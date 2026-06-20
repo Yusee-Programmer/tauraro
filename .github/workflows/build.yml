@@ -270,17 +270,43 @@ jobs:
           echo "===== benchmarks/results.md ====="
           cat benchmarks/results.md || echo "no results.md produced"
 
-      - name: Commit results.md
+      - name: Commit results.md (auto-resolving conflicts)
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          # Register the 'ours' merge driver that .gitattributes maps
+          # benchmarks/results.md to, so if master advances while this job runs,
+          # results.md auto-resolves to THIS run's freshly-generated file instead
+          # of stopping on a conflict. This is the same resolution
+          # scripts/resolve-benchmark-conflicts.ps1 sets up locally — running
+          # automatically here so it never has to be done by hand.
+          git config merge.ours.driver true
           git add benchmarks/results.md
           if git diff --cached --quiet; then
             echo "No benchmark changes to commit."
-          else
-            git commit -m "ci: update benchmark results [skip ci]"
-            git push
+            exit 0
           fi
+          git commit -m "ci: update benchmark results [skip ci]"
+          # Push robustly: if origin/master moved since checkout, merge it in
+          # (results.md auto-resolves to ours via the driver) and retry. Avoids
+          # a failed job — and a conflict the maintainer would resolve by hand —
+          # when another push lands during the benchmark run.
+          for attempt in 1 2 3 4 5; do
+            if git push origin HEAD:master; then
+              echo "Pushed benchmark results."
+              exit 0
+            fi
+            echo "Push rejected (master moved); integrating latest and retrying ($attempt/5)..."
+            git fetch origin master
+            git merge --no-edit origin/master || {
+              echo "Unexpected non-results.md conflict; aborting merge."
+              git merge --abort || true
+              exit 1
+            }
+            sleep 3
+          done
+          echo "Could not push benchmark results after 5 attempts."
+          exit 1
 
   # -----------------------------------------------------------------
   # Release: runs only on v* tag pushes after all builds pass.

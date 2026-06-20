@@ -41,6 +41,13 @@ extern "C":
     def _tr_time_ms() -> int
     def _tr_c_free(ptr: Pointer[char])
 
+# Lowercase a single ASCII byte ('A'..'Z' -> 'a'..'z'); other bytes unchanged.
+# Used for case-insensitive header-name matching without allocating a lowercased
+# copy of the name or the header line.
+pub def _ascii_lower(c: int) -> int:
+    if c >= 65 and c <= 90: return c + 32
+    return c
+
 # ── HttpRequest ───────────────────────────────────────────────────────────────
 
 pub class HttpRequest:
@@ -48,13 +55,15 @@ pub class HttpRequest:
     pub path:     str       # "/users/42"
     pub query:    str       # raw query string without '?'
     pub body:     str       # request body
-    pub headers:  Map[str, str]  # request headers
+    pub headers:  Map[str, str]  # request headers (lazily populated; see _raw_hdr / headers_map())
     pub params:   Map[str, str]  # path parameters extracted by router (:id → "42")
     pub route_id: int       # matched route identifier (-1 if unmatched)
     pub version:  str       # "HTTP/1.1" or "HTTP/1.0"
     pub version_owned: bool # true when `version` is a heap Str.slice (HttpParser.parse set it), not the init() literal
     pub recv_ms:  int       # Clock.now_ms() when this request was parsed (for timing middleware)
     pub oversized: bool     # true when the declared Content-Length exceeded the server's body limit (handler should 413)
+    pub _raw_hdr: str       # owned slice of the raw header block (lines after the request line); scanned on demand by header()
+    pub _ka:      int        # keep-alive cache: -1 = not yet computed, 0 = false, 1 = true
 
 extend HttpRequest:
     pub def init() -> HttpRequest:
@@ -63,22 +72,59 @@ extend HttpRequest:
         r.path       = "/"
         r.query      = ""
         r.body       = ""
-        r.headers    = Map[str, str].init(16)
+        # Headers are parsed lazily (scanned out of _raw_hdr by header()), so the
+        # map starts empty and small - most handlers read 0-2 headers, so building
+        # a full Map of every header on every request is pure overhead. headers_map()
+        # populates it on demand for the rare caller that wants the whole map.
+        r.headers    = Map[str, str].init(4)
         r.params     = Map[str, str].init(4)
         r.route_id   = -1
         r.version    = "HTTP/1.1"
         r.version_owned = false
         r.recv_ms    = _tr_time_ms()
         r.oversized  = false
+        r._raw_hdr   = ""
+        r._ka        = -1
         return r
 
     # Return a header value by name (case-insensitive), or "" when absent.
     # HTTP header names are case-insensitive; the parser stores them lowercased.
+    # Look up a request header by name (case-insensitive), or "" when absent.
+    # Scans the raw header block in place (no per-request header Map is built):
+    # the only allocation is the returned value slice when the header is found.
     pub def header(self, name: str) -> str:
-        mut key = Str.to_lower(name)
-        mut result = ""
-        if self.headers.contains(key): result = self.headers.get(key)
-        return result
+        mut raw  = self._raw_hdr
+        mut rlen = Str.len(raw)
+        mut nlen = Str.len(name)
+        if rlen == 0 or nlen == 0: return ""
+        mut pos = 0
+        while pos < rlen:
+            # Try to match `name:` (case-insensitive) at the start of this line.
+            mut matched = pos + nlen < rlen
+            mut k = 0
+            while matched and k < nlen:
+                if _ascii_lower(Str.char_at(raw, pos + k)) != _ascii_lower(Str.char_at(name, k)):
+                    matched = false
+                k = k + 1
+            if matched and Str.char_at(raw, pos + nlen) == 58:   # ':' immediately after the name
+                mut vs = pos + nlen + 1
+                while vs < rlen and Str.char_at(raw, vs) == 32: vs = vs + 1   # skip OWS
+                mut ve = vs
+                while ve < rlen and Str.char_at(raw, ve) != 13: ve = ve + 1   # up to CR
+                return Str.slice(raw, vs, ve)
+            # Advance to the start of the next line (past the next LF).
+            while pos < rlen and Str.char_at(raw, pos) != 10: pos = pos + 1
+            pos = pos + 1
+        return ""
+
+    # Populate and return the full header Map (name -> value, names lowercased).
+    # Lazy: built once on first call from _raw_hdr, for callers that need to
+    # iterate every header. The hot path uses header() and never calls this.
+    pub def headers_map(self) -> Map[str, str]:
+        if self.headers.len() > 0 or Str.len(self._raw_hdr) == 0:
+            return self.headers
+        HttpParser._parse_headers_into(self._raw_hdr, self.headers)
+        return self.headers
 
     # Return a path parameter by name (set by router), or "" when absent.
     pub def get_param(self, name: str) -> str:
@@ -139,14 +185,22 @@ extend HttpRequest:
     # another request after the response is sent: HTTP/1.1 defaults to
     # keep-alive (unless `Connection: close` is sent), HTTP/1.0 defaults to
     # close (unless `Connection: keep-alive` is sent).
+    # Whether this connection should be kept alive after the response. Computed
+    # once and cached on `_ka` - keep_alive() is consulted both per-request in
+    # the serve loop and again when writing each response, so caching avoids
+    # re-scanning + re-lowercasing the Connection header twice per request.
     pub def keep_alive(self) -> bool:
+        if self._ka >= 0: return self._ka == 1
         mut conn_hdr = Str.to_lower(HttpRequest.header(self, "Connection"))
         mut has_close = Str.contains(conn_hdr, "close")
         mut has_keepalive = Str.contains(conn_hdr, "keep-alive")
         unsafe: _tr_c_free(conn_hdr as Pointer[char])
-        if has_close: return false
-        if has_keepalive: return true
-        return Str.eq(self.version, "HTTP/1.1")
+        mut result = Str.eq(self.version, "HTTP/1.1")
+        if has_close: result = false
+        elif has_keepalive: result = true
+        if result: self._ka = 1
+        else: self._ka = 0
+        return result
 
     # Free this request's headers/params maps (incl. values - every value is
     # a heap-allocated Str.slice/Str.to_lower result, parser-owned, never a
@@ -167,6 +221,7 @@ extend HttpRequest:
             _tr_c_free(self.query as Pointer[char])
             _tr_c_free(self.body as Pointer[char])
             _tr_c_free(self.version as Pointer[char])
+            _tr_c_free(self._raw_hdr as Pointer[char])
         unsafe: _tr_c_free(self as Pointer[char])
 
 # ── HttpResponse ──────────────────────────────────────────────────────────────
@@ -632,10 +687,28 @@ extend HttpParser:
         if request_ln_owned:
             unsafe: _tr_c_free(request_ln as Pointer[char])
         unsafe: _tr_c_free(hdr_sec as Pointer[char])
+        # Lazy headers: keep the raw header block (everything after the request
+        # line) and let header() scan it on demand, instead of eagerly building a
+        # Map of every header on every request. The previous design slice-split
+        # each header line + lowercased the name + boxed the value into a Map - ~5
+        # allocations per header that most handlers never read.
+        #
+        # Storing the NAMED local `rest_hdrs` into a field retains it (rc+1), so
+        # release our local ref to leave req._raw_hdr the sole owner (rc=1), freed
+        # by free_owned() (capture-before/release-after, #53). When first_line < 0
+        # rest_hdrs is the "" literal and both ops are no-ops.
+        req._raw_hdr = rest_hdrs
+        unsafe: _tr_c_free(rest_hdrs as Pointer[char])
+        return req
+
+    # Parse `raw` (a raw header block, lines after the request line) into `into`,
+    # lowercasing each header name. Used by HttpRequest.headers_map() to populate
+    # the full Map lazily for callers that want to iterate all headers.
+    pub def _parse_headers_into(raw: str, into: Map[str, str]):
         mut hdr_pos = 0
-        mut hdr_len = Str.len(rest_hdrs)
+        mut hdr_len = Str.len(raw)
         while hdr_pos < hdr_len:
-            mut tail     = Str.slice(rest_hdrs, hdr_pos, hdr_len)
+            mut tail     = Str.slice(raw, hdr_pos, hdr_len)
             mut line_end = Str.index_of(tail, "\r\n")
             mut line_len = line_end
             if line_end >= 0:
@@ -643,35 +716,16 @@ extend HttpParser:
             else:
                 line_len = Str.len(tail)
                 hdr_pos  = hdr_len
-            # Always a FRESH slice (never `line = tail`): aliasing the borrowed
-            # `tail` local retains it (rc=2) and the final header line - which has
-            # no trailing CRLF - was then never freed (leaked one str/request),
-            # because the local is not auto-dropped (#53).
             mut line  = Str.slice(tail, 0, line_len)
             mut colon = Str.index_of(line, ": ")
             if colon >= 0:
-                # Header names are case-insensitive: store lowercased so lookups
-                # via HttpRequest.header() (which also lowercases) always match.
                 mut hname_raw = Str.slice(line, 0, colon)
                 mut hname     = Str.to_lower(hname_raw)
                 unsafe: _tr_c_free(hname_raw as Pointer[char])
-                # Pass the value slice INLINE (a fresh rc=1 expression), not via
-                # a named local: dict_val_arg hoists a fresh str value to a temp
-                # that flush_wraps releases, netting the stored box to rc=1 so
-                # Dict_free_strval frees it at free_owned(). A named local would
-                # instead rely on str-local auto-drop (#53, not yet implemented)
-                # to balance the box's retain, leaking the value at rc=2.
-                req.headers.insert(hname, Str.slice(line, colon + 2, Str.len(line)))
-                # Dict_set() strdup()s the key, so the lowercased copy we just
-                # allocated is no longer needed once it's been copied in.
+                into.insert(hname, Str.slice(line, colon + 2, Str.len(line)))
                 unsafe: _tr_c_free(hname as Pointer[char])
             unsafe: _tr_c_free(line as Pointer[char])
             unsafe: _tr_c_free(tail as Pointer[char])
-        # rest_hdrs is a heap Str.slice (the header section after the request
-        # line); free its buffer now that all headers have been parsed out of
-        # it. (When first_line < 0 it is the "" literal, a no-op release.)
-        unsafe: _tr_c_free(rest_hdrs as Pointer[char])
-        return req
 
     # Content-Length value from a raw header section, or 0 when absent.
     pub def content_length(hdr: str) -> int:
