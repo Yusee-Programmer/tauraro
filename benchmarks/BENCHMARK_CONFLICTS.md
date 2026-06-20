@@ -20,12 +20,25 @@ We've configured three layers of conflict resolution:
 2. **`.github/workflows/auto-resolve-conflicts.yml`**
    A GitHub Action that can automatically rebase PRs with conflicts using `rebase -X ours`.
 
-3. **Helper Script**
-   A shell script to easily resolve conflicts locally.
+3. **Helper Scripts**
+   - Windows: `scripts/resolve-benchmark-conflicts.ps1` - PowerShell script for Windows
+   - Linux/macOS: `scripts/resolve-benchmark-conflicts.sh` - Bash script for Unix-like systems
 
 ### How to Resolve Conflicts
 
 #### Option 1: Use the Helper Script (Recommended)
+
+**Windows (PowerShell):**
+```powershell
+.\scripts\resolve-benchmark-conflicts.ps1
+```
+
+Or specify a different remote branch:
+```powershell
+.\scripts\resolve-benchmark-conflicts.ps1 -RemoteBranch upstream/master
+```
+
+**Linux/macOS (Bash):**
 ```bash
 bash scripts/resolve-benchmark-conflicts.sh
 ```
@@ -59,7 +72,8 @@ git pull -X ours upstream master
 ### Example Workflow
 1. You have changes in your fork on `master`
 2. You notice PR conflicts with upstream/master
-3. Run: `bash scripts/resolve-benchmark-conflicts.sh upstream/master`
+3. **Windows:** Run: `.\scripts\resolve-benchmark-conflicts.ps1 -RemoteBranch upstream/master`
+   **Linux/macOS:** Run: `bash scripts/resolve-benchmark-conflicts.sh upstream/master`
 4. Review the rebase: `git log -5`
 5. Force push: `git push origin master --force-with-lease`
 
