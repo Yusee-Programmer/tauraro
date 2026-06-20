@@ -601,6 +601,8 @@ __attribute__((hot)) List_Token* Lexer_tokenize(Lexer* self) {
     /* pass */
     bool at_line_start = true;
     /* pass */
+    bool trailing_dot = false;
+    /* pass */
     long long nesting = 0LL;
     /* pass */
     while ((!Lexer_at_end(self))) {
@@ -677,7 +679,7 @@ __attribute__((hot)) List_Token* Lexer_tokenize(Lexer* self) {
                 /* pass */
                 self->tok_col = ((self->pos - self->line_start) + 1LL);
                 /* pass */
-                if ((next_c != 46LL)) {
+                if (((next_c != 46LL) && (!trailing_dot))) {
                     /* pass */
                     long long cur_indent = List_i64_get(self->indent_stack, (self->indent_stack->len - 1LL));
                     /* pass */
@@ -707,6 +709,8 @@ __attribute__((hot)) List_Token* Lexer_tokenize(Lexer* self) {
                         }
                     }
                 }
+                /* pass */
+                trailing_dot = false;
             }
         }
         /* pass */
@@ -732,7 +736,10 @@ __attribute__((hot)) List_Token* Lexer_tokenize(Lexer* self) {
             /* pass */
             if ((nesting == 0LL)) {
                 /* pass */
-                if ((!_peek_next_line_dot(self->src, self->pos, self->len))) {
+                if (_last_tok_is_dot(tokens)) {
+                    /* pass */
+                    trailing_dot = true;
+                } else if ((!_peek_next_line_dot(self->src, self->pos, self->len))) {
                     /* pass */
                     List_Token_append(tokens, Token_make_Newline());
                     /* pass */
@@ -753,7 +760,10 @@ __attribute__((hot)) List_Token* Lexer_tokenize(Lexer* self) {
             /* pass */
             if ((nesting == 0LL)) {
                 /* pass */
-                if ((!_peek_next_line_dot(self->src, self->pos, self->len))) {
+                if (_last_tok_is_dot(tokens)) {
+                    /* pass */
+                    trailing_dot = true;
+                } else if ((!_peek_next_line_dot(self->src, self->pos, self->len))) {
                     /* pass */
                     List_Token_append(tokens, Token_make_Newline());
                     /* pass */
@@ -1547,5 +1557,37 @@ __attribute__((hot)) bool _peek_next_line_dot(char* src, long long pos, long lon
     }
     /* pass */
     return false;
+}
+
+__attribute__((hot)) bool _last_tok_is_dot(List_Token* tokens) {
+    /* pass */
+    if ((tokens->len == 0LL)) {
+        /* pass */
+        return false;
+    }
+    /* pass */
+    __auto_type _t14 = List_Token_get(tokens, (tokens->len - 1LL));
+    if (_t14.tag == Token_Dot) {
+        /* pass */
+        if ((tokens->len < 2LL)) {
+            /* pass */
+            return false;
+        }
+        /* pass */
+        __auto_type _t15 = List_Token_get(tokens, (tokens->len - 2LL));
+        if (_t15.tag == Token_IntLit) {
+            __auto_type _ = _t15.data.IntLit.val;
+            return false;
+        } else if (_t15.tag == Token_FloatLit) {
+            __auto_type _ = _t15.data.FloatLit.val;
+            return false;
+        } else if (1) {
+            __auto_type _ = _t15;
+            return true;
+        }
+    } else if (1) {
+        __auto_type _ = _t14;
+        return false;
+    }
 }
 

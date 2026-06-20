@@ -2143,6 +2143,7 @@ __attribute__((hot)) bool char_is_space(long long c);
 __attribute__((hot)) bool char_is_newline(long long c);
 __attribute__((hot)) bool char_is_hex(long long c);
 __attribute__((hot)) bool _peek_next_line_dot(char* src, long long pos, long long src_len);
+__attribute__((hot)) bool _last_tok_is_dot(List_Token* tokens);
 __attribute__((hot)) char* raw_alloc(long long size);
 __attribute__((hot)) char* raw_realloc(char* ptr, long long size);
 __attribute__((hot)) void raw_free(char* ptr);
