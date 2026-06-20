@@ -246,6 +246,11 @@ extend JsonValue:
                 child.read().dispose()
                 unsafe: _tr_c_free(child as Pointer[char])
                 i = i + 1
+        # Release the string value we retained in init_str (field-store retains
+        # the str). A no-op for non-string nodes (s_val is the "" literal, rc=NULL)
+        # and for literal-built strings, but frees parsed/dynamic string values.
+        # (codegen rewrites this `_tr_c_free(str ...)` to refcounted release.)
+        unsafe: _tr_c_free(self.s_val as Pointer[char])
         self.items.free()
         self.keys.free()
         unsafe: _tr_c_free(self as Pointer[char])
