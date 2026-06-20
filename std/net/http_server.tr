@@ -48,6 +48,24 @@ pub def _ascii_lower(c: int) -> int:
     if c >= 65 and c <= 90: return c + 32
     return c
 
+# Full HTTP status line (incl. trailing CRLF) for common codes, as a single
+# string literal -> zero allocation. Returns "" for uncommon codes so the caller
+# builds it dynamically. Lets the hot response path skip Fmt.int_to_str + the
+# reason-phrase lookup that HttpResponse.to_wire does.
+pub def _status_line_lit(status: int) -> str:
+    if status == 200: return "HTTP/1.1 200 OK\r\n"
+    if status == 201: return "HTTP/1.1 201 Created\r\n"
+    if status == 204: return "HTTP/1.1 204 No Content\r\n"
+    if status == 304: return "HTTP/1.1 304 Not Modified\r\n"
+    if status == 400: return "HTTP/1.1 400 Bad Request\r\n"
+    if status == 401: return "HTTP/1.1 401 Unauthorized\r\n"
+    if status == 403: return "HTTP/1.1 403 Forbidden\r\n"
+    if status == 404: return "HTTP/1.1 404 Not Found\r\n"
+    if status == 413: return "HTTP/1.1 413 Payload Too Large\r\n"
+    if status == 429: return "HTTP/1.1 429 Too Many Requests\r\n"
+    if status == 500: return "HTTP/1.1 500 Internal Server Error\r\n"
+    return ""
+
 # ── HttpRequest ───────────────────────────────────────────────────────────────
 
 pub class HttpRequest:
@@ -370,23 +388,60 @@ extend HttpConn:
             resp._order.free()
             resp.dispose()
 
+    # Fast path for a simple response (a single Content-Type, a body). Builds the
+    # whole wire in ONE StringBuilder and sends it with a single write, skipping
+    # the HttpResponse + headers-Map + _order-Vec machinery that send_response
+    # builds and tears down (~12 allocations per request). `body` is only
+    # appended (copied), never owned, so the caller keeps responsibility for it
+    # exactly as with the old HttpResponse path.
+    #
+    # Falls back to the full path when the connection has queued custom headers
+    # (set_resp_header), which must be merged into the response.
+    pub def _send_simple(self, status: int, content_type: str, body: str):
+        if self._closed: return
+        if self._horder.len > 0:
+            mut resp = HttpResponse.init(status, body)
+            resp.set_header("Content-Type", content_type)
+            HttpConn.send_response(self, resp)
+            return
+        mut sb   = StringBuilder.init(160 + Str.len(body))
+        mut line = _status_line_lit(status)
+        if Str.len(line) > 0:
+            sb.append(line)
+        else:
+            sb.append("HTTP/1.1 ")
+            mut ss = Fmt.int_to_str(status)
+            sb.append(ss)
+            unsafe: _tr_c_free(ss as Pointer[char])
+            sb.append(" OK\r\n")
+        sb.append("Content-Type: ")
+        sb.append(content_type)
+        sb.append("\r\nContent-Length: ")
+        mut cl = Fmt.int_to_str(Str.len(body))
+        sb.append(cl)
+        unsafe: _tr_c_free(cl as Pointer[char])
+        if self.request.keep_alive():
+            sb.append("\r\nConnection: keep-alive\r\n\r\n")
+        else:
+            sb.append("\r\nConnection: close\r\n\r\n")
+        sb.append(body)
+        mut wire = sb.to_owned()
+        sb.free()
+        mut sent = self._stream.send(wire)
+        unsafe: _tr_c_free(wire as Pointer[char])
+        self.last_status = status
+
     # Convenience: plain-text response.
     pub def send_text(self, status: int, text: str):
-        mut resp = HttpResponse.init(status, text)
-        resp.set_header("Content-Type", "text/plain; charset=utf-8")
-        HttpConn.send_response(self, resp)
+        HttpConn._send_simple(self, status, "text/plain; charset=utf-8", text)
 
     # Convenience: JSON response.
     pub def send_json(self, status: int, json: str):
-        mut resp = HttpResponse.init(status, json)
-        resp.set_header("Content-Type", "application/json")
-        HttpConn.send_response(self, resp)
+        HttpConn._send_simple(self, status, "application/json", json)
 
     # Convenience: HTML response.
     pub def send_html(self, status: int, html: str):
-        mut resp = HttpResponse.init(status, html)
-        resp.set_header("Content-Type", "text/html; charset=utf-8")
-        HttpConn.send_response(self, resp)
+        HttpConn._send_simple(self, status, "text/html; charset=utf-8", html)
 
     # Convenience: status-only response with empty body.
     pub def send_status(self, status: int):
@@ -822,8 +877,30 @@ extend HttpServer:
     # Note: text-protocol oriented (JSON/forms/HTML); a body containing NUL
     # bytes is truncated by the string representation.
     def _read_full(self, stream: TcpStream) -> str:
+        # Fast path: a single recv() that already holds the whole request -- the
+        # common case for small keep-alive requests. The recv buffer IS the raw
+        # request, so return it directly: no StringBuilder, no to_owned() copies.
+        # Only fall back to accumulation when the request spans TCP segments.
+        mut first = stream.recv(self._recv_buf)
+        mut flen  = Str.len(first)
+        if flen == 0:
+            return first
+        mut he = Str.index_of(first, "\r\n\r\n")
+        if he >= 0:
+            mut hdr  = Str.slice(first, 0, he)
+            mut clen = HttpParser.content_length(hdr)
+            unsafe: _tr_c_free(hdr as Pointer[char])
+            mut cap_total = clen
+            if self._max_body > 0 and clen > self._max_body:
+                cap_total = self._max_body + 1
+            if flen - (he + 4) >= cap_total:
+                return first
+        # Slow path: accumulate across recvs (headers split over segments, or a
+        # body still arriving). Seed the builder with what we already read.
         mut sb         = StringBuilder.init(self._recv_buf)
-        mut header_end = -1
+        sb.append(first)
+        unsafe: _tr_c_free(first as Pointer[char])
+        mut header_end = he
         while header_end < 0:
             mut chunk = stream.recv(self._recv_buf)
             if Str.len(chunk) == 0: break
@@ -836,7 +913,7 @@ extend HttpServer:
             return raw0
         mut raw = sb.to_owned()
         mut hdr_for_clen = Str.slice(raw, 0, header_end)
-        mut clen = HttpParser.content_length(hdr_for_clen)
+        mut clen2 = HttpParser.content_length(hdr_for_clen)
         unsafe: _tr_c_free(hdr_for_clen as Pointer[char])
         mut have = Str.len(raw) - (header_end + 4)
         unsafe: _tr_c_free(raw as Pointer[char])
@@ -844,10 +921,10 @@ extend HttpServer:
         # (plus the headers already buffered) so a huge/lying Content-Length
         # cannot drive unbounded memory growth. read_next() flags the request
         # oversized from the declared Content-Length and the handler returns 413.
-        mut cap_total = clen
-        if self._max_body > 0 and clen > self._max_body:
-            cap_total = self._max_body + 1
-        while have < cap_total:
+        mut cap_total2 = clen2
+        if self._max_body > 0 and clen2 > self._max_body:
+            cap_total2 = self._max_body + 1
+        while have < cap_total2:
             mut more = stream.recv(self._recv_buf)
             if Str.len(more) == 0: break
             sb.append(more)

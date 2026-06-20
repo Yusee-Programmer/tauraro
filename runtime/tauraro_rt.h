@@ -3211,12 +3211,16 @@ static size_t _dict_hash(const char* k, size_t cap) {
 }
 static Dict* Dict_new(void) {
     Dict* d=(Dict*)malloc(sizeof(Dict)); _TR_MEMCOUNT_INC(); _TR_MEMCOUNT_DICT_INC();
-    d->cap=16; d->len=0;
-    d->buckets=(_DictNode**)calloc(16,sizeof(_DictNode*)); _TR_MEMCOUNT_INC();
+    /* Lazy buckets: an empty dict allocates no bucket array (cap=0). The 16-slot
+       array is created on first insert. Saves one alloc per dict that stays
+       empty - e.g. an HttpRequest's headers/params maps when a handler reads no
+       headers and the route binds no params. All accessors below guard cap==0. */
+    d->cap=0; d->len=0; d->buckets=NULL;
     return d;
 }
 static void Dict_set(Dict* d, char* key, void* val) {
     if (!d || !key) return;
+    if (d->cap==0) { d->cap=16; d->buckets=(_DictNode**)calloc(16,sizeof(_DictNode*)); _TR_MEMCOUNT_INC(); }
     size_t i=_dict_hash(key,d->cap);
     _DictNode* n=d->buckets[i];
     while (n) { if (strcmp(n->key,key)==0) { n->value=val; return; } n=n->next; }
@@ -3224,7 +3228,7 @@ static void Dict_set(Dict* d, char* key, void* val) {
     nd->key=strdup(key); _TR_MEMCOUNT_INC(); nd->value=val; nd->next=d->buckets[i]; d->buckets[i]=nd; d->len++;
 }
 static void*     Dict_get(Dict* d, char* key) {
-    if (!d||!key) return NULL;
+    if (!d||!key||d->cap==0) return NULL;
     size_t i=_dict_hash(key,d->cap);
     _DictNode* n=d->buckets[i];
     while (n) { if (strcmp(n->key,key)==0) return n->value; n=n->next; }
@@ -3233,7 +3237,7 @@ static void*     Dict_get(Dict* d, char* key) {
 static bool      Dict_has(Dict* d, char* key) { return Dict_get(d,key)!=NULL; }
 static long long Dict_len(Dict* d)  { return d?(long long)d->len:0LL; }
 static void      Dict_remove(Dict* d, char* key) {
-    if (!d||!key) return;
+    if (!d||!key||d->cap==0) return;
     size_t i=_dict_hash(key,d->cap);
     _DictNode* n=d->buckets[i]; _DictNode* prev=NULL;
     while (n) {
