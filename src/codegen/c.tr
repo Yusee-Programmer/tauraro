@@ -2243,9 +2243,25 @@ pub class CGenerator:
         return "((" + ct + ")(" + expr_s + "))"
 
     # Dict key arg: TrMap keys are char*, so str-typed keys must be unwrapped.
+    # Dict key arg: TrMap keys are stored as the dict's OWN strdup'd copy of the
+    # char*, so the caller's TrStr is only borrowed for the duration of the set.
+    # A FRESH str key (concat/call/method, e.g. Str.slice(pat,...) used INLINE as
+    # a route ':name' param key) is rc=1 and bound to no local, so a bare
+    # _tr_strz() would extract its .data, let the dict copy it, then leak the
+    # orphaned TrStr (struct + .data) - one per insert. Hoist it to a temp that
+    # the enclosing statement's flush_wraps releases (mirrors dict_val_arg's
+    # _dvt hoist), so the fresh key is freed after the dict has copied it. A
+    # borrowed key (str local/param/field) is released by its own scope-exit
+    # auto-drop, so it needs no hoist here.
     pub def dict_key_arg(self, e: Pointer[HirExpr]) -> str:
         mut e_s = self.gen_expr(e)
-        if _is_str_type(hir_expr_type(e).name): return self.strz(e_s)
+        if _is_str_type(hir_expr_type(e).name):
+            if self._is_fresh_str_expr(e):
+                mut tmp = "_dkt" + self.next_temp()
+                self.wrap_temp_decls.push("TrStr " + tmp + " = (" + e_s + ")")
+                self.wrap_temp_names.push(tmp)
+                return self.strz(tmp)
+            return self.strz(e_s)
         return e_s
 
     # Dict value arg: TrMap values are void*, so str-typed values must be boxed.
