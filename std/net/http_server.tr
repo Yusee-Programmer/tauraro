@@ -242,6 +242,39 @@ extend HttpRequest:
             _tr_c_free(self._raw_hdr as Pointer[char])
         unsafe: _tr_c_free(self as Pointer[char])
 
+    # Reset this request so it can be reused for the NEXT keep-alive request on
+    # the same connection, WITHOUT freeing the struct or the headers/params map
+    # structs (those are reused). Releases the owned per-request slices, then
+    # restores init() defaults. The maps are reused as-is when already empty (the
+    # common case - no boxed values to release); only when one actually holds
+    # entries (e.g. params after a matched ':id' route) is it freed + re-created,
+    # which correctly releases its boxed str values via Map.free()'s _strval path.
+    pub def _reset_for_reuse(self):
+        unsafe:
+            _tr_c_free(self.method as Pointer[char])
+            _tr_c_free(self.path as Pointer[char])
+            _tr_c_free(self.query as Pointer[char])
+            _tr_c_free(self.body as Pointer[char])
+            _tr_c_free(self.version as Pointer[char])
+            _tr_c_free(self._raw_hdr as Pointer[char])
+        if self.headers.len() > 0:
+            self.headers.free()
+            self.headers = Map[str, str].init(4)
+        if self.params.len() > 0:
+            self.params.free()
+            self.params = Map[str, str].init(4)
+        self.method        = ""
+        self.path          = "/"
+        self.query         = ""
+        self.body          = ""
+        self.version       = "HTTP/1.1"
+        self.version_owned = false
+        self.route_id      = -1
+        self.recv_ms       = _tr_time_ms()
+        self.oversized     = false
+        self._raw_hdr      = ""
+        self._ka           = -1
+
 # ── HttpResponse ──────────────────────────────────────────────────────────────
 
 pub class HttpResponse:
@@ -563,6 +596,18 @@ extend HttpConn:
         self._horder  = Vec[str].init(8)
         self.last_status = 0
 
+    # Reset only the per-response conn state (queued response headers + status)
+    # between keep-alive requests, leaving `request` in place for in-place reuse
+    # (read_next_into). The header map/vec are reused as-is when empty (the common
+    # case) and only freed + re-created when a handler actually queued headers.
+    pub def _reset_for_next(self):
+        if self._horder.len > 0:
+            self._headers.free()
+            self._horder.free()
+            self._headers = Map[str, str].init(8)
+            self._horder  = Vec[str].init(8)
+        self.last_status = 0
+
     # Release the HttpConn heap instance itself (and any per-request state
     # not already released by close()) once the connection is torn down.
     pub def dispose(self):
@@ -693,10 +738,22 @@ pub class HttpParser:
     _dummy: int
 
 extend HttpParser:
-    # Parse a raw HTTP request string into an HttpRequest.
+    # Parse a raw HTTP request string into a fresh HttpRequest.
     pub def parse(raw: str) -> HttpRequest:
         mut req = HttpRequest.init()
-        if Str.len(raw) == 0: return req
+        HttpParser._fill(req, raw)
+        return req
+
+    # Reset an EXISTING request and parse `raw` into it. Used by the keep-alive
+    # serve loop to reuse one HttpRequest (and its headers/params map structs)
+    # across every request on a connection instead of free+alloc per request.
+    pub def parse_into(req: HttpRequest, raw: str):
+        HttpRequest._reset_for_reuse(req)
+        HttpParser._fill(req, raw)
+
+    # Populate an already-init'd (or just-reset) `req` from a raw request string.
+    def _fill(req: HttpRequest, raw: str):
+        if Str.len(raw) == 0: return
         mut header_end = Str.index_of(raw, "\r\n\r\n")
         mut body_start = 0
         if header_end >= 0:
@@ -754,7 +811,6 @@ extend HttpParser:
         # rest_hdrs is the "" literal and both ops are no-ops.
         req._raw_hdr = rest_hdrs
         unsafe: _tr_c_free(rest_hdrs as Pointer[char])
-        return req
 
     # Parse `raw` (a raw header block, lines after the request line) into `into`,
     # lowercasing each header name. Used by HttpRequest.headers_map() to populate
@@ -957,6 +1013,24 @@ extend HttpServer:
             unsafe: _tr_c_free(cl as Pointer[char])
         self._router.dispatch(req)
         return req
+
+    # Like read_next(), but parses into an EXISTING request object (keep-alive
+    # reuse) instead of allocating a new one. Returns false when the connection
+    # closed or sent garbage (caller should stop serving it), true otherwise.
+    pub def read_next_into(self, stream: TcpStream, req: HttpRequest) -> bool:
+        mut raw = HttpServer._read_full(self, stream)
+        if Str.len(raw) == 0 or Str.index_of(raw, "\r\n\r\n") < 0:
+            unsafe: _tr_c_free(raw as Pointer[char])
+            return false
+        HttpParser.parse_into(req, raw)
+        unsafe: _tr_c_free(raw as Pointer[char])
+        if self._max_body > 0:
+            mut cl: str = req.header("content-length")
+            if Str.len(cl) > 0 and Str.parse_int(cl) > self._max_body:
+                req.oversized = true
+            unsafe: _tr_c_free(cl as Pointer[char])
+        self._router.dispatch(req)
+        return true
 
     # Block until the next client connects, read the full request, run the
     # router, and return an HttpConn ready for the handler to write a response.
