@@ -228,10 +228,21 @@ jobs:
   # artifact -- they live in the repo as a tracked .md file.
   # Only runs on pushes to the default branch (master); skipped on PRs
   # and forks. The commit message carries [skip ci] to avoid re-triggering.
+  #
+  # IMPORTANT: gated to the canonical org repo (tauraro/tauraro) only, which owns
+  # the official benchmark numbers. results.md is auto-generated, so if BOTH the
+  # org repo and the dev fork (Yusee-Programmer/tauraro) ran this job they would
+  # commit divergent results.md files, and every cross-repo PR (fork -> org) would
+  # conflict on it (GitHub's web merge ignores the .gitattributes merge=ours
+  # driver). Letting only the org repo touch results.md means the fork never
+  # modifies it, so those PRs stay conflict-free everywhere.
   # -----------------------------------------------------------------
   benchmark:
     needs: build
-    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    if: >-
+      github.event_name == 'push'
+      && github.ref == 'refs/heads/master'
+      && github.repository == 'tauraro/tauraro'
     runs-on: ubuntu-latest
     permissions:
       contents: write
