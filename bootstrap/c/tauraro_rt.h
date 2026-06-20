@@ -5399,16 +5399,4 @@ static int64_t _tr_list_all_i64(List_i64* l, _tr_pred_fn p) { return _tr_list_al
 static int64_t _tr_list_any_f64(List_f64* l, _tr_pred_fn p) { return _tr_list_any_ptr((List_ptr*)l, p); }
 static int64_t _tr_list_all_f64(List_f64* l, _tr_pred_fn p) { return _tr_list_all_ptr((List_ptr*)l, p); }
 
-/* Drop libc object-like macros that collide with legitimate Tauraro identifiers
- * generated AFTER this header (user/std functions). <signal.h> defines POLL_IN
- * and POLL_OUT as si_code constants (1, 2), which would otherwise expand inside
- * `long long POLL_IN(void)` -> `long long 1(void)`. The runtime itself never
- * uses these macros, so undef'ing them here is safe. */
-#ifdef POLL_IN
-#  undef POLL_IN
-#endif
-#ifdef POLL_OUT
-#  undef POLL_OUT
-#endif
-
 #endif /* TAURARO_RT_H */
