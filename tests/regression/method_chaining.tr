@@ -1,0 +1,68 @@
+# tests/regression/method_chaining.tr
+# Builder-style method chaining — single-line, and multi-line via BOTH
+# leading-dot and trailing-dot continuation (the lexer suppresses the
+# newline + indent for a chain continuation). Regression for the watax
+# fluent App.new().get(...).post(...) pattern.
+
+from std.test import TestRunner
+
+pub class Calc:
+    mut n: int
+
+extend Calc:
+    pub def init() -> Calc:
+        mut c = Calc()
+        c.n = 0
+        return c
+
+    pub def add(self, x: int) -> Calc:
+        self.n = self.n + x
+        return self
+
+    pub def mul(self, x: int) -> Calc:
+        self.n = self.n * x
+        return self
+
+    pub def val(self) -> int:
+        return self.n
+
+def main():
+    mut t = TestRunner.init("method_chaining")
+
+    # Single line.
+    mut a = Calc.init().add(1).add(2).add(3)
+    t.assert_eq_int(a.val(), 6, "single-line chain")
+
+    # Multi-line, leading-dot.
+    mut b = Calc.init()
+        .add(10)
+        .add(20)
+        .mul(2)
+    t.assert_eq_int(b.val(), 60, "leading-dot chain")
+
+    # Multi-line, trailing-dot.
+    mut c = Calc.init().
+        add(4).
+        add(5).
+        mul(10)
+    t.assert_eq_int(c.val(), 90, "trailing-dot chain")
+
+    # Mixed leading + trailing dot in one chain.
+    mut d = Calc.init().
+        add(1)
+        .add(2).
+        add(3)
+    t.assert_eq_int(d.val(), 6, "mixed leading/trailing chain")
+
+    # Chain off an existing variable, reassigned across lines.
+    mut e = Calc.init()
+    e = e.add(7)
+          .add(8)
+    t.assert_eq_int(e.val(), 15, "reassigned multi-line chain")
+
+    # Float literals must NOT be confused with a trailing dot.
+    mut f = 5.5
+    mut g = 2.0
+    t.assert_true(f > g, "float literals lex correctly (no dot-continuation)")
+
+    t.summary()

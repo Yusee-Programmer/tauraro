@@ -403,6 +403,7 @@ pub class Lexer:
 
         mut tokens = Vec[Token].init(1024)
         mut at_line_start = True
+        mut trailing_dot = False  # previous line ended with '.', so this line continues the chain
         mut nesting = 0  # paren/bracket/brace depth; suppress Indent/Dedent inside
 
         while not self.at_end():
@@ -454,7 +455,10 @@ pub class Lexer:
                 #       .build()
                 if nesting == 0:
                     self.tok_col = self.pos - self.line_start + 1
-                    if next_c != 46:  # '.' -> NOT a continuation line
+                    # No Indent/Dedent for a continuation line — either the next
+                    # line starts with '.' (leading-dot) or the previous line
+                    # ended with '.' (trailing-dot, tracked by `trailing_dot`).
+                    if next_c != 46 and not trailing_dot:
                         mut cur_indent = self.indent_stack.get(self.indent_stack.len - 1)
                         if indent > cur_indent:
                             self.indent_stack.push(indent)
@@ -467,6 +471,7 @@ pub class Lexer:
                                 self.indent_stack.len = self.indent_stack.len - 1
                                 tokens.push(Token.Dedent)
                                 self.push_loc()
+                    trailing_dot = False  # consumed: this line is the continuation
 
             mut c = self.peek()
             # Capture the 1-based column of this token's first byte. All real
@@ -481,9 +486,13 @@ pub class Lexer:
                 self.advance()
                 if c == 13 and self.peek() == 10: self.advance()
                 if nesting == 0:
-                    # Suppress the Newline if the next non-blank line starts with '.'
-                    # (dot-continuation: method chains across lines).
-                    if not _peek_next_line_dot(self.src, self.pos, self.len):
+                    # Suppress the Newline for a method-chain continuation: the
+                    # next line starts with '.' (leading-dot) OR this line ended
+                    # with '.' (trailing-dot — flag it so the next line's indent
+                    # is suppressed too).
+                    if _last_tok_is_dot(tokens):
+                        trailing_dot = True
+                    elif not _peek_next_line_dot(self.src, self.pos, self.len):
                         tokens.push(Token.Newline)
                         self.push_loc()
                     at_line_start = True
@@ -492,7 +501,9 @@ pub class Lexer:
                 self.advance()
                 self.skip_comment(true)   # trailing (code preceded it on this line)
                 if nesting == 0:
-                    if not _peek_next_line_dot(self.src, self.pos, self.len):
+                    if _last_tok_is_dot(tokens):
+                        trailing_dot = True
+                    elif not _peek_next_line_dot(self.src, self.pos, self.len):
                         tokens.push(Token.Newline)
                         self.push_loc()
                     at_line_start = True
@@ -719,4 +730,27 @@ pub def _peek_next_line_dot(src: Pointer[char], pos: int, src_len: int) -> bool:
         else:
             return c == 46            # '.' -> chain continuation
     return false
+
+# -- Trailing-dot continuation -------------------------------------------------
+# True when the most recently emitted real token is a '.' — i.e. the current
+# line ENDS with a dot, so the next line continues the method chain. Enables the
+# trailing-dot builder style (mirrors the leading-dot style above):
+#   mut x = Foo.init().
+#       set("k", v).
+#       build()
+# A float literal like `5.` lexes as a single Float token (not `5` then `.`),
+# so it never trips this.
+pub def _last_tok_is_dot(tokens: Vec[Token]) -> bool:
+    if tokens.len == 0: return false
+    match tokens.get(tokens.len - 1):
+        case Token.Dot:
+            # Only a chain continuation when the dot follows a chainable
+            # expression end. A dot right after a NUMBER (`5.`) is a malformed
+            # float, not a continuation — don't let it swallow the next line.
+            if tokens.len < 2: return false
+            match tokens.get(tokens.len - 2):
+                case Token.IntLit(_):   return false
+                case Token.FloatLit(_): return false
+                case _:                 return true
+        case _: return false
 
