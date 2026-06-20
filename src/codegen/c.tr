@@ -3027,7 +3027,22 @@ pub class CGenerator:
         # StringBuilder special handling (must be before len/length shortcut)
         if class_name == "StringBuilder":
             if method == "init": return "StringBuilder_init(" + self.gen_args(args) + ")"
-            if method == "append": return "StringBuilder_append(" + obj_s + ", " + self.gen_expr(args.get(0)) + ")"
+            if method == "append":
+                # append() COPIES its argument into the builder, so a FRESH str
+                # arg (concat / call / method result, e.g. sb.append(html_escape(x))
+                # or sb.append(n.to_str())) must be released after the call.
+                # The special-case above bypasses gen_args' arg hoisting, so do it
+                # here: hoist the fresh value into a temp that the statement's
+                # flush_wraps releases (mirrors dict_val_arg). Without this, every
+                # sb.append(<computed string>) leaked the computed string.
+                mut _ap_e = args.get(0)
+                mut _ap_s = self.gen_expr(_ap_e)
+                if _is_str_type(hir_expr_type(_ap_e).name) and self._is_fresh_str_expr(_ap_e):
+                    mut _ap_t = "_sbt" + self.next_temp()
+                    self.wrap_temp_decls.push("TrStr " + _ap_t + " = (" + _ap_s + ")")
+                    self.wrap_temp_names.push(_ap_t)
+                    return "StringBuilder_append(" + obj_s + ", " + _ap_t + ")"
+                return "StringBuilder_append(" + obj_s + ", " + _ap_s + ")"
             if method == "append_char": return "StringBuilder_append_char(" + obj_s + ", " + self.gen_expr(args.get(0)) + ")"
             if method == "to_string": return "StringBuilder_to_string(" + obj_s + ")"
             if method == "len" or method == "length": return obj_s + "->buf->len"
@@ -4337,6 +4352,10 @@ pub class CGenerator:
                     self.coll_local_sfx.insert(n, c_ty.slice(5, c_ty.len() - 1))
                 elif (ty.name == "Dict" or ty.name == "Map" or ty.name == "Set") and (c_ty == "TrIDict*" or c_ty == "_TrISet*"):
                     self.coll_local_idict.insert(n, true)
+                # Str-valued Dict/Map local: track for strval free/auto-drop.
+                # Use the declared type's args, but fall back to the init value's
+                # type args when the local is inferred (`mut m = Map[str,str].init`)
+                # and lost its args on the declared type.
                 if (ty.name == "Dict" or ty.name == "Map") and ty.args.len > 1 and _is_str_type(ty.args.get(1).read().name):
                     self.coll_local_strval.insert(n, true)
                 # ? propagation in let binding
