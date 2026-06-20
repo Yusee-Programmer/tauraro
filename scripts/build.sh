@@ -10,26 +10,23 @@ if [ ! -x "$BOOTSTRAP" ] && ! command -v "$BOOTSTRAP" &>/dev/null; then
     exit 1
 fi
 
-# ARM64 Linux: wrap gcc with musl-gcc for Android/Termux portability.
+# Remove the ARM64 musl wrapper - use native glibc GCC instead
+# (musl lacks ucontext functions needed by the coroutine scheduler)
 STATIC_FLAG=""
-if [ "$(uname -m)" = "aarch64" ] && [ "$(uname -s)" = "Linux" ]; then
-    echo "==> ARM64 Linux: installing musl-tools for portable binary"
-    sudo apt-get install -y --no-install-recommends musl-tools
-    mkdir -p "$HOME/.local/bin"
-    printf '#!/bin/sh\nexec musl-gcc -std=gnu11 -D_GNU_SOURCE "$@"\n' > "$HOME/.local/bin/gcc"
-    chmod +x "$HOME/.local/bin/gcc"
-    export PATH="$HOME/.local/bin:$PATH"
-    STATIC_FLAG="--static"
-fi
 
-# For non-ARM64 Linux, ensure -std=gnu11 and -D_GNU_SOURCE for ucontext
-if [ "$(uname -s)" = "Linux" ] && [ "$(uname -m)" != "aarch64" ]; then
+# For Linux, ensure -std=gnu11 and -D_GNU_SOURCE for ucontext
+if [ "$(uname -s)" = "Linux" ]; then
+    # Create a GCC wrapper that always uses -std=gnu11 -D_GNU_SOURCE
     mkdir -p "$HOME/.local/bin"
     if [ ! -f "$HOME/.local/bin/gcc" ]; then
         printf '#!/bin/sh\nexec /usr/bin/gcc -std=gnu11 -D_GNU_SOURCE "$@"\n' > "$HOME/.local/bin/gcc"
         chmod +x "$HOME/.local/bin/gcc"
     fi
     export PATH="$HOME/.local/bin:$PATH"
+    # Use native glibc GCC on all Linux platforms
+    export CC="gcc"
+    export CFLAGS="-O2 -std=gnu11 -D_GNU_SOURCE"
+    export LDFLAGS="-lm -lpthread"
 fi
 
 echo "==> Compiling src/main.tr → ./tauraroc"

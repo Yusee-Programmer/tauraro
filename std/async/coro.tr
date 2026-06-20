@@ -24,8 +24,11 @@ extern "C":
     def _tr_co_spawn_h(fn: Pointer[char], arg: Pointer[char])
 
 # Reactor event flags (mirror TAURARO_POLLIN / TAURARO_POLLOUT).
-pub def POLL_IN()  -> int: return 1
-pub def POLL_OUT() -> int: return 2
+# NOTE: named POLL_READABLE/POLL_WRITABLE (not POLL_IN/POLL_OUT) because glibc's
+# <bits/siginfo-consts.h> defines POLL_IN/POLL_OUT as enum constants — colliding
+# C function names there cause "redeclared as different kind of symbol".
+pub def POLL_READABLE()  -> int: return 1
+pub def POLL_WRITABLE() -> int: return 2
 
 pub class Coro:
     _dummy: int
