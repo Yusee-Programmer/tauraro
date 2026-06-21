@@ -22,7 +22,11 @@
 /* Must be defined before any system header to expose full POSIX/platform extensions:
  * pthread_rwlock_t, setenv, strdup, struct addrinfo, NI_NAMEREQD, clock_gettime, etc. */
 #if defined(__linux__)
-#  define _GNU_SOURCE
+/* Guard against a command-line -D_GNU_SOURCE (CI sets it) to avoid a
+ * "_GNU_SOURCE redefined" warning; same value, so the guard is harmless. */
+#  ifndef _GNU_SOURCE
+#    define _GNU_SOURCE
+#  endif
 #elif defined(__APPLE__)
 /* macOS: _DARWIN_C_SOURCE re-enables BSD extensions (strdup, etc.); _XOPEN_SOURCE
  * is ALSO required because recent SDKs (Xcode 16+) guard the ucontext routines

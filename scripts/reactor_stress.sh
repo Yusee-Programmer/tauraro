@@ -24,8 +24,17 @@ TEST="tests/reactor/keepalive_stress.tr"
 COUNT=0
 [ "${1:-}" = "--count" ] && COUNT=1
 
+# Portable timeout: GNU `timeout` (Linux / Git-Bash), `gtimeout` (macOS with
+# coreutils), else none — macOS runners ship no `timeout`. Running without it is
+# safe here: the test self-terminates (clients do a fixed number of round-trips,
+# then main returns and the process exits, killing the detached server thread).
+TO=""
+if command -v timeout >/dev/null 2>&1; then TO="timeout 120"
+elif command -v gtimeout >/dev/null 2>&1; then TO="gtimeout 120"
+fi
+
 run_once() {
-    timeout 120 "$TAURAROC" --run "$TEST" 2>&1
+    $TO "$TAURAROC" --run "$TEST" 2>&1
 }
 
 if [ "$COUNT" -eq 1 ] && [ "$(uname)" = "Linux" ] && command -v strace >/dev/null 2>&1; then
