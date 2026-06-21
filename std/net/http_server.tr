@@ -458,10 +458,13 @@ extend HttpConn:
         else:
             sb.append("\r\nConnection: close\r\n\r\n")
         sb.append(body)
-        mut wire = sb.to_owned()
+        # Send the StringBuilder's buffer DIRECTLY (send_raw takes ptr+len, is
+        # cooperative-blocking so `sb` stays valid until all bytes are written,
+        # and is TLS-aware). This avoids to_owned()'s full-response memcpy +
+        # allocation + free, and send()'s NUL-length rescan — a measurable win
+        # on the large-body paths (plaintext-big, fortunes).
+        mut sent = self._stream.send_raw(sb.buf.data, sb.buf.len)
         sb.free()
-        mut sent = self._stream.send(wire)
-        unsafe: _tr_c_free(wire as Pointer[char])
         self.last_status = status
 
     # Convenience: plain-text response.
