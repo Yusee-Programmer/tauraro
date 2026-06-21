@@ -161,12 +161,26 @@ extend TcpStream:
     # Receive up to `cap` bytes, awaiting readability if needed.
     pub def recv_async(self, cap: int) -> str:
         if not self.nonblocking: self.set_nonblocking()
+        if not self.connected: return ""
+        # Allocate the receive buffer ONCE and reuse it across would-block
+        # retries (the previous version called recv_nb, which malloc'd + freed a
+        # fresh cap-sized buffer on every parked attempt — a wasted 16 KB
+        # malloc/free per request when the next keep-alive request hadn't
+        # arrived yet). On success the buffer becomes the returned string (caller
+        # owns it); on close/error it is freed here.
+        mut buf = _tr_c_malloc(cap + 1)
         while true:
-            mut data: str = self.recv_nb(cap)
-            if not self._wb:
-                return data
-            # Would block: park until the socket is readable, then retry.
-            _tr_co_await_fd_h(self.fd, 1)
+            mut n = _tr_tcp_recv_nb(self.fd, buf, cap)
+            if n == -2:
+                # Would block: park until readable, then retry into the same buf.
+                _tr_co_await_fd_h(self.fd, 1)
+            elif n <= 0:
+                self.connected = false
+                _tr_free(buf)
+                return ""
+            else:
+                unsafe: buf.offset(n).write('\0')
+                return buf as str
         return ""   # unreachable (loop only exits via return); satisfies F-3
 
     # Send all of `data`, awaiting writability as the send buffer drains.
