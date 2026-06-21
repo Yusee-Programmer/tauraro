@@ -1397,19 +1397,33 @@ extend Parser:
                         idx = box_expr(Expr.ETypeArg(box_asttype(self.parse_type())))
                     else:
                         idx = self.parse_expr()
-                    # Consume extra comma-separated type args (e.g. Map[str, T]).
+                    # Collect extra comma-separated type args (e.g. Map[str, T]).
                     # A subsequent arg may itself be a function-pointer type
                     # (e.g. `Map[str, def(int) -> bool].init(4)`), which `def`
                     # cannot start as a value expression - parse it as a type.
+                    # These were previously PARSED AND DISCARDED, which collapsed
+                    # `Map[K, V]` to `Map[K]` and lost the value type V (so the
+                    # codegen couldn't tell a Map[*,str] needed the strval free
+                    # path -> leak). Keep them: a multi-arg index becomes an
+                    # ETuple of all the type args, which the type lowering reads.
+                    mut _ti_extra = Vec[Pointer[Expr]].init(2)
                     while self.peek() == Token.Comma:
                         self.pos = self.pos + 1
                         self.skip_newlines_and_indent()
                         if self.peek() == Token.KwDef:
-                            self.parse_type()
+                            _ti_extra.push(box_expr(Expr.ETypeArg(box_asttype(self.parse_type()))))
                         else:
-                            self.parse_expr()
+                            _ti_extra.push(self.parse_expr())
                     if self.peek() == Token.RBracket:
                         self.pos = self.pos + 1
+                    if _ti_extra.len > 0:
+                        mut _ti_all = Vec[Pointer[Expr]].init(_ti_extra.len + 1)
+                        _ti_all.push(idx)
+                        mut _tj = 0
+                        while _tj < _ti_extra.len:
+                            _ti_all.push(_ti_extra.get(_tj))
+                            _tj = _tj + 1
+                        idx = box_expr(Expr.ETuple(_ti_all))
                     e = box_expr(Expr.EIndex(e, idx))
                 case Token.Question:
                     self.pos = self.pos + 1
