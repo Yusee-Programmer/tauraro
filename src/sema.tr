@@ -1069,22 +1069,23 @@ extend Sema:
             case HirExpr.EUnaryOp(_, inner, _): self.mark_escaped_str_args(inner)
             case HirExpr.ECall(callee, args, _):
                 self.mark_escaped_str_args(callee)
-                # Only class-constructor calls risk storing a str arg into a
-                # struct field with extended lifetime (no retain). Plain
-                # function/static-method calls (e.g. all of Str.*/Fmt.*) only
-                # read their `str` params (params are never auto-dropped, see
-                # is_droppable_sym's is_param check) - the caller keeps sole
-                # ownership and remains safe to auto-drop at scope exit.
-                mut _call_is_ctor = false
+                # A str local passed to a function / constructor / static method
+                # stays auto-drop-eligible (same reasoning as the EMethodCall
+                # branch below): a constructor that stores the arg into a field
+                # retains it (str_retain_wrap on the `self.f = arg` assignment),
+                # and plain/static calls only READ their str params (params are
+                # never auto-dropped). So the caller is never the sole owner of
+                # storage the callee keeps. The ONE exception is the
+                # `unsafe: _tr_c_free(x as Pointer[char])` idiom, which manually
+                # frees x's TrStr.data; x must stay escaped there so auto-drop
+                # doesn't ALSO release it (double-free).
                 mut _call_is_c_free = false
                 match callee.read():
                     case HirExpr.EIdent(_cnm, _, _):
-                        if self.classes.contains(_cnm): _call_is_ctor = true
                         if _cnm == "_tr_c_free": _call_is_c_free = true
                     case _: pass
                 mut i = 0
                 while i < args.len:
-                    if _call_is_ctor: self.mark_str_arg(args.get(i))
                     if _call_is_c_free:
                         # `unsafe: _tr_c_free(x as Pointer[char])` manually frees
                         # x's underlying TrStr.data - the std-lib idiom for
