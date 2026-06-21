@@ -1101,48 +1101,26 @@ extend Sema:
                     i = i + 1
             case HirExpr.EMethodCall(obj, mname, args, _):
                 self.mark_escaped_str_args(obj)
-                # Since #52 (List_TrStr migration), pushing a str into
-                # List[str]/Vec[str] (append/push/extend/set/insert),
-                # Set[str].add(), or using a str as a Dict/Map key
-                # (insert/set arg 0) all retain-on-insert (List_TrStr_append,
-                # _tr_dict_set's strdup), so the str local does NOT alias the
-                # collection's storage - safe to keep eligible for auto-drop.
-                # As of Phase 5 (Tier2b), Dict/Map VALUE args (arg 1) also
-                # retain-on-box (dict_val_arg -> _tr_str_box(_tr_str_retain)),
-                # so they too are safe to leave eligible for auto-drop.
-                mut obj_ty = hir_expr_type(obj)
-                # Static-method call on a class name (e.g. `Str.to_upper(s)`,
-                # `Fmt.int_to_str(n)`): `obj` is the class identifier itself,
-                # not an instance, so there is no `self` to stash the arg
-                # into a field - same reasoning as the ECall non-constructor
-                # case above, safe to leave args eligible for auto-drop.
-                mut _is_static_call = false
-                match obj.read():
-                    case HirExpr.EIdent(_ocnm, _, _):
-                        if self.classes.contains(_ocnm) and not self.is_local_var(_ocnm): _is_static_call = true
-                    case _: pass
+                # A `str` local passed as a METHOD argument stays eligible for
+                # auto-drop. Every way a callee can STORE a str arg with an
+                # extended lifetime takes its OWN reference:
+                #   - field assignment retains (str_retain_wrap wraps the RHS of
+                #     `self.field = arg` - an EPropAccess target - in c.tr),
+                #   - List/Vec/Set/Map/Dict inserts retain (#52 List_TrStr, #54
+                #     Dict str values, Tier2b Dict value boxing),
+                #   - enum/tuple/box payloads retain on construction.
+                # So the caller is never left as the sole owner of storage the
+                # callee keeps; the scope-exit `_tr_str_release` just drops the
+                # CALLER's own reference (the stored copy's refcount keeps it
+                # alive). Marking these args escaped (the old behaviour) instead
+                # LEAKED every str handed to a user-class instance method, e.g.
+                # `w.field_str(k, name)`, `c.send_text(200, body)` - the
+                # get_param / response-body leak. The only genuine alias risk is
+                # raw-pointer storage in `unsafe` code, which is the author's
+                # responsibility (and `_tr_c_free(x ...)` is still special-cased
+                # in the ECall branch above to avoid a double-free).
                 mut i = 0
                 while i < args.len:
-                    mut skip_mark = _is_static_call
-                    if obj_ty.name == "List" or obj_ty.name == "Vec":
-                        if mname == "append" or mname == "push" or mname == "extend" or mname == "set" or mname == "insert":
-                            skip_mark = true
-                    elif obj_ty.name == "Set":
-                        if mname == "add" or mname == "contains" or mname == "remove":
-                            skip_mark = true
-                    elif obj_ty.name == "Map" or obj_ty.name == "Dict":
-                        # Both key (i==0, strdup'd) and value (i==1, boxed
-                        # with retain) take independent references on insert/
-                        # set, so neither aliases the caller's local.
-                        if (mname == "insert" or mname == "set") and (i == 0 or i == 1):
-                            skip_mark = true
-                        # get/get_or/contains/remove/pop only look up the key
-                        # (i==0) - never store it - so the caller's local
-                        # remains sole owner and stays auto-drop eligible.
-                        elif (mname == "get" or mname == "get_or" or mname == "contains" or mname == "remove" or mname == "pop") and i == 0:
-                            skip_mark = true
-                    if not skip_mark:
-                        self.mark_str_arg(args.get(i))
                     self.mark_escaped_str_args(args.get(i))
                     i = i + 1
             case HirExpr.EPropAccess(obj, _, _): self.mark_escaped_str_args(obj)
@@ -2444,13 +2422,26 @@ extend Sema:
                 self.block_depth = self.block_depth + 1
                 self.open_block()
                 if elifs.len > 0:
+                    # Each elif/else body must get its OWN block id, not share
+                    # the chain's outer one: sibling branches reuse local names
+                    # (the lexer's three `mut inner = ...` arms), and the scope's
+                    # variables map is keyed by NAME, so a shared id makes a str
+                    # local declared in one arm look "visible" (block_stack
+                    # still holds the shared id) at another arm's early return -
+                    # emitting a _tr_str_release of a C variable not in that
+                    # arm's scope. Per-branch open/close blocks keep each arm's
+                    # decl_block_id distinct so it's only dropped within its arm.
+                    self.open_block()
                     mut base_else = self.lower_block(else_b)
+                    self.close_block()
                     mut chain = base_else
                     mut k = elifs.len - 1
                     while k >= 0:
                         mut elif_c = elifs.get(k)
                         mut elif_cond = self.lower_expr(elif_c.cond)
+                        self.open_block()
                         mut elif_body = self.lower_block(elif_c.body.read())
+                        self.close_block()
                         mut nested = HirBlock.init()
                         nested.push(box_hirstmt(HirStmt.SIf(elif_cond, elif_body, chain)))
                         chain = nested
