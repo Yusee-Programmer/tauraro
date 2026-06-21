@@ -3838,7 +3838,16 @@ pub class CGenerator:
                 s = s + "if (" + self.gen_expr(gen.ifs.get(fi)) + ") { "
                 fi = fi + 1
             i = i + 1
-        s = s + "List_" + sfx + "_append(" + tmp + ", " + self.gen_expr(element) + "); "
+        # For a FRESH str element (e.g. `x.to_str()`, a concat), transfer
+        # ownership into the list via _append_owned instead of _append: the
+        # plain List_TrStr_append RETAINS its arg, so appending a fresh rc=1
+        # string without a matching release leaks it once per element. A
+        # borrowed str element (e.g. `[s for s in strs]`) still uses the
+        # retaining _append so the result keeps its own reference.
+        mut _elem_s = self.gen_expr(element)
+        mut _app_sfx = "_append"
+        if sfx == "TrStr" and self._is_fresh_str_expr(element): _app_sfx = "_append_owned"
+        s = s + "List_" + sfx + _app_sfx + "(" + tmp + ", " + _elem_s + "); "
         i = 0
         while i < generators.len:
             mut gen2 = generators.get(i).read()
@@ -3846,9 +3855,41 @@ pub class CGenerator:
             while fi < gen2.ifs.len:
                 s = s + "} "
                 fi = fi + 1
-            s = s + "_gi" + i.to_str() + "++; } } "
+            # Free the comprehension's source iterable when it is a freshly
+            # allocated, owned list (a literal or range) with PRIMITIVE
+            # elements - otherwise it leaks every evaluation (e.g.
+            # `[x.to_str() for x in [a,b,c]]`). The free goes inside the
+            # `{ __auto_type _gc<i> = ...; }` block (after the while, before the
+            # block's closing brace). Restricted to single-generator comps and
+            # primitive element types: a borrowed source (variable/field) must
+            # not be freed (UAF), and a str/class-element source could share
+            # refcounted elements with the result via append (double-free).
+            mut src_free = ""
+            if generators.len == 1:
+                src_free = self._comp_src_free_stmt(gen2.iter, i)
+            s = s + "_gi" + i.to_str() + "++; } " + src_free + "} "
             i = i + 1
         return s + tmp + "; })"
+
+    # Returns "List_<sfx>_free(_gc<idx>); " when the comprehension source `iter_e`
+    # is a fresh, owned collection (list literal or range) with primitive
+    # elements, else "" (leave borrowed / refcounted-element sources alone).
+    pub def _comp_src_free_stmt(self, iter_e: Pointer[HirExpr], idx: int) -> str:
+        mut is_fresh = false
+        match iter_e.read():
+            case HirExpr.EList(_, _): is_fresh = true
+            case HirExpr.ERange(_, _, _, _): is_fresh = true
+            case _: is_fresh = false
+        if not is_fresh: return ""
+        mut src_ty = hir_expr_type(iter_e)
+        mut elem_n = "int"
+        if src_ty.args.len > 0: elem_n = src_ty.args.get(0).read().name
+        mut src_sfx = self.list_sfx(self.list_elem_suffix(elem_n))
+        # Only primitive element suffixes are safe to free here. TrStr (str
+        # elements) and ptr (class/heap elements) may have been shared into the
+        # result by append, so skip them.
+        if src_sfx == "TrStr" or src_sfx == "ptr": return ""
+        return "List_" + src_sfx + "_free(_gc" + idx.to_str() + "); "
 
     pub def gen_closure(self, params: Vec[HirParam], ret_ty: AstType, body: HirBlock, captures: Vec[HirParam]) -> str:
         self.closure_count = self.closure_count + 1

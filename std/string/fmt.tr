@@ -103,7 +103,11 @@ extend Fmt:
             sb.append_char(pad_char)
             i = i + 1
         sb.append(s)
-        unsafe: _tr_c_free(s as Pointer[char])
+        # `s` is borrowed: the caller owns/releases it (fresh args are released
+        # at the call site; variable args stay owned by the caller). append()
+        # copies, so we must NOT free `s` here — doing so double-frees (the
+        # `slen >= width` path returns a retained `s`, this path consumed it),
+        # which corrupted the heap via Fmt.zero_pad -> DateTime.to_string.
         mut out = sb.to_owned()
         sb.free()
         return out
@@ -113,7 +117,7 @@ extend Fmt:
         if slen >= width: return s
         mut sb = StringBuilder.init(width + 1)
         sb.append(s)
-        unsafe: _tr_c_free(s as Pointer[char])
+        # `s` is borrowed (see pad_left) — do not free it here.
         mut i  = slen
         while i < width:
             sb.append_char(pad_char)
