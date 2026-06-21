@@ -2144,8 +2144,8 @@ static inline int _tr_iopoll_del(_TrIOPoll* p, int fd) {
 }
 static inline int _tr_iopoll_wait(_TrIOPoll* p, _TrIOEvent* out, int maxev, int timeout_ms) {
     if (!p || !out || maxev <= 0) return 0;
-    struct epoll_event evs[64];
-    int n = epoll_wait(p->epfd, evs, maxev < 64 ? maxev : 64, timeout_ms);
+    struct epoll_event evs[256];
+    int n = epoll_wait(p->epfd, evs, maxev < 256 ? maxev : 256, timeout_ms);
     if (n <= 0) return 0;
     for (int i = 0; i < n; i++) {
         uint32_t e = 0;
@@ -2223,10 +2223,10 @@ static inline int _tr_iopoll_del(_TrIOPoll* p, int fd) {
 }
 static inline int _tr_iopoll_wait(_TrIOPoll* p, _TrIOEvent* out, int maxev, int timeout_ms) {
     if (!p || !out || maxev <= 0) return 0;
-    struct kevent evs[64];
+    struct kevent evs[256];
     struct timespec ts = { timeout_ms / 1000, (timeout_ms % 1000) * 1000000L };
     struct timespec* tsp = timeout_ms < 0 ? NULL : &ts;
-    int n = kevent(p->kqfd, NULL, 0, evs, maxev < 64 ? maxev : 64, tsp);
+    int n = kevent(p->kqfd, NULL, 0, evs, maxev < 256 ? maxev : 256, tsp);
     if (n <= 0) return 0;
     for (int i = 0; i < n; i++) {
         uint32_t e = 0;
@@ -2486,8 +2486,12 @@ static int _tr_sched_step(void) {
     if (earliest >= 0) { timeout = (int)(earliest - now); if (timeout < 0) timeout = 0; }
 
     if (_tr_g.n_io > 0 && _tr_g.reactor) {
-        _TrIOEvent evs[64];
-        int n = _tr_iopoll_wait(_tr_g.reactor, evs, 64, timeout);
+        /* Drain up to 256 ready connections per epoll/kqueue/WSAPoll wakeup
+         * (was 64): under 1000+ concurrent connections, readiness arrives in
+         * bursts, so a small batch means many syscalls to clear the ready set
+         * and head-of-line latency for the connections at the back. */
+        _TrIOEvent evs[256];
+        int n = _tr_iopoll_wait(_tr_g.reactor, evs, 256, timeout);
         for (int i = 0; i < n; i++) {
             _TrCoro* k = (_TrCoro*)evs[i].userdata;
             if (k && k->state == _TRC_SUSP && k->io_fd >= 0) {

@@ -371,6 +371,128 @@ pub def _json_write_pretty(v: Pointer[JsonValue], sb: StringBuilder, depth: int)
     mut node = v.read()
     _json_write_val_pretty(node, sb, depth)
 
+# ─── JsonWriter — streaming serialization (no intermediate tree) ──────────────
+#
+# Writes JSON directly into a StringBuilder with ZERO per-value heap allocation
+# (ints go straight to the buffer via append_int; strings via _json_escape).
+# For hot response paths whose shape is known at the call site — far cheaper
+# than building a JsonValue tree and disposing it (which is one heap alloc per
+# node plus the dict/list machinery). Comma/colon placement is handled
+# automatically by a small "first element" stack.
+#
+#   mut w = JsonWriter.init(256)
+#   w.begin_array()
+#   w.begin_object()
+#   w.field_int("id", 1); w.field_str("name", "x"); w.field_bool("ok", true)
+#   w.end_object()
+#   w.end_array()
+#   mut body = w.finish()           # -> "[{\"id\":1,\"name\":\"x\",\"ok\":true}]"
+pub class JsonWriter:
+    pub sb:     StringBuilder
+    pub _first: Vec[bool]   # per nesting level: true until its first element is written
+    pub _pend:  bool        # true between key() and its value (suppress that value's separator)
+
+extend JsonWriter:
+    pub def init(capacity: int) -> JsonWriter:
+        mut w = JsonWriter()
+        w.sb     = StringBuilder.init(capacity)
+        w._first = Vec[bool].init(8)
+        w._pend  = false
+        return w
+
+    # Emit a ',' before the next element, unless it's the first in its container
+    # or it is the value belonging to a just-written key.
+    def _sep(self):
+        if self._pend:
+            self._pend = false
+            return
+        if self._first.len > 0:
+            mut idx = self._first.len - 1
+            if self._first.get(idx):
+                self._first.set(idx, false)
+            else:
+                self.sb.append_char(44)   # ','
+
+    pub def begin_object(self):
+        self._sep()
+        self.sb.append_char(123)          # '{'
+        self._first.push(true)
+
+    pub def end_object(self):
+        self.sb.append_char(125)          # '}'
+        self._first.pop()
+
+    pub def begin_array(self):
+        self._sep()
+        self.sb.append_char(91)           # '['
+        self._first.push(true)
+
+    pub def end_array(self):
+        self.sb.append_char(93)           # ']'
+        self._first.pop()
+
+    # Object member key. The following value call writes the value with no
+    # separator of its own (handled via _pend).
+    pub def key(self, name: str):
+        self._sep()
+        self.sb.append_char(34)
+        _json_escape(name, self.sb)
+        self.sb.append_char(34)
+        self.sb.append_char(58)           # ':'
+        self._pend = true
+
+    # ── Scalar values (array element, or object value after key()) ────────────
+    pub def int_val(self, n: int):
+        self._sep()
+        self.sb.append_int(n)
+
+    pub def str_val(self, s: str):
+        self._sep()
+        self.sb.append_char(34)
+        _json_escape(s, self.sb)
+        self.sb.append_char(34)
+
+    pub def bool_val(self, b: bool):
+        self._sep()
+        if b: self.sb.append("true")
+        else: self.sb.append("false")
+
+    pub def null_val(self):
+        self._sep()
+        self.sb.append("null")
+
+    # ── Object field convenience (key + value) ────────────────────────────────
+    pub def field_int(self, name: str, n: int):
+        self.key(name)
+        self.int_val(n)
+
+    pub def field_str(self, name: str, s: str):
+        self.key(name)
+        self.str_val(s)
+
+    pub def field_bool(self, name: str, b: bool):
+        self.key(name)
+        self.bool_val(b)
+
+    # Read-only view of the serialized bytes (aliases the internal buffer).
+    # Named `view` (not `as_str`) because the codegen intercepts `.as_str()` on
+    # any receiver as a built-in pointer->str cast, bypassing user methods.
+    pub def view(self) -> str:
+        return self.sb.as_str()
+
+    # Take ownership of the serialized JSON as a fresh string and free the
+    # writer's buffer.
+    pub def finish(self) -> str:
+        mut out = self.sb.to_owned()
+        self.sb.free()
+        self._first.free()
+        return out
+
+    # Free without producing a string (when as_str() was sent directly).
+    pub def free(self):
+        self.sb.free()
+        self._first.free()
+
 # ─── JsonParser ───────────────────────────────────────────────────────────────
 
 pub class JsonParser:
