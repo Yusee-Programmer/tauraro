@@ -2301,6 +2301,7 @@ static inline int   _tr_iopoll_del_h(char* p, long long fd)
 typedef LPVOID _tr_coctx_t;
 #else
 #include <ucontext.h>
+#include <sys/mman.h>
 typedef ucontext_t _tr_coctx_t;
 #endif
 
@@ -2429,7 +2430,16 @@ static _TrCoro* _tr_co_go(_tr_coro_fn fn, void* arg) {
 #if defined(_WIN32)
     c->ctx = CreateFiber(_TR_CORO_STACK, _tr_co_entry, c);
 #else
-    c->stack = (char*)malloc(_TR_CORO_STACK);
+    /* mmap the coroutine stack instead of malloc: anonymous pages are
+     * zero-fill-on-demand, so only the pages a handler actually touches become
+     * resident. A 256 KiB stack that uses ~16 KiB costs ~16 KiB RSS, not 256 KiB.
+     * Under N concurrent keep-alive connections (one stackful coro each) this is
+     * the difference between ~N*256KiB and ~N*16KiB of resident memory - the main
+     * reason a stackful green-thread server's RSS otherwise dwarfs a stackless
+     * one (tokio/asyncio). Falls back to malloc if mmap is unavailable. */
+    c->stack = (char*)mmap(NULL, _TR_CORO_STACK, PROT_READ | PROT_WRITE,
+                           MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (c->stack == MAP_FAILED) { _TR_OOM_ABORT(); }
     getcontext(&c->ctx);
     c->ctx.uc_stack.ss_sp = c->stack;
     c->ctx.uc_stack.ss_size = _TR_CORO_STACK;
@@ -2445,7 +2455,7 @@ static void _tr_co_free(_TrCoro* c) {
 #if defined(_WIN32)
     if (c->ctx) DeleteFiber(c->ctx);
 #else
-    if (c->stack) free(c->stack);
+    if (c->stack) munmap(c->stack, _TR_CORO_STACK);
 #endif
     free(c);
 }

@@ -132,12 +132,31 @@ extend Sema:
                 match obj.read():
                     case Expr.EIdent(on):
                         mut at = AstType.init(on)
-                        at.args = Vec[Pointer[AstType]].init(1)
-                        at.args.push(self.build_ast_type(idx))
+                        at.args = Vec[Pointer[AstType]].init(2)
+                        # A multi-arg generic (e.g. Map[K, V]) carries its args as
+                        # an ETuple of type-arg exprs; push them all so the value
+                        # type V is preserved (single-arg index stays one arg).
+                        match idx.read():
+                            case Expr.ETuple(_bte):
+                                mut _bti = 0
+                                while _bti < _bte.len:
+                                    at.args.push(self.build_ast_type(_bte.get(_bti)))
+                                    _bti = _bti + 1
+                            case _:
+                                at.args.push(self.build_ast_type(idx))
                         return box_asttype(at)
                     case _: pass
             case _: pass
         return box_asttype(AstType.init("void"))
+
+    # Convert a single type-argument expression (as parsed inside `Name[...]`)
+    # to its AstType, mirroring the per-case logic in the EIndex type lowering.
+    pub def _targ_of(self, e: Pointer[Expr]) -> Pointer[AstType]:
+        if e as usize == 0 as usize: return box_asttype(AstType.init("void"))
+        match e.read():
+            case Expr.EIdent(n): return box_asttype(AstType.init(n))
+            case Expr.EIndex(_, _): return self.build_ast_type(e)
+            case _: return box_asttype(AstType.init("void"))
 
     pub def init() -> Sema:
         mut s = Sema()
@@ -3632,9 +3651,23 @@ extend Sema:
                 mut is_generic = false
                 mut generic_arg_n: str = ""
                 mut generic_arg_ty: Pointer[AstType] = 0 as Pointer[AstType]
+                # All type args (for multi-arg generics like Map[K, V]); the
+                # single-arg cases below leave this empty and the container build
+                # falls back to generic_arg_n/ty.
+                mut generic_args: Vec[Pointer[AstType]] = Vec[Pointer[AstType]].init(2)
                 if idx_inner as usize == 0 as usize:
                     return hexpr_obj
                 match idx_inner.read():
+                    case Expr.ETuple(_tup_targs):
+                        # Multi-arg generic, e.g. Map[str, str] -> ETuple([str,str]).
+                        is_generic = true
+                        mut _tti = 0
+                        while _tti < _tup_targs.len:
+                            generic_args.push(self._targ_of(_tup_targs.get(_tti)))
+                            _tti = _tti + 1
+                        if generic_args.len > 0:
+                            generic_arg_ty = generic_args.get(0)
+                            generic_arg_n = generic_args.get(0).read().name
                     case Expr.ETypeArg(targ_ty):
                         is_generic = true
                         generic_arg_ty = targ_ty
@@ -3678,19 +3711,33 @@ extend Sema:
                         eff_ty_n = obj_name
                     if (eff_ty_n == "Vec" or eff_ty_n == "List" or eff_ty_n == "Map" or eff_ty_n == "Dict" or eff_ty_n == "Set" or eff_ty_n == "Pointer") and generic_arg_n != "":
                         mut container_ty = AstType.init(eff_ty_n)
-                        container_ty.args = Vec[Pointer[AstType]].init(1)
-                        if generic_arg_ty as usize != 0 as usize:
+                        container_ty.args = Vec[Pointer[AstType]].init(2)
+                        # Multi-arg generics (Map[K, V]) push ALL collected args so
+                        # the value type is preserved; single-arg fall back to the
+                        # one generic_arg_ty/n.
+                        if generic_args.len > 0:
+                            mut _gci = 0
+                            while _gci < generic_args.len:
+                                container_ty.args.push(generic_args.get(_gci))
+                                _gci = _gci + 1
+                        elif generic_arg_ty as usize != 0 as usize:
                             container_ty.args.push(generic_arg_ty)
                         else:
                             container_ty.args.push(box_asttype(AstType.init(generic_arg_n)))
                         if obj_name == "alloc" or obj_name == "dealloc" or obj_name == "resize" or obj_name == "copy":
                              return box_hirexpr(HirExpr.EIndex(hexpr_obj, self.lower_expr(idx_inner), container_ty))
                         return box_hirexpr(HirExpr.EIdent(eff_ty_n, container_ty, false))
-                    # User-defined generic class or enum: preserve the concrete type arg
+                    # User-defined generic class or enum: preserve the concrete type args
                     if (self.classes.contains(obj_name) or self.enums.contains(obj_name)) and generic_arg_n != "":
                         mut cls_ty = AstType.init(obj_name)
-                        cls_ty.args = Vec[Pointer[AstType]].init(1)
-                        cls_ty.args.push(box_asttype(AstType.init(generic_arg_n)))
+                        cls_ty.args = Vec[Pointer[AstType]].init(2)
+                        if generic_args.len > 0:
+                            mut _cgi = 0
+                            while _cgi < generic_args.len:
+                                cls_ty.args.push(generic_args.get(_cgi))
+                                _cgi = _cgi + 1
+                        else:
+                            cls_ty.args.push(box_asttype(AstType.init(generic_arg_n)))
                         return box_hirexpr(HirExpr.EIdent(obj_name, cls_ty, false))
                     return hexpr_obj
                 # Dict/Map index access d[key]: lower to get_index carrying the
