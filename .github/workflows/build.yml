@@ -173,6 +173,23 @@ jobs:
         shell: pwsh
         run: ./scripts/run_tests.ps1
 
+      # -------------------------------------------------------
+      # Reactor stress gate: a green-thread echo server hammered by concurrent
+      # keep-alive clients, exercising the REAL readiness reactor (epoll on
+      # Linux, kqueue on macOS) and its per-request re-arm path. Guards reactor
+      # changes — notably the persistent-epoll-registration optimization — from
+      # dropping events / mis-tracking fds. Linux/macOS only (Windows uses
+      # WSAPoll and is covered locally); timeout-bounded so a hang fails fast.
+      # -------------------------------------------------------
+      - name: Reactor stress test (Linux / macOS)
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          CC: "gcc"
+          CFLAGS: "-O2 -std=gnu11 -D_GNU_SOURCE -D_XOPEN_SOURCE=700"
+          LDFLAGS: "-lm -lpthread -lrt"
+        run: bash scripts/reactor_stress.sh
+
       - name: Clean up generated build output
         shell: bash
         run: |

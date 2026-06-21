@@ -480,18 +480,22 @@ extend JsonWriter:
     pub def view(self) -> str:
         return self.sb.as_str()
 
-    # Take ownership of the serialized JSON as a fresh string and free the
-    # writer's buffer.
+    # Take ownership of the serialized JSON as a fresh string. The writer itself
+    # is torn down by the caller's auto-drop at scope exit (do NOT free here, or
+    # it would double-free with that drop — same contract as view()).
     pub def finish(self) -> str:
-        mut out = self.sb.to_owned()
-        self.sb.free()
-        self._first.free()
-        return out
+        return self.sb.to_owned()
 
-    # Free without producing a string (when as_str() was sent directly).
+    # Full teardown, invoked by auto-drop (the writer is a class with a `free`
+    # method). Must release EVERYTHING the writer owns AND its own struct, the
+    # way StringBuilder.free does — otherwise the JsonWriter struct and the
+    # Vec[bool] struct (Vec.free frees only its data buffer, not the Vec struct)
+    # leak ~per call, which under load grows RSS without bound.
     pub def free(self):
         self.sb.free()
         self._first.free()
+        unsafe:
+            _tr_c_free(self as Pointer[char])
 
 # ─── JsonParser ───────────────────────────────────────────────────────────────
 
