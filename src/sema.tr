@@ -3307,6 +3307,15 @@ extend Sema:
                         mut _elem_name = self.type_alias_elem.get(hobj_ty.name)
                         _alias_ty = AstType.init_generic(_alias_base, box_asttype(AstType.init(_elem_name)))
                     hobj_ty = _alias_ty
+                # Receiver identifier name (e.g. "Thread", "Coro", "ThreadPool")
+                # for static-call dispatch. Used to disambiguate `Thread.spawn`
+                # (Sendable-checked) from other `X.spawn` methods like
+                # `Coro.spawn` (the low-level green-thread primitive that takes
+                # raw Pointer args in unsafe blocks), which must NOT be checked.
+                mut _recv_name = ""
+                match obj.read():
+                    case Expr.EIdent(_rn): _recv_name = _rn
+                    case _: pass
                 # Callable-field call: obj.f(args) where f is a def(...)-typed
                 # FIELD (not a method) -> lower to field access + indirect call.
                 if self.classes.contains(hobj_ty.name):
@@ -3482,8 +3491,11 @@ extend Sema:
                     elif method == "unwrap_err" or method == "err":
                         if hobj_ty.args.len > 1: ret_ty = hobj_ty.args.get(1).read()
                         else: ret_ty = AstType.init("str")
-                # Thread built-in method return types
-                elif method == "spawn" and (hobj_ty.name == "Thread" or hobj_ty.name == "void"):
+                # Thread built-in method return types. Key on the RECEIVER NAME
+                # being `Thread` (not on hobj_ty resolving to void) so sibling
+                # `X.spawn` methods - notably `Coro.spawn`, which takes raw
+                # Pointer args by design - are not subjected to the Sendable check.
+                elif method == "spawn" and (_recv_name == "Thread" or hobj_ty.name == "Thread"):
                     ret_ty = AstType.init("Thread")
                     # Check all args (skip fn name at index 0) are Sendable
                     mut _tsi = 1

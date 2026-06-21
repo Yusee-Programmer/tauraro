@@ -213,6 +213,10 @@ extend TcpStream:
     # Send exactly `n` bytes from `buf`, awaiting writability as needed.
     # Returns bytes sent (< n only on error/closed).
     pub def send_raw(self, buf: Pointer[char], n: int) -> int:
+        # TLS can't take a raw fd buffer; hand the (NUL-terminated) buffer to the
+        # TLS layer as a str. Callers that build into a StringBuilder always
+        # NUL-terminate, so this is correct for text/JSON/HTML responses.
+        if (self.tls as usize) != 0: return _tr_tls_send(self.tls, buf as str)
         mut sent = 0
         while sent < n:
             mut r = _tr_tcp_send_raw(self.fd, buf.offset(sent), n - sent)
