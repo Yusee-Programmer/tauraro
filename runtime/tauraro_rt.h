@@ -2322,7 +2322,12 @@ typedef struct _TrCoro {
     _tr_costate      state;
     long long        result;
     long long        wake_at;     /* timer deadline (ms); 0 = not sleeping  */
-    int              io_fd;       /* fd parked on the reactor; -1 = none    */
+    int              io_fd;       /* fd this coro is parked on right now; -1 = none */
+    int              io_armed_fd; /* fd currently REGISTERED in the reactor; -1 = none.
+                                   * Kept across awaits so a keep-alive connection
+                                   * re-arms with no epoll_ctl syscall (persistent
+                                   * registration); dropped when the coro is freed. */
+    uint32_t         io_armed_ev; /* event mask registered for io_armed_fd  */
     int              detached;    /* 1 = scheduler frees it on completion   */
     struct _TrCoro*  joiner;      /* coro waiting for this one to finish    */
     struct _TrCoro*  next;        /* ready-queue link                       */
@@ -2430,7 +2435,7 @@ static void _tr_co_entry(void) {
 static _TrCoro* _tr_co_go(_tr_coro_fn fn, void* arg) {
     _tr_sched_ensure();
     _TrCoro* c = (_TrCoro*)calloc(1, sizeof(_TrCoro));
-    c->fn = fn; c->arg = arg; c->io_fd = -1;
+    c->fn = fn; c->arg = arg; c->io_fd = -1; c->io_armed_fd = -1;
 #if defined(_WIN32)
     c->ctx = CreateFiber(_TR_CORO_STACK, _tr_co_entry, c);
 #else
@@ -2456,6 +2461,16 @@ static _TrCoro* _tr_co_go(_tr_coro_fn fn, void* arg) {
 
 static void _tr_co_free(_TrCoro* c) {
     if (!c) return;
+    /* Drop any lingering reactor registration before freeing this coro, so a
+     * later readiness event on its fd can never deliver to (and dereference) a
+     * freed coro. Runs on the scheduler thread the instant the coro returns:
+     * the handler has just closed the fd (epoll/kqueue auto-removed it, so the
+     * del is a harmless no-op; WSAPoll still needs it), and the fd cannot have
+     * been reused yet because no accept has run in between. */
+    if (c->io_armed_fd >= 0 && _tr_g.reactor) {
+        _tr_iopoll_del(_tr_g.reactor, c->io_armed_fd);
+        c->io_armed_fd = -1;
+    }
 #if defined(_WIN32)
     if (c->ctx) DeleteFiber(c->ctx);
 #else
@@ -2499,7 +2514,15 @@ static int _tr_sched_step(void) {
         for (int i = 0; i < n; i++) {
             _TrCoro* k = (_TrCoro*)evs[i].userdata;
             if (k && k->state == _TRC_SUSP && k->io_fd >= 0) {
-                _tr_iopoll_del(_tr_g.reactor, k->io_fd);
+                /* Persistent registration: do NOT _tr_iopoll_del here. The fd
+                 * stays armed (k->io_armed_fd) so the next await on the same
+                 * fd+events is a no-op instead of an ADD - saving 2 epoll_ctl
+                 * syscalls per keep-alive request. The registration is dropped
+                 * when the coro is freed (_tr_co_free). A registered fd that is
+                 * level-readable while its coro is already runnable is returned
+                 * again by epoll but skipped here (state != _TRC_SUSP); the
+                 * scheduler drains the ready queue before polling, so this does
+                 * not spin. */
                 k->io_fd = -1; _tr_g.n_io--;
                 _tr_rpush(k);
             }
@@ -2591,7 +2614,26 @@ static int _tr_co_await_fd(int fd, unsigned int events) {
     if (!_tr_g.reactor) _tr_g.reactor = _tr_iopoll_create();
     c->io_fd = fd;
     c->state = _TRC_SUSP;
-    _tr_iopoll_add(_tr_g.reactor, fd, events, (void*)c);
+    /* Persistent registration: keep the fd armed across awaits. The common
+     * keep-alive path re-awaits the SAME fd for the SAME events every request,
+     * so this becomes a no-op (no syscall) after the first ADD. Only ADD when
+     * the fd is new to this coro, and MOD when the interest changes (e.g.
+     * readable -> writable for a backpressured send). The DEL is deferred to
+     * _tr_co_free. (epoll/kqueue: ADD/MOD/DEL are syscalls, so this saves two
+     * per request; WSAPoll: they are cheap in-memory set ops, so it is a wash
+     * but still correct.) */
+    if (c->io_armed_fd == fd) {
+        if (c->io_armed_ev != (uint32_t)events) {
+            _tr_iopoll_mod(_tr_g.reactor, fd, events, (void*)c);
+            c->io_armed_ev = (uint32_t)events;
+        }
+        /* else: already armed for this fd+events - no syscall */
+    } else {
+        if (c->io_armed_fd >= 0) _tr_iopoll_del(_tr_g.reactor, c->io_armed_fd);
+        _tr_iopoll_add(_tr_g.reactor, fd, events, (void*)c);
+        c->io_armed_fd = fd;
+        c->io_armed_ev = (uint32_t)events;
+    }
     _tr_g.n_io++;
 #if defined(__linux__) && !defined(_WIN32)
     _tr_co_reclaim_stack(c);
