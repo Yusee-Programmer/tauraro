@@ -1,0 +1,121 @@
+# Reactor keep-alive stress test — a green-thread (Coro) echo server hammered by
+# several concurrent OS-thread clients, each doing many keep-alive round-trips on
+# one connection. Every round-trip makes the server's connection coroutine
+# recv_async() again, which re-arms the readiness reactor (epoll/kqueue/WSAPoll)
+# — exactly the path the persistent-registration optimization touches. If a
+# reactor change drops events, double-frees an fd, or mis-tracks readiness, this
+# test reports errors / hangs instead of the OK line.
+#
+# Pass criteria: prints "REACTOR-STRESS OK ..." and exits 0; any mismatch /
+# dropped response prints "FAILED".
+
+from std.net.tcp import TcpStream, TcpListener
+from std.async.coro import Coro
+from std.string.str import Str
+
+extern "C":
+    def _tr_c_free(ptr: Pointer[char])
+
+# Sendable holder so the server can cross the Thread.spawn boundary.
+class SrvCfg implements Sendable:
+    pub port: int
+
+# ── Green-thread echo server ──────────────────────────────────────────────────
+
+# One coroutine per connection: echo every chunk until the peer closes.
+def _echo_conn(arg: Pointer[char]):
+    mut fd: int = 0
+    unsafe: fd = arg as int
+    mut s = TcpStream()
+    s.fd = fd
+    s.connected = true
+    s.nonblocking = true
+    s.async_mode = true
+    s._wb = false
+    s.host = ""
+    s.port = 0
+    while true:
+        mut data = s.recv_async(4096)
+        if Str.len(data) == 0:
+            break
+        s.send_async(data)
+        unsafe: _tr_c_free(data as Pointer[char])
+    s.close()
+
+# Accept loop coroutine: spawn a handler per accepted fd, park on the listener
+# when there's nothing to accept.
+def _echo_accept(arg: Pointer[char]):
+    mut lfd: int = 0
+    unsafe: lfd = arg as int
+    mut listener = TcpListener()
+    listener.fd = lfd
+    listener.listening = true
+    listener.host = ""
+    listener.port = 0
+    while true:
+        mut cs = listener.accept_nb()
+        if cs.fd >= 0:
+            unsafe: Coro.spawn(_echo_conn as Pointer[char], cs.fd as Pointer[char])
+        else:
+            Coro.await_readable(lfd)
+
+# Server thread entry: bind, then run the cooperative scheduler forever.
+def _server_entry(cfg: SrvCfg):
+    mut listener = TcpListener.listen("127.0.0.1", cfg.port)
+    listener.set_nonblocking()
+    unsafe: Coro.spawn(_echo_accept as Pointer[char], listener.fd as Pointer[char])
+    Coro.run()
+
+# ── Concurrent blocking clients ───────────────────────────────────────────────
+
+def _client_worker(port: int, rounds: int, errors: Atomic[int]):
+    mut s = TcpStream.connect("127.0.0.1", port)
+    if not s.connected:
+        errors.add(1)
+        return
+    mut r = 0
+    while r < rounds:
+        mut sent = s.send("PING\n")
+        if sent <= 0:
+            errors.add(1)
+            break
+        mut resp = s.recv(64)
+        if Str.len(resp) == 0:
+            errors.add(1)
+            break
+        if Str.index_of(resp, "PING") < 0:
+            errors.add(1)
+        unsafe: _tr_c_free(resp as Pointer[char])
+        r = r + 1
+    s.close()
+
+async def main():
+    mut port = 18765
+    mut cfg = SrvCfg()
+    cfg.port = port
+    # Detached server thread (runs the reactor forever; killed on process exit).
+    # NOTE: spawn + detach are split across two statements — chaining
+    # `Thread.spawn(..).detach()` makes codegen miss the spawn-wrapper emission.
+    mut srv_t = Thread.spawn(_server_entry, cfg)
+    srv_t.detach()
+    Thread.sleep(400)   # let the listener bind
+
+    mut rounds = 100
+    mut errors: Atomic[int] = Atomic.new(0)
+    # 8 concurrent connections, each doing `rounds` keep-alive round-trips.
+    task_group:
+        spawn _client_worker(port, rounds, errors)
+        spawn _client_worker(port, rounds, errors)
+        spawn _client_worker(port, rounds, errors)
+        spawn _client_worker(port, rounds, errors)
+        spawn _client_worker(port, rounds, errors)
+        spawn _client_worker(port, rounds, errors)
+        spawn _client_worker(port, rounds, errors)
+        spawn _client_worker(port, rounds, errors)
+    mut e = errors.load()
+    errors.free()
+
+    if e == 0:
+        print("REACTOR-STRESS OK (8 conns x " + rounds.to_str() + " keep-alive round-trips)")
+    else:
+        print("FAILED: " + e.to_str() + " reactor errors")
