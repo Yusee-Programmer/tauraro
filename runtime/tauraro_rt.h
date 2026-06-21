@@ -2551,6 +2551,32 @@ static void _tr_co_sleep_ms(long long ms) {
 /* Park the current coro until `fd` is ready for `events` (TAURARO_POLLIN/OUT).
  * Returns immediately (1) outside a coroutine - caller should use blocking I/O
  * there. Inside a coro: registers with the reactor and yields. */
+/* Return the dead stack pages this coro touched (during its last request)
+ * back to the OS before it parks on I/O. Under HTTP keep-alive, nearly all
+ * connections sit suspended here awaiting their next request; without this,
+ * each one keeps its deepest touched stack (tens of KB of JSON/templating
+ * frames) resident for its whole lifetime, so peak RSS scales with the
+ * connection count, not the worker count. The region BELOW the current frame
+ * (lower addresses, since the stack grows down) is unused until we resume;
+ * MADV_DONTNEED drops it and the kernel re-supplies zero pages on next touch.
+ * A 16 KB margin below the live SP keeps the current frame + red zone safe.
+ * Linux-only (MADV_DONTNEED's zero-on-reuse semantics); opt out with
+ * TAURARO_CORO_NORECLAIM=1. */
+#if defined(__linux__) && !defined(_WIN32)
+static void _tr_co_reclaim_stack(_TrCoro* c) {
+    static int enabled = -1;
+    if (enabled < 0) enabled = (getenv("TAURARO_CORO_NORECLAIM") == NULL) ? 1 : 0;
+    if (!enabled || !c->stack) return;
+    volatile char probe;
+    uintptr_t sp   = (uintptr_t)&probe;
+    uintptr_t base = (uintptr_t)c->stack;
+    uintptr_t lo   = (base + 4095u) & ~(uintptr_t)4095u;   /* first whole page at/after base */
+    uintptr_t hi   = (sp - 16384u) & ~(uintptr_t)4095u;    /* page below a 16 KB safety margin */
+    if (hi > lo && (hi - lo) >= 65536u)                    /* only when >=64 KB is reclaimable */
+        madvise((void*)lo, (size_t)(hi - lo), MADV_DONTNEED);
+}
+#endif
+
 static int _tr_co_await_fd(int fd, unsigned int events) {
     _TrCoro* c = _tr_g.current;
     if (!c) return 1;
@@ -2559,6 +2585,9 @@ static int _tr_co_await_fd(int fd, unsigned int events) {
     c->state = _TRC_SUSP;
     _tr_iopoll_add(_tr_g.reactor, fd, events, (void*)c);
     _tr_g.n_io++;
+#if defined(__linux__) && !defined(_WIN32)
+    _tr_co_reclaim_stack(c);
+#endif
     _tr_co_to_sched(c);
     return 1;
 }
