@@ -86,6 +86,8 @@ pub class MirBuilder:
     pub if_bodies: Vec[HirBlock]
     pub in_unsafe: int          # >0 inside an `unsafe:` block; bodies lowered there
                                 # are NOT drop targets (dev manages that memory)
+    pub loop_continue: Vec[int] # block to TGoto on `continue` (innermost loop header)
+    pub loop_break:    Vec[int] # block to TGoto on `break` (innermost loop exit)
 
 extend MirBuilder:
     pub def init() -> MirBuilder:
@@ -95,6 +97,8 @@ extend MirBuilder:
         b.complete = true
         b.if_bodies = Vec[HirBlock].init(4)
         b.in_unsafe = 0
+        b.loop_continue = Vec[int].init(4)
+        b.loop_break    = Vec[int].init(4)
         return b
 
     # Create a fresh block, return its id.
@@ -184,7 +188,11 @@ def lower_stmts(b: MirBuilder, hb: HirBlock):
                 b.cur = hdr
                 b.set_term(MirTerm.TBranch(cond, body_b, exit_b))
                 b.cur = body_b
+                b.loop_continue.push(hdr)
+                b.loop_break.push(exit_b)
                 lower_stmts(b, body)
+                b.loop_continue.pop()
+                b.loop_break.pop()
                 if not b.terminated(): b.set_term(MirTerm.TGoto(hdr))
                 b.cur = exit_b
             case HirStmt.SFor(_, fiter, fbody):
@@ -200,7 +208,11 @@ def lower_stmts(b: MirBuilder, hb: HirBlock):
                 b.cur = for_hdr
                 b.set_term(MirTerm.TBranch(fiter, for_body, for_exit))
                 b.cur = for_body
+                b.loop_continue.push(for_hdr)
+                b.loop_break.push(for_exit)
                 lower_stmts(b, fbody)
+                b.loop_continue.pop()
+                b.loop_break.pop()
                 if not b.terminated(): b.set_term(MirTerm.TGoto(for_hdr))
                 b.cur = for_exit
             case HirStmt.SForUnpack(_, fuiter, fubody):
@@ -211,7 +223,11 @@ def lower_stmts(b: MirBuilder, hb: HirBlock):
                 b.cur = fu_hdr
                 b.set_term(MirTerm.TBranch(fuiter, fu_body, fu_exit))
                 b.cur = fu_body
+                b.loop_continue.push(fu_hdr)
+                b.loop_break.push(fu_exit)
                 lower_stmts(b, fubody)
+                b.loop_continue.pop()
+                b.loop_break.pop()
                 if not b.terminated(): b.set_term(MirTerm.TGoto(fu_hdr))
                 b.cur = fu_exit
             case HirStmt.STry(try_body, catches, finally_b):
@@ -304,6 +320,23 @@ def lower_stmts(b: MirBuilder, hb: HirBlock):
             case HirStmt.SAutoDrop(_, _):
                 pass    # sema's own drop; the MIR recomputes drops, so ignore it
                         # here (and avoid double-drop when MIR drives codegen)
+            case HirStmt.SBreak:
+                # `break` jumps to the innermost loop's exit block — a real CFG
+                # edge, so liveness/ownership see locals declared before the break
+                # as dead on this path and drop them correctly. Modelling it (vs
+                # the old `case _:` -> incomplete) lets functions that merely use
+                # break/continue keep MIR-driven drops instead of the HIR fallback.
+                if b.loop_break.len > 0:
+                    b.set_term(MirTerm.TGoto(b.loop_break.get(b.loop_break.len - 1)))
+                else:
+                    b.complete = false   # break outside a loop (rejected by sema)
+            case HirStmt.SContinue:
+                # `continue` jumps to the innermost loop's header (re-test the
+                # condition / advance the iterator).
+                if b.loop_continue.len > 0:
+                    b.set_term(MirTerm.TGoto(b.loop_continue.get(b.loop_continue.len - 1)))
+                else:
+                    b.complete = false
             case _:
                 # Statement form not yet lowered into the CFG. Mark the function
                 # incomplete so no MIR-driven codegen runs on it (the dropped
