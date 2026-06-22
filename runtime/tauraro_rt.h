@@ -255,6 +255,19 @@ static inline char* _tr_empty_heap_str(void) {
     _TR_MEMCOUNT_INC();
     return e;
 }
+/* Owned (heap) copy of a C string, for char*-returning helpers declared `-> str`
+ * whose NORMAL result is a compile-time constant (e.g. _tr_platform/_tr_arch/
+ * _tr_exe_dir). Codegen UNIFORMLY wraps every `-> str` extern result as owned
+ * (rc=1, _tr_str_wrap) and frees it via auto-drop, so returning a string literal
+ * is a free()-on-non-heap corruption; this returns heap so the free is valid.
+ * Memcount-balanced (INC here via _tr_checked_alloc, DEC at _tr_free). */
+static inline char* _tr_str_dup_owned(const char* s) {
+    if (!s) return _tr_empty_heap_str();
+    size_t n = strlen(s);
+    char* r = (char*)_tr_checked_alloc(n + 1);
+    memcpy(r, s, n + 1);
+    return r;
+}
 /* ── Refcounted string (TrStr): fat-pointer str representation ──
  * `data` points at the NUL-terminated bytes. `rc` points at a heap
  * refcount, or is NULL for literal/immortal strings — in that case
@@ -4228,12 +4241,12 @@ static inline char* _tr_username(void) { char* b=(char*)_tr_c_malloc(256); DWORD
 static inline int   _tr_cpu_count(void) { SYSTEM_INFO si; GetSystemInfo(&si); return (int)si.dwNumberOfProcessors; }
 static inline char* _tr_cwd(void)       { char* b=(char*)_tr_c_malloc(4096); GetCurrentDirectoryA(4096,b); return b; }
 static inline int   _tr_chdir(const char* p) { return SetCurrentDirectoryA(p)?0:-1; }
-static inline char* _tr_platform(void) { return (char*)"windows"; }
+static inline char* _tr_platform(void) { return _tr_str_dup_owned("windows"); }
 static inline char* _tr_os_machine(void) {
     SYSTEM_INFO si; GetSystemInfo(&si);
-    if(si.wProcessorArchitecture==PROCESSOR_ARCHITECTURE_AMD64) return (char*)"x86_64";
-    if(si.wProcessorArchitecture==PROCESSOR_ARCHITECTURE_ARM64) return (char*)"arm64";
-    return (char*)"x86";
+    if(si.wProcessorArchitecture==PROCESSOR_ARCHITECTURE_AMD64) return _tr_str_dup_owned("x86_64");
+    if(si.wProcessorArchitecture==PROCESSOR_ARCHITECTURE_ARM64) return _tr_str_dup_owned("arm64");
+    return _tr_str_dup_owned("x86");
 }
 static inline long long _tr_memory_total_mb(void) {
     MEMORYSTATUSEX ms; ms.dwLength=sizeof(ms); GlobalMemoryStatusEx(&ms);
@@ -4329,26 +4342,26 @@ static inline char* _tr_cwd(void)       { char* b=(char*)_tr_c_malloc(4096); ret
 static inline int   _tr_chdir(const char* p) { return chdir(p); }
 #ifdef __APPLE__
 #  if defined(TAURARO_IOS)
-static inline char* _tr_platform(void) { return (char*)"ios"; }
+static inline char* _tr_platform(void) { return _tr_str_dup_owned("ios"); }
 #  else
-static inline char* _tr_platform(void) { return (char*)"macos"; }
+static inline char* _tr_platform(void) { return _tr_str_dup_owned("macos"); }
 #  endif
 #elif defined(TAURARO_ANDROID)
-static inline char* _tr_platform(void) { return (char*)"android"; }
+static inline char* _tr_platform(void) { return _tr_str_dup_owned("android"); }
 #elif defined(TAURARO_WASM)
-static inline char* _tr_platform(void) { return (char*)"wasm"; }
+static inline char* _tr_platform(void) { return _tr_str_dup_owned("wasm"); }
 #else
-static inline char* _tr_platform(void) { return (char*)"linux"; }
+static inline char* _tr_platform(void) { return _tr_str_dup_owned("linux"); }
 #endif
 static inline char* _tr_os_machine(void) {
 #if defined(__x86_64__)||defined(__amd64__)
-    return (char*)"x86_64";
+    return _tr_str_dup_owned("x86_64");
 #elif defined(__aarch64__)
-    return (char*)"arm64";
+    return _tr_str_dup_owned("arm64");
 #elif defined(__arm__)
-    return (char*)"arm";
+    return _tr_str_dup_owned("arm");
 #else
-    return (char*)"unknown";
+    return _tr_str_dup_owned("unknown");
 #endif
 }
 static inline long long _tr_memory_total_mb(void) {
@@ -4633,7 +4646,7 @@ static inline char* _tr_exe_dir(void) {
     return buf;
 #elif defined(__APPLE__)
     char tmp[4096]; uint32_t sz=sizeof(tmp);
-    if(_NSGetExecutablePath(tmp,&sz)!=0) return (char*)".";
+    if(_NSGetExecutablePath(tmp,&sz)!=0) return _tr_str_dup_owned(".");
     char* buf=(char*)_tr_c_malloc(4096);
     if(!realpath(tmp,buf)){strcpy(buf,".");return buf;}
     for(int i=(int)strlen(buf)-1;i>0;i--){if(buf[i]=='/'){buf[i]='\0';break;}}
@@ -4646,7 +4659,7 @@ static inline char* _tr_exe_dir(void) {
     for(int i=(int)n-1;i>0;i--){if(buf[i]=='/'){buf[i]='\0';break;}}
     return buf;
 #else
-    return (char*)".";
+    return _tr_str_dup_owned(".");
 #endif
 }
 

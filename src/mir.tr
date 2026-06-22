@@ -293,55 +293,26 @@ def lower_stmts(b: MirBuilder, hb: HirBlock):
                     b.push_stmt(MirStmt.MEval(amsg))
             case HirStmt.SUnsafe(ubody):
                 # Lower the `unsafe:` body TRANSPARENTLY so liveness still sees its
-                # uses (a value raw-aliased inside stays live THROUGH the block),
-                # then PIN every name the block touches — those names are removed
-                # from the MIR drop schedule (compute_drops), so the dev's own
-                # raw-pointer aliasing (`s.data` / `s as Pointer[char]` used past
-                # the value's last high-level use) is never freed under a live raw
-                # pointer. Pinned values are dropped by the HIR scope-exit machinery
-                # instead, which runs late enough to be safe. The in_unsafe guard
-                # additionally keeps nested if/match bodies here off the drop-target
-                # list. NET: the SAFE region of an unsafe-containing function now
-                # gets CFG-correct MIR drops while raw-aliased values stay HIR-owned.
+                # uses (a raw-aliased value stays live THROUGH the block). Pinning
+                # is NO LONGER done per-unsafe-block — it is the precise FUNCTION-
+                # WIDE raw-borrow set (collect_raw_borrows in lower_function), which
+                # pins exactly the values whose raw pointer is taken (`s as Pointer`
+                # / `&s`) ANYWHERE, inside or outside unsafe. So unsafe-touched
+                # values that are NOT raw-aliased now get their CFG-correct MIR
+                # drops (the Phase-C win), while genuinely raw-aliased values stay
+                # HIR-owned (scope-exit drop, late enough to be safe). The in_unsafe
+                # guard still keeps nested if/match bodies here off the drop-target
+                # list (conservative — those go to HIR scope-exit).
                 #
-                # This is what unlocked unsafe functions after 7 prior failures: the
-                # gen2 corruption those attempts hit was NOT analysis unsoundness but
-                # pre-existing RUNTIME OWNERSHIP LIES — extern `-> str` helpers (e.g.
-                # _tr_readdir) returning a string LITERAL that codegen wraps as owned
-                # (rc=1); the conservative blessed compiler masked them by leaking,
-                # and the (correct) MIR drop exposed them. Fixed at the source (the
-                # runtime now returns owned heap). See [[project_safety_overhaul_phase0]].
-                # NOTE: the pin scans only SYNTACTIC unsafe blocks; raw casts the
-                # compiler makes OUTSIDE unsafe are handled because the aliased value
-                # is either a borrowed param, or used at its drop point, or its raw
-                # pointer dies before the value — none needed a pin in practice (the
-                # full self-host + examples + leak gate are byte-clean). A precise
-                # value-level raw-borrow tracker (Phase C) would let the pinned
-                # values also get MIR drops; the pin is the sound conservative floor.
-                mut ub_start = b.new_block()
-                if not b.terminated(): b.set_term(MirTerm.TGoto(ub_start))
-                b.cur = ub_start
+                # This unlocked unsafe fns after 7 failures whose gen2 corruption was
+                # NOT analysis unsoundness but pre-existing RUNTIME OWNERSHIP LIES
+                # (extern `-> str` helpers like _tr_readdir returning a string
+                # LITERAL that codegen wraps as owned rc=1; masked by the old leak,
+                # exposed by the correct MIR drop). Fixed in the runtime.
+                # See [[project_safety_overhaul_phase0]].
                 b.in_unsafe = b.in_unsafe + 1
                 lower_stmts(b, ubody)
                 b.in_unsafe = b.in_unsafe - 1
-                mut ub_after = b.new_block()
-                if not b.terminated(): b.set_term(MirTerm.TGoto(ub_after))
-                # Pin every name appearing (used or defined) in the unsafe region.
-                mut ubi = ub_start
-                while ubi < ub_after:
-                    mut pg = Vec[str].init(4)
-                    mut pk = Vec[str].init(4)
-                    block_use_def(b.blocks.get(ubi), pg, pk)
-                    mut gi = 0
-                    while gi < pg.len:
-                        mut _a1 = b.unsafe_pinned.add(pg.get(gi))
-                        gi = gi + 1
-                    mut ki = 0
-                    while ki < pk.len:
-                        mut _a2 = b.unsafe_pinned.add(pk.get(ki))
-                        ki = ki + 1
-                    ubi = ubi + 1
-                b.cur = ub_after
             case HirStmt.SRaise(rval):
                 # `raise` exits, but we model it as a plain eval (non-terminating)
                 # so liveness only OVER-approximates (keeps values live past it) —
@@ -404,6 +375,27 @@ pub def lower_function(hf: HirFunction) -> MirFunction:
     b.cur  = b.new_block()           # entry block bb0
     lower_stmts(b, hf.body)
     if not b.terminated(): b.set_term(MirTerm.TReturnVoid())
+    # Phase C: pin the precise FUNCTION-WIDE raw-borrow set — values whose raw
+    # pointer is taken (`x as Pointer[T]` / `&x`) anywhere in the body. These are
+    # excluded from the MIR drop schedule (compute_drops) because a raw pointer may
+    # outlive the value's last high-level use; HIR scope-exit owns their drop. This
+    # replaces the old blanket "pin everything touched in unsafe" so unsafe-touched
+    # values that are NOT raw-aliased get their CFG-correct MIR drops.
+    mut rbi = 0
+    while rbi < b.blocks.len:
+        mut rblk = b.blocks.get(rbi)
+        mut rsi = 0
+        while rsi < rblk.stmts.len:
+            match rblk.stmts.get(rsi).read():
+                case MirStmt.MDeclare(_, rv): collect_raw_borrows(rv, b.unsafe_pinned)
+                case MirStmt.MAssign(_, rv): collect_raw_borrows(rv, b.unsafe_pinned)
+                case MirStmt.MEval(rv): collect_raw_borrows(rv, b.unsafe_pinned)
+            rsi = rsi + 1
+        match rblk.term.read():
+            case MirTerm.TBranch(rc, _, _): collect_raw_borrows(rc, b.unsafe_pinned)
+            case MirTerm.TReturn(rv): collect_raw_borrows(rv, b.unsafe_pinned)
+            case _: pass
+        rbi = rbi + 1
     mf.blocks = b.blocks
     mf.complete = b.complete
     mf.if_bodies = b.if_bodies
@@ -468,6 +460,58 @@ def collect_uses(e: Pointer[HirExpr], out: Vec[str]):
             collect_uses(c, out)
             collect_uses(t, out)
             collect_uses(f, out)
+        case _: pass
+
+# Collect names whose RAW POINTER is taken anywhere in `e`: a bare local cast to
+# `Pointer[T]` (`s as Pointer[char]`) or address-taken (`&s`). Such a local may be
+# aliased by a raw pointer that outlives the local's last HIGH-LEVEL use, so the
+# MIR must NOT auto-drop it (freeing the buffer under the live raw pointer = UAF —
+# the hazard that kept unsafe-containing fns on the HIR fallback). Run FUNCTION-
+# WIDE (raw casts occur both inside AND outside `unsafe:` — e.g. codegen's own
+# `s as Pointer[char]` helpers), which makes this strictly more complete than the
+# old "pin everything syntactically inside unsafe" and lets unsafe-touched-but-
+# NOT-raw-aliased values get their precise CFG drops. Detection is a SUPERSET of
+# the dangerous set: erring toward pinning only leaks (HIR still scope-drops),
+# never double-frees.
+def collect_raw_borrows(e: Pointer[HirExpr], out: LiveSet):
+    if e as usize == 0 as usize: return
+    match e.read():
+        case HirExpr.ECast(inner, ty):
+            if ty.name == "Pointer":
+                match inner.read():
+                    case HirExpr.EIdent(nm, _, _): mut _a = out.add(nm)
+                    case _: pass
+            collect_raw_borrows(inner, out)
+        case HirExpr.EUnaryOp(op, inner, _):
+            if op == "&":
+                match inner.read():
+                    case HirExpr.EIdent(nm, _, _): mut _b = out.add(nm)
+                    case _: pass
+            collect_raw_borrows(inner, out)
+        case HirExpr.EBinOp(_, l, r, _):
+            collect_raw_borrows(l, out)
+            collect_raw_borrows(r, out)
+        case HirExpr.ECall(callee, args, _):
+            collect_raw_borrows(callee, out)
+            mut i = 0
+            while i < args.len:
+                collect_raw_borrows(args.get(i), out)
+                i = i + 1
+        case HirExpr.EMethodCall(obj, _, args, _):
+            collect_raw_borrows(obj, out)
+            mut i = 0
+            while i < args.len:
+                collect_raw_borrows(args.get(i), out)
+                i = i + 1
+        case HirExpr.EPropAccess(obj, _, _): collect_raw_borrows(obj, out)
+        case HirExpr.EIndex(obj, idx, _):
+            collect_raw_borrows(obj, out)
+            collect_raw_borrows(idx, out)
+        case HirExpr.EAwait(x, _): collect_raw_borrows(x, out)
+        case HirExpr.EIfElse(c, t, f, _):
+            collect_raw_borrows(c, out)
+            collect_raw_borrows(t, out)
+            collect_raw_borrows(f, out)
         case _: pass
 
 # Add the upward-exposed uses of `e` to `gen`: a name is upward-exposed only if
