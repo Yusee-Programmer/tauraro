@@ -255,6 +255,19 @@ static inline char* _tr_empty_heap_str(void) {
     _TR_MEMCOUNT_INC();
     return e;
 }
+/* Owned (heap) copy of a C string, for char*-returning helpers declared `-> str`
+ * whose NORMAL result is a compile-time constant (e.g. _tr_platform/_tr_arch/
+ * _tr_exe_dir). Codegen UNIFORMLY wraps every `-> str` extern result as owned
+ * (rc=1, _tr_str_wrap) and frees it via auto-drop, so returning a string literal
+ * is a free()-on-non-heap corruption; this returns heap so the free is valid.
+ * Memcount-balanced (INC here via _tr_checked_alloc, DEC at _tr_free). */
+static inline char* _tr_str_dup_owned(const char* s) {
+    if (!s) return _tr_empty_heap_str();
+    size_t n = strlen(s);
+    char* r = (char*)_tr_checked_alloc(n + 1);
+    memcpy(r, s, n + 1);
+    return r;
+}
 /* ── Refcounted string (TrStr): fat-pointer str representation ──
  * `data` points at the NUL-terminated bytes. `rc` points at a heap
  * refcount, or is NULL for literal/immortal strings — in that case
@@ -1782,7 +1795,8 @@ static char* input(const char* prompt) {
         if (len > 0 && buf[len-1] == '\n') buf[len-1] = '\0';
         return buf;
     }
-    return "";
+    free(buf);
+    return _tr_empty_heap_str();
 }
 static char* _tr_read_line(const char* prompt) {
     if (prompt && prompt[0]) printf("%s", prompt);
@@ -1793,7 +1807,8 @@ static char* _tr_read_line(const char* prompt) {
         if (len > 0 && buf[len-1] == '\r') buf[--len] = '\0'; /* strip \r on Windows */
         return buf;
     }
-    return (char*)"";
+    free(buf);
+    return _tr_empty_heap_str();
 }
 static void yield_val(void* v) { (void)v; }
 
@@ -1817,7 +1832,7 @@ static void yield_val(void* v) { (void)v; }
 
 /* int.to_binary(n) — base-2 string */
 static char* _tr_int_to_binary(int64_t n) {
-    if (n == 0) return (char*)"0";
+    if (n == 0) { char* z=(char*)_tr_checked_alloc(2); z[0]='0'; z[1]='\0'; return z; }
     char buf[70]; int pos = 68; buf[69] = '\0';
     uint64_t v = (uint64_t)n;
     while (v > 0) { buf[pos--] = '0' + (int)(v & 1); v >>= 1; }
@@ -1849,17 +1864,17 @@ static int64_t _tr_int_lcm(int64_t a, int64_t b) {
  * EOF ("").  Never strips — the Tauraro caller calls .trim() itself.   */
 static char* _tr_read_stdin_line(void) {
     char* buf = (char*)malloc(8192);
-    if (!buf) return (char*)"";
-    if (!fgets(buf, 8192, stdin)) { free(buf); return (char*)""; }
+    if (!buf) return _tr_empty_heap_str();
+    if (!fgets(buf, 8192, stdin)) { free(buf); return _tr_empty_heap_str(); }
     return buf;
 }
 
 /* Read exactly n raw bytes from stdin.  Returns a null-terminated heap
  * string.  Returns "" on EOF or error.                                  */
 static char* _tr_read_stdin_bytes(int64_t n) {
-    if (n <= 0) return (char*)"";
+    if (n <= 0) return _tr_empty_heap_str();
     char* buf = (char*)malloc((size_t)(n + 1));
-    if (!buf) return (char*)"";
+    if (!buf) return _tr_empty_heap_str();
     size_t total = 0;
     while ((int64_t)total < n) {
         size_t got = fread(buf + total, 1, (size_t)(n - (int64_t)total), stdin);
@@ -2800,7 +2815,7 @@ static inline bool  _tr_dir_exists(const char* p){ (void)p; return false; }
 static inline bool  _tr_is_dir(const char* p)    { (void)p; return false; }
 static inline bool  _tr_is_file(const char* p)   { (void)p; return false; }
 static inline void* _tr_opendir(const char* p)   { (void)p; return NULL; }
-static inline char* _tr_readdir(void* h)         { (void)h; return (char*)""; }
+static inline char* _tr_readdir(void* h)         { (void)h; return strdup(""); }
 static inline void  _tr_closedir(void* h)        { (void)h; }
 #elif defined(_WIN32)
 static inline int  _tr_mkdir(const char* path)     { return CreateDirectoryA(path, NULL) ? 0 : -1; }
@@ -2827,10 +2842,14 @@ static inline void* _tr_opendir(const char* path) {
 }
 static inline char* _tr_readdir(void* handle) {
     _TrDir* d = (_TrDir*)handle;
-    if (!d || d->h == INVALID_HANDLE_VALUE) return (char*)"";
+    /* Declared `-> str`, so codegen wraps the result as OWNED (rc=1) and will
+     * free it. Every path must therefore return heap memory — the end-of-dir
+     * sentinel returns strdup("") (NOT a string literal: freeing a literal
+     * corrupts the heap). */
+    if (!d || d->h == INVALID_HANDLE_VALUE) return strdup("");
     if (d->first) { d->first = 0; return strdup(d->ffd.cFileName); }
     if (FindNextFileA(d->h, &d->ffd)) return strdup(d->ffd.cFileName);
-    return (char*)"";
+    return strdup("");
 }
 static inline void _tr_closedir(void* handle) {
     _TrDir* d = (_TrDir*)handle;
@@ -2854,9 +2873,11 @@ static inline bool _tr_is_file(const char* path) {
 static inline void* _tr_opendir(const char* path)  { return (void*)opendir(path); }
 static inline char* _tr_readdir(void* handle) {
     DIR* d = (DIR*)handle;
-    if (!d) return (char*)"";
+    /* Always return OWNED heap (codegen frees it); strdup("") at end-of-dir,
+     * never a string literal. */
+    if (!d) return strdup("");
     struct dirent* e = readdir(d);
-    return e ? strdup(e->d_name) : (char*)"";
+    return e ? strdup(e->d_name) : strdup("");
 }
 static inline void _tr_closedir(void* handle)       { if (handle) closedir((DIR*)handle); }
 #endif
@@ -3097,12 +3118,17 @@ static inline bool _tr_str_eq(const char* a, const char* b) {
 }
 
 /* ── String slice (alias for _tr_str_substring) ─────────────────────── */
+/* These str helpers are all declared `-> str`, so codegen wraps their result as
+ * owned (rc=1) and will free it — every return path must be heap, NEVER a string
+ * literal. Use the canonical _tr_empty_heap_str() (defined near _tr_checked_alloc)
+ * for the empty-result fallback (freeing a literal corrupts the heap; this is the
+ * ownership-lie class that blocked MIR completion of fns that drop these). */
 static inline char* _tr_str_slice(const char* s, long long start, long long end) {
-    if (!s) return (char*)"";
+    if (!s) return _tr_empty_heap_str();
     long long len = (long long)strlen(s);
     if (start < 0) start = 0;
     if (end > len) end = len;
-    if (start >= end) { char* e=(char*)_tr_checked_alloc(1); e[0]='\0'; return e; }
+    if (start >= end) return _tr_empty_heap_str();
     long long sz = end - start;
     char* out = (char*)_tr_checked_alloc(sz + 1);
     memcpy(out, s + start, (size_t)sz);
@@ -3112,24 +3138,24 @@ static inline char* _tr_str_slice(const char* s, long long start, long long end)
 
 /* ── Additional string helpers ───────────────────────────────────────── */
 static inline char* _tr_str_trim_left(const char* s) {
-    if (!s) return (char*)"";
+    if (!s) return _tr_empty_heap_str();
     while (*s == ' ' || *s == '\t' || *s == '\n' || *s == '\r') s++;
     size_t n = strlen(s); char* r = (char*)_tr_checked_alloc(n+1); memcpy(r,s,n+1); return r;
 }
 static inline char* _tr_str_trim_right(const char* s) {
-    if (!s) return (char*)"";
+    if (!s) return _tr_empty_heap_str();
     size_t n = strlen(s); const char* e = s+n-1;
     while (n > 0 && (*e==' '||*e=='\t'||*e=='\n'||*e=='\r')) { e--; n--; }
     char* r = (char*)_tr_checked_alloc(n+1); memcpy(r,s,n); r[n]='\0'; return r;
 }
 static inline char* _tr_str_capitalize(const char* s) {
-    if (!s||!*s) return (char*)"";
+    if (!s||!*s) return _tr_empty_heap_str();
     size_t n=strlen(s); char* r=(char*)_tr_checked_alloc(n+1); memcpy(r,s,n+1);
     r[0]=(char)toupper((unsigned char)r[0]); for(size_t i=1;i<n;i++) r[i]=(char)tolower((unsigned char)r[i]);
     return r;
 }
 static inline char* _tr_str_title(const char* s) {
-    if (!s) return (char*)"";
+    if (!s) return _tr_empty_heap_str();
     size_t n=strlen(s); char* r=(char*)_tr_checked_alloc(n+1); memcpy(r,s,n+1);
     bool ws=true;
     for(size_t i=0;i<n;i++){
@@ -3140,7 +3166,7 @@ static inline char* _tr_str_title(const char* s) {
     return r;
 }
 static inline char* _tr_str_reverse(const char* s) {
-    if (!s) return (char*)"";
+    if (!s) return _tr_empty_heap_str();
     size_t n=strlen(s); char* r=(char*)_tr_checked_alloc(n+1);
     for(size_t i=0;i<n;i++) r[i]=s[n-1-i]; r[n]='\0'; return r;
 }
@@ -3917,7 +3943,7 @@ static inline void _tr_list_u32_set(List_u32* l, long long i, uint32_t v) {
 }
 
 static inline char* _tr_str_join(List_str* parts, const char* sep) {
-    if (!parts || parts->len == 0) return (char*)"";
+    if (!parts || parts->len == 0) return _tr_empty_heap_str();
     size_t total = 0, seplen = sep ? strlen(sep) : 0;
     for (size_t i = 0; i < parts->len; i++) {
         if (parts->data[i]) total += strlen(parts->data[i]);
@@ -4103,11 +4129,12 @@ static inline void StringBuilder_free(StringBuilder* sb) {
 
 /* ── File I/O helpers ────────────────────────────────────────────────── */
 static inline char* read_file(char* path) {
-    if (!path || !*path) return "";
+    /* Owned `-> str` (success path allocs `buf`); error paths must also be heap. */
+    if (!path || !*path) return _tr_empty_heap_str();
     FILE* f = fopen(path, "rb");
-    if (!f) return "";
+    if (!f) return _tr_empty_heap_str();
     fseek(f, 0, SEEK_END); long sz = ftell(f); rewind(f);
-    if (sz < 0) { fclose(f); return ""; }
+    if (sz < 0) { fclose(f); return _tr_empty_heap_str(); }
     char* buf = (char*)_tr_checked_alloc((size_t)sz + 1);
     size_t rd = fread(buf, 1, (size_t)sz, f); fclose(f);
     buf[rd] = '\0';
@@ -4180,7 +4207,7 @@ static inline long long _tr_tm_make(int year,int month,int day,int hour,int mi,i
 }
 static inline char* _tr_strftime(long long ts, const char* fmt) {
     time_t t=(time_t)ts; struct tm* m=localtime(&t);
-    char* buf=(char*)_tr_c_malloc(256); if(!buf) return (char*)"";
+    char* buf=(char*)_tr_c_malloc(256); if(!buf) return _tr_empty_heap_str();
     strftime(buf,256,fmt,m); return buf;
 }
 
@@ -4214,12 +4241,12 @@ static inline char* _tr_username(void) { char* b=(char*)_tr_c_malloc(256); DWORD
 static inline int   _tr_cpu_count(void) { SYSTEM_INFO si; GetSystemInfo(&si); return (int)si.dwNumberOfProcessors; }
 static inline char* _tr_cwd(void)       { char* b=(char*)_tr_c_malloc(4096); GetCurrentDirectoryA(4096,b); return b; }
 static inline int   _tr_chdir(const char* p) { return SetCurrentDirectoryA(p)?0:-1; }
-static inline char* _tr_platform(void) { return (char*)"windows"; }
+static inline char* _tr_platform(void) { return _tr_str_dup_owned("windows"); }
 static inline char* _tr_os_machine(void) {
     SYSTEM_INFO si; GetSystemInfo(&si);
-    if(si.wProcessorArchitecture==PROCESSOR_ARCHITECTURE_AMD64) return (char*)"x86_64";
-    if(si.wProcessorArchitecture==PROCESSOR_ARCHITECTURE_ARM64) return (char*)"arm64";
-    return (char*)"x86";
+    if(si.wProcessorArchitecture==PROCESSOR_ARCHITECTURE_AMD64) return _tr_str_dup_owned("x86_64");
+    if(si.wProcessorArchitecture==PROCESSOR_ARCHITECTURE_ARM64) return _tr_str_dup_owned("arm64");
+    return _tr_str_dup_owned("x86");
 }
 static inline long long _tr_memory_total_mb(void) {
     MEMORYSTATUSEX ms; ms.dwLength=sizeof(ms); GlobalMemoryStatusEx(&ms);
@@ -4245,7 +4272,7 @@ static inline void _tr_tcp_set_nodelay(int fd) {
 static inline int   _tr_tcp_accept(int srv) { SOCKET c=accept((SOCKET)srv,NULL,NULL); if(c!=INVALID_SOCKET) _tr_tcp_set_nodelay((int)c); return (c==INVALID_SOCKET)?-1:(int)c; }
 static inline char* _tr_tcp_peer_addr(int fd) {
     struct sockaddr_in a; int al=sizeof(a);
-    if(getpeername((SOCKET)fd,(struct sockaddr*)&a,&al)!=0) return (char*)"";
+    if(getpeername((SOCKET)fd,(struct sockaddr*)&a,&al)!=0) return _tr_empty_heap_str();
     char* buf=(char*)_tr_c_malloc(64); char ip[32];
     inet_ntop(AF_INET,&a.sin_addr,ip,sizeof(ip));
     _snprintf(buf,63,"%s:%d",ip,(int)ntohs(a.sin_port)); return buf;
@@ -4271,7 +4298,7 @@ static inline void _tr_udp_close(int fd) { closesocket((SOCKET)fd); }
 static inline char* _tr_dns_resolve(const char* host) {
     _tr_net_init();
     struct addrinfo hints={0},*res=NULL; hints.ai_family=AF_INET;
-    if(getaddrinfo(host,NULL,&hints,&res)!=0) return (char*)"";
+    if(getaddrinfo(host,NULL,&hints,&res)!=0) return _tr_empty_heap_str();
     char* ip=(char*)_tr_c_malloc(64);
     inet_ntop(AF_INET,&((struct sockaddr_in*)res->ai_addr)->sin_addr,ip,64);
     freeaddrinfo(res); return ip;
@@ -4280,7 +4307,7 @@ static inline char* _tr_dns_reverse(const char* ip) {
     struct sockaddr_in a; memset(&a,0,sizeof(a));
     a.sin_family=AF_INET; inet_pton(AF_INET,ip,&a.sin_addr);
     char* buf=(char*)_tr_c_malloc(256);
-    return (getnameinfo((struct sockaddr*)&a,sizeof(a),buf,256,NULL,0,0)==0)?buf:(char*)"";
+    return (getnameinfo((struct sockaddr*)&a,sizeof(a),buf,256,NULL,0,0)==0)?buf:_tr_empty_heap_str();
 }
 static inline void _tr_console_color(int code) {
     HANDLE h=GetStdHandle(STD_OUTPUT_HANDLE); int attr=0;
@@ -4315,26 +4342,26 @@ static inline char* _tr_cwd(void)       { char* b=(char*)_tr_c_malloc(4096); ret
 static inline int   _tr_chdir(const char* p) { return chdir(p); }
 #ifdef __APPLE__
 #  if defined(TAURARO_IOS)
-static inline char* _tr_platform(void) { return (char*)"ios"; }
+static inline char* _tr_platform(void) { return _tr_str_dup_owned("ios"); }
 #  else
-static inline char* _tr_platform(void) { return (char*)"macos"; }
+static inline char* _tr_platform(void) { return _tr_str_dup_owned("macos"); }
 #  endif
 #elif defined(TAURARO_ANDROID)
-static inline char* _tr_platform(void) { return (char*)"android"; }
+static inline char* _tr_platform(void) { return _tr_str_dup_owned("android"); }
 #elif defined(TAURARO_WASM)
-static inline char* _tr_platform(void) { return (char*)"wasm"; }
+static inline char* _tr_platform(void) { return _tr_str_dup_owned("wasm"); }
 #else
-static inline char* _tr_platform(void) { return (char*)"linux"; }
+static inline char* _tr_platform(void) { return _tr_str_dup_owned("linux"); }
 #endif
 static inline char* _tr_os_machine(void) {
 #if defined(__x86_64__)||defined(__amd64__)
-    return (char*)"x86_64";
+    return _tr_str_dup_owned("x86_64");
 #elif defined(__aarch64__)
-    return (char*)"arm64";
+    return _tr_str_dup_owned("arm64");
 #elif defined(__arm__)
-    return (char*)"arm";
+    return _tr_str_dup_owned("arm");
 #else
-    return (char*)"unknown";
+    return _tr_str_dup_owned("unknown");
 #endif
 }
 static inline long long _tr_memory_total_mb(void) {
@@ -4359,7 +4386,7 @@ static inline void _tr_tcp_set_nodelay(int fd) {
 static inline int   _tr_tcp_accept(int srv) { int c=accept(srv,NULL,NULL); if(c>=0) _tr_tcp_set_nodelay(c); return c; }
 static inline char* _tr_tcp_peer_addr(int fd) {
     struct sockaddr_in a; socklen_t al=sizeof(a);
-    if(getpeername(fd,(struct sockaddr*)&a,&al)<0) return (char*)"";
+    if(getpeername(fd,(struct sockaddr*)&a,&al)<0) return _tr_empty_heap_str();
     char* buf=(char*)_tr_c_malloc(64); char ip[32];
     inet_ntop(AF_INET,&a.sin_addr,ip,sizeof(ip));
     snprintf(buf,63,"%s:%d",ip,(int)ntohs(a.sin_port)); return buf;
@@ -4384,7 +4411,7 @@ static inline int  _tr_udp_recv_from(int fd,char* buf,int cap,char* src) {
 static inline void _tr_udp_close(int fd) { close(fd); }
 static inline char* _tr_dns_resolve(const char* host) {
     struct addrinfo hints={0},*res=NULL; hints.ai_family=AF_INET;
-    if(getaddrinfo(host,NULL,&hints,&res)!=0) return (char*)"";
+    if(getaddrinfo(host,NULL,&hints,&res)!=0) return _tr_empty_heap_str();
     char* ip=(char*)_tr_c_malloc(64);
     inet_ntop(AF_INET,&((struct sockaddr_in*)res->ai_addr)->sin_addr,ip,64);
     freeaddrinfo(res); return ip;
@@ -4526,7 +4553,7 @@ static inline void _tr_rng_free(_TrRng* r) { _tr_free(r); }
 static inline char* _tr_float_fmt(double f, int decimals) {
     char fmt[16]; int d = decimals < 0 ? 6 : decimals;
     sprintf(fmt, "%%.%df", d);
-    char* buf = (char*)_tr_c_malloc(64); if(!buf) return (char*)"";
+    char* buf = (char*)_tr_c_malloc(64); if(!buf) return _tr_empty_heap_str();
     sprintf(buf, fmt, f); return buf;
 }
 
@@ -4619,7 +4646,7 @@ static inline char* _tr_exe_dir(void) {
     return buf;
 #elif defined(__APPLE__)
     char tmp[4096]; uint32_t sz=sizeof(tmp);
-    if(_NSGetExecutablePath(tmp,&sz)!=0) return (char*)".";
+    if(_NSGetExecutablePath(tmp,&sz)!=0) return _tr_str_dup_owned(".");
     char* buf=(char*)_tr_c_malloc(4096);
     if(!realpath(tmp,buf)){strcpy(buf,".");return buf;}
     for(int i=(int)strlen(buf)-1;i>0;i--){if(buf[i]=='/'){buf[i]='\0';break;}}
@@ -4632,7 +4659,7 @@ static inline char* _tr_exe_dir(void) {
     for(int i=(int)n-1;i>0;i--){if(buf[i]=='/'){buf[i]='\0';break;}}
     return buf;
 #else
-    return (char*)".";
+    return _tr_str_dup_owned(".");
 #endif
 }
 

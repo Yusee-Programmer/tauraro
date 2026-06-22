@@ -81,7 +81,39 @@ extend ModuleResolver:
         return r
 
     pub def add_search_path(self, p: str):
+        if p == "": return
+        mut i = 0
+        while i < self.search_paths.len:
+            if self.search_paths.get(i) == p: return   # dedup
+            i = i + 1
         self.search_paths.push(p)
+
+    # Directory portion of a file path ("" if none), handling '/' and '\'.
+    pub def dir_of_path(self, path: str) -> str:
+        mut p = path as Pointer[char]
+        mut n = 0
+        while p.offset(n).read() as int != 0: n = n + 1
+        mut last = 0 - 1
+        mut i = 0
+        while i < n:
+            mut c = p.offset(i).read() as int
+            if c == 47 or c == 92: last = i   # '/' or '\'
+            i = i + 1
+        if last < 0: return ""
+        return path.slice(0, last)
+
+    # Final path segment (basename), e.g. "watax" from "a/b/watax".
+    pub def base_of_path(self, path: str) -> str:
+        mut p = path as Pointer[char]
+        mut n = 0
+        while p.offset(n).read() as int != 0: n = n + 1
+        mut last = 0 - 1
+        mut i = 0
+        while i < n:
+            mut c = p.offset(i).read() as int
+            if c == 47 or c == 92: last = i
+            i = i + 1
+        return path.slice(last + 1, n)
 
     # Entry point.  The root file's private declarations ARE included.
     pub def resolve_main(self, main_path: str) -> Program:
@@ -265,6 +297,28 @@ extend ModuleResolver:
                 if not already:
                     self.mod_dot_paths.push(mod_path)
                     self.mod_file_paths.push(flat_path)
+                self.current_mod = saved_mod
+                return
+
+            # 3. taupkg package layout (no mod.tr): <base>/<dir>/src/<pkg>.tr,
+            #    e.g. `from watax import X` -> <base>/watax/src/watax.tr. This is
+            #    what lets just the PACKAGES ROOT be on TAURARO_PATH: the index
+            #    module is found here, and resolve_file adds <base>/watax/src to
+            #    the search paths so its sibling imports (json_ext, http_ext, …,
+            #    which carry the `extend HttpConn` blocks) resolve too.
+            mut pkg_src_path = base + "/" + dir_path + "/src/" + self.base_of_path(dir_path) + ".tr"
+            if file_exists(pkg_src_path):
+                # Put the package's own src/ dir on the search path so the index
+                # module's sibling imports (json_ext, http_ext, … which carry the
+                # `extend HttpConn` blocks) resolve. This is scoped to packages
+                # found via this lookup, so it doesn't perturb resolution when the
+                # caller already lists each src/ dir explicitly.
+                self.add_search_path(base + "/" + dir_path + "/src")
+                mut already3 = self.visited.contains(pkg_src_path)
+                self.resolve_file(pkg_src_path, false)
+                if not already3:
+                    self.mod_dot_paths.push(mod_path)
+                    self.mod_file_paths.push(pkg_src_path)
                 self.current_mod = saved_mod
                 return
 

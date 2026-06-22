@@ -33,17 +33,11 @@ Tauraro is a compiled, statically-typed language with Python-style indentation s
 It is also the **first programming language with full bilingual keyword support** — every keyword has both an English and a Hausa equivalent. Programs can be written in either language, or mixed freely.
 
 ```python
-# English
 def greet(name: str) -> str:
     return f"Hello, {name}!"
 
-# Hausa
-aiki gaisawa(suna: str) -> str:
-    dawo f"Sannu, {suna}!"
-
 def main():
     print(greet("world"))
-    buga(gaisawa("duniya"))
 ```
 
 ---
@@ -80,7 +74,7 @@ tauraroc --version
 **hello.tr**
 ```python
 def main():
-    print("Sannu duniya!")   # Hello, world!
+    print("Hello, world!")
 ```
 
 ```sh
@@ -179,26 +173,26 @@ Every keyword has an English and Hausa equivalent:
 ## Example Program
 
 ```python
-class Kirga:
-    pub adadi: i64
+class Counter:
+    pub total: i64
 
-extend Kirga:
-    pub def init(n: i64) -> Kirga:
-        mut k = Kirga()
-        k.adadi = n
-        return k
+extend Counter:
+    pub def init(n: i64) -> Counter:
+        mut c = Counter()
+        c.total = n
+        return c
 
-    pub def qara(self, n: i64) -> void:
-        self.adadi = self.adadi + n
+    pub def add(self, n: i64) -> void:
+        self.total = self.total + n
 
-    pub def nuna(self) -> void:
-        buga(f"adadi = {self.adadi}")
+    pub def show(self) -> void:
+        print(f"total = {self.total}")
 
 def main():
-    mut k = Kirga.init(0)
-    ga i in range(10):
-        k.qara(i)
-    k.nuna()    # adadi = 45
+    mut c = Counter.init(0)
+    for i in range(10):
+        c.add(i)
+    c.show()    # total = 45
 ```
 
 ---
@@ -236,18 +230,20 @@ All stages are written in Tauraro itself — the compiler is **fully self-hosted
 
 ## Performance
 
-Benchmarks run on Windows x64 with `gcc -O3` (C), `rustc -C opt-level=3 -C target-cpu=native` (Rust), and `tauraroc -O3` (Tauraro → C → `gcc -O3 -march=native`).
+Benchmarks run on Linux x86_64 with `gcc -O3` (C), `rustc -C opt-level=3 -C target-cpu=native` (Rust), and `tauraroc -O3` (Tauraro → C → `gcc -O3 -march=native -funroll-loops`). Wall-clock seconds, lower is better.
 
-| Benchmark | C | Rust | Tauraro | Tau/C | Tau/Rust |
-|-----------|--:|-----:|--------:|------:|---------:|
-| Fibonacci 1B steps | 1.476s | 0.675s | 0.759s | **0.51×** | 1.12× |
-| Float Multiply 1B | 3.614s | 3.233s | 3.280s | **0.91×** | 1.01× |
-| Newton Sqrt 1B | 18.076s | 17.045s | 17.278s | **0.96×** | 1.01× |
-| Mandelbrot 800×800 | 1.389s | 1.491s | 1.340s | **0.96×** | **0.90×** |
-| Sieve 50M | 1.390s | 1.313s | 1.221s | **0.88×** | **0.93×** |
-| Matrix Multiply 400×400 | 0.053s | 0.027s | 0.027s | **0.51×** | **1.00×** |
+| Benchmark | C (s) | Rust (s) | Tauraro (s) | Tau/C | Tau/Rust |
+|-----------|------:|---------:|------------:|------:|---------:|
+| Fibonacci 1B | 0.313 | 0.311 | 0.311 | **0.99×** | **1.00×** |
+| Float Multiply 1B | 0.933 | 0.934 | 0.934 | **1.00×** | **1.00×** |
+| XOR Shift PRNG 1B | 1.866 | 1.867 | 1.870 | **1.00×** | **1.00×** |
+| Newton Sqrt 1B | 6.063 | 6.046 | 6.053 | **1.00×** | **1.00×** |
+| Mandelbrot 800×800 | 0.442 | 0.441 | 0.428 | **0.97×** | **0.97×** |
+| N-Body 10M | 0.286 | 0.284 | 0.289 | **1.01×** | **1.02×** |
+| Sieve 50M | 0.172 | 0.182 | 0.265 | 1.54× | 1.46× |
+| Matrix Multiply 400×400 | 0.015 | 0.012 | 0.033 | 2.20× | 2.75× |
 
-`tauraroc -O3` passes `-march=native -funroll-loops` to GCC. Tauraro beats C on **8 of 9 measurable benchmarks** and ties or beats Rust on 5. Full results in [`benchmarks/README.md`](benchmarks/README.md).
+Tauraro runs at **C/Rust parity** on the scalar compute kernels (within ~3%), and stays leaner than Rust on memory across the board. Sieve and MatMul are still slower (cache/aliasing-bound). Full results, including peak memory, in [`benchmarks/README.md`](benchmarks/README.md).
 
 ---
 

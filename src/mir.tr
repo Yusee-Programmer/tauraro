@@ -66,6 +66,9 @@ pub class MirFunction:
     pub params: Vec[str]
     pub blocks: Vec[MirBlock]
     pub if_bodies: Vec[HirBlock]   # then/else body HIR blocks (drop targets)
+    pub unsafe_pinned: LiveSet     # names touched inside `unsafe:` — excluded from
+                                   # the drop schedule (dev may raw-alias them; HIR
+                                   # owns their scope-exit drop)
     # True iff every statement in the body was fully lowered into the CFG (no
     # `case _: pass` fallthrough). Only COMPLETE functions may drive MIR-based
     # codegen / drop insertion — for incomplete ones the analysis is unsound
@@ -86,6 +89,9 @@ pub class MirBuilder:
     pub if_bodies: Vec[HirBlock]
     pub in_unsafe: int          # >0 inside an `unsafe:` block; bodies lowered there
                                 # are NOT drop targets (dev manages that memory)
+    pub unsafe_pinned: LiveSet  # names touched inside any `unsafe:` block (pinned)
+    pub loop_continue: Vec[int] # block to TGoto on `continue` (innermost loop header)
+    pub loop_break:    Vec[int] # block to TGoto on `break` (innermost loop exit)
 
 extend MirBuilder:
     pub def init() -> MirBuilder:
@@ -95,6 +101,9 @@ extend MirBuilder:
         b.complete = true
         b.if_bodies = Vec[HirBlock].init(4)
         b.in_unsafe = 0
+        b.unsafe_pinned = LiveSet.init()
+        b.loop_continue = Vec[int].init(4)
+        b.loop_break    = Vec[int].init(4)
         return b
 
     # Create a fresh block, return its id.
@@ -184,7 +193,11 @@ def lower_stmts(b: MirBuilder, hb: HirBlock):
                 b.cur = hdr
                 b.set_term(MirTerm.TBranch(cond, body_b, exit_b))
                 b.cur = body_b
+                b.loop_continue.push(hdr)
+                b.loop_break.push(exit_b)
                 lower_stmts(b, body)
+                b.loop_continue.pop()
+                b.loop_break.pop()
                 if not b.terminated(): b.set_term(MirTerm.TGoto(hdr))
                 b.cur = exit_b
             case HirStmt.SFor(_, fiter, fbody):
@@ -200,7 +213,11 @@ def lower_stmts(b: MirBuilder, hb: HirBlock):
                 b.cur = for_hdr
                 b.set_term(MirTerm.TBranch(fiter, for_body, for_exit))
                 b.cur = for_body
+                b.loop_continue.push(for_hdr)
+                b.loop_break.push(for_exit)
                 lower_stmts(b, fbody)
+                b.loop_continue.pop()
+                b.loop_break.pop()
                 if not b.terminated(): b.set_term(MirTerm.TGoto(for_hdr))
                 b.cur = for_exit
             case HirStmt.SForUnpack(_, fuiter, fubody):
@@ -211,7 +228,11 @@ def lower_stmts(b: MirBuilder, hb: HirBlock):
                 b.cur = fu_hdr
                 b.set_term(MirTerm.TBranch(fuiter, fu_body, fu_exit))
                 b.cur = fu_body
+                b.loop_continue.push(fu_hdr)
+                b.loop_break.push(fu_exit)
                 lower_stmts(b, fubody)
+                b.loop_continue.pop()
+                b.loop_break.pop()
                 if not b.terminated(): b.set_term(MirTerm.TGoto(fu_hdr))
                 b.cur = fu_exit
             case HirStmt.STry(try_body, catches, finally_b):
@@ -270,15 +291,28 @@ def lower_stmts(b: MirBuilder, hb: HirBlock):
                 b.push_stmt(MirStmt.MEval(acond))
                 if amsg as usize != 0 as usize:
                     b.push_stmt(MirStmt.MEval(amsg))
-            # SUnsafe stays UNLOWERED → unsafe-containing functions are INCOMPLETE
-            # (full HIR fallback). Per the Rust model `unsafe` should NOT disable
-            # auto-drop, and collect_frees() now recognises manual frees — BUT the
-            # blocker is different: the compiler's own unsafe internals take raw
-            # pointers into a TrStr's `.data` buffer and use them past where the str
-            # would be auto-dropped (relying on no-drop). Auto-drop there would
-            # free the buffer under the live raw pointer. Enabling MIR drops for
-            # unsafe functions requires first auditing those raw-aliasing sites; a
-            # separate task. (collect_frees still helps all SAFE complete fns.)
+            case HirStmt.SUnsafe(ubody):
+                # Lower the `unsafe:` body TRANSPARENTLY so liveness still sees its
+                # uses (a raw-aliased value stays live THROUGH the block). Pinning
+                # is NO LONGER done per-unsafe-block — it is the precise FUNCTION-
+                # WIDE raw-borrow set (collect_raw_borrows in lower_function), which
+                # pins exactly the values whose raw pointer is taken (`s as Pointer`
+                # / `&s`) ANYWHERE, inside or outside unsafe. So unsafe-touched
+                # values that are NOT raw-aliased now get their CFG-correct MIR
+                # drops (the Phase-C win), while genuinely raw-aliased values stay
+                # HIR-owned (scope-exit drop, late enough to be safe). The in_unsafe
+                # guard still keeps nested if/match bodies here off the drop-target
+                # list (conservative — those go to HIR scope-exit).
+                #
+                # This unlocked unsafe fns after 7 failures whose gen2 corruption was
+                # NOT analysis unsoundness but pre-existing RUNTIME OWNERSHIP LIES
+                # (extern `-> str` helpers like _tr_readdir returning a string
+                # LITERAL that codegen wraps as owned rc=1; masked by the old leak,
+                # exposed by the correct MIR drop). Fixed in the runtime.
+                # See [[project_safety_overhaul_phase0]].
+                b.in_unsafe = b.in_unsafe + 1
+                lower_stmts(b, ubody)
+                b.in_unsafe = b.in_unsafe - 1
             case HirStmt.SRaise(rval):
                 # `raise` exits, but we model it as a plain eval (non-terminating)
                 # so liveness only OVER-approximates (keeps values live past it) —
@@ -304,6 +338,23 @@ def lower_stmts(b: MirBuilder, hb: HirBlock):
             case HirStmt.SAutoDrop(_, _):
                 pass    # sema's own drop; the MIR recomputes drops, so ignore it
                         # here (and avoid double-drop when MIR drives codegen)
+            case HirStmt.SBreak:
+                # `break` jumps to the innermost loop's exit block — a real CFG
+                # edge, so liveness/ownership see locals declared before the break
+                # as dead on this path and drop them correctly. Modelling it (vs
+                # the old `case _:` -> incomplete) lets functions that merely use
+                # break/continue keep MIR-driven drops instead of the HIR fallback.
+                if b.loop_break.len > 0:
+                    b.set_term(MirTerm.TGoto(b.loop_break.get(b.loop_break.len - 1)))
+                else:
+                    b.complete = false   # break outside a loop (rejected by sema)
+            case HirStmt.SContinue:
+                # `continue` jumps to the innermost loop's header (re-test the
+                # condition / advance the iterator).
+                if b.loop_continue.len > 0:
+                    b.set_term(MirTerm.TGoto(b.loop_continue.get(b.loop_continue.len - 1)))
+                else:
+                    b.complete = false
             case _:
                 # Statement form not yet lowered into the CFG. Mark the function
                 # incomplete so no MIR-driven codegen runs on it (the dropped
@@ -324,9 +375,31 @@ pub def lower_function(hf: HirFunction) -> MirFunction:
     b.cur  = b.new_block()           # entry block bb0
     lower_stmts(b, hf.body)
     if not b.terminated(): b.set_term(MirTerm.TReturnVoid())
+    # Phase C: pin the precise FUNCTION-WIDE raw-borrow set — values whose raw
+    # pointer is taken (`x as Pointer[T]` / `&x`) anywhere in the body. These are
+    # excluded from the MIR drop schedule (compute_drops) because a raw pointer may
+    # outlive the value's last high-level use; HIR scope-exit owns their drop. This
+    # replaces the old blanket "pin everything touched in unsafe" so unsafe-touched
+    # values that are NOT raw-aliased get their CFG-correct MIR drops.
+    mut rbi = 0
+    while rbi < b.blocks.len:
+        mut rblk = b.blocks.get(rbi)
+        mut rsi = 0
+        while rsi < rblk.stmts.len:
+            match rblk.stmts.get(rsi).read():
+                case MirStmt.MDeclare(_, rv): collect_raw_borrows(rv, b.unsafe_pinned)
+                case MirStmt.MAssign(_, rv): collect_raw_borrows(rv, b.unsafe_pinned)
+                case MirStmt.MEval(rv): collect_raw_borrows(rv, b.unsafe_pinned)
+            rsi = rsi + 1
+        match rblk.term.read():
+            case MirTerm.TBranch(rc, _, _): collect_raw_borrows(rc, b.unsafe_pinned)
+            case MirTerm.TReturn(rv): collect_raw_borrows(rv, b.unsafe_pinned)
+            case _: pass
+        rbi = rbi + 1
     mf.blocks = b.blocks
     mf.complete = b.complete
     mf.if_bodies = b.if_bodies
+    mf.unsafe_pinned = b.unsafe_pinned
     return mf
 
 pub def lower_program(hir: HirProgram) -> MirProgram:
@@ -387,6 +460,58 @@ def collect_uses(e: Pointer[HirExpr], out: Vec[str]):
             collect_uses(c, out)
             collect_uses(t, out)
             collect_uses(f, out)
+        case _: pass
+
+# Collect names whose RAW POINTER is taken anywhere in `e`: a bare local cast to
+# `Pointer[T]` (`s as Pointer[char]`) or address-taken (`&s`). Such a local may be
+# aliased by a raw pointer that outlives the local's last HIGH-LEVEL use, so the
+# MIR must NOT auto-drop it (freeing the buffer under the live raw pointer = UAF —
+# the hazard that kept unsafe-containing fns on the HIR fallback). Run FUNCTION-
+# WIDE (raw casts occur both inside AND outside `unsafe:` — e.g. codegen's own
+# `s as Pointer[char]` helpers), which makes this strictly more complete than the
+# old "pin everything syntactically inside unsafe" and lets unsafe-touched-but-
+# NOT-raw-aliased values get their precise CFG drops. Detection is a SUPERSET of
+# the dangerous set: erring toward pinning only leaks (HIR still scope-drops),
+# never double-frees.
+def collect_raw_borrows(e: Pointer[HirExpr], out: LiveSet):
+    if e as usize == 0 as usize: return
+    match e.read():
+        case HirExpr.ECast(inner, ty):
+            if ty.name == "Pointer":
+                match inner.read():
+                    case HirExpr.EIdent(nm, _, _): mut _a = out.add(nm)
+                    case _: pass
+            collect_raw_borrows(inner, out)
+        case HirExpr.EUnaryOp(op, inner, _):
+            if op == "&":
+                match inner.read():
+                    case HirExpr.EIdent(nm, _, _): mut _b = out.add(nm)
+                    case _: pass
+            collect_raw_borrows(inner, out)
+        case HirExpr.EBinOp(_, l, r, _):
+            collect_raw_borrows(l, out)
+            collect_raw_borrows(r, out)
+        case HirExpr.ECall(callee, args, _):
+            collect_raw_borrows(callee, out)
+            mut i = 0
+            while i < args.len:
+                collect_raw_borrows(args.get(i), out)
+                i = i + 1
+        case HirExpr.EMethodCall(obj, _, args, _):
+            collect_raw_borrows(obj, out)
+            mut i = 0
+            while i < args.len:
+                collect_raw_borrows(args.get(i), out)
+                i = i + 1
+        case HirExpr.EPropAccess(obj, _, _): collect_raw_borrows(obj, out)
+        case HirExpr.EIndex(obj, idx, _):
+            collect_raw_borrows(obj, out)
+            collect_raw_borrows(idx, out)
+        case HirExpr.EAwait(x, _): collect_raw_borrows(x, out)
+        case HirExpr.EIfElse(c, t, f, _):
+            collect_raw_borrows(c, out)
+            collect_raw_borrows(t, out)
+            collect_raw_borrows(f, out)
         case _: pass
 
 # Add the upward-exposed uses of `e` to `gen`: a name is upward-exposed only if
@@ -778,7 +903,8 @@ pub def compute_drops(mf: MirFunction, live_out: Vec[LiveSet]) -> Vec[LiveSet]:
                 pj = pj + 1
         mut _g2 = own_in2.union_in(gen.get(i))
         mut owned_i = own_in2.minus(kill.get(i))
-        drops.push(owned_i.minus(live_out.get(i)))
+        mut dead_i = owned_i.minus(live_out.get(i))
+        drops.push(dead_i.minus(mf.unsafe_pinned))
         i = i + 1
     return drops
 
