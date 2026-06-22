@@ -369,6 +369,7 @@ extend Parser:
                             if self.peek() == Token.KwFrom:
                                 self.pos = self.pos + 1
                                 ty.from_param = self.consume_ident()
+                                ty.from_regions.push(ty.from_param)
                             ty_ptr = box_asttype(ty)
                         case _:
                             pass
@@ -2111,9 +2112,12 @@ extend Parser:
                 # of the named regions — their intersection). Stored comma-joined.
                 self.pos = self.pos + 1
                 ret_t.from_param = self.consume_ident()
+                ret_t.from_regions.push(ret_t.from_param)
                 while self.peek() == Token.Comma:
                     self.pos = self.pos + 1
-                    ret_t.from_param = ret_t.from_param + "," + self.consume_ident()
+                    mut rgn2 = self.consume_ident()
+                    ret_t.from_param = ret_t.from_param + "," + rgn2
+                    ret_t.from_regions.push(rgn2)
             f.ret_ty = box_asttype(ret_t)
         if self.peek() == Token.Colon:
             self.pos = self.pos + 1
@@ -2237,9 +2241,12 @@ extend Parser:
                         if self.peek() == Token.KwFrom:
                             self.pos = self.pos + 1
                             fty.from_param = self.consume_ident()
+                            fty.from_regions.push(fty.from_param)
                             while self.peek() == Token.Comma:
                                 self.pos = self.pos + 1
-                                fty.from_param = fty.from_param + "," + self.consume_ident()
+                                mut frgn2 = self.consume_ident()
+                                fty.from_param = fty.from_param + "," + frgn2
+                                fty.from_regions.push(frgn2)
                         ty_ptr = box_asttype(fty)
                     mut fld = FieldDef.init(fname, ty_ptr)
                     c.fields.push(fld)

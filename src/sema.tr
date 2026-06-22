@@ -37,6 +37,7 @@ pub class Symbol:
     pub decl_block_id: int    # auto-drop: id of the innermost if/while C block open at declaration within the current scope; 0 = scope top-level
     pub str_escaped: bool     # auto-drop: a `str` local passed as a call/method-call ARGUMENT - may be aliased into a legacy List_str/Dict/Set (#52 not yet migrated); excluded from auto-drop to avoid UAF
     pub coll_escaped: bool    # auto-drop: a List/Vec/Dict/Map/Set local that is ever read in a non-receiver position (call/method arg, assigned to another var, returned, stored in a literal) - raw unrefcounted pointer, so any alias must disable auto-free to avoid UAF
+    pub fresh_owned_str: bool # [L-3] region derivation: this str local's CURRENT value is a freshly-built concat (owned heap), NOT a borrow of any region. Tracks the LAST assignment; used to reject returning it as a `ref ... from r` under --strict.
 
 extend Symbol:
     pub def init(name: str, kind: SymbolKind, ty: Pointer[AstType]) -> Symbol:
@@ -110,6 +111,7 @@ pub class Sema:
     pub copy_classes: Map[str, bool]    # Fix 3: auto-inferred Copy classes (all-primitive fields)
     pub in_unsafe: bool                 # Gap 6: inside an unsafe: block
     pub current_func_ret_from: str      # Gap 1: 'from' lifetime param of current function return
+    pub current_func_ret_borrow_str: bool   # current fn returns `ref str from ...` (a str borrow)
     pub strict_mode: bool               # --strict: alloc outside unsafe -> hard [U-1] error
     pub decorator_names: Map[str, bool]  # decorator def registry (name -> true)
     pub variadic_fns:    Map[str, str]   # fn name -> index of trailing variadic param (= fixed-arg count, as string)
@@ -194,6 +196,7 @@ extend Sema:
         s.copy_classes           = Map[str, bool].init(32)
         s.in_unsafe              = false
         s.current_func_ret_from  = ""
+        s.current_func_ret_borrow_str = false
         s.strict_mode            = false
         s.decorator_names        = Map[str, bool].init(16)
         s.variadic_fns           = Map[str, str].init(8)
@@ -1875,9 +1878,13 @@ extend Sema:
         self.container_borrows = Map[str, str].init(16)
         # Gap 1: capture 'from' lifetime param for escape-analysis check in SReturn
         mut saved_ret_from = self.current_func_ret_from
+        mut saved_ret_borrow_str = self.current_func_ret_borrow_str
         self.current_func_ret_from = ""
+        self.current_func_ret_borrow_str = false
         if f.ret_ty as usize != 0 as usize:
             self.current_func_ret_from = f.ret_ty.read().from_param
+            if f.ret_ty.read().is_borrow and f.ret_ty.read().name == "str":
+                self.current_func_ret_borrow_str = true
         # Auto-infer 'from' when no explicit annotation: if return is Pointer/ref and there is
         # exactly one non-primitive parameter, that parameter is the inferred lifetime source.
         # This covers the common single-param borrow pattern without requiring any annotation.
@@ -1898,6 +1905,32 @@ extend Sema:
                     infer_i = infer_i + 1
                 if infer_count == 1:
                     self.current_func_ret_from = infer_from
+        # [L-2] Validate explicit region sources (the names in `from a, b`): each must
+        # be a parameter or a region parameter of the enclosing type. Rejects a typo'd
+        # / nonexistent region — a MALFORMED annotation, never safe code: the ARC floor
+        # keeps every real borrow safe, so lifetimes stay fully optional.
+        if f.ret_ty as usize != 0 as usize:
+            mut rregs = f.ret_ty.read().from_regions
+            mut rri = 0
+            while rri < rregs.len:
+                mut rnm = rregs.get(rri)
+                mut rok = false
+                mut rpi = 0
+                while rpi < f.params.len:
+                    if f.params.get(rpi).name == rnm:
+                        rok = true
+                    rpi = rpi + 1
+                if not rok:
+                    if self.current_class_name != "" and self.classes.contains(self.current_class_name):
+                        mut rcls = self.classes.get(self.current_class_name)
+                        mut rci = 0
+                        while rci < rcls.region_params.len:
+                            if rcls.region_params.get(rci) == rnm:
+                                rok = true
+                            rci = rci + 1
+                if not rok:
+                    self.error("[L-2] region source '" + rnm + "' named in 'from' is not a parameter or a region parameter of the enclosing type.\n      FIX: name a parameter the borrow comes from, or declare 'class <T> from " + rnm + ":'.")
+                rri = rri + 1
         self.enter_scope()
 
         mut hparams = Vec[HirParam].init(4)
@@ -1977,6 +2010,7 @@ extend Sema:
         self.current_func_name = ""
         self.current_func_generics = saved_func_generics
         self.current_func_ret_from = saved_ret_from
+        self.current_func_ret_borrow_str = saved_ret_borrow_str
         return hf
 
     pub def lower_class(self, c: ClassDef) -> HirClass:
@@ -2242,6 +2276,18 @@ extend Sema:
                         case _: pass
                 return h_s_expr
             case Stmt.SReturn(e):
+                # [L-3] (outlives, opt-in --strict): a borrow-returning function
+                # `-> ref str from r` that returns a freshly-built concat is returning
+                # OWNED data, not a borrow of region r — under zero-copy elision that
+                # would dangle. Sound (a `+` concat is unambiguously fresh heap, never
+                # a borrow). Off by default (ARC keeps it safe → lifetimes stay
+                # optional); only flagged under --strict for Rust-model checking.
+                if self.strict_mode and self.current_func_ret_borrow_str and e as usize != 0 as usize:
+                    match e.read():
+                        case Expr.EBinOp(l3_op, _, _):
+                            if l3_op == "+":
+                                self.error("[L-3] borrow-returning function returns a freshly-built string (owned), not a borrow of region '" + self.current_func_ret_from + "'.\n      FIX: return a slice/view of the region source, or change the return type to a plain owned 'str'.")
+                        case _: pass
                 # Gap 1: [L-1] escape check - returning a LOCAL-region Pointer without 'from' annotation
                 if e as usize != 0 as usize and not self.in_unsafe and self.current_func_ret_from == "":
                     match e.read():

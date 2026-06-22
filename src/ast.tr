@@ -14,7 +14,8 @@ from core.alloc import alloc, dealloc
 pub class AstType:
     pub name: str
     pub args: Vec[Pointer[AstType]]
-    pub from_param: str   # 'from X' / 'from X, Y' region(s) — comma-joined; empty = none
+    pub from_param: str   # 'from X' region — first/single source (non-empty = borrow)
+    pub from_regions: Vec[str]   # all explicit region sources of `from a, b` (for [L-2])
     pub is_borrow: bool   # true when written as `ref T` / `mut_ref T` — a borrow
                           # (region) view. Erased to the inner type T for codegen;
                           # the flag + from_param drive borrow checking (L-1/M-2).
@@ -26,6 +27,7 @@ extend AstType:
         t.name = name
         t.args = Vec[Pointer[AstType]].init(0)
         t.from_param = ""
+        t.from_regions = Vec[str].init(0)
         t.is_borrow = false
         t.is_mut_borrow = false
         return t
@@ -36,6 +38,7 @@ extend AstType:
         t.args = Vec[Pointer[AstType]].init(1)
         t.args.push(arg)
         t.from_param = ""
+        t.from_regions = Vec[str].init(0)
         t.is_borrow = false
         t.is_mut_borrow = false
         return t
