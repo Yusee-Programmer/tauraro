@@ -443,16 +443,12 @@ extend HttpConn:
             sb.append(line)
         else:
             sb.append("HTTP/1.1 ")
-            mut ss = Fmt.int_to_str(status)
-            sb.append(ss)
-            unsafe: _tr_c_free(ss as Pointer[char])
-            sb.append(" OK\r\n")
+            sb.append_int(status)       # format directly into the buffer — no
+            sb.append(" OK\r\n")        # intermediate heap string + free per req
         sb.append("Content-Type: ")
         sb.append(content_type)
         sb.append("\r\nContent-Length: ")
-        mut cl = Fmt.int_to_str(Str.len(body))
-        sb.append(cl)
-        unsafe: _tr_c_free(cl as Pointer[char])
+        sb.append_int(Str.len(body))    # ditto — was Fmt.int_to_str()+_tr_c_free()
         if self.request.keep_alive():
             sb.append("\r\nConnection: keep-alive\r\n\r\n")
         else:
@@ -764,56 +760,57 @@ extend HttpParser:
             req.body    = Str.slice(raw, body_start, Str.len(raw))
         else:
             header_end  = Str.len(raw)
-        mut hdr_sec     = Str.slice(raw, 0, header_end)
-        mut first_line  = Str.index_of(hdr_sec, "\r\n")
-        mut request_ln  = hdr_sec
-        mut request_ln_owned = false
-        mut rest_hdrs   = ""
-        if first_line >= 0:
-            request_ln  = Str.slice(hdr_sec, 0, first_line)
-            rest_hdrs   = Str.slice(hdr_sec, first_line + 2, Str.len(hdr_sec))
-            request_ln_owned = true
-        mut sp1 = Str.index_of(request_ln, " ")
-        if sp1 >= 0:
-            req.method  = Str.slice(request_ln, 0, sp1)
-            mut after   = Str.slice(request_ln, sp1 + 1, Str.len(request_ln))
-            mut sp2     = Str.index_of(after, " ")
-            mut full_path = after
-            mut full_path_is_after = true
-            if sp2 >= 0:
-                full_path     = Str.slice(after, 0, sp2)
-                req.version   = Str.slice(after, sp2 + 1, Str.len(after))
-                req.version_owned = true
-                full_path_is_after = false
-            mut q = Str.index_of(full_path, "?")
-            if q >= 0:
-                req.path  = Str.slice(full_path, 0, q)
-                req.query = Str.slice(full_path, q + 1, Str.len(full_path))
+        # Parse the request line positionally from `raw` directly. The old design
+        # sliced hdr_sec / request_ln / after / full_path — ~4 fresh heap slices
+        # allocated + freed PER REQUEST just to locate the two spaces and the '?'.
+        # We scan for those byte offsets in-place and slice ONLY the fields we keep
+        # (method/path/query/version/_raw_hdr). Each kept field is a fresh inline
+        # Str.slice (rc=1, sole owner, freed by free_owned) — never a borrowed local
+        # assigned into a field (#53), same ownership as req.path's branch.
+        mut line_end = Str.index_of(raw, "\r\n")   # end of the request line
+        if line_end < 0 or line_end > header_end: line_end = header_end
+        mut sp1 = -1
+        mut ci = 0
+        while ci < line_end:
+            if Str.char_at(raw, ci) == 32:    # ' ' after METHOD
+                sp1 = ci
+                ci = line_end
             else:
-                # A fresh slice, NOT `req.path = full_path`: storing the borrowed
-                # `full_path` local into a field retains it (rc=2) while the local
-                # is never auto-dropped (#53), so the path string leaked every
-                # request. A fresh slice is owned outright (rc=1) and freed by
-                # free_owned(). Both branches now share the same cleanup below.
-                req.path  = Str.slice(full_path, 0, Str.len(full_path))
-            if not full_path_is_after:
-                unsafe: _tr_c_free(full_path as Pointer[char])
-            unsafe: _tr_c_free(after as Pointer[char])
-        if request_ln_owned:
-            unsafe: _tr_c_free(request_ln as Pointer[char])
-        unsafe: _tr_c_free(hdr_sec as Pointer[char])
-        # Lazy headers: keep the raw header block (everything after the request
-        # line) and let header() scan it on demand, instead of eagerly building a
-        # Map of every header on every request. The previous design slice-split
-        # each header line + lowercased the name + boxed the value into a Map - ~5
-        # allocations per header that most handlers never read.
-        #
-        # Storing the NAMED local `rest_hdrs` into a field retains it (rc+1), so
-        # release our local ref to leave req._raw_hdr the sole owner (rc=1), freed
-        # by free_owned() (capture-before/release-after, #53). When first_line < 0
-        # rest_hdrs is the "" literal and both ops are no-ops.
-        req._raw_hdr = rest_hdrs
-        unsafe: _tr_c_free(rest_hdrs as Pointer[char])
+                ci = ci + 1
+        if sp1 >= 0:
+            req.method = Str.slice(raw, 0, sp1)
+            mut sp2 = -1
+            ci = sp1 + 1
+            while ci < line_end:
+                if Str.char_at(raw, ci) == 32:    # ' ' before VERSION
+                    sp2 = ci
+                    ci = line_end
+                else:
+                    ci = ci + 1
+            mut pstart = sp1 + 1
+            mut pend   = line_end
+            if sp2 >= 0:
+                pend = sp2
+                req.version = Str.slice(raw, sp2 + 1, line_end)
+                req.version_owned = true
+            mut q = -1
+            ci = pstart
+            while ci < pend:
+                if Str.char_at(raw, ci) == 63:    # '?' splits PATH from QUERY
+                    q = ci
+                    ci = pend
+                else:
+                    ci = ci + 1
+            if q >= 0:
+                req.path  = Str.slice(raw, pstart, q)
+                req.query = Str.slice(raw, q + 1, pend)
+            else:
+                req.path  = Str.slice(raw, pstart, pend)
+        # Lazy headers: store the raw header block [line_end+2, header_end) as a
+        # fresh inline slice (sole owner, freed by free_owned); header() scans it on
+        # demand instead of eagerly building a Map of every header per request.
+        if line_end >= 0 and line_end + 2 < header_end:
+            req._raw_hdr = Str.slice(raw, line_end + 2, header_end)
 
     # Parse `raw` (a raw header block, lines after the request line) into `into`,
     # lowercasing each header name. Used by HttpRequest.headers_map() to populate
