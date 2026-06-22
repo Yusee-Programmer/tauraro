@@ -3103,12 +3103,18 @@ static inline bool _tr_str_eq(const char* a, const char* b) {
 }
 
 /* ── String slice (alias for _tr_str_substring) ─────────────────────── */
+/* An OWNED (heap) empty string. The str helpers below are all declared `-> str`,
+ * so codegen wraps their result as owned (rc=1) and will free it — every return
+ * path must be heap, NEVER a string literal (freeing a literal corrupts the heap;
+ * this is the ownership-lie class that blocked MIR completion of fns that drop
+ * these results). */
+static inline char* _tr_empty_owned(void) { char* e=(char*)_tr_checked_alloc(1); e[0]='\0'; return e; }
 static inline char* _tr_str_slice(const char* s, long long start, long long end) {
-    if (!s) return (char*)"";
+    if (!s) return _tr_empty_owned();
     long long len = (long long)strlen(s);
     if (start < 0) start = 0;
     if (end > len) end = len;
-    if (start >= end) { char* e=(char*)_tr_checked_alloc(1); e[0]='\0'; return e; }
+    if (start >= end) return _tr_empty_owned();
     long long sz = end - start;
     char* out = (char*)_tr_checked_alloc(sz + 1);
     memcpy(out, s + start, (size_t)sz);
@@ -3118,24 +3124,24 @@ static inline char* _tr_str_slice(const char* s, long long start, long long end)
 
 /* ── Additional string helpers ───────────────────────────────────────── */
 static inline char* _tr_str_trim_left(const char* s) {
-    if (!s) return (char*)"";
+    if (!s) return _tr_empty_owned();
     while (*s == ' ' || *s == '\t' || *s == '\n' || *s == '\r') s++;
     size_t n = strlen(s); char* r = (char*)_tr_checked_alloc(n+1); memcpy(r,s,n+1); return r;
 }
 static inline char* _tr_str_trim_right(const char* s) {
-    if (!s) return (char*)"";
+    if (!s) return _tr_empty_owned();
     size_t n = strlen(s); const char* e = s+n-1;
     while (n > 0 && (*e==' '||*e=='\t'||*e=='\n'||*e=='\r')) { e--; n--; }
     char* r = (char*)_tr_checked_alloc(n+1); memcpy(r,s,n); r[n]='\0'; return r;
 }
 static inline char* _tr_str_capitalize(const char* s) {
-    if (!s||!*s) return (char*)"";
+    if (!s||!*s) return _tr_empty_owned();
     size_t n=strlen(s); char* r=(char*)_tr_checked_alloc(n+1); memcpy(r,s,n+1);
     r[0]=(char)toupper((unsigned char)r[0]); for(size_t i=1;i<n;i++) r[i]=(char)tolower((unsigned char)r[i]);
     return r;
 }
 static inline char* _tr_str_title(const char* s) {
-    if (!s) return (char*)"";
+    if (!s) return _tr_empty_owned();
     size_t n=strlen(s); char* r=(char*)_tr_checked_alloc(n+1); memcpy(r,s,n+1);
     bool ws=true;
     for(size_t i=0;i<n;i++){
@@ -3146,7 +3152,7 @@ static inline char* _tr_str_title(const char* s) {
     return r;
 }
 static inline char* _tr_str_reverse(const char* s) {
-    if (!s) return (char*)"";
+    if (!s) return _tr_empty_owned();
     size_t n=strlen(s); char* r=(char*)_tr_checked_alloc(n+1);
     for(size_t i=0;i<n;i++) r[i]=s[n-1-i]; r[n]='\0'; return r;
 }
@@ -4109,11 +4115,12 @@ static inline void StringBuilder_free(StringBuilder* sb) {
 
 /* ── File I/O helpers ────────────────────────────────────────────────── */
 static inline char* read_file(char* path) {
-    if (!path || !*path) return "";
+    /* Owned `-> str` (success path allocs `buf`); error paths must also be heap. */
+    if (!path || !*path) return _tr_empty_owned();
     FILE* f = fopen(path, "rb");
-    if (!f) return "";
+    if (!f) return _tr_empty_owned();
     fseek(f, 0, SEEK_END); long sz = ftell(f); rewind(f);
-    if (sz < 0) { fclose(f); return ""; }
+    if (sz < 0) { fclose(f); return _tr_empty_owned(); }
     char* buf = (char*)_tr_checked_alloc((size_t)sz + 1);
     size_t rd = fread(buf, 1, (size_t)sz, f); fclose(f);
     buf[rd] = '\0';
