@@ -2800,7 +2800,7 @@ static inline bool  _tr_dir_exists(const char* p){ (void)p; return false; }
 static inline bool  _tr_is_dir(const char* p)    { (void)p; return false; }
 static inline bool  _tr_is_file(const char* p)   { (void)p; return false; }
 static inline void* _tr_opendir(const char* p)   { (void)p; return NULL; }
-static inline char* _tr_readdir(void* h)         { (void)h; return (char*)""; }
+static inline char* _tr_readdir(void* h)         { (void)h; return strdup(""); }
 static inline void  _tr_closedir(void* h)        { (void)h; }
 #elif defined(_WIN32)
 static inline int  _tr_mkdir(const char* path)     { return CreateDirectoryA(path, NULL) ? 0 : -1; }
@@ -2827,10 +2827,14 @@ static inline void* _tr_opendir(const char* path) {
 }
 static inline char* _tr_readdir(void* handle) {
     _TrDir* d = (_TrDir*)handle;
-    if (!d || d->h == INVALID_HANDLE_VALUE) return (char*)"";
+    /* Declared `-> str`, so codegen wraps the result as OWNED (rc=1) and will
+     * free it. Every path must therefore return heap memory — the end-of-dir
+     * sentinel returns strdup("") (NOT a string literal: freeing a literal
+     * corrupts the heap). */
+    if (!d || d->h == INVALID_HANDLE_VALUE) return strdup("");
     if (d->first) { d->first = 0; return strdup(d->ffd.cFileName); }
     if (FindNextFileA(d->h, &d->ffd)) return strdup(d->ffd.cFileName);
-    return (char*)"";
+    return strdup("");
 }
 static inline void _tr_closedir(void* handle) {
     _TrDir* d = (_TrDir*)handle;
@@ -2854,9 +2858,11 @@ static inline bool _tr_is_file(const char* path) {
 static inline void* _tr_opendir(const char* path)  { return (void*)opendir(path); }
 static inline char* _tr_readdir(void* handle) {
     DIR* d = (DIR*)handle;
-    if (!d) return (char*)"";
+    /* Always return OWNED heap (codegen frees it); strdup("") at end-of-dir,
+     * never a string literal. */
+    if (!d) return strdup("");
     struct dirent* e = readdir(d);
-    return e ? strdup(e->d_name) : (char*)"";
+    return e ? strdup(e->d_name) : strdup("");
 }
 static inline void _tr_closedir(void* handle)       { if (handle) closedir((DIR*)handle); }
 #endif
