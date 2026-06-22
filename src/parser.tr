@@ -288,14 +288,15 @@ extend Parser:
                 dfn_t.args.push(box_asttype(dret))
                 return dfn_t
             case Token.KwMut:
-                # "mut ref T" - mutable reference/borrow type (optional, advanced)
+                # "mut ref T" - mutable (exclusive) borrow. ERASES to the inner type
+                # T for codegen; the is_borrow/is_mut_borrow flags drive checking.
                 self.pos = self.pos + 1
                 mut mr_name = self.consume_ident()
                 if mr_name == "ref":
                     mut mr_inner = self.parse_type()
-                    mut mr_t = AstType.init("mut_ref")
-                    mr_t.args.push(box_asttype(mr_inner))
-                    return mr_t
+                    mr_inner.is_borrow = true
+                    mr_inner.is_mut_borrow = true
+                    return mr_inner
                 # Malformed - just return void
                 return AstType.init("void")
             case _:
@@ -304,12 +305,14 @@ extend Parser:
         if name == "":
             return AstType.init("void")
 
-        # "ref T" - immutable borrow type (optional lifetime syntax, Proposal 3)
+        # "ref T" - immutable (shared) borrow / region view. ERASES to the inner
+        # type T for codegen (so a `ref str` is usable exactly like a `str`); the
+        # is_borrow flag + a `from` region drive borrow checking. Named regions are
+        # a checking concept layered over the ARC floor, not a representation change.
         if name == "ref":
             mut ref_inner = self.parse_type()
-            mut ref_t = AstType.init("ref")
-            ref_t.args.push(box_asttype(ref_inner))
-            return ref_t
+            ref_inner.is_borrow = true
+            return ref_inner
 
 
         match self.peek():
@@ -361,14 +364,19 @@ extend Parser:
                         case Token.Colon:
                             self.pos = self.pos + 1
                             ty = self.parse_type()
+                            # Param region: `a: ref str from r`. A single region only —
+                            # a comma here separates parameters, not regions.
+                            if self.peek() == Token.KwFrom:
+                                self.pos = self.pos + 1
+                                ty.from_param = self.consume_ident()
                             ty_ptr = box_asttype(ty)
                         case _:
                             pass
                     p = Param.init(item_name, ty_ptr)
                     if ty_ptr as usize != 0 as usize:
-                        if ty_ptr.read().name == "ref":
+                        if ty_ptr.read().is_borrow:
                             p.is_ref = true
-                        if ty_ptr.read().name == "mut_ref":
+                        if ty_ptr.read().is_mut_borrow:
                             p.is_mut_ref = true
                     # Variadic param: `args...` or `args: T...` collects trailing
                     # call args into a List[T] (T defaults to int if unannotated).
@@ -2098,8 +2106,14 @@ extend Parser:
             self.pos = self.pos + 1
             mut ret_t = self.parse_type()
             if self.peek() == Token.KwFrom:
+                # Region annotation on the return borrow. Single source `from a`, or
+                # multi-source `from a, b` (the returned ref is valid for the SHORTER
+                # of the named regions — their intersection). Stored comma-joined.
                 self.pos = self.pos + 1
                 ret_t.from_param = self.consume_ident()
+                while self.peek() == Token.Comma:
+                    self.pos = self.pos + 1
+                    ret_t.from_param = ret_t.from_param + "," + self.consume_ident()
             f.ret_ty = box_asttype(ret_t)
         if self.peek() == Token.Colon:
             self.pos = self.pos + 1
@@ -2121,6 +2135,15 @@ extend Parser:
                     self.pos = self.pos + 1
             if self.peek() == Token.RBracket:
                 self.pos = self.pos + 1
+        # Region (lifetime) parameters: `class Parser from src:` — names the region
+        # this type's `ref`-typed fields borrow for. Parsed and accepted; field-level
+        # borrows + the M-2 move-while-borrowed check provide conservative enforcement.
+        if self.peek() == Token.KwFrom:
+            self.pos = self.pos + 1
+            c.region_params.push(self.consume_ident())
+            while self.peek() == Token.Comma:
+                self.pos = self.pos + 1
+                c.region_params.push(self.consume_ident())
         if self.peek() == Token.KwExtends:
             self.pos = self.pos + 1
             c.base_classes.push(self.consume_ident())
@@ -2206,7 +2229,18 @@ extend Parser:
                     mut ty_ptr = Pointer[AstType](0)
                     if self.peek() == Token.Colon:
                         self.pos = self.pos + 1
-                        ty_ptr = box_asttype(self.parse_type())
+                        mut fty = self.parse_type()
+                        # Field-level region: `text: ref str from src` — the field
+                        # borrows for region `src` (a class region param). The type
+                        # is already erased to its inner T (is_borrow set); record
+                        # the region name(s) for checking.
+                        if self.peek() == Token.KwFrom:
+                            self.pos = self.pos + 1
+                            fty.from_param = self.consume_ident()
+                            while self.peek() == Token.Comma:
+                                self.pos = self.pos + 1
+                                fty.from_param = fty.from_param + "," + self.consume_ident()
+                        ty_ptr = box_asttype(fty)
                     mut fld = FieldDef.init(fname, ty_ptr)
                     c.fields.push(fld)
                     self.expect_newline()

@@ -1883,7 +1883,8 @@ extend Sema:
         # This covers the common single-param borrow pattern without requiring any annotation.
         if self.current_func_ret_from == "" and f.ret_ty as usize != 0 as usize:
             mut infer_ret_nm = f.ret_ty.read().name
-            if infer_ret_nm == "Pointer" or infer_ret_nm == "ref" or infer_ret_nm == "mut_ref":
+            mut infer_is_borrow = f.ret_ty.read().is_borrow
+            if infer_ret_nm == "Pointer" or infer_ret_nm == "ref" or infer_ret_nm == "mut_ref" or infer_is_borrow:
                 mut infer_from = ""
                 mut infer_count = 0
                 mut infer_i = 0

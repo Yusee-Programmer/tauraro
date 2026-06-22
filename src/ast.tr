@@ -14,7 +14,11 @@ from core.alloc import alloc, dealloc
 pub class AstType:
     pub name: str
     pub args: Vec[Pointer[AstType]]
-    pub from_param: str  # 'from X' lifetime annotation - empty means none
+    pub from_param: str   # 'from X' / 'from X, Y' region(s) — comma-joined; empty = none
+    pub is_borrow: bool   # true when written as `ref T` / `mut_ref T` — a borrow
+                          # (region) view. Erased to the inner type T for codegen;
+                          # the flag + from_param drive borrow checking (L-1/M-2).
+    pub is_mut_borrow: bool   # true specifically for `mut_ref T` (exclusive borrow)
 
 extend AstType:
     pub def init(name: str) -> AstType:
@@ -22,6 +26,8 @@ extend AstType:
         t.name = name
         t.args = Vec[Pointer[AstType]].init(0)
         t.from_param = ""
+        t.is_borrow = false
+        t.is_mut_borrow = false
         return t
 
     pub def init_generic(name: str, arg: Pointer[AstType]) -> AstType:
@@ -30,6 +36,8 @@ extend AstType:
         t.args = Vec[Pointer[AstType]].init(1)
         t.args.push(arg)
         t.from_param = ""
+        t.is_borrow = false
+        t.is_mut_borrow = false
         return t
 
 pub class GenericConstraint:
@@ -361,6 +369,7 @@ pub class ClassDef:
     pub is_class: bool
     pub line: int
     pub docstring: str
+    pub region_params: Vec[str]   # 'from r' region (lifetime) parameters
 
 extend ClassDef:
     pub def init(name: str) -> ClassDef:
@@ -377,6 +386,7 @@ extend ClassDef:
         c.is_class = true
         c.line = 0
         c.docstring = ""
+        c.region_params = Vec[str].init(0)
         return c
 
 pub class VariantDef:
