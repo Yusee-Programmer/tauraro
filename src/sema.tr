@@ -1078,7 +1078,46 @@ extend Sema:
                 if cr_sym.name == "": return ""
                 if cr_sym.is_param: return cr_nm
                 return cr_sym.borrows_region
+            case Expr.ECall(cr_callee, cr_args):
+                # [cross-fn] result of `f(args)` where `f -> ref str from p` borrows the
+                # region of the argument matching p — recurse into that argument.
+                if cr_callee as usize != 0 as usize:
+                    match cr_callee.read():
+                        case Expr.EIdent(cr_fn):
+                            mut cr_fsym = self.resolve(cr_fn)
+                            if cr_fsym.name != "" and cr_fsym.ty as usize != 0 as usize:
+                                mut cr_ret = cr_fsym.ty.read()
+                                if cr_ret.is_borrow and cr_ret.from_index >= 0 and cr_ret.from_index < cr_args.len:
+                                    return self.compute_region(cr_args.get(cr_ret.from_index))
+                        case _: pass
+                return ""
             case _: return ""
+
+    # [L-5] True iff `obj.field` names a `ref` (borrow) field. Sound: returns false
+    # whenever the object's class or the field can't be resolved (never over-flags).
+    pub def field_is_borrow(self, obj: Pointer[Expr], field: str) -> bool:
+        if obj as usize == 0 as usize: return false
+        mut cls_name = ""
+        match obj.read():
+            case Expr.EIdent(fb_obj):
+                if fb_obj == "self":
+                    cls_name = self.current_class_name
+                else:
+                    mut fb_sym = self.resolve(fb_obj)
+                    if fb_sym.name != "" and fb_sym.ty as usize != 0 as usize:
+                        cls_name = fb_sym.ty.read().name
+            case _: pass
+        if cls_name == "": return false
+        if not self.classes.contains(cls_name): return false
+        mut fb_cls = self.classes.get(cls_name)
+        mut fb_i = 0
+        while fb_i < fb_cls.fields.len:
+            mut fb_fld = fb_cls.fields.get(fb_i)
+            if fb_fld.name == field:
+                if fb_fld.ty as usize != 0 as usize:
+                    return fb_fld.ty.read().is_borrow
+            fb_i = fb_i + 1
+        return false
 
     # If `e` is a bare `str`-typed identifier, mark its symbol as escaped (it
     # is being passed as a call/method-call ARGUMENT, so a copy of it may be
@@ -1790,6 +1829,18 @@ extend Sema:
             case Decl.DFunction(f):
                 mut _f_ret = box_asttype(AstType.init("void"))
                 if f.ret_ty as usize != 0 as usize: _f_ret = f.ret_ty
+                # [cross-fn region] for a single-region borrow return (`-> ref str from a`),
+                # record the index of the `from` parameter so a call site can map the
+                # result's region to the matching argument.
+                if f.ret_ty as usize != 0 as usize:
+                    mut _frt = f.ret_ty.read()
+                    if _frt.is_borrow and _frt.from_regions.len == 1:
+                        mut _fi = 0
+                        while _fi < f.params.len:
+                            if f.params.get(_fi).name == _frt.from_regions.get(0):
+                                _frt.from_index = _fi
+                            _fi = _fi + 1
+                        _f_ret = box_asttype(_frt)
                 # A 'throws' function's call-site type is Result[V, Err], so that
                 # `mut r = throwing_fn(...)` infers `r: Result[V, Err]` and
                 # r.is_ok / r.unwrap() / r.unwrap_err() dispatch correctly.
@@ -2440,6 +2491,14 @@ extend Sema:
                 mut htgt = self.lower_expr(target)
                 self.in_assign_target = false
                 mut hv = self.lower_expr(val)
+                # [L-5] (--strict): storing freshly-built (owned) data into a `ref`
+                # (borrow) field — the field is meant to hold a borrow, not own.
+                if self.strict_mode and target as usize != 0 as usize:
+                    match target.read():
+                        case Expr.EPropAccess(l5_obj, l5_field):
+                            if self.compute_region(val) == "@owned" and self.field_is_borrow(l5_obj, l5_field):
+                                self.error("[L-5] storing a freshly-built (owned) string into the borrow field '" + l5_field + "' (declared 'ref').\n      FIX: store a borrow of the field's region, or make the field a plain owned 'str'.")
+                        case _: pass
                 # First assignment to an undeclared name (bare `name = expr`, no
                 # `mut`): implicitly declare it with the inferred type so its
                 # methods/fields resolve (e.g. `obj = Foo(); obj.bar()`).

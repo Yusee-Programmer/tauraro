@@ -16,6 +16,9 @@ pub class AstType:
     pub args: Vec[Pointer[AstType]]
     pub from_param: str   # 'from X' region — first/single source (non-empty = borrow)
     pub from_regions: Vec[str]   # all explicit region sources of `from a, b` (for [L-2])
+    pub from_index: int   # [cross-fn] for a single-region borrow RETURN type, the index
+                          # of the `from` parameter in the function's param list; -1 = none.
+                          # Lets a call site map the result's region to the matching arg.
     pub is_borrow: bool   # true when written as `ref T` / `mut_ref T` — a borrow
                           # (region) view. Erased to the inner type T for codegen;
                           # the flag + from_param drive borrow checking (L-1/M-2).
@@ -28,6 +31,7 @@ extend AstType:
         t.args = Vec[Pointer[AstType]].init(0)
         t.from_param = ""
         t.from_regions = Vec[str].init(0)
+        t.from_index = -1
         t.is_borrow = false
         t.is_mut_borrow = false
         return t
@@ -39,6 +43,7 @@ extend AstType:
         t.args.push(arg)
         t.from_param = ""
         t.from_regions = Vec[str].init(0)
+        t.from_index = -1
         t.is_borrow = false
         t.is_mut_borrow = false
         return t
