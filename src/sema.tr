@@ -37,7 +37,7 @@ pub class Symbol:
     pub decl_block_id: int    # auto-drop: id of the innermost if/while C block open at declaration within the current scope; 0 = scope top-level
     pub str_escaped: bool     # auto-drop: a `str` local passed as a call/method-call ARGUMENT - may be aliased into a legacy List_str/Dict/Set (#52 not yet migrated); excluded from auto-drop to avoid UAF
     pub coll_escaped: bool    # auto-drop: a List/Vec/Dict/Map/Set local that is ever read in a non-receiver position (call/method arg, assigned to another var, returned, stored in a literal) - raw unrefcounted pointer, so any alias must disable auto-free to avoid UAF
-    pub fresh_owned_str: bool # [L-3] region derivation: this str local's CURRENT value is a freshly-built concat (owned heap), NOT a borrow of any region. Tracks the LAST assignment; used to reject returning it as a `ref ... from r` under --strict.
+    pub borrows_region: str   # [L-3/L-4] region derivation of this str local's CURRENT value: "" = unknown (never flagged), "@owned" = freshly built (concat — owned, not a borrow), "<name>" = shares parameter/local <name>'s region (transitive). Tracks the LAST assignment.
 
 extend Symbol:
     pub def init(name: str, kind: SymbolKind, ty: Pointer[AstType]) -> Symbol:
@@ -62,7 +62,7 @@ extend Symbol:
         s.decl_block_id = 0
         s.str_escaped = false
         s.coll_escaped = false
-        s.fresh_owned_str = false
+        s.borrows_region = ""
         return s
 
 pub class Scope:
@@ -113,6 +113,7 @@ pub class Sema:
     pub in_unsafe: bool                 # Gap 6: inside an unsafe: block
     pub current_func_ret_from: str      # Gap 1: 'from' lifetime param of current function return
     pub current_func_ret_borrow_str: bool   # current fn returns `ref str from ...` (a str borrow)
+    pub current_func_ret_regions: Vec[str]  # explicit `from a, b` region list (empty if none/auto-inferred)
     pub strict_mode: bool               # --strict: alloc outside unsafe -> hard [U-1] error
     pub decorator_names: Map[str, bool]  # decorator def registry (name -> true)
     pub variadic_fns:    Map[str, str]   # fn name -> index of trailing variadic param (= fixed-arg count, as string)
@@ -198,6 +199,7 @@ extend Sema:
         s.in_unsafe              = false
         s.current_func_ret_from  = ""
         s.current_func_ret_borrow_str = false
+        s.current_func_ret_regions = Vec[str].init(0)
         s.strict_mode            = false
         s.decorator_names        = Map[str, bool].init(16)
         s.variadic_fns           = Map[str, str].init(8)
@@ -1048,26 +1050,35 @@ extend Sema:
                 return
             i = i - 1
 
-    # [L-3] region derivation: record whether `name`'s CURRENT value is a freshly
-    # built concat (owned heap, NOT a borrow). Updated on each assignment so the
-    # flag always reflects the latest binding (a later borrow-slice clears it).
-    pub def set_fresh_owned(self, name: str, fresh: bool):
+    # [L-3/L-4] region derivation: record which region `name`'s CURRENT value derives
+    # from. Updated on each assignment so it always reflects the latest binding.
+    pub def set_borrows_region(self, name: str, region: str):
         mut i = self.scopes.len - 1
         while i >= 0:
             if self.scopes.get(i).variables.contains(name):
                 mut sym = self.scopes.get(i).variables.get(name)
-                sym.fresh_owned_str = fresh
+                sym.borrows_region = region
                 self.scopes.get(i).variables.insert(name, sym)
                 return
             i = i - 1
 
-    # True iff `e` is a `+` expression (string concat) — a freshly-allocated owned
-    # str, never a borrow of an existing value.
-    pub def expr_is_fresh_concat(self, e: Pointer[Expr]) -> bool:
-        if e as usize == 0 as usize: return false
+    # The region a value `e` derives from (see Symbol.borrows_region for the encoding):
+    #   "@owned" = a `+` concat (freshly built, owned, never a borrow);
+    #   "<param>"/"<region>" = shares a parameter (directly) or another local's region
+    #     (transitively — `mut x = w` inherits w's region);
+    #   "" = unknown (slices, calls, anything we can't prove — NEVER flagged → sound).
+    pub def compute_region(self, e: Pointer[Expr]) -> str:
+        if e as usize == 0 as usize: return ""
         match e.read():
-            case Expr.EBinOp(fc_op, _, _): return fc_op == "+"
-            case _: return false
+            case Expr.EBinOp(cr_op, _, _):
+                if cr_op == "+": return "@owned"
+                return ""
+            case Expr.EIdent(cr_nm):
+                mut cr_sym = self.resolve(cr_nm)
+                if cr_sym.name == "": return ""
+                if cr_sym.is_param: return cr_nm
+                return cr_sym.borrows_region
+            case _: return ""
 
     # If `e` is a bare `str`-typed identifier, mark its symbol as escaped (it
     # is being passed as a call/method-call ARGUMENT, so a copy of it may be
@@ -1901,10 +1912,13 @@ extend Sema:
         # Gap 1: capture 'from' lifetime param for escape-analysis check in SReturn
         mut saved_ret_from = self.current_func_ret_from
         mut saved_ret_borrow_str = self.current_func_ret_borrow_str
+        mut saved_ret_regions = self.current_func_ret_regions
         self.current_func_ret_from = ""
         self.current_func_ret_borrow_str = false
+        self.current_func_ret_regions = Vec[str].init(0)
         if f.ret_ty as usize != 0 as usize:
             self.current_func_ret_from = f.ret_ty.read().from_param
+            self.current_func_ret_regions = f.ret_ty.read().from_regions
             if f.ret_ty.read().is_borrow and f.ret_ty.read().name == "str":
                 self.current_func_ret_borrow_str = true
         # Auto-infer 'from' when no explicit annotation: if return is Pointer/ref and there is
@@ -2033,6 +2047,7 @@ extend Sema:
         self.current_func_generics = saved_func_generics
         self.current_func_ret_from = saved_ret_from
         self.current_func_ret_borrow_str = saved_ret_borrow_str
+        self.current_func_ret_regions = saved_ret_regions
         return hf
 
     pub def lower_class(self, c: ClassDef) -> HirClass:
@@ -2310,10 +2325,29 @@ extend Sema:
                             if l3_op == "+":
                                 self.error("[L-3] borrow-returning function returns a freshly-built string (owned), not a borrow of region '" + self.current_func_ret_from + "'.\n      FIX: return a slice/view of the region source, or change the return type to a plain owned 'str'.")
                         case Expr.EIdent(l3_nm):
-                            # via-local: the returned local's last value is a fresh concat.
                             mut l3_sym = self.resolve(l3_nm)
-                            if l3_sym.name != "" and l3_sym.fresh_owned_str:
-                                self.error("[L-3] borrow-returning function returns '" + l3_nm + "', a freshly-built string (owned), not a borrow of region '" + self.current_func_ret_from + "'.\n      FIX: return a slice/view of the region source, or change the return type to a plain owned 'str'.")
+                            if l3_sym.name != "":
+                                # Effective region of the returned value: a parameter
+                                # shares its own region; a local inherits its tracked one.
+                                mut l3_eff = ""
+                                if l3_sym.is_param:
+                                    l3_eff = l3_nm
+                                else:
+                                    l3_eff = l3_sym.borrows_region
+                                if l3_eff == "@owned":
+                                    self.error("[L-3] borrow-returning function returns '" + l3_nm + "', a freshly-built string (owned), not a borrow of region '" + self.current_func_ret_from + "'.\n      FIX: return a slice/view of the region source, or change the return type to a plain owned 'str'.")
+                                elif l3_eff != "" and self.current_func_ret_regions.len > 0:
+                                    # [L-4] wrong region: returns a borrow of region `l3_eff`,
+                                    # but the return is declared `from <other>`. Covers direct
+                                    # params AND via-local (`mut w = b; return w`).
+                                    mut l3_in = false
+                                    mut l3ri = 0
+                                    while l3ri < self.current_func_ret_regions.len:
+                                        if self.current_func_ret_regions.get(l3ri) == l3_eff:
+                                            l3_in = true
+                                        l3ri = l3ri + 1
+                                    if not l3_in:
+                                        self.error("[L-4] borrow-returning function returns a borrow of region '" + l3_eff + "', but its return is declared 'from " + self.current_func_ret_from + "'.\n      FIX: add '" + l3_eff + "' to the 'from' list, or return a borrow of a declared region.")
                         case _: pass
                 # Gap 1: [L-1] escape check - returning a LOCAL-region Pointer without 'from' annotation
                 if e as usize != 0 as usize and not self.in_unsafe and self.current_func_ret_from == "":
@@ -2355,10 +2389,10 @@ extend Sema:
                                 self.mark_moved(m1_src)
                         case _: pass
                 self.declare(name, SymbolKind.SVariable, box_asttype(ty), is_mut)
-                # [L-3] region derivation: tag this local fresh-owned iff its initial
-                # value is a `+` concat (freshly-built heap str, not a borrow).
+                # [L-3/L-4] region derivation: record which region this local derives
+                # from (its initial value).
                 if val_ptr as usize != 0 as usize:
-                    self.set_fresh_owned(name, self.expr_is_fresh_concat(val_ptr))
+                    self.set_borrows_region(name, self.compute_region(val_ptr))
                 # Gap 1: infer ptr_region for Pointer-typed variables.
                 # Conservative rule: any call-expression RHS is assumed HEAP (functions may alloc).
                 # Only a variable without initializer OR initialized with Pointer[T](0) is LOCAL.
@@ -2412,10 +2446,10 @@ extend Sema:
                 if target as usize != 0 as usize:
                     match target.read():
                         case Expr.EIdent(sa_decl_name):
-                            # [L-3] region derivation: a reassignment refreshes the
-                            # fresh-owned tag — `w = a + b` marks it owned, `w = slice(a)`
-                            # (a borrow) clears it. Keeps the flag sound across reassignment.
-                            self.set_fresh_owned(sa_decl_name, self.expr_is_fresh_concat(val))
+                            # [L-3/L-4] region derivation: a reassignment refreshes the
+                            # region — `w = a + b` → @owned, `w = b` → region b. Keeps the
+                            # tag sound across reassignment.
+                            self.set_borrows_region(sa_decl_name, self.compute_region(val))
                             mut sa_existing = self.resolve(sa_decl_name)
                             if sa_existing.name == "":
                                 # Bare `name = expr` with no prior declaration and no `mut`:
