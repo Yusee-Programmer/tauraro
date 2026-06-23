@@ -61,6 +61,14 @@ pub class DropSite:
     pub hir_block: HirBlock
     pub places:    Vec[str]    # filled by mir_if_drop_plan: names to release here
 
+# Outlives engine: `borrower` is a `ref`/borrow local whose value aliases `source`
+# (a parameter or another local). For the borrow to be sound, `source` must stay
+# live everywhere `borrower` is live. compute_borrow_outlives classifies each edge.
+pub class BorrowEdge:
+    pub borrower: str
+    pub source:   str
+    pub decl_block: int   # the block where the borrow is created (for per-point checks)
+
 pub class MirFunction:
     pub name:   str
     pub params: Vec[str]
@@ -69,6 +77,7 @@ pub class MirFunction:
     pub unsafe_pinned: LiveSet     # names touched inside `unsafe:` — excluded from
                                    # the drop schedule (dev may raw-alias them; HIR
                                    # owns their scope-exit drop)
+    pub borrows: Vec[BorrowEdge]   # outlives engine: ref-borrow edges (borrower←source)
     # True iff every statement in the body was fully lowered into the CFG (no
     # `case _: pass` fallthrough). Only COMPLETE functions may drive MIR-based
     # codegen / drop insertion — for incomplete ones the analysis is unsound
@@ -92,6 +101,7 @@ pub class MirBuilder:
     pub unsafe_pinned: LiveSet  # names touched inside any `unsafe:` block (pinned)
     pub loop_continue: Vec[int] # block to TGoto on `continue` (innermost loop header)
     pub loop_break:    Vec[int] # block to TGoto on `break` (innermost loop exit)
+    pub borrows: Vec[BorrowEdge]   # outlives engine: ref-borrow edges recorded here
 
 extend MirBuilder:
     pub def init() -> MirBuilder:
@@ -104,7 +114,16 @@ extend MirBuilder:
         b.unsafe_pinned = LiveSet.init()
         b.loop_continue = Vec[int].init(4)
         b.loop_break    = Vec[int].init(4)
+        b.borrows       = Vec[BorrowEdge].init(2)
         return b
+
+    # Outlives engine: record that `borrower` is a ref-borrow aliasing `source`.
+    pub def record_borrow(self, borrower: str, source: str):
+        mut e = BorrowEdge()
+        e.borrower = borrower
+        e.source   = source
+        e.decl_block = self.cur
+        self.borrows.push(e)
 
     # Create a fresh block, return its id.
     pub def new_block(self) -> int:
@@ -155,8 +174,15 @@ def lower_stmts(b: MirBuilder, hb: HirBlock):
             b.cur = b.new_block()
         mut sp = hb.stmts.get(i)
         match sp.read():
-            case HirStmt.SLet(nm, _, _, _, _, _, val):
+            case HirStmt.SLet(nm, _, _, _, _, slet_ty, val):
                 b.push_stmt(MirStmt.MDeclare(nm, val))
+                # Outlives engine: a `ref T` let binding a bare local (`mut b: ref T = s`)
+                # borrows s — record the edge so compute_borrow_outlives can check that
+                # s stays live wherever b is live.
+                if slet_ty.is_borrow and val as usize != 0 as usize:
+                    match val.read():
+                        case HirExpr.EIdent(src_nm, _, _): b.record_borrow(nm, src_nm)
+                        case _: pass
             case HirStmt.SAssign(tgt, val):
                 # Record the place when the target is a simple local, so liveness
                 # can track def/use; field/index targets stay opaque (eval).
@@ -400,6 +426,7 @@ pub def lower_function(hf: HirFunction) -> MirFunction:
     mf.complete = b.complete
     mf.if_bodies = b.if_bodies
     mf.unsafe_pinned = b.unsafe_pinned
+    mf.borrows = b.borrows
     return mf
 
 pub def lower_program(hir: HirProgram) -> MirProgram:
@@ -908,6 +935,71 @@ pub def compute_drops(mf: MirFunction, live_out: Vec[LiveSet]) -> Vec[LiveSet]:
         i = i + 1
     return drops
 
+# ── Outlives engine (increment 1: additive analysis) ─────────────────────────
+# For each borrow edge (borrower ← source), determine whether `source` is
+# independently live everywhere `borrower` is live. Using the existing backward
+# liveness (live_out per block):
+#   PROVEN  → source already outlives borrower with no help → the borrow is sound
+#             and (future) its refcount can be elided with zero added liveness.
+#   NOT     → there is a block where borrower is live but source is NOT → source
+#             would die under the borrower → the borrow needs source's liveness
+#             EXTENDED (the NLL "borrow extends the borrowed value's lifetime"
+#             rule) before any refcount elision is safe.
+# Pure analysis: returns one bool per edge, drives no codegen yet. Sound by
+# construction — it only READS liveness.
+# Index of the LAST statement in `blk` that uses `name`; blk.stmts.len if the
+# terminator uses it (a use "after" all statements); -1 if never used here.
+def last_use_in_block(blk: MirBlock, name: str) -> int:
+    mut last = -1
+    mut si = 0
+    while si < blk.stmts.len:
+        mut tmp = Vec[str].init(4)
+        match blk.stmts.get(si).read():
+            case MirStmt.MDeclare(_, val): collect_uses(val, tmp)
+            case MirStmt.MAssign(_, val): collect_uses(val, tmp)
+            case MirStmt.MEval(val): collect_uses(val, tmp)
+        if set_contains(tmp, name): last = si
+        si = si + 1
+    mut tt = Vec[str].init(4)
+    match blk.term.read():
+        case MirTerm.TBranch(cond, _, _): collect_uses(cond, tt)
+        case MirTerm.TReturn(val): collect_uses(val, tt)
+        case _: pass
+    if set_contains(tt, name): last = blk.stmts.len
+    return last
+
+pub def compute_borrow_outlives(mf: MirFunction, live_out: Vec[LiveSet]) -> Vec[bool]:
+    mut out = Vec[bool].init(mf.borrows.len)
+    mut i = 0
+    while i < mf.borrows.len:
+        mut edge = mf.borrows.get(i)
+        mut proven = true
+        # (a) cross-block: borrower live past a block where the source is not.
+        mut bi = 0
+        while bi < mf.blocks.len:
+            mut lo = live_out.get(bi)
+            if lo.has(edge.borrower) and not lo.has(edge.source):
+                proven = false
+            bi = bi + 1
+        # (b) within the declaring block (per-point): if the source dies in this
+        # block (not in its live_out) BEFORE the borrower's last use, the borrow
+        # outlives the source → needs extension. This is what makes a plain
+        # `mut b: ref str = s; use b` correctly NEEDS-EXTENSION (s is consumed into
+        # b at the declaration, but b is used afterward).
+        mut db = edge.decl_block
+        if db >= 0 and db < mf.blocks.len:
+            if not live_out.get(db).has(edge.source):
+                mut dblk = mf.blocks.get(db)
+                mut src_last = last_use_in_block(dblk, edge.source)
+                mut bor_last = last_use_in_block(dblk, edge.borrower)
+                if live_out.get(db).has(edge.borrower):
+                    bor_last = dblk.stmts.len + 1   # borrower escapes to later blocks
+                if bor_last > src_last:
+                    proven = false
+        out.push(proven)
+        i = i + 1
+    return out
+
 # Public entry point for sema's HYBRID drop wiring: lower `hf` to MIR, and IF the
 # function is fully lowerable (complete), compute the drop schedule and return the
 # single-block if/else-body drop sites with their place lists filled in. For an
@@ -995,6 +1087,16 @@ pub def dump_mir(mp: MirProgram) -> str:
         out = out + "fn " + f.name + "(" + f.params.len.to_str() + " params), " + f.blocks.len.to_str() + " blocks" + tag + ":\n"
         mut live = compute_liveness(f)
         mut drops = compute_drops(f, live)
+        # Outlives engine: show recorded borrow edges + whether each is proven.
+        if f.borrows.len > 0:
+            mut outl = compute_borrow_outlives(f, live)
+            mut ei = 0
+            while ei < f.borrows.len:
+                mut ed = f.borrows.get(ei)
+                mut verdict = "NEEDS-EXTENSION"
+                if outl.get(ei): verdict = "PROVEN"
+                out = out + "  ; borrow " + ed.borrower + " <- " + ed.source + " : " + verdict + "\n"
+                ei = ei + 1
         mut bi = 0
         while bi < f.blocks.len:
             mut blk = f.blocks.get(bi)
