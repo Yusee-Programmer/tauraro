@@ -1752,7 +1752,7 @@ static inline void  _tr_threadobj_join_h(char* t)                              {
 static inline void  _tr_threadobj_detach_h(char* t)                            { _tr_threadobj_detach((_TrThreadObj*)t); }
 static inline void  _tr_threadobj_free_h(char* t)                              { _tr_threadobj_free((_TrThreadObj*)t); }
 static inline bool  _tr_threadobj_panicked_h(char* t)                          { return _tr_threadobj_panicked((_TrThreadObj*)t); }
-static inline char* _tr_threadobj_panic_msg_h(char* t)                         { return _tr_threadobj_panic_msg((_TrThreadObj*)t); }
+static inline char* _tr_threadobj_panic_msg_h(char* t)                         { return _tr_str_dup_owned(_tr_threadobj_panic_msg((_TrThreadObj*)t)); }
 static inline long long _tr_thread_current_id_h(void)                          { return _tr_thread_current_id(); }
 static inline void  _tr_thread_sleep_ms_h(long long ms)                        { _tr_thread_sleep_ms(ms); }
 

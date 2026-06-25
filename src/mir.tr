@@ -427,6 +427,20 @@ pub def lower_function(hf: HirFunction) -> MirFunction:
     mf.if_bodies = b.if_bodies
     mf.unsafe_pinned = b.unsafe_pinned
     mf.borrows = b.borrows
+    # Outlives engine: append cross-fn borrow edges collected by sema (parallel
+    # arrays on the HIR fn) — these are the edges the MIR can't detect itself
+    # because it has no function signatures (`mut r = f(args)` borrows an arg).
+    mut hbi = 0
+    if (hf.borrow_borrowers as usize) == 0 as usize: return mf   # fields unset → done
+    if (hf.borrow_sources as usize) == 0 as usize: return mf
+    while hbi < hf.borrow_borrowers.len and hbi < hf.borrow_sources.len:
+        mut he = BorrowEdge()
+        he.borrower = hf.borrow_borrowers.get(hbi)
+        he.source   = hf.borrow_sources.get(hbi)
+        he.decl_block = -1   # sema doesn't know the MIR block → skip per-point, use
+                             # only the (always-valid) cross-block liveness check
+        mf.borrows.push(he)
+        hbi = hbi + 1
     return mf
 
 pub def lower_program(hir: HirProgram) -> MirProgram:
@@ -1025,6 +1039,29 @@ def site_for(out: Vec[DropSite], hb: HirBlock) -> DropSite:
     s.places = Vec[str].init(4)
     out.push(s)
     return s
+
+# Outlives engine → codegen: the names of `ref` borrow locals whose source is
+# PROVEN to outlive them (per-point precise, within-MIR edges only). Codegen may
+# elide their refcount (no retain at the binding, no release at scope) — they are
+# pure aliases of a value that lives at least as long. Only COMPLETE functions are
+# trusted; cross-fn (decl_block<0) edges are excluded here (handled separately).
+pub def mir_proven_borrows(hf: HirFunction) -> Vec[str]:
+    mut out = Vec[str].init(2)
+    mut mf  = lower_function(hf)
+    if not mf.complete: return out
+    if mf.borrows.len == 0: return out
+    mut live = compute_liveness(mf)
+    mut outl = compute_borrow_outlives(mf, live)
+    mut i = 0
+    while i < mf.borrows.len:
+        mut edge = mf.borrows.get(i)
+        # PROVEN includes BOTH within-fn per-point edges (decl_block>=0) AND cross-fn
+        # edges (decl_block==-1, from a `-> ref` call) whose source provably outlives
+        # the borrower by cross-block liveness. Both are sound to elide.
+        if outl.get(i):
+            out.push(edge.borrower)
+        i = i + 1
+    return out
 
 pub def mir_if_drop_plan(hf: HirFunction) -> Vec[DropSite]:
     mut out = Vec[DropSite].init(4)

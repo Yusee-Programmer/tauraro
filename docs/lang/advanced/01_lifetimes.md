@@ -119,6 +119,81 @@ def get_value() -> int:
 
 ---
 
+## Named Regions & Zero-Copy Borrow Elision
+
+> This section documents the borrow engine that backs the `from` annotations. The
+> headline: **borrow annotations are always optional.** Tauraro's ARC (automatic
+> reference counting) is the safety *floor* — every value is correctly freed with or
+> without annotations. Annotations only let the compiler *prove* a borrow is safe and
+> then **elide the reference count entirely**, turning the borrow into a true
+> zero-copy alias (a bare pointer move, no `retain`/`release`).
+
+### `ref T` and `mut ref T` bindings
+
+A local can borrow another value instead of owning it:
+
+```python
+mut owner = build_big_string()
+mut view: ref str = owner        # read-only borrow — shares owner's buffer
+print(len(view))
+print(len(owner))                # owner still usable; view is just an alias
+```
+
+`ref T` is a shared (read-only) borrow; `mut ref T` (two words) is an exclusive
+borrow. Both **erase to `T`** for codegen — a `ref str` is used exactly like a `str`.
+The annotation never changes representation; it only drives checking and elision.
+
+### Multi-source regions and region parameters
+
+A return can borrow from *several* sources, and a class can carry a region:
+
+```python
+def longest(x: str, y: str) -> ref str from x, y:
+    if len(x) >= len(y): return x
+    return y
+
+class Parser from src:               # the class borrows region `src`
+    pub rest: ref str from src       # a borrowing field
+```
+
+### What "elision" buys you
+
+When the compiler can **prove** the borrowed source outlives the borrow (the *outlives*
+analysis), it emits the borrow as a pure alias:
+
+```python
+mut r = head(p, q)     # head() returns `ref str from a`
+# emitted C:  TrStr r = head(p, q);   — no retain, no release. Zero-copy.
+```
+
+When it *cannot* prove it (the source might die first), it falls back to ARC
+(retain + release) — still correct, just not zero-copy. **You never get a leak or a
+dangling pointer either way**; proof only decides whether the refcount is skipped.
+
+This works across function boundaries: a `-> ref` function returns its result without
+retaining (a borrow), and callers that bind a proven borrow skip the release. Owned
+contexts (storing into a field, returning from a non-`ref` function, pushing into a
+collection) automatically take ownership (retain) so the borrow can safely outlive its
+origin.
+
+### Optional strict checking
+
+By default, borrow violations are **not** fatal — ARC keeps the program safe. Compiling
+with `--strict` turns the borrow checker on as hard errors (Rust-style), enforcing:
+
+| Code | Meaning |
+|------|---------|
+| L-1 | returning a pointer/borrow to a function-local (it dies at return) |
+| L-2 | `from` names a region that isn't a parameter/field in scope |
+| L-3 | returning a freshly-owned value through a `ref` (borrow) return type |
+| L-4 | returning a borrow from a region the signature didn't promise |
+| L-5 | storing a freshly-owned value into a borrowing (`ref`) field |
+
+Without `--strict`, these surface as warnings (or are simply absorbed by ARC), so code
+from Rust users who annotate heavily still compiles and runs under the ARC floor.
+
+---
+
 ## How the Compiler Enforces This
 
 When the compiler sees a call site like:

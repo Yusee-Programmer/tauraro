@@ -1,0 +1,64 @@
+# Cross-function / return borrow elision stress test (outlives engine increment 5).
+# Exercises every borrow boundary case under a tight loop + memcount so a leak or
+# double-free is caught: callee borrow-return, inline use, let-bound proven (zero-copy)
+# and not-proven (ARC fallback), return-borrow-from-owned-fn, concat, collection store.
+from std.string.str import Str
+
+extern "C":
+    def _tr_report_mem(tag: Pointer[char]) -> void
+
+# Callee returns a BORROW of a parameter (no retain on return).
+def head(a: str, b: str) -> ref str from a:
+    return a
+
+def longest(x: str, y: str) -> ref str from x, y:
+    if Str.len(x) >= Str.len(y):
+        return x
+    return y
+
+# Owned-return function that returns a borrow-call result: must OWN it (retain).
+def head_owned(a: str, b: str) -> str:
+    return head(a, b)
+
+# Not-proven borrow: `a` is not used after `r`, so `r` falls back to ARC (retain+release).
+def only_borrow(a: str, b: str) -> int:
+    mut r = head(a, b)
+    return Str.len(r)
+
+def use_str(s: str) -> int:
+    return Str.len(s)
+
+def main():
+    mut total = 0
+    mut i = 0
+    while i < 100000:
+        mut p = "hello" + i.to_str()
+        mut q = "world!!" + i.to_str()
+
+        # 1. inline use of a borrow-return (not freed by the caller)
+        total = total + use_str(head(p, q))
+
+        # 2. let-bound PROVEN borrow (p used after r -> zero-copy alias)
+        mut r = head(p, q)
+        total = total + Str.len(r)
+        total = total + Str.len(p)
+
+        # 3. longest, proven via both sources
+        mut lg = longest(p, q)
+        total = total + Str.len(lg)
+        total = total + Str.len(q)
+
+        # 4. owned fn returning a borrow-call result (retains to own)
+        mut owned = head_owned(p, q)
+        total = total + Str.len(owned)
+
+        # 5. concat consuming a borrow-return
+        mut cc = "Z" + head(p, q)
+        total = total + Str.len(cc)
+
+        # 6. not-proven borrow (ARC fallback inside only_borrow)
+        total = total + only_borrow(p, q)
+
+        i = i + 1
+    print(total)
+    unsafe: _tr_report_mem("after 1M cross-fn ref ops (expect flat)" as Pointer[char])

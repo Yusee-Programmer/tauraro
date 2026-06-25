@@ -6,7 +6,7 @@ from core.alloc import alloc, dealloc
 from core.io import _tr_exit, write_file, append_file
 from ast import Program, Decl, Expr, Stmt, AstType, Block, MatchArm, Pattern, FunctionDef, ClassDef, EnumDef, InterfaceDef, Param, Decorator, FStringPart, Ownership, CatchClause, Comprehension, ChanSelectArm
 from hir import HirProgram, HirFunction, HirClass, HirEnum, HirInterface, HirStmt, HirExpr, HirBlock, HirParam, HirField, HirVariant, HirFStringPart, HirComprehension, HirCatchClause, HirMatchArm, box_hirexpr, box_hirstmt, hir_expr_type, HirChanSelectArm
-from mir import mir_if_drop_plan, DropSite
+from mir import mir_if_drop_plan, DropSite, mir_proven_borrows
 
 
 pub enum SymbolKind:
@@ -114,6 +114,8 @@ pub class Sema:
     pub current_func_ret_from: str      # Gap 1: 'from' lifetime param of current function return
     pub current_func_ret_borrow_str: bool   # current fn returns `ref str from ...` (a str borrow)
     pub current_func_ret_regions: Vec[str]  # explicit `from a, b` region list (empty if none/auto-inferred)
+    pub cur_func_borrowers: Vec[str]   # outlives engine: cross-fn ref-borrow edges (borrowers ...)
+    pub cur_func_sources:   Vec[str]   # ... and immediate sources) collected during lower_func
     pub strict_mode: bool               # --strict: alloc outside unsafe -> hard [U-1] error
     pub decorator_names: Map[str, bool]  # decorator def registry (name -> true)
     pub variadic_fns:    Map[str, str]   # fn name -> index of trailing variadic param (= fixed-arg count, as string)
@@ -200,6 +202,8 @@ extend Sema:
         s.current_func_ret_from  = ""
         s.current_func_ret_borrow_str = false
         s.current_func_ret_regions = Vec[str].init(0)
+        s.cur_func_borrowers     = Vec[str].init(0)
+        s.cur_func_sources       = Vec[str].init(0)
         s.strict_mode            = false
         s.decorator_names        = Map[str, bool].init(16)
         s.variadic_fns           = Map[str, str].init(8)
@@ -884,9 +888,32 @@ extend Sema:
         if not sym.is_init or sym.is_maybe_init: return false
         mut cls = self.classes.get(tn)
         mut mi = 0
+        mut has_dispose = false
         while mi < cls.methods.len:
-            if cls.methods.get(mi).name == "free": return true
+            mut mnm = cls.methods.get(mi).name
+            if mnm == "free": return true
+            if mnm == "dispose": has_dispose = true
             mi = mi + 1
+        # A class with a `dispose()` method manages its OWN memory (the `dispose()`
+        # convention releases everything itself, including str fields) — the compiler
+        # must NOT also auto-release its fields or it would double-free. Hands off.
+        if has_dispose: return false
+        # Otherwise ANY class that owns heap str fields gets an implicit destructor:
+        # the compiler releases those fields at scope exit, so a plain record OR a
+        # resource class (e.g. one with only a close()/getter methods, like
+        # std.net.TcpStream) no longer leaks its str fields. `free()` (if present, the
+        # branch above) still runs first for non-field cleanup; borrow (`ref`) fields
+        # are not owned and are skipped. This requires every str field to hold a
+        # heap-owned string (extern `-> str` helpers must strdup, not return a static/
+        # internal pointer — the ownership-lie class of bug).
+        mut fi = 0
+        while fi < cls.fields.len:
+            mut fdt_p = cls.fields.get(fi).ty
+            if fdt_p as usize != 0 as usize:
+                mut fdt = fdt_p.read()
+                if fdt.name == "str" and not fdt.is_borrow:
+                    return true
+            fi = fi + 1
         return false
 
     # Open a new if/while/etc body block, assigning it a fresh monotonic id.
@@ -2061,7 +2088,14 @@ extend Sema:
         if f.ret_ty as usize != 0 as usize: hf.ret_ty = f.ret_ty.read()
         hf.throws_ty = AstType.init("")
         if f.throws_ty as usize != 0 as usize: hf.throws_ty = f.throws_ty.read()
+        # outlives engine: collect cross-fn ref-borrow edges while lowering the body.
+        self.cur_func_borrowers = Vec[str].init(2)
+        self.cur_func_sources   = Vec[str].init(2)
         hf.body = self.lower_block(f.body)
+        hf.borrow_borrowers = self.cur_func_borrowers
+        hf.borrow_sources   = self.cur_func_sources
+        # Outlives engine result: which ref-borrow locals are PROVEN-safe to elide.
+        hf.proven_borrows   = mir_proven_borrows(hf)
         hf.decorators = f.decorators
         hf.is_async = f.is_async
         hf.is_extern = f.is_extern
@@ -2444,6 +2478,26 @@ extend Sema:
                 # from (its initial value).
                 if val_ptr as usize != 0 as usize:
                     self.set_borrows_region(name, self.compute_region(val_ptr))
+                # Outlives engine (cross-fn edge): `mut r = f(args)` where f returns
+                # `ref .. from p` makes r borrow args[p_index]. Record (r, that-arg)
+                # when it's a bare local/param so the MIR liveness check covers it.
+                if ty.is_borrow and val_ptr as usize != 0 as usize:
+                    match val_ptr.read():
+                        case Expr.ECall(ce_callee, ce_args):
+                            if ce_callee as usize != 0 as usize:
+                                match ce_callee.read():
+                                    case Expr.EIdent(ce_fn):
+                                        mut ce_sym = self.resolve(ce_fn)
+                                        if ce_sym.name != "" and ce_sym.ty as usize != 0 as usize:
+                                            mut ce_ret = ce_sym.ty.read()
+                                            if ce_ret.is_borrow and ce_ret.from_index >= 0 and ce_ret.from_index < ce_args.len:
+                                                match ce_args.get(ce_ret.from_index).read():
+                                                    case Expr.EIdent(ce_src):
+                                                        self.cur_func_borrowers.push(name)
+                                                        self.cur_func_sources.push(ce_src)
+                                                    case _: pass
+                                    case _: pass
+                        case _: pass
                 # Gap 1: infer ptr_region for Pointer-typed variables.
                 # Conservative rule: any call-expression RHS is assumed HEAP (functions may alloc).
                 # Only a variable without initializer OR initialized with Pointer[T](0) is LOCAL.

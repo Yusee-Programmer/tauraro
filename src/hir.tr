@@ -161,6 +161,11 @@ pub class HirFunction:
     pub is_static: bool
     pub is_variadic: bool
     pub is_decorator: bool
+    pub borrow_borrowers: Vec[str]   # outlives engine: ref-borrow edge borrowers ...
+    pub borrow_sources:   Vec[str]   # ... and their immediate sources (parallel arrays),
+                                     # collected by sema (cross-fn), consumed by the MIR.
+    pub proven_borrows:   Vec[str]   # outlives engine result: borrow locals whose source
+                                     # PROVABLY outlives them → codegen elides their refcount.
 
 pub class HirField:
     pub name: str
