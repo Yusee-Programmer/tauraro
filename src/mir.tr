@@ -15,8 +15,24 @@
 # module is additive: nothing in the live HIR->C pipeline calls it yet; `--emit
 # mir` dumps it for inspection.
 
-from hir import HirProgram, HirFunction, HirBlock, HirStmt, HirExpr
+from hir import HirProgram, HirFunction, HirBlock, HirStmt, HirExpr, hir_expr_type
 from core.vec import Vec
+from core.map import Map
+
+# True if `val` is directly a MUTATING method call on `source` — `source.m(...)` where
+# "Type.m" is in `mm` (a method that stores into self.<field>). Used by the borrow
+# checker to treat such a call as a write to `source` (implicit `&mut` of the receiver).
+def _is_mutating_call_on(val: Pointer[HirExpr], source: str, mm: Map[str, bool]) -> bool:
+    if val as usize == 0 as usize: return false
+    match val.read():
+        case HirExpr.EMethodCall(obj, method, _, _):
+            if obj as usize == 0 as usize: return false
+            match obj.read():
+                case HirExpr.EIdent(onm, _, _):
+                    if onm != source: return false
+                    return mm.contains(hir_expr_type(obj).name + "." + method)
+                case _: return false
+        case _: return false
 
 # A MIR statement (straight-line; no control flow — that lives in terminators).
 pub enum MirStmt:
@@ -1075,7 +1091,7 @@ pub def mir_proven_borrows(hf: HirFunction) -> Vec[str]:
 # precision (a borrow's range is [declaration .. last use]; disjoint borrows are fine);
 # cross-block/cross-fn edges are skipped (sound-but-incomplete v1 — never rejects valid
 # code, only the clear violations). Self-contained (no helper fns).
-pub def mir_borrow_conflicts(hf: HirFunction) -> Vec[str]:
+pub def mir_borrow_conflicts(hf: HirFunction, mutating_methods: Map[str, bool]) -> Vec[str]:
     mut out = Vec[str].init(2)
     mut mf  = lower_function(hf)
     if not mf.complete: return out
@@ -1115,12 +1131,20 @@ pub def mir_borrow_conflicts(hf: HirFunction) -> Vec[str]:
             while wk <= blast and wk < bblk.stmts.len:
                 mut wst = bblk.stmts.get(wk)
                 mut is_write = false
+                mut wval = 0 as Pointer[HirExpr]
                 match wst.read():
-                    case MirStmt.MAssign(wp, _):
+                    case MirStmt.MAssign(wp, wv):
+                        wval = wv
                         if wp == be.source:
                             is_write = true
                             out.push("cannot assign to '" + be.source + "' while it is borrowed by '" + be.borrower + "' — the borrow is still live")
-                    case _: pass
+                    case MirStmt.MDeclare(_, dv): wval = dv
+                    case MirStmt.MEval(ev): wval = ev
+                # Implicit `&mut` of a method receiver: a MUTATING method call on the source
+                # (`source.mutate()`) invalidates an outstanding borrow of it.
+                if not is_write and _is_mutating_call_on(wval, be.source, mutating_methods):
+                    is_write = true
+                    out.push("cannot call a mutating method on '" + be.source + "' while it is borrowed by '" + be.borrower + "'")
                 # For an EXCLUSIVE (`mut`) borrow, the source may not be used AT ALL while
                 # the borrow is live — not just written. Any read of it through the original
                 # binding aliases the exclusive borrow. (Sound: under Rust's rules a `&mut`

@@ -76,6 +76,66 @@ extend Scope:
         s.decl_order = Vec[str].init(8)
         return s
 
+# --- Method-mutability inference (for implicit method-receiver borrows, --strict) ---
+# A method MUTATES self if it (anywhere in its body, incl. nested blocks) assigns to a
+# field of `self`: `self.f = ...`. Used to flag `a.mutate()` while `a` is borrowed.
+# Conservative on purpose: only DIRECT field stores count (a transitive `self.list.push()`
+# is not flagged) — so the checker never produces a false positive, only misses some.
+def _expr_is_self_field(e: Pointer[Expr]) -> bool:
+    if e as usize == 0 as usize: return false
+    match e.read():
+        case Expr.EPropAccess(obj, _):
+            if obj as usize == 0 as usize: return false
+            match obj.read():
+                case Expr.EIdent(nm): return nm == "self"
+                case _: return false
+        case _: return false
+
+def _block_mutates_self(b: Block) -> bool:
+    mut i = 0
+    while i < b.stmts.len:
+        if _stmt_mutates_self(b.stmts.get(i)): return true
+        i = i + 1
+    return false
+
+def _pblock_mutates_self(pb: Pointer[Block]) -> bool:
+    if pb as usize == 0 as usize: return false
+    return _block_mutates_self(pb.read())
+
+def _stmt_mutates_self(s: Pointer[Stmt]) -> bool:
+    if s as usize == 0 as usize: return false
+    match s.read():
+        case Stmt.SAssign(tgt, _): return _expr_is_self_field(tgt)
+        case Stmt.SIf(_, then_b, elifs, else_b):
+            if _block_mutates_self(then_b): return true
+            mut i = 0
+            while i < elifs.len:
+                if _pblock_mutates_self(elifs.get(i).body): return true
+                i = i + 1
+            return _block_mutates_self(else_b)
+        case Stmt.SWhile(_, body, _): return _block_mutates_self(body)
+        case Stmt.SFor(_, _, body, _): return _block_mutates_self(body)
+        case Stmt.SForUnpack(_, _, body): return _block_mutates_self(body)
+        case Stmt.SUnsafe(body): return _block_mutates_self(body)
+        case Stmt.SWith(_, _, body): return _block_mutates_self(body)
+        case Stmt.STaskGroup(body): return _block_mutates_self(body)
+        case Stmt.SGpuBlock(body): return _block_mutates_self(body)
+        case Stmt.SMatch(_, arms):
+            mut i = 0
+            while i < arms.len:
+                if _pblock_mutates_self(arms.get(i).body): return true
+                i = i + 1
+            return false
+        case Stmt.STry(try_body, catches, finally_b):
+            if _block_mutates_self(try_body): return true
+            mut i = 0
+            while i < catches.len:
+                if _pblock_mutates_self(catches.get(i).read().body): return true
+                i = i + 1
+            return _block_mutates_self(finally_b)
+        case Stmt.SDefer(inner): return _stmt_mutates_self(inner)
+        case _: return false
+
 pub class Sema:
     pub globals:            Map[str, Symbol]
     pub scopes:             Vec[Scope]
@@ -117,6 +177,7 @@ pub class Sema:
     pub cur_func_borrowers: Vec[str]   # outlives engine: cross-fn ref-borrow edges (borrowers ...)
     pub cur_func_sources:   Vec[str]   # ... and immediate sources) collected during lower_func
     pub strict_mode: bool               # --strict: alloc outside unsafe -> hard [U-1] error
+    pub mutating_methods: Map[str, bool] # "ClassName.method" -> true if it stores into self.<field> (implicit-borrow check)
     pub decorator_names: Map[str, bool]  # decorator def registry (name -> true)
     pub variadic_fns:    Map[str, str]   # fn name -> index of trailing variadic param (= fixed-arg count, as string)
     pub variadic_elem_ty: Map[str, Pointer[AstType]] # fn name -> element type of the variadic List[T] param
@@ -205,6 +266,7 @@ extend Sema:
         s.cur_func_borrowers     = Vec[str].init(0)
         s.cur_func_sources       = Vec[str].init(0)
         s.strict_mode            = false
+        s.mutating_methods       = Map[str, bool].init(32)
         s.decorator_names        = Map[str, bool].init(16)
         s.variadic_fns           = Map[str, str].init(8)
         s.variadic_elem_ty       = Map[str, Pointer[AstType]].init(8)
@@ -1815,6 +1877,34 @@ extend Sema:
             self.register_decl(prog.decls.get(i))
             i = i + 1
 
+        # Implicit-borrow support (--strict only, additive): pre-compute which methods
+        # mutate self, so the borrow checker can flag `a.mutate()` while `a` is borrowed.
+        # Runs AFTER register_decl so `extend T` methods are included; keyed "Type.method".
+        if self.strict_mode:
+            i = 0
+            while i < prog.decls.len:
+                match prog.decls.get(i).read():
+                    case Decl.DClass(mc):
+                        mut mmi = 0
+                        while mmi < mc.methods.len:
+                            mut mm = mc.methods.get(mmi)
+                            if _block_mutates_self(mm.body): self.mutating_methods.insert(mc.name + "." + mm.name, true)
+                            mmi = mmi + 1
+                    case Decl.DActor(ac):
+                        mut ami = 0
+                        while ami < ac.methods.len:
+                            mut am = ac.methods.get(ami)
+                            if _block_mutates_self(am.body): self.mutating_methods.insert(ac.name + "." + am.name, true)
+                            ami = ami + 1
+                    case Decl.DExtend(mtarget, mmethods):
+                        mut emi = 0
+                        while emi < mmethods.len:
+                            mut em = mmethods.get(emi)
+                            if _block_mutates_self(em.body): self.mutating_methods.insert(mtarget + "." + em.name, true)
+                            emi = emi + 1
+                    case _: pass
+                i = i + 1
+
         i = 0
         while i < prog.decls.len:
             mut d = prog.decls.get(i)
@@ -2129,7 +2219,7 @@ extend Sema:
         # borrows of the same place where one is exclusive (`mut x: ref T`). ARC keeps the
         # program safe without this; --strict enforces the borrow discipline.
         if self.strict_mode:
-            mut _bconf = mir_borrow_conflicts(hf)
+            mut _bconf = mir_borrow_conflicts(hf, self.mutating_methods)
             mut _bci = 0
             while _bci < _bconf.len:
                 self.error("[B-1] " + _bconf.get(_bci) + ".\n      A place may have MANY shared `ref` borrows, OR exactly ONE exclusive `mut` borrow — never both. End one borrow's last use before the other begins.")

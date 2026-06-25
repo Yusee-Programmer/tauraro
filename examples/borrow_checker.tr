@@ -11,6 +11,13 @@
 # and without --strict); the comments show what --strict would REJECT.
 from std.string.str import Str
 
+class Counter:
+    pub n: int
+    def bump(self):           # mutates self.n -> a MUTATING method
+        self.n = self.n + 1
+    def value(self) -> int:   # only reads self.n -> a non-mutating method
+        return self.n
+
 def first_word(s: str) -> ref str from s:
     return s
 
@@ -52,5 +59,17 @@ def main():
     #       mut ex: mut ref str = buffer
     #       print(Str.len(buffer))     # [B-2] cannot use 'buffer' while exclusively borrowed by 'ex'
     #       print(Str.len(ex))
+
+    # OK: a borrow of a class instance; reading through it / calling a non-mutating
+    # method is fine while a shared borrow is live.
+    mut counter = Counter()
+    cb: ref Counter = counter
+    print(cb.value() + counter.value())   # both read-only — fine
+    #   --strict would REJECT mutating the instance while it's borrowed:
+    #       cb: ref Counter = counter
+    #       counter.bump()             # [B-2] cannot call a mutating method on 'counter' while borrowed by 'cb'
+    #       print(cb.value())
+    counter.bump()                        # fine now — cb is dead
+    print(counter.value())
 
     print("borrow checker example ok")
