@@ -1085,79 +1085,85 @@ pub def mir_proven_borrows(hf: HirFunction) -> Vec[str]:
         i = i + 1
     return out
 
-# Aliasing-XOR-mutability (item 1, --strict): two live borrows of the SAME place may
-# not overlap if EITHER is exclusive (`mut x: ref T`). Returns human-readable conflict
-# descriptions for sema to emit as [B-1]. Within-block ranges are checked with NLL
-# precision (a borrow's range is [declaration .. last use]; disjoint borrows are fine);
-# cross-block/cross-fn edges are skipped (sound-but-incomplete v1 — never rejects valid
-# code, only the clear violations). Self-contained (no helper fns).
+# NLL liveness query: is `name` LIVE strictly AFTER statement `after_idx` of block `blk`?
+# True if used in a later statement, in the terminator, or live at the block's exit (`lo`
+# = live_out[blk], which follows CFG successors — so this is PATH-AWARE: a borrower live on
+# one branch is not considered live on a sibling branch). Drives the cross-block checks.
+def borrower_live_after(blk: MirBlock, after_idx: int, name: str, lo: LiveSet) -> bool:
+    mut si = after_idx + 1
+    while si < blk.stmts.len:
+        mut uses = Vec[str].init(4)
+        match blk.stmts.get(si).read():
+            case MirStmt.MDeclare(_, val): collect_uses(val, uses)
+            case MirStmt.MAssign(_, val): collect_uses(val, uses)
+            case MirStmt.MEval(val): collect_uses(val, uses)
+        if set_contains(uses, name): return true
+        si = si + 1
+    mut tu = Vec[str].init(4)
+    match blk.term.read():
+        case MirTerm.TBranch(cond, _, _): collect_uses(cond, tu)
+        case MirTerm.TReturn(val): collect_uses(val, tu)
+        case _: pass
+    if set_contains(tu, name): return true
+    return lo.has(name)
+
+# Aliasing-XOR-mutability (item 1, --strict): borrow-vs-borrow overlap [B-1] (within-block,
+# NLL interval) + the "place" half [B-2]: an invalidation (reassign / move / mutating method
+# call) of a borrowed source, or ANY use of an exclusively-borrowed source, while the borrower
+# is still live — now CROSS-BLOCK and liveness-driven (see borrower_live_after).
 pub def mir_borrow_conflicts(hf: HirFunction, mutating_methods: Map[str, bool]) -> Vec[str]:
     mut out = Vec[str].init(2)
     mut mf  = lower_function(hf)
     if not mf.complete: return out
     if mf.borrows.len == 0: return out
-    # B-2 (dropck / aliasing-XOR-mutability, the "place" half): the borrowed PLACE itself
-    # may not be reassigned/moved while a borrow of it is still live — that invalidates the
-    # borrow (a dangling reference). For each borrow, scan its live range [decl..last-use]
-    # for an assignment to its source. NLL-precise: a write AFTER the borrower's last use is
-    # fine (the borrow is dead by then).
+    mut live = compute_liveness(mf)
+    # B-2 (dropck / aliasing-XOR-mutability "place" half) — CROSS-BLOCK, liveness-driven:
+    # scan EVERY block for an invalidation of the borrowed source (reassign / move / mutating
+    # method call), or — for an EXCLUSIVE borrow — ANY use of it; flag it iff the BORROWER is
+    # still live right after (borrower_live_after follows the CFG via live_out, so it is both
+    # NLL-precise AND path-aware: a write on a branch the borrower never reaches is fine, and
+    # a write before the borrow exists can't flag because the borrower isn't live yet).
     mut k = 0
     while k < mf.borrows.len:
         mut be = mf.borrows.get(k)
-        # Locate the block + index where the borrower is declared. Works for BOTH within-
-        # fn edges (decl_block>=0) AND cross-fn edges from `mut r = f(args)` (decl_block==-1,
-        # where source is the borrowed argument) — so e.g. `mut r = head(p,q); p = x; use(r)`
-        # is caught: r borrows p across the call, and p is invalidated while r is live.
-        mut bbi = 0
-        mut found_blk = -1
-        mut bdecl = 0
-        while bbi < mf.blocks.len:
-            mut cblk = mf.blocks.get(bbi)
-            mut csk = 0
-            while csk < cblk.stmts.len:
-                match cblk.stmts.get(csk).read():
-                    case MirStmt.MDeclare(dn2, _):
-                        if dn2 == be.borrower:
-                            found_blk = bbi
-                            bdecl = csk
-                    case _: pass
-                csk = csk + 1
-            bbi = bbi + 1
-        if found_blk >= 0:
-            mut bblk = mf.blocks.get(found_blk)
-            mut blast = last_use_in_block(bblk, be.borrower)
-            if blast < bdecl: blast = bdecl
-            mut wk = bdecl + 1
-            while wk <= blast and wk < bblk.stmts.len:
-                mut wst = bblk.stmts.get(wk)
-                mut is_write = false
-                mut wval = 0 as Pointer[HirExpr]
-                match wst.read():
+        mut bn = 0
+        while bn < mf.blocks.len:
+            mut blk = mf.blocks.get(bn)
+            mut lo = live.get(bn)
+            mut si = 0
+            while si < blk.stmts.len:
+                mut stmt = blk.stmts.get(si)
+                mut invalid_desc = ""
+                mut sval = 0 as Pointer[HirExpr]
+                match stmt.read():
                     case MirStmt.MAssign(wp, wv):
-                        wval = wv
-                        if wp == be.source:
-                            is_write = true
-                            out.push("cannot assign to '" + be.source + "' while it is borrowed by '" + be.borrower + "' — the borrow is still live")
-                    case MirStmt.MDeclare(_, dv): wval = dv
-                    case MirStmt.MEval(ev): wval = ev
-                # Implicit `&mut` of a method receiver: a MUTATING method call on the source
-                # (`source.mutate()`) invalidates an outstanding borrow of it.
-                if not is_write and _is_mutating_call_on(wval, be.source, mutating_methods):
-                    is_write = true
-                    out.push("cannot call a mutating method on '" + be.source + "' while it is borrowed by '" + be.borrower + "'")
-                # For an EXCLUSIVE (`mut`) borrow, the source may not be used AT ALL while
-                # the borrow is live — not just written. Any read of it through the original
-                # binding aliases the exclusive borrow. (Sound: under Rust's rules a `&mut`
-                # has sole access, so every such use is genuinely an error — no false flags.)
-                if be.is_exclusive and not is_write:
-                    mut uses = Vec[str].init(4)
-                    match wst.read():
-                        case MirStmt.MDeclare(_, val): collect_uses(val, uses)
-                        case MirStmt.MAssign(_, val): collect_uses(val, uses)
-                        case MirStmt.MEval(val): collect_uses(val, uses)
-                    if set_contains(uses, be.source):
-                        out.push("cannot use '" + be.source + "' while it is exclusively (mut) borrowed by '" + be.borrower + "'")
-                wk = wk + 1
+                        sval = wv
+                        if wp == be.source: invalid_desc = "assign to"
+                    case MirStmt.MDeclare(_, dv): sval = dv
+                    case MirStmt.MEval(ev): sval = ev
+                if invalid_desc == "" and _is_mutating_call_on(sval, be.source, mutating_methods):
+                    invalid_desc = "call a mutating method on"
+                if invalid_desc != "":
+                    if borrower_live_after(blk, si, be.borrower, lo):
+                        out.push("cannot " + invalid_desc + " '" + be.source + "' while it is borrowed by '" + be.borrower + "' — the borrow is still live")
+                elif be.is_exclusive:
+                    # Exclusive borrow: ANY read of the source while the borrower is live is a
+                    # violation — except the borrow's OWN creation (`MDeclare(borrower, ...)`).
+                    mut is_creation = false
+                    match stmt.read():
+                        case MirStmt.MDeclare(dn, _):
+                            if dn == be.borrower: is_creation = true
+                        case _: pass
+                    if not is_creation:
+                        mut uses = Vec[str].init(4)
+                        match stmt.read():
+                            case MirStmt.MDeclare(_, val): collect_uses(val, uses)
+                            case MirStmt.MAssign(_, val): collect_uses(val, uses)
+                            case MirStmt.MEval(val): collect_uses(val, uses)
+                        if set_contains(uses, be.source) and borrower_live_after(blk, si, be.borrower, lo):
+                            out.push("cannot use '" + be.source + "' while it is exclusively (mut) borrowed by '" + be.borrower + "'")
+                si = si + 1
+            bn = bn + 1
         k = k + 1
     if mf.borrows.len < 2: return out
     mut i = 0
