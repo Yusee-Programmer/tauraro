@@ -6,7 +6,7 @@ from core.alloc import alloc, dealloc
 from core.io import _tr_exit, write_file, append_file
 from ast import Program, Decl, Expr, Stmt, AstType, Block, MatchArm, Pattern, FunctionDef, ClassDef, EnumDef, InterfaceDef, Param, Decorator, FStringPart, Ownership, CatchClause, Comprehension, ChanSelectArm
 from hir import HirProgram, HirFunction, HirClass, HirEnum, HirInterface, HirStmt, HirExpr, HirBlock, HirParam, HirField, HirVariant, HirFStringPart, HirComprehension, HirCatchClause, HirMatchArm, box_hirexpr, box_hirstmt, hir_expr_type, HirChanSelectArm
-from mir import mir_if_drop_plan, DropSite, mir_proven_borrows
+from mir import mir_if_drop_plan, DropSite, mir_proven_borrows, mir_borrow_conflicts
 
 
 pub enum SymbolKind:
@@ -836,6 +836,11 @@ extend Sema:
         if sym.is_param: return false
         if sym.is_shared: return false
         if sym.ty as usize == 0 as usize: return false
+        # A value BORROWED from a collection element (`x = coll.get(i)`) ALIASES that
+        # element — it does NOT own it. Auto-dropping it (releasing its str fields /
+        # calling free) would free data the collection still owns: a use-after-free.
+        # Marked "@borrowed" at the SLet (Phase C). Never droppable.
+        if sym.borrows_region == "@borrowed": return false
         mut tn = sym.ty.read().name
         # `str` locals get retain/release auto-drop, gated by the same
         # block-id "visible" check compute_scope_drops uses for class-typed
@@ -886,6 +891,10 @@ extend Sema:
         if sym.is_moved or sym.is_maybe_moved or sym.is_freed: return false
         if sym.active_borrows > 0: return false
         if not sym.is_init or sym.is_maybe_init: return false
+        # ESCAPED: passed in a non-receiver position (may be stored by the callee).
+        # Excluded from the implicit field-destructor to avoid freeing data a new owner
+        # holds (use-after-free). coll_escaped is reused for class instances here.
+        if sym.coll_escaped: return false
         mut cls = self.classes.get(tn)
         mut mi = 0
         mut has_dispose = false
@@ -894,18 +903,18 @@ extend Sema:
             if mnm == "free": return true
             if mnm == "dispose": has_dispose = true
             mi = mi + 1
-        # A class with a `dispose()` method manages its OWN memory (the `dispose()`
-        # convention releases everything itself, including str fields) — the compiler
-        # must NOT also auto-release its fields or it would double-free. Hands off.
+        # A `dispose()` class self-manages its memory — hands off (no double-free).
         if has_dispose: return false
-        # Otherwise ANY class that owns heap str fields gets an implicit destructor:
-        # the compiler releases those fields at scope exit, so a plain record OR a
-        # resource class (e.g. one with only a close()/getter methods, like
-        # std.net.TcpStream) no longer leaks its str fields. `free()` (if present, the
-        # branch above) still runs first for non-field cleanup; borrow (`ref`) fields
-        # are not owned and are skipped. This requires every str field to hold a
-        # heap-owned string (extern `-> str` helpers must strdup, not return a static/
-        # internal pointer — the ownership-lie class of bug).
+        # IMPLICIT FIELD-DESTRUCTOR (plain data class: str fields, no free/dispose) — but
+        # ONLY for a PROVABLY-OWNED instance. The ownership invariant is THE soundness
+        # key: a freshly-constructed (`x = T()`) or returned-by-value instance is owned,
+        # so releasing its str fields at scope exit is correct. A BORROW — a collection
+        # element (`coll.get(i)`), a field read (`o.f`), a method/`ref` result — ALIASES
+        # data its owner still holds, so dropping it is a use-after-free. compute_region
+        # tags owned initializers "@owned" at the SLet; everything else is left undropped
+        # (a small conservative leak, never a UAF). This is the sound core of auto-free
+        # without a full borrow checker.
+        if sym.borrows_region != "@owned": return false
         mut fi = 0
         while fi < cls.fields.len:
             mut fdt_p = cls.fields.get(fi).ty
@@ -944,13 +953,20 @@ extend Sema:
         mut ki = 0
         while ki < scope.decl_order.len:
             mut nm = scope.decl_order.get(ki)
-            mut sym = scope.variables.get(nm)
-            mut visible = sym.decl_block_id == 0
-            if not visible and is_innermost:
-                visible = self.block_stack_contains(sym.decl_block_id)
-            if visible:
-                if self.is_droppable_sym(sym):
-                    out.push(box_hirstmt(HirStmt.SAutoDrop(nm, sym.ty.read().name)))
+            # DEFENSIVE: a name may appear in decl_order without a fully-formed entry
+            # in `variables` (e.g. while an enclosing function's scope is still being
+            # built and a nested function is lowered through it). Reading such a
+            # Symbol — or its null `ty` — is a use of uninitialised memory that
+            # segfaults under some build layouts. Skip anything not soundly present.
+            if scope.variables.contains(nm):
+                mut sym = scope.variables.get(nm)
+                if (sym.ty as usize) != 0 as usize:
+                    mut visible = sym.decl_block_id == 0
+                    if not visible and is_innermost:
+                        visible = self.block_stack_contains(sym.decl_block_id)
+                    if visible:
+                        if self.is_droppable_sym(sym):
+                            out.push(box_hirstmt(HirStmt.SAutoDrop(nm, sym.ty.read().name)))
             ki = ki + 1
         return out
 
@@ -1106,16 +1122,21 @@ extend Sema:
                 if cr_sym.is_param: return cr_nm
                 return cr_sym.borrows_region
             case Expr.ECall(cr_callee, cr_args):
-                # [cross-fn] result of `f(args)` where `f -> ref str from p` borrows the
-                # region of the argument matching p — recurse into that argument.
                 if cr_callee as usize != 0 as usize:
                     match cr_callee.read():
                         case Expr.EIdent(cr_fn):
+                            # Constructor call `T()` → a freshly-OWNED instance.
+                            if self.classes.contains(cr_fn): return "@owned"
                             mut cr_fsym = self.resolve(cr_fn)
                             if cr_fsym.name != "" and cr_fsym.ty as usize != 0 as usize:
                                 mut cr_ret = cr_fsym.ty.read()
-                                if cr_ret.is_borrow and cr_ret.from_index >= 0 and cr_ret.from_index < cr_args.len:
-                                    return self.compute_region(cr_args.get(cr_ret.from_index))
+                                if cr_ret.is_borrow:
+                                    # [cross-fn] `f -> ref .. from p` borrows arg p's region.
+                                    if cr_ret.from_index >= 0 and cr_ret.from_index < cr_args.len:
+                                        return self.compute_region(cr_args.get(cr_ret.from_index))
+                                    return ""   # borrow of an unknown region
+                                # Non-`ref` function returning by value → caller OWNS it.
+                                return "@owned"
                         case _: pass
                 return ""
             case _: return ""
@@ -1362,7 +1383,15 @@ extend Sema:
         match e.read():
             case HirExpr.EIdent(nm, _, _):
                 mut tn = hir_expr_type(e).name
-                if tn == "List" or tn == "Vec" or tn == "Dict" or tn == "Map" or tn == "Set": self.mark_coll_escaped(nm)
+                if tn == "List" or tn == "Vec" or tn == "Dict" or tn == "Map" or tn == "Set":
+                    self.mark_coll_escaped(nm)
+                elif self.classes.contains(tn):
+                    # A class instance passed in a NON-RECEIVER position (call/method arg,
+                    # RHS, return, literal element) may be stored by the callee (pushed into
+                    # a collection, kept in a field). The implicit field-destructor must not
+                    # then free its str fields — the new owner still holds them (UAF). Reuse
+                    # coll_escaped to exclude it from auto-drop (a leak, never a UAF).
+                    self.mark_coll_escaped(nm)
             case _: pass
 
     # Recursively scan a lowered expression for any bare List/Vec/Dict/Map/Set
@@ -2096,6 +2125,15 @@ extend Sema:
         hf.borrow_sources   = self.cur_func_sources
         # Outlives engine result: which ref-borrow locals are PROVEN-safe to elide.
         hf.proven_borrows   = mir_proven_borrows(hf)
+        # [B-1] Aliasing-XOR-mutability (opt-in --strict, Rust-model): reject overlapping
+        # borrows of the same place where one is exclusive (`mut x: ref T`). ARC keeps the
+        # program safe without this; --strict enforces the borrow discipline.
+        if self.strict_mode:
+            mut _bconf = mir_borrow_conflicts(hf)
+            mut _bci = 0
+            while _bci < _bconf.len:
+                self.error("[B-1] " + _bconf.get(_bci) + ".\n      A place may have MANY shared `ref` borrows, OR exactly ONE exclusive `mut` borrow — never both. End one borrow's last use before the other begins.")
+                _bci = _bci + 1
         hf.decorators = f.decorators
         hf.is_async = f.is_async
         hf.is_extern = f.is_extern
@@ -2522,7 +2560,12 @@ extend Sema:
                             mut pd_sym = pd_scope.variables.get(name)
                             pd_sym.is_init = false
                             pd_scope.variables.insert(name, pd_sym)
-                # Phase C: track borrow if RHS is vec.get / vec.first / vec.last on a non-primitive
+                # Phase C: a local that BORROWS a collection element ALIASES it and does
+                # NOT own it. RHS forms: `coll.get(i)` / `.first()` / `.last()`, or `coll[i]`.
+                # For a CLASS-instance element this is critical for auto-drop soundness: the
+                # element's str fields belong to the collection, so dropping the borrow would
+                # free live data (UAF — this is what corrupted f-string format specs read from
+                # `parts.get(i)`). Mark the local "@borrowed" so is_droppable_sym skips it.
                 if val_ptr as usize != 0 as usize:
                     mut pc_cont_nm = ""
                     mut pc_meth = ""
@@ -2532,13 +2575,25 @@ extend Sema:
                             match pc_obj.read():
                                 case Expr.EIdent(pc_src): pc_cont_nm = pc_src
                                 case _: pass
+                        case Expr.EIndex(pc_iobj, _):
+                            pc_meth = "get"
+                            match pc_iobj.read():
+                                case Expr.EIdent(pc_isrc): pc_cont_nm = pc_isrc
+                                case _: pass
                         case _: pass
                     if pc_cont_nm != "" and (pc_meth == "get" or pc_meth == "first" or pc_meth == "last"):
                         mut pc_cont_sym = self.resolve(pc_cont_nm)
                         mut pc_cont_ty = pc_cont_sym.ty.read()
-                        if pc_cont_ty.name == "Vec" or pc_cont_ty.name == "List":
+                        mut pc_ctn = pc_cont_ty.name
+                        if pc_ctn == "Vec" or pc_ctn == "List" or pc_ctn == "Dict" or pc_ctn == "Map" or pc_ctn == "Set":
+                            mut pc_elem_ty = hir_expr_type(hval).name
                             if not self.is_primitive(hir_expr_type(hval)):
                                 self.container_borrows.insert(pc_cont_nm, name)
+                                # Class-instance element borrow: must NOT be auto-dropped.
+                                # (str/collection elements are returned retained by .get, so
+                                # they remain owned and droppable as usual.)
+                                if pc_elem_ty != "str" and pc_elem_ty != "Vec" and pc_elem_ty != "List" and pc_elem_ty != "Dict" and pc_elem_ty != "Map" and pc_elem_ty != "Set":
+                                    self.set_borrows_region(name, "@borrowed")
                 return box_hirstmt(HirStmt.SLet(name, ownership, is_mut, is_const, is_shared, ty, hval))
             case Stmt.SAssign(target, val):
                 self.in_assign_target = true

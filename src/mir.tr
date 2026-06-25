@@ -68,6 +68,7 @@ pub class BorrowEdge:
     pub borrower: str
     pub source:   str
     pub decl_block: int   # the block where the borrow is created (for per-point checks)
+    pub is_exclusive: bool # a `mut x: ref T` (exclusive/mutable borrow) vs `x: ref T` (shared/read-only)
 
 pub class MirFunction:
     pub name:   str
@@ -118,11 +119,12 @@ extend MirBuilder:
         return b
 
     # Outlives engine: record that `borrower` is a ref-borrow aliasing `source`.
-    pub def record_borrow(self, borrower: str, source: str):
+    pub def record_borrow(self, borrower: str, source: str, exclusive: bool):
         mut e = BorrowEdge()
         e.borrower = borrower
         e.source   = source
         e.decl_block = self.cur
+        e.is_exclusive = exclusive
         self.borrows.push(e)
 
     # Create a fresh block, return its id.
@@ -180,8 +182,12 @@ def lower_stmts(b: MirBuilder, hb: HirBlock):
                 # borrows s — record the edge so compute_borrow_outlives can check that
                 # s stays live wherever b is live.
                 if slet_ty.is_borrow and val as usize != 0 as usize:
+                    mut _slet_mut = false
+                    match sp.read():
+                        case HirStmt.SLet(_, _, _sm, _, _, _, _): _slet_mut = _sm
+                        case _: pass
                     match val.read():
-                        case HirExpr.EIdent(src_nm, _, _): b.record_borrow(nm, src_nm)
+                        case HirExpr.EIdent(src_nm, _, _): b.record_borrow(nm, src_nm, _slet_mut or slet_ty.is_mut_borrow)
                         case _: pass
             case HirStmt.SAssign(tgt, val):
                 # Record the place when the target is a simple local, so liveness
@@ -1060,6 +1066,48 @@ pub def mir_proven_borrows(hf: HirFunction) -> Vec[str]:
         # the borrower by cross-block liveness. Both are sound to elide.
         if outl.get(i):
             out.push(edge.borrower)
+        i = i + 1
+    return out
+
+# Aliasing-XOR-mutability (item 1, --strict): two live borrows of the SAME place may
+# not overlap if EITHER is exclusive (`mut x: ref T`). Returns human-readable conflict
+# descriptions for sema to emit as [B-1]. Within-block ranges are checked with NLL
+# precision (a borrow's range is [declaration .. last use]; disjoint borrows are fine);
+# cross-block/cross-fn edges are skipped (sound-but-incomplete v1 — never rejects valid
+# code, only the clear violations). Self-contained (no helper fns).
+pub def mir_borrow_conflicts(hf: HirFunction) -> Vec[str]:
+    mut out = Vec[str].init(2)
+    mut mf  = lower_function(hf)
+    if not mf.complete: return out
+    if mf.borrows.len < 2: return out
+    mut i = 0
+    while i < mf.borrows.len:
+        mut bi = mf.borrows.get(i)
+        if bi.decl_block >= 0 and bi.decl_block < mf.blocks.len:
+            mut j = i + 1
+            while j < mf.borrows.len:
+                mut bj = mf.borrows.get(j)
+                if bj.decl_block == bi.decl_block and bi.source == bj.source and (bi.is_exclusive or bj.is_exclusive):
+                    mut blk = mf.blocks.get(bi.decl_block)
+                    mut pi = 0
+                    mut pj = 0
+                    mut bk = 0
+                    while bk < blk.stmts.len:
+                        match blk.stmts.get(bk).read():
+                            case MirStmt.MDeclare(dn, _):
+                                if dn == bi.borrower: pi = bk
+                                if dn == bj.borrower: pj = bk
+                            case _: pass
+                        bk = bk + 1
+                    mut ui = last_use_in_block(blk, bi.borrower)
+                    mut uj = last_use_in_block(blk, bj.borrower)
+                    if ui < pi: ui = pi
+                    if uj < pj: uj = pj
+                    if pi <= uj and pj <= ui:
+                        mut kind = "a mutable borrow"
+                        if not (bi.is_exclusive and bj.is_exclusive): kind = "a mutable and a shared borrow"
+                        out.push("'" + bi.borrower + "' and '" + bj.borrower + "' are " + kind + " of '" + bi.source + "' that are live at the same time")
+                j = j + 1
         i = i + 1
     return out
 
