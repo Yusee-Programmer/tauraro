@@ -1079,6 +1079,36 @@ pub def mir_borrow_conflicts(hf: HirFunction) -> Vec[str]:
     mut out = Vec[str].init(2)
     mut mf  = lower_function(hf)
     if not mf.complete: return out
+    if mf.borrows.len == 0: return out
+    # B-2 (dropck / aliasing-XOR-mutability, the "place" half): the borrowed PLACE itself
+    # may not be reassigned/moved while a borrow of it is still live — that invalidates the
+    # borrow (a dangling reference). For each borrow, scan its live range [decl..last-use]
+    # for an assignment to its source. NLL-precise: a write AFTER the borrower's last use is
+    # fine (the borrow is dead by then).
+    mut k = 0
+    while k < mf.borrows.len:
+        mut be = mf.borrows.get(k)
+        if be.decl_block >= 0 and be.decl_block < mf.blocks.len:
+            mut bblk = mf.blocks.get(be.decl_block)
+            mut bdecl = 0
+            mut sk = 0
+            while sk < bblk.stmts.len:
+                match bblk.stmts.get(sk).read():
+                    case MirStmt.MDeclare(dn2, _):
+                        if dn2 == be.borrower: bdecl = sk
+                    case _: pass
+                sk = sk + 1
+            mut blast = last_use_in_block(bblk, be.borrower)
+            if blast < bdecl: blast = bdecl
+            mut wk = bdecl + 1
+            while wk <= blast and wk < bblk.stmts.len:
+                match bblk.stmts.get(wk).read():
+                    case MirStmt.MAssign(wp, _):
+                        if wp == be.source:
+                            out.push("cannot assign to '" + be.source + "' while it is borrowed by '" + be.borrower + "' — the borrow is still live")
+                    case _: pass
+                wk = wk + 1
+        k = k + 1
     if mf.borrows.len < 2: return out
     mut i = 0
     while i < mf.borrows.len:
