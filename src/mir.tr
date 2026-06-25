@@ -1088,25 +1088,51 @@ pub def mir_borrow_conflicts(hf: HirFunction) -> Vec[str]:
     mut k = 0
     while k < mf.borrows.len:
         mut be = mf.borrows.get(k)
-        if be.decl_block >= 0 and be.decl_block < mf.blocks.len:
-            mut bblk = mf.blocks.get(be.decl_block)
-            mut bdecl = 0
-            mut sk = 0
-            while sk < bblk.stmts.len:
-                match bblk.stmts.get(sk).read():
+        # Locate the block + index where the borrower is declared. Works for BOTH within-
+        # fn edges (decl_block>=0) AND cross-fn edges from `mut r = f(args)` (decl_block==-1,
+        # where source is the borrowed argument) — so e.g. `mut r = head(p,q); p = x; use(r)`
+        # is caught: r borrows p across the call, and p is invalidated while r is live.
+        mut bbi = 0
+        mut found_blk = -1
+        mut bdecl = 0
+        while bbi < mf.blocks.len:
+            mut cblk = mf.blocks.get(bbi)
+            mut csk = 0
+            while csk < cblk.stmts.len:
+                match cblk.stmts.get(csk).read():
                     case MirStmt.MDeclare(dn2, _):
-                        if dn2 == be.borrower: bdecl = sk
+                        if dn2 == be.borrower:
+                            found_blk = bbi
+                            bdecl = csk
                     case _: pass
-                sk = sk + 1
+                csk = csk + 1
+            bbi = bbi + 1
+        if found_blk >= 0:
+            mut bblk = mf.blocks.get(found_blk)
             mut blast = last_use_in_block(bblk, be.borrower)
             if blast < bdecl: blast = bdecl
             mut wk = bdecl + 1
             while wk <= blast and wk < bblk.stmts.len:
-                match bblk.stmts.get(wk).read():
+                mut wst = bblk.stmts.get(wk)
+                mut is_write = false
+                match wst.read():
                     case MirStmt.MAssign(wp, _):
                         if wp == be.source:
+                            is_write = true
                             out.push("cannot assign to '" + be.source + "' while it is borrowed by '" + be.borrower + "' — the borrow is still live")
                     case _: pass
+                # For an EXCLUSIVE (`mut`) borrow, the source may not be used AT ALL while
+                # the borrow is live — not just written. Any read of it through the original
+                # binding aliases the exclusive borrow. (Sound: under Rust's rules a `&mut`
+                # has sole access, so every such use is genuinely an error — no false flags.)
+                if be.is_exclusive and not is_write:
+                    mut uses = Vec[str].init(4)
+                    match wst.read():
+                        case MirStmt.MDeclare(_, val): collect_uses(val, uses)
+                        case MirStmt.MAssign(_, val): collect_uses(val, uses)
+                        case MirStmt.MEval(val): collect_uses(val, uses)
+                    if set_contains(uses, be.source):
+                        out.push("cannot use '" + be.source + "' while it is exclusively (mut) borrowed by '" + be.borrower + "'")
                 wk = wk + 1
         k = k + 1
     if mf.borrows.len < 2: return out

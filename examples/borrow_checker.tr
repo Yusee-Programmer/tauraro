@@ -1,0 +1,56 @@
+# Optional Rust-style borrow checker (opt-in with --strict).
+#
+# By DEFAULT (no --strict) ARC keeps everything safe and nothing here is rejected.
+# Under --strict, Tauraro enforces aliasing-XOR-mutability + dropck on `ref` borrows:
+#
+#   * `x: ref T`      = a SHARED (read-only) borrow   — many may coexist
+#   * `mut x: ref T`  = an EXCLUSIVE (mutable) borrow — only one, and no shared alongside
+#
+# All checks are NLL-precise: a borrow ends at its LAST USE, so reusing/mutating the
+# source afterwards is fine. This file only contains VALID code (compiles + runs with
+# and without --strict); the comments show what --strict would REJECT.
+from std.string.str import Str
+
+def first_word(s: str) -> ref str from s:
+    return s
+
+def main():
+    mut owner = "the quick brown fox"
+
+    # OK: two shared borrows live at the same time.
+    a: ref str = owner
+    b: ref str = owner
+    print(Str.len(a) + Str.len(b))
+    #   --strict would REJECT, if either were `mut`:
+    #       mut a: ref str = owner
+    #       b:     ref str = owner     # [B-1] mutable + shared borrow of 'owner' overlap
+
+    # OK (NLL): the borrow's last use is before the source is mutated.
+    mut greeting = "hello"
+    v: ref str = greeting
+    print(Str.len(v))                  # v's last use
+    greeting = "hi there"              # fine — v is dead here
+    print(Str.len(greeting))
+    #   --strict would REJECT the reverse order:
+    #       v: ref str = greeting
+    #       greeting = "hi there"      # [B-2] cannot assign to 'greeting' while borrowed by 'v'
+    #       print(Str.len(v))
+
+    # OK: a cross-function borrow used before the source changes.
+    mut sentence = "lorem ipsum dolor"
+    w: ref str = first_word(sentence)
+    print(Str.len(w))                  # w's last use; sentence is free to change after
+    sentence = "changed now"           # fine — w is dead
+    print(Str.len(sentence))
+
+    # OK: an exclusive (mut) borrow, used without touching the source meanwhile.
+    mut buffer = "scratch"
+    mut ex: ref str = buffer
+    print(Str.len(ex))                 # exclusive borrow's last use
+    print(Str.len(buffer))             # fine now — ex is dead
+    #   --strict would REJECT touching the source while the exclusive borrow is live:
+    #       mut ex: mut ref str = buffer
+    #       print(Str.len(buffer))     # [B-2] cannot use 'buffer' while exclusively borrowed by 'ex'
+    #       print(Str.len(ex))
+
+    print("borrow checker example ok")
