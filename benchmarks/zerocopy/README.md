@@ -65,3 +65,27 @@ Two patterns emerge, and they tell the whole story of when zero-copy pays off:
 > Bottom line: **zero-copy wins when it removes an allocation/copy (views,
 > borrowed payloads), not merely a pointer pass.** And it's free to adopt —
 > `--strict` enforces it at zero runtime cost.
+
+## Collection-value borrows (`ref T = d.get(k)`)
+
+Reading a `str` value out of a `Dict`/`Map` (`v = d.get(k)`) normally **retains
+and releases** the value on every access. Binding it as a borrow —
+`v: ref str = d.get(k)` — now **elides** that retain/release entirely, when the
+compiler can prove the collection is not mutated while the borrow is live:
+
+```
+def sum_lens(d: ref Dict[str, str]) -> int:
+    mut s = 0
+    for k in d.keys():
+        v: ref str = d.get(k)     # zero-copy borrow — no retain, no release
+        s = s + v.len()
+    return s
+```
+
+This is the **universal zero-copy guarantee** under `--strict`: when you express
+ownership/borrowing explicitly and the borrow is provably safe, the refcount
+traffic disappears. If the dict *is* mutated while the borrow is live, the
+compiler keeps the safe ARC retain (no use-after-free) — and `--strict` rejects
+it outright with `[B-2]`. So the borrow is either zero-cost or a hard error,
+never unsound. (`list[i]` element borrows are a planned follow-up; `for ref x`
+over a list already borrows elements with no retain.)

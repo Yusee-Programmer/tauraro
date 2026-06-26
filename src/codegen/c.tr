@@ -144,6 +144,7 @@ pub class CGenerator:
     pub str_local_names: Map[str, bool]  # TrStr-typed locals declared via SLet in current function (retain/release tracked)
     pub cur_proven_borrows: Map[str, bool]  # outlives engine: ref-borrow locals whose source provably outlives them — refcount ELIDED (no retain at bind, no release at scope)
     pub cur_ret_is_borrow: bool  # current function's return type is `ref` — returns a BORROW (no retain on return; the caller does not free it)
+    pub eliding_get_retain: bool # set while generating a PROVEN collection-element borrow's RHS (`ref T = coll.get(k)`) — the str-valued get returns the unboxed alias WITHOUT retaining (zero-copy borrow); the SLet also skips the release
     pub coll_local_sfx: Map[str, str]    # List/Vec local name -> list_sfx (e.g. "i64"/"TrStr") for SAutoDrop's List_<sfx>_free; Dict/Map/Set don't need a suffix (Dict_free)
     pub coll_local_idict: Map[str, bool] # Dict/Map/Set local name -> true if int-keyed (TrIDict*/_TrISet*, freed via _tr_idict_free instead of Dict_free)
     pub coll_local_strval: Map[str, bool] # Dict/Map local name -> true if value type is str (_tr_str_box'd; freed via Dict_free_strval/_tr_idict_free_strval, #54)
@@ -194,6 +195,7 @@ pub class CGenerator:
         g.str_local_names = Map[str, bool].init(16)
         g.cur_proven_borrows = Map[str, bool].init(8)
         g.cur_ret_is_borrow = false
+        g.eliding_get_retain = false
         g.coll_local_sfx = Map[str, str].init(16)
         g.coll_local_idict = Map[str, bool].init(16)
         g.coll_local_strval = Map[str, bool].init(16)
@@ -3400,12 +3402,16 @@ pub class CGenerator:
                 mut c_ty_c = self.type_to_c(call_ty)
                 if is_idict:
                     mut iget_r = "_tr_idict_get(" + obj_s + ", " + self.gen_args(args) + ")"
-                    if _is_str_type(call_ty.name): return "_tr_str_retain(_tr_str_unbox(" + iget_r + "))"
+                    if _is_str_type(call_ty.name):
+                        if self.eliding_get_retain: return "_tr_str_unbox(" + iget_r + ")"
+                        return "_tr_str_retain(_tr_str_unbox(" + iget_r + "))"
                     if c_ty_c != "void" and c_ty_c != "":
                         return "((" + c_ty_c + ")(uintptr_t)" + iget_r + ")"
                     return iget_r
                 mut mget_r = "_tr_dict_get(" + obj_s + ", " + self.dict_key_arg(args.get(0)) + ")"
-                if _is_str_type(call_ty.name): return "_tr_str_retain(_tr_str_unbox(" + mget_r + "))"
+                if _is_str_type(call_ty.name):
+                    if self.eliding_get_retain: return "_tr_str_unbox(" + mget_r + ")"
+                    return "_tr_str_retain(_tr_str_unbox(" + mget_r + "))"
                 if c_ty_c != "void" and c_ty_c != "":
                     return "((" + c_ty_c + ")(uintptr_t)" + mget_r + ")"
                 return mget_r
@@ -4558,6 +4564,18 @@ pub class CGenerator:
                                 if _slet_cls.generics.len > 0 and _slet_val_ty.args.len > 0:
                                     val_ty_n = val_ty_n + "_" + self.type_args_suffix(_slet_val_ty.args)
                                 init_s = val_ty_n + "_as_" + _slet_iface_name + "(" + self.gen_expr(v) + ")"
+                        # Zero-copy collection-element borrow: when this binding is an
+                        # outlives-PROVEN borrow whose RHS is `coll.get(k)` / `coll[i]`,
+                        # generate the str-valued get/index as a pure alias (no retain);
+                        # the proven branch below then also skips the release.
+                        mut _saved_elide = self.eliding_get_retain
+                        self.eliding_get_retain = false
+                        if c_ty == "TrStr" and self.cur_proven_borrows.contains(n):
+                            match v.read():
+                                case HirExpr.EMethodCall(_, _gm, _, _):
+                                    if _gm == "get" or _gm == "get_or" or _gm == "get_index": self.eliding_get_retain = true
+                                case HirExpr.EIndex(_, _, _): self.eliding_get_retain = true
+                                case _: pass
                         if init_s == "":
                             match v.read():
                                 case HirExpr.EList(items, list_ty):
@@ -4574,6 +4592,7 @@ pub class CGenerator:
                                         init_s = self.gen_dict_literal(d_keys, d_vals, d_ty)
                                 case _:
                                     init_s = self.gen_expr(v)
+                        self.eliding_get_retain = _saved_elide
                         # Dict.get/get_or returning a generic void* into a str-typed
                         # local: gen_method_call only unboxes when call_ty is resolved
                         # to "str"; recover here from the declared SLet type instead.

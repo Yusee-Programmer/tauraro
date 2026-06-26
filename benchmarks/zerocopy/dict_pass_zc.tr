@@ -7,7 +7,7 @@ extern "C":
 def sum_lens(d: ref Dict[str, str]) -> int:
     mut s = 0
     for k in d.keys():
-        mut v: str = d.get(k)
+        v: ref str = d.get(k)
         s = s + v.len()
     return s
 
