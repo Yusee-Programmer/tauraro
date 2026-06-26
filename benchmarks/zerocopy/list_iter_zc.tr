@@ -1,0 +1,28 @@
+from std.sys.time import Clock
+extern "C":
+    def _tr_int_to_str(n: int) -> str
+    def _tr_mem_live() -> int
+    def _tr_mem_live_strs() -> int
+
+def build() -> List[str]:
+    mut items: List[str] = []
+    mut k = 0
+    while k < 1000:
+        items.append("list element payload number " + _tr_int_to_str(k))
+        k = k + 1
+    return items
+
+def main():
+    mut items = build()
+    mut clock = Clock.init()
+    mut total = 0
+    mut r = 0
+    while r < 3000:
+        for ref x in items:
+            total = total + x.len()
+        r = r + 1
+    mut ms = clock.elapsed_ms()
+    print(total)
+    print("TIME_MS:" + _tr_int_to_str(ms))
+    print("ALLOCS:" + _tr_int_to_str(_tr_mem_live()))
+    print("STRS:" + _tr_int_to_str(_tr_mem_live_strs()))

@@ -1451,6 +1451,16 @@ pub class CGenerator:
             case HirExpr.EIdent(nm, _, _):
                 if is_return and self.str_local_names.contains(nm): return s
                 return "_tr_str_retain(" + s + ")"
+            case HirExpr.EPropAccess(_, _, _):
+                # A `str` FIELD read (e.g. `return self.nm`) aliases the object's
+                # own buffer. When this is an OWNED return (`-> str`), the caller
+                # will release the result, so we must retain to keep the field's
+                # reference valid — otherwise the first drop frees the field's
+                # buffer and the next read is a use-after-free / heap corruption.
+                # (`-> ref` borrow returns never reach here; they pass the alias
+                # through and the caller does not free it.)
+                if is_return: return "_tr_str_retain(" + s + ")"
+                return s
             case _:
                 return s
 

@@ -204,6 +204,17 @@ static inline long long _tr_mem_live(void) {
 #endif
 }
 
+/* Net live TrStr string objects (alloc'd minus freed) under -DTAURARO_MEMCOUNT.
+ * Zero-copy views (StrView) hold a borrowed pointer and create NO TrStr, so this
+ * counter distinguishes data-copying (str.slice) from borrowing (StrView).      */
+static inline long long _tr_mem_live_strs(void) {
+#ifdef TAURARO_MEMCOUNT
+    return (long long)_tr_live_strs;
+#else
+    return 0LL;
+#endif
+}
+
 // Wrappers for core library to avoid signature conflicts
 static inline void* _tr_c_malloc(size_t size) {
     void* p = TAURARO_ALLOC(size);

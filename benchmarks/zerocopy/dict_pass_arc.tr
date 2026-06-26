@@ -1,0 +1,30 @@
+from std.sys.time import Clock
+extern "C":
+    def _tr_int_to_str(n: int) -> str
+    def _tr_mem_live() -> int
+    def _tr_mem_live_strs() -> int
+
+def sum_lens(d: Dict[str, str]) -> int:
+    mut s = 0
+    for k in d.keys():
+        mut v: str = d.get(k)
+        s = s + v.len()
+    return s
+
+def main():
+    mut d: Dict[str, str] = {}
+    mut k = 0
+    while k < 500:
+        d.insert("key_" + _tr_int_to_str(k), "value payload " + _tr_int_to_str(k))
+        k = k + 1
+    mut clock = Clock.init()
+    mut total = 0
+    mut r = 0
+    while r < 4000:
+        total = total + sum_lens(d)
+        r = r + 1
+    mut ms = clock.elapsed_ms()
+    print(total)
+    print("TIME_MS:" + _tr_int_to_str(ms))
+    print("ALLOCS:" + _tr_int_to_str(_tr_mem_live()))
+    print("STRS:" + _tr_int_to_str(_tr_mem_live_strs()))

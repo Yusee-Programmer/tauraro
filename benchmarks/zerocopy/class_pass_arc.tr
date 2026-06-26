@@ -1,0 +1,28 @@
+from std.sys.time import Clock
+extern "C":
+    def _tr_int_to_str(n: int) -> str
+    def _tr_mem_live() -> int
+    def _tr_mem_live_strs() -> int
+
+class Record:
+    pub name: str
+    pub score: int
+
+def score_of(r: Record, i: int) -> int:
+    return r.score + r.name.index_of("record") + (i % 2)
+
+def main():
+    mut rec = Record()
+    rec.name = "benchmark record display name" + _tr_int_to_str(0)
+    rec.score = 42
+    mut clock = Clock.init()
+    mut total = 0
+    mut i = 0
+    while i < 5000000:
+        total = total + score_of(rec, i)
+        i = i + 1
+    mut ms = clock.elapsed_ms()
+    print(total)
+    print("TIME_MS:" + _tr_int_to_str(ms))
+    print("ALLOCS:" + _tr_int_to_str(_tr_mem_live()))
+    print("STRS:" + _tr_int_to_str(_tr_mem_live_strs()))
