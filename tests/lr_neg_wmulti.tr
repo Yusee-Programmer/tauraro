@@ -1,0 +1,8 @@
+def bad(a: ref str, b: ref str) -> ref str from b
+    where (
+        zzz outlives b,
+    ):
+    return a
+
+def main() -> int:
+    return 0

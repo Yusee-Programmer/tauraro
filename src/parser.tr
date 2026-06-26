@@ -2147,30 +2147,63 @@ extend Parser:
                     ret_t.from_param = ret_t.from_param + "," + rgn2
                     ret_t.from_regions.push(rgn2)
             f.ret_ty = box_asttype(ret_t)
-        # Gap 4: optional `where` outlives-bounds clause (optional parens, one or more):
-        #   where a outlives b            /  where (a outlives b)  /  where (a outlives b, c outlives d)
+        # Gap 4: optional `where` outlives-bounds clause (optional parens, one or more).
+        # May sit on the signature line OR break to a continuation line, and the
+        # parenthesized form may span lines with a trailing comma:
+        #   where a outlives b
+        #   -> T from b \n    where a outlives b:
+        #   where (a outlives b, c outlives d)
+        #   where ( \n    a outlives b, \n    c outlives d, \n  ):
+        mut w_is = false
         match self.peek():
-            case Token.Ident(wkw):
-                if wkw == "where":
-                    self.pos = self.pos + 1
-                    mut w_paren = false
-                    if self.peek() == Token.LParen:
-                        self.pos = self.pos + 1
-                        w_paren = true
-                    mut w_more = true
-                    while w_more:
-                        mut w_a  = self.consume_ident()    # region a
-                        mut w_kw = self.consume_ident()    # `outlives`
-                        mut w_b  = self.consume_ident()    # region b
-                        f.outlives_a.push(w_a)
-                        f.outlives_b.push(w_b)
-                        if w_paren and self.peek() == Token.Comma:
-                            self.pos = self.pos + 1
-                        else:
-                            w_more = false
-                    if w_paren and self.peek() == Token.RParen:
-                        self.pos = self.pos + 1
+            case Token.Ident(wkw0):
+                if wkw0 == "where": w_is = true
             case _: pass
+        if not w_is and self.peek() == Token.Newline:
+            # Continuation line: look past NEWLINE/INDENT for a `where` keyword.
+            # Consuming the leading INDENT lets the body (at the clause's indent)
+            # parse normally as the block opened by that indent.
+            mut scan = self.pos
+            mut scanning = true
+            while scanning:
+                match self.tokens.get(scan):
+                    case Token.Newline | Token.Indent:
+                        scan = scan + 1
+                    case _:
+                        scanning = false
+            match self.tokens.get(scan):
+                case Token.Ident(wkw1):
+                    if wkw1 == "where":
+                        w_is = true
+                        self.pos = scan
+                case _: pass
+        if w_is:
+            self.pos = self.pos + 1   # consume `where`
+            mut w_paren = false
+            if self.peek() == Token.LParen:
+                self.pos = self.pos + 1
+                w_paren = true
+                self.skip_newlines_and_indent()
+            mut w_more = true
+            while w_more:
+                if w_paren: self.skip_newlines_and_indent()
+                if w_paren and self.peek() == Token.RParen:
+                    w_more = false        # trailing comma before `)`
+                else:
+                    mut w_a  = self.consume_ident()    # region a
+                    mut w_kw = self.consume_ident()    # `outlives`
+                    mut w_b  = self.consume_ident()    # region b
+                    f.outlives_a.push(w_a)
+                    f.outlives_b.push(w_b)
+                    if w_paren: self.skip_newlines_and_indent()
+                    if w_paren and self.peek() == Token.Comma:
+                        self.pos = self.pos + 1
+                    else:
+                        w_more = false
+            if w_paren:
+                self.skip_newlines_and_indent()
+                if self.peek() == Token.RParen:
+                    self.pos = self.pos + 1
         if self.peek() == Token.Colon:
             self.pos = self.pos + 1
             f.body = self.parse_block()
