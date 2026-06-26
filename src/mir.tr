@@ -30,6 +30,9 @@ def _is_mutating_call_on(val: Pointer[HirExpr], source: str, mm: Map[str, bool])
             match obj.read():
                 case HirExpr.EIdent(onm, _, _):
                     if onm != source: return false
+                    # Builtin collection mutators always mutate the receiver.
+                    if method == "push" or method == "append" or method == "insert" or method == "set" or method == "remove" or method == "pop" or method == "clear" or method == "extend" or method == "add" or method == "put":
+                        return true
                     return mm.contains(hir_expr_type(obj).name + "." + method)
                 case _: return false
         case _: return false

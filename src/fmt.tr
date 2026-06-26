@@ -474,7 +474,7 @@ extend Formatter:
                 self.indent = self.indent + 1
                 self.emit_block(body)
                 self.indent = self.indent - 1
-            case Stmt.SFor(var, it, body, decs):
+            case Stmt.SFor(var, it, body, decs, _):
                 self.emit_simple("for " + var + " in " + self.expr_str(it) + ":", src_line)
                 self.indent = self.indent + 1
                 self.emit_block(body)

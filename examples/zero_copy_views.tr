@@ -1,0 +1,29 @@
+# Gap 1 — Zero-copy substring views via StrView.
+#
+# A `str` slice (Str.slice / s[a:b]) ALLOCATES a new buffer. A StrView instead holds a
+# BORROWED pointer into the source plus a length — so slicing and comparing copy NOTHING.
+# Only `.to_str()` materializes an owned string. This is the zero-copy win for parsing /
+# tokenizing: split a large input into thousands of fields with zero string-data allocation.
+from std.string.str import Str, StrView
+
+def main():
+    mut csv = "name,age,city"
+
+    # Zero-copy field views — no allocation, just {ptr+offset, len}.
+    mut name = StrView.of(csv, 0, 4)     # "name"
+    mut age  = StrView.of(csv, 5, 3)     # "age"
+    mut city = StrView.of(csv, 9, 4)     # "city"
+    print(name.eq("name"))                # true
+    print(age.eq("age"))                  # true
+    print(city.starts_with("cit"))        # true
+
+    # A view over the whole string, then zero-copy sub-views of it.
+    mut whole = StrView.all(csv)
+    print(whole.length())                 # 13
+    print(whole.slice(0, 4).eq("name"))   # true
+
+    # Materialize to an owned `str` ONLY when you actually need ownership.
+    mut owned = city.to_str()
+    print(owned)                          # city
+
+    print("zero-copy views ok")

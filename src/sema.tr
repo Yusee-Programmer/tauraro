@@ -114,7 +114,7 @@ def _stmt_mutates_self(s: Pointer[Stmt]) -> bool:
                 i = i + 1
             return _block_mutates_self(else_b)
         case Stmt.SWhile(_, body, _): return _block_mutates_self(body)
-        case Stmt.SFor(_, _, body, _): return _block_mutates_self(body)
+        case Stmt.SFor(_, _, body, _, _): return _block_mutates_self(body)
         case Stmt.SForUnpack(_, _, body): return _block_mutates_self(body)
         case Stmt.SUnsafe(body): return _block_mutates_self(body)
         case Stmt.SWith(_, _, body): return _block_mutates_self(body)
@@ -1980,7 +1980,11 @@ extend Sema:
                 # result's region to the matching argument.
                 if f.ret_ty as usize != 0 as usize:
                     mut _frt = f.ret_ty.read()
-                    if _frt.is_borrow and _frt.from_regions.len == 1:
+                    # A single-region `from a` return — whether it's `ref T from a` (a
+                    # borrow) OR a borrow-HOLDING struct `T from a` (Gap 3, e.g. a StrView
+                    # that borrows its source) — records the index of the `from` parameter
+                    # so a call site maps the result's region to the matching argument.
+                    if _frt.from_regions.len == 1:
                         mut _fi = 0
                         while _fi < f.params.len:
                             if f.params.get(_fi).name == _frt.from_regions.get(0):
@@ -2607,9 +2611,11 @@ extend Sema:
                 if val_ptr as usize != 0 as usize:
                     self.set_borrows_region(name, self.compute_region(val_ptr))
                 # Outlives engine (cross-fn edge): `mut r = f(args)` where f returns
-                # `ref .. from p` makes r borrow args[p_index]. Record (r, that-arg)
-                # when it's a bare local/param so the MIR liveness check covers it.
-                if ty.is_borrow and val_ptr as usize != 0 as usize:
+                # `ref .. from p` (a borrow) OR a borrow-HOLDING struct `T from p` (Gap 3 —
+                # e.g. `mut v = str_view(text, ..)` returning `StrView from text`) makes r
+                # borrow args[p_index]. Record (r, that-arg) so the MIR liveness check
+                # covers it (so mutating the source while r is live is rejected).
+                if val_ptr as usize != 0 as usize:
                     match val_ptr.read():
                         case Expr.ECall(ce_callee, ce_args):
                             if ce_callee as usize != 0 as usize:
@@ -2618,7 +2624,7 @@ extend Sema:
                                         mut ce_sym = self.resolve(ce_fn)
                                         if ce_sym.name != "" and ce_sym.ty as usize != 0 as usize:
                                             mut ce_ret = ce_sym.ty.read()
-                                            if ce_ret.is_borrow and ce_ret.from_index >= 0 and ce_ret.from_index < ce_args.len:
+                                            if (ce_ret.is_borrow or ce_ret.from_regions.len > 0) and ce_ret.from_index >= 0 and ce_ret.from_index < ce_args.len:
                                                 match ce_args.get(ce_ret.from_index).read():
                                                     case Expr.EIdent(ce_src):
                                                         self.cur_func_borrowers.push(name)
@@ -2935,7 +2941,7 @@ extend Sema:
                     self.mark_maybe_init(sw_loop_inited.get(sw_ii))
                     sw_ii = sw_ii + 1
                 return box_hirstmt(HirStmt.SWhile(sw_cond, sw_body))
-            case Stmt.SFor(var, iter, body, decorators):
+            case Stmt.SFor(var, iter, body, decorators, for_is_ref):
                 self.enter_scope()
                 mut h_iter_for = self.lower_expr(iter)
                 mut var_ty_for = AstType.init("int")
@@ -2948,6 +2954,15 @@ extend Sema:
                 elif iter_hn == "str":
                     var_ty_for = AstType.init("char")
                 self.declare(var, SymbolKind.SVariable, box_asttype(var_ty_for), false)
+                # Gap 2: `for ref x in items` — x borrows each element, so the body borrows
+                # the collection. Record the edge so the borrow checker (B-2) rejects
+                # mutating `items` inside the loop (e.g. `items.push(..)` while iterating).
+                if for_is_ref:
+                    match iter.read():
+                        case Expr.EIdent(for_coll):
+                            self.cur_func_borrowers.push(var)
+                            self.cur_func_sources.push(for_coll)
+                        case _: pass
                 # Fix 1+4: for-loop body might not run -> moves/inits are "maybe"
                 mut sf_outer_cap_m = self.capturing_moves
                 mut sf_outer_buf_m = self.branch_moved_buf

@@ -969,7 +969,21 @@ extend Parser:
 
     pub def parse_for_stmt(self) -> Pointer[Stmt]:
         self.pos = self.pos + 1
-        var = self.consume_ident()
+        # `for mut ref x` / `for ref x` — borrow each element (zero-copy iteration; the
+        # loop body borrows the collection, so it can't be mutated mid-loop).
+        mut for_is_ref = false
+        if self.peek() == Token.KwMut:
+            self.pos = self.pos + 1
+            mut _mr = self.consume_ident()   # `ref`
+            for_is_ref = true
+        mut var = self.consume_ident()
+        if not for_is_ref and var == "ref":
+            match self.peek():
+                case Token.KwIn: pass
+                case Token.Comma: pass
+                case _:
+                    for_is_ref = true
+                    var = self.consume_ident()
         # Multi-target: for a, b in ... -> SForUnpack
         if self.peek() == Token.Comma:
             mut unpack_vars = Vec[str].init(4)
@@ -996,7 +1010,7 @@ extend Parser:
             case _:
                 pass
         body = self.parse_block()
-        return box_stmt(Stmt.SFor(var, iter_e, body, Vec[Decorator].init(0)))
+        return box_stmt(Stmt.SFor(var, iter_e, body, Vec[Decorator].init(0), for_is_ref))
 
     pub def parse_match_stmt(self) -> Pointer[Stmt]:
         self.pos = self.pos + 1
@@ -2119,6 +2133,29 @@ extend Parser:
                     ret_t.from_param = ret_t.from_param + "," + rgn2
                     ret_t.from_regions.push(rgn2)
             f.ret_ty = box_asttype(ret_t)
+        # Gap 4: optional `where` outlives-bounds clause (optional parens, one or more):
+        #   where a outlives b            /  where (a outlives b)  /  where (a outlives b, c outlives d)
+        match self.peek():
+            case Token.Ident(wkw):
+                if wkw == "where":
+                    self.pos = self.pos + 1
+                    mut w_paren = false
+                    if self.peek() == Token.LParen:
+                        self.pos = self.pos + 1
+                        w_paren = true
+                    mut w_more = true
+                    while w_more:
+                        mut w_a  = self.consume_ident()    # region a
+                        mut w_kw = self.consume_ident()    # `outlives`
+                        mut w_b  = self.consume_ident()    # region b
+                        f.outlives_bounds.push(w_a + ">" + w_b)
+                        if w_paren and self.peek() == Token.Comma:
+                            self.pos = self.pos + 1
+                        else:
+                            w_more = false
+                    if w_paren and self.peek() == Token.RParen:
+                        self.pos = self.pos + 1
+            case _: pass
         if self.peek() == Token.Colon:
             self.pos = self.pos + 1
             f.body = self.parse_block()
