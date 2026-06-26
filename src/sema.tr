@@ -174,6 +174,8 @@ pub class Sema:
     pub current_func_ret_from: str      # Gap 1: 'from' lifetime param of current function return
     pub current_func_ret_borrow_str: bool   # current fn returns `ref str from ...` (a str borrow)
     pub current_func_ret_regions: Vec[str]  # explicit `from a, b` region list (empty if none/auto-inferred)
+    pub current_func_outlives_a: Vec[str]   # `where a outlives b` bounds (parallel): a[i] outlives b[i]
+    pub current_func_outlives_b: Vec[str]
     pub cur_func_borrowers: Vec[str]   # outlives engine: cross-fn ref-borrow edges (borrowers ...)
     pub cur_func_sources:   Vec[str]   # ... and immediate sources) collected during lower_func
     pub strict_mode: bool               # --strict: alloc outside unsafe -> hard [U-1] error
@@ -263,6 +265,8 @@ extend Sema:
         s.current_func_ret_from  = ""
         s.current_func_ret_borrow_str = false
         s.current_func_ret_regions = Vec[str].init(0)
+        s.current_func_outlives_a = Vec[str].init(0)
+        s.current_func_outlives_b = Vec[str].init(0)
         s.cur_func_borrowers     = Vec[str].init(0)
         s.cur_func_sources       = Vec[str].init(0)
         s.strict_mode            = false
@@ -1203,6 +1207,27 @@ extend Sema:
                 return ""
             case _: return ""
 
+    # `where` enforcement: true if region `longer` is declared (via a `where … outlives …`
+    # bound on the current function, possibly one level transitively) to outlive `shorter`.
+    # A longer-lived region's borrow is valid wherever the shorter one is needed.
+    pub def region_outlives(self, longer: str, shorter: str) -> bool:
+        mut i = 0
+        while i < self.current_func_outlives_a.len:
+            if self.current_func_outlives_a.get(i) == longer and self.current_func_outlives_b.get(i) == shorter:
+                return true
+            i = i + 1
+        mut j = 0
+        while j < self.current_func_outlives_a.len:
+            if self.current_func_outlives_a.get(j) == longer:
+                mut mid = self.current_func_outlives_b.get(j)
+                mut kk = 0
+                while kk < self.current_func_outlives_a.len:
+                    if self.current_func_outlives_a.get(kk) == mid and self.current_func_outlives_b.get(kk) == shorter:
+                        return true
+                    kk = kk + 1
+            j = j + 1
+        return false
+
     # [L-5] True iff `obj.field` names a `ref` (borrow) field. Sound: returns false
     # whenever the object's class or the field can't be resolved (never over-flags).
     pub def field_is_borrow(self, obj: Pointer[Expr], field: str) -> bool:
@@ -2114,9 +2139,29 @@ extend Sema:
         mut saved_ret_from = self.current_func_ret_from
         mut saved_ret_borrow_str = self.current_func_ret_borrow_str
         mut saved_ret_regions = self.current_func_ret_regions
+        mut saved_outlives_a = self.current_func_outlives_a
+        mut saved_outlives_b = self.current_func_outlives_b
         self.current_func_ret_from = ""
         self.current_func_ret_borrow_str = false
         self.current_func_ret_regions = Vec[str].init(0)
+        self.current_func_outlives_a = f.outlives_a
+        self.current_func_outlives_b = f.outlives_b
+        # `where` enforcement (--strict): each region named in a bound must be a parameter.
+        if self.strict_mode and f.outlives_a.len > 0:
+            mut wbi = 0
+            while wbi < f.outlives_a.len:
+                mut w_ok_a = false
+                mut w_ok_b = false
+                mut wpi = 0
+                while wpi < f.params.len:
+                    if f.params.get(wpi).name == f.outlives_a.get(wbi): w_ok_a = true
+                    if f.params.get(wpi).name == f.outlives_b.get(wbi): w_ok_b = true
+                    wpi = wpi + 1
+                if not w_ok_a:
+                    self.error("[L-2] region '" + f.outlives_a.get(wbi) + "' in the `where ... outlives ...` clause is not a parameter of this function.")
+                if not w_ok_b:
+                    self.error("[L-2] region '" + f.outlives_b.get(wbi) + "' in the `where ... outlives ...` clause is not a parameter of this function.")
+                wbi = wbi + 1
         if f.ret_ty as usize != 0 as usize:
             self.current_func_ret_from = f.ret_ty.read().from_param
             self.current_func_ret_regions = f.ret_ty.read().from_regions
@@ -2265,6 +2310,8 @@ extend Sema:
         self.current_func_ret_from = saved_ret_from
         self.current_func_ret_borrow_str = saved_ret_borrow_str
         self.current_func_ret_regions = saved_ret_regions
+        self.current_func_outlives_a = saved_outlives_a
+        self.current_func_outlives_b = saved_outlives_b
         return hf
 
     pub def lower_class(self, c: ClassDef) -> HirClass:
@@ -2563,8 +2610,17 @@ extend Sema:
                                         if self.current_func_ret_regions.get(l3ri) == l3_eff:
                                             l3_in = true
                                         l3ri = l3ri + 1
+                                    # `where` enforcement: a `where l3_eff outlives D` bound for
+                                    # a declared region D means l3_eff is longer-lived, so its
+                                    # borrow is valid for D's scope — accept the return.
                                     if not l3_in:
-                                        self.error("[L-4] borrow-returning function returns a borrow of region '" + l3_eff + "', but its return is declared 'from " + self.current_func_ret_from + "'.\n      FIX: add '" + l3_eff + "' to the 'from' list, or return a borrow of a declared region.")
+                                        mut l3di = 0
+                                        while l3di < self.current_func_ret_regions.len:
+                                            if self.region_outlives(l3_eff, self.current_func_ret_regions.get(l3di)):
+                                                l3_in = true
+                                            l3di = l3di + 1
+                                    if not l3_in:
+                                        self.error("[L-4] borrow-returning function returns a borrow of region '" + l3_eff + "', but its return is declared 'from " + self.current_func_ret_from + "'.\n      FIX: add '" + l3_eff + "' to the 'from' list, declare 'where " + l3_eff + " outlives " + self.current_func_ret_from + "', or return a borrow of a declared region.")
                         case _: pass
                 # Gap 1: [L-1] escape check - returning a LOCAL-region Pointer without 'from' annotation
                 if e as usize != 0 as usize and not self.in_unsafe and self.current_func_ret_from == "":

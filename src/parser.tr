@@ -2148,7 +2148,8 @@ extend Parser:
                         mut w_a  = self.consume_ident()    # region a
                         mut w_kw = self.consume_ident()    # `outlives`
                         mut w_b  = self.consume_ident()    # region b
-                        f.outlives_bounds.push(w_a + ">" + w_b)
+                        f.outlives_a.push(w_a)
+                        f.outlives_b.push(w_b)
                         if w_paren and self.peek() == Token.Comma:
                             self.pos = self.pos + 1
                         else:

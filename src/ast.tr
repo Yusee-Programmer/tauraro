@@ -331,7 +331,9 @@ pub class FunctionDef:
     pub is_export: bool   # `export def` - emit a C-ABI dllexport/visibility wrapper for FFI
     pub body: Block
     pub line: int
-    pub outlives_bounds: Vec[str]   # `where a outlives b` region bounds, stored as "a>b" (Gap 4)
+    # `where a outlives b` region bounds (Gap 4) — parallel: outlives_a[i] outlives outlives_b[i].
+    pub outlives_a: Vec[str]
+    pub outlives_b: Vec[str]
 
 extend FunctionDef:
     pub def init(name: str) -> FunctionDef:
@@ -350,7 +352,8 @@ extend FunctionDef:
         f.is_export = false
         f.body = Block.init()
         f.line = 0
-        f.outlives_bounds = Vec[str].init(0)
+        f.outlives_a = Vec[str].init(0)
+        f.outlives_b = Vec[str].init(0)
         return f
 
 pub class FieldDef:
