@@ -67,4 +67,3 @@ def main() -> int:
     print(nums.len())
 
     print("lifetimes everywhere: ok")
-    return 0

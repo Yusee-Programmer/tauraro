@@ -153,6 +153,7 @@ pub class Sema:
     pub in_async_fn:        bool
     pub assign_froms:       Map[str, int] # block-local last use tracking
     pub fn_sigs:            Map[str, AstType] # top-level fn name -> def(...)->R type, for first-class function references
+    pub extern_names:       Map[str, bool]    # [N-3] extern "C" function names (valid bare names not in fn_sigs/globals)
     # Nested declarations (class/def/enum/interface inside main()) hoisted to file scope.
     pub nested_classes:     Vec[HirClass]
     pub nested_functions:   Vec[HirFunction]
@@ -164,6 +165,7 @@ pub class Sema:
     pub closure_caps:     Vec[HirParam] # captures accumulated for the current innermost closure
     pub closure_cap_set:  Map[str, bool] # dedup set for capture names
     pub in_assign_target: bool          # Phase D: suppress is_init check on assignment LHS
+    pub in_recv_pos: bool               # [N-3] lowering a method/prop/index receiver — skip undefined-name check (module receivers like `OS`/`math` resolve to no symbol)
     pub container_borrows: Map[str, str] # Phase C: container_var -> borrowing_var
     pub capturing_moves: bool           # Fix 1: branch snapshot - are we tracking move deltas?
     pub branch_moved_buf: Vec[str]      # Fix 1: names moved in current branch
@@ -247,6 +249,7 @@ extend Sema:
         s.in_async_fn        = false
         s.assign_froms       = Map[str, int].init(32)
         s.fn_sigs            = Map[str, AstType].init(64)
+        s.extern_names       = Map[str, bool].init(128)
         s.nested_classes     = Vec[HirClass].init(4)
         s.nested_functions   = Vec[HirFunction].init(4)
         s.nested_enums       = Vec[HirEnum].init(4)
@@ -257,6 +260,7 @@ extend Sema:
         s.closure_caps      = Vec[HirParam].init(0)
         s.closure_cap_set   = Map[str, bool].init(0)
         s.in_assign_target  = false
+        s.in_recv_pos       = false
         s.container_borrows = Map[str, str].init(16)
         s.capturing_moves   = false
         s.branch_moved_buf  = Vec[str].init(0)
@@ -1844,6 +1848,23 @@ extend Sema:
 
         return Symbol.init("", SymbolKind.SVariable, box_asttype(AstType.init("void")))
 
+    # [N-3] True if `name` is a known top-level entity even when it is not a
+    # scope/global symbol: a user function, class, enum, interface, type alias, or
+    # built-in type name. Used to avoid false "undefined name" errors.
+    pub def is_known_name(self, name: str) -> bool:
+        if self.fn_sigs.contains(name): return true
+        if self.extern_names.contains(name): return true
+        if self.classes.contains(name): return true
+        if self.enums.contains(name): return true
+        if self.interfaces.contains(name): return true
+        if self.type_aliases.contains(name): return true
+        if self.is_type_name(name): return true
+        # Memory builtins + reflection (not in the globals table).
+        if name == "alloc" or name == "dealloc" or name == "realloc" or name == "sizeof" or name == "repr": return true
+        # Runtime intrinsics are reserved to the `_tr_` prefix and always available.
+        if name.len() >= 4 and name.slice(0, 4) == "_tr_": return true
+        return false
+
     # #10: True if `nm` names a type (class/enum/interface/builtin primitive).
     pub def is_type_name(self, nm: str) -> bool:
         if self.classes.contains(nm) or self.enums.contains(nm) or self.interfaces.contains(nm): return true
@@ -2098,6 +2119,7 @@ extend Sema:
                     mut _e_ret = box_asttype(AstType.init("void"))
                     if f.ret_ty as usize != 0 as usize: _e_ret = f.ret_ty
                     self.declare(f.name, SymbolKind.SFunction, _e_ret, false)
+                    self.extern_names.insert(f.name, true)   # [N-3] allowlist
                     ei = ei + 1
             case Decl.DDecoratorDef(f):
                 self.decorator_names.insert(f.name, true)
@@ -2298,11 +2320,15 @@ extend Sema:
         hf.is_variadic = f.is_variadic
         hf.is_decorator = false
 
-        # Rule F-3: Definite return check for non-void, non-extern functions
-        # Skip for interface method signatures (empty body = no stmts)
+        # Rule F-3: Definite return check for non-void, non-extern functions.
+        # Skip interface method signatures (empty body), constructors, and the
+        # program entry point `main` — `main` is the entry point whose return is
+        # always optional (C's main implicitly returns 0), so it needs no
+        # explicit `return` even when written `-> int`.
+        mut _is_entry_main = f.name == "main" and self.current_class_name == ""
         if not f.is_extern and f.body.stmts.len > 0 and f.ret_ty as usize != 0 as usize:
             mut ret_nm = f.ret_ty.read().name
-            if ret_nm != "void" and ret_nm != "None" and ret_nm != "" and f.name != "init" and f.name != "new":
+            if ret_nm != "void" and ret_nm != "None" and ret_nm != "" and f.name != "init" and f.name != "new" and not _is_entry_main:
                 if not self.block_returns(f.body):
                     self.current_line = f.line
                     self.error("[F-3] Function '" + f.name + "' returns '" + ret_nm + "' but is missing a return statement on at least one code path. FIX: Add a return at the end, or ensure all if/elif/else branches return.")
@@ -3194,6 +3220,10 @@ extend Sema:
                     hcc_val.err_name = cc.err_name
                     hcc_val.err_type = AstType.init("str")
                     if cc.err_type as usize != 0 as usize: hcc_val.err_type = cc.err_type.read()
+                    # Bind the `except E as e` variable so the catch body can use it
+                    # (otherwise the [N-3] check would flag `e` as undefined).
+                    if cc.err_name != "":
+                        self.declare(cc.err_name, SymbolKind.SVariable, box_asttype(hcc_val.err_type), true)
                     hcc_val.body = self.lower_block(cc.body.read())
                     unsafe:
                         mut hcc = alloc[HirCatchClause](1)
@@ -3470,6 +3500,12 @@ extend Sema:
             case Expr.EIdent(name):
                 mut sym = self.resolve(name)
                 mut ty = sym.ty.read()
+                # [N-3] Undefined name: not a scope/global symbol, not a function/
+                # class/enum/interface/type, and not an assignment target or a
+                # method/property receiver (module receivers like OS/File resolve to
+                # no symbol). Catch it here so it never reaches the C backend.
+                if sym.name == "" and name != "" and not self.in_assign_target and not self.in_recv_pos and not self.is_known_name(name):
+                    self.error("[N-3] name '" + name + "' is not defined.\n      FIX: check the spelling, declare it with 'mut " + name + " = ...', or import it before use.")
                 # First-class function reference: a top-level function used as a
                 # value carries its def(...)->R signature (not its return type).
                 if self.fn_sigs.contains(name) and sym.kind == SymbolKind.SFunction:
@@ -3761,7 +3797,10 @@ extend Sema:
                 while k < args.len:
                     hl.push(self.lower_expr(args.get(k)))
                     k = k + 1
+                mut _saved_recv_mc = self.in_recv_pos
+                self.in_recv_pos = true
                 mut hobj = self.lower_expr(obj)
+                self.in_recv_pos = _saved_recv_mc
                 # Auto-drop: an explicit manual `.free()` call marks the variable as
                 # freed so the compiler doesn't also auto-drop it (would double-free).
                 # Must run AFTER lowering `obj` above, so this call's own move-check
@@ -4092,7 +4131,10 @@ extend Sema:
                             _gi4 = _gi4 + 1
                 return box_hirexpr(HirExpr.EMethodCall(hobj, method, hl, ret_ty))
             case Expr.EPropAccess(obj, prop):
+                mut _saved_recv_pa = self.in_recv_pos
+                self.in_recv_pos = true
                 mut hobj = self.lower_expr(obj)
+                self.in_recv_pos = _saved_recv_pa
                 mut hobj_ty_n: str = hir_expr_type(hobj).name
                 mut hobj_ty_full = hir_expr_type(hobj)
                 mut ret_ty = AstType.init("void")

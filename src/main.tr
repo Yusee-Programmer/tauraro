@@ -7,7 +7,8 @@ from core.map import Map
 from core.string import StringObj
 from resolver import ModuleResolver
 from lexer import Lexer
-from parser import Parser
+from parser import Parser, _nth_source_line
+from diag import c_red, c_yellow, c_green, c_cyan, c_dim, c_bold, spaces, repeat_char, first_quoted, col_of, loc_file, loc_line
 from sema import Sema
 from ast import Decl
 from fmt import Formatter
@@ -25,7 +26,7 @@ extern "C":
 # --- Helpers ------------------------------------------------------------------
 
 pub def print_version():
-    print("tauraroc v0.0.6")
+    print("tauraroc v0.0.7")
 
 pub def print_usage():
     print("Usage: tauraroc <file.tr> [options]")
@@ -564,7 +565,7 @@ pub def compile_all_c_incremental(c_files: Vec[str], needs: Vec[bool], exe_path:
             if verbose: print("  [CC -c] " + cpath)
             mut crc = _tr_system(ccmd)
             if crc != 0:
-                print("error: compiling " + cpath + " failed (exit code " + str(crc) + ")")
+                print(c_red("error") + ": compiling " + cpath + " failed (exit code " + str(crc) + ")")
                 return crc
         else:
             compiled = compiled + 1
@@ -618,18 +619,56 @@ pub def compile_c_to_exe(c_path: str, exe_path: str, opt_level: str, verbose: bo
 #   "line: [CODE] main message. FIX: hint."         (no file)
 #   "[CODE] main message. FIX: hint."               (no line)
 pub def _print_diag(level: str, msg: str):
-    # Split on "FIX:" to separate message from hint
+    # Separate the "FIX:" hint from the message body.
     mut fix_part  = ""
     mut main_part = msg
     mut fix_idx = msg.index_of("FIX:")
     if fix_idx >= 0:
-        mut _mp = msg.slice(0, fix_idx)
-        main_part = _mp.trim()
-        mut _fp = msg.slice(fix_idx, msg.len())
-        fix_part  = _fp.trim()
-    print(level + ": " + main_part)
+        main_part = msg.slice(0, fix_idx).trim()
+        fix_part  = msg.slice(fix_idx + 4, msg.len()).trim()
+    # Peel off a leading "file:line: " location (first ": " past the prefix; the
+    # last ':' in the head splits file from line, so Windows C:\ paths survive).
+    mut loc_str   = ""
+    mut file_path = ""
+    mut line_no   = 0
+    mut body      = main_part
+    mut pe = main_part.index_of(": ")
+    if pe > 0:
+        mut head = main_part.slice(0, pe)
+        mut ln   = loc_line(head)
+        if ln > 0:                       # guards against a body that merely has ": "
+            loc_str   = head
+            file_path = loc_file(head)
+            line_no   = ln
+            body      = main_part.slice(pe + 2, main_part.len())
+    # Header line: colored severity + bold message.
+    mut lvl = c_red(level)
+    if level == "warning":
+        lvl = c_yellow(level)
+    print(lvl + ": " + c_bold(body))
+    if loc_str.len() > 0:
+        print("  " + c_cyan("-->") + " " + loc_str)
+        # Source excerpt + caret under the first quoted identifier (semantic
+        # diagnostics carry no column, so we locate the name in the line text).
+        mut src = ""
+        if file_path.len() > 0:
+            src = read_file(file_path)
+        if src.len() > 0:
+            mut srcline = _nth_source_line(src, line_no)
+            if srcline.len() > 0:
+                mut gnum = "   " + str(line_no) + " | "
+                mut gbar = spaces(gnum.len() - 2) + "| "
+                print(c_dim(gnum) + srcline)
+                mut name = first_quoted(msg)
+                mut col  = col_of(srcline, name)
+                if col > 0:
+                    mut underline = repeat_char("^", name.len())
+                    mut caret = c_red(underline)
+                    if level == "warning":
+                        caret = c_yellow(underline)
+                    print(c_dim(gbar) + spaces(col - 1) + caret)
     if fix_part.len() > 0:
-        print("       " + fix_part)
+        print("  " + c_green("= help") + ": " + fix_part)
 
 
 # Called when -o is given: removes all intermediate files from build_dir,
@@ -797,7 +836,7 @@ pub def main(args: Vec[str]):
         i = i + 1
 
     if input_path == "":
-        print("error: no input file specified")
+        print(c_red("error") + ": no input file specified")
         print_usage()
         _tr_exit(1)
 
@@ -834,7 +873,7 @@ pub def main(args: Vec[str]):
     mut prog = resolver.resolve_main(input_path)
     # Parser errors are fatal: a malformed parse cannot be safely compiled.
     if resolver.parse_errors > 0:
-        print("error: " + resolver.parse_errors.to_str() + " parse error(s); aborting compilation.")
+        print(c_red("error") + ": " + resolver.parse_errors.to_str() + " parse error(s); aborting compilation.")
         _tr_exit(1)
 
     if emit_mode == "ast":
@@ -1104,7 +1143,7 @@ pub def main(args: Vec[str]):
     # populated (.c + .o + headers) so the next build can reuse cached objects.
     mut rc = compile_all_c_incremental(all_c_files, needs_recompile, exe_path, build_dir, link_paths, lib_flags, opt_level, verbose, static_link, target, sysroot, debug_mode, lib_mode)
     if rc != 0:
-        print("error: compilation failed (exit code " + str(rc) + ")")
+        print(c_red("error") + ": compilation failed (exit code " + str(rc) + ")")
         _tr_exit(rc)
 
     if verbose: print("Done: " + exe_path)

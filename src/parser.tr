@@ -4,6 +4,7 @@ from core.vec import Vec
 from core.alloc import alloc, dealloc
 from token import Token
 from lexer import Lexer
+from diag import c_red, c_bold, c_cyan, c_dim, c_green, repeat_char
 from ast import Program, Decl, AstType, Param, FunctionDef, FieldDef, ClassDef, VariantDef, EnumDef, InterfaceDef, ImportItem, Expr, Stmt, Block, ElifClause, MatchArm, Pattern, Decorator, FStringPart, Ownership, ChanSelectArm, CatchClause
 
 # --- Helpers ------------------------------------------------------------------
@@ -150,34 +151,44 @@ extend Parser:
             return self.cols.get(self.cols.len - 1)
         return 0
 
-    # Render a diagnostic with the rustc-style format:
-    #   file:line:col: error: <msg>
+    # Render a diagnostic with the rustc-style format (colorized on a TTY):
+    #   error: <msg>
+    #     --> file:line:col
     #      N | <source line>
-    #        |     ^
-    #        FIX: <hint>
+    #        |     ^^^^   (span underlined in red)
+    #        = help: <hint>
     # Degrades gracefully: omits the col when 0, and the snippet/caret when
-    # the source text or column is unavailable.
+    # the source text or column is unavailable. Color auto-disables off a TTY.
     pub def emit_diag(self, msg: str, hint: str):
         mut ln  = self.cur_line()
         mut col = self.cur_col()
+        print(c_red("error") + ": " + c_bold(msg))
         mut loc = ""
         if self.current_file.len() > 0:
-            loc = self.current_file + ":"
-        mut head = loc + str(ln)
+            loc = self.current_file
+        mut head = loc + ":" + str(ln)
         if col > 0:
             head = head + ":" + str(col)
-        print(head + ": error: " + msg)
+        print("  " + c_cyan("-->") + " " + head)
         # Source snippet + caret, when we have both the text and a column.
         if self.src_text.len() > 0 and ln > 0:
             mut srcline = _nth_source_line(self.src_text, ln)
             if srcline.len() > 0:
-                mut gutter = "   " + str(ln) + " | "
-                print(gutter + srcline)
+                mut gnum = "   " + str(ln) + " | "       # plain — used for width math
+                mut gbar = _spaces(gnum.len() - 2) + "| "
+                print(c_dim(gnum) + srcline)
                 if col > 0:
-                    mut pad = _spaces(gutter.len() + col - 1)
-                    print(pad + "^")
+                    # Underline a span as wide as the offending token (distance to
+                    # the next token on the same line), falling back to a single ^.
+                    mut width = 1
+                    if self.pos + 1 < self.cols.len and self.pos + 1 < self.lines.len:
+                        if self.lines.get(self.pos + 1) == ln:
+                            mut d = self.cols.get(self.pos + 1) - col
+                            if d > 0 and d < 200:
+                                width = d
+                    print(c_dim(gbar) + _spaces(col - 1) + c_red(repeat_char("^", width)))
         if hint.len() > 0:
-            print("       FIX: " + hint)
+            print("  " + c_green("= help") + ": " + hint)
         self.error_count = self.error_count + 1
 
     pub def consume_ident(self) -> str:
@@ -1424,6 +1435,8 @@ extend Parser:
                     self.pos = self.pos + 1
                     e = box_expr(Expr.ECall(e, self.parse_arg_list()))
                 case Token.LBracket:
+                    mut ix_oln = self.cur_line()
+                    mut ix_ocol = self.cur_col()
                     self.pos = self.pos + 1
                     # A generic argument that is itself a function-pointer type
                     # (e.g. `Vec[def(HttpConn) -> bool].init(4)`) cannot be
@@ -1451,8 +1464,7 @@ extend Parser:
                             _ti_extra.push(box_expr(Expr.ETypeArg(box_asttype(self.parse_type()))))
                         else:
                             _ti_extra.push(self.parse_expr())
-                    if self.peek() == Token.RBracket:
-                        self.pos = self.pos + 1
+                    self.expect_rbracket(ix_oln, ix_ocol, "this index")
                     if _ti_extra.len > 0:
                         mut _ti_all = Vec[Pointer[Expr]].init(_ti_extra.len + 1)
                         _ti_all.push(idx)
@@ -1471,7 +1483,61 @@ extend Parser:
                 case _: break
         return e
 
+    # Render a diagnostic at an EXPLICIT location (line/col) rather than the
+    # current token. Used to point an "unclosed delimiter" error back at the
+    # OPENING bracket, not at end-of-file where the parser finally gives up.
+    pub def emit_diag_at(self, ln: int, col: int, msg: str, hint: str):
+        print(c_red("error") + ": " + c_bold(msg))
+        mut loc = ""
+        if self.current_file.len() > 0:
+            loc = self.current_file
+        mut head = loc + ":" + str(ln)
+        if col > 0:
+            head = head + ":" + str(col)
+        print("  " + c_cyan("-->") + " " + head)
+        if self.src_text.len() > 0 and ln > 0:
+            mut srcline = _nth_source_line(self.src_text, ln)
+            if srcline.len() > 0:
+                mut gnum = "   " + str(ln) + " | "
+                mut gbar = _spaces(gnum.len() - 2) + "| "
+                print(c_dim(gnum) + srcline)
+                if col > 0:
+                    print(c_dim(gbar) + _spaces(col - 1) + c_red("^"))
+        if hint.len() > 0:
+            print("  " + c_green("= help") + ": " + hint)
+        self.error_count = self.error_count + 1
+
+    # Consume an expected closing bracket, or emit a fatal diagnostic pointing at
+    # the OPENING bracket (oln:ocol). Silently skipping a missing closer (the old
+    # behavior) let malformed source — e.g. an unclosed `(` — slip through to the
+    # C backend instead of stopping here.
+    pub def expect_rparen(self, oln: int, ocol: int, what: str):
+        match self.peek():
+            case Token.RParen:
+                self.pos = self.pos + 1
+            case _:
+                self.emit_diag_at(oln, ocol, "unclosed '(' — " + what + " is never closed", "add the matching ')'.")
+    pub def expect_rbracket(self, oln: int, ocol: int, what: str):
+        match self.peek():
+            case Token.RBracket:
+                self.pos = self.pos + 1
+            case _:
+                self.emit_diag_at(oln, ocol, "unclosed '[' — " + what + " is never closed", "add the matching ']'.")
+    pub def expect_rbrace(self, oln: int, ocol: int, what: str):
+        match self.peek():
+            case Token.RBrace:
+                self.pos = self.pos + 1
+            case _:
+                self.emit_diag_at(oln, ocol, "unclosed '{' — " + what + " is never closed", "add the matching '}'.")
+
     pub def parse_arg_list(self) -> Vec[Pointer[Expr]]:
+        # The caller already consumed the '(' — point an unclosed-call error back
+        # at it (the token at pos-1), not at wherever parsing finally stops.
+        mut oln = 0
+        mut ocol = 0
+        if self.pos > 0:
+            oln = self.lines.get(self.pos - 1)
+            ocol = self.cols.get(self.pos - 1)
         mut el = Vec[Pointer[Expr]].init(4)
         mut going = True
         while going:
@@ -1489,11 +1555,7 @@ extend Parser:
                         self.skip_newlines_and_indent()
                     case _:
                         going = False
-        match self.peek():
-            case Token.RParen:
-                self.pos = self.pos + 1
-            case _:
-                pass
+        self.expect_rparen(oln, ocol, "this call's argument list")
         return el
 
     pub def parse_primary(self) -> Pointer[Expr]:
@@ -1608,6 +1670,8 @@ extend Parser:
                         pass
                 return box_expr(Expr.ESizeOf(ty))
             case Token.LParen:
+                mut p_oln = self.cur_line()
+                mut p_ocol = self.cur_col()
                 self.pos = self.pos + 1
                 self.skip_newlines()
                 if self.peek() == Token.RParen:
@@ -1625,21 +1689,17 @@ extend Parser:
                         self.skip_newlines()
                         if self.peek() == Token.Comma:
                             self.pos = self.pos + 1
-                        self.skip_newlines()
-                    match self.peek():
-                        case Token.RParen:
-                            self.pos = self.pos + 1
-                        case _:
-                            pass
+                            self.skip_newlines()
+                        else:
+                            break
+                    self.expect_rparen(p_oln, p_ocol, "this tuple")
                     return box_expr(Expr.ETuple(items))
                 else:
-                    match self.peek():
-                        case Token.RParen:
-                            self.pos = self.pos + 1
-                        case _:
-                            pass
+                    self.expect_rparen(p_oln, p_ocol, "this parenthesized expression")
                     return e
             case Token.LBracket:
+                mut lb_oln = self.cur_line()
+                mut lb_ocol = self.cur_col()
                 self.pos = self.pos + 1
                 self.skip_newlines()
                 if self.peek() == Token.RBracket:
@@ -1668,11 +1728,7 @@ extend Parser:
                             mut c_ptr = alloc[Comprehension](1)
                             c_ptr.write(c)
                             generators.push(c_ptr)
-                    match self.peek():
-                        case Token.RBracket:
-                            self.pos = self.pos + 1
-                        case _:
-                            pass
+                    self.expect_rbracket(lb_oln, lb_ocol, "this list comprehension")
                     return box_expr(Expr.EListComp(first, generators))
                 mut items = Vec[Pointer[Expr]].init(2)
                 items.push(first)
@@ -1684,14 +1740,14 @@ extend Parser:
                         self.skip_newlines()
                         if self.peek() == Token.Comma:
                             self.pos = self.pos + 1
-                        self.skip_newlines()
-                match self.peek():
-                    case Token.RBracket:
-                        self.pos = self.pos + 1
-                    case _:
-                        pass
+                            self.skip_newlines()
+                        else:
+                            break
+                self.expect_rbracket(lb_oln, lb_ocol, "this list")
                 return box_expr(Expr.EList(items))
             case Token.LBrace:
+                mut br_oln = self.cur_line()
+                mut br_ocol = self.cur_col()
                 self.pos = self.pos + 1
                 self.skip_newlines()
                 mut keys = Vec[Pointer[Expr]].init(2)
@@ -1745,11 +1801,7 @@ extend Parser:
                                 break
                             self.skip_newlines()
                 self.skip_newlines()
-                match self.peek():
-                    case Token.RBrace:
-                        self.pos = self.pos + 1
-                    case _:
-                        pass
+                self.expect_rbrace(br_oln, br_ocol, "this dict/set literal")
                 if is_set:
                     return box_expr(Expr.ESet(set_items))
                 else:
@@ -1838,6 +1890,12 @@ extend Parser:
                 case Token.RBrace:
                     tok_desc = "'}'"
                     hint = "check for an extra '}' or a missing matching '{'."
+                case Token.Error(em):
+                    # A lexer-level error (unknown char, inconsistent indentation):
+                    # report its own message verbatim rather than "unexpected token".
+                    self.emit_diag(em, "")
+                    self.pos = self.pos + 1
+                    return box_expr(Expr.ELitNone)
                 case _: pass
             self.emit_diag("unexpected " + tok_desc + " in expression", hint)
             self.pos = self.pos + 1
@@ -1902,7 +1960,23 @@ extend Parser:
         mut prog = Program.init()
         self.skip_newlines_and_indent()
         while not self.at_end():
-            self.skip_newlines_and_indent()
+            # Skip blank lines and block-closing dedents between top-level items.
+            # A stray INDENT here means a declaration/statement is indented under
+            # nothing (no `:`-opened block above it) — a fatal structural error,
+            # not something to silently swallow.
+            mut sk = True
+            while sk:
+                sk = False
+                match self.peek():
+                    case Token.Newline | Token.Dedent:
+                        self.pos = self.pos + 1
+                        sk = True
+                    case Token.Indent:
+                        self.emit_diag("unexpected indentation", "this line is indented but no block was opened above it (a statement ending in ':' and its own line) — remove the extra indentation.")
+                        self.pos = self.pos + 1
+                        sk = True
+                    case _:
+                        pass
             if not self.at_end():
                 prog.push(self.parse_decl())
         return prog
