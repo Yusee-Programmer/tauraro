@@ -27,35 +27,33 @@ written to `results.md`.
 
 | Case | Rust time | Rust mem | Tauraro time | Tauraro mem |
 |------|----------:|---------:|-------------:|------------:|
-| enum_payload | 9 ms | ~11 MB | **9 ms** | ~10.8 MB |
-| str_view | 3 ms | ~6.1 MB | 19 ms | ~7.5 MB |
+| str_view | 3 ms | ~6.2 MB | **4 ms** | ~6.2 MB |
+| enum_payload | 8 ms | ~10.9 MB | 10 ms | ~10.8 MB |
 
 (Numbers vary by machine; run it yourself. Peak memory is the OS working set,
 which includes runtime/DLL overhead and is roughly flat across both.)
 
 ## Honest interpretation
 
-- **Borrowed enum payloads: Tauraro matches Rust.** Building 200k tokens that
-  borrow a shared source allocates nothing for the payloads in either language;
-  both store a pointer in a value-type tagged union. Tauraro is dead even on time
-  and slightly *lower* on memory. This is the headline: Tauraro's borrowed-payload
-  zero-copy is genuinely Rust-competitive.
+- **Substring views: Tauraro now matches Rust.** `StrView` is a `@value_type`
+  class — a stack value `(ptr, len)`, exactly like Rust's `&str` fat pointer.
+  Slicing allocates nothing, and a `List[StrView]` stores the views inline (one
+  buffer, like Rust's `Vec<&str>`). Tauraro lands at **4 ms vs Rust's 3 ms** with
+  *less* peak memory. (Before `StrView` was made a value type it was ~19 ms,
+  because each view heap-allocated a struct — making it a value type closed the
+  gap ~5×.)
 
-- **Substring views: Rust wins (~6×), and we know exactly why.** Rust's `&str` is
-  a *value* — a fat pointer `(ptr, len)` that lives in a register/stack slot, so a
-  slice is literally free. Tauraro's `StrView` is currently a **heap-allocated
-  class**, so the loop allocates 100k small view structs (the *string data* is
-  still zero-copy — that's the 15× memory win over the ARC `s.slice()` baseline in
-  the [zerocopy](../zerocopy/README.md) suite — but the *struct* allocations cost
-  time). A **value-type `StrView`** (stack-allocated, no heap struct) would close
-  most of this gap; it's a known, planned optimization (`is_class=false` /
-  `@value_type` views are not yet wired).
+- **Borrowed enum payloads: also on par.** Building 200k tokens that borrow a
+  shared source allocates nothing for the payloads in either language; both store
+  a pointer in a value-type tagged union. Tauraro is within noise on time and
+  slightly *lower* on memory.
 
 ## Takeaway
 
-Tauraro's zero-copy is **real and, for borrowed payloads, on par with Rust** —
-with Python-like syntax and an ARC safety floor, rather than mandatory lifetimes
-everywhere. The remaining gap (heap-allocated views) is an implementation detail
-with a known fix, not a fundamental design limit. The fair summary: Tauraro is
-*close to* Rust on zero-copy where its representation is already a value, and has
-a clear path to closing the rest.
+Tauraro's zero-copy is **real and Rust-competitive** — substring views and
+borrowed payloads both land within ~1 ms of Rust at comparable or *lower* memory,
+with Python-like syntax and an ARC safety floor rather than mandatory lifetimes
+everywhere. The headline `&str`-vs-`StrView` gap is closed by the `@value_type`
+representation (stack value, inline collection storage); what remains is general
+`@value_type` polish (generic value types, mutating value-type methods), not a
+fundamental design limit.

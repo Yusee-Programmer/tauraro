@@ -298,6 +298,12 @@ pub class CGenerator:
         mut ci = 0
         while ci < prog.classes.len:
             mut cls = prog.classes.get(ci)
+            # @value_type classes are stored inline in List_<Name>; ensure that
+            # list type exists eagerly (here, before the list-types buffer is
+            # flushed) so `List[ValueType]` locals/args resolve — value-type list
+            # use is often discovered only in a function body, which is too late.
+            if not cls.is_class:
+                self.ensure_list_type(cls.name)
             mut fi = 0
             while fi < cls.fields.len:
                 self.check_and_emit_list_fwd(cls.fields.get(fi).ty)
@@ -537,7 +543,9 @@ pub class CGenerator:
         mut sfx = self.type_suffix(actual_n)
         if sfx == "i64" or sfx == "f64" or sfx == "str" or sfx == "bool" or sfx == "i8" or sfx == "i32" or sfx == "char" or sfx == "u8" or sfx == "u32":
             return sfx
-        if self.enums.contains(actual_n):
+        if self.enums.contains(actual_n) or self.value_types.contains(actual_n):
+            # Enums and @value_type classes are stored BY VALUE inline in the list
+            # (List_<Name>), exactly like a primitive — no per-element heap box.
             self.ensure_list_type(actual_n)
             return actual_n
         return "ptr"
@@ -907,7 +915,9 @@ pub class CGenerator:
         mut first = true
 
         if class_name != "" and not f.is_static:
-            if self.enums.contains(class_name):
+            # Enums and @value_type classes take `self` BY VALUE; reference
+            # (heap) classes take a pointer.
+            if self.enums.contains(class_name) or self.value_types.contains(class_name):
                 sig = sig + class_name + " self"
             else:
                 sig = sig + class_name + "* self"
@@ -1611,6 +1621,9 @@ pub class CGenerator:
             return obj_s + "." + p
         if self.interfaces.contains(t_n) and self.interfaces as usize != 0 as usize:
             return obj_s + "." + p
+        # Value type (@value_type): field access by value, `.` not `->`.
+        if self.value_types.contains(t_n):
+            return obj_s + "." + p
         return obj_s + "->" + p
 
     pub def gen_index(self, o: Pointer[HirExpr], idx: Pointer[HirExpr]) -> str:
@@ -2007,6 +2020,10 @@ pub class CGenerator:
             case HirExpr.EIdent(n, ident_ty, _):
                 if self.classes.contains(n) and n != "Vec" and n != "Map" and n != "Dict" and n != "List":
                     mut ucls = self.classes.get(n)
+                    # Value type (@value_type): construct on the STACK by value, no
+                    # heap allocation, no refcount. (Generic value types not yet wired.)
+                    if self.value_types.contains(n):
+                        return "(" + n + "){0}"
                     if ucls.generics.len > 0 and ident_ty.args.len > 0:
                         mut sfx = self.type_args_suffix(ident_ty.args)
                         self.ensure_mono(ucls, ident_ty.args)
@@ -4931,7 +4948,11 @@ pub class CGenerator:
             case HirStmt.SChanSelect(cs_arms):
                 self.gen_chan_select(cs_arms, indent)
             case HirStmt.SAutoDrop(adn, adc):
-                if adc == "str":
+                if self.value_types.contains(adc):
+                    # Value type (@value_type): lives on the stack, holds no owned
+                    # heap, no refcount — nothing to drop.
+                    pass
+                elif adc == "str":
                     if self.str_local_names.contains(adn):
                         self.w(pad + "_tr_str_release(" + _safe_c_varname(adn) + ");\n")
                 elif adc == "List" or adc == "Vec":

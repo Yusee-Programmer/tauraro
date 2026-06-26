@@ -46,7 +46,11 @@ because ARC was already optimal. That is a *strength*: there is nothing to fix.
 
 `StrView` (in `std/string/str`) holds a borrowed pointer into a source string
 plus a length. Slicing and comparing copy **nothing**; only `.to_str()`
-materialises an owned `str`.
+materialises an owned `str`. It is a `@value_type` class — a **stack value**
+`(ptr, len)`, exactly like Rust's `&str` fat pointer: no heap allocation per
+view, and a `List[StrView]` stores the views inline. In the
+[Rust-vs-Tauraro benchmark](../../../benchmarks/rust_vs_tauraro/README.md) this
+puts substring views at ~4 ms vs Rust's ~3 ms, at comparable memory.
 
 ```python
 from std.string.str import StrView

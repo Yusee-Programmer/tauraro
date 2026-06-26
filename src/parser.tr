@@ -2042,7 +2042,15 @@ extend Parser:
                     case Decl.DClass(c):
                         c.line = _cline
                         c.is_public = is_public
-                        c.is_class = true
+                        # @value_type marks a class as a stack VALUE type (no heap
+                        # box, no refcount, passed/returned by value — like Rust's
+                        # &str fat pointer). Everything else is a heap reference type.
+                        mut _is_vt = false
+                        mut _dvi = 0
+                        while _dvi < decorators.len:
+                            if decorators.get(_dvi).name == "value_type": _is_vt = true
+                            _dvi = _dvi + 1
+                        c.is_class = not _is_vt
                         c.decorators = decorators
                         unsafe: c_ptr.write(Decl.DClass(c))
                     case _:
