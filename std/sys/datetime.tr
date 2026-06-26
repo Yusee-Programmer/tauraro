@@ -18,6 +18,7 @@ extern "C":
 
 # ─── TimeDelta ────────────────────────────────────────────────────────────────
 
+@value_type
 pub class TimeDelta:
     pub days:    int
     pub seconds: int
@@ -70,11 +71,10 @@ extend TimeDelta:
         sb.free()
         return out
 
-    pub def free(self):
-        unsafe: _tr_c_free(self as Pointer[char])
 
 # ─── DateTime ─────────────────────────────────────────────────────────────────
 
+@value_type
 pub class DateTime:
     pub year:   int
     pub month:  int
@@ -250,11 +250,10 @@ extend DateTime:
         sb.free()
         return out
 
-    pub def free(self):
-        unsafe: _tr_c_free(self as Pointer[char])
 
 # ─── Date ─────────────────────────────────────────────────────────────────────
 
+@value_type
 pub class Date:
     pub year:  int
     pub month: int
@@ -302,11 +301,10 @@ extend Date:
     pub def after(self, other: Date) -> bool:
         return other.before(self)
 
-    pub def free(self):
-        unsafe: _tr_c_free(self as Pointer[char])
 
 # ─── Time ─────────────────────────────────────────────────────────────────────
 
+@value_type
 pub class Time:
     pub hour:   int
     pub minute: int
@@ -349,5 +347,3 @@ extend Time:
     pub def before(self, other: Time) -> bool:
         return self.total_seconds() < other.total_seconds()
 
-    pub def free(self):
-        unsafe: _tr_c_free(self as Pointer[char])

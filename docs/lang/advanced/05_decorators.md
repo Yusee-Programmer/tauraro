@@ -161,6 +161,62 @@ print(c.diameter)   # no ()
 
 ---
 
+### @value_type
+
+Applied to a **class** (not a function). Makes the class a **stack value type** —
+like a C struct or Rust's `Copy` types (`&str`, `Point`, `NaiveDate`). Instead of
+the default *reference* semantics (heap-allocated, reference-counted, shared by
+pointer), a `@value_type` class is:
+
+- **stack-allocated** — constructing one allocates nothing on the heap;
+- **passed and returned by value** — a struct copy, no refcount traffic;
+- **stored inline in collections** — `List[Point]` packs the structs in one
+  buffer (like Rust's `Vec<Point>`), not an array of pointers;
+- **not dropped** — it owns no heap and has no destructor.
+
+```python
+@value_type
+pub class Point:
+    pub x: int
+    pub y: int
+
+@value_type
+pub class StrView:          # the stdlib zero-copy string view
+    pub data: Pointer[char]  # borrowed
+    pub len:  int
+```
+
+**When to use it.** A small, immutable, *value-semantics* type that is
+constructed or copied frequently — points, colors, dates/times, ranges, borrowed
+views. This is the lever that lets such types **match Rust's performance**:
+`StrView` substring views went from ~19 ms to ~4 ms (Rust: ~3 ms) once marked
+`@value_type`, because each view stopped heap-allocating a struct.
+
+**Hard rules (the compiler does not yet check these — follow them):**
+
+- **POD fields only.** Every field must be a primitive (`int`/`float`/`bool`/
+  `char`), a `Pointer[T]`, or another `@value_type`. **No owned heap fields** —
+  a `str`, `List`, `Dict`, `Set`, or reference-class field would **leak**, because
+  a value type is never dropped (its fields are never released).
+- **Treat it as immutable.** Methods receive `self` **by value**, so mutating
+  `self.field` inside a method does **not** persist to the caller's copy. Model
+  changes as methods that *return a new value* (`def with_x(self, x) -> Point`),
+  not in-place mutation.
+- **Value semantics on assignment.** `b = a` copies the struct; later changes to
+  one do not affect the other. That's correct for points/dates/views, but wrong
+  for anything you intend to share and mutate through aliases.
+
+**Not yet supported (avoid for now):** generic value types (`Box[T]`),
+mutating value-type methods, and using a value type as a `Dict`/`Map` value or
+`Set` element. Reference (default) classes have none of these limits.
+
+**Best practice.** Default to a normal (reference) class. Reach for
+`@value_type` only for a small, immutable, copy-friendly type on a measured hot
+path — that's where it turns ARC's refcount traffic and per-instance heap
+allocation into free stack copies.
+
+---
+
 ## Custom Decorators
 
 Custom decorators are compile-time macros that inject C attributes into the generated code. They are declared with `decorator def` and must return a `str` naming a C compiler attribute:

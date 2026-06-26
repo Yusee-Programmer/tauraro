@@ -855,6 +855,10 @@ pub class CGenerator:
         if f.name == "main" or f.name == "_tr_main":
             return "__attribute__((hot)) "
         if f.name == "init":
+            # A value-type `init` returns the struct BY VALUE — `malloc` /
+            # `returns_nonnull` are pointer-only attributes and are invalid here.
+            if self.value_types.contains(f.class_name):
+                return "static __attribute__((hot)) "
             return "static __attribute__((malloc,returns_nonnull,hot)) "
         return "static __attribute__((hot)) "
 
@@ -881,6 +885,8 @@ pub class CGenerator:
         if f.name == "main" or f.name == "_tr_main":
             return "__attribute__((hot)) "
         if f.name == "init":
+            if self.value_types.contains(f.class_name):
+                return "__attribute__((hot)) "
             return "__attribute__((malloc,returns_nonnull,hot)) "
         return "__attribute__((hot)) "
 
