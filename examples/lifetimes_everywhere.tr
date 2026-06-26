@@ -1,0 +1,69 @@
+# Optional lifetimes on EVERY declaration form (Rust parity) — all erased to plain
+# types for codegen; only `--strict` enforces the region/borrow discipline. Without
+# `--strict` the compiler ignores every `ref` / `mut ref` / `from r` and falls back
+# to ARC, so this file runs identically with or without the flag.
+
+# --- Enum regions: `enum E from r` (Rust `enum Token<'a>`) ----------------------
+# A variant payload `ref str from src` is a zero-copy borrowed slice into `src`.
+enum Token from src:
+    Word(ref str from src)
+    Number(int)
+    End
+
+# --- Interface regions: `interface V from r` (Rust `trait View<'a>`) ------------
+interface View from r:
+    def text(self) -> ref str from r
+    def size(self) -> int
+
+# --- Struct regions (already supported) + `extend T from r` impl-block ----------
+class Slice from src:
+    pub body: str
+
+extend Slice from src:
+    pub def text(self) -> ref str from src:
+        return self.body
+    pub def size(self) -> int:
+        return self.body.length()
+
+# --- Explicit `ref` / `mut ref` params (Rust `&T` / `&mut T`) -------------------
+# `ref` = shared, read-only borrow.  `mut ref` = exclusive, mutable borrow.
+def longest(a: ref str, b: ref str) -> ref str from a, b:
+    if a.length() >= b.length():
+        return a
+    return b
+
+def push_twice(buf: mut ref List[int], x: int):
+    buf.append(x)
+    buf.append(x)
+
+# --- `where ... outlives ...` composes with everything -------------------------
+# The clause may break to a continuation line:
+def pick_first(a: ref str, b: ref str) -> ref str from b
+    where a outlives b:
+    return a
+
+# ...and the parenthesized multi-clause form may span lines with a trailing comma:
+def pick_a(a: ref str, b: ref str, c: ref str) -> ref str from c
+    where (
+        a outlives c,
+        b outlives c,
+    ):
+    return a
+
+def main() -> int:
+    s = Slice()
+    s.body = "hello"
+    print(s.text())
+    print(s.size())
+
+    x = "longword"
+    y = "hi"
+    print(longest(x, y))
+    print(pick_first(x, y))
+    print(pick_a(x, y, "third"))
+
+    mut nums = [1, 2, 3]
+    push_twice(nums, 9)
+    print(nums.len())
+
+    print("lifetimes everywhere: ok")

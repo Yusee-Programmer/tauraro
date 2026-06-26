@@ -6,6 +6,7 @@ extern "C":
     def _tr_str_split(s: str, sep: str) -> List[str]
     def _tr_strx_join_trstr(parts: List[str], sep: str) -> str
     def _tr_c_free(ptr: Pointer[char])
+    def _tr_str_slice(s: Pointer[char], start: int, end: int) -> str
 
 pub class Str:
     _dummy: int
@@ -618,3 +619,71 @@ extend Str:
         mut out = sb.to_owned()
         sb.free()
         return out
+
+# ── StrView: a ZERO-COPY substring view (Gap 1) ──────────────────────────────
+# A StrView holds a BORROWED pointer into a source string plus a length — it does
+# NOT own or copy the bytes. Creating/slicing a view is allocation-free; only
+# `.to_str()` materializes an owned copy. The view is valid only while its source
+# string is alive (the borrow checker can enforce this for `from`-region views).
+pub class StrView:
+    pub data: Pointer[char]   # borrowed — points into the source's buffer
+    pub len:  int
+
+extend StrView:
+    # Zero-copy view of `s[start : start+count]`. No allocation.
+    pub def of(s: str, start: int, count: int) -> StrView:
+        mut v = StrView()
+        mut p = s as Pointer[char]
+        v.data = p.offset(start)
+        v.len  = count
+        return v
+
+    # Zero-copy view of the whole string.
+    pub def all(s: str) -> StrView:
+        mut v = StrView()
+        v.data = s as Pointer[char]
+        v.len  = Str.len(s)
+        return v
+
+    pub def length(self) -> int:
+        return self.len
+
+    pub def char_at(self, i: int) -> char:
+        return self.data.offset(i).read()
+
+    # Zero-copy sub-view of this view.
+    pub def slice(self, start: int, count: int) -> StrView:
+        mut v = StrView()
+        v.data = self.data.offset(start)
+        v.len  = count
+        return v
+
+    # Materialize into an OWNED `str` (this is the one operation that allocates).
+    pub def to_str(self) -> str:
+        return _tr_str_slice(self.data, 0, self.len)
+
+    # Byte-wise equality with an owned str — no allocation.
+    pub def eq(self, other: str) -> bool:
+        if self.len != Str.len(other): return false
+        mut op = other as Pointer[char]
+        mut i  = 0
+        while i < self.len:
+            if self.data.offset(i).read() as int != op.offset(i).read() as int: return false
+            i = i + 1
+        return true
+
+    pub def starts_with(self, prefix: str) -> bool:
+        mut pl = Str.len(prefix)
+        if pl > self.len: return false
+        mut pp = prefix as Pointer[char]
+        mut i  = 0
+        while i < pl:
+            if self.data.offset(i).read() as int != pp.offset(i).read() as int: return false
+            i = i + 1
+        return true
+
+# Borrow-checked zero-copy view constructor (Gap 3): the returned StrView BORROWS its
+# source `s` — under --strict the borrow checker enforces that `s` is not mutated/moved
+# while the view is still live (so the view can never dangle).
+pub def str_view(s: str, start: int, count: int) -> StrView from s:
+    return StrView.of(s, start, count)

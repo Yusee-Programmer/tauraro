@@ -15,8 +15,27 @@
 # module is additive: nothing in the live HIR->C pipeline calls it yet; `--emit
 # mir` dumps it for inspection.
 
-from hir import HirProgram, HirFunction, HirBlock, HirStmt, HirExpr
+from hir import HirProgram, HirFunction, HirBlock, HirStmt, HirExpr, hir_expr_type
 from core.vec import Vec
+from core.map import Map
+
+# True if `val` is directly a MUTATING method call on `source` — `source.m(...)` where
+# "Type.m" is in `mm` (a method that stores into self.<field>). Used by the borrow
+# checker to treat such a call as a write to `source` (implicit `&mut` of the receiver).
+def _is_mutating_call_on(val: Pointer[HirExpr], source: str, mm: Map[str, bool]) -> bool:
+    if val as usize == 0 as usize: return false
+    match val.read():
+        case HirExpr.EMethodCall(obj, method, _, _):
+            if obj as usize == 0 as usize: return false
+            match obj.read():
+                case HirExpr.EIdent(onm, _, _):
+                    if onm != source: return false
+                    # Builtin collection mutators always mutate the receiver.
+                    if method == "push" or method == "append" or method == "insert" or method == "set" or method == "remove" or method == "pop" or method == "clear" or method == "extend" or method == "add" or method == "put":
+                        return true
+                    return mm.contains(hir_expr_type(obj).name + "." + method)
+                case _: return false
+        case _: return false
 
 # A MIR statement (straight-line; no control flow — that lives in terminators).
 pub enum MirStmt:
@@ -61,6 +80,15 @@ pub class DropSite:
     pub hir_block: HirBlock
     pub places:    Vec[str]    # filled by mir_if_drop_plan: names to release here
 
+# Outlives engine: `borrower` is a `ref`/borrow local whose value aliases `source`
+# (a parameter or another local). For the borrow to be sound, `source` must stay
+# live everywhere `borrower` is live. compute_borrow_outlives classifies each edge.
+pub class BorrowEdge:
+    pub borrower: str
+    pub source:   str
+    pub decl_block: int   # the block where the borrow is created (for per-point checks)
+    pub is_exclusive: bool # a `mut x: ref T` (exclusive/mutable borrow) vs `x: ref T` (shared/read-only)
+
 pub class MirFunction:
     pub name:   str
     pub params: Vec[str]
@@ -69,6 +97,7 @@ pub class MirFunction:
     pub unsafe_pinned: LiveSet     # names touched inside `unsafe:` — excluded from
                                    # the drop schedule (dev may raw-alias them; HIR
                                    # owns their scope-exit drop)
+    pub borrows: Vec[BorrowEdge]   # outlives engine: ref-borrow edges (borrower←source)
     # True iff every statement in the body was fully lowered into the CFG (no
     # `case _: pass` fallthrough). Only COMPLETE functions may drive MIR-based
     # codegen / drop insertion — for incomplete ones the analysis is unsound
@@ -92,6 +121,7 @@ pub class MirBuilder:
     pub unsafe_pinned: LiveSet  # names touched inside any `unsafe:` block (pinned)
     pub loop_continue: Vec[int] # block to TGoto on `continue` (innermost loop header)
     pub loop_break:    Vec[int] # block to TGoto on `break` (innermost loop exit)
+    pub borrows: Vec[BorrowEdge]   # outlives engine: ref-borrow edges recorded here
 
 extend MirBuilder:
     pub def init() -> MirBuilder:
@@ -104,7 +134,17 @@ extend MirBuilder:
         b.unsafe_pinned = LiveSet.init()
         b.loop_continue = Vec[int].init(4)
         b.loop_break    = Vec[int].init(4)
+        b.borrows       = Vec[BorrowEdge].init(2)
         return b
+
+    # Outlives engine: record that `borrower` is a ref-borrow aliasing `source`.
+    pub def record_borrow(self, borrower: str, source: str, exclusive: bool):
+        mut e = BorrowEdge()
+        e.borrower = borrower
+        e.source   = source
+        e.decl_block = self.cur
+        e.is_exclusive = exclusive
+        self.borrows.push(e)
 
     # Create a fresh block, return its id.
     pub def new_block(self) -> int:
@@ -155,8 +195,19 @@ def lower_stmts(b: MirBuilder, hb: HirBlock):
             b.cur = b.new_block()
         mut sp = hb.stmts.get(i)
         match sp.read():
-            case HirStmt.SLet(nm, _, _, _, _, _, val):
+            case HirStmt.SLet(nm, _, _, _, _, slet_ty, val):
                 b.push_stmt(MirStmt.MDeclare(nm, val))
+                # Outlives engine: a `ref T` let binding a bare local (`mut b: ref T = s`)
+                # borrows s — record the edge so compute_borrow_outlives can check that
+                # s stays live wherever b is live.
+                if slet_ty.is_borrow and val as usize != 0 as usize:
+                    mut _slet_mut = false
+                    match sp.read():
+                        case HirStmt.SLet(_, _, _sm, _, _, _, _): _slet_mut = _sm
+                        case _: pass
+                    match val.read():
+                        case HirExpr.EIdent(src_nm, _, _): b.record_borrow(nm, src_nm, _slet_mut or slet_ty.is_mut_borrow)
+                        case _: pass
             case HirStmt.SAssign(tgt, val):
                 # Record the place when the target is a simple local, so liveness
                 # can track def/use; field/index targets stay opaque (eval).
@@ -400,6 +451,21 @@ pub def lower_function(hf: HirFunction) -> MirFunction:
     mf.complete = b.complete
     mf.if_bodies = b.if_bodies
     mf.unsafe_pinned = b.unsafe_pinned
+    mf.borrows = b.borrows
+    # Outlives engine: append cross-fn borrow edges collected by sema (parallel
+    # arrays on the HIR fn) — these are the edges the MIR can't detect itself
+    # because it has no function signatures (`mut r = f(args)` borrows an arg).
+    mut hbi = 0
+    if (hf.borrow_borrowers as usize) == 0 as usize: return mf   # fields unset → done
+    if (hf.borrow_sources as usize) == 0 as usize: return mf
+    while hbi < hf.borrow_borrowers.len and hbi < hf.borrow_sources.len:
+        mut he = BorrowEdge()
+        he.borrower = hf.borrow_borrowers.get(hbi)
+        he.source   = hf.borrow_sources.get(hbi)
+        he.decl_block = -1   # sema doesn't know the MIR block → skip per-point, use
+                             # only the (always-valid) cross-block liveness check
+        mf.borrows.push(he)
+        hbi = hbi + 1
     return mf
 
 pub def lower_program(hir: HirProgram) -> MirProgram:
@@ -908,6 +974,71 @@ pub def compute_drops(mf: MirFunction, live_out: Vec[LiveSet]) -> Vec[LiveSet]:
         i = i + 1
     return drops
 
+# ── Outlives engine (increment 1: additive analysis) ─────────────────────────
+# For each borrow edge (borrower ← source), determine whether `source` is
+# independently live everywhere `borrower` is live. Using the existing backward
+# liveness (live_out per block):
+#   PROVEN  → source already outlives borrower with no help → the borrow is sound
+#             and (future) its refcount can be elided with zero added liveness.
+#   NOT     → there is a block where borrower is live but source is NOT → source
+#             would die under the borrower → the borrow needs source's liveness
+#             EXTENDED (the NLL "borrow extends the borrowed value's lifetime"
+#             rule) before any refcount elision is safe.
+# Pure analysis: returns one bool per edge, drives no codegen yet. Sound by
+# construction — it only READS liveness.
+# Index of the LAST statement in `blk` that uses `name`; blk.stmts.len if the
+# terminator uses it (a use "after" all statements); -1 if never used here.
+def last_use_in_block(blk: MirBlock, name: str) -> int:
+    mut last = -1
+    mut si = 0
+    while si < blk.stmts.len:
+        mut tmp = Vec[str].init(4)
+        match blk.stmts.get(si).read():
+            case MirStmt.MDeclare(_, val): collect_uses(val, tmp)
+            case MirStmt.MAssign(_, val): collect_uses(val, tmp)
+            case MirStmt.MEval(val): collect_uses(val, tmp)
+        if set_contains(tmp, name): last = si
+        si = si + 1
+    mut tt = Vec[str].init(4)
+    match blk.term.read():
+        case MirTerm.TBranch(cond, _, _): collect_uses(cond, tt)
+        case MirTerm.TReturn(val): collect_uses(val, tt)
+        case _: pass
+    if set_contains(tt, name): last = blk.stmts.len
+    return last
+
+pub def compute_borrow_outlives(mf: MirFunction, live_out: Vec[LiveSet]) -> Vec[bool]:
+    mut out = Vec[bool].init(mf.borrows.len)
+    mut i = 0
+    while i < mf.borrows.len:
+        mut edge = mf.borrows.get(i)
+        mut proven = true
+        # (a) cross-block: borrower live past a block where the source is not.
+        mut bi = 0
+        while bi < mf.blocks.len:
+            mut lo = live_out.get(bi)
+            if lo.has(edge.borrower) and not lo.has(edge.source):
+                proven = false
+            bi = bi + 1
+        # (b) within the declaring block (per-point): if the source dies in this
+        # block (not in its live_out) BEFORE the borrower's last use, the borrow
+        # outlives the source → needs extension. This is what makes a plain
+        # `mut b: ref str = s; use b` correctly NEEDS-EXTENSION (s is consumed into
+        # b at the declaration, but b is used afterward).
+        mut db = edge.decl_block
+        if db >= 0 and db < mf.blocks.len:
+            if not live_out.get(db).has(edge.source):
+                mut dblk = mf.blocks.get(db)
+                mut src_last = last_use_in_block(dblk, edge.source)
+                mut bor_last = last_use_in_block(dblk, edge.borrower)
+                if live_out.get(db).has(edge.borrower):
+                    bor_last = dblk.stmts.len + 1   # borrower escapes to later blocks
+                if bor_last > src_last:
+                    proven = false
+        out.push(proven)
+        i = i + 1
+    return out
+
 # Public entry point for sema's HYBRID drop wiring: lower `hf` to MIR, and IF the
 # function is fully lowerable (complete), compute the drop schedule and return the
 # single-block if/else-body drop sites with their place lists filled in. For an
@@ -933,6 +1064,183 @@ def site_for(out: Vec[DropSite], hb: HirBlock) -> DropSite:
     s.places = Vec[str].init(4)
     out.push(s)
     return s
+
+# Outlives engine → codegen: the names of `ref` borrow locals whose source is
+# PROVEN to outlive them (per-point precise, within-MIR edges only). Codegen may
+# elide their refcount (no retain at the binding, no release at scope) — they are
+# pure aliases of a value that lives at least as long. Only COMPLETE functions are
+# trusted; cross-fn (decl_block<0) edges are excluded here (handled separately).
+pub def mir_proven_borrows(hf: HirFunction) -> Vec[str]:
+    mut out = Vec[str].init(2)
+    mut mf  = lower_function(hf)
+    if not mf.complete: return out
+    if mf.borrows.len == 0: return out
+    mut live = compute_liveness(mf)
+    mut outl = compute_borrow_outlives(mf, live)
+    mut i = 0
+    while i < mf.borrows.len:
+        mut edge = mf.borrows.get(i)
+        # PROVEN includes BOTH within-fn per-point edges (decl_block>=0) AND cross-fn
+        # edges (decl_block==-1, from a `-> ref` call) whose source provably outlives
+        # the borrower by cross-block liveness. Both are sound to elide.
+        if outl.get(i):
+            out.push(edge.borrower)
+        i = i + 1
+    return out
+
+# NLL liveness query: is `name` LIVE strictly AFTER statement `after_idx` of block `blk`?
+# True if used in a later statement, in the terminator, or live at the block's exit (`lo`
+# = live_out[blk], which follows CFG successors — so this is PATH-AWARE: a borrower live on
+# one branch is not considered live on a sibling branch). Drives the cross-block checks.
+def borrower_live_after(blk: MirBlock, after_idx: int, name: str, lo: LiveSet) -> bool:
+    mut si = after_idx + 1
+    while si < blk.stmts.len:
+        mut uses = Vec[str].init(4)
+        match blk.stmts.get(si).read():
+            case MirStmt.MDeclare(_, val): collect_uses(val, uses)
+            case MirStmt.MAssign(_, val): collect_uses(val, uses)
+            case MirStmt.MEval(val): collect_uses(val, uses)
+        if set_contains(uses, name): return true
+        si = si + 1
+    mut tu = Vec[str].init(4)
+    match blk.term.read():
+        case MirTerm.TBranch(cond, _, _): collect_uses(cond, tu)
+        case MirTerm.TReturn(val): collect_uses(val, tu)
+        case _: pass
+    if set_contains(tu, name): return true
+    return lo.has(name)
+
+# Aliasing-XOR-mutability (item 1, --strict): borrow-vs-borrow overlap [B-1] (within-block,
+# NLL interval) + the "place" half [B-2]: an invalidation (reassign / move / mutating method
+# call) of a borrowed source, or ANY use of an exclusively-borrowed source, while the borrower
+# is still live — now CROSS-BLOCK and liveness-driven (see borrower_live_after).
+pub def mir_borrow_conflicts(hf: HirFunction, mutating_methods: Map[str, bool]) -> Vec[str]:
+    mut out = Vec[str].init(2)
+    mut mf  = lower_function(hf)
+    if not mf.complete: return out
+    if mf.borrows.len == 0: return out
+    mut live = compute_liveness(mf)
+    # B-2 (dropck / aliasing-XOR-mutability "place" half) — CROSS-BLOCK, liveness-driven:
+    # scan EVERY block for an invalidation of the borrowed source (reassign / move / mutating
+    # method call), or — for an EXCLUSIVE borrow — ANY use of it; flag it iff the BORROWER is
+    # still live right after (borrower_live_after follows the CFG via live_out, so it is both
+    # NLL-precise AND path-aware: a write on a branch the borrower never reaches is fine, and
+    # a write before the borrow exists can't flag because the borrower isn't live yet).
+    mut k = 0
+    while k < mf.borrows.len:
+        mut be = mf.borrows.get(k)
+        mut bn = 0
+        while bn < mf.blocks.len:
+            mut blk = mf.blocks.get(bn)
+            mut lo = live.get(bn)
+            mut si = 0
+            while si < blk.stmts.len:
+                mut stmt = blk.stmts.get(si)
+                mut invalid_desc = ""
+                mut sval = 0 as Pointer[HirExpr]
+                match stmt.read():
+                    case MirStmt.MAssign(wp, wv):
+                        sval = wv
+                        if wp == be.source: invalid_desc = "assign to"
+                    case MirStmt.MDeclare(_, dv): sval = dv
+                    case MirStmt.MEval(ev): sval = ev
+                if invalid_desc == "" and _is_mutating_call_on(sval, be.source, mutating_methods):
+                    invalid_desc = "call a mutating method on"
+                if invalid_desc != "":
+                    if borrower_live_after(blk, si, be.borrower, lo):
+                        out.push("cannot " + invalid_desc + " '" + be.source + "' while it is borrowed by '" + be.borrower + "' — the borrow is still live")
+                elif be.is_exclusive:
+                    # Exclusive borrow: ANY read of the source while the borrower is live is a
+                    # violation — except the borrow's OWN creation (`MDeclare(borrower, ...)`).
+                    mut is_creation = false
+                    match stmt.read():
+                        case MirStmt.MDeclare(dn, _):
+                            if dn == be.borrower: is_creation = true
+                        case _: pass
+                    if not is_creation:
+                        mut uses = Vec[str].init(4)
+                        match stmt.read():
+                            case MirStmt.MDeclare(_, val): collect_uses(val, uses)
+                            case MirStmt.MAssign(_, val): collect_uses(val, uses)
+                            case MirStmt.MEval(val): collect_uses(val, uses)
+                        if set_contains(uses, be.source) and borrower_live_after(blk, si, be.borrower, lo):
+                            out.push("cannot use '" + be.source + "' while it is exclusively (mut) borrowed by '" + be.borrower + "'")
+                si = si + 1
+            bn = bn + 1
+        k = k + 1
+    if mf.borrows.len < 2: return out
+    mut i = 0
+    while i < mf.borrows.len:
+        mut bi = mf.borrows.get(i)
+        if bi.decl_block >= 0 and bi.decl_block < mf.blocks.len:
+            mut j = i + 1
+            while j < mf.borrows.len:
+                mut bj = mf.borrows.get(j)
+                if bj.decl_block == bi.decl_block and bi.source == bj.source and (bi.is_exclusive or bj.is_exclusive):
+                    mut blk = mf.blocks.get(bi.decl_block)
+                    mut pi = 0
+                    mut pj = 0
+                    mut bk = 0
+                    while bk < blk.stmts.len:
+                        match blk.stmts.get(bk).read():
+                            case MirStmt.MDeclare(dn, _):
+                                if dn == bi.borrower: pi = bk
+                                if dn == bj.borrower: pj = bk
+                            case _: pass
+                        bk = bk + 1
+                    mut ui = last_use_in_block(blk, bi.borrower)
+                    mut uj = last_use_in_block(blk, bj.borrower)
+                    if ui < pi: ui = pi
+                    if uj < pj: uj = pj
+                    if pi <= uj and pj <= ui:
+                        mut kind = "a mutable borrow"
+                        if not (bi.is_exclusive and bj.is_exclusive): kind = "a mutable and a shared borrow"
+                        out.push("'" + bi.borrower + "' and '" + bj.borrower + "' are " + kind + " of '" + bi.source + "' that are live at the same time")
+                j = j + 1
+        i = i + 1
+    return out
+
+# [B-3] Explicit borrow mutability (Rust `&T` vs `&mut T`): a SHARED `ref T` parameter
+# is read-only — mutating it (reassignment or a mutating method call) requires `mut ref T`.
+# A `mut ref T` param permits mutation. Opt-in (--strict); ARC keeps the program safe
+# regardless, so the borrow kinds stay fully optional. Within-function, source-faithful.
+pub def mir_shared_ref_param_violations(hf: HirFunction, mutating_methods: Map[str, bool]) -> Vec[str]:
+    mut out = Vec[str].init(2)
+    # Collect names of SHARED ref params (is_borrow set, is_mut_borrow not).
+    mut shps = Vec[str].init(2)
+    mut pi = 0
+    while pi < hf.params.len:
+        mut pty = hf.params.get(pi).ty
+        if pty.is_borrow and not pty.is_mut_borrow:
+            shps.push(hf.params.get(pi).name)
+        pi = pi + 1
+    if shps.len == 0: return out
+    mut mf = lower_function(hf)
+    mut sk = 0
+    while sk < shps.len:
+        mut pn = shps.get(sk)
+        mut bn = 0
+        while bn < mf.blocks.len:
+            mut blk = mf.blocks.get(bn)
+            mut si = 0
+            while si < blk.stmts.len:
+                mut stmt = blk.stmts.get(si)
+                mut sval = 0 as Pointer[HirExpr]
+                mut desc = ""
+                match stmt.read():
+                    case MirStmt.MAssign(wp, wv):
+                        sval = wv
+                        if wp == pn: desc = "reassign"
+                    case MirStmt.MDeclare(_, dv): sval = dv
+                    case MirStmt.MEval(ev): sval = ev
+                if desc == "" and _is_mutating_call_on(sval, pn, mutating_methods):
+                    desc = "call a mutating method on"
+                if desc != "":
+                    out.push("cannot " + desc + " '" + pn + "' — it is a SHARED `ref` parameter (read-only)")
+                si = si + 1
+            bn = bn + 1
+        sk = sk + 1
+    return out
 
 pub def mir_if_drop_plan(hf: HirFunction) -> Vec[DropSite]:
     mut out = Vec[DropSite].init(4)
@@ -995,6 +1303,16 @@ pub def dump_mir(mp: MirProgram) -> str:
         out = out + "fn " + f.name + "(" + f.params.len.to_str() + " params), " + f.blocks.len.to_str() + " blocks" + tag + ":\n"
         mut live = compute_liveness(f)
         mut drops = compute_drops(f, live)
+        # Outlives engine: show recorded borrow edges + whether each is proven.
+        if f.borrows.len > 0:
+            mut outl = compute_borrow_outlives(f, live)
+            mut ei = 0
+            while ei < f.borrows.len:
+                mut ed = f.borrows.get(ei)
+                mut verdict = "NEEDS-EXTENSION"
+                if outl.get(ei): verdict = "PROVEN"
+                out = out + "  ; borrow " + ed.borrower + " <- " + ed.source + " : " + verdict + "\n"
+                ei = ei + 1
         mut bi = 0
         while bi < f.blocks.len:
             mut blk = f.blocks.get(bi)

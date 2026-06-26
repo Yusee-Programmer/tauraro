@@ -14,7 +14,15 @@ from core.alloc import alloc, dealloc
 pub class AstType:
     pub name: str
     pub args: Vec[Pointer[AstType]]
-    pub from_param: str  # 'from X' lifetime annotation - empty means none
+    pub from_param: str   # 'from X' region — first/single source (non-empty = borrow)
+    pub from_regions: Vec[str]   # all explicit region sources of `from a, b` (for [L-2])
+    pub from_index: int   # [cross-fn] for a single-region borrow RETURN type, the index
+                          # of the `from` parameter in the function's param list; -1 = none.
+                          # Lets a call site map the result's region to the matching arg.
+    pub is_borrow: bool   # true when written as `ref T` / `mut_ref T` — a borrow
+                          # (region) view. Erased to the inner type T for codegen;
+                          # the flag + from_param drive borrow checking (L-1/M-2).
+    pub is_mut_borrow: bool   # true specifically for `mut_ref T` (exclusive borrow)
 
 extend AstType:
     pub def init(name: str) -> AstType:
@@ -22,6 +30,10 @@ extend AstType:
         t.name = name
         t.args = Vec[Pointer[AstType]].init(0)
         t.from_param = ""
+        t.from_regions = Vec[str].init(0)
+        t.from_index = -1
+        t.is_borrow = false
+        t.is_mut_borrow = false
         return t
 
     pub def init_generic(name: str, arg: Pointer[AstType]) -> AstType:
@@ -30,6 +42,10 @@ extend AstType:
         t.args = Vec[Pointer[AstType]].init(1)
         t.args.push(arg)
         t.from_param = ""
+        t.from_regions = Vec[str].init(0)
+        t.from_index = -1
+        t.is_borrow = false
+        t.is_mut_borrow = false
         return t
 
 pub class GenericConstraint:
@@ -235,7 +251,7 @@ pub enum Stmt:
     SUnsafe(body: Block)
     SIf(cond: Pointer[Expr], then_b: Block, elifs: Vec[ElifClause], else_b: Block)
     SWhile(cond: Pointer[Expr], body: Block, decorators: Vec[Decorator])
-    SFor(var: str, iter: Pointer[Expr], body: Block, decorators: Vec[Decorator])
+    SFor(var: str, iter: Pointer[Expr], body: Block, decorators: Vec[Decorator], is_ref: bool)
     SForUnpack(vars: Vec[str], iter: Pointer[Expr], body: Block)
     SMatch(expr: Pointer[Expr], arms: Vec[MatchArm])
     STry(try_body: Block, catches: Vec[Pointer[CatchClause]], finally_b: Block)
@@ -315,6 +331,9 @@ pub class FunctionDef:
     pub is_export: bool   # `export def` - emit a C-ABI dllexport/visibility wrapper for FFI
     pub body: Block
     pub line: int
+    # `where a outlives b` region bounds (Gap 4) — parallel: outlives_a[i] outlives outlives_b[i].
+    pub outlives_a: Vec[str]
+    pub outlives_b: Vec[str]
 
 extend FunctionDef:
     pub def init(name: str) -> FunctionDef:
@@ -333,6 +352,8 @@ extend FunctionDef:
         f.is_export = false
         f.body = Block.init()
         f.line = 0
+        f.outlives_a = Vec[str].init(0)
+        f.outlives_b = Vec[str].init(0)
         return f
 
 pub class FieldDef:
@@ -361,6 +382,7 @@ pub class ClassDef:
     pub is_class: bool
     pub line: int
     pub docstring: str
+    pub region_params: Vec[str]   # 'from r' region (lifetime) parameters
 
 extend ClassDef:
     pub def init(name: str) -> ClassDef:
@@ -377,6 +399,7 @@ extend ClassDef:
         c.is_class = true
         c.line = 0
         c.docstring = ""
+        c.region_params = Vec[str].init(0)
         return c
 
 pub class VariantDef:
@@ -399,6 +422,8 @@ pub class EnumDef:
     pub decorators: Vec[Decorator]
     pub is_public: bool
     pub line: int
+    pub region_params: Vec[str]   # 'from r' region (lifetime) parameters — variant
+                                  # payloads written `ref T from r` borrow for region r.
 
 extend EnumDef:
     pub def init(name: str) -> EnumDef:
@@ -411,6 +436,7 @@ extend EnumDef:
         e.decorators = Vec[Decorator].init(0)
         e.is_public = false
         e.line = 0
+        e.region_params = Vec[str].init(0)
         return e
 
 pub class InterfaceDef:
@@ -420,6 +446,8 @@ pub class InterfaceDef:
     pub is_public: bool
     pub line: int
     pub decorators: Vec[Decorator]
+    pub region_params: Vec[str]   # 'from r' region (lifetime) parameters — method
+                                  # signatures may return `ref T from r`.
 
 extend InterfaceDef:
     pub def init(name: str) -> InterfaceDef:
@@ -430,6 +458,7 @@ extend InterfaceDef:
         i.is_public = false
         i.line = 0
         i.decorators = Vec[Decorator].init(0)
+        i.region_params = Vec[str].init(0)
         return i
 
 pub class ImportItem:

@@ -1752,7 +1752,7 @@ static inline void  _tr_threadobj_join_h(char* t)                              {
 static inline void  _tr_threadobj_detach_h(char* t)                            { _tr_threadobj_detach((_TrThreadObj*)t); }
 static inline void  _tr_threadobj_free_h(char* t)                              { _tr_threadobj_free((_TrThreadObj*)t); }
 static inline bool  _tr_threadobj_panicked_h(char* t)                          { return _tr_threadobj_panicked((_TrThreadObj*)t); }
-static inline char* _tr_threadobj_panic_msg_h(char* t)                         { return _tr_threadobj_panic_msg((_TrThreadObj*)t); }
+static inline char* _tr_threadobj_panic_msg_h(char* t)                         { return _tr_str_dup_owned(_tr_threadobj_panic_msg((_TrThreadObj*)t)); }
 static inline long long _tr_thread_current_id_h(void)                          { return _tr_thread_current_id(); }
 static inline void  _tr_thread_sleep_ms_h(long long ms)                        { _tr_thread_sleep_ms(ms); }
 
@@ -1905,6 +1905,18 @@ static int64_t _tr_stdin_isatty(void) {
 #endif
 }
 
+/* 1 if env var `name` is set to a non-empty value; 0 otherwise. Used for the
+ * NO_COLOR convention (https://no-color.org).                               */
+static int64_t _tr_env_set(const char* name) {
+    if (!name) return 0;
+    const char* v = getenv(name);
+    return (v && v[0]) ? 1 : 0;
+}
+
+/* The ESC control byte (0x1b) as an owned string. Lets the diagnostics module
+ * build ANSI sequences without depending on core.string (StringBuilder).     */
+static char* _tr_ansi_esc(void) { return _tr_str_dup_owned("\x1b"); }
+
 
 static inline char* _tr_str_substring(const char* s, int start, int end) {
     if (!s) return NULL;
@@ -1964,6 +1976,20 @@ static inline void _tr_enable_vt100(void) {
         GetConsoleMode(h, &mode);
         SetConsoleMode(h, mode | 0x0004 /* ENABLE_VIRTUAL_TERMINAL_PROCESSING */);
     }
+#endif
+}
+
+/* 1 if stdout can render ANSI color, cross-platform. Linux/macOS: stdout is a
+ * TTY. Windows: stdout is a TTY AND we best-effort enable VT processing so even
+ * classic conhost interprets the escapes (Windows Terminal/VS Code already do).
+ * Returns 0 when piped/redirected so logs and `... | grep` stay plain ASCII.  */
+static int64_t _tr_stdout_supports_ansi(void) {
+#ifdef _WIN32
+    if (!_isatty(_fileno(stdout))) return 0;
+    _tr_enable_vt100();
+    return 1;
+#else
+    return isatty(STDOUT_FILENO) ? 1 : 0;
 #endif
 }
 

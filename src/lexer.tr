@@ -471,6 +471,15 @@ pub class Lexer:
                                 self.indent_stack.len = self.indent_stack.len - 1
                                 tokens.push(Token.Dedent)
                                 self.push_loc()
+                            # After dedenting, the new level MUST equal this line's
+                            # indent — otherwise the line aligns with no enclosing
+                            # block (a misaligned block / inconsistent tabs+spaces).
+                            # Surface it as a located error the parser will report.
+                            mut newtop = self.indent_stack.get(self.indent_stack.len - 1)
+                            if newtop != indent:
+                                self.tok_col = self.pos - self.line_start + 1
+                                tokens.push(Token.Error("inconsistent indentation: this line does not line up with any enclosing block (check for mixed tabs and spaces, or an off-by-one indent)"))
+                                self.push_loc()
                     trailing_dot = False  # consumed: this line is the continuation
 
             mut c = self.peek()

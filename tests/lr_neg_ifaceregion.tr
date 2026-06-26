@@ -1,0 +1,6 @@
+# [L-2] an interface method returning a region not declared on the interface errors.
+interface View from r:
+    def text(self) -> ref str from nope   # 'nope' is not a region param -> [L-2]
+
+def main() -> int:
+    return 0

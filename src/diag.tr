@@ -1,0 +1,97 @@
+# src/diag.tr — shared ANSI coloring + caret rendering for compiler diagnostics.
+#
+# Cross-platform: color auto-disables when stdout is not a TTY or NO_COLOR is
+# set, so piped/redirected output (CI logs, `... | grep`, files) stays plain
+# ASCII. CLICOLOR_FORCE=1 forces color on (useful in MSYS/Git-Bash, where the
+# Windows isatty under-reports a real terminal). NO_COLOR always wins. The ESC
+# byte comes from a tiny runtime helper (no core.string dependency).
+extern "C":
+    def _tr_stdout_supports_ansi() -> int
+    def _tr_env_set(name: str) -> int
+    def _tr_ansi_esc() -> str
+
+# True when ANSI color should be emitted. NO_COLOR disables; CLICOLOR_FORCE
+# overrides TTY detection; otherwise an interactive terminal (Linux/macOS TTY,
+# or Windows TTY with VT processing enabled by the runtime).
+pub def color_enabled() -> bool:
+    if _tr_env_set("NO_COLOR") == 1:
+        return false
+    if _tr_env_set("CLICOLOR_FORCE") == 1:
+        return true
+    return _tr_stdout_supports_ansi() == 1
+
+# The ESC control byte (0x1b) as a one-char string.
+pub def esc() -> str:
+    return _tr_ansi_esc()
+
+# Wrap `s` in an SGR sequence `code`, resetting after. No-op when color is off.
+pub def paint(s: str, code: str) -> str:
+    if not color_enabled():
+        return s
+    mut e = esc()
+    return e + "[" + code + "m" + s + e + "[0m"
+
+pub def c_red(s: str) -> str:    return paint(s, "1;31")   # bold red — fatal errors
+pub def c_yellow(s: str) -> str: return paint(s, "1;33")   # bold yellow — warnings
+pub def c_green(s: str) -> str:  return paint(s, "1;32")   # bold green — help/fix
+pub def c_cyan(s: str) -> str:   return paint(s, "1;36")   # bold cyan — locations/codes
+pub def c_dim(s: str) -> str:    return paint(s, "2")      # dim — gutters
+pub def c_bold(s: str) -> str:   return paint(s, "1")
+
+# A run of `n` spaces (for caret alignment).
+pub def spaces(n: int) -> str:
+    mut s = ""
+    mut i = 0
+    while i < n:
+        s = s + " "
+        i = i + 1
+    return s
+
+# A run of `n` copies of `ch` (for the `^^^^` underline).
+pub def repeat_char(ch: str, n: int) -> str:
+    mut s = ""
+    mut i = 0
+    mut k = n
+    if k < 1: k = 1
+    while i < k:
+        s = s + ch
+        i = i + 1
+    return s
+
+# Extract the first single-quoted token from a message, e.g.
+# "Use after move of 'x'" -> "x". Empty string if none. Lets semantic
+# diagnostics (which carry no column) still underline the offending name.
+pub def first_quoted(msg: str) -> str:
+    mut a = msg.index_of("'")
+    if a < 0:
+        return ""
+    mut rest = msg.slice(a + 1, msg.len())
+    mut b = rest.index_of("'")
+    if b < 0:
+        return ""
+    return rest.slice(0, b)
+
+# 1-based byte column of the first occurrence of `needle` in `line`, else 0.
+pub def col_of(line: str, needle: str) -> int:
+    if needle.len() == 0:
+        return 0
+    mut idx = line.index_of(needle)
+    if idx < 0:
+        return 0
+    return idx + 1
+
+# Split a "file:line" (or bare "line") location head into its file path. Uses
+# the LAST ':' as separator so Windows drive colons (C:\...) are preserved.
+pub def loc_file(head: str) -> str:
+    mut last = head.last_index_of(":")
+    if last < 0:
+        return ""
+    return head.slice(0, last)
+
+# The 1-based line number from a "file:line" (or bare "line") head; 0 if none.
+pub def loc_line(head: str) -> int:
+    mut last = head.last_index_of(":")
+    mut numstr = head
+    if last >= 0:
+        numstr = head.slice(last + 1, head.len())
+    return numstr.to_int()

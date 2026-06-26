@@ -142,6 +142,8 @@ pub class CGenerator:
     pub method_owners:  Map[str, bool]  # "ClassOrEnumName#method" -> true (extend methods, incl. enums)
     pub decl_vars:      Map[str, bool]
     pub str_local_names: Map[str, bool]  # TrStr-typed locals declared via SLet in current function (retain/release tracked)
+    pub cur_proven_borrows: Map[str, bool]  # outlives engine: ref-borrow locals whose source provably outlives them — refcount ELIDED (no retain at bind, no release at scope)
+    pub cur_ret_is_borrow: bool  # current function's return type is `ref` — returns a BORROW (no retain on return; the caller does not free it)
     pub coll_local_sfx: Map[str, str]    # List/Vec local name -> list_sfx (e.g. "i64"/"TrStr") for SAutoDrop's List_<sfx>_free; Dict/Map/Set don't need a suffix (Dict_free)
     pub coll_local_idict: Map[str, bool] # Dict/Map/Set local name -> true if int-keyed (TrIDict*/_TrISet*, freed via _tr_idict_free instead of Dict_free)
     pub coll_local_strval: Map[str, bool] # Dict/Map local name -> true if value type is str (_tr_str_box'd; freed via Dict_free_strval/_tr_idict_free_strval, #54)
@@ -190,6 +192,8 @@ pub class CGenerator:
         g.method_owners = Map[str, bool].init(64)
         g.decl_vars     = Map[str, bool].init(64)
         g.str_local_names = Map[str, bool].init(16)
+        g.cur_proven_borrows = Map[str, bool].init(8)
+        g.cur_ret_is_borrow = false
         g.coll_local_sfx = Map[str, str].init(16)
         g.coll_local_idict = Map[str, bool].init(16)
         g.coll_local_strval = Map[str, bool].init(16)
@@ -251,6 +255,12 @@ pub class CGenerator:
                     fdi = fdi - 1
 
     pub def seed_params(self, f: HirFunction):
+        # Load the outlives-proven borrow set for THIS function (every function-entry
+        # path calls seed_params), so the SLet codegen can elide their refcounts.
+        self.set_proven_borrows(f.proven_borrows)
+        # A `-> ref` function returns a BORROW: it does NOT retain on return, and its
+        # callers must NOT free the result (see _is_fresh_str_expr / _expr_is_borrow_call).
+        self.cur_ret_is_borrow = f.ret_ty.is_borrow
         mut pi = 0
         while pi < f.params.len:
             self.decl_vars.insert(f.params.get(pi).name, true)
@@ -1423,6 +1433,16 @@ pub class CGenerator:
     # buffer correctly and pass through unchanged. For `is_return=true` with an
     # EIdent that's a tracked str local, no retain - ownership transfers to the
     # caller (matches the SAutoDrop exclusion for `return x`).
+    # Load the current function's proven-borrow set (from the outlives engine), so
+    # the SLet codegen can elide refcounts for those locals.
+    pub def set_proven_borrows(self, pb: Vec[str]):
+        self.cur_proven_borrows = Map[str, bool].init(8)
+        if (pb as usize) == 0 as usize: return   # field unset (synthetic fn) → empty
+        mut spi = 0
+        while spi < pb.len:
+            self.cur_proven_borrows.insert(pb.get(spi), true)
+            spi = spi + 1
+
     pub def str_retain_wrap(self, e: Pointer[HirExpr], s: str, is_return: bool) -> str:
         if _is_invalid_ptr(e as usize): return s
         mut ety = hir_expr_type(e)
@@ -2327,9 +2347,21 @@ pub class CGenerator:
     # are borrowed/immortal and don't need this.
     pub def _is_fresh_str_expr(self, e: Pointer[HirExpr]) -> bool:
         match e.read():
-            case HirExpr.ECall(_, _, _): return true
-            case HirExpr.EMethodCall(_, _, _, _): return true
+            case HirExpr.ECall(_, _, ce_fty):
+                if ce_fty.is_borrow: return false   # `-> ref` call returns a BORROW, not fresh-owned: don't free it inline
+                return true
+            case HirExpr.EMethodCall(_, _, _, me_fty):
+                if me_fty.is_borrow: return false
+                return true
             case HirExpr.EBinOp(_, _, _, _): return true
+            case _: return false
+
+    # True if `e` is a call to a `-> ref` function/method: its result is a BORROW
+    # (the callee did NOT retain it), so any owner-position use must retain to own it.
+    pub def _expr_is_borrow_call(self, e: Pointer[HirExpr]) -> bool:
+        match e.read():
+            case HirExpr.ECall(_, _, ce_bty): return ce_bty.is_borrow
+            case HirExpr.EMethodCall(_, _, _, me_bty): return me_bty.is_borrow
             case _: return false
 
     pub def gen_args(self, args: Vec[Pointer[HirExpr]]) -> str:
@@ -4360,7 +4392,17 @@ pub class CGenerator:
                     else:
                         mut ret_s2 = self.gen_expr(e)
                         ret_s2 = self.flush_wraps(ret_s2, false)
-                        self.w(pad + "return " + self.str_retain_wrap(e, ret_s2, true) + ";\n")
+                        if self.cur_ret_is_borrow:
+                            # `-> ref` function: hand back the borrow as-is. No retain — the
+                            # caller treats the result as a borrow and will not free it.
+                            self.w(pad + "return " + ret_s2 + ";\n")
+                        elif self._expr_is_borrow_call(e):
+                            # Owned-return function returning a `-> ref` call result: the
+                            # callee did NOT retain, so OWN it here (retain) before handing
+                            # it back as an owned value the caller will free.
+                            self.w(pad + "return _tr_str_retain(" + ret_s2 + ");\n")
+                        else:
+                            self.w(pad + "return " + self.str_retain_wrap(e, ret_s2, true) + ";\n")
             case HirStmt.SLet(n, _, _, is_const, is_shared, ty, v):
                 mut c_ty = self.type_to_c(ty)
                 # If SLet.ty is Vec/List without generic args, recover c_ty from the init expression
@@ -4534,10 +4576,23 @@ pub class CGenerator:
                                             init_s = "_tr_str_unbox(" + init_s + ")"
                                 case _: pass
                         if c_ty == "TrStr":
-                            init_s = self.str_retain_wrap(v, init_s, false)
-                            match v.read():
-                                case HirExpr.EPropAccess(_, _, _): pass
-                                case _: self.str_local_names.insert(n, true)
+                            if self.cur_proven_borrows.contains(n):
+                                # Outlives-proven `ref` borrow: a pure alias of a value
+                                # that provably outlives it → NO retain at the binding and
+                                # NO release at scope (not tracked in str_local_names).
+                                # Zero-copy borrow.
+                                pass
+                            else:
+                                init_s = self.str_retain_wrap(v, init_s, false)
+                                # NOT-proven borrow from a `-> ref` call: the callee did not
+                                # retain and the source may not outlive this local, so OWN it
+                                # (retain) — this is the safe ARC fallback (balanced by the
+                                # release below since the local is registered).
+                                if self._expr_is_borrow_call(v):
+                                    init_s = "_tr_str_retain(" + init_s + ")"
+                                match v.read():
+                                    case HirExpr.EPropAccess(_, _, _): pass
+                                    case _: self.str_local_names.insert(n, true)
                         init_s = self.flush_wraps(init_s, false)
                         self.w(" = " + init_s + ";\n")
                 else:
@@ -4559,11 +4614,17 @@ pub class CGenerator:
                             mut _sa_rhs = self.gen_expr(v)
                             _sa_rhs = self.flush_wraps(_sa_rhs, false)
                             if hir_expr_type(t).name == "str":
-                                _sa_rhs = self.str_retain_wrap(v, _sa_rhs, false)
-                                self.w(pad + "TrStr " + _safe_c_varname(n) + " = " + _sa_rhs + ";\n")
-                                match v.read():
-                                    case HirExpr.EPropAccess(_, _, _): pass
-                                    case _: self.str_local_names.insert(n, true)
+                                if self.cur_proven_borrows.contains(n):
+                                    # proven borrow: pure alias, no retain/release
+                                    self.w(pad + "TrStr " + _safe_c_varname(n) + " = " + _sa_rhs + ";\n")
+                                else:
+                                    _sa_rhs = self.str_retain_wrap(v, _sa_rhs, false)
+                                    if self._expr_is_borrow_call(v):
+                                        _sa_rhs = "_tr_str_retain(" + _sa_rhs + ")"   # own not-proven borrow
+                                    self.w(pad + "TrStr " + _safe_c_varname(n) + " = " + _sa_rhs + ";\n")
+                                    match v.read():
+                                        case HirExpr.EPropAccess(_, _, _): pass
+                                        case _: self.str_local_names.insert(n, true)
                             else:
                                 self.w(pad + "__auto_type " + _safe_c_varname(n) + " = " + _sa_rhs + ";\n")
                             self.decl_vars.insert(n, true)
@@ -4632,12 +4693,16 @@ pub class CGenerator:
                             if self.str_local_names.contains(_an):
                                 mut _strtmp = "_strtmp" + self.next_temp()
                                 mut _wrapped_rhs = self.str_retain_wrap(v, _assign_rhs, false)
+                                if self._expr_is_borrow_call(v):
+                                    _wrapped_rhs = "_tr_str_retain(" + _wrapped_rhs + ")"   # own not-proven borrow before storing
                                 self.w(pad + "TrStr " + _strtmp + " = " + _wrapped_rhs + ";\n")
                                 self.w(pad + "_tr_str_release(" + _safe_c_varname(_an) + ");\n")
                                 self.w(pad + _safe_c_varname(_an) + " = " + _strtmp + ";\n")
                                 return
                         case HirExpr.EPropAccess(_, _, _):
                             _assign_rhs = self.str_retain_wrap(v, _assign_rhs, false)
+                            if self._expr_is_borrow_call(v):
+                                _assign_rhs = "_tr_str_retain(" + _assign_rhs + ")"   # field must OWN: retain borrow
                         case _: pass
                 self.w(pad + self.gen_expr(t) + " = " + _assign_rhs + ";\n")
             case HirStmt.SIf(c, t, e):
@@ -4870,12 +4935,20 @@ pub class CGenerator:
                         mut _ad_fi = 0
                         while _ad_fi < _ad_cls.fields.len:
                             mut _ad_fld = _ad_cls.fields.get(_ad_fi)
-                            if _is_str_type(self.resolve_generic_prim(_ad_fld.ty.name)):
+                            # Own each heap str field's reference and release it below.
+                            # SKIP `ref` (borrow) fields: they are not owned by the
+                            # instance, so releasing them would over-decrement.
+                            if _is_str_type(self.resolve_generic_prim(_ad_fld.ty.name)) and not _ad_fld.ty.is_borrow:
                                 mut _ad_tmp = "_ad_f" + self.next_temp()
                                 self.w(pad + "TrStr " + _ad_tmp + " = " + _adn_safe + "->" + _safe_c_varname(_ad_fld.name) + ";\n")
                                 _ad_tmps.push(_ad_tmp)
                             _ad_fi = _ad_fi + 1
-                    self.w(pad + self.cls_method_c_call(adc, "free", adn, "") + ";\n")
+                    # Run the user's free() first IF the class defines one (capture the
+                    # field copies BEFORE so free() can still read them); a plain data
+                    # class with no free() just gets its owned fields released — an
+                    # implicit destructor so it no longer leaks them.
+                    if self.has_method(adc, "free"):
+                        self.w(pad + self.cls_method_c_call(adc, "free", adn, "") + ";\n")
                     mut _ad_ti = 0
                     while _ad_ti < _ad_tmps.len:
                         self.w(pad + "_tr_str_release(" + _ad_tmps.get(_ad_ti) + ");\n")
