@@ -1200,6 +1200,48 @@ pub def mir_borrow_conflicts(hf: HirFunction, mutating_methods: Map[str, bool]) 
         i = i + 1
     return out
 
+# [B-3] Explicit borrow mutability (Rust `&T` vs `&mut T`): a SHARED `ref T` parameter
+# is read-only — mutating it (reassignment or a mutating method call) requires `mut ref T`.
+# A `mut ref T` param permits mutation. Opt-in (--strict); ARC keeps the program safe
+# regardless, so the borrow kinds stay fully optional. Within-function, source-faithful.
+pub def mir_shared_ref_param_violations(hf: HirFunction, mutating_methods: Map[str, bool]) -> Vec[str]:
+    mut out = Vec[str].init(2)
+    # Collect names of SHARED ref params (is_borrow set, is_mut_borrow not).
+    mut shps = Vec[str].init(2)
+    mut pi = 0
+    while pi < hf.params.len:
+        mut pty = hf.params.get(pi).ty
+        if pty.is_borrow and not pty.is_mut_borrow:
+            shps.push(hf.params.get(pi).name)
+        pi = pi + 1
+    if shps.len == 0: return out
+    mut mf = lower_function(hf)
+    mut sk = 0
+    while sk < shps.len:
+        mut pn = shps.get(sk)
+        mut bn = 0
+        while bn < mf.blocks.len:
+            mut blk = mf.blocks.get(bn)
+            mut si = 0
+            while si < blk.stmts.len:
+                mut stmt = blk.stmts.get(si)
+                mut sval = 0 as Pointer[HirExpr]
+                mut desc = ""
+                match stmt.read():
+                    case MirStmt.MAssign(wp, wv):
+                        sval = wv
+                        if wp == pn: desc = "reassign"
+                    case MirStmt.MDeclare(_, dv): sval = dv
+                    case MirStmt.MEval(ev): sval = ev
+                if desc == "" and _is_mutating_call_on(sval, pn, mutating_methods):
+                    desc = "call a mutating method on"
+                if desc != "":
+                    out.push("cannot " + desc + " '" + pn + "' — it is a SHARED `ref` parameter (read-only)")
+                si = si + 1
+            bn = bn + 1
+        sk = sk + 1
+    return out
+
 pub def mir_if_drop_plan(hf: HirFunction) -> Vec[DropSite]:
     mut out = Vec[DropSite].init(4)
     mut mf  = lower_function(hf)

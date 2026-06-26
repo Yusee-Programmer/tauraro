@@ -357,7 +357,7 @@ extend Parser:
                 case _:
                     pass
             if going:
-                item_name = self.consume_ident()
+                mut item_name = self.consume_ident()
                 if item_name != "":
                     mut ty_ptr = Pointer[AstType](0)
                     match self.peek():
@@ -372,7 +372,21 @@ extend Parser:
                                 ty.from_regions.push(ty.from_param)
                             ty_ptr = box_asttype(ty)
                         case _:
-                            pass
+                            # Bare-type field (enum variant payload), e.g. `Word(str)` —
+                            # `item_name` IS the type. Support a borrowed bare type
+                            # `ref T from r`: `item_name == "ref"` means the real type
+                            # follows; parse it, mark the borrow, and read the region.
+                            if item_name == "ref":
+                                mut bt = self.parse_type()
+                                bt.is_borrow = true
+                                if self.peek() == Token.KwFrom:
+                                    self.pos = self.pos + 1
+                                    bt.from_param = self.consume_ident()
+                                    bt.from_regions.push(bt.from_param)
+                                ty_ptr = box_asttype(bt)
+                                # Mirror the bare-type convention: the field name is the
+                                # inner type's name (codegen derives `_tr_v_<name>` from it).
+                                item_name = bt.name
                     p = Param.init(item_name, ty_ptr)
                     if ty_ptr as usize != 0 as usize:
                         if ty_ptr.read().is_borrow:
@@ -2302,6 +2316,15 @@ extend Parser:
         self.pos = self.pos + 1
         mut name = self.consume_ident()
         mut e = EnumDef.init(name)
+        # Region (lifetime) parameters: `enum Token from src:` — names the region
+        # variant payloads written `ref T from src` borrow for. Erased for codegen;
+        # only the L-2 region-name check (under --strict) consumes them.
+        if self.peek() == Token.KwFrom:
+            self.pos = self.pos + 1
+            e.region_params.push(self.consume_ident())
+            while self.peek() == Token.Comma:
+                self.pos = self.pos + 1
+                e.region_params.push(self.consume_ident())
         if self.peek() == Token.KwImplements:
             self.pos = self.pos + 1
             while True:
@@ -2377,6 +2400,14 @@ extend Parser:
                 if gname != "": i.generics.push(gname)
                 if self.peek() == Token.Comma: self.pos = self.pos + 1
             if self.peek() == Token.RBracket: self.pos = self.pos + 1
+        # Region (lifetime) parameters: `interface View from r:` — method signatures
+        # may return `ref T from r`. Erased for codegen; drives the L-2 check.
+        if self.peek() == Token.KwFrom:
+            self.pos = self.pos + 1
+            i.region_params.push(self.consume_ident())
+            while self.peek() == Token.Comma:
+                self.pos = self.pos + 1
+                i.region_params.push(self.consume_ident())
         if self.peek() == Token.Colon:
             self.pos = self.pos + 1
         self.skip_newlines()
@@ -2414,6 +2445,16 @@ extend Parser:
     pub def parse_extend_decl(self) -> Pointer[Decl]:
         self.pos = self.pos + 1
         mut target = self.consume_ident()
+        # Impl-block region (lifetime) re-declaration: `extend View from r:` —
+        # Rust's `impl<'a> View<'a>`. Accepted for surface symmetry; the regions
+        # the methods reference are already those of the extended type's decl, so
+        # the names are simply consumed (erased) here.
+        if self.peek() == Token.KwFrom:
+            self.pos = self.pos + 1
+            mut _erg = self.consume_ident()
+            while self.peek() == Token.Comma:
+                self.pos = self.pos + 1
+                _erg = self.consume_ident()
         if self.peek() == Token.Colon:
             self.pos = self.pos + 1
         self.skip_newlines()

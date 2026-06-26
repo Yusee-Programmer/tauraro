@@ -6,7 +6,7 @@ from core.alloc import alloc, dealloc
 from core.io import _tr_exit, write_file, append_file
 from ast import Program, Decl, Expr, Stmt, AstType, Block, MatchArm, Pattern, FunctionDef, ClassDef, EnumDef, InterfaceDef, Param, Decorator, FStringPart, Ownership, CatchClause, Comprehension, ChanSelectArm
 from hir import HirProgram, HirFunction, HirClass, HirEnum, HirInterface, HirStmt, HirExpr, HirBlock, HirParam, HirField, HirVariant, HirFStringPart, HirComprehension, HirCatchClause, HirMatchArm, box_hirexpr, box_hirstmt, hir_expr_type, HirChanSelectArm
-from mir import mir_if_drop_plan, DropSite, mir_proven_borrows, mir_borrow_conflicts
+from mir import mir_if_drop_plan, DropSite, mir_proven_borrows, mir_borrow_conflicts, mir_shared_ref_param_violations
 
 
 pub enum SymbolKind:
@@ -176,6 +176,8 @@ pub class Sema:
     pub current_func_ret_regions: Vec[str]  # explicit `from a, b` region list (empty if none/auto-inferred)
     pub current_func_outlives_a: Vec[str]   # `where a outlives b` bounds (parallel): a[i] outlives b[i]
     pub current_func_outlives_b: Vec[str]
+    pub current_region_params: Vec[str] # region (lifetime) params of the type being lowered
+                                        # (class/enum/interface `from r`) — feeds the L-2 check
     pub cur_func_borrowers: Vec[str]   # outlives engine: cross-fn ref-borrow edges (borrowers ...)
     pub cur_func_sources:   Vec[str]   # ... and immediate sources) collected during lower_func
     pub strict_mode: bool               # --strict: alloc outside unsafe -> hard [U-1] error
@@ -267,6 +269,7 @@ extend Sema:
         s.current_func_ret_regions = Vec[str].init(0)
         s.current_func_outlives_a = Vec[str].init(0)
         s.current_func_outlives_b = Vec[str].init(0)
+        s.current_region_params  = Vec[str].init(0)
         s.cur_func_borrowers     = Vec[str].init(0)
         s.cur_func_sources       = Vec[str].init(0)
         s.strict_mode            = false
@@ -1946,12 +1949,15 @@ extend Sema:
                     hp.interfaces.push(self.lower_interface(i_def))
                 case Decl.DExtend(target, methods):
                     self.current_class_name = target
+                    if self.classes.contains(target):
+                        self.current_region_params = self.classes.get(target).region_params
                     mut hi = 0
                     while hi < methods.len:
                         mut f = methods.get(hi)
                         hp.functions.push(self.lower_func(f))
                         hi = hi + 1
                     self.current_class_name = ""
+                    self.current_region_params = Vec[str].init(0)
                 case Decl.DTopLevelStmt(s):
                     hp.top_level_stmts.push(self.lower_stmt(s))
                 case Decl.DExtern(_, functions):
@@ -2203,15 +2209,14 @@ extend Sema:
                         rok = true
                     rpi = rpi + 1
                 if not rok:
-                    if self.current_class_name != "" and self.classes.contains(self.current_class_name):
-                        mut rcls = self.classes.get(self.current_class_name)
-                        mut rci = 0
-                        while rci < rcls.region_params.len:
-                            if rcls.region_params.get(rci) == rnm:
-                                rok = true
-                            rci = rci + 1
+                    # Region params of the enclosing type (class/enum/interface `from r`).
+                    mut rci = 0
+                    while rci < self.current_region_params.len:
+                        if self.current_region_params.get(rci) == rnm:
+                            rok = true
+                        rci = rci + 1
                 if not rok:
-                    self.error("[L-2] region source '" + rnm + "' named in 'from' is not a parameter or a region parameter of the enclosing type.\n      FIX: name a parameter the borrow comes from, or declare 'class <T> from " + rnm + ":'.")
+                    self.error("[L-2] region source '" + rnm + "' named in 'from' is not a parameter or a region parameter of the enclosing type.\n      FIX: name a parameter the borrow comes from, or declare 'class/enum/interface <T> from " + rnm + ":'.")
                 rri = rri + 1
         self.enter_scope()
 
@@ -2273,6 +2278,12 @@ extend Sema:
             while _bci < _bconf.len:
                 self.error("[B-1] " + _bconf.get(_bci) + ".\n      A place may have MANY shared `ref` borrows, OR exactly ONE exclusive `mut` borrow — never both. End one borrow's last use before the other begins.")
                 _bci = _bci + 1
+            # [B-3] Shared `ref` params are read-only; mutation needs `mut ref`.
+            mut _b3 = mir_shared_ref_param_violations(hf, self.mutating_methods)
+            mut _b3i = 0
+            while _b3i < _b3.len:
+                self.error("[B-3] " + _b3.get(_b3i) + ".\n      A shared `ref T` parameter cannot be mutated — declare it `mut ref T` for an exclusive (mutable) borrow.")
+                _b3i = _b3i + 1
         hf.decorators = f.decorators
         hf.is_async = f.is_async
         hf.is_extern = f.is_extern
@@ -2317,6 +2328,7 @@ extend Sema:
     pub def lower_class(self, c: ClassDef) -> HirClass:
         self.current_line = c.line
         self.current_class_name = c.name
+        self.current_region_params = c.region_params
         mut hfields = Vec[HirField].init(4)
         mut i = 0
         while i < c.fields.len:
@@ -2427,10 +2439,12 @@ extend Sema:
         hc.is_class = c.is_class
 
         self.current_class_name = ""
+        self.current_region_params = Vec[str].init(0)
         return hc
 
     pub def lower_enum(self, e: EnumDef) -> HirEnum:
         self.current_class_name = e.name
+        self.current_region_params = e.region_params
         mut hvariants = Vec[HirVariant].init(4)
         mut i = 0
         while i < e.variants.len:
@@ -2439,6 +2453,23 @@ extend Sema:
             mut j = 0
             while j < v.fields.len:
                 mut p = v.fields.get(j)
+                # [L-2] A variant payload written `ref T from r` may only name a
+                # region declared on the enum (`enum E from r`). Rejects a typo'd
+                # region — never safe code; ARC keeps real borrows safe regardless.
+                if self.strict_mode and p.ty as usize != 0 as usize:
+                    mut _vty = p.ty.read()
+                    mut _vri = 0
+                    while _vri < _vty.from_regions.len:
+                        mut _vrn = _vty.from_regions.get(_vri)
+                        mut _vrok = false
+                        mut _vrk = 0
+                        while _vrk < e.region_params.len:
+                            if e.region_params.get(_vrk) == _vrn: _vrok = true
+                            _vrk = _vrk + 1
+                        if not _vrok:
+                            self.current_line = e.line
+                            self.error("[L-2] region source '" + _vrn + "' in variant '" + v.name + "' of enum '" + e.name + "' is not a region parameter.\n      FIX: declare 'enum " + e.name + " from " + _vrn + ":'.")
+                        _vri = _vri + 1
                 mut hp = HirParam()
                 hp.name = p.name
                 # Tuple-variant fields written as a bare type (e.g. `Err(str)`)
@@ -2471,22 +2502,25 @@ extend Sema:
         he.iface_names = e.iface_names
         he.decorators = e.decorators
         he.is_public = e.is_public
-        
+
         self.current_class_name = ""
+        self.current_region_params = Vec[str].init(0)
         return he
 
     pub def lower_interface(self, i_def: InterfaceDef) -> HirInterface:
+        self.current_region_params = i_def.region_params
         mut hmethods = Vec[HirFunction].init(4)
         mut i = 0
         while i < i_def.methods.len:
             mut hm = self.lower_func(i_def.methods.get(i))
             hmethods.push(hm)
             i = i + 1
-            
+
         mut hi = HirInterface()
         hi.name = i_def.name
         hi.generics = i_def.generics
         hi.methods = hmethods
+        self.current_region_params = Vec[str].init(0)
         return hi
 
     pub def lower_block(self, b: Block) -> HirBlock:
@@ -3283,6 +3317,8 @@ extend Sema:
                         # from there, not from hp.functions) - find the already-lowered
                         # nested HirClass and append to it in place.
                         self.current_class_name = ld_target
+                        if self.classes.contains(ld_target):
+                            self.current_region_params = self.classes.get(ld_target).region_params
                         mut ld_ci = 0
                         mut ld_found = false
                         while ld_ci < self.nested_classes.len:
@@ -3303,6 +3339,7 @@ extend Sema:
                     case _: pass
                 self.current_func_name = saved_ld_func_name
                 self.current_class_name = saved_ld_class_name
+                self.current_region_params = Vec[str].init(0)
                 return box_hirstmt(HirStmt.SPass)
             case Stmt.SUnsafe(body):
                 # Gap 6: track unsafe boundary

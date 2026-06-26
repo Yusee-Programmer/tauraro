@@ -422,6 +422,8 @@ pub class EnumDef:
     pub decorators: Vec[Decorator]
     pub is_public: bool
     pub line: int
+    pub region_params: Vec[str]   # 'from r' region (lifetime) parameters — variant
+                                  # payloads written `ref T from r` borrow for region r.
 
 extend EnumDef:
     pub def init(name: str) -> EnumDef:
@@ -434,6 +436,7 @@ extend EnumDef:
         e.decorators = Vec[Decorator].init(0)
         e.is_public = false
         e.line = 0
+        e.region_params = Vec[str].init(0)
         return e
 
 pub class InterfaceDef:
@@ -443,6 +446,8 @@ pub class InterfaceDef:
     pub is_public: bool
     pub line: int
     pub decorators: Vec[Decorator]
+    pub region_params: Vec[str]   # 'from r' region (lifetime) parameters — method
+                                  # signatures may return `ref T from r`.
 
 extend InterfaceDef:
     pub def init(name: str) -> InterfaceDef:
@@ -453,6 +458,7 @@ extend InterfaceDef:
         i.is_public = false
         i.line = 0
         i.decorators = Vec[Decorator].init(0)
+        i.region_params = Vec[str].init(0)
         return i
 
 pub class ImportItem:

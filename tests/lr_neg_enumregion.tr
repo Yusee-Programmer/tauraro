@@ -1,0 +1,7 @@
+# [L-2] a variant payload region not declared on the enum must error under --strict.
+enum Token from src:
+    Word(ref str from typo)   # 'typo' is not a region param -> [L-2]
+    End
+
+def main() -> int:
+    return 0

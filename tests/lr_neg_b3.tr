@@ -1,0 +1,6 @@
+# [B-3] mutating a SHARED `ref` param must error under --strict.
+def bad(buf: ref List[int], x: int):
+    buf.append(x)   # shared ref is read-only -> [B-3]
+
+def main() -> int:
+    return 0
