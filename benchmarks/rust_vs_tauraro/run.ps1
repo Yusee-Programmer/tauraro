@@ -1,16 +1,23 @@
-# run.ps1 -- Rust vs Tauraro, zero-copy hot paths (Windows).
-# Compares the cases where BOTH languages do genuine zero-copy:
-#   str_view     - substring views   (Rust &str slice   vs Tauraro StrView)
-#   enum_payload - borrowed payloads  (Rust enum<'a>     vs Tauraro `enum E from r`)
+# run.ps1 -- Rust vs Tauraro, zero-copy / borrow hot paths (Windows).
+# Tauraro uses explicit borrow/own/lifetime annotations (ref / @value_type /
+# `enum E from r`) and is built --strict, so every borrow is COMPILE-TIME PROVEN
+# (and the proven ones elide ARC retain/release) — apples-to-apples with Rust:
+#   str_view     - substring views    (Rust &str slice    vs Tauraro StrView value type)
+#   enum_payload - borrowed payloads   (Rust enum<'a>      vs Tauraro `enum E from r`)
+#   class_field  - shared struct borrow (Rust &Point       vs Tauraro `ref Point`)
+#   list_sum     - borrowed iteration   (Rust &Vec<i64>    vs Tauraro `ref List[int]`)
+#   dict_borrow  - dict value borrow    (Rust &HashMap+&str vs Tauraro `ref str = d.get(k)`)
+#   value_dict   - inline value in dict (Rust HashMap<_,Point> vs Tauraro @value_type)
+#   iface_call   - dynamic dispatch     (Rust &dyn Shape   vs Tauraro `ref Shape`)
 # Each program self-times its workload and prints TIME_MS:<n>; we also sample
-# peak working-set memory. Tauraro is built --strict (proving the borrows).
+# peak working-set memory.
 
 $ErrorActionPreference = "Continue"
 $BENCH = $PSScriptRoot
 $TAU   = Resolve-Path "$BENCH\..\..\tauraroc.exe"
 $BDIR  = "$BENCH\build"
 $WARN  = "-DTAURARO_NO_RT_HELPERS","-Wno-attributes","-Wno-unused-value","-Wno-string-compare","-Wno-unknown-attributes"
-$cases = "str_view","enum_payload"
+$cases = "str_view","enum_payload","class_field","list_sum","dict_borrow","value_dict","iface_call"
 
 function Exe-Works($exe) {
     if (-not (Test-Path $exe)) { return $false }

@@ -1,0 +1,32 @@
+# Borrow a class instance: `ref Point` is a SHARED borrow — under --strict the
+# compiler proves it and elides ARC retain/release (pure alias), exactly like
+# Rust's &Point. Zero-copy field access, no refcount traffic.
+from std.sys.time import Clock
+extern "C":
+    def _tr_int_to_str(n: int) -> str
+
+class Point:
+    pub x: int
+    pub y: int
+
+extend Point:
+    pub def init(x: int, y: int) -> Point:
+        mut p = Point()
+        p.x = x
+        p.y = y
+        return p
+
+def dist2(p: ref Point) -> int:
+    return p.x * p.x + p.y * p.y
+
+def main():
+    mut clock = Clock.init()
+    mut p = Point.init(3, 4)
+    mut total = 0
+    mut i = 0
+    while i < 50000000:
+        total = total + dist2(p) + (i % 7)
+        i = i + 1
+    mut ms = clock.elapsed_ms()
+    print(total)
+    print("TIME_MS:" + _tr_int_to_str(ms))

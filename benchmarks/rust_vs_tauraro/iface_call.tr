@@ -1,0 +1,35 @@
+# Interface dispatch through a borrow: `ref Shape` is a shared borrow of the
+# fat pointer (data + vtable); area() dispatches through the vtable. Mirrors
+# Rust's `&dyn Shape`.
+from std.sys.time import Clock
+extern "C":
+    def _tr_int_to_str(n: int) -> str
+
+interface Shape:
+    def area(self) -> int
+
+class Square implements Shape:
+    pub side: int
+
+extend Square:
+    pub def init(s: int) -> Square:
+        mut sq = Square()
+        sq.side = s
+        return sq
+    pub def area(self) -> int:
+        return self.side * self.side
+
+def total_area(s: ref Shape, n: int) -> int:
+    return s.area() + n
+
+def main():
+    mut clock = Clock.init()
+    mut sq = Square.init(7)
+    mut total = 0
+    mut i = 0
+    while i < 20000000:
+        total = total + total_area(sq, i % 5)
+        i = i + 1
+    mut ms = clock.elapsed_ms()
+    print(total)
+    print("TIME_MS:" + _tr_int_to_str(ms))

@@ -1,0 +1,27 @@
+# Borrow a List: `ref List[int]` is a shared borrow (no retain/release under
+# --strict), iterated element-by-element. Mirrors Rust's `&Vec<i64>`.
+from std.sys.time import Clock
+extern "C":
+    def _tr_int_to_str(n: int) -> str
+
+def sum_list(xs: ref List[int]) -> int:
+    mut s = 0
+    for x in xs:
+        s = s + x
+    return s
+
+def main():
+    mut clock = Clock.init()
+    mut xs: List[int] = []
+    mut i = 0
+    while i < 1000:
+        xs.append(i)
+        i = i + 1
+    mut total = 0
+    mut r = 0
+    while r < 200000:
+        total = total + sum_list(xs)
+        r = r + 1
+    mut ms = clock.elapsed_ms()
+    print(total)
+    print("TIME_MS:" + _tr_int_to_str(ms))

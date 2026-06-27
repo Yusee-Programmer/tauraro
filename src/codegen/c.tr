@@ -5326,6 +5326,32 @@ pub class CGenerator:
                     case _: pass
             case _: pass
 
+        # Fast path: `for k in <dict>.keys()` over a str-keyed Dict/Map walks the
+        # hash buckets DIRECTLY — no intermediate List allocation. `keys()`
+        # otherwise materialises a fresh List_TrStr on every call, which dominates
+        # dict-iteration hot loops. The key binds as a borrowed `_tr_str_lit`.
+        match iter.read():
+            case HirExpr.EMethodCall(d_obj, d_meth, d_args, _):
+                if d_meth == "keys" and d_args.len == 0:
+                    mut d_ty = hir_expr_type(d_obj)
+                    if d_ty.name == "Dict" or d_ty.name == "Map":
+                        mut d_int_key = false
+                        if d_ty.args.len > 0:
+                            mut dk = d_ty.args.get(0).read()
+                            if _is_int_type(dk.name) or dk.name == "int" or dk.name == "i64" or dk.name == "usize": d_int_key = true
+                        if not d_int_key:
+                            mut d_s = self.gen_expr(d_obj)
+                            mut bw = self.next_temp()
+                            self.w(pad + "{ TrMap* " + bw + "d = " + d_s + ";\n")
+                            self.w(pad + "  if (" + bw + "d) for (size_t " + bw + "b = 0; " + bw + "b < " + bw + "d->cap; " + bw + "b++)\n")
+                            self.w(pad + "  for (_DictNode* " + bw + "n = " + bw + "d->buckets[" + bw + "b]; " + bw + "n; " + bw + "n = " + bw + "n->next) {\n")
+                            self.w(pad + "    TrStr " + var + " = _tr_str_lit(" + bw + "n->key);\n")
+                            self.gen_block(body, indent + 2)
+                            self.w(pad + "  }\n")
+                            self.w(pad + "}\n")
+                            return
+            case _: pass
+
         # Generic iteration over a collection
         mut tmp = self.next_temp()
         mut iter_ty = hir_expr_type(iter)
