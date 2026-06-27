@@ -76,6 +76,7 @@ pub enum Token:
     KwExport
     KwLambda
     KwDecorator
+    KwMacro
 
     # Keywords - literals
     KwTrue
@@ -237,6 +238,7 @@ extend Token:
             case Token.KwExport: return True
             case Token.KwLambda: return True
             case Token.KwDecorator: return True
+            case Token.KwMacro: return True
             case Token.KwInt:    return True
             case Token.KwFloat:  return True
             case Token.KwBool:   return True
@@ -305,6 +307,7 @@ extend Token:
             case Token.KwExport: return "export"
             case Token.KwLambda: return "lambda"
             case Token.KwDecorator: return "decorator"
+            case Token.KwMacro: return "macro"
             case Token.KwInt:    return "int"
             case Token.KwFloat:  return "float"
             case Token.KwBool:   return "bool"

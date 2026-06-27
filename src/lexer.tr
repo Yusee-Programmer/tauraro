@@ -58,6 +58,7 @@ pub def keyword_to_token(s: str) -> Token:
     if s == "export":                  return Token.KwExport
     if s == "lambda" or s == "dan_aiki": return Token.KwLambda
     if s == "decorator":               return Token.KwDecorator
+    if s == "macro":                   return Token.KwMacro
     if s == "sizeof":                  return Token.KwSizeOf
     if s == "is":                      return Token.KwIs
     
@@ -361,6 +362,19 @@ pub class Lexer:
         if not self.at_end(): self.advance()
         return Token.FStrLit(sb.to_string().as_str())
 
+    # Triple-quoted f-string `f"""..."""`: a multi-line f-string. Called after the
+    # `f` and the three opening quotes have been consumed. Content (with embedded
+    # newlines) is captured raw; the parser splits out the `{expr}` parts. Used
+    # heavily by macros to emit multi-line generated source.
+    pub def read_triple_fstring(self, quote: int) -> Token:
+        mut sb = StringBuilder.init(128)
+        while not self.at_end():
+            if self.peek() == quote and self.peek_at(1) == quote and self.peek_at(2) == quote:
+                self.advance(); self.advance(); self.advance()
+                return Token.FStrLit(sb.to_string().as_str())
+            sb.append_char(self.advance())
+        return Token.FStrLit(sb.to_string().as_str())
+
     pub def read_raw_string(self) -> Token:
         self.advance(); mut quote = self.advance()
         mut sb = StringBuilder.init(64)
@@ -533,6 +547,11 @@ pub class Lexer:
                 else:
                     tokens.push(self.read_string(c))
                     self.push_loc()
+                continue
+            if c == 102 and self.peek_at(1) == 34 and self.peek_at(2) == 34 and self.peek_at(3) == 34:
+                self.advance(); self.advance(); self.advance(); self.advance()  # consume f"""
+                tokens.push(self.read_triple_fstring(34))
+                self.push_loc()
                 continue
             if c == 102 and (self.peek_at(1) == 34 or self.peek_at(1) == 39):
                 tokens.push(self.read_fstring())

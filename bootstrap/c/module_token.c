@@ -98,6 +98,8 @@ __attribute__((hot)) bool Token_is_keyword(Token self) {
         return true;
     } else if (_t4.tag == Token_KwDecorator) {
         return true;
+    } else if (_t4.tag == Token_KwMacro) {
+        return true;
     } else if (_t4.tag == Token_KwInt) {
         return true;
     } else if (_t4.tag == Token_KwFloat) {
@@ -244,6 +246,8 @@ __attribute__((hot)) TrStr Token_debug(Token self) {
         return _tr_str_lit("lambda");
     } else if (_t5.tag == Token_KwDecorator) {
         return _tr_str_lit("decorator");
+    } else if (_t5.tag == Token_KwMacro) {
+        return _tr_str_lit("macro");
     } else if (_t5.tag == Token_KwInt) {
         return _tr_str_lit("int");
     } else if (_t5.tag == Token_KwFloat) {

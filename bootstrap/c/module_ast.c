@@ -309,6 +309,8 @@ __attribute__((malloc,returns_nonnull,hot)) FunctionDef* FunctionDef_init(TrStr 
     /* pass */
     f->is_export = false;
     /* pass */
+    f->is_macro = false;
+    /* pass */
     f->body = Block_init();
     /* pass */
     f->line = 0LL;

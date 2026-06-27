@@ -54,6 +54,7 @@ typedef struct Sema Sema;
 typedef struct Formatter Formatter;
 typedef struct CGenerator CGenerator;
 typedef struct LlvmGenerator LlvmGenerator;
+typedef struct MacroCtx MacroCtx;
 typedef struct Token Token;
 typedef struct Pattern Pattern;
 typedef struct Ownership Ownership;
@@ -65,6 +66,7 @@ typedef struct HirStmt HirStmt;
 typedef struct MirStmt MirStmt;
 typedef struct MirTerm MirTerm;
 typedef struct SymbolKind SymbolKind;
+typedef struct MacroVal MacroVal;
 typedef struct List_Token List_Token;
 typedef struct List_Pattern List_Pattern;
 
@@ -136,6 +138,7 @@ typedef enum {
     Token_KwExport,
     Token_KwLambda,
     Token_KwDecorator,
+    Token_KwMacro,
     Token_KwTrue,
     Token_KwFalse,
     Token_KwNone,
@@ -327,6 +330,7 @@ static inline __attribute__((always_inline)) Token Token_ctor_Ident(TrStr name) 
 #define Token_make_KwExport() ((Token){.tag=Token_KwExport})
 #define Token_make_KwLambda() ((Token){.tag=Token_KwLambda})
 #define Token_make_KwDecorator() ((Token){.tag=Token_KwDecorator})
+#define Token_make_KwMacro() ((Token){.tag=Token_KwMacro})
 #define Token_make_KwTrue() ((Token){.tag=Token_KwTrue})
 #define Token_make_KwFalse() ((Token){.tag=Token_KwFalse})
 #define Token_make_KwNone() ((Token){.tag=Token_KwNone})
@@ -1414,6 +1418,44 @@ typedef struct SymbolKind {
 #define SymbolKind_make_SVariable() ((SymbolKind){.tag=SymbolKind_SVariable})
 #define SymbolKind_make_SInterface() ((SymbolKind){.tag=SymbolKind_SInterface})
 
+typedef enum {
+    MacroVal_MStr,
+    MacroVal_MInt,
+    MacroVal_MBool,
+    MacroVal_MList,
+    MacroVal_MRec,
+    MacroVal_MNil
+} MacroVal_tag;
+
+typedef struct MacroVal {
+    MacroVal_tag tag;
+    union {
+        struct {
+            TrStr s;
+        } MStr;
+        struct {
+            long long n;
+        } MInt;
+        struct {
+            bool b;
+        } MBool;
+        struct {
+            List_ptr* items;
+        } MList;
+        struct {
+            List_TrStr* keys;
+            List_ptr* vals;
+        } MRec;
+    } data;
+} MacroVal;
+
+static inline __attribute__((always_inline)) MacroVal MacroVal_ctor_MStr(TrStr s) { MacroVal _r = {.tag=MacroVal_MStr}; _r.data.MStr.s = _tr_str_retain(s); return _r; }
+static inline __attribute__((always_inline)) MacroVal MacroVal_ctor_MInt(long long n) { MacroVal _r = {.tag=MacroVal_MInt}; _r.data.MInt.n = n; return _r; }
+static inline __attribute__((always_inline)) MacroVal MacroVal_ctor_MBool(bool b) { MacroVal _r = {.tag=MacroVal_MBool}; _r.data.MBool.b = b; return _r; }
+static inline __attribute__((always_inline)) MacroVal MacroVal_ctor_MList(List_ptr* items) { MacroVal _r = {.tag=MacroVal_MList}; _r.data.MList.items = items; return _r; }
+static inline __attribute__((always_inline)) MacroVal MacroVal_ctor_MRec(List_TrStr* keys, List_ptr* vals) { MacroVal _r = {.tag=MacroVal_MRec}; _r.data.MRec.keys = keys; _r.data.MRec.vals = vals; return _r; }
+#define MacroVal_make_MNil() ((MacroVal){.tag=MacroVal_MNil})
+
 #ifndef StringObj_STRUCT_DEFINED
 #define StringObj_STRUCT_DEFINED
 typedef struct StringObj {
@@ -1570,6 +1612,7 @@ typedef struct FunctionDef {
     bool is_extern;
     bool is_public;
     bool is_export;
+    bool is_macro;
     Block* body;
     long long line;
     List_TrStr* outlives_a;
@@ -2096,6 +2139,17 @@ typedef struct LlvmGenerator {
 } LlvmGenerator;
 #endif
 
+#ifndef MacroCtx_STRUCT_DEFINED
+#define MacroCtx_STRUCT_DEFINED
+typedef struct MacroCtx {
+    TrMap* env;
+    bool returned;
+    TrStr result;
+    bool has_error;
+    TrStr error_msg;
+} MacroCtx;
+#endif
+
 typedef struct List_Token { Token* data; size_t len; size_t capacity; } List_Token;
 static inline List_Token* List_Token_new(void) { List_Token* l=(List_Token*)malloc(sizeof(List_Token)); l->data=(Token*)malloc(sizeof(Token)*8); l->len=0; l->capacity=8; return l; }
 static inline void List_Token_append(List_Token* l, Token val) { if(l->len==l->capacity){ l->capacity*=2; l->data=(Token*)realloc(l->data,sizeof(Token)*l->capacity); } l->data[l->len++]=val; }
@@ -2162,6 +2216,12 @@ static inline void List_SymbolKind_append(List_SymbolKind* l, SymbolKind val) { 
 static inline SymbolKind List_SymbolKind_get(List_SymbolKind* l, long long i) { _tr_bounds_check(i, l->len); return l->data[i]; }
 static inline SymbolKind List_SymbolKind_pop(List_SymbolKind* l) { if(!l||l->len==0) return (SymbolKind){0}; l->len--; return l->data[l->len]; }
 static inline void List_SymbolKind_free(List_SymbolKind* l) { if(l){ free(l->data); free(l); } }
+typedef struct List_MacroVal { MacroVal* data; size_t len; size_t capacity; } List_MacroVal;
+static inline List_MacroVal* List_MacroVal_new(void) { List_MacroVal* l=(List_MacroVal*)malloc(sizeof(List_MacroVal)); l->data=(MacroVal*)malloc(sizeof(MacroVal)*8); l->len=0; l->capacity=8; return l; }
+static inline void List_MacroVal_append(List_MacroVal* l, MacroVal val) { if(l->len==l->capacity){ l->capacity*=2; l->data=(MacroVal*)realloc(l->data,sizeof(MacroVal)*l->capacity); } l->data[l->len++]=val; }
+static inline MacroVal List_MacroVal_get(List_MacroVal* l, long long i) { _tr_bounds_check(i, l->len); return l->data[i]; }
+static inline MacroVal List_MacroVal_pop(List_MacroVal* l) { if(!l||l->len==0) return (MacroVal){0}; l->len--; return l->data[l->len]; }
+static inline void List_MacroVal_free(List_MacroVal* l) { if(l){ free(l->data); free(l); } }
 
 __attribute__((hot)) TrStr read_file(TrStr path);
 __attribute__((hot)) bool file_exists(TrStr path);
@@ -2548,6 +2608,28 @@ __attribute__((hot)) TrStr LlvmGenerator_gen_call_llvm(LlvmGenerator* self, HirE
 __attribute__((hot)) void LlvmGenerator_gen_stmt(LlvmGenerator* self, HirStmt* s_ptr);
 __attribute__((hot)) void LlvmGenerator_gen_block(LlvmGenerator* self, HirBlock* b);
 __attribute__((hot)) TrStr LlvmGenerator_generate(LlvmGenerator* self, HirProgram* prog);
+__attribute__((hot)) MacroVal* box_mv(MacroVal v);
+__attribute__((hot)) MacroVal* mrec(List_TrStr* keys, List_ptr* vals);
+__attribute__((hot)) MacroVal* mrec_get(MacroVal* recptr, TrStr key);
+__attribute__((hot)) TrStr mv_to_str(MacroVal* vptr);
+__attribute__((hot)) bool mv_truthy(MacroVal* vptr);
+__attribute__((hot)) bool mv_eq(MacroVal* a, MacroVal* b);
+__attribute__((hot)) TrStr render_type(AstType** typtr);
+__attribute__((hot)) MacroVal* str_list(List_TrStr* items);
+__attribute__((hot)) MacroVal* param_rec(Param* p);
+__attribute__((hot)) MacroVal* params_list(List_ptr* ps);
+__attribute__((hot)) MacroVal* fn_rec(FunctionDef* f);
+__attribute__((hot)) MacroVal* method_list(List_ptr* ms);
+__attribute__((hot)) MacroVal* build_item(Decl* declptr);
+__attribute__((malloc,returns_nonnull,hot)) MacroCtx* MacroCtx_init();
+__attribute__((hot)) void MacroCtx_fail(MacroCtx* self, TrStr msg);
+__attribute__((hot)) MacroVal* MacroCtx_eval_binop(MacroCtx* self, TrStr op, MacroVal* lv, MacroVal* rv);
+__attribute__((hot)) MacroVal* MacroCtx_eval_mexpr(MacroCtx* self, Expr* eptr);
+__attribute__((hot)) void MacroCtx_eval_mblock(MacroCtx* self, Block* b);
+__attribute__((hot)) void MacroCtx_eval_mstmt(MacroCtx* self, Stmt* sptr);
+__attribute__((hot)) void parse_into(TrStr src, List_ptr* gen);
+__attribute__((hot)) List_ptr* decl_decorators(Decl* declptr);
+__attribute__((hot)) long long expand_macros(Program* prog);
 __attribute__((hot)) void print_version();
 __attribute__((hot)) void print_usage();
 __attribute__((hot)) bool str_ends_with_dot_tr(TrStr path);
@@ -2597,6 +2679,7 @@ __attribute__((hot)) Token Lexer_read_triple_string(Lexer* self, long long quote
 __attribute__((hot)) Token Lexer_read_string(Lexer* self, long long quote);
 __attribute__((hot)) Token Lexer_read_char(Lexer* self);
 __attribute__((hot)) Token Lexer_read_fstring(Lexer* self);
+__attribute__((hot)) Token Lexer_read_triple_fstring(Lexer* self, long long quote);
 __attribute__((hot)) Token Lexer_read_raw_string(Lexer* self);
 __attribute__((hot)) Token Lexer_read_byte_string(Lexer* self);
 __attribute__((hot)) Token Lexer_read_ident(Lexer* self);
@@ -3771,6 +3854,36 @@ __attribute__((hot)) codegen_llvm_LlvmGenerator*** core_alloc_resize_codegen_llv
 __attribute__((hot)) void core_alloc_dealloc_codegen_llvm_LlvmGenerator_ptr(codegen_llvm_LlvmGenerator*** ptr);
 __attribute__((hot)) core_map_MapNode_str_codegen_llvm_LlvmGenerator** core_alloc_alloc_core_map_MapNode_str_codegen_llvm_LlvmGenerator(long long count);
 __attribute__((hot)) void core_alloc_dealloc_core_map_MapNode_str_codegen_llvm_LlvmGenerator(core_map_MapNode_str_codegen_llvm_LlvmGenerator** ptr);
+
+typedef MacroVal macros_MacroVal;
+struct core_vec_Vec_macros_MacroVal { macros_MacroVal* data; long long len; long long capacity; };
+typedef struct core_vec_Vec_macros_MacroVal core_vec_Vec_macros_MacroVal;
+struct core_vec_Vec_macros_MacroVal_ptr { macros_MacroVal** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_macros_MacroVal_ptr core_vec_Vec_macros_MacroVal_ptr;
+__attribute__((hot)) macros_MacroVal* core_alloc_alloc_macros_MacroVal(long long count);
+__attribute__((hot)) macros_MacroVal* core_alloc_resize_macros_MacroVal(macros_MacroVal* ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_macros_MacroVal(macros_MacroVal* ptr);
+__attribute__((hot)) macros_MacroVal** core_alloc_alloc_macros_MacroVal_ptr(long long count);
+__attribute__((hot)) macros_MacroVal** core_alloc_resize_macros_MacroVal_ptr(macros_MacroVal** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_macros_MacroVal_ptr(macros_MacroVal** ptr);
+
+typedef MacroCtx macros_MacroCtx;
+struct core_vec_Vec_macros_MacroCtx { macros_MacroCtx** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_macros_MacroCtx core_vec_Vec_macros_MacroCtx;
+struct core_vec_Vec_macros_MacroCtx_ptr { macros_MacroCtx*** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_macros_MacroCtx_ptr core_vec_Vec_macros_MacroCtx_ptr;
+struct core_map_MapNode_str_macros_MacroCtx { char* key; macros_MacroCtx* value; struct core_map_MapNode_str_macros_MacroCtx* next; };
+typedef struct core_map_MapNode_str_macros_MacroCtx core_map_MapNode_str_macros_MacroCtx;
+struct core_map_Map_str_macros_MacroCtx { core_map_MapNode_str_macros_MacroCtx** buckets; long long capacity; long long len; };
+typedef struct core_map_Map_str_macros_MacroCtx core_map_Map_str_macros_MacroCtx;
+__attribute__((hot)) macros_MacroCtx** core_alloc_alloc_macros_MacroCtx(long long count);
+__attribute__((hot)) macros_MacroCtx** core_alloc_resize_macros_MacroCtx(macros_MacroCtx** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_macros_MacroCtx(macros_MacroCtx** ptr);
+__attribute__((hot)) macros_MacroCtx*** core_alloc_alloc_macros_MacroCtx_ptr(long long count);
+__attribute__((hot)) macros_MacroCtx*** core_alloc_resize_macros_MacroCtx_ptr(macros_MacroCtx*** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_macros_MacroCtx_ptr(macros_MacroCtx*** ptr);
+__attribute__((hot)) core_map_MapNode_str_macros_MacroCtx** core_alloc_alloc_core_map_MapNode_str_macros_MacroCtx(long long count);
+__attribute__((hot)) void core_alloc_dealloc_core_map_MapNode_str_macros_MacroCtx(core_map_MapNode_str_macros_MacroCtx** ptr);
 
 /* Primitive vec/map types for core modules */
 struct core_vec_Vec_str { char** data; long long len; long long capacity; };

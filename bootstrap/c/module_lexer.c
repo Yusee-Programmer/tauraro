@@ -499,6 +499,29 @@ __attribute__((hot)) Token Lexer_read_fstring(Lexer* self) {
     return ({ TrStr _at_t10 = (StringObj_as_str(StringBuilder_to_string(sb))); __auto_type _wr = (Token_ctor_FStrLit(_at_t10)); _tr_str_release(_at_t10); _wr; });
 }
 
+__attribute__((hot)) Token Lexer_read_triple_fstring(Lexer* self, long long quote) {
+    /* pass */
+    StringBuilder* sb = StringBuilder_init(128LL);
+    /* pass */
+    while ((!Lexer_at_end(self))) {
+        /* pass */
+        if ((((Lexer_peek(self) == quote) && (Lexer_peek_at(self, 1LL) == quote)) && (Lexer_peek_at(self, 2LL) == quote))) {
+            /* pass */
+            Lexer_advance(self);
+            /* pass */
+            Lexer_advance(self);
+            /* pass */
+            Lexer_advance(self);
+            /* pass */
+            return ({ TrStr _at_t11 = (StringObj_as_str(StringBuilder_to_string(sb))); __auto_type _wr = (Token_ctor_FStrLit(_at_t11)); _tr_str_release(_at_t11); _wr; });
+        }
+        /* pass */
+        StringBuilder_append_char(sb, Lexer_advance(self));
+    }
+    /* pass */
+    return ({ TrStr _at_t12 = (StringObj_as_str(StringBuilder_to_string(sb))); __auto_type _wr = (Token_ctor_FStrLit(_at_t12)); _tr_str_release(_at_t12); _wr; });
+}
+
 __attribute__((hot)) Token Lexer_read_raw_string(Lexer* self) {
     /* pass */
     Lexer_advance(self);
@@ -517,7 +540,7 @@ __attribute__((hot)) Token Lexer_read_raw_string(Lexer* self) {
         Lexer_advance(self);
     }
     /* pass */
-    return ({ TrStr _at_t11 = (StringObj_as_str(StringBuilder_to_string(sb))); __auto_type _wr = (Token_ctor_RawStrLit(_at_t11)); _tr_str_release(_at_t11); _wr; });
+    return ({ TrStr _at_t13 = (StringObj_as_str(StringBuilder_to_string(sb))); __auto_type _wr = (Token_ctor_RawStrLit(_at_t13)); _tr_str_release(_at_t13); _wr; });
 }
 
 __attribute__((hot)) Token Lexer_read_byte_string(Lexer* self) {
@@ -572,7 +595,7 @@ __attribute__((hot)) Token Lexer_read_byte_string(Lexer* self) {
         Lexer_advance(self);
     }
     /* pass */
-    return ({ TrStr _at_t12 = (StringObj_as_str(StringBuilder_to_string(sb))); __auto_type _wr = (Token_ctor_ByteStrLit(_at_t12)); _tr_str_release(_at_t12); _wr; });
+    return ({ TrStr _at_t14 = (StringObj_as_str(StringBuilder_to_string(sb))); __auto_type _wr = (Token_ctor_ByteStrLit(_at_t14)); _tr_str_release(_at_t14); _wr; });
 }
 
 __attribute__((hot)) Token Lexer_read_ident(Lexer* self) {
@@ -584,7 +607,7 @@ __attribute__((hot)) Token Lexer_read_ident(Lexer* self) {
         StringBuilder_append_char(sb, Lexer_advance(self));
     }
     /* pass */
-    return ({ TrStr _at_t13 = (StringObj_as_str(StringBuilder_to_string(sb))); __auto_type _wr = (keyword_to_token(_at_t13)); _tr_str_release(_at_t13); _wr; });
+    return ({ TrStr _at_t15 = (StringObj_as_str(StringBuilder_to_string(sb))); __auto_type _wr = (keyword_to_token(_at_t15)); _tr_str_release(_at_t15); _wr; });
 }
 
 __attribute__((hot)) List_Token* Lexer_tokenize(Lexer* self) {
@@ -820,6 +843,23 @@ __attribute__((hot)) List_Token* Lexer_tokenize(Lexer* self) {
                 /* pass */
                 Lexer_push_loc(self);
             }
+            /* pass */
+            continue;
+        }
+        /* pass */
+        if (((((c == 102LL) && (Lexer_peek_at(self, 1LL) == 34LL)) && (Lexer_peek_at(self, 2LL) == 34LL)) && (Lexer_peek_at(self, 3LL) == 34LL))) {
+            /* pass */
+            Lexer_advance(self);
+            /* pass */
+            Lexer_advance(self);
+            /* pass */
+            Lexer_advance(self);
+            /* pass */
+            Lexer_advance(self);
+            /* pass */
+            List_Token_append(tokens, Lexer_read_triple_fstring(self, 34LL));
+            /* pass */
+            Lexer_push_loc(self);
             /* pass */
             continue;
         }
@@ -1425,6 +1465,11 @@ __attribute__((hot)) Token keyword_to_token(TrStr s) {
         return Token_make_KwDecorator();
     }
     /* pass */
+    if ((strcmp(_tr_strz(s), _tr_strz(_tr_str_lit("macro"))) == 0)) {
+        /* pass */
+        return Token_make_KwMacro();
+    }
+    /* pass */
     if ((strcmp(_tr_strz(s), _tr_strz(_tr_str_lit("sizeof"))) == 0)) {
         /* pass */
         return Token_make_KwSizeOf();
@@ -1577,27 +1622,27 @@ __attribute__((hot)) bool _last_tok_is_dot(List_Token* tokens) {
         return false;
     }
     /* pass */
-    __auto_type _t14 = List_Token_get(tokens, (tokens->len - 1LL));
-    if (_t14.tag == Token_Dot) {
+    __auto_type _t16 = List_Token_get(tokens, (tokens->len - 1LL));
+    if (_t16.tag == Token_Dot) {
         /* pass */
         if ((tokens->len < 2LL)) {
             /* pass */
             return false;
         }
         /* pass */
-        __auto_type _t15 = List_Token_get(tokens, (tokens->len - 2LL));
-        if (_t15.tag == Token_IntLit) {
-            __auto_type _ = _t15.data.IntLit.val;
+        __auto_type _t17 = List_Token_get(tokens, (tokens->len - 2LL));
+        if (_t17.tag == Token_IntLit) {
+            __auto_type _ = _t17.data.IntLit.val;
             return false;
-        } else if (_t15.tag == Token_FloatLit) {
-            __auto_type _ = _t15.data.FloatLit.val;
+        } else if (_t17.tag == Token_FloatLit) {
+            __auto_type _ = _t17.data.FloatLit.val;
             return false;
         } else if (1) {
-            __auto_type _ = _t15;
+            __auto_type _ = _t17;
             return true;
         }
     } else if (1) {
-        __auto_type _ = _t14;
+        __auto_type _ = _t16;
         return false;
     }
 }

@@ -1,0 +1,50 @@
+# Proof that `macro def` + `@`-application works end-to-end.
+# @derive_eq generates an __eq__ method comparing every field, by iterating
+# item.fields at compile time and emitting an `extend` block as source.
+
+macro def derive_eq(c) -> code:
+    mut checks = ""
+    for f in c.fields:
+        checks = checks + f" and self.{f.name} == other.{f.name}"
+    return f"""extend {c.name}:
+    pub def __eq__(self, other: {c.name}) -> bool:
+        return true{checks}
+"""
+
+@derive_eq
+class Point:
+    pub x: int
+    pub y: int
+
+@derive_eq
+class Color:
+    pub r: int
+    pub g: int
+    pub b: int
+
+def main():
+    mut a = Point()
+    a.x = 1
+    a.y = 2
+    mut b = Point()
+    b.x = 1
+    b.y = 2
+    mut c = Point()
+    c.x = 9
+    c.y = 2
+    if a == b:
+        print("point eq ok")
+    if not (a == c):
+        print("point neq ok")
+
+    mut p = Color()
+    p.r = 10
+    p.g = 20
+    p.b = 30
+    mut q = Color()
+    q.r = 10
+    q.g = 20
+    q.b = 30
+    if p == q:
+        print("color eq ok")
+    print("macro derive_eq ok")

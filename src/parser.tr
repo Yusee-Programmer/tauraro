@@ -2089,6 +2089,17 @@ extend Parser:
                 _df.line = _dl
                 _df.is_public = is_public
                 return box_decl(Decl.DDecoratorDef(_df))
+            case Token.KwMacro:
+                # `macro def name(item) -> code:` — a compile-time code-generating
+                # macro. Parsed like a decorator def (reuses DDecoratorDef) but
+                # flagged is_macro; expanded before sema by expand_macros().
+                self.pos = self.pos + 1   # consume 'macro'
+                mut _ml = self.cur_line()
+                mut _mf = self.parse_function_def(False)
+                _mf.line = _ml
+                _mf.is_public = is_public
+                _mf.is_macro = true
+                return box_decl(Decl.DDecoratorDef(_mf))
             case Token.KwExtern:
                 return self.parse_extern_decl()
             case Token.KwAsync:
