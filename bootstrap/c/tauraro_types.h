@@ -2002,6 +2002,7 @@ typedef struct Sema {
     TrMap* variadic_elem_ty;
     TrMap* fn_defs;
     List_i64* loop_scope_base;
+    List_i64* fn_scope_base;
     long long block_depth;
     List_i64* block_depth_stack;
     long long next_block_id;

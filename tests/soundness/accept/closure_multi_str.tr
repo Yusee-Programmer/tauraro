@@ -1,0 +1,19 @@
+# EXPECT: pass
+# Regression for a heap-corruption bug: a `return` inside a closure used to drop
+# the ENCLOSING function's str locals (they were released when the closure ran AND
+# again at the real function exit -> multiple-release -> STATUS_HEAP_CORRUPTION).
+# A closure must only drop its own locals. Here several str locals are live when
+# two closures run; correct code releases each exactly once.
+def main():
+    mut a: str = "alpha"
+    mut b: str = "bravo"
+    mut c: str = "charlie"
+    mut f = def () -> int:
+        return a.len() + b.len()
+    mut items: List[str] = ["x", "y", "z"]
+    mut g = def () -> int:
+        return len(items) + c.len()
+    mut total: int = f() + g() + f() + g()
+    print(total)        # (5+5) + (3+7) + (5+5) + (3+7) = 40
+    print(a)
+    print(c)

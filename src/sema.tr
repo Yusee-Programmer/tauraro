@@ -189,6 +189,7 @@ pub class Sema:
     pub variadic_elem_ty: Map[str, Pointer[AstType]] # fn name -> element type of the variadic List[T] param
     pub fn_defs:         Map[str, FunctionDef]  # top-level fn name -> full definition, for inspect(T)
     pub loop_scope_base: Vec[int]  # auto-drop: scope-stack depth marking the start of each enclosing loop's scopes
+    pub fn_scope_base: Vec[int]    # auto-drop: scope-stack depth marking the start of each enclosing CLOSURE's scopes — a `return` inside a closure must only drop the closure's own locals, NOT the enclosing function's (else they double-free: released when the closure runs AND at the real function exit)
     pub block_depth: int  # auto-drop: nested-C-block depth (if/while bodies sharing a Scope); 0 = directly in the owning scope's top-level block
     pub block_depth_stack: Vec[int]  # auto-drop: saved block_depth per scope, restored on exit_scope
     pub next_block_id: int       # auto-drop: monotonic id, incremented each time an if/while/etc body block opens
@@ -283,6 +284,7 @@ extend Sema:
         s.variadic_elem_ty       = Map[str, Pointer[AstType]].init(8)
         s.fn_defs                = Map[str, FunctionDef].init(32)
         s.loop_scope_base        = Vec[int].init(8)
+        s.fn_scope_base          = Vec[int].init(8)
         s.block_depth            = 0
         s.block_depth_stack      = Vec[int].init(8)
         s.next_block_id          = 0
@@ -2605,7 +2607,13 @@ extend Sema:
                             case HirStmt.SReturn(lowered_ret):
                                 self.collect_idents(lowered_ret, ret_excl)
                             case _: pass
-                        self.append_drops_from_excl_multi(hb, 0, ret_excl)
+                        # Inside a closure, only drop the closure's own scopes (from its
+                        # base up), never the enclosing function's locals — those are
+                        # dropped at the real function exit and would otherwise double-free.
+                        mut ret_from = 0
+                        if self.fn_scope_base.len > 0:
+                            ret_from = self.fn_scope_base.get(self.fn_scope_base.len - 1)
+                        self.append_drops_from_excl_multi(hb, ret_from, ret_excl)
                     case Stmt.SBreak:
                         if self.loop_scope_base.len > 0:
                             self.append_drops_from(hb, self.loop_scope_base.get(self.loop_scope_base.len - 1))
@@ -4357,7 +4365,11 @@ extend Sema:
                     l = l + 1
                 mut r_ty = AstType.init("void")
                 if ret_ty as usize != 0 as usize: r_ty = ret_ty.read()
+                # A closure is a separate function: a `return` inside it must drop only
+                # the closure's own scopes, never the enclosing function's locals.
+                self.fn_scope_base.push(self.scopes.len - 1)
                 mut clo_body = self.lower_block(body)
+                self.fn_scope_base.pop()
                 self.finalize_scope_drops(clo_body)
                 mut hexpr = HirExpr.EClosure(hparams, r_ty, clo_body, is_async, Vec[HirParam].init(0))
                 self.exit_scope()

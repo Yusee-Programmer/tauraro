@@ -243,6 +243,8 @@ __attribute__((malloc,returns_nonnull,hot)) Sema* Sema_init() {
     /* pass */
     s->loop_scope_base = (void*)List_i64_new();
     /* pass */
+    s->fn_scope_base = (void*)List_i64_new();
+    /* pass */
     s->block_depth = 0LL;
     /* pass */
     s->block_depth_stack = (void*)List_i64_new();
@@ -4943,7 +4945,14 @@ __auto_type _sa_v = _t414.data.SAssign.val;
                     /* pass */
                 }
                 /* pass */
-                Sema_append_drops_from_excl_multi(self, hb, 0LL, ret_excl);
+                long long ret_from = 0LL;
+                /* pass */
+                if ((self->fn_scope_base->len > 0LL)) {
+                    /* pass */
+                    ret_from = List_i64_get(self->fn_scope_base, (self->fn_scope_base->len - 1LL));
+                }
+                /* pass */
+                Sema_append_drops_from_excl_multi(self, hb, ret_from, ret_excl);
             } else if (_t415.tag == Stmt_SBreak) {
                 /* pass */
                 if ((self->loop_scope_base->len > 0LL)) {
@@ -8757,7 +8766,11 @@ __auto_type is_async = _t489.data.EClosure.is_async;
             r_ty = (*ret_ty);
         }
         /* pass */
+        List_i64_append(self->fn_scope_base, (self->scopes->len - 1LL));
+        /* pass */
         HirBlock* clo_body = Sema_lower_block(self, body);
+        /* pass */
+        List_i64_pop(self->fn_scope_base);
         /* pass */
         Sema_finalize_scope_drops(self, clo_body);
         /* pass */
