@@ -53,6 +53,7 @@ These topics are **optional** for everyday Tauraro development. Normal programs 
 | A7 | [Concurrency Guide](advanced/07_concurrency_guide.md) | All concurrency models, primitives, decision matrix, best practices |
 | A8 | [Zero-Copy Guide](advanced/08_zero_copy.md) | When zero-copy wins (StrView, borrowed payloads, dict borrows) vs parity |
 | A9 | [Safety Specification](advanced/09_safety_spec.md) | **Normative**: ARC-floor invariants, what `--strict` proves/elides, how it's verified |
+| A10 | [Macros](advanced/10_macros.md) | `macro def` + `@` — compile-time code generation via f-string templates over an `item` reflection |
 
 ---
 

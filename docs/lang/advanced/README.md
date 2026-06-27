@@ -14,7 +14,8 @@ This directory covers advanced Tauraro topics. Core Tauraro development — writ
 | [02 — Advanced Ownership](02_advanced_ownership.md) | Move, borrow, Shared deep dive | Understanding M-2 errors; shared mutable state |
 | [03 — Channel Select](03_channel_select.md) | `select:` for multiplexed channels | Fan-in, timeouts, non-blocking channel ops |
 | [04 — Generators](04_generators.md) | Not currently supported — use list comprehensions / manual loops | — |
-| [05 — Decorators](05_decorators.md) | `@inline`, `@hot`, `@property`, custom decorators | Compile-time code annotation and transformation |
+| [05 — Decorators](05_decorators.md) | `@inline`, `@hot`, `@property`, `@value_type`, custom decorators | Compile-time code annotation and transformation |
+| [10 — Macros](10_macros.md) | `macro def` + `@` — compile-time code generation via f-string templates over an `item` reflection (`@derive_eq`, etc.) | Generating boilerplate (derives, wrappers) from a declaration's shape |
 | [06 — Sendable](06_sendable.md) | Thread-safety enforcement via the `Sendable` interface | Passing types across threads without data races |
 | [07 — Concurrency Guide](07_concurrency_guide.md) | All concurrency models, primitives, decision matrix, best-practice combinations | Choosing the right model; building servers/parallel work; see `examples/concurrency/` |
 
