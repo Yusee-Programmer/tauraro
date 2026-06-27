@@ -1,0 +1,23 @@
+# Mutating @value_type method: `bump` writes self.field, so it must take a
+# pointer self and the call must pass &receiver (else the write is lost).
+@value_type
+pub class Counter:
+    pub count: int
+
+extend Counter:
+    pub def of(start: int) -> Counter:
+        mut c = Counter()
+        c.count = start
+        return c
+    pub def bump(self):
+        self.count = self.count + 1     # MUTATES self
+    pub def value(self) -> int:
+        return self.count               # read-only
+
+def main():
+    mut c = Counter.of(10)
+    c.bump()
+    c.bump()
+    c.bump()
+    print(c.value())                    # expect 13
+    print("mutating value-type ok")

@@ -206,9 +206,33 @@ views. This is the lever that lets such types **match Rust's performance**:
   one do not affect the other. That's correct for points/dates/views, but wrong
   for anything you intend to share and mutate through aliases.
 
-**Not yet supported (avoid for now):** generic value types (`Box[T]`),
-mutating value-type methods, and using a value type as a `Dict`/`Map` value or
-`Set` element. Reference (default) classes have none of these limits.
+**Mutating methods are supported.** A method that writes `self.field` is given a
+*pointer* `self` automatically and the call passes the receiver by reference, so
+the write persists (the compiler detects self-mutation and rewires both sides):
+
+```python
+@value_type
+pub class Counter:
+    pub count: int
+
+extend Counter:
+    pub def bump(self):
+        self.count = self.count + 1   # persists to the caller's value
+
+mut c = Counter()
+c.bump()                              # c.count is now 1
+```
+
+Note the value-semantics caveat still applies on **assignment/copy**: `b = a`
+copies, so `b.bump()` does not affect `a`.
+
+**Generic value types** (`Box[T]`) are supported — `List[Box[int]]` stores the
+boxes inline. Use an explicit annotation at the binding site
+(`mut b: Box[int] = Box[int].of(42)`), since bare inference can't yet substitute
+the receiver's type args.
+
+**Not yet supported (avoid for now):** using a value type as a `Dict`/`Map`
+value or `Set` element. Reference (default) classes have none of these limits.
 
 **Best practice.** Default to a normal (reference) class. Reach for
 `@value_type` only for a small, immutable, copy-friendly type on a measured hot

@@ -145,6 +145,7 @@ pub class CGenerator:
     pub cur_proven_borrows: Map[str, bool]  # outlives engine: ref-borrow locals whose source provably outlives them — refcount ELIDED (no retain at bind, no release at scope)
     pub cur_ret_is_borrow: bool  # current function's return type is `ref` — returns a BORROW (no retain on return; the caller does not free it)
     pub eliding_get_retain: bool # set while generating a PROVEN collection-element borrow's RHS (`ref T = coll.get(k)`) — the str-valued get returns the unboxed alias WITHOUT retaining (zero-copy borrow); the SLet also skips the release
+    pub cur_self_is_ptr: bool     # inside a MUTATING @value_type method, `self` is a POINTER (`ClassName* self`) so writes persist — gen_prop_access uses `self->field`, not `self.field`
     pub coll_local_sfx: Map[str, str]    # List/Vec local name -> list_sfx (e.g. "i64"/"TrStr") for SAutoDrop's List_<sfx>_free; Dict/Map/Set don't need a suffix (Dict_free)
     pub coll_local_idict: Map[str, bool] # Dict/Map/Set local name -> true if int-keyed (TrIDict*/_TrISet*, freed via _tr_idict_free instead of Dict_free)
     pub coll_local_strval: Map[str, bool] # Dict/Map local name -> true if value type is str (_tr_str_box'd; freed via Dict_free_strval/_tr_idict_free_strval, #54)
@@ -165,6 +166,7 @@ pub class CGenerator:
     pub in_task_group:   int              # depth counter for task_group nesting
     pub in_gpu_block:    int              # depth counter for gpu: block nesting
     pub value_types:     Map[str, bool]  # classes with is_class=false - no * in C type
+    pub value_list_elems: Vec[str]       # monomorphized value-type element names (Box_i64) needing a List_<name> type; emitted by emit_list_fwd_decls (post buffer-redirect) since the mono scan runs before it
     pub global_vars:     Map[str, bool]  # top-level var names hoisted to C file scope (visible in all functions)
     pub closure_cap_set: Map[str, bool]  # captured var names for the current closure being generated
     pub closure_env_var: str             # env var name inside a closure body (empty = not in closure body)
@@ -196,6 +198,7 @@ pub class CGenerator:
         g.cur_proven_borrows = Map[str, bool].init(8)
         g.cur_ret_is_borrow = false
         g.eliding_get_retain = false
+        g.cur_self_is_ptr = false
         g.coll_local_sfx = Map[str, str].init(16)
         g.coll_local_idict = Map[str, bool].init(16)
         g.coll_local_strval = Map[str, bool].init(16)
@@ -216,6 +219,7 @@ pub class CGenerator:
         g.in_task_group  = 0
         g.in_gpu_block   = 0
         g.value_types    = Map[str, bool].init(32)
+        g.value_list_elems = Vec[str].init(8)
         g.global_vars    = Map[str, bool].init(32)
         g.closure_cap_set = Map[str, bool].init(0)
         g.closure_env_var = ""
@@ -295,14 +299,21 @@ pub class CGenerator:
                         self.w("typedef struct List_" + elem.name + " List_" + elem.name + ";\n")
 
     pub def emit_list_fwd_decls(self, prog: HirProgram):
+        # Monomorphized value-type list types (List_Box_i64) recorded by the mono
+        # scan — emit them here, after generate_types_header has swapped in the
+        # real list_types_buf, so they actually land in the header.
+        mut vli = 0
+        while vli < self.value_list_elems.len:
+            self.ensure_list_type(self.value_list_elems.get(vli))
+            vli = vli + 1
         mut ci = 0
         while ci < prog.classes.len:
             mut cls = prog.classes.get(ci)
-            # @value_type classes are stored inline in List_<Name>; ensure that
-            # list type exists eagerly (here, before the list-types buffer is
-            # flushed) so `List[ValueType]` locals/args resolve — value-type list
-            # use is often discovered only in a function body, which is too late.
-            if not cls.is_class:
+            # Non-generic @value_type classes are stored inline in List_<Name>;
+            # ensure that list type eagerly. GENERIC value types (`Box[T]`) are
+            # NOT ensured here — `T` is unresolved (would emit `struct Box { T v }`);
+            # their list types are ensured per-monomorphization in scan_mono_ty.
+            if not cls.is_class and cls.generics.len == 0:
                 self.ensure_list_type(cls.name)
             mut fi = 0
             while fi < cls.fields.len:
@@ -445,6 +456,11 @@ pub class CGenerator:
         if n == "List":
             if ty.args.len > 0:
                 mut elem = ty.args.get(0).read()
+                # Generic value-type element (`List[Box[int]]`): inline-store the
+                # MONOMORPHIZED struct (`List_Box_i64`), not the base name.
+                if self.value_types.contains(elem.name) and elem.args.len > 0 and self.classes.contains(elem.name):
+                    self.ensure_mono(self.classes.get(elem.name), elem.args)
+                    return "List_" + elem.name + "_" + self.type_args_suffix(elem.args) + "*"
                 mut sfx = self.list_elem_suffix(elem.name)
                 if sfx == "ptr": return "List_ptr*"
                 return "List_" + self.list_sfx(sfx) + "*"
@@ -453,6 +469,9 @@ pub class CGenerator:
         if n == "Vec":
             if ty.args.len > 0:
                 mut elem = ty.args.get(0).read()
+                if self.value_types.contains(elem.name) and elem.args.len > 0 and self.classes.contains(elem.name):
+                    self.ensure_mono(self.classes.get(elem.name), elem.args)
+                    return "List_" + elem.name + "_" + self.type_args_suffix(elem.args) + "*"
                 mut sfx = self.list_elem_suffix(elem.name)
                 if sfx == "ptr": return "List_ptr*"
                 return "List_" + self.list_sfx(sfx) + "*"
@@ -634,6 +653,12 @@ pub class CGenerator:
         self.mono_done.insert(mono_key, true)
 
         mut mono_name = cls.name + "_" + sfx
+        # Generic VALUE type: the monomorphized instance (`Box_i64`) is also a
+        # value type — register it so every value-type codegen site (construction,
+        # field access via `.`, by-value self, no-drop, inline list storage)
+        # recognizes the mono name, not just the base generic name (`Box`).
+        if self.value_types.contains(cls.name):
+            self.value_types.insert(mono_name, true)
 
         # Pre-resolve type arguments using active parent substitutions
         mut resolved_args = Vec[str].init(type_args.len)
@@ -698,9 +723,11 @@ pub class CGenerator:
             self.coll_local_idict = Map[str, bool].init(16)
             self.coll_local_strval = Map[str, bool].init(16)
             self.seed_params(m)
+            self.cur_self_is_ptr = self.value_types.contains(mono_name) and self.vt_method_mutates_self(m)
             mut sig = self.get_inline_attrs(m) + self.gen_func_sig(m, mono_name)
             self.w(sig + " {\n")
             self.gen_func_body(m.body, 1)
+            self.cur_self_is_ptr = false
             self.w("}\n\n")
             self.cur_class = old_class
             self.cur_func  = old_func
@@ -815,8 +842,12 @@ pub class CGenerator:
         self.coll_local_idict = Map[str, bool].init(16)
         self.coll_local_strval = Map[str, bool].init(16)
         self.seed_params(f)
+        # extend-block methods are free functions carrying class_name; a mutating
+        # @value_type method here takes a pointer self -> `self->field` in the body.
+        self.cur_self_is_ptr = f.class_name != "" and self.value_types.contains(f.class_name) and self.vt_method_mutates_self(f)
         self.w(sig + " {\n")
         self.gen_func_body(f.body, 1)
+        self.cur_self_is_ptr = false
         self.w("}\n\n")
         self.cur_class = old_class
         self.cur_func = old_func
@@ -890,6 +921,72 @@ pub class CGenerator:
             return "__attribute__((malloc,returns_nonnull,hot)) "
         return "__attribute__((hot)) "
 
+    # True if this method writes `self.<field> = ...` anywhere in its body. A
+    # @value_type method that mutates self must take `self` BY POINTER (else the
+    # write hits a by-value copy and is lost).
+    pub def vt_method_mutates_self(self, f: HirFunction) -> bool:
+        return self.hir_block_mutates_self(f.body)
+
+    # True when a call `recv.method(...)` targets a MUTATING @value_type method,
+    # so the receiver must be passed by address (`&recv`).
+    pub def vt_call_needs_ptr_self(self, class_name: str, method: str) -> bool:
+        if not self.value_types.contains(class_name): return false
+        if not self.classes.contains(class_name): return false
+        mut cls = self.classes.get(class_name)
+        mut i = 0
+        while i < cls.methods.len:
+            if cls.methods.get(i).name == method:
+                return self.vt_method_mutates_self(cls.methods.get(i))
+            i = i + 1
+        return false
+
+    pub def hir_block_mutates_self(self, block: HirBlock) -> bool:
+        if _is_invalid_ptr(block as usize): return false
+        if _is_invalid_ptr(block.stmts as usize): return false
+        mut i = 0
+        while i < block.stmts.len:
+            if self.hir_stmt_mutates_self(block.stmts.get(i)): return true
+            i = i + 1
+        return false
+
+    pub def hir_stmt_mutates_self(self, s: Pointer[HirStmt]) -> bool:
+        if _is_invalid_ptr(s as usize): return false
+        match s.read():
+            case HirStmt.SAssign(tgt, _):
+                match tgt.read():
+                    case HirExpr.EPropAccess(o, _, _):
+                        match o.read():
+                            case HirExpr.EIdent(on, _, _):
+                                if on == "self": return true
+                            case _: pass
+                    case _: pass
+                return false
+            case HirStmt.SIf(_, t, e):
+                if self.hir_block_mutates_self(t): return true
+                if not _is_invalid_ptr(e as usize): return self.hir_block_mutates_self(e)
+                return false
+            case HirStmt.SWhile(_, body): return self.hir_block_mutates_self(body)
+            case HirStmt.SFor(_, _, body): return self.hir_block_mutates_self(body)
+            case HirStmt.SForUnpack(_, _, body): return self.hir_block_mutates_self(body)
+            case HirStmt.SUnsafe(body): return self.hir_block_mutates_self(body)
+            case HirStmt.SWith(_, _, body): return self.hir_block_mutates_self(body)
+            case HirStmt.SMatch(_, arms):
+                mut ai = 0
+                while ai < arms.len:
+                    if self.hir_block_mutates_self(arms.get(ai).body): return true
+                    ai = ai + 1
+                return false
+            case HirStmt.STry(tb, catches, fin):
+                if self.hir_block_mutates_self(tb): return true
+                if not _is_invalid_ptr(fin as usize):
+                    if self.hir_block_mutates_self(fin): return true
+                mut ci = 0
+                while ci < catches.len:
+                    if self.hir_block_mutates_self(catches.get(ci).read().body): return true
+                    ci = ci + 1
+                return false
+            case _: return false
+
     pub def gen_func_sig(self, f: HirFunction, class_name: str) -> str:
         mut old_f = self.cur_func
         self.cur_func = f.name
@@ -921,9 +1018,12 @@ pub class CGenerator:
         mut first = true
 
         if class_name != "" and not f.is_static:
-            # Enums and @value_type classes take `self` BY VALUE; reference
-            # (heap) classes take a pointer.
-            if self.enums.contains(class_name) or self.value_types.contains(class_name):
+            # A @value_type method that MUTATES self takes a pointer (writes must
+            # persist). Otherwise enums and @value_type classes take `self` BY
+            # VALUE; reference (heap) classes take a pointer.
+            if self.value_types.contains(class_name) and self.vt_method_mutates_self(f):
+                sig = sig + class_name + "* self"
+            elif self.enums.contains(class_name) or self.value_types.contains(class_name):
                 sig = sig + class_name + " self"
             else:
                 sig = sig + class_name + "* self"
@@ -1627,8 +1727,11 @@ pub class CGenerator:
             return obj_s + "." + p
         if self.interfaces.contains(t_n) and self.interfaces as usize != 0 as usize:
             return obj_s + "." + p
-        # Value type (@value_type): field access by value, `.` not `->`.
+        # Value type (@value_type): field access by value, `.` not `->`. Inside a
+        # MUTATING value-type method, `self` is a pointer -> `self->field`.
         if self.value_types.contains(t_n):
+            if obj_s == "self" and self.cur_self_is_ptr:
+                return obj_s + "->" + p
             return obj_s + "." + p
         return obj_s + "->" + p
 
@@ -2027,8 +2130,15 @@ pub class CGenerator:
                 if self.classes.contains(n) and n != "Vec" and n != "Map" and n != "Dict" and n != "List":
                     mut ucls = self.classes.get(n)
                     # Value type (@value_type): construct on the STACK by value, no
-                    # heap allocation, no refcount. (Generic value types not yet wired.)
+                    # heap allocation, no refcount. Resolve the monomorphized name
+                    # for a generic value type (`Box[T]()` -> `(Box_i64){0}`).
                     if self.value_types.contains(n):
+                        if ucls.generics.len > 0 and ident_ty.args.len > 0:
+                            self.ensure_mono(ucls, ident_ty.args)
+                            return "(" + n + "_" + self.type_args_suffix(ident_ty.args) + "){0}"
+                        if ucls.generics.len > 0:
+                            mut vsfx = self.synth_class_suffix(ucls)
+                            if vsfx != "": return "(" + n + "_" + vsfx + "){0}"
                         return "(" + n + "){0}"
                     if ucls.generics.len > 0 and ident_ty.args.len > 0:
                         mut sfx = self.type_args_suffix(ident_ty.args)
@@ -3209,7 +3319,11 @@ pub class CGenerator:
             mut dispatch_name = class_name + "_" + method_c
             if self.overloaded_sigs.contains(dispatch_name):
                 dispatch_name = dispatch_name + "_" + args.len.to_str() + "arg"
-            mut s = dispatch_name + "(" + obj_s
+            # Mutating @value_type method: pass the receiver by address so writes
+            # to `self.<field>` persist to the caller's value.
+            mut self_arg = obj_s
+            if self.vt_call_needs_ptr_self(class_name, method): self_arg = "&(" + obj_s + ")"
+            mut s = dispatch_name + "(" + self_arg
             if args.len > 0: s = s + ", " + self.gen_args(args)
             return s + ")"
 
@@ -3237,7 +3351,13 @@ pub class CGenerator:
         match obj.read():
             case HirExpr.EIdent(_, ity, _):
                 if ity.args.len > 0:
-                    elem_sfx = self.list_elem_suffix(ity.args.get(0).read().name)
+                    mut _me = ity.args.get(0).read()
+                    # Generic value-type element -> monomorphized list suffix.
+                    if self.value_types.contains(_me.name) and _me.args.len > 0 and self.classes.contains(_me.name):
+                        self.ensure_mono(self.classes.get(_me.name), _me.args)
+                        elem_sfx = _me.name + "_" + self.type_args_suffix(_me.args)
+                    else:
+                        elem_sfx = self.list_elem_suffix(_me.name)
                 elif self.type_alias_map.contains(ity.name):
                     # Type alias e.g. NodeList -> "List_str*" - extract elem suffix from C name.
                     mut _alias_raw = self.type_alias_map.get(ity.name)
@@ -3847,7 +3967,14 @@ pub class CGenerator:
 
     pub def gen_list_literal(self, items: Vec[Pointer[HirExpr]], ty: AstType) -> str:
         mut sfx = "ptr"
-        if ty.args.len > 0: sfx = self.list_elem_suffix(ty.args.get(0).read().name)
+        if ty.args.len > 0:
+            mut _le = ty.args.get(0).read()
+            # Generic value-type element -> monomorphized inline suffix (Box_i64).
+            if self.value_types.contains(_le.name) and _le.args.len > 0 and self.classes.contains(_le.name):
+                self.ensure_mono(self.classes.get(_le.name), _le.args)
+                sfx = _le.name + "_" + self.type_args_suffix(_le.args)
+            else:
+                sfx = self.list_elem_suffix(_le.name)
         elif items.len > 0:
             sfx = self.list_elem_suffix(hir_expr_type(items.get(0)).name)
         mut lsfx = self.list_sfx(sfx)
@@ -5710,6 +5837,18 @@ pub class CGenerator:
             mut ucls = self.classes.get(ty.name)
             if ucls.generics.len > 0:
                 self.ensure_mono(ucls, ty.args)
+        # List/Vec of a GENERIC VALUE TYPE (`List[Box[int]]`): monomorphize the
+        # element (Box_i64 struct -> mono_buf, which survives the redirect) and
+        # RECORD that List_Box_i64 is needed. We don't ensure_list_type here: this
+        # scan runs BEFORE generate_types_header swaps in a fresh list_types_buf,
+        # so the emission must be deferred to emit_list_fwd_decls (post-redirect).
+        # Non-generic value-type lists (List_StrView, List_Date) are already
+        # ensured by emit_list_fwd_decls iterating prog.classes.
+        if (ty.name == "List" or ty.name == "Vec") and ty.args.len > 0:
+            mut elty = ty.args.get(0).read()
+            if self.value_types.contains(elty.name) and elty.args.len > 0 and self.classes.contains(elty.name):
+                self.ensure_mono(self.classes.get(elty.name), elty.args)
+                self.value_list_elems.push(elty.name + "_" + self.type_args_suffix(elty.args))
 
     pub def scan_mono_block(self, block: HirBlock):
         if _is_invalid_ptr(block as usize): return
@@ -6006,8 +6145,10 @@ pub class CGenerator:
                     self.coll_local_strval = Map[str, bool].init(16)
                     self.shared_vars = Map[str, str].init(8)
                     self.seed_params(m)
+                    self.cur_self_is_ptr = self.value_types.contains(c.name) and self.vt_method_mutates_self(m)
                     self.w(self.get_inline_attrs(m) + self.gen_func_sig(m, c.name) + " {\n")
                     self.gen_func_body(m.body, 1)
+                    self.cur_self_is_ptr = false
                     self.w("}\n\n")
                     self.cur_class = ""
                     self.cur_func  = ""
@@ -6597,8 +6738,10 @@ pub class CGenerator:
                         self.coll_local_idict = Map[str, bool].init(16)
                         self.coll_local_strval = Map[str, bool].init(16)
                         self.seed_params(m)
+                        self.cur_self_is_ptr = self.value_types.contains(c.name) and self.vt_method_mutates_self(m)
                         self.w(self.get_proto_attrs(m) + self.gen_func_sig(m, c.name) + " {\n")
                         self.gen_func_body(m.body, 1)
+                        self.cur_self_is_ptr = false
                         self.w("}\n\n")
                         self.cur_class = ""
                         self.cur_func  = ""
@@ -6657,8 +6800,10 @@ pub class CGenerator:
                         self.coll_local_idict = Map[str, bool].init(16)
                         self.coll_local_strval = Map[str, bool].init(16)
                         self.seed_params(f)
+                        self.cur_self_is_ptr = f.class_name != "" and self.value_types.contains(f.class_name) and self.vt_method_mutates_self(f)
                         self.w(self.get_proto_attrs(f) + self.gen_func_sig(f, f.class_name) + " {\n")
                         self.gen_func_body(f.body, 1)
+                        self.cur_self_is_ptr = false
                         self.w("}\n\n")
                         self.cur_func  = ""
                         self.cur_class = ""
@@ -6734,8 +6879,10 @@ pub class CGenerator:
                                         self.coll_local_strval = Map[str, bool].init(16)
                                         self.shared_vars = Map[str, str].init(8)
                                         self.seed_params(m)
+                                        self.cur_self_is_ptr = self.value_types.contains(c.name) and self.vt_method_mutates_self(m)
                                         self.w(self.get_proto_attrs(m) + self.gen_func_sig(m, c.name) + " {\n")
                                         self.gen_func_body(m.body, 1)
+                                        self.cur_self_is_ptr = false
                                         self.w("}\n\n")
                                         self.cur_class = ""
                                         self.cur_func  = ""
@@ -6833,8 +6980,10 @@ pub class CGenerator:
                                 self.coll_local_strval = Map[str, bool].init(16)
                                 self.shared_vars = Map[str, str].init(8)
                                 self.seed_params(f)
+                                self.cur_self_is_ptr = f.class_name != "" and self.value_types.contains(f.class_name) and self.vt_method_mutates_self(f)
                                 self.w(self.get_proto_attrs(f) + self.gen_func_sig(f, f.class_name) + " {\n")
                                 self.gen_func_body(f.body, 1)
+                                self.cur_self_is_ptr = false
                                 self.w("}\n\n")
                                 self.cur_func  = ""
                                 self.cur_class = ""
