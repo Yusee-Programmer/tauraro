@@ -54,7 +54,7 @@ Tauraro's zero-copy is **real and Rust-competitive** — substring views and
 borrowed payloads both land within ~1 ms of Rust at comparable or *lower* memory,
 with Python-like syntax and an ARC safety floor rather than mandatory lifetimes
 everywhere. The headline `&str`-vs-`StrView` gap is closed by the `@value_type`
-representation (stack value, inline collection storage). Generic value types
-(`Box[T]`) and mutating value-type methods now work too; the only remaining
-`@value_type` polish is using a value type as a `Dict`/`Map` value or `Set`
-element — not a fundamental design limit.
+representation (stack value, inline collection storage). The `@value_type` story
+is now complete: generic value types (`Box[T]`), mutating value-type methods, and
+value types stored **inline** as `Dict`/`Map` values and `Set` elements
+(`Dict_str_Point`, `Set_Point` — like Rust's `HashMap`/`HashSet`) all work.

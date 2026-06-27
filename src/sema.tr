@@ -2799,7 +2799,10 @@ extend Sema:
                         mut pc_ctn = pc_cont_ty.name
                         if pc_ctn == "Vec" or pc_ctn == "List" or pc_ctn == "Dict" or pc_ctn == "Map" or pc_ctn == "Set":
                             mut pc_elem_ty = hir_expr_type(hval).name
-                            if not self.is_primitive(hir_expr_type(hval)):
+                            # A @value_type element is returned BY VALUE (a copy), so
+                            # `x = d.get(k)` is NOT a borrow into the container.
+                            mut pc_is_vt = self.classes.contains(pc_elem_ty) and not self.classes.get(pc_elem_ty).is_class
+                            if (not self.is_primitive(hir_expr_type(hval))) and not pc_is_vt:
                                 self.container_borrows.insert(pc_cont_nm, name)
                                 # Class-instance element borrow: must NOT be auto-dropped.
                                 # (str/collection elements are returned retained by .get, so

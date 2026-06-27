@@ -149,6 +149,7 @@ pub class CGenerator:
     pub coll_local_sfx: Map[str, str]    # List/Vec local name -> list_sfx (e.g. "i64"/"TrStr") for SAutoDrop's List_<sfx>_free; Dict/Map/Set don't need a suffix (Dict_free)
     pub coll_local_idict: Map[str, bool] # Dict/Map/Set local name -> true if int-keyed (TrIDict*/_TrISet*, freed via _tr_idict_free instead of Dict_free)
     pub coll_local_strval: Map[str, bool] # Dict/Map local name -> true if value type is str (_tr_str_box'd; freed via Dict_free_strval/_tr_idict_free_strval, #54)
+    pub coll_local_vtcoll: Map[str, str] # Dict/Map/Set local name -> typed-collection struct (e.g. "Dict_str_Point"/"Set_Point") for SAutoDrop's <name>_free
     pub type_subst:     Map[str, str]   # T -> "long long" during mono gen
     pub mono_done:      Map[str, bool]  # "Vec_i64" -> true (prevents duplicate gen)
     pub list_type_done: Map[str, bool]  # "Token" -> true (prevents duplicate list gen)
@@ -167,6 +168,8 @@ pub class CGenerator:
     pub in_gpu_block:    int              # depth counter for gpu: block nesting
     pub value_types:     Map[str, bool]  # classes with is_class=false - no * in C type
     pub value_list_elems: Vec[str]       # monomorphized value-type element names (Box_i64) needing a List_<name> type; emitted by emit_list_fwd_decls (post buffer-redirect) since the mono scan runs before it
+    pub value_dict_elems: Vec[str]       # "kc|vname" pairs: Dict/Map with a value-type VALUE stored inline (typed Dict_<kc>_<vname>); recorded by scan, emitted by emit_list_fwd_decls
+    pub value_set_elems:  Vec[str]       # value-type names for Set elements stored inline (typed Set_<vname>); recorded by scan, emitted by emit_list_fwd_decls
     pub global_vars:     Map[str, bool]  # top-level var names hoisted to C file scope (visible in all functions)
     pub closure_cap_set: Map[str, bool]  # captured var names for the current closure being generated
     pub closure_env_var: str             # env var name inside a closure body (empty = not in closure body)
@@ -202,6 +205,7 @@ pub class CGenerator:
         g.coll_local_sfx = Map[str, str].init(16)
         g.coll_local_idict = Map[str, bool].init(16)
         g.coll_local_strval = Map[str, bool].init(16)
+        g.coll_local_vtcoll = Map[str, str].init(16)
         g.type_subst    = Map[str, str].init(8)
         g.mono_done     = Map[str, bool].init(32)
         g.list_type_done = Map[str, bool].init(16)
@@ -220,6 +224,8 @@ pub class CGenerator:
         g.in_gpu_block   = 0
         g.value_types    = Map[str, bool].init(32)
         g.value_list_elems = Vec[str].init(8)
+        g.value_dict_elems = Vec[str].init(8)
+        g.value_set_elems  = Vec[str].init(8)
         g.global_vars    = Map[str, bool].init(32)
         g.closure_cap_set = Map[str, bool].init(0)
         g.closure_env_var = ""
@@ -288,6 +294,63 @@ pub class CGenerator:
         self.wlt("static inline " + n + " List_" + n + "_pop(List_" + n + "* l) { if(!l||l->len==0) return (" + n + "){0}; l->len--; return l->data[l->len]; }\n")
         self.wlt("static inline void List_" + n + "_free(List_" + n + "* l) { if(l){ free(l->data); free(l); } }\n")
 
+    # Typed inline dict: Dict_<kc>_<vname> stores the value-type struct BY VALUE in
+    # the node (no void* boxing, no per-entry heap copy) - like Rust's HashMap<K,V>.
+    # kc is "str" (char* keys) or "i64" (long long keys). Mirrors the runtime Dict.
+    pub def ensure_dict_type(self, kc: str, vname: str):
+        mut dn = "Dict_" + kc + "_" + vname
+        if self.list_type_done.contains(dn): return
+        self.list_type_done.insert(dn, true)
+        self.ensure_list_type(vname)            # for .values() -> List_<vname>
+        mut is_str = kc == "str"
+        mut ktype = "long long"
+        if is_str: ktype = "char*"
+        mut node = "_DN_" + kc + "_" + vname
+        mut hashexpr = "((size_t)key) % d->cap"
+        mut keyeq = "n->key==key"
+        mut keystore = "key"
+        mut keyfree = ""
+        if is_str:
+            hashexpr = "_dict_hash(key, d->cap)"
+            keyeq = "strcmp(n->key,key)==0"
+            keystore = "strdup(key)"
+            keyfree = "if(n->key) _tr_free(n->key); "
+        self.wlt("typedef struct " + node + " { " + ktype + " key; " + vname + " value; struct " + node + "* next; } " + node + ";\n")
+        self.wlt("typedef struct { " + node + "** buckets; size_t cap; size_t len; } " + dn + ";\n")
+        self.wlt("static inline " + dn + "* " + dn + "_new(long long c){ (void)c; " + dn + "* d=(" + dn + "*)malloc(sizeof(" + dn + ")); d->cap=0; d->len=0; d->buckets=NULL; return d; }\n")
+        self.wlt("static inline void " + dn + "_set(" + dn + "* d, " + ktype + " key, " + vname + " val){ if(!d) return; if(d->cap==0){ d->cap=16; d->buckets=(" + node + "**)calloc(16,sizeof(" + node + "*)); } size_t i=" + hashexpr + "; " + node + "* n=d->buckets[i]; while(n){ if(" + keyeq + "){ n->value=val; return; } n=n->next; } " + node + "* nd=(" + node + "*)malloc(sizeof(" + node + ")); nd->key=" + keystore + "; nd->value=val; nd->next=d->buckets[i]; d->buckets[i]=nd; d->len++; }\n")
+        self.wlt("static inline " + vname + " " + dn + "_get(" + dn + "* d, " + ktype + " key){ if(!d||d->cap==0) return (" + vname + "){0}; size_t i=" + hashexpr + "; " + node + "* n=d->buckets[i]; while(n){ if(" + keyeq + ") return n->value; n=n->next; } return (" + vname + "){0}; }\n")
+        self.wlt("static inline bool " + dn + "_has(" + dn + "* d, " + ktype + " key){ if(!d||d->cap==0) return false; size_t i=" + hashexpr + "; " + node + "* n=d->buckets[i]; while(n){ if(" + keyeq + ") return true; n=n->next; } return false; }\n")
+        self.wlt("static inline long long " + dn + "_len(" + dn + "* d){ return d?(long long)d->len:0LL; }\n")
+        self.wlt("static inline void " + dn + "_remove(" + dn + "* d, " + ktype + " key){ if(!d||d->cap==0) return; size_t i=" + hashexpr + "; " + node + "* n=d->buckets[i]; " + node + "* p=NULL; while(n){ if(" + keyeq + "){ if(p) p->next=n->next; else d->buckets[i]=n->next; " + keyfree + "_tr_free(n); if(d->len>0)d->len--; return; } p=n; n=n->next; } }\n")
+        self.wlt("static inline void " + dn + "_free(" + dn + "* d){ if(!d) return; for(size_t i=0;i<d->cap;i++){ " + node + "* n=d->buckets[i]; while(n){ " + node + "* nx=n->next; " + keyfree + "_tr_free(n); n=nx; } } _tr_free(d->buckets); _tr_free(d); }\n")
+        self.wlt("static inline void " + dn + "_clear(" + dn + "* d){ if(!d) return; for(size_t i=0;i<d->cap;i++){ " + node + "* n=d->buckets[i]; while(n){ " + node + "* nx=n->next; " + keyfree + "_tr_free(n); n=nx; } if(d->buckets) d->buckets[i]=NULL; } d->len=0; }\n")
+        self.wlt("static inline List_" + vname + "* " + dn + "_values(" + dn + "* d){ List_" + vname + "* l=List_" + vname + "_new(); if(d){ for(size_t i=0;i<d->cap;i++){ " + node + "* n=d->buckets[i]; while(n){ List_" + vname + "_append(l,n->value); n=n->next; } } } return l; }\n")
+        if is_str:
+            self.wlt("static inline List_TrStr* " + dn + "_keys(" + dn + "* d){ List_TrStr* l=List_TrStr_new(); if(d){ for(size_t i=0;i<d->cap;i++){ " + node + "* n=d->buckets[i]; while(n){ List_TrStr_append(l,_tr_str_lit(n->key)); n=n->next; } } } return l; }\n")
+        else:
+            self.wlt("static inline List_i64* " + dn + "_keys(" + dn + "* d){ List_i64* l=List_i64_new(); if(d){ for(size_t i=0;i<d->cap;i++){ " + node + "* n=d->buckets[i]; while(n){ List_i64_append(l,n->key); n=n->next; } } } return l; }\n")
+
+    # Typed inline set: Set_<vname> stores the value-type struct BY VALUE; hashed by
+    # its raw bytes (FNV) and compared with memcmp (POD value types only).
+    pub def ensure_set_type(self, vname: str):
+        mut sn = "Set_" + vname
+        if self.list_type_done.contains(sn): return
+        self.list_type_done.insert(sn, true)
+        self.ensure_list_type(vname)            # for .to_list() -> List_<vname>
+        mut node = "_SN_" + vname
+        self.wlt("typedef struct " + node + " { " + vname + " elem; struct " + node + "* next; } " + node + ";\n")
+        self.wlt("typedef struct { " + node + "** buckets; size_t cap; size_t len; } " + sn + ";\n")
+        self.wlt("static inline size_t " + sn + "_hash(" + vname + " e, size_t cap){ unsigned char* p=(unsigned char*)&e; size_t h=5381; for(size_t i=0;i<sizeof(" + vname + ");i++) h=h*33+p[i]; return h%cap; }\n")
+        self.wlt("static inline " + sn + "* " + sn + "_new(long long c){ (void)c; " + sn + "* s=(" + sn + "*)malloc(sizeof(" + sn + ")); s->cap=0; s->len=0; s->buckets=NULL; return s; }\n")
+        self.wlt("static inline void " + sn + "_add(" + sn + "* s, " + vname + " e){ if(!s) return; if(s->cap==0){ s->cap=16; s->buckets=(" + node + "**)calloc(16,sizeof(" + node + "*)); } size_t i=" + sn + "_hash(e,s->cap); " + node + "* n=s->buckets[i]; while(n){ if(memcmp(&n->elem,&e,sizeof(" + vname + "))==0) return; n=n->next; } " + node + "* nd=(" + node + "*)malloc(sizeof(" + node + ")); nd->elem=e; nd->next=s->buckets[i]; s->buckets[i]=nd; s->len++; }\n")
+        self.wlt("static inline bool " + sn + "_contains(" + sn + "* s, " + vname + " e){ if(!s||s->cap==0) return false; size_t i=" + sn + "_hash(e,s->cap); " + node + "* n=s->buckets[i]; while(n){ if(memcmp(&n->elem,&e,sizeof(" + vname + "))==0) return true; n=n->next; } return false; }\n")
+        self.wlt("static inline void " + sn + "_remove(" + sn + "* s, " + vname + " e){ if(!s||s->cap==0) return; size_t i=" + sn + "_hash(e,s->cap); " + node + "* n=s->buckets[i]; " + node + "* p=NULL; while(n){ if(memcmp(&n->elem,&e,sizeof(" + vname + "))==0){ if(p)p->next=n->next; else s->buckets[i]=n->next; _tr_free(n); if(s->len>0)s->len--; return; } p=n; n=n->next; } }\n")
+        self.wlt("static inline long long " + sn + "_len(" + sn + "* s){ return s?(long long)s->len:0LL; }\n")
+        self.wlt("static inline void " + sn + "_free(" + sn + "* s){ if(!s) return; for(size_t i=0;i<s->cap;i++){ " + node + "* n=s->buckets[i]; while(n){ " + node + "* nx=n->next; _tr_free(n); n=nx; } } _tr_free(s->buckets); _tr_free(s); }\n")
+        self.wlt("static inline void " + sn + "_clear(" + sn + "* s){ if(!s) return; for(size_t i=0;i<s->cap;i++){ " + node + "* n=s->buckets[i]; while(n){ " + node + "* nx=n->next; _tr_free(n); n=nx; } if(s->buckets)s->buckets[i]=NULL; } s->len=0; }\n")
+        self.wlt("static inline List_" + vname + "* " + sn + "_to_list(" + sn + "* s){ List_" + vname + "* l=List_" + vname + "_new(); if(s){ for(size_t i=0;i<s->cap;i++){ " + node + "* n=s->buckets[i]; while(n){ List_" + vname + "_append(l,n->elem); n=n->next; } } } return l; }\n")
+
     pub def check_and_emit_list_fwd(self, ty: AstType):
         if ty as usize == 0 as usize: return
         if ty.name == "List" or ty.name == "Vec":
@@ -306,6 +369,19 @@ pub class CGenerator:
         while vli < self.value_list_elems.len:
             self.ensure_list_type(self.value_list_elems.get(vli))
             vli = vli + 1
+        # Typed inline value-type dicts (Dict_str_Point) and sets (Set_Date),
+        # recorded by scan_mono_ty. Emit here, post buffer-redirect, like lists.
+        mut vdi = 0
+        while vdi < self.value_dict_elems.len:
+            mut spec = self.value_dict_elems.get(vdi)
+            mut bar = spec.index_of("|")
+            if bar > 0:
+                self.ensure_dict_type(spec.slice(0, bar), spec.slice(bar + 1, spec.length()))
+            vdi = vdi + 1
+        mut vsi = 0
+        while vsi < self.value_set_elems.len:
+            self.ensure_set_type(self.value_set_elems.get(vsi))
+            vsi = vsi + 1
         mut ci = 0
         while ci < prog.classes.len:
             mut cls = prog.classes.get(ci)
@@ -482,14 +558,24 @@ pub class CGenerator:
             # int key -> TrIDict*, anything else (str, ...) -> TrMap*.
             if ty.args.len > 0:
                 mut ka = ty.args.get(0).read()
-                if _is_int_type(ka.name) or ka.name == "int" or ka.name == "i64" or ka.name == "usize":
-                    return "TrIDict*"
+                mut kc = "str"
+                if _is_int_type(ka.name) or ka.name == "int" or ka.name == "i64" or ka.name == "usize": kc = "i64"
+                # Value-type VALUE -> typed inline dict (Dict_<kc>_<Vname>), stores
+                # the struct by value (no void* boxing). Non-generic value types only.
+                if ty.args.len > 1:
+                    mut va = ty.args.get(1).read()
+                    if self.value_types.contains(va.name) and va.args.len == 0:
+                        return "Dict_" + kc + "_" + va.name + "*"
+                if kc == "i64": return "TrIDict*"
             return "TrMap*"
 
         if n == "Set":
             # Set[int] -> int-keyed set; everything else -> string-keyed set
             if ty.args.len > 0:
                 mut se = ty.args.get(0).read()
+                # Value-type element -> typed inline set (Set_<Vname>).
+                if self.value_types.contains(se.name) and se.args.len == 0:
+                    return "Set_" + se.name + "*"
                 if _is_int_type(se.name) or se.name == "int" or se.name == "i64" or se.name == "usize":
                     return "_TrISet*"
             return "_TrSet*"
@@ -722,6 +808,7 @@ pub class CGenerator:
             self.coll_local_sfx = Map[str, str].init(16)
             self.coll_local_idict = Map[str, bool].init(16)
             self.coll_local_strval = Map[str, bool].init(16)
+            self.coll_local_vtcoll = Map[str, str].init(16)
             self.seed_params(m)
             self.cur_self_is_ptr = self.value_types.contains(mono_name) and self.vt_method_mutates_self(m)
             mut sig = self.get_inline_attrs(m) + self.gen_func_sig(m, mono_name)
@@ -841,6 +928,7 @@ pub class CGenerator:
         self.coll_local_sfx = Map[str, str].init(16)
         self.coll_local_idict = Map[str, bool].init(16)
         self.coll_local_strval = Map[str, bool].init(16)
+        self.coll_local_vtcoll = Map[str, str].init(16)
         self.seed_params(f)
         # extend-block methods are free functions carrying class_name; a mutating
         # @value_type method here takes a pointer self -> `self->field` in the body.
@@ -3484,6 +3572,25 @@ pub class CGenerator:
 
         # Set[T] method dispatch - backed by _TrSet (hash set via TrMap with bool values)
         if class_name == "Set":
+            # Value-type element -> typed inline set (Set_<Vname>), element by value.
+            mut set_full_ty = hir_expr_type(obj)
+            mut vt_set = ""
+            if set_full_ty.args.len > 0:
+                mut se2 = set_full_ty.args.get(0).read()
+                if self.value_types.contains(se2.name) and se2.args.len == 0: vt_set = se2.name
+            if vt_set != "":
+                mut sp = "Set_" + vt_set
+                if method == "init" or method == "new":
+                    if args.len == 0: return sp + "_new(16)"
+                    return sp + "_new(" + self.gen_args(args) + ")"
+                if method == "add" and args.len > 0: return sp + "_add(" + obj_s + ", " + self.gen_expr(args.get(0)) + ")"
+                if method == "contains" or method == "has": return sp + "_contains(" + obj_s + ", " + self.gen_expr(args.get(0)) + ")"
+                if method == "remove" and args.len > 0: return sp + "_remove(" + obj_s + ", " + self.gen_expr(args.get(0)) + ")"
+                if method == "len" or method == "length": return sp + "_len(" + obj_s + ")"
+                if method == "is_empty": return "(" + sp + "_len(" + obj_s + ") == 0LL)"
+                if method == "clear": return sp + "_clear(" + obj_s + ")"
+                if method == "to_list": return sp + "_to_list(" + obj_s + ")"
+                if method == "free": return sp + "_free(" + obj_s + ")"
             mut set_elem = elem_sfx
             if set_elem == "ptr": set_elem = "str"  # default element type
             # Choose runtime prefix: int-keyed sets use _tr_iset_*, others _tr_set_*
@@ -3536,6 +3643,45 @@ pub class CGenerator:
                 if _is_int_type(ka.name) or ka.name == "int" or ka.name == "i64" or ka.name == "i32" or ka.name == "usize":
                     dict_key_ty = "int"
             mut is_idict = dict_key_ty == "int"
+            # Value-type VALUE -> typed inline dict (Dict_<kc>_<Vname>); value stored
+            # and returned BY VALUE (no void* boxing, no str retain/unbox).
+            mut vt_dict = ""
+            if obj_full_ty.args.len > 1:
+                mut vv = obj_full_ty.args.get(1).read()
+                if self.value_types.contains(vv.name) and vv.args.len == 0: vt_dict = vv.name
+            if vt_dict != "":
+                mut kc = "str"
+                if is_idict: kc = "i64"
+                mut dp = "Dict_" + kc + "_" + vt_dict
+                if method == "init" or method == "new":
+                    if args.len == 0: return dp + "_new(16)"
+                    return dp + "_new(" + self.gen_args(args) + ")"
+                mut dkey = ""
+                if args.len > 0:
+                    if is_idict: dkey = self.gen_expr(args.get(0))
+                    else: dkey = self.dict_key_arg(args.get(0))
+                if method == "get" or method == "get_index":
+                    return dp + "_get(" + obj_s + ", " + dkey + ")"
+                if method == "set" or method == "insert":
+                    return dp + "_set(" + obj_s + ", " + dkey + ", " + self.gen_expr(args.get(1)) + ")"
+                if method == "contains" or method == "has":
+                    return dp + "_has(" + obj_s + ", " + dkey + ")"
+                if method == "remove":
+                    return dp + "_remove(" + obj_s + ", " + dkey + ")"
+                if method == "len" or method == "length":
+                    return dp + "_len(" + obj_s + ")"
+                if method == "is_empty":
+                    return "(" + dp + "_len(" + obj_s + ") == 0LL)"
+                if method == "keys":
+                    return dp + "_keys(" + obj_s + ")"
+                if method == "values":
+                    return dp + "_values(" + obj_s + ")"
+                if method == "clear":
+                    return dp + "_clear(" + obj_s + ")"
+                if method == "free":
+                    return dp + "_free(" + obj_s + ")"
+                if method == "get_or" and args.len >= 2:
+                    return "(" + dp + "_has(" + obj_s + ", " + dkey + ") ? " + dp + "_get(" + obj_s + ", " + dkey + ") : (" + self.gen_expr(args.get(1)) + "))"
             if method == "init" or method == "new":
                 if is_idict: return "_tr_idict_new(" + self.gen_args(args) + ")"
                 return "_tr_dict_new(" + self.gen_args(args) + ")"
@@ -4601,6 +4747,10 @@ pub class CGenerator:
                     self.coll_local_sfx.insert(n, c_ty.slice(5, c_ty.len() - 1))
                 elif (ty.name == "Dict" or ty.name == "Map" or ty.name == "Set") and (c_ty == "TrIDict*" or c_ty == "_TrISet*"):
                     self.coll_local_idict.insert(n, true)
+                elif (ty.name == "Dict" or ty.name == "Map" or ty.name == "Set") and (c_ty.starts_with("Dict_") or c_ty.starts_with("Set_")) and c_ty.ends_with("*"):
+                    # Typed inline value-type collection (Dict_str_Point* / Set_Point*):
+                    # auto-drop frees via the typed <struct>_free.
+                    self.coll_local_vtcoll.insert(n, c_ty.slice(0, c_ty.len() - 1))
                 # Str-valued Dict/Map local: track for strval free/auto-drop.
                 # Use the declared type's args, but fall back to the init value's
                 # type args when the local is inferred (`mut m = Map[str,str].init`)
@@ -5094,7 +5244,10 @@ pub class CGenerator:
                         self.w(pad + "List_" + _ad_sfx + "_free(" + _safe_c_varname(adn) + ");\n")
                 elif adc == "Dict" or adc == "Map" or adc == "Set":
                     mut _ad_strval = self.coll_local_strval.contains(adn)
-                    if self.coll_local_idict.contains(adn):
+                    if self.coll_local_vtcoll.contains(adn):
+                        # Typed inline value-type collection: Dict_str_Point_free / Set_Point_free
+                        self.w(pad + self.coll_local_vtcoll.get(adn) + "_free(" + _safe_c_varname(adn) + ");\n")
+                    elif self.coll_local_idict.contains(adn):
                         if _ad_strval:
                             self.w(pad + "_tr_idict_free_strval(" + _safe_c_varname(adn) + ");\n")
                         else:
@@ -5849,6 +6002,19 @@ pub class CGenerator:
             if self.value_types.contains(elty.name) and elty.args.len > 0 and self.classes.contains(elty.name):
                 self.ensure_mono(self.classes.get(elty.name), elty.args)
                 self.value_list_elems.push(elty.name + "_" + self.type_args_suffix(elty.args))
+        # Dict/Map with a non-generic value-type VALUE -> record a typed inline dict.
+        if (ty.name == "Map" or ty.name == "Dict") and ty.args.len > 1:
+            mut vty = ty.args.get(1).read()
+            if self.value_types.contains(vty.name) and vty.args.len == 0:
+                mut kc2 = "str"
+                mut kty = ty.args.get(0).read()
+                if _is_int_type(kty.name) or kty.name == "int" or kty.name == "i64" or kty.name == "usize": kc2 = "i64"
+                self.value_dict_elems.push(kc2 + "|" + vty.name)
+        # Set with a non-generic value-type ELEMENT -> record a typed inline set.
+        if ty.name == "Set" and ty.args.len > 0:
+            mut sty = ty.args.get(0).read()
+            if self.value_types.contains(sty.name) and sty.args.len == 0:
+                self.value_set_elems.push(sty.name)
 
     pub def scan_mono_block(self, block: HirBlock):
         if _is_invalid_ptr(block as usize): return
@@ -6143,6 +6309,7 @@ pub class CGenerator:
                     self.coll_local_sfx = Map[str, str].init(16)
                     self.coll_local_idict = Map[str, bool].init(16)
                     self.coll_local_strval = Map[str, bool].init(16)
+                    self.coll_local_vtcoll = Map[str, str].init(16)
                     self.shared_vars = Map[str, str].init(8)
                     self.seed_params(m)
                     self.cur_self_is_ptr = self.value_types.contains(c.name) and self.vt_method_mutates_self(m)
@@ -6170,6 +6337,7 @@ pub class CGenerator:
                 self.coll_local_sfx = Map[str, str].init(16)
                 self.coll_local_idict = Map[str, bool].init(16)
                 self.coll_local_strval = Map[str, bool].init(16)
+                self.coll_local_vtcoll = Map[str, str].init(16)
                 self.shared_vars = Map[str, str].init(8)
                 self.seed_params(m)
                 self.w(self.get_inline_attrs(m) + self.gen_func_sig(m, e.name) + " {\n")
@@ -6204,6 +6372,7 @@ pub class CGenerator:
                     self.coll_local_sfx = Map[str, str].init(16)
                     self.coll_local_idict = Map[str, bool].init(16)
                     self.coll_local_strval = Map[str, bool].init(16)
+                    self.coll_local_vtcoll = Map[str, str].init(16)
                     self.shared_vars = Map[str, str].init(8)
                     self.seed_params(f)
                     self.w(self.get_inline_attrs(f) + self.gen_func_sig(f, f.class_name) + " {\n")
@@ -6264,6 +6433,7 @@ pub class CGenerator:
                 self.coll_local_sfx = Map[str, str].init(16)
                 self.coll_local_idict = Map[str, bool].init(16)
                 self.coll_local_strval = Map[str, bool].init(16)
+                self.coll_local_vtcoll = Map[str, str].init(16)
                 self.gen_func_body(f.body, 1)
                 self.cur_func  = ""
             i = i + 1
@@ -6737,6 +6907,7 @@ pub class CGenerator:
                         self.coll_local_sfx = Map[str, str].init(16)
                         self.coll_local_idict = Map[str, bool].init(16)
                         self.coll_local_strval = Map[str, bool].init(16)
+                        self.coll_local_vtcoll = Map[str, str].init(16)
                         self.seed_params(m)
                         self.cur_self_is_ptr = self.value_types.contains(c.name) and self.vt_method_mutates_self(m)
                         self.w(self.get_proto_attrs(m) + self.gen_func_sig(m, c.name) + " {\n")
@@ -6763,6 +6934,7 @@ pub class CGenerator:
                         self.coll_local_sfx = Map[str, str].init(16)
                         self.coll_local_idict = Map[str, bool].init(16)
                         self.coll_local_strval = Map[str, bool].init(16)
+                        self.coll_local_vtcoll = Map[str, str].init(16)
                         self.seed_params(m)
                         self.w(self.get_proto_attrs(m) + self.gen_func_sig(m, e.name) + " {\n")
                         self.gen_func_body(m.body, 1)
@@ -6799,6 +6971,7 @@ pub class CGenerator:
                         self.coll_local_sfx = Map[str, str].init(16)
                         self.coll_local_idict = Map[str, bool].init(16)
                         self.coll_local_strval = Map[str, bool].init(16)
+                        self.coll_local_vtcoll = Map[str, str].init(16)
                         self.seed_params(f)
                         self.cur_self_is_ptr = f.class_name != "" and self.value_types.contains(f.class_name) and self.vt_method_mutates_self(f)
                         self.w(self.get_proto_attrs(f) + self.gen_func_sig(f, f.class_name) + " {\n")
@@ -6877,6 +7050,7 @@ pub class CGenerator:
                                         self.coll_local_sfx = Map[str, str].init(16)
                                         self.coll_local_idict = Map[str, bool].init(16)
                                         self.coll_local_strval = Map[str, bool].init(16)
+                                        self.coll_local_vtcoll = Map[str, str].init(16)
                                         self.shared_vars = Map[str, str].init(8)
                                         self.seed_params(m)
                                         self.cur_self_is_ptr = self.value_types.contains(c.name) and self.vt_method_mutates_self(m)
@@ -6910,6 +7084,7 @@ pub class CGenerator:
                                         self.coll_local_sfx = Map[str, str].init(16)
                                         self.coll_local_idict = Map[str, bool].init(16)
                                         self.coll_local_strval = Map[str, bool].init(16)
+                                        self.coll_local_vtcoll = Map[str, str].init(16)
                                         self.shared_vars = Map[str, str].init(8)
                                         self.seed_params(m)
                                         self.w(self.get_proto_attrs(m) + self.gen_func_sig(m, e.name) + " {\n")
@@ -6978,6 +7153,7 @@ pub class CGenerator:
                                 self.coll_local_sfx = Map[str, str].init(16)
                                 self.coll_local_idict = Map[str, bool].init(16)
                                 self.coll_local_strval = Map[str, bool].init(16)
+                                self.coll_local_vtcoll = Map[str, str].init(16)
                                 self.shared_vars = Map[str, str].init(8)
                                 self.seed_params(f)
                                 self.cur_self_is_ptr = f.class_name != "" and self.value_types.contains(f.class_name) and self.vt_method_mutates_self(f)
@@ -7041,6 +7217,7 @@ pub class CGenerator:
                         self.coll_local_sfx = Map[str, str].init(16)
                         self.coll_local_idict = Map[str, bool].init(16)
                         self.coll_local_strval = Map[str, bool].init(16)
+                        self.coll_local_vtcoll = Map[str, str].init(16)
                         self.gen_func_body(f.body, 1)
                         self.cur_func  = ""
                 i = i + 1

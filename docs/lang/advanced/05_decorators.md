@@ -231,8 +231,26 @@ boxes inline. Use an explicit annotation at the binding site
 (`mut b: Box[int] = Box[int].of(42)`), since bare inference can't yet substitute
 the receiver's type args.
 
-**Not yet supported (avoid for now):** using a value type as a `Dict`/`Map`
-value or `Set` element. Reference (default) classes have none of these limits.
+**Value types in `Dict`/`Map` values and `Set` elements** are supported and stored
+**inline** — `Dict[str, Point]` and `Set[Point]` keep the structs in the table
+itself (no per-entry boxing), like Rust's `HashMap<K, V>` / `HashSet<T>`:
+
+```python
+mut d: Dict[str, Point] = Dict[str, Point].init()
+d.set("origin", Point())
+mut p: Point = d.get("origin")        # returns a copy, by value
+
+mut seen: Set[Point] = Set[Point].init()
+seen.add(Point())                     # hashed by raw bytes, compared with memcmp
+```
+
+Restrictions: the value/element must be a **non-generic** value type, and dict
+keys must be `str` or `int`. Set membership uses byte-wise equality, so it's exact
+for POD value types (which is all a value type may contain).
+
+**Not yet supported (avoid for now):** *generic* value types as a `Dict`/`Map`
+value or `Set` element (e.g. `Dict[str, Box[int]]`). Reference (default) classes
+have none of these limits.
 
 **Best practice.** Default to a normal (reference) class. Reach for
 `@value_type` only for a small, immutable, copy-friendly type on a measured hot
