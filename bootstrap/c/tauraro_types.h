@@ -2411,6 +2411,7 @@ __attribute__((hot)) TrStr Sema_io_func_sig(Sema* self, FunctionDef* f);
 __attribute__((hot)) TrStr Sema_build_inspect_str(Sema* self, TrStr name);
 __attribute__((hot)) void Sema_error(Sema* self, TrStr msg);
 __attribute__((hot)) bool Sema_is_sendable_type(Sema* self, TrStr ty_name);
+__attribute__((hot)) bool Sema_is_sendable_ty(Sema* self, AstType* ty);
 __attribute__((hot)) bool Sema_class_method_exists(Sema* self, TrStr cls_name, TrStr method);
 __attribute__((hot)) bool Sema_is_universal_method(Sema* self, TrStr method);
 __attribute__((hot)) bool Sema_expr_is_borrow(Sema* self, HirExpr* e);

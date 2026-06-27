@@ -1,0 +1,11 @@
+# EXPECT: [T-2]
+# Reachability: a `Sendable` class may not expose non-thread-safe data through an
+# UNSYNCHRONIZED wrapper. `Shared[T]` gives shared access to T across threads, so
+# T must itself be Sendable. Here `Shared[Inner]` (Inner holds a raw List) would
+# let two threads reach the same unsynchronized List — a data race.
+class Inner:
+    pub data: List[int]
+class Box implements Sendable:
+    pub handle: Shared[Inner]
+def main():
+    print(1)

@@ -568,6 +568,20 @@ extend Sema:
         # Unknown type - conservative: assume not sendable
         return false
 
+    # Full-type Sendable check (sees generic args), so reachability through a
+    # wrapper is enforced. `Shared[T]`/`Weak[T]` give UNSYNCHRONIZED shared access
+    # to T across threads, and `Chan[T]` TRANSFERS a T to another thread — so the
+    # inner T must itself be Sendable, else non-thread-safe data is reachable on
+    # another thread (a data race). `Mutex`/`RwLock`/`Atomic` SERIALIZE access, so
+    # their inner type is protected and stays unconditionally Sendable.
+    pub def is_sendable_ty(self, ty: AstType) -> bool:
+        mut n = ty.name
+        if n == "Shared" or n == "Weak" or n == "Chan" or n == "Channel":
+            if ty.args.len > 0:
+                return self.is_sendable_ty(ty.args.get(0).read())
+            return true
+        return self.is_sendable_type(n)
+
     # Recursively checks cls_name and its base classes for a method named `method`.
     pub def class_method_exists(self, cls_name: str, method: str) -> bool:
         if not self.classes.contains(cls_name): return false
@@ -668,8 +682,14 @@ extend Sema:
                     # the author has explicitly opted in via UnsafeSendable.
                     if not has_unsafe:
                         self.error("[T-2] Class '" + c.name + "' declares 'implements Sendable' but holds a raw 'Pointer' field '" + fd.name + "', which the compiler cannot prove thread-safe.\n      FIX: If '" + c.name + "' wraps an internally-synchronized handle, assert it explicitly: 'implements Sendable, UnsafeSendable'.\n      Otherwise wrap the data in Mutex[T]/Atomic[T], or drop 'implements Sendable'.")
-                elif not self.is_sendable_type(fty.name):
-                    self.error("[T-2] Class '" + c.name + "' declares 'implements Sendable' but field '" + fd.name + ": " + fty.name + "' is not Sendable.\n      FIX: Wrap '" + fd.name + "' in Mutex[" + fty.name + "] for exclusive access, RwLock[" + fty.name + "] for reader-writer, or Atomic[T] for numeric/flag types.\n      Or remove 'implements Sendable' if '" + c.name + "' is only used on one thread.")
+                elif not self.is_sendable_ty(fty):
+                    # Covers a bare non-Sendable field AND reachability through an
+                    # unsynchronized wrapper: `Shared[NonSendable]`/`Chan[NonSendable]`
+                    # would expose non-thread-safe data on another thread.
+                    mut _t2_inner = fty.name
+                    if (fty.name == "Shared" or fty.name == "Weak" or fty.name == "Chan" or fty.name == "Channel") and fty.args.len > 0:
+                        _t2_inner = fty.name + "[" + fty.args.get(0).read().name + "]"
+                    self.error("[T-2] Class '" + c.name + "' declares 'implements Sendable' but field '" + fd.name + ": " + _t2_inner + "' is not Sendable (non-thread-safe data is reachable across threads).\n      FIX: make the inner type Sendable, wrap it in Mutex[T]/RwLock[T] for guarded access or Atomic[T] for numerics, or drop 'implements Sendable'.")
                 elif fty.name == "int" or fty.name == "float" or fty.name == "bool":
                     self.warnings.push("[T-3] Sendable class '" + c.name + "' has primitive field '" + fd.name + ": " + fty.name + "' that may cause data races if mutated from multiple threads.\n      FIX: Use 'Atomic[" + fty.name + "]' for safe concurrent mutation, or ensure this field is written only before the object is shared across threads.")
             cfi = cfi + 1
@@ -4050,7 +4070,7 @@ extend Sema:
                         if self.expr_is_borrow(hl.get(_tsi)):
                             self.error("[T-6] a borrow (`ref`/`mut ref`) cannot be passed to Thread.spawn: the borrowed value may be mutated or freed by another thread, or outlive its source.\n      FIX: pass an owned value, a `Shared[T]`, or a `Mutex[T]`/`Atomic[T]` handle instead of a borrow.")
                         mut _tsa_ty = hir_expr_type(hl.get(_tsi))
-                        if not self.is_sendable_type(_tsa_ty.name):
+                        if not self.is_sendable_ty(_tsa_ty):
                             self.error("[T-1] Type '" + _tsa_ty.name + "' is not Sendable and cannot be passed to Thread.spawn.\n      FIX: Wrap in Mutex[" + _tsa_ty.name + "] for exclusive access, or add 'implements Sendable' to '" + _tsa_ty.name + "' to confirm it is thread-safe.")
                         _tsi = _tsi + 1
                 # ThreadPool.spawn arg Sendable check
@@ -4062,7 +4082,7 @@ extend Sema:
                         if self.expr_is_borrow(hl.get(_psi)):
                             self.error("[T-6] a borrow (`ref`/`mut ref`) cannot be passed to ThreadPool.spawn: the borrowed value may be mutated or freed by another thread, or outlive its source.\n      FIX: pass an owned value, a `Shared[T]`, or a `Mutex[T]`/`Atomic[T]` handle instead of a borrow.")
                         mut _psa_ty = hir_expr_type(hl.get(_psi))
-                        if not self.is_sendable_type(_psa_ty.name):
+                        if not self.is_sendable_ty(_psa_ty):
                             self.error("[T-1] Type '" + _psa_ty.name + "' is not Sendable and cannot be passed to ThreadPool.spawn.\n      FIX: Wrap in Mutex[" + _psa_ty.name + "] for exclusive access, or add 'implements Sendable' to '" + _psa_ty.name + "' to confirm it is thread-safe.")
                         _psi = _psi + 1
                 # Atomic built-in method return types

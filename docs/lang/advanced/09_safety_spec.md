@@ -111,7 +111,12 @@ the author.
   the compiler rejects non-Sendable values crossing a thread boundary (`[T-1]`).
 - A `Sendable` class is *checked*, not trusted: every field must itself be
   Sendable (`[T-2]`), a raw `Pointer` field needs the explicit `UnsafeSendable`
-  opt-in, and a mutable primitive field is warned as a race risk (`[T-3]`).
+  opt-in, and a mutable primitive field is warned as a race risk (`[T-3]`). The
+  check is **transitive through unsynchronized wrappers**: a `Shared[T]`/`Weak[T]`/
+  `Chan[T]` field (or spawn argument) requires its inner `T` to be Sendable too,
+  so non-thread-safe data cannot be reached on another thread *through* a handle.
+  (`Mutex[T]`/`RwLock[T]`/`Atomic[T]` serialize access, so their inner type is
+  protected.)
 - A **borrow** (`ref`/`mut ref`) may **not** cross a thread boundary (`[T-6]`):
   `Thread.spawn` is not scoped, so a borrowed value could be mutated or freed by
   another thread, or outlive its source — the same reason Rust's `thread::spawn`
@@ -119,16 +124,36 @@ the author.
 - The ARC floor keeps cross-thread *memory* safe (no UAF) for shared handles.
 
 Together these give compile-time protection against the common data-race shapes:
-sharing non-thread-safe data, an under-synchronized `Sendable` type, and sending
-a live borrow across threads.
+sharing non-thread-safe data (`[T-1]`), an under-synchronized `Sendable` type
+including data reachable *through* a shared handle (`[T-2]`, transitive), and
+sending a live borrow across threads (`[T-6]`). `Shared[T]` is the `Arc`
+equivalent — its refcount is **atomic** (`_Atomic`), so cloning the handle across
+threads is race-free.
 
-**Not yet guaranteed:** Tauraro does not yet provide Rust's *full* compile-time
-data-race freedom — in particular it does not yet split refcounts into
-non-atomic (thread-local) vs atomic (shared) à la `Rc`/`Arc`, nor prove the
-absence of races on data reachable through two `Sendable` handles. Shared mutable
-state across threads must still be guarded explicitly (`Mutex`/`RwLock`/`Atomic`),
-which the checks above steer you toward. Closing the remainder (atomic-refcount
-split + reachability analysis) is the open part of roadmap item §2.
+**Not yet guaranteed (the honest remainder):**
+
+1. **Detached-thread lifetimes for owned refcounted values.** Passing an *owned*
+   `str`/collection to `Thread.spawn` is sound when the caller outlives the thread
+   (the structured forms — `task_group`, `await`, and `join` before scope exit —
+   guarantee this). A *detached* thread whose argument's source goes out of scope
+   first can dangle. `[T-6]` proves this for *borrows*; the owned case is not yet
+   compile-time-proven (it would need scoped threads or a `'static` bound on
+   `Thread.spawn`, as Rust has). Until then, **join before the source scope ends**
+   (which the structured APIs enforce).
+2. **No `Rc`/`Arc` split for `str`.** `str`'s own refcount is non-atomic. The
+   current ABI passes a `str` arg by value to a thread that only *reads* it
+   (the caller keeps ownership and does the single release), so the refcount is
+   not raced — but this relies on (1). A full split (a distinct atomic-refcount
+   string for sharing) is future work.
+3. **Deeply-nested aliasing** (e.g. an aliased refcounted value placed inside a
+   `Mutex` while other aliases live on another thread) is not yet analyzed — the
+   full Rust `Send`/`Sync` trait algebra is not reproduced.
+
+These remaining items are concurrency-model design decisions (scoped threads,
+atomic-string split, a Send/Sync algebra). Until they land, shared *mutable*
+state across threads must be guarded explicitly (`Mutex`/`RwLock`/`Atomic`) — which
+all the checks above steer you toward — and detached threads must not outlive
+their arguments' sources.
 
 ---
 
@@ -164,7 +189,10 @@ is supported, add an `accept/` test (it is automatically differential-checked).
 
 - **Not formally proven.** THM-ELISION and INV-1..INV-3 are tested, not mechanized.
   A small mechanized proof of the region/outlives core is future work.
-- **No compile-time data-race freedom yet** (§5) — the biggest gap vs Rust.
+- **Partial compile-time data-race freedom** (§5): the common shapes are caught
+  (`[T-1]`/`[T-2]`-transitive/`[T-6]`), but detached-thread lifetimes for owned
+  refcounted values, an `Rc`/`Arc` string split, and deeply-nested aliasing remain
+  — the largest open area vs Rust.
 - **Expressiveness < Rust** by design: no lifetime variance, HRTBs, or GATs. The
   ARC floor covers what the borrow checker cannot express, so these are not needed
   for *safety* — only for squeezing out the last refcounts.
