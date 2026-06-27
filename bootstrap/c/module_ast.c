@@ -11,6 +11,14 @@ __attribute__((malloc,returns_nonnull,hot)) AstType* AstType_init(TrStr name) {
     /* pass */
     t->from_param = _tr_str_lit("");
     /* pass */
+    t->from_regions = (void*)List_TrStr_new();
+    /* pass */
+    t->from_index = (-1LL);
+    /* pass */
+    t->is_borrow = false;
+    /* pass */
+    t->is_mut_borrow = false;
+    /* pass */
     return t;
 }
 
@@ -25,6 +33,14 @@ __attribute__((hot)) AstType* AstType_init_generic(TrStr name, AstType** arg) {
     List_ptr_append(t->args, arg);
     /* pass */
     t->from_param = _tr_str_lit("");
+    /* pass */
+    t->from_regions = (void*)List_TrStr_new();
+    /* pass */
+    t->from_index = (-1LL);
+    /* pass */
+    t->is_borrow = false;
+    /* pass */
+    t->is_mut_borrow = false;
     /* pass */
     return t;
 }
@@ -297,6 +313,10 @@ __attribute__((malloc,returns_nonnull,hot)) FunctionDef* FunctionDef_init(TrStr 
     /* pass */
     f->line = 0LL;
     /* pass */
+    f->outlives_a = (void*)List_TrStr_new();
+    /* pass */
+    f->outlives_b = (void*)List_TrStr_new();
+    /* pass */
     return f;
 }
 
@@ -341,6 +361,8 @@ __attribute__((malloc,returns_nonnull,hot)) ClassDef* ClassDef_init(TrStr name) 
     /* pass */
     c->docstring = _tr_str_lit("");
     /* pass */
+    c->region_params = (void*)List_TrStr_new();
+    /* pass */
     return c;
 }
 
@@ -375,6 +397,8 @@ __attribute__((malloc,returns_nonnull,hot)) EnumDef* EnumDef_init(TrStr name) {
     /* pass */
     e->line = 0LL;
     /* pass */
+    e->region_params = (void*)List_TrStr_new();
+    /* pass */
     return e;
 }
 
@@ -393,6 +417,8 @@ __attribute__((malloc,returns_nonnull,hot)) InterfaceDef* InterfaceDef_init(TrSt
     i->line = 0LL;
     /* pass */
     i->decorators = (void*)List_ptr_new();
+    /* pass */
+    i->region_params = (void*)List_TrStr_new();
     /* pass */
     return i;
 }

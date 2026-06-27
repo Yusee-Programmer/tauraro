@@ -11,11 +11,19 @@
 
 $ErrorActionPreference = "Continue"
 
-$TAURAROC = if ($env:BOOTSTRAP_BIN) { $env:BOOTSTRAP_BIN } else { ".\tauraroc.exe" }
+# PREFER the freshly-built .\tauraroc.exe (current source) over the bootstrap
+# stage0 seed (BOOTSTRAP_BIN): the soundness corpus validates the SHIPPED compiler.
+$TAURAROC = $null
+if ($env:TAURAROC) { $TAURAROC = $env:TAURAROC }
+elseif (Test-Path ".\tauraroc.exe") { $TAURAROC = ".\tauraroc.exe" }
+elseif (Test-Path ".\tauraroc") { $TAURAROC = ".\tauraroc" }
+elseif ($env:BOOTSTRAP_BIN -and (Test-Path $env:BOOTSTRAP_BIN)) { $TAURAROC = $env:BOOTSTRAP_BIN }
+else { $TAURAROC = ".\tauraroc.exe" }
 if (-not (Test-Path $TAURAROC) -and -not (Get-Command $TAURAROC -ErrorAction SilentlyContinue)) {
     Write-Error "ERROR: tauraroc binary not found: $TAURAROC"
     exit 1
 }
+Write-Host "(compiler under test: $TAURAROC)"
 $CC = if ($env:CC) { $env:CC } else { "gcc" }
 $WARN = @("-Wno-string-compare","-Wno-comment","-Wno-attributes","-Wno-unused-value")
 $LIBS = @("-lm","-lws2_32","-mconsole")

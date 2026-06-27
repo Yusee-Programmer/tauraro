@@ -707,6 +707,17 @@ __attribute__((hot)) List_Token* Lexer_tokenize(Lexer* self) {
                             /* pass */
                             Lexer_push_loc(self);
                         }
+                        /* pass */
+                        long long newtop = List_i64_get(self->indent_stack, (self->indent_stack->len - 1LL));
+                        /* pass */
+                        if ((newtop != indent)) {
+                            /* pass */
+                            self->tok_col = ((self->pos - self->line_start) + 1LL);
+                            /* pass */
+                            List_Token_append(tokens, Token_ctor_Error(_tr_str_lit("inconsistent indentation: this line does not line up with any enclosing block (check for mixed tabs and spaces, or an off-by-one indent)")));
+                            /* pass */
+                            Lexer_push_loc(self);
+                        }
                     }
                 }
                 /* pass */

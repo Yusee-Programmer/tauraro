@@ -16,16 +16,23 @@
 set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
-# Binary resolution mirrors run_tests.sh: Linux/macOS build is ./tauraroc (no
-# .exe), Windows is ./tauraroc.exe; BOOTSTRAP_BIN/TAURAROC override either.
-TAURAROC="${TAURAROC:-${BOOTSTRAP_BIN:-./tauraroc}}"
-if [ ! -x "$TAURAROC" ] && [ -x "./tauraroc.exe" ]; then
-    TAURAROC="./tauraroc.exe"
+# Binary resolution: PREFER the freshly-built ./tauraroc (current source) over the
+# bootstrap stage0 seed (BOOTSTRAP_BIN). The soundness corpus validates the
+# compiler being SHIPPED — testing the older seed would fail on any feature/check
+# added since the seed was regenerated. Explicit TAURAROC= still wins.
+TAURAROC="${TAURAROC:-}"
+if [ -z "$TAURAROC" ]; then
+    if   [ -x "./tauraroc" ];     then TAURAROC="./tauraroc"
+    elif [ -x "./tauraroc.exe" ]; then TAURAROC="./tauraroc.exe"
+    elif [ -n "${BOOTSTRAP_BIN:-}" ] && [ -x "$BOOTSTRAP_BIN" ]; then TAURAROC="$BOOTSTRAP_BIN"
+    else TAURAROC="./tauraroc"
+    fi
 fi
 if [ ! -x "$TAURAROC" ] && ! command -v "$TAURAROC" >/dev/null 2>&1; then
-    echo "ERROR: tauraroc binary not found: $TAURAROC (set BOOTSTRAP_BIN or build ./tauraroc[.exe])"
+    echo "ERROR: tauraroc binary not found: $TAURAROC (build ./tauraroc[.exe] first)"
     exit 1
 fi
+echo "(compiler under test: $TAURAROC)"
 CC="${CC:-gcc}"
 WARN="-Wno-string-compare -Wno-comment -Wno-attributes -Wno-unused-value"
 LIBS="-lm"
@@ -68,19 +75,48 @@ for src in tests/soundness/reject/*.tr; do
     esac
 done
 
+# Build one accept source into build/<exe> with the given extra tauraroc flag and
+# extra C flag; echo its stdout, return its exit status. Caller checks both.
+build_and_run() {
+    local src="$1" exe="$2" tflag="$3" cflag="$4"
+    rm -rf build
+    "$TAURAROC" "$src" $tflag --emit c >/dev/null 2>&1 || return 90
+    # shellcheck disable=SC2046
+    "$CC" -O1 $STD $cflag -DTAURARO_NO_RT_HELPERS $WARN -I build/include \
+        -o "$exe" $(find build -name '*.c') $LIBS >/dev/null 2>&1 || return 91
+    "$exe" 2>/dev/null
+}
+
 echo
-echo "== ACCEPT corpus (safe; must compile under --strict, build, run, exit 0) =="
+echo "== ACCEPT corpus (safe; --strict OK + DIFFERENTIAL: elided ≡ pure-ARC) =="
+# For each safe program: it must pass --strict; then it is built TWO ways and run.
+#   A) default (elision ON) + sanitizers  -> catches UB and yields the output
+#   B) --no-elide (pure ARC, elision OFF) -> the soundness oracle baseline
+# The borrow elision is sound iff A and B produce identical observable output;
+# any divergence is an unsound zero-copy elision (e.g. a dangling alias).
 for src in tests/soundness/accept/*.tr; do
     [ -f "$src" ] || continue
     name="$(basename "$src" .tr)"
     chk="$("$TAURAROC" "$src" --strict --check 2>&1)"; rc=$?
     if [ "$rc" -ne 0 ]; then echo "FAIL  $name (--strict rejected a SAFE program)"; echo "$chk" | grep -E '\[[A-Z]-[0-9]+\]' | head -2; acc_fail=$((acc_fail+1)); continue; fi
-    rm -rf build
-    "$TAURAROC" "$src" --strict --emit c >/dev/null 2>&1 || { echo "FAIL  $name (emit)"; acc_fail=$((acc_fail+1)); continue; }
-    "$CC" -O1 $STD $SAN -DTAURARO_NO_RT_HELPERS $WARN -I build/include \
-        -o "build/$name.exe" $(find build -name '*.c') $LIBS >/dev/null 2>&1 \
-        || { echo "FAIL  $name (C compile)"; acc_fail=$((acc_fail+1)); continue; }
-    if "build/$name.exe" >/dev/null 2>&1; then echo "PASS  $name"; acc_pass=$((acc_pass+1)); else echo "FAIL  $name (runtime exit != 0)"; acc_fail=$((acc_fail+1)); fi
+    out_def="$(build_and_run "$src" "build/${name}_def.exe" "" "$SAN")"; rc_a=$?
+    if [ "$rc_a" -ne 0 ]; then
+        case "$rc_a" in 90) echo "FAIL  $name (emit)";; 91) echo "FAIL  $name (C compile)";; *) echo "FAIL  $name (default build runtime exit $rc_a — possible UB under sanitizer)";; esac
+        acc_fail=$((acc_fail+1)); continue
+    fi
+    out_ne="$(build_and_run "$src" "build/${name}_ne.exe" "--no-elide" "")"; rc_b=$?
+    if [ "$rc_b" -ne 0 ]; then
+        case "$rc_b" in 90) echo "FAIL  $name (--no-elide emit)";; 91) echo "FAIL  $name (--no-elide C compile)";; *) echo "FAIL  $name (--no-elide runtime exit $rc_b)";; esac
+        acc_fail=$((acc_fail+1)); continue
+    fi
+    if [ "$out_def" = "$out_ne" ]; then
+        echo "PASS  $name (elide ≡ arc)"; acc_pass=$((acc_pass+1))
+    else
+        echo "FAIL  $name (UNSOUND ELISION: elided output != pure-ARC output)"
+        echo "      elided : $(echo "$out_def" | tr '\n' '|')"
+        echo "      pure-arc: $(echo "$out_ne" | tr '\n' '|')"
+        acc_fail=$((acc_fail+1))
+    fi
 done
 rm -rf build
 
