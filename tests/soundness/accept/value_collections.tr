@@ -1,0 +1,20 @@
+# EXPECT: pass
+# @value_type stored inline in a Dict value and a Set element (zero boxing).
+@value_type
+pub class Point:
+    pub x: int
+    pub y: int
+extend Point:
+    pub def of(x: int, y: int) -> Point:
+        mut p = Point()
+        p.x = x
+        p.y = y
+        return p
+def main():
+    mut d: Dict[str, Point] = Dict[str, Point].init()
+    d.set("o", Point.of(2, 3))
+    mut p: Point = d.get("o")
+    mut s: Set[Point] = Set[Point].init()
+    s.add(Point.of(2, 3))
+    s.add(Point.of(2, 3))
+    print(p.x + p.y + s.len())   # 5 + 1 = 6

@@ -1,0 +1,8 @@
+# EXPECT: [B-3]
+# A shared `ref T` parameter is read-only. Mutating it requires an exclusive
+# `mut ref T` borrow. Under --strict, writing through a shared ref is rejected.
+def f(p: ref int):
+    p = 6
+def main():
+    mut x = 5
+    f(x)

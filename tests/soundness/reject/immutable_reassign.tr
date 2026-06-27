@@ -1,0 +1,7 @@
+# EXPECT: [M-8]
+# An immutable binding (no `mut`) cannot be reassigned. The compiler must reject
+# this regardless of --strict; it is a core immutability guarantee.
+def main():
+    x = 5
+    x = 6
+    print(x)

@@ -1,0 +1,7 @@
+# EXPECT: [P-1]
+# Dereferencing a raw Pointer (read/write) is only allowed inside `unsafe:`.
+# Under --strict, raw pointer access in safe code is a hard error.
+def main():
+    mut p: Pointer[int] = alloc[int](4)
+    p.write(5)
+    print(p.read())

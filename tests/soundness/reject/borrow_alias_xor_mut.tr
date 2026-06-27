@@ -1,0 +1,10 @@
+# EXPECT: [B-1]
+# Aliasing-XOR-mutability: a place may have MANY shared `ref` borrows OR exactly
+# ONE exclusive `mut ref` borrow, never both at once. Here an exclusive borrow of
+# `x` overlaps a shared borrow of `x` -> rejected under --strict.
+def main():
+    mut x = 5
+    mut a: mut ref int = x
+    mut b: ref int = x
+    print(a)
+    print(b)
