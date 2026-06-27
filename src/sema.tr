@@ -618,12 +618,12 @@ extend Sema:
             case HirExpr.ECall(_, cs_args, _):
                 mut csi = 0
                 while csi < cs_args.len:
-                    # [T-5] a borrow cannot cross a thread boundary (non-scoped spawn):
+                    # [T-6] a borrow cannot cross a thread boundary (non-scoped spawn):
                     # the borrowed value may be mutated/freed by another thread or
                     # outlive its source. Rust's thread::spawn requires 'static for
                     # the same reason. T-1 misses this (ref T erases to a Sendable T).
                     if self.expr_is_borrow(cs_args.get(csi)):
-                        self.error("[T-5] a borrow (`ref`/`mut ref`) cannot cross a thread boundary: the borrowed value may be mutated or freed by another thread, or outlive its source.\n      FIX: pass an owned value, a `Shared[T]`, or a `Mutex[T]`/`Atomic[T]` handle instead of a borrow.")
+                        self.error("[T-6] a borrow (`ref`/`mut ref`) cannot cross a thread boundary: the borrowed value may be mutated or freed by another thread, or outlive its source.\n      FIX: pass an owned value, a `Shared[T]`, or a `Mutex[T]`/`Atomic[T]` handle instead of a borrow.")
                     mut arg_ty = hir_expr_type(cs_args.get(csi))
                     if (arg_ty.name == "Shared" or arg_ty.name == "Weak") and arg_ty.args.len > 0:
                         mut inner_nm = arg_ty.args.get(0).read().name
@@ -636,7 +636,7 @@ extend Sema:
                 mut csmi = 0
                 while csmi < cs_margs.len:
                     if self.expr_is_borrow(cs_margs.get(csmi)):
-                        self.error("[T-5] a borrow (`ref`/`mut ref`) cannot cross a thread boundary: the borrowed value may be mutated or freed by another thread, or outlive its source.\n      FIX: pass an owned value, a `Shared[T]`, or a `Mutex[T]`/`Atomic[T]` handle instead of a borrow.")
+                        self.error("[T-6] a borrow (`ref`/`mut ref`) cannot cross a thread boundary: the borrowed value may be mutated or freed by another thread, or outlive its source.\n      FIX: pass an owned value, a `Shared[T]`, or a `Mutex[T]`/`Atomic[T]` handle instead of a borrow.")
                     mut arg_ty2 = hir_expr_type(cs_margs.get(csmi))
                     if (arg_ty2.name == "Shared" or arg_ty2.name == "Weak") and arg_ty2.args.len > 0:
                         mut inner_nm2 = arg_ty2.args.get(0).read().name
@@ -4048,7 +4048,7 @@ extend Sema:
                     mut _tsi = 1
                     while _tsi < hl.len:
                         if self.expr_is_borrow(hl.get(_tsi)):
-                            self.error("[T-5] a borrow (`ref`/`mut ref`) cannot be passed to Thread.spawn: the borrowed value may be mutated or freed by another thread, or outlive its source.\n      FIX: pass an owned value, a `Shared[T]`, or a `Mutex[T]`/`Atomic[T]` handle instead of a borrow.")
+                            self.error("[T-6] a borrow (`ref`/`mut ref`) cannot be passed to Thread.spawn: the borrowed value may be mutated or freed by another thread, or outlive its source.\n      FIX: pass an owned value, a `Shared[T]`, or a `Mutex[T]`/`Atomic[T]` handle instead of a borrow.")
                         mut _tsa_ty = hir_expr_type(hl.get(_tsi))
                         if not self.is_sendable_type(_tsa_ty.name):
                             self.error("[T-1] Type '" + _tsa_ty.name + "' is not Sendable and cannot be passed to Thread.spawn.\n      FIX: Wrap in Mutex[" + _tsa_ty.name + "] for exclusive access, or add 'implements Sendable' to '" + _tsa_ty.name + "' to confirm it is thread-safe.")
@@ -4060,7 +4060,7 @@ extend Sema:
                     mut _psi = 1
                     while _psi < hl.len:
                         if self.expr_is_borrow(hl.get(_psi)):
-                            self.error("[T-5] a borrow (`ref`/`mut ref`) cannot be passed to ThreadPool.spawn: the borrowed value may be mutated or freed by another thread, or outlive its source.\n      FIX: pass an owned value, a `Shared[T]`, or a `Mutex[T]`/`Atomic[T]` handle instead of a borrow.")
+                            self.error("[T-6] a borrow (`ref`/`mut ref`) cannot be passed to ThreadPool.spawn: the borrowed value may be mutated or freed by another thread, or outlive its source.\n      FIX: pass an owned value, a `Shared[T]`, or a `Mutex[T]`/`Atomic[T]` handle instead of a borrow.")
                         mut _psa_ty = hir_expr_type(hl.get(_psi))
                         if not self.is_sendable_type(_psa_ty.name):
                             self.error("[T-1] Type '" + _psa_ty.name + "' is not Sendable and cannot be passed to ThreadPool.spawn.\n      FIX: Wrap in Mutex[" + _psa_ty.name + "] for exclusive access, or add 'implements Sendable' to '" + _psa_ty.name + "' to confirm it is thread-safe.")

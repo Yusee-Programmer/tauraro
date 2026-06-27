@@ -106,17 +106,29 @@ the author.
 
 ## 5. Concurrency safety (current scope — see §7)
 
-- Passing a value to another thread (`spawn`, `task_group`) requires it to be
-  `Sendable` ([06 — Sendable](06_sendable.md)); the compiler rejects non-Sendable
-  captures crossing a thread boundary.
+- Passing a value to another thread (`spawn`, `task_group`, `Thread.spawn`,
+  `ThreadPool.spawn`) requires it to be `Sendable` ([06 — Sendable](06_sendable.md));
+  the compiler rejects non-Sendable values crossing a thread boundary (`[T-1]`).
+- A `Sendable` class is *checked*, not trusted: every field must itself be
+  Sendable (`[T-2]`), a raw `Pointer` field needs the explicit `UnsafeSendable`
+  opt-in, and a mutable primitive field is warned as a race risk (`[T-3]`).
+- A **borrow** (`ref`/`mut ref`) may **not** cross a thread boundary (`[T-6]`):
+  `Thread.spawn` is not scoped, so a borrowed value could be mutated or freed by
+  another thread, or outlive its source — the same reason Rust's `thread::spawn`
+  requires `'static`. Pass an owned value, a `Shared[T]`, or a `Mutex[T]`/`Atomic[T]`.
 - The ARC floor keeps cross-thread *memory* safe (no UAF) for shared handles.
 
-**Not yet guaranteed:** Tauraro does **not** yet provide Rust's compile-time
-*data-race freedom* — i.e. it does not yet prove that a `mut ref` cannot be
-observed concurrently with another access. This is the largest open gap and is
-tracked as roadmap item §2 (thread-aware `[B-1]` + a verified `Sendable`). Until
-then, shared mutable state across threads must be guarded explicitly
-(`Mutex`/`RwLock`/`Atomic`).
+Together these give compile-time protection against the common data-race shapes:
+sharing non-thread-safe data, an under-synchronized `Sendable` type, and sending
+a live borrow across threads.
+
+**Not yet guaranteed:** Tauraro does not yet provide Rust's *full* compile-time
+data-race freedom — in particular it does not yet split refcounts into
+non-atomic (thread-local) vs atomic (shared) à la `Rc`/`Arc`, nor prove the
+absence of races on data reachable through two `Sendable` handles. Shared mutable
+state across threads must still be guarded explicitly (`Mutex`/`RwLock`/`Atomic`),
+which the checks above steer you toward. Closing the remainder (atomic-refcount
+split + reachability analysis) is the open part of roadmap item §2.
 
 ---
 

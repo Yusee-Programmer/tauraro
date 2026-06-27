@@ -27,6 +27,7 @@ category, with its cause, a triggering example, and the fix.
 | [T-3] | Concurrency (warning) | `Sendable` class has an unguarded primitive field |
 | [T-4] | Type | Unhandled `Result` from a `throws` call |
 | [T-5] | Type | Numeric value used as an `if`/`while` condition |
+| [T-6] | Concurrency | A borrow (`ref`/`mut ref`) passed across a thread boundary |
 | [N-1] | Name | Reserved/keyword name used as a declaration |
 | [F-3] | Function | Missing `return` on a code path |
 | [E-1] | Existence | (1) Non-exhaustive `match`; (2) explicit `main()` call; (3) no such method on type |
@@ -276,6 +277,28 @@ class Counter implements Sendable:
 
 **FIX:** Use `Atomic[T]` for fields mutated from multiple threads, or ensure
 the field is written only before the object is shared.
+
+---
+
+### [T-6] Borrow Crossing a Thread Boundary
+
+**Message:** `a borrow (ref/mut ref) cannot cross a thread boundary: the borrowed
+value may be mutated or freed by another thread, or outlive its source.`
+
+`Thread.spawn`/`ThreadPool.spawn`/`spawn:` are not *scoped* — the spawned work
+may run after the borrow's source goes out of scope, and a `mut ref` shared with
+another thread is an aliased mutable access (a data race). This is the same reason
+Rust's `thread::spawn` requires `'static`. (`[T-1]` does not catch it because a
+`ref T` parameter erases to a Sendable `T`.)
+
+```python
+def run(x: mut ref int):
+    mut t: Thread = Thread.spawn(worker, x)   # T-6: borrow crosses the boundary
+    t.join()
+```
+
+**FIX:** Pass an *owned* value, a `Shared[T]` (reference-counted handle), or a
+`Mutex[T]`/`Atomic[T]` instead of a borrow.
 
 ---
 

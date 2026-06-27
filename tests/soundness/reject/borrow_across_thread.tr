@@ -1,4 +1,4 @@
-# EXPECT: [T-5]
+# EXPECT: [T-6]
 # A borrow (`ref`/`mut ref`) cannot cross a thread boundary. Thread.spawn is not
 # scoped, so the borrowed value could be mutated/freed by another thread or
 # outlive its source (Rust's thread::spawn requires 'static for the same reason).
