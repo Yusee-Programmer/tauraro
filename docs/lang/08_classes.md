@@ -696,4 +696,28 @@ function call — zero overhead compared to hand-written C.
 
 ---
 
+## Value Types (`@value_type`)
+
+By default a class is a **reference type**: heap-allocated, reference-counted,
+shared by pointer. For a small, immutable, copy-friendly type (a point, a color, a
+date, a borrowed view) you can instead mark it `@value_type` to make it a **stack
+value** — like a C struct or Rust's `Copy` types: no heap allocation, no refcount,
+passed and returned by value, and stored **inline** in collections
+(`List[Point]`, `Dict[str, Point]`, `Set[Point]` pack the structs directly, like
+Rust's `Vec`/`HashMap`/`HashSet`).
+
+```python
+@value_type
+pub class Point:
+    pub x: int
+    pub y: int
+```
+
+This is the lever that lets such types match Rust's performance on hot paths. The
+rules and trade-offs (POD fields only, value semantics, generic and mutating value
+types, value types in collections) are covered in
+[Advanced: Decorators → `@value_type`](../advanced/05_decorators.md).
+
+---
+
 Next: [Enums →](09_enums.md)

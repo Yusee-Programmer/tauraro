@@ -31,7 +31,7 @@ Every core doc covers: **What it is → When to use it → How it works → Comm
 | 15 | [Modules](15_modules.md) | import, from, pub, export, module resolution, TAURARO_PATH |
 | 16 | [Concurrency](16_concurrency.md) | async/await, spawn, task_group:, channels, Sendable |
 | 17 | [Extern & FFI](17_extern_and_ffi.md) | extern "C", variadic functions, linking, ABI |
-| 18 | [GPU & Inline Assembly](18_gpu_and_asm.md) | std.gpu.Gpu (OpenMP dispatch), deprecated gpu: blocks, asm(), memory barriers |
+| 18 | [Parallelism & Inline Assembly](18_gpu_and_asm.md) | std.gpu.Gpu (OpenMP dispatch), asm(), memory barriers |
 | 19 | [Compiler Error Reference](19_compiler_errors.md) | Every error code with cause, example, and fix |
 | 20 | [Advanced Patterns](20_advanced_patterns.md) | Idioms, design patterns, performance, best practices |
 | 21 | [Operator Overloading](21_operator_overloading.md) | Dunder methods: `__add__`, `__str__`, `__iter__`, `with` |
@@ -44,12 +44,15 @@ These topics are **optional** for everyday Tauraro development. Normal programs 
 
 | # | File | Topics |
 |---|------|--------|
-| A1 | [Lifetimes (`from` keyword)](advanced/01_lifetimes.md) | Borrow lifetime annotations, escape analysis, `-> T from param` |
+| A1 | [Lifetimes & Borrow Checking](advanced/01_lifetimes.md) | `ref`/`mut ref`, regions (`from`), `where … outlives`, the `[B-*]`/`[L-*]` checks |
 | A2 | [Advanced Ownership](advanced/02_advanced_ownership.md) | Move semantics, Shared[T] deep dive, explicit borrow patterns |
 | A3 | [Channel Select](advanced/03_channel_select.md) | `select:` blocks, timeout arms, fan-in/fan-out patterns |
 | A4 | [Generators](advanced/04_generators.md) | Generator expressions `(x for x in ...)`, lazy evaluation |
-| A5 | [Decorators](advanced/05_decorators.md) | `@inline`, `@hot`, `@property`, custom decorators |
-| A6 | [Sendable & Thread Safety](advanced/06_sendable.md) | Sendable interface, thread-safety enforcement, StructuredGroup |
+| A5 | [Decorators](advanced/05_decorators.md) | `@inline`, `@hot`, `@property`, `@value_type`, custom decorators |
+| A6 | [Sendable & Thread Safety](advanced/06_sendable.md) | Sendable interface, `[T-1]`/`[T-2]`/`[T-6]` checks, UnsafeSendable |
+| A7 | [Concurrency Guide](advanced/07_concurrency_guide.md) | All concurrency models, primitives, decision matrix, best practices |
+| A8 | [Zero-Copy Guide](advanced/08_zero_copy.md) | When zero-copy wins (StrView, borrowed payloads, dict borrows) vs parity |
+| A9 | [Safety Specification](advanced/09_safety_spec.md) | **Normative**: ARC-floor invariants, what `--strict` proves/elides, how it's verified |
 
 ---
 
