@@ -1,0 +1,10 @@
+# EXPECT: [T-1]
+# A non-Sendable value (a bare List) cannot cross a thread boundary: two threads
+# could mutate it concurrently (data race). The compiler rejects it; use Mutex[T]
+# or a Sendable type to share across threads.
+def worker(d: List[int]) -> int:
+    return len(d)
+def main():
+    mut items: List[int] = [1, 2, 3]
+    mut t: Thread = Thread.spawn(worker, items)
+    t.join()

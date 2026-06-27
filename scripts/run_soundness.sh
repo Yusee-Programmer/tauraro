@@ -99,7 +99,13 @@ for src in tests/soundness/accept/*.tr; do
     name="$(basename "$src" .tr)"
     chk="$("$TAURAROC" "$src" --strict --check 2>&1)"; rc=$?
     if [ "$rc" -ne 0 ]; then echo "FAIL  $name (--strict rejected a SAFE program)"; echo "$chk" | grep -E '\[[A-Z]-[0-9]+\]' | head -2; acc_fail=$((acc_fail+1)); continue; fi
-    out_def="$(build_and_run "$src" "build/${name}_def.exe" "" "$SAN")"; rc_a=$?
+    # A test marked `# NO_ASAN` is built WITHOUT sanitizers: closures lower to GCC
+    # nested-function trampolines, which need an executable stack and cannot be
+    # instrumented by ASan (it aborts on the trampoline, unrelated to soundness).
+    # Such tests still run + are differential-checked (elide ≡ arc), just unsanitized.
+    file_san="$SAN"
+    if grep -q "NO_ASAN" "$src"; then file_san=""; fi
+    out_def="$(build_and_run "$src" "build/${name}_def.exe" "" "$file_san")"; rc_a=$?
     if [ "$rc_a" -ne 0 ]; then
         case "$rc_a" in 90) echo "FAIL  $name (emit)";; 91) echo "FAIL  $name (C compile)";; *) echo "FAIL  $name (default build runtime exit $rc_a — possible UB under sanitizer)";; esac
         acc_fail=$((acc_fail+1)); continue

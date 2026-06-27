@@ -8,6 +8,7 @@ This directory covers advanced Tauraro topics. Core Tauraro development — writ
 
 | Doc | Topic | When You Need It |
 |-----|-------|-----------------|
+| [09 — Safety Specification](09_safety_spec.md) | **Normative**: the ARC-floor invariants, what `--strict` proves/elides, the elision-soundness theorem, and how every guarantee is verified (corpus + differential oracle + ASan) | Understanding exactly what Tauraro guarantees, and what it does not yet |
 | [01 — Lifetimes & Borrow Checking](01_lifetimes.md) | `ref`/`mut ref`, regions (`from`), `where … outlives`, regions on enum/interface, the `[B-*]`/`[L-*]` checks | Opt-in zero-copy with a compile-time guarantee under `--strict` |
 | [08 — Zero-Copy Guide](08_zero_copy.md) | When zero-copy wins (StrView, borrowed payloads, dict borrows) vs parity, best practices, numbers | Removing copies/allocations/refcount traffic on hot paths |
 | [02 — Advanced Ownership](02_advanced_ownership.md) | Move, borrow, Shared deep dive | Understanding M-2 errors; shared mutable state |

@@ -1,0 +1,12 @@
+# EXPECT: [T-5]
+# A borrow (`ref`/`mut ref`) cannot cross a thread boundary. Thread.spawn is not
+# scoped, so the borrowed value could be mutated/freed by another thread or
+# outlive its source (Rust's thread::spawn requires 'static for the same reason).
+def worker(n: int) -> int:
+    return n
+def run(x: mut ref int):
+    mut t: Thread = Thread.spawn(worker, x)
+    t.join()
+def main():
+    mut v = 5
+    run(v)

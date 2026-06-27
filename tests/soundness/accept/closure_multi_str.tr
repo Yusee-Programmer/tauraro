@@ -1,4 +1,9 @@
 # EXPECT: pass
+# NO_ASAN: closures lower to GCC nested-function trampolines (executable stack),
+# which ASan cannot instrument — it aborts on the trampoline call, unrelated to
+# memory safety. This test still runs and is differential-checked (elide ≡ arc);
+# the closure double-free it guards is also covered by the phase4 regression test.
+#
 # Regression for a heap-corruption bug: a `return` inside a closure used to drop
 # the ENCLOSING function's str locals (they were released when the closure ran AND
 # again at the real function exit -> multiple-release -> STATUS_HEAP_CORRUPTION).

@@ -1,0 +1,7 @@
+# EXPECT: [T-2]
+# A class declared `implements Sendable` must have only Sendable fields, else it
+# is not actually safe to share across threads. A raw List field is rejected.
+class SharedBox implements Sendable:
+    pub data: List[int]
+def main():
+    print(1)
