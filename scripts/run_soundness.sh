@@ -16,18 +16,37 @@
 set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
-TAURAROC="${TAURAROC:-./tauraroc.exe}"
+# Binary resolution mirrors run_tests.sh: Linux/macOS build is ./tauraroc (no
+# .exe), Windows is ./tauraroc.exe; BOOTSTRAP_BIN/TAURAROC override either.
+TAURAROC="${TAURAROC:-${BOOTSTRAP_BIN:-./tauraroc}}"
+if [ ! -x "$TAURAROC" ] && [ -x "./tauraroc.exe" ]; then
+    TAURAROC="./tauraroc.exe"
+fi
+if [ ! -x "$TAURAROC" ] && ! command -v "$TAURAROC" >/dev/null 2>&1; then
+    echo "ERROR: tauraroc binary not found: $TAURAROC (set BOOTSTRAP_BIN or build ./tauraroc[.exe])"
+    exit 1
+fi
 CC="${CC:-gcc}"
 WARN="-Wno-string-compare -Wno-comment -Wno-attributes -Wno-unused-value"
 LIBS="-lm"
-case "$(uname -s 2>/dev/null)" in *NT*|*MINGW*|*MSYS*|*CYGWIN*) LIBS="-lm -lws2_32 -mconsole";; esac
+STD=""
+case "$(uname -s 2>/dev/null)" in
+    *NT*|*MINGW*|*MSYS*|*CYGWIN*) LIBS="-lm -lws2_32 -mconsole" ;;
+    Linux)  LIBS="-lm -lpthread -lrt"; STD="-std=gnu11 -D_GNU_SOURCE -D_XOPEN_SOURCE=700" ;;
+    Darwin) LIBS="-lm -lpthread";      STD="-std=gnu11 -D_GNU_SOURCE -D_XOPEN_SOURCE=700" ;;
+esac
 SAN=""
 if [ "${ASAN:-0}" = "1" ]; then
     # Only enable sanitizers if the toolchain can actually link them (MinGW ships
     # no -lasan/-lubsan, so ASAN=1 there would be a false failure, not real UB).
     if echo 'int main(void){return 0;}' | "$CC" -fsanitize=address,undefined -x c - -o /dev/null >/dev/null 2>&1; then
         SAN="-fsanitize=address,undefined -g -fno-omit-frame-pointer"
-        echo "(sanitizers: address,undefined enabled)"
+        # The accept corpus checks for UB (use-after-free, double-free, OOB), NOT
+        # leaks — a short program not freeing once is not a soundness bug (the leak
+        # gate covers loop leaks). So turn LeakSanitizer off but hard-fail on real UB.
+        export ASAN_OPTIONS="detect_leaks=0:abort_on_error=1:halt_on_error=1"
+        export UBSAN_OPTIONS="halt_on_error=1:abort_on_error=1:print_stacktrace=1"
+        echo "(sanitizers: address,undefined enabled; leak detection off)"
     else
         echo "(ASAN=1 requested but $CC cannot link sanitizers; running without)"
     fi
@@ -58,7 +77,7 @@ for src in tests/soundness/accept/*.tr; do
     if [ "$rc" -ne 0 ]; then echo "FAIL  $name (--strict rejected a SAFE program)"; echo "$chk" | grep -E '\[[A-Z]-[0-9]+\]' | head -2; acc_fail=$((acc_fail+1)); continue; fi
     rm -rf build
     "$TAURAROC" "$src" --strict --emit c >/dev/null 2>&1 || { echo "FAIL  $name (emit)"; acc_fail=$((acc_fail+1)); continue; }
-    "$CC" -O1 $SAN -DTAURARO_NO_RT_HELPERS $WARN -I build/include \
+    "$CC" -O1 $STD $SAN -DTAURARO_NO_RT_HELPERS $WARN -I build/include \
         -o "build/$name.exe" $(find build -name '*.c') $LIBS >/dev/null 2>&1 \
         || { echo "FAIL  $name (C compile)"; acc_fail=$((acc_fail+1)); continue; }
     if "build/$name.exe" >/dev/null 2>&1; then echo "PASS  $name"; acc_pass=$((acc_pass+1)); else echo "FAIL  $name (runtime exit != 0)"; acc_fail=$((acc_fail+1)); fi

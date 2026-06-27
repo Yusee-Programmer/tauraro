@@ -775,6 +775,7 @@ pub def main(args: Vec[str]):
     mut sysroot     = ""                 # --sysroot <path>: explicit sysroot
     mut debug_mode  = false              # --debug         : ASAN + assertions
     mut strict_mode = false              # --strict        : alloc outside unsafe -> hard error
+    mut no_elide    = false              # --no-elide      : disable zero-copy borrow elision -> pure ARC (differential-soundness oracle)
     mut lib_mode    = false              # --lib           : build a shared library (.so/.dll) of `export def`s + a header
 
     # `tauraroc lint <file>` runs resolution + semantic analysis and reports
@@ -828,6 +829,8 @@ pub def main(args: Vec[str]):
             debug_mode = true
         elif arg == "--strict":
             strict_mode = true
+        elif arg == "--no-elide":
+            no_elide = true
         elif arg == "--lib":
             lib_mode = true
         elif not str_starts_with(arg, "-"):
@@ -925,6 +928,10 @@ pub def main(args: Vec[str]):
     # --debug: emit `#line N "src.tr"` directives so GCC/GDB diagnostics and
     # backtraces map generated C back to the original Tauraro source.
     c_gen.emit_line_info = debug_mode
+    # --no-elide: force pure ARC (no zero-copy borrow elision). Used by the
+    # differential-soundness oracle: an elided build and a --no-elide build must
+    # produce identical observable output; any divergence is an unsound elision.
+    c_gen.no_elide = no_elide
     mut rt_h   = read_runtime_header(args.get(0), input_path)
 
     c_gen.register_program(hir)
