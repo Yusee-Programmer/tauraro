@@ -1,10 +1,11 @@
 # Advanced — Macros (`macro def`)
 
 > Compile-time code generation. A macro is a function that runs **during
-> compilation**, receives a read-only reflection of the declaration it is
-> attached to, and **returns Tauraro source** which the compiler parses and
-> splices in. The generated code is then type- and borrow-checked like any other
-> source.
+> compilation** and **returns Tauraro source**, which the compiler parses and
+> splices in; the generated code is then type- and borrow-checked like any other
+> source. Macros come in two forms: `@name` on a declaration (receives a
+> reflection of that declaration) and `name!(…)` in expression position
+> (receives the call's arguments). See [Two forms](#two-forms-name-and-name).
 
 ---
 
@@ -102,7 +103,7 @@ def main():
 `args` supports `args.len`, `args[i]`, and `for a in args:`; each `a` is the
 argument's rendered source text (a string).
 
-**Need statements, not just one expression?** Return a [`do:` block](20_advanced_patterns.md)
+**Need statements, not just one expression?** Return a [`do:` block](../04_control_flow.md#block-expressions-do--if--match--loop--while-as-values)
 — it is a single expression that runs a body and yields its last value, so a
 function-like macro can generate arbitrary local logic:
 
