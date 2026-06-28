@@ -57,6 +57,10 @@ pub def mv_to_str(vptr: Pointer[MacroVal]) -> str:
         case MacroVal.MBool(b):
             if b: return "true"
             return "false"
+        # A function-like macro ARGUMENT is a record {src, kind}; it stringifies
+        # to its source text, so `s + arg` and `for a in args: … + a` keep working
+        # exactly as when args were plain strings (backward compatible).
+        case MacroVal.MRec(_, _): return mv_to_str(mrec_get(vptr, "src"))
         case _: return ""
 
 pub def mv_truthy(vptr: Pointer[MacroVal]) -> bool:
@@ -217,6 +221,7 @@ pub class MacroCtx:
     pub result: str
     pub has_error: bool
     pub error_msg: str
+    pub gensym_ctr: int
 
 extend MacroCtx:
     pub def init() -> MacroCtx:
@@ -226,6 +231,7 @@ extend MacroCtx:
         c.result = ""
         c.has_error = false
         c.error_msg = ""
+        c.gensym_ctr = 0
         return c
 
     pub def fail(self, msg: str):
@@ -326,6 +332,18 @@ extend MacroCtx:
                             if cargs.len > 0: msg = mv_to_str(self.eval_mexpr(cargs.get(0)))
                             self.fail(msg)
                             return box_mv(MacroVal.MNil)
+                        # gensym(["prefix"]) -> a unique identifier string, for
+                        # opt-in hygiene: name macro-introduced locals with it so
+                        # they can never collide with the caller's names.
+                        if cn == "gensym":
+                            self.gensym_ctr = self.gensym_ctr + 1
+                            mut pfx = "g"
+                            if cargs.len > 0: pfx = mv_to_str(self.eval_mexpr(cargs.get(0)))
+                            return box_mv(MacroVal.MStr("__hyg_" + pfx + "_" + self.gensym_ctr.to_str()))
+                        # str(x) -> stringify a macro value
+                        if cn == "str":
+                            if cargs.len > 0: return box_mv(MacroVal.MStr(mv_to_str(self.eval_mexpr(cargs.get(0)))))
+                            return box_mv(MacroVal.MStr(""))
                     case _: pass
                 self.fail("macro: unsupported call in macro body")
                 return box_mv(MacroVal.MNil)
@@ -431,13 +449,47 @@ def parse_expr_src(src: str) -> Pointer[Expr]:
     mut ps = Parser.init(toks, lx.token_lines)
     return ps.parse_expr()
 
-# Run a function-like macro: env[param] = list of arg source strings.
-def run_fn_macro(mdef: FunctionDef, args: Vec[Pointer[Expr]]) -> MacroCtx:
+# Coarse syntactic kind of an argument expression, for macro introspection.
+def kind_of(e: Pointer[Expr]) -> str:
+    if e as usize == 0 as usize: return "nil"
+    match e.read():
+        case Expr.ELitInt(_): return "int"
+        case Expr.ELitFloat(_): return "float"
+        case Expr.ELitStr(_): return "str"
+        case Expr.ERawStr(_): return "str"
+        case Expr.ELitBool(_): return "bool"
+        case Expr.ELitChar(_): return "char"
+        case Expr.EIdent(_): return "ident"
+        case Expr.ECall(_, _): return "call"
+        case Expr.EMethodCall(_, _, _): return "call"
+        case Expr.EBinOp(_, _, _): return "binop"
+        case Expr.EUnaryOp(_, _): return "unop"
+        case Expr.EList(_): return "list"
+        case Expr.ETuple(_): return "tuple"
+        case Expr.EIndex(_, _): return "index"
+        case Expr.EPropAccess(_, _): return "field"
+        case Expr.EFString(_): return "fstring"
+        case _: return "expr"
+
+# One macro argument as a record {src, kind}: `arg.src` is its source text,
+# `arg.kind` its syntactic kind ("int"/"str"/"ident"/"call"/…). It stringifies
+# to `src`, so `for a in args: … + a` still concatenates source.
+def arg_rec(e: Pointer[Expr]) -> Pointer[MacroVal]:
+    mut ks = Vec[str].init(2)
+    mut vs = Vec[Pointer[MacroVal]].init(2)
+    ks.push("src");  vs.push(box_mv(MacroVal.MStr(render_arg(e))))
+    ks.push("kind"); vs.push(box_mv(MacroVal.MStr(kind_of(e))))
+    return mrec(ks, vs)
+
+# Run a function-like macro: env[param] = list of arg records. `gbase` seeds the
+# gensym counter so hygiene names are unique across the whole compilation.
+def run_fn_macro(mdef: FunctionDef, args: Vec[Pointer[Expr]], gbase: int) -> MacroCtx:
     mut ctx = MacroCtx.init()
+    ctx.gensym_ctr = gbase
     mut argvals = Vec[Pointer[MacroVal]].init(args.len)
     mut i = 0
     while i < args.len:
-        argvals.push(box_mv(MacroVal.MStr(render_arg(args.get(i)))))
+        argvals.push(arg_rec(args.get(i)))
         i = i + 1
     if mdef.params.len > 0:
         ctx.env.insert(mdef.params.get(0).name, box_mv(MacroVal.MList(argvals)))
@@ -452,6 +504,7 @@ pub class FnMacroExpander:
     pub macros: Map[str, FunctionDef]
     pub errors: int
     pub depth: int
+    pub gensym_base: int
 
 extend FnMacroExpander:
     pub def init(m: Map[str, FunctionDef]) -> FnMacroExpander:
@@ -459,6 +512,7 @@ extend FnMacroExpander:
         e.macros = m
         e.errors = 0
         e.depth = 0
+        e.gensym_base = 0
         return e
 
     pub def visit_expr(self, eptr: Pointer[Expr]):
@@ -473,7 +527,8 @@ extend FnMacroExpander:
                     print("error: [MACRO] unknown function-like macro '" + name + "!'")
                     self.errors = self.errors + 1
                     return
-                mut ctx = run_fn_macro(self.macros.get(name), args)
+                mut ctx = run_fn_macro(self.macros.get(name), args, self.gensym_base)
+                self.gensym_base = ctx.gensym_ctr
                 if ctx.has_error:
                     print("error: [MACRO] " + name + "!: " + ctx.error_msg)
                     self.errors = self.errors + 1
@@ -636,6 +691,7 @@ pub def expand_macros(prog: Program) -> int:
     if nmac == 0: return 0
 
     mut errors = 0
+    mut gbase = 0   # shared gensym counter across @- and !-form expansions
     mut out = Vec[Pointer[Decl]].init(prog.decls.len)
     mut gen = Vec[Pointer[Decl]].init(8)
     i = 0
@@ -653,10 +709,12 @@ pub def expand_macros(prog: Program) -> int:
                 mut dname = decs.get(di).name
                 if macros.contains(dname):
                     mut ctx = MacroCtx.init()
+                    ctx.gensym_ctr = gbase
                     mut mdef = macros.get(dname)
                     if mdef.params.len > 0:
                         ctx.env.insert(mdef.params.get(0).name, build_item(dptr))
                     ctx.eval_mblock(mdef.body)
+                    gbase = ctx.gensym_ctr
                     if ctx.has_error:
                         print("error: [MACRO] @" + dname + ": " + ctx.error_msg)
                         errors = errors + 1
@@ -672,6 +730,7 @@ pub def expand_macros(prog: Program) -> int:
     # Function-like `name!(…)` expansion over the final decl set (original +
     # macro-generated). Runs after `@` expansion so generated bodies are covered.
     mut fexp = FnMacroExpander.init(macros)
+    fexp.gensym_base = gbase
     mut fi = 0
     while fi < out.len:
         fexp.expand_decl(out.get(fi))

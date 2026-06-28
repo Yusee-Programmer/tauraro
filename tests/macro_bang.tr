@@ -24,17 +24,25 @@ macro def max2(args) -> code:
     mut b = args[1]
     return "((" + a + ") if (" + a + ") > (" + b + ") else (" + b + "))"
 
-# sum_to!(n) -> a `do:` block computing 1+2+...+n (statement-generating macro)
+# sum_to!(n) -> a `do:` block computing 1+2+...+n. Uses gensym() for HYGIENE so
+# the macro's temporaries can never collide with the caller's variables.
 macro def sum_to(args) -> code:
     mut n = args[0]
+    mut t = gensym("t")
+    mut i = gensym("i")
     mut s = "do:\n"
-    s = s + "    mut __t = 0\n"
-    s = s + "    mut __i = 1\n"
-    s = s + "    while __i <= " + n + ":\n"
-    s = s + "        __t = __t + __i\n"
-    s = s + "        __i = __i + 1\n"
-    s = s + "    __t"
+    s = s + "    mut " + t + " = 0\n"
+    s = s + "    mut " + i + " = 1\n"
+    s = s + "    while " + i + " <= " + n + ":\n"
+    s = s + "        " + t + " = " + t + " + " + i + "\n"
+    s = s + "        " + i + " = " + i + " + 1\n"
+    s = s + "    " + t
     return s
+
+# kindof!(x) -> a string literal naming the argument's syntactic kind.
+# Demonstrates structured args: `args[0].kind` / `args[0].src`.
+macro def kindof(args) -> code:
+    return "\"" + args[0].kind + "\""
 
 def main():
     mut v = vec!(10, 20, 30)
@@ -50,6 +58,17 @@ def main():
     mut total = square!(4) + square!(5)
     print(f"total = {total}")            # 41
 
-    # statement-generating macro via a do: block
+    # statement-generating macro via a do: block (hygienic temps)
     mut st = sum_to!(5)
     print(f"sum_to = {st}")              # 15
+
+    # hygiene: macro's internal `t`/`i` don't clash with my own `t`/`i`
+    mut t = 100
+    mut i = 7
+    mut st2 = sum_to!(4)
+    print(f"hygiene t={t} i={i} st2={st2}")   # t=100 i=7 st2=10
+
+    # structured args: introspect the argument's kind
+    print(kindof!(42))                   # int
+    print(kindof!("hi"))                 # str
+    print(kindof!(v))                    # ident

@@ -2219,6 +2219,7 @@ typedef struct MacroCtx {
     TrStr result;
     bool has_error;
     TrStr error_msg;
+    long long gensym_ctr;
 } MacroCtx;
 #endif
 
@@ -2228,6 +2229,7 @@ typedef struct FnMacroExpander {
     TrMap* macros;
     long long errors;
     long long depth;
+    long long gensym_base;
 } FnMacroExpander;
 #endif
 
@@ -2720,7 +2722,9 @@ __attribute__((hot)) void parse_into(TrStr src, List_ptr* gen);
 __attribute__((hot)) List_ptr* decl_decorators(Decl* declptr);
 __attribute__((hot)) TrStr render_arg(Expr* e);
 __attribute__((hot)) Expr* parse_expr_src(TrStr src);
-__attribute__((hot)) MacroCtx* run_fn_macro(FunctionDef* mdef, List_ptr* args);
+__attribute__((hot)) TrStr kind_of(Expr* e);
+__attribute__((hot)) MacroVal* arg_rec(Expr* e);
+__attribute__((hot)) MacroCtx* run_fn_macro(FunctionDef* mdef, List_ptr* args, long long gbase);
 __attribute__((malloc,returns_nonnull,hot)) FnMacroExpander* FnMacroExpander_init(TrMap* m);
 __attribute__((hot)) void FnMacroExpander_visit_expr(FnMacroExpander* self, Expr* eptr);
 __attribute__((hot)) void FnMacroExpander_visit_block(FnMacroExpander* self, Block* b);
