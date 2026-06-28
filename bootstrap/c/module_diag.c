@@ -71,9 +71,9 @@ __attribute__((hot)) TrStr spaces(long long n) {
     /* pass */
     while ((i < n)) {
         /* pass */
-        TrStr _strtmp_t18 = _tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit(" ")));
+        TrStr _strtmp_t19 = _tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit(" ")));
         _tr_str_release(s);
-        s = _strtmp_t18;
+        s = _strtmp_t19;
         /* pass */
         i = (i + 1LL);
     }
@@ -96,9 +96,9 @@ __attribute__((hot)) TrStr repeat_char(TrStr ch, long long n) {
     /* pass */
     while ((i < k)) {
         /* pass */
-        TrStr _strtmp_t19 = _tr_strx_concat(_tr_strz(s), _tr_strz(ch));
+        TrStr _strtmp_t20 = _tr_strx_concat(_tr_strz(s), _tr_strz(ch));
         _tr_str_release(s);
-        s = _strtmp_t19;
+        s = _strtmp_t20;
         /* pass */
         i = (i + 1LL);
     }
@@ -165,9 +165,9 @@ __attribute__((hot)) long long loc_line(TrStr head) {
     /* pass */
     if ((last >= 0LL)) {
         /* pass */
-        TrStr _strtmp_t20 = _tr_str_wrap(_tr_str_slice(_tr_strz(head), (last + 1LL), _tr_strlen(_tr_strz(head))));
+        TrStr _strtmp_t21 = _tr_str_wrap(_tr_str_slice(_tr_strz(head), (last + 1LL), _tr_strlen(_tr_strz(head))));
         _tr_str_release(numstr);
-        numstr = _strtmp_t20;
+        numstr = _strtmp_t21;
     }
     /* pass */
     return _tr_str_to_int(_tr_strz(numstr));

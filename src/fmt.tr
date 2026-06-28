@@ -439,7 +439,9 @@ extend Formatter:
             case Stmt.SReturn(v):
                 if v as usize == 0 as usize: self.emit_simple("return", src_line)
                 else: self.emit_simple("return " + self.expr_str(v), src_line)
-            case Stmt.SBreak: self.emit_simple("break", src_line)
+            case Stmt.SBreak(bv):
+                if bv as usize == 0 as usize: self.emit_simple("break", src_line)
+                else: self.emit_simple("break " + self.expr_str(bv), src_line)
             case Stmt.SContinue: self.emit_simple("continue", src_line)
             case Stmt.SPass: self.emit_simple("pass", src_line)
             case Stmt.SRaise(v): self.emit_simple("raise " + self.expr_str(v), src_line)

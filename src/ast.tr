@@ -203,6 +203,25 @@ pub enum Expr:
     ESizeOf(ty: Pointer[AstType])
     EIfElse(cond: Pointer[Expr], then_expr: Pointer[Expr], else_expr: Pointer[Expr])
     ETypeArg(ty: Pointer[AstType])
+    # `do:` block-expression — runs its body and evaluates to the last bare
+    # expression (lowers to a GCC statement-expression, zero-cost).
+    EDo(body: Block)
+    # `match … :` block-expression — each arm's last bare expression is the
+    # value; lowers to a statement-expression dispatching into per-arm `do:`s.
+    EMatch(subj: Pointer[Expr], arms: Vec[MatchArm])
+    # Function-like macro call `name!(args)` — expanded at compile time (between
+    # parse and sema) into the macro's returned source, parsed as an expression
+    # and substituted here. Args are kept as parsed expressions; the macro sees
+    # their rendered source text. (The `@name` decorator form is additive; this
+    # `name!` form is inline/expression-position "full power".)
+    EMacroCall(name: str, args: Vec[Pointer[Expr]])
+    # `loop:` block-expression — an infinite loop whose value comes from
+    # `break <value>`. Lowers to `({ T _lres; for(;;){…} _lres; })`.
+    ELoop(body: Block)
+    # `while c:` block-expression — value comes from `break <value>`; on normal
+    # exit (condition false) the optional `else:` block's last expression is the
+    # value (empty/zero if there is no else).
+    EWhileExpr(cond: Pointer[Expr], body: Block, else_body: Block)
 
 # --- Chan-select arms ---------------------------------------------------------
 
@@ -244,7 +263,9 @@ pub enum Stmt:
     SMultiLet(names: Vec[str], is_mut: bool, val: Pointer[Expr])
     SAssign(target: Pointer[Expr], val: Pointer[Expr])
     SReturn(val: Pointer[Expr])
-    SBreak
+    # `break` optionally carries a value when it exits a `loop:`/`while:` used as
+    # an expression (`break v`); val is a null Pointer for a plain `break`.
+    SBreak(val: Pointer[Expr])
     SContinue
     SPass
     SRaise(val: Pointer[Expr])

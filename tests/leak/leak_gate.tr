@@ -26,6 +26,69 @@ def workload():
     m.insert("k", "v")             # boxed str value (the #54 path)
     m.free()
 
+    # `do:` block-expression yielding a fresh owned string: the block's locals
+    # are auto-dropped while the yielded value escapes (must not leak/double-free).
+    mut g = do:
+        mut name = "wor" + "ld"
+        mut msg = "hello, " + name  # `name` dropped at block exit, `msg` escapes
+        msg
+    mut glen = g.len()             # `g` auto-dropped at scope exit
+
+    # `do:` nested in a parenthesized expression yielding a string.
+    mut p = ("[" + (do:
+        mut inner = "x" + "y"
+        inner
+    ))
+    mut plen = p.len()
+
+    # `if`-expression yielding a fresh owned string from each branch.
+    mut q = if glen > 2:
+        mut a = "yes" + "!"
+        a
+    else:
+        "no"
+    mut qlen = q.len()
+
+    # if-expression result used directly as a concat operand (owned, released).
+    # Paren-nested block-expressions put the closing paren on its own line.
+    mut r = "<" + (if plen > 0:
+        "h" + "it"
+    else:
+        "miss"
+    )
+    mut rlen = r.len()
+
+    # match-expression yielding a fresh owned string per arm.
+    mut u = match rlen:
+        case 0: "empty"
+        case _:
+            mut w = "len" + "gth"
+            w
+    mut ulen = u.len()
+
+    # match-expression result used directly as a concat operand.
+    mut v = ">" + (match qlen:
+        case 0: "z" + "ero"
+        case _: "non" + "zero"
+    )
+    mut vlen = v.len()
+
+    # loop: expression yielding a fresh owned string via `break <value>`.
+    mut ll = loop:
+        mut bse = "lo" + "op"
+        break bse + "!"
+    mut lllen = ll.len()
+
+    # while: expression yielding an owned string on the break path.
+    mut cnt = 0
+    mut wv = while cnt < 3:
+        cnt = cnt + 1
+        if cnt == 2:
+            break "wh" + "ile"
+    else:
+        "done"
+    mut wvlen = wv.len()
+
 def main():
     workload()                                  # warm up (one-time allocations)
     mut before = _tr_mem_live()

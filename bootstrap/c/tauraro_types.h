@@ -55,6 +55,7 @@ typedef struct Formatter Formatter;
 typedef struct CGenerator CGenerator;
 typedef struct LlvmGenerator LlvmGenerator;
 typedef struct MacroCtx MacroCtx;
+typedef struct FnMacroExpander FnMacroExpander;
 typedef struct Token Token;
 typedef struct Pattern Pattern;
 typedef struct Ownership Ownership;
@@ -93,6 +94,7 @@ typedef enum {
     Token_KwElse,
     Token_KwFor,
     Token_KwWhile,
+    Token_KwLoop,
     Token_KwReturn,
     Token_KwBreak,
     Token_KwContinue,
@@ -139,6 +141,7 @@ typedef enum {
     Token_KwLambda,
     Token_KwDecorator,
     Token_KwMacro,
+    Token_KwDo,
     Token_KwTrue,
     Token_KwFalse,
     Token_KwNone,
@@ -179,6 +182,7 @@ typedef enum {
     Token_StarStarEq,
     Token_EqEq,
     Token_NotEq,
+    Token_Bang,
     Token_Lt,
     Token_Gt,
     Token_LtEq,
@@ -285,6 +289,7 @@ static inline __attribute__((always_inline)) Token Token_ctor_Ident(TrStr name) 
 #define Token_make_KwElse() ((Token){.tag=Token_KwElse})
 #define Token_make_KwFor() ((Token){.tag=Token_KwFor})
 #define Token_make_KwWhile() ((Token){.tag=Token_KwWhile})
+#define Token_make_KwLoop() ((Token){.tag=Token_KwLoop})
 #define Token_make_KwReturn() ((Token){.tag=Token_KwReturn})
 #define Token_make_KwBreak() ((Token){.tag=Token_KwBreak})
 #define Token_make_KwContinue() ((Token){.tag=Token_KwContinue})
@@ -331,6 +336,7 @@ static inline __attribute__((always_inline)) Token Token_ctor_Ident(TrStr name) 
 #define Token_make_KwLambda() ((Token){.tag=Token_KwLambda})
 #define Token_make_KwDecorator() ((Token){.tag=Token_KwDecorator})
 #define Token_make_KwMacro() ((Token){.tag=Token_KwMacro})
+#define Token_make_KwDo() ((Token){.tag=Token_KwDo})
 #define Token_make_KwTrue() ((Token){.tag=Token_KwTrue})
 #define Token_make_KwFalse() ((Token){.tag=Token_KwFalse})
 #define Token_make_KwNone() ((Token){.tag=Token_KwNone})
@@ -371,6 +377,7 @@ static inline __attribute__((always_inline)) Token Token_ctor_Ident(TrStr name) 
 #define Token_make_StarStarEq() ((Token){.tag=Token_StarStarEq})
 #define Token_make_EqEq() ((Token){.tag=Token_EqEq})
 #define Token_make_NotEq() ((Token){.tag=Token_NotEq})
+#define Token_make_Bang() ((Token){.tag=Token_Bang})
 #define Token_make_Lt() ((Token){.tag=Token_Lt})
 #define Token_make_Gt() ((Token){.tag=Token_Gt})
 #define Token_make_LtEq() ((Token){.tag=Token_LtEq})
@@ -526,7 +533,12 @@ typedef enum {
     Expr_ERange,
     Expr_ESizeOf,
     Expr_EIfElse,
-    Expr_ETypeArg
+    Expr_ETypeArg,
+    Expr_EDo,
+    Expr_EMatch,
+    Expr_EMacroCall,
+    Expr_ELoop,
+    Expr_EWhileExpr
 } Expr_tag;
 
 typedef struct Expr {
@@ -660,6 +672,25 @@ typedef struct Expr {
         struct {
             AstType** ty;
         } ETypeArg;
+        struct {
+            Block* body;
+        } EDo;
+        struct {
+            Expr* subj;
+            List_ptr* arms;
+        } EMatch;
+        struct {
+            TrStr name;
+            List_ptr* args;
+        } EMacroCall;
+        struct {
+            Block* body;
+        } ELoop;
+        struct {
+            Expr* cond;
+            Block* body;
+            Block* else_body;
+        } EWhileExpr;
     } data;
 } Expr;
 
@@ -698,6 +729,11 @@ static inline __attribute__((always_inline)) Expr Expr_ctor_ERange(Expr* start, 
 static inline __attribute__((always_inline)) Expr Expr_ctor_ESizeOf(AstType** ty) { Expr _r = {.tag=Expr_ESizeOf}; _r.data.ESizeOf.ty = ty; return _r; }
 static inline __attribute__((always_inline)) Expr Expr_ctor_EIfElse(Expr* cond, Expr* then_expr, Expr* else_expr) { Expr _r = {.tag=Expr_EIfElse}; _r.data.EIfElse.cond = cond; _r.data.EIfElse.then_expr = then_expr; _r.data.EIfElse.else_expr = else_expr; return _r; }
 static inline __attribute__((always_inline)) Expr Expr_ctor_ETypeArg(AstType** ty) { Expr _r = {.tag=Expr_ETypeArg}; _r.data.ETypeArg.ty = ty; return _r; }
+static inline __attribute__((always_inline)) Expr Expr_ctor_EDo(Block* body) { Expr _r = {.tag=Expr_EDo}; _r.data.EDo.body = body; return _r; }
+static inline __attribute__((always_inline)) Expr Expr_ctor_EMatch(Expr* subj, List_ptr* arms) { Expr _r = {.tag=Expr_EMatch}; _r.data.EMatch.subj = subj; _r.data.EMatch.arms = arms; return _r; }
+static inline __attribute__((always_inline)) Expr Expr_ctor_EMacroCall(TrStr name, List_ptr* args) { Expr _r = {.tag=Expr_EMacroCall}; _r.data.EMacroCall.name = _tr_str_retain(name); _r.data.EMacroCall.args = args; return _r; }
+static inline __attribute__((always_inline)) Expr Expr_ctor_ELoop(Block* body) { Expr _r = {.tag=Expr_ELoop}; _r.data.ELoop.body = body; return _r; }
+static inline __attribute__((always_inline)) Expr Expr_ctor_EWhileExpr(Expr* cond, Block* body, Block* else_body) { Expr _r = {.tag=Expr_EWhileExpr}; _r.data.EWhileExpr.cond = cond; _r.data.EWhileExpr.body = body; _r.data.EWhileExpr.else_body = else_body; return _r; }
 
 typedef enum {
     Stmt_SExpr,
@@ -755,6 +791,9 @@ typedef struct Stmt {
         struct {
             Expr* val;
         } SReturn;
+        struct {
+            Expr* val;
+        } SBreak;
         struct {
             Expr* val;
         } SRaise;
@@ -837,7 +876,7 @@ static inline __attribute__((always_inline)) Stmt Stmt_ctor_SLet(TrStr name, Own
 static inline __attribute__((always_inline)) Stmt Stmt_ctor_SMultiLet(List_TrStr* names, bool is_mut, Expr* val) { Stmt _r = {.tag=Stmt_SMultiLet}; _r.data.SMultiLet.names = names; _r.data.SMultiLet.is_mut = is_mut; _r.data.SMultiLet.val = val; return _r; }
 static inline __attribute__((always_inline)) Stmt Stmt_ctor_SAssign(Expr* target, Expr* val) { Stmt _r = {.tag=Stmt_SAssign}; _r.data.SAssign.target = target; _r.data.SAssign.val = val; return _r; }
 static inline __attribute__((always_inline)) Stmt Stmt_ctor_SReturn(Expr* val) { Stmt _r = {.tag=Stmt_SReturn}; _r.data.SReturn.val = val; return _r; }
-#define Stmt_make_SBreak() ((Stmt){.tag=Stmt_SBreak})
+static inline __attribute__((always_inline)) Stmt Stmt_ctor_SBreak(Expr* val) { Stmt _r = {.tag=Stmt_SBreak}; _r.data.SBreak.val = val; return _r; }
 #define Stmt_make_SContinue() ((Stmt){.tag=Stmt_SContinue})
 #define Stmt_make_SPass() ((Stmt){.tag=Stmt_SPass})
 static inline __attribute__((always_inline)) Stmt Stmt_ctor_SRaise(Expr* val) { Stmt _r = {.tag=Stmt_SRaise}; _r.data.SRaise.val = val; return _r; }
@@ -969,7 +1008,11 @@ typedef enum {
     HirExpr_ETry,
     HirExpr_ERange,
     HirExpr_ESizeOf,
-    HirExpr_EIfElse
+    HirExpr_EIfElse,
+    HirExpr_EDo,
+    HirExpr_EMatchExpr,
+    HirExpr_ELoop,
+    HirExpr_EWhileExpr
 } HirExpr_tag;
 
 typedef struct HirExpr {
@@ -1141,6 +1184,25 @@ typedef struct HirExpr {
             HirExpr* else_e;
             AstType* ty;
         } EIfElse;
+        struct {
+            HirBlock* body;
+            AstType* ty;
+        } EDo;
+        struct {
+            HirExpr* subj;
+            List_ptr* arms;
+            AstType* ty;
+        } EMatchExpr;
+        struct {
+            HirBlock* body;
+            AstType* ty;
+        } ELoop;
+        struct {
+            HirExpr* cond;
+            HirBlock* body;
+            HirBlock* else_body;
+            AstType* ty;
+        } EWhileExpr;
     } data;
 } HirExpr;
 
@@ -1179,6 +1241,10 @@ static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_ETry(HirBlock*
 static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_ERange(HirExpr* start, HirExpr* end, bool inclusive, AstType* ty) { HirExpr _r = {.tag=HirExpr_ERange}; _r.data.ERange.start = start; _r.data.ERange.end = end; _r.data.ERange.inclusive = inclusive; _r.data.ERange.ty = ty; return _r; }
 static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_ESizeOf(AstType* target_ty, AstType* ty) { HirExpr _r = {.tag=HirExpr_ESizeOf}; _r.data.ESizeOf.target_ty = target_ty; _r.data.ESizeOf.ty = ty; return _r; }
 static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_EIfElse(HirExpr* cond, HirExpr* then_e, HirExpr* else_e, AstType* ty) { HirExpr _r = {.tag=HirExpr_EIfElse}; _r.data.EIfElse.cond = cond; _r.data.EIfElse.then_e = then_e; _r.data.EIfElse.else_e = else_e; _r.data.EIfElse.ty = ty; return _r; }
+static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_EDo(HirBlock* body, AstType* ty) { HirExpr _r = {.tag=HirExpr_EDo}; _r.data.EDo.body = body; _r.data.EDo.ty = ty; return _r; }
+static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_EMatchExpr(HirExpr* subj, List_ptr* arms, AstType* ty) { HirExpr _r = {.tag=HirExpr_EMatchExpr}; _r.data.EMatchExpr.subj = subj; _r.data.EMatchExpr.arms = arms; _r.data.EMatchExpr.ty = ty; return _r; }
+static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_ELoop(HirBlock* body, AstType* ty) { HirExpr _r = {.tag=HirExpr_ELoop}; _r.data.ELoop.body = body; _r.data.ELoop.ty = ty; return _r; }
+static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_EWhileExpr(HirExpr* cond, HirBlock* body, HirBlock* else_body, AstType* ty) { HirExpr _r = {.tag=HirExpr_EWhileExpr}; _r.data.EWhileExpr.cond = cond; _r.data.EWhileExpr.body = body; _r.data.EWhileExpr.else_body = else_body; _r.data.EWhileExpr.ty = ty; return _r; }
 
 typedef enum {
     HirStmt_SExpr,
@@ -1232,6 +1298,9 @@ typedef struct HirStmt {
         struct {
             HirExpr* val;
         } SReturn;
+        struct {
+            HirExpr* val;
+        } SBreak;
         struct {
             HirExpr* val;
         } SRaise;
@@ -1318,7 +1387,7 @@ static inline __attribute__((always_inline)) HirStmt HirStmt_ctor_SExpr(HirExpr*
 static inline __attribute__((always_inline)) HirStmt HirStmt_ctor_SLet(TrStr name, Ownership ownership, bool is_mut, bool is_const, bool is_shared, AstType* ty, HirExpr* val) { HirStmt _r = {.tag=HirStmt_SLet}; _r.data.SLet.name = _tr_str_retain(name); _r.data.SLet.ownership = ownership; _r.data.SLet.is_mut = is_mut; _r.data.SLet.is_const = is_const; _r.data.SLet.is_shared = is_shared; _r.data.SLet.ty = ty; _r.data.SLet.val = val; return _r; }
 static inline __attribute__((always_inline)) HirStmt HirStmt_ctor_SAssign(HirExpr* target, HirExpr* val) { HirStmt _r = {.tag=HirStmt_SAssign}; _r.data.SAssign.target = target; _r.data.SAssign.val = val; return _r; }
 static inline __attribute__((always_inline)) HirStmt HirStmt_ctor_SReturn(HirExpr* val) { HirStmt _r = {.tag=HirStmt_SReturn}; _r.data.SReturn.val = val; return _r; }
-#define HirStmt_make_SBreak() ((HirStmt){.tag=HirStmt_SBreak})
+static inline __attribute__((always_inline)) HirStmt HirStmt_ctor_SBreak(HirExpr* val) { HirStmt _r = {.tag=HirStmt_SBreak}; _r.data.SBreak.val = val; return _r; }
 #define HirStmt_make_SContinue() ((HirStmt){.tag=HirStmt_SContinue})
 #define HirStmt_make_SPass() ((HirStmt){.tag=HirStmt_SPass})
 static inline __attribute__((always_inline)) HirStmt HirStmt_ctor_SRaise(HirExpr* val) { HirStmt _r = {.tag=HirStmt_SRaise}; _r.data.SRaise.val = val; return _r; }
@@ -2051,6 +2120,7 @@ typedef struct Sema {
     long long next_block_id;
     List_i64* block_stack;
     List_i64* block_stack_base;
+    long long do_temp_ctr;
 } Sema;
 #endif
 
@@ -2123,6 +2193,8 @@ typedef struct CGenerator {
     List_TrStr* defer_stack;
     List_TrStr* wrap_temp_decls;
     List_TrStr* wrap_temp_names;
+    List_TrStr* loop_res_stack;
+    List_TrStr* loop_done_stack;
     bool emit_line_info;
     TrStr cur_src_file;
 } CGenerator;
@@ -2148,6 +2220,15 @@ typedef struct MacroCtx {
     bool has_error;
     TrStr error_msg;
 } MacroCtx;
+#endif
+
+#ifndef FnMacroExpander_STRUCT_DEFINED
+#define FnMacroExpander_STRUCT_DEFINED
+typedef struct FnMacroExpander {
+    TrMap* macros;
+    long long errors;
+    long long depth;
+} FnMacroExpander;
 #endif
 
 typedef struct List_Token { Token* data; size_t len; size_t capacity; } List_Token;
@@ -2348,11 +2429,15 @@ __attribute__((hot)) Stmt* Parser_parse_shared_let_stmt(Parser* self);
 __attribute__((hot)) Stmt* Parser_parse_const_let_stmt(Parser* self);
 __attribute__((hot)) Stmt* Parser_parse_if_stmt(Parser* self);
 __attribute__((hot)) Stmt* Parser_parse_while_stmt(Parser* self);
+__attribute__((hot)) Stmt* Parser_parse_loop_stmt(Parser* self);
 __attribute__((hot)) Stmt* Parser_parse_for_stmt(Parser* self);
 __attribute__((hot)) Stmt* Parser_parse_match_stmt(Parser* self);
+__attribute__((hot)) List_ptr* Parser_parse_match_arms(Parser* self);
 __attribute__((hot)) Pattern Parser_parse_pattern(Parser* self);
 __attribute__((hot)) Stmt* Parser_parse_assign_or_expr_stmt(Parser* self);
 __attribute__((hot)) Expr* Parser_parse_expr(Parser* self);
+__attribute__((hot)) Expr* Parser_parse_match_expr(Parser* self);
+__attribute__((hot)) Expr* Parser_parse_if_expr(Parser* self);
 __attribute__((hot)) Expr* Parser_parse_ternary(Parser* self);
 __attribute__((hot)) Expr* Parser_parse_or_expr(Parser* self);
 __attribute__((hot)) Expr* Parser_parse_and_expr(Parser* self);
@@ -2535,12 +2620,16 @@ __attribute__((hot)) HirFunction* Sema_lower_func(Sema* self, FunctionDef* f);
 __attribute__((hot)) HirClass* Sema_lower_class(Sema* self, ClassDef* c);
 __attribute__((hot)) HirEnum* Sema_lower_enum(Sema* self, EnumDef* e);
 __attribute__((hot)) HirInterface* Sema_lower_interface(Sema* self, InterfaceDef* i_def);
+__attribute__((hot)) void Sema_apply_escape_marks(Sema* self, HirStmt* _hs);
 __attribute__((hot)) HirBlock* Sema_lower_block(Sema* self, Block* b);
 __attribute__((hot)) HirStmt* Sema_lower_stmt(Sema* self, Stmt* s_ptr);
 __attribute__((hot)) AstType* Sema_variant_field_ty(Sema* self, TrStr type_name, TrStr variant_name, long long field_idx);
 __attribute__((hot)) void Sema_declare_pattern_binds(Sema* self, Pattern pat);
 __attribute__((hot)) void Sema_declare_pattern_binds_typed(Sema* self, Pattern pat, AstType* subj_ty);
 __attribute__((hot)) AstType* Sema_str_method_ret_ty(Sema* self, TrStr method);
+__attribute__((hot)) HirExpr* Sema_lower_do_value(Sema* self, Block* do_body);
+__attribute__((hot)) AstType* Sema_infer_break_type(Sema* self, HirBlock* hb);
+__attribute__((hot)) AstType* Sema_infer_break_type_stmt(Sema* self, HirStmt* s);
 __attribute__((hot)) HirExpr* Sema_lower_expr(Sema* self, Expr* e_ptr);
 __attribute__((hot)) TrStr Sema_is_reserved_error(Sema* self, TrStr name);
 __attribute__((hot)) TrStr Sema_is_reserved_keyword(Sema* self, TrStr name);
@@ -2629,6 +2718,14 @@ __attribute__((hot)) void MacroCtx_eval_mblock(MacroCtx* self, Block* b);
 __attribute__((hot)) void MacroCtx_eval_mstmt(MacroCtx* self, Stmt* sptr);
 __attribute__((hot)) void parse_into(TrStr src, List_ptr* gen);
 __attribute__((hot)) List_ptr* decl_decorators(Decl* declptr);
+__attribute__((hot)) TrStr render_arg(Expr* e);
+__attribute__((hot)) Expr* parse_expr_src(TrStr src);
+__attribute__((hot)) MacroCtx* run_fn_macro(FunctionDef* mdef, List_ptr* args);
+__attribute__((malloc,returns_nonnull,hot)) FnMacroExpander* FnMacroExpander_init(TrMap* m);
+__attribute__((hot)) void FnMacroExpander_visit_expr(FnMacroExpander* self, Expr* eptr);
+__attribute__((hot)) void FnMacroExpander_visit_block(FnMacroExpander* self, Block* b);
+__attribute__((hot)) void FnMacroExpander_visit_stmt(FnMacroExpander* self, Stmt* sptr);
+__attribute__((hot)) void FnMacroExpander_expand_decl(FnMacroExpander* self, Decl* dptr);
 __attribute__((hot)) long long expand_macros(Program* prog);
 __attribute__((hot)) void print_version();
 __attribute__((hot)) void print_usage();
@@ -2670,6 +2767,7 @@ __attribute__((malloc,returns_nonnull,hot)) Lexer* Lexer_init(TrStr source);
 __attribute__((hot)) void Lexer_push_loc(Lexer* self);
 __attribute__((hot)) long long Lexer_peek(Lexer* self);
 __attribute__((hot)) long long Lexer_peek_at(Lexer* self, long long offset);
+__attribute__((hot)) bool Lexer__at_eol_after_ws(Lexer* self);
 __attribute__((hot)) long long Lexer_advance(Lexer* self);
 __attribute__((hot)) bool Lexer_at_end(Lexer* self);
 __attribute__((hot)) void Lexer_skip_spaces(Lexer* self);
@@ -2722,6 +2820,7 @@ __attribute__((hot)) void CGenerator_gen_enum_struct(CGenerator* self, HirEnum* 
 __attribute__((hot)) void CGenerator_gen_interface_vtable(CGenerator* self, HirInterface* iface);
 __attribute__((hot)) TrStr CGenerator_gen_one_iface_wrap(CGenerator* self, TrStr cls_name, HirInterface* iface);
 __attribute__((hot)) TrStr CGenerator_gen_expr(CGenerator* self, HirExpr* e_ptr);
+__attribute__((hot)) TrStr CGenerator_gen_match_expr(CGenerator* self, HirExpr* subj, List_ptr* arms, AstType* ty);
 __attribute__((hot)) bool CGenerator_has_method(CGenerator* self, TrStr cls_name, TrStr method);
 __attribute__((hot)) AstType* CGenerator_cls_method_ret_ty(CGenerator* self, TrStr cls_name, TrStr method);
 __attribute__((hot)) TrStr CGenerator_cls_method_c_call(CGenerator* self, TrStr cls_name, TrStr method, TrStr obj_s, TrStr extra_args);
@@ -3884,6 +3983,24 @@ __attribute__((hot)) macros_MacroCtx*** core_alloc_resize_macros_MacroCtx_ptr(ma
 __attribute__((hot)) void core_alloc_dealloc_macros_MacroCtx_ptr(macros_MacroCtx*** ptr);
 __attribute__((hot)) core_map_MapNode_str_macros_MacroCtx** core_alloc_alloc_core_map_MapNode_str_macros_MacroCtx(long long count);
 __attribute__((hot)) void core_alloc_dealloc_core_map_MapNode_str_macros_MacroCtx(core_map_MapNode_str_macros_MacroCtx** ptr);
+
+typedef FnMacroExpander macros_FnMacroExpander;
+struct core_vec_Vec_macros_FnMacroExpander { macros_FnMacroExpander** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_macros_FnMacroExpander core_vec_Vec_macros_FnMacroExpander;
+struct core_vec_Vec_macros_FnMacroExpander_ptr { macros_FnMacroExpander*** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_macros_FnMacroExpander_ptr core_vec_Vec_macros_FnMacroExpander_ptr;
+struct core_map_MapNode_str_macros_FnMacroExpander { char* key; macros_FnMacroExpander* value; struct core_map_MapNode_str_macros_FnMacroExpander* next; };
+typedef struct core_map_MapNode_str_macros_FnMacroExpander core_map_MapNode_str_macros_FnMacroExpander;
+struct core_map_Map_str_macros_FnMacroExpander { core_map_MapNode_str_macros_FnMacroExpander** buckets; long long capacity; long long len; };
+typedef struct core_map_Map_str_macros_FnMacroExpander core_map_Map_str_macros_FnMacroExpander;
+__attribute__((hot)) macros_FnMacroExpander** core_alloc_alloc_macros_FnMacroExpander(long long count);
+__attribute__((hot)) macros_FnMacroExpander** core_alloc_resize_macros_FnMacroExpander(macros_FnMacroExpander** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_macros_FnMacroExpander(macros_FnMacroExpander** ptr);
+__attribute__((hot)) macros_FnMacroExpander*** core_alloc_alloc_macros_FnMacroExpander_ptr(long long count);
+__attribute__((hot)) macros_FnMacroExpander*** core_alloc_resize_macros_FnMacroExpander_ptr(macros_FnMacroExpander*** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_macros_FnMacroExpander_ptr(macros_FnMacroExpander*** ptr);
+__attribute__((hot)) core_map_MapNode_str_macros_FnMacroExpander** core_alloc_alloc_core_map_MapNode_str_macros_FnMacroExpander(long long count);
+__attribute__((hot)) void core_alloc_dealloc_core_map_MapNode_str_macros_FnMacroExpander(core_map_MapNode_str_macros_FnMacroExpander** ptr);
 
 /* Primitive vec/map types for core modules */
 struct core_vec_Vec_str { char** data; long long len; long long capacity; };

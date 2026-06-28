@@ -54,6 +54,8 @@ __attribute__((hot)) bool Token_is_keyword(Token self) {
         return true;
     } else if (_t4.tag == Token_KwWhile) {
         return true;
+    } else if (_t4.tag == Token_KwLoop) {
+        return true;
     } else if (_t4.tag == Token_KwReturn) {
         return true;
     } else if (_t4.tag == Token_KwMatch) {
@@ -99,6 +101,8 @@ __attribute__((hot)) bool Token_is_keyword(Token self) {
     } else if (_t4.tag == Token_KwDecorator) {
         return true;
     } else if (_t4.tag == Token_KwMacro) {
+        return true;
+    } else if (_t4.tag == Token_KwDo) {
         return true;
     } else if (_t4.tag == Token_KwInt) {
         return true;
@@ -200,6 +204,8 @@ __attribute__((hot)) TrStr Token_debug(Token self) {
         return _tr_str_lit("for");
     } else if (_t5.tag == Token_KwWhile) {
         return _tr_str_lit("while");
+    } else if (_t5.tag == Token_KwLoop) {
+        return _tr_str_lit("loop");
     } else if (_t5.tag == Token_KwReturn) {
         return _tr_str_lit("return");
     } else if (_t5.tag == Token_KwMatch) {
@@ -248,6 +254,8 @@ __attribute__((hot)) TrStr Token_debug(Token self) {
         return _tr_str_lit("decorator");
     } else if (_t5.tag == Token_KwMacro) {
         return _tr_str_lit("macro");
+    } else if (_t5.tag == Token_KwDo) {
+        return _tr_str_lit("do");
     } else if (_t5.tag == Token_KwInt) {
         return _tr_str_lit("int");
     } else if (_t5.tag == Token_KwFloat) {
@@ -304,6 +312,8 @@ __attribute__((hot)) TrStr Token_debug(Token self) {
         return _tr_str_lit("==");
     } else if (_t5.tag == Token_NotEq) {
         return _tr_str_lit("!=");
+    } else if (_t5.tag == Token_Bang) {
+        return _tr_str_lit("!");
     } else if (_t5.tag == Token_Lt) {
         return _tr_str_lit("<");
     } else if (_t5.tag == Token_Gt) {

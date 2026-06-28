@@ -84,6 +84,43 @@ __attribute__((hot)) long long Lexer_peek_at(Lexer* self, long long offset) {
     return ((long long)((*(self->src + p))));
 }
 
+__attribute__((hot)) bool Lexer__at_eol_after_ws(Lexer* self) {
+    /* pass */
+    long long k = 0LL;
+    /* pass */
+    while (true) {
+        /* pass */
+        long long ch = Lexer_peek_at(self, k);
+        /* pass */
+        if (((ch == 32LL) || (ch == 9LL))) {
+            /* pass */
+            k = (k + 1LL);
+        } else {
+            /* pass */
+            break;
+        }
+    }
+    /* pass */
+    long long ch2 = Lexer_peek_at(self, k);
+    /* pass */
+    if ((ch2 == 0LL)) {
+        /* pass */
+        return true;
+    }
+    /* pass */
+    if ((ch2 == 35LL)) {
+        /* pass */
+        return true;
+    }
+    /* pass */
+    if (char_is_newline(ch2)) {
+        /* pass */
+        return true;
+    }
+    /* pass */
+    return false;
+}
+
 __attribute__((hot)) long long Lexer_advance(Lexer* self) {
     /* pass */
     long long c = Lexer_peek(self);
@@ -628,6 +665,12 @@ __attribute__((hot)) List_Token* Lexer_tokenize(Lexer* self) {
     /* pass */
     long long nesting = 0LL;
     /* pass */
+    List_i64* susp_nesting = (void*)List_i64_new();
+    /* pass */
+    List_i64* susp_baseline = (void*)List_i64_new();
+    /* pass */
+    bool block_kw_seen = false;
+    /* pass */
     while ((!Lexer_at_end(self))) {
         /* pass */
         if ((self->pending_dedents > 0LL)) {
@@ -745,6 +788,24 @@ __attribute__((hot)) List_Token* Lexer_tokenize(Lexer* self) {
                 }
                 /* pass */
                 trailing_dot = false;
+                /* pass */
+                while ((susp_nesting->len > 0LL)) {
+                    /* pass */
+                    long long _base = List_i64_get(susp_baseline, (susp_baseline->len - 1LL));
+                    /* pass */
+                    if ((indent > _base)) {
+                        /* pass */
+                        break;
+                    }
+                    /* pass */
+                    nesting = List_i64_get(susp_nesting, (susp_nesting->len - 1LL));
+                    /* pass */
+                    susp_nesting->len = (susp_nesting->len - 1LL);
+                    /* pass */
+                    susp_baseline->len = (susp_baseline->len - 1LL);
+                    /* pass */
+                    block_kw_seen = false;
+                }
             }
         }
         /* pass */
@@ -893,7 +954,23 @@ __attribute__((hot)) List_Token* Lexer_tokenize(Lexer* self) {
         /* pass */
         if (char_is_alpha(c)) {
             /* pass */
-            List_Token_append(tokens, Lexer_read_ident(self));
+            Token _idtok = Lexer_read_ident(self);
+            /* pass */
+            __auto_type _t16 = _idtok;
+            if (_t16.tag == Token_KwDo) {
+                block_kw_seen = true;
+            } else if (_t16.tag == Token_KwIf) {
+                block_kw_seen = true;
+            } else if (_t16.tag == Token_KwMatch) {
+                block_kw_seen = true;
+            } else if (_t16.tag == Token_KwLoop) {
+                block_kw_seen = true;
+            } else if (1) {
+                __auto_type _ = _t16;
+                /* pass */
+            }
+            /* pass */
+            List_Token_append(tokens, _idtok);
             /* pass */
             Lexer_push_loc(self);
             /* pass */
@@ -929,7 +1006,7 @@ __attribute__((hot)) List_Token* Lexer_tokenize(Lexer* self) {
                 List_Token_append(tokens, Token_make_NotEq());
             } else {
                 /* pass */
-                List_Token_append(tokens, Token_ctor_Error(_tr_str_lit("!")));
+                List_Token_append(tokens, Token_make_Bang());
             }
         } else if ((c == 60LL)) {
             /* pass */
@@ -1137,6 +1214,17 @@ __attribute__((hot)) List_Token* Lexer_tokenize(Lexer* self) {
         } else if ((c == 58LL)) {
             /* pass */
             List_Token_append(tokens, Token_make_Colon());
+            /* pass */
+            if ((((nesting > 0LL) && block_kw_seen) && Lexer__at_eol_after_ws(self))) {
+                /* pass */
+                List_i64_append(susp_nesting, nesting);
+                /* pass */
+                List_i64_append(susp_baseline, List_i64_get(self->indent_stack, (self->indent_stack->len - 1LL)));
+                /* pass */
+                nesting = 0LL;
+            }
+            /* pass */
+            block_kw_seen = false;
         } else if ((c == 44LL)) {
             /* pass */
             List_Token_append(tokens, Token_make_Comma());
@@ -1210,6 +1298,8 @@ __attribute__((hot)) List_Token* Lexer_tokenize(Lexer* self) {
     /* pass */
     Lexer_push_loc(self);
     /* pass */
+    List_i64_free(susp_nesting);
+    List_i64_free(susp_baseline);
     return tokens;
 }
 
@@ -1268,6 +1358,11 @@ __attribute__((hot)) Token keyword_to_token(TrStr s) {
     if (((strcmp(_tr_strz(s), _tr_strz(_tr_str_lit("while"))) == 0) || (strcmp(_tr_strz(s), _tr_strz(_tr_str_lit("yayinda"))) == 0))) {
         /* pass */
         return Token_make_KwWhile();
+    }
+    /* pass */
+    if ((strcmp(_tr_strz(s), _tr_strz(_tr_str_lit("loop"))) == 0)) {
+        /* pass */
+        return Token_make_KwLoop();
     }
     /* pass */
     if (((strcmp(_tr_strz(s), _tr_strz(_tr_str_lit("return"))) == 0) || (strcmp(_tr_strz(s), _tr_strz(_tr_str_lit("dawo"))) == 0))) {
@@ -1470,6 +1565,11 @@ __attribute__((hot)) Token keyword_to_token(TrStr s) {
         return Token_make_KwMacro();
     }
     /* pass */
+    if ((strcmp(_tr_strz(s), _tr_strz(_tr_str_lit("do"))) == 0)) {
+        /* pass */
+        return Token_make_KwDo();
+    }
+    /* pass */
     if ((strcmp(_tr_strz(s), _tr_strz(_tr_str_lit("sizeof"))) == 0)) {
         /* pass */
         return Token_make_KwSizeOf();
@@ -1622,27 +1722,27 @@ __attribute__((hot)) bool _last_tok_is_dot(List_Token* tokens) {
         return false;
     }
     /* pass */
-    __auto_type _t16 = List_Token_get(tokens, (tokens->len - 1LL));
-    if (_t16.tag == Token_Dot) {
+    __auto_type _t17 = List_Token_get(tokens, (tokens->len - 1LL));
+    if (_t17.tag == Token_Dot) {
         /* pass */
         if ((tokens->len < 2LL)) {
             /* pass */
             return false;
         }
         /* pass */
-        __auto_type _t17 = List_Token_get(tokens, (tokens->len - 2LL));
-        if (_t17.tag == Token_IntLit) {
-            __auto_type _ = _t17.data.IntLit.val;
+        __auto_type _t18 = List_Token_get(tokens, (tokens->len - 2LL));
+        if (_t18.tag == Token_IntLit) {
+            __auto_type _ = _t18.data.IntLit.val;
             return false;
-        } else if (_t17.tag == Token_FloatLit) {
-            __auto_type _ = _t17.data.FloatLit.val;
+        } else if (_t18.tag == Token_FloatLit) {
+            __auto_type _ = _t18.data.FloatLit.val;
             return false;
         } else if (1) {
-            __auto_type _ = _t17;
+            __auto_type _ = _t18;
             return true;
         }
     } else if (1) {
-        __auto_type _ = _t16;
+        __auto_type _ = _t17;
         return false;
     }
 }

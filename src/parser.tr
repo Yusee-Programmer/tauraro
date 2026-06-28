@@ -514,8 +514,18 @@ extend Parser:
                 return box_stmt(Stmt.SPass)
             case Token.KwBreak:
                 self.pos = self.pos + 1
+                # `break <value>` carries a result out of a loop/while expression;
+                # a bare `break` (followed by end-of-statement) has a null value.
+                mut brk_val = Pointer[Expr](0)
+                match self.peek():
+                    case Token.Newline: pass
+                    case Token.Dedent: pass
+                    case Token.Eof: pass
+                    case Token.Semicolon: pass
+                    case _:
+                        brk_val = self.parse_expr()
                 self.expect_newline()
-                return box_stmt(Stmt.SBreak)
+                return box_stmt(Stmt.SBreak(brk_val))
             case Token.KwContinue:
                 self.pos = self.pos + 1
                 self.expect_newline()
@@ -537,6 +547,8 @@ extend Parser:
                 return self.parse_if_stmt()
             case Token.KwWhile:
                 return self.parse_while_stmt()
+            case Token.KwLoop:
+                return self.parse_loop_stmt()
             case Token.KwFor:
                 return self.parse_for_stmt()
             case Token.KwMatch:
@@ -992,6 +1004,14 @@ extend Parser:
         body = self.parse_block()
         return box_stmt(Stmt.SWhile(cond, body, Vec[Decorator].init(0)))
 
+    # `loop:` statement — an infinite loop, equivalent to `while true:`.
+    pub def parse_loop_stmt(self) -> Pointer[Stmt]:
+        self.pos = self.pos + 1                    # consume 'loop'
+        self.skip_newlines()
+        if self.peek() == Token.Colon: self.pos = self.pos + 1
+        mut body = self.parse_block()
+        return box_stmt(Stmt.SWhile(box_expr(Expr.ELitBool(true)), body, Vec[Decorator].init(0)))
+
     pub def parse_for_stmt(self) -> Pointer[Stmt]:
         self.pos = self.pos + 1
         # `for mut ref x` / `for ref x` — borrow each element (zero-copy iteration; the
@@ -1046,6 +1066,12 @@ extend Parser:
                 self.pos = self.pos + 1
             case _:
                 pass
+        mut arms = self.parse_match_arms()
+        return box_stmt(Stmt.SMatch(subj, arms))
+
+    # Parse the indented arm list of a `match` (shared by statement and the
+    # `match` block-expression). Assumes the leading `match subj:` is consumed.
+    pub def parse_match_arms(self) -> Vec[MatchArm]:
         self.skip_newlines()
         match self.peek():
             case Token.Indent:
@@ -1057,7 +1083,10 @@ extend Parser:
         while going:
             self.skip_newlines()
             match self.peek():
-                case Token.Dedent | Token.Eof:
+                # Stop at a dedent/EOF, or at a closing bracket when this match is
+                # a block-EXPRESSION whose `)` / `]` / `}` sits on the final arm's
+                # line (the lexer's bracket-suspend may not emit a closing Dedent).
+                case Token.Dedent | Token.Eof | Token.RParen | Token.RBracket | Token.RBrace:
                     going = False
                 case _:
                     pass
@@ -1102,7 +1131,7 @@ extend Parser:
                 self.pos = self.pos + 1
             case _:
                 pass
-        return box_stmt(Stmt.SMatch(subj, arms))
+        return arms
 
     pub def parse_pattern(self) -> Pattern:
         match self.peek():
@@ -1243,7 +1272,84 @@ extend Parser:
         return box_stmt(Stmt.SExpr(lhs))
 
     pub def parse_expr(self) -> Pointer[Expr]:
+        # Block-expression forms in expression position (RHS of let/assign,
+        # return value, argument): `do:` runs a block and yields its last bare
+        # expression. (if/match/loop/while as expressions build on this.)
+        if self.peek() == Token.KwDo:
+            self.pos = self.pos + 1            # consume 'do'
+            if self.peek() == Token.Colon: self.pos = self.pos + 1
+            mut do_body = self.parse_block()
+            return box_expr(Expr.EDo(do_body))
+        # Prefix `if … :` block in expression position is an if-EXPRESSION whose
+        # branches each yield their last bare expression. It lowers to a ternary
+        # of `do:` blocks (EIfElse of EDo), reusing the do-block value machinery.
+        # (Statement `if` is dispatched in parse_stmt; the postfix `a if c else b`
+        # ternary is reached via parse_ternary after parsing its left operand, so
+        # this hook only fires when `if` is the FIRST token of an expression.)
+        if self.peek() == Token.KwIf:
+            return self.parse_if_expr()
+        # Prefix `match … :` block in expression position is a match-EXPRESSION:
+        # each arm's last bare expression is its value. (Statement `match` is
+        # dispatched in parse_stmt, so this only fires in expression position.)
+        if self.peek() == Token.KwMatch:
+            return self.parse_match_expr()
+        # `loop:` / `while c:` in expression position: the value comes from a
+        # `break <value>` inside the body (and, for `while`, the optional `else:`
+        # block on normal exit). Statement loops are dispatched in parse_stmt.
+        if self.peek() == Token.KwLoop:
+            self.pos = self.pos + 1                # consume 'loop'
+            self.skip_newlines()
+            if self.peek() == Token.Colon: self.pos = self.pos + 1
+            mut loop_body = self.parse_block()
+            return box_expr(Expr.ELoop(loop_body))
+        if self.peek() == Token.KwWhile:
+            self.pos = self.pos + 1                # consume 'while'
+            mut we_cond = self.parse_expr()
+            self.skip_newlines()
+            if self.peek() == Token.Colon: self.pos = self.pos + 1
+            mut we_body = self.parse_block()
+            mut we_else = Block.init()
+            self.skip_newlines()
+            if self.peek() == Token.KwElse:
+                self.pos = self.pos + 1
+                self.skip_newlines()
+                if self.peek() == Token.Colon: self.pos = self.pos + 1
+                we_else = self.parse_block()
+            return box_expr(Expr.EWhileExpr(we_cond, we_body, we_else))
         return self.parse_ternary()
+
+    pub def parse_match_expr(self) -> Pointer[Expr]:
+        self.pos = self.pos + 1                    # consume 'match'
+        mut subj = self.parse_expr()
+        self.skip_newlines()
+        if self.peek() == Token.Colon: self.pos = self.pos + 1
+        mut arms = self.parse_match_arms()
+        return box_expr(Expr.EMatch(subj, arms))
+
+    # Parse `if cond: <block> (elif cond: <block>)* else: <block>` as an
+    # expression. Each branch becomes an `EDo` (its last bare expression is the
+    # value); elif/else chain nests into the else arm. `else` is required for a
+    # well-defined value, but a missing else yields an empty (void) do-block.
+    pub def parse_if_expr(self) -> Pointer[Expr]:
+        self.pos = self.pos + 1                    # consume 'if' or 'elif'
+        mut cond = self.parse_expr()
+        self.skip_newlines()
+        if self.peek() == Token.Colon: self.pos = self.pos + 1
+        mut then_b = self.parse_block()
+        mut then_e = box_expr(Expr.EDo(then_b))
+        self.skip_newlines()
+        mut else_e = box_expr(Expr.EDo(Block.init()))
+        match self.peek():
+            case Token.KwElif:
+                else_e = self.parse_if_expr()      # recurse: consumes 'elif'
+            case Token.KwElse:
+                self.pos = self.pos + 1
+                self.skip_newlines()
+                if self.peek() == Token.Colon: self.pos = self.pos + 1
+                mut else_b = self.parse_block()
+                else_e = box_expr(Expr.EDo(else_b))
+            case _: pass
+        return box_expr(Expr.EIfElse(cond, then_e, else_e))
 
     pub def parse_ternary(self) -> Pointer[Expr]:
         mut left = self.parse_or_expr()
@@ -1654,6 +1760,14 @@ extend Parser:
                 return box_expr(Expr.EIdent("super"))
             case Token.Ident(name):
                 self.pos = self.pos + 1
+                # Function-like macro call: `name!(args)`. Expanded at compile time
+                # into the macro's returned source (parsed as an expression).
+                if self.peek() == Token.Bang:
+                    self.pos = self.pos + 1            # consume '!'
+                    if self.peek() == Token.LParen:
+                        self.pos = self.pos + 1        # consume '('
+                        mut mac_args = self.parse_arg_list()
+                        return box_expr(Expr.EMacroCall(name, mac_args))
                 return box_expr(Expr.EIdent(name))
             case Token.KwSizeOf:
                 self.pos = self.pos + 1

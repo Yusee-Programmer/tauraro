@@ -59,6 +59,68 @@ preserve newlines and indentation, which is what you want when emitting blocks.
 
 ---
 
+## Two forms: `@name` and `name!`
+
+A `macro def` can be invoked two ways — the form you use determines what the
+macro receives, mirroring Rust's split between `#[derive(...)]` and `vec![...]`:
+
+| Form | Invoked as | Receives | Produces | Use for |
+|---|---|---|---|---|
+| **Decorator** | `@name` on a decl | `item` — a reflection of the declaration | new top-level decls (additive) | deriving from a type's shape |
+| **Function-like** | `name!(a, b, …)` in expression position | `args` — the call arguments' **source text** | an expression spliced in place | code from values at a call site |
+
+Both are backed by the same `macro def`; a given macro is written for one form
+(it reads either `item` or `args`).
+
+### Function-like macros (`name!`)
+
+`name!(...)` expands **at the call site**: the macro receives `args` (a list of
+the arguments' source strings), returns the source of an **expression**, and the
+compiler parses it and substitutes it for the `name!(…)` node.
+
+```python
+# square!(x)  ->  (x) * (x)
+macro def square(args) -> code:
+    a = args[0]
+    return "(" + a + ") * (" + a + ")"
+
+# vec!(...)  ->  a list literal of the arguments
+macro def vec(args) -> code:
+    s = "["
+    first = true
+    for a in args:
+        if not first: s = s + ", "
+        s = s + a
+        first = false
+    return s + "]"
+
+def main():
+    n = square!(7)          # -> (7) * (7)  == 49
+    xs = vec!(10, 20, 30)   # -> [10, 20, 30]
+```
+
+`args` supports `args.len`, `args[i]`, and `for a in args:`; each `a` is the
+argument's rendered source text (a string).
+
+**Need statements, not just one expression?** Return a [`do:` block](20_advanced_patterns.md)
+— it is a single expression that runs a body and yields its last value, so a
+function-like macro can generate arbitrary local logic:
+
+```python
+# sum_to!(n)  ->  a do-block summing 1..=n
+macro def sum_to(args) -> code:
+    n = args[0]
+    return "do:\n    mut __t = 0\n    mut __i = 1\n    while __i <= " + n + ":\n        __t = __t + __i\n        __i = __i + 1\n    __t"
+
+total = sum_to!(5)          # == 15
+```
+
+Function-like calls may nest (a macro's expansion can use other `name!` macros);
+expansion runs between parse and sema, so the spliced code is fully type- and
+borrow-checked.
+
+---
+
 ## The `item` reflection
 
 `item` is a read-only record. Fields are plain values you read with `.field` and

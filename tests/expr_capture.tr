@@ -1,0 +1,34 @@
+def main():
+    # Block-expressions capture (read) surrounding variables.
+    mut base = 100
+    mut factor = 3
+    mut prefix = "item-"
+
+    mut total = do:
+        mut s = base                    # reads outer `base`
+        s = s + factor * 2              # reads outer `factor`
+        s
+    print(f"total = {total}")           # 106
+
+    mut tag = if base > 50:
+        prefix + "big"                  # reads outer `prefix`
+    else:
+        prefix + "small"
+    print(tag)                          # item-big
+
+    mut kind = match factor:
+        case 3:
+            mut label = prefix + "three"  # reads outer `prefix`
+            label
+        case _:
+            "other"
+    print(kind)                         # item-three
+
+    # nested block-expressions all referencing the same surroundings
+    mut combo = do:
+        mut a = if base > 0: factor else: 0
+        mut b = match a:
+            case 3: base
+            case _: 1
+        a + b
+    print(f"combo = {combo}")           # 103

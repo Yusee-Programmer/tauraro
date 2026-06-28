@@ -1,0 +1,39 @@
+enum Color:
+    Red
+    Green
+    Blue
+
+def name_of(c: Color) -> str:
+    return match c:
+        case Color.Red:   "red"
+        case Color.Green: "green"
+        case _:           "other"
+
+def main():
+    # int subject, str result
+    mut n = 2
+    mut label = match n:
+        case 1: "one"
+        case 2: "two"
+        case _: "many"
+    print(label)                       # two
+
+    # enum subject via helper (return match-expr)
+    print(name_of(Color.Green))        # green
+    print(name_of(Color.Blue))         # other
+
+    # match-expr with statements in an arm (last expr is value)
+    mut score = match n:
+        case 2:
+            mut base = 10
+            base * 4
+        case _:
+            0
+    print(f"score = {score}")          # 40
+
+    # match-expr yielding a fresh string used as a concat operand
+    mut msg = "color=" + (match n:
+        case 1: "a" + "lpha"
+        case _: "b" + "eta"
+    )
+    print(msg)                         # color=beta

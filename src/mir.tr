@@ -419,7 +419,7 @@ def lower_stmts(b: MirBuilder, hb: HirBlock):
             case HirStmt.SAutoDrop(_, _):
                 pass    # sema's own drop; the MIR recomputes drops, so ignore it
                         # here (and avoid double-drop when MIR drives codegen)
-            case HirStmt.SBreak:
+            case HirStmt.SBreak(_):
                 # `break` jumps to the innermost loop's exit block — a real CFG
                 # edge, so liveness/ownership see locals declared before the break
                 # as dead on this path and drop them correctly. Modelling it (vs

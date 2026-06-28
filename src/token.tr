@@ -29,6 +29,7 @@ pub enum Token:
     KwElse
     KwFor
     KwWhile
+    KwLoop
     KwReturn
     KwBreak
     KwContinue
@@ -77,6 +78,7 @@ pub enum Token:
     KwLambda
     KwDecorator
     KwMacro
+    KwDo
 
     # Keywords - literals
     KwTrue
@@ -127,6 +129,7 @@ pub enum Token:
     # Operators - comparison
     EqEq       # ==
     NotEq      # !=
+    Bang       # !  (function-like macro call: name!(…))
     Lt         # <
     Gt         # >
     LtEq       # <=
@@ -216,6 +219,7 @@ extend Token:
             case Token.KwElse:   return True
             case Token.KwFor:    return True
             case Token.KwWhile:  return True
+            case Token.KwLoop:   return True
             case Token.KwReturn: return True
             case Token.KwMatch:  return True
             case Token.KwTrue:   return True
@@ -239,6 +243,7 @@ extend Token:
             case Token.KwLambda: return True
             case Token.KwDecorator: return True
             case Token.KwMacro: return True
+            case Token.KwDo: return True
             case Token.KwInt:    return True
             case Token.KwFloat:  return True
             case Token.KwBool:   return True
@@ -284,6 +289,7 @@ extend Token:
             case Token.KwElse:   return "else"
             case Token.KwFor:    return "for"
             case Token.KwWhile:  return "while"
+            case Token.KwLoop:   return "loop"
             case Token.KwReturn: return "return"
             case Token.KwMatch:  return "match"
             case Token.KwTrue:   return "True"
@@ -308,6 +314,7 @@ extend Token:
             case Token.KwLambda: return "lambda"
             case Token.KwDecorator: return "decorator"
             case Token.KwMacro: return "macro"
+            case Token.KwDo: return "do"
             case Token.KwInt:    return "int"
             case Token.KwFloat:  return "float"
             case Token.KwBool:   return "bool"
@@ -336,6 +343,7 @@ extend Token:
             case Token.Slash:    return "/"
             case Token.EqEq:     return "=="
             case Token.NotEq:    return "!="
+            case Token.Bang:     return "!"
             case Token.Lt:       return "<"
             case Token.Gt:       return ">"
             case Token.LtEq:     return "<="

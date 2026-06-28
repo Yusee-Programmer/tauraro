@@ -43,6 +43,16 @@ pub enum HirExpr:
     ERange(start: Pointer[HirExpr], end: Pointer[HirExpr], inclusive: bool, ty: AstType)
     ESizeOf(target_ty: AstType, ty: AstType)
     EIfElse(cond: Pointer[HirExpr], then_e: Pointer[HirExpr], else_e: Pointer[HirExpr], ty: AstType)
+    # `do:` block-expression — body runs, value is the last bare expression.
+    EDo(body: HirBlock, ty: AstType)
+    # `match` block-expression — each arm.body is a single SExpr(EDo) whose value
+    # is the arm's result; codegen dispatches into a result temp.
+    EMatchExpr(subj: Pointer[HirExpr], arms: Vec[HirMatchArm], ty: AstType)
+    # `loop:` block-expression — infinite loop; value comes from `break <value>`.
+    ELoop(body: HirBlock, ty: AstType)
+    # `while c:` block-expression — value from `break <value>`, or the `else:`
+    # block on normal exit (else_body empty if absent).
+    EWhileExpr(cond: Pointer[HirExpr], body: HirBlock, else_body: HirBlock, ty: AstType)
 
 
 pub class HirComprehension:
@@ -102,8 +112,10 @@ pub enum HirStmt:
     SExpr(expr: Pointer[HirExpr])
     SLet(name: str, ownership: Ownership, is_mut: bool, is_const: bool, is_shared: bool, ty: AstType, val: Pointer[HirExpr])
     SAssign(target: Pointer[HirExpr], val: Pointer[HirExpr])
-    SReturn(val: Pointer[HirExpr])    
-    SBreak
+    SReturn(val: Pointer[HirExpr])
+    # `break` with an optional value (null Pointer for a plain break) — a value
+    # is the result of an enclosing `loop:`/`while:` block-expression.
+    SBreak(val: Pointer[HirExpr])
     SContinue
     SPass
     SRaise(val: Pointer[HirExpr])
@@ -279,6 +291,10 @@ pub def hir_expr_type(e: Pointer[HirExpr]) -> AstType:
         case HirExpr.ERange(_, _, _, ty): return ty
         case HirExpr.ESizeOf(_, ty): return ty
         case HirExpr.EIfElse(_, _, _, ty): return ty
+        case HirExpr.EDo(_, ty): return ty
+        case HirExpr.EMatchExpr(_, _, ty): return ty
+        case HirExpr.ELoop(_, ty): return ty
+        case HirExpr.EWhileExpr(_, _, _, ty): return ty
         case _:
             pass
     return AstType.init("void")

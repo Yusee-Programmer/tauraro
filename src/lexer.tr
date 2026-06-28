@@ -19,6 +19,7 @@ pub def keyword_to_token(s: str) -> Token:
     if s == "else" or s == "sai":      return Token.KwElse
     if s == "for" or s == "ga":        return Token.KwFor
     if s == "while" or s == "yayinda": return Token.KwWhile
+    if s == "loop":                    return Token.KwLoop
     if s == "return" or s == "dawo":   return Token.KwReturn
     if s == "break" or s == "tsaya":   return Token.KwBreak
     if s == "continue" or s == "ci_gaba": return Token.KwContinue
@@ -59,6 +60,7 @@ pub def keyword_to_token(s: str) -> Token:
     if s == "lambda" or s == "dan_aiki": return Token.KwLambda
     if s == "decorator":               return Token.KwDecorator
     if s == "macro":                   return Token.KwMacro
+    if s == "do":                      return Token.KwDo
     if s == "sizeof":                  return Token.KwSizeOf
     if s == "is":                      return Token.KwIs
     
@@ -171,6 +173,23 @@ pub class Lexer:
             return 0
         unsafe:
             return self.src.offset(p).read() as int
+
+    # True if the rest of the current line (from self.pos) is blank — only
+    # spaces/tabs, then a comment, newline, or EOF. Used to detect a
+    # block-opening colon that sits at end-of-line.
+    pub def _at_eol_after_ws(self) -> bool:
+        mut k = 0
+        while True:
+            mut ch = self.peek_at(k)
+            if ch == 32 or ch == 9:
+                k = k + 1
+            else:
+                break
+        mut ch2 = self.peek_at(k)
+        if ch2 == 0: return True       # EOF
+        if ch2 == 35: return True      # comment
+        if char_is_newline(ch2): return True
+        return False
 
     pub def advance(self) -> int:
         mut c = self.peek()
@@ -419,6 +438,14 @@ pub class Lexer:
         mut at_line_start = True
         mut trailing_dot = False  # previous line ended with '.', so this line continues the chain
         mut nesting = 0  # paren/bracket/brace depth; suppress Indent/Dedent inside
+        # Block-expressions (`do:`/`if:`/`match:`/`while:`) used INSIDE brackets,
+        # e.g. `2 * (do: ... )`, need indentation to matter again for their body.
+        # When such a block-opening colon is seen at end-of-line while nesting>0,
+        # we "suspend" bracket-suppression (save the depth, set nesting=0) and
+        # restore it once the body dedents back to the line that opened it.
+        mut susp_nesting = Vec[int].init(4)   # saved bracket depth per suspended block
+        mut susp_baseline = Vec[int].init(4)  # indent level at which each block closes
+        mut block_kw_seen = False             # a do/if/match/while header is open
 
         while not self.at_end():
             if self.pending_dedents > 0:
@@ -495,6 +522,17 @@ pub class Lexer:
                                 tokens.push(Token.Error("inconsistent indentation: this line does not line up with any enclosing block (check for mixed tabs and spaces, or an off-by-one indent)"))
                                 self.push_loc()
                     trailing_dot = False  # consumed: this line is the continuation
+                    # Restore any bracket context whose block-expression has now
+                    # dedented back to (or past) the line that opened it. The body
+                    # DEDENTs were just emitted above, so the closing `)`/`]`/`}`
+                    # on this line is lexed with bracket-suppression active again.
+                    while susp_nesting.len > 0:
+                        mut _base = susp_baseline.get(susp_baseline.len - 1)
+                        if indent > _base: break
+                        nesting = susp_nesting.get(susp_nesting.len - 1)
+                        susp_nesting.len = susp_nesting.len - 1
+                        susp_baseline.len = susp_baseline.len - 1
+                        block_kw_seen = False
 
             mut c = self.peek()
             # Capture the 1-based column of this token's first byte. All real
@@ -566,7 +604,21 @@ pub class Lexer:
                 self.push_loc()
                 continue
             if char_is_alpha(c):
-                tokens.push(self.read_ident())
+                mut _idtok = self.read_ident()
+                # Remember when a block-expression keyword opens inside brackets, so
+                # its end-of-line colon can re-enable indentation for the body
+                # (`2 * (do: …)`, `(if c: …)`, `(match x: …)`). `do`/`match` are
+                # unambiguous; `if` also appears in the `a if c else b` ternary, but
+                # that has no end-of-line colon, so the flag only matters at a
+                # block-opening colon. block_kw_seen is cleared at every colon and
+                # at each suspend/restore, bounding any stale-flag window.
+                match _idtok:
+                    case Token.KwDo: block_kw_seen = True
+                    case Token.KwIf: block_kw_seen = True
+                    case Token.KwMatch: block_kw_seen = True
+                    case Token.KwLoop: block_kw_seen = True
+                    case _: pass
+                tokens.push(_idtok)
                 self.push_loc()
                 continue
 
@@ -586,7 +638,8 @@ pub class Lexer:
                     self.advance()
                     tokens.push(Token.NotEq)
                 else:
-                    tokens.push(Token.Error("!"))
+                    # Bare `!` — used only for function-like macro calls `name!(…)`.
+                    tokens.push(Token.Bang)
             elif c == 60:
                 mut nc = self.peek()
                 if nc == 61:
@@ -697,7 +750,15 @@ pub class Lexer:
                 tokens.push(Token.RBrace)
                 if nesting > 0:
                     nesting = nesting - 1
-            elif c == 58: tokens.push(Token.Colon)
+            elif c == 58:
+                tokens.push(Token.Colon)
+                # A block-opening colon at end-of-line inside brackets suspends
+                # bracket-suppression so the block's body is indentation-delimited.
+                if nesting > 0 and block_kw_seen and self._at_eol_after_ws():
+                    susp_nesting.push(nesting)
+                    susp_baseline.push(self.indent_stack.get(self.indent_stack.len - 1))
+                    nesting = 0
+                block_kw_seen = False
             elif c == 44: tokens.push(Token.Comma)
             elif c == 59: tokens.push(Token.Semicolon)
             elif c == 64: tokens.push(Token.At)

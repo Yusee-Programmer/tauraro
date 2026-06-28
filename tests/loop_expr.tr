@@ -1,0 +1,61 @@
+def main():
+    # loop: expression — value from `break v`
+    mut first_sq_over_50 = loop:
+        mut i = 1
+        mut found = 0
+        while found == 0:
+            if i * i > 50:
+                found = i
+            i = i + 1
+        break found * found
+    print(f"first_sq_over_50 = {first_sq_over_50}")   # 64
+
+    # simpler loop: with a counter and break value
+    mut n = 0
+    mut doubled = loop:
+        n = n + 1
+        if n >= 21:
+            break n * 2
+    print(f"doubled = {doubled}")                       # 42
+
+    # while: expression with break value
+    mut k = 0
+    mut r = while k < 100:
+        k = k + 7
+        if k > 30:
+            break k
+    else:
+        -1
+    print(f"r = {r}")                                   # 35
+
+    # while: expression that exits normally -> else value
+    mut m = 0
+    mut s = while m < 3:
+        m = m + 1
+    else:
+        999
+    print(f"s = {s}")                                   # 999
+
+    # loop: yielding a string (capture + owned escape)
+    mut label = loop:
+        mut base = "found"
+        break base + "!"
+    print(label)                                        # found!
+
+    # loop expression capturing surroundings
+    mut limit = 10
+    mut acc = loop:
+        mut t = 0
+        mut j = 0
+        while j < limit:
+            t = t + j
+            j = j + 1
+        break t
+    print(f"acc = {acc}")                               # 45
+
+    # `loop:` as a plain statement with a plain break (no value)
+    mut c = 0
+    loop:
+        c = c + 1
+        if c == 5: break
+    print(f"c = {c}")                                   # 5

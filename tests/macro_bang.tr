@@ -1,0 +1,55 @@
+# Function-like macros (the `name!` form). Each `macro def` receives `args` —
+# the list of the call's argument SOURCE strings — and returns expression source.
+
+# vec!(...) -> a list literal built from the arguments
+macro def vec(args) -> code:
+    mut s = "["
+    mut first = true
+    for a in args:
+        if not first:
+            s = s + ", "
+        s = s + a
+        first = false
+    s = s + "]"
+    return s
+
+# square!(x) -> (x) * (x)
+macro def square(args) -> code:
+    mut a = args[0]
+    return "(" + a + ") * (" + a + ")"
+
+# max2!(a, b) -> ternary picking the larger
+macro def max2(args) -> code:
+    mut a = args[0]
+    mut b = args[1]
+    return "((" + a + ") if (" + a + ") > (" + b + ") else (" + b + "))"
+
+# sum_to!(n) -> a `do:` block computing 1+2+...+n (statement-generating macro)
+macro def sum_to(args) -> code:
+    mut n = args[0]
+    mut s = "do:\n"
+    s = s + "    mut __t = 0\n"
+    s = s + "    mut __i = 1\n"
+    s = s + "    while __i <= " + n + ":\n"
+    s = s + "        __t = __t + __i\n"
+    s = s + "        __i = __i + 1\n"
+    s = s + "    __t"
+    return s
+
+def main():
+    mut v = vec!(10, 20, 30)
+    print(f"v.len = {v.len()}")          # 3
+
+    mut s = square!(7)
+    print(f"square = {s}")               # 49
+
+    mut m = max2!(3, 9)
+    print(f"max = {m}")                  # 9
+
+    # macros used inside a larger expression
+    mut total = square!(4) + square!(5)
+    print(f"total = {total}")            # 41
+
+    # statement-generating macro via a do: block
+    mut st = sum_to!(5)
+    print(f"sum_to = {st}")              # 15
