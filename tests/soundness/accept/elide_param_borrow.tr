@@ -1,0 +1,28 @@
+# EXPECT: pass
+# Exercises the zero-copy elision oracle: `v: ref str = d.get(k)` on a `ref Dict`
+# parameter is a PROVEN borrow, so the default build elides the retain/release
+# (pure alias). The differential runner compiles this with and without
+# --no-elide and asserts identical output: if the elision were unsound (e.g.
+# the alias dangled), the borrowed bytes would corrupt and the totals diverge.
+def total_len(d: ref Dict[str, str]) -> int:
+    mut s = 0
+    for k in d.keys():
+        v: ref str = d.get(k)
+        s = s + v.len()
+    return s
+
+def first_char_sum(d: ref Dict[str, str]) -> int:
+    mut s = 0
+    for k in d.keys():
+        v: ref str = d.get(k)
+        if v.len() > 0:
+            s = s + (v.char_at(0) as int)
+    return s
+
+def main():
+    mut m: Dict[str, str] = {}
+    m.insert("one", "alpha")
+    m.insert("two", "bravo")
+    m.insert("three", "charlie")
+    print(total_len(m))         # 5 + 5 + 7 = 17
+    print(first_char_sum(m))    # 'a'+'b'+'c' = 97+98+99 = 294

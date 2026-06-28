@@ -1,0 +1,24 @@
+# Value type stored inline as a Set element (typed Set_Point), no boxing.
+@value_type
+pub class Point:
+    pub x: int
+    pub y: int
+
+extend Point:
+    pub def of(x: int, y: int) -> Point:
+        mut p = Point()
+        p.x = x
+        p.y = y
+        return p
+
+def main():
+    mut s: Set[Point] = Set[Point].init()
+    s.add(Point.of(1, 2))
+    s.add(Point.of(3, 4))
+    s.add(Point.of(1, 2))       # duplicate -> ignored
+    print(s.len())              # 2
+    print(s.contains(Point.of(1, 2)))   # true
+    print(s.contains(Point.of(9, 9)))   # false
+    s.remove(Point.of(1, 2))
+    print(s.len())              # 1
+    print("value set ok")

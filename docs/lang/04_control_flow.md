@@ -268,9 +268,11 @@ while n != 0:        # CORRECT
 ### Best Practices
 
 - Always verify the loop termination condition is reachable before writing the loop body.
-- For event loops and retry loops, prefer `while true: ... break` over a complex boolean
-  condition that becomes stale.
+- For event loops and retry loops, prefer `loop:` (an infinite loop that exits only via `break`)
+  over `while true:` — it states the intent directly.
 - Use `while not done:` idiom for queue-draining loops rather than manually managing an index.
+- A loop can also **produce a value** via `break <value>` (and a `while … else:` clause) — see
+  [Block Expressions](#block-expressions-do--if--match--loop--while-as-values).
 
 ---
 
@@ -588,6 +590,135 @@ match shape:
   enough information for the decision.
 - For enums with many variants, `match` is faster than an equivalent `if`/`elif` chain because
   it compiles to a switch statement.
+
+---
+
+## Block Expressions (`do` / `if` / `match` / `loop` / `while` as values)
+
+Every control-flow block can be used as an **expression** — it produces a value you can
+assign, return, or pass as an argument. This removes the "declare-then-assign-in-each-branch"
+boilerplate common in C/Java/Python.
+
+```python
+# Instead of:
+mut grade = ""
+if score >= 90: grade = "A"
+elif score >= 80: grade = "B"
+else: grade = "C"
+
+# Write:
+mut grade = if score >= 90:
+    "A"
+elif score >= 80:
+    "B"
+else:
+    "C"
+```
+
+### When to use
+
+- Initialising a variable whose value depends on a condition, a match, or a computed loop.
+- Returning a computed value directly (`return if …` / `return match …`).
+- Replacing a temporary mutable accumulator that exists only to be assigned in branches.
+
+### How it works
+
+The **last bare expression** of a block is its value. Each form lowers to a zero-cost inline
+block (a GCC statement-expression) — there is no function call, no allocation, no overhead
+versus writing the statements by hand.
+
+**`do:` — a block that yields its last expression.** Use it to run several statements where
+only an expression is allowed:
+
+```python
+mut total = do:
+    mut s = 0
+    for x in items:
+        s = s + x
+    s                      # value of the do-block
+```
+
+**`if` / `elif` / `else` as a value.** `else` is required (every path must produce a value):
+
+```python
+mut label = if n % 2 == 0: "even" else: "odd"
+```
+
+**`match` as a value.** Each arm's last expression is its result:
+
+```python
+mut name = match color:
+    case Color.Red:   "red"
+    case Color.Green: "green"
+    case _:           "other"
+```
+
+**`loop:` and `while` with `break <value>`.** `loop:` is an infinite loop whose value comes
+from `break v`; a `while` expression takes its value from `break v`, or from an `else:` block
+on normal exit (when the condition becomes false):
+
+```python
+mut first_big = loop:
+    n = n + 1
+    if n * n > 1000:
+        break n              # the loop's value
+
+mut found = while i < len:
+    if items.get(i) == target:
+        break i              # break path value
+    i = i + 1
+else:
+    -1                       # normal-exit (not-found) value
+```
+
+`loop:` is also a plain statement (an infinite loop) when you don't use its value; a bare
+`break` (no value) just exits, exactly as in a `while`/`for` loop.
+
+**They capture their surroundings.** A block expression reads (and a `do:` may compute from)
+any variable in scope — it is inline code, not a closure:
+
+```python
+mut limit = 10
+mut acc = do:
+    mut t = 0
+    for j in range(limit):    # reads outer `limit`
+        t = t + j
+    t
+```
+
+### Paren-nesting
+
+Block expressions can appear inside `( … )` (e.g. as an operand or argument). Put the closing
+parenthesis on its **own dedented line** so the block's body stays indentation-delimited:
+
+```python
+mut msg = "result=" + (match code:
+    case 0: "ok"
+    case _: "err"
+)
+```
+
+### Common Mistakes
+
+```python
+# Missing else in a value-position if — there is no value on the false path:
+mut x = if c: 1            # WRONG (as an expression)
+mut x = if c: 1 else: 0    # OK
+
+# Closing paren on the last arm's line instead of a dedented line:
+mut v = (match n:
+    case 0: "a"
+    case _: "b")           # WRONG — put ) on its own dedented line
+```
+
+### Best Practices
+
+- Reach for a block expression when a value **depends on** control flow; keep plain statements
+  for side-effecting flow.
+- Prefer `do:` over a throwaway `mut` accumulator that exists only to be assigned in branches.
+- Keep branches short — if a branch needs many statements, a named helper function is clearer.
+- For exhaustive enum results, omit `case _:` so the compiler's `[E-1]` exhaustiveness check
+  catches a forgotten variant; for open/int/str subjects, always provide `case _:`.
 
 ---
 

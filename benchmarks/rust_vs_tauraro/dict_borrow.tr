@@ -1,0 +1,30 @@
+# Zero-copy Dict value borrow: `v: ref str = d.get(k)` binds a BORROW of the
+# string stored in the dict. Under --strict the compiler proves the dict isn't
+# mutated while the borrow is live and ELIDES the retain/release (pure alias) —
+# the genuine zero-copy win. Mirrors Rust's `&HashMap` + `&str`.
+from std.sys.time import Clock
+extern "C":
+    def _tr_int_to_str(n: int) -> str
+
+def sum_lens(d: ref Dict[str, str]) -> int:
+    mut s = 0
+    for k in d.keys():
+        v: ref str = d.get(k)
+        s = s + v.len()
+    return s
+
+def main():
+    mut clock = Clock.init()
+    mut d: Dict[str, str] = {}
+    d.set("alpha", "hello")
+    d.set("beta", "world")
+    d.set("gamma", "tauraro")
+    d.set("delta", "zerocopy")
+    mut total = 0
+    mut r = 0
+    while r < 1000000:
+        total = total + sum_lens(d)
+        r = r + 1
+    mut ms = clock.elapsed_ms()
+    print(total)
+    print("TIME_MS:" + _tr_int_to_str(ms))

@@ -632,9 +632,9 @@ def normalize(n: int) -> void:
 ```
 
 Compile with `-fopenmp` to enable actual parallelism (`Gpu.parallel` falls back
-to sequential execution otherwise). The older `gpu:` block keyword is
-**deprecated** — it now compiles to a plain sequential block with no pragmas.
-See chapter 18 for the full `std.gpu.Gpu` reference.
+to sequential execution otherwise). Parallelism is a **library** feature
+(`std.gpu`), not a language block — there is no `gpu:` syntax. See chapter 18 for
+the full `std.gpu.Gpu` reference.
 
 ---
 

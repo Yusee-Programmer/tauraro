@@ -1,0 +1,44 @@
+def main():
+    # do: as an int-valued block expression
+    mut total = do:
+        mut s = 0
+        mut i = 1
+        while i <= 5:
+            s = s + i
+            i = i + 1
+        s
+    print(f"total = {total}")          # 15
+
+    # do: yielding a str built inside the block (fresh value escapes the block)
+    mut greeting = do:
+        mut name = "world"
+        mut msg = "hello, " + name
+        msg
+    print(greeting)                    # hello, world
+
+    # nested do:
+    mut nested = do:
+        mut a = do:
+            mut b = 10
+            b + 1
+        a * 2
+    print(f"nested = {nested}")         # 22
+
+    # do: inside a parenthesized expression (closing paren on a dedented line)
+    mut doubled = 2 * (do:
+        mut x = 21
+        x
+    )
+    print(f"doubled = {doubled}")       # 42
+
+    # do: as a call argument (paren-nested)
+    mut summed = add_one(do:
+        mut t = 0
+        for k in [1, 2, 3, 4]:
+            t = t + k
+        t
+    )
+    print(f"summed = {summed}")         # 11
+
+def add_one(n: int) -> int:
+    return n + 1

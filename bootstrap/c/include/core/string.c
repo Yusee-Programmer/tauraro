@@ -180,6 +180,7 @@ __attribute__((hot)) void StringBuilder_append_float(StringBuilder* self, double
     TrStr s = _tr_str_wrap(_tr_float_to_str((double)(f)));
     /* pass */
     StringBuilder_append(self, s);
+    _tr_str_release(s);
 }
 
 __attribute__((hot)) long long StringBuilder_len(StringBuilder* self) {

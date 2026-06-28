@@ -1,0 +1,29 @@
+from std.sys.time import Clock
+extern "C":
+    def _tr_int_to_str(n: int) -> str
+    def _tr_mem_live() -> int
+    def _tr_mem_live_strs() -> int
+
+interface Named from r:
+    def label(self) -> ref str from r
+
+class Person from r implements Named:
+    pub nm: str
+    pub def label(self) -> ref str from r:
+        return self.nm
+
+def main():
+    mut p = Person()
+    p.nm = "interface dispatch benchmark person" + _tr_int_to_str(0)
+    mut clock = Clock.init()
+    mut total = 0
+    mut i = 0
+    while i < 5000000:
+        s: ref str = p.label()
+        total = total + s.index_of("person") + (i % 2)
+        i = i + 1
+    mut ms = clock.elapsed_ms()
+    print(total)
+    print("TIME_MS:" + _tr_int_to_str(ms))
+    print("ALLOCS:" + _tr_int_to_str(_tr_mem_live()))
+    print("STRS:" + _tr_int_to_str(_tr_mem_live_strs()))

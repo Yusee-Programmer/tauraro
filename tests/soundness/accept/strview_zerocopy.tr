@@ -1,0 +1,9 @@
+# EXPECT: pass
+# StrView (@value_type) borrows into a source string; slicing allocates nothing.
+from std.string.str import StrView
+def main():
+    mut csv = "name,age,city"
+    mut name = StrView.of(csv, 0, 4)
+    print(name.eq("name"))
+    mut whole = StrView.all(csv)
+    print(whole.slice(0, 4).eq("name"))

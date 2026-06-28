@@ -1,0 +1,27 @@
+from std.sys.time import Clock
+from std.string.str import Str, StrView
+extern "C":
+    def _tr_int_to_str(n: int) -> str
+
+def make_src() -> str:
+    mut s = "abcdefghij"
+    mut k = 0
+    while k < 7:
+        s = s + s
+        k = k + 1
+    return s
+
+def main():
+    mut clock = Clock.init()
+    mut src = make_src()
+    mut held: List[StrView] = []
+    mut total = 0
+    mut i = 0
+    while i < 100000:
+        mut piece = StrView.of(src, 0, 1000)   # zero-copy view, no allocation
+        total = total + piece.length()
+        held.append(piece)
+        i = i + 1
+    mut ms = clock.elapsed_ms()
+    print(total)
+    print("TIME_MS:" + _tr_int_to_str(ms))

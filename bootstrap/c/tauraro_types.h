@@ -43,6 +43,7 @@ typedef struct HirInterface HirInterface;
 typedef struct HirProgram HirProgram;
 typedef struct MirBlock MirBlock;
 typedef struct DropSite DropSite;
+typedef struct BorrowEdge BorrowEdge;
 typedef struct MirFunction MirFunction;
 typedef struct MirProgram MirProgram;
 typedef struct MirBuilder MirBuilder;
@@ -53,6 +54,8 @@ typedef struct Sema Sema;
 typedef struct Formatter Formatter;
 typedef struct CGenerator CGenerator;
 typedef struct LlvmGenerator LlvmGenerator;
+typedef struct MacroCtx MacroCtx;
+typedef struct FnMacroExpander FnMacroExpander;
 typedef struct Token Token;
 typedef struct Pattern Pattern;
 typedef struct Ownership Ownership;
@@ -64,6 +67,7 @@ typedef struct HirStmt HirStmt;
 typedef struct MirStmt MirStmt;
 typedef struct MirTerm MirTerm;
 typedef struct SymbolKind SymbolKind;
+typedef struct MacroVal MacroVal;
 typedef struct List_Token List_Token;
 typedef struct List_Pattern List_Pattern;
 
@@ -90,6 +94,7 @@ typedef enum {
     Token_KwElse,
     Token_KwFor,
     Token_KwWhile,
+    Token_KwLoop,
     Token_KwReturn,
     Token_KwBreak,
     Token_KwContinue,
@@ -135,6 +140,8 @@ typedef enum {
     Token_KwExport,
     Token_KwLambda,
     Token_KwDecorator,
+    Token_KwMacro,
+    Token_KwDo,
     Token_KwTrue,
     Token_KwFalse,
     Token_KwNone,
@@ -175,6 +182,7 @@ typedef enum {
     Token_StarStarEq,
     Token_EqEq,
     Token_NotEq,
+    Token_Bang,
     Token_Lt,
     Token_Gt,
     Token_LtEq,
@@ -281,6 +289,7 @@ static inline __attribute__((always_inline)) Token Token_ctor_Ident(TrStr name) 
 #define Token_make_KwElse() ((Token){.tag=Token_KwElse})
 #define Token_make_KwFor() ((Token){.tag=Token_KwFor})
 #define Token_make_KwWhile() ((Token){.tag=Token_KwWhile})
+#define Token_make_KwLoop() ((Token){.tag=Token_KwLoop})
 #define Token_make_KwReturn() ((Token){.tag=Token_KwReturn})
 #define Token_make_KwBreak() ((Token){.tag=Token_KwBreak})
 #define Token_make_KwContinue() ((Token){.tag=Token_KwContinue})
@@ -326,6 +335,8 @@ static inline __attribute__((always_inline)) Token Token_ctor_Ident(TrStr name) 
 #define Token_make_KwExport() ((Token){.tag=Token_KwExport})
 #define Token_make_KwLambda() ((Token){.tag=Token_KwLambda})
 #define Token_make_KwDecorator() ((Token){.tag=Token_KwDecorator})
+#define Token_make_KwMacro() ((Token){.tag=Token_KwMacro})
+#define Token_make_KwDo() ((Token){.tag=Token_KwDo})
 #define Token_make_KwTrue() ((Token){.tag=Token_KwTrue})
 #define Token_make_KwFalse() ((Token){.tag=Token_KwFalse})
 #define Token_make_KwNone() ((Token){.tag=Token_KwNone})
@@ -366,6 +377,7 @@ static inline __attribute__((always_inline)) Token Token_ctor_Ident(TrStr name) 
 #define Token_make_StarStarEq() ((Token){.tag=Token_StarStarEq})
 #define Token_make_EqEq() ((Token){.tag=Token_EqEq})
 #define Token_make_NotEq() ((Token){.tag=Token_NotEq})
+#define Token_make_Bang() ((Token){.tag=Token_Bang})
 #define Token_make_Lt() ((Token){.tag=Token_Lt})
 #define Token_make_Gt() ((Token){.tag=Token_Gt})
 #define Token_make_LtEq() ((Token){.tag=Token_LtEq})
@@ -521,7 +533,12 @@ typedef enum {
     Expr_ERange,
     Expr_ESizeOf,
     Expr_EIfElse,
-    Expr_ETypeArg
+    Expr_ETypeArg,
+    Expr_EDo,
+    Expr_EMatch,
+    Expr_EMacroCall,
+    Expr_ELoop,
+    Expr_EWhileExpr
 } Expr_tag;
 
 typedef struct Expr {
@@ -655,6 +672,25 @@ typedef struct Expr {
         struct {
             AstType** ty;
         } ETypeArg;
+        struct {
+            Block* body;
+        } EDo;
+        struct {
+            Expr* subj;
+            List_ptr* arms;
+        } EMatch;
+        struct {
+            TrStr name;
+            List_ptr* args;
+        } EMacroCall;
+        struct {
+            Block* body;
+        } ELoop;
+        struct {
+            Expr* cond;
+            Block* body;
+            Block* else_body;
+        } EWhileExpr;
     } data;
 } Expr;
 
@@ -693,6 +729,11 @@ static inline __attribute__((always_inline)) Expr Expr_ctor_ERange(Expr* start, 
 static inline __attribute__((always_inline)) Expr Expr_ctor_ESizeOf(AstType** ty) { Expr _r = {.tag=Expr_ESizeOf}; _r.data.ESizeOf.ty = ty; return _r; }
 static inline __attribute__((always_inline)) Expr Expr_ctor_EIfElse(Expr* cond, Expr* then_expr, Expr* else_expr) { Expr _r = {.tag=Expr_EIfElse}; _r.data.EIfElse.cond = cond; _r.data.EIfElse.then_expr = then_expr; _r.data.EIfElse.else_expr = else_expr; return _r; }
 static inline __attribute__((always_inline)) Expr Expr_ctor_ETypeArg(AstType** ty) { Expr _r = {.tag=Expr_ETypeArg}; _r.data.ETypeArg.ty = ty; return _r; }
+static inline __attribute__((always_inline)) Expr Expr_ctor_EDo(Block* body) { Expr _r = {.tag=Expr_EDo}; _r.data.EDo.body = body; return _r; }
+static inline __attribute__((always_inline)) Expr Expr_ctor_EMatch(Expr* subj, List_ptr* arms) { Expr _r = {.tag=Expr_EMatch}; _r.data.EMatch.subj = subj; _r.data.EMatch.arms = arms; return _r; }
+static inline __attribute__((always_inline)) Expr Expr_ctor_EMacroCall(TrStr name, List_ptr* args) { Expr _r = {.tag=Expr_EMacroCall}; _r.data.EMacroCall.name = _tr_str_retain(name); _r.data.EMacroCall.args = args; return _r; }
+static inline __attribute__((always_inline)) Expr Expr_ctor_ELoop(Block* body) { Expr _r = {.tag=Expr_ELoop}; _r.data.ELoop.body = body; return _r; }
+static inline __attribute__((always_inline)) Expr Expr_ctor_EWhileExpr(Expr* cond, Block* body, Block* else_body) { Expr _r = {.tag=Expr_EWhileExpr}; _r.data.EWhileExpr.cond = cond; _r.data.EWhileExpr.body = body; _r.data.EWhileExpr.else_body = else_body; return _r; }
 
 typedef enum {
     Stmt_SExpr,
@@ -752,6 +793,9 @@ typedef struct Stmt {
         } SReturn;
         struct {
             Expr* val;
+        } SBreak;
+        struct {
+            Expr* val;
         } SRaise;
         struct {
             Block* body;
@@ -772,6 +816,7 @@ typedef struct Stmt {
             Expr* iter;
             Block* body;
             List_ptr* decorators;
+            bool is_ref;
         } SFor;
         struct {
             List_TrStr* vars;
@@ -831,14 +876,14 @@ static inline __attribute__((always_inline)) Stmt Stmt_ctor_SLet(TrStr name, Own
 static inline __attribute__((always_inline)) Stmt Stmt_ctor_SMultiLet(List_TrStr* names, bool is_mut, Expr* val) { Stmt _r = {.tag=Stmt_SMultiLet}; _r.data.SMultiLet.names = names; _r.data.SMultiLet.is_mut = is_mut; _r.data.SMultiLet.val = val; return _r; }
 static inline __attribute__((always_inline)) Stmt Stmt_ctor_SAssign(Expr* target, Expr* val) { Stmt _r = {.tag=Stmt_SAssign}; _r.data.SAssign.target = target; _r.data.SAssign.val = val; return _r; }
 static inline __attribute__((always_inline)) Stmt Stmt_ctor_SReturn(Expr* val) { Stmt _r = {.tag=Stmt_SReturn}; _r.data.SReturn.val = val; return _r; }
-#define Stmt_make_SBreak() ((Stmt){.tag=Stmt_SBreak})
+static inline __attribute__((always_inline)) Stmt Stmt_ctor_SBreak(Expr* val) { Stmt _r = {.tag=Stmt_SBreak}; _r.data.SBreak.val = val; return _r; }
 #define Stmt_make_SContinue() ((Stmt){.tag=Stmt_SContinue})
 #define Stmt_make_SPass() ((Stmt){.tag=Stmt_SPass})
 static inline __attribute__((always_inline)) Stmt Stmt_ctor_SRaise(Expr* val) { Stmt _r = {.tag=Stmt_SRaise}; _r.data.SRaise.val = val; return _r; }
 static inline __attribute__((always_inline)) Stmt Stmt_ctor_SUnsafe(Block* body) { Stmt _r = {.tag=Stmt_SUnsafe}; _r.data.SUnsafe.body = body; return _r; }
 static inline __attribute__((always_inline)) Stmt Stmt_ctor_SIf(Expr* cond, Block* then_b, List_ptr* elifs, Block* else_b) { Stmt _r = {.tag=Stmt_SIf}; _r.data.SIf.cond = cond; _r.data.SIf.then_b = then_b; _r.data.SIf.elifs = elifs; _r.data.SIf.else_b = else_b; return _r; }
 static inline __attribute__((always_inline)) Stmt Stmt_ctor_SWhile(Expr* cond, Block* body, List_ptr* decorators) { Stmt _r = {.tag=Stmt_SWhile}; _r.data.SWhile.cond = cond; _r.data.SWhile.body = body; _r.data.SWhile.decorators = decorators; return _r; }
-static inline __attribute__((always_inline)) Stmt Stmt_ctor_SFor(TrStr var, Expr* iter, Block* body, List_ptr* decorators) { Stmt _r = {.tag=Stmt_SFor}; _r.data.SFor.var = _tr_str_retain(var); _r.data.SFor.iter = iter; _r.data.SFor.body = body; _r.data.SFor.decorators = decorators; return _r; }
+static inline __attribute__((always_inline)) Stmt Stmt_ctor_SFor(TrStr var, Expr* iter, Block* body, List_ptr* decorators, bool is_ref) { Stmt _r = {.tag=Stmt_SFor}; _r.data.SFor.var = _tr_str_retain(var); _r.data.SFor.iter = iter; _r.data.SFor.body = body; _r.data.SFor.decorators = decorators; _r.data.SFor.is_ref = is_ref; return _r; }
 static inline __attribute__((always_inline)) Stmt Stmt_ctor_SForUnpack(List_TrStr* vars, Expr* iter, Block* body) { Stmt _r = {.tag=Stmt_SForUnpack}; _r.data.SForUnpack.vars = vars; _r.data.SForUnpack.iter = iter; _r.data.SForUnpack.body = body; return _r; }
 static inline __attribute__((always_inline)) Stmt Stmt_ctor_SMatch(Expr* expr, List_ptr* arms) { Stmt _r = {.tag=Stmt_SMatch}; _r.data.SMatch.expr = expr; _r.data.SMatch.arms = arms; return _r; }
 static inline __attribute__((always_inline)) Stmt Stmt_ctor_STry(Block* try_body, List_ptr* catches, Block* finally_b) { Stmt _r = {.tag=Stmt_STry}; _r.data.STry.try_body = try_body; _r.data.STry.catches = catches; _r.data.STry.finally_b = finally_b; return _r; }
@@ -963,7 +1008,11 @@ typedef enum {
     HirExpr_ETry,
     HirExpr_ERange,
     HirExpr_ESizeOf,
-    HirExpr_EIfElse
+    HirExpr_EIfElse,
+    HirExpr_EDo,
+    HirExpr_EMatchExpr,
+    HirExpr_ELoop,
+    HirExpr_EWhileExpr
 } HirExpr_tag;
 
 typedef struct HirExpr {
@@ -1135,6 +1184,25 @@ typedef struct HirExpr {
             HirExpr* else_e;
             AstType* ty;
         } EIfElse;
+        struct {
+            HirBlock* body;
+            AstType* ty;
+        } EDo;
+        struct {
+            HirExpr* subj;
+            List_ptr* arms;
+            AstType* ty;
+        } EMatchExpr;
+        struct {
+            HirBlock* body;
+            AstType* ty;
+        } ELoop;
+        struct {
+            HirExpr* cond;
+            HirBlock* body;
+            HirBlock* else_body;
+            AstType* ty;
+        } EWhileExpr;
     } data;
 } HirExpr;
 
@@ -1173,6 +1241,10 @@ static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_ETry(HirBlock*
 static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_ERange(HirExpr* start, HirExpr* end, bool inclusive, AstType* ty) { HirExpr _r = {.tag=HirExpr_ERange}; _r.data.ERange.start = start; _r.data.ERange.end = end; _r.data.ERange.inclusive = inclusive; _r.data.ERange.ty = ty; return _r; }
 static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_ESizeOf(AstType* target_ty, AstType* ty) { HirExpr _r = {.tag=HirExpr_ESizeOf}; _r.data.ESizeOf.target_ty = target_ty; _r.data.ESizeOf.ty = ty; return _r; }
 static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_EIfElse(HirExpr* cond, HirExpr* then_e, HirExpr* else_e, AstType* ty) { HirExpr _r = {.tag=HirExpr_EIfElse}; _r.data.EIfElse.cond = cond; _r.data.EIfElse.then_e = then_e; _r.data.EIfElse.else_e = else_e; _r.data.EIfElse.ty = ty; return _r; }
+static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_EDo(HirBlock* body, AstType* ty) { HirExpr _r = {.tag=HirExpr_EDo}; _r.data.EDo.body = body; _r.data.EDo.ty = ty; return _r; }
+static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_EMatchExpr(HirExpr* subj, List_ptr* arms, AstType* ty) { HirExpr _r = {.tag=HirExpr_EMatchExpr}; _r.data.EMatchExpr.subj = subj; _r.data.EMatchExpr.arms = arms; _r.data.EMatchExpr.ty = ty; return _r; }
+static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_ELoop(HirBlock* body, AstType* ty) { HirExpr _r = {.tag=HirExpr_ELoop}; _r.data.ELoop.body = body; _r.data.ELoop.ty = ty; return _r; }
+static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_EWhileExpr(HirExpr* cond, HirBlock* body, HirBlock* else_body, AstType* ty) { HirExpr _r = {.tag=HirExpr_EWhileExpr}; _r.data.EWhileExpr.cond = cond; _r.data.EWhileExpr.body = body; _r.data.EWhileExpr.else_body = else_body; _r.data.EWhileExpr.ty = ty; return _r; }
 
 typedef enum {
     HirStmt_SExpr,
@@ -1226,6 +1298,9 @@ typedef struct HirStmt {
         struct {
             HirExpr* val;
         } SReturn;
+        struct {
+            HirExpr* val;
+        } SBreak;
         struct {
             HirExpr* val;
         } SRaise;
@@ -1312,7 +1387,7 @@ static inline __attribute__((always_inline)) HirStmt HirStmt_ctor_SExpr(HirExpr*
 static inline __attribute__((always_inline)) HirStmt HirStmt_ctor_SLet(TrStr name, Ownership ownership, bool is_mut, bool is_const, bool is_shared, AstType* ty, HirExpr* val) { HirStmt _r = {.tag=HirStmt_SLet}; _r.data.SLet.name = _tr_str_retain(name); _r.data.SLet.ownership = ownership; _r.data.SLet.is_mut = is_mut; _r.data.SLet.is_const = is_const; _r.data.SLet.is_shared = is_shared; _r.data.SLet.ty = ty; _r.data.SLet.val = val; return _r; }
 static inline __attribute__((always_inline)) HirStmt HirStmt_ctor_SAssign(HirExpr* target, HirExpr* val) { HirStmt _r = {.tag=HirStmt_SAssign}; _r.data.SAssign.target = target; _r.data.SAssign.val = val; return _r; }
 static inline __attribute__((always_inline)) HirStmt HirStmt_ctor_SReturn(HirExpr* val) { HirStmt _r = {.tag=HirStmt_SReturn}; _r.data.SReturn.val = val; return _r; }
-#define HirStmt_make_SBreak() ((HirStmt){.tag=HirStmt_SBreak})
+static inline __attribute__((always_inline)) HirStmt HirStmt_ctor_SBreak(HirExpr* val) { HirStmt _r = {.tag=HirStmt_SBreak}; _r.data.SBreak.val = val; return _r; }
 #define HirStmt_make_SContinue() ((HirStmt){.tag=HirStmt_SContinue})
 #define HirStmt_make_SPass() ((HirStmt){.tag=HirStmt_SPass})
 static inline __attribute__((always_inline)) HirStmt HirStmt_ctor_SRaise(HirExpr* val) { HirStmt _r = {.tag=HirStmt_SRaise}; _r.data.SRaise.val = val; return _r; }
@@ -1412,6 +1487,44 @@ typedef struct SymbolKind {
 #define SymbolKind_make_SVariable() ((SymbolKind){.tag=SymbolKind_SVariable})
 #define SymbolKind_make_SInterface() ((SymbolKind){.tag=SymbolKind_SInterface})
 
+typedef enum {
+    MacroVal_MStr,
+    MacroVal_MInt,
+    MacroVal_MBool,
+    MacroVal_MList,
+    MacroVal_MRec,
+    MacroVal_MNil
+} MacroVal_tag;
+
+typedef struct MacroVal {
+    MacroVal_tag tag;
+    union {
+        struct {
+            TrStr s;
+        } MStr;
+        struct {
+            long long n;
+        } MInt;
+        struct {
+            bool b;
+        } MBool;
+        struct {
+            List_ptr* items;
+        } MList;
+        struct {
+            List_TrStr* keys;
+            List_ptr* vals;
+        } MRec;
+    } data;
+} MacroVal;
+
+static inline __attribute__((always_inline)) MacroVal MacroVal_ctor_MStr(TrStr s) { MacroVal _r = {.tag=MacroVal_MStr}; _r.data.MStr.s = _tr_str_retain(s); return _r; }
+static inline __attribute__((always_inline)) MacroVal MacroVal_ctor_MInt(long long n) { MacroVal _r = {.tag=MacroVal_MInt}; _r.data.MInt.n = n; return _r; }
+static inline __attribute__((always_inline)) MacroVal MacroVal_ctor_MBool(bool b) { MacroVal _r = {.tag=MacroVal_MBool}; _r.data.MBool.b = b; return _r; }
+static inline __attribute__((always_inline)) MacroVal MacroVal_ctor_MList(List_ptr* items) { MacroVal _r = {.tag=MacroVal_MList}; _r.data.MList.items = items; return _r; }
+static inline __attribute__((always_inline)) MacroVal MacroVal_ctor_MRec(List_TrStr* keys, List_ptr* vals) { MacroVal _r = {.tag=MacroVal_MRec}; _r.data.MRec.keys = keys; _r.data.MRec.vals = vals; return _r; }
+#define MacroVal_make_MNil() ((MacroVal){.tag=MacroVal_MNil})
+
 #ifndef StringObj_STRUCT_DEFINED
 #define StringObj_STRUCT_DEFINED
 typedef struct StringObj {
@@ -1454,6 +1567,10 @@ typedef struct AstType {
     TrStr name;
     List_ptr* args;
     TrStr from_param;
+    List_TrStr* from_regions;
+    long long from_index;
+    bool is_borrow;
+    bool is_mut_borrow;
 } AstType;
 #endif
 
@@ -1564,8 +1681,11 @@ typedef struct FunctionDef {
     bool is_extern;
     bool is_public;
     bool is_export;
+    bool is_macro;
     Block* body;
     long long line;
+    List_TrStr* outlives_a;
+    List_TrStr* outlives_b;
 } FunctionDef;
 #endif
 
@@ -1593,6 +1713,7 @@ typedef struct ClassDef {
     bool is_class;
     long long line;
     TrStr docstring;
+    List_TrStr* region_params;
 } ClassDef;
 #endif
 
@@ -1615,6 +1736,7 @@ typedef struct EnumDef {
     List_ptr* decorators;
     bool is_public;
     long long line;
+    List_TrStr* region_params;
 } EnumDef;
 #endif
 
@@ -1627,6 +1749,7 @@ typedef struct InterfaceDef {
     bool is_public;
     long long line;
     List_ptr* decorators;
+    List_TrStr* region_params;
 } InterfaceDef;
 #endif
 
@@ -1755,6 +1878,9 @@ typedef struct HirFunction {
     bool is_static;
     bool is_variadic;
     bool is_decorator;
+    List_TrStr* borrow_borrowers;
+    List_TrStr* borrow_sources;
+    List_TrStr* proven_borrows;
 } HirFunction;
 #endif
 
@@ -1846,6 +1972,17 @@ typedef struct DropSite {
 } DropSite;
 #endif
 
+#ifndef BorrowEdge_STRUCT_DEFINED
+#define BorrowEdge_STRUCT_DEFINED
+typedef struct BorrowEdge {
+    TrStr borrower;
+    TrStr source;
+    long long decl_block;
+    bool is_exclusive;
+    bool via_collection;
+} BorrowEdge;
+#endif
+
 #ifndef MirFunction_STRUCT_DEFINED
 #define MirFunction_STRUCT_DEFINED
 typedef struct MirFunction {
@@ -1853,6 +1990,8 @@ typedef struct MirFunction {
     List_TrStr* params;
     List_ptr* blocks;
     List_ptr* if_bodies;
+    LiveSet* unsafe_pinned;
+    List_ptr* borrows;
     bool complete;
 } MirFunction;
 #endif
@@ -1873,6 +2012,10 @@ typedef struct MirBuilder {
     HirBlock* cur_hb;
     List_ptr* if_bodies;
     long long in_unsafe;
+    LiveSet* unsafe_pinned;
+    List_i64* loop_continue;
+    List_i64* loop_break;
+    List_ptr* borrows;
 } MirBuilder;
 #endif
 
@@ -1906,6 +2049,7 @@ typedef struct Symbol {
     long long decl_block_id;
     bool str_escaped;
     bool coll_escaped;
+    TrStr borrows_region;
 } Symbol;
 #endif
 
@@ -1936,6 +2080,7 @@ typedef struct Sema {
     bool in_async_fn;
     TrMap* assign_froms;
     TrMap* fn_sigs;
+    TrMap* extern_names;
     List_ptr* nested_classes;
     List_ptr* nested_functions;
     List_ptr* nested_enums;
@@ -1946,6 +2091,7 @@ typedef struct Sema {
     List_ptr* closure_caps;
     TrMap* closure_cap_set;
     bool in_assign_target;
+    bool in_recv_pos;
     TrMap* container_borrows;
     bool capturing_moves;
     List_TrStr* branch_moved_buf;
@@ -1954,17 +2100,27 @@ typedef struct Sema {
     TrMap* copy_classes;
     bool in_unsafe;
     TrStr current_func_ret_from;
+    bool current_func_ret_borrow_str;
+    List_TrStr* current_func_ret_regions;
+    List_TrStr* current_func_outlives_a;
+    List_TrStr* current_func_outlives_b;
+    List_TrStr* current_region_params;
+    List_TrStr* cur_func_borrowers;
+    List_TrStr* cur_func_sources;
     bool strict_mode;
+    TrMap* mutating_methods;
     TrMap* decorator_names;
     TrMap* variadic_fns;
     TrMap* variadic_elem_ty;
     TrMap* fn_defs;
     List_i64* loop_scope_base;
+    List_i64* fn_scope_base;
     long long block_depth;
     List_i64* block_depth_stack;
     long long next_block_id;
     List_i64* block_stack;
     List_i64* block_stack_base;
+    long long do_temp_ctr;
 } Sema;
 #endif
 
@@ -1999,9 +2155,15 @@ typedef struct CGenerator {
     TrMap* method_owners;
     TrMap* decl_vars;
     TrMap* str_local_names;
+    TrMap* cur_proven_borrows;
+    bool cur_ret_is_borrow;
+    bool eliding_get_retain;
+    bool no_elide;
+    bool cur_self_is_ptr;
     TrMap* coll_local_sfx;
     TrMap* coll_local_idict;
     TrMap* coll_local_strval;
+    TrMap* coll_local_vtcoll;
     TrMap* type_subst;
     TrMap* mono_done;
     TrMap* list_type_done;
@@ -2019,6 +2181,9 @@ typedef struct CGenerator {
     long long in_task_group;
     long long in_gpu_block;
     TrMap* value_types;
+    List_TrStr* value_list_elems;
+    List_TrStr* value_dict_elems;
+    List_TrStr* value_set_elems;
     TrMap* global_vars;
     TrMap* closure_cap_set;
     TrStr closure_env_var;
@@ -2028,6 +2193,8 @@ typedef struct CGenerator {
     List_TrStr* defer_stack;
     List_TrStr* wrap_temp_decls;
     List_TrStr* wrap_temp_names;
+    List_TrStr* loop_res_stack;
+    List_TrStr* loop_done_stack;
     bool emit_line_info;
     TrStr cur_src_file;
 } CGenerator;
@@ -2042,6 +2209,28 @@ typedef struct LlvmGenerator {
     TrMap* enums;
     TrMap* functions;
 } LlvmGenerator;
+#endif
+
+#ifndef MacroCtx_STRUCT_DEFINED
+#define MacroCtx_STRUCT_DEFINED
+typedef struct MacroCtx {
+    TrMap* env;
+    bool returned;
+    TrStr result;
+    bool has_error;
+    TrStr error_msg;
+    long long gensym_ctr;
+} MacroCtx;
+#endif
+
+#ifndef FnMacroExpander_STRUCT_DEFINED
+#define FnMacroExpander_STRUCT_DEFINED
+typedef struct FnMacroExpander {
+    TrMap* macros;
+    long long errors;
+    long long depth;
+    long long gensym_base;
+} FnMacroExpander;
 #endif
 
 typedef struct List_Token { Token* data; size_t len; size_t capacity; } List_Token;
@@ -2110,6 +2299,12 @@ static inline void List_SymbolKind_append(List_SymbolKind* l, SymbolKind val) { 
 static inline SymbolKind List_SymbolKind_get(List_SymbolKind* l, long long i) { _tr_bounds_check(i, l->len); return l->data[i]; }
 static inline SymbolKind List_SymbolKind_pop(List_SymbolKind* l) { if(!l||l->len==0) return (SymbolKind){0}; l->len--; return l->data[l->len]; }
 static inline void List_SymbolKind_free(List_SymbolKind* l) { if(l){ free(l->data); free(l); } }
+typedef struct List_MacroVal { MacroVal* data; size_t len; size_t capacity; } List_MacroVal;
+static inline List_MacroVal* List_MacroVal_new(void) { List_MacroVal* l=(List_MacroVal*)malloc(sizeof(List_MacroVal)); l->data=(MacroVal*)malloc(sizeof(MacroVal)*8); l->len=0; l->capacity=8; return l; }
+static inline void List_MacroVal_append(List_MacroVal* l, MacroVal val) { if(l->len==l->capacity){ l->capacity*=2; l->data=(MacroVal*)realloc(l->data,sizeof(MacroVal)*l->capacity); } l->data[l->len++]=val; }
+static inline MacroVal List_MacroVal_get(List_MacroVal* l, long long i) { _tr_bounds_check(i, l->len); return l->data[i]; }
+static inline MacroVal List_MacroVal_pop(List_MacroVal* l) { if(!l||l->len==0) return (MacroVal){0}; l->len--; return l->data[l->len]; }
+static inline void List_MacroVal_free(List_MacroVal* l) { if(l){ free(l->data); free(l); } }
 
 __attribute__((hot)) TrStr read_file(TrStr path);
 __attribute__((hot)) bool file_exists(TrStr path);
@@ -2154,6 +2349,21 @@ __attribute__((hot)) void** alloc(long long n_elems);
 __attribute__((hot)) void dealloc(void** ptr);
 __attribute__((hot)) void** resize(void** ptr, long long new_count);
 __attribute__((hot)) void copy(void** dst, void** src, long long n_elems);
+__attribute__((hot)) bool color_enabled();
+__attribute__((hot)) TrStr esc();
+__attribute__((hot)) TrStr paint(TrStr s, TrStr code);
+__attribute__((hot)) TrStr c_red(TrStr s);
+__attribute__((hot)) TrStr c_yellow(TrStr s);
+__attribute__((hot)) TrStr c_green(TrStr s);
+__attribute__((hot)) TrStr c_cyan(TrStr s);
+__attribute__((hot)) TrStr c_dim(TrStr s);
+__attribute__((hot)) TrStr c_bold(TrStr s);
+__attribute__((hot)) TrStr spaces(long long n);
+__attribute__((hot)) TrStr repeat_char(TrStr ch, long long n);
+__attribute__((hot)) TrStr first_quoted(TrStr msg);
+__attribute__((hot)) long long col_of(TrStr line, TrStr needle);
+__attribute__((hot)) TrStr loc_file(TrStr head);
+__attribute__((hot)) long long loc_line(TrStr head);
 __attribute__((malloc,returns_nonnull,hot)) AstType* AstType_init(TrStr name);
 __attribute__((hot)) AstType* AstType_init_generic(TrStr name, AstType** arg);
 __attribute__((malloc,returns_nonnull,hot)) GenericConstraint* GenericConstraint_init(TrStr target);
@@ -2221,11 +2431,15 @@ __attribute__((hot)) Stmt* Parser_parse_shared_let_stmt(Parser* self);
 __attribute__((hot)) Stmt* Parser_parse_const_let_stmt(Parser* self);
 __attribute__((hot)) Stmt* Parser_parse_if_stmt(Parser* self);
 __attribute__((hot)) Stmt* Parser_parse_while_stmt(Parser* self);
+__attribute__((hot)) Stmt* Parser_parse_loop_stmt(Parser* self);
 __attribute__((hot)) Stmt* Parser_parse_for_stmt(Parser* self);
 __attribute__((hot)) Stmt* Parser_parse_match_stmt(Parser* self);
+__attribute__((hot)) List_ptr* Parser_parse_match_arms(Parser* self);
 __attribute__((hot)) Pattern Parser_parse_pattern(Parser* self);
 __attribute__((hot)) Stmt* Parser_parse_assign_or_expr_stmt(Parser* self);
 __attribute__((hot)) Expr* Parser_parse_expr(Parser* self);
+__attribute__((hot)) Expr* Parser_parse_match_expr(Parser* self);
+__attribute__((hot)) Expr* Parser_parse_if_expr(Parser* self);
 __attribute__((hot)) Expr* Parser_parse_ternary(Parser* self);
 __attribute__((hot)) Expr* Parser_parse_or_expr(Parser* self);
 __attribute__((hot)) Expr* Parser_parse_and_expr(Parser* self);
@@ -2240,6 +2454,10 @@ __attribute__((hot)) Expr* Parser_parse_multiplicative(Parser* self);
 __attribute__((hot)) Expr* Parser_parse_power(Parser* self);
 __attribute__((hot)) Expr* Parser_parse_unary(Parser* self);
 __attribute__((hot)) Expr* Parser_parse_postfix(Parser* self);
+__attribute__((hot)) void Parser_emit_diag_at(Parser* self, long long ln, long long col, TrStr msg, TrStr hint);
+__attribute__((hot)) void Parser_expect_rparen(Parser* self, long long oln, long long ocol, TrStr what);
+__attribute__((hot)) void Parser_expect_rbracket(Parser* self, long long oln, long long ocol, TrStr what);
+__attribute__((hot)) void Parser_expect_rbrace(Parser* self, long long oln, long long ocol, TrStr what);
 __attribute__((hot)) List_ptr* Parser_parse_arg_list(Parser* self);
 __attribute__((hot)) Expr* Parser_parse_primary(Parser* self);
 __attribute__((hot)) Expr* Parser_parse_fstring(Parser* self, TrStr raw);
@@ -2257,6 +2475,8 @@ __attribute__((hot)) long long _find_fmt_colon(TrStr s);
 __attribute__((hot)) bool decl_is_pub(Decl d);
 __attribute__((malloc,returns_nonnull,hot)) ModuleResolver* ModuleResolver_init();
 __attribute__((hot)) void ModuleResolver_add_search_path(ModuleResolver* self, TrStr p);
+__attribute__((hot)) TrStr ModuleResolver_dir_of_path(ModuleResolver* self, TrStr path);
+__attribute__((hot)) TrStr ModuleResolver_base_of_path(ModuleResolver* self, TrStr path);
 __attribute__((hot)) Program* ModuleResolver_resolve_main(ModuleResolver* self, TrStr main_path);
 __attribute__((hot)) void ModuleResolver_resolve_file(ModuleResolver* self, TrStr path, bool is_root);
 __attribute__((hot)) void ModuleResolver_resolve_recursive(ModuleResolver* self, TrStr path);
@@ -2270,9 +2490,12 @@ __attribute__((hot)) HirExpr* box_hirexpr(HirExpr e);
 __attribute__((hot)) HirStmt* box_hirstmt(HirStmt s);
 __attribute__((hot)) AstType* hir_expr_type(HirExpr* e);
 __attribute__((hot)) long long _tr_str_len(TrStr s);
+__attribute__((hot)) bool _is_mutating_call_on(HirExpr* val, TrStr source, TrMap* mm);
 __attribute__((hot)) MirStmt* box_mirstmt(MirStmt s);
 __attribute__((hot)) MirTerm* box_mirterm(MirTerm t);
 __attribute__((malloc,returns_nonnull,hot)) MirBuilder* MirBuilder_init();
+__attribute__((hot)) void MirBuilder_record_borrow(MirBuilder* self, TrStr borrower, TrStr source, bool exclusive);
+__attribute__((hot)) void MirBuilder_record_coll_borrow(MirBuilder* self, TrStr borrower, TrStr source, bool exclusive);
 __attribute__((hot)) long long MirBuilder_new_block(MirBuilder* self);
 __attribute__((hot)) void MirBuilder_push_stmt(MirBuilder* self, MirStmt s);
 __attribute__((hot)) void MirBuilder_set_term(MirBuilder* self, MirTerm t);
@@ -2284,6 +2507,7 @@ __attribute__((hot)) MirProgram* lower_program(HirProgram* hir);
 __attribute__((hot)) bool set_contains(List_TrStr* v, TrStr s);
 __attribute__((hot)) bool set_add(List_TrStr* v, TrStr s);
 __attribute__((hot)) void collect_uses(HirExpr* e, List_TrStr* out);
+__attribute__((hot)) void collect_raw_borrows(HirExpr* e, LiveSet* out);
 __attribute__((hot)) void add_exposed(HirExpr* e, List_TrStr* gen, List_TrStr* kill);
 __attribute__((hot)) void block_use_def(MirBlock* blk, List_TrStr* gen, List_TrStr* kill);
 __attribute__((hot)) void block_succs(MirBlock* blk, List_i64* out);
@@ -2306,8 +2530,14 @@ __attribute__((hot)) void block_gen_own(MirBlock* blk, List_TrStr* out);
 __attribute__((hot)) void block_moves(MirBlock* blk, List_TrStr* out);
 __attribute__((hot)) void preds_of(MirFunction* mf, long long b, List_i64* out);
 __attribute__((hot)) List_ptr* compute_drops(MirFunction* mf, List_ptr* live_out);
+__attribute__((hot)) long long last_use_in_block(MirBlock* blk, TrStr name);
+__attribute__((hot)) List_bool* compute_borrow_outlives(MirFunction* mf, List_ptr* live_out);
 __attribute__((hot)) bool is_if_body(MirFunction* mf, HirBlock* hb);
 __attribute__((hot)) DropSite* site_for(List_ptr* out, HirBlock* hb);
+__attribute__((hot)) List_TrStr* mir_proven_borrows(HirFunction* hf);
+__attribute__((hot)) bool borrower_live_after(MirBlock* blk, long long after_idx, TrStr name, LiveSet* lo);
+__attribute__((hot)) List_TrStr* mir_borrow_conflicts(HirFunction* hf, TrMap* mutating_methods);
+__attribute__((hot)) List_TrStr* mir_shared_ref_param_violations(HirFunction* hf, TrMap* mutating_methods);
 __attribute__((hot)) List_ptr* mir_if_drop_plan(HirFunction* hf);
 __attribute__((hot)) TrStr set_str(List_TrStr* v);
 __attribute__((hot)) TrStr term_str(MirTerm* t);
@@ -2315,7 +2545,12 @@ __attribute__((hot)) TrStr stmt_str(MirStmt* s);
 __attribute__((hot)) TrStr dump_mir(MirProgram* mp);
 __attribute__((malloc,returns_nonnull,hot)) Symbol* Symbol_init(TrStr name, SymbolKind kind, AstType** ty);
 __attribute__((malloc,returns_nonnull,hot)) Scope* Scope_init();
+__attribute__((hot)) bool _expr_is_self_field(Expr* e);
+__attribute__((hot)) bool _block_mutates_self(Block* b);
+__attribute__((hot)) bool _pblock_mutates_self(Block** pb);
+__attribute__((hot)) bool _stmt_mutates_self(Stmt* s);
 __attribute__((hot)) AstType** Sema_build_ast_type(Sema* self, Expr* e);
+__attribute__((hot)) AstType** Sema__targ_of(Sema* self, Expr* e);
 __attribute__((malloc,returns_nonnull,hot)) Sema* Sema_init();
 __attribute__((hot)) TrStr Sema_io_ty_str(Sema* self, AstType* ty);
 __attribute__((hot)) TrStr Sema_io_doc_of(Sema* self, Block* body);
@@ -2323,8 +2558,10 @@ __attribute__((hot)) TrStr Sema_io_func_sig(Sema* self, FunctionDef* f);
 __attribute__((hot)) TrStr Sema_build_inspect_str(Sema* self, TrStr name);
 __attribute__((hot)) void Sema_error(Sema* self, TrStr msg);
 __attribute__((hot)) bool Sema_is_sendable_type(Sema* self, TrStr ty_name);
+__attribute__((hot)) bool Sema_is_sendable_ty(Sema* self, AstType* ty);
 __attribute__((hot)) bool Sema_class_method_exists(Sema* self, TrStr cls_name, TrStr method);
 __attribute__((hot)) bool Sema_is_universal_method(Sema* self, TrStr method);
+__attribute__((hot)) bool Sema_expr_is_borrow(Sema* self, HirExpr* e);
 __attribute__((hot)) void Sema_check_spawn_sendable(Sema* self, HirExpr* e);
 __attribute__((hot)) void Sema_check_class_sendable_fields(Sema* self, ClassDef* c);
 __attribute__((hot)) void Sema_mark_moved(Sema* self, TrStr name);
@@ -2356,6 +2593,10 @@ __attribute__((hot)) void Sema_append_drops_from_excl_multi(Sema* self, HirBlock
 __attribute__((hot)) void Sema_collect_idents(Sema* self, HirExpr* e, List_TrStr* out);
 __attribute__((hot)) bool Sema_is_local_var(Sema* self, TrStr name);
 __attribute__((hot)) void Sema_mark_str_escaped(Sema* self, TrStr name);
+__attribute__((hot)) void Sema_set_borrows_region(Sema* self, TrStr name, TrStr region);
+__attribute__((hot)) TrStr Sema_compute_region(Sema* self, Expr* e);
+__attribute__((hot)) bool Sema_region_outlives(Sema* self, TrStr longer, TrStr shorter);
+__attribute__((hot)) bool Sema_field_is_borrow(Sema* self, Expr* obj, TrStr field);
 __attribute__((hot)) void Sema_mark_str_arg(Sema* self, HirExpr* e);
 __attribute__((hot)) void Sema_mark_escaped_str_args(Sema* self, HirExpr* e);
 __attribute__((hot)) void Sema_mark_coll_escaped(Sema* self, TrStr name);
@@ -2371,6 +2612,7 @@ __attribute__((hot)) bool Sema_coll_droppable_by_sema(Sema* self, TrStr nm);
 __attribute__((hot)) void Sema_apply_mir_if_drops(Sema* self, HirFunction* hf);
 __attribute__((hot)) void Sema_declare(Sema* self, TrStr name, SymbolKind kind, AstType** ty, bool is_mut);
 __attribute__((hot)) Symbol* Sema_resolve(Sema* self, TrStr name);
+__attribute__((hot)) bool Sema_is_known_name(Sema* self, TrStr name);
 __attribute__((hot)) bool Sema_is_type_name(Sema* self, TrStr nm);
 __attribute__((hot)) TrStr Sema_type_ref_name(Sema* self, Expr* raw);
 __attribute__((hot)) bool Sema_is_global_not_local(Sema* self, TrStr name);
@@ -2380,12 +2622,16 @@ __attribute__((hot)) HirFunction* Sema_lower_func(Sema* self, FunctionDef* f);
 __attribute__((hot)) HirClass* Sema_lower_class(Sema* self, ClassDef* c);
 __attribute__((hot)) HirEnum* Sema_lower_enum(Sema* self, EnumDef* e);
 __attribute__((hot)) HirInterface* Sema_lower_interface(Sema* self, InterfaceDef* i_def);
+__attribute__((hot)) void Sema_apply_escape_marks(Sema* self, HirStmt* _hs);
 __attribute__((hot)) HirBlock* Sema_lower_block(Sema* self, Block* b);
 __attribute__((hot)) HirStmt* Sema_lower_stmt(Sema* self, Stmt* s_ptr);
 __attribute__((hot)) AstType* Sema_variant_field_ty(Sema* self, TrStr type_name, TrStr variant_name, long long field_idx);
 __attribute__((hot)) void Sema_declare_pattern_binds(Sema* self, Pattern pat);
 __attribute__((hot)) void Sema_declare_pattern_binds_typed(Sema* self, Pattern pat, AstType* subj_ty);
 __attribute__((hot)) AstType* Sema_str_method_ret_ty(Sema* self, TrStr method);
+__attribute__((hot)) HirExpr* Sema_lower_do_value(Sema* self, Block* do_body);
+__attribute__((hot)) AstType* Sema_infer_break_type(Sema* self, HirBlock* hb);
+__attribute__((hot)) AstType* Sema_infer_break_type_stmt(Sema* self, HirStmt* s);
 __attribute__((hot)) HirExpr* Sema_lower_expr(Sema* self, Expr* e_ptr);
 __attribute__((hot)) TrStr Sema_is_reserved_error(Sema* self, TrStr name);
 __attribute__((hot)) TrStr Sema_is_reserved_keyword(Sema* self, TrStr name);
@@ -2453,6 +2699,38 @@ __attribute__((hot)) TrStr LlvmGenerator_gen_call_llvm(LlvmGenerator* self, HirE
 __attribute__((hot)) void LlvmGenerator_gen_stmt(LlvmGenerator* self, HirStmt* s_ptr);
 __attribute__((hot)) void LlvmGenerator_gen_block(LlvmGenerator* self, HirBlock* b);
 __attribute__((hot)) TrStr LlvmGenerator_generate(LlvmGenerator* self, HirProgram* prog);
+__attribute__((hot)) MacroVal* box_mv(MacroVal v);
+__attribute__((hot)) MacroVal* mrec(List_TrStr* keys, List_ptr* vals);
+__attribute__((hot)) MacroVal* mrec_get(MacroVal* recptr, TrStr key);
+__attribute__((hot)) TrStr mv_to_str(MacroVal* vptr);
+__attribute__((hot)) bool mv_truthy(MacroVal* vptr);
+__attribute__((hot)) bool mv_eq(MacroVal* a, MacroVal* b);
+__attribute__((hot)) TrStr render_type(AstType** typtr);
+__attribute__((hot)) MacroVal* str_list(List_TrStr* items);
+__attribute__((hot)) MacroVal* param_rec(Param* p);
+__attribute__((hot)) MacroVal* params_list(List_ptr* ps);
+__attribute__((hot)) MacroVal* fn_rec(FunctionDef* f);
+__attribute__((hot)) MacroVal* method_list(List_ptr* ms);
+__attribute__((hot)) MacroVal* build_item(Decl* declptr);
+__attribute__((malloc,returns_nonnull,hot)) MacroCtx* MacroCtx_init();
+__attribute__((hot)) void MacroCtx_fail(MacroCtx* self, TrStr msg);
+__attribute__((hot)) MacroVal* MacroCtx_eval_binop(MacroCtx* self, TrStr op, MacroVal* lv, MacroVal* rv);
+__attribute__((hot)) MacroVal* MacroCtx_eval_mexpr(MacroCtx* self, Expr* eptr);
+__attribute__((hot)) void MacroCtx_eval_mblock(MacroCtx* self, Block* b);
+__attribute__((hot)) void MacroCtx_eval_mstmt(MacroCtx* self, Stmt* sptr);
+__attribute__((hot)) void parse_into(TrStr src, List_ptr* gen);
+__attribute__((hot)) List_ptr* decl_decorators(Decl* declptr);
+__attribute__((hot)) TrStr render_arg(Expr* e);
+__attribute__((hot)) Expr* parse_expr_src(TrStr src);
+__attribute__((hot)) TrStr kind_of(Expr* e);
+__attribute__((hot)) MacroVal* arg_rec(Expr* e);
+__attribute__((hot)) MacroCtx* run_fn_macro(FunctionDef* mdef, List_ptr* args, long long gbase);
+__attribute__((malloc,returns_nonnull,hot)) FnMacroExpander* FnMacroExpander_init(TrMap* m);
+__attribute__((hot)) void FnMacroExpander_visit_expr(FnMacroExpander* self, Expr* eptr);
+__attribute__((hot)) void FnMacroExpander_visit_block(FnMacroExpander* self, Block* b);
+__attribute__((hot)) void FnMacroExpander_visit_stmt(FnMacroExpander* self, Stmt* sptr);
+__attribute__((hot)) void FnMacroExpander_expand_decl(FnMacroExpander* self, Decl* dptr);
+__attribute__((hot)) long long expand_macros(Program* prog);
 __attribute__((hot)) void print_version();
 __attribute__((hot)) void print_usage();
 __attribute__((hot)) bool str_ends_with_dot_tr(TrStr path);
@@ -2493,6 +2771,7 @@ __attribute__((malloc,returns_nonnull,hot)) Lexer* Lexer_init(TrStr source);
 __attribute__((hot)) void Lexer_push_loc(Lexer* self);
 __attribute__((hot)) long long Lexer_peek(Lexer* self);
 __attribute__((hot)) long long Lexer_peek_at(Lexer* self, long long offset);
+__attribute__((hot)) bool Lexer__at_eol_after_ws(Lexer* self);
 __attribute__((hot)) long long Lexer_advance(Lexer* self);
 __attribute__((hot)) bool Lexer_at_end(Lexer* self);
 __attribute__((hot)) void Lexer_skip_spaces(Lexer* self);
@@ -2502,6 +2781,7 @@ __attribute__((hot)) Token Lexer_read_triple_string(Lexer* self, long long quote
 __attribute__((hot)) Token Lexer_read_string(Lexer* self, long long quote);
 __attribute__((hot)) Token Lexer_read_char(Lexer* self);
 __attribute__((hot)) Token Lexer_read_fstring(Lexer* self);
+__attribute__((hot)) Token Lexer_read_triple_fstring(Lexer* self, long long quote);
 __attribute__((hot)) Token Lexer_read_raw_string(Lexer* self);
 __attribute__((hot)) Token Lexer_read_byte_string(Lexer* self);
 __attribute__((hot)) Token Lexer_read_ident(Lexer* self);
@@ -2517,6 +2797,8 @@ __attribute__((hot)) void CGenerator_ws(CGenerator* self, TrStr s);
 __attribute__((hot)) void CGenerator_wp(CGenerator* self, TrStr s);
 __attribute__((hot)) void CGenerator_wlt(CGenerator* self, TrStr s);
 __attribute__((hot)) void CGenerator_ensure_list_type(CGenerator* self, TrStr n);
+__attribute__((hot)) void CGenerator_ensure_dict_type(CGenerator* self, TrStr kc, TrStr vname);
+__attribute__((hot)) void CGenerator_ensure_set_type(CGenerator* self, TrStr vname);
 __attribute__((hot)) void CGenerator_check_and_emit_list_fwd(CGenerator* self, AstType* ty);
 __attribute__((hot)) void CGenerator_emit_list_fwd_decls(CGenerator* self, HirProgram* prog);
 __attribute__((hot)) TrStr CGenerator_type_to_c(CGenerator* self, AstType* ty);
@@ -2531,6 +2813,10 @@ __attribute__((hot)) TrStr CGenerator_get_user_decorator_attr(CGenerator* self, 
 __attribute__((hot)) TrStr CGenerator_get_inline_attrs(CGenerator* self, HirFunction* f);
 __attribute__((hot)) bool CGenerator_is_rt_concurrency_type(CGenerator* self, TrStr name);
 __attribute__((hot)) TrStr CGenerator_get_proto_attrs(CGenerator* self, HirFunction* f);
+__attribute__((hot)) bool CGenerator_vt_method_mutates_self(CGenerator* self, HirFunction* f);
+__attribute__((hot)) bool CGenerator_vt_call_needs_ptr_self(CGenerator* self, TrStr class_name, TrStr method);
+__attribute__((hot)) bool CGenerator_hir_block_mutates_self(CGenerator* self, HirBlock* block);
+__attribute__((hot)) bool CGenerator_hir_stmt_mutates_self(CGenerator* self, HirStmt* s);
 __attribute__((hot)) TrStr CGenerator_gen_func_sig(CGenerator* self, HirFunction* f, TrStr class_name);
 __attribute__((hot)) void CGenerator_emit_base_fields(CGenerator* self, TrStr base_name);
 __attribute__((hot)) void CGenerator_gen_class_struct(CGenerator* self, HirClass* c);
@@ -2538,6 +2824,7 @@ __attribute__((hot)) void CGenerator_gen_enum_struct(CGenerator* self, HirEnum* 
 __attribute__((hot)) void CGenerator_gen_interface_vtable(CGenerator* self, HirInterface* iface);
 __attribute__((hot)) TrStr CGenerator_gen_one_iface_wrap(CGenerator* self, TrStr cls_name, HirInterface* iface);
 __attribute__((hot)) TrStr CGenerator_gen_expr(CGenerator* self, HirExpr* e_ptr);
+__attribute__((hot)) TrStr CGenerator_gen_match_expr(CGenerator* self, HirExpr* subj, List_ptr* arms, AstType* ty);
 __attribute__((hot)) bool CGenerator_has_method(CGenerator* self, TrStr cls_name, TrStr method);
 __attribute__((hot)) AstType* CGenerator_cls_method_ret_ty(CGenerator* self, TrStr cls_name, TrStr method);
 __attribute__((hot)) TrStr CGenerator_cls_method_c_call(CGenerator* self, TrStr cls_name, TrStr method, TrStr obj_s, TrStr extra_args);
@@ -2549,6 +2836,7 @@ __attribute__((hot)) TrStr CGenerator_gen_collection_to_str(CGenerator* self, Tr
 __attribute__((hot)) TrStr CGenerator_strz(CGenerator* self, TrStr e);
 __attribute__((hot)) TrStr CGenerator_flush_wraps(CGenerator* self, TrStr expr_s, bool is_void);
 __attribute__((hot)) TrStr CGenerator_wrapstr(CGenerator* self, TrStr e);
+__attribute__((hot)) void CGenerator_set_proven_borrows(CGenerator* self, List_TrStr* pb);
 __attribute__((hot)) TrStr CGenerator_str_retain_wrap(CGenerator* self, HirExpr* e, TrStr s, bool is_return);
 __attribute__((hot)) TrStr CGenerator_gen_cond_expr(CGenerator* self, HirExpr* cond);
 __attribute__((hot)) TrStr CGenerator_gen_binop(CGenerator* self, TrStr op, HirExpr* l, HirExpr* r);
@@ -2563,6 +2851,7 @@ __attribute__((hot)) TrStr CGenerator_dict_key_arg(CGenerator* self, HirExpr* e)
 __attribute__((hot)) TrStr CGenerator_dict_val_arg(CGenerator* self, HirExpr* e);
 __attribute__((hot)) TrStr CGenerator_gen_args_extern(CGenerator* self, List_ptr* args);
 __attribute__((hot)) bool CGenerator__is_fresh_str_expr(CGenerator* self, HirExpr* e);
+__attribute__((hot)) bool CGenerator__expr_is_borrow_call(CGenerator* self, HirExpr* e);
 __attribute__((hot)) TrStr CGenerator_gen_args(CGenerator* self, List_ptr* args);
 __attribute__((hot)) TrStr CGenerator_gen_args_strify(CGenerator* self, List_ptr* args, TrStr elem_sfx);
 __attribute__((hot)) TrStr CGenerator_gen_method_call(CGenerator* self, HirExpr* obj, TrStr method, List_ptr* args, AstType* call_ty);
@@ -2576,6 +2865,7 @@ __attribute__((hot)) void CGenerator_gen_multi_let(CGenerator* self, List_TrStr*
 __attribute__((hot)) TrStr CGenerator_gen_list_literal(CGenerator* self, List_ptr* items, AstType* ty);
 __attribute__((hot)) TrStr CGenerator_gen_dict_literal(CGenerator* self, List_ptr* keys, List_ptr* vals, AstType* hint_ty);
 __attribute__((hot)) TrStr CGenerator_gen_list_comp(CGenerator* self, HirExpr* element, List_ptr* generators);
+__attribute__((hot)) TrStr CGenerator__comp_src_free_stmt(CGenerator* self, HirExpr* iter_e, long long idx);
 __attribute__((hot)) TrStr CGenerator_gen_closure(CGenerator* self, List_ptr* params, AstType* ret_ty, HirBlock* body, List_ptr* captures);
 __attribute__((hot)) void CGenerator_emit_spawn_wrapper_for_expr(CGenerator* self, HirExpr* e);
 __attribute__((hot)) void CGenerator_prescan_block_spawns(CGenerator* self, HirBlock* block);
@@ -3458,6 +3748,24 @@ __attribute__((hot)) void core_alloc_dealloc_mir_DropSite_ptr(mir_DropSite*** pt
 __attribute__((hot)) core_map_MapNode_str_mir_DropSite** core_alloc_alloc_core_map_MapNode_str_mir_DropSite(long long count);
 __attribute__((hot)) void core_alloc_dealloc_core_map_MapNode_str_mir_DropSite(core_map_MapNode_str_mir_DropSite** ptr);
 
+typedef BorrowEdge mir_BorrowEdge;
+struct core_vec_Vec_mir_BorrowEdge { mir_BorrowEdge** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_mir_BorrowEdge core_vec_Vec_mir_BorrowEdge;
+struct core_vec_Vec_mir_BorrowEdge_ptr { mir_BorrowEdge*** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_mir_BorrowEdge_ptr core_vec_Vec_mir_BorrowEdge_ptr;
+struct core_map_MapNode_str_mir_BorrowEdge { char* key; mir_BorrowEdge* value; struct core_map_MapNode_str_mir_BorrowEdge* next; };
+typedef struct core_map_MapNode_str_mir_BorrowEdge core_map_MapNode_str_mir_BorrowEdge;
+struct core_map_Map_str_mir_BorrowEdge { core_map_MapNode_str_mir_BorrowEdge** buckets; long long capacity; long long len; };
+typedef struct core_map_Map_str_mir_BorrowEdge core_map_Map_str_mir_BorrowEdge;
+__attribute__((hot)) mir_BorrowEdge** core_alloc_alloc_mir_BorrowEdge(long long count);
+__attribute__((hot)) mir_BorrowEdge** core_alloc_resize_mir_BorrowEdge(mir_BorrowEdge** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_mir_BorrowEdge(mir_BorrowEdge** ptr);
+__attribute__((hot)) mir_BorrowEdge*** core_alloc_alloc_mir_BorrowEdge_ptr(long long count);
+__attribute__((hot)) mir_BorrowEdge*** core_alloc_resize_mir_BorrowEdge_ptr(mir_BorrowEdge*** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_mir_BorrowEdge_ptr(mir_BorrowEdge*** ptr);
+__attribute__((hot)) core_map_MapNode_str_mir_BorrowEdge** core_alloc_alloc_core_map_MapNode_str_mir_BorrowEdge(long long count);
+__attribute__((hot)) void core_alloc_dealloc_core_map_MapNode_str_mir_BorrowEdge(core_map_MapNode_str_mir_BorrowEdge** ptr);
+
 typedef MirFunction mir_MirFunction;
 struct core_vec_Vec_mir_MirFunction { mir_MirFunction** data; long long len; long long capacity; };
 typedef struct core_vec_Vec_mir_MirFunction core_vec_Vec_mir_MirFunction;
@@ -3649,6 +3957,54 @@ __attribute__((hot)) codegen_llvm_LlvmGenerator*** core_alloc_resize_codegen_llv
 __attribute__((hot)) void core_alloc_dealloc_codegen_llvm_LlvmGenerator_ptr(codegen_llvm_LlvmGenerator*** ptr);
 __attribute__((hot)) core_map_MapNode_str_codegen_llvm_LlvmGenerator** core_alloc_alloc_core_map_MapNode_str_codegen_llvm_LlvmGenerator(long long count);
 __attribute__((hot)) void core_alloc_dealloc_core_map_MapNode_str_codegen_llvm_LlvmGenerator(core_map_MapNode_str_codegen_llvm_LlvmGenerator** ptr);
+
+typedef MacroVal macros_MacroVal;
+struct core_vec_Vec_macros_MacroVal { macros_MacroVal* data; long long len; long long capacity; };
+typedef struct core_vec_Vec_macros_MacroVal core_vec_Vec_macros_MacroVal;
+struct core_vec_Vec_macros_MacroVal_ptr { macros_MacroVal** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_macros_MacroVal_ptr core_vec_Vec_macros_MacroVal_ptr;
+__attribute__((hot)) macros_MacroVal* core_alloc_alloc_macros_MacroVal(long long count);
+__attribute__((hot)) macros_MacroVal* core_alloc_resize_macros_MacroVal(macros_MacroVal* ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_macros_MacroVal(macros_MacroVal* ptr);
+__attribute__((hot)) macros_MacroVal** core_alloc_alloc_macros_MacroVal_ptr(long long count);
+__attribute__((hot)) macros_MacroVal** core_alloc_resize_macros_MacroVal_ptr(macros_MacroVal** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_macros_MacroVal_ptr(macros_MacroVal** ptr);
+
+typedef MacroCtx macros_MacroCtx;
+struct core_vec_Vec_macros_MacroCtx { macros_MacroCtx** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_macros_MacroCtx core_vec_Vec_macros_MacroCtx;
+struct core_vec_Vec_macros_MacroCtx_ptr { macros_MacroCtx*** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_macros_MacroCtx_ptr core_vec_Vec_macros_MacroCtx_ptr;
+struct core_map_MapNode_str_macros_MacroCtx { char* key; macros_MacroCtx* value; struct core_map_MapNode_str_macros_MacroCtx* next; };
+typedef struct core_map_MapNode_str_macros_MacroCtx core_map_MapNode_str_macros_MacroCtx;
+struct core_map_Map_str_macros_MacroCtx { core_map_MapNode_str_macros_MacroCtx** buckets; long long capacity; long long len; };
+typedef struct core_map_Map_str_macros_MacroCtx core_map_Map_str_macros_MacroCtx;
+__attribute__((hot)) macros_MacroCtx** core_alloc_alloc_macros_MacroCtx(long long count);
+__attribute__((hot)) macros_MacroCtx** core_alloc_resize_macros_MacroCtx(macros_MacroCtx** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_macros_MacroCtx(macros_MacroCtx** ptr);
+__attribute__((hot)) macros_MacroCtx*** core_alloc_alloc_macros_MacroCtx_ptr(long long count);
+__attribute__((hot)) macros_MacroCtx*** core_alloc_resize_macros_MacroCtx_ptr(macros_MacroCtx*** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_macros_MacroCtx_ptr(macros_MacroCtx*** ptr);
+__attribute__((hot)) core_map_MapNode_str_macros_MacroCtx** core_alloc_alloc_core_map_MapNode_str_macros_MacroCtx(long long count);
+__attribute__((hot)) void core_alloc_dealloc_core_map_MapNode_str_macros_MacroCtx(core_map_MapNode_str_macros_MacroCtx** ptr);
+
+typedef FnMacroExpander macros_FnMacroExpander;
+struct core_vec_Vec_macros_FnMacroExpander { macros_FnMacroExpander** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_macros_FnMacroExpander core_vec_Vec_macros_FnMacroExpander;
+struct core_vec_Vec_macros_FnMacroExpander_ptr { macros_FnMacroExpander*** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_macros_FnMacroExpander_ptr core_vec_Vec_macros_FnMacroExpander_ptr;
+struct core_map_MapNode_str_macros_FnMacroExpander { char* key; macros_FnMacroExpander* value; struct core_map_MapNode_str_macros_FnMacroExpander* next; };
+typedef struct core_map_MapNode_str_macros_FnMacroExpander core_map_MapNode_str_macros_FnMacroExpander;
+struct core_map_Map_str_macros_FnMacroExpander { core_map_MapNode_str_macros_FnMacroExpander** buckets; long long capacity; long long len; };
+typedef struct core_map_Map_str_macros_FnMacroExpander core_map_Map_str_macros_FnMacroExpander;
+__attribute__((hot)) macros_FnMacroExpander** core_alloc_alloc_macros_FnMacroExpander(long long count);
+__attribute__((hot)) macros_FnMacroExpander** core_alloc_resize_macros_FnMacroExpander(macros_FnMacroExpander** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_macros_FnMacroExpander(macros_FnMacroExpander** ptr);
+__attribute__((hot)) macros_FnMacroExpander*** core_alloc_alloc_macros_FnMacroExpander_ptr(long long count);
+__attribute__((hot)) macros_FnMacroExpander*** core_alloc_resize_macros_FnMacroExpander_ptr(macros_FnMacroExpander*** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_macros_FnMacroExpander_ptr(macros_FnMacroExpander*** ptr);
+__attribute__((hot)) core_map_MapNode_str_macros_FnMacroExpander** core_alloc_alloc_core_map_MapNode_str_macros_FnMacroExpander(long long count);
+__attribute__((hot)) void core_alloc_dealloc_core_map_MapNode_str_macros_FnMacroExpander(core_map_MapNode_str_macros_FnMacroExpander** ptr);
 
 /* Primitive vec/map types for core modules */
 struct core_vec_Vec_str { char** data; long long len; long long capacity; };

@@ -1,0 +1,34 @@
+# Validates @value_type Date/Time/DateTime/TimeDelta: construct, read fields,
+# call methods, store in a list (inline value storage), pass by value.
+from std.sys.datetime import Date, Time, DateTime, TimeDelta
+
+def show(d: Date) -> int:          # by-value param
+    return d.year + d.month + d.day
+
+def main():
+    mut d = Date.init(2026, 6, 26)
+    print(d.year)
+    print(d.month)
+    print(d.day)
+    print(show(d))                 # pass by value
+
+    mut t = Time.init(14, 30, 45)
+    print(t.hour + t.minute + t.second)
+
+    mut dt = DateTime.init(2026, 6, 26, 14, 30, 45)
+    print(dt.year + dt.hour)
+
+    mut td = TimeDelta.init(2, 3600)
+    print(td.days)
+
+    # store value types inline in a list
+    mut dates: List[Date] = []
+    mut i = 0
+    while i < 3:
+        dates.append(Date.init(2026, i + 1, 15))
+        i = i + 1
+    mut total = 0
+    for x in dates:
+        total = total + x.month
+    print(total)
+    print("value datetime ok")

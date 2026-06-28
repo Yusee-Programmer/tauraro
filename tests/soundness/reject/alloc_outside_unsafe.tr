@@ -1,0 +1,7 @@
+# EXPECT: [U-1]
+# Raw allocation must live inside an `unsafe:` block. Under --strict, calling
+# alloc[T] in safe code is a hard error (the compiler refuses to hand out
+# unmanaged memory without an explicit unsafe acknowledgement).
+def main():
+    mut p = alloc[int](4)
+    print(1)

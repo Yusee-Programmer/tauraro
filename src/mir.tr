@@ -88,6 +88,11 @@ pub class BorrowEdge:
     pub source:   str
     pub decl_block: int   # the block where the borrow is created (for per-point checks)
     pub is_exclusive: bool # a `mut x: ref T` (exclusive/mutable borrow) vs `x: ref T` (shared/read-only)
+    pub via_collection: bool # borrows a COLLECTION ELEMENT (`ref T = coll.get(k)` / `coll[i]`):
+                             # eliding the retain is sound only if `source` is also never
+                             # MUTATED while the borrower is live (a mutation can free the
+                             # element). compute_borrow_outlives proves liveness; the extra
+                             # mutation-freedom proof lives in mir_proven_borrows.
 
 pub class MirFunction:
     pub name:   str
@@ -144,6 +149,17 @@ extend MirBuilder:
         e.source   = source
         e.decl_block = self.cur
         e.is_exclusive = exclusive
+        e.via_collection = false
+        self.borrows.push(e)
+
+    # As record_borrow, but for a COLLECTION-ELEMENT borrow (`ref T = coll.get(k)`).
+    pub def record_coll_borrow(self, borrower: str, source: str, exclusive: bool):
+        mut e = BorrowEdge()
+        e.borrower = borrower
+        e.source   = source
+        e.decl_block = self.cur
+        e.is_exclusive = exclusive
+        e.via_collection = true
         self.borrows.push(e)
 
     # Create a fresh block, return its id.
@@ -207,6 +223,20 @@ def lower_stmts(b: MirBuilder, hb: HirBlock):
                         case _: pass
                     match val.read():
                         case HirExpr.EIdent(src_nm, _, _): b.record_borrow(nm, src_nm, _slet_mut or slet_ty.is_mut_borrow)
+                        case HirExpr.EMethodCall(mobj, mmethod, _, _):
+                            # `ref T = coll.get(k)` / `.get_or(...)` borrows the
+                            # collection's VALUE. Record a collection-element edge so
+                            # the retain can be elided when the collection is provably
+                            # not mutated while the borrow is live.
+                            if mmethod == "get" or mmethod == "get_or":
+                                match mobj.read():
+                                    case HirExpr.EIdent(cnm, _, _): b.record_coll_borrow(nm, cnm, _slet_mut or slet_ty.is_mut_borrow)
+                                    case _: pass
+                        case HirExpr.EIndex(iobj, _, _):
+                            # `ref T = coll[i]` borrows the indexed element.
+                            match iobj.read():
+                                case HirExpr.EIdent(cnm2, _, _): b.record_coll_borrow(nm, cnm2, _slet_mut or slet_ty.is_mut_borrow)
+                                case _: pass
                         case _: pass
             case HirStmt.SAssign(tgt, val):
                 # Record the place when the target is a simple local, so liveness
@@ -389,7 +419,7 @@ def lower_stmts(b: MirBuilder, hb: HirBlock):
             case HirStmt.SAutoDrop(_, _):
                 pass    # sema's own drop; the MIR recomputes drops, so ignore it
                         # here (and avoid double-drop when MIR drives codegen)
-            case HirStmt.SBreak:
+            case HirStmt.SBreak(_):
                 # `break` jumps to the innermost loop's exit block — a real CFG
                 # edge, so liveness/ownership see locals declared before the break
                 # as dead on this path and drop them correctly. Modelling it (vs
@@ -1083,7 +1113,37 @@ pub def mir_proven_borrows(hf: HirFunction) -> Vec[str]:
         # PROVEN includes BOTH within-fn per-point edges (decl_block>=0) AND cross-fn
         # edges (decl_block==-1, from a `-> ref` call) whose source provably outlives
         # the borrower by cross-block liveness. Both are sound to elide.
-        if outl.get(i):
+        mut proven = outl.get(i)
+        # Collection-element borrow (`ref T = coll.get(k)` / `coll[i]`): eliding the
+        # retain is sound ONLY if the source collection is not touched anywhere the
+        # borrower is still live — any read/write/pass could mutate it and free the
+        # borrowed element. Conservative (sound): if the source appears in ANY later
+        # live statement (other than the borrow's own creation), keep the retain.
+        if proven and edge.via_collection:
+            mut bn = 0
+            while bn < mf.blocks.len:
+                mut blk = mf.blocks.get(bn)
+                mut lo = live.get(bn)
+                mut si = 0
+                while si < blk.stmts.len:
+                    mut is_creation = false
+                    match blk.stmts.get(si).read():
+                        case MirStmt.MDeclare(dn, _):
+                            if dn == edge.borrower: is_creation = true
+                        case _: pass
+                    if not is_creation:
+                        mut uses = Vec[str].init(4)
+                        match blk.stmts.get(si).read():
+                            case MirStmt.MDeclare(_, val): collect_uses(val, uses)
+                            case MirStmt.MAssign(ap, val):
+                                collect_uses(val, uses)
+                                if ap == edge.source: set_add(uses, edge.source)
+                            case MirStmt.MEval(val): collect_uses(val, uses)
+                        if set_contains(uses, edge.source) and borrower_live_after(blk, si, edge.borrower, lo):
+                            proven = false
+                    si = si + 1
+                bn = bn + 1
+        if proven:
             out.push(edge.borrower)
         i = i + 1
     return out

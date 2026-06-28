@@ -1,0 +1,7 @@
+# EXPECT: pass
+# Many shared `ref` borrows of the same place coexist (read-only aliasing).
+def main():
+    mut x = 5
+    a: ref int = x
+    b: ref int = x
+    print(a + b)

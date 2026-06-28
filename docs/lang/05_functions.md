@@ -413,6 +413,15 @@ accumulate(10)
 print(total)    # 15 — outer variable was modified
 ```
 
+> **Build requirement (GCC).** Capture-by-reference closures compile to GCC
+> *nested functions*, a GCC extension. Programs that use closures therefore need
+> **GCC** (not Clang) as the C backend. On Linux that is the default; on macOS,
+> install GCC (e.g. `brew install gcc`) and build with it, since the system `cc`
+> is Clang and rejects nested functions. Programs that don't use closures build
+> fine on either compiler. (A portable closure representation — top-level
+> function + heap-allocated capture environment — is planned; until then, GCC is
+> required for closures.)
+
 **Stateful counter:**
 ```python
 def make_counter() -> lambda:

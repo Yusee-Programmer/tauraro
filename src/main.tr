@@ -15,6 +15,7 @@ from fmt import Formatter
 from codegen.c import CGenerator
 from codegen.llvm import LlvmGenerator
 from mir import lower_program, dump_mir
+from macros import expand_macros
 
 extern "C":
     def _tr_is_windows() -> bool
@@ -775,6 +776,7 @@ pub def main(args: Vec[str]):
     mut sysroot     = ""                 # --sysroot <path>: explicit sysroot
     mut debug_mode  = false              # --debug         : ASAN + assertions
     mut strict_mode = false              # --strict        : alloc outside unsafe -> hard error
+    mut no_elide    = false              # --no-elide      : disable zero-copy borrow elision -> pure ARC (differential-soundness oracle)
     mut lib_mode    = false              # --lib           : build a shared library (.so/.dll) of `export def`s + a header
 
     # `tauraroc lint <file>` runs resolution + semantic analysis and reports
@@ -828,6 +830,8 @@ pub def main(args: Vec[str]):
             debug_mode = true
         elif arg == "--strict":
             strict_mode = true
+        elif arg == "--no-elide":
+            no_elide = true
         elif arg == "--lib":
             lib_mode = true
         elif not str_starts_with(arg, "-"):
@@ -874,6 +878,15 @@ pub def main(args: Vec[str]):
     # Parser errors are fatal: a malformed parse cannot be safely compiled.
     if resolver.parse_errors > 0:
         print(c_red("error") + ": " + resolver.parse_errors.to_str() + " parse error(s); aborting compilation.")
+        _tr_exit(1)
+
+    # Compile-time macro expansion: run `macro def`s over their `@`-decorated
+    # targets, splice the generated decls into the program, and drop the macro
+    # defs — all BEFORE sema, so generated code is type/borrow-checked normally
+    # and macro bodies (which use the `item` reflection) never reach sema.
+    mut macro_errs = expand_macros(prog)
+    if macro_errs > 0:
+        print(c_red("error") + ": " + macro_errs.to_str() + " macro error(s); aborting compilation.")
         _tr_exit(1)
 
     if emit_mode == "ast":
@@ -925,6 +938,10 @@ pub def main(args: Vec[str]):
     # --debug: emit `#line N "src.tr"` directives so GCC/GDB diagnostics and
     # backtraces map generated C back to the original Tauraro source.
     c_gen.emit_line_info = debug_mode
+    # --no-elide: force pure ARC (no zero-copy borrow elision). Used by the
+    # differential-soundness oracle: an elided build and a --no-elide build must
+    # produce identical observable output; any divergence is an unsound elision.
+    c_gen.no_elide = no_elide
     mut rt_h   = read_runtime_header(args.get(0), input_path)
 
     c_gen.register_program(hir)

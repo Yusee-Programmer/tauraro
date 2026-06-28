@@ -1,0 +1,740 @@
+# src/macros.tr — compile-time macro expansion for `macro def` + `@`-application.
+#
+# A `macro def name(item) -> code:` is a COMPILE-TIME function: it receives a
+# read-only reflection of the declaration it is attached to (`item`) and RETURNS
+# Tauraro source (built with f-strings), which the compiler parses and splices in.
+# Macros run BETWEEN parse and sema (expand_macros), so the generated code is
+# type- and borrow-checked like everything else, and macro bodies never reach sema.
+#
+# Design: brutally simple. No token streams, no AST building, no hygiene. The
+# macro body is interpreted by a tiny evaluator over a restricted subset (mut
+# locals, `for x in item.<list>`, if/elif/else, string `+`, f-strings, attribute
+# access, `macro_error(msg)`, `return <code>`). Macros are ADDITIVE — they emit
+# new top-level decls and never rewrite the original body.
+
+from ast import Program, Decl, FunctionDef, ClassDef, EnumDef, InterfaceDef, FieldDef, VariantDef, Param, Expr, Stmt, Block, FStringPart, AstType, Decorator, ElifClause, MatchArm, CatchClause
+from lexer import Lexer
+from parser import Parser
+from fmt import Formatter
+from core.vec import Vec
+from core.map import Map
+
+# ── Compile-time value ────────────────────────────────────────────────────────
+pub enum MacroVal:
+    MStr(s: str)
+    MInt(n: int)
+    MBool(b: bool)
+    MList(items: Vec[Pointer[MacroVal]])
+    MRec(keys: Vec[str], vals: Vec[Pointer[MacroVal]])
+    MNil
+
+pub def box_mv(v: MacroVal) -> Pointer[MacroVal]:
+    unsafe:
+        mut p = alloc[MacroVal](1)
+        p.write(v)
+        return p
+
+pub def mrec(keys: Vec[str], vals: Vec[Pointer[MacroVal]]) -> Pointer[MacroVal]:
+    return box_mv(MacroVal.MRec(keys, vals))
+
+# Look up a field of a record value; returns MNil if absent / not a record.
+pub def mrec_get(recptr: Pointer[MacroVal], key: str) -> Pointer[MacroVal]:
+    if recptr as usize == 0 as usize: return box_mv(MacroVal.MNil)
+    match recptr.read():
+        case MacroVal.MRec(keys, vals):
+            mut i = 0
+            while i < keys.len:
+                if keys.get(i) == key: return vals.get(i)
+                i = i + 1
+        case _: pass
+    return box_mv(MacroVal.MNil)
+
+pub def mv_to_str(vptr: Pointer[MacroVal]) -> str:
+    if vptr as usize == 0 as usize: return ""
+    match vptr.read():
+        case MacroVal.MStr(s): return s
+        case MacroVal.MInt(n): return n.to_str()
+        case MacroVal.MBool(b):
+            if b: return "true"
+            return "false"
+        # A function-like macro ARGUMENT is a record {src, kind}; it stringifies
+        # to its source text, so `s + arg` and `for a in args: … + a` keep working
+        # exactly as when args were plain strings (backward compatible).
+        case MacroVal.MRec(_, _): return mv_to_str(mrec_get(vptr, "src"))
+        case _: return ""
+
+pub def mv_truthy(vptr: Pointer[MacroVal]) -> bool:
+    if vptr as usize == 0 as usize: return false
+    match vptr.read():
+        case MacroVal.MBool(b): return b
+        case MacroVal.MInt(n): return n != 0
+        case MacroVal.MStr(s): return s != ""
+        case _: return false
+
+# Macro comparisons are between same-kind values (e.g. `item.kind == "class"`,
+# `f.name == "x"`), so comparing rendered strings is correct and avoids a nested
+# match. (A cross-kind compare like MInt(1)==MStr("1") never arises in practice.)
+pub def mv_eq(a: Pointer[MacroVal], b: Pointer[MacroVal]) -> bool:
+    return mv_to_str(a) == mv_to_str(b)
+
+# ── Type rendering (AstType -> source string for splicing) ─────────────────────
+pub def render_type(typtr: Pointer[AstType]) -> str:
+    if typtr as usize == 0 as usize: return "void"
+    mut t = typtr.read()
+    mut base = t.name
+    if t.args.len > 0:
+        mut s = base + "["
+        mut i = 0
+        while i < t.args.len:
+            if i > 0: s = s + ", "
+            s = s + render_type(t.args.get(i))
+            i = i + 1
+        base = s + "]"
+    if t.is_mut_borrow: return "mut ref " + base
+    if t.is_borrow: return "ref " + base
+    return base
+
+# ── `item` reflection: build the compile-time record for a declaration ─────────
+def str_list(items: Vec[str]) -> Pointer[MacroVal]:
+    mut l = Vec[Pointer[MacroVal]].init(items.len)
+    mut i = 0
+    while i < items.len:
+        l.push(box_mv(MacroVal.MStr(items.get(i))))
+        i = i + 1
+    return box_mv(MacroVal.MList(l))
+
+def param_rec(p: Param) -> Pointer[MacroVal]:
+    mut ks = Vec[str].init(5)
+    mut vs = Vec[Pointer[MacroVal]].init(5)
+    ks.push("name");        vs.push(box_mv(MacroVal.MStr(p.name)))
+    ks.push("type");        vs.push(box_mv(MacroVal.MStr(render_type(p.ty))))
+    ks.push("is_ref");      vs.push(box_mv(MacroVal.MBool(p.is_ref)))
+    ks.push("is_mut");      vs.push(box_mv(MacroVal.MBool(p.is_mut_ref)))
+    ks.push("is_variadic"); vs.push(box_mv(MacroVal.MBool(p.is_variadic)))
+    return mrec(ks, vs)
+
+def params_list(ps: Vec[Param]) -> Pointer[MacroVal]:
+    mut l = Vec[Pointer[MacroVal]].init(ps.len)
+    mut i = 0
+    while i < ps.len:
+        l.push(param_rec(ps.get(i)))
+        i = i + 1
+    return box_mv(MacroVal.MList(l))
+
+def fn_rec(f: FunctionDef) -> Pointer[MacroVal]:
+    mut ks = Vec[str].init(10)
+    mut vs = Vec[Pointer[MacroVal]].init(10)
+    mut arglist = ""
+    mut ai = 0
+    while ai < f.params.len:
+        if ai > 0:
+            arglist = arglist + ", "
+        arglist = arglist + f.params.get(ai).name
+        ai = ai + 1
+    mut thr = ""
+    if f.throws_ty as usize != 0 as usize:
+        thr = render_type(f.throws_ty)
+    ks.push("kind");     vs.push(box_mv(MacroVal.MStr("fn")))
+    ks.push("name");     vs.push(box_mv(MacroVal.MStr(f.name)))
+    ks.push("params");   vs.push(params_list(f.params))
+    ks.push("ret");      vs.push(box_mv(MacroVal.MStr(render_type(f.ret_ty))))
+    ks.push("arglist");  vs.push(box_mv(MacroVal.MStr(arglist)))
+    ks.push("is_pub");   vs.push(box_mv(MacroVal.MBool(f.is_public)))
+    ks.push("is_async"); vs.push(box_mv(MacroVal.MBool(f.is_async)))
+    ks.push("throws");   vs.push(box_mv(MacroVal.MStr(thr)))
+    ks.push("generics"); vs.push(str_list(f.generics))
+    return mrec(ks, vs)
+
+def method_list(ms: Vec[FunctionDef]) -> Pointer[MacroVal]:
+    mut l = Vec[Pointer[MacroVal]].init(ms.len)
+    mut i = 0
+    while i < ms.len:
+        l.push(fn_rec(ms.get(i)))
+        i = i + 1
+    return box_mv(MacroVal.MList(l))
+
+pub def build_item(declptr: Pointer[Decl]) -> Pointer[MacroVal]:
+    if declptr as usize == 0 as usize: return box_mv(MacroVal.MNil)
+    match declptr.read():
+        case Decl.DClass(c):
+            mut ks = Vec[str].init(10)
+            mut vs = Vec[Pointer[MacroVal]].init(10)
+            # fields
+            mut fl = Vec[Pointer[MacroVal]].init(c.fields.len)
+            mut i = 0
+            while i < c.fields.len:
+                mut fd = c.fields.get(i)
+                mut fks = Vec[str].init(2)
+                mut fvs = Vec[Pointer[MacroVal]].init(2)
+                fks.push("name"); fvs.push(box_mv(MacroVal.MStr(fd.name)))
+                fks.push("type"); fvs.push(box_mv(MacroVal.MStr(render_type(fd.ty))))
+                fl.push(mrec(fks, fvs))
+                i = i + 1
+            ks.push("kind");          vs.push(box_mv(MacroVal.MStr("class")))
+            ks.push("name");          vs.push(box_mv(MacroVal.MStr(c.name)))
+            ks.push("fields");        vs.push(box_mv(MacroVal.MList(fl)))
+            ks.push("methods");       vs.push(method_list(c.methods))
+            ks.push("bases");         vs.push(str_list(c.base_classes))
+            ks.push("interfaces");    vs.push(str_list(c.iface_names))
+            ks.push("generics");      vs.push(str_list(c.generics))
+            ks.push("is_value_type"); vs.push(box_mv(MacroVal.MBool(not c.is_class)))
+            ks.push("is_pub");        vs.push(box_mv(MacroVal.MBool(c.is_public)))
+            return mrec(ks, vs)
+        case Decl.DFunction(f):
+            return fn_rec(f)
+        case Decl.DEnum(e):
+            mut ks2 = Vec[str].init(4)
+            mut vs2 = Vec[Pointer[MacroVal]].init(4)
+            mut vl = Vec[Pointer[MacroVal]].init(e.variants.len)
+            mut i2 = 0
+            while i2 < e.variants.len:
+                mut vd = e.variants.get(i2)
+                mut vks = Vec[str].init(2)
+                mut vvs = Vec[Pointer[MacroVal]].init(2)
+                mut tys = Vec[str].init(vd.fields.len)
+                mut j = 0
+                while j < vd.fields.len:
+                    tys.push(render_type(vd.fields.get(j).ty))
+                    j = j + 1
+                vks.push("name");   vvs.push(box_mv(MacroVal.MStr(vd.name)))
+                vks.push("fields"); vvs.push(str_list(tys))
+                vl.push(mrec(vks, vvs))
+                i2 = i2 + 1
+            ks2.push("kind");     vs2.push(box_mv(MacroVal.MStr("enum")))
+            ks2.push("name");     vs2.push(box_mv(MacroVal.MStr(e.name)))
+            ks2.push("variants"); vs2.push(box_mv(MacroVal.MList(vl)))
+            ks2.push("generics"); vs2.push(str_list(e.generics))
+            return mrec(ks2, vs2)
+        case Decl.DInterface(ifc):
+            mut ks3 = Vec[str].init(3)
+            mut vs3 = Vec[Pointer[MacroVal]].init(3)
+            ks3.push("kind");    vs3.push(box_mv(MacroVal.MStr("interface")))
+            ks3.push("name");    vs3.push(box_mv(MacroVal.MStr(ifc.name)))
+            ks3.push("methods"); vs3.push(method_list(ifc.methods))
+            return mrec(ks3, vs3)
+        case _: return box_mv(MacroVal.MNil)
+
+# ── Evaluator ──────────────────────────────────────────────────────────────────
+pub class MacroCtx:
+    pub env: Map[str, Pointer[MacroVal]]
+    pub returned: bool
+    pub result: str
+    pub has_error: bool
+    pub error_msg: str
+    pub gensym_ctr: int
+
+extend MacroCtx:
+    pub def init() -> MacroCtx:
+        mut c = MacroCtx()
+        c.env = Map[str, Pointer[MacroVal]].init(16)
+        c.returned = false
+        c.result = ""
+        c.has_error = false
+        c.error_msg = ""
+        c.gensym_ctr = 0
+        return c
+
+    pub def fail(self, msg: str):
+        if not self.has_error:
+            self.has_error = true
+            self.error_msg = msg
+
+    pub def eval_binop(self, op: str, lv: Pointer[MacroVal], rv: Pointer[MacroVal]) -> Pointer[MacroVal]:
+        if op == "+":
+            match lv.read():
+                case MacroVal.MInt(a):
+                    match rv.read():
+                        case MacroVal.MInt(b): return box_mv(MacroVal.MInt(a + b))
+                        case _: return box_mv(MacroVal.MStr(mv_to_str(lv) + mv_to_str(rv)))
+                case _: return box_mv(MacroVal.MStr(mv_to_str(lv) + mv_to_str(rv)))
+        if op == "==": return box_mv(MacroVal.MBool(mv_eq(lv, rv)))
+        if op == "!=": return box_mv(MacroVal.MBool(not mv_eq(lv, rv)))
+        if op == "and": return box_mv(MacroVal.MBool(mv_truthy(lv) and mv_truthy(rv)))
+        if op == "or": return box_mv(MacroVal.MBool(mv_truthy(lv) or mv_truthy(rv)))
+        match lv.read():
+            case MacroVal.MInt(a):
+                match rv.read():
+                    case MacroVal.MInt(b):
+                        if op == "<": return box_mv(MacroVal.MBool(a < b))
+                        if op == ">": return box_mv(MacroVal.MBool(a > b))
+                        if op == "<=": return box_mv(MacroVal.MBool(a <= b))
+                        if op == ">=": return box_mv(MacroVal.MBool(a >= b))
+                        if op == "-": return box_mv(MacroVal.MInt(a - b))
+                        if op == "*": return box_mv(MacroVal.MInt(a * b))
+                    case _: pass
+            case _: pass
+        self.fail("macro: unsupported operator '" + op + "' in macro body")
+        return box_mv(MacroVal.MNil)
+
+    pub def eval_mexpr(self, eptr: Pointer[Expr]) -> Pointer[MacroVal]:
+        if eptr as usize == 0 as usize: return box_mv(MacroVal.MNil)
+        match eptr.read():
+            case Expr.ELitStr(s): return box_mv(MacroVal.MStr(s))
+            case Expr.ERawStr(s): return box_mv(MacroVal.MStr(s))
+            case Expr.ELitInt(n): return box_mv(MacroVal.MInt(n))
+            case Expr.ELitBool(b): return box_mv(MacroVal.MBool(b))
+            case Expr.EIdent(name):
+                if self.env.contains(name): return self.env.get(name)
+                self.fail("macro: unknown name '" + name + "'")
+                return box_mv(MacroVal.MNil)
+            case Expr.EBinOp(op, l, r):
+                return self.eval_binop(op, self.eval_mexpr(l), self.eval_mexpr(r))
+            case Expr.EUnaryOp(op, x):
+                mut xv = self.eval_mexpr(x)
+                if op == "not": return box_mv(MacroVal.MBool(not mv_truthy(xv)))
+                if op == "-":
+                    match xv.read():
+                        case MacroVal.MInt(n): return box_mv(MacroVal.MInt(0 - n))
+                        case _: pass
+                self.fail("macro: unsupported unary operator '" + op + "' in macro body")
+                return box_mv(MacroVal.MNil)
+            case Expr.EFString(parts):
+                mut out = ""
+                mut i = 0
+                while i < parts.len:
+                    mut part = parts.get(i)
+                    if part.is_expr:
+                        out = out + mv_to_str(self.eval_mexpr(part.expr))
+                    else:
+                        out = out + part.text
+                    i = i + 1
+                return box_mv(MacroVal.MStr(out))
+            case Expr.EIndex(obj, idx):
+                mut ov = self.eval_mexpr(obj)
+                mut iv = self.eval_mexpr(idx)
+                match ov.read():
+                    case MacroVal.MList(items):
+                        match iv.read():
+                            case MacroVal.MInt(n):
+                                if n >= 0 and n < items.len: return items.get(n)
+                                self.fail("macro: list index out of range")
+                            case _: self.fail("macro: list index must be an int")
+                    case _: self.fail("macro: indexing requires a list")
+                return box_mv(MacroVal.MNil)
+            case Expr.EPropAccess(obj, prop):
+                return mrec_get(self.eval_mexpr(obj), prop)
+            case Expr.EMethodCall(obj, method, margs):
+                mut ov = self.eval_mexpr(obj)
+                if method == "len":
+                    match ov.read():
+                        case MacroVal.MList(items): return box_mv(MacroVal.MInt(items.len))
+                        case _: pass
+                    return box_mv(MacroVal.MInt(0))
+                if method == "to_str" or method == "to_string":
+                    return box_mv(MacroVal.MStr(mv_to_str(ov)))
+                self.fail("macro: unsupported method '" + method + "' in macro body")
+                return box_mv(MacroVal.MNil)
+            case Expr.ECall(callee, cargs):
+                match callee.read():
+                    case Expr.EIdent(cn):
+                        if cn == "macro_error":
+                            mut msg = "macro_error"
+                            if cargs.len > 0: msg = mv_to_str(self.eval_mexpr(cargs.get(0)))
+                            self.fail(msg)
+                            return box_mv(MacroVal.MNil)
+                        # gensym(["prefix"]) -> a unique identifier string, for
+                        # opt-in hygiene: name macro-introduced locals with it so
+                        # they can never collide with the caller's names.
+                        if cn == "gensym":
+                            self.gensym_ctr = self.gensym_ctr + 1
+                            mut pfx = "g"
+                            if cargs.len > 0: pfx = mv_to_str(self.eval_mexpr(cargs.get(0)))
+                            return box_mv(MacroVal.MStr("__hyg_" + pfx + "_" + self.gensym_ctr.to_str()))
+                        # str(x) -> stringify a macro value
+                        if cn == "str":
+                            if cargs.len > 0: return box_mv(MacroVal.MStr(mv_to_str(self.eval_mexpr(cargs.get(0)))))
+                            return box_mv(MacroVal.MStr(""))
+                    case _: pass
+                self.fail("macro: unsupported call in macro body")
+                return box_mv(MacroVal.MNil)
+            case Expr.EList(items):
+                mut l = Vec[Pointer[MacroVal]].init(items.len)
+                mut i2 = 0
+                while i2 < items.len:
+                    l.push(self.eval_mexpr(items.get(i2)))
+                    i2 = i2 + 1
+                return box_mv(MacroVal.MList(l))
+            case _:
+                self.fail("macro: unsupported expression in macro body")
+                return box_mv(MacroVal.MNil)
+
+    pub def eval_mblock(self, b: Block):
+        mut i = 0
+        while i < b.stmts.len:
+            if self.returned or self.has_error: return
+            self.eval_mstmt(b.stmts.get(i))
+            i = i + 1
+
+    pub def eval_mstmt(self, sptr: Pointer[Stmt]):
+        if sptr as usize == 0 as usize: return
+        match sptr.read():
+            case Stmt.SLet(name, _, _, _, _, _, val):
+                self.env.insert(name, self.eval_mexpr(val))
+            case Stmt.SAssign(target, val):
+                match target.read():
+                    case Expr.EIdent(nm): self.env.insert(nm, self.eval_mexpr(val))
+                    case _: self.fail("macro: assignment target must be a simple variable")
+            case Stmt.SReturn(val):
+                self.result = mv_to_str(self.eval_mexpr(val))
+                self.returned = true
+            case Stmt.SExpr(e):
+                mut _r = self.eval_mexpr(e)
+            case Stmt.SFor(var, iter, body, _, _):
+                mut iv = self.eval_mexpr(iter)
+                match iv.read():
+                    case MacroVal.MList(items):
+                        mut i = 0
+                        while i < items.len:
+                            if self.returned or self.has_error: return
+                            self.env.insert(var, items.get(i))
+                            self.eval_mblock(body)
+                            i = i + 1
+                    case _: self.fail("macro: 'for' needs a list (e.g. item.fields)")
+            case Stmt.SIf(cond, then_b, elifs, else_b):
+                if mv_truthy(self.eval_mexpr(cond)):
+                    self.eval_mblock(then_b)
+                else:
+                    mut done = false
+                    mut i = 0
+                    while i < elifs.len and not done:
+                        mut ec = elifs.get(i)
+                        if mv_truthy(self.eval_mexpr(ec.cond)):
+                            self.eval_mblock(ec.body.read())
+                            done = true
+                        i = i + 1
+                    if not done:
+                        self.eval_mblock(else_b)
+            case Stmt.SPass: pass
+            case Stmt.SLine(_): pass
+            case _:
+                self.fail("macro: unsupported statement in macro body")
+
+# ── Driver: register macros, run @-applications, splice generated decls ─────────
+def parse_into(src: str, gen: Vec[Pointer[Decl]]):
+    mut lx = Lexer.init(src)
+    mut toks = lx.tokenize()
+    mut ps = Parser.init(toks, lx.token_lines)
+    mut gp = ps.parse_program()
+    mut i = 0
+    while i < gp.decls.len:
+        gen.push(gp.decls.get(i))
+        i = i + 1
+
+def decl_decorators(declptr: Pointer[Decl]) -> Vec[Decorator]:
+    match declptr.read():
+        case Decl.DClass(c): return c.decorators
+        case Decl.DFunction(f): return f.decorators
+        case Decl.DEnum(e): return e.decorators
+        case Decl.DInterface(ifc): return ifc.decorators
+        case _: return Vec[Decorator].init(0)
+
+# ── Function-like macros: `name!(args)` expanded inline at the call site ────────
+#
+# A `macro def name(args) -> code:` invoked as `name!(a, b, …)` receives `args` as
+# a compile-time LIST of the call arguments' SOURCE TEXT (MStr), and returns the
+# source of an EXPRESSION (a `do:` block when it needs statements). That source is
+# parsed and substituted in place of the `name!(…)` node. The SAME macro registry
+# backs both forms: the `@name` form passes `item` (a declaration reflection); the
+# `name!` form passes `args` (the argument source list).
+
+# Render an argument expression back to source text for the macro to splice.
+def render_arg(e: Pointer[Expr]) -> str:
+    mut fm = Formatter.init(Vec[int].init(0), Vec[str].init(0), Vec[bool].init(0))
+    return fm.expr_str(e)
+
+# Parse a macro's returned source as a single expression.
+def parse_expr_src(src: str) -> Pointer[Expr]:
+    mut lx = Lexer.init(src)
+    mut toks = lx.tokenize()
+    mut ps = Parser.init(toks, lx.token_lines)
+    return ps.parse_expr()
+
+# Coarse syntactic kind of an argument expression, for macro introspection.
+def kind_of(e: Pointer[Expr]) -> str:
+    if e as usize == 0 as usize: return "nil"
+    match e.read():
+        case Expr.ELitInt(_): return "int"
+        case Expr.ELitFloat(_): return "float"
+        case Expr.ELitStr(_): return "str"
+        case Expr.ERawStr(_): return "str"
+        case Expr.ELitBool(_): return "bool"
+        case Expr.ELitChar(_): return "char"
+        case Expr.EIdent(_): return "ident"
+        case Expr.ECall(_, _): return "call"
+        case Expr.EMethodCall(_, _, _): return "call"
+        case Expr.EBinOp(_, _, _): return "binop"
+        case Expr.EUnaryOp(_, _): return "unop"
+        case Expr.EList(_): return "list"
+        case Expr.ETuple(_): return "tuple"
+        case Expr.EIndex(_, _): return "index"
+        case Expr.EPropAccess(_, _): return "field"
+        case Expr.EFString(_): return "fstring"
+        case _: return "expr"
+
+# One macro argument as a record {src, kind}: `arg.src` is its source text,
+# `arg.kind` its syntactic kind ("int"/"str"/"ident"/"call"/…). It stringifies
+# to `src`, so `for a in args: … + a` still concatenates source.
+def arg_rec(e: Pointer[Expr]) -> Pointer[MacroVal]:
+    mut ks = Vec[str].init(2)
+    mut vs = Vec[Pointer[MacroVal]].init(2)
+    ks.push("src");  vs.push(box_mv(MacroVal.MStr(render_arg(e))))
+    ks.push("kind"); vs.push(box_mv(MacroVal.MStr(kind_of(e))))
+    return mrec(ks, vs)
+
+# Run a function-like macro: env[param] = list of arg records. `gbase` seeds the
+# gensym counter so hygiene names are unique across the whole compilation.
+def run_fn_macro(mdef: FunctionDef, args: Vec[Pointer[Expr]], gbase: int) -> MacroCtx:
+    mut ctx = MacroCtx.init()
+    ctx.gensym_ctr = gbase
+    mut argvals = Vec[Pointer[MacroVal]].init(args.len)
+    mut i = 0
+    while i < args.len:
+        argvals.push(arg_rec(args.get(i)))
+        i = i + 1
+    if mdef.params.len > 0:
+        ctx.env.insert(mdef.params.get(0).name, box_mv(MacroVal.MList(argvals)))
+    ctx.eval_mblock(mdef.body)
+    return ctx
+
+# Walks declaration bodies and replaces every `name!(…)` (EMacroCall) IN PLACE
+# with its expansion (additive: positions not traversed simply keep the call,
+# which sema then reports as unexpanded). Recurses into the expansion so macros
+# may use other macros (bounded by `depth`).
+pub class FnMacroExpander:
+    pub macros: Map[str, FunctionDef]
+    pub errors: int
+    pub depth: int
+    pub gensym_base: int
+
+extend FnMacroExpander:
+    pub def init(m: Map[str, FunctionDef]) -> FnMacroExpander:
+        mut e = FnMacroExpander()
+        e.macros = m
+        e.errors = 0
+        e.depth = 0
+        e.gensym_base = 0
+        return e
+
+    pub def visit_expr(self, eptr: Pointer[Expr]):
+        if eptr as usize == 0 as usize: return
+        match eptr.read():
+            case Expr.EMacroCall(name, args):
+                mut i = 0
+                while i < args.len:
+                    self.visit_expr(args.get(i))
+                    i = i + 1
+                if not self.macros.contains(name):
+                    print("error: [MACRO] unknown function-like macro '" + name + "!'")
+                    self.errors = self.errors + 1
+                    return
+                mut ctx = run_fn_macro(self.macros.get(name), args, self.gensym_base)
+                self.gensym_base = ctx.gensym_ctr
+                if ctx.has_error:
+                    print("error: [MACRO] " + name + "!: " + ctx.error_msg)
+                    self.errors = self.errors + 1
+                    return
+                mut newe = parse_expr_src(ctx.result)
+                if newe as usize != 0 as usize:
+                    if self.depth < 64:
+                        self.depth = self.depth + 1
+                        self.visit_expr(newe)
+                        self.depth = self.depth - 1
+                    # Replace the `name!(…)` node in place with its expansion.
+                    unsafe:
+                        eptr.write(newe.read())
+            case Expr.EBinOp(_, l, r):
+                self.visit_expr(l)
+                self.visit_expr(r)
+            case Expr.EUnaryOp(_, x): self.visit_expr(x)
+            case Expr.ECall(callee, cargs):
+                self.visit_expr(callee)
+                mut i = 0
+                while i < cargs.len:
+                    self.visit_expr(cargs.get(i))
+                    i = i + 1
+            case Expr.EMethodCall(obj, _, margs):
+                self.visit_expr(obj)
+                mut i = 0
+                while i < margs.len:
+                    self.visit_expr(margs.get(i))
+                    i = i + 1
+            case Expr.EPropAccess(obj, _): self.visit_expr(obj)
+            case Expr.EIndex(obj, idx):
+                self.visit_expr(obj)
+                self.visit_expr(idx)
+            case Expr.ECast(x, _): self.visit_expr(x)
+            case Expr.ETryExpr(x): self.visit_expr(x)
+            case Expr.EIfElse(c, t, e2):
+                self.visit_expr(c)
+                self.visit_expr(t)
+                self.visit_expr(e2)
+            case Expr.EList(items):
+                mut i = 0
+                while i < items.len:
+                    self.visit_expr(items.get(i))
+                    i = i + 1
+            case Expr.ETuple(items):
+                mut i = 0
+                while i < items.len:
+                    self.visit_expr(items.get(i))
+                    i = i + 1
+            case Expr.EFString(parts):
+                mut i = 0
+                while i < parts.len:
+                    mut p = parts.get(i)
+                    if p.is_expr: self.visit_expr(p.expr)
+                    i = i + 1
+            case Expr.EDo(body): self.visit_block(body)
+            case Expr.ELoop(body): self.visit_block(body)
+            case Expr.EWhileExpr(c, body, eb):
+                self.visit_expr(c)
+                self.visit_block(body)
+                self.visit_block(eb)
+            case Expr.EMatch(subj, arms):
+                self.visit_expr(subj)
+                mut i = 0
+                while i < arms.len:
+                    self.visit_block(arms.get(i).body.read())
+                    i = i + 1
+            case _: pass
+
+    pub def visit_block(self, b: Block):
+        mut i = 0
+        while i < b.stmts.len:
+            self.visit_stmt(b.stmts.get(i))
+            i = i + 1
+
+    pub def visit_stmt(self, sptr: Pointer[Stmt]):
+        if sptr as usize == 0 as usize: return
+        match sptr.read():
+            case Stmt.SExpr(e): self.visit_expr(e)
+            case Stmt.SLet(_, _, _, _, _, _, v): self.visit_expr(v)
+            case Stmt.SMultiLet(_, _, v): self.visit_expr(v)
+            case Stmt.SAssign(t, v):
+                self.visit_expr(t)
+                self.visit_expr(v)
+            case Stmt.SReturn(v): self.visit_expr(v)
+            case Stmt.SBreak(v): self.visit_expr(v)
+            case Stmt.SRaise(v): self.visit_expr(v)
+            case Stmt.SSpawn(v): self.visit_expr(v)
+            case Stmt.SAssert(c, m):
+                self.visit_expr(c)
+                self.visit_expr(m)
+            case Stmt.SIf(c, tb, elifs, eb):
+                self.visit_expr(c)
+                self.visit_block(tb)
+                mut i = 0
+                while i < elifs.len:
+                    mut ec = elifs.get(i)
+                    self.visit_expr(ec.cond)
+                    self.visit_block(ec.body.read())
+                    i = i + 1
+                self.visit_block(eb)
+            case Stmt.SWhile(c, b, _):
+                self.visit_expr(c)
+                self.visit_block(b)
+            case Stmt.SFor(_, it, b, _, _):
+                self.visit_expr(it)
+                self.visit_block(b)
+            case Stmt.SForUnpack(_, it, b):
+                self.visit_expr(it)
+                self.visit_block(b)
+            case Stmt.SMatch(subj, arms):
+                self.visit_expr(subj)
+                mut i = 0
+                while i < arms.len:
+                    self.visit_block(arms.get(i).body.read())
+                    i = i + 1
+            case Stmt.SWith(items, _, b):
+                mut i = 0
+                while i < items.len:
+                    self.visit_expr(items.get(i))
+                    i = i + 1
+                self.visit_block(b)
+            case Stmt.STry(tb, catches, fb):
+                self.visit_block(tb)
+                self.visit_block(fb)
+                mut i = 0
+                while i < catches.len:
+                    self.visit_block(catches.get(i).read().body.read())
+                    i = i + 1
+            case Stmt.SUnsafe(b): self.visit_block(b)
+            case Stmt.STaskGroup(b): self.visit_block(b)
+            case Stmt.SGpuBlock(b): self.visit_block(b)
+            case Stmt.SDefer(s): self.visit_stmt(s)
+            case _: pass
+
+    pub def expand_decl(self, dptr: Pointer[Decl]):
+        match dptr.read():
+            case Decl.DFunction(f): self.visit_block(f.body)
+            case Decl.DClass(c):
+                mut i = 0
+                while i < c.methods.len:
+                    self.visit_block(c.methods.get(i).body)
+                    i = i + 1
+            case _: pass
+
+# Returns number of macro errors encountered (caller aborts if > 0).
+pub def expand_macros(prog: Program) -> int:
+    # 1. collect macro registry
+    mut macros = Map[str, FunctionDef].init(16)
+    mut nmac = 0
+    mut i = 0
+    while i < prog.decls.len:
+        match prog.decls.get(i).read():
+            case Decl.DDecoratorDef(f):
+                if f.is_macro:
+                    macros.insert(f.name, f)
+                    nmac = nmac + 1
+            case _: pass
+        i = i + 1
+    if nmac == 0: return 0
+
+    mut errors = 0
+    mut gbase = 0   # shared gensym counter across @- and !-form expansions
+    mut out = Vec[Pointer[Decl]].init(prog.decls.len)
+    mut gen = Vec[Pointer[Decl]].init(8)
+    i = 0
+    while i < prog.decls.len:
+        mut dptr = prog.decls.get(i)
+        mut is_macro_def = false
+        match dptr.read():
+            case Decl.DDecoratorDef(f):
+                if f.is_macro: is_macro_def = true
+            case _: pass
+        if not is_macro_def:
+            mut decs = decl_decorators(dptr)
+            mut di = 0
+            while di < decs.len:
+                mut dname = decs.get(di).name
+                if macros.contains(dname):
+                    mut ctx = MacroCtx.init()
+                    ctx.gensym_ctr = gbase
+                    mut mdef = macros.get(dname)
+                    if mdef.params.len > 0:
+                        ctx.env.insert(mdef.params.get(0).name, build_item(dptr))
+                    ctx.eval_mblock(mdef.body)
+                    gbase = ctx.gensym_ctr
+                    if ctx.has_error:
+                        print("error: [MACRO] @" + dname + ": " + ctx.error_msg)
+                        errors = errors + 1
+                    else:
+                        parse_into(ctx.result, gen)
+                di = di + 1
+            out.push(dptr)
+        i = i + 1
+    mut gi = 0
+    while gi < gen.len:
+        out.push(gen.get(gi))
+        gi = gi + 1
+    # Function-like `name!(…)` expansion over the final decl set (original +
+    # macro-generated). Runs after `@` expansion so generated bodies are covered.
+    mut fexp = FnMacroExpander.init(macros)
+    fexp.gensym_base = gbase
+    mut fi = 0
+    while fi < out.len:
+        fexp.expand_decl(out.get(fi))
+        fi = fi + 1
+    errors = errors + fexp.errors
+    prog.decls = out
+    return errors

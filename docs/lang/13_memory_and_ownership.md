@@ -715,4 +715,13 @@ spawn_task(cfg)     # another task, another clone of the shared reference
 
 ---
 
+> **The full picture.** This chapter describes the always-on ARC floor that makes
+> every program memory-safe by default. For the *normative* statement of what
+> Tauraro guarantees — the ARC-floor invariants, what `--strict` proves and
+> elides, the zero-copy soundness theorem, and exactly how each guarantee is
+> verified (soundness corpus, differential oracle, sanitizers) — see
+> [Advanced: Safety Specification](../advanced/09_safety_spec.md).
+
+---
+
 Next: [Unsafe & Pointers →](14_unsafe_and_pointers.md)

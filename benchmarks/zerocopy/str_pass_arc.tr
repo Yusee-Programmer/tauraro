@@ -1,0 +1,22 @@
+from std.sys.time import Clock
+extern "C":
+    def _tr_int_to_str(n: int) -> str
+    def _tr_mem_live() -> int
+    def _tr_mem_live_strs() -> int
+
+def work(s: str, i: int) -> int:
+    return s.index_of("omega") + (i % 2)
+
+def main():
+    mut base = "alpha beta gamma delta epsilon zeta eta omega" + _tr_int_to_str(0)
+    mut clock = Clock.init()
+    mut total = 0
+    mut i = 0
+    while i < 5000000:
+        total = total + work(base, i)
+        i = i + 1
+    mut ms = clock.elapsed_ms()
+    print(total)
+    print("TIME_MS:" + _tr_int_to_str(ms))
+    print("ALLOCS:" + _tr_int_to_str(_tr_mem_live()))
+    print("STRS:" + _tr_int_to_str(_tr_mem_live_strs()))

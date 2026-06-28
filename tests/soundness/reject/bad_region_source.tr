@@ -1,0 +1,9 @@
+# EXPECT: [L-2]
+# A borrow-returning function's `from <region>` must name an actual parameter (or
+# a region parameter of the enclosing type). Naming an undeclared region is a
+# lifetime error under --strict — the compiler cannot prove what the borrow
+# outlives.
+def grab(s: ref str) -> ref str from bogus:
+    return s
+def main():
+    print(1)

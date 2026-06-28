@@ -625,6 +625,7 @@ extend Str:
 # NOT own or copy the bytes. Creating/slicing a view is allocation-free; only
 # `.to_str()` materializes an owned copy. The view is valid only while its source
 # string is alive (the borrow checker can enforce this for `from`-region views).
+@value_type
 pub class StrView:
     pub data: Pointer[char]   # borrowed — points into the source's buffer
     pub len:  int

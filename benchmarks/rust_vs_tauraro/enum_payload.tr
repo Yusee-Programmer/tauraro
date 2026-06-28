@@ -1,0 +1,23 @@
+from std.sys.time import Clock
+from std.string.str import Str
+extern "C":
+    def _tr_int_to_str(n: int) -> str
+
+enum Token from src:
+    Word(ref str from src)
+    End
+
+def main():
+    mut src = "the quick brown fox jumps over the lazy dog while the sun shines"
+    mut held: List[Token] = []
+    mut clock = Clock.init()
+    mut total = 0
+    mut i = 0
+    while i < 200000:
+        mut t = Token.Word(src)     # borrowed payload, no allocation
+        held.append(t)
+        total = total + 1
+        i = i + 1
+    mut ms = clock.elapsed_ms()
+    print(total)
+    print("TIME_MS:" + _tr_int_to_str(ms))

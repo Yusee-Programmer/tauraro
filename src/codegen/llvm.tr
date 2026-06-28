@@ -277,7 +277,7 @@ extend LlvmGenerator:
                 self.gen_block(body)
                 self.w("    br label %"); self.w(cond_lbl); self.w("\n")
                 self.w(end_lbl); self.w(":\n")
-            case HirStmt.SBreak:
+            case HirStmt.SBreak(_):
                 self.w("    ; break (unresolved in stub)\n")
             case HirStmt.SContinue:
                 self.w("    ; continue (unresolved in stub)\n")

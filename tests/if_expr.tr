@@ -1,0 +1,30 @@
+def grade(score: int) -> str:
+    return if score >= 90:
+        "A"
+    elif score >= 80:
+        "B"
+    else:
+        "C"
+
+def main():
+    mut x = 7
+    mut label = if x > 5:
+        mut tag = "big"
+        tag
+    else:
+        "small"
+    print(label)                       # big
+
+    mut n = if x % 2 == 0: 100 else: 200
+    print(f"n = {n}")                  # 200
+
+    print(grade(95))                   # A
+    print(grade(85))                   # B
+    print(grade(50))                   # C
+
+    # if-expression yielding a fresh string used as an operand
+    mut msg = "[" + (if x > 0:
+        "pos"
+    else:
+        "neg")
+    print(msg)                         # [pos

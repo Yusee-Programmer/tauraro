@@ -31,8 +31,9 @@ Tauraro provides a layered concurrency model:
 | Code | Meaning |
 |------|---------|
 | `[T-1]` | Value passed to `spawn`/`Thread.spawn`/`Shared[T]` is not `Sendable` |
-| `[T-2]` | A class `implements Sendable` but declares a field whose type is not `Sendable` |
+| `[T-2]` | A class `implements Sendable` but declares a field whose type is not `Sendable` — checked **transitively** through `Shared[T]`/`Weak[T]`/`Chan[T]` (their inner `T` must also be Sendable, so non-thread-safe data can't be reached through a handle) |
 | `[T-3]` | *(warning)* A `Sendable` class has a primitive field that may race if mutated from multiple threads — wrap it in `Atomic[T]` |
+| `[T-6]` | A borrow (`ref`/`mut ref`) crosses a thread boundary — it could dangle or race. Pass an owned value, `Shared[T]`, or `Mutex[T]` instead (like Rust's `thread::spawn` requiring `'static`) |
 
 ---
 

@@ -8,11 +8,14 @@ This directory covers advanced Tauraro topics. Core Tauraro development — writ
 
 | Doc | Topic | When You Need It |
 |-----|-------|-----------------|
-| [01 — Lifetimes](01_lifetimes.md) | The `from` keyword lifetime annotation | Returning pointers into caller-owned data |
+| [09 — Safety Specification](09_safety_spec.md) | **Normative**: the ARC-floor invariants, what `--strict` proves/elides, the elision-soundness theorem, and how every guarantee is verified (corpus + differential oracle + ASan) | Understanding exactly what Tauraro guarantees, and what it does not yet |
+| [01 — Lifetimes & Borrow Checking](01_lifetimes.md) | `ref`/`mut ref`, regions (`from`), `where … outlives`, regions on enum/interface, the `[B-*]`/`[L-*]` checks | Opt-in zero-copy with a compile-time guarantee under `--strict` |
+| [08 — Zero-Copy Guide](08_zero_copy.md) | When zero-copy wins (StrView, borrowed payloads, dict borrows) vs parity, best practices, numbers | Removing copies/allocations/refcount traffic on hot paths |
 | [02 — Advanced Ownership](02_advanced_ownership.md) | Move, borrow, Shared deep dive | Understanding M-2 errors; shared mutable state |
 | [03 — Channel Select](03_channel_select.md) | `select:` for multiplexed channels | Fan-in, timeouts, non-blocking channel ops |
 | [04 — Generators](04_generators.md) | Not currently supported — use list comprehensions / manual loops | — |
-| [05 — Decorators](05_decorators.md) | `@inline`, `@hot`, `@property`, custom decorators | Compile-time code annotation and transformation |
+| [05 — Decorators](05_decorators.md) | `@inline`, `@hot`, `@property`, `@value_type`, custom decorators | Compile-time code annotation and transformation |
+| [10 — Macros](10_macros.md) | `macro def` + `@` — compile-time code generation via f-string templates over an `item` reflection (`@derive_eq`, etc.) | Generating boilerplate (derives, wrappers) from a declaration's shape |
 | [06 — Sendable](06_sendable.md) | Thread-safety enforcement via the `Sendable` interface | Passing types across threads without data races |
 | [07 — Concurrency Guide](07_concurrency_guide.md) | All concurrency models, primitives, decision matrix, best-practice combinations | Choosing the right model; building servers/parallel work; see `examples/concurrency/` |
 
@@ -36,7 +39,9 @@ Ownership model (ch 13)
     │
     ├── Advanced Ownership (02)  ← explains inference rules + Shared[T]
     │       │
-    │       └── Lifetimes (01)   ← extends ownership to pointer return types
+    │       └── Lifetimes & Borrows (01)  ← opt-in ref/mut ref + regions + --strict checks
+    │               │
+    │               └── Zero-Copy Guide (08)  ← when borrows remove copies/allocs/refcounts
     │
 Concurrency (ch 16)
     │

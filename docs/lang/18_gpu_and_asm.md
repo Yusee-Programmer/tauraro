@@ -1,4 +1,4 @@
-# 18 — GPU Blocks and Inline Assembly
+# 18 — Parallelism (`std.gpu`) and Inline Assembly
 
 ---
 
@@ -8,15 +8,14 @@ Tauraro provides two mechanisms for low-level parallel and hardware-specific cod
 
 | Feature | Purpose |
 |---------|---------|
-| `std.gpu.Gpu` | OpenMP-backed parallel dispatch (the supported way to run work across CPU cores) |
-| `gpu:` block | **Deprecated.** Still parses for source compatibility, but compiles to a plain sequential block — no pragmas are emitted. Use `std.gpu.Gpu` instead. |
+| `std.gpu.Gpu` | OpenMP-backed parallel dispatch — the supported way to run work across CPU cores |
 | `asm(...)` | Inline assembly — must be inside `unsafe:` |
 
-> **Note:** `@parallel` and `@vectorize` loop-hint decorators described in earlier
-> drafts of this document were never implemented and do not exist in the
-> compiler. Do not use them — they are silently ignored by no codegen path
-> (in fact, an unrecognized decorator is a compile error). Use `std.gpu.Gpu`
-> or hand-written `gpu:`-free OpenMP via `extern "C"` if you need pragmas.
+> **Parallelism lives in the standard library.** Use the `std.gpu` module
+> (`from std.gpu import Gpu`) for data-parallel work. There is no `gpu:` language
+> block and no `@parallel`/`@vectorize` decorators — parallelism is a library
+> feature, not a syntax feature, which keeps the language small. For raw OpenMP
+> pragmas beyond `std.gpu`, drop to `extern "C"`.
 
 ---
 
@@ -104,25 +103,6 @@ Write to pre-allocated indexed positions (`output[i] = ...`) instead.
 2. Pre-allocate the output array before calling `Gpu.parallel` — do not call `append` from inside it.
 3. Wrap the `Gpu.parallel` call in `unsafe:` (it takes a raw `Pointer[void]`).
 4. Benchmark with and without `-fopenmp` to verify the parallelism is helping.
-
----
-
-## The Deprecated `gpu:` Block
-
-Older code may still contain `gpu:` blocks:
-
-```python
-gpu:
-    for i in range(n):
-        data[i] = compute(i)
-```
-
-The parser still accepts this syntax, but codegen now emits the body as a
-plain sequential block with a `/* deprecated gpu: block - use std.gpu for GPU
-dispatch */` comment — **no OpenMP pragmas are generated**, regardless of
-`-fopenmp`. Existing `gpu:` blocks keep compiling and running correctly
-(sequentially); they simply gain no parallelism. Migrate to `std.gpu.Gpu` (above)
-to actually parallelize the loop.
 
 ---
 
@@ -316,7 +296,7 @@ tauraroc main.tr kernel.o --run
 
 ## Inspecting Compiler Output
 
-Use `--emit c` to see the C the compiler generates before passing it to GCC. This is essential for verifying that `asm()` contains the intended instructions, and for confirming that any leftover `gpu:` blocks compile to the documented sequential `/* deprecated gpu: block */` form rather than pragmas.
+Use `--emit c` to see the C the compiler generates before passing it to GCC. This is essential for verifying that `asm()` contains the intended instructions.
 
 ```bash
 tauraroc --emit c program.tr

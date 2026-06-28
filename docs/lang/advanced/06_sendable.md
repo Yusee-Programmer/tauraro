@@ -54,14 +54,15 @@ mut ch: Chan[MyClass] = Chan[MyClass].init(16)
 | Type | Sendable | Notes |
 |------|----------|-------|
 | `int`, `float`, `bool`, `char` | Yes | Primitive — copied on send |
-| `str` | Yes | Immutable — safe to share |
-| `Shared[T]` | Yes | Reference-counted — atomic refcount |
-| `Mutex[T]` | Yes | Lock-protected mutation |
-| `RwLock[T]` | Yes | Read-write lock |
-| `Atomic[T]` | Yes | Lock-free atomic operations |
-| `Chan[T]` | Yes | Thread-safe by design |
-| `Pointer[T]` | Yes (but unsafe) | Raw pointer — inherently unsafe, you take responsibility |
-| `List[T]`, `Dict`, plain classes | **No** | Not thread-safe — use `Shared[T]` to wrap |
+| `str` | Yes | Owned + read-only on the worker; the caller keeps ownership. Safe when the caller outlives the thread (the structured APIs `join`); a *detached* thread must not outlive it. |
+| `Shared[T]` / `Weak[T]` | If `T` is | Reference-counted with an **atomic** refcount (the `Arc` equivalent). Sendable **only if `T` is Sendable** — checked transitively, so non-thread-safe data can't be reached through the handle. |
+| `Chan[T]` | If `T` is | Thread-safe channel; sends a `T` to another thread, so `T` must be Sendable. |
+| `Mutex[T]` | Yes | Lock-protected mutation (serializes access to `T`). |
+| `RwLock[T]` | Yes | Read-write lock. |
+| `Atomic[T]` | Yes | Lock-free atomic operations. |
+| `Pointer[T]` | Only with `UnsafeSendable` | Raw pointer — the compiler can't prove it thread-safe; assert `implements Sendable, UnsafeSendable` to take responsibility (Tauraro's `unsafe impl Send`). |
+| `List[T]`, `Dict`, `Set`, plain classes | **No** | Not thread-safe — wrap in `Shared[T]` / `Mutex[T]`. |
+| a **borrow** `ref T` / `mut ref T` | **No** | A borrow can dangle or race across threads (`[T-6]`); send an owned value or a handle. |
 
 ---
 
@@ -161,6 +162,25 @@ task_group:
     spawn increment(shared_counter)
     spawn increment(shared_counter)
 ```
+
+### [T-6] Borrow Crosses a Thread Boundary
+
+```
+error [T-6]: a borrow (ref/mut ref) cannot cross a thread boundary
+```
+
+**Cause:** You passed a `ref`/`mut ref` borrow to `Thread.spawn`/`ThreadPool.spawn`/
+`spawn`. Spawn is not scoped, so the borrowed value could be mutated or freed by
+another thread, or outlive its source — the same reason Rust's `thread::spawn`
+requires `'static`. (`[T-1]` doesn't catch it because `ref T` erases to a Sendable `T`.)
+
+```python
+def run(x: mut ref int):
+    mut t = Thread.spawn(worker, x)   # T-6: borrow crosses the boundary
+    t.join()
+```
+
+**Fix:** pass an *owned* value, a `Shared[T]`, or a `Mutex[T]`/`Atomic[T]`.
 
 ---
 
@@ -315,7 +335,9 @@ By declaring `implements Sendable`, you assert this class is thread-safe. The co
 ---
 
 See also:
+- [09 — Safety Specification](09_safety_spec.md) — the normative statement of what Tauraro's concurrency safety guarantees, and the honest remaining gaps
 - [16 — Concurrency](../16_concurrency.md)
+- [07 — Concurrency Guide](07_concurrency_guide.md) — models, primitives, decision matrix
 - [03 — Channel Select](03_channel_select.md)
 - [02 — Advanced Ownership](02_advanced_ownership.md)
-- [Compiler Error T-1](../19_compiler_errors.md#t-1-no-implicit-type-coercion) (Sendable errors use the T-series codes)
+- [19 — Compiler Errors](../19_compiler_errors.md) (Sendable errors use the `[T-*]` codes)

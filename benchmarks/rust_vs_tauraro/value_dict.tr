@@ -1,0 +1,38 @@
+# @value_type Point stored INLINE in a Dict (no per-entry boxing), accessed via a
+# `ref Dict` borrow. vs Rust HashMap<String, Point> with Copy Point.
+from std.sys.time import Clock
+extern "C":
+    def _tr_int_to_str(n: int) -> str
+
+@value_type
+pub class Point:
+    pub x: int
+    pub y: int
+
+extend Point:
+    pub def of(x: int, y: int) -> Point:
+        mut p = Point()
+        p.x = x
+        p.y = y
+        return p
+
+def sum_pts(d: ref Dict[str, Point]) -> int:
+    mut pa: Point = d.get("a")
+    mut pc: Point = d.get("c")
+    return pa.x + pa.y + pc.x + pc.y
+
+def main():
+    mut clock = Clock.init()
+    mut total = 0
+    mut r = 0
+    while r < 200000:
+        mut d: Dict[str, Point] = Dict[str, Point].init()
+        d.set("a", Point.of(1, 2))
+        d.set("b", Point.of(3, 4))
+        d.set("c", Point.of(5, 6))
+        total = total + sum_pts(d)
+        d.free()
+        r = r + 1
+    mut ms = clock.elapsed_ms()
+    print(total)
+    print("TIME_MS:" + _tr_int_to_str(ms))

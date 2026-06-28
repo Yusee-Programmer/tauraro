@@ -1,0 +1,6 @@
+# EXPECT: pass
+# A single exclusive `mut ref` borrow, used within its lifetime, is fine.
+def main():
+    mut x = 5
+    mut a: mut ref int = x
+    print(a)

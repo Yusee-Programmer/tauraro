@@ -189,11 +189,13 @@ pub class Sema:
     pub variadic_elem_ty: Map[str, Pointer[AstType]] # fn name -> element type of the variadic List[T] param
     pub fn_defs:         Map[str, FunctionDef]  # top-level fn name -> full definition, for inspect(T)
     pub loop_scope_base: Vec[int]  # auto-drop: scope-stack depth marking the start of each enclosing loop's scopes
+    pub fn_scope_base: Vec[int]    # auto-drop: scope-stack depth marking the start of each enclosing CLOSURE's scopes — a `return` inside a closure must only drop the closure's own locals, NOT the enclosing function's (else they double-free: released when the closure runs AND at the real function exit)
     pub block_depth: int  # auto-drop: nested-C-block depth (if/while bodies sharing a Scope); 0 = directly in the owning scope's top-level block
     pub block_depth_stack: Vec[int]  # auto-drop: saved block_depth per scope, restored on exit_scope
     pub next_block_id: int       # auto-drop: monotonic id, incremented each time an if/while/etc body block opens
     pub block_stack: Vec[int]    # auto-drop: ids of currently-open if/while bodies, innermost last
     pub block_stack_base: Vec[int] # auto-drop: block_stack.len at each enter_scope, restored on exit_scope
+    pub do_temp_ctr: int           # `do:` block-expression: monotonic counter for synthetic result-capture temps
 
 extend Sema:
     pub def build_ast_type(self, e: Pointer[Expr]) -> Pointer[AstType]:
@@ -283,11 +285,13 @@ extend Sema:
         s.variadic_elem_ty       = Map[str, Pointer[AstType]].init(8)
         s.fn_defs                = Map[str, FunctionDef].init(32)
         s.loop_scope_base        = Vec[int].init(8)
+        s.fn_scope_base          = Vec[int].init(8)
         s.block_depth            = 0
         s.block_depth_stack      = Vec[int].init(8)
         s.next_block_id          = 0
         s.block_stack            = Vec[int].init(8)
         s.block_stack_base       = Vec[int].init(8)
+        s.do_temp_ctr            = 0
 
         # -- Built-in functions -------------------------------------------------
         s.globals.insert("print",    Symbol.init("print",    SymbolKind.SFunction, box_asttype(AstType.init("void"))))
@@ -566,6 +570,20 @@ extend Sema:
         # Unknown type - conservative: assume not sendable
         return false
 
+    # Full-type Sendable check (sees generic args), so reachability through a
+    # wrapper is enforced. `Shared[T]`/`Weak[T]` give UNSYNCHRONIZED shared access
+    # to T across threads, and `Chan[T]` TRANSFERS a T to another thread — so the
+    # inner T must itself be Sendable, else non-thread-safe data is reachable on
+    # another thread (a data race). `Mutex`/`RwLock`/`Atomic` SERIALIZE access, so
+    # their inner type is protected and stays unconditionally Sendable.
+    pub def is_sendable_ty(self, ty: AstType) -> bool:
+        mut n = ty.name
+        if n == "Shared" or n == "Weak" or n == "Chan" or n == "Channel":
+            if ty.args.len > 0:
+                return self.is_sendable_ty(ty.args.get(0).read())
+            return true
+        return self.is_sendable_type(n)
+
     # Recursively checks cls_name and its base classes for a method named `method`.
     pub def class_method_exists(self, cls_name: str, method: str) -> bool:
         if not self.classes.contains(cls_name): return false
@@ -595,12 +613,33 @@ extend Sema:
         if method == "__str__" or method == "__repr__" or method == "__enter__" or method == "__exit__": return true
         return false
 
+    # True if `e` is a borrow (`ref`/`mut ref`): the type carries is_borrow even
+    # after the `ref` wrapper is erased to the inner type name at parse, and a
+    # borrow-typed local/param keeps it on its declared type.
+    pub def expr_is_borrow(self, e: Pointer[HirExpr]) -> bool:
+        if e as usize == 0 as usize: return false
+        if _is_invalid_ptr(e as usize): return false
+        if hir_expr_type(e).is_borrow: return true
+        match e.read():
+            case HirExpr.EIdent(nm, _, _):
+                mut sym = self.resolve(nm)
+                if sym.name != "" and (sym.ty as usize) != 0 as usize:
+                    if sym.ty.read().is_borrow: return true
+            case _: pass
+        return false
+
     pub def check_spawn_sendable(self, e: Pointer[HirExpr]):
         if _is_invalid_ptr(e as usize): return
         match e.read():
             case HirExpr.ECall(_, cs_args, _):
                 mut csi = 0
                 while csi < cs_args.len:
+                    # [T-6] a borrow cannot cross a thread boundary (non-scoped spawn):
+                    # the borrowed value may be mutated/freed by another thread or
+                    # outlive its source. Rust's thread::spawn requires 'static for
+                    # the same reason. T-1 misses this (ref T erases to a Sendable T).
+                    if self.expr_is_borrow(cs_args.get(csi)):
+                        self.error("[T-6] a borrow (`ref`/`mut ref`) cannot cross a thread boundary: the borrowed value may be mutated or freed by another thread, or outlive its source.\n      FIX: pass an owned value, a `Shared[T]`, or a `Mutex[T]`/`Atomic[T]` handle instead of a borrow.")
                     mut arg_ty = hir_expr_type(cs_args.get(csi))
                     if (arg_ty.name == "Shared" or arg_ty.name == "Weak") and arg_ty.args.len > 0:
                         mut inner_nm = arg_ty.args.get(0).read().name
@@ -612,6 +651,8 @@ extend Sema:
             case HirExpr.EMethodCall(_, _, cs_margs, _):
                 mut csmi = 0
                 while csmi < cs_margs.len:
+                    if self.expr_is_borrow(cs_margs.get(csmi)):
+                        self.error("[T-6] a borrow (`ref`/`mut ref`) cannot cross a thread boundary: the borrowed value may be mutated or freed by another thread, or outlive its source.\n      FIX: pass an owned value, a `Shared[T]`, or a `Mutex[T]`/`Atomic[T]` handle instead of a borrow.")
                     mut arg_ty2 = hir_expr_type(cs_margs.get(csmi))
                     if (arg_ty2.name == "Shared" or arg_ty2.name == "Weak") and arg_ty2.args.len > 0:
                         mut inner_nm2 = arg_ty2.args.get(0).read().name
@@ -643,8 +684,14 @@ extend Sema:
                     # the author has explicitly opted in via UnsafeSendable.
                     if not has_unsafe:
                         self.error("[T-2] Class '" + c.name + "' declares 'implements Sendable' but holds a raw 'Pointer' field '" + fd.name + "', which the compiler cannot prove thread-safe.\n      FIX: If '" + c.name + "' wraps an internally-synchronized handle, assert it explicitly: 'implements Sendable, UnsafeSendable'.\n      Otherwise wrap the data in Mutex[T]/Atomic[T], or drop 'implements Sendable'.")
-                elif not self.is_sendable_type(fty.name):
-                    self.error("[T-2] Class '" + c.name + "' declares 'implements Sendable' but field '" + fd.name + ": " + fty.name + "' is not Sendable.\n      FIX: Wrap '" + fd.name + "' in Mutex[" + fty.name + "] for exclusive access, RwLock[" + fty.name + "] for reader-writer, or Atomic[T] for numeric/flag types.\n      Or remove 'implements Sendable' if '" + c.name + "' is only used on one thread.")
+                elif not self.is_sendable_ty(fty):
+                    # Covers a bare non-Sendable field AND reachability through an
+                    # unsynchronized wrapper: `Shared[NonSendable]`/`Chan[NonSendable]`
+                    # would expose non-thread-safe data on another thread.
+                    mut _t2_inner = fty.name
+                    if (fty.name == "Shared" or fty.name == "Weak" or fty.name == "Chan" or fty.name == "Channel") and fty.args.len > 0:
+                        _t2_inner = fty.name + "[" + fty.args.get(0).read().name + "]"
+                    self.error("[T-2] Class '" + c.name + "' declares 'implements Sendable' but field '" + fd.name + ": " + _t2_inner + "' is not Sendable (non-thread-safe data is reachable across threads).\n      FIX: make the inner type Sendable, wrap it in Mutex[T]/RwLock[T] for guarded access or Atomic[T] for numerics, or drop 'implements Sendable'.")
                 elif fty.name == "int" or fty.name == "float" or fty.name == "bool":
                     self.warnings.push("[T-3] Sendable class '" + c.name + "' has primitive field '" + fd.name + ": " + fty.name + "' that may cause data races if mutated from multiple threads.\n      FIX: Use 'Atomic[" + fty.name + "]' for safe concurrent mutation, or ensure this field is written only before the object is shared across threads.")
             cfi = cfi + 1
@@ -1443,6 +1490,17 @@ extend Sema:
             # by lower_block when each block is lowered, so no recursion is
             # needed here.
             case HirExpr.ETry(_, _, _, _): pass
+            # `do:` block-expression. Inner statements are escape-marked during
+            # lowering; the trailing value is RETAINED (copied) into the block's
+            # result temp by codegen, not moved, so nothing here escapes.
+            case HirExpr.EDo(_do_b, _): pass
+            # match-EXPRESSION: arm bodies are escape-marked during lowering; each
+            # arm's value is captured (retained) into the result temp, not moved.
+            case HirExpr.EMatchExpr(_, _, _): pass
+            # loop/while EXPRESSIONS: bodies are escape-marked during lowering; the
+            # break value is captured (retained) into the result temp, not moved.
+            case HirExpr.ELoop(_, _): pass
+            case HirExpr.EWhileExpr(_, _, _, _): pass
             # Leaf/literal variants - nothing to recurse into or mark.
             case HirExpr.ELitInt(_, _): pass
             case HirExpr.ELitFloat(_, _): pass
@@ -1680,6 +1738,17 @@ extend Sema:
             # by lower_block when each block is lowered, so no recursion is
             # needed here.
             case HirExpr.ETry(_, _, _, _): pass
+            # `do:` block-expression. Inner statements are escape-marked during
+            # lowering; the trailing value is RETAINED (copied) into the block's
+            # result temp by codegen, not moved, so nothing here escapes.
+            case HirExpr.EDo(_do_b, _): pass
+            # match-EXPRESSION: arm bodies are escape-marked during lowering; each
+            # arm's value is captured (retained) into the result temp, not moved.
+            case HirExpr.EMatchExpr(_, _, _): pass
+            # loop/while EXPRESSIONS: bodies are escape-marked during lowering; the
+            # break value is captured (retained) into the result temp, not moved.
+            case HirExpr.ELoop(_, _): pass
+            case HirExpr.EWhileExpr(_, _, _, _): pass
             # Leaf/literal variants - nothing to recurse into or mark.
             case HirExpr.ELitInt(_, _): pass
             case HirExpr.ELitFloat(_, _): pass
@@ -1700,7 +1769,7 @@ extend Sema:
         if last as usize == 0 as usize: return false
         match last.read():
             case HirStmt.SReturn(_): return true
-            case HirStmt.SBreak: return true
+            case HirStmt.SBreak(_): return true
             case HirStmt.SContinue: return true
             case _: return false
 
@@ -2549,44 +2618,47 @@ extend Sema:
         self.current_region_params = Vec[str].init(0)
         return hi
 
+    # Mark any `str`/collection local passed as a call/method-call argument in
+    # this (lowered) statement as "escaped" (excluded from auto-drop) - see
+    # mark_escaped_str_args. Shared by lower_block and the `do:` lowering.
+    pub def apply_escape_marks(self, _hs: Pointer[HirStmt]):
+        match _hs.read():
+            case HirStmt.SExpr(_es_e):
+                self.mark_escaped_str_args(_es_e)
+                self.mark_escaped_coll_args(_es_e)
+            case HirStmt.SLet(_, _, _, _, _, _, _sl_v):
+                self.mark_escaped_str_args(_sl_v)
+                self.mark_coll_arg(_sl_v)
+                self.mark_escaped_coll_args(_sl_v)
+            case HirStmt.SAssign(_sa_t, _sa_v):
+                self.mark_escaped_str_args(_sa_t)
+                self.mark_escaped_str_args(_sa_v)
+                self.mark_escaped_coll_args(_sa_t)
+                self.mark_coll_arg(_sa_v)
+                self.mark_escaped_coll_args(_sa_v)
+            case HirStmt.SReturn(_sr_e):
+                self.mark_escaped_str_args(_sr_e)
+                self.mark_coll_arg(_sr_e)
+                self.mark_escaped_coll_args(_sr_e)
+            case HirStmt.SIf(_si_c, _, _):
+                self.mark_escaped_str_args(_si_c)
+                self.mark_escaped_coll_args(_si_c)
+            case HirStmt.SWhile(_sw_c, _):
+                self.mark_escaped_str_args(_sw_c)
+                self.mark_escaped_coll_args(_sw_c)
+            case HirStmt.SFor(_, _sf_iter, _):
+                self.mark_escaped_coll_args(_sf_iter)
+            case HirStmt.SForUnpack(_, _sfu_iter, _):
+                self.mark_escaped_coll_args(_sfu_iter)
+            case _: pass
+
     pub def lower_block(self, b: Block) -> HirBlock:
         mut hb = HirBlock.init()
         mut i = 0
         while i < b.stmts.len:
             mut orig_ptr = b.stmts.get(i)
             mut _hs = self.lower_stmt(orig_ptr)
-            # Mark any `str` local passed as a call/method-call argument in
-            # this statement as "escaped" (excluded from auto-drop) - see
-            # mark_escaped_str_args.
-            match _hs.read():
-                case HirStmt.SExpr(_es_e):
-                    self.mark_escaped_str_args(_es_e)
-                    self.mark_escaped_coll_args(_es_e)
-                case HirStmt.SLet(_, _, _, _, _, _, _sl_v):
-                    self.mark_escaped_str_args(_sl_v)
-                    self.mark_coll_arg(_sl_v)
-                    self.mark_escaped_coll_args(_sl_v)
-                case HirStmt.SAssign(_sa_t, _sa_v):
-                    self.mark_escaped_str_args(_sa_t)
-                    self.mark_escaped_str_args(_sa_v)
-                    self.mark_escaped_coll_args(_sa_t)
-                    self.mark_coll_arg(_sa_v)
-                    self.mark_escaped_coll_args(_sa_v)
-                case HirStmt.SReturn(_sr_e):
-                    self.mark_escaped_str_args(_sr_e)
-                    self.mark_coll_arg(_sr_e)
-                    self.mark_escaped_coll_args(_sr_e)
-                case HirStmt.SIf(_si_c, _, _):
-                    self.mark_escaped_str_args(_si_c)
-                    self.mark_escaped_coll_args(_si_c)
-                case HirStmt.SWhile(_sw_c, _):
-                    self.mark_escaped_str_args(_sw_c)
-                    self.mark_escaped_coll_args(_sw_c)
-                case HirStmt.SFor(_, _sf_iter, _):
-                    self.mark_escaped_coll_args(_sf_iter)
-                case HirStmt.SForUnpack(_, _sfu_iter, _):
-                    self.mark_escaped_coll_args(_sfu_iter)
-                case _: pass
+            self.apply_escape_marks(_hs)
             # Auto-drop: inject SAutoDrop stmts for all currently-open scopes
             # right before a control-transfer statement, so owned locals are
             # freed on every exit path (not just normal fall-through).
@@ -2605,8 +2677,14 @@ extend Sema:
                             case HirStmt.SReturn(lowered_ret):
                                 self.collect_idents(lowered_ret, ret_excl)
                             case _: pass
-                        self.append_drops_from_excl_multi(hb, 0, ret_excl)
-                    case Stmt.SBreak:
+                        # Inside a closure, only drop the closure's own scopes (from its
+                        # base up), never the enclosing function's locals — those are
+                        # dropped at the real function exit and would otherwise double-free.
+                        mut ret_from = 0
+                        if self.fn_scope_base.len > 0:
+                            ret_from = self.fn_scope_base.get(self.fn_scope_base.len - 1)
+                        self.append_drops_from_excl_multi(hb, ret_from, ret_excl)
+                    case Stmt.SBreak(_):
                         if self.loop_scope_base.len > 0:
                             self.append_drops_from(hb, self.loop_scope_base.get(self.loop_scope_base.len - 1))
                     case Stmt.SContinue:
@@ -2799,7 +2877,10 @@ extend Sema:
                         mut pc_ctn = pc_cont_ty.name
                         if pc_ctn == "Vec" or pc_ctn == "List" or pc_ctn == "Dict" or pc_ctn == "Map" or pc_ctn == "Set":
                             mut pc_elem_ty = hir_expr_type(hval).name
-                            if not self.is_primitive(hir_expr_type(hval)):
+                            # A @value_type element is returned BY VALUE (a copy), so
+                            # `x = d.get(k)` is NOT a borrow into the container.
+                            mut pc_is_vt = self.classes.contains(pc_elem_ty) and not self.classes.get(pc_elem_ty).is_class
+                            if (not self.is_primitive(hir_expr_type(hval))) and not pc_is_vt:
                                 self.container_borrows.insert(pc_cont_nm, name)
                                 # Class-instance element borrow: must NOT be auto-dropped.
                                 # (str/collection elements are returned retained by .get, so
@@ -3317,7 +3398,10 @@ extend Sema:
                 self.block_depth = self.block_depth - 1
                 self.close_block()
                 return box_hirstmt(HirStmt.SGpuBlock(h_gpu_body))
-            case Stmt.SBreak: return box_hirstmt(HirStmt.SBreak)
+            case Stmt.SBreak(bv):
+                mut hbv = Pointer[HirExpr](0)
+                if bv as usize != 0 as usize: hbv = self.lower_expr(bv)
+                return box_hirstmt(HirStmt.SBreak(hbv))
             case Stmt.SContinue: return box_hirstmt(HirStmt.SContinue)
             case Stmt.SPass: return box_hirstmt(HirStmt.SPass)
             case Stmt.SLocalDecl(ldecl):
@@ -3484,6 +3568,79 @@ extend Sema:
         if method == "lines": return AstType.init("Vec")
         if method == "words": return AstType.init("Vec")
         return AstType.init("void")
+
+    # Lower a block into a `do:` value (HirExpr.EDo): runs the body in its own
+    # scope; the LAST bare expression is the value. Scope-exit drops run NORMALLY
+    # (no exclusion) for `str`/refcounted values — codegen captures + retains the
+    # yielded value into a result temp BEFORE these drops run. Owned non-refcounted
+    # values (List/Dict/Set/Vec/Map) cannot be retained, so they are TRANSFERRED:
+    # the yielded value's idents are excluded from the block's drops (mirroring
+    # `return EXPR`). Shared by the `do:`, `if`, and `match` block-expressions.
+    pub def lower_do_value(self, do_body: Block) -> Pointer[HirExpr]:
+        self.enter_scope()
+        mut do_hb = HirBlock.init()
+        mut do_n = do_body.stmts.len
+        mut do_i = 0
+        mut do_val = Pointer[HirExpr](0)
+        mut do_ty = AstType.init("void")
+        while do_i < do_n:
+            mut do_s = do_body.stmts.get(do_i)
+            if do_i == do_n - 1:
+                match do_s.read():
+                    case Stmt.SExpr(de):
+                        do_val = self.lower_expr(de)
+                        do_ty = hir_expr_type(do_val)
+                    case _:
+                        mut do_hs = self.lower_stmt(do_s)
+                        if do_hs as usize != 0 as usize:
+                            self.apply_escape_marks(do_hs)
+                            do_hb.push(do_hs)
+            else:
+                mut do_hs2 = self.lower_stmt(do_s)
+                if do_hs2 as usize != 0 as usize:
+                    self.apply_escape_marks(do_hs2)
+                    do_hb.push(do_hs2)
+            do_i = do_i + 1
+        mut do_excl = Vec[str].init(2)
+        if do_val as usize != 0 as usize and do_ty.name != "str":
+            self.collect_idents(do_val, do_excl)
+        self.append_drops_from_excl_multi(do_hb, self.scopes.len - 1, do_excl)
+        if do_val as usize != 0 as usize: do_hb.push(box_hirstmt(HirStmt.SExpr(do_val)))
+        self.exit_scope()
+        return box_hirexpr(HirExpr.EDo(do_hb, do_ty))
+
+    # Infer a loop/while EXPRESSION's result type from the FIRST `break <value>`
+    # in its (lowered) body. Recurses into if/match/try arms but NOT into nested
+    # loops (their breaks belong to them). Returns "void" if no value-break found.
+    pub def infer_break_type(self, hb: HirBlock) -> AstType:
+        mut i = 0
+        while i < hb.stmts.len:
+            mut t = self.infer_break_type_stmt(hb.stmts.get(i))
+            if t.name != "void": return t
+            i = i + 1
+        return AstType.init("void")
+
+    pub def infer_break_type_stmt(self, s: Pointer[HirStmt]) -> AstType:
+        match s.read():
+            case HirStmt.SBreak(bv):
+                if bv as usize != 0 as usize: return hir_expr_type(bv)
+                return AstType.init("void")
+            case HirStmt.SIf(_, then_b, else_b):
+                mut t = self.infer_break_type(then_b)
+                if t.name != "void": return t
+                return self.infer_break_type(else_b)
+            case HirStmt.SMatch(_, m_arms):
+                mut ai = 0
+                while ai < m_arms.len:
+                    mut t2 = self.infer_break_type(m_arms.get(ai).body)
+                    if t2.name != "void": return t2
+                    ai = ai + 1
+                return AstType.init("void")
+            case HirStmt.STry(tb, _, fb):
+                mut t3 = self.infer_break_type(tb)
+                if t3.name != "void": return t3
+                return self.infer_break_type(fb)
+            case _: return AstType.init("void")
 
     pub def lower_expr(self, e_ptr: Pointer[Expr]) -> Pointer[HirExpr]:
         if e_ptr as usize == 0 as usize: return Pointer[HirExpr](0)
@@ -4013,8 +4170,10 @@ extend Sema:
                     # Check all args (skip fn name at index 0) are Sendable
                     mut _tsi = 1
                     while _tsi < hl.len:
+                        if self.expr_is_borrow(hl.get(_tsi)):
+                            self.error("[T-6] a borrow (`ref`/`mut ref`) cannot be passed to Thread.spawn: the borrowed value may be mutated or freed by another thread, or outlive its source.\n      FIX: pass an owned value, a `Shared[T]`, or a `Mutex[T]`/`Atomic[T]` handle instead of a borrow.")
                         mut _tsa_ty = hir_expr_type(hl.get(_tsi))
-                        if not self.is_sendable_type(_tsa_ty.name):
+                        if not self.is_sendable_ty(_tsa_ty):
                             self.error("[T-1] Type '" + _tsa_ty.name + "' is not Sendable and cannot be passed to Thread.spawn.\n      FIX: Wrap in Mutex[" + _tsa_ty.name + "] for exclusive access, or add 'implements Sendable' to '" + _tsa_ty.name + "' to confirm it is thread-safe.")
                         _tsi = _tsi + 1
                 # ThreadPool.spawn arg Sendable check
@@ -4023,8 +4182,10 @@ extend Sema:
                     # Check all args (skip fn name at index 0) are Sendable
                     mut _psi = 1
                     while _psi < hl.len:
+                        if self.expr_is_borrow(hl.get(_psi)):
+                            self.error("[T-6] a borrow (`ref`/`mut ref`) cannot be passed to ThreadPool.spawn: the borrowed value may be mutated or freed by another thread, or outlive its source.\n      FIX: pass an owned value, a `Shared[T]`, or a `Mutex[T]`/`Atomic[T]` handle instead of a borrow.")
                         mut _psa_ty = hir_expr_type(hl.get(_psi))
-                        if not self.is_sendable_type(_psa_ty.name):
+                        if not self.is_sendable_ty(_psa_ty):
                             self.error("[T-1] Type '" + _psa_ty.name + "' is not Sendable and cannot be passed to ThreadPool.spawn.\n      FIX: Wrap in Mutex[" + _psa_ty.name + "] for exclusive access, or add 'implements Sendable' to '" + _psa_ty.name + "' to confirm it is thread-safe.")
                         _psi = _psi + 1
                 # Atomic built-in method return types
@@ -4354,7 +4515,11 @@ extend Sema:
                     l = l + 1
                 mut r_ty = AstType.init("void")
                 if ret_ty as usize != 0 as usize: r_ty = ret_ty.read()
+                # A closure is a separate function: a `return` inside it must drop only
+                # the closure's own scopes, never the enclosing function's locals.
+                self.fn_scope_base.push(self.scopes.len - 1)
                 mut clo_body = self.lower_block(body)
+                self.fn_scope_base.pop()
                 self.finalize_scope_drops(clo_body)
                 mut hexpr = HirExpr.EClosure(hparams, r_ty, clo_body, is_async, Vec[HirParam].init(0))
                 self.exit_scope()
@@ -4365,6 +4530,70 @@ extend Sema:
                 mut helse = self.lower_expr(else_e)
                 mut ite_ty = hir_expr_type(hthen)
                 return box_hirexpr(HirExpr.EIfElse(hcond, hthen, helse, ite_ty))
+            case Expr.EDo(do_body):
+                # `do:` block-expression. Lower the body in its own scope; the
+                # LAST bare expression is the value. Scope-exit drops run NORMALLY
+                # (no exclusion): the codegen captures the yielded value into a
+                # result temp — retaining it iff it is not already fresh-owned —
+                # BEFORE these drops run, so a block-local that produced the value
+                # is retained (then balanced by its own drop) while a borrowed /
+                # outer / field value is retained into an independent rc=1 owned
+                # result. Codegen wraps the whole thing in a statement-expression
+                # `({ … _dores; })` whose trailing temp is the block's value.
+                return self.lower_do_value(do_body)
+            case Expr.EMatch(m_subj, m_arms):
+                # match-EXPRESSION: lower the subject, then lower EACH arm body as
+                # a `do:` value (its last bare expression is the arm's result).
+                # Pattern bindings are declared in the arm's scope (visible to the
+                # nested do-block). Codegen dispatches `_mres = ({arm-do})` per arm.
+                mut hm_subj = self.lower_expr(m_subj)
+                mut hm_subj_ty = hir_expr_type(hm_subj)
+                mut hm_arms = Vec[HirMatchArm].init(4)
+                mut hm_ty = AstType.init("void")
+                mut hm_k = 0
+                while hm_k < m_arms.len:
+                    mut hm_arm = m_arms.get(hm_k)
+                    self.enter_scope()
+                    self.declare_pattern_binds_typed(hm_arm.pat, hm_subj_ty)
+                    mut hm_edo = self.lower_do_value(hm_arm.body.read())
+                    if hir_expr_type(hm_edo).name != "void": hm_ty = hir_expr_type(hm_edo)
+                    mut hm_body = HirBlock.init()
+                    hm_body.push(box_hirstmt(HirStmt.SExpr(hm_edo)))
+                    mut h_marm = HirMatchArm.init(hm_arm.pat, hm_body)
+                    if hm_arm.guard as usize != 0 as usize:
+                        h_marm.guard = self.lower_expr(hm_arm.guard)
+                    hm_arms.push(h_marm)
+                    self.exit_scope()
+                    hm_k = hm_k + 1
+                return box_hirexpr(HirExpr.EMatchExpr(hm_subj, hm_arms, hm_ty))
+            case Expr.ELoop(loop_body):
+                # `loop:` expression — infinite loop; value comes from `break v`.
+                self.enter_scope()
+                self.loop_scope_base.push(self.scopes.len - 1)
+                mut h_loop_body = self.lower_block(loop_body)
+                self.loop_scope_base.pop()
+                self.finalize_scope_drops(h_loop_body)
+                self.exit_scope()
+                mut loop_ty = self.infer_break_type(h_loop_body)
+                return box_hirexpr(HirExpr.ELoop(h_loop_body, loop_ty))
+            case Expr.EWhileExpr(we_cond, we_body, we_else):
+                # `while c:` expression — value from `break v`, else the `else:`
+                # block's last bare expression on normal exit.
+                mut h_we_cond = self.lower_expr(we_cond)
+                self.enter_scope()
+                self.loop_scope_base.push(self.scopes.len - 1)
+                mut h_we_body = self.lower_block(we_body)
+                self.loop_scope_base.pop()
+                self.finalize_scope_drops(h_we_body)
+                self.exit_scope()
+                # The else block yields a do-style value on normal exit.
+                mut h_we_else = self.lower_do_value(we_else)
+                mut we_ty = self.infer_break_type(h_we_body)
+                if we_ty.name == "void": we_ty = hir_expr_type(h_we_else)
+                # Wrap the else value-expr in a block so codegen can emit it.
+                mut h_we_else_b = HirBlock.init()
+                h_we_else_b.push(box_hirstmt(HirStmt.SExpr(h_we_else)))
+                return box_hirexpr(HirExpr.EWhileExpr(h_we_cond, h_we_body, h_we_else_b, we_ty))
             case Expr.ETryExpr(inner):
                 mut hinner = self.lower_expr(inner)
                 mut inner_ty = hir_expr_type(hinner)

@@ -1,0 +1,11 @@
+# EXPECT: pass
+# Zero-copy dict value borrow in a read loop (no mutation while borrowed).
+def main():
+    mut d: Dict[str, str] = {}
+    d.insert("a", "alpha")
+    d.insert("b", "beta")
+    mut total = 0
+    for k in d.keys():
+        v: ref str = d.get(k)
+        total = total + v.len()
+    print(total)

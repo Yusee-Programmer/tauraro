@@ -1,0 +1,26 @@
+# Generic @value_type: Box[T] should be a stack value (Box_i64), inline in lists.
+@value_type
+pub class Box[T]:
+    pub v: T
+
+extend Box[T]:
+    pub def of(x: T) -> Box[T]:
+        mut b = Box[T]()
+        b.v = x
+        return b
+    pub def get(self) -> T:
+        return self.v
+
+def main():
+    mut b: Box[int] = Box[int].of(42)
+    print(b.get())
+    mut boxes: List[Box[int]] = []
+    mut i = 0
+    while i < 3:
+        boxes.append(Box[int].of(i * 10))
+        i = i + 1
+    mut total = 0
+    for x in boxes:
+        total = total + x.get()
+    print(total)
+    print("generic value-type ok")
