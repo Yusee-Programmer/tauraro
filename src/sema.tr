@@ -3569,6 +3569,49 @@ extend Sema:
         if method == "words": return AstType.init("Vec")
         return AstType.init("void")
 
+    # Collect every identifier referenced anywhere in a HIR block — used for
+    # closure free-variable / capture analysis.
+    pub def collect_block_refs(self, b: HirBlock, out: Vec[str]):
+        mut i = 0
+        while i < b.stmts.len:
+            self.collect_stmt_refs(b.stmts.get(i), out)
+            i = i + 1
+
+    pub def collect_stmt_refs(self, s: Pointer[HirStmt], out: Vec[str]):
+        if s as usize == 0 as usize: return
+        match s.read():
+            case HirStmt.SExpr(e): self.collect_idents(e, out)
+            case HirStmt.SLet(_, _, _, _, _, _, v): self.collect_idents(v, out)
+            case HirStmt.SAssign(t, v):
+                self.collect_idents(t, out)
+                self.collect_idents(v, out)
+            case HirStmt.SReturn(v):
+                if v as usize != 0 as usize: self.collect_idents(v, out)
+            case HirStmt.SBreak(v):
+                if v as usize != 0 as usize: self.collect_idents(v, out)
+            case HirStmt.SRaise(v): self.collect_idents(v, out)
+            case HirStmt.SIf(c, tb, eb):
+                self.collect_idents(c, out)
+                self.collect_block_refs(tb, out)
+                self.collect_block_refs(eb, out)
+            case HirStmt.SWhile(c, b2):
+                self.collect_idents(c, out)
+                self.collect_block_refs(b2, out)
+            case HirStmt.SFor(_, it, b2):
+                self.collect_idents(it, out)
+                self.collect_block_refs(b2, out)
+            case HirStmt.SForUnpack(_, it, b2):
+                self.collect_idents(it, out)
+                self.collect_block_refs(b2, out)
+            case HirStmt.SMatch(subj, arms):
+                self.collect_idents(subj, out)
+                mut i = 0
+                while i < arms.len:
+                    self.collect_block_refs(arms.get(i).body, out)
+                    i = i + 1
+            case HirStmt.SUnsafe(b2): self.collect_block_refs(b2, out)
+            case _: pass
+
     # Lower a block into a `do:` value (HirExpr.EDo): runs the body in its own
     # scope; the LAST bare expression is the value. Scope-exit drops run NORMALLY
     # (no exclusion) for `str`/refcounted values — codegen captures + retains the
@@ -4501,6 +4544,7 @@ extend Sema:
                 return box_hirexpr(HirExpr.EList(hitems, list_ty))
             case Expr.EClosure(params, ret_ty, body, is_async):
                 self.enter_scope()
+                mut cap_idx = self.scopes.len - 1   # the closure's OWN scope
                 mut hparams = Vec[HirParam].init(params.len)
                 mut l = 0
                 while l < params.len:
@@ -4521,7 +4565,36 @@ extend Sema:
                 mut clo_body = self.lower_block(body)
                 self.fn_scope_base.pop()
                 self.finalize_scope_drops(clo_body)
-                mut hexpr = HirExpr.EClosure(hparams, r_ty, clo_body, is_async, Vec[HirParam].init(0))
+                # Capture analysis: the outlined closure (a top-level function) can
+                # no longer see the enclosing frame, so compute the FREE variables —
+                # names it references that resolve to an ENCLOSING local variable
+                # (not its own params/locals, not a global/function) — and record
+                # them as by-reference captures for codegen's env.
+                mut clo_refs = Vec[str].init(8)
+                self.collect_block_refs(clo_body, clo_refs)
+                mut clo_caps = Vec[HirParam].init(4)
+                mut clo_seen = Map[str, bool].init(8)
+                mut cri = 0
+                while cri < clo_refs.len:
+                    mut rn = clo_refs.get(cri)
+                    if not clo_seen.contains(rn):
+                        clo_seen.insert(rn, true)
+                        if not self.scopes.get(cap_idx).variables.contains(rn):
+                            mut si = cap_idx - 1
+                            mut cty_p = Pointer[AstType](0)
+                            while si >= 0:
+                                if self.scopes.get(si).variables.contains(rn):
+                                    cty_p = self.scopes.get(si).variables.get(rn).ty
+                                    si = 0 - 1
+                                else:
+                                    si = si - 1
+                            if cty_p as usize != 0 as usize:
+                                mut ccp = HirParam()
+                                ccp.name = rn
+                                ccp.ty = cty_p.read()
+                                clo_caps.push(ccp)
+                    cri = cri + 1
+                mut hexpr = HirExpr.EClosure(hparams, r_ty, clo_body, is_async, clo_caps)
                 self.exit_scope()
                 return box_hirexpr(hexpr)
             case Expr.EIfElse(cond, then_e, else_e):

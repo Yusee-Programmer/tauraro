@@ -174,6 +174,12 @@ pub class CGenerator:
     pub global_vars:     Map[str, bool]  # top-level var names hoisted to C file scope (visible in all functions)
     pub closure_cap_set: Map[str, bool]  # captured var names for the current closure being generated
     pub closure_env_var: str             # env var name inside a closure body (empty = not in closure body)
+    pub closure_buf:    StringBuilder    # outlined top-level closure typedefs + static functions, flushed before each function
+    pub last_clo_cname:   str            # last gen_closure: outlined fn name (for the SLet stack-env path)
+    pub last_clo_estruct: str            # last gen_closure: inline env struct type
+    pub last_clo_ptypes:  str            # last gen_closure: param type list (after env)
+    pub last_clo_ret:     str            # last gen_closure: C return type
+    pub last_clo_init:    str            # last gen_closure: positional env initializer
     pub decorator_defs:   Map[str, HirFunction]  # user-defined decorator registry
     pub overloaded_sigs:  Map[str, bool]          # "ClassName_method" keys where multiple overloads exist
     pub type_alias_map:   Map[str, str]           # alias_name -> resolved C type string
@@ -233,6 +239,12 @@ pub class CGenerator:
         g.global_vars    = Map[str, bool].init(32)
         g.closure_cap_set = Map[str, bool].init(0)
         g.closure_env_var = ""
+        g.closure_buf = StringBuilder.init(2048)
+        g.last_clo_cname = ""
+        g.last_clo_estruct = ""
+        g.last_clo_ptypes = ""
+        g.last_clo_ret = ""
+        g.last_clo_init = ""
         g.decorator_defs  = Map[str, HirFunction].init(16)
         g.overloaded_sigs = Map[str, bool].init(32)
         g.type_alias_map  = Map[str, str].init(16)
@@ -271,6 +283,17 @@ pub class CGenerator:
                     self.w(self.defer_stack.get(fdi))
                     if fdi == 0: break
                     fdi = fdi - 1
+
+    # Append the outlined closure functions (accumulated during body codegen) to
+    # the current translation unit, at file scope after everything else. Each
+    # closure's creation site carries a block-scope prototype, so emitting the
+    # definitions last is safe (and lets them use any user type/function above).
+    pub def flush_closures(self):
+        mut cd = self.closure_buf.to_string().as_str()
+        if cd != "":
+            self.w("\n/* ---- outlined closures ---- */\n")
+            self.w(cd)
+            self.closure_buf = StringBuilder.init(2048)
 
     pub def seed_params(self, f: HirFunction):
         # Load the outlives-proven borrow set for THIS function (every function-entry
@@ -1314,6 +1337,10 @@ pub class CGenerator:
                 else: return "false"
             case HirExpr.ELitNone(_): return "NULL"
             case HirExpr.EIdent(n, _, _):
+                # Inside an outlined closure body, a captured variable is reached
+                # by-reference through the env pointer (preserves live read/write).
+                if self.closure_env_var != "" and self.closure_cap_set.contains(n):
+                    return "(*(__env->p_" + _safe_c_varname(n) + "))"
                 if _is_c_keyword(n) and self.decl_vars.contains(n): return "_tr_v_" + n
                 if n == "argv" and self.cur_func == "main": return "_tr_main_argv"
                 # A top-level function used as a value (not a call target) is a
@@ -2617,8 +2644,20 @@ pub class CGenerator:
                 if ai2 > 0: arg_types = arg_types + ", "
                 arg_types = arg_types + self.type_to_c(hir_expr_type(args.get(ai2)))
                 ai2 = ai2 + 1
-            if arg_types == "": arg_types = "void"
-            return "((" + ret_cty + "(*)(" + arg_types + "))(" + callee_s + "))(" + self.gen_args(args) + ")"
+            # A def-typed value is either a CLOSURE (a tagged heap env whose first
+            # word is the fn pointer, called with the env as the first arg) or a
+            # bare NAMED-function pointer (untagged, called directly). Branch on
+            # the tag. `gen_args` is emitted once and reused in both arms; only the
+            # taken arm runs at runtime.
+            mut _cargs = self.gen_args(args)
+            mut env_sig = "void*"
+            if arg_types != "": env_sig = "void*, " + arg_types
+            mut dir_sig = arg_types
+            if dir_sig == "": dir_sig = "void"
+            mut env_args = "__ce"
+            if args.len > 0: env_args = "__ce, " + _cargs
+            mut dir_args = _cargs
+            return "({ void* __cl = (void*)(" + callee_s + "); void* __ce = (void*)((uintptr_t)__cl & ~(uintptr_t)1); ((uintptr_t)__cl & 1) ? ((" + ret_cty + "(*)(" + env_sig + "))(*(void**)__ce))(" + env_args + ") : ((" + ret_cty + "(*)(" + dir_sig + "))__cl)(" + dir_args + "); })"
 
         # __call__ dispatch: callee is a variable holding a callable object
         mut callee_cls_ty: str = hir_expr_type(callee).name
@@ -2671,29 +2710,41 @@ pub class CGenerator:
 
     pub def gen_print_call(self, args: Vec[Pointer[HirExpr]]) -> str:
         if args.len == 0: return "printf(\"\\n\")"
-        mut arg0 = args.get(0)
-        mut ty0_n: str = self.resolve_generic_prim(hir_expr_type(arg0).name)
-        mut s0 = self.gen_expr(arg0)
-        if _is_int_type(ty0_n): return "printf(\"%lld\\n\", (long long)(" + s0 + "))"
-        if _is_float_type(ty0_n): return "printf(\"%g\\n\", (double)(" + s0 + "))"
-        if ty0_n == "bool": return "printf(\"%s\\n\", (" + s0 + ") ? \"true\" : \"false\")"
-        if ty0_n == "char": return "printf(\"%c\\n\", " + s0 + ")"
-        if ty0_n == "Pointer": return "printf(\"0x%llx\\n\", (unsigned long long)(uintptr_t)(" + s0 + "))"
-        if ty0_n == "List" or ty0_n == "Vec" or ty0_n == "Set" or ty0_n == "Dict" or ty0_n == "Map":
-            return "printf(\"%s\\n\", " + self.gen_collection_to_str(s0, hir_expr_type(arg0)) + ")"
-        if ty0_n == "Tuple" or ty0_n == "tuple":
-            return "printf(\"%s\\n\", " + self.gen_tuple_to_str(s0, hir_expr_type(arg0)) + ")"
-        if _is_str_type(ty0_n): return "printf(\"%s\\n\", _tr_strz(" + s0 + "))"
-        mut mono0 = self.mono_cls_name_for(hir_expr_type(arg0))
+        # Python-style print: each argument is written with its own type-correct
+        # format, separated by a single space, with one trailing newline.
+        if args.len == 1:
+            return "({ " + self.gen_print_one(args.get(0)) + "; printf(\"\\n\"); })"
+        mut out = "({ "
+        mut i = 0
+        while i < args.len:
+            if i > 0: out = out + "printf(\" \"); "
+            out = out + self.gen_print_one(args.get(i)) + "; "
+            i = i + 1
+        out = out + "printf(\"\\n\"); })"
+        return out
+
+    # A single `print` argument formatted with `printf` and NO trailing newline.
+    pub def gen_print_one(self, arg: Pointer[HirExpr]) -> str:
+        mut ty_n: str = self.resolve_generic_prim(hir_expr_type(arg).name)
+        mut s: str = self.gen_expr(arg)
+        if _is_int_type(ty_n): return "printf(\"%lld\", (long long)(" + s + "))"
+        if _is_float_type(ty_n): return "printf(\"%g\", (double)(" + s + "))"
+        if ty_n == "bool": return "printf(\"%s\", (" + s + ") ? \"true\" : \"false\")"
+        if ty_n == "char": return "printf(\"%c\", " + s + ")"
+        if ty_n == "Pointer": return "printf(\"0x%llx\", (unsigned long long)(uintptr_t)(" + s + "))"
+        if ty_n == "List" or ty_n == "Vec" or ty_n == "Set" or ty_n == "Dict" or ty_n == "Map":
+            return "printf(\"%s\", " + self.gen_collection_to_str(s, hir_expr_type(arg)) + ")"
+        if ty_n == "Tuple" or ty_n == "tuple":
+            return "printf(\"%s\", " + self.gen_tuple_to_str(s, hir_expr_type(arg)) + ")"
+        if _is_str_type(ty_n): return "printf(\"%s\", _tr_strz(" + s + "))"
+        mut mono0 = self.mono_cls_name_for(hir_expr_type(arg))
         if self.has_method(mono0, "__str__"):
-            return "printf(\"%s\\n\", _tr_strz(" + self.cls_method_c_call(mono0, "__str__", s0, "") + "))"
+            return "printf(\"%s\", _tr_strz(" + self.cls_method_c_call(mono0, "__str__", s, "") + "))"
         if self.has_method(mono0, "__repr__"):
-            return "printf(\"%s\\n\", _tr_strz(" + self.cls_method_c_call(mono0, "__repr__", s0, "") + "))"
-        if ty0_n == "void" or ty0_n == "" or ty0_n == "lambda":
-            return "printf(\"%s\\n\", _TR_AUTO_STR(" + s0 + "))"
+            return "printf(\"%s\", _tr_strz(" + self.cls_method_c_call(mono0, "__repr__", s, "") + "))"
         if self.classes.contains(mono0):
-            return "printf(\"%s\\n\", " + self.obj_to_str_expr(mono0, s0) + ")"
-        return "printf(\"%s\\n\", _TR_AUTO_STR(" + s0 + "))"
+            return "printf(\"%s\", " + self.obj_to_str_expr(mono0, s) + ")"
+        return "printf(\"%s\", _TR_AUTO_STR(" + s + "))"
 
     # Wrap an Option[T]/Result[T,E] payload expression for storage in the
     # generic `void* val` slot. Floats can't be cast to/from void* directly
@@ -4474,37 +4525,124 @@ pub class CGenerator:
         if src_sfx == "TrStr" or src_sfx == "ptr": return ""
         return "List_" + src_sfx + "_free(_gc" + idx.to_str() + "); "
 
+    # Portable (GCC+Clang) closure: the body is OUTLINED to a top-level `static`
+    # function taking an explicit env pointer, and the closure VALUE is a heap env
+    # holding POINTERS to the captured variables (capture-by-reference, so reads
+    # see live updates and writes are visible outside — matching the previous
+    # GCC-nested-function semantics). Inside the body, a reference to a captured
+    # name lowers to `(*__env->p_<name>)` (see gen_expr EIdent / SAssign).
+    #   value layout:  { void* __fn; <cty>* p_cap; … }  (env, first word = fn)
+    #   call:          (*(void**)f)(f, args)             (see the lambda call site)
+    # NOTE: the env is heap-allocated and not yet freed (a small per-creation leak;
+    # freeing it needs closure-local drop tracking — a follow-up). Escaping closures
+    # behave as before (their captures' frame is gone), now without a dangling fn.
     pub def gen_closure(self, params: Vec[HirParam], ret_ty: AstType, body: HirBlock, captures: Vec[HirParam]) -> str:
         self.closure_count = self.closure_count + 1
         mut cname = "_closure_" + self.closure_count.to_str()
+        mut ename = "_ClosureEnv_" + self.closure_count.to_str()
         mut ret_c = self.type_to_c(ret_ty)
         if ret_c == "void": ret_c = "long long"
 
-        # Seed closure params into decl_vars so SAssign generates plain assignment, not __auto_type
+        # Seed closure params + captured vars into decl_vars so SAssign emits plain
+        # assignment (captures are additionally redirected through the env below).
         mut pi = 0
         while pi < params.len:
             self.decl_vars.insert(params.get(pi).name, true)
             pi = pi + 1
-        # Seed captured vars into decl_vars so assignments to them don't create new locals
         mut ci = 0
         while ci < captures.len:
             self.decl_vars.insert(captures.get(ci).name, true)
             ci = ci + 1
 
-        # GCC nested function: has access to all outer scope variables via trampoline
-        self.w("    " + ret_c + " " + cname + "(")
-        mut first: bool = true
+        # The env is an INLINE anonymous struct (same layout at the def and the
+        # creation site, matched through the void* cast) so no typedef ordering
+        # matters: { void* __fn; <cty>* p_cap; … }.
+        mut estruct = "struct { void* __fn;"
+        mut ti = 0
+        while ti < captures.len:
+            mut cp = captures.get(ti)
+            estruct = estruct + " " + self.type_to_c(cp.ty) + "* p_" + _safe_c_varname(cp.name) + ";"
+            ti = ti + 1
+        estruct = estruct + " }"
+        # Parameter type list (after the env pointer) — for the block-scope
+        # prototype at the creation site.
+        mut ptypes = ""
+        mut i2 = 0
+        while i2 < params.len:
+            ptypes = ptypes + ", " + self.type_to_c(params.get(i2).ty)
+            i2 = i2 + 1
+
+        # Emit the static function into a FRESH buffer, then append to closure_buf
+        # (flushed ONCE at file end). Inside the body a captured name lowers to
+        # (*__env->p_<name>) — see gen_expr EIdent / SAssign.
+        mut saved_buf = self.buf
+        mut saved_cap = self.closure_cap_set
+        mut saved_env = self.closure_env_var
+        self.buf = StringBuilder.init(512)
+        self.closure_cap_set = Map[str, bool].init(8)
+        mut cj = 0
+        while cj < captures.len:
+            self.closure_cap_set.insert(captures.get(cj).name, true)
+            cj = cj + 1
+        self.closure_env_var = ename
+        # External linkage (unique names): a block-scope prototype at the creation
+        # site cannot carry `static`, so the definition must match (extern).
+        self.w(ret_c + " " + cname + "(void* __envp")
         mut i: int = 0
         while i < params.len:
             mut p: HirParam = params.get(i)
-            if not first: self.w(", ")
-            self.w(self.type_to_c(p.ty) + " " + _safe_c_varname(p.name))
-            first = false
+            self.w(", " + self.type_to_c(p.ty) + " " + _safe_c_varname(p.name))
             i = i + 1
         self.w(") {\n")
-        self.gen_block(body, 2)
-        self.w("    }\n")
-        return "(void*)(&" + cname + ")"
+        self.w("    " + estruct + "* __env = __envp; (void)__env;\n")
+        self.gen_block(body, 1)
+        self.w("}\n")
+        mut thisdef = self.buf.to_string().as_str()
+        self.buf = saved_buf
+        self.closure_cap_set = saved_cap
+        self.closure_env_var = saved_env
+        self.closure_buf.append(thisdef)
+
+        # Capture-address list (shared by heap and stack forms). If we are inside
+        # an ENCLOSING closure and a name is one of ITS captures, the value already
+        # lives behind that env pointer — reuse it (`__env->p_x`) so transitive
+        # captures chain, rather than `&x` (a non-existent local).
+        mut addrs = ""
+        mut ki = 0
+        while ki < captures.len:
+            mut kp = captures.get(ki)
+            mut sn = _safe_c_varname(kp.name)
+            mut addr = "&" + sn
+            if self.closure_env_var != "" and self.closure_cap_set.contains(kp.name):
+                addr = "__env->p_" + sn
+            addrs = addrs + ", " + addr
+            ki = ki + 1
+        # Stash the pieces so a `let`-bound closure can build a STACK env (no heap,
+        # no leak — see the SLet EClosure path). A tagged low bit marks a closure
+        # env vs a bare named-function pointer at the call site.
+        self.last_clo_cname = cname
+        self.last_clo_estruct = estruct
+        self.last_clo_ptypes = ptypes
+        self.last_clo_ret = ret_c
+        self.last_clo_init = "{ (void*)&" + cname + addrs + " }"
+
+        # Heap (malloc) creation — the fallback for closures NOT bound to a local
+        # (e.g. passed inline as an argument), where there is no statement to hold a
+        # stack env. Field-by-field (the two written-out `struct{…}` are distinct
+        # anonymous C types, so a compound-literal assignment would mismatch).
+        mut crt = "({ " + ret_c + " " + cname + "(void*" + ptypes + ");"
+        crt = crt + " " + estruct + "* __c = malloc(sizeof(" + estruct + ")); __c->__fn = (void*)&" + cname + ";"
+        mut kj = 0
+        while kj < captures.len:
+            mut kp2 = captures.get(kj)
+            mut sn2 = _safe_c_varname(kp2.name)
+            mut addr2 = "&" + sn2
+            if self.closure_env_var != "" and self.closure_cap_set.contains(kp2.name):
+                addr2 = "__env->p_" + sn2
+            crt = crt + " __c->p_" + sn2 + " = " + addr2 + ";"
+            kj = kj + 1
+        crt = crt + " (void*)((uintptr_t)__c | (uintptr_t)1); })"
+        return crt
 
     # -- Spawn wrapper pre-scan ------------------------------------------------
 
@@ -5017,36 +5155,21 @@ pub class CGenerator:
                             self.decl_vars.insert(n, true)
                             return
                         case _: pass
-                # Special-case: EClosure in SLet - write nested function FIRST, then the variable,
-                # to prevent gen_closure's self.w() calls from merging into the "c_ty n" prefix line.
+                # EClosure in SLet: gen_closure outlines the body to closure_buf and
+                # stashes the env pieces. Bind it with a STACK env (a plain local
+                # struct in this function) instead of a heap one — zero-cost and
+                # never leaks (reclaimed with the frame). Escape semantics are the
+                # same as before: a closure that outlives this frame dangles (its
+                # captures' frame is gone), exactly like the old GCC nested fns.
                 if v as usize != 0 as usize:
                     match v.read():
                         case HirExpr.EClosure(cl_params, cl_ret_ty, cl_body, _, cl_caps):
-                            self.closure_count = self.closure_count + 1
-                            mut cl_cname = "_closure_" + self.closure_count.to_str()
-                            mut cl_ret_c = self.type_to_c(cl_ret_ty)
-                            if cl_ret_c == "void": cl_ret_c = "long long"
-                            mut cl_pi = 0
-                            while cl_pi < cl_params.len:
-                                self.decl_vars.insert(cl_params.get(cl_pi).name, true)
-                                cl_pi = cl_pi + 1
-                            mut cl_ci = 0
-                            while cl_ci < cl_caps.len:
-                                self.decl_vars.insert(cl_caps.get(cl_ci).name, true)
-                                cl_ci = cl_ci + 1
-                            self.w(pad + cl_ret_c + " " + cl_cname + "(")
-                            mut cl_first = true
-                            mut cl_ii = 0
-                            while cl_ii < cl_params.len:
-                                mut cl_p = cl_params.get(cl_ii)
-                                if not cl_first: self.w(", ")
-                                self.w(self.type_to_c(cl_p.ty) + " " + _safe_c_varname(cl_p.name))
-                                cl_first = false
-                                cl_ii = cl_ii + 1
-                            self.w(") {\n")
-                            self.gen_block(cl_body, indent + 1)
-                            self.w(pad + "}\n")
-                            self.w(pad + "void* " + _safe_c_varname(n) + " = (void*)(&" + cl_cname + ");\n")
+                            mut _cdrop = self.gen_closure(cl_params, cl_ret_ty, cl_body, cl_caps)
+                            mut _cenv = "__clenv_" + self.last_clo_cname
+                            # block-scope prototype so &fn resolves; stack env; tag.
+                            self.w(pad + self.last_clo_ret + " " + self.last_clo_cname + "(void*" + self.last_clo_ptypes + ");\n")
+                            self.w(pad + self.last_clo_estruct + " " + _cenv + " = " + self.last_clo_init + ";\n")
+                            self.w(pad + "void* " + _safe_c_varname(n) + " = (void*)((uintptr_t)&" + _cenv + " | (uintptr_t)1);\n")
                             self.decl_vars.insert(n, true)
                             return
                         case _: pass
@@ -6737,6 +6860,7 @@ pub class CGenerator:
         self.w("#endif\n")
         self.w("    return 0;\n}\n")
 
+        self.flush_closures()
         return self.buf.to_string().as_str()
 
     # -- Modular output helpers ----------------------------------------------------
@@ -7276,6 +7400,7 @@ pub class CGenerator:
                         self.cur_class = ""
             i = i + 1
 
+        self.flush_closures()
         return self.buf.to_string().as_str()
 
     # Generate main.c: main-module implementations + C entry point.
@@ -7520,4 +7645,5 @@ pub class CGenerator:
         self.w("    _tr_async_pool_shutdown();\n")
         self.w("#endif\n")
         self.w("    return 0;\n}\n")
+        self.flush_closures()
         return self.buf.to_string().as_str()

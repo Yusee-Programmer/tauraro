@@ -144,22 +144,35 @@ if (_t1.tag == Color_Red) {
 
 **Where:** `src/codegen/c.tr`
 
-- `gen_closure(params, ret_ty, body, captures)` (~line 3711) — emits a
-  **GCC nested function** named `_closure_<N>` (a fresh counter,
-  `self.closure_count`) directly inside the enclosing C function body.
-  Because it is a nested function, it can reference any outer-scope C
-  variable directly (GCC trampoline) — this is how `mut`-variable capture
-  by reference works, with no explicit capture struct.
-- `closure_cap_set` / `closure_env_var` fields exist for tracking captured
-  names but the common path relies on GCC's nested-function scoping.
-- `EClosure` bound to a `let` (`SLet`) is special-cased (~line 4236): the
-  nested function definition is written *before* the `void* name = ...`
-  declaration line, so `gen_block`'s buffered writes don't interleave with
-  the declaration prefix.
-- The closure value itself is represented as `void*` — `type_to_c("lambda")`
-  and `type_to_c("def")` both return `"void*"` (~lines 314/470). Calling a
-  `def(...)->R`-typed value casts the `void*` back to a function pointer at
-  the call site (~line 2109, `gen_call`).
+Closures are **portable (GCC + Clang)**: each is OUTLINED to a top-level
+function plus a heap capture environment of pointers (capture-by-reference).
+
+- **Capture analysis** happens in sema (`lower_expr` for `Expr.EClosure`):
+  after lowering the body it collects free variables (`collect_block_refs`)
+  that resolve to an *enclosing local* (not the closure's own params/locals,
+  not a global/function) and records them as `captures` (a `HirParam` each,
+  with type). The old GCC path left `captures` empty.
+- `gen_closure(params, ret_ty, body, captures)` — emits a top-level function
+  `_closure_<N>(void* __envp, params)` into `closure_buf` (flushed once at
+  file end via `flush_closures`). The env is an **inline anonymous struct**
+  `{ void* __fn; <cty>* p_cap; … }`; the same layout is written at the def and
+  the creation site and matched through the `void*` cast (no typedef, so no
+  ordering problem). Inside the body a captured name lowers to
+  `(*__env->p_<name>)` (see `gen_expr` `EIdent` and `SAssign`, gated on
+  `closure_env_var != "" && closure_cap_set.contains(name)`).
+- **Creation** returns a statement-expression that carries a *block-scope
+  prototype* for `_closure_<N>` (so the def can live at file end), `malloc`s
+  the env, sets `__fn` + `&capture` for each, and **tags the low bit** of the
+  returned pointer.
+- **Call site** (`gen_call`, the `lambda`/`void*`/`def` branch): branch on the
+  tag — a tagged value is a CLOSURE (untag, read `__fn`, call with the env as
+  the first arg), an untagged value is a bare NAMED-function pointer (call
+  directly). This lets a closure and a function name be interchangeable as a
+  `def(...)->R` value.
+- The closure value is still `void*` — `type_to_c("lambda")`/`type_to_c("def")`
+  return `"void*"`. `closure_buf`/`flush_closures` handle emission; the env is
+  heap-allocated and **not yet freed** (a small per-creation leak — reclamation
+  via scope-based drop is a follow-up).
 
 ### Example
 
@@ -174,16 +187,24 @@ def main():
 ### Generated C shape (approximate)
 
 ```c
-void main(void) {
+/* file scope (flushed at end): */
+long long _closure_1(void* __envp, long long x) {
+    struct { void* __fn; long long* p_counter; }* __env = __envp;
+    return (*__env->p_counter) + x;     /* capture by reference */
+}
+
+int main(void) {
     long long counter = 0;
-
-    long long _closure_1(long long x) {
-        return counter + x;     /* direct access via GCC nested function */
-    }
-    void* add = (void*)(&_closure_1);
-
+    void* add = ({ long long _closure_1(void*, long long);
+                   struct { void* __fn; long long* p_counter; }* __c = malloc(sizeof(*__c));
+                   __c->__fn = (void*)&_closure_1; __c->p_counter = &counter;
+                   (void*)((uintptr_t)__c | 1); });   /* tagged env */
     counter = 10;
-    printf("%lld\n", ((long long(*)(long long))add)(5));
+    void* __cl = add;                                 /* call: tag -> env call */
+    void* __ce = (void*)((uintptr_t)__cl & ~(uintptr_t)1);
+    printf("%lld\n", ((uintptr_t)__cl & 1)
+        ? ((long long(*)(void*, long long))(*(void**)__ce))(__ce, 5)
+        : ((long long(*)(long long))__cl)(5));
 }
 ```
 

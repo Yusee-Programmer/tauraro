@@ -1,0 +1,7 @@
+def main():
+    print(20, "yusee", 10.5)        # 20 yusee 10.5
+    print("total =", 15)             # total = 15
+    print(1, 2, 3, 4)                # 1 2 3 4
+    print(True, 3.14)                # true 3.14
+    print("single")                  # single
+    print(42)                        # 42

@@ -153,7 +153,35 @@ __attribute__((hot)) AstType* hir_expr_type(HirExpr* e) {
         __auto_type ty = _t227.data.ETryExpr.ty;
         return ty;
     } else if (_t227.tag == HirExpr_EClosure) {
-        return AstType_init(_tr_str_lit("lambda"));
+        __auto_type _cl_ps = _t227.data.EClosure.params;
+__auto_type _cl_ret = _t227.data.EClosure.ret_ty;
+        /* pass */
+        AstType* _clt = AstType_init(_tr_str_lit("def"));
+        /* pass */
+        long long _cli = 0LL;
+        /* pass */
+        while ((_cli < _cl_ps->len)) {
+            /* pass */
+            /* unsafe block */
+            /* pass */
+            AstType** _clp = ((AstType**)_tr_c_calloc((size_t)(1LL), sizeof(AstType*)));
+            /* pass */
+            (*_clp = ((HirParam*)List_ptr_get(_cl_ps, _cli))->ty);
+            /* pass */
+            List_ptr_append(_clt->args, _clp);
+            /* pass */
+            _cli = (_cli + 1LL);
+        }
+        /* pass */
+        /* unsafe block */
+        /* pass */
+        AstType** _clrp = ((AstType**)_tr_c_calloc((size_t)(1LL), sizeof(AstType*)));
+        /* pass */
+        (*_clrp = _cl_ret);
+        /* pass */
+        List_ptr_append(_clt->args, _clrp);
+        /* pass */
+        return _clt;
     } else if (_t227.tag == HirExpr_ESuperMethodCall) {
         __auto_type ty = _t227.data.ESuperMethodCall.ty;
         return ty;

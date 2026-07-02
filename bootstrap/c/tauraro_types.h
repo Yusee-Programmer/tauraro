@@ -2187,6 +2187,12 @@ typedef struct CGenerator {
     TrMap* global_vars;
     TrMap* closure_cap_set;
     TrStr closure_env_var;
+    StringBuilder* closure_buf;
+    TrStr last_clo_cname;
+    TrStr last_clo_estruct;
+    TrStr last_clo_ptypes;
+    TrStr last_clo_ret;
+    TrStr last_clo_init;
     TrMap* decorator_defs;
     TrMap* overloaded_sigs;
     TrMap* type_alias_map;
@@ -2629,6 +2635,8 @@ __attribute__((hot)) AstType* Sema_variant_field_ty(Sema* self, TrStr type_name,
 __attribute__((hot)) void Sema_declare_pattern_binds(Sema* self, Pattern pat);
 __attribute__((hot)) void Sema_declare_pattern_binds_typed(Sema* self, Pattern pat, AstType* subj_ty);
 __attribute__((hot)) AstType* Sema_str_method_ret_ty(Sema* self, TrStr method);
+__attribute__((hot)) void Sema_collect_block_refs(Sema* self, HirBlock* b, List_TrStr* out);
+__attribute__((hot)) void Sema_collect_stmt_refs(Sema* self, HirStmt* s, List_TrStr* out);
 __attribute__((hot)) HirExpr* Sema_lower_do_value(Sema* self, Block* do_body);
 __attribute__((hot)) AstType* Sema_infer_break_type(Sema* self, HirBlock* hb);
 __attribute__((hot)) AstType* Sema_infer_break_type_stmt(Sema* self, HirStmt* s);
@@ -2790,6 +2798,7 @@ __attribute__((malloc,returns_nonnull,hot)) CGenerator* CGenerator_init();
 __attribute__((hot)) TrStr CGenerator_next_temp(CGenerator* self);
 __attribute__((hot)) void CGenerator_reset_defer_stack(CGenerator* self);
 __attribute__((hot)) void CGenerator_gen_func_body(CGenerator* self, HirBlock* body, long long indent);
+__attribute__((hot)) void CGenerator_flush_closures(CGenerator* self);
 __attribute__((hot)) void CGenerator_seed_params(CGenerator* self, HirFunction* f);
 __attribute__((hot)) void CGenerator_w(CGenerator* self, TrStr s);
 __attribute__((hot)) void CGenerator_wf(CGenerator* self, TrStr s);
@@ -2845,6 +2854,7 @@ __attribute__((hot)) TrStr CGenerator_gen_prop_access(CGenerator* self, HirExpr*
 __attribute__((hot)) TrStr CGenerator_gen_index(CGenerator* self, HirExpr* o, HirExpr* idx);
 __attribute__((hot)) TrStr CGenerator_gen_call(CGenerator* self, HirExpr* callee, List_ptr* args, AstType* call_ty);
 __attribute__((hot)) TrStr CGenerator_gen_print_call(CGenerator* self, List_ptr* args);
+__attribute__((hot)) TrStr CGenerator_gen_print_one(CGenerator* self, HirExpr* arg);
 __attribute__((hot)) TrStr CGenerator_wrap_voidp_arg(CGenerator* self, HirExpr* arg);
 __attribute__((hot)) TrStr CGenerator_unwrap_voidp_as(CGenerator* self, TrStr expr_s, AstType* ty);
 __attribute__((hot)) TrStr CGenerator_dict_key_arg(CGenerator* self, HirExpr* e);

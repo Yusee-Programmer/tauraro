@@ -274,7 +274,23 @@ pub def hir_expr_type(e: Pointer[HirExpr]) -> AstType:
         case HirExpr.ECast(_, ty): return ty
         case HirExpr.EFString(_, ty): return ty
         case HirExpr.ETryExpr(_, ty): return ty
-        case HirExpr.EClosure(_, _, _, _, _): return AstType.init("lambda")
+        case HirExpr.EClosure(_cl_ps, _cl_ret, _, _, _):
+            # A `def(...)->R` value: carry the signature as a "def" type whose
+            # args are the parameter types followed by the return type, so a call
+            # `f(x)` can infer R (a bare "lambda" lost it -> results became void*).
+            mut _clt = AstType.init("def")
+            mut _cli = 0
+            while _cli < _cl_ps.len:
+                unsafe:
+                    mut _clp = alloc[AstType](1)
+                    _clp.write(_cl_ps.get(_cli).ty)
+                    _clt.args.push(_clp)
+                _cli = _cli + 1
+            unsafe:
+                mut _clrp = alloc[AstType](1)
+                _clrp.write(_cl_ret)
+                _clt.args.push(_clrp)
+            return _clt
         case HirExpr.ESuperMethodCall(_, _, _, ty): return ty
         case HirExpr.ESuperPropAccess(_, _, ty): return ty
         case HirExpr.EList(_, ty): return ty

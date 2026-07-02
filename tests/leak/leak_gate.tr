@@ -89,6 +89,13 @@ def workload():
         "done"
     mut wvlen = wv.len()
 
+    # Closure bound to a local: the capture env is stack-allocated (no heap, no
+    # leak across the 5000-iteration workload). Captures `capv` by reference.
+    mut capv = 10
+    mut cf = def (x: int) -> int:
+        return capv + x
+    mut cfr = cf(5)            # 15
+
 def main():
     workload()                                  # warm up (one-time allocations)
     mut before = _tr_mem_live()

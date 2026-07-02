@@ -413,14 +413,18 @@ accumulate(10)
 print(total)    # 15 — outer variable was modified
 ```
 
-> **Build requirement (GCC).** Capture-by-reference closures compile to GCC
-> *nested functions*, a GCC extension. Programs that use closures therefore need
-> **GCC** (not Clang) as the C backend. On Linux that is the default; on macOS,
-> install GCC (e.g. `brew install gcc`) and build with it, since the system `cc`
-> is Clang and rejects nested functions. Programs that don't use closures build
-> fine on either compiler. (A portable closure representation — top-level
-> function + heap-allocated capture environment — is planned; until then, GCC is
-> required for closures.)
+> **Portable (GCC + Clang).** A closure compiles to a **top-level function plus a
+> heap-allocated capture environment** that holds pointers to the captured
+> variables (capture-by-reference). This works on both GCC and Clang — closures
+> no longer require GCC-only nested functions. A closure value and a plain
+> function name are interchangeable wherever a `def(...)->R` is expected.
+>
+> Two things to know: (1) captures are **by reference**, so a closure that
+> *escapes* the function that created it (is returned or stored past that call)
+> must not outlive the captured variables — same rule as before. (2) The capture
+> environment is currently heap-allocated and not yet reclaimed, so creating many
+> closures in a hot loop leaks a small amount; binding a closure once and reusing
+> it is fine. (Env reclamation via scope-based drop is a planned follow-up.)
 
 **Stateful counter:**
 ```python
