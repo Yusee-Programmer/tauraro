@@ -5398,6 +5398,55 @@ static void _tr_idict_free_objval(TrIDict* d, void(*drop)(void*)) {
     _tr_free(d->buckets); _tr_free(d);
 }
 
+/* Set[HeapClass] — hash set of heap instances keyed by POINTER IDENTITY. The set
+   OWNS each element (add retains); _tr_pset_free_obj releases them on teardown. */
+typedef struct _TrPSetNode { void* elem; struct _TrPSetNode* next; } _TrPSetNode;
+typedef struct { _TrPSetNode** buckets; size_t cap; size_t len; } _TrPtrSet;
+static inline _TrPtrSet* _tr_pset_new(int64_t cap) {
+    _TrPtrSet* s=(_TrPtrSet*)_tr_checked_alloc(sizeof(_TrPtrSet));
+    s->cap = cap>0?(size_t)cap:16; s->len=0;
+    s->buckets=(_TrPSetNode**)_tr_checked_alloc(sizeof(_TrPSetNode*)*s->cap);
+    for(size_t i=0;i<s->cap;i++) s->buckets[i]=NULL;
+    return s;
+}
+static inline size_t _tr_pset_hash(_TrPtrSet* s, void* e) { return ((size_t)(uintptr_t)e >> 4) % s->cap; }
+static inline int64_t _tr_pset_contains(_TrPtrSet* s, void* e) {
+    if(!s) return 0; _TrPSetNode* n=s->buckets[_tr_pset_hash(s,e)];
+    while(n){ if(n->elem==e) return 1; n=n->next; } return 0;
+}
+static inline void _tr_pset_add(_TrPtrSet* s, void* e) {
+    if(!s||_tr_pset_contains(s,e)) return;
+    size_t h=_tr_pset_hash(s,e);
+    _TrPSetNode* n=(_TrPSetNode*)_tr_checked_alloc(sizeof(_TrPSetNode));
+    n->elem=e; n->next=s->buckets[h]; s->buckets[h]=n; s->len++;
+}
+static inline void _tr_pset_remove(_TrPtrSet* s, void* e) {
+    if(!s) return; size_t h=_tr_pset_hash(s,e);
+    _TrPSetNode* n=s->buckets[h]; _TrPSetNode* p=NULL;
+    while(n){ if(n->elem==e){ if(p)p->next=n->next; else s->buckets[h]=n->next; _tr_free(n); if(s->len)s->len--; return; } p=n; n=n->next; }
+}
+static inline int64_t _tr_pset_len(_TrPtrSet* s) { return s?(int64_t)s->len:0; }
+static inline void _tr_pset_clear(_TrPtrSet* s) {
+    if(!s) return;
+    for(size_t i=0;i<s->cap;i++){ _TrPSetNode* n=s->buckets[i]; while(n){ _TrPSetNode* nx=n->next; _tr_free(n); n=nx; } s->buckets[i]=NULL; }
+    s->len=0;
+}
+static inline void _tr_pset_free(_TrPtrSet* s) {
+    if(!s) return;
+    for(size_t i=0;i<s->cap;i++){ _TrPSetNode* n=s->buckets[i]; while(n){ _TrPSetNode* nx=n->next; _tr_free(n); n=nx; } }
+    _tr_free(s->buckets); _tr_free(s);
+}
+static inline void _tr_pset_free_obj(_TrPtrSet* s, void(*drop)(void*)) {
+    if(!s) return;
+    for(size_t i=0;i<s->cap;i++){ _TrPSetNode* n=s->buckets[i]; while(n){ _TrPSetNode* nx=n->next; _tr_obj_release(n->elem, drop); _tr_free(n); n=nx; } }
+    _tr_free(s->buckets); _tr_free(s);
+}
+static inline List_ptr* _tr_pset_to_list(_TrPtrSet* s) {
+    List_ptr* l=List_ptr_new();
+    if(s){ for(size_t i=0;i<s->cap;i++){ _TrPSetNode* n=s->buckets[i]; while(n){ List_ptr_append(l,n->elem); n=n->next; } } }
+    return l;
+}
+
 /* Set[T] — hash set backed by TrMap */
 typedef TrMap _TrSet;
 static _TrSet* _tr_set_new(int64_t cap) { return _tr_dict_new(cap > 0 ? cap : 16); }

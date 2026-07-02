@@ -625,6 +625,9 @@ pub class CGenerator:
                     return "Set_" + se.name + "*"
                 if _is_int_type(se.name) or se.name == "int" or se.name == "i64" or se.name == "usize":
                     return "_TrISet*"
+                # Heap-class element -> pointer-identity set (owns + releases elements).
+                if self.is_heap_class_tn(se.name):
+                    return "_TrPtrSet*"
             return "_TrSet*"
 
         if n == "Chan": return "_TrChan*"
@@ -2162,6 +2165,10 @@ pub class CGenerator:
                 return "Dict_free_strval(" + fld_c + ")"
             if _ik: return "_tr_idict_free(" + fld_c + ")"
             return "Dict_free(" + fld_c + ")"
+        if ty.name == "Set":
+            if ty.args.len > 0 and self.is_heap_class_tn(ty.args.get(0).read().name):
+                return "_tr_pset_free_obj(" + fld_c + ", " + self.obj_drop_fn(ty.args.get(0).read().name) + ")"
+            return ""
         return ""
 
     pub def is_heap_class_tn(self, tn: str) -> bool:
@@ -4292,6 +4299,25 @@ pub class CGenerator:
                 if method == "clear": return sp + "_clear(" + obj_s + ")"
                 if method == "to_list": return sp + "_to_list(" + obj_s + ")"
                 if method == "free": return sp + "_free(" + obj_s + ")"
+            # Heap-class element -> pointer-identity set (_TrPtrSet), owns+releases elements.
+            mut _pset_heap = ""
+            if set_full_ty.args.len > 0 and self.is_heap_class_tn(set_full_ty.args.get(0).read().name):
+                _pset_heap = set_full_ty.args.get(0).read().name
+            if _pset_heap != "":
+                if method == "init" or method == "new":
+                    if args.len == 0: return "_tr_pset_new(16)"
+                    return "_tr_pset_new(" + self.gen_args(args) + ")"
+                if method == "add" and args.len > 0:
+                    mut _pa = self.obj_retain_wrap(args.get(0), self.gen_expr(args.get(0)), false)
+                    if self._obj_store_needs_retain(args.get(0)): _pa = "_tr_obj_retain(" + _pa + ")"
+                    return "_tr_pset_add(" + obj_s + ", " + _pa + ")"
+                if method == "contains" or method == "has": return "_tr_pset_contains(" + obj_s + ", " + self.gen_expr(args.get(0)) + ")"
+                if method == "remove" and args.len > 0: return "_tr_pset_remove(" + obj_s + ", " + self.gen_expr(args.get(0)) + ")"
+                if method == "len" or method == "length": return "_tr_pset_len(" + obj_s + ")"
+                if method == "is_empty": return "(_tr_pset_len(" + obj_s + ") == 0LL)"
+                if method == "clear": return "_tr_pset_clear(" + obj_s + ")"
+                if method == "to_list": return "_tr_pset_to_list(" + obj_s + ")"
+                if method == "free": return "_tr_pset_free(" + obj_s + ")"
             mut set_elem = elem_sfx
             if set_elem == "ptr": set_elem = "str"  # default element type
             # Choose runtime prefix: int-keyed sets use _tr_iset_*, others _tr_set_*
@@ -5575,6 +5601,9 @@ pub class CGenerator:
                         self.coll_local_sfx.insert(n, "d@i@" + _dvc)
                     else:
                         self.coll_local_sfx.insert(n, "d@s@" + _dvc)
+                # Heap-class Set (_TrPtrSet): free via _tr_pset_free_obj releasing each element.
+                if ty.name == "Set" and c_ty == "_TrPtrSet*" and ty.args.len > 0 and self.is_heap_class_tn(ty.args.get(0).read().name):
+                    self.coll_local_sfx.insert(n, "s@" + ty.args.get(0).read().name)
                 # ? propagation in let binding
                 if v as usize != 0 as usize:
                     match v.read():
@@ -6167,6 +6196,9 @@ pub class CGenerator:
                             self.w(pad + "_tr_idict_free_objval(" + _safe_c_varname(adn) + ", " + self.obj_drop_fn(_dcls) + ");\n")
                         else:
                             self.w(pad + "Dict_free_objval(" + _safe_c_varname(adn) + ", " + self.obj_drop_fn(_dcls) + ");\n")
+                    elif _ad_dsfx.len() > 2 and _ad_dsfx.slice(0, 2) == "s@":
+                        # Heap-class Set (_TrPtrSet): release each owned element. "s@<Class>".
+                        self.w(pad + "_tr_pset_free_obj(" + _safe_c_varname(adn) + ", " + self.obj_drop_fn(_ad_dsfx.slice(2, _ad_dsfx.len())) + ");\n")
                     elif self.coll_local_vtcoll.contains(adn):
                         # Typed inline value-type collection: Dict_str_Point_free / Set_Point_free
                         self.w(pad + self.coll_local_vtcoll.get(adn) + "_free(" + _safe_c_varname(adn) + ");\n")
@@ -6190,10 +6222,14 @@ pub class CGenerator:
                         # retain-on-bind/store/return); borrows never enter that set.
                         if self.class_local_names.contains(adn):
                             self.w(pad + "_tr_obj_release(" + _adn_safe + ", " + self.obj_drop_fn(adc) + ");\n")
-                    else:
+                    elif self.has_method(adc, "free"):
                         # User-managed class (defines free()): capture each owned str
                         # field BEFORE free() (so free() can still read it), run free(),
                         # then release the captured copies. (Item #2 destructor.)
+                        # A class WITHOUT free() that isn't a droppable heap class (e.g.
+                        # a Pointer[T]-managed / raw_aliased type like TomlValue) is NOT
+                        # dropped here: its str fields are owned by the raw struct, and
+                        # releasing them would UAF the value written through the pointer.
                         mut _ad_tmps = Vec[str].init(0)
                         if self.classes.contains(adc):
                             mut _ad_cls = self.classes.get(adc)

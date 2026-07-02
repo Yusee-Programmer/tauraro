@@ -187,6 +187,13 @@ def workload():
     bin.put(make_tag("b2-", dd))
     mut binlen = bin.items.len
 
+    # Set of heap-class elements (pointer-identity set): co-owns each; drop releases
+    # them (_tr_pset_free_obj).
+    mut ts = Set[Tag].init(8)
+    ts.add(make_tag("s1-", dd))
+    ts.add(make_tag("s2-", dd))
+    mut tslen = ts.len()
+
 def main():
     workload()                                  # warm up (one-time allocations)
     mut before = _tr_mem_live()
