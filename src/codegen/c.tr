@@ -1189,6 +1189,19 @@ pub class CGenerator:
                 self.ws("    " + self.type_to_c(bf.ty) + " " + bf.name + ";\n")
                 bfi = bfi + 1
 
+    # Forward-declare every per-class `_trdrop_T` before any is defined, so a
+    # class whose _trdrop releases a class-typed field (calling another class's
+    # _trdrop) compiles regardless of declaration order.
+    pub def emit_drop_fwd_decls(self, prog: HirProgram):
+        mut i = 0
+        while i < prog.classes.len:
+            mut c = prog.classes.get(i)
+            if not _is_invalid_ptr(c as usize):
+                if c.generics.len == 0 and not self.value_types.contains(c.name) and not self.has_method(c.name, "free"):
+                    self.ws("static void " + self.obj_drop_fn(c.name) + "(void* vp);\n")
+            i = i + 1
+        self.ws("\n")
+
     pub def gen_class_struct(self, c: HirClass):
         self.ws("#ifndef " + c.name + "_STRUCT_DEFINED\n")
         self.ws("#define " + c.name + "_STRUCT_DEFINED\n")
@@ -1229,9 +1242,21 @@ pub class CGenerator:
                 mut _csf = 0
                 while _csf < c.fields.len:
                     mut _csfld = c.fields.get(_csf)
-                    if _is_str_type(self.resolve_generic_prim(_csfld.ty.name)) and not _csfld.ty.is_borrow:
+                    if _csfld.ty.is_borrow:
+                        # `ref T` field is a borrow — the object does not own it.
+                        _csf = _csf + 1
+                    elif _is_str_type(self.resolve_generic_prim(_csfld.ty.name)):
                         self.ws("    _tr_str_release(self->" + _safe_c_varname(_csfld.name) + ");\n")
-                    _csf = _csf + 1
+                        _csf = _csf + 1
+                    elif self.is_heap_class_tn(_csfld.ty.name):
+                        # Owned heap-class field: recursively release it (its own
+                        # _trdrop releases ITS str/class fields). Field stores co-own
+                        # (retain), so this release is balanced. Pointer-aliased types
+                        # (raw_aliased) are excluded by is_heap_class_tn.
+                        self.ws("    _tr_obj_release(self->" + _safe_c_varname(_csfld.name) + ", " + self.obj_drop_fn(_csfld.ty.name) + ");\n")
+                        _csf = _csf + 1
+                    else:
+                        _csf = _csf + 1
                 self.ws("}\n")
         self.ws("#endif\n\n")
 
@@ -2066,6 +2091,34 @@ pub class CGenerator:
                         if self.classes.contains(rn): rt = rn
                     case _: pass
                 return self._fn_owned_lookup(rt + "." + m)
+            case _: return false
+
+    # When a heap-class value is STORED into a class FIELD (which now co-owns it and
+    # releases it in _trdrop_T), does the store need an extra retain to establish
+    # ownership? A fresh construction / owned-classified call TRANSFERS its rc=1 (no
+    # retain). A collection-element borrow or a borrow-returning call is an ALIAS the
+    # field must retain to co-own (else _trdrop over-releases → UAF). EIdent/EPropAccess
+    # are already retained by obj_retain_wrap, so they return false here (no double).
+    pub def _obj_store_needs_retain(self, e: Pointer[HirExpr]) -> bool:
+        if _is_invalid_ptr(e as usize): return false
+        match e.read():
+            case HirExpr.EIdent(_, _, _): return false
+            case HirExpr.EPropAccess(_, _, _): return false
+            case HirExpr.ECall(callee, _, _):
+                match callee.read():
+                    case HirExpr.EIdent(cn, _, _):
+                        if self.classes.contains(cn): return false   # constructor transfer
+                        return not self._fn_owned_lookup(cn)          # owned-call transfer; borrow retain
+                    case _: return true
+            case HirExpr.EMethodCall(recv, m, _, _):
+                mut rt = hir_expr_type(recv).name
+                if (rt == "Vec" or rt == "List" or rt == "Dict" or rt == "Map" or rt == "Set") and (m == "get" or m == "first" or m == "last"):
+                    return true
+                match recv.read():
+                    case HirExpr.EIdent(rn, _, _):
+                        if self.classes.contains(rn): rt = rn
+                    case _: pass
+                return not self._fn_owned_lookup(rt + "." + m)
             case _: return false
 
     # Name of the per-class field-drop function (releases owned str/class fields).
@@ -5621,9 +5674,15 @@ pub class CGenerator:
                                 self.w(pad + _safe_c_varname(_can) + " = " + _cltmp + ";\n")
                                 return
                         case HirExpr.EPropAccess(_, _, _):
+                            # The field co-owns its value (released in _trdrop_T), so a
+                            # borrow-alias RHS must be retained here (fresh/owned rvalues
+                            # already transfer their rc=1).
+                            mut _fld_rhs = _crhs
+                            if (not self._expr_is_borrow_call(v)) and self._obj_store_needs_retain(v):
+                                _fld_rhs = "_tr_obj_retain(" + _fld_rhs + ")"
                             mut _cltmp2 = "_cltmp" + self.next_temp()
                             mut _cfld = self.gen_expr(t)
-                            self.w(pad + _cty2 + " " + _cltmp2 + " = " + _crhs + ";\n")
+                            self.w(pad + _cty2 + " " + _cltmp2 + " = " + _fld_rhs + ";\n")
                             self.w(pad + "_tr_obj_release(" + _cfld + ", " + _cdrop + ");\n")
                             self.w(pad + _cfld + " = " + _cltmp2 + ";\n")
                             return
@@ -6933,6 +6992,7 @@ pub class CGenerator:
             self.w("\n")
 
         # -- Phase 3: Struct definitions ---------------------------------------
+        self.emit_drop_fwd_decls(prog)
         i = 0
         while i < prog.enums.len:
             self.gen_enum_struct(prog.enums.get(i))
@@ -7295,6 +7355,7 @@ pub class CGenerator:
         # -- Struct / enum / interface definitions (BEFORE prototypes) ------------
         # Must come before function prototypes so that Vec[UserType] list structs
         # (e.g. List_JsonVal) are defined before any prototype uses them.
+        self.emit_drop_fwd_decls(prog)
         i = 0
         while i < prog.enums.len:
             mut e3 = prog.enums.get(i)

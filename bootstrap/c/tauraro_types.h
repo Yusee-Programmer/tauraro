@@ -72,6 +72,59 @@ typedef struct List_Token List_Token;
 typedef struct List_Pattern List_Pattern;
 
 
+static void _trdrop_StringObj(void* vp);
+static void _trdrop_Lexer(void* vp);
+static void _trdrop_AstType(void* vp);
+static void _trdrop_GenericConstraint(void* vp);
+static void _trdrop_Decorator(void* vp);
+static void _trdrop_Comprehension(void* vp);
+static void _trdrop_CatchClause(void* vp);
+static void _trdrop_MatchArm(void* vp);
+static void _trdrop_FStringPart(void* vp);
+static void _trdrop_ChanSelectArm(void* vp);
+static void _trdrop_Block(void* vp);
+static void _trdrop_ElifClause(void* vp);
+static void _trdrop_Param(void* vp);
+static void _trdrop_FunctionDef(void* vp);
+static void _trdrop_FieldDef(void* vp);
+static void _trdrop_ClassDef(void* vp);
+static void _trdrop_VariantDef(void* vp);
+static void _trdrop_EnumDef(void* vp);
+static void _trdrop_InterfaceDef(void* vp);
+static void _trdrop_ImportItem(void* vp);
+static void _trdrop_Program(void* vp);
+static void _trdrop_Parser(void* vp);
+static void _trdrop_ModuleResolver(void* vp);
+static void _trdrop_HirComprehension(void* vp);
+static void _trdrop_HirCatchClause(void* vp);
+static void _trdrop_HirFStringPart(void* vp);
+static void _trdrop_HirMatchArm(void* vp);
+static void _trdrop_HirChanSelectArm(void* vp);
+static void _trdrop_HirBlock(void* vp);
+static void _trdrop_HirParam(void* vp);
+static void _trdrop_HirFunction(void* vp);
+static void _trdrop_HirField(void* vp);
+static void _trdrop_HirClass(void* vp);
+static void _trdrop_HirVariant(void* vp);
+static void _trdrop_HirEnum(void* vp);
+static void _trdrop_HirInterface(void* vp);
+static void _trdrop_HirProgram(void* vp);
+static void _trdrop_MirBlock(void* vp);
+static void _trdrop_DropSite(void* vp);
+static void _trdrop_BorrowEdge(void* vp);
+static void _trdrop_MirFunction(void* vp);
+static void _trdrop_MirProgram(void* vp);
+static void _trdrop_MirBuilder(void* vp);
+static void _trdrop_LiveSet(void* vp);
+static void _trdrop_Symbol(void* vp);
+static void _trdrop_Scope(void* vp);
+static void _trdrop_Sema(void* vp);
+static void _trdrop_Formatter(void* vp);
+static void _trdrop_CGenerator(void* vp);
+static void _trdrop_LlvmGenerator(void* vp);
+static void _trdrop_MacroCtx(void* vp);
+static void _trdrop_FnMacroExpander(void* vp);
+
 typedef enum {
     Token_IntLit,
     Token_FloatLit,
@@ -1936,6 +1989,7 @@ typedef struct HirCatchClause {
 static void _trdrop_HirCatchClause(void* vp) {
     HirCatchClause* self = (HirCatchClause*)vp; (void)self;
     _tr_str_release(self->err_name);
+    _tr_obj_release(self->body, _trdrop_HirBlock);
 }
 #endif
 
@@ -1965,6 +2019,7 @@ typedef struct HirMatchArm {
 } HirMatchArm;
 static void _trdrop_HirMatchArm(void* vp) {
     HirMatchArm* self = (HirMatchArm*)vp; (void)self;
+    _tr_obj_release(self->body, _trdrop_HirBlock);
 }
 #endif
 
@@ -1982,6 +2037,7 @@ typedef struct HirChanSelectArm {
 static void _trdrop_HirChanSelectArm(void* vp) {
     HirChanSelectArm* self = (HirChanSelectArm*)vp; (void)self;
     _tr_str_release(self->var_name);
+    _tr_obj_release(self->body, _trdrop_HirBlock);
 }
 #endif
 
@@ -2037,6 +2093,7 @@ static void _trdrop_HirFunction(void* vp) {
     HirFunction* self = (HirFunction*)vp; (void)self;
     _tr_str_release(self->name);
     _tr_str_release(self->class_name);
+    _tr_obj_release(self->body, _trdrop_HirBlock);
 }
 #endif
 
@@ -2150,6 +2207,7 @@ typedef struct MirBlock {
 } MirBlock;
 static void _trdrop_MirBlock(void* vp) {
     MirBlock* self = (MirBlock*)vp; (void)self;
+    _tr_obj_release(self->hir_block, _trdrop_HirBlock);
 }
 #endif
 
@@ -2162,6 +2220,7 @@ typedef struct DropSite {
 } DropSite;
 static void _trdrop_DropSite(void* vp) {
     DropSite* self = (DropSite*)vp; (void)self;
+    _tr_obj_release(self->hir_block, _trdrop_HirBlock);
 }
 #endif
 
@@ -2197,6 +2256,7 @@ typedef struct MirFunction {
 static void _trdrop_MirFunction(void* vp) {
     MirFunction* self = (MirFunction*)vp; (void)self;
     _tr_str_release(self->name);
+    _tr_obj_release(self->unsafe_pinned, _trdrop_LiveSet);
 }
 #endif
 
@@ -2228,6 +2288,8 @@ typedef struct MirBuilder {
 } MirBuilder;
 static void _trdrop_MirBuilder(void* vp) {
     MirBuilder* self = (MirBuilder*)vp; (void)self;
+    _tr_obj_release(self->cur_hb, _trdrop_HirBlock);
+    _tr_obj_release(self->unsafe_pinned, _trdrop_LiveSet);
 }
 #endif
 
@@ -3104,6 +3166,7 @@ __attribute__((hot)) bool CGenerator_hir_block_mutates_self(CGenerator* self, Hi
 __attribute__((hot)) bool CGenerator_hir_stmt_mutates_self(CGenerator* self, HirStmt* s);
 __attribute__((hot)) TrStr CGenerator_gen_func_sig(CGenerator* self, HirFunction* f, TrStr class_name);
 __attribute__((hot)) void CGenerator_emit_base_fields(CGenerator* self, TrStr base_name);
+__attribute__((hot)) void CGenerator_emit_drop_fwd_decls(CGenerator* self, HirProgram* prog);
 __attribute__((hot)) void CGenerator_gen_class_struct(CGenerator* self, HirClass* c);
 __attribute__((hot)) void CGenerator_gen_enum_struct(CGenerator* self, HirEnum* e);
 __attribute__((hot)) void CGenerator_gen_interface_vtable(CGenerator* self, HirInterface* iface);
@@ -3129,6 +3192,7 @@ __attribute__((hot)) TrStr CGenerator_obj_retain_wrap(CGenerator* self, HirExpr*
 __attribute__((hot)) bool CGenerator__fn_owned_lookup(CGenerator* self, TrStr key);
 __attribute__((hot)) void CGenerator__reg_fn_owned(CGenerator* self, TrStr key, bool v);
 __attribute__((hot)) bool CGenerator__obj_expr_owns_ref(CGenerator* self, HirExpr* e);
+__attribute__((hot)) bool CGenerator__obj_store_needs_retain(CGenerator* self, HirExpr* e);
 __attribute__((hot)) TrStr CGenerator_obj_drop_fn(CGenerator* self, TrStr tn);
 __attribute__((hot)) TrStr CGenerator_gen_cond_expr(CGenerator* self, HirExpr* cond);
 __attribute__((hot)) TrStr CGenerator_gen_binop(CGenerator* self, TrStr op, HirExpr* l, HirExpr* r);

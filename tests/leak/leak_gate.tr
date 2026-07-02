@@ -39,6 +39,17 @@ def dist(a: Point, b: Point) -> int:      # classes passed BY reference (borrowe
 def make_tag(prefix: str, n: int) -> Tag: # FREE FUNCTION returning an OWNED instance
     return Tag.init(prefix + n.to_str())   # (interproc inference must reclaim its result)
 
+# Holder OWNS a nested heap-class field (`Tag`, which itself owns a `str`). Its
+# drop must recursively release the Tag (and the Tag its str) — the recursive
+# _trdrop_T path.
+class Holder:
+    pub t: Tag
+extend Holder:
+    pub def init(tg: Tag) -> Holder:
+        mut h = Holder()
+        h.t = tg
+        return h
+
 # Exercise the string + map paths that are fully ref-counted/auto-dropped.
 def workload():
     mut s = "abc" + "def"          # fresh concat, auto-dropped at scope exit
@@ -132,6 +143,12 @@ def workload():
     mut dd = dist(p1, p2)          # p1/p2 borrowed, not consumed
     mut tg = make_tag("id-", dd)   # free-function-returned owned Tag (str field)
     mut tlen = tg.name.len()
+
+    # Nested owned class field: Holder.t owns a Tag (which owns a str). Holder's
+    # drop must recursively release Tag → str (recursive _trdrop_T).
+    mut t2 = make_tag("h-", dd)    # local owns the Tag
+    mut hd = Holder.init(t2)       # Holder co-owns it in field .t
+    mut hlen = hd.t.name.len()
 
 def main():
     workload()                                  # warm up (one-time allocations)
