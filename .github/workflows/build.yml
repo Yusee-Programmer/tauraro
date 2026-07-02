@@ -200,6 +200,20 @@ jobs:
         run: ./scripts/run_soundness.ps1
 
       # -------------------------------------------------------
+      # Leak gate + differential ARC-soundness oracle (Linux / macOS):
+      # runs the leak-prone workload under -DTAURARO_MEMCOUNT with borrow
+      # elision ON and OFF (--no-elide = pure-ARC ground truth). BOTH must be
+      # leak-free AND produce byte-identical net counts — an unsound elision
+      # (a dropped/duplicated retain/release) diverges here and fails the gate.
+      # -------------------------------------------------------
+      - name: Leak gate + elision oracle (Linux / macOS)
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          CC: "gcc"
+        run: TAURAROC=./tauraroc${{ matrix.ext }} bash scripts/leak_check.sh
+
+      # -------------------------------------------------------
       # Reactor stress gate: a green-thread echo server hammered by concurrent
       # keep-alive clients, exercising the REAL readiness reactor (epoll on
       # Linux, kqueue on macOS) and its per-request re-arm path. Guards reactor
