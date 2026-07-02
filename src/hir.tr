@@ -178,6 +178,14 @@ pub class HirFunction:
                                      # collected by sema (cross-fn), consumed by the MIR.
     pub proven_borrows:   Vec[str]   # outlives engine result: borrow locals whose source
                                      # PROVABLY outlives them → codegen elides their refcount.
+    pub returns_owned:    bool       # return-ownership inference: true = every return path
+                                     # yields an OWNED heap-class reference (fresh/retained/
+                                     # transferred), so a caller binding the result OWNS it and
+                                     # must release it. false = a return may be a BORROW (alias
+                                     # via collection .get / a borrow-returning callee) → the
+                                     # caller must NOT drop it (leak-safe). Only meaningful when
+                                     # ret_ty is a heap class; computed by a whole-program
+                                     # fixpoint in sema, consumed by codegen `_obj_expr_owns_ref`.
 
 pub class HirField:
     pub name: str

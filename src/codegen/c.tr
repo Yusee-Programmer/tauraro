@@ -143,6 +143,8 @@ pub class CGenerator:
     pub decl_vars:      Map[str, bool]
     pub str_local_names: Map[str, bool]  # TrStr-typed locals declared via SLet in current function (retain/release tracked)
     pub class_local_names: Map[str, bool]  # heap-class-typed locals in current function that OWN a refcount (released at scope exit; reset in seed_params)
+    pub fn_owned: Map[str, bool]  # return-ownership inference (from sema HirFunction.returns_owned): fn key ("name" or "Class.method") -> returns an OWNED heap-class ref; drives _obj_expr_owns_ref
+    pub raw_aliased: Map[str, bool]  # class names reachable as Pointer[T] anywhere in the program — their instances are aliased by RAW pointers that bypass refcounting, so they must NEVER be auto-dropped (is_heap_class_tn excludes them). e.g. AstType via AstType.args: Vec[Pointer[AstType]]
     pub cur_proven_borrows: Map[str, bool]  # outlives engine: ref-borrow locals whose source provably outlives them — refcount ELIDED (no retain at bind, no release at scope)
     pub cur_ret_is_borrow: bool  # current function's return type is `ref` — returns a BORROW (no retain on return; the caller does not free it)
     pub eliding_get_retain: bool # set while generating a PROVEN collection-element borrow's RHS (`ref T = coll.get(k)`) — the str-valued get returns the unboxed alias WITHOUT retaining (zero-copy borrow); the SLet also skips the release
@@ -209,6 +211,8 @@ pub class CGenerator:
         g.decl_vars     = Map[str, bool].init(64)
         g.str_local_names = Map[str, bool].init(16)
         g.class_local_names = Map[str, bool].init(16)
+        g.fn_owned = Map[str, bool].init(64)
+        g.raw_aliased = Map[str, bool].init(32)
         g.cur_proven_borrows = Map[str, bool].init(8)
         g.cur_ret_is_borrow = false
         g.eliding_get_retain = false
@@ -1966,9 +1970,33 @@ pub class CGenerator:
     # True for a refcounted HEAP class type name (excludes value types, builtin
     # collections/concurrency/StringBuilder, and generic monos which aren't in
     # self.classes by their mono name — those stay conservatively un-rc'd).
+    # Record every class name appearing as `Pointer[T]` inside `t` (recursively):
+    # `Pointer[C]` → mark C; otherwise descend into type arguments (so
+    # `Vec[Pointer[AstType]]`, `Map[str, Pointer[Symbol]]`, etc. are covered).
+    pub def _scan_ptr_aliased(self, t: AstType):
+        if _is_invalid_ptr(t as usize): return
+        if _is_invalid_ptr(t.args as usize): return
+        if t.name == "Pointer" and t.args.len > 0:
+            mut ip = t.args.get(0)
+            if not _is_invalid_ptr(ip as usize):
+                mut inner = ip.read()
+                if not _is_invalid_ptr(inner as usize):
+                    self.raw_aliased.insert(inner.name, true)
+                    self._scan_ptr_aliased(inner)
+            return
+        mut ai = 0
+        while ai < t.args.len:
+            mut ap = t.args.get(ai)
+            if not _is_invalid_ptr(ap as usize):
+                self._scan_ptr_aliased(ap.read())
+            ai = ai + 1
+
     pub def is_heap_class_tn(self, tn: str) -> bool:
         if not self.classes.contains(tn): return false
         if self.value_types.contains(tn): return false
+        # Pointer-aliased types (e.g. AstType, HIR nodes) are shared via raw
+        # Pointer[T] that bypasses the refcount — never auto-drop them.
+        if self.raw_aliased.contains(tn): return false
         if tn == "Vec" or tn == "Map" or tn == "List" or tn == "Dict" or tn == "Set" or tn == "Box" or tn == "Mutex" or tn == "RwLock" or tn == "Atomic" or tn == "Shared" or tn == "Option" or tn == "Result" or tn == "Chan" or tn == "StringBuilder" or tn == "StringObj": return false
         return true
 
@@ -1999,30 +2027,45 @@ pub class CGenerator:
     # BORROW we cannot prove owned: conservatively NOT owning, so it is never
     # released (a leak is safe; over-releasing an alias is a use-after-free).
     # (`-> ref` borrow calls are handled separately via _expr_is_borrow_call.)
+    # Look up a fn/method key in the return-ownership map (missing → BORROWED).
+    pub def _fn_owned_lookup(self, key: str) -> bool:
+        if self.fn_owned.contains(key): return self.fn_owned.get(key)
+        return false
+
+    # Register a fn/method's return-ownership; on key collision (overloads) the
+    # BORROWED verdict wins (never drop a value some overload returns as an alias).
+    pub def _reg_fn_owned(self, key: str, v: bool):
+        mut nv = v
+        if self.fn_owned.contains(key):
+            if not self.fn_owned.get(key): nv = false
+        self.fn_owned.insert(key, nv)
+
     pub def _obj_expr_owns_ref(self, e: Pointer[HirExpr]) -> bool:
         if _is_invalid_ptr(e as usize): return false
         match e.read():
             case HirExpr.EIdent(_, _, _): return true
             case HirExpr.EPropAccess(_, _, _): return true
             case HirExpr.ECall(callee, _, _):
-                # A constructor `ClassName(...)` yields a fresh owned instance. Any
-                # other free-function call may return a BORROW (e.g. `site_for()` →
-                # `out.get(i)`, an alias into a Vec): conservatively NOT owning, so it
-                # is never released (leak-safe; over-releasing an alias is a UAF).
+                # A constructor `ClassName(...)` yields a fresh owned instance.
+                # A free-function call owns iff return-ownership inference proved it
+                # OWNED (e.g. `make_named`); a borrow-returning fn (`site_for()` →
+                # `out.get(i)`) stays NOT owning (leak-safe; dropping an alias = UAF).
                 match callee.read():
                     case HirExpr.EIdent(cn, _, _):
                         if self.classes.contains(cn): return true
-                        return false
+                        return self._fn_owned_lookup(cn)
                     case _: return false
-            case HirExpr.EMethodCall(recv, _, _, _):
-                # `ClassName.factory(...)` (type receiver) yields a fresh owned
-                # instance; an instance method `obj.m(...)` may return a borrow
-                # (`self.resolve(n)` → a scope-map alias) → conservatively NOT owning.
+            case HirExpr.EMethodCall(recv, m, _, _):
+                # Owned iff the callee (`ClassName.factory` or an instance method) was
+                # inferred to return an OWNED reference. Collection `.get/.first/.last`
+                # and unknown callees key to nothing in the map → BORROWED (not dropped),
+                # so `self.resolve(n)` → a scope-map alias is never over-released.
+                mut rt = hir_expr_type(recv).name
                 match recv.read():
                     case HirExpr.EIdent(rn, _, _):
-                        if self.classes.contains(rn): return true
-                        return false
-                    case _: return false
+                        if self.classes.contains(rn): rt = rn
+                    case _: pass
+                return self._fn_owned_lookup(rt + "." + m)
             case _: return false
 
     # Name of the per-class field-drop function (releases owned str/class fields).
@@ -6544,6 +6587,75 @@ pub class CGenerator:
                 self.functions.insert(pf.name, pf)
             if pf.class_name != "":
                 self.method_owners.insert(pf.class_name + "#" + pf.name, true)
+            # Return-ownership: key free functions by name, methods by "Class.method".
+            if pf.class_name == "":
+                self._reg_fn_owned(pf.name, pf.returns_owned)
+            else:
+                self._reg_fn_owned(pf.class_name + "." + pf.name, pf.returns_owned)
+            i = i + 1
+        # Class/enum methods live in their container's method list (not always in
+        # prog.functions) — register those too, keyed "Class.method".
+        i = 0
+        while i < prog.classes.len:
+            mut roc = prog.classes.get(i)
+            mut rocm = 0
+            while rocm < roc.methods.len:
+                self._reg_fn_owned(roc.name + "." + roc.methods.get(rocm).name, roc.methods.get(rocm).returns_owned)
+                rocm = rocm + 1
+            i = i + 1
+        i = 0
+        while i < prog.enums.len:
+            mut roe = prog.enums.get(i)
+            mut roem = 0
+            while roem < roe.methods.len:
+                self._reg_fn_owned(roe.name + "." + roe.methods.get(roem).name, roe.methods.get(roem).returns_owned)
+                roem = roem + 1
+            i = i + 1
+        # Raw-alias scan: any class reachable as Pointer[T] (a class field, enum
+        # payload, or fn param/return) is aliased by raw pointers that bypass the
+        # refcount — auto-dropping it would free memory other aliases still hold.
+        # Collect all such T so is_heap_class_tn can exclude them (e.g. AstType via
+        # `AstType.args: Vec[Pointer[AstType]]`, every HIR node via Pointer[HirExpr]).
+        i = 0
+        while i < prog.classes.len:
+            mut rac = prog.classes.get(i)
+            mut rafi = 0
+            while rafi < rac.fields.len:
+                self._scan_ptr_aliased(rac.fields.get(rafi).ty)
+                rafi = rafi + 1
+            i = i + 1
+        i = 0
+        while i < prog.enums.len:
+            mut rae = prog.enums.get(i)
+            mut ravi = 0
+            while ravi < rae.variants.len:
+                mut ravf = 0
+                while ravf < rae.variants.get(ravi).fields.len:
+                    self._scan_ptr_aliased(rae.variants.get(ravi).fields.get(ravf).ty)
+                    ravf = ravf + 1
+                ravi = ravi + 1
+            i = i + 1
+        i = 0
+        while i < prog.functions.len:
+            mut raf = prog.functions.get(i)
+            mut rapi = 0
+            while rapi < raf.params.len:
+                self._scan_ptr_aliased(raf.params.get(rapi).ty)
+                rapi = rapi + 1
+            if raf.ret_ty as usize != 0 as usize: self._scan_ptr_aliased(raf.ret_ty)
+            i = i + 1
+        i = 0
+        while i < prog.classes.len:
+            mut ramc = prog.classes.get(i)
+            mut rammi = 0
+            while rammi < ramc.methods.len:
+                mut ramm = ramc.methods.get(rammi)
+                mut rampi = 0
+                while rampi < ramm.params.len:
+                    self._scan_ptr_aliased(ramm.params.get(rampi).ty)
+                    rampi = rampi + 1
+                if ramm.ret_ty as usize != 0 as usize: self._scan_ptr_aliased(ramm.ret_ty)
+                rammi = rammi + 1
             i = i + 1
         i = 0
         while i < prog.decorator_defs.len:

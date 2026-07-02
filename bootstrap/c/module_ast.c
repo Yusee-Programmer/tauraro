@@ -167,9 +167,7 @@ __attribute__((hot)) ChanSelectArm* ChanSelectArm_init_recv(Expr* chan, TrStr va
     /* pass */
     a->timeout_ms = (Expr*)(0LL);
     /* pass */
-    Block* _cltmp_t22 = _tr_obj_retain(body);
-    _tr_obj_release(a->body, _trdrop_Block);
-    a->body = _cltmp_t22;
+    a->body = body;
     /* pass */
     return a;
 }
@@ -188,9 +186,7 @@ __attribute__((hot)) ChanSelectArm* ChanSelectArm_init_send(Expr* chan, Expr* va
     /* pass */
     a->timeout_ms = (Expr*)(0LL);
     /* pass */
-    Block* _cltmp_t23 = _tr_obj_retain(body);
-    _tr_obj_release(a->body, _trdrop_Block);
-    a->body = _cltmp_t23;
+    a->body = body;
     /* pass */
     return a;
 }
@@ -209,9 +205,7 @@ __attribute__((hot)) ChanSelectArm* ChanSelectArm_init_timeout(Expr* ms, Block* 
     /* pass */
     a->timeout_ms = ms;
     /* pass */
-    Block* _cltmp_t24 = _tr_obj_retain(body);
-    _tr_obj_release(a->body, _trdrop_Block);
-    a->body = _cltmp_t24;
+    a->body = body;
     /* pass */
     return a;
 }
@@ -230,9 +224,7 @@ __attribute__((hot)) ChanSelectArm* ChanSelectArm_init_default(Block* body) {
     /* pass */
     a->timeout_ms = (Expr*)(0LL);
     /* pass */
-    Block* _cltmp_t25 = _tr_obj_retain(body);
-    _tr_obj_release(a->body, _trdrop_Block);
-    a->body = _cltmp_t25;
+    a->body = body;
     /* pass */
     return a;
 }
@@ -319,9 +311,7 @@ __attribute__((malloc,returns_nonnull,hot)) FunctionDef* FunctionDef_init(TrStr 
     /* pass */
     f->is_macro = false;
     /* pass */
-    Block* _cltmp_t26 = Block_init();
-    _tr_obj_release(f->body, _trdrop_Block);
-    f->body = _cltmp_t26;
+    f->body = Block_init();
     /* pass */
     f->line = 0LL;
     /* pass */

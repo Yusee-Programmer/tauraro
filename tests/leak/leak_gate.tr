@@ -12,6 +12,33 @@
 extern "C":
     def _tr_mem_live() -> int
 
+# Heap classes for the class-instance ARC workload below. `Tag` carries a `str`
+# field so its drop must release both the field buffer and the struct.
+class Point:
+    pub x: int
+    pub y: int
+extend Point:
+    pub def init(x: int, y: int) -> Point:
+        mut p = Point()
+        p.x = x
+        p.y = y
+        return p
+
+class Tag:
+    pub name: str
+extend Tag:
+    pub def init(n: str) -> Tag:
+        mut t = Tag()
+        t.name = n
+        return t
+
+def dist(a: Point, b: Point) -> int:      # classes passed BY reference (borrowed)
+    mut dx = a.x - b.x
+    return dx * dx
+
+def make_tag(prefix: str, n: int) -> Tag: # FREE FUNCTION returning an OWNED instance
+    return Tag.init(prefix + n.to_str())   # (interproc inference must reclaim its result)
+
 # Exercise the string + map paths that are fully ref-counted/auto-dropped.
 def workload():
     mut s = "abc" + "def"          # fresh concat, auto-dropped at scope exit
@@ -95,6 +122,16 @@ def workload():
     mut cf = def (x: int) -> int:
         return capv + x
     mut cfr = cf(5)            # 15
+
+    # Heap class instances: factory-constructed (Point.init / Tag.init), passed as
+    # a borrowed argument (dist), and returned from a FREE FUNCTION (make_tag). All
+    # owned locals must be reclaimed — factory results by the constructor rule,
+    # make_tag's result by interprocedural return-ownership inference.
+    mut p1 = Point.init(1, 2)
+    mut p2 = Point.init(4, 6)
+    mut dd = dist(p1, p2)          # p1/p2 borrowed, not consumed
+    mut tg = make_tag("id-", dd)   # free-function-returned owned Tag (str field)
+    mut tlen = tg.name.len()
 
 def main():
     workload()                                  # warm up (one-time allocations)

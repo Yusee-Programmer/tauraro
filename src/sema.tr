@@ -184,6 +184,7 @@ pub class Sema:
     pub cur_func_sources:   Vec[str]   # ... and immediate sources) collected during lower_func
     pub strict_mode: bool               # --strict: alloc outside unsafe -> hard [U-1] error
     pub mutating_methods: Map[str, bool] # "ClassName.method" -> true if it stores into self.<field> (implicit-borrow check)
+    pub fn_ret_owned:    Map[str, bool] # return-ownership inference: fn/method key -> true if it returns an OWNED heap-class ref (see compute_return_ownership)
     pub decorator_names: Map[str, bool]  # decorator def registry (name -> true)
     pub variadic_fns:    Map[str, str]   # fn name -> index of trailing variadic param (= fixed-arg count, as string)
     pub variadic_elem_ty: Map[str, Pointer[AstType]] # fn name -> element type of the variadic List[T] param
@@ -280,6 +281,7 @@ extend Sema:
         s.cur_func_sources       = Vec[str].init(0)
         s.strict_mode            = false
         s.mutating_methods       = Map[str, bool].init(32)
+        s.fn_ret_owned           = Map[str, bool].init(64)
         s.decorator_names        = Map[str, bool].init(16)
         s.variadic_fns           = Map[str, str].init(8)
         s.variadic_elem_ty       = Map[str, Pointer[AstType]].init(8)
@@ -2072,7 +2074,182 @@ extend Sema:
         while nii < self.nested_interfaces.len:
             hp.interfaces.push(self.nested_interfaces.get(nii))
             nii = nii + 1
+        # Return-ownership inference: classify every heap-class-returning function
+        # as OWNED (caller receives+owns a reference → must release) or BORROWED
+        # (a return may alias a collection element / another borrow → caller must
+        # NOT release). Consumed by codegen `_obj_expr_owns_ref` to decide whether
+        # a call-result local is auto-dropped — enabling reclamation of owned
+        # factory/free-function results without ever over-releasing a borrow.
+        self.compute_return_ownership(hp)
         return hp
+
+    # ---- Return-ownership inference (whole-program monotone fixpoint) ----
+    # A function returns an OWNED heap-class reference iff EVERY return path yields
+    # one. Base cases that yield owned (codegen's obj_retain_wrap guarantees it):
+    #   * a bare ident (retained at return, or an owned tracked-local transfer)
+    #   * a field read `self.f` / `obj.f` (retained at return)
+    #   * a constructor `ClassName(...)`
+    # Transitive: a call to an OWNED function/method. Forced BORROWED by: a
+    # collection `.get/.first/.last` or `[]` (raw element alias, not retained), an
+    # index, or a call to a BORROWED/unknown function. Fixpoint starts optimistic
+    # (all true) and only flips true→false, so it converges.
+    pub def compute_return_ownership(self, hp: HirProgram):
+        # Collect (key, HirFunction) for every heap-class-returning function.
+        mut keys = Vec[str].init(64)
+        mut fns  = Vec[HirFunction].init(64)
+        mut fi = 0
+        while fi < hp.functions.len:
+            mut f = hp.functions.get(fi)
+            if self._fn_ret_is_heap_class(f):
+                keys.push(f.name)
+                fns.push(f)
+            fi = fi + 1
+        mut ci = 0
+        while ci < hp.classes.len:
+            mut c = hp.classes.get(ci)
+            mut mi = 0
+            while mi < c.methods.len:
+                mut m = c.methods.get(mi)
+                if self._fn_ret_is_heap_class(m):
+                    keys.push(c.name + "." + m.name)
+                    fns.push(m)
+                mi = mi + 1
+            ci = ci + 1
+        mut ei = 0
+        while ei < hp.enums.len:
+            mut en = hp.enums.get(ei)
+            mut emi = 0
+            while emi < en.methods.len:
+                mut em = en.methods.get(emi)
+                if self._fn_ret_is_heap_class(em):
+                    keys.push(en.name + "." + em.name)
+                    fns.push(em)
+                emi = emi + 1
+            ei = ei + 1
+        # Start optimistic — EXCEPT a `-> ref T` / `-> T from r` function returns a
+        # BORROW (zero-copy: the return path does NOT retain), so it is owned=false
+        # from the start (and stays false under the monotone fixpoint). Missing this
+        # would classify `return self.field` in a borrow-returning fn as OWNED → the
+        # caller drops an un-retained alias → use-after-free.
+        mut ki = 0
+        while ki < keys.len:
+            mut kf = fns.get(ki)
+            mut kf_owned = true
+            if kf.ret_ty as usize != 0 as usize:
+                if kf.ret_ty.is_borrow or kf.ret_ty.from_param != "" or kf.ret_ty.from_regions.len > 0:
+                    kf_owned = false
+            self.fn_ret_owned.insert(keys.get(ki), kf_owned)
+            ki = ki + 1
+        # Monotone fixpoint (only true→false).
+        mut changed = true
+        while changed:
+            changed = false
+            mut xi = 0
+            while xi < fns.len:
+                mut k = keys.get(xi)
+                if self.fn_ret_owned.get(k):
+                    mut rets = Vec[Pointer[HirExpr]].init(4)
+                    self._collect_returns(fns.get(xi).body, rets)
+                    mut all_owned = true
+                    mut ri = 0
+                    while ri < rets.len:
+                        if not self._ret_yields_owned(rets.get(ri)):
+                            all_owned = false
+                        ri = ri + 1
+                    if not all_owned:
+                        self.fn_ret_owned.insert(k, false)
+                        changed = true
+                xi = xi + 1
+        # Publish onto each HirFunction for codegen.
+        mut wi = 0
+        while wi < fns.len:
+            mut hf2 = fns.get(wi)
+            hf2.returns_owned = self.fn_ret_owned.get(keys.get(wi))
+            wi = wi + 1
+
+    pub def _fn_ret_is_heap_class(self, f: HirFunction) -> bool:
+        if f.ret_ty as usize == 0 as usize: return false
+        mut rn = f.ret_ty.name
+        if not self.classes.contains(rn): return false
+        if rn == "Vec" or rn == "Map" or rn == "List" or rn == "Dict" or rn == "Set" or rn == "Box" or rn == "Mutex" or rn == "RwLock" or rn == "Atomic" or rn == "Shared" or rn == "Option" or rn == "Result" or rn == "Chan" or rn == "StringBuilder" or rn == "StringObj": return false
+        # value types are copied by value, not refcounted
+        mut cinfo = self.classes.get(rn)
+        if not cinfo.is_class: return false
+        return true
+
+    # Collect every SReturn expression reachable in `b` (recurses into EVERY
+    # nested block form — missing one would leave a borrow-return unseen and
+    # wrongly classify the function OWNED, risking a UAF at the call site).
+    pub def _collect_returns(self, b: HirBlock, out: Vec[Pointer[HirExpr]]):
+        if b as usize == 0 as usize: return
+        mut i = 0
+        while i < b.stmts.len:
+            self._collect_returns_stmt(b.stmts.get(i), out)
+            i = i + 1
+
+    pub def _collect_returns_stmt(self, sp: Pointer[HirStmt], out: Vec[Pointer[HirExpr]]):
+        if sp as usize == 0 as usize: return
+        match sp.read():
+            case HirStmt.SReturn(re):
+                if re as usize != 0 as usize: out.push(re)
+            case HirStmt.SIf(_, tb, eb):
+                self._collect_returns(tb, out)
+                self._collect_returns(eb, out)
+            case HirStmt.SWhile(_, wb): self._collect_returns(wb, out)
+            case HirStmt.SFor(_, _, fb): self._collect_returns(fb, out)
+            case HirStmt.SForUnpack(_, _, fub): self._collect_returns(fub, out)
+            case HirStmt.SMatch(_, marms):
+                mut ai = 0
+                while ai < marms.len:
+                    self._collect_returns(marms.get(ai).body, out)
+                    ai = ai + 1
+            case HirStmt.SUnsafe(ub): self._collect_returns(ub, out)
+            case HirStmt.SWith(_, _, wb2): self._collect_returns(wb2, out)
+            case HirStmt.STaskGroup(tgb): self._collect_returns(tgb, out)
+            case HirStmt.SGpuBlock(gb): self._collect_returns(gb, out)
+            case HirStmt.SDefer(ds): self._collect_returns_stmt(ds, out)
+            case HirStmt.STry(tb2, catches, fb2):
+                self._collect_returns(tb2, out)
+                mut ci = 0
+                while ci < catches.len:
+                    mut cc = catches.get(ci)
+                    if cc as usize != 0 as usize: self._collect_returns(cc.read().body, out)
+                    ci = ci + 1
+                self._collect_returns(fb2, out)
+            case _: pass
+
+    # Current fixpoint estimate for a fn/method key (missing → conservatively BORROWED).
+    pub def _owned_of(self, key: str) -> bool:
+        if self.fn_ret_owned.contains(key): return self.fn_ret_owned.get(key)
+        return false
+
+    pub def _ret_yields_owned(self, e: Pointer[HirExpr]) -> bool:
+        if e as usize == 0 as usize: return false
+        match e.read():
+            case HirExpr.EIdent(_, _, _): return true
+            case HirExpr.EPropAccess(_, _, _): return true
+            case HirExpr.ECall(callee, _, _):
+                if callee as usize == 0 as usize: return false
+                match callee.read():
+                    case HirExpr.EIdent(cn, _, _):
+                        if self.classes.contains(cn): return true   # constructor
+                        return self._owned_of(cn)                    # free fn (missing→borrow)
+                    case _: return false
+            case HirExpr.EMethodCall(recv, m, _, _):
+                mut rt = hir_expr_type(recv).name
+                # A collection element read is a raw alias (not retained) → borrow.
+                if (rt == "Vec" or rt == "List" or rt == "Dict" or rt == "Map" or rt == "Set") and (m == "get" or m == "first" or m == "last"):
+                    return false
+                # ClassName.factory(...) — receiver names a class → key on it directly.
+                match recv.read():
+                    case HirExpr.EIdent(rn, _, _):
+                        if self.classes.contains(rn): rt = rn
+                    case _: pass
+                return self._owned_of(rt + "." + m)
+            case HirExpr.EIndex(_, _, _): return false
+            case HirExpr.EIfElse(_, a, b2, _):
+                return self._ret_yields_owned(a) and self._ret_yields_owned(b2)
+            case _: return false
 
     pub def register_decl(self, d: Pointer[Decl]):
         match d.read():
