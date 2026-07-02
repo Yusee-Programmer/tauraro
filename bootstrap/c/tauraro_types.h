@@ -712,7 +712,7 @@ static inline __attribute__((always_inline)) Expr Expr_ctor_EIndex(Expr* obj, Ex
 static inline __attribute__((always_inline)) Expr Expr_ctor_ECast(Expr* expr, AstType** ty) { Expr _r = {.tag=Expr_ECast}; _r.data.ECast.expr = expr; _r.data.ECast.ty = ty; return _r; }
 static inline __attribute__((always_inline)) Expr Expr_ctor_EFString(List_ptr* parts) { Expr _r = {.tag=Expr_EFString}; _r.data.EFString.parts = parts; return _r; }
 static inline __attribute__((always_inline)) Expr Expr_ctor_ETryExpr(Expr* expr) { Expr _r = {.tag=Expr_ETryExpr}; _r.data.ETryExpr.expr = expr; return _r; }
-static inline __attribute__((always_inline)) Expr Expr_ctor_EClosure(List_ptr* params, AstType** ret_ty, Block* body, bool is_async) { Expr _r = {.tag=Expr_EClosure}; _r.data.EClosure.params = params; _r.data.EClosure.ret_ty = ret_ty; _r.data.EClosure.body = body; _r.data.EClosure.is_async = is_async; return _r; }
+static inline __attribute__((always_inline)) Expr Expr_ctor_EClosure(List_ptr* params, AstType** ret_ty, Block* body, bool is_async) { Expr _r = {.tag=Expr_EClosure}; _r.data.EClosure.params = params; _r.data.EClosure.ret_ty = ret_ty; _r.data.EClosure.body = _tr_obj_retain(body); _r.data.EClosure.is_async = is_async; return _r; }
 static inline __attribute__((always_inline)) Expr Expr_ctor_ESuperMethodCall(TrStr base_class, TrStr method, List_ptr* args) { Expr _r = {.tag=Expr_ESuperMethodCall}; _r.data.ESuperMethodCall.base_class = _tr_str_retain(base_class); _r.data.ESuperMethodCall.method = _tr_str_retain(method); _r.data.ESuperMethodCall.args = args; return _r; }
 static inline __attribute__((always_inline)) Expr Expr_ctor_ESuperPropAccess(TrStr base_class, TrStr prop) { Expr _r = {.tag=Expr_ESuperPropAccess}; _r.data.ESuperPropAccess.base_class = _tr_str_retain(base_class); _r.data.ESuperPropAccess.prop = _tr_str_retain(prop); return _r; }
 static inline __attribute__((always_inline)) Expr Expr_ctor_EList(List_ptr* items) { Expr _r = {.tag=Expr_EList}; _r.data.EList.items = items; return _r; }
@@ -724,16 +724,16 @@ static inline __attribute__((always_inline)) Expr Expr_ctor_EGeneratorExpr(Expr*
 static inline __attribute__((always_inline)) Expr Expr_ctor_ESlice(Expr* start, Expr* stop, Expr* step) { Expr _r = {.tag=Expr_ESlice}; _r.data.ESlice.start = start; _r.data.ESlice.stop = stop; _r.data.ESlice.step = step; return _r; }
 static inline __attribute__((always_inline)) Expr Expr_ctor_EAwait(Expr* expr) { Expr _r = {.tag=Expr_EAwait}; _r.data.EAwait.expr = expr; return _r; }
 static inline __attribute__((always_inline)) Expr Expr_ctor_EYield(Expr* expr) { Expr _r = {.tag=Expr_EYield}; _r.data.EYield.expr = expr; return _r; }
-static inline __attribute__((always_inline)) Expr Expr_ctor_ETry(Block* try_body, List_ptr* catches, Block* finally_b) { Expr _r = {.tag=Expr_ETry}; _r.data.ETry.try_body = try_body; _r.data.ETry.catches = catches; _r.data.ETry.finally_b = finally_b; return _r; }
+static inline __attribute__((always_inline)) Expr Expr_ctor_ETry(Block* try_body, List_ptr* catches, Block* finally_b) { Expr _r = {.tag=Expr_ETry}; _r.data.ETry.try_body = _tr_obj_retain(try_body); _r.data.ETry.catches = catches; _r.data.ETry.finally_b = _tr_obj_retain(finally_b); return _r; }
 static inline __attribute__((always_inline)) Expr Expr_ctor_ERange(Expr* start, Expr* end, bool inclusive) { Expr _r = {.tag=Expr_ERange}; _r.data.ERange.start = start; _r.data.ERange.end = end; _r.data.ERange.inclusive = inclusive; return _r; }
 static inline __attribute__((always_inline)) Expr Expr_ctor_ESizeOf(AstType** ty) { Expr _r = {.tag=Expr_ESizeOf}; _r.data.ESizeOf.ty = ty; return _r; }
 static inline __attribute__((always_inline)) Expr Expr_ctor_EIfElse(Expr* cond, Expr* then_expr, Expr* else_expr) { Expr _r = {.tag=Expr_EIfElse}; _r.data.EIfElse.cond = cond; _r.data.EIfElse.then_expr = then_expr; _r.data.EIfElse.else_expr = else_expr; return _r; }
 static inline __attribute__((always_inline)) Expr Expr_ctor_ETypeArg(AstType** ty) { Expr _r = {.tag=Expr_ETypeArg}; _r.data.ETypeArg.ty = ty; return _r; }
-static inline __attribute__((always_inline)) Expr Expr_ctor_EDo(Block* body) { Expr _r = {.tag=Expr_EDo}; _r.data.EDo.body = body; return _r; }
+static inline __attribute__((always_inline)) Expr Expr_ctor_EDo(Block* body) { Expr _r = {.tag=Expr_EDo}; _r.data.EDo.body = _tr_obj_retain(body); return _r; }
 static inline __attribute__((always_inline)) Expr Expr_ctor_EMatch(Expr* subj, List_ptr* arms) { Expr _r = {.tag=Expr_EMatch}; _r.data.EMatch.subj = subj; _r.data.EMatch.arms = arms; return _r; }
 static inline __attribute__((always_inline)) Expr Expr_ctor_EMacroCall(TrStr name, List_ptr* args) { Expr _r = {.tag=Expr_EMacroCall}; _r.data.EMacroCall.name = _tr_str_retain(name); _r.data.EMacroCall.args = args; return _r; }
-static inline __attribute__((always_inline)) Expr Expr_ctor_ELoop(Block* body) { Expr _r = {.tag=Expr_ELoop}; _r.data.ELoop.body = body; return _r; }
-static inline __attribute__((always_inline)) Expr Expr_ctor_EWhileExpr(Expr* cond, Block* body, Block* else_body) { Expr _r = {.tag=Expr_EWhileExpr}; _r.data.EWhileExpr.cond = cond; _r.data.EWhileExpr.body = body; _r.data.EWhileExpr.else_body = else_body; return _r; }
+static inline __attribute__((always_inline)) Expr Expr_ctor_ELoop(Block* body) { Expr _r = {.tag=Expr_ELoop}; _r.data.ELoop.body = _tr_obj_retain(body); return _r; }
+static inline __attribute__((always_inline)) Expr Expr_ctor_EWhileExpr(Expr* cond, Block* body, Block* else_body) { Expr _r = {.tag=Expr_EWhileExpr}; _r.data.EWhileExpr.cond = cond; _r.data.EWhileExpr.body = _tr_obj_retain(body); _r.data.EWhileExpr.else_body = _tr_obj_retain(else_body); return _r; }
 
 typedef enum {
     Stmt_SExpr,
@@ -880,19 +880,19 @@ static inline __attribute__((always_inline)) Stmt Stmt_ctor_SBreak(Expr* val) { 
 #define Stmt_make_SContinue() ((Stmt){.tag=Stmt_SContinue})
 #define Stmt_make_SPass() ((Stmt){.tag=Stmt_SPass})
 static inline __attribute__((always_inline)) Stmt Stmt_ctor_SRaise(Expr* val) { Stmt _r = {.tag=Stmt_SRaise}; _r.data.SRaise.val = val; return _r; }
-static inline __attribute__((always_inline)) Stmt Stmt_ctor_SUnsafe(Block* body) { Stmt _r = {.tag=Stmt_SUnsafe}; _r.data.SUnsafe.body = body; return _r; }
-static inline __attribute__((always_inline)) Stmt Stmt_ctor_SIf(Expr* cond, Block* then_b, List_ptr* elifs, Block* else_b) { Stmt _r = {.tag=Stmt_SIf}; _r.data.SIf.cond = cond; _r.data.SIf.then_b = then_b; _r.data.SIf.elifs = elifs; _r.data.SIf.else_b = else_b; return _r; }
-static inline __attribute__((always_inline)) Stmt Stmt_ctor_SWhile(Expr* cond, Block* body, List_ptr* decorators) { Stmt _r = {.tag=Stmt_SWhile}; _r.data.SWhile.cond = cond; _r.data.SWhile.body = body; _r.data.SWhile.decorators = decorators; return _r; }
-static inline __attribute__((always_inline)) Stmt Stmt_ctor_SFor(TrStr var, Expr* iter, Block* body, List_ptr* decorators, bool is_ref) { Stmt _r = {.tag=Stmt_SFor}; _r.data.SFor.var = _tr_str_retain(var); _r.data.SFor.iter = iter; _r.data.SFor.body = body; _r.data.SFor.decorators = decorators; _r.data.SFor.is_ref = is_ref; return _r; }
-static inline __attribute__((always_inline)) Stmt Stmt_ctor_SForUnpack(List_TrStr* vars, Expr* iter, Block* body) { Stmt _r = {.tag=Stmt_SForUnpack}; _r.data.SForUnpack.vars = vars; _r.data.SForUnpack.iter = iter; _r.data.SForUnpack.body = body; return _r; }
+static inline __attribute__((always_inline)) Stmt Stmt_ctor_SUnsafe(Block* body) { Stmt _r = {.tag=Stmt_SUnsafe}; _r.data.SUnsafe.body = _tr_obj_retain(body); return _r; }
+static inline __attribute__((always_inline)) Stmt Stmt_ctor_SIf(Expr* cond, Block* then_b, List_ptr* elifs, Block* else_b) { Stmt _r = {.tag=Stmt_SIf}; _r.data.SIf.cond = cond; _r.data.SIf.then_b = _tr_obj_retain(then_b); _r.data.SIf.elifs = elifs; _r.data.SIf.else_b = _tr_obj_retain(else_b); return _r; }
+static inline __attribute__((always_inline)) Stmt Stmt_ctor_SWhile(Expr* cond, Block* body, List_ptr* decorators) { Stmt _r = {.tag=Stmt_SWhile}; _r.data.SWhile.cond = cond; _r.data.SWhile.body = _tr_obj_retain(body); _r.data.SWhile.decorators = decorators; return _r; }
+static inline __attribute__((always_inline)) Stmt Stmt_ctor_SFor(TrStr var, Expr* iter, Block* body, List_ptr* decorators, bool is_ref) { Stmt _r = {.tag=Stmt_SFor}; _r.data.SFor.var = _tr_str_retain(var); _r.data.SFor.iter = iter; _r.data.SFor.body = _tr_obj_retain(body); _r.data.SFor.decorators = decorators; _r.data.SFor.is_ref = is_ref; return _r; }
+static inline __attribute__((always_inline)) Stmt Stmt_ctor_SForUnpack(List_TrStr* vars, Expr* iter, Block* body) { Stmt _r = {.tag=Stmt_SForUnpack}; _r.data.SForUnpack.vars = vars; _r.data.SForUnpack.iter = iter; _r.data.SForUnpack.body = _tr_obj_retain(body); return _r; }
 static inline __attribute__((always_inline)) Stmt Stmt_ctor_SMatch(Expr* expr, List_ptr* arms) { Stmt _r = {.tag=Stmt_SMatch}; _r.data.SMatch.expr = expr; _r.data.SMatch.arms = arms; return _r; }
-static inline __attribute__((always_inline)) Stmt Stmt_ctor_STry(Block* try_body, List_ptr* catches, Block* finally_b) { Stmt _r = {.tag=Stmt_STry}; _r.data.STry.try_body = try_body; _r.data.STry.catches = catches; _r.data.STry.finally_b = finally_b; return _r; }
+static inline __attribute__((always_inline)) Stmt Stmt_ctor_STry(Block* try_body, List_ptr* catches, Block* finally_b) { Stmt _r = {.tag=Stmt_STry}; _r.data.STry.try_body = _tr_obj_retain(try_body); _r.data.STry.catches = catches; _r.data.STry.finally_b = _tr_obj_retain(finally_b); return _r; }
 static inline __attribute__((always_inline)) Stmt Stmt_ctor_SAssert(Expr* cond, Expr* msg) { Stmt _r = {.tag=Stmt_SAssert}; _r.data.SAssert.cond = cond; _r.data.SAssert.msg = msg; return _r; }
-static inline __attribute__((always_inline)) Stmt Stmt_ctor_SWith(List_ptr* items, List_TrStr* aliases, Block* body) { Stmt _r = {.tag=Stmt_SWith}; _r.data.SWith.items = items; _r.data.SWith.aliases = aliases; _r.data.SWith.body = body; return _r; }
+static inline __attribute__((always_inline)) Stmt Stmt_ctor_SWith(List_ptr* items, List_TrStr* aliases, Block* body) { Stmt _r = {.tag=Stmt_SWith}; _r.data.SWith.items = items; _r.data.SWith.aliases = aliases; _r.data.SWith.body = _tr_obj_retain(body); return _r; }
 static inline __attribute__((always_inline)) Stmt Stmt_ctor_SAsm(TrStr code, TrStr outputs, TrStr inputs, TrStr clobbers) { Stmt _r = {.tag=Stmt_SAsm}; _r.data.SAsm.code = _tr_str_retain(code); _r.data.SAsm.outputs = _tr_str_retain(outputs); _r.data.SAsm.inputs = _tr_str_retain(inputs); _r.data.SAsm.clobbers = _tr_str_retain(clobbers); return _r; }
 static inline __attribute__((always_inline)) Stmt Stmt_ctor_SSpawn(Expr* expr) { Stmt _r = {.tag=Stmt_SSpawn}; _r.data.SSpawn.expr = expr; return _r; }
-static inline __attribute__((always_inline)) Stmt Stmt_ctor_STaskGroup(Block* body) { Stmt _r = {.tag=Stmt_STaskGroup}; _r.data.STaskGroup.body = body; return _r; }
-static inline __attribute__((always_inline)) Stmt Stmt_ctor_SGpuBlock(Block* body) { Stmt _r = {.tag=Stmt_SGpuBlock}; _r.data.SGpuBlock.body = body; return _r; }
+static inline __attribute__((always_inline)) Stmt Stmt_ctor_STaskGroup(Block* body) { Stmt _r = {.tag=Stmt_STaskGroup}; _r.data.STaskGroup.body = _tr_obj_retain(body); return _r; }
+static inline __attribute__((always_inline)) Stmt Stmt_ctor_SGpuBlock(Block* body) { Stmt _r = {.tag=Stmt_SGpuBlock}; _r.data.SGpuBlock.body = _tr_obj_retain(body); return _r; }
 static inline __attribute__((always_inline)) Stmt Stmt_ctor_SChanSelect(List_ptr* cases) { Stmt _r = {.tag=Stmt_SChanSelect}; _r.data.SChanSelect.cases = cases; return _r; }
 static inline __attribute__((always_inline)) Stmt Stmt_ctor_SDefer(Stmt* stmt) { Stmt _r = {.tag=Stmt_SDefer}; _r.data.SDefer.stmt = stmt; return _r; }
 static inline __attribute__((always_inline)) Stmt Stmt_ctor_SLine(long long n) { Stmt _r = {.tag=Stmt_SLine}; _r.data.SLine.n = n; return _r; }
@@ -960,17 +960,17 @@ typedef struct Decl {
     } data;
 } Decl;
 
-static inline __attribute__((always_inline)) Decl Decl_ctor_DFunction(FunctionDef* func) { Decl _r = {.tag=Decl_DFunction}; _r.data.DFunction.func = func; return _r; }
-static inline __attribute__((always_inline)) Decl Decl_ctor_DClass(ClassDef* cls) { Decl _r = {.tag=Decl_DClass}; _r.data.DClass.cls = cls; return _r; }
-static inline __attribute__((always_inline)) Decl Decl_ctor_DEnum(EnumDef* enm) { Decl _r = {.tag=Decl_DEnum}; _r.data.DEnum.enm = enm; return _r; }
-static inline __attribute__((always_inline)) Decl Decl_ctor_DInterface(InterfaceDef* iface) { Decl _r = {.tag=Decl_DInterface}; _r.data.DInterface.iface = iface; return _r; }
+static inline __attribute__((always_inline)) Decl Decl_ctor_DFunction(FunctionDef* func) { Decl _r = {.tag=Decl_DFunction}; _r.data.DFunction.func = _tr_obj_retain(func); return _r; }
+static inline __attribute__((always_inline)) Decl Decl_ctor_DClass(ClassDef* cls) { Decl _r = {.tag=Decl_DClass}; _r.data.DClass.cls = _tr_obj_retain(cls); return _r; }
+static inline __attribute__((always_inline)) Decl Decl_ctor_DEnum(EnumDef* enm) { Decl _r = {.tag=Decl_DEnum}; _r.data.DEnum.enm = _tr_obj_retain(enm); return _r; }
+static inline __attribute__((always_inline)) Decl Decl_ctor_DInterface(InterfaceDef* iface) { Decl _r = {.tag=Decl_DInterface}; _r.data.DInterface.iface = _tr_obj_retain(iface); return _r; }
 static inline __attribute__((always_inline)) Decl Decl_ctor_DExtend(TrStr target, List_ptr* methods) { Decl _r = {.tag=Decl_DExtend}; _r.data.DExtend.target = _tr_str_retain(target); _r.data.DExtend.methods = methods; return _r; }
 static inline __attribute__((always_inline)) Decl Decl_ctor_DImport(TrStr path, TrStr alias) { Decl _r = {.tag=Decl_DImport}; _r.data.DImport.path = _tr_str_retain(path); _r.data.DImport.alias = _tr_str_retain(alias); return _r; }
 static inline __attribute__((always_inline)) Decl Decl_ctor_DFromImport(TrStr path, List_ptr* items) { Decl _r = {.tag=Decl_DFromImport}; _r.data.DFromImport.path = _tr_str_retain(path); _r.data.DFromImport.items = items; return _r; }
 static inline __attribute__((always_inline)) Decl Decl_ctor_DExtern(TrStr abi, List_ptr* functions) { Decl _r = {.tag=Decl_DExtern}; _r.data.DExtern.abi = _tr_str_retain(abi); _r.data.DExtern.functions = functions; return _r; }
 static inline __attribute__((always_inline)) Decl Decl_ctor_DTopLevelStmt(Stmt* stmt) { Decl _r = {.tag=Decl_DTopLevelStmt}; _r.data.DTopLevelStmt.stmt = stmt; return _r; }
-static inline __attribute__((always_inline)) Decl Decl_ctor_DActor(ClassDef* cls) { Decl _r = {.tag=Decl_DActor}; _r.data.DActor.cls = cls; return _r; }
-static inline __attribute__((always_inline)) Decl Decl_ctor_DDecoratorDef(FunctionDef* func) { Decl _r = {.tag=Decl_DDecoratorDef}; _r.data.DDecoratorDef.func = func; return _r; }
+static inline __attribute__((always_inline)) Decl Decl_ctor_DActor(ClassDef* cls) { Decl _r = {.tag=Decl_DActor}; _r.data.DActor.cls = _tr_obj_retain(cls); return _r; }
+static inline __attribute__((always_inline)) Decl Decl_ctor_DDecoratorDef(FunctionDef* func) { Decl _r = {.tag=Decl_DDecoratorDef}; _r.data.DDecoratorDef.func = _tr_obj_retain(func); return _r; }
 static inline __attribute__((always_inline)) Decl Decl_ctor_DTypeAlias(TrStr name, AstType** target) { Decl _r = {.tag=Decl_DTypeAlias}; _r.data.DTypeAlias.name = _tr_str_retain(name); _r.data.DTypeAlias.target = target; return _r; }
 
 typedef enum {
@@ -1206,45 +1206,45 @@ typedef struct HirExpr {
     } data;
 } HirExpr;
 
-static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_ELitInt(long long val, AstType* ty) { HirExpr _r = {.tag=HirExpr_ELitInt}; _r.data.ELitInt.val = val; _r.data.ELitInt.ty = ty; return _r; }
-static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_ELitFloat(double val, AstType* ty) { HirExpr _r = {.tag=HirExpr_ELitFloat}; _r.data.ELitFloat.val = val; _r.data.ELitFloat.ty = ty; return _r; }
-static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_ELitStr(TrStr val, AstType* ty) { HirExpr _r = {.tag=HirExpr_ELitStr}; _r.data.ELitStr.val = _tr_str_retain(val); _r.data.ELitStr.ty = ty; return _r; }
-static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_ELitBytes(TrStr val, AstType* ty) { HirExpr _r = {.tag=HirExpr_ELitBytes}; _r.data.ELitBytes.val = _tr_str_retain(val); _r.data.ELitBytes.ty = ty; return _r; }
-static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_ERawStr(TrStr val, AstType* ty) { HirExpr _r = {.tag=HirExpr_ERawStr}; _r.data.ERawStr.val = _tr_str_retain(val); _r.data.ERawStr.ty = ty; return _r; }
-static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_ELitChar(long long val, AstType* ty) { HirExpr _r = {.tag=HirExpr_ELitChar}; _r.data.ELitChar.val = val; _r.data.ELitChar.ty = ty; return _r; }
-static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_ELitBool(bool val, AstType* ty) { HirExpr _r = {.tag=HirExpr_ELitBool}; _r.data.ELitBool.val = val; _r.data.ELitBool.ty = ty; return _r; }
-static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_ELitNone(AstType* ty) { HirExpr _r = {.tag=HirExpr_ELitNone}; _r.data.ELitNone.ty = ty; return _r; }
-static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_EIdent(TrStr name, AstType* ty, bool is_move) { HirExpr _r = {.tag=HirExpr_EIdent}; _r.data.EIdent.name = _tr_str_retain(name); _r.data.EIdent.ty = ty; _r.data.EIdent.is_move = is_move; return _r; }
-static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_EBinOp(TrStr op, HirExpr* left, HirExpr* right, AstType* ty) { HirExpr _r = {.tag=HirExpr_EBinOp}; _r.data.EBinOp.op = _tr_str_retain(op); _r.data.EBinOp.left = left; _r.data.EBinOp.right = right; _r.data.EBinOp.ty = ty; return _r; }
-static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_EUnaryOp(TrStr op, HirExpr* expr, AstType* ty) { HirExpr _r = {.tag=HirExpr_EUnaryOp}; _r.data.EUnaryOp.op = _tr_str_retain(op); _r.data.EUnaryOp.expr = expr; _r.data.EUnaryOp.ty = ty; return _r; }
-static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_ECall(HirExpr* callee, List_ptr* args, AstType* ty) { HirExpr _r = {.tag=HirExpr_ECall}; _r.data.ECall.callee = callee; _r.data.ECall.args = args; _r.data.ECall.ty = ty; return _r; }
-static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_EMethodCall(HirExpr* obj, TrStr method, List_ptr* args, AstType* ty) { HirExpr _r = {.tag=HirExpr_EMethodCall}; _r.data.EMethodCall.obj = obj; _r.data.EMethodCall.method = _tr_str_retain(method); _r.data.EMethodCall.args = args; _r.data.EMethodCall.ty = ty; return _r; }
-static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_EPropAccess(HirExpr* obj, TrStr prop, AstType* ty) { HirExpr _r = {.tag=HirExpr_EPropAccess}; _r.data.EPropAccess.obj = obj; _r.data.EPropAccess.prop = _tr_str_retain(prop); _r.data.EPropAccess.ty = ty; return _r; }
-static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_EIndex(HirExpr* obj, HirExpr* _tr_v_index, AstType* ty) { HirExpr _r = {.tag=HirExpr_EIndex}; _r.data.EIndex.obj = obj; _r.data.EIndex._tr_v_index = _tr_v_index; _r.data.EIndex.ty = ty; return _r; }
-static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_ECast(HirExpr* expr, AstType* target_ty) { HirExpr _r = {.tag=HirExpr_ECast}; _r.data.ECast.expr = expr; _r.data.ECast.target_ty = target_ty; return _r; }
-static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_EFString(List_ptr* parts, AstType* ty) { HirExpr _r = {.tag=HirExpr_EFString}; _r.data.EFString.parts = parts; _r.data.EFString.ty = ty; return _r; }
-static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_ETryExpr(HirExpr* expr, AstType* ty) { HirExpr _r = {.tag=HirExpr_ETryExpr}; _r.data.ETryExpr.expr = expr; _r.data.ETryExpr.ty = ty; return _r; }
-static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_EClosure(List_ptr* params, AstType* ret_ty, HirBlock* body, bool is_async, List_ptr* captures) { HirExpr _r = {.tag=HirExpr_EClosure}; _r.data.EClosure.params = params; _r.data.EClosure.ret_ty = ret_ty; _r.data.EClosure.body = body; _r.data.EClosure.is_async = is_async; _r.data.EClosure.captures = captures; return _r; }
-static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_ESuperMethodCall(TrStr base_class, TrStr method, List_ptr* args, AstType* ty) { HirExpr _r = {.tag=HirExpr_ESuperMethodCall}; _r.data.ESuperMethodCall.base_class = _tr_str_retain(base_class); _r.data.ESuperMethodCall.method = _tr_str_retain(method); _r.data.ESuperMethodCall.args = args; _r.data.ESuperMethodCall.ty = ty; return _r; }
-static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_ESuperPropAccess(TrStr base_class, TrStr prop, AstType* ty) { HirExpr _r = {.tag=HirExpr_ESuperPropAccess}; _r.data.ESuperPropAccess.base_class = _tr_str_retain(base_class); _r.data.ESuperPropAccess.prop = _tr_str_retain(prop); _r.data.ESuperPropAccess.ty = ty; return _r; }
-static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_EList(List_ptr* items, AstType* ty) { HirExpr _r = {.tag=HirExpr_EList}; _r.data.EList.items = items; _r.data.EList.ty = ty; return _r; }
-static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_ESet(List_ptr* items, AstType* ty) { HirExpr _r = {.tag=HirExpr_ESet}; _r.data.ESet.items = items; _r.data.ESet.ty = ty; return _r; }
-static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_EDict(List_ptr* keys, List_ptr* vals, AstType* ty) { HirExpr _r = {.tag=HirExpr_EDict}; _r.data.EDict.keys = keys; _r.data.EDict.vals = vals; _r.data.EDict.ty = ty; return _r; }
-static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_ETuple(List_ptr* items, AstType* ty) { HirExpr _r = {.tag=HirExpr_ETuple}; _r.data.ETuple.items = items; _r.data.ETuple.ty = ty; return _r; }
-static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_EListComp(HirExpr* element, List_ptr* generators, AstType* ty) { HirExpr _r = {.tag=HirExpr_EListComp}; _r.data.EListComp.element = element; _r.data.EListComp.generators = generators; _r.data.EListComp.ty = ty; return _r; }
-static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_EGeneratorExpr(HirExpr* element, List_ptr* generators, AstType* ty) { HirExpr _r = {.tag=HirExpr_EGeneratorExpr}; _r.data.EGeneratorExpr.element = element; _r.data.EGeneratorExpr.generators = generators; _r.data.EGeneratorExpr.ty = ty; return _r; }
-static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_ESlice(HirExpr* start, HirExpr* stop, HirExpr* step, AstType* ty) { HirExpr _r = {.tag=HirExpr_ESlice}; _r.data.ESlice.start = start; _r.data.ESlice.stop = stop; _r.data.ESlice.step = step; _r.data.ESlice.ty = ty; return _r; }
-static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_EAwait(HirExpr* expr, AstType* ty) { HirExpr _r = {.tag=HirExpr_EAwait}; _r.data.EAwait.expr = expr; _r.data.EAwait.ty = ty; return _r; }
-static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_EAwaitTimeout(HirExpr* expr, HirExpr* timeout_ms, AstType* ty) { HirExpr _r = {.tag=HirExpr_EAwaitTimeout}; _r.data.EAwaitTimeout.expr = expr; _r.data.EAwaitTimeout.timeout_ms = timeout_ms; _r.data.EAwaitTimeout.ty = ty; return _r; }
-static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_EYield(HirExpr* expr, AstType* ty) { HirExpr _r = {.tag=HirExpr_EYield}; _r.data.EYield.expr = expr; _r.data.EYield.ty = ty; return _r; }
-static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_ETry(HirBlock* try_body, List_ptr* catches, HirBlock* finally_b, AstType* ty) { HirExpr _r = {.tag=HirExpr_ETry}; _r.data.ETry.try_body = try_body; _r.data.ETry.catches = catches; _r.data.ETry.finally_b = finally_b; _r.data.ETry.ty = ty; return _r; }
-static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_ERange(HirExpr* start, HirExpr* end, bool inclusive, AstType* ty) { HirExpr _r = {.tag=HirExpr_ERange}; _r.data.ERange.start = start; _r.data.ERange.end = end; _r.data.ERange.inclusive = inclusive; _r.data.ERange.ty = ty; return _r; }
-static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_ESizeOf(AstType* target_ty, AstType* ty) { HirExpr _r = {.tag=HirExpr_ESizeOf}; _r.data.ESizeOf.target_ty = target_ty; _r.data.ESizeOf.ty = ty; return _r; }
-static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_EIfElse(HirExpr* cond, HirExpr* then_e, HirExpr* else_e, AstType* ty) { HirExpr _r = {.tag=HirExpr_EIfElse}; _r.data.EIfElse.cond = cond; _r.data.EIfElse.then_e = then_e; _r.data.EIfElse.else_e = else_e; _r.data.EIfElse.ty = ty; return _r; }
-static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_EDo(HirBlock* body, AstType* ty) { HirExpr _r = {.tag=HirExpr_EDo}; _r.data.EDo.body = body; _r.data.EDo.ty = ty; return _r; }
-static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_EMatchExpr(HirExpr* subj, List_ptr* arms, AstType* ty) { HirExpr _r = {.tag=HirExpr_EMatchExpr}; _r.data.EMatchExpr.subj = subj; _r.data.EMatchExpr.arms = arms; _r.data.EMatchExpr.ty = ty; return _r; }
-static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_ELoop(HirBlock* body, AstType* ty) { HirExpr _r = {.tag=HirExpr_ELoop}; _r.data.ELoop.body = body; _r.data.ELoop.ty = ty; return _r; }
-static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_EWhileExpr(HirExpr* cond, HirBlock* body, HirBlock* else_body, AstType* ty) { HirExpr _r = {.tag=HirExpr_EWhileExpr}; _r.data.EWhileExpr.cond = cond; _r.data.EWhileExpr.body = body; _r.data.EWhileExpr.else_body = else_body; _r.data.EWhileExpr.ty = ty; return _r; }
+static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_ELitInt(long long val, AstType* ty) { HirExpr _r = {.tag=HirExpr_ELitInt}; _r.data.ELitInt.val = val; _r.data.ELitInt.ty = _tr_obj_retain(ty); return _r; }
+static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_ELitFloat(double val, AstType* ty) { HirExpr _r = {.tag=HirExpr_ELitFloat}; _r.data.ELitFloat.val = val; _r.data.ELitFloat.ty = _tr_obj_retain(ty); return _r; }
+static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_ELitStr(TrStr val, AstType* ty) { HirExpr _r = {.tag=HirExpr_ELitStr}; _r.data.ELitStr.val = _tr_str_retain(val); _r.data.ELitStr.ty = _tr_obj_retain(ty); return _r; }
+static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_ELitBytes(TrStr val, AstType* ty) { HirExpr _r = {.tag=HirExpr_ELitBytes}; _r.data.ELitBytes.val = _tr_str_retain(val); _r.data.ELitBytes.ty = _tr_obj_retain(ty); return _r; }
+static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_ERawStr(TrStr val, AstType* ty) { HirExpr _r = {.tag=HirExpr_ERawStr}; _r.data.ERawStr.val = _tr_str_retain(val); _r.data.ERawStr.ty = _tr_obj_retain(ty); return _r; }
+static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_ELitChar(long long val, AstType* ty) { HirExpr _r = {.tag=HirExpr_ELitChar}; _r.data.ELitChar.val = val; _r.data.ELitChar.ty = _tr_obj_retain(ty); return _r; }
+static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_ELitBool(bool val, AstType* ty) { HirExpr _r = {.tag=HirExpr_ELitBool}; _r.data.ELitBool.val = val; _r.data.ELitBool.ty = _tr_obj_retain(ty); return _r; }
+static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_ELitNone(AstType* ty) { HirExpr _r = {.tag=HirExpr_ELitNone}; _r.data.ELitNone.ty = _tr_obj_retain(ty); return _r; }
+static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_EIdent(TrStr name, AstType* ty, bool is_move) { HirExpr _r = {.tag=HirExpr_EIdent}; _r.data.EIdent.name = _tr_str_retain(name); _r.data.EIdent.ty = _tr_obj_retain(ty); _r.data.EIdent.is_move = is_move; return _r; }
+static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_EBinOp(TrStr op, HirExpr* left, HirExpr* right, AstType* ty) { HirExpr _r = {.tag=HirExpr_EBinOp}; _r.data.EBinOp.op = _tr_str_retain(op); _r.data.EBinOp.left = left; _r.data.EBinOp.right = right; _r.data.EBinOp.ty = _tr_obj_retain(ty); return _r; }
+static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_EUnaryOp(TrStr op, HirExpr* expr, AstType* ty) { HirExpr _r = {.tag=HirExpr_EUnaryOp}; _r.data.EUnaryOp.op = _tr_str_retain(op); _r.data.EUnaryOp.expr = expr; _r.data.EUnaryOp.ty = _tr_obj_retain(ty); return _r; }
+static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_ECall(HirExpr* callee, List_ptr* args, AstType* ty) { HirExpr _r = {.tag=HirExpr_ECall}; _r.data.ECall.callee = callee; _r.data.ECall.args = args; _r.data.ECall.ty = _tr_obj_retain(ty); return _r; }
+static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_EMethodCall(HirExpr* obj, TrStr method, List_ptr* args, AstType* ty) { HirExpr _r = {.tag=HirExpr_EMethodCall}; _r.data.EMethodCall.obj = obj; _r.data.EMethodCall.method = _tr_str_retain(method); _r.data.EMethodCall.args = args; _r.data.EMethodCall.ty = _tr_obj_retain(ty); return _r; }
+static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_EPropAccess(HirExpr* obj, TrStr prop, AstType* ty) { HirExpr _r = {.tag=HirExpr_EPropAccess}; _r.data.EPropAccess.obj = obj; _r.data.EPropAccess.prop = _tr_str_retain(prop); _r.data.EPropAccess.ty = _tr_obj_retain(ty); return _r; }
+static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_EIndex(HirExpr* obj, HirExpr* _tr_v_index, AstType* ty) { HirExpr _r = {.tag=HirExpr_EIndex}; _r.data.EIndex.obj = obj; _r.data.EIndex._tr_v_index = _tr_v_index; _r.data.EIndex.ty = _tr_obj_retain(ty); return _r; }
+static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_ECast(HirExpr* expr, AstType* target_ty) { HirExpr _r = {.tag=HirExpr_ECast}; _r.data.ECast.expr = expr; _r.data.ECast.target_ty = _tr_obj_retain(target_ty); return _r; }
+static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_EFString(List_ptr* parts, AstType* ty) { HirExpr _r = {.tag=HirExpr_EFString}; _r.data.EFString.parts = parts; _r.data.EFString.ty = _tr_obj_retain(ty); return _r; }
+static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_ETryExpr(HirExpr* expr, AstType* ty) { HirExpr _r = {.tag=HirExpr_ETryExpr}; _r.data.ETryExpr.expr = expr; _r.data.ETryExpr.ty = _tr_obj_retain(ty); return _r; }
+static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_EClosure(List_ptr* params, AstType* ret_ty, HirBlock* body, bool is_async, List_ptr* captures) { HirExpr _r = {.tag=HirExpr_EClosure}; _r.data.EClosure.params = params; _r.data.EClosure.ret_ty = _tr_obj_retain(ret_ty); _r.data.EClosure.body = _tr_obj_retain(body); _r.data.EClosure.is_async = is_async; _r.data.EClosure.captures = captures; return _r; }
+static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_ESuperMethodCall(TrStr base_class, TrStr method, List_ptr* args, AstType* ty) { HirExpr _r = {.tag=HirExpr_ESuperMethodCall}; _r.data.ESuperMethodCall.base_class = _tr_str_retain(base_class); _r.data.ESuperMethodCall.method = _tr_str_retain(method); _r.data.ESuperMethodCall.args = args; _r.data.ESuperMethodCall.ty = _tr_obj_retain(ty); return _r; }
+static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_ESuperPropAccess(TrStr base_class, TrStr prop, AstType* ty) { HirExpr _r = {.tag=HirExpr_ESuperPropAccess}; _r.data.ESuperPropAccess.base_class = _tr_str_retain(base_class); _r.data.ESuperPropAccess.prop = _tr_str_retain(prop); _r.data.ESuperPropAccess.ty = _tr_obj_retain(ty); return _r; }
+static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_EList(List_ptr* items, AstType* ty) { HirExpr _r = {.tag=HirExpr_EList}; _r.data.EList.items = items; _r.data.EList.ty = _tr_obj_retain(ty); return _r; }
+static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_ESet(List_ptr* items, AstType* ty) { HirExpr _r = {.tag=HirExpr_ESet}; _r.data.ESet.items = items; _r.data.ESet.ty = _tr_obj_retain(ty); return _r; }
+static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_EDict(List_ptr* keys, List_ptr* vals, AstType* ty) { HirExpr _r = {.tag=HirExpr_EDict}; _r.data.EDict.keys = keys; _r.data.EDict.vals = vals; _r.data.EDict.ty = _tr_obj_retain(ty); return _r; }
+static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_ETuple(List_ptr* items, AstType* ty) { HirExpr _r = {.tag=HirExpr_ETuple}; _r.data.ETuple.items = items; _r.data.ETuple.ty = _tr_obj_retain(ty); return _r; }
+static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_EListComp(HirExpr* element, List_ptr* generators, AstType* ty) { HirExpr _r = {.tag=HirExpr_EListComp}; _r.data.EListComp.element = element; _r.data.EListComp.generators = generators; _r.data.EListComp.ty = _tr_obj_retain(ty); return _r; }
+static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_EGeneratorExpr(HirExpr* element, List_ptr* generators, AstType* ty) { HirExpr _r = {.tag=HirExpr_EGeneratorExpr}; _r.data.EGeneratorExpr.element = element; _r.data.EGeneratorExpr.generators = generators; _r.data.EGeneratorExpr.ty = _tr_obj_retain(ty); return _r; }
+static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_ESlice(HirExpr* start, HirExpr* stop, HirExpr* step, AstType* ty) { HirExpr _r = {.tag=HirExpr_ESlice}; _r.data.ESlice.start = start; _r.data.ESlice.stop = stop; _r.data.ESlice.step = step; _r.data.ESlice.ty = _tr_obj_retain(ty); return _r; }
+static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_EAwait(HirExpr* expr, AstType* ty) { HirExpr _r = {.tag=HirExpr_EAwait}; _r.data.EAwait.expr = expr; _r.data.EAwait.ty = _tr_obj_retain(ty); return _r; }
+static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_EAwaitTimeout(HirExpr* expr, HirExpr* timeout_ms, AstType* ty) { HirExpr _r = {.tag=HirExpr_EAwaitTimeout}; _r.data.EAwaitTimeout.expr = expr; _r.data.EAwaitTimeout.timeout_ms = timeout_ms; _r.data.EAwaitTimeout.ty = _tr_obj_retain(ty); return _r; }
+static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_EYield(HirExpr* expr, AstType* ty) { HirExpr _r = {.tag=HirExpr_EYield}; _r.data.EYield.expr = expr; _r.data.EYield.ty = _tr_obj_retain(ty); return _r; }
+static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_ETry(HirBlock* try_body, List_ptr* catches, HirBlock* finally_b, AstType* ty) { HirExpr _r = {.tag=HirExpr_ETry}; _r.data.ETry.try_body = _tr_obj_retain(try_body); _r.data.ETry.catches = catches; _r.data.ETry.finally_b = _tr_obj_retain(finally_b); _r.data.ETry.ty = _tr_obj_retain(ty); return _r; }
+static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_ERange(HirExpr* start, HirExpr* end, bool inclusive, AstType* ty) { HirExpr _r = {.tag=HirExpr_ERange}; _r.data.ERange.start = start; _r.data.ERange.end = end; _r.data.ERange.inclusive = inclusive; _r.data.ERange.ty = _tr_obj_retain(ty); return _r; }
+static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_ESizeOf(AstType* target_ty, AstType* ty) { HirExpr _r = {.tag=HirExpr_ESizeOf}; _r.data.ESizeOf.target_ty = _tr_obj_retain(target_ty); _r.data.ESizeOf.ty = _tr_obj_retain(ty); return _r; }
+static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_EIfElse(HirExpr* cond, HirExpr* then_e, HirExpr* else_e, AstType* ty) { HirExpr _r = {.tag=HirExpr_EIfElse}; _r.data.EIfElse.cond = cond; _r.data.EIfElse.then_e = then_e; _r.data.EIfElse.else_e = else_e; _r.data.EIfElse.ty = _tr_obj_retain(ty); return _r; }
+static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_EDo(HirBlock* body, AstType* ty) { HirExpr _r = {.tag=HirExpr_EDo}; _r.data.EDo.body = _tr_obj_retain(body); _r.data.EDo.ty = _tr_obj_retain(ty); return _r; }
+static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_EMatchExpr(HirExpr* subj, List_ptr* arms, AstType* ty) { HirExpr _r = {.tag=HirExpr_EMatchExpr}; _r.data.EMatchExpr.subj = subj; _r.data.EMatchExpr.arms = arms; _r.data.EMatchExpr.ty = _tr_obj_retain(ty); return _r; }
+static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_ELoop(HirBlock* body, AstType* ty) { HirExpr _r = {.tag=HirExpr_ELoop}; _r.data.ELoop.body = _tr_obj_retain(body); _r.data.ELoop.ty = _tr_obj_retain(ty); return _r; }
+static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_EWhileExpr(HirExpr* cond, HirBlock* body, HirBlock* else_body, AstType* ty) { HirExpr _r = {.tag=HirExpr_EWhileExpr}; _r.data.EWhileExpr.cond = cond; _r.data.EWhileExpr.body = _tr_obj_retain(body); _r.data.EWhileExpr.else_body = _tr_obj_retain(else_body); _r.data.EWhileExpr.ty = _tr_obj_retain(ty); return _r; }
 
 typedef enum {
     HirStmt_SExpr,
@@ -1384,26 +1384,26 @@ typedef struct HirStmt {
 } HirStmt;
 
 static inline __attribute__((always_inline)) HirStmt HirStmt_ctor_SExpr(HirExpr* expr) { HirStmt _r = {.tag=HirStmt_SExpr}; _r.data.SExpr.expr = expr; return _r; }
-static inline __attribute__((always_inline)) HirStmt HirStmt_ctor_SLet(TrStr name, Ownership ownership, bool is_mut, bool is_const, bool is_shared, AstType* ty, HirExpr* val) { HirStmt _r = {.tag=HirStmt_SLet}; _r.data.SLet.name = _tr_str_retain(name); _r.data.SLet.ownership = ownership; _r.data.SLet.is_mut = is_mut; _r.data.SLet.is_const = is_const; _r.data.SLet.is_shared = is_shared; _r.data.SLet.ty = ty; _r.data.SLet.val = val; return _r; }
+static inline __attribute__((always_inline)) HirStmt HirStmt_ctor_SLet(TrStr name, Ownership ownership, bool is_mut, bool is_const, bool is_shared, AstType* ty, HirExpr* val) { HirStmt _r = {.tag=HirStmt_SLet}; _r.data.SLet.name = _tr_str_retain(name); _r.data.SLet.ownership = ownership; _r.data.SLet.is_mut = is_mut; _r.data.SLet.is_const = is_const; _r.data.SLet.is_shared = is_shared; _r.data.SLet.ty = _tr_obj_retain(ty); _r.data.SLet.val = val; return _r; }
 static inline __attribute__((always_inline)) HirStmt HirStmt_ctor_SAssign(HirExpr* target, HirExpr* val) { HirStmt _r = {.tag=HirStmt_SAssign}; _r.data.SAssign.target = target; _r.data.SAssign.val = val; return _r; }
 static inline __attribute__((always_inline)) HirStmt HirStmt_ctor_SReturn(HirExpr* val) { HirStmt _r = {.tag=HirStmt_SReturn}; _r.data.SReturn.val = val; return _r; }
 static inline __attribute__((always_inline)) HirStmt HirStmt_ctor_SBreak(HirExpr* val) { HirStmt _r = {.tag=HirStmt_SBreak}; _r.data.SBreak.val = val; return _r; }
 #define HirStmt_make_SContinue() ((HirStmt){.tag=HirStmt_SContinue})
 #define HirStmt_make_SPass() ((HirStmt){.tag=HirStmt_SPass})
 static inline __attribute__((always_inline)) HirStmt HirStmt_ctor_SRaise(HirExpr* val) { HirStmt _r = {.tag=HirStmt_SRaise}; _r.data.SRaise.val = val; return _r; }
-static inline __attribute__((always_inline)) HirStmt HirStmt_ctor_SUnsafe(HirBlock* body) { HirStmt _r = {.tag=HirStmt_SUnsafe}; _r.data.SUnsafe.body = body; return _r; }
-static inline __attribute__((always_inline)) HirStmt HirStmt_ctor_SIf(HirExpr* cond, HirBlock* then_b, HirBlock* else_b) { HirStmt _r = {.tag=HirStmt_SIf}; _r.data.SIf.cond = cond; _r.data.SIf.then_b = then_b; _r.data.SIf.else_b = else_b; return _r; }
-static inline __attribute__((always_inline)) HirStmt HirStmt_ctor_SWhile(HirExpr* cond, HirBlock* body) { HirStmt _r = {.tag=HirStmt_SWhile}; _r.data.SWhile.cond = cond; _r.data.SWhile.body = body; return _r; }
-static inline __attribute__((always_inline)) HirStmt HirStmt_ctor_SFor(TrStr var, HirExpr* iter, HirBlock* body) { HirStmt _r = {.tag=HirStmt_SFor}; _r.data.SFor.var = _tr_str_retain(var); _r.data.SFor.iter = iter; _r.data.SFor.body = body; return _r; }
-static inline __attribute__((always_inline)) HirStmt HirStmt_ctor_SForUnpack(List_TrStr* vars, HirExpr* iter, HirBlock* body) { HirStmt _r = {.tag=HirStmt_SForUnpack}; _r.data.SForUnpack.vars = vars; _r.data.SForUnpack.iter = iter; _r.data.SForUnpack.body = body; return _r; }
+static inline __attribute__((always_inline)) HirStmt HirStmt_ctor_SUnsafe(HirBlock* body) { HirStmt _r = {.tag=HirStmt_SUnsafe}; _r.data.SUnsafe.body = _tr_obj_retain(body); return _r; }
+static inline __attribute__((always_inline)) HirStmt HirStmt_ctor_SIf(HirExpr* cond, HirBlock* then_b, HirBlock* else_b) { HirStmt _r = {.tag=HirStmt_SIf}; _r.data.SIf.cond = cond; _r.data.SIf.then_b = _tr_obj_retain(then_b); _r.data.SIf.else_b = _tr_obj_retain(else_b); return _r; }
+static inline __attribute__((always_inline)) HirStmt HirStmt_ctor_SWhile(HirExpr* cond, HirBlock* body) { HirStmt _r = {.tag=HirStmt_SWhile}; _r.data.SWhile.cond = cond; _r.data.SWhile.body = _tr_obj_retain(body); return _r; }
+static inline __attribute__((always_inline)) HirStmt HirStmt_ctor_SFor(TrStr var, HirExpr* iter, HirBlock* body) { HirStmt _r = {.tag=HirStmt_SFor}; _r.data.SFor.var = _tr_str_retain(var); _r.data.SFor.iter = iter; _r.data.SFor.body = _tr_obj_retain(body); return _r; }
+static inline __attribute__((always_inline)) HirStmt HirStmt_ctor_SForUnpack(List_TrStr* vars, HirExpr* iter, HirBlock* body) { HirStmt _r = {.tag=HirStmt_SForUnpack}; _r.data.SForUnpack.vars = vars; _r.data.SForUnpack.iter = iter; _r.data.SForUnpack.body = _tr_obj_retain(body); return _r; }
 static inline __attribute__((always_inline)) HirStmt HirStmt_ctor_SMatch(HirExpr* expr, List_ptr* arms) { HirStmt _r = {.tag=HirStmt_SMatch}; _r.data.SMatch.expr = expr; _r.data.SMatch.arms = arms; return _r; }
-static inline __attribute__((always_inline)) HirStmt HirStmt_ctor_STry(HirBlock* try_body, List_ptr* catches, HirBlock* finally_b) { HirStmt _r = {.tag=HirStmt_STry}; _r.data.STry.try_body = try_body; _r.data.STry.catches = catches; _r.data.STry.finally_b = finally_b; return _r; }
+static inline __attribute__((always_inline)) HirStmt HirStmt_ctor_STry(HirBlock* try_body, List_ptr* catches, HirBlock* finally_b) { HirStmt _r = {.tag=HirStmt_STry}; _r.data.STry.try_body = _tr_obj_retain(try_body); _r.data.STry.catches = catches; _r.data.STry.finally_b = _tr_obj_retain(finally_b); return _r; }
 static inline __attribute__((always_inline)) HirStmt HirStmt_ctor_SAssert(HirExpr* cond, HirExpr* msg) { HirStmt _r = {.tag=HirStmt_SAssert}; _r.data.SAssert.cond = cond; _r.data.SAssert.msg = msg; return _r; }
-static inline __attribute__((always_inline)) HirStmt HirStmt_ctor_SWith(List_ptr* items, List_TrStr* aliases, HirBlock* body) { HirStmt _r = {.tag=HirStmt_SWith}; _r.data.SWith.items = items; _r.data.SWith.aliases = aliases; _r.data.SWith.body = body; return _r; }
+static inline __attribute__((always_inline)) HirStmt HirStmt_ctor_SWith(List_ptr* items, List_TrStr* aliases, HirBlock* body) { HirStmt _r = {.tag=HirStmt_SWith}; _r.data.SWith.items = items; _r.data.SWith.aliases = aliases; _r.data.SWith.body = _tr_obj_retain(body); return _r; }
 static inline __attribute__((always_inline)) HirStmt HirStmt_ctor_SAsm(TrStr code, TrStr outputs, TrStr inputs, TrStr clobbers) { HirStmt _r = {.tag=HirStmt_SAsm}; _r.data.SAsm.code = _tr_str_retain(code); _r.data.SAsm.outputs = _tr_str_retain(outputs); _r.data.SAsm.inputs = _tr_str_retain(inputs); _r.data.SAsm.clobbers = _tr_str_retain(clobbers); return _r; }
 static inline __attribute__((always_inline)) HirStmt HirStmt_ctor_SSpawn(HirExpr* expr) { HirStmt _r = {.tag=HirStmt_SSpawn}; _r.data.SSpawn.expr = expr; return _r; }
-static inline __attribute__((always_inline)) HirStmt HirStmt_ctor_STaskGroup(HirBlock* body) { HirStmt _r = {.tag=HirStmt_STaskGroup}; _r.data.STaskGroup.body = body; return _r; }
-static inline __attribute__((always_inline)) HirStmt HirStmt_ctor_SGpuBlock(HirBlock* body) { HirStmt _r = {.tag=HirStmt_SGpuBlock}; _r.data.SGpuBlock.body = body; return _r; }
+static inline __attribute__((always_inline)) HirStmt HirStmt_ctor_STaskGroup(HirBlock* body) { HirStmt _r = {.tag=HirStmt_STaskGroup}; _r.data.STaskGroup.body = _tr_obj_retain(body); return _r; }
+static inline __attribute__((always_inline)) HirStmt HirStmt_ctor_SGpuBlock(HirBlock* body) { HirStmt _r = {.tag=HirStmt_SGpuBlock}; _r.data.SGpuBlock.body = _tr_obj_retain(body); return _r; }
 static inline __attribute__((always_inline)) HirStmt HirStmt_ctor_SFree(TrStr name) { HirStmt _r = {.tag=HirStmt_SFree}; _r.data.SFree.name = _tr_str_retain(name); return _r; }
 static inline __attribute__((always_inline)) HirStmt HirStmt_ctor_SMultiLet(List_TrStr* names, bool is_mut, HirExpr* val) { HirStmt _r = {.tag=HirStmt_SMultiLet}; _r.data.SMultiLet.names = names; _r.data.SMultiLet.is_mut = is_mut; _r.data.SMultiLet.val = val; return _r; }
 static inline __attribute__((always_inline)) HirStmt HirStmt_ctor_SChanSelect(List_ptr* cases) { HirStmt _r = {.tag=HirStmt_SChanSelect}; _r.data.SChanSelect.cases = cases; return _r; }
@@ -1528,15 +1528,20 @@ static inline __attribute__((always_inline)) MacroVal MacroVal_ctor_MRec(List_Tr
 #ifndef StringObj_STRUCT_DEFINED
 #define StringObj_STRUCT_DEFINED
 typedef struct StringObj {
+    size_t __rc;
     char* data;
     long long len;
     long long capacity;
 } StringObj;
+static void _trdrop_StringObj(void* vp) {
+    StringObj* self = (StringObj*)vp; (void)self;
+}
 #endif
 
 #ifndef StringBuilder_STRUCT_DEFINED
 #define StringBuilder_STRUCT_DEFINED
 typedef struct StringBuilder {
+    size_t __rc;
     StringObj* buf;
 } StringBuilder;
 #endif
@@ -1544,6 +1549,7 @@ typedef struct StringBuilder {
 #ifndef Lexer_STRUCT_DEFINED
 #define Lexer_STRUCT_DEFINED
 typedef struct Lexer {
+    size_t __rc;
     char* src;
     long long len;
     long long pos;
@@ -1559,11 +1565,15 @@ typedef struct Lexer {
     List_TrStr* comment_texts;
     List_bool* comment_trailing;
 } Lexer;
+static void _trdrop_Lexer(void* vp) {
+    Lexer* self = (Lexer*)vp; (void)self;
+}
 #endif
 
 #ifndef AstType_STRUCT_DEFINED
 #define AstType_STRUCT_DEFINED
 typedef struct AstType {
+    size_t __rc;
     TrStr name;
     List_ptr* args;
     TrStr from_param;
@@ -1572,65 +1582,101 @@ typedef struct AstType {
     bool is_borrow;
     bool is_mut_borrow;
 } AstType;
+static void _trdrop_AstType(void* vp) {
+    AstType* self = (AstType*)vp; (void)self;
+    _tr_str_release(self->name);
+    _tr_str_release(self->from_param);
+}
 #endif
 
 #ifndef GenericConstraint_STRUCT_DEFINED
 #define GenericConstraint_STRUCT_DEFINED
 typedef struct GenericConstraint {
+    size_t __rc;
     TrStr target;
     List_ptr* bounds;
 } GenericConstraint;
+static void _trdrop_GenericConstraint(void* vp) {
+    GenericConstraint* self = (GenericConstraint*)vp; (void)self;
+    _tr_str_release(self->target);
+}
 #endif
 
 #ifndef Decorator_STRUCT_DEFINED
 #define Decorator_STRUCT_DEFINED
 typedef struct Decorator {
+    size_t __rc;
     TrStr name;
     List_ptr* args;
 } Decorator;
+static void _trdrop_Decorator(void* vp) {
+    Decorator* self = (Decorator*)vp; (void)self;
+    _tr_str_release(self->name);
+}
 #endif
 
 #ifndef Comprehension_STRUCT_DEFINED
 #define Comprehension_STRUCT_DEFINED
 typedef struct Comprehension {
+    size_t __rc;
     TrStr target;
     Expr* iter;
     List_ptr* ifs;
     bool is_async;
 } Comprehension;
+static void _trdrop_Comprehension(void* vp) {
+    Comprehension* self = (Comprehension*)vp; (void)self;
+    _tr_str_release(self->target);
+}
 #endif
 
 #ifndef CatchClause_STRUCT_DEFINED
 #define CatchClause_STRUCT_DEFINED
 typedef struct CatchClause {
+    size_t __rc;
     TrStr err_name;
     AstType** err_type;
     Block** body;
 } CatchClause;
+static void _trdrop_CatchClause(void* vp) {
+    CatchClause* self = (CatchClause*)vp; (void)self;
+    _tr_str_release(self->err_name);
+}
 #endif
 
 #ifndef MatchArm_STRUCT_DEFINED
 #define MatchArm_STRUCT_DEFINED
 typedef struct MatchArm {
+    size_t __rc;
     Pattern pat;
     Expr* guard;
     Block** body;
 } MatchArm;
+static void _trdrop_MatchArm(void* vp) {
+    MatchArm* self = (MatchArm*)vp; (void)self;
+}
 #endif
 
 #ifndef FStringPart_STRUCT_DEFINED
 #define FStringPart_STRUCT_DEFINED
 typedef struct FStringPart {
+    size_t __rc;
     bool is_expr;
     TrStr text;
     Expr* expr;
     TrStr fmt_spec;
 } FStringPart;
+static void _trdrop_FStringPart(void* vp) {
+    FStringPart* self = (FStringPart*)vp; (void)self;
+    _tr_str_release(self->text);
+    _tr_str_release(self->fmt_spec);
+}
 #endif
 
 #ifndef ChanSelectArm_STRUCT_DEFINED
 #define ChanSelectArm_STRUCT_DEFINED
 typedef struct ChanSelectArm {
+    size_t __rc;
     long long kind;
     Expr* chan_expr;
     Expr* val_expr;
@@ -1638,37 +1684,55 @@ typedef struct ChanSelectArm {
     Expr* timeout_ms;
     Block* body;
 } ChanSelectArm;
+static void _trdrop_ChanSelectArm(void* vp) {
+    ChanSelectArm* self = (ChanSelectArm*)vp; (void)self;
+    _tr_str_release(self->var_name);
+}
 #endif
 
 #ifndef Block_STRUCT_DEFINED
 #define Block_STRUCT_DEFINED
 typedef struct Block {
+    size_t __rc;
     List_ptr* stmts;
 } Block;
+static void _trdrop_Block(void* vp) {
+    Block* self = (Block*)vp; (void)self;
+}
 #endif
 
 #ifndef ElifClause_STRUCT_DEFINED
 #define ElifClause_STRUCT_DEFINED
 typedef struct ElifClause {
+    size_t __rc;
     Expr* cond;
     Block** body;
 } ElifClause;
+static void _trdrop_ElifClause(void* vp) {
+    ElifClause* self = (ElifClause*)vp; (void)self;
+}
 #endif
 
 #ifndef Param_STRUCT_DEFINED
 #define Param_STRUCT_DEFINED
 typedef struct Param {
+    size_t __rc;
     TrStr name;
     AstType** ty;
     bool is_ref;
     bool is_mut_ref;
     bool is_variadic;
 } Param;
+static void _trdrop_Param(void* vp) {
+    Param* self = (Param*)vp; (void)self;
+    _tr_str_release(self->name);
+}
 #endif
 
 #ifndef FunctionDef_STRUCT_DEFINED
 #define FunctionDef_STRUCT_DEFINED
 typedef struct FunctionDef {
+    size_t __rc;
     TrStr name;
     List_TrStr* generics;
     List_ptr* params;
@@ -1687,20 +1751,30 @@ typedef struct FunctionDef {
     List_TrStr* outlives_a;
     List_TrStr* outlives_b;
 } FunctionDef;
+static void _trdrop_FunctionDef(void* vp) {
+    FunctionDef* self = (FunctionDef*)vp; (void)self;
+    _tr_str_release(self->name);
+}
 #endif
 
 #ifndef FieldDef_STRUCT_DEFINED
 #define FieldDef_STRUCT_DEFINED
 typedef struct FieldDef {
+    size_t __rc;
     TrStr name;
     AstType** ty;
     Expr* default_val;
 } FieldDef;
+static void _trdrop_FieldDef(void* vp) {
+    FieldDef* self = (FieldDef*)vp; (void)self;
+    _tr_str_release(self->name);
+}
 #endif
 
 #ifndef ClassDef_STRUCT_DEFINED
 #define ClassDef_STRUCT_DEFINED
 typedef struct ClassDef {
+    size_t __rc;
     TrStr name;
     List_TrStr* generics;
     List_TrStr* base_classes;
@@ -1715,19 +1789,30 @@ typedef struct ClassDef {
     TrStr docstring;
     List_TrStr* region_params;
 } ClassDef;
+static void _trdrop_ClassDef(void* vp) {
+    ClassDef* self = (ClassDef*)vp; (void)self;
+    _tr_str_release(self->name);
+    _tr_str_release(self->docstring);
+}
 #endif
 
 #ifndef VariantDef_STRUCT_DEFINED
 #define VariantDef_STRUCT_DEFINED
 typedef struct VariantDef {
+    size_t __rc;
     TrStr name;
     List_ptr* fields;
 } VariantDef;
+static void _trdrop_VariantDef(void* vp) {
+    VariantDef* self = (VariantDef*)vp; (void)self;
+    _tr_str_release(self->name);
+}
 #endif
 
 #ifndef EnumDef_STRUCT_DEFINED
 #define EnumDef_STRUCT_DEFINED
 typedef struct EnumDef {
+    size_t __rc;
     TrStr name;
     List_TrStr* generics;
     List_TrStr* iface_names;
@@ -1738,11 +1823,16 @@ typedef struct EnumDef {
     long long line;
     List_TrStr* region_params;
 } EnumDef;
+static void _trdrop_EnumDef(void* vp) {
+    EnumDef* self = (EnumDef*)vp; (void)self;
+    _tr_str_release(self->name);
+}
 #endif
 
 #ifndef InterfaceDef_STRUCT_DEFINED
 #define InterfaceDef_STRUCT_DEFINED
 typedef struct InterfaceDef {
+    size_t __rc;
     TrStr name;
     List_TrStr* generics;
     List_ptr* methods;
@@ -1751,26 +1841,41 @@ typedef struct InterfaceDef {
     List_ptr* decorators;
     List_TrStr* region_params;
 } InterfaceDef;
+static void _trdrop_InterfaceDef(void* vp) {
+    InterfaceDef* self = (InterfaceDef*)vp; (void)self;
+    _tr_str_release(self->name);
+}
 #endif
 
 #ifndef ImportItem_STRUCT_DEFINED
 #define ImportItem_STRUCT_DEFINED
 typedef struct ImportItem {
+    size_t __rc;
     TrStr name;
     TrStr alias;
 } ImportItem;
+static void _trdrop_ImportItem(void* vp) {
+    ImportItem* self = (ImportItem*)vp; (void)self;
+    _tr_str_release(self->name);
+    _tr_str_release(self->alias);
+}
 #endif
 
 #ifndef Program_STRUCT_DEFINED
 #define Program_STRUCT_DEFINED
 typedef struct Program {
+    size_t __rc;
     List_ptr* decls;
 } Program;
+static void _trdrop_Program(void* vp) {
+    Program* self = (Program*)vp; (void)self;
+}
 #endif
 
 #ifndef Parser_STRUCT_DEFINED
 #define Parser_STRUCT_DEFINED
 typedef struct Parser {
+    size_t __rc;
     List_Token* tokens;
     long long pos;
     List_i64* lines;
@@ -1779,11 +1884,17 @@ typedef struct Parser {
     long long error_count;
     TrStr current_file;
 } Parser;
+static void _trdrop_Parser(void* vp) {
+    Parser* self = (Parser*)vp; (void)self;
+    _tr_str_release(self->src_text);
+    _tr_str_release(self->current_file);
+}
 #endif
 
 #ifndef ModuleResolver_STRUCT_DEFINED
 #define ModuleResolver_STRUCT_DEFINED
 typedef struct ModuleResolver {
+    size_t __rc;
     TrMap* visited;
     List_ptr* all_decls;
     List_TrStr* search_paths;
@@ -1793,49 +1904,74 @@ typedef struct ModuleResolver {
     TrStr current_mod;
     long long parse_errors;
 } ModuleResolver;
+static void _trdrop_ModuleResolver(void* vp) {
+    ModuleResolver* self = (ModuleResolver*)vp; (void)self;
+    _tr_str_release(self->current_mod);
+}
 #endif
 
 #ifndef HirComprehension_STRUCT_DEFINED
 #define HirComprehension_STRUCT_DEFINED
 typedef struct HirComprehension {
+    size_t __rc;
     TrStr target;
     HirExpr* iter;
     List_ptr* ifs;
     bool is_async;
 } HirComprehension;
+static void _trdrop_HirComprehension(void* vp) {
+    HirComprehension* self = (HirComprehension*)vp; (void)self;
+    _tr_str_release(self->target);
+}
 #endif
 
 #ifndef HirCatchClause_STRUCT_DEFINED
 #define HirCatchClause_STRUCT_DEFINED
 typedef struct HirCatchClause {
+    size_t __rc;
     TrStr err_name;
     AstType* err_type;
     HirBlock* body;
 } HirCatchClause;
+static void _trdrop_HirCatchClause(void* vp) {
+    HirCatchClause* self = (HirCatchClause*)vp; (void)self;
+    _tr_str_release(self->err_name);
+}
 #endif
 
 #ifndef HirFStringPart_STRUCT_DEFINED
 #define HirFStringPart_STRUCT_DEFINED
 typedef struct HirFStringPart {
+    size_t __rc;
     bool is_expr;
     TrStr text;
     HirExpr* expr;
     TrStr fmt_spec;
 } HirFStringPart;
+static void _trdrop_HirFStringPart(void* vp) {
+    HirFStringPart* self = (HirFStringPart*)vp; (void)self;
+    _tr_str_release(self->text);
+    _tr_str_release(self->fmt_spec);
+}
 #endif
 
 #ifndef HirMatchArm_STRUCT_DEFINED
 #define HirMatchArm_STRUCT_DEFINED
 typedef struct HirMatchArm {
+    size_t __rc;
     Pattern pat;
     HirBlock* body;
     HirExpr* guard;
 } HirMatchArm;
+static void _trdrop_HirMatchArm(void* vp) {
+    HirMatchArm* self = (HirMatchArm*)vp; (void)self;
+}
 #endif
 
 #ifndef HirChanSelectArm_STRUCT_DEFINED
 #define HirChanSelectArm_STRUCT_DEFINED
 typedef struct HirChanSelectArm {
+    size_t __rc;
     long long kind;
     HirExpr* chan_expr;
     HirExpr* val_expr;
@@ -1843,26 +1979,40 @@ typedef struct HirChanSelectArm {
     HirExpr* timeout_ms;
     HirBlock* body;
 } HirChanSelectArm;
+static void _trdrop_HirChanSelectArm(void* vp) {
+    HirChanSelectArm* self = (HirChanSelectArm*)vp; (void)self;
+    _tr_str_release(self->var_name);
+}
 #endif
 
 #ifndef HirBlock_STRUCT_DEFINED
 #define HirBlock_STRUCT_DEFINED
 typedef struct HirBlock {
+    size_t __rc;
     List_ptr* stmts;
 } HirBlock;
+static void _trdrop_HirBlock(void* vp) {
+    HirBlock* self = (HirBlock*)vp; (void)self;
+}
 #endif
 
 #ifndef HirParam_STRUCT_DEFINED
 #define HirParam_STRUCT_DEFINED
 typedef struct HirParam {
+    size_t __rc;
     TrStr name;
     AstType* ty;
 } HirParam;
+static void _trdrop_HirParam(void* vp) {
+    HirParam* self = (HirParam*)vp; (void)self;
+    _tr_str_release(self->name);
+}
 #endif
 
 #ifndef HirFunction_STRUCT_DEFINED
 #define HirFunction_STRUCT_DEFINED
 typedef struct HirFunction {
+    size_t __rc;
     TrStr name;
     TrStr class_name;
     List_TrStr* generics;
@@ -1882,20 +2032,31 @@ typedef struct HirFunction {
     List_TrStr* borrow_sources;
     List_TrStr* proven_borrows;
 } HirFunction;
+static void _trdrop_HirFunction(void* vp) {
+    HirFunction* self = (HirFunction*)vp; (void)self;
+    _tr_str_release(self->name);
+    _tr_str_release(self->class_name);
+}
 #endif
 
 #ifndef HirField_STRUCT_DEFINED
 #define HirField_STRUCT_DEFINED
 typedef struct HirField {
+    size_t __rc;
     TrStr name;
     AstType* ty;
     bool is_public;
 } HirField;
+static void _trdrop_HirField(void* vp) {
+    HirField* self = (HirField*)vp; (void)self;
+    _tr_str_release(self->name);
+}
 #endif
 
 #ifndef HirClass_STRUCT_DEFINED
 #define HirClass_STRUCT_DEFINED
 typedef struct HirClass {
+    size_t __rc;
     TrStr name;
     List_TrStr* generics;
     List_TrStr* base_classes;
@@ -1906,19 +2067,29 @@ typedef struct HirClass {
     bool is_public;
     bool is_class;
 } HirClass;
+static void _trdrop_HirClass(void* vp) {
+    HirClass* self = (HirClass*)vp; (void)self;
+    _tr_str_release(self->name);
+}
 #endif
 
 #ifndef HirVariant_STRUCT_DEFINED
 #define HirVariant_STRUCT_DEFINED
 typedef struct HirVariant {
+    size_t __rc;
     TrStr name;
     List_ptr* fields;
 } HirVariant;
+static void _trdrop_HirVariant(void* vp) {
+    HirVariant* self = (HirVariant*)vp; (void)self;
+    _tr_str_release(self->name);
+}
 #endif
 
 #ifndef HirEnum_STRUCT_DEFINED
 #define HirEnum_STRUCT_DEFINED
 typedef struct HirEnum {
+    size_t __rc;
     TrStr name;
     List_TrStr* generics;
     List_TrStr* iface_names;
@@ -1927,21 +2098,31 @@ typedef struct HirEnum {
     List_ptr* decorators;
     bool is_public;
 } HirEnum;
+static void _trdrop_HirEnum(void* vp) {
+    HirEnum* self = (HirEnum*)vp; (void)self;
+    _tr_str_release(self->name);
+}
 #endif
 
 #ifndef HirInterface_STRUCT_DEFINED
 #define HirInterface_STRUCT_DEFINED
 typedef struct HirInterface {
+    size_t __rc;
     TrStr name;
     List_TrStr* generics;
     List_ptr* methods;
     bool is_public;
 } HirInterface;
+static void _trdrop_HirInterface(void* vp) {
+    HirInterface* self = (HirInterface*)vp; (void)self;
+    _tr_str_release(self->name);
+}
 #endif
 
 #ifndef HirProgram_STRUCT_DEFINED
 #define HirProgram_STRUCT_DEFINED
 typedef struct HirProgram {
+    size_t __rc;
     List_ptr* functions;
     List_ptr* classes;
     List_ptr* enums;
@@ -1952,40 +2133,58 @@ typedef struct HirProgram {
     List_TrStr* type_alias_names;
     List_ptr* type_alias_types;
 } HirProgram;
+static void _trdrop_HirProgram(void* vp) {
+    HirProgram* self = (HirProgram*)vp; (void)self;
+}
 #endif
 
 #ifndef MirBlock_STRUCT_DEFINED
 #define MirBlock_STRUCT_DEFINED
 typedef struct MirBlock {
+    size_t __rc;
     long long id;
     List_ptr* stmts;
     MirTerm* term;
     HirBlock* hir_block;
 } MirBlock;
+static void _trdrop_MirBlock(void* vp) {
+    MirBlock* self = (MirBlock*)vp; (void)self;
+}
 #endif
 
 #ifndef DropSite_STRUCT_DEFINED
 #define DropSite_STRUCT_DEFINED
 typedef struct DropSite {
+    size_t __rc;
     HirBlock* hir_block;
     List_TrStr* places;
 } DropSite;
+static void _trdrop_DropSite(void* vp) {
+    DropSite* self = (DropSite*)vp; (void)self;
+}
 #endif
 
 #ifndef BorrowEdge_STRUCT_DEFINED
 #define BorrowEdge_STRUCT_DEFINED
 typedef struct BorrowEdge {
+    size_t __rc;
     TrStr borrower;
     TrStr source;
     long long decl_block;
     bool is_exclusive;
     bool via_collection;
 } BorrowEdge;
+static void _trdrop_BorrowEdge(void* vp) {
+    BorrowEdge* self = (BorrowEdge*)vp; (void)self;
+    _tr_str_release(self->borrower);
+    _tr_str_release(self->source);
+}
 #endif
 
 #ifndef MirFunction_STRUCT_DEFINED
 #define MirFunction_STRUCT_DEFINED
 typedef struct MirFunction {
+    size_t __rc;
     TrStr name;
     List_TrStr* params;
     List_ptr* blocks;
@@ -1994,18 +2193,27 @@ typedef struct MirFunction {
     List_ptr* borrows;
     bool complete;
 } MirFunction;
+static void _trdrop_MirFunction(void* vp) {
+    MirFunction* self = (MirFunction*)vp; (void)self;
+    _tr_str_release(self->name);
+}
 #endif
 
 #ifndef MirProgram_STRUCT_DEFINED
 #define MirProgram_STRUCT_DEFINED
 typedef struct MirProgram {
+    size_t __rc;
     List_ptr* functions;
 } MirProgram;
+static void _trdrop_MirProgram(void* vp) {
+    MirProgram* self = (MirProgram*)vp; (void)self;
+}
 #endif
 
 #ifndef MirBuilder_STRUCT_DEFINED
 #define MirBuilder_STRUCT_DEFINED
 typedef struct MirBuilder {
+    size_t __rc;
     List_ptr* blocks;
     long long cur;
     bool complete;
@@ -2017,18 +2225,26 @@ typedef struct MirBuilder {
     List_i64* loop_break;
     List_ptr* borrows;
 } MirBuilder;
+static void _trdrop_MirBuilder(void* vp) {
+    MirBuilder* self = (MirBuilder*)vp; (void)self;
+}
 #endif
 
 #ifndef LiveSet_STRUCT_DEFINED
 #define LiveSet_STRUCT_DEFINED
 typedef struct LiveSet {
+    size_t __rc;
     List_TrStr* items;
 } LiveSet;
+static void _trdrop_LiveSet(void* vp) {
+    LiveSet* self = (LiveSet*)vp; (void)self;
+}
 #endif
 
 #ifndef Symbol_STRUCT_DEFINED
 #define Symbol_STRUCT_DEFINED
 typedef struct Symbol {
+    size_t __rc;
     TrStr name;
     SymbolKind kind;
     AstType** ty;
@@ -2051,19 +2267,29 @@ typedef struct Symbol {
     bool coll_escaped;
     TrStr borrows_region;
 } Symbol;
+static void _trdrop_Symbol(void* vp) {
+    Symbol* self = (Symbol*)vp; (void)self;
+    _tr_str_release(self->name);
+    _tr_str_release(self->borrows_region);
+}
 #endif
 
 #ifndef Scope_STRUCT_DEFINED
 #define Scope_STRUCT_DEFINED
 typedef struct Scope {
+    size_t __rc;
     TrMap* variables;
     List_TrStr* decl_order;
 } Scope;
+static void _trdrop_Scope(void* vp) {
+    Scope* self = (Scope*)vp; (void)self;
+}
 #endif
 
 #ifndef Sema_STRUCT_DEFINED
 #define Sema_STRUCT_DEFINED
 typedef struct Sema {
+    size_t __rc;
     TrMap* globals;
     List_ptr* scopes;
     List_TrStr* errors;
@@ -2122,11 +2348,19 @@ typedef struct Sema {
     List_i64* block_stack_base;
     long long do_temp_ctr;
 } Sema;
+static void _trdrop_Sema(void* vp) {
+    Sema* self = (Sema*)vp; (void)self;
+    _tr_str_release(self->current_file);
+    _tr_str_release(self->current_func_name);
+    _tr_str_release(self->current_class_name);
+    _tr_str_release(self->current_func_ret_from);
+}
 #endif
 
 #ifndef Formatter_STRUCT_DEFINED
 #define Formatter_STRUCT_DEFINED
 typedef struct Formatter {
+    size_t __rc;
     StringBuilder* out;
     long long indent;
     List_i64* c_lines;
@@ -2136,11 +2370,15 @@ typedef struct Formatter {
     bool unsupported;
     bool in_fstring;
 } Formatter;
+static void _trdrop_Formatter(void* vp) {
+    Formatter* self = (Formatter*)vp; (void)self;
+}
 #endif
 
 #ifndef CGenerator_STRUCT_DEFINED
 #define CGenerator_STRUCT_DEFINED
 typedef struct CGenerator {
+    size_t __rc;
     StringBuilder* buf;
     StringBuilder* fwd_buf;
     StringBuilder* struct_buf;
@@ -2155,6 +2393,7 @@ typedef struct CGenerator {
     TrMap* method_owners;
     TrMap* decl_vars;
     TrMap* str_local_names;
+    TrMap* class_local_names;
     TrMap* cur_proven_borrows;
     bool cur_ret_is_borrow;
     bool eliding_get_retain;
@@ -2204,22 +2443,40 @@ typedef struct CGenerator {
     bool emit_line_info;
     TrStr cur_src_file;
 } CGenerator;
+static void _trdrop_CGenerator(void* vp) {
+    CGenerator* self = (CGenerator*)vp; (void)self;
+    _tr_str_release(self->cur_class);
+    _tr_str_release(self->cur_func);
+    _tr_str_release(self->cur_throws_ty);
+    _tr_str_release(self->closure_env_var);
+    _tr_str_release(self->last_clo_cname);
+    _tr_str_release(self->last_clo_estruct);
+    _tr_str_release(self->last_clo_ptypes);
+    _tr_str_release(self->last_clo_ret);
+    _tr_str_release(self->last_clo_init);
+    _tr_str_release(self->cur_src_file);
+}
 #endif
 
 #ifndef LlvmGenerator_STRUCT_DEFINED
 #define LlvmGenerator_STRUCT_DEFINED
 typedef struct LlvmGenerator {
+    size_t __rc;
     StringBuilder* buf;
     long long temp;
     TrMap* classes;
     TrMap* enums;
     TrMap* functions;
 } LlvmGenerator;
+static void _trdrop_LlvmGenerator(void* vp) {
+    LlvmGenerator* self = (LlvmGenerator*)vp; (void)self;
+}
 #endif
 
 #ifndef MacroCtx_STRUCT_DEFINED
 #define MacroCtx_STRUCT_DEFINED
 typedef struct MacroCtx {
+    size_t __rc;
     TrMap* env;
     bool returned;
     TrStr result;
@@ -2227,16 +2484,25 @@ typedef struct MacroCtx {
     TrStr error_msg;
     long long gensym_ctr;
 } MacroCtx;
+static void _trdrop_MacroCtx(void* vp) {
+    MacroCtx* self = (MacroCtx*)vp; (void)self;
+    _tr_str_release(self->result);
+    _tr_str_release(self->error_msg);
+}
 #endif
 
 #ifndef FnMacroExpander_STRUCT_DEFINED
 #define FnMacroExpander_STRUCT_DEFINED
 typedef struct FnMacroExpander {
+    size_t __rc;
     TrMap* macros;
     long long errors;
     long long depth;
     long long gensym_base;
 } FnMacroExpander;
+static void _trdrop_FnMacroExpander(void* vp) {
+    FnMacroExpander* self = (FnMacroExpander*)vp; (void)self;
+}
 #endif
 
 typedef struct List_Token { Token* data; size_t len; size_t capacity; } List_Token;
@@ -2847,6 +3113,10 @@ __attribute__((hot)) TrStr CGenerator_flush_wraps(CGenerator* self, TrStr expr_s
 __attribute__((hot)) TrStr CGenerator_wrapstr(CGenerator* self, TrStr e);
 __attribute__((hot)) void CGenerator_set_proven_borrows(CGenerator* self, List_TrStr* pb);
 __attribute__((hot)) TrStr CGenerator_str_retain_wrap(CGenerator* self, HirExpr* e, TrStr s, bool is_return);
+__attribute__((hot)) bool CGenerator_is_heap_class_tn(CGenerator* self, TrStr tn);
+__attribute__((hot)) TrStr CGenerator_obj_retain_wrap(CGenerator* self, HirExpr* e, TrStr s, bool is_return);
+__attribute__((hot)) bool CGenerator__obj_expr_owns_ref(CGenerator* self, HirExpr* e);
+__attribute__((hot)) TrStr CGenerator_obj_drop_fn(CGenerator* self, TrStr tn);
 __attribute__((hot)) TrStr CGenerator_gen_cond_expr(CGenerator* self, HirExpr* cond);
 __attribute__((hot)) TrStr CGenerator_gen_binop(CGenerator* self, TrStr op, HirExpr* l, HirExpr* r);
 __attribute__((hot)) TrStr CGenerator_gen_unary(CGenerator* self, TrStr op, HirExpr* expr);

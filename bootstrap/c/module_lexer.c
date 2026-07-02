@@ -3,7 +3,7 @@
 
 __attribute__((malloc,returns_nonnull,hot)) Lexer* Lexer_init(TrStr source) {
     /* pass */
-    Lexer* lx = ((Lexer*)_tr_checked_alloc(sizeof(Lexer)));
+    Lexer* lx = ((Lexer*)_tr_obj_alloc(sizeof(Lexer)));
     /* pass */
     /* unsafe block */
     /* pass */

@@ -1293,6 +1293,13 @@ pub class CGenerator:
                     # caller's argument local, which can auto-drop at scope exit.
                     if _is_str_type(self.resolve_generic_prim(_ef.ty.name)):
                         self.ws("_r.data." + v.name + "." + _efn + " = _tr_str_retain(" + _efn + "); ")
+                    elif self.is_heap_class_tn(_ef.ty.name):
+                        # Heap-class payload (e.g. HirStmt.SIf holding a HirBlock): the
+                        # enum stores the instance BY REFERENCE and becomes a co-owner.
+                        # Retain so the caller's providing local can auto-drop at scope
+                        # exit without dangling the reference the tree keeps (symmetric
+                        # with str payloads and collection-element stores).
+                        self.ws("_r.data." + v.name + "." + _efn + " = _tr_obj_retain(" + _efn + "); ")
                     else:
                         self.ws("_r.data." + v.name + "." + _efn + " = " + _efn + "; ")
                     j = j + 1
@@ -1981,6 +1988,42 @@ pub class CGenerator:
                 return "_tr_obj_retain(" + s + ")"
             case _:
                 return s
+
+    # True when a heap-class SLet/first-assign RHS yields a reference this local
+    # OWNS (so it must be released at scope exit). Owning forms: a fresh
+    # construction `ClassName(...)`/free-function result (ECall), a static
+    # factory `ClassName.method(...)` (EMethodCall whose receiver names a class),
+    # or a retained alias (EIdent / EPropAccess — obj_retain_wrap added a retain).
+    # An INSTANCE method call `obj.method(...)` returning a class by value
+    # (e.g. `self.resolve(name)` → an alias into a scope map, `d.get(k)`) is a
+    # BORROW we cannot prove owned: conservatively NOT owning, so it is never
+    # released (a leak is safe; over-releasing an alias is a use-after-free).
+    # (`-> ref` borrow calls are handled separately via _expr_is_borrow_call.)
+    pub def _obj_expr_owns_ref(self, e: Pointer[HirExpr]) -> bool:
+        if _is_invalid_ptr(e as usize): return false
+        match e.read():
+            case HirExpr.EIdent(_, _, _): return true
+            case HirExpr.EPropAccess(_, _, _): return true
+            case HirExpr.ECall(callee, _, _):
+                # A constructor `ClassName(...)` yields a fresh owned instance. Any
+                # other free-function call may return a BORROW (e.g. `site_for()` →
+                # `out.get(i)`, an alias into a Vec): conservatively NOT owning, so it
+                # is never released (leak-safe; over-releasing an alias is a UAF).
+                match callee.read():
+                    case HirExpr.EIdent(cn, _, _):
+                        if self.classes.contains(cn): return true
+                        return false
+                    case _: return false
+            case HirExpr.EMethodCall(recv, _, _, _):
+                # `ClassName.factory(...)` (type receiver) yields a fresh owned
+                # instance; an instance method `obj.m(...)` may return a borrow
+                # (`self.resolve(n)` → a scope-map alias) → conservatively NOT owning.
+                match recv.read():
+                    case HirExpr.EIdent(rn, _, _):
+                        if self.classes.contains(rn): return true
+                        return false
+                    case _: return false
+            case _: return false
 
     # Name of the per-class field-drop function (releases owned str/class fields).
     pub def obj_drop_fn(self, tn: str) -> str:
@@ -2880,6 +2923,11 @@ pub class CGenerator:
                 self.wrap_temp_names.push(tmp)
                 return "_tr_str_box(_tr_str_retain(" + tmp + "))"
             return "_tr_str_box(_tr_str_retain(" + e_s + "))"
+        # Heap-class value: the dict holds a reference. Retain an alias; move a
+        # fresh ctor result (obj_retain_wrap decides). Without this the instance is
+        # freed at the source local's scope exit while the dict points at it (UAF).
+        if self.is_heap_class_tn(hir_expr_type(e).name):
+            return self.obj_retain_wrap(e, e_s, false)
         return e_s
 
     # Like gen_args, but unwraps any TrStr-typed argument to raw char* via
@@ -3838,6 +3886,11 @@ pub class CGenerator:
                     elif _is_float_type(push_arg_ty): elem_sfx = "f64"
                     elif push_arg_ty == "str" or push_arg_ty == "char*": elem_sfx = "str"
                     lsfx = self.list_sfx(elem_sfx)
+                # Heap-class element: the list holds a reference. Retain an ALIAS
+                # (a local/field); MOVE a fresh ctor result (rc=1) — obj_retain_wrap
+                # picks correctly, so fresh temps aren't double-counted.
+                if args.len > 0 and self.is_heap_class_tn(hir_expr_type(args.get(0)).name):
+                    return "List_" + lsfx + "_append(" + obj_s + ", " + self.obj_retain_wrap(args.get(0), self.gen_expr(args.get(0)), false) + ")"
                 mut append_args = self.gen_args_strify(args, elem_sfx)
                 if lsfx == "TrStr": append_args = self.gen_args(args)
                 return "List_" + lsfx + "_append(" + obj_s + ", " + append_args + ")"
@@ -3940,7 +3993,10 @@ pub class CGenerator:
                 if method == "init" or method == "new":
                     if args.len == 0: return sp + "_new(16)"
                     return sp + "_new(" + self.gen_args(args) + ")"
-                if method == "add" and args.len > 0: return sp + "_add(" + obj_s + ", " + self.gen_expr(args.get(0)) + ")"
+                if method == "add" and args.len > 0:
+                    if self.is_heap_class_tn(hir_expr_type(args.get(0)).name):
+                        return sp + "_add(" + obj_s + ", " + self.obj_retain_wrap(args.get(0), self.gen_expr(args.get(0)), false) + ")"
+                    return sp + "_add(" + obj_s + ", " + self.gen_expr(args.get(0)) + ")"
                 if method == "contains" or method == "has": return sp + "_contains(" + obj_s + ", " + self.gen_expr(args.get(0)) + ")"
                 if method == "remove" and args.len > 0: return sp + "_remove(" + obj_s + ", " + self.gen_expr(args.get(0)) + ")"
                 if method == "len" or method == "length": return sp + "_len(" + obj_s + ")"
@@ -5369,9 +5425,12 @@ pub class CGenerator:
                                 pass
                             else:
                                 init_s = self.obj_retain_wrap(v, init_s, false)
+                                mut _owns = self._obj_expr_owns_ref(v)
                                 if self._expr_is_borrow_call(v):
                                     init_s = "_tr_obj_retain(" + init_s + ")"
-                                self.class_local_names.insert(n, true)
+                                    _owns = true
+                                if _owns:
+                                    self.class_local_names.insert(n, true)
                         init_s = self.flush_wraps(init_s, false)
                         self.w(" = " + init_s + ";\n")
                 else:
@@ -5413,10 +5472,13 @@ pub class CGenerator:
                                     self.w(pad + _sa_cty + " " + _safe_c_varname(n) + " = " + _sa_rhs + ";\n")
                                 else:
                                     _sa_rhs = self.obj_retain_wrap(v, _sa_rhs, false)
+                                    mut _sa_owns = self._obj_expr_owns_ref(v)
                                     if self._expr_is_borrow_call(v):
                                         _sa_rhs = "_tr_obj_retain(" + _sa_rhs + ")"
+                                        _sa_owns = true
                                     self.w(pad + _sa_cty + " " + _safe_c_varname(n) + " = " + _sa_rhs + ";\n")
-                                    self.class_local_names.insert(n, true)
+                                    if _sa_owns:
+                                        self.class_local_names.insert(n, true)
                             else:
                                 self.w(pad + "__auto_type " + _safe_c_varname(n) + " = " + _sa_rhs + ";\n")
                             self.decl_vars.insert(n, true)
@@ -5496,6 +5558,34 @@ pub class CGenerator:
                             if self._expr_is_borrow_call(v):
                                 _assign_rhs = "_tr_str_retain(" + _assign_rhs + ")"   # field must OWN: retain borrow
                         case _: pass
+                elif self.is_heap_class_tn(hir_expr_type(t).name) and not self.has_method(hir_expr_type(t).name, "free"):
+                    # Refcounted heap-class store (reassign a local, or a field). Retain
+                    # the new value (the target now holds a reference) into a temp, then
+                    # release the OLD value before overwriting — this avoids a double-free
+                    # on `x = y` and reclaims a replaced field. (release() is a no-op on
+                    # a NULL/0 old value, so first-time field init is safe.)
+                    mut _ctn = hir_expr_type(t).name
+                    mut _cdrop = self.obj_drop_fn(_ctn)
+                    mut _cty2 = self.type_to_c(hir_expr_type(t))
+                    mut _crhs = self.obj_retain_wrap(v, _assign_rhs, false)
+                    if self._expr_is_borrow_call(v): _crhs = "_tr_obj_retain(" + _crhs + ")"
+                    match t.read():
+                        case HirExpr.EIdent(_can, _, _):
+                            if self.class_local_names.contains(_can):
+                                mut _cltmp = "_cltmp" + self.next_temp()
+                                self.w(pad + _cty2 + " " + _cltmp + " = " + _crhs + ";\n")
+                                self.w(pad + "_tr_obj_release(" + _safe_c_varname(_can) + ", " + _cdrop + ");\n")
+                                self.w(pad + _safe_c_varname(_can) + " = " + _cltmp + ";\n")
+                                return
+                        case HirExpr.EPropAccess(_, _, _):
+                            mut _cltmp2 = "_cltmp" + self.next_temp()
+                            mut _cfld = self.gen_expr(t)
+                            self.w(pad + _cty2 + " " + _cltmp2 + " = " + _crhs + ";\n")
+                            self.w(pad + "_tr_obj_release(" + _cfld + ", " + _cdrop + ");\n")
+                            self.w(pad + _cfld + " = " + _cltmp2 + ";\n")
+                            return
+                        case _: pass
+                    _assign_rhs = _crhs
                 self.w(pad + self.gen_expr(t) + " = " + _assign_rhs + ";\n")
             case HirStmt.SIf(c, t, e):
                 self.w(pad + "if (" + self.gen_cond_expr(c) + ") {\n")

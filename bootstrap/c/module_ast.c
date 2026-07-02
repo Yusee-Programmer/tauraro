@@ -3,7 +3,7 @@
 
 __attribute__((malloc,returns_nonnull,hot)) AstType* AstType_init(TrStr name) {
     /* pass */
-    AstType* t = ((AstType*)_tr_checked_alloc(sizeof(AstType)));
+    AstType* t = ((AstType*)_tr_obj_alloc(sizeof(AstType)));
     /* pass */
     t->name = _tr_str_retain(name);
     /* pass */
@@ -24,7 +24,7 @@ __attribute__((malloc,returns_nonnull,hot)) AstType* AstType_init(TrStr name) {
 
 __attribute__((hot)) AstType* AstType_init_generic(TrStr name, AstType** arg) {
     /* pass */
-    AstType* t = ((AstType*)_tr_checked_alloc(sizeof(AstType)));
+    AstType* t = ((AstType*)_tr_obj_alloc(sizeof(AstType)));
     /* pass */
     t->name = _tr_str_retain(name);
     /* pass */
@@ -47,7 +47,7 @@ __attribute__((hot)) AstType* AstType_init_generic(TrStr name, AstType** arg) {
 
 __attribute__((malloc,returns_nonnull,hot)) GenericConstraint* GenericConstraint_init(TrStr target) {
     /* pass */
-    GenericConstraint* g = ((GenericConstraint*)_tr_checked_alloc(sizeof(GenericConstraint)));
+    GenericConstraint* g = ((GenericConstraint*)_tr_obj_alloc(sizeof(GenericConstraint)));
     /* pass */
     g->target = _tr_str_retain(target);
     /* pass */
@@ -58,7 +58,7 @@ __attribute__((malloc,returns_nonnull,hot)) GenericConstraint* GenericConstraint
 
 __attribute__((malloc,returns_nonnull,hot)) Decorator* Decorator_init(TrStr name) {
     /* pass */
-    Decorator* d = ((Decorator*)_tr_checked_alloc(sizeof(Decorator)));
+    Decorator* d = ((Decorator*)_tr_obj_alloc(sizeof(Decorator)));
     /* pass */
     d->name = _tr_str_retain(name);
     /* pass */
@@ -69,7 +69,7 @@ __attribute__((malloc,returns_nonnull,hot)) Decorator* Decorator_init(TrStr name
 
 __attribute__((malloc,returns_nonnull,hot)) Comprehension* Comprehension_init(TrStr target, Expr* iter) {
     /* pass */
-    Comprehension* c = ((Comprehension*)_tr_checked_alloc(sizeof(Comprehension)));
+    Comprehension* c = ((Comprehension*)_tr_obj_alloc(sizeof(Comprehension)));
     /* pass */
     c->target = _tr_str_retain(target);
     /* pass */
@@ -84,7 +84,7 @@ __attribute__((malloc,returns_nonnull,hot)) Comprehension* Comprehension_init(Tr
 
 __attribute__((malloc,returns_nonnull,hot)) CatchClause* CatchClause_init(TrStr err_name, Block** body) {
     /* pass */
-    CatchClause* c = ((CatchClause*)_tr_checked_alloc(sizeof(CatchClause)));
+    CatchClause* c = ((CatchClause*)_tr_obj_alloc(sizeof(CatchClause)));
     /* pass */
     c->err_name = _tr_str_retain(err_name);
     /* pass */
@@ -97,7 +97,7 @@ __attribute__((malloc,returns_nonnull,hot)) CatchClause* CatchClause_init(TrStr 
 
 __attribute__((malloc,returns_nonnull,hot)) MatchArm* MatchArm_init(Pattern pat, Block** body) {
     /* pass */
-    MatchArm* a = ((MatchArm*)_tr_checked_alloc(sizeof(MatchArm)));
+    MatchArm* a = ((MatchArm*)_tr_obj_alloc(sizeof(MatchArm)));
     /* pass */
     a->pat = pat;
     /* pass */
@@ -110,7 +110,7 @@ __attribute__((malloc,returns_nonnull,hot)) MatchArm* MatchArm_init(Pattern pat,
 
 __attribute__((hot)) FStringPart* FStringPart_init_text(TrStr s) {
     /* pass */
-    FStringPart* p = ((FStringPart*)_tr_checked_alloc(sizeof(FStringPart)));
+    FStringPart* p = ((FStringPart*)_tr_obj_alloc(sizeof(FStringPart)));
     /* pass */
     p->is_expr = false;
     /* pass */
@@ -125,7 +125,7 @@ __attribute__((hot)) FStringPart* FStringPart_init_text(TrStr s) {
 
 __attribute__((hot)) FStringPart* FStringPart_init_expr(Expr* e) {
     /* pass */
-    FStringPart* p = ((FStringPart*)_tr_checked_alloc(sizeof(FStringPart)));
+    FStringPart* p = ((FStringPart*)_tr_obj_alloc(sizeof(FStringPart)));
     /* pass */
     p->is_expr = true;
     /* pass */
@@ -140,7 +140,7 @@ __attribute__((hot)) FStringPart* FStringPart_init_expr(Expr* e) {
 
 __attribute__((hot)) FStringPart* FStringPart_init_expr_fmt(Expr* e, TrStr spec) {
     /* pass */
-    FStringPart* p = ((FStringPart*)_tr_checked_alloc(sizeof(FStringPart)));
+    FStringPart* p = ((FStringPart*)_tr_obj_alloc(sizeof(FStringPart)));
     /* pass */
     p->is_expr = true;
     /* pass */
@@ -155,7 +155,7 @@ __attribute__((hot)) FStringPart* FStringPart_init_expr_fmt(Expr* e, TrStr spec)
 
 __attribute__((hot)) ChanSelectArm* ChanSelectArm_init_recv(Expr* chan, TrStr var, Block* body) {
     /* pass */
-    ChanSelectArm* a = ((ChanSelectArm*)_tr_checked_alloc(sizeof(ChanSelectArm)));
+    ChanSelectArm* a = ((ChanSelectArm*)_tr_obj_alloc(sizeof(ChanSelectArm)));
     /* pass */
     a->kind = 0LL;
     /* pass */
@@ -167,14 +167,16 @@ __attribute__((hot)) ChanSelectArm* ChanSelectArm_init_recv(Expr* chan, TrStr va
     /* pass */
     a->timeout_ms = (Expr*)(0LL);
     /* pass */
-    a->body = body;
+    Block* _cltmp_t22 = _tr_obj_retain(body);
+    _tr_obj_release(a->body, _trdrop_Block);
+    a->body = _cltmp_t22;
     /* pass */
     return a;
 }
 
 __attribute__((hot)) ChanSelectArm* ChanSelectArm_init_send(Expr* chan, Expr* val, Block* body) {
     /* pass */
-    ChanSelectArm* a = ((ChanSelectArm*)_tr_checked_alloc(sizeof(ChanSelectArm)));
+    ChanSelectArm* a = ((ChanSelectArm*)_tr_obj_alloc(sizeof(ChanSelectArm)));
     /* pass */
     a->kind = 1LL;
     /* pass */
@@ -186,14 +188,16 @@ __attribute__((hot)) ChanSelectArm* ChanSelectArm_init_send(Expr* chan, Expr* va
     /* pass */
     a->timeout_ms = (Expr*)(0LL);
     /* pass */
-    a->body = body;
+    Block* _cltmp_t23 = _tr_obj_retain(body);
+    _tr_obj_release(a->body, _trdrop_Block);
+    a->body = _cltmp_t23;
     /* pass */
     return a;
 }
 
 __attribute__((hot)) ChanSelectArm* ChanSelectArm_init_timeout(Expr* ms, Block* body) {
     /* pass */
-    ChanSelectArm* a = ((ChanSelectArm*)_tr_checked_alloc(sizeof(ChanSelectArm)));
+    ChanSelectArm* a = ((ChanSelectArm*)_tr_obj_alloc(sizeof(ChanSelectArm)));
     /* pass */
     a->kind = 2LL;
     /* pass */
@@ -205,14 +209,16 @@ __attribute__((hot)) ChanSelectArm* ChanSelectArm_init_timeout(Expr* ms, Block* 
     /* pass */
     a->timeout_ms = ms;
     /* pass */
-    a->body = body;
+    Block* _cltmp_t24 = _tr_obj_retain(body);
+    _tr_obj_release(a->body, _trdrop_Block);
+    a->body = _cltmp_t24;
     /* pass */
     return a;
 }
 
 __attribute__((hot)) ChanSelectArm* ChanSelectArm_init_default(Block* body) {
     /* pass */
-    ChanSelectArm* a = ((ChanSelectArm*)_tr_checked_alloc(sizeof(ChanSelectArm)));
+    ChanSelectArm* a = ((ChanSelectArm*)_tr_obj_alloc(sizeof(ChanSelectArm)));
     /* pass */
     a->kind = 3LL;
     /* pass */
@@ -224,14 +230,16 @@ __attribute__((hot)) ChanSelectArm* ChanSelectArm_init_default(Block* body) {
     /* pass */
     a->timeout_ms = (Expr*)(0LL);
     /* pass */
-    a->body = body;
+    Block* _cltmp_t25 = _tr_obj_retain(body);
+    _tr_obj_release(a->body, _trdrop_Block);
+    a->body = _cltmp_t25;
     /* pass */
     return a;
 }
 
 __attribute__((malloc,returns_nonnull,hot)) Block* Block_init() {
     /* pass */
-    Block* b = ((Block*)_tr_checked_alloc(sizeof(Block)));
+    Block* b = ((Block*)_tr_obj_alloc(sizeof(Block)));
     /* pass */
     b->stmts = (void*)List_ptr_new();
     /* pass */
@@ -255,7 +263,7 @@ __attribute__((hot)) Stmt* Block_get(Block* self, long long i) {
 
 __attribute__((malloc,returns_nonnull,hot)) ElifClause* ElifClause_init(Expr* cond, Block** body) {
     /* pass */
-    ElifClause* c = ((ElifClause*)_tr_checked_alloc(sizeof(ElifClause)));
+    ElifClause* c = ((ElifClause*)_tr_obj_alloc(sizeof(ElifClause)));
     /* pass */
     c->cond = cond;
     /* pass */
@@ -266,7 +274,7 @@ __attribute__((malloc,returns_nonnull,hot)) ElifClause* ElifClause_init(Expr* co
 
 __attribute__((malloc,returns_nonnull,hot)) Param* Param_init(TrStr name, AstType** ty) {
     /* pass */
-    Param* p = ((Param*)_tr_checked_alloc(sizeof(Param)));
+    Param* p = ((Param*)_tr_obj_alloc(sizeof(Param)));
     /* pass */
     p->name = _tr_str_retain(name);
     /* pass */
@@ -283,7 +291,7 @@ __attribute__((malloc,returns_nonnull,hot)) Param* Param_init(TrStr name, AstTyp
 
 __attribute__((malloc,returns_nonnull,hot)) FunctionDef* FunctionDef_init(TrStr name) {
     /* pass */
-    FunctionDef* f = ((FunctionDef*)_tr_checked_alloc(sizeof(FunctionDef)));
+    FunctionDef* f = ((FunctionDef*)_tr_obj_alloc(sizeof(FunctionDef)));
     /* pass */
     f->name = _tr_str_retain(name);
     /* pass */
@@ -311,7 +319,9 @@ __attribute__((malloc,returns_nonnull,hot)) FunctionDef* FunctionDef_init(TrStr 
     /* pass */
     f->is_macro = false;
     /* pass */
-    f->body = Block_init();
+    Block* _cltmp_t26 = Block_init();
+    _tr_obj_release(f->body, _trdrop_Block);
+    f->body = _cltmp_t26;
     /* pass */
     f->line = 0LL;
     /* pass */
@@ -324,7 +334,7 @@ __attribute__((malloc,returns_nonnull,hot)) FunctionDef* FunctionDef_init(TrStr 
 
 __attribute__((malloc,returns_nonnull,hot)) FieldDef* FieldDef_init(TrStr name, AstType** ty) {
     /* pass */
-    FieldDef* fd = ((FieldDef*)_tr_checked_alloc(sizeof(FieldDef)));
+    FieldDef* fd = ((FieldDef*)_tr_obj_alloc(sizeof(FieldDef)));
     /* pass */
     fd->name = _tr_str_retain(name);
     /* pass */
@@ -337,7 +347,7 @@ __attribute__((malloc,returns_nonnull,hot)) FieldDef* FieldDef_init(TrStr name, 
 
 __attribute__((malloc,returns_nonnull,hot)) ClassDef* ClassDef_init(TrStr name) {
     /* pass */
-    ClassDef* c = ((ClassDef*)_tr_checked_alloc(sizeof(ClassDef)));
+    ClassDef* c = ((ClassDef*)_tr_obj_alloc(sizeof(ClassDef)));
     /* pass */
     c->name = _tr_str_retain(name);
     /* pass */
@@ -370,7 +380,7 @@ __attribute__((malloc,returns_nonnull,hot)) ClassDef* ClassDef_init(TrStr name) 
 
 __attribute__((malloc,returns_nonnull,hot)) VariantDef* VariantDef_init(TrStr name) {
     /* pass */
-    VariantDef* v = ((VariantDef*)_tr_checked_alloc(sizeof(VariantDef)));
+    VariantDef* v = ((VariantDef*)_tr_obj_alloc(sizeof(VariantDef)));
     /* pass */
     v->name = _tr_str_retain(name);
     /* pass */
@@ -381,7 +391,7 @@ __attribute__((malloc,returns_nonnull,hot)) VariantDef* VariantDef_init(TrStr na
 
 __attribute__((malloc,returns_nonnull,hot)) EnumDef* EnumDef_init(TrStr name) {
     /* pass */
-    EnumDef* e = ((EnumDef*)_tr_checked_alloc(sizeof(EnumDef)));
+    EnumDef* e = ((EnumDef*)_tr_obj_alloc(sizeof(EnumDef)));
     /* pass */
     e->name = _tr_str_retain(name);
     /* pass */
@@ -406,7 +416,7 @@ __attribute__((malloc,returns_nonnull,hot)) EnumDef* EnumDef_init(TrStr name) {
 
 __attribute__((malloc,returns_nonnull,hot)) InterfaceDef* InterfaceDef_init(TrStr name) {
     /* pass */
-    InterfaceDef* i = ((InterfaceDef*)_tr_checked_alloc(sizeof(InterfaceDef)));
+    InterfaceDef* i = ((InterfaceDef*)_tr_obj_alloc(sizeof(InterfaceDef)));
     /* pass */
     i->name = _tr_str_retain(name);
     /* pass */
@@ -427,7 +437,7 @@ __attribute__((malloc,returns_nonnull,hot)) InterfaceDef* InterfaceDef_init(TrSt
 
 __attribute__((malloc,returns_nonnull,hot)) ImportItem* ImportItem_init(TrStr name) {
     /* pass */
-    ImportItem* it = ((ImportItem*)_tr_checked_alloc(sizeof(ImportItem)));
+    ImportItem* it = ((ImportItem*)_tr_obj_alloc(sizeof(ImportItem)));
     /* pass */
     it->name = _tr_str_retain(name);
     /* pass */
@@ -438,7 +448,7 @@ __attribute__((malloc,returns_nonnull,hot)) ImportItem* ImportItem_init(TrStr na
 
 __attribute__((malloc,returns_nonnull,hot)) Program* Program_init() {
     /* pass */
-    Program* p = ((Program*)_tr_checked_alloc(sizeof(Program)));
+    Program* p = ((Program*)_tr_obj_alloc(sizeof(Program)));
     /* pass */
     p->decls = (void*)List_ptr_new();
     /* pass */

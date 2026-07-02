@@ -1709,6 +1709,9 @@ __attribute__((hot)) void run_fmt(TrStr path0, bool write_in_place) {
     }
     _tr_str_release(path);
     _tr_str_release(source);
+    _tr_obj_release(lexer, _trdrop_Lexer);
+    _tr_obj_release(parser, _trdrop_Parser);
+    _tr_obj_release(f, _trdrop_Formatter);
     _tr_str_release(formatted);
 }
 
@@ -2035,6 +2038,7 @@ __attribute__((hot)) int main(int argc, char** argv) {
         List_TrStr_free(lib_flags);
         _tr_str_release(target);
         _tr_str_release(sysroot);
+        _tr_obj_release(resolver, _trdrop_ModuleResolver);
         _tr_str_release(bin_dir);
         _tr_str_release(tauraro_path_env);
         return 0;
@@ -2093,8 +2097,10 @@ __attribute__((hot)) int main(int argc, char** argv) {
         List_TrStr_free(lib_flags);
         _tr_str_release(target);
         _tr_str_release(sysroot);
+        _tr_obj_release(resolver, _trdrop_ModuleResolver);
         _tr_str_release(bin_dir);
         _tr_str_release(tauraro_path_env);
+        _tr_obj_release(sema, _trdrop_Sema);
         return 0;
     }
     /* pass */
@@ -2114,8 +2120,10 @@ __attribute__((hot)) int main(int argc, char** argv) {
         List_TrStr_free(lib_flags);
         _tr_str_release(target);
         _tr_str_release(sysroot);
+        _tr_obj_release(resolver, _trdrop_ModuleResolver);
         _tr_str_release(bin_dir);
         _tr_str_release(tauraro_path_env);
+        _tr_obj_release(sema, _trdrop_Sema);
         return 0;
     }
     /* pass */
@@ -2154,8 +2162,11 @@ __attribute__((hot)) int main(int argc, char** argv) {
         List_TrStr_free(lib_flags);
         _tr_str_release(target);
         _tr_str_release(sysroot);
+        _tr_obj_release(resolver, _trdrop_ModuleResolver);
         _tr_str_release(bin_dir);
         _tr_str_release(tauraro_path_env);
+        _tr_obj_release(sema, _trdrop_Sema);
+        _tr_obj_release(llvm_gen, _trdrop_LlvmGenerator);
         _tr_str_release(llvm_ir);
         return 0;
     }
@@ -2292,6 +2303,7 @@ __attribute__((hot)) int main(int argc, char** argv) {
                     __auto_type f = _t2461.data.DFunction.func;
                     /* pass */
                     _tr_dict_set(fn_set, _tr_strz(f->name), true);
+                    _tr_obj_release(f, _trdrop_FunctionDef);
                 } else if (_t2461.tag == Decl_DEnum) {
                     __auto_type e = _t2461.data.DEnum.enm;
                     /* pass */
@@ -2389,6 +2401,7 @@ __auto_type methods = _t2461.data.DExtend.methods;
                 __auto_type f = _t2465.data.DFunction.func;
                 /* pass */
                 _tr_dict_set(main_fn_set, _tr_strz(f->name), true);
+                _tr_obj_release(f, _trdrop_FunctionDef);
             } else if (_t2465.tag == Decl_DEnum) {
                 __auto_type e = _t2465.data.DEnum.enm;
                 /* pass */
@@ -2508,8 +2521,11 @@ __auto_type methods = _t2465.data.DExtend.methods;
         List_TrStr_free(lib_flags);
         _tr_str_release(target);
         _tr_str_release(sysroot);
+        _tr_obj_release(resolver, _trdrop_ModuleResolver);
         _tr_str_release(bin_dir);
         _tr_str_release(tauraro_path_env);
+        _tr_obj_release(sema, _trdrop_Sema);
+        _tr_obj_release(c_gen, _trdrop_CGenerator);
         _tr_str_release(rt_h);
         _tr_str_release(build_dir);
         _tr_str_release(types_h);
@@ -2671,8 +2687,11 @@ __auto_type methods = _t2465.data.DExtend.methods;
     _tr_str_release(opt_level);
     _tr_str_release(target);
     _tr_str_release(sysroot);
+    _tr_obj_release(resolver, _trdrop_ModuleResolver);
     _tr_str_release(bin_dir);
     _tr_str_release(tauraro_path_env);
+    _tr_obj_release(sema, _trdrop_Sema);
+    _tr_obj_release(c_gen, _trdrop_CGenerator);
     _tr_str_release(rt_h);
     _tr_str_release(build_dir);
     _tr_str_release(types_h);

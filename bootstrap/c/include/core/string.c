@@ -3,7 +3,7 @@
 
 __attribute__((malloc,returns_nonnull,hot)) StringObj* StringObj_init(TrStr s) {
     /* pass */
-    StringObj* obj = ((StringObj*)_tr_checked_alloc(sizeof(StringObj)));
+    StringObj* obj = ((StringObj*)_tr_obj_alloc(sizeof(StringObj)));
     /* pass */
     long long slen = _tr_strlen(_tr_strz(s));
     /* pass */
@@ -75,9 +75,9 @@ __attribute__((malloc,returns_nonnull,hot)) StringBuilder* StringBuilder_init(lo
         cap = 16LL;
     }
     /* pass */
-    StringBuilder* sb = ((StringBuilder*)_tr_checked_alloc(sizeof(StringBuilder)));
+    StringBuilder* sb = ((StringBuilder*)_tr_obj_alloc(sizeof(StringBuilder)));
     /* pass */
-    sb->buf = ((StringObj*)_tr_checked_alloc(sizeof(StringObj)));
+    sb->buf = ((StringObj*)_tr_obj_alloc(sizeof(StringObj)));
     /* pass */
     sb->buf->len = 0LL;
     /* pass */
