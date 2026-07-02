@@ -185,6 +185,7 @@ pub class Sema:
     pub strict_mode: bool               # --strict: alloc outside unsafe -> hard [U-1] error
     pub mutating_methods: Map[str, bool] # "ClassName.method" -> true if it stores into self.<field> (implicit-borrow check)
     pub fn_ret_owned:    Map[str, bool] # return-ownership inference: fn/method key -> true if it returns an OWNED heap-class ref (see compute_return_ownership)
+    pub ptr_aliased:     Map[str, bool] # class names reachable as Pointer[T] (raw, NOT refcounted) — excluded from the [S-2] ownership-cycle graph
     pub decorator_names: Map[str, bool]  # decorator def registry (name -> true)
     pub variadic_fns:    Map[str, str]   # fn name -> index of trailing variadic param (= fixed-arg count, as string)
     pub variadic_elem_ty: Map[str, Pointer[AstType]] # fn name -> element type of the variadic List[T] param
@@ -282,6 +283,7 @@ extend Sema:
         s.strict_mode            = false
         s.mutating_methods       = Map[str, bool].init(32)
         s.fn_ret_owned           = Map[str, bool].init(64)
+        s.ptr_aliased            = Map[str, bool].init(32)
         s.decorator_names        = Map[str, bool].init(16)
         s.variadic_fns           = Map[str, str].init(8)
         s.variadic_elem_ty       = Map[str, Pointer[AstType]].init(8)
@@ -958,6 +960,126 @@ extend Sema:
             if n == "Vec" or n == "Map" or n == "List" or n == "Dict" or n == "Set" or n == "Box" or n == "Mutex" or n == "RwLock" or n == "Atomic" or n == "Shared" or n == "Option" or n == "Result" or n == "Chan" or n == "StringBuilder" or n == "StringObj": return false
             return true
         return false
+
+    # ===== [S-2] ownership-cycle guarantee (--strict) =====
+    # A program that compiles under --strict has NO strong-ownership cycles among
+    # refcounted classes, so — with ARC + [U-1] (no raw alloc outside unsafe) — every
+    # reference count reaches zero: provably leak-free.
+    pub def _scan_ptr_aliased_ty(self, t: AstType):
+        if t.name == "Pointer" and t.args.len > 0:
+            mut inner = t.args.get(0).read()
+            self.ptr_aliased.insert(inner.name, true)
+            self._scan_ptr_aliased_ty(inner)
+            return
+        mut ai = 0
+        while ai < t.args.len:
+            self._scan_ptr_aliased_ty(t.args.get(ai).read())
+            ai = ai + 1
+
+    # True for a refcounted heap class (excludes @value_type, builtins, and any type
+    # reachable as Pointer[T] — those are raw-managed, not ARC-refcounted).
+    pub def _is_rc_class(self, n: str) -> bool:
+        if not self.classes.contains(n): return false
+        if not self.classes.get(n).is_class: return false
+        if n == "Vec" or n == "Map" or n == "List" or n == "Dict" or n == "Set" or n == "Box" or n == "Mutex" or n == "RwLock" or n == "Atomic" or n == "Shared" or n == "Weak" or n == "Option" or n == "Result" or n == "Chan" or n == "StringBuilder" or n == "StringObj": return false
+        if self.ptr_aliased.contains(n): return false
+        return true
+
+    # Append the refcounted class names that field type `ft` STRONGLY owns. A
+    # Pointer[T] or Weak[T] is NOT ownership (breaks a cycle); a collection owns its
+    # element/value; Shared[T] is strong shared ownership.
+    pub def _collect_strong_edge(self, ft: AstType, out: Vec[str]):
+        mut n = ft.name
+        if n == "Pointer" or n == "Weak": return
+        if n == "Vec" or n == "List" or n == "Set":
+            if ft.args.len > 0: self._collect_strong_edge(ft.args.get(0).read(), out)
+            return
+        if n == "Dict" or n == "Map":
+            if ft.args.len > 1: self._collect_strong_edge(ft.args.get(1).read(), out)
+            return
+        if n == "Shared":
+            if ft.args.len > 0:
+                mut si = ft.args.get(0).read().name
+                if self.classes.contains(si): out.push(si)
+            return
+        if self._is_rc_class(n): out.push(n)
+
+    pub def _strong_owned(self, cd: ClassDef) -> Vec[str]:
+        mut out = Vec[str].init(4)
+        mut i = 0
+        while i < cd.fields.len:
+            mut f = cd.fields.get(i)
+            if f.ty as usize != 0 as usize:
+                self._collect_strong_edge(f.ty.read(), out)
+            i = i + 1
+        return out
+
+    # DFS from `start`, following strong-ownership edges; if we come back to a class
+    # already on the current path, that path is a leak cycle → report [S-2] once.
+    pub def _cycle_dfs(self, cur: str, start: str, on_path: Map[str, bool], reported: Map[str, bool], depth: int):
+        if depth > 200: return
+        if not self.classes.contains(cur): return
+        mut edges = self._strong_owned(self.classes.get(cur))
+        mut i = 0
+        while i < edges.len:
+            mut nxt = edges.get(i)
+            if nxt == start:
+                # cycle closes back to start.
+                if not reported.contains(start):
+                    reported.insert(start, true)
+                    self.error("[S-2] class '" + start + "' is part of a strong reference CYCLE (via '" + cur + "' -> '" + nxt + "'), which reference counting cannot reclaim — it would leak.\n      FIX: make one back-edge non-owning with 'Weak[" + start + "]' (a weak reference) or 'Pointer[" + start + "]' (raw, manual).")
+            elif not on_path.contains(nxt):
+                on_path.insert(nxt, true)
+                self._cycle_dfs(nxt, start, on_path, reported, depth + 1)
+                on_path.insert(nxt, false)
+            i = i + 1
+
+    pub def check_ownership_cycles(self, prog: Program):
+        # 1) Collect raw Pointer[T] usage across all class fields + method signatures.
+        mut di = 0
+        while di < prog.decls.len:
+            match prog.decls.get(di).read():
+                case Decl.DClass(c): self._scan_class_ptrs(c)
+                case Decl.DActor(c): self._scan_class_ptrs(c)
+                case Decl.DExtend(_, ms):
+                    mut mi = 0
+                    while mi < ms.len:
+                        self._scan_fn_ptrs(ms.get(mi))
+                        mi = mi + 1
+                case Decl.DFunction(f): self._scan_fn_ptrs(f)
+                case _: pass
+            di = di + 1
+        # 2) DFS each refcounted class for a strong-ownership cycle.
+        mut reported = Map[str, bool].init(16)
+        di = 0
+        while di < prog.decls.len:
+            match prog.decls.get(di).read():
+                case Decl.DClass(c):
+                    if self._is_rc_class(c.name):
+                        mut on_path = Map[str, bool].init(16)
+                        on_path.insert(c.name, true)
+                        self._cycle_dfs(c.name, c.name, on_path, reported, 0)
+                case _: pass
+            di = di + 1
+
+    pub def _scan_class_ptrs(self, c: ClassDef):
+        mut i = 0
+        while i < c.fields.len:
+            mut f = c.fields.get(i)
+            if f.ty as usize != 0 as usize: self._scan_ptr_aliased_ty(f.ty.read())
+            i = i + 1
+        i = 0
+        while i < c.methods.len:
+            self._scan_fn_ptrs(c.methods.get(i))
+            i = i + 1
+
+    pub def _scan_fn_ptrs(self, f: FunctionDef):
+        mut i = 0
+        while i < f.params.len:
+            mut p = f.params.get(i)
+            if p.ty as usize != 0 as usize: self._scan_ptr_aliased_ty(p.ty.read())
+            i = i + 1
+        if f.ret_ty as usize != 0 as usize: self._scan_ptr_aliased_ty(f.ret_ty.read())
 
     # A local is auto-dropped at scope exit if it is a user-defined class with a
     # 'free' method, was never moved/returned/borrowed-out, was never freed
@@ -2000,6 +2122,14 @@ extend Sema:
         while i < prog.decls.len:
             self.register_decl(prog.decls.get(i))
             i = i + 1
+
+        # [S-2] (--strict): the leak-freedom GUARANTEE. Reject strong-ownership CYCLES
+        # among refcounted classes (the one thing plain ARC cannot reclaim). Combined
+        # with [U-1] (no raw allocation outside `unsafe:`), a program that compiles
+        # under --strict is provably leak-free: every heap value is refcounted and the
+        # ownership graph is acyclic, so every count reaches zero.
+        if self.strict_mode:
+            self.check_ownership_cycles(prog)
 
         # Implicit-borrow support (--strict only, additive): pre-compute which methods
         # mutate self, so the borrow checker can flag `a.mutate()` while `a` is borrowed.

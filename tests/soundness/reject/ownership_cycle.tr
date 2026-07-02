@@ -1,0 +1,11 @@
+# EXPECT: [S-2]
+# The leak-freedom GUARANTEE: under --strict, a strong-ownership CYCLE among
+# refcounted classes is a hard error — reference counting alone can never
+# reclaim it (each object keeps the other alive, so neither count hits zero).
+# The fix is to make one back-edge non-owning: `Weak[T]` (or raw `Pointer[T]`).
+class Parent:
+    pub child: Child          # strong -> Child
+class Child:
+    pub parent: Parent        # strong -> Parent  ==> Parent <-> Child cycle
+def main():
+    print(1)

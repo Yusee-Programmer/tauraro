@@ -3349,7 +3349,10 @@ pub class CGenerator:
         # Weak[T] handle methods (non-owning ref to a Shared box).
         if t_n == "Weak":
             if method == "is_alive": return "_tr_weak_is_alive(" + obj_s + ")"
-            if method == "upgrade": return "_tr_weak_upgrade(" + obj_s + ")"
+            if method == "upgrade":
+                # Option[T]: Some(payload) while the strong target is alive, else None.
+                # A borrow-style upgrade (no refcount change) — sound single-threaded.
+                return "({ _TrWeakBox* _wu = (" + obj_s + "); _tr_weak_is_alive(_wu) ? ((Option){.tag=Option_Some, .data.Some.val=(void*)(_wu->box->data)}) : ((Option){.tag=Option_None}); })"
             if method == "drop" or method == "free": return "_tr_weak_drop(" + obj_s + ")"
         # Shared var: unwrap _TrSharedBox* -> (TypeName*)obj->data for method dispatch
         if self.shared_vars.contains(obj_s):
