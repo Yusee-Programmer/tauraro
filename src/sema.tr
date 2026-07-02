@@ -1011,39 +1011,22 @@ extend Sema:
         if sym.is_moved or sym.is_maybe_moved or sym.is_freed: return false
         if sym.active_borrows > 0: return false
         if not sym.is_init or sym.is_maybe_init: return false
-        # ESCAPED: passed in a non-receiver position (may be stored by the callee).
-        # Excluded from the implicit field-destructor to avoid freeing data a new owner
-        # holds (use-after-free). coll_escaped is reused for class instances here.
-        if sym.coll_escaped: return false
         mut cls = self.classes.get(tn)
         mut mi = 0
         mut has_dispose = false
         while mi < cls.methods.len:
             mut mnm = cls.methods.get(mi).name
-            if mnm == "free": return true
+            if mnm == "free": return true          # user free(): called at scope exit
             if mnm == "dispose": has_dispose = true
             mi = mi + 1
         # A `dispose()` class self-manages its memory — hands off (no double-free).
         if has_dispose: return false
-        # IMPLICIT FIELD-DESTRUCTOR (plain data class: str fields, no free/dispose) — but
-        # ONLY for a PROVABLY-OWNED instance. The ownership invariant is THE soundness
-        # key: a freshly-constructed (`x = T()`) or returned-by-value instance is owned,
-        # so releasing its str fields at scope exit is correct. A BORROW — a collection
-        # element (`coll.get(i)`), a field read (`o.f`), a method/`ref` result — ALIASES
-        # data its owner still holds, so dropping it is a use-after-free. compute_region
-        # tags owned initializers "@owned" at the SLet; everything else is left undropped
-        # (a small conservative leak, never a UAF). This is the sound core of auto-free
-        # without a full borrow checker.
-        if sym.borrows_region != "@owned": return false
-        mut fi = 0
-        while fi < cls.fields.len:
-            mut fdt_p = cls.fields.get(fi).ty
-            if fdt_p as usize != 0 as usize:
-                mut fdt = fdt_p.read()
-                if fdt.name == "str" and not fdt.is_borrow:
-                    return true
-            fi = fi + 1
-        return false
+        # Plain heap class: REFCOUNTED. Released at scope exit via _tr_obj_release,
+        # which the codegen gates on class_local_names (only OWNING locals enter it).
+        # Combined with retain-on-bind/store/return, this is balanced regardless of
+        # aliasing (rc is the safety net) — so no @owned/escape gate is needed here.
+        # (`@borrowed` collection-element borrows are excluded at the top of this fn.)
+        return true
 
     # Open a new if/while/etc body block, assigning it a fresh monotonic id.
     pub def open_block(self):

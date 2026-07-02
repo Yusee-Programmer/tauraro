@@ -256,6 +256,32 @@ static inline void* _tr_checked_alloc(size_t sz) {
     if (p) _TR_MEMCOUNT_INC();
     return p;
 }
+
+/* ── Class-instance ARC ──────────────────────────────────────────────────────
+ * A heap class instance carries a refcount as its FIRST member (`size_t __rc`,
+ * so it sits at offset 0). Instances are shared by retain/released by scope-exit
+ * and container teardown, and freed when the count reaches zero — sound under
+ * aliasing (no ownership proof needed). Retain/release are elided by codegen
+ * wherever the borrow checker proves a value is only borrowed (zero-cost). */
+static inline void* _tr_obj_alloc(size_t sz) {
+    void* p = TAURARO_CALLOC(1, sz);
+    if (!p && sz > 0) { _TR_OOM_ABORT(); }
+    if (p) { *(size_t*)p = 1; _TR_MEMCOUNT_INC(); }   /* rc = 1 */
+    return p;
+}
+static inline void* _tr_obj_retain(void* p) {
+    if (p) (*(size_t*)p)++;
+    return p;
+}
+/* `drop` releases the instance's owned fields (generated per class). NULL for a
+ * class with no droppable fields — the struct is still freed. */
+static inline void _tr_obj_release(void* p, void (*drop)(void*)) {
+    if (p && --(*(size_t*)p) == 0) {
+        if (drop) drop(p);
+        _TR_MEMCOUNT_DEC();
+        TAURARO_FREE(p);
+    }
+}
 /* Heap-allocated empty C string. Used by char*-returning helpers that need
  * an "empty result" fallback - returning a static string literal (`""`)
  * here would later be `_tr_str_wrap`'d (rc=1) and `_tr_str_release`'d,

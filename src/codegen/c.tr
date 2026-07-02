@@ -142,6 +142,7 @@ pub class CGenerator:
     pub method_owners:  Map[str, bool]  # "ClassOrEnumName#method" -> true (extend methods, incl. enums)
     pub decl_vars:      Map[str, bool]
     pub str_local_names: Map[str, bool]  # TrStr-typed locals declared via SLet in current function (retain/release tracked)
+    pub class_local_names: Map[str, bool]  # heap-class-typed locals in current function that OWN a refcount (released at scope exit; reset in seed_params)
     pub cur_proven_borrows: Map[str, bool]  # outlives engine: ref-borrow locals whose source provably outlives them — refcount ELIDED (no retain at bind, no release at scope)
     pub cur_ret_is_borrow: bool  # current function's return type is `ref` — returns a BORROW (no retain on return; the caller does not free it)
     pub eliding_get_retain: bool # set while generating a PROVEN collection-element borrow's RHS (`ref T = coll.get(k)`) — the str-valued get returns the unboxed alias WITHOUT retaining (zero-copy borrow); the SLet also skips the release
@@ -207,6 +208,7 @@ pub class CGenerator:
         g.method_owners = Map[str, bool].init(64)
         g.decl_vars     = Map[str, bool].init(64)
         g.str_local_names = Map[str, bool].init(16)
+        g.class_local_names = Map[str, bool].init(16)
         g.cur_proven_borrows = Map[str, bool].init(8)
         g.cur_ret_is_borrow = false
         g.eliding_get_retain = false
@@ -299,6 +301,10 @@ pub class CGenerator:
         # Load the outlives-proven borrow set for THIS function (every function-entry
         # path calls seed_params), so the SLet codegen can elide their refcounts.
         self.set_proven_borrows(f.proven_borrows)
+        # Reset per-function heap-class ownership tracking here (seed_params is the
+        # single common entry for every function/method emit — avoids resetting at
+        # each of the ~13 emit sites).
+        self.class_local_names = Map[str, bool].init(16)
         # A `-> ref` function returns a BORROW: it does NOT retain on return, and its
         # callers must NOT free the result (see _is_fresh_str_expr / _expr_is_borrow_call).
         self.cur_ret_is_borrow = f.ret_ty.is_borrow
@@ -803,14 +809,19 @@ pub class CGenerator:
         # Forward declaration
         self.w("typedef struct " + mono_name + " " + mono_name + ";\n")
 
-        # Struct body
+        # Struct body — heap monos carry the ARC refcount at offset 0 (must match
+        # gen_class_struct, since _tr_obj_alloc writes __rc there). Value-type
+        # monos are stack `(mn){0}` and get none.
         self.w("typedef struct " + mono_name + " {\n")
+        mut _mono_vt = self.value_types.contains(cls.name)
+        if not _mono_vt:
+            self.w("    size_t __rc;\n")
         mut fi = 0
         while fi < cls.fields.len:
             mut f = cls.fields.get(fi)
             self.w("    " + self.type_to_c(f.ty) + " " + f.name + ";\n")
             fi = fi + 1
-        if cls.fields.len == 0:
+        if cls.fields.len == 0 and _mono_vt:
             self.w("    char _pad;\n")
         self.w("} " + mono_name + ";\n\n")
 
@@ -1178,6 +1189,12 @@ pub class CGenerator:
         self.ws("#ifndef " + c.name + "_STRUCT_DEFINED\n")
         self.ws("#define " + c.name + "_STRUCT_DEFINED\n")
         self.ws("typedef struct " + c.name + " {\n")
+        # ARC refcount, first member (offset 0) for heap classes. Value types live
+        # on the stack by value and need no refcount. Inherited via the base copy
+        # is NOT duplicated: emit_base_fields copies only the base's HirFields.
+        mut _is_vt = self.value_types.contains(c.name)
+        if not _is_vt:
+            self.ws("    size_t __rc;\n")
         # Emit inherited fields first (single-level inheritance via field copying)
         mut bi: int = 0
         while bi < c.base_classes.len:
@@ -1189,9 +1206,29 @@ pub class CGenerator:
             mut f: HirField = c.fields.get(i)
             self.ws("    " + self.type_to_c(f.ty) + " " + f.name + ";\n")
             i = i + 1
-        if c.fields.len == 0 and c.base_classes.len == 0:
+        if c.fields.len == 0 and c.base_classes.len == 0 and _is_vt:
             self.ws("    char _pad;\n")
         self.ws("} " + c.name + ";\n")
+        # Field-drop for a refcounted plain class: releases owned str fields when
+        # _tr_obj_release drives the count to zero. Value types (stack) and
+        # user-free() classes are excluded (the latter self-manage). Emitted right
+        # after the struct so it is defined before any function references it.
+        if not _is_vt:
+            mut _cs_has_free = false
+            mut _csm = 0
+            while _csm < c.methods.len:
+                if c.methods.get(_csm).name == "free": _cs_has_free = true
+                _csm = _csm + 1
+            if not _cs_has_free:
+                self.ws("static void " + self.obj_drop_fn(c.name) + "(void* vp) {\n")
+                self.ws("    " + c.name + "* self = (" + c.name + "*)vp; (void)self;\n")
+                mut _csf = 0
+                while _csf < c.fields.len:
+                    mut _csfld = c.fields.get(_csf)
+                    if _is_str_type(self.resolve_generic_prim(_csfld.ty.name)) and not _csfld.ty.is_borrow:
+                        self.ws("    _tr_str_release(self->" + _safe_c_varname(_csfld.name) + ");\n")
+                    _csf = _csf + 1
+                self.ws("}\n")
         self.ws("#endif\n\n")
 
     pub def gen_enum_struct(self, e: HirEnum):
@@ -1919,6 +1956,36 @@ pub class CGenerator:
             case _:
                 return s
 
+    # True for a refcounted HEAP class type name (excludes value types, builtin
+    # collections/concurrency/StringBuilder, and generic monos which aren't in
+    # self.classes by their mono name — those stay conservatively un-rc'd).
+    pub def is_heap_class_tn(self, tn: str) -> bool:
+        if not self.classes.contains(tn): return false
+        if self.value_types.contains(tn): return false
+        if tn == "Vec" or tn == "Map" or tn == "List" or tn == "Dict" or tn == "Set" or tn == "Box" or tn == "Mutex" or tn == "RwLock" or tn == "Atomic" or tn == "Shared" or tn == "Option" or tn == "Result" or tn == "Chan" or tn == "StringBuilder" or tn == "StringObj": return false
+        return true
+
+    # Class-instance analogue of str_retain_wrap: retain when a heap-class value
+    # is bound/stored/returned so the new holder owns a counted reference. Fresh
+    # constructions and owned (`-> T`) call results are already rc=1 (no retain);
+    # aliases (a tracked local, a field read) and `-> ref` borrows are retained.
+    # Returning a tracked local transfers ownership (excluded from drops) → no retain.
+    pub def obj_retain_wrap(self, e: Pointer[HirExpr], s: str, is_return: bool) -> str:
+        if _is_invalid_ptr(e as usize): return s
+        if not self.is_heap_class_tn(hir_expr_type(e).name): return s
+        match e.read():
+            case HirExpr.EIdent(nm, _, _):
+                if is_return and self.class_local_names.contains(nm): return s
+                return "_tr_obj_retain(" + s + ")"
+            case HirExpr.EPropAccess(_, _, _):
+                return "_tr_obj_retain(" + s + ")"
+            case _:
+                return s
+
+    # Name of the per-class field-drop function (releases owned str/class fields).
+    pub def obj_drop_fn(self, tn: str) -> str:
+        return "_trdrop_" + tn
+
     pub def gen_cond_expr(self, cond: Pointer[HirExpr]) -> str:
         mut cond_s = self.gen_expr(cond)
         mut ty_n: str = hir_expr_type(cond).name
@@ -2481,14 +2548,14 @@ pub class CGenerator:
                         mut sfx = self.type_args_suffix(ident_ty.args)
                         self.ensure_mono(ucls, ident_ty.args)
                         mut mn = n + "_" + sfx
-                        return "((" + mn + "*)_tr_checked_alloc(sizeof(" + mn + ")))"
+                        return "((" + mn + "*)_tr_obj_alloc(sizeof(" + mn + ")))"
                     # Synthesize mono name from active type_subst when args absent in HIR
                     if ucls.generics.len > 0:
                         mut sfx2 = self.synth_class_suffix(ucls)
                         if sfx2 != "":
                             mut mn2 = n + "_" + sfx2
-                            return "((" + mn2 + "*)_tr_checked_alloc(sizeof(" + mn2 + ")))"
-                    return "((" + n + "*)_tr_checked_alloc(sizeof(" + n + ")))"
+                            return "((" + mn2 + "*)_tr_obj_alloc(sizeof(" + mn2 + ")))"
+                    return "((" + n + "*)_tr_obj_alloc(sizeof(" + n + ")))"
                 if self.enums.contains(n):
                     return "(" + n + "){.tag=" + n + "_" + n + "}"
             case HirExpr.EPropAccess(obj_inner, variant, _):
@@ -5089,9 +5156,17 @@ pub class CGenerator:
                             # Owned-return function returning a `-> ref` call result: the
                             # callee did NOT retain, so OWN it here (retain) before handing
                             # it back as an owned value the caller will free.
-                            self.w(pad + "return _tr_str_retain(" + ret_s2 + ");\n")
+                            if self.is_heap_class_tn(hir_expr_type(e).name):
+                                self.w(pad + "return _tr_obj_retain(" + ret_s2 + ");\n")
+                            elif _is_str_type(hir_expr_type(e).name):
+                                self.w(pad + "return _tr_str_retain(" + ret_s2 + ");\n")
+                            else:
+                                self.w(pad + "return " + ret_s2 + ";\n")
                         else:
-                            self.w(pad + "return " + self.str_retain_wrap(e, ret_s2, true) + ";\n")
+                            # str + heap-class owned returns: retain a borrowed/aliased
+                            # result (self, a field) so the caller owns a counted ref;
+                            # a returned local transfers (no retain — excluded from drops).
+                            self.w(pad + "return " + self.obj_retain_wrap(e, self.str_retain_wrap(e, ret_s2, true), true) + ";\n")
             case HirStmt.SLet(n, _, _, is_const, is_shared, ty, v):
                 mut c_ty = self.type_to_c(ty)
                 # If SLet.ty is Vec/List without generic args, recover c_ty from the init expression
@@ -5284,6 +5359,19 @@ pub class CGenerator:
                                 match v.read():
                                     case HirExpr.EPropAccess(_, _, _): pass
                                     case _: self.str_local_names.insert(n, true)
+                        elif self.is_heap_class_tn(hir_expr_type(v).name):
+                            # Refcounted heap class. A proven borrow is a zero-cost
+                            # alias (no retain/release, not tracked). Otherwise this
+                            # local OWNS a reference: retain aliases (a fresh ctor /
+                            # owned `-> T` result is already rc=1), own `-> ref`
+                            # results, and register for release at scope exit.
+                            if self.cur_proven_borrows.contains(n):
+                                pass
+                            else:
+                                init_s = self.obj_retain_wrap(v, init_s, false)
+                                if self._expr_is_borrow_call(v):
+                                    init_s = "_tr_obj_retain(" + init_s + ")"
+                                self.class_local_names.insert(n, true)
                         init_s = self.flush_wraps(init_s, false)
                         self.w(" = " + init_s + ";\n")
                 else:
@@ -5316,6 +5404,19 @@ pub class CGenerator:
                                     match v.read():
                                         case HirExpr.EPropAccess(_, _, _): pass
                                         case _: self.str_local_names.insert(n, true)
+                            elif self.is_heap_class_tn(hir_expr_type(v).name):
+                                # First assignment declares a heap-class local — same
+                                # retain/track as SLet (explicit T* since _tr_obj_retain
+                                # yields void*). Proven borrow → zero-cost alias.
+                                mut _sa_cty = self.type_to_c(hir_expr_type(v))
+                                if self.cur_proven_borrows.contains(n):
+                                    self.w(pad + _sa_cty + " " + _safe_c_varname(n) + " = " + _sa_rhs + ";\n")
+                                else:
+                                    _sa_rhs = self.obj_retain_wrap(v, _sa_rhs, false)
+                                    if self._expr_is_borrow_call(v):
+                                        _sa_rhs = "_tr_obj_retain(" + _sa_rhs + ")"
+                                    self.w(pad + _sa_cty + " " + _safe_c_varname(n) + " = " + _sa_rhs + ";\n")
+                                    self.class_local_names.insert(n, true)
                             else:
                                 self.w(pad + "__auto_type " + _safe_c_varname(n) + " = " + _sa_rhs + ";\n")
                             self.decl_vars.insert(n, true)
@@ -5649,37 +5750,36 @@ pub class CGenerator:
                         else:
                             self.w(pad + "Dict_free(" + _safe_c_varname(adn) + ");\n")
                 else:
-                    # Item #2: release str-typed fields after the user's free()
-                    # runs. Capture each field's TrStr value BEFORE free() (so
-                    # free() can still read it - e.g. to log it), then release
-                    # the captured copy AFTER free() returns - this drops the
-                    # instance's own reference (severed once free() deallocates
-                    # `self`) without racing free()'s own access to the field.
                     mut _adn_safe = _safe_c_varname(adn)
-                    mut _ad_tmps = Vec[str].init(0)
-                    if self.classes.contains(adc):
-                        mut _ad_cls = self.classes.get(adc)
-                        mut _ad_fi = 0
-                        while _ad_fi < _ad_cls.fields.len:
-                            mut _ad_fld = _ad_cls.fields.get(_ad_fi)
-                            # Own each heap str field's reference and release it below.
-                            # SKIP `ref` (borrow) fields: they are not owned by the
-                            # instance, so releasing them would over-decrement.
-                            if _is_str_type(self.resolve_generic_prim(_ad_fld.ty.name)) and not _ad_fld.ty.is_borrow:
-                                mut _ad_tmp = "_ad_f" + self.next_temp()
-                                self.w(pad + "TrStr " + _ad_tmp + " = " + _adn_safe + "->" + _safe_c_varname(_ad_fld.name) + ";\n")
-                                _ad_tmps.push(_ad_tmp)
-                            _ad_fi = _ad_fi + 1
-                    # Run the user's free() first IF the class defines one (capture the
-                    # field copies BEFORE so free() can still read them); a plain data
-                    # class with no free() just gets its owned fields released — an
-                    # implicit destructor so it no longer leaks them.
-                    if self.has_method(adc, "free"):
-                        self.w(pad + self.cls_method_c_call(adc, "free", adn, "") + ";\n")
-                    mut _ad_ti = 0
-                    while _ad_ti < _ad_tmps.len:
-                        self.w(pad + "_tr_str_release(" + _ad_tmps.get(_ad_ti) + ");\n")
-                        _ad_ti = _ad_ti + 1
+                    if self.is_heap_class_tn(adc) and not self.has_method(adc, "free"):
+                        # Refcounted plain class: release OUR reference. The struct is
+                        # freed and its owned fields dropped (via _trdrop_T) only when
+                        # the count hits zero — sound under aliasing. Gated on
+                        # class_local_names so only OWNING locals release (balances
+                        # retain-on-bind/store/return); borrows never enter that set.
+                        if self.class_local_names.contains(adn):
+                            self.w(pad + "_tr_obj_release(" + _adn_safe + ", " + self.obj_drop_fn(adc) + ");\n")
+                    else:
+                        # User-managed class (defines free()): capture each owned str
+                        # field BEFORE free() (so free() can still read it), run free(),
+                        # then release the captured copies. (Item #2 destructor.)
+                        mut _ad_tmps = Vec[str].init(0)
+                        if self.classes.contains(adc):
+                            mut _ad_cls = self.classes.get(adc)
+                            mut _ad_fi = 0
+                            while _ad_fi < _ad_cls.fields.len:
+                                mut _ad_fld = _ad_cls.fields.get(_ad_fi)
+                                if _is_str_type(self.resolve_generic_prim(_ad_fld.ty.name)) and not _ad_fld.ty.is_borrow:
+                                    mut _ad_tmp = "_ad_f" + self.next_temp()
+                                    self.w(pad + "TrStr " + _ad_tmp + " = " + _adn_safe + "->" + _safe_c_varname(_ad_fld.name) + ";\n")
+                                    _ad_tmps.push(_ad_tmp)
+                                _ad_fi = _ad_fi + 1
+                        if self.has_method(adc, "free"):
+                            self.w(pad + self.cls_method_c_call(adc, "free", adn, "") + ";\n")
+                        mut _ad_ti = 0
+                        while _ad_ti < _ad_tmps.len:
+                            self.w(pad + "_tr_str_release(" + _ad_tmps.get(_ad_ti) + ");\n")
+                            _ad_ti = _ad_ti + 1
             case _: pass
 
     pub def gen_for_loop(self, var: str, iter: Pointer[HirExpr], body: HirBlock, indent: int):
