@@ -1620,6 +1620,12 @@ typedef struct Lexer {
 } Lexer;
 static void _trdrop_Lexer(void* vp) {
     Lexer* self = (Lexer*)vp; (void)self;
+    List_i64_free(self->indent_stack);
+    List_i64_free(self->token_lines);
+    List_i64_free(self->token_cols);
+    List_i64_free(self->comment_lines);
+    List_TrStr_free(self->comment_texts);
+    List_bool_free(self->comment_trailing);
 }
 #endif
 
@@ -1639,6 +1645,7 @@ static void _trdrop_AstType(void* vp) {
     AstType* self = (AstType*)vp; (void)self;
     _tr_str_release(self->name);
     _tr_str_release(self->from_param);
+    List_TrStr_free(self->from_regions);
 }
 #endif
 
@@ -1652,6 +1659,7 @@ typedef struct GenericConstraint {
 static void _trdrop_GenericConstraint(void* vp) {
     GenericConstraint* self = (GenericConstraint*)vp; (void)self;
     _tr_str_release(self->target);
+    List_ptr_free(self->bounds);
 }
 #endif
 
@@ -1751,6 +1759,7 @@ typedef struct Block {
 } Block;
 static void _trdrop_Block(void* vp) {
     Block* self = (Block*)vp; (void)self;
+    List_ptr_free(self->stmts);
 }
 #endif
 
@@ -1807,6 +1816,9 @@ typedef struct FunctionDef {
 static void _trdrop_FunctionDef(void* vp) {
     FunctionDef* self = (FunctionDef*)vp; (void)self;
     _tr_str_release(self->name);
+    List_ptr_free_obj(self->constraints, _trdrop_GenericConstraint);
+    List_TrStr_free(self->outlives_a);
+    List_TrStr_free(self->outlives_b);
 }
 #endif
 
@@ -1845,7 +1857,9 @@ typedef struct ClassDef {
 static void _trdrop_ClassDef(void* vp) {
     ClassDef* self = (ClassDef*)vp; (void)self;
     _tr_str_release(self->name);
+    List_ptr_free_obj(self->constraints, _trdrop_GenericConstraint);
     _tr_str_release(self->docstring);
+    List_TrStr_free(self->region_params);
 }
 #endif
 
@@ -1879,6 +1893,7 @@ typedef struct EnumDef {
 static void _trdrop_EnumDef(void* vp) {
     EnumDef* self = (EnumDef*)vp; (void)self;
     _tr_str_release(self->name);
+    List_TrStr_free(self->region_params);
 }
 #endif
 
@@ -1897,6 +1912,7 @@ typedef struct InterfaceDef {
 static void _trdrop_InterfaceDef(void* vp) {
     InterfaceDef* self = (InterfaceDef*)vp; (void)self;
     _tr_str_release(self->name);
+    List_TrStr_free(self->region_params);
 }
 #endif
 
@@ -1959,6 +1975,12 @@ typedef struct ModuleResolver {
 } ModuleResolver;
 static void _trdrop_ModuleResolver(void* vp) {
     ModuleResolver* self = (ModuleResolver*)vp; (void)self;
+    Dict_free(self->visited);
+    List_ptr_free(self->all_decls);
+    List_TrStr_free(self->search_paths);
+    List_TrStr_free(self->mod_dot_paths);
+    List_TrStr_free(self->mod_file_paths);
+    List_TrStr_free(self->all_decl_modules);
     _tr_str_release(self->current_mod);
 }
 #endif
@@ -2049,6 +2071,7 @@ typedef struct HirBlock {
 } HirBlock;
 static void _trdrop_HirBlock(void* vp) {
     HirBlock* self = (HirBlock*)vp; (void)self;
+    List_ptr_free(self->stmts);
 }
 #endif
 
@@ -2193,6 +2216,15 @@ typedef struct HirProgram {
 } HirProgram;
 static void _trdrop_HirProgram(void* vp) {
     HirProgram* self = (HirProgram*)vp; (void)self;
+    List_ptr_free_obj(self->functions, _trdrop_HirFunction);
+    List_ptr_free_obj(self->classes, _trdrop_HirClass);
+    List_ptr_free_obj(self->enums, _trdrop_HirEnum);
+    List_ptr_free_obj(self->interfaces, _trdrop_HirInterface);
+    List_ptr_free(self->top_level_stmts);
+    List_ptr_free_obj(self->extern_funcs, _trdrop_HirFunction);
+    List_ptr_free_obj(self->decorator_defs, _trdrop_HirFunction);
+    List_TrStr_free(self->type_alias_names);
+    List_ptr_free(self->type_alias_types);
 }
 #endif
 
@@ -2207,6 +2239,7 @@ typedef struct MirBlock {
 } MirBlock;
 static void _trdrop_MirBlock(void* vp) {
     MirBlock* self = (MirBlock*)vp; (void)self;
+    List_ptr_free(self->stmts);
     _tr_obj_release(self->hir_block, _trdrop_HirBlock);
 }
 #endif
@@ -2221,6 +2254,7 @@ typedef struct DropSite {
 static void _trdrop_DropSite(void* vp) {
     DropSite* self = (DropSite*)vp; (void)self;
     _tr_obj_release(self->hir_block, _trdrop_HirBlock);
+    List_TrStr_free(self->places);
 }
 #endif
 
@@ -2268,6 +2302,7 @@ typedef struct MirProgram {
 } MirProgram;
 static void _trdrop_MirProgram(void* vp) {
     MirProgram* self = (MirProgram*)vp; (void)self;
+    List_ptr_free_obj(self->functions, _trdrop_MirFunction);
 }
 #endif
 
@@ -2290,6 +2325,8 @@ static void _trdrop_MirBuilder(void* vp) {
     MirBuilder* self = (MirBuilder*)vp; (void)self;
     _tr_obj_release(self->cur_hb, _trdrop_HirBlock);
     _tr_obj_release(self->unsafe_pinned, _trdrop_LiveSet);
+    List_i64_free(self->loop_continue);
+    List_i64_free(self->loop_break);
 }
 #endif
 
@@ -2333,6 +2370,7 @@ typedef struct Symbol {
 static void _trdrop_Symbol(void* vp) {
     Symbol* self = (Symbol*)vp; (void)self;
     _tr_str_release(self->name);
+    List_TrStr_free(self->borrowed_by);
     _tr_str_release(self->borrows_region);
 }
 #endif
@@ -2346,6 +2384,8 @@ typedef struct Scope {
 } Scope;
 static void _trdrop_Scope(void* vp) {
     Scope* self = (Scope*)vp; (void)self;
+    Dict_free(self->variables);
+    List_TrStr_free(self->decl_order);
 }
 #endif
 
@@ -2414,10 +2454,41 @@ typedef struct Sema {
 } Sema;
 static void _trdrop_Sema(void* vp) {
     Sema* self = (Sema*)vp; (void)self;
+    Dict_free(self->globals);
+    List_ptr_free_obj(self->scopes, _trdrop_Scope);
+    List_TrStr_free(self->warnings);
+    Dict_free_objval(self->classes, _trdrop_ClassDef);
+    Dict_free_objval(self->enums, _trdrop_EnumDef);
+    Dict_free_objval(self->interfaces, _trdrop_InterfaceDef);
+    Dict_free_strval(self->type_aliases);
+    Dict_free_strval(self->type_alias_elem);
     _tr_str_release(self->current_file);
     _tr_str_release(self->current_func_name);
     _tr_str_release(self->current_class_name);
+    Dict_free(self->assign_froms);
+    Dict_free(self->fn_sigs);
+    Dict_free(self->extern_names);
+    List_ptr_free_obj(self->nested_classes, _trdrop_HirClass);
+    List_ptr_free_obj(self->nested_functions, _trdrop_HirFunction);
+    List_ptr_free_obj(self->nested_enums, _trdrop_HirEnum);
+    List_ptr_free_obj(self->nested_interfaces, _trdrop_HirInterface);
+    List_ptr_free_obj(self->closure_caps, _trdrop_HirParam);
+    Dict_free_strval(self->container_borrows);
+    Dict_free(self->copy_classes);
     _tr_str_release(self->current_func_ret_from);
+    List_TrStr_free(self->cur_func_borrowers);
+    List_TrStr_free(self->cur_func_sources);
+    Dict_free(self->mutating_methods);
+    Dict_free(self->fn_ret_owned);
+    Dict_free(self->decorator_names);
+    Dict_free_strval(self->variadic_fns);
+    Dict_free(self->variadic_elem_ty);
+    Dict_free_objval(self->fn_defs, _trdrop_FunctionDef);
+    List_i64_free(self->loop_scope_base);
+    List_i64_free(self->fn_scope_base);
+    List_i64_free(self->block_depth_stack);
+    List_i64_free(self->block_stack);
+    List_i64_free(self->block_stack_base);
 }
 #endif
 
@@ -2460,6 +2531,8 @@ typedef struct CGenerator {
     TrMap* class_local_names;
     TrMap* fn_owned;
     TrMap* raw_aliased;
+    TrMap* coll_field_owned;
+    TrMap* coll_field_disq;
     TrMap* cur_proven_borrows;
     bool cur_ret_is_borrow;
     bool eliding_get_retain;
@@ -2504,6 +2577,8 @@ typedef struct CGenerator {
     List_TrStr* defer_stack;
     List_TrStr* wrap_temp_decls;
     List_TrStr* wrap_temp_names;
+    List_TrStr* wrap_obj_names;
+    List_TrStr* wrap_obj_drops;
     List_TrStr* loop_res_stack;
     List_TrStr* loop_done_stack;
     bool emit_line_info;
@@ -2511,15 +2586,56 @@ typedef struct CGenerator {
 } CGenerator;
 static void _trdrop_CGenerator(void* vp) {
     CGenerator* self = (CGenerator*)vp; (void)self;
+    Dict_free_objval(self->classes, _trdrop_HirClass);
+    Dict_free_objval(self->enums, _trdrop_HirEnum);
+    Dict_free_objval(self->interfaces, _trdrop_HirInterface);
+    Dict_free_objval(self->functions, _trdrop_HirFunction);
+    Dict_free(self->method_owners);
+    Dict_free(self->decl_vars);
+    Dict_free(self->str_local_names);
+    Dict_free(self->class_local_names);
+    Dict_free(self->fn_owned);
+    Dict_free(self->raw_aliased);
+    Dict_free(self->coll_field_owned);
+    Dict_free(self->coll_field_disq);
+    Dict_free(self->cur_proven_borrows);
+    Dict_free_strval(self->coll_local_sfx);
+    Dict_free(self->coll_local_idict);
+    Dict_free(self->coll_local_strval);
+    Dict_free_strval(self->coll_local_vtcoll);
+    Dict_free(self->mono_done);
+    Dict_free(self->list_type_done);
+    Dict_free(self->list_fwd_done);
+    Dict_free(self->elem_fmt_done);
     _tr_str_release(self->cur_class);
     _tr_str_release(self->cur_func);
+    Dict_free(self->emitted_fns);
+    Dict_free(self->spawn_wrappers);
+    Dict_free(self->async_wrappers);
+    Dict_free(self->prescanned_fns);
+    Dict_free_strval(self->shared_vars);
     _tr_str_release(self->cur_throws_ty);
+    Dict_free(self->value_types);
+    List_TrStr_free(self->value_list_elems);
+    List_TrStr_free(self->value_dict_elems);
+    List_TrStr_free(self->value_set_elems);
+    Dict_free(self->global_vars);
     _tr_str_release(self->closure_env_var);
     _tr_str_release(self->last_clo_cname);
     _tr_str_release(self->last_clo_estruct);
     _tr_str_release(self->last_clo_ptypes);
     _tr_str_release(self->last_clo_ret);
     _tr_str_release(self->last_clo_init);
+    Dict_free_objval(self->decorator_defs, _trdrop_HirFunction);
+    Dict_free(self->overloaded_sigs);
+    Dict_free_strval(self->type_alias_map);
+    List_TrStr_free(self->defer_stack);
+    List_TrStr_free(self->wrap_temp_decls);
+    List_TrStr_free(self->wrap_temp_names);
+    List_TrStr_free(self->wrap_obj_names);
+    List_TrStr_free(self->wrap_obj_drops);
+    List_TrStr_free(self->loop_res_stack);
+    List_TrStr_free(self->loop_done_stack);
     _tr_str_release(self->cur_src_file);
 }
 #endif
@@ -2536,6 +2652,9 @@ typedef struct LlvmGenerator {
 } LlvmGenerator;
 static void _trdrop_LlvmGenerator(void* vp) {
     LlvmGenerator* self = (LlvmGenerator*)vp; (void)self;
+    Dict_free_objval(self->classes, _trdrop_HirClass);
+    Dict_free_objval(self->enums, _trdrop_HirEnum);
+    Dict_free_objval(self->functions, _trdrop_HirFunction);
 }
 #endif
 
@@ -2552,6 +2671,7 @@ typedef struct MacroCtx {
 } MacroCtx;
 static void _trdrop_MacroCtx(void* vp) {
     MacroCtx* self = (MacroCtx*)vp; (void)self;
+    Dict_free(self->env);
     _tr_str_release(self->result);
     _tr_str_release(self->error_msg);
 }
@@ -3187,6 +3307,12 @@ __attribute__((hot)) TrStr CGenerator_wrapstr(CGenerator* self, TrStr e);
 __attribute__((hot)) void CGenerator_set_proven_borrows(CGenerator* self, List_TrStr* pb);
 __attribute__((hot)) TrStr CGenerator_str_retain_wrap(CGenerator* self, HirExpr* e, TrStr s, bool is_return);
 __attribute__((hot)) void CGenerator__scan_ptr_aliased(CGenerator* self, AstType* t);
+__attribute__((hot)) bool CGenerator__is_coll_type_name(CGenerator* self, TrStr n);
+__attribute__((hot)) bool CGenerator__is_fresh_coll_expr(CGenerator* self, HirExpr* e);
+__attribute__((hot)) void CGenerator__scan_coll_fields(CGenerator* self, HirProgram* prog);
+__attribute__((hot)) void CGenerator__scan_coll_fields_block(CGenerator* self, HirBlock* b);
+__attribute__((hot)) void CGenerator__scan_coll_fields_stmt(CGenerator* self, HirStmt* sp);
+__attribute__((hot)) TrStr CGenerator__coll_field_free_call(CGenerator* self, TrStr fld_c, AstType* ty);
 __attribute__((hot)) bool CGenerator_is_heap_class_tn(CGenerator* self, TrStr tn);
 __attribute__((hot)) TrStr CGenerator_obj_retain_wrap(CGenerator* self, HirExpr* e, TrStr s, bool is_return);
 __attribute__((hot)) bool CGenerator__fn_owned_lookup(CGenerator* self, TrStr key);
@@ -3209,6 +3335,7 @@ __attribute__((hot)) TrStr CGenerator_dict_val_arg(CGenerator* self, HirExpr* e)
 __attribute__((hot)) TrStr CGenerator_gen_args_extern(CGenerator* self, List_ptr* args);
 __attribute__((hot)) bool CGenerator__is_fresh_str_expr(CGenerator* self, HirExpr* e);
 __attribute__((hot)) bool CGenerator__expr_is_borrow_call(CGenerator* self, HirExpr* e);
+__attribute__((hot)) bool CGenerator__is_fresh_obj_expr(CGenerator* self, HirExpr* e);
 __attribute__((hot)) TrStr CGenerator_gen_args(CGenerator* self, List_ptr* args);
 __attribute__((hot)) TrStr CGenerator_gen_args_strify(CGenerator* self, List_ptr* args, TrStr elem_sfx);
 __attribute__((hot)) TrStr CGenerator_gen_method_call(CGenerator* self, HirExpr* obj, TrStr method, List_ptr* args, AstType* call_ty);

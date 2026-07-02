@@ -485,5 +485,11 @@ __attribute__((hot)) void _dummy_instantiations() {
     List_ptr* v11 = (void*)List_ptr_new();
     /* pass */
     List_ptr* v12 = (void*)List_ptr_new();
+    List_ptr_free_obj(v4, _trdrop_ImportItem);
+    List_ptr_free_obj(v5, _trdrop_Decorator);
+    List_ptr_free_obj(v6, _trdrop_Param);
+    List_ptr_free_obj(v7, _trdrop_VariantDef);
+    List_ptr_free_obj(v8, _trdrop_FunctionDef);
+    List_ptr_free_obj(v9, _trdrop_FieldDef);
 }
 

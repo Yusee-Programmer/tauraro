@@ -145,6 +145,8 @@ pub class CGenerator:
     pub class_local_names: Map[str, bool]  # heap-class-typed locals in current function that OWN a refcount (released at scope exit; reset in seed_params)
     pub fn_owned: Map[str, bool]  # return-ownership inference (from sema HirFunction.returns_owned): fn key ("name" or "Class.method") -> returns an OWNED heap-class ref; drives _obj_expr_owns_ref
     pub raw_aliased: Map[str, bool]  # class names reachable as Pointer[T] anywhere in the program — their instances are aliased by RAW pointers that bypass refcounting, so they must NEVER be auto-dropped (is_heap_class_tn excludes them). e.g. AstType via AstType.args: Vec[Pointer[AstType]]
+    pub coll_field_owned: Map[str, bool]  # "Class.field" collection field with a FRESH-collection assignment (candidate to free in _trdrop_T)
+    pub coll_field_disq: Map[str, bool]   # bare collection field NAME ever assigned a non-fresh (aliased) collection anywhere — disqualifies freeing that field (collections aren't refcounted, so an alias would double-free)
     pub cur_proven_borrows: Map[str, bool]  # outlives engine: ref-borrow locals whose source provably outlives them — refcount ELIDED (no retain at bind, no release at scope)
     pub cur_ret_is_borrow: bool  # current function's return type is `ref` — returns a BORROW (no retain on return; the caller does not free it)
     pub eliding_get_retain: bool # set while generating a PROVEN collection-element borrow's RHS (`ref T = coll.get(k)`) — the str-valued get returns the unboxed alias WITHOUT retaining (zero-copy borrow); the SLet also skips the release
@@ -189,6 +191,8 @@ pub class CGenerator:
     pub defer_stack:      Vec[str]                # deferred C statements for current function (LIFO)
     pub wrap_temp_decls:  Vec[str]                # pending "TrStr _wtN = (_tr_str_wrap(...))" decls for the current top-level expr
     pub wrap_temp_names:  Vec[str]                # names of the above, to _tr_str_release after the expr is consumed
+    pub wrap_obj_names:   Vec[str]                # fresh-owned heap-class arg temps (decls in wrap_temp_decls) to _tr_obj_release after the expr
+    pub wrap_obj_drops:   Vec[str]                # parallel: the _trdrop_T fn for each wrap_obj_names temp
     pub loop_res_stack:   Vec[str]               # `loop:`/`while:` EXPRESSION result-temp per enclosing loop ("" = a plain statement loop: a valued break has no target)
     pub loop_done_stack:  Vec[str]               # `while:` EXPRESSION normal-exit flag per enclosing loop ("" = none)
     pub emit_line_info:   bool                    # --debug: emit `#line N "src.tr"` directives for SLineMarker
@@ -213,6 +217,8 @@ pub class CGenerator:
         g.class_local_names = Map[str, bool].init(16)
         g.fn_owned = Map[str, bool].init(64)
         g.raw_aliased = Map[str, bool].init(32)
+        g.coll_field_owned = Map[str, bool].init(32)
+        g.coll_field_disq = Map[str, bool].init(32)
         g.cur_proven_borrows = Map[str, bool].init(8)
         g.cur_ret_is_borrow = false
         g.eliding_get_retain = false
@@ -257,6 +263,8 @@ pub class CGenerator:
         g.defer_stack     = Vec[str].init(0)
         g.wrap_temp_decls = Vec[str].init(0)
         g.wrap_temp_names = Vec[str].init(0)
+        g.wrap_obj_names = Vec[str].init(0)
+        g.wrap_obj_drops = Vec[str].init(0)
         g.loop_res_stack = Vec[str].init(4)
         g.loop_done_stack = Vec[str].init(4)
         g.emit_line_info  = false
@@ -1255,6 +1263,14 @@ pub class CGenerator:
                         # (raw_aliased) are excluded by is_heap_class_tn.
                         self.ws("    _tr_obj_release(self->" + _safe_c_varname(_csfld.name) + ", " + self.obj_drop_fn(_csfld.ty.name) + ");\n")
                         _csf = _csf + 1
+                    elif self._is_coll_type_name(_csfld.ty.name) and self.coll_field_owned.contains(c.name + "." + _csfld.name) and not self.coll_field_disq.contains(_csfld.name):
+                        # Uniquely-owned collection field (only ever assigned a fresh
+                        # collection, name never aliased): free it, releasing any owned
+                        # heap-class elements/values. Aliased collection fields are left
+                        # alone (collections aren't refcounted → freeing would double-free).
+                        mut _cfree = self._coll_field_free_call("self->" + _safe_c_varname(_csfld.name), _csfld.ty)
+                        if _cfree != "": self.ws("    " + _cfree + ";\n")
+                        _csf = _csf + 1
                     else:
                         _csf = _csf + 1
                 self.ws("}\n")
@@ -1940,11 +1956,19 @@ pub class CGenerator:
         while i < self.wrap_temp_names.len:
             out = out + "_tr_str_release(" + self.wrap_temp_names.get(i) + "); "
             i = i + 1
+        # Release fresh-owned heap-class arg temps (a borrowing callee doesn't own
+        # them; a callee that stored one retained it, so this nets correctly).
+        i = 0
+        while i < self.wrap_obj_names.len:
+            out = out + "_tr_obj_release(" + self.wrap_obj_names.get(i) + ", " + self.wrap_obj_drops.get(i) + "); "
+            i = i + 1
         if not is_void:
             out = out + "_wr; "
         out = out + "})"
         self.wrap_temp_decls = Vec[str].init(0)
         self.wrap_temp_names = Vec[str].init(0)
+        self.wrap_obj_names = Vec[str].init(0)
+        self.wrap_obj_drops = Vec[str].init(0)
         return out
 
     # Wraps a fresh heap char* (from a legacy _tr_str_* helper) into a
@@ -2015,6 +2039,130 @@ pub class CGenerator:
             if not _is_invalid_ptr(ap as usize):
                 self._scan_ptr_aliased(ap.read())
             ai = ai + 1
+
+    pub def _is_coll_type_name(self, n: str) -> bool:
+        return n == "List" or n == "Vec" or n == "Dict" or n == "Map" or n == "Set"
+
+    # True for an expression that builds a FRESH, uniquely-owned collection: a
+    # literal (`[..]`/`{..}`), a comprehension, or a `List/Dict/Set/Map[..].init/new()`.
+    # Anything else (an ident, a field read, an arbitrary call) may ALIAS an existing
+    # collection, which — since collections aren't refcounted — must not be auto-freed.
+    pub def _is_fresh_coll_expr(self, e: Pointer[HirExpr]) -> bool:
+        if _is_invalid_ptr(e as usize): return false
+        match e.read():
+            case HirExpr.EList(_, _): return true
+            case HirExpr.ESet(_, _): return true
+            case HirExpr.EDict(_, _, _): return true
+            case HirExpr.EListComp(_, _, _): return true
+            case HirExpr.ECall(callee, _, _):
+                match callee.read():
+                    case HirExpr.EIdent(cn, _, _): return self._is_coll_type_name(cn)
+                    case _: return false
+            case HirExpr.EMethodCall(recv, m, _, _):
+                if m != "init" and m != "new": return false
+                match recv.read():
+                    case HirExpr.EIdent(rn, _, _): return self._is_coll_type_name(rn)
+                    case _: return false
+            case _: return false
+
+    # Populate coll_field_owned / coll_field_disq by scanning every function body
+    # for `obj.field = <collection>` stores (see _trdrop_T's collection-field free).
+    pub def _scan_coll_fields(self, prog: HirProgram):
+        mut i = 0
+        while i < prog.functions.len:
+            self._scan_coll_fields_block(prog.functions.get(i).body)
+            i = i + 1
+        i = 0
+        while i < prog.classes.len:
+            mut c = prog.classes.get(i)
+            mut mi = 0
+            while mi < c.methods.len:
+                self._scan_coll_fields_block(c.methods.get(mi).body)
+                mi = mi + 1
+            i = i + 1
+        i = 0
+        while i < prog.enums.len:
+            mut en = prog.enums.get(i)
+            mut emi = 0
+            while emi < en.methods.len:
+                self._scan_coll_fields_block(en.methods.get(emi).body)
+                emi = emi + 1
+            i = i + 1
+
+    pub def _scan_coll_fields_block(self, b: HirBlock):
+        if _is_invalid_ptr(b as usize): return
+        mut i = 0
+        while i < b.stmts.len:
+            self._scan_coll_fields_stmt(b.stmts.get(i))
+            i = i + 1
+
+    pub def _scan_coll_fields_stmt(self, sp: Pointer[HirStmt]):
+        if _is_invalid_ptr(sp as usize): return
+        match sp.read():
+            case HirStmt.SAssign(t, v):
+                match t.read():
+                    case HirExpr.EPropAccess(obj, fname, _):
+                        if self._is_fresh_coll_expr(v):
+                            mut ft = hir_expr_type(t).name
+                            mut ocn = hir_expr_type(obj).name
+                            if self._is_coll_type_name(ft) and self.classes.contains(ocn):
+                                self.coll_field_owned.insert(ocn + "." + fname, true)
+                        else:
+                            # A non-fresh store to this field name anywhere disqualifies it
+                            # (may alias a collection the object doesn't uniquely own).
+                            self.coll_field_disq.insert(fname, true)
+                    case _: pass
+            case HirStmt.SIf(_, tb, eb):
+                self._scan_coll_fields_block(tb)
+                self._scan_coll_fields_block(eb)
+            case HirStmt.SWhile(_, wb): self._scan_coll_fields_block(wb)
+            case HirStmt.SFor(_, _, fb): self._scan_coll_fields_block(fb)
+            case HirStmt.SForUnpack(_, _, fub): self._scan_coll_fields_block(fub)
+            case HirStmt.SMatch(_, marms):
+                mut ai = 0
+                while ai < marms.len:
+                    self._scan_coll_fields_block(marms.get(ai).body)
+                    ai = ai + 1
+            case HirStmt.SUnsafe(ub): self._scan_coll_fields_block(ub)
+            case HirStmt.SWith(_, _, wb2): self._scan_coll_fields_block(wb2)
+            case HirStmt.STaskGroup(tgb): self._scan_coll_fields_block(tgb)
+            case HirStmt.SGpuBlock(gb): self._scan_coll_fields_block(gb)
+            case HirStmt.SDefer(ds): self._scan_coll_fields_stmt(ds)
+            case HirStmt.STry(tb2, catches, fb2):
+                self._scan_coll_fields_block(tb2)
+                mut ci = 0
+                while ci < catches.len:
+                    mut cc = catches.get(ci)
+                    if not _is_invalid_ptr(cc as usize): self._scan_coll_fields_block(cc.read().body)
+                    ci = ci + 1
+                self._scan_coll_fields_block(fb2)
+            case _: pass
+
+    # The C free call that reclaims collection field `fld_c` of type `ty`, releasing
+    # heap-class elements/values. Empty string if the type isn't a supported collection.
+    pub def _coll_field_free_call(self, fld_c: str, ty: AstType) -> str:
+        if ty.name == "List" or ty.name == "Vec":
+            if ty.args.len > 0:
+                mut et = ty.args.get(0).read().name
+                if self.is_heap_class_tn(et):
+                    return "List_ptr_free_obj(" + fld_c + ", " + self.obj_drop_fn(et) + ")"
+                if _is_str_type(et): return "List_TrStr_free(" + fld_c + ")"
+                return "List_" + self.list_sfx(self.list_elem_suffix(et)) + "_free(" + fld_c + ")"
+            return "List_ptr_free(" + fld_c + ")"
+        if ty.name == "Dict" or ty.name == "Map":
+            mut _ik = ty.args.len > 0 and (_is_int_type(ty.args.get(0).read().name) or ty.args.get(0).read().name == "int")
+            mut _vheap = ty.args.len > 1 and self.is_heap_class_tn(ty.args.get(1).read().name)
+            mut _vstr = ty.args.len > 1 and _is_str_type(ty.args.get(1).read().name)
+            if _vheap:
+                mut _vc = ty.args.get(1).read().name
+                if _ik: return "_tr_idict_free_objval(" + fld_c + ", " + self.obj_drop_fn(_vc) + ")"
+                return "Dict_free_objval(" + fld_c + ", " + self.obj_drop_fn(_vc) + ")"
+            if _vstr:
+                if _ik: return "_tr_idict_free_strval(" + fld_c + ")"
+                return "Dict_free_strval(" + fld_c + ")"
+            if _ik: return "_tr_idict_free(" + fld_c + ")"
+            return "Dict_free(" + fld_c + ")"
+        return ""
 
     pub def is_heap_class_tn(self, tn: str) -> bool:
         if not self.classes.contains(tn): return false
@@ -3023,7 +3171,9 @@ pub class CGenerator:
         # fresh ctor result (obj_retain_wrap decides). Without this the instance is
         # freed at the source local's scope exit while the dict points at it (UAF).
         if self.is_heap_class_tn(hir_expr_type(e).name):
-            return self.obj_retain_wrap(e, e_s, false)
+            mut _dvr = self.obj_retain_wrap(e, e_s, false)
+            if self._obj_store_needs_retain(e): _dvr = "_tr_obj_retain(" + _dvr + ")"
+            return _dvr
         return e_s
 
     # Like gen_args, but unwraps any TrStr-typed argument to raw char* via
@@ -3098,6 +3248,35 @@ pub class CGenerator:
             case HirExpr.EMethodCall(_, _, _, me_bty): return me_bty.is_borrow
             case _: return false
 
+    # True for a heap-class expression that produces a FRESH, OWNED (rc=1)
+    # instance not bound to any local: a constructor `ClassName(...)`, an
+    # owned-classified free-function/factory call. Passed directly as a call
+    # argument, such a temp is borrowed by the callee and released by no one →
+    # it leaks; gen_args hoists it and flush_wraps releases it. Idents/fields
+    # (borrows/live locals) and collection-element reads are NOT fresh.
+    pub def _is_fresh_obj_expr(self, e: Pointer[HirExpr]) -> bool:
+        if _is_invalid_ptr(e as usize): return false
+        if not self.is_heap_class_tn(hir_expr_type(e).name): return false
+        match e.read():
+            case HirExpr.ECall(callee, _, ce_bty):
+                if ce_bty.is_borrow: return false
+                match callee.read():
+                    case HirExpr.EIdent(cn, _, _):
+                        if self.classes.contains(cn): return true   # constructor
+                        return self._fn_owned_lookup(cn)            # owned free-fn
+                    case _: return false
+            case HirExpr.EMethodCall(recv, m, _, me_bty):
+                if me_bty.is_borrow: return false
+                mut rt = hir_expr_type(recv).name
+                if (rt == "Vec" or rt == "List" or rt == "Dict" or rt == "Map" or rt == "Set") and (m == "get" or m == "first" or m == "last"):
+                    return false
+                match recv.read():
+                    case HirExpr.EIdent(rn, _, _):
+                        if self.classes.contains(rn): rt = rn
+                    case _: pass
+                return self._fn_owned_lookup(rt + "." + m)
+            case _: return false
+
     pub def gen_args(self, args: Vec[Pointer[HirExpr]]) -> str:
         mut s = ""
         mut i = 0
@@ -3110,6 +3289,12 @@ pub class CGenerator:
                 self.wrap_temp_decls.push("TrStr " + tmp + " = (" + a_s + ")")
                 self.wrap_temp_names.push(tmp)
                 a_s = tmp
+            elif self._is_fresh_obj_expr(a):
+                mut otmp = "_aot" + self.next_temp()
+                self.wrap_temp_decls.push(self.type_to_c(hir_expr_type(a)) + " " + otmp + " = (" + a_s + ")")
+                self.wrap_obj_names.push(otmp)
+                self.wrap_obj_drops.push(self.obj_drop_fn(hir_expr_type(a).name))
+                a_s = otmp
             s = s + a_s
             i = i + 1
         return s
@@ -3154,6 +3339,11 @@ pub class CGenerator:
                             fi_fb = fi_fb + 1
                 case _: pass
 
+        # Weak[T] handle methods (non-owning ref to a Shared box).
+        if t_n == "Weak":
+            if method == "is_alive": return "_tr_weak_is_alive(" + obj_s + ")"
+            if method == "upgrade": return "_tr_weak_upgrade(" + obj_s + ")"
+            if method == "drop" or method == "free": return "_tr_weak_drop(" + obj_s + ")"
         # Shared var: unwrap _TrSharedBox* -> (TypeName*)obj->data for method dispatch
         if self.shared_vars.contains(obj_s):
             mut sh_ty = self.shared_vars.get(obj_s)
@@ -3986,7 +4176,9 @@ pub class CGenerator:
                 # (a local/field); MOVE a fresh ctor result (rc=1) — obj_retain_wrap
                 # picks correctly, so fresh temps aren't double-counted.
                 if args.len > 0 and self.is_heap_class_tn(hir_expr_type(args.get(0)).name):
-                    return "List_" + lsfx + "_append(" + obj_s + ", " + self.obj_retain_wrap(args.get(0), self.gen_expr(args.get(0)), false) + ")"
+                    mut _ael = self.obj_retain_wrap(args.get(0), self.gen_expr(args.get(0)), false)
+                    if self._obj_store_needs_retain(args.get(0)): _ael = "_tr_obj_retain(" + _ael + ")"
+                    return "List_" + lsfx + "_append(" + obj_s + ", " + _ael + ")"
                 mut append_args = self.gen_args_strify(args, elem_sfx)
                 if lsfx == "TrStr": append_args = self.gen_args(args)
                 return "List_" + lsfx + "_append(" + obj_s + ", " + append_args + ")"
@@ -4638,6 +4830,11 @@ pub class CGenerator:
         mut i = 0
         while i < items.len:
             mut item_s = self.gen_expr(items.get(i))
+            # Heap-class element: the list co-owns it (retain alias / transfer fresh),
+            # so element-release on the list's drop is balanced.
+            if self.is_heap_class_tn(hir_expr_type(items.get(i)).name):
+                item_s = self.obj_retain_wrap(items.get(i), item_s, false)
+                if self._obj_store_needs_retain(items.get(i)): item_s = "_tr_obj_retain(" + item_s + ")"
             s = s + "List_" + lsfx + "_append(" + l + ", " + item_s + "); "
             i = i + 1
         return s + l + "; })"
@@ -5348,7 +5545,15 @@ pub class CGenerator:
                 # suffix; Dict/Map/Set are uniformly TrMap*/_TrSet*, freed via
                 # Dict_free regardless of element type).
                 if (ty.name == "List" or ty.name == "Vec") and c_ty.starts_with("List_") and c_ty.ends_with("*"):
-                    self.coll_local_sfx.insert(n, c_ty.slice(5, c_ty.len() - 1))
+                    mut _lsfx = c_ty.slice(5, c_ty.len() - 1)
+                    # A heap-class-element list is List_ptr; encode the element class
+                    # ("ptr@Tag") so SAutoDrop frees via List_ptr_free_obj(l, _trdrop_Tag),
+                    # releasing each owned element. Raw pointer-aliased element types stay
+                    # plain "ptr" (container-only free — is_heap_class_tn excludes them).
+                    if _lsfx == "ptr" and ty.args.len > 0:
+                        mut _elt = ty.args.get(0).read().name
+                        if self.is_heap_class_tn(_elt): _lsfx = "ptr@" + _elt
+                    self.coll_local_sfx.insert(n, _lsfx)
                 elif (ty.name == "Dict" or ty.name == "Map" or ty.name == "Set") and (c_ty == "TrIDict*" or c_ty == "_TrISet*"):
                     self.coll_local_idict.insert(n, true)
                 elif (ty.name == "Dict" or ty.name == "Map" or ty.name == "Set") and (c_ty.starts_with("Dict_") or c_ty.starts_with("Set_")) and c_ty.ends_with("*"):
@@ -5361,6 +5566,15 @@ pub class CGenerator:
                 # and lost its args on the declared type.
                 if (ty.name == "Dict" or ty.name == "Map") and ty.args.len > 1 and _is_str_type(ty.args.get(1).read().name):
                     self.coll_local_strval.insert(n, true)
+                # Heap-class-VALUE Dict/Map: the dict co-owns each value (insert-retain),
+                # so its drop must release them. Encode "d@<i|s>@<ValueClass>" in
+                # coll_local_sfx (read only by SAutoDrop) → Dict_free_objval / _tr_idict_free_objval.
+                if (ty.name == "Dict" or ty.name == "Map") and ty.args.len > 1 and self.is_heap_class_tn(ty.args.get(1).read().name):
+                    mut _dvc = ty.args.get(1).read().name
+                    if self.coll_local_idict.contains(n):
+                        self.coll_local_sfx.insert(n, "d@i@" + _dvc)
+                    else:
+                        self.coll_local_sfx.insert(n, "d@s@" + _dvc)
                 # ? propagation in let binding
                 if v as usize != 0 as usize:
                     match v.read():
@@ -5422,6 +5636,10 @@ pub class CGenerator:
                     self.w(pad + c_ty + " " + _sn)
                 if v as usize != 0 as usize:
                     if is_shared:
+                        # Register var in shared_vars with the raw Tauraro type name
+                        mut sh_type_name = ty.name
+                        if sh_type_name == "void" or sh_type_name == "None":
+                            sh_type_name = hir_expr_type(v).name
                         # Detect clone vs new-wrap: if value is an already-shared var, clone it
                         mut is_clone = false
                         match v.read():
@@ -5431,11 +5649,11 @@ pub class CGenerator:
                                     is_clone = true
                             case _: pass
                         if not is_clone:
-                            self.w(" = _tr_shared_new(" + self.gen_expr(v) + ");\n")
-                        # Register var in shared_vars with the raw Tauraro type name
-                        mut sh_type_name = ty.name
-                        if sh_type_name == "void" or sh_type_name == "None":
-                            sh_type_name = hir_expr_type(v).name
+                            # Pass the payload's drop fn so _tr_shared_drop reclaims a
+                            # plain-ARC payload's owned fields (not just the struct).
+                            mut _sh_drop = "NULL"
+                            if self.is_heap_class_tn(sh_type_name): _sh_drop = self.obj_drop_fn(sh_type_name)
+                            self.w(" = _tr_shared_new(" + self.gen_expr(v) + ", " + _sh_drop + ");\n")
                         self.shared_vars.insert(n, sh_type_name)
                     else:
                         # For empty list literals, propagate annotation type so suffix is correct
@@ -5915,7 +6133,15 @@ pub class CGenerator:
             case HirStmt.SChanSelect(cs_arms):
                 self.gen_chan_select(cs_arms, indent)
             case HirStmt.SAutoDrop(adn, adc):
-                if self.value_types.contains(adc):
+                if self.shared_vars.contains(adn):
+                    # `shared` (Shared[T]/Rc) local: release its strong reference. The
+                    # payload is reclaimed at strong==0 and the block survives any Weak.
+                    self.w(pad + "_tr_shared_drop(" + _safe_c_varname(adn) + ");\n")
+                elif adc == "Weak":
+                    # Weak[T] handle: drop the weak ref (frees the block if it was the
+                    # last one and the payload is already gone).
+                    self.w(pad + "_tr_weak_drop(" + _safe_c_varname(adn) + ");\n")
+                elif self.value_types.contains(adc):
                     # Value type (@value_type): lives on the stack, holds no owned
                     # heap, no refcount — nothing to drop.
                     pass
@@ -5925,10 +6151,23 @@ pub class CGenerator:
                 elif adc == "List" or adc == "Vec":
                     if self.coll_local_sfx.contains(adn):
                         mut _ad_sfx = self.coll_local_sfx.get(adn)
-                        self.w(pad + "List_" + _ad_sfx + "_free(" + _safe_c_varname(adn) + ");\n")
+                        if _ad_sfx.len() > 4 and _ad_sfx.slice(0, 4) == "ptr@":
+                            # Heap-class-element list: release each owned element.
+                            self.w(pad + "List_ptr_free_obj(" + _safe_c_varname(adn) + ", " + self.obj_drop_fn(_ad_sfx.slice(4, _ad_sfx.len())) + ");\n")
+                        else:
+                            self.w(pad + "List_" + _ad_sfx + "_free(" + _safe_c_varname(adn) + ");\n")
                 elif adc == "Dict" or adc == "Map" or adc == "Set":
                     mut _ad_strval = self.coll_local_strval.contains(adn)
-                    if self.coll_local_vtcoll.contains(adn):
+                    mut _ad_dsfx = ""
+                    if self.coll_local_sfx.contains(adn): _ad_dsfx = self.coll_local_sfx.get(adn)
+                    if _ad_dsfx.len() > 4 and _ad_dsfx.slice(0, 2) == "d@":
+                        # Heap-class-VALUE dict: release each owned value. "d@<i|s>@<Class>".
+                        mut _dcls = _ad_dsfx.slice(4, _ad_dsfx.len())
+                        if _ad_dsfx.slice(2, 3) == "i":
+                            self.w(pad + "_tr_idict_free_objval(" + _safe_c_varname(adn) + ", " + self.obj_drop_fn(_dcls) + ");\n")
+                        else:
+                            self.w(pad + "Dict_free_objval(" + _safe_c_varname(adn) + ", " + self.obj_drop_fn(_dcls) + ");\n")
+                    elif self.coll_local_vtcoll.contains(adn):
                         # Typed inline value-type collection: Dict_str_Point_free / Set_Point_free
                         self.w(pad + self.coll_local_vtcoll.get(adn) + "_free(" + _safe_c_varname(adn) + ");\n")
                     elif self.coll_local_idict.contains(adn):
@@ -6716,6 +6955,8 @@ pub class CGenerator:
                 if ramm.ret_ty as usize != 0 as usize: self._scan_ptr_aliased(ramm.ret_ty)
                 rammi = rammi + 1
             i = i + 1
+        # Collection-field ownership scan (drives _trdrop_T's collection-field free).
+        self._scan_coll_fields(prog)
         i = 0
         while i < prog.decorator_defs.len:
             mut _dd = prog.decorator_defs.get(i)

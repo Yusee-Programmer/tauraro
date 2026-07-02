@@ -948,6 +948,15 @@ extend Sema:
         if n == "i8" or n == "i16" or n == "i32" or n == "i64": return true
         if n == "u8" or n == "u16" or n == "u32" or n == "u64" or n == "usize": return true
         if n == "f32" or n == "f64": return true
+        # A refcounted heap-class element: the collection co-owns each element
+        # (insert retains), and its typed free releases them (codegen gates the
+        # actual release on is_heap_class_tn, so raw pointer-aliased element types
+        # like Pointer[T] fall back to a container-only free). Value types / enums
+        # are stored inline and need no per-element drop.
+        if self.classes.contains(n):
+            if not self.classes.get(n).is_class: return false   # @value_type: inline, no drop
+            if n == "Vec" or n == "Map" or n == "List" or n == "Dict" or n == "Set" or n == "Box" or n == "Mutex" or n == "RwLock" or n == "Atomic" or n == "Shared" or n == "Option" or n == "Result" or n == "Chan" or n == "StringBuilder" or n == "StringObj": return false
+            return true
         return false
 
     # A local is auto-dropped at scope exit if it is a user-defined class with a
@@ -956,8 +965,20 @@ extend Sema:
     pub def is_droppable_sym(self, sym: Symbol) -> bool:
         if sym.kind != SymbolKind.SVariable: return false
         if sym.is_param: return false
-        if sym.is_shared: return false
         if sym.ty as usize == 0 as usize: return false
+        # A `shared` (Shared[T]/Rc) local owns one strong reference to a control
+        # block; auto-drop it (`_tr_shared_drop`) at scope exit so the refcount is
+        # released and the payload reclaimed at count 0 (codegen routes SAutoDrop for
+        # a shared_vars name to _tr_shared_drop). A `Weak[T]` local likewise releases
+        # its weak handle. Both were previously leaked (manual `.drop()` only).
+        if sym.is_shared:
+            if sym.is_moved or sym.is_maybe_moved or sym.is_freed: return false
+            if not sym.is_init or sym.is_maybe_init: return false
+            return true
+        if sym.ty.read().name == "Weak":
+            if sym.is_moved or sym.is_maybe_moved or sym.is_freed: return false
+            if not sym.is_init or sym.is_maybe_init: return false
+            return true
         # A value BORROWED from a collection element (`x = coll.get(i)`) ALIASES that
         # element — it does NOT own it. Auto-dropping it (releasing its str fields /
         # calling free) would free data the collection still owns: a use-after-free.
@@ -2960,6 +2981,15 @@ extend Sema:
                                 self.mark_moved(m1_src)
                         case _: pass
                 self.declare(name, SymbolKind.SVariable, box_asttype(ty), is_mut)
+                # A `shared` local: record is_shared on the symbol so the Shared[T]
+                # control methods (clone/downgrade/drop) resolve on it and its drop is
+                # routed to _tr_shared_drop.
+                if is_shared and self.scopes.len > 0:
+                    mut _sh_scope = self.scopes.get(self.scopes.len - 1)
+                    if _sh_scope.variables.contains(name):
+                        mut _sh_sym = _sh_scope.variables.get(name)
+                        _sh_sym.is_shared = true
+                        _sh_scope.variables.insert(name, _sh_sym)
                 # [L-3/L-4] region derivation: record which region this local derives
                 # from (its initial value).
                 if val_ptr as usize != 0 as usize:
@@ -4186,8 +4216,12 @@ extend Sema:
                 # `Coro.spawn` (the low-level green-thread primitive that takes
                 # raw Pointer args in unsafe blocks), which must NOT be checked.
                 mut _recv_name = ""
+                mut _recv_is_shared = false
                 match obj.read():
-                    case Expr.EIdent(_rn): _recv_name = _rn
+                    case Expr.EIdent(_rn):
+                        _recv_name = _rn
+                        mut _rsym = self.resolve(_rn)
+                        if _rsym.name != "" and _rsym.is_shared: _recv_is_shared = true
                     case _: pass
                 # Callable-field call: obj.f(args) where f is a def(...)-typed
                 # FIELD (not a method) -> lower to field access + indirect call.
@@ -4443,6 +4477,18 @@ extend Sema:
                             opt_ty.args.push(box_asttype(hobj_ty.args.get(0).read()))
                         ret_ty = opt_ty
                     elif method == "is_alive": ret_ty = AstType.init("bool")
+                # A `shared` LOCAL is typed as its inner payload T (so `s.field`/`s.method()`
+                # auto-deref), but the Shared[T] control methods still apply to the box. Route
+                # them here so they don't hit the payload-class [E-1] "no method" check.
+                elif _recv_is_shared and (method == "clone" or method == "downgrade" or method == "drop" or method == "is_null"):
+                    if method == "clone": ret_ty = hobj_ty
+                    elif method == "is_null": ret_ty = AstType.init("bool")
+                    elif method == "drop": ret_ty = AstType.init("void")
+                    elif method == "downgrade":
+                        mut _wk_ty = AstType.init("Weak")
+                        _wk_ty.args = Vec[Pointer[AstType]].init(1)
+                        _wk_ty.args.push(box_asttype(hobj_ty))
+                        ret_ty = _wk_ty
                 elif self.interfaces as usize != 0 as usize and self.interfaces.contains(hobj_ty.name):
                     mut _iface_def = self.interfaces.get(hobj_ty.name)
                     mut _imi = 0

@@ -50,6 +50,19 @@ extend Holder:
         h.t = tg
         return h
 
+# Bin OWNS a collection field of heap-class elements (only ever assigned a fresh
+# Vec) — its drop must free the Vec AND release each Tag (recursive _trdrop_T +
+# _coll_field_free_call + List_ptr_free_obj).
+class Bin:
+    pub items: Vec[Tag]
+extend Bin:
+    pub def init() -> Bin:
+        mut b = Bin()
+        b.items = Vec[Tag].init(4)
+        return b
+    pub def put(self, t: Tag):
+        self.items.append(t)
+
 # Exercise the string + map paths that are fully ref-counted/auto-dropped.
 def workload():
     mut s = "abc" + "def"          # fresh concat, auto-dropped at scope exit
@@ -149,6 +162,30 @@ def workload():
     mut t2 = make_tag("h-", dd)    # local owns the Tag
     mut hd = Holder.init(t2)       # Holder co-owns it in field .t
     mut hlen = hd.t.name.len()
+
+    # Inline owned rvalue as a call argument: the fresh Tag from make_tag is passed
+    # directly (no local bind) — gen_args must hoist+release the arg temp.
+    mut hd2 = Holder.init(make_tag("q-", dd))
+    mut h2len = hd2.t.name.len()
+
+    # List with heap-class elements: the list co-owns each; its drop releases them.
+    mut tl = Vec[Tag].init(4)
+    tl.append(make_tag("l-", dd))
+    tl.append(make_tag("m-", dd))
+    mut tllen = tl.len
+
+    # Dict with heap-class values: co-owns each value; drop releases them (Dict_free_objval).
+    mut dm: Dict[str, Tag] = {}
+    dm.insert("x", make_tag("dx-", dd))
+    dm.insert("y", make_tag("dy-", dd))
+    mut dmlen = dm.len()
+
+    # Class OWNING a collection field of heap-class elements: drop frees the field's
+    # Vec and releases each element (collection-field free + element release).
+    mut bin = Bin.init()
+    bin.put(make_tag("b1-", dd))
+    bin.put(make_tag("b2-", dd))
+    mut binlen = bin.items.len
 
 def main():
     workload()                                  # warm up (one-time allocations)

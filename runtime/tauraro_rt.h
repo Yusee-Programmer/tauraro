@@ -409,15 +409,23 @@ static inline TrStr _tr_str_unbox(void* p) {
     return *(TrStr*)p;
 }
 /* ── Shared ownership: reference-counted box (replaces Rc/Arc/Mutex in one keyword) ── */
+/* Control block for Shared[T] (Rc) and Weak[T]. The payload is destroyed when the
+ * STRONG count hits 0; the block itself lingers until the WEAK count is also 0, so
+ * a Weak[T] can safely observe liveness / attempt upgrade without dangling. This is
+ * what lets Weak[T] break an ownership CYCLE with no leak and no use-after-free. */
 typedef struct _TrSharedBox {
-    _Atomic(int) refcount;
+    _Atomic(int) refcount;    /* strong */
+    _Atomic(int) weakcount;   /* outstanding Weak[T] handles */
     void* data;
+    void (*drop)(void*);      /* payload field-drop (_trdrop_T); NULL → plain free */
 } _TrSharedBox;
 
-static inline _TrSharedBox* _tr_shared_new(void* data) {
+static inline _TrSharedBox* _tr_shared_new(void* data, void (*drop)(void*)) {
     _TrSharedBox* b = (_TrSharedBox*)_tr_checked_alloc(sizeof(_TrSharedBox));
     atomic_store(&b->refcount, 1);
+    atomic_store(&b->weakcount, 0);
     b->data = data;
+    b->drop = drop;
     return b;
 }
 static inline _TrSharedBox* _tr_shared_clone(_TrSharedBox* b) {
@@ -427,16 +435,22 @@ static inline _TrSharedBox* _tr_shared_clone(_TrSharedBox* b) {
 static inline void _tr_shared_drop(_TrSharedBox* b) {
     if (!b) return;
     if (atomic_fetch_sub(&b->refcount, 1) == 1) {
-        _tr_free(b->data);
-        _tr_free(b);
+        /* Release the payload: a plain-ARC class (drop set) releases its owned
+         * fields + struct via the refcount; otherwise a plain free. */
+        if (b->drop) { _tr_obj_release(b->data, b->drop); } else { _tr_free(b->data); }
+        b->data = NULL;
+        /* Keep the (payload-less) block alive while any Weak[T] still points here,
+         * so their is_alive()/upgrade() read a valid refcount==0 instead of freed memory. */
+        if (atomic_load(&b->weakcount) == 0) { _tr_free(b); }
     }
 }
-/* ── Weak[T] — non-owning reference to a Shared[T] box ── */
+/* ── Weak[T] — non-owning reference to a Shared[T] box (does NOT keep it alive) ── */
 typedef struct _TrWeakBox {
     _TrSharedBox* box;
 } _TrWeakBox;
 static inline _TrWeakBox* _tr_weak_new(_TrSharedBox* b) {
     _TrWeakBox* w = (_TrWeakBox*)_tr_checked_alloc(sizeof(_TrWeakBox));
+    if (b) atomic_fetch_add(&b->weakcount, 1);
     w->box = b;
     return w;
 }
@@ -450,6 +464,19 @@ static inline _TrSharedBox* _tr_weak_upgrade(_TrWeakBox* w) {
     if (old <= 0) return NULL;
     atomic_fetch_add(&w->box->refcount, 1);
     return w->box;
+}
+/* Drop a Weak[T]: decrement the box's weak count; if the payload is already gone
+ * (strong==0) and this was the last weak handle, reclaim the block. Also frees the
+ * small weak handle itself. */
+static inline void _tr_weak_drop(_TrWeakBox* w) {
+    if (!w) return;
+    _TrSharedBox* b = w->box;
+    if (b) {
+        if (atomic_fetch_sub(&b->weakcount, 1) == 1 && atomic_load(&b->refcount) <= 0) {
+            _tr_free(b);
+        }
+    }
+    _tr_free(w);
 }
 
 static inline void* _tr_c_memcpy(void* dst, void* src, size_t n) { return memcpy(dst, src, n); }
@@ -3455,6 +3482,17 @@ static void      Dict_free_strval(Dict* d) {
     }
     _tr_free(d->buckets); _tr_free(d);
 }
+/* Dict[str, HeapClass]: values are owned refcounted instances (void*); the dict
+   co-owns each (insert-retain), so release each before freeing nodes/keys/struct. */
+static void      Dict_free_objval(Dict* d, void(*drop)(void*)) {
+    if (!d) return;
+    _TR_MEMCOUNT_DICT_DEC();
+    for (size_t i=0; i<d->cap; i++) {
+        _DictNode* n=d->buckets[i];
+        while (n) { _DictNode* nx=n->next; if(n->key) _tr_free(n->key); _tr_obj_release(n->value, drop); _tr_free(n); n=nx; }
+    }
+    _tr_free(d->buckets); _tr_free(d);
+}
 /* Free all entries (and their key strings) but keep the Dict struct itself
    alive and reusable - used by clear(), unlike Dict_free() which also frees
    the struct (would otherwise leave m a dangling pointer after clear()). */
@@ -3631,6 +3669,10 @@ static inline List_ptr* List_ptr_new(void) { List_ptr* l=(List_ptr*)malloc(sizeo
 static inline void List_ptr_append(List_ptr* l, void* val) { if(l->len==l->capacity){ l->capacity*=2; l->data=(void**)realloc(l->data,sizeof(void*)*l->capacity); } l->data[l->len++]=val; }
 static inline void* List_ptr_pop(List_ptr* l) { if(!l||l->len==0) return NULL; l->len--; return l->data[l->len]; }
 static inline void List_ptr_free(List_ptr* l) { if(l){ _TR_MEMCOUNT_LIST_DEC(); _tr_free(l->data); _tr_free(l); } }
+/* Free a List_ptr whose elements are owned refcounted heap-class instances:
+   release each element (via its _trdrop_T) before freeing the buffer. The list
+   co-owns each element (append retains), so this balances the count. */
+static inline void List_ptr_free_obj(List_ptr* l, void(*drop)(void*)) { if(l){ for(size_t _i=0;_i<l->len;_i++){ _tr_obj_release(l->data[_i], drop); } _TR_MEMCOUNT_LIST_DEC(); _tr_free(l->data); _tr_free(l); } }
 
 typedef struct { _Bool* data; size_t len; size_t capacity; } List_bool;
 static inline List_bool* List_bool_new(void) { List_bool* l=(List_bool*)malloc(sizeof(List_bool)); l->data=(_Bool*)malloc(sizeof(_Bool)*8); l->len=0; l->capacity=8; return l; }
@@ -5342,6 +5384,16 @@ static void _tr_idict_free_strval(TrIDict* d) {
             _tr_free(n);
             n=nx;
         }
+    }
+    _tr_free(d->buckets); _tr_free(d);
+}
+/* Dict[int, HeapClass]: values are owned refcounted instances stored directly as
+   void* (the dict co-owns each via insert-retain) — release each before teardown. */
+static void _tr_idict_free_objval(TrIDict* d, void(*drop)(void*)) {
+    if (!d) return;
+    for (size_t i=0;i<d->cap;i++) {
+        _TrIDictNode* n=d->buckets[i];
+        while(n){ _TrIDictNode* nx=n->next; _tr_obj_release(n->value, drop); _tr_free(n); n=nx; }
     }
     _tr_free(d->buckets); _tr_free(d);
 }

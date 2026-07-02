@@ -1329,6 +1329,9 @@ __attribute__((hot)) List_ptr* compute_liveness(MirFunction* mf) {
         }
     }
     /* pass */
+    List_ptr_free_obj(uses, _trdrop_LiveSet);
+    List_ptr_free_obj(defs, _trdrop_LiveSet);
+    List_ptr_free_obj(live_in, _trdrop_LiveSet);
     return live_out;
 }
 
@@ -1789,6 +1792,9 @@ __attribute__((hot)) List_ptr* compute_drops(MirFunction* mf, List_ptr* live_out
         _tr_obj_release(dead_i, _trdrop_LiveSet);
     }
     /* pass */
+    List_ptr_free_obj(gen, _trdrop_LiveSet);
+    List_ptr_free_obj(kill, _trdrop_LiveSet);
+    List_ptr_free_obj(own_out, _trdrop_LiveSet);
     _tr_obj_release(universe, _trdrop_LiveSet);
     return drops;
 }
@@ -2236,6 +2242,7 @@ __auto_type wv = _t308.data.MAssign.value;
     if ((mf->borrows->len < 2LL)) {
         /* pass */
         _tr_obj_release(mf, _trdrop_MirFunction);
+        List_ptr_free_obj(live, _trdrop_LiveSet);
         return out;
     }
     /* pass */
@@ -2323,6 +2330,7 @@ __auto_type wv = _t308.data.MAssign.value;
     }
     /* pass */
     _tr_obj_release(mf, _trdrop_MirFunction);
+    List_ptr_free_obj(live, _trdrop_LiveSet);
     return out;
 }
 
@@ -2477,6 +2485,7 @@ __attribute__((hot)) List_ptr* mir_if_drop_plan(HirFunction* hf) {
     }
     /* pass */
     _tr_obj_release(mf, _trdrop_MirFunction);
+    List_ptr_free_obj(drops, _trdrop_LiveSet);
     return out;
 }
 
@@ -2637,6 +2646,7 @@ __attribute__((hot)) TrStr dump_mir(MirProgram* mp) {
         /* pass */
         fi = (fi + 1LL);
         _tr_str_release(tag);
+        List_ptr_free_obj(drops, _trdrop_LiveSet);
     }
     /* pass */
     return out;

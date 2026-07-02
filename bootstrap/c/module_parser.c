@@ -4036,9 +4036,11 @@ __attribute__((hot)) Decl* Parser_parse_decl(Parser* self) {
     __auto_type _t188 = Parser_peek(self);
     if (_t188.tag == Token_KwFrom) {
         /* pass */
+        List_ptr_free_obj(decorators, _trdrop_Decorator);
         return Parser_parse_from_import(self);
     } else if (_t188.tag == Token_KwImport) {
         /* pass */
+        List_ptr_free_obj(decorators, _trdrop_Decorator);
         return Parser_parse_import(self);
     } else if (_t188.tag == Token_Ident) {
         __auto_type type_kw = _t188.data.Ident.name;
@@ -4057,6 +4059,7 @@ __attribute__((hot)) Decl* Parser_parse_decl(Parser* self) {
                 /* pass */
                 Parser_expect_newline(self);
                 /* pass */
+                List_ptr_free_obj(decorators, _trdrop_Decorator);
                 return box_decl(Decl_ctor_DTypeAlias(alias_name, box_asttype(target_ty)));
             }
         }
