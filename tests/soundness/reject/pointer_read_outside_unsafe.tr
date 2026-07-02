@@ -1,0 +1,12 @@
+# EXPECT: [P-2]
+# Dereferencing a raw pointer can read freed or invalid memory (temporal/spatial
+# UB). Under --strict, `.read()` in SAFE code is a hard error — raw pointer access
+# is the audited-`unsafe` core's job, exactly like Rust requires `unsafe` to deref
+# a `*const T`. (std/core library code is trusted and exempt.)
+def main():
+    unsafe:
+        mut p = alloc[int](1)
+        p.write(0, 5)
+    mut q = alloc[int](1)      # (also [U-1], but the point is the read below)
+    mut v = q.read()           # [P-2]: raw deref outside unsafe
+    print(v)

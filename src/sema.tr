@@ -173,6 +173,7 @@ pub class Sema:
     pub branch_init_buf: Vec[str]       # Fix 4: names init'd in current branch
     pub copy_classes: Map[str, bool]    # Fix 3: auto-inferred Copy classes (all-primitive fields)
     pub in_unsafe: bool                 # Gap 6: inside an unsafe: block
+    pub cur_fn_is_lib: bool             # currently lowering a trusted std/core function (audited unsafe core) — exempt from [P-2]
     pub current_func_ret_from: str      # Gap 1: 'from' lifetime param of current function return
     pub current_func_ret_borrow_str: bool   # current fn returns `ref str from ...` (a str borrow)
     pub current_func_ret_regions: Vec[str]  # explicit `from a, b` region list (empty if none/auto-inferred)
@@ -272,6 +273,7 @@ extend Sema:
         s.branch_init_buf   = Vec[str].init(0)
         s.copy_classes           = Map[str, bool].init(32)
         s.in_unsafe              = false
+        s.cur_fn_is_lib          = false
         s.current_func_ret_from  = ""
         s.current_func_ret_borrow_str = false
         s.current_func_ret_regions = Vec[str].init(0)
@@ -649,6 +651,8 @@ extend Sema:
                         mut inner_nm = arg_ty.args.get(0).read().name
                         if not self.is_sendable_type(inner_nm):
                             self.error("[T-1] 'Shared[" + inner_nm + "]' cannot safely cross thread boundaries because '" + inner_nm + "' is not Sendable.\n      FIX: Add 'implements Sendable' to '" + inner_nm + "' and ensure all mutable fields use Atomic[T] or Mutex[T].")
+                    elif self.strict_mode and self._is_rc_class(arg_ty.name):
+                        self.error("[T-7] '" + arg_ty.name + "' is a plain reference-counted class — its refcount is thread-local (non-atomic), so it is not 'Send' and cannot cross a thread boundary (this is exactly why Rust's 'Rc' is '!Send').\n      FIX: share it as 'Shared[" + arg_ty.name + "]' (atomic refcount, like Rust's 'Arc'), or 'Mutex[" + arg_ty.name + "]' for exclusive access.")
                     elif not self.is_sendable_type(arg_ty.name):
                         self.error("[T-1] Type '" + arg_ty.name + "' is not Sendable and cannot be safely shared across threads.\n      FIX: Wrap in Mutex[" + arg_ty.name + "] for exclusive access, or Atomic[T] for counters/flags.\n      Or add 'implements Sendable' to '" + arg_ty.name + "' to confirm it is thread-safe.")
                     csi = csi + 1
@@ -662,6 +666,8 @@ extend Sema:
                         mut inner_nm2 = arg_ty2.args.get(0).read().name
                         if not self.is_sendable_type(inner_nm2):
                             self.error("[T-1] 'Shared[" + inner_nm2 + "]' cannot safely cross thread boundaries because '" + inner_nm2 + "' is not Sendable.\n      FIX: Add 'implements Sendable' to '" + inner_nm2 + "' and protect mutable fields with Atomic[T] or Mutex[T].")
+                    elif self.strict_mode and self._is_rc_class(arg_ty2.name):
+                        self.error("[T-7] '" + arg_ty2.name + "' is a plain reference-counted class — its refcount is thread-local (non-atomic), so it is not 'Send' and cannot cross a thread boundary.\n      FIX: share it as 'Shared[" + arg_ty2.name + "]' (atomic refcount) or 'Mutex[" + arg_ty2.name + "]' for exclusive access.")
                     elif not self.is_sendable_type(arg_ty2.name):
                         self.error("[T-1] Type '" + arg_ty2.name + "' is not Sendable and cannot be safely shared across threads.\n      FIX: Wrap in Mutex[" + arg_ty2.name + "].")
                     csmi = csmi + 1
@@ -2524,6 +2530,8 @@ extend Sema:
 
     pub def lower_func(self, f: FunctionDef) -> HirFunction:
         self.current_line = f.line
+        mut _saved_fn_is_lib = self.cur_fn_is_lib
+        self.cur_fn_is_lib = f.is_lib
         # Rule N-1: Function name check
         # Top-level functions cannot shadow reserved built-ins.
         # Methods (current_class_name != "") are exempt - len/abs/etc. are valid method names.
@@ -2729,6 +2737,7 @@ extend Sema:
         self.current_func_ret_regions = saved_ret_regions
         self.current_func_outlives_a = saved_outlives_a
         self.current_func_outlives_b = saved_outlives_b
+        self.cur_fn_is_lib = _saved_fn_is_lib
         return hf
 
     pub def lower_class(self, c: ClassDef) -> HirClass:
@@ -4423,7 +4432,12 @@ extend Sema:
                             case _: ret_ty = hobj_ty
                     else:
                         ret_ty = hobj_ty
-                elif method == "offset": ret_ty = hobj_ty
+                elif method == "offset":
+                    # [P-2] (--strict): raw pointer ARITHMETIC can fabricate an
+                    # out-of-bounds pointer — only allowed inside `unsafe:`.
+                    if self.strict_mode and not self.cur_fn_is_lib and hobj_ty.name == "Pointer" and not self.in_unsafe:
+                        self.error("[P-2] '.offset()' does raw pointer arithmetic (can create an out-of-bounds pointer) and must be inside an 'unsafe:' block under --strict.\n      FIX: wrap it in 'unsafe:', or use a safe slice / Vec[T] instead of pointer math.")
+                    ret_ty = hobj_ty
                 # List/Vec aggregate methods - return element type or int
                 elif (hobj_ty.name == "List" or hobj_ty.name == "Vec") and (method == "sum" or method == "min" or method == "max" or method == "min_val" or method == "max_val"):
                     if hobj_ty.args.len > 0: ret_ty = hobj_ty.args.get(0).read()
@@ -4438,7 +4452,12 @@ extend Sema:
                 elif (hobj_ty.name == "List" or hobj_ty.name == "Vec") and (method == "index_of" or method == "last_index_of" or method == "count"): ret_ty = AstType.init("int")
                 elif (hobj_ty.name == "List" or hobj_ty.name == "Vec") and method == "join": ret_ty = AstType.init("str")
                 elif method == "read":
-                    if hobj_ty.name == "Pointer" and hobj_ty.args.len > 0: ret_ty = hobj_ty.args.get(0).read()
+                    if hobj_ty.name == "Pointer" and hobj_ty.args.len > 0:
+                        # [P-2] (--strict): DEREFERENCING a raw pointer may read freed /
+                        # invalid memory (temporal + spatial UB) — only inside `unsafe:`.
+                        if self.strict_mode and not self.cur_fn_is_lib and not self.in_unsafe:
+                            self.error("[P-2] '.read()' dereferences a raw pointer (may read freed or invalid memory) and must be inside an 'unsafe:' block under --strict.\n      FIX: wrap it in 'unsafe:', or hold the value in a safe Box[T] / Vec[T] / class reference instead of a raw pointer.")
+                        ret_ty = hobj_ty.args.get(0).read()
                     else: ret_ty = AstType.init("int")
                 elif method == "as_str" or method == "to_str": ret_ty = AstType.init("str")
                 elif method == "len" or method == "__len__": ret_ty = AstType.init("int")

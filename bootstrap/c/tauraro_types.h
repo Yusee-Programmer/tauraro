@@ -1808,6 +1808,7 @@ typedef struct FunctionDef {
     bool is_public;
     bool is_export;
     bool is_macro;
+    bool is_lib;
     Block* body;
     long long line;
     List_TrStr* outlives_a;
@@ -2428,6 +2429,7 @@ typedef struct Sema {
     List_TrStr* branch_init_buf;
     TrMap* copy_classes;
     bool in_unsafe;
+    bool cur_fn_is_lib;
     TrStr current_func_ret_from;
     bool current_func_ret_borrow_str;
     List_TrStr* current_func_ret_regions;
@@ -2939,6 +2941,10 @@ __attribute__((hot)) TrStr ModuleResolver_dir_of_path(ModuleResolver* self, TrSt
 __attribute__((hot)) TrStr ModuleResolver_base_of_path(ModuleResolver* self, TrStr path);
 __attribute__((hot)) Program* ModuleResolver_resolve_main(ModuleResolver* self, TrStr main_path);
 __attribute__((hot)) void ModuleResolver_resolve_file(ModuleResolver* self, TrStr path, bool is_root);
+__attribute__((hot)) bool ModuleResolver__path_is_lib(ModuleResolver* self, TrStr path);
+__attribute__((hot)) bool ModuleResolver__contains(ModuleResolver* self, TrStr hay, TrStr needle);
+__attribute__((hot)) void ModuleResolver__mark_decl_lib(ModuleResolver* self, Decl* dp);
+__attribute__((hot)) void ModuleResolver__mark_methods_lib(ModuleResolver* self, ClassDef* c);
 __attribute__((hot)) void ModuleResolver_resolve_recursive(ModuleResolver* self, TrStr path);
 __attribute__((hot)) void ModuleResolver_resolve_module_path(ModuleResolver* self, TrStr mod_path);
 __attribute__((malloc,returns_nonnull,hot)) HirFStringPart* HirFStringPart_init();

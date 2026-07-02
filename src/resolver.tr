@@ -242,8 +242,48 @@ extend ModuleResolver:
                     # their own module's generated .c file, so they MUST be in all_decls
                     # for generate_module_c to emit their bodies. Filtering them out here
                     # causes "implicit declaration" / missing-body GCC errors.
+                    # Trusted standard library (std/core): tag its functions is_lib so the
+                    # strict raw-pointer checks ([P-2]) treat them as an audited unsafe
+                    # core (like Rust's std), applying only to the user's own code.
+                    if not is_root and self._path_is_lib(path):
+                        self._mark_decl_lib(decl_ptr)
                     self.all_decls.push(decl_ptr)
                     self.all_decl_modules.push(self.current_mod)
+            i = i + 1
+
+    # True when `path` is under the trusted standard library (std/ or the bootstrap
+    # core/ stdlib) — those modules are the audited unsafe core, exempt from [P-2].
+    pub def _path_is_lib(self, path: str) -> bool:
+        return self._contains(path, "std/") or self._contains(path, "std\\") or self._contains(path, "core/") or self._contains(path, "core\\")
+
+    pub def _contains(self, hay: str, needle: str) -> bool:
+        mut hl = hay.len()
+        mut nl = needle.len()
+        if nl == 0 or nl > hl: return false
+        mut i = 0
+        while i + nl <= hl:
+            if hay.slice(i, i + nl) == needle: return true
+            i = i + 1
+        return false
+
+    # Tag every FunctionDef reachable in a decl as is_lib (trusted library code).
+    pub def _mark_decl_lib(self, dp: Pointer[Decl]):
+        if dp as usize == 0 as usize: return
+        match dp.read():
+            case Decl.DFunction(f): f.is_lib = true
+            case Decl.DClass(c): self._mark_methods_lib(c)
+            case Decl.DActor(c): self._mark_methods_lib(c)
+            case Decl.DExtend(_, ms):
+                mut i = 0
+                while i < ms.len:
+                    ms.get(i).is_lib = true
+                    i = i + 1
+            case _: pass
+
+    pub def _mark_methods_lib(self, c: ClassDef):
+        mut i = 0
+        while i < c.methods.len:
+            c.methods.get(i).is_lib = true
             i = i + 1
 
     # Compatibility shim - resolve_recursive kept so existing callers compile.

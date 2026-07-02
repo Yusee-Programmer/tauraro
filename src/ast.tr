@@ -351,6 +351,7 @@ pub class FunctionDef:
     pub is_public: bool
     pub is_export: bool   # `export def` - emit a C-ABI dllexport/visibility wrapper for FFI
     pub is_macro: bool    # `macro def` - compile-time code-generating macro (expanded before sema)
+    pub is_lib: bool      # from the trusted standard library (std/core) - exempt from the strict raw-pointer checks ([P-2]), like Rust's std audited-`unsafe` core
     pub body: Block
     pub line: int
     # `where a outlives b` region bounds (Gap 4) — parallel: outlives_a[i] outlives outlives_b[i].
@@ -373,6 +374,7 @@ extend FunctionDef:
         f.is_public = false
         f.is_export = false
         f.is_macro = false
+        f.is_lib = false
         f.body = Block.init()
         f.line = 0
         f.outlives_a = Vec[str].init(0)

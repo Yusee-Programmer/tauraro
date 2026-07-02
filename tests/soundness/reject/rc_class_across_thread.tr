@@ -1,0 +1,16 @@
+# EXPECT: [T-7]
+# A plain reference-counted class is thread-LOCAL: its refcount is non-atomic (fast,
+# like Rust's `Rc`). Passing it across a thread boundary would let two threads race
+# on that count, so under --strict it is `!Send` — a hard error. Shared cross-thread
+# ownership must use `Shared[T]` (atomic refcount, like `Arc`), matching the choice
+# to keep plain-class ARC non-atomic and enforce thread-locality.
+class Job implements Sendable:
+    pub id: int
+def run(j: Job) -> void:
+    mut x = j.id
+async def main():
+    mut j = Job()
+    j.id = 1
+    task_group:
+        spawn run(j)          # [T-7]: plain Rc class cannot cross a thread
+    print("done")
