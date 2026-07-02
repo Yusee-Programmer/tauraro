@@ -2942,6 +2942,7 @@ __attribute__((hot)) TrStr ModuleResolver_base_of_path(ModuleResolver* self, TrS
 __attribute__((hot)) Program* ModuleResolver_resolve_main(ModuleResolver* self, TrStr main_path);
 __attribute__((hot)) void ModuleResolver_resolve_file(ModuleResolver* self, TrStr path, bool is_root);
 __attribute__((hot)) bool ModuleResolver__path_is_lib(ModuleResolver* self, TrStr path);
+__attribute__((hot)) bool ModuleResolver__source_is_trusted(ModuleResolver* self, TrStr source);
 __attribute__((hot)) bool ModuleResolver__contains(ModuleResolver* self, TrStr hay, TrStr needle);
 __attribute__((hot)) void ModuleResolver__mark_decl_lib(ModuleResolver* self, Decl* dp);
 __attribute__((hot)) void ModuleResolver__mark_methods_lib(ModuleResolver* self, ClassDef* c);

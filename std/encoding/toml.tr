@@ -5,25 +5,25 @@
 # ([...]), inline tables ({ k = v }), and `[table]` / `[a.b.c]` table
 # headers (nested tables). Dates/times are parsed as strings.
 #
-# Usage:
+# SAFE API: `TomlValue` is an ARC class — the parse tree is a tree of owned
+# ARC nodes (acyclic, so no [S-2] cycle; reclaimed recursively by ARC). No raw
+# pointers are exposed, so callers never need `unsafe:`:
 #   from std.encoding.toml import TomlValue, Toml
 #   mut t = Toml.parse("title = \"hello\"\n[server]\nport = 8080\n")
-#   print(t.read().obj_get("server").read().obj_get("port").read().get_int())
+#   print(t.obj_get("server").obj_get("port").get_int())
 #   print(Toml.stringify(t))   # round-trips to canonical TOML
 
 from std.core.vec import Vec
 from std.core.string import StringBuilder
 
 extern "C":
-    def _tr_c_malloc(size: int) -> Pointer[char]
-    def _tr_c_free(ptr: Pointer[char])
     def _tr_strlen(s: str) -> int
     def _tr_str_to_float(s: str) -> float
     def _tr_str_to_int(s: str) -> int
     def _tr_int_to_str(n: int) -> str
     def _tr_float_to_str(n: float) -> str
 
-# TomlValue.tag constants (mirrors the JSON model).
+# TomlValue.tag constants (mirrors the JSON model). tag 0 = "none"/absent.
 pub def TOML_BOOL()  -> int: return 1
 pub def TOML_INT()   -> int: return 2
 pub def TOML_FLOAT() -> int: return 3
@@ -37,60 +37,50 @@ pub class TomlValue:
     pub i_val: int
     pub f_val: float
     pub s_val: str
-    pub items: Vec[Pointer[TomlValue]]   # array items OR table values
-    pub keys:  Vec[str]                   # table keys (parallel to items)
+    pub items: Vec[TomlValue]   # array items OR table values (owned children)
+    pub keys:  Vec[str]         # table keys (parallel to items)
 
 extend TomlValue:
-    pub def _alloc() -> Pointer[TomlValue]:
-        mut raw = _tr_c_malloc(sizeof(TomlValue)) as Pointer[TomlValue]
+    pub def _new() -> TomlValue:
         mut v = TomlValue()
         v.tag   = 0
         v.b_val = false
         v.i_val = 0
         v.f_val = 0.0
         v.s_val = ""
-        v.items = Vec[Pointer[TomlValue]].init(4)
+        v.items = Vec[TomlValue].init(4)
         v.keys  = Vec[str].init(4)
-        unsafe:
-            raw.write(v)
-            return raw
+        return v
 
-    pub def init_bool(b: bool) -> Pointer[TomlValue]:
-        mut p = TomlValue._alloc()
-        mut v = p.read(); v.tag = 1; v.b_val = b
-        unsafe: p.write(v)
-        return p
+    # The absent value (tag 0), returned by obj_get/array_get on a miss.
+    pub def none() -> TomlValue:
+        return TomlValue._new()
 
-    pub def init_int(n: int) -> Pointer[TomlValue]:
-        mut p = TomlValue._alloc()
-        mut v = p.read(); v.tag = 2; v.i_val = n
-        unsafe: p.write(v)
-        return p
+    pub def init_bool(b: bool) -> TomlValue:
+        mut v = TomlValue._new(); v.tag = 1; v.b_val = b
+        return v
 
-    pub def init_float(f: float) -> Pointer[TomlValue]:
-        mut p = TomlValue._alloc()
-        mut v = p.read(); v.tag = 3; v.f_val = f
-        unsafe: p.write(v)
-        return p
+    pub def init_int(n: int) -> TomlValue:
+        mut v = TomlValue._new(); v.tag = 2; v.i_val = n
+        return v
 
-    pub def init_str(s: str) -> Pointer[TomlValue]:
-        mut p = TomlValue._alloc()
-        mut v = p.read(); v.tag = 4; v.s_val = s
-        unsafe: p.write(v)
-        return p
+    pub def init_float(f: float) -> TomlValue:
+        mut v = TomlValue._new(); v.tag = 3; v.f_val = f
+        return v
 
-    pub def init_array() -> Pointer[TomlValue]:
-        mut p = TomlValue._alloc()
-        mut v = p.read(); v.tag = 5
-        unsafe: p.write(v)
-        return p
+    pub def init_str(s: str) -> TomlValue:
+        mut v = TomlValue._new(); v.tag = 4; v.s_val = s
+        return v
 
-    pub def init_table() -> Pointer[TomlValue]:
-        mut p = TomlValue._alloc()
-        mut v = p.read(); v.tag = 6
-        unsafe: p.write(v)
-        return p
+    pub def init_array() -> TomlValue:
+        mut v = TomlValue._new(); v.tag = 5
+        return v
 
+    pub def init_table() -> TomlValue:
+        mut v = TomlValue._new(); v.tag = 6
+        return v
+
+    pub def is_none(self)  -> bool: return self.tag == 0
     pub def is_bool(self)  -> bool: return self.tag == 1
     pub def is_int(self)   -> bool: return self.tag == 2
     pub def is_float(self) -> bool: return self.tag == 3
@@ -103,16 +93,17 @@ extend TomlValue:
     pub def get_float(self) -> float: return self.f_val
     pub def get_str(self)   -> str:   return self.s_val
 
-    pub def push(self, v: Pointer[TomlValue]):
+    pub def push(self, v: TomlValue):
         self.items.push(v)
 
     pub def array_len(self) -> int:
         return self.items.len
 
-    pub def array_get(self, i: int) -> Pointer[TomlValue]:
+    pub def array_get(self, i: int) -> TomlValue:
+        if i < 0 or i >= self.items.len: return TomlValue.none()
         return self.items.get(i)
 
-    pub def obj_set(self, key: str, v: Pointer[TomlValue]):
+    pub def obj_set(self, key: str, v: TomlValue):
         mut i = 0
         while i < self.keys.len:
             if self.keys.get(i) == key:
@@ -122,13 +113,13 @@ extend TomlValue:
         self.keys.push(key)
         self.items.push(v)
 
-    pub def obj_get(self, key: str) -> Pointer[TomlValue]:
+    pub def obj_get(self, key: str) -> TomlValue:
         mut i = 0
         while i < self.keys.len:
             if self.keys.get(i) == key:
                 return self.items.get(i)
             i = i + 1
-        return Pointer[TomlValue](0)
+        return TomlValue.none()
 
     pub def obj_has(self, key: str) -> bool:
         mut i = 0
@@ -143,7 +134,7 @@ extend TomlValue:
     pub def obj_key(self, i: int) -> str:
         return self.keys.get(i)
 
-    pub def obj_val(self, i: int) -> Pointer[TomlValue]:
+    pub def obj_val(self, i: int) -> TomlValue:
         return self.items.get(i)
 
 # ─── Parser ─────────────────────────────────────────────────────────────────
@@ -241,7 +232,7 @@ extend TomlParser:
         sb.free()
         return out
 
-    pub def parse_value(self) -> Pointer[TomlValue]:
+    pub def parse_value(self) -> TomlValue:
         self.skip_inline_ws()
         mut c = self.cur()
         if c == 34: return TomlValue.init_str(self.parse_quoted(34))
@@ -257,7 +248,7 @@ extend TomlParser:
             return TomlValue.init_bool(false)
         return self.parse_number_or_datetime()
 
-    pub def parse_number_or_datetime(self) -> Pointer[TomlValue]:
+    pub def parse_number_or_datetime(self) -> TomlValue:
         mut start = self.pos
         mut is_float = false
         mut is_date = false
@@ -296,7 +287,7 @@ extend TomlParser:
             return TomlValue.init_float(_tr_str_to_float(cleaned))
         return TomlValue.init_int(_tr_str_to_int(cleaned))
 
-    pub def parse_array(self) -> Pointer[TomlValue]:
+    pub def parse_array(self) -> TomlValue:
         self.advance()  # '['
         mut arr = TomlValue.init_array()
         while true:
@@ -307,12 +298,12 @@ extend TomlParser:
                 break
             if c == 0: break
             mut item = self.parse_value()
-            arr.read().push(item)
+            arr.push(item)
             self.skip_ws_and_comments()
             if self.cur() == 44: self.advance()  # ','
         return arr
 
-    pub def parse_inline_table(self) -> Pointer[TomlValue]:
+    pub def parse_inline_table(self) -> TomlValue:
         self.advance()  # '{'
         mut tbl = TomlValue.init_table()
         while true:
@@ -326,23 +317,24 @@ extend TomlParser:
             self.skip_inline_ws()
             if self.cur() == 61: self.advance()  # '='
             mut val = self.parse_value()
-            tbl.read().obj_set(key, val)
+            tbl.obj_set(key, val)
             self.skip_inline_ws()
             if self.cur() == 44: self.advance()  # ','
         return tbl
 
     # Navigate/create a nested table path (e.g. a.b.c) from `root`, returning
     # the deepest table.
-    pub def descend(self, root: Pointer[TomlValue], path: Vec[str]) -> Pointer[TomlValue]:
+    pub def descend(self, root: TomlValue, path: Vec[str]) -> TomlValue:
         mut cur = root
         mut i = 0
         while i < path.len:
             mut seg = path.get(i)
-            mut nxt = cur.read().obj_get(seg)
-            if nxt as usize == 0 as usize:
-                nxt = TomlValue.init_table()
-                cur.read().obj_set(seg, nxt)
-            cur = nxt
+            if cur.obj_has(seg):
+                cur = cur.obj_get(seg)
+            else:
+                mut nt = TomlValue.init_table()
+                cur.obj_set(seg, nt)
+                cur = nt
             i = i + 1
         return cur
 
@@ -362,7 +354,7 @@ extend TomlParser:
                 path.push(self.parse_key())
         return path
 
-    pub def parse(self) -> Pointer[TomlValue]:
+    pub def parse(self) -> TomlValue:
         mut root = TomlValue.init_table()
         mut cur = root
         while self.pos < self.len:
@@ -377,7 +369,7 @@ extend TomlParser:
                 self.skip_inline_ws()
                 if self.cur() == 61: self.advance()  # '='
                 mut val = self.parse_value()
-                cur.read().obj_set(key, val)
+                cur.obj_set(key, val)
         return root
 
 # ─── Serializer ───────────────────────────────────────────────────────────────
@@ -414,7 +406,7 @@ pub def _toml_write_inline(node: TomlValue, sb: StringBuilder):
         mut i = 0
         while i < node.items.len:
             if i > 0: sb.append(", ")
-            _toml_write_inline(node.items.get(i).read(), sb)
+            _toml_write_inline(node.items.get(i), sb)
             i = i + 1
         sb.append("]")
     elif node.tag == 6:
@@ -425,7 +417,7 @@ pub def _toml_write_inline(node: TomlValue, sb: StringBuilder):
             if i > 0: sb.append(", ")
             sb.append(node.keys.get(i))
             sb.append(" = ")
-            _toml_write_inline(node.items.get(i).read(), sb)
+            _toml_write_inline(node.items.get(i), sb)
             i = i + 1
         sb.append(" }")
 
@@ -439,7 +431,7 @@ pub def _toml_write_table(node: TomlValue, prefix: str, sb: StringBuilder):
     # Pass 1: scalar / array / inline values.
     mut i = 0
     while i < node.keys.len:
-        mut v = node.items.get(i).read()
+        mut v = node.items.get(i)
         if not _toml_is_table(v):
             sb.append(node.keys.get(i))
             sb.append(" = ")
@@ -449,7 +441,7 @@ pub def _toml_write_table(node: TomlValue, prefix: str, sb: StringBuilder):
     # Pass 2: nested tables as [section] headers.
     i = 0
     while i < node.keys.len:
-        mut v = node.items.get(i).read()
+        mut v = node.items.get(i)
         if _toml_is_table(v):
             mut path = node.keys.get(i)
             if prefix.len() > 0: path = prefix + "." + path
@@ -465,21 +457,21 @@ pub class Toml:
     _dummy: int
 
 extend Toml:
-    pub def parse(src: str) -> Pointer[TomlValue]:
+    pub def parse(src: str) -> TomlValue:
         mut p = TomlParser.init(src)
         return p.parse()
 
-    pub def stringify(v: Pointer[TomlValue]) -> str:
-        if v as usize == 0 as usize: return ""
+    pub def stringify(v: TomlValue) -> str:
+        if v.tag == 0: return ""
         mut sb = StringBuilder.init(256)
-        _toml_write_table(v.read(), "", sb)
+        _toml_write_table(v, "", sb)
         mut out = sb.to_owned()
         sb.free()
         return out
 
-    pub def table()           -> Pointer[TomlValue]: return TomlValue.init_table()
-    pub def bool_val(b: bool)  -> Pointer[TomlValue]: return TomlValue.init_bool(b)
-    pub def int_val(n: int)    -> Pointer[TomlValue]: return TomlValue.init_int(n)
-    pub def float_val(f: float) -> Pointer[TomlValue]: return TomlValue.init_float(f)
-    pub def str_val(s: str)    -> Pointer[TomlValue]: return TomlValue.init_str(s)
-    pub def array()            -> Pointer[TomlValue]: return TomlValue.init_array()
+    pub def table()            -> TomlValue: return TomlValue.init_table()
+    pub def bool_val(b: bool)   -> TomlValue: return TomlValue.init_bool(b)
+    pub def int_val(n: int)     -> TomlValue: return TomlValue.init_int(n)
+    pub def float_val(f: float) -> TomlValue: return TomlValue.init_float(f)
+    pub def str_val(s: str)     -> TomlValue: return TomlValue.init_str(s)
+    pub def array()             -> TomlValue: return TomlValue.init_array()

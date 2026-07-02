@@ -312,6 +312,8 @@ __attribute__((hot)) void ModuleResolver_resolve_file(ModuleResolver* self, TrSt
         }
     }
     /* pass */
+    bool file_trusted = (ModuleResolver__path_is_lib(self, path) || ModuleResolver__source_is_trusted(self, source));
+    /* pass */
     Lexer* lexer = Lexer_init(source);
     /* pass */
     List_Token* tokens = Lexer_tokenize(lexer);
@@ -348,7 +350,7 @@ __auto_type items = _t224.data.DFromImport.items;
         } else if (1) {
             __auto_type _ = _t224;
             /* pass */
-            if (((!is_root) && ModuleResolver__path_is_lib(self, path))) {
+            if (file_trusted) {
                 /* pass */
                 ModuleResolver__mark_decl_lib(self, decl_ptr);
             }
@@ -371,6 +373,25 @@ __attribute__((hot)) bool ModuleResolver__path_is_lib(ModuleResolver* self, TrSt
     return (((ModuleResolver__contains(self, path, _tr_str_lit("std/")) || ModuleResolver__contains(self, path, _tr_str_lit("std\\"))) || ModuleResolver__contains(self, path, _tr_str_lit("core/"))) || ModuleResolver__contains(self, path, _tr_str_lit("core\\")));
 }
 
+__attribute__((hot)) bool ModuleResolver__source_is_trusted(ModuleResolver* self, TrStr source) {
+    /* pass */
+    long long n = _tr_strlen(_tr_strz(source));
+    /* pass */
+    long long lim = 400LL;
+    /* pass */
+    if ((n < lim)) {
+        /* pass */
+        lim = n;
+    }
+    /* pass */
+    if ((lim <= 0LL)) {
+        /* pass */
+        return false;
+    }
+    /* pass */
+    return ({ TrStr _at_t225 = (_tr_str_wrap(_tr_str_slice(_tr_strz(source), 0LL, lim))); __auto_type _wr = (ModuleResolver__contains(self, _at_t225, _tr_str_lit("@trusted"))); _tr_str_release(_at_t225); _wr; });
+}
+
 __attribute__((hot)) bool ModuleResolver__contains(ModuleResolver* self, TrStr hay, TrStr needle) {
     /* pass */
     long long hl = _tr_strlen(_tr_strz(hay));
@@ -386,7 +407,7 @@ __attribute__((hot)) bool ModuleResolver__contains(ModuleResolver* self, TrStr h
     /* pass */
     while (((i + nl) <= hl)) {
         /* pass */
-        if (({ TrStr _wt_t225 = (_tr_str_wrap(_tr_str_slice(_tr_strz(hay), i, (i + nl)))); __auto_type _wr = ((strcmp(_wt_t225.data, _tr_strz(needle)) == 0)); _tr_str_release(_wt_t225); _wr; })) {
+        if (({ TrStr _wt_t226 = (_tr_str_wrap(_tr_str_slice(_tr_strz(hay), i, (i + nl)))); __auto_type _wr = ((strcmp(_wt_t226.data, _tr_strz(needle)) == 0)); _tr_str_release(_wt_t226); _wr; })) {
             /* pass */
             return true;
         }
@@ -404,18 +425,18 @@ __attribute__((hot)) void ModuleResolver__mark_decl_lib(ModuleResolver* self, De
         return;
     }
     /* pass */
-    __auto_type _t226 = (*dp);
-    if (_t226.tag == Decl_DFunction) {
-        __auto_type f = _t226.data.DFunction.func;
+    __auto_type _t227 = (*dp);
+    if (_t227.tag == Decl_DFunction) {
+        __auto_type f = _t227.data.DFunction.func;
         f->is_lib = true;
-    } else if (_t226.tag == Decl_DClass) {
-        __auto_type c = _t226.data.DClass.cls;
+    } else if (_t227.tag == Decl_DClass) {
+        __auto_type c = _t227.data.DClass.cls;
         ModuleResolver__mark_methods_lib(self, c);
-    } else if (_t226.tag == Decl_DActor) {
-        __auto_type c = _t226.data.DActor.cls;
+    } else if (_t227.tag == Decl_DActor) {
+        __auto_type c = _t227.data.DActor.cls;
         ModuleResolver__mark_methods_lib(self, c);
-    } else if (_t226.tag == Decl_DExtend) {
-        __auto_type ms = _t226.data.DExtend.methods;
+    } else if (_t227.tag == Decl_DExtend) {
+        __auto_type ms = _t227.data.DExtend.methods;
         /* pass */
         long long i = 0LL;
         /* pass */
@@ -426,7 +447,7 @@ __attribute__((hot)) void ModuleResolver__mark_decl_lib(ModuleResolver* self, De
             i = (i + 1LL);
         }
     } else if (1) {
-        __auto_type _ = _t226;
+        __auto_type _ = _t227;
         /* pass */
     }
 }
@@ -538,7 +559,7 @@ __attribute__((hot)) void ModuleResolver_resolve_module_path(ModuleResolver* sel
         /* pass */
         if (file_exists(pkg_src_path)) {
             /* pass */
-            ({ TrStr _at_t227 = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(base), _tr_strz(_tr_str_lit("/")))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(dir_path)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("/src"))); _tr_str_release(_cl); _cres; })); ModuleResolver_add_search_path(self, _at_t227); _tr_str_release(_at_t227); });
+            ({ TrStr _at_t228 = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(base), _tr_strz(_tr_str_lit("/")))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(dir_path)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("/src"))); _tr_str_release(_cl); _cres; })); ModuleResolver_add_search_path(self, _at_t228); _tr_str_release(_at_t228); });
             /* pass */
             bool already3 = _tr_dict_contains(self->visited, _tr_strz(pkg_src_path));
             /* pass */
@@ -574,43 +595,43 @@ __attribute__((hot)) void ModuleResolver_resolve_module_path(ModuleResolver* sel
 
 __attribute__((hot)) bool decl_is_pub(Decl d) {
     /* pass */
-    __auto_type _t228 = d;
-    if (_t228.tag == Decl_DFunction) {
-        __auto_type f = _t228.data.DFunction.func;
+    __auto_type _t229 = d;
+    if (_t229.tag == Decl_DFunction) {
+        __auto_type f = _t229.data.DFunction.func;
         /* pass */
         return f->is_public;
-    } else if (_t228.tag == Decl_DClass) {
-        __auto_type c = _t228.data.DClass.cls;
+    } else if (_t229.tag == Decl_DClass) {
+        __auto_type c = _t229.data.DClass.cls;
         /* pass */
         return c->is_public;
-    } else if (_t228.tag == Decl_DEnum) {
-        __auto_type e = _t228.data.DEnum.enm;
+    } else if (_t229.tag == Decl_DEnum) {
+        __auto_type e = _t229.data.DEnum.enm;
         /* pass */
         return e->is_public;
-    } else if (_t228.tag == Decl_DInterface) {
-        __auto_type i = _t228.data.DInterface.iface;
+    } else if (_t229.tag == Decl_DInterface) {
+        __auto_type i = _t229.data.DInterface.iface;
         /* pass */
         return i->is_public;
-    } else if (_t228.tag == Decl_DActor) {
-        __auto_type c = _t228.data.DActor.cls;
+    } else if (_t229.tag == Decl_DActor) {
+        __auto_type c = _t229.data.DActor.cls;
         /* pass */
         return c->is_public;
-    } else if (_t228.tag == Decl_DExtern) {
-        __auto_type abi = _t228.data.DExtern.abi;
-__auto_type funcs = _t228.data.DExtern.functions;
+    } else if (_t229.tag == Decl_DExtern) {
+        __auto_type abi = _t229.data.DExtern.abi;
+__auto_type funcs = _t229.data.DExtern.functions;
         /* pass */
         return true;
-    } else if (_t228.tag == Decl_DExtend) {
-        __auto_type target = _t228.data.DExtend.target;
-__auto_type methods = _t228.data.DExtend.methods;
+    } else if (_t229.tag == Decl_DExtend) {
+        __auto_type target = _t229.data.DExtend.target;
+__auto_type methods = _t229.data.DExtend.methods;
         /* pass */
         return true;
-    } else if (_t228.tag == Decl_DDecoratorDef) {
-        __auto_type f = _t228.data.DDecoratorDef.func;
+    } else if (_t229.tag == Decl_DDecoratorDef) {
+        __auto_type f = _t229.data.DDecoratorDef.func;
         /* pass */
         return f->is_public;
     } else if (1) {
-        __auto_type _ = _t228;
+        __auto_type _ = _t229;
         /* pass */
         return false;
     }

@@ -1,3 +1,4 @@
+# @trusted: compiler systems module — audited raw-pointer core (like Rust std internals)
 # compiler/src/hir.tr - High-level Intermediate Representation
 
 from core.vec import Vec

@@ -1,3 +1,4 @@
+# @trusted: compiler systems module — audited raw-pointer core (like Rust std internals)
 # compiler/src/mir.tr — Mid-level IR (control-flow graph) for Tauraro.
 #
 # The MIR is a flat control-flow graph: each function is a list of basic blocks,

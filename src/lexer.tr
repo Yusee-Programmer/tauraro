@@ -1,3 +1,4 @@
+# @trusted: compiler systems module — audited raw-pointer core (like Rust std internals)
 # compiler/src/lexer.tr - Tauraro lexer written in Tauraro.
 # Tokenizes a source string into a Vec[Token].
 

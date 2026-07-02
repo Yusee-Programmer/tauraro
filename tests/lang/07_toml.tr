@@ -1,3 +1,7 @@
+# @trusted: this test exercises the LOW-LEVEL pointer-based Toml API (Toml.parse
+# returns Pointer[TomlValue]; callers .read() it). Until toml/json expose a safe
+# ARC-node API, code that walks their trees needs this or an unsafe: block. See
+# the as-safe-as-Rust roadmap: "Pointer-returning std APIs need safe wrappers".
 # tests/lang/07_toml.tr - std.encoding.toml parse/stringify round-trip.
 
 from std.test import TestRunner

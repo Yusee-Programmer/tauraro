@@ -1,3 +1,4 @@
+# @trusted: compiler systems module — audited raw-pointer core (like Rust std internals)
 # compiler/src/codegen/c.tr - C code generator for the Tauraro self-hosted compiler.
 # Generates brutally optimized C from HIR with zero-cost abstractions.
 

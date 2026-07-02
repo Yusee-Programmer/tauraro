@@ -1,3 +1,4 @@
+# @trusted: compiler systems module — audited raw-pointer core (like Rust std internals)
 # src/macros.tr — compile-time macro expansion for `macro def` + `@`-application.
 #
 # A `macro def name(item) -> code:` is a COMPILE-TIME function: it receives a

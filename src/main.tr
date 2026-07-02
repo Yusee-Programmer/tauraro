@@ -1,3 +1,4 @@
+# @trusted: compiler systems module — audited raw-pointer core (like Rust std internals)
 # compiler/src/main.tr - CLI driver, module resolver, and linker invocation.
 # Implements the full Tauraro compiler command-line interface.
 

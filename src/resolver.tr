@@ -1,3 +1,4 @@
+# @trusted: compiler systems module — audited raw-pointer core (like Rust std internals)
 # compiler/src/resolver.tr - Module Resolver for the Tauraro self-hosted compiler.
 #
 # Unity Build model: every imported file is parsed and its declarations are
@@ -218,6 +219,13 @@ extend ModuleResolver:
                 source = read_file(path + ".tr")
             if source == "": return
 
+        # A module is TRUSTED (audited unsafe core, exempt from the default raw-pointer
+        # check [P-2]) if it is std/core library code OR carries the `# @trusted` module
+        # pragma near the top (the compiler's own systems modules use this — like Rust's
+        # `unsafe` internals in std). User modules are NOT trusted → their raw pointer
+        # derefs need `unsafe:`.
+        mut file_trusted = self._path_is_lib(path) or self._source_is_trusted(source)
+
         mut lexer   = Lexer.init(source)
         mut tokens  = lexer.tokenize()
         mut parser  = Parser.init(tokens, lexer.token_lines)
@@ -242,10 +250,10 @@ extend ModuleResolver:
                     # their own module's generated .c file, so they MUST be in all_decls
                     # for generate_module_c to emit their bodies. Filtering them out here
                     # causes "implicit declaration" / missing-body GCC errors.
-                    # Trusted standard library (std/core): tag its functions is_lib so the
-                    # strict raw-pointer checks ([P-2]) treat them as an audited unsafe
-                    # core (like Rust's std), applying only to the user's own code.
-                    if not is_root and self._path_is_lib(path):
+                    # Trusted std/core OR a `# @trusted` systems module: tag its functions
+                    # is_lib so the raw-pointer check [P-2] treats them as an audited unsafe
+                    # core (like Rust's std), applying only to ordinary user code.
+                    if file_trusted:
                         self._mark_decl_lib(decl_ptr)
                     self.all_decls.push(decl_ptr)
                     self.all_decl_modules.push(self.current_mod)
@@ -255,6 +263,14 @@ extend ModuleResolver:
     # core/ stdlib) — those modules are the audited unsafe core, exempt from [P-2].
     pub def _path_is_lib(self, path: str) -> bool:
         return self._contains(path, "std/") or self._contains(path, "std\\") or self._contains(path, "core/") or self._contains(path, "core\\")
+
+    # True if the module source carries the `# @trusted` pragma near the top.
+    pub def _source_is_trusted(self, source: str) -> bool:
+        mut n = source.len()
+        mut lim = 400
+        if n < lim: lim = n
+        if lim <= 0: return false
+        return self._contains(source.slice(0, lim), "@trusted")
 
     pub def _contains(self, hay: str, needle: str) -> bool:
         mut hl = hay.len()
