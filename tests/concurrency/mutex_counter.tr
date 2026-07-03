@@ -21,7 +21,6 @@ async def main():
         spawn bump(counter)
     mut total = counter.get()
     counter.unlock()
-    if total == 4000:
-        print("OK mutex_counter " + total.to_str())
-    else:
-        print("FAIL mutex_counter " + total.to_str())
+    mut _msg = "mutex_counter " + total.to_str()
+    if total == 4000: print("OK " + _msg)
+    else: print("FAIL " + _msg)

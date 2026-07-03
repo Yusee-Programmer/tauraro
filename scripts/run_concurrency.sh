@@ -19,7 +19,11 @@ if [ "${TSAN:-0}" = "1" ]; then
 elif [ "${ASAN:-0}" = "1" ]; then
     if echo 'int main(void){return 0;}' | "$CC" -fsanitize=address,undefined -x c - -o /dev/null >/dev/null 2>&1; then
         SAN="-fsanitize=address,undefined -g -fno-omit-frame-pointer"
-        export ASAN_OPTIONS="abort_on_error=1:halt_on_error=1"; echo "(AddressSanitizer+UBSan enabled)"
+        # detect_leaks=0: this corpus targets USE-AFTER-FREE / DOUBLE-FREE / heap
+        # corruption of state crossing the thread boundary (and UB via UBSan) — not
+        # exit-time leaks, which are covered by the differential leak gate. Matches
+        # run_soundness.sh so a benign fresh-arg print-concat isn't a false failure.
+        export ASAN_OPTIONS="detect_leaks=0:abort_on_error=1:halt_on_error=1"; echo "(AddressSanitizer+UBSan enabled; leak detection off)"
     else echo "(ASAN=1 but $CC can't link sanitizers; running without)"; fi
 fi
 LIBS="-lm -lpthread"

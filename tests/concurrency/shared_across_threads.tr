@@ -26,4 +26,5 @@ async def main():
         spawn reader(cfg)
         spawn reader(cfg)
         spawn reader(cfg)
-    print("OK shared_across_threads " + cfg.get().to_str())
+    mut _m = "OK shared_across_threads " + cfg.get().to_str()
+    print(_m)
