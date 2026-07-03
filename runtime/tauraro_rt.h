@@ -1480,24 +1480,41 @@ static inline void _tr_tls_free(_TrTLS* t) {
 
 #endif /* POSIX async primitives */
 
+/* ── Lock-ownership tracking (thread-local) ──────────────────────────── */
+/* Each thread maintains small stacks of box pointers it currently holds.
+ * lock_get pushes; set_unlock/unlock pop; the RAII cleanup fires only when
+ * it can pop — i.e. only when THIS thread actually holds the lock.
+ * All stack reads/writes are thread-local: no sharing, no data race. */
+#ifndef _TR_LOCK_DEPTH
+#define _TR_LOCK_DEPTH 8
+#endif
+typedef struct { void* s[_TR_LOCK_DEPTH]; int n; } _TrLockStack;
+static _Thread_local _TrLockStack _tr_tl_mu_stk;
+static _Thread_local _TrLockStack _tr_tl_rwl_r_stk;
+static _Thread_local _TrLockStack _tr_tl_rwl_w_stk;
+static inline void  _tr_lstack_push(_TrLockStack* ls, void* b) {
+    if (ls->n < _TR_LOCK_DEPTH) ls->s[ls->n++] = b;
+}
+static inline int   _tr_lstack_pop(_TrLockStack* ls, void* b) {
+    for (int i = ls->n - 1; i >= 0; i--)
+        if (ls->s[i] == b) { ls->s[i] = ls->s[--ls->n]; return 1; }
+    return 0;
+}
+
 /* ── MutexBox<T>: mutex-guarded single value ─────────────────────────── */
-/* _Atomic int rc: thread-safe refcount via C11 atomics (stdatomic.h included above) */
-/* _locked: 1 while this thread holds the lock; cleared by set_unlock/unlock.
- * Only one thread can hold the lock at a time so _locked is safe without
- * additional synchronization — it is always accessed under the mutex. */
-typedef struct { _TrMutexH* mu; long long data; _Atomic int rc; volatile int _locked; } _TrMutexBox;
+typedef struct { _TrMutexH* mu; long long data; _Atomic int rc; } _TrMutexBox;
 static inline _TrMutexBox* _tr_mutexbox_new(long long init) {
     _TrMutexBox* b = (_TrMutexBox*)TAURARO_ALLOC(sizeof(_TrMutexBox));
-    b->mu = _tr_mutex_new(); b->data = init; b->_locked = 0;
+    b->mu = _tr_mutex_new(); b->data = init;
     atomic_store(&b->rc, 1); return b;
 }
 static inline long long _tr_mutexbox_lock_get(_TrMutexBox* b) {
-    _tr_mutex_hlock(b->mu); b->_locked = 1; return b->data;
+    _tr_mutex_hlock(b->mu); _tr_lstack_push(&_tr_tl_mu_stk, b); return b->data;
 }
 static inline void _tr_mutexbox_set_unlock(_TrMutexBox* b, long long v) {
-    b->data = v; b->_locked = 0; _tr_mutex_hunlock(b->mu);
+    b->data = v; _tr_lstack_pop(&_tr_tl_mu_stk, b); _tr_mutex_hunlock(b->mu);
 }
-static inline void _tr_mutexbox_unlock(_TrMutexBox* b) { b->_locked = 0; _tr_mutex_hunlock(b->mu); }
+static inline void _tr_mutexbox_unlock(_TrMutexBox* b) { _tr_lstack_pop(&_tr_tl_mu_stk, b); _tr_mutex_hunlock(b->mu); }
 static inline void _tr_mutexbox_free(_TrMutexBox* b) {
     if (!b) return; _tr_mutex_hfree(b->mu); TAURARO_FREE(b);
 }
@@ -1508,28 +1525,28 @@ static inline void _tr_mutexbox_drop(_TrMutexBox* b) {
     if (!b || atomic_fetch_sub(&b->rc, 1) > 1) return; _tr_mutexbox_free(b);
 }
 /* Auto-unlock cleanup — used by __attribute__((cleanup)) RAII guard in codegen.
- * Fires when the guard variable goes out of scope. No-op if already unlocked. */
+ * Fires when the guard variable goes out of scope. No-op if already unlocked
+ * (set_unlock/unlock already popped the box from the TLS stack). */
 static inline void _tr_mutexbox_cleanup(_TrMutexBox** bp) {
-    if (bp && *bp && (*bp)->_locked) { (*bp)->_locked = 0; _tr_mutex_hunlock((*bp)->mu); }
+    if (bp && *bp && _tr_lstack_pop(&_tr_tl_mu_stk, *bp)) _tr_mutex_hunlock((*bp)->mu);
 }
 
 /* ── RwLockBox<T>: reader-writer guarded single value ────────────────── */
-/* _locked: 0=none, 1=write locked, 2=read locked. */
-typedef struct { _TrRWL* rw; long long data; _Atomic int rc; volatile int _locked; } _TrRWLBox;
+typedef struct { _TrRWL* rw; long long data; _Atomic int rc; } _TrRWLBox;
 static inline _TrRWLBox* _tr_rwlbox_new(long long init) {
     _TrRWLBox* b = (_TrRWLBox*)TAURARO_ALLOC(sizeof(_TrRWLBox));
-    b->rw = _tr_rwl_new(); b->data = init; b->_locked = 0;
+    b->rw = _tr_rwl_new(); b->data = init;
     atomic_store(&b->rc, 1); return b;
 }
 static inline long long _tr_rwlbox_read_get(_TrRWLBox* b) {
-    _tr_rwl_read_lock(b->rw); b->_locked = 2; return b->data;
+    _tr_rwl_read_lock(b->rw); _tr_lstack_push(&_tr_tl_rwl_r_stk, b); return b->data;
 }
-static inline void _tr_rwlbox_read_unlock(_TrRWLBox* b) { b->_locked = 0; _tr_rwl_read_unlock(b->rw); }
+static inline void _tr_rwlbox_read_unlock(_TrRWLBox* b) { _tr_lstack_pop(&_tr_tl_rwl_r_stk, b); _tr_rwl_read_unlock(b->rw); }
 static inline long long _tr_rwlbox_write_get(_TrRWLBox* b) {
-    _tr_rwl_write_lock(b->rw); b->_locked = 1; return b->data;
+    _tr_rwl_write_lock(b->rw); _tr_lstack_push(&_tr_tl_rwl_w_stk, b); return b->data;
 }
 static inline void _tr_rwlbox_write_set_unlock(_TrRWLBox* b, long long v) {
-    b->data = v; b->_locked = 0; _tr_rwl_write_unlock(b->rw);
+    b->data = v; _tr_lstack_pop(&_tr_tl_rwl_w_stk, b); _tr_rwl_write_unlock(b->rw);
 }
 static inline void _tr_rwlbox_free(_TrRWLBox* b) {
     if (!b) return; _tr_rwl_free(b->rw); TAURARO_FREE(b);
@@ -1542,10 +1559,10 @@ static inline void _tr_rwlbox_drop(_TrRWLBox* b) {
 }
 /* Auto-unlock cleanup for read/write guards. */
 static inline void _tr_rwlbox_cleanup_r(_TrRWLBox** bp) {
-    if (bp && *bp && (*bp)->_locked == 2) { (*bp)->_locked = 0; _tr_rwl_read_unlock((*bp)->rw); }
+    if (bp && *bp && _tr_lstack_pop(&_tr_tl_rwl_r_stk, *bp)) _tr_rwl_read_unlock((*bp)->rw);
 }
 static inline void _tr_rwlbox_cleanup_w(_TrRWLBox** bp) {
-    if (bp && *bp && (*bp)->_locked == 1) { (*bp)->_locked = 0; _tr_rwl_write_unlock((*bp)->rw); }
+    if (bp && *bp && _tr_lstack_pop(&_tr_tl_rwl_w_stk, *bp)) _tr_rwl_write_unlock((*bp)->rw);
 }
 
 /* ── ThreadPool: fixed-N worker pool with a channel work queue ────────── */

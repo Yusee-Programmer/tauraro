@@ -2480,6 +2480,24 @@ pub class CGenerator:
             return self.strz(os) + "[" + is_idx + "]"
         return os + "[" + is_idx + "]"
 
+    # True when a call arg is a `Shared[T]` handle (a `shared` var — typed as its
+    # inner T with a `_TrSharedBox*` runtime repr — or a `Shared[T]` value) being
+    # passed to a param that expects the PLAIN inner class `T`. The call site must
+    # then unwrap the atomic box to `((T*)box->data)`. This is what lets a worker
+    # pass its shared `App`/`HttpConn` handles to functions taking `App`/`HttpConn`.
+    pub def _call_arg_needs_shared_unwrap(self, arg: Pointer[HirExpr], param_ty: AstType) -> bool:
+        mut pn = param_ty.name
+        if pn == "Shared" or pn == "Weak" or pn == "Pointer": return false
+        if not self.classes.contains(pn): return false
+        mut at = hir_expr_type(arg)
+        if at.name == "Shared" and at.args.len > 0 and at.args.get(0).read().name == pn: return true
+        if at.name == pn:
+            match arg.read():
+                case HirExpr.EIdent(nm, _, _):
+                    if self.shared_vars.contains(_safe_c_varname(nm)): return true
+                case _: pass
+        return false
+
     pub def gen_call(self, callee: Pointer[HirExpr], args: Vec[Pointer[HirExpr]], call_ty: AstType) -> str:
         mut callee_s = self.gen_expr(callee)
         
@@ -2986,6 +3004,8 @@ pub class CGenerator:
                         mut actual_ty_n = hir_expr_type(args.get(ai)).name
                         if self.classes.contains(actual_ty_n):
                             any_wrapped = true
+                    elif self._call_arg_needs_shared_unwrap(args.get(ai), fn_def.params.get(pi).ty):
+                        any_wrapped = true
                 ai = ai + 1
             if any_wrapped:
                 mut wrapped_args = ""
@@ -2994,6 +3014,9 @@ pub class CGenerator:
                     if ai > 0: wrapped_args = wrapped_args + ", "
                     mut pi = ai + self_skip
                     mut arg_s = self.gen_expr(args.get(ai))
+                    if fn_def.params as usize != 0 as usize and pi < fn_def.params.len and self._call_arg_needs_shared_unwrap(args.get(ai), fn_def.params.get(pi).ty):
+                        # Shared[T] handle -> plain T param: unwrap the atomic box.
+                        arg_s = "((" + fn_def.params.get(pi).ty.name + "*)(" + arg_s + ")->data)"
                     if fn_def.params as usize != 0 as usize and pi < fn_def.params.len:
                         mut _p_iface_ty = fn_def.params.get(pi).ty
                         mut expected_iface = _p_iface_ty.name
@@ -5745,7 +5768,20 @@ pub class CGenerator:
                             # plain-ARC payload's owned fields (not just the struct).
                             mut _sh_drop = "NULL"
                             if self.is_heap_class_tn(sh_type_name): _sh_drop = self.obj_drop_fn(sh_type_name)
-                            self.w(" = _tr_shared_new(" + self.gen_expr(v) + ", " + _sh_drop + ");\n")
+                            # A FRESH construction (`shared s = T.init(..)`) transfers its rc=1
+                            # into the box. An EXISTING reference (`shared s = plain`/`= self` —
+                            # a var or field) is still owned by its source (which auto-drops or
+                            # is a live receiver), so the box must RETAIN it to co-own —
+                            # otherwise both free it (double-free).
+                            mut _sh_val = self.gen_expr(v)
+                            mut _sh_ref = false
+                            match v.read():
+                                case HirExpr.EIdent(_, _, _): _sh_ref = true
+                                case HirExpr.EPropAccess(_, _, _): _sh_ref = true
+                                case _: pass
+                            if self.is_heap_class_tn(sh_type_name) and _sh_ref:
+                                _sh_val = "_tr_obj_retain(" + _sh_val + ")"
+                            self.w(" = _tr_shared_new(" + _sh_val + ", " + _sh_drop + ");\n")
                         self.shared_vars.insert(n, sh_type_name)
                     else:
                         # For empty list literals, propagate annotation type so suffix is correct
