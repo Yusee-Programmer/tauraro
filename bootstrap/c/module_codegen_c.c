@@ -13163,6 +13163,21 @@ __attribute__((hot)) TrStr CGenerator_gen_closure(CGenerator* self, List_ptr* pa
     return crt;
 }
 
+__attribute__((hot)) TrStr CGenerator__spawn_wrap_cast_ty(CGenerator* self, TrStr fn_name, HirExpr* arg_expr) {
+    /* pass */
+    if (_tr_dict_contains(self->functions, _tr_strz(fn_name))) {
+        /* pass */
+        HirFunction* _wf = ((HirFunction*)(uintptr_t)_tr_dict_get(self->functions, _tr_strz(fn_name)));
+        /* pass */
+        if ((_wf->params->len > 0LL)) {
+            /* pass */
+            return CGenerator_type_to_c(self, ((HirParam*)List_ptr_get(_wf->params, 0LL))->ty);
+        }
+    }
+    /* pass */
+    return CGenerator_type_to_c(self, hir_expr_type(arg_expr));
+}
+
 __attribute__((hot)) void CGenerator_emit_spawn_wrapper_for_expr(CGenerator* self, HirExpr* e) {
     /* pass */
     if (_is_invalid_ptr(((unsigned long long)(e)))) {
@@ -13478,7 +13493,7 @@ __auto_type th_var2 = _t1470.data.EPropAccess.prop;
                             /* pass */
                             if ((((!_is_int_type(th2_sp_aty)) && (strcmp(_tr_strz(th2_sp_aty), _tr_strz(_tr_str_lit("bool"))) != 0)) && (strcmp(_tr_strz(th2_sp_aty), _tr_strz(_tr_str_lit("char"))) != 0))) {
                                 /* pass */
-                                TrStr th2_sp_cty = CGenerator_type_to_c(self, hir_expr_type(((HirExpr*)List_ptr_get(aa_args, 1LL))));
+                                TrStr th2_sp_cty = CGenerator__spawn_wrap_cast_ty(self, th2_fn_nm, ((HirExpr*)List_ptr_get(aa_args, 1LL)));
                                 /* pass */
                                 TrStr _strtmp_t1477 = ({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("(")), _tr_strz(th2_sp_cty))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(")_vp"))); _tr_str_release(_cl); _cres; });
                                 _tr_str_release(th2_sp_cast);
@@ -13558,7 +13573,7 @@ __auto_type pool_args = _t1469.data.EMethodCall.args;
                         /* pass */
                         if ((((!_is_int_type(th_ps_aty)) && (strcmp(_tr_strz(th_ps_aty), _tr_strz(_tr_str_lit("bool"))) != 0)) && (strcmp(_tr_strz(th_ps_aty), _tr_strz(_tr_str_lit("char"))) != 0))) {
                             /* pass */
-                            TrStr th_ps_cty = CGenerator_type_to_c(self, hir_expr_type(((HirExpr*)List_ptr_get(pool_args, 1LL))));
+                            TrStr th_ps_cty = CGenerator__spawn_wrap_cast_ty(self, th_ps_fn, ((HirExpr*)List_ptr_get(pool_args, 1LL)));
                             /* pass */
                             TrStr _strtmp_t1484 = ({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("(")), _tr_strz(th_ps_cty))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(")_vp"))); _tr_str_release(_cl); _cres; });
                             _tr_str_release(th_ps_cast);
@@ -13650,7 +13665,7 @@ __auto_type pool_args = _t1469.data.EMethodCall.args;
                             /* pass */
                             if ((((!_is_int_type(sp_aty)) && (strcmp(_tr_strz(sp_aty), _tr_strz(_tr_str_lit("bool"))) != 0)) && (strcmp(_tr_strz(sp_aty), _tr_strz(_tr_str_lit("char"))) != 0))) {
                                 /* pass */
-                                TrStr sp_cty = CGenerator_type_to_c(self, hir_expr_type(((HirExpr*)List_ptr_get(pool_args, 1LL))));
+                                TrStr sp_cty = CGenerator__spawn_wrap_cast_ty(self, sp_fn_nm, ((HirExpr*)List_ptr_get(pool_args, 1LL)));
                                 /* pass */
                                 TrStr _strtmp_t1494 = ({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("(")), _tr_strz(sp_cty))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(")_vp"))); _tr_str_release(_cl); _cres; });
                                 _tr_str_release(sp_cast);

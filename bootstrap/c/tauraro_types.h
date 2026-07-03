@@ -3370,6 +3370,7 @@ __attribute__((hot)) TrStr CGenerator_gen_dict_literal(CGenerator* self, List_pt
 __attribute__((hot)) TrStr CGenerator_gen_list_comp(CGenerator* self, HirExpr* element, List_ptr* generators);
 __attribute__((hot)) TrStr CGenerator__comp_src_free_stmt(CGenerator* self, HirExpr* iter_e, long long idx);
 __attribute__((hot)) TrStr CGenerator_gen_closure(CGenerator* self, List_ptr* params, AstType* ret_ty, HirBlock* body, List_ptr* captures);
+__attribute__((hot)) TrStr CGenerator__spawn_wrap_cast_ty(CGenerator* self, TrStr fn_name, HirExpr* arg_expr);
 __attribute__((hot)) void CGenerator_emit_spawn_wrapper_for_expr(CGenerator* self, HirExpr* e);
 __attribute__((hot)) void CGenerator_prescan_block_spawns(CGenerator* self, HirBlock* block);
 __attribute__((hot)) void CGenerator_prescan_stmt_spawns(CGenerator* self, HirStmt* s);

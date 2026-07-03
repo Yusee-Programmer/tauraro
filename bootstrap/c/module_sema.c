@@ -1050,6 +1050,14 @@ __attribute__((hot)) bool Sema__expr_is_shared(Sema* self, HirExpr* e) {
         Symbol* sym = Sema_resolve(self, nm);
         /* pass */
         return ((strcmp(_tr_strz(sym->name), _tr_strz(_tr_str_lit(""))) != 0) && sym->is_shared);
+    } else if (_t355.tag == HirExpr_EMethodCall) {
+        __auto_type _tr_v_recv = _t355.data.EMethodCall.obj;
+__auto_type meth = _t355.data.EMethodCall.method;
+        /* pass */
+        if ((strcmp(_tr_strz(meth), _tr_strz(_tr_str_lit("clone"))) == 0)) {
+            /* pass */
+            return Sema__expr_is_shared(self, _tr_v_recv);
+        }
     } else if (1) {
         __auto_type _ = _t355;
         /* pass */
@@ -9463,6 +9471,26 @@ __auto_type prop = _t517.data.EPropAccess.prop;
             if ((((strcmp(_tr_strz(prop), _tr_strz(_tr_str_lit("len"))) == 0) || (strcmp(_tr_strz(prop), _tr_strz(_tr_str_lit("length"))) == 0)) || (strcmp(_tr_strz(prop), _tr_strz(_tr_str_lit("capacity"))) == 0))) {
                 /* pass */
                 ret_ty = AstType_init(_tr_str_lit("int"));
+            }
+        } else if ((((strcmp(_tr_strz(hobj_ty_n), _tr_strz(_tr_str_lit("Shared"))) == 0) && (hobj_ty_full->args->len > 0LL)) && _tr_dict_contains(self->classes, _tr_strz((*((AstType**)List_ptr_get(hobj_ty_full->args, 0LL)))->name)))) {
+            /* pass */
+            ClassDef* _scls = ((ClassDef*)(uintptr_t)_tr_dict_get(self->classes, _tr_strz((*((AstType**)List_ptr_get(hobj_ty_full->args, 0LL)))->name)));
+            /* pass */
+            long long _sfi = 0LL;
+            /* pass */
+            while ((_sfi < _scls->fields->len)) {
+                /* pass */
+                FieldDef* _sfld = ((FieldDef*)List_ptr_get(_scls->fields, _sfi));
+                /* pass */
+                if ((strcmp(_tr_strz(_sfld->name), _tr_strz(prop)) == 0)) {
+                    /* pass */
+                    if ((((unsigned long long)(_sfld->ty)) != ((unsigned long long)(0LL)))) {
+                        /* pass */
+                        ret_ty = (*_sfld->ty);
+                    }
+                }
+                /* pass */
+                _sfi = (_sfi + 1LL);
             }
         } else if (_tr_dict_contains(self->classes, _tr_strz(hobj_ty_n))) {
             /* pass */

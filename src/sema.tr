@@ -646,6 +646,10 @@ extend Sema:
             case HirExpr.EIdent(nm, _, _):
                 mut sym = self.resolve(nm)
                 return sym.name != "" and sym.is_shared
+            case HirExpr.EMethodCall(recv, meth, _, _):
+                # `s.clone()` of a shared value is itself a shared (atomic) handle —
+                # the idiomatic way to hand a worker its own cross-thread reference.
+                if meth == "clone": return self._expr_is_shared(recv)
             case _: pass
         return false
 
@@ -4746,6 +4750,17 @@ extend Sema:
                     elif prop == "data": ret_ty = AstType.init("Pointer")
                 elif hobj_ty_n == "Map" or hobj_ty_n == "Dict" or hobj_ty_n == "Set":
                     if prop == "len" or prop == "length" or prop == "capacity": ret_ty = AstType.init("int")
+                elif hobj_ty_n == "Shared" and hobj_ty_full.args.len > 0 and self.classes.contains(hobj_ty_full.args.get(0).read().name):
+                    # Field access through a Shared[T] handle: look up the field on the
+                    # inner T (the codegen unwraps the atomic box to (T*)box->data). Lets
+                    # `job.app.get()` on a `Shared[Job]` type the `.app` field as Mutex[App].
+                    mut _scls = self.classes.get(hobj_ty_full.args.get(0).read().name)
+                    mut _sfi = 0
+                    while _sfi < _scls.fields.len:
+                        mut _sfld = _scls.fields.get(_sfi)
+                        if _sfld.name == prop:
+                            if _sfld.ty as usize != 0 as usize: ret_ty = _sfld.ty.read()
+                        _sfi = _sfi + 1
                 elif self.classes.contains(hobj_ty_n):
                     mut _cls = self.classes.get(hobj_ty_n)
                     mut _fi = 0

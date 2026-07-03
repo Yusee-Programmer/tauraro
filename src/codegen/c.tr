@@ -5133,6 +5133,17 @@ pub class CGenerator:
 
     # -- Spawn wrapper pre-scan ------------------------------------------------
 
+    # The C type to cast a spawn wrapper's void* arg to: the WORKER's declared
+    # param type (a shared value / x.clone() is typed as its inner T, but the
+    # worker's param is Shared[T] -> _TrSharedBox*). Falls back to the arg type.
+    pub def _spawn_wrap_cast_ty(self, fn_name: str, arg_expr: Pointer[HirExpr]) -> str:
+        if self.functions.contains(fn_name):
+            mut _wf = self.functions.get(fn_name)
+            if _wf.params.len > 0:
+                return self.type_to_c(_wf.params.get(0).ty)
+        return self.type_to_c(hir_expr_type(arg_expr))
+
+
     pub def emit_spawn_wrapper_for_expr(self, e: Pointer[HirExpr]):
         if _is_invalid_ptr(e as usize): return
         match e.read():
@@ -5259,7 +5270,7 @@ pub class CGenerator:
                                         mut th2_sp_aty = hir_expr_type(aa_args.get(1)).name
                                         mut th2_sp_cast = "(long long)(uintptr_t)_vp"
                                         if not _is_int_type(th2_sp_aty) and th2_sp_aty != "bool" and th2_sp_aty != "char":
-                                            mut th2_sp_cty = self.type_to_c(hir_expr_type(aa_args.get(1)))
+                                            mut th2_sp_cty = self._spawn_wrap_cast_ty(th2_fn_nm, aa_args.get(1))
                                             th2_sp_cast = "(" + th2_sp_cty + ")_vp"
                                         self.w("static void* _tr_spawn_wrap_" + th2_fn_nm + "(void* _vp) { " + th2_fn_nm + "(" + th2_sp_cast + "); return NULL; }\n")
                     case _: pass
@@ -5288,7 +5299,7 @@ pub class CGenerator:
                                 mut th_ps_aty = hir_expr_type(pool_args.get(1)).name
                                 mut th_ps_cast = "(long long)(uintptr_t)_vp"
                                 if not _is_int_type(th_ps_aty) and th_ps_aty != "bool" and th_ps_aty != "char":
-                                    mut th_ps_cty = self.type_to_c(hir_expr_type(pool_args.get(1)))
+                                    mut th_ps_cty = self._spawn_wrap_cast_ty(th_ps_fn, pool_args.get(1))
                                     th_ps_cast = "(" + th_ps_cty + ")_vp"
                                 self.w("static void* _tr_spawn_wrap_" + th_ps_fn + "(void* _vp) { " + th_ps_fn + "(" + th_ps_cast + "); return NULL; }\n")
                             else:
@@ -5327,7 +5338,7 @@ pub class CGenerator:
                                     mut sp_aty = hir_expr_type(pool_args.get(1)).name
                                     mut sp_cast = "(long long)(uintptr_t)_vp"
                                     if not _is_int_type(sp_aty) and sp_aty != "bool" and sp_aty != "char":
-                                        mut sp_cty = self.type_to_c(hir_expr_type(pool_args.get(1)))
+                                        mut sp_cty = self._spawn_wrap_cast_ty(sp_fn_nm, pool_args.get(1))
                                         sp_cast = "(" + sp_cty + ")_vp"
                                     self.w("static void* _tr_spawn_wrap_" + sp_fn_nm + "(void* _vp) { " + sp_fn_nm + "(" + sp_cast + "); return NULL; }\n")
                                 else:
