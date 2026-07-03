@@ -3325,7 +3325,14 @@ extend Sema:
                         mut pc_cont_sym = self.resolve(pc_cont_nm)
                         mut pc_cont_ty = pc_cont_sym.ty.read()
                         mut pc_ctn = pc_cont_ty.name
-                        if pc_ctn == "Vec" or pc_ctn == "List" or pc_ctn == "Dict" or pc_ctn == "Map" or pc_ctn == "Set":
+                        if pc_ctn == "Mutex" or pc_ctn == "RwLock":
+                            # `mut x = mutex.get()` / `rwlock.get()` BORROWS the guarded
+                            # value — the lock OWNS it. Auto-dropping x would free the
+                            # guarded content (e.g. Dict_free_objval on a Mutex[Map]'s Map,
+                            # or _tr_obj_release on a Mutex[Class]'s instance) → UAF on the
+                            # next .get(). Mark it @borrowed so is_droppable_sym skips it.
+                            self.set_borrows_region(name, "@borrowed")
+                        elif pc_ctn == "Vec" or pc_ctn == "List" or pc_ctn == "Dict" or pc_ctn == "Map" or pc_ctn == "Set":
                             mut pc_elem_ty = hir_expr_type(hval).name
                             # A @value_type element is returned BY VALUE (a copy), so
                             # `x = d.get(k)` is NOT a borrow into the container.

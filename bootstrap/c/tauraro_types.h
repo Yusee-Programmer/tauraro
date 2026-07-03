@@ -3054,6 +3054,7 @@ __attribute__((hot)) void Sema__scan_ptr_aliased_ty(Sema* self, AstType* t);
 __attribute__((hot)) bool Sema__is_rc_class(Sema* self, TrStr n);
 __attribute__((hot)) bool Sema__ty_reaches_plain_rc(Sema* self, AstType* ft, long long depth);
 __attribute__((hot)) bool Sema__sendable_reaches_plain_rc(Sema* self, TrStr tn, long long depth);
+__attribute__((hot)) bool Sema__is_unsafe_sendable(Sema* self, TrStr n);
 __attribute__((hot)) void Sema__check_spawn_nested_rc(Sema* self, HirExpr* arg_expr);
 __attribute__((hot)) void Sema__collect_strong_edge(Sema* self, AstType* ft, List_TrStr* out);
 __attribute__((hot)) List_TrStr* Sema__strong_owned(Sema* self, ClassDef* cd);
@@ -3347,6 +3348,7 @@ __attribute__((hot)) TrStr CGenerator_gen_binop(CGenerator* self, TrStr op, HirE
 __attribute__((hot)) TrStr CGenerator_gen_unary(CGenerator* self, TrStr op, HirExpr* expr);
 __attribute__((hot)) TrStr CGenerator_gen_prop_access(CGenerator* self, HirExpr* o, TrStr p);
 __attribute__((hot)) TrStr CGenerator_gen_index(CGenerator* self, HirExpr* o, HirExpr* idx);
+__attribute__((hot)) bool CGenerator__call_arg_needs_shared_unwrap(CGenerator* self, HirExpr* arg, AstType* param_ty);
 __attribute__((hot)) TrStr CGenerator_gen_call(CGenerator* self, HirExpr* callee, List_ptr* args, AstType* call_ty);
 __attribute__((hot)) TrStr CGenerator_gen_print_call(CGenerator* self, List_ptr* args);
 __attribute__((hot)) TrStr CGenerator_gen_print_one(CGenerator* self, HirExpr* arg);
