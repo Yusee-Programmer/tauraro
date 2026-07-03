@@ -674,6 +674,7 @@ extend Sema:
                         self.error("[T-7] '" + arg_ty.name + "' is a plain reference-counted class — its refcount is thread-local (non-atomic), so it is not 'Send' and cannot cross a thread boundary (this is exactly why Rust's 'Rc' is '!Send').\n      FIX: share it as 'Shared[" + arg_ty.name + "]' (atomic refcount, like Rust's 'Arc'), or 'Mutex[" + arg_ty.name + "]' for exclusive access.")
                     elif not self.is_sendable_type(arg_ty.name):
                         self.error("[T-1] Type '" + arg_ty.name + "' is not Sendable and cannot be safely shared across threads.\n      FIX: Wrap in Mutex[" + arg_ty.name + "] for exclusive access, or Atomic[T] for counters/flags.\n      Or add 'implements Sendable' to '" + arg_ty.name + "' to confirm it is thread-safe.")
+                    self._check_spawn_nested_rc(cs_args.get(csi))
                     csi = csi + 1
             case HirExpr.EMethodCall(_, _, cs_margs, _):
                 mut csmi = 0
@@ -689,6 +690,7 @@ extend Sema:
                         self.error("[T-7] '" + arg_ty2.name + "' is a plain reference-counted class — its refcount is thread-local (non-atomic), so it is not 'Send' and cannot cross a thread boundary.\n      FIX: share it as 'Shared[" + arg_ty2.name + "]' (atomic refcount) or 'Mutex[" + arg_ty2.name + "]' for exclusive access.")
                     elif not self.is_sendable_type(arg_ty2.name):
                         self.error("[T-1] Type '" + arg_ty2.name + "' is not Sendable and cannot be safely shared across threads.\n      FIX: Wrap in Mutex[" + arg_ty2.name + "].")
+                    self._check_spawn_nested_rc(cs_margs.get(csmi))
                     csmi = csmi + 1
             case _: pass
 
@@ -1015,6 +1017,60 @@ extend Sema:
         if n == "Vec" or n == "Map" or n == "List" or n == "Dict" or n == "Set" or n == "Box" or n == "Mutex" or n == "RwLock" or n == "Atomic" or n == "Shared" or n == "Weak" or n == "Option" or n == "Result" or n == "Chan" or n == "StringBuilder" or n == "StringObj": return false
         if self.ptr_aliased.contains(n): return false
         return true
+
+    # ===== [T-7] TRANSITIVE: does a thread-crossing value REACH a plain rc class? =====
+    # A `Sendable`/`Shared` value that transitively holds a plain (non-atomic, thread-
+    # local) rc class — directly, or inside Mutex[X]/Vec[X]/Dict[K,X]/… — is NOT
+    # actually Send: crossing it lets two threads race that nested class's non-atomic
+    # refcount (or dangle its lifetime). `Shared[X]`/`Weak[X]` are atomic (Arc) and
+    # stop the recursion; `Pointer[X]` is the user's `unsafe` responsibility. Mirrors
+    # Rust: `Mutex<Rc<_>>` is `!Send`.
+    pub def _ty_reaches_plain_rc(self, ft: AstType, depth: int) -> bool:
+        if depth > 24: return false
+        mut n = ft.name
+        if n == "Shared" or n == "Weak" or n == "Pointer": return false
+        if n == "Mutex" or n == "RwLock" or n == "Box" or n == "Vec" or n == "List" or n == "Set" or n == "Chan" or n == "Option":
+            if ft.args.len > 0: return self._ty_reaches_plain_rc(ft.args.get(0).read(), depth + 1)
+            return false
+        if n == "Dict" or n == "Map":
+            if ft.args.len > 1: return self._ty_reaches_plain_rc(ft.args.get(1).read(), depth + 1)
+            return false
+        if self._is_rc_class(n): return true
+        if self.classes.contains(n): return self._sendable_reaches_plain_rc(n, depth + 1)
+        return false
+
+    pub def _sendable_reaches_plain_rc(self, tn: str, depth: int) -> bool:
+        if depth > 24: return false
+        if not self.classes.contains(tn): return false
+        mut cls = self.classes.get(tn)
+        mut i = 0
+        while i < cls.fields.len:
+            mut f = cls.fields.get(i)
+            if f.ty as usize != 0 as usize:
+                if self._ty_reaches_plain_rc(f.ty.read(), depth + 1): return true
+            i = i + 1
+        return false
+
+    # [T-7] transitive check on a spawn ARG: even when the arg itself is atomic
+    # (Shared[T]) or a sync primitive (Mutex[T]), reject it if it transitively
+    # reaches a plain rc class. A bare plain-rc-class arg is left to the DIRECT
+    # [T-7] check (avoids a duplicate error).
+    pub def _check_spawn_nested_rc(self, arg_expr: Pointer[HirExpr]):
+        if not self.strict_mode: return
+        if _is_invalid_ptr(arg_expr as usize): return
+        mut at = hir_expr_type(arg_expr)
+        mut n = at.name
+        mut reaches = false
+        if self._expr_is_shared(arg_expr):
+            mut inner = n
+            if (n == "Shared" or n == "Weak") and at.args.len > 0: inner = at.args.get(0).read().name
+            reaches = self._sendable_reaches_plain_rc(inner, 0)
+        elif (n == "Mutex" or n == "RwLock" or n == "Box" or n == "Vec" or n == "List" or n == "Set" or n == "Option" or n == "Chan") and at.args.len > 0:
+            reaches = self._ty_reaches_plain_rc(at.args.get(0).read(), 0)
+        elif (n == "Dict" or n == "Map") and at.args.len > 1:
+            reaches = self._ty_reaches_plain_rc(at.args.get(1).read(), 0)
+        if reaches:
+            self.error("[T-7] a value crossing the thread boundary transitively holds a plain (non-atomic) reference-counted class inside '" + n + "' (e.g. via a Mutex/Vec/field). Even wrapped in Shared/Sendable, that nested class's refcount is thread-local and would race across threads.\n      FIX: make the nested state 'Shared[T]' (atomic, like Rust's 'Arc'), or restructure so only one thread ever owns it.")
 
     # Append the refcounted class names that field type `ft` STRONGLY owns. A
     # Pointer[T] or Weak[T] is NOT ownership (breaks a cycle); a collection owns its
@@ -4595,6 +4651,7 @@ extend Sema:
                             self.error("[T-1] Type '" + _tsa_ty.name + "' is not Sendable and cannot be passed to Thread.spawn.\n      FIX: Wrap in Mutex[" + _tsa_ty.name + "] for exclusive access, or add 'implements Sendable' to '" + _tsa_ty.name + "' to confirm it is thread-safe.")
                         elif self.strict_mode and self._is_rc_class(_tsa_ty.name) and not self._expr_is_shared(hl.get(_tsi)):
                             self.error("[T-7] '" + _tsa_ty.name + "' is a plain reference-counted class — its refcount is thread-local (non-atomic), so it is not 'Send' and cannot be passed to Thread.spawn (exactly why Rust's 'Rc' is '!Send'): retaining/releasing it from another thread races the count.\n      FIX: share it as 'Shared[" + _tsa_ty.name + "]' (atomic refcount, like Rust's 'Arc'). A 'Sendable' class must itself hold only Sendable + atomically-shared state.")
+                        self._check_spawn_nested_rc(hl.get(_tsi))
                         _tsi = _tsi + 1
                 # ThreadPool.spawn arg Sendable check
                 elif method == "spawn" and hobj_ty.name == "ThreadPool":
@@ -4609,6 +4666,7 @@ extend Sema:
                             self.error("[T-1] Type '" + _psa_ty.name + "' is not Sendable and cannot be passed to ThreadPool.spawn.\n      FIX: Wrap in Mutex[" + _psa_ty.name + "] for exclusive access, or add 'implements Sendable' to '" + _psa_ty.name + "' to confirm it is thread-safe.")
                         elif self.strict_mode and self._is_rc_class(_psa_ty.name) and not self._expr_is_shared(hl.get(_psi)):
                             self.error("[T-7] '" + _psa_ty.name + "' is a plain reference-counted class — its refcount is thread-local (non-atomic), so it cannot be passed to ThreadPool.spawn (like Rust's 'Rc' being '!Send').\n      FIX: share it as 'Shared[" + _psa_ty.name + "]' (atomic refcount, like Rust's 'Arc').")
+                        self._check_spawn_nested_rc(hl.get(_psi))
                         _psi = _psi + 1
                 # Atomic built-in method return types
                 elif hobj_ty.name == "Atomic":
