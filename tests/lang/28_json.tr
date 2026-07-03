@@ -18,6 +18,15 @@ def main():
     t.assert_true(root.obj_get("nil").is_null(), "null value")
     t.assert_false(root.obj_has("missing"), "missing key")
 
+    t.section("zero-copy string access (StrView)")
+    # str_eq compares without allocating; str_view borrows into the doc buffer.
+    t.assert_true(root.obj_get("name").str_eq("Tau\nraro"), "zero-copy str_eq match")
+    t.assert_false(root.obj_get("name").str_eq("other"), "zero-copy str_eq mismatch")
+    mut view = root.obj_get("name").str_view()
+    t.assert_eq_int(view.length(), 8, "str_view length (no alloc)")
+    mut materialized: str = view.to_str()
+    t.assert_eq_str(materialized, "Tau\nraro", "str_view materialized on demand")
+
     t.section("arrays")
     mut d2 = Json.parse("{\"nums\": [10, 20, 30], \"words\": [\"a\", \"b\"]}")
     mut nums = d2.root().obj_get("nums")

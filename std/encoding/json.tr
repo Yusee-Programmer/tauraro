@@ -17,6 +17,7 @@
 
 from std.core.vec import Vec
 from std.core.string import StringBuilder
+from std.string.str import StrView
 
 extern "C":
     def _tr_strlen(s: str) -> int
@@ -258,6 +259,14 @@ extend JsonDoc:
         if idx < 0 or idx >= self.tags.len: return ""
         return self.strs.slice(self.soffs.get(idx), self.soffs.get(idx) + self.slens.get(idx))
 
+    # ZERO-COPY string value: a borrowed StrView into the doc's string buffer — no
+    # allocation. Valid while the doc is alive (borrows `from self`); under --strict
+    # the region checker enforces that. Use `.eq()`/`.starts_with()` to compare
+    # without materializing, or `.to_str()` to take an owned copy when needed.
+    pub def strview_at(self, idx: int) -> StrView from self:
+        if idx < 0 or idx >= self.tags.len: return StrView.of(self.strs, 0, 0)
+        return StrView.of(self.strs, self.soffs.get(idx), self.slens.get(idx))
+
     pub def int_at(self, idx: int) -> int:
         if idx < 0 or idx >= self.tags.len: return 0
         return self.ivals.get(idx)
@@ -382,6 +391,12 @@ extend JsonRef:
     pub def is_object(self)-> bool: return self.doc.tag_at(self.idx) == 6
 
     pub def get_str(self)  -> str:   return self.doc.str_at(self.idx)
+    # ZERO-COPY read path: a borrowed view of the string value (no allocation).
+    pub def str_view(self) -> StrView from self:
+        return self.doc.strview_at(self.idx)
+    # Compare a string value to `other` WITHOUT allocating (hot-path dispatch).
+    pub def str_eq(self, other: str) -> bool:
+        return self.doc.strview_at(self.idx).eq(other)
     pub def get_int(self)  -> int:   return self.doc.int_at(self.idx)
     pub def get_float(self)-> float: return self.doc.float_at(self.idx)
     pub def get_bool(self) -> bool:  return self.doc.bool_at(self.idx)
