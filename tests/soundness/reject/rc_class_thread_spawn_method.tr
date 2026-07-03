@@ -1,0 +1,19 @@
+# EXPECT: [T-7]
+# The `Thread.spawn(fn, arg)` METHOD form must reject a plain reference-counted
+# class just like the scoped `spawn` statement does — its refcount is non-atomic
+# (thread-local, like Rust's `Rc`), so retaining/releasing it from the worker
+# thread races the count. Cross-thread ownership must use `Shared[T]` (atomic Arc).
+from std.async.thread import Thread
+class Job implements Sendable:
+    pub id: int
+extend Job:
+    pub def init(i: int) -> Job:
+        mut j = Job()
+        j.id = i
+        return j
+def worker(j: Job):
+    mut x = j.id
+def main():
+    mut j = Job.init(1)
+    mut t = Thread.spawn(worker, j)
+    t.detach()

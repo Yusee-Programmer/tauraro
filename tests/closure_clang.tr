@@ -1,0 +1,27 @@
+def apply(f: def(int) -> int, x: int) -> int:
+    return f(x)
+
+def main():
+    # basic closure
+    mut square = def (x: int) -> int:
+        return x * x
+    print(square(7))          # 49
+
+    # capture-by-reference: sees updated value
+    mut base = 100
+    mut add_to_base = def (n: int) -> int:
+        return base + n
+    print(add_to_base(5))     # 105
+    base = 200
+    print(add_to_base(5))     # 205
+
+    # capture-by-reference: mutation visible outside
+    mut total = 0
+    mut accumulate = def (n: int) -> void:
+        total = total + n
+    accumulate(5)
+    accumulate(10)
+    print(total)              # 15
+
+    # closure passed to a higher-order function
+    print(apply(square, 9))   # 81

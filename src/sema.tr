@@ -1,3 +1,4 @@
+# @trusted: compiler systems module — audited raw-pointer core (like Rust std internals)
 # compiler/sema.tr - Semantic analyzer for the Tauraro self-hosted compiler.
 
 from core.vec import Vec
@@ -173,6 +174,7 @@ pub class Sema:
     pub branch_init_buf: Vec[str]       # Fix 4: names init'd in current branch
     pub copy_classes: Map[str, bool]    # Fix 3: auto-inferred Copy classes (all-primitive fields)
     pub in_unsafe: bool                 # Gap 6: inside an unsafe: block
+    pub cur_fn_is_lib: bool             # currently lowering a trusted std/core function (audited unsafe core) — exempt from [P-2]
     pub current_func_ret_from: str      # Gap 1: 'from' lifetime param of current function return
     pub current_func_ret_borrow_str: bool   # current fn returns `ref str from ...` (a str borrow)
     pub current_func_ret_regions: Vec[str]  # explicit `from a, b` region list (empty if none/auto-inferred)
@@ -184,6 +186,8 @@ pub class Sema:
     pub cur_func_sources:   Vec[str]   # ... and immediate sources) collected during lower_func
     pub strict_mode: bool               # --strict: alloc outside unsafe -> hard [U-1] error
     pub mutating_methods: Map[str, bool] # "ClassName.method" -> true if it stores into self.<field> (implicit-borrow check)
+    pub fn_ret_owned:    Map[str, bool] # return-ownership inference: fn/method key -> true if it returns an OWNED heap-class ref (see compute_return_ownership)
+    pub ptr_aliased:     Map[str, bool] # class names reachable as Pointer[T] (raw, NOT refcounted) — excluded from the [S-2] ownership-cycle graph
     pub decorator_names: Map[str, bool]  # decorator def registry (name -> true)
     pub variadic_fns:    Map[str, str]   # fn name -> index of trailing variadic param (= fixed-arg count, as string)
     pub variadic_elem_ty: Map[str, Pointer[AstType]] # fn name -> element type of the variadic List[T] param
@@ -270,6 +274,7 @@ extend Sema:
         s.branch_init_buf   = Vec[str].init(0)
         s.copy_classes           = Map[str, bool].init(32)
         s.in_unsafe              = false
+        s.cur_fn_is_lib          = false
         s.current_func_ret_from  = ""
         s.current_func_ret_borrow_str = false
         s.current_func_ret_regions = Vec[str].init(0)
@@ -280,6 +285,8 @@ extend Sema:
         s.cur_func_sources       = Vec[str].init(0)
         s.strict_mode            = false
         s.mutating_methods       = Map[str, bool].init(32)
+        s.fn_ret_owned           = Map[str, bool].init(64)
+        s.ptr_aliased            = Map[str, bool].init(32)
         s.decorator_names        = Map[str, bool].init(16)
         s.variadic_fns           = Map[str, str].init(8)
         s.variadic_elem_ty       = Map[str, Pointer[AstType]].init(8)
@@ -628,6 +635,24 @@ extend Sema:
             case _: pass
         return false
 
+    # True if `e` is a `shared` value (a variable bound with `shared`, i.e. a
+    # Shared[T]/Arc handle). Such a value has an ATOMIC refcount, so it is exempt
+    # from [T-7] — it CAN cross a thread boundary (that is the fix [T-7] points to).
+    # A shared var is typed as its inner T (with sym.is_shared), so the type name
+    # alone can't tell; resolve the identifier and check the flag.
+    pub def _expr_is_shared(self, e: Pointer[HirExpr]) -> bool:
+        if _is_invalid_ptr(e as usize): return false
+        match e.read():
+            case HirExpr.EIdent(nm, _, _):
+                mut sym = self.resolve(nm)
+                return sym.name != "" and sym.is_shared
+            case HirExpr.EMethodCall(recv, meth, _, _):
+                # `s.clone()` of a shared value is itself a shared (atomic) handle —
+                # the idiomatic way to hand a worker its own cross-thread reference.
+                if meth == "clone": return self._expr_is_shared(recv)
+            case _: pass
+        return false
+
     pub def check_spawn_sendable(self, e: Pointer[HirExpr]):
         if _is_invalid_ptr(e as usize): return
         match e.read():
@@ -645,8 +670,11 @@ extend Sema:
                         mut inner_nm = arg_ty.args.get(0).read().name
                         if not self.is_sendable_type(inner_nm):
                             self.error("[T-1] 'Shared[" + inner_nm + "]' cannot safely cross thread boundaries because '" + inner_nm + "' is not Sendable.\n      FIX: Add 'implements Sendable' to '" + inner_nm + "' and ensure all mutable fields use Atomic[T] or Mutex[T].")
+                    elif self.strict_mode and self._is_rc_class(arg_ty.name) and not self._expr_is_shared(cs_args.get(csi)) and not self._is_unsafe_sendable(arg_ty.name):
+                        self.error("[T-7] '" + arg_ty.name + "' is a plain reference-counted class — its refcount is thread-local (non-atomic), so it is not 'Send' and cannot cross a thread boundary (this is exactly why Rust's 'Rc' is '!Send').\n      FIX: share it as 'Shared[" + arg_ty.name + "]' (atomic refcount, like Rust's 'Arc'), or 'Mutex[" + arg_ty.name + "]' for exclusive access.")
                     elif not self.is_sendable_type(arg_ty.name):
                         self.error("[T-1] Type '" + arg_ty.name + "' is not Sendable and cannot be safely shared across threads.\n      FIX: Wrap in Mutex[" + arg_ty.name + "] for exclusive access, or Atomic[T] for counters/flags.\n      Or add 'implements Sendable' to '" + arg_ty.name + "' to confirm it is thread-safe.")
+                    self._check_spawn_nested_rc(cs_args.get(csi))
                     csi = csi + 1
             case HirExpr.EMethodCall(_, _, cs_margs, _):
                 mut csmi = 0
@@ -658,8 +686,11 @@ extend Sema:
                         mut inner_nm2 = arg_ty2.args.get(0).read().name
                         if not self.is_sendable_type(inner_nm2):
                             self.error("[T-1] 'Shared[" + inner_nm2 + "]' cannot safely cross thread boundaries because '" + inner_nm2 + "' is not Sendable.\n      FIX: Add 'implements Sendable' to '" + inner_nm2 + "' and protect mutable fields with Atomic[T] or Mutex[T].")
+                    elif self.strict_mode and self._is_rc_class(arg_ty2.name) and not self._expr_is_shared(cs_margs.get(csmi)) and not self._is_unsafe_sendable(arg_ty2.name):
+                        self.error("[T-7] '" + arg_ty2.name + "' is a plain reference-counted class — its refcount is thread-local (non-atomic), so it is not 'Send' and cannot cross a thread boundary.\n      FIX: share it as 'Shared[" + arg_ty2.name + "]' (atomic refcount) or 'Mutex[" + arg_ty2.name + "]' for exclusive access.")
                     elif not self.is_sendable_type(arg_ty2.name):
                         self.error("[T-1] Type '" + arg_ty2.name + "' is not Sendable and cannot be safely shared across threads.\n      FIX: Wrap in Mutex[" + arg_ty2.name + "].")
+                    self._check_spawn_nested_rc(cs_margs.get(csmi))
                     csmi = csmi + 1
             case _: pass
 
@@ -908,8 +939,14 @@ extend Sema:
             mut fd = cls.fields.get(fi)
             if fd.ty as usize != 0 as usize:
                 mut fty = fd.ty.read()
-                if not self.is_copy_class(fty.name):
-                    all_copy = false
+                # A `ref T` (borrow) field is a POINTER, not an embedded value: it is
+                # trivially copyable and must NOT be descended into — for a self-
+                # referential type (e.g. `parent: ref Ctx`) recursing on the field's
+                # own class name infinitely re-enters is_copy_class. (Raw `Pointer[T]`
+                # fields already don't recurse: "Pointer" isn't a user class.)
+                if not fty.is_borrow:
+                    if not self.is_copy_class(fty.name):
+                        all_copy = false
             fi = fi + 1
         self.copy_classes.insert(name, all_copy)
         return all_copy
@@ -946,7 +983,215 @@ extend Sema:
         if n == "i8" or n == "i16" or n == "i32" or n == "i64": return true
         if n == "u8" or n == "u16" or n == "u32" or n == "u64" or n == "usize": return true
         if n == "f32" or n == "f64": return true
+        # A refcounted heap-class element: the collection co-owns each element
+        # (insert retains), and its typed free releases them (codegen gates the
+        # actual release on is_heap_class_tn, so raw pointer-aliased element types
+        # like Pointer[T] fall back to a container-only free). Value types / enums
+        # are stored inline and need no per-element drop.
+        if self.classes.contains(n):
+            if not self.classes.get(n).is_class: return false   # @value_type: inline, no drop
+            if n == "Vec" or n == "Map" or n == "List" or n == "Dict" or n == "Set" or n == "Box" or n == "Mutex" or n == "RwLock" or n == "Atomic" or n == "Shared" or n == "Option" or n == "Result" or n == "Chan" or n == "StringBuilder" or n == "StringObj": return false
+            return true
         return false
+
+    # ===== [S-2] ownership-cycle guarantee (--strict) =====
+    # A program that compiles under --strict has NO strong-ownership cycles among
+    # refcounted classes, so — with ARC + [U-1] (no raw alloc outside unsafe) — every
+    # reference count reaches zero: provably leak-free.
+    pub def _scan_ptr_aliased_ty(self, t: AstType):
+        if t.name == "Pointer" and t.args.len > 0:
+            mut inner = t.args.get(0).read()
+            self.ptr_aliased.insert(inner.name, true)
+            self._scan_ptr_aliased_ty(inner)
+            return
+        mut ai = 0
+        while ai < t.args.len:
+            self._scan_ptr_aliased_ty(t.args.get(ai).read())
+            ai = ai + 1
+
+    # True for a refcounted heap class (excludes @value_type, builtins, and any type
+    # reachable as Pointer[T] — those are raw-managed, not ARC-refcounted).
+    pub def _is_rc_class(self, n: str) -> bool:
+        if not self.classes.contains(n): return false
+        if not self.classes.get(n).is_class: return false
+        if n == "Vec" or n == "Map" or n == "List" or n == "Dict" or n == "Set" or n == "Box" or n == "Mutex" or n == "RwLock" or n == "Atomic" or n == "Shared" or n == "Weak" or n == "Option" or n == "Result" or n == "Chan" or n == "StringBuilder" or n == "StringObj": return false
+        if self.ptr_aliased.contains(n): return false
+        return true
+
+    # ===== [T-7] TRANSITIVE: does a thread-crossing value REACH a plain rc class? =====
+    # A `Sendable`/`Shared` value that transitively holds a plain (non-atomic, thread-
+    # local) rc class — directly, or inside Mutex[X]/Vec[X]/Dict[K,X]/… — is NOT
+    # actually Send: crossing it lets two threads race that nested class's non-atomic
+    # refcount (or dangle its lifetime). `Shared[X]`/`Weak[X]` are atomic (Arc) and
+    # stop the recursion; `Pointer[X]` is the user's `unsafe` responsibility. Mirrors
+    # Rust: `Mutex<Rc<_>>` is `!Send`.
+    pub def _ty_reaches_plain_rc(self, ft: AstType, depth: int) -> bool:
+        if depth > 24: return false
+        mut n = ft.name
+        if n == "Shared" or n == "Weak" or n == "Pointer": return false
+        if n == "Mutex" or n == "RwLock" or n == "Box" or n == "Vec" or n == "List" or n == "Set" or n == "Chan" or n == "Option":
+            if ft.args.len > 0: return self._ty_reaches_plain_rc(ft.args.get(0).read(), depth + 1)
+            return false
+        if n == "Dict" or n == "Map":
+            if ft.args.len > 1: return self._ty_reaches_plain_rc(ft.args.get(1).read(), depth + 1)
+            return false
+        if self._is_rc_class(n): return true
+        if self.classes.contains(n): return self._sendable_reaches_plain_rc(n, depth + 1)
+        return false
+
+    pub def _sendable_reaches_plain_rc(self, tn: str, depth: int) -> bool:
+        if depth > 24: return false
+        if not self.classes.contains(tn): return false
+        mut cls = self.classes.get(tn)
+        mut i = 0
+        while i < cls.fields.len:
+            mut f = cls.fields.get(i)
+            if f.ty as usize != 0 as usize:
+                if self._ty_reaches_plain_rc(f.ty.read(), depth + 1): return true
+            i = i + 1
+        return false
+
+    # [T-7] transitive check on a spawn ARG: even when the arg itself is atomic
+    # (Shared[T]) or a sync primitive (Mutex[T]), reject it if it transitively
+    # reaches a plain rc class. A bare plain-rc-class arg is left to the DIRECT
+    # [T-7] check (avoids a duplicate error).
+    # `implements Sendable, UnsafeSendable` is Tauraro's `unsafe impl Send/Sync`:
+    # the author has AUDITED this class's cross-thread safety (including the atomicity
+    # of any refcounts it touches). It is the small, explicit unsafe core a systems
+    # framework (like hyper/tokio) needs. Such a class is therefore exempt from the
+    # automatic [T-7] rc-safety check — a program that compiles WITHOUT UnsafeSendable
+    # still has the full guarantee; UnsafeSendable is the opt-out at the boundary.
+    pub def _is_unsafe_sendable(self, n: str) -> bool:
+        if not self.classes.contains(n): return false
+        mut cls = self.classes.get(n)
+        if _is_invalid_ptr(cls.iface_names as usize): return false
+        mut i = 0
+        while i < cls.iface_names.len:
+            if cls.iface_names.get(i) == "UnsafeSendable": return true
+            i = i + 1
+        return false
+
+    pub def _check_spawn_nested_rc(self, arg_expr: Pointer[HirExpr]):
+        if not self.strict_mode: return
+        if _is_invalid_ptr(arg_expr as usize): return
+        mut at = hir_expr_type(arg_expr)
+        mut n = at.name
+        # The crossing class the author may have audited (unwrap a Shared handle).
+        mut _cross_cls = n
+        if (n == "Shared" or n == "Weak") and at.args.len > 0: _cross_cls = at.args.get(0).read().name
+        if self._is_unsafe_sendable(_cross_cls): return
+        mut reaches = false
+        if self._expr_is_shared(arg_expr):
+            mut inner = n
+            if (n == "Shared" or n == "Weak") and at.args.len > 0: inner = at.args.get(0).read().name
+            reaches = self._sendable_reaches_plain_rc(inner, 0)
+        elif (n == "Mutex" or n == "RwLock" or n == "Box" or n == "Vec" or n == "List" or n == "Set" or n == "Option" or n == "Chan") and at.args.len > 0:
+            reaches = self._ty_reaches_plain_rc(at.args.get(0).read(), 0)
+        elif (n == "Dict" or n == "Map") and at.args.len > 1:
+            reaches = self._ty_reaches_plain_rc(at.args.get(1).read(), 0)
+        if reaches:
+            self.error("[T-7] a value crossing the thread boundary transitively holds a plain (non-atomic) reference-counted class inside '" + n + "' (e.g. via a Mutex/Vec/field). Even wrapped in Shared/Sendable, that nested class's refcount is thread-local and would race across threads.\n      FIX: make the nested state 'Shared[T]' (atomic, like Rust's 'Arc'), or restructure so only one thread ever owns it.")
+
+    # Append the refcounted class names that field type `ft` STRONGLY owns. A
+    # Pointer[T] or Weak[T] is NOT ownership (breaks a cycle); a collection owns its
+    # element/value; Shared[T] is strong shared ownership.
+    pub def _collect_strong_edge(self, ft: AstType, out: Vec[str]):
+        mut n = ft.name
+        # A `ref T` (borrow) field is NON-OWNING — like Pointer[T]/Weak[T], it does
+        # not keep its target alive, so it can never form a strong (leaking) cycle.
+        # A parent-pointer / back-reference via `ref` (e.g. templa's `Context.parent:
+        # ref Context`) is the canonical safe way to break an ownership cycle.
+        if ft.is_borrow: return
+        if n == "Pointer" or n == "Weak": return
+        if n == "Vec" or n == "List" or n == "Set":
+            if ft.args.len > 0: self._collect_strong_edge(ft.args.get(0).read(), out)
+            return
+        if n == "Dict" or n == "Map":
+            if ft.args.len > 1: self._collect_strong_edge(ft.args.get(1).read(), out)
+            return
+        if n == "Shared":
+            if ft.args.len > 0:
+                mut si = ft.args.get(0).read().name
+                if self.classes.contains(si): out.push(si)
+            return
+        if self._is_rc_class(n): out.push(n)
+
+    pub def _strong_owned(self, cd: ClassDef) -> Vec[str]:
+        mut out = Vec[str].init(4)
+        mut i = 0
+        while i < cd.fields.len:
+            mut f = cd.fields.get(i)
+            if f.ty as usize != 0 as usize:
+                self._collect_strong_edge(f.ty.read(), out)
+            i = i + 1
+        return out
+
+    # DFS from `start`, following strong-ownership edges; if we come back to a class
+    # already on the current path, that path is a leak cycle → report [S-2] once.
+    pub def _cycle_dfs(self, cur: str, start: str, on_path: Map[str, bool], reported: Map[str, bool], depth: int):
+        if depth > 200: return
+        if not self.classes.contains(cur): return
+        mut edges = self._strong_owned(self.classes.get(cur))
+        mut i = 0
+        while i < edges.len:
+            mut nxt = edges.get(i)
+            if nxt == start:
+                # cycle closes back to start.
+                if not reported.contains(start):
+                    reported.insert(start, true)
+                    self.error("[S-2] class '" + start + "' is part of a strong reference CYCLE (via '" + cur + "' -> '" + nxt + "'), which reference counting cannot reclaim — it would leak.\n      FIX: make one back-edge non-owning with 'Weak[" + start + "]' (a weak reference) or 'Pointer[" + start + "]' (raw, manual).")
+            elif not on_path.contains(nxt):
+                on_path.insert(nxt, true)
+                self._cycle_dfs(nxt, start, on_path, reported, depth + 1)
+                on_path.insert(nxt, false)
+            i = i + 1
+
+    pub def check_ownership_cycles(self, prog: Program):
+        # 1) Collect raw Pointer[T] usage across all class fields + method signatures.
+        mut di = 0
+        while di < prog.decls.len:
+            match prog.decls.get(di).read():
+                case Decl.DClass(c): self._scan_class_ptrs(c)
+                case Decl.DActor(c): self._scan_class_ptrs(c)
+                case Decl.DExtend(_, ms):
+                    mut mi = 0
+                    while mi < ms.len:
+                        self._scan_fn_ptrs(ms.get(mi))
+                        mi = mi + 1
+                case Decl.DFunction(f): self._scan_fn_ptrs(f)
+                case _: pass
+            di = di + 1
+        # 2) DFS each refcounted class for a strong-ownership cycle.
+        mut reported = Map[str, bool].init(16)
+        di = 0
+        while di < prog.decls.len:
+            match prog.decls.get(di).read():
+                case Decl.DClass(c):
+                    if self._is_rc_class(c.name):
+                        mut on_path = Map[str, bool].init(16)
+                        on_path.insert(c.name, true)
+                        self._cycle_dfs(c.name, c.name, on_path, reported, 0)
+                case _: pass
+            di = di + 1
+
+    pub def _scan_class_ptrs(self, c: ClassDef):
+        mut i = 0
+        while i < c.fields.len:
+            mut f = c.fields.get(i)
+            if f.ty as usize != 0 as usize: self._scan_ptr_aliased_ty(f.ty.read())
+            i = i + 1
+        i = 0
+        while i < c.methods.len:
+            self._scan_fn_ptrs(c.methods.get(i))
+            i = i + 1
+
+    pub def _scan_fn_ptrs(self, f: FunctionDef):
+        mut i = 0
+        while i < f.params.len:
+            mut p = f.params.get(i)
+            if p.ty as usize != 0 as usize: self._scan_ptr_aliased_ty(p.ty.read())
+            i = i + 1
+        if f.ret_ty as usize != 0 as usize: self._scan_ptr_aliased_ty(f.ret_ty.read())
 
     # A local is auto-dropped at scope exit if it is a user-defined class with a
     # 'free' method, was never moved/returned/borrowed-out, was never freed
@@ -954,8 +1199,20 @@ extend Sema:
     pub def is_droppable_sym(self, sym: Symbol) -> bool:
         if sym.kind != SymbolKind.SVariable: return false
         if sym.is_param: return false
-        if sym.is_shared: return false
         if sym.ty as usize == 0 as usize: return false
+        # A `shared` (Shared[T]/Rc) local owns one strong reference to a control
+        # block; auto-drop it (`_tr_shared_drop`) at scope exit so the refcount is
+        # released and the payload reclaimed at count 0 (codegen routes SAutoDrop for
+        # a shared_vars name to _tr_shared_drop). A `Weak[T]` local likewise releases
+        # its weak handle. Both were previously leaked (manual `.drop()` only).
+        if sym.is_shared:
+            if sym.is_moved or sym.is_maybe_moved or sym.is_freed: return false
+            if not sym.is_init or sym.is_maybe_init: return false
+            return true
+        if sym.ty.read().name == "Weak":
+            if sym.is_moved or sym.is_maybe_moved or sym.is_freed: return false
+            if not sym.is_init or sym.is_maybe_init: return false
+            return true
         # A value BORROWED from a collection element (`x = coll.get(i)`) ALIASES that
         # element — it does NOT own it. Auto-dropping it (releasing its str fields /
         # calling free) would free data the collection still owns: a use-after-free.
@@ -1011,39 +1268,32 @@ extend Sema:
         if sym.is_moved or sym.is_maybe_moved or sym.is_freed: return false
         if sym.active_borrows > 0: return false
         if not sym.is_init or sym.is_maybe_init: return false
-        # ESCAPED: passed in a non-receiver position (may be stored by the callee).
-        # Excluded from the implicit field-destructor to avoid freeing data a new owner
-        # holds (use-after-free). coll_escaped is reused for class instances here.
-        if sym.coll_escaped: return false
         mut cls = self.classes.get(tn)
         mut mi = 0
         mut has_dispose = false
         while mi < cls.methods.len:
             mut mnm = cls.methods.get(mi).name
-            if mnm == "free": return true
+            if mnm == "free":
+                # A user `free()` class is MANUALLY managed (not refcount-balanced).
+                # If this instance was passed to a callee in a non-receiver position
+                # (mark_coll_arg set coll_escaped), that callee may take ownership and
+                # call free() itself — e.g. `c.send_json_writer(200, w)` frees `w`.
+                # Auto-dropping here too would call free() twice → double-free/heap
+                # corruption. Exclude it (a leak at worst, never a UAF), same as the
+                # collection path does. (Refcounted plain classes below are exempt —
+                # rc is the safety net there.)
+                if sym.coll_escaped: return false
+                return true          # user free(): called at scope exit
             if mnm == "dispose": has_dispose = true
             mi = mi + 1
         # A `dispose()` class self-manages its memory — hands off (no double-free).
         if has_dispose: return false
-        # IMPLICIT FIELD-DESTRUCTOR (plain data class: str fields, no free/dispose) — but
-        # ONLY for a PROVABLY-OWNED instance. The ownership invariant is THE soundness
-        # key: a freshly-constructed (`x = T()`) or returned-by-value instance is owned,
-        # so releasing its str fields at scope exit is correct. A BORROW — a collection
-        # element (`coll.get(i)`), a field read (`o.f`), a method/`ref` result — ALIASES
-        # data its owner still holds, so dropping it is a use-after-free. compute_region
-        # tags owned initializers "@owned" at the SLet; everything else is left undropped
-        # (a small conservative leak, never a UAF). This is the sound core of auto-free
-        # without a full borrow checker.
-        if sym.borrows_region != "@owned": return false
-        mut fi = 0
-        while fi < cls.fields.len:
-            mut fdt_p = cls.fields.get(fi).ty
-            if fdt_p as usize != 0 as usize:
-                mut fdt = fdt_p.read()
-                if fdt.name == "str" and not fdt.is_borrow:
-                    return true
-            fi = fi + 1
-        return false
+        # Plain heap class: REFCOUNTED. Released at scope exit via _tr_obj_release,
+        # which the codegen gates on class_local_names (only OWNING locals enter it).
+        # Combined with retain-on-bind/store/return, this is balanced regardless of
+        # aliasing (rc is the safety net) — so no @owned/escape gate is needed here.
+        # (`@borrowed` collection-element borrows are excluded at the top of this fn.)
+        return true
 
     # Open a new if/while/etc body block, assigning it a fresh monotonic id.
     pub def open_block(self):
@@ -1995,6 +2245,14 @@ extend Sema:
             self.register_decl(prog.decls.get(i))
             i = i + 1
 
+        # [S-2] (--strict): the leak-freedom GUARANTEE. Reject strong-ownership CYCLES
+        # among refcounted classes (the one thing plain ARC cannot reclaim). Combined
+        # with [U-1] (no raw allocation outside `unsafe:`), a program that compiles
+        # under --strict is provably leak-free: every heap value is refcounted and the
+        # ownership graph is acyclic, so every count reaches zero.
+        if self.strict_mode:
+            self.check_ownership_cycles(prog)
+
         # Implicit-borrow support (--strict only, additive): pre-compute which methods
         # mutate self, so the borrow checker can flag `a.mutate()` while `a` is borrowed.
         # Runs AFTER register_decl so `extend T` methods are included; keyed "Type.method".
@@ -2089,7 +2347,182 @@ extend Sema:
         while nii < self.nested_interfaces.len:
             hp.interfaces.push(self.nested_interfaces.get(nii))
             nii = nii + 1
+        # Return-ownership inference: classify every heap-class-returning function
+        # as OWNED (caller receives+owns a reference → must release) or BORROWED
+        # (a return may alias a collection element / another borrow → caller must
+        # NOT release). Consumed by codegen `_obj_expr_owns_ref` to decide whether
+        # a call-result local is auto-dropped — enabling reclamation of owned
+        # factory/free-function results without ever over-releasing a borrow.
+        self.compute_return_ownership(hp)
         return hp
+
+    # ---- Return-ownership inference (whole-program monotone fixpoint) ----
+    # A function returns an OWNED heap-class reference iff EVERY return path yields
+    # one. Base cases that yield owned (codegen's obj_retain_wrap guarantees it):
+    #   * a bare ident (retained at return, or an owned tracked-local transfer)
+    #   * a field read `self.f` / `obj.f` (retained at return)
+    #   * a constructor `ClassName(...)`
+    # Transitive: a call to an OWNED function/method. Forced BORROWED by: a
+    # collection `.get/.first/.last` or `[]` (raw element alias, not retained), an
+    # index, or a call to a BORROWED/unknown function. Fixpoint starts optimistic
+    # (all true) and only flips true→false, so it converges.
+    pub def compute_return_ownership(self, hp: HirProgram):
+        # Collect (key, HirFunction) for every heap-class-returning function.
+        mut keys = Vec[str].init(64)
+        mut fns  = Vec[HirFunction].init(64)
+        mut fi = 0
+        while fi < hp.functions.len:
+            mut f = hp.functions.get(fi)
+            if self._fn_ret_is_heap_class(f):
+                keys.push(f.name)
+                fns.push(f)
+            fi = fi + 1
+        mut ci = 0
+        while ci < hp.classes.len:
+            mut c = hp.classes.get(ci)
+            mut mi = 0
+            while mi < c.methods.len:
+                mut m = c.methods.get(mi)
+                if self._fn_ret_is_heap_class(m):
+                    keys.push(c.name + "." + m.name)
+                    fns.push(m)
+                mi = mi + 1
+            ci = ci + 1
+        mut ei = 0
+        while ei < hp.enums.len:
+            mut en = hp.enums.get(ei)
+            mut emi = 0
+            while emi < en.methods.len:
+                mut em = en.methods.get(emi)
+                if self._fn_ret_is_heap_class(em):
+                    keys.push(en.name + "." + em.name)
+                    fns.push(em)
+                emi = emi + 1
+            ei = ei + 1
+        # Start optimistic — EXCEPT a `-> ref T` / `-> T from r` function returns a
+        # BORROW (zero-copy: the return path does NOT retain), so it is owned=false
+        # from the start (and stays false under the monotone fixpoint). Missing this
+        # would classify `return self.field` in a borrow-returning fn as OWNED → the
+        # caller drops an un-retained alias → use-after-free.
+        mut ki = 0
+        while ki < keys.len:
+            mut kf = fns.get(ki)
+            mut kf_owned = true
+            if kf.ret_ty as usize != 0 as usize:
+                if kf.ret_ty.is_borrow or kf.ret_ty.from_param != "" or kf.ret_ty.from_regions.len > 0:
+                    kf_owned = false
+            self.fn_ret_owned.insert(keys.get(ki), kf_owned)
+            ki = ki + 1
+        # Monotone fixpoint (only true→false).
+        mut changed = true
+        while changed:
+            changed = false
+            mut xi = 0
+            while xi < fns.len:
+                mut k = keys.get(xi)
+                if self.fn_ret_owned.get(k):
+                    mut rets = Vec[Pointer[HirExpr]].init(4)
+                    self._collect_returns(fns.get(xi).body, rets)
+                    mut all_owned = true
+                    mut ri = 0
+                    while ri < rets.len:
+                        if not self._ret_yields_owned(rets.get(ri)):
+                            all_owned = false
+                        ri = ri + 1
+                    if not all_owned:
+                        self.fn_ret_owned.insert(k, false)
+                        changed = true
+                xi = xi + 1
+        # Publish onto each HirFunction for codegen.
+        mut wi = 0
+        while wi < fns.len:
+            mut hf2 = fns.get(wi)
+            hf2.returns_owned = self.fn_ret_owned.get(keys.get(wi))
+            wi = wi + 1
+
+    pub def _fn_ret_is_heap_class(self, f: HirFunction) -> bool:
+        if f.ret_ty as usize == 0 as usize: return false
+        mut rn = f.ret_ty.name
+        if not self.classes.contains(rn): return false
+        if rn == "Vec" or rn == "Map" or rn == "List" or rn == "Dict" or rn == "Set" or rn == "Box" or rn == "Mutex" or rn == "RwLock" or rn == "Atomic" or rn == "Shared" or rn == "Option" or rn == "Result" or rn == "Chan" or rn == "StringBuilder" or rn == "StringObj": return false
+        # value types are copied by value, not refcounted
+        mut cinfo = self.classes.get(rn)
+        if not cinfo.is_class: return false
+        return true
+
+    # Collect every SReturn expression reachable in `b` (recurses into EVERY
+    # nested block form — missing one would leave a borrow-return unseen and
+    # wrongly classify the function OWNED, risking a UAF at the call site).
+    pub def _collect_returns(self, b: HirBlock, out: Vec[Pointer[HirExpr]]):
+        if b as usize == 0 as usize: return
+        mut i = 0
+        while i < b.stmts.len:
+            self._collect_returns_stmt(b.stmts.get(i), out)
+            i = i + 1
+
+    pub def _collect_returns_stmt(self, sp: Pointer[HirStmt], out: Vec[Pointer[HirExpr]]):
+        if sp as usize == 0 as usize: return
+        match sp.read():
+            case HirStmt.SReturn(re):
+                if re as usize != 0 as usize: out.push(re)
+            case HirStmt.SIf(_, tb, eb):
+                self._collect_returns(tb, out)
+                self._collect_returns(eb, out)
+            case HirStmt.SWhile(_, wb): self._collect_returns(wb, out)
+            case HirStmt.SFor(_, _, fb): self._collect_returns(fb, out)
+            case HirStmt.SForUnpack(_, _, fub): self._collect_returns(fub, out)
+            case HirStmt.SMatch(_, marms):
+                mut ai = 0
+                while ai < marms.len:
+                    self._collect_returns(marms.get(ai).body, out)
+                    ai = ai + 1
+            case HirStmt.SUnsafe(ub): self._collect_returns(ub, out)
+            case HirStmt.SWith(_, _, wb2): self._collect_returns(wb2, out)
+            case HirStmt.STaskGroup(tgb): self._collect_returns(tgb, out)
+            case HirStmt.SGpuBlock(gb): self._collect_returns(gb, out)
+            case HirStmt.SDefer(ds): self._collect_returns_stmt(ds, out)
+            case HirStmt.STry(tb2, catches, fb2):
+                self._collect_returns(tb2, out)
+                mut ci = 0
+                while ci < catches.len:
+                    mut cc = catches.get(ci)
+                    if cc as usize != 0 as usize: self._collect_returns(cc.read().body, out)
+                    ci = ci + 1
+                self._collect_returns(fb2, out)
+            case _: pass
+
+    # Current fixpoint estimate for a fn/method key (missing → conservatively BORROWED).
+    pub def _owned_of(self, key: str) -> bool:
+        if self.fn_ret_owned.contains(key): return self.fn_ret_owned.get(key)
+        return false
+
+    pub def _ret_yields_owned(self, e: Pointer[HirExpr]) -> bool:
+        if e as usize == 0 as usize: return false
+        match e.read():
+            case HirExpr.EIdent(_, _, _): return true
+            case HirExpr.EPropAccess(_, _, _): return true
+            case HirExpr.ECall(callee, _, _):
+                if callee as usize == 0 as usize: return false
+                match callee.read():
+                    case HirExpr.EIdent(cn, _, _):
+                        if self.classes.contains(cn): return true   # constructor
+                        return self._owned_of(cn)                    # free fn (missing→borrow)
+                    case _: return false
+            case HirExpr.EMethodCall(recv, m, _, _):
+                mut rt = hir_expr_type(recv).name
+                # A collection element read is a raw alias (not retained) → borrow.
+                if (rt == "Vec" or rt == "List" or rt == "Dict" or rt == "Map" or rt == "Set") and (m == "get" or m == "first" or m == "last"):
+                    return false
+                # ClassName.factory(...) — receiver names a class → key on it directly.
+                match recv.read():
+                    case HirExpr.EIdent(rn, _, _):
+                        if self.classes.contains(rn): rt = rn
+                    case _: pass
+                return self._owned_of(rt + "." + m)
+            case HirExpr.EIndex(_, _, _): return false
+            case HirExpr.EIfElse(_, a, b2, _):
+                return self._ret_yields_owned(a) and self._ret_yields_owned(b2)
+            case _: return false
 
     pub def register_decl(self, d: Pointer[Decl]):
         match d.read():
@@ -2213,6 +2646,8 @@ extend Sema:
 
     pub def lower_func(self, f: FunctionDef) -> HirFunction:
         self.current_line = f.line
+        mut _saved_fn_is_lib = self.cur_fn_is_lib
+        self.cur_fn_is_lib = f.is_lib
         # Rule N-1: Function name check
         # Top-level functions cannot shadow reserved built-ins.
         # Methods (current_class_name != "") are exempt - len/abs/etc. are valid method names.
@@ -2418,6 +2853,7 @@ extend Sema:
         self.current_func_ret_regions = saved_ret_regions
         self.current_func_outlives_a = saved_outlives_a
         self.current_func_outlives_b = saved_outlives_b
+        self.cur_fn_is_lib = _saved_fn_is_lib
         return hf
 
     pub def lower_class(self, c: ClassDef) -> HirClass:
@@ -2463,6 +2899,11 @@ extend Sema:
                 # Validate all fields are Sendable; pass generics (T fields allowed)
                 if c.generics.len == 0:
                     self.check_class_sendable_fields(c)
+            elif _ifc_nm == "UnsafeSendable":
+                # Marker (Tauraro's `unsafe impl Send/Sync`): the author asserts this
+                # class is thread-safe. No compiler field check — the assertion is the
+                # audited unsafe core; it opts out of [T-2] (fields) and [T-7] (rc).
+                pass
             elif not self.interfaces.contains(_ifc_nm):
                 self.error("[I-1] Class '" + c.name + "' declares 'implements " + _ifc_nm + "' but interface '" + _ifc_nm + "' is not defined.\n      FIX: Define 'interface " + _ifc_nm + ":' before this class, or check for typos.")
             else:
@@ -2800,6 +3241,15 @@ extend Sema:
                                 self.mark_moved(m1_src)
                         case _: pass
                 self.declare(name, SymbolKind.SVariable, box_asttype(ty), is_mut)
+                # A `shared` local: record is_shared on the symbol so the Shared[T]
+                # control methods (clone/downgrade/drop) resolve on it and its drop is
+                # routed to _tr_shared_drop.
+                if is_shared and self.scopes.len > 0:
+                    mut _sh_scope = self.scopes.get(self.scopes.len - 1)
+                    if _sh_scope.variables.contains(name):
+                        mut _sh_sym = _sh_scope.variables.get(name)
+                        _sh_sym.is_shared = true
+                        _sh_scope.variables.insert(name, _sh_sym)
                 # [L-3/L-4] region derivation: record which region this local derives
                 # from (its initial value).
                 if val_ptr as usize != 0 as usize:
@@ -2875,7 +3325,14 @@ extend Sema:
                         mut pc_cont_sym = self.resolve(pc_cont_nm)
                         mut pc_cont_ty = pc_cont_sym.ty.read()
                         mut pc_ctn = pc_cont_ty.name
-                        if pc_ctn == "Vec" or pc_ctn == "List" or pc_ctn == "Dict" or pc_ctn == "Map" or pc_ctn == "Set":
+                        if pc_ctn == "Mutex" or pc_ctn == "RwLock":
+                            # `mut x = mutex.get()` / `rwlock.get()` BORROWS the guarded
+                            # value — the lock OWNS it. Auto-dropping x would free the
+                            # guarded content (e.g. Dict_free_objval on a Mutex[Map]'s Map,
+                            # or _tr_obj_release on a Mutex[Class]'s instance) → UAF on the
+                            # next .get(). Mark it @borrowed so is_droppable_sym skips it.
+                            self.set_borrows_region(name, "@borrowed")
+                        elif pc_ctn == "Vec" or pc_ctn == "List" or pc_ctn == "Dict" or pc_ctn == "Map" or pc_ctn == "Set":
                             mut pc_elem_ty = hir_expr_type(hval).name
                             # A @value_type element is returned BY VALUE (a copy), so
                             # `x = d.get(k)` is NOT a borrow into the container.
@@ -3569,6 +4026,49 @@ extend Sema:
         if method == "words": return AstType.init("Vec")
         return AstType.init("void")
 
+    # Collect every identifier referenced anywhere in a HIR block — used for
+    # closure free-variable / capture analysis.
+    pub def collect_block_refs(self, b: HirBlock, out: Vec[str]):
+        mut i = 0
+        while i < b.stmts.len:
+            self.collect_stmt_refs(b.stmts.get(i), out)
+            i = i + 1
+
+    pub def collect_stmt_refs(self, s: Pointer[HirStmt], out: Vec[str]):
+        if s as usize == 0 as usize: return
+        match s.read():
+            case HirStmt.SExpr(e): self.collect_idents(e, out)
+            case HirStmt.SLet(_, _, _, _, _, _, v): self.collect_idents(v, out)
+            case HirStmt.SAssign(t, v):
+                self.collect_idents(t, out)
+                self.collect_idents(v, out)
+            case HirStmt.SReturn(v):
+                if v as usize != 0 as usize: self.collect_idents(v, out)
+            case HirStmt.SBreak(v):
+                if v as usize != 0 as usize: self.collect_idents(v, out)
+            case HirStmt.SRaise(v): self.collect_idents(v, out)
+            case HirStmt.SIf(c, tb, eb):
+                self.collect_idents(c, out)
+                self.collect_block_refs(tb, out)
+                self.collect_block_refs(eb, out)
+            case HirStmt.SWhile(c, b2):
+                self.collect_idents(c, out)
+                self.collect_block_refs(b2, out)
+            case HirStmt.SFor(_, it, b2):
+                self.collect_idents(it, out)
+                self.collect_block_refs(b2, out)
+            case HirStmt.SForUnpack(_, it, b2):
+                self.collect_idents(it, out)
+                self.collect_block_refs(b2, out)
+            case HirStmt.SMatch(subj, arms):
+                self.collect_idents(subj, out)
+                mut i = 0
+                while i < arms.len:
+                    self.collect_block_refs(arms.get(i).body, out)
+                    i = i + 1
+            case HirStmt.SUnsafe(b2): self.collect_block_refs(b2, out)
+            case _: pass
+
     # Lower a block into a `do:` value (HirExpr.EDo): runs the body in its own
     # scope; the LAST bare expression is the value. Scope-exit drops run NORMALLY
     # (no exclusion) for `str`/refcounted values — codegen captures + retains the
@@ -3983,8 +4483,12 @@ extend Sema:
                 # `Coro.spawn` (the low-level green-thread primitive that takes
                 # raw Pointer args in unsafe blocks), which must NOT be checked.
                 mut _recv_name = ""
+                mut _recv_is_shared = false
                 match obj.read():
-                    case Expr.EIdent(_rn): _recv_name = _rn
+                    case Expr.EIdent(_rn):
+                        _recv_name = _rn
+                        mut _rsym = self.resolve(_rn)
+                        if _rsym.name != "" and _rsym.is_shared: _recv_is_shared = true
                     case _: pass
                 # Callable-field call: obj.f(args) where f is a def(...)-typed
                 # FIELD (not a method) -> lower to field access + indirect call.
@@ -4056,7 +4560,13 @@ extend Sema:
                             case _: ret_ty = hobj_ty
                     else:
                         ret_ty = hobj_ty
-                elif method == "offset": ret_ty = hobj_ty
+                elif method == "offset":
+                    # [P-2] (default-on): raw pointer ARITHMETIC can fabricate an
+                    # out-of-bounds pointer — only allowed inside `unsafe:`. Trusted
+                    # std/core + `# @trusted` systems modules are the audited core (exempt).
+                    if hobj_ty.name == "Pointer" and not self.cur_fn_is_lib and not self.in_unsafe:
+                        self.error("[P-2] '.offset()' does raw pointer arithmetic (can create an out-of-bounds pointer) and must be inside an 'unsafe:' block.\n      FIX: wrap it in 'unsafe:', or use a safe slice / Vec[T] instead of pointer math.")
+                    ret_ty = hobj_ty
                 # List/Vec aggregate methods - return element type or int
                 elif (hobj_ty.name == "List" or hobj_ty.name == "Vec") and (method == "sum" or method == "min" or method == "max" or method == "min_val" or method == "max_val"):
                     if hobj_ty.args.len > 0: ret_ty = hobj_ty.args.get(0).read()
@@ -4071,7 +4581,13 @@ extend Sema:
                 elif (hobj_ty.name == "List" or hobj_ty.name == "Vec") and (method == "index_of" or method == "last_index_of" or method == "count"): ret_ty = AstType.init("int")
                 elif (hobj_ty.name == "List" or hobj_ty.name == "Vec") and method == "join": ret_ty = AstType.init("str")
                 elif method == "read":
-                    if hobj_ty.name == "Pointer" and hobj_ty.args.len > 0: ret_ty = hobj_ty.args.get(0).read()
+                    if hobj_ty.name == "Pointer" and hobj_ty.args.len > 0:
+                        # [P-2] (default-on): DEREFERENCING a raw pointer may read freed /
+                        # invalid memory (temporal + spatial UB) — only inside `unsafe:`.
+                        # Trusted std/core + `# @trusted` systems modules are exempt.
+                        if not self.cur_fn_is_lib and not self.in_unsafe:
+                            self.error("[P-2] '.read()' dereferences a raw pointer (may read freed or invalid memory) and must be inside an 'unsafe:' block.\n      FIX: wrap it in 'unsafe:', or hold the value in a safe Box[T] / Vec[T] / class reference instead of a raw pointer.")
+                        ret_ty = hobj_ty.args.get(0).read()
                     else: ret_ty = AstType.init("int")
                 elif method == "as_str" or method == "to_str": ret_ty = AstType.init("str")
                 elif method == "len" or method == "__len__": ret_ty = AstType.init("int")
@@ -4175,6 +4691,9 @@ extend Sema:
                         mut _tsa_ty = hir_expr_type(hl.get(_tsi))
                         if not self.is_sendable_ty(_tsa_ty):
                             self.error("[T-1] Type '" + _tsa_ty.name + "' is not Sendable and cannot be passed to Thread.spawn.\n      FIX: Wrap in Mutex[" + _tsa_ty.name + "] for exclusive access, or add 'implements Sendable' to '" + _tsa_ty.name + "' to confirm it is thread-safe.")
+                        elif self.strict_mode and self._is_rc_class(_tsa_ty.name) and not self._expr_is_shared(hl.get(_tsi)) and not self._is_unsafe_sendable(_tsa_ty.name):
+                            self.error("[T-7] '" + _tsa_ty.name + "' is a plain reference-counted class — its refcount is thread-local (non-atomic), so it is not 'Send' and cannot be passed to Thread.spawn (exactly why Rust's 'Rc' is '!Send'): retaining/releasing it from another thread races the count.\n      FIX: share it as 'Shared[" + _tsa_ty.name + "]' (atomic refcount, like Rust's 'Arc'). A 'Sendable' class must itself hold only Sendable + atomically-shared state.")
+                        self._check_spawn_nested_rc(hl.get(_tsi))
                         _tsi = _tsi + 1
                 # ThreadPool.spawn arg Sendable check
                 elif method == "spawn" and hobj_ty.name == "ThreadPool":
@@ -4187,6 +4706,9 @@ extend Sema:
                         mut _psa_ty = hir_expr_type(hl.get(_psi))
                         if not self.is_sendable_ty(_psa_ty):
                             self.error("[T-1] Type '" + _psa_ty.name + "' is not Sendable and cannot be passed to ThreadPool.spawn.\n      FIX: Wrap in Mutex[" + _psa_ty.name + "] for exclusive access, or add 'implements Sendable' to '" + _psa_ty.name + "' to confirm it is thread-safe.")
+                        elif self.strict_mode and self._is_rc_class(_psa_ty.name) and not self._expr_is_shared(hl.get(_psi)) and not self._is_unsafe_sendable(_psa_ty.name):
+                            self.error("[T-7] '" + _psa_ty.name + "' is a plain reference-counted class — its refcount is thread-local (non-atomic), so it cannot be passed to ThreadPool.spawn (like Rust's 'Rc' being '!Send').\n      FIX: share it as 'Shared[" + _psa_ty.name + "]' (atomic refcount, like Rust's 'Arc').")
+                        self._check_spawn_nested_rc(hl.get(_psi))
                         _psi = _psi + 1
                 # Atomic built-in method return types
                 elif hobj_ty.name == "Atomic":
@@ -4240,6 +4762,18 @@ extend Sema:
                             opt_ty.args.push(box_asttype(hobj_ty.args.get(0).read()))
                         ret_ty = opt_ty
                     elif method == "is_alive": ret_ty = AstType.init("bool")
+                # A `shared` LOCAL is typed as its inner payload T (so `s.field`/`s.method()`
+                # auto-deref), but the Shared[T] control methods still apply to the box. Route
+                # them here so they don't hit the payload-class [E-1] "no method" check.
+                elif _recv_is_shared and (method == "clone" or method == "downgrade" or method == "drop" or method == "is_null"):
+                    if method == "clone": ret_ty = hobj_ty
+                    elif method == "is_null": ret_ty = AstType.init("bool")
+                    elif method == "drop": ret_ty = AstType.init("void")
+                    elif method == "downgrade":
+                        mut _wk_ty = AstType.init("Weak")
+                        _wk_ty.args = Vec[Pointer[AstType]].init(1)
+                        _wk_ty.args.push(box_asttype(hobj_ty))
+                        ret_ty = _wk_ty
                 elif self.interfaces as usize != 0 as usize and self.interfaces.contains(hobj_ty.name):
                     mut _iface_def = self.interfaces.get(hobj_ty.name)
                     mut _imi = 0
@@ -4316,6 +4850,17 @@ extend Sema:
                     elif prop == "data": ret_ty = AstType.init("Pointer")
                 elif hobj_ty_n == "Map" or hobj_ty_n == "Dict" or hobj_ty_n == "Set":
                     if prop == "len" or prop == "length" or prop == "capacity": ret_ty = AstType.init("int")
+                elif hobj_ty_n == "Shared" and hobj_ty_full.args.len > 0 and self.classes.contains(hobj_ty_full.args.get(0).read().name):
+                    # Field access through a Shared[T] handle: look up the field on the
+                    # inner T (the codegen unwraps the atomic box to (T*)box->data). Lets
+                    # `job.app.get()` on a `Shared[Job]` type the `.app` field as Mutex[App].
+                    mut _scls = self.classes.get(hobj_ty_full.args.get(0).read().name)
+                    mut _sfi = 0
+                    while _sfi < _scls.fields.len:
+                        mut _sfld = _scls.fields.get(_sfi)
+                        if _sfld.name == prop:
+                            if _sfld.ty as usize != 0 as usize: ret_ty = _sfld.ty.read()
+                        _sfi = _sfi + 1
                 elif self.classes.contains(hobj_ty_n):
                     mut _cls = self.classes.get(hobj_ty_n)
                     mut _fi = 0
@@ -4501,6 +5046,7 @@ extend Sema:
                 return box_hirexpr(HirExpr.EList(hitems, list_ty))
             case Expr.EClosure(params, ret_ty, body, is_async):
                 self.enter_scope()
+                mut cap_idx = self.scopes.len - 1   # the closure's OWN scope
                 mut hparams = Vec[HirParam].init(params.len)
                 mut l = 0
                 while l < params.len:
@@ -4521,7 +5067,36 @@ extend Sema:
                 mut clo_body = self.lower_block(body)
                 self.fn_scope_base.pop()
                 self.finalize_scope_drops(clo_body)
-                mut hexpr = HirExpr.EClosure(hparams, r_ty, clo_body, is_async, Vec[HirParam].init(0))
+                # Capture analysis: the outlined closure (a top-level function) can
+                # no longer see the enclosing frame, so compute the FREE variables —
+                # names it references that resolve to an ENCLOSING local variable
+                # (not its own params/locals, not a global/function) — and record
+                # them as by-reference captures for codegen's env.
+                mut clo_refs = Vec[str].init(8)
+                self.collect_block_refs(clo_body, clo_refs)
+                mut clo_caps = Vec[HirParam].init(4)
+                mut clo_seen = Map[str, bool].init(8)
+                mut cri = 0
+                while cri < clo_refs.len:
+                    mut rn = clo_refs.get(cri)
+                    if not clo_seen.contains(rn):
+                        clo_seen.insert(rn, true)
+                        if not self.scopes.get(cap_idx).variables.contains(rn):
+                            mut si = cap_idx - 1
+                            mut cty_p = Pointer[AstType](0)
+                            while si >= 0:
+                                if self.scopes.get(si).variables.contains(rn):
+                                    cty_p = self.scopes.get(si).variables.get(rn).ty
+                                    si = 0 - 1
+                                else:
+                                    si = si - 1
+                            if cty_p as usize != 0 as usize:
+                                mut ccp = HirParam()
+                                ccp.name = rn
+                                ccp.ty = cty_p.read()
+                                clo_caps.push(ccp)
+                    cri = cri + 1
+                mut hexpr = HirExpr.EClosure(hparams, r_ty, clo_body, is_async, clo_caps)
                 self.exit_scope()
                 return box_hirexpr(hexpr)
             case Expr.EIfElse(cond, then_e, else_e):

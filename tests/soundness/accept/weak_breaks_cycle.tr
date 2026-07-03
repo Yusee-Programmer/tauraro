@@ -1,0 +1,10 @@
+# EXPECT: pass
+# The same Parent/Child relationship, but the back-edge is a `Weak[Parent]`
+# (non-owning) — this breaks the strong-ownership cycle, so [S-2] is satisfied
+# and ARC reclaims both objects. A weak reference is the sanctioned escape hatch.
+class Parent:
+    pub child: Child          # strong forward edge
+class Child:
+    pub parent: Weak[Parent]  # weak back-edge -> no cycle
+def main():
+    print("ok")

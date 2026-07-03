@@ -3,7 +3,7 @@
 
 __attribute__((malloc,returns_nonnull,hot)) LlvmGenerator* LlvmGenerator_init() {
     /* pass */
-    LlvmGenerator* g = ((LlvmGenerator*)_tr_checked_alloc(sizeof(LlvmGenerator)));
+    LlvmGenerator* g = ((LlvmGenerator*)_tr_obj_alloc(sizeof(LlvmGenerator)));
     /* pass */
     g->buf = StringBuilder_init(1024LL);
     /* pass */
@@ -38,7 +38,7 @@ __attribute__((hot)) void LlvmGenerator__tr_fn_register(LlvmGenerator* self, Hir
         /* pass */
         HirClass* c = ((HirClass*)List_ptr_get(prog->classes, i));
         /* pass */
-        _tr_dict_set(self->classes, _tr_strz(c->name), c);
+        _tr_dict_set(self->classes, _tr_strz(c->name), _tr_obj_retain(c));
         /* pass */
         i = (i + 1LL);
     }
@@ -49,7 +49,7 @@ __attribute__((hot)) void LlvmGenerator__tr_fn_register(LlvmGenerator* self, Hir
         /* pass */
         HirEnum* e = ((HirEnum*)List_ptr_get(prog->enums, i));
         /* pass */
-        _tr_dict_set(self->enums, _tr_strz(e->name), e);
+        _tr_dict_set(self->enums, _tr_strz(e->name), _tr_obj_retain(e));
         /* pass */
         i = (i + 1LL);
     }
@@ -60,7 +60,7 @@ __attribute__((hot)) void LlvmGenerator__tr_fn_register(LlvmGenerator* self, Hir
         /* pass */
         HirFunction* f = ((HirFunction*)List_ptr_get(prog->functions, i));
         /* pass */
-        _tr_dict_set(self->functions, _tr_strz(f->name), f);
+        _tr_dict_set(self->functions, _tr_strz(f->name), _tr_obj_retain(f));
         /* pass */
         i = (i + 1LL);
     }
@@ -91,7 +91,7 @@ __attribute__((hot)) void LlvmGenerator_emit_type_decls(LlvmGenerator* self, Hir
                 LlvmGenerator_w(self, _tr_str_lit(", "));
             }
             /* pass */
-            ({ TrStr _at_t2247 = (llvm_type(((HirField*)List_ptr_get(c->fields, fi))->ty)); LlvmGenerator_w(self, _at_t2247); _tr_str_release(_at_t2247); });
+            ({ TrStr _at_t2164 = (llvm_type(((HirField*)List_ptr_get(c->fields, fi))->ty)); LlvmGenerator_w(self, _at_t2164); _tr_str_release(_at_t2164); });
             /* pass */
             first = false;
             /* pass */
@@ -199,7 +199,7 @@ __attribute__((hot)) void LlvmGenerator_emit_func_sig(LlvmGenerator* self, HirFu
             LlvmGenerator_w(self, _tr_str_lit(", "));
         }
         /* pass */
-        ({ TrStr _at_t2248 = (llvm_type(p->ty)); LlvmGenerator_w(self, _at_t2248); _tr_str_release(_at_t2248); });
+        ({ TrStr _at_t2165 = (llvm_type(p->ty)); LlvmGenerator_w(self, _at_t2165); _tr_str_release(_at_t2165); });
         /* pass */
         LlvmGenerator_w(self, _tr_str_lit(" %"));
         /* pass */
@@ -223,10 +223,10 @@ __attribute__((hot)) TrStr LlvmGenerator_gen_expr(LlvmGenerator* self, HirExpr* 
     /* pass */
     __auto_type e = (*e_ptr);
     /* pass */
-    __auto_type _t2249 = e;
-    if (_t2249.tag == HirExpr_ELitInt) {
-        __auto_type v = _t2249.data.ELitInt.val;
-__auto_type ty = _t2249.data.ELitInt.ty;
+    __auto_type _t2166 = e;
+    if (_t2166.tag == HirExpr_ELitInt) {
+        __auto_type v = _t2166.data.ELitInt.val;
+__auto_type ty = _t2166.data.ELitInt.ty;
         /* pass */
         TrStr reg = LlvmGenerator_next_reg(self);
         /* pass */
@@ -242,14 +242,14 @@ __auto_type ty = _t2249.data.ELitInt.ty;
         /* pass */
         LlvmGenerator_w(self, _tr_str_lit(" 0, "));
         /* pass */
-        ({ TrStr _at_t2250 = (_tr_str_wrap(_tr_int_to_str((long long)(v)))); LlvmGenerator_w(self, _at_t2250); _tr_str_release(_at_t2250); });
+        ({ TrStr _at_t2167 = (_tr_str_wrap(_tr_int_to_str((long long)(v)))); LlvmGenerator_w(self, _at_t2167); _tr_str_release(_at_t2167); });
         /* pass */
         LlvmGenerator_w(self, _tr_str_lit("\n"));
         /* pass */
         _tr_str_release(lty);
         return reg;
-    } else if (_t2249.tag == HirExpr_ELitBool) {
-        __auto_type v = _t2249.data.ELitBool.val;
+    } else if (_t2166.tag == HirExpr_ELitBool) {
+        __auto_type v = _t2166.data.ELitBool.val;
         /* pass */
         TrStr reg = LlvmGenerator_next_reg(self);
         /* pass */
@@ -257,9 +257,9 @@ __auto_type ty = _t2249.data.ELitInt.ty;
         /* pass */
         if (v) {
             /* pass */
-            TrStr _strtmp_t2251 = _tr_str_lit("1");
+            TrStr _strtmp_t2168 = _tr_str_lit("1");
             _tr_str_release(bval);
-            bval = _strtmp_t2251;
+            bval = _strtmp_t2168;
         }
         /* pass */
         LlvmGenerator_w(self, _tr_str_lit("    "));
@@ -274,9 +274,9 @@ __auto_type ty = _t2249.data.ELitInt.ty;
         /* pass */
         _tr_str_release(bval);
         return reg;
-    } else if (_t2249.tag == HirExpr_ELitFloat) {
-        __auto_type v = _t2249.data.ELitFloat.val;
-__auto_type ty = _t2249.data.ELitFloat.ty;
+    } else if (_t2166.tag == HirExpr_ELitFloat) {
+        __auto_type v = _t2166.data.ELitFloat.val;
+__auto_type ty = _t2166.data.ELitFloat.ty;
         /* pass */
         TrStr reg = LlvmGenerator_next_reg(self);
         /* pass */
@@ -286,13 +286,13 @@ __auto_type ty = _t2249.data.ELitFloat.ty;
         /* pass */
         LlvmGenerator_w(self, _tr_str_lit(" = fadd double 0.0, "));
         /* pass */
-        ({ TrStr _at_t2252 = (_tr_str_wrap(_tr_float_to_str((double)(v)))); LlvmGenerator_w(self, _at_t2252); _tr_str_release(_at_t2252); });
+        ({ TrStr _at_t2169 = (_tr_str_wrap(_tr_float_to_str((double)(v)))); LlvmGenerator_w(self, _at_t2169); _tr_str_release(_at_t2169); });
         /* pass */
         LlvmGenerator_w(self, _tr_str_lit("\n"));
         /* pass */
         return reg;
-    } else if (_t2249.tag == HirExpr_ELitStr) {
-        __auto_type v = _t2249.data.ELitStr.val;
+    } else if (_t2166.tag == HirExpr_ELitStr) {
+        __auto_type v = _t2166.data.ELitStr.val;
         /* pass */
         TrStr reg = LlvmGenerator_next_reg(self);
         /* pass */
@@ -306,7 +306,7 @@ __auto_type ty = _t2249.data.ELitFloat.ty;
         /* pass */
         LlvmGenerator_w(self, _tr_str_lit(" = getelementptr ["));
         /* pass */
-        ({ TrStr _at_t2253 = (_tr_str_wrap(_tr_int_to_str((long long)(len)))); LlvmGenerator_w(self, _at_t2253); _tr_str_release(_at_t2253); });
+        ({ TrStr _at_t2170 = (_tr_str_wrap(_tr_int_to_str((long long)(len)))); LlvmGenerator_w(self, _at_t2170); _tr_str_release(_at_t2170); });
         /* pass */
         LlvmGenerator_w(self, _tr_str_lit(" x i8], ptr "));
         /* pass */
@@ -316,13 +316,13 @@ __auto_type ty = _t2249.data.ELitFloat.ty;
         /* pass */
         _tr_str_release(gname);
         return reg;
-    } else if (_t2249.tag == HirExpr_ELitNone) {
-        __auto_type _ = _t2249.data.ELitNone.ty;
+    } else if (_t2166.tag == HirExpr_ELitNone) {
+        __auto_type _ = _t2166.data.ELitNone.ty;
         /* pass */
         return _tr_str_lit("null");
-    } else if (_t2249.tag == HirExpr_EIdent) {
-        __auto_type name = _t2249.data.EIdent.name;
-__auto_type is_move = _t2249.data.EIdent.is_move;
+    } else if (_t2166.tag == HirExpr_EIdent) {
+        __auto_type name = _t2166.data.EIdent.name;
+__auto_type is_move = _t2166.data.EIdent.is_move;
         /* pass */
         TrStr reg = LlvmGenerator_next_reg(self);
         /* pass */
@@ -337,20 +337,20 @@ __auto_type is_move = _t2249.data.EIdent.is_move;
         LlvmGenerator_w(self, _tr_str_lit("\n"));
         /* pass */
         return reg;
-    } else if (_t2249.tag == HirExpr_EBinOp) {
-        __auto_type op = _t2249.data.EBinOp.op;
-__auto_type left = _t2249.data.EBinOp.left;
-__auto_type right = _t2249.data.EBinOp.right;
-__auto_type ty = _t2249.data.EBinOp.ty;
+    } else if (_t2166.tag == HirExpr_EBinOp) {
+        __auto_type op = _t2166.data.EBinOp.op;
+__auto_type left = _t2166.data.EBinOp.left;
+__auto_type right = _t2166.data.EBinOp.right;
+__auto_type ty = _t2166.data.EBinOp.ty;
         /* pass */
         return LlvmGenerator_gen_binop_llvm(self, op, left, right, ty);
-    } else if (_t2249.tag == HirExpr_ECall) {
-        __auto_type callee = _t2249.data.ECall.callee;
-__auto_type args = _t2249.data.ECall.args;
+    } else if (_t2166.tag == HirExpr_ECall) {
+        __auto_type callee = _t2166.data.ECall.callee;
+__auto_type args = _t2166.data.ECall.args;
         /* pass */
         return LlvmGenerator_gen_call_llvm(self, callee, args);
     } else if (1) {
-        __auto_type _ = _t2249;
+        __auto_type _ = _t2166;
         /* pass */
         return _tr_str_lit("undef");
     }
@@ -370,114 +370,114 @@ __attribute__((hot)) TrStr LlvmGenerator_gen_binop_llvm(LlvmGenerator* self, TrS
     /* pass */
     if ((strcmp(_tr_strz(op), _tr_strz(_tr_str_lit("+"))) == 0)) {
         /* pass */
-        TrStr _strtmp_t2254 = _tr_str_lit("add");
+        TrStr _strtmp_t2171 = _tr_str_lit("add");
         _tr_str_release(instr);
-        instr = _strtmp_t2254;
+        instr = _strtmp_t2171;
     }
     /* pass */
     if ((strcmp(_tr_strz(op), _tr_strz(_tr_str_lit("-"))) == 0)) {
         /* pass */
-        TrStr _strtmp_t2255 = _tr_str_lit("sub");
+        TrStr _strtmp_t2172 = _tr_str_lit("sub");
         _tr_str_release(instr);
-        instr = _strtmp_t2255;
+        instr = _strtmp_t2172;
     }
     /* pass */
     if ((strcmp(_tr_strz(op), _tr_strz(_tr_str_lit("*"))) == 0)) {
         /* pass */
-        TrStr _strtmp_t2256 = _tr_str_lit("mul");
+        TrStr _strtmp_t2173 = _tr_str_lit("mul");
         _tr_str_release(instr);
-        instr = _strtmp_t2256;
+        instr = _strtmp_t2173;
     }
     /* pass */
     if ((strcmp(_tr_strz(op), _tr_strz(_tr_str_lit("/"))) == 0)) {
         /* pass */
-        TrStr _strtmp_t2257 = _tr_str_lit("sdiv");
+        TrStr _strtmp_t2174 = _tr_str_lit("sdiv");
         _tr_str_release(instr);
-        instr = _strtmp_t2257;
+        instr = _strtmp_t2174;
     }
     /* pass */
     if ((strcmp(_tr_strz(op), _tr_strz(_tr_str_lit("%"))) == 0)) {
         /* pass */
-        TrStr _strtmp_t2258 = _tr_str_lit("srem");
+        TrStr _strtmp_t2175 = _tr_str_lit("srem");
         _tr_str_release(instr);
-        instr = _strtmp_t2258;
+        instr = _strtmp_t2175;
     }
     /* pass */
     if ((strcmp(_tr_strz(op), _tr_strz(_tr_str_lit("&"))) == 0)) {
         /* pass */
-        TrStr _strtmp_t2259 = _tr_str_lit("and");
+        TrStr _strtmp_t2176 = _tr_str_lit("and");
         _tr_str_release(instr);
-        instr = _strtmp_t2259;
+        instr = _strtmp_t2176;
     }
     /* pass */
     if ((strcmp(_tr_strz(op), _tr_strz(_tr_str_lit("|"))) == 0)) {
         /* pass */
-        TrStr _strtmp_t2260 = _tr_str_lit("or");
+        TrStr _strtmp_t2177 = _tr_str_lit("or");
         _tr_str_release(instr);
-        instr = _strtmp_t2260;
+        instr = _strtmp_t2177;
     }
     /* pass */
     if ((strcmp(_tr_strz(op), _tr_strz(_tr_str_lit("^"))) == 0)) {
         /* pass */
-        TrStr _strtmp_t2261 = _tr_str_lit("xor");
+        TrStr _strtmp_t2178 = _tr_str_lit("xor");
         _tr_str_release(instr);
-        instr = _strtmp_t2261;
+        instr = _strtmp_t2178;
     }
     /* pass */
     if ((strcmp(_tr_strz(op), _tr_strz(_tr_str_lit("<<"))) == 0)) {
         /* pass */
-        TrStr _strtmp_t2262 = _tr_str_lit("shl");
+        TrStr _strtmp_t2179 = _tr_str_lit("shl");
         _tr_str_release(instr);
-        instr = _strtmp_t2262;
+        instr = _strtmp_t2179;
     }
     /* pass */
     if ((strcmp(_tr_strz(op), _tr_strz(_tr_str_lit(">>"))) == 0)) {
         /* pass */
-        TrStr _strtmp_t2263 = _tr_str_lit("ashr");
+        TrStr _strtmp_t2180 = _tr_str_lit("ashr");
         _tr_str_release(instr);
-        instr = _strtmp_t2263;
+        instr = _strtmp_t2180;
     }
     /* pass */
     if ((strcmp(_tr_strz(op), _tr_strz(_tr_str_lit("=="))) == 0)) {
         /* pass */
-        TrStr _strtmp_t2264 = _tr_str_lit("icmp eq");
+        TrStr _strtmp_t2181 = _tr_str_lit("icmp eq");
         _tr_str_release(instr);
-        instr = _strtmp_t2264;
+        instr = _strtmp_t2181;
     }
     /* pass */
     if ((strcmp(_tr_strz(op), _tr_strz(_tr_str_lit("!="))) == 0)) {
         /* pass */
-        TrStr _strtmp_t2265 = _tr_str_lit("icmp ne");
+        TrStr _strtmp_t2182 = _tr_str_lit("icmp ne");
         _tr_str_release(instr);
-        instr = _strtmp_t2265;
+        instr = _strtmp_t2182;
     }
     /* pass */
     if ((strcmp(_tr_strz(op), _tr_strz(_tr_str_lit("<"))) == 0)) {
         /* pass */
-        TrStr _strtmp_t2266 = _tr_str_lit("icmp slt");
+        TrStr _strtmp_t2183 = _tr_str_lit("icmp slt");
         _tr_str_release(instr);
-        instr = _strtmp_t2266;
+        instr = _strtmp_t2183;
     }
     /* pass */
     if ((strcmp(_tr_strz(op), _tr_strz(_tr_str_lit("<="))) == 0)) {
         /* pass */
-        TrStr _strtmp_t2267 = _tr_str_lit("icmp sle");
+        TrStr _strtmp_t2184 = _tr_str_lit("icmp sle");
         _tr_str_release(instr);
-        instr = _strtmp_t2267;
+        instr = _strtmp_t2184;
     }
     /* pass */
     if ((strcmp(_tr_strz(op), _tr_strz(_tr_str_lit(">"))) == 0)) {
         /* pass */
-        TrStr _strtmp_t2268 = _tr_str_lit("icmp sgt");
+        TrStr _strtmp_t2185 = _tr_str_lit("icmp sgt");
         _tr_str_release(instr);
-        instr = _strtmp_t2268;
+        instr = _strtmp_t2185;
     }
     /* pass */
     if ((strcmp(_tr_strz(op), _tr_strz(_tr_str_lit(">="))) == 0)) {
         /* pass */
-        TrStr _strtmp_t2269 = _tr_str_lit("icmp sge");
+        TrStr _strtmp_t2186 = _tr_str_lit("icmp sge");
         _tr_str_release(instr);
-        instr = _strtmp_t2269;
+        instr = _strtmp_t2186;
     }
     /* pass */
     LlvmGenerator_w(self, _tr_str_lit("    "));
@@ -515,24 +515,24 @@ __attribute__((hot)) TrStr LlvmGenerator_gen_call_llvm(LlvmGenerator* self, HirE
     /* pass */
     TrStr callee_name = _tr_str_lit("");
     /* pass */
-    __auto_type _t2270 = (*callee);
-    if (_t2270.tag == HirExpr_EIdent) {
-        __auto_type n = _t2270.data.EIdent.name;
-__auto_type is_move = _t2270.data.EIdent.is_move;
-        TrStr _strtmp_t2271 = _tr_str_retain(n);
+    __auto_type _t2187 = (*callee);
+    if (_t2187.tag == HirExpr_EIdent) {
+        __auto_type n = _t2187.data.EIdent.name;
+__auto_type is_move = _t2187.data.EIdent.is_move;
+        TrStr _strtmp_t2188 = _tr_str_retain(n);
         _tr_str_release(callee_name);
-        callee_name = _strtmp_t2271;
+        callee_name = _strtmp_t2188;
     } else if (1) {
-        __auto_type _ = _t2270;
+        __auto_type _ = _t2187;
         /* pass */
         /* pass */
     }
     /* pass */
     if ((strcmp(_tr_strz(callee_name), _tr_strz(_tr_str_lit(""))) == 0)) {
         /* pass */
-        TrStr _strtmp_t2272 = _tr_str_lit("unknown");
+        TrStr _strtmp_t2189 = _tr_str_lit("unknown");
         _tr_str_release(callee_name);
-        callee_name = _strtmp_t2272;
+        callee_name = _strtmp_t2189;
     }
     /* pass */
     LlvmGenerator_w(self, _tr_str_lit("    "));
@@ -558,7 +558,7 @@ __auto_type is_move = _t2270.data.EIdent.is_move;
         /* pass */
         AstType* arg_ty = hir_expr_type(((HirExpr*)List_ptr_get(args, i)));
         /* pass */
-        ({ TrStr _at_t2273 = (llvm_type(arg_ty)); LlvmGenerator_w(self, _at_t2273); _tr_str_release(_at_t2273); });
+        ({ TrStr _at_t2190 = (llvm_type(arg_ty)); LlvmGenerator_w(self, _at_t2190); _tr_str_release(_at_t2190); });
         /* pass */
         LlvmGenerator_w(self, _tr_str_lit(" "));
         /* pass */
@@ -583,13 +583,13 @@ __attribute__((hot)) void LlvmGenerator_gen_stmt(LlvmGenerator* self, HirStmt* s
     /* pass */
     __auto_type s = (*s_ptr);
     /* pass */
-    __auto_type _t2274 = s;
-    if (_t2274.tag == HirStmt_SExpr) {
-        __auto_type e = _t2274.data.SExpr.expr;
+    __auto_type _t2191 = s;
+    if (_t2191.tag == HirStmt_SExpr) {
+        __auto_type e = _t2191.data.SExpr.expr;
         /* pass */
         LlvmGenerator_gen_expr(self, e);
-    } else if (_t2274.tag == HirStmt_SReturn) {
-        __auto_type e = _t2274.data.SReturn.val;
+    } else if (_t2191.tag == HirStmt_SReturn) {
+        __auto_type e = _t2191.data.SReturn.val;
         /* pass */
         if ((((unsigned long long)(e)) == ((unsigned long long)(0LL)))) {
             /* pass */
@@ -602,7 +602,7 @@ __attribute__((hot)) void LlvmGenerator_gen_stmt(LlvmGenerator* self, HirStmt* s
             /* pass */
             LlvmGenerator_w(self, _tr_str_lit("    ret "));
             /* pass */
-            ({ TrStr _at_t2275 = (llvm_type(ty)); LlvmGenerator_w(self, _at_t2275); _tr_str_release(_at_t2275); });
+            ({ TrStr _at_t2192 = (llvm_type(ty)); LlvmGenerator_w(self, _at_t2192); _tr_str_release(_at_t2192); });
             /* pass */
             LlvmGenerator_w(self, _tr_str_lit(" "));
             /* pass */
@@ -610,14 +610,14 @@ __attribute__((hot)) void LlvmGenerator_gen_stmt(LlvmGenerator* self, HirStmt* s
             /* pass */
             LlvmGenerator_w(self, _tr_str_lit("\n"));
         }
-    } else if (_t2274.tag == HirStmt_SLet) {
-        __auto_type name = _t2274.data.SLet.name;
-__auto_type ownership = _t2274.data.SLet.ownership;
-__auto_type is_mut = _t2274.data.SLet.is_mut;
-__auto_type is_const = _t2274.data.SLet.is_const;
-__auto_type is_shared = _t2274.data.SLet.is_shared;
-__auto_type ty = _t2274.data.SLet.ty;
-__auto_type val = _t2274.data.SLet.val;
+    } else if (_t2191.tag == HirStmt_SLet) {
+        __auto_type name = _t2191.data.SLet.name;
+__auto_type ownership = _t2191.data.SLet.ownership;
+__auto_type is_mut = _t2191.data.SLet.is_mut;
+__auto_type is_const = _t2191.data.SLet.is_const;
+__auto_type is_shared = _t2191.data.SLet.is_shared;
+__auto_type ty = _t2191.data.SLet.ty;
+__auto_type val = _t2191.data.SLet.val;
         /* pass */
         LlvmGenerator_w(self, _tr_str_lit("    %"));
         /* pass */
@@ -625,7 +625,7 @@ __auto_type val = _t2274.data.SLet.val;
         /* pass */
         LlvmGenerator_w(self, _tr_str_lit(" = alloca "));
         /* pass */
-        ({ TrStr _at_t2276 = (llvm_type(ty)); LlvmGenerator_w(self, _at_t2276); _tr_str_release(_at_t2276); });
+        ({ TrStr _at_t2193 = (llvm_type(ty)); LlvmGenerator_w(self, _at_t2193); _tr_str_release(_at_t2193); });
         /* pass */
         LlvmGenerator_w(self, _tr_str_lit("\n"));
         /* pass */
@@ -635,7 +635,7 @@ __auto_type val = _t2274.data.SLet.val;
             /* pass */
             LlvmGenerator_w(self, _tr_str_lit("    store "));
             /* pass */
-            ({ TrStr _at_t2277 = (llvm_type(ty)); LlvmGenerator_w(self, _at_t2277); _tr_str_release(_at_t2277); });
+            ({ TrStr _at_t2194 = (llvm_type(ty)); LlvmGenerator_w(self, _at_t2194); _tr_str_release(_at_t2194); });
             /* pass */
             LlvmGenerator_w(self, _tr_str_lit(" "));
             /* pass */
@@ -647,10 +647,10 @@ __auto_type val = _t2274.data.SLet.val;
             /* pass */
             LlvmGenerator_w(self, _tr_str_lit("\n"));
         }
-    } else if (_t2274.tag == HirStmt_SIf) {
-        __auto_type cond = _t2274.data.SIf.cond;
-__auto_type then_b = _t2274.data.SIf.then_b;
-__auto_type else_b = _t2274.data.SIf.else_b;
+    } else if (_t2191.tag == HirStmt_SIf) {
+        __auto_type cond = _t2191.data.SIf.cond;
+__auto_type then_b = _t2191.data.SIf.then_b;
+__auto_type else_b = _t2191.data.SIf.else_b;
         /* pass */
         TrStr cond_v = LlvmGenerator_gen_expr(self, cond);
         /* pass */
@@ -705,9 +705,9 @@ __auto_type else_b = _t2274.data.SIf.else_b;
         _tr_str_release(then_lbl);
         _tr_str_release(else_lbl);
         _tr_str_release(end_lbl);
-    } else if (_t2274.tag == HirStmt_SWhile) {
-        __auto_type cond = _t2274.data.SWhile.cond;
-__auto_type body = _t2274.data.SWhile.body;
+    } else if (_t2191.tag == HirStmt_SWhile) {
+        __auto_type cond = _t2191.data.SWhile.cond;
+__auto_type body = _t2191.data.SWhile.body;
         /* pass */
         TrStr cond_lbl = ({ TrStr _cr = (LlvmGenerator_next_reg(self)); TrStr _cres = _tr_strx_concat(_tr_strz(_tr_str_lit("while_cond_")), _cr.data); _tr_str_release(_cr); _cres; });
         /* pass */
@@ -760,18 +760,18 @@ __auto_type body = _t2274.data.SWhile.body;
         _tr_str_release(body_lbl);
         _tr_str_release(end_lbl);
         _tr_str_release(cond_v);
-    } else if (_t2274.tag == HirStmt_SBreak) {
-        __auto_type _ = _t2274.data.SBreak.val;
+    } else if (_t2191.tag == HirStmt_SBreak) {
+        __auto_type _ = _t2191.data.SBreak.val;
         /* pass */
         LlvmGenerator_w(self, _tr_str_lit("    ; break (unresolved in stub)\n"));
-    } else if (_t2274.tag == HirStmt_SContinue) {
+    } else if (_t2191.tag == HirStmt_SContinue) {
         /* pass */
         LlvmGenerator_w(self, _tr_str_lit("    ; continue (unresolved in stub)\n"));
-    } else if (_t2274.tag == HirStmt_SPass) {
+    } else if (_t2191.tag == HirStmt_SPass) {
         /* pass */
         /* pass */
     } else if (1) {
-        __auto_type _ = _t2274;
+        __auto_type _ = _t2191;
         /* pass */
         LlvmGenerator_w(self, _tr_str_lit("    ; TODO stmt\n"));
     }
@@ -821,7 +821,7 @@ __attribute__((hot)) TrStr LlvmGenerator_generate(LlvmGenerator* self, HirProgra
             /* pass */
             LlvmGenerator_w(self, _tr_str_lit("declare "));
             /* pass */
-            ({ TrStr _at_t2278 = (llvm_type(f->ret_ty)); LlvmGenerator_w(self, _at_t2278); _tr_str_release(_at_t2278); });
+            ({ TrStr _at_t2195 = (llvm_type(f->ret_ty)); LlvmGenerator_w(self, _at_t2195); _tr_str_release(_at_t2195); });
             /* pass */
             LlvmGenerator_w(self, _tr_str_lit(" @"));
             /* pass */

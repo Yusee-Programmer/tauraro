@@ -1,0 +1,30 @@
+# Concurrency corpus — Shared[T] (atomic Arc) across threads: the SOUND way to
+# cross-thread share a heap value. The box's refcount is _Atomic, so concurrent
+# clone/drop from workers can't race (unlike a plain Rc class, which [T-7]
+# rejects). Compiles under --strict; ASan/TSan-clean.
+class Config implements Sendable:
+    pub level: int
+extend Config:
+    pub def init(v: int) -> Config:
+        mut c = Config()
+        c.level = v
+        return c
+    pub def get(self) -> int:
+        return self.level
+
+def reader(cfg: Shared[Config]) -> void:
+    mut s = 0
+    mut i = 0
+    while i < 500:
+        s = s + cfg.get()
+        i = i + 1
+
+async def main():
+    shared cfg = Config.init(7)
+    task_group:
+        spawn reader(cfg)
+        spawn reader(cfg)
+        spawn reader(cfg)
+        spawn reader(cfg)
+    mut _m = "OK shared_across_threads " + cfg.get().to_str()
+    print(_m)

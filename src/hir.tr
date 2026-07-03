@@ -1,3 +1,4 @@
+# @trusted: compiler systems module — audited raw-pointer core (like Rust std internals)
 # compiler/src/hir.tr - High-level Intermediate Representation
 
 from core.vec import Vec
@@ -178,6 +179,14 @@ pub class HirFunction:
                                      # collected by sema (cross-fn), consumed by the MIR.
     pub proven_borrows:   Vec[str]   # outlives engine result: borrow locals whose source
                                      # PROVABLY outlives them → codegen elides their refcount.
+    pub returns_owned:    bool       # return-ownership inference: true = every return path
+                                     # yields an OWNED heap-class reference (fresh/retained/
+                                     # transferred), so a caller binding the result OWNS it and
+                                     # must release it. false = a return may be a BORROW (alias
+                                     # via collection .get / a borrow-returning callee) → the
+                                     # caller must NOT drop it (leak-safe). Only meaningful when
+                                     # ret_ty is a heap class; computed by a whole-program
+                                     # fixpoint in sema, consumed by codegen `_obj_expr_owns_ref`.
 
 pub class HirField:
     pub name: str
@@ -274,7 +283,23 @@ pub def hir_expr_type(e: Pointer[HirExpr]) -> AstType:
         case HirExpr.ECast(_, ty): return ty
         case HirExpr.EFString(_, ty): return ty
         case HirExpr.ETryExpr(_, ty): return ty
-        case HirExpr.EClosure(_, _, _, _, _): return AstType.init("lambda")
+        case HirExpr.EClosure(_cl_ps, _cl_ret, _, _, _):
+            # A `def(...)->R` value: carry the signature as a "def" type whose
+            # args are the parameter types followed by the return type, so a call
+            # `f(x)` can infer R (a bare "lambda" lost it -> results became void*).
+            mut _clt = AstType.init("def")
+            mut _cli = 0
+            while _cli < _cl_ps.len:
+                unsafe:
+                    mut _clp = alloc[AstType](1)
+                    _clp.write(_cl_ps.get(_cli).ty)
+                    _clt.args.push(_clp)
+                _cli = _cli + 1
+            unsafe:
+                mut _clrp = alloc[AstType](1)
+                _clrp.write(_cl_ret)
+                _clt.args.push(_clrp)
+            return _clt
         case HirExpr.ESuperMethodCall(_, _, _, ty): return ty
         case HirExpr.ESuperPropAccess(_, _, ty): return ty
         case HirExpr.EList(_, ty): return ty

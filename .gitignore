@@ -10,6 +10,8 @@
 build/
 target/
 bench/
+g1/
+g2/
 
 # Runtime headers copied into benchmark build dirs
 **/tauraro_rt.h

@@ -1,3 +1,4 @@
+# @trusted: compiler systems module — audited raw-pointer core (like Rust std internals)
 # compiler/src/parser.tr - Recursive descent parser for the Tauraro self-hosted compiler.
 
 from core.vec import Vec

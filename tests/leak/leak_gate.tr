@@ -12,6 +12,57 @@
 extern "C":
     def _tr_mem_live() -> int
 
+# Heap classes for the class-instance ARC workload below. `Tag` carries a `str`
+# field so its drop must release both the field buffer and the struct.
+class Point:
+    pub x: int
+    pub y: int
+extend Point:
+    pub def init(x: int, y: int) -> Point:
+        mut p = Point()
+        p.x = x
+        p.y = y
+        return p
+
+class Tag:
+    pub name: str
+extend Tag:
+    pub def init(n: str) -> Tag:
+        mut t = Tag()
+        t.name = n
+        return t
+
+def dist(a: Point, b: Point) -> int:      # classes passed BY reference (borrowed)
+    mut dx = a.x - b.x
+    return dx * dx
+
+def make_tag(prefix: str, n: int) -> Tag: # FREE FUNCTION returning an OWNED instance
+    return Tag.init(prefix + n.to_str())   # (interproc inference must reclaim its result)
+
+# Holder OWNS a nested heap-class field (`Tag`, which itself owns a `str`). Its
+# drop must recursively release the Tag (and the Tag its str) — the recursive
+# _trdrop_T path.
+class Holder:
+    pub t: Tag
+extend Holder:
+    pub def init(tg: Tag) -> Holder:
+        mut h = Holder()
+        h.t = tg
+        return h
+
+# Bin OWNS a collection field of heap-class elements (only ever assigned a fresh
+# Vec) — its drop must free the Vec AND release each Tag (recursive _trdrop_T +
+# _coll_field_free_call + List_ptr_free_obj).
+class Bin:
+    pub items: Vec[Tag]
+extend Bin:
+    pub def init() -> Bin:
+        mut b = Bin()
+        b.items = Vec[Tag].init(4)
+        return b
+    pub def put(self, t: Tag):
+        self.items.append(t)
+
 # Exercise the string + map paths that are fully ref-counted/auto-dropped.
 def workload():
     mut s = "abc" + "def"          # fresh concat, auto-dropped at scope exit
@@ -88,6 +139,60 @@ def workload():
     else:
         "done"
     mut wvlen = wv.len()
+
+    # Closure bound to a local: the capture env is stack-allocated (no heap, no
+    # leak across the 5000-iteration workload). Captures `capv` by reference.
+    mut capv = 10
+    mut cf = def (x: int) -> int:
+        return capv + x
+    mut cfr = cf(5)            # 15
+
+    # Heap class instances: factory-constructed (Point.init / Tag.init), passed as
+    # a borrowed argument (dist), and returned from a FREE FUNCTION (make_tag). All
+    # owned locals must be reclaimed — factory results by the constructor rule,
+    # make_tag's result by interprocedural return-ownership inference.
+    mut p1 = Point.init(1, 2)
+    mut p2 = Point.init(4, 6)
+    mut dd = dist(p1, p2)          # p1/p2 borrowed, not consumed
+    mut tg = make_tag("id-", dd)   # free-function-returned owned Tag (str field)
+    mut tlen = tg.name.len()
+
+    # Nested owned class field: Holder.t owns a Tag (which owns a str). Holder's
+    # drop must recursively release Tag → str (recursive _trdrop_T).
+    mut t2 = make_tag("h-", dd)    # local owns the Tag
+    mut hd = Holder.init(t2)       # Holder co-owns it in field .t
+    mut hlen = hd.t.name.len()
+
+    # Inline owned rvalue as a call argument: the fresh Tag from make_tag is passed
+    # directly (no local bind) — gen_args must hoist+release the arg temp.
+    mut hd2 = Holder.init(make_tag("q-", dd))
+    mut h2len = hd2.t.name.len()
+
+    # List with heap-class elements: the list co-owns each; its drop releases them.
+    mut tl = Vec[Tag].init(4)
+    tl.append(make_tag("l-", dd))
+    tl.append(make_tag("m-", dd))
+    mut tllen = tl.len
+
+    # Dict with heap-class values: co-owns each value; drop releases them (Dict_free_objval).
+    mut dm: Dict[str, Tag] = {}
+    dm.insert("x", make_tag("dx-", dd))
+    dm.insert("y", make_tag("dy-", dd))
+    mut dmlen = dm.len()
+
+    # Class OWNING a collection field of heap-class elements: drop frees the field's
+    # Vec and releases each element (collection-field free + element release).
+    mut bin = Bin.init()
+    bin.put(make_tag("b1-", dd))
+    bin.put(make_tag("b2-", dd))
+    mut binlen = bin.items.len
+
+    # Set of heap-class elements (pointer-identity set): co-owns each; drop releases
+    # them (_tr_pset_free_obj).
+    mut ts = Set[Tag].init(8)
+    ts.add(make_tag("s1-", dd))
+    ts.add(make_tag("s2-", dd))
+    mut tslen = ts.len()
 
 def main():
     workload()                                  # warm up (one-time allocations)

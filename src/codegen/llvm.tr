@@ -1,3 +1,4 @@
+# @trusted: compiler systems module — audited raw-pointer core (like Rust std internals)
 # compiler/src/codegen/llvm.tr - LLVM IR backend stub for the Tauraro self-hosted compiler.
 #
 # Mirrors the structure of src/codegen/llvm.rs from the Rust bootstrap.

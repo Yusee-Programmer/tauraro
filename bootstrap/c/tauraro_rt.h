@@ -256,6 +256,32 @@ static inline void* _tr_checked_alloc(size_t sz) {
     if (p) _TR_MEMCOUNT_INC();
     return p;
 }
+
+/* ── Class-instance ARC ──────────────────────────────────────────────────────
+ * A heap class instance carries a refcount as its FIRST member (`size_t __rc`,
+ * so it sits at offset 0). Instances are shared by retain/released by scope-exit
+ * and container teardown, and freed when the count reaches zero — sound under
+ * aliasing (no ownership proof needed). Retain/release are elided by codegen
+ * wherever the borrow checker proves a value is only borrowed (zero-cost). */
+static inline void* _tr_obj_alloc(size_t sz) {
+    void* p = TAURARO_CALLOC(1, sz);
+    if (!p && sz > 0) { _TR_OOM_ABORT(); }
+    if (p) { *(size_t*)p = 1; _TR_MEMCOUNT_INC(); }   /* rc = 1 */
+    return p;
+}
+static inline void* _tr_obj_retain(void* p) {
+    if (p) (*(size_t*)p)++;
+    return p;
+}
+/* `drop` releases the instance's owned fields (generated per class). NULL for a
+ * class with no droppable fields — the struct is still freed. */
+static inline void _tr_obj_release(void* p, void (*drop)(void*)) {
+    if (p && --(*(size_t*)p) == 0) {
+        if (drop) drop(p);
+        _TR_MEMCOUNT_DEC();
+        TAURARO_FREE(p);
+    }
+}
 /* Heap-allocated empty C string. Used by char*-returning helpers that need
  * an "empty result" fallback - returning a static string literal (`""`)
  * here would later be `_tr_str_wrap`'d (rc=1) and `_tr_str_release`'d,
@@ -383,15 +409,23 @@ static inline TrStr _tr_str_unbox(void* p) {
     return *(TrStr*)p;
 }
 /* ── Shared ownership: reference-counted box (replaces Rc/Arc/Mutex in one keyword) ── */
+/* Control block for Shared[T] (Rc) and Weak[T]. The payload is destroyed when the
+ * STRONG count hits 0; the block itself lingers until the WEAK count is also 0, so
+ * a Weak[T] can safely observe liveness / attempt upgrade without dangling. This is
+ * what lets Weak[T] break an ownership CYCLE with no leak and no use-after-free. */
 typedef struct _TrSharedBox {
-    _Atomic(int) refcount;
+    _Atomic(int) refcount;    /* strong */
+    _Atomic(int) weakcount;   /* outstanding Weak[T] handles */
     void* data;
+    void (*drop)(void*);      /* payload field-drop (_trdrop_T); NULL → plain free */
 } _TrSharedBox;
 
-static inline _TrSharedBox* _tr_shared_new(void* data) {
+static inline _TrSharedBox* _tr_shared_new(void* data, void (*drop)(void*)) {
     _TrSharedBox* b = (_TrSharedBox*)_tr_checked_alloc(sizeof(_TrSharedBox));
     atomic_store(&b->refcount, 1);
+    atomic_store(&b->weakcount, 0);
     b->data = data;
+    b->drop = drop;
     return b;
 }
 static inline _TrSharedBox* _tr_shared_clone(_TrSharedBox* b) {
@@ -401,16 +435,22 @@ static inline _TrSharedBox* _tr_shared_clone(_TrSharedBox* b) {
 static inline void _tr_shared_drop(_TrSharedBox* b) {
     if (!b) return;
     if (atomic_fetch_sub(&b->refcount, 1) == 1) {
-        _tr_free(b->data);
-        _tr_free(b);
+        /* Release the payload: a plain-ARC class (drop set) releases its owned
+         * fields + struct via the refcount; otherwise a plain free. */
+        if (b->drop) { _tr_obj_release(b->data, b->drop); } else { _tr_free(b->data); }
+        b->data = NULL;
+        /* Keep the (payload-less) block alive while any Weak[T] still points here,
+         * so their is_alive()/upgrade() read a valid refcount==0 instead of freed memory. */
+        if (atomic_load(&b->weakcount) == 0) { _tr_free(b); }
     }
 }
-/* ── Weak[T] — non-owning reference to a Shared[T] box ── */
+/* ── Weak[T] — non-owning reference to a Shared[T] box (does NOT keep it alive) ── */
 typedef struct _TrWeakBox {
     _TrSharedBox* box;
 } _TrWeakBox;
 static inline _TrWeakBox* _tr_weak_new(_TrSharedBox* b) {
     _TrWeakBox* w = (_TrWeakBox*)_tr_checked_alloc(sizeof(_TrWeakBox));
+    if (b) atomic_fetch_add(&b->weakcount, 1);
     w->box = b;
     return w;
 }
@@ -424,6 +464,19 @@ static inline _TrSharedBox* _tr_weak_upgrade(_TrWeakBox* w) {
     if (old <= 0) return NULL;
     atomic_fetch_add(&w->box->refcount, 1);
     return w->box;
+}
+/* Drop a Weak[T]: decrement the box's weak count; if the payload is already gone
+ * (strong==0) and this was the last weak handle, reclaim the block. Also frees the
+ * small weak handle itself. */
+static inline void _tr_weak_drop(_TrWeakBox* w) {
+    if (!w) return;
+    _TrSharedBox* b = w->box;
+    if (b) {
+        if (atomic_fetch_sub(&b->weakcount, 1) == 1 && atomic_load(&b->refcount) <= 0) {
+            _tr_free(b);
+        }
+    }
+    _tr_free(w);
 }
 
 static inline void* _tr_c_memcpy(void* dst, void* src, size_t n) { return memcpy(dst, src, n); }
@@ -1427,24 +1480,41 @@ static inline void _tr_tls_free(_TrTLS* t) {
 
 #endif /* POSIX async primitives */
 
+/* ── Lock-ownership tracking (thread-local) ──────────────────────────── */
+/* Each thread maintains small stacks of box pointers it currently holds.
+ * lock_get pushes; set_unlock/unlock pop; the RAII cleanup fires only when
+ * it can pop — i.e. only when THIS thread actually holds the lock.
+ * All stack reads/writes are thread-local: no sharing, no data race. */
+#ifndef _TR_LOCK_DEPTH
+#define _TR_LOCK_DEPTH 8
+#endif
+typedef struct { void* s[_TR_LOCK_DEPTH]; int n; } _TrLockStack;
+static _Thread_local _TrLockStack _tr_tl_mu_stk;
+static _Thread_local _TrLockStack _tr_tl_rwl_r_stk;
+static _Thread_local _TrLockStack _tr_tl_rwl_w_stk;
+static inline void  _tr_lstack_push(_TrLockStack* ls, void* b) {
+    if (ls->n < _TR_LOCK_DEPTH) ls->s[ls->n++] = b;
+}
+static inline int   _tr_lstack_pop(_TrLockStack* ls, void* b) {
+    for (int i = ls->n - 1; i >= 0; i--)
+        if (ls->s[i] == b) { ls->s[i] = ls->s[--ls->n]; return 1; }
+    return 0;
+}
+
 /* ── MutexBox<T>: mutex-guarded single value ─────────────────────────── */
-/* _Atomic int rc: thread-safe refcount via C11 atomics (stdatomic.h included above) */
-/* _locked: 1 while this thread holds the lock; cleared by set_unlock/unlock.
- * Only one thread can hold the lock at a time so _locked is safe without
- * additional synchronization — it is always accessed under the mutex. */
-typedef struct { _TrMutexH* mu; long long data; _Atomic int rc; volatile int _locked; } _TrMutexBox;
+typedef struct { _TrMutexH* mu; long long data; _Atomic int rc; } _TrMutexBox;
 static inline _TrMutexBox* _tr_mutexbox_new(long long init) {
     _TrMutexBox* b = (_TrMutexBox*)TAURARO_ALLOC(sizeof(_TrMutexBox));
-    b->mu = _tr_mutex_new(); b->data = init; b->_locked = 0;
+    b->mu = _tr_mutex_new(); b->data = init;
     atomic_store(&b->rc, 1); return b;
 }
 static inline long long _tr_mutexbox_lock_get(_TrMutexBox* b) {
-    _tr_mutex_hlock(b->mu); b->_locked = 1; return b->data;
+    _tr_mutex_hlock(b->mu); _tr_lstack_push(&_tr_tl_mu_stk, b); return b->data;
 }
 static inline void _tr_mutexbox_set_unlock(_TrMutexBox* b, long long v) {
-    b->data = v; b->_locked = 0; _tr_mutex_hunlock(b->mu);
+    b->data = v; _tr_lstack_pop(&_tr_tl_mu_stk, b); _tr_mutex_hunlock(b->mu);
 }
-static inline void _tr_mutexbox_unlock(_TrMutexBox* b) { b->_locked = 0; _tr_mutex_hunlock(b->mu); }
+static inline void _tr_mutexbox_unlock(_TrMutexBox* b) { _tr_lstack_pop(&_tr_tl_mu_stk, b); _tr_mutex_hunlock(b->mu); }
 static inline void _tr_mutexbox_free(_TrMutexBox* b) {
     if (!b) return; _tr_mutex_hfree(b->mu); TAURARO_FREE(b);
 }
@@ -1455,28 +1525,28 @@ static inline void _tr_mutexbox_drop(_TrMutexBox* b) {
     if (!b || atomic_fetch_sub(&b->rc, 1) > 1) return; _tr_mutexbox_free(b);
 }
 /* Auto-unlock cleanup — used by __attribute__((cleanup)) RAII guard in codegen.
- * Fires when the guard variable goes out of scope. No-op if already unlocked. */
+ * Fires when the guard variable goes out of scope. No-op if already unlocked
+ * (set_unlock/unlock already popped the box from the TLS stack). */
 static inline void _tr_mutexbox_cleanup(_TrMutexBox** bp) {
-    if (bp && *bp && (*bp)->_locked) { (*bp)->_locked = 0; _tr_mutex_hunlock((*bp)->mu); }
+    if (bp && *bp && _tr_lstack_pop(&_tr_tl_mu_stk, *bp)) _tr_mutex_hunlock((*bp)->mu);
 }
 
 /* ── RwLockBox<T>: reader-writer guarded single value ────────────────── */
-/* _locked: 0=none, 1=write locked, 2=read locked. */
-typedef struct { _TrRWL* rw; long long data; _Atomic int rc; volatile int _locked; } _TrRWLBox;
+typedef struct { _TrRWL* rw; long long data; _Atomic int rc; } _TrRWLBox;
 static inline _TrRWLBox* _tr_rwlbox_new(long long init) {
     _TrRWLBox* b = (_TrRWLBox*)TAURARO_ALLOC(sizeof(_TrRWLBox));
-    b->rw = _tr_rwl_new(); b->data = init; b->_locked = 0;
+    b->rw = _tr_rwl_new(); b->data = init;
     atomic_store(&b->rc, 1); return b;
 }
 static inline long long _tr_rwlbox_read_get(_TrRWLBox* b) {
-    _tr_rwl_read_lock(b->rw); b->_locked = 2; return b->data;
+    _tr_rwl_read_lock(b->rw); _tr_lstack_push(&_tr_tl_rwl_r_stk, b); return b->data;
 }
-static inline void _tr_rwlbox_read_unlock(_TrRWLBox* b) { b->_locked = 0; _tr_rwl_read_unlock(b->rw); }
+static inline void _tr_rwlbox_read_unlock(_TrRWLBox* b) { _tr_lstack_pop(&_tr_tl_rwl_r_stk, b); _tr_rwl_read_unlock(b->rw); }
 static inline long long _tr_rwlbox_write_get(_TrRWLBox* b) {
-    _tr_rwl_write_lock(b->rw); b->_locked = 1; return b->data;
+    _tr_rwl_write_lock(b->rw); _tr_lstack_push(&_tr_tl_rwl_w_stk, b); return b->data;
 }
 static inline void _tr_rwlbox_write_set_unlock(_TrRWLBox* b, long long v) {
-    b->data = v; b->_locked = 0; _tr_rwl_write_unlock(b->rw);
+    b->data = v; _tr_lstack_pop(&_tr_tl_rwl_w_stk, b); _tr_rwl_write_unlock(b->rw);
 }
 static inline void _tr_rwlbox_free(_TrRWLBox* b) {
     if (!b) return; _tr_rwl_free(b->rw); TAURARO_FREE(b);
@@ -1489,10 +1559,10 @@ static inline void _tr_rwlbox_drop(_TrRWLBox* b) {
 }
 /* Auto-unlock cleanup for read/write guards. */
 static inline void _tr_rwlbox_cleanup_r(_TrRWLBox** bp) {
-    if (bp && *bp && (*bp)->_locked == 2) { (*bp)->_locked = 0; _tr_rwl_read_unlock((*bp)->rw); }
+    if (bp && *bp && _tr_lstack_pop(&_tr_tl_rwl_r_stk, *bp)) _tr_rwl_read_unlock((*bp)->rw);
 }
 static inline void _tr_rwlbox_cleanup_w(_TrRWLBox** bp) {
-    if (bp && *bp && (*bp)->_locked == 1) { (*bp)->_locked = 0; _tr_rwl_write_unlock((*bp)->rw); }
+    if (bp && *bp && _tr_lstack_pop(&_tr_tl_rwl_w_stk, *bp)) _tr_rwl_write_unlock((*bp)->rw);
 }
 
 /* ── ThreadPool: fixed-N worker pool with a channel work queue ────────── */
@@ -3429,6 +3499,17 @@ static void      Dict_free_strval(Dict* d) {
     }
     _tr_free(d->buckets); _tr_free(d);
 }
+/* Dict[str, HeapClass]: values are owned refcounted instances (void*); the dict
+   co-owns each (insert-retain), so release each before freeing nodes/keys/struct. */
+static void      Dict_free_objval(Dict* d, void(*drop)(void*)) {
+    if (!d) return;
+    _TR_MEMCOUNT_DICT_DEC();
+    for (size_t i=0; i<d->cap; i++) {
+        _DictNode* n=d->buckets[i];
+        while (n) { _DictNode* nx=n->next; if(n->key) _tr_free(n->key); _tr_obj_release(n->value, drop); _tr_free(n); n=nx; }
+    }
+    _tr_free(d->buckets); _tr_free(d);
+}
 /* Free all entries (and their key strings) but keep the Dict struct itself
    alive and reusable - used by clear(), unlike Dict_free() which also frees
    the struct (would otherwise leave m a dangling pointer after clear()). */
@@ -3605,6 +3686,10 @@ static inline List_ptr* List_ptr_new(void) { List_ptr* l=(List_ptr*)malloc(sizeo
 static inline void List_ptr_append(List_ptr* l, void* val) { if(l->len==l->capacity){ l->capacity*=2; l->data=(void**)realloc(l->data,sizeof(void*)*l->capacity); } l->data[l->len++]=val; }
 static inline void* List_ptr_pop(List_ptr* l) { if(!l||l->len==0) return NULL; l->len--; return l->data[l->len]; }
 static inline void List_ptr_free(List_ptr* l) { if(l){ _TR_MEMCOUNT_LIST_DEC(); _tr_free(l->data); _tr_free(l); } }
+/* Free a List_ptr whose elements are owned refcounted heap-class instances:
+   release each element (via its _trdrop_T) before freeing the buffer. The list
+   co-owns each element (append retains), so this balances the count. */
+static inline void List_ptr_free_obj(List_ptr* l, void(*drop)(void*)) { if(l){ for(size_t _i=0;_i<l->len;_i++){ _tr_obj_release(l->data[_i], drop); } _TR_MEMCOUNT_LIST_DEC(); _tr_free(l->data); _tr_free(l); } }
 
 typedef struct { _Bool* data; size_t len; size_t capacity; } List_bool;
 static inline List_bool* List_bool_new(void) { List_bool* l=(List_bool*)malloc(sizeof(List_bool)); l->data=(_Bool*)malloc(sizeof(_Bool)*8); l->len=0; l->capacity=8; return l; }
@@ -5318,6 +5403,65 @@ static void _tr_idict_free_strval(TrIDict* d) {
         }
     }
     _tr_free(d->buckets); _tr_free(d);
+}
+/* Dict[int, HeapClass]: values are owned refcounted instances stored directly as
+   void* (the dict co-owns each via insert-retain) — release each before teardown. */
+static void _tr_idict_free_objval(TrIDict* d, void(*drop)(void*)) {
+    if (!d) return;
+    for (size_t i=0;i<d->cap;i++) {
+        _TrIDictNode* n=d->buckets[i];
+        while(n){ _TrIDictNode* nx=n->next; _tr_obj_release(n->value, drop); _tr_free(n); n=nx; }
+    }
+    _tr_free(d->buckets); _tr_free(d);
+}
+
+/* Set[HeapClass] — hash set of heap instances keyed by POINTER IDENTITY. The set
+   OWNS each element (add retains); _tr_pset_free_obj releases them on teardown. */
+typedef struct _TrPSetNode { void* elem; struct _TrPSetNode* next; } _TrPSetNode;
+typedef struct { _TrPSetNode** buckets; size_t cap; size_t len; } _TrPtrSet;
+static inline _TrPtrSet* _tr_pset_new(int64_t cap) {
+    _TrPtrSet* s=(_TrPtrSet*)_tr_checked_alloc(sizeof(_TrPtrSet));
+    s->cap = cap>0?(size_t)cap:16; s->len=0;
+    s->buckets=(_TrPSetNode**)_tr_checked_alloc(sizeof(_TrPSetNode*)*s->cap);
+    for(size_t i=0;i<s->cap;i++) s->buckets[i]=NULL;
+    return s;
+}
+static inline size_t _tr_pset_hash(_TrPtrSet* s, void* e) { return ((size_t)(uintptr_t)e >> 4) % s->cap; }
+static inline int64_t _tr_pset_contains(_TrPtrSet* s, void* e) {
+    if(!s) return 0; _TrPSetNode* n=s->buckets[_tr_pset_hash(s,e)];
+    while(n){ if(n->elem==e) return 1; n=n->next; } return 0;
+}
+static inline void _tr_pset_add(_TrPtrSet* s, void* e) {
+    if(!s||_tr_pset_contains(s,e)) return;
+    size_t h=_tr_pset_hash(s,e);
+    _TrPSetNode* n=(_TrPSetNode*)_tr_checked_alloc(sizeof(_TrPSetNode));
+    n->elem=e; n->next=s->buckets[h]; s->buckets[h]=n; s->len++;
+}
+static inline void _tr_pset_remove(_TrPtrSet* s, void* e) {
+    if(!s) return; size_t h=_tr_pset_hash(s,e);
+    _TrPSetNode* n=s->buckets[h]; _TrPSetNode* p=NULL;
+    while(n){ if(n->elem==e){ if(p)p->next=n->next; else s->buckets[h]=n->next; _tr_free(n); if(s->len)s->len--; return; } p=n; n=n->next; }
+}
+static inline int64_t _tr_pset_len(_TrPtrSet* s) { return s?(int64_t)s->len:0; }
+static inline void _tr_pset_clear(_TrPtrSet* s) {
+    if(!s) return;
+    for(size_t i=0;i<s->cap;i++){ _TrPSetNode* n=s->buckets[i]; while(n){ _TrPSetNode* nx=n->next; _tr_free(n); n=nx; } s->buckets[i]=NULL; }
+    s->len=0;
+}
+static inline void _tr_pset_free(_TrPtrSet* s) {
+    if(!s) return;
+    for(size_t i=0;i<s->cap;i++){ _TrPSetNode* n=s->buckets[i]; while(n){ _TrPSetNode* nx=n->next; _tr_free(n); n=nx; } }
+    _tr_free(s->buckets); _tr_free(s);
+}
+static inline void _tr_pset_free_obj(_TrPtrSet* s, void(*drop)(void*)) {
+    if(!s) return;
+    for(size_t i=0;i<s->cap;i++){ _TrPSetNode* n=s->buckets[i]; while(n){ _TrPSetNode* nx=n->next; _tr_obj_release(n->elem, drop); _tr_free(n); n=nx; } }
+    _tr_free(s->buckets); _tr_free(s);
+}
+static inline List_ptr* _tr_pset_to_list(_TrPtrSet* s) {
+    List_ptr* l=List_ptr_new();
+    if(s){ for(size_t i=0;i<s->cap;i++){ _TrPSetNode* n=s->buckets[i]; while(n){ List_ptr_append(l,n->elem); n=n->next; } } }
+    return l;
 }
 
 /* Set[T] — hash set backed by TrMap */

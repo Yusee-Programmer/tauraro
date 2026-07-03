@@ -3,7 +3,7 @@
 
 __attribute__((malloc,returns_nonnull,hot)) Parser* Parser_init(List_Token* tokens, List_i64* lines) {
     /* pass */
-    Parser* p = ((Parser*)_tr_checked_alloc(sizeof(Parser)));
+    Parser* p = ((Parser*)_tr_obj_alloc(sizeof(Parser)));
     /* pass */
     p->tokens = tokens;
     /* pass */
@@ -152,7 +152,7 @@ __attribute__((hot)) void Parser_emit_diag(Parser* self, TrStr msg, TrStr hint) 
     /* pass */
     long long col = Parser_cur_col(self);
     /* pass */
-    printf("%s\n", _tr_strz(({ TrStr _cl = (({ TrStr _cl = (c_red(_tr_str_lit("error"))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(": "))); _tr_str_release(_cl); _cres; })); TrStr _cr = (c_bold(msg)); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; })));
+    ({ printf("%s", _tr_strz(({ TrStr _cl = (({ TrStr _cl = (c_red(_tr_str_lit("error"))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(": "))); _tr_str_release(_cl); _cres; })); TrStr _cr = (c_bold(msg)); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; }))); printf("\n"); });
     /* pass */
     TrStr loc = _tr_str_lit("");
     /* pass */
@@ -172,7 +172,7 @@ __attribute__((hot)) void Parser_emit_diag(Parser* self, TrStr msg, TrStr hint) 
         head = _strtmp_t27;
     }
     /* pass */
-    printf("%s\n", _tr_strz(({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cr = (c_cyan(_tr_str_lit("-->"))); TrStr _cres = _tr_strx_concat(_tr_strz(_tr_str_lit("  ")), _cr.data); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(head)); _tr_str_release(_cl); _cres; })));
+    ({ printf("%s", _tr_strz(({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cr = (c_cyan(_tr_str_lit("-->"))); TrStr _cres = _tr_strx_concat(_tr_strz(_tr_str_lit("  ")), _cr.data); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(head)); _tr_str_release(_cl); _cres; }))); printf("\n"); });
     /* pass */
     if (((_tr_strlen(_tr_strz(self->src_text)) > 0LL) && (ln > 0LL))) {
         /* pass */
@@ -184,7 +184,7 @@ __attribute__((hot)) void Parser_emit_diag(Parser* self, TrStr msg, TrStr hint) 
             /* pass */
             TrStr gbar = ({ TrStr _cl = (_spaces((_tr_strlen(_tr_strz(gnum)) - 2LL))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("| "))); _tr_str_release(_cl); _cres; });
             /* pass */
-            printf("%s\n", _tr_strz(({ TrStr _cl = (c_dim(gnum)); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(srcline)); _tr_str_release(_cl); _cres; })));
+            ({ printf("%s", _tr_strz(({ TrStr _cl = (c_dim(gnum)); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(srcline)); _tr_str_release(_cl); _cres; }))); printf("\n"); });
             /* pass */
             if ((col > 0LL)) {
                 /* pass */
@@ -203,7 +203,7 @@ __attribute__((hot)) void Parser_emit_diag(Parser* self, TrStr msg, TrStr hint) 
                     }
                 }
                 /* pass */
-                ({ TrStr _at_t28 = (repeat_char(_tr_str_lit("^"), width)); printf("%s\n", _tr_strz(({ TrStr _cl = (({ TrStr _cl = (c_dim(gbar)); TrStr _cr = (_spaces((col - 1LL))); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; })); TrStr _cr = (c_red(_at_t28)); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; }))); _tr_str_release(_at_t28); });
+                ({ TrStr _at_t28 = (repeat_char(_tr_str_lit("^"), width)); ({ printf("%s", _tr_strz(({ TrStr _cl = (({ TrStr _cl = (c_dim(gbar)); TrStr _cr = (_spaces((col - 1LL))); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; })); TrStr _cr = (c_red(_at_t28)); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; }))); printf("\n"); }); _tr_str_release(_at_t28); });
             }
             _tr_str_release(gnum);
         }
@@ -211,7 +211,7 @@ __attribute__((hot)) void Parser_emit_diag(Parser* self, TrStr msg, TrStr hint) 
     /* pass */
     if ((_tr_strlen(_tr_strz(hint)) > 0LL)) {
         /* pass */
-        printf("%s\n", _tr_strz(({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cr = (c_green(_tr_str_lit("= help"))); TrStr _cres = _tr_strx_concat(_tr_strz(_tr_str_lit("  ")), _cr.data); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(": "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(hint)); _tr_str_release(_cl); _cres; })));
+        ({ printf("%s", _tr_strz(({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cr = (c_green(_tr_str_lit("= help"))); TrStr _cres = _tr_strx_concat(_tr_strz(_tr_str_lit("  ")), _cr.data); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(": "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(hint)); _tr_str_release(_cl); _cres; }))); printf("\n"); });
     }
     /* pass */
     self->error_count = (self->error_count + 1LL);
@@ -583,7 +583,7 @@ __attribute__((hot)) List_ptr* Parser_parse_param_list(Parser* self) {
                     }
                 }
                 /* pass */
-                __auto_type p = Param_init(item_name, ty_ptr);
+                Param* p = Param_init(item_name, ty_ptr);
                 /* pass */
                 if ((((unsigned long long)(ty_ptr)) != ((unsigned long long)(0LL)))) {
                     /* pass */
@@ -605,7 +605,7 @@ __attribute__((hot)) List_ptr* Parser_parse_param_list(Parser* self) {
                     p->is_variadic = true;
                 }
                 /* pass */
-                List_ptr_append(pl, p);
+                List_ptr_append(pl, _tr_obj_retain(p));
                 /* pass */
                 __auto_type _t40 = Parser_peek(self);
                 if (_t40.tag == Token_Comma) {
@@ -2008,7 +2008,7 @@ __attribute__((hot)) List_ptr* Parser_parse_match_arms(Parser* self) {
             /* pass */
             new_arm->guard = guard_expr;
             /* pass */
-            List_ptr_append(arms, new_arm);
+            List_ptr_append(arms, _tr_obj_retain(new_arm));
         }
     }
     /* pass */
@@ -2877,7 +2877,7 @@ __attribute__((hot)) Expr* Parser_parse_postfix(Parser* self) {
 
 __attribute__((hot)) void Parser_emit_diag_at(Parser* self, long long ln, long long col, TrStr msg, TrStr hint) {
     /* pass */
-    printf("%s\n", _tr_strz(({ TrStr _cl = (({ TrStr _cl = (c_red(_tr_str_lit("error"))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(": "))); _tr_str_release(_cl); _cres; })); TrStr _cr = (c_bold(msg)); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; })));
+    ({ printf("%s", _tr_strz(({ TrStr _cl = (({ TrStr _cl = (c_red(_tr_str_lit("error"))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(": "))); _tr_str_release(_cl); _cres; })); TrStr _cr = (c_bold(msg)); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; }))); printf("\n"); });
     /* pass */
     TrStr loc = _tr_str_lit("");
     /* pass */
@@ -2897,7 +2897,7 @@ __attribute__((hot)) void Parser_emit_diag_at(Parser* self, long long ln, long l
         head = _strtmp_t118;
     }
     /* pass */
-    printf("%s\n", _tr_strz(({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cr = (c_cyan(_tr_str_lit("-->"))); TrStr _cres = _tr_strx_concat(_tr_strz(_tr_str_lit("  ")), _cr.data); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(head)); _tr_str_release(_cl); _cres; })));
+    ({ printf("%s", _tr_strz(({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cr = (c_cyan(_tr_str_lit("-->"))); TrStr _cres = _tr_strx_concat(_tr_strz(_tr_str_lit("  ")), _cr.data); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(head)); _tr_str_release(_cl); _cres; }))); printf("\n"); });
     /* pass */
     if (((_tr_strlen(_tr_strz(self->src_text)) > 0LL) && (ln > 0LL))) {
         /* pass */
@@ -2909,11 +2909,11 @@ __attribute__((hot)) void Parser_emit_diag_at(Parser* self, long long ln, long l
             /* pass */
             TrStr gbar = ({ TrStr _cl = (_spaces((_tr_strlen(_tr_strz(gnum)) - 2LL))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("| "))); _tr_str_release(_cl); _cres; });
             /* pass */
-            printf("%s\n", _tr_strz(({ TrStr _cl = (c_dim(gnum)); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(srcline)); _tr_str_release(_cl); _cres; })));
+            ({ printf("%s", _tr_strz(({ TrStr _cl = (c_dim(gnum)); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(srcline)); _tr_str_release(_cl); _cres; }))); printf("\n"); });
             /* pass */
             if ((col > 0LL)) {
                 /* pass */
-                printf("%s\n", _tr_strz(({ TrStr _cl = (({ TrStr _cl = (c_dim(gbar)); TrStr _cr = (_spaces((col - 1LL))); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; })); TrStr _cr = (c_red(_tr_str_lit("^"))); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; })));
+                ({ printf("%s", _tr_strz(({ TrStr _cl = (({ TrStr _cl = (c_dim(gbar)); TrStr _cr = (_spaces((col - 1LL))); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; })); TrStr _cr = (c_red(_tr_str_lit("^"))); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; }))); printf("\n"); });
             }
             _tr_str_release(gnum);
         }
@@ -2921,7 +2921,7 @@ __attribute__((hot)) void Parser_emit_diag_at(Parser* self, long long ln, long l
     /* pass */
     if ((_tr_strlen(_tr_strz(hint)) > 0LL)) {
         /* pass */
-        printf("%s\n", _tr_strz(({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cr = (c_green(_tr_str_lit("= help"))); TrStr _cres = _tr_strx_concat(_tr_strz(_tr_str_lit("  ")), _cr.data); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(": "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(hint)); _tr_str_release(_cl); _cres; })));
+        ({ printf("%s", _tr_strz(({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cr = (c_green(_tr_str_lit("= help"))); TrStr _cres = _tr_strx_concat(_tr_strz(_tr_str_lit("  ")), _cr.data); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(": "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(hint)); _tr_str_release(_cl); _cres; }))); printf("\n"); });
     }
     /* pass */
     self->error_count = (self->error_count + 1LL);
@@ -3957,9 +3957,10 @@ __attribute__((hot)) Decl* Parser_parse_decl(Parser* self) {
             d->args = Parser_parse_arg_list(self);
         }
         /* pass */
-        List_ptr_append(decorators, d);
+        List_ptr_append(decorators, _tr_obj_retain(d));
         /* pass */
         Parser_expect_newline(self);
+        _tr_obj_release(d, _trdrop_Decorator);
     }
     /* pass */
     bool is_public = false;
@@ -3999,9 +4000,11 @@ __attribute__((hot)) Decl* Parser_parse_decl(Parser* self) {
     __auto_type _t170 = Parser_peek(self);
     if (_t170.tag == Token_KwFrom) {
         /* pass */
+        List_ptr_free_obj(decorators, _trdrop_Decorator);
         return Parser_parse_from_import(self);
     } else if (_t170.tag == Token_KwImport) {
         /* pass */
+        List_ptr_free_obj(decorators, _trdrop_Decorator);
         return Parser_parse_import(self);
     } else if (_t170.tag == Token_Ident) {
         __auto_type type_kw = _t170.data.Ident.name;
@@ -4020,6 +4023,7 @@ __attribute__((hot)) Decl* Parser_parse_decl(Parser* self) {
                 /* pass */
                 Parser_expect_newline(self);
                 /* pass */
+                List_ptr_free_obj(decorators, _trdrop_Decorator);
                 return box_decl(Decl_ctor_DTypeAlias(alias_name, box_asttype(target_ty)));
             }
         }
@@ -4282,7 +4286,7 @@ __attribute__((hot)) Decl* Parser_parse_from_import(Parser* self) {
                     item->alias = Parser_consume_ident(self);
                 }
                 /* pass */
-                List_ptr_append(il, item);
+                List_ptr_append(il, _tr_obj_retain(item));
                 /* pass */
                 if ((Parser_peek(self).tag == Token_make_Comma().tag)) {
                     /* pass */
@@ -4707,9 +4711,10 @@ __attribute__((hot)) Decl* Parser_parse_class_decl(Parser* self) {
                 d->args = Parser_parse_arg_list(self);
             }
             /* pass */
-            List_ptr_append(decorators, d);
+            List_ptr_append(decorators, _tr_obj_retain(d));
             /* pass */
             Parser_expect_newline(self);
+            _tr_obj_release(d, _trdrop_Decorator);
         }
         /* pass */
         bool is_p = false;
@@ -4742,7 +4747,8 @@ __attribute__((hot)) Decl* Parser_parse_class_decl(Parser* self) {
             /* pass */
             m->decorators = decorators;
             /* pass */
-            List_ptr_append(c->methods, m);
+            List_ptr_append(c->methods, _tr_obj_retain(m));
+            _tr_obj_release(m, _trdrop_FunctionDef);
         } else if (_t196.tag == Token_KwAsync) {
             /* pass */
             self->pos = (self->pos + 1LL);
@@ -4762,7 +4768,8 @@ __attribute__((hot)) Decl* Parser_parse_class_decl(Parser* self) {
                 /* pass */
                 m->decorators = decorators;
                 /* pass */
-                List_ptr_append(c->methods, m);
+                List_ptr_append(c->methods, _tr_obj_retain(m));
+                _tr_obj_release(m, _trdrop_FunctionDef);
             } else if (1) {
                 __auto_type _ = _t197;
                 /* pass */
@@ -4807,9 +4814,10 @@ __attribute__((hot)) Decl* Parser_parse_class_decl(Parser* self) {
             /* pass */
             FieldDef* fld = FieldDef_init(fname, ty_ptr);
             /* pass */
-            List_ptr_append(c->fields, fld);
+            List_ptr_append(c->fields, _tr_obj_retain(fld));
             /* pass */
             Parser_expect_newline(self);
+            _tr_obj_release(fld, _trdrop_FieldDef);
         } else if (_t196.tag == Token_KwPass) {
             /* pass */
             self->pos = (self->pos + 1LL);
@@ -4911,9 +4919,10 @@ __attribute__((hot)) Decl* Parser_parse_enum_decl(Parser* self) {
                 d->args = Parser_parse_arg_list(self);
             }
             /* pass */
-            List_ptr_append(decorators, d);
+            List_ptr_append(decorators, _tr_obj_retain(d));
             /* pass */
             Parser_expect_newline(self);
+            _tr_obj_release(d, _trdrop_Decorator);
         }
         /* pass */
         bool is_p = false;
@@ -4953,9 +4962,10 @@ __attribute__((hot)) Decl* Parser_parse_enum_decl(Parser* self) {
                 }
             }
             /* pass */
-            List_ptr_append(e->variants, vd);
+            List_ptr_append(e->variants, _tr_obj_retain(vd));
             /* pass */
             Parser_expect_newline(self);
+            _tr_obj_release(vd, _trdrop_VariantDef);
         } else if (_t203.tag == Token_KwDef) {
             /* pass */
             FunctionDef* m = Parser_parse_function_def(self, true);
@@ -4964,7 +4974,8 @@ __attribute__((hot)) Decl* Parser_parse_enum_decl(Parser* self) {
             /* pass */
             m->decorators = decorators;
             /* pass */
-            List_ptr_append(e->methods, m);
+            List_ptr_append(e->methods, _tr_obj_retain(m));
+            _tr_obj_release(m, _trdrop_FunctionDef);
         } else if (_t203.tag == Token_KwPass) {
             /* pass */
             self->pos = (self->pos + 1LL);
@@ -5081,7 +5092,8 @@ __attribute__((hot)) Decl* Parser_parse_interface_decl(Parser* self) {
             /* pass */
             m->is_public = is_p;
             /* pass */
-            List_ptr_append(i->methods, m);
+            List_ptr_append(i->methods, _tr_obj_retain(m));
+            _tr_obj_release(m, _trdrop_FunctionDef);
         } else if (_t208.tag == Token_KwPass) {
             /* pass */
             self->pos = (self->pos + 1LL);
@@ -5167,9 +5179,10 @@ __attribute__((hot)) Decl* Parser_parse_extend_decl(Parser* self) {
                 d->args = Parser_parse_arg_list(self);
             }
             /* pass */
-            List_ptr_append(decorators, d);
+            List_ptr_append(decorators, _tr_obj_retain(d));
             /* pass */
             Parser_expect_newline(self);
+            _tr_obj_release(d, _trdrop_Decorator);
         }
         /* pass */
         bool is_p = false;
@@ -5198,7 +5211,8 @@ __attribute__((hot)) Decl* Parser_parse_extend_decl(Parser* self) {
             /* pass */
             m->decorators = decorators;
             /* pass */
-            List_ptr_append(fl, m);
+            List_ptr_append(fl, _tr_obj_retain(m));
+            _tr_obj_release(m, _trdrop_FunctionDef);
         } else if (_t212.tag == Token_KwPass) {
             /* pass */
             self->pos = (self->pos + 1LL);
@@ -5304,7 +5318,8 @@ __attribute__((hot)) Decl* Parser_parse_extern_decl(Parser* self) {
                 }
             }
             /* pass */
-            List_ptr_append(fl, m);
+            List_ptr_append(fl, _tr_obj_retain(m));
+            _tr_obj_release(m, _trdrop_FunctionDef);
         } else if (1) {
             __auto_type _ = _t217;
             /* pass */

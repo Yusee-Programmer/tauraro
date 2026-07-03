@@ -1,0 +1,72 @@
+# tests/lang/28_json.tr - zero-cost arena JSON: parse (JsonDoc/JsonRef) + build
+# (JsonWriter). Uses the SAFE API (no raw pointers, no unsafe, no .read()).
+
+from std.test import TestRunner
+from std.encoding.json import JsonDoc, JsonRef, JsonWriter, Json
+
+def main():
+    mut t = TestRunner.init("28_json")
+
+    t.section("scalars + nesting")
+    mut doc = Json.parse("{\"name\": \"Tau\\nraro\", \"port\": 8080, \"ratio\": 1.5, \"ok\": true, \"nil\": null}")
+    mut root = doc.root()
+    mut name: str = root.obj_get("name").get_str()
+    t.assert_eq_str(name, "Tau\nraro", "string value with escape")
+    t.assert_eq_int(root.obj_get("port").get_int(), 8080, "int value")
+    t.assert_eq_float(root.obj_get("ratio").get_float(), 1.5, 0.0001, "float value")
+    t.assert_true(root.obj_get("ok").get_bool(), "bool value")
+    t.assert_true(root.obj_get("nil").is_null(), "null value")
+    t.assert_false(root.obj_has("missing"), "missing key")
+
+    t.section("zero-copy string access (StrView)")
+    # str_eq compares without allocating; str_view borrows into the doc buffer.
+    t.assert_true(root.obj_get("name").str_eq("Tau\nraro"), "zero-copy str_eq match")
+    t.assert_false(root.obj_get("name").str_eq("other"), "zero-copy str_eq mismatch")
+    mut view = root.obj_get("name").str_view()
+    t.assert_eq_int(view.length(), 8, "str_view length (no alloc)")
+    mut materialized: str = view.to_str()
+    t.assert_eq_str(materialized, "Tau\nraro", "str_view materialized on demand")
+
+    t.section("arrays")
+    mut d2 = Json.parse("{\"nums\": [10, 20, 30], \"words\": [\"a\", \"b\"]}")
+    mut nums = d2.root().obj_get("nums")
+    t.assert_eq_int(nums.array_len(), 3, "array length")
+    t.assert_eq_int(nums.array_get(0).get_int(), 10, "array elem 0")
+    t.assert_eq_int(nums.array_get(2).get_int(), 30, "array elem 2")
+    mut w1: str = d2.root().obj_get("words").array_get(1).get_str()
+    t.assert_eq_str(w1, "b", "string array elem")
+
+    t.section("deep nesting")
+    mut d3 = Json.parse("{\"a\": {\"b\": {\"c\": 42}}}")
+    t.assert_eq_int(d3.root().obj_get("a").obj_get("b").obj_get("c").get_int(), 42, "3-deep object")
+
+    t.section("serialize (parse -> to_str -> parse)")
+    mut d4 = Json.parse("{\"id\": 7, \"tags\": [1, 2], \"live\": false}")
+    mut emitted: str = d4.root().to_str()
+    mut d5 = Json.parse(emitted)
+    t.assert_eq_int(d5.root().obj_get("id").get_int(), 7, "round-trip int")
+    t.assert_eq_int(d5.root().obj_get("tags").array_get(1).get_int(), 2, "round-trip array")
+    t.assert_false(d5.root().obj_get("live").get_bool(), "round-trip bool")
+
+    t.section("JsonWriter (streaming build)")
+    mut w = JsonWriter.init(128)
+    w.begin_object()
+    w.field_int("id", 1)
+    w.field_str("name", "x")
+    w.field_bool("ok", true)
+    w.key("nums")
+    w.begin_array()
+    w.int_val(5)
+    w.int_val(6)
+    w.end_array()
+    w.end_object()
+    mut built: str = w.finish()
+    w.free()
+    # Re-parse the built JSON to verify structure.
+    mut d6 = Json.parse(built)
+    t.assert_eq_int(d6.root().obj_get("id").get_int(), 1, "writer id")
+    mut wn: str = d6.root().obj_get("name").get_str()
+    t.assert_eq_str(wn, "x", "writer name")
+    t.assert_eq_int(d6.root().obj_get("nums").array_get(0).get_int(), 5, "writer array")
+
+    t.summary()

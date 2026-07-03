@@ -1,0 +1,50 @@
+# ARC leak validation for classes: passed as arguments, returned from functions,
+# and holding str fields — all must be reclaimed with no net growth.
+extern "C":
+    def _tr_mem_live() -> int
+
+class Point:
+    pub x: int
+    pub y: int
+extend Point:
+    pub def init(x: int, y: int) -> Point:
+        mut p = Point()
+        p.x = x
+        p.y = y
+        return p
+
+class Named:
+    pub name: str
+extend Named:
+    pub def init(n: str) -> Named:
+        mut o = Named()
+        o.name = n
+        return o
+
+def dist(a: Point, b: Point) -> int:      # classes passed BY reference (ARC)
+    mut dx = a.x - b.x
+    mut dy = a.y - b.y
+    return dx * dx + dy * dy
+
+def make_named(prefix: str, n: int) -> Named:   # class RETURNED (ownership moves)
+    return Named.init(prefix + n.to_str())
+
+def work():
+    mut p1 = Point.init(1, 2)
+    mut p2 = Point.init(4, 6)
+    mut d = dist(p1, p2)                   # pass two classes as args
+    mut nm = make_named("item-", d)        # construct + return a class w/ str field
+    mut ln = nm.name.len()
+
+def main():
+    work()
+    mut before = _tr_mem_live()
+    mut i = 0
+    while i < 5000:
+        work()
+        i = i + 1
+    mut leaked = _tr_mem_live() - before
+    if leaked <= 0:
+        print("ARC-CLASSES PASS (net " + leaked.to_str() + " over 5000 iters)")
+    else:
+        print("ARC-CLASSES FAIL: " + leaked.to_str() + " leaked")

@@ -1,3 +1,4 @@
+# @trusted: compiler systems module — audited raw-pointer core (like Rust std internals)
 # compiler/src/codegen/mod.tr - Codegen backend registry.
 #
 # Re-exports all available backends so callers can do:

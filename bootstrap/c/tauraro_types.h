@@ -72,6 +72,59 @@ typedef struct List_Token List_Token;
 typedef struct List_Pattern List_Pattern;
 
 
+static void _trdrop_StringObj(void* vp);
+static void _trdrop_Lexer(void* vp);
+static void _trdrop_AstType(void* vp);
+static void _trdrop_GenericConstraint(void* vp);
+static void _trdrop_Decorator(void* vp);
+static void _trdrop_Comprehension(void* vp);
+static void _trdrop_CatchClause(void* vp);
+static void _trdrop_MatchArm(void* vp);
+static void _trdrop_FStringPart(void* vp);
+static void _trdrop_ChanSelectArm(void* vp);
+static void _trdrop_Block(void* vp);
+static void _trdrop_ElifClause(void* vp);
+static void _trdrop_Param(void* vp);
+static void _trdrop_FunctionDef(void* vp);
+static void _trdrop_FieldDef(void* vp);
+static void _trdrop_ClassDef(void* vp);
+static void _trdrop_VariantDef(void* vp);
+static void _trdrop_EnumDef(void* vp);
+static void _trdrop_InterfaceDef(void* vp);
+static void _trdrop_ImportItem(void* vp);
+static void _trdrop_Program(void* vp);
+static void _trdrop_Parser(void* vp);
+static void _trdrop_ModuleResolver(void* vp);
+static void _trdrop_HirComprehension(void* vp);
+static void _trdrop_HirCatchClause(void* vp);
+static void _trdrop_HirFStringPart(void* vp);
+static void _trdrop_HirMatchArm(void* vp);
+static void _trdrop_HirChanSelectArm(void* vp);
+static void _trdrop_HirBlock(void* vp);
+static void _trdrop_HirParam(void* vp);
+static void _trdrop_HirFunction(void* vp);
+static void _trdrop_HirField(void* vp);
+static void _trdrop_HirClass(void* vp);
+static void _trdrop_HirVariant(void* vp);
+static void _trdrop_HirEnum(void* vp);
+static void _trdrop_HirInterface(void* vp);
+static void _trdrop_HirProgram(void* vp);
+static void _trdrop_MirBlock(void* vp);
+static void _trdrop_DropSite(void* vp);
+static void _trdrop_BorrowEdge(void* vp);
+static void _trdrop_MirFunction(void* vp);
+static void _trdrop_MirProgram(void* vp);
+static void _trdrop_MirBuilder(void* vp);
+static void _trdrop_LiveSet(void* vp);
+static void _trdrop_Symbol(void* vp);
+static void _trdrop_Scope(void* vp);
+static void _trdrop_Sema(void* vp);
+static void _trdrop_Formatter(void* vp);
+static void _trdrop_CGenerator(void* vp);
+static void _trdrop_LlvmGenerator(void* vp);
+static void _trdrop_MacroCtx(void* vp);
+static void _trdrop_FnMacroExpander(void* vp);
+
 typedef enum {
     Token_IntLit,
     Token_FloatLit,
@@ -960,17 +1013,17 @@ typedef struct Decl {
     } data;
 } Decl;
 
-static inline __attribute__((always_inline)) Decl Decl_ctor_DFunction(FunctionDef* func) { Decl _r = {.tag=Decl_DFunction}; _r.data.DFunction.func = func; return _r; }
-static inline __attribute__((always_inline)) Decl Decl_ctor_DClass(ClassDef* cls) { Decl _r = {.tag=Decl_DClass}; _r.data.DClass.cls = cls; return _r; }
-static inline __attribute__((always_inline)) Decl Decl_ctor_DEnum(EnumDef* enm) { Decl _r = {.tag=Decl_DEnum}; _r.data.DEnum.enm = enm; return _r; }
-static inline __attribute__((always_inline)) Decl Decl_ctor_DInterface(InterfaceDef* iface) { Decl _r = {.tag=Decl_DInterface}; _r.data.DInterface.iface = iface; return _r; }
+static inline __attribute__((always_inline)) Decl Decl_ctor_DFunction(FunctionDef* func) { Decl _r = {.tag=Decl_DFunction}; _r.data.DFunction.func = _tr_obj_retain(func); return _r; }
+static inline __attribute__((always_inline)) Decl Decl_ctor_DClass(ClassDef* cls) { Decl _r = {.tag=Decl_DClass}; _r.data.DClass.cls = _tr_obj_retain(cls); return _r; }
+static inline __attribute__((always_inline)) Decl Decl_ctor_DEnum(EnumDef* enm) { Decl _r = {.tag=Decl_DEnum}; _r.data.DEnum.enm = _tr_obj_retain(enm); return _r; }
+static inline __attribute__((always_inline)) Decl Decl_ctor_DInterface(InterfaceDef* iface) { Decl _r = {.tag=Decl_DInterface}; _r.data.DInterface.iface = _tr_obj_retain(iface); return _r; }
 static inline __attribute__((always_inline)) Decl Decl_ctor_DExtend(TrStr target, List_ptr* methods) { Decl _r = {.tag=Decl_DExtend}; _r.data.DExtend.target = _tr_str_retain(target); _r.data.DExtend.methods = methods; return _r; }
 static inline __attribute__((always_inline)) Decl Decl_ctor_DImport(TrStr path, TrStr alias) { Decl _r = {.tag=Decl_DImport}; _r.data.DImport.path = _tr_str_retain(path); _r.data.DImport.alias = _tr_str_retain(alias); return _r; }
 static inline __attribute__((always_inline)) Decl Decl_ctor_DFromImport(TrStr path, List_ptr* items) { Decl _r = {.tag=Decl_DFromImport}; _r.data.DFromImport.path = _tr_str_retain(path); _r.data.DFromImport.items = items; return _r; }
 static inline __attribute__((always_inline)) Decl Decl_ctor_DExtern(TrStr abi, List_ptr* functions) { Decl _r = {.tag=Decl_DExtern}; _r.data.DExtern.abi = _tr_str_retain(abi); _r.data.DExtern.functions = functions; return _r; }
 static inline __attribute__((always_inline)) Decl Decl_ctor_DTopLevelStmt(Stmt* stmt) { Decl _r = {.tag=Decl_DTopLevelStmt}; _r.data.DTopLevelStmt.stmt = stmt; return _r; }
-static inline __attribute__((always_inline)) Decl Decl_ctor_DActor(ClassDef* cls) { Decl _r = {.tag=Decl_DActor}; _r.data.DActor.cls = cls; return _r; }
-static inline __attribute__((always_inline)) Decl Decl_ctor_DDecoratorDef(FunctionDef* func) { Decl _r = {.tag=Decl_DDecoratorDef}; _r.data.DDecoratorDef.func = func; return _r; }
+static inline __attribute__((always_inline)) Decl Decl_ctor_DActor(ClassDef* cls) { Decl _r = {.tag=Decl_DActor}; _r.data.DActor.cls = _tr_obj_retain(cls); return _r; }
+static inline __attribute__((always_inline)) Decl Decl_ctor_DDecoratorDef(FunctionDef* func) { Decl _r = {.tag=Decl_DDecoratorDef}; _r.data.DDecoratorDef.func = _tr_obj_retain(func); return _r; }
 static inline __attribute__((always_inline)) Decl Decl_ctor_DTypeAlias(TrStr name, AstType** target) { Decl _r = {.tag=Decl_DTypeAlias}; _r.data.DTypeAlias.name = _tr_str_retain(name); _r.data.DTypeAlias.target = target; return _r; }
 
 typedef enum {
@@ -1224,7 +1277,7 @@ static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_EIndex(HirExpr
 static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_ECast(HirExpr* expr, AstType* target_ty) { HirExpr _r = {.tag=HirExpr_ECast}; _r.data.ECast.expr = expr; _r.data.ECast.target_ty = target_ty; return _r; }
 static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_EFString(List_ptr* parts, AstType* ty) { HirExpr _r = {.tag=HirExpr_EFString}; _r.data.EFString.parts = parts; _r.data.EFString.ty = ty; return _r; }
 static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_ETryExpr(HirExpr* expr, AstType* ty) { HirExpr _r = {.tag=HirExpr_ETryExpr}; _r.data.ETryExpr.expr = expr; _r.data.ETryExpr.ty = ty; return _r; }
-static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_EClosure(List_ptr* params, AstType* ret_ty, HirBlock* body, bool is_async, List_ptr* captures) { HirExpr _r = {.tag=HirExpr_EClosure}; _r.data.EClosure.params = params; _r.data.EClosure.ret_ty = ret_ty; _r.data.EClosure.body = body; _r.data.EClosure.is_async = is_async; _r.data.EClosure.captures = captures; return _r; }
+static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_EClosure(List_ptr* params, AstType* ret_ty, HirBlock* body, bool is_async, List_ptr* captures) { HirExpr _r = {.tag=HirExpr_EClosure}; _r.data.EClosure.params = params; _r.data.EClosure.ret_ty = ret_ty; _r.data.EClosure.body = _tr_obj_retain(body); _r.data.EClosure.is_async = is_async; _r.data.EClosure.captures = captures; return _r; }
 static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_ESuperMethodCall(TrStr base_class, TrStr method, List_ptr* args, AstType* ty) { HirExpr _r = {.tag=HirExpr_ESuperMethodCall}; _r.data.ESuperMethodCall.base_class = _tr_str_retain(base_class); _r.data.ESuperMethodCall.method = _tr_str_retain(method); _r.data.ESuperMethodCall.args = args; _r.data.ESuperMethodCall.ty = ty; return _r; }
 static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_ESuperPropAccess(TrStr base_class, TrStr prop, AstType* ty) { HirExpr _r = {.tag=HirExpr_ESuperPropAccess}; _r.data.ESuperPropAccess.base_class = _tr_str_retain(base_class); _r.data.ESuperPropAccess.prop = _tr_str_retain(prop); _r.data.ESuperPropAccess.ty = ty; return _r; }
 static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_EList(List_ptr* items, AstType* ty) { HirExpr _r = {.tag=HirExpr_EList}; _r.data.EList.items = items; _r.data.EList.ty = ty; return _r; }
@@ -1237,14 +1290,14 @@ static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_ESlice(HirExpr
 static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_EAwait(HirExpr* expr, AstType* ty) { HirExpr _r = {.tag=HirExpr_EAwait}; _r.data.EAwait.expr = expr; _r.data.EAwait.ty = ty; return _r; }
 static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_EAwaitTimeout(HirExpr* expr, HirExpr* timeout_ms, AstType* ty) { HirExpr _r = {.tag=HirExpr_EAwaitTimeout}; _r.data.EAwaitTimeout.expr = expr; _r.data.EAwaitTimeout.timeout_ms = timeout_ms; _r.data.EAwaitTimeout.ty = ty; return _r; }
 static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_EYield(HirExpr* expr, AstType* ty) { HirExpr _r = {.tag=HirExpr_EYield}; _r.data.EYield.expr = expr; _r.data.EYield.ty = ty; return _r; }
-static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_ETry(HirBlock* try_body, List_ptr* catches, HirBlock* finally_b, AstType* ty) { HirExpr _r = {.tag=HirExpr_ETry}; _r.data.ETry.try_body = try_body; _r.data.ETry.catches = catches; _r.data.ETry.finally_b = finally_b; _r.data.ETry.ty = ty; return _r; }
+static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_ETry(HirBlock* try_body, List_ptr* catches, HirBlock* finally_b, AstType* ty) { HirExpr _r = {.tag=HirExpr_ETry}; _r.data.ETry.try_body = _tr_obj_retain(try_body); _r.data.ETry.catches = catches; _r.data.ETry.finally_b = _tr_obj_retain(finally_b); _r.data.ETry.ty = ty; return _r; }
 static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_ERange(HirExpr* start, HirExpr* end, bool inclusive, AstType* ty) { HirExpr _r = {.tag=HirExpr_ERange}; _r.data.ERange.start = start; _r.data.ERange.end = end; _r.data.ERange.inclusive = inclusive; _r.data.ERange.ty = ty; return _r; }
 static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_ESizeOf(AstType* target_ty, AstType* ty) { HirExpr _r = {.tag=HirExpr_ESizeOf}; _r.data.ESizeOf.target_ty = target_ty; _r.data.ESizeOf.ty = ty; return _r; }
 static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_EIfElse(HirExpr* cond, HirExpr* then_e, HirExpr* else_e, AstType* ty) { HirExpr _r = {.tag=HirExpr_EIfElse}; _r.data.EIfElse.cond = cond; _r.data.EIfElse.then_e = then_e; _r.data.EIfElse.else_e = else_e; _r.data.EIfElse.ty = ty; return _r; }
-static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_EDo(HirBlock* body, AstType* ty) { HirExpr _r = {.tag=HirExpr_EDo}; _r.data.EDo.body = body; _r.data.EDo.ty = ty; return _r; }
+static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_EDo(HirBlock* body, AstType* ty) { HirExpr _r = {.tag=HirExpr_EDo}; _r.data.EDo.body = _tr_obj_retain(body); _r.data.EDo.ty = ty; return _r; }
 static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_EMatchExpr(HirExpr* subj, List_ptr* arms, AstType* ty) { HirExpr _r = {.tag=HirExpr_EMatchExpr}; _r.data.EMatchExpr.subj = subj; _r.data.EMatchExpr.arms = arms; _r.data.EMatchExpr.ty = ty; return _r; }
-static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_ELoop(HirBlock* body, AstType* ty) { HirExpr _r = {.tag=HirExpr_ELoop}; _r.data.ELoop.body = body; _r.data.ELoop.ty = ty; return _r; }
-static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_EWhileExpr(HirExpr* cond, HirBlock* body, HirBlock* else_body, AstType* ty) { HirExpr _r = {.tag=HirExpr_EWhileExpr}; _r.data.EWhileExpr.cond = cond; _r.data.EWhileExpr.body = body; _r.data.EWhileExpr.else_body = else_body; _r.data.EWhileExpr.ty = ty; return _r; }
+static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_ELoop(HirBlock* body, AstType* ty) { HirExpr _r = {.tag=HirExpr_ELoop}; _r.data.ELoop.body = _tr_obj_retain(body); _r.data.ELoop.ty = ty; return _r; }
+static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_EWhileExpr(HirExpr* cond, HirBlock* body, HirBlock* else_body, AstType* ty) { HirExpr _r = {.tag=HirExpr_EWhileExpr}; _r.data.EWhileExpr.cond = cond; _r.data.EWhileExpr.body = _tr_obj_retain(body); _r.data.EWhileExpr.else_body = _tr_obj_retain(else_body); _r.data.EWhileExpr.ty = ty; return _r; }
 
 typedef enum {
     HirStmt_SExpr,
@@ -1391,19 +1444,19 @@ static inline __attribute__((always_inline)) HirStmt HirStmt_ctor_SBreak(HirExpr
 #define HirStmt_make_SContinue() ((HirStmt){.tag=HirStmt_SContinue})
 #define HirStmt_make_SPass() ((HirStmt){.tag=HirStmt_SPass})
 static inline __attribute__((always_inline)) HirStmt HirStmt_ctor_SRaise(HirExpr* val) { HirStmt _r = {.tag=HirStmt_SRaise}; _r.data.SRaise.val = val; return _r; }
-static inline __attribute__((always_inline)) HirStmt HirStmt_ctor_SUnsafe(HirBlock* body) { HirStmt _r = {.tag=HirStmt_SUnsafe}; _r.data.SUnsafe.body = body; return _r; }
-static inline __attribute__((always_inline)) HirStmt HirStmt_ctor_SIf(HirExpr* cond, HirBlock* then_b, HirBlock* else_b) { HirStmt _r = {.tag=HirStmt_SIf}; _r.data.SIf.cond = cond; _r.data.SIf.then_b = then_b; _r.data.SIf.else_b = else_b; return _r; }
-static inline __attribute__((always_inline)) HirStmt HirStmt_ctor_SWhile(HirExpr* cond, HirBlock* body) { HirStmt _r = {.tag=HirStmt_SWhile}; _r.data.SWhile.cond = cond; _r.data.SWhile.body = body; return _r; }
-static inline __attribute__((always_inline)) HirStmt HirStmt_ctor_SFor(TrStr var, HirExpr* iter, HirBlock* body) { HirStmt _r = {.tag=HirStmt_SFor}; _r.data.SFor.var = _tr_str_retain(var); _r.data.SFor.iter = iter; _r.data.SFor.body = body; return _r; }
-static inline __attribute__((always_inline)) HirStmt HirStmt_ctor_SForUnpack(List_TrStr* vars, HirExpr* iter, HirBlock* body) { HirStmt _r = {.tag=HirStmt_SForUnpack}; _r.data.SForUnpack.vars = vars; _r.data.SForUnpack.iter = iter; _r.data.SForUnpack.body = body; return _r; }
+static inline __attribute__((always_inline)) HirStmt HirStmt_ctor_SUnsafe(HirBlock* body) { HirStmt _r = {.tag=HirStmt_SUnsafe}; _r.data.SUnsafe.body = _tr_obj_retain(body); return _r; }
+static inline __attribute__((always_inline)) HirStmt HirStmt_ctor_SIf(HirExpr* cond, HirBlock* then_b, HirBlock* else_b) { HirStmt _r = {.tag=HirStmt_SIf}; _r.data.SIf.cond = cond; _r.data.SIf.then_b = _tr_obj_retain(then_b); _r.data.SIf.else_b = _tr_obj_retain(else_b); return _r; }
+static inline __attribute__((always_inline)) HirStmt HirStmt_ctor_SWhile(HirExpr* cond, HirBlock* body) { HirStmt _r = {.tag=HirStmt_SWhile}; _r.data.SWhile.cond = cond; _r.data.SWhile.body = _tr_obj_retain(body); return _r; }
+static inline __attribute__((always_inline)) HirStmt HirStmt_ctor_SFor(TrStr var, HirExpr* iter, HirBlock* body) { HirStmt _r = {.tag=HirStmt_SFor}; _r.data.SFor.var = _tr_str_retain(var); _r.data.SFor.iter = iter; _r.data.SFor.body = _tr_obj_retain(body); return _r; }
+static inline __attribute__((always_inline)) HirStmt HirStmt_ctor_SForUnpack(List_TrStr* vars, HirExpr* iter, HirBlock* body) { HirStmt _r = {.tag=HirStmt_SForUnpack}; _r.data.SForUnpack.vars = vars; _r.data.SForUnpack.iter = iter; _r.data.SForUnpack.body = _tr_obj_retain(body); return _r; }
 static inline __attribute__((always_inline)) HirStmt HirStmt_ctor_SMatch(HirExpr* expr, List_ptr* arms) { HirStmt _r = {.tag=HirStmt_SMatch}; _r.data.SMatch.expr = expr; _r.data.SMatch.arms = arms; return _r; }
-static inline __attribute__((always_inline)) HirStmt HirStmt_ctor_STry(HirBlock* try_body, List_ptr* catches, HirBlock* finally_b) { HirStmt _r = {.tag=HirStmt_STry}; _r.data.STry.try_body = try_body; _r.data.STry.catches = catches; _r.data.STry.finally_b = finally_b; return _r; }
+static inline __attribute__((always_inline)) HirStmt HirStmt_ctor_STry(HirBlock* try_body, List_ptr* catches, HirBlock* finally_b) { HirStmt _r = {.tag=HirStmt_STry}; _r.data.STry.try_body = _tr_obj_retain(try_body); _r.data.STry.catches = catches; _r.data.STry.finally_b = _tr_obj_retain(finally_b); return _r; }
 static inline __attribute__((always_inline)) HirStmt HirStmt_ctor_SAssert(HirExpr* cond, HirExpr* msg) { HirStmt _r = {.tag=HirStmt_SAssert}; _r.data.SAssert.cond = cond; _r.data.SAssert.msg = msg; return _r; }
-static inline __attribute__((always_inline)) HirStmt HirStmt_ctor_SWith(List_ptr* items, List_TrStr* aliases, HirBlock* body) { HirStmt _r = {.tag=HirStmt_SWith}; _r.data.SWith.items = items; _r.data.SWith.aliases = aliases; _r.data.SWith.body = body; return _r; }
+static inline __attribute__((always_inline)) HirStmt HirStmt_ctor_SWith(List_ptr* items, List_TrStr* aliases, HirBlock* body) { HirStmt _r = {.tag=HirStmt_SWith}; _r.data.SWith.items = items; _r.data.SWith.aliases = aliases; _r.data.SWith.body = _tr_obj_retain(body); return _r; }
 static inline __attribute__((always_inline)) HirStmt HirStmt_ctor_SAsm(TrStr code, TrStr outputs, TrStr inputs, TrStr clobbers) { HirStmt _r = {.tag=HirStmt_SAsm}; _r.data.SAsm.code = _tr_str_retain(code); _r.data.SAsm.outputs = _tr_str_retain(outputs); _r.data.SAsm.inputs = _tr_str_retain(inputs); _r.data.SAsm.clobbers = _tr_str_retain(clobbers); return _r; }
 static inline __attribute__((always_inline)) HirStmt HirStmt_ctor_SSpawn(HirExpr* expr) { HirStmt _r = {.tag=HirStmt_SSpawn}; _r.data.SSpawn.expr = expr; return _r; }
-static inline __attribute__((always_inline)) HirStmt HirStmt_ctor_STaskGroup(HirBlock* body) { HirStmt _r = {.tag=HirStmt_STaskGroup}; _r.data.STaskGroup.body = body; return _r; }
-static inline __attribute__((always_inline)) HirStmt HirStmt_ctor_SGpuBlock(HirBlock* body) { HirStmt _r = {.tag=HirStmt_SGpuBlock}; _r.data.SGpuBlock.body = body; return _r; }
+static inline __attribute__((always_inline)) HirStmt HirStmt_ctor_STaskGroup(HirBlock* body) { HirStmt _r = {.tag=HirStmt_STaskGroup}; _r.data.STaskGroup.body = _tr_obj_retain(body); return _r; }
+static inline __attribute__((always_inline)) HirStmt HirStmt_ctor_SGpuBlock(HirBlock* body) { HirStmt _r = {.tag=HirStmt_SGpuBlock}; _r.data.SGpuBlock.body = _tr_obj_retain(body); return _r; }
 static inline __attribute__((always_inline)) HirStmt HirStmt_ctor_SFree(TrStr name) { HirStmt _r = {.tag=HirStmt_SFree}; _r.data.SFree.name = _tr_str_retain(name); return _r; }
 static inline __attribute__((always_inline)) HirStmt HirStmt_ctor_SMultiLet(List_TrStr* names, bool is_mut, HirExpr* val) { HirStmt _r = {.tag=HirStmt_SMultiLet}; _r.data.SMultiLet.names = names; _r.data.SMultiLet.is_mut = is_mut; _r.data.SMultiLet.val = val; return _r; }
 static inline __attribute__((always_inline)) HirStmt HirStmt_ctor_SChanSelect(List_ptr* cases) { HirStmt _r = {.tag=HirStmt_SChanSelect}; _r.data.SChanSelect.cases = cases; return _r; }
@@ -1528,15 +1581,20 @@ static inline __attribute__((always_inline)) MacroVal MacroVal_ctor_MRec(List_Tr
 #ifndef StringObj_STRUCT_DEFINED
 #define StringObj_STRUCT_DEFINED
 typedef struct StringObj {
+    size_t __rc;
     char* data;
     long long len;
     long long capacity;
 } StringObj;
+static void _trdrop_StringObj(void* vp) {
+    StringObj* self = (StringObj*)vp; (void)self;
+}
 #endif
 
 #ifndef StringBuilder_STRUCT_DEFINED
 #define StringBuilder_STRUCT_DEFINED
 typedef struct StringBuilder {
+    size_t __rc;
     StringObj* buf;
 } StringBuilder;
 #endif
@@ -1544,6 +1602,7 @@ typedef struct StringBuilder {
 #ifndef Lexer_STRUCT_DEFINED
 #define Lexer_STRUCT_DEFINED
 typedef struct Lexer {
+    size_t __rc;
     char* src;
     long long len;
     long long pos;
@@ -1559,11 +1618,21 @@ typedef struct Lexer {
     List_TrStr* comment_texts;
     List_bool* comment_trailing;
 } Lexer;
+static void _trdrop_Lexer(void* vp) {
+    Lexer* self = (Lexer*)vp; (void)self;
+    List_i64_free(self->indent_stack);
+    List_i64_free(self->token_lines);
+    List_i64_free(self->token_cols);
+    List_i64_free(self->comment_lines);
+    List_TrStr_free(self->comment_texts);
+    List_bool_free(self->comment_trailing);
+}
 #endif
 
 #ifndef AstType_STRUCT_DEFINED
 #define AstType_STRUCT_DEFINED
 typedef struct AstType {
+    size_t __rc;
     TrStr name;
     List_ptr* args;
     TrStr from_param;
@@ -1572,65 +1641,103 @@ typedef struct AstType {
     bool is_borrow;
     bool is_mut_borrow;
 } AstType;
+static void _trdrop_AstType(void* vp) {
+    AstType* self = (AstType*)vp; (void)self;
+    _tr_str_release(self->name);
+    _tr_str_release(self->from_param);
+    List_TrStr_free(self->from_regions);
+}
 #endif
 
 #ifndef GenericConstraint_STRUCT_DEFINED
 #define GenericConstraint_STRUCT_DEFINED
 typedef struct GenericConstraint {
+    size_t __rc;
     TrStr target;
     List_ptr* bounds;
 } GenericConstraint;
+static void _trdrop_GenericConstraint(void* vp) {
+    GenericConstraint* self = (GenericConstraint*)vp; (void)self;
+    _tr_str_release(self->target);
+    List_ptr_free(self->bounds);
+}
 #endif
 
 #ifndef Decorator_STRUCT_DEFINED
 #define Decorator_STRUCT_DEFINED
 typedef struct Decorator {
+    size_t __rc;
     TrStr name;
     List_ptr* args;
 } Decorator;
+static void _trdrop_Decorator(void* vp) {
+    Decorator* self = (Decorator*)vp; (void)self;
+    _tr_str_release(self->name);
+}
 #endif
 
 #ifndef Comprehension_STRUCT_DEFINED
 #define Comprehension_STRUCT_DEFINED
 typedef struct Comprehension {
+    size_t __rc;
     TrStr target;
     Expr* iter;
     List_ptr* ifs;
     bool is_async;
 } Comprehension;
+static void _trdrop_Comprehension(void* vp) {
+    Comprehension* self = (Comprehension*)vp; (void)self;
+    _tr_str_release(self->target);
+}
 #endif
 
 #ifndef CatchClause_STRUCT_DEFINED
 #define CatchClause_STRUCT_DEFINED
 typedef struct CatchClause {
+    size_t __rc;
     TrStr err_name;
     AstType** err_type;
     Block** body;
 } CatchClause;
+static void _trdrop_CatchClause(void* vp) {
+    CatchClause* self = (CatchClause*)vp; (void)self;
+    _tr_str_release(self->err_name);
+}
 #endif
 
 #ifndef MatchArm_STRUCT_DEFINED
 #define MatchArm_STRUCT_DEFINED
 typedef struct MatchArm {
+    size_t __rc;
     Pattern pat;
     Expr* guard;
     Block** body;
 } MatchArm;
+static void _trdrop_MatchArm(void* vp) {
+    MatchArm* self = (MatchArm*)vp; (void)self;
+}
 #endif
 
 #ifndef FStringPart_STRUCT_DEFINED
 #define FStringPart_STRUCT_DEFINED
 typedef struct FStringPart {
+    size_t __rc;
     bool is_expr;
     TrStr text;
     Expr* expr;
     TrStr fmt_spec;
 } FStringPart;
+static void _trdrop_FStringPart(void* vp) {
+    FStringPart* self = (FStringPart*)vp; (void)self;
+    _tr_str_release(self->text);
+    _tr_str_release(self->fmt_spec);
+}
 #endif
 
 #ifndef ChanSelectArm_STRUCT_DEFINED
 #define ChanSelectArm_STRUCT_DEFINED
 typedef struct ChanSelectArm {
+    size_t __rc;
     long long kind;
     Expr* chan_expr;
     Expr* val_expr;
@@ -1638,37 +1745,56 @@ typedef struct ChanSelectArm {
     Expr* timeout_ms;
     Block* body;
 } ChanSelectArm;
+static void _trdrop_ChanSelectArm(void* vp) {
+    ChanSelectArm* self = (ChanSelectArm*)vp; (void)self;
+    _tr_str_release(self->var_name);
+}
 #endif
 
 #ifndef Block_STRUCT_DEFINED
 #define Block_STRUCT_DEFINED
 typedef struct Block {
+    size_t __rc;
     List_ptr* stmts;
 } Block;
+static void _trdrop_Block(void* vp) {
+    Block* self = (Block*)vp; (void)self;
+    List_ptr_free(self->stmts);
+}
 #endif
 
 #ifndef ElifClause_STRUCT_DEFINED
 #define ElifClause_STRUCT_DEFINED
 typedef struct ElifClause {
+    size_t __rc;
     Expr* cond;
     Block** body;
 } ElifClause;
+static void _trdrop_ElifClause(void* vp) {
+    ElifClause* self = (ElifClause*)vp; (void)self;
+}
 #endif
 
 #ifndef Param_STRUCT_DEFINED
 #define Param_STRUCT_DEFINED
 typedef struct Param {
+    size_t __rc;
     TrStr name;
     AstType** ty;
     bool is_ref;
     bool is_mut_ref;
     bool is_variadic;
 } Param;
+static void _trdrop_Param(void* vp) {
+    Param* self = (Param*)vp; (void)self;
+    _tr_str_release(self->name);
+}
 #endif
 
 #ifndef FunctionDef_STRUCT_DEFINED
 #define FunctionDef_STRUCT_DEFINED
 typedef struct FunctionDef {
+    size_t __rc;
     TrStr name;
     List_TrStr* generics;
     List_ptr* params;
@@ -1682,25 +1808,39 @@ typedef struct FunctionDef {
     bool is_public;
     bool is_export;
     bool is_macro;
+    bool is_lib;
     Block* body;
     long long line;
     List_TrStr* outlives_a;
     List_TrStr* outlives_b;
 } FunctionDef;
+static void _trdrop_FunctionDef(void* vp) {
+    FunctionDef* self = (FunctionDef*)vp; (void)self;
+    _tr_str_release(self->name);
+    List_ptr_free_obj(self->constraints, _trdrop_GenericConstraint);
+    List_TrStr_free(self->outlives_a);
+    List_TrStr_free(self->outlives_b);
+}
 #endif
 
 #ifndef FieldDef_STRUCT_DEFINED
 #define FieldDef_STRUCT_DEFINED
 typedef struct FieldDef {
+    size_t __rc;
     TrStr name;
     AstType** ty;
     Expr* default_val;
 } FieldDef;
+static void _trdrop_FieldDef(void* vp) {
+    FieldDef* self = (FieldDef*)vp; (void)self;
+    _tr_str_release(self->name);
+}
 #endif
 
 #ifndef ClassDef_STRUCT_DEFINED
 #define ClassDef_STRUCT_DEFINED
 typedef struct ClassDef {
+    size_t __rc;
     TrStr name;
     List_TrStr* generics;
     List_TrStr* base_classes;
@@ -1715,19 +1855,32 @@ typedef struct ClassDef {
     TrStr docstring;
     List_TrStr* region_params;
 } ClassDef;
+static void _trdrop_ClassDef(void* vp) {
+    ClassDef* self = (ClassDef*)vp; (void)self;
+    _tr_str_release(self->name);
+    List_ptr_free_obj(self->constraints, _trdrop_GenericConstraint);
+    _tr_str_release(self->docstring);
+    List_TrStr_free(self->region_params);
+}
 #endif
 
 #ifndef VariantDef_STRUCT_DEFINED
 #define VariantDef_STRUCT_DEFINED
 typedef struct VariantDef {
+    size_t __rc;
     TrStr name;
     List_ptr* fields;
 } VariantDef;
+static void _trdrop_VariantDef(void* vp) {
+    VariantDef* self = (VariantDef*)vp; (void)self;
+    _tr_str_release(self->name);
+}
 #endif
 
 #ifndef EnumDef_STRUCT_DEFINED
 #define EnumDef_STRUCT_DEFINED
 typedef struct EnumDef {
+    size_t __rc;
     TrStr name;
     List_TrStr* generics;
     List_TrStr* iface_names;
@@ -1738,11 +1891,17 @@ typedef struct EnumDef {
     long long line;
     List_TrStr* region_params;
 } EnumDef;
+static void _trdrop_EnumDef(void* vp) {
+    EnumDef* self = (EnumDef*)vp; (void)self;
+    _tr_str_release(self->name);
+    List_TrStr_free(self->region_params);
+}
 #endif
 
 #ifndef InterfaceDef_STRUCT_DEFINED
 #define InterfaceDef_STRUCT_DEFINED
 typedef struct InterfaceDef {
+    size_t __rc;
     TrStr name;
     List_TrStr* generics;
     List_ptr* methods;
@@ -1751,26 +1910,42 @@ typedef struct InterfaceDef {
     List_ptr* decorators;
     List_TrStr* region_params;
 } InterfaceDef;
+static void _trdrop_InterfaceDef(void* vp) {
+    InterfaceDef* self = (InterfaceDef*)vp; (void)self;
+    _tr_str_release(self->name);
+    List_TrStr_free(self->region_params);
+}
 #endif
 
 #ifndef ImportItem_STRUCT_DEFINED
 #define ImportItem_STRUCT_DEFINED
 typedef struct ImportItem {
+    size_t __rc;
     TrStr name;
     TrStr alias;
 } ImportItem;
+static void _trdrop_ImportItem(void* vp) {
+    ImportItem* self = (ImportItem*)vp; (void)self;
+    _tr_str_release(self->name);
+    _tr_str_release(self->alias);
+}
 #endif
 
 #ifndef Program_STRUCT_DEFINED
 #define Program_STRUCT_DEFINED
 typedef struct Program {
+    size_t __rc;
     List_ptr* decls;
 } Program;
+static void _trdrop_Program(void* vp) {
+    Program* self = (Program*)vp; (void)self;
+}
 #endif
 
 #ifndef Parser_STRUCT_DEFINED
 #define Parser_STRUCT_DEFINED
 typedef struct Parser {
+    size_t __rc;
     List_Token* tokens;
     long long pos;
     List_i64* lines;
@@ -1779,11 +1954,17 @@ typedef struct Parser {
     long long error_count;
     TrStr current_file;
 } Parser;
+static void _trdrop_Parser(void* vp) {
+    Parser* self = (Parser*)vp; (void)self;
+    _tr_str_release(self->src_text);
+    _tr_str_release(self->current_file);
+}
 #endif
 
 #ifndef ModuleResolver_STRUCT_DEFINED
 #define ModuleResolver_STRUCT_DEFINED
 typedef struct ModuleResolver {
+    size_t __rc;
     TrMap* visited;
     List_ptr* all_decls;
     List_TrStr* search_paths;
@@ -1793,49 +1974,82 @@ typedef struct ModuleResolver {
     TrStr current_mod;
     long long parse_errors;
 } ModuleResolver;
+static void _trdrop_ModuleResolver(void* vp) {
+    ModuleResolver* self = (ModuleResolver*)vp; (void)self;
+    Dict_free(self->visited);
+    List_ptr_free(self->all_decls);
+    List_TrStr_free(self->search_paths);
+    List_TrStr_free(self->mod_dot_paths);
+    List_TrStr_free(self->mod_file_paths);
+    List_TrStr_free(self->all_decl_modules);
+    _tr_str_release(self->current_mod);
+}
 #endif
 
 #ifndef HirComprehension_STRUCT_DEFINED
 #define HirComprehension_STRUCT_DEFINED
 typedef struct HirComprehension {
+    size_t __rc;
     TrStr target;
     HirExpr* iter;
     List_ptr* ifs;
     bool is_async;
 } HirComprehension;
+static void _trdrop_HirComprehension(void* vp) {
+    HirComprehension* self = (HirComprehension*)vp; (void)self;
+    _tr_str_release(self->target);
+}
 #endif
 
 #ifndef HirCatchClause_STRUCT_DEFINED
 #define HirCatchClause_STRUCT_DEFINED
 typedef struct HirCatchClause {
+    size_t __rc;
     TrStr err_name;
     AstType* err_type;
     HirBlock* body;
 } HirCatchClause;
+static void _trdrop_HirCatchClause(void* vp) {
+    HirCatchClause* self = (HirCatchClause*)vp; (void)self;
+    _tr_str_release(self->err_name);
+    _tr_obj_release(self->body, _trdrop_HirBlock);
+}
 #endif
 
 #ifndef HirFStringPart_STRUCT_DEFINED
 #define HirFStringPart_STRUCT_DEFINED
 typedef struct HirFStringPart {
+    size_t __rc;
     bool is_expr;
     TrStr text;
     HirExpr* expr;
     TrStr fmt_spec;
 } HirFStringPart;
+static void _trdrop_HirFStringPart(void* vp) {
+    HirFStringPart* self = (HirFStringPart*)vp; (void)self;
+    _tr_str_release(self->text);
+    _tr_str_release(self->fmt_spec);
+}
 #endif
 
 #ifndef HirMatchArm_STRUCT_DEFINED
 #define HirMatchArm_STRUCT_DEFINED
 typedef struct HirMatchArm {
+    size_t __rc;
     Pattern pat;
     HirBlock* body;
     HirExpr* guard;
 } HirMatchArm;
+static void _trdrop_HirMatchArm(void* vp) {
+    HirMatchArm* self = (HirMatchArm*)vp; (void)self;
+    _tr_obj_release(self->body, _trdrop_HirBlock);
+}
 #endif
 
 #ifndef HirChanSelectArm_STRUCT_DEFINED
 #define HirChanSelectArm_STRUCT_DEFINED
 typedef struct HirChanSelectArm {
+    size_t __rc;
     long long kind;
     HirExpr* chan_expr;
     HirExpr* val_expr;
@@ -1843,26 +2057,42 @@ typedef struct HirChanSelectArm {
     HirExpr* timeout_ms;
     HirBlock* body;
 } HirChanSelectArm;
+static void _trdrop_HirChanSelectArm(void* vp) {
+    HirChanSelectArm* self = (HirChanSelectArm*)vp; (void)self;
+    _tr_str_release(self->var_name);
+    _tr_obj_release(self->body, _trdrop_HirBlock);
+}
 #endif
 
 #ifndef HirBlock_STRUCT_DEFINED
 #define HirBlock_STRUCT_DEFINED
 typedef struct HirBlock {
+    size_t __rc;
     List_ptr* stmts;
 } HirBlock;
+static void _trdrop_HirBlock(void* vp) {
+    HirBlock* self = (HirBlock*)vp; (void)self;
+    List_ptr_free(self->stmts);
+}
 #endif
 
 #ifndef HirParam_STRUCT_DEFINED
 #define HirParam_STRUCT_DEFINED
 typedef struct HirParam {
+    size_t __rc;
     TrStr name;
     AstType* ty;
 } HirParam;
+static void _trdrop_HirParam(void* vp) {
+    HirParam* self = (HirParam*)vp; (void)self;
+    _tr_str_release(self->name);
+}
 #endif
 
 #ifndef HirFunction_STRUCT_DEFINED
 #define HirFunction_STRUCT_DEFINED
 typedef struct HirFunction {
+    size_t __rc;
     TrStr name;
     TrStr class_name;
     List_TrStr* generics;
@@ -1881,21 +2111,34 @@ typedef struct HirFunction {
     List_TrStr* borrow_borrowers;
     List_TrStr* borrow_sources;
     List_TrStr* proven_borrows;
+    bool returns_owned;
 } HirFunction;
+static void _trdrop_HirFunction(void* vp) {
+    HirFunction* self = (HirFunction*)vp; (void)self;
+    _tr_str_release(self->name);
+    _tr_str_release(self->class_name);
+    _tr_obj_release(self->body, _trdrop_HirBlock);
+}
 #endif
 
 #ifndef HirField_STRUCT_DEFINED
 #define HirField_STRUCT_DEFINED
 typedef struct HirField {
+    size_t __rc;
     TrStr name;
     AstType* ty;
     bool is_public;
 } HirField;
+static void _trdrop_HirField(void* vp) {
+    HirField* self = (HirField*)vp; (void)self;
+    _tr_str_release(self->name);
+}
 #endif
 
 #ifndef HirClass_STRUCT_DEFINED
 #define HirClass_STRUCT_DEFINED
 typedef struct HirClass {
+    size_t __rc;
     TrStr name;
     List_TrStr* generics;
     List_TrStr* base_classes;
@@ -1906,19 +2149,29 @@ typedef struct HirClass {
     bool is_public;
     bool is_class;
 } HirClass;
+static void _trdrop_HirClass(void* vp) {
+    HirClass* self = (HirClass*)vp; (void)self;
+    _tr_str_release(self->name);
+}
 #endif
 
 #ifndef HirVariant_STRUCT_DEFINED
 #define HirVariant_STRUCT_DEFINED
 typedef struct HirVariant {
+    size_t __rc;
     TrStr name;
     List_ptr* fields;
 } HirVariant;
+static void _trdrop_HirVariant(void* vp) {
+    HirVariant* self = (HirVariant*)vp; (void)self;
+    _tr_str_release(self->name);
+}
 #endif
 
 #ifndef HirEnum_STRUCT_DEFINED
 #define HirEnum_STRUCT_DEFINED
 typedef struct HirEnum {
+    size_t __rc;
     TrStr name;
     List_TrStr* generics;
     List_TrStr* iface_names;
@@ -1927,21 +2180,31 @@ typedef struct HirEnum {
     List_ptr* decorators;
     bool is_public;
 } HirEnum;
+static void _trdrop_HirEnum(void* vp) {
+    HirEnum* self = (HirEnum*)vp; (void)self;
+    _tr_str_release(self->name);
+}
 #endif
 
 #ifndef HirInterface_STRUCT_DEFINED
 #define HirInterface_STRUCT_DEFINED
 typedef struct HirInterface {
+    size_t __rc;
     TrStr name;
     List_TrStr* generics;
     List_ptr* methods;
     bool is_public;
 } HirInterface;
+static void _trdrop_HirInterface(void* vp) {
+    HirInterface* self = (HirInterface*)vp; (void)self;
+    _tr_str_release(self->name);
+}
 #endif
 
 #ifndef HirProgram_STRUCT_DEFINED
 #define HirProgram_STRUCT_DEFINED
 typedef struct HirProgram {
+    size_t __rc;
     List_ptr* functions;
     List_ptr* classes;
     List_ptr* enums;
@@ -1952,40 +2215,71 @@ typedef struct HirProgram {
     List_TrStr* type_alias_names;
     List_ptr* type_alias_types;
 } HirProgram;
+static void _trdrop_HirProgram(void* vp) {
+    HirProgram* self = (HirProgram*)vp; (void)self;
+    List_ptr_free_obj(self->functions, _trdrop_HirFunction);
+    List_ptr_free_obj(self->classes, _trdrop_HirClass);
+    List_ptr_free_obj(self->enums, _trdrop_HirEnum);
+    List_ptr_free_obj(self->interfaces, _trdrop_HirInterface);
+    List_ptr_free(self->top_level_stmts);
+    List_ptr_free_obj(self->extern_funcs, _trdrop_HirFunction);
+    List_ptr_free_obj(self->decorator_defs, _trdrop_HirFunction);
+    List_TrStr_free(self->type_alias_names);
+    List_ptr_free(self->type_alias_types);
+}
 #endif
 
 #ifndef MirBlock_STRUCT_DEFINED
 #define MirBlock_STRUCT_DEFINED
 typedef struct MirBlock {
+    size_t __rc;
     long long id;
     List_ptr* stmts;
     MirTerm* term;
     HirBlock* hir_block;
 } MirBlock;
+static void _trdrop_MirBlock(void* vp) {
+    MirBlock* self = (MirBlock*)vp; (void)self;
+    List_ptr_free(self->stmts);
+    _tr_obj_release(self->hir_block, _trdrop_HirBlock);
+}
 #endif
 
 #ifndef DropSite_STRUCT_DEFINED
 #define DropSite_STRUCT_DEFINED
 typedef struct DropSite {
+    size_t __rc;
     HirBlock* hir_block;
     List_TrStr* places;
 } DropSite;
+static void _trdrop_DropSite(void* vp) {
+    DropSite* self = (DropSite*)vp; (void)self;
+    _tr_obj_release(self->hir_block, _trdrop_HirBlock);
+    List_TrStr_free(self->places);
+}
 #endif
 
 #ifndef BorrowEdge_STRUCT_DEFINED
 #define BorrowEdge_STRUCT_DEFINED
 typedef struct BorrowEdge {
+    size_t __rc;
     TrStr borrower;
     TrStr source;
     long long decl_block;
     bool is_exclusive;
     bool via_collection;
 } BorrowEdge;
+static void _trdrop_BorrowEdge(void* vp) {
+    BorrowEdge* self = (BorrowEdge*)vp; (void)self;
+    _tr_str_release(self->borrower);
+    _tr_str_release(self->source);
+}
 #endif
 
 #ifndef MirFunction_STRUCT_DEFINED
 #define MirFunction_STRUCT_DEFINED
 typedef struct MirFunction {
+    size_t __rc;
     TrStr name;
     List_TrStr* params;
     List_ptr* blocks;
@@ -1994,18 +2288,29 @@ typedef struct MirFunction {
     List_ptr* borrows;
     bool complete;
 } MirFunction;
+static void _trdrop_MirFunction(void* vp) {
+    MirFunction* self = (MirFunction*)vp; (void)self;
+    _tr_str_release(self->name);
+    _tr_obj_release(self->unsafe_pinned, _trdrop_LiveSet);
+}
 #endif
 
 #ifndef MirProgram_STRUCT_DEFINED
 #define MirProgram_STRUCT_DEFINED
 typedef struct MirProgram {
+    size_t __rc;
     List_ptr* functions;
 } MirProgram;
+static void _trdrop_MirProgram(void* vp) {
+    MirProgram* self = (MirProgram*)vp; (void)self;
+    List_ptr_free_obj(self->functions, _trdrop_MirFunction);
+}
 #endif
 
 #ifndef MirBuilder_STRUCT_DEFINED
 #define MirBuilder_STRUCT_DEFINED
 typedef struct MirBuilder {
+    size_t __rc;
     List_ptr* blocks;
     long long cur;
     bool complete;
@@ -2017,18 +2322,30 @@ typedef struct MirBuilder {
     List_i64* loop_break;
     List_ptr* borrows;
 } MirBuilder;
+static void _trdrop_MirBuilder(void* vp) {
+    MirBuilder* self = (MirBuilder*)vp; (void)self;
+    _tr_obj_release(self->cur_hb, _trdrop_HirBlock);
+    _tr_obj_release(self->unsafe_pinned, _trdrop_LiveSet);
+    List_i64_free(self->loop_continue);
+    List_i64_free(self->loop_break);
+}
 #endif
 
 #ifndef LiveSet_STRUCT_DEFINED
 #define LiveSet_STRUCT_DEFINED
 typedef struct LiveSet {
+    size_t __rc;
     List_TrStr* items;
 } LiveSet;
+static void _trdrop_LiveSet(void* vp) {
+    LiveSet* self = (LiveSet*)vp; (void)self;
+}
 #endif
 
 #ifndef Symbol_STRUCT_DEFINED
 #define Symbol_STRUCT_DEFINED
 typedef struct Symbol {
+    size_t __rc;
     TrStr name;
     SymbolKind kind;
     AstType** ty;
@@ -2051,19 +2368,32 @@ typedef struct Symbol {
     bool coll_escaped;
     TrStr borrows_region;
 } Symbol;
+static void _trdrop_Symbol(void* vp) {
+    Symbol* self = (Symbol*)vp; (void)self;
+    _tr_str_release(self->name);
+    List_TrStr_free(self->borrowed_by);
+    _tr_str_release(self->borrows_region);
+}
 #endif
 
 #ifndef Scope_STRUCT_DEFINED
 #define Scope_STRUCT_DEFINED
 typedef struct Scope {
+    size_t __rc;
     TrMap* variables;
     List_TrStr* decl_order;
 } Scope;
+static void _trdrop_Scope(void* vp) {
+    Scope* self = (Scope*)vp; (void)self;
+    Dict_free(self->variables);
+    List_TrStr_free(self->decl_order);
+}
 #endif
 
 #ifndef Sema_STRUCT_DEFINED
 #define Sema_STRUCT_DEFINED
 typedef struct Sema {
+    size_t __rc;
     TrMap* globals;
     List_ptr* scopes;
     List_TrStr* errors;
@@ -2099,6 +2429,7 @@ typedef struct Sema {
     List_TrStr* branch_init_buf;
     TrMap* copy_classes;
     bool in_unsafe;
+    bool cur_fn_is_lib;
     TrStr current_func_ret_from;
     bool current_func_ret_borrow_str;
     List_TrStr* current_func_ret_regions;
@@ -2109,6 +2440,8 @@ typedef struct Sema {
     List_TrStr* cur_func_sources;
     bool strict_mode;
     TrMap* mutating_methods;
+    TrMap* fn_ret_owned;
+    TrMap* ptr_aliased;
     TrMap* decorator_names;
     TrMap* variadic_fns;
     TrMap* variadic_elem_ty;
@@ -2122,11 +2455,51 @@ typedef struct Sema {
     List_i64* block_stack_base;
     long long do_temp_ctr;
 } Sema;
+static void _trdrop_Sema(void* vp) {
+    Sema* self = (Sema*)vp; (void)self;
+    Dict_free(self->globals);
+    List_ptr_free_obj(self->scopes, _trdrop_Scope);
+    List_TrStr_free(self->warnings);
+    Dict_free_objval(self->classes, _trdrop_ClassDef);
+    Dict_free_objval(self->enums, _trdrop_EnumDef);
+    Dict_free_objval(self->interfaces, _trdrop_InterfaceDef);
+    Dict_free_strval(self->type_aliases);
+    Dict_free_strval(self->type_alias_elem);
+    _tr_str_release(self->current_file);
+    _tr_str_release(self->current_func_name);
+    _tr_str_release(self->current_class_name);
+    Dict_free(self->assign_froms);
+    Dict_free(self->fn_sigs);
+    Dict_free(self->extern_names);
+    List_ptr_free_obj(self->nested_classes, _trdrop_HirClass);
+    List_ptr_free_obj(self->nested_functions, _trdrop_HirFunction);
+    List_ptr_free_obj(self->nested_enums, _trdrop_HirEnum);
+    List_ptr_free_obj(self->nested_interfaces, _trdrop_HirInterface);
+    List_ptr_free_obj(self->closure_caps, _trdrop_HirParam);
+    Dict_free_strval(self->container_borrows);
+    Dict_free(self->copy_classes);
+    _tr_str_release(self->current_func_ret_from);
+    List_TrStr_free(self->cur_func_borrowers);
+    List_TrStr_free(self->cur_func_sources);
+    Dict_free(self->mutating_methods);
+    Dict_free(self->fn_ret_owned);
+    Dict_free(self->ptr_aliased);
+    Dict_free(self->decorator_names);
+    Dict_free_strval(self->variadic_fns);
+    Dict_free(self->variadic_elem_ty);
+    Dict_free_objval(self->fn_defs, _trdrop_FunctionDef);
+    List_i64_free(self->loop_scope_base);
+    List_i64_free(self->fn_scope_base);
+    List_i64_free(self->block_depth_stack);
+    List_i64_free(self->block_stack);
+    List_i64_free(self->block_stack_base);
+}
 #endif
 
 #ifndef Formatter_STRUCT_DEFINED
 #define Formatter_STRUCT_DEFINED
 typedef struct Formatter {
+    size_t __rc;
     StringBuilder* out;
     long long indent;
     List_i64* c_lines;
@@ -2136,11 +2509,15 @@ typedef struct Formatter {
     bool unsupported;
     bool in_fstring;
 } Formatter;
+static void _trdrop_Formatter(void* vp) {
+    Formatter* self = (Formatter*)vp; (void)self;
+}
 #endif
 
 #ifndef CGenerator_STRUCT_DEFINED
 #define CGenerator_STRUCT_DEFINED
 typedef struct CGenerator {
+    size_t __rc;
     StringBuilder* buf;
     StringBuilder* fwd_buf;
     StringBuilder* struct_buf;
@@ -2155,6 +2532,11 @@ typedef struct CGenerator {
     TrMap* method_owners;
     TrMap* decl_vars;
     TrMap* str_local_names;
+    TrMap* class_local_names;
+    TrMap* fn_owned;
+    TrMap* raw_aliased;
+    TrMap* coll_field_owned;
+    TrMap* coll_field_disq;
     TrMap* cur_proven_borrows;
     bool cur_ret_is_borrow;
     bool eliding_get_retain;
@@ -2187,33 +2569,103 @@ typedef struct CGenerator {
     TrMap* global_vars;
     TrMap* closure_cap_set;
     TrStr closure_env_var;
+    StringBuilder* closure_buf;
+    TrStr last_clo_cname;
+    TrStr last_clo_estruct;
+    TrStr last_clo_ptypes;
+    TrStr last_clo_ret;
+    TrStr last_clo_init;
     TrMap* decorator_defs;
     TrMap* overloaded_sigs;
     TrMap* type_alias_map;
     List_TrStr* defer_stack;
     List_TrStr* wrap_temp_decls;
     List_TrStr* wrap_temp_names;
+    List_TrStr* wrap_obj_names;
+    List_TrStr* wrap_obj_drops;
     List_TrStr* loop_res_stack;
     List_TrStr* loop_done_stack;
     bool emit_line_info;
     TrStr cur_src_file;
 } CGenerator;
+static void _trdrop_CGenerator(void* vp) {
+    CGenerator* self = (CGenerator*)vp; (void)self;
+    Dict_free_objval(self->classes, _trdrop_HirClass);
+    Dict_free_objval(self->enums, _trdrop_HirEnum);
+    Dict_free_objval(self->interfaces, _trdrop_HirInterface);
+    Dict_free_objval(self->functions, _trdrop_HirFunction);
+    Dict_free(self->method_owners);
+    Dict_free(self->decl_vars);
+    Dict_free(self->str_local_names);
+    Dict_free(self->class_local_names);
+    Dict_free(self->fn_owned);
+    Dict_free(self->raw_aliased);
+    Dict_free(self->coll_field_owned);
+    Dict_free(self->coll_field_disq);
+    Dict_free(self->cur_proven_borrows);
+    Dict_free_strval(self->coll_local_sfx);
+    Dict_free(self->coll_local_idict);
+    Dict_free(self->coll_local_strval);
+    Dict_free_strval(self->coll_local_vtcoll);
+    Dict_free(self->mono_done);
+    Dict_free(self->list_type_done);
+    Dict_free(self->list_fwd_done);
+    Dict_free(self->elem_fmt_done);
+    _tr_str_release(self->cur_class);
+    _tr_str_release(self->cur_func);
+    Dict_free(self->emitted_fns);
+    Dict_free(self->spawn_wrappers);
+    Dict_free(self->async_wrappers);
+    Dict_free(self->prescanned_fns);
+    Dict_free_strval(self->shared_vars);
+    _tr_str_release(self->cur_throws_ty);
+    Dict_free(self->value_types);
+    List_TrStr_free(self->value_list_elems);
+    List_TrStr_free(self->value_dict_elems);
+    List_TrStr_free(self->value_set_elems);
+    Dict_free(self->global_vars);
+    _tr_str_release(self->closure_env_var);
+    _tr_str_release(self->last_clo_cname);
+    _tr_str_release(self->last_clo_estruct);
+    _tr_str_release(self->last_clo_ptypes);
+    _tr_str_release(self->last_clo_ret);
+    _tr_str_release(self->last_clo_init);
+    Dict_free_objval(self->decorator_defs, _trdrop_HirFunction);
+    Dict_free(self->overloaded_sigs);
+    Dict_free_strval(self->type_alias_map);
+    List_TrStr_free(self->defer_stack);
+    List_TrStr_free(self->wrap_temp_decls);
+    List_TrStr_free(self->wrap_temp_names);
+    List_TrStr_free(self->wrap_obj_names);
+    List_TrStr_free(self->wrap_obj_drops);
+    List_TrStr_free(self->loop_res_stack);
+    List_TrStr_free(self->loop_done_stack);
+    _tr_str_release(self->cur_src_file);
+}
 #endif
 
 #ifndef LlvmGenerator_STRUCT_DEFINED
 #define LlvmGenerator_STRUCT_DEFINED
 typedef struct LlvmGenerator {
+    size_t __rc;
     StringBuilder* buf;
     long long temp;
     TrMap* classes;
     TrMap* enums;
     TrMap* functions;
 } LlvmGenerator;
+static void _trdrop_LlvmGenerator(void* vp) {
+    LlvmGenerator* self = (LlvmGenerator*)vp; (void)self;
+    Dict_free_objval(self->classes, _trdrop_HirClass);
+    Dict_free_objval(self->enums, _trdrop_HirEnum);
+    Dict_free_objval(self->functions, _trdrop_HirFunction);
+}
 #endif
 
 #ifndef MacroCtx_STRUCT_DEFINED
 #define MacroCtx_STRUCT_DEFINED
 typedef struct MacroCtx {
+    size_t __rc;
     TrMap* env;
     bool returned;
     TrStr result;
@@ -2221,16 +2673,26 @@ typedef struct MacroCtx {
     TrStr error_msg;
     long long gensym_ctr;
 } MacroCtx;
+static void _trdrop_MacroCtx(void* vp) {
+    MacroCtx* self = (MacroCtx*)vp; (void)self;
+    Dict_free(self->env);
+    _tr_str_release(self->result);
+    _tr_str_release(self->error_msg);
+}
 #endif
 
 #ifndef FnMacroExpander_STRUCT_DEFINED
 #define FnMacroExpander_STRUCT_DEFINED
 typedef struct FnMacroExpander {
+    size_t __rc;
     TrMap* macros;
     long long errors;
     long long depth;
     long long gensym_base;
 } FnMacroExpander;
+static void _trdrop_FnMacroExpander(void* vp) {
+    FnMacroExpander* self = (FnMacroExpander*)vp; (void)self;
+}
 #endif
 
 typedef struct List_Token { Token* data; size_t len; size_t capacity; } List_Token;
@@ -2479,6 +2941,11 @@ __attribute__((hot)) TrStr ModuleResolver_dir_of_path(ModuleResolver* self, TrSt
 __attribute__((hot)) TrStr ModuleResolver_base_of_path(ModuleResolver* self, TrStr path);
 __attribute__((hot)) Program* ModuleResolver_resolve_main(ModuleResolver* self, TrStr main_path);
 __attribute__((hot)) void ModuleResolver_resolve_file(ModuleResolver* self, TrStr path, bool is_root);
+__attribute__((hot)) bool ModuleResolver__path_is_lib(ModuleResolver* self, TrStr path);
+__attribute__((hot)) bool ModuleResolver__source_is_trusted(ModuleResolver* self, TrStr source);
+__attribute__((hot)) bool ModuleResolver__contains(ModuleResolver* self, TrStr hay, TrStr needle);
+__attribute__((hot)) void ModuleResolver__mark_decl_lib(ModuleResolver* self, Decl* dp);
+__attribute__((hot)) void ModuleResolver__mark_methods_lib(ModuleResolver* self, ClassDef* c);
 __attribute__((hot)) void ModuleResolver_resolve_recursive(ModuleResolver* self, TrStr path);
 __attribute__((hot)) void ModuleResolver_resolve_module_path(ModuleResolver* self, TrStr mod_path);
 __attribute__((malloc,returns_nonnull,hot)) HirFStringPart* HirFStringPart_init();
@@ -2562,6 +3029,7 @@ __attribute__((hot)) bool Sema_is_sendable_ty(Sema* self, AstType* ty);
 __attribute__((hot)) bool Sema_class_method_exists(Sema* self, TrStr cls_name, TrStr method);
 __attribute__((hot)) bool Sema_is_universal_method(Sema* self, TrStr method);
 __attribute__((hot)) bool Sema_expr_is_borrow(Sema* self, HirExpr* e);
+__attribute__((hot)) bool Sema__expr_is_shared(Sema* self, HirExpr* e);
 __attribute__((hot)) void Sema_check_spawn_sendable(Sema* self, HirExpr* e);
 __attribute__((hot)) void Sema_check_class_sendable_fields(Sema* self, ClassDef* c);
 __attribute__((hot)) void Sema_mark_moved(Sema* self, TrStr name);
@@ -2582,6 +3050,18 @@ __attribute__((hot)) bool Sema_is_copy_class(Sema* self, TrStr name);
 __attribute__((hot)) void Sema_enter_scope(Sema* self);
 __attribute__((hot)) void Sema_exit_scope(Sema* self);
 __attribute__((hot)) bool Sema__coll_elem_droppable(Sema* self, TrStr n);
+__attribute__((hot)) void Sema__scan_ptr_aliased_ty(Sema* self, AstType* t);
+__attribute__((hot)) bool Sema__is_rc_class(Sema* self, TrStr n);
+__attribute__((hot)) bool Sema__ty_reaches_plain_rc(Sema* self, AstType* ft, long long depth);
+__attribute__((hot)) bool Sema__sendable_reaches_plain_rc(Sema* self, TrStr tn, long long depth);
+__attribute__((hot)) bool Sema__is_unsafe_sendable(Sema* self, TrStr n);
+__attribute__((hot)) void Sema__check_spawn_nested_rc(Sema* self, HirExpr* arg_expr);
+__attribute__((hot)) void Sema__collect_strong_edge(Sema* self, AstType* ft, List_TrStr* out);
+__attribute__((hot)) List_TrStr* Sema__strong_owned(Sema* self, ClassDef* cd);
+__attribute__((hot)) void Sema__cycle_dfs(Sema* self, TrStr cur, TrStr start, TrMap* on_path, TrMap* reported, long long depth);
+__attribute__((hot)) void Sema_check_ownership_cycles(Sema* self, Program* prog);
+__attribute__((hot)) void Sema__scan_class_ptrs(Sema* self, ClassDef* c);
+__attribute__((hot)) void Sema__scan_fn_ptrs(Sema* self, FunctionDef* f);
 __attribute__((hot)) bool Sema_is_droppable_sym(Sema* self, Symbol* sym);
 __attribute__((hot)) void Sema_open_block(Sema* self);
 __attribute__((hot)) void Sema_close_block(Sema* self);
@@ -2617,6 +3097,12 @@ __attribute__((hot)) bool Sema_is_type_name(Sema* self, TrStr nm);
 __attribute__((hot)) TrStr Sema_type_ref_name(Sema* self, Expr* raw);
 __attribute__((hot)) bool Sema_is_global_not_local(Sema* self, TrStr name);
 __attribute__((hot)) HirProgram* Sema_analyze(Sema* self, Program* prog);
+__attribute__((hot)) void Sema_compute_return_ownership(Sema* self, HirProgram* hp);
+__attribute__((hot)) bool Sema__fn_ret_is_heap_class(Sema* self, HirFunction* f);
+__attribute__((hot)) void Sema__collect_returns(Sema* self, HirBlock* b, List_ptr* out);
+__attribute__((hot)) void Sema__collect_returns_stmt(Sema* self, HirStmt* sp, List_ptr* out);
+__attribute__((hot)) bool Sema__owned_of(Sema* self, TrStr key);
+__attribute__((hot)) bool Sema__ret_yields_owned(Sema* self, HirExpr* e);
 __attribute__((hot)) void Sema_register_decl(Sema* self, Decl* d);
 __attribute__((hot)) HirFunction* Sema_lower_func(Sema* self, FunctionDef* f);
 __attribute__((hot)) HirClass* Sema_lower_class(Sema* self, ClassDef* c);
@@ -2629,6 +3115,8 @@ __attribute__((hot)) AstType* Sema_variant_field_ty(Sema* self, TrStr type_name,
 __attribute__((hot)) void Sema_declare_pattern_binds(Sema* self, Pattern pat);
 __attribute__((hot)) void Sema_declare_pattern_binds_typed(Sema* self, Pattern pat, AstType* subj_ty);
 __attribute__((hot)) AstType* Sema_str_method_ret_ty(Sema* self, TrStr method);
+__attribute__((hot)) void Sema_collect_block_refs(Sema* self, HirBlock* b, List_TrStr* out);
+__attribute__((hot)) void Sema_collect_stmt_refs(Sema* self, HirStmt* s, List_TrStr* out);
 __attribute__((hot)) HirExpr* Sema_lower_do_value(Sema* self, Block* do_body);
 __attribute__((hot)) AstType* Sema_infer_break_type(Sema* self, HirBlock* hb);
 __attribute__((hot)) AstType* Sema_infer_break_type_stmt(Sema* self, HirStmt* s);
@@ -2790,6 +3278,7 @@ __attribute__((malloc,returns_nonnull,hot)) CGenerator* CGenerator_init();
 __attribute__((hot)) TrStr CGenerator_next_temp(CGenerator* self);
 __attribute__((hot)) void CGenerator_reset_defer_stack(CGenerator* self);
 __attribute__((hot)) void CGenerator_gen_func_body(CGenerator* self, HirBlock* body, long long indent);
+__attribute__((hot)) void CGenerator_flush_closures(CGenerator* self);
 __attribute__((hot)) void CGenerator_seed_params(CGenerator* self, HirFunction* f);
 __attribute__((hot)) void CGenerator_w(CGenerator* self, TrStr s);
 __attribute__((hot)) void CGenerator_wf(CGenerator* self, TrStr s);
@@ -2819,6 +3308,7 @@ __attribute__((hot)) bool CGenerator_hir_block_mutates_self(CGenerator* self, Hi
 __attribute__((hot)) bool CGenerator_hir_stmt_mutates_self(CGenerator* self, HirStmt* s);
 __attribute__((hot)) TrStr CGenerator_gen_func_sig(CGenerator* self, HirFunction* f, TrStr class_name);
 __attribute__((hot)) void CGenerator_emit_base_fields(CGenerator* self, TrStr base_name);
+__attribute__((hot)) void CGenerator_emit_drop_fwd_decls(CGenerator* self, HirProgram* prog);
 __attribute__((hot)) void CGenerator_gen_class_struct(CGenerator* self, HirClass* c);
 __attribute__((hot)) void CGenerator_gen_enum_struct(CGenerator* self, HirEnum* e);
 __attribute__((hot)) void CGenerator_gen_interface_vtable(CGenerator* self, HirInterface* iface);
@@ -2838,13 +3328,30 @@ __attribute__((hot)) TrStr CGenerator_flush_wraps(CGenerator* self, TrStr expr_s
 __attribute__((hot)) TrStr CGenerator_wrapstr(CGenerator* self, TrStr e);
 __attribute__((hot)) void CGenerator_set_proven_borrows(CGenerator* self, List_TrStr* pb);
 __attribute__((hot)) TrStr CGenerator_str_retain_wrap(CGenerator* self, HirExpr* e, TrStr s, bool is_return);
+__attribute__((hot)) void CGenerator__scan_ptr_aliased(CGenerator* self, AstType* t);
+__attribute__((hot)) bool CGenerator__is_coll_type_name(CGenerator* self, TrStr n);
+__attribute__((hot)) bool CGenerator__is_fresh_coll_expr(CGenerator* self, HirExpr* e);
+__attribute__((hot)) void CGenerator__scan_coll_fields(CGenerator* self, HirProgram* prog);
+__attribute__((hot)) void CGenerator__scan_coll_fields_block(CGenerator* self, HirBlock* b);
+__attribute__((hot)) void CGenerator__scan_coll_fields_stmt(CGenerator* self, HirStmt* sp);
+__attribute__((hot)) TrStr CGenerator__coll_field_free_call(CGenerator* self, TrStr fld_c, AstType* ty);
+__attribute__((hot)) bool CGenerator_is_heap_class_tn(CGenerator* self, TrStr tn);
+__attribute__((hot)) TrStr CGenerator_obj_retain_wrap(CGenerator* self, HirExpr* e, TrStr s, bool is_return);
+__attribute__((hot)) bool CGenerator__fn_owned_lookup(CGenerator* self, TrStr key);
+__attribute__((hot)) void CGenerator__reg_fn_owned(CGenerator* self, TrStr key, bool v);
+__attribute__((hot)) bool CGenerator__obj_expr_owns_ref(CGenerator* self, HirExpr* e);
+__attribute__((hot)) bool CGenerator__store_target_is_borrow_field(CGenerator* self, HirExpr* t);
+__attribute__((hot)) bool CGenerator__obj_store_needs_retain(CGenerator* self, HirExpr* e);
+__attribute__((hot)) TrStr CGenerator_obj_drop_fn(CGenerator* self, TrStr tn);
 __attribute__((hot)) TrStr CGenerator_gen_cond_expr(CGenerator* self, HirExpr* cond);
 __attribute__((hot)) TrStr CGenerator_gen_binop(CGenerator* self, TrStr op, HirExpr* l, HirExpr* r);
 __attribute__((hot)) TrStr CGenerator_gen_unary(CGenerator* self, TrStr op, HirExpr* expr);
 __attribute__((hot)) TrStr CGenerator_gen_prop_access(CGenerator* self, HirExpr* o, TrStr p);
 __attribute__((hot)) TrStr CGenerator_gen_index(CGenerator* self, HirExpr* o, HirExpr* idx);
+__attribute__((hot)) bool CGenerator__call_arg_needs_shared_unwrap(CGenerator* self, HirExpr* arg, AstType* param_ty);
 __attribute__((hot)) TrStr CGenerator_gen_call(CGenerator* self, HirExpr* callee, List_ptr* args, AstType* call_ty);
 __attribute__((hot)) TrStr CGenerator_gen_print_call(CGenerator* self, List_ptr* args);
+__attribute__((hot)) TrStr CGenerator_gen_print_one(CGenerator* self, HirExpr* arg);
 __attribute__((hot)) TrStr CGenerator_wrap_voidp_arg(CGenerator* self, HirExpr* arg);
 __attribute__((hot)) TrStr CGenerator_unwrap_voidp_as(CGenerator* self, TrStr expr_s, AstType* ty);
 __attribute__((hot)) TrStr CGenerator_dict_key_arg(CGenerator* self, HirExpr* e);
@@ -2852,6 +3359,7 @@ __attribute__((hot)) TrStr CGenerator_dict_val_arg(CGenerator* self, HirExpr* e)
 __attribute__((hot)) TrStr CGenerator_gen_args_extern(CGenerator* self, List_ptr* args);
 __attribute__((hot)) bool CGenerator__is_fresh_str_expr(CGenerator* self, HirExpr* e);
 __attribute__((hot)) bool CGenerator__expr_is_borrow_call(CGenerator* self, HirExpr* e);
+__attribute__((hot)) bool CGenerator__is_fresh_obj_expr(CGenerator* self, HirExpr* e);
 __attribute__((hot)) TrStr CGenerator_gen_args(CGenerator* self, List_ptr* args);
 __attribute__((hot)) TrStr CGenerator_gen_args_strify(CGenerator* self, List_ptr* args, TrStr elem_sfx);
 __attribute__((hot)) TrStr CGenerator_gen_method_call(CGenerator* self, HirExpr* obj, TrStr method, List_ptr* args, AstType* call_ty);
@@ -2867,6 +3375,7 @@ __attribute__((hot)) TrStr CGenerator_gen_dict_literal(CGenerator* self, List_pt
 __attribute__((hot)) TrStr CGenerator_gen_list_comp(CGenerator* self, HirExpr* element, List_ptr* generators);
 __attribute__((hot)) TrStr CGenerator__comp_src_free_stmt(CGenerator* self, HirExpr* iter_e, long long idx);
 __attribute__((hot)) TrStr CGenerator_gen_closure(CGenerator* self, List_ptr* params, AstType* ret_ty, HirBlock* body, List_ptr* captures);
+__attribute__((hot)) TrStr CGenerator__spawn_wrap_cast_ty(CGenerator* self, TrStr fn_name, HirExpr* arg_expr);
 __attribute__((hot)) void CGenerator_emit_spawn_wrapper_for_expr(CGenerator* self, HirExpr* e);
 __attribute__((hot)) void CGenerator_prescan_block_spawns(CGenerator* self, HirBlock* block);
 __attribute__((hot)) void CGenerator_prescan_stmt_spawns(CGenerator* self, HirStmt* s);
