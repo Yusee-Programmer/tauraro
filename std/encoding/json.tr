@@ -1,29 +1,32 @@
-# std.encoding.json — JSON parser and serializer.
+# std.encoding.json — zero-cost JSON, safe by default.
 #
-# Usage:
-#   from std.encoding.json import JsonValue, Json
+# PARSE: `Json.parse(src)` returns a `JsonDoc` that OWNS a flat arena (parallel
+# primitive arrays — no per-node heap alloc) plus a single decoded-string buffer
+# (no per-string malloc). Navigation uses `JsonRef`, a tiny value-type view that
+# borrows the doc; string values are slices of the doc's buffer. No raw pointers
+# are exposed, so callers never need `unsafe:`:
 #
-#   mut v = Json.parse("{\"name\": \"Tauraro\", \"version\": 1}")
-#   print(v.read().obj_get("name").read().get_str())   # → Tauraro
+#   mut doc = Json.parse("{\"name\": \"Tauraro\", \"version\": 1}")
+#   mut root = doc.root()
+#   print(root.obj_get("name").get_str())    # → Tauraro
+#   print(root.obj_get("version").get_int())  # → 1
+#   # `doc` frees the whole arena in one shot at scope exit.
 #
-#   mut arr = JsonValue.init_array()
-#   arr.read().push(JsonValue.init_int(1))
-#   arr.read().push(JsonValue.init_str("hello"))
-#   print(arr.read().to_str())                         # → [1,"hello"]
+# BUILD: use `JsonWriter` — streaming serialization straight into a buffer with
+# ZERO intermediate tree and zero per-value heap allocation (see bottom).
 
 from std.core.vec import Vec
 from std.core.string import StringBuilder
 
 extern "C":
-    def _tr_c_malloc(size: int) -> Pointer[char]
-    def _tr_c_free(ptr: Pointer[char])
     def _tr_strlen(s: str) -> int
     def _tr_str_to_float(s: str) -> float
     def _tr_str_to_int(s: str) -> int
     def _tr_int_to_str(n: int) -> str
     def _tr_float_to_str(n: float) -> str
+    def _tr_c_free(ptr: Pointer[char])
 
-# JsonValue.tag constants
+# Node tag constants.
 pub def JSON_NULL()   -> int: return 0
 pub def JSON_BOOL()   -> int: return 1
 pub def JSON_INT()    -> int: return 2
@@ -32,235 +35,398 @@ pub def JSON_STR()    -> int: return 4
 pub def JSON_ARRAY()  -> int: return 5
 pub def JSON_OBJ()    -> int: return 6
 
-# ─── JsonValue ────────────────────────────────────────────────────────────────
+# ─── JsonDoc — owns the arena + decoded-string buffer ────────────────────────
 
-pub class JsonValue:
-    pub tag:   int
-    pub b_val: bool
-    pub i_val: int
-    pub f_val: float
-    pub s_val: str
-    pub items: Vec[Pointer[JsonValue]]   # array items OR object values
-    pub keys:  Vec[str]                   # object keys (parallel to items)
+pub class JsonDoc:
+    pub input: str
+    pub strs:  str            # decoded strings (keys + values), finalized after parse
+    pub pos:   int
+    pub len:   int
+    pub soff:  int            # current strbuf length (next slice offset)
+    pub sb:    StringBuilder
+    # Structure-of-arrays node arena (node id = index):
+    pub tags:  Vec[int]       # 0 null 1 bool 2 int 3 float 4 str 5 array 6 object
+    pub ivals: Vec[int]       # int value; bool as 0/1
+    pub fvals: Vec[float]
+    pub soffs: Vec[int]       # string value slice into `strs`
+    pub slens: Vec[int]
+    pub koffs: Vec[int]       # object-member key slice into `strs` (klen<0 = no key)
+    pub klens: Vec[int]
+    pub kids:  Vec[int]       # first child node idx (-1 = none)
+    pub sibs:  Vec[int]       # next sibling node idx (-1 = none)
 
-extend JsonValue:
-    # ── Constructors ──────────────────────────────────────────────────────────
+extend JsonDoc:
+    pub def init(src: str) -> JsonDoc:
+        mut d = JsonDoc()
+        d.input = src
+        d.strs  = ""
+        d.pos   = 0
+        d.len   = _tr_strlen(src)
+        d.soff  = 0
+        d.sb    = StringBuilder.init(64)
+        d.tags  = Vec[int].init(16)
+        d.ivals = Vec[int].init(16)
+        d.fvals = Vec[float].init(16)
+        d.soffs = Vec[int].init(16)
+        d.slens = Vec[int].init(16)
+        d.koffs = Vec[int].init(16)
+        d.klens = Vec[int].init(16)
+        d.kids  = Vec[int].init(16)
+        d.sibs  = Vec[int].init(16)
+        return d
 
-    pub def init_null() -> Pointer[JsonValue]:
-        mut raw = _tr_c_malloc(sizeof(JsonValue)) as Pointer[JsonValue]
-        mut v = JsonValue()
-        v.tag   = 0
-        v.b_val = false
-        v.i_val = 0
-        v.f_val = 0.0
-        v.s_val = ""
-        v.items = Vec[Pointer[JsonValue]].init(4)
-        v.keys  = Vec[str].init(4)
+    def cur(self) -> int:
+        if self.pos >= self.len: return 0
+        return (self.input as Pointer[char]).offset(self.pos).read() as int
+
+    def adv(self):
+        self.pos = self.pos + 1
+
+    def skip_ws(self):
+        while self.pos < self.len:
+            mut c = self.cur()
+            if c == 32 or c == 9 or c == 10 or c == 13:
+                self.adv()
+            else:
+                break
+
+    def _new_node(self, tag: int) -> int:
+        self.tags.push(tag)
+        self.ivals.push(0)
+        self.fvals.push(0.0)
+        self.soffs.push(0)
+        self.slens.push(0)
+        self.koffs.push(0)
+        self.klens.push(0 - 1)
+        self.kids.push(0 - 1)
+        self.sibs.push(0 - 1)
+        return self.tags.len - 1
+
+    # Decode a JSON string at the cursor into the string buffer; return its start
+    # offset (length = soff - start after the call).
+    def _read_string(self) -> int:
+        mut off = self.soff
+        self.adv()  # opening quote
+        while self.pos < self.len:
+            mut c = self.cur()
+            if c == 34:
+                self.adv()
+                break
+            if c == 92:
+                self.adv()
+                mut esc = self.cur()
+                self.adv()
+                if esc == 110: self.sb.append_char(10)
+                elif esc == 116: self.sb.append_char(9)
+                elif esc == 114: self.sb.append_char(13)
+                elif esc == 92: self.sb.append_char(92)
+                elif esc == 34: self.sb.append_char(34)
+                elif esc == 47: self.sb.append_char(47)
+                elif esc == 98: self.sb.append_char(8)
+                elif esc == 102: self.sb.append_char(12)
+                else: self.sb.append_char(esc)
+                self.soff = self.soff + 1
+            else:
+                self.sb.append_char(c)
+                self.soff = self.soff + 1
+                self.adv()
+        return off
+
+    def _parse_val(self) -> int:
+        self.skip_ws()
+        mut c = self.cur()
+        if c == 34:
+            mut off = self._read_string()
+            mut idx = self._new_node(4)
+            self.soffs.set(idx, off)
+            self.slens.set(idx, self.soff - off)
+            return idx
+        if c == 116:  # true
+            self.pos = self.pos + 4
+            mut idx = self._new_node(1)
+            self.ivals.set(idx, 1)
+            return idx
+        if c == 102:  # false
+            self.pos = self.pos + 5
+            return self._new_node(1)
+        if c == 110:  # null
+            self.pos = self.pos + 4
+            return self._new_node(0)
+        if c == 91:   # [
+            return self._parse_array()
+        if c == 123:  # {
+            return self._parse_object()
+        if c == 0:
+            return self._new_node(0)
+        return self._parse_number()
+
+    def _parse_number(self) -> int:
+        mut start = self.pos
+        mut is_float = false
+        if self.cur() == 45: self.adv()
+        while self.pos < self.len:
+            mut c = self.cur()
+            if c >= 48 and c <= 57:
+                self.adv()
+            elif c == 46 or c == 101 or c == 69:  # . e E
+                is_float = true
+                self.adv()
+            elif (c == 43 or c == 45) and self.pos > start + 1:
+                self.adv()
+            else:
+                break
+        mut raw = ""
         unsafe:
-            raw.write(v)
-            return raw
+            raw = self.input.slice(start, self.pos)
+        if is_float:
+            mut idx = self._new_node(3)
+            self.fvals.set(idx, _tr_str_to_float(raw))
+            return idx
+        mut idx = self._new_node(2)
+        self.ivals.set(idx, _tr_str_to_int(raw))
+        return idx
 
-    pub def init_bool(b: bool) -> Pointer[JsonValue]:
-        mut raw = _tr_c_malloc(sizeof(JsonValue)) as Pointer[JsonValue]
-        mut v = JsonValue()
-        v.tag   = 1
-        v.b_val = b
-        v.i_val = 0
-        v.f_val = 0.0
-        v.s_val = ""
-        v.items = Vec[Pointer[JsonValue]].init(4)
-        v.keys  = Vec[str].init(4)
-        unsafe:
-            raw.write(v)
-            return raw
+    def _parse_array(self) -> int:
+        self.adv()  # [
+        mut arr = self._new_node(5)
+        self.skip_ws()
+        if self.cur() == 93:
+            self.adv()
+            return arr
+        mut prev = 0 - 1
+        while true:
+            self.skip_ws()
+            mut child = self._parse_val()
+            if prev == 0 - 1:
+                self.kids.set(arr, child)
+            else:
+                self.sibs.set(prev, child)
+            prev = child
+            self.skip_ws()
+            mut ch = self.cur()
+            if ch == 93:
+                self.adv()
+                break
+            if ch == 44: self.adv()  # ,
+            if ch == 0: break
+        return arr
 
-    pub def init_int(n: int) -> Pointer[JsonValue]:
-        mut raw = _tr_c_malloc(sizeof(JsonValue)) as Pointer[JsonValue]
-        mut v = JsonValue()
-        v.tag   = 2
-        v.b_val = false
-        v.i_val = n
-        v.f_val = 0.0
-        v.s_val = ""
-        v.items = Vec[Pointer[JsonValue]].init(4)
-        v.keys  = Vec[str].init(4)
-        unsafe:
-            raw.write(v)
-            return raw
+    def _parse_object(self) -> int:
+        self.adv()  # {
+        mut obj = self._new_node(6)
+        self.skip_ws()
+        if self.cur() == 125:
+            self.adv()
+            return obj
+        mut prev = 0 - 1
+        while true:
+            self.skip_ws()
+            if self.cur() != 34: break
+            mut koff = self._read_string()
+            mut klen = self.soff - koff
+            self.skip_ws()
+            if self.cur() == 58: self.adv()  # :
+            self.skip_ws()
+            mut child = self._parse_val()
+            self.koffs.set(child, koff)
+            self.klens.set(child, klen)
+            if prev == 0 - 1:
+                self.kids.set(obj, child)
+            else:
+                self.sibs.set(prev, child)
+            prev = child
+            self.skip_ws()
+            mut ch = self.cur()
+            if ch == 125:
+                self.adv()
+                break
+            if ch == 44: self.adv()  # ,
+            if ch == 0: break
+        return obj
 
-    pub def init_float(f: float) -> Pointer[JsonValue]:
-        mut raw = _tr_c_malloc(sizeof(JsonValue)) as Pointer[JsonValue]
-        mut v = JsonValue()
-        v.tag   = 3
-        v.b_val = false
-        v.i_val = 0
-        v.f_val = f
-        v.s_val = ""
-        v.items = Vec[Pointer[JsonValue]].init(4)
-        v.keys  = Vec[str].init(4)
-        unsafe:
-            raw.write(v)
-            return raw
+    pub def parse_root(self) -> int:
+        mut r = self._parse_val()
+        self.strs = self.sb.to_owned()
+        return r
 
-    pub def init_str(s: str) -> Pointer[JsonValue]:
-        mut raw = _tr_c_malloc(sizeof(JsonValue)) as Pointer[JsonValue]
-        mut v = JsonValue()
-        v.tag   = 4
-        v.b_val = false
-        v.i_val = 0
-        v.f_val = 0.0
-        v.s_val = s
-        v.items = Vec[Pointer[JsonValue]].init(4)
-        v.keys  = Vec[str].init(4)
-        unsafe:
-            raw.write(v)
-            return raw
+    # --- index-based accessors (JsonRef wraps these) ---
+    pub def tag_at(self, idx: int) -> int:
+        if idx < 0 or idx >= self.tags.len: return 0
+        return self.tags.get(idx)
 
-    pub def init_array() -> Pointer[JsonValue]:
-        mut raw = _tr_c_malloc(sizeof(JsonValue)) as Pointer[JsonValue]
-        mut v = JsonValue()
-        v.tag   = 5
-        v.b_val = false
-        v.i_val = 0
-        v.f_val = 0.0
-        v.s_val = ""
-        v.items = Vec[Pointer[JsonValue]].init(8)
-        v.keys  = Vec[str].init(4)
-        unsafe:
-            raw.write(v)
-            return raw
+    pub def str_at(self, idx: int) -> str:
+        if idx < 0 or idx >= self.tags.len: return ""
+        return self.strs.slice(self.soffs.get(idx), self.soffs.get(idx) + self.slens.get(idx))
 
-    pub def init_object() -> Pointer[JsonValue]:
-        mut raw = _tr_c_malloc(sizeof(JsonValue)) as Pointer[JsonValue]
-        mut v = JsonValue()
-        v.tag   = 6
-        v.b_val = false
-        v.i_val = 0
-        v.f_val = 0.0
-        v.s_val = ""
-        v.items = Vec[Pointer[JsonValue]].init(8)
-        v.keys  = Vec[str].init(8)
-        unsafe:
-            raw.write(v)
-            return raw
+    pub def int_at(self, idx: int) -> int:
+        if idx < 0 or idx >= self.tags.len: return 0
+        return self.ivals.get(idx)
 
-    # ── Type checks ───────────────────────────────────────────────────────────
+    pub def float_at(self, idx: int) -> float:
+        if idx < 0 or idx >= self.tags.len: return 0.0
+        return self.fvals.get(idx)
 
-    pub def is_null(self)   -> bool: return self.tag == 0
-    pub def is_bool(self)   -> bool: return self.tag == 1
-    pub def is_int(self)    -> bool: return self.tag == 2
-    pub def is_float(self)  -> bool: return self.tag == 3
-    pub def is_str(self)    -> bool: return self.tag == 4
-    pub def is_array(self)  -> bool: return self.tag == 5
-    pub def is_object(self) -> bool: return self.tag == 6
-    pub def is_number(self) -> bool: return self.tag == 2 or self.tag == 3
+    pub def bool_at(self, idx: int) -> bool:
+        if idx < 0 or idx >= self.tags.len: return false
+        return self.ivals.get(idx) != 0
 
-    # ── Value getters ─────────────────────────────────────────────────────────
+    def _key_eq(self, child: int, key: str) -> bool:
+        if self.klens.get(child) < 0: return false
+        mut ks = self.strs.slice(self.koffs.get(child), self.koffs.get(child) + self.klens.get(child))
+        return ks == key
 
-    pub def get_bool(self)  -> bool:  return self.b_val
-    pub def get_int(self)   -> int:   return self.i_val
-    pub def get_float(self) -> float: return self.f_val
-    pub def get_str(self)   -> str:   return self.s_val
+    pub def obj_get_at(self, idx: int, key: str) -> int:
+        if idx < 0 or idx >= self.tags.len: return 0 - 1
+        mut child = self.kids.get(idx)
+        while child != 0 - 1:
+            if self._key_eq(child, key):
+                return child
+            child = self.sibs.get(child)
+        return 0 - 1
 
-    # Coerce int or float to float
+    pub def array_len_at(self, idx: int) -> int:
+        if idx < 0 or idx >= self.tags.len: return 0
+        mut cnt = 0
+        mut child = self.kids.get(idx)
+        while child != 0 - 1:
+            cnt = cnt + 1
+            child = self.sibs.get(child)
+        return cnt
+
+    pub def array_get_at(self, idx: int, i: int) -> int:
+        if idx < 0 or idx >= self.tags.len: return 0 - 1
+        mut child = self.kids.get(idx)
+        mut k = 0
+        while child != 0 - 1:
+            if k == i: return child
+            k = k + 1
+            child = self.sibs.get(child)
+        return 0 - 1
+
+    # Serialize the subtree rooted at `idx` into `sb` (compact form).
+    pub def write_at(self, idx: int, sb: StringBuilder):
+        if idx < 0 or idx >= self.tags.len:
+            sb.append("null")
+            return
+        mut t = self.tags.get(idx)
+        if t == 0:
+            sb.append("null")
+        elif t == 1:
+            if self.ivals.get(idx) != 0: sb.append("true")
+            else: sb.append("false")
+        elif t == 2:
+            sb.append(_tr_int_to_str(self.ivals.get(idx)))
+        elif t == 3:
+            sb.append(_tr_float_to_str(self.fvals.get(idx)))
+        elif t == 4:
+            sb.append_char(34)
+            _json_escape(self.str_at(idx), sb)
+            sb.append_char(34)
+        elif t == 5:
+            sb.append_char(91)
+            mut child = self.kids.get(idx)
+            mut first = true
+            while child != 0 - 1:
+                if not first: sb.append_char(44)
+                first = false
+                self.write_at(child, sb)
+                child = self.sibs.get(child)
+            sb.append_char(93)
+        elif t == 6:
+            sb.append_char(123)
+            mut child = self.kids.get(idx)
+            mut first = true
+            while child != 0 - 1:
+                if not first: sb.append_char(44)
+                first = false
+                sb.append_char(34)
+                _json_escape(self.strs.slice(self.koffs.get(child), self.koffs.get(child) + self.klens.get(child)), sb)
+                sb.append_char(34)
+                sb.append_char(58)
+                self.write_at(child, sb)
+                child = self.sibs.get(child)
+            sb.append_char(125)
+
+    pub def root(self) -> JsonRef:
+        mut r = JsonRef()
+        r.doc = self
+        r.idx = 0
+        return r
+
+# ─── JsonRef — tiny borrowed view (value type: doc reference + node index) ────
+
+# `doc` is a BORROW (ref) of the owning JsonDoc — storing/copying it neither
+# retains nor releases, so navigation is pure pointer + index (zero refcount
+# traffic). The view must not outlive the doc; under --strict the region checker
+# proves that, and in default mode the doc always outlives its refs by construction.
+@value_type
+class JsonRef:
+    pub doc: ref JsonDoc
+    pub idx: int
+
+extend JsonRef:
+    def _wrap(self, i: int) -> JsonRef:
+        mut r = JsonRef()
+        r.doc = self.doc
+        r.idx = i
+        return r
+
+    pub def exists(self)   -> bool: return self.idx >= 0
+    pub def tag(self)      -> int:  return self.doc.tag_at(self.idx)
+    pub def is_null(self)  -> bool: return self.doc.tag_at(self.idx) == 0
+    pub def is_bool(self)  -> bool: return self.doc.tag_at(self.idx) == 1
+    pub def is_int(self)   -> bool: return self.doc.tag_at(self.idx) == 2
+    pub def is_float(self) -> bool: return self.doc.tag_at(self.idx) == 3
+    pub def is_str(self)   -> bool: return self.doc.tag_at(self.idx) == 4
+    pub def is_array(self) -> bool: return self.doc.tag_at(self.idx) == 5
+    pub def is_object(self)-> bool: return self.doc.tag_at(self.idx) == 6
+
+    pub def get_str(self)  -> str:   return self.doc.str_at(self.idx)
+    pub def get_int(self)  -> int:   return self.doc.int_at(self.idx)
+    pub def get_float(self)-> float: return self.doc.float_at(self.idx)
+    pub def get_bool(self) -> bool:  return self.doc.bool_at(self.idx)
     pub def as_float(self) -> float:
-        if self.tag == 2: return self.i_val as float
-        return self.f_val
+        if self.doc.tag_at(self.idx) == 2: return self.doc.int_at(self.idx) as float
+        return self.doc.float_at(self.idx)
 
-    # ── Array operations ──────────────────────────────────────────────────────
-
-    pub def push(self, v: Pointer[JsonValue]):
-        self.items.push(v)
-
-    pub def array_get(self, i: int) -> Pointer[JsonValue]:
-        return self.items.get(i)
-
-    pub def array_len(self) -> int:
-        return self.items.len
-
-    # ── Object operations ─────────────────────────────────────────────────────
-
-    pub def obj_set(self, key: str, v: Pointer[JsonValue]):
-        mut i = 0
-        while i < self.keys.len:
-            if self.keys.get(i) == key:
-                self.items.set(i, v)
-                return
-            i = i + 1
-        self.keys.push(key)
-        self.items.push(v)
-
-    pub def obj_get(self, key: str) -> Pointer[JsonValue]:
-        mut i = 0
-        while i < self.keys.len:
-            if self.keys.get(i) == key:
-                return self.items.get(i)
-            i = i + 1
-        return JsonValue.init_null()
+    pub def obj_get(self, key: str) -> JsonRef:
+        return self._wrap(self.doc.obj_get_at(self.idx, key))
 
     pub def obj_has(self, key: str) -> bool:
-        mut i = 0
-        while i < self.keys.len:
-            if self.keys.get(i) == key: return true
-            i = i + 1
-        return false
+        return self.doc.obj_get_at(self.idx, key) >= 0
 
-    pub def obj_len(self) -> int:
-        return self.keys.len
+    pub def array_len(self) -> int:
+        return self.doc.array_len_at(self.idx)
 
-    pub def obj_key(self, i: int) -> str:
-        return self.keys.get(i)
+    pub def array_get(self, i: int) -> JsonRef:
+        return self._wrap(self.doc.array_get_at(self.idx, i))
 
-    pub def obj_val(self, i: int) -> Pointer[JsonValue]:
-        return self.items.get(i)
-
-    # ── Serialization ─────────────────────────────────────────────────────────
-
+    # Serialize this subtree to a fresh compact JSON string.
     pub def to_str(self) -> str:
         mut sb = StringBuilder.init(64)
-        _json_write_val(self, sb)
+        self.doc.write_at(self.idx, sb)
         mut out = sb.to_owned()
         sb.free()
         return out
 
-    # Serialize with 2-space pretty-printing.
-    pub def to_pretty(self, indent: int) -> str:
-        mut sb = StringBuilder.init(256)
-        _json_write_val_pretty(self, sb, 0)
-        mut out = sb.to_owned()
-        sb.free()
-        return out
+# ─── Json static API ─────────────────────────────────────────────────────────
 
-    # Recursively free this JsonValue tree: child nodes (for arrays/objects),
-    # the items/keys lists, and this node's own heap allocation. Does not
-    # free s_val - JsonValue.init_str() is commonly called with string
-    # literals, which must never be passed to free(). Named `dispose`, not
-    # `free`, so JsonValue stays out of auto-drop - sema.tr would otherwise
-    # auto-free the `v` local in every init_*() constructor right after
-    # `*raw = v`, leaving `raw` dangling.
-    pub def dispose(self):
-        if self.tag == 5 or self.tag == 6:
-            mut i = 0
-            while i < self.items.len:
-                mut child = self.items.get(i)
-                child.read().dispose()
-                unsafe: _tr_c_free(child as Pointer[char])
-                i = i + 1
-        # Release the string value we retained in init_str (field-store retains
-        # the str). A no-op for non-string nodes (s_val is the "" literal, rc=NULL)
-        # and for literal-built strings, but frees parsed/dynamic string values.
-        # (codegen rewrites this `_tr_c_free(str ...)` to refcounted release.)
-        unsafe: _tr_c_free(self.s_val as Pointer[char])
-        self.items.free()
-        self.keys.free()
-        unsafe: _tr_c_free(self as Pointer[char])
+pub class Json:
+    _dummy: int
 
-# ─── Internal serialization helpers ──────────────────────────────────────────
+extend Json:
+    pub def parse(src: str) -> JsonDoc:
+        mut d = JsonDoc.init(src)
+        mut r = d.parse_root()
+        return d
+
+# ─── Serialization helpers + JsonWriter (streaming build, zero-alloc) ─────────
 
 pub def _json_escape(s: str, sb: StringBuilder):
     mut p = s as Pointer[char]
     mut i = 0
-    while p.offset(i).read() as int != 0:
+    mut n = _tr_strlen(s)
+    while i < n:
         mut c = p.offset(i).read() as int
         if c == 34:  sb.append("\\\"")
         elif c == 92: sb.append("\\\\")
@@ -270,122 +436,14 @@ pub def _json_escape(s: str, sb: StringBuilder):
         else: sb.append_char(c)
         i = i + 1
 
-# Write a JsonValue instance (self = JsonValue*) into sb — no pointer indirection needed.
-pub def _json_write_val(node: JsonValue, sb: StringBuilder):
-    if node.tag == 0:
-        sb.append("null")
-    elif node.tag == 1:
-        if node.b_val: sb.append("true")
-        else: sb.append("false")
-    elif node.tag == 2:
-        mut int_s = _tr_int_to_str(node.i_val)
-        sb.append(int_s)
-        unsafe: _tr_c_free(int_s as Pointer[char])
-    elif node.tag == 3:
-        mut float_s = _tr_float_to_str(node.f_val)
-        sb.append(float_s)
-        unsafe: _tr_c_free(float_s as Pointer[char])
-    elif node.tag == 4:
-        sb.append_char(34)
-        _json_escape(node.s_val, sb)
-        sb.append_char(34)
-    elif node.tag == 5:
-        sb.append_char(91)   # '['
-        mut i = 0
-        while i < node.items.len:
-            if i > 0: sb.append_char(44)   # ','
-            _json_write(node.items.get(i), sb)
-            i = i + 1
-        sb.append_char(93)   # ']'
-    elif node.tag == 6:
-        sb.append_char(123)  # '{'
-        mut i = 0
-        while i < node.keys.len:
-            if i > 0: sb.append_char(44)   # ','
-            sb.append_char(34)
-            _json_escape(node.keys.get(i), sb)
-            sb.append_char(34)
-            sb.append_char(58)  # ':'
-            _json_write(node.items.get(i), sb)
-            i = i + 1
-        sb.append_char(125)  # '}'
-
-# Write a JsonValue handle (Pointer[JsonValue] = JsonValue**) into sb.
-pub def _json_write(v: Pointer[JsonValue], sb: StringBuilder):
-    if v as int == 0:
-        sb.append("null")
-        return
-    mut node = v.read()
-    _json_write_val(node, sb)
-
-pub def _json_indent(sb: StringBuilder, depth: int):
-    mut i = 0
-    while i < depth:
-        sb.append("  ")
-        i = i + 1
-
-# Pretty-print a JsonValue instance (self = JsonValue*).
-pub def _json_write_val_pretty(node: JsonValue, sb: StringBuilder, depth: int):
-    if node.tag == 5:
-        sb.append_char(91)
-        if node.items.len == 0:
-            sb.append_char(93)
-            return
-        sb.append_char(10)
-        mut i = 0
-        while i < node.items.len:
-            _json_indent(sb, depth + 1)
-            _json_write_pretty(node.items.get(i), sb, depth + 1)
-            if i < node.items.len - 1: sb.append_char(44)
-            sb.append_char(10)
-            i = i + 1
-        _json_indent(sb, depth)
-        sb.append_char(93)
-    elif node.tag == 6:
-        sb.append_char(123)
-        if node.keys.len == 0:
-            sb.append_char(125)
-            return
-        sb.append_char(10)
-        mut i = 0
-        while i < node.keys.len:
-            _json_indent(sb, depth + 1)
-            sb.append_char(34)
-            _json_escape(node.keys.get(i), sb)
-            sb.append_char(34)
-            sb.append(": ")
-            _json_write_pretty(node.items.get(i), sb, depth + 1)
-            if i < node.keys.len - 1: sb.append_char(44)
-            sb.append_char(10)
-            i = i + 1
-        _json_indent(sb, depth)
-        sb.append_char(125)
-    else:
-        _json_write_val(node, sb)
-
-# Pretty-print a JsonValue handle (Pointer[JsonValue] = JsonValue**).
-pub def _json_write_pretty(v: Pointer[JsonValue], sb: StringBuilder, depth: int):
-    if v as int == 0:
-        sb.append("null")
-        return
-    mut node = v.read()
-    _json_write_val_pretty(node, sb, depth)
-
-# ─── JsonWriter — streaming serialization (no intermediate tree) ──────────────
-#
 # Writes JSON directly into a StringBuilder with ZERO per-value heap allocation
-# (ints go straight to the buffer via append_int; strings via _json_escape).
-# For hot response paths whose shape is known at the call site — far cheaper
-# than building a JsonValue tree and disposing it (which is one heap alloc per
-# node plus the dict/list machinery). Comma/colon placement is handled
-# automatically by a small "first element" stack.
+# (ints via append_int; strings via _json_escape). For hot response paths whose
+# shape is known at the call site — far cheaper than building a tree.
 #
 #   mut w = JsonWriter.init(256)
-#   w.begin_array()
-#   w.begin_object()
+#   w.begin_array(); w.begin_object()
 #   w.field_int("id", 1); w.field_str("name", "x"); w.field_bool("ok", true)
-#   w.end_object()
-#   w.end_array()
+#   w.end_object(); w.end_array()
 #   mut body = w.finish()           # -> "[{\"id\":1,\"name\":\"x\",\"ok\":true}]"
 pub class JsonWriter:
     pub sb:     StringBuilder
@@ -400,8 +458,6 @@ extend JsonWriter:
         w._pend  = false
         return w
 
-    # Emit a ',' before the next element, unless it's the first in its container
-    # or it is the value belonging to a just-written key.
     def _sep(self):
         if self._pend:
             self._pend = false
@@ -411,37 +467,34 @@ extend JsonWriter:
             if self._first.get(idx):
                 self._first.set(idx, false)
             else:
-                self.sb.append_char(44)   # ','
+                self.sb.append_char(44)   # ,
 
     pub def begin_object(self):
         self._sep()
-        self.sb.append_char(123)          # '{'
+        self.sb.append_char(123)
         self._first.push(true)
 
     pub def end_object(self):
-        self.sb.append_char(125)          # '}'
+        self.sb.append_char(125)
         self._first.pop()
 
     pub def begin_array(self):
         self._sep()
-        self.sb.append_char(91)           # '['
+        self.sb.append_char(91)
         self._first.push(true)
 
     pub def end_array(self):
-        self.sb.append_char(93)           # ']'
+        self.sb.append_char(93)
         self._first.pop()
 
-    # Object member key. The following value call writes the value with no
-    # separator of its own (handled via _pend).
     pub def key(self, name: str):
         self._sep()
         self.sb.append_char(34)
         _json_escape(name, self.sb)
         self.sb.append_char(34)
-        self.sb.append_char(58)           # ':'
+        self.sb.append_char(58)
         self._pend = true
 
-    # ── Scalar values (array element, or object value after key()) ────────────
     pub def int_val(self, n: int):
         self._sep()
         self.sb.append_int(n)
@@ -461,7 +514,6 @@ extend JsonWriter:
         self._sep()
         self.sb.append("null")
 
-    # ── Object field convenience (key + value) ────────────────────────────────
     pub def field_int(self, name: str, n: int):
         self.key(name)
         self.int_val(n)
@@ -475,207 +527,15 @@ extend JsonWriter:
         self.bool_val(b)
 
     # Read-only view of the serialized bytes (aliases the internal buffer).
-    # Named `view` (not `as_str`) because the codegen intercepts `.as_str()` on
-    # any receiver as a built-in pointer->str cast, bypassing user methods.
     pub def view(self) -> str:
         return self.sb.as_str()
 
-    # Take ownership of the serialized JSON as a fresh string. The writer itself
-    # is torn down by the caller's auto-drop at scope exit (do NOT free here, or
-    # it would double-free with that drop — same contract as view()).
+    # Take ownership of the serialized JSON as a fresh string.
     pub def finish(self) -> str:
         return self.sb.to_owned()
 
-    # Full teardown, invoked by auto-drop (the writer is a class with a `free`
-    # method). Must release EVERYTHING the writer owns AND its own struct, the
-    # way StringBuilder.free does — otherwise the JsonWriter struct and the
-    # Vec[bool] struct (Vec.free frees only its data buffer, not the Vec struct)
-    # leak ~per call, which under load grows RSS without bound.
     pub def free(self):
         self.sb.free()
         self._first.free()
         unsafe:
             _tr_c_free(self as Pointer[char])
-
-# ─── JsonParser ───────────────────────────────────────────────────────────────
-
-pub class JsonParser:
-    pub src: str
-    pub pos: int
-    pub len: int
-
-extend JsonParser:
-    pub def init(src: str) -> JsonParser:
-        mut p = JsonParser()
-        p.src = src
-        p.pos = 0
-        p.len = _tr_strlen(src)
-        return p
-
-    pub def cur(self) -> int:
-        if self.pos >= self.len: return 0
-        return (self.src as Pointer[char]).offset(self.pos).read() as int
-
-    pub def advance(self):
-        self.pos = self.pos + 1
-
-    pub def skip_ws(self):
-        while self.pos < self.len:
-            mut c = self.cur()
-            if c == 32 or c == 9 or c == 10 or c == 13:
-                self.advance()
-            else:
-                break
-
-    pub def parse_string(self) -> str:
-        self.advance()  # skip opening '"'
-        mut sb = StringBuilder.init(32)
-        while self.pos < self.len:
-            mut c = self.cur()
-            if c == 34:  # closing '"'
-                self.advance()
-                break
-            if c == 92:  # backslash escape
-                self.advance()
-                mut esc = self.cur()
-                self.advance()
-                if esc == 110: sb.append_char(10)   # \n
-                elif esc == 116: sb.append_char(9)  # \t
-                elif esc == 114: sb.append_char(13) # \r
-                elif esc == 92: sb.append_char(92)  # \\
-                elif esc == 34: sb.append_char(34)  # \"
-                elif esc == 47: sb.append_char(47)  # \/
-                elif esc == 98: sb.append_char(8)   # \b
-                elif esc == 102: sb.append_char(12) # \f
-                else: sb.append_char(esc)
-            else:
-                sb.append_char(c)
-                self.advance()
-        mut out = sb.to_owned()
-        sb.free()
-        return out
-
-    pub def parse_number(self) -> Pointer[JsonValue]:
-        mut start = self.pos
-        mut is_float = false
-        if self.cur() == 45: self.advance()  # optional '-'
-        while self.pos < self.len:
-            mut c = self.cur()
-            if c >= 48 and c <= 57:
-                self.advance()
-            elif c == 46 or c == 101 or c == 69:  # '.' 'e' 'E'
-                is_float = true
-                self.advance()
-            elif (c == 43 or c == 45) and self.pos > start + 1:  # '+'/'-' in exponent
-                self.advance()
-            else:
-                break
-        mut raw = ""
-        unsafe:
-            raw = self.src.slice(start, self.pos)
-        if is_float:
-            return JsonValue.init_float(_tr_str_to_float(raw))
-        return JsonValue.init_int(_tr_str_to_int(raw))
-
-    pub def parse(self) -> Pointer[JsonValue]:
-        self.skip_ws()
-        mut c = self.cur()
-        if c == 34:  # '"' → string
-            mut s = self.parse_string()
-            return JsonValue.init_str(s)
-        elif c == 116:  # 't' → true
-            self.pos = self.pos + 4
-            return JsonValue.init_bool(true)
-        elif c == 102:  # 'f' → false
-            self.pos = self.pos + 5
-            return JsonValue.init_bool(false)
-        elif c == 110:  # 'n' → null
-            self.pos = self.pos + 4
-            return JsonValue.init_null()
-        elif c == 91:   # '[' → array
-            return self.parse_array()
-        elif c == 123:  # '{' → object
-            return self.parse_object()
-        elif c == 0:
-            return JsonValue.init_null()
-        else:           # number
-            return self.parse_number()
-
-    pub def parse_array(self) -> Pointer[JsonValue]:
-        self.advance()  # skip '['
-        mut arr = JsonValue.init_array()
-        self.skip_ws()
-        if self.cur() == 93:  # empty array ']'
-            self.advance()
-            return arr
-        while true:
-            self.skip_ws()
-            mut item = self.parse()
-            arr.read().push(item)
-            self.skip_ws()
-            mut ch = self.cur()
-            if ch == 93:   # ']'
-                self.advance()
-                break
-            if ch == 44: self.advance()  # ','
-            if ch == 0: break
-        return arr
-
-    pub def parse_object(self) -> Pointer[JsonValue]:
-        self.advance()  # skip '{'
-        mut obj = JsonValue.init_object()
-        self.skip_ws()
-        if self.cur() == 125:  # empty object '}'
-            self.advance()
-            return obj
-        while true:
-            self.skip_ws()
-            if self.cur() != 34: break  # key must start with '"'
-            mut key = self.parse_string()
-            self.skip_ws()
-            if self.cur() == 58: self.advance()  # ':'
-            self.skip_ws()
-            mut val = self.parse()
-            obj.read().obj_set(key, val)
-            self.skip_ws()
-            mut ch = self.cur()
-            if ch == 125:  # '}'
-                self.advance()
-                break
-            if ch == 44: self.advance()  # ','
-            if ch == 0: break
-        return obj
-
-# ─── Json static API ──────────────────────────────────────────────────────────
-
-pub class Json:
-    _dummy: int
-
-extend Json:
-    # Parse a JSON string; returns a Pointer[JsonValue] tree.
-    pub def parse(src: str) -> Pointer[JsonValue]:
-        mut p = JsonParser.init(src)
-        return p.parse()
-
-    # Serialize any JsonValue to a compact JSON string.
-    pub def stringify(v: Pointer[JsonValue]) -> str:
-        if v as int == 0: return "null"
-        return v.read().to_str()
-
-    # Serialize with 2-space indentation.
-    pub def pretty(v: Pointer[JsonValue]) -> str:
-        if v as int == 0: return "null"
-        mut sb = StringBuilder.init(256)
-        _json_write_pretty(v, sb, 0)
-        mut out = sb.to_owned()
-        sb.free()
-        return out
-
-    # Convenience constructors
-    pub def null_val()       -> Pointer[JsonValue]: return JsonValue.init_null()
-    pub def bool_val(b: bool) -> Pointer[JsonValue]: return JsonValue.init_bool(b)
-    pub def int_val(n: int)   -> Pointer[JsonValue]: return JsonValue.init_int(n)
-    pub def float_val(f: float) -> Pointer[JsonValue]: return JsonValue.init_float(f)
-    pub def str_val(s: str)   -> Pointer[JsonValue]: return JsonValue.init_str(s)
-    pub def array()           -> Pointer[JsonValue]: return JsonValue.init_array()
-    pub def object()          -> Pointer[JsonValue]: return JsonValue.init_object()

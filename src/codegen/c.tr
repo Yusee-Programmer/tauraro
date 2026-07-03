@@ -2255,6 +2255,25 @@ pub class CGenerator:
     # retain). A collection-element borrow or a borrow-returning call is an ALIAS the
     # field must retain to co-own (else _trdrop over-releases → UAF). EIdent/EPropAccess
     # are already retained by obj_retain_wrap, so they return false here (no double).
+    # True if `t` stores into a `ref T` (borrow) class field. Such a field does NOT
+    # co-own its value: the drop side already skips releasing borrow fields (see
+    # gen_class_struct), so the store side must likewise NOT retain — otherwise the
+    # retain leaks (asymmetric). A plain store = a zero-cost borrow (Rc/Arc-free view).
+    pub def _store_target_is_borrow_field(self, t: Pointer[HirExpr]) -> bool:
+        if _is_invalid_ptr(t as usize): return false
+        match t.read():
+            case HirExpr.EPropAccess(obj, prop, _):
+                mut on = hir_expr_type(obj).name
+                if self.classes.contains(on):
+                    mut cls = self.classes.get(on)
+                    mut fi = 0
+                    while fi < cls.fields.len:
+                        if cls.fields.get(fi).name == prop:
+                            return cls.fields.get(fi).ty.is_borrow
+                        fi = fi + 1
+            case _: pass
+        return false
+
     pub def _obj_store_needs_retain(self, e: Pointer[HirExpr]) -> bool:
         if _is_invalid_ptr(e as usize): return false
         match e.read():
@@ -5901,11 +5920,22 @@ pub class CGenerator:
                                 self.w(pad + _safe_c_varname(_an) + " = " + _strtmp + ";\n")
                                 return
                         case HirExpr.EPropAccess(_, _, _):
-                            _assign_rhs = self.str_retain_wrap(v, _assign_rhs, false)
-                            if self._expr_is_borrow_call(v):
-                                _assign_rhs = "_tr_str_retain(" + _assign_rhs + ")"   # field must OWN: retain borrow
+                            # A `ref str` (borrow) field does NOT own its value — the drop
+                            # side skips releasing borrow fields (is_borrow check precedes
+                            # the str-release), so the store must NOT retain either (else it
+                            # leaks). Only OWNING str fields retain.
+                            if not self._store_target_is_borrow_field(t):
+                                _assign_rhs = self.str_retain_wrap(v, _assign_rhs, false)
+                                if self._expr_is_borrow_call(v):
+                                    _assign_rhs = "_tr_str_retain(" + _assign_rhs + ")"   # field must OWN: retain borrow
                         case _: pass
                 elif self.is_heap_class_tn(hir_expr_type(t).name) and not self.has_method(hir_expr_type(t).name, "free"):
+                    # `ref T` (borrow) field store: no co-ownership — plain store, no
+                    # retain, no release-old (symmetric with the drop side, which skips
+                    # borrow fields). This is the zero-cost borrowed-view case.
+                    if self._store_target_is_borrow_field(t):
+                        self.w(pad + self.gen_expr(t) + " = " + _assign_rhs + ";\n")
+                        return
                     # Refcounted heap-class store (reassign a local, or a field). Retain
                     # the new value (the target now holds a reference) into a temp, then
                     # release the OLD value before overwriting — this avoids a double-free
