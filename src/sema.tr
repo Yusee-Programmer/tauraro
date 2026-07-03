@@ -919,8 +919,14 @@ extend Sema:
             mut fd = cls.fields.get(fi)
             if fd.ty as usize != 0 as usize:
                 mut fty = fd.ty.read()
-                if not self.is_copy_class(fty.name):
-                    all_copy = false
+                # A `ref T` (borrow) field is a POINTER, not an embedded value: it is
+                # trivially copyable and must NOT be descended into — for a self-
+                # referential type (e.g. `parent: ref Ctx`) recursing on the field's
+                # own class name infinitely re-enters is_copy_class. (Raw `Pointer[T]`
+                # fields already don't recurse: "Pointer" isn't a user class.)
+                if not fty.is_borrow:
+                    if not self.is_copy_class(fty.name):
+                        all_copy = false
             fi = fi + 1
         self.copy_classes.insert(name, all_copy)
         return all_copy

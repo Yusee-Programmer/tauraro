@@ -1606,9 +1606,12 @@ __attribute__((hot)) bool Sema_is_copy_class(Sema* self, TrStr name) {
             /* pass */
             AstType* fty = (*fd->ty);
             /* pass */
-            if ((!Sema_is_copy_class(self, fty->name))) {
+            if ((!fty->is_borrow)) {
                 /* pass */
-                all_copy = false;
+                if ((!Sema_is_copy_class(self, fty->name))) {
+                    /* pass */
+                    all_copy = false;
+                }
             }
         }
         /* pass */
