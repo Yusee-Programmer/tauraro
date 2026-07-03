@@ -2409,6 +2409,12 @@ pub class CGenerator:
         if self.shared_vars.contains(obj_s):
             mut sh_ty = self.shared_vars.get(obj_s)
             return "((" + sh_ty + "*)(" + obj_s + "->data))->" + p
+        # Shared[T]-TYPED receiver (e.g. a `cfg: Shared[Config]` param, not a
+        # `shared` local): same unwrap — deref the atomic box to the inner T.
+        if t_n == "Shared":
+            mut _shp_ft = hir_expr_type(o)
+            if _shp_ft.args.len > 0:
+                return "((" + _shp_ft.args.get(0).read().name + "*)(" + obj_s + "->data))->" + p
         if self.enums.contains(t_n):
             if obj_s == t_n: return t_n + "_make_" + p + "()"
             return obj_s + ".data." + p
@@ -3388,6 +3394,22 @@ pub class CGenerator:
             if args.len > 0:
                 sh_sig = sh_sig + ", " + self.gen_args(args)
             return sh_sig + ")"
+        # Shared[T]-TYPED receiver (a `cfg: Shared[Config]` PARAM, not a `shared`
+        # local): unwrap the atomic box and dispatch as the inner type's method —
+        # this is what makes `Shared[T]` usable across a thread boundary (the sound
+        # cross-thread pattern [T-7] points to).
+        if t_n == "Shared":
+            mut _shm_ft = hir_expr_type(obj)
+            if _shm_ft.args.len > 0:
+                mut _shm_ty = _shm_ft.args.get(0).read().name
+                if method == "clone": return "_tr_shared_clone(" + obj_s + ")"
+                if method == "drop": return "_tr_shared_drop(" + obj_s + ")"
+                if method == "is_null": return "(" + obj_s + " == NULL || " + obj_s + "->data == NULL)"
+                if method == "downgrade": return "_tr_weak_new(" + obj_s + ")"
+                mut _shm_unwrapped = "((" + _shm_ty + "*)(" + obj_s + "->data))"
+                mut _shm_sig = _shm_ty + "_" + method + "(" + _shm_unwrapped
+                if args.len > 0: _shm_sig = _shm_sig + ", " + self.gen_args(args)
+                return _shm_sig + ")"
 
         # Interface vtable dispatch: obj.vtable->method(obj.data, extra_args...)
         if self.interfaces.contains(t_n):
@@ -5129,6 +5151,13 @@ pub class CGenerator:
                     mut cast_back = "(long long)(uintptr_t)_vp"
                     if not _is_int_type(arg_ty_n) and arg_ty_n != "bool" and arg_ty_n != "char":
                         mut c_arg_ty = self.type_to_c(hir_expr_type(args.get(0)))
+                        # Cast to the WORKER's declared param type, not the arg's: a
+                        # `shared` var is typed as its inner T, but the worker's param is
+                        # Shared[T] -> _TrSharedBox*, so the arg type alone is wrong.
+                        if self.functions.contains(fn_name):
+                            mut _wf = self.functions.get(fn_name)
+                            if _wf.params.len > 0:
+                                c_arg_ty = self.type_to_c(_wf.params.get(0).ty)
                         cast_back = "(" + c_arg_ty + ")_vp"
                     self.w("static void* _tr_spawn_wrap_" + fn_name + "(void* _vp) { " + fn_name + "(" + cast_back + "); return NULL; }\n")
                 else:

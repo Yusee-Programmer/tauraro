@@ -214,6 +214,30 @@ jobs:
         run: TAURAROC=./tauraroc${{ matrix.ext }} bash scripts/leak_check.sh
 
       # -------------------------------------------------------
+      # Concurrency corpus under sanitizers (Linux): each tests/concurrency/*.tr
+      # runs under ThreadSanitizer (data races — a lost Mutex update, or a
+      # non-atomic refcount touched by two threads) AND AddressSanitizer (UAF /
+      # double-free of state crossing the spawn/Mutex/Shared boundary). This is
+      # the oracle that a program compiling under --strict is actually thread-safe
+      # at runtime — not just "didn't crash in a few runs".
+      # -------------------------------------------------------
+      - name: Concurrency corpus — ThreadSanitizer (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          CC: "gcc"
+          TSAN: "1"
+        run: TAURAROC=./tauraroc${{ matrix.ext }} bash scripts/run_concurrency.sh
+
+      - name: Concurrency corpus — AddressSanitizer (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          CC: "gcc"
+          ASAN: "1"
+        run: TAURAROC=./tauraroc${{ matrix.ext }} bash scripts/run_concurrency.sh
+
+      # -------------------------------------------------------
       # Reactor stress gate: a green-thread echo server hammered by concurrent
       # keep-alive clients, exercising the REAL readiness reactor (epoll on
       # Linux, kqueue on macOS) and its per-request re-arm path. Guards reactor
