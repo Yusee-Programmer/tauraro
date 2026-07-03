@@ -1,0 +1,27 @@
+# Concurrency corpus — Mutex-guarded counter under contention.
+#
+# Four threads each do 1000 lock/read/increment/write cycles on ONE shared
+# Mutex[int]. The final total MUST be exactly 4000: a lost update (broken mutual
+# exclusion / data race on the value) shows up as total < 4000; a use-after-free
+# or double-free of the box shows up under ASan. This is the primary TSan/ASan
+# target for the "sound concurrency" work.
+def bump(m: Mutex[int]) -> void:
+    mut i = 0
+    while i < 1000:
+        mut c = m.get()
+        m.set(c + 1)
+        i = i + 1
+
+async def main():
+    mut counter: Mutex[int] = Mutex.init(0)
+    task_group:
+        spawn bump(counter)
+        spawn bump(counter)
+        spawn bump(counter)
+        spawn bump(counter)
+    mut total = counter.get()
+    counter.unlock()
+    if total == 4000:
+        print("OK mutex_counter " + total.to_str())
+    else:
+        print("FAIL mutex_counter " + total.to_str())

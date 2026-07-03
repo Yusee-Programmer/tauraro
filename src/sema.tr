@@ -4575,6 +4575,8 @@ extend Sema:
                         mut _tsa_ty = hir_expr_type(hl.get(_tsi))
                         if not self.is_sendable_ty(_tsa_ty):
                             self.error("[T-1] Type '" + _tsa_ty.name + "' is not Sendable and cannot be passed to Thread.spawn.\n      FIX: Wrap in Mutex[" + _tsa_ty.name + "] for exclusive access, or add 'implements Sendable' to '" + _tsa_ty.name + "' to confirm it is thread-safe.")
+                        elif self.strict_mode and self._is_rc_class(_tsa_ty.name):
+                            self.error("[T-7] '" + _tsa_ty.name + "' is a plain reference-counted class — its refcount is thread-local (non-atomic), so it is not 'Send' and cannot be passed to Thread.spawn (exactly why Rust's 'Rc' is '!Send'): retaining/releasing it from another thread races the count.\n      FIX: share it as 'Shared[" + _tsa_ty.name + "]' (atomic refcount, like Rust's 'Arc'). A 'Sendable' class must itself hold only Sendable + atomically-shared state.")
                         _tsi = _tsi + 1
                 # ThreadPool.spawn arg Sendable check
                 elif method == "spawn" and hobj_ty.name == "ThreadPool":
@@ -4587,6 +4589,8 @@ extend Sema:
                         mut _psa_ty = hir_expr_type(hl.get(_psi))
                         if not self.is_sendable_ty(_psa_ty):
                             self.error("[T-1] Type '" + _psa_ty.name + "' is not Sendable and cannot be passed to ThreadPool.spawn.\n      FIX: Wrap in Mutex[" + _psa_ty.name + "] for exclusive access, or add 'implements Sendable' to '" + _psa_ty.name + "' to confirm it is thread-safe.")
+                        elif self.strict_mode and self._is_rc_class(_psa_ty.name):
+                            self.error("[T-7] '" + _psa_ty.name + "' is a plain reference-counted class — its refcount is thread-local (non-atomic), so it cannot be passed to ThreadPool.spawn (like Rust's 'Rc' being '!Send').\n      FIX: share it as 'Shared[" + _psa_ty.name + "]' (atomic refcount, like Rust's 'Arc').")
                         _psi = _psi + 1
                 # Atomic built-in method return types
                 elif hobj_ty.name == "Atomic":

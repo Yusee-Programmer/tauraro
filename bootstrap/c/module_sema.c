@@ -1756,6 +1756,11 @@ __attribute__((hot)) void Sema__collect_strong_edge(Sema* self, AstType* ft, Lis
     /* pass */
     TrStr n = ft->name;
     /* pass */
+    if (ft->is_borrow) {
+        /* pass */
+        return;
+    }
+    /* pass */
     if (((strcmp(_tr_strz(n), _tr_strz(_tr_str_lit("Pointer"))) == 0) || (strcmp(_tr_strz(n), _tr_strz(_tr_str_lit("Weak"))) == 0))) {
         /* pass */
         return;
