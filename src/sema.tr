@@ -635,6 +635,20 @@ extend Sema:
             case _: pass
         return false
 
+    # True if `e` is a `shared` value (a variable bound with `shared`, i.e. a
+    # Shared[T]/Arc handle). Such a value has an ATOMIC refcount, so it is exempt
+    # from [T-7] — it CAN cross a thread boundary (that is the fix [T-7] points to).
+    # A shared var is typed as its inner T (with sym.is_shared), so the type name
+    # alone can't tell; resolve the identifier and check the flag.
+    pub def _expr_is_shared(self, e: Pointer[HirExpr]) -> bool:
+        if _is_invalid_ptr(e as usize): return false
+        match e.read():
+            case HirExpr.EIdent(nm, _, _):
+                mut sym = self.resolve(nm)
+                return sym.name != "" and sym.is_shared
+            case _: pass
+        return false
+
     pub def check_spawn_sendable(self, e: Pointer[HirExpr]):
         if _is_invalid_ptr(e as usize): return
         match e.read():
@@ -652,7 +666,7 @@ extend Sema:
                         mut inner_nm = arg_ty.args.get(0).read().name
                         if not self.is_sendable_type(inner_nm):
                             self.error("[T-1] 'Shared[" + inner_nm + "]' cannot safely cross thread boundaries because '" + inner_nm + "' is not Sendable.\n      FIX: Add 'implements Sendable' to '" + inner_nm + "' and ensure all mutable fields use Atomic[T] or Mutex[T].")
-                    elif self.strict_mode and self._is_rc_class(arg_ty.name):
+                    elif self.strict_mode and self._is_rc_class(arg_ty.name) and not self._expr_is_shared(cs_args.get(csi)):
                         self.error("[T-7] '" + arg_ty.name + "' is a plain reference-counted class — its refcount is thread-local (non-atomic), so it is not 'Send' and cannot cross a thread boundary (this is exactly why Rust's 'Rc' is '!Send').\n      FIX: share it as 'Shared[" + arg_ty.name + "]' (atomic refcount, like Rust's 'Arc'), or 'Mutex[" + arg_ty.name + "]' for exclusive access.")
                     elif not self.is_sendable_type(arg_ty.name):
                         self.error("[T-1] Type '" + arg_ty.name + "' is not Sendable and cannot be safely shared across threads.\n      FIX: Wrap in Mutex[" + arg_ty.name + "] for exclusive access, or Atomic[T] for counters/flags.\n      Or add 'implements Sendable' to '" + arg_ty.name + "' to confirm it is thread-safe.")
@@ -667,7 +681,7 @@ extend Sema:
                         mut inner_nm2 = arg_ty2.args.get(0).read().name
                         if not self.is_sendable_type(inner_nm2):
                             self.error("[T-1] 'Shared[" + inner_nm2 + "]' cannot safely cross thread boundaries because '" + inner_nm2 + "' is not Sendable.\n      FIX: Add 'implements Sendable' to '" + inner_nm2 + "' and protect mutable fields with Atomic[T] or Mutex[T].")
-                    elif self.strict_mode and self._is_rc_class(arg_ty2.name):
+                    elif self.strict_mode and self._is_rc_class(arg_ty2.name) and not self._expr_is_shared(cs_margs.get(csmi)):
                         self.error("[T-7] '" + arg_ty2.name + "' is a plain reference-counted class — its refcount is thread-local (non-atomic), so it is not 'Send' and cannot cross a thread boundary.\n      FIX: share it as 'Shared[" + arg_ty2.name + "]' (atomic refcount) or 'Mutex[" + arg_ty2.name + "]' for exclusive access.")
                     elif not self.is_sendable_type(arg_ty2.name):
                         self.error("[T-1] Type '" + arg_ty2.name + "' is not Sendable and cannot be safely shared across threads.\n      FIX: Wrap in Mutex[" + arg_ty2.name + "].")
@@ -4575,7 +4589,7 @@ extend Sema:
                         mut _tsa_ty = hir_expr_type(hl.get(_tsi))
                         if not self.is_sendable_ty(_tsa_ty):
                             self.error("[T-1] Type '" + _tsa_ty.name + "' is not Sendable and cannot be passed to Thread.spawn.\n      FIX: Wrap in Mutex[" + _tsa_ty.name + "] for exclusive access, or add 'implements Sendable' to '" + _tsa_ty.name + "' to confirm it is thread-safe.")
-                        elif self.strict_mode and self._is_rc_class(_tsa_ty.name):
+                        elif self.strict_mode and self._is_rc_class(_tsa_ty.name) and not self._expr_is_shared(hl.get(_tsi)):
                             self.error("[T-7] '" + _tsa_ty.name + "' is a plain reference-counted class — its refcount is thread-local (non-atomic), so it is not 'Send' and cannot be passed to Thread.spawn (exactly why Rust's 'Rc' is '!Send'): retaining/releasing it from another thread races the count.\n      FIX: share it as 'Shared[" + _tsa_ty.name + "]' (atomic refcount, like Rust's 'Arc'). A 'Sendable' class must itself hold only Sendable + atomically-shared state.")
                         _tsi = _tsi + 1
                 # ThreadPool.spawn arg Sendable check
@@ -4589,7 +4603,7 @@ extend Sema:
                         mut _psa_ty = hir_expr_type(hl.get(_psi))
                         if not self.is_sendable_ty(_psa_ty):
                             self.error("[T-1] Type '" + _psa_ty.name + "' is not Sendable and cannot be passed to ThreadPool.spawn.\n      FIX: Wrap in Mutex[" + _psa_ty.name + "] for exclusive access, or add 'implements Sendable' to '" + _psa_ty.name + "' to confirm it is thread-safe.")
-                        elif self.strict_mode and self._is_rc_class(_psa_ty.name):
+                        elif self.strict_mode and self._is_rc_class(_psa_ty.name) and not self._expr_is_shared(hl.get(_psi)):
                             self.error("[T-7] '" + _psa_ty.name + "' is a plain reference-counted class — its refcount is thread-local (non-atomic), so it cannot be passed to ThreadPool.spawn (like Rust's 'Rc' being '!Send').\n      FIX: share it as 'Shared[" + _psa_ty.name + "]' (atomic refcount, like Rust's 'Arc').")
                         _psi = _psi + 1
                 # Atomic built-in method return types
