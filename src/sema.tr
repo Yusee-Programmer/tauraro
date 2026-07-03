@@ -1273,7 +1273,17 @@ extend Sema:
         mut has_dispose = false
         while mi < cls.methods.len:
             mut mnm = cls.methods.get(mi).name
-            if mnm == "free": return true          # user free(): called at scope exit
+            if mnm == "free":
+                # A user `free()` class is MANUALLY managed (not refcount-balanced).
+                # If this instance was passed to a callee in a non-receiver position
+                # (mark_coll_arg set coll_escaped), that callee may take ownership and
+                # call free() itself — e.g. `c.send_json_writer(200, w)` frees `w`.
+                # Auto-dropping here too would call free() twice → double-free/heap
+                # corruption. Exclude it (a leak at worst, never a UAF), same as the
+                # collection path does. (Refcounted plain classes below are exempt —
+                # rc is the safety net there.)
+                if sym.coll_escaped: return false
+                return true          # user free(): called at scope exit
             if mnm == "dispose": has_dispose = true
             mi = mi + 1
         # A `dispose()` class self-manages its memory — hands off (no double-free).
