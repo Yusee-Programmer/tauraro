@@ -61,7 +61,8 @@ mut ch: Chan[MyClass] = Chan[MyClass].init(16)
 | `RwLock[T]` | Yes | Read-write lock. |
 | `Atomic[T]` | Yes | Lock-free atomic operations. |
 | `Pointer[T]` | Only with `UnsafeSendable` | Raw pointer — the compiler can't prove it thread-safe; assert `implements Sendable, UnsafeSendable` to take responsibility (Tauraro's `unsafe impl Send`). |
-| `List[T]`, `Dict`, `Set`, plain classes | **No** | Not thread-safe — wrap in `Shared[T]` / `Mutex[T]`. |
+| `List[T]`, `Dict`, `Set` | **No** | Not thread-safe (unsynchronized mutation) — wrap in `Shared[T]` / `Mutex[T]`. |
+| a **plain class** instance | **No** (`[T-7]`) | Every heap class is reference-counted; a *plain* class uses a **non-atomic** refcount, so it is `!Send` exactly like Rust's `Rc` — two threads retaining/releasing it would race the count. Use `Shared[T]` (atomic `Arc`). |
 | a **borrow** `ref T` / `mut ref T` | **No** | A borrow can dangle or race across threads (`[T-6]`); send an owned value or a handle. |
 
 ---
@@ -181,6 +182,60 @@ def run(x: mut ref int):
 ```
 
 **Fix:** pass an *owned* value, a `Shared[T]`, or a `Mutex[T]`/`Atomic[T]`.
+
+---
+
+### [T-7] Plain Reference-Counted Class Crosses a Thread
+
+```
+error [T-7]: 'Node' is a plain reference-counted class — its refcount is
+thread-local (non-atomic), so it is not 'Send' (exactly why Rust's 'Rc' is '!Send')
+```
+
+**Cause:** You passed a plain class instance across a thread boundary. Its refcount
+is non-atomic (fast, but single-thread-only); two threads adjusting it would race.
+Checked **transitively** — a plain class reached through a `Mutex[T]`, `Vec[T]`,
+`Dict`, or another class's field is rejected too.
+
+```python
+class Node:
+    pub v: int
+
+def worker(n: Node): ...
+
+# WRONG:
+mut n = Node(...)
+Thread.spawn(worker, n)          # T-7: Node's rc is non-atomic → !Send
+
+# RIGHT: Shared[T] has an atomic refcount (Arc)
+shared n = Node(...)
+Thread.spawn(worker, n.clone())  # OK
+```
+
+**Fix:** use `Shared[T]` for anything shared across threads.
+
+---
+
+### `UnsafeSendable` — the audited escape hatch
+
+`UnsafeSendable` is Tauraro's `unsafe impl Send/Sync`. Adding it to a class
+(`implements Sendable, UnsafeSendable`) asserts that **you have audited** the
+class's cross-thread safety, and opts it out of the automatic field check (`[T-2]`,
+including raw `Pointer` fields) **and** the refcount check (`[T-7]`). It is the small,
+explicit unsafe core a systems framework needs (like the `unsafe` inside
+hyper/tokio) — e.g. a read-only handle shared behind an atomic `Shared[T]`.
+
+```python
+class ConnJob implements Sendable, UnsafeSendable:   # audited: read-only App + owned conn
+    pub app:  Mutex[App]
+    pub conn: Mutex[HttpConn]
+```
+
+**The rule that keeps the guarantee honest:** a program that compiles **without**
+any `UnsafeSendable` has the *full*, machine-checked `Send`/`Sync` guarantee. Every
+`UnsafeSendable` is a labeled, greppable point where a human took responsibility —
+exactly like `unsafe` blocks. Use it only at a real framework boundary, never to
+silence an error in ordinary code.
 
 ---
 

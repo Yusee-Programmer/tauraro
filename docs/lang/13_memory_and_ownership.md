@@ -451,6 +451,45 @@ print(s1.get())               # 2 — same underlying object
 
 **Important:** `shared` makes the reference count thread-safe. It does **not** make mutations to the underlying object thread-safe. If multiple threads call `s1.increment()` simultaneously, the counter's internal state may race. Use `Mutex[T]` for mutually exclusive access.
 
+### ARC under the hood — atomic vs non-atomic
+
+Every heap class instance is reference-counted (ARC): the compiler inserts
+retain/release automatically, so you never call `free`. The difference is *which
+kind* of refcount:
+
+| | Refcount | Cross-thread |
+|---|---|---|
+| a **plain** class (`Own`) | non-atomic (fast) | **No** — `!Send`, rejected by `[T-7]` (like Rust's `Rc`) |
+| `shared` / `Shared[T]` | atomic | **Yes** — the `Arc` equivalent |
+
+So `shared` is not "the way to refcount" — *everything* is refcounted. `shared` is
+specifically the **atomic** refcount you need to cross a thread boundary. This is
+why `[T-7]` tells you to switch a plain class to `Shared[T]` when it must be sent to
+another thread.
+
+### `Weak[T]` and reference cycles — `[S-2]`
+
+Reference counting cannot reclaim a **cycle** of strong references (A owns B owns A):
+the counts never reach zero, so it leaks. Under `--strict` the compiler *rejects*
+such cycles with `[S-2]` (this generalizes `[S-1]`, which is the direct
+`Shared[Self]` case). Break the cycle by making one edge **non-owning**:
+
+```python
+class Parent:
+    pub children: List[Child]     # strong (owns)
+class Child:
+    pub parent: Weak[Parent]      # non-owning back-reference — no cycle
+```
+
+`Weak[T]` observes an object without keeping it alive; call `.upgrade()` to get an
+`Option[T]` that is `Some` only while the object is still live. (`Pointer[T]` is the
+raw, unchecked alternative — also a non-owning edge, but you manage validity
+yourself.)
+
+> Because of `[S-2]` (+ `[U-1]`, no unmanaged allocation), a program that compiles
+> under `--strict` is provably **leak-free**: all heap memory is ARC-managed and the
+> strong-ownership graph is acyclic.
+
 ### Common Mistakes
 
 ```python

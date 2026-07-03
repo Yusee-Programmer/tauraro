@@ -28,16 +28,19 @@ category, with its cause, a triggering example, and the fix.
 | [T-4] | Type | Unhandled `Result` from a `throws` call |
 | [T-5] | Type | Numeric value used as an `if`/`while` condition |
 | [T-6] | Concurrency | A borrow (`ref`/`mut ref`) passed across a thread boundary |
+| [T-7] | Concurrency | A plain reference-counted class crosses a thread boundary — its refcount is non-atomic (`!Send`, exactly like Rust's `Rc`). Checked **transitively** (through `Mutex`/`Vec`/fields). Use `Shared[T]` (atomic `Arc`) instead |
 | [N-1] | Name | Reserved/keyword name used as a declaration |
 | [F-3] | Function | Missing `return` on a code path |
 | [E-1] | Existence | (1) Non-exhaustive `match`; (2) explicit `main()` call; (3) no such method on type |
 | [E-2] | Existence | Nested declaration used outside `main()` |
 | [S-1] | Shared | `Shared[Self]` field creates a reference cycle |
+| [S-2] | Shared | A strong-ownership **cycle** among reference-counted classes (would leak). Break it with `Pointer[T]` or `Weak[T]` (non-owning edges). `--strict` only |
 | [I-1] | Interface / Init | (1) `implements` an undefined interface; (2) variable used before assignment |
 | [I-2] | Interface / Init | (1) Class missing an interface method; (2) variable not initialized on all paths |
 | [I-3] | Interface | Method signature doesn't match the interface |
 | [L-1] | Lifetime | Local pointer may not outlive its function |
 | [P-1] | Unsafe | `.write()` on a `Pointer` outside `unsafe:` |
+| [P-2] | Unsafe | `.read()` (deref) or `.offset()` (pointer arithmetic) on a raw `Pointer` outside `unsafe:` — **on by default**, no `--strict` needed |
 | [U-1] | Unsafe | `alloc`/`dealloc`/`alloc_array` outside `unsafe:` (with `--strict`) |
 
 See [13 — Memory and Ownership](13_memory_and_ownership.md) for the conceptual
@@ -302,6 +305,51 @@ def run(x: mut ref int):
 
 ---
 
+### [T-7] Plain Reference-Counted Class Crossing a Thread
+
+**Message:** `'C' is a plain reference-counted class — its refcount is thread-local
+(non-atomic), so it is not 'Send' and cannot be passed to Thread.spawn (exactly why
+Rust's 'Rc' is '!Send'): retaining/releasing it from another thread races the count.`
+
+Every heap class instance in Tauraro is reference-counted (ARC). For speed, a
+*plain* class uses a **non-atomic** refcount — perfect for single-threaded ARC, but
+if two threads retain/release the same instance the count races and the object is
+freed twice or leaked. This is precisely why Rust's `Rc` is `!Send` (and `Arc`
+exists). `[T-7]` enforces it, and it is checked **transitively**: a plain class
+reached through a `Mutex`, `Vec`, `Dict`, field, etc. is still rejected.
+
+```python
+class Node:              # plain class → non-atomic refcount
+    pub v: int
+
+def worker(n: Node): ...
+
+def main():
+    mut n = Node(...)
+    Thread.spawn(worker, n)          # T-7: Node's rc is non-atomic → !Send
+```
+
+**FIX:** Use `Shared[T]` — the `Arc` equivalent, whose refcount **is** atomic:
+
+```python
+    shared n = Node(...)             # Shared[Node]: atomic refcount
+    Thread.spawn(worker, n.clone())  # OK
+```
+
+**Escape hatch:** a framework that has *audited* its own cross-thread sharing may
+mark the crossing class `implements Sendable, UnsafeSendable` to opt out of `[T-7]`
+(Tauraro's `unsafe impl Send/Sync`). Code that compiles **without** `UnsafeSendable`
+keeps the full guarantee — see [Advanced — Sendable](advanced/06_sendable.md).
+
+> **The guarantee.** Under `--strict`, a program that compiles has **no** plain
+> reference-counted class crossing a thread — directly or transitively. Therefore
+> every value shared across threads is an atomic `Shared[T]` or a synchronization
+> primitive, and no non-atomic refcount is ever raced. Combined with `[T-6]`
+> (no borrows cross) and `[T-1]`/`[T-2]` (only Sendable data crosses), this is the
+> same outcome as Rust's `Send`/`Sync` — reached with **zero lifetime annotations**.
+
+---
+
 ## Type Rules (T-4 / T-5)
 
 ### [T-4] Unhandled Result from `throws` Function
@@ -517,6 +565,38 @@ class Node implements Shared:
 
 ---
 
+### [S-2] Strong-Ownership Cycle (`--strict`)
+
+**Message:** `strong-ownership cycle among reference-counted classes ('A' -> 'B' ->
+'A') would leak — break it with Pointer[T] or Weak[T] (a non-owning edge).`
+
+**Cause:** ARC (reference counting) reclaims memory when a count hits zero — but a
+*cycle* of strong references (`A` owns `B` owns `A`) never reaches zero, so it
+leaks. This generalizes `[S-1]`: it catches indirect cycles through any chain of
+owning class fields. `Pointer[T]` and `Weak[T]` fields are **non-owning** edges, so
+they don't count toward a cycle.
+
+```python
+# WRONG (--strict): A and B strongly own each other
+class A:
+    pub b: B
+class B:
+    pub a: A          # S-2: A → B → A strong cycle
+
+# RIGHT: make one edge non-owning
+class B:
+    pub a: Weak[A]    # or Pointer[A] — breaks the cycle
+```
+
+**FIX:** Turn one edge of the cycle into a `Weak[T]` (safe, upgradable) or a
+`Pointer[T]` (raw, non-owning) field.
+
+> **Leak-freedom guarantee.** Under `--strict`, `[S-2]` + `[U-1]` (no unmanaged
+> allocation) means a program that compiles is provably **leak-free**: every heap
+> object is ARC-managed and the ownership graph is acyclic.
+
+---
+
 ## Interface Rules (I-series)
 
 `[I-1]` and `[I-2]` are each emitted for **two unrelated situations** — one
@@ -665,6 +745,40 @@ unsafe:
 ```
 
 **FIX:** Wrap the call in `unsafe:`.
+
+---
+
+### [P-2] Raw-Pointer Deref / Arithmetic Outside `unsafe:` (default-on)
+
+**Message:** `'.read()' dereferences a raw Pointer and must be inside an 'unsafe:'
+block.` / `'.offset()' does raw pointer arithmetic and must be inside an 'unsafe:'
+block.`
+
+**Cause:** Reading through a raw `Pointer` (`.read()`) or moving one (`.offset()`)
+can read freed or out-of-bounds memory — the two operations that make raw pointers
+unsafe. Unlike `[U-1]`, **`[P-2]` is on by default** — you do *not* need `--strict`.
+
+```python
+# WRONG (no --strict needed):
+mut p: Pointer[int] = q.offset(1)   # P-2: pointer arithmetic
+mut x = p.read()                    # P-2: raw deref
+
+# RIGHT:
+unsafe:
+    mut p = q.offset(1)
+    mut x = p.read()
+```
+
+**Why this matters:** with `[P-2]` default-on, an *ordinary* Tauraro program is
+memory-safe with no flags at all — ARC gives no use-after-free / double-free,
+indexing is bounds-checked, and the **only** way to reach undefined behavior is an
+explicit `unsafe:` block. That is the same contract as Rust, but with **zero
+lifetime annotations**. Trusted standard-library / compiler code opts out of `[P-2]`
+via the `# @trusted` module pragma (the audited unsafe core); user code never needs
+it.
+
+**FIX:** Wrap the deref/arithmetic in `unsafe:` — or, better, use a safe abstraction
+(`List[T]`, `str`, `StrView`, a slice) that does the bounds checking for you.
 
 ---
 
