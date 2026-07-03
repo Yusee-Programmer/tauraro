@@ -1003,6 +1003,11 @@ extend Sema:
     # element/value; Shared[T] is strong shared ownership.
     pub def _collect_strong_edge(self, ft: AstType, out: Vec[str]):
         mut n = ft.name
+        # A `ref T` (borrow) field is NON-OWNING — like Pointer[T]/Weak[T], it does
+        # not keep its target alive, so it can never form a strong (leaking) cycle.
+        # A parent-pointer / back-reference via `ref` (e.g. templa's `Context.parent:
+        # ref Context`) is the canonical safe way to break an ownership cycle.
+        if ft.is_borrow: return
         if n == "Pointer" or n == "Weak": return
         if n == "Vec" or n == "List" or n == "Set":
             if ft.args.len > 0: self._collect_strong_edge(ft.args.get(0).read(), out)
