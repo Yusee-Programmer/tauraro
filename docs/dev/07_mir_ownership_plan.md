@@ -92,6 +92,36 @@ no double-free.
 Once complete, promote the `HARD` fuzz fragments to `CORE` (they should be leak-free)
 and the fuzzer runs the full ownership surface as the standing regression gate.
 
+## Implementation constraint — the pass-ordering blocker (pinned)
+
+A deep spike established the exact reason F-2 can't be a drop-in patch, so the next
+(reviewed) session starts here rather than re-discovering it:
+
+- `coll_escaped` is set by `mark_coll_arg` **during** the main lowering pass, at each
+  call site (`sema.tr` ~1782).
+- The drop decision (`compute_scope_drops` → `is_droppable_sym`, which reads
+  `coll_escaped`) also runs **during** the main pass, at scope-exit — it "must run
+  while the scope is live" (`sema.tr` ~2101), because it reads live `Symbol` state.
+- The interprocedural `consumes(fn,i)` fixpoint needs **types** (to resolve
+  `param.m()`'s receiver class for `consumes_self`), which only exist **after**
+  lowering. And it needs the whole program's lowered bodies (like
+  `compute_return_ownership`, which is why that one is a post-pass at ~2383).
+
+So the analysis is only computable *after* lowering, but its result is needed
+*during* lowering (before `compute_scope_drops` fires). The two orderings conflict.
+Neither an AST pre-pass (no types) nor a HIR post-pass (too late) works.
+
+**The fix (the restructure):** split `analyze()` into phases —
+(1) lower all function/method/enum bodies to HIR and register signatures;
+(2) run `compute_return_ownership` **and** the new `compute_param_ownership` fixpoint
+    over the lowered program;
+(3) run the escape-marking + `compute_scope_drops` pass, now consulting the
+    precomputed `consumes`/`consumes_self`.
+Today (1) and (3) are interleaved in one pass; separating them is the core change.
+It is byte-identical-preserving if step (2)'s results are not yet consumed (Stage 1),
+then `mark_coll_arg` gates on them (Stage 2). Validate each with fixpoint + the fuzz
+oracle. This is a real pass-architecture change — do it under review, not unattended.
+
 ## Non-goals
 
 Not a borrow *checker* rewrite — `--strict`'s `[B-*]`/`[L-*]`/`[S-2]` region rules
