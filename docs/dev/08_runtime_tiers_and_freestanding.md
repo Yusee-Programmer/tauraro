@@ -91,6 +91,38 @@ runtime header — closing it there closes it for all programs.
       codegen to not emit the frame under `--no-std`, or a no-op stub). Then add the
       `--no-std` compiler flag that emits the define.
 
+### Authoritative bare-metal seam map (from CI, arm-none-eabi)
+
+Part A of the CI gate is **GREEN** — `hello_std.tr` cross-compiles to aarch64 and
+runs under qemu (`CROSS 81 42 cross ok`): the **std runtime is proven to
+cross-compile and execute on ARM**. Part B compiled the freestanding program and
+reported the true seam list (no MinGW flood). Note gcc *parses* every `static
+inline` in the header, so this is the **whole runtime's** libc surface, not just a
+minimal program's — which is why gating whole subsystems is the big lever:
+
+1. **Gate std-only subsystems under `#ifndef TAURARO_KERNEL`** (biggest reduction):
+   file I/O (`fopen`/`fclose`/`fflush`/`fgets`/`fread`/`fwrite`/`fseek`/`ftell`/
+   `rewind`/`fputs`/`remove`/`rename`), channels (`_tr_chan_*`), threads
+   (`_tr_thread_*`), timers (`_tr_ticker_new`/`_tr_timer_new`/`_tr_sleep_ms`), env
+   (`getenv`), `exit`, `printf`. These are whole subsystems a freestanding program
+   never parses. Additive-under-kernel → hosted can't regress.
+2. **Complete libc-lite** (`TAURARO_KERNEL && !__KERNEL__`): ctype
+   (`isalnum`/`isalpha`/`isdigit`/`islower`/`isupper`/`isspace`/`tolower`/`toupper`),
+   string (`strcpy`/`strstr`/`strtok`/`strdup`), `isinf`/`isnan` (bit checks), and
+   the hard one — **`snprintf`/`sprintf`** (integer formatting for `to_str`; a
+   freestanding integer `snprintf` is tractable, float is the stretch). `qsort`/
+   `rand`/`strtod`/`strtoll` belong to gate-able stdlib.
+3. **Investigate first — the suspicious core seams.** `_tr_str_new`,
+   `_tr_checked_alloc`, `_tr_obj_release`, `_tr_str_*`, and even raw `malloc`/`free`
+   appear implicit — those are *defined* in the header, so their showing up implies
+   the header may be **failing early** under `TAURARO_KERNEL` on arm-none-eabi (a
+   likely culprit: `<stdatomic.h>` without atomic support, or a libc-lite/builtin
+   clash), making everything after it implicit. Reproduce by compiling with plain
+   `-Wimplicit-function-declaration` (not `-Werror`) and reading the *first* real
+   error. Fix that before chasing the long list — it may collapse most of it.
+4. **Codegen: gate the top-level exception frame** (`setjmp`/`longjmp`/
+   `_tr_exc_push`) under `--no-std` — the compiler change that Phase 1b/4 owns.
+
 > **Sequencing correction (learned this session):** MinGW is **not** a faithful
 > freestanding target — its `<stdatomic.h>` pulls x86 intrinsic headers, flooding a
 > `TAURARO_KERNEL` compile with unrelated `__builtin_ia32_*` errors. So the local

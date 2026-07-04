@@ -56,6 +56,14 @@ else
          -c build/main.c -o /tmp/fs_main.o 2>/tmp/arm_cc.log; then
         echo "  BOUNDARY CLEAN — main.c compiles freestanding with no libc leak"
     else
+        # First, surface any HARD (non-implicit) errors — an early header failure
+        # (e.g. <stdatomic.h> without atomics) makes everything after it look
+        # implicit, so the *first real* error is what to fix. See docs/dev/08 §3.
+        hard="$(grep -E "error:" /tmp/arm_cc.log | grep -viE "implicit declaration|__builtin_ia32" | head -5)"
+        if [ -n "$hard" ]; then
+            echo "  FIRST HARD ERRORS (likely the early-header-failure root cause):"
+            echo "$hard" | sed 's/^/    /'
+        fi
         echo "  boundary report — remaining libc seams the compiler's --no-std must gate:"
         grep -oiE "implicit declaration of function '[a-z_0-9]+'" /tmp/arm_cc.log \
             | grep -viE "__builtin_ia32|_x(abort|test|begin|end)" | sort -u | sed 's/^/    /'

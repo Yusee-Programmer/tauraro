@@ -293,9 +293,10 @@ jobs:
 
       - name: Cross-compile gate (edge aarch64 run + bare-metal boundary)
         if: runner.os == 'Linux'
-        # Non-blocking until the aarch64/qemu path is proven in CI (it runs and
-        # reports; flip to blocking once green). Bare-metal (B) is informational.
-        continue-on-error: true
+        # Blocking: part A (edge aarch64 build + qemu run) is PROVEN green and now
+        # guards the std runtime's ARM cross-compilability. Part B (bare-metal
+        # boundary) stays informational *within* the script (non-fatal) — it reports
+        # the remaining seams to gate; see docs/dev/08.
         shell: bash
         run: TAURAROC=./tauraroc${{ matrix.ext }} bash scripts/cross_check.sh
 

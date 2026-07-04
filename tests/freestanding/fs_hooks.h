@@ -1,6 +1,7 @@
 /* Freestanding platform hooks for the arm-none-eabi boundary check. Defines the
  * tier + a pluggable allocator so the runtime pulls NO libc allocator. */
 #define TAURARO_KERNEL
+#define TAURARO_BARE     /* gate the async-pool cleanup emitted in main() */
 #include <stddef.h>
 void* _fs_alloc(size_t);   void  _fs_free(void*);
 void* _fs_realloc(void*, size_t);   void* _fs_calloc(size_t, size_t);
