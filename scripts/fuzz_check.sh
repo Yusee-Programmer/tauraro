@@ -24,6 +24,11 @@ if [ ! -x "$TAURAROC" ] && [ -x "./tauraroc" ]; then TAURAROC="./tauraroc"; fi
 CC="${CC:-gcc}"
 PY="$(command -v python3 || command -v python)"
 COUNT="${1:-50}"
+if [ ! -f tests/fuzz/gen.py ]; then
+    echo "FATAL: tests/fuzz/gen.py not found (is it committed? a broad .gitignore *.py rule can hide it)."
+    exit 1
+fi
+if [ -z "$PY" ]; then echo "FATAL: python3 not found on PATH."; exit 1; fi
 WARN="-Wno-string-compare -Wno-comment -Wno-attributes -Wno-unused-value"
 LIBS="-lm"
 case "$(uname -s 2>/dev/null)" in *NT*|*MINGW*|*MSYS*|*CYGWIN*) LIBS="-lm -lws2_32 -mconsole";; esac

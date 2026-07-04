@@ -1,0 +1,17 @@
+# Bare-metal (arm-none-eabi, core/alloc tier) boundary check: no OS, no print —
+# computes into a Vec and hands the result to an extern platform hook. Compiled
+# freestanding with a custom bump allocator; used to map the remaining libc seams.
+extern "C":
+    def _fs_result(n: int)
+def main():
+    mut v = Vec[int].init(2)
+    mut i = 0
+    while i < 100:
+        v.push(i)
+        i = i + 1
+    mut s = 0
+    mut j = 0
+    while j < v.len:
+        s = s + v.get(j)
+        j = j + 1
+    _fs_result(s)

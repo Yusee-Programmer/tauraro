@@ -28,3 +28,12 @@ bootstrap/*.zip
 !bootstrap/c/
 !bootstrap/c/**
 
+
+# --- Test SOURCE files that must be tracked despite the broad *.py/*.c rules ---
+# The ownership fuzzer generator and the bare-metal platform harness are source,
+# not build artifacts. (git check-ignore was hiding them from CI.)
+!tests/fuzz/gen.py
+!tests/freestanding/platform.c
+# Python bytecode is never source:
+__pycache__/
+*.pyc

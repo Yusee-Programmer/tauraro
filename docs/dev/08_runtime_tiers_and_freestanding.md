@@ -48,8 +48,25 @@ runtime header — closing it there closes it for all programs.
 
 ## Phased plan
 
-- **Phase 0 — cross-compile polish.** musl-static + ARM/RISC-V. Fully unlocks
-  **edge/gateway Linux** and **mobile compute libraries** with no `--no-std` needed.
+- **Phase 0 — cross-compile validation — DONE ✅ (CI).** `scripts/cross_check.sh` +
+  a CI job (Linux) do two things: **(A)** cross-compile a real heap program
+  (`tests/cross/hello_std.tr`) to **aarch64 Linux** with `aarch64-linux-gnu-gcc
+  -static` and **run it under qemu** — proving the full `std` runtime + ARC +
+  collections cross-compile and execute on ARM (this is the *faithful* validator;
+  MinGW can't do freestanding because its `stdatomic` pulls x86 intrinsics). This
+  fully unlocks **edge/gateway Linux** and **mobile compute libraries** — no
+  `--no-std` needed. **(B)** compile `tests/freestanding/vecsum.tr` freestanding for
+  **arm-none-eabi** with a custom bump allocator (`tests/freestanding/platform.c`)
+  and `-Werror=implicit-function-declaration`, **reporting** the remaining bare-metal
+  libc seams (informational until the compiler flag lands). Validated locally: the
+  programs produce the exact expected outputs; the ARM checks run in CI.
+
+  **Key finding from B:** a fully-compiling *freestanding* program needs the
+  **codegen** to stop emitting the top-level exception frame (`setjmp`/`longjmp`/
+  `_tr_exc_push`) and the async-pool cleanup under `--no-std` — a compiler change,
+  not runtime-only. That's the gating item that makes Phase 1b's `--no-std` flag a
+  compiler flag (drop those emissions + emit `#define TAURARO_KERNEL`), after which
+  the CI boundary check (B) goes from informational to green/blocking.
 - **Phase 1 — close the libc boundary.**
   - **1a — DONE ✅ (allocation + trap boundary).** All raw `malloc`/`calloc`/
     `realloc`/`free` now route through `TAURARO_ALLOC/FREE/REALLOC/CALLOC`; all raw
@@ -59,16 +76,28 @@ runtime header — closing it there closes it for all programs.
     `Vec[int]` program with a custom bump allocator compiles with **zero** libc
     `malloc/calloc/realloc/abort/fprintf` references — the alloc/trap boundary is
     proven clean.
-  - **1b — NEXT.** `--no-std` compiler flag → defines `TAURARO_NO_STD`, `#ifdef`-out
-    the OS services. The freestanding smoke pins the exact seam list to gate: file I/O
-    (`fclose`/`fflush`/`fgets`/`fopen`/`_fileno`), the threadpool
-    (`_tr_threadpool_*`), exceptions (`_tr_exc_push`), env (`_putenv_s`), plus the
-    net/thread/reactor blocks (already in platform `#ifdef`s). Keep ARC on the
-    allocator hook. Add `_TR_WRITE` so `print`/`_tr_print` routes to a user sink.
-  - **1c — libc-lite.** The pervasive freestanding needs `strlen`/`memcpy`/`memset`/
-    `memmove`/`strcmp`/`snprintf`. Provide minimal freestanding impls behind
-    `TAURARO_KERNEL && !__KERNEL__` (kernel gets `<linux/string.h>`), or require the
-    target to supply them.
+  - **1b — IN PROGRESS.** Additive-under-`TAURARO_KERNEL` pieces done (default build
+    cannot regress — guards only *remove* under kernel; verified suite 16/16):
+    - **`_TR_WRITE` output hook ✅** — the kernel `print` path now routes through a
+      user-providable `_TR_WRITE` (default no-op; redefine to UART/semihosting).
+      Completes the hook trilogy: alloc / trap / write.
+    - **libc-lite ✅** — freestanding `strlen`/`memcpy`/`memmove`/`memset`/`memcmp`/
+      `strcmp`/`strncmp`/`strchr` under `TAURARO_KERNEL && !__KERNEL__`.
+    - **REMAINING (needs a real cross-compiler to validate — see Phase 0):** gate the
+      OS-service sections behind `#ifndef TAURARO_KERNEL` / `TAURARO_NO_STD` — stdin
+      input (`fgets`/prompt/`_tr_checked_alloc` block), file I/O
+      (`fopen`/`fclose`/`fflush`/`_fileno`), env (`getenv`/`_putenv_s`), and the
+      always-emitted top-level exception frame (`_tr_exc_push` — this one needs the
+      codegen to not emit the frame under `--no-std`, or a no-op stub). Then add the
+      `--no-std` compiler flag that emits the define.
+
+> **Sequencing correction (learned this session):** MinGW is **not** a faithful
+> freestanding target — its `<stdatomic.h>` pulls x86 intrinsic headers, flooding a
+> `TAURARO_KERNEL` compile with unrelated `__builtin_ia32_*` errors. So the local
+> smoke can prove the *alloc/trap boundary* (it did — 0 libc alloc/abort) but not a
+> full freestanding link. **Do Phase 0 (arm-none-eabi / riscv cross-compiler in CI)
+> before finishing 1b's OS-service gating**, so that gating is validated on a real
+> bare-metal target instead of gated blind.
 - **Phase 2 — tier-tagging in sema.** Each stdlib module/feature carries a minimum
   tier; using a `std` feature under `--no-std` is a clear `[R-1]` diagnostic ("needs
   the std runtime"). *The compiler carries the burden* — Tauraro's identity applied

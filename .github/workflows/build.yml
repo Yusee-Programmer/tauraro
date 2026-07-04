@@ -275,6 +275,30 @@ jobs:
           LDFLAGS: "-lm -lpthread -lrt"
         run: bash scripts/reactor_stress.sh
 
+      # -------------------------------------------------------
+      # Cross-compilation gate (Linux). (A) edge/gateway: cross-compile a real
+      # heap program to aarch64 Linux and RUN it under qemu — proves the std
+      # runtime + ARC cross-compile and execute on ARM. (B) bare-metal: compile a
+      # no-OS program freestanding for arm-none-eabi with a custom bump allocator
+      # and NO libc, reporting the remaining seams. See docs/dev/08. This is the
+      # faithful validator (MinGW can't do freestanding — its stdatomic pulls x86
+      # intrinsics). Uses a real cross-toolchain instead.
+      # -------------------------------------------------------
+      - name: Install cross toolchains (aarch64 + arm-none-eabi + qemu)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu qemu-user-static gcc-arm-none-eabi
+
+      - name: Cross-compile gate (edge aarch64 run + bare-metal boundary)
+        if: runner.os == 'Linux'
+        # Non-blocking until the aarch64/qemu path is proven in CI (it runs and
+        # reports; flip to blocking once green). Bare-metal (B) is informational.
+        continue-on-error: true
+        shell: bash
+        run: TAURAROC=./tauraroc${{ matrix.ext }} bash scripts/cross_check.sh
+
       - name: Clean up generated build output
         shell: bash
         run: |

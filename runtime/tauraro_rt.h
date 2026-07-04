@@ -117,6 +117,24 @@
 #  endif
 #endif
 
+/* ââ Freestanding libc-lite ââ *
+ * Bare-metal (TAURARO_KERNEL, non-Linux-kernel) has no <string.h>; provide the
+ * minimal mem/str primitives the core runtime needs. Kernel mode already pulled
+ * <linux/string.h>; hosted has libc. A target may predefine any of these. */
+#if defined(TAURARO_KERNEL) && !defined(__KERNEL__)
+#ifndef _TR_HAVE_STRING
+static inline size_t strlen(const char* s){ size_t n=0; while(s[n]) n++; return n; }
+static inline void*  memcpy(void* d,const void* s,size_t n){ unsigned char* a=(unsigned char*)d; const unsigned char* b=(const unsigned char*)s; for(size_t i=0;i<n;i++) a[i]=b[i]; return d; }
+static inline void*  memmove(void* d,const void* s,size_t n){ unsigned char* a=(unsigned char*)d; const unsigned char* b=(const unsigned char*)s; if(a<b){for(size_t i=0;i<n;i++)a[i]=b[i];}else{for(size_t i=n;i>0;i--)a[i-1]=b[i-1];} return d; }
+static inline void*  memset(void* d,int c,size_t n){ unsigned char* a=(unsigned char*)d; for(size_t i=0;i<n;i++) a[i]=(unsigned char)c; return d; }
+static inline int    memcmp(const void* x,const void* y,size_t n){ const unsigned char* a=(const unsigned char*)x; const unsigned char* b=(const unsigned char*)y; for(size_t i=0;i<n;i++){ if(a[i]!=b[i]) return (int)a[i]-(int)b[i]; } return 0; }
+static inline int    strcmp(const char* a,const char* b){ while(*a && *a==*b){a++;b++;} return (int)(unsigned char)*a-(int)(unsigned char)*b; }
+static inline int    strncmp(const char* a,const char* b,size_t n){ for(size_t i=0;i<n;i++){ if(a[i]!=b[i]) return (int)(unsigned char)a[i]-(int)(unsigned char)b[i]; if(!a[i]) break; } return 0; }
+static inline char*  strchr(const char* s,int c){ for(;*s;s++){ if(*s==(char)c) return (char*)s; } return c?0:(char*)s; }
+#endif
+#endif
+
+
 /* ── Thread stack size ───────────────────────────────────────────────────── *
  * Override before including this header: -DTAURARO_THREAD_STACK_SIZE=N       *
  * 0 = use OS default (POSIX: skips setstacksize; Win32: passes 0 to          *
@@ -265,9 +283,14 @@ static inline void _tr_print(char* s) { printf("%s\n", s); }
 static inline void _tr_print_raw(char* s) { printf("%s", s); fflush(stdout); }
 static inline void _tr_eprint(char* s) { _TR_DIAG("%s\n", s); fflush(stderr); }
 #else
-static inline void _tr_print(char* s) { (void)s; }
-static inline void _tr_print_raw(char* s) { (void)s; }
-static inline void _tr_eprint(char* s) { (void)s; }
+#ifndef _TR_WRITE
+#  define _TR_WRITE(s) ((void)(s))   /* freestanding sink: redefine to UART/semihosting */
+#endif
+static inline void _tr_print(char* s) { _TR_WRITE(s); _TR_WRITE("
+"); }
+static inline void _tr_print_raw(char* s) { _TR_WRITE(s); }
+static inline void _tr_eprint(char* s) { _TR_WRITE(s); _TR_WRITE("
+"); }
 #endif
 
 static inline void* _tr_c_realloc(void* ptr, size_t size) {
