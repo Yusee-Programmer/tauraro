@@ -238,6 +238,27 @@ jobs:
         run: TAURAROC=./tauraroc${{ matrix.ext }} bash scripts/run_concurrency.sh
 
       # -------------------------------------------------------
+      # Ownership fuzz oracle: generate random ownership-stressing programs and
+      # subject each to (1) differential elision (elided == pure-ARC output),
+      # (2) net-leak accounting, and (3) AddressSanitizer (double-free / UAF) on
+      # Linux. Turns "found by accident" into "found by CI" for the drop/escape
+      # analysis. tests/fuzz/FINDINGS.md tracks known-open patterns (HARD tier);
+      # the CORE tier here must stay green. See scripts/fuzz_check.sh.
+      # -------------------------------------------------------
+      - name: Ownership fuzz oracle (Linux, +ASan)
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          CC: "gcc"
+          ASAN: "1"
+        run: TAURAROC=./tauraroc${{ matrix.ext }} bash scripts/fuzz_check.sh 120
+
+      - name: Ownership fuzz oracle (macOS / Windows, differential + leak)
+        if: runner.os != 'Linux'
+        shell: bash
+        run: TAURAROC=./tauraroc${{ matrix.ext }} bash scripts/fuzz_check.sh 60
+
+      # -------------------------------------------------------
       # Reactor stress gate: a green-thread echo server hammered by concurrent
       # keep-alive clients, exercising the REAL readiness reactor (epoll on
       # Linux, kqueue on macOS) and its per-request re-arm path. Guards reactor
