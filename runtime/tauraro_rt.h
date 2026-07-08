@@ -1937,6 +1937,10 @@ static inline void  _tr_tls_free_h(char* t)                                    {
 
 /* ── Core runtime helpers ────────────────────────────────────────────── */
 
+/* stdin-reading builtins: std-tier only (need <stdio.h>'s stdin). Bare-metal has
+ * no console — stub to empty so a freestanding program that never calls input()
+ * still compiles (and one that does gets "" rather than a link error). */
+#ifndef TAURARO_BARE
 static char* input(const char* prompt) {
     if (prompt) printf("%s", prompt);
     char* buf = (char*)malloc(256);
@@ -1960,6 +1964,10 @@ static char* _tr_read_line(const char* prompt) {
     free(buf);
     return _tr_empty_heap_str();
 }
+#else
+static char* input(const char* prompt) { (void)prompt; return _tr_empty_heap_str(); }
+static char* _tr_read_line(const char* prompt) { (void)prompt; return _tr_empty_heap_str(); }
+#endif
 static void yield_val(void* v) { (void)v; }
 
 /* ── LSP / stdio primitives ──────────────────────────────────────────────
@@ -2009,6 +2017,9 @@ static int64_t _tr_int_lcm(int64_t a, int64_t b) {
 
 /* Map update/clear defined after TrMap typedef below */
 
+/* stdin/stdout/tty/env primitives (LSP, JSON-RPC, NO_COLOR): std-tier only.
+ * Gated so a bare-metal build parses past here; stubs keep any caller linkable. */
+#ifndef TAURARO_BARE
 /* Read one line from stdin.  Returns the raw line INCLUDING any trailing
  * \r\n so callers can distinguish a blank separator ("\r\n") from true
  * EOF ("").  Never strips — the Tauraro caller calls .trim() itself.   */
@@ -2062,6 +2073,14 @@ static int64_t _tr_env_set(const char* name) {
     const char* v = getenv(name);
     return (v && v[0]) ? 1 : 0;
 }
+#else  /* TAURARO_BARE: no console / tty / env */
+static char* _tr_read_stdin_line(void) { return _tr_empty_heap_str(); }
+static char* _tr_read_stdin_bytes(int64_t n) { (void)n; return _tr_empty_heap_str(); }
+static void _tr_write_stdout(const char* s) { _TR_WRITE(s); }
+static void _tr_flush_stdout(void) { }
+static int64_t _tr_stdin_isatty(void) { return 0; }
+static int64_t _tr_env_set(const char* name) { (void)name; return 0; }
+#endif
 
 /* The ESC control byte (0x1b) as an owned string. Lets the diagnostics module
  * build ANSI sequences without depending on core.string (StringBuilder).     */
@@ -3058,7 +3077,8 @@ static inline char* _tr_readdir(void* handle) {
 static inline void _tr_closedir(void* handle)       { if (handle) closedir((DIR*)handle); }
 #endif
 
-/* ── File-system helpers ─────────────────────────────────────────────── */
+/* ── File-system helpers ──────── std-tier only (remove/rename/FILE) ──── */
+#ifndef TAURARO_BARE
 static inline int  _tr_file_delete(const char* path)                     { return remove(path) == 0 ? 0 : -1; }
 static inline int  _tr_file_rename(const char* old_p, const char* new_p) { return rename(old_p, new_p) == 0 ? 0 : -1; }
 static inline long long _tr_file_size(const char* path) {
@@ -3066,6 +3086,11 @@ static inline long long _tr_file_size(const char* path) {
     FILE* f = fopen(path, "rb"); if (!f) return -1LL;
     fseek(f, 0, SEEK_END); long long sz = (long long)ftell(f); fclose(f); return sz;
 }
+#else
+static inline int  _tr_file_delete(const char* path)                     { (void)path; return -1; }
+static inline int  _tr_file_rename(const char* old_p, const char* new_p) { (void)old_p; (void)new_p; return -1; }
+static inline long long _tr_file_size(const char* path)                  { (void)path; return -1LL; }
+#endif
 
 /* _tr_c_memset defined above */
 
