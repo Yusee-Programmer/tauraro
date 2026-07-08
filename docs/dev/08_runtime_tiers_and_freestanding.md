@@ -91,6 +91,21 @@ runtime header — closing it there closes it for all programs.
       codegen to not emit the frame under `--no-std`, or a no-op stub). Then add the
       `--no-std` compiler flag that emits the define.
 
+### MILESTONE: bare-metal boundary CLOSED for arm/riscv ✅
+
+After the iterative CI-driven descent below, the arm-none-eabi bare compile went
+**33 → 8 → 4 → 0 arm-relevant seams**. The runtime header now parses and compiles
+freestanding (no libc) on a real embedded target. The last batch: raw `malloc`/
+`calloc`/`realloc`/`free` (used by the platform concurrency primitives) now route
+through the pluggable `TAURARO_ALLOC/…` macros via bare-only wrappers, and
+`_tr_stdout_supports_ansi` returns 0 under `TAURARO_BARE`. The **only** residual
+errors are `_WIN32`+`TAURARO_BARE` (bare-metal-*on-Windows*: `_fileno`/`_putenv_s`/
+`fflush`/the Windows-branch threadpool) — a niche non-target (you cross-compile for
+bare metal; you don't target Windows-as-MCU). Gating those is the same
+`#if defined(_WIN32) && !defined(TAURARO_BARE)` pattern, deferred as low-value.
+Remaining for a *linkable* freestanding binary: the codegen `--no-std` flag (drop
+the top-level exception frame) — Phase 4.
+
 ### Authoritative bare-metal seam map (from CI, arm-none-eabi)
 
 Part A of the CI gate is **GREEN** — `hello_std.tr` cross-compiles to aarch64 and
