@@ -87,6 +87,11 @@
 #    include <linux/kernel.h>
 #    include <linux/slab.h>
 #    include <linux/string.h>
+#  else
+     /* Bare-metal (non-Linux-kernel, e.g. arm-none-eabi/newlib): setjmp.h is a
+      * freestanding header and is needed by the bare-metal panic buffer
+      * (_tr_thread_panic_jmpbuf) — without it 'jmp_buf' is undeclared. */
+#    include <setjmp.h>
 #  endif
 #endif
 
@@ -115,6 +120,13 @@
 #  ifndef TAURARO_CALLOC
 #    define TAURARO_CALLOC(n,sz)   calloc(n,sz)
 #  endif
+#endif
+
+/* Normalize the freestanding tier flags: TAURARO_KERNEL (no libc) and
+ * TAURARO_NO_OS (bare-metal target) both imply TAURARO_BARE — the canonical
+ * "no OS services" flag used to gate file I/O / env / process / stdin below. */
+#if (defined(TAURARO_KERNEL) || defined(TAURARO_NO_OS)) && !defined(TAURARO_BARE)
+#  define TAURARO_BARE
 #endif
 
 /* ââ Freestanding libc-lite ââ *
@@ -531,6 +543,11 @@ static inline void _tr_weak_drop(_TrWeakBox* w) {
 static inline void* _tr_c_memcpy(void* dst, void* src, size_t n) { return memcpy(dst, src, n); }
 static inline void* _tr_c_memset(void* ptr, int val, size_t n) { return memset(ptr, val, n); }
 static inline void* _tr_c_memmove(void* dst, void* src, size_t n) { return memmove(dst, src, n); }
+/* File I/O + env: std-tier only (need <stdio.h>'s FILE / getenv). Gated so a
+ * freestanding (TAURARO_BARE) build parses past here — leaving these ungated was
+ * the 'FILE undeclared' early-header-failure that made everything after look
+ * implicit on bare-metal. */
+#ifndef TAURARO_BARE
 static inline void* _tr_c_fopen(const char* path, const char* mode) { return (void*)fopen(path, mode); }
 static inline int _tr_c_fclose(void* fp) { return fclose((FILE*)fp); }
 static inline size_t _tr_c_fread(void* ptr, size_t size, size_t nmemb, void* fp) { return fread(ptr, size, nmemb, (FILE*)fp); }
@@ -538,6 +555,9 @@ static inline size_t _tr_c_fwrite(const void* ptr, size_t size, size_t nmemb, vo
 static inline int _tr_c_fseek(void* fp, long offset, int whence) { return fseek((FILE*)fp, offset, whence); }
 static inline long _tr_c_ftell(void* fp) { return ftell((FILE*)fp); }
 static inline char* _tr_getenv(const char* name) { char* v = getenv(name); return v ? v : ""; }
+#else
+static inline char* _tr_getenv(const char* name) { (void)name; return (char*)""; }
+#endif
 #ifdef _WIN32
 static inline int _tr_setenv(const char* name, const char* value) { return _putenv_s(name, value) == 0 ? 0 : -1; }
 static inline int _tr_unsetenv(const char* name) { return _putenv_s(name, "") == 0 ? 0 : -1; }

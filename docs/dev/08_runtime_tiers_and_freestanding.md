@@ -112,14 +112,22 @@ minimal program's — which is why gating whole subsystems is the big lever:
    the hard one — **`snprintf`/`sprintf`** (integer formatting for `to_str`; a
    freestanding integer `snprintf` is tractable, float is the stretch). `qsort`/
    `rand`/`strtod`/`strtoll` belong to gate-able stdlib.
-3. **Investigate first — the suspicious core seams.** `_tr_str_new`,
-   `_tr_checked_alloc`, `_tr_obj_release`, `_tr_str_*`, and even raw `malloc`/`free`
-   appear implicit — those are *defined* in the header, so their showing up implies
-   the header may be **failing early** under `TAURARO_KERNEL` on arm-none-eabi (a
-   likely culprit: `<stdatomic.h>` without atomic support, or a libc-lite/builtin
-   clash), making everything after it implicit. Reproduce by compiling with plain
-   `-Wimplicit-function-declaration` (not `-Werror`) and reading the *first* real
-   error. Fix that before chasing the long list — it may collapse most of it.
+3. **Early-header-failure — DIAGNOSED & FIXED.** The "core seams" (`_tr_str_new`,
+   `_tr_checked_alloc`, raw `malloc`/`free`, …) were a **cascade**: the CI's
+   first-hard-error probe pinpointed `tauraro_rt.h:535: 'FILE' undeclared` — the file
+   I/O helpers (`_tr_c_fopen`/`fclose`/`fread`/…) and `_tr_getenv` were *ungated*, so
+   under bare-metal (no `<stdio.h>`) `FILE` was undeclared, gcc derailed, and
+   *everything after* looked implicit. **Fixes:** (a) normalize the tier flags so
+   `TAURARO_KERNEL`/`TAURARO_NO_OS` ⇒ `TAURARO_BARE` (the existing stub convention);
+   (b) gate the file-I/O + env helpers under `#ifndef TAURARO_BARE` (bare gets a
+   `_tr_getenv`→`""` stub); (c) add `<setjmp.h>` to the bare (non-`__KERNEL__`)
+   include set — the next hard error was `jmp_buf` undeclared, needed by the
+   bare-metal panic buffer. Both hard type-errors now resolve and hosted stays
+   byte-identical (suite 16/16). (The remaining *local* MinGW errors — `stderr`,
+   `_tr_time_ns`/`_tr_path_canonicalize` redefs — are all inside `#ifdef _WIN32`
+   Windows blocks, which arm-none-eabi skips; they're a niche "bare-metal-on-Windows"
+   latent issue, not on the arm path.) Next CI run should drop past the hard errors
+   to the pure implicit-decl list = items 1 (gate std subsystems) + 2 (libc-lite).
 4. **Codegen: gate the top-level exception frame** (`setjmp`/`longjmp`/
    `_tr_exc_push`) under `--no-std` — the compiler change that Phase 1b/4 owns.
 
