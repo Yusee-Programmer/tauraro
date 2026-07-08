@@ -4343,7 +4343,8 @@ static inline void StringBuilder_free(StringBuilder* sb) {
 }
 #endif /* TAURARO_RT_NO_STRINGBUILDER */
 
-/* ── File I/O helpers ────────────────────────────────────────────────── */
+/* ── File I/O helpers ──────── std-tier only (FILE/fopen) ────────────── */
+#ifndef TAURARO_BARE
 static inline char* read_file(char* path) {
     /* Owned `-> str` (success path allocs `buf`); error paths must also be heap. */
     if (!path || !*path) return _tr_empty_heap_str();
@@ -4378,6 +4379,12 @@ static inline bool file_exists(char* path) {
     if (!f) return false;
     fclose(f); return true;
 }
+#else
+static inline char* read_file(char* path) { (void)path; return _tr_empty_heap_str(); }
+static inline bool write_file(char* path, char* content) { (void)path; (void)content; return false; }
+static inline bool append_file(char* path, char* content) { (void)path; (void)content; return false; }
+static inline bool file_exists(char* path) { (void)path; return false; }
+#endif
 #endif /* TAURARO_STD_LIB */
 #endif /* TAURARO_NO_RT_HELPERS */
 
@@ -4387,9 +4394,10 @@ static inline char* _tr_c_strdup(char* s) {
 #define _tr_strdup _tr_c_strdup
 
 
-static inline double _tr_get_inf(void) { return (double)INFINITY; }
-static inline bool   _tr_is_inf(double x) { return isinf(x) != 0; }
-static inline bool   _tr_is_nan(double x) { return isnan(x) != 0; }
+/* Use compiler builtins (no <math.h>) so these work at every tier. */
+static inline double _tr_get_inf(void) { return __builtin_inf(); }
+static inline bool   _tr_is_inf(double x) { return __builtin_isinf(x) != 0; }
+static inline bool   _tr_is_nan(double x) { return __builtin_isnan(x) != 0; }
 
 
 #ifdef _WIN32
