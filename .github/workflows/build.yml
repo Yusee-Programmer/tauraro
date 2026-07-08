@@ -238,6 +238,27 @@ jobs:
         run: TAURAROC=./tauraroc${{ matrix.ext }} bash scripts/run_concurrency.sh
 
       # -------------------------------------------------------
+      # Ownership fuzz oracle: generate random ownership-stressing programs and
+      # subject each to (1) differential elision (elided == pure-ARC output),
+      # (2) net-leak accounting, and (3) AddressSanitizer (double-free / UAF) on
+      # Linux. Turns "found by accident" into "found by CI" for the drop/escape
+      # analysis. tests/fuzz/FINDINGS.md tracks known-open patterns (HARD tier);
+      # the CORE tier here must stay green. See scripts/fuzz_check.sh.
+      # -------------------------------------------------------
+      - name: Ownership fuzz oracle (Linux, +ASan)
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          CC: "gcc"
+          ASAN: "1"
+        run: TAURAROC=./tauraroc${{ matrix.ext }} bash scripts/fuzz_check.sh 120
+
+      - name: Ownership fuzz oracle (macOS / Windows, differential + leak)
+        if: runner.os != 'Linux'
+        shell: bash
+        run: TAURAROC=./tauraroc${{ matrix.ext }} bash scripts/fuzz_check.sh 60
+
+      # -------------------------------------------------------
       # Reactor stress gate: a green-thread echo server hammered by concurrent
       # keep-alive clients, exercising the REAL readiness reactor (epoll on
       # Linux, kqueue on macOS) and its per-request re-arm path. Guards reactor
@@ -253,6 +274,31 @@ jobs:
           CFLAGS: "-O2 -std=gnu11 -D_GNU_SOURCE -D_XOPEN_SOURCE=700"
           LDFLAGS: "-lm -lpthread -lrt"
         run: bash scripts/reactor_stress.sh
+
+      # -------------------------------------------------------
+      # Cross-compilation gate (Linux). (A) edge/gateway: cross-compile a real
+      # heap program to aarch64 Linux and RUN it under qemu — proves the std
+      # runtime + ARC cross-compile and execute on ARM. (B) bare-metal: compile a
+      # no-OS program freestanding for arm-none-eabi with a custom bump allocator
+      # and NO libc, reporting the remaining seams. See docs/dev/08. This is the
+      # faithful validator (MinGW can't do freestanding — its stdatomic pulls x86
+      # intrinsics). Uses a real cross-toolchain instead.
+      # -------------------------------------------------------
+      - name: Install cross toolchains (aarch64 + arm-none-eabi + qemu)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu qemu-user-static gcc-arm-none-eabi
+
+      - name: Cross-compile gate (edge aarch64 run + bare-metal boundary)
+        if: runner.os == 'Linux'
+        # Blocking: part A (edge aarch64 build + qemu run) is PROVEN green and now
+        # guards the std runtime's ARM cross-compilability. Part B (bare-metal
+        # boundary) stays informational *within* the script (non-fatal) — it reports
+        # the remaining seams to gate; see docs/dev/08.
+        shell: bash
+        run: TAURAROC=./tauraroc${{ matrix.ext }} bash scripts/cross_check.sh
 
       - name: Clean up generated build output
         shell: bash

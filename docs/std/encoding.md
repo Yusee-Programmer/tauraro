@@ -6,10 +6,10 @@ Data encoding and decoding: JSON, Base64, and hexadecimal.
 
 ```tauraro
 # Import the whole module
-from std.encoding import JsonValue, Json, Base64, Hex
+from std.encoding import JsonDoc, JsonRef, JsonWriter, Json, Base64, Hex
 
 # Or import specific sub-modules
-from std.encoding.json   import JsonValue, Json, JsonParser
+from std.encoding.json   import JsonDoc, JsonRef, JsonWriter, Json
 from std.encoding.base64 import Base64
 from std.encoding.hex    import Hex
 ```
@@ -18,152 +18,132 @@ from std.encoding.hex    import Hex
 
 ## JSON — `std.encoding.json`
 
-A full JSON parser and serializer.  All JSON values are represented as `Pointer[JsonValue]`
-nodes allocated on the heap.  The `Json` class provides static helpers for the most common
-operations.
+A fast, memory-safe JSON parser and serializer. The API is **zero-copy** and uses
+**no raw pointers** — parsing builds a compact arena (`JsonDoc`), you read it through
+lightweight borrowed views (`JsonRef` / `StrView`), and you build output with a
+streaming `JsonWriter`. Everything is ARC-managed, so there is nothing to `free`
+manually (except the optional `JsonWriter.free()` fast path).
 
-### `JsonValue` class
+```tauraro
+from std.encoding.json import JsonDoc, JsonRef, JsonWriter, Json
+```
 
-Every JSON value is tagged with an integer discriminant:
+> **Migration note.** The old `Pointer[JsonValue]` tree API (with `.read()` and
+> manual `dispose()`) has been replaced. `.read()` on a raw pointer is now a `[P-2]`
+> error by default; use the safe `JsonDoc` / `JsonRef` / `JsonWriter` types below.
 
-| Tag | Constant helper | Meaning |
-|-----|-----------------|---------|
-| 0 | `JSON_NULL()` | `null` |
-| 1 | `JSON_BOOL()` | boolean |
-| 2 | `JSON_INT()` | integer |
-| 3 | `JSON_FLOAT()` | floating-point |
-| 4 | `JSON_STR()` | string |
-| 5 | `JSON_ARRAY()` | array |
-| 6 | `JSON_OBJ()` | object |
+### Parsing — `JsonDoc` + `JsonRef`
 
-#### Constructors (static)
+`Json.parse(src)` (or `JsonDoc.init(src)`) parses a string into a `JsonDoc` — a
+single arena that owns all of the document's structure and string bytes. You never
+index it directly; you navigate it through `JsonRef`, a tiny borrowed view
+(`@value_type`) that stays valid while the `JsonDoc` is alive.
 
-All constructors return `Pointer[JsonValue]`.
+```tauraro
+mut doc  = Json.parse("{\"x\": 42, \"items\": [1, 2, 3], \"name\": \"Tauraro\"}")
+mut root = doc.root()                 # -> JsonRef
+
+root.obj_get("x").get_int()           # 42
+root.obj_get("name").get_str()        # "Tauraro" (owned copy)
+root.obj_get("items").array_len()     # 3
+root.obj_get("items").array_get(0).get_int()   # 1
+# doc drops at scope end — the whole arena is reclaimed automatically
+```
+
+**`JsonRef` methods** (all borrow from the `JsonDoc`, no allocation):
+
+| Method | Returns | Notes |
+|--------|---------|-------|
+| `exists()` | `bool` | `false` for a missing key / out-of-range index |
+| `is_null()` `is_bool()` `is_int()` `is_float()` `is_str()` `is_array()` `is_object()` | `bool` | type check |
+| `get_bool()` `get_int()` `get_float()` | value | numeric / bool accessors |
+| `as_float()` | `float` | coerces an int node to float |
+| `get_str()` | `str` | **owned** copy of the string value |
+| `str_view()` | `StrView` | **zero-copy** borrowed view of the string bytes (no allocation) — see below |
+| `str_eq(other: str)` | `bool` | compare the string value without materializing it |
+| `obj_get(key: str)` | `JsonRef` | field lookup (returns a non-existent ref if absent) |
+| `obj_has(key: str)` | `bool` | key presence |
+| `array_len()` | `int` | element count |
+| `array_get(i: int)` | `JsonRef` | element by index |
+| `to_str()` | `str` | re-serialize this node (and its subtree) to a compact JSON string |
+
+**Zero-copy string reads.** For hot paths (routing, validation) that only need to
+*look at* a string, `str_view()` returns a `StrView` that borrows the doc's buffer —
+no allocation at all. Materialize it with `.to_str()` only when you must keep it:
+
+```tauraro
+mut method = root.obj_get("method").str_view()
+if method.eq("GET"): ...              # comparison, zero allocations
+mut owned = method.to_str()           # allocate only when storing it
+```
+
+### Writing — `JsonWriter`
+
+`JsonWriter` streams JSON directly into a growable buffer — no intermediate tree, no
+per-node allocation. Ideal for building responses.
+
+```tauraro
+mut w = JsonWriter.init(64)           # initial capacity in bytes
+w.field_str("status", "ok")           # {"status":"ok",
+w.field_int("count", 3)               #  "count":3}
+mut body = w.finish()                 # -> owned str; also frees the writer
+```
+
+Nested structures use the explicit begin/end + `key` / value calls:
+
+```tauraro
+mut w = JsonWriter.init(128)
+w.begin_object()
+    w.key("user"); w.begin_object()
+        w.field_str("name", "Ada")
+        w.field_int("id", 7)
+    w.end_object()
+    w.key("tags"); w.begin_array()
+        w.str_val("a"); w.str_val("b")
+    w.end_array()
+w.end_object()
+print(w.finish())   # {"user":{"name":"Ada","id":7},"tags":["a","b"]}
+```
+
+**`JsonWriter` methods:**
 
 | Method | Description |
 |--------|-------------|
-| `JsonValue.init_null()` | Create a `null` node |
-| `JsonValue.init_bool(b: bool)` | Create a boolean node |
-| `JsonValue.init_int(n: int)` | Create an integer node |
-| `JsonValue.init_float(f: float)` | Create a float node |
-| `JsonValue.init_str(s: str)` | Create a string node |
-| `JsonValue.init_array()` | Create an empty array node |
-| `JsonValue.init_object()` | Create an empty object node |
+| `init(capacity: int)` | new writer with a starting byte capacity |
+| `begin_object()` / `end_object()` | `{` … `}` |
+| `begin_array()` / `end_array()` | `[` … `]` |
+| `key(name: str)` | write an object key (call a value method next) |
+| `int_val(n)` / `str_val(s)` / `bool_val(b)` / `null_val()` | write a bare value |
+| `field_int(name, n)` / `field_str(name, s)` / `field_bool(name, b)` | key + value in one call |
+| `view()` | borrow the buffer as `str` **without** freeing (valid until the next write / `free`) |
+| `finish()` | return an **owned** `str` and free the writer |
+| `free()` | release the writer without producing a string |
 
-#### Type checks (`self` methods)
-
-```tauraro
-v.read().is_null()    -> bool
-v.read().is_bool()    -> bool
-v.read().is_int()     -> bool
-v.read().is_float()   -> bool
-v.read().is_str()     -> bool
-v.read().is_array()   -> bool
-v.read().is_object()  -> bool
-v.read().is_number()  -> bool   # true for int or float
-```
-
-#### Value getters
+### `Json` static helper
 
 ```tauraro
-v.read().get_bool()   -> bool
-v.read().get_int()    -> int
-v.read().get_float()  -> float
-v.read().get_str()    -> str
-v.read().as_float()   -> float  # coerces int to float if needed
-```
-
-#### Array operations
-
-```tauraro
-arr.read().push(item: Pointer[JsonValue])
-arr.read().array_get(i: int) -> Pointer[JsonValue]
-arr.read().array_len()       -> int
-```
-
-#### Object operations
-
-```tauraro
-obj.read().obj_set(key: str, v: Pointer[JsonValue])
-obj.read().obj_get(key: str) -> Pointer[JsonValue]   # returns null node if key absent
-obj.read().obj_has(key: str) -> bool
-obj.read().obj_len()         -> int
-obj.read().obj_key(i: int)   -> str
-obj.read().obj_val(i: int)   -> Pointer[JsonValue]
-```
-
-#### Serialization
-
-```tauraro
-v.read().to_str()              -> str   # compact JSON string
-v.read().to_pretty(indent: int) -> str  # pretty-printed with 2-space indentation
-                                         # (the `indent` parameter is currently unused)
-```
-
-### Resource cleanup
-
-`JsonValue` trees are heap-allocated and not managed by auto-drop. Call
-`v.read().dispose()` to recursively free a whole tree (child nodes, their
-`items`/`keys` lists, and the node itself) once you're done with it. Note that
-`dispose()` does **not** free `s_val` — string-node values are commonly string
-literals, which must never be passed to a free function.
-
-```tauraro
-mut v = Json.parse(src)
-# ... use v ...
-v.read().dispose()
-```
-
-### `Json` class (static API)
-
-```tauraro
-Json.parse(src: str)           -> Pointer[JsonValue]   # parse JSON string
-Json.stringify(v: Pointer[JsonValue]) -> str            # compact serialization
-Json.pretty(v: Pointer[JsonValue])    -> str            # 2-space indented
-Json.null_val()                -> Pointer[JsonValue]
-Json.bool_val(b: bool)         -> Pointer[JsonValue]
-Json.int_val(n: int)           -> Pointer[JsonValue]
-Json.float_val(f: float)       -> Pointer[JsonValue]
-Json.str_val(s: str)           -> Pointer[JsonValue]
-Json.array()                   -> Pointer[JsonValue]
-Json.object()                  -> Pointer[JsonValue]
-```
-
-### `JsonParser` class
-
-Low-level recursive-descent parser.  Use `Json.parse()` instead unless you need streaming or
-incremental parsing.
-
-```tauraro
-mut p = JsonParser.init(src: str)
-p.parse() -> Pointer[JsonValue]
+Json.parse(src: str) -> JsonDoc       # parse a string into an arena document
 ```
 
 ### Example
 
 ```tauraro
-from std.encoding.json import Json, JsonValue
+from std.encoding.json import Json, JsonWriter
 
 def main():
-    # Build a JSON object programmatically
-    mut obj = Json.object()
-    obj.read().obj_set("name",    Json.str_val("Tauraro"))
-    obj.read().obj_set("version", Json.int_val(1))
-    obj.read().obj_set("stable",  Json.bool_val(true))
+    # Parse
+    mut doc  = Json.parse("{\"x\": 42, \"y\": [1, 2]}")
+    mut root = doc.root()
+    print(root.obj_get("x").get_int())               # 42
+    print(root.obj_get("y").array_get(1).get_int())  # 2
 
-    mut arr = Json.array()
-    arr.read().push(Json.int_val(1))
-    arr.read().push(Json.int_val(2))
-    arr.read().push(Json.int_val(3))
-    obj.read().obj_set("items", arr)
-
-    print(Json.stringify(obj))
-    # → {"name":"Tauraro","version":1,"stable":true,"items":[1,2,3]}
-    print(Json.pretty(obj))
-
-    # Parse JSON from a string
-    mut v = Json.parse("{\"x\": 42, \"y\": [1, 2]}")
-    print(v.read().obj_get("x").read().get_int())   # → 42
+    # Build
+    mut w = JsonWriter.init(64)
+    w.begin_object()
+    w.field_str("name", "Tauraro")
+    w.field_bool("stable", true)
+    w.end_object()
+    print(w.finish())   # {"name":"Tauraro","stable":true}
 ```
 
 ---

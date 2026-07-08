@@ -10,7 +10,24 @@ These operations are quarantined behind the `unsafe:` keyword. Every `unsafe:` b
 
 **The goal of `unsafe:` is containment, not avoidance.** The keyword makes low-level operations visible and auditable — a safety reviewer can search for `unsafe:` and find every raw operation in the codebase in one pass.
 
-**`--strict` mode:** When the `--strict` flag is passed, using `alloc` or `dealloc` outside an `unsafe:` block is a compile error `[U-1]`.
+**Safe by default — no flag required.** Dereferencing a raw pointer (`.read()`) or
+doing pointer arithmetic (`.offset()`) outside an `unsafe:` block is a compile error
+`[P-2]` **on by default** — you don't need `--strict`. Together with ARC (no
+use-after-free / double-free), bounds-checked indexing, and immutable-by-default
+bindings, this means an *ordinary* Tauraro program is memory-safe with no flags at
+all: the **only** path to undefined behavior is an explicit `unsafe:` block. That is
+the same contract as Rust — reached with **zero lifetime annotations**.
+
+**`--strict` mode** adds the leak/allocation guarantees on top: using `alloc` or
+`dealloc` outside an `unsafe:` block becomes `[U-1]`, and `[S-2]` rejects
+strong-ownership cycles — so a `--strict` program that compiles is provably
+leak-free as well as memory-safe.
+
+> **`# @trusted` pragma.** The compiler's own source and the standard library are
+> marked `# @trusted` at the top of the module, which exempts them from `[P-2]` —
+> they *are* the audited unsafe core that implements the safe abstractions. User
+> code never needs `@trusted`; reach for a safe type (`List[T]`, `str`, `StrView`)
+> instead.
 
 ---
 
@@ -49,9 +66,9 @@ print(f"y = {y}, x = {x}")     # y = 42, x = 100
 | Operation | Why unsafe |
 |-----------|-----------|
 | `&x` address-of | Produces a raw pointer that ownership tracking cannot follow |
-| `p.read()` | May access freed or invalid memory |
-| `p.write(v)` | May corrupt memory — outside `unsafe:` this is a compile error `[P-1]` |
-| `p.offset(n)` | May produce an out-of-bounds pointer |
+| `p.read()` | May access freed or invalid memory — outside `unsafe:` this is `[P-2]` (**default-on**) |
+| `p.write(v)` | May corrupt memory — outside `unsafe:` this is `[P-1]` |
+| `p.offset(n)` | May produce an out-of-bounds pointer — outside `unsafe:` this is `[P-2]` (**default-on**) |
 | `alloc[T](n)` | Bypasses automatic memory management |
 | `dealloc(ptr)` | Bypasses ownership tracking |
 | `asm(...)` | Emits arbitrary machine instructions with side effects |

@@ -79,8 +79,17 @@ Under `--strict`, the compiler enforces:
   its region must be a declared parameter/region (`from`), and a borrow-returning
   function may not return freshly-owned data.
 - **No aliased mutable arguments `[M-x]`**, move-after-use, mutate-while-borrowed.
-- **Unsafe is explicit `[U-1]`/`[P-1]`.** Raw allocation and raw pointer
-  dereference are only allowed inside `unsafe:`.
+- **No strong-ownership cycles `[S-2]`.** A cycle of owning class references would
+  leak (its refcounts never reach zero); `--strict` rejects it (break it with a
+  `Weak[T]`/`Pointer[T]` non-owning edge). With `[U-1]` this upgrades INV-2 to a
+  *total* leak-freedom guarantee: a `--strict` program that compiles is provably
+  leak-free (all heap is ARC-managed, the ownership graph is acyclic).
+- **Manual allocation is explicit `[U-1]`.** `alloc`/`dealloc`/`alloc_array` are
+  only allowed inside `unsafe:`.
+
+Note that the raw-pointer gates are **not** `--strict`-only — they are on by
+default (see §4): `[P-2]` (raw deref `.read()` / arithmetic `.offset()`) and `[P-1]`
+(raw `.write()`) are errors outside `unsafe:` in *every* build.
 
 > **THM-ELISION (soundness of zero-copy).** If the compiler elides the
 > retain/release for a borrow `b` of source `s`, then `s` provably outlives `b`'s
@@ -98,9 +107,20 @@ by definition, an unsound elision.
 
 Inside `unsafe:`, INV-1..INV-3 are the programmer's responsibility for the raw
 operations performed (manual `alloc`/`dealloc`, raw `Pointer[T]` read/write, FFI).
-Safe code cannot reach these operations without the `unsafe:` keyword (`[U-1]`,
-`[P-1]`). Unsafe blocks are the *only* place the floor's guarantees are delegated to
-the author.
+Safe code cannot reach these operations without the `unsafe:` keyword:
+
+- `[P-2]` — raw pointer **deref** (`.read()`) and **arithmetic** (`.offset()`) —
+  **on by default**, no `--strict` needed.
+- `[P-1]` — raw pointer **write** (`.write()`) — on by default.
+- `[U-1]` — manual **allocation** (`alloc`/`dealloc`) — under `--strict`.
+
+Because `[P-2]`/`[P-1]` are default-on, an *ordinary* program (no flags) already has
+no way to reach undefined behavior except through an explicit `unsafe:` block — the
+same containment contract as Rust, with zero lifetime annotations. Unsafe blocks are
+the *only* place the floor's guarantees are delegated to the author. The compiler's
+own source and the standard library — the audited code that *implements* the safe
+abstractions — opt out of `[P-2]` with the `# @trusted` module pragma; user code
+never needs it.
 
 ---
 
@@ -121,33 +141,42 @@ the author.
   `Thread.spawn` is not scoped, so a borrowed value could be mutated or freed by
   another thread, or outlive its source — the same reason Rust's `thread::spawn`
   requires `'static`. Pass an owned value, a `Shared[T]`, or a `Mutex[T]`/`Atomic[T]`.
+- A **plain reference-counted class may not cross a thread boundary** (`[T-7]`).
+  Every heap class is ARC-managed; a *plain* class uses a **non-atomic** refcount,
+  so it is `!Send` exactly like Rust's `Rc` — two threads retaining/releasing it
+  would race the count. This is checked **transitively**: a plain class reached
+  through a `Mutex`, `Vec`, `Dict`, or another class's field is rejected too. The
+  fix is `Shared[T]`, whose refcount **is** atomic (`_Atomic`) — the `Arc`
+  equivalent. A framework may opt an audited class out with `UnsafeSendable`.
 - The ARC floor keeps cross-thread *memory* safe (no UAF) for shared handles.
 
-Together these give compile-time protection against the common data-race shapes:
-sharing non-thread-safe data (`[T-1]`), an under-synchronized `Sendable` type
-including data reachable *through* a shared handle (`[T-2]`, transitive), and
-sending a live borrow across threads (`[T-6]`). `Shared[T]` is the `Arc`
-equivalent — its refcount is **atomic** (`_Atomic`), so cloning the handle across
-threads is race-free.
+**The guarantee.** Together, `[T-1]`/`[T-2]` (only Sendable data crosses, checked
+transitively), `[T-6]` (no live borrow crosses), and `[T-7]` (no non-atomic refcount
+crosses, checked transitively) mean that under `--strict`, **a program that compiles
+shares no non-thread-safe state and no non-atomic refcount across threads** —
+everything crossing a thread is an atomic `Shared[T]` or a synchronization primitive
+over Sendable data. This is the same safety *outcome* as Rust's `Send`/`Sync`,
+reached with **zero lifetime annotations**. Every escape is a labeled, greppable
+`UnsafeSendable` where a human took responsibility; code that compiles without one
+carries the full machine-checked guarantee.
 
-**Not yet guaranteed (the honest remainder):**
+**Not yet fully proven (the honest remainder):**
 
-1. **Detached-thread lifetimes for owned refcounted values.** Passing an *owned*
-   `str`/collection to `Thread.spawn` is sound when the caller outlives the thread
-   (the structured forms — `task_group`, `await`, and `join` before scope exit —
-   guarantee this). A *detached* thread whose argument's source goes out of scope
-   first can dangle. `[T-6]` proves this for *borrows*; the owned case is not yet
-   compile-time-proven (it would need scoped threads or a `'static` bound on
-   `Thread.spawn`, as Rust has). Until then, **join before the source scope ends**
-   (which the structured APIs enforce).
-2. **No `Rc`/`Arc` split for `str`.** `str`'s own refcount is non-atomic. The
-   current ABI passes a `str` arg by value to a thread that only *reads* it
-   (the caller keeps ownership and does the single release), so the refcount is
-   not raced — but this relies on (1). A full split (a distinct atomic-refcount
-   string for sharing) is future work.
-3. **Deeply-nested aliasing** (e.g. an aliased refcounted value placed inside a
-   `Mutex` while other aliases live on another thread) is not yet analyzed — the
-   full Rust `Send`/`Sync` trait algebra is not reproduced.
+1. **Detached-thread lifetimes for owned `str`/collection values.** Passing an
+   *owned* `str`/collection to a *detached* `Thread.spawn` whose argument's source
+   scope ends first can still dangle (`str`/collections are not classes, so `[T-7]`
+   does not cover them). The structured forms — `task_group`, `await`, and `join`
+   before scope exit — guarantee the caller outlives the thread; **prefer those**,
+   or wrap the value in `Shared[T]`. (`[T-6]` already proves the *borrow* case; a
+   `'static`-style bound on detached `Thread.spawn` for owned non-class values is
+   future work.)
+2. **Framework `UnsafeSendable` cores are trusted, not proven.** Like Rust's
+   `unsafe impl Send/Sync`, an `UnsafeSendable` assertion is only as sound as its
+   author's audit. The guarantee above is about code that compiles *without* it.
+
+> `[T-7]` supersedes the earlier "deeply-nested aliasing through a `Mutex`" gap: an
+> aliased plain refcounted value placed inside a `Mutex` (or `Vec`, or a field) and
+> sent to another thread is now **caught** by the transitive check.
 
 These remaining items are concurrency-model design decisions (scoped threads,
 atomic-string split, a Send/Sync algebra). Until they land, shared *mutable*

@@ -1,0 +1,14 @@
+# Edge/gateway (aarch64 Linux, full std tier) cross-compile smoke: exercises the
+# heap runtime (Vec/Map/str/print) so the std runtime is proven to cross-compile
+# and RUN on ARM Linux (under qemu). Prints a known line the harness greps.
+from std.core.map import Map
+def main():
+    mut v = Vec[int].init(4)
+    mut i = 0
+    while i < 10:
+        v.push(i * i)
+        i = i + 1
+    mut m = Map[str, int].init(8)
+    m.insert("answer", 42)
+    mut s = "cross " + "ok"
+    print("CROSS " + v.get(9).to_str() + " " + m.get("answer").to_str() + " " + s)
