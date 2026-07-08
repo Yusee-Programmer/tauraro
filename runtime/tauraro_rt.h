@@ -88,10 +88,11 @@
 #    include <linux/slab.h>
 #    include <linux/string.h>
 #  else
-     /* Bare-metal (non-Linux-kernel, e.g. arm-none-eabi/newlib): setjmp.h is a
-      * freestanding header and is needed by the bare-metal panic buffer
-      * (_tr_thread_panic_jmpbuf) — without it 'jmp_buf' is undeclared. */
+     /* Bare-metal (non-Linux-kernel, e.g. arm-none-eabi/newlib): setjmp.h and
+      * stdarg.h are freestanding headers. setjmp is needed by the bare-metal panic
+      * buffer (_tr_thread_panic_jmpbuf); stdarg by the libc-lite vsnprintf. */
 #    include <setjmp.h>
+#    include <stdarg.h>
 #  endif
 #endif
 
@@ -129,6 +130,13 @@
 #  define TAURARO_BARE
 #endif
 
+/* Output sink hook — default no-op; a bare target redefines it (UART/semihosting).
+ * Hoisted here so the libc-lite printf below can route through it; the print
+ * section's own `#ifndef _TR_WRITE` guard then no-ops. */
+#ifndef _TR_WRITE
+#  define _TR_WRITE(s) ((void)(s))
+#endif
+
 /* ââ Freestanding libc-lite ââ *
  * Bare-metal (TAURARO_KERNEL, non-Linux-kernel) has no <string.h>; provide the
  * minimal mem/str primitives the core runtime needs. Kernel mode already pulled
@@ -143,8 +151,82 @@ static inline int    memcmp(const void* x,const void* y,size_t n){ const unsigne
 static inline int    strcmp(const char* a,const char* b){ while(*a && *a==*b){a++;b++;} return (int)(unsigned char)*a-(int)(unsigned char)*b; }
 static inline int    strncmp(const char* a,const char* b,size_t n){ for(size_t i=0;i<n;i++){ if(a[i]!=b[i]) return (int)(unsigned char)a[i]-(int)(unsigned char)b[i]; if(!a[i]) break; } return 0; }
 static inline char*  strchr(const char* s,int c){ for(;*s;s++){ if(*s==(char)c) return (char*)s; } return c?0:(char*)s; }
-#endif
-#endif
+static inline char*  strcpy(char* d,const char* s){ char* r=d; while((*d++=*s++)); return r; }
+static inline char*  strncpy(char* d,const char* s,size_t n){ size_t i=0; for(;i<n&&s[i];i++) d[i]=s[i]; for(;i<n;i++) d[i]='\0'; return d; }
+static inline char*  strcat(char* d,const char* s){ char* r=d; while(*d)d++; while((*d++=*s++)); return r; }
+static inline char*  strstr(const char* h,const char* n){ if(!*n) return (char*)h; for(;*h;h++){ const char* a=h; const char* b=n; while(*a&&*b&&*a==*b){a++;b++;} if(!*b) return (char*)h; } return 0; }
+static inline char*  strrchr(const char* s,int c){ const char* last=0; for(;;s++){ if(*s==(char)c) last=s; if(!*s) break; } return (char*)last; }
+static inline char*  strtok(char* s,const char* delim){
+    static char* save; if(s) save=s; if(!save) return 0;
+    while(*save){ const char* d=delim; int isd=0; for(;*d;d++) if(*save==*d){isd=1;break;} if(!isd) break; save++; }
+    if(!*save){ save=0; return 0; }
+    char* tok=save;
+    while(*save){ const char* d=delim; int isd=0; for(;*d;d++) if(*save==*d){isd=1;break;} if(isd){ *save++='\0'; return tok; } save++; }
+    save=0; return tok;
+}
+#endif  /* _TR_HAVE_STRING */
+
+/* ctype / stdlib / stdio libc-lite (bare-metal, no <ctype.h>/<stdlib.h>/<stdio.h>).
+ * Correct-by-inspection ASCII/int impls; float in the formatter is basic (bare
+ * logging), never the hosted path. A target may predefine _TR_HAVE_CTYPE. */
+#ifndef _TR_HAVE_CTYPE
+static inline int isspace(int c){ return c==' '||c=='\t'||c=='\n'||c=='\r'||c=='\v'||c=='\f'; }
+static inline int isdigit(int c){ return c>='0'&&c<='9'; }
+static inline int isalpha(int c){ return (c>='a'&&c<='z')||(c>='A'&&c<='Z'); }
+static inline int isalnum(int c){ return isalpha(c)||isdigit(c); }
+static inline int islower(int c){ return c>='a'&&c<='z'; }
+static inline int isupper(int c){ return c>='A'&&c<='Z'; }
+static inline int isxdigit(int c){ return isdigit(c)||(c>='a'&&c<='f')||(c>='A'&&c<='F'); }
+static inline int tolower(int c){ return isupper(c)? c+32 : c; }
+static inline int toupper(int c){ return islower(c)? c-32 : c; }
+static inline char* strdup(const char* s){ if(!s) return 0; size_t n=strlen(s)+1; char* r=(char*)TAURARO_ALLOC(n); if(r) memcpy(r,s,n); return r; }
+static inline int   atoi(const char* s){ int r=0,neg=0; while(*s==' '||*s=='\t')s++; if(*s=='-'){neg=1;s++;}else if(*s=='+')s++; while(*s>='0'&&*s<='9'){ r=r*10+(*s-'0'); s++; } return neg?-r:r; }
+static inline long long strtoll(const char* s,char** end,int base){ (void)base; long long r=0; int neg=0; while(*s==' '||*s=='\t')s++; if(*s=='-'){neg=1;s++;}else if(*s=='+')s++; while(*s>='0'&&*s<='9'){ r=r*10+(*s-'0'); s++; } if(end)*end=(char*)s; return neg?-r:r; }
+static inline unsigned long long strtoull(const char* s,char** end,int base){ (void)base; unsigned long long r=0; while(*s==' '||*s=='\t')s++; if(*s=='+')s++; while(*s>='0'&&*s<='9'){ r=r*10+(unsigned)(*s-'0'); s++; } if(end)*end=(char*)s; return r; }
+static inline double strtod(const char* s,char** end){ double r=0; int neg=0; while(*s==' '||*s=='\t')s++; if(*s=='-'){neg=1;s++;}else if(*s=='+')s++; while(*s>='0'&&*s<='9'){ r=r*10+(*s-'0'); s++; } if(*s=='.'){ s++; double f=0.1; while(*s>='0'&&*s<='9'){ r+=(*s-'0')*f; f*=0.1; s++; } } if(end)*end=(char*)s; return neg?-r:r; }
+static unsigned long long _tr_rng=88172645463325252ULL;
+static inline void srand(unsigned s){ _tr_rng = s? (unsigned long long)s : 1ULL; }
+static inline int  rand(void){ _tr_rng^=_tr_rng<<13; _tr_rng^=_tr_rng>>7; _tr_rng^=_tr_rng<<17; return (int)(_tr_rng & 0x7fffffff); }
+static inline void qsort(void* base,size_t n,size_t sz,int(*cmp)(const void*,const void*)){
+    char* a=(char*)base;
+    for(size_t i=1;i<n;i++) for(size_t j=i; j>0 && cmp(a+(j-1)*sz, a+j*sz)>0; j--)
+        for(size_t k=0;k<sz;k++){ char t=a[(j-1)*sz+k]; a[(j-1)*sz+k]=a[j*sz+k]; a[j*sz+k]=t; }
+}
+__attribute__((noreturn)) static inline void exit(int code){ (void)code; __builtin_trap(); for(;;){} }
+/* Minimal vsnprintf — %d/%i/%u/%l/%ll(+d/u/x)/%zu/%x/%X/%p/%c/%s/%f/%g/%% with
+ * optional width.precision. Integer/string are exact; float is a basic decimal
+ * (bare-metal logging only — hosted uses real libc). */
+static int _tr_fmt_u(char* o,unsigned long long v,int base,int up){ char t[24];int i=0;const char* d=up?"0123456789ABCDEF":"0123456789abcdef"; if(!v)t[i++]='0'; while(v){t[i++]=d[v%base];v/=base;} for(int j=0;j<i;j++)o[j]=t[i-1-j]; return i; }
+static int vsnprintf(char* buf,size_t cap,const char* fmt,va_list ap){
+    size_t o=0; char tmp[64];
+    #define _TR_PUT(ch) do{ if(o+1<cap) buf[o]=(ch); o++; }while(0)
+    for(const char* p=fmt; *p; p++){
+        if(*p!='%'){ _TR_PUT(*p); continue; }
+        p++; int lng=0; int prec=-1;
+        while(*p=='-'||*p=='+'||*p==' '||*p=='0'||*p=='#'){ p++; }
+        while(*p>='0'&&*p<='9') p++;                 /* width (ignored) */
+        if(*p=='.'){ p++; prec=0; while(*p>='0'&&*p<='9'){ prec=prec*10+(*p-'0'); p++; } }
+        while(*p=='l'){ lng++; p++; } if(*p=='z'||*p=='j'){ lng=2; p++; }
+        char c=*p; int n=0;
+        if(c=='d'||c=='i'){ long long v = lng>=2? va_arg(ap,long long) : (long long)va_arg(ap,int); if(v<0){ _TR_PUT('-'); v=-v; } n=_tr_fmt_u(tmp,(unsigned long long)v,10,0); for(int k=0;k<n;k++)_TR_PUT(tmp[k]); }
+        else if(c=='u'){ unsigned long long v = lng>=2? va_arg(ap,unsigned long long):(unsigned long long)va_arg(ap,unsigned); n=_tr_fmt_u(tmp,v,10,0); for(int k=0;k<n;k++)_TR_PUT(tmp[k]); }
+        else if(c=='x'||c=='X'){ unsigned long long v = lng>=2? va_arg(ap,unsigned long long):(unsigned long long)va_arg(ap,unsigned); n=_tr_fmt_u(tmp,v,16,c=='X'); for(int k=0;k<n;k++)_TR_PUT(tmp[k]); }
+        else if(c=='p'){ unsigned long long v=(unsigned long long)(size_t)va_arg(ap,void*); _TR_PUT('0');_TR_PUT('x'); n=_tr_fmt_u(tmp,v,16,0); for(int k=0;k<n;k++)_TR_PUT(tmp[k]); }
+        else if(c=='c'){ _TR_PUT((char)va_arg(ap,int)); }
+        else if(c=='s'){ const char* s=va_arg(ap,const char*); if(!s)s="(null)"; while(*s)_TR_PUT(*s++); }
+        else if(c=='f'||c=='g'||c=='e'||c=='G'){ double d=va_arg(ap,double); if(d<0){_TR_PUT('-');d=-d;} unsigned long long ip=(unsigned long long)d; n=_tr_fmt_u(tmp,ip,10,0); for(int k=0;k<n;k++)_TR_PUT(tmp[k]); int pr=prec<0?6:prec; if(pr>0){ _TR_PUT('.'); double fr=d-(double)ip; for(int k=0;k<pr;k++){ fr*=10; int dg=(int)fr; _TR_PUT((char)('0'+(dg%10))); fr-=dg; } } }
+        else if(c=='%'){ _TR_PUT('%'); }
+        else { _TR_PUT('%'); if(c) _TR_PUT(c); }
+    }
+    if(cap) buf[o<cap?o:cap-1]='\0';
+    #undef _TR_PUT
+    return (int)o;
+}
+static int snprintf(char* buf,size_t cap,const char* fmt,...){ va_list ap; va_start(ap,fmt); int r=vsnprintf(buf,cap,fmt,ap); va_end(ap); return r; }
+static int sprintf(char* buf,const char* fmt,...){ va_list ap; va_start(ap,fmt); int r=vsnprintf(buf,(size_t)-1,fmt,ap); va_end(ap); return r; }
+static int printf(const char* fmt,...){ char b[1024]; va_list ap; va_start(ap,fmt); int r=vsnprintf(b,sizeof(b),fmt,ap); va_end(ap); _TR_WRITE(b); return r; }
+#endif  /* _TR_HAVE_CTYPE */
+#endif  /* TAURARO_KERNEL && !__KERNEL__ */
 
 
 /* ── Thread stack size ───────────────────────────────────────────────────── *
