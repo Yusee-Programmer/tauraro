@@ -286,11 +286,9 @@ static inline void _tr_eprint(char* s) { _TR_DIAG("%s\n", s); fflush(stderr); }
 #ifndef _TR_WRITE
 #  define _TR_WRITE(s) ((void)(s))   /* freestanding sink: redefine to UART/semihosting */
 #endif
-static inline void _tr_print(char* s) { _TR_WRITE(s); _TR_WRITE("
-"); }
+static inline void _tr_print(char* s) { _TR_WRITE(s); _TR_WRITE("\n"); }
 static inline void _tr_print_raw(char* s) { _TR_WRITE(s); }
-static inline void _tr_eprint(char* s) { _TR_WRITE(s); _TR_WRITE("
-"); }
+static inline void _tr_eprint(char* s) { _TR_WRITE(s); _TR_WRITE("\n"); }
 #endif
 
 static inline void* _tr_c_realloc(void* ptr, size_t size) {
