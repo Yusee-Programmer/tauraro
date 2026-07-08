@@ -106,12 +106,18 @@ minimal program's — which is why gating whole subsystems is the big lever:
    (`_tr_thread_*`), timers (`_tr_ticker_new`/`_tr_timer_new`/`_tr_sleep_ms`), env
    (`getenv`), `exit`, `printf`. These are whole subsystems a freestanding program
    never parses. Additive-under-kernel → hosted can't regress.
-2. **Complete libc-lite** (`TAURARO_KERNEL && !__KERNEL__`): ctype
-   (`isalnum`/`isalpha`/`isdigit`/`islower`/`isupper`/`isspace`/`tolower`/`toupper`),
-   string (`strcpy`/`strstr`/`strtok`/`strdup`), `isinf`/`isnan` (bit checks), and
-   the hard one — **`snprintf`/`sprintf`** (integer formatting for `to_str`; a
-   freestanding integer `snprintf` is tractable, float is the stretch). `qsort`/
-   `rand`/`strtod`/`strtoll` belong to gate-able stdlib.
+2. **Complete libc-lite — DONE ✅** (`TAURARO_KERNEL && !__KERNEL__`, bare-only so
+   hosted is untouched). Added, correct-by-inspection: ctype (`isalnum`/`isalpha`/
+   `isdigit`/`islower`/`isupper`/`isspace`/`isxdigit`/`tolower`/`toupper`), string
+   (`strcpy`/`strncpy`/`strcat`/`strstr`/`strrchr`/`strtok`/`strdup`), stdlib
+   (`atoi`/`strtoll`/`strtoull`/`strtod`/`rand`/`srand`/`qsort`/`exit`), and a
+   minimal **`vsnprintf`/`snprintf`/`sprintf`/`printf`** (integers/hex/strings exact;
+   float is a basic decimal — bare logging only, never the hosted path). `isinf`/
+   `isnan`/`INFINITY` now use `__builtin_*` (every tier). **Result: the bare-metal
+   implicit-decl list collapsed 33 → 8**, and the 8 remaining are all `_WIN32`+`BARE`
+   MinGW-local (`_fileno`/`_putenv_s`/threadpool/Win file paths) — arm-none-eabi
+   skips them. The one genuinely-common file seam left (`_tr_uuid_v4`'s
+   `/dev/urandom`) is now gated to the `rand()` fallback under `TAURARO_BARE`.
 3. **Early-header-failure — DIAGNOSED & FIXED.** The "core seams" (`_tr_str_new`,
    `_tr_checked_alloc`, raw `malloc`/`free`, …) were a **cascade**: the CI's
    first-hard-error probe pinpointed `tauraro_rt.h:535: 'FILE' undeclared` — the file

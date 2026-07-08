@@ -5224,11 +5224,12 @@ static inline char* _tr_hmac_sha256(char* key, int klen, char* msg) {
 /* ── UUID v4 ────────────────────────────────────────────────────────────── */
 static inline char* _tr_uuid_v4(void) {
     uint8_t b[16];
-#if !defined(_WIN32) || defined(__MINGW32__) || defined(__MINGW64__)
+#if (!defined(_WIN32) || defined(__MINGW32__) || defined(__MINGW64__)) && !defined(TAURARO_BARE)
     FILE* f=fopen("/dev/urandom","rb");
     if(f){fread(b,1,16,f);fclose(f);}
     else{for(int i=0;i<16;i++)b[i]=(uint8_t)(rand()&0xff);}
 #else
+    /* bare-metal / Windows: no /dev/urandom — fall back to the PRNG */
     for(int i=0;i<16;i++)b[i]=(uint8_t)(rand()&0xff);
 #endif
     b[6]=(b[6]&0x0f)|0x40; b[8]=(b[8]&0x3f)|0x80;
