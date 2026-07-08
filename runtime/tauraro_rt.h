@@ -193,6 +193,14 @@ static inline void qsort(void* base,size_t n,size_t sz,int(*cmp)(const void*,con
         for(size_t k=0;k<sz;k++){ char t=a[(j-1)*sz+k]; a[(j-1)*sz+k]=a[j*sz+k]; a[j*sz+k]=t; }
 }
 __attribute__((noreturn)) static inline void exit(int code){ (void)code; __builtin_trap(); for(;;){} }
+/* Route raw malloc/calloc/realloc/free (used by the platform concurrency
+ * primitives) through the pluggable allocator. Under TAURARO_KERNEL the
+ * TAURARO_ALLOC/... macros are always user-supplied (enforced by #error above),
+ * so there is no self-recursion into a libc malloc. */
+static inline void* malloc(size_t n)            { return TAURARO_ALLOC(n); }
+static inline void* calloc(size_t a, size_t b)  { return TAURARO_CALLOC(a, b); }
+static inline void* realloc(void* p, size_t n)  { return TAURARO_REALLOC(p, n); }
+static inline void  free(void* p)               { TAURARO_FREE(p); }
 /* Minimal vsnprintf — %d/%i/%u/%l/%ll(+d/u/x)/%zu/%x/%X/%p/%c/%s/%f/%g/%% with
  * optional width.precision. Integer/string are exact; float is a basic decimal
  * (bare-metal logging only — hosted uses real libc). */
