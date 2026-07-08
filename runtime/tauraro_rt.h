@@ -2243,7 +2243,9 @@ static inline void _tr_enable_vt100(void) {
  * classic conhost interprets the escapes (Windows Terminal/VS Code already do).
  * Returns 0 when piped/redirected so logs and `... | grep` stay plain ASCII.  */
 static int64_t _tr_stdout_supports_ansi(void) {
-#ifdef _WIN32
+#if defined(TAURARO_BARE)
+    return 0;   /* no console on bare-metal */
+#elif defined(_WIN32)
     if (!_isatty(_fileno(stdout))) return 0;
     _tr_enable_vt100();
     return 1;
