@@ -289,7 +289,7 @@ jobs:
         shell: bash
         run: |
           sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu qemu-user-static gcc-arm-none-eabi
+          sudo apt-get install -y gcc-aarch64-linux-gnu qemu-user-static gcc-arm-none-eabi qemu-system-arm
 
       - name: Cross-compile gate (edge aarch64 run + bare-metal boundary)
         if: runner.os == 'Linux'
@@ -299,6 +299,19 @@ jobs:
         # the remaining seams to gate; see docs/dev/08.
         shell: bash
         run: TAURAROC=./tauraroc${{ matrix.ext }} bash scripts/cross_check.sh
+
+      # -------------------------------------------------------
+      # Bare-metal LINK + RUN: build examples/freestanding/hello_bare.tr for a
+      # Cortex-M3 (mps2-an385) with --freestanding — our own startup + linker +
+      # UART sink, no libc/OS — and RUN it under qemu-system-arm. Proves a Tauraro
+      # binary executes on bare metal. Non-blocking while the MCU bring-up is
+      # proven in CI (I can't run qemu-system locally); flip to blocking once green.
+      # -------------------------------------------------------
+      - name: Bare-metal run (Cortex-M3 under qemu-system-arm)
+        if: runner.os == 'Linux'
+        continue-on-error: true
+        shell: bash
+        run: TAURAROC=./tauraroc${{ matrix.ext }} bash scripts/bare_run.sh
 
       - name: Clean up generated build output
         shell: bash

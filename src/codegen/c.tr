@@ -152,6 +152,7 @@ pub class CGenerator:
     pub cur_ret_is_borrow: bool  # current function's return type is `ref` — returns a BORROW (no retain on return; the caller does not free it)
     pub eliding_get_retain: bool # set while generating a PROVEN collection-element borrow's RHS (`ref T = coll.get(k)`) — the str-valued get returns the unboxed alias WITHOUT retaining (zero-copy borrow); the SLet also skips the release
     pub no_elide: bool           # --no-elide: force pure ARC (drop ALL proven-borrow elision) — the differential-soundness oracle baseline
+    pub tier_define: str         # --freestanding => "TAURARO_KERNEL" (no libc), --no-std => "TAURARO_NO_OS" (no OS); emitted as a #define before the runtime include so the tier build "just works" without a hand-passed -D
     pub cur_self_is_ptr: bool     # inside a MUTATING @value_type method, `self` is a POINTER (`ClassName* self`) so writes persist — gen_prop_access uses `self->field`, not `self.field`
     pub coll_local_sfx: Map[str, str]    # List/Vec local name -> list_sfx (e.g. "i64"/"TrStr") for SAutoDrop's List_<sfx>_free; Dict/Map/Set don't need a suffix (Dict_free)
     pub coll_local_idict: Map[str, bool] # Dict/Map/Set local name -> true if int-keyed (TrIDict*/_TrISet*, freed via _tr_idict_free instead of Dict_free)
@@ -224,6 +225,7 @@ pub class CGenerator:
         g.cur_ret_is_borrow = false
         g.eliding_get_retain = false
         g.no_elide = false
+        g.tier_define = ""
         g.cur_self_is_ptr = false
         g.coll_local_sfx = Map[str, str].init(16)
         g.coll_local_idict = Map[str, bool].init(16)
@@ -7318,6 +7320,7 @@ pub class CGenerator:
 
         # -- Phase 1: Runtime header include + file-wide optimization pragmas ----
         self.w("#define _TR_MAIN\n")
+        if self.tier_define != "": self.w("#define " + self.tier_define + "\n")
         self.w("#include \"tauraro_rt.h\"\n")
 
         # -- Phase 2: Forward declarations (opaque struct pointers) ------------
@@ -7663,6 +7666,7 @@ pub class CGenerator:
         if has_std_lib:
             out.append("#define TAURARO_STD_LIB\n")
             out.append("#define TAURARO_RT_NO_STRINGBUILDER\n")
+        if self.tier_define != "": out.append("#define " + self.tier_define + "\n")
         out.append("#include \"tauraro_rt.h\"\n\n")
 
         # -- Forward declarations ----------------------------------------------
@@ -8188,6 +8192,7 @@ pub class CGenerator:
         self.buf = StringBuilder.init(65536)
 
         self.w("#define _TR_MAIN\n")
+        if self.tier_define != "": self.w("#define " + self.tier_define + "\n")
         self.w("#include \"tauraro_types.h\"\n\n")
 
         # Emit spawn + async wrappers (static thread-entry functions) before any function body

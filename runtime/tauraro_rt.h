@@ -4491,6 +4491,17 @@ static inline double _tr_get_inf(void) { return __builtin_inf(); }
 static inline bool   _tr_is_inf(double x) { return __builtin_isinf(x) != 0; }
 static inline bool   _tr_is_nan(double x) { return __builtin_isnan(x) != 0; }
 
+/* ── MMIO intrinsics for bare-metal device drivers (std/hal/mmio.tr) ──────
+ * Volatile so the compiler never elides or reorders a hardware register access.
+ * Available at every tier; the address is a raw device register the caller vouches
+ * for (this is the primitive `unsafe` build on). */
+/* Address is `usize` (unsigned long long in Tauraro) cast to a pointer, so the
+ * ABI matches on both 32- and 64-bit targets. */
+static inline void          _tr_mmio_write32(unsigned long long a, unsigned int v)  { *(volatile uint32_t*)(size_t)a = (uint32_t)v; }
+static inline unsigned int  _tr_mmio_read32 (unsigned long long a)                  { return (unsigned int)*(volatile uint32_t*)(size_t)a; }
+static inline void          _tr_mmio_write8 (unsigned long long a, unsigned char v) { *(volatile uint8_t*)(size_t)a  = (uint8_t)v; }
+static inline unsigned char _tr_mmio_read8  (unsigned long long a)                  { return (unsigned char)*(volatile uint8_t*)(size_t)a; }
+
 
 #ifdef _WIN32
 static inline void _tr_init_console(void) {

@@ -1,0 +1,35 @@
+# std/hal/mmio — memory-mapped I/O for bare-metal device drivers.
+#
+# Every access is *volatile* (backed by the runtime's _tr_mmio_* intrinsics), so
+# the compiler never elides or reorders a hardware register read/write. Addresses
+# are raw device registers the caller vouches for — this is the safe surface over
+# what would otherwise be raw `unsafe` pointer arithmetic. Works at every tier;
+# on bare metal it is how you write drivers in Tauraro.
+
+extern "C":
+    def _tr_mmio_write32(addr: usize, val: u32)
+    def _tr_mmio_read32(addr: usize) -> u32
+    def _tr_mmio_write8(addr: usize, val: u8)
+    def _tr_mmio_read8(addr: usize) -> u8
+
+# Store a 32-bit word to a hardware register.
+pub def write32(addr: usize, val: u32):
+    _tr_mmio_write32(addr, val)
+
+# Load a 32-bit word from a hardware register.
+pub def read32(addr: usize) -> u32:
+    return _tr_mmio_read32(addr)
+
+# Store a byte to a hardware register.
+pub def write8(addr: usize, val: u8):
+    _tr_mmio_write8(addr, val)
+
+# Load a byte from a hardware register.
+pub def read8(addr: usize) -> u8:
+    return _tr_mmio_read8(addr)
+
+# Spin until every bit in `mask` reads back as set at `addr` (poll a status/ready
+# flag) — the bread-and-butter of a device-driver wait loop.
+pub def wait_bits_set(addr: usize, mask: u32):
+    while (read32(addr) & mask) != mask:
+        pass

@@ -165,11 +165,23 @@ minimal program's — which is why gating whole subsystems is the big lever:
   to runtimes.
 - **Phase 3 — `core` stdlib.** Value-type primitives: fixed arrays, slices, StrView,
   math, bit/volatile/MMIO helpers — no allocator.
-- **Phase 4 — `--freestanding` (`core`) + entry control.** ARC off; reuse the
-  `@export`/cdylib machinery for named entries (`_start`, an ISR) instead of a hosted
-  `main`. Ship a blink + a toy kernel as proof.
-- **Phase 5 — arch/HAL ecosystem.** startup, linker scripts, interrupt/volatile,
-  `hal` layer. Deep, ongoing; where real MCU support lives.
+- **Phase 4 — `--freestanding` / `--no-std` flag + link-and-run — DONE (pending CI) ✅.**
+  - `--freestanding` auto-emits `#define TAURARO_KERNEL` (no libc, pluggable
+    allocator); `--no-std` emits `#define TAURARO_NO_OS` — so a bare-metal build
+    needs no hand-passed `-D`. Threaded via `CGenerator.tier_define`, emitted before
+    the runtime include in every TU. Hosted is unchanged when the flag is absent.
+  - **Link-and-run harness** (`scripts/bare_run.sh` + CI, non-blocking until green):
+    `examples/freestanding/hello_bare.tr` → `--freestanding` → linked against a
+    Cortex-M3 startup (`tests/freestanding/mcu/startup_cm3.c`), linker script
+    (`mps2.ld`), and a UART+bump-allocator platform (`platform_mps2.c` /
+    `mps2_hooks.h`) → **run under `qemu-system-arm -M mps2-an385`**. `print()` flows
+    through `_TR_WRITE` → CMSDK UART → qemu stdout; the harness asserts the program's
+    output. This is the step that turns "compiles freestanding" into "a Tauraro
+    binary runs on bare metal."
+- **Phase 5 — arch/HAL + drivers.** `std/hal/mmio.tr` gives volatile MMIO
+  `read32/write32/read8/write8/wait_bits_set` (backed by `_tr_mmio_*` runtime
+  intrinsics) — device drivers written in Tauraro. Still ahead: more archs
+  (riscv/Cortex-A), interrupts/ISR entry, a toy kernel, linker/startup generators.
 
 ## Invariant across all tiers
 

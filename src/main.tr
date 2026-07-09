@@ -778,6 +778,7 @@ pub def main(args: Vec[str]):
     mut debug_mode  = false              # --debug         : ASAN + assertions
     mut strict_mode = false              # --strict        : alloc outside unsafe -> hard error
     mut no_elide    = false              # --no-elide      : disable zero-copy borrow elision -> pure ARC (differential-soundness oracle)
+    mut tier_define = ""                 # --freestanding=>TAURARO_KERNEL (no libc), --no-std=>TAURARO_NO_OS (no OS); auto-emitted so the bare-metal build needs no hand-passed -D
     mut lib_mode    = false              # --lib           : build a shared library (.so/.dll) of `export def`s + a header
 
     # `tauraroc lint <file>` runs resolution + semantic analysis and reports
@@ -833,6 +834,10 @@ pub def main(args: Vec[str]):
             strict_mode = true
         elif arg == "--no-elide":
             no_elide = true
+        elif arg == "--freestanding":
+            tier_define = "TAURARO_KERNEL"   # bare-metal core tier: no libc, pluggable allocator
+        elif arg == "--no-std":
+            tier_define = "TAURARO_NO_OS"    # alloc tier: no OS services, libc allocator ok
         elif arg == "--lib":
             lib_mode = true
         elif not str_starts_with(arg, "-"):
@@ -943,6 +948,7 @@ pub def main(args: Vec[str]):
     # differential-soundness oracle: an elided build and a --no-elide build must
     # produce identical observable output; any divergence is an unsound elision.
     c_gen.no_elide = no_elide
+    c_gen.tier_define = tier_define
     mut rt_h   = read_runtime_header(args.get(0), input_path)
 
     c_gen.register_program(hir)
