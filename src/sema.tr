@@ -4594,7 +4594,11 @@ extend Sema:
                                 elif self.enums.contains(gn):
                                     ret_ty = AstType.init(gn)
                                 else:
-                                    # Generic function call: fname[T](args) - mangle callee name
+                                    # Generic function call: fname[T](args) - mangle the callee
+                                    # name and resolve the RESULT type. The result is the
+                                    # function's declared return type with its type param
+                                    # substituted by T (so `id[int](x)`->int, `describe[Cat](x)`
+                                    # -> str, not Cat).
                                     match idx.read():
                                         case Expr.EIdent(farg_c):
                                             mut fret = AstType.init(farg_c)

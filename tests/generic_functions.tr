@@ -1,0 +1,37 @@
+# Generic free-function monomorphization: a `def f[T](..)` is specialized per concrete
+# type argument (zero-cost, like a Rust generic / like Tauraro's generic classes),
+# inferred from the call arguments. This makes value-type generics work (id("hi") is
+# not void*-erased) and lets a generic body call methods on a T-typed value.
+
+class Cat:
+    pub sound: str
+extend Cat:
+    pub def speak(self) -> str:
+        return "meow"
+
+class Dog:
+    pub sound: str
+extend Dog:
+    pub def speak(self) -> str:
+        return "woof"
+
+# Identity over any type — returns T. Was broken under erasure for value types (str).
+def id[T](x: T) -> T:
+    return x
+
+# Calls a method on the T-typed value — impossible under type erasure (would emit T_speak).
+def describe[T](x: T) -> str:
+    return x.speak()
+
+def main():
+    # Value-type + primitive generics (the erasure-breaking cases).
+    print(id(42))              # 42
+    print(id("hello"))         # hello
+
+    # Method dispatch on a generic param, inferred from the argument.
+    mut c = Cat()
+    mut d = Dog()
+    print(describe(c))         # meow
+    print(describe(d))         # woof  (distinct monomorphization)
+
+    print("generic functions ok")

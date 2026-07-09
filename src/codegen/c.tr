@@ -135,6 +135,7 @@ pub class CGenerator:
     pub list_types_buf: StringBuilder   # value-type List_T definitions (emitted after structs)
     pub proto_buf:      StringBuilder   # function prototypes
     pub mono_buf:       StringBuilder   # monomorphized generic class code
+    pub fn_mono_body:   StringBuilder   # monomorphized generic FREE-function bodies (flushed after all prototypes)
     pub temp_count:     int
     pub classes:        Map[str, HirClass]
     pub enums:          Map[str, HirEnum]
@@ -160,6 +161,7 @@ pub class CGenerator:
     pub coll_local_vtcoll: Map[str, str] # Dict/Map/Set local name -> typed-collection struct (e.g. "Dict_str_Point"/"Set_Point") for SAutoDrop's <name>_free
     pub type_subst:     Map[str, str]   # T -> "long long" during mono gen
     pub mono_done:      Map[str, bool]  # "Vec_i64" -> true (prevents duplicate gen)
+    pub emit_fn_name:   str             # override the emitted C name of a free fn (mono: id -> id_i64)
     pub list_type_done: Map[str, bool]  # "Token" -> true (prevents duplicate list gen)
     pub list_fwd_done:  Map[str, bool]  # "Token" -> true (prevents duplicate fwd decl)
     pub elem_fmt_done:  Map[str, bool]  # "_tr_fmt_obj_X" -> true (prevents duplicate to_str formatter gen)
@@ -208,6 +210,7 @@ pub class CGenerator:
         g.list_types_buf = StringBuilder.init(2048)
         g.proto_buf     = StringBuilder.init(8192)
         g.mono_buf      = StringBuilder.init(8192)
+        g.fn_mono_body  = StringBuilder.init(4096)
         g.temp_count    = 0
         g.classes       = Map[str, HirClass].init(128)
         g.enums         = Map[str, HirEnum].init(64)
@@ -233,6 +236,7 @@ pub class CGenerator:
         g.coll_local_vtcoll = Map[str, str].init(16)
         g.type_subst    = Map[str, str].init(8)
         g.mono_done     = Map[str, bool].init(32)
+        g.emit_fn_name  = ""
         g.list_type_done = Map[str, bool].init(16)
         g.list_fwd_done  = Map[str, bool].init(16)
         g.elem_fmt_done  = Map[str, bool].init(16)
@@ -982,7 +986,38 @@ pub class CGenerator:
         self.proto_buf  = old_pbuf
         self.type_subst = old_subst
 
-    # Ensure a monomorphized version of a generic function is generated into mono_buf.
+    # Infer the single type argument of a generic free function from its call args,
+    # by matching a parameter declared directly as the type param (x: T) against the
+    # actual arg type. Returns the concrete type NAME (Cat / int / str) or "" when it
+    # can't be inferred / isn't an eligible single-generic free function. Under an
+    # active substitution (a call inside another mono body) the arg type resolves
+    # through it, so _map_hash(key,..) inside Map_str picks up "str".
+    pub def infer_generic_targ(self, fname: str, args: Vec[Pointer[HirExpr]]) -> str:
+        if not self.functions.contains(fname): return ""
+        mut fd = self.functions.get(fname)
+        if fd.class_name != "" or fd.generics.len != 1: return ""
+        if fd.params as usize == 0 as usize: return ""
+        mut sk = 0
+        if fd.params.len > 0 and fd.params.get(0).name == "self": sk = 1
+        mut gp = fd.generics.get(0)
+        mut targ = ""
+        mut pi = 0
+        while pi < fd.params.len:
+            mut pp = fd.params.get(pi)
+            if pp.name != "self" and pp.ty.name == gp:
+                mut aidx = pi - sk
+                if aidx >= 0 and aidx < args.len:
+                    targ = self.resolve_generic_tyname(hir_expr_type(args.get(aidx)).name)
+            pi = pi + 1
+        if targ == "void" or targ == gp or targ == "": return ""
+        return targ
+
+    # Ensure a monomorphized copy of a generic free function is generated. The
+    # PROTOTYPE goes into mono_buf (flushed early, only forward-declared types
+    # needed); the BODY goes into fn_mono_body (flushed after all prototypes, so
+    # calls to other functions resolve). Both are `static` so the copy can live in
+    # the shared header without a multi-TU duplicate-symbol clash — exactly like the
+    # generic-class method monos.
     pub def ensure_mono_func(self, fname: str, targ: str):
         mut mono_key = "func_" + fname + "__MONO_" + targ
         if self.mono_done.contains(mono_key): return
@@ -998,12 +1033,9 @@ pub class CGenerator:
         mut old_buf = self.buf
         mut old_sbuf = self.struct_buf
         mut old_pbuf = self.proto_buf
-        self.buf = self.mono_buf
-        self.struct_buf = self.mono_buf
-        self.proto_buf = self.mono_buf
         mut mono_fname = fname + "__MONO_" + targ
         mut ret_s = self.type_to_c(f.ret_ty)
-        mut sig = ret_s + " " + mono_fname + "("
+        mut sig = "static __attribute__((hot)) " + ret_s + " " + mono_fname + "("
         mut first = true
         mut pi = 0
         while pi < f.params.len:
@@ -1014,7 +1046,16 @@ pub class CGenerator:
                 first = false
             pi = pi + 1
         sig = sig + ")"
+        # Prototype -> mono_buf (early).
+        self.buf        = self.mono_buf
+        self.struct_buf = self.mono_buf
+        self.proto_buf  = self.mono_buf
         self.w(sig + ";\n")
+        self.mono_buf = self.buf
+        # Body -> fn_mono_body (after prototypes).
+        self.buf        = self.fn_mono_body
+        self.struct_buf = self.fn_mono_body
+        self.proto_buf  = self.fn_mono_body
         mut old_class = self.cur_class
         mut old_func = self.cur_func
         self.cur_class = ""
@@ -1035,7 +1076,7 @@ pub class CGenerator:
         self.w("}\n\n")
         self.cur_class = old_class
         self.cur_func = old_func
-        self.mono_buf = self.buf
+        self.fn_mono_body = self.buf
         self.buf = old_buf
         self.struct_buf = old_sbuf
         self.proto_buf = old_pbuf
@@ -1320,6 +1361,9 @@ pub class CGenerator:
                 fname = base_sig_key + "_" + param_count.to_str() + "arg"
             else:
                 fname = base_sig_key
+        # Monomorphized free function: emit under the specialized name (id -> id_i64).
+        elif self.emit_fn_name != "":
+            fname = self.emit_fn_name
         mut sig = ret_ty_str + " " + fname + "("
         # Exported (FFI) functions get a dllexport/visibility attribute so they
         # land in a shared library's exported symbol table. Only free functions
@@ -1989,6 +2033,19 @@ pub class CGenerator:
             if c == "char*": return "str"
             if c == "TrStr": return "str"
         return n
+
+    # Resolve a generic type-param name to its concrete Tauraro type NAME under the
+    # active monomorphization substitution — used to dispatch method calls on a
+    # `T`-typed value (x.show() -> Cat_show) inside a monomorphized body. Primitives
+    # map via resolve_generic_prim; a class/value-type maps from its C type ("Cat*")
+    # back to the bare name ("Cat"). Returns n unchanged when not substituted.
+    pub def resolve_generic_tyname(self, n: str) -> str:
+        if not self.type_subst.contains(n): return n
+        mut r = self.resolve_generic_prim(n)
+        if r != n: return r
+        mut c = self.type_subst.get(n)
+        if c.ends_with("*"): c = c.slice(0, c.len() - 1)
+        return c
 
     pub def mono_cls_name_for(self, ty: AstType) -> str:
         mut cn: str = ty.name
@@ -3169,6 +3226,16 @@ pub class CGenerator:
             mut self_skip = 0
             if fn_def.params as usize != 0 as usize and fn_def.params.len > 0 and fn_def.params.get(0).name == "self":
                 self_skip = 1
+            # Generic free function called by inference (no explicit [T]): specialize it.
+            # Infer the single type param from a parameter declared directly as that
+            # param (x: T), emit a monomorphized copy, and dispatch to it — zero-cost,
+            # like a Rust generic. (Explicit fname[T](..) is mangled in sema and driven
+            # by the mono scan; multi-param generics keep the erased path for now.)
+            if fn_def.class_name == "" and fn_def.generics.len == 1:
+                mut _targ = self.infer_generic_targ(callee_s, args)
+                if _targ != "":
+                    self.ensure_mono_func(callee_s, _targ)
+                    return callee_s + "__MONO_" + _targ + "(" + self.gen_args(args) + ")"
             mut any_wrapped = false
             mut ai = 0
             while ai < args.len:
@@ -3550,6 +3617,11 @@ pub class CGenerator:
     pub def gen_method_call(self, obj: Pointer[HirExpr], method: str, args: Vec[Pointer[HirExpr]], call_ty: AstType) -> str:
         mut obj_s = self.gen_expr(obj)
         mut t_n: str = hir_expr_type(obj).name
+
+        # Inside a monomorphized body, a receiver typed as a generic param (x: T) must
+        # dispatch to the concrete type's method (x.show() -> Cat_show, not T_show).
+        if self.type_subst.contains(t_n):
+            t_n = self.resolve_generic_tyname(t_n)
 
         # Fixed-size array element read a[i]: sema lowers to EMethodCall(a,"get_index",[i]).
         # Emit a bounds-checked aggregate index; N is the compile-time length on the type.
@@ -7417,6 +7489,11 @@ pub class CGenerator:
                                 mut gfunc_t = mn.slice(sep_p + 7, nlen)
                                 if self.functions.contains(gfunc_n):
                                     self.ensure_mono_func(gfunc_n, gfunc_t)
+                        else:
+                            # Inference call (no explicit [T]): specialize before the
+                            # mono buffer is flushed so the copy + prototype exist.
+                            mut _sit = self.infer_generic_targ(mn, args)
+                            if _sit != "": self.ensure_mono_func(mn, _sit)
                     case _: pass
             case HirExpr.EMethodCall(obj, _, margs, _):
                 self.scan_mono_expr(obj)
@@ -7649,6 +7726,10 @@ pub class CGenerator:
                 mut skip4 = false
                 if f.class_name != "":
                     skip4 = true   # class/enum methods handled in per-class loops or mono_buf
+                # A generic free function is emitted only as monomorphized copies
+                # (fname__MONO_T) into mono_buf — never as an erased void* template.
+                if f.generics.len > 0:
+                    skip4 = true
                 if not skip4:
                     if not self.emitted_fns.contains("p_" + f.name):
                         self.emitted_fns.insert("p_" + f.name, true)
@@ -7725,6 +7806,9 @@ pub class CGenerator:
                 mut skip6 = false
                 if f.class_name != "":
                     skip6 = true   # class/enum methods handled in per-class loops or mono_buf
+                # Generic free function: only monomorphized copies are emitted (mono_buf).
+                if f.generics.len > 0:
+                    skip6 = true
                 # Skip duplicate free-standing functions (same name from multiple modules)
                 if not skip6:
                     if self.emitted_fns.contains("i_" + f.name):
@@ -7993,7 +8077,7 @@ pub class CGenerator:
                             if not self.emitted_fns.contains(ep_key):
                                 self.emitted_fns.insert(ep_key, true)
                                 out.append(self.get_proto_attrs(f4) + self.gen_func_sig(f4, f4.class_name) + ";\n")
-                    else:
+                    elif f4.generics.len == 0:
                         if not self.emitted_fns.contains("p_" + f4.name):
                             self.emitted_fns.insert("p_" + f4.name, true)
                             out.append(self.get_proto_attrs(f4) + self.gen_func_sig(f4, f4.class_name) + ";\n")
@@ -8047,12 +8131,18 @@ pub class CGenerator:
                             if not self.emitted_fns.contains(ep_key2):
                                 self.emitted_fns.insert(ep_key2, true)
                                 out.append(self.get_proto_attrs(f4) + self.gen_func_sig(f4, f4.class_name) + ";\n")
-                    else:
+                    elif f4.generics.len == 0:
                         if not self.emitted_fns.contains("p_" + f4.name):
                             self.emitted_fns.insert("p_" + f4.name, true)
                             out.append(self.get_proto_attrs(f4) + self.gen_func_sig(f4, f4.class_name) + ";\n")
             i = i + 1
         out.append("\n")
+
+        # -- Monomorphized generic FREE-function bodies (after all prototypes, so their
+        # calls to other user functions resolve; static, so shared-header inclusion in
+        # every TU is duplicate-safe). Their prototypes were emitted early in mono_buf.
+        mut fn_mono_out = self.fn_mono_body.to_string().as_str()
+        if fn_mono_out != "": out.append(fn_mono_out + "\n")
 
         # -- Spawn + async wrappers (after prototypes so wrappers can call declared fns) -
         self.buf = StringBuilder.init(1024)
@@ -8326,7 +8416,7 @@ pub class CGenerator:
             mut f = prog.functions.get(i)
             if f.name != "main" and not f.is_extern:
                 mut in_mod = false
-                if f.class_name == "" and fn_set.contains(f.name):
+                if f.class_name == "" and fn_set.contains(f.name) and f.generics.len == 0:
                     in_mod = true
                 elif f.class_name != "" and class_set.contains(f.class_name):
                     # Skip generic class extend methods - only monomorphized instances are emitted.
@@ -8510,7 +8600,7 @@ pub class CGenerator:
                 if not _is_invalid_ptr(f as usize):
                     if f.name != "main" and not f.is_extern:
                         mut in_mod = false
-                        if f.class_name == "" and fn_set.contains(f.name):
+                        if f.class_name == "" and fn_set.contains(f.name) and f.generics.len == 0:
                             in_mod = true
                         elif f.class_name != "" and class_set.contains(f.class_name):
                             # Skip generic class extend methods - only monomorphized instances are emitted.

@@ -2527,6 +2527,7 @@ typedef struct CGenerator {
     StringBuilder* list_types_buf;
     StringBuilder* proto_buf;
     StringBuilder* mono_buf;
+    StringBuilder* fn_mono_body;
     long long temp_count;
     TrMap* classes;
     TrMap* enums;
@@ -2552,6 +2553,7 @@ typedef struct CGenerator {
     TrMap* coll_local_vtcoll;
     TrMap* type_subst;
     TrMap* mono_done;
+    TrStr emit_fn_name;
     TrMap* list_type_done;
     TrMap* list_fwd_done;
     TrMap* elem_fmt_done;
@@ -2613,6 +2615,7 @@ static void _trdrop_CGenerator(void* vp) {
     Dict_free(self->coll_local_strval);
     Dict_free_strval(self->coll_local_vtcoll);
     Dict_free(self->mono_done);
+    _tr_str_release(self->emit_fn_name);
     Dict_free(self->list_type_done);
     Dict_free(self->list_fwd_done);
     Dict_free(self->elem_fmt_done);
@@ -2777,7 +2780,6 @@ __attribute__((hot)) TrStr read_file(TrStr path);
 __attribute__((hot)) bool file_exists(TrStr path);
 __attribute__((hot)) bool write_file(TrStr path, TrStr content);
 __attribute__((hot)) bool append_file(TrStr path, TrStr content);
-__attribute__((hot)) long long _map_hash(void* key, long long cap);
 __attribute__((malloc,returns_nonnull,hot)) StringObj* StringObj_init(TrStr s);
 __attribute__((hot)) TrStr StringObj_as_str(StringObj* self);
 __attribute__((hot)) void StringObj_append(StringObj* self, TrStr other);
@@ -2812,10 +2814,6 @@ __attribute__((hot)) void raw_free(char* ptr);
 __attribute__((hot)) void raw_copy(char* dst, char* src, long long n);
 __attribute__((hot)) void raw_zero(char* ptr, long long n);
 __attribute__((hot)) void raw_move(char* dst, char* src, long long n);
-__attribute__((hot)) void** alloc(long long n_elems);
-__attribute__((hot)) void dealloc(void** ptr);
-__attribute__((hot)) void** resize(void** ptr, long long new_count);
-__attribute__((hot)) void copy(void** dst, void** src, long long n_elems);
 __attribute__((hot)) bool color_enabled();
 __attribute__((hot)) TrStr esc();
 __attribute__((hot)) TrStr paint(TrStr s, TrStr code);
@@ -3314,6 +3312,7 @@ __attribute__((hot)) TrStr CGenerator_type_args_suffix(CGenerator* self, List_pt
 __attribute__((hot)) TrStr CGenerator_synth_class_suffix(CGenerator* self, HirClass* ucls);
 __attribute__((hot)) TrStr CGenerator_ensure_array_type(CGenerator* self, AstType* ty);
 __attribute__((hot)) void CGenerator_ensure_mono(CGenerator* self, HirClass* cls, List_ptr* type_args);
+__attribute__((hot)) TrStr CGenerator_infer_generic_targ(CGenerator* self, TrStr fname, List_ptr* args);
 __attribute__((hot)) void CGenerator_ensure_mono_func(CGenerator* self, TrStr fname, TrStr targ);
 __attribute__((hot)) TrStr CGenerator_get_user_decorator_attr(CGenerator* self, TrStr name);
 __attribute__((hot)) TrStr CGenerator_deco_first_str(CGenerator* self, Decorator* d);
@@ -3342,6 +3341,7 @@ __attribute__((hot)) bool CGenerator_has_method(CGenerator* self, TrStr cls_name
 __attribute__((hot)) AstType* CGenerator_cls_method_ret_ty(CGenerator* self, TrStr cls_name, TrStr method);
 __attribute__((hot)) TrStr CGenerator_cls_method_c_call(CGenerator* self, TrStr cls_name, TrStr method, TrStr obj_s, TrStr extra_args);
 __attribute__((hot)) TrStr CGenerator_resolve_generic_prim(CGenerator* self, TrStr n);
+__attribute__((hot)) TrStr CGenerator_resolve_generic_tyname(CGenerator* self, TrStr n);
 __attribute__((hot)) TrStr CGenerator_mono_cls_name_for(CGenerator* self, AstType* ty);
 __attribute__((hot)) TrStr CGenerator_obj_to_str_expr(CGenerator* self, TrStr mono, TrStr s);
 __attribute__((hot)) TrStr CGenerator_ensure_elem_fmt_fn(CGenerator* self, AstType* ty);
