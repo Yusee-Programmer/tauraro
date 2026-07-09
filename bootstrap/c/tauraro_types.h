@@ -3323,6 +3323,8 @@ __attribute__((hot)) TrStr CGenerator_ensure_array_type(CGenerator* self, AstTyp
 __attribute__((hot)) void CGenerator_ensure_mono(CGenerator* self, HirClass* cls, List_ptr* type_args);
 __attribute__((hot)) TrStr CGenerator_infer_generic_targ(CGenerator* self, TrStr fname, List_ptr* args);
 __attribute__((hot)) void CGenerator_ensure_mono_func(CGenerator* self, TrStr fname, TrStr targ);
+__attribute__((hot)) TrStr CGenerator_infer_method_targ(CGenerator* self, TrStr cls_name, TrStr method, List_ptr* args);
+__attribute__((hot)) void CGenerator_ensure_mono_method(CGenerator* self, TrStr cls_name, TrStr method, TrStr targ);
 __attribute__((hot)) TrStr CGenerator_get_user_decorator_attr(CGenerator* self, TrStr name);
 __attribute__((hot)) TrStr CGenerator_deco_first_str(CGenerator* self, Decorator* d);
 __attribute__((hot)) TrStr CGenerator_hw_attrs(CGenerator* self, HirFunction* f);
