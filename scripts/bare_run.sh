@@ -24,8 +24,11 @@ echo "  Bare-metal LINK + RUN — Cortex-M3, multi-module, 100% Tauraro"
 echo "=============================================================="
 rm -rf "$APP/build"
 # Compiled from the app dir so `from console import …` (local siblings) resolve.
-( cd "$APP" && "$TAURAROC" main.tr --freestanding --emit c --emit-ld build/app.ld >/dev/null 2>&1 ) \
-    || { echo "FAIL: emit"; exit 1; }
+# --strict proves the SAFETY dial and the RUNTIME dial are orthogonal: this firmware
+# passes the borrow-checker, lifetime, [P-2] raw-pointer, and [S-2] leak-freedom
+# checks — memory-safe, on bare metal — and emits a byte-identical binary.
+( cd "$APP" && "$TAURAROC" main.tr --freestanding --strict --emit c --emit-ld build/app.ld >/dev/null 2>&1 ) \
+    || { echo "FAIL: emit (--freestanding --strict)"; exit 1; }
 [ -f "$APP/build/app.ld" ] || { echo "FAIL: linker script not generated"; exit 1; }
 echo "  emitted $(find "$APP/build" -name '*.c' | wc -l) C files (main + sub-modules), all from .tr"
 

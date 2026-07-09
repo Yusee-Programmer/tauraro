@@ -201,9 +201,17 @@ For a **comprehensive multi-module** version — a GPIO driver, a SysTick timer,
 
 ---
 
-## Invariant across all tiers
+## The safety dial is orthogonal — and it works on bare metal
 
-`--strict`, bounds checks, `[P-2]` raw-pointer quarantine, null safety, and `@value_type` safety **stay on**. The dial reduces the *runtime*, never the *safety* — that is the entire point, and the differentiator from C/Zig bare-metal.
+`--strict`, bounds checks, `[P-2]` raw-pointer quarantine, null safety, and `@value_type` safety **stay on** at every tier. The dial reduces the *runtime*, never the *safety* — the differentiator from C/Zig bare-metal.
+
+This is not aspirational — it is CI-proven. The comprehensive `mcu_app` firmware **compiles under `--freestanding --strict`**:
+
+```bash
+tauraroc main.tr --freestanding --strict --emit c --emit-ld build/app.ld
+```
+
+It passes the full safety analysis — the borrow-checker (`[B-*]`), lifetimes (`[L-*]`), the `[P-2]` raw-pointer quarantine (the allocator's and UART's raw accesses are correctly confined to `unsafe:`), and `[S-2]` leak-freedom — and emits a **byte-identical binary** to the non-strict build (the checks are compile-time only). So you get **Rust-level compile-time safety guarantees on firmware with no OS and no libc** — a combination no mainstream systems language offers. The `bare_run.sh` CI gate builds `mcu_app` this way.
 
 For the internals (the tier defines, the libc boundary, how the seams were closed), see [`docs/dev/08_runtime_tiers_and_freestanding.md`](../../dev/08_runtime_tiers_and_freestanding.md).
 

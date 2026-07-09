@@ -15,9 +15,10 @@
 #   • integer algorithms                                           (mathx)
 #   • reading core system registers                               (sysinfo)
 #
-# Build + run:
+# Build + run (add --strict for the full borrow-checker + leak-freedom guarantee —
+# this firmware is memory-safe by that analysis, and emits an identical binary):
 #   cd examples/freestanding/mcu_app
-#   tauraroc main.tr --freestanding --emit c --emit-ld build/app.ld
+#   tauraroc main.tr --freestanding --strict --emit c --emit-ld build/app.ld
 #   arm-none-eabi-gcc -mcpu=cortex-m3 -mthumb -nostdlib -fno-builtin \
 #       -T build/app.ld -I build/include -o app.elf $(find build -name '*.c') -lgcc
 #   qemu-system-arm -M mps2-an385 -nographic -kernel app.elf
