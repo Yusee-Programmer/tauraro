@@ -1098,6 +1098,104 @@ pub class CGenerator:
         self.proto_buf = old_pbuf
         self.type_subst = old_subst
 
+    # Infer the single type argument of a generic METHOD (its OWN `[T]`, distinct from
+    # the class's generics) from the call args. Args align to the non-self params.
+    pub def infer_method_targ(self, cls_name: str, method: str, args: Vec[Pointer[HirExpr]]) -> str:
+        if not self.classes.contains(cls_name): return ""
+        mut cls = self.classes.get(cls_name)
+        mut mi = 0
+        while mi < cls.methods.len:
+            mut m = cls.methods.get(mi)
+            if m.name == method and m.generics.len == 1:
+                mut gp = m.generics.get(0)
+                mut targ = ""
+                mut nonself = 0
+                mut pi = 0
+                while pi < m.params.len:
+                    mut pp = m.params.get(pi)
+                    if pp.name != "self":
+                        if pp.ty.name == gp and nonself < args.len:
+                            targ = self.resolve_generic_tyname(hir_expr_type(args.get(nonself)).name)
+                        nonself = nonself + 1
+                    pi = pi + 1
+                if targ != "void" and targ != gp and targ != "": return targ
+            mi = mi + 1
+        return ""
+
+    # Ensure a monomorphized copy of a generic METHOD (Wrapper.echo[T] on a non-generic
+    # class). Named <Cls>_<method>__MONO_<targ>; prototype -> mono_buf, body ->
+    # fn_mono_body (after prototypes); `static`. Mirrors ensure_mono_func but carries a
+    # `self` parameter.
+    pub def ensure_mono_method(self, cls_name: str, method: str, targ: str):
+        mut mono_key = "meth_" + cls_name + "_" + method + "__MONO_" + targ
+        if self.mono_done.contains(mono_key): return
+        self.mono_done.insert(mono_key, true)
+        if not self.classes.contains(cls_name): return
+        mut cls = self.classes.get(cls_name)
+        mut mi = 0
+        mut found = false
+        mut m: HirFunction = cls.methods.get(0)
+        while mi < cls.methods.len:
+            mut mm = cls.methods.get(mi)
+            if mm.name == method and mm.generics.len == 1:
+                m = mm
+                found = true
+            mi = mi + 1
+        if not found: return
+        mut gp = m.generics.get(0)
+        mut concrete_c = self.type_to_c(AstType.init(targ))
+        mut old_subst = self.type_subst
+        self.type_subst = Map[str, str].init(4)
+        self.type_subst.insert(gp, concrete_c)
+        mut mono_fname = cls_name + "_" + method + "__MONO_" + targ
+        mut ret_s = self.type_to_c(m.ret_ty)
+        # self by pointer (heap class / mutating value-type) or by value (value-type).
+        mut self_c = cls_name + "* self"
+        if self.value_types.contains(cls_name) and not self.vt_method_mutates_self(m):
+            self_c = cls_name + " self"
+        mut sig = "static __attribute__((hot)) " + ret_s + " " + mono_fname + "(" + self_c
+        mut pi = 0
+        while pi < m.params.len:
+            mut p = m.params.get(pi)
+            if p.name != "self":
+                sig = sig + ", " + self.type_to_c(p.ty) + " " + _safe_c_varname(p.name)
+            pi = pi + 1
+        sig = sig + ")"
+        mut old_buf = self.buf
+        mut old_sbuf = self.struct_buf
+        mut old_pbuf = self.proto_buf
+        self.buf = self.mono_buf
+        self.struct_buf = self.mono_buf
+        self.proto_buf = self.mono_buf
+        self.w(sig + ";\n")
+        self.mono_buf = self.buf
+        self.buf = self.fn_mono_body
+        self.struct_buf = self.fn_mono_body
+        self.proto_buf = self.fn_mono_body
+        mut old_class = self.cur_class
+        mut old_func = self.cur_func
+        self.cur_class = cls_name
+        self.cur_func = method
+        self.decl_vars = Map[str, bool].init(64)
+        self.str_local_names = Map[str, bool].init(16)
+        self.coll_local_sfx = Map[str, str].init(16)
+        self.coll_local_idict = Map[str, bool].init(16)
+        self.coll_local_strval = Map[str, bool].init(16)
+        self.coll_local_vtcoll = Map[str, str].init(16)
+        self.seed_params(m)
+        self.cur_self_is_ptr = self.value_types.contains(cls_name) and self.vt_method_mutates_self(m)
+        self.w(sig + " {\n")
+        self.gen_func_body(m.body, 1)
+        self.cur_self_is_ptr = false
+        self.w("}\n\n")
+        self.cur_class = old_class
+        self.cur_func = old_func
+        self.fn_mono_body = self.buf
+        self.buf = old_buf
+        self.struct_buf = old_sbuf
+        self.proto_buf = old_pbuf
+        self.type_subst = old_subst
+
     # -- Attributes & signatures -----------------------------------------------
 
     pub def get_user_decorator_attr(self, name: str) -> str:
@@ -4444,6 +4542,14 @@ pub class CGenerator:
 
         # Non-generic user class dispatch
         if self.classes.contains(class_name) and class_name != "Vec" and class_name != "Map" and class_name != "Dict" and class_name != "List":
+            # Generic METHOD (its own `[T]`): monomorphize per inferred type arg and
+            # dispatch to the specialized copy (like a generic free function, but with self).
+            mut _mtarg = self.infer_method_targ(class_name, method, args)
+            if _mtarg != "":
+                self.ensure_mono_method(class_name, method, _mtarg)
+                mut _mm = class_name + "_" + method + "__MONO_" + _mtarg + "(" + obj_s
+                if args.len > 0: _mm = _mm + ", " + self.gen_args(args)
+                return _mm + ")"
             mut method_c: str = method
             if _is_c_keyword(method_c): method_c = "_tr_fn_" + method_c
             if method == "init" or method == "new":
@@ -7534,12 +7640,17 @@ pub class CGenerator:
                             mut _sit = self.infer_generic_targ(mn, args)
                             if _sit != "": self.ensure_mono_func(mn, _sit)
                     case _: pass
-            case HirExpr.EMethodCall(obj, _, margs, _):
+            case HirExpr.EMethodCall(obj, mmeth, margs, _):
                 self.scan_mono_expr(obj)
                 mut ei2 = 0
                 while ei2 < margs.len:
                     self.scan_mono_expr(margs.get(ei2))
                     ei2 = ei2 + 1
+                # Generic-method call: specialize before the mono buffer is flushed.
+                mut _rcn = hir_expr_type(obj).name
+                if self.classes.contains(_rcn):
+                    mut _mt = self.infer_method_targ(_rcn, mmeth, margs)
+                    if _mt != "": self.ensure_mono_method(_rcn, mmeth, _mt)
             case HirExpr.EBinOp(_, bl, br, _):
                 self.scan_mono_expr(bl)
                 self.scan_mono_expr(br)
@@ -7746,7 +7857,8 @@ pub class CGenerator:
                 mut mi = 0
                 while mi < c.methods.len:
                     mut m = c.methods.get(mi)
-                    self.w(self.get_inline_attrs(m) + self.gen_func_sig(m, c.name) + ";\n")
+                    if m.generics.len == 0:   # generic methods -> monomorphized copies only
+                        self.w(self.get_inline_attrs(m) + self.gen_func_sig(m, c.name) + ";\n")
                     mi = mi + 1
             i = i + 1
         i = 0
@@ -7789,6 +7901,9 @@ pub class CGenerator:
                 mut mi = 0
                 while mi < c.methods.len:
                     mut m = c.methods.get(mi)
+                    if m.generics.len > 0:   # generic methods -> monomorphized copies only
+                        mi = mi + 1
+                        continue
                     self.cur_class = c.name
                     self.cur_func  = m.name
                     self.cur_throws_ty = m.throws_ty.name
@@ -8133,7 +8248,7 @@ pub class CGenerator:
                     if not _is_invalid_ptr(c4.methods as usize):
                         while mi < c4.methods.len:
                             mut m = c4.methods.get(mi)
-                            if not _is_invalid_ptr(m as usize):
+                            if not _is_invalid_ptr(m as usize) and m.generics.len == 0:
                                 mut ep_key3 = "p_" + c4.name + "_" + m.name
                                 if not self.emitted_fns.contains(ep_key3):
                                     self.emitted_fns.insert(ep_key3, true)
@@ -8403,6 +8518,9 @@ pub class CGenerator:
                     mut mi = 0
                     while mi < c.methods.len:
                         mut m = c.methods.get(mi)
+                        if m.generics.len > 0:   # generic methods -> monomorphized copies only
+                            mi = mi + 1
+                            continue
                         # Mark with the per-method key so loop-2 (prog.functions) won't re-emit.
                         self.emitted_fns.insert("i_" + c.name + "_" + m.name, true)
                         self.cur_class = c.name
@@ -8463,8 +8581,8 @@ pub class CGenerator:
                     if self.classes.contains(f.class_name):
                         if self.classes.get(f.class_name).generics.len > 0:
                             is_generic_cls = true
-                    if not is_generic_cls:
-                        in_mod = true  # extend method belonging to this module
+                    if not is_generic_cls and f.generics.len == 0:
+                        in_mod = true  # extend method (generic ones -> monomorphized copies only)
                 if in_mod:
                     mut em_key = "i_" + f.class_name + "_" + f.name
                     if not self.emitted_fns.contains(em_key):
@@ -8547,7 +8665,7 @@ pub class CGenerator:
                             if not _is_invalid_ptr(c.methods as usize):
                                 while mi < c.methods.len:
                                     mut m = c.methods.get(mi)
-                                    if not _is_invalid_ptr(m as usize):
+                                    if not _is_invalid_ptr(m as usize) and m.generics.len == 0:
                                         # Mark with per-method key so loop-2 won't re-emit.
                                         self.emitted_fns.insert("i_" + c.name + "_" + m.name, true)
                                         self.cur_class = c.name
@@ -8647,8 +8765,8 @@ pub class CGenerator:
                             if self.classes.contains(f.class_name):
                                 if self.classes.get(f.class_name).generics.len > 0:
                                     is_generic_cls2 = true
-                            if not is_generic_cls2:
-                                in_mod = true  # extend method belonging to this module
+                            if not is_generic_cls2 and f.generics.len == 0:
+                                in_mod = true  # extend method (generic ones -> monomorphized copies only)
                         if in_mod:
                             mut em_key2 = "i_" + f.class_name + "_" + f.name
                             if not self.emitted_fns.contains(em_key2):

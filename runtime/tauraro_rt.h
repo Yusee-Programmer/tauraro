@@ -88,11 +88,23 @@
 #    include <linux/slab.h>
 #    include <linux/string.h>
 #  else
-     /* Bare-metal (non-Linux-kernel, e.g. arm-none-eabi/newlib): setjmp.h and
-      * stdarg.h are freestanding headers. setjmp is needed by the bare-metal panic
-      * buffer (_tr_thread_panic_jmpbuf); stdarg by the libc-lite vsnprintf. */
-#    include <setjmp.h>
+     /* Bare-metal (non-Linux-kernel). stdarg.h IS a freestanding header (libc-lite
+      * vsnprintf). setjmp.h is NOT — it's hosted; arm-none-eabi/newlib bundles it, but
+      * bare toolchains like riscv64-unknown-elf don't provide it under -ffreestanding.
+      * Use it when present; otherwise fall back to a trivial no-unwind version (a
+      * bare-metal panic has nowhere to return to, so longjmp just stops). */
 #    include <stdarg.h>
+#    if defined(__has_include)
+#      if __has_include(<setjmp.h>)
+#        include <setjmp.h>
+#        define _TR_HAS_SETJMP 1
+#      endif
+#    endif
+#    ifndef _TR_HAS_SETJMP
+       typedef void* jmp_buf[8];
+#      define setjmp(b)      (0)
+#      define longjmp(b, v)  do { for(;;){} } while(0)
+#    endif
 #  endif
 #endif
 
