@@ -5145,10 +5145,15 @@ extend Sema:
                             is_generic = true
                             generic_arg_n = iname
                     case Expr.EIndex(_, _):
+                        # A nested generic type arg, e.g. the `Box[int]` in Box[Box[int]].
+                        # Keep the FULL nested type (with its own args) so the outer
+                        # monomorphization suffix recurses (Box[int] -> Box_i64) instead
+                        # of collapsing to a bare `Box`.
                         is_generic = true
                         mut nested_ty = self.build_ast_type(idx_inner)
                         if nested_ty as usize != 0 as usize:
                             generic_arg_n = nested_ty.read().name
+                            generic_arg_ty = nested_ty
                     case _: pass
                 # The generic interpretation (obj[T] is a type application like
                 # List[int]) only applies when `obj` is a TYPE NAME - a builtin
@@ -5191,6 +5196,9 @@ extend Sema:
                             while _cgi < generic_args.len:
                                 cls_ty.args.push(generic_args.get(_cgi))
                                 _cgi = _cgi + 1
+                        elif generic_arg_ty as usize != 0 as usize:
+                            # Nested generic arg (Box[Box[int]]): keep its inner args.
+                            cls_ty.args.push(generic_arg_ty)
                         else:
                             cls_ty.args.push(box_asttype(AstType.init(generic_arg_n)))
                         return box_hirexpr(HirExpr.EIdent(obj_name, cls_ty, false))

@@ -1655,7 +1655,7 @@ __attribute__((hot)) long long expand_macros(Program* prog) {
     /* pass */
     while ((gi < gen->len)) {
         /* pass */
-        List_ptr_append(out, List_ptr_get(gen, gi));
+        List_ptr_append(out, ((Decl*)List_ptr_get(gen, gi)));
         /* pass */
         gi = (gi + 1LL);
     }
@@ -1668,7 +1668,7 @@ __attribute__((hot)) long long expand_macros(Program* prog) {
     /* pass */
     while ((fi < out->len)) {
         /* pass */
-        FnMacroExpander_expand_decl(fexp, List_ptr_get(out, fi));
+        FnMacroExpander_expand_decl(fexp, ((Decl*)List_ptr_get(out, fi)));
         /* pass */
         fi = (fi + 1LL);
     }

@@ -4520,7 +4520,7 @@ __attribute__((hot)) void Sema_compute_return_ownership(Sema* self, HirProgram* 
                 /* pass */
                 while ((ri < rets->len)) {
                     /* pass */
-                    if ((!Sema__ret_yields_owned(self, List_ptr_get(rets, ri)))) {
+                    if ((!Sema__ret_yields_owned(self, ((HirExpr*)List_ptr_get(rets, ri))))) {
                         /* pass */
                         all_owned = false;
                     }
@@ -9087,7 +9087,7 @@ __auto_type args = _t530.data.ECall.args;
                         /* pass */
                         while ((vi < hl->len)) {
                             /* pass */
-                            List_ptr_append(vargs, List_ptr_get(hl, vi));
+                            List_ptr_append(vargs, ((HirExpr*)List_ptr_get(hl, vi)));
                             /* pass */
                             vi = (vi + 1LL);
                         }
@@ -9102,7 +9102,7 @@ __auto_type args = _t530.data.ECall.args;
                         /* pass */
                         while ((vk < vfixed)) {
                             /* pass */
-                            List_ptr_append(vnew_hl, List_ptr_get(hl, vk));
+                            List_ptr_append(vnew_hl, ((HirExpr*)List_ptr_get(hl, vk)));
                             /* pass */
                             vk = (vk + 1LL);
                         }
@@ -9330,7 +9330,7 @@ __auto_type idx2 = _t564.data.EIndex._tr_v_index;
                     /* pass */
                     while ((aa_i < hl->len)) {
                         /* pass */
-                        Sema_check_spawn_sendable(self, List_ptr_get(hl, aa_i));
+                        Sema_check_spawn_sendable(self, ((HirExpr*)List_ptr_get(hl, aa_i)));
                         /* pass */
                         aa_i = (aa_i + 1LL);
                     }
@@ -9836,7 +9836,7 @@ __auto_type idx_arg = _t579.data.EIndex._tr_v_index;
                 /* pass */
                 if ((hl->len > 0LL)) {
                     /* pass */
-                    ret_ty = hir_expr_type(List_ptr_get(hl, 0LL));
+                    ret_ty = hir_expr_type(((HirExpr*)List_ptr_get(hl, 0LL)));
                 } else if ((hobj_ty->args->len > 0LL)) {
                     /* pass */
                     ret_ty = (*((AstType**)List_ptr_get(hobj_ty->args, 0LL)));
@@ -9877,22 +9877,22 @@ __auto_type idx_arg = _t579.data.EIndex._tr_v_index;
             /* pass */
             while ((_tsi < hl->len)) {
                 /* pass */
-                if (Sema_expr_is_borrow(self, List_ptr_get(hl, _tsi))) {
+                if (Sema_expr_is_borrow(self, ((HirExpr*)List_ptr_get(hl, _tsi)))) {
                     /* pass */
                     Sema_error(self, _tr_str_lit("[T-6] a borrow (`ref`/`mut ref`) cannot be passed to Thread.spawn: the borrowed value may be mutated or freed by another thread, or outlive its source.\n      FIX: pass an owned value, a `Shared[T]`, or a `Mutex[T]`/`Atomic[T]` handle instead of a borrow."));
                 }
                 /* pass */
-                AstType* _tsa_ty = hir_expr_type(List_ptr_get(hl, _tsi));
+                AstType* _tsa_ty = hir_expr_type(((HirExpr*)List_ptr_get(hl, _tsi)));
                 /* pass */
                 if ((!Sema_is_sendable_ty(self, _tsa_ty))) {
                     /* pass */
                     ({ TrStr _at_t582 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("[T-1] Type '")), _tr_strz(_tsa_ty->name))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("' is not Sendable and cannot be passed to Thread.spawn.\n      FIX: Wrap in Mutex["))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tsa_ty->name)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("] for exclusive access, or add 'implements Sendable' to '"))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tsa_ty->name)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("' to confirm it is thread-safe."))); _tr_str_release(_cl); _cres; })); Sema_error(self, _at_t582); _tr_str_release(_at_t582); });
-                } else if ((((self->strict_mode && Sema__is_rc_class(self, _tsa_ty->name)) && (!Sema__expr_is_shared(self, List_ptr_get(hl, _tsi)))) && (!Sema__is_unsafe_sendable(self, _tsa_ty->name)))) {
+                } else if ((((self->strict_mode && Sema__is_rc_class(self, _tsa_ty->name)) && (!Sema__expr_is_shared(self, ((HirExpr*)List_ptr_get(hl, _tsi))))) && (!Sema__is_unsafe_sendable(self, _tsa_ty->name)))) {
                     /* pass */
                     ({ TrStr _at_t583 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("[T-7] '")), _tr_strz(_tsa_ty->name))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("' is a plain reference-counted class — its refcount is thread-local (non-atomic), so it is not 'Send' and cannot be passed to Thread.spawn (exactly why Rust's 'Rc' is '!Send'): retaining/releasing it from another thread races the count.\n      FIX: share it as 'Shared["))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tsa_ty->name)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("]' (atomic refcount, like Rust's 'Arc'). A 'Sendable' class must itself hold only Sendable + atomically-shared state."))); _tr_str_release(_cl); _cres; })); Sema_error(self, _at_t583); _tr_str_release(_at_t583); });
                 }
                 /* pass */
-                Sema__check_spawn_nested_rc(self, List_ptr_get(hl, _tsi));
+                Sema__check_spawn_nested_rc(self, ((HirExpr*)List_ptr_get(hl, _tsi)));
                 /* pass */
                 _tsi = (_tsi + 1LL);
             }
@@ -9904,22 +9904,22 @@ __auto_type idx_arg = _t579.data.EIndex._tr_v_index;
             /* pass */
             while ((_psi < hl->len)) {
                 /* pass */
-                if (Sema_expr_is_borrow(self, List_ptr_get(hl, _psi))) {
+                if (Sema_expr_is_borrow(self, ((HirExpr*)List_ptr_get(hl, _psi)))) {
                     /* pass */
                     Sema_error(self, _tr_str_lit("[T-6] a borrow (`ref`/`mut ref`) cannot be passed to ThreadPool.spawn: the borrowed value may be mutated or freed by another thread, or outlive its source.\n      FIX: pass an owned value, a `Shared[T]`, or a `Mutex[T]`/`Atomic[T]` handle instead of a borrow."));
                 }
                 /* pass */
-                AstType* _psa_ty = hir_expr_type(List_ptr_get(hl, _psi));
+                AstType* _psa_ty = hir_expr_type(((HirExpr*)List_ptr_get(hl, _psi)));
                 /* pass */
                 if ((!Sema_is_sendable_ty(self, _psa_ty))) {
                     /* pass */
                     ({ TrStr _at_t584 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("[T-1] Type '")), _tr_strz(_psa_ty->name))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("' is not Sendable and cannot be passed to ThreadPool.spawn.\n      FIX: Wrap in Mutex["))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_psa_ty->name)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("] for exclusive access, or add 'implements Sendable' to '"))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_psa_ty->name)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("' to confirm it is thread-safe."))); _tr_str_release(_cl); _cres; })); Sema_error(self, _at_t584); _tr_str_release(_at_t584); });
-                } else if ((((self->strict_mode && Sema__is_rc_class(self, _psa_ty->name)) && (!Sema__expr_is_shared(self, List_ptr_get(hl, _psi)))) && (!Sema__is_unsafe_sendable(self, _psa_ty->name)))) {
+                } else if ((((self->strict_mode && Sema__is_rc_class(self, _psa_ty->name)) && (!Sema__expr_is_shared(self, ((HirExpr*)List_ptr_get(hl, _psi))))) && (!Sema__is_unsafe_sendable(self, _psa_ty->name)))) {
                     /* pass */
                     ({ TrStr _at_t585 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("[T-7] '")), _tr_strz(_psa_ty->name))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("' is a plain reference-counted class — its refcount is thread-local (non-atomic), so it cannot be passed to ThreadPool.spawn (like Rust's 'Rc' being '!Send').\n      FIX: share it as 'Shared["))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_psa_ty->name)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("]' (atomic refcount, like Rust's 'Arc')."))); _tr_str_release(_cl); _cres; })); Sema_error(self, _at_t585); _tr_str_release(_at_t585); });
                 }
                 /* pass */
-                Sema__check_spawn_nested_rc(self, List_ptr_get(hl, _psi));
+                Sema__check_spawn_nested_rc(self, ((HirExpr*)List_ptr_get(hl, _psi)));
                 /* pass */
                 _psi = (_psi + 1LL);
             }
@@ -10413,6 +10413,8 @@ __auto_type idx_inner = _t530.data.EIndex._tr_v_index;
                 TrStr _strtmp_t593 = (*nested_ty)->name;
                 _tr_str_release(generic_arg_n);
                 generic_arg_n = _strtmp_t593;
+                /* pass */
+                generic_arg_ty = nested_ty;
             }
         } else if (1) {
             __auto_type _ = _t589;
@@ -10485,6 +10487,9 @@ __auto_type idx_inner = _t530.data.EIndex._tr_v_index;
                         /* pass */
                         _cgi = (_cgi + 1LL);
                     }
+                } else if ((((unsigned long long)(generic_arg_ty)) != ((unsigned long long)(0LL)))) {
+                    /* pass */
+                    List_ptr_append(cls_ty->args, generic_arg_ty);
                 } else {
                     /* pass */
                     List_ptr_append(cls_ty->args, box_asttype(AstType_init(generic_arg_n)));
@@ -10621,7 +10626,7 @@ __auto_type ty = _t530.data.ECast.ty;
         /* pass */
         while ((m < hitems->len)) {
             /* pass */
-            List_ptr_append(tup_ty->args, box_asttype(hir_expr_type(List_ptr_get(hitems, m))));
+            List_ptr_append(tup_ty->args, box_asttype(hir_expr_type(((HirExpr*)List_ptr_get(hitems, m)))));
             /* pass */
             m = (m + 1LL);
         }
@@ -10647,7 +10652,7 @@ __auto_type ty = _t530.data.ECast.ty;
             /* pass */
             list_ty->args = (void*)List_ptr_new();
             /* pass */
-            List_ptr_append(list_ty->args, box_asttype(hir_expr_type(List_ptr_get(hitems, 0LL))));
+            List_ptr_append(list_ty->args, box_asttype(hir_expr_type(((HirExpr*)List_ptr_get(hitems, 0LL)))));
         }
         /* pass */
         return box_hirexpr(HirExpr_ctor_EList(hitems, list_ty));
@@ -10939,9 +10944,9 @@ __auto_type vals = _t530.data.EDict.vals;
         /* pass */
         if ((h_keys->len > 0LL)) {
             /* pass */
-            List_ptr_append(dict_ty->args, box_asttype(hir_expr_type(List_ptr_get(h_keys, 0LL))));
+            List_ptr_append(dict_ty->args, box_asttype(hir_expr_type(((HirExpr*)List_ptr_get(h_keys, 0LL)))));
             /* pass */
-            List_ptr_append(dict_ty->args, box_asttype(hir_expr_type(List_ptr_get(h_vals, 0LL))));
+            List_ptr_append(dict_ty->args, box_asttype(hir_expr_type(((HirExpr*)List_ptr_get(h_vals, 0LL)))));
         }
         /* pass */
         return box_hirexpr(HirExpr_ctor_EDict(h_keys, h_vals, dict_ty));

@@ -1371,7 +1371,13 @@ __attribute__((hot)) TrStr CGenerator_type_args_suffix(CGenerator* self, List_pt
                 arg_name = _tr_str_lit("f32");
             } else {
                 /* pass */
-                arg_name = concrete;
+                if (_tr_str_ends_with(_tr_strz(concrete), _tr_strz(_tr_str_lit("*")))) {
+                    /* pass */
+                    arg_name = _tr_str_wrap(_tr_str_slice(_tr_strz(concrete), 0LL, (_tr_strlen(_tr_strz(concrete)) - 1LL)));
+                } else {
+                    /* pass */
+                    arg_name = concrete;
+                }
             }
         }
         /* pass */
@@ -3564,7 +3570,7 @@ __auto_type _do_ty = _t913.data.EDo.ty;
             /* pass */
             while ((_dj < _ddrops->len)) {
                 /* pass */
-                CGenerator_gen_stmt(self, List_ptr_get(_ddrops, _dj), 0LL);
+                CGenerator_gen_stmt(self, ((HirStmt*)List_ptr_get(_ddrops, _dj)), 0LL);
                 /* pass */
                 _dj = (_dj + 1LL);
             }
@@ -3576,7 +3582,7 @@ __auto_type _do_ty = _t913.data.EDo.ty;
             /* pass */
             while ((_dj2 < _ddrops->len)) {
                 /* pass */
-                CGenerator_gen_stmt(self, List_ptr_get(_ddrops, _dj2), 0LL);
+                CGenerator_gen_stmt(self, ((HirStmt*)List_ptr_get(_ddrops, _dj2)), 0LL);
                 /* pass */
                 _dj2 = (_dj2 + 1LL);
             }

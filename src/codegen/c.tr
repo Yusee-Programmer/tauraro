@@ -756,7 +756,16 @@ pub class CGenerator:
                 elif concrete == "short": arg_name = "i16"
                 elif concrete == "signed char": arg_name = "i8"
                 elif concrete == "float": arg_name = "f32"
-                else: arg_name = concrete
+                else:
+                    # A generic param bound to a user-class/struct pointer, e.g. the T of
+                    # Box[Box[int]] is "Box_i64*". Its mono suffix is the POINTEE struct
+                    # name (Box_i64) — matching how the outer type's struct is named via
+                    # the nested-type recursion above — not "Box_i64_ptr" (which
+                    # type_suffix would yield for a trailing '*').
+                    if concrete.ends_with("*"):
+                        arg_name = concrete.slice(0, concrete.len() - 1)
+                    else:
+                        arg_name = concrete
             sfx = sfx + self.type_suffix(arg_name)
             i = i + 1
         return sfx

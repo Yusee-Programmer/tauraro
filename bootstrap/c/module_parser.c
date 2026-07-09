@@ -2881,7 +2881,7 @@ __attribute__((hot)) Expr* Parser_parse_postfix(Parser* self) {
                 /* pass */
                 while ((_tj < _ti_extra->len)) {
                     /* pass */
-                    List_ptr_append(_ti_all, List_ptr_get(_ti_extra, _tj));
+                    List_ptr_append(_ti_all, ((Expr*)List_ptr_get(_ti_extra, _tj)));
                     /* pass */
                     _tj = (_tj + 1LL);
                 }
