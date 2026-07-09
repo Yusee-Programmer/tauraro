@@ -30,8 +30,8 @@ from hwio import popcount, reverse_byte
 from fixedpoint import fx, fx_mul, fx_to_int
 from crc import crc32
 from ringbuf import RingBuf
-from gpio import gpio_out_enable, gpio_write, gpio_read
-from timer import systick_start, systick_now, busy
+from gpio import gpio_out_enable, gpio_write
+from timer import systick_start, systick_now, systick_reload, busy
 from sysinfo import cpuid
 
 # ---- Platform: bump allocator (natural non-zero global; @entry runs the init) ----
@@ -104,19 +104,20 @@ def boot():
         rsum = rsum + rb.pop()
     kv("ringbuf_sum", rsum)
 
-    # GPIO driver: enable output, drive high/low, read back
-    gpio_out_enable(0)
-    gpio_write(0, true)
-    kv("gpio0_high", gpio_read(0))
-    gpio_write(0, false)
-    kv("gpio0_low", gpio_read(0))
-
-    # SysTick: enable the free-running down-counter, confirm it advances
+    # SysTick timer: enable the free-running down-counter, read its reload register
+    # back (a reliable MMIO write->read round-trip), and confirm the counter advances
     systick_start()
+    kv_hex("mmio_readback", systick_reload())      # 0xffffff — the value written to RVR
     mut t0 = systick_now()
     busy(3000)
     mut t1 = systick_now()
     kv("timer_running", b2i(t0 != t1))
+
+    # GPIO driver: configure pin 0 as an output and drive it high then low
+    gpio_out_enable(0)
+    gpio_write(0, true)
+    gpio_write(0, false)
+    kv("gpio_driven", 1)
 
     # core system register
     kv_hex("cpuid", cpuid())

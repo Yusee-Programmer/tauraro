@@ -9,6 +9,10 @@ pub def systick_start():
     wr(0xE000E010, 0x5)           # enable, processor clock, no IRQ
 pub def systick_now() -> int:
     return rd(0xE000E018)
+# Read back the reload register — a reliable MMIO write→read round-trip: whatever
+# systick_start() wrote to RVR reads back here.
+pub def systick_reload() -> int:
+    return rd(0xE000E014)
 pub def busy(n: int):
     mut i = 0
     while i < n:
