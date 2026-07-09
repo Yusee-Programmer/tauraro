@@ -2,15 +2,18 @@
 # Configure a pin as output, drive it, read it back — the embedded "hello world".
 from hwio import rd, wr, set_bits
 
-mut GPIO0: int = 0x40010000        # DATA @ +0x00, OUTENABLESET @ +0x10
+# CMSDK GPIO0 register map: DATA @ +0x00 (read = input pad state), DATAOUT @ +0x04
+# (the output latch — read back the value you drove), OUTENABLESET @ +0x10.
+mut GPIO0_DATAOUT: int = 0x40010004
+mut GPIO0_OUTEN:   int = 0x40010010
 
 pub def gpio_out_enable(pin: int):
-    set_bits(0x40010000 + 0x10, 1 << pin)   # OUTENABLESET
+    set_bits(0x40010010, 1 << pin)          # OUTENABLESET
 pub def gpio_write(pin: int, on: bool):
-    mut v = rd(0x40010000)
+    mut v = rd(0x40010004)                    # DATAOUT
     if on:
-        wr(0x40010000, v | (1 << pin))
+        wr(0x40010004, v | (1 << pin))
     else:
-        wr(0x40010000, v & (0xFFFFFFFF ^ (1 << pin)))
+        wr(0x40010004, v & (0xFFFFFFFF ^ (1 << pin)))
 pub def gpio_read(pin: int) -> int:
-    return (rd(0x40010000) >> pin) & 1
+    return (rd(0x40010004) >> pin) & 1        # read back the driven output
