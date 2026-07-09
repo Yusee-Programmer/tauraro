@@ -7768,6 +7768,10 @@ pub class CGenerator:
             out.append("#define TAURARO_STD_LIB\n")
             out.append("#define TAURARO_RT_NO_STRINGBUILDER\n")
         if self.tier_define != "": out.append("#define " + self.tier_define + "\n")
+        # Hook wiring (@allocator/@output) goes in the SHARED header so every module
+        # TU — not just main.c — sees TAURARO_ALLOC/... before the runtime include
+        # (else a std module like std.hal.mmio hits the TAURARO_KERNEL #error).
+        out.append(self.emit_tier_hooks(prog))
         out.append("#include \"tauraro_rt.h\"\n\n")
 
         # -- Forward declarations ----------------------------------------------
