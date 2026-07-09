@@ -1020,7 +1020,104 @@ pub class CGenerator:
                 case _: pass
         return ""
 
+    # First string argument of a decorator (e.g. @section("x") -> "x"), or "".
+    pub def deco_first_str(self, d: Decorator) -> str:
+        if d.args.len == 0: return ""
+        match d.args.get(0).read():
+            case Expr.ELitStr(v): return v
+            case _: return ""
+
+    # Bare-metal / low-level codegen attributes from decorators: @naked, @interrupt,
+    # @used, and @section("name") -> a combined GCC __attribute__((...)) prefix, or ""
+    # if the function carries none. Emitted WITHOUT `static` so a reset entry / ISR /
+    # sectioned symbol stays linkable (referenced from a vector table or the linker).
+    pub def hw_attrs(self, f: HirFunction) -> str:
+        mut parts = Vec[str].init(0)
+        mut i = 0
+        while i < f.decorators.len:
+            mut d = f.decorators.get(i)
+            if d.name == "naked": parts.push("naked")
+            elif d.name == "interrupt": parts.push("interrupt")
+            elif d.name == "used": parts.push("used")
+            elif d.name == "section":
+                mut s = self.deco_first_str(d)
+                if s != "": parts.push("section(\"" + s + "\")")
+            i = i + 1
+        if parts.len == 0: return ""
+        mut body = parts.get(0)
+        mut j = 1
+        while j < parts.len:
+            body = body + "," + parts.get(j)
+            j = j + 1
+        return "__attribute__((" + body + ")) "
+
+    # The #define wiring a runtime pluggable macro to a user function `f`, if `f`
+    # carries a hook decorator (@allocator/@free/@realloc/@calloc/@output); else "".
+    # Lets a bare-metal program supply its allocator + output sink in pure Tauraro —
+    # no C hooks header. Hook fns must use basic C types (usize, Pointer[u8],
+    # Pointer[char]) so the forward-decl is valid before the runtime include.
+    pub def hook_macro_for(self, f: HirFunction) -> str:
+        mut i = 0
+        mut nm = f.name
+        while i < f.decorators.len:
+            mut d = f.decorators.get(i).name
+            if d == "allocator": return "#define TAURARO_ALLOC(sz) " + nm + "(sz)\n"
+            if d == "free":      return "#define TAURARO_FREE(p) " + nm + "(p)\n"
+            if d == "realloc":   return "#define TAURARO_REALLOC(p,sz) " + nm + "(p,sz)\n"
+            if d == "calloc":    return "#define TAURARO_CALLOC(n,sz) " + nm + "(n,sz)\n"
+            if d == "output":    return "#define _TR_WRITE(s) " + nm + "(s)\n"
+            i = i + 1
+        return ""
+
+    # Prologue text (forward-decls + #defines) wiring every hook function in `prog`
+    # to the runtime macros. Emitted before the runtime include.
+    pub def emit_tier_hooks(self, prog: HirProgram) -> str:
+        mut fwd = ""
+        mut defs = ""
+        mut i = 0
+        while i < prog.functions.len:
+            mut f = prog.functions.get(i)
+            if not _is_invalid_ptr(f as usize):
+                mut hm = self.hook_macro_for(f)
+                if hm != "":
+                    fwd = fwd + self.gen_func_sig(f, "") + ";\n"
+                    defs = defs + hm
+            i = i + 1
+        return fwd + defs
+
+    # --freestanding @entry: emit a reset trampoline + Cortex-M .isr_vector table so
+    # the user's @entry function is the boot entry — no hand-written startup.c. The
+    # trampoline copies .data, zeroes .bss, then calls the entry; the .bss/.data/
+    # _stack_top symbols come from the generated linker script (--emit-ld). Returns ""
+    # if the program has no @entry. Emitted after all function defs (the entry fn is
+    # a static function already in scope, so no forward decl is needed).
+    pub def emit_entry_glue(self, prog: HirProgram) -> str:
+        mut entry = ""
+        mut i = 0
+        while i < prog.functions.len:
+            mut f = prog.functions.get(i)
+            if not _is_invalid_ptr(f as usize):
+                mut j = 0
+                while j < f.decorators.len:
+                    if f.decorators.get(j).name == "entry": entry = f.name
+                    j = j + 1
+            i = i + 1
+        if entry == "": return ""
+        mut s = "\n/* --freestanding @entry: reset trampoline + Cortex-M vector table */\n"
+        s = s + "extern unsigned _stack_top, __bss_start__, __bss_end__, _sidata, _sdata, _edata;\n"
+        s = s + "__attribute__((used)) void _tr_reset(void){\n"
+        s = s + "    unsigned *d, *sp;\n"
+        s = s + "    for(d=&_sdata, sp=&_sidata; d<&_edata;) *d++ = *sp++;\n"
+        s = s + "    for(d=&__bss_start__; d<&__bss_end__;) *d++ = 0;\n"
+        s = s + "    " + entry + "();\n"
+        s = s + "    for(;;){}\n}\n"
+        s = s + "__attribute__((used, section(\".isr_vector\")))\n"
+        s = s + "void* const _tr_isr_vector[] = { (void*)&_stack_top, (void*)_tr_reset };\n"
+        return s
+
     pub def get_inline_attrs(self, f: HirFunction) -> str:
+        mut hw = self.hw_attrs(f)
+        if hw != "": return hw
         mut i = 0
         while i < f.decorators.len:
             if f.decorators.get(i).name == "inline": return "static inline __attribute__((always_inline,hot)) "
@@ -1051,6 +1148,8 @@ pub class CGenerator:
 
     # Like get_inline_attrs but without `static` - for cross-module prototypes in tauraro_types.h.
     pub def get_proto_attrs(self, f: HirFunction) -> str:
+        mut hwp = self.hw_attrs(f)
+        if hwp != "": return hwp
         mut i = 0
         while i < f.decorators.len:
             if f.decorators.get(i).name == "inline": return "inline __attribute__((always_inline,hot)) "
@@ -7321,6 +7420,7 @@ pub class CGenerator:
         # -- Phase 1: Runtime header include + file-wide optimization pragmas ----
         self.w("#define _TR_MAIN\n")
         if self.tier_define != "": self.w("#define " + self.tier_define + "\n")
+        self.w(self.emit_tier_hooks(prog))
         self.w("#include \"tauraro_rt.h\"\n")
 
         # -- Phase 2: Forward declarations (opaque struct pointers) ------------
@@ -7553,6 +7653,7 @@ pub class CGenerator:
             i = i + 1
 
         # -- Phase 7: C main entry point ---------------------------------------
+        self.w(self.emit_entry_glue(prog))
         self.w("__attribute__((hot)) int main(int argc, char** argv) {\n")
         self.w("    _tr_argc = argc; _tr_argv = argv;\n")
         self.w("    _tr_init_console();\n")
@@ -8193,6 +8294,7 @@ pub class CGenerator:
 
         self.w("#define _TR_MAIN\n")
         if self.tier_define != "": self.w("#define " + self.tier_define + "\n")
+        self.w(self.emit_tier_hooks(prog))
         self.w("#include \"tauraro_types.h\"\n\n")
 
         # Emit spawn + async wrappers (static thread-entry functions) before any function body
@@ -8341,6 +8443,7 @@ pub class CGenerator:
                 i = i + 1
 
         # C main() entry point
+        self.w(self.emit_entry_glue(prog))
         self.w("__attribute__((hot)) int main(int argc, char** argv) {\n")
         self.w("    _tr_argc = argc; _tr_argv = argv;\n")
         self.w("    _tr_init_console();\n")

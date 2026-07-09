@@ -178,6 +178,34 @@ minimal program's — which is why gating whole subsystems is the big lever:
     through `_TR_WRITE` → CMSDK UART → qemu stdout; the harness asserts the program's
     output. This is the step that turns "compiles freestanding" into "a Tauraro
     binary runs on bare metal."
+### Bare-metal decorators — eliminating the C shims (Phase 5, in progress)
+
+Goal: the user authors **only `.tr`** — the compiler generates all glue (the emitted
+C/asm/ld is the compiler's burden, not the user's). Progress:
+
+- **Batch 1 — low-level function attributes — DONE ✅** (`src/codegen/c.tr`,
+  `hw_attrs`): `@section("name")` → `__attribute__((section("name")))` (vector table
+  / custom placement); `@naked` → `naked`; `@interrupt` → `interrupt` (ISRs); `@used`
+  → `used` (keep a symbol the linker would drop). Emitted *without* `static` so
+  entry/ISR/vector symbols stay linkable. Note `@interrupt`/`@naked` are
+  target-specific (invalid on hosted x86 — they're cross-compile/bare-metal tools).
+- **Batch 2 — hook wiring + entry + linker-gen — DONE ✅ (blessed):**
+  - `@allocator`/`@free`/`@realloc`/`@calloc` → forward-decl + `#define
+    TAURARO_ALLOC(sz) <fn>` before the runtime include (kills `platform_mps2.c`'s
+    allocator + `mps2_hooks.h`). `@output` → `#define _TR_WRITE(s) <fn>` (UART sink;
+    `s` is a `Pointer[char]`). (`emit_tier_hooks` in `src/codegen/c.tr`.)
+  - `@entry` → the compiler emits a reset trampoline (copy `.data`, zero `.bss`, call
+    the entry) **and** the `.isr_vector` table `{ &_stack_top, _tr_reset }` (kills
+    `startup_cm3.c`). (`emit_entry_glue`.)
+  - `--emit-ld <path>` → the compiler writes a Cortex-M linker script whose symbols
+    match the trampoline (kills `mps2.ld`). (`linker_script_cortex_m` in
+    `src/main.tr`.)
+  - **Result: `examples/freestanding/mps2_pure.tr` is a bare-metal program in 100%
+    Tauraro** — allocator, UART driver, boot entry — that emits clean and links with
+    only the generated C + `.ld`. `scripts/bare_run.sh` builds+runs *it* under qemu.
+  - Remaining niceties: a `target {…}` block (nicer than `--emit-ld`'s fixed map) and
+    fixed-size static arrays (`[u8; N]`) so the arena needn't sit at a fixed address.
+
 - **Phase 5 — arch/HAL + drivers.** `std/hal/mmio.tr` gives volatile MMIO
   `read32/write32/read8/write8/wait_bits_set` (backed by `_tr_mmio_*` runtime
   intrinsics) — device drivers written in Tauraro. Still ahead: more archs
