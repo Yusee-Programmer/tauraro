@@ -2733,6 +2733,60 @@ extend Sema:
                 return self._ret_yields_owned(a) and self._ret_yields_owned(b2)
             case _: return false
 
+    # A concrete type satisfies a generic bound `T: Iface` if it is a class that
+    # either explicitly `implements Iface` OR structurally has all of the interface's
+    # methods (Tauraro's monomorphized generics dispatch by method, so structural
+    # satisfaction is exactly what makes the body compile). Unknown bound names are
+    # accepted (lenient — could be a non-interface marker); primitives never satisfy.
+    pub def _type_satisfies_bound(self, type_name: str, iface_name: str) -> bool:
+        if not self.interfaces.contains(iface_name): return true
+        if not self.classes.contains(type_name): return false
+        mut cls = self.classes.get(type_name)
+        mut ii = 0
+        while ii < cls.iface_names.len:
+            if cls.iface_names.get(ii) == iface_name: return true
+            ii = ii + 1
+        mut idef = self.interfaces.get(iface_name)
+        mut mi = 0
+        while mi < idef.methods.len:
+            mut imeth_nm = idef.methods.get(mi).name
+            mut found = false
+            mut cmi = 0
+            while cmi < cls.methods.len:
+                if cls.methods.get(cmi).name == imeth_nm: found = true
+                cmi = cmi + 1
+            if not found: return false
+            mi = mi + 1
+        return true
+
+    # [G-1] Enforce generic bounds at a call site: for each `T: Iface` constraint on
+    # the callee, infer T's concrete type from an argument whose parameter is declared
+    # as T, and require it to satisfy every bound interface.
+    pub def check_call_bounds(self, fname: str, hargs: Vec[Pointer[HirExpr]]):
+        if not self.fn_defs.contains(fname): return
+        mut fd = self.fn_defs.get(fname)
+        if fd.constraints.len == 0: return
+        mut sk = 0
+        if fd.params.len > 0 and fd.params.get(0).name == "self": sk = 1
+        mut ci = 0
+        while ci < fd.constraints.len:
+            mut gc = fd.constraints.get(ci)
+            mut pi = 0
+            while pi < fd.params.len:
+                mut _pty = fd.params.get(pi).ty
+                if _pty as usize != 0 as usize and _pty.read().name == gc.target:
+                    mut aidx = pi - sk
+                    if aidx >= 0 and aidx < hargs.len:
+                        mut concrete_n: str = hir_expr_type(hargs.get(aidx)).name
+                        mut bi = 0
+                        while bi < gc.bounds.len:
+                            mut iface_n = gc.bounds.get(bi).read().name
+                            if not self._type_satisfies_bound(concrete_n, iface_n):
+                                self.error("[G-1] Type '" + concrete_n + "' does not satisfy the bound '" + iface_n + "' required by type parameter '" + gc.target + "' of '" + fname + "'.\n      FIX: implement all methods of interface '" + iface_n + "' on '" + concrete_n + "', or add 'implements " + iface_n + "'.")
+                            bi = bi + 1
+                pi = pi + 1
+            ci = ci + 1
+
     pub def register_decl(self, d: Pointer[Decl]):
         match d.read():
             case Decl.DFunction(f):
@@ -4549,6 +4603,8 @@ extend Sema:
                 if callee as usize == 0 as usize: return box_hirexpr(HirExpr.ECall(hcallee, hl, ret_ty))
                 match callee.read():
                     case Expr.EIdent(n):
+                        # [G-1] generic bounds: verify the inferred type args satisfy them.
+                        self.check_call_bounds(n, hl)
                         if n == "main":
                             self.error("[E-1] Explicit call to 'main()' is forbidden. The compiler automatically invokes main() as the program entry point. Remove the 'main()' call from your source.")
                             return box_hirexpr(HirExpr.ECall(hcallee, hl, ret_ty))

@@ -6,7 +6,7 @@ from core.alloc import alloc, dealloc
 from token import Token
 from lexer import Lexer
 from diag import c_red, c_bold, c_cyan, c_dim, c_green, repeat_char
-from ast import Program, Decl, AstType, Param, FunctionDef, FieldDef, ClassDef, VariantDef, EnumDef, InterfaceDef, ImportItem, Expr, Stmt, Block, ElifClause, MatchArm, Pattern, Decorator, FStringPart, Ownership, ChanSelectArm, CatchClause
+from ast import Program, Decl, AstType, Param, FunctionDef, FieldDef, ClassDef, VariantDef, EnumDef, InterfaceDef, ImportItem, Expr, Stmt, Block, ElifClause, MatchArm, Pattern, Decorator, FStringPart, Ownership, ChanSelectArm, CatchClause, GenericConstraint
 
 # --- Helpers ------------------------------------------------------------------
 
@@ -2331,6 +2331,19 @@ extend Parser:
         self.expect_newline()
         return box_decl(Decl.DImport(path, alias))
 
+    # Parse an optional bound clause after a generic param name: `T: Show` or
+    # `T: Show + Ord`. Records a GenericConstraint (target=gname, bounds=[interfaces])
+    # when present; a bare `T` records nothing. The bound types are plain names.
+    pub def parse_generic_bound(self, gname: str, constraints: Vec[GenericConstraint]):
+        if self.peek() == Token.Colon:
+            self.pos = self.pos + 1
+            mut gc = GenericConstraint.init(gname)
+            gc.bounds.push(box_asttype(AstType.init(self.consume_ident())))
+            while self.peek() == Token.Plus:
+                self.pos = self.pos + 1
+                gc.bounds.push(box_asttype(AstType.init(self.consume_ident())))
+            constraints.push(gc)
+
     pub def parse_function_def(self, is_method: bool) -> FunctionDef:
         self.pos = self.pos + 1
         mut name = self.consume_ident()
@@ -2338,7 +2351,9 @@ extend Parser:
         if self.peek() == Token.LBracket:
             self.pos = self.pos + 1
             while self.peek() != Token.RBracket:
-                f.generics.push(self.consume_ident())
+                mut _gpn = self.consume_ident()
+                f.generics.push(_gpn)
+                self.parse_generic_bound(_gpn, f.constraints)
                 if self.peek() == Token.Comma:
                     self.pos = self.pos + 1
             if self.peek() == Token.RBracket:
@@ -2442,7 +2457,9 @@ extend Parser:
         if self.peek() == Token.LBracket:
             self.pos = self.pos + 1
             while self.peek() != Token.RBracket:
-                c.generics.push(self.consume_ident())
+                mut _cgpn = self.consume_ident()
+                c.generics.push(_cgpn)
+                self.parse_generic_bound(_cgpn, c.constraints)
                 if self.peek() == Token.Comma:
                     self.pos = self.pos + 1
             if self.peek() == Token.RBracket:

@@ -42,7 +42,7 @@ __attribute__((hot)) TrStr Formatter_pad(Formatter* self) {
 
 __attribute__((hot)) void Formatter_line(Formatter* self, TrStr text) {
     /* pass */
-    ({ TrStr _sbt_t604 = (Formatter_pad(self)); StringBuilder_append(self->out, _sbt_t604); _tr_str_release(_sbt_t604); });
+    ({ TrStr _sbt_t605 = (Formatter_pad(self)); StringBuilder_append(self->out, _sbt_t605); _tr_str_release(_sbt_t605); });
     /* pass */
     StringBuilder_append(self->out, text);
     /* pass */
@@ -60,11 +60,11 @@ __attribute__((hot)) void Formatter_flush_standalone_before(Formatter* self, lon
         /* pass */
         if (List_bool_get(self->c_trailing, self->ci)) {
             /* pass */
-            ({ TrStr _sbt_t605 = (Formatter_pad(self)); StringBuilder_append(self->out, _sbt_t605); _tr_str_release(_sbt_t605); });
+            ({ TrStr _sbt_t606 = (Formatter_pad(self)); StringBuilder_append(self->out, _sbt_t606); _tr_str_release(_sbt_t606); });
             /* pass */
             StringBuilder_append(self->out, _tr_str_lit("#"));
             /* pass */
-            ({ TrStr _sbt_t606 = (List_TrStr_get(self->c_texts, self->ci)); StringBuilder_append(self->out, _sbt_t606); _tr_str_release(_sbt_t606); });
+            ({ TrStr _sbt_t607 = (List_TrStr_get(self->c_texts, self->ci)); StringBuilder_append(self->out, _sbt_t607); _tr_str_release(_sbt_t607); });
             /* pass */
             StringBuilder_append(self->out, _tr_str_lit("\n"));
         } else {
@@ -76,7 +76,7 @@ __attribute__((hot)) void Formatter_flush_standalone_before(Formatter* self, lon
                 StringBuilder_append(self->out, _tr_str_lit("#\n"));
             } else {
                 /* pass */
-                ({ TrStr _sbt_t607 = (Formatter_pad(self)); StringBuilder_append(self->out, _sbt_t607); _tr_str_release(_sbt_t607); });
+                ({ TrStr _sbt_t608 = (Formatter_pad(self)); StringBuilder_append(self->out, _sbt_t608); _tr_str_release(_sbt_t608); });
                 /* pass */
                 StringBuilder_append(self->out, _tr_str_lit("#"));
                 /* pass */
@@ -286,14 +286,14 @@ __attribute__((hot)) TrStr Formatter_type_str(Formatter* self, AstType** t) {
             /* pass */
             if ((ti > 0LL)) {
                 /* pass */
-                TrStr _strtmp_t608 = _tr_strx_concat(_tr_strz(ts), _tr_strz(_tr_str_lit(", ")));
+                TrStr _strtmp_t609 = _tr_strx_concat(_tr_strz(ts), _tr_strz(_tr_str_lit(", ")));
                 _tr_str_release(ts);
-                ts = _strtmp_t608;
+                ts = _strtmp_t609;
             }
             /* pass */
-            TrStr _strtmp_t609 = ({ TrStr _cr = (Formatter_type_str(self, ((AstType**)List_ptr_get(ty->args, ti)))); TrStr _cres = _tr_strx_concat(_tr_strz(ts), _cr.data); _tr_str_release(_cr); _cres; });
+            TrStr _strtmp_t610 = ({ TrStr _cr = (Formatter_type_str(self, ((AstType**)List_ptr_get(ty->args, ti)))); TrStr _cres = _tr_strx_concat(_tr_strz(ts), _cr.data); _tr_str_release(_cr); _cres; });
             _tr_str_release(ts);
-            ts = _strtmp_t609;
+            ts = _strtmp_t610;
             /* pass */
             ti = (ti + 1LL);
         }
@@ -311,21 +311,21 @@ __attribute__((hot)) TrStr Formatter_type_str(Formatter* self, AstType** t) {
             /* pass */
             if ((di > 0LL)) {
                 /* pass */
-                TrStr _strtmp_t610 = _tr_strx_concat(_tr_strz(ds), _tr_strz(_tr_str_lit(", ")));
+                TrStr _strtmp_t611 = _tr_strx_concat(_tr_strz(ds), _tr_strz(_tr_str_lit(", ")));
                 _tr_str_release(ds);
-                ds = _strtmp_t610;
+                ds = _strtmp_t611;
             }
             /* pass */
-            TrStr _strtmp_t611 = ({ TrStr _cr = (Formatter_type_str(self, ((AstType**)List_ptr_get(ty->args, di)))); TrStr _cres = _tr_strx_concat(_tr_strz(ds), _cr.data); _tr_str_release(_cr); _cres; });
+            TrStr _strtmp_t612 = ({ TrStr _cr = (Formatter_type_str(self, ((AstType**)List_ptr_get(ty->args, di)))); TrStr _cres = _tr_strx_concat(_tr_strz(ds), _cr.data); _tr_str_release(_cr); _cres; });
             _tr_str_release(ds);
-            ds = _strtmp_t611;
+            ds = _strtmp_t612;
             /* pass */
             di = (di + 1LL);
         }
         /* pass */
-        TrStr _strtmp_t612 = _tr_strx_concat(_tr_strz(ds), _tr_strz(_tr_str_lit(")")));
+        TrStr _strtmp_t613 = _tr_strx_concat(_tr_strz(ds), _tr_strz(_tr_str_lit(")")));
         _tr_str_release(ds);
-        ds = _strtmp_t612;
+        ds = _strtmp_t613;
         /* pass */
         if ((ty->args->len > 0LL)) {
             /* pass */
@@ -333,9 +333,9 @@ __attribute__((hot)) TrStr Formatter_type_str(Formatter* self, AstType** t) {
             /* pass */
             if (((_tr_strlen(_tr_strz(rt)) > 0LL) && (strcmp(_tr_strz(rt), _tr_strz(_tr_str_lit("void"))) != 0))) {
                 /* pass */
-                TrStr _strtmp_t613 = ({ TrStr _cl = (_tr_strx_concat(_tr_strz(ds), _tr_strz(_tr_str_lit(" -> ")))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(rt)); _tr_str_release(_cl); _cres; });
+                TrStr _strtmp_t614 = ({ TrStr _cl = (_tr_strx_concat(_tr_strz(ds), _tr_strz(_tr_str_lit(" -> ")))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(rt)); _tr_str_release(_cl); _cres; });
                 _tr_str_release(ds);
-                ds = _strtmp_t613;
+                ds = _strtmp_t614;
             }
         }
         /* pass */
@@ -380,22 +380,22 @@ __attribute__((hot)) bool Formatter_needs_parens(Formatter* self, Expr* e) {
         return false;
     }
     /* pass */
-    __auto_type _t614 = (*e);
-    if (_t614.tag == Expr_EBinOp) {
+    __auto_type _t615 = (*e);
+    if (_t615.tag == Expr_EBinOp) {
         return true;
-    } else if (_t614.tag == Expr_EUnaryOp) {
+    } else if (_t615.tag == Expr_EUnaryOp) {
         return true;
-    } else if (_t614.tag == Expr_EIfElse) {
+    } else if (_t615.tag == Expr_EIfElse) {
         return true;
-    } else if (_t614.tag == Expr_ETuple) {
-        __auto_type _ = _t614.data.ETuple.items;
+    } else if (_t615.tag == Expr_ETuple) {
+        __auto_type _ = _t615.data.ETuple.items;
         return true;
-    } else if (_t614.tag == Expr_ERange) {
+    } else if (_t615.tag == Expr_ERange) {
         return true;
-    } else if (_t614.tag == Expr_ECast) {
+    } else if (_t615.tag == Expr_ECast) {
         return true;
     } else if (1) {
-        __auto_type _ = _t614;
+        __auto_type _ = _t615;
         return false;
     }
 }
@@ -420,14 +420,14 @@ __attribute__((hot)) TrStr Formatter_args_str(Formatter* self, List_ptr* args) {
         /* pass */
         if ((i > 0LL)) {
             /* pass */
-            TrStr _strtmp_t615 = _tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit(", ")));
+            TrStr _strtmp_t616 = _tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit(", ")));
             _tr_str_release(s);
-            s = _strtmp_t615;
+            s = _strtmp_t616;
         }
         /* pass */
-        TrStr _strtmp_t616 = ({ TrStr _cr = (Formatter_expr_str(self, ((Expr*)List_ptr_get(args, i)))); TrStr _cres = _tr_strx_concat(_tr_strz(s), _cr.data); _tr_str_release(_cr); _cres; });
+        TrStr _strtmp_t617 = ({ TrStr _cr = (Formatter_expr_str(self, ((Expr*)List_ptr_get(args, i)))); TrStr _cres = _tr_strx_concat(_tr_strz(s), _cr.data); _tr_str_release(_cr); _cres; });
         _tr_str_release(s);
-        s = _strtmp_t616;
+        s = _strtmp_t617;
         /* pass */
         i = (i + 1LL);
     }
@@ -442,15 +442,15 @@ __attribute__((hot)) TrStr Formatter_expr_str(Formatter* self, Expr* e) {
         return _tr_str_lit("");
     }
     /* pass */
-    __auto_type _t617 = (*e);
-    if (_t617.tag == Expr_ELitInt) {
-        __auto_type v = _t617.data.ELitInt.val;
+    __auto_type _t618 = (*e);
+    if (_t618.tag == Expr_ELitInt) {
+        __auto_type v = _t618.data.ELitInt.val;
         return _tr_str_wrap(_tr_int_to_str((long long)(v)));
-    } else if (_t617.tag == Expr_ELitFloat) {
-        __auto_type v = _t617.data.ELitFloat.val;
+    } else if (_t618.tag == Expr_ELitFloat) {
+        __auto_type v = _t618.data.ELitFloat.val;
         return _tr_str_wrap(_tr_float_to_str((double)(v)));
-    } else if (_t617.tag == Expr_ELitStr) {
-        __auto_type v = _t617.data.ELitStr.val;
+    } else if (_t618.tag == Expr_ELitStr) {
+        __auto_type v = _t618.data.ELitStr.val;
         /* pass */
         if (self->in_fstring) {
             /* pass */
@@ -458,8 +458,8 @@ __attribute__((hot)) TrStr Formatter_expr_str(Formatter* self, Expr* e) {
         }
         /* pass */
         return ({ TrStr _cl = (({ TrStr _cr = (Formatter_escape_str(self, v)); TrStr _cres = _tr_strx_concat(_tr_strz(_tr_str_lit("\"")), _cr.data); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\""))); _tr_str_release(_cl); _cres; });
-    } else if (_t617.tag == Expr_ELitBool) {
-        __auto_type b = _t617.data.ELitBool.val;
+    } else if (_t618.tag == Expr_ELitBool) {
+        __auto_type b = _t618.data.ELitBool.val;
         /* pass */
         if (b) {
             /* pass */
@@ -467,29 +467,29 @@ __attribute__((hot)) TrStr Formatter_expr_str(Formatter* self, Expr* e) {
         }
         /* pass */
         return _tr_str_lit("False");
-    } else if (_t617.tag == Expr_ELitChar) {
-        __auto_type v = _t617.data.ELitChar.val;
+    } else if (_t618.tag == Expr_ELitChar) {
+        __auto_type v = _t618.data.ELitChar.val;
         return ({ TrStr _cl = (({ TrStr _cr = (Formatter_escape_char(self, v)); TrStr _cres = _tr_strx_concat(_tr_strz(_tr_str_lit("'")), _cr.data); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("'"))); _tr_str_release(_cl); _cres; });
-    } else if (_t617.tag == Expr_ELitBytes) {
-        __auto_type v = _t617.data.ELitBytes.val;
+    } else if (_t618.tag == Expr_ELitBytes) {
+        __auto_type v = _t618.data.ELitBytes.val;
         return ({ TrStr _cl = (({ TrStr _cr = (Formatter_escape_str(self, v)); TrStr _cres = _tr_strx_concat(_tr_strz(_tr_str_lit("b\"")), _cr.data); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\""))); _tr_str_release(_cl); _cres; });
-    } else if (_t617.tag == Expr_ERawStr) {
-        __auto_type v = _t617.data.ERawStr.val;
+    } else if (_t618.tag == Expr_ERawStr) {
+        __auto_type v = _t618.data.ERawStr.val;
         return ({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("r\"")), _tr_strz(v))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\""))); _tr_str_release(_cl); _cres; });
-    } else if (_t617.tag == Expr_ELitNone) {
+    } else if (_t618.tag == Expr_ELitNone) {
         return _tr_str_lit("None");
-    } else if (_t617.tag == Expr_EIdent) {
-        __auto_type nm = _t617.data.EIdent.name;
+    } else if (_t618.tag == Expr_EIdent) {
+        __auto_type nm = _t618.data.EIdent.name;
         return _tr_str_retain(nm);
-    } else if (_t617.tag == Expr_EBinOp) {
-        __auto_type op = _t617.data.EBinOp.op;
-__auto_type l = _t617.data.EBinOp.left;
-__auto_type r = _t617.data.EBinOp.right;
+    } else if (_t618.tag == Expr_EBinOp) {
+        __auto_type op = _t618.data.EBinOp.op;
+__auto_type l = _t618.data.EBinOp.left;
+__auto_type r = _t618.data.EBinOp.right;
         /* pass */
         return ({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (Formatter_operand_str(self, l)); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(op)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" "))); _tr_str_release(_cl); _cres; })); TrStr _cr = (Formatter_operand_str(self, r)); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; });
-    } else if (_t617.tag == Expr_EUnaryOp) {
-        __auto_type op = _t617.data.EUnaryOp.op;
-__auto_type x = _t617.data.EUnaryOp.expr;
+    } else if (_t618.tag == Expr_EUnaryOp) {
+        __auto_type op = _t618.data.EUnaryOp.op;
+__auto_type x = _t618.data.EUnaryOp.expr;
         /* pass */
         if ((strcmp(_tr_strz(op), _tr_strz(_tr_str_lit("not"))) == 0)) {
             /* pass */
@@ -497,87 +497,87 @@ __auto_type x = _t617.data.EUnaryOp.expr;
         }
         /* pass */
         return ({ TrStr _cr = (Formatter_operand_str(self, x)); TrStr _cres = _tr_strx_concat(_tr_strz(op), _cr.data); _tr_str_release(_cr); _cres; });
-    } else if (_t617.tag == Expr_ECall) {
-        __auto_type callee = _t617.data.ECall.callee;
-__auto_type args = _t617.data.ECall.args;
+    } else if (_t618.tag == Expr_ECall) {
+        __auto_type callee = _t618.data.ECall.callee;
+__auto_type args = _t618.data.ECall.args;
         /* pass */
         return ({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (Formatter_expr_str(self, callee)); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("("))); _tr_str_release(_cl); _cres; })); TrStr _cr = (Formatter_args_str(self, args)); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(")"))); _tr_str_release(_cl); _cres; });
-    } else if (_t617.tag == Expr_EMethodCall) {
-        __auto_type obj = _t617.data.EMethodCall.obj;
-__auto_type m = _t617.data.EMethodCall.method;
-__auto_type args = _t617.data.EMethodCall.args;
+    } else if (_t618.tag == Expr_EMethodCall) {
+        __auto_type obj = _t618.data.EMethodCall.obj;
+__auto_type m = _t618.data.EMethodCall.method;
+__auto_type args = _t618.data.EMethodCall.args;
         /* pass */
         return ({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (Formatter_operand_str(self, obj)); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("."))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(m)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("("))); _tr_str_release(_cl); _cres; })); TrStr _cr = (Formatter_args_str(self, args)); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(")"))); _tr_str_release(_cl); _cres; });
-    } else if (_t617.tag == Expr_EPropAccess) {
-        __auto_type obj = _t617.data.EPropAccess.obj;
-__auto_type p = _t617.data.EPropAccess.prop;
+    } else if (_t618.tag == Expr_EPropAccess) {
+        __auto_type obj = _t618.data.EPropAccess.obj;
+__auto_type p = _t618.data.EPropAccess.prop;
         /* pass */
         return ({ TrStr _cl = (({ TrStr _cl = (Formatter_operand_str(self, obj)); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("."))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(p)); _tr_str_release(_cl); _cres; });
-    } else if (_t617.tag == Expr_EIndex) {
-        __auto_type obj = _t617.data.EIndex.obj;
-__auto_type idx = _t617.data.EIndex._tr_v_index;
+    } else if (_t618.tag == Expr_EIndex) {
+        __auto_type obj = _t618.data.EIndex.obj;
+__auto_type idx = _t618.data.EIndex._tr_v_index;
         /* pass */
         return ({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (Formatter_operand_str(self, obj)); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("["))); _tr_str_release(_cl); _cres; })); TrStr _cr = (Formatter_expr_str(self, idx)); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("]"))); _tr_str_release(_cl); _cres; });
-    } else if (_t617.tag == Expr_ECast) {
-        __auto_type x = _t617.data.ECast.expr;
-__auto_type ty = _t617.data.ECast.ty;
+    } else if (_t618.tag == Expr_ECast) {
+        __auto_type x = _t618.data.ECast.expr;
+__auto_type ty = _t618.data.ECast.ty;
         /* pass */
         return ({ TrStr _cl = (({ TrStr _cl = (Formatter_operand_str(self, x)); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" as "))); _tr_str_release(_cl); _cres; })); TrStr _cr = (Formatter_type_str(self, ty)); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; });
-    } else if (_t617.tag == Expr_EFString) {
-        __auto_type parts = _t617.data.EFString.parts;
+    } else if (_t618.tag == Expr_EFString) {
+        __auto_type parts = _t618.data.EFString.parts;
         return Formatter_fstring_str(self, parts);
-    } else if (_t617.tag == Expr_ETryExpr) {
-        __auto_type x = _t617.data.ETryExpr.expr;
+    } else if (_t618.tag == Expr_ETryExpr) {
+        __auto_type x = _t618.data.ETryExpr.expr;
         return ({ TrStr _cl = (Formatter_operand_str(self, x)); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("?"))); _tr_str_release(_cl); _cres; });
-    } else if (_t617.tag == Expr_EClosure) {
-        __auto_type params = _t617.data.EClosure.params;
-__auto_type ret_ty = _t617.data.EClosure.ret_ty;
-__auto_type body = _t617.data.EClosure.body;
-__auto_type is_async = _t617.data.EClosure.is_async;
+    } else if (_t618.tag == Expr_EClosure) {
+        __auto_type params = _t618.data.EClosure.params;
+__auto_type ret_ty = _t618.data.EClosure.ret_ty;
+__auto_type body = _t618.data.EClosure.body;
+__auto_type is_async = _t618.data.EClosure.is_async;
         /* pass */
         return Formatter_closure_str(self, params, ret_ty, body, is_async);
-    } else if (_t617.tag == Expr_ESuperMethodCall) {
-        __auto_type base = _t617.data.ESuperMethodCall.base_class;
-__auto_type m = _t617.data.ESuperMethodCall.method;
-__auto_type args = _t617.data.ESuperMethodCall.args;
+    } else if (_t618.tag == Expr_ESuperMethodCall) {
+        __auto_type base = _t618.data.ESuperMethodCall.base_class;
+__auto_type m = _t618.data.ESuperMethodCall.method;
+__auto_type args = _t618.data.ESuperMethodCall.args;
         /* pass */
         return ({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("super.")), _tr_strz(m))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("("))); _tr_str_release(_cl); _cres; })); TrStr _cr = (Formatter_args_str(self, args)); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(")"))); _tr_str_release(_cl); _cres; });
-    } else if (_t617.tag == Expr_ESuperPropAccess) {
-        __auto_type base = _t617.data.ESuperPropAccess.base_class;
-__auto_type p = _t617.data.ESuperPropAccess.prop;
+    } else if (_t618.tag == Expr_ESuperPropAccess) {
+        __auto_type base = _t618.data.ESuperPropAccess.base_class;
+__auto_type p = _t618.data.ESuperPropAccess.prop;
         /* pass */
         return _tr_strx_concat(_tr_strz(_tr_str_lit("super.")), _tr_strz(p));
-    } else if (_t617.tag == Expr_EList) {
-        __auto_type items = _t617.data.EList.items;
+    } else if (_t618.tag == Expr_EList) {
+        __auto_type items = _t618.data.EList.items;
         return ({ TrStr _cl = (({ TrStr _cr = (Formatter_args_str(self, items)); TrStr _cres = _tr_strx_concat(_tr_strz(_tr_str_lit("[")), _cr.data); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("]"))); _tr_str_release(_cl); _cres; });
-    } else if (_t617.tag == Expr_ESet) {
-        __auto_type items = _t617.data.ESet.items;
+    } else if (_t618.tag == Expr_ESet) {
+        __auto_type items = _t618.data.ESet.items;
         return ({ TrStr _cl = (({ TrStr _cr = (Formatter_args_str(self, items)); TrStr _cres = _tr_strx_concat(_tr_strz(_tr_str_lit("{")), _cr.data); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("}"))); _tr_str_release(_cl); _cres; });
-    } else if (_t617.tag == Expr_EDict) {
-        __auto_type keys = _t617.data.EDict.keys;
-__auto_type vals = _t617.data.EDict.vals;
+    } else if (_t618.tag == Expr_EDict) {
+        __auto_type keys = _t618.data.EDict.keys;
+__auto_type vals = _t618.data.EDict.vals;
         return Formatter_dict_str(self, keys, vals);
-    } else if (_t617.tag == Expr_ETuple) {
-        __auto_type items = _t617.data.ETuple.items;
+    } else if (_t618.tag == Expr_ETuple) {
+        __auto_type items = _t618.data.ETuple.items;
         return ({ TrStr _cl = (({ TrStr _cr = (Formatter_args_str(self, items)); TrStr _cres = _tr_strx_concat(_tr_strz(_tr_str_lit("(")), _cr.data); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(")"))); _tr_str_release(_cl); _cres; });
-    } else if (_t617.tag == Expr_EListComp) {
-        __auto_type elem = _t617.data.EListComp.element;
-__auto_type gens = _t617.data.EListComp.generators;
+    } else if (_t618.tag == Expr_EListComp) {
+        __auto_type elem = _t618.data.EListComp.element;
+__auto_type gens = _t618.data.EListComp.generators;
         return ({ TrStr _cl = (({ TrStr _cr = (Formatter_comp_str(self, elem, gens)); TrStr _cres = _tr_strx_concat(_tr_strz(_tr_str_lit("[")), _cr.data); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("]"))); _tr_str_release(_cl); _cres; });
-    } else if (_t617.tag == Expr_EGeneratorExpr) {
-        __auto_type elem = _t617.data.EGeneratorExpr.element;
-__auto_type gens = _t617.data.EGeneratorExpr.generators;
+    } else if (_t618.tag == Expr_EGeneratorExpr) {
+        __auto_type elem = _t618.data.EGeneratorExpr.element;
+__auto_type gens = _t618.data.EGeneratorExpr.generators;
         return ({ TrStr _cl = (({ TrStr _cr = (Formatter_comp_str(self, elem, gens)); TrStr _cres = _tr_strx_concat(_tr_strz(_tr_str_lit("(")), _cr.data); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(")"))); _tr_str_release(_cl); _cres; });
-    } else if (_t617.tag == Expr_ESlice) {
-        __auto_type a = _t617.data.ESlice.start;
-__auto_type b = _t617.data.ESlice.stop;
-__auto_type c = _t617.data.ESlice.step;
+    } else if (_t618.tag == Expr_ESlice) {
+        __auto_type a = _t618.data.ESlice.start;
+__auto_type b = _t618.data.ESlice.stop;
+__auto_type c = _t618.data.ESlice.step;
         return Formatter_slice_str(self, a, b, c);
-    } else if (_t617.tag == Expr_EAwait) {
-        __auto_type x = _t617.data.EAwait.expr;
+    } else if (_t618.tag == Expr_EAwait) {
+        __auto_type x = _t618.data.EAwait.expr;
         return ({ TrStr _cr = (Formatter_operand_str(self, x)); TrStr _cres = _tr_strx_concat(_tr_strz(_tr_str_lit("await ")), _cr.data); _tr_str_release(_cr); _cres; });
-    } else if (_t617.tag == Expr_EYield) {
-        __auto_type x = _t617.data.EYield.expr;
+    } else if (_t618.tag == Expr_EYield) {
+        __auto_type x = _t618.data.EYield.expr;
         /* pass */
         if ((((unsigned long long)(x)) == ((unsigned long long)(0LL)))) {
             /* pass */
@@ -585,35 +585,35 @@ __auto_type c = _t617.data.ESlice.step;
         }
         /* pass */
         return ({ TrStr _cr = (Formatter_expr_str(self, x)); TrStr _cres = _tr_strx_concat(_tr_strz(_tr_str_lit("yield ")), _cr.data); _tr_str_release(_cr); _cres; });
-    } else if (_t617.tag == Expr_ERange) {
-        __auto_type a = _t617.data.ERange.start;
-__auto_type b = _t617.data.ERange.end;
-__auto_type inclusive = _t617.data.ERange.inclusive;
+    } else if (_t618.tag == Expr_ERange) {
+        __auto_type a = _t618.data.ERange.start;
+__auto_type b = _t618.data.ERange.end;
+__auto_type inclusive = _t618.data.ERange.inclusive;
         /* pass */
         TrStr sep = _tr_str_lit("..");
         /* pass */
         if (inclusive) {
             /* pass */
-            TrStr _strtmp_t618 = _tr_str_lit("..=");
+            TrStr _strtmp_t619 = _tr_str_lit("..=");
             _tr_str_release(sep);
-            sep = _strtmp_t618;
+            sep = _strtmp_t619;
         }
         /* pass */
         return ({ TrStr _cl = (({ TrStr _cl = (Formatter_operand_str(self, a)); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(sep)); _tr_str_release(_cl); _cres; })); TrStr _cr = (Formatter_operand_str(self, b)); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; });
-    } else if (_t617.tag == Expr_ESizeOf) {
-        __auto_type ty = _t617.data.ESizeOf.ty;
+    } else if (_t618.tag == Expr_ESizeOf) {
+        __auto_type ty = _t618.data.ESizeOf.ty;
         return ({ TrStr _cl = (({ TrStr _cr = (Formatter_type_str(self, ty)); TrStr _cres = _tr_strx_concat(_tr_strz(_tr_str_lit("sizeof(")), _cr.data); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(")"))); _tr_str_release(_cl); _cres; });
-    } else if (_t617.tag == Expr_EIfElse) {
-        __auto_type c = _t617.data.EIfElse.cond;
-__auto_type t = _t617.data.EIfElse.then_expr;
-__auto_type f = _t617.data.EIfElse.else_expr;
+    } else if (_t618.tag == Expr_EIfElse) {
+        __auto_type c = _t618.data.EIfElse.cond;
+__auto_type t = _t618.data.EIfElse.then_expr;
+__auto_type f = _t618.data.EIfElse.else_expr;
         /* pass */
         return ({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (Formatter_operand_str(self, t)); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" if "))); _tr_str_release(_cl); _cres; })); TrStr _cr = (Formatter_operand_str(self, c)); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" else "))); _tr_str_release(_cl); _cres; })); TrStr _cr = (Formatter_operand_str(self, f)); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; });
-    } else if (_t617.tag == Expr_ETypeArg) {
-        __auto_type ty = _t617.data.ETypeArg.ty;
+    } else if (_t618.tag == Expr_ETypeArg) {
+        __auto_type ty = _t618.data.ETypeArg.ty;
         return Formatter_type_str(self, ty);
     } else if (1) {
-        __auto_type _ = _t617;
+        __auto_type _ = _t618;
         /* pass */
         self->unsupported = true;
         /* pass */
@@ -641,26 +641,26 @@ __attribute__((hot)) TrStr Formatter_fstring_str(Formatter* self, List_ptr* part
             /* pass */
             self->in_fstring = saved;
             /* pass */
-            TrStr _strtmp_t619 = ({ TrStr _cl = (_tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit("{")))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(es)); _tr_str_release(_cl); _cres; });
+            TrStr _strtmp_t620 = ({ TrStr _cl = (_tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit("{")))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(es)); _tr_str_release(_cl); _cres; });
             _tr_str_release(s);
-            s = _strtmp_t619;
+            s = _strtmp_t620;
             /* pass */
             if ((_tr_strlen(_tr_strz(part->fmt_spec)) > 0LL)) {
                 /* pass */
-                TrStr _strtmp_t620 = ({ TrStr _cl = (_tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit(":")))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(part->fmt_spec)); _tr_str_release(_cl); _cres; });
+                TrStr _strtmp_t621 = ({ TrStr _cl = (_tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit(":")))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(part->fmt_spec)); _tr_str_release(_cl); _cres; });
                 _tr_str_release(s);
-                s = _strtmp_t620;
+                s = _strtmp_t621;
             }
             /* pass */
-            TrStr _strtmp_t621 = _tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit("}")));
+            TrStr _strtmp_t622 = _tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit("}")));
             _tr_str_release(s);
-            s = _strtmp_t621;
+            s = _strtmp_t622;
             _tr_str_release(es);
         } else {
             /* pass */
-            TrStr _strtmp_t622 = ({ TrStr _cr = (Formatter_escape_str(self, part->text)); TrStr _cres = _tr_strx_concat(_tr_strz(s), _cr.data); _tr_str_release(_cr); _cres; });
+            TrStr _strtmp_t623 = ({ TrStr _cr = (Formatter_escape_str(self, part->text)); TrStr _cres = _tr_strx_concat(_tr_strz(s), _cr.data); _tr_str_release(_cr); _cres; });
             _tr_str_release(s);
-            s = _strtmp_t622;
+            s = _strtmp_t623;
         }
         /* pass */
         i = (i + 1LL);
@@ -684,14 +684,14 @@ __attribute__((hot)) TrStr Formatter_dict_str(Formatter* self, List_ptr* keys, L
         /* pass */
         if ((i > 0LL)) {
             /* pass */
-            TrStr _strtmp_t623 = _tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit(", ")));
+            TrStr _strtmp_t624 = _tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit(", ")));
             _tr_str_release(s);
-            s = _strtmp_t623;
+            s = _strtmp_t624;
         }
         /* pass */
-        TrStr _strtmp_t624 = ({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cr = (Formatter_expr_str(self, ((Expr*)List_ptr_get(keys, i)))); TrStr _cres = _tr_strx_concat(_tr_strz(s), _cr.data); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(": "))); _tr_str_release(_cl); _cres; })); TrStr _cr = (Formatter_expr_str(self, ((Expr*)List_ptr_get(vals, i)))); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; });
+        TrStr _strtmp_t625 = ({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cr = (Formatter_expr_str(self, ((Expr*)List_ptr_get(keys, i)))); TrStr _cres = _tr_strx_concat(_tr_strz(s), _cr.data); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(": "))); _tr_str_release(_cl); _cres; })); TrStr _cr = (Formatter_expr_str(self, ((Expr*)List_ptr_get(vals, i)))); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; });
         _tr_str_release(s);
-        s = _strtmp_t624;
+        s = _strtmp_t625;
         /* pass */
         i = (i + 1LL);
     }
@@ -709,17 +709,17 @@ __attribute__((hot)) TrStr Formatter_comp_str(Formatter* self, Expr* elem, List_
         /* pass */
         Comprehension* g = (*((Comprehension**)List_ptr_get(gens, i)));
         /* pass */
-        TrStr _strtmp_t625 = ({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit(" for ")))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(g->target)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" in "))); _tr_str_release(_cl); _cres; })); TrStr _cr = (Formatter_expr_str(self, g->iter)); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; });
+        TrStr _strtmp_t626 = ({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit(" for ")))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(g->target)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" in "))); _tr_str_release(_cl); _cres; })); TrStr _cr = (Formatter_expr_str(self, g->iter)); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; });
         _tr_str_release(s);
-        s = _strtmp_t625;
+        s = _strtmp_t626;
         /* pass */
         long long j = 0LL;
         /* pass */
         while ((j < g->ifs->len)) {
             /* pass */
-            TrStr _strtmp_t626 = ({ TrStr _cl = (_tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit(" if ")))); TrStr _cr = (Formatter_expr_str(self, ((Expr*)List_ptr_get(g->ifs, j)))); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; });
+            TrStr _strtmp_t627 = ({ TrStr _cl = (_tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit(" if ")))); TrStr _cr = (Formatter_expr_str(self, ((Expr*)List_ptr_get(g->ifs, j)))); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; });
             _tr_str_release(s);
-            s = _strtmp_t626;
+            s = _strtmp_t627;
             /* pass */
             j = (j + 1LL);
         }
@@ -736,27 +736,27 @@ __attribute__((hot)) TrStr Formatter_slice_str(Formatter* self, Expr* a, Expr* b
     /* pass */
     if ((((unsigned long long)(a)) != ((unsigned long long)(0LL)))) {
         /* pass */
-        TrStr _strtmp_t627 = ({ TrStr _cr = (Formatter_expr_str(self, a)); TrStr _cres = _tr_strx_concat(_tr_strz(s), _cr.data); _tr_str_release(_cr); _cres; });
+        TrStr _strtmp_t628 = ({ TrStr _cr = (Formatter_expr_str(self, a)); TrStr _cres = _tr_strx_concat(_tr_strz(s), _cr.data); _tr_str_release(_cr); _cres; });
         _tr_str_release(s);
-        s = _strtmp_t627;
+        s = _strtmp_t628;
     }
     /* pass */
-    TrStr _strtmp_t628 = _tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit(":")));
+    TrStr _strtmp_t629 = _tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit(":")));
     _tr_str_release(s);
-    s = _strtmp_t628;
+    s = _strtmp_t629;
     /* pass */
     if ((((unsigned long long)(b)) != ((unsigned long long)(0LL)))) {
         /* pass */
-        TrStr _strtmp_t629 = ({ TrStr _cr = (Formatter_expr_str(self, b)); TrStr _cres = _tr_strx_concat(_tr_strz(s), _cr.data); _tr_str_release(_cr); _cres; });
+        TrStr _strtmp_t630 = ({ TrStr _cr = (Formatter_expr_str(self, b)); TrStr _cres = _tr_strx_concat(_tr_strz(s), _cr.data); _tr_str_release(_cr); _cres; });
         _tr_str_release(s);
-        s = _strtmp_t629;
+        s = _strtmp_t630;
     }
     /* pass */
     if ((((unsigned long long)(c)) != ((unsigned long long)(0LL)))) {
         /* pass */
-        TrStr _strtmp_t630 = ({ TrStr _cl = (_tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit(":")))); TrStr _cr = (Formatter_expr_str(self, c)); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; });
+        TrStr _strtmp_t631 = ({ TrStr _cl = (_tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit(":")))); TrStr _cr = (Formatter_expr_str(self, c)); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; });
         _tr_str_release(s);
-        s = _strtmp_t630;
+        s = _strtmp_t631;
     }
     /* pass */
     return s;
@@ -768,14 +768,14 @@ __attribute__((hot)) TrStr Formatter_closure_str(Formatter* self, List_ptr* para
     /* pass */
     if (is_async) {
         /* pass */
-        TrStr _strtmp_t631 = _tr_str_lit("async ");
+        TrStr _strtmp_t632 = _tr_str_lit("async ");
         _tr_str_release(s);
-        s = _strtmp_t631;
+        s = _strtmp_t632;
     }
     /* pass */
-    TrStr _strtmp_t632 = ({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit("def (")))); TrStr _cr = (Formatter_params_str(self, params)); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(")"))); _tr_str_release(_cl); _cres; });
+    TrStr _strtmp_t633 = ({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit("def (")))); TrStr _cr = (Formatter_params_str(self, params)); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(")"))); _tr_str_release(_cl); _cres; });
     _tr_str_release(s);
-    s = _strtmp_t632;
+    s = _strtmp_t633;
     /* pass */
     if ((((unsigned long long)(ret_ty)) != ((unsigned long long)(0LL)))) {
         /* pass */
@@ -783,15 +783,15 @@ __attribute__((hot)) TrStr Formatter_closure_str(Formatter* self, List_ptr* para
         /* pass */
         if (((_tr_strlen(_tr_strz(rt)) > 0LL) && (strcmp(_tr_strz(rt), _tr_strz(_tr_str_lit("void"))) != 0))) {
             /* pass */
-            TrStr _strtmp_t633 = ({ TrStr _cl = (_tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit(" -> ")))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(rt)); _tr_str_release(_cl); _cres; });
+            TrStr _strtmp_t634 = ({ TrStr _cl = (_tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit(" -> ")))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(rt)); _tr_str_release(_cl); _cres; });
             _tr_str_release(s);
-            s = _strtmp_t633;
+            s = _strtmp_t634;
         }
     }
     /* pass */
-    TrStr _strtmp_t634 = _tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit(":")));
+    TrStr _strtmp_t635 = _tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit(":")));
     _tr_str_release(s);
-    s = _strtmp_t634;
+    s = _strtmp_t635;
     /* pass */
     Stmt* real = (Stmt*)(0LL);
     /* pass */
@@ -801,12 +801,12 @@ __attribute__((hot)) TrStr Formatter_closure_str(Formatter* self, List_ptr* para
     /* pass */
     while ((i < body->stmts->len)) {
         /* pass */
-        __auto_type _t635 = (*((Stmt*)List_ptr_get(body->stmts, i)));
-        if (_t635.tag == Stmt_SLine) {
-            __auto_type _ = _t635.data.SLine.n;
+        __auto_type _t636 = (*((Stmt*)List_ptr_get(body->stmts, i)));
+        if (_t636.tag == Stmt_SLine) {
+            __auto_type _ = _t636.data.SLine.n;
             /* pass */
         } else if (1) {
-            __auto_type _ = _t635;
+            __auto_type _ = _t636;
             /* pass */
             _tr_v_count = (_tr_v_count + 1LL);
             /* pass */
@@ -818,9 +818,9 @@ __attribute__((hot)) TrStr Formatter_closure_str(Formatter* self, List_ptr* para
     /* pass */
     if ((_tr_v_count == 1LL)) {
         /* pass */
-        __auto_type _t636 = (*real);
-        if (_t636.tag == Stmt_SReturn) {
-            __auto_type v = _t636.data.SReturn.val;
+        __auto_type _t637 = (*real);
+        if (_t637.tag == Stmt_SReturn) {
+            __auto_type v = _t637.data.SReturn.val;
             /* pass */
             if ((((unsigned long long)(v)) == ((unsigned long long)(0LL)))) {
                 /* pass */
@@ -828,11 +828,11 @@ __attribute__((hot)) TrStr Formatter_closure_str(Formatter* self, List_ptr* para
             }
             /* pass */
             return ({ TrStr _cl = (_tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit(" return ")))); TrStr _cr = (Formatter_expr_str(self, v)); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; });
-        } else if (_t636.tag == Stmt_SExpr) {
-            __auto_type e = _t636.data.SExpr.expr;
+        } else if (_t637.tag == Stmt_SExpr) {
+            __auto_type e = _t637.data.SExpr.expr;
             return ({ TrStr _cl = (_tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit(" ")))); TrStr _cr = (Formatter_expr_str(self, e)); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; });
         } else if (1) {
-            __auto_type _ = _t636;
+            __auto_type _ = _t637;
             /* pass */
             self->unsupported = true;
             /* pass */
@@ -855,31 +855,31 @@ __attribute__((hot)) TrStr Formatter_params_str(Formatter* self, List_ptr* param
         /* pass */
         if ((i > 0LL)) {
             /* pass */
-            TrStr _strtmp_t637 = _tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit(", ")));
+            TrStr _strtmp_t638 = _tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit(", ")));
             _tr_str_release(s);
-            s = _strtmp_t637;
+            s = _strtmp_t638;
         }
         /* pass */
         Param* p = ((Param*)List_ptr_get(params, i));
         /* pass */
-        TrStr _strtmp_t638 = _tr_strx_concat(_tr_strz(s), _tr_strz(p->name));
+        TrStr _strtmp_t639 = _tr_strx_concat(_tr_strz(s), _tr_strz(p->name));
         _tr_str_release(s);
-        s = _strtmp_t638;
+        s = _strtmp_t639;
         /* pass */
         TrStr tn = Formatter_type_str(self, p->ty);
         /* pass */
         if (((_tr_strlen(_tr_strz(tn)) > 0LL) && (strcmp(_tr_strz(tn), _tr_strz(_tr_str_lit("void"))) != 0))) {
             /* pass */
-            TrStr _strtmp_t639 = ({ TrStr _cl = (_tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit(": ")))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(tn)); _tr_str_release(_cl); _cres; });
+            TrStr _strtmp_t640 = ({ TrStr _cl = (_tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit(": ")))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(tn)); _tr_str_release(_cl); _cres; });
             _tr_str_release(s);
-            s = _strtmp_t639;
+            s = _strtmp_t640;
         }
         /* pass */
         if (p->is_variadic) {
             /* pass */
-            TrStr _strtmp_t640 = _tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit("...")));
+            TrStr _strtmp_t641 = _tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit("...")));
             _tr_str_release(s);
-            s = _strtmp_t640;
+            s = _strtmp_t641;
         }
         /* pass */
         i = (i + 1LL);
@@ -899,10 +899,10 @@ __attribute__((hot)) void Formatter_emit_decorators(Formatter* self, List_ptr* d
         /* pass */
         if ((d->args->len > 0LL)) {
             /* pass */
-            ({ TrStr _at_t641 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("@")), _tr_strz(d->name))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("("))); _tr_str_release(_cl); _cres; })); TrStr _cr = (Formatter_args_str(self, d->args)); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(")"))); _tr_str_release(_cl); _cres; })); Formatter_line(self, _at_t641); _tr_str_release(_at_t641); });
+            ({ TrStr _at_t642 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("@")), _tr_strz(d->name))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("("))); _tr_str_release(_cl); _cres; })); TrStr _cr = (Formatter_args_str(self, d->args)); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(")"))); _tr_str_release(_cl); _cres; })); Formatter_line(self, _at_t642); _tr_str_release(_at_t642); });
         } else {
             /* pass */
-            ({ TrStr _at_t642 = (_tr_strx_concat(_tr_strz(_tr_str_lit("@")), _tr_strz(d->name))); Formatter_line(self, _at_t642); _tr_str_release(_at_t642); });
+            ({ TrStr _at_t643 = (_tr_strx_concat(_tr_strz(_tr_str_lit("@")), _tr_strz(d->name))); Formatter_line(self, _at_t643); _tr_str_release(_at_t643); });
         }
         /* pass */
         i = (i + 1LL);
@@ -919,15 +919,15 @@ __attribute__((hot)) void Formatter_emit_block(Formatter* self, Block* b) {
         /* pass */
         Stmt* sp = ((Stmt*)List_ptr_get(b->stmts, i));
         /* pass */
-        __auto_type _t643 = (*sp);
-        if (_t643.tag == Stmt_SLine) {
-            __auto_type n = _t643.data.SLine.n;
+        __auto_type _t644 = (*sp);
+        if (_t644.tag == Stmt_SLine) {
+            __auto_type n = _t644.data.SLine.n;
             /* pass */
             Formatter_flush_standalone_before(self, n);
             /* pass */
             cur_line = n;
         } else if (1) {
-            __auto_type _ = _t643;
+            __auto_type _ = _t644;
             /* pass */
             Formatter_emit_stmt(self, sp, cur_line);
         }
@@ -938,43 +938,43 @@ __attribute__((hot)) void Formatter_emit_block(Formatter* self, Block* b) {
 
 __attribute__((hot)) void Formatter_emit_simple(Formatter* self, TrStr text, long long src_line) {
     /* pass */
-    ({ TrStr _sbt_t644 = (Formatter_pad(self)); StringBuilder_append(self->out, _sbt_t644); _tr_str_release(_sbt_t644); });
+    ({ TrStr _sbt_t645 = (Formatter_pad(self)); StringBuilder_append(self->out, _sbt_t645); _tr_str_release(_sbt_t645); });
     /* pass */
     StringBuilder_append(self->out, text);
     /* pass */
-    ({ TrStr _sbt_t645 = (Formatter_trailing_for(self, src_line)); StringBuilder_append(self->out, _sbt_t645); _tr_str_release(_sbt_t645); });
+    ({ TrStr _sbt_t646 = (Formatter_trailing_for(self, src_line)); StringBuilder_append(self->out, _sbt_t646); _tr_str_release(_sbt_t646); });
     /* pass */
     StringBuilder_append(self->out, _tr_str_lit("\n"));
 }
 
 __attribute__((hot)) void Formatter_emit_stmt(Formatter* self, Stmt* sp, long long src_line) {
     /* pass */
-    __auto_type _t646 = (*sp);
-    if (_t646.tag == Stmt_SExpr) {
-        __auto_type e = _t646.data.SExpr.expr;
-        ({ TrStr _at_t647 = (Formatter_expr_str(self, e)); Formatter_emit_simple(self, _at_t647, src_line); _tr_str_release(_at_t647); });
-    } else if (_t646.tag == Stmt_SLet) {
-        __auto_type name = _t646.data.SLet.name;
-__auto_type own = _t646.data.SLet.ownership;
-__auto_type is_mut = _t646.data.SLet.is_mut;
-__auto_type is_const = _t646.data.SLet.is_const;
-__auto_type is_shared = _t646.data.SLet.is_shared;
-__auto_type ty = _t646.data.SLet.ty;
-__auto_type val = _t646.data.SLet.val;
+    __auto_type _t647 = (*sp);
+    if (_t647.tag == Stmt_SExpr) {
+        __auto_type e = _t647.data.SExpr.expr;
+        ({ TrStr _at_t648 = (Formatter_expr_str(self, e)); Formatter_emit_simple(self, _at_t648, src_line); _tr_str_release(_at_t648); });
+    } else if (_t647.tag == Stmt_SLet) {
+        __auto_type name = _t647.data.SLet.name;
+__auto_type own = _t647.data.SLet.ownership;
+__auto_type is_mut = _t647.data.SLet.is_mut;
+__auto_type is_const = _t647.data.SLet.is_const;
+__auto_type is_shared = _t647.data.SLet.is_shared;
+__auto_type ty = _t647.data.SLet.ty;
+__auto_type val = _t647.data.SLet.val;
         /* pass */
-        ({ TrStr _at_t648 = (Formatter_let_str(self, name, own, is_mut, is_const, is_shared, ty, val)); Formatter_emit_simple(self, _at_t648, src_line); _tr_str_release(_at_t648); });
-    } else if (_t646.tag == Stmt_SMultiLet) {
-        __auto_type names = _t646.data.SMultiLet.names;
-__auto_type is_mut = _t646.data.SMultiLet.is_mut;
-__auto_type val = _t646.data.SMultiLet.val;
+        ({ TrStr _at_t649 = (Formatter_let_str(self, name, own, is_mut, is_const, is_shared, ty, val)); Formatter_emit_simple(self, _at_t649, src_line); _tr_str_release(_at_t649); });
+    } else if (_t647.tag == Stmt_SMultiLet) {
+        __auto_type names = _t647.data.SMultiLet.names;
+__auto_type is_mut = _t647.data.SMultiLet.is_mut;
+__auto_type val = _t647.data.SMultiLet.val;
         /* pass */
         TrStr pfx = _tr_str_lit("");
         /* pass */
         if (is_mut) {
             /* pass */
-            TrStr _strtmp_t649 = _tr_str_lit("mut ");
+            TrStr _strtmp_t650 = _tr_str_lit("mut ");
             _tr_str_release(pfx);
-            pfx = _strtmp_t649;
+            pfx = _strtmp_t650;
         }
         /* pass */
         TrStr ns = _tr_str_lit("");
@@ -985,66 +985,66 @@ __auto_type val = _t646.data.SMultiLet.val;
             /* pass */
             if ((k > 0LL)) {
                 /* pass */
-                TrStr _strtmp_t650 = _tr_strx_concat(_tr_strz(ns), _tr_strz(_tr_str_lit(", ")));
+                TrStr _strtmp_t651 = _tr_strx_concat(_tr_strz(ns), _tr_strz(_tr_str_lit(", ")));
                 _tr_str_release(ns);
-                ns = _strtmp_t650;
+                ns = _strtmp_t651;
             }
             /* pass */
-            TrStr _strtmp_t651 = ({ TrStr _cr = (List_TrStr_get(names, k)); TrStr _cres = _tr_strx_concat(_tr_strz(ns), _cr.data); _tr_str_release(_cr); _cres; });
+            TrStr _strtmp_t652 = ({ TrStr _cr = (List_TrStr_get(names, k)); TrStr _cres = _tr_strx_concat(_tr_strz(ns), _cr.data); _tr_str_release(_cr); _cres; });
             _tr_str_release(ns);
-            ns = _strtmp_t651;
+            ns = _strtmp_t652;
             /* pass */
             k = (k + 1LL);
         }
         /* pass */
-        ({ TrStr _at_t652 = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(pfx), _tr_strz(ns))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" = "))); _tr_str_release(_cl); _cres; })); TrStr _cr = (Formatter_expr_str(self, val)); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; })); Formatter_emit_simple(self, _at_t652, src_line); _tr_str_release(_at_t652); });
+        ({ TrStr _at_t653 = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(pfx), _tr_strz(ns))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" = "))); _tr_str_release(_cl); _cres; })); TrStr _cr = (Formatter_expr_str(self, val)); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; })); Formatter_emit_simple(self, _at_t653, src_line); _tr_str_release(_at_t653); });
         _tr_str_release(pfx);
         _tr_str_release(ns);
-    } else if (_t646.tag == Stmt_SAssign) {
-        __auto_type t = _t646.data.SAssign.target;
-__auto_type v = _t646.data.SAssign.val;
+    } else if (_t647.tag == Stmt_SAssign) {
+        __auto_type t = _t647.data.SAssign.target;
+__auto_type v = _t647.data.SAssign.val;
         /* pass */
-        ({ TrStr _at_t653 = (({ TrStr _cl = (({ TrStr _cl = (Formatter_expr_str(self, t)); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" = "))); _tr_str_release(_cl); _cres; })); TrStr _cr = (Formatter_expr_str(self, v)); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; })); Formatter_emit_simple(self, _at_t653, src_line); _tr_str_release(_at_t653); });
-    } else if (_t646.tag == Stmt_SReturn) {
-        __auto_type v = _t646.data.SReturn.val;
+        ({ TrStr _at_t654 = (({ TrStr _cl = (({ TrStr _cl = (Formatter_expr_str(self, t)); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" = "))); _tr_str_release(_cl); _cres; })); TrStr _cr = (Formatter_expr_str(self, v)); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; })); Formatter_emit_simple(self, _at_t654, src_line); _tr_str_release(_at_t654); });
+    } else if (_t647.tag == Stmt_SReturn) {
+        __auto_type v = _t647.data.SReturn.val;
         /* pass */
         if ((((unsigned long long)(v)) == ((unsigned long long)(0LL)))) {
             /* pass */
             Formatter_emit_simple(self, _tr_str_lit("return"), src_line);
         } else {
             /* pass */
-            ({ TrStr _at_t654 = (({ TrStr _cr = (Formatter_expr_str(self, v)); TrStr _cres = _tr_strx_concat(_tr_strz(_tr_str_lit("return ")), _cr.data); _tr_str_release(_cr); _cres; })); Formatter_emit_simple(self, _at_t654, src_line); _tr_str_release(_at_t654); });
+            ({ TrStr _at_t655 = (({ TrStr _cr = (Formatter_expr_str(self, v)); TrStr _cres = _tr_strx_concat(_tr_strz(_tr_str_lit("return ")), _cr.data); _tr_str_release(_cr); _cres; })); Formatter_emit_simple(self, _at_t655, src_line); _tr_str_release(_at_t655); });
         }
-    } else if (_t646.tag == Stmt_SBreak) {
-        __auto_type bv = _t646.data.SBreak.val;
+    } else if (_t647.tag == Stmt_SBreak) {
+        __auto_type bv = _t647.data.SBreak.val;
         /* pass */
         if ((((unsigned long long)(bv)) == ((unsigned long long)(0LL)))) {
             /* pass */
             Formatter_emit_simple(self, _tr_str_lit("break"), src_line);
         } else {
             /* pass */
-            ({ TrStr _at_t655 = (({ TrStr _cr = (Formatter_expr_str(self, bv)); TrStr _cres = _tr_strx_concat(_tr_strz(_tr_str_lit("break ")), _cr.data); _tr_str_release(_cr); _cres; })); Formatter_emit_simple(self, _at_t655, src_line); _tr_str_release(_at_t655); });
+            ({ TrStr _at_t656 = (({ TrStr _cr = (Formatter_expr_str(self, bv)); TrStr _cres = _tr_strx_concat(_tr_strz(_tr_str_lit("break ")), _cr.data); _tr_str_release(_cr); _cres; })); Formatter_emit_simple(self, _at_t656, src_line); _tr_str_release(_at_t656); });
         }
-    } else if (_t646.tag == Stmt_SContinue) {
+    } else if (_t647.tag == Stmt_SContinue) {
         Formatter_emit_simple(self, _tr_str_lit("continue"), src_line);
-    } else if (_t646.tag == Stmt_SPass) {
+    } else if (_t647.tag == Stmt_SPass) {
         Formatter_emit_simple(self, _tr_str_lit("pass"), src_line);
-    } else if (_t646.tag == Stmt_SRaise) {
-        __auto_type v = _t646.data.SRaise.val;
-        ({ TrStr _at_t656 = (({ TrStr _cr = (Formatter_expr_str(self, v)); TrStr _cres = _tr_strx_concat(_tr_strz(_tr_str_lit("raise ")), _cr.data); _tr_str_release(_cr); _cres; })); Formatter_emit_simple(self, _at_t656, src_line); _tr_str_release(_at_t656); });
-    } else if (_t646.tag == Stmt_SAssert) {
-        __auto_type c = _t646.data.SAssert.cond;
-__auto_type m = _t646.data.SAssert.msg;
+    } else if (_t647.tag == Stmt_SRaise) {
+        __auto_type v = _t647.data.SRaise.val;
+        ({ TrStr _at_t657 = (({ TrStr _cr = (Formatter_expr_str(self, v)); TrStr _cres = _tr_strx_concat(_tr_strz(_tr_str_lit("raise ")), _cr.data); _tr_str_release(_cr); _cres; })); Formatter_emit_simple(self, _at_t657, src_line); _tr_str_release(_at_t657); });
+    } else if (_t647.tag == Stmt_SAssert) {
+        __auto_type c = _t647.data.SAssert.cond;
+__auto_type m = _t647.data.SAssert.msg;
         /* pass */
         if ((((unsigned long long)(m)) == ((unsigned long long)(0LL)))) {
             /* pass */
-            ({ TrStr _at_t657 = (({ TrStr _cr = (Formatter_expr_str(self, c)); TrStr _cres = _tr_strx_concat(_tr_strz(_tr_str_lit("assert ")), _cr.data); _tr_str_release(_cr); _cres; })); Formatter_emit_simple(self, _at_t657, src_line); _tr_str_release(_at_t657); });
+            ({ TrStr _at_t658 = (({ TrStr _cr = (Formatter_expr_str(self, c)); TrStr _cres = _tr_strx_concat(_tr_strz(_tr_str_lit("assert ")), _cr.data); _tr_str_release(_cr); _cres; })); Formatter_emit_simple(self, _at_t658, src_line); _tr_str_release(_at_t658); });
         } else {
             /* pass */
-            ({ TrStr _at_t658 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cr = (Formatter_expr_str(self, c)); TrStr _cres = _tr_strx_concat(_tr_strz(_tr_str_lit("assert ")), _cr.data); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(", "))); _tr_str_release(_cl); _cres; })); TrStr _cr = (Formatter_expr_str(self, m)); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; })); Formatter_emit_simple(self, _at_t658, src_line); _tr_str_release(_at_t658); });
+            ({ TrStr _at_t659 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cr = (Formatter_expr_str(self, c)); TrStr _cres = _tr_strx_concat(_tr_strz(_tr_str_lit("assert ")), _cr.data); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(", "))); _tr_str_release(_cl); _cres; })); TrStr _cr = (Formatter_expr_str(self, m)); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; })); Formatter_emit_simple(self, _at_t659, src_line); _tr_str_release(_at_t659); });
         }
-    } else if (_t646.tag == Stmt_SUnsafe) {
-        __auto_type body = _t646.data.SUnsafe.body;
+    } else if (_t647.tag == Stmt_SUnsafe) {
+        __auto_type body = _t647.data.SUnsafe.body;
         /* pass */
         Formatter_emit_simple(self, _tr_str_lit("unsafe:"), src_line);
         /* pass */
@@ -1053,13 +1053,13 @@ __auto_type m = _t646.data.SAssert.msg;
         Formatter_emit_block(self, body);
         /* pass */
         self->indent = (self->indent - 1LL);
-    } else if (_t646.tag == Stmt_SIf) {
-        __auto_type cond = _t646.data.SIf.cond;
-__auto_type then_b = _t646.data.SIf.then_b;
-__auto_type elifs = _t646.data.SIf.elifs;
-__auto_type else_b = _t646.data.SIf.else_b;
+    } else if (_t647.tag == Stmt_SIf) {
+        __auto_type cond = _t647.data.SIf.cond;
+__auto_type then_b = _t647.data.SIf.then_b;
+__auto_type elifs = _t647.data.SIf.elifs;
+__auto_type else_b = _t647.data.SIf.else_b;
         /* pass */
-        ({ TrStr _at_t659 = (({ TrStr _cl = (({ TrStr _cr = (Formatter_expr_str(self, cond)); TrStr _cres = _tr_strx_concat(_tr_strz(_tr_str_lit("if ")), _cr.data); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(":"))); _tr_str_release(_cl); _cres; })); Formatter_emit_simple(self, _at_t659, src_line); _tr_str_release(_at_t659); });
+        ({ TrStr _at_t660 = (({ TrStr _cl = (({ TrStr _cr = (Formatter_expr_str(self, cond)); TrStr _cres = _tr_strx_concat(_tr_strz(_tr_str_lit("if ")), _cr.data); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(":"))); _tr_str_release(_cl); _cres; })); Formatter_emit_simple(self, _at_t660, src_line); _tr_str_release(_at_t660); });
         /* pass */
         self->indent = (self->indent + 1LL);
         /* pass */
@@ -1073,7 +1073,7 @@ __auto_type else_b = _t646.data.SIf.else_b;
             /* pass */
             ElifClause* ec = ((ElifClause*)List_ptr_get(elifs, ei));
             /* pass */
-            ({ TrStr _at_t660 = (({ TrStr _cl = (({ TrStr _cr = (Formatter_expr_str(self, ec->cond)); TrStr _cres = _tr_strx_concat(_tr_strz(_tr_str_lit("elif ")), _cr.data); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(":"))); _tr_str_release(_cl); _cres; })); Formatter_line(self, _at_t660); _tr_str_release(_at_t660); });
+            ({ TrStr _at_t661 = (({ TrStr _cl = (({ TrStr _cr = (Formatter_expr_str(self, ec->cond)); TrStr _cres = _tr_strx_concat(_tr_strz(_tr_str_lit("elif ")), _cr.data); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(":"))); _tr_str_release(_cl); _cres; })); Formatter_line(self, _at_t661); _tr_str_release(_at_t661); });
             /* pass */
             self->indent = (self->indent + 1LL);
             /* pass */
@@ -1094,35 +1094,35 @@ __auto_type else_b = _t646.data.SIf.else_b;
             /* pass */
             self->indent = (self->indent - 1LL);
         }
-    } else if (_t646.tag == Stmt_SWhile) {
-        __auto_type cond = _t646.data.SWhile.cond;
-__auto_type body = _t646.data.SWhile.body;
-__auto_type decs = _t646.data.SWhile.decorators;
+    } else if (_t647.tag == Stmt_SWhile) {
+        __auto_type cond = _t647.data.SWhile.cond;
+__auto_type body = _t647.data.SWhile.body;
+__auto_type decs = _t647.data.SWhile.decorators;
         /* pass */
-        ({ TrStr _at_t661 = (({ TrStr _cl = (({ TrStr _cr = (Formatter_expr_str(self, cond)); TrStr _cres = _tr_strx_concat(_tr_strz(_tr_str_lit("while ")), _cr.data); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(":"))); _tr_str_release(_cl); _cres; })); Formatter_emit_simple(self, _at_t661, src_line); _tr_str_release(_at_t661); });
-        /* pass */
-        self->indent = (self->indent + 1LL);
-        /* pass */
-        Formatter_emit_block(self, body);
-        /* pass */
-        self->indent = (self->indent - 1LL);
-    } else if (_t646.tag == Stmt_SFor) {
-        __auto_type var = _t646.data.SFor.var;
-__auto_type it = _t646.data.SFor.iter;
-__auto_type body = _t646.data.SFor.body;
-__auto_type decs = _t646.data.SFor.decorators;
-        /* pass */
-        ({ TrStr _at_t662 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("for ")), _tr_strz(var))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" in "))); _tr_str_release(_cl); _cres; })); TrStr _cr = (Formatter_expr_str(self, it)); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(":"))); _tr_str_release(_cl); _cres; })); Formatter_emit_simple(self, _at_t662, src_line); _tr_str_release(_at_t662); });
+        ({ TrStr _at_t662 = (({ TrStr _cl = (({ TrStr _cr = (Formatter_expr_str(self, cond)); TrStr _cres = _tr_strx_concat(_tr_strz(_tr_str_lit("while ")), _cr.data); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(":"))); _tr_str_release(_cl); _cres; })); Formatter_emit_simple(self, _at_t662, src_line); _tr_str_release(_at_t662); });
         /* pass */
         self->indent = (self->indent + 1LL);
         /* pass */
         Formatter_emit_block(self, body);
         /* pass */
         self->indent = (self->indent - 1LL);
-    } else if (_t646.tag == Stmt_SForUnpack) {
-        __auto_type vars = _t646.data.SForUnpack.vars;
-__auto_type it = _t646.data.SForUnpack.iter;
-__auto_type body = _t646.data.SForUnpack.body;
+    } else if (_t647.tag == Stmt_SFor) {
+        __auto_type var = _t647.data.SFor.var;
+__auto_type it = _t647.data.SFor.iter;
+__auto_type body = _t647.data.SFor.body;
+__auto_type decs = _t647.data.SFor.decorators;
+        /* pass */
+        ({ TrStr _at_t663 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("for ")), _tr_strz(var))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" in "))); _tr_str_release(_cl); _cres; })); TrStr _cr = (Formatter_expr_str(self, it)); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(":"))); _tr_str_release(_cl); _cres; })); Formatter_emit_simple(self, _at_t663, src_line); _tr_str_release(_at_t663); });
+        /* pass */
+        self->indent = (self->indent + 1LL);
+        /* pass */
+        Formatter_emit_block(self, body);
+        /* pass */
+        self->indent = (self->indent - 1LL);
+    } else if (_t647.tag == Stmt_SForUnpack) {
+        __auto_type vars = _t647.data.SForUnpack.vars;
+__auto_type it = _t647.data.SForUnpack.iter;
+__auto_type body = _t647.data.SForUnpack.body;
         /* pass */
         TrStr vs = _tr_str_lit("");
         /* pass */
@@ -1132,19 +1132,19 @@ __auto_type body = _t646.data.SForUnpack.body;
             /* pass */
             if ((k > 0LL)) {
                 /* pass */
-                TrStr _strtmp_t663 = _tr_strx_concat(_tr_strz(vs), _tr_strz(_tr_str_lit(", ")));
+                TrStr _strtmp_t664 = _tr_strx_concat(_tr_strz(vs), _tr_strz(_tr_str_lit(", ")));
                 _tr_str_release(vs);
-                vs = _strtmp_t663;
+                vs = _strtmp_t664;
             }
             /* pass */
-            TrStr _strtmp_t664 = ({ TrStr _cr = (List_TrStr_get(vars, k)); TrStr _cres = _tr_strx_concat(_tr_strz(vs), _cr.data); _tr_str_release(_cr); _cres; });
+            TrStr _strtmp_t665 = ({ TrStr _cr = (List_TrStr_get(vars, k)); TrStr _cres = _tr_strx_concat(_tr_strz(vs), _cr.data); _tr_str_release(_cr); _cres; });
             _tr_str_release(vs);
-            vs = _strtmp_t664;
+            vs = _strtmp_t665;
             /* pass */
             k = (k + 1LL);
         }
         /* pass */
-        ({ TrStr _at_t665 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("for ")), _tr_strz(vs))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" in "))); _tr_str_release(_cl); _cres; })); TrStr _cr = (Formatter_expr_str(self, it)); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(":"))); _tr_str_release(_cl); _cres; })); Formatter_emit_simple(self, _at_t665, src_line); _tr_str_release(_at_t665); });
+        ({ TrStr _at_t666 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("for ")), _tr_strz(vs))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" in "))); _tr_str_release(_cl); _cres; })); TrStr _cr = (Formatter_expr_str(self, it)); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(":"))); _tr_str_release(_cl); _cres; })); Formatter_emit_simple(self, _at_t666, src_line); _tr_str_release(_at_t666); });
         /* pass */
         self->indent = (self->indent + 1LL);
         /* pass */
@@ -1152,11 +1152,11 @@ __auto_type body = _t646.data.SForUnpack.body;
         /* pass */
         self->indent = (self->indent - 1LL);
         _tr_str_release(vs);
-    } else if (_t646.tag == Stmt_SMatch) {
-        __auto_type e = _t646.data.SMatch.expr;
-__auto_type arms = _t646.data.SMatch.arms;
+    } else if (_t647.tag == Stmt_SMatch) {
+        __auto_type e = _t647.data.SMatch.expr;
+__auto_type arms = _t647.data.SMatch.arms;
         /* pass */
-        ({ TrStr _at_t666 = (({ TrStr _cl = (({ TrStr _cr = (Formatter_expr_str(self, e)); TrStr _cres = _tr_strx_concat(_tr_strz(_tr_str_lit("match ")), _cr.data); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(":"))); _tr_str_release(_cl); _cres; })); Formatter_emit_simple(self, _at_t666, src_line); _tr_str_release(_at_t666); });
+        ({ TrStr _at_t667 = (({ TrStr _cl = (({ TrStr _cr = (Formatter_expr_str(self, e)); TrStr _cres = _tr_strx_concat(_tr_strz(_tr_str_lit("match ")), _cr.data); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(":"))); _tr_str_release(_cl); _cres; })); Formatter_emit_simple(self, _at_t667, src_line); _tr_str_release(_at_t667); });
         /* pass */
         self->indent = (self->indent + 1LL);
         /* pass */
@@ -1170,12 +1170,12 @@ __auto_type arms = _t646.data.SMatch.arms;
             /* pass */
             if ((((unsigned long long)(arm->guard)) != ((unsigned long long)(0LL)))) {
                 /* pass */
-                TrStr _strtmp_t667 = ({ TrStr _cl = (_tr_strx_concat(_tr_strz(head), _tr_strz(_tr_str_lit(" if ")))); TrStr _cr = (Formatter_expr_str(self, arm->guard)); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; });
+                TrStr _strtmp_t668 = ({ TrStr _cl = (_tr_strx_concat(_tr_strz(head), _tr_strz(_tr_str_lit(" if ")))); TrStr _cr = (Formatter_expr_str(self, arm->guard)); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; });
                 _tr_str_release(head);
-                head = _strtmp_t667;
+                head = _strtmp_t668;
             }
             /* pass */
-            ({ TrStr _at_t668 = (_tr_strx_concat(_tr_strz(head), _tr_strz(_tr_str_lit(":")))); Formatter_line(self, _at_t668); _tr_str_release(_at_t668); });
+            ({ TrStr _at_t669 = (_tr_strx_concat(_tr_strz(head), _tr_strz(_tr_str_lit(":")))); Formatter_line(self, _at_t669); _tr_str_release(_at_t669); });
             /* pass */
             self->indent = (self->indent + 1LL);
             /* pass */
@@ -1188,10 +1188,10 @@ __auto_type arms = _t646.data.SMatch.arms;
         }
         /* pass */
         self->indent = (self->indent - 1LL);
-    } else if (_t646.tag == Stmt_STry) {
-        __auto_type try_b = _t646.data.STry.try_body;
-__auto_type catches = _t646.data.STry.catches;
-__auto_type finally_b = _t646.data.STry.finally_b;
+    } else if (_t647.tag == Stmt_STry) {
+        __auto_type try_b = _t647.data.STry.try_body;
+__auto_type catches = _t647.data.STry.catches;
+__auto_type finally_b = _t647.data.STry.finally_b;
         /* pass */
         Formatter_emit_simple(self, _tr_str_lit("try:"), src_line);
         /* pass */
@@ -1215,20 +1215,20 @@ __auto_type finally_b = _t646.data.STry.finally_b;
                 /* pass */
                 if (((_tr_strlen(_tr_strz(et)) > 0LL) && (strcmp(_tr_strz(et), _tr_strz(_tr_str_lit("void"))) != 0))) {
                     /* pass */
-                    TrStr _strtmp_t669 = ({ TrStr _cl = (_tr_strx_concat(_tr_strz(head), _tr_strz(_tr_str_lit(" ")))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(et)); _tr_str_release(_cl); _cres; });
+                    TrStr _strtmp_t670 = ({ TrStr _cl = (_tr_strx_concat(_tr_strz(head), _tr_strz(_tr_str_lit(" ")))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(et)); _tr_str_release(_cl); _cres; });
                     _tr_str_release(head);
-                    head = _strtmp_t669;
+                    head = _strtmp_t670;
                 }
             }
             /* pass */
             if ((_tr_strlen(_tr_strz(cc->err_name)) > 0LL)) {
                 /* pass */
-                TrStr _strtmp_t670 = ({ TrStr _cl = (_tr_strx_concat(_tr_strz(head), _tr_strz(_tr_str_lit(" as ")))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(cc->err_name)); _tr_str_release(_cl); _cres; });
+                TrStr _strtmp_t671 = ({ TrStr _cl = (_tr_strx_concat(_tr_strz(head), _tr_strz(_tr_str_lit(" as ")))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(cc->err_name)); _tr_str_release(_cl); _cres; });
                 _tr_str_release(head);
-                head = _strtmp_t670;
+                head = _strtmp_t671;
             }
             /* pass */
-            ({ TrStr _at_t671 = (_tr_strx_concat(_tr_strz(head), _tr_strz(_tr_str_lit(":")))); Formatter_line(self, _at_t671); _tr_str_release(_at_t671); });
+            ({ TrStr _at_t672 = (_tr_strx_concat(_tr_strz(head), _tr_strz(_tr_str_lit(":")))); Formatter_line(self, _at_t672); _tr_str_release(_at_t672); });
             /* pass */
             self->indent = (self->indent + 1LL);
             /* pass */
@@ -1250,10 +1250,10 @@ __auto_type finally_b = _t646.data.STry.finally_b;
             /* pass */
             self->indent = (self->indent - 1LL);
         }
-    } else if (_t646.tag == Stmt_SWith) {
-        __auto_type items = _t646.data.SWith.items;
-__auto_type aliases = _t646.data.SWith.aliases;
-__auto_type body = _t646.data.SWith.body;
+    } else if (_t647.tag == Stmt_SWith) {
+        __auto_type items = _t647.data.SWith.items;
+__auto_type aliases = _t647.data.SWith.aliases;
+__auto_type body = _t647.data.SWith.body;
         /* pass */
         TrStr hs = _tr_str_lit("with ");
         /* pass */
@@ -1263,26 +1263,26 @@ __auto_type body = _t646.data.SWith.body;
             /* pass */
             if ((k > 0LL)) {
                 /* pass */
-                TrStr _strtmp_t672 = _tr_strx_concat(_tr_strz(hs), _tr_strz(_tr_str_lit(", ")));
+                TrStr _strtmp_t673 = _tr_strx_concat(_tr_strz(hs), _tr_strz(_tr_str_lit(", ")));
                 _tr_str_release(hs);
-                hs = _strtmp_t672;
+                hs = _strtmp_t673;
             }
             /* pass */
-            TrStr _strtmp_t673 = ({ TrStr _cr = (Formatter_expr_str(self, ((Expr*)List_ptr_get(items, k)))); TrStr _cres = _tr_strx_concat(_tr_strz(hs), _cr.data); _tr_str_release(_cr); _cres; });
+            TrStr _strtmp_t674 = ({ TrStr _cr = (Formatter_expr_str(self, ((Expr*)List_ptr_get(items, k)))); TrStr _cres = _tr_strx_concat(_tr_strz(hs), _cr.data); _tr_str_release(_cr); _cres; });
             _tr_str_release(hs);
-            hs = _strtmp_t673;
+            hs = _strtmp_t674;
             /* pass */
             if (((k < aliases->len) && (_tr_strlen(_tr_strz(List_TrStr_get(aliases, k))) > 0LL))) {
                 /* pass */
-                TrStr _strtmp_t674 = ({ TrStr _cl = (_tr_strx_concat(_tr_strz(hs), _tr_strz(_tr_str_lit(" as ")))); TrStr _cr = (List_TrStr_get(aliases, k)); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; });
+                TrStr _strtmp_t675 = ({ TrStr _cl = (_tr_strx_concat(_tr_strz(hs), _tr_strz(_tr_str_lit(" as ")))); TrStr _cr = (List_TrStr_get(aliases, k)); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; });
                 _tr_str_release(hs);
-                hs = _strtmp_t674;
+                hs = _strtmp_t675;
             }
             /* pass */
             k = (k + 1LL);
         }
         /* pass */
-        ({ TrStr _at_t675 = (_tr_strx_concat(_tr_strz(hs), _tr_strz(_tr_str_lit(":")))); Formatter_emit_simple(self, _at_t675, src_line); _tr_str_release(_at_t675); });
+        ({ TrStr _at_t676 = (_tr_strx_concat(_tr_strz(hs), _tr_strz(_tr_str_lit(":")))); Formatter_emit_simple(self, _at_t676, src_line); _tr_str_release(_at_t676); });
         /* pass */
         self->indent = (self->indent + 1LL);
         /* pass */
@@ -1290,11 +1290,11 @@ __auto_type body = _t646.data.SWith.body;
         /* pass */
         self->indent = (self->indent - 1LL);
         _tr_str_release(hs);
-    } else if (_t646.tag == Stmt_SSpawn) {
-        __auto_type e = _t646.data.SSpawn.expr;
-        ({ TrStr _at_t676 = (({ TrStr _cr = (Formatter_expr_str(self, e)); TrStr _cres = _tr_strx_concat(_tr_strz(_tr_str_lit("spawn ")), _cr.data); _tr_str_release(_cr); _cres; })); Formatter_emit_simple(self, _at_t676, src_line); _tr_str_release(_at_t676); });
-    } else if (_t646.tag == Stmt_STaskGroup) {
-        __auto_type body = _t646.data.STaskGroup.body;
+    } else if (_t647.tag == Stmt_SSpawn) {
+        __auto_type e = _t647.data.SSpawn.expr;
+        ({ TrStr _at_t677 = (({ TrStr _cr = (Formatter_expr_str(self, e)); TrStr _cres = _tr_strx_concat(_tr_strz(_tr_str_lit("spawn ")), _cr.data); _tr_str_release(_cr); _cres; })); Formatter_emit_simple(self, _at_t677, src_line); _tr_str_release(_at_t677); });
+    } else if (_t647.tag == Stmt_STaskGroup) {
+        __auto_type body = _t647.data.STaskGroup.body;
         /* pass */
         Formatter_emit_simple(self, _tr_str_lit("task_group:"), src_line);
         /* pass */
@@ -1303,18 +1303,18 @@ __auto_type body = _t646.data.SWith.body;
         Formatter_emit_block(self, body);
         /* pass */
         self->indent = (self->indent - 1LL);
-    } else if (_t646.tag == Stmt_SDefer) {
-        __auto_type inner = _t646.data.SDefer.stmt;
+    } else if (_t647.tag == Stmt_SDefer) {
+        __auto_type inner = _t647.data.SDefer.stmt;
         /* pass */
-        ({ TrStr _sbt_t677 = (Formatter_pad(self)); StringBuilder_append(self->out, _sbt_t677); _tr_str_release(_sbt_t677); });
+        ({ TrStr _sbt_t678 = (Formatter_pad(self)); StringBuilder_append(self->out, _sbt_t678); _tr_str_release(_sbt_t678); });
         /* pass */
         StringBuilder_append(self->out, _tr_str_lit("defer "));
         /* pass */
         Formatter_emit_inline_stmt(self, inner);
         /* pass */
         StringBuilder_append(self->out, _tr_str_lit("\n"));
-    } else if (_t646.tag == Stmt_SGpuBlock) {
-        __auto_type body = _t646.data.SGpuBlock.body;
+    } else if (_t647.tag == Stmt_SGpuBlock) {
+        __auto_type body = _t647.data.SGpuBlock.body;
         /* pass */
         Formatter_emit_simple(self, _tr_str_lit("gpu:"), src_line);
         /* pass */
@@ -1323,11 +1323,11 @@ __auto_type body = _t646.data.SWith.body;
         Formatter_emit_block(self, body);
         /* pass */
         self->indent = (self->indent - 1LL);
-    } else if (_t646.tag == Stmt_SLocalDecl) {
-        __auto_type d = _t646.data.SLocalDecl.decl;
+    } else if (_t647.tag == Stmt_SLocalDecl) {
+        __auto_type d = _t647.data.SLocalDecl.decl;
         Formatter_emit_decl(self, d);
     } else if (1) {
-        __auto_type _ = _t646;
+        __auto_type _ = _t647;
         /* pass */
         self->unsupported = true;
     }
@@ -1335,26 +1335,26 @@ __auto_type body = _t646.data.SWith.body;
 
 __attribute__((hot)) void Formatter_emit_inline_stmt(Formatter* self, Stmt* sp) {
     /* pass */
-    __auto_type _t678 = (*sp);
-    if (_t678.tag == Stmt_SExpr) {
-        __auto_type e = _t678.data.SExpr.expr;
-        ({ TrStr _sbt_t679 = (Formatter_expr_str(self, e)); StringBuilder_append(self->out, _sbt_t679); _tr_str_release(_sbt_t679); });
-    } else if (_t678.tag == Stmt_SReturn) {
-        __auto_type v = _t678.data.SReturn.val;
+    __auto_type _t679 = (*sp);
+    if (_t679.tag == Stmt_SExpr) {
+        __auto_type e = _t679.data.SExpr.expr;
+        ({ TrStr _sbt_t680 = (Formatter_expr_str(self, e)); StringBuilder_append(self->out, _sbt_t680); _tr_str_release(_sbt_t680); });
+    } else if (_t679.tag == Stmt_SReturn) {
+        __auto_type v = _t679.data.SReturn.val;
         /* pass */
         if ((((unsigned long long)(v)) == ((unsigned long long)(0LL)))) {
             /* pass */
             StringBuilder_append(self->out, _tr_str_lit("return"));
         } else {
             /* pass */
-            ({ TrStr _sbt_t680 = (({ TrStr _cr = (Formatter_expr_str(self, v)); TrStr _cres = _tr_strx_concat(_tr_strz(_tr_str_lit("return ")), _cr.data); _tr_str_release(_cr); _cres; })); StringBuilder_append(self->out, _sbt_t680); _tr_str_release(_sbt_t680); });
+            ({ TrStr _sbt_t681 = (({ TrStr _cr = (Formatter_expr_str(self, v)); TrStr _cres = _tr_strx_concat(_tr_strz(_tr_str_lit("return ")), _cr.data); _tr_str_release(_cr); _cres; })); StringBuilder_append(self->out, _sbt_t681); _tr_str_release(_sbt_t681); });
         }
-    } else if (_t678.tag == Stmt_SAssign) {
-        __auto_type t = _t678.data.SAssign.target;
-__auto_type v = _t678.data.SAssign.val;
-        ({ TrStr _sbt_t681 = (({ TrStr _cl = (({ TrStr _cl = (Formatter_expr_str(self, t)); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" = "))); _tr_str_release(_cl); _cres; })); TrStr _cr = (Formatter_expr_str(self, v)); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; })); StringBuilder_append(self->out, _sbt_t681); _tr_str_release(_sbt_t681); });
+    } else if (_t679.tag == Stmt_SAssign) {
+        __auto_type t = _t679.data.SAssign.target;
+__auto_type v = _t679.data.SAssign.val;
+        ({ TrStr _sbt_t682 = (({ TrStr _cl = (({ TrStr _cl = (Formatter_expr_str(self, t)); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" = "))); _tr_str_release(_cl); _cres; })); TrStr _cr = (Formatter_expr_str(self, v)); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; })); StringBuilder_append(self->out, _sbt_t682); _tr_str_release(_sbt_t682); });
     } else if (1) {
-        __auto_type _ = _t678;
+        __auto_type _ = _t679;
         /* pass */
     }
 }
@@ -1365,39 +1365,39 @@ __attribute__((hot)) TrStr Formatter_let_str(Formatter* self, TrStr name, Owners
     /* pass */
     if (is_const) {
         /* pass */
-        TrStr _strtmp_t682 = _tr_str_lit("const ");
-        _tr_str_release(s);
-        s = _strtmp_t682;
-    } else if (is_shared) {
-        /* pass */
-        TrStr _strtmp_t683 = _tr_str_lit("shared ");
+        TrStr _strtmp_t683 = _tr_str_lit("const ");
         _tr_str_release(s);
         s = _strtmp_t683;
-    } else if (is_mut) {
+    } else if (is_shared) {
         /* pass */
-        TrStr _strtmp_t684 = _tr_str_lit("mut ");
+        TrStr _strtmp_t684 = _tr_str_lit("shared ");
         _tr_str_release(s);
         s = _strtmp_t684;
+    } else if (is_mut) {
+        /* pass */
+        TrStr _strtmp_t685 = _tr_str_lit("mut ");
+        _tr_str_release(s);
+        s = _strtmp_t685;
     }
     /* pass */
-    TrStr _strtmp_t685 = _tr_strx_concat(_tr_strz(s), _tr_strz(name));
+    TrStr _strtmp_t686 = _tr_strx_concat(_tr_strz(s), _tr_strz(name));
     _tr_str_release(s);
-    s = _strtmp_t685;
+    s = _strtmp_t686;
     /* pass */
     TrStr tn = Formatter_type_str(self, ty);
     /* pass */
     if (((_tr_strlen(_tr_strz(tn)) > 0LL) && (strcmp(_tr_strz(tn), _tr_strz(_tr_str_lit("void"))) != 0))) {
         /* pass */
-        TrStr _strtmp_t686 = ({ TrStr _cl = (_tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit(": ")))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(tn)); _tr_str_release(_cl); _cres; });
+        TrStr _strtmp_t687 = ({ TrStr _cl = (_tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit(": ")))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(tn)); _tr_str_release(_cl); _cres; });
         _tr_str_release(s);
-        s = _strtmp_t686;
+        s = _strtmp_t687;
     }
     /* pass */
     if ((((unsigned long long)(val)) != ((unsigned long long)(0LL)))) {
         /* pass */
-        TrStr _strtmp_t687 = ({ TrStr _cl = (_tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit(" = ")))); TrStr _cr = (Formatter_expr_str(self, val)); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; });
+        TrStr _strtmp_t688 = ({ TrStr _cl = (_tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit(" = ")))); TrStr _cr = (Formatter_expr_str(self, val)); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; });
         _tr_str_release(s);
-        s = _strtmp_t687;
+        s = _strtmp_t688;
     }
     /* pass */
     _tr_str_release(tn);
@@ -1406,20 +1406,20 @@ __attribute__((hot)) TrStr Formatter_let_str(Formatter* self, TrStr name, Owners
 
 __attribute__((hot)) TrStr Formatter_pattern_str(Formatter* self, Pattern p) {
     /* pass */
-    __auto_type _t688 = p;
-    if (_t688.tag == Pattern_PWild) {
+    __auto_type _t689 = p;
+    if (_t689.tag == Pattern_PWild) {
         return _tr_str_lit("_");
-    } else if (_t688.tag == Pattern_PBind) {
-        __auto_type n = _t688.data.PBind.name;
+    } else if (_t689.tag == Pattern_PBind) {
+        __auto_type n = _t689.data.PBind.name;
         return _tr_str_retain(n);
-    } else if (_t688.tag == Pattern_PLitInt) {
-        __auto_type v = _t688.data.PLitInt.val;
+    } else if (_t689.tag == Pattern_PLitInt) {
+        __auto_type v = _t689.data.PLitInt.val;
         return _tr_str_wrap(_tr_int_to_str((long long)(v)));
-    } else if (_t688.tag == Pattern_PLitStr) {
-        __auto_type v = _t688.data.PLitStr.val;
+    } else if (_t689.tag == Pattern_PLitStr) {
+        __auto_type v = _t689.data.PLitStr.val;
         return ({ TrStr _cl = (({ TrStr _cr = (Formatter_escape_str(self, v)); TrStr _cres = _tr_strx_concat(_tr_strz(_tr_str_lit("\"")), _cr.data); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\""))); _tr_str_release(_cl); _cres; });
-    } else if (_t688.tag == Pattern_PLitBool) {
-        __auto_type b = _t688.data.PLitBool.val;
+    } else if (_t689.tag == Pattern_PLitBool) {
+        __auto_type b = _t689.data.PLitBool.val;
         /* pass */
         if (b) {
             /* pass */
@@ -1427,19 +1427,19 @@ __attribute__((hot)) TrStr Formatter_pattern_str(Formatter* self, Pattern p) {
         }
         /* pass */
         return _tr_str_lit("False");
-    } else if (_t688.tag == Pattern_PVariant) {
-        __auto_type tn = _t688.data.PVariant.type_name;
-__auto_type vn = _t688.data.PVariant.variant;
+    } else if (_t689.tag == Pattern_PVariant) {
+        __auto_type tn = _t689.data.PVariant.type_name;
+__auto_type vn = _t689.data.PVariant.variant;
         return ({ TrStr _cl = (_tr_strx_concat(_tr_strz(tn), _tr_strz(_tr_str_lit(".")))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(vn)); _tr_str_release(_cl); _cres; });
-    } else if (_t688.tag == Pattern_PVariantBind) {
-        __auto_type tn = _t688.data.PVariantBind.type_name;
-__auto_type vn = _t688.data.PVariantBind.variant;
-__auto_type f = _t688.data.PVariantBind.field;
+    } else if (_t689.tag == Pattern_PVariantBind) {
+        __auto_type tn = _t689.data.PVariantBind.type_name;
+__auto_type vn = _t689.data.PVariantBind.variant;
+__auto_type f = _t689.data.PVariantBind.field;
         return ({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(tn), _tr_strz(_tr_str_lit(".")))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(vn)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("("))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(f)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(")"))); _tr_str_release(_cl); _cres; });
-    } else if (_t688.tag == Pattern_PVariantBindMany) {
-        __auto_type tn = _t688.data.PVariantBindMany.type_name;
-__auto_type vn = _t688.data.PVariantBindMany.variant;
-__auto_type fs = _t688.data.PVariantBindMany.fields;
+    } else if (_t689.tag == Pattern_PVariantBindMany) {
+        __auto_type tn = _t689.data.PVariantBindMany.type_name;
+__auto_type vn = _t689.data.PVariantBindMany.variant;
+__auto_type fs = _t689.data.PVariantBindMany.fields;
         /* pass */
         TrStr s = ({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(tn), _tr_strz(_tr_str_lit(".")))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(vn)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("("))); _tr_str_release(_cl); _cres; });
         /* pass */
@@ -1449,25 +1449,25 @@ __auto_type fs = _t688.data.PVariantBindMany.fields;
             /* pass */
             if ((i > 0LL)) {
                 /* pass */
-                TrStr _strtmp_t689 = _tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit(", ")));
+                TrStr _strtmp_t690 = _tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit(", ")));
                 _tr_str_release(s);
-                s = _strtmp_t689;
+                s = _strtmp_t690;
             }
             /* pass */
-            TrStr _strtmp_t690 = ({ TrStr _cr = (List_TrStr_get(fs, i)); TrStr _cres = _tr_strx_concat(_tr_strz(s), _cr.data); _tr_str_release(_cr); _cres; });
+            TrStr _strtmp_t691 = ({ TrStr _cr = (List_TrStr_get(fs, i)); TrStr _cres = _tr_strx_concat(_tr_strz(s), _cr.data); _tr_str_release(_cr); _cres; });
             _tr_str_release(s);
-            s = _strtmp_t690;
+            s = _strtmp_t691;
             /* pass */
             i = (i + 1LL);
         }
         /* pass */
         return _tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit(")")));
-    } else if (_t688.tag == Pattern_PTuple) {
-        __auto_type a = _t688.data.PTuple.first;
-__auto_type b = _t688.data.PTuple.second;
+    } else if (_t689.tag == Pattern_PTuple) {
+        __auto_type a = _t689.data.PTuple.first;
+__auto_type b = _t689.data.PTuple.second;
         return ({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("(")), _tr_strz(a))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(", "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(b)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(")"))); _tr_str_release(_cl); _cres; });
-    } else if (_t688.tag == Pattern_POr) {
-        __auto_type pats = _t688.data.POr.patterns;
+    } else if (_t689.tag == Pattern_POr) {
+        __auto_type pats = _t689.data.POr.patterns;
         /* pass */
         TrStr s = _tr_str_lit("");
         /* pass */
@@ -1477,21 +1477,21 @@ __auto_type b = _t688.data.PTuple.second;
             /* pass */
             if ((i > 0LL)) {
                 /* pass */
-                TrStr _strtmp_t691 = _tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit(" | ")));
+                TrStr _strtmp_t692 = _tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit(" | ")));
                 _tr_str_release(s);
-                s = _strtmp_t691;
+                s = _strtmp_t692;
             }
             /* pass */
-            TrStr _strtmp_t692 = ({ TrStr _cr = (Formatter_pattern_str(self, List_Pattern_get(pats, i))); TrStr _cres = _tr_strx_concat(_tr_strz(s), _cr.data); _tr_str_release(_cr); _cres; });
+            TrStr _strtmp_t693 = ({ TrStr _cr = (Formatter_pattern_str(self, List_Pattern_get(pats, i))); TrStr _cres = _tr_strx_concat(_tr_strz(s), _cr.data); _tr_str_release(_cr); _cres; });
             _tr_str_release(s);
-            s = _strtmp_t692;
+            s = _strtmp_t693;
             /* pass */
             i = (i + 1LL);
         }
         /* pass */
         return s;
     } else if (1) {
-        __auto_type _ = _t688;
+        __auto_type _ = _t689;
         return _tr_str_lit("_");
     }
 }
@@ -1502,27 +1502,27 @@ __attribute__((hot)) TrStr Formatter_fn_header(Formatter* self, FunctionDef* f) 
     /* pass */
     if (f->is_public) {
         /* pass */
-        TrStr _strtmp_t693 = _tr_str_lit("pub ");
-        _tr_str_release(s);
-        s = _strtmp_t693;
-    }
-    /* pass */
-    if (f->is_async) {
-        /* pass */
-        TrStr _strtmp_t694 = _tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit("async ")));
+        TrStr _strtmp_t694 = _tr_str_lit("pub ");
         _tr_str_release(s);
         s = _strtmp_t694;
     }
     /* pass */
-    TrStr _strtmp_t695 = ({ TrStr _cl = (_tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit("def ")))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(f->name)); _tr_str_release(_cl); _cres; });
+    if (f->is_async) {
+        /* pass */
+        TrStr _strtmp_t695 = _tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit("async ")));
+        _tr_str_release(s);
+        s = _strtmp_t695;
+    }
+    /* pass */
+    TrStr _strtmp_t696 = ({ TrStr _cl = (_tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit("def ")))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(f->name)); _tr_str_release(_cl); _cres; });
     _tr_str_release(s);
-    s = _strtmp_t695;
+    s = _strtmp_t696;
     /* pass */
     if ((f->generics->len > 0LL)) {
         /* pass */
-        TrStr _strtmp_t696 = _tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit("[")));
+        TrStr _strtmp_t697 = _tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit("[")));
         _tr_str_release(s);
-        s = _strtmp_t696;
+        s = _strtmp_t697;
         /* pass */
         long long gi = 0LL;
         /* pass */
@@ -1530,26 +1530,26 @@ __attribute__((hot)) TrStr Formatter_fn_header(Formatter* self, FunctionDef* f) 
             /* pass */
             if ((gi > 0LL)) {
                 /* pass */
-                TrStr _strtmp_t697 = _tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit(", ")));
+                TrStr _strtmp_t698 = _tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit(", ")));
                 _tr_str_release(s);
-                s = _strtmp_t697;
+                s = _strtmp_t698;
             }
             /* pass */
-            TrStr _strtmp_t698 = ({ TrStr _cr = (List_TrStr_get(f->generics, gi)); TrStr _cres = _tr_strx_concat(_tr_strz(s), _cr.data); _tr_str_release(_cr); _cres; });
+            TrStr _strtmp_t699 = ({ TrStr _cr = (List_TrStr_get(f->generics, gi)); TrStr _cres = _tr_strx_concat(_tr_strz(s), _cr.data); _tr_str_release(_cr); _cres; });
             _tr_str_release(s);
-            s = _strtmp_t698;
+            s = _strtmp_t699;
             /* pass */
             gi = (gi + 1LL);
         }
         /* pass */
-        TrStr _strtmp_t699 = _tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit("]")));
+        TrStr _strtmp_t700 = _tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit("]")));
         _tr_str_release(s);
-        s = _strtmp_t699;
+        s = _strtmp_t700;
     }
     /* pass */
-    TrStr _strtmp_t700 = ({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit("(")))); TrStr _cr = (Formatter_params_str(self, f->params)); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(")"))); _tr_str_release(_cl); _cres; });
+    TrStr _strtmp_t701 = ({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit("(")))); TrStr _cr = (Formatter_params_str(self, f->params)); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(")"))); _tr_str_release(_cl); _cres; });
     _tr_str_release(s);
-    s = _strtmp_t700;
+    s = _strtmp_t701;
     /* pass */
     if ((((unsigned long long)(f->throws_ty)) != ((unsigned long long)(0LL)))) {
         /* pass */
@@ -1557,9 +1557,9 @@ __attribute__((hot)) TrStr Formatter_fn_header(Formatter* self, FunctionDef* f) 
         /* pass */
         if ((_tr_strlen(_tr_strz(tt)) > 0LL)) {
             /* pass */
-            TrStr _strtmp_t701 = ({ TrStr _cl = (_tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit(" throws ")))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(tt)); _tr_str_release(_cl); _cres; });
+            TrStr _strtmp_t702 = ({ TrStr _cl = (_tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit(" throws ")))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(tt)); _tr_str_release(_cl); _cres; });
             _tr_str_release(s);
-            s = _strtmp_t701;
+            s = _strtmp_t702;
         }
     }
     /* pass */
@@ -1569,9 +1569,9 @@ __attribute__((hot)) TrStr Formatter_fn_header(Formatter* self, FunctionDef* f) 
         /* pass */
         if (((_tr_strlen(_tr_strz(rt)) > 0LL) && (strcmp(_tr_strz(rt), _tr_strz(_tr_str_lit("void"))) != 0))) {
             /* pass */
-            TrStr _strtmp_t702 = ({ TrStr _cl = (_tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit(" -> ")))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(rt)); _tr_str_release(_cl); _cres; });
+            TrStr _strtmp_t703 = ({ TrStr _cl = (_tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit(" -> ")))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(rt)); _tr_str_release(_cl); _cres; });
             _tr_str_release(s);
-            s = _strtmp_t702;
+            s = _strtmp_t703;
         }
     }
     /* pass */
@@ -1584,11 +1584,11 @@ __attribute__((hot)) void Formatter_emit_function(Formatter* self, FunctionDef* 
     /* pass */
     Formatter_emit_decorators(self, f->decorators);
     /* pass */
-    ({ TrStr _sbt_t703 = (Formatter_pad(self)); StringBuilder_append(self->out, _sbt_t703); _tr_str_release(_sbt_t703); });
+    ({ TrStr _sbt_t704 = (Formatter_pad(self)); StringBuilder_append(self->out, _sbt_t704); _tr_str_release(_sbt_t704); });
     /* pass */
-    ({ TrStr _sbt_t704 = (Formatter_fn_header(self, f)); StringBuilder_append(self->out, _sbt_t704); _tr_str_release(_sbt_t704); });
+    ({ TrStr _sbt_t705 = (Formatter_fn_header(self, f)); StringBuilder_append(self->out, _sbt_t705); _tr_str_release(_sbt_t705); });
     /* pass */
-    ({ TrStr _sbt_t705 = (Formatter_trailing_for(self, f->line)); StringBuilder_append(self->out, _sbt_t705); _tr_str_release(_sbt_t705); });
+    ({ TrStr _sbt_t706 = (Formatter_trailing_for(self, f->line)); StringBuilder_append(self->out, _sbt_t706); _tr_str_release(_sbt_t706); });
     /* pass */
     StringBuilder_append(self->out, _tr_str_lit("\n"));
     /* pass */
@@ -1615,20 +1615,20 @@ __attribute__((hot)) void Formatter_emit_class(Formatter* self, ClassDef* c, TrS
     /* pass */
     if (c->is_public) {
         /* pass */
-        TrStr _strtmp_t706 = _tr_str_lit("pub ");
+        TrStr _strtmp_t707 = _tr_str_lit("pub ");
         _tr_str_release(head);
-        head = _strtmp_t706;
+        head = _strtmp_t707;
     }
     /* pass */
-    TrStr _strtmp_t707 = ({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(head), _tr_strz(kw))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(c->name)); _tr_str_release(_cl); _cres; });
+    TrStr _strtmp_t708 = ({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(head), _tr_strz(kw))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(c->name)); _tr_str_release(_cl); _cres; });
     _tr_str_release(head);
-    head = _strtmp_t707;
+    head = _strtmp_t708;
     /* pass */
     if ((c->generics->len > 0LL)) {
         /* pass */
-        TrStr _strtmp_t708 = _tr_strx_concat(_tr_strz(head), _tr_strz(_tr_str_lit("[")));
+        TrStr _strtmp_t709 = _tr_strx_concat(_tr_strz(head), _tr_strz(_tr_str_lit("[")));
         _tr_str_release(head);
-        head = _strtmp_t708;
+        head = _strtmp_t709;
         /* pass */
         long long gi = 0LL;
         /* pass */
@@ -1636,36 +1636,36 @@ __attribute__((hot)) void Formatter_emit_class(Formatter* self, ClassDef* c, TrS
             /* pass */
             if ((gi > 0LL)) {
                 /* pass */
-                TrStr _strtmp_t709 = _tr_strx_concat(_tr_strz(head), _tr_strz(_tr_str_lit(", ")));
+                TrStr _strtmp_t710 = _tr_strx_concat(_tr_strz(head), _tr_strz(_tr_str_lit(", ")));
                 _tr_str_release(head);
-                head = _strtmp_t709;
+                head = _strtmp_t710;
             }
             /* pass */
-            TrStr _strtmp_t710 = ({ TrStr _cr = (List_TrStr_get(c->generics, gi)); TrStr _cres = _tr_strx_concat(_tr_strz(head), _cr.data); _tr_str_release(_cr); _cres; });
+            TrStr _strtmp_t711 = ({ TrStr _cr = (List_TrStr_get(c->generics, gi)); TrStr _cres = _tr_strx_concat(_tr_strz(head), _cr.data); _tr_str_release(_cr); _cres; });
             _tr_str_release(head);
-            head = _strtmp_t710;
+            head = _strtmp_t711;
             /* pass */
             gi = (gi + 1LL);
         }
         /* pass */
-        TrStr _strtmp_t711 = _tr_strx_concat(_tr_strz(head), _tr_strz(_tr_str_lit("]")));
+        TrStr _strtmp_t712 = _tr_strx_concat(_tr_strz(head), _tr_strz(_tr_str_lit("]")));
         _tr_str_release(head);
-        head = _strtmp_t711;
+        head = _strtmp_t712;
     }
     /* pass */
     if ((c->base_classes->len > 0LL)) {
         /* pass */
-        TrStr _strtmp_t712 = ({ TrStr _cl = (_tr_strx_concat(_tr_strz(head), _tr_strz(_tr_str_lit(" extends ")))); TrStr _cr = (List_TrStr_get(c->base_classes, 0LL)); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; });
+        TrStr _strtmp_t713 = ({ TrStr _cl = (_tr_strx_concat(_tr_strz(head), _tr_strz(_tr_str_lit(" extends ")))); TrStr _cr = (List_TrStr_get(c->base_classes, 0LL)); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; });
         _tr_str_release(head);
-        head = _strtmp_t712;
+        head = _strtmp_t713;
         /* pass */
         long long bi = 1LL;
         /* pass */
         while ((bi < c->base_classes->len)) {
             /* pass */
-            TrStr _strtmp_t713 = ({ TrStr _cl = (_tr_strx_concat(_tr_strz(head), _tr_strz(_tr_str_lit(", ")))); TrStr _cr = (List_TrStr_get(c->base_classes, bi)); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; });
+            TrStr _strtmp_t714 = ({ TrStr _cl = (_tr_strx_concat(_tr_strz(head), _tr_strz(_tr_str_lit(", ")))); TrStr _cr = (List_TrStr_get(c->base_classes, bi)); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; });
             _tr_str_release(head);
-            head = _strtmp_t713;
+            head = _strtmp_t714;
             /* pass */
             bi = (bi + 1LL);
         }
@@ -1673,9 +1673,9 @@ __attribute__((hot)) void Formatter_emit_class(Formatter* self, ClassDef* c, TrS
     /* pass */
     if ((c->iface_names->len > 0LL)) {
         /* pass */
-        TrStr _strtmp_t714 = _tr_strx_concat(_tr_strz(head), _tr_strz(_tr_str_lit(" implements ")));
+        TrStr _strtmp_t715 = _tr_strx_concat(_tr_strz(head), _tr_strz(_tr_str_lit(" implements ")));
         _tr_str_release(head);
-        head = _strtmp_t714;
+        head = _strtmp_t715;
         /* pass */
         long long ii = 0LL;
         /* pass */
@@ -1683,20 +1683,20 @@ __attribute__((hot)) void Formatter_emit_class(Formatter* self, ClassDef* c, TrS
             /* pass */
             if ((ii > 0LL)) {
                 /* pass */
-                TrStr _strtmp_t715 = _tr_strx_concat(_tr_strz(head), _tr_strz(_tr_str_lit(", ")));
+                TrStr _strtmp_t716 = _tr_strx_concat(_tr_strz(head), _tr_strz(_tr_str_lit(", ")));
                 _tr_str_release(head);
-                head = _strtmp_t715;
+                head = _strtmp_t716;
             }
             /* pass */
-            TrStr _strtmp_t716 = ({ TrStr _cr = (List_TrStr_get(c->iface_names, ii)); TrStr _cres = _tr_strx_concat(_tr_strz(head), _cr.data); _tr_str_release(_cr); _cres; });
+            TrStr _strtmp_t717 = ({ TrStr _cr = (List_TrStr_get(c->iface_names, ii)); TrStr _cres = _tr_strx_concat(_tr_strz(head), _cr.data); _tr_str_release(_cr); _cres; });
             _tr_str_release(head);
-            head = _strtmp_t716;
+            head = _strtmp_t717;
             /* pass */
             ii = (ii + 1LL);
         }
     }
     /* pass */
-    ({ TrStr _at_t717 = (_tr_strx_concat(_tr_strz(head), _tr_strz(_tr_str_lit(":")))); Formatter_line(self, _at_t717); _tr_str_release(_at_t717); });
+    ({ TrStr _at_t718 = (_tr_strx_concat(_tr_strz(head), _tr_strz(_tr_str_lit(":")))); Formatter_line(self, _at_t718); _tr_str_release(_at_t718); });
     /* pass */
     self->indent = (self->indent + 1LL);
     /* pass */
@@ -1712,9 +1712,9 @@ __attribute__((hot)) void Formatter_emit_class(Formatter* self, ClassDef* c, TrS
         /* pass */
         if ((((unsigned long long)(fld->default_val)) != ((unsigned long long)(0LL)))) {
             /* pass */
-            TrStr _strtmp_t718 = ({ TrStr _cl = (_tr_strx_concat(_tr_strz(fs), _tr_strz(_tr_str_lit(" = ")))); TrStr _cr = (Formatter_expr_str(self, fld->default_val)); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; });
+            TrStr _strtmp_t719 = ({ TrStr _cl = (_tr_strx_concat(_tr_strz(fs), _tr_strz(_tr_str_lit(" = ")))); TrStr _cr = (Formatter_expr_str(self, fld->default_val)); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; });
             _tr_str_release(fs);
-            fs = _strtmp_t718;
+            fs = _strtmp_t719;
         }
         /* pass */
         Formatter_line(self, fs);
@@ -1755,20 +1755,20 @@ __attribute__((hot)) void Formatter_emit_enum(Formatter* self, EnumDef* e) {
     /* pass */
     if (e->is_public) {
         /* pass */
-        TrStr _strtmp_t719 = _tr_str_lit("pub ");
+        TrStr _strtmp_t720 = _tr_str_lit("pub ");
         _tr_str_release(head);
-        head = _strtmp_t719;
+        head = _strtmp_t720;
     }
     /* pass */
-    TrStr _strtmp_t720 = ({ TrStr _cl = (_tr_strx_concat(_tr_strz(head), _tr_strz(_tr_str_lit("enum ")))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(e->name)); _tr_str_release(_cl); _cres; });
+    TrStr _strtmp_t721 = ({ TrStr _cl = (_tr_strx_concat(_tr_strz(head), _tr_strz(_tr_str_lit("enum ")))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(e->name)); _tr_str_release(_cl); _cres; });
     _tr_str_release(head);
-    head = _strtmp_t720;
+    head = _strtmp_t721;
     /* pass */
     if ((e->generics->len > 0LL)) {
         /* pass */
-        TrStr _strtmp_t721 = _tr_strx_concat(_tr_strz(head), _tr_strz(_tr_str_lit("[")));
+        TrStr _strtmp_t722 = _tr_strx_concat(_tr_strz(head), _tr_strz(_tr_str_lit("[")));
         _tr_str_release(head);
-        head = _strtmp_t721;
+        head = _strtmp_t722;
         /* pass */
         long long gi = 0LL;
         /* pass */
@@ -1776,24 +1776,24 @@ __attribute__((hot)) void Formatter_emit_enum(Formatter* self, EnumDef* e) {
             /* pass */
             if ((gi > 0LL)) {
                 /* pass */
-                TrStr _strtmp_t722 = _tr_strx_concat(_tr_strz(head), _tr_strz(_tr_str_lit(", ")));
+                TrStr _strtmp_t723 = _tr_strx_concat(_tr_strz(head), _tr_strz(_tr_str_lit(", ")));
                 _tr_str_release(head);
-                head = _strtmp_t722;
+                head = _strtmp_t723;
             }
             /* pass */
-            TrStr _strtmp_t723 = ({ TrStr _cr = (List_TrStr_get(e->generics, gi)); TrStr _cres = _tr_strx_concat(_tr_strz(head), _cr.data); _tr_str_release(_cr); _cres; });
+            TrStr _strtmp_t724 = ({ TrStr _cr = (List_TrStr_get(e->generics, gi)); TrStr _cres = _tr_strx_concat(_tr_strz(head), _cr.data); _tr_str_release(_cr); _cres; });
             _tr_str_release(head);
-            head = _strtmp_t723;
+            head = _strtmp_t724;
             /* pass */
             gi = (gi + 1LL);
         }
         /* pass */
-        TrStr _strtmp_t724 = _tr_strx_concat(_tr_strz(head), _tr_strz(_tr_str_lit("]")));
+        TrStr _strtmp_t725 = _tr_strx_concat(_tr_strz(head), _tr_strz(_tr_str_lit("]")));
         _tr_str_release(head);
-        head = _strtmp_t724;
+        head = _strtmp_t725;
     }
     /* pass */
-    ({ TrStr _at_t725 = (_tr_strx_concat(_tr_strz(head), _tr_strz(_tr_str_lit(":")))); Formatter_line(self, _at_t725); _tr_str_release(_at_t725); });
+    ({ TrStr _at_t726 = (_tr_strx_concat(_tr_strz(head), _tr_strz(_tr_str_lit(":")))); Formatter_line(self, _at_t726); _tr_str_release(_at_t726); });
     /* pass */
     self->indent = (self->indent + 1LL);
     /* pass */
@@ -1805,7 +1805,7 @@ __attribute__((hot)) void Formatter_emit_enum(Formatter* self, EnumDef* e) {
         /* pass */
         if ((v->fields->len > 0LL)) {
             /* pass */
-            ({ TrStr _at_t726 = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(v->name), _tr_strz(_tr_str_lit("(")))); TrStr _cr = (Formatter_params_str(self, v->fields)); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(")"))); _tr_str_release(_cl); _cres; })); Formatter_line(self, _at_t726); _tr_str_release(_at_t726); });
+            ({ TrStr _at_t727 = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(v->name), _tr_strz(_tr_str_lit("(")))); TrStr _cr = (Formatter_params_str(self, v->fields)); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(")"))); _tr_str_release(_cl); _cres; })); Formatter_line(self, _at_t727); _tr_str_release(_at_t727); });
         } else {
             /* pass */
             Formatter_line(self, v->name);
@@ -1835,20 +1835,20 @@ __attribute__((hot)) void Formatter_emit_interface(Formatter* self, InterfaceDef
     /* pass */
     if (it->is_public) {
         /* pass */
-        TrStr _strtmp_t727 = _tr_str_lit("pub ");
+        TrStr _strtmp_t728 = _tr_str_lit("pub ");
         _tr_str_release(head);
-        head = _strtmp_t727;
+        head = _strtmp_t728;
     }
     /* pass */
-    TrStr _strtmp_t728 = ({ TrStr _cl = (_tr_strx_concat(_tr_strz(head), _tr_strz(_tr_str_lit("interface ")))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(it->name)); _tr_str_release(_cl); _cres; });
+    TrStr _strtmp_t729 = ({ TrStr _cl = (_tr_strx_concat(_tr_strz(head), _tr_strz(_tr_str_lit("interface ")))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(it->name)); _tr_str_release(_cl); _cres; });
     _tr_str_release(head);
-    head = _strtmp_t728;
+    head = _strtmp_t729;
     /* pass */
     if ((it->generics->len > 0LL)) {
         /* pass */
-        TrStr _strtmp_t729 = _tr_strx_concat(_tr_strz(head), _tr_strz(_tr_str_lit("[")));
+        TrStr _strtmp_t730 = _tr_strx_concat(_tr_strz(head), _tr_strz(_tr_str_lit("[")));
         _tr_str_release(head);
-        head = _strtmp_t729;
+        head = _strtmp_t730;
         /* pass */
         long long gi = 0LL;
         /* pass */
@@ -1856,24 +1856,24 @@ __attribute__((hot)) void Formatter_emit_interface(Formatter* self, InterfaceDef
             /* pass */
             if ((gi > 0LL)) {
                 /* pass */
-                TrStr _strtmp_t730 = _tr_strx_concat(_tr_strz(head), _tr_strz(_tr_str_lit(", ")));
+                TrStr _strtmp_t731 = _tr_strx_concat(_tr_strz(head), _tr_strz(_tr_str_lit(", ")));
                 _tr_str_release(head);
-                head = _strtmp_t730;
+                head = _strtmp_t731;
             }
             /* pass */
-            TrStr _strtmp_t731 = ({ TrStr _cr = (List_TrStr_get(it->generics, gi)); TrStr _cres = _tr_strx_concat(_tr_strz(head), _cr.data); _tr_str_release(_cr); _cres; });
+            TrStr _strtmp_t732 = ({ TrStr _cr = (List_TrStr_get(it->generics, gi)); TrStr _cres = _tr_strx_concat(_tr_strz(head), _cr.data); _tr_str_release(_cr); _cres; });
             _tr_str_release(head);
-            head = _strtmp_t731;
+            head = _strtmp_t732;
             /* pass */
             gi = (gi + 1LL);
         }
         /* pass */
-        TrStr _strtmp_t732 = _tr_strx_concat(_tr_strz(head), _tr_strz(_tr_str_lit("]")));
+        TrStr _strtmp_t733 = _tr_strx_concat(_tr_strz(head), _tr_strz(_tr_str_lit("]")));
         _tr_str_release(head);
-        head = _strtmp_t732;
+        head = _strtmp_t733;
     }
     /* pass */
-    ({ TrStr _at_t733 = (_tr_strx_concat(_tr_strz(head), _tr_strz(_tr_str_lit(":")))); Formatter_line(self, _at_t733); _tr_str_release(_at_t733); });
+    ({ TrStr _at_t734 = (_tr_strx_concat(_tr_strz(head), _tr_strz(_tr_str_lit(":")))); Formatter_line(self, _at_t734); _tr_str_release(_at_t734); });
     /* pass */
     self->indent = (self->indent + 1LL);
     /* pass */
@@ -1897,16 +1897,16 @@ __attribute__((hot)) void Formatter_emit_interface(Formatter* self, InterfaceDef
 
 __attribute__((hot)) void Formatter_emit_decl(Formatter* self, Decl* dp) {
     /* pass */
-    __auto_type _t734 = (*dp);
-    if (_t734.tag == Decl_DFunction) {
-        __auto_type f = _t734.data.DFunction.func;
+    __auto_type _t735 = (*dp);
+    if (_t735.tag == Decl_DFunction) {
+        __auto_type f = _t735.data.DFunction.func;
         Formatter_emit_function(self, f);
-    } else if (_t734.tag == Decl_DDecoratorDef) {
-        __auto_type f = _t734.data.DDecoratorDef.func;
+    } else if (_t735.tag == Decl_DDecoratorDef) {
+        __auto_type f = _t735.data.DDecoratorDef.func;
         /* pass */
         Formatter_flush_standalone_before(self, f->line);
         /* pass */
-        ({ TrStr _at_t735 = (({ TrStr _cr = (Formatter_fn_header(self, f)); TrStr _cres = _tr_strx_concat(_tr_strz(_tr_str_lit("decorator ")), _cr.data); _tr_str_release(_cr); _cres; })); Formatter_line(self, _at_t735); _tr_str_release(_at_t735); });
+        ({ TrStr _at_t736 = (({ TrStr _cr = (Formatter_fn_header(self, f)); TrStr _cres = _tr_strx_concat(_tr_strz(_tr_str_lit("decorator ")), _cr.data); _tr_str_release(_cr); _cres; })); Formatter_line(self, _at_t736); _tr_str_release(_at_t736); });
         /* pass */
         self->indent = (self->indent + 1LL);
         /* pass */
@@ -1919,23 +1919,23 @@ __attribute__((hot)) void Formatter_emit_decl(Formatter* self, Decl* dp) {
         }
         /* pass */
         self->indent = (self->indent - 1LL);
-    } else if (_t734.tag == Decl_DClass) {
-        __auto_type c = _t734.data.DClass.cls;
+    } else if (_t735.tag == Decl_DClass) {
+        __auto_type c = _t735.data.DClass.cls;
         Formatter_emit_class(self, c, _tr_str_lit("class"));
-    } else if (_t734.tag == Decl_DActor) {
-        __auto_type c = _t734.data.DActor.cls;
+    } else if (_t735.tag == Decl_DActor) {
+        __auto_type c = _t735.data.DActor.cls;
         Formatter_emit_class(self, c, _tr_str_lit("actor"));
-    } else if (_t734.tag == Decl_DEnum) {
-        __auto_type e = _t734.data.DEnum.enm;
+    } else if (_t735.tag == Decl_DEnum) {
+        __auto_type e = _t735.data.DEnum.enm;
         Formatter_emit_enum(self, e);
-    } else if (_t734.tag == Decl_DInterface) {
-        __auto_type it = _t734.data.DInterface.iface;
+    } else if (_t735.tag == Decl_DInterface) {
+        __auto_type it = _t735.data.DInterface.iface;
         Formatter_emit_interface(self, it);
-    } else if (_t734.tag == Decl_DExtend) {
-        __auto_type target = _t734.data.DExtend.target;
-__auto_type methods = _t734.data.DExtend.methods;
+    } else if (_t735.tag == Decl_DExtend) {
+        __auto_type target = _t735.data.DExtend.target;
+__auto_type methods = _t735.data.DExtend.methods;
         /* pass */
-        ({ TrStr _at_t736 = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("extend ")), _tr_strz(target))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(":"))); _tr_str_release(_cl); _cres; })); Formatter_line(self, _at_t736); _tr_str_release(_at_t736); });
+        ({ TrStr _at_t737 = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("extend ")), _tr_strz(target))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(":"))); _tr_str_release(_cl); _cres; })); Formatter_line(self, _at_t737); _tr_str_release(_at_t737); });
         /* pass */
         self->indent = (self->indent + 1LL);
         /* pass */
@@ -1949,20 +1949,20 @@ __auto_type methods = _t734.data.DExtend.methods;
         }
         /* pass */
         self->indent = (self->indent - 1LL);
-    } else if (_t734.tag == Decl_DImport) {
-        __auto_type path = _t734.data.DImport.path;
-__auto_type alias = _t734.data.DImport.alias;
+    } else if (_t735.tag == Decl_DImport) {
+        __auto_type path = _t735.data.DImport.path;
+__auto_type alias = _t735.data.DImport.alias;
         /* pass */
         if ((_tr_strlen(_tr_strz(alias)) > 0LL)) {
             /* pass */
-            ({ TrStr _at_t737 = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("import ")), _tr_strz(path))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" as "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(alias)); _tr_str_release(_cl); _cres; })); Formatter_line(self, _at_t737); _tr_str_release(_at_t737); });
+            ({ TrStr _at_t738 = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("import ")), _tr_strz(path))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" as "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(alias)); _tr_str_release(_cl); _cres; })); Formatter_line(self, _at_t738); _tr_str_release(_at_t738); });
         } else {
             /* pass */
-            ({ TrStr _at_t738 = (_tr_strx_concat(_tr_strz(_tr_str_lit("import ")), _tr_strz(path))); Formatter_line(self, _at_t738); _tr_str_release(_at_t738); });
+            ({ TrStr _at_t739 = (_tr_strx_concat(_tr_strz(_tr_str_lit("import ")), _tr_strz(path))); Formatter_line(self, _at_t739); _tr_str_release(_at_t739); });
         }
-    } else if (_t734.tag == Decl_DFromImport) {
-        __auto_type path = _t734.data.DFromImport.path;
-__auto_type items = _t734.data.DFromImport.items;
+    } else if (_t735.tag == Decl_DFromImport) {
+        __auto_type path = _t735.data.DFromImport.path;
+__auto_type items = _t735.data.DFromImport.items;
         /* pass */
         TrStr s = ({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("from ")), _tr_strz(path))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" import "))); _tr_str_release(_cl); _cres; });
         /* pass */
@@ -1972,22 +1972,22 @@ __auto_type items = _t734.data.DFromImport.items;
             /* pass */
             if ((i > 0LL)) {
                 /* pass */
-                TrStr _strtmp_t739 = _tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit(", ")));
+                TrStr _strtmp_t740 = _tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit(", ")));
                 _tr_str_release(s);
-                s = _strtmp_t739;
+                s = _strtmp_t740;
             }
             /* pass */
             ImportItem* it = ((ImportItem*)List_ptr_get(items, i));
             /* pass */
-            TrStr _strtmp_t740 = _tr_strx_concat(_tr_strz(s), _tr_strz(it->name));
+            TrStr _strtmp_t741 = _tr_strx_concat(_tr_strz(s), _tr_strz(it->name));
             _tr_str_release(s);
-            s = _strtmp_t740;
+            s = _strtmp_t741;
             /* pass */
             if ((_tr_strlen(_tr_strz(it->alias)) > 0LL)) {
                 /* pass */
-                TrStr _strtmp_t741 = ({ TrStr _cl = (_tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit(" as ")))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(it->alias)); _tr_str_release(_cl); _cres; });
+                TrStr _strtmp_t742 = ({ TrStr _cl = (_tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit(" as ")))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(it->alias)); _tr_str_release(_cl); _cres; });
                 _tr_str_release(s);
-                s = _strtmp_t741;
+                s = _strtmp_t742;
             }
             /* pass */
             i = (i + 1LL);
@@ -1995,11 +1995,11 @@ __auto_type items = _t734.data.DFromImport.items;
         /* pass */
         Formatter_line(self, s);
         _tr_str_release(s);
-    } else if (_t734.tag == Decl_DExtern) {
-        __auto_type abi = _t734.data.DExtern.abi;
-__auto_type functions = _t734.data.DExtern.functions;
+    } else if (_t735.tag == Decl_DExtern) {
+        __auto_type abi = _t735.data.DExtern.abi;
+__auto_type functions = _t735.data.DExtern.functions;
         /* pass */
-        ({ TrStr _at_t742 = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("extern \"")), _tr_strz(abi))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\":"))); _tr_str_release(_cl); _cres; })); Formatter_line(self, _at_t742); _tr_str_release(_at_t742); });
+        ({ TrStr _at_t743 = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("extern \"")), _tr_strz(abi))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\":"))); _tr_str_release(_cl); _cres; })); Formatter_line(self, _at_t743); _tr_str_release(_at_t743); });
         /* pass */
         self->indent = (self->indent + 1LL);
         /* pass */
@@ -2007,23 +2007,23 @@ __auto_type functions = _t734.data.DExtern.functions;
         /* pass */
         while ((fi < functions->len)) {
             /* pass */
-            ({ TrStr _at_t743 = (Formatter_fn_header_no_colon(self, ((FunctionDef*)List_ptr_get(functions, fi)))); Formatter_line(self, _at_t743); _tr_str_release(_at_t743); });
+            ({ TrStr _at_t744 = (Formatter_fn_header_no_colon(self, ((FunctionDef*)List_ptr_get(functions, fi)))); Formatter_line(self, _at_t744); _tr_str_release(_at_t744); });
             /* pass */
             fi = (fi + 1LL);
         }
         /* pass */
         self->indent = (self->indent - 1LL);
-    } else if (_t734.tag == Decl_DTypeAlias) {
-        __auto_type name = _t734.data.DTypeAlias.name;
-__auto_type target = _t734.data.DTypeAlias.target;
+    } else if (_t735.tag == Decl_DTypeAlias) {
+        __auto_type name = _t735.data.DTypeAlias.name;
+__auto_type target = _t735.data.DTypeAlias.target;
         /* pass */
-        ({ TrStr _at_t744 = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("type ")), _tr_strz(name))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" = "))); _tr_str_release(_cl); _cres; })); TrStr _cr = (Formatter_type_str(self, target)); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; })); Formatter_line(self, _at_t744); _tr_str_release(_at_t744); });
-    } else if (_t734.tag == Decl_DTopLevelStmt) {
-        __auto_type s = _t734.data.DTopLevelStmt.stmt;
+        ({ TrStr _at_t745 = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("type ")), _tr_strz(name))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" = "))); _tr_str_release(_cl); _cres; })); TrStr _cr = (Formatter_type_str(self, target)); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; })); Formatter_line(self, _at_t745); _tr_str_release(_at_t745); });
+    } else if (_t735.tag == Decl_DTopLevelStmt) {
+        __auto_type s = _t735.data.DTopLevelStmt.stmt;
         /* pass */
         Formatter_emit_stmt(self, s, 0LL);
     } else if (1) {
-        __auto_type _ = _t734;
+        __auto_type _ = _t735;
         /* pass */
     }
 }
@@ -2032,7 +2032,7 @@ __attribute__((hot)) TrStr Formatter_fn_header_no_colon(Formatter* self, Functio
     /* pass */
     TrStr h = Formatter_fn_header(self, f);
     /* pass */
-    if (({ TrStr _wt_t745 = (_tr_str_wrap(_tr_str_slice(_tr_strz(h), (_tr_strlen(_tr_strz(h)) - 1LL), _tr_strlen(_tr_strz(h))))); __auto_type _wr = (((_tr_strlen(_tr_strz(h)) > 0LL) && (strcmp(_wt_t745.data, _tr_strz(_tr_str_lit(":"))) == 0))); _tr_str_release(_wt_t745); _wr; })) {
+    if (({ TrStr _wt_t746 = (_tr_str_wrap(_tr_str_slice(_tr_strz(h), (_tr_strlen(_tr_strz(h)) - 1LL), _tr_strlen(_tr_strz(h))))); __auto_type _wr = (((_tr_strlen(_tr_strz(h)) > 0LL) && (strcmp(_wt_t746.data, _tr_strz(_tr_str_lit(":"))) == 0))); _tr_str_release(_wt_t746); _wr; })) {
         /* pass */
         return _tr_str_wrap(_tr_str_slice(_tr_strz(h), 0LL, (_tr_strlen(_tr_strz(h)) - 1LL)));
     }
@@ -2042,31 +2042,31 @@ __attribute__((hot)) TrStr Formatter_fn_header_no_colon(Formatter* self, Functio
 
 __attribute__((hot)) bool Formatter_is_block_decl(Formatter* self, Decl* dp) {
     /* pass */
-    __auto_type _t746 = (*dp);
-    if (_t746.tag == Decl_DFunction) {
-        __auto_type _ = _t746.data.DFunction.func;
+    __auto_type _t747 = (*dp);
+    if (_t747.tag == Decl_DFunction) {
+        __auto_type _ = _t747.data.DFunction.func;
         return true;
-    } else if (_t746.tag == Decl_DDecoratorDef) {
-        __auto_type _ = _t746.data.DDecoratorDef.func;
+    } else if (_t747.tag == Decl_DDecoratorDef) {
+        __auto_type _ = _t747.data.DDecoratorDef.func;
         return true;
-    } else if (_t746.tag == Decl_DClass) {
-        __auto_type _ = _t746.data.DClass.cls;
+    } else if (_t747.tag == Decl_DClass) {
+        __auto_type _ = _t747.data.DClass.cls;
         return true;
-    } else if (_t746.tag == Decl_DActor) {
-        __auto_type _ = _t746.data.DActor.cls;
+    } else if (_t747.tag == Decl_DActor) {
+        __auto_type _ = _t747.data.DActor.cls;
         return true;
-    } else if (_t746.tag == Decl_DEnum) {
-        __auto_type _ = _t746.data.DEnum.enm;
+    } else if (_t747.tag == Decl_DEnum) {
+        __auto_type _ = _t747.data.DEnum.enm;
         return true;
-    } else if (_t746.tag == Decl_DInterface) {
-        __auto_type _ = _t746.data.DInterface.iface;
+    } else if (_t747.tag == Decl_DInterface) {
+        __auto_type _ = _t747.data.DInterface.iface;
         return true;
-    } else if (_t746.tag == Decl_DExtend) {
+    } else if (_t747.tag == Decl_DExtend) {
         return true;
-    } else if (_t746.tag == Decl_DExtern) {
+    } else if (_t747.tag == Decl_DExtern) {
         return true;
     } else if (1) {
-        __auto_type _ = _t746;
+        __auto_type _ = _t747;
         return false;
     }
 }

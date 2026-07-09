@@ -1,0 +1,19 @@
+# EXPECT: [G-1]
+# A generic bound `T: Show` requires the type argument to implement the interface.
+# Dog has no show() method (and no `implements Show`), so calling describe(dog) — which
+# infers T = Dog — is a hard error: the bound is not satisfied.
+interface Show:
+    def show(self) -> str
+
+class Dog:
+    pub n: str
+extend Dog:
+    pub def bark(self) -> str:
+        return "woof"
+
+def describe[T: Show](x: T) -> str:
+    return x.show()
+
+def main():
+    mut d = Dog()
+    print(describe(d))

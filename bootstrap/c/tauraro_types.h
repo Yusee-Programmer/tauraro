@@ -2930,6 +2930,7 @@ __attribute__((hot)) Program* Parser_parse_program(Parser* self);
 __attribute__((hot)) Decl* Parser_parse_decl(Parser* self);
 __attribute__((hot)) Decl* Parser_parse_from_import(Parser* self);
 __attribute__((hot)) Decl* Parser_parse_import(Parser* self);
+__attribute__((hot)) void Parser_parse_generic_bound(Parser* self, TrStr gname, List_ptr* constraints);
 __attribute__((hot)) FunctionDef* Parser_parse_function_def(Parser* self, bool is_method);
 __attribute__((hot)) Decl* Parser_parse_class_decl(Parser* self);
 __attribute__((hot)) Decl* Parser_parse_enum_decl(Parser* self);
@@ -3116,6 +3117,8 @@ __attribute__((hot)) void Sema__collect_returns(Sema* self, HirBlock* b, List_pt
 __attribute__((hot)) void Sema__collect_returns_stmt(Sema* self, HirStmt* sp, List_ptr* out);
 __attribute__((hot)) bool Sema__owned_of(Sema* self, TrStr key);
 __attribute__((hot)) bool Sema__ret_yields_owned(Sema* self, HirExpr* e);
+__attribute__((hot)) bool Sema__type_satisfies_bound(Sema* self, TrStr type_name, TrStr iface_name);
+__attribute__((hot)) void Sema_check_call_bounds(Sema* self, TrStr fname, List_ptr* hargs);
 __attribute__((hot)) void Sema_register_decl(Sema* self, Decl* d);
 __attribute__((hot)) HirFunction* Sema_lower_func(Sema* self, FunctionDef* f);
 __attribute__((hot)) HirClass* Sema_lower_class(Sema* self, ClassDef* c);

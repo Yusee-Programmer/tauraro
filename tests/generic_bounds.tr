@@ -1,0 +1,42 @@
+# Generic bounds `def f[T: Iface]`: a constraint that the type argument implements an
+# interface. Satisfaction is structural OR explicit `implements` (either makes the
+# monomorphized body's method calls valid). Enforced with a clear [G-1] error at the
+# call site when unmet (see tests/soundness/reject/generic_bound_unsatisfied.tr).
+interface Show:
+    def show(self) -> str
+
+interface Area:
+    def area(self) -> int
+
+# Structural satisfaction: Cat has show() without an explicit `implements`.
+class Cat:
+    pub n: str
+extend Cat:
+    pub def show(self) -> str:
+        return "cat"
+
+# Explicit satisfaction + a second bound.
+class Square implements Show:
+    pub side: int
+extend Square:
+    pub def show(self) -> str:
+        return "square"
+    pub def area(self) -> int:
+        return self.side * self.side
+
+def describe[T: Show](x: T) -> str:
+    return x.show()
+
+def describe_area[T: Show + Area](x: T) -> int:
+    return x.area()
+
+def main():
+    mut c = Cat()
+    print(describe(c))          # cat  (structural)
+
+    mut s = Square()
+    s.side = 5
+    print(describe(s))          # square (explicit implements)
+    print(describe_area(s))     # 25    (satisfies both Show + Area)
+
+    print("generic bounds ok")
