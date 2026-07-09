@@ -15,7 +15,7 @@ if [ -z "$GCC" ] || [ -z "$QEMU" ]; then
     echo "(riscv64 gcc / qemu-system-riscv64 not installed — skipping RISC-V bare-metal run)"; exit 0
 fi
 # A Linux-targeted riscv gcc (riscv64-linux-gnu-gcc) can still build freestanding.
-WARN="-Wno-string-compare -Wno-comment -Wno-attributes -Wno-unused-value -Wno-builtin-declaration-mismatch -Wno-int-conversion"
+WARN="-Wno-string-compare -Wno-comment -Wno-attributes -Wno-unused-value -Wno-builtin-declaration-mismatch -Wno-int-conversion -Wno-incompatible-pointer-types"
 APP="examples/freestanding/riscv_hello"
 
 echo "=============================================================="
@@ -27,10 +27,19 @@ rm -rf "$APP/build"
 [ -f "$APP/build/app.ld" ] || { echo "FAIL: linker script not generated"; exit 1; }
 echo "  emitted $(find "$APP/build" -name '*.c' | wc -l) C files, all from .tr"
 
+# -fno-stack-protector: Ubuntu's gcc enables -fstack-protector-strong by default, which
+# emits __stack_chk_fail/__stack_chk_guard refs unresolvable under -nostdlib. -fno-pic /
+# -fno-pie avoids GOT relocations that need a dynamic loader.
 if ! "$GCC" -O2 -march=rv64imac -mabi=lp64 -mcmodel=medany -ffreestanding -nostdlib -fno-builtin \
+      -fno-stack-protector -fno-pic -fno-pie \
       -T "$APP/build/app.ld" $WARN -I "$APP/build/include" -I "$APP/build" \
       -o "$APP/build/bare.elf" $(find "$APP/build" -name '*.c') -lgcc 2>/tmp/bare_rv_cc.log; then
-    echo "FAIL: bare-metal link"; sed -n '1,20p' /tmp/bare_rv_cc.log; exit 1
+    echo "FAIL: bare-metal link"
+    echo "--- errors (compile + link) ---"
+    grep -nE 'error:|undefined reference|ld returned|fatal error|collect2' /tmp/bare_rv_cc.log | head -40
+    echo "--- log tail ---"
+    tail -n 25 /tmp/bare_rv_cc.log
+    exit 1
 fi
 echo "  bare.elf linked OK ($(stat -c%s "$APP/build/bare.elf" 2>/dev/null || echo '?') bytes) — from .tr only"
 
