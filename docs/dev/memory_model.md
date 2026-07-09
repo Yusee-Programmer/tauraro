@@ -88,31 +88,31 @@ workload as coverage grows) MUST stay green, gen2 (the compiler built by the
 patched compiler) MUST actually run, and the gen2==gen3 fixpoint MUST hold.
 Never bless a compiler that fails any of these.
 
-- **Phase 0 — DONE/blessed:** explicit `UnsafeSendable` boundary; leak gate.
-- **Phase A — Uniform ARC (correctness floor; the NEAR-TERM target):**
+- **Baseline (in place):** explicit `UnsafeSendable` boundary; leak gate.
+- **Uniform ARC (the correctness floor):**
   make release unconditional at every scope/block exit (incl. if-bodies — this
   is the residual #53 leak), keep retain-on-copy uniform, and **delete the
   manual `str` frees** (~150 `.tr` sites, concentrated in net/*) that currently
   fight ARC and cause double-frees when drops are added. After this, all
   unsafe-memory bug classes are gone *by construction*; perf is "everything
   refcounted."
-- **Phase B — Ownership elision (MIR):** move + liveness + drop elaboration that
+- **Ownership elision (MIR):** move + liveness + drop elaboration that
   removes refcounts for provably-owned values (locals, non-escaping temporaries).
   Pure optimization; getting it wrong costs perf, not safety.
-- **Phase C — Inferred borrow check:** aliasing-xor-mutation, region inference,
+- **Inferred borrow check:** aliasing-xor-mutation, region inference,
   no annotations; yields data-race freedom on owned values.
-- **Phase D — Advanced opt-in surface:** `from` (have it), optional `mut`/`&mut`,
+- **Advanced opt-in surface:** `from` (have it), optional `mut`/`&mut`,
   force-zero-cost errors; `--explain` lint to show refcounted-vs-owned per value.
 
-## Why Phase A first, not the borrow checker
+## Why uniform ARC first, not the borrow checker
 
-The borrow checker is the long pole (research-grade). Phase A (uniform ARC)
+The borrow checker is the long pole (research-grade). Uniform ARC
 eliminates the bug classes the project actually hits, *now*, and is sound by the
 refcount invariant — no escape analysis required. Four prior attempts failed
 because they added *drops* (releases) gated by an incomplete escape analysis
-while manual frees were still present → double-free → corrupted gen2. Phase A
+while manual frees were still present → double-free → corrupted gen2. Uniform ARC
 removes both the gating and the manual frees, so correctness no longer depends on
-proving anything. The hard ownership analysis (Phases B/C) then layers on as
+proving anything. The hard ownership analysis (elision + borrow check) then layers on as
 optimization, never as a correctness prerequisite.
 
 ## Current state (audit)
@@ -121,15 +121,15 @@ optimization, never as a correctness prerequisite.
   at scope exit. The retain half of #53 is effectively done.
 - Residual leak: `str` declared inside `if`-bodies is not released (top-level and
   `while`-bodies are). Fixing it via scope-heuristic drops corrupts gen2 — must
-  be done as Phase A (uniform unconditional release + remove manual frees), not a
+  be done as the uniform-ARC change (unconditional release + remove manual frees), not a
   drop patch.
 - ~234 manual `_tr_c_free`/`_tr_free` sites (~150 in `.tr`, rest vendored
-  headers) + ~90 `.free()`/`.dispose()` calls — the Phase A reconciliation
+  headers) + ~90 `.free()`/`.dispose()` calls — the uniform-ARC reconciliation
   surface, concentrated in `std/net/*`.
 
-## First implementation milestone (next focused session)
+## First implementation slice
 
-Phase A, smallest sound slice: in **one leaf module** (e.g. `std/string/str.tr`,
+Smallest sound slice: in **one leaf module** (e.g. `std/string/str.tr`,
 7 manual frees), delete the manual `str` frees, make release unconditional for
 that module's `str` locals, and prove via the oracle (leak gate workload over
 those functions = 0 growth, gen2 runs, fixpoint holds). Then expand module by

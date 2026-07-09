@@ -4049,7 +4049,7 @@ pub class CGenerator:
             return "_tr_str_contains(" + self.strz(obj_s) + ", " + self.strz(self.gen_expr(args.get(0))) + ")"
 
         # String method dispatch - must be before the generic TrStr_ fallback
-        # NOTE on interim semantics (Phase 2/TrStr migration): scalar `str`
+        # NOTE on interim string semantics: scalar `str`
         # values are TrStr (refcounted). List[str]/Dict/Set string elements
         # remain legacy char* (List_str etc, task #52, not yet migrated).
         # Boundary: TrStr -> char* via _tr_strz(); char* -> TrStr from a
@@ -7438,14 +7438,14 @@ pub class CGenerator:
     pub def generate(self, prog: HirProgram) -> str:
         self.register_program(prog)
 
-        # -- Phase 1: Runtime header include + file-wide optimization pragmas ----
+        # -- Runtime header include + file-wide optimization pragmas ----
         self.w("#define _TR_MAIN\n")
         if self.tier_define != "": self.w("#define " + self.tier_define + "\n")
         self.w(self.emit_tier_hooks(prog))
         self.w("#include \"tauraro_rt.h\"\n")
 
-        # -- Phase 2: Forward declarations (opaque struct pointers) ------------
-        # Skip generic classes - their mono versions are handled in Phase 2.75
+        # -- Forward declarations (opaque struct pointers) ------------
+        # Skip generic classes - their monomorphized versions are emitted below
         mut i = 0
         while i < prog.classes.len:
             mut cls2 = prog.classes.get(i)
@@ -7466,7 +7466,7 @@ pub class CGenerator:
         self.emit_list_fwd_decls(prog)
         self.w("\n")
 
-        # -- Phase 2.5: Extern C function declarations -------------------------
+        # -- Extern C function declarations -------------------------
         # `extern "CPP"`/`extern "C++"` blocks are accepted as synonyms for
         # `extern "C"`: to call into a C++ library, expose (or write a thin
         # shim with) `extern "C"` functions and link the .o/.a via --link.
@@ -7493,7 +7493,7 @@ pub class CGenerator:
             i = i + 1
         if prog.extern_funcs.len > 0: self.w("\n")
 
-        # -- Phase 2.75: Generic monomorphization ------------------------------
+        # -- Generic monomorphization ------------------------------
         # Pre-scan all HIR types to collect and generate monomorphized classes.
         # mono_buf accumulates: fwd decl + struct body + prototypes + impls.
         self.scan_mono_prog(prog)
@@ -7502,7 +7502,7 @@ pub class CGenerator:
             self.w(mono_out)
             self.w("\n")
 
-        # -- Phase 3: Struct definitions ---------------------------------------
+        # -- Struct definitions ---------------------------------------
         self.emit_drop_fwd_decls(prog)
         i = 0
         while i < prog.enums.len:
@@ -7523,14 +7523,14 @@ pub class CGenerator:
         self.w(self.struct_buf.to_string().as_str())
         self.struct_buf = StringBuilder.init(16)
 
-        # -- Phase 3.5: Value-type list definitions (after all enums/structs defined) --
+        # -- Value-type list definitions (after all enums/structs defined) --
         mut lt_out = self.list_types_buf.to_string().as_str()
         if lt_out != "": self.w(lt_out)
 
-        # -- Phase 3.6: Top-level global variables ------------------------------
+        # -- Top-level global variables ------------------------------
         # Module-level `mut`/`const` vars are declared at C file scope so every
         # function can see them (not just main). The initializer runs in main
-        # (Phase 7), since it may be a non-constant expression.
+        # (in main), since it may be a non-constant expression.
         mut gvi = 0
         while gvi < prog.top_level_stmts.len:
             match prog.top_level_stmts.get(gvi).read():
@@ -7544,7 +7544,7 @@ pub class CGenerator:
                 case _: pass
             gvi = gvi + 1
 
-        # -- Phase 4: Function prototypes --------------------------------------
+        # -- Function prototypes --------------------------------------
         i = 0
         while i < prog.classes.len:
             mut c = prog.classes.get(i)
@@ -7578,12 +7578,12 @@ pub class CGenerator:
             i = i + 1
         self.w("\n")
 
-        # -- Phase 4.5: Spawn + async wrappers (static thread-entry functions) --
+        # -- Spawn + async wrappers (static thread-entry functions) --
         self.prescan_spawns(prog)
         self.prescan_awaits(prog)
         self.w("\n")
 
-        # -- Phase 5: Method implementations -----------------------------------
+        # -- Method implementations -----------------------------------
         i = 0
         while i < prog.classes.len:
             mut c = prog.classes.get(i)
@@ -7639,7 +7639,7 @@ pub class CGenerator:
                 mi = mi + 1
             i = i + 1
 
-        # -- Phase 6: Free-standing function implementations -------------------
+        # -- Free-standing function implementations -------------------
         i = 0
         while i < prog.functions.len:
             mut f = prog.functions.get(i)
@@ -7673,7 +7673,7 @@ pub class CGenerator:
                     self.cur_throws_ty = ""
             i = i + 1
 
-        # -- Phase 7: C main entry point ---------------------------------------
+        # -- C main entry point ---------------------------------------
         self.emit_entry_glue(prog)
         self.w("__attribute__((hot)) int main(int argc, char** argv) {\n")
         self.w("    _tr_argc = argc; _tr_argv = argv;\n")
@@ -7699,7 +7699,7 @@ pub class CGenerator:
             self.w("    for (int _ai = 0; _ai < argc; _ai++) { List_TrStr_append(" + main_args_name + ", _tr_str_lit(argv[_ai])); }\n")
 
         # Call top-level statements. A hoisted global var (declared at file scope
-        # in Phase 3.6) is initialized here with an assignment, not re-declared.
+        # at file scope) is initialized here with an assignment, not re-declared.
         i = 0
         while i < prog.top_level_stmts.len:
             mut _tl_global = false
@@ -8005,7 +8005,7 @@ pub class CGenerator:
 
         # -- Module-level `mut`/`let` globals: extern declarations -------------
         # Definitions (with initializers, run in main()) are emitted by
-        # generate_module_c's "Phase 3.6" only into the entry module's C file.
+        # the global-variable hoisting only into the entry module's C file.
         # Every other module's C file needs an `extern` declaration to
         # reference these globals, so declare them here in the shared header.
         mut hgi = 0

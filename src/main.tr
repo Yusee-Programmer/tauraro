@@ -531,7 +531,7 @@ pub def obj_path_for(c_path: str) -> str:
             return c_path.slice(0, n - 2) + ".o"
     return c_path + ".o"
 
-# Incremental compile + link (Phase 7 / Tier1#3).
+# Incremental compile + link.
 #
 # Each module's C is compiled to its own .o with `gcc -c`; modules whose
 # generated .c was unchanged since the previous build (needs[i]==false) and
@@ -985,7 +985,7 @@ pub def main(args: Vec[str]):
     mut build_dir = "build/"
     make_dir(build_dir)
 
-    # -- Incremental-build invalidation (Phase 7) ------------------------------
+    # -- Incremental-build invalidation ---------------------------------------
     # The shared headers (tauraro_rt.h, tauraro_types.h) and the compile flags
     # are inputs to EVERY module's object file. If any of them changed since
     # the previous build, all cached .o files are stale and must be rebuilt.
@@ -1192,7 +1192,7 @@ pub def main(args: Vec[str]):
         if verbose: print("[lib] header: " + hdr_path)
 
     if verbose: print("[5/5] Compiling + linking " + str(all_c_files.len) + " modules -> " + exe_path)
-    # Incremental compile + link (Phase 7): per-module .o with cache reuse for
+    # Incremental compile + link: per-module .o with cache reuse for
     # unchanged modules, then a single link. build/ is intentionally kept
     # populated (.c + .o + headers) so the next build can reuse cached objects.
     mut rc = compile_all_c_incremental(all_c_files, needs_recompile, exe_path, build_dir, link_paths, lib_flags, opt_level, verbose, static_link, target, sysroot, debug_mode, lib_mode)

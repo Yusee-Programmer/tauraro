@@ -5,7 +5,7 @@
 The compiler's memory management is ARC + a **web of interacting heuristics** that
 decide, per local, whether it is auto-dropped: `is_droppable_sym`, `coll_escaped`,
 `str_escaped`, `container_borrows`, `borrows_region` (`@borrowed`), and the escape
-walkers (`mark_escaped_coll_args` / `mark_escaped_str_args`) + the Phase-C borrow
+walkers (`mark_escaped_coll_args` / `mark_escaped_str_args`) + the borrow-analysis
 check at the `SLet`. These are **conservative in the safe direction** — when unsure,
 they *don't* drop (a leak, never a UAF) — which is why the safety guarantee holds.
 But conservatism leaves **precision holes**, and the special-casing has had **soundness
@@ -14,7 +14,7 @@ holes** too. Both session-blocking bugs and all four fuzzer findings live here:
 | | Kind | Root |
 |---|---|---|
 | class-with-`free` double-free (fixed) | **UAF/double-free** | `is_droppable_sym` free-branch ignored `coll_escaped` |
-| `Mutex.get()` UAF (fixed) | **UAF** | Phase-C borrow check didn't cover `Mutex`/`RwLock` |
+| `Mutex.get()` UAF (fixed) | **UAF** | the borrow-analysis check didn't cover `Mutex`/`RwLock` |
 | F-1 `Vec[T].get()` container leak | leak | element borrow marks container non-droppable, never re-dropped |
 | F-2 borrowed `free`-class leak | leak | `coll_escaped` set for *any* class arg, even a pure borrow |
 | F-3 `Mutex[T]` payload leak | leak | mutex drop releases the lock, not the guarded value |
