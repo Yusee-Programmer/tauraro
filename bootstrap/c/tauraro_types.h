@@ -2546,6 +2546,7 @@ typedef struct CGenerator {
     bool eliding_get_retain;
     bool no_elide;
     TrStr tier_define;
+    TrStr bare_arch;
     bool cur_self_is_ptr;
     TrMap* coll_local_sfx;
     TrMap* coll_local_idict;
@@ -2610,6 +2611,7 @@ static void _trdrop_CGenerator(void* vp) {
     Dict_free(self->coll_field_disq);
     Dict_free(self->cur_proven_borrows);
     _tr_str_release(self->tier_define);
+    _tr_str_release(self->bare_arch);
     Dict_free_strval(self->coll_local_sfx);
     Dict_free(self->coll_local_idict);
     Dict_free(self->coll_local_strval);
@@ -3247,6 +3249,7 @@ __attribute__((hot)) TrStr detect_c_compiler();
 __attribute__((hot)) bool is_clang_compiler(TrStr cc);
 __attribute__((hot)) TrStr resolve_target_triple(TrStr target);
 __attribute__((hot)) TrStr linker_script_cortex_m();
+__attribute__((hot)) TrStr linker_script_riscv();
 __attribute__((hot)) TrStr target_extra_flags(TrStr triple);
 __attribute__((hot)) TrStr detect_cross_compiler(TrStr triple);
 __attribute__((hot)) TrStr dir_of_path(TrStr path);

@@ -154,6 +154,7 @@ pub class CGenerator:
     pub eliding_get_retain: bool # set while generating a PROVEN collection-element borrow's RHS (`ref T = coll.get(k)`) — the str-valued get returns the unboxed alias WITHOUT retaining (zero-copy borrow); the SLet also skips the release
     pub no_elide: bool           # --no-elide: force pure ARC (drop ALL proven-borrow elision) — the differential-soundness oracle baseline
     pub tier_define: str         # --freestanding => "TAURARO_KERNEL" (no libc), --no-std => "TAURARO_NO_OS" (no OS); emitted as a #define before the runtime include so the tier build "just works" without a hand-passed -D
+    pub bare_arch:   str         # bare-metal boot architecture for @entry glue + linker script: "cortex-m" (default) or "riscv" (selected by --target embedded-riscv*)
     pub cur_self_is_ptr: bool     # inside a MUTATING @value_type method, `self` is a POINTER (`ClassName* self`) so writes persist — gen_prop_access uses `self->field`, not `self.field`
     pub coll_local_sfx: Map[str, str]    # List/Vec local name -> list_sfx (e.g. "i64"/"TrStr") for SAutoDrop's List_<sfx>_free; Dict/Map/Set don't need a suffix (Dict_free)
     pub coll_local_idict: Map[str, bool] # Dict/Map/Set local name -> true if int-keyed (TrIDict*/_TrISet*, freed via _tr_idict_free instead of Dict_free)
@@ -229,6 +230,7 @@ pub class CGenerator:
         g.eliding_get_retain = false
         g.no_elide = false
         g.tier_define = ""
+        g.bare_arch   = "cortex-m"
         g.cur_self_is_ptr = false
         g.coll_local_sfx = Map[str, str].init(16)
         g.coll_local_idict = Map[str, bool].init(16)
@@ -1224,6 +1226,29 @@ pub class CGenerator:
                     j = j + 1
             i = i + 1
         if entry == "": return
+        if self.bare_arch == "riscv":
+            # RISC-V (qemu 'virt', loaded to RAM at 0x80000000): the ELF entry is
+            # _start. It parks harts != 0, sets sp, then boots. .data is already in RAM
+            # (loaded from the ELF), so only .bss needs clearing. No vector table.
+            self.w("\n/* --freestanding @entry: RISC-V boot (qemu virt) */\n")
+            self.w("extern unsigned _stack_top, __bss_start__, __bss_end__;\n")
+            self.w("__attribute__((used)) void _tr_boot(void){\n")
+            self.w("    unsigned *d;\n")
+            self.w("    for(d=&__bss_start__; d<&__bss_end__;) *d++ = 0;\n")
+            self.emit_global_inits(prog)
+            self.w("    " + entry + "();\n")
+            self.w("    for(;;){}\n}\n")
+            self.w("__attribute__((naked, used, section(\".text.init\"))) void _start(void){\n")
+            self.w("    __asm__ volatile(\n")
+            self.w("        \"csrr t0, mhartid\\n\"\n")
+            self.w("        \"bnez t0, 1f\\n\"\n")
+            self.w("        \"la sp, _stack_top\\n\"\n")
+            self.w("        \"call _tr_boot\\n\"\n")
+            self.w("        \"1: wfi\\n\"\n")
+            self.w("        \"j 1b\\n\"\n")
+            self.w("    );\n")
+            self.w("}\n")
+            return
         self.w("\n/* --freestanding @entry: reset trampoline + Cortex-M vector table */\n")
         self.w("extern unsigned _stack_top, __bss_start__, __bss_end__, _sidata, _sdata, _edata;\n")
         self.w("__attribute__((used)) void _tr_reset(void){\n")
