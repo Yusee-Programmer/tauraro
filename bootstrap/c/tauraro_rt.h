@@ -3806,7 +3806,7 @@ static inline void List_str_append(List_str* l, char* val) { if(l->len==l->capac
 static inline char* List_str_pop(List_str* l) { if(!l||l->len==0) return NULL; l->len--; return l->data[l->len]; }
 static inline void List_str_free(List_str* l) { if(l){ _tr_free(l->data); _tr_free(l); } }
 
-/* ── List_TrStr: refcounted-string element container (Phase 2 target) ──
+/* ── List_TrStr: refcounted-string element container ──
  * Parallel to List_str (char**); element is the 16-byte TrStr fat
  * pointer. append() retains, free() releases every element. */
 typedef struct { TrStr* data; size_t len; size_t capacity; } List_TrStr;

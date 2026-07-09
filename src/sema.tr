@@ -187,6 +187,7 @@ pub class Sema:
     pub strict_mode: bool               # --strict: alloc outside unsafe -> hard [U-1] error
     pub mutating_methods: Map[str, bool] # "ClassName.method" -> true if it stores into self.<field> (implicit-borrow check)
     pub fn_ret_owned:    Map[str, bool] # return-ownership inference: fn/method key -> true if it returns an OWNED heap-class ref (see compute_return_ownership)
+    pub fn_param_consumes: Map[str, bool] # parameter-ownership inference: "fnkey#i" -> true if the fn CONSUMES (moves/frees/stores/returns) param i; false = PROVEN only-borrowed. Interprocedural monotone fixpoint (compute_param_ownership); the precise per-callee effect the drop heuristics lack.
     pub ptr_aliased:     Map[str, bool] # class names reachable as Pointer[T] (raw, NOT refcounted) — excluded from the [S-2] ownership-cycle graph
     pub decorator_names: Map[str, bool]  # decorator def registry (name -> true)
     pub variadic_fns:    Map[str, str]   # fn name -> index of trailing variadic param (= fixed-arg count, as string)
@@ -286,6 +287,7 @@ extend Sema:
         s.strict_mode            = false
         s.mutating_methods       = Map[str, bool].init(32)
         s.fn_ret_owned           = Map[str, bool].init(64)
+        s.fn_param_consumes      = Map[str, bool].init(64)
         s.ptr_aliased            = Map[str, bool].init(32)
         s.decorator_names        = Map[str, bool].init(16)
         s.variadic_fns           = Map[str, str].init(8)
@@ -2354,6 +2356,9 @@ extend Sema:
         # a call-result local is auto-dropped — enabling reclamation of owned
         # factory/free-function results without ever over-releasing a borrow.
         self.compute_return_ownership(hp)
+        # Parameter-ownership summary (consumes(fn,i)). Computed here, not yet consumed
+        # by codegen — lands the interprocedural analysis infrastructure at zero risk.
+        self.compute_param_ownership(hp)
         return hp
 
     # ---- Return-ownership inference (whole-program monotone fixpoint) ----
@@ -2439,6 +2444,210 @@ extend Sema:
             mut hf2 = fns.get(wi)
             hf2.returns_owned = self.fn_ret_owned.get(keys.get(wi))
             wi = wi + 1
+
+    # ---- Parameter-ownership inference (whole-program monotone fixpoint) ----
+    # consumes(fn, i): the fn moves/frees/stores/returns parameter i, or passes it to
+    # some callee at a position that consumes it. Starts optimistic (all borrowed) and
+    # only flips false->true, so a fixed-point `false` PROVES param i is only borrowed —
+    # the precise per-callee effect the drop/escape heuristics only approximate.
+    # STAGING: this pass only COMPUTES the summary into fn_param_consumes; codegen does
+    # not consult it yet, so emitted C is unchanged (validated byte-identical).
+    pub def compute_param_ownership(self, hp: HirProgram):
+        mut keys = Vec[str].init(64)
+        mut fns  = Vec[HirFunction].init(64)
+        mut fi = 0
+        while fi < hp.functions.len:
+            keys.push(hp.functions.get(fi).name)
+            fns.push(hp.functions.get(fi))
+            fi = fi + 1
+        mut ci = 0
+        while ci < hp.classes.len:
+            mut c = hp.classes.get(ci)
+            mut mi = 0
+            while mi < c.methods.len:
+                keys.push(c.name + "." + c.methods.get(mi).name)
+                fns.push(c.methods.get(mi))
+                mi = mi + 1
+            ci = ci + 1
+        mut eni = 0
+        while eni < hp.enums.len:
+            mut en = hp.enums.get(eni)
+            mut emi = 0
+            while emi < en.methods.len:
+                keys.push(en.name + "." + en.methods.get(emi).name)
+                fns.push(en.methods.get(emi))
+                emi = emi + 1
+            eni = eni + 1
+        # Init every non-self parameter optimistic (borrowed = false).
+        mut ii = 0
+        while ii < fns.len:
+            mut f = fns.get(ii)
+            mut pi = 0
+            while pi < f.params.len:
+                if f.params.get(pi).name != "self":
+                    self.fn_param_consumes.insert(keys.get(ii) + "#" + pi.to_str(), false)
+                pi = pi + 1
+            ii = ii + 1
+        # Monotone fixpoint (false -> true only).
+        mut changed = true
+        while changed:
+            changed = false
+            mut xi = 0
+            while xi < fns.len:
+                mut f = fns.get(xi)
+                mut pi = 0
+                while pi < f.params.len:
+                    mut pn = f.params.get(pi).name
+                    mut pk = keys.get(xi) + "#" + pi.to_str()
+                    if pn != "self" and self.fn_param_consumes.contains(pk):
+                        if not self.fn_param_consumes.get(pk):
+                            if self._param_consumed_in_block(pn, f.body):
+                                self.fn_param_consumes.insert(pk, true)
+                                changed = true
+                    pi = pi + 1
+                xi = xi + 1
+
+    pub def _pc_is_ident(self, ep: Pointer[HirExpr], name: str) -> bool:
+        if ep as usize == 0 as usize: return false
+        match ep.read():
+            case HirExpr.EIdent(n, _, _): return n == name
+            case _: return false
+
+    pub def _pc_callee_name(self, callee: Pointer[HirExpr]) -> str:
+        if callee as usize == 0 as usize: return ""
+        match callee.read():
+            case HirExpr.EIdent(n, _, _): return n
+            case _: return ""
+
+    pub def _pc_stores_method(self, m: str) -> bool:
+        return m == "push" or m == "append" or m == "insert" or m == "set" or m == "add"
+
+    pub def _pc_is_store_target(self, tgt: Pointer[HirExpr]) -> bool:
+        if tgt as usize == 0 as usize: return false
+        match tgt.read():
+            case HirExpr.EPropAccess(_, _, _): return true
+            case HirExpr.EIndex(_, _, _): return true
+            case _: return false
+
+    # Does `name` appear anywhere in the expression tree (a use, not necessarily a consume)?
+    pub def _pc_refs(self, ep: Pointer[HirExpr], name: str) -> bool:
+        if ep as usize == 0 as usize: return false
+        match ep.read():
+            case HirExpr.EIdent(n, _, _): return n == name
+            case HirExpr.EBinOp(_, l, r, _): return self._pc_refs(l, name) or self._pc_refs(r, name)
+            case HirExpr.EUnaryOp(_, e, _): return self._pc_refs(e, name)
+            case HirExpr.ECast(e, _): return self._pc_refs(e, name)
+            case HirExpr.EPropAccess(o, _, _): return self._pc_refs(o, name)
+            case HirExpr.EIndex(o, ix, _): return self._pc_refs(o, name) or self._pc_refs(ix, name)
+            case HirExpr.ECall(cl, args, _): return self._pc_refs(cl, name) or self._pc_anyrefs(args, name)
+            case HirExpr.EMethodCall(o, _, args, _): return self._pc_refs(o, name) or self._pc_anyrefs(args, name)
+            case HirExpr.EList(items, _): return self._pc_anyrefs(items, name)
+            case HirExpr.ESet(items, _): return self._pc_anyrefs(items, name)
+            case HirExpr.ETuple(items, _): return self._pc_anyrefs(items, name)
+            case HirExpr.EDict(dks, dvs, _): return self._pc_anyrefs(dks, name) or self._pc_anyrefs(dvs, name)
+            case HirExpr.ETryExpr(e, _): return self._pc_refs(e, name)
+            case HirExpr.EAwait(e, _): return self._pc_refs(e, name)
+            case HirExpr.EIfElse(cnd, te, ee, _): return self._pc_refs(cnd, name) or self._pc_refs(te, name) or self._pc_refs(ee, name)
+            case HirExpr.ESlice(sa, sb, sc, _): return self._pc_refs(sa, name) or self._pc_refs(sb, name) or self._pc_refs(sc, name)
+            case HirExpr.ERange(ra, rb, _, _): return self._pc_refs(ra, name) or self._pc_refs(rb, name)
+            case _: return false
+
+    pub def _pc_anyrefs(self, args: Vec[Pointer[HirExpr]], name: str) -> bool:
+        mut i = 0
+        while i < args.len:
+            if self._pc_refs(args.get(i), name): return true
+            i = i + 1
+        return false
+
+    pub def _param_consumed_in_block(self, pname: str, b: HirBlock) -> bool:
+        if b as usize == 0 as usize: return false
+        mut i = 0
+        while i < b.stmts.len:
+            if self._param_consumed_in_stmt(pname, b.stmts.get(i)): return true
+            i = i + 1
+        return false
+
+    pub def _param_consumed_in_stmt(self, pname: str, sp: Pointer[HirStmt]) -> bool:
+        if sp as usize == 0 as usize: return false
+        match sp.read():
+            case HirStmt.SReturn(e): return self._pc_refs(e, pname)          # returned -> transferred
+            case HirStmt.SRaise(e): return self._pc_refs(e, pname)
+            case HirStmt.SFree(nm): return nm == pname                       # freed -> consumed
+            case HirStmt.SSpawn(e): return self._pc_refs(e, pname)           # crosses a thread -> consumed
+            case HirStmt.SAssign(tgt, val):
+                if self._pc_is_store_target(tgt) and self._pc_refs(val, pname): return true   # store into field/index
+                return self._param_consumed_in_expr(pname, val)
+            case HirStmt.SLet(_, _, _, _, _, _, val): return self._param_consumed_in_expr(pname, val)
+            case HirStmt.SMultiLet(_, _, val): return self._param_consumed_in_expr(pname, val)
+            case HirStmt.SExpr(e): return self._param_consumed_in_expr(pname, e)
+            case HirStmt.SIf(_, tb, eb): return self._param_consumed_in_block(pname, tb) or self._param_consumed_in_block(pname, eb)
+            case HirStmt.SWhile(_, wb): return self._param_consumed_in_block(pname, wb)
+            case HirStmt.SFor(_, _, fb): return self._param_consumed_in_block(pname, fb)
+            case HirStmt.SForUnpack(_, _, fub): return self._param_consumed_in_block(pname, fub)
+            case HirStmt.SMatch(_, arms):
+                mut ai = 0
+                while ai < arms.len:
+                    if self._param_consumed_in_block(pname, arms.get(ai).body): return true
+                    ai = ai + 1
+                return false
+            case HirStmt.SUnsafe(ub): return self._param_consumed_in_block(pname, ub)
+            case HirStmt.SWith(_, _, wb): return self._param_consumed_in_block(pname, wb)
+            case HirStmt.STaskGroup(tb): return self._param_consumed_in_block(pname, tb)
+            case HirStmt.SDefer(ds): return self._param_consumed_in_stmt(pname, ds)
+            case HirStmt.STry(tb, catches, fb):
+                if self._param_consumed_in_block(pname, tb): return true
+                if self._param_consumed_in_block(pname, fb): return true
+                mut ci = 0
+                while ci < catches.len:
+                    if self._param_consumed_in_block(pname, catches.get(ci).read().body): return true
+                    ci = ci + 1
+                return false
+            case _: return false
+
+    # True if the expression consumes `pname` — stores it in a container, captures it,
+    # or passes it to a consuming/unknown callee position. A bare read does not consume.
+    pub def _param_consumed_in_expr(self, pname: str, ep: Pointer[HirExpr]) -> bool:
+        if ep as usize == 0 as usize: return false
+        match ep.read():
+            case HirExpr.ECall(callee, args, _):
+                mut gname = self._pc_callee_name(callee)
+                mut j = 0
+                while j < args.len:
+                    if self._pc_is_ident(args.get(j), pname):
+                        if gname == "": return true                                  # indirect callee -> conservative
+                        mut ck = gname + "#" + j.to_str()
+                        if not self.fn_param_consumes.contains(ck): return true       # extern/unknown -> conservative
+                        if self.fn_param_consumes.get(ck): return true               # known consuming position
+                    else:
+                        if self._param_consumed_in_expr(pname, args.get(j)): return true
+                    j = j + 1
+                return self._param_consumed_in_expr(pname, callee)
+            case HirExpr.EMethodCall(obj, method, args, _):
+                mut j2 = 0
+                while j2 < args.len:
+                    if self._pc_is_ident(args.get(j2), pname): return true            # receiver-type deferred -> conservative
+                    if self._param_consumed_in_expr(pname, args.get(j2)): return true
+                    j2 = j2 + 1
+                return self._param_consumed_in_expr(pname, obj)
+            case HirExpr.EList(items, _): return self._pc_anyrefs(items, pname)        # collection literal stores it
+            case HirExpr.ESet(items, _): return self._pc_anyrefs(items, pname)
+            case HirExpr.ETuple(items, _): return self._pc_anyrefs(items, pname)
+            case HirExpr.EDict(dks, dvs, _): return self._pc_anyrefs(dks, pname) or self._pc_anyrefs(dvs, pname)
+            case HirExpr.EClosure(_, _, _, _, caps):
+                mut cj = 0
+                while cj < caps.len:
+                    if caps.get(cj).name == pname: return true                        # captured by a closure
+                    cj = cj + 1
+                return false
+            case HirExpr.EBinOp(_, l, r, _): return self._param_consumed_in_expr(pname, l) or self._param_consumed_in_expr(pname, r)
+            case HirExpr.EUnaryOp(_, e, _): return self._param_consumed_in_expr(pname, e)
+            case HirExpr.ECast(e, _): return self._param_consumed_in_expr(pname, e)
+            case HirExpr.EPropAccess(o, _, _): return self._param_consumed_in_expr(pname, o)
+            case HirExpr.EIndex(o, ix, _): return self._param_consumed_in_expr(pname, o) or self._param_consumed_in_expr(pname, ix)
+            case HirExpr.EIfElse(cnd, te, ee, _): return self._param_consumed_in_expr(pname, cnd) or self._param_consumed_in_expr(pname, te) or self._param_consumed_in_expr(pname, ee)
+            case HirExpr.EAwait(e, _): return self._param_consumed_in_expr(pname, e)
+            case HirExpr.ETryExpr(e, _): return self._param_consumed_in_expr(pname, e)
+            case _: return false
 
     pub def _fn_ret_is_heap_class(self, f: HirFunction) -> bool:
         if f.ret_ty as usize == 0 as usize: return false

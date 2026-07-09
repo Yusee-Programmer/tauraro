@@ -280,6 +280,21 @@ extend Parser:
                     if self.peek() == Token.Comma: self.pos = self.pos + 1
                 if self.peek() == Token.RParen: self.pos = self.pos + 1
                 return tup_t
+            case Token.LBracket:
+                # Fixed-size array type: [T; N] -> AstType{name="Array", args=[T], array_size=N}
+                self.pos = self.pos + 1
+                mut arr_t = AstType.init("Array")
+                mut arr_elem = self.parse_type()
+                arr_t.args.push(box_asttype(arr_elem))
+                if self.peek() == Token.Semicolon:
+                    self.pos = self.pos + 1
+                    match self.peek():
+                        case Token.IntLit(arr_sz):
+                            arr_t.array_size = arr_sz
+                            self.pos = self.pos + 1
+                        case _: pass
+                if self.peek() == Token.RBracket: self.pos = self.pos + 1
+                return arr_t
             case Token.KwDef:
                 # Function-pointer type: def(T1, T2) -> R  (zero-cost callable
                 # value: a pointer to a top-level function). Encoded internally
