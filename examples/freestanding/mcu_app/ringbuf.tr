@@ -1,0 +1,36 @@
+# mcu_app sub-module: a classic circular buffer — how firmware buffers bytes
+# between an ISR producer and a main-loop consumer. Backed by a heap Vec.
+class RingBuf:
+    pub buf: Vec[int]
+    pub head: int
+    pub tail: int
+    pub count: int
+    pub cap: int
+
+extend RingBuf:
+    pub def init(cap: int) -> RingBuf:
+        mut r = RingBuf()
+        r.buf = Vec[int].init(cap)
+        mut i = 0
+        while i < cap:
+            r.buf.push(0)
+            i = i + 1
+        r.head = 0
+        r.tail = 0
+        r.count = 0
+        r.cap = cap
+        return r
+    pub def push(self, v: int) -> bool:
+        if self.count >= self.cap:
+            return false
+        self.buf.set(self.tail, v)
+        self.tail = (self.tail + 1) % self.cap
+        self.count = self.count + 1
+        return true
+    pub def pop(self) -> int:
+        if self.count == 0:
+            return -1
+        mut v = self.buf.get(self.head)
+        self.head = (self.head + 1) % self.cap
+        self.count = self.count - 1
+        return v

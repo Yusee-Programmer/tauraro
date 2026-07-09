@@ -37,3 +37,6 @@ bootstrap/*.zip
 # Python bytecode is never source:
 __pycache__/
 *.pyc
+
+# Bare-metal MCU platform SOURCE (startup/allocator/UART) — source, not artifacts.
+!tests/freestanding/mcu/*.c

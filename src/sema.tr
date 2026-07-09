@@ -165,9 +165,9 @@ pub class Sema:
     pub closure_boundary: int           # scope depth just before entering a closure (-1 = not in closure)
     pub closure_caps:     Vec[HirParam] # captures accumulated for the current innermost closure
     pub closure_cap_set:  Map[str, bool] # dedup set for capture names
-    pub in_assign_target: bool          # Phase D: suppress is_init check on assignment LHS
+    pub in_assign_target: bool          # suppress is_init check on assignment LHS
     pub in_recv_pos: bool               # [N-3] lowering a method/prop/index receiver — skip undefined-name check (module receivers like `OS`/`math` resolve to no symbol)
-    pub container_borrows: Map[str, str] # Phase C: container_var -> borrowing_var
+    pub container_borrows: Map[str, str] # container_var -> borrowing_var
     pub capturing_moves: bool           # Fix 1: branch snapshot - are we tracking move deltas?
     pub branch_moved_buf: Vec[str]      # Fix 1: names moved in current branch
     pub capturing_inits: bool           # Fix 4: branch snapshot for init deltas
@@ -384,7 +384,7 @@ extend Sema:
         s.globals.insert("Rc",        Symbol.init("Rc",        SymbolKind.SClass, box_asttype(AstType.init("Rc"))))
         s.globals.insert("WaitGroup", Symbol.init("WaitGroup", SymbolKind.SClass, box_asttype(AstType.init("WaitGroup"))))
 
-        # -- Ownership / shared types (Phase 4) ---------------------------------
+        # -- Ownership / shared types ---------------------------------
         s.globals.insert("Shared", Symbol.init("Shared", SymbolKind.SClass, box_asttype(AstType.init("Shared"))))
         s.globals.insert("Weak",   Symbol.init("Weak",   SymbolKind.SClass, box_asttype(AstType.init("Weak"))))
 
@@ -727,7 +727,7 @@ extend Sema:
                     self.warnings.push("[T-3] Sendable class '" + c.name + "' has primitive field '" + fd.name + ": " + fty.name + "' that may cause data races if mutated from multiple threads.\n      FIX: Use 'Atomic[" + fty.name + "]' for safe concurrent mutation, or ensure this field is written only before the object is shared across threads.")
             cfi = cfi + 1
 
-    # -- Phase 1-3: Ownership / borrow tracking -------------------------------
+    # -- Ownership / borrow tracking -------------------------------
 
     pub def mark_moved(self, name: str):
         mut i = self.scopes.len - 1
@@ -811,7 +811,7 @@ extend Sema:
         if sym.name != "" and sym.active_borrows > 0:
             self.error("[M-2] Cannot move '" + name + "' while it is borrowed.\n      FIX: The borrow must end before '" + name + "' can be moved.")
 
-    # Phase D: mark a variable as initialized (e.g. after assignment)
+    # mark a variable as initialized (e.g. after assignment)
     pub def mark_init(self, name: str):
         mut mi_i = self.scopes.len - 1
         while mi_i >= 0:
@@ -835,7 +835,7 @@ extend Sema:
                 if self.capturing_inits:
                     self.branch_init_buf.push(name)
 
-    # Phase C: remove any container borrow where var_name is the borrow key
+    # remove any container borrow where var_name is the borrow key
     pub def clear_container_borrow(self, var_name: str):
         if self.container_borrows.contains(var_name):
             self.container_borrows.remove(var_name)
@@ -1216,7 +1216,7 @@ extend Sema:
         # A value BORROWED from a collection element (`x = coll.get(i)`) ALIASES that
         # element — it does NOT own it. Auto-dropping it (releasing its str fields /
         # calling free) would free data the collection still owns: a use-after-free.
-        # Marked "@borrowed" at the SLet (Phase C). Never droppable.
+        # Marked "@borrowed" at the SLet. Never droppable.
         if sym.borrows_region == "@borrowed": return false
         mut tn = sym.ty.read().name
         # `str` locals get retain/release auto-drop, gated by the same
@@ -2665,7 +2665,7 @@ extend Sema:
         self.current_func_name = f.name
         mut saved_func_generics = self.current_func_generics
         self.current_func_generics = f.generics
-        # Phase C: clear container-borrow state - it must not leak between functions
+        # clear container-borrow state - it must not leak between functions
         self.container_borrows = Map[str, str].init(16)
         # Gap 1: capture 'from' lifetime param for escape-analysis check in SReturn
         mut saved_ret_from = self.current_func_ret_from
@@ -2763,7 +2763,7 @@ extend Sema:
                 p_ty = _vp_ty
 
             self.declare(p.name, SymbolKind.SVariable, box_asttype(p_ty), false)
-            # Phase B: mark as parameter so return-of-local-pointer check is skipped
+            # mark as parameter so return-of-local-pointer check is skipped
             if self.scopes.len > 0:
                 mut pb_scope = self.scopes.get(self.scopes.len - 1)
                 if pb_scope.variables.contains(p.name):
@@ -2872,7 +2872,7 @@ extend Sema:
             hfields.push(hf)
             i = i + 1
 
-        # Phase F: detect self-referential Shared[ClassName] fields (creates ref cycle -> leak)
+        # detect self-referential Shared[ClassName] fields (creates ref cycle -> leak)
         mut pf_i = 0
         while pf_i < c.fields.len:
             mut pf_f = c.fields.get(pf_i)
@@ -3225,9 +3225,9 @@ extend Sema:
                 if ty_ptr as usize != 0 as usize: ty = ty_ptr.read()
                 mut hval = self.lower_expr(val_ptr)
                 if ty.name == "void" or ty.name == "None": ty = hir_expr_type(hval)
-                # Phase 1: plain-identifier RHS of non-primitive type = ownership move
+                # plain-identifier RHS of non-primitive type = ownership move
                 # Skip for shared lets (shared = clone via refcount, not a move)
-                # Phase 1: plain variable-to-variable move (mut newvar = old_obj)
+                # plain variable-to-variable move (mut newvar = old_obj)
                 # Field/index access is NOT a move in Tauraro (C value semantics copy fields)
                 if val_ptr as usize != 0 as usize and not is_shared:
                     match val_ptr.read():
@@ -3292,7 +3292,7 @@ extend Sema:
                                 mut alloc_sym = alloc_scope.variables.get(name)
                                 alloc_sym.ptr_region = 1  # HEAP (function call result)
                                 alloc_scope.variables.insert(name, alloc_sym)
-                # Phase D: variable declared without a value - mark as uninitialised
+                # variable declared without a value - mark as uninitialised
                 if val_ptr as usize == 0 as usize:
                     if self.scopes.len > 0:
                         mut pd_scope = self.scopes.get(self.scopes.len - 1)
@@ -3300,7 +3300,7 @@ extend Sema:
                             mut pd_sym = pd_scope.variables.get(name)
                             pd_sym.is_init = false
                             pd_scope.variables.insert(name, pd_sym)
-                # Phase C: a local that BORROWS a collection element ALIASES it and does
+                # a local that BORROWS a collection element ALIASES it and does
                 # NOT own it. RHS forms: `coll.get(i)` / `.first()` / `.last()`, or `coll[i]`.
                 # For a CLASS-instance element this is critical for auto-drop soundness: the
                 # element's str fields belong to the collection, so dropping the borrow would
@@ -3387,7 +3387,7 @@ extend Sema:
                             elif sa_existing.kind == SymbolKind.SVariable and not sa_existing.is_mut:
                                 self.error("[M-8] Cannot assign to '" + sa_decl_name + "' a second time because it is immutable.\n      FIX: Declare it as 'mut " + sa_decl_name + " = ...' if it needs to change.")
                         case _: pass
-                # Phase 1 SAssign: plain-variable RHS of non-primitive non-Copy type = ownership move
+                # SAssign: plain-variable RHS of non-primitive non-Copy type = ownership move
                 # Lower first (EIdent checks current is_moved), then mark moved for subsequent uses.
                 # SAssign is guarded by branch snapshots (Fix 1) so sibling else-branches correctly
                 # roll back and re-check - no false positives across if/else chains.
@@ -3402,12 +3402,12 @@ extend Sema:
                                 self.check_no_active_borrows(sa_src, sa_ty.name)
                                 self.mark_moved(sa_src)
                         case _: pass
-                # Phase D: mark assignment target as initialised after any assignment
+                # mark assignment target as initialised after any assignment
                 if target as usize != 0 as usize:
                     match target.read():
                         case Expr.EIdent(pd_tgt): self.mark_init(pd_tgt)
                         case _: pass
-                # Phase C: clear container borrow when the borrowing variable is reassigned
+                # clear container borrow when the borrowing variable is reassigned
                 if target as usize != 0 as usize:
                     match target.read():
                         case Expr.EIdent(pc_tgt): self.clear_container_borrow(pc_tgt)
@@ -4170,13 +4170,13 @@ extend Sema:
                 # [M-6] use-after-free: dealloc() was called on this pointer
                 if sym.is_freed and sym.name != "":
                     self.error("[M-6] '" + name + "' was freed by 'dealloc()' and can no longer be used.\n      FIX: Remove all uses of '" + name + "' after 'dealloc()', or restructure so the pointer is freed only when no longer needed.")
-                # Phase 1: use-after-definite-move (hard error)
+                # use-after-definite-move (hard error)
                 elif sym.is_moved and not self.is_primitive(ty) and not self.is_copy_class(ty.name) and sym.name != "" and not sym.is_shared:
                     self.error("[M-1] '" + name + "' was moved and cannot be used again.\n      FIX: Use the variable that now owns it, or call .clone() to copy before moving.")
                 # Fix 1: use-after-maybe-move - hard error (moved in some branch = definitely unsafe to use)
                 elif sym.is_maybe_moved and not self.is_primitive(ty) and not self.is_copy_class(ty.name) and sym.name != "" and not sym.is_shared:
                     self.error("[M-5] '" + name + "' may have been moved on some code paths, making this use unsafe.\n      FIX: Ensure '" + name + "' is not moved before this point on any branch, or restructure so the use is inside the branch where it's still valid.")
-                # Phase D: use-before-definite-init (hard error)
+                # use-before-definite-init (hard error)
                 if not sym.is_init and not sym.is_maybe_init and sym.name != "" and sym.kind == SymbolKind.SVariable and not self.in_assign_target:
                     self.error("[I-1] Variable '" + name + "' is used before being assigned a value.\n      FIX: Assign a value before use, e.g. 'mut " + name + " = <default>'.")
                 # Fix 4: use-before-maybe-init - hard error (uninitialized on some path = unsafe)
@@ -4275,7 +4275,7 @@ extend Sema:
                                     isp_target_n = hir_expr_type(isp_obj).name
                                 return box_hirexpr(HirExpr.ELitStr(self.build_inspect_str(isp_target_n), AstType.init("str")))
                         case _: pass
-                # Phase 2+3: iterate AST args - mark borrows (P2) and detect aliasing (P3)
+                # iterate AST args - mark borrows and detect aliasing
                 mut p23_borrow_names = Vec[str].init(4)
                 mut p23_seen = Map[str, bool].init(4)
                 mut p23_k = 0
@@ -4300,7 +4300,7 @@ extend Sema:
                 while k < args.len:
                     hl.push(self.lower_expr(args.get(k)))
                     k = k + 1
-                # Phase 2: release borrows after call
+                # release borrows after call
                 mut p23_ui = 0
                 while p23_ui < p23_borrow_names.len:
                     self.unmark_borrow(p23_borrow_names.get(p23_ui))
@@ -4508,7 +4508,7 @@ extend Sema:
                         if _cf_ty.args.len > 0: _cf_ret = _cf_ty.args.get(_cf_ty.args.len - 1).read()
                         mut _cf_prop = box_hirexpr(HirExpr.EPropAccess(hobj, method, _cf_ty))
                         return box_hirexpr(HirExpr.ECall(_cf_prop, hl, _cf_ret))
-                # Phase C: error if mutating a container that has an active borrow
+                # error if mutating a container that has an active borrow
                 if method == "push" or method == "pop" or method == "insert" or method == "remove":
                     mut pc_obj_nm = ""
                     match obj.read():
@@ -4740,7 +4740,7 @@ extend Sema:
                         if hobj_ty.args.len > 0: ret_ty = hobj_ty.args.get(0).read()
                         else: ret_ty = AstType.init("int")
                 elif hobj_ty.name == "StringBuilder" and method == "to_string": ret_ty = AstType.init("StringObj")
-                # Phase 4: Shared[T] method return types
+                # Shared[T] method return types
                 # Note: s1's HIR type is the inner T (not Shared[T]), so these branches
                 # are reached only when an explicit Shared[T] annotation is used.
                 elif hobj_ty.name == "Shared":
@@ -4753,7 +4753,7 @@ extend Sema:
                             weak_ty.args.push(box_asttype(hobj_ty.args.get(0).read()))
                         ret_ty = weak_ty
                     elif method == "drop": ret_ty = AstType.init("void")
-                # Phase 4: Weak[T] method return types
+                # Weak[T] method return types
                 elif hobj_ty.name == "Weak":
                     if method == "upgrade":
                         mut opt_ty = AstType.init("Option")

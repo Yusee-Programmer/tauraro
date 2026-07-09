@@ -152,6 +152,7 @@ pub class CGenerator:
     pub cur_ret_is_borrow: bool  # current function's return type is `ref` — returns a BORROW (no retain on return; the caller does not free it)
     pub eliding_get_retain: bool # set while generating a PROVEN collection-element borrow's RHS (`ref T = coll.get(k)`) — the str-valued get returns the unboxed alias WITHOUT retaining (zero-copy borrow); the SLet also skips the release
     pub no_elide: bool           # --no-elide: force pure ARC (drop ALL proven-borrow elision) — the differential-soundness oracle baseline
+    pub tier_define: str         # --freestanding => "TAURARO_KERNEL" (no libc), --no-std => "TAURARO_NO_OS" (no OS); emitted as a #define before the runtime include so the tier build "just works" without a hand-passed -D
     pub cur_self_is_ptr: bool     # inside a MUTATING @value_type method, `self` is a POINTER (`ClassName* self`) so writes persist — gen_prop_access uses `self->field`, not `self.field`
     pub coll_local_sfx: Map[str, str]    # List/Vec local name -> list_sfx (e.g. "i64"/"TrStr") for SAutoDrop's List_<sfx>_free; Dict/Map/Set don't need a suffix (Dict_free)
     pub coll_local_idict: Map[str, bool] # Dict/Map/Set local name -> true if int-keyed (TrIDict*/_TrISet*, freed via _tr_idict_free instead of Dict_free)
@@ -224,6 +225,7 @@ pub class CGenerator:
         g.cur_ret_is_borrow = false
         g.eliding_get_retain = false
         g.no_elide = false
+        g.tier_define = ""
         g.cur_self_is_ptr = false
         g.coll_local_sfx = Map[str, str].init(16)
         g.coll_local_idict = Map[str, bool].init(16)
@@ -1018,7 +1020,125 @@ pub class CGenerator:
                 case _: pass
         return ""
 
+    # First string argument of a decorator (e.g. @section("x") -> "x"), or "".
+    pub def deco_first_str(self, d: Decorator) -> str:
+        if d.args.len == 0: return ""
+        match d.args.get(0).read():
+            case Expr.ELitStr(v): return v
+            case _: return ""
+
+    # Bare-metal / low-level codegen attributes from decorators: @naked, @interrupt,
+    # @used, and @section("name") -> a combined GCC __attribute__((...)) prefix, or ""
+    # if the function carries none. Emitted WITHOUT `static` so a reset entry / ISR /
+    # sectioned symbol stays linkable (referenced from a vector table or the linker).
+    pub def hw_attrs(self, f: HirFunction) -> str:
+        mut parts = Vec[str].init(0)
+        mut i = 0
+        while i < f.decorators.len:
+            mut d = f.decorators.get(i)
+            if d.name == "naked": parts.push("naked")
+            elif d.name == "interrupt": parts.push("interrupt")
+            elif d.name == "used": parts.push("used")
+            elif d.name == "section":
+                mut s = self.deco_first_str(d)
+                if s != "": parts.push("section(\"" + s + "\")")
+            i = i + 1
+        if parts.len == 0: return ""
+        mut body = parts.get(0)
+        mut j = 1
+        while j < parts.len:
+            body = body + "," + parts.get(j)
+            j = j + 1
+        return "__attribute__((" + body + ")) "
+
+    # The #define wiring a runtime pluggable macro to a user function `f`, if `f`
+    # carries a hook decorator (@allocator/@free/@realloc/@calloc/@output); else "".
+    # Lets a bare-metal program supply its allocator + output sink in pure Tauraro —
+    # no C hooks header. Hook fns must use basic C types (usize, Pointer[u8],
+    # Pointer[char]) so the forward-decl is valid before the runtime include.
+    pub def hook_macro_for(self, f: HirFunction) -> str:
+        mut i = 0
+        mut nm = f.name
+        while i < f.decorators.len:
+            mut d = f.decorators.get(i).name
+            if d == "allocator": return "#define TAURARO_ALLOC(sz) " + nm + "(sz)\n"
+            if d == "free":      return "#define TAURARO_FREE(p) " + nm + "(p)\n"
+            if d == "realloc":   return "#define TAURARO_REALLOC(p,sz) " + nm + "(p,sz)\n"
+            if d == "calloc":    return "#define TAURARO_CALLOC(n,sz) " + nm + "(n,sz)\n"
+            if d == "output":    return "#define _TR_WRITE(s) " + nm + "(s)\n"
+            i = i + 1
+        return ""
+
+    # Prologue text (forward-decls + #defines) wiring every hook function in `prog`
+    # to the runtime macros. Emitted before the runtime include.
+    pub def emit_tier_hooks(self, prog: HirProgram) -> str:
+        mut fwd = ""
+        mut defs = ""
+        mut i = 0
+        while i < prog.functions.len:
+            mut f = prog.functions.get(i)
+            if not _is_invalid_ptr(f as usize):
+                mut hm = self.hook_macro_for(f)
+                if hm != "":
+                    fwd = fwd + self.gen_func_sig(f, "") + ";\n"
+                    defs = defs + hm
+            i = i + 1
+        return fwd + defs
+
+    # Emit the top-level global-initializer statements (assignments to hoisted globals
+    # + any module-scope code) — the SAME logic main() runs inline. Shared so the
+    # @entry reset trampoline initializes globals too: @entry boots past main(), so
+    # without this a non-zero global initializer (mut x: usize = 0x...) stays at its
+    # .bss zero (a silent HardFault). Writes via self.w.
+    pub def emit_global_inits(self, prog: HirProgram):
+        if _is_invalid_ptr(prog as usize): return
+        if _is_invalid_ptr(prog.top_level_stmts as usize): return
+        mut i = 0
+        while i < prog.top_level_stmts.len:
+            mut _tlg = false
+            match prog.top_level_stmts.get(i).read():
+                case HirStmt.SLet(gn, _, _, _, _, _, gv):
+                    if self.global_vars.contains(gn) and gv as usize != 0 as usize:
+                        self.w("    " + gn + " = " + self.gen_expr(gv) + ";\n")
+                        _tlg = true
+                case _: pass
+            if not _tlg:
+                self.gen_stmt(prog.top_level_stmts.get(i), 1)
+            i = i + 1
+
+    # --freestanding @entry: emit a reset trampoline + Cortex-M .isr_vector table so
+    # the user's @entry function is the boot entry — no hand-written startup.c. The
+    # trampoline copies .data, zeroes .bss, runs the global initializers, then calls
+    # the entry; the .bss/.data/_stack_top symbols come from the generated linker
+    # script (--emit-ld). Writes nothing if the program has no @entry. Emitted after
+    # all function defs (the entry fn is already in scope, so no forward decl needed).
+    pub def emit_entry_glue(self, prog: HirProgram):
+        mut entry = ""
+        mut i = 0
+        while i < prog.functions.len:
+            mut f = prog.functions.get(i)
+            if not _is_invalid_ptr(f as usize):
+                mut j = 0
+                while j < f.decorators.len:
+                    if f.decorators.get(j).name == "entry": entry = f.name
+                    j = j + 1
+            i = i + 1
+        if entry == "": return
+        self.w("\n/* --freestanding @entry: reset trampoline + Cortex-M vector table */\n")
+        self.w("extern unsigned _stack_top, __bss_start__, __bss_end__, _sidata, _sdata, _edata;\n")
+        self.w("__attribute__((used)) void _tr_reset(void){\n")
+        self.w("    unsigned *d, *sp;\n")
+        self.w("    for(d=&_sdata, sp=&_sidata; d<&_edata;) *d++ = *sp++;\n")
+        self.w("    for(d=&__bss_start__; d<&__bss_end__;) *d++ = 0;\n")
+        self.emit_global_inits(prog)
+        self.w("    " + entry + "();\n")
+        self.w("    for(;;){}\n}\n")
+        self.w("__attribute__((used, section(\".isr_vector\")))\n")
+        self.w("void* const _tr_isr_vector[] = { (void*)&_stack_top, (void*)_tr_reset };\n")
+
     pub def get_inline_attrs(self, f: HirFunction) -> str:
+        mut hw = self.hw_attrs(f)
+        if hw != "": return hw
         mut i = 0
         while i < f.decorators.len:
             if f.decorators.get(i).name == "inline": return "static inline __attribute__((always_inline,hot)) "
@@ -1049,6 +1169,8 @@ pub class CGenerator:
 
     # Like get_inline_attrs but without `static` - for cross-module prototypes in tauraro_types.h.
     pub def get_proto_attrs(self, f: HirFunction) -> str:
+        mut hwp = self.hw_attrs(f)
+        if hwp != "": return hwp
         mut i = 0
         while i < f.decorators.len:
             if f.decorators.get(i).name == "inline": return "inline __attribute__((always_inline,hot)) "
@@ -3927,7 +4049,7 @@ pub class CGenerator:
             return "_tr_str_contains(" + self.strz(obj_s) + ", " + self.strz(self.gen_expr(args.get(0))) + ")"
 
         # String method dispatch - must be before the generic TrStr_ fallback
-        # NOTE on interim semantics (Phase 2/TrStr migration): scalar `str`
+        # NOTE on interim string semantics: scalar `str`
         # values are TrStr (refcounted). List[str]/Dict/Set string elements
         # remain legacy char* (List_str etc, task #52, not yet migrated).
         # Boundary: TrStr -> char* via _tr_strz(); char* -> TrStr from a
@@ -7316,12 +7438,14 @@ pub class CGenerator:
     pub def generate(self, prog: HirProgram) -> str:
         self.register_program(prog)
 
-        # -- Phase 1: Runtime header include + file-wide optimization pragmas ----
+        # -- Runtime header include + file-wide optimization pragmas ----
         self.w("#define _TR_MAIN\n")
+        if self.tier_define != "": self.w("#define " + self.tier_define + "\n")
+        self.w(self.emit_tier_hooks(prog))
         self.w("#include \"tauraro_rt.h\"\n")
 
-        # -- Phase 2: Forward declarations (opaque struct pointers) ------------
-        # Skip generic classes - their mono versions are handled in Phase 2.75
+        # -- Forward declarations (opaque struct pointers) ------------
+        # Skip generic classes - their monomorphized versions are emitted below
         mut i = 0
         while i < prog.classes.len:
             mut cls2 = prog.classes.get(i)
@@ -7342,7 +7466,7 @@ pub class CGenerator:
         self.emit_list_fwd_decls(prog)
         self.w("\n")
 
-        # -- Phase 2.5: Extern C function declarations -------------------------
+        # -- Extern C function declarations -------------------------
         # `extern "CPP"`/`extern "C++"` blocks are accepted as synonyms for
         # `extern "C"`: to call into a C++ library, expose (or write a thin
         # shim with) `extern "C"` functions and link the .o/.a via --link.
@@ -7369,7 +7493,7 @@ pub class CGenerator:
             i = i + 1
         if prog.extern_funcs.len > 0: self.w("\n")
 
-        # -- Phase 2.75: Generic monomorphization ------------------------------
+        # -- Generic monomorphization ------------------------------
         # Pre-scan all HIR types to collect and generate monomorphized classes.
         # mono_buf accumulates: fwd decl + struct body + prototypes + impls.
         self.scan_mono_prog(prog)
@@ -7378,7 +7502,7 @@ pub class CGenerator:
             self.w(mono_out)
             self.w("\n")
 
-        # -- Phase 3: Struct definitions ---------------------------------------
+        # -- Struct definitions ---------------------------------------
         self.emit_drop_fwd_decls(prog)
         i = 0
         while i < prog.enums.len:
@@ -7399,14 +7523,14 @@ pub class CGenerator:
         self.w(self.struct_buf.to_string().as_str())
         self.struct_buf = StringBuilder.init(16)
 
-        # -- Phase 3.5: Value-type list definitions (after all enums/structs defined) --
+        # -- Value-type list definitions (after all enums/structs defined) --
         mut lt_out = self.list_types_buf.to_string().as_str()
         if lt_out != "": self.w(lt_out)
 
-        # -- Phase 3.6: Top-level global variables ------------------------------
+        # -- Top-level global variables ------------------------------
         # Module-level `mut`/`const` vars are declared at C file scope so every
         # function can see them (not just main). The initializer runs in main
-        # (Phase 7), since it may be a non-constant expression.
+        # (in main), since it may be a non-constant expression.
         mut gvi = 0
         while gvi < prog.top_level_stmts.len:
             match prog.top_level_stmts.get(gvi).read():
@@ -7420,7 +7544,7 @@ pub class CGenerator:
                 case _: pass
             gvi = gvi + 1
 
-        # -- Phase 4: Function prototypes --------------------------------------
+        # -- Function prototypes --------------------------------------
         i = 0
         while i < prog.classes.len:
             mut c = prog.classes.get(i)
@@ -7454,12 +7578,12 @@ pub class CGenerator:
             i = i + 1
         self.w("\n")
 
-        # -- Phase 4.5: Spawn + async wrappers (static thread-entry functions) --
+        # -- Spawn + async wrappers (static thread-entry functions) --
         self.prescan_spawns(prog)
         self.prescan_awaits(prog)
         self.w("\n")
 
-        # -- Phase 5: Method implementations -----------------------------------
+        # -- Method implementations -----------------------------------
         i = 0
         while i < prog.classes.len:
             mut c = prog.classes.get(i)
@@ -7515,7 +7639,7 @@ pub class CGenerator:
                 mi = mi + 1
             i = i + 1
 
-        # -- Phase 6: Free-standing function implementations -------------------
+        # -- Free-standing function implementations -------------------
         i = 0
         while i < prog.functions.len:
             mut f = prog.functions.get(i)
@@ -7549,7 +7673,8 @@ pub class CGenerator:
                     self.cur_throws_ty = ""
             i = i + 1
 
-        # -- Phase 7: C main entry point ---------------------------------------
+        # -- C main entry point ---------------------------------------
+        self.emit_entry_glue(prog)
         self.w("__attribute__((hot)) int main(int argc, char** argv) {\n")
         self.w("    _tr_argc = argc; _tr_argv = argv;\n")
         self.w("    _tr_init_console();\n")
@@ -7574,7 +7699,7 @@ pub class CGenerator:
             self.w("    for (int _ai = 0; _ai < argc; _ai++) { List_TrStr_append(" + main_args_name + ", _tr_str_lit(argv[_ai])); }\n")
 
         # Call top-level statements. A hoisted global var (declared at file scope
-        # in Phase 3.6) is initialized here with an assignment, not re-declared.
+        # at file scope) is initialized here with an assignment, not re-declared.
         i = 0
         while i < prog.top_level_stmts.len:
             mut _tl_global = false
@@ -7663,6 +7788,11 @@ pub class CGenerator:
         if has_std_lib:
             out.append("#define TAURARO_STD_LIB\n")
             out.append("#define TAURARO_RT_NO_STRINGBUILDER\n")
+        if self.tier_define != "": out.append("#define " + self.tier_define + "\n")
+        # Hook wiring (@allocator/@output) goes in the SHARED header so every module
+        # TU — not just main.c — sees TAURARO_ALLOC/... before the runtime include
+        # (else a std module like std.hal.mmio hits the TAURARO_KERNEL #error).
+        out.append(self.emit_tier_hooks(prog))
         out.append("#include \"tauraro_rt.h\"\n\n")
 
         # -- Forward declarations ----------------------------------------------
@@ -7875,7 +8005,7 @@ pub class CGenerator:
 
         # -- Module-level `mut`/`let` globals: extern declarations -------------
         # Definitions (with initializers, run in main()) are emitted by
-        # generate_module_c's "Phase 3.6" only into the entry module's C file.
+        # the global-variable hoisting only into the entry module's C file.
         # Every other module's C file needs an `extern` declaration to
         # reference these globals, so declare them here in the shared header.
         mut hgi = 0
@@ -8188,6 +8318,8 @@ pub class CGenerator:
         self.buf = StringBuilder.init(65536)
 
         self.w("#define _TR_MAIN\n")
+        if self.tier_define != "": self.w("#define " + self.tier_define + "\n")
+        self.w(self.emit_tier_hooks(prog))
         self.w("#include \"tauraro_types.h\"\n\n")
 
         # Emit spawn + async wrappers (static thread-entry functions) before any function body
@@ -8336,6 +8468,7 @@ pub class CGenerator:
                 i = i + 1
 
         # C main() entry point
+        self.emit_entry_glue(prog)
         self.w("__attribute__((hot)) int main(int argc, char** argv) {\n")
         self.w("    _tr_argc = argc; _tr_argv = argv;\n")
         self.w("    _tr_init_console();\n")

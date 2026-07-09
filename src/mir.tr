@@ -381,7 +381,7 @@ def lower_stmts(b: MirBuilder, hb: HirBlock):
                 # pins exactly the values whose raw pointer is taken (`s as Pointer`
                 # / `&s`) ANYWHERE, inside or outside unsafe. So unsafe-touched
                 # values that are NOT raw-aliased now get their CFG-correct MIR
-                # drops (the Phase-C win), while genuinely raw-aliased values stay
+                # drops for borrowed values, while genuinely raw-aliased values stay
                 # HIR-owned (scope-exit drop, late enough to be safe). The in_unsafe
                 # guard still keeps nested if/match bodies here off the drop-target
                 # list (conservative — those go to HIR scope-exit).
@@ -457,7 +457,7 @@ pub def lower_function(hf: HirFunction) -> MirFunction:
     b.cur  = b.new_block()           # entry block bb0
     lower_stmts(b, hf.body)
     if not b.terminated(): b.set_term(MirTerm.TReturnVoid())
-    # Phase C: pin the precise FUNCTION-WIDE raw-borrow set — values whose raw
+    # pin the precise FUNCTION-WIDE raw-borrow set — values whose raw
     # pointer is taken (`x as Pointer[T]` / `&x`) anywhere in the body. These are
     # excluded from the MIR drop schedule (compute_drops) because a raw pointer may
     # outlive the value's last high-level use; HIR scope-exit owns their drop. This

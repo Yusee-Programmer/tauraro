@@ -2541,6 +2541,7 @@ typedef struct CGenerator {
     bool cur_ret_is_borrow;
     bool eliding_get_retain;
     bool no_elide;
+    TrStr tier_define;
     bool cur_self_is_ptr;
     TrMap* coll_local_sfx;
     TrMap* coll_local_idict;
@@ -2603,6 +2604,7 @@ static void _trdrop_CGenerator(void* vp) {
     Dict_free(self->coll_field_owned);
     Dict_free(self->coll_field_disq);
     Dict_free(self->cur_proven_borrows);
+    _tr_str_release(self->tier_define);
     Dict_free_strval(self->coll_local_sfx);
     Dict_free(self->coll_local_idict);
     Dict_free(self->coll_local_strval);
@@ -3227,6 +3229,7 @@ __attribute__((hot)) bool str_starts_with(TrStr s, TrStr prefix);
 __attribute__((hot)) TrStr detect_c_compiler();
 __attribute__((hot)) bool is_clang_compiler(TrStr cc);
 __attribute__((hot)) TrStr resolve_target_triple(TrStr target);
+__attribute__((hot)) TrStr linker_script_cortex_m();
 __attribute__((hot)) TrStr target_extra_flags(TrStr triple);
 __attribute__((hot)) TrStr detect_cross_compiler(TrStr triple);
 __attribute__((hot)) TrStr dir_of_path(TrStr path);
@@ -3299,6 +3302,12 @@ __attribute__((hot)) TrStr CGenerator_synth_class_suffix(CGenerator* self, HirCl
 __attribute__((hot)) void CGenerator_ensure_mono(CGenerator* self, HirClass* cls, List_ptr* type_args);
 __attribute__((hot)) void CGenerator_ensure_mono_func(CGenerator* self, TrStr fname, TrStr targ);
 __attribute__((hot)) TrStr CGenerator_get_user_decorator_attr(CGenerator* self, TrStr name);
+__attribute__((hot)) TrStr CGenerator_deco_first_str(CGenerator* self, Decorator* d);
+__attribute__((hot)) TrStr CGenerator_hw_attrs(CGenerator* self, HirFunction* f);
+__attribute__((hot)) TrStr CGenerator_hook_macro_for(CGenerator* self, HirFunction* f);
+__attribute__((hot)) TrStr CGenerator_emit_tier_hooks(CGenerator* self, HirProgram* prog);
+__attribute__((hot)) void CGenerator_emit_global_inits(CGenerator* self, HirProgram* prog);
+__attribute__((hot)) void CGenerator_emit_entry_glue(CGenerator* self, HirProgram* prog);
 __attribute__((hot)) TrStr CGenerator_get_inline_attrs(CGenerator* self, HirFunction* f);
 __attribute__((hot)) bool CGenerator_is_rt_concurrency_type(CGenerator* self, TrStr name);
 __attribute__((hot)) TrStr CGenerator_get_proto_attrs(CGenerator* self, HirFunction* f);

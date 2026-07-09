@@ -316,7 +316,7 @@ it.
 
 Two runtime additions close this gap:
 
-- **`List_TrStr`** (`runtime/tauraro_rt.h`, "Phase 2 target" of the TrStr migration):
+- **`List_TrStr`** (`runtime/tauraro_rt.h`, the refcounted-string element container of the TrStr migration):
   a dedicated `{ TrStr* data; size_t len; size_t capacity; }` container used for
   `List[str]`/`Vec[str]`/`Set[str]` and `Dict.keys()`. `List_TrStr_append` retains each
   value on insert; `List_TrStr_free` releases every element before freeing the backing

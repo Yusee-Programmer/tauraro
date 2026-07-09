@@ -1,0 +1,14 @@
+# mcu_app sub-module: a pure-Tauraro hardware driver. Reads Cortex-M core system
+# registers over MMIO (std/hal/mmio). These registers are always present on any
+# ARMv7-M part, so the read is safe under qemu.
+from std.hal.mmio import read32
+
+# SCB CPUID (0xE000ED00) — implementer/part number of the core.
+pub def cpuid() -> int:
+    unsafe:
+        return read32(0xE000ED00 as usize) as int
+
+# SysTick calibration (0xE000E01C) — a second real core register.
+pub def systick_calib() -> int:
+    unsafe:
+        return read32(0xE000E01C as usize) as int

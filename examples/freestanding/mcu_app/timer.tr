@@ -1,0 +1,19 @@
+# mcu_app sub-module: the Cortex-M SysTick timer — the standard MCU time base.
+# Enable it as a free-running down-counter, then read the current value.
+from hwio import rd, wr
+
+# SysTick: CSR @ 0xE000E010, RVR @ 0xE000E014, CVR @ 0xE000E018.
+pub def systick_start():
+    wr(0xE000E014, 0x00FFFFFF)     # reload = max
+    wr(0xE000E018, 0)              # clear current
+    wr(0xE000E010, 0x5)           # enable, processor clock, no IRQ
+pub def systick_now() -> int:
+    return rd(0xE000E018)
+# Read back the reload register — a reliable MMIO write→read round-trip: whatever
+# systick_start() wrote to RVR reads back here.
+pub def systick_reload() -> int:
+    return rd(0xE000E014)
+pub def busy(n: int):
+    mut i = 0
+    while i < n:
+        i = i + 1

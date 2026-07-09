@@ -1,0 +1,57 @@
+# A bare-metal program for QEMU mps2-an385 (Cortex-M3), written 100% in Tauraro —
+# NO hand-written .c / .h / .ld shims. The compiler generates everything:
+#   @allocator/@free/@realloc/@calloc -> the pluggable allocator macros
+#   @output                           -> the _TR_WRITE sink (print flows here)
+#   @entry                            -> the reset trampoline + .isr_vector table
+#   --emit-ld build/app.ld            -> the linker script
+#
+# Build + run:
+#   tauraroc examples/freestanding/mps2_pure.tr --freestanding --emit c --emit-ld build/app.ld
+#   arm-none-eabi-gcc -mcpu=cortex-m3 -mthumb -nostdlib -T build/app.ld \
+#       -I build/include -o app.elf $(find build -name '*.c') -lgcc
+#   qemu-system-arm -M mps2-an385 -nographic -kernel app.elf
+
+from std.hal.mmio import write32
+
+# ---- Bump allocator over a fixed RAM window (0x20080000..) ----
+# _heap_next uses a non-zero global initializer — the @entry reset trampoline now
+# runs Tauraro's global-initializer pass (emit_global_inits), so this works exactly
+# as it would in a hosted program.
+mut _heap_next: usize = 0x20080000 as usize
+
+@allocator
+def heap_alloc(n: usize) -> Pointer[u8]:
+    unsafe:
+        mut p = _heap_next as Pointer[u8]
+        _heap_next = _heap_next + ((n + 7) / 8) * 8
+        return p
+@free
+def heap_free(p: Pointer[u8]):
+    pass
+@realloc
+def heap_realloc(p: Pointer[u8], n: usize) -> Pointer[u8]:
+    return heap_alloc(n)
+@calloc
+def heap_calloc(n: usize, sz: usize) -> Pointer[u8]:
+    return heap_alloc(n * sz)
+
+# ---- UART output sink: CMSDK UART0 @ 0x40004000 ----
+@output
+def uart_write(s: Pointer[char]):
+    unsafe:
+        write32(0x40004008 as usize, 1 as u32)          # TX enable
+        mut i = 0
+        while s.offset(i).read() != (0 as char):
+            write32(0x40004000 as usize, s.offset(i).read() as u32)
+            i = i + 1
+
+# ---- Boot entry: compiler emits the vector table + reset trampoline ----
+@entry
+def kernel_main():
+    print("hello from pure-Tauraro bare metal")
+    mut total = 0
+    mut i = 1
+    while i <= 100:
+        total = total + i
+        i = i + 1
+    print("sum 1..100 = " + total.to_str())

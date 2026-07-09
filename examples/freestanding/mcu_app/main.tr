@@ -1,0 +1,125 @@
+# ============================================================================
+# mcu_app — a COMPREHENSIVE bare-metal feature tour in 100% Tauraro, split into
+# sub-modules imported by main. Target: QEMU mps2-an385 (Cortex-M3); no libc, no
+# OS, no C/.h/.ld shims. The compiler generates the reset vector + trampoline,
+# allocator/UART wiring, and the linker script.
+#
+# Demonstrates the common bare-metal use cases:
+#   • MMIO register access + read-modify-write bit manipulation   (hwio)
+#   • a GPIO driver: configure, drive, read back                  (gpio)
+#   • the Cortex-M SysTick timer as a free-running time base       (timer)
+#   • formatted UART output (decimal + hex)                        (console)
+#   • fixed-point (Q16.16) math with no FPU                        (fixedpoint)
+#   • CRC-32 data integrity                                        (crc)
+#   • a heap-backed ring buffer (ISR/consumer pattern)             (ringbuf)
+#   • integer algorithms                                           (mathx)
+#   • reading core system registers                               (sysinfo)
+#
+# Build + run (add --strict for the full borrow-checker + leak-freedom guarantee —
+# this firmware is memory-safe by that analysis, and emits an identical binary):
+#   cd examples/freestanding/mcu_app
+#   tauraroc main.tr --freestanding --strict --emit c --emit-ld build/app.ld
+#   arm-none-eabi-gcc -mcpu=cortex-m3 -mthumb -nostdlib -fno-builtin \
+#       -T build/app.ld -I build/include -o app.elf $(find build -name '*.c') -lgcc
+#   qemu-system-arm -M mps2-an385 -nographic -kernel app.elf
+# ============================================================================
+from std.hal.mmio import write32
+from console import banner, line, kv, kv_hex
+from mathx import fib, sum_to, is_prime
+from hwio import popcount, reverse_byte
+from fixedpoint import fx, fx_mul, fx_to_int
+from crc import crc32
+from ringbuf import RingBuf
+from gpio import gpio_out_enable, gpio_write
+from timer import systick_start, systick_now, systick_reload, busy
+from sysinfo import cpuid
+
+# ---- Platform: bump allocator (natural non-zero global; @entry runs the init) ----
+mut _heap_next: usize = 0x20080000 as usize
+
+@allocator
+def heap_alloc(n: usize) -> Pointer[u8]:
+    unsafe:
+        mut p = _heap_next as Pointer[u8]
+        _heap_next = _heap_next + ((n + 7) / 8) * 8
+        return p
+@free
+def heap_free(p: Pointer[u8]):
+    pass
+@realloc
+def heap_realloc(p: Pointer[u8], n: usize) -> Pointer[u8]:
+    return heap_alloc(n)
+@calloc
+def heap_calloc(n: usize, sz: usize) -> Pointer[u8]:
+    return heap_alloc(n * sz)
+
+# ---- Platform: UART output sink (CMSDK UART0 @ 0x40004000) ----
+@output
+def uart_write(s: Pointer[char]):
+    unsafe:
+        write32(0x40004008 as usize, 1 as u32)
+        mut i = 0
+        while s.offset(i).read() != (0 as char):
+            write32(0x40004000 as usize, s.offset(i).read() as u32)
+            i = i + 1
+
+def b2i(b: bool) -> int:
+    if b:
+        return 1
+    return 0
+
+# ---- Boot entry: the compiler emits the vector table + reset trampoline ----
+@entry
+def boot():
+    banner("mcu_app: bare-metal feature tour, 100% Tauraro")
+
+    # integer algorithms
+    kv("fib(20)", fib(20))
+    kv("sum 1..100", sum_to(100))
+    kv("is_prime(97)", b2i(is_prime(97)))
+
+    # bit manipulation
+    kv("popcount(0xFF)", popcount(255))
+    kv("reverse_byte(0x01)", reverse_byte(1))
+
+    # fixed-point (Q16.16), no FPU: 3.5 * 2.0
+    kv("fx 3.5*2.0", fx_to_int(fx_mul(fx(3, 5, 10), fx(2, 0, 1))))
+
+    # CRC-32 over four bytes
+    mut data = Vec[int].init(4)
+    data.push(0x12)
+    data.push(0x34)
+    data.push(0x56)
+    data.push(0x78)
+    kv("crc32", crc32(data, 4))
+
+    # ring buffer: push 10,20,30,40,50 then drain
+    mut rb = RingBuf.init(8)
+    mut k = 1
+    while k <= 5:
+        rb.push(k * 10)
+        k = k + 1
+    mut rsum = 0
+    while rb.count > 0:
+        rsum = rsum + rb.pop()
+    kv("ringbuf_sum", rsum)
+
+    # SysTick timer: enable the free-running down-counter, read its reload register
+    # back (a reliable MMIO write->read round-trip), and confirm the counter advances
+    systick_start()
+    kv_hex("mmio_readback", systick_reload())      # 0xffffff — the value written to RVR
+    mut t0 = systick_now()
+    busy(3000)
+    mut t1 = systick_now()
+    kv("timer_running", b2i(t0 != t1))
+
+    # GPIO driver: configure pin 0 as an output and drive it high then low
+    gpio_out_enable(0)
+    gpio_write(0, true)
+    gpio_write(0, false)
+    kv("gpio_driven", 1)
+
+    # core system register
+    kv_hex("cpuid", cpuid())
+
+    line("mcu_app: done")
