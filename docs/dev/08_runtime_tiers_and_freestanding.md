@@ -209,13 +209,13 @@ C/asm/ld is the compiler's burden, not the user's). Progress:
     "everything in Tauraro, down to bare metal" milestone.
   - Remaining niceties: a `target {…}` block (nicer than `--emit-ld`'s fixed map) and
     fixed-size static arrays (`[u8; N]`) so the arena needn't sit at a fixed address.
-  - **KNOWN LIMITATION (found in CI):** Tauraro runs global initializers in `main()`,
-    but `@entry` boots straight to the entry — so a non-zero global initializer
-    (`mut x: usize = 0x20080000`) is **not** applied (the global stays at its `.bss`
-    zero). Bare-metal globals must currently be correct at zero (use a local constant
-    + a zero-init offset, as `mps2_pure.tr`'s allocator does). Proper fix (follow-up):
-    factor `main()`'s global-init into a `_tr_init_globals()` that the reset
-    trampoline also calls. Symptom if you forget: a HardFault (NULL/garbage global).
+  - **Global initializers under `@entry` — FIXED ✅.** Tauraro runs global
+    initializers in `main()`; `@entry` boots past `main()`, so a non-zero global
+    (`mut x: usize = 0x20080000`) used to stay at its `.bss` zero (a silent
+    HardFault, found in CI). Now the reset trampoline runs the same global-init pass
+    (`emit_global_inits`, shared with `main()`) before calling the entry — so `@entry`
+    programs initialize globals exactly like hosted ones. `mps2_pure.tr`'s allocator
+    uses a natural `mut _heap_next: usize = 0x20080000` and runs green.
 
 - **Phase 5 — arch/HAL + drivers.** `std/hal/mmio.tr` gives volatile MMIO
   `read32/write32/read8/write8/wait_bits_set` (backed by `_tr_mmio_*` runtime

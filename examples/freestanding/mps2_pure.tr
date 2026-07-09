@@ -14,17 +14,16 @@
 from std.hal.mmio import write32
 
 # ---- Bump allocator over a fixed RAM window (0x20080000..) ----
-# NOTE: @entry boots straight to kernel_main, bypassing main() where Tauraro runs
-# global initializers — so a global must be correct at its ZERO value. _heap_off
-# starts at 0 (.bss, zeroed by the reset trampoline); the base is a local constant,
-# not an initialized global. (A future @entry that runs global init would lift this.)
-mut _heap_off: usize = 0
+# _heap_next uses a non-zero global initializer — the @entry reset trampoline now
+# runs Tauraro's global-initializer pass (emit_global_inits), so this works exactly
+# as it would in a hosted program.
+mut _heap_next: usize = 0x20080000 as usize
 
 @allocator
 def heap_alloc(n: usize) -> Pointer[u8]:
     unsafe:
-        mut p = ((0x20080000 as usize) + _heap_off) as Pointer[u8]
-        _heap_off = _heap_off + ((n + 7) / 8) * 8
+        mut p = _heap_next as Pointer[u8]
+        _heap_next = _heap_next + ((n + 7) / 8) * 8
         return p
 @free
 def heap_free(p: Pointer[u8]):

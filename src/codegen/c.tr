@@ -1085,13 +1085,34 @@ pub class CGenerator:
             i = i + 1
         return fwd + defs
 
+    # Emit the top-level global-initializer statements (assignments to hoisted globals
+    # + any module-scope code) — the SAME logic main() runs inline. Shared so the
+    # @entry reset trampoline initializes globals too: @entry boots past main(), so
+    # without this a non-zero global initializer (mut x: usize = 0x...) stays at its
+    # .bss zero (a silent HardFault). Writes via self.w.
+    pub def emit_global_inits(self, prog: HirProgram):
+        if _is_invalid_ptr(prog as usize): return
+        if _is_invalid_ptr(prog.top_level_stmts as usize): return
+        mut i = 0
+        while i < prog.top_level_stmts.len:
+            mut _tlg = false
+            match prog.top_level_stmts.get(i).read():
+                case HirStmt.SLet(gn, _, _, _, _, _, gv):
+                    if self.global_vars.contains(gn) and gv as usize != 0 as usize:
+                        self.w("    " + gn + " = " + self.gen_expr(gv) + ";\n")
+                        _tlg = true
+                case _: pass
+            if not _tlg:
+                self.gen_stmt(prog.top_level_stmts.get(i), 1)
+            i = i + 1
+
     # --freestanding @entry: emit a reset trampoline + Cortex-M .isr_vector table so
     # the user's @entry function is the boot entry — no hand-written startup.c. The
-    # trampoline copies .data, zeroes .bss, then calls the entry; the .bss/.data/
-    # _stack_top symbols come from the generated linker script (--emit-ld). Returns ""
-    # if the program has no @entry. Emitted after all function defs (the entry fn is
-    # a static function already in scope, so no forward decl is needed).
-    pub def emit_entry_glue(self, prog: HirProgram) -> str:
+    # trampoline copies .data, zeroes .bss, runs the global initializers, then calls
+    # the entry; the .bss/.data/_stack_top symbols come from the generated linker
+    # script (--emit-ld). Writes nothing if the program has no @entry. Emitted after
+    # all function defs (the entry fn is already in scope, so no forward decl needed).
+    pub def emit_entry_glue(self, prog: HirProgram):
         mut entry = ""
         mut i = 0
         while i < prog.functions.len:
@@ -1102,18 +1123,18 @@ pub class CGenerator:
                     if f.decorators.get(j).name == "entry": entry = f.name
                     j = j + 1
             i = i + 1
-        if entry == "": return ""
-        mut s = "\n/* --freestanding @entry: reset trampoline + Cortex-M vector table */\n"
-        s = s + "extern unsigned _stack_top, __bss_start__, __bss_end__, _sidata, _sdata, _edata;\n"
-        s = s + "__attribute__((used)) void _tr_reset(void){\n"
-        s = s + "    unsigned *d, *sp;\n"
-        s = s + "    for(d=&_sdata, sp=&_sidata; d<&_edata;) *d++ = *sp++;\n"
-        s = s + "    for(d=&__bss_start__; d<&__bss_end__;) *d++ = 0;\n"
-        s = s + "    " + entry + "();\n"
-        s = s + "    for(;;){}\n}\n"
-        s = s + "__attribute__((used, section(\".isr_vector\")))\n"
-        s = s + "void* const _tr_isr_vector[] = { (void*)&_stack_top, (void*)_tr_reset };\n"
-        return s
+        if entry == "": return
+        self.w("\n/* --freestanding @entry: reset trampoline + Cortex-M vector table */\n")
+        self.w("extern unsigned _stack_top, __bss_start__, __bss_end__, _sidata, _sdata, _edata;\n")
+        self.w("__attribute__((used)) void _tr_reset(void){\n")
+        self.w("    unsigned *d, *sp;\n")
+        self.w("    for(d=&_sdata, sp=&_sidata; d<&_edata;) *d++ = *sp++;\n")
+        self.w("    for(d=&__bss_start__; d<&__bss_end__;) *d++ = 0;\n")
+        self.emit_global_inits(prog)
+        self.w("    " + entry + "();\n")
+        self.w("    for(;;){}\n}\n")
+        self.w("__attribute__((used, section(\".isr_vector\")))\n")
+        self.w("void* const _tr_isr_vector[] = { (void*)&_stack_top, (void*)_tr_reset };\n")
 
     pub def get_inline_attrs(self, f: HirFunction) -> str:
         mut hw = self.hw_attrs(f)
@@ -7653,7 +7674,7 @@ pub class CGenerator:
             i = i + 1
 
         # -- Phase 7: C main entry point ---------------------------------------
-        self.w(self.emit_entry_glue(prog))
+        self.emit_entry_glue(prog)
         self.w("__attribute__((hot)) int main(int argc, char** argv) {\n")
         self.w("    _tr_argc = argc; _tr_argv = argv;\n")
         self.w("    _tr_init_console();\n")
@@ -8447,7 +8468,7 @@ pub class CGenerator:
                 i = i + 1
 
         # C main() entry point
-        self.w(self.emit_entry_glue(prog))
+        self.emit_entry_glue(prog)
         self.w("__attribute__((hot)) int main(int argc, char** argv) {\n")
         self.w("    _tr_argc = argc; _tr_argv = argv;\n")
         self.w("    _tr_init_console();\n")
