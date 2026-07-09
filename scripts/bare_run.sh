@@ -38,8 +38,9 @@ echo "  bare.elf linked OK ($(stat -c%s "$APP/build/bare.elf" 2>/dev/null || ech
 
 out="$(timeout 20 "$QEMU" -M mps2-an385 -cpu cortex-m3 -nographic -kernel "$APP/build/bare.elf" 2>&1 || true)"
 echo "--- UART output ---"; echo "$out" | sed 's/^/    /'
-if echo "$out" | grep -q "fib(20) = 6765" && echo "$out" | grep -q "sum 1..100 = 5050" \
-   && echo "$out" | grep -q "is_prime(97) = 1" && echo "$out" | grep -q "mcu_app: done"; then
+if echo "$out" | grep -q "fib(20) = 6765" && echo "$out" | grep -q "crc32 = 1242107544" \
+   && echo "$out" | grep -q "ringbuf_sum = 150" && echo "$out" | grep -q "popcount(0xFF) = 8" \
+   && echo "$out" | grep -q "mcu_app: done"; then
     echo "BARE-METAL RUN OK ✅ — a multi-module 100%-Tauraro binary executed on bare metal"
     exit 0
 else

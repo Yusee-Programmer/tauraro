@@ -1,0 +1,10 @@
+# mcu_app sub-module: Q16.16 fixed-point arithmetic — how you do fractional math
+# on an MCU with no FPU. 1.0 == 65536.
+pub def fx(whole: int, num: int, den: int) -> int:
+    return (whole << 16) + ((num << 16) / den)
+pub def fx_mul(a: int, b: int) -> int:
+    return (a * b) >> 16
+pub def fx_div(a: int, b: int) -> int:
+    return (a << 16) / b
+pub def fx_to_int(a: int) -> int:
+    return a >> 16

@@ -1,0 +1,16 @@
+# mcu_app sub-module: CRC-32 (IEEE, poly 0xEDB88320) — ubiquitous in firmware for
+# validating packets and flash images. Pure bit manipulation.
+pub def crc32(data: Vec[int], len: int) -> int:
+    mut crc = 0xFFFFFFFF
+    mut i = 0
+    while i < len:
+        crc = crc ^ (data.get(i) & 0xFF)
+        mut j = 0
+        while j < 8:
+            if (crc & 1) != 0:
+                crc = (crc >> 1) ^ 0xEDB88320
+            else:
+                crc = crc >> 1
+            j = j + 1
+        i = i + 1
+    return (crc ^ 0xFFFFFFFF) & 0xFFFFFFFF
