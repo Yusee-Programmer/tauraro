@@ -1,0 +1,62 @@
+# Fixed-size arrays [T; N]: inline value-type storage, zero-init on declaration,
+# bounds-checked element read/write, compile-time .len, and .as_ptr() buffer interop.
+
+# A module-level fixed array is a real global (zero-init, shared across functions) —
+# not a main-local. Exercised as a bump-allocated arena via as_ptr().
+mut _arena: [u8; 32]
+mut _off: usize = 0 as usize
+
+def arena_bump(n: usize) -> Pointer[u8]:
+    unsafe:
+        mut p: Pointer[u8] = _arena.as_ptr().offset(_off as int)
+        _off = _off + n
+        return p
+
+def sum4(a: [int; 4]) -> int:
+    mut s = 0
+    mut i = 0
+    while i < 4:
+        s = s + a[i]
+        i = i + 1
+    return s
+
+def main():
+    # Declared without a value → zero-initialized aggregate.
+    mut a: [int; 4]
+    print(a[0])                 # 0
+    print(a.len)                # 4
+
+    a[0] = 10
+    a[1] = 20
+    a[2] = 30
+    a[3] = 40
+
+    mut total = 0
+    mut i = 0
+    while i < 4:
+        total = total + a[i]
+        i = i + 1
+    print(total)                # 100
+
+    # Passed by value to a function.
+    print(sum4(a))              # 100
+
+    # A byte array (distinct element type → distinct monomorphized struct).
+    mut buf: [u8; 3]
+    buf[0] = 1
+    buf[1] = 2
+    buf[2] = 3
+    print(buf[0] + buf[1] + buf[2])   # 6
+    print(buf.len)              # 3
+
+    # Global-arena bump allocation via as_ptr(): writes through the shared global.
+    unsafe:
+        mut r0: Pointer[u8] = arena_bump(4 as usize)
+        r0.write(0x11 as u8)
+        mut r1: Pointer[u8] = arena_bump(4 as usize)
+        r1.write(0x22 as u8)
+    print(_arena[0])            # 17
+    print(_arena[4])            # 34
+    print(_off as int)          # 8
+
+    print("fixed array ok")

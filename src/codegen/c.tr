@@ -470,6 +470,11 @@ pub class CGenerator:
         if (n == "ref" or n == "mut_ref") and ty.args.len > 0:
             return self.type_to_c(ty.args.get(0).read())
 
+        # Fixed-size array [T; N]: a zero-cost VALUE-type struct wrapping a C array
+        # (stack-allocated, no ARC). Emitted once as _TrArr_<Tsfx>_<N>.
+        if n == "Array" and ty.array_size > 0 and ty.args.len > 0:
+            return self.ensure_array_type(ty)
+
         # Function-pointer type (def(...)->R): stored as a void* function pointer.
         # Zero-cost: the call site casts back to the exact signature before calling.
         if n == "def": return "void*"
@@ -785,6 +790,30 @@ pub class CGenerator:
 
     # Ensure a monomorphized version of cls is generated into mono_buf.
     # Safe to call multiple times - guarded by mono_done map.
+    # Emit (once) the value-type struct for a fixed-size array [T; N] and return its
+    # C name (_TrArr_<Tsfx>_<N>). A plain C array can't be a uniform type prefix, so we
+    # wrap it in a struct — giving value semantics (copyable, passable) and a clean
+    # `.data[i]` index. No __rc: it's a stack value, never refcounted.
+    pub def ensure_array_type(self, ty: AstType) -> str:
+        mut elem = ty.args.get(0).read()
+        mut elem_c = self.type_to_c(elem)
+        mut sfx = self.type_args_suffix(ty.args)
+        mut nm = "_TrArr_" + sfx + "_" + ty.array_size.to_str()
+        if not self.mono_done.contains(nm):
+            self.mono_done.insert(nm, true)
+            self.value_types.insert(nm, true)
+            mut old_buf  = self.buf
+            mut old_sbuf = self.struct_buf
+            mut old_pbuf = self.proto_buf
+            self.buf        = self.mono_buf
+            self.struct_buf = self.mono_buf
+            self.proto_buf  = self.mono_buf
+            self.w("typedef struct " + nm + " { " + elem_c + " data[" + ty.array_size.to_str() + "]; } " + nm + ";\n")
+            self.buf        = old_buf
+            self.struct_buf = old_sbuf
+            self.proto_buf  = old_pbuf
+        return nm
+
     pub def ensure_mono(self, cls: HirClass, type_args: Vec[Pointer[AstType]]):
         mut sfx = self.type_args_suffix(type_args)
         mut mono_key = cls.name + "_" + sfx
@@ -1098,8 +1127,15 @@ pub class CGenerator:
             mut _tlg = false
             match prog.top_level_stmts.get(i).read():
                 case HirStmt.SLet(gn, _, _, _, _, _, gv):
-                    if self.global_vars.contains(gn) and gv as usize != 0 as usize:
-                        self.w("    " + gn + " = " + self.gen_expr(gv) + ";\n")
+                    if self.global_vars.contains(gn):
+                        # File-scope globals are already declared (and zero-initialized
+                        # by C static storage). With a value, run the initializer here in
+                        # the boot path; without one, the static zero suffices. Either way
+                        # never fall through to gen_stmt, which would re-declare (shadow)
+                        # the global as a main-local (breaks cross-function globals, e.g.
+                        # a `[u8; N]` arena shared with an @allocator).
+                        if gv as usize != 0 as usize:
+                            self.w("    " + gn + " = " + self.gen_expr(gv) + ";\n")
                         _tlg = true
                 case _: pass
             if not _tlg:
@@ -2541,6 +2577,8 @@ pub class CGenerator:
             if obj_s == t_n: return t_n + "_make_" + p + "()"
             return obj_s + ".data." + p
         if t_n == "Pointer": return "(*" + obj_s + ")." + p
+        if t_n == "Array" and (p == "len" or p == "length"):
+            return "((long long)" + hir_expr_type(o).array_size.to_str() + ")"   # compile-time N
         if _is_str_type(t_n) and (p == "len" or p == "length"):
             return "((long long)_tr_strlen(" + self.strz(obj_s) + "))"
         if t_n == "StringBuilder" and (p == "len" or p == "length"):
@@ -2586,6 +2624,11 @@ pub class CGenerator:
         mut is_idx = self.gen_expr(idx)
         mut ty_n: str = hir_expr_type(o).name
         if ty_n == "Pointer": return os + "[" + is_idx + "]"
+        if ty_n == "Array":
+            # Fixed-size array: bounds-checked `.data[i]` (lvalue + rvalue). N is the
+            # compile-time size carried on the type.
+            mut arr_o_ty = hir_expr_type(o)
+            return os + ".data[(_tr_bounds_check(" + is_idx + ", " + arr_o_ty.array_size.to_str() + "), " + is_idx + ")]"
         if ty_n == "List" or ty_n == "Vec":
             # Bounds-checked access - works as both lvalue and rvalue.
             # The comma operator in the subscript runs the check then uses the index.
@@ -3498,6 +3541,18 @@ pub class CGenerator:
     pub def gen_method_call(self, obj: Pointer[HirExpr], method: str, args: Vec[Pointer[HirExpr]], call_ty: AstType) -> str:
         mut obj_s = self.gen_expr(obj)
         mut t_n: str = hir_expr_type(obj).name
+
+        # Fixed-size array element read a[i]: sema lowers to EMethodCall(a,"get_index",[i]).
+        # Emit a bounds-checked aggregate index; N is the compile-time length on the type.
+        if t_n == "Array" and (method == "get_index" or method == "get") and args.len > 0:
+            mut _ar_ty_r = hir_expr_type(obj)
+            mut _ar_idx_r = self.gen_expr(args.get(0))
+            return obj_s + ".data[(_tr_bounds_check(" + _ar_idx_r + ", " + _ar_ty_r.array_size.to_str() + "), " + _ar_idx_r + ")]"
+
+        # Fixed-size array base pointer a.as_ptr() -> Pointer[T]: the inline `T data[N]`
+        # aggregate decays to `T*` at element 0 — usable for buffer/DMA/bump-alloc interop.
+        if t_n == "Array" and method == "as_ptr":
+            return obj_s + ".data"
 
         # Fallback: when HIR stores void for an EPropAccess type (cross-module field lookup),
         # recover the actual type from the parent class field declaration
@@ -6003,6 +6058,8 @@ pub class CGenerator:
                         self.shared_vars.insert(n, ty.name)
                     elif c_ty == "Result" or c_ty == "Option":
                         self.w(" = (" + c_ty + "){0};\n")
+                    elif ty.name == "Array" and ty.array_size > 0:
+                        self.w(" = {0};\n")   # fixed-size array: zero-init the aggregate
                     else:
                         self.w(" = 0;\n")
                 self.decl_vars.insert(n, true)
@@ -6093,6 +6150,14 @@ pub class CGenerator:
                                 else:
                                     _di_set = "_tr_dict_set(" + _di_obj + ", " + self.dict_key_arg(mc_args.get(0)) + ", " + self.dict_val_arg(v) + ")"
                                 self.w(pad + self.flush_wraps(_di_set, true) + ";\n")
+                                return
+                            # Fixed-size array index-assign a[i] = v -> a.data[i] = v (bounds-checked lvalue).
+                            if mc_ty_n == "Array":
+                                mut _ai_obj = self.gen_expr(mc_obj)
+                                mut _ai_ty = hir_expr_type(mc_obj)
+                                mut _ai_key = self.gen_expr(mc_args.get(0))
+                                mut _ai_lval = _ai_obj + ".data[(_tr_bounds_check(" + _ai_key + ", " + _ai_ty.array_size.to_str() + "), " + _ai_key + ")]"
+                                self.w(pad + self.flush_wraps(_ai_lval + " = " + self.gen_expr(v), true) + ";\n")
                                 return
                     case _: pass
                 mut _assign_rhs = ""
@@ -7273,6 +7338,10 @@ pub class CGenerator:
         while i < ty.args.len:
             self.scan_mono_ty(ty.args.get(i).read())
             i = i + 1
+        # Fixed-size array [T; N]: emit its value-type struct now (pre-types.h) so the
+        # typedef is visible everywhere, not lazily during a later pass.
+        if ty.name == "Array" and ty.array_size > 0 and ty.args.len > 0:
+            self.ensure_array_type(ty)
         if ty.args.len > 0 and self.classes.contains(ty.name) and ty.name != "Vec" and ty.name != "Map" and ty.name != "Dict" and ty.name != "List":
             mut ucls = self.classes.get(ty.name)
             if ucls.generics.len > 0:
@@ -8499,8 +8568,13 @@ pub class CGenerator:
                 mut _tlg = false
                 match prog.top_level_stmts.get(i).read():
                     case HirStmt.SLet(tln2, _, _, _, _, _, tlv2):
-                        if self.global_vars.contains(tln2) and tlv2 as usize != 0 as usize:
-                            self.w("    " + tln2 + " = " + self.gen_expr(tlv2) + ";\n")
+                        if self.global_vars.contains(tln2):
+                            # File-scope global: initialize in main's boot path when it has
+                            # a value; a value-less global (e.g. a `[u8; N]` arena) is already
+                            # zero-initialized by C static storage. Never fall through to
+                            # gen_stmt, which would re-declare (shadow) the global as a local.
+                            if tlv2 as usize != 0 as usize:
+                                self.w("    " + tln2 + " = " + self.gen_expr(tlv2) + ";\n")
                             _tlg = true
                     case _: pass
                 if not _tlg:

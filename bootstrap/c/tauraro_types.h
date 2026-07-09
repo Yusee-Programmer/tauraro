@@ -1640,6 +1640,7 @@ typedef struct AstType {
     long long from_index;
     bool is_borrow;
     bool is_mut_borrow;
+    long long array_size;
 } AstType;
 static void _trdrop_AstType(void* vp) {
     AstType* self = (AstType*)vp; (void)self;
@@ -3311,6 +3312,7 @@ __attribute__((hot)) TrStr CGenerator_list_elem_suffix(CGenerator* self, TrStr n
 __attribute__((hot)) TrStr CGenerator_list_sfx(CGenerator* self, TrStr elem_sfx);
 __attribute__((hot)) TrStr CGenerator_type_args_suffix(CGenerator* self, List_ptr* args);
 __attribute__((hot)) TrStr CGenerator_synth_class_suffix(CGenerator* self, HirClass* ucls);
+__attribute__((hot)) TrStr CGenerator_ensure_array_type(CGenerator* self, AstType* ty);
 __attribute__((hot)) void CGenerator_ensure_mono(CGenerator* self, HirClass* cls, List_ptr* type_args);
 __attribute__((hot)) void CGenerator_ensure_mono_func(CGenerator* self, TrStr fname, TrStr targ);
 __attribute__((hot)) TrStr CGenerator_get_user_decorator_attr(CGenerator* self, TrStr name);

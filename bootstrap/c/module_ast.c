@@ -19,6 +19,8 @@ __attribute__((malloc,returns_nonnull,hot)) AstType* AstType_init(TrStr name) {
     /* pass */
     t->is_mut_borrow = false;
     /* pass */
+    t->array_size = 0LL;
+    /* pass */
     return t;
 }
 
