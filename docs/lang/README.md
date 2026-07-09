@@ -54,6 +54,7 @@ These topics are **optional** for everyday Tauraro development. Normal programs 
 | A8 | [Zero-Copy Guide](advanced/08_zero_copy.md) | When zero-copy wins (StrView, borrowed payloads, dict borrows) vs parity |
 | A9 | [Safety Specification](advanced/09_safety_spec.md) | **Normative**: ARC-floor invariants, what `--strict` proves/elides, how it's verified |
 | A10 | [Macros](advanced/10_macros.md) | `macro def` + `@` — compile-time code generation via f-string templates over an `item` reflection |
+| A11 | [Bare-Metal & Freestanding](advanced/11_bare_metal.md) | The `std`/`--no-std`/`--freestanding` runtime tiers, cross-compilation, `@entry`/`@allocator`/`@output`, `@section`/`@naked`/`@interrupt`, `--emit-ld`, `std/hal/mmio` — MCU firmware & drivers, 100% in Tauraro |
 
 ---
 

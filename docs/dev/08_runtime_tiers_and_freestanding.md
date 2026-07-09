@@ -4,6 +4,10 @@ Extend Tauraro's *gradual safety* dial with an orthogonal *gradual runtime* dial
 turn the runtime **down** without turning the safety **off**. The banner:
 **memory-safe, Python-syntax, all the way down to bare metal.**
 
+> **This doc is the internals.** The user-facing guide — how to *write* bare-metal
+> Tauraro (the `@entry`/`@allocator`/`@output` decorators, `--emit-ld`, `std/hal/mmio`,
+> a complete firmware) — is [lang/advanced/11_bare_metal.md](../lang/advanced/11_bare_metal.md).
+
 ## The three tiers (mirrors Rust core/alloc/std)
 
 | Tier | Flag | Has | Needs | Targets |

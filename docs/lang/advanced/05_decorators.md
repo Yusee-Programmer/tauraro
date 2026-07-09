@@ -259,6 +259,24 @@ allocation into free stack copies.
 
 ---
 
+## Bare-metal decorators
+
+A family of decorators exists for **freestanding / bare-metal** builds (`--freestanding`). They let you write firmware — the boot entry, the allocator, the output sink, interrupt handlers — as plain Tauraro functions, and the compiler generates all the startup/linker glue:
+
+| Decorator | Purpose |
+|---|---|
+| `@entry` | The boot entry — the compiler emits the reset trampoline + `.isr_vector` table |
+| `@allocator` / `@free` / `@realloc` / `@calloc` | Wire the runtime's pluggable allocator to your functions |
+| `@output` | Route `print()` (`_TR_WRITE`) to your byte sink (e.g. a UART) |
+| `@section("name")` | `__attribute__((section("name")))` — place a symbol in a linker section |
+| `@naked` | `__attribute__((naked))` — no prologue/epilogue (expert / inline-asm) |
+| `@interrupt` | `__attribute__((interrupt))` — an interrupt service routine |
+| `@used` | `__attribute__((used))` — keep a symbol the linker would drop |
+
+These are covered in full — with a complete firmware example — in **[11 — Bare-Metal & Freestanding](11_bare_metal.md)**. Note `@interrupt`/`@naked` are target-specific and do not compile on hosted x86.
+
+---
+
 ## Custom Decorators
 
 Custom decorators are compile-time macros that inject C attributes into the generated code. They are declared with `decorator def` and must return a `str` naming a C compiler attribute:
