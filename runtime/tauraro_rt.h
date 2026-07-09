@@ -2223,11 +2223,20 @@ static inline long long _tr_getpid(void) { return (long long)_getpid(); }
 static inline long long _tr_getpid(void) { return (long long)getpid(); }
 #endif
 
-#ifndef TAURARO_BARE
-#include <time.h>
+/* time.h is hosted, not freestanding: arm-none-eabi/newlib bundles it but bare
+ * toolchains (riscv64-unknown-elf) don't. Use it when the toolchain provides it
+ * (real wall-clock + calendar); otherwise the datetime helpers below stub out.
+ * _TR_HAS_TIME gates every time.h user (here + the DateTime helpers). */
+#if defined(__has_include)
+#  if __has_include(<time.h>)
+#    include <time.h>
+#    define _TR_HAS_TIME 1
+#  endif
+#endif
+#ifdef _TR_HAS_TIME
 static inline long long _tr_timestamp(void) { return (long long)time(NULL); }
 #else
-static inline long long _tr_timestamp(void) { return 0LL; }  /* bare metal: no wall clock */
+static inline long long _tr_timestamp(void) { return 0LL; }  /* no wall clock */
 #endif
 
 /* High-resolution millisecond wall-clock: QueryPerformanceCounter on Windows,
@@ -4539,6 +4548,7 @@ static inline void _tr_init_console(void) {}
    ========================================================================== */
 
 /* -- DateTime helpers ------------------------------------------------------ */
+#ifdef _TR_HAS_TIME
 static inline int    _tr_tm_year(long long ts)    { time_t t=(time_t)ts; struct tm* m=localtime(&t); return m->tm_year+1900; }
 static inline int    _tr_tm_month(long long ts)   { time_t t=(time_t)ts; struct tm* m=localtime(&t); return m->tm_mon+1; }
 static inline int    _tr_tm_day(long long ts)     { time_t t=(time_t)ts; struct tm* m=localtime(&t); return m->tm_mday; }
@@ -4558,6 +4568,22 @@ static inline char* _tr_strftime(long long ts, const char* fmt) {
     char* buf=(char*)_tr_c_malloc(256); if(!buf) return _tr_empty_heap_str();
     strftime(buf,256,fmt,m); return buf;
 }
+#else  /* no <time.h> (bare toolchain): no calendar/RTC — stub the datetime helpers */
+static inline int    _tr_tm_year(long long ts)    { (void)ts; return 1970; }
+static inline int    _tr_tm_month(long long ts)   { (void)ts; return 1; }
+static inline int    _tr_tm_day(long long ts)     { (void)ts; return 1; }
+static inline int    _tr_tm_hour(long long ts)    { (void)ts; return 0; }
+static inline int    _tr_tm_min(long long ts)     { (void)ts; return 0; }
+static inline int    _tr_tm_sec(long long ts)     { (void)ts; return 0; }
+static inline int    _tr_tm_weekday(long long ts) { (void)ts; return 0; }
+static inline int    _tr_tm_yearday(long long ts) { (void)ts; return 1; }
+static inline long long _tr_tm_make(int year,int month,int day,int hour,int mi,int sec) {
+    (void)year;(void)month;(void)day;(void)hour;(void)mi;(void)sec; return 0LL;
+}
+static inline char* _tr_strftime(long long ts, const char* fmt) {
+    (void)ts;(void)fmt; return _tr_empty_heap_str();
+}
+#endif
 
 /* -- OS / System helpers (platform-specific) ------------------------------- */
 #if defined(TAURARO_BARE) && !defined(__wasi__)
