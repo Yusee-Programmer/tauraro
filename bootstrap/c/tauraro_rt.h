@@ -2223,8 +2223,12 @@ static inline long long _tr_getpid(void) { return (long long)_getpid(); }
 static inline long long _tr_getpid(void) { return (long long)getpid(); }
 #endif
 
+#ifndef TAURARO_BARE
 #include <time.h>
 static inline long long _tr_timestamp(void) { return (long long)time(NULL); }
+#else
+static inline long long _tr_timestamp(void) { return 0LL; }  /* bare metal: no wall clock */
+#endif
 
 /* High-resolution millisecond wall-clock: QueryPerformanceCounter on Windows,
    CLOCK_MONOTONIC on POSIX.  Used by std.sys.time.time_ms / elapsed_ms. */

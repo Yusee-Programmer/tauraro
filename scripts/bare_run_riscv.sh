@@ -15,7 +15,7 @@ if [ -z "$GCC" ] || [ -z "$QEMU" ]; then
     echo "(riscv64 gcc / qemu-system-riscv64 not installed — skipping RISC-V bare-metal run)"; exit 0
 fi
 # A Linux-targeted riscv gcc (riscv64-linux-gnu-gcc) can still build freestanding.
-WARN="-Wno-string-compare -Wno-comment -Wno-attributes -Wno-unused-value -Wno-builtin-declaration-mismatch -Wno-int-conversion -Wno-incompatible-pointer-types"
+WARN="-Wno-string-compare -Wno-comment -Wno-attributes -Wno-unused-value -Wno-builtin-declaration-mismatch -Wno-int-conversion -Wno-incompatible-pointer-types -Wno-discarded-qualifiers"
 APP="examples/freestanding/riscv_hello"
 
 echo "=============================================================="
