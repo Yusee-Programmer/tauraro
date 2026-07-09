@@ -1,0 +1,63 @@
+# ============================================================================
+# mcu_app — a COMPREHENSIVE bare-metal program in 100% Tauraro, split across
+# sub-modules that are imported into main. Target: QEMU mps2-an385 (Cortex-M3),
+# no libc, no OS, no C/.h/.ld shims. The compiler generates the reset vector,
+# trampoline, allocator/UART wiring, and the linker script.
+#
+# Build + run:
+#   cd examples/freestanding/mcu_app
+#   tauraroc main.tr --freestanding --emit c --emit-ld build/app.ld
+#   arm-none-eabi-gcc -mcpu=cortex-m3 -mthumb -nostdlib -fno-builtin \
+#       -T build/app.ld -I build/include -o app.elf $(find build -name '*.c') -lgcc
+#   qemu-system-arm -M mps2-an385 -nographic -kernel app.elf
+# ============================================================================
+from std.hal.mmio import write32
+from console import banner, line, kv
+from mathx import fib, sum_to, is_prime
+from sysinfo import cpuid, systick_calib
+
+# ---- Platform: bump allocator (natural non-zero global — @entry runs the init) ----
+mut _heap_next: usize = 0x20080000 as usize
+
+@allocator
+def heap_alloc(n: usize) -> Pointer[u8]:
+    unsafe:
+        mut p = _heap_next as Pointer[u8]
+        _heap_next = _heap_next + ((n + 7) / 8) * 8
+        return p
+@free
+def heap_free(p: Pointer[u8]):
+    pass
+@realloc
+def heap_realloc(p: Pointer[u8], n: usize) -> Pointer[u8]:
+    return heap_alloc(n)
+@calloc
+def heap_calloc(n: usize, sz: usize) -> Pointer[u8]:
+    return heap_alloc(n * sz)
+
+# ---- Platform: UART output sink (CMSDK UART0 @ 0x40004000) ----
+@output
+def uart_write(s: Pointer[char]):
+    unsafe:
+        write32(0x40004008 as usize, 1 as u32)          # TX enable
+        mut i = 0
+        while s.offset(i).read() != (0 as char):
+            write32(0x40004000 as usize, s.offset(i).read() as u32)
+            i = i + 1
+
+def bool_to_int(b: bool) -> int:
+    if b:
+        return 1
+    return 0
+
+# ---- Boot entry: compiler emits the vector table + reset trampoline ----
+@entry
+def boot():
+    banner("mcu_app: multi-module bare-metal in pure Tauraro")
+    kv("fib(20)", fib(20))
+    kv("sum 1..100", sum_to(100))
+    kv("is_prime(97)", bool_to_int(is_prime(97)))
+    kv("is_prime(91)", bool_to_int(is_prime(91)))
+    kv("cpuid_nonzero", bool_to_int(cpuid() != 0))
+    kv("systick_calib_read", bool_to_int(systick_calib() >= 0))
+    line("mcu_app: done")

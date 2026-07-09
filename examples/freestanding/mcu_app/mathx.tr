@@ -1,0 +1,31 @@
+# mcu_app sub-module: pure integer computation (no OS, no allocation).
+pub def fib(n: int) -> int:
+    if n < 2:
+        return n
+    mut a = 0
+    mut b = 1
+    mut i = 2
+    while i <= n:
+        mut c = a + b
+        a = b
+        b = c
+        i = i + 1
+    return b
+
+pub def sum_to(n: int) -> int:
+    mut total = 0
+    mut i = 1
+    while i <= n:
+        total = total + i
+        i = i + 1
+    return total
+
+pub def is_prime(n: int) -> bool:
+    if n < 2:
+        return false
+    mut i = 2
+    while i * i <= n:
+        if n % i == 0:
+            return false
+        i = i + 1
+    return true

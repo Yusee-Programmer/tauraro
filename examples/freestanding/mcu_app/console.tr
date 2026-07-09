@@ -1,0 +1,11 @@
+# mcu_app sub-module: line + labeled-value console output, built on print()
+# (which the main module routes to the UART via @output). Exercises the Tauraro
+# allocator through .to_str() + string concatenation.
+pub def banner(title: str):
+    print("=== " + title + " ===")
+
+pub def line(s: str):
+    print(s)
+
+pub def kv(label: str, val: int):
+    print(label + " = " + val.to_str())

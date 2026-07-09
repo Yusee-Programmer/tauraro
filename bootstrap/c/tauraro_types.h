@@ -3306,7 +3306,8 @@ __attribute__((hot)) TrStr CGenerator_deco_first_str(CGenerator* self, Decorator
 __attribute__((hot)) TrStr CGenerator_hw_attrs(CGenerator* self, HirFunction* f);
 __attribute__((hot)) TrStr CGenerator_hook_macro_for(CGenerator* self, HirFunction* f);
 __attribute__((hot)) TrStr CGenerator_emit_tier_hooks(CGenerator* self, HirProgram* prog);
-__attribute__((hot)) TrStr CGenerator_emit_entry_glue(CGenerator* self, HirProgram* prog);
+__attribute__((hot)) void CGenerator_emit_global_inits(CGenerator* self, HirProgram* prog);
+__attribute__((hot)) void CGenerator_emit_entry_glue(CGenerator* self, HirProgram* prog);
 __attribute__((hot)) TrStr CGenerator_get_inline_attrs(CGenerator* self, HirFunction* f);
 __attribute__((hot)) bool CGenerator_is_rt_concurrency_type(CGenerator* self, TrStr name);
 __attribute__((hot)) TrStr CGenerator_get_proto_attrs(CGenerator* self, HirFunction* f);
