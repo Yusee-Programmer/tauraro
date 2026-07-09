@@ -1,0 +1,33 @@
+# Generic methods: a method with its OWN type parameter (`def m[T](self, ..)`),
+# distinct from any class generics. Monomorphized per call like a generic free
+# function — so value-type args work (not void*-erased) and the body can call
+# methods on the T-typed argument.
+
+class Animal:
+    pub name: str
+extend Animal:
+    pub def speak(self) -> str:
+        return "meow"
+
+class Zoo:
+    pub count: int
+extend Zoo:
+    # Returns T — was void*-erased before (broke for value types like str).
+    pub def keep[T](self, x: T) -> T:
+        return x
+    # Calls a method on the T-typed argument — impossible under erasure (would emit T_speak).
+    pub def describe[T](self, a: T) -> str:
+        return a.speak()
+
+def main():
+    mut z = Zoo()
+
+    # Value-type + primitive generics through a method.
+    print(z.keep(7))            # 7
+    print(z.keep("kept"))       # kept
+
+    # Method dispatch on a generic method's type param, inferred from the argument.
+    mut a = Animal()
+    print(z.describe(a))        # meow
+
+    print("generic methods ok")

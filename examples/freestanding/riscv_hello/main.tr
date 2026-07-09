@@ -26,6 +26,12 @@ def heap_alloc(n: usize) -> Pointer[u8]:
 @free
 def heap_free(p: Pointer[u8]):
     pass
+@realloc
+def heap_realloc(p: Pointer[u8], n: usize) -> Pointer[u8]:
+    return heap_alloc(n)
+@calloc
+def heap_calloc(n: usize, sz: usize) -> Pointer[u8]:
+    return heap_alloc(n * sz)
 
 # ---- Platform: UART output sink (NS16550 THR @ 0x10000000 on qemu virt) ----
 @output
