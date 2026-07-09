@@ -2078,6 +2078,10 @@ static void yield_val(void* v) { (void)v; }
  * code can use them via  extern "C": def _tr_read_stdin_line() -> str
  * without needing a hand-written C shim file.
  * ──────────────────────────────────────────────────────────────────────── */
+/* Hosted only: <io.h>/<unistd.h> (isatty, fileno) aren't freestanding headers —
+ * bare toolchains like riscv64-unknown-elf lack <unistd.h>. Under TAURARO_BARE there
+ * is no stdio/tty, so skip the include; the bare fallbacks below don't use it. */
+#ifndef TAURARO_BARE
 #ifdef _WIN32
 #  ifndef _INC_IO
 #    include <io.h>     /* _isatty, _fileno on Windows */
@@ -2086,6 +2090,7 @@ static void yield_val(void* v) { (void)v; }
 #  ifndef _UNISTD_H
 #    include <unistd.h> /* isatty, STDIN_FILENO on Unix */
 #  endif
+#endif
 #endif
 
 /* ── New built-in methods added in v0.0.5 ────────────────────────────────── */
