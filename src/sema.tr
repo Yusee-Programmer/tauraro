@@ -2738,8 +2738,22 @@ extend Sema:
     # methods (Tauraro's monomorphized generics dispatch by method, so structural
     # satisfaction is exactly what makes the body compile). Unknown bound names are
     # accepted (lenient — could be a non-interface marker); primitives never satisfy.
+    # A name is an abstract type parameter in the current scope (not a concrete type)
+    # if it's a single-letter param (T/K/V/…) or appears in the enclosing function's
+    # generics — bounds on such a name can't be checked yet, so we don't false-error.
+    pub def _is_type_param_in_scope(self, name: str) -> bool:
+        if _tr_strlen(name) == 1: return true
+        mut i = 0
+        while i < self.current_func_generics.len:
+            if self.current_func_generics.get(i) == name: return true
+            i = i + 1
+        return false
+
     pub def _type_satisfies_bound(self, type_name: str, iface_name: str) -> bool:
         if not self.interfaces.contains(iface_name): return true
+        # An unresolved type parameter (Box[T] inside a generic body) is checked when
+        # the OUTER generic is instantiated with a concrete type — accept it here.
+        if self._is_type_param_in_scope(type_name): return true
         if not self.classes.contains(type_name): return false
         mut cls = self.classes.get(type_name)
         mut ii = 0
@@ -2785,6 +2799,49 @@ extend Sema:
                                 self.error("[G-1] Type '" + concrete_n + "' does not satisfy the bound '" + iface_n + "' required by type parameter '" + gc.target + "' of '" + fname + "'.\n      FIX: implement all methods of interface '" + iface_n + "' on '" + concrete_n + "', or add 'implements " + iface_n + "'.")
                             bi = bi + 1
                 pi = pi + 1
+            ci = ci + 1
+
+    # Substitute a generic class's type params for their concrete args throughout a
+    # type — including NESTED positions. `of() -> Box[T]` called on Box[Cat] yields
+    # Box[Cat], not just when the whole return type is a bare `T`. Rebuilds only when
+    # a param is present; preserves array_size.
+    pub def _subst_ret_generics(self, ty: AstType, generics: Vec[str], concrete: Vec[Pointer[AstType]]) -> AstType:
+        mut gi = 0
+        while gi < generics.len:
+            if generics.get(gi) == ty.name and gi < concrete.len:
+                return concrete.get(gi).read()
+            gi = gi + 1
+        if ty.args.len == 0: return ty
+        mut nt = AstType.init(ty.name)
+        nt.array_size = ty.array_size
+        nt.args = Vec[Pointer[AstType]].init(ty.args.len)
+        mut ai = 0
+        while ai < ty.args.len:
+            nt.args.push(box_asttype(self._subst_ret_generics(ty.args.get(ai).read(), generics, concrete)))
+            ai = ai + 1
+        return nt
+
+    # [G-1] Enforce generic bounds when a generic CLASS is instantiated with concrete
+    # type args (Box[Cat]): each `T: Iface` constraint requires the arg bound to T to
+    # satisfy the interface. arg_tys are positional, aligned with the class's generics.
+    pub def check_class_bounds(self, cls_name: str, arg_tys: Vec[Pointer[AstType]]):
+        if not self.classes.contains(cls_name): return
+        mut cd = self.classes.get(cls_name)
+        if cd.constraints.len == 0: return
+        mut ci = 0
+        while ci < cd.constraints.len:
+            mut gc = cd.constraints.get(ci)
+            mut gpi = 0
+            while gpi < cd.generics.len:
+                if cd.generics.get(gpi) == gc.target and gpi < arg_tys.len:
+                    mut concrete_n: str = arg_tys.get(gpi).read().name
+                    mut bi = 0
+                    while bi < gc.bounds.len:
+                        mut iface_n = gc.bounds.get(bi).read().name
+                        if not self._type_satisfies_bound(concrete_n, iface_n):
+                            self.error("[G-1] Type '" + concrete_n + "' does not satisfy the bound '" + iface_n + "' required by type parameter '" + gc.target + "' of class '" + cls_name + "'.\n      FIX: implement all methods of interface '" + iface_n + "' on '" + concrete_n + "', or add 'implements " + iface_n + "'.")
+                        bi = bi + 1
+                gpi = gpi + 1
             ci = ci + 1
 
     pub def register_decl(self, d: Pointer[Decl]):
@@ -5097,14 +5154,10 @@ extend Sema:
                                 elif ret_ty.name == "void":
                                     ret_ty = _mdef.ret_ty.read()  # fallback: first match
                         _mi = _mi + 1
-                    # Substitute generic type params: T->concrete when object has type args
+                    # Substitute generic type params: T->concrete when object has type
+                    # args — including nested (`of() -> Box[T]` on Box[Cat] -> Box[Cat]).
                     if _cls.generics.len > 0 and hobj_ty.args.len > 0:
-                        mut _gi4 = 0
-                        while _gi4 < _cls.generics.len:
-                            if _cls.generics.get(_gi4) == ret_ty.name:
-                                if _gi4 < hobj_ty.args.len:
-                                    ret_ty = hobj_ty.args.get(_gi4).read()
-                            _gi4 = _gi4 + 1
+                        ret_ty = self._subst_ret_generics(ret_ty, _cls.generics, hobj_ty.args)
                 return box_hirexpr(HirExpr.EMethodCall(hobj, method, hl, ret_ty))
             case Expr.EPropAccess(obj, prop):
                 mut _saved_recv_pa = self.in_recv_pos
@@ -5261,6 +5314,8 @@ extend Sema:
                             cls_ty.args.push(generic_arg_ty)
                         else:
                             cls_ty.args.push(box_asttype(AstType.init(generic_arg_n)))
+                        # [G-1] generic class bounds (Box[T: Show] used as Box[Cat]).
+                        self.check_class_bounds(obj_name, cls_ty.args)
                         return box_hirexpr(HirExpr.EIdent(obj_name, cls_ty, false))
                     return hexpr_obj
                 # Dict/Map index access d[key]: lower to get_index carrying the

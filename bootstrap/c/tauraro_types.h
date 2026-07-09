@@ -3117,8 +3117,11 @@ __attribute__((hot)) void Sema__collect_returns(Sema* self, HirBlock* b, List_pt
 __attribute__((hot)) void Sema__collect_returns_stmt(Sema* self, HirStmt* sp, List_ptr* out);
 __attribute__((hot)) bool Sema__owned_of(Sema* self, TrStr key);
 __attribute__((hot)) bool Sema__ret_yields_owned(Sema* self, HirExpr* e);
+__attribute__((hot)) bool Sema__is_type_param_in_scope(Sema* self, TrStr name);
 __attribute__((hot)) bool Sema__type_satisfies_bound(Sema* self, TrStr type_name, TrStr iface_name);
 __attribute__((hot)) void Sema_check_call_bounds(Sema* self, TrStr fname, List_ptr* hargs);
+__attribute__((hot)) AstType* Sema__subst_ret_generics(Sema* self, AstType* ty, List_TrStr* generics, List_ptr* concrete);
+__attribute__((hot)) void Sema_check_class_bounds(Sema* self, TrStr cls_name, List_ptr* arg_tys);
 __attribute__((hot)) void Sema_register_decl(Sema* self, Decl* d);
 __attribute__((hot)) HirFunction* Sema_lower_func(Sema* self, FunctionDef* f);
 __attribute__((hot)) HirClass* Sema_lower_class(Sema* self, ClassDef* c);

@@ -30,6 +30,18 @@ def describe[T: Show](x: T) -> str:
 def describe_area[T: Show + Area](x: T) -> int:
     return x.area()
 
+# A bounded generic CLASS: the type arg must satisfy Show (checked at Box[..] use).
+# `render` calls the bound method on the T-typed field — the point of the bound.
+class Box[T: Show]:
+    pub val: T
+extend Box[T]:
+    pub def of(v: T) -> Box[T]:
+        mut b = Box[T]()
+        b.val = v
+        return b
+    pub def render(self) -> str:
+        return self.val.show()
+
 def main():
     mut c = Cat()
     print(describe(c))          # cat  (structural)
@@ -38,5 +50,11 @@ def main():
     s.side = 5
     print(describe(s))          # square (explicit implements)
     print(describe_area(s))     # 25    (satisfies both Show + Area)
+
+    # Generic class bound: Box[Cat] is allowed because Cat satisfies Show. The factory
+    # (Box[Cat].of) infers Box[Cat] without an annotation, and render() calls the bound
+    # method on the T-typed field.
+    mut bc = Box[Cat].of(Cat())
+    print(bc.render())          # cat
 
     print("generic bounds ok")

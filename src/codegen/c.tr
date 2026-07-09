@@ -896,7 +896,17 @@ pub class CGenerator:
             mut sig = self.get_inline_attrs(m) + self.gen_func_sig(m, mono_name)
             self.w(sig + ";\n")
             mi = mi + 1
+        # Method bodies -> fn_mono_body (flushed after ALL prototypes) so a mono method
+        # that calls a regular function/method declared later (e.g. self.field.show() on
+        # a T-typed field where T=Cat -> Cat_show) resolves. `static` keeps it multi-TU
+        # safe. Prototypes above stay in mono_buf (early).
         mi = 0
+        mut _cmb_obuf  = self.buf
+        mut _cmb_osbuf = self.struct_buf
+        mut _cmb_opbuf = self.proto_buf
+        self.buf        = self.fn_mono_body
+        self.struct_buf = self.fn_mono_body
+        self.proto_buf  = self.fn_mono_body
         while mi < cls.methods.len:
             mut m = cls.methods.get(mi)
             mut old_class = self.cur_class
@@ -919,6 +929,10 @@ pub class CGenerator:
             self.cur_class = old_class
             self.cur_func  = old_func
             mi = mi + 1
+        self.fn_mono_body = self.buf
+        self.buf        = _cmb_obuf
+        self.struct_buf = _cmb_osbuf
+        self.proto_buf  = _cmb_opbuf
 
         # Generate monomorphized interface vtable + wrapper for each implemented interface.
         # type_subst is still active here so type_to_c substitutes T->concrete correctly.
