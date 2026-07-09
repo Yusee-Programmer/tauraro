@@ -2541,6 +2541,7 @@ typedef struct CGenerator {
     bool cur_ret_is_borrow;
     bool eliding_get_retain;
     bool no_elide;
+    TrStr tier_define;
     bool cur_self_is_ptr;
     TrMap* coll_local_sfx;
     TrMap* coll_local_idict;
@@ -2603,6 +2604,7 @@ static void _trdrop_CGenerator(void* vp) {
     Dict_free(self->coll_field_owned);
     Dict_free(self->coll_field_disq);
     Dict_free(self->cur_proven_borrows);
+    _tr_str_release(self->tier_define);
     Dict_free_strval(self->coll_local_sfx);
     Dict_free(self->coll_local_idict);
     Dict_free(self->coll_local_strval);

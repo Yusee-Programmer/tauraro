@@ -87,6 +87,12 @@
 #    include <linux/kernel.h>
 #    include <linux/slab.h>
 #    include <linux/string.h>
+#  else
+     /* Bare-metal (non-Linux-kernel, e.g. arm-none-eabi/newlib): setjmp.h and
+      * stdarg.h are freestanding headers. setjmp is needed by the bare-metal panic
+      * buffer (_tr_thread_panic_jmpbuf); stdarg by the libc-lite vsnprintf. */
+#    include <setjmp.h>
+#    include <stdarg.h>
 #  endif
 #endif
 
@@ -116,6 +122,120 @@
 #    define TAURARO_CALLOC(n,sz)   calloc(n,sz)
 #  endif
 #endif
+
+/* Normalize the freestanding tier flags: TAURARO_KERNEL (no libc) and
+ * TAURARO_NO_OS (bare-metal target) both imply TAURARO_BARE — the canonical
+ * "no OS services" flag used to gate file I/O / env / process / stdin below. */
+#if (defined(TAURARO_KERNEL) || defined(TAURARO_NO_OS)) && !defined(TAURARO_BARE)
+#  define TAURARO_BARE
+#endif
+
+/* Output sink hook — default no-op; a bare target redefines it (UART/semihosting).
+ * Hoisted here so the libc-lite printf below can route through it; the print
+ * section's own `#ifndef _TR_WRITE` guard then no-ops. */
+#ifndef _TR_WRITE
+#  define _TR_WRITE(s) ((void)(s))
+#endif
+
+/* ââ Freestanding libc-lite ââ *
+ * Bare-metal (TAURARO_KERNEL, non-Linux-kernel) has no <string.h>; provide the
+ * minimal mem/str primitives the core runtime needs. Kernel mode already pulled
+ * <linux/string.h>; hosted has libc. A target may predefine any of these. */
+#if defined(TAURARO_KERNEL) && !defined(__KERNEL__)
+#ifndef _TR_HAVE_STRING
+static inline size_t strlen(const char* s){ size_t n=0; while(s[n]) n++; return n; }
+static inline void*  memcpy(void* d,const void* s,size_t n){ unsigned char* a=(unsigned char*)d; const unsigned char* b=(const unsigned char*)s; for(size_t i=0;i<n;i++) a[i]=b[i]; return d; }
+static inline void*  memmove(void* d,const void* s,size_t n){ unsigned char* a=(unsigned char*)d; const unsigned char* b=(const unsigned char*)s; if(a<b){for(size_t i=0;i<n;i++)a[i]=b[i];}else{for(size_t i=n;i>0;i--)a[i-1]=b[i-1];} return d; }
+static inline void*  memset(void* d,int c,size_t n){ unsigned char* a=(unsigned char*)d; for(size_t i=0;i<n;i++) a[i]=(unsigned char)c; return d; }
+static inline int    memcmp(const void* x,const void* y,size_t n){ const unsigned char* a=(const unsigned char*)x; const unsigned char* b=(const unsigned char*)y; for(size_t i=0;i<n;i++){ if(a[i]!=b[i]) return (int)a[i]-(int)b[i]; } return 0; }
+static inline int    strcmp(const char* a,const char* b){ while(*a && *a==*b){a++;b++;} return (int)(unsigned char)*a-(int)(unsigned char)*b; }
+static inline int    strncmp(const char* a,const char* b,size_t n){ for(size_t i=0;i<n;i++){ if(a[i]!=b[i]) return (int)(unsigned char)a[i]-(int)(unsigned char)b[i]; if(!a[i]) break; } return 0; }
+static inline char*  strchr(const char* s,int c){ for(;*s;s++){ if(*s==(char)c) return (char*)s; } return c?0:(char*)s; }
+static inline char*  strcpy(char* d,const char* s){ char* r=d; while((*d++=*s++)); return r; }
+static inline char*  strncpy(char* d,const char* s,size_t n){ size_t i=0; for(;i<n&&s[i];i++) d[i]=s[i]; for(;i<n;i++) d[i]='\0'; return d; }
+static inline char*  strcat(char* d,const char* s){ char* r=d; while(*d)d++; while((*d++=*s++)); return r; }
+static inline char*  strstr(const char* h,const char* n){ if(!*n) return (char*)h; for(;*h;h++){ const char* a=h; const char* b=n; while(*a&&*b&&*a==*b){a++;b++;} if(!*b) return (char*)h; } return 0; }
+static inline char*  strrchr(const char* s,int c){ const char* last=0; for(;;s++){ if(*s==(char)c) last=s; if(!*s) break; } return (char*)last; }
+static inline char*  strtok(char* s,const char* delim){
+    static char* save; if(s) save=s; if(!save) return 0;
+    while(*save){ const char* d=delim; int isd=0; for(;*d;d++) if(*save==*d){isd=1;break;} if(!isd) break; save++; }
+    if(!*save){ save=0; return 0; }
+    char* tok=save;
+    while(*save){ const char* d=delim; int isd=0; for(;*d;d++) if(*save==*d){isd=1;break;} if(isd){ *save++='\0'; return tok; } save++; }
+    save=0; return tok;
+}
+#endif  /* _TR_HAVE_STRING */
+
+/* ctype / stdlib / stdio libc-lite (bare-metal, no <ctype.h>/<stdlib.h>/<stdio.h>).
+ * Correct-by-inspection ASCII/int impls; float in the formatter is basic (bare
+ * logging), never the hosted path. A target may predefine _TR_HAVE_CTYPE. */
+#ifndef _TR_HAVE_CTYPE
+static inline int isspace(int c){ return c==' '||c=='\t'||c=='\n'||c=='\r'||c=='\v'||c=='\f'; }
+static inline int isdigit(int c){ return c>='0'&&c<='9'; }
+static inline int isalpha(int c){ return (c>='a'&&c<='z')||(c>='A'&&c<='Z'); }
+static inline int isalnum(int c){ return isalpha(c)||isdigit(c); }
+static inline int islower(int c){ return c>='a'&&c<='z'; }
+static inline int isupper(int c){ return c>='A'&&c<='Z'; }
+static inline int isxdigit(int c){ return isdigit(c)||(c>='a'&&c<='f')||(c>='A'&&c<='F'); }
+static inline int tolower(int c){ return isupper(c)? c+32 : c; }
+static inline int toupper(int c){ return islower(c)? c-32 : c; }
+static inline char* strdup(const char* s){ if(!s) return 0; size_t n=strlen(s)+1; char* r=(char*)TAURARO_ALLOC(n); if(r) memcpy(r,s,n); return r; }
+static inline int   atoi(const char* s){ int r=0,neg=0; while(*s==' '||*s=='\t')s++; if(*s=='-'){neg=1;s++;}else if(*s=='+')s++; while(*s>='0'&&*s<='9'){ r=r*10+(*s-'0'); s++; } return neg?-r:r; }
+static inline long long strtoll(const char* s,char** end,int base){ (void)base; long long r=0; int neg=0; while(*s==' '||*s=='\t')s++; if(*s=='-'){neg=1;s++;}else if(*s=='+')s++; while(*s>='0'&&*s<='9'){ r=r*10+(*s-'0'); s++; } if(end)*end=(char*)s; return neg?-r:r; }
+static inline unsigned long long strtoull(const char* s,char** end,int base){ (void)base; unsigned long long r=0; while(*s==' '||*s=='\t')s++; if(*s=='+')s++; while(*s>='0'&&*s<='9'){ r=r*10+(unsigned)(*s-'0'); s++; } if(end)*end=(char*)s; return r; }
+static inline double strtod(const char* s,char** end){ double r=0; int neg=0; while(*s==' '||*s=='\t')s++; if(*s=='-'){neg=1;s++;}else if(*s=='+')s++; while(*s>='0'&&*s<='9'){ r=r*10+(*s-'0'); s++; } if(*s=='.'){ s++; double f=0.1; while(*s>='0'&&*s<='9'){ r+=(*s-'0')*f; f*=0.1; s++; } } if(end)*end=(char*)s; return neg?-r:r; }
+static unsigned long long _tr_rng=88172645463325252ULL;
+static inline void srand(unsigned s){ _tr_rng = s? (unsigned long long)s : 1ULL; }
+static inline int  rand(void){ _tr_rng^=_tr_rng<<13; _tr_rng^=_tr_rng>>7; _tr_rng^=_tr_rng<<17; return (int)(_tr_rng & 0x7fffffff); }
+static inline void qsort(void* base,size_t n,size_t sz,int(*cmp)(const void*,const void*)){
+    char* a=(char*)base;
+    for(size_t i=1;i<n;i++) for(size_t j=i; j>0 && cmp(a+(j-1)*sz, a+j*sz)>0; j--)
+        for(size_t k=0;k<sz;k++){ char t=a[(j-1)*sz+k]; a[(j-1)*sz+k]=a[j*sz+k]; a[j*sz+k]=t; }
+}
+__attribute__((noreturn)) static inline void exit(int code){ (void)code; __builtin_trap(); for(;;){} }
+/* Route raw malloc/calloc/realloc/free (used by the platform concurrency
+ * primitives) through the pluggable allocator. Under TAURARO_KERNEL the
+ * TAURARO_ALLOC/... macros are always user-supplied (enforced by #error above),
+ * so there is no self-recursion into a libc malloc. */
+static inline void* malloc(size_t n)            { return TAURARO_ALLOC(n); }
+static inline void* calloc(size_t a, size_t b)  { return TAURARO_CALLOC(a, b); }
+static inline void* realloc(void* p, size_t n)  { return TAURARO_REALLOC(p, n); }
+static inline void  free(void* p)               { TAURARO_FREE(p); }
+/* Minimal vsnprintf — %d/%i/%u/%l/%ll(+d/u/x)/%zu/%x/%X/%p/%c/%s/%f/%g/%% with
+ * optional width.precision. Integer/string are exact; float is a basic decimal
+ * (bare-metal logging only — hosted uses real libc). */
+static int _tr_fmt_u(char* o,unsigned long long v,int base,int up){ char t[24];int i=0;const char* d=up?"0123456789ABCDEF":"0123456789abcdef"; if(!v)t[i++]='0'; while(v){t[i++]=d[v%base];v/=base;} for(int j=0;j<i;j++)o[j]=t[i-1-j]; return i; }
+static int vsnprintf(char* buf,size_t cap,const char* fmt,va_list ap){
+    size_t o=0; char tmp[64];
+    #define _TR_PUT(ch) do{ if(o+1<cap) buf[o]=(ch); o++; }while(0)
+    for(const char* p=fmt; *p; p++){
+        if(*p!='%'){ _TR_PUT(*p); continue; }
+        p++; int lng=0; int prec=-1;
+        while(*p=='-'||*p=='+'||*p==' '||*p=='0'||*p=='#'){ p++; }
+        while(*p>='0'&&*p<='9') p++;                 /* width (ignored) */
+        if(*p=='.'){ p++; prec=0; while(*p>='0'&&*p<='9'){ prec=prec*10+(*p-'0'); p++; } }
+        while(*p=='l'){ lng++; p++; } if(*p=='z'||*p=='j'){ lng=2; p++; }
+        char c=*p; int n=0;
+        if(c=='d'||c=='i'){ long long v = lng>=2? va_arg(ap,long long) : (long long)va_arg(ap,int); if(v<0){ _TR_PUT('-'); v=-v; } n=_tr_fmt_u(tmp,(unsigned long long)v,10,0); for(int k=0;k<n;k++)_TR_PUT(tmp[k]); }
+        else if(c=='u'){ unsigned long long v = lng>=2? va_arg(ap,unsigned long long):(unsigned long long)va_arg(ap,unsigned); n=_tr_fmt_u(tmp,v,10,0); for(int k=0;k<n;k++)_TR_PUT(tmp[k]); }
+        else if(c=='x'||c=='X'){ unsigned long long v = lng>=2? va_arg(ap,unsigned long long):(unsigned long long)va_arg(ap,unsigned); n=_tr_fmt_u(tmp,v,16,c=='X'); for(int k=0;k<n;k++)_TR_PUT(tmp[k]); }
+        else if(c=='p'){ unsigned long long v=(unsigned long long)(size_t)va_arg(ap,void*); _TR_PUT('0');_TR_PUT('x'); n=_tr_fmt_u(tmp,v,16,0); for(int k=0;k<n;k++)_TR_PUT(tmp[k]); }
+        else if(c=='c'){ _TR_PUT((char)va_arg(ap,int)); }
+        else if(c=='s'){ const char* s=va_arg(ap,const char*); if(!s)s="(null)"; while(*s)_TR_PUT(*s++); }
+        else if(c=='f'||c=='g'||c=='e'||c=='G'){ double d=va_arg(ap,double); if(d<0){_TR_PUT('-');d=-d;} unsigned long long ip=(unsigned long long)d; n=_tr_fmt_u(tmp,ip,10,0); for(int k=0;k<n;k++)_TR_PUT(tmp[k]); int pr=prec<0?6:prec; if(pr>0){ _TR_PUT('.'); double fr=d-(double)ip; for(int k=0;k<pr;k++){ fr*=10; int dg=(int)fr; _TR_PUT((char)('0'+(dg%10))); fr-=dg; } } }
+        else if(c=='%'){ _TR_PUT('%'); }
+        else { _TR_PUT('%'); if(c) _TR_PUT(c); }
+    }
+    if(cap) buf[o<cap?o:cap-1]='\0';
+    #undef _TR_PUT
+    return (int)o;
+}
+static int snprintf(char* buf,size_t cap,const char* fmt,...){ va_list ap; va_start(ap,fmt); int r=vsnprintf(buf,cap,fmt,ap); va_end(ap); return r; }
+static int sprintf(char* buf,const char* fmt,...){ va_list ap; va_start(ap,fmt); int r=vsnprintf(buf,(size_t)-1,fmt,ap); va_end(ap); return r; }
+static int printf(const char* fmt,...){ char b[1024]; va_list ap; va_start(ap,fmt); int r=vsnprintf(b,sizeof(b),fmt,ap); va_end(ap); _TR_WRITE(b); return r; }
+#endif  /* _TR_HAVE_CTYPE */
+#endif  /* TAURARO_KERNEL && !__KERNEL__ */
+
 
 /* ── Thread stack size ───────────────────────────────────────────────────── *
  * Override before including this header: -DTAURARO_THREAD_STACK_SIZE=N       *
@@ -156,6 +276,34 @@
     do { if (!(cond)) { fprintf(stderr, "assertion failed: %s\n  at %s:%d\n", #cond, __FILE__, __LINE__); abort(); } } while(0)
 #  define _TR_ASSERT_MSG(cond, msg) \
     do { if (!(cond)) { fprintf(stderr, "assertion failed: %s\n  message: %s\n  at %s:%d\n", #cond, (msg), __FILE__, __LINE__); abort(); } } while(0)
+#endif
+
+/* ââ Diagnostic + trap hooks ââ *
+ * All raw stderr diagnostics and hard traps route through these so a tier below
+ * `std` (TAURARO_KERNEL / freestanding) has NO direct libc: hosted keeps the exact
+ * fprintf/abort behaviour; kernel spins/BUG()s; a bare-metal target can redefine
+ * _TR_DIAG to a UART/semihosting write before including this header. */
+#if defined(TAURARO_KERNEL) && defined(__KERNEL__)
+#  ifndef _TR_DIAG
+#    define _TR_DIAG(...)   pr_err(__VA_ARGS__)
+#  endif
+#  ifndef _TR_TRAP
+#    define _TR_TRAP()      BUG()
+#  endif
+#elif defined(TAURARO_KERNEL)
+#  ifndef _TR_DIAG
+#    define _TR_DIAG(...)   ((void)0)
+#  endif
+#  ifndef _TR_TRAP
+#    define _TR_TRAP()      do { while(1); } while(0)
+#  endif
+#else
+#  ifndef _TR_DIAG
+#    define _TR_DIAG(...)   fprintf(stderr, __VA_ARGS__)
+#  endif
+#  ifndef _TR_TRAP
+#    define _TR_TRAP()      abort()
+#  endif
 #endif
 
 /* Opt-in live-allocation counter for leak bisection. Compile with
@@ -235,11 +383,14 @@ static inline void _tr_c_free(void* ptr) { _tr_free(ptr); }
 #ifndef TAURARO_KERNEL
 static inline void _tr_print(char* s) { printf("%s\n", s); }
 static inline void _tr_print_raw(char* s) { printf("%s", s); fflush(stdout); }
-static inline void _tr_eprint(char* s) { fprintf(stderr, "%s\n", s); fflush(stderr); }
+static inline void _tr_eprint(char* s) { _TR_DIAG("%s\n", s); fflush(stderr); }
 #else
-static inline void _tr_print(char* s) { (void)s; }
-static inline void _tr_print_raw(char* s) { (void)s; }
-static inline void _tr_eprint(char* s) { (void)s; }
+#ifndef _TR_WRITE
+#  define _TR_WRITE(s) ((void)(s))   /* freestanding sink: redefine to UART/semihosting */
+#endif
+static inline void _tr_print(char* s) { _TR_WRITE(s); _TR_WRITE("\n"); }
+static inline void _tr_print_raw(char* s) { _TR_WRITE(s); }
+static inline void _tr_eprint(char* s) { _TR_WRITE(s); _TR_WRITE("\n"); }
 #endif
 
 static inline void* _tr_c_realloc(void* ptr, size_t size) {
@@ -482,6 +633,11 @@ static inline void _tr_weak_drop(_TrWeakBox* w) {
 static inline void* _tr_c_memcpy(void* dst, void* src, size_t n) { return memcpy(dst, src, n); }
 static inline void* _tr_c_memset(void* ptr, int val, size_t n) { return memset(ptr, val, n); }
 static inline void* _tr_c_memmove(void* dst, void* src, size_t n) { return memmove(dst, src, n); }
+/* File I/O + env: std-tier only (need <stdio.h>'s FILE / getenv). Gated so a
+ * freestanding (TAURARO_BARE) build parses past here — leaving these ungated was
+ * the 'FILE undeclared' early-header-failure that made everything after look
+ * implicit on bare-metal. */
+#ifndef TAURARO_BARE
 static inline void* _tr_c_fopen(const char* path, const char* mode) { return (void*)fopen(path, mode); }
 static inline int _tr_c_fclose(void* fp) { return fclose((FILE*)fp); }
 static inline size_t _tr_c_fread(void* ptr, size_t size, size_t nmemb, void* fp) { return fread(ptr, size, nmemb, (FILE*)fp); }
@@ -489,6 +645,9 @@ static inline size_t _tr_c_fwrite(const void* ptr, size_t size, size_t nmemb, vo
 static inline int _tr_c_fseek(void* fp, long offset, int whence) { return fseek((FILE*)fp, offset, whence); }
 static inline long _tr_c_ftell(void* fp) { return ftell((FILE*)fp); }
 static inline char* _tr_getenv(const char* name) { char* v = getenv(name); return v ? v : ""; }
+#else
+static inline char* _tr_getenv(const char* name) { (void)name; return (char*)""; }
+#endif
 #ifdef _WIN32
 static inline int _tr_setenv(const char* name, const char* value) { return _putenv_s(name, value) == 0 ? 0 : -1; }
 static inline int _tr_unsetenv(const char* name) { return _putenv_s(name, "") == 0 ? 0 : -1; }
@@ -584,14 +743,14 @@ static inline double _tr_ptr_to_f64(void* p) { union { double d; void* p; } u; u
 static inline bool Option_is_some(Option self) { return self.tag == Option_Some; }
 static inline bool Option_is_none(Option self) { return self.tag == Option_None; }
 static inline void* Option_unwrap(Option self) {
-    if (self.tag != Option_Some) { fprintf(stderr, "Option.unwrap() called on None\n"); abort(); }
+    if (self.tag != Option_Some) { _TR_DIAG("Option.unwrap() called on None\n"); _TR_TRAP(); }
     return self.data.Some.val;
 }
 static inline void* Option_unwrap_or(Option self, void* _default) {
     return self.tag == Option_Some ? self.data.Some.val : _default;
 }
 static inline void* Option_expect(Option self, char* msg) {
-    if (self.tag != Option_Some) { fprintf(stderr, "%s\n", msg); abort(); }
+    if (self.tag != Option_Some) { _TR_DIAG("%s\n", msg); _TR_TRAP(); }
     return self.data.Some.val;
 }
 static inline Option Option_map(Option self, void* (*f)(void*)) {
@@ -613,18 +772,18 @@ static inline Result Option_ok_or(Option self, void* err);  /* defined after Res
 static inline bool Result_is_ok(Result self)  { return self.tag == Result_Ok;  }
 static inline bool Result_is_err(Result self) { return self.tag == Result_Err; }
 static inline void* Result_unwrap(Result self) {
-    if (self.tag != Result_Ok) { fprintf(stderr, "Result.unwrap() called on Err\n"); abort(); }
+    if (self.tag != Result_Ok) { _TR_DIAG("Result.unwrap() called on Err\n"); _TR_TRAP(); }
     return self.data.Ok.val;
 }
 static inline void* Result_unwrap_err(Result self) {
-    if (self.tag != Result_Err) { fprintf(stderr, "Result.unwrap_err() called on Ok\n"); abort(); }
+    if (self.tag != Result_Err) { _TR_DIAG("Result.unwrap_err() called on Ok\n"); _TR_TRAP(); }
     return self.data.Err.err;
 }
 static inline void* Result_unwrap_or(Result self, void* _default) {
     return self.tag == Result_Ok ? self.data.Ok.val : _default;
 }
 static inline void* Result_expect(Result self, char* msg) {
-    if (self.tag != Result_Ok) { fprintf(stderr, "%s\n", msg); abort(); }
+    if (self.tag != Result_Ok) { _TR_DIAG("%s\n", msg); _TR_TRAP(); }
     return self.data.Ok.val;
 }
 static inline Result Result_map(Result self, void* (*f)(void*)) {
@@ -703,9 +862,9 @@ static inline void _tr_report_mem(const char* label) {
     PROCESS_MEMORY_COUNTERS pmc;
     GetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof(pmc));
 #ifdef TAURARO_MEMCOUNT
-    fprintf(stderr, "%s: %zu bytes, %ld allocs, %ld dicts, %ld lists, %ld strs\n", label, (size_t)pmc.WorkingSetSize, _tr_live_allocs, _tr_live_dicts, _tr_live_lists, _tr_live_strs);
+    _TR_DIAG("%s: %zu bytes, %ld allocs, %ld dicts, %ld lists, %ld strs\n", label, (size_t)pmc.WorkingSetSize, _tr_live_allocs, _tr_live_dicts, _tr_live_lists, _tr_live_strs);
 #else
-    fprintf(stderr, "%s: %zu bytes\n", label, (size_t)pmc.WorkingSetSize);
+    _TR_DIAG("%s: %zu bytes\n", label, (size_t)pmc.WorkingSetSize);
 #endif
     fflush(stderr);
 }
@@ -727,7 +886,7 @@ static DWORD WINAPI _tr_thread_start_trampoline(LPVOID raw) {
         if (result) { result->panicked = 0; result->panic_msg = NULL; }
     } else {
         if (result) { result->panicked = 1; result->panic_msg = _tr_thread_panic_message; }
-        else { fprintf(stderr, "thread panic (detached): %s\n",
+        else { _TR_DIAG("thread panic (detached): %s\n",
                _tr_thread_panic_message ? _tr_thread_panic_message : "?"); }
     }
     _tr_thread_has_panic_buf = 0;
@@ -806,7 +965,7 @@ static void* _tr_posix_thread_trampoline(void* raw) {
         if (result) { result->panicked = 0; result->panic_msg = NULL; }
     } else {
         if (result) { result->panicked = 1; result->panic_msg = _tr_thread_panic_message; }
-        else { fprintf(stderr, "thread panic (detached): %s\n",
+        else { _TR_DIAG("thread panic (detached): %s\n",
                _tr_thread_panic_message ? _tr_thread_panic_message : "?"); }
     }
     _tr_thread_has_panic_buf = 0;
@@ -861,7 +1020,7 @@ typedef struct {
 static _TrChan* _tr_chan_new(long long cap) {
     if (cap < 1) cap = 1;
     _TrChan* c = (_TrChan*)calloc(1, sizeof(_TrChan));
-    c->buf = (long long*)calloc((size_t)cap, sizeof(long long)); c->cap = cap;
+    c->buf = (long long*)TAURARO_CALLOC((size_t)cap, sizeof(long long)); c->cap = cap;
     InitializeCriticalSection(&c->mu);
     InitializeConditionVariable(&c->not_empty);
     InitializeConditionVariable(&c->not_full);
@@ -929,7 +1088,7 @@ static void _tr_chan_close(_TrChan* c) {
 static bool   _tr_chan_is_closed(_TrChan* c) { EnterCriticalSection(&c->mu); bool r=c->closed!=0; LeaveCriticalSection(&c->mu); return r; }
 static long long _tr_chan_len(_TrChan* c)    { EnterCriticalSection(&c->mu); long long n=c->count; LeaveCriticalSection(&c->mu); return n; }
 static long long _tr_chan_cap(_TrChan* c)    { return c?c->cap:0; }
-static void   _tr_chan_free(_TrChan* c)      { if(!c)return; DeleteCriticalSection(&c->mu); free(c->buf); free(c); }
+static void   _tr_chan_free(_TrChan* c)      { if(!c)return; DeleteCriticalSection(&c->mu); _tr_free(c->buf); _tr_free(c); }
 static long long _tr_chan_recv_ok(_TrChan* c, int* ok) {
     EnterCriticalSection(&c->mu);
     while (c->count == 0 && !c->closed)
@@ -1260,7 +1419,7 @@ typedef struct {
 } _TrChan;
 static _TrChan* _tr_chan_new(long long cap) {
     if(cap<1)cap=1; _TrChan* c=(_TrChan*)calloc(1,sizeof(_TrChan));
-    c->buf=(long long*)calloc((size_t)cap,sizeof(long long)); c->cap=cap;
+    c->buf=(long long*)TAURARO_CALLOC((size_t)cap,sizeof(long long)); c->cap=cap;
     pthread_mutex_init(&c->mu,NULL); pthread_cond_init(&c->not_empty,NULL); pthread_cond_init(&c->not_full,NULL); return c;
 }
 static void _tr_chan_send(_TrChan* c, long long val) {
@@ -1312,7 +1471,7 @@ static void _tr_chan_close(_TrChan* c) {
 static bool   _tr_chan_is_closed(_TrChan* c) { pthread_mutex_lock(&c->mu); bool r=c->closed!=0; pthread_mutex_unlock(&c->mu); return r; }
 static long long _tr_chan_len(_TrChan* c)    { pthread_mutex_lock(&c->mu); long long n=c->count; pthread_mutex_unlock(&c->mu); return n; }
 static long long _tr_chan_cap(_TrChan* c)    { return c?c->cap:0; }
-static void   _tr_chan_free(_TrChan* c)      { if(!c)return; pthread_mutex_destroy(&c->mu); pthread_cond_destroy(&c->not_empty); pthread_cond_destroy(&c->not_full); free(c->buf); free(c); }
+static void   _tr_chan_free(_TrChan* c)      { if(!c)return; pthread_mutex_destroy(&c->mu); pthread_cond_destroy(&c->not_empty); pthread_cond_destroy(&c->not_full); _tr_free(c->buf); _tr_free(c); }
 static long long _tr_chan_recv_ok(_TrChan* c, int* ok) {
     pthread_mutex_lock(&c->mu);
     while (c->count == 0 && !c->closed) pthread_cond_wait(&c->not_empty, &c->mu);
@@ -1868,6 +2027,10 @@ static inline void  _tr_tls_free_h(char* t)                                    {
 
 /* ── Core runtime helpers ────────────────────────────────────────────── */
 
+/* stdin-reading builtins: std-tier only (need <stdio.h>'s stdin). Bare-metal has
+ * no console — stub to empty so a freestanding program that never calls input()
+ * still compiles (and one that does gets "" rather than a link error). */
+#ifndef TAURARO_BARE
 static char* input(const char* prompt) {
     if (prompt) printf("%s", prompt);
     char* buf = (char*)malloc(256);
@@ -1891,6 +2054,10 @@ static char* _tr_read_line(const char* prompt) {
     free(buf);
     return _tr_empty_heap_str();
 }
+#else
+static char* input(const char* prompt) { (void)prompt; return _tr_empty_heap_str(); }
+static char* _tr_read_line(const char* prompt) { (void)prompt; return _tr_empty_heap_str(); }
+#endif
 static void yield_val(void* v) { (void)v; }
 
 /* ── LSP / stdio primitives ──────────────────────────────────────────────
@@ -1940,6 +2107,9 @@ static int64_t _tr_int_lcm(int64_t a, int64_t b) {
 
 /* Map update/clear defined after TrMap typedef below */
 
+/* stdin/stdout/tty/env primitives (LSP, JSON-RPC, NO_COLOR): std-tier only.
+ * Gated so a bare-metal build parses past here; stubs keep any caller linkable. */
+#ifndef TAURARO_BARE
 /* Read one line from stdin.  Returns the raw line INCLUDING any trailing
  * \r\n so callers can distinguish a blank separator ("\r\n") from true
  * EOF ("").  Never strips — the Tauraro caller calls .trim() itself.   */
@@ -1993,6 +2163,14 @@ static int64_t _tr_env_set(const char* name) {
     const char* v = getenv(name);
     return (v && v[0]) ? 1 : 0;
 }
+#else  /* TAURARO_BARE: no console / tty / env */
+static char* _tr_read_stdin_line(void) { return _tr_empty_heap_str(); }
+static char* _tr_read_stdin_bytes(int64_t n) { (void)n; return _tr_empty_heap_str(); }
+static void _tr_write_stdout(const char* s) { _TR_WRITE(s); }
+static void _tr_flush_stdout(void) { }
+static int64_t _tr_stdin_isatty(void) { return 0; }
+static int64_t _tr_env_set(const char* name) { (void)name; return 0; }
+#endif
 
 /* The ESC control byte (0x1b) as an owned string. Lets the diagnostics module
  * build ANSI sequences without depending on core.string (StringBuilder).     */
@@ -2065,7 +2243,9 @@ static inline void _tr_enable_vt100(void) {
  * classic conhost interprets the escapes (Windows Terminal/VS Code already do).
  * Returns 0 when piped/redirected so logs and `... | grep` stay plain ASCII.  */
 static int64_t _tr_stdout_supports_ansi(void) {
-#ifdef _WIN32
+#if defined(TAURARO_BARE)
+    return 0;   /* no console on bare-metal */
+#elif defined(_WIN32)
     if (!_isatty(_fileno(stdout))) return 0;
     _tr_enable_vt100();
     return 1;
@@ -2152,13 +2332,13 @@ static inline _TrIOPoll* _tr_iopoll_create(void) {
     _TrIOPoll* p = (_TrIOPoll*)calloc(1, sizeof(_TrIOPoll));
     if (!p) return NULL;
     p->cap = 64;
-    p->pfds = (WSAPOLLFD*)calloc((size_t)p->cap, sizeof(WSAPOLLFD));
-    p->userdata = (void**)calloc((size_t)p->cap, sizeof(void*));
-    if (!p->pfds || !p->userdata) { free(p->pfds); free(p->userdata); free(p); return NULL; }
+    p->pfds = (WSAPOLLFD*)TAURARO_CALLOC((size_t)p->cap, sizeof(WSAPOLLFD));
+    p->userdata = (void**)TAURARO_CALLOC((size_t)p->cap, sizeof(void*));
+    if (!p->pfds || !p->userdata) { _tr_free(p->pfds); _tr_free(p->userdata); _tr_free(p); return NULL; }
     return p;
 }
 static inline void _tr_iopoll_destroy(_TrIOPoll* p) {
-    if (p) { free(p->pfds); free(p->userdata); free(p); }
+    if (p) { _tr_free(p->pfds); _tr_free(p->userdata); _tr_free(p); }
 }
 static inline SHORT _tr_poll_events(uint32_t ev) {
     SHORT e = 0;
@@ -2989,7 +3169,8 @@ static inline char* _tr_readdir(void* handle) {
 static inline void _tr_closedir(void* handle)       { if (handle) closedir((DIR*)handle); }
 #endif
 
-/* ── File-system helpers ─────────────────────────────────────────────── */
+/* ── File-system helpers ──────── std-tier only (remove/rename/FILE) ──── */
+#ifndef TAURARO_BARE
 static inline int  _tr_file_delete(const char* path)                     { return remove(path) == 0 ? 0 : -1; }
 static inline int  _tr_file_rename(const char* old_p, const char* new_p) { return rename(old_p, new_p) == 0 ? 0 : -1; }
 static inline long long _tr_file_size(const char* path) {
@@ -2997,13 +3178,18 @@ static inline long long _tr_file_size(const char* path) {
     FILE* f = fopen(path, "rb"); if (!f) return -1LL;
     fseek(f, 0, SEEK_END); long long sz = (long long)ftell(f); fclose(f); return sz;
 }
+#else
+static inline int  _tr_file_delete(const char* path)                     { (void)path; return -1; }
+static inline int  _tr_file_rename(const char* old_p, const char* new_p) { (void)old_p; (void)new_p; return -1; }
+static inline long long _tr_file_size(const char* path)                  { (void)path; return -1LL; }
+#endif
 
 /* _tr_c_memset defined above */
 
 static inline void _tr_bounds_check(long long i, size_t len) {
     if (__builtin_expect(i < 0 || (size_t)i >= len, 0)) {
-        fprintf(stderr, "Index %lld out of bounds (length %zu)\n", i, len);
-        abort();
+        _TR_DIAG("Index %lld out of bounds (length %zu)\n", i, len);
+        _TR_TRAP();
     }
 }
 
@@ -3097,8 +3283,8 @@ static void _tr_exc_raise(char* msg) {
         _tr_thread_panic_message = msg;
         longjmp(_tr_thread_panic_jmpbuf, 1);
     }
-    fprintf(stderr, "Unhandled exception: %s\n", msg ? msg : "(null)");
-    abort();
+    _TR_DIAG("Unhandled exception: %s\n", msg ? msg : "(null)");
+    _TR_TRAP();
 }
 
 /* ── String helpers ─────────────────────────────────────────────────── */
@@ -3400,12 +3586,12 @@ static inline int _tr_system(const char* cmd) { return system(cmd); }
 /* ── Panic / error ───────────────────────────────────────────────────── */
 static inline void _tr_panic(const char* msg) {
     if (_tr_thread_has_panic_buf) {
-        /* In a spawned thread: unwind to thread boundary, not abort() */
+        /* In a spawned thread: unwind to thread boundary, not _TR_TRAP() */
         _tr_thread_panic_message = (char*)msg;
         longjmp(_tr_thread_panic_jmpbuf, 1);
     }
-    fprintf(stderr, "panic: %s\n", msg ? msg : "(null)");
-    abort();
+    _TR_DIAG("panic: %s\n", msg ? msg : "(null)");
+    _TR_TRAP();
 }
 
 /* ── Generic contains (for `in` operator on strings) ────────────────── */
@@ -3442,7 +3628,7 @@ static Dict* Dict_new(void) {
 }
 static void Dict_set(Dict* d, char* key, void* val) {
     if (!d || !key) return;
-    if (d->cap==0) { d->cap=16; d->buckets=(_DictNode**)calloc(16,sizeof(_DictNode*)); _TR_MEMCOUNT_INC(); }
+    if (d->cap==0) { d->cap=16; d->buckets=(_DictNode**)TAURARO_CALLOC(16,sizeof(_DictNode*)); _TR_MEMCOUNT_INC(); }
     size_t i=_dict_hash(key,d->cap);
     _DictNode* n=d->buckets[i];
     while (n) { if (strcmp(n->key,key)==0) { n->value=val; return; } n=n->next; }
@@ -3542,7 +3728,7 @@ typedef struct { _TrIDictNode** buckets; size_t cap; size_t len; } TrIDict;
 static inline TrIDict* _tr_idict_new(long long cap_hint) {
     size_t cap = (size_t)(cap_hint > 8 ? cap_hint : 8);
     TrIDict* d = (TrIDict*)calloc(1, sizeof(TrIDict));
-    d->buckets = (_TrIDictNode**)calloc(cap, sizeof(_TrIDictNode*));
+    d->buckets = (_TrIDictNode**)TAURARO_CALLOC(cap, sizeof(_TrIDictNode*));
     d->cap = cap; d->len = 0; return d;
 }
 static inline void _tr_idict_set_impl(TrIDict* d, long long k, void* v) {
@@ -3590,13 +3776,13 @@ static inline void List_TrTuple_append(List_TrTuple* l, TrTuple val) { if(l->len
 static inline TrTuple List_TrTuple_get(List_TrTuple* l, long long i) { _tr_bounds_check(i, l->len); return l->data[i]; }
 static inline TrTuple List_TrTuple_pop(List_TrTuple* l) { if(!l||l->len==0) return (TrTuple){0}; l->len--; return l->data[l->len]; }
 static inline void List_TrTuple_set(List_TrTuple* l, long long i, TrTuple v) { if(l&&(size_t)i<l->len) l->data[i]=v; }
-static inline void List_TrTuple_free(List_TrTuple* l) { if(l){ free(l->data); free(l); } }
+static inline void List_TrTuple_free(List_TrTuple* l) { if(l){ _tr_free(l->data); _tr_free(l); } }
 
 /* ── List types (bootstrap phase) ─────────────────────────────────── */
 
 typedef struct { long long* __restrict__ data; size_t len; size_t capacity; } List_i64;
 static inline List_i64* List_i64_new(void) { List_i64* l=(List_i64*)malloc(sizeof(List_i64)); l->data=(long long*)malloc(sizeof(long long)*8); l->len=0; l->capacity=8; return l; }
-static inline void List_i64_append(List_i64* l, long long val) { if(l->len==l->capacity){ l->capacity*=2; l->data=(long long*)realloc(l->data,sizeof(long long)*l->capacity); } l->data[l->len++]=val; }
+static inline void List_i64_append(List_i64* l, long long val) { if(l->len==l->capacity){ l->capacity*=2; l->data=(long long*)TAURARO_REALLOC(l->data,sizeof(long long)*l->capacity); } l->data[l->len++]=val; }
 static inline bool List_i64_contains(List_i64* l, long long val) { for (size_t i = 0; i < l->len; i++) { if (l->data[i] == val) return true; } return false; }
 static inline long long List_i64_pop(List_i64* l) { if(!l||l->len==0) return 0LL; l->len--; return l->data[l->len]; }
 static inline void List_i64_set(List_i64* l, long long i, long long v) { if(l&&(size_t)i<l->len) l->data[i]=v; }
@@ -3616,7 +3802,7 @@ static inline void List_f64_free(List_f64* l) { if(l){ _tr_free(l->data); _tr_fr
 #undef List_ptr
 typedef struct { char** data; size_t len; size_t capacity; } List_str;
 static inline List_str* List_str_new(void) { List_str* l=(List_str*)malloc(sizeof(List_str)); l->data=(char**)malloc(sizeof(char*)*8); l->len=0; l->capacity=8; return l; }
-static inline void List_str_append(List_str* l, char* val) { if(l->len==l->capacity){ l->capacity*=2; l->data=(char**)realloc(l->data,sizeof(char*)*l->capacity); } l->data[l->len++]=val; }
+static inline void List_str_append(List_str* l, char* val) { if(l->len==l->capacity){ l->capacity*=2; l->data=(char**)TAURARO_REALLOC(l->data,sizeof(char*)*l->capacity); } l->data[l->len++]=val; }
 static inline char* List_str_pop(List_str* l) { if(!l||l->len==0) return NULL; l->len--; return l->data[l->len]; }
 static inline void List_str_free(List_str* l) { if(l){ _tr_free(l->data); _tr_free(l); } }
 
@@ -3683,7 +3869,7 @@ static int64_t _tr_list_all_TrStr(List_TrStr* l, _tr_pred_trstr_fn p) {
 
 typedef struct { void** data; size_t len; size_t capacity; } List_ptr;
 static inline List_ptr* List_ptr_new(void) { List_ptr* l=(List_ptr*)malloc(sizeof(List_ptr)); _TR_MEMCOUNT_INC(); _TR_MEMCOUNT_LIST_INC(); l->data=(void**)malloc(sizeof(void*)*8); _TR_MEMCOUNT_INC(); l->len=0; l->capacity=8; return l; }
-static inline void List_ptr_append(List_ptr* l, void* val) { if(l->len==l->capacity){ l->capacity*=2; l->data=(void**)realloc(l->data,sizeof(void*)*l->capacity); } l->data[l->len++]=val; }
+static inline void List_ptr_append(List_ptr* l, void* val) { if(l->len==l->capacity){ l->capacity*=2; l->data=(void**)TAURARO_REALLOC(l->data,sizeof(void*)*l->capacity); } l->data[l->len++]=val; }
 static inline void* List_ptr_pop(List_ptr* l) { if(!l||l->len==0) return NULL; l->len--; return l->data[l->len]; }
 static inline void List_ptr_free(List_ptr* l) { if(l){ _TR_MEMCOUNT_LIST_DEC(); _tr_free(l->data); _tr_free(l); } }
 /* Free a List_ptr whose elements are owned refcounted heap-class instances:
@@ -3828,7 +4014,7 @@ static inline List_u8* _tr_bytes_new(const uint8_t* data, size_t len) {
     List_u8* l = (List_u8*)malloc(sizeof(List_u8));
     l->len = len;
     l->capacity = len > 0 ? len : 8;
-    l->data = (uint8_t*)malloc(l->capacity);
+    l->data = (uint8_t*)TAURARO_ALLOC(l->capacity);
     if (len > 0) memcpy(l->data, data, len);
     return l;
 }
@@ -3868,8 +4054,8 @@ static inline void List_TrStr_extend(List_TrStr* l, List_TrStr* o) { if(!l||!o) 
 static inline bool List_TrStr_contains(List_TrStr* l, TrStr v) { if(!l) return false; for(size_t i=0;i<l->len;i++) if(l->data[i].data&&v.data&&strcmp(l->data[i].data,v.data)==0) return true; return false; }
 static inline long long List_TrStr_index_of(List_TrStr* l, TrStr v) { if(!l) return -1LL; for(size_t i=0;i<l->len;i++) if(l->data[i].data&&v.data&&strcmp(l->data[i].data,v.data)==0) return (long long)i; return -1LL; }
 /* get() returns a retained copy (independent reference); set() releases the old element and retains the new one. */
-static inline TrStr List_TrStr_get(List_TrStr* l, long long i) { if (!l) { fprintf(stderr, "Null list access\n"); abort(); } _tr_bounds_check(i, l->len); return _tr_str_retain(l->data[i]); }
-static inline void List_TrStr_set(List_TrStr* l, long long i, TrStr v) { if (!l) { fprintf(stderr, "Null list access\n"); abort(); } _tr_bounds_check(i, l->len); _tr_str_release(l->data[i]); l->data[i]=_tr_str_retain(v); }
+static inline TrStr List_TrStr_get(List_TrStr* l, long long i) { if (!l) { _TR_DIAG("Null list access\n"); _TR_TRAP(); } _tr_bounds_check(i, l->len); return _tr_str_retain(l->data[i]); }
+static inline void List_TrStr_set(List_TrStr* l, long long i, TrStr v) { if (!l) { _TR_DIAG("Null list access\n"); _TR_TRAP(); } _tr_bounds_check(i, l->len); _tr_str_release(l->data[i]); l->data[i]=_tr_str_retain(v); }
 static inline void List_ptr_remove(List_ptr* l, long long i) { if(!l||(size_t)i>=l->len) return; for(size_t j=(size_t)i;j<l->len-1;j++) l->data[j]=l->data[j+1]; l->len--; }
 static inline void List_ptr_swap(List_ptr* l, long long a, long long b) { if(!l||(size_t)a>=l->len||(size_t)b>=l->len) return; void* t=l->data[a]; l->data[a]=l->data[b]; l->data[b]=t; }
 static inline void List_ptr_clear(List_ptr* l) { if(l) l->len=0; }
@@ -3903,7 +4089,7 @@ typedef struct { long long* data; size_t len; size_t capacity; } Set_i64;
 static inline Set_i64* Set_i64_new(void) { Set_i64* l=(Set_i64*)malloc(sizeof(Set_i64)); l->data=(long long*)malloc(sizeof(long long)*8); l->len=0; l->capacity=8; return l; }
 static inline void Set_i64_add(Set_i64* l, long long val) { 
     for (size_t i = 0; i < l->len; i++) { if (l->data[i] == val) return; }
-    if(l->len==l->capacity){ l->capacity*=2; l->data=(long long*)realloc(l->data,sizeof(long long)*l->capacity); } l->data[l->len++]=val; 
+    if(l->len==l->capacity){ l->capacity*=2; l->data=(long long*)TAURARO_REALLOC(l->data,sizeof(long long)*l->capacity); } l->data[l->len++]=val; 
 }
 static inline void Set_i64_free(Set_i64* l) { if(l){ _tr_free(l->data); _tr_free(l); } }
 
@@ -3911,7 +4097,7 @@ typedef struct { void** data; size_t len; size_t capacity; } Set_ptr;
 static inline Set_ptr* Set_ptr_new(void) { Set_ptr* l=(Set_ptr*)malloc(sizeof(Set_ptr)); l->data=(void**)malloc(sizeof(void*)*8); l->len=0; l->capacity=8; return l; }
 static inline void Set_ptr_add(Set_ptr* l, void* val) { 
     for (size_t i = 0; i < l->len; i++) { if (l->data[i] == val) return; }
-    if(l->len==l->capacity){ l->capacity*=2; l->data=(void**)realloc(l->data,sizeof(void*)*l->capacity); } l->data[l->len++]=val; 
+    if(l->len==l->capacity){ l->capacity*=2; l->data=(void**)TAURARO_REALLOC(l->data,sizeof(void*)*l->capacity); } l->data[l->len++]=val; 
 }
 static inline void Set_ptr_free(Set_ptr* l) { if(l){ _tr_free(l->data); _tr_free(l); } }
 
@@ -3919,7 +4105,7 @@ typedef struct { char** data; size_t len; size_t capacity; } Set_str;
 static inline Set_str* Set_str_new(void) { Set_str* l=(Set_str*)malloc(sizeof(Set_str)); l->data=(char**)malloc(sizeof(char*)*8); l->len=0; l->capacity=8; return l; }
 static inline void Set_str_add(Set_str* l, char* val) { 
     for (size_t i = 0; i < l->len; i++) { if (strcmp(l->data[i], val) == 0) return; }
-    if(l->len==l->capacity){ l->capacity*=2; l->data=(char**)realloc(l->data,sizeof(char*)*l->capacity); } l->data[l->len++]=val; 
+    if(l->len==l->capacity){ l->capacity*=2; l->data=(char**)TAURARO_REALLOC(l->data,sizeof(char*)*l->capacity); } l->data[l->len++]=val; 
 }
 static inline void Set_str_free(Set_str* l) { if(l){ _tr_free(l->data); _tr_free(l); } }
 
@@ -3931,40 +4117,40 @@ static inline List_i64* _tr_range_new(long long start, long long stop, bool incl
     return l;
 }
 static inline long long _tr_list_i64_get(List_i64* l, long long i) {
-    if (!l) { fprintf(stderr, "Null list access\n"); abort(); }
+    if (!l) { _TR_DIAG("Null list access\n"); _TR_TRAP(); }
     _tr_bounds_check(i, l->len);
     return l->data[i];
 }
 static inline long long List_i64_get_index(List_i64* l, long long i) { return _tr_list_i64_get(l, i); }
 static inline void _tr_list_i64_set(List_i64* l, long long i, long long v) {
-    if (!l) { fprintf(stderr, "Null list access\n"); abort(); }
+    if (!l) { _TR_DIAG("Null list access\n"); _TR_TRAP(); }
     _tr_bounds_check(i, l->len);
     l->data[i] = v;
 }
 static inline void List_i64_set_index(List_i64* l, long long i, long long v) { _tr_list_i64_set(l, i, v); }
 
 static inline double _tr_list_f64_get(List_f64* l, long long i) {
-    if (!l) { fprintf(stderr, "Null list access\n"); abort(); }
+    if (!l) { _TR_DIAG("Null list access\n"); _TR_TRAP(); }
     _tr_bounds_check(i, l->len);
     return l->data[i];
 }
 static inline double List_f64_get_index(List_f64* l, long long i) { return _tr_list_f64_get(l, i); }
 static inline void _tr_list_f64_set(List_f64* l, long long i, double v) {
-    if (!l) { fprintf(stderr, "Null list access\n"); abort(); }
+    if (!l) { _TR_DIAG("Null list access\n"); _TR_TRAP(); }
     _tr_bounds_check(i, l->len);
     l->data[i] = v;
 }
 static inline void List_f64_set_index(List_f64* l, long long i, double v) { _tr_list_f64_set(l, i, v); }
 
 static inline char* _tr_list_str_get(List_str* l, long long i) {
-    if (!l) { fprintf(stderr, "Null list access\n"); abort(); }
+    if (!l) { _TR_DIAG("Null list access\n"); _TR_TRAP(); }
     _tr_bounds_check(i, l->len);
     return l->data[i];
 }
 static inline char* List_str_get_index(List_str* l, long long i) { return _tr_list_str_get(l, i); }
 static inline char* List_str_get(List_str* l, long long i) { return _tr_list_str_get(l, i); }
 static inline void _tr_list_str_set(List_str* l, long long i, char* v) {
-    if (!l) { fprintf(stderr, "Null list access\n"); abort(); }
+    if (!l) { _TR_DIAG("Null list access\n"); _TR_TRAP(); }
     _tr_bounds_check(i, l->len);
     l->data[i] = v;
 }
@@ -3987,14 +4173,14 @@ static inline long long Vec_str_len(Vec_str* v) { return v ? v->len : 0LL; }
 #endif
 
 static inline void* _tr_list_ptr_get(List_ptr* l, long long i) {
-    if (!l) { fprintf(stderr, "Null list access\n"); abort(); }
+    if (!l) { _TR_DIAG("Null list access\n"); _TR_TRAP(); }
     _tr_bounds_check(i, l->len);
     return l->data[i];
 }
 static inline void* List_ptr_get_index(List_ptr* l, long long i) { return _tr_list_ptr_get(l, i); }
 static inline void* List_ptr_get(List_ptr* l, long long i) { return _tr_list_ptr_get(l, i); }
 static inline void _tr_list_ptr_set(List_ptr* l, long long i, void* v) {
-    if (!l) { fprintf(stderr, "Null list access\n"); abort(); }
+    if (!l) { _TR_DIAG("Null list access\n"); _TR_TRAP(); }
     _tr_bounds_check(i, l->len);
     l->data[i] = v;
 }
@@ -4002,64 +4188,64 @@ static inline void List_ptr_set_index(List_ptr* l, long long i, void* v) { _tr_l
 static inline void List_ptr_set(List_ptr* l, long long i, void* v) { _tr_list_ptr_set(l, i, v); }
 
 static inline _Bool _tr_list_bool_get(List_bool* l, long long i) {
-    if (!l) { fprintf(stderr, "Null list access\n"); abort(); }
+    if (!l) { _TR_DIAG("Null list access\n"); _TR_TRAP(); }
     _tr_bounds_check(i, l->len);
     return l->data[i];
 }
 static inline _Bool List_bool_get_index(List_bool* l, long long i) { return _tr_list_bool_get(l, i); }
 static inline void _tr_list_bool_set(List_bool* l, long long i, _Bool v) {
-    if (!l) { fprintf(stderr, "Null list access\n"); abort(); }
+    if (!l) { _TR_DIAG("Null list access\n"); _TR_TRAP(); }
     _tr_bounds_check(i, l->len);
     l->data[i] = v;
 }
 static inline void List_bool_set_index(List_bool* l, long long i, _Bool v) { _tr_list_bool_set(l, i, v); }
 static inline int8_t _tr_list_i8_get(List_i8* l, long long i) {
-    if (!l) { fprintf(stderr, "Null list access\n"); abort(); }
+    if (!l) { _TR_DIAG("Null list access\n"); _TR_TRAP(); }
     _tr_bounds_check(i, l->len);
     return l->data[i];
 }
 static inline void _tr_list_i8_set(List_i8* l, long long i, int8_t v) {
-    if (!l) { fprintf(stderr, "Null list access\n"); abort(); }
+    if (!l) { _TR_DIAG("Null list access\n"); _TR_TRAP(); }
     _tr_bounds_check(i, l->len);
     l->data[i] = v;
 }
 static inline int _tr_list_i32_get(List_i32* l, long long i) {
-    if (!l) { fprintf(stderr, "Null list access\n"); abort(); }
+    if (!l) { _TR_DIAG("Null list access\n"); _TR_TRAP(); }
     _tr_bounds_check(i, l->len);
     return l->data[i];
 }
 static inline void _tr_list_i32_set(List_i32* l, long long i, int v) {
-    if (!l) { fprintf(stderr, "Null list access\n"); abort(); }
+    if (!l) { _TR_DIAG("Null list access\n"); _TR_TRAP(); }
     _tr_bounds_check(i, l->len);
     l->data[i] = v;
 }
 static inline char _tr_list_char_get(List_char* l, long long i) {
-    if (!l) { fprintf(stderr, "Null list access\n"); abort(); }
+    if (!l) { _TR_DIAG("Null list access\n"); _TR_TRAP(); }
     _tr_bounds_check(i, l->len);
     return l->data[i];
 }
 static inline void _tr_list_char_set(List_char* l, long long i, char v) {
-    if (!l) { fprintf(stderr, "Null list access\n"); abort(); }
+    if (!l) { _TR_DIAG("Null list access\n"); _TR_TRAP(); }
     _tr_bounds_check(i, l->len);
     l->data[i] = v;
 }
 static inline uint8_t _tr_list_u8_get(List_u8* l, long long i) {
-    if (!l) { fprintf(stderr, "Null list access\n"); abort(); }
+    if (!l) { _TR_DIAG("Null list access\n"); _TR_TRAP(); }
     _tr_bounds_check(i, l->len);
     return l->data[i];
 }
 static inline void _tr_list_u8_set(List_u8* l, long long i, uint8_t v) {
-    if (!l) { fprintf(stderr, "Null list access\n"); abort(); }
+    if (!l) { _TR_DIAG("Null list access\n"); _TR_TRAP(); }
     _tr_bounds_check(i, l->len);
     l->data[i] = v;
 }
 static inline uint32_t _tr_list_u32_get(List_u32* l, long long i) {
-    if (!l) { fprintf(stderr, "Null list access\n"); abort(); }
+    if (!l) { _TR_DIAG("Null list access\n"); _TR_TRAP(); }
     _tr_bounds_check(i, l->len);
     return l->data[i];
 }
 static inline void _tr_list_u32_set(List_u32* l, long long i, uint32_t v) {
-    if (!l) { fprintf(stderr, "Null list access\n"); abort(); }
+    if (!l) { _TR_DIAG("Null list access\n"); _TR_TRAP(); }
     _tr_bounds_check(i, l->len);
     l->data[i] = v;
 }
@@ -4249,7 +4435,8 @@ static inline void StringBuilder_free(StringBuilder* sb) {
 }
 #endif /* TAURARO_RT_NO_STRINGBUILDER */
 
-/* ── File I/O helpers ────────────────────────────────────────────────── */
+/* ── File I/O helpers ──────── std-tier only (FILE/fopen) ────────────── */
+#ifndef TAURARO_BARE
 static inline char* read_file(char* path) {
     /* Owned `-> str` (success path allocs `buf`); error paths must also be heap. */
     if (!path || !*path) return _tr_empty_heap_str();
@@ -4284,6 +4471,12 @@ static inline bool file_exists(char* path) {
     if (!f) return false;
     fclose(f); return true;
 }
+#else
+static inline char* read_file(char* path) { (void)path; return _tr_empty_heap_str(); }
+static inline bool write_file(char* path, char* content) { (void)path; (void)content; return false; }
+static inline bool append_file(char* path, char* content) { (void)path; (void)content; return false; }
+static inline bool file_exists(char* path) { (void)path; return false; }
+#endif
 #endif /* TAURARO_STD_LIB */
 #endif /* TAURARO_NO_RT_HELPERS */
 
@@ -4293,9 +4486,21 @@ static inline char* _tr_c_strdup(char* s) {
 #define _tr_strdup _tr_c_strdup
 
 
-static inline double _tr_get_inf(void) { return (double)INFINITY; }
-static inline bool   _tr_is_inf(double x) { return isinf(x) != 0; }
-static inline bool   _tr_is_nan(double x) { return isnan(x) != 0; }
+/* Use compiler builtins (no <math.h>) so these work at every tier. */
+static inline double _tr_get_inf(void) { return __builtin_inf(); }
+static inline bool   _tr_is_inf(double x) { return __builtin_isinf(x) != 0; }
+static inline bool   _tr_is_nan(double x) { return __builtin_isnan(x) != 0; }
+
+/* ── MMIO intrinsics for bare-metal device drivers (std/hal/mmio.tr) ──────
+ * Volatile so the compiler never elides or reorders a hardware register access.
+ * Available at every tier; the address is a raw device register the caller vouches
+ * for (this is the primitive `unsafe` build on). */
+/* Address is `usize` (unsigned long long in Tauraro) cast to a pointer, so the
+ * ABI matches on both 32- and 64-bit targets. */
+static inline void          _tr_mmio_write32(unsigned long long a, unsigned int v)  { *(volatile uint32_t*)(size_t)a = (uint32_t)v; }
+static inline unsigned int  _tr_mmio_read32 (unsigned long long a)                  { return (unsigned int)*(volatile uint32_t*)(size_t)a; }
+static inline void          _tr_mmio_write8 (unsigned long long a, unsigned char v) { *(volatile uint8_t*)(size_t)a  = (uint8_t)v; }
+static inline unsigned char _tr_mmio_read8  (unsigned long long a)                  { return (unsigned char)*(volatile uint8_t*)(size_t)a; }
 
 
 #ifdef _WIN32
@@ -5040,11 +5245,12 @@ static inline char* _tr_hmac_sha256(char* key, int klen, char* msg) {
 /* ── UUID v4 ────────────────────────────────────────────────────────────── */
 static inline char* _tr_uuid_v4(void) {
     uint8_t b[16];
-#if !defined(_WIN32) || defined(__MINGW32__) || defined(__MINGW64__)
+#if (!defined(_WIN32) || defined(__MINGW32__) || defined(__MINGW64__)) && !defined(TAURARO_BARE)
     FILE* f=fopen("/dev/urandom","rb");
     if(f){fread(b,1,16,f);fclose(f);}
     else{for(int i=0;i<16;i++)b[i]=(uint8_t)(rand()&0xff);}
 #else
+    /* bare-metal / Windows: no /dev/urandom — fall back to the PRNG */
     for(int i=0;i<16;i++)b[i]=(uint8_t)(rand()&0xff);
 #endif
     b[6]=(b[6]&0x0f)|0x40; b[8]=(b[8]&0x3f)|0x80;
