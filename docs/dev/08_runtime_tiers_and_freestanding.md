@@ -200,11 +200,22 @@ C/asm/ld is the compiler's burden, not the user's). Progress:
   - `--emit-ld <path>` → the compiler writes a Cortex-M linker script whose symbols
     match the trampoline (kills `mps2.ld`). (`linker_script_cortex_m` in
     `src/main.tr`.)
-  - **Result: `examples/freestanding/mps2_pure.tr` is a bare-metal program in 100%
-    Tauraro** — allocator, UART driver, boot entry — that emits clean and links with
-    only the generated C + `.ld`. `scripts/bare_run.sh` builds+runs *it* under qemu.
+  - **Result — PROVEN in CI ✅: `examples/freestanding/mps2_pure.tr` is a bare-metal
+    firmware written 100% in Tauraro** — allocator (`@allocator`), UART driver
+    (`@output` + `std/hal/mmio`), boot entry (`@entry`) — that links with only the
+    generated C + `.ld` and **executes under `qemu-system-arm`** (prints
+    `hello from pure-Tauraro bare metal` + `sum 1..100 = 5050`). **The four C/`.h`/
+    `.ld` shim files are deleted** — there is no non-`.tr` platform code. This is the
+    "everything in Tauraro, down to bare metal" milestone.
   - Remaining niceties: a `target {…}` block (nicer than `--emit-ld`'s fixed map) and
     fixed-size static arrays (`[u8; N]`) so the arena needn't sit at a fixed address.
+  - **KNOWN LIMITATION (found in CI):** Tauraro runs global initializers in `main()`,
+    but `@entry` boots straight to the entry — so a non-zero global initializer
+    (`mut x: usize = 0x20080000`) is **not** applied (the global stays at its `.bss`
+    zero). Bare-metal globals must currently be correct at zero (use a local constant
+    + a zero-init offset, as `mps2_pure.tr`'s allocator does). Proper fix (follow-up):
+    factor `main()`'s global-init into a `_tr_init_globals()` that the reset
+    trampoline also calls. Symptom if you forget: a HardFault (NULL/garbage global).
 
 - **Phase 5 — arch/HAL + drivers.** `std/hal/mmio.tr` gives volatile MMIO
   `read32/write32/read8/write8/wait_bits_set` (backed by `_tr_mmio_*` runtime

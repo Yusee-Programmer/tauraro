@@ -301,11 +301,10 @@ jobs:
         run: TAURAROC=./tauraroc${{ matrix.ext }} bash scripts/cross_check.sh
 
       # -------------------------------------------------------
-      # Bare-metal LINK + RUN: build examples/freestanding/hello_bare.tr for a
-      # Cortex-M3 (mps2-an385) with --freestanding — our own startup + linker +
-      # UART sink, no libc/OS — and RUN it under qemu-system-arm. Proves a Tauraro
-      # binary executes on bare metal. Non-blocking while the MCU bring-up is
-      # proven in CI (I can't run qemu-system locally); flip to blocking once green.
+      # Bare-metal LINK + RUN: build examples/freestanding/mps2_pure.tr — a Cortex-M3
+      # firmware written 100% in Tauraro (allocator/@allocator, UART/@output, boot
+      # /@entry) — with --freestanding + --emit-ld, then RUN it under qemu-system-arm.
+      # Proves a Tauraro binary executes on bare metal with NO C/.h/.ld shims.
       # -------------------------------------------------------
       - name: Bare-metal run (Cortex-M3 under qemu-system-arm)
         if: runner.os == 'Linux'
