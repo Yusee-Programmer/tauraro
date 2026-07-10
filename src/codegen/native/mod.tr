@@ -1,37 +1,37 @@
 # @trusted: compiler systems module — audited raw-pointer core (like Rust std internals)
-# src/codegen/native/ — the NATIVE backend (Path B): lowered IR (src/taumir) → x86-64
-# machine code → ELF64 object → linked with runtime.o via the system linker. No C
-# source, no gcc/clang in the per-build loop.
+# src/codegen/native/ — the NATIVE backend (Path B): lowered IR (src/taumir) -> x86-64
+# machine code -> ELF64 object -> linked with runtime.o via the system linker. No C
+# source, no gcc/clang in the per-build loop (the linker + a one-time runtime.o remain).
 #
-# Module layout (grows in Phase 1/2):
 #   mod.tr      - NativeGenerator (this file): the public entry the driver calls
-#   isa_x64.tr  - x86-64 instruction encoding (raw bytes)
-#   select.tr   - instruction selection (LIR -> x86-64)
-#   regalloc.tr - linear-scan register allocation
-#   frame.tr    - stack frame + System V AMD64 ABI
+#   bytebuf.tr  - little-endian byte buffer + binary writer
+#   isa_x64.tr  - x86-64 instruction selection + encoding
 #   elf.tr      - ELF64 object writer (sections, symbols, relocations)
-#   emit.tr     - orchestration: LIR -> .o -> link
+#   emit.tr     - orchestration (LIR -> encoded funcs -> .o)
+#   (regalloc.tr / frame.tr / select.tr land in Phase 2 as the op set grows)
 #
-# Phase 0 status: the driver seam is wired and this generator is a POLITE STUB — it
-# reports that native codegen isn't implemented yet and the caller falls back to an
-# error (never silent-wrong output). Real emission lands in Phase 1.
+# Phase 1 (skeleton): lowers `def main(): print(<int>)` -> a call to _tr_rt_print_i64
+# with an immediate, emits a real ELF64 .o. Anything else -> emit_object returns false
+# and the driver prints a clear "use --backend c" message (never silent-wrong).
 
 from hir import HirProgram
+from taumir.lower import lower_to_lir
+from codegen.native.emit import emit_lir_object
 
 pub class NativeGenerator:
-    pub target: str          # e.g. "x86_64-linux-elf"
-    pub ready:  bool         # false until Phase 1 wires taumir -> isa_x64 -> elf
+    pub target: str          # "x86_64-linux-elf"
+    pub ready:  bool
 
 extend NativeGenerator:
     pub def init() -> NativeGenerator:
         mut g = NativeGenerator()
         g.target = "x86_64-linux-elf"
-        g.ready  = false
+        g.ready  = true
         return g
 
-    # Emit an ELF64 object for `prog` at `out_path`, returning true on success.
-    # Phase 0: not implemented — returns false so the driver prints a clear message.
+    # Emit an ELF64 object for `prog` at `out_path`. Returns true on success; false when
+    # the program uses constructs the native backend can't lower yet (driver falls back).
     pub def emit_object(self, prog: HirProgram, out_path: str) -> bool:
-        if not self.ready:
-            return false
-        return false
+        mut m = lower_to_lir(prog)
+        if not m.ok: return false
+        return emit_lir_object(m, out_path)

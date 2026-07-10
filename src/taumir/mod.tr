@@ -1,0 +1,11 @@
+# @trusted: compiler systems module.
+# src/taumir/ — the lowered IR (LIR) shared by the native (x86-64/ELF) and LLVM
+# backends. Completes src/mir.tr (a CFG-over-HIR for ownership analysis) into an
+# instruction-level IR ready for machine codegen.
+#
+#   ir.tr    - LIR data model (LType/LVal/LInst/LTerm/LBlock/LFunc/LModule)
+#   lower.tr - HIR (+ CFG-MIR) -> LIR
+#   print.tr - textual dumper for `--emit lir`  (added as the IR grows)
+
+from taumir.ir    import LModule, LFunc, LBlock, LInst, LVal, LTerm, LType, box_lval, box_linst
+from taumir.lower import lower_to_lir

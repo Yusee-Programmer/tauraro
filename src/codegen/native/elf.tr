@@ -1,0 +1,189 @@
+# @trusted: compiler systems module.
+# src/codegen/native/elf.tr — a from-scratch ELF64 relocatable-object (ET_REL) writer.
+# Emits: .text (code) + .rela.text (relocations) + .symtab/.strtab (symbols) +
+# .shstrtab. No assembler — raw bytes. The system linker (cc/ld) turns the .o into an
+# executable, linking crt + libc + runtime.o. Validated structurally with readelf/objdump.
+#
+# Layout: [Ehdr 64] [.text] [.rela.text] [.symtab] [.strtab] [.shstrtab] [Shdr table].
+
+from codegen.native.bytebuf import ByteBuf
+from codegen.native.isa_x64 import EncodedFunc, Reloc
+
+# A resolved relocation over the whole .text (absolute r_offset in .text + target symbol).
+pub class TextReloc:
+    pub roff: int
+    pub sym:  str
+
+# Find a symbol name's index in `names` (0-based); +1 elsewhere because symtab index 0
+# is the reserved null symbol. Returns -1 if absent.
+def _index_of(names: Vec[str], s: str) -> int:
+    mut i = 0
+    while i < names.len:
+        if names.get(i) == s: return i
+        i = i + 1
+    return -1
+
+# Emit one 64-byte Elf64_Shdr.
+def _shdr(out: ByteBuf, name: int, ty: int, flags: int, addr: int, offset: int, size: int, link: int, info: int, align: int, entsize: int):
+    out.u32(name)
+    out.u32(ty)
+    out.u64(flags)
+    out.u64(addr)
+    out.u64(offset)
+    out.u64(size)
+    out.u32(link)
+    out.u32(info)
+    out.u64(align)
+    out.u64(entsize)
+
+# Write an ELF64 .o for the given encoded functions + external symbols.
+pub def write_elf_object(out_path: str, funcs: Vec[EncodedFunc], externs: Vec[str]) -> bool:
+    # -- .text: concatenate function code; resolve relocations to text offsets --------
+    mut text = ByteBuf.init()
+    mut trelocs = Vec[TextReloc].init(4)
+    mut func_base = Vec[int].init(funcs.len)
+    mut fi = 0
+    while fi < funcs.len:
+        mut f = funcs.get(fi)
+        mut base = text.len
+        func_base.push(base)
+        text.append_buf(f.code)
+        mut ri = 0
+        while ri < f.relocs.len:
+            mut r = f.relocs.get(ri)
+            mut tr = TextReloc()
+            tr.roff = base + r.offset
+            tr.sym  = r.symbol
+            trelocs.push(tr)
+            ri = ri + 1
+        fi = fi + 1
+
+    # -- symbols: [null] then defined funcs (GLOBAL FUNC) then externs (GLOBAL UND) ----
+    mut symtab = ByteBuf.init()
+    mut strtab = ByteBuf.init()
+    mut sym_names = Vec[str].init(4)     # sym_names[k] is symbol at symtab index k+1
+    symtab.zeros(24)                     # index 0: null symbol
+    strtab.u8(0)                         # strtab index 0: empty string
+    fi = 0
+    while fi < funcs.len:
+        mut f2 = funcs.get(fi)
+        mut noff = strtab.len
+        strtab.cstr(f2.name)
+        symtab.u32(noff)                 # st_name
+        symtab.u8(18)                    # st_info = GLOBAL(1)<<4 | FUNC(2) = 0x12
+        symtab.u8(0)                     # st_other
+        symtab.u16(1)                    # st_shndx = .text (section 1)
+        symtab.u64(func_base.get(fi))    # st_value
+        symtab.u64(f2.code.len)          # st_size
+        sym_names.push(f2.name)
+        fi = fi + 1
+    mut ei = 0
+    while ei < externs.len:
+        mut ex = externs.get(ei)
+        mut noff2 = strtab.len
+        strtab.cstr(ex)
+        symtab.u32(noff2)
+        symtab.u8(16)                    # st_info = GLOBAL(1)<<4 | NOTYPE(0) = 0x10
+        symtab.u8(0)
+        symtab.u16(0)                    # st_shndx = SHN_UNDEF
+        symtab.u64(0)
+        symtab.u64(0)
+        sym_names.push(ex)
+        ei = ei + 1
+
+    # -- .rela.text: Elf64_Rela = { r_offset:u64, r_info:u64, r_addend:i64 } ----------
+    mut rela = ByteBuf.init()
+    mut tri = 0
+    while tri < trelocs.len:
+        mut trr = trelocs.get(tri)
+        mut sidx = _index_of(sym_names, trr.sym) + 1     # +1 for the null symbol
+        rela.u64(trr.roff)                                # r_offset
+        rela.u64((sidx * 4294967296) + 4)                 # r_info = (sym<<32) | R_X86_64_PLT32(4)
+        rela.u64(0 - 4)                                   # r_addend = -4 (PC-relative call)
+        tri = tri + 1
+
+    # -- .shstrtab: section-name string table -----------------------------------------
+    mut shstr = ByteBuf.init()
+    shstr.u8(0)
+    mut n_text = shstr.len
+    shstr.cstr(".text")
+    mut n_rela = shstr.len
+    shstr.cstr(".rela.text")
+    mut n_symtab = shstr.len
+    shstr.cstr(".symtab")
+    mut n_strtab = shstr.len
+    shstr.cstr(".strtab")
+    mut n_shstr = shstr.len
+    shstr.cstr(".shstrtab")
+
+    # -- file offsets (must match the write order below) ------------------------------
+    mut text_off = 64
+    mut off = text_off + text.len
+    off = _align8(off)
+    mut rela_off = off
+    off = off + rela.len
+    mut symtab_off = off
+    off = off + symtab.len
+    mut strtab_off = off
+    off = off + strtab.len
+    mut shstr_off = off
+    off = off + shstr.len
+    off = _align8(off)
+    mut shoff = off
+
+    mut nsyms = 1 + funcs.len + externs.len
+
+    # -- assemble ---------------------------------------------------------------------
+    mut out = ByteBuf.init()
+    # Elf64_Ehdr (64 bytes)
+    out.u8(127)
+    out.u8(69)
+    out.u8(76)
+    out.u8(70)          # \x7F E L F
+    out.u8(2)           # EI_CLASS = ELFCLASS64
+    out.u8(1)           # EI_DATA  = ELFDATA2LSB
+    out.u8(1)           # EI_VERSION
+    out.u8(0)           # EI_OSABI = SYSV
+    out.zeros(8)        # EI_ABIVERSION + padding (indices 8..15)
+    out.u16(1)          # e_type    = ET_REL
+    out.u16(62)         # e_machine = EM_X86_64
+    out.u32(1)          # e_version
+    out.u64(0)          # e_entry
+    out.u64(0)          # e_phoff
+    out.u64(shoff)      # e_shoff
+    out.u32(0)          # e_flags
+    out.u16(64)         # e_ehsize
+    out.u16(0)          # e_phentsize
+    out.u16(0)          # e_phnum
+    out.u16(64)         # e_shentsize
+    out.u16(6)          # e_shnum
+    out.u16(5)          # e_shstrndx (.shstrtab = section 5)
+
+    out.append_buf(text)
+    out.align_to(8)
+    out.append_buf(rela)
+    out.append_buf(symtab)
+    out.append_buf(strtab)
+    out.append_buf(shstr)
+    out.align_to(8)
+
+    # Section header table (6 entries).
+    # 0: NULL
+    _shdr(out, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+    # 1: .text   (PROGBITS, ALLOC|EXECINSTR = 0x6, align 16)
+    _shdr(out, n_text, 1, 6, 0, text_off, text.len, 0, 0, 16, 0)
+    # 2: .rela.text (RELA, INFO_LINK 0x40, link=.symtab(3), info=.text(1), align 8, entsize 24)
+    _shdr(out, n_rela, 4, 64, 0, rela_off, rela.len, 3, 1, 8, 24)
+    # 3: .symtab  (SYMTAB, link=.strtab(4), info=first-global=1, align 8, entsize 24)
+    _shdr(out, n_symtab, 2, 0, 0, symtab_off, symtab.len, 4, 1, 8, 24)
+    # 4: .strtab  (STRTAB, align 1)
+    _shdr(out, n_strtab, 3, 0, 0, strtab_off, strtab.len, 0, 0, 1, 0)
+    # 5: .shstrtab (STRTAB, align 1)
+    _shdr(out, n_shstr, 3, 0, 0, shstr_off, shstr.len, 0, 0, 1, 0)
+
+    return out.write_file(out_path)
+
+def _align8(n: int) -> int:
+    mut r = n
+    while (r % 8) != 0: r = r + 1
+    return r

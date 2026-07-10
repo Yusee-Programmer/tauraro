@@ -1,0 +1,90 @@
+# @trusted: compiler systems module — audited raw-pointer core.
+# src/taumir/ir.tr — the lowered IR ("LIR") that native (x86-64/ELF) and LLVM backends
+# consume. Distinct from src/mir.tr, which is a CFG-over-HIR for ownership/liveness
+# analysis (its statements still hold HirExpr). LIR is instruction-level: explicit ops
+# over typed values, ready for machine codegen.
+#
+# Phase 1 (skeleton) covers only what `def main(): print(<int>)` needs — an external
+# call with an immediate arg + a return. It grows (binops, loads/stores, control flow,
+# string/collection ops) as the native backend covers more of the language.
+
+from core.alloc import alloc
+
+# Machine-level types (independent of AstType). Widen as needed.
+pub enum LType:
+    LVoid
+    LI64
+    LPtr
+
+# An LIR operand.
+pub enum LVal:
+    VConst(v: int)     # integer immediate
+    VReg(id: int)      # virtual register (result of a prior instruction)
+    VStr(s: str)       # C-string literal (materialized into .rodata) — Phase 1b
+
+# An LIR instruction. dst = -1 means "no result" (void).
+pub enum LInst:
+    ICall(dst: int, callee: str, args: Vec[Pointer[LVal]])
+
+# Block terminator (exactly one per block).
+pub enum LTerm:
+    TRetInt(v: int)    # return an integer constant (main returns 0)
+    TRetVoid
+    TUnset
+
+pub def box_lval(v: LVal) -> Pointer[LVal]:
+    unsafe:
+        mut p = alloc[LVal](1)
+        p.write(v)
+        return p
+
+pub def box_linst(i: LInst) -> Pointer[LInst]:
+    unsafe:
+        mut p = alloc[LInst](1)
+        p.write(i)
+        return p
+
+pub class LBlock:
+    pub insts: Vec[Pointer[LInst]]
+    pub term:  LTerm
+
+extend LBlock:
+    pub def init() -> LBlock:
+        mut b = LBlock()
+        b.insts = Vec[Pointer[LInst]].init(4)
+        b.term  = LTerm.TUnset
+        return b
+
+pub class LFunc:
+    pub name:    str
+    pub block:   LBlock        # single block for the skeleton (CFG comes in Phase 2)
+    pub is_main: bool
+
+extend LFunc:
+    pub def init(name: str) -> LFunc:
+        mut f = LFunc()
+        f.name    = name
+        f.block   = LBlock.init()
+        f.is_main = false
+        return f
+
+pub class LModule:
+    pub funcs:   Vec[LFunc]
+    pub externs: Vec[str]      # external symbols referenced (e.g. _tr_rt_print_i64)
+    pub ok:      bool          # false if any construct wasn't lowerable (native falls back)
+
+extend LModule:
+    pub def init() -> LModule:
+        mut m = LModule()
+        m.funcs   = Vec[LFunc].init(4)
+        m.externs = Vec[str].init(4)
+        m.ok      = true
+        return m
+
+    # Record an external symbol once (deduplicated).
+    pub def add_extern(self, name: str):
+        mut i = 0
+        while i < self.externs.len:
+            if self.externs.get(i) == name: return
+            i = i + 1
+        self.externs.push(name)

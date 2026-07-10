@@ -1,0 +1,91 @@
+# @trusted: compiler systems module.
+# src/codegen/native/isa_x64.tr — x86-64 instruction selection + encoding for the LIR.
+# Phase 1 (skeleton) encodes a leaf `main` that makes one runtime call with an immediate
+# argument and returns 0. Grows to the full op set + linear-scan register allocation in
+# Phase 2. System V AMD64 ABI: integer args in rdi, rsi, rdx, rcx, r8, r9; result in rax.
+
+from taumir.ir import LFunc, LInst, LVal, LTerm
+from codegen.native.bytebuf import ByteBuf
+
+# A PC-relative relocation site inside a function's code (currently only `call`).
+# type is always R_X86_64_PLT32 (4), addend -4.
+pub class Reloc:
+    pub offset: int    # byte offset of the rel32 field, relative to the function start
+    pub symbol: str    # target symbol name
+
+pub class EncodedFunc:
+    pub name:    str
+    pub is_main: bool
+    pub code:    ByteBuf
+    pub relocs:  Vec[Reloc]
+
+extend EncodedFunc:
+    pub def init(name: str) -> EncodedFunc:
+        mut e = EncodedFunc()
+        e.name    = name
+        e.is_main = false
+        e.code    = ByteBuf.init()
+        e.relocs  = Vec[Reloc].init(2)
+        return e
+
+# System V integer argument registers, encoded as the ModRM reg field for
+# `mov r32, imm32` (opcode B8+rd). rdi=7, rsi=6, rdx=2, rcx=1, r8, r9 (r8/r9 need REX.B).
+def _arg_opcode_movimm(idx: int) -> int:
+    if idx == 0: return 0xBF   # mov edi, imm32
+    if idx == 1: return 0xBE   # mov esi, imm32
+    if idx == 2: return 0xBA   # mov edx, imm32
+    if idx == 3: return 0xB9   # mov ecx, imm32
+    return 0xBF                # (skeleton: <= 1 arg; extend for r8/r9 later)
+
+# Select + encode one LIR function to x86-64 machine code + relocations.
+pub def encode_func(lf: LFunc) -> EncodedFunc:
+    mut e = EncodedFunc.init(lf.name)
+    e.is_main = lf.is_main
+    mut c = e.code
+
+    # prologue: push rbp ; mov rbp, rsp   (keeps rsp 16-aligned for the call)
+    c.u8(0x55)
+    c.u8(0x48)
+    c.u8(0x89)
+    c.u8(0xE5)
+
+    mut ii = 0
+    while ii < lf.block.insts.len:
+        match lf.block.insts.get(ii).read():
+            case LInst.ICall(_, callee, args):
+                # load integer-immediate args into arg registers
+                mut ai = 0
+                while ai < args.len:
+                    match args.get(ai).read():
+                        case LVal.VConst(v):
+                            c.u8(_arg_opcode_movimm(ai))
+                            c.u32(v)
+                        case _:
+                            pass
+                    ai = ai + 1
+                # call rel32 -> E8 <rel32=0 placeholder>, reloc at the rel32 offset
+                c.u8(0xE8)
+                mut r = Reloc()
+                r.offset = c.len
+                r.symbol = callee
+                e.relocs.push(r)
+                c.u32(0)
+        ii = ii + 1
+
+    # terminator -> set eax then epilogue
+    match lf.block.term:
+        case LTerm.TRetInt(rv):
+            if rv == 0:
+                c.u8(0x31)   # xor eax, eax
+                c.u8(0xC0)
+            else:
+                c.u8(0xB8)   # mov eax, imm32
+                c.u32(rv)
+        case _:
+            c.u8(0x31)
+            c.u8(0xC0)
+
+    # epilogue: pop rbp ; ret
+    c.u8(0x5D)
+    c.u8(0xC3)
+    return e

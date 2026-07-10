@@ -1,0 +1,79 @@
+# @trusted: compiler systems module.
+# src/taumir/lower.tr — HIR -> LIR lowering. Phase 1 handles only the skeleton
+# (`def main(): print(<int literal>)` — an external runtime call with an immediate,
+# plus an implicit `return 0`). Anything else sets LModule.ok = false so the native
+# driver falls back to a clean error and the C backend is used instead. This grows to
+# full expression/statement lowering (reusing src/mir.tr's CFG + drop analysis) in
+# Phase 2.
+
+from hir import HirProgram, HirFunction, HirStmt, HirExpr, HirBlock
+from taumir.ir import LModule, LFunc, LInst, LVal, LTerm, box_lval, box_linst
+
+# The runtime symbol that `print(<i64>)` lowers to (see runtime/native_abi.c).
+def _print_i64_sym() -> str:
+    return "_tr_rt_print_i64"
+
+# Lower a whole program to LIR. For the skeleton, only `main` (void, whose body is a
+# sequence of `print(<int>)` statements) is supported.
+pub def lower_to_lir(prog: HirProgram) -> LModule:
+    mut m = LModule.init()
+    mut i = 0
+    while i < prog.functions.len:
+        mut f = prog.functions.get(i)
+        if f.name == "main":
+            lower_main(m, f)
+        i = i + 1
+    return m
+
+def lower_main(m: LModule, f: HirFunction):
+    mut lf = LFunc.init("main")
+    lf.is_main = true
+    mut si = 0
+    while si < f.body.stmts.len:
+        mut s = f.body.stmts.get(si)
+        if not lower_stmt(m, lf, s):
+            m.ok = false
+            return
+        si = si + 1
+    # main returns 0
+    lf.block.term = LTerm.TRetInt(0)
+    m.funcs.push(lf)
+
+# Returns true if the statement was lowered, false if it's beyond the skeleton.
+def lower_stmt(m: LModule, lf: LFunc, s: Pointer[HirStmt]) -> bool:
+    match s.read():
+        case HirStmt.SExpr(e):
+            return lower_print(m, lf, e)
+        case HirStmt.SReturn(_):
+            # Skeleton: a void `return` in main is handled by the block terminator.
+            return true
+        case HirStmt.SLineMarker(_):
+            return true      # source-line marker — no-op for native
+        case HirStmt.SPass:
+            return true
+        case _:
+            return false
+
+# Match `print(<int literal>)` -> ICall(_tr_rt_print_i64, [const]).
+def lower_print(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> bool:
+    match e.read():
+        case HirExpr.ECall(callee, args, _):
+            mut is_print = false
+            match callee.read():
+                case HirExpr.EIdent(n, _, _):
+                    if n == "print": is_print = true
+                case _: pass
+            if not is_print: return false
+            if args.len != 1: return false
+            match args.get(0).read():
+                case HirExpr.ELitInt(v, _):
+                    mut callee_sym = _print_i64_sym()
+                    m.add_extern(callee_sym)
+                    mut cargs = Vec[Pointer[LVal]].init(1)
+                    cargs.push(box_lval(LVal.VConst(v)))
+                    lf.block.insts.push(box_linst(LInst.ICall(-1, callee_sym, cargs)))
+                    return true
+                case _:
+                    return false
+        case _:
+            return false
