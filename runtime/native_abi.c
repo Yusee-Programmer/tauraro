@@ -130,6 +130,38 @@ long long _tr_rt_str_ends_with(const char* s, const char* p) {
     if (pl > sl) return 0;
     return strcmp(s + sl - pl, p) == 0 ? 1 : 0;
 }
+/* s.slice(a,b) / s.count(sub) / s.char_at(i) / s.contains(sub) — match tauraro_rt.h. */
+char* _tr_rt_str_slice(const char* s, long long start, long long end) {
+    char* e;
+    long long len, sz;
+    if (!s) { e = (char*)malloc(1); e[0] = 0; return e; }
+    len = (long long)strlen(s);
+    if (start < 0) start = 0;
+    if (end > len) end = len;
+    if (start >= end) { e = (char*)malloc(1); e[0] = 0; return e; }
+    sz = end - start;
+    e = (char*)malloc((size_t)sz + 1);
+    for (long long i = 0; i < sz; i++) e[i] = s[start + i];
+    e[sz] = 0;
+    return e;
+}
+long long _tr_rt_str_count(const char* s, const char* sub) {
+    if (!s || !sub || !*sub) return 0;
+    size_t subl = strlen(sub); long long c = 0; const char* p = s;
+    while ((p = strstr(p, sub))) { c++; p += subl; }
+    return c;
+}
+long long _tr_rt_str_char_at(const char* s, long long i) {
+    if (!s) return -1;
+    long long n = (long long)strlen(s);
+    if (i < 0 || i >= n) return -1;
+    return (long long)(unsigned char)s[i];
+}
+long long _tr_rt_str_contains(const char* s, const char* sub) {
+    if (!s || !sub) return 0;
+    return strstr(s, sub) != 0 ? 1 : 0;
+}
+
 long long _tr_rt_list_sum_i64(void* h) {
     _TrNList* l = (_TrNList*)h;
     if (!l) return 0;

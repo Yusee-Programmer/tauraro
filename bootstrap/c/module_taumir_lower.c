@@ -1339,6 +1339,89 @@ __attribute__((hot)) long long _lower_str_method(LModule* m, LFunc* lf, long lon
         return _str_call1(m, lf, _tr_str_lit("_tr_rt_str_ends_with"), _tr_v_recv, ea, 4LL);
     }
     /* pass */
+    if (((strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("count"))) == 0) && (margs->len == 1LL))) {
+        /* pass */
+        long long ka = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, 0LL)));
+        /* pass */
+        if (((ka < 0LL) || (LFunc_vreg_type(lf, ka) != 1LL))) {
+            /* pass */
+            return (-1LL);
+        }
+        /* pass */
+        return _str_call1(m, lf, _tr_str_lit("_tr_rt_str_count"), _tr_v_recv, ka, 0LL);
+    }
+    /* pass */
+    if (((strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("contains"))) == 0) && (margs->len == 1LL))) {
+        /* pass */
+        long long na = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, 0LL)));
+        /* pass */
+        if (((na < 0LL) || (LFunc_vreg_type(lf, na) != 1LL))) {
+            /* pass */
+            return (-1LL);
+        }
+        /* pass */
+        return _str_call1(m, lf, _tr_str_lit("_tr_rt_str_contains"), _tr_v_recv, na, 4LL);
+    }
+    /* pass */
+    if (((strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("char_at"))) == 0) && (margs->len == 1LL))) {
+        /* pass */
+        long long ia = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, 0LL)));
+        /* pass */
+        if (((ia < 0LL) || (LFunc_vreg_type(lf, ia) != 0LL))) {
+            /* pass */
+            return (-1LL);
+        }
+        /* pass */
+        return _str_call1(m, lf, _tr_str_lit("_tr_rt_str_char_at"), _tr_v_recv, ia, 0LL);
+    }
+    /* pass */
+    if (((strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("repeat"))) == 0) && (margs->len == 1LL))) {
+        /* pass */
+        long long pa = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, 0LL)));
+        /* pass */
+        if (((pa < 0LL) || (LFunc_vreg_type(lf, pa) != 0LL))) {
+            /* pass */
+            return (-1LL);
+        }
+        /* pass */
+        return _str_call1(m, lf, _tr_str_lit("_tr_rt_str_repeat"), _tr_v_recv, pa, 1LL);
+    }
+    /* pass */
+    if (((strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("slice"))) == 0) && (margs->len == 2LL))) {
+        /* pass */
+        long long s0 = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, 0LL)));
+        /* pass */
+        if (((s0 < 0LL) || (LFunc_vreg_type(lf, s0) != 0LL))) {
+            /* pass */
+            return (-1LL);
+        }
+        /* pass */
+        long long s1 = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, 1LL)));
+        /* pass */
+        if (((s1 < 0LL) || (LFunc_vreg_type(lf, s1) != 0LL))) {
+            /* pass */
+            return (-1LL);
+        }
+        /* pass */
+        LModule_add_extern(m, _tr_str_lit("_tr_rt_str_slice"));
+        /* pass */
+        List_i64* sla = (void*)List_i64_new();
+        /* pass */
+        List_i64_append(sla, _tr_v_recv);
+        /* pass */
+        List_i64_append(sla, s0);
+        /* pass */
+        List_i64_append(sla, s1);
+        /* pass */
+        long long sld = LFunc_new_vreg(lf);
+        /* pass */
+        LFunc_emit(lf, LInst_ctor_ICall(sld, _tr_str_lit("_tr_rt_str_slice"), sla));
+        /* pass */
+        LFunc_set_vreg_type(lf, sld, 1LL);
+        /* pass */
+        return sld;
+    }
+    /* pass */
     return (-1LL);
 }
 

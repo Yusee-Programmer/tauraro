@@ -563,6 +563,36 @@ def _lower_str_method(m: LModule, lf: LFunc, recv: int, method: str, margs: Vec[
         mut ea = lower_expr(m, lf, margs.get(0))
         if ea < 0 or lf.vreg_type(ea) != 1: return -1
         return _str_call1(m, lf, "_tr_rt_str_ends_with", recv, ea, 4)
+    if method == "count" and margs.len == 1:
+        mut ka = lower_expr(m, lf, margs.get(0))
+        if ka < 0 or lf.vreg_type(ka) != 1: return -1
+        return _str_call1(m, lf, "_tr_rt_str_count", recv, ka, 0)
+    if method == "contains" and margs.len == 1:
+        mut na = lower_expr(m, lf, margs.get(0))
+        if na < 0 or lf.vreg_type(na) != 1: return -1
+        return _str_call1(m, lf, "_tr_rt_str_contains", recv, na, 4)
+    if method == "char_at" and margs.len == 1:
+        mut ia = lower_expr(m, lf, margs.get(0))
+        if ia < 0 or lf.vreg_type(ia) != 0: return -1
+        return _str_call1(m, lf, "_tr_rt_str_char_at", recv, ia, 0)
+    if method == "repeat" and margs.len == 1:
+        mut pa = lower_expr(m, lf, margs.get(0))
+        if pa < 0 or lf.vreg_type(pa) != 0: return -1
+        return _str_call1(m, lf, "_tr_rt_str_repeat", recv, pa, 1)
+    if method == "slice" and margs.len == 2:
+        mut s0 = lower_expr(m, lf, margs.get(0))
+        if s0 < 0 or lf.vreg_type(s0) != 0: return -1
+        mut s1 = lower_expr(m, lf, margs.get(1))
+        if s1 < 0 or lf.vreg_type(s1) != 0: return -1
+        m.add_extern("_tr_rt_str_slice")
+        mut sla = Vec[int].init(3)
+        sla.push(recv)
+        sla.push(s0)
+        sla.push(s1)
+        mut sld = lf.new_vreg()
+        lf.emit(LInst.ICall(sld, "_tr_rt_str_slice", sla))
+        lf.set_vreg_type(sld, 1)
+        return sld
     return -1
 
 # Compile-time int literal helpers (for `range(a, b, step)` direction). Handle `-N` too.
