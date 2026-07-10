@@ -4172,7 +4172,7 @@ __attribute__((hot)) TrStr CGenerator_gen_match_expr(CGenerator* self, HirExpr* 
             }
         } else if (_t956.tag == Pattern_PLitStr) {
             __auto_type v = _t956.data.PLitStr.val;
-            TrStr _strtmp_t960 = ({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("_tr_str_eq(")), _tr_strz(subj_t))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(", \""))); _tr_str_release(_cl); _cres; })); TrStr _cr = (_escape_str_for_c(v)); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\")"))); _tr_str_release(_cl); _cres; });
+            TrStr _strtmp_t960 = ({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("_tr_str_eq(_tr_strz(")), _tr_strz(subj_t))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("), \""))); _tr_str_release(_cl); _cres; })); TrStr _cr = (_escape_str_for_c(v)); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\")"))); _tr_str_release(_cl); _cres; });
             _tr_str_release(cond);
             cond = _strtmp_t960;
         } else if (_t956.tag == Pattern_PVariant) {
@@ -4355,7 +4355,7 @@ __auto_type vn = _t975.data.PVariant.variant;
                     pc = _strtmp_t978;
                 } else if (_t975.tag == Pattern_PLitStr) {
                     __auto_type vs = _t975.data.PLitStr.val;
-                    TrStr _strtmp_t979 = ({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("_tr_str_eq(")), _tr_strz(subj_t))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(", \""))); _tr_str_release(_cl); _cres; })); TrStr _cr = (_escape_str_for_c(vs)); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\")"))); _tr_str_release(_cl); _cres; });
+                    TrStr _strtmp_t979 = ({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("_tr_str_eq(_tr_strz(")), _tr_strz(subj_t))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("), \""))); _tr_str_release(_cl); _cres; })); TrStr _cr = (_escape_str_for_c(vs)); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\")"))); _tr_str_release(_cl); _cres; });
                     _tr_str_release(pc);
                     pc = _strtmp_t979;
                 } else if (_t975.tag == Pattern_PLitBool) {
@@ -12935,7 +12935,7 @@ __attribute__((hot)) TrStr CGenerator_gen_fstring(CGenerator* self, List_ptr* pa
     /* pass */
     if ((parts->len == 0LL)) {
         /* pass */
-        return _tr_str_lit("\"\"");
+        return _tr_str_lit("_tr_str_lit(\"\")");
     }
     /* pass */
     TrStr fmt = _tr_str_lit("");
@@ -17962,7 +17962,7 @@ __attribute__((hot)) void CGenerator_gen_match(CGenerator* self, HirExpr* expr, 
                 }
             } else if (_t1970.tag == Pattern_PLitStr) {
                 __auto_type v = _t1970.data.PLitStr.val;
-                TrStr _strtmp_t1974 = ({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("_tr_str_eq(")), _tr_strz(subj))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(", \""))); _tr_str_release(_cl); _cres; })); TrStr _cr = (_escape_str_for_c(v)); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\")"))); _tr_str_release(_cl); _cres; });
+                TrStr _strtmp_t1974 = ({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("_tr_str_eq(_tr_strz(")), _tr_strz(subj))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("), \""))); _tr_str_release(_cl); _cres; })); TrStr _cr = (_escape_str_for_c(v)); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\")"))); _tr_str_release(_cl); _cres; });
                 _tr_str_release(gcond);
                 gcond = _strtmp_t1974;
             } else if (_t1970.tag == Pattern_PVariant) {
@@ -18183,7 +18183,7 @@ __auto_type fields = _t1970.data.PVariantBindMany.fields;
             }
         } else if (_t1998.tag == Pattern_PLitStr) {
             __auto_type v = _t1998.data.PLitStr.val;
-            TrStr _strtmp_t2002 = ({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("_tr_str_eq(")), _tr_strz(subj))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(", \""))); _tr_str_release(_cl); _cres; })); TrStr _cr = (_escape_str_for_c(v)); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\")"))); _tr_str_release(_cl); _cres; });
+            TrStr _strtmp_t2002 = ({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("_tr_str_eq(_tr_strz(")), _tr_strz(subj))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("), \""))); _tr_str_release(_cl); _cres; })); TrStr _cr = (_escape_str_for_c(v)); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\")"))); _tr_str_release(_cl); _cres; });
             _tr_str_release(cond);
             cond = _strtmp_t2002;
         } else if (_t1998.tag == Pattern_PVariant) {
@@ -18367,7 +18367,7 @@ __auto_type vn = _t2017.data.PVariant.variant;
                     pc = _strtmp_t2020;
                 } else if (_t2017.tag == Pattern_PLitStr) {
                     __auto_type vs = _t2017.data.PLitStr.val;
-                    TrStr _strtmp_t2021 = ({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("_tr_str_eq(")), _tr_strz(subj))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(", \""))); _tr_str_release(_cl); _cres; })); TrStr _cr = (_escape_str_for_c(vs)); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\")"))); _tr_str_release(_cl); _cres; });
+                    TrStr _strtmp_t2021 = ({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("_tr_str_eq(_tr_strz(")), _tr_strz(subj))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("), \""))); _tr_str_release(_cl); _cres; })); TrStr _cr = (_escape_str_for_c(vs)); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\")"))); _tr_str_release(_cl); _cres; });
                     _tr_str_release(pc);
                     pc = _strtmp_t2021;
                 } else if (_t2017.tag == Pattern_PLitBool) {
