@@ -15,7 +15,16 @@ echo "=============================================================="
 echo "  Native backend LINK + RUN — x86-64/ELF, 100% Tauraro (no C)"
 echo "=============================================================="
 mkdir -p build
-printf 'def main():\n    print(42)\n' > /tmp/native_p42.tr
+# Exercises the native backend: integer constants, local variables, +/-/* , and multiple
+# runtime calls — all compiled straight to x86-64, no C.
+cat > /tmp/native_p42.tr <<'EOF'
+def main():
+    mut x = 6
+    mut y = 7
+    print(x * y)
+    print(40 + 2)
+    print(50 - 8)
+EOF
 
 # 1) runtime.o — extern entry points to the header-only runtime (compiled once).
 bash scripts/build_runtime_o.sh build/runtime.o || { echo "FAIL: runtime.o"; exit 1; }
@@ -34,9 +43,10 @@ fi
 # 4) run.
 out="$(build/native_p42 2>&1)"
 echo "--- output ---"; echo "$out" | sed 's/^/    /'
-if [ "$out" = "42" ]; then
-    echo "NATIVE RUN OK ✅ — a Tauraro program compiled straight to x86-64/ELF (no C) printed 42"
+expected=$'42\n42\n42'
+if [ "$out" = "$expected" ]; then
+    echo "NATIVE RUN OK ✅ — a Tauraro program (vars + arithmetic) compiled straight to x86-64/ELF (no C) ran correctly"
     exit 0
 else
-    echo "FAIL: expected 42, got '$out'"; exit 1
+    echo "FAIL: expected three 42s, got '$out'"; exit 1
 fi

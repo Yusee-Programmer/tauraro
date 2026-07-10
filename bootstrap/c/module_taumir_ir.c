@@ -24,7 +24,59 @@ __attribute__((malloc,returns_nonnull,hot)) LFunc* LFunc_init(TrStr name) {
     /* pass */
     f->is_main = false;
     /* pass */
+    f->n_vregs = 0LL;
+    /* pass */
+    f->vars = (void*)List_TrStr_new();
+    /* pass */
     return f;
+}
+
+__attribute__((hot)) long long LFunc_new_vreg(LFunc* self) {
+    /* pass */
+    long long id = self->n_vregs;
+    /* pass */
+    self->n_vregs = (self->n_vregs + 1LL);
+    /* pass */
+    return id;
+}
+
+__attribute__((hot)) void LFunc_add_var(LFunc* self, TrStr name) {
+    /* pass */
+    long long i = 0LL;
+    /* pass */
+    while ((i < self->vars->len)) {
+        /* pass */
+        if ((strcmp(_tr_strz(List_TrStr_get(self->vars, i)), _tr_strz(name)) == 0)) {
+            /* pass */
+            return;
+        }
+        /* pass */
+        i = (i + 1LL);
+    }
+    /* pass */
+    List_TrStr_append(self->vars, name);
+}
+
+__attribute__((hot)) long long LFunc_var_index(LFunc* self, TrStr name) {
+    /* pass */
+    long long i = 0LL;
+    /* pass */
+    while ((i < self->vars->len)) {
+        /* pass */
+        if ((strcmp(_tr_strz(List_TrStr_get(self->vars, i)), _tr_strz(name)) == 0)) {
+            /* pass */
+            return i;
+        }
+        /* pass */
+        i = (i + 1LL);
+    }
+    /* pass */
+    return (-1LL);
+}
+
+__attribute__((hot)) void LFunc_emit(LFunc* self, LInst i) {
+    /* pass */
+    List_ptr_append(self->block->insts, box_linst(i));
 }
 
 __attribute__((malloc,returns_nonnull,hot)) LModule* LModule_init() {
@@ -55,17 +107,6 @@ __attribute__((hot)) void LModule_add_extern(LModule* self, TrStr name) {
     }
     /* pass */
     List_TrStr_append(self->externs, name);
-}
-
-__attribute__((hot)) LVal* box_lval(LVal v) {
-    /* pass */
-    /* unsafe block */
-    /* pass */
-    LVal* p = ((LVal*)_tr_c_calloc((size_t)(1LL), sizeof(LVal)));
-    /* pass */
-    (*p = v);
-    /* pass */
-    return p;
 }
 
 __attribute__((hot)) LInst* box_linst(LInst i) {

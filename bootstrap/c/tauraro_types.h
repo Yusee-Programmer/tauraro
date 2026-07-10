@@ -76,7 +76,6 @@ typedef struct MirStmt MirStmt;
 typedef struct MirTerm MirTerm;
 typedef struct SymbolKind SymbolKind;
 typedef struct LType LType;
-typedef struct LVal LVal;
 typedef struct LInst LInst;
 typedef struct LTerm LTerm;
 typedef struct MacroVal MacroVal;
@@ -1575,31 +1574,10 @@ typedef struct LType {
 #define LType_make_LPtr() ((LType){.tag=LType_LPtr})
 
 typedef enum {
-    LVal_VConst,
-    LVal_VReg,
-    LVal_VStr
-} LVal_tag;
-
-typedef struct LVal {
-    LVal_tag tag;
-    union {
-        struct {
-            long long v;
-        } VConst;
-        struct {
-            long long id;
-        } VReg;
-        struct {
-            TrStr s;
-        } VStr;
-    } data;
-} LVal;
-
-static inline __attribute__((always_inline)) LVal LVal_ctor_VConst(long long v) { LVal _r = {.tag=LVal_VConst}; _r.data.VConst.v = v; return _r; }
-static inline __attribute__((always_inline)) LVal LVal_ctor_VReg(long long id) { LVal _r = {.tag=LVal_VReg}; _r.data.VReg.id = id; return _r; }
-static inline __attribute__((always_inline)) LVal LVal_ctor_VStr(TrStr s) { LVal _r = {.tag=LVal_VStr}; _r.data.VStr.s = _tr_str_retain(s); return _r; }
-
-typedef enum {
+    LInst_IConst,
+    LInst_IBinOp,
+    LInst_ILoadVar,
+    LInst_IStoreVar,
     LInst_ICall
 } LInst_tag;
 
@@ -1608,13 +1586,35 @@ typedef struct LInst {
     union {
         struct {
             long long dst;
+            long long v;
+        } IConst;
+        struct {
+            long long dst;
+            TrStr op;
+            long long a;
+            long long b;
+        } IBinOp;
+        struct {
+            long long dst;
+            TrStr name;
+        } ILoadVar;
+        struct {
+            TrStr name;
+            long long src;
+        } IStoreVar;
+        struct {
+            long long dst;
             TrStr callee;
-            List_ptr* args;
+            List_i64* args;
         } ICall;
     } data;
 } LInst;
 
-static inline __attribute__((always_inline)) LInst LInst_ctor_ICall(long long dst, TrStr callee, List_ptr* args) { LInst _r = {.tag=LInst_ICall}; _r.data.ICall.dst = dst; _r.data.ICall.callee = _tr_str_retain(callee); _r.data.ICall.args = args; return _r; }
+static inline __attribute__((always_inline)) LInst LInst_ctor_IConst(long long dst, long long v) { LInst _r = {.tag=LInst_IConst}; _r.data.IConst.dst = dst; _r.data.IConst.v = v; return _r; }
+static inline __attribute__((always_inline)) LInst LInst_ctor_IBinOp(long long dst, TrStr op, long long a, long long b) { LInst _r = {.tag=LInst_IBinOp}; _r.data.IBinOp.dst = dst; _r.data.IBinOp.op = _tr_str_retain(op); _r.data.IBinOp.a = a; _r.data.IBinOp.b = b; return _r; }
+static inline __attribute__((always_inline)) LInst LInst_ctor_ILoadVar(long long dst, TrStr name) { LInst _r = {.tag=LInst_ILoadVar}; _r.data.ILoadVar.dst = dst; _r.data.ILoadVar.name = _tr_str_retain(name); return _r; }
+static inline __attribute__((always_inline)) LInst LInst_ctor_IStoreVar(TrStr name, long long src) { LInst _r = {.tag=LInst_IStoreVar}; _r.data.IStoreVar.name = _tr_str_retain(name); _r.data.IStoreVar.src = src; return _r; }
+static inline __attribute__((always_inline)) LInst LInst_ctor_ICall(long long dst, TrStr callee, List_i64* args) { LInst _r = {.tag=LInst_ICall}; _r.data.ICall.dst = dst; _r.data.ICall.callee = _tr_str_retain(callee); _r.data.ICall.args = args; return _r; }
 
 typedef enum {
     LTerm_TRetInt,
@@ -2787,11 +2787,14 @@ typedef struct LFunc {
     TrStr name;
     LBlock* block;
     bool is_main;
+    long long n_vregs;
+    List_TrStr* vars;
 } LFunc;
 static void _trdrop_LFunc(void* vp) {
     LFunc* self = (LFunc*)vp; (void)self;
     _tr_str_release(self->name);
     _tr_obj_release(self->block, _trdrop_LBlock);
+    List_TrStr_free(self->vars);
 }
 #endif
 
@@ -2984,12 +2987,6 @@ static inline void List_LType_append(List_LType* l, LType val) { if(l->len==l->c
 static inline LType List_LType_get(List_LType* l, long long i) { _tr_bounds_check(i, l->len); return l->data[i]; }
 static inline LType List_LType_pop(List_LType* l) { if(!l||l->len==0) return (LType){0}; l->len--; return l->data[l->len]; }
 static inline void List_LType_free(List_LType* l) { if(l){ free(l->data); free(l); } }
-typedef struct List_LVal { LVal* data; size_t len; size_t capacity; } List_LVal;
-static inline List_LVal* List_LVal_new(void) { List_LVal* l=(List_LVal*)malloc(sizeof(List_LVal)); l->data=(LVal*)malloc(sizeof(LVal)*8); l->len=0; l->capacity=8; return l; }
-static inline void List_LVal_append(List_LVal* l, LVal val) { if(l->len==l->capacity){ l->capacity*=2; l->data=(LVal*)realloc(l->data,sizeof(LVal)*l->capacity); } l->data[l->len++]=val; }
-static inline LVal List_LVal_get(List_LVal* l, long long i) { _tr_bounds_check(i, l->len); return l->data[i]; }
-static inline LVal List_LVal_pop(List_LVal* l) { if(!l||l->len==0) return (LVal){0}; l->len--; return l->data[l->len]; }
-static inline void List_LVal_free(List_LVal* l) { if(l){ free(l->data); free(l); } }
 typedef struct List_LInst { LInst* data; size_t len; size_t capacity; } List_LInst;
 static inline List_LInst* List_LInst_new(void) { List_LInst* l=(List_LInst*)malloc(sizeof(List_LInst)); l->data=(LInst*)malloc(sizeof(LInst)*8); l->len=0; l->capacity=8; return l; }
 static inline void List_LInst_append(List_LInst* l, LInst val) { if(l->len==l->capacity){ l->capacity*=2; l->data=(LInst*)realloc(l->data,sizeof(LInst)*l->capacity); } l->data[l->len++]=val; }
@@ -3439,17 +3436,22 @@ __attribute__((hot)) TrStr LlvmGenerator_gen_call_llvm(LlvmGenerator* self, HirE
 __attribute__((hot)) void LlvmGenerator_gen_stmt(LlvmGenerator* self, HirStmt* s_ptr);
 __attribute__((hot)) void LlvmGenerator_gen_block(LlvmGenerator* self, HirBlock* b);
 __attribute__((hot)) TrStr LlvmGenerator_generate(LlvmGenerator* self, HirProgram* prog);
-__attribute__((hot)) LVal* box_lval(LVal v);
 __attribute__((hot)) LInst* box_linst(LInst i);
 __attribute__((malloc,returns_nonnull,hot)) LBlock* LBlock_init();
 __attribute__((malloc,returns_nonnull,hot)) LFunc* LFunc_init(TrStr name);
+__attribute__((hot)) long long LFunc_new_vreg(LFunc* self);
+__attribute__((hot)) void LFunc_add_var(LFunc* self, TrStr name);
+__attribute__((hot)) long long LFunc_var_index(LFunc* self, TrStr name);
+__attribute__((hot)) void LFunc_emit(LFunc* self, LInst i);
 __attribute__((malloc,returns_nonnull,hot)) LModule* LModule_init();
 __attribute__((hot)) void LModule_add_extern(LModule* self, TrStr name);
 __attribute__((hot)) TrStr _print_i64_sym();
 __attribute__((hot)) LModule* lower_to_lir(HirProgram* prog);
 __attribute__((hot)) void lower_main(LModule* m, HirFunction* f);
 __attribute__((hot)) bool lower_stmt(LModule* m, LFunc* lf, HirStmt* s);
-__attribute__((hot)) bool lower_print(LModule* m, LFunc* lf, HirExpr* e);
+__attribute__((hot)) TrStr _ident_name(HirExpr* e);
+__attribute__((hot)) bool lower_call_stmt(LModule* m, LFunc* lf, HirExpr* e);
+__attribute__((hot)) long long lower_expr(LFunc* lf, HirExpr* e);
 __attribute__((malloc,returns_nonnull,hot)) ByteBuf* ByteBuf_init();
 __attribute__((hot)) void ByteBuf_u8(ByteBuf* self, long long v);
 __attribute__((hot)) void ByteBuf_u16(ByteBuf* self, long long v);
@@ -3462,7 +3464,16 @@ __attribute__((hot)) void ByteBuf_patch_u32(ByteBuf* self, long long off, long l
 __attribute__((hot)) void ByteBuf_align_to(ByteBuf* self, long long align);
 __attribute__((hot)) bool ByteBuf_write_file(ByteBuf* self, TrStr path);
 __attribute__((malloc,returns_nonnull,hot)) EncodedFunc* EncodedFunc_init(TrStr name);
-__attribute__((hot)) long long _arg_opcode_movimm(long long idx);
+__attribute__((hot)) long long _argreg_modrm(long long idx);
+__attribute__((hot)) long long _round16(long long n);
+__attribute__((hot)) long long _vreg_disp(long long id);
+__attribute__((hot)) long long _var_disp(LFunc* lf, TrStr name);
+__attribute__((hot)) void _st_rax(ByteBuf* c, long long disp);
+__attribute__((hot)) void _ld_rax(ByteBuf* c, long long disp);
+__attribute__((hot)) void _ld_rcx(ByteBuf* c, long long disp);
+__attribute__((hot)) void _ld_argreg(ByteBuf* c, long long idx, long long disp);
+__attribute__((hot)) void _mov_rax_imm64(ByteBuf* c, long long v);
+__attribute__((hot)) void _emit_binop(ByteBuf* c, TrStr op);
 __attribute__((hot)) EncodedFunc* encode_func(LFunc* lf);
 __attribute__((hot)) long long _index_of(List_TrStr* names, TrStr s);
 __attribute__((hot)) void _shdr(ByteBuf* out, long long name, long long ty, long long flags, long long addr, long long offset, long long size, long long link, long long info, long long align, long long entsize);
@@ -4775,18 +4786,6 @@ __attribute__((hot)) void core_alloc_dealloc_taumir_ir_LType(taumir_ir_LType* pt
 __attribute__((hot)) taumir_ir_LType** core_alloc_alloc_taumir_ir_LType_ptr(long long count);
 __attribute__((hot)) taumir_ir_LType** core_alloc_resize_taumir_ir_LType_ptr(taumir_ir_LType** ptr, long long new_count);
 __attribute__((hot)) void core_alloc_dealloc_taumir_ir_LType_ptr(taumir_ir_LType** ptr);
-
-typedef LVal taumir_ir_LVal;
-struct core_vec_Vec_taumir_ir_LVal { taumir_ir_LVal* data; long long len; long long capacity; };
-typedef struct core_vec_Vec_taumir_ir_LVal core_vec_Vec_taumir_ir_LVal;
-struct core_vec_Vec_taumir_ir_LVal_ptr { taumir_ir_LVal** data; long long len; long long capacity; };
-typedef struct core_vec_Vec_taumir_ir_LVal_ptr core_vec_Vec_taumir_ir_LVal_ptr;
-__attribute__((hot)) taumir_ir_LVal* core_alloc_alloc_taumir_ir_LVal(long long count);
-__attribute__((hot)) taumir_ir_LVal* core_alloc_resize_taumir_ir_LVal(taumir_ir_LVal* ptr, long long new_count);
-__attribute__((hot)) void core_alloc_dealloc_taumir_ir_LVal(taumir_ir_LVal* ptr);
-__attribute__((hot)) taumir_ir_LVal** core_alloc_alloc_taumir_ir_LVal_ptr(long long count);
-__attribute__((hot)) taumir_ir_LVal** core_alloc_resize_taumir_ir_LVal_ptr(taumir_ir_LVal** ptr, long long new_count);
-__attribute__((hot)) void core_alloc_dealloc_taumir_ir_LVal_ptr(taumir_ir_LVal** ptr);
 
 typedef LInst taumir_ir_LInst;
 struct core_vec_Vec_taumir_ir_LInst { taumir_ir_LInst* data; long long len; long long capacity; };

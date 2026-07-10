@@ -1,42 +1,33 @@
 # @trusted: compiler systems module — audited raw-pointer core.
-# src/taumir/ir.tr — the lowered IR ("LIR") that native (x86-64/ELF) and LLVM backends
-# consume. Distinct from src/mir.tr, which is a CFG-over-HIR for ownership/liveness
-# analysis (its statements still hold HirExpr). LIR is instruction-level: explicit ops
-# over typed values, ready for machine codegen.
+# src/taumir/ir.tr — the lowered IR ("LIR") that the native (x86-64/ELF) and LLVM
+# backends consume. Instruction-level: virtual registers (vregs) + explicit ops, ready
+# for machine codegen. Distinct from src/mir.tr (a CFG-over-HIR whose statements still
+# hold HirExpr, for ownership analysis).
 #
-# Phase 1 (skeleton) covers only what `def main(): print(<int>)` needs — an external
-# call with an immediate arg + a return. It grows (binops, loads/stores, control flow,
-# string/collection ops) as the native backend covers more of the language.
+# Phase 2 covers integer values: constants, +/-/* , local variables (load/store), and
+# runtime calls. Codegen uses a trivial "every value in a stack slot" model (no register
+# allocation yet) — fast COMPILE, -O0 runtime. Grows to control flow / calls / real
+# regalloc next.
 
 from core.alloc import alloc
 
-# Machine-level types (independent of AstType). Widen as needed.
 pub enum LType:
     LVoid
     LI64
     LPtr
 
-# An LIR operand.
-pub enum LVal:
-    VConst(v: int)     # integer immediate
-    VReg(id: int)      # virtual register (result of a prior instruction)
-    VStr(s: str)       # C-string literal (materialized into .rodata) — Phase 1b
-
-# An LIR instruction. dst = -1 means "no result" (void).
+# An LIR instruction. Results and operands are vreg ids (ints); dst = -1 means void.
 pub enum LInst:
-    ICall(dst: int, callee: str, args: Vec[Pointer[LVal]])
+    IConst(dst: int, v: int)                       # dst = immediate
+    IBinOp(dst: int, op: str, a: int, b: int)      # dst = a <op> b   (op in "+","-","*")
+    ILoadVar(dst: int, name: str)                  # dst = <var>
+    IStoreVar(name: str, src: int)                 # <var> = src
+    ICall(dst: int, callee: str, args: Vec[int])   # dst = callee(args...); dst=-1 if void
 
-# Block terminator (exactly one per block).
 pub enum LTerm:
     TRetInt(v: int)    # return an integer constant (main returns 0)
     TRetVoid
     TUnset
-
-pub def box_lval(v: LVal) -> Pointer[LVal]:
-    unsafe:
-        mut p = alloc[LVal](1)
-        p.write(v)
-        return p
 
 pub def box_linst(i: LInst) -> Pointer[LInst]:
     unsafe:
@@ -51,14 +42,16 @@ pub class LBlock:
 extend LBlock:
     pub def init() -> LBlock:
         mut b = LBlock()
-        b.insts = Vec[Pointer[LInst]].init(4)
+        b.insts = Vec[Pointer[LInst]].init(8)
         b.term  = LTerm.TUnset
         return b
 
 pub class LFunc:
     pub name:    str
-    pub block:   LBlock        # single block for the skeleton (CFG comes in Phase 2)
+    pub block:   LBlock        # single block (CFG comes with control flow)
     pub is_main: bool
+    pub n_vregs: int           # virtual registers allocated (each gets a stack slot)
+    pub vars:    Vec[str]      # local variable names (each gets a stack slot)
 
 extend LFunc:
     pub def init(name: str) -> LFunc:
@@ -66,7 +59,31 @@ extend LFunc:
         f.name    = name
         f.block   = LBlock.init()
         f.is_main = false
+        f.n_vregs = 0
+        f.vars    = Vec[str].init(4)
         return f
+
+    pub def new_vreg(self) -> int:
+        mut id = self.n_vregs
+        self.n_vregs = self.n_vregs + 1
+        return id
+
+    pub def add_var(self, name: str):
+        mut i = 0
+        while i < self.vars.len:
+            if self.vars.get(i) == name: return
+            i = i + 1
+        self.vars.push(name)
+
+    pub def var_index(self, name: str) -> int:
+        mut i = 0
+        while i < self.vars.len:
+            if self.vars.get(i) == name: return i
+            i = i + 1
+        return -1
+
+    pub def emit(self, i: LInst):
+        self.block.insts.push(box_linst(i))
 
 pub class LModule:
     pub funcs:   Vec[LFunc]
@@ -81,7 +98,6 @@ extend LModule:
         m.ok      = true
         return m
 
-    # Record an external symbol once (deduplicated).
     pub def add_extern(self, name: str):
         mut i = 0
         while i < self.externs.len:

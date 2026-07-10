@@ -1,17 +1,17 @@
 # @trusted: compiler systems module.
 # src/codegen/native/isa_x64.tr — x86-64 instruction selection + encoding for the LIR.
-# Phase 1 (skeleton) encodes a leaf `main` that makes one runtime call with an immediate
-# argument and returns 0. Grows to the full op set + linear-scan register allocation in
-# Phase 2. System V AMD64 ABI: integer args in rdi, rsi, rdx, rcx, r8, r9; result in rax.
+# Model: every vreg and local variable lives in a stack slot (rbp-relative); each op
+# loads its operands into rax/rcx, computes, and stores the result back. No register
+# allocation yet — fast COMPILE, -O0 runtime (that's the point; C/LLVM handle release
+# perf). System V AMD64 ABI: integer args in rdi, rsi, rdx, rcx; result in rax.
 
-from taumir.ir import LFunc, LInst, LVal, LTerm
+from taumir.ir import LFunc, LInst, LTerm
 from codegen.native.bytebuf import ByteBuf
 
-# A PC-relative relocation site inside a function's code (currently only `call`).
-# type is always R_X86_64_PLT32 (4), addend -4.
+# A PC-relative relocation site (a `call` rel32). Type R_X86_64_PLT32, addend -4.
 pub class Reloc:
     pub offset: int    # byte offset of the rel32 field, relative to the function start
-    pub symbol: str    # target symbol name
+    pub symbol: str
 
 pub class EncodedFunc:
     pub name:    str
@@ -25,67 +25,145 @@ extend EncodedFunc:
         e.name    = name
         e.is_main = false
         e.code    = ByteBuf.init()
-        e.relocs  = Vec[Reloc].init(2)
+        e.relocs  = Vec[Reloc].init(4)
         return e
 
-# System V integer argument registers, encoded as the ModRM reg field for
-# `mov r32, imm32` (opcode B8+rd). rdi=7, rsi=6, rdx=2, rcx=1, r8, r9 (r8/r9 need REX.B).
-def _arg_opcode_movimm(idx: int) -> int:
-    if idx == 0: return 0xBF   # mov edi, imm32
-    if idx == 1: return 0xBE   # mov esi, imm32
-    if idx == 2: return 0xBA   # mov edx, imm32
-    if idx == 3: return 0xB9   # mov ecx, imm32
-    return 0xBF                # (skeleton: <= 1 arg; extend for r8/r9 later)
+# ModRM byte for `mov <argreg>, [rbp+disp32]`: mod=10, reg=argreg, rm=101(rbp).
+def _argreg_modrm(idx: int) -> int:
+    if idx == 0: return 189    # rdi -> 0xBD
+    if idx == 1: return 181    # rsi -> 0xB5
+    if idx == 2: return 149    # rdx -> 0x95
+    if idx == 3: return 141    # rcx -> 0x8D
+    return 189
 
-# Select + encode one LIR function to x86-64 machine code + relocations.
+def _round16(n: int) -> int:
+    mut r = n
+    while (r % 16) != 0: r = r + 1
+    return r
+
+# rbp-relative displacement (negative) for a vreg / a variable slot.
+def _vreg_disp(id: int) -> int:
+    return 0 - (8 * (id + 1))
+
+def _var_disp(lf: LFunc, name: str) -> int:
+    mut idx = lf.var_index(name)
+    if idx < 0: idx = 0
+    return 0 - (8 * (lf.n_vregs + idx + 1))
+
+# mov [rbp+disp32], rax   (48 89 85 disp32)
+def _st_rax(c: ByteBuf, disp: int):
+    c.u8(72)
+    c.u8(137)
+    c.u8(133)
+    c.u32(disp)
+
+# mov rax, [rbp+disp32]   (48 8B 85 disp32)
+def _ld_rax(c: ByteBuf, disp: int):
+    c.u8(72)
+    c.u8(139)
+    c.u8(133)
+    c.u32(disp)
+
+# mov rcx, [rbp+disp32]   (48 8B 8D disp32)
+def _ld_rcx(c: ByteBuf, disp: int):
+    c.u8(72)
+    c.u8(139)
+    c.u8(141)
+    c.u32(disp)
+
+# mov <argreg>, [rbp+disp32]   (48 8B modrm disp32)
+def _ld_argreg(c: ByteBuf, idx: int, disp: int):
+    c.u8(72)
+    c.u8(139)
+    c.u8(_argreg_modrm(idx))
+    c.u32(disp)
+
+# mov rax, imm64   (48 B8 imm64)
+def _mov_rax_imm64(c: ByteBuf, v: int):
+    c.u8(72)
+    c.u8(184)
+    c.u64(v)
+
+# apply `op` to rax (dst) and rcx (src), result in rax
+def _emit_binop(c: ByteBuf, op: str):
+    if op == "+":
+        c.u8(72)
+        c.u8(1)
+        c.u8(200)          # add rax, rcx  (48 01 C8)
+    elif op == "-":
+        c.u8(72)
+        c.u8(41)
+        c.u8(200)          # sub rax, rcx  (48 29 C8)
+    elif op == "*":
+        c.u8(72)
+        c.u8(15)
+        c.u8(175)
+        c.u8(193)          # imul rax, rcx (48 0F AF C1)
+
 pub def encode_func(lf: LFunc) -> EncodedFunc:
     mut e = EncodedFunc.init(lf.name)
     e.is_main = lf.is_main
     mut c = e.code
 
-    # prologue: push rbp ; mov rbp, rsp   (keeps rsp 16-aligned for the call)
-    c.u8(0x55)
-    c.u8(0x48)
-    c.u8(0x89)
-    c.u8(0xE5)
+    mut framesize = _round16((lf.n_vregs + lf.vars.len) * 8)
+
+    # prologue: push rbp ; mov rbp, rsp ; [sub rsp, framesize]
+    c.u8(85)
+    c.u8(72)
+    c.u8(137)
+    c.u8(229)
+    if framesize > 0:
+        c.u8(72)
+        c.u8(129)
+        c.u8(236)
+        c.u32(framesize)
 
     mut ii = 0
     while ii < lf.block.insts.len:
         match lf.block.insts.get(ii).read():
-            case LInst.ICall(_, callee, args):
-                # load integer-immediate args into arg registers
+            case LInst.IConst(dst, v):
+                _mov_rax_imm64(c, v)
+                _st_rax(c, _vreg_disp(dst))
+            case LInst.ILoadVar(dst, name):
+                _ld_rax(c, _var_disp(lf, name))
+                _st_rax(c, _vreg_disp(dst))
+            case LInst.IStoreVar(name, src):
+                _ld_rax(c, _vreg_disp(src))
+                _st_rax(c, _var_disp(lf, name))
+            case LInst.IBinOp(dst, op, a, b):
+                _ld_rax(c, _vreg_disp(a))
+                _ld_rcx(c, _vreg_disp(b))
+                _emit_binop(c, op)
+                _st_rax(c, _vreg_disp(dst))
+            case LInst.ICall(dst, callee, args):
                 mut ai = 0
                 while ai < args.len:
-                    match args.get(ai).read():
-                        case LVal.VConst(v):
-                            c.u8(_arg_opcode_movimm(ai))
-                            c.u32(v)
-                        case _:
-                            pass
+                    _ld_argreg(c, ai, _vreg_disp(args.get(ai)))
                     ai = ai + 1
-                # call rel32 -> E8 <rel32=0 placeholder>, reloc at the rel32 offset
-                c.u8(0xE8)
+                c.u8(232)              # call rel32
                 mut r = Reloc()
                 r.offset = c.len
                 r.symbol = callee
                 e.relocs.push(r)
                 c.u32(0)
+                if dst >= 0:
+                    _st_rax(c, _vreg_disp(dst))
         ii = ii + 1
 
-    # terminator -> set eax then epilogue
+    # terminator -> set eax
     match lf.block.term:
         case LTerm.TRetInt(rv):
             if rv == 0:
-                c.u8(0x31)   # xor eax, eax
-                c.u8(0xC0)
+                c.u8(49)
+                c.u8(192)              # xor eax, eax
             else:
-                c.u8(0xB8)   # mov eax, imm32
-                c.u32(rv)
+                c.u8(184)
+                c.u32(rv)              # mov eax, imm32
         case _:
-            c.u8(0x31)
-            c.u8(0xC0)
+            c.u8(49)
+            c.u8(192)
 
-    # epilogue: pop rbp ; ret
-    c.u8(0x5D)
-    c.u8(0xC3)
+    # epilogue: leave ; ret
+    c.u8(201)
+    c.u8(195)
     return e
