@@ -4910,6 +4910,7 @@ extend Sema:
                     if hobj_ty.args.len > 0: ret_ty = hobj_ty.args.get(0).read()
                     else: ret_ty = AstType.init("int")
                 elif (hobj_ty.name == "List" or hobj_ty.name == "Vec") and (method == "any" or method == "all" or method == "is_empty"): ret_ty = AstType.init("bool")
+                elif (hobj_ty.name == "List" or hobj_ty.name == "Vec") and (method == "count" or method == "index_of"): ret_ty = AstType.init("int")
                 elif (hobj_ty.name == "List" or hobj_ty.name == "Vec") and (method == "first" or method == "last"):
                     if hobj_ty.args.len > 0: ret_ty = hobj_ty.args.get(0).read()
                     else: ret_ty = AstType.init("void")

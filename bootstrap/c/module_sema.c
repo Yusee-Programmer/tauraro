@@ -9897,6 +9897,9 @@ __auto_type idx_arg = _t581.data.EIndex._tr_v_index;
         } else if ((((strcmp(_tr_strz(hobj_ty->name), _tr_strz(_tr_str_lit("List"))) == 0) || (strcmp(_tr_strz(hobj_ty->name), _tr_strz(_tr_str_lit("Vec"))) == 0)) && (((strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("any"))) == 0) || (strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("all"))) == 0)) || (strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("is_empty"))) == 0)))) {
             /* pass */
             ret_ty = AstType_init(_tr_str_lit("bool"));
+        } else if ((((strcmp(_tr_strz(hobj_ty->name), _tr_strz(_tr_str_lit("List"))) == 0) || (strcmp(_tr_strz(hobj_ty->name), _tr_strz(_tr_str_lit("Vec"))) == 0)) && ((strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("count"))) == 0) || (strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("index_of"))) == 0)))) {
+            /* pass */
+            ret_ty = AstType_init(_tr_str_lit("int"));
         } else if ((((strcmp(_tr_strz(hobj_ty->name), _tr_strz(_tr_str_lit("List"))) == 0) || (strcmp(_tr_strz(hobj_ty->name), _tr_strz(_tr_str_lit("Vec"))) == 0)) && ((strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("first"))) == 0) || (strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("last"))) == 0)))) {
             /* pass */
             if ((hobj_ty->args->len > 0LL)) {

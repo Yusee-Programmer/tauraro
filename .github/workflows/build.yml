@@ -340,6 +340,12 @@ jobs:
         shell: bash
         run: TAURAROC=./tauraroc${{ matrix.ext }} bash scripts/native_diff.sh
 
+      # Runtime security regressions (V-001 float-format overflow, etc.) under ASan+UBSan.
+      - name: Runtime security tests (ASan/UBSan)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: bash scripts/security_test.sh
+
       - name: Clean up generated build output
         shell: bash
         run: |

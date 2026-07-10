@@ -229,6 +229,30 @@ long long _tr_rt_str_parse_bool(const char* s) {
 }
 long long _tr_rt_str_is_empty(const char* s) { return (!s || !*s) ? 1 : 0; }
 long long _tr_rt_str_ord(const char* s) { return s ? (long long)(unsigned char)s[0] : 0; }
+char* _tr_rt_str_pad_left(const char* s, long long w) {
+    if (!s) s = "";
+    long long n = (long long)strlen(s);
+    if (n >= w) return _trn_dup(s);
+    long long pad = w - n;
+    char* r = (char*)malloc((size_t)w + 1);
+    for (long long i = 0; i < pad; i++) r[i] = ' ';
+    for (long long i = 0; i < n; i++) r[pad + i] = s[i];
+    r[w] = 0; return r;
+}
+char* _tr_rt_str_pad_right(const char* s, long long w) {
+    if (!s) s = "";
+    long long n = (long long)strlen(s);
+    if (n >= w) return _trn_dup(s);
+    char* r = (char*)malloc((size_t)w + 1);
+    for (long long i = 0; i < n; i++) r[i] = s[i];
+    for (long long i = n; i < w; i++) r[i] = ' ';
+    r[w] = 0; return r;
+}
+long long _tr_rt_str_contains_char(const char* s, long long c) {
+    if (!s) return 0;
+    for (; *s; s++) if ((unsigned char)*s == (unsigned char)c) return 1;
+    return 0;
+}
 
 /* s.slice(a,b) / s.count(sub) / s.char_at(i) / s.contains(sub) — match tauraro_rt.h. */
 char* _tr_rt_str_slice(const char* s, long long start, long long end) {
@@ -389,6 +413,24 @@ long long _tr_rt_list_index_str(void* h, const char* s) {
         if (strcmp(e, s) == 0) return i;
     }
     return -1;
+}
+long long _tr_rt_list_count_i64(void* h, long long v) {
+    _TrNList* l = (_TrNList*)h;
+    if (!l) return 0;
+    long long c = 0;
+    for (long long i = 0; i < l->len; i++) if (l->data[i] == v) c++;
+    return c;
+}
+long long _tr_rt_list_count_str(void* h, const char* s) {
+    _TrNList* l = (_TrNList*)h;
+    if (!l) return 0;
+    if (!s) s = "";
+    long long c = 0;
+    for (long long i = 0; i < l->len; i++) {
+        const char* e = (const char*)l->data[i]; if (!e) e = "";
+        if (strcmp(e, s) == 0) c++;
+    }
+    return c;
 }
 long long _tr_rt_list_min_i64(void* h) {
     _TrNList* l = (_TrNList*)h;
