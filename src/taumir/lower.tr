@@ -335,6 +335,8 @@ def lower_stmt(m: LModule, lf: LFunc, s: Pointer[HirStmt]) -> bool:
             return true
         case HirStmt.SFor(var, iter, body):
             return _lower_for(m, lf, var, iter, body)
+        case HirStmt.SForUnpack(vars, iter, body):
+            return _lower_for_unpack(m, lf, vars, iter, body)
         case HirStmt.SExpr(e):
             mut se_ok = lower_expr_stmt(m, lf, e)
             _flush_fresh_strs(m, lf)
@@ -458,6 +460,76 @@ def _lower_for_list(m: LModule, lf: LFunc, var: str, iter: Pointer[HirExpr], bod
     lf.set_term(LTerm.TBr(latch))
     lf.set_cur(latch)
     _emit_incr(lf, iname)
+    lf.set_term(LTerm.TBr(hdr))
+    lf.set_cur(ext)
+    return true
+
+# for i, v in <iter>:  -> only enumerate(List) is supported natively.
+def _lower_for_unpack(m: LModule, lf: LFunc, vars: Vec[str], iter: Pointer[HirExpr], body: HirBlock) -> bool:
+    if vars.len != 2: return false
+    match iter.read():
+        case HirExpr.ECall(callee, args, _):
+            if _ident_name(callee) == "enumerate" and args.len == 1:
+                return _lower_enumerate(m, lf, vars.get(0), vars.get(1), args.get(0), body)
+        case _:
+            pass
+    return false
+
+# for idxvar, elemvar in enumerate(list): -> idx=0; while idx<len: elem=list[idx]; body; idx++
+def _lower_enumerate(m: LModule, lf: LFunc, ivar: str, evar: str, listexpr: Pointer[HirExpr], body: HirBlock) -> bool:
+    mut lv = lower_expr(m, lf, listexpr)
+    if lv < 0: return false
+    mut ltag = lf.vreg_type(lv)
+    if not _is_list_tag(ltag): return false
+    mut elem_t = _list_elem_tag(ltag)
+    mut uid = lf.fresh_id()
+    mut hname = "__enumlist" + _lir_itoa(uid)
+    lf.add_var(hname)
+    lf.set_var_type(hname, ltag)
+    lf.emit(LInst.IStoreVar(hname, lv))
+    mut z = lf.new_vreg()
+    lf.emit(LInst.IConst(z, 0))
+    lf.add_var(ivar)
+    lf.set_var_type(ivar, 0)
+    lf.emit(LInst.IStoreVar(ivar, z))
+    mut hdr = lf.new_block()
+    mut bdy = lf.new_block()
+    mut latch = lf.new_block()
+    mut ext = lf.new_block()
+    lf.set_term(LTerm.TBr(hdr))
+    lf.set_cur(hdr)
+    mut hv = lf.new_vreg()
+    lf.emit(LInst.ILoadVar(hv, hname))
+    m.add_extern("_tr_rt_list_len")
+    mut la = Vec[int].init(1)
+    la.push(hv)
+    mut lenv = lf.new_vreg()
+    lf.emit(LInst.ICall(lenv, "_tr_rt_list_len", la))
+    mut iv = lf.new_vreg()
+    lf.emit(LInst.ILoadVar(iv, ivar))
+    mut cond = lf.new_vreg()
+    lf.emit(LInst.IBinOp(cond, "<", iv, lenv))
+    lf.set_term(LTerm.TCondBr(cond, bdy, ext))
+    lf.set_cur(bdy)
+    mut hv2 = lf.new_vreg()
+    lf.emit(LInst.ILoadVar(hv2, hname))
+    mut iv2 = lf.new_vreg()
+    lf.emit(LInst.ILoadVar(iv2, ivar))
+    mut xval = _list_get(m, lf, hv2, iv2)
+    lf.set_vreg_type(xval, elem_t)
+    if elem_t == 1: _retain_str(m, lf, xval)    # elem loop var owns its ref (borrow of list elem)
+    lf.add_var(evar)
+    lf.set_var_type(evar, elem_t)
+    lf.emit(LInst.IStoreVar(evar, xval))
+    lf.loop_cont.push(latch)
+    lf.loop_brk.push(ext)
+    mut ok = lower_block(m, lf, body)
+    lf.loop_cont.pop()
+    lf.loop_brk.pop()
+    if not ok: return false
+    lf.set_term(LTerm.TBr(latch))
+    lf.set_cur(latch)
+    _emit_incr(lf, ivar)
     lf.set_term(LTerm.TBr(hdr))
     lf.set_cur(ext)
     return true
@@ -1241,6 +1313,17 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                     lf.emit(LInst.ICall(sld, "_tr_rt_strlen", sla))
                     return sld
                 return -1
+            if fn == "round" and args.len == 1:    # round(x) -> f64 (libm round)
+                mut rv0 = lower_expr(m, lf, args.get(0))
+                if rv0 < 0: return -1
+                mut rvt = lf.vreg_type(rv0)
+                if rvt == 0: rv0 = _promote_f(lf, rv0)
+                elif rvt != 5: return -1
+                m.add_extern("_tr_rt_round")
+                mut rrd = lf.new_vreg()
+                lf.emit(LInst.IFCallF(rrd, "_tr_rt_round", rv0))
+                lf.set_vreg_type(rrd, 5)
+                return rrd
             if fn == "abs" and args.len == 1:      # abs(int) builtin
                 mut xv2 = lower_expr(m, lf, args.get(0))
                 if xv2 < 0: return -1
@@ -1271,6 +1354,13 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                 if cv0 < 0: return -1
                 mut cvt = lf.vreg_type(cv0)
                 if cvt == 1: return cv0            # str(str) = identity
+                if cvt == 5:                       # str(float) -> "%g" (arg in xmm0)
+                    m.add_extern("_tr_rt_f64_to_str")
+                    mut fsd = lf.new_vreg()
+                    lf.emit(LInst.IFCall1(fsd, "_tr_rt_f64_to_str", cv0))
+                    lf.set_vreg_type(fsd, 1)
+                    _fresh_mark(lf, fsd)
+                    return fsd
                 mut ssym = "_tr_rt_i64_to_str"
                 if cvt == 4: ssym = "_tr_rt_bool_to_str"
                 elif cvt != 0: return -1           # list -> fall back

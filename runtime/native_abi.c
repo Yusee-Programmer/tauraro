@@ -126,6 +126,7 @@ char* _tr_rt_i64_to_str(long long v) {
 }
 char* _tr_rt_bool_to_str(long long v) { return _tr_rt_str_new(v ? "true" : "false"); }
 long long _tr_rt_str_to_i64(const char* s) { return s ? (long long)strtoll(s, 0, 10) : 0; }
+char* _tr_rt_f64_to_str(double v) { char b[32]; snprintf(b, sizeof(b), "%g", v); return _tr_rt_str_new(b); }
 
 /* "ab" * 3 -> "ababab" */
 char* _tr_rt_str_repeat(const char* s, long long n) {

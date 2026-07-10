@@ -1,0 +1,31 @@
+# native≡c differential corpus: str(float), round() builtin, enumerate() in for loops.
+def main():
+    print(str(3.14))            # 3.14
+    print(str(2.0))             # 2
+    print("pi=" + str(3.14159)) # pi=3.14159
+
+    print(round(3.7))           # 4
+    print(round(2.4))           # 2
+    print(round(2.5))           # 3  (C round: half away from zero)
+    print(round(-1.5))          # -2
+
+    mut xs = [10, 20, 30]
+    for i, v in enumerate(xs):
+        print(i)
+        print(v)
+    # 0/10/1/20/2/30
+
+    mut names = ["a", "b", "c"]
+    for idx, name in enumerate(names):
+        print(idx)
+        print(name)
+    # 0/a/1/b/2/c
+
+    mut total = 0
+    mut ys = [5, 5, 5, 5]
+    for j, y in enumerate(ys):
+        total = total + y
+    print(total)                # 20
+
+    mut label = "v=" + str(9.5)
+    print(label)                # v=9.5
