@@ -8,6 +8,29 @@
  */
 #define _TR_MAIN
 #include "tauraro_rt.h"
+#include <math.h>
+
+/* Float math methods (x.sqrt() etc.) — thin wrappers over libm so the native backend
+ * has stable extern symbols. The final link must include -lm. */
+double _tr_rt_sqrt(double x)  { return sqrt(x); }
+double _tr_rt_floor(double x) { return floor(x); }
+double _tr_rt_ceil(double x)  { return ceil(x); }
+double _tr_rt_round(double x) { return round(x); }
+double _tr_rt_fabs(double x)  { return fabs(x); }
+double _tr_rt_log(double x)   { return log(x); }
+double _tr_rt_log2(double x)  { return log2(x); }
+double _tr_rt_log10(double x) { return log10(x); }
+double _tr_rt_exp(double x)   { return exp(x); }
+double _tr_rt_sin(double x)   { return sin(x); }
+double _tr_rt_cos(double x)   { return cos(x); }
+double _tr_rt_tan(double x)   { return tan(x); }
+double _tr_rt_asin(double x)  { return asin(x); }
+double _tr_rt_acos(double x)  { return acos(x); }
+double _tr_rt_atan(double x)  { return atan(x); }
+double _tr_rt_pow(double a, double b)   { return pow(a, b); }
+double _tr_rt_atan2(double a, double b) { return atan2(a, b); }
+long long _tr_rt_f64_is_nan(double x) { return isnan(x) ? 1 : 0; }
+long long _tr_rt_f64_is_inf(double x) { return isinf(x) ? 1 : 0; }
 
 /* List[int]/List[str] backing store: a dynamic 8-byte-slot array (a str element is just
  * a char* stored in the same slot). Declared up top so every _tr_rt_list_* helper sees it. */

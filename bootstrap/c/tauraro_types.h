@@ -1587,7 +1587,9 @@ typedef enum {
     LInst_IFBinOp,
     LInst_IIToF,
     LInst_IFToI,
-    LInst_IFCall1
+    LInst_IFCall1,
+    LInst_IFCallF,
+    LInst_IFCall2F
 } LInst_tag;
 
 typedef struct LInst {
@@ -1647,6 +1649,17 @@ typedef struct LInst {
             TrStr callee;
             long long arg;
         } IFCall1;
+        struct {
+            long long dst;
+            TrStr callee;
+            long long arg;
+        } IFCallF;
+        struct {
+            long long dst;
+            TrStr callee;
+            long long a;
+            long long b;
+        } IFCall2F;
     } data;
 } LInst;
 
@@ -1662,6 +1675,8 @@ static inline __attribute__((always_inline)) LInst LInst_ctor_IFBinOp(long long 
 static inline __attribute__((always_inline)) LInst LInst_ctor_IIToF(long long dst, long long src) { LInst _r = {.tag=LInst_IIToF}; _r.data.IIToF.dst = dst; _r.data.IIToF.src = src; return _r; }
 static inline __attribute__((always_inline)) LInst LInst_ctor_IFToI(long long dst, long long src) { LInst _r = {.tag=LInst_IFToI}; _r.data.IFToI.dst = dst; _r.data.IFToI.src = src; return _r; }
 static inline __attribute__((always_inline)) LInst LInst_ctor_IFCall1(long long dst, TrStr callee, long long arg) { LInst _r = {.tag=LInst_IFCall1}; _r.data.IFCall1.dst = dst; _r.data.IFCall1.callee = _tr_str_retain(callee); _r.data.IFCall1.arg = arg; return _r; }
+static inline __attribute__((always_inline)) LInst LInst_ctor_IFCallF(long long dst, TrStr callee, long long arg) { LInst _r = {.tag=LInst_IFCallF}; _r.data.IFCallF.dst = dst; _r.data.IFCallF.callee = _tr_str_retain(callee); _r.data.IFCallF.arg = arg; return _r; }
+static inline __attribute__((always_inline)) LInst LInst_ctor_IFCall2F(long long dst, TrStr callee, long long a, long long b) { LInst _r = {.tag=LInst_IFCall2F}; _r.data.IFCall2F.dst = dst; _r.data.IFCall2F.callee = _tr_str_retain(callee); _r.data.IFCall2F.a = a; _r.data.IFCall2F.b = b; return _r; }
 
 typedef enum {
     LTerm_TRetInt,
@@ -3596,6 +3611,8 @@ __attribute__((hot)) long long _norm_bool(LFunc* lf, long long v);
 __attribute__((hot)) long long _str_call0(LModule* m, LFunc* lf, TrStr sym, long long _tr_v_recv, long long restype);
 __attribute__((hot)) long long _str_call1(LModule* m, LFunc* lf, TrStr sym, long long _tr_v_recv, long long arg, long long restype);
 __attribute__((hot)) long long _lower_str_method(LModule* m, LFunc* lf, long long _tr_v_recv, TrStr method, List_ptr* margs);
+__attribute__((hot)) TrStr _float_unary_sym(TrStr method);
+__attribute__((hot)) long long _lower_float_method(LModule* m, LFunc* lf, long long _tr_v_recv, TrStr method, List_ptr* margs);
 __attribute__((hot)) bool _is_const_int(HirExpr* e);
 __attribute__((hot)) long long _const_int_val(HirExpr* e);
 __attribute__((hot)) void _emit_add_const(LFunc* lf, TrStr name, long long delta);

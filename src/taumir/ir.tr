@@ -30,6 +30,8 @@ pub enum LInst:
     IIToF(dst: int, src: int)                   # int -> f64  (cvtsi2sd)
     IFToI(dst: int, src: int)                   # f64 -> int  (cvttsd2si, truncates)
     IFCall1(dst: int, callee: str, arg: int)    # call callee(f64 arg in xmm0); rax -> dst if >=0
+    IFCallF(dst: int, callee: str, arg: int)    # call callee(f64 xmm0) -> f64 xmm0 -> dst
+    IFCall2F(dst: int, callee: str, a: int, b: int)  # call callee(f64 xmm0, f64 xmm1) -> f64 -> dst
 
 # Block terminator (exactly one per block).
 pub enum LTerm:

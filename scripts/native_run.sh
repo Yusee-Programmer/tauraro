@@ -61,7 +61,7 @@ echo "  emitted build/native_p42.o ($(stat -c%s build/native_p42.o 2>/dev/null |
 echo "--- readelf ---"; readelf -hSr build/native_p42.o 2>/dev/null | grep -E 'Class:|Machine:|Type:|\.text|\.rela|\.symtab|R_X86_64|_tr_rt_print_i64' | sed 's/^/    /'
 
 # 3) link with the system linker (crt + libc + runtime.o).
-if ! "$CC" build/native_p42.o build/runtime.o -o build/native_p42 2>/tmp/native_ld.log; then
+if ! "$CC" build/native_p42.o build/runtime.o -lm -o build/native_p42 2>/tmp/native_ld.log; then
     echo "FAIL: link"; sed -n '1,20p' /tmp/native_ld.log; exit 1
 fi
 

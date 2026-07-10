@@ -639,6 +639,60 @@ def _lower_str_method(m: LModule, lf: LFunc, recv: int, method: str, margs: Vec[
         return rfd
     return -1
 
+# libm symbol for a 0-arg float method (x.<method>() -> f64), or "" if not one.
+def _float_unary_sym(method: str) -> str:
+    if method == "sqrt": return "_tr_rt_sqrt"
+    if method == "floor": return "_tr_rt_floor"
+    if method == "ceil": return "_tr_rt_ceil"
+    if method == "round": return "_tr_rt_round"
+    if method == "abs" or method == "fabs": return "_tr_rt_fabs"
+    if method == "log": return "_tr_rt_log"
+    if method == "log2": return "_tr_rt_log2"
+    if method == "log10": return "_tr_rt_log10"
+    if method == "exp": return "_tr_rt_exp"
+    if method == "sin": return "_tr_rt_sin"
+    if method == "cos": return "_tr_rt_cos"
+    if method == "tan": return "_tr_rt_tan"
+    if method == "asin": return "_tr_rt_asin"
+    if method == "acos": return "_tr_rt_acos"
+    if method == "atan": return "_tr_rt_atan"
+    return ""
+
+# Float math methods on an f64 receiver: unary libm (-> f64), pow/atan2 (1 arg -> f64),
+# is_nan/is_inf (-> bool).
+def _lower_float_method(m: LModule, lf: LFunc, recv: int, method: str, margs: Vec[Pointer[HirExpr]]) -> int:
+    if margs.len == 0:
+        mut usym = _float_unary_sym(method)
+        if usym != "":
+            m.add_extern(usym)
+            mut d = lf.new_vreg()
+            lf.emit(LInst.IFCallF(d, usym, recv))
+            lf.set_vreg_type(d, 5)
+            return d
+        if method == "is_nan" or method == "is_inf":
+            mut nsym = "_tr_rt_f64_is_nan"
+            if method == "is_inf": nsym = "_tr_rt_f64_is_inf"
+            m.add_extern(nsym)
+            mut nd = lf.new_vreg()
+            lf.emit(LInst.IFCall1(nd, nsym, recv))
+            lf.set_vreg_type(nd, 4)
+            return nd
+        return -1
+    if margs.len == 1 and (method == "pow" or method == "atan2"):
+        mut arg = lower_expr(m, lf, margs.get(0))
+        if arg < 0: return -1
+        mut argt = lf.vreg_type(arg)
+        if argt == 0: arg = _promote_f(lf, arg)
+        elif argt != 5: return -1
+        mut psym = "_tr_rt_pow"
+        if method == "atan2": psym = "_tr_rt_atan2"
+        m.add_extern(psym)
+        mut pd = lf.new_vreg()
+        lf.emit(LInst.IFCall2F(pd, psym, recv, arg))
+        lf.set_vreg_type(pd, 5)
+        return pd
+    return -1
+
 # Compile-time int literal helpers (for `range(a, b, step)` direction). Handle `-N` too.
 def _is_const_int(e: Pointer[HirExpr]) -> bool:
     match e.read():
@@ -757,7 +811,15 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
             mut sv = lower_expr(m, lf, sub)
             if sv < 0: return -1
             mut svt = lf.vreg_type(sv)
-            if op == "-":                          # -x  ->  0 - x   (int only)
+            if op == "-":                          # -x  ->  0 - x
+                if svt == 5:                        # float negation: 0.0 - x
+                    mut zf = lf.new_vreg()
+                    lf.emit(LInst.IConst(zf, _f64_bits(0.0)))
+                    lf.set_vreg_type(zf, 5)
+                    mut dnf = lf.new_vreg()
+                    lf.emit(LInst.IFBinOp(dnf, "-", zf, sv))
+                    lf.set_vreg_type(dnf, 5)
+                    return dnf
                 if svt != 0: return -1
                 mut zn = lf.new_vreg()
                 lf.emit(LInst.IConst(zn, 0))
@@ -1073,6 +1135,8 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
             mut ovmt = lf.vreg_type(ovm)
             if ovmt == 1:
                 return _lower_str_method(m, lf, ovm, method, margs)
+            if ovmt == 5:
+                return _lower_float_method(m, lf, ovm, method, margs)
             if not _is_list_tag(ovmt): return -1
             mut want_elem = _list_elem_tag(ovmt)
             if method == "push" or method == "append":

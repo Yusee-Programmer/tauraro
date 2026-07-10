@@ -355,6 +355,29 @@ pub def encode_func(lf: LFunc) -> EncodedFunc:
                     c.u32(0)
                     if dst >= 0:
                         _st_rax(c, _vreg_disp(dst))
+                case LInst.IFCallF(dst, callee, arg):
+                    _ld_xmm0(c, _vreg_disp(arg))
+                    c.u8(232)              # call rel32
+                    mut ffr = Reloc()
+                    ffr.offset  = c.len
+                    ffr.symbol  = callee
+                    ffr.kind    = 0
+                    ffr.str_idx = 0
+                    e.relocs.push(ffr)
+                    c.u32(0)
+                    _st_xmm0(c, _vreg_disp(dst))   # f64 result in xmm0
+                case LInst.IFCall2F(dst, callee, a, b):
+                    _ld_xmm0(c, _vreg_disp(a))
+                    _ld_xmm1(c, _vreg_disp(b))
+                    c.u8(232)              # call rel32
+                    mut f2r = Reloc()
+                    f2r.offset  = c.len
+                    f2r.symbol  = callee
+                    f2r.kind    = 0
+                    f2r.str_idx = 0
+                    e.relocs.push(f2r)
+                    c.u32(0)
+                    _st_xmm0(c, _vreg_disp(dst))
             ii = ii + 1
 
         match blk.term:

@@ -44,7 +44,7 @@ for src in tests/native/*.tr; do
         echo "  ✗ $name: native backend fell back / errored (uses an unsupported feature?)"
         sed -n '1,8p' /tmp/nat_build.log; fail=$((fail+1)); continue
     fi
-    if ! "$CC" "build/$name.o" build/runtime.o -o "build/nat_$name" 2>/tmp/nat_ld.log; then
+    if ! "$CC" "build/$name.o" build/runtime.o -lm -o "build/nat_$name" 2>/tmp/nat_ld.log; then
         echo "  ✗ $name: link failed"; sed -n '1,8p' /tmp/nat_ld.log; fail=$((fail+1)); continue
     fi
     out_nat="$("build/nat_$name" 2>&1)"
