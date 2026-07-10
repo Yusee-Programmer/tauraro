@@ -54,6 +54,7 @@ typedef struct Sema Sema;
 typedef struct Formatter Formatter;
 typedef struct CGenerator CGenerator;
 typedef struct LlvmGenerator LlvmGenerator;
+typedef struct NativeGenerator NativeGenerator;
 typedef struct MacroCtx MacroCtx;
 typedef struct FnMacroExpander FnMacroExpander;
 typedef struct Token Token;
@@ -122,6 +123,7 @@ static void _trdrop_Sema(void* vp);
 static void _trdrop_Formatter(void* vp);
 static void _trdrop_CGenerator(void* vp);
 static void _trdrop_LlvmGenerator(void* vp);
+static void _trdrop_NativeGenerator(void* vp);
 static void _trdrop_MacroCtx(void* vp);
 static void _trdrop_FnMacroExpander(void* vp);
 
@@ -2672,6 +2674,19 @@ static void _trdrop_LlvmGenerator(void* vp) {
 }
 #endif
 
+#ifndef NativeGenerator_STRUCT_DEFINED
+#define NativeGenerator_STRUCT_DEFINED
+typedef struct NativeGenerator {
+    size_t __rc;
+    TrStr target;
+    bool ready;
+} NativeGenerator;
+static void _trdrop_NativeGenerator(void* vp) {
+    NativeGenerator* self = (NativeGenerator*)vp; (void)self;
+    _tr_str_release(self->target);
+}
+#endif
+
 #ifndef MacroCtx_STRUCT_DEFINED
 #define MacroCtx_STRUCT_DEFINED
 typedef struct MacroCtx {
@@ -3208,6 +3223,8 @@ __attribute__((hot)) TrStr LlvmGenerator_gen_call_llvm(LlvmGenerator* self, HirE
 __attribute__((hot)) void LlvmGenerator_gen_stmt(LlvmGenerator* self, HirStmt* s_ptr);
 __attribute__((hot)) void LlvmGenerator_gen_block(LlvmGenerator* self, HirBlock* b);
 __attribute__((hot)) TrStr LlvmGenerator_generate(LlvmGenerator* self, HirProgram* prog);
+__attribute__((malloc,returns_nonnull,hot)) NativeGenerator* NativeGenerator_init();
+__attribute__((hot)) bool NativeGenerator_emit_object(NativeGenerator* self, HirProgram* prog, TrStr out_path);
 __attribute__((hot)) MacroVal* box_mv(MacroVal v);
 __attribute__((hot)) MacroVal* mrec(List_TrStr* keys, List_ptr* vals);
 __attribute__((hot)) MacroVal* mrec_get(MacroVal* recptr, TrStr key);
@@ -4500,6 +4517,24 @@ __attribute__((hot)) codegen_llvm_LlvmGenerator*** core_alloc_resize_codegen_llv
 __attribute__((hot)) void core_alloc_dealloc_codegen_llvm_LlvmGenerator_ptr(codegen_llvm_LlvmGenerator*** ptr);
 __attribute__((hot)) core_map_MapNode_str_codegen_llvm_LlvmGenerator** core_alloc_alloc_core_map_MapNode_str_codegen_llvm_LlvmGenerator(long long count);
 __attribute__((hot)) void core_alloc_dealloc_core_map_MapNode_str_codegen_llvm_LlvmGenerator(core_map_MapNode_str_codegen_llvm_LlvmGenerator** ptr);
+
+typedef NativeGenerator codegen_native_NativeGenerator;
+struct core_vec_Vec_codegen_native_NativeGenerator { codegen_native_NativeGenerator** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_codegen_native_NativeGenerator core_vec_Vec_codegen_native_NativeGenerator;
+struct core_vec_Vec_codegen_native_NativeGenerator_ptr { codegen_native_NativeGenerator*** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_codegen_native_NativeGenerator_ptr core_vec_Vec_codegen_native_NativeGenerator_ptr;
+struct core_map_MapNode_str_codegen_native_NativeGenerator { char* key; codegen_native_NativeGenerator* value; struct core_map_MapNode_str_codegen_native_NativeGenerator* next; };
+typedef struct core_map_MapNode_str_codegen_native_NativeGenerator core_map_MapNode_str_codegen_native_NativeGenerator;
+struct core_map_Map_str_codegen_native_NativeGenerator { core_map_MapNode_str_codegen_native_NativeGenerator** buckets; long long capacity; long long len; };
+typedef struct core_map_Map_str_codegen_native_NativeGenerator core_map_Map_str_codegen_native_NativeGenerator;
+__attribute__((hot)) codegen_native_NativeGenerator** core_alloc_alloc_codegen_native_NativeGenerator(long long count);
+__attribute__((hot)) codegen_native_NativeGenerator** core_alloc_resize_codegen_native_NativeGenerator(codegen_native_NativeGenerator** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_codegen_native_NativeGenerator(codegen_native_NativeGenerator** ptr);
+__attribute__((hot)) codegen_native_NativeGenerator*** core_alloc_alloc_codegen_native_NativeGenerator_ptr(long long count);
+__attribute__((hot)) codegen_native_NativeGenerator*** core_alloc_resize_codegen_native_NativeGenerator_ptr(codegen_native_NativeGenerator*** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_codegen_native_NativeGenerator_ptr(codegen_native_NativeGenerator*** ptr);
+__attribute__((hot)) core_map_MapNode_str_codegen_native_NativeGenerator** core_alloc_alloc_core_map_MapNode_str_codegen_native_NativeGenerator(long long count);
+__attribute__((hot)) void core_alloc_dealloc_core_map_MapNode_str_codegen_native_NativeGenerator(core_map_MapNode_str_codegen_native_NativeGenerator** ptr);
 
 typedef MacroVal macros_MacroVal;
 struct core_vec_Vec_macros_MacroVal { macros_MacroVal* data; long long len; long long capacity; };

@@ -6,5 +6,6 @@
 #
 # New backends (MIR, WASM, etc.) should be added here.
 
-from codegen.c    import CGenerator
-from codegen.llvm import LlvmGenerator
+from codegen.c      import CGenerator
+from codegen.llvm   import LlvmGenerator
+from codegen.native import NativeGenerator

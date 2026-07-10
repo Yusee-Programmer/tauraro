@@ -15,6 +15,7 @@ from ast import Decl
 from fmt import Formatter
 from codegen.c import CGenerator
 from codegen.llvm import LlvmGenerator
+from codegen.native import NativeGenerator
 from mir import lower_program, dump_mir
 from macros import expand_macros
 
@@ -42,7 +43,8 @@ pub def print_usage():
     print("  --run             Compile and immediately execute")
     print("  --check           Run semantic analysis only (no codegen)")
     print("  --verbose         Show all pipeline phases")
-    print("  --backend llvm    Use LLVM IR backend instead of C")
+    print("  --backend <b>     Code generator: c (default, C->gcc/clang), llvm (LLVM IR),")
+    print("                      native (x86-64->ELF, under construction)")
     print("  -o <path>         Output executable name (temp .c files are deleted)")
     print("  --lib             Build a shared library (.so/.dll) of `export def`s + a C header")
     print("  -O0/-O1/-O2/-O3  Optimization level (default: -O2)")
@@ -983,6 +985,20 @@ pub def main(args: Vec[str]):
             output_path = strip_extension(input_path) + ".ll"
         write_file(output_path, llvm_ir)
         if verbose: print("[4/5] LLVM IR written to " + output_path)
+        return
+
+    if backend == "native":
+        # Native backend (Path B): lowered IR -> x86-64 -> ELF -> link with runtime.o.
+        # Phase 0: the seam is wired but codegen isn't implemented yet — error clearly
+        # rather than emit nothing, so the default (C) or LLVM path is used instead.
+        mut nat_gen = NativeGenerator.init()
+        mut nat_out = output_path
+        if nat_out == "": nat_out = strip_extension(input_path) + ".o"
+        if not nat_gen.emit_object(hir, nat_out):
+            print(c_red("error") + ": the native backend (--backend native) is not implemented yet")
+            print("       it is under construction (x86-64/ELF). Use --backend c (default) or --backend llvm for now.")
+            _tr_exit(2)
+        if verbose: print("[4/5] native object written to " + nat_out)
         return
 
     # -- C backend - modular output into build/ --------------------------------
