@@ -185,6 +185,26 @@ def _emit_arith(c: ByteBuf, op: str):
         c.u8(72)
         c.u8(137)
         c.u8(208)          # mov rax, rdx  (remainder)
+    elif op == "&":
+        c.u8(72)
+        c.u8(33)
+        c.u8(200)          # and rax, rcx
+    elif op == "|":
+        c.u8(72)
+        c.u8(9)
+        c.u8(200)          # or rax, rcx
+    elif op == "^":
+        c.u8(72)
+        c.u8(49)
+        c.u8(200)          # xor rax, rcx
+    elif op == "<<":
+        c.u8(72)
+        c.u8(211)
+        c.u8(224)          # shl rax, cl
+    elif op == ">>":
+        c.u8(72)
+        c.u8(211)
+        c.u8(248)          # sar rax, cl  (arithmetic, signed)
 
 def _emit_return(c: ByteBuf, rv: int):
     if rv == 0:

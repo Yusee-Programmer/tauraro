@@ -3612,6 +3612,7 @@ __attribute__((hot)) long long _str_call0(LModule* m, LFunc* lf, TrStr sym, long
 __attribute__((hot)) long long _str_call1(LModule* m, LFunc* lf, TrStr sym, long long _tr_v_recv, long long arg, long long restype);
 __attribute__((hot)) long long _lower_str_method(LModule* m, LFunc* lf, long long _tr_v_recv, TrStr method, List_ptr* margs);
 __attribute__((hot)) TrStr _float_unary_sym(TrStr method);
+__attribute__((hot)) long long _lower_int_method(LModule* m, LFunc* lf, long long _tr_v_recv, TrStr method, List_ptr* margs);
 __attribute__((hot)) long long _lower_float_method(LModule* m, LFunc* lf, long long _tr_v_recv, TrStr method, List_ptr* margs);
 __attribute__((hot)) bool _is_const_int(HirExpr* e);
 __attribute__((hot)) long long _const_int_val(HirExpr* e);

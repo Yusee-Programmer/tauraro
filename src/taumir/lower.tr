@@ -475,6 +475,7 @@ def lower_expr_stmt(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> bool:
 # -- expressions: returns the vreg holding the value, or -1 if unsupported ----------
 def _int_op(op: str) -> bool:
     if op == "+" or op == "-" or op == "*" or op == "/" or op == "//" or op == "%": return true
+    if op == "&" or op == "|" or op == "^" or op == "<<" or op == ">>": return true
     if op == "<" or op == ">" or op == "==" or op == "!=" or op == "<=" or op == ">=": return true
     return false
 
@@ -658,6 +659,51 @@ def _float_unary_sym(method: str) -> str:
     if method == "atan": return "_tr_rt_atan"
     return ""
 
+# Int utility methods on an i64 receiver: to_hex/oct/bin (-> str), sign/clamp/gcd/lcm (-> int).
+def _lower_int_method(m: LModule, lf: LFunc, recv: int, method: str, margs: Vec[Pointer[HirExpr]]) -> int:
+    if margs.len == 0:
+        if method == "to_hex": return _str_call0(m, lf, "_tr_rt_i64_to_hex", recv, 1)
+        if method == "to_hex_upper" or method == "to_HEX": return _str_call0(m, lf, "_tr_rt_i64_to_hex_upper", recv, 1)
+        if method == "to_oct" or method == "to_octal": return _str_call0(m, lf, "_tr_rt_i64_to_oct", recv, 1)
+        if method == "to_bin" or method == "to_binary": return _str_call0(m, lf, "_tr_rt_i64_to_bin", recv, 1)
+        if method == "sign":                       # (x>0) - (x<0)
+            mut z = lf.new_vreg()
+            lf.emit(LInst.IConst(z, 0))
+            mut gt = lf.new_vreg()
+            lf.emit(LInst.IBinOp(gt, ">", recv, z))
+            mut lt = lf.new_vreg()
+            lf.emit(LInst.IBinOp(lt, "<", recv, z))
+            mut sd = lf.new_vreg()
+            lf.emit(LInst.IBinOp(sd, "-", gt, lt))
+            return sd
+        return -1
+    if margs.len == 1 and (method == "gcd" or method == "lcm"):
+        mut y = lower_expr(m, lf, margs.get(0))
+        if y < 0 or lf.vreg_type(y) != 0: return -1
+        mut gsym = "_tr_rt_gcd_i64"
+        if method == "lcm": gsym = "_tr_rt_lcm_i64"
+        m.add_extern(gsym)
+        mut glargs = Vec[int].init(2)
+        glargs.push(recv)
+        glargs.push(y)
+        mut gd = lf.new_vreg()
+        lf.emit(LInst.ICall(gd, gsym, glargs))
+        return gd
+    if margs.len == 2 and method == "clamp":
+        mut lo = lower_expr(m, lf, margs.get(0))
+        if lo < 0 or lf.vreg_type(lo) != 0: return -1
+        mut hi = lower_expr(m, lf, margs.get(1))
+        if hi < 0 or lf.vreg_type(hi) != 0: return -1
+        m.add_extern("_tr_rt_clamp_i64")
+        mut ca = Vec[int].init(3)
+        ca.push(recv)
+        ca.push(lo)
+        ca.push(hi)
+        mut cd = lf.new_vreg()
+        lf.emit(LInst.ICall(cd, "_tr_rt_clamp_i64", ca))
+        return cd
+    return -1
+
 # Float math methods on an f64 receiver: unary libm (-> f64), pow/atan2 (1 arg -> f64),
 # is_nan/is_inf (-> bool).
 def _lower_float_method(m: LModule, lf: LFunc, recv: int, method: str, margs: Vec[Pointer[HirExpr]]) -> int:
@@ -834,6 +880,13 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                 lf.emit(LInst.IBinOp(dnot, "==", sv, zt))
                 lf.set_vreg_type(dnot, 4)
                 return dnot
+            if op == "~":                          # ~x  ->  x ^ -1  (int bit-complement)
+                if svt != 0: return -1
+                mut ones = lf.new_vreg()
+                lf.emit(LInst.IConst(ones, 0 - 1))
+                mut dcpl = lf.new_vreg()
+                lf.emit(LInst.IBinOp(dcpl, "^", sv, ones))
+                return dcpl
             return -1
         case HirExpr.EBinOp(op, l, r, _):
             mut a = lower_expr(m, lf, l)
@@ -1137,6 +1190,8 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                 return _lower_str_method(m, lf, ovm, method, margs)
             if ovmt == 5:
                 return _lower_float_method(m, lf, ovm, method, margs)
+            if ovmt == 0:
+                return _lower_int_method(m, lf, ovm, method, margs)
             if not _is_list_tag(ovmt): return -1
             mut want_elem = _list_elem_tag(ovmt)
             if method == "push" or method == "append":

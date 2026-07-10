@@ -262,6 +262,40 @@ long long _tr_rt_str_contains(const char* s, const char* sub) {
     return strstr(s, sub) != 0 ? 1 : 0;
 }
 
+/* Int utility methods (x.to_hex() etc.) — match tauraro_rt.h formats. */
+static char* _trn_fmt(const char* fmt, long long v) {
+    char b[40]; int n = snprintf(b, sizeof(b), fmt, v);
+    char* r = (char*)malloc((size_t)n + 1);
+    for (int i = 0; i <= n; i++) r[i] = b[i];
+    return r;
+}
+char* _tr_rt_i64_to_hex(long long v)       { return _trn_fmt("%llx", v); }
+char* _tr_rt_i64_to_hex_upper(long long v) { return _trn_fmt("%llX", v); }
+char* _tr_rt_i64_to_oct(long long v)       { return _trn_fmt("%llo", v); }
+char* _tr_rt_i64_to_bin(long long n) {
+    if (n == 0) { char* z = (char*)malloc(2); z[0] = '0'; z[1] = 0; return z; }
+    char buf[70]; int pos = 68; buf[69] = 0;
+    unsigned long long v = (unsigned long long)n;
+    while (v > 0) { buf[pos--] = (char)('0' + (int)(v & 1)); v >>= 1; }
+    size_t nd = (size_t)(68 - pos);
+    char* r = (char*)malloc(nd + 1);
+    for (size_t i = 0; i < nd; i++) r[i] = buf[pos + 1 + i];
+    r[nd] = 0;
+    return r;
+}
+long long _tr_rt_gcd_i64(long long a, long long b) {
+    a = a < 0 ? -a : a; b = b < 0 ? -b : b;
+    while (b) { long long t = b; b = a % b; a = t; }
+    return a;
+}
+long long _tr_rt_lcm_i64(long long a, long long b) {
+    long long g = _tr_rt_gcd_i64(a, b);
+    return g ? (a / g * b) : 0;
+}
+long long _tr_rt_clamp_i64(long long v, long long lo, long long hi) {
+    return v < lo ? lo : (v > hi ? hi : v);
+}
+
 long long _tr_rt_list_sum_i64(void* h) {
     _TrNList* l = (_TrNList*)h;
     if (!l) return 0;
