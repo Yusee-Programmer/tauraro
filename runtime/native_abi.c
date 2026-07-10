@@ -114,6 +114,7 @@ void _tr_rt_write_nl(void) { fputc('\n', stdout); }
 long long _tr_rt_abs_i64(long long x) { return x < 0 ? -x : x; }
 long long _tr_rt_min_i64(long long a, long long b) { return a < b ? a : b; }
 long long _tr_rt_max_i64(long long a, long long b) { return a > b ? a : b; }
+long long _tr_rt_int_pow(long long b, long long e) { return (long long)pow((double)b, (double)e); }
 
 /* Conversions: str(int)/str(bool), int(str). (i64_to_str/str_repeat malloc -> leak; -O0 dev.) */
 char* _tr_rt_i64_to_str(long long v) {
@@ -334,6 +335,12 @@ long long _tr_rt_str_contains(const char* s, const char* sub) {
     if (!s || !sub) return 0;
     return strstr(s, sub) != 0 ? 1 : 0;
 }
+long long _tr_rt_str_last_index_of(const char* s, const char* sub) {
+    if (!s || !sub || !*sub) return -1;
+    size_t sl = strlen(s), subl = strlen(sub); long long last = -1;
+    for (size_t i = 0; i + subl <= sl; i++) if (strncmp(s + i, sub, subl) == 0) last = (long long)i;
+    return last;
+}
 
 /* Dict[str,int] / Dict[int,int] — chained hash maps with i64 values. Missing key -> 0
  * (matches the C backend). No ARC/free yet (leaks; -O0 dev). Fixed bucket count. */
@@ -373,6 +380,11 @@ long long _tr_rt_sdict_has(void* h, const char* k) {
     return 0;
 }
 long long _tr_rt_sdict_len(void* h) { _SDict* d = (_SDict*)h; return d ? d->len : 0; }
+long long _tr_rt_sdict_get_or(void* h, const char* k, long long def) {
+    _SDict* d = (_SDict*)h; if (!d || !k) return def;
+    for (_SNode* n = d->b[_trn_shash(k)]; n; n = n->next) if (strcmp(n->key, k) == 0) return n->val;
+    return def;
+}
 
 void* _tr_rt_idict_new(void) {
     _IDict* d = (_IDict*)malloc(sizeof(_IDict));
@@ -399,6 +411,12 @@ long long _tr_rt_idict_has(void* h, long long k) {
     return 0;
 }
 long long _tr_rt_idict_len(void* h) { _IDict* d = (_IDict*)h; return d ? d->len : 0; }
+long long _tr_rt_idict_get_or(void* h, long long k, long long def) {
+    _IDict* d = (_IDict*)h; if (!d) return def;
+    unsigned long i = (unsigned long)((unsigned long long)k % _TRN_DCAP);
+    for (_INode* n = d->b[i]; n; n = n->next) if (n->key == k) return n->val;
+    return def;
+}
 
 /* xs[i] = v for List[int]/List[str] (value is 8 bytes either way). */
 void _tr_rt_list_set_i64(void* h, long long i, long long v) {
@@ -674,4 +692,10 @@ void _tr_rt_list_remove(void* h, long long i) {
     if (!l || i < 0 || i >= l->len) return;
     for (long long j = i; j < l->len - 1; j++) l->data[j] = l->data[j + 1];
     l->len--;
+}
+/* xs.swap(i, j) -> swap elements at i and j. */
+void _tr_rt_list_swap(void* h, long long i, long long j) {
+    _TrNList* l = (_TrNList*)h;
+    if (!l || i < 0 || j < 0 || i >= l->len || j >= l->len) return;
+    long long t = l->data[i]; l->data[i] = l->data[j]; l->data[j] = t;
 }

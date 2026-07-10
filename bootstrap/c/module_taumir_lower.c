@@ -2107,6 +2107,18 @@ __attribute__((hot)) long long _lower_str_method(LModule* m, LFunc* lf, long lon
         return _str_call1(m, lf, _tr_str_lit("_tr_rt_str_find"), _tr_v_recv, ida, 0LL);
     }
     /* pass */
+    if (((strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("last_index_of"))) == 0) && (margs->len == 1LL))) {
+        /* pass */
+        long long lia = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, 0LL)));
+        /* pass */
+        if (((lia < 0LL) || (LFunc_vreg_type(lf, lia) != 1LL))) {
+            /* pass */
+            return (-1LL);
+        }
+        /* pass */
+        return _str_call1(m, lf, _tr_str_lit("_tr_rt_str_last_index_of"), _tr_v_recv, lia, 0LL);
+    }
+    /* pass */
     if (((strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("strip_prefix"))) == 0) && (margs->len == 1LL))) {
         /* pass */
         long long ppa = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, 0LL)));
@@ -2299,6 +2311,30 @@ __attribute__((hot)) long long _lower_int_method(LModule* m, LFunc* lf, long lon
         return (-1LL);
     }
     /* pass */
+    if (((margs->len == 1LL) && (strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("pow"))) == 0))) {
+        /* pass */
+        long long pe = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, 0LL)));
+        /* pass */
+        if (((pe < 0LL) || (LFunc_vreg_type(lf, pe) != 0LL))) {
+            /* pass */
+            return (-1LL);
+        }
+        /* pass */
+        LModule_add_extern(m, _tr_str_lit("_tr_rt_int_pow"));
+        /* pass */
+        List_i64* ppa = (void*)List_i64_new();
+        /* pass */
+        List_i64_append(ppa, _tr_v_recv);
+        /* pass */
+        List_i64_append(ppa, pe);
+        /* pass */
+        long long ppd = LFunc_new_vreg(lf);
+        /* pass */
+        LFunc_emit(lf, LInst_ctor_ICall(ppd, _tr_str_lit("_tr_rt_int_pow"), ppa));
+        /* pass */
+        return ppd;
+    }
+    /* pass */
     if (((margs->len == 1LL) && ((strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("gcd"))) == 0) || (strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("lcm"))) == 0)))) {
         /* pass */
         long long y = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, 0LL)));
@@ -2370,6 +2406,57 @@ __attribute__((hot)) long long _lower_int_method(LModule* m, LFunc* lf, long lon
 }
 
 __attribute__((hot)) long long _lower_dict_method(LModule* m, LFunc* lf, long long _tr_v_recv, long long dtag, TrStr method, List_ptr* margs) {
+    /* pass */
+    if (((strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("get_or"))) == 0) && (margs->len == 2LL))) {
+        /* pass */
+        if ((_dict_val_tag(dtag) != 0LL)) {
+            /* pass */
+            return (-1LL);
+        }
+        /* pass */
+        long long gk = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, 0LL)));
+        /* pass */
+        if ((gk < 0LL)) {
+            /* pass */
+            return (-1LL);
+        }
+        /* pass */
+        if ((_dict_key_is_str(dtag) && (LFunc_vreg_type(lf, gk) != 1LL))) {
+            /* pass */
+            return (-1LL);
+        }
+        /* pass */
+        if (((!_dict_key_is_str(dtag)) && (LFunc_vreg_type(lf, gk) != 0LL))) {
+            /* pass */
+            return (-1LL);
+        }
+        /* pass */
+        long long gdef = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, 1LL)));
+        /* pass */
+        if (((gdef < 0LL) || (LFunc_vreg_type(lf, gdef) != 0LL))) {
+            /* pass */
+            return (-1LL);
+        }
+        /* pass */
+        TrStr gosym = _dict_sym(dtag, _tr_str_lit("get_or"));
+        /* pass */
+        LModule_add_extern(m, gosym);
+        /* pass */
+        List_i64* goa = (void*)List_i64_new();
+        /* pass */
+        List_i64_append(goa, _tr_v_recv);
+        /* pass */
+        List_i64_append(goa, gk);
+        /* pass */
+        List_i64_append(goa, gdef);
+        /* pass */
+        long long godd = LFunc_new_vreg(lf);
+        /* pass */
+        LFunc_emit(lf, LInst_ctor_ICall(godd, gosym, goa));
+        /* pass */
+        _tr_str_release(gosym);
+        return godd;
+    }
     /* pass */
     if ((margs->len != 1LL)) {
         /* pass */
@@ -4251,6 +4338,37 @@ __auto_type margs = _t2264.data.EMethodCall.args;
             List_i64_append(rma, rmi);
             /* pass */
             LFunc_emit(lf, LInst_ctor_ICall((-1LL), _tr_str_lit("_tr_rt_list_remove"), rma));
+            /* pass */
+            return ovm;
+        }
+        /* pass */
+        if (((strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("swap"))) == 0) && (margs->len == 2LL))) {
+            /* pass */
+            long long swi = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, 0LL)));
+            /* pass */
+            if (((swi < 0LL) || (LFunc_vreg_type(lf, swi) != 0LL))) {
+                /* pass */
+                return (-1LL);
+            }
+            /* pass */
+            long long swj = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, 1LL)));
+            /* pass */
+            if (((swj < 0LL) || (LFunc_vreg_type(lf, swj) != 0LL))) {
+                /* pass */
+                return (-1LL);
+            }
+            /* pass */
+            LModule_add_extern(m, _tr_str_lit("_tr_rt_list_swap"));
+            /* pass */
+            List_i64* swa = (void*)List_i64_new();
+            /* pass */
+            List_i64_append(swa, ovm);
+            /* pass */
+            List_i64_append(swa, swi);
+            /* pass */
+            List_i64_append(swa, swj);
+            /* pass */
+            LFunc_emit(lf, LInst_ctor_ICall((-1LL), _tr_str_lit("_tr_rt_list_swap"), swa));
             /* pass */
             return ovm;
         }

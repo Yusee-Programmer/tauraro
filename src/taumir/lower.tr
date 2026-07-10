@@ -875,6 +875,10 @@ def _lower_str_method(m: LModule, lf: LFunc, recv: int, method: str, margs: Vec[
         mut ida = lower_expr(m, lf, margs.get(0))
         if ida < 0 or lf.vreg_type(ida) != 1: return -1
         return _str_call1(m, lf, "_tr_rt_str_find", recv, ida, 0)
+    if method == "last_index_of" and margs.len == 1:
+        mut lia = lower_expr(m, lf, margs.get(0))
+        if lia < 0 or lf.vreg_type(lia) != 1: return -1
+        return _str_call1(m, lf, "_tr_rt_str_last_index_of", recv, lia, 0)
     if method == "strip_prefix" and margs.len == 1:
         mut ppa = lower_expr(m, lf, margs.get(0))
         if ppa < 0 or lf.vreg_type(ppa) != 1: return -1
@@ -937,6 +941,16 @@ def _lower_int_method(m: LModule, lf: LFunc, recv: int, method: str, margs: Vec[
             lf.emit(LInst.IBinOp(sd, "-", gt, lt))
             return sd
         return -1
+    if margs.len == 1 and method == "pow":       # int.pow(exp) via libm pow -> int
+        mut pe = lower_expr(m, lf, margs.get(0))
+        if pe < 0 or lf.vreg_type(pe) != 0: return -1
+        m.add_extern("_tr_rt_int_pow")
+        mut ppa = Vec[int].init(2)
+        ppa.push(recv)
+        ppa.push(pe)
+        mut ppd = lf.new_vreg()
+        lf.emit(LInst.ICall(ppd, "_tr_rt_int_pow", ppa))
+        return ppd
     if margs.len == 1 and (method == "gcd" or method == "lcm"):
         mut y = lower_expr(m, lf, margs.get(0))
         if y < 0 or lf.vreg_type(y) != 0: return -1
@@ -966,6 +980,23 @@ def _lower_int_method(m: LModule, lf: LFunc, recv: int, method: str, margs: Vec[
 
 # Dict methods on a dict receiver: .get(k) -> int value, .contains(k) -> bool.
 def _lower_dict_method(m: LModule, lf: LFunc, recv: int, dtag: int, method: str, margs: Vec[Pointer[HirExpr]]) -> int:
+    if method == "get_or" and margs.len == 2:    # d.get_or(k, default) -> int (int-valued dicts)
+        if _dict_val_tag(dtag) != 0: return -1
+        mut gk = lower_expr(m, lf, margs.get(0))
+        if gk < 0: return -1
+        if _dict_key_is_str(dtag) and lf.vreg_type(gk) != 1: return -1
+        if not _dict_key_is_str(dtag) and lf.vreg_type(gk) != 0: return -1
+        mut gdef = lower_expr(m, lf, margs.get(1))
+        if gdef < 0 or lf.vreg_type(gdef) != 0: return -1
+        mut gosym = _dict_sym(dtag, "get_or")
+        m.add_extern(gosym)
+        mut goa = Vec[int].init(3)
+        goa.push(recv)
+        goa.push(gk)
+        goa.push(gdef)
+        mut godd = lf.new_vreg()
+        lf.emit(LInst.ICall(godd, gosym, goa))
+        return godd
     if margs.len != 1: return -1
     mut kv = lower_expr(m, lf, margs.get(0))
     if kv < 0: return -1
@@ -1680,6 +1711,18 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                 rma.push(ovm)
                 rma.push(rmi)
                 lf.emit(LInst.ICall(-1, "_tr_rt_list_remove", rma))
+                return ovm
+            if method == "swap" and margs.len == 2:
+                mut swi = lower_expr(m, lf, margs.get(0))
+                if swi < 0 or lf.vreg_type(swi) != 0: return -1
+                mut swj = lower_expr(m, lf, margs.get(1))
+                if swj < 0 or lf.vreg_type(swj) != 0: return -1
+                m.add_extern("_tr_rt_list_swap")
+                mut swa = Vec[int].init(3)
+                swa.push(ovm)
+                swa.push(swi)
+                swa.push(swj)
+                lf.emit(LInst.ICall(-1, "_tr_rt_list_swap", swa))
                 return ovm
             if method == "join" and margs.len == 1:
                 if ovmt != 3: return -1             # List[str] only
