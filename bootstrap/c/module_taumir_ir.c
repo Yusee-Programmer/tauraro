@@ -30,6 +30,8 @@ __attribute__((malloc,returns_nonnull,hot)) LFunc* LFunc_init(TrStr name) {
     /* pass */
     f->vars = (void*)List_TrStr_new();
     /* pass */
+    f->params = (void*)List_TrStr_new();
+    /* pass */
     return f;
 }
 
@@ -127,6 +129,8 @@ __attribute__((malloc,returns_nonnull,hot)) LModule* LModule_init() {
     /* pass */
     m->externs = (void*)List_TrStr_new();
     /* pass */
+    m->fn_names = (void*)List_TrStr_new();
+    /* pass */
     m->ok = true;
     /* pass */
     return m;
@@ -147,6 +151,23 @@ __attribute__((hot)) void LModule_add_extern(LModule* self, TrStr name) {
     }
     /* pass */
     List_TrStr_append(self->externs, name);
+}
+
+__attribute__((hot)) bool LModule_is_user_fn(LModule* self, TrStr name) {
+    /* pass */
+    long long i = 0LL;
+    /* pass */
+    while ((i < self->fn_names->len)) {
+        /* pass */
+        if ((strcmp(_tr_strz(List_TrStr_get(self->fn_names, i)), _tr_strz(name)) == 0)) {
+            /* pass */
+            return true;
+        }
+        /* pass */
+        i = (i + 1LL);
+    }
+    /* pass */
+    return false;
 }
 
 __attribute__((hot)) LInst* box_linst(LInst i) {

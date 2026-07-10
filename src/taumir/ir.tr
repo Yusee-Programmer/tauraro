@@ -25,7 +25,8 @@ pub enum LInst:
 
 # Block terminator (exactly one per block).
 pub enum LTerm:
-    TRetInt(v: int)
+    TRetInt(v: int)                         # return an integer constant
+    TRetVal(v: int)                         # return the value in vreg v
     TRetVoid
     TBr(target: int)                        # -> block{target}
     TCondBr(cond: int, then_b: int, else_b: int)   # cond!=0 ? then : else
@@ -57,6 +58,7 @@ pub class LFunc:
     pub cur:     int             # block currently being built
     pub n_vregs: int
     pub vars:    Vec[str]
+    pub params:  Vec[str]        # parameter names in order (System V arg registers -> slots)
 
 extend LFunc:
     pub def init(name: str) -> LFunc:
@@ -67,6 +69,7 @@ extend LFunc:
         f.cur     = -1
         f.n_vregs = 0
         f.vars    = Vec[str].init(4)
+        f.params  = Vec[str].init(4)
         return f
 
     # Create a new empty block, return its id (does NOT change the cursor).
@@ -115,16 +118,18 @@ extend LFunc:
         return -1
 
 pub class LModule:
-    pub funcs:   Vec[LFunc]
-    pub externs: Vec[str]
-    pub ok:      bool
+    pub funcs:    Vec[LFunc]
+    pub externs:  Vec[str]
+    pub fn_names: Vec[str]      # user function names (defined in this module; call targets)
+    pub ok:       bool
 
 extend LModule:
     pub def init() -> LModule:
         mut m = LModule()
-        m.funcs   = Vec[LFunc].init(4)
-        m.externs = Vec[str].init(4)
-        m.ok      = true
+        m.funcs    = Vec[LFunc].init(4)
+        m.externs  = Vec[str].init(4)
+        m.fn_names = Vec[str].init(8)
+        m.ok       = true
         return m
 
     pub def add_extern(self, name: str):
@@ -133,3 +138,10 @@ extend LModule:
             if self.externs.get(i) == name: return
             i = i + 1
         self.externs.push(name)
+
+    pub def is_user_fn(self, name: str) -> bool:
+        mut i = 0
+        while i < self.fn_names.len:
+            if self.fn_names.get(i) == name: return true
+            i = i + 1
+        return false

@@ -78,6 +78,12 @@ def _ld_argreg(c: ByteBuf, idx: int, disp: int):   # mov <argreg>, [rbp+disp32]
     c.u8(_argreg_modrm(idx))
     c.u32(disp)
 
+def _st_argreg(c: ByteBuf, idx: int, disp: int):   # mov [rbp+disp32], <argreg>
+    c.u8(72)
+    c.u8(137)
+    c.u8(_argreg_modrm(idx))
+    c.u32(disp)
+
 def _mov_rax_imm64(c: ByteBuf, v: int):    # mov rax, imm64
     c.u8(72)
     c.u8(184)
@@ -139,6 +145,12 @@ pub def encode_func(lf: LFunc) -> EncodedFunc:
         c.u8(236)
         c.u32(framesize)
 
+    # move parameters (System V arg registers rdi/rsi/rdx/rcx) into their stack slots
+    mut ppi = 0
+    while ppi < lf.params.len:
+        _st_argreg(c, ppi, _var_disp(lf, lf.params.get(ppi)))
+        ppi = ppi + 1
+
     mut block_start = Vec[int].init(lf.blocks.len)
     mut jumps = Vec[Jump].init(8)
 
@@ -194,6 +206,10 @@ pub def encode_func(lf: LFunc) -> EncodedFunc:
         match blk.term:
             case LTerm.TRetInt(rv):
                 _emit_return(c, rv)
+            case LTerm.TRetVal(rvreg):
+                _ld_rax(c, _vreg_disp(rvreg))   # mov rax, [vreg]  (result in rax)
+                c.u8(201)                        # leave
+                c.u8(195)                        # ret
             case LTerm.TRetVoid:
                 _emit_return(c, 0)
             case LTerm.TBr(target):

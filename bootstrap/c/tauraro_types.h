@@ -1620,6 +1620,7 @@ static inline __attribute__((always_inline)) LInst LInst_ctor_ICall(long long ds
 
 typedef enum {
     LTerm_TRetInt,
+    LTerm_TRetVal,
     LTerm_TRetVoid,
     LTerm_TBr,
     LTerm_TCondBr,
@@ -1633,6 +1634,9 @@ typedef struct LTerm {
             long long v;
         } TRetInt;
         struct {
+            long long v;
+        } TRetVal;
+        struct {
             long long target;
         } TBr;
         struct {
@@ -1644,6 +1648,7 @@ typedef struct LTerm {
 } LTerm;
 
 static inline __attribute__((always_inline)) LTerm LTerm_ctor_TRetInt(long long v) { LTerm _r = {.tag=LTerm_TRetInt}; _r.data.TRetInt.v = v; return _r; }
+static inline __attribute__((always_inline)) LTerm LTerm_ctor_TRetVal(long long v) { LTerm _r = {.tag=LTerm_TRetVal}; _r.data.TRetVal.v = v; return _r; }
 #define LTerm_make_TRetVoid() ((LTerm){.tag=LTerm_TRetVoid})
 static inline __attribute__((always_inline)) LTerm LTerm_ctor_TBr(long long target) { LTerm _r = {.tag=LTerm_TBr}; _r.data.TBr.target = target; return _r; }
 static inline __attribute__((always_inline)) LTerm LTerm_ctor_TCondBr(long long cond, long long then_b, long long else_b) { LTerm _r = {.tag=LTerm_TCondBr}; _r.data.TCondBr.cond = cond; _r.data.TCondBr.then_b = then_b; _r.data.TCondBr.else_b = else_b; return _r; }
@@ -2805,6 +2810,7 @@ typedef struct LFunc {
     long long cur;
     long long n_vregs;
     List_TrStr* vars;
+    List_TrStr* params;
 } LFunc;
 static void _trdrop_LFunc(void* vp) {
     LFunc* self = (LFunc*)vp; (void)self;
@@ -2819,12 +2825,14 @@ typedef struct LModule {
     size_t __rc;
     List_ptr* funcs;
     List_TrStr* externs;
+    List_TrStr* fn_names;
     bool ok;
 } LModule;
 static void _trdrop_LModule(void* vp) {
     LModule* self = (LModule*)vp; (void)self;
     List_ptr_free_obj(self->funcs, _trdrop_LFunc);
     List_TrStr_free(self->externs);
+    List_TrStr_free(self->fn_names);
 }
 #endif
 
@@ -3476,15 +3484,16 @@ __attribute__((hot)) void LFunc_add_var(LFunc* self, TrStr name);
 __attribute__((hot)) long long LFunc_var_index(LFunc* self, TrStr name);
 __attribute__((malloc,returns_nonnull,hot)) LModule* LModule_init();
 __attribute__((hot)) void LModule_add_extern(LModule* self, TrStr name);
+__attribute__((hot)) bool LModule_is_user_fn(LModule* self, TrStr name);
 __attribute__((hot)) TrStr _print_i64_sym();
 __attribute__((hot)) LModule* lower_to_lir(HirProgram* prog);
-__attribute__((hot)) void lower_main(LModule* m, HirFunction* f);
+__attribute__((hot)) void _lir_lower_function(LModule* m, HirFunction* f);
 __attribute__((hot)) bool lower_block(LModule* m, LFunc* lf, HirBlock* hb);
 __attribute__((hot)) bool lower_stmt(LModule* m, LFunc* lf, HirStmt* s);
 __attribute__((hot)) TrStr _ident_name(HirExpr* e);
-__attribute__((hot)) bool lower_call_stmt(LModule* m, LFunc* lf, HirExpr* e);
+__attribute__((hot)) bool lower_expr_stmt(LModule* m, LFunc* lf, HirExpr* e);
 __attribute__((hot)) bool _supported_op(TrStr op);
-__attribute__((hot)) long long lower_expr(LFunc* lf, HirExpr* e);
+__attribute__((hot)) long long lower_expr(LModule* m, LFunc* lf, HirExpr* e);
 __attribute__((malloc,returns_nonnull,hot)) ByteBuf* ByteBuf_init();
 __attribute__((hot)) void ByteBuf_u8(ByteBuf* self, long long v);
 __attribute__((hot)) void ByteBuf_u16(ByteBuf* self, long long v);
@@ -3505,6 +3514,7 @@ __attribute__((hot)) void _st_rax(ByteBuf* c, long long disp);
 __attribute__((hot)) void _ld_rax(ByteBuf* c, long long disp);
 __attribute__((hot)) void _ld_rcx(ByteBuf* c, long long disp);
 __attribute__((hot)) void _ld_argreg(ByteBuf* c, long long idx, long long disp);
+__attribute__((hot)) void _st_argreg(ByteBuf* c, long long idx, long long disp);
 __attribute__((hot)) void _mov_rax_imm64(ByteBuf* c, long long v);
 __attribute__((hot)) bool _is_cmp(TrStr op);
 __attribute__((hot)) long long _setcc(TrStr op);
