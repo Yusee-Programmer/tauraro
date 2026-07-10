@@ -1,0 +1,25 @@
+# native≡c differential corpus: string methods, sum(), range 3-arg step.
+def main():
+    mut s = "Hello World"
+    print(s.upper())            # HELLO WORLD
+    print(s.lower())            # hello world
+    print(s.replace("o", "0"))  # Hell0 W0rld
+    print(s.find("World"))      # 6
+    print(s.find("xyz"))        # -1
+    print("  hi  ".strip())     # hi
+    print(s.starts_with("Hell"))  # true
+    print(s.ends_with("World"))   # true
+    print(s.starts_with("world")) # false
+
+    mut xs = [3, 1, 4, 1, 5, 9]
+    print(sum(xs))              # 23
+
+    mut total = 0
+    for i in range(0, 10, 2):
+        total = total + i
+    print(total)               # 0+2+4+6+8 = 20
+
+    mut down = 0
+    for j in range(10, 0, -1):
+        down = down + j
+    print(down)                # 10+9+..+1 = 55

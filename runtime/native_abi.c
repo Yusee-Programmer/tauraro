@@ -71,6 +71,67 @@ long long _tr_rt_list_pop_i64(void* h) {
     return l->data[l->len];
 }
 
+/* String methods (match tauraro_rt.h semantics: isspace/toupper/strstr). malloc -> -O0. */
+char* _tr_rt_str_upper(const char* s) {
+    if (!s) s = "";
+    size_t n = strlen(s); char* r = (char*)malloc(n + 1);
+    for (size_t i = 0; i <= n; i++) r[i] = (char)toupper((unsigned char)s[i]);
+    return r;
+}
+char* _tr_rt_str_lower(const char* s) {
+    if (!s) s = "";
+    size_t n = strlen(s); char* r = (char*)malloc(n + 1);
+    for (size_t i = 0; i <= n; i++) r[i] = (char)tolower((unsigned char)s[i]);
+    return r;
+}
+char* _tr_rt_str_strip(const char* s) {
+    if (!s) s = "";
+    while (isspace((unsigned char)*s)) s++;
+    const char* e = s + strlen(s);
+    while (e > s && isspace((unsigned char)e[-1])) e--;
+    size_t l = (size_t)(e - s); char* r = (char*)malloc(l + 1);
+    for (size_t i = 0; i < l; i++) r[i] = s[i];
+    r[l] = 0; return r;
+}
+char* _tr_rt_str_replace(const char* s, const char* a, const char* b) {
+    if (!s) s = ""; if (!a) a = ""; if (!b) b = "";
+    size_t sl = strlen(s), al = strlen(a), bl = strlen(b);
+    if (al == 0) { char* r = (char*)malloc(sl + 1); for (size_t i = 0; i <= sl; i++) r[i] = s[i]; return r; }
+    int cnt = 0; const char* p = s;
+    while ((p = strstr(p, a))) { cnt++; p += al; }
+    char* r = (char*)malloc(sl + (bl > al ? (bl - al) * (size_t)cnt : 0) + 1);
+    char* w = r; p = s; const char* q;
+    while ((q = strstr(p, a))) {
+        for (const char* c = p; c < q; c++) *w++ = *c;
+        for (size_t j = 0; j < bl; j++) *w++ = b[j];
+        p = q + al;
+    }
+    while (*p) *w++ = *p++;
+    *w = 0; return r;
+}
+long long _tr_rt_str_find(const char* s, const char* sub) {
+    if (!s || !sub) return -1;
+    const char* p = strstr(s, sub);
+    return p ? (long long)(p - s) : -1;
+}
+long long _tr_rt_str_starts_with(const char* s, const char* p) {
+    if (!s || !p) return 0;
+    return strncmp(s, p, strlen(p)) == 0 ? 1 : 0;
+}
+long long _tr_rt_str_ends_with(const char* s, const char* p) {
+    if (!s || !p) return 0;
+    size_t sl = strlen(s), pl = strlen(p);
+    if (pl > sl) return 0;
+    return strcmp(s + sl - pl, p) == 0 ? 1 : 0;
+}
+long long _tr_rt_list_sum_i64(void* h) {
+    _TrNList* l = (_TrNList*)h;
+    if (!l) return 0;
+    long long t = 0;
+    for (long long i = 0; i < l->len; i++) t += l->data[i];
+    return t;
+}
+
 /* `x in xs` membership for List[int] / List[str]. */
 long long _tr_rt_list_contains_i64(void* h, long long v) {
     _TrNList* l = (_TrNList*)h;

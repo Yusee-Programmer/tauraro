@@ -265,7 +265,14 @@ def _lower_for(m: LModule, lf: LFunc, var: str, iter: Pointer[HirExpr], body: Hi
     return _lower_for_list(m, lf, var, iter, body)
 
 def _lower_for_range(m: LModule, lf: LFunc, var: str, args: Vec[Pointer[HirExpr]], body: HirBlock) -> bool:
-    if args.len < 1 or args.len > 2: return false     # 3-arg (step) form -> fall back to C
+    if args.len < 1 or args.len > 3: return false
+    mut stepv = 1
+    mut cmp = "<"                        # ascending: i < end
+    if args.len == 3:
+        if not _is_const_int(args.get(2)): return false   # need static direction
+        stepv = _const_int_val(args.get(2))
+        if stepv == 0: return false
+        if stepv < 0: cmp = ">"          # descending: i > end
     mut sv = -1
     mut end_expr = args.get(0)
     if args.len == 1:
@@ -290,7 +297,7 @@ def _lower_for_range(m: LModule, lf: LFunc, var: str, args: Vec[Pointer[HirExpr]
     mut ev = lower_expr(m, lf, end_expr)
     if ev < 0: return false
     mut cond = lf.new_vreg()
-    lf.emit(LInst.IBinOp(cond, "<", vv, ev))
+    lf.emit(LInst.IBinOp(cond, cmp, vv, ev))
     lf.set_term(LTerm.TCondBr(cond, bdy, ext))
     lf.set_cur(bdy)
     lf.loop_cont.push(latch)            # continue -> latch (runs the increment)
@@ -301,7 +308,7 @@ def _lower_for_range(m: LModule, lf: LFunc, var: str, args: Vec[Pointer[HirExpr]
     if not rok: return false
     lf.set_term(LTerm.TBr(latch))
     lf.set_cur(latch)
-    _emit_incr(lf, var)
+    _emit_add_const(lf, var, stepv)
     lf.set_term(LTerm.TBr(hdr))
     lf.set_cur(ext)
     return true
@@ -474,6 +481,94 @@ def _norm_bool(lf: LFunc, v: int) -> int:
     mut r = lf.new_vreg()
     lf.emit(LInst.IBinOp(r, "!=", v, z))
     return r
+
+# A 1-receiver runtime call (str method): sym(recv) -> result of type `restype`.
+def _str_call0(m: LModule, lf: LFunc, sym: str, recv: int, restype: int) -> int:
+    m.add_extern(sym)
+    mut a = Vec[int].init(1)
+    a.push(recv)
+    mut d = lf.new_vreg()
+    lf.emit(LInst.ICall(d, sym, a))
+    lf.set_vreg_type(d, restype)
+    return d
+
+# A str method taking one str argument: sym(recv, arg) -> result of type `restype`.
+def _str_call1(m: LModule, lf: LFunc, sym: str, recv: int, arg: int, restype: int) -> int:
+    m.add_extern(sym)
+    mut a = Vec[int].init(2)
+    a.push(recv)
+    a.push(arg)
+    mut d = lf.new_vreg()
+    lf.emit(LInst.ICall(d, sym, a))
+    lf.set_vreg_type(d, restype)
+    return d
+
+# String methods on a str receiver. New-string results are type 1; find -> int; starts/ends -> bool.
+def _lower_str_method(m: LModule, lf: LFunc, recv: int, method: str, margs: Vec[Pointer[HirExpr]]) -> int:
+    if (method == "upper" or method == "to_upper") and margs.len == 0:
+        return _str_call0(m, lf, "_tr_rt_str_upper", recv, 1)
+    if (method == "lower" or method == "to_lower") and margs.len == 0:
+        return _str_call0(m, lf, "_tr_rt_str_lower", recv, 1)
+    if (method == "strip" or method == "trim") and margs.len == 0:
+        return _str_call0(m, lf, "_tr_rt_str_strip", recv, 1)
+    if method == "replace" and margs.len == 2:
+        mut a0 = lower_expr(m, lf, margs.get(0))
+        if a0 < 0 or lf.vreg_type(a0) != 1: return -1
+        mut a1 = lower_expr(m, lf, margs.get(1))
+        if a1 < 0 or lf.vreg_type(a1) != 1: return -1
+        m.add_extern("_tr_rt_str_replace")
+        mut ra = Vec[int].init(3)
+        ra.push(recv)
+        ra.push(a0)
+        ra.push(a1)
+        mut rd = lf.new_vreg()
+        lf.emit(LInst.ICall(rd, "_tr_rt_str_replace", ra))
+        lf.set_vreg_type(rd, 1)
+        return rd
+    if method == "find" and margs.len == 1:
+        mut fa = lower_expr(m, lf, margs.get(0))
+        if fa < 0 or lf.vreg_type(fa) != 1: return -1
+        return _str_call1(m, lf, "_tr_rt_str_find", recv, fa, 0)
+    if method == "starts_with" and margs.len == 1:
+        mut sa = lower_expr(m, lf, margs.get(0))
+        if sa < 0 or lf.vreg_type(sa) != 1: return -1
+        return _str_call1(m, lf, "_tr_rt_str_starts_with", recv, sa, 4)
+    if method == "ends_with" and margs.len == 1:
+        mut ea = lower_expr(m, lf, margs.get(0))
+        if ea < 0 or lf.vreg_type(ea) != 1: return -1
+        return _str_call1(m, lf, "_tr_rt_str_ends_with", recv, ea, 4)
+    return -1
+
+# Compile-time int literal helpers (for `range(a, b, step)` direction). Handle `-N` too.
+def _is_const_int(e: Pointer[HirExpr]) -> bool:
+    match e.read():
+        case HirExpr.ELitInt(_, _): return true
+        case HirExpr.EUnaryOp(op, sub, _):
+            if op == "-":
+                match sub.read():
+                    case HirExpr.ELitInt(_, _): return true
+                    case _: return false
+            return false
+        case _: return false
+
+def _const_int_val(e: Pointer[HirExpr]) -> int:
+    match e.read():
+        case HirExpr.ELitInt(v, _): return v
+        case HirExpr.EUnaryOp(op, sub, _):
+            match sub.read():
+                case HirExpr.ELitInt(v2, _): return 0 - v2
+                case _: return 0
+        case _: return 0
+
+# name = name + delta  (loop counter bump by a constant step).
+def _emit_add_const(lf: LFunc, name: str, delta: int):
+    mut cur = lf.new_vreg()
+    lf.emit(LInst.ILoadVar(cur, name))
+    mut d = lf.new_vreg()
+    lf.emit(LInst.IConst(d, delta))
+    mut inc = lf.new_vreg()
+    lf.emit(LInst.IBinOp(inc, "+", cur, d))
+    lf.emit(LInst.IStoreVar(name, inc))
 
 # xs[i] / xs.get(i) lowering: _tr_rt_list_get_i64(handle, i) returning an i64.
 def _list_get(m: LModule, lf: LFunc, handle: int, idx: int) -> int:
@@ -723,6 +818,16 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                 mut i2d = lf.new_vreg()
                 lf.emit(LInst.ICall(i2d, "_tr_rt_str_to_i64", i2a))
                 return i2d
+            if fn == "sum" and args.len == 1:      # sum(List[int]) -> int
+                mut suv = lower_expr(m, lf, args.get(0))
+                if suv < 0: return -1
+                if lf.vreg_type(suv) != 2: return -1
+                m.add_extern("_tr_rt_list_sum_i64")
+                mut sua = Vec[int].init(1)
+                sua.push(suv)
+                mut sud = lf.new_vreg()
+                lf.emit(LInst.ICall(sud, "_tr_rt_list_sum_i64", sua))
+                return sud
             if fn == "bool" and args.len == 1:     # bool(x) -> (x != 0)
                 mut bv0 = lower_expr(m, lf, args.get(0))
                 if bv0 < 0: return -1
@@ -798,6 +903,8 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
             mut ovm = lower_expr(m, lf, obj)
             if ovm < 0: return -1
             mut ovmt = lf.vreg_type(ovm)
+            if ovmt == 1:
+                return _lower_str_method(m, lf, ovm, method, margs)
             if not _is_list_tag(ovmt): return -1
             mut want_elem = _list_elem_tag(ovmt)
             if method == "push" or method == "append":

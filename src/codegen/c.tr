@@ -6794,10 +6794,10 @@ pub class CGenerator:
                                 start_s = self.gen_expr(args.get(0))
                                 end_s = self.gen_expr(args.get(1))
                                 step_s = self.gen_expr(args.get(2))
-                            mut cmp = "<"
-                            mut step_p = step_s as Pointer[char]
-                            if step_p.offset(0).read() as int == 45: cmp = ">"
-                            self.w(pad + "for (long long " + var + " = " + start_s + "; " + var + " " + cmp + " " + end_s + "; " + var + " += " + step_s + ") {\n")
+                            # Loop direction depends on the step's SIGN, which isn't known
+                            # from the rendered expression text (e.g. "-1" may render as
+                            # "(-1LL)"), so pick the comparison at runtime: step>0 ? i<end : i>end.
+                            self.w(pad + "for (long long " + var + " = " + start_s + "; (" + step_s + ") > 0 ? " + var + " < " + end_s + " : " + var + " > " + end_s + "; " + var + " += " + step_s + ") {\n")
                             self.gen_block(body, indent + 1)
                             self.w(pad + "}\n")
                             return
