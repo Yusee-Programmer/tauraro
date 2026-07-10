@@ -284,12 +284,12 @@ jobs:
       # faithful validator (MinGW can't do freestanding — its stdatomic pulls x86
       # intrinsics). Uses a real cross-toolchain instead.
       # -------------------------------------------------------
-      - name: Install cross toolchains (aarch64 + arm-none-eabi + qemu)
+      - name: Install cross toolchains (aarch64 + arm-none-eabi + riscv64 + qemu)
         if: runner.os == 'Linux'
         shell: bash
         run: |
           sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu qemu-user-static gcc-arm-none-eabi qemu-system-arm
+          sudo apt-get install -y gcc-aarch64-linux-gnu qemu-user-static gcc-arm-none-eabi qemu-system-arm gcc-riscv64-unknown-elf qemu-system-misc
 
       - name: Cross-compile gate (edge aarch64 run + bare-metal boundary)
         if: runner.os == 'Linux'
@@ -315,6 +315,30 @@ jobs:
         # link-and-run correct on a real MCU target.
         shell: bash
         run: TAURAROC=./tauraroc${{ matrix.ext }} bash scripts/bare_run.sh
+
+      # Second bare-metal architecture: the SAME --freestanding path targeting RISC-V
+      # (qemu 'virt', rv64). The compiler emits the RISC-V _start boot code + linker
+      # script; proves the bare-metal support is arch-portable, not Cortex-M-specific.
+      - name: Bare-metal run (RISC-V rv64 under qemu-system-riscv64)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: TAURAROC=./tauraroc${{ matrix.ext }} bash scripts/bare_run_riscv.sh
+
+      # Native backend (Path B): compile a Tauraro program STRAIGHT to an x86-64 ELF
+      # object (no C source, no gcc for the user code), link it with runtime.o + libc,
+      # and run it. Proves the taumir(LIR) -> x86-64 -> ELF -> link pipeline.
+      - name: Native backend run (x86-64/ELF, no C)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: TAURAROC=./tauraroc${{ matrix.ext }} bash scripts/native_run.sh
+
+      # Differential oracle: every tests/native/*.tr compiled by BOTH the C backend and the
+      # native x86-64/ELF backend must produce byte-identical output — proves the
+      # from-scratch machine-code backend matches the reference on all covered features.
+      - name: Native ≡ C differential oracle
+        if: runner.os == 'Linux'
+        shell: bash
+        run: TAURAROC=./tauraroc${{ matrix.ext }} bash scripts/native_diff.sh
 
       - name: Clean up generated build output
         shell: bash

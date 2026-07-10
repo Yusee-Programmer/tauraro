@@ -1,0 +1,36 @@
+# native≡c differential corpus: multi-arg print, augmented assignment, abs/min/max,
+# `in` membership, `while True` + break, elif chains.
+def main():
+    mut s = 0
+    s += 10
+    s -= 3
+    s *= 2
+    print("sum", s)             # sum 14   (multi-arg print)
+
+    print(abs(-9))              # 9
+    print(min(4, 7), max(4, 7)) # 4 7
+    print("ok", True, 42)       # ok true 42
+
+    mut xs = [1, 2, 3]
+    print(2 in xs)             # true
+    print(9 in xs)             # false
+    mut names = ["a", "b"]
+    print("b" in names)        # true
+    print("z" in names)        # false
+
+    mut i = 0
+    while True:
+        i += 1
+        if i >= 5:
+            break
+    print(i)                    # 5
+
+    mut g = 75
+    if g >= 90:
+        print("A")
+    elif g >= 80:
+        print("B")
+    elif g >= 70:
+        print("C")              # C
+    else:
+        print("F")

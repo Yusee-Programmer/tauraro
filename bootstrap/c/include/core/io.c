@@ -5,7 +5,7 @@ __attribute__((hot)) TrStr read_file(TrStr path) {
     /* pass */
     /* unsafe block */
     /* pass */
-    void* fp = _tr_c_fopen(_tr_strz(path), _tr_strz(_tr_str_lit("rb")));
+    char* fp = _tr_c_fopen(_tr_strz(path), _tr_strz(_tr_str_lit("rb")));
     /* pass */
     if ((((unsigned long long)(fp)) == ((unsigned long long)(0LL)))) {
         /* pass */
@@ -33,7 +33,7 @@ __attribute__((hot)) bool file_exists(TrStr path) {
     /* pass */
     /* unsafe block */
     /* pass */
-    void* fp = _tr_c_fopen(_tr_strz(path), _tr_strz(_tr_str_lit("rb")));
+    char* fp = _tr_c_fopen(_tr_strz(path), _tr_strz(_tr_str_lit("rb")));
     /* pass */
     if ((((unsigned long long)(fp)) != ((unsigned long long)(0LL)))) {
         /* pass */
@@ -49,7 +49,7 @@ __attribute__((hot)) bool write_file(TrStr path, TrStr content) {
     /* pass */
     /* unsafe block */
     /* pass */
-    void* fp = _tr_c_fopen(_tr_strz(path), _tr_strz(_tr_str_lit("wb")));
+    char* fp = _tr_c_fopen(_tr_strz(path), _tr_strz(_tr_str_lit("wb")));
     /* pass */
     if ((((unsigned long long)(fp)) == ((unsigned long long)(0LL)))) {
         /* pass */
@@ -76,7 +76,7 @@ __attribute__((hot)) bool append_file(TrStr path, TrStr content) {
     /* pass */
     /* unsafe block */
     /* pass */
-    void* fp = _tr_c_fopen(_tr_strz(path), _tr_strz(_tr_str_lit("ab")));
+    char* fp = _tr_c_fopen(_tr_strz(path), _tr_strz(_tr_str_lit("ab")));
     /* pass */
     if ((((unsigned long long)(fp)) == ((unsigned long long)(0LL)))) {
         /* pass */

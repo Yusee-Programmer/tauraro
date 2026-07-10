@@ -1,0 +1,14 @@
+# native≡c differential corpus: user functions, params, recursion.
+def fib(n: int) -> int:
+    if n < 2:
+        return n
+    return fib(n - 1) + fib(n - 2)
+
+def add(x: int, y: int) -> int:
+    return x + y
+
+def main():
+    print(fib(10))          # 55
+    print(fib(15))          # 610
+    print(add(100, 23))     # 123
+    print(add(fib(7), 1))   # 14

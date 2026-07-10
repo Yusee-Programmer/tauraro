@@ -135,6 +135,7 @@ pub class CGenerator:
     pub list_types_buf: StringBuilder   # value-type List_T definitions (emitted after structs)
     pub proto_buf:      StringBuilder   # function prototypes
     pub mono_buf:       StringBuilder   # monomorphized generic class code
+    pub fn_mono_body:   StringBuilder   # monomorphized generic FREE-function bodies (flushed after all prototypes)
     pub temp_count:     int
     pub classes:        Map[str, HirClass]
     pub enums:          Map[str, HirEnum]
@@ -153,6 +154,7 @@ pub class CGenerator:
     pub eliding_get_retain: bool # set while generating a PROVEN collection-element borrow's RHS (`ref T = coll.get(k)`) — the str-valued get returns the unboxed alias WITHOUT retaining (zero-copy borrow); the SLet also skips the release
     pub no_elide: bool           # --no-elide: force pure ARC (drop ALL proven-borrow elision) — the differential-soundness oracle baseline
     pub tier_define: str         # --freestanding => "TAURARO_KERNEL" (no libc), --no-std => "TAURARO_NO_OS" (no OS); emitted as a #define before the runtime include so the tier build "just works" without a hand-passed -D
+    pub bare_arch:   str         # bare-metal boot architecture for @entry glue + linker script: "cortex-m" (default) or "riscv" (selected by --target embedded-riscv*)
     pub cur_self_is_ptr: bool     # inside a MUTATING @value_type method, `self` is a POINTER (`ClassName* self`) so writes persist — gen_prop_access uses `self->field`, not `self.field`
     pub coll_local_sfx: Map[str, str]    # List/Vec local name -> list_sfx (e.g. "i64"/"TrStr") for SAutoDrop's List_<sfx>_free; Dict/Map/Set don't need a suffix (Dict_free)
     pub coll_local_idict: Map[str, bool] # Dict/Map/Set local name -> true if int-keyed (TrIDict*/_TrISet*, freed via _tr_idict_free instead of Dict_free)
@@ -160,6 +162,7 @@ pub class CGenerator:
     pub coll_local_vtcoll: Map[str, str] # Dict/Map/Set local name -> typed-collection struct (e.g. "Dict_str_Point"/"Set_Point") for SAutoDrop's <name>_free
     pub type_subst:     Map[str, str]   # T -> "long long" during mono gen
     pub mono_done:      Map[str, bool]  # "Vec_i64" -> true (prevents duplicate gen)
+    pub emit_fn_name:   str             # override the emitted C name of a free fn (mono: id -> id_i64)
     pub list_type_done: Map[str, bool]  # "Token" -> true (prevents duplicate list gen)
     pub list_fwd_done:  Map[str, bool]  # "Token" -> true (prevents duplicate fwd decl)
     pub elem_fmt_done:  Map[str, bool]  # "_tr_fmt_obj_X" -> true (prevents duplicate to_str formatter gen)
@@ -208,6 +211,7 @@ pub class CGenerator:
         g.list_types_buf = StringBuilder.init(2048)
         g.proto_buf     = StringBuilder.init(8192)
         g.mono_buf      = StringBuilder.init(8192)
+        g.fn_mono_body  = StringBuilder.init(4096)
         g.temp_count    = 0
         g.classes       = Map[str, HirClass].init(128)
         g.enums         = Map[str, HirEnum].init(64)
@@ -226,6 +230,7 @@ pub class CGenerator:
         g.eliding_get_retain = false
         g.no_elide = false
         g.tier_define = ""
+        g.bare_arch   = "cortex-m"
         g.cur_self_is_ptr = false
         g.coll_local_sfx = Map[str, str].init(16)
         g.coll_local_idict = Map[str, bool].init(16)
@@ -233,6 +238,7 @@ pub class CGenerator:
         g.coll_local_vtcoll = Map[str, str].init(16)
         g.type_subst    = Map[str, str].init(8)
         g.mono_done     = Map[str, bool].init(32)
+        g.emit_fn_name  = ""
         g.list_type_done = Map[str, bool].init(16)
         g.list_fwd_done  = Map[str, bool].init(16)
         g.elem_fmt_done  = Map[str, bool].init(16)
@@ -469,6 +475,11 @@ pub class CGenerator:
         # Gap 4: 'ref T' and 'mut ref T' are transparent wrappers - map to inner type
         if (n == "ref" or n == "mut_ref") and ty.args.len > 0:
             return self.type_to_c(ty.args.get(0).read())
+
+        # Fixed-size array [T; N]: a zero-cost VALUE-type struct wrapping a C array
+        # (stack-allocated, no ARC). Emitted once as _TrArr_<Tsfx>_<N>.
+        if n == "Array" and ty.array_size > 0 and ty.args.len > 0:
+            return self.ensure_array_type(ty)
 
         # Function-pointer type (def(...)->R): stored as a void* function pointer.
         # Zero-cost: the call site casts back to the exact signature before calling.
@@ -751,7 +762,16 @@ pub class CGenerator:
                 elif concrete == "short": arg_name = "i16"
                 elif concrete == "signed char": arg_name = "i8"
                 elif concrete == "float": arg_name = "f32"
-                else: arg_name = concrete
+                else:
+                    # A generic param bound to a user-class/struct pointer, e.g. the T of
+                    # Box[Box[int]] is "Box_i64*". Its mono suffix is the POINTEE struct
+                    # name (Box_i64) — matching how the outer type's struct is named via
+                    # the nested-type recursion above — not "Box_i64_ptr" (which
+                    # type_suffix would yield for a trailing '*').
+                    if concrete.ends_with("*"):
+                        arg_name = concrete.slice(0, concrete.len() - 1)
+                    else:
+                        arg_name = concrete
             sfx = sfx + self.type_suffix(arg_name)
             i = i + 1
         return sfx
@@ -785,6 +805,30 @@ pub class CGenerator:
 
     # Ensure a monomorphized version of cls is generated into mono_buf.
     # Safe to call multiple times - guarded by mono_done map.
+    # Emit (once) the value-type struct for a fixed-size array [T; N] and return its
+    # C name (_TrArr_<Tsfx>_<N>). A plain C array can't be a uniform type prefix, so we
+    # wrap it in a struct — giving value semantics (copyable, passable) and a clean
+    # `.data[i]` index. No __rc: it's a stack value, never refcounted.
+    pub def ensure_array_type(self, ty: AstType) -> str:
+        mut elem = ty.args.get(0).read()
+        mut elem_c = self.type_to_c(elem)
+        mut sfx = self.type_args_suffix(ty.args)
+        mut nm = "_TrArr_" + sfx + "_" + ty.array_size.to_str()
+        if not self.mono_done.contains(nm):
+            self.mono_done.insert(nm, true)
+            self.value_types.insert(nm, true)
+            mut old_buf  = self.buf
+            mut old_sbuf = self.struct_buf
+            mut old_pbuf = self.proto_buf
+            self.buf        = self.mono_buf
+            self.struct_buf = self.mono_buf
+            self.proto_buf  = self.mono_buf
+            self.w("typedef struct " + nm + " { " + elem_c + " data[" + ty.array_size.to_str() + "]; } " + nm + ";\n")
+            self.buf        = old_buf
+            self.struct_buf = old_sbuf
+            self.proto_buf  = old_pbuf
+        return nm
+
     pub def ensure_mono(self, cls: HirClass, type_args: Vec[Pointer[AstType]]):
         mut sfx = self.type_args_suffix(type_args)
         mut mono_key = cls.name + "_" + sfx
@@ -854,7 +898,17 @@ pub class CGenerator:
             mut sig = self.get_inline_attrs(m) + self.gen_func_sig(m, mono_name)
             self.w(sig + ";\n")
             mi = mi + 1
+        # Method bodies -> fn_mono_body (flushed after ALL prototypes) so a mono method
+        # that calls a regular function/method declared later (e.g. self.field.show() on
+        # a T-typed field where T=Cat -> Cat_show) resolves. `static` keeps it multi-TU
+        # safe. Prototypes above stay in mono_buf (early).
         mi = 0
+        mut _cmb_obuf  = self.buf
+        mut _cmb_osbuf = self.struct_buf
+        mut _cmb_opbuf = self.proto_buf
+        self.buf        = self.fn_mono_body
+        self.struct_buf = self.fn_mono_body
+        self.proto_buf  = self.fn_mono_body
         while mi < cls.methods.len:
             mut m = cls.methods.get(mi)
             mut old_class = self.cur_class
@@ -877,6 +931,10 @@ pub class CGenerator:
             self.cur_class = old_class
             self.cur_func  = old_func
             mi = mi + 1
+        self.fn_mono_body = self.buf
+        self.buf        = _cmb_obuf
+        self.struct_buf = _cmb_osbuf
+        self.proto_buf  = _cmb_opbuf
 
         # Generate monomorphized interface vtable + wrapper for each implemented interface.
         # type_subst is still active here so type_to_c substitutes T->concrete correctly.
@@ -944,7 +1002,38 @@ pub class CGenerator:
         self.proto_buf  = old_pbuf
         self.type_subst = old_subst
 
-    # Ensure a monomorphized version of a generic function is generated into mono_buf.
+    # Infer the single type argument of a generic free function from its call args,
+    # by matching a parameter declared directly as the type param (x: T) against the
+    # actual arg type. Returns the concrete type NAME (Cat / int / str) or "" when it
+    # can't be inferred / isn't an eligible single-generic free function. Under an
+    # active substitution (a call inside another mono body) the arg type resolves
+    # through it, so _map_hash(key,..) inside Map_str picks up "str".
+    pub def infer_generic_targ(self, fname: str, args: Vec[Pointer[HirExpr]]) -> str:
+        if not self.functions.contains(fname): return ""
+        mut fd = self.functions.get(fname)
+        if fd.class_name != "" or fd.generics.len != 1: return ""
+        if fd.params as usize == 0 as usize: return ""
+        mut sk = 0
+        if fd.params.len > 0 and fd.params.get(0).name == "self": sk = 1
+        mut gp = fd.generics.get(0)
+        mut targ = ""
+        mut pi = 0
+        while pi < fd.params.len:
+            mut pp = fd.params.get(pi)
+            if pp.name != "self" and pp.ty.name == gp:
+                mut aidx = pi - sk
+                if aidx >= 0 and aidx < args.len:
+                    targ = self.resolve_generic_tyname(hir_expr_type(args.get(aidx)).name)
+            pi = pi + 1
+        if targ == "void" or targ == gp or targ == "": return ""
+        return targ
+
+    # Ensure a monomorphized copy of a generic free function is generated. The
+    # PROTOTYPE goes into mono_buf (flushed early, only forward-declared types
+    # needed); the BODY goes into fn_mono_body (flushed after all prototypes, so
+    # calls to other functions resolve). Both are `static` so the copy can live in
+    # the shared header without a multi-TU duplicate-symbol clash — exactly like the
+    # generic-class method monos.
     pub def ensure_mono_func(self, fname: str, targ: str):
         mut mono_key = "func_" + fname + "__MONO_" + targ
         if self.mono_done.contains(mono_key): return
@@ -960,12 +1049,9 @@ pub class CGenerator:
         mut old_buf = self.buf
         mut old_sbuf = self.struct_buf
         mut old_pbuf = self.proto_buf
-        self.buf = self.mono_buf
-        self.struct_buf = self.mono_buf
-        self.proto_buf = self.mono_buf
         mut mono_fname = fname + "__MONO_" + targ
         mut ret_s = self.type_to_c(f.ret_ty)
-        mut sig = ret_s + " " + mono_fname + "("
+        mut sig = "static __attribute__((hot)) " + ret_s + " " + mono_fname + "("
         mut first = true
         mut pi = 0
         while pi < f.params.len:
@@ -976,7 +1062,16 @@ pub class CGenerator:
                 first = false
             pi = pi + 1
         sig = sig + ")"
+        # Prototype -> mono_buf (early).
+        self.buf        = self.mono_buf
+        self.struct_buf = self.mono_buf
+        self.proto_buf  = self.mono_buf
         self.w(sig + ";\n")
+        self.mono_buf = self.buf
+        # Body -> fn_mono_body (after prototypes).
+        self.buf        = self.fn_mono_body
+        self.struct_buf = self.fn_mono_body
+        self.proto_buf  = self.fn_mono_body
         mut old_class = self.cur_class
         mut old_func = self.cur_func
         self.cur_class = ""
@@ -997,7 +1092,105 @@ pub class CGenerator:
         self.w("}\n\n")
         self.cur_class = old_class
         self.cur_func = old_func
+        self.fn_mono_body = self.buf
+        self.buf = old_buf
+        self.struct_buf = old_sbuf
+        self.proto_buf = old_pbuf
+        self.type_subst = old_subst
+
+    # Infer the single type argument of a generic METHOD (its OWN `[T]`, distinct from
+    # the class's generics) from the call args. Args align to the non-self params.
+    pub def infer_method_targ(self, cls_name: str, method: str, args: Vec[Pointer[HirExpr]]) -> str:
+        if not self.classes.contains(cls_name): return ""
+        mut cls = self.classes.get(cls_name)
+        mut mi = 0
+        while mi < cls.methods.len:
+            mut m = cls.methods.get(mi)
+            if m.name == method and m.generics.len == 1:
+                mut gp = m.generics.get(0)
+                mut targ = ""
+                mut nonself = 0
+                mut pi = 0
+                while pi < m.params.len:
+                    mut pp = m.params.get(pi)
+                    if pp.name != "self":
+                        if pp.ty.name == gp and nonself < args.len:
+                            targ = self.resolve_generic_tyname(hir_expr_type(args.get(nonself)).name)
+                        nonself = nonself + 1
+                    pi = pi + 1
+                if targ != "void" and targ != gp and targ != "": return targ
+            mi = mi + 1
+        return ""
+
+    # Ensure a monomorphized copy of a generic METHOD (Wrapper.echo[T] on a non-generic
+    # class). Named <Cls>_<method>__MONO_<targ>; prototype -> mono_buf, body ->
+    # fn_mono_body (after prototypes); `static`. Mirrors ensure_mono_func but carries a
+    # `self` parameter.
+    pub def ensure_mono_method(self, cls_name: str, method: str, targ: str):
+        mut mono_key = "meth_" + cls_name + "_" + method + "__MONO_" + targ
+        if self.mono_done.contains(mono_key): return
+        self.mono_done.insert(mono_key, true)
+        if not self.classes.contains(cls_name): return
+        mut cls = self.classes.get(cls_name)
+        mut mi = 0
+        mut found = false
+        mut m: HirFunction = cls.methods.get(0)
+        while mi < cls.methods.len:
+            mut mm = cls.methods.get(mi)
+            if mm.name == method and mm.generics.len == 1:
+                m = mm
+                found = true
+            mi = mi + 1
+        if not found: return
+        mut gp = m.generics.get(0)
+        mut concrete_c = self.type_to_c(AstType.init(targ))
+        mut old_subst = self.type_subst
+        self.type_subst = Map[str, str].init(4)
+        self.type_subst.insert(gp, concrete_c)
+        mut mono_fname = cls_name + "_" + method + "__MONO_" + targ
+        mut ret_s = self.type_to_c(m.ret_ty)
+        # self by pointer (heap class / mutating value-type) or by value (value-type).
+        mut self_c = cls_name + "* self"
+        if self.value_types.contains(cls_name) and not self.vt_method_mutates_self(m):
+            self_c = cls_name + " self"
+        mut sig = "static __attribute__((hot)) " + ret_s + " " + mono_fname + "(" + self_c
+        mut pi = 0
+        while pi < m.params.len:
+            mut p = m.params.get(pi)
+            if p.name != "self":
+                sig = sig + ", " + self.type_to_c(p.ty) + " " + _safe_c_varname(p.name)
+            pi = pi + 1
+        sig = sig + ")"
+        mut old_buf = self.buf
+        mut old_sbuf = self.struct_buf
+        mut old_pbuf = self.proto_buf
+        self.buf = self.mono_buf
+        self.struct_buf = self.mono_buf
+        self.proto_buf = self.mono_buf
+        self.w(sig + ";\n")
         self.mono_buf = self.buf
+        self.buf = self.fn_mono_body
+        self.struct_buf = self.fn_mono_body
+        self.proto_buf = self.fn_mono_body
+        mut old_class = self.cur_class
+        mut old_func = self.cur_func
+        self.cur_class = cls_name
+        self.cur_func = method
+        self.decl_vars = Map[str, bool].init(64)
+        self.str_local_names = Map[str, bool].init(16)
+        self.coll_local_sfx = Map[str, str].init(16)
+        self.coll_local_idict = Map[str, bool].init(16)
+        self.coll_local_strval = Map[str, bool].init(16)
+        self.coll_local_vtcoll = Map[str, str].init(16)
+        self.seed_params(m)
+        self.cur_self_is_ptr = self.value_types.contains(cls_name) and self.vt_method_mutates_self(m)
+        self.w(sig + " {\n")
+        self.gen_func_body(m.body, 1)
+        self.cur_self_is_ptr = false
+        self.w("}\n\n")
+        self.cur_class = old_class
+        self.cur_func = old_func
+        self.fn_mono_body = self.buf
         self.buf = old_buf
         self.struct_buf = old_sbuf
         self.proto_buf = old_pbuf
@@ -1098,8 +1291,15 @@ pub class CGenerator:
             mut _tlg = false
             match prog.top_level_stmts.get(i).read():
                 case HirStmt.SLet(gn, _, _, _, _, _, gv):
-                    if self.global_vars.contains(gn) and gv as usize != 0 as usize:
-                        self.w("    " + gn + " = " + self.gen_expr(gv) + ";\n")
+                    if self.global_vars.contains(gn):
+                        # File-scope globals are already declared (and zero-initialized
+                        # by C static storage). With a value, run the initializer here in
+                        # the boot path; without one, the static zero suffices. Either way
+                        # never fall through to gen_stmt, which would re-declare (shadow)
+                        # the global as a main-local (breaks cross-function globals, e.g.
+                        # a `[u8; N]` arena shared with an @allocator).
+                        if gv as usize != 0 as usize:
+                            self.w("    " + gn + " = " + self.gen_expr(gv) + ";\n")
                         _tlg = true
                 case _: pass
             if not _tlg:
@@ -1124,6 +1324,29 @@ pub class CGenerator:
                     j = j + 1
             i = i + 1
         if entry == "": return
+        if self.bare_arch == "riscv":
+            # RISC-V (qemu 'virt', loaded to RAM at 0x80000000): the ELF entry is
+            # _start — set sp and boot. .data is already in RAM (loaded from the ELF),
+            # so only .bss needs clearing. No vector table. Single-hart is assumed (qemu
+            # 'virt' defaults to -smp 1); we deliberately AVOID a `csrr mhartid` hart
+            # guard because CSR ops need the `zicsr` ISA extension, whose -march naming
+            # (rv64imac_zicsr) isn't accepted by older gcc even when the assembler
+            # demands it — so the plain boot is the portable choice.
+            self.w("\n/* --freestanding @entry: RISC-V boot (qemu virt, single-hart) */\n")
+            self.w("extern unsigned _stack_top, __bss_start__, __bss_end__;\n")
+            self.w("__attribute__((used)) void _tr_boot(void){\n")
+            self.w("    unsigned *d;\n")
+            self.w("    for(d=&__bss_start__; d<&__bss_end__;) *d++ = 0;\n")
+            self.emit_global_inits(prog)
+            self.w("    " + entry + "();\n")
+            self.w("    for(;;){}\n}\n")
+            self.w("__attribute__((naked, used, section(\".text.init\"))) void _start(void){\n")
+            self.w("    __asm__ volatile(\n")
+            self.w("        \"la sp, _stack_top\\n\"\n")
+            self.w("        \"call _tr_boot\\n\"\n")
+            self.w("    );\n")
+            self.w("}\n")
+            return
         self.w("\n/* --freestanding @entry: reset trampoline + Cortex-M vector table */\n")
         self.w("extern unsigned _stack_top, __bss_start__, __bss_end__, _sidata, _sdata, _edata;\n")
         self.w("__attribute__((used)) void _tr_reset(void){\n")
@@ -1275,6 +1498,9 @@ pub class CGenerator:
                 fname = base_sig_key + "_" + param_count.to_str() + "arg"
             else:
                 fname = base_sig_key
+        # Monomorphized free function: emit under the specialized name (id -> id_i64).
+        elif self.emit_fn_name != "":
+            fname = self.emit_fn_name
         mut sig = ret_ty_str + " " + fname + "("
         # Exported (FFI) functions get a dllexport/visibility attribute so they
         # land in a shared library's exported symbol table. Only free functions
@@ -1945,6 +2171,19 @@ pub class CGenerator:
             if c == "TrStr": return "str"
         return n
 
+    # Resolve a generic type-param name to its concrete Tauraro type NAME under the
+    # active monomorphization substitution — used to dispatch method calls on a
+    # `T`-typed value (x.show() -> Cat_show) inside a monomorphized body. Primitives
+    # map via resolve_generic_prim; a class/value-type maps from its C type ("Cat*")
+    # back to the bare name ("Cat"). Returns n unchanged when not substituted.
+    pub def resolve_generic_tyname(self, n: str) -> str:
+        if not self.type_subst.contains(n): return n
+        mut r = self.resolve_generic_prim(n)
+        if r != n: return r
+        mut c = self.type_subst.get(n)
+        if c.ends_with("*"): c = c.slice(0, c.len() - 1)
+        return c
+
     pub def mono_cls_name_for(self, ty: AstType) -> str:
         mut cn: str = ty.name
         if self.classes.contains(cn) and cn != "Vec" and cn != "Map" and cn != "Dict" and cn != "List":
@@ -2475,6 +2714,15 @@ pub class CGenerator:
                 mut in_sfx: str = self.list_elem_suffix(lt_n)
                 return "List_" + self.list_sfx(in_sfx) + "_contains(" + rs + ", " + ls + ")"
             if rt_n == "Map" or rt_n == "Dict":
+                # int-keyed dict uses the integer contains (str version would _tr_strz an int).
+                mut _in_rty = hir_expr_type(r)
+                mut _in_int_key = false
+                if _in_rty.args.len > 0:
+                    mut _in_kt = _in_rty.args.get(0).read()
+                    if _is_int_type(_in_kt.name) or _in_kt.name == "int" or _in_kt.name == "i64" or _in_kt.name == "i32" or _in_kt.name == "usize":
+                        _in_int_key = true
+                if _in_int_key:
+                    return "_tr_idict_contains(" + rs + ", " + ls + ")"
                 return "_tr_dict_contains(" + rs + ", " + self.strz(ls) + ")"
             if self.has_method(rt_n, "__contains__"):
                 return self.cls_method_c_call(rt_n, "__contains__", rs, ls)
@@ -2541,6 +2789,8 @@ pub class CGenerator:
             if obj_s == t_n: return t_n + "_make_" + p + "()"
             return obj_s + ".data." + p
         if t_n == "Pointer": return "(*" + obj_s + ")." + p
+        if t_n == "Array" and (p == "len" or p == "length"):
+            return "((long long)" + hir_expr_type(o).array_size.to_str() + ")"   # compile-time N
         if _is_str_type(t_n) and (p == "len" or p == "length"):
             return "((long long)_tr_strlen(" + self.strz(obj_s) + "))"
         if t_n == "StringBuilder" and (p == "len" or p == "length"):
@@ -2586,6 +2836,11 @@ pub class CGenerator:
         mut is_idx = self.gen_expr(idx)
         mut ty_n: str = hir_expr_type(o).name
         if ty_n == "Pointer": return os + "[" + is_idx + "]"
+        if ty_n == "Array":
+            # Fixed-size array: bounds-checked `.data[i]` (lvalue + rvalue). N is the
+            # compile-time size carried on the type.
+            mut arr_o_ty = hir_expr_type(o)
+            return os + ".data[(_tr_bounds_check(" + is_idx + ", " + arr_o_ty.array_size.to_str() + "), " + is_idx + ")]"
         if ty_n == "List" or ty_n == "Vec":
             # Bounds-checked access - works as both lvalue and rvalue.
             # The comma operator in the subscript runs the check then uses the index.
@@ -2708,7 +2963,8 @@ pub class CGenerator:
             if args.len > 0:
                 mut ord_t_n: str = hir_expr_type(args.get(0)).name
                 if ord_t_n == "char": return "((long long)(unsigned char)(" + self.gen_expr(args.get(0)) + "))"
-                return "((long long)(unsigned char)(" + self.gen_expr(args.get(0)) + ")[0])"
+                # str arg: a TrStr can't be subscripted — materialize the C string first.
+                return "((long long)(unsigned char)_tr_strz(" + self.gen_expr(args.get(0)) + ")[0])"
             return "0LL"
         if base_callee == "chr":
             if args.len > 0: return "((char)(" + self.gen_expr(args.get(0)) + "))"
@@ -3117,6 +3373,16 @@ pub class CGenerator:
             mut self_skip = 0
             if fn_def.params as usize != 0 as usize and fn_def.params.len > 0 and fn_def.params.get(0).name == "self":
                 self_skip = 1
+            # Generic free function called by inference (no explicit [T]): specialize it.
+            # Infer the single type param from a parameter declared directly as that
+            # param (x: T), emit a monomorphized copy, and dispatch to it — zero-cost,
+            # like a Rust generic. (Explicit fname[T](..) is mangled in sema and driven
+            # by the mono scan; multi-param generics keep the erased path for now.)
+            if fn_def.class_name == "" and fn_def.generics.len == 1:
+                mut _targ = self.infer_generic_targ(callee_s, args)
+                if _targ != "":
+                    self.ensure_mono_func(callee_s, _targ)
+                    return callee_s + "__MONO_" + _targ + "(" + self.gen_args(args) + ")"
             mut any_wrapped = false
             mut ai = 0
             while ai < args.len:
@@ -3498,6 +3764,23 @@ pub class CGenerator:
     pub def gen_method_call(self, obj: Pointer[HirExpr], method: str, args: Vec[Pointer[HirExpr]], call_ty: AstType) -> str:
         mut obj_s = self.gen_expr(obj)
         mut t_n: str = hir_expr_type(obj).name
+
+        # Inside a monomorphized body, a receiver typed as a generic param (x: T) must
+        # dispatch to the concrete type's method (x.show() -> Cat_show, not T_show).
+        if self.type_subst.contains(t_n):
+            t_n = self.resolve_generic_tyname(t_n)
+
+        # Fixed-size array element read a[i]: sema lowers to EMethodCall(a,"get_index",[i]).
+        # Emit a bounds-checked aggregate index; N is the compile-time length on the type.
+        if t_n == "Array" and (method == "get_index" or method == "get") and args.len > 0:
+            mut _ar_ty_r = hir_expr_type(obj)
+            mut _ar_idx_r = self.gen_expr(args.get(0))
+            return obj_s + ".data[(_tr_bounds_check(" + _ar_idx_r + ", " + _ar_ty_r.array_size.to_str() + "), " + _ar_idx_r + ")]"
+
+        # Fixed-size array base pointer a.as_ptr() -> Pointer[T]: the inline `T data[N]`
+        # aggregate decays to `T*` at element 0 — usable for buffer/DMA/bump-alloc interop.
+        if t_n == "Array" and method == "as_ptr":
+            return obj_s + ".data"
 
         # Fallback: when HIR stores void for an EPropAccess type (cross-module field lookup),
         # recover the actual type from the parent class field declaration
@@ -4057,6 +4340,7 @@ pub class CGenerator:
         # heap result, rc=1) so it participates in refcounting going forward.
         if _is_str_type(t_n):
             mut os: str = self.strz(obj_s)
+            if method == "is_empty": return "(_tr_strlen(" + os + ") == 0)"
             if method == "upper" or method == "to_upper": return self.wrapstr("_tr_str_upper(" + os + ")")
             if method == "lower" or method == "to_lower": return self.wrapstr("_tr_str_lower(" + os + ")")
             if method == "strip" or method == "trim": return self.wrapstr("_tr_str_strip(" + os + ")")
@@ -4269,6 +4553,14 @@ pub class CGenerator:
 
         # Non-generic user class dispatch
         if self.classes.contains(class_name) and class_name != "Vec" and class_name != "Map" and class_name != "Dict" and class_name != "List":
+            # Generic METHOD (its own `[T]`): monomorphize per inferred type arg and
+            # dispatch to the specialized copy (like a generic free function, but with self).
+            mut _mtarg = self.infer_method_targ(class_name, method, args)
+            if _mtarg != "":
+                self.ensure_mono_method(class_name, method, _mtarg)
+                mut _mm = class_name + "_" + method + "__MONO_" + _mtarg + "(" + obj_s
+                if args.len > 0: _mm = _mm + ", " + self.gen_args(args)
+                return _mm + ")"
             mut method_c: str = method
             if _is_c_keyword(method_c): method_c = "_tr_fn_" + method_c
             if method == "init" or method == "new":
@@ -6003,6 +6295,8 @@ pub class CGenerator:
                         self.shared_vars.insert(n, ty.name)
                     elif c_ty == "Result" or c_ty == "Option":
                         self.w(" = (" + c_ty + "){0};\n")
+                    elif ty.name == "Array" and ty.array_size > 0:
+                        self.w(" = {0};\n")   # fixed-size array: zero-init the aggregate
                     else:
                         self.w(" = 0;\n")
                 self.decl_vars.insert(n, true)
@@ -6093,6 +6387,14 @@ pub class CGenerator:
                                 else:
                                     _di_set = "_tr_dict_set(" + _di_obj + ", " + self.dict_key_arg(mc_args.get(0)) + ", " + self.dict_val_arg(v) + ")"
                                 self.w(pad + self.flush_wraps(_di_set, true) + ";\n")
+                                return
+                            # Fixed-size array index-assign a[i] = v -> a.data[i] = v (bounds-checked lvalue).
+                            if mc_ty_n == "Array":
+                                mut _ai_obj = self.gen_expr(mc_obj)
+                                mut _ai_ty = hir_expr_type(mc_obj)
+                                mut _ai_key = self.gen_expr(mc_args.get(0))
+                                mut _ai_lval = _ai_obj + ".data[(_tr_bounds_check(" + _ai_key + ", " + _ai_ty.array_size.to_str() + "), " + _ai_key + ")]"
+                                self.w(pad + self.flush_wraps(_ai_lval + " = " + self.gen_expr(v), true) + ";\n")
                                 return
                     case _: pass
                 mut _assign_rhs = ""
@@ -6503,10 +6805,10 @@ pub class CGenerator:
                                 start_s = self.gen_expr(args.get(0))
                                 end_s = self.gen_expr(args.get(1))
                                 step_s = self.gen_expr(args.get(2))
-                            mut cmp = "<"
-                            mut step_p = step_s as Pointer[char]
-                            if step_p.offset(0).read() as int == 45: cmp = ">"
-                            self.w(pad + "for (long long " + var + " = " + start_s + "; " + var + " " + cmp + " " + end_s + "; " + var + " += " + step_s + ") {\n")
+                            # Loop direction depends on the step's SIGN, which isn't known
+                            # from the rendered expression text (e.g. "-1" may render as
+                            # "(-1LL)"), so pick the comparison at runtime: step>0 ? i<end : i>end.
+                            self.w(pad + "for (long long " + var + " = " + start_s + "; (" + step_s + ") > 0 ? " + var + " < " + end_s + " : " + var + " > " + end_s + "; " + var + " += " + step_s + ") {\n")
                             self.gen_block(body, indent + 1)
                             self.w(pad + "}\n")
                             return
@@ -7273,6 +7575,10 @@ pub class CGenerator:
         while i < ty.args.len:
             self.scan_mono_ty(ty.args.get(i).read())
             i = i + 1
+        # Fixed-size array [T; N]: emit its value-type struct now (pre-types.h) so the
+        # typedef is visible everywhere, not lazily during a later pass.
+        if ty.name == "Array" and ty.array_size > 0 and ty.args.len > 0:
+            self.ensure_array_type(ty)
         if ty.args.len > 0 and self.classes.contains(ty.name) and ty.name != "Vec" and ty.name != "Map" and ty.name != "Dict" and ty.name != "List":
             mut ucls = self.classes.get(ty.name)
             if ucls.generics.len > 0:
@@ -7339,13 +7645,23 @@ pub class CGenerator:
                                 mut gfunc_t = mn.slice(sep_p + 7, nlen)
                                 if self.functions.contains(gfunc_n):
                                     self.ensure_mono_func(gfunc_n, gfunc_t)
+                        else:
+                            # Inference call (no explicit [T]): specialize before the
+                            # mono buffer is flushed so the copy + prototype exist.
+                            mut _sit = self.infer_generic_targ(mn, args)
+                            if _sit != "": self.ensure_mono_func(mn, _sit)
                     case _: pass
-            case HirExpr.EMethodCall(obj, _, margs, _):
+            case HirExpr.EMethodCall(obj, mmeth, margs, _):
                 self.scan_mono_expr(obj)
                 mut ei2 = 0
                 while ei2 < margs.len:
                     self.scan_mono_expr(margs.get(ei2))
                     ei2 = ei2 + 1
+                # Generic-method call: specialize before the mono buffer is flushed.
+                mut _rcn = hir_expr_type(obj).name
+                if self.classes.contains(_rcn):
+                    mut _mt = self.infer_method_targ(_rcn, mmeth, margs)
+                    if _mt != "": self.ensure_mono_method(_rcn, mmeth, _mt)
             case HirExpr.EBinOp(_, bl, br, _):
                 self.scan_mono_expr(bl)
                 self.scan_mono_expr(br)
@@ -7552,7 +7868,8 @@ pub class CGenerator:
                 mut mi = 0
                 while mi < c.methods.len:
                     mut m = c.methods.get(mi)
-                    self.w(self.get_inline_attrs(m) + self.gen_func_sig(m, c.name) + ";\n")
+                    if m.generics.len == 0:   # generic methods -> monomorphized copies only
+                        self.w(self.get_inline_attrs(m) + self.gen_func_sig(m, c.name) + ";\n")
                     mi = mi + 1
             i = i + 1
         i = 0
@@ -7571,6 +7888,10 @@ pub class CGenerator:
                 mut skip4 = false
                 if f.class_name != "":
                     skip4 = true   # class/enum methods handled in per-class loops or mono_buf
+                # A generic free function is emitted only as monomorphized copies
+                # (fname__MONO_T) into mono_buf — never as an erased void* template.
+                if f.generics.len > 0:
+                    skip4 = true
                 if not skip4:
                     if not self.emitted_fns.contains("p_" + f.name):
                         self.emitted_fns.insert("p_" + f.name, true)
@@ -7591,6 +7912,9 @@ pub class CGenerator:
                 mut mi = 0
                 while mi < c.methods.len:
                     mut m = c.methods.get(mi)
+                    if m.generics.len > 0:   # generic methods -> monomorphized copies only
+                        mi = mi + 1
+                        continue
                     self.cur_class = c.name
                     self.cur_func  = m.name
                     self.cur_throws_ty = m.throws_ty.name
@@ -7647,6 +7971,9 @@ pub class CGenerator:
                 mut skip6 = false
                 if f.class_name != "":
                     skip6 = true   # class/enum methods handled in per-class loops or mono_buf
+                # Generic free function: only monomorphized copies are emitted (mono_buf).
+                if f.generics.len > 0:
+                    skip6 = true
                 # Skip duplicate free-standing functions (same name from multiple modules)
                 if not skip6:
                     if self.emitted_fns.contains("i_" + f.name):
@@ -7915,7 +8242,7 @@ pub class CGenerator:
                             if not self.emitted_fns.contains(ep_key):
                                 self.emitted_fns.insert(ep_key, true)
                                 out.append(self.get_proto_attrs(f4) + self.gen_func_sig(f4, f4.class_name) + ";\n")
-                    else:
+                    elif f4.generics.len == 0:
                         if not self.emitted_fns.contains("p_" + f4.name):
                             self.emitted_fns.insert("p_" + f4.name, true)
                             out.append(self.get_proto_attrs(f4) + self.gen_func_sig(f4, f4.class_name) + ";\n")
@@ -7932,7 +8259,7 @@ pub class CGenerator:
                     if not _is_invalid_ptr(c4.methods as usize):
                         while mi < c4.methods.len:
                             mut m = c4.methods.get(mi)
-                            if not _is_invalid_ptr(m as usize):
+                            if not _is_invalid_ptr(m as usize) and m.generics.len == 0:
                                 mut ep_key3 = "p_" + c4.name + "_" + m.name
                                 if not self.emitted_fns.contains(ep_key3):
                                     self.emitted_fns.insert(ep_key3, true)
@@ -7969,12 +8296,18 @@ pub class CGenerator:
                             if not self.emitted_fns.contains(ep_key2):
                                 self.emitted_fns.insert(ep_key2, true)
                                 out.append(self.get_proto_attrs(f4) + self.gen_func_sig(f4, f4.class_name) + ";\n")
-                    else:
+                    elif f4.generics.len == 0:
                         if not self.emitted_fns.contains("p_" + f4.name):
                             self.emitted_fns.insert("p_" + f4.name, true)
                             out.append(self.get_proto_attrs(f4) + self.gen_func_sig(f4, f4.class_name) + ";\n")
             i = i + 1
         out.append("\n")
+
+        # -- Monomorphized generic FREE-function bodies (after all prototypes, so their
+        # calls to other user functions resolve; static, so shared-header inclusion in
+        # every TU is duplicate-safe). Their prototypes were emitted early in mono_buf.
+        mut fn_mono_out = self.fn_mono_body.to_string().as_str()
+        if fn_mono_out != "": out.append(fn_mono_out + "\n")
 
         # -- Spawn + async wrappers (after prototypes so wrappers can call declared fns) -
         self.buf = StringBuilder.init(1024)
@@ -8196,6 +8529,9 @@ pub class CGenerator:
                     mut mi = 0
                     while mi < c.methods.len:
                         mut m = c.methods.get(mi)
+                        if m.generics.len > 0:   # generic methods -> monomorphized copies only
+                            mi = mi + 1
+                            continue
                         # Mark with the per-method key so loop-2 (prog.functions) won't re-emit.
                         self.emitted_fns.insert("i_" + c.name + "_" + m.name, true)
                         self.cur_class = c.name
@@ -8248,7 +8584,7 @@ pub class CGenerator:
             mut f = prog.functions.get(i)
             if f.name != "main" and not f.is_extern:
                 mut in_mod = false
-                if f.class_name == "" and fn_set.contains(f.name):
+                if f.class_name == "" and fn_set.contains(f.name) and f.generics.len == 0:
                     in_mod = true
                 elif f.class_name != "" and class_set.contains(f.class_name):
                     # Skip generic class extend methods - only monomorphized instances are emitted.
@@ -8256,8 +8592,8 @@ pub class CGenerator:
                     if self.classes.contains(f.class_name):
                         if self.classes.get(f.class_name).generics.len > 0:
                             is_generic_cls = true
-                    if not is_generic_cls:
-                        in_mod = true  # extend method belonging to this module
+                    if not is_generic_cls and f.generics.len == 0:
+                        in_mod = true  # extend method (generic ones -> monomorphized copies only)
                 if in_mod:
                     mut em_key = "i_" + f.class_name + "_" + f.name
                     if not self.emitted_fns.contains(em_key):
@@ -8340,7 +8676,7 @@ pub class CGenerator:
                             if not _is_invalid_ptr(c.methods as usize):
                                 while mi < c.methods.len:
                                     mut m = c.methods.get(mi)
-                                    if not _is_invalid_ptr(m as usize):
+                                    if not _is_invalid_ptr(m as usize) and m.generics.len == 0:
                                         # Mark with per-method key so loop-2 won't re-emit.
                                         self.emitted_fns.insert("i_" + c.name + "_" + m.name, true)
                                         self.cur_class = c.name
@@ -8432,7 +8768,7 @@ pub class CGenerator:
                 if not _is_invalid_ptr(f as usize):
                     if f.name != "main" and not f.is_extern:
                         mut in_mod = false
-                        if f.class_name == "" and fn_set.contains(f.name):
+                        if f.class_name == "" and fn_set.contains(f.name) and f.generics.len == 0:
                             in_mod = true
                         elif f.class_name != "" and class_set.contains(f.class_name):
                             # Skip generic class extend methods - only monomorphized instances are emitted.
@@ -8440,8 +8776,8 @@ pub class CGenerator:
                             if self.classes.contains(f.class_name):
                                 if self.classes.get(f.class_name).generics.len > 0:
                                     is_generic_cls2 = true
-                            if not is_generic_cls2:
-                                in_mod = true  # extend method belonging to this module
+                            if not is_generic_cls2 and f.generics.len == 0:
+                                in_mod = true  # extend method (generic ones -> monomorphized copies only)
                         if in_mod:
                             mut em_key2 = "i_" + f.class_name + "_" + f.name
                             if not self.emitted_fns.contains(em_key2):
@@ -8499,8 +8835,13 @@ pub class CGenerator:
                 mut _tlg = false
                 match prog.top_level_stmts.get(i).read():
                     case HirStmt.SLet(tln2, _, _, _, _, _, tlv2):
-                        if self.global_vars.contains(tln2) and tlv2 as usize != 0 as usize:
-                            self.w("    " + tln2 + " = " + self.gen_expr(tlv2) + ";\n")
+                        if self.global_vars.contains(tln2):
+                            # File-scope global: initialize in main's boot path when it has
+                            # a value; a value-less global (e.g. a `[u8; N]` arena) is already
+                            # zero-initialized by C static storage. Never fall through to
+                            # gen_stmt, which would re-declare (shadow) the global as a local.
+                            if tlv2 as usize != 0 as usize:
+                                self.w("    " + tln2 + " = " + self.gen_expr(tlv2) + ";\n")
                             _tlg = true
                     case _: pass
                 if not _tlg:

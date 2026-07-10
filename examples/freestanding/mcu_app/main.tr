@@ -34,13 +34,17 @@ from gpio import gpio_out_enable, gpio_write
 from timer import systick_start, systick_now, systick_reload, busy
 from sysinfo import cpuid
 
-# ---- Platform: bump allocator (natural non-zero global; @entry runs the init) ----
-mut _heap_next: usize = 0x20080000 as usize
+# ---- Platform: bump allocator over a static arena --------------------------------
+# The backing store is a fixed-size array `[u8; N]` — a real, typed global that lands
+# in .bss (zeroed by the generated reset trampoline). No magic RAM address: as_ptr()
+# hands out the arena's base and we bump an 8-byte-aligned offset through it.
+mut _arena: [u8; 8192]
+mut _heap_next: usize = 0 as usize
 
 @allocator
 def heap_alloc(n: usize) -> Pointer[u8]:
     unsafe:
-        mut p = _heap_next as Pointer[u8]
+        mut p: Pointer[u8] = _arena.as_ptr().offset(_heap_next as int)
         _heap_next = _heap_next + ((n + 7) / 8) * 8
         return p
 @free

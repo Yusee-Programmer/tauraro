@@ -1,0 +1,89 @@
+# @trusted: compiler systems module — audited raw-pointer core.
+# src/codegen/native/bytebuf.tr — a little-endian byte buffer for emitting machine code
+# and object files, with a binary file writer. Fixed capacity (the skeleton objects are
+# < 1 KB); grows to a resizable buffer when real programs need it.
+
+from core.alloc import alloc
+
+extern "C":
+    def _tr_c_fopen(path: str, mode: str) -> Pointer[char]
+    def _tr_c_fwrite(buf: Pointer[char], size: int, nmemb: int, fp: Pointer[char]) -> int
+    def _tr_c_fclose(fp: Pointer[char]) -> int
+
+pub class ByteBuf:
+    pub data: Pointer[u8]
+    pub len:  int
+    pub cap:  int
+
+extend ByteBuf:
+    pub def init() -> ByteBuf:
+        unsafe:
+            mut b = ByteBuf()
+            b.cap  = 65536
+            b.data = alloc[u8](b.cap)
+            b.len  = 0
+            return b
+
+    pub def u8(self, v: int):
+        unsafe:
+            if self.len < self.cap:
+                self.data.offset(self.len).write((v & 255) as u8)
+                self.len = self.len + 1
+
+    pub def u16(self, v: int):
+        self.u8(v & 255)
+        self.u8((v >> 8) & 255)
+
+    pub def u32(self, v: int):
+        self.u8(v & 255)
+        self.u8((v >> 8) & 255)
+        self.u8((v >> 16) & 255)
+        self.u8((v >> 24) & 255)
+
+    pub def u64(self, v: int):
+        self.u32(v & 4294967295)
+        self.u32((v >> 32) & 4294967295)
+
+    # Append a string's bytes followed by a NUL (string table entries / section names).
+    pub def cstr(self, s: str):
+        unsafe:
+            mut p = s as Pointer[char]
+            mut i = 0
+            while p.offset(i).read() as int != 0:
+                self.u8(p.offset(i).read() as int)
+                i = i + 1
+        self.u8(0)
+
+    pub def zeros(self, n: int):
+        mut i = 0
+        while i < n:
+            self.u8(0)
+            i = i + 1
+
+    # Append the raw bytes of another buffer.
+    pub def append_buf(self, o: ByteBuf):
+        unsafe:
+            mut i = 0
+            while i < o.len:
+                self.u8(o.data.offset(i).read() as int)
+                i = i + 1
+
+    # Overwrite 4 little-endian bytes at absolute offset `off` (back-patching).
+    pub def patch_u32(self, off: int, v: int):
+        unsafe:
+            self.data.offset(off).write((v & 255) as u8)
+            self.data.offset(off + 1).write(((v >> 8) & 255) as u8)
+            self.data.offset(off + 2).write(((v >> 16) & 255) as u8)
+            self.data.offset(off + 3).write(((v >> 24) & 255) as u8)
+
+    # Pad with zero bytes until len is a multiple of `align`.
+    pub def align_to(self, align: int):
+        while (self.len % align) != 0:
+            self.u8(0)
+
+    pub def write_file(self, path: str) -> bool:
+        mut fp = _tr_c_fopen(path, "wb")
+        if fp as int == 0: return false
+        _tr_c_fwrite(self.data as Pointer[char], 1, self.len, fp)
+        _tr_c_fclose(fp)
+        return true

@@ -1,0 +1,39 @@
+# native≡c differential corpus: Dict[str,int] and Dict[int,int] — literal/get/set/in/len.
+def main():
+    mut d = {"a": 1, "b": 2, "c": 3}
+    print(d["a"])           # 1
+    print(d.get("b"))       # 2
+    print(d.len)            # 3
+    d["d"] = 4
+    print(d["d"])           # 4
+    print(d.get("z"))       # 0  (missing)
+    print("a" in d)         # true
+    print("z" in d)         # false
+    print(d.contains("c"))  # true
+
+    d["a"] = 100
+    print(d["a"])           # 100  (update)
+    print(d.len)            # 4    (still 4, update not insert)
+
+    mut e = {1: 10, 2: 20, 3: 30}
+    print(e[1])             # 10
+    print(e.get(2))         # 20
+    print(e.len)            # 3
+    e[4] = 40
+    print(e[4])             # 40
+    print(2 in e)           # true
+    print(9 in e)           # false
+
+    # word frequency count
+    mut freq = {"x": 0}
+    mut i = 0
+    while i < 5:
+        freq["x"] = freq["x"] + 1
+        i = i + 1
+    print(freq["x"])        # 5
+
+    # list index assignment
+    mut xs = [10, 20, 30]
+    xs[1] = 99
+    print(xs[1])            # 99
+    print(xs[0])            # 10

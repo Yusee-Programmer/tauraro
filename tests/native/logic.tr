@@ -1,0 +1,17 @@
+# native≡c differential corpus: and / or / not, unary minus.
+def main():
+    mut a = 5
+    mut b = 10
+    if a < b and b < 20:
+        print(1)            # 1
+    if a > b or b == 10:
+        print(1)            # 1
+    if not (a > b):
+        print(1)            # 1
+    mut n = -7
+    print(n)                # -7
+    print(-a)               # -5
+    print(a + -b)           # -5
+    mut flag = a < b
+    if flag:
+        print(1)            # 1

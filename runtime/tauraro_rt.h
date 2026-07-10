@@ -88,11 +88,23 @@
 #    include <linux/slab.h>
 #    include <linux/string.h>
 #  else
-     /* Bare-metal (non-Linux-kernel, e.g. arm-none-eabi/newlib): setjmp.h and
-      * stdarg.h are freestanding headers. setjmp is needed by the bare-metal panic
-      * buffer (_tr_thread_panic_jmpbuf); stdarg by the libc-lite vsnprintf. */
-#    include <setjmp.h>
+     /* Bare-metal (non-Linux-kernel). stdarg.h IS a freestanding header (libc-lite
+      * vsnprintf). setjmp.h is NOT — it's hosted; arm-none-eabi/newlib bundles it, but
+      * bare toolchains like riscv64-unknown-elf don't provide it under -ffreestanding.
+      * Use it when present; otherwise fall back to a trivial no-unwind version (a
+      * bare-metal panic has nowhere to return to, so longjmp just stops). */
 #    include <stdarg.h>
+#    if defined(__has_include)
+#      if __has_include(<setjmp.h>)
+#        include <setjmp.h>
+#        define _TR_HAS_SETJMP 1
+#      endif
+#    endif
+#    ifndef _TR_HAS_SETJMP
+       typedef void* jmp_buf[8];
+#      define setjmp(b)      (0)
+#      define longjmp(b, v)  do { for(;;){} } while(0)
+#    endif
 #  endif
 #endif
 
@@ -2066,6 +2078,10 @@ static void yield_val(void* v) { (void)v; }
  * code can use them via  extern "C": def _tr_read_stdin_line() -> str
  * without needing a hand-written C shim file.
  * ──────────────────────────────────────────────────────────────────────── */
+/* Hosted only: <io.h>/<unistd.h> (isatty, fileno) aren't freestanding headers —
+ * bare toolchains like riscv64-unknown-elf lack <unistd.h>. Under TAURARO_BARE there
+ * is no stdio/tty, so skip the include; the bare fallbacks below don't use it. */
+#ifndef TAURARO_BARE
 #ifdef _WIN32
 #  ifndef _INC_IO
 #    include <io.h>     /* _isatty, _fileno on Windows */
@@ -2074,6 +2090,7 @@ static void yield_val(void* v) { (void)v; }
 #  ifndef _UNISTD_H
 #    include <unistd.h> /* isatty, STDIN_FILENO on Unix */
 #  endif
+#endif
 #endif
 
 /* ── New built-in methods added in v0.0.5 ────────────────────────────────── */
@@ -2206,8 +2223,21 @@ static inline long long _tr_getpid(void) { return (long long)_getpid(); }
 static inline long long _tr_getpid(void) { return (long long)getpid(); }
 #endif
 
-#include <time.h>
+/* time.h is hosted, not freestanding: arm-none-eabi/newlib bundles it but bare
+ * toolchains (riscv64-unknown-elf) don't. Use it when the toolchain provides it
+ * (real wall-clock + calendar); otherwise the datetime helpers below stub out.
+ * _TR_HAS_TIME gates every time.h user (here + the DateTime helpers). */
+#if defined(__has_include)
+#  if __has_include(<time.h>)
+#    include <time.h>
+#    define _TR_HAS_TIME 1
+#  endif
+#endif
+#ifdef _TR_HAS_TIME
 static inline long long _tr_timestamp(void) { return (long long)time(NULL); }
+#else
+static inline long long _tr_timestamp(void) { return 0LL; }  /* no wall clock */
+#endif
 
 /* High-resolution millisecond wall-clock: QueryPerformanceCounter on Windows,
    CLOCK_MONOTONIC on POSIX.  Used by std.sys.time.time_ms / elapsed_ms. */
@@ -4518,6 +4548,7 @@ static inline void _tr_init_console(void) {}
    ========================================================================== */
 
 /* -- DateTime helpers ------------------------------------------------------ */
+#ifdef _TR_HAS_TIME
 static inline int    _tr_tm_year(long long ts)    { time_t t=(time_t)ts; struct tm* m=localtime(&t); return m->tm_year+1900; }
 static inline int    _tr_tm_month(long long ts)   { time_t t=(time_t)ts; struct tm* m=localtime(&t); return m->tm_mon+1; }
 static inline int    _tr_tm_day(long long ts)     { time_t t=(time_t)ts; struct tm* m=localtime(&t); return m->tm_mday; }
@@ -4537,6 +4568,22 @@ static inline char* _tr_strftime(long long ts, const char* fmt) {
     char* buf=(char*)_tr_c_malloc(256); if(!buf) return _tr_empty_heap_str();
     strftime(buf,256,fmt,m); return buf;
 }
+#else  /* no <time.h> (bare toolchain): no calendar/RTC — stub the datetime helpers */
+static inline int    _tr_tm_year(long long ts)    { (void)ts; return 1970; }
+static inline int    _tr_tm_month(long long ts)   { (void)ts; return 1; }
+static inline int    _tr_tm_day(long long ts)     { (void)ts; return 1; }
+static inline int    _tr_tm_hour(long long ts)    { (void)ts; return 0; }
+static inline int    _tr_tm_min(long long ts)     { (void)ts; return 0; }
+static inline int    _tr_tm_sec(long long ts)     { (void)ts; return 0; }
+static inline int    _tr_tm_weekday(long long ts) { (void)ts; return 0; }
+static inline int    _tr_tm_yearday(long long ts) { (void)ts; return 1; }
+static inline long long _tr_tm_make(int year,int month,int day,int hour,int mi,int sec) {
+    (void)year;(void)month;(void)day;(void)hour;(void)mi;(void)sec; return 0LL;
+}
+static inline char* _tr_strftime(long long ts, const char* fmt) {
+    (void)ts;(void)fmt; return _tr_empty_heap_str();
+}
+#endif
 
 /* -- OS / System helpers (platform-specific) ------------------------------- */
 #if defined(TAURARO_BARE) && !defined(__wasi__)

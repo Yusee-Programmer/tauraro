@@ -1,0 +1,36 @@
+# Nested user-generic classes: Box[Box[int]] etc. The monomorphization suffix must
+# recurse through nested type args (Box[int] -> Box_i64) so the static-call name and
+# the struct name agree (both Box_Box_i64), instead of collapsing to a bare `Box`.
+class Box[T]:
+    pub val: T
+
+extend Box[T]:
+    pub def of(v: T) -> Box[T]:
+        mut b = Box[T]()
+        b.val = v
+        return b
+    pub def get(self) -> T:
+        return self.val
+
+def main():
+    # Simple generic (regression).
+    mut bi: Box[int] = Box[int].of(7)
+    print(bi.get())                    # 7
+
+    # Two-level nesting over int.
+    mut inner: Box[int] = Box[int].of(42)
+    mut outer: Box[Box[int]] = Box[Box[int]].of(inner)
+    mut got: Box[int] = outer.get()
+    print(got.get())                   # 42
+
+    # Two-level nesting over str (distinct inner suffix).
+    mut bs: Box[str] = Box[str].of("hi")
+    mut bbs: Box[Box[str]] = Box[Box[str]].of(bs)
+    print(bbs.get().get())             # hi
+
+    # Three-level nesting.
+    mut mid: Box[Box[int]] = Box[Box[int]].of(Box[int].of(9))
+    mut top: Box[Box[Box[int]]] = Box[Box[Box[int]]].of(mid)
+    print(top.get().get().get())       # 9
+
+    print("nested generics ok")

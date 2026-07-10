@@ -1,0 +1,24 @@
+# native≡c differential corpus: str .slice/.count/.char_at/.contains/.repeat.
+def main():
+    mut s = "hello world"
+    print(s.slice(0, 5))       # hello
+    print(s.slice(6, 11))      # world
+    print(s.slice(6, 100))     # world  (end clamped)
+    print(s.slice(3, 3))       # (empty)
+
+    print(s.count("o"))        # 2
+    print(s.count("l"))        # 3
+    print(s.count("xyz"))      # 0
+
+    print(s.char_at(0))        # 104 ('h')
+    print(s.char_at(1))        # 101 ('e')
+    print(s.char_at(100))      # -1
+
+    print(s.contains("world")) # true
+    print(s.contains("World")) # false
+
+    print("ab".repeat(3))      # ababab
+
+    mut word = "banana"
+    print(word.count("na"))    # 2
+    print(word.slice(1, 4))    # ana

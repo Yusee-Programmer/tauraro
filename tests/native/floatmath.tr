@@ -1,0 +1,27 @@
+# native≡c differential corpus: float math methods (libm) on f64 receivers.
+def main():
+    mut x = 16.0
+    print(x.sqrt())         # 4
+    print(x.floor())        # 16
+    print((3.7).floor())    # 3
+    print((3.2).ceil())     # 4
+    print((3.5).round())    # 4
+    print((-2.5).abs())     # 2.5
+
+    mut y = 2.0
+    print(y.pow(10.0))      # 1024
+    print(y.pow(0.5))       # 1.41421
+
+    print((1.0).exp())      # 2.71828
+    print((8.0).log2())     # 3
+    print((100.0).log10())  # 2
+
+    print((0.0).sin())      # 0
+    print((0.0).cos())      # 1
+
+    mut n = 2.0
+    print(n.sqrt().pow(2.0))  # 2  (sqrt(2)^2)
+
+    mut r = 9.0
+    mut area = 3.14159 * r.pow(2.0)
+    print(area)             # 254.469

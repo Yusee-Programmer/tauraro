@@ -54,6 +54,15 @@ typedef struct Sema Sema;
 typedef struct Formatter Formatter;
 typedef struct CGenerator CGenerator;
 typedef struct LlvmGenerator LlvmGenerator;
+typedef struct LBlock LBlock;
+typedef struct LFunc LFunc;
+typedef struct LModule LModule;
+typedef struct ByteBuf ByteBuf;
+typedef struct Reloc Reloc;
+typedef struct Jump Jump;
+typedef struct EncodedFunc EncodedFunc;
+typedef struct TextReloc TextReloc;
+typedef struct NativeGenerator NativeGenerator;
 typedef struct MacroCtx MacroCtx;
 typedef struct FnMacroExpander FnMacroExpander;
 typedef struct Token Token;
@@ -67,6 +76,9 @@ typedef struct HirStmt HirStmt;
 typedef struct MirStmt MirStmt;
 typedef struct MirTerm MirTerm;
 typedef struct SymbolKind SymbolKind;
+typedef struct LType LType;
+typedef struct LInst LInst;
+typedef struct LTerm LTerm;
 typedef struct MacroVal MacroVal;
 typedef struct List_Token List_Token;
 typedef struct List_Pattern List_Pattern;
@@ -122,6 +134,15 @@ static void _trdrop_Sema(void* vp);
 static void _trdrop_Formatter(void* vp);
 static void _trdrop_CGenerator(void* vp);
 static void _trdrop_LlvmGenerator(void* vp);
+static void _trdrop_LBlock(void* vp);
+static void _trdrop_LFunc(void* vp);
+static void _trdrop_LModule(void* vp);
+static void _trdrop_ByteBuf(void* vp);
+static void _trdrop_Reloc(void* vp);
+static void _trdrop_Jump(void* vp);
+static void _trdrop_EncodedFunc(void* vp);
+static void _trdrop_TextReloc(void* vp);
+static void _trdrop_NativeGenerator(void* vp);
 static void _trdrop_MacroCtx(void* vp);
 static void _trdrop_FnMacroExpander(void* vp);
 
@@ -1541,6 +1562,159 @@ typedef struct SymbolKind {
 #define SymbolKind_make_SInterface() ((SymbolKind){.tag=SymbolKind_SInterface})
 
 typedef enum {
+    LType_LVoid,
+    LType_LI64,
+    LType_LPtr
+} LType_tag;
+
+typedef struct LType {
+    LType_tag tag;
+} LType;
+
+#define LType_make_LVoid() ((LType){.tag=LType_LVoid})
+#define LType_make_LI64() ((LType){.tag=LType_LI64})
+#define LType_make_LPtr() ((LType){.tag=LType_LPtr})
+
+typedef enum {
+    LInst_IConst,
+    LInst_IStr,
+    LInst_IBinOp,
+    LInst_ILoadVar,
+    LInst_IStoreVar,
+    LInst_ILoadGlobal,
+    LInst_IStoreGlobal,
+    LInst_ICall,
+    LInst_IFBinOp,
+    LInst_IIToF,
+    LInst_IFToI,
+    LInst_IFCall1,
+    LInst_IFCallF,
+    LInst_IFCall2F
+} LInst_tag;
+
+typedef struct LInst {
+    LInst_tag tag;
+    union {
+        struct {
+            long long dst;
+            long long v;
+        } IConst;
+        struct {
+            long long dst;
+            long long str_idx;
+        } IStr;
+        struct {
+            long long dst;
+            TrStr op;
+            long long a;
+            long long b;
+        } IBinOp;
+        struct {
+            long long dst;
+            TrStr name;
+        } ILoadVar;
+        struct {
+            TrStr name;
+            long long src;
+        } IStoreVar;
+        struct {
+            long long dst;
+            long long gidx;
+        } ILoadGlobal;
+        struct {
+            long long gidx;
+            long long src;
+        } IStoreGlobal;
+        struct {
+            long long dst;
+            TrStr callee;
+            List_i64* args;
+        } ICall;
+        struct {
+            long long dst;
+            TrStr op;
+            long long a;
+            long long b;
+        } IFBinOp;
+        struct {
+            long long dst;
+            long long src;
+        } IIToF;
+        struct {
+            long long dst;
+            long long src;
+        } IFToI;
+        struct {
+            long long dst;
+            TrStr callee;
+            long long arg;
+        } IFCall1;
+        struct {
+            long long dst;
+            TrStr callee;
+            long long arg;
+        } IFCallF;
+        struct {
+            long long dst;
+            TrStr callee;
+            long long a;
+            long long b;
+        } IFCall2F;
+    } data;
+} LInst;
+
+static inline __attribute__((always_inline)) LInst LInst_ctor_IConst(long long dst, long long v) { LInst _r = {.tag=LInst_IConst}; _r.data.IConst.dst = dst; _r.data.IConst.v = v; return _r; }
+static inline __attribute__((always_inline)) LInst LInst_ctor_IStr(long long dst, long long str_idx) { LInst _r = {.tag=LInst_IStr}; _r.data.IStr.dst = dst; _r.data.IStr.str_idx = str_idx; return _r; }
+static inline __attribute__((always_inline)) LInst LInst_ctor_IBinOp(long long dst, TrStr op, long long a, long long b) { LInst _r = {.tag=LInst_IBinOp}; _r.data.IBinOp.dst = dst; _r.data.IBinOp.op = _tr_str_retain(op); _r.data.IBinOp.a = a; _r.data.IBinOp.b = b; return _r; }
+static inline __attribute__((always_inline)) LInst LInst_ctor_ILoadVar(long long dst, TrStr name) { LInst _r = {.tag=LInst_ILoadVar}; _r.data.ILoadVar.dst = dst; _r.data.ILoadVar.name = _tr_str_retain(name); return _r; }
+static inline __attribute__((always_inline)) LInst LInst_ctor_IStoreVar(TrStr name, long long src) { LInst _r = {.tag=LInst_IStoreVar}; _r.data.IStoreVar.name = _tr_str_retain(name); _r.data.IStoreVar.src = src; return _r; }
+static inline __attribute__((always_inline)) LInst LInst_ctor_ILoadGlobal(long long dst, long long gidx) { LInst _r = {.tag=LInst_ILoadGlobal}; _r.data.ILoadGlobal.dst = dst; _r.data.ILoadGlobal.gidx = gidx; return _r; }
+static inline __attribute__((always_inline)) LInst LInst_ctor_IStoreGlobal(long long gidx, long long src) { LInst _r = {.tag=LInst_IStoreGlobal}; _r.data.IStoreGlobal.gidx = gidx; _r.data.IStoreGlobal.src = src; return _r; }
+static inline __attribute__((always_inline)) LInst LInst_ctor_ICall(long long dst, TrStr callee, List_i64* args) { LInst _r = {.tag=LInst_ICall}; _r.data.ICall.dst = dst; _r.data.ICall.callee = _tr_str_retain(callee); _r.data.ICall.args = args; return _r; }
+static inline __attribute__((always_inline)) LInst LInst_ctor_IFBinOp(long long dst, TrStr op, long long a, long long b) { LInst _r = {.tag=LInst_IFBinOp}; _r.data.IFBinOp.dst = dst; _r.data.IFBinOp.op = _tr_str_retain(op); _r.data.IFBinOp.a = a; _r.data.IFBinOp.b = b; return _r; }
+static inline __attribute__((always_inline)) LInst LInst_ctor_IIToF(long long dst, long long src) { LInst _r = {.tag=LInst_IIToF}; _r.data.IIToF.dst = dst; _r.data.IIToF.src = src; return _r; }
+static inline __attribute__((always_inline)) LInst LInst_ctor_IFToI(long long dst, long long src) { LInst _r = {.tag=LInst_IFToI}; _r.data.IFToI.dst = dst; _r.data.IFToI.src = src; return _r; }
+static inline __attribute__((always_inline)) LInst LInst_ctor_IFCall1(long long dst, TrStr callee, long long arg) { LInst _r = {.tag=LInst_IFCall1}; _r.data.IFCall1.dst = dst; _r.data.IFCall1.callee = _tr_str_retain(callee); _r.data.IFCall1.arg = arg; return _r; }
+static inline __attribute__((always_inline)) LInst LInst_ctor_IFCallF(long long dst, TrStr callee, long long arg) { LInst _r = {.tag=LInst_IFCallF}; _r.data.IFCallF.dst = dst; _r.data.IFCallF.callee = _tr_str_retain(callee); _r.data.IFCallF.arg = arg; return _r; }
+static inline __attribute__((always_inline)) LInst LInst_ctor_IFCall2F(long long dst, TrStr callee, long long a, long long b) { LInst _r = {.tag=LInst_IFCall2F}; _r.data.IFCall2F.dst = dst; _r.data.IFCall2F.callee = _tr_str_retain(callee); _r.data.IFCall2F.a = a; _r.data.IFCall2F.b = b; return _r; }
+
+typedef enum {
+    LTerm_TRetInt,
+    LTerm_TRetVal,
+    LTerm_TRetVoid,
+    LTerm_TBr,
+    LTerm_TCondBr,
+    LTerm_TUnset
+} LTerm_tag;
+
+typedef struct LTerm {
+    LTerm_tag tag;
+    union {
+        struct {
+            long long v;
+        } TRetInt;
+        struct {
+            long long v;
+        } TRetVal;
+        struct {
+            long long target;
+        } TBr;
+        struct {
+            long long cond;
+            long long then_b;
+            long long else_b;
+        } TCondBr;
+    } data;
+} LTerm;
+
+static inline __attribute__((always_inline)) LTerm LTerm_ctor_TRetInt(long long v) { LTerm _r = {.tag=LTerm_TRetInt}; _r.data.TRetInt.v = v; return _r; }
+static inline __attribute__((always_inline)) LTerm LTerm_ctor_TRetVal(long long v) { LTerm _r = {.tag=LTerm_TRetVal}; _r.data.TRetVal.v = v; return _r; }
+#define LTerm_make_TRetVoid() ((LTerm){.tag=LTerm_TRetVoid})
+static inline __attribute__((always_inline)) LTerm LTerm_ctor_TBr(long long target) { LTerm _r = {.tag=LTerm_TBr}; _r.data.TBr.target = target; return _r; }
+static inline __attribute__((always_inline)) LTerm LTerm_ctor_TCondBr(long long cond, long long then_b, long long else_b) { LTerm _r = {.tag=LTerm_TCondBr}; _r.data.TCondBr.cond = cond; _r.data.TCondBr.then_b = then_b; _r.data.TCondBr.else_b = else_b; return _r; }
+#define LTerm_make_TUnset() ((LTerm){.tag=LTerm_TUnset})
+
+typedef enum {
     MacroVal_MStr,
     MacroVal_MInt,
     MacroVal_MBool,
@@ -1640,6 +1814,7 @@ typedef struct AstType {
     long long from_index;
     bool is_borrow;
     bool is_mut_borrow;
+    long long array_size;
 } AstType;
 static void _trdrop_AstType(void* vp) {
     AstType* self = (AstType*)vp; (void)self;
@@ -2441,6 +2616,7 @@ typedef struct Sema {
     bool strict_mode;
     TrMap* mutating_methods;
     TrMap* fn_ret_owned;
+    TrMap* fn_param_consumes;
     TrMap* ptr_aliased;
     TrMap* decorator_names;
     TrMap* variadic_fns;
@@ -2483,6 +2659,7 @@ static void _trdrop_Sema(void* vp) {
     List_TrStr_free(self->cur_func_sources);
     Dict_free(self->mutating_methods);
     Dict_free(self->fn_ret_owned);
+    Dict_free(self->fn_param_consumes);
     Dict_free(self->ptr_aliased);
     Dict_free(self->decorator_names);
     Dict_free_strval(self->variadic_fns);
@@ -2524,6 +2701,7 @@ typedef struct CGenerator {
     StringBuilder* list_types_buf;
     StringBuilder* proto_buf;
     StringBuilder* mono_buf;
+    StringBuilder* fn_mono_body;
     long long temp_count;
     TrMap* classes;
     TrMap* enums;
@@ -2542,6 +2720,7 @@ typedef struct CGenerator {
     bool eliding_get_retain;
     bool no_elide;
     TrStr tier_define;
+    TrStr bare_arch;
     bool cur_self_is_ptr;
     TrMap* coll_local_sfx;
     TrMap* coll_local_idict;
@@ -2549,6 +2728,7 @@ typedef struct CGenerator {
     TrMap* coll_local_vtcoll;
     TrMap* type_subst;
     TrMap* mono_done;
+    TrStr emit_fn_name;
     TrMap* list_type_done;
     TrMap* list_fwd_done;
     TrMap* elem_fmt_done;
@@ -2605,11 +2785,13 @@ static void _trdrop_CGenerator(void* vp) {
     Dict_free(self->coll_field_disq);
     Dict_free(self->cur_proven_borrows);
     _tr_str_release(self->tier_define);
+    _tr_str_release(self->bare_arch);
     Dict_free_strval(self->coll_local_sfx);
     Dict_free(self->coll_local_idict);
     Dict_free(self->coll_local_strval);
     Dict_free_strval(self->coll_local_vtcoll);
     Dict_free(self->mono_done);
+    _tr_str_release(self->emit_fn_name);
     Dict_free(self->list_type_done);
     Dict_free(self->list_fwd_done);
     Dict_free(self->elem_fmt_done);
@@ -2661,6 +2843,160 @@ static void _trdrop_LlvmGenerator(void* vp) {
     Dict_free_objval(self->classes, _trdrop_HirClass);
     Dict_free_objval(self->enums, _trdrop_HirEnum);
     Dict_free_objval(self->functions, _trdrop_HirFunction);
+}
+#endif
+
+#ifndef LBlock_STRUCT_DEFINED
+#define LBlock_STRUCT_DEFINED
+typedef struct LBlock {
+    size_t __rc;
+    long long id;
+    List_ptr* insts;
+    LTerm term;
+} LBlock;
+static void _trdrop_LBlock(void* vp) {
+    LBlock* self = (LBlock*)vp; (void)self;
+    List_ptr_free(self->insts);
+}
+#endif
+
+#ifndef LFunc_STRUCT_DEFINED
+#define LFunc_STRUCT_DEFINED
+typedef struct LFunc {
+    size_t __rc;
+    TrStr name;
+    bool is_main;
+    List_ptr* blocks;
+    long long cur;
+    long long n_vregs;
+    List_i64* vreg_types;
+    List_TrStr* vars;
+    List_i64* var_types;
+    List_TrStr* params;
+    long long tmp_ctr;
+    List_i64* loop_cont;
+    List_i64* loop_brk;
+} LFunc;
+static void _trdrop_LFunc(void* vp) {
+    LFunc* self = (LFunc*)vp; (void)self;
+    _tr_str_release(self->name);
+    List_i64_free(self->vreg_types);
+    List_TrStr_free(self->vars);
+    List_i64_free(self->var_types);
+    List_i64_free(self->loop_cont);
+    List_i64_free(self->loop_brk);
+}
+#endif
+
+#ifndef LModule_STRUCT_DEFINED
+#define LModule_STRUCT_DEFINED
+typedef struct LModule {
+    size_t __rc;
+    List_ptr* funcs;
+    List_TrStr* externs;
+    List_TrStr* fn_names;
+    List_i64* fn_ret;
+    List_TrStr* strings;
+    List_TrStr* globals;
+    List_i64* global_types;
+    List_ptr* global_inits;
+    bool ok;
+} LModule;
+static void _trdrop_LModule(void* vp) {
+    LModule* self = (LModule*)vp; (void)self;
+    List_ptr_free_obj(self->funcs, _trdrop_LFunc);
+    List_TrStr_free(self->externs);
+    List_TrStr_free(self->fn_names);
+    List_i64_free(self->fn_ret);
+    List_TrStr_free(self->strings);
+    List_TrStr_free(self->globals);
+    List_i64_free(self->global_types);
+    List_ptr_free(self->global_inits);
+}
+#endif
+
+#ifndef ByteBuf_STRUCT_DEFINED
+#define ByteBuf_STRUCT_DEFINED
+typedef struct ByteBuf {
+    size_t __rc;
+    unsigned char* data;
+    long long len;
+    long long cap;
+} ByteBuf;
+static void _trdrop_ByteBuf(void* vp) {
+    ByteBuf* self = (ByteBuf*)vp; (void)self;
+}
+#endif
+
+#ifndef Reloc_STRUCT_DEFINED
+#define Reloc_STRUCT_DEFINED
+typedef struct Reloc {
+    size_t __rc;
+    long long offset;
+    TrStr symbol;
+    long long kind;
+    long long str_idx;
+} Reloc;
+static void _trdrop_Reloc(void* vp) {
+    Reloc* self = (Reloc*)vp; (void)self;
+    _tr_str_release(self->symbol);
+}
+#endif
+
+#ifndef Jump_STRUCT_DEFINED
+#define Jump_STRUCT_DEFINED
+typedef struct Jump {
+    size_t __rc;
+    long long patch_off;
+    long long target;
+} Jump;
+static void _trdrop_Jump(void* vp) {
+    Jump* self = (Jump*)vp; (void)self;
+}
+#endif
+
+#ifndef EncodedFunc_STRUCT_DEFINED
+#define EncodedFunc_STRUCT_DEFINED
+typedef struct EncodedFunc {
+    size_t __rc;
+    TrStr name;
+    bool is_main;
+    ByteBuf* code;
+    List_ptr* relocs;
+} EncodedFunc;
+static void _trdrop_EncodedFunc(void* vp) {
+    EncodedFunc* self = (EncodedFunc*)vp; (void)self;
+    _tr_str_release(self->name);
+    _tr_obj_release(self->code, _trdrop_ByteBuf);
+    List_ptr_free_obj(self->relocs, _trdrop_Reloc);
+}
+#endif
+
+#ifndef TextReloc_STRUCT_DEFINED
+#define TextReloc_STRUCT_DEFINED
+typedef struct TextReloc {
+    size_t __rc;
+    long long roff;
+    TrStr sym;
+    long long kind;
+    long long str_idx;
+} TextReloc;
+static void _trdrop_TextReloc(void* vp) {
+    TextReloc* self = (TextReloc*)vp; (void)self;
+    _tr_str_release(self->sym);
+}
+#endif
+
+#ifndef NativeGenerator_STRUCT_DEFINED
+#define NativeGenerator_STRUCT_DEFINED
+typedef struct NativeGenerator {
+    size_t __rc;
+    TrStr target;
+    bool ready;
+} NativeGenerator;
+static void _trdrop_NativeGenerator(void* vp) {
+    NativeGenerator* self = (NativeGenerator*)vp; (void)self;
+    _tr_str_release(self->target);
 }
 #endif
 
@@ -2763,6 +3099,24 @@ static inline void List_SymbolKind_append(List_SymbolKind* l, SymbolKind val) { 
 static inline SymbolKind List_SymbolKind_get(List_SymbolKind* l, long long i) { _tr_bounds_check(i, l->len); return l->data[i]; }
 static inline SymbolKind List_SymbolKind_pop(List_SymbolKind* l) { if(!l||l->len==0) return (SymbolKind){0}; l->len--; return l->data[l->len]; }
 static inline void List_SymbolKind_free(List_SymbolKind* l) { if(l){ free(l->data); free(l); } }
+typedef struct List_LType { LType* data; size_t len; size_t capacity; } List_LType;
+static inline List_LType* List_LType_new(void) { List_LType* l=(List_LType*)malloc(sizeof(List_LType)); l->data=(LType*)malloc(sizeof(LType)*8); l->len=0; l->capacity=8; return l; }
+static inline void List_LType_append(List_LType* l, LType val) { if(l->len==l->capacity){ l->capacity*=2; l->data=(LType*)realloc(l->data,sizeof(LType)*l->capacity); } l->data[l->len++]=val; }
+static inline LType List_LType_get(List_LType* l, long long i) { _tr_bounds_check(i, l->len); return l->data[i]; }
+static inline LType List_LType_pop(List_LType* l) { if(!l||l->len==0) return (LType){0}; l->len--; return l->data[l->len]; }
+static inline void List_LType_free(List_LType* l) { if(l){ free(l->data); free(l); } }
+typedef struct List_LInst { LInst* data; size_t len; size_t capacity; } List_LInst;
+static inline List_LInst* List_LInst_new(void) { List_LInst* l=(List_LInst*)malloc(sizeof(List_LInst)); l->data=(LInst*)malloc(sizeof(LInst)*8); l->len=0; l->capacity=8; return l; }
+static inline void List_LInst_append(List_LInst* l, LInst val) { if(l->len==l->capacity){ l->capacity*=2; l->data=(LInst*)realloc(l->data,sizeof(LInst)*l->capacity); } l->data[l->len++]=val; }
+static inline LInst List_LInst_get(List_LInst* l, long long i) { _tr_bounds_check(i, l->len); return l->data[i]; }
+static inline LInst List_LInst_pop(List_LInst* l) { if(!l||l->len==0) return (LInst){0}; l->len--; return l->data[l->len]; }
+static inline void List_LInst_free(List_LInst* l) { if(l){ free(l->data); free(l); } }
+typedef struct List_LTerm { LTerm* data; size_t len; size_t capacity; } List_LTerm;
+static inline List_LTerm* List_LTerm_new(void) { List_LTerm* l=(List_LTerm*)malloc(sizeof(List_LTerm)); l->data=(LTerm*)malloc(sizeof(LTerm)*8); l->len=0; l->capacity=8; return l; }
+static inline void List_LTerm_append(List_LTerm* l, LTerm val) { if(l->len==l->capacity){ l->capacity*=2; l->data=(LTerm*)realloc(l->data,sizeof(LTerm)*l->capacity); } l->data[l->len++]=val; }
+static inline LTerm List_LTerm_get(List_LTerm* l, long long i) { _tr_bounds_check(i, l->len); return l->data[i]; }
+static inline LTerm List_LTerm_pop(List_LTerm* l) { if(!l||l->len==0) return (LTerm){0}; l->len--; return l->data[l->len]; }
+static inline void List_LTerm_free(List_LTerm* l) { if(l){ free(l->data); free(l); } }
 typedef struct List_MacroVal { MacroVal* data; size_t len; size_t capacity; } List_MacroVal;
 static inline List_MacroVal* List_MacroVal_new(void) { List_MacroVal* l=(List_MacroVal*)malloc(sizeof(List_MacroVal)); l->data=(MacroVal*)malloc(sizeof(MacroVal)*8); l->len=0; l->capacity=8; return l; }
 static inline void List_MacroVal_append(List_MacroVal* l, MacroVal val) { if(l->len==l->capacity){ l->capacity*=2; l->data=(MacroVal*)realloc(l->data,sizeof(MacroVal)*l->capacity); } l->data[l->len++]=val; }
@@ -2774,7 +3128,6 @@ __attribute__((hot)) TrStr read_file(TrStr path);
 __attribute__((hot)) bool file_exists(TrStr path);
 __attribute__((hot)) bool write_file(TrStr path, TrStr content);
 __attribute__((hot)) bool append_file(TrStr path, TrStr content);
-__attribute__((hot)) long long _map_hash(void* key, long long cap);
 __attribute__((malloc,returns_nonnull,hot)) StringObj* StringObj_init(TrStr s);
 __attribute__((hot)) TrStr StringObj_as_str(StringObj* self);
 __attribute__((hot)) void StringObj_append(StringObj* self, TrStr other);
@@ -2809,10 +3162,6 @@ __attribute__((hot)) void raw_free(char* ptr);
 __attribute__((hot)) void raw_copy(char* dst, char* src, long long n);
 __attribute__((hot)) void raw_zero(char* ptr, long long n);
 __attribute__((hot)) void raw_move(char* dst, char* src, long long n);
-__attribute__((hot)) void** alloc(long long n_elems);
-__attribute__((hot)) void dealloc(void** ptr);
-__attribute__((hot)) void** resize(void** ptr, long long new_count);
-__attribute__((hot)) void copy(void** dst, void** src, long long n_elems);
 __attribute__((hot)) bool color_enabled();
 __attribute__((hot)) TrStr esc();
 __attribute__((hot)) TrStr paint(TrStr s, TrStr code);
@@ -2929,6 +3278,7 @@ __attribute__((hot)) Program* Parser_parse_program(Parser* self);
 __attribute__((hot)) Decl* Parser_parse_decl(Parser* self);
 __attribute__((hot)) Decl* Parser_parse_from_import(Parser* self);
 __attribute__((hot)) Decl* Parser_parse_import(Parser* self);
+__attribute__((hot)) void Parser_parse_generic_bound(Parser* self, TrStr gname, List_ptr* constraints);
 __attribute__((hot)) FunctionDef* Parser_parse_function_def(Parser* self, bool is_method);
 __attribute__((hot)) Decl* Parser_parse_class_decl(Parser* self);
 __attribute__((hot)) Decl* Parser_parse_enum_decl(Parser* self);
@@ -3015,6 +3365,7 @@ __attribute__((hot)) TrStr dump_mir(MirProgram* mp);
 __attribute__((malloc,returns_nonnull,hot)) Symbol* Symbol_init(TrStr name, SymbolKind kind, AstType** ty);
 __attribute__((malloc,returns_nonnull,hot)) Scope* Scope_init();
 __attribute__((hot)) bool _expr_is_self_field(Expr* e);
+__attribute__((hot)) bool _binop_is_float_name(TrStr n);
 __attribute__((hot)) bool _block_mutates_self(Block* b);
 __attribute__((hot)) bool _pblock_mutates_self(Block** pb);
 __attribute__((hot)) bool _stmt_mutates_self(Stmt* s);
@@ -3100,11 +3451,26 @@ __attribute__((hot)) TrStr Sema_type_ref_name(Sema* self, Expr* raw);
 __attribute__((hot)) bool Sema_is_global_not_local(Sema* self, TrStr name);
 __attribute__((hot)) HirProgram* Sema_analyze(Sema* self, Program* prog);
 __attribute__((hot)) void Sema_compute_return_ownership(Sema* self, HirProgram* hp);
+__attribute__((hot)) void Sema_compute_param_ownership(Sema* self, HirProgram* hp);
+__attribute__((hot)) bool Sema__pc_is_ident(Sema* self, HirExpr* ep, TrStr name);
+__attribute__((hot)) TrStr Sema__pc_callee_name(Sema* self, HirExpr* callee);
+__attribute__((hot)) bool Sema__pc_stores_method(Sema* self, TrStr m);
+__attribute__((hot)) bool Sema__pc_is_store_target(Sema* self, HirExpr* tgt);
+__attribute__((hot)) bool Sema__pc_refs(Sema* self, HirExpr* ep, TrStr name);
+__attribute__((hot)) bool Sema__pc_anyrefs(Sema* self, List_ptr* args, TrStr name);
+__attribute__((hot)) bool Sema__param_consumed_in_block(Sema* self, TrStr pname, HirBlock* b);
+__attribute__((hot)) bool Sema__param_consumed_in_stmt(Sema* self, TrStr pname, HirStmt* sp);
+__attribute__((hot)) bool Sema__param_consumed_in_expr(Sema* self, TrStr pname, HirExpr* ep);
 __attribute__((hot)) bool Sema__fn_ret_is_heap_class(Sema* self, HirFunction* f);
 __attribute__((hot)) void Sema__collect_returns(Sema* self, HirBlock* b, List_ptr* out);
 __attribute__((hot)) void Sema__collect_returns_stmt(Sema* self, HirStmt* sp, List_ptr* out);
 __attribute__((hot)) bool Sema__owned_of(Sema* self, TrStr key);
 __attribute__((hot)) bool Sema__ret_yields_owned(Sema* self, HirExpr* e);
+__attribute__((hot)) bool Sema__is_type_param_in_scope(Sema* self, TrStr name);
+__attribute__((hot)) bool Sema__type_satisfies_bound(Sema* self, TrStr type_name, TrStr iface_name);
+__attribute__((hot)) void Sema_check_call_bounds(Sema* self, TrStr fname, List_ptr* hargs);
+__attribute__((hot)) AstType* Sema__subst_ret_generics(Sema* self, AstType* ty, List_TrStr* generics, List_ptr* concrete);
+__attribute__((hot)) void Sema_check_class_bounds(Sema* self, TrStr cls_name, List_ptr* arg_tys);
 __attribute__((hot)) void Sema_register_decl(Sema* self, Decl* d);
 __attribute__((hot)) HirFunction* Sema_lower_func(Sema* self, FunctionDef* f);
 __attribute__((hot)) HirClass* Sema_lower_class(Sema* self, ClassDef* c);
@@ -3189,6 +3555,117 @@ __attribute__((hot)) TrStr LlvmGenerator_gen_call_llvm(LlvmGenerator* self, HirE
 __attribute__((hot)) void LlvmGenerator_gen_stmt(LlvmGenerator* self, HirStmt* s_ptr);
 __attribute__((hot)) void LlvmGenerator_gen_block(LlvmGenerator* self, HirBlock* b);
 __attribute__((hot)) TrStr LlvmGenerator_generate(LlvmGenerator* self, HirProgram* prog);
+__attribute__((hot)) LInst* box_linst(LInst i);
+__attribute__((malloc,returns_nonnull,hot)) LBlock* LBlock_init(long long id);
+__attribute__((malloc,returns_nonnull,hot)) LFunc* LFunc_init(TrStr name);
+__attribute__((hot)) long long LFunc_fresh_id(LFunc* self);
+__attribute__((hot)) long long LFunc_new_block(LFunc* self);
+__attribute__((hot)) void LFunc_set_cur(LFunc* self, long long id);
+__attribute__((hot)) void LFunc_emit(LFunc* self, LInst i);
+__attribute__((hot)) void LFunc_set_term(LFunc* self, LTerm t);
+__attribute__((hot)) bool LFunc_cur_terminated(LFunc* self);
+__attribute__((hot)) long long LFunc_new_vreg(LFunc* self);
+__attribute__((hot)) void LFunc_set_vreg_type(LFunc* self, long long id, long long t);
+__attribute__((hot)) long long LFunc_vreg_type(LFunc* self, long long id);
+__attribute__((hot)) void LFunc_add_var(LFunc* self, TrStr name);
+__attribute__((hot)) long long LFunc_var_index(LFunc* self, TrStr name);
+__attribute__((hot)) void LFunc_set_var_type(LFunc* self, TrStr name, long long t);
+__attribute__((hot)) long long LFunc_var_type(LFunc* self, TrStr name);
+__attribute__((malloc,returns_nonnull,hot)) LModule* LModule_init();
+__attribute__((hot)) long long LModule_add_global(LModule* self, TrStr name, long long tag);
+__attribute__((hot)) long long LModule_global_index(LModule* self, TrStr name);
+__attribute__((hot)) bool LModule_is_global(LModule* self, TrStr name);
+__attribute__((hot)) long long LModule_global_type(LModule* self, TrStr name);
+__attribute__((hot)) long long LModule_fn_ret_tag(LModule* self, TrStr name);
+__attribute__((hot)) long long LModule_add_string(LModule* self, TrStr s);
+__attribute__((hot)) void LModule_add_extern(LModule* self, TrStr name);
+__attribute__((hot)) bool LModule_is_user_fn(LModule* self, TrStr name);
+__attribute__((hot)) long long _f64_bits(double v);
+__attribute__((hot)) long long _promote_f(LFunc* lf, long long v);
+__attribute__((hot)) TrStr _print_i64_sym();
+__attribute__((hot)) bool _is_list_tag(long long t);
+__attribute__((hot)) bool _is_dict_tag(long long t);
+__attribute__((hot)) bool _dict_key_is_str(long long t);
+__attribute__((hot)) TrStr _dict_new_sym(long long t);
+__attribute__((hot)) TrStr _dict_sym(long long t, TrStr op);
+__attribute__((hot)) long long _list_elem_tag(long long t);
+__attribute__((hot)) long long _list_tag_for_elem(long long et);
+__attribute__((hot)) bool _is_cmp_op(TrStr op);
+__attribute__((hot)) bool _is_int_typename(TrStr n);
+__attribute__((hot)) long long _ast_type_tag(AstType* ty);
+__attribute__((hot)) LModule* lower_to_lir(HirProgram* prog);
+__attribute__((hot)) bool _register_global(LModule* m, HirStmt* s);
+__attribute__((hot)) bool _lower_global_init(LModule* m, LFunc* lf, HirStmt* s);
+__attribute__((hot)) void _lir_lower_function(LModule* m, HirFunction* f);
+__attribute__((hot)) bool lower_block(LModule* m, LFunc* lf, HirBlock* hb);
+__attribute__((hot)) bool lower_stmt(LModule* m, LFunc* lf, HirStmt* s);
+__attribute__((hot)) bool _lower_for(LModule* m, LFunc* lf, TrStr var, HirExpr* iter, HirBlock* body);
+__attribute__((hot)) bool _lower_for_range(LModule* m, LFunc* lf, TrStr var, List_ptr* args, HirBlock* body);
+__attribute__((hot)) bool _lower_for_list(LModule* m, LFunc* lf, TrStr var, HirExpr* iter, HirBlock* body);
+__attribute__((hot)) void _emit_incr(LFunc* lf, TrStr name);
+__attribute__((hot)) TrStr _ident_name(HirExpr* e);
+__attribute__((hot)) bool _lower_index_set(LModule* m, LFunc* lf, HirExpr* obj, HirExpr* idx, HirExpr* val);
+__attribute__((hot)) TrStr _write_sym(long long t);
+__attribute__((hot)) void _emit_call0(LModule* m, LFunc* lf, TrStr sym);
+__attribute__((hot)) bool _lower_print(LModule* m, LFunc* lf, List_ptr* args);
+__attribute__((hot)) bool lower_expr_stmt(LModule* m, LFunc* lf, HirExpr* e);
+__attribute__((hot)) bool _int_op(TrStr op);
+__attribute__((hot)) TrStr _lir_digit(long long d);
+__attribute__((hot)) TrStr _lir_itoa(long long n);
+__attribute__((hot)) long long _norm_bool(LFunc* lf, long long v);
+__attribute__((hot)) long long _str_call0(LModule* m, LFunc* lf, TrStr sym, long long _tr_v_recv, long long restype);
+__attribute__((hot)) long long _str_call1(LModule* m, LFunc* lf, TrStr sym, long long _tr_v_recv, long long arg, long long restype);
+__attribute__((hot)) long long _lower_str_method(LModule* m, LFunc* lf, long long _tr_v_recv, TrStr method, List_ptr* margs);
+__attribute__((hot)) TrStr _float_unary_sym(TrStr method);
+__attribute__((hot)) long long _lower_int_method(LModule* m, LFunc* lf, long long _tr_v_recv, TrStr method, List_ptr* margs);
+__attribute__((hot)) long long _lower_dict_method(LModule* m, LFunc* lf, long long _tr_v_recv, long long dtag, TrStr method, List_ptr* margs);
+__attribute__((hot)) long long _lower_float_method(LModule* m, LFunc* lf, long long _tr_v_recv, TrStr method, List_ptr* margs);
+__attribute__((hot)) bool _is_const_int(HirExpr* e);
+__attribute__((hot)) long long _const_int_val(HirExpr* e);
+__attribute__((hot)) void _emit_add_const(LFunc* lf, TrStr name, long long delta);
+__attribute__((hot)) long long _list_call1(LModule* m, LFunc* lf, TrStr sym, long long handle, long long restype);
+__attribute__((hot)) long long _list_get(LModule* m, LFunc* lf, long long handle, long long idx);
+__attribute__((hot)) long long lower_expr(LModule* m, LFunc* lf, HirExpr* e);
+__attribute__((malloc,returns_nonnull,hot)) ByteBuf* ByteBuf_init();
+__attribute__((hot)) void ByteBuf_u8(ByteBuf* self, long long v);
+__attribute__((hot)) void ByteBuf_u16(ByteBuf* self, long long v);
+__attribute__((hot)) void ByteBuf_u32(ByteBuf* self, long long v);
+__attribute__((hot)) void ByteBuf_u64(ByteBuf* self, long long v);
+__attribute__((hot)) void ByteBuf_cstr(ByteBuf* self, TrStr s);
+__attribute__((hot)) void ByteBuf_zeros(ByteBuf* self, long long n);
+__attribute__((hot)) void ByteBuf_append_buf(ByteBuf* self, ByteBuf* o);
+__attribute__((hot)) void ByteBuf_patch_u32(ByteBuf* self, long long off, long long v);
+__attribute__((hot)) void ByteBuf_align_to(ByteBuf* self, long long align);
+__attribute__((hot)) bool ByteBuf_write_file(ByteBuf* self, TrStr path);
+__attribute__((malloc,returns_nonnull,hot)) EncodedFunc* EncodedFunc_init(TrStr name);
+__attribute__((hot)) long long _argreg_modrm(long long idx);
+__attribute__((hot)) long long _argreg_rex(long long idx);
+__attribute__((hot)) long long _round16(long long n);
+__attribute__((hot)) long long _vreg_disp(long long id);
+__attribute__((hot)) long long _var_disp(LFunc* lf, TrStr name);
+__attribute__((hot)) void _st_rax(ByteBuf* c, long long disp);
+__attribute__((hot)) void _ld_rax(ByteBuf* c, long long disp);
+__attribute__((hot)) void _ld_rcx(ByteBuf* c, long long disp);
+__attribute__((hot)) void _ld_argreg(ByteBuf* c, long long idx, long long disp);
+__attribute__((hot)) void _st_argreg(ByteBuf* c, long long idx, long long disp);
+__attribute__((hot)) void _mov_rax_imm64(ByteBuf* c, long long v);
+__attribute__((hot)) void _ld_xmm0(ByteBuf* c, long long disp);
+__attribute__((hot)) void _ld_xmm1(ByteBuf* c, long long disp);
+__attribute__((hot)) void _st_xmm0(ByteBuf* c, long long disp);
+__attribute__((hot)) void _emit_farith(ByteBuf* c, TrStr op);
+__attribute__((hot)) long long _fsetcc(TrStr op);
+__attribute__((hot)) bool _is_cmp(TrStr op);
+__attribute__((hot)) long long _setcc(TrStr op);
+__attribute__((hot)) void _emit_arith(ByteBuf* c, TrStr op);
+__attribute__((hot)) void _emit_return(ByteBuf* c, long long rv);
+__attribute__((hot)) EncodedFunc* encode_func(LFunc* lf);
+__attribute__((hot)) long long _index_of(List_TrStr* names, TrStr s);
+__attribute__((hot)) void _shdr(ByteBuf* out, long long name, long long ty, long long flags, long long addr, long long offset, long long size, long long link, long long info, long long align, long long entsize);
+__attribute__((hot)) long long _align8(long long n);
+__attribute__((hot)) bool write_elf_object(TrStr out_path, List_ptr* funcs, List_TrStr* externs, List_TrStr* strings, long long n_globals);
+__attribute__((hot)) bool emit_lir_object(LModule* m, TrStr out_path);
+__attribute__((malloc,returns_nonnull,hot)) NativeGenerator* NativeGenerator_init();
+__attribute__((hot)) bool NativeGenerator_emit_object(NativeGenerator* self, HirProgram* prog, TrStr out_path);
 __attribute__((hot)) MacroVal* box_mv(MacroVal v);
 __attribute__((hot)) MacroVal* mrec(List_TrStr* keys, List_ptr* vals);
 __attribute__((hot)) MacroVal* mrec_get(MacroVal* recptr, TrStr key);
@@ -3230,6 +3707,7 @@ __attribute__((hot)) TrStr detect_c_compiler();
 __attribute__((hot)) bool is_clang_compiler(TrStr cc);
 __attribute__((hot)) TrStr resolve_target_triple(TrStr target);
 __attribute__((hot)) TrStr linker_script_cortex_m();
+__attribute__((hot)) TrStr linker_script_riscv();
 __attribute__((hot)) TrStr target_extra_flags(TrStr triple);
 __attribute__((hot)) TrStr detect_cross_compiler(TrStr triple);
 __attribute__((hot)) TrStr dir_of_path(TrStr path);
@@ -3299,8 +3777,12 @@ __attribute__((hot)) TrStr CGenerator_list_elem_suffix(CGenerator* self, TrStr n
 __attribute__((hot)) TrStr CGenerator_list_sfx(CGenerator* self, TrStr elem_sfx);
 __attribute__((hot)) TrStr CGenerator_type_args_suffix(CGenerator* self, List_ptr* args);
 __attribute__((hot)) TrStr CGenerator_synth_class_suffix(CGenerator* self, HirClass* ucls);
+__attribute__((hot)) TrStr CGenerator_ensure_array_type(CGenerator* self, AstType* ty);
 __attribute__((hot)) void CGenerator_ensure_mono(CGenerator* self, HirClass* cls, List_ptr* type_args);
+__attribute__((hot)) TrStr CGenerator_infer_generic_targ(CGenerator* self, TrStr fname, List_ptr* args);
 __attribute__((hot)) void CGenerator_ensure_mono_func(CGenerator* self, TrStr fname, TrStr targ);
+__attribute__((hot)) TrStr CGenerator_infer_method_targ(CGenerator* self, TrStr cls_name, TrStr method, List_ptr* args);
+__attribute__((hot)) void CGenerator_ensure_mono_method(CGenerator* self, TrStr cls_name, TrStr method, TrStr targ);
 __attribute__((hot)) TrStr CGenerator_get_user_decorator_attr(CGenerator* self, TrStr name);
 __attribute__((hot)) TrStr CGenerator_deco_first_str(CGenerator* self, Decorator* d);
 __attribute__((hot)) TrStr CGenerator_hw_attrs(CGenerator* self, HirFunction* f);
@@ -3328,6 +3810,7 @@ __attribute__((hot)) bool CGenerator_has_method(CGenerator* self, TrStr cls_name
 __attribute__((hot)) AstType* CGenerator_cls_method_ret_ty(CGenerator* self, TrStr cls_name, TrStr method);
 __attribute__((hot)) TrStr CGenerator_cls_method_c_call(CGenerator* self, TrStr cls_name, TrStr method, TrStr obj_s, TrStr extra_args);
 __attribute__((hot)) TrStr CGenerator_resolve_generic_prim(CGenerator* self, TrStr n);
+__attribute__((hot)) TrStr CGenerator_resolve_generic_tyname(CGenerator* self, TrStr n);
 __attribute__((hot)) TrStr CGenerator_mono_cls_name_for(CGenerator* self, AstType* ty);
 __attribute__((hot)) TrStr CGenerator_obj_to_str_expr(CGenerator* self, TrStr mono, TrStr s);
 __attribute__((hot)) TrStr CGenerator_ensure_elem_fmt_fn(CGenerator* self, AstType* ty);
@@ -4475,6 +4958,204 @@ __attribute__((hot)) codegen_llvm_LlvmGenerator*** core_alloc_resize_codegen_llv
 __attribute__((hot)) void core_alloc_dealloc_codegen_llvm_LlvmGenerator_ptr(codegen_llvm_LlvmGenerator*** ptr);
 __attribute__((hot)) core_map_MapNode_str_codegen_llvm_LlvmGenerator** core_alloc_alloc_core_map_MapNode_str_codegen_llvm_LlvmGenerator(long long count);
 __attribute__((hot)) void core_alloc_dealloc_core_map_MapNode_str_codegen_llvm_LlvmGenerator(core_map_MapNode_str_codegen_llvm_LlvmGenerator** ptr);
+
+typedef LType taumir_ir_LType;
+struct core_vec_Vec_taumir_ir_LType { taumir_ir_LType* data; long long len; long long capacity; };
+typedef struct core_vec_Vec_taumir_ir_LType core_vec_Vec_taumir_ir_LType;
+struct core_vec_Vec_taumir_ir_LType_ptr { taumir_ir_LType** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_taumir_ir_LType_ptr core_vec_Vec_taumir_ir_LType_ptr;
+__attribute__((hot)) taumir_ir_LType* core_alloc_alloc_taumir_ir_LType(long long count);
+__attribute__((hot)) taumir_ir_LType* core_alloc_resize_taumir_ir_LType(taumir_ir_LType* ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_taumir_ir_LType(taumir_ir_LType* ptr);
+__attribute__((hot)) taumir_ir_LType** core_alloc_alloc_taumir_ir_LType_ptr(long long count);
+__attribute__((hot)) taumir_ir_LType** core_alloc_resize_taumir_ir_LType_ptr(taumir_ir_LType** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_taumir_ir_LType_ptr(taumir_ir_LType** ptr);
+
+typedef LInst taumir_ir_LInst;
+struct core_vec_Vec_taumir_ir_LInst { taumir_ir_LInst* data; long long len; long long capacity; };
+typedef struct core_vec_Vec_taumir_ir_LInst core_vec_Vec_taumir_ir_LInst;
+struct core_vec_Vec_taumir_ir_LInst_ptr { taumir_ir_LInst** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_taumir_ir_LInst_ptr core_vec_Vec_taumir_ir_LInst_ptr;
+__attribute__((hot)) taumir_ir_LInst* core_alloc_alloc_taumir_ir_LInst(long long count);
+__attribute__((hot)) taumir_ir_LInst* core_alloc_resize_taumir_ir_LInst(taumir_ir_LInst* ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_taumir_ir_LInst(taumir_ir_LInst* ptr);
+__attribute__((hot)) taumir_ir_LInst** core_alloc_alloc_taumir_ir_LInst_ptr(long long count);
+__attribute__((hot)) taumir_ir_LInst** core_alloc_resize_taumir_ir_LInst_ptr(taumir_ir_LInst** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_taumir_ir_LInst_ptr(taumir_ir_LInst** ptr);
+
+typedef LTerm taumir_ir_LTerm;
+struct core_vec_Vec_taumir_ir_LTerm { taumir_ir_LTerm* data; long long len; long long capacity; };
+typedef struct core_vec_Vec_taumir_ir_LTerm core_vec_Vec_taumir_ir_LTerm;
+struct core_vec_Vec_taumir_ir_LTerm_ptr { taumir_ir_LTerm** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_taumir_ir_LTerm_ptr core_vec_Vec_taumir_ir_LTerm_ptr;
+__attribute__((hot)) taumir_ir_LTerm* core_alloc_alloc_taumir_ir_LTerm(long long count);
+__attribute__((hot)) taumir_ir_LTerm* core_alloc_resize_taumir_ir_LTerm(taumir_ir_LTerm* ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_taumir_ir_LTerm(taumir_ir_LTerm* ptr);
+__attribute__((hot)) taumir_ir_LTerm** core_alloc_alloc_taumir_ir_LTerm_ptr(long long count);
+__attribute__((hot)) taumir_ir_LTerm** core_alloc_resize_taumir_ir_LTerm_ptr(taumir_ir_LTerm** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_taumir_ir_LTerm_ptr(taumir_ir_LTerm** ptr);
+
+typedef LBlock taumir_ir_LBlock;
+struct core_vec_Vec_taumir_ir_LBlock { taumir_ir_LBlock** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_taumir_ir_LBlock core_vec_Vec_taumir_ir_LBlock;
+struct core_vec_Vec_taumir_ir_LBlock_ptr { taumir_ir_LBlock*** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_taumir_ir_LBlock_ptr core_vec_Vec_taumir_ir_LBlock_ptr;
+struct core_map_MapNode_str_taumir_ir_LBlock { char* key; taumir_ir_LBlock* value; struct core_map_MapNode_str_taumir_ir_LBlock* next; };
+typedef struct core_map_MapNode_str_taumir_ir_LBlock core_map_MapNode_str_taumir_ir_LBlock;
+struct core_map_Map_str_taumir_ir_LBlock { core_map_MapNode_str_taumir_ir_LBlock** buckets; long long capacity; long long len; };
+typedef struct core_map_Map_str_taumir_ir_LBlock core_map_Map_str_taumir_ir_LBlock;
+__attribute__((hot)) taumir_ir_LBlock** core_alloc_alloc_taumir_ir_LBlock(long long count);
+__attribute__((hot)) taumir_ir_LBlock** core_alloc_resize_taumir_ir_LBlock(taumir_ir_LBlock** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_taumir_ir_LBlock(taumir_ir_LBlock** ptr);
+__attribute__((hot)) taumir_ir_LBlock*** core_alloc_alloc_taumir_ir_LBlock_ptr(long long count);
+__attribute__((hot)) taumir_ir_LBlock*** core_alloc_resize_taumir_ir_LBlock_ptr(taumir_ir_LBlock*** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_taumir_ir_LBlock_ptr(taumir_ir_LBlock*** ptr);
+__attribute__((hot)) core_map_MapNode_str_taumir_ir_LBlock** core_alloc_alloc_core_map_MapNode_str_taumir_ir_LBlock(long long count);
+__attribute__((hot)) void core_alloc_dealloc_core_map_MapNode_str_taumir_ir_LBlock(core_map_MapNode_str_taumir_ir_LBlock** ptr);
+
+typedef LFunc taumir_ir_LFunc;
+struct core_vec_Vec_taumir_ir_LFunc { taumir_ir_LFunc** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_taumir_ir_LFunc core_vec_Vec_taumir_ir_LFunc;
+struct core_vec_Vec_taumir_ir_LFunc_ptr { taumir_ir_LFunc*** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_taumir_ir_LFunc_ptr core_vec_Vec_taumir_ir_LFunc_ptr;
+struct core_map_MapNode_str_taumir_ir_LFunc { char* key; taumir_ir_LFunc* value; struct core_map_MapNode_str_taumir_ir_LFunc* next; };
+typedef struct core_map_MapNode_str_taumir_ir_LFunc core_map_MapNode_str_taumir_ir_LFunc;
+struct core_map_Map_str_taumir_ir_LFunc { core_map_MapNode_str_taumir_ir_LFunc** buckets; long long capacity; long long len; };
+typedef struct core_map_Map_str_taumir_ir_LFunc core_map_Map_str_taumir_ir_LFunc;
+__attribute__((hot)) taumir_ir_LFunc** core_alloc_alloc_taumir_ir_LFunc(long long count);
+__attribute__((hot)) taumir_ir_LFunc** core_alloc_resize_taumir_ir_LFunc(taumir_ir_LFunc** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_taumir_ir_LFunc(taumir_ir_LFunc** ptr);
+__attribute__((hot)) taumir_ir_LFunc*** core_alloc_alloc_taumir_ir_LFunc_ptr(long long count);
+__attribute__((hot)) taumir_ir_LFunc*** core_alloc_resize_taumir_ir_LFunc_ptr(taumir_ir_LFunc*** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_taumir_ir_LFunc_ptr(taumir_ir_LFunc*** ptr);
+__attribute__((hot)) core_map_MapNode_str_taumir_ir_LFunc** core_alloc_alloc_core_map_MapNode_str_taumir_ir_LFunc(long long count);
+__attribute__((hot)) void core_alloc_dealloc_core_map_MapNode_str_taumir_ir_LFunc(core_map_MapNode_str_taumir_ir_LFunc** ptr);
+
+typedef LModule taumir_ir_LModule;
+struct core_vec_Vec_taumir_ir_LModule { taumir_ir_LModule** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_taumir_ir_LModule core_vec_Vec_taumir_ir_LModule;
+struct core_vec_Vec_taumir_ir_LModule_ptr { taumir_ir_LModule*** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_taumir_ir_LModule_ptr core_vec_Vec_taumir_ir_LModule_ptr;
+struct core_map_MapNode_str_taumir_ir_LModule { char* key; taumir_ir_LModule* value; struct core_map_MapNode_str_taumir_ir_LModule* next; };
+typedef struct core_map_MapNode_str_taumir_ir_LModule core_map_MapNode_str_taumir_ir_LModule;
+struct core_map_Map_str_taumir_ir_LModule { core_map_MapNode_str_taumir_ir_LModule** buckets; long long capacity; long long len; };
+typedef struct core_map_Map_str_taumir_ir_LModule core_map_Map_str_taumir_ir_LModule;
+__attribute__((hot)) taumir_ir_LModule** core_alloc_alloc_taumir_ir_LModule(long long count);
+__attribute__((hot)) taumir_ir_LModule** core_alloc_resize_taumir_ir_LModule(taumir_ir_LModule** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_taumir_ir_LModule(taumir_ir_LModule** ptr);
+__attribute__((hot)) taumir_ir_LModule*** core_alloc_alloc_taumir_ir_LModule_ptr(long long count);
+__attribute__((hot)) taumir_ir_LModule*** core_alloc_resize_taumir_ir_LModule_ptr(taumir_ir_LModule*** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_taumir_ir_LModule_ptr(taumir_ir_LModule*** ptr);
+__attribute__((hot)) core_map_MapNode_str_taumir_ir_LModule** core_alloc_alloc_core_map_MapNode_str_taumir_ir_LModule(long long count);
+__attribute__((hot)) void core_alloc_dealloc_core_map_MapNode_str_taumir_ir_LModule(core_map_MapNode_str_taumir_ir_LModule** ptr);
+
+typedef ByteBuf codegen_native_bytebuf_ByteBuf;
+struct core_vec_Vec_codegen_native_bytebuf_ByteBuf { codegen_native_bytebuf_ByteBuf** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_codegen_native_bytebuf_ByteBuf core_vec_Vec_codegen_native_bytebuf_ByteBuf;
+struct core_vec_Vec_codegen_native_bytebuf_ByteBuf_ptr { codegen_native_bytebuf_ByteBuf*** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_codegen_native_bytebuf_ByteBuf_ptr core_vec_Vec_codegen_native_bytebuf_ByteBuf_ptr;
+struct core_map_MapNode_str_codegen_native_bytebuf_ByteBuf { char* key; codegen_native_bytebuf_ByteBuf* value; struct core_map_MapNode_str_codegen_native_bytebuf_ByteBuf* next; };
+typedef struct core_map_MapNode_str_codegen_native_bytebuf_ByteBuf core_map_MapNode_str_codegen_native_bytebuf_ByteBuf;
+struct core_map_Map_str_codegen_native_bytebuf_ByteBuf { core_map_MapNode_str_codegen_native_bytebuf_ByteBuf** buckets; long long capacity; long long len; };
+typedef struct core_map_Map_str_codegen_native_bytebuf_ByteBuf core_map_Map_str_codegen_native_bytebuf_ByteBuf;
+__attribute__((hot)) codegen_native_bytebuf_ByteBuf** core_alloc_alloc_codegen_native_bytebuf_ByteBuf(long long count);
+__attribute__((hot)) codegen_native_bytebuf_ByteBuf** core_alloc_resize_codegen_native_bytebuf_ByteBuf(codegen_native_bytebuf_ByteBuf** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_codegen_native_bytebuf_ByteBuf(codegen_native_bytebuf_ByteBuf** ptr);
+__attribute__((hot)) codegen_native_bytebuf_ByteBuf*** core_alloc_alloc_codegen_native_bytebuf_ByteBuf_ptr(long long count);
+__attribute__((hot)) codegen_native_bytebuf_ByteBuf*** core_alloc_resize_codegen_native_bytebuf_ByteBuf_ptr(codegen_native_bytebuf_ByteBuf*** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_codegen_native_bytebuf_ByteBuf_ptr(codegen_native_bytebuf_ByteBuf*** ptr);
+__attribute__((hot)) core_map_MapNode_str_codegen_native_bytebuf_ByteBuf** core_alloc_alloc_core_map_MapNode_str_codegen_native_bytebuf_ByteBuf(long long count);
+__attribute__((hot)) void core_alloc_dealloc_core_map_MapNode_str_codegen_native_bytebuf_ByteBuf(core_map_MapNode_str_codegen_native_bytebuf_ByteBuf** ptr);
+
+typedef Reloc codegen_native_isa_x64_Reloc;
+struct core_vec_Vec_codegen_native_isa_x64_Reloc { codegen_native_isa_x64_Reloc** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_codegen_native_isa_x64_Reloc core_vec_Vec_codegen_native_isa_x64_Reloc;
+struct core_vec_Vec_codegen_native_isa_x64_Reloc_ptr { codegen_native_isa_x64_Reloc*** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_codegen_native_isa_x64_Reloc_ptr core_vec_Vec_codegen_native_isa_x64_Reloc_ptr;
+struct core_map_MapNode_str_codegen_native_isa_x64_Reloc { char* key; codegen_native_isa_x64_Reloc* value; struct core_map_MapNode_str_codegen_native_isa_x64_Reloc* next; };
+typedef struct core_map_MapNode_str_codegen_native_isa_x64_Reloc core_map_MapNode_str_codegen_native_isa_x64_Reloc;
+struct core_map_Map_str_codegen_native_isa_x64_Reloc { core_map_MapNode_str_codegen_native_isa_x64_Reloc** buckets; long long capacity; long long len; };
+typedef struct core_map_Map_str_codegen_native_isa_x64_Reloc core_map_Map_str_codegen_native_isa_x64_Reloc;
+__attribute__((hot)) codegen_native_isa_x64_Reloc** core_alloc_alloc_codegen_native_isa_x64_Reloc(long long count);
+__attribute__((hot)) codegen_native_isa_x64_Reloc** core_alloc_resize_codegen_native_isa_x64_Reloc(codegen_native_isa_x64_Reloc** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_codegen_native_isa_x64_Reloc(codegen_native_isa_x64_Reloc** ptr);
+__attribute__((hot)) codegen_native_isa_x64_Reloc*** core_alloc_alloc_codegen_native_isa_x64_Reloc_ptr(long long count);
+__attribute__((hot)) codegen_native_isa_x64_Reloc*** core_alloc_resize_codegen_native_isa_x64_Reloc_ptr(codegen_native_isa_x64_Reloc*** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_codegen_native_isa_x64_Reloc_ptr(codegen_native_isa_x64_Reloc*** ptr);
+__attribute__((hot)) core_map_MapNode_str_codegen_native_isa_x64_Reloc** core_alloc_alloc_core_map_MapNode_str_codegen_native_isa_x64_Reloc(long long count);
+__attribute__((hot)) void core_alloc_dealloc_core_map_MapNode_str_codegen_native_isa_x64_Reloc(core_map_MapNode_str_codegen_native_isa_x64_Reloc** ptr);
+
+typedef Jump codegen_native_isa_x64_Jump;
+struct core_vec_Vec_codegen_native_isa_x64_Jump { codegen_native_isa_x64_Jump** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_codegen_native_isa_x64_Jump core_vec_Vec_codegen_native_isa_x64_Jump;
+struct core_vec_Vec_codegen_native_isa_x64_Jump_ptr { codegen_native_isa_x64_Jump*** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_codegen_native_isa_x64_Jump_ptr core_vec_Vec_codegen_native_isa_x64_Jump_ptr;
+struct core_map_MapNode_str_codegen_native_isa_x64_Jump { char* key; codegen_native_isa_x64_Jump* value; struct core_map_MapNode_str_codegen_native_isa_x64_Jump* next; };
+typedef struct core_map_MapNode_str_codegen_native_isa_x64_Jump core_map_MapNode_str_codegen_native_isa_x64_Jump;
+struct core_map_Map_str_codegen_native_isa_x64_Jump { core_map_MapNode_str_codegen_native_isa_x64_Jump** buckets; long long capacity; long long len; };
+typedef struct core_map_Map_str_codegen_native_isa_x64_Jump core_map_Map_str_codegen_native_isa_x64_Jump;
+__attribute__((hot)) codegen_native_isa_x64_Jump** core_alloc_alloc_codegen_native_isa_x64_Jump(long long count);
+__attribute__((hot)) codegen_native_isa_x64_Jump** core_alloc_resize_codegen_native_isa_x64_Jump(codegen_native_isa_x64_Jump** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_codegen_native_isa_x64_Jump(codegen_native_isa_x64_Jump** ptr);
+__attribute__((hot)) codegen_native_isa_x64_Jump*** core_alloc_alloc_codegen_native_isa_x64_Jump_ptr(long long count);
+__attribute__((hot)) codegen_native_isa_x64_Jump*** core_alloc_resize_codegen_native_isa_x64_Jump_ptr(codegen_native_isa_x64_Jump*** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_codegen_native_isa_x64_Jump_ptr(codegen_native_isa_x64_Jump*** ptr);
+__attribute__((hot)) core_map_MapNode_str_codegen_native_isa_x64_Jump** core_alloc_alloc_core_map_MapNode_str_codegen_native_isa_x64_Jump(long long count);
+__attribute__((hot)) void core_alloc_dealloc_core_map_MapNode_str_codegen_native_isa_x64_Jump(core_map_MapNode_str_codegen_native_isa_x64_Jump** ptr);
+
+typedef EncodedFunc codegen_native_isa_x64_EncodedFunc;
+struct core_vec_Vec_codegen_native_isa_x64_EncodedFunc { codegen_native_isa_x64_EncodedFunc** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_codegen_native_isa_x64_EncodedFunc core_vec_Vec_codegen_native_isa_x64_EncodedFunc;
+struct core_vec_Vec_codegen_native_isa_x64_EncodedFunc_ptr { codegen_native_isa_x64_EncodedFunc*** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_codegen_native_isa_x64_EncodedFunc_ptr core_vec_Vec_codegen_native_isa_x64_EncodedFunc_ptr;
+struct core_map_MapNode_str_codegen_native_isa_x64_EncodedFunc { char* key; codegen_native_isa_x64_EncodedFunc* value; struct core_map_MapNode_str_codegen_native_isa_x64_EncodedFunc* next; };
+typedef struct core_map_MapNode_str_codegen_native_isa_x64_EncodedFunc core_map_MapNode_str_codegen_native_isa_x64_EncodedFunc;
+struct core_map_Map_str_codegen_native_isa_x64_EncodedFunc { core_map_MapNode_str_codegen_native_isa_x64_EncodedFunc** buckets; long long capacity; long long len; };
+typedef struct core_map_Map_str_codegen_native_isa_x64_EncodedFunc core_map_Map_str_codegen_native_isa_x64_EncodedFunc;
+__attribute__((hot)) codegen_native_isa_x64_EncodedFunc** core_alloc_alloc_codegen_native_isa_x64_EncodedFunc(long long count);
+__attribute__((hot)) codegen_native_isa_x64_EncodedFunc** core_alloc_resize_codegen_native_isa_x64_EncodedFunc(codegen_native_isa_x64_EncodedFunc** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_codegen_native_isa_x64_EncodedFunc(codegen_native_isa_x64_EncodedFunc** ptr);
+__attribute__((hot)) codegen_native_isa_x64_EncodedFunc*** core_alloc_alloc_codegen_native_isa_x64_EncodedFunc_ptr(long long count);
+__attribute__((hot)) codegen_native_isa_x64_EncodedFunc*** core_alloc_resize_codegen_native_isa_x64_EncodedFunc_ptr(codegen_native_isa_x64_EncodedFunc*** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_codegen_native_isa_x64_EncodedFunc_ptr(codegen_native_isa_x64_EncodedFunc*** ptr);
+__attribute__((hot)) core_map_MapNode_str_codegen_native_isa_x64_EncodedFunc** core_alloc_alloc_core_map_MapNode_str_codegen_native_isa_x64_EncodedFunc(long long count);
+__attribute__((hot)) void core_alloc_dealloc_core_map_MapNode_str_codegen_native_isa_x64_EncodedFunc(core_map_MapNode_str_codegen_native_isa_x64_EncodedFunc** ptr);
+
+typedef TextReloc codegen_native_elf_TextReloc;
+struct core_vec_Vec_codegen_native_elf_TextReloc { codegen_native_elf_TextReloc** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_codegen_native_elf_TextReloc core_vec_Vec_codegen_native_elf_TextReloc;
+struct core_vec_Vec_codegen_native_elf_TextReloc_ptr { codegen_native_elf_TextReloc*** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_codegen_native_elf_TextReloc_ptr core_vec_Vec_codegen_native_elf_TextReloc_ptr;
+struct core_map_MapNode_str_codegen_native_elf_TextReloc { char* key; codegen_native_elf_TextReloc* value; struct core_map_MapNode_str_codegen_native_elf_TextReloc* next; };
+typedef struct core_map_MapNode_str_codegen_native_elf_TextReloc core_map_MapNode_str_codegen_native_elf_TextReloc;
+struct core_map_Map_str_codegen_native_elf_TextReloc { core_map_MapNode_str_codegen_native_elf_TextReloc** buckets; long long capacity; long long len; };
+typedef struct core_map_Map_str_codegen_native_elf_TextReloc core_map_Map_str_codegen_native_elf_TextReloc;
+__attribute__((hot)) codegen_native_elf_TextReloc** core_alloc_alloc_codegen_native_elf_TextReloc(long long count);
+__attribute__((hot)) codegen_native_elf_TextReloc** core_alloc_resize_codegen_native_elf_TextReloc(codegen_native_elf_TextReloc** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_codegen_native_elf_TextReloc(codegen_native_elf_TextReloc** ptr);
+__attribute__((hot)) codegen_native_elf_TextReloc*** core_alloc_alloc_codegen_native_elf_TextReloc_ptr(long long count);
+__attribute__((hot)) codegen_native_elf_TextReloc*** core_alloc_resize_codegen_native_elf_TextReloc_ptr(codegen_native_elf_TextReloc*** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_codegen_native_elf_TextReloc_ptr(codegen_native_elf_TextReloc*** ptr);
+__attribute__((hot)) core_map_MapNode_str_codegen_native_elf_TextReloc** core_alloc_alloc_core_map_MapNode_str_codegen_native_elf_TextReloc(long long count);
+__attribute__((hot)) void core_alloc_dealloc_core_map_MapNode_str_codegen_native_elf_TextReloc(core_map_MapNode_str_codegen_native_elf_TextReloc** ptr);
+
+typedef NativeGenerator codegen_native_NativeGenerator;
+struct core_vec_Vec_codegen_native_NativeGenerator { codegen_native_NativeGenerator** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_codegen_native_NativeGenerator core_vec_Vec_codegen_native_NativeGenerator;
+struct core_vec_Vec_codegen_native_NativeGenerator_ptr { codegen_native_NativeGenerator*** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_codegen_native_NativeGenerator_ptr core_vec_Vec_codegen_native_NativeGenerator_ptr;
+struct core_map_MapNode_str_codegen_native_NativeGenerator { char* key; codegen_native_NativeGenerator* value; struct core_map_MapNode_str_codegen_native_NativeGenerator* next; };
+typedef struct core_map_MapNode_str_codegen_native_NativeGenerator core_map_MapNode_str_codegen_native_NativeGenerator;
+struct core_map_Map_str_codegen_native_NativeGenerator { core_map_MapNode_str_codegen_native_NativeGenerator** buckets; long long capacity; long long len; };
+typedef struct core_map_Map_str_codegen_native_NativeGenerator core_map_Map_str_codegen_native_NativeGenerator;
+__attribute__((hot)) codegen_native_NativeGenerator** core_alloc_alloc_codegen_native_NativeGenerator(long long count);
+__attribute__((hot)) codegen_native_NativeGenerator** core_alloc_resize_codegen_native_NativeGenerator(codegen_native_NativeGenerator** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_codegen_native_NativeGenerator(codegen_native_NativeGenerator** ptr);
+__attribute__((hot)) codegen_native_NativeGenerator*** core_alloc_alloc_codegen_native_NativeGenerator_ptr(long long count);
+__attribute__((hot)) codegen_native_NativeGenerator*** core_alloc_resize_codegen_native_NativeGenerator_ptr(codegen_native_NativeGenerator*** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_codegen_native_NativeGenerator_ptr(codegen_native_NativeGenerator*** ptr);
+__attribute__((hot)) core_map_MapNode_str_codegen_native_NativeGenerator** core_alloc_alloc_core_map_MapNode_str_codegen_native_NativeGenerator(long long count);
+__attribute__((hot)) void core_alloc_dealloc_core_map_MapNode_str_codegen_native_NativeGenerator(core_map_MapNode_str_codegen_native_NativeGenerator** ptr);
 
 typedef MacroVal macros_MacroVal;
 struct core_vec_Vec_macros_MacroVal { macros_MacroVal* data; long long len; long long capacity; };

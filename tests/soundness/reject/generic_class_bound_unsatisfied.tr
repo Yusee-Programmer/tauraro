@@ -1,0 +1,18 @@
+# EXPECT: [G-1]
+# A generic CLASS bound `Box[T: Show]` requires the type argument to implement Show.
+# Dog has no show() method, so instantiating Box[Dog] is a hard error.
+interface Show:
+    def show(self) -> str
+
+class Dog:
+    pub n: str
+extend Dog:
+    pub def bark(self) -> str:
+        return "woof"
+
+class Box[T: Show]:
+    pub val: T
+
+def main():
+    mut b = Box[Dog]()
+    print(1)

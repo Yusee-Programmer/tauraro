@@ -1,0 +1,27 @@
+# native≡c differential corpus: list .index_of/.contains/.min/.max (int + str lists).
+def main():
+    mut xs = [3, 1, 4, 1, 5, 9]
+    print(xs.index_of(4))       # 2
+    print(xs.index_of(9))       # 5
+    print(xs.index_of(7))       # -1
+    print(xs.contains(5))       # true
+    print(xs.contains(8))       # false
+    print(xs.min())             # 1
+    print(xs.max())             # 9
+    print(xs.min_val())         # 1
+    print(xs.max_val())         # 9
+
+    mut names = ["bob", "alice", "carol"]
+    print(names.index_of("alice"))  # 1
+    print(names.index_of("dave"))   # -1
+    print(names.contains("carol"))  # true
+    print(names.contains("zoe"))    # false
+
+    mut single = [42]
+    print(single.min())         # 42
+    print(single.max())         # 42
+
+    # find max via method, then use it
+    mut data = [10, 30, 20]
+    mut peak = data.max()
+    print(peak + 5)             # 35

@@ -1,0 +1,16 @@
+# native≡c differential corpus: integer division / floor-div / modulo.
+def main():
+    print(20 / 3)           # 6
+    print(20 // 3)          # 6
+    print(20 % 3)           # 2
+    print(100 / 10)         # 10
+    print(17 % 5)           # 2
+    mut a = 84
+    mut b = 5
+    print(a / b)            # 16
+    print(a % b)            # 4
+    mut total = 0
+    for i in range(1, 10):
+        if i % 2 == 0:
+            total = total + i
+    print(total)            # 2+4+6+8 = 20

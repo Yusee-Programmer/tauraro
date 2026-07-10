@@ -1,0 +1,9 @@
+# native≡c differential corpus: string literals, variables, concatenation.
+def main():
+    print("hello world")
+    mut a = "foo"
+    mut b = "bar"
+    print(a + b)            # foobar
+    mut c = a + b
+    print(c + "!")          # foobar!
+    print(a + " " + b)      # foo bar

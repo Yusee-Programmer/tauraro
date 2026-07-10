@@ -125,6 +125,25 @@ The linker script is a linker *input*, not code — but you should not hand-writ
 tauraroc firmware.tr --freestanding --emit c --emit-ld build/app.ld
 ```
 
+### Target architectures
+
+The `@entry` boot code and the generated linker script are architecture-specific, selected by `--target`:
+
+| Arch | Flag | Boot code the compiler emits | Linker `ENTRY` / load |
+| --- | --- | --- | --- |
+| **Cortex-M** (default) | *(none)* or `--target embedded-arm*` | reset trampoline + `.isr_vector` table (`{ &_stack_top, _tr_reset }`) | `_tr_reset` at FLASH `0x0`, RAM `0x20000000` |
+| **RISC-V** (rv64) | `--target embedded-riscv64` | `_start` (naked): parks harts ≠ 0, sets `sp`, clears `.bss`, calls the entry | `_start` in RAM at `0x80000000` (qemu `virt`) |
+
+```bash
+# RISC-V bare metal (qemu 'virt'):
+tauraroc firmware.tr --freestanding --target embedded-riscv64 --emit c --emit-ld build/app.ld
+riscv64-unknown-elf-gcc -march=rv64imac -mabi=lp64 -mcmodel=medany -nostdlib -ffreestanding \
+    -T build/app.ld -I build/include -o app.elf $(find build -name '*.c') -lgcc
+qemu-system-riscv64 -machine virt -bios none -nographic -kernel app.elf
+```
+
+See [`examples/freestanding/riscv_hello/`](../../../examples/freestanding/riscv_hello) — a no-OS RISC-V program (bump allocator over a `[u8; N]` arena + NS16550 UART) that prints `fib(20)` on bare metal. Both the Cortex-M and RISC-V paths are link-and-run gated in CI under qemu.
+
 ---
 
 ## MMIO — writing device drivers

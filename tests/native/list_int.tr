@@ -1,0 +1,14 @@
+# native≡c differential corpus: List[int] literal / push / get / index / len.
+def main():
+    mut xs = [1, 2, 3]
+    xs.push(4)
+    xs.append(5)
+    print(xs.len)           # 5
+    print(xs.get(0))        # 1
+    print(xs[4])            # 5
+    mut i = 0
+    mut sum = 0
+    while i < xs.len:
+        sum = sum + xs[i]
+        i = i + 1
+    print(sum)              # 15

@@ -1,0 +1,30 @@
+# native≡c differential corpus: typed function params/returns (str/bool/list) + 6-arg calls.
+def greet(name: str) -> str:
+    return "hello, " + name
+
+def is_even(n: int) -> bool:
+    return n % 2 == 0
+
+def sum6(a: int, b: int, c: int, d: int, e: int, f: int) -> int:
+    return a + b + c + d + e + f
+
+def pick(flag: bool, x: int, y: int) -> int:
+    if flag:
+        return x
+    return y
+
+def first(xs: List[int]) -> int:
+    return xs[0]
+
+def main():
+    print(greet("world"))       # hello, world
+    print(greet("tauraro"))     # hello, tauraro
+    print(is_even(4))           # true
+    print(is_even(7))           # false
+    print(sum6(1, 2, 3, 4, 5, 6))   # 21
+    print(pick(True, 100, 200))     # 100
+    print(pick(False, 100, 200))    # 200
+    mut ns = [42, 43, 44]
+    print(first(ns))            # 42
+    mut g = greet("x")
+    print(g + "!")              # hello, x!

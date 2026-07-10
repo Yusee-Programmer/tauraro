@@ -1,0 +1,32 @@
+# native≡c differential corpus: bitwise operators + int utility methods.
+def main():
+    print(12 & 10)          # 8
+    print(12 | 10)          # 14
+    print(12 ^ 10)          # 6
+    print(1 << 4)           # 16
+    print(256 >> 2)         # 64
+    print(~5)               # -6
+    print(~0)               # -1
+
+    mut flags = 0
+    flags = flags | 1
+    flags = flags | 4
+    print(flags)            # 5
+    print(flags & 1)        # 1
+    print(flags & 2)        # 0
+
+    print((255).to_hex())   # ff
+    print((255).to_hex_upper()) # FF
+    print((64).to_oct())    # 100
+    print((10).to_bin())    # 1010
+    print((0).to_bin())     # 0
+
+    print((7).sign())       # 1
+    print((-3).sign())      # -1
+    print((0).sign())       # 0
+
+    print((12).gcd(18))     # 6
+    print((4).lcm(6))       # 12
+    print((15).clamp(0, 10)) # 10
+    print((-5).clamp(0, 10)) # 0
+    print((7).clamp(0, 10))  # 7

@@ -1,0 +1,1452 @@
+# @trusted: compiler systems module.
+# src/taumir/lower.tr — HIR -> LIR lowering. Covers integer + string + List[int]
+# programs: user functions (params, return values, calls incl. recursion), constants,
+# +/-/*, // /  % integer division/modulo, comparisons, and/or/not, unary minus, bool
+# literals, string literals/variables/concatenation/comparison, len()/abs()/min()/max(),
+# `x in list` membership, List[int]/List[str] literals / .push/.append / .get / xs[i] /
+# .len / iteration, typed user functions (up to 6 args), augmented assignment, local
+# variables, if / elif / while / for control flow with break/continue, and single- or
+# multi-argument print. A per-vreg/var value-type tag
+# (0 = int/i64, 1 = str/char*, 2 = List[int], 3 = List[str], 4 = bool) routes print to
+# _tr_rt_print_{i64,cstr,bool}, "+" to add vs str_concat, comparison to int-cmp vs str_cmp,
+# and method/index/.len/len() to the _tr_rt_{list,str}_* runtime. Anything else sets
+# LModule.ok = false so the native driver falls back to C.
+
+from hir import HirProgram, HirFunction, HirStmt, HirExpr, HirBlock, hir_expr_type
+from taumir.ir import LModule, LFunc, LInst, LTerm
+from ast import AstType
+from core.alloc import alloc
+
+# Reinterpret an f64 literal as its raw i64 bit pattern (emitted as an immediate, then
+# reloaded into an xmm register for float ops). lower.tr is @trusted, so the raw-pointer
+# reinterpret is allowed.
+def _f64_bits(v: float) -> int:
+    unsafe:
+        mut p = alloc[float](1)
+        p.write(v)
+        mut ip = p as Pointer[int]
+        return ip.read()
+
+# int vreg -> f64 vreg (cvtsi2sd).
+def _promote_f(lf: LFunc, v: int) -> int:
+    mut d = lf.new_vreg()
+    lf.emit(LInst.IIToF(d, v))
+    lf.set_vreg_type(d, 5)
+    return d
+
+def _print_i64_sym() -> str:
+    return "_tr_rt_print_i64"
+
+# Value-type tags: 0=int/i64, 1=str/char*, 2=List[int], 3=List[str], 4=bool, 5=f64,
+# 6=Dict[str,int], 7=Dict[int,int].
+def _is_list_tag(t: int) -> bool:
+    return t == 2 or t == 3
+
+def _is_dict_tag(t: int) -> bool:
+    return t == 6 or t == 7
+
+def _dict_key_is_str(t: int) -> bool:
+    return t == 6
+
+def _dict_new_sym(t: int) -> str:
+    if t == 6: return "_tr_rt_sdict_new"
+    return "_tr_rt_idict_new"
+
+# Dict runtime symbol for op ("set"/"get"/"has"/"len") given the dict tag.
+def _dict_sym(t: int, op: str) -> str:
+    mut pfx = "_tr_rt_idict_"
+    if t == 6: pfx = "_tr_rt_sdict_"
+    return pfx + op
+
+def _list_elem_tag(t: int) -> int:      # element value-type held by a list handle
+    if t == 3: return 1
+    return 0
+
+def _list_tag_for_elem(et: int) -> int: # list handle tag that holds element type `et`
+    if et == 1: return 3
+    return 2
+
+def _is_cmp_op(op: str) -> bool:
+    return op == "<" or op == ">" or op == "==" or op == "!=" or op == "<=" or op == ">="
+
+def _is_int_typename(n: str) -> bool:
+    if n == "int" or n == "i64" or n == "i32" or n == "i16" or n == "i8": return true
+    if n == "usize" or n == "isize" or n == "u64" or n == "u32" or n == "u16" or n == "u8": return true
+    return false
+
+# Map a declared AstType to a native value-type tag, or -1 if the native backend can't
+# represent it (float, class, Dict, etc.) — callers treat -1 as "fall back to C".
+def _ast_type_tag(ty: AstType) -> int:
+    mut n = ty.name
+    if n == "str" or n == "String": return 1
+    if n == "bool": return 4
+    if n == "List" or n == "Vec":
+        if ty.args.len > 0:
+            mut et = ty.args.get(0).read()
+            if et.name == "str" or et.name == "String": return 3
+            if _is_int_typename(et.name): return 2
+            return -1
+        return 2
+    if n == "Dict" or n == "Map":
+        if ty.args.len >= 2:
+            mut kt = ty.args.get(0).read()
+            mut vt = ty.args.get(1).read()
+            if _is_int_typename(vt.name):        # only int values natively
+                if kt.name == "str" or kt.name == "String": return 6
+                if _is_int_typename(kt.name): return 7
+        return -1
+    if _is_int_typename(n): return 0
+    if n == "void" or n == "" or n == "None": return 0   # void return (no annotation)
+    return -1
+
+pub def lower_to_lir(prog: HirProgram) -> LModule:
+    mut m = LModule.init()
+    mut i = 0
+    while i < prog.functions.len:
+        mut f0 = prog.functions.get(i)
+        if f0.class_name == "" and not f0.is_extern:
+            m.fn_names.push(f0.name)
+            m.fn_ret.push(_ast_type_tag(f0.ret_ty))
+        i = i + 1
+    # Module-level globals: register each top-level var (name + type) so functions can
+    # reference them; the init statements run at the start of main.
+    mut ti = 0
+    while ti < prog.top_level_stmts.len:
+        if not _register_global(m, prog.top_level_stmts.get(ti)):
+            m.ok = false
+            return m
+        ti = ti + 1
+    i = 0
+    while i < prog.functions.len:
+        mut f = prog.functions.get(i)
+        if f.class_name == "" and not f.is_extern:
+            _lir_lower_function(m, f)
+            if not m.ok: return m
+        i = i + 1
+    return m
+
+# Register a top-level statement as a module global (SLet/SAssign of a supported type).
+# Line markers/pass are ignored; anything else -> the module falls back to C (we must not
+# silently skip top-level init code).
+def _register_global(m: LModule, s: Pointer[HirStmt]) -> bool:
+    match s.read():
+        case HirStmt.SLineMarker(_): return true
+        case HirStmt.SPass: return true
+        case HirStmt.SLet(name, _, _, _, _, _, val):
+            if val as usize == 0 as usize: return false
+            mut tag = _ast_type_tag(hir_expr_type(val))
+            if tag < 0: return false
+            m.add_global(name, tag)
+            m.global_inits.push(s)
+            return true
+        case HirStmt.SAssign(target, val):
+            mut nm = _ident_name(target)
+            if nm == "": return false
+            mut tag2 = _ast_type_tag(hir_expr_type(val))
+            if tag2 < 0: return false
+            m.add_global(nm, tag2)
+            m.global_inits.push(s)
+            return true
+        case _:
+            return false
+
+# Lower one global-init statement as a store to its .bss slot (emitted at main's entry).
+def _lower_global_init(m: LModule, lf: LFunc, s: Pointer[HirStmt]) -> bool:
+    match s.read():
+        case HirStmt.SLineMarker(_): return true
+        case HirStmt.SPass: return true
+        case HirStmt.SLet(name, _, _, _, _, _, val):
+            mut v = lower_expr(m, lf, val)
+            if v < 0: return false
+            mut gidx = m.global_index(name)
+            if gidx < 0: return false
+            lf.emit(LInst.IStoreGlobal(gidx, v))
+            return true
+        case HirStmt.SAssign(target, val):
+            mut v2 = lower_expr(m, lf, val)
+            if v2 < 0: return false
+            mut gidx2 = m.global_index(_ident_name(target))
+            if gidx2 < 0: return false
+            lf.emit(LInst.IStoreGlobal(gidx2, v2))
+            return true
+        case _:
+            return false
+
+def _lir_lower_function(m: LModule, f: HirFunction):
+    mut lf = LFunc.init(f.name)
+    if f.name == "main": lf.is_main = true
+    mut pi = 0
+    while pi < f.params.len:
+        mut p = f.params.get(pi)
+        if p.name != "self":
+            mut ptag = _ast_type_tag(p.ty)
+            if ptag < 0:                       # unsupported param type -> fall back to C
+                m.ok = false
+                return
+            lf.params.push(p.name)
+            lf.add_var(p.name)
+            lf.set_var_type(p.name, ptag)
+        pi = pi + 1
+    lf.set_cur(lf.new_block())
+    if lf.is_main:                         # run module global inits before main's body
+        mut gi = 0
+        while gi < m.global_inits.len:
+            if not _lower_global_init(m, lf, m.global_inits.get(gi)):
+                m.ok = false
+                return
+            gi = gi + 1
+    if not lower_block(m, lf, f.body):
+        m.ok = false
+        return
+    lf.set_term(LTerm.TRetInt(0))
+    m.funcs.push(lf)
+
+def lower_block(m: LModule, lf: LFunc, hb: HirBlock) -> bool:
+    mut si = 0
+    while si < hb.stmts.len:
+        if not lower_stmt(m, lf, hb.stmts.get(si)): return false
+        si = si + 1
+    return true
+
+# -- statements ---------------------------------------------------------------------
+def lower_stmt(m: LModule, lf: LFunc, s: Pointer[HirStmt]) -> bool:
+    match s.read():
+        case HirStmt.SLineMarker(_): return true
+        case HirStmt.SPass: return true
+        case HirStmt.SAutoDrop(_, _): return true   # native has no ARC yet (leaks; C/LLVM own it)
+        case HirStmt.SFree(_): return true
+        case HirStmt.SReturn(val):
+            if val as usize != 0 as usize:
+                mut rv = lower_expr(m, lf, val)
+                if rv < 0: return false
+                lf.set_term(LTerm.TRetVal(rv))
+            else:
+                lf.set_term(LTerm.TRetInt(0))
+            return true
+        case HirStmt.SLet(name, _, _, _, _, _, val):
+            if val as usize == 0 as usize: return false
+            mut v = lower_expr(m, lf, val)
+            if v < 0: return false
+            lf.add_var(name)
+            lf.set_var_type(name, lf.vreg_type(v))
+            lf.emit(LInst.IStoreVar(name, v))
+            return true
+        case HirStmt.SAssign(target, val):
+            # d[k] = v / xs[i] = v  lower to SAssign(EMethodCall(obj, "get_index", [k]), v).
+            match target.read():
+                case HirExpr.EMethodCall(mobj, mmeth, midx, _):
+                    if mmeth == "get_index" and midx.len == 1:
+                        return _lower_index_set(m, lf, mobj, midx.get(0), val)
+                    return false
+                case HirExpr.EIndex(iobj, iidx, _):
+                    return _lower_index_set(m, lf, iobj, iidx, val)
+                case _:
+                    pass
+            mut tn = _ident_name(target)
+            if tn == "": return false
+            mut v2 = lower_expr(m, lf, val)
+            if v2 < 0: return false
+            if lf.var_index(tn) < 0 and m.is_global(tn):    # assign to a module global
+                lf.emit(LInst.IStoreGlobal(m.global_index(tn), v2))
+                return true
+            lf.add_var(tn)
+            lf.set_var_type(tn, lf.vreg_type(v2))
+            lf.emit(LInst.IStoreVar(tn, v2))
+            return true
+        case HirStmt.SIf(cond, then_b, else_b):
+            mut cv = lower_expr(m, lf, cond)
+            if cv < 0: return false
+            mut then_id = lf.new_block()
+            mut else_id = lf.new_block()
+            mut end_id  = lf.new_block()
+            lf.set_term(LTerm.TCondBr(cv, then_id, else_id))
+            lf.set_cur(then_id)
+            if not lower_block(m, lf, then_b): return false
+            lf.set_term(LTerm.TBr(end_id))
+            lf.set_cur(else_id)
+            if not lower_block(m, lf, else_b): return false
+            lf.set_term(LTerm.TBr(end_id))
+            lf.set_cur(end_id)
+            return true
+        case HirStmt.SWhile(cond, body):
+            mut hdr = lf.new_block()
+            mut bdy = lf.new_block()
+            mut ext = lf.new_block()
+            lf.set_term(LTerm.TBr(hdr))
+            lf.set_cur(hdr)
+            mut cv2 = lower_expr(m, lf, cond)
+            if cv2 < 0: return false
+            lf.set_term(LTerm.TCondBr(cv2, bdy, ext))
+            lf.set_cur(bdy)
+            lf.loop_cont.push(hdr)          # continue -> re-test condition
+            lf.loop_brk.push(ext)
+            mut wok = lower_block(m, lf, body)
+            lf.loop_cont.pop()
+            lf.loop_brk.pop()
+            if not wok: return false
+            lf.set_term(LTerm.TBr(hdr))
+            lf.set_cur(ext)
+            return true
+        case HirStmt.SBreak(bval):
+            if bval as usize != 0 as usize: return false   # break-with-value unsupported
+            if lf.loop_brk.len == 0: return false
+            lf.set_term(LTerm.TBr(lf.loop_brk.get(lf.loop_brk.len - 1)))
+            lf.set_cur(lf.new_block())                      # isolate any (dead) trailing stmts
+            return true
+        case HirStmt.SContinue:
+            if lf.loop_cont.len == 0: return false
+            lf.set_term(LTerm.TBr(lf.loop_cont.get(lf.loop_cont.len - 1)))
+            lf.set_cur(lf.new_block())
+            return true
+        case HirStmt.SFor(var, iter, body):
+            return _lower_for(m, lf, var, iter, body)
+        case HirStmt.SExpr(e):
+            return lower_expr_stmt(m, lf, e)
+        case _:
+            return false
+
+# for-loops lower to counting/index while-loops (no native iterator protocol).
+#   for i in range(a, b):  -> i=a; while i<b: <body>; i=i+1
+#   for x in <List[int]>:  -> idx=0; while idx<xs.len: x=xs[idx]; <body>; idx=idx+1
+def _lower_for(m: LModule, lf: LFunc, var: str, iter: Pointer[HirExpr], body: HirBlock) -> bool:
+    match iter.read():
+        case HirExpr.ECall(callee, args, _):
+            if _ident_name(callee) == "range":
+                return _lower_for_range(m, lf, var, args, body)
+        case _:
+            pass
+    return _lower_for_list(m, lf, var, iter, body)
+
+def _lower_for_range(m: LModule, lf: LFunc, var: str, args: Vec[Pointer[HirExpr]], body: HirBlock) -> bool:
+    if args.len < 1 or args.len > 3: return false
+    mut stepv = 1
+    mut cmp = "<"                        # ascending: i < end
+    if args.len == 3:
+        if not _is_const_int(args.get(2)): return false   # need static direction
+        stepv = _const_int_val(args.get(2))
+        if stepv == 0: return false
+        if stepv < 0: cmp = ">"          # descending: i > end
+    mut sv = -1
+    mut end_expr = args.get(0)
+    if args.len == 1:
+        mut z = lf.new_vreg()
+        lf.emit(LInst.IConst(z, 0))
+        sv = z
+    else:
+        sv = lower_expr(m, lf, args.get(0))
+        if sv < 0: return false
+        end_expr = args.get(1)
+    lf.add_var(var)
+    lf.set_var_type(var, 0)
+    lf.emit(LInst.IStoreVar(var, sv))
+    mut hdr = lf.new_block()
+    mut bdy = lf.new_block()
+    mut latch = lf.new_block()
+    mut ext = lf.new_block()
+    lf.set_term(LTerm.TBr(hdr))
+    lf.set_cur(hdr)
+    mut vv = lf.new_vreg()
+    lf.emit(LInst.ILoadVar(vv, var))
+    mut ev = lower_expr(m, lf, end_expr)
+    if ev < 0: return false
+    mut cond = lf.new_vreg()
+    lf.emit(LInst.IBinOp(cond, cmp, vv, ev))
+    lf.set_term(LTerm.TCondBr(cond, bdy, ext))
+    lf.set_cur(bdy)
+    lf.loop_cont.push(latch)            # continue -> latch (runs the increment)
+    lf.loop_brk.push(ext)
+    mut rok = lower_block(m, lf, body)
+    lf.loop_cont.pop()
+    lf.loop_brk.pop()
+    if not rok: return false
+    lf.set_term(LTerm.TBr(latch))
+    lf.set_cur(latch)
+    _emit_add_const(lf, var, stepv)
+    lf.set_term(LTerm.TBr(hdr))
+    lf.set_cur(ext)
+    return true
+
+def _lower_for_list(m: LModule, lf: LFunc, var: str, iter: Pointer[HirExpr], body: HirBlock) -> bool:
+    mut lv = lower_expr(m, lf, iter)
+    if lv < 0: return false
+    mut ltag = lf.vreg_type(lv)
+    if not _is_list_tag(ltag): return false           # only List[int]/List[str] iteration
+    mut elem_t = _list_elem_tag(ltag)
+    mut uid = lf.fresh_id()
+    mut hname = "__forlist" + _lir_itoa(uid)
+    mut iname = "__foridx" + _lir_itoa(uid)
+    lf.add_var(hname)
+    lf.set_var_type(hname, ltag)
+    lf.emit(LInst.IStoreVar(hname, lv))
+    mut z = lf.new_vreg()
+    lf.emit(LInst.IConst(z, 0))
+    lf.add_var(iname)
+    lf.set_var_type(iname, 0)
+    lf.emit(LInst.IStoreVar(iname, z))
+    mut hdr = lf.new_block()
+    mut bdy = lf.new_block()
+    mut latch = lf.new_block()
+    mut ext = lf.new_block()
+    lf.set_term(LTerm.TBr(hdr))
+    lf.set_cur(hdr)
+    mut hv = lf.new_vreg()
+    lf.emit(LInst.ILoadVar(hv, hname))
+    m.add_extern("_tr_rt_list_len")
+    mut la = Vec[int].init(1)
+    la.push(hv)
+    mut lenv = lf.new_vreg()
+    lf.emit(LInst.ICall(lenv, "_tr_rt_list_len", la))
+    mut iv = lf.new_vreg()
+    lf.emit(LInst.ILoadVar(iv, iname))
+    mut cond = lf.new_vreg()
+    lf.emit(LInst.IBinOp(cond, "<", iv, lenv))
+    lf.set_term(LTerm.TCondBr(cond, bdy, ext))
+    lf.set_cur(bdy)
+    mut hv2 = lf.new_vreg()
+    lf.emit(LInst.ILoadVar(hv2, hname))
+    mut iv2 = lf.new_vreg()
+    lf.emit(LInst.ILoadVar(iv2, iname))
+    mut xval = _list_get(m, lf, hv2, iv2)
+    lf.set_vreg_type(xval, elem_t)
+    lf.add_var(var)
+    lf.set_var_type(var, elem_t)
+    lf.emit(LInst.IStoreVar(var, xval))
+    lf.loop_cont.push(latch)            # continue -> latch (bumps the index)
+    lf.loop_brk.push(ext)
+    mut fok = lower_block(m, lf, body)
+    lf.loop_cont.pop()
+    lf.loop_brk.pop()
+    if not fok: return false
+    lf.set_term(LTerm.TBr(latch))
+    lf.set_cur(latch)
+    _emit_incr(lf, iname)
+    lf.set_term(LTerm.TBr(hdr))
+    lf.set_cur(ext)
+    return true
+
+# name = name + 1  (loop counter bump).
+def _emit_incr(lf: LFunc, name: str):
+    mut cur = lf.new_vreg()
+    lf.emit(LInst.ILoadVar(cur, name))
+    mut one = lf.new_vreg()
+    lf.emit(LInst.IConst(one, 1))
+    mut inc = lf.new_vreg()
+    lf.emit(LInst.IBinOp(inc, "+", cur, one))
+    lf.emit(LInst.IStoreVar(name, inc))
+
+def _ident_name(e: Pointer[HirExpr]) -> str:
+    match e.read():
+        case HirExpr.EIdent(n, _, _): return n
+        case _: return ""
+
+# d[k] = v (dict set) or xs[i] = v (list element store).
+def _lower_index_set(m: LModule, lf: LFunc, obj: Pointer[HirExpr], idx: Pointer[HirExpr], val: Pointer[HirExpr]) -> bool:
+    mut ov = lower_expr(m, lf, obj)
+    if ov < 0: return false
+    mut ovt = lf.vreg_type(ov)
+    if _is_dict_tag(ovt):
+        mut kv = lower_expr(m, lf, idx)
+        if kv < 0: return false
+        if _dict_key_is_str(ovt) and lf.vreg_type(kv) != 1: return false
+        if not _dict_key_is_str(ovt) and lf.vreg_type(kv) != 0: return false
+        mut vv = lower_expr(m, lf, val)
+        if vv < 0 or lf.vreg_type(vv) != 0: return false
+        mut ssym = _dict_sym(ovt, "set")
+        m.add_extern(ssym)
+        mut sa = Vec[int].init(3)
+        sa.push(ov)
+        sa.push(kv)
+        sa.push(vv)
+        lf.emit(LInst.ICall(-1, ssym, sa))
+        return true
+    if _is_list_tag(ovt):
+        mut iv = lower_expr(m, lf, idx)
+        if iv < 0 or lf.vreg_type(iv) != 0: return false
+        mut lvv = lower_expr(m, lf, val)
+        if lvv < 0 or lf.vreg_type(lvv) != _list_elem_tag(ovt): return false
+        m.add_extern("_tr_rt_list_set_i64")
+        mut la = Vec[int].init(3)
+        la.push(ov)
+        la.push(iv)
+        la.push(lvv)
+        lf.emit(LInst.ICall(-1, "_tr_rt_list_set_i64", la))
+        return true
+    return false
+
+# The no-newline writer symbol for a value's type tag (multi-arg print).
+def _write_sym(t: int) -> str:
+    if t == 1: return "_tr_rt_write_cstr"
+    if t == 4: return "_tr_rt_write_bool"
+    return "_tr_rt_write_i64"
+
+def _emit_call0(m: LModule, lf: LFunc, sym: str):
+    m.add_extern(sym)
+    lf.emit(LInst.ICall(-1, sym, Vec[int].init(0)))
+
+# print(...) — Python semantics: each arg written with its type-correct format, single
+# space between, one trailing newline. Single-arg keeps the newline-appending print_*.
+def _lower_print(m: LModule, lf: LFunc, args: Vec[Pointer[HirExpr]]) -> bool:
+    if args.len == 0:
+        _emit_call0(m, lf, "_tr_rt_write_nl")
+        return true
+    if args.len == 1:
+        mut av = lower_expr(m, lf, args.get(0))
+        if av < 0: return false
+        mut avt = lf.vreg_type(av)
+        if _is_list_tag(avt): return false     # printing a whole list -> fall back to C
+        if avt == 5:                           # print(f64) -> "%g\n" (arg in xmm0)
+            m.add_extern("_tr_rt_print_f64")
+            lf.emit(LInst.IFCall1(-1, "_tr_rt_print_f64", av))
+            return true
+        mut sym = _print_i64_sym()
+        if avt == 1: sym = "_tr_rt_print_cstr"
+        elif avt == 4: sym = "_tr_rt_print_bool"
+        m.add_extern(sym)
+        mut cargs = Vec[int].init(1)
+        cargs.push(av)
+        lf.emit(LInst.ICall(-1, sym, cargs))
+        return true
+    mut pi = 0
+    while pi < args.len:
+        if pi > 0: _emit_call0(m, lf, "_tr_rt_write_sp")
+        mut pv = lower_expr(m, lf, args.get(pi))
+        if pv < 0: return false
+        mut pvt = lf.vreg_type(pv)
+        if _is_list_tag(pvt): return false
+        if pvt == 5:
+            m.add_extern("_tr_rt_write_f64")
+            lf.emit(LInst.IFCall1(-1, "_tr_rt_write_f64", pv))
+        else:
+            mut wsym = _write_sym(pvt)
+            m.add_extern(wsym)
+            mut wargs = Vec[int].init(1)
+            wargs.push(pv)
+            lf.emit(LInst.ICall(-1, wsym, wargs))
+        pi = pi + 1
+    _emit_call0(m, lf, "_tr_rt_write_nl")
+    return true
+
+# A bare expression statement: print(<expr>) or a user call whose result is discarded.
+def lower_expr_stmt(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> bool:
+    match e.read():
+        case HirExpr.ECall(callee, args, _):
+            mut fname = _ident_name(callee)
+            if fname == "print":
+                return _lower_print(m, lf, args)
+            mut r = lower_expr(m, lf, e)
+            return r >= 0
+        case HirExpr.EMethodCall(_, _, _, _):     # e.g. xs.push(v) — value discarded
+            mut rm = lower_expr(m, lf, e)
+            return rm >= 0
+        case _:
+            return false
+
+# -- expressions: returns the vreg holding the value, or -1 if unsupported ----------
+def _int_op(op: str) -> bool:
+    if op == "+" or op == "-" or op == "*" or op == "/" or op == "//" or op == "%": return true
+    if op == "&" or op == "|" or op == "^" or op == "<<" or op == ">>": return true
+    if op == "<" or op == ">" or op == "==" or op == "!=" or op == "<=" or op == ">=": return true
+    return false
+
+def _lir_digit(d: int) -> str:
+    if d == 0: return "0"
+    if d == 1: return "1"
+    if d == 2: return "2"
+    if d == 3: return "3"
+    if d == 4: return "4"
+    if d == 5: return "5"
+    if d == 6: return "6"
+    if d == 7: return "7"
+    if d == 8: return "8"
+    return "9"
+
+# Small unsigned int -> decimal string (for synthesized loop-var suffixes).
+def _lir_itoa(n: int) -> str:
+    if n == 0: return "0"
+    mut s = ""
+    mut x = n
+    while x > 0:
+        s = _lir_digit(x % 10) + s
+        x = x / 10
+    return s
+
+# Normalize an i64 vreg to a 0/1 boolean vreg:  (v != 0).
+def _norm_bool(lf: LFunc, v: int) -> int:
+    mut z = lf.new_vreg()
+    lf.emit(LInst.IConst(z, 0))
+    mut r = lf.new_vreg()
+    lf.emit(LInst.IBinOp(r, "!=", v, z))
+    return r
+
+# A 1-receiver runtime call (str method): sym(recv) -> result of type `restype`.
+def _str_call0(m: LModule, lf: LFunc, sym: str, recv: int, restype: int) -> int:
+    m.add_extern(sym)
+    mut a = Vec[int].init(1)
+    a.push(recv)
+    mut d = lf.new_vreg()
+    lf.emit(LInst.ICall(d, sym, a))
+    lf.set_vreg_type(d, restype)
+    return d
+
+# A str method taking one str argument: sym(recv, arg) -> result of type `restype`.
+def _str_call1(m: LModule, lf: LFunc, sym: str, recv: int, arg: int, restype: int) -> int:
+    m.add_extern(sym)
+    mut a = Vec[int].init(2)
+    a.push(recv)
+    a.push(arg)
+    mut d = lf.new_vreg()
+    lf.emit(LInst.ICall(d, sym, a))
+    lf.set_vreg_type(d, restype)
+    return d
+
+# String methods on a str receiver. New-string results are type 1; find -> int; starts/ends -> bool.
+def _lower_str_method(m: LModule, lf: LFunc, recv: int, method: str, margs: Vec[Pointer[HirExpr]]) -> int:
+    if (method == "upper" or method == "to_upper") and margs.len == 0:
+        return _str_call0(m, lf, "_tr_rt_str_upper", recv, 1)
+    if (method == "lower" or method == "to_lower") and margs.len == 0:
+        return _str_call0(m, lf, "_tr_rt_str_lower", recv, 1)
+    if (method == "strip" or method == "trim") and margs.len == 0:
+        return _str_call0(m, lf, "_tr_rt_str_strip", recv, 1)
+    if method == "replace" and margs.len == 2:
+        mut a0 = lower_expr(m, lf, margs.get(0))
+        if a0 < 0 or lf.vreg_type(a0) != 1: return -1
+        mut a1 = lower_expr(m, lf, margs.get(1))
+        if a1 < 0 or lf.vreg_type(a1) != 1: return -1
+        m.add_extern("_tr_rt_str_replace")
+        mut ra = Vec[int].init(3)
+        ra.push(recv)
+        ra.push(a0)
+        ra.push(a1)
+        mut rd = lf.new_vreg()
+        lf.emit(LInst.ICall(rd, "_tr_rt_str_replace", ra))
+        lf.set_vreg_type(rd, 1)
+        return rd
+    if method == "find" and margs.len == 1:
+        mut fa = lower_expr(m, lf, margs.get(0))
+        if fa < 0 or lf.vreg_type(fa) != 1: return -1
+        return _str_call1(m, lf, "_tr_rt_str_find", recv, fa, 0)
+    if method == "starts_with" and margs.len == 1:
+        mut sa = lower_expr(m, lf, margs.get(0))
+        if sa < 0 or lf.vreg_type(sa) != 1: return -1
+        return _str_call1(m, lf, "_tr_rt_str_starts_with", recv, sa, 4)
+    if method == "ends_with" and margs.len == 1:
+        mut ea = lower_expr(m, lf, margs.get(0))
+        if ea < 0 or lf.vreg_type(ea) != 1: return -1
+        return _str_call1(m, lf, "_tr_rt_str_ends_with", recv, ea, 4)
+    if method == "count" and margs.len == 1:
+        mut ka = lower_expr(m, lf, margs.get(0))
+        if ka < 0 or lf.vreg_type(ka) != 1: return -1
+        return _str_call1(m, lf, "_tr_rt_str_count", recv, ka, 0)
+    if method == "contains" and margs.len == 1:
+        mut na = lower_expr(m, lf, margs.get(0))
+        if na < 0 or lf.vreg_type(na) != 1: return -1
+        return _str_call1(m, lf, "_tr_rt_str_contains", recv, na, 4)
+    if method == "char_at" and margs.len == 1:
+        mut ia = lower_expr(m, lf, margs.get(0))
+        if ia < 0 or lf.vreg_type(ia) != 0: return -1
+        return _str_call1(m, lf, "_tr_rt_str_char_at", recv, ia, 0)
+    if method == "repeat" and margs.len == 1:
+        mut pa = lower_expr(m, lf, margs.get(0))
+        if pa < 0 or lf.vreg_type(pa) != 0: return -1
+        return _str_call1(m, lf, "_tr_rt_str_repeat", recv, pa, 1)
+    if method == "slice" and margs.len == 2:
+        mut s0 = lower_expr(m, lf, margs.get(0))
+        if s0 < 0 or lf.vreg_type(s0) != 0: return -1
+        mut s1 = lower_expr(m, lf, margs.get(1))
+        if s1 < 0 or lf.vreg_type(s1) != 0: return -1
+        m.add_extern("_tr_rt_str_slice")
+        mut sla = Vec[int].init(3)
+        sla.push(recv)
+        sla.push(s0)
+        sla.push(s1)
+        mut sld = lf.new_vreg()
+        lf.emit(LInst.ICall(sld, "_tr_rt_str_slice", sla))
+        lf.set_vreg_type(sld, 1)
+        return sld
+    # 0-arg string methods (new string / bool / int results).
+    if method == "capitalize" and margs.len == 0:
+        return _str_call0(m, lf, "_tr_rt_str_capitalize", recv, 1)
+    if method == "title" and margs.len == 0:
+        return _str_call0(m, lf, "_tr_rt_str_title", recv, 1)
+    if (method == "trim_left" or method == "lstrip") and margs.len == 0:
+        return _str_call0(m, lf, "_tr_rt_str_trim_left", recv, 1)
+    if (method == "trim_right" or method == "rstrip") and margs.len == 0:
+        return _str_call0(m, lf, "_tr_rt_str_trim_right", recv, 1)
+    if method == "reverse" and margs.len == 0:
+        return _str_call0(m, lf, "_tr_rt_str_reverse", recv, 1)
+    if method == "is_empty" and margs.len == 0:
+        return _str_call0(m, lf, "_tr_rt_str_is_empty", recv, 4)
+    if method == "parse_bool" and margs.len == 0:
+        return _str_call0(m, lf, "_tr_rt_str_parse_bool", recv, 4)
+    if method == "parse_int" and margs.len == 0:
+        return _str_call0(m, lf, "_tr_rt_str_to_i64", recv, 0)
+    # 1-str-arg string methods.
+    if method == "index_of" and margs.len == 1:
+        mut ida = lower_expr(m, lf, margs.get(0))
+        if ida < 0 or lf.vreg_type(ida) != 1: return -1
+        return _str_call1(m, lf, "_tr_rt_str_find", recv, ida, 0)
+    if method == "strip_prefix" and margs.len == 1:
+        mut ppa = lower_expr(m, lf, margs.get(0))
+        if ppa < 0 or lf.vreg_type(ppa) != 1: return -1
+        return _str_call1(m, lf, "_tr_rt_str_strip_prefix", recv, ppa, 1)
+    if method == "strip_suffix" and margs.len == 1:
+        mut ssa = lower_expr(m, lf, margs.get(0))
+        if ssa < 0 or lf.vreg_type(ssa) != 1: return -1
+        return _str_call1(m, lf, "_tr_rt_str_strip_suffix", recv, ssa, 1)
+    if method == "replace_first" and margs.len == 2:
+        mut rf0 = lower_expr(m, lf, margs.get(0))
+        if rf0 < 0 or lf.vreg_type(rf0) != 1: return -1
+        mut rf1 = lower_expr(m, lf, margs.get(1))
+        if rf1 < 0 or lf.vreg_type(rf1) != 1: return -1
+        m.add_extern("_tr_rt_str_replace_first")
+        mut rfa = Vec[int].init(3)
+        rfa.push(recv)
+        rfa.push(rf0)
+        rfa.push(rf1)
+        mut rfd = lf.new_vreg()
+        lf.emit(LInst.ICall(rfd, "_tr_rt_str_replace_first", rfa))
+        lf.set_vreg_type(rfd, 1)
+        return rfd
+    return -1
+
+# libm symbol for a 0-arg float method (x.<method>() -> f64), or "" if not one.
+def _float_unary_sym(method: str) -> str:
+    if method == "sqrt": return "_tr_rt_sqrt"
+    if method == "floor": return "_tr_rt_floor"
+    if method == "ceil": return "_tr_rt_ceil"
+    if method == "round": return "_tr_rt_round"
+    if method == "abs" or method == "fabs": return "_tr_rt_fabs"
+    if method == "log": return "_tr_rt_log"
+    if method == "log2": return "_tr_rt_log2"
+    if method == "log10": return "_tr_rt_log10"
+    if method == "exp": return "_tr_rt_exp"
+    if method == "sin": return "_tr_rt_sin"
+    if method == "cos": return "_tr_rt_cos"
+    if method == "tan": return "_tr_rt_tan"
+    if method == "asin": return "_tr_rt_asin"
+    if method == "acos": return "_tr_rt_acos"
+    if method == "atan": return "_tr_rt_atan"
+    return ""
+
+# Int utility methods on an i64 receiver: to_hex/oct/bin (-> str), sign/clamp/gcd/lcm (-> int).
+def _lower_int_method(m: LModule, lf: LFunc, recv: int, method: str, margs: Vec[Pointer[HirExpr]]) -> int:
+    if margs.len == 0:
+        if method == "to_hex": return _str_call0(m, lf, "_tr_rt_i64_to_hex", recv, 1)
+        if method == "to_hex_upper" or method == "to_HEX": return _str_call0(m, lf, "_tr_rt_i64_to_hex_upper", recv, 1)
+        if method == "to_oct" or method == "to_octal": return _str_call0(m, lf, "_tr_rt_i64_to_oct", recv, 1)
+        if method == "to_bin" or method == "to_binary": return _str_call0(m, lf, "_tr_rt_i64_to_bin", recv, 1)
+        if method == "sign":                       # (x>0) - (x<0)
+            mut z = lf.new_vreg()
+            lf.emit(LInst.IConst(z, 0))
+            mut gt = lf.new_vreg()
+            lf.emit(LInst.IBinOp(gt, ">", recv, z))
+            mut lt = lf.new_vreg()
+            lf.emit(LInst.IBinOp(lt, "<", recv, z))
+            mut sd = lf.new_vreg()
+            lf.emit(LInst.IBinOp(sd, "-", gt, lt))
+            return sd
+        return -1
+    if margs.len == 1 and (method == "gcd" or method == "lcm"):
+        mut y = lower_expr(m, lf, margs.get(0))
+        if y < 0 or lf.vreg_type(y) != 0: return -1
+        mut gsym = "_tr_rt_gcd_i64"
+        if method == "lcm": gsym = "_tr_rt_lcm_i64"
+        m.add_extern(gsym)
+        mut glargs = Vec[int].init(2)
+        glargs.push(recv)
+        glargs.push(y)
+        mut gd = lf.new_vreg()
+        lf.emit(LInst.ICall(gd, gsym, glargs))
+        return gd
+    if margs.len == 2 and method == "clamp":
+        mut lo = lower_expr(m, lf, margs.get(0))
+        if lo < 0 or lf.vreg_type(lo) != 0: return -1
+        mut hi = lower_expr(m, lf, margs.get(1))
+        if hi < 0 or lf.vreg_type(hi) != 0: return -1
+        m.add_extern("_tr_rt_clamp_i64")
+        mut ca = Vec[int].init(3)
+        ca.push(recv)
+        ca.push(lo)
+        ca.push(hi)
+        mut cd = lf.new_vreg()
+        lf.emit(LInst.ICall(cd, "_tr_rt_clamp_i64", ca))
+        return cd
+    return -1
+
+# Dict methods on a dict receiver: .get(k) -> int value, .contains(k) -> bool.
+def _lower_dict_method(m: LModule, lf: LFunc, recv: int, dtag: int, method: str, margs: Vec[Pointer[HirExpr]]) -> int:
+    if margs.len != 1: return -1
+    mut kv = lower_expr(m, lf, margs.get(0))
+    if kv < 0: return -1
+    if _dict_key_is_str(dtag) and lf.vreg_type(kv) != 1: return -1
+    if not _dict_key_is_str(dtag) and lf.vreg_type(kv) != 0: return -1
+    if method == "get" or method == "get_index":
+        mut gsym = _dict_sym(dtag, "get")
+        m.add_extern(gsym)
+        mut getargs = Vec[int].init(2)
+        getargs.push(recv)
+        getargs.push(kv)
+        mut gd = lf.new_vreg()
+        lf.emit(LInst.ICall(gd, gsym, getargs))
+        return gd
+    if method == "contains" or method == "has":
+        mut hsym = _dict_sym(dtag, "has")
+        m.add_extern(hsym)
+        mut ha = Vec[int].init(2)
+        ha.push(recv)
+        ha.push(kv)
+        mut hd = lf.new_vreg()
+        lf.emit(LInst.ICall(hd, hsym, ha))
+        lf.set_vreg_type(hd, 4)
+        return hd
+    return -1
+
+# Float math methods on an f64 receiver: unary libm (-> f64), pow/atan2 (1 arg -> f64),
+# is_nan/is_inf (-> bool).
+def _lower_float_method(m: LModule, lf: LFunc, recv: int, method: str, margs: Vec[Pointer[HirExpr]]) -> int:
+    if margs.len == 0:
+        mut usym = _float_unary_sym(method)
+        if usym != "":
+            m.add_extern(usym)
+            mut d = lf.new_vreg()
+            lf.emit(LInst.IFCallF(d, usym, recv))
+            lf.set_vreg_type(d, 5)
+            return d
+        if method == "is_nan" or method == "is_inf":
+            mut nsym = "_tr_rt_f64_is_nan"
+            if method == "is_inf": nsym = "_tr_rt_f64_is_inf"
+            m.add_extern(nsym)
+            mut nd = lf.new_vreg()
+            lf.emit(LInst.IFCall1(nd, nsym, recv))
+            lf.set_vreg_type(nd, 4)
+            return nd
+        return -1
+    if margs.len == 1 and (method == "pow" or method == "atan2"):
+        mut arg = lower_expr(m, lf, margs.get(0))
+        if arg < 0: return -1
+        mut argt = lf.vreg_type(arg)
+        if argt == 0: arg = _promote_f(lf, arg)
+        elif argt != 5: return -1
+        mut psym = "_tr_rt_pow"
+        if method == "atan2": psym = "_tr_rt_atan2"
+        m.add_extern(psym)
+        mut pd = lf.new_vreg()
+        lf.emit(LInst.IFCall2F(pd, psym, recv, arg))
+        lf.set_vreg_type(pd, 5)
+        return pd
+    return -1
+
+# Compile-time int literal helpers (for `range(a, b, step)` direction). Handle `-N` too.
+def _is_const_int(e: Pointer[HirExpr]) -> bool:
+    match e.read():
+        case HirExpr.ELitInt(_, _): return true
+        case HirExpr.EUnaryOp(op, sub, _):
+            if op == "-":
+                match sub.read():
+                    case HirExpr.ELitInt(_, _): return true
+                    case _: return false
+            return false
+        case _: return false
+
+def _const_int_val(e: Pointer[HirExpr]) -> int:
+    match e.read():
+        case HirExpr.ELitInt(v, _): return v
+        case HirExpr.EUnaryOp(op, sub, _):
+            match sub.read():
+                case HirExpr.ELitInt(v2, _): return 0 - v2
+                case _: return 0
+        case _: return 0
+
+# name = name + delta  (loop counter bump by a constant step).
+def _emit_add_const(lf: LFunc, name: str, delta: int):
+    mut cur = lf.new_vreg()
+    lf.emit(LInst.ILoadVar(cur, name))
+    mut d = lf.new_vreg()
+    lf.emit(LInst.IConst(d, delta))
+    mut inc = lf.new_vreg()
+    lf.emit(LInst.IBinOp(inc, "+", cur, d))
+    lf.emit(LInst.IStoreVar(name, inc))
+
+# A 1-arg (list handle) runtime call: sym(handle) -> result of type `restype`.
+def _list_call1(m: LModule, lf: LFunc, sym: str, handle: int, restype: int) -> int:
+    m.add_extern(sym)
+    mut a = Vec[int].init(1)
+    a.push(handle)
+    mut d = lf.new_vreg()
+    lf.emit(LInst.ICall(d, sym, a))
+    lf.set_vreg_type(d, restype)
+    return d
+
+# xs[i] / xs.get(i) lowering: _tr_rt_list_get_i64(handle, i) returning an i64.
+def _list_get(m: LModule, lf: LFunc, handle: int, idx: int) -> int:
+    m.add_extern("_tr_rt_list_get_i64")
+    mut gargs = Vec[int].init(2)
+    gargs.push(handle)
+    gargs.push(idx)
+    mut gd = lf.new_vreg()
+    lf.emit(LInst.ICall(gd, "_tr_rt_list_get_i64", gargs))
+    return gd
+
+def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
+    match e.read():
+        case HirExpr.ELitInt(v, _):
+            mut d = lf.new_vreg()
+            lf.emit(LInst.IConst(d, v))
+            return d
+        case HirExpr.ELitStr(sv, _):
+            mut idx = m.add_string(sv)
+            mut ds = lf.new_vreg()
+            lf.emit(LInst.IStr(ds, idx))
+            lf.set_vreg_type(ds, 1)
+            return ds
+        case HirExpr.ELitBool(bval, _):
+            mut db = lf.new_vreg()
+            mut bconst = 0
+            if bval: bconst = 1
+            lf.emit(LInst.IConst(db, bconst))
+            lf.set_vreg_type(db, 4)
+            return db
+        case HirExpr.ELitFloat(fval, _):
+            mut fd = lf.new_vreg()
+            lf.emit(LInst.IConst(fd, _f64_bits(fval)))   # store the f64 bit pattern
+            lf.set_vreg_type(fd, 5)
+            return fd
+        case HirExpr.EIdent(name, _, _):
+            if lf.var_index(name) < 0 and m.is_global(name):    # module global read
+                mut gd = lf.new_vreg()
+                lf.emit(LInst.ILoadGlobal(gd, m.global_index(name)))
+                lf.set_vreg_type(gd, m.global_type(name))
+                return gd
+            lf.add_var(name)
+            mut d2 = lf.new_vreg()
+            lf.emit(LInst.ILoadVar(d2, name))
+            lf.set_vreg_type(d2, lf.var_type(name))
+            return d2
+        case HirExpr.EIfElse(cond, then_e, else_e, _):
+            # ternary `then if cond else else` -> branch into a hidden result slot.
+            mut tcv = lower_expr(m, lf, cond)
+            if tcv < 0: return -1
+            mut tuid = lf.fresh_id()
+            mut rname = "__tern" + _lir_itoa(tuid)
+            lf.add_var(rname)
+            mut then_b = lf.new_block()
+            mut else_b = lf.new_block()
+            mut end_b = lf.new_block()
+            lf.set_term(LTerm.TCondBr(tcv, then_b, else_b))
+            lf.set_cur(then_b)
+            mut tv = lower_expr(m, lf, then_e)
+            if tv < 0: return -1
+            mut rtype = lf.vreg_type(tv)
+            lf.set_var_type(rname, rtype)
+            lf.emit(LInst.IStoreVar(rname, tv))
+            lf.set_term(LTerm.TBr(end_b))
+            lf.set_cur(else_b)
+            mut ev2 = lower_expr(m, lf, else_e)
+            if ev2 < 0: return -1
+            lf.emit(LInst.IStoreVar(rname, ev2))
+            lf.set_term(LTerm.TBr(end_b))
+            lf.set_cur(end_b)
+            mut trd = lf.new_vreg()
+            lf.emit(LInst.ILoadVar(trd, rname))
+            lf.set_vreg_type(trd, rtype)
+            return trd
+        case HirExpr.EUnaryOp(op, sub, _):
+            mut sv = lower_expr(m, lf, sub)
+            if sv < 0: return -1
+            mut svt = lf.vreg_type(sv)
+            if op == "-":                          # -x  ->  0 - x
+                if svt == 5:                        # float negation: 0.0 - x
+                    mut zf = lf.new_vreg()
+                    lf.emit(LInst.IConst(zf, _f64_bits(0.0)))
+                    lf.set_vreg_type(zf, 5)
+                    mut dnf = lf.new_vreg()
+                    lf.emit(LInst.IFBinOp(dnf, "-", zf, sv))
+                    lf.set_vreg_type(dnf, 5)
+                    return dnf
+                if svt != 0: return -1
+                mut zn = lf.new_vreg()
+                lf.emit(LInst.IConst(zn, 0))
+                mut dneg = lf.new_vreg()
+                lf.emit(LInst.IBinOp(dneg, "-", zn, sv))
+                return dneg
+            if op == "not":                        # not x  ->  x == 0   (int/bool)
+                if svt != 0 and svt != 4: return -1
+                mut zt = lf.new_vreg()
+                lf.emit(LInst.IConst(zt, 0))
+                mut dnot = lf.new_vreg()
+                lf.emit(LInst.IBinOp(dnot, "==", sv, zt))
+                lf.set_vreg_type(dnot, 4)
+                return dnot
+            if op == "~":                          # ~x  ->  x ^ -1  (int bit-complement)
+                if svt != 0: return -1
+                mut ones = lf.new_vreg()
+                lf.emit(LInst.IConst(ones, 0 - 1))
+                mut dcpl = lf.new_vreg()
+                lf.emit(LInst.IBinOp(dcpl, "^", sv, ones))
+                return dcpl
+            return -1
+        case HirExpr.EBinOp(op, l, r, _):
+            mut a = lower_expr(m, lf, l)
+            if a < 0: return -1
+            mut b = lower_expr(m, lf, r)
+            if b < 0: return -1
+            mut at = lf.vreg_type(a)
+            mut bt = lf.vreg_type(b)
+            # Float arithmetic / comparison (an int operand is promoted to f64, Python-style).
+            if at == 5 or bt == 5:
+                if at != 5 and at != 0: return -1
+                if bt != 5 and bt != 0: return -1
+                mut fa = a
+                mut fb = b
+                if at == 0: fa = _promote_f(lf, a)
+                if bt == 0: fb = _promote_f(lf, b)
+                if op == "+" or op == "-" or op == "*" or op == "/":
+                    mut fdd = lf.new_vreg()
+                    lf.emit(LInst.IFBinOp(fdd, op, fa, fb))
+                    lf.set_vreg_type(fdd, 5)
+                    return fdd
+                if _is_cmp_op(op):
+                    mut fcd = lf.new_vreg()
+                    lf.emit(LInst.IFBinOp(fcd, op, fa, fb))
+                    lf.set_vreg_type(fcd, 4)
+                    return fcd
+                return -1
+            # k in <dict> -> dict has -> bool.
+            if op == "in" and _is_dict_tag(bt):
+                if _dict_key_is_str(bt) and at != 1: return -1
+                if not _dict_key_is_str(bt) and at != 0: return -1
+                mut dhsym = _dict_sym(bt, "has")
+                m.add_extern(dhsym)
+                mut dha = Vec[int].init(2)
+                dha.push(b)
+                dha.push(a)
+                mut dhd = lf.new_vreg()
+                lf.emit(LInst.ICall(dhd, dhsym, dha))
+                lf.set_vreg_type(dhd, 4)
+                return dhd
+            # x in <list> -> _tr_rt_list_contains_{i64,str}(list, x) -> bool.
+            if op == "in":
+                if not _is_list_tag(bt): return -1
+                mut want_e = _list_elem_tag(bt)
+                if at != want_e: return -1
+                mut csym = "_tr_rt_list_contains_i64"
+                if want_e == 1: csym = "_tr_rt_list_contains_str"
+                m.add_extern(csym)
+                mut cca = Vec[int].init(2)
+                cca.push(b)
+                cca.push(a)
+                mut cd = lf.new_vreg()
+                lf.emit(LInst.ICall(cd, csym, cca))
+                lf.set_vreg_type(cd, 4)
+                return cd
+            # String repetition: "ab" * 3  or  3 * "ab"  ->  _tr_rt_str_repeat(s, n).
+            if op == "*" and (at == 1 or bt == 1) and (at == 0 or bt == 0):
+                mut sreg = a
+                mut nreg = b
+                if at == 0:
+                    sreg = b
+                    nreg = a
+                m.add_extern("_tr_rt_str_repeat")
+                mut ra = Vec[int].init(2)
+                ra.push(sreg)
+                ra.push(nreg)
+                mut rd = lf.new_vreg()
+                lf.emit(LInst.ICall(rd, "_tr_rt_str_repeat", ra))
+                lf.set_vreg_type(rd, 1)
+                return rd
+            if op == "+" and at == 1 and bt == 1:
+                m.add_extern("_tr_rt_str_concat")
+                mut ca = Vec[int].init(2)
+                ca.push(a)
+                ca.push(b)
+                mut dc = lf.new_vreg()
+                lf.emit(LInst.ICall(dc, "_tr_rt_str_concat", ca))
+                lf.set_vreg_type(dc, 1)
+                return dc
+            # String comparison: <op> maps to  strcmp(a,b) <op> 0.
+            if _is_cmp_op(op) and at == 1 and bt == 1:
+                m.add_extern("_tr_rt_str_cmp")
+                mut sca = Vec[int].init(2)
+                sca.push(a)
+                sca.push(b)
+                mut cmpv = lf.new_vreg()
+                lf.emit(LInst.ICall(cmpv, "_tr_rt_str_cmp", sca))
+                mut zc = lf.new_vreg()
+                lf.emit(LInst.IConst(zc, 0))
+                mut rc = lf.new_vreg()
+                lf.emit(LInst.IBinOp(rc, op, cmpv, zc))
+                lf.set_vreg_type(rc, 4)
+                return rc
+            if at == 1 or bt == 1: return -1       # other pointer ops unsupported
+            if _is_list_tag(at) or _is_list_tag(bt): return -1   # no list operators in binop
+            # Logical and/or over pure int/bool operands. Not short-circuit, but the native
+            # subset has no side-effecting operands here, so it matches C for 0/1 results:
+            #   a and b -> (a!=0)*(b!=0);   a or b -> ((a!=0)+(b!=0)) != 0
+            if op == "and" or op == "or":
+                mut na = _norm_bool(lf, a)
+                mut nb = _norm_bool(lf, b)
+                if op == "and":
+                    mut dand = lf.new_vreg()
+                    lf.emit(LInst.IBinOp(dand, "*", na, nb))
+                    lf.set_vreg_type(dand, 4)
+                    return dand
+                mut ssum = lf.new_vreg()
+                lf.emit(LInst.IBinOp(ssum, "+", na, nb))
+                mut oro = _norm_bool(lf, ssum)
+                lf.set_vreg_type(oro, 4)
+                return oro
+            if not _int_op(op): return -1
+            mut d3 = lf.new_vreg()
+            lf.emit(LInst.IBinOp(d3, op, a, b))
+            if _is_cmp_op(op): lf.set_vreg_type(d3, 4)   # comparison result is a bool
+            return d3
+        case HirExpr.ECall(callee, args, _):
+            mut fn = _ident_name(callee)
+            if fn == "": return -1
+            if fn == "len" and args.len == 1:      # len(str) / len(list) builtin
+                mut xv = lower_expr(m, lf, args.get(0))
+                if xv < 0: return -1
+                mut xt = lf.vreg_type(xv)
+                if _is_list_tag(xt):
+                    m.add_extern("_tr_rt_list_len")
+                    mut lla = Vec[int].init(1)
+                    lla.push(xv)
+                    mut lld = lf.new_vreg()
+                    lf.emit(LInst.ICall(lld, "_tr_rt_list_len", lla))
+                    return lld
+                if xt == 1:
+                    m.add_extern("_tr_rt_strlen")
+                    mut sla = Vec[int].init(1)
+                    sla.push(xv)
+                    mut sld = lf.new_vreg()
+                    lf.emit(LInst.ICall(sld, "_tr_rt_strlen", sla))
+                    return sld
+                return -1
+            if fn == "abs" and args.len == 1:      # abs(int) builtin
+                mut xv2 = lower_expr(m, lf, args.get(0))
+                if xv2 < 0: return -1
+                if lf.vreg_type(xv2) != 0: return -1
+                m.add_extern("_tr_rt_abs_i64")
+                mut aba = Vec[int].init(1)
+                aba.push(xv2)
+                mut abd = lf.new_vreg()
+                lf.emit(LInst.ICall(abd, "_tr_rt_abs_i64", aba))
+                return abd
+            if (fn == "min" or fn == "max") and args.len == 2:   # min/max(int, int) builtin
+                mut mm1 = lower_expr(m, lf, args.get(0))
+                if mm1 < 0: return -1
+                mut mm2 = lower_expr(m, lf, args.get(1))
+                if mm2 < 0: return -1
+                if lf.vreg_type(mm1) != 0 or lf.vreg_type(mm2) != 0: return -1
+                mut msym = "_tr_rt_min_i64"
+                if fn == "max": msym = "_tr_rt_max_i64"
+                m.add_extern(msym)
+                mut mma = Vec[int].init(2)
+                mma.push(mm1)
+                mma.push(mm2)
+                mut mmd = lf.new_vreg()
+                lf.emit(LInst.ICall(mmd, msym, mma))
+                return mmd
+            if fn == "str" and args.len == 1:      # str(int)/str(bool)/str(str)
+                mut cv0 = lower_expr(m, lf, args.get(0))
+                if cv0 < 0: return -1
+                mut cvt = lf.vreg_type(cv0)
+                if cvt == 1: return cv0            # str(str) = identity
+                mut ssym = "_tr_rt_i64_to_str"
+                if cvt == 4: ssym = "_tr_rt_bool_to_str"
+                elif cvt != 0: return -1           # list -> fall back
+                m.add_extern(ssym)
+                mut s2a = Vec[int].init(1)
+                s2a.push(cv0)
+                mut s2d = lf.new_vreg()
+                lf.emit(LInst.ICall(s2d, ssym, s2a))
+                lf.set_vreg_type(s2d, 1)
+                return s2d
+            if fn == "float" and args.len == 1:    # float(int)/float(float)
+                mut fv0 = lower_expr(m, lf, args.get(0))
+                if fv0 < 0: return -1
+                mut fvt = lf.vreg_type(fv0)
+                if fvt == 5: return fv0            # float(float) = identity
+                if fvt == 0: return _promote_f(lf, fv0)
+                return -1
+            if (fn == "int" or fn == "_tr_fn_int") and args.len == 1:   # int(str)/int(int)/int(bool)/int(float)
+                mut iv0 = lower_expr(m, lf, args.get(0))
+                if iv0 < 0: return -1
+                mut ivt = lf.vreg_type(iv0)
+                if ivt == 0: return iv0            # int(int) = identity
+                if ivt == 4:                       # int(bool): already 0/1, just retag
+                    lf.set_vreg_type(iv0, 0)
+                    return iv0
+                if ivt == 5:                       # int(float): truncate toward zero
+                    mut itd = lf.new_vreg()
+                    lf.emit(LInst.IFToI(itd, iv0))
+                    return itd
+                if ivt != 1: return -1
+                m.add_extern("_tr_rt_str_to_i64")
+                mut i2a = Vec[int].init(1)
+                i2a.push(iv0)
+                mut i2d = lf.new_vreg()
+                lf.emit(LInst.ICall(i2d, "_tr_rt_str_to_i64", i2a))
+                return i2d
+            if fn == "sum" and args.len == 1:      # sum(List[int]) -> int
+                mut suv = lower_expr(m, lf, args.get(0))
+                if suv < 0: return -1
+                if lf.vreg_type(suv) != 2: return -1
+                m.add_extern("_tr_rt_list_sum_i64")
+                mut sua = Vec[int].init(1)
+                sua.push(suv)
+                mut sud = lf.new_vreg()
+                lf.emit(LInst.ICall(sud, "_tr_rt_list_sum_i64", sua))
+                return sud
+            if (fn == "any" or fn == "all") and args.len == 1:   # any/all(List[int]) -> bool
+                mut anv = lower_expr(m, lf, args.get(0))
+                if anv < 0: return -1
+                if lf.vreg_type(anv) != 2: return -1
+                mut ansym = "_tr_rt_list_any_i64"
+                if fn == "all": ansym = "_tr_rt_list_all_i64"
+                m.add_extern(ansym)
+                mut ana = Vec[int].init(1)
+                ana.push(anv)
+                mut and2 = lf.new_vreg()
+                lf.emit(LInst.ICall(and2, ansym, ana))
+                lf.set_vreg_type(and2, 4)
+                return and2
+            if fn == "ord" and args.len == 1:      # ord(str) -> first byte's code
+                mut ordv = lower_expr(m, lf, args.get(0))
+                if ordv < 0: return -1
+                if lf.vreg_type(ordv) != 1: return -1
+                m.add_extern("_tr_rt_str_ord")
+                mut orda = Vec[int].init(1)
+                orda.push(ordv)
+                mut ordd = lf.new_vreg()
+                lf.emit(LInst.ICall(ordd, "_tr_rt_str_ord", orda))
+                return ordd
+            if fn == "bool" and args.len == 1:     # bool(x) -> (x != 0)
+                mut bv0 = lower_expr(m, lf, args.get(0))
+                if bv0 < 0: return -1
+                if _is_list_tag(lf.vreg_type(bv0)): return -1
+                mut bnorm = _norm_bool(lf, bv0)
+                lf.set_vreg_type(bnorm, 4)
+                return bnorm
+            if not m.is_user_fn(fn): return -1
+            if args.len > 6: return -1                 # System V: rdi,rsi,rdx,rcx,r8,r9
+            mut rtag = m.fn_ret_tag(fn)
+            if rtag < 0: return -1                      # unsupported return type -> fall back
+            mut argvregs = Vec[int].init(args.len)
+            mut ai = 0
+            while ai < args.len:
+                mut avr = lower_expr(m, lf, args.get(ai))
+                if avr < 0: return -1
+                argvregs.push(avr)
+                ai = ai + 1
+            mut d4 = lf.new_vreg()
+            lf.emit(LInst.ICall(d4, fn, argvregs))
+            lf.set_vreg_type(d4, rtag)                  # result carries the fn's return type
+            return d4
+        case HirExpr.EList(items, _):
+            # List literal -> _tr_rt_list_new + a push per element. Element type is inferred
+            # from the first element (int -> List[int] tag 2, str -> List[str] tag 3); a str
+            # element is just a char* (8 bytes), so the same i64 push/get runtime is reused.
+            m.add_extern("_tr_rt_list_new")
+            mut hv = lf.new_vreg()
+            lf.emit(LInst.ICall(hv, "_tr_rt_list_new", Vec[int].init(0)))
+            mut elem_t = 0
+            mut list_tag = 2
+            mut li = 0
+            while li < items.len:
+                mut ev = lower_expr(m, lf, items.get(li))
+                if ev < 0: return -1
+                mut evt = lf.vreg_type(ev)
+                if evt != 0 and evt != 1: return -1     # only int/str elements
+                if li == 0:
+                    elem_t = evt
+                    list_tag = _list_tag_for_elem(evt)
+                elif evt != elem_t:
+                    return -1                           # heterogeneous list unsupported
+                m.add_extern("_tr_rt_list_push_i64")
+                mut pa = Vec[int].init(2)
+                pa.push(hv)
+                pa.push(ev)
+                lf.emit(LInst.ICall(-1, "_tr_rt_list_push_i64", pa))
+                li = li + 1
+            lf.set_vreg_type(hv, list_tag)
+            return hv
+        case HirExpr.EDict(keys, vals, dty):
+            mut dtag = _ast_type_tag(dty)
+            if keys.len > 0:
+                mut k0 = _ast_type_tag(hir_expr_type(keys.get(0)))
+                mut v0 = _ast_type_tag(hir_expr_type(vals.get(0)))
+                if v0 != 0: return -1              # only int values natively
+                if k0 == 1: dtag = 6
+                elif k0 == 0: dtag = 7
+                else: return -1
+            if not _is_dict_tag(dtag): return -1
+            mut dnew = _dict_new_sym(dtag)
+            m.add_extern(dnew)
+            mut dhv = lf.new_vreg()
+            lf.emit(LInst.ICall(dhv, dnew, Vec[int].init(0)))
+            lf.set_vreg_type(dhv, dtag)
+            mut kstr = _dict_key_is_str(dtag)
+            mut di = 0
+            while di < keys.len:
+                mut kv = lower_expr(m, lf, keys.get(di))
+                if kv < 0: return -1
+                if kstr and lf.vreg_type(kv) != 1: return -1
+                if not kstr and lf.vreg_type(kv) != 0: return -1
+                mut vv = lower_expr(m, lf, vals.get(di))
+                if vv < 0: return -1
+                if lf.vreg_type(vv) != 0: return -1
+                mut dset = _dict_sym(dtag, "set")
+                m.add_extern(dset)
+                mut dsa = Vec[int].init(3)
+                dsa.push(dhv)
+                dsa.push(kv)
+                dsa.push(vv)
+                lf.emit(LInst.ICall(-1, dset, dsa))
+                di = di + 1
+            return dhv
+        case HirExpr.EIndex(obj, idx, _):
+            mut ov = lower_expr(m, lf, obj)
+            if ov < 0: return -1
+            mut ovt = lf.vreg_type(ov)
+            if _is_dict_tag(ovt):                  # d[k] -> dict get (int value)
+                mut dkv = lower_expr(m, lf, idx)
+                if dkv < 0: return -1
+                if _dict_key_is_str(ovt) and lf.vreg_type(dkv) != 1: return -1
+                if not _dict_key_is_str(ovt) and lf.vreg_type(dkv) != 0: return -1
+                mut dget = _dict_sym(ovt, "get")
+                m.add_extern(dget)
+                mut dga = Vec[int].init(2)
+                dga.push(ov)
+                dga.push(dkv)
+                mut dgd = lf.new_vreg()
+                lf.emit(LInst.ICall(dgd, dget, dga))
+                return dgd
+            if not _is_list_tag(ovt): return -1
+            mut iv = lower_expr(m, lf, idx)
+            if iv < 0: return -1
+            mut gval = _list_get(m, lf, ov, iv)
+            lf.set_vreg_type(gval, _list_elem_tag(ovt))
+            return gval
+        case HirExpr.EPropAccess(obj, prop, _):
+            if prop != "len": return -1
+            mut ovl = lower_expr(m, lf, obj)
+            if ovl < 0: return -1
+            if _is_dict_tag(lf.vreg_type(ovl)):    # d.len
+                mut dlsym = _dict_sym(lf.vreg_type(ovl), "len")
+                m.add_extern(dlsym)
+                mut dla = Vec[int].init(1)
+                dla.push(ovl)
+                mut dld = lf.new_vreg()
+                lf.emit(LInst.ICall(dld, dlsym, dla))
+                return dld
+            if not _is_list_tag(lf.vreg_type(ovl)): return -1
+            m.add_extern("_tr_rt_list_len")
+            mut la = Vec[int].init(1)
+            la.push(ovl)
+            mut ld = lf.new_vreg()
+            lf.emit(LInst.ICall(ld, "_tr_rt_list_len", la))
+            return ld
+        case HirExpr.EMethodCall(obj, method, margs, _):
+            mut ovm = lower_expr(m, lf, obj)
+            if ovm < 0: return -1
+            mut ovmt = lf.vreg_type(ovm)
+            if ovmt == 1:
+                return _lower_str_method(m, lf, ovm, method, margs)
+            if ovmt == 5:
+                return _lower_float_method(m, lf, ovm, method, margs)
+            if ovmt == 0:
+                return _lower_int_method(m, lf, ovm, method, margs)
+            if _is_dict_tag(ovmt):
+                return _lower_dict_method(m, lf, ovm, ovmt, method, margs)
+            if not _is_list_tag(ovmt): return -1
+            mut want_elem = _list_elem_tag(ovmt)
+            if method == "push" or method == "append":
+                if margs.len != 1: return -1
+                mut av = lower_expr(m, lf, margs.get(0))
+                if av < 0: return -1
+                if lf.vreg_type(av) != want_elem: return -1   # element type must match list
+                m.add_extern("_tr_rt_list_push_i64")
+                mut ppa = Vec[int].init(2)
+                ppa.push(ovm)
+                ppa.push(av)
+                lf.emit(LInst.ICall(-1, "_tr_rt_list_push_i64", ppa))
+                return ovm                              # handle (discarded at stmt level)
+            if method == "get" or method == "get_index":
+                if margs.len != 1: return -1
+                mut giv = lower_expr(m, lf, margs.get(0))
+                if giv < 0: return -1
+                mut gv2 = _list_get(m, lf, ovm, giv)
+                lf.set_vreg_type(gv2, want_elem)
+                return gv2
+            if method == "pop" and margs.len == 0:
+                m.add_extern("_tr_rt_list_pop_i64")
+                mut poa = Vec[int].init(1)
+                poa.push(ovm)
+                mut pod = lf.new_vreg()
+                lf.emit(LInst.ICall(pod, "_tr_rt_list_pop_i64", poa))
+                lf.set_vreg_type(pod, want_elem)
+                return pod
+            if method == "index_of" and margs.len == 1:
+                mut ixa = lower_expr(m, lf, margs.get(0))
+                if ixa < 0 or lf.vreg_type(ixa) != want_elem: return -1
+                mut ixsym = "_tr_rt_list_index_i64"
+                if want_elem == 1: ixsym = "_tr_rt_list_index_str"
+                m.add_extern(ixsym)
+                mut ixargs = Vec[int].init(2)
+                ixargs.push(ovm)
+                ixargs.push(ixa)
+                mut ixd = lf.new_vreg()
+                lf.emit(LInst.ICall(ixd, ixsym, ixargs))
+                return ixd
+            if method == "contains" and margs.len == 1:
+                mut cxa = lower_expr(m, lf, margs.get(0))
+                if cxa < 0 or lf.vreg_type(cxa) != want_elem: return -1
+                mut cxsym = "_tr_rt_list_contains_i64"
+                if want_elem == 1: cxsym = "_tr_rt_list_contains_str"
+                m.add_extern(cxsym)
+                mut cxargs = Vec[int].init(2)
+                cxargs.push(ovm)
+                cxargs.push(cxa)
+                mut cxd = lf.new_vreg()
+                lf.emit(LInst.ICall(cxd, cxsym, cxargs))
+                lf.set_vreg_type(cxd, 4)
+                return cxd
+            if (method == "min" or method == "min_val" or method == "max" or method == "max_val") and margs.len == 0:
+                if want_elem != 0: return -1        # int lists only
+                mut mmsym = "_tr_rt_list_min_i64"
+                if method == "max" or method == "max_val": mmsym = "_tr_rt_list_max_i64"
+                return _list_call1(m, lf, mmsym, ovm, 0)
+            if method == "is_empty" and margs.len == 0:
+                return _list_call1(m, lf, "_tr_rt_list_is_empty", ovm, 4)
+            if method == "first" and margs.len == 0:
+                return _list_call1(m, lf, "_tr_rt_list_first_i64", ovm, want_elem)
+            if method == "last" and margs.len == 0:
+                return _list_call1(m, lf, "_tr_rt_list_last_i64", ovm, want_elem)
+            if method == "reverse" and margs.len == 0:
+                m.add_extern("_tr_rt_list_reverse")
+                mut rva = Vec[int].init(1)
+                rva.push(ovm)
+                lf.emit(LInst.ICall(-1, "_tr_rt_list_reverse", rva))
+                return ovm                          # in-place; handle discarded at stmt level
+            if method == "clear" and margs.len == 0:
+                m.add_extern("_tr_rt_list_clear")
+                mut cla = Vec[int].init(1)
+                cla.push(ovm)
+                lf.emit(LInst.ICall(-1, "_tr_rt_list_clear", cla))
+                return ovm
+            if (method == "sort" or method == "sort_asc" or method == "sort_desc") and margs.len == 0:
+                if want_elem != 0: return -1        # only List[int] sorts natively
+                mut dirv = lf.new_vreg()
+                mut dir = 1
+                if method == "sort_desc": dir = 0 - 1
+                lf.emit(LInst.IConst(dirv, dir))
+                m.add_extern("_tr_rt_list_sort")
+                mut soa = Vec[int].init(2)
+                soa.push(ovm)
+                soa.push(dirv)
+                lf.emit(LInst.ICall(-1, "_tr_rt_list_sort", soa))
+                return ovm
+            return -1
+        case _:
+            return -1

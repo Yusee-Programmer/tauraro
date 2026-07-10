@@ -1,0 +1,449 @@
+# @trusted: compiler systems module.
+# src/codegen/native/isa_x64.tr — x86-64 instruction selection + encoding for the LIR.
+# Model: every vreg and local variable lives in a stack slot (rbp-relative); each op
+# loads operands into rax/rcx, computes, stores back. Basic blocks are laid out in order;
+# intra-function branches are PC-relative rel32, patched after layout (no ELF reloc — only
+# external `call`s get an R_X86_64_PLT32). No register allocation yet (fast COMPILE,
+# -O0 runtime). System V AMD64 ABI: int args in rdi, rsi, rdx, rcx; result in rax.
+
+from taumir.ir import LFunc, LInst, LTerm
+from codegen.native.bytebuf import ByteBuf
+
+# A relocation site. kind 0 = a `call` (R_X86_64_PLT32 to `symbol`, addend -4);
+# kind 1 = a string address `lea` (R_X86_64_PC32 to the .rodata section, addend =
+# strings[str_idx] offset - 4).
+pub class Reloc:
+    pub offset:  int
+    pub symbol:  str
+    pub kind:    int
+    pub str_idx: int
+
+# A pending INTRA-function branch: the rel32 field at `patch_off` targets block `target`.
+pub class Jump:
+    pub patch_off: int
+    pub target:    int
+
+pub class EncodedFunc:
+    pub name:    str
+    pub is_main: bool
+    pub code:    ByteBuf
+    pub relocs:  Vec[Reloc]
+
+extend EncodedFunc:
+    pub def init(name: str) -> EncodedFunc:
+        mut e = EncodedFunc()
+        e.name    = name
+        e.is_main = false
+        e.code    = ByteBuf.init()
+        e.relocs  = Vec[Reloc].init(4)
+        return e
+
+def _argreg_modrm(idx: int) -> int:
+    # ModRM for `mov <argreg>, [rbp+disp32]` (mod=10, rm=101). System V arg order:
+    # rdi, rsi, rdx, rcx, r8, r9. r8/r9 share low reg-field bits with rax/rcx and are
+    # distinguished by REX.R (see _argreg_rex).
+    if idx == 0: return 189    # rdi -> reg 111 -> 0xBD
+    if idx == 1: return 181    # rsi -> reg 110 -> 0xB5
+    if idx == 2: return 149    # rdx -> reg 010 -> 0x95
+    if idx == 3: return 141    # rcx -> reg 001 -> 0x8D
+    if idx == 4: return 133    # r8  -> reg 000 (+REX.R) -> 0x85
+    return 141                 # r9  -> reg 001 (+REX.R) -> 0x8D
+
+# REX prefix for an arg-register move: REX.W always; REX.R too for r8/r9 (idx >= 4).
+def _argreg_rex(idx: int) -> int:
+    if idx >= 4: return 76     # 0x4C = REX.W | REX.R
+    return 72                  # 0x48 = REX.W
+
+def _round16(n: int) -> int:
+    mut r = n
+    while (r % 16) != 0: r = r + 1
+    return r
+
+def _vreg_disp(id: int) -> int:
+    return 0 - (8 * (id + 1))
+
+def _var_disp(lf: LFunc, name: str) -> int:
+    mut idx = lf.var_index(name)
+    if idx < 0: idx = 0
+    return 0 - (8 * (lf.n_vregs + idx + 1))
+
+def _st_rax(c: ByteBuf, disp: int):        # mov [rbp+disp32], rax
+    c.u8(72)
+    c.u8(137)
+    c.u8(133)
+    c.u32(disp)
+
+def _ld_rax(c: ByteBuf, disp: int):        # mov rax, [rbp+disp32]
+    c.u8(72)
+    c.u8(139)
+    c.u8(133)
+    c.u32(disp)
+
+def _ld_rcx(c: ByteBuf, disp: int):        # mov rcx, [rbp+disp32]
+    c.u8(72)
+    c.u8(139)
+    c.u8(141)
+    c.u32(disp)
+
+def _ld_argreg(c: ByteBuf, idx: int, disp: int):   # mov <argreg>, [rbp+disp32]
+    c.u8(_argreg_rex(idx))
+    c.u8(139)
+    c.u8(_argreg_modrm(idx))
+    c.u32(disp)
+
+def _st_argreg(c: ByteBuf, idx: int, disp: int):   # mov [rbp+disp32], <argreg>
+    c.u8(_argreg_rex(idx))
+    c.u8(137)
+    c.u8(_argreg_modrm(idx))
+    c.u32(disp)
+
+def _mov_rax_imm64(c: ByteBuf, v: int):    # mov rax, imm64
+    c.u8(72)
+    c.u8(184)
+    c.u64(v)
+
+# -- SSE scalar-double helpers (values live as bit patterns in stack slots) ----------
+def _ld_xmm0(c: ByteBuf, disp: int):       # movsd xmm0, [rbp+disp32]
+    c.u8(242)
+    c.u8(15)
+    c.u8(16)
+    c.u8(133)
+    c.u32(disp)
+
+def _ld_xmm1(c: ByteBuf, disp: int):       # movsd xmm1, [rbp+disp32]
+    c.u8(242)
+    c.u8(15)
+    c.u8(16)
+    c.u8(141)
+    c.u32(disp)
+
+def _st_xmm0(c: ByteBuf, disp: int):       # movsd [rbp+disp32], xmm0
+    c.u8(242)
+    c.u8(15)
+    c.u8(17)
+    c.u8(133)
+    c.u32(disp)
+
+# <op>sd xmm0, xmm1  (F2 0F <opcode> C1)
+def _emit_farith(c: ByteBuf, op: str):
+    c.u8(242)
+    c.u8(15)
+    if op == "+":   c.u8(88)    # addsd 0x58
+    elif op == "-": c.u8(92)    # subsd 0x5C
+    elif op == "*": c.u8(89)    # mulsd 0x59
+    else:           c.u8(94)    # divsd 0x5E
+    c.u8(193)                   # modrm C1 (xmm0, xmm1)
+
+# setcc byte for an ORDERED float comparison after `comisd` (unsigned-style flags).
+def _fsetcc(op: str) -> int:
+    if op == "<":  return 146   # setb  0x92
+    if op == ">":  return 151   # seta  0x97
+    if op == "==": return 148   # sete  0x94
+    if op == "!=": return 149   # setne 0x95
+    if op == "<=": return 150   # setbe 0x96
+    return 147                  # setae 0x93  (">=")
+
+def _is_cmp(op: str) -> bool:
+    return op == "<" or op == ">" or op == "==" or op == "!=" or op == "<=" or op == ">="
+
+# setcc opcode byte (0F <op> C0 = setcc al)
+def _setcc(op: str) -> int:
+    if op == "<":  return 156   # setl  0x9C
+    if op == ">":  return 159   # setg  0x9F
+    if op == "==": return 148   # sete  0x94
+    if op == "!=": return 149   # setne 0x95
+    if op == "<=": return 158   # setle 0x9E
+    return 157                  # setge 0x9D  (">=")
+
+# arithmetic: apply op to rax (dst) and rcx (src), result in rax
+def _emit_arith(c: ByteBuf, op: str):
+    if op == "+":
+        c.u8(72)
+        c.u8(1)
+        c.u8(200)          # add rax, rcx
+    elif op == "-":
+        c.u8(72)
+        c.u8(41)
+        c.u8(200)          # sub rax, rcx
+    elif op == "*":
+        c.u8(72)
+        c.u8(15)
+        c.u8(175)
+        c.u8(193)          # imul rax, rcx
+    elif op == "/" or op == "//":
+        c.u8(72)
+        c.u8(153)          # cqo (sign-extend rax -> rdx:rax)
+        c.u8(72)
+        c.u8(247)
+        c.u8(249)          # idiv rcx  -> quotient in rax, remainder in rdx
+    elif op == "%":
+        c.u8(72)
+        c.u8(153)          # cqo
+        c.u8(72)
+        c.u8(247)
+        c.u8(249)          # idiv rcx
+        c.u8(72)
+        c.u8(137)
+        c.u8(208)          # mov rax, rdx  (remainder)
+    elif op == "&":
+        c.u8(72)
+        c.u8(33)
+        c.u8(200)          # and rax, rcx
+    elif op == "|":
+        c.u8(72)
+        c.u8(9)
+        c.u8(200)          # or rax, rcx
+    elif op == "^":
+        c.u8(72)
+        c.u8(49)
+        c.u8(200)          # xor rax, rcx
+    elif op == "<<":
+        c.u8(72)
+        c.u8(211)
+        c.u8(224)          # shl rax, cl
+    elif op == ">>":
+        c.u8(72)
+        c.u8(211)
+        c.u8(248)          # sar rax, cl  (arithmetic, signed)
+
+def _emit_return(c: ByteBuf, rv: int):
+    if rv == 0:
+        c.u8(49)
+        c.u8(192)          # xor eax, eax
+    else:
+        c.u8(184)
+        c.u32(rv)          # mov eax, imm32
+    c.u8(201)              # leave
+    c.u8(195)              # ret
+
+pub def encode_func(lf: LFunc) -> EncodedFunc:
+    mut e = EncodedFunc.init(lf.name)
+    e.is_main = lf.is_main
+    mut c = e.code
+
+    mut framesize = _round16((lf.n_vregs + lf.vars.len) * 8)
+
+    # prologue: push rbp ; mov rbp, rsp ; [sub rsp, framesize]
+    c.u8(85)
+    c.u8(72)
+    c.u8(137)
+    c.u8(229)
+    if framesize > 0:
+        c.u8(72)
+        c.u8(129)
+        c.u8(236)
+        c.u32(framesize)
+
+    # move parameters (System V arg registers rdi/rsi/rdx/rcx) into their stack slots
+    mut ppi = 0
+    while ppi < lf.params.len:
+        _st_argreg(c, ppi, _var_disp(lf, lf.params.get(ppi)))
+        ppi = ppi + 1
+
+    mut block_start = Vec[int].init(lf.blocks.len)
+    mut jumps = Vec[Jump].init(8)
+
+    mut bi = 0
+    while bi < lf.blocks.len:
+        mut blk = lf.blocks.get(bi)
+        block_start.push(c.len)          # block_start[bi] = offset of this block
+
+        mut ii = 0
+        while ii < blk.insts.len:
+            match blk.insts.get(ii).read():
+                case LInst.IConst(dst, v):
+                    _mov_rax_imm64(c, v)
+                    _st_rax(c, _vreg_disp(dst))
+                case LInst.IStr(dst, sidx):
+                    c.u8(72)
+                    c.u8(141)
+                    c.u8(5)                # lea rax, [rip+disp32]
+                    mut sr = Reloc()
+                    sr.offset  = c.len
+                    sr.symbol  = ""
+                    sr.kind    = 1
+                    sr.str_idx = sidx
+                    e.relocs.push(sr)
+                    c.u32(0)
+                    _st_rax(c, _vreg_disp(dst))
+                case LInst.ILoadVar(dst, name):
+                    _ld_rax(c, _var_disp(lf, name))
+                    _st_rax(c, _vreg_disp(dst))
+                case LInst.IStoreVar(name, src):
+                    _ld_rax(c, _vreg_disp(src))
+                    _st_rax(c, _var_disp(lf, name))
+                case LInst.ILoadGlobal(dst, gidx):
+                    c.u8(72)
+                    c.u8(139)
+                    c.u8(5)                # mov rax, [rip+disp32]
+                    mut glr = Reloc()
+                    glr.offset  = c.len
+                    glr.symbol  = ""
+                    glr.kind    = 3        # PC32 to .bss section sym, addend = gidx*8 - 4
+                    glr.str_idx = gidx
+                    e.relocs.push(glr)
+                    c.u32(0)
+                    _st_rax(c, _vreg_disp(dst))
+                case LInst.IStoreGlobal(gidx, src):
+                    _ld_rax(c, _vreg_disp(src))
+                    c.u8(72)
+                    c.u8(137)
+                    c.u8(5)                # mov [rip+disp32], rax
+                    mut gsr = Reloc()
+                    gsr.offset  = c.len
+                    gsr.symbol  = ""
+                    gsr.kind    = 3
+                    gsr.str_idx = gidx
+                    e.relocs.push(gsr)
+                    c.u32(0)
+                case LInst.IBinOp(dst, op, a, b):
+                    _ld_rax(c, _vreg_disp(a))
+                    _ld_rcx(c, _vreg_disp(b))
+                    if _is_cmp(op):
+                        c.u8(72)
+                        c.u8(57)
+                        c.u8(200)          # cmp rax, rcx
+                        c.u8(15)
+                        c.u8(_setcc(op))
+                        c.u8(192)          # setcc al
+                        c.u8(72)
+                        c.u8(15)
+                        c.u8(182)
+                        c.u8(192)          # movzx rax, al
+                    else:
+                        _emit_arith(c, op)
+                    _st_rax(c, _vreg_disp(dst))
+                case LInst.ICall(dst, callee, args):
+                    mut ai = 0
+                    while ai < args.len:
+                        _ld_argreg(c, ai, _vreg_disp(args.get(ai)))
+                        ai = ai + 1
+                    c.u8(232)              # call rel32
+                    mut r = Reloc()
+                    r.offset  = c.len
+                    r.symbol  = callee
+                    r.kind    = 0
+                    r.str_idx = 0
+                    e.relocs.push(r)
+                    c.u32(0)
+                    if dst >= 0:
+                        _st_rax(c, _vreg_disp(dst))
+                case LInst.IFBinOp(dst, op, a, b):
+                    _ld_xmm0(c, _vreg_disp(a))
+                    _ld_xmm1(c, _vreg_disp(b))
+                    if _is_cmp(op):
+                        c.u8(102)
+                        c.u8(15)
+                        c.u8(47)
+                        c.u8(193)          # comisd xmm0, xmm1
+                        c.u8(15)
+                        c.u8(_fsetcc(op))
+                        c.u8(192)          # setcc al
+                        c.u8(72)
+                        c.u8(15)
+                        c.u8(182)
+                        c.u8(192)          # movzx rax, al
+                        _st_rax(c, _vreg_disp(dst))
+                    else:
+                        _emit_farith(c, op)
+                        _st_xmm0(c, _vreg_disp(dst))
+                case LInst.IIToF(dst, src):
+                    _ld_rax(c, _vreg_disp(src))
+                    c.u8(242)
+                    c.u8(72)
+                    c.u8(15)
+                    c.u8(42)
+                    c.u8(192)              # cvtsi2sd xmm0, rax
+                    _st_xmm0(c, _vreg_disp(dst))
+                case LInst.IFToI(dst, src):
+                    _ld_xmm0(c, _vreg_disp(src))
+                    c.u8(242)
+                    c.u8(72)
+                    c.u8(15)
+                    c.u8(44)
+                    c.u8(192)              # cvttsd2si rax, xmm0
+                    _st_rax(c, _vreg_disp(dst))
+                case LInst.IFCall1(dst, callee, arg):
+                    _ld_xmm0(c, _vreg_disp(arg))
+                    c.u8(232)              # call rel32
+                    mut fr = Reloc()
+                    fr.offset  = c.len
+                    fr.symbol  = callee
+                    fr.kind    = 0
+                    fr.str_idx = 0
+                    e.relocs.push(fr)
+                    c.u32(0)
+                    if dst >= 0:
+                        _st_rax(c, _vreg_disp(dst))
+                case LInst.IFCallF(dst, callee, arg):
+                    _ld_xmm0(c, _vreg_disp(arg))
+                    c.u8(232)              # call rel32
+                    mut ffr = Reloc()
+                    ffr.offset  = c.len
+                    ffr.symbol  = callee
+                    ffr.kind    = 0
+                    ffr.str_idx = 0
+                    e.relocs.push(ffr)
+                    c.u32(0)
+                    _st_xmm0(c, _vreg_disp(dst))   # f64 result in xmm0
+                case LInst.IFCall2F(dst, callee, a, b):
+                    _ld_xmm0(c, _vreg_disp(a))
+                    _ld_xmm1(c, _vreg_disp(b))
+                    c.u8(232)              # call rel32
+                    mut f2r = Reloc()
+                    f2r.offset  = c.len
+                    f2r.symbol  = callee
+                    f2r.kind    = 0
+                    f2r.str_idx = 0
+                    e.relocs.push(f2r)
+                    c.u32(0)
+                    _st_xmm0(c, _vreg_disp(dst))
+            ii = ii + 1
+
+        match blk.term:
+            case LTerm.TRetInt(rv):
+                _emit_return(c, rv)
+            case LTerm.TRetVal(rvreg):
+                _ld_rax(c, _vreg_disp(rvreg))   # mov rax, [vreg]  (result in rax)
+                c.u8(201)                        # leave
+                c.u8(195)                        # ret
+            case LTerm.TRetVoid:
+                _emit_return(c, 0)
+            case LTerm.TBr(target):
+                c.u8(233)                  # jmp rel32
+                mut jp = Jump()
+                jp.patch_off = c.len
+                jp.target = target
+                jumps.push(jp)
+                c.u32(0)
+            case LTerm.TCondBr(cond, tb, eb):
+                _ld_rax(c, _vreg_disp(cond))
+                c.u8(72)
+                c.u8(133)
+                c.u8(192)                  # test rax, rax
+                c.u8(15)
+                c.u8(133)                  # jnz rel32 -> then
+                mut jp2 = Jump()
+                jp2.patch_off = c.len
+                jp2.target = tb
+                jumps.push(jp2)
+                c.u32(0)
+                c.u8(233)                  # jmp rel32 -> else
+                mut jp3 = Jump()
+                jp3.patch_off = c.len
+                jp3.target = eb
+                jumps.push(jp3)
+                c.u32(0)
+            case _:
+                _emit_return(c, 0)         # defensive: unterminated block
+        bi = bi + 1
+
+    # patch intra-function branches: rel32 = target_offset - (rel32_field + 4)
+    mut ji = 0
+    while ji < jumps.len:
+        mut j = jumps.get(ji)
+        mut rel = block_start.get(j.target) - (j.patch_off + 4)
+        c.patch_u32(j.patch_off, rel)
+        ji = ji + 1
+
+    return e

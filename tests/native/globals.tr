@@ -1,0 +1,25 @@
+# native≡c differential corpus: module-level global variables (int/str/bool + mutation).
+mut counter = 0
+mut greeting = "hi"
+mut enabled = True
+mut base = 100
+
+def bump():
+    counter = counter + 1
+
+def add_to_base(n: int) -> int:
+    return base + n
+
+def main():
+    print(counter)          # 0
+    print(greeting)         # hi
+    print(enabled)          # true
+    bump()
+    bump()
+    bump()
+    print(counter)          # 3
+    counter = counter * 10
+    print(counter)          # 30
+    print(add_to_base(5))   # 105
+    greeting = greeting + "!"
+    print(greeting)         # hi!

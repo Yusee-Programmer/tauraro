@@ -1,0 +1,37 @@
+# native≡c differential corpus: any/all, list .is_empty/.first/.last/.reverse/.clear/.sort.
+def main():
+    mut xs = [3, 1, 4, 1, 5, 9, 2, 6]
+    print(xs.first())          # 3
+    print(xs.last())           # 6
+    print(xs.is_empty())       # false
+
+    xs.sort()
+    print(xs.first())          # 1
+    print(xs.last())           # 9
+    print(xs[0])               # 1
+    print(xs[7])               # 9
+
+    xs.sort_desc()
+    print(xs.first())          # 9
+    print(xs.last())           # 1
+
+    xs.reverse()
+    print(xs.first())          # 1  (was 9 after desc, reversed -> ascending)
+
+    mut flags = [1, 1, 1]
+    print(all(flags))          # true
+    print(any(flags))          # true
+    mut zeros = [0, 0, 0]
+    print(any(zeros))          # false
+    print(all(zeros))          # false
+    mut mixed = [0, 1, 0]
+    print(any(mixed))          # true
+    print(all(mixed))          # false
+
+    xs.clear()
+    print(xs.is_empty())       # true
+    print(len(xs))             # 0
+
+    mut names = ["bob", "alice"]
+    print(names.first())       # bob
+    print(names.last())        # alice

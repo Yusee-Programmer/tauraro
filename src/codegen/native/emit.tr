@@ -1,0 +1,20 @@
+# @trusted: compiler systems module.
+# src/codegen/native/emit.tr — orchestration: LIR module -> encoded x86-64 functions ->
+# ELF64 object file. The system linker (invoked by scripts/native_run.sh, or the driver
+# on a native host) links the .o with runtime.o + crt + libc into an executable.
+
+from taumir.ir import LModule, LFunc
+from codegen.native.isa_x64 import encode_func, EncodedFunc
+from codegen.native.elf import write_elf_object
+
+# Emit an ELF64 relocatable object for the lowered module at `out_path`.
+# Returns false if the module wasn't fully lowerable (driver then falls back).
+pub def emit_lir_object(m: LModule, out_path: str) -> bool:
+    if not m.ok: return false
+    if m.funcs.len == 0: return false
+    mut encoded = Vec[EncodedFunc].init(m.funcs.len)
+    mut i = 0
+    while i < m.funcs.len:
+        encoded.push(encode_func(m.funcs.get(i)))
+        i = i + 1
+    return write_elf_object(out_path, encoded, m.externs, m.strings, m.globals.len)

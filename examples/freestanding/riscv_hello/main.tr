@@ -1,0 +1,64 @@
+# ============================================================================
+# riscv_hello — a bare-metal RISC-V program in 100% Tauraro. Target: QEMU 'virt'
+# (rv64); no libc, no OS, no hand-written C/.h/.ld. The compiler generates the
+# _start boot code (hart parking + stack setup + .bss clear), wires the bump
+# allocator and the NS16550 UART, and emits the linker script.
+#
+# Build + run:
+#   cd examples/freestanding/riscv_hello
+#   tauraroc main.tr --freestanding --target embedded-riscv64 --emit c --emit-ld build/app.ld
+#   riscv64-unknown-elf-gcc -march=rv64imac -mabi=lp64 -nostdlib -ffreestanding \
+#       -T build/app.ld -I build/include -o app.elf $(find build -name '*.c') -lgcc
+#   qemu-system-riscv64 -machine virt -bios none -nographic -kernel app.elf
+# ============================================================================
+from std.hal.mmio import write8
+
+# ---- Platform: bump allocator over a static .bss arena ----
+mut _arena: [u8; 4096]
+mut _heap_next: usize = 0 as usize
+
+@allocator
+def heap_alloc(n: usize) -> Pointer[u8]:
+    unsafe:
+        mut p: Pointer[u8] = _arena.as_ptr().offset(_heap_next as int)
+        _heap_next = _heap_next + ((n + 7) / 8) * 8
+        return p
+@free
+def heap_free(p: Pointer[u8]):
+    pass
+@realloc
+def heap_realloc(p: Pointer[u8], n: usize) -> Pointer[u8]:
+    return heap_alloc(n)
+@calloc
+def heap_calloc(n: usize, sz: usize) -> Pointer[u8]:
+    return heap_alloc(n * sz)
+
+# ---- Platform: UART output sink (NS16550 THR @ 0x10000000 on qemu virt) ----
+@output
+def uart_write(s: Pointer[char]):
+    unsafe:
+        mut i = 0
+        while s.offset(i).read() != (0 as char):
+            write8(0x10000000 as usize, s.offset(i).read() as u8)
+            i = i + 1
+
+def fib(n: int) -> int:
+    if n < 2:
+        return n
+    return fib(n - 1) + fib(n - 2)
+
+def sum_to(n: int) -> int:
+    mut s = 0
+    mut i = 1
+    while i <= n:
+        s = s + i
+        i = i + 1
+    return s
+
+# ---- Boot entry: the compiler emits _start (the RISC-V reset path) ----
+@entry
+def boot():
+    print("riscv: hello from bare metal")
+    print("fib(20) = " + fib(20).to_str())      # 6765
+    print("sum 1..100 = " + sum_to(100).to_str())  # 5050
+    print("riscv_app: done")

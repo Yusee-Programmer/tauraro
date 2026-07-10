@@ -24,6 +24,7 @@ pub class AstType:
                           # (region) view. Erased to the inner type T for codegen;
                           # the flag + from_param drive borrow checking (L-1/M-2).
     pub is_mut_borrow: bool   # true specifically for `mut_ref T` (exclusive borrow)
+    pub array_size: int   # fixed-size array `[T; N]` -> N (element type in args[0]); 0 = not a fixed array
 
 extend AstType:
     pub def init(name: str) -> AstType:
@@ -35,6 +36,7 @@ extend AstType:
         t.from_index = -1
         t.is_borrow = false
         t.is_mut_borrow = false
+        t.array_size = 0
         return t
 
     pub def init_generic(name: str, arg: Pointer[AstType]) -> AstType:
