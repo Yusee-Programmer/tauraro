@@ -320,6 +320,9 @@ extend Sema:
         s.globals.insert("range",    Symbol.init("range",    SymbolKind.SFunction, box_asttype(AstType.init("List"))))
         s.globals.insert("type",     Symbol.init("type",     SymbolKind.SFunction, box_asttype(AstType.init("str"))))
         s.globals.insert("str",      Symbol.init("str",      SymbolKind.SFunction, box_asttype(AstType.init("str"))))
+        s.globals.insert("hex",      Symbol.init("hex",      SymbolKind.SFunction, box_asttype(AstType.init("str"))))
+        s.globals.insert("oct",      Symbol.init("oct",      SymbolKind.SFunction, box_asttype(AstType.init("str"))))
+        s.globals.insert("bin",      Symbol.init("bin",      SymbolKind.SFunction, box_asttype(AstType.init("str"))))
         s.globals.insert("int",      Symbol.init("int",      SymbolKind.SFunction, box_asttype(AstType.init("int"))))
         s.globals.insert("float",    Symbol.init("float",    SymbolKind.SFunction, box_asttype(AstType.init("float"))))
         s.globals.insert("bool",     Symbol.init("bool",     SymbolKind.SFunction, box_asttype(AstType.init("bool"))))
@@ -4333,6 +4336,9 @@ extend Sema:
         if method == "center": return AstType.init("str")
         if method == "pad_left": return AstType.init("str")
         if method == "pad_right": return AstType.init("str")
+        if method == "zfill": return AstType.init("str")
+        if method == "format": return AstType.init("str")
+        if method == "chars": return AstType.init_generic("Vec", box_asttype(AstType.init("str")))
         if method == "capitalize": return AstType.init("str")
         if method == "title": return AstType.init("str")
         if method == "reverse": return AstType.init("str")
@@ -5414,6 +5420,19 @@ extend Sema:
                     list_ty.args = Vec[Pointer[AstType]].init(1)
                     list_ty.args.push(box_asttype(hir_expr_type(hitems.get(0))))
                 return box_hirexpr(HirExpr.EList(hitems, list_ty))
+            case Expr.ESet(items):
+                mut sitems = Vec[Pointer[HirExpr]].init(items.len)
+                mut sn = 0
+                while sn < items.len:
+                    sitems.push(self.lower_expr(items.get(sn)))
+                    sn = sn + 1
+                # Infer the element type from the first entry so `.len`/`in`/`.add`
+                # resolve to the right runtime (int-keyed _TrISet vs str _TrSet).
+                mut set_ty = AstType.init("Set")
+                if sitems.len > 0:
+                    set_ty.args = Vec[Pointer[AstType]].init(1)
+                    set_ty.args.push(box_asttype(hir_expr_type(sitems.get(0))))
+                return box_hirexpr(HirExpr.ESet(sitems, set_ty))
             case Expr.EClosure(params, ret_ty, body, is_async):
                 self.enter_scope()
                 mut cap_idx = self.scopes.len - 1   # the closure's OWN scope

@@ -1,0 +1,23 @@
+# native≡c differential corpus: hex/oct/bin builtins, s.zfill, s.chars.
+def main():
+    print(hex(255))             # 0xff
+    print(hex(16))              # 0x10
+    print(hex(-255))            # -0xff
+    print(oct(64))              # 0o100
+    print(oct(8))               # 0o10
+    print(bin(5))               # 0b101
+    print(bin(10))              # 0b1010
+    print(bin(-6))              # -0b110
+
+    print("42".zfill(5))        # 00042
+    print("-7".zfill(4))        # -007
+    print("hello".zfill(3))     # hello
+
+    mut cs = "abc".chars()
+    print(cs.len)               # 3
+    print(cs[0])                # a
+    print(cs[2])                # c
+
+    mut sc = "hi!".chars()
+    for i, ch in enumerate(sc):
+        print(ch)               # h / i / !

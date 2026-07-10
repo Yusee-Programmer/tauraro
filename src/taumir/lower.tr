@@ -835,6 +835,10 @@ def _lower_str_method(m: LModule, lf: LFunc, recv: int, method: str, margs: Vec[
         return _str_call0(m, lf, "_tr_rt_str_trim_left", recv, 1)
     if (method == "trim_right" or method == "rstrip") and margs.len == 0:
         return _str_call0(m, lf, "_tr_rt_str_trim_right", recv, 1)
+    if method == "zfill" and margs.len == 1:
+        mut zfa = lower_expr(m, lf, margs.get(0))
+        if zfa < 0 or lf.vreg_type(zfa) != 0: return -1
+        return _str_call1(m, lf, "_tr_rt_str_zfill", recv, zfa, 1)
     if method == "pad_left" and margs.len == 1:
         mut pla = lower_expr(m, lf, margs.get(0))
         if pla < 0 or lf.vreg_type(pla) != 0: return -1
@@ -851,6 +855,14 @@ def _lower_str_method(m: LModule, lf: LFunc, recv: int, method: str, margs: Vec[
         mut cea = lower_expr(m, lf, margs.get(0))
         if cea < 0 or lf.vreg_type(cea) != 0: return -1
         return _str_call1(m, lf, "_tr_rt_str_center", recv, cea, 1)
+    if method == "chars" and margs.len == 0:
+        m.add_extern("_tr_rt_str_chars")
+        mut cha = Vec[int].init(1)
+        cha.push(recv)
+        mut chd = lf.new_vreg()
+        lf.emit(LInst.ICall(chd, "_tr_rt_str_chars", cha))
+        lf.set_vreg_type(chd, 3)                  # -> List[str]
+        return chd
     if method == "split" and margs.len == 1:
         mut spa = lower_expr(m, lf, margs.get(0))
         if spa < 0 or lf.vreg_type(spa) != 1: return -1
@@ -1359,6 +1371,20 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                     lf.emit(LInst.ICall(sld, "_tr_rt_strlen", sla))
                     return sld
                 return -1
+            if (fn == "hex" or fn == "oct" or fn == "bin") and args.len == 1:   # -> "0x.."/"0o.."/"0b.."
+                mut hxv = lower_expr(m, lf, args.get(0))
+                if hxv < 0 or lf.vreg_type(hxv) != 0: return -1
+                mut hxsym = "_tr_rt_hex_str"
+                if fn == "oct": hxsym = "_tr_rt_oct_str"
+                elif fn == "bin": hxsym = "_tr_rt_bin_str"
+                m.add_extern(hxsym)
+                mut hxa = Vec[int].init(1)
+                hxa.push(hxv)
+                mut hxd = lf.new_vreg()
+                lf.emit(LInst.ICall(hxd, hxsym, hxa))
+                lf.set_vreg_type(hxd, 1)
+                _fresh_mark(lf, hxd)
+                return hxd
             if fn == "round" and args.len == 1:    # round(x) -> f64 (libm round)
                 mut rv0 = lower_expr(m, lf, args.get(0))
                 if rv0 < 0: return -1

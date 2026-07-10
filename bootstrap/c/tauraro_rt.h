@@ -2110,6 +2110,23 @@ static char* _tr_int_to_binary(int64_t n) {
     memcpy(r, buf + pos + 1, 69 - pos);
     return r;
 }
+/* Python-style hex()/oct()/bin(): "0x"/"0o"/"0b" prefix, sign kept ("-0xff"). */
+static char* _tr_hex_str(int64_t n) {
+    char b[32]; unsigned long long u = n < 0 ? (unsigned long long)(-(n)) : (unsigned long long)n;
+    if (n < 0) snprintf(b, sizeof(b), "-0x%llx", u); else snprintf(b, sizeof(b), "0x%llx", u);
+    char* r = (char*)_tr_checked_alloc(strlen(b) + 1); memcpy(r, b, strlen(b) + 1); return r;
+}
+static char* _tr_oct_str(int64_t n) {
+    char b[32]; unsigned long long u = n < 0 ? (unsigned long long)(-(n)) : (unsigned long long)n;
+    if (n < 0) snprintf(b, sizeof(b), "-0o%llo", u); else snprintf(b, sizeof(b), "0o%llo", u);
+    char* r = (char*)_tr_checked_alloc(strlen(b) + 1); memcpy(r, b, strlen(b) + 1); return r;
+}
+static char* _tr_bin_str(int64_t n) {
+    char* body = _tr_int_to_binary(n < 0 ? -(n) : n);
+    size_t bl = strlen(body); const char* pfx = n < 0 ? "-0b" : "0b"; size_t pl = strlen(pfx);
+    char* r = (char*)_tr_checked_alloc(pl + bl + 1);
+    memcpy(r, pfx, pl); memcpy(r + pl, body, bl + 1); return r;
+}
 
 /* float utility predicates */
 static int64_t _tr_float_is_nan(double x) { return (int64_t)(x != x); }
@@ -3620,6 +3637,18 @@ static inline char* _tr_str_center(const char* s, long long width) {
     char* r=(char*)_tr_checked_alloc((size_t)(width+1));
     for(long long i=0;i<left;i++) r[i]=' '; memcpy(r+left,s,(size_t)slen); for(long long i=0;i<right;i++) r[left+slen+i]=' '; r[width]='\0'; return r;
 }
+/* s.zfill(w): left-pad with '0' to width; a leading sign stays first ("-42".zfill(5)="-0042"). */
+static inline char* _tr_str_zfill(const char* s, long long width) {
+    if (!s) s = "";
+    long long n = (long long)strlen(s);
+    if (n >= width) { char* c=(char*)_tr_checked_alloc((size_t)n+1); memcpy(c,s,(size_t)n+1); return c; }
+    long long pad = width - n, si = 0;
+    char* r = (char*)_tr_checked_alloc((size_t)width + 1); long long p = 0;
+    if (n > 0 && (s[0]=='-' || s[0]=='+')) { r[p++] = s[0]; si = 1; }
+    for (long long i = 0; i < pad; i++) r[p++] = '0';
+    for (long long i = si; i < n; i++) r[p++] = s[i];
+    r[width] = '\0'; return r;
+}
 
 /* ── Char code → 1-char string ───────────────────────────────────────── */
 static inline char* _tr_char_to_str(long long code) {
@@ -4370,6 +4399,28 @@ static inline List_TrStr* _tr_str_split(const char* s, const char* sep) {
     _tr_free(cp); return l;
 }
 static inline List_TrStr* _tr_str_lines(const char* s) { return _tr_str_split(s, "\n"); }
+/* s.format(a, b, ...): replace each "{}" placeholder in order with the given (already
+ * stringified) arguments. Extra placeholders / args are ignored. */
+static inline char* _tr_str_format(const char* fmt, const char* const* args, long long argc) {
+    if (!fmt) fmt = "";
+    size_t cap = strlen(fmt);
+    for (long long i = 0; i < argc; i++) if (args[i]) cap += strlen(args[i]);
+    char* r = (char*)_tr_checked_alloc(cap + 1);
+    char* w = r; const char* p = fmt; long long ai = 0;
+    while (*p) {
+        if (p[0] == '{' && p[1] == '}' && ai < argc) {
+            const char* a = args[ai++]; if (a) { size_t l = strlen(a); memcpy(w, a, l); w += l; }
+            p += 2;
+        } else { *w++ = *p++; }
+    }
+    *w = '\0'; return r;
+}
+/* s.chars() -> List[str] of single-character strings. */
+static inline List_TrStr* _tr_str_chars(const char* s) {
+    List_TrStr* l = List_TrStr_new(); if (!s) return l;
+    for (size_t i = 0; s[i]; i++) { char c[2]; c[0] = s[i]; c[1] = '\0'; List_TrStr_append_owned(l, _tr_str_wrap(strdup(c))); }
+    return l;
+}
 static inline List_TrStr* _tr_str_words(const char* s) { return _tr_str_split(s, " "); }
 /* TrStr-elements join: build "sep"-joined string from a List_TrStr*. */
 static inline TrStr _tr_trstr_join(List_TrStr* parts, const char* sep) {

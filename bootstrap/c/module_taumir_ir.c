@@ -79,22 +79,22 @@ __attribute__((hot)) void LFunc_set_term(LFunc* self, LTerm t) {
     /* pass */
     LBlock* b = ((LBlock*)List_ptr_get(self->blocks, self->cur));
     /* pass */
-    __auto_type _t2239 = b->term;
-    if (_t2239.tag == LTerm_TUnset) {
+    __auto_type _t2253 = b->term;
+    if (_t2253.tag == LTerm_TUnset) {
         b->term = t;
     } else if (1) {
-        __auto_type _ = _t2239;
+        __auto_type _ = _t2253;
         /* pass */
     }
 }
 
 __attribute__((hot)) bool LFunc_cur_terminated(LFunc* self) {
     /* pass */
-    __auto_type _t2240 = ((LBlock*)List_ptr_get(self->blocks, self->cur))->term;
-    if (_t2240.tag == LTerm_TUnset) {
+    __auto_type _t2254 = ((LBlock*)List_ptr_get(self->blocks, self->cur))->term;
+    if (_t2254.tag == LTerm_TUnset) {
         return false;
     } else if (1) {
-        __auto_type _ = _t2240;
+        __auto_type _ = _t2254;
         return true;
     }
 }

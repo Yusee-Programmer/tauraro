@@ -3260,6 +3260,7 @@ __attribute__((hot)) Expr* Parser_parse_or_expr(Parser* self);
 __attribute__((hot)) Expr* Parser_parse_and_expr(Parser* self);
 __attribute__((hot)) Expr* Parser_parse_not_expr(Parser* self);
 __attribute__((hot)) Expr* Parser_parse_comparison(Parser* self);
+__attribute__((hot)) TrStr Parser__peek_cmp_op(Parser* self);
 __attribute__((hot)) Expr* Parser_parse_bitor_expr(Parser* self);
 __attribute__((hot)) Expr* Parser_parse_bitxor_expr(Parser* self);
 __attribute__((hot)) Expr* Parser_parse_bitand_expr(Parser* self);
@@ -3856,6 +3857,7 @@ __attribute__((hot)) TrStr CGenerator_gen_index(CGenerator* self, HirExpr* o, Hi
 __attribute__((hot)) bool CGenerator__call_arg_needs_shared_unwrap(CGenerator* self, HirExpr* arg, AstType* param_ty);
 __attribute__((hot)) TrStr CGenerator_gen_call(CGenerator* self, HirExpr* callee, List_ptr* args, AstType* call_ty);
 __attribute__((hot)) TrStr CGenerator_gen_print_call(CGenerator* self, List_ptr* args);
+__attribute__((hot)) TrStr CGenerator_gen_to_cstr(CGenerator* self, HirExpr* arg);
 __attribute__((hot)) TrStr CGenerator_gen_print_one(CGenerator* self, HirExpr* arg);
 __attribute__((hot)) TrStr CGenerator_wrap_voidp_arg(CGenerator* self, HirExpr* arg);
 __attribute__((hot)) TrStr CGenerator_unwrap_voidp_as(CGenerator* self, TrStr expr_s, AstType* ty);

@@ -126,9 +126,9 @@ __attribute__((hot)) TrStr _dict_sym(long long t, TrStr op) {
     /* pass */
     if (((t == 6LL) || (t == 8LL))) {
         /* pass */
-        TrStr _strtmp_t2241 = _tr_str_lit("_tr_rt_sdict_");
+        TrStr _strtmp_t2255 = _tr_str_lit("_tr_rt_sdict_");
         _tr_str_release(pfx);
-        pfx = _strtmp_t2241;
+        pfx = _strtmp_t2255;
     }
     /* pass */
     return _tr_strx_concat(_tr_strz(pfx), _tr_strz(op));
@@ -321,15 +321,15 @@ __attribute__((hot)) LModule* lower_to_lir(HirProgram* prog) {
 
 __attribute__((hot)) bool _register_global(LModule* m, HirStmt* s) {
     /* pass */
-    __auto_type _t2242 = (*s);
-    if (_t2242.tag == HirStmt_SLineMarker) {
-        __auto_type _ = _t2242.data.SLineMarker.n;
+    __auto_type _t2256 = (*s);
+    if (_t2256.tag == HirStmt_SLineMarker) {
+        __auto_type _ = _t2256.data.SLineMarker.n;
         return true;
-    } else if (_t2242.tag == HirStmt_SPass) {
+    } else if (_t2256.tag == HirStmt_SPass) {
         return true;
-    } else if (_t2242.tag == HirStmt_SLet) {
-        __auto_type name = _t2242.data.SLet.name;
-__auto_type val = _t2242.data.SLet.val;
+    } else if (_t2256.tag == HirStmt_SLet) {
+        __auto_type name = _t2256.data.SLet.name;
+__auto_type val = _t2256.data.SLet.val;
         /* pass */
         if ((((unsigned long long)(val)) == ((unsigned long long)(0LL)))) {
             /* pass */
@@ -348,9 +348,9 @@ __auto_type val = _t2242.data.SLet.val;
         List_ptr_append(m->global_inits, s);
         /* pass */
         return true;
-    } else if (_t2242.tag == HirStmt_SAssign) {
-        __auto_type target = _t2242.data.SAssign.target;
-__auto_type val = _t2242.data.SAssign.val;
+    } else if (_t2256.tag == HirStmt_SAssign) {
+        __auto_type target = _t2256.data.SAssign.target;
+__auto_type val = _t2256.data.SAssign.val;
         /* pass */
         TrStr nm = _ident_name(target);
         /* pass */
@@ -375,7 +375,7 @@ __auto_type val = _t2242.data.SAssign.val;
         _tr_str_release(nm);
         return true;
     } else if (1) {
-        __auto_type _ = _t2242;
+        __auto_type _ = _t2256;
         /* pass */
         return false;
     }
@@ -383,15 +383,15 @@ __auto_type val = _t2242.data.SAssign.val;
 
 __attribute__((hot)) bool _lower_global_init(LModule* m, LFunc* lf, HirStmt* s) {
     /* pass */
-    __auto_type _t2243 = (*s);
-    if (_t2243.tag == HirStmt_SLineMarker) {
-        __auto_type _ = _t2243.data.SLineMarker.n;
+    __auto_type _t2257 = (*s);
+    if (_t2257.tag == HirStmt_SLineMarker) {
+        __auto_type _ = _t2257.data.SLineMarker.n;
         return true;
-    } else if (_t2243.tag == HirStmt_SPass) {
+    } else if (_t2257.tag == HirStmt_SPass) {
         return true;
-    } else if (_t2243.tag == HirStmt_SLet) {
-        __auto_type name = _t2243.data.SLet.name;
-__auto_type val = _t2243.data.SLet.val;
+    } else if (_t2257.tag == HirStmt_SLet) {
+        __auto_type name = _t2257.data.SLet.name;
+__auto_type val = _t2257.data.SLet.val;
         /* pass */
         long long v = lower_expr(m, lf, val);
         /* pass */
@@ -417,9 +417,9 @@ __auto_type val = _t2243.data.SLet.val;
         _flush_fresh_strs(m, lf);
         /* pass */
         return true;
-    } else if (_t2243.tag == HirStmt_SAssign) {
-        __auto_type target = _t2243.data.SAssign.target;
-__auto_type val = _t2243.data.SAssign.val;
+    } else if (_t2257.tag == HirStmt_SAssign) {
+        __auto_type target = _t2257.data.SAssign.target;
+__auto_type val = _t2257.data.SAssign.val;
         /* pass */
         long long v2 = lower_expr(m, lf, val);
         /* pass */
@@ -428,7 +428,7 @@ __auto_type val = _t2243.data.SAssign.val;
             return false;
         }
         /* pass */
-        long long gidx2 = ({ TrStr _at_t2244 = (_ident_name(target)); __auto_type _wr = (LModule_global_index(m, _at_t2244)); _tr_str_release(_at_t2244); _wr; });
+        long long gidx2 = ({ TrStr _at_t2258 = (_ident_name(target)); __auto_type _wr = (LModule_global_index(m, _at_t2258)); _tr_str_release(_at_t2258); _wr; });
         /* pass */
         if ((gidx2 < 0LL)) {
             /* pass */
@@ -446,7 +446,7 @@ __auto_type val = _t2243.data.SAssign.val;
         /* pass */
         return true;
     } else if (1) {
-        __auto_type _ = _t2243;
+        __auto_type _ = _t2257;
         /* pass */
         return false;
     }
@@ -542,14 +542,14 @@ __attribute__((hot)) bool lower_block(LModule* m, LFunc* lf, HirBlock* hb) {
 
 __attribute__((hot)) bool lower_stmt(LModule* m, LFunc* lf, HirStmt* s) {
     /* pass */
-    __auto_type _t2245 = (*s);
-    if (_t2245.tag == HirStmt_SLineMarker) {
-        __auto_type _ = _t2245.data.SLineMarker.n;
+    __auto_type _t2259 = (*s);
+    if (_t2259.tag == HirStmt_SLineMarker) {
+        __auto_type _ = _t2259.data.SLineMarker.n;
         return true;
-    } else if (_t2245.tag == HirStmt_SPass) {
+    } else if (_t2259.tag == HirStmt_SPass) {
         return true;
-    } else if (_t2245.tag == HirStmt_SAutoDrop) {
-        __auto_type name = _t2245.data.SAutoDrop.name;
+    } else if (_t2259.tag == HirStmt_SAutoDrop) {
+        __auto_type name = _t2259.data.SAutoDrop.name;
         /* pass */
         if ((((LFunc_var_index(lf, name) >= 0LL) && (LFunc_var_type(lf, name) == 1LL)) && (!_is_param(lf, name)))) {
             /* pass */
@@ -561,11 +561,11 @@ __attribute__((hot)) bool lower_stmt(LModule* m, LFunc* lf, HirStmt* s) {
         }
         /* pass */
         return true;
-    } else if (_t2245.tag == HirStmt_SFree) {
-        __auto_type _ = _t2245.data.SFree.name;
+    } else if (_t2259.tag == HirStmt_SFree) {
+        __auto_type _ = _t2259.data.SFree.name;
         return true;
-    } else if (_t2245.tag == HirStmt_SReturn) {
-        __auto_type val = _t2245.data.SReturn.val;
+    } else if (_t2259.tag == HirStmt_SReturn) {
+        __auto_type val = _t2259.data.SReturn.val;
         /* pass */
         if ((((unsigned long long)(val)) != ((unsigned long long)(0LL)))) {
             /* pass */
@@ -592,9 +592,9 @@ __attribute__((hot)) bool lower_stmt(LModule* m, LFunc* lf, HirStmt* s) {
         }
         /* pass */
         return true;
-    } else if (_t2245.tag == HirStmt_SLet) {
-        __auto_type name = _t2245.data.SLet.name;
-__auto_type val = _t2245.data.SLet.val;
+    } else if (_t2259.tag == HirStmt_SLet) {
+        __auto_type name = _t2259.data.SLet.name;
+__auto_type val = _t2259.data.SLet.val;
         /* pass */
         if ((((unsigned long long)(val)) == ((unsigned long long)(0LL)))) {
             /* pass */
@@ -622,15 +622,15 @@ __auto_type val = _t2245.data.SLet.val;
         _flush_fresh_strs(m, lf);
         /* pass */
         return true;
-    } else if (_t2245.tag == HirStmt_SAssign) {
-        __auto_type target = _t2245.data.SAssign.target;
-__auto_type val = _t2245.data.SAssign.val;
+    } else if (_t2259.tag == HirStmt_SAssign) {
+        __auto_type target = _t2259.data.SAssign.target;
+__auto_type val = _t2259.data.SAssign.val;
         /* pass */
-        __auto_type _t2246 = (*target);
-        if (_t2246.tag == HirExpr_EMethodCall) {
-            __auto_type mobj = _t2246.data.EMethodCall.obj;
-__auto_type mmeth = _t2246.data.EMethodCall.method;
-__auto_type midx = _t2246.data.EMethodCall.args;
+        __auto_type _t2260 = (*target);
+        if (_t2260.tag == HirExpr_EMethodCall) {
+            __auto_type mobj = _t2260.data.EMethodCall.obj;
+__auto_type mmeth = _t2260.data.EMethodCall.method;
+__auto_type midx = _t2260.data.EMethodCall.args;
             /* pass */
             if (((strcmp(_tr_strz(mmeth), _tr_strz(_tr_str_lit("get_index"))) == 0) && (midx->len == 1LL))) {
                 /* pass */
@@ -638,13 +638,13 @@ __auto_type midx = _t2246.data.EMethodCall.args;
             }
             /* pass */
             return false;
-        } else if (_t2246.tag == HirExpr_EIndex) {
-            __auto_type iobj = _t2246.data.EIndex.obj;
-__auto_type iidx = _t2246.data.EIndex._tr_v_index;
+        } else if (_t2260.tag == HirExpr_EIndex) {
+            __auto_type iobj = _t2260.data.EIndex.obj;
+__auto_type iidx = _t2260.data.EIndex._tr_v_index;
             /* pass */
             return _lower_index_set(m, lf, iobj, iidx, val);
         } else if (1) {
-            __auto_type _ = _t2246;
+            __auto_type _ = _t2260;
             /* pass */
             /* pass */
         }
@@ -701,10 +701,10 @@ __auto_type iidx = _t2246.data.EIndex._tr_v_index;
         /* pass */
         _tr_str_release(tn);
         return true;
-    } else if (_t2245.tag == HirStmt_SIf) {
-        __auto_type cond = _t2245.data.SIf.cond;
-__auto_type then_b = _t2245.data.SIf.then_b;
-__auto_type else_b = _t2245.data.SIf.else_b;
+    } else if (_t2259.tag == HirStmt_SIf) {
+        __auto_type cond = _t2259.data.SIf.cond;
+__auto_type then_b = _t2259.data.SIf.then_b;
+__auto_type else_b = _t2259.data.SIf.else_b;
         /* pass */
         long long cv = lower_expr(m, lf, cond);
         /* pass */
@@ -744,9 +744,9 @@ __auto_type else_b = _t2245.data.SIf.else_b;
         LFunc_set_cur(lf, end_id);
         /* pass */
         return true;
-    } else if (_t2245.tag == HirStmt_SWhile) {
-        __auto_type cond = _t2245.data.SWhile.cond;
-__auto_type body = _t2245.data.SWhile.body;
+    } else if (_t2259.tag == HirStmt_SWhile) {
+        __auto_type cond = _t2259.data.SWhile.cond;
+__auto_type body = _t2259.data.SWhile.body;
         /* pass */
         long long hdr = LFunc_new_block(lf);
         /* pass */
@@ -791,8 +791,8 @@ __auto_type body = _t2245.data.SWhile.body;
         LFunc_set_cur(lf, ext);
         /* pass */
         return true;
-    } else if (_t2245.tag == HirStmt_SBreak) {
-        __auto_type bval = _t2245.data.SBreak.val;
+    } else if (_t2259.tag == HirStmt_SBreak) {
+        __auto_type bval = _t2259.data.SBreak.val;
         /* pass */
         if ((((unsigned long long)(bval)) != ((unsigned long long)(0LL)))) {
             /* pass */
@@ -809,7 +809,7 @@ __auto_type body = _t2245.data.SWhile.body;
         LFunc_set_cur(lf, LFunc_new_block(lf));
         /* pass */
         return true;
-    } else if (_t2245.tag == HirStmt_SContinue) {
+    } else if (_t2259.tag == HirStmt_SContinue) {
         /* pass */
         if ((lf->loop_cont->len == 0LL)) {
             /* pass */
@@ -821,20 +821,20 @@ __auto_type body = _t2245.data.SWhile.body;
         LFunc_set_cur(lf, LFunc_new_block(lf));
         /* pass */
         return true;
-    } else if (_t2245.tag == HirStmt_SFor) {
-        __auto_type var = _t2245.data.SFor.var;
-__auto_type iter = _t2245.data.SFor.iter;
-__auto_type body = _t2245.data.SFor.body;
+    } else if (_t2259.tag == HirStmt_SFor) {
+        __auto_type var = _t2259.data.SFor.var;
+__auto_type iter = _t2259.data.SFor.iter;
+__auto_type body = _t2259.data.SFor.body;
         /* pass */
         return _lower_for(m, lf, var, iter, body);
-    } else if (_t2245.tag == HirStmt_SForUnpack) {
-        __auto_type vars = _t2245.data.SForUnpack.vars;
-__auto_type iter = _t2245.data.SForUnpack.iter;
-__auto_type body = _t2245.data.SForUnpack.body;
+    } else if (_t2259.tag == HirStmt_SForUnpack) {
+        __auto_type vars = _t2259.data.SForUnpack.vars;
+__auto_type iter = _t2259.data.SForUnpack.iter;
+__auto_type body = _t2259.data.SForUnpack.body;
         /* pass */
         return _lower_for_unpack(m, lf, vars, iter, body);
-    } else if (_t2245.tag == HirStmt_SExpr) {
-        __auto_type e = _t2245.data.SExpr.expr;
+    } else if (_t2259.tag == HirStmt_SExpr) {
+        __auto_type e = _t2259.data.SExpr.expr;
         /* pass */
         bool se_ok = lower_expr_stmt(m, lf, e);
         /* pass */
@@ -842,7 +842,7 @@ __auto_type body = _t2245.data.SForUnpack.body;
         /* pass */
         return se_ok;
     } else if (1) {
-        __auto_type _ = _t2245;
+        __auto_type _ = _t2259;
         /* pass */
         return false;
     }
@@ -850,17 +850,17 @@ __auto_type body = _t2245.data.SForUnpack.body;
 
 __attribute__((hot)) bool _lower_for(LModule* m, LFunc* lf, TrStr var, HirExpr* iter, HirBlock* body) {
     /* pass */
-    __auto_type _t2247 = (*iter);
-    if (_t2247.tag == HirExpr_ECall) {
-        __auto_type callee = _t2247.data.ECall.callee;
-__auto_type args = _t2247.data.ECall.args;
+    __auto_type _t2261 = (*iter);
+    if (_t2261.tag == HirExpr_ECall) {
+        __auto_type callee = _t2261.data.ECall.callee;
+__auto_type args = _t2261.data.ECall.args;
         /* pass */
         if ((strcmp(_tr_strz(_ident_name(callee)), _tr_strz(_tr_str_lit("range"))) == 0)) {
             /* pass */
             return _lower_for_range(m, lf, var, args, body);
         }
     } else if (1) {
-        __auto_type _ = _t2247;
+        __auto_type _ = _t2261;
         /* pass */
         /* pass */
     }
@@ -897,9 +897,9 @@ __attribute__((hot)) bool _lower_for_range(LModule* m, LFunc* lf, TrStr var, Lis
         /* pass */
         if ((stepv < 0LL)) {
             /* pass */
-            TrStr _strtmp_t2248 = _tr_str_lit(">");
+            TrStr _strtmp_t2262 = _tr_str_lit(">");
             _tr_str_release(cmp);
-            cmp = _strtmp_t2248;
+            cmp = _strtmp_t2262;
         }
     }
     /* pass */
@@ -1135,17 +1135,17 @@ __attribute__((hot)) bool _lower_for_unpack(LModule* m, LFunc* lf, List_TrStr* v
         return false;
     }
     /* pass */
-    __auto_type _t2249 = (*iter);
-    if (_t2249.tag == HirExpr_ECall) {
-        __auto_type callee = _t2249.data.ECall.callee;
-__auto_type args = _t2249.data.ECall.args;
+    __auto_type _t2263 = (*iter);
+    if (_t2263.tag == HirExpr_ECall) {
+        __auto_type callee = _t2263.data.ECall.callee;
+__auto_type args = _t2263.data.ECall.args;
         /* pass */
         if (((strcmp(_tr_strz(_ident_name(callee)), _tr_strz(_tr_str_lit("enumerate"))) == 0) && (args->len == 1LL))) {
             /* pass */
-            return ({ TrStr _at_t2250 = (List_TrStr_get(vars, 0LL)); TrStr _at_t2251 = (List_TrStr_get(vars, 1LL)); __auto_type _wr = (_lower_enumerate(m, lf, _at_t2250, _at_t2251, ((HirExpr*)List_ptr_get(args, 0LL)), body)); _tr_str_release(_at_t2250); _tr_str_release(_at_t2251); _wr; });
+            return ({ TrStr _at_t2264 = (List_TrStr_get(vars, 0LL)); TrStr _at_t2265 = (List_TrStr_get(vars, 1LL)); __auto_type _wr = (_lower_enumerate(m, lf, _at_t2264, _at_t2265, ((HirExpr*)List_ptr_get(args, 0LL)), body)); _tr_str_release(_at_t2264); _tr_str_release(_at_t2265); _wr; });
         }
     } else if (1) {
-        __auto_type _ = _t2249;
+        __auto_type _ = _t2263;
         /* pass */
         /* pass */
     }
@@ -1301,12 +1301,12 @@ __attribute__((hot)) void _emit_incr(LFunc* lf, TrStr name) {
 
 __attribute__((hot)) TrStr _ident_name(HirExpr* e) {
     /* pass */
-    __auto_type _t2252 = (*e);
-    if (_t2252.tag == HirExpr_EIdent) {
-        __auto_type n = _t2252.data.EIdent.name;
+    __auto_type _t2266 = (*e);
+    if (_t2266.tag == HirExpr_EIdent) {
+        __auto_type n = _t2266.data.EIdent.name;
         return _tr_str_retain(n);
     } else if (1) {
-        __auto_type _ = _t2252;
+        __auto_type _ = _t2266;
         return _tr_str_lit("");
     }
 }
@@ -1470,14 +1470,14 @@ __attribute__((hot)) bool _lower_print(LModule* m, LFunc* lf, List_ptr* args) {
         /* pass */
         if ((avt == 1LL)) {
             /* pass */
-            TrStr _strtmp_t2253 = _tr_str_lit("_tr_rt_print_cstr");
+            TrStr _strtmp_t2267 = _tr_str_lit("_tr_rt_print_cstr");
             _tr_str_release(sym);
-            sym = _strtmp_t2253;
+            sym = _strtmp_t2267;
         } else if ((avt == 4LL)) {
             /* pass */
-            TrStr _strtmp_t2254 = _tr_str_lit("_tr_rt_print_bool");
+            TrStr _strtmp_t2268 = _tr_str_lit("_tr_rt_print_bool");
             _tr_str_release(sym);
-            sym = _strtmp_t2254;
+            sym = _strtmp_t2268;
         }
         /* pass */
         LModule_add_extern(m, sym);
@@ -1544,10 +1544,10 @@ __attribute__((hot)) bool _lower_print(LModule* m, LFunc* lf, List_ptr* args) {
 
 __attribute__((hot)) bool lower_expr_stmt(LModule* m, LFunc* lf, HirExpr* e) {
     /* pass */
-    __auto_type _t2255 = (*e);
-    if (_t2255.tag == HirExpr_ECall) {
-        __auto_type callee = _t2255.data.ECall.callee;
-__auto_type args = _t2255.data.ECall.args;
+    __auto_type _t2269 = (*e);
+    if (_t2269.tag == HirExpr_ECall) {
+        __auto_type callee = _t2269.data.ECall.callee;
+__auto_type args = _t2269.data.ECall.args;
         /* pass */
         TrStr fname = _ident_name(callee);
         /* pass */
@@ -1561,13 +1561,13 @@ __auto_type args = _t2255.data.ECall.args;
         /* pass */
         _tr_str_release(fname);
         return (r >= 0LL);
-    } else if (_t2255.tag == HirExpr_EMethodCall) {
+    } else if (_t2269.tag == HirExpr_EMethodCall) {
         /* pass */
         long long rm = lower_expr(m, lf, e);
         /* pass */
         return (rm >= 0LL);
     } else if (1) {
-        __auto_type _ = _t2255;
+        __auto_type _ = _t2269;
         /* pass */
         return false;
     }
@@ -1656,9 +1656,9 @@ __attribute__((hot)) TrStr _lir_itoa(long long n) {
     /* pass */
     while ((x > 0LL)) {
         /* pass */
-        TrStr _strtmp_t2256 = ({ TrStr _cl = (_lir_digit((x % 10LL))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(s)); _tr_str_release(_cl); _cres; });
+        TrStr _strtmp_t2270 = ({ TrStr _cl = (_lir_digit((x % 10LL))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(s)); _tr_str_release(_cl); _cres; });
         _tr_str_release(s);
-        s = _strtmp_t2256;
+        s = _strtmp_t2270;
         /* pass */
         x = (x / 10LL);
     }
@@ -2001,6 +2001,18 @@ __attribute__((hot)) long long _lower_str_method(LModule* m, LFunc* lf, long lon
         return _str_call0(m, lf, _tr_str_lit("_tr_rt_str_trim_right"), _tr_v_recv, 1LL);
     }
     /* pass */
+    if (((strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("zfill"))) == 0) && (margs->len == 1LL))) {
+        /* pass */
+        long long zfa = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, 0LL)));
+        /* pass */
+        if (((zfa < 0LL) || (LFunc_vreg_type(lf, zfa) != 0LL))) {
+            /* pass */
+            return (-1LL);
+        }
+        /* pass */
+        return _str_call1(m, lf, _tr_str_lit("_tr_rt_str_zfill"), _tr_v_recv, zfa, 1LL);
+    }
+    /* pass */
     if (((strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("pad_left"))) == 0) && (margs->len == 1LL))) {
         /* pass */
         long long pla = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, 0LL)));
@@ -2047,6 +2059,23 @@ __attribute__((hot)) long long _lower_str_method(LModule* m, LFunc* lf, long lon
         }
         /* pass */
         return _str_call1(m, lf, _tr_str_lit("_tr_rt_str_center"), _tr_v_recv, cea, 1LL);
+    }
+    /* pass */
+    if (((strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("chars"))) == 0) && (margs->len == 0LL))) {
+        /* pass */
+        LModule_add_extern(m, _tr_str_lit("_tr_rt_str_chars"));
+        /* pass */
+        List_i64* cha = (void*)List_i64_new();
+        /* pass */
+        List_i64_append(cha, _tr_v_recv);
+        /* pass */
+        long long chd = LFunc_new_vreg(lf);
+        /* pass */
+        LFunc_emit(lf, LInst_ctor_ICall(chd, _tr_str_lit("_tr_rt_str_chars"), cha));
+        /* pass */
+        LFunc_set_vreg_type(lf, chd, 3LL);
+        /* pass */
+        return chd;
     }
     /* pass */
     if (((strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("split"))) == 0) && (margs->len == 1LL))) {
@@ -2348,9 +2377,9 @@ __attribute__((hot)) long long _lower_int_method(LModule* m, LFunc* lf, long lon
         /* pass */
         if ((strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("lcm"))) == 0)) {
             /* pass */
-            TrStr _strtmp_t2257 = _tr_str_lit("_tr_rt_lcm_i64");
+            TrStr _strtmp_t2271 = _tr_str_lit("_tr_rt_lcm_i64");
             _tr_str_release(gsym);
-            gsym = _strtmp_t2257;
+            gsym = _strtmp_t2271;
         }
         /* pass */
         LModule_add_extern(m, gsym);
@@ -2553,9 +2582,9 @@ __attribute__((hot)) long long _lower_float_method(LModule* m, LFunc* lf, long l
             /* pass */
             if ((strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("is_inf"))) == 0)) {
                 /* pass */
-                TrStr _strtmp_t2258 = _tr_str_lit("_tr_rt_f64_is_inf");
+                TrStr _strtmp_t2272 = _tr_str_lit("_tr_rt_f64_is_inf");
                 _tr_str_release(nsym);
-                nsym = _strtmp_t2258;
+                nsym = _strtmp_t2272;
             }
             /* pass */
             LModule_add_extern(m, nsym);
@@ -2598,9 +2627,9 @@ __attribute__((hot)) long long _lower_float_method(LModule* m, LFunc* lf, long l
         /* pass */
         if ((strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("atan2"))) == 0)) {
             /* pass */
-            TrStr _strtmp_t2259 = _tr_str_lit("_tr_rt_atan2");
+            TrStr _strtmp_t2273 = _tr_str_lit("_tr_rt_atan2");
             _tr_str_release(psym);
-            psym = _strtmp_t2259;
+            psym = _strtmp_t2273;
         }
         /* pass */
         LModule_add_extern(m, psym);
@@ -2620,51 +2649,51 @@ __attribute__((hot)) long long _lower_float_method(LModule* m, LFunc* lf, long l
 
 __attribute__((hot)) bool _is_const_int(HirExpr* e) {
     /* pass */
-    __auto_type _t2260 = (*e);
-    if (_t2260.tag == HirExpr_ELitInt) {
+    __auto_type _t2274 = (*e);
+    if (_t2274.tag == HirExpr_ELitInt) {
         return true;
-    } else if (_t2260.tag == HirExpr_EUnaryOp) {
-        __auto_type op = _t2260.data.EUnaryOp.op;
-__auto_type sub = _t2260.data.EUnaryOp.expr;
+    } else if (_t2274.tag == HirExpr_EUnaryOp) {
+        __auto_type op = _t2274.data.EUnaryOp.op;
+__auto_type sub = _t2274.data.EUnaryOp.expr;
         /* pass */
         if ((strcmp(_tr_strz(op), _tr_strz(_tr_str_lit("-"))) == 0)) {
             /* pass */
-            __auto_type _t2261 = (*sub);
-            if (_t2261.tag == HirExpr_ELitInt) {
+            __auto_type _t2275 = (*sub);
+            if (_t2275.tag == HirExpr_ELitInt) {
                 return true;
             } else if (1) {
-                __auto_type _ = _t2261;
+                __auto_type _ = _t2275;
                 return false;
             }
         }
         /* pass */
         return false;
     } else if (1) {
-        __auto_type _ = _t2260;
+        __auto_type _ = _t2274;
         return false;
     }
 }
 
 __attribute__((hot)) long long _const_int_val(HirExpr* e) {
     /* pass */
-    __auto_type _t2262 = (*e);
-    if (_t2262.tag == HirExpr_ELitInt) {
-        __auto_type v = _t2262.data.ELitInt.val;
+    __auto_type _t2276 = (*e);
+    if (_t2276.tag == HirExpr_ELitInt) {
+        __auto_type v = _t2276.data.ELitInt.val;
         return v;
-    } else if (_t2262.tag == HirExpr_EUnaryOp) {
-        __auto_type op = _t2262.data.EUnaryOp.op;
-__auto_type sub = _t2262.data.EUnaryOp.expr;
+    } else if (_t2276.tag == HirExpr_EUnaryOp) {
+        __auto_type op = _t2276.data.EUnaryOp.op;
+__auto_type sub = _t2276.data.EUnaryOp.expr;
         /* pass */
-        __auto_type _t2263 = (*sub);
-        if (_t2263.tag == HirExpr_ELitInt) {
-            __auto_type v2 = _t2263.data.ELitInt.val;
+        __auto_type _t2277 = (*sub);
+        if (_t2277.tag == HirExpr_ELitInt) {
+            __auto_type v2 = _t2277.data.ELitInt.val;
             return (0LL - v2);
         } else if (1) {
-            __auto_type _ = _t2263;
+            __auto_type _ = _t2277;
             return 0LL;
         }
     } else if (1) {
-        __auto_type _ = _t2262;
+        __auto_type _ = _t2276;
         return 0LL;
     }
 }
@@ -2722,17 +2751,17 @@ __attribute__((hot)) long long _list_get(LModule* m, LFunc* lf, long long handle
 
 __attribute__((hot)) long long lower_expr(LModule* m, LFunc* lf, HirExpr* e) {
     /* pass */
-    __auto_type _t2264 = (*e);
-    if (_t2264.tag == HirExpr_ELitInt) {
-        __auto_type v = _t2264.data.ELitInt.val;
+    __auto_type _t2278 = (*e);
+    if (_t2278.tag == HirExpr_ELitInt) {
+        __auto_type v = _t2278.data.ELitInt.val;
         /* pass */
         long long d = LFunc_new_vreg(lf);
         /* pass */
         LFunc_emit(lf, LInst_ctor_IConst(d, v));
         /* pass */
         return d;
-    } else if (_t2264.tag == HirExpr_ELitStr) {
-        __auto_type sv = _t2264.data.ELitStr.val;
+    } else if (_t2278.tag == HirExpr_ELitStr) {
+        __auto_type sv = _t2278.data.ELitStr.val;
         /* pass */
         long long idx = LModule_add_string(m, sv);
         /* pass */
@@ -2757,8 +2786,8 @@ __attribute__((hot)) long long lower_expr(LModule* m, LFunc* lf, HirExpr* e) {
         _fresh_mark(lf, lheap);
         /* pass */
         return lheap;
-    } else if (_t2264.tag == HirExpr_ELitBool) {
-        __auto_type bval = _t2264.data.ELitBool.val;
+    } else if (_t2278.tag == HirExpr_ELitBool) {
+        __auto_type bval = _t2278.data.ELitBool.val;
         /* pass */
         long long db = LFunc_new_vreg(lf);
         /* pass */
@@ -2774,8 +2803,8 @@ __attribute__((hot)) long long lower_expr(LModule* m, LFunc* lf, HirExpr* e) {
         LFunc_set_vreg_type(lf, db, 4LL);
         /* pass */
         return db;
-    } else if (_t2264.tag == HirExpr_ELitFloat) {
-        __auto_type fval = _t2264.data.ELitFloat.val;
+    } else if (_t2278.tag == HirExpr_ELitFloat) {
+        __auto_type fval = _t2278.data.ELitFloat.val;
         /* pass */
         long long fd = LFunc_new_vreg(lf);
         /* pass */
@@ -2784,8 +2813,8 @@ __attribute__((hot)) long long lower_expr(LModule* m, LFunc* lf, HirExpr* e) {
         LFunc_set_vreg_type(lf, fd, 5LL);
         /* pass */
         return fd;
-    } else if (_t2264.tag == HirExpr_EIdent) {
-        __auto_type name = _t2264.data.EIdent.name;
+    } else if (_t2278.tag == HirExpr_EIdent) {
+        __auto_type name = _t2278.data.EIdent.name;
         /* pass */
         if (((LFunc_var_index(lf, name) < 0LL) && LModule_is_global(m, name))) {
             /* pass */
@@ -2807,10 +2836,10 @@ __attribute__((hot)) long long lower_expr(LModule* m, LFunc* lf, HirExpr* e) {
         LFunc_set_vreg_type(lf, d2, LFunc_var_type(lf, name));
         /* pass */
         return d2;
-    } else if (_t2264.tag == HirExpr_EIfElse) {
-        __auto_type cond = _t2264.data.EIfElse.cond;
-__auto_type then_e = _t2264.data.EIfElse.then_e;
-__auto_type else_e = _t2264.data.EIfElse.else_e;
+    } else if (_t2278.tag == HirExpr_EIfElse) {
+        __auto_type cond = _t2278.data.EIfElse.cond;
+__auto_type then_e = _t2278.data.EIfElse.then_e;
+__auto_type else_e = _t2278.data.EIfElse.else_e;
         /* pass */
         long long tcv = lower_expr(m, lf, cond);
         /* pass */
@@ -2890,9 +2919,9 @@ __auto_type else_e = _t2264.data.EIfElse.else_e;
         /* pass */
         _tr_str_release(rname);
         return trd;
-    } else if (_t2264.tag == HirExpr_EUnaryOp) {
-        __auto_type op = _t2264.data.EUnaryOp.op;
-__auto_type sub = _t2264.data.EUnaryOp.expr;
+    } else if (_t2278.tag == HirExpr_EUnaryOp) {
+        __auto_type op = _t2278.data.EUnaryOp.op;
+__auto_type sub = _t2278.data.EUnaryOp.expr;
         /* pass */
         long long sv = lower_expr(m, lf, sub);
         /* pass */
@@ -2977,10 +3006,10 @@ __auto_type sub = _t2264.data.EUnaryOp.expr;
         }
         /* pass */
         return (-1LL);
-    } else if (_t2264.tag == HirExpr_EBinOp) {
-        __auto_type op = _t2264.data.EBinOp.op;
-__auto_type l = _t2264.data.EBinOp.left;
-__auto_type r = _t2264.data.EBinOp.right;
+    } else if (_t2278.tag == HirExpr_EBinOp) {
+        __auto_type op = _t2278.data.EBinOp.op;
+__auto_type l = _t2278.data.EBinOp.left;
+__auto_type r = _t2278.data.EBinOp.right;
         /* pass */
         long long a = lower_expr(m, lf, l);
         /* pass */
@@ -3101,9 +3130,9 @@ __auto_type r = _t2264.data.EBinOp.right;
             /* pass */
             if ((want_e == 1LL)) {
                 /* pass */
-                TrStr _strtmp_t2265 = _tr_str_lit("_tr_rt_list_contains_str");
+                TrStr _strtmp_t2279 = _tr_str_lit("_tr_rt_list_contains_str");
                 _tr_str_release(csym);
-                csym = _strtmp_t2265;
+                csym = _strtmp_t2279;
             }
             /* pass */
             LModule_add_extern(m, csym);
@@ -3257,9 +3286,9 @@ __auto_type r = _t2264.data.EBinOp.right;
         }
         /* pass */
         return d3;
-    } else if (_t2264.tag == HirExpr_ECall) {
-        __auto_type callee = _t2264.data.ECall.callee;
-__auto_type args = _t2264.data.ECall.args;
+    } else if (_t2278.tag == HirExpr_ECall) {
+        __auto_type callee = _t2278.data.ECall.callee;
+__auto_type args = _t2278.data.ECall.args;
         /* pass */
         TrStr fn = _ident_name(callee);
         /* pass */
@@ -3315,6 +3344,49 @@ __auto_type args = _t2264.data.ECall.args;
             /* pass */
             _tr_str_release(fn);
             return (-1LL);
+        }
+        /* pass */
+        if (((((strcmp(_tr_strz(fn), _tr_strz(_tr_str_lit("hex"))) == 0) || (strcmp(_tr_strz(fn), _tr_strz(_tr_str_lit("oct"))) == 0)) || (strcmp(_tr_strz(fn), _tr_strz(_tr_str_lit("bin"))) == 0)) && (args->len == 1LL))) {
+            /* pass */
+            long long hxv = lower_expr(m, lf, ((HirExpr*)List_ptr_get(args, 0LL)));
+            /* pass */
+            if (((hxv < 0LL) || (LFunc_vreg_type(lf, hxv) != 0LL))) {
+                /* pass */
+                _tr_str_release(fn);
+                return (-1LL);
+            }
+            /* pass */
+            TrStr hxsym = _tr_str_lit("_tr_rt_hex_str");
+            /* pass */
+            if ((strcmp(_tr_strz(fn), _tr_strz(_tr_str_lit("oct"))) == 0)) {
+                /* pass */
+                TrStr _strtmp_t2280 = _tr_str_lit("_tr_rt_oct_str");
+                _tr_str_release(hxsym);
+                hxsym = _strtmp_t2280;
+            } else if ((strcmp(_tr_strz(fn), _tr_strz(_tr_str_lit("bin"))) == 0)) {
+                /* pass */
+                TrStr _strtmp_t2281 = _tr_str_lit("_tr_rt_bin_str");
+                _tr_str_release(hxsym);
+                hxsym = _strtmp_t2281;
+            }
+            /* pass */
+            LModule_add_extern(m, hxsym);
+            /* pass */
+            List_i64* hxa = (void*)List_i64_new();
+            /* pass */
+            List_i64_append(hxa, hxv);
+            /* pass */
+            long long hxd = LFunc_new_vreg(lf);
+            /* pass */
+            LFunc_emit(lf, LInst_ctor_ICall(hxd, hxsym, hxa));
+            /* pass */
+            LFunc_set_vreg_type(lf, hxd, 1LL);
+            /* pass */
+            _fresh_mark(lf, hxd);
+            /* pass */
+            _tr_str_release(fn);
+            _tr_str_release(hxsym);
+            return hxd;
         }
         /* pass */
         if (((strcmp(_tr_strz(fn), _tr_strz(_tr_str_lit("round"))) == 0) && (args->len == 1LL))) {
@@ -3442,9 +3514,9 @@ __auto_type args = _t2264.data.ECall.args;
                 /* pass */
                 if ((strcmp(_tr_strz(fn), _tr_strz(_tr_str_lit("max"))) == 0)) {
                     /* pass */
-                    TrStr _strtmp_t2266 = _tr_str_lit("_tr_rt_max_f64");
+                    TrStr _strtmp_t2282 = _tr_str_lit("_tr_rt_max_f64");
                     _tr_str_release(fmsym);
-                    fmsym = _strtmp_t2266;
+                    fmsym = _strtmp_t2282;
                 }
                 /* pass */
                 LModule_add_extern(m, fmsym);
@@ -3470,9 +3542,9 @@ __auto_type args = _t2264.data.ECall.args;
             /* pass */
             if ((strcmp(_tr_strz(fn), _tr_strz(_tr_str_lit("max"))) == 0)) {
                 /* pass */
-                TrStr _strtmp_t2267 = _tr_str_lit("_tr_rt_max_i64");
+                TrStr _strtmp_t2283 = _tr_str_lit("_tr_rt_max_i64");
                 _tr_str_release(msym);
-                msym = _strtmp_t2267;
+                msym = _strtmp_t2283;
             }
             /* pass */
             LModule_add_extern(m, msym);
@@ -3530,9 +3602,9 @@ __auto_type args = _t2264.data.ECall.args;
             /* pass */
             if ((cvt == 4LL)) {
                 /* pass */
-                TrStr _strtmp_t2268 = _tr_str_lit("_tr_rt_bool_to_str");
+                TrStr _strtmp_t2284 = _tr_str_lit("_tr_rt_bool_to_str");
                 _tr_str_release(ssym);
-                ssym = _strtmp_t2268;
+                ssym = _strtmp_t2284;
             } else if ((cvt != 0LL)) {
                 /* pass */
                 _tr_str_release(fn);
@@ -3693,9 +3765,9 @@ __auto_type args = _t2264.data.ECall.args;
             /* pass */
             if ((strcmp(_tr_strz(fn), _tr_strz(_tr_str_lit("all"))) == 0)) {
                 /* pass */
-                TrStr _strtmp_t2269 = _tr_str_lit("_tr_rt_list_all_i64");
+                TrStr _strtmp_t2285 = _tr_str_lit("_tr_rt_list_all_i64");
                 _tr_str_release(ansym);
-                ansym = _strtmp_t2269;
+                ansym = _strtmp_t2285;
             }
             /* pass */
             LModule_add_extern(m, ansym);
@@ -3822,8 +3894,8 @@ __auto_type args = _t2264.data.ECall.args;
         /* pass */
         _tr_str_release(fn);
         return d4;
-    } else if (_t2264.tag == HirExpr_EList) {
-        __auto_type items = _t2264.data.EList.items;
+    } else if (_t2278.tag == HirExpr_EList) {
+        __auto_type items = _t2278.data.EList.items;
         /* pass */
         LModule_add_extern(m, _tr_str_lit("_tr_rt_list_new"));
         /* pass */
@@ -3884,10 +3956,10 @@ __auto_type args = _t2264.data.ECall.args;
         LFunc_set_vreg_type(lf, hv, list_tag);
         /* pass */
         return hv;
-    } else if (_t2264.tag == HirExpr_EDict) {
-        __auto_type keys = _t2264.data.EDict.keys;
-__auto_type vals = _t2264.data.EDict.vals;
-__auto_type dty = _t2264.data.EDict.ty;
+    } else if (_t2278.tag == HirExpr_EDict) {
+        __auto_type keys = _t2278.data.EDict.keys;
+__auto_type vals = _t2278.data.EDict.vals;
+__auto_type dty = _t2278.data.EDict.ty;
         /* pass */
         long long dtag = _ast_type_tag(dty);
         /* pass */
@@ -3997,9 +4069,9 @@ __auto_type dty = _t2264.data.EDict.ty;
         /* pass */
         _tr_str_release(dnew);
         return dhv;
-    } else if (_t2264.tag == HirExpr_EIndex) {
-        __auto_type obj = _t2264.data.EIndex.obj;
-__auto_type idx = _t2264.data.EIndex._tr_v_index;
+    } else if (_t2278.tag == HirExpr_EIndex) {
+        __auto_type obj = _t2278.data.EIndex.obj;
+__auto_type idx = _t2278.data.EIndex._tr_v_index;
         /* pass */
         long long ov = lower_expr(m, lf, obj);
         /* pass */
@@ -4066,9 +4138,9 @@ __auto_type idx = _t2264.data.EIndex._tr_v_index;
         LFunc_set_vreg_type(lf, gval, _list_elem_tag(ovt));
         /* pass */
         return gval;
-    } else if (_t2264.tag == HirExpr_EPropAccess) {
-        __auto_type obj = _t2264.data.EPropAccess.obj;
-__auto_type prop = _t2264.data.EPropAccess.prop;
+    } else if (_t2278.tag == HirExpr_EPropAccess) {
+        __auto_type obj = _t2278.data.EPropAccess.obj;
+__auto_type prop = _t2278.data.EPropAccess.prop;
         /* pass */
         if ((strcmp(_tr_strz(prop), _tr_strz(_tr_str_lit("len"))) != 0)) {
             /* pass */
@@ -4116,10 +4188,10 @@ __auto_type prop = _t2264.data.EPropAccess.prop;
         LFunc_emit(lf, LInst_ctor_ICall(ld, _tr_str_lit("_tr_rt_list_len"), la));
         /* pass */
         return ld;
-    } else if (_t2264.tag == HirExpr_EMethodCall) {
-        __auto_type obj = _t2264.data.EMethodCall.obj;
-__auto_type method = _t2264.data.EMethodCall.method;
-__auto_type margs = _t2264.data.EMethodCall.args;
+    } else if (_t2278.tag == HirExpr_EMethodCall) {
+        __auto_type obj = _t2278.data.EMethodCall.obj;
+__auto_type method = _t2278.data.EMethodCall.method;
+__auto_type margs = _t2278.data.EMethodCall.args;
         /* pass */
         long long ovm = lower_expr(m, lf, obj);
         /* pass */
@@ -4245,9 +4317,9 @@ __auto_type margs = _t2264.data.EMethodCall.args;
             /* pass */
             if ((want_elem == 1LL)) {
                 /* pass */
-                TrStr _strtmp_t2270 = _tr_str_lit("_tr_rt_list_index_str");
+                TrStr _strtmp_t2286 = _tr_str_lit("_tr_rt_list_index_str");
                 _tr_str_release(ixsym);
-                ixsym = _strtmp_t2270;
+                ixsym = _strtmp_t2286;
             }
             /* pass */
             LModule_add_extern(m, ixsym);
@@ -4279,9 +4351,9 @@ __auto_type margs = _t2264.data.EMethodCall.args;
             /* pass */
             if ((want_elem == 1LL)) {
                 /* pass */
-                TrStr _strtmp_t2271 = _tr_str_lit("_tr_rt_list_contains_str");
+                TrStr _strtmp_t2287 = _tr_str_lit("_tr_rt_list_contains_str");
                 _tr_str_release(cxsym);
-                cxsym = _strtmp_t2271;
+                cxsym = _strtmp_t2287;
             }
             /* pass */
             LModule_add_extern(m, cxsym);
@@ -4315,9 +4387,9 @@ __auto_type margs = _t2264.data.EMethodCall.args;
             /* pass */
             if ((want_elem == 1LL)) {
                 /* pass */
-                TrStr _strtmp_t2272 = _tr_str_lit("_tr_rt_list_count_str");
+                TrStr _strtmp_t2288 = _tr_str_lit("_tr_rt_list_count_str");
                 _tr_str_release(ctsym);
-                ctsym = _strtmp_t2272;
+                ctsym = _strtmp_t2288;
             }
             /* pass */
             LModule_add_extern(m, ctsym);
@@ -4347,9 +4419,9 @@ __auto_type margs = _t2264.data.EMethodCall.args;
             /* pass */
             if (((strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("max"))) == 0) || (strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("max_val"))) == 0))) {
                 /* pass */
-                TrStr _strtmp_t2273 = _tr_str_lit("_tr_rt_list_max_i64");
+                TrStr _strtmp_t2289 = _tr_str_lit("_tr_rt_list_max_i64");
                 _tr_str_release(mmsym);
-                mmsym = _strtmp_t2273;
+                mmsym = _strtmp_t2289;
             }
             /* pass */
             return _list_call1(m, lf, mmsym, ovm, 0LL);
@@ -4564,7 +4636,7 @@ __auto_type margs = _t2264.data.EMethodCall.args;
         /* pass */
         return (-1LL);
     } else if (1) {
-        __auto_type _ = _t2264;
+        __auto_type _ = _t2278;
         /* pass */
         return (-1LL);
     }

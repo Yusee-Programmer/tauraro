@@ -1417,34 +1417,38 @@ extend Parser:
                 self.pos = self.pos + 1
                 return box_expr(Expr.EUnaryOp("not", box_expr(Expr.EBinOp("in", left, self.parse_bitor_expr()))))
             self.pos = saved_pos
+        # Comparison chain: `a < b < c` desugars to `(a < b) and (b < c)` (Python-style).
+        # A single comparison is the common case (chain of length 1).
+        mut operands = Vec[Pointer[Expr]].init(4)
+        operands.push(left)
+        mut ops = Vec[str].init(4)
+        while true:
+            mut op = self._peek_cmp_op()
+            if op == "": break
+            self.pos = self.pos + 1
+            ops.push(op)
+            operands.push(self.parse_bitor_expr())
+            if op == "is" or op == "in": break   # is/in don't chain further
+        if ops.len == 0: return left
+        mut result = box_expr(Expr.EBinOp(ops.get(0), operands.get(0), operands.get(1)))
+        mut ci = 1
+        while ci < ops.len:
+            mut cmp = box_expr(Expr.EBinOp(ops.get(ci), operands.get(ci), operands.get(ci + 1)))
+            result = box_expr(Expr.EBinOp("and", result, cmp))
+            ci = ci + 1
+        return result
+
+    def _peek_cmp_op(self) -> str:
         match self.peek():
-            case Token.EqEq:
-                self.pos = self.pos + 1
-                left = box_expr(Expr.EBinOp("==", left, self.parse_bitor_expr()))
-            case Token.NotEq:
-                self.pos = self.pos + 1
-                left = box_expr(Expr.EBinOp("!=", left, self.parse_bitor_expr()))
-            case Token.Lt:
-                self.pos = self.pos + 1
-                left = box_expr(Expr.EBinOp("<", left, self.parse_bitor_expr()))
-            case Token.Gt:
-                self.pos = self.pos + 1
-                left = box_expr(Expr.EBinOp(">", left, self.parse_bitor_expr()))
-            case Token.LtEq:
-                self.pos = self.pos + 1
-                left = box_expr(Expr.EBinOp("<=", left, self.parse_bitor_expr()))
-            case Token.GtEq:
-                self.pos = self.pos + 1
-                left = box_expr(Expr.EBinOp(">=", left, self.parse_bitor_expr()))
-            case Token.KwIs:
-                self.pos = self.pos + 1
-                left = box_expr(Expr.EBinOp("is", left, self.parse_bitor_expr()))
-            case Token.KwIn:
-                self.pos = self.pos + 1
-                left = box_expr(Expr.EBinOp("in", left, self.parse_bitor_expr()))
-            case _:
-                pass
-        return left
+            case Token.EqEq: return "=="
+            case Token.NotEq: return "!="
+            case Token.Lt: return "<"
+            case Token.Gt: return ">"
+            case Token.LtEq: return "<="
+            case Token.GtEq: return ">="
+            case Token.KwIs: return "is"
+            case Token.KwIn: return "in"
+            case _: return ""
 
     pub def parse_bitor_expr(self) -> Pointer[Expr]:
         mut left = self.parse_bitxor_expr()

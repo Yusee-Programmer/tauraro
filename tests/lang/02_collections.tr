@@ -108,4 +108,19 @@ def main():
     fruit_set.remove("banana")
     t.assert_eq_int(fruit_set.len(), 1, "Set.remove shrinks")
 
+    # Set literals: {..} infers Set[int] / Set[str] and supports `in`.
+    mut nums = {3, 1, 2, 1}
+    t.assert_eq_int(nums.len, 3, "int set literal dedups")
+    t.assert_true(2 in nums, "int set literal `in` true")
+    t.assert_false(9 in nums, "int set literal `in` false")
+    nums.add(9)
+    t.assert_true(9 in nums, "int set literal add")
+    nums.remove(3)
+    t.assert_false(3 in nums, "int set literal remove")
+
+    mut words = {"a", "b"}
+    t.assert_true("a" in words, "str set literal `in` true")
+    t.assert_false("z" in words, "str set literal `in` false")
+    t.assert_true("z" not in words, "str set literal `not in`")
+
     t.summary()

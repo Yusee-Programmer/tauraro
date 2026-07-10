@@ -1862,11 +1862,25 @@ pub class CGenerator:
             case HirExpr.EYield(expr, _):
                 return self.gen_expr(expr)
             case HirExpr.ESet(items, _):
-                mut set_ty = AstType.init("ptr")
-                if items.len > 0:
-                    mut first_ty_n: str = hir_expr_type(items.get(0)).name
-                    set_ty = AstType.init(first_ty_n)
-                return self.gen_list_literal(items, set_ty)
+                # Build a real hash set (int-keyed _TrISet or str-keyed _TrSet)
+                # rather than a List, so .len/.add/.contains/`in`/.remove resolve.
+                mut elem_n: str = "int"
+                if items.len > 0: elem_n = hir_expr_type(items.get(0)).name
+                mut is_istr: bool = elem_n == "str"
+                mut cap_s: str = items.len.to_str()
+                if is_istr:
+                    mut sb: str = "({ _TrSet* _tset = _tr_set_new(" + cap_s + "); "
+                    mut si = 0
+                    while si < items.len:
+                        sb = sb + "_tr_set_add(_tset, _tr_strz(" + self.gen_expr(items.get(si)) + ")); "
+                        si = si + 1
+                    return sb + "_tset; })"
+                mut ib: str = "({ _TrISet* _tset = _tr_iset_new(" + cap_s + "); "
+                mut ii = 0
+                while ii < items.len:
+                    ib = ib + "_tr_iset_add(_tset, (int64_t)(" + self.gen_expr(items.get(ii)) + ")); "
+                    ii = ii + 1
+                return ib + "_tset; })"
             case HirExpr.EListComp(element, generators, _):
                 return self.gen_list_comp(element, generators)
             case HirExpr.EGeneratorExpr(element, generators, _):
@@ -2724,6 +2738,14 @@ pub class CGenerator:
                 if _in_int_key:
                     return "_tr_idict_contains(" + rs + ", " + ls + ")"
                 return "_tr_dict_contains(" + rs + ", " + self.strz(ls) + ")"
+            if rt_n == "Set":
+                # int-keyed set -> _tr_iset_contains; str-keyed set -> _tr_set_contains.
+                mut _in_sty = hir_expr_type(r)
+                mut _in_set_str = false
+                if _in_sty.args.len > 0 and _in_sty.args.get(0).read().name == "str": _in_set_str = true
+                if _in_set_str:
+                    return "_tr_set_contains(" + rs + ", " + self.strz(ls) + ")"
+                return "_tr_iset_contains(" + rs + ", (int64_t)(" + ls + "))"
             if self.has_method(rt_n, "__contains__"):
                 return self.cls_method_c_call(rt_n, "__contains__", rs, ls)
             return "_tr_contains(" + self.strz(rs) + ", " + self.strz(ls) + ")"
@@ -2959,6 +2981,15 @@ pub class CGenerator:
             return "exit(0)"
 
         # ord / chr - character conversions
+        if base_callee == "hex":
+            if args.len > 0: return self.wrapstr("_tr_hex_str((long long)(" + self.gen_expr(args.get(0)) + "))")
+            return self.wrapstr("_tr_hex_str(0)")
+        if base_callee == "oct":
+            if args.len > 0: return self.wrapstr("_tr_oct_str((long long)(" + self.gen_expr(args.get(0)) + "))")
+            return self.wrapstr("_tr_oct_str(0)")
+        if base_callee == "bin":
+            if args.len > 0: return self.wrapstr("_tr_bin_str((long long)(" + self.gen_expr(args.get(0)) + "))")
+            return self.wrapstr("_tr_bin_str(0)")
         if base_callee == "ord":
             if args.len > 0:
                 mut ord_t_n: str = hir_expr_type(args.get(0)).name
@@ -3522,6 +3553,16 @@ pub class CGenerator:
         return out
 
     # A single `print` argument formatted with `printf` and NO trailing newline.
+    # A C char* expression that is the string form of `arg` (for str.format() args).
+    pub def gen_to_cstr(self, arg: Pointer[HirExpr]) -> str:
+        mut tn: str = self.resolve_generic_prim(hir_expr_type(arg).name)
+        mut s: str = self.gen_expr(arg)
+        if _is_int_type(tn): return "_tr_int_to_str((long long)(" + s + "))"
+        if _is_float_type(tn): return "_tr_float_to_str((double)(" + s + "))"
+        if tn == "bool": return "((" + s + ") ? \"true\" : \"false\")"
+        if _is_str_type(tn): return self.strz(s)
+        return "_tr_strz(_TR_AUTO_STR(" + s + "))"
+
     pub def gen_print_one(self, arg: Pointer[HirExpr]) -> str:
         mut ty_n: str = self.resolve_generic_prim(hir_expr_type(arg).name)
         mut s: str = self.gen_expr(arg)
@@ -4346,6 +4387,22 @@ pub class CGenerator:
             if method == "strip" or method == "trim": return self.wrapstr("_tr_str_strip(" + os + ")")
             if method == "trim_left": return self.wrapstr("_tr_str_trim_left(" + os + ")")
             if method == "trim_right": return self.wrapstr("_tr_str_trim_right(" + os + ")")
+            if method == "zfill" and args.len > 0:
+                return self.wrapstr("_tr_str_zfill(" + os + ", (long long)(" + self.gen_expr(args.get(0)) + "))")
+            if method == "chars":
+                return "_tr_str_chars(" + os + ")"
+            if method == "format":
+                mut _fa = "(const char*[]){"
+                if args.len == 0:
+                    _fa = _fa + "0"
+                else:
+                    mut _fi = 0
+                    while _fi < args.len:
+                        if _fi > 0: _fa = _fa + ", "
+                        _fa = _fa + self.gen_to_cstr(args.get(_fi))
+                        _fi = _fi + 1
+                _fa = _fa + "}"
+                return self.wrapstr("_tr_str_format(" + os + ", " + _fa + ", " + args.len.to_str() + "LL)")
             if method == "pad_left" and args.len > 0:
                 return self.wrapstr("_tr_str_pad_left(" + os + ", (long long)(" + self.gen_expr(args.get(0)) + "))")
             if method == "pad_right" and args.len > 0:

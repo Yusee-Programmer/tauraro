@@ -130,6 +130,30 @@ char* _tr_rt_i64_to_str(long long v) {
 char* _tr_rt_bool_to_str(long long v) { return _tr_rt_str_new(v ? "true" : "false"); }
 long long _tr_rt_str_to_i64(const char* s) { return s ? (long long)strtoll(s, 0, 10) : 0; }
 char* _tr_rt_f64_to_str(double v) { char b[32]; snprintf(b, sizeof(b), "%g", v); return _tr_rt_str_new(b); }
+char* _tr_rt_hex_str(long long n) {
+    char b[32]; unsigned long long u = n < 0 ? (unsigned long long)(-n) : (unsigned long long)n;
+    if (n < 0) snprintf(b, sizeof(b), "-0x%llx", u); else snprintf(b, sizeof(b), "0x%llx", u);
+    return _tr_rt_str_new(b);
+}
+char* _tr_rt_oct_str(long long n) {
+    char b[32]; unsigned long long u = n < 0 ? (unsigned long long)(-n) : (unsigned long long)n;
+    if (n < 0) snprintf(b, sizeof(b), "-0o%llo", u); else snprintf(b, sizeof(b), "0o%llo", u);
+    return _tr_rt_str_new(b);
+}
+char* _tr_rt_bin_str(long long n) {
+    unsigned long long u = n < 0 ? (unsigned long long)(-n) : (unsigned long long)n;
+    char digits[70]; int dc = 0;
+    if (u == 0) digits[dc++] = '0';
+    while (u > 0) { digits[dc++] = (char)('0' + (int)(u & 1)); u >>= 1; }
+    int extra = n < 0 ? 3 : 2;
+    char* r = _tr_rt_str_alloc((size_t)(dc + extra));
+    int p = 0;
+    if (n < 0) r[p++] = '-';
+    r[p++] = '0'; r[p++] = 'b';
+    for (int i = dc - 1; i >= 0; i--) r[p++] = digits[i];
+    r[p] = 0;
+    return r;
+}
 
 /* "ab" * 3 -> "ababab" */
 char* _tr_rt_str_repeat(const char* s, long long n) {
@@ -650,6 +674,19 @@ char* _tr_rt_str_center(const char* s, long long w) {
     r[w] = 0;
     return r;
 }
+/* s.zfill(w): left-pad with '0' to width; a leading sign stays first. */
+char* _tr_rt_str_zfill(const char* s, long long width) {
+    if (!s) s = "";
+    long long n = (long long)strlen(s);
+    if (n >= width) return _trn_dup(s);
+    long long pad = width - n, si = 0;
+    char* r = _tr_rt_str_alloc((size_t)width); long long p = 0;
+    if (n > 0 && (s[0] == '-' || s[0] == '+')) { r[p++] = s[0]; si = 1; }
+    for (long long i = 0; i < pad; i++) r[p++] = '0';
+    for (long long i = si; i < n; i++) r[p++] = s[i];
+    r[width] = 0; return r;
+}
+
 /* s.split(sep) -> List[str]. strtok semantics: consecutive seps collapse, empties dropped. */
 void* _tr_rt_str_split(const char* s, const char* sep) {
     _TrNList* l = (_TrNList*)_tr_rt_list_new();
@@ -660,6 +697,13 @@ void* _tr_rt_str_split(const char* s, const char* sep) {
     char* tok = strtok(cp, sep);
     while (tok) { _tr_rt_list_push_i64(l, (long long)(size_t)_tr_rt_str_new(tok)); tok = strtok(0, sep); }
     free(cp);
+    return l;
+}
+/* s.chars() -> List[str] of single-character strings. */
+void* _tr_rt_str_chars(const char* s) {
+    _TrNList* l = (_TrNList*)_tr_rt_list_new();
+    if (!s) return l;
+    for (size_t i = 0; s[i]; i++) { char c[2]; c[0] = s[i]; c[1] = 0; _tr_rt_list_push_i64(l, (long long)(size_t)_tr_rt_str_new(c)); }
     return l;
 }
 /* List[str].join(sep) -> str. */
