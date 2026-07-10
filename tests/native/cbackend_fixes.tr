@@ -1,0 +1,27 @@
+# native≡c corpus for the C-backend gaps fixed here: chained str-method results are
+# typed str (upper/lower/etc.), and abs/min/max are float-in -> float-out.
+def main():
+    mut a = "Hello"
+    mut au = a.upper()
+    mut al = a.lower()
+    print(au + al)              # HELLOhello
+
+    mut x = "world"
+    mut xc = x.center(9)
+    print(xc + "|")             # "  world  |"
+
+    mut p = "test".pad_left(6)
+    print(p + "!")              # "  test!"
+
+    print(abs(-3.5))            # 3.5
+    print(abs(4.25))            # 4.25
+    print(min(1.5, 2.5))        # 1.5
+    print(max(1.5, 2.5))        # 2.5
+    print(min(3, 7))            # 3   (int still works)
+    print(abs(-9))              # 9   (int still works)
+
+    mut lo = "MixedCase".lower()
+    mut up = "MixedCase".upper()
+    print(lo)                   # mixedcase
+    print(up)                   # MIXEDCASE
+    print(lo + "-" + up)        # mixedcase-MIXEDCASE

@@ -95,6 +95,14 @@ def _expr_is_self_field(e: Pointer[Expr]) -> bool:
 def _binop_is_float_name(n: str) -> bool:
     return n == "float" or n == "f64" or n == "f32"
 
+# True if any argument in a lowered call arg list is float-typed (abs/min/max polymorphism).
+def _hl_has_float(hl: Vec[Pointer[HirExpr]]) -> bool:
+    mut i = 0
+    while i < hl.len:
+        if _binop_is_float_name(hir_expr_type(hl.get(i)).name): return true
+        i = i + 1
+    return false
+
 def _block_mutates_self(b: Block) -> bool:
     mut i = 0
     while i < b.stmts.len:
@@ -4318,6 +4326,13 @@ extend Sema:
         if method == "trim_right": return AstType.init("str")
         if method == "to_upper": return AstType.init("str")
         if method == "to_lower": return AstType.init("str")
+        if method == "upper": return AstType.init("str")
+        if method == "lower": return AstType.init("str")
+        if method == "lstrip": return AstType.init("str")
+        if method == "rstrip": return AstType.init("str")
+        if method == "center": return AstType.init("str")
+        if method == "pad_left": return AstType.init("str")
+        if method == "pad_right": return AstType.init("str")
         if method == "capitalize": return AstType.init("str")
         if method == "title": return AstType.init("str")
         if method == "reverse": return AstType.init("str")
@@ -4677,6 +4692,8 @@ extend Sema:
                             ret_ty = AstType.init(n)
                         elif self.enums.contains(n):
                             ret_ty = AstType.init(n)
+                        elif (n == "abs" or n == "min" or n == "max") and _hl_has_float(hl):
+                            ret_ty = AstType.init("float")   # abs/min/max are float-in -> float-out
                         elif n == "alloc" or n == "dealloc":
                             ret_ty = AstType.init("Pointer")
                             if not self.in_unsafe:

@@ -2,6 +2,7 @@
 
 bool _expr_is_self_field(Expr* e);
 bool _binop_is_float_name(TrStr n);
+bool _hl_has_float(List_ptr* hl);
 bool _block_mutates_self(Block* b);
 bool _pblock_mutates_self(Block** pb);
 bool _stmt_mutates_self(Stmt* s);
@@ -8520,6 +8521,41 @@ __attribute__((hot)) AstType* Sema_str_method_ret_ty(Sema* self, TrStr method) {
         return AstType_init(_tr_str_lit("str"));
     }
     /* pass */
+    if ((strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("upper"))) == 0)) {
+        /* pass */
+        return AstType_init(_tr_str_lit("str"));
+    }
+    /* pass */
+    if ((strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("lower"))) == 0)) {
+        /* pass */
+        return AstType_init(_tr_str_lit("str"));
+    }
+    /* pass */
+    if ((strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("lstrip"))) == 0)) {
+        /* pass */
+        return AstType_init(_tr_str_lit("str"));
+    }
+    /* pass */
+    if ((strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("rstrip"))) == 0)) {
+        /* pass */
+        return AstType_init(_tr_str_lit("str"));
+    }
+    /* pass */
+    if ((strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("center"))) == 0)) {
+        /* pass */
+        return AstType_init(_tr_str_lit("str"));
+    }
+    /* pass */
+    if ((strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("pad_left"))) == 0)) {
+        /* pass */
+        return AstType_init(_tr_str_lit("str"));
+    }
+    /* pass */
+    if ((strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("pad_right"))) == 0)) {
+        /* pass */
+        return AstType_init(_tr_str_lit("str"));
+    }
+    /* pass */
     if ((strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("capitalize"))) == 0)) {
         /* pass */
         return AstType_init(_tr_str_lit("str"));
@@ -9406,6 +9442,9 @@ __auto_type args = _t532.data.ECall.args;
             } else if (_tr_dict_contains(self->enums, _tr_strz(n))) {
                 /* pass */
                 ret_ty = AstType_init(n);
+            } else if (((((strcmp(_tr_strz(n), _tr_strz(_tr_str_lit("abs"))) == 0) || (strcmp(_tr_strz(n), _tr_strz(_tr_str_lit("min"))) == 0)) || (strcmp(_tr_strz(n), _tr_strz(_tr_str_lit("max"))) == 0)) && _hl_has_float(hl))) {
+                /* pass */
+                ret_ty = AstType_init(_tr_str_lit("float"));
             } else if (((strcmp(_tr_strz(n), _tr_strz(_tr_str_lit("alloc"))) == 0) || (strcmp(_tr_strz(n), _tr_strz(_tr_str_lit("dealloc"))) == 0))) {
                 /* pass */
                 ret_ty = AstType_init(_tr_str_lit("Pointer"));
@@ -11764,6 +11803,23 @@ __attribute__((hot)) bool _expr_is_self_field(Expr* e) {
 __attribute__((hot)) bool _binop_is_float_name(TrStr n) {
     /* pass */
     return (((strcmp(_tr_strz(n), _tr_strz(_tr_str_lit("float"))) == 0) || (strcmp(_tr_strz(n), _tr_strz(_tr_str_lit("f64"))) == 0)) || (strcmp(_tr_strz(n), _tr_strz(_tr_str_lit("f32"))) == 0));
+}
+
+__attribute__((hot)) bool _hl_has_float(List_ptr* hl) {
+    /* pass */
+    long long i = 0LL;
+    /* pass */
+    while ((i < hl->len)) {
+        /* pass */
+        if (_binop_is_float_name(hir_expr_type(((HirExpr*)List_ptr_get(hl, i)))->name)) {
+            /* pass */
+            return true;
+        }
+        /* pass */
+        i = (i + 1LL);
+    }
+    /* pass */
+    return false;
 }
 
 __attribute__((hot)) bool _block_mutates_self(Block* b) {

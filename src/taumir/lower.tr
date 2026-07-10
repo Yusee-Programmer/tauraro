@@ -1370,22 +1370,43 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                 lf.emit(LInst.IFCallF(rrd, "_tr_rt_round", rv0))
                 lf.set_vreg_type(rrd, 5)
                 return rrd
-            if fn == "abs" and args.len == 1:      # abs(int) builtin
+            if fn == "abs" and args.len == 1:      # abs(int)/abs(float)
                 mut xv2 = lower_expr(m, lf, args.get(0))
                 if xv2 < 0: return -1
-                if lf.vreg_type(xv2) != 0: return -1
+                mut xvt = lf.vreg_type(xv2)
+                if xvt == 5:                       # abs(float) -> fabs
+                    m.add_extern("_tr_rt_fabs")
+                    mut fabd = lf.new_vreg()
+                    lf.emit(LInst.IFCallF(fabd, "_tr_rt_fabs", xv2))
+                    lf.set_vreg_type(fabd, 5)
+                    return fabd
+                if xvt != 0: return -1
                 m.add_extern("_tr_rt_abs_i64")
                 mut aba = Vec[int].init(1)
                 aba.push(xv2)
                 mut abd = lf.new_vreg()
                 lf.emit(LInst.ICall(abd, "_tr_rt_abs_i64", aba))
                 return abd
-            if (fn == "min" or fn == "max") and args.len == 2:   # min/max(int, int) builtin
+            if (fn == "min" or fn == "max") and args.len == 2:   # min/max(int,int) or (float,float)
                 mut mm1 = lower_expr(m, lf, args.get(0))
                 if mm1 < 0: return -1
                 mut mm2 = lower_expr(m, lf, args.get(1))
                 if mm2 < 0: return -1
-                if lf.vreg_type(mm1) != 0 or lf.vreg_type(mm2) != 0: return -1
+                mut mt1 = lf.vreg_type(mm1)
+                mut mt2 = lf.vreg_type(mm2)
+                if mt1 == 5 or mt2 == 5:           # float min/max (int operand promoted)
+                    if mt1 == 0: mm1 = _promote_f(lf, mm1)
+                    elif mt1 != 5: return -1
+                    if mt2 == 0: mm2 = _promote_f(lf, mm2)
+                    elif mt2 != 5: return -1
+                    mut fmsym = "_tr_rt_min_f64"
+                    if fn == "max": fmsym = "_tr_rt_max_f64"
+                    m.add_extern(fmsym)
+                    mut fmd = lf.new_vreg()
+                    lf.emit(LInst.IFCall2F(fmd, fmsym, mm1, mm2))
+                    lf.set_vreg_type(fmd, 5)
+                    return fmd
+                if mt1 != 0 or mt2 != 0: return -1
                 mut msym = "_tr_rt_min_i64"
                 if fn == "max": msym = "_tr_rt_max_i64"
                 m.add_extern(msym)

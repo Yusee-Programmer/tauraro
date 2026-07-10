@@ -115,6 +115,8 @@ long long _tr_rt_abs_i64(long long x) { return x < 0 ? -x : x; }
 long long _tr_rt_min_i64(long long a, long long b) { return a < b ? a : b; }
 long long _tr_rt_max_i64(long long a, long long b) { return a > b ? a : b; }
 long long _tr_rt_int_pow(long long b, long long e) { return (long long)pow((double)b, (double)e); }
+double _tr_rt_min_f64(double a, double b) { return a < b ? a : b; }
+double _tr_rt_max_f64(double a, double b) { return a > b ? a : b; }
 
 /* Conversions: str(int)/str(bool), int(str). (i64_to_str/str_repeat malloc -> leak; -O0 dev.) */
 char* _tr_rt_i64_to_str(long long v) {

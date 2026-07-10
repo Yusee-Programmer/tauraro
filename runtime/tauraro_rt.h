@@ -4146,6 +4146,10 @@ static inline void Set_i64_add(Set_i64* l, long long val) {
     if(l->len==l->capacity){ l->capacity*=2; l->data=(long long*)TAURARO_REALLOC(l->data,sizeof(long long)*l->capacity); } l->data[l->len++]=val; 
 }
 static inline void Set_i64_free(Set_i64* l) { if(l){ _tr_free(l->data); _tr_free(l); } }
+static inline _Bool Set_i64_contains(Set_i64* l, long long v) { if(!l) return 0; for(size_t i=0;i<l->len;i++) if(l->data[i]==v) return 1; return 0; }
+static inline long long Set_i64_len(Set_i64* l) { return l ? (long long)l->len : 0LL; }
+static inline _Bool Set_i64_is_empty(Set_i64* l) { return !l || l->len==0; }
+static inline void Set_i64_remove(Set_i64* l, long long v) { if(!l) return; for(size_t i=0;i<l->len;i++) if(l->data[i]==v){ for(size_t j=i;j+1<l->len;j++) l->data[j]=l->data[j+1]; l->len--; return; } }
 
 typedef struct { void** data; size_t len; size_t capacity; } Set_ptr;
 static inline Set_ptr* Set_ptr_new(void) { Set_ptr* l=(Set_ptr*)malloc(sizeof(Set_ptr)); l->data=(void**)malloc(sizeof(void*)*8); l->len=0; l->capacity=8; return l; }
@@ -4162,6 +4166,10 @@ static inline void Set_str_add(Set_str* l, char* val) {
     if(l->len==l->capacity){ l->capacity*=2; l->data=(char**)TAURARO_REALLOC(l->data,sizeof(char*)*l->capacity); } l->data[l->len++]=val; 
 }
 static inline void Set_str_free(Set_str* l) { if(l){ _tr_free(l->data); _tr_free(l); } }
+static inline _Bool Set_str_contains(Set_str* l, const char* v) { if(!l||!v) return 0; for(size_t i=0;i<l->len;i++) if(l->data[i]&&strcmp(l->data[i],v)==0) return 1; return 0; }
+static inline long long Set_str_len(Set_str* l) { return l ? (long long)l->len : 0LL; }
+static inline _Bool Set_str_is_empty(Set_str* l) { return !l || l->len==0; }
+static inline void Set_str_remove(Set_str* l, const char* v) { if(!l||!v) return; for(size_t i=0;i<l->len;i++) if(l->data[i]&&strcmp(l->data[i],v)==0){ for(size_t j=i;j+1<l->len;j++) l->data[j]=l->data[j+1]; l->len--; return; } }
 
 /* ── Bounds-checked list access ─────────────────────────────────────────── */
 static inline List_i64* _tr_range_new(long long start, long long stop, bool inclusive) {

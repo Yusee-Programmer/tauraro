@@ -3368,6 +3368,7 @@ __attribute__((malloc,returns_nonnull,hot)) Symbol* Symbol_init(TrStr name, Symb
 __attribute__((malloc,returns_nonnull,hot)) Scope* Scope_init();
 __attribute__((hot)) bool _expr_is_self_field(Expr* e);
 __attribute__((hot)) bool _binop_is_float_name(TrStr n);
+__attribute__((hot)) bool _hl_has_float(List_ptr* hl);
 __attribute__((hot)) bool _block_mutates_self(Block* b);
 __attribute__((hot)) bool _pblock_mutates_self(Block** pb);
 __attribute__((hot)) bool _stmt_mutates_self(Stmt* s);
