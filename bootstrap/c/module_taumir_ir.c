@@ -28,7 +28,11 @@ __attribute__((malloc,returns_nonnull,hot)) LFunc* LFunc_init(TrStr name) {
     /* pass */
     f->n_vregs = 0LL;
     /* pass */
+    f->vreg_types = (void*)List_i64_new();
+    /* pass */
     f->vars = (void*)List_TrStr_new();
+    /* pass */
+    f->var_types = (void*)List_i64_new();
     /* pass */
     f->params = (void*)List_TrStr_new();
     /* pass */
@@ -84,7 +88,27 @@ __attribute__((hot)) long long LFunc_new_vreg(LFunc* self) {
     /* pass */
     self->n_vregs = (self->n_vregs + 1LL);
     /* pass */
+    List_i64_append(self->vreg_types, 0LL);
+    /* pass */
     return id;
+}
+
+__attribute__((hot)) void LFunc_set_vreg_type(LFunc* self, long long id, long long t) {
+    /* pass */
+    if (((id >= 0LL) && (id < self->vreg_types->len))) {
+        /* pass */
+        List_i64_set(self->vreg_types, id, t);
+    }
+}
+
+__attribute__((hot)) long long LFunc_vreg_type(LFunc* self, long long id) {
+    /* pass */
+    if (((id >= 0LL) && (id < self->vreg_types->len))) {
+        /* pass */
+        return List_i64_get(self->vreg_types, id);
+    }
+    /* pass */
+    return 0LL;
 }
 
 __attribute__((hot)) void LFunc_add_var(LFunc* self, TrStr name) {
@@ -102,6 +126,8 @@ __attribute__((hot)) void LFunc_add_var(LFunc* self, TrStr name) {
     }
     /* pass */
     List_TrStr_append(self->vars, name);
+    /* pass */
+    List_i64_append(self->var_types, 0LL);
 }
 
 __attribute__((hot)) long long LFunc_var_index(LFunc* self, TrStr name) {
@@ -119,6 +145,28 @@ __attribute__((hot)) long long LFunc_var_index(LFunc* self, TrStr name) {
     }
     /* pass */
     return (-1LL);
+}
+
+__attribute__((hot)) void LFunc_set_var_type(LFunc* self, TrStr name, long long t) {
+    /* pass */
+    long long idx = LFunc_var_index(self, name);
+    /* pass */
+    if ((idx >= 0LL)) {
+        /* pass */
+        List_i64_set(self->var_types, idx, t);
+    }
+}
+
+__attribute__((hot)) long long LFunc_var_type(LFunc* self, TrStr name) {
+    /* pass */
+    long long idx = LFunc_var_index(self, name);
+    /* pass */
+    if ((idx >= 0LL)) {
+        /* pass */
+        return List_i64_get(self->var_types, idx);
+    }
+    /* pass */
+    return 0LL;
 }
 
 __attribute__((malloc,returns_nonnull,hot)) LModule* LModule_init() {

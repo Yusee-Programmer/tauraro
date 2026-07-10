@@ -53,24 +53,28 @@ extend LBlock:
         return b
 
 pub class LFunc:
-    pub name:    str
-    pub is_main: bool
-    pub blocks:  Vec[LBlock]      # basic blocks in layout order (block 0 = entry)
-    pub cur:     int             # block currently being built
-    pub n_vregs: int
-    pub vars:    Vec[str]
-    pub params:  Vec[str]        # parameter names in order (System V arg registers -> slots)
+    pub name:       str
+    pub is_main:    bool
+    pub blocks:     Vec[LBlock]      # basic blocks in layout order (block 0 = entry)
+    pub cur:        int             # block currently being built
+    pub n_vregs:    int
+    pub vreg_types: Vec[int]        # per-vreg value type: 0 = int (i64), 1 = ptr (char*)
+    pub vars:       Vec[str]
+    pub var_types:  Vec[int]        # parallel to vars: 0 = int, 1 = ptr
+    pub params:     Vec[str]        # parameter names in order (System V arg registers -> slots)
 
 extend LFunc:
     pub def init(name: str) -> LFunc:
         mut f = LFunc()
-        f.name    = name
-        f.is_main = false
-        f.blocks  = Vec[LBlock].init(4)
-        f.cur     = -1
-        f.n_vregs = 0
-        f.vars    = Vec[str].init(4)
-        f.params  = Vec[str].init(4)
+        f.name       = name
+        f.is_main    = false
+        f.blocks     = Vec[LBlock].init(4)
+        f.cur        = -1
+        f.n_vregs    = 0
+        f.vreg_types = Vec[int].init(8)
+        f.vars       = Vec[str].init(4)
+        f.var_types  = Vec[int].init(4)
+        f.params     = Vec[str].init(4)
         return f
 
     # Create a new empty block, return its id (does NOT change the cursor).
@@ -102,7 +106,15 @@ extend LFunc:
     pub def new_vreg(self) -> int:
         mut id = self.n_vregs
         self.n_vregs = self.n_vregs + 1
+        self.vreg_types.push(0)
         return id
+
+    pub def set_vreg_type(self, id: int, t: int):
+        if id >= 0 and id < self.vreg_types.len: self.vreg_types.set(id, t)
+
+    pub def vreg_type(self, id: int) -> int:
+        if id >= 0 and id < self.vreg_types.len: return self.vreg_types.get(id)
+        return 0
 
     pub def add_var(self, name: str):
         mut i = 0
@@ -110,6 +122,7 @@ extend LFunc:
             if self.vars.get(i) == name: return
             i = i + 1
         self.vars.push(name)
+        self.var_types.push(0)
 
     pub def var_index(self, name: str) -> int:
         mut i = 0
@@ -117,6 +130,15 @@ extend LFunc:
             if self.vars.get(i) == name: return i
             i = i + 1
         return -1
+
+    pub def set_var_type(self, name: str, t: int):
+        mut idx = self.var_index(name)
+        if idx >= 0: self.var_types.set(idx, t)
+
+    pub def var_type(self, name: str) -> int:
+        mut idx = self.var_index(name)
+        if idx >= 0: return self.var_types.get(idx)
+        return 0
 
 pub class LModule:
     pub funcs:    Vec[LFunc]

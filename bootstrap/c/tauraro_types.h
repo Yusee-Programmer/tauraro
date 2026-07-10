@@ -2815,13 +2815,17 @@ typedef struct LFunc {
     List_ptr* blocks;
     long long cur;
     long long n_vregs;
+    List_i64* vreg_types;
     List_TrStr* vars;
+    List_i64* var_types;
     List_TrStr* params;
 } LFunc;
 static void _trdrop_LFunc(void* vp) {
     LFunc* self = (LFunc*)vp; (void)self;
     _tr_str_release(self->name);
+    List_i64_free(self->vreg_types);
     List_TrStr_free(self->vars);
+    List_i64_free(self->var_types);
 }
 #endif
 
@@ -3492,8 +3496,12 @@ __attribute__((hot)) void LFunc_emit(LFunc* self, LInst i);
 __attribute__((hot)) void LFunc_set_term(LFunc* self, LTerm t);
 __attribute__((hot)) bool LFunc_cur_terminated(LFunc* self);
 __attribute__((hot)) long long LFunc_new_vreg(LFunc* self);
+__attribute__((hot)) void LFunc_set_vreg_type(LFunc* self, long long id, long long t);
+__attribute__((hot)) long long LFunc_vreg_type(LFunc* self, long long id);
 __attribute__((hot)) void LFunc_add_var(LFunc* self, TrStr name);
 __attribute__((hot)) long long LFunc_var_index(LFunc* self, TrStr name);
+__attribute__((hot)) void LFunc_set_var_type(LFunc* self, TrStr name, long long t);
+__attribute__((hot)) long long LFunc_var_type(LFunc* self, TrStr name);
 __attribute__((malloc,returns_nonnull,hot)) LModule* LModule_init();
 __attribute__((hot)) long long LModule_add_string(LModule* self, TrStr s);
 __attribute__((hot)) void LModule_add_extern(LModule* self, TrStr name);
@@ -3505,7 +3513,7 @@ __attribute__((hot)) bool lower_block(LModule* m, LFunc* lf, HirBlock* hb);
 __attribute__((hot)) bool lower_stmt(LModule* m, LFunc* lf, HirStmt* s);
 __attribute__((hot)) TrStr _ident_name(HirExpr* e);
 __attribute__((hot)) bool lower_expr_stmt(LModule* m, LFunc* lf, HirExpr* e);
-__attribute__((hot)) bool _supported_op(TrStr op);
+__attribute__((hot)) bool _int_op(TrStr op);
 __attribute__((hot)) long long lower_expr(LModule* m, LFunc* lf, HirExpr* e);
 __attribute__((malloc,returns_nonnull,hot)) ByteBuf* ByteBuf_init();
 __attribute__((hot)) void ByteBuf_u8(ByteBuf* self, long long v);

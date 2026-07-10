@@ -9,6 +9,21 @@
 #define _TR_MAIN
 #include "tauraro_rt.h"
 
-/* -- Phase 1 skeleton: what `print(42)` lowers to -------------------------------- */
+/* -- print + string helpers the native backend calls ---------------------------- */
 void _tr_rt_print_i64(long long v) { printf("%lld\n", v); }
-void _tr_rt_print_cstr(const char* s) { fputs(s ? s : "", stdout); }
+void _tr_rt_print_cstr(const char* s) { fputs(s ? s : "", stdout); fputc('\n', stdout); }
+
+/* Concatenate two C-strings into a freshly-allocated one. (No ARC in the native
+ * backend yet — this leaks; the C/LLVM backends handle ownership. Fine for -O0 dev.) */
+char* _tr_rt_str_concat(const char* a, const char* b) {
+    if (!a) a = "";
+    if (!b) b = "";
+    size_t la = 0; while (a[la]) la++;
+    size_t lb = 0; while (b[lb]) lb++;
+    char* r = (char*)malloc(la + lb + 1);
+    if (!r) return (char*)"";
+    for (size_t i = 0; i < la; i++) r[i] = a[i];
+    for (size_t j = 0; j < lb; j++) r[la + j] = b[j];
+    r[la + lb] = 0;
+    return r;
+}

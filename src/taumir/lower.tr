@@ -1,8 +1,10 @@
 # @trusted: compiler systems module.
-# src/taumir/lower.tr — HIR -> LIR lowering. Covers integer programs: user functions
-# (params, return values, calls incl. recursion), constants, +/-/* and comparisons,
-# local variables, if / while control flow, and print(<int>). Anything else sets
-# LModule.ok = false so the native driver falls back and the C backend is used.
+# src/taumir/lower.tr — HIR -> LIR lowering. Covers integer + string programs: user
+# functions (params, return values, calls incl. recursion), constants, +/-/* and
+# comparisons, string literals/variables/concatenation, local variables, if / while
+# control flow, and print. A per-vreg/var value-type tag (0 = int/i64, 1 = ptr/char*)
+# routes print to _tr_rt_print_i64 vs _tr_rt_print_cstr and "+" to add vs str_concat.
+# Anything else sets LModule.ok = false so the native driver falls back to C.
 
 from hir import HirProgram, HirFunction, HirStmt, HirExpr, HirBlock
 from taumir.ir import LModule, LFunc, LInst, LTerm
@@ -12,14 +14,12 @@ def _print_i64_sym() -> str:
 
 pub def lower_to_lir(prog: HirProgram) -> LModule:
     mut m = LModule.init()
-    # register user (free) function names first so calls resolve
     mut i = 0
     while i < prog.functions.len:
         mut f0 = prog.functions.get(i)
         if f0.class_name == "" and not f0.is_extern:
             m.fn_names.push(f0.name)
         i = i + 1
-    # lower each free function
     i = 0
     while i < prog.functions.len:
         mut f = prog.functions.get(i)
@@ -32,7 +32,6 @@ pub def lower_to_lir(prog: HirProgram) -> LModule:
 def _lir_lower_function(m: LModule, f: HirFunction):
     mut lf = LFunc.init(f.name)
     if f.name == "main": lf.is_main = true
-    # parameters -> var slots (System V registers moved into slots in the prologue)
     mut pi = 0
     while pi < f.params.len:
         mut pn = f.params.get(pi).name
@@ -44,7 +43,7 @@ def _lir_lower_function(m: LModule, f: HirFunction):
     if not lower_block(m, lf, f.body):
         m.ok = false
         return
-    lf.set_term(LTerm.TRetInt(0))     # fall-through -> return 0 (first-wins)
+    lf.set_term(LTerm.TRetInt(0))
     m.funcs.push(lf)
 
 def lower_block(m: LModule, lf: LFunc, hb: HirBlock) -> bool:
@@ -59,6 +58,8 @@ def lower_stmt(m: LModule, lf: LFunc, s: Pointer[HirStmt]) -> bool:
     match s.read():
         case HirStmt.SLineMarker(_): return true
         case HirStmt.SPass: return true
+        case HirStmt.SAutoDrop(_, _): return true   # native has no ARC yet (leaks; C/LLVM own it)
+        case HirStmt.SFree(_): return true
         case HirStmt.SReturn(val):
             if val as usize != 0 as usize:
                 mut rv = lower_expr(m, lf, val)
@@ -72,6 +73,7 @@ def lower_stmt(m: LModule, lf: LFunc, s: Pointer[HirStmt]) -> bool:
             mut v = lower_expr(m, lf, val)
             if v < 0: return false
             lf.add_var(name)
+            lf.set_var_type(name, lf.vreg_type(v))
             lf.emit(LInst.IStoreVar(name, v))
             return true
         case HirStmt.SAssign(target, val):
@@ -80,6 +82,7 @@ def lower_stmt(m: LModule, lf: LFunc, s: Pointer[HirStmt]) -> bool:
             mut v2 = lower_expr(m, lf, val)
             if v2 < 0: return false
             lf.add_var(tn)
+            lf.set_var_type(tn, lf.vreg_type(v2))
             lf.emit(LInst.IStoreVar(tn, v2))
             return true
         case HirStmt.SIf(cond, then_b, else_b):
@@ -121,46 +124,29 @@ def _ident_name(e: Pointer[HirExpr]) -> str:
         case HirExpr.EIdent(n, _, _): return n
         case _: return ""
 
-# A bare expression statement: `print(x)` or a user call whose result is discarded.
+# A bare expression statement: print(<expr>) or a user call whose result is discarded.
 def lower_expr_stmt(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> bool:
     match e.read():
         case HirExpr.ECall(callee, args, _):
             mut fname = _ident_name(callee)
             if fname == "print":
                 if args.len != 1: return false
-                mut arg0 = args.get(0)
-                # string literal -> print_cstr(&rodata)
-                mut is_str = false
-                mut sidx = 0
-                match arg0.read():
-                    case HirExpr.ELitStr(sv, _):
-                        is_str = true
-                        sidx = m.add_string(sv)
-                    case _: pass
-                if is_str:
-                    mut ds = lf.new_vreg()
-                    lf.emit(LInst.IStr(ds, sidx))
-                    m.add_extern("_tr_rt_print_cstr")
-                    mut sargs = Vec[int].init(1)
-                    sargs.push(ds)
-                    lf.emit(LInst.ICall(-1, "_tr_rt_print_cstr", sargs))
-                    return true
-                # integer expression -> print_i64
-                mut a = lower_expr(m, lf, arg0)
-                if a < 0: return false
-                m.add_extern(_print_i64_sym())
+                mut av = lower_expr(m, lf, args.get(0))
+                if av < 0: return false
+                mut sym = _print_i64_sym()
+                if lf.vreg_type(av) == 1: sym = "_tr_rt_print_cstr"
+                m.add_extern(sym)
                 mut cargs = Vec[int].init(1)
-                cargs.push(a)
-                lf.emit(LInst.ICall(-1, _print_i64_sym(), cargs))
+                cargs.push(av)
+                lf.emit(LInst.ICall(-1, sym, cargs))
                 return true
-            # user call as a statement (discard result)
             mut r = lower_expr(m, lf, e)
             return r >= 0
         case _:
             return false
 
 # -- expressions: returns the vreg holding the value, or -1 if unsupported ----------
-def _supported_op(op: str) -> bool:
+def _int_op(op: str) -> bool:
     if op == "+" or op == "-" or op == "*": return true
     if op == "<" or op == ">" or op == "==" or op == "!=" or op == "<=" or op == ">=": return true
     return false
@@ -171,17 +157,36 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
             mut d = lf.new_vreg()
             lf.emit(LInst.IConst(d, v))
             return d
+        case HirExpr.ELitStr(sv, _):
+            mut idx = m.add_string(sv)
+            mut ds = lf.new_vreg()
+            lf.emit(LInst.IStr(ds, idx))
+            lf.set_vreg_type(ds, 1)
+            return ds
         case HirExpr.EIdent(name, _, _):
             lf.add_var(name)
             mut d2 = lf.new_vreg()
             lf.emit(LInst.ILoadVar(d2, name))
+            lf.set_vreg_type(d2, lf.var_type(name))
             return d2
         case HirExpr.EBinOp(op, l, r, _):
-            if not _supported_op(op): return -1
             mut a = lower_expr(m, lf, l)
             if a < 0: return -1
             mut b = lower_expr(m, lf, r)
             if b < 0: return -1
+            mut at = lf.vreg_type(a)
+            mut bt = lf.vreg_type(b)
+            if op == "+" and at == 1 and bt == 1:
+                m.add_extern("_tr_rt_str_concat")
+                mut ca = Vec[int].init(2)
+                ca.push(a)
+                ca.push(b)
+                mut dc = lf.new_vreg()
+                lf.emit(LInst.ICall(dc, "_tr_rt_str_concat", ca))
+                lf.set_vreg_type(dc, 1)
+                return dc
+            if at == 1 or bt == 1: return -1       # other pointer ops unsupported
+            if not _int_op(op): return -1
             mut d3 = lf.new_vreg()
             lf.emit(LInst.IBinOp(d3, op, a, b))
             return d3
@@ -189,13 +194,13 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
             mut fn = _ident_name(callee)
             if fn == "": return -1
             if not m.is_user_fn(fn): return -1
-            if args.len > 4: return -1          # System V: rdi..rcx only for now
+            if args.len > 4: return -1
             mut argvregs = Vec[int].init(args.len)
             mut ai = 0
             while ai < args.len:
-                mut av = lower_expr(m, lf, args.get(ai))
-                if av < 0: return -1
-                argvregs.push(av)
+                mut avr = lower_expr(m, lf, args.get(ai))
+                if avr < 0: return -1
+                argvregs.push(avr)
                 ai = ai + 1
             mut d4 = lf.new_vreg()
             lf.emit(LInst.ICall(d4, fn, argvregs))

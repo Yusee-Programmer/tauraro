@@ -33,7 +33,9 @@ def fib(n: int) -> int:
     return fib(n - 1) + fib(n - 2)
 
 def main():
-    print("hello from native")
+    mut a = "hello"
+    mut b = " native"
+    print(a + b)         # string variables + concatenation -> "hello native"
     print(fib(10))       # 55
     mut i = 0
     mut s = 0
@@ -61,10 +63,10 @@ fi
 # 4) run.
 out="$(build/native_p42 2>&1)"
 echo "--- output ---"; echo "$out" | sed 's/^/    /'
-expected=$'hello from native\n55\n45\ndone'
+expected=$'hello native\n55\n45\ndone'
 if [ "$out" = "$expected" ]; then
-    echo "NATIVE RUN OK ✅ — a Tauraro program (strings + recursion + loops) compiled straight to x86-64/ELF (no C) ran correctly"
+    echo "NATIVE RUN OK ✅ — a Tauraro program (string vars+concat, recursion, loops) compiled straight to x86-64/ELF (no C) ran correctly"
     exit 0
 else
-    echo "FAIL: expected 'hello from native/55/45/done', got '$out'"; exit 1
+    echo "FAIL: expected 'hello native/55/45/done', got '$out'"; exit 1
 fi
