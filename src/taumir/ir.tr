@@ -62,6 +62,7 @@ pub class LFunc:
     pub vars:       Vec[str]
     pub var_types:  Vec[int]        # parallel to vars: 0 = int, 1 = ptr
     pub params:     Vec[str]        # parameter names in order (System V arg registers -> slots)
+    pub tmp_ctr:    int             # monotonic counter for synthesized (loop) var names
 
 extend LFunc:
     pub def init(name: str) -> LFunc:
@@ -75,7 +76,15 @@ extend LFunc:
         f.vars       = Vec[str].init(4)
         f.var_types  = Vec[int].init(4)
         f.params     = Vec[str].init(4)
+        f.tmp_ctr    = 0
         return f
+
+    # A monotonically increasing id, for building unique synthesized variable names
+    # (e.g. hidden for-loop index/handle slots that must not collide across loops).
+    pub def fresh_id(self) -> int:
+        mut id = self.tmp_ctr
+        self.tmp_ctr = self.tmp_ctr + 1
+        return id
 
     # Create a new empty block, return its id (does NOT change the cursor).
     pub def new_block(self) -> int:

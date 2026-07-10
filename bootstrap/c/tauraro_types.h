@@ -2819,6 +2819,7 @@ typedef struct LFunc {
     List_TrStr* vars;
     List_i64* var_types;
     List_TrStr* params;
+    long long tmp_ctr;
 } LFunc;
 static void _trdrop_LFunc(void* vp) {
     LFunc* self = (LFunc*)vp; (void)self;
@@ -3490,6 +3491,7 @@ __attribute__((hot)) TrStr LlvmGenerator_generate(LlvmGenerator* self, HirProgra
 __attribute__((hot)) LInst* box_linst(LInst i);
 __attribute__((malloc,returns_nonnull,hot)) LBlock* LBlock_init(long long id);
 __attribute__((malloc,returns_nonnull,hot)) LFunc* LFunc_init(TrStr name);
+__attribute__((hot)) long long LFunc_fresh_id(LFunc* self);
 __attribute__((hot)) long long LFunc_new_block(LFunc* self);
 __attribute__((hot)) void LFunc_set_cur(LFunc* self, long long id);
 __attribute__((hot)) void LFunc_emit(LFunc* self, LInst i);
@@ -3511,9 +3513,16 @@ __attribute__((hot)) LModule* lower_to_lir(HirProgram* prog);
 __attribute__((hot)) void _lir_lower_function(LModule* m, HirFunction* f);
 __attribute__((hot)) bool lower_block(LModule* m, LFunc* lf, HirBlock* hb);
 __attribute__((hot)) bool lower_stmt(LModule* m, LFunc* lf, HirStmt* s);
+__attribute__((hot)) bool _lower_for(LModule* m, LFunc* lf, TrStr var, HirExpr* iter, HirBlock* body);
+__attribute__((hot)) bool _lower_for_range(LModule* m, LFunc* lf, TrStr var, List_ptr* args, HirBlock* body);
+__attribute__((hot)) bool _lower_for_list(LModule* m, LFunc* lf, TrStr var, HirExpr* iter, HirBlock* body);
+__attribute__((hot)) void _emit_incr(LFunc* lf, TrStr name);
 __attribute__((hot)) TrStr _ident_name(HirExpr* e);
 __attribute__((hot)) bool lower_expr_stmt(LModule* m, LFunc* lf, HirExpr* e);
 __attribute__((hot)) bool _int_op(TrStr op);
+__attribute__((hot)) TrStr _lir_digit(long long d);
+__attribute__((hot)) TrStr _lir_itoa(long long n);
+__attribute__((hot)) long long _norm_bool(LFunc* lf, long long v);
 __attribute__((hot)) long long _list_get(LModule* m, LFunc* lf, long long handle, long long idx);
 __attribute__((hot)) long long lower_expr(LModule* m, LFunc* lf, HirExpr* e);
 __attribute__((malloc,returns_nonnull,hot)) ByteBuf* ByteBuf_init();

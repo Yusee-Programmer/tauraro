@@ -1,9 +1,9 @@
 # @trusted: compiler systems module.
 # src/taumir/lower.tr — HIR -> LIR lowering. Covers integer + string + List[int]
 # programs: user functions (params, return values, calls incl. recursion), constants,
-# +/-/* and comparisons, string literals/variables/concatenation, List[int] literals /
-# .push/.append / .get / xs[i] / .len, local variables, if / while control flow, and
-# print. A per-vreg/var value-type tag (0 = int/i64, 1 = ptr/char*, 2 = List[int] handle)
+# +/-/*, // /  % integer division/modulo, comparisons, and/or/not, unary minus, string
+# literals/variables/concatenation, List[int] literals / .push/.append / .get / xs[i] /
+# .len, local variables, if / while / for (range and List[int]) control flow, and print. A per-vreg/var value-type tag (0 = int/i64, 1 = ptr/char*, 2 = List[int] handle)
 # routes print to _tr_rt_print_i64 vs _tr_rt_print_cstr, "+" to add vs str_concat, and
 # method/index/.len to the _tr_rt_list_* runtime. Anything else sets LModule.ok = false
 # so the native driver falls back to C.
@@ -116,10 +116,115 @@ def lower_stmt(m: LModule, lf: LFunc, s: Pointer[HirStmt]) -> bool:
             lf.set_term(LTerm.TBr(hdr))
             lf.set_cur(ext)
             return true
+        case HirStmt.SFor(var, iter, body):
+            return _lower_for(m, lf, var, iter, body)
         case HirStmt.SExpr(e):
             return lower_expr_stmt(m, lf, e)
         case _:
             return false
+
+# for-loops lower to counting/index while-loops (no native iterator protocol).
+#   for i in range(a, b):  -> i=a; while i<b: <body>; i=i+1
+#   for x in <List[int]>:  -> idx=0; while idx<xs.len: x=xs[idx]; <body>; idx=idx+1
+def _lower_for(m: LModule, lf: LFunc, var: str, iter: Pointer[HirExpr], body: HirBlock) -> bool:
+    match iter.read():
+        case HirExpr.ECall(callee, args, _):
+            if _ident_name(callee) == "range":
+                return _lower_for_range(m, lf, var, args, body)
+        case _:
+            pass
+    return _lower_for_list(m, lf, var, iter, body)
+
+def _lower_for_range(m: LModule, lf: LFunc, var: str, args: Vec[Pointer[HirExpr]], body: HirBlock) -> bool:
+    if args.len < 1 or args.len > 2: return false     # 3-arg (step) form -> fall back to C
+    mut sv = -1
+    mut end_expr = args.get(0)
+    if args.len == 1:
+        mut z = lf.new_vreg()
+        lf.emit(LInst.IConst(z, 0))
+        sv = z
+    else:
+        sv = lower_expr(m, lf, args.get(0))
+        if sv < 0: return false
+        end_expr = args.get(1)
+    lf.add_var(var)
+    lf.set_var_type(var, 0)
+    lf.emit(LInst.IStoreVar(var, sv))
+    mut hdr = lf.new_block()
+    mut bdy = lf.new_block()
+    mut ext = lf.new_block()
+    lf.set_term(LTerm.TBr(hdr))
+    lf.set_cur(hdr)
+    mut vv = lf.new_vreg()
+    lf.emit(LInst.ILoadVar(vv, var))
+    mut ev = lower_expr(m, lf, end_expr)
+    if ev < 0: return false
+    mut cond = lf.new_vreg()
+    lf.emit(LInst.IBinOp(cond, "<", vv, ev))
+    lf.set_term(LTerm.TCondBr(cond, bdy, ext))
+    lf.set_cur(bdy)
+    if not lower_block(m, lf, body): return false
+    _emit_incr(lf, var)
+    lf.set_term(LTerm.TBr(hdr))
+    lf.set_cur(ext)
+    return true
+
+def _lower_for_list(m: LModule, lf: LFunc, var: str, iter: Pointer[HirExpr], body: HirBlock) -> bool:
+    mut lv = lower_expr(m, lf, iter)
+    if lv < 0: return false
+    if lf.vreg_type(lv) != 2: return false            # only List[int] iteration natively
+    mut uid = lf.fresh_id()
+    mut hname = "__forlist" + _lir_itoa(uid)
+    mut iname = "__foridx" + _lir_itoa(uid)
+    lf.add_var(hname)
+    lf.set_var_type(hname, 2)
+    lf.emit(LInst.IStoreVar(hname, lv))
+    mut z = lf.new_vreg()
+    lf.emit(LInst.IConst(z, 0))
+    lf.add_var(iname)
+    lf.set_var_type(iname, 0)
+    lf.emit(LInst.IStoreVar(iname, z))
+    mut hdr = lf.new_block()
+    mut bdy = lf.new_block()
+    mut ext = lf.new_block()
+    lf.set_term(LTerm.TBr(hdr))
+    lf.set_cur(hdr)
+    mut hv = lf.new_vreg()
+    lf.emit(LInst.ILoadVar(hv, hname))
+    m.add_extern("_tr_rt_list_len")
+    mut la = Vec[int].init(1)
+    la.push(hv)
+    mut lenv = lf.new_vreg()
+    lf.emit(LInst.ICall(lenv, "_tr_rt_list_len", la))
+    mut iv = lf.new_vreg()
+    lf.emit(LInst.ILoadVar(iv, iname))
+    mut cond = lf.new_vreg()
+    lf.emit(LInst.IBinOp(cond, "<", iv, lenv))
+    lf.set_term(LTerm.TCondBr(cond, bdy, ext))
+    lf.set_cur(bdy)
+    mut hv2 = lf.new_vreg()
+    lf.emit(LInst.ILoadVar(hv2, hname))
+    mut iv2 = lf.new_vreg()
+    lf.emit(LInst.ILoadVar(iv2, iname))
+    mut xval = _list_get(m, lf, hv2, iv2)
+    lf.add_var(var)
+    lf.set_var_type(var, 0)
+    lf.emit(LInst.IStoreVar(var, xval))
+    if not lower_block(m, lf, body): return false
+    _emit_incr(lf, iname)
+    lf.set_term(LTerm.TBr(hdr))
+    lf.set_cur(ext)
+    return true
+
+# name = name + 1  (loop counter bump).
+def _emit_incr(lf: LFunc, name: str):
+    mut cur = lf.new_vreg()
+    lf.emit(LInst.ILoadVar(cur, name))
+    mut one = lf.new_vreg()
+    lf.emit(LInst.IConst(one, 1))
+    mut inc = lf.new_vreg()
+    lf.emit(LInst.IBinOp(inc, "+", cur, one))
+    lf.emit(LInst.IStoreVar(name, inc))
 
 def _ident_name(e: Pointer[HirExpr]) -> str:
     match e.read():
@@ -152,9 +257,39 @@ def lower_expr_stmt(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> bool:
 
 # -- expressions: returns the vreg holding the value, or -1 if unsupported ----------
 def _int_op(op: str) -> bool:
-    if op == "+" or op == "-" or op == "*": return true
+    if op == "+" or op == "-" or op == "*" or op == "/" or op == "//" or op == "%": return true
     if op == "<" or op == ">" or op == "==" or op == "!=" or op == "<=" or op == ">=": return true
     return false
+
+def _lir_digit(d: int) -> str:
+    if d == 0: return "0"
+    if d == 1: return "1"
+    if d == 2: return "2"
+    if d == 3: return "3"
+    if d == 4: return "4"
+    if d == 5: return "5"
+    if d == 6: return "6"
+    if d == 7: return "7"
+    if d == 8: return "8"
+    return "9"
+
+# Small unsigned int -> decimal string (for synthesized loop-var suffixes).
+def _lir_itoa(n: int) -> str:
+    if n == 0: return "0"
+    mut s = ""
+    mut x = n
+    while x > 0:
+        s = _lir_digit(x % 10) + s
+        x = x / 10
+    return s
+
+# Normalize an i64 vreg to a 0/1 boolean vreg:  (v != 0).
+def _norm_bool(lf: LFunc, v: int) -> int:
+    mut z = lf.new_vreg()
+    lf.emit(LInst.IConst(z, 0))
+    mut r = lf.new_vreg()
+    lf.emit(LInst.IBinOp(r, "!=", v, z))
+    return r
 
 # xs[i] / xs.get(i) lowering: _tr_rt_list_get_i64(handle, i) returning an i64.
 def _list_get(m: LModule, lf: LFunc, handle: int, idx: int) -> int:
@@ -184,6 +319,23 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
             lf.emit(LInst.ILoadVar(d2, name))
             lf.set_vreg_type(d2, lf.var_type(name))
             return d2
+        case HirExpr.EUnaryOp(op, sub, _):
+            mut sv = lower_expr(m, lf, sub)
+            if sv < 0: return -1
+            if lf.vreg_type(sv) != 0: return -1
+            if op == "-":                          # -x  ->  0 - x
+                mut zn = lf.new_vreg()
+                lf.emit(LInst.IConst(zn, 0))
+                mut dneg = lf.new_vreg()
+                lf.emit(LInst.IBinOp(dneg, "-", zn, sv))
+                return dneg
+            if op == "not":                        # not x  ->  x == 0
+                mut zt = lf.new_vreg()
+                lf.emit(LInst.IConst(zt, 0))
+                mut dnot = lf.new_vreg()
+                lf.emit(LInst.IBinOp(dnot, "==", sv, zt))
+                return dnot
+            return -1
         case HirExpr.EBinOp(op, l, r, _):
             mut a = lower_expr(m, lf, l)
             if a < 0: return -1
@@ -201,6 +353,19 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                 lf.set_vreg_type(dc, 1)
                 return dc
             if at == 1 or bt == 1: return -1       # other pointer ops unsupported
+            # Logical and/or over pure int/bool operands. Not short-circuit, but the native
+            # subset has no side-effecting operands here, so it matches C for 0/1 results:
+            #   a and b -> (a!=0)*(b!=0);   a or b -> ((a!=0)+(b!=0)) != 0
+            if op == "and" or op == "or":
+                mut na = _norm_bool(lf, a)
+                mut nb = _norm_bool(lf, b)
+                if op == "and":
+                    mut dand = lf.new_vreg()
+                    lf.emit(LInst.IBinOp(dand, "*", na, nb))
+                    return dand
+                mut ssum = lf.new_vreg()
+                lf.emit(LInst.IBinOp(ssum, "+", na, nb))
+                return _norm_bool(lf, ssum)
             if not _int_op(op): return -1
             mut d3 = lf.new_vreg()
             lf.emit(LInst.IBinOp(d3, op, a, b))

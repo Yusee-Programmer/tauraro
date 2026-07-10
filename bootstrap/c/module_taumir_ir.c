@@ -36,7 +36,18 @@ __attribute__((malloc,returns_nonnull,hot)) LFunc* LFunc_init(TrStr name) {
     /* pass */
     f->params = (void*)List_TrStr_new();
     /* pass */
+    f->tmp_ctr = 0LL;
+    /* pass */
     return f;
+}
+
+__attribute__((hot)) long long LFunc_fresh_id(LFunc* self) {
+    /* pass */
+    long long id = self->tmp_ctr;
+    /* pass */
+    self->tmp_ctr = (self->tmp_ctr + 1LL);
+    /* pass */
+    return id;
 }
 
 __attribute__((hot)) long long LFunc_new_block(LFunc* self) {

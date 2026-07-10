@@ -120,6 +120,21 @@ def _emit_arith(c: ByteBuf, op: str):
         c.u8(15)
         c.u8(175)
         c.u8(193)          # imul rax, rcx
+    elif op == "/" or op == "//":
+        c.u8(72)
+        c.u8(153)          # cqo (sign-extend rax -> rdx:rax)
+        c.u8(72)
+        c.u8(247)
+        c.u8(249)          # idiv rcx  -> quotient in rax, remainder in rdx
+    elif op == "%":
+        c.u8(72)
+        c.u8(153)          # cqo
+        c.u8(72)
+        c.u8(247)
+        c.u8(249)          # idiv rcx
+        c.u8(72)
+        c.u8(137)
+        c.u8(208)          # mov rax, rdx  (remainder)
 
 def _emit_return(c: ByteBuf, rv: int):
     if rv == 0:

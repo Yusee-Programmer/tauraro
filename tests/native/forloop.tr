@@ -1,0 +1,20 @@
+# native≡c differential corpus: for over range and over List[int].
+def main():
+    mut s = 0
+    for i in range(5):
+        s = s + i
+    print(s)                # 0+1+2+3+4 = 10
+    mut t = 0
+    for j in range(2, 6):
+        t = t + j
+    print(t)                # 2+3+4+5 = 14
+    mut xs = [7, 8, 9]
+    mut u = 0
+    for x in xs:
+        u = u + x
+    print(u)                # 24
+    mut c = 0
+    for a in range(3):
+        for b in range(3):
+            c = c + 1
+    print(c)                # 9 (nested)
