@@ -2954,7 +2954,8 @@ pub class CGenerator:
             if args.len > 0:
                 mut ord_t_n: str = hir_expr_type(args.get(0)).name
                 if ord_t_n == "char": return "((long long)(unsigned char)(" + self.gen_expr(args.get(0)) + "))"
-                return "((long long)(unsigned char)(" + self.gen_expr(args.get(0)) + ")[0])"
+                # str arg: a TrStr can't be subscripted — materialize the C string first.
+                return "((long long)(unsigned char)_tr_strz(" + self.gen_expr(args.get(0)) + ")[0])"
             return "0LL"
         if base_callee == "chr":
             if args.len > 0: return "((char)(" + self.gen_expr(args.get(0)) + "))"
@@ -4330,6 +4331,7 @@ pub class CGenerator:
         # heap result, rc=1) so it participates in refcounting going forward.
         if _is_str_type(t_n):
             mut os: str = self.strz(obj_s)
+            if method == "is_empty": return "(_tr_strlen(" + os + ") == 0)"
             if method == "upper" or method == "to_upper": return self.wrapstr("_tr_str_upper(" + os + ")")
             if method == "lower" or method == "to_lower": return self.wrapstr("_tr_str_lower(" + os + ")")
             if method == "strip" or method == "trim": return self.wrapstr("_tr_str_strip(" + os + ")")

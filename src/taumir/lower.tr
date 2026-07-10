@@ -593,6 +593,50 @@ def _lower_str_method(m: LModule, lf: LFunc, recv: int, method: str, margs: Vec[
         lf.emit(LInst.ICall(sld, "_tr_rt_str_slice", sla))
         lf.set_vreg_type(sld, 1)
         return sld
+    # 0-arg string methods (new string / bool / int results).
+    if method == "capitalize" and margs.len == 0:
+        return _str_call0(m, lf, "_tr_rt_str_capitalize", recv, 1)
+    if method == "title" and margs.len == 0:
+        return _str_call0(m, lf, "_tr_rt_str_title", recv, 1)
+    if (method == "trim_left" or method == "lstrip") and margs.len == 0:
+        return _str_call0(m, lf, "_tr_rt_str_trim_left", recv, 1)
+    if (method == "trim_right" or method == "rstrip") and margs.len == 0:
+        return _str_call0(m, lf, "_tr_rt_str_trim_right", recv, 1)
+    if method == "reverse" and margs.len == 0:
+        return _str_call0(m, lf, "_tr_rt_str_reverse", recv, 1)
+    if method == "is_empty" and margs.len == 0:
+        return _str_call0(m, lf, "_tr_rt_str_is_empty", recv, 4)
+    if method == "parse_bool" and margs.len == 0:
+        return _str_call0(m, lf, "_tr_rt_str_parse_bool", recv, 4)
+    if method == "parse_int" and margs.len == 0:
+        return _str_call0(m, lf, "_tr_rt_str_to_i64", recv, 0)
+    # 1-str-arg string methods.
+    if method == "index_of" and margs.len == 1:
+        mut ida = lower_expr(m, lf, margs.get(0))
+        if ida < 0 or lf.vreg_type(ida) != 1: return -1
+        return _str_call1(m, lf, "_tr_rt_str_find", recv, ida, 0)
+    if method == "strip_prefix" and margs.len == 1:
+        mut ppa = lower_expr(m, lf, margs.get(0))
+        if ppa < 0 or lf.vreg_type(ppa) != 1: return -1
+        return _str_call1(m, lf, "_tr_rt_str_strip_prefix", recv, ppa, 1)
+    if method == "strip_suffix" and margs.len == 1:
+        mut ssa = lower_expr(m, lf, margs.get(0))
+        if ssa < 0 or lf.vreg_type(ssa) != 1: return -1
+        return _str_call1(m, lf, "_tr_rt_str_strip_suffix", recv, ssa, 1)
+    if method == "replace_first" and margs.len == 2:
+        mut rf0 = lower_expr(m, lf, margs.get(0))
+        if rf0 < 0 or lf.vreg_type(rf0) != 1: return -1
+        mut rf1 = lower_expr(m, lf, margs.get(1))
+        if rf1 < 0 or lf.vreg_type(rf1) != 1: return -1
+        m.add_extern("_tr_rt_str_replace_first")
+        mut rfa = Vec[int].init(3)
+        rfa.push(recv)
+        rfa.push(rf0)
+        rfa.push(rf1)
+        mut rfd = lf.new_vreg()
+        lf.emit(LInst.ICall(rfd, "_tr_rt_str_replace_first", rfa))
+        lf.set_vreg_type(rfd, 1)
+        return rfd
     return -1
 
 # Compile-time int literal helpers (for `range(a, b, step)` direction). Handle `-N` too.
@@ -942,6 +986,16 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                 lf.emit(LInst.ICall(and2, ansym, ana))
                 lf.set_vreg_type(and2, 4)
                 return and2
+            if fn == "ord" and args.len == 1:      # ord(str) -> first byte's code
+                mut ordv = lower_expr(m, lf, args.get(0))
+                if ordv < 0: return -1
+                if lf.vreg_type(ordv) != 1: return -1
+                m.add_extern("_tr_rt_str_ord")
+                mut orda = Vec[int].init(1)
+                orda.push(ordv)
+                mut ordd = lf.new_vreg()
+                lf.emit(LInst.ICall(ordd, "_tr_rt_str_ord", orda))
+                return ordd
             if fn == "bool" and args.len == 1:     # bool(x) -> (x != 0)
                 mut bv0 = lower_expr(m, lf, args.get(0))
                 if bv0 < 0: return -1

@@ -8625,6 +8625,21 @@ __attribute__((hot)) AstType* Sema_str_method_ret_ty(Sema* self, TrStr method) {
         return AstType_init(_tr_str_lit("bool"));
     }
     /* pass */
+    if ((strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("is_empty"))) == 0)) {
+        /* pass */
+        return AstType_init(_tr_str_lit("bool"));
+    }
+    /* pass */
+    if ((strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("parse_bool"))) == 0)) {
+        /* pass */
+        return AstType_init(_tr_str_lit("bool"));
+    }
+    /* pass */
+    if ((strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("contains"))) == 0)) {
+        /* pass */
+        return AstType_init(_tr_str_lit("bool"));
+    }
+    /* pass */
     if ((strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("contains_char"))) == 0)) {
         /* pass */
         return AstType_init(_tr_str_lit("bool"));

@@ -1,0 +1,31 @@
+# native≡c differential corpus: capitalize/title/trim/reverse/strip_prefix/suffix/
+# replace_first/parse_int/parse_bool/index_of/is_empty + ord().
+def main():
+    print("hello world".capitalize())     # Hello world
+    print("hello world".title())          # Hello World
+    print("  hi there  ".trim_left())     # "hi there  "
+    print("  hi there  ".trim_right())    # "  hi there"
+    print("abcdef".reverse())             # fedcba
+
+    print("foobar".strip_prefix("foo"))   # bar
+    print("foobar".strip_prefix("xyz"))   # foobar
+    print("foobar".strip_suffix("bar"))   # foo
+    print("foobar".strip_suffix("xyz"))   # foobar
+    print("aXbXc".replace_first("X", "-")) # a-bXc
+
+    print("hello".index_of("ll"))         # 2
+    print("hello".index_of("z"))          # -1
+    print("".is_empty())                  # true
+    print("x".is_empty())                 # false
+
+    print("42".parse_int() + 8)           # 50
+    print("true".parse_bool())            # true
+    print("no".parse_bool())              # false
+
+    print(ord("A"))                       # 65
+    print(ord("a"))                       # 97
+    print(ord("0"))                       # 48
+
+    print("PYTHON".capitalize())          # Python
+    print("the quick fox".title())        # The Quick Fox
+    print("racecar".reverse())            # racecar

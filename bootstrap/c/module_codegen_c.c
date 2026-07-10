@@ -6432,7 +6432,7 @@ __auto_type idx_ty = _t1059.data.EIndex.ty;
             /* pass */
             _tr_str_release(callee_s);
             _tr_str_release(base_callee);
-            return ({ TrStr _cl = (({ TrStr _cr = (CGenerator_gen_expr(self, ((HirExpr*)List_ptr_get(args, 0LL)))); TrStr _cres = _tr_strx_concat(_tr_strz(_tr_str_lit("((long long)(unsigned char)(")), _cr.data); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(")[0])"))); _tr_str_release(_cl); _cres; });
+            return ({ TrStr _cl = (({ TrStr _cr = (CGenerator_gen_expr(self, ((HirExpr*)List_ptr_get(args, 0LL)))); TrStr _cres = _tr_strx_concat(_tr_strz(_tr_str_lit("((long long)(unsigned char)_tr_strz(")), _cr.data); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(")[0])"))); _tr_str_release(_cl); _cres; });
         }
         /* pass */
         _tr_str_release(callee_s);
@@ -10381,6 +10381,12 @@ __auto_type field_name_fb = _t1172.data.EPropAccess.prop;
     if (_is_str_type(t_n)) {
         /* pass */
         TrStr os = CGenerator_strz(self, obj_s);
+        /* pass */
+        if ((strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("is_empty"))) == 0)) {
+            /* pass */
+            _tr_str_release(obj_s);
+            return ({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("(_tr_strlen(")), _tr_strz(os))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(") == 0)"))); _tr_str_release(_cl); _cres; });
+        }
         /* pass */
         if (((strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("upper"))) == 0) || (strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("to_upper"))) == 0))) {
             /* pass */

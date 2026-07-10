@@ -130,6 +130,83 @@ long long _tr_rt_str_ends_with(const char* s, const char* p) {
     if (pl > sl) return 0;
     return strcmp(s + sl - pl, p) == 0 ? 1 : 0;
 }
+/* More string methods — bodies mirror tauraro_rt.h exactly (case/whitespace rules). */
+static char* _trn_dup(const char* s) {
+    size_t n = strlen(s); char* r = (char*)malloc(n + 1);
+    for (size_t i = 0; i <= n; i++) r[i] = s[i]; return r;
+}
+char* _tr_rt_str_capitalize(const char* s) {
+    if (!s || !*s) { char* e = (char*)malloc(1); e[0] = 0; return e; }
+    char* r = _trn_dup(s);
+    r[0] = (char)toupper((unsigned char)r[0]);
+    for (size_t i = 1; r[i]; i++) r[i] = (char)tolower((unsigned char)r[i]);
+    return r;
+}
+char* _tr_rt_str_title(const char* s) {
+    if (!s) { char* e = (char*)malloc(1); e[0] = 0; return e; }
+    char* r = _trn_dup(s);
+    int ws = 1;
+    for (size_t i = 0; r[i]; i++) {
+        if (r[i] == ' ' || r[i] == '\t' || r[i] == '\n') ws = 1;
+        else if (ws) { r[i] = (char)toupper((unsigned char)r[i]); ws = 0; }
+        else r[i] = (char)tolower((unsigned char)r[i]);
+    }
+    return r;
+}
+char* _tr_rt_str_trim_left(const char* s) {
+    if (!s) s = "";
+    while (*s == ' ' || *s == '\t' || *s == '\n' || *s == '\r') s++;
+    return _trn_dup(s);
+}
+char* _tr_rt_str_trim_right(const char* s) {
+    if (!s) s = "";
+    size_t n = strlen(s);
+    while (n > 0 && (s[n-1] == ' ' || s[n-1] == '\t' || s[n-1] == '\n' || s[n-1] == '\r')) n--;
+    char* r = (char*)malloc(n + 1);
+    for (size_t i = 0; i < n; i++) r[i] = s[i];
+    r[n] = 0; return r;
+}
+char* _tr_rt_str_reverse(const char* s) {
+    if (!s) s = "";
+    size_t n = strlen(s); char* r = (char*)malloc(n + 1);
+    for (size_t i = 0; i < n; i++) r[i] = s[n-1-i];
+    r[n] = 0; return r;
+}
+char* _tr_rt_str_strip_prefix(const char* s, const char* pre) {
+    if (!s) s = ""; if (!pre) pre = "";
+    size_t pl = strlen(pre);
+    if (strncmp(s, pre, pl) == 0) return _trn_dup(s + pl);
+    return _trn_dup(s);
+}
+char* _tr_rt_str_strip_suffix(const char* s, const char* suf) {
+    if (!s) s = ""; if (!suf) suf = "";
+    size_t sl = strlen(s), sufl = strlen(suf);
+    if (sl >= sufl && strcmp(s + sl - sufl, suf) == 0) {
+        char* r = (char*)malloc(sl - sufl + 1);
+        for (size_t i = 0; i < sl - sufl; i++) r[i] = s[i];
+        r[sl - sufl] = 0; return r;
+    }
+    return _trn_dup(s);
+}
+char* _tr_rt_str_replace_first(const char* s, const char* a, const char* b) {
+    if (!s) s = ""; if (!a) a = ""; if (!b) b = "";
+    const char* p = strstr(s, a);
+    if (!p || !*a) return _trn_dup(s);
+    size_t ol = strlen(a), nl = strlen(b), pre = (size_t)(p - s), sl = strlen(s);
+    char* r = (char*)malloc(sl - ol + nl + 1);
+    char* w = r;
+    for (size_t i = 0; i < pre; i++) *w++ = s[i];
+    for (size_t j = 0; j < nl; j++) *w++ = b[j];
+    for (const char* q = s + pre + ol; *q; q++) *w++ = *q;
+    *w = 0; return r;
+}
+long long _tr_rt_str_parse_bool(const char* s) {
+    if (!s) return 0;
+    return (strcmp(s, "true") == 0 || strcmp(s, "1") == 0 || strcmp(s, "yes") == 0) ? 1 : 0;
+}
+long long _tr_rt_str_is_empty(const char* s) { return (!s || !*s) ? 1 : 0; }
+long long _tr_rt_str_ord(const char* s) { return s ? (long long)(unsigned char)s[0] : 0; }
+
 /* s.slice(a,b) / s.count(sub) / s.char_at(i) / s.contains(sub) — match tauraro_rt.h. */
 char* _tr_rt_str_slice(const char* s, long long start, long long end) {
     char* e;
