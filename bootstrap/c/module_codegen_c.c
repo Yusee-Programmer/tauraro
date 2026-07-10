@@ -2568,7 +2568,7 @@ __attribute__((hot)) void CGenerator_emit_entry_glue(CGenerator* self, HirProgra
     /* pass */
     if ((strcmp(_tr_strz(self->bare_arch), _tr_strz(_tr_str_lit("riscv"))) == 0)) {
         /* pass */
-        CGenerator_w(self, _tr_str_lit("\n/* --freestanding @entry: RISC-V boot (qemu virt) */\n"));
+        CGenerator_w(self, _tr_str_lit("\n/* --freestanding @entry: RISC-V boot (qemu virt, single-hart) */\n"));
         /* pass */
         CGenerator_w(self, _tr_str_lit("extern unsigned _stack_top, __bss_start__, __bss_end__;\n"));
         /* pass */
@@ -2588,17 +2588,9 @@ __attribute__((hot)) void CGenerator_emit_entry_glue(CGenerator* self, HirProgra
         /* pass */
         CGenerator_w(self, _tr_str_lit("    __asm__ volatile(\n"));
         /* pass */
-        CGenerator_w(self, _tr_str_lit("        \"csrr t0, mhartid\\n\"\n"));
-        /* pass */
-        CGenerator_w(self, _tr_str_lit("        \"bnez t0, 1f\\n\"\n"));
-        /* pass */
         CGenerator_w(self, _tr_str_lit("        \"la sp, _stack_top\\n\"\n"));
         /* pass */
         CGenerator_w(self, _tr_str_lit("        \"call _tr_boot\\n\"\n"));
-        /* pass */
-        CGenerator_w(self, _tr_str_lit("        \"1: wfi\\n\"\n"));
-        /* pass */
-        CGenerator_w(self, _tr_str_lit("        \"j 1b\\n\"\n"));
         /* pass */
         CGenerator_w(self, _tr_str_lit("    );\n"));
         /* pass */
