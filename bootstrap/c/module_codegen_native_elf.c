@@ -44,7 +44,19 @@ __attribute__((hot)) void _shdr(ByteBuf* out, long long name, long long ty, long
     ByteBuf_u64(out, entsize);
 }
 
-__attribute__((hot)) bool write_elf_object(TrStr out_path, List_ptr* funcs, List_TrStr* externs) {
+__attribute__((hot)) long long _align8(long long n) {
+    /* pass */
+    long long r = n;
+    /* pass */
+    while (((r % 8LL) != 0LL)) {
+        /* pass */
+        r = (r + 1LL);
+    }
+    /* pass */
+    return r;
+}
+
+__attribute__((hot)) bool write_elf_object(TrStr out_path, List_ptr* funcs, List_TrStr* externs, List_TrStr* strings) {
     /* pass */
     ByteBuf* text = ByteBuf_init();
     /* pass */
@@ -76,6 +88,10 @@ __attribute__((hot)) bool write_elf_object(TrStr out_path, List_ptr* funcs, List
             /* pass */
             tr->sym = r->symbol;
             /* pass */
+            tr->kind = r->kind;
+            /* pass */
+            tr->str_idx = r->str_idx;
+            /* pass */
             List_ptr_append(trelocs, _tr_obj_retain(tr));
             /* pass */
             ri = (ri + 1LL);
@@ -83,6 +99,21 @@ __attribute__((hot)) bool write_elf_object(TrStr out_path, List_ptr* funcs, List
         }
         /* pass */
         fi = (fi + 1LL);
+    }
+    /* pass */
+    ByteBuf* rodata = ByteBuf_init();
+    /* pass */
+    List_i64* str_off = (void*)List_i64_new();
+    /* pass */
+    long long sxi = 0LL;
+    /* pass */
+    while ((sxi < strings->len)) {
+        /* pass */
+        List_i64_append(str_off, rodata->len);
+        /* pass */
+        ({ TrStr _at_t2250 = (List_TrStr_get(strings, sxi)); ByteBuf_cstr(rodata, _at_t2250); _tr_str_release(_at_t2250); });
+        /* pass */
+        sxi = (sxi + 1LL);
     }
     /* pass */
     ByteBuf* symtab = ByteBuf_init();
@@ -94,6 +125,18 @@ __attribute__((hot)) bool write_elf_object(TrStr out_path, List_ptr* funcs, List
     ByteBuf_zeros(symtab, 24LL);
     /* pass */
     ByteBuf_u8(strtab, 0LL);
+    /* pass */
+    ByteBuf_u32(symtab, 0LL);
+    /* pass */
+    ByteBuf_u8(symtab, 3LL);
+    /* pass */
+    ByteBuf_u8(symtab, 0LL);
+    /* pass */
+    ByteBuf_u16(symtab, 2LL);
+    /* pass */
+    ByteBuf_u64(symtab, 0LL);
+    /* pass */
+    ByteBuf_u64(symtab, 0LL);
     /* pass */
     fi = 0LL;
     /* pass */
@@ -158,13 +201,23 @@ __attribute__((hot)) bool write_elf_object(TrStr out_path, List_ptr* funcs, List
         /* pass */
         TextReloc* trr = ((TextReloc*)List_ptr_get(trelocs, tri));
         /* pass */
-        long long sidx = (_index_of(sym_names, trr->sym) + 1LL);
-        /* pass */
-        ByteBuf_u64(rela, trr->roff);
-        /* pass */
-        ByteBuf_u64(rela, ((sidx * 4294967296LL) + 4LL));
-        /* pass */
-        ByteBuf_u64(rela, (0LL - 4LL));
+        if ((trr->kind == 1LL)) {
+            /* pass */
+            ByteBuf_u64(rela, trr->roff);
+            /* pass */
+            ByteBuf_u64(rela, ((1LL * 4294967296LL) + 2LL));
+            /* pass */
+            ByteBuf_u64(rela, (List_i64_get(str_off, trr->str_idx) - 4LL));
+        } else {
+            /* pass */
+            long long sidx = (_index_of(sym_names, trr->sym) + 2LL);
+            /* pass */
+            ByteBuf_u64(rela, trr->roff);
+            /* pass */
+            ByteBuf_u64(rela, ((sidx * 4294967296LL) + 4LL));
+            /* pass */
+            ByteBuf_u64(rela, (0LL - 4LL));
+        }
         /* pass */
         tri = (tri + 1LL);
     }
@@ -176,6 +229,10 @@ __attribute__((hot)) bool write_elf_object(TrStr out_path, List_ptr* funcs, List
     long long n_text = shstr->len;
     /* pass */
     ByteBuf_cstr(shstr, _tr_str_lit(".text"));
+    /* pass */
+    long long n_rodata = shstr->len;
+    /* pass */
+    ByteBuf_cstr(shstr, _tr_str_lit(".rodata"));
     /* pass */
     long long n_rela = shstr->len;
     /* pass */
@@ -195,9 +252,11 @@ __attribute__((hot)) bool write_elf_object(TrStr out_path, List_ptr* funcs, List
     /* pass */
     long long text_off = 64LL;
     /* pass */
-    long long off = (text_off + text->len);
+    long long off = _align8((text_off + text->len));
     /* pass */
-    off = _align8(off);
+    long long rodata_off = off;
+    /* pass */
+    off = _align8((off + rodata->len));
     /* pass */
     long long rela_off = off;
     /* pass */
@@ -213,13 +272,9 @@ __attribute__((hot)) bool write_elf_object(TrStr out_path, List_ptr* funcs, List
     /* pass */
     long long shstr_off = off;
     /* pass */
-    off = (off + shstr->len);
-    /* pass */
-    off = _align8(off);
+    off = _align8((off + shstr->len));
     /* pass */
     long long shoff = off;
-    /* pass */
-    long long nsyms = ((1LL + funcs->len) + externs->len);
     /* pass */
     ByteBuf* out = ByteBuf_init();
     /* pass */
@@ -263,11 +318,15 @@ __attribute__((hot)) bool write_elf_object(TrStr out_path, List_ptr* funcs, List
     /* pass */
     ByteBuf_u16(out, 64LL);
     /* pass */
+    ByteBuf_u16(out, 7LL);
+    /* pass */
     ByteBuf_u16(out, 6LL);
     /* pass */
-    ByteBuf_u16(out, 5LL);
-    /* pass */
     ByteBuf_append_buf(out, text);
+    /* pass */
+    ByteBuf_align_to(out, 8LL);
+    /* pass */
+    ByteBuf_append_buf(out, rodata);
     /* pass */
     ByteBuf_align_to(out, 8LL);
     /* pass */
@@ -281,13 +340,17 @@ __attribute__((hot)) bool write_elf_object(TrStr out_path, List_ptr* funcs, List
     /* pass */
     ByteBuf_align_to(out, 8LL);
     /* pass */
+    long long nsyms_globals = ((1LL + funcs->len) + externs->len);
+    /* pass */
     _shdr(out, 0LL, 0LL, 0LL, 0LL, 0LL, 0LL, 0LL, 0LL, 0LL, 0LL);
     /* pass */
     _shdr(out, n_text, 1LL, 6LL, 0LL, text_off, text->len, 0LL, 0LL, 16LL, 0LL);
     /* pass */
-    _shdr(out, n_rela, 4LL, 64LL, 0LL, rela_off, rela->len, 3LL, 1LL, 8LL, 24LL);
+    _shdr(out, n_rodata, 1LL, 2LL, 0LL, rodata_off, rodata->len, 0LL, 0LL, 1LL, 0LL);
     /* pass */
-    _shdr(out, n_symtab, 2LL, 0LL, 0LL, symtab_off, symtab->len, 4LL, 1LL, 8LL, 24LL);
+    _shdr(out, n_rela, 4LL, 64LL, 0LL, rela_off, rela->len, 4LL, 1LL, 8LL, 24LL);
+    /* pass */
+    _shdr(out, n_symtab, 2LL, 0LL, 0LL, symtab_off, symtab->len, 5LL, 2LL, 8LL, 24LL);
     /* pass */
     _shdr(out, n_strtab, 3LL, 0LL, 0LL, strtab_off, strtab->len, 0LL, 0LL, 1LL, 0LL);
     /* pass */
@@ -296,22 +359,12 @@ __attribute__((hot)) bool write_elf_object(TrStr out_path, List_ptr* funcs, List
     _tr_obj_release(text, _trdrop_ByteBuf);
     List_ptr_free_obj(trelocs, _trdrop_TextReloc);
     List_i64_free(func_base);
+    _tr_obj_release(rodata, _trdrop_ByteBuf);
+    List_i64_free(str_off);
     _tr_obj_release(symtab, _trdrop_ByteBuf);
     _tr_obj_release(strtab, _trdrop_ByteBuf);
     _tr_obj_release(rela, _trdrop_ByteBuf);
     _tr_obj_release(shstr, _trdrop_ByteBuf);
     return ByteBuf_write_file(out, out_path);
-}
-
-__attribute__((hot)) long long _align8(long long n) {
-    /* pass */
-    long long r = n;
-    /* pass */
-    while (((r % 8LL) != 0LL)) {
-        /* pass */
-        r = (r + 1LL);
-    }
-    /* pass */
-    return r;
 }
 

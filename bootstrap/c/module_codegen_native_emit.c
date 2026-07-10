@@ -24,6 +24,6 @@ __attribute__((hot)) bool emit_lir_object(LModule* m, TrStr out_path) {
         i = (i + 1LL);
     }
     /* pass */
-    return write_elf_object(out_path, encoded, m->externs);
+    return write_elf_object(out_path, encoded, m->externs, m->strings);
 }
 

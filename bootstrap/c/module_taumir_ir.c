@@ -131,9 +131,30 @@ __attribute__((malloc,returns_nonnull,hot)) LModule* LModule_init() {
     /* pass */
     m->fn_names = (void*)List_TrStr_new();
     /* pass */
+    m->strings = (void*)List_TrStr_new();
+    /* pass */
     m->ok = true;
     /* pass */
     return m;
+}
+
+__attribute__((hot)) long long LModule_add_string(LModule* self, TrStr s) {
+    /* pass */
+    long long i = 0LL;
+    /* pass */
+    while ((i < self->strings->len)) {
+        /* pass */
+        if ((strcmp(_tr_strz(List_TrStr_get(self->strings, i)), _tr_strz(s)) == 0)) {
+            /* pass */
+            return i;
+        }
+        /* pass */
+        i = (i + 1LL);
+    }
+    /* pass */
+    List_TrStr_append(self->strings, s);
+    /* pass */
+    return (self->strings->len - 1LL);
 }
 
 __attribute__((hot)) void LModule_add_extern(LModule* self, TrStr name) {

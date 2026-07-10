@@ -18,6 +18,7 @@ pub enum LType:
 # — a comparison produces 0/1 in its dst vreg.
 pub enum LInst:
     IConst(dst: int, v: int)
+    IStr(dst: int, str_idx: int)              # dst = &module.strings[str_idx] (.rodata C-string)
     IBinOp(dst: int, op: str, a: int, b: int)
     ILoadVar(dst: int, name: str)
     IStoreVar(name: str, src: int)
@@ -121,6 +122,7 @@ pub class LModule:
     pub funcs:    Vec[LFunc]
     pub externs:  Vec[str]
     pub fn_names: Vec[str]      # user function names (defined in this module; call targets)
+    pub strings:  Vec[str]      # string literals -> .rodata (each NUL-terminated)
     pub ok:       bool
 
 extend LModule:
@@ -129,8 +131,18 @@ extend LModule:
         m.funcs    = Vec[LFunc].init(4)
         m.externs  = Vec[str].init(4)
         m.fn_names = Vec[str].init(8)
+        m.strings  = Vec[str].init(4)
         m.ok       = true
         return m
+
+    # Intern a string literal, returning its index in the .rodata table.
+    pub def add_string(self, s: str) -> int:
+        mut i = 0
+        while i < self.strings.len:
+            if self.strings.get(i) == s: return i
+            i = i + 1
+        self.strings.push(s)
+        return self.strings.len - 1
 
     pub def add_extern(self, name: str):
         mut i = 0

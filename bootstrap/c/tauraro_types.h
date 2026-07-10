@@ -1577,6 +1577,7 @@ typedef struct LType {
 
 typedef enum {
     LInst_IConst,
+    LInst_IStr,
     LInst_IBinOp,
     LInst_ILoadVar,
     LInst_IStoreVar,
@@ -1590,6 +1591,10 @@ typedef struct LInst {
             long long dst;
             long long v;
         } IConst;
+        struct {
+            long long dst;
+            long long str_idx;
+        } IStr;
         struct {
             long long dst;
             TrStr op;
@@ -1613,6 +1618,7 @@ typedef struct LInst {
 } LInst;
 
 static inline __attribute__((always_inline)) LInst LInst_ctor_IConst(long long dst, long long v) { LInst _r = {.tag=LInst_IConst}; _r.data.IConst.dst = dst; _r.data.IConst.v = v; return _r; }
+static inline __attribute__((always_inline)) LInst LInst_ctor_IStr(long long dst, long long str_idx) { LInst _r = {.tag=LInst_IStr}; _r.data.IStr.dst = dst; _r.data.IStr.str_idx = str_idx; return _r; }
 static inline __attribute__((always_inline)) LInst LInst_ctor_IBinOp(long long dst, TrStr op, long long a, long long b) { LInst _r = {.tag=LInst_IBinOp}; _r.data.IBinOp.dst = dst; _r.data.IBinOp.op = _tr_str_retain(op); _r.data.IBinOp.a = a; _r.data.IBinOp.b = b; return _r; }
 static inline __attribute__((always_inline)) LInst LInst_ctor_ILoadVar(long long dst, TrStr name) { LInst _r = {.tag=LInst_ILoadVar}; _r.data.ILoadVar.dst = dst; _r.data.ILoadVar.name = _tr_str_retain(name); return _r; }
 static inline __attribute__((always_inline)) LInst LInst_ctor_IStoreVar(TrStr name, long long src) { LInst _r = {.tag=LInst_IStoreVar}; _r.data.IStoreVar.name = _tr_str_retain(name); _r.data.IStoreVar.src = src; return _r; }
@@ -2826,6 +2832,7 @@ typedef struct LModule {
     List_ptr* funcs;
     List_TrStr* externs;
     List_TrStr* fn_names;
+    List_TrStr* strings;
     bool ok;
 } LModule;
 static void _trdrop_LModule(void* vp) {
@@ -2833,6 +2840,7 @@ static void _trdrop_LModule(void* vp) {
     List_ptr_free_obj(self->funcs, _trdrop_LFunc);
     List_TrStr_free(self->externs);
     List_TrStr_free(self->fn_names);
+    List_TrStr_free(self->strings);
 }
 #endif
 
@@ -2855,6 +2863,8 @@ typedef struct Reloc {
     size_t __rc;
     long long offset;
     TrStr symbol;
+    long long kind;
+    long long str_idx;
 } Reloc;
 static void _trdrop_Reloc(void* vp) {
     Reloc* self = (Reloc*)vp; (void)self;
@@ -2897,6 +2907,8 @@ typedef struct TextReloc {
     size_t __rc;
     long long roff;
     TrStr sym;
+    long long kind;
+    long long str_idx;
 } TextReloc;
 static void _trdrop_TextReloc(void* vp) {
     TextReloc* self = (TextReloc*)vp; (void)self;
@@ -3483,6 +3495,7 @@ __attribute__((hot)) long long LFunc_new_vreg(LFunc* self);
 __attribute__((hot)) void LFunc_add_var(LFunc* self, TrStr name);
 __attribute__((hot)) long long LFunc_var_index(LFunc* self, TrStr name);
 __attribute__((malloc,returns_nonnull,hot)) LModule* LModule_init();
+__attribute__((hot)) long long LModule_add_string(LModule* self, TrStr s);
 __attribute__((hot)) void LModule_add_extern(LModule* self, TrStr name);
 __attribute__((hot)) bool LModule_is_user_fn(LModule* self, TrStr name);
 __attribute__((hot)) TrStr _print_i64_sym();
@@ -3523,8 +3536,8 @@ __attribute__((hot)) void _emit_return(ByteBuf* c, long long rv);
 __attribute__((hot)) EncodedFunc* encode_func(LFunc* lf);
 __attribute__((hot)) long long _index_of(List_TrStr* names, TrStr s);
 __attribute__((hot)) void _shdr(ByteBuf* out, long long name, long long ty, long long flags, long long addr, long long offset, long long size, long long link, long long info, long long align, long long entsize);
-__attribute__((hot)) bool write_elf_object(TrStr out_path, List_ptr* funcs, List_TrStr* externs);
 __attribute__((hot)) long long _align8(long long n);
+__attribute__((hot)) bool write_elf_object(TrStr out_path, List_ptr* funcs, List_TrStr* externs, List_TrStr* strings);
 __attribute__((hot)) bool emit_lir_object(LModule* m, TrStr out_path);
 __attribute__((malloc,returns_nonnull,hot)) NativeGenerator* NativeGenerator_init();
 __attribute__((hot)) bool NativeGenerator_emit_object(NativeGenerator* self, HirProgram* prog, TrStr out_path);

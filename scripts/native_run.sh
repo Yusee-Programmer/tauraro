@@ -24,26 +24,24 @@ echo "=============================================================="
 echo "  Native backend LINK + RUN — x86-64/ELF, 100% Tauraro (no C)"
 echo "=============================================================="
 mkdir -p build
-# Exercises the native backend: user functions + recursion, params + return values,
-# loops, if/else, and arithmetic — all compiled straight to x86-64, no C.
+# Exercises the native backend: string literals, user functions + recursion, params +
+# return values, loops, if/else, and arithmetic — all compiled straight to x86-64, no C.
 cat > /tmp/native_p42.tr <<'EOF'
 def fib(n: int) -> int:
     if n < 2:
         return n
     return fib(n - 1) + fib(n - 2)
 
-def add(a: int, b: int) -> int:
-    return a + b
-
 def main():
+    print("hello from native")
     print(fib(10))       # 55
-    print(add(20, 22))   # 42
     mut i = 0
     mut s = 0
     while i < 10:
         s = s + i
         i = i + 1
     print(s)             # 45
+    print("done")
 EOF
 
 # 1) runtime.o — extern entry points to the header-only runtime (compiled once).
@@ -63,10 +61,10 @@ fi
 # 4) run.
 out="$(build/native_p42 2>&1)"
 echo "--- output ---"; echo "$out" | sed 's/^/    /'
-expected=$'55\n42\n45'
+expected=$'hello from native\n55\n45\ndone'
 if [ "$out" = "$expected" ]; then
-    echo "NATIVE RUN OK ✅ — a Tauraro program (recursion + functions + loops) compiled straight to x86-64/ELF (no C) ran correctly"
+    echo "NATIVE RUN OK ✅ — a Tauraro program (strings + recursion + loops) compiled straight to x86-64/ELF (no C) ran correctly"
     exit 0
 else
-    echo "FAIL: expected 55/42/45, got '$out'"; exit 1
+    echo "FAIL: expected 'hello from native/55/45/done', got '$out'"; exit 1
 fi

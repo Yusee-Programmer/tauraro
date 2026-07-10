@@ -128,7 +128,25 @@ def lower_expr_stmt(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> bool:
             mut fname = _ident_name(callee)
             if fname == "print":
                 if args.len != 1: return false
-                mut a = lower_expr(m, lf, args.get(0))
+                mut arg0 = args.get(0)
+                # string literal -> print_cstr(&rodata)
+                mut is_str = false
+                mut sidx = 0
+                match arg0.read():
+                    case HirExpr.ELitStr(sv, _):
+                        is_str = true
+                        sidx = m.add_string(sv)
+                    case _: pass
+                if is_str:
+                    mut ds = lf.new_vreg()
+                    lf.emit(LInst.IStr(ds, sidx))
+                    m.add_extern("_tr_rt_print_cstr")
+                    mut sargs = Vec[int].init(1)
+                    sargs.push(ds)
+                    lf.emit(LInst.ICall(-1, "_tr_rt_print_cstr", sargs))
+                    return true
+                # integer expression -> print_i64
+                mut a = lower_expr(m, lf, arg0)
                 if a < 0: return false
                 m.add_extern(_print_i64_sym())
                 mut cargs = Vec[int].init(1)
