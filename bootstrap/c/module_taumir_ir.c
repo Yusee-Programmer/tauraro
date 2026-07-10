@@ -1,9 +1,11 @@
 #include "tauraro_types.h"
 
 
-__attribute__((malloc,returns_nonnull,hot)) LBlock* LBlock_init() {
+__attribute__((malloc,returns_nonnull,hot)) LBlock* LBlock_init(long long id) {
     /* pass */
     LBlock* b = ((LBlock*)_tr_obj_alloc(sizeof(LBlock)));
+    /* pass */
+    b->id = id;
     /* pass */
     b->insts = (void*)List_ptr_new();
     /* pass */
@@ -18,17 +20,60 @@ __attribute__((malloc,returns_nonnull,hot)) LFunc* LFunc_init(TrStr name) {
     /* pass */
     f->name = _tr_str_retain(name);
     /* pass */
-    LBlock* _cltmp_t2237 = LBlock_init();
-    _tr_obj_release(f->block, _trdrop_LBlock);
-    f->block = _cltmp_t2237;
-    /* pass */
     f->is_main = false;
+    /* pass */
+    f->blocks = (void*)List_ptr_new();
+    /* pass */
+    f->cur = (-1LL);
     /* pass */
     f->n_vregs = 0LL;
     /* pass */
     f->vars = (void*)List_TrStr_new();
     /* pass */
     return f;
+}
+
+__attribute__((hot)) long long LFunc_new_block(LFunc* self) {
+    /* pass */
+    long long id = self->blocks->len;
+    /* pass */
+    List_ptr_append(self->blocks, LBlock_init(id));
+    /* pass */
+    return id;
+}
+
+__attribute__((hot)) void LFunc_set_cur(LFunc* self, long long id) {
+    /* pass */
+    self->cur = id;
+}
+
+__attribute__((hot)) void LFunc_emit(LFunc* self, LInst i) {
+    /* pass */
+    List_ptr_append(((LBlock*)List_ptr_get(self->blocks, self->cur))->insts, box_linst(i));
+}
+
+__attribute__((hot)) void LFunc_set_term(LFunc* self, LTerm t) {
+    /* pass */
+    LBlock* b = ((LBlock*)List_ptr_get(self->blocks, self->cur));
+    /* pass */
+    __auto_type _t2237 = b->term;
+    if (_t2237.tag == LTerm_TUnset) {
+        b->term = t;
+    } else if (1) {
+        __auto_type _ = _t2237;
+        /* pass */
+    }
+}
+
+__attribute__((hot)) bool LFunc_cur_terminated(LFunc* self) {
+    /* pass */
+    __auto_type _t2238 = ((LBlock*)List_ptr_get(self->blocks, self->cur))->term;
+    if (_t2238.tag == LTerm_TUnset) {
+        return false;
+    } else if (1) {
+        __auto_type _ = _t2238;
+        return true;
+    }
 }
 
 __attribute__((hot)) long long LFunc_new_vreg(LFunc* self) {
@@ -72,11 +117,6 @@ __attribute__((hot)) long long LFunc_var_index(LFunc* self, TrStr name) {
     }
     /* pass */
     return (-1LL);
-}
-
-__attribute__((hot)) void LFunc_emit(LFunc* self, LInst i) {
-    /* pass */
-    List_ptr_append(self->block->insts, box_linst(i));
 }
 
 __attribute__((malloc,returns_nonnull,hot)) LModule* LModule_init() {

@@ -59,6 +59,7 @@ typedef struct LFunc LFunc;
 typedef struct LModule LModule;
 typedef struct ByteBuf ByteBuf;
 typedef struct Reloc Reloc;
+typedef struct Jump Jump;
 typedef struct EncodedFunc EncodedFunc;
 typedef struct TextReloc TextReloc;
 typedef struct NativeGenerator NativeGenerator;
@@ -138,6 +139,7 @@ static void _trdrop_LFunc(void* vp);
 static void _trdrop_LModule(void* vp);
 static void _trdrop_ByteBuf(void* vp);
 static void _trdrop_Reloc(void* vp);
+static void _trdrop_Jump(void* vp);
 static void _trdrop_EncodedFunc(void* vp);
 static void _trdrop_TextReloc(void* vp);
 static void _trdrop_NativeGenerator(void* vp);
@@ -1619,6 +1621,8 @@ static inline __attribute__((always_inline)) LInst LInst_ctor_ICall(long long ds
 typedef enum {
     LTerm_TRetInt,
     LTerm_TRetVoid,
+    LTerm_TBr,
+    LTerm_TCondBr,
     LTerm_TUnset
 } LTerm_tag;
 
@@ -1628,11 +1632,21 @@ typedef struct LTerm {
         struct {
             long long v;
         } TRetInt;
+        struct {
+            long long target;
+        } TBr;
+        struct {
+            long long cond;
+            long long then_b;
+            long long else_b;
+        } TCondBr;
     } data;
 } LTerm;
 
 static inline __attribute__((always_inline)) LTerm LTerm_ctor_TRetInt(long long v) { LTerm _r = {.tag=LTerm_TRetInt}; _r.data.TRetInt.v = v; return _r; }
 #define LTerm_make_TRetVoid() ((LTerm){.tag=LTerm_TRetVoid})
+static inline __attribute__((always_inline)) LTerm LTerm_ctor_TBr(long long target) { LTerm _r = {.tag=LTerm_TBr}; _r.data.TBr.target = target; return _r; }
+static inline __attribute__((always_inline)) LTerm LTerm_ctor_TCondBr(long long cond, long long then_b, long long else_b) { LTerm _r = {.tag=LTerm_TCondBr}; _r.data.TCondBr.cond = cond; _r.data.TCondBr.then_b = then_b; _r.data.TCondBr.else_b = else_b; return _r; }
 #define LTerm_make_TUnset() ((LTerm){.tag=LTerm_TUnset})
 
 typedef enum {
@@ -2771,6 +2785,7 @@ static void _trdrop_LlvmGenerator(void* vp) {
 #define LBlock_STRUCT_DEFINED
 typedef struct LBlock {
     size_t __rc;
+    long long id;
     List_ptr* insts;
     LTerm term;
 } LBlock;
@@ -2785,15 +2800,15 @@ static void _trdrop_LBlock(void* vp) {
 typedef struct LFunc {
     size_t __rc;
     TrStr name;
-    LBlock* block;
     bool is_main;
+    List_ptr* blocks;
+    long long cur;
     long long n_vregs;
     List_TrStr* vars;
 } LFunc;
 static void _trdrop_LFunc(void* vp) {
     LFunc* self = (LFunc*)vp; (void)self;
     _tr_str_release(self->name);
-    _tr_obj_release(self->block, _trdrop_LBlock);
     List_TrStr_free(self->vars);
 }
 #endif
@@ -2836,6 +2851,18 @@ typedef struct Reloc {
 static void _trdrop_Reloc(void* vp) {
     Reloc* self = (Reloc*)vp; (void)self;
     _tr_str_release(self->symbol);
+}
+#endif
+
+#ifndef Jump_STRUCT_DEFINED
+#define Jump_STRUCT_DEFINED
+typedef struct Jump {
+    size_t __rc;
+    long long patch_off;
+    long long target;
+} Jump;
+static void _trdrop_Jump(void* vp) {
+    Jump* self = (Jump*)vp; (void)self;
 }
 #endif
 
@@ -3437,20 +3464,26 @@ __attribute__((hot)) void LlvmGenerator_gen_stmt(LlvmGenerator* self, HirStmt* s
 __attribute__((hot)) void LlvmGenerator_gen_block(LlvmGenerator* self, HirBlock* b);
 __attribute__((hot)) TrStr LlvmGenerator_generate(LlvmGenerator* self, HirProgram* prog);
 __attribute__((hot)) LInst* box_linst(LInst i);
-__attribute__((malloc,returns_nonnull,hot)) LBlock* LBlock_init();
+__attribute__((malloc,returns_nonnull,hot)) LBlock* LBlock_init(long long id);
 __attribute__((malloc,returns_nonnull,hot)) LFunc* LFunc_init(TrStr name);
+__attribute__((hot)) long long LFunc_new_block(LFunc* self);
+__attribute__((hot)) void LFunc_set_cur(LFunc* self, long long id);
+__attribute__((hot)) void LFunc_emit(LFunc* self, LInst i);
+__attribute__((hot)) void LFunc_set_term(LFunc* self, LTerm t);
+__attribute__((hot)) bool LFunc_cur_terminated(LFunc* self);
 __attribute__((hot)) long long LFunc_new_vreg(LFunc* self);
 __attribute__((hot)) void LFunc_add_var(LFunc* self, TrStr name);
 __attribute__((hot)) long long LFunc_var_index(LFunc* self, TrStr name);
-__attribute__((hot)) void LFunc_emit(LFunc* self, LInst i);
 __attribute__((malloc,returns_nonnull,hot)) LModule* LModule_init();
 __attribute__((hot)) void LModule_add_extern(LModule* self, TrStr name);
 __attribute__((hot)) TrStr _print_i64_sym();
 __attribute__((hot)) LModule* lower_to_lir(HirProgram* prog);
 __attribute__((hot)) void lower_main(LModule* m, HirFunction* f);
+__attribute__((hot)) bool lower_block(LModule* m, LFunc* lf, HirBlock* hb);
 __attribute__((hot)) bool lower_stmt(LModule* m, LFunc* lf, HirStmt* s);
 __attribute__((hot)) TrStr _ident_name(HirExpr* e);
 __attribute__((hot)) bool lower_call_stmt(LModule* m, LFunc* lf, HirExpr* e);
+__attribute__((hot)) bool _supported_op(TrStr op);
 __attribute__((hot)) long long lower_expr(LFunc* lf, HirExpr* e);
 __attribute__((malloc,returns_nonnull,hot)) ByteBuf* ByteBuf_init();
 __attribute__((hot)) void ByteBuf_u8(ByteBuf* self, long long v);
@@ -3473,7 +3506,10 @@ __attribute__((hot)) void _ld_rax(ByteBuf* c, long long disp);
 __attribute__((hot)) void _ld_rcx(ByteBuf* c, long long disp);
 __attribute__((hot)) void _ld_argreg(ByteBuf* c, long long idx, long long disp);
 __attribute__((hot)) void _mov_rax_imm64(ByteBuf* c, long long v);
-__attribute__((hot)) void _emit_binop(ByteBuf* c, TrStr op);
+__attribute__((hot)) bool _is_cmp(TrStr op);
+__attribute__((hot)) long long _setcc(TrStr op);
+__attribute__((hot)) void _emit_arith(ByteBuf* c, TrStr op);
+__attribute__((hot)) void _emit_return(ByteBuf* c, long long rv);
 __attribute__((hot)) EncodedFunc* encode_func(LFunc* lf);
 __attribute__((hot)) long long _index_of(List_TrStr* names, TrStr s);
 __attribute__((hot)) void _shdr(ByteBuf* out, long long name, long long ty, long long flags, long long addr, long long offset, long long size, long long link, long long info, long long align, long long entsize);
@@ -4900,6 +4936,24 @@ __attribute__((hot)) codegen_native_isa_x64_Reloc*** core_alloc_resize_codegen_n
 __attribute__((hot)) void core_alloc_dealloc_codegen_native_isa_x64_Reloc_ptr(codegen_native_isa_x64_Reloc*** ptr);
 __attribute__((hot)) core_map_MapNode_str_codegen_native_isa_x64_Reloc** core_alloc_alloc_core_map_MapNode_str_codegen_native_isa_x64_Reloc(long long count);
 __attribute__((hot)) void core_alloc_dealloc_core_map_MapNode_str_codegen_native_isa_x64_Reloc(core_map_MapNode_str_codegen_native_isa_x64_Reloc** ptr);
+
+typedef Jump codegen_native_isa_x64_Jump;
+struct core_vec_Vec_codegen_native_isa_x64_Jump { codegen_native_isa_x64_Jump** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_codegen_native_isa_x64_Jump core_vec_Vec_codegen_native_isa_x64_Jump;
+struct core_vec_Vec_codegen_native_isa_x64_Jump_ptr { codegen_native_isa_x64_Jump*** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_codegen_native_isa_x64_Jump_ptr core_vec_Vec_codegen_native_isa_x64_Jump_ptr;
+struct core_map_MapNode_str_codegen_native_isa_x64_Jump { char* key; codegen_native_isa_x64_Jump* value; struct core_map_MapNode_str_codegen_native_isa_x64_Jump* next; };
+typedef struct core_map_MapNode_str_codegen_native_isa_x64_Jump core_map_MapNode_str_codegen_native_isa_x64_Jump;
+struct core_map_Map_str_codegen_native_isa_x64_Jump { core_map_MapNode_str_codegen_native_isa_x64_Jump** buckets; long long capacity; long long len; };
+typedef struct core_map_Map_str_codegen_native_isa_x64_Jump core_map_Map_str_codegen_native_isa_x64_Jump;
+__attribute__((hot)) codegen_native_isa_x64_Jump** core_alloc_alloc_codegen_native_isa_x64_Jump(long long count);
+__attribute__((hot)) codegen_native_isa_x64_Jump** core_alloc_resize_codegen_native_isa_x64_Jump(codegen_native_isa_x64_Jump** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_codegen_native_isa_x64_Jump(codegen_native_isa_x64_Jump** ptr);
+__attribute__((hot)) codegen_native_isa_x64_Jump*** core_alloc_alloc_codegen_native_isa_x64_Jump_ptr(long long count);
+__attribute__((hot)) codegen_native_isa_x64_Jump*** core_alloc_resize_codegen_native_isa_x64_Jump_ptr(codegen_native_isa_x64_Jump*** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_codegen_native_isa_x64_Jump_ptr(codegen_native_isa_x64_Jump*** ptr);
+__attribute__((hot)) core_map_MapNode_str_codegen_native_isa_x64_Jump** core_alloc_alloc_core_map_MapNode_str_codegen_native_isa_x64_Jump(long long count);
+__attribute__((hot)) void core_alloc_dealloc_core_map_MapNode_str_codegen_native_isa_x64_Jump(core_map_MapNode_str_codegen_native_isa_x64_Jump** ptr);
 
 typedef EncodedFunc codegen_native_isa_x64_EncodedFunc;
 struct core_vec_Vec_codegen_native_isa_x64_EncodedFunc { codegen_native_isa_x64_EncodedFunc** data; long long len; long long capacity; };

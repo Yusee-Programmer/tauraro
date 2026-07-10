@@ -11,19 +11,40 @@ CC="${CC:-cc}"
 command -v "$CC" >/dev/null 2>&1 || CC=gcc
 command -v "$CC" >/dev/null 2>&1 || { echo "(no cc/gcc — skipping native run)"; exit 0; }
 
+# The native backend emits x86-64 ELF (ARM64 is a later slice). On any other host the
+# system linker is a different arch and can't link the object ("file in wrong format"),
+# so skip gracefully — C/LLVM cover other targets.
+HOSTARCH="$(uname -m 2>/dev/null || echo unknown)"
+case "$HOSTARCH" in
+    x86_64|amd64) : ;;
+    *) echo "(host arch is $HOSTARCH; the native backend targets x86-64 — skipping)"; exit 0 ;;
+esac
+
 echo "=============================================================="
 echo "  Native backend LINK + RUN — x86-64/ELF, 100% Tauraro (no C)"
 echo "=============================================================="
 mkdir -p build
-# Exercises the native backend: integer constants, local variables, +/-/* , and multiple
-# runtime calls — all compiled straight to x86-64, no C.
+# Exercises the native backend: constants, local variables, +/-/* and comparisons,
+# while loops, and if/else — all compiled straight to x86-64, no C.
 cat > /tmp/native_p42.tr <<'EOF'
 def main():
-    mut x = 6
-    mut y = 7
-    print(x * y)
-    print(40 + 2)
-    print(50 - 8)
+    mut i = 0
+    mut s = 0
+    while i < 10:
+        s = s + i
+        i = i + 1
+    print(s)          # 0+1+..+9 = 45
+    mut n = 5
+    mut f = 1
+    while n > 1:
+        f = f * n
+        n = n - 1
+    print(f)          # 5! = 120
+    mut x = 7
+    if x > 5:
+        print(1)
+    else:
+        print(0)
 EOF
 
 # 1) runtime.o — extern entry points to the header-only runtime (compiled once).
@@ -43,10 +64,10 @@ fi
 # 4) run.
 out="$(build/native_p42 2>&1)"
 echo "--- output ---"; echo "$out" | sed 's/^/    /'
-expected=$'42\n42\n42'
+expected=$'45\n120\n1'
 if [ "$out" = "$expected" ]; then
-    echo "NATIVE RUN OK ✅ — a Tauraro program (vars + arithmetic) compiled straight to x86-64/ELF (no C) ran correctly"
+    echo "NATIVE RUN OK ✅ — a Tauraro program (loops + if/else + arithmetic) compiled straight to x86-64/ELF (no C) ran correctly"
     exit 0
 else
-    echo "FAIL: expected three 42s, got '$out'"; exit 1
+    echo "FAIL: expected 45/120/1, got '$out'"; exit 1
 fi

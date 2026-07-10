@@ -1,13 +1,10 @@
 # @trusted: compiler systems module — audited raw-pointer core.
-# src/taumir/ir.tr — the lowered IR ("LIR") that the native (x86-64/ELF) and LLVM
-# backends consume. Instruction-level: virtual registers (vregs) + explicit ops, ready
-# for machine codegen. Distinct from src/mir.tr (a CFG-over-HIR whose statements still
-# hold HirExpr, for ownership analysis).
+# src/taumir/ir.tr — the lowered IR ("LIR"): vregs + explicit ops over a control-flow
+# graph of basic blocks. What the native (x86-64/ELF) and LLVM backends consume.
+# Distinct from src/mir.tr (a CFG-over-HIR for ownership analysis; its stmts hold HirExpr).
 #
-# Phase 2 covers integer values: constants, +/-/* , local variables (load/store), and
-# runtime calls. Codegen uses a trivial "every value in a stack slot" model (no register
-# allocation yet) — fast COMPILE, -O0 runtime. Grows to control flow / calls / real
-# regalloc next.
+# Codegen uses a trivial "every vreg + var in a stack slot" model (no register allocation
+# yet) — fast COMPILE, -O0 runtime (that's the point; C/LLVM cover release perf).
 
 from core.alloc import alloc
 
@@ -16,17 +13,22 @@ pub enum LType:
     LI64
     LPtr
 
-# An LIR instruction. Results and operands are vreg ids (ints); dst = -1 means void.
+# An LIR instruction. Results/operands are vreg ids (ints); dst = -1 means void.
+# IBinOp `op` covers arithmetic ("+","-","*") and comparisons ("<",">","==","!=","<=",">=")
+# — a comparison produces 0/1 in its dst vreg.
 pub enum LInst:
-    IConst(dst: int, v: int)                       # dst = immediate
-    IBinOp(dst: int, op: str, a: int, b: int)      # dst = a <op> b   (op in "+","-","*")
-    ILoadVar(dst: int, name: str)                  # dst = <var>
-    IStoreVar(name: str, src: int)                 # <var> = src
-    ICall(dst: int, callee: str, args: Vec[int])   # dst = callee(args...); dst=-1 if void
+    IConst(dst: int, v: int)
+    IBinOp(dst: int, op: str, a: int, b: int)
+    ILoadVar(dst: int, name: str)
+    IStoreVar(name: str, src: int)
+    ICall(dst: int, callee: str, args: Vec[int])
 
+# Block terminator (exactly one per block).
 pub enum LTerm:
-    TRetInt(v: int)    # return an integer constant (main returns 0)
+    TRetInt(v: int)
     TRetVoid
+    TBr(target: int)                        # -> block{target}
+    TCondBr(cond: int, then_b: int, else_b: int)   # cond!=0 ? then : else
     TUnset
 
 pub def box_linst(i: LInst) -> Pointer[LInst]:
@@ -36,32 +38,62 @@ pub def box_linst(i: LInst) -> Pointer[LInst]:
         return p
 
 pub class LBlock:
+    pub id:    int
     pub insts: Vec[Pointer[LInst]]
     pub term:  LTerm
 
 extend LBlock:
-    pub def init() -> LBlock:
+    pub def init(id: int) -> LBlock:
         mut b = LBlock()
+        b.id    = id
         b.insts = Vec[Pointer[LInst]].init(8)
         b.term  = LTerm.TUnset
         return b
 
 pub class LFunc:
     pub name:    str
-    pub block:   LBlock        # single block (CFG comes with control flow)
     pub is_main: bool
-    pub n_vregs: int           # virtual registers allocated (each gets a stack slot)
-    pub vars:    Vec[str]      # local variable names (each gets a stack slot)
+    pub blocks:  Vec[LBlock]      # basic blocks in layout order (block 0 = entry)
+    pub cur:     int             # block currently being built
+    pub n_vregs: int
+    pub vars:    Vec[str]
 
 extend LFunc:
     pub def init(name: str) -> LFunc:
         mut f = LFunc()
         f.name    = name
-        f.block   = LBlock.init()
         f.is_main = false
+        f.blocks  = Vec[LBlock].init(4)
+        f.cur     = -1
         f.n_vregs = 0
         f.vars    = Vec[str].init(4)
         return f
+
+    # Create a new empty block, return its id (does NOT change the cursor).
+    pub def new_block(self) -> int:
+        mut id = self.blocks.len
+        self.blocks.push(LBlock.init(id))
+        return id
+
+    pub def set_cur(self, id: int):
+        self.cur = id
+
+    pub def emit(self, i: LInst):
+        self.blocks.get(self.cur).insts.push(box_linst(i))
+
+    # Set the current block's terminator, but only if it hasn't been set (the first
+    # terminator wins — e.g. a `return` inside an if-body isn't overwritten by the
+    # branch-to-end that the if-lowering would otherwise append).
+    pub def set_term(self, t: LTerm):
+        mut b = self.blocks.get(self.cur)
+        match b.term:
+            case LTerm.TUnset: b.term = t
+            case _: pass
+
+    pub def cur_terminated(self) -> bool:
+        match self.blocks.get(self.cur).term:
+            case LTerm.TUnset: return false
+            case _: return true
 
     pub def new_vreg(self) -> int:
         mut id = self.n_vregs
@@ -82,13 +114,10 @@ extend LFunc:
             i = i + 1
         return -1
 
-    pub def emit(self, i: LInst):
-        self.block.insts.push(box_linst(i))
-
 pub class LModule:
     pub funcs:   Vec[LFunc]
-    pub externs: Vec[str]      # external symbols referenced (e.g. _tr_rt_print_i64)
-    pub ok:      bool          # false if any construct wasn't lowerable (native falls back)
+    pub externs: Vec[str]
+    pub ok:      bool
 
 extend LModule:
     pub def init() -> LModule:

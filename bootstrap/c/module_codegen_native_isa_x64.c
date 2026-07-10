@@ -9,7 +9,10 @@ void _ld_rax(ByteBuf* c, long long disp);
 void _ld_rcx(ByteBuf* c, long long disp);
 void _ld_argreg(ByteBuf* c, long long idx, long long disp);
 void _mov_rax_imm64(ByteBuf* c, long long v);
-void _emit_binop(ByteBuf* c, TrStr op);
+bool _is_cmp(TrStr op);
+long long _setcc(TrStr op);
+void _emit_arith(ByteBuf* c, TrStr op);
+void _emit_return(ByteBuf* c, long long rv);
 
 __attribute__((malloc,returns_nonnull,hot)) EncodedFunc* EncodedFunc_init(TrStr name) {
     /* pass */
@@ -19,9 +22,9 @@ __attribute__((malloc,returns_nonnull,hot)) EncodedFunc* EncodedFunc_init(TrStr 
     /* pass */
     e->is_main = false;
     /* pass */
-    ByteBuf* _cltmp_t2242 = ByteBuf_init();
+    ByteBuf* _cltmp_t2243 = ByteBuf_init();
     _tr_obj_release(e->code, _trdrop_ByteBuf);
-    e->code = _cltmp_t2242;
+    e->code = _cltmp_t2243;
     /* pass */
     e->relocs = (void*)List_ptr_new();
     /* pass */
@@ -135,7 +138,42 @@ __attribute__((hot)) void _mov_rax_imm64(ByteBuf* c, long long v) {
     ByteBuf_u64(c, v);
 }
 
-__attribute__((hot)) void _emit_binop(ByteBuf* c, TrStr op) {
+__attribute__((hot)) bool _is_cmp(TrStr op) {
+    /* pass */
+    return ((((((strcmp(_tr_strz(op), _tr_strz(_tr_str_lit("<"))) == 0) || (strcmp(_tr_strz(op), _tr_strz(_tr_str_lit(">"))) == 0)) || (strcmp(_tr_strz(op), _tr_strz(_tr_str_lit("=="))) == 0)) || (strcmp(_tr_strz(op), _tr_strz(_tr_str_lit("!="))) == 0)) || (strcmp(_tr_strz(op), _tr_strz(_tr_str_lit("<="))) == 0)) || (strcmp(_tr_strz(op), _tr_strz(_tr_str_lit(">="))) == 0));
+}
+
+__attribute__((hot)) long long _setcc(TrStr op) {
+    /* pass */
+    if ((strcmp(_tr_strz(op), _tr_strz(_tr_str_lit("<"))) == 0)) {
+        /* pass */
+        return 156LL;
+    }
+    /* pass */
+    if ((strcmp(_tr_strz(op), _tr_strz(_tr_str_lit(">"))) == 0)) {
+        /* pass */
+        return 159LL;
+    }
+    /* pass */
+    if ((strcmp(_tr_strz(op), _tr_strz(_tr_str_lit("=="))) == 0)) {
+        /* pass */
+        return 148LL;
+    }
+    /* pass */
+    if ((strcmp(_tr_strz(op), _tr_strz(_tr_str_lit("!="))) == 0)) {
+        /* pass */
+        return 149LL;
+    }
+    /* pass */
+    if ((strcmp(_tr_strz(op), _tr_strz(_tr_str_lit("<="))) == 0)) {
+        /* pass */
+        return 158LL;
+    }
+    /* pass */
+    return 157LL;
+}
+
+__attribute__((hot)) void _emit_arith(ByteBuf* c, TrStr op) {
     /* pass */
     if ((strcmp(_tr_strz(op), _tr_strz(_tr_str_lit("+"))) == 0)) {
         /* pass */
@@ -161,6 +199,25 @@ __attribute__((hot)) void _emit_binop(ByteBuf* c, TrStr op) {
         /* pass */
         ByteBuf_u8(c, 193LL);
     }
+}
+
+__attribute__((hot)) void _emit_return(ByteBuf* c, long long rv) {
+    /* pass */
+    if ((rv == 0LL)) {
+        /* pass */
+        ByteBuf_u8(c, 49LL);
+        /* pass */
+        ByteBuf_u8(c, 192LL);
+    } else {
+        /* pass */
+        ByteBuf_u8(c, 184LL);
+        /* pass */
+        ByteBuf_u32(c, rv);
+    }
+    /* pass */
+    ByteBuf_u8(c, 201LL);
+    /* pass */
+    ByteBuf_u8(c, 195LL);
 }
 
 __attribute__((hot)) EncodedFunc* encode_func(LFunc* lf) {
@@ -192,109 +249,205 @@ __attribute__((hot)) EncodedFunc* encode_func(LFunc* lf) {
         ByteBuf_u32(c, framesize);
     }
     /* pass */
-    long long ii = 0LL;
+    List_i64* block_start = (void*)List_i64_new();
     /* pass */
-    while ((ii < lf->block->insts->len)) {
+    List_ptr* jumps = (void*)List_ptr_new();
+    /* pass */
+    long long bi = 0LL;
+    /* pass */
+    while ((bi < lf->blocks->len)) {
         /* pass */
-        __auto_type _t2243 = (*((LInst*)List_ptr_get(lf->block->insts, ii)));
-        if (_t2243.tag == LInst_IConst) {
-            __auto_type dst = _t2243.data.IConst.dst;
-__auto_type v = _t2243.data.IConst.v;
+        LBlock* blk = ((LBlock*)List_ptr_get(lf->blocks, bi));
+        /* pass */
+        List_i64_append(block_start, c->len);
+        /* pass */
+        long long ii = 0LL;
+        /* pass */
+        while ((ii < blk->insts->len)) {
             /* pass */
-            _mov_rax_imm64(c, v);
-            /* pass */
-            _st_rax(c, _vreg_disp(dst));
-        } else if (_t2243.tag == LInst_ILoadVar) {
-            __auto_type dst = _t2243.data.ILoadVar.dst;
-__auto_type name = _t2243.data.ILoadVar.name;
-            /* pass */
-            _ld_rax(c, _var_disp(lf, name));
-            /* pass */
-            _st_rax(c, _vreg_disp(dst));
-        } else if (_t2243.tag == LInst_IStoreVar) {
-            __auto_type name = _t2243.data.IStoreVar.name;
-__auto_type src = _t2243.data.IStoreVar.src;
-            /* pass */
-            _ld_rax(c, _vreg_disp(src));
-            /* pass */
-            _st_rax(c, _var_disp(lf, name));
-        } else if (_t2243.tag == LInst_IBinOp) {
-            __auto_type dst = _t2243.data.IBinOp.dst;
-__auto_type op = _t2243.data.IBinOp.op;
-__auto_type a = _t2243.data.IBinOp.a;
-__auto_type b = _t2243.data.IBinOp.b;
-            /* pass */
-            _ld_rax(c, _vreg_disp(a));
-            /* pass */
-            _ld_rcx(c, _vreg_disp(b));
-            /* pass */
-            _emit_binop(c, op);
-            /* pass */
-            _st_rax(c, _vreg_disp(dst));
-        } else if (_t2243.tag == LInst_ICall) {
-            __auto_type dst = _t2243.data.ICall.dst;
-__auto_type callee = _t2243.data.ICall.callee;
-__auto_type args = _t2243.data.ICall.args;
-            /* pass */
-            long long ai = 0LL;
-            /* pass */
-            while ((ai < args->len)) {
+            __auto_type _t2244 = (*((LInst*)List_ptr_get(blk->insts, ii)));
+            if (_t2244.tag == LInst_IConst) {
+                __auto_type dst = _t2244.data.IConst.dst;
+__auto_type v = _t2244.data.IConst.v;
                 /* pass */
-                _ld_argreg(c, ai, _vreg_disp(List_i64_get(args, ai)));
+                _mov_rax_imm64(c, v);
                 /* pass */
-                ai = (ai + 1LL);
+                _st_rax(c, _vreg_disp(dst));
+            } else if (_t2244.tag == LInst_ILoadVar) {
+                __auto_type dst = _t2244.data.ILoadVar.dst;
+__auto_type name = _t2244.data.ILoadVar.name;
+                /* pass */
+                _ld_rax(c, _var_disp(lf, name));
+                /* pass */
+                _st_rax(c, _vreg_disp(dst));
+            } else if (_t2244.tag == LInst_IStoreVar) {
+                __auto_type name = _t2244.data.IStoreVar.name;
+__auto_type src = _t2244.data.IStoreVar.src;
+                /* pass */
+                _ld_rax(c, _vreg_disp(src));
+                /* pass */
+                _st_rax(c, _var_disp(lf, name));
+            } else if (_t2244.tag == LInst_IBinOp) {
+                __auto_type dst = _t2244.data.IBinOp.dst;
+__auto_type op = _t2244.data.IBinOp.op;
+__auto_type a = _t2244.data.IBinOp.a;
+__auto_type b = _t2244.data.IBinOp.b;
+                /* pass */
+                _ld_rax(c, _vreg_disp(a));
+                /* pass */
+                _ld_rcx(c, _vreg_disp(b));
+                /* pass */
+                if (_is_cmp(op)) {
+                    /* pass */
+                    ByteBuf_u8(c, 72LL);
+                    /* pass */
+                    ByteBuf_u8(c, 57LL);
+                    /* pass */
+                    ByteBuf_u8(c, 200LL);
+                    /* pass */
+                    ByteBuf_u8(c, 15LL);
+                    /* pass */
+                    ByteBuf_u8(c, _setcc(op));
+                    /* pass */
+                    ByteBuf_u8(c, 192LL);
+                    /* pass */
+                    ByteBuf_u8(c, 72LL);
+                    /* pass */
+                    ByteBuf_u8(c, 15LL);
+                    /* pass */
+                    ByteBuf_u8(c, 182LL);
+                    /* pass */
+                    ByteBuf_u8(c, 192LL);
+                } else {
+                    /* pass */
+                    _emit_arith(c, op);
+                }
+                /* pass */
+                _st_rax(c, _vreg_disp(dst));
+            } else if (_t2244.tag == LInst_ICall) {
+                __auto_type dst = _t2244.data.ICall.dst;
+__auto_type callee = _t2244.data.ICall.callee;
+__auto_type args = _t2244.data.ICall.args;
+                /* pass */
+                long long ai = 0LL;
+                /* pass */
+                while ((ai < args->len)) {
+                    /* pass */
+                    _ld_argreg(c, ai, _vreg_disp(List_i64_get(args, ai)));
+                    /* pass */
+                    ai = (ai + 1LL);
+                }
+                /* pass */
+                ByteBuf_u8(c, 232LL);
+                /* pass */
+                Reloc* r = ((Reloc*)_tr_obj_alloc(sizeof(Reloc)));
+                /* pass */
+                r->offset = c->len;
+                /* pass */
+                r->symbol = _tr_str_retain(callee);
+                /* pass */
+                List_ptr_append(e->relocs, _tr_obj_retain(r));
+                /* pass */
+                ByteBuf_u32(c, 0LL);
+                /* pass */
+                if ((dst >= 0LL)) {
+                    /* pass */
+                    _st_rax(c, _vreg_disp(dst));
+                }
+                _tr_obj_release(r, _trdrop_Reloc);
             }
             /* pass */
-            ByteBuf_u8(c, 232LL);
+            ii = (ii + 1LL);
+        }
+        /* pass */
+        __auto_type _t2245 = blk->term;
+        if (_t2245.tag == LTerm_TRetInt) {
+            __auto_type rv = _t2245.data.TRetInt.v;
             /* pass */
-            Reloc* r = ((Reloc*)_tr_obj_alloc(sizeof(Reloc)));
+            _emit_return(c, rv);
+        } else if (_t2245.tag == LTerm_TRetVoid) {
             /* pass */
-            r->offset = c->len;
+            _emit_return(c, 0LL);
+        } else if (_t2245.tag == LTerm_TBr) {
+            __auto_type target = _t2245.data.TBr.target;
             /* pass */
-            r->symbol = _tr_str_retain(callee);
+            ByteBuf_u8(c, 233LL);
             /* pass */
-            List_ptr_append(e->relocs, _tr_obj_retain(r));
+            Jump* jp = ((Jump*)_tr_obj_alloc(sizeof(Jump)));
+            /* pass */
+            jp->patch_off = c->len;
+            /* pass */
+            jp->target = target;
+            /* pass */
+            List_ptr_append(jumps, _tr_obj_retain(jp));
+            /* pass */
+            ByteBuf_u32(c, 0LL);
+            _tr_obj_release(jp, _trdrop_Jump);
+        } else if (_t2245.tag == LTerm_TCondBr) {
+            __auto_type cond = _t2245.data.TCondBr.cond;
+__auto_type tb = _t2245.data.TCondBr.then_b;
+__auto_type eb = _t2245.data.TCondBr.else_b;
+            /* pass */
+            _ld_rax(c, _vreg_disp(cond));
+            /* pass */
+            ByteBuf_u8(c, 72LL);
+            /* pass */
+            ByteBuf_u8(c, 133LL);
+            /* pass */
+            ByteBuf_u8(c, 192LL);
+            /* pass */
+            ByteBuf_u8(c, 15LL);
+            /* pass */
+            ByteBuf_u8(c, 133LL);
+            /* pass */
+            Jump* jp2 = ((Jump*)_tr_obj_alloc(sizeof(Jump)));
+            /* pass */
+            jp2->patch_off = c->len;
+            /* pass */
+            jp2->target = tb;
+            /* pass */
+            List_ptr_append(jumps, _tr_obj_retain(jp2));
             /* pass */
             ByteBuf_u32(c, 0LL);
             /* pass */
-            if ((dst >= 0LL)) {
-                /* pass */
-                _st_rax(c, _vreg_disp(dst));
-            }
-            _tr_obj_release(r, _trdrop_Reloc);
+            ByteBuf_u8(c, 233LL);
+            /* pass */
+            Jump* jp3 = ((Jump*)_tr_obj_alloc(sizeof(Jump)));
+            /* pass */
+            jp3->patch_off = c->len;
+            /* pass */
+            jp3->target = eb;
+            /* pass */
+            List_ptr_append(jumps, _tr_obj_retain(jp3));
+            /* pass */
+            ByteBuf_u32(c, 0LL);
+            _tr_obj_release(jp2, _trdrop_Jump);
+            _tr_obj_release(jp3, _trdrop_Jump);
+        } else if (1) {
+            __auto_type _ = _t2245;
+            /* pass */
+            _emit_return(c, 0LL);
         }
         /* pass */
-        ii = (ii + 1LL);
+        bi = (bi + 1LL);
     }
     /* pass */
-    __auto_type _t2244 = lf->block->term;
-    if (_t2244.tag == LTerm_TRetInt) {
-        __auto_type rv = _t2244.data.TRetInt.v;
+    long long ji = 0LL;
+    /* pass */
+    while ((ji < jumps->len)) {
         /* pass */
-        if ((rv == 0LL)) {
-            /* pass */
-            ByteBuf_u8(c, 49LL);
-            /* pass */
-            ByteBuf_u8(c, 192LL);
-        } else {
-            /* pass */
-            ByteBuf_u8(c, 184LL);
-            /* pass */
-            ByteBuf_u32(c, rv);
-        }
-    } else if (1) {
-        __auto_type _ = _t2244;
+        Jump* j = ((Jump*)List_ptr_get(jumps, ji));
         /* pass */
-        ByteBuf_u8(c, 49LL);
+        long long rel = (List_i64_get(block_start, j->target) - (j->patch_off + 4LL));
         /* pass */
-        ByteBuf_u8(c, 192LL);
+        ByteBuf_patch_u32(c, j->patch_off, rel);
+        /* pass */
+        ji = (ji + 1LL);
     }
-    /* pass */
-    ByteBuf_u8(c, 201LL);
-    /* pass */
-    ByteBuf_u8(c, 195LL);
     /* pass */
     _tr_obj_release(c, _trdrop_ByteBuf);
+    List_i64_free(block_start);
+    List_ptr_free_obj(jumps, _trdrop_Jump);
     return e;
 }
 

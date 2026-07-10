@@ -1,9 +1,9 @@
 # @trusted: compiler systems module.
-# src/taumir/lower.tr — HIR -> LIR lowering. Phase 2 handles integer values in `main`:
-# constants, +/-/*, local variables (mut / assignment), and `print(<int expr>)`. Any
-# construct beyond this sets LModule.ok = false so the native driver falls back to a
-# clean error and the C backend is used. Grows to control flow / user functions next
-# (reusing src/mir.tr's CFG + drop analysis).
+# src/taumir/lower.tr — HIR -> LIR lowering. Covers integer `main`: constants, +/-/* and
+# comparisons, local variables (mut / assignment), if / while control flow, and
+# print(<int expr>). Anything else sets LModule.ok = false so the native driver falls
+# back to a clean error and the C backend is used. Grows to user functions / strings /
+# collections next (reusing src/mir.tr's CFG + drop analysis).
 
 from hir import HirProgram, HirFunction, HirStmt, HirExpr, HirBlock
 from taumir.ir import LModule, LFunc, LInst, LTerm
@@ -24,21 +24,28 @@ pub def lower_to_lir(prog: HirProgram) -> LModule:
 def lower_main(m: LModule, f: HirFunction):
     mut lf = LFunc.init("main")
     lf.is_main = true
-    mut si = 0
-    while si < f.body.stmts.len:
-        if not lower_stmt(m, lf, f.body.stmts.get(si)):
-            m.ok = false
-            return
-        si = si + 1
-    lf.block.term = LTerm.TRetInt(0)   # main returns 0
+    lf.set_cur(lf.new_block())        # entry block
+    if not lower_block(m, lf, f.body):
+        m.ok = false
+        return
+    lf.set_term(LTerm.TRetInt(0))     # main returns 0 (first-wins: keeps any earlier ret)
     m.funcs.push(lf)
+
+def lower_block(m: LModule, lf: LFunc, hb: HirBlock) -> bool:
+    mut si = 0
+    while si < hb.stmts.len:
+        if not lower_stmt(m, lf, hb.stmts.get(si)): return false
+        si = si + 1
+    return true
 
 # -- statements ---------------------------------------------------------------------
 def lower_stmt(m: LModule, lf: LFunc, s: Pointer[HirStmt]) -> bool:
     match s.read():
         case HirStmt.SLineMarker(_): return true
         case HirStmt.SPass: return true
-        case HirStmt.SReturn(_): return true       # void return -> block terminator
+        case HirStmt.SReturn(_):
+            lf.set_term(LTerm.TRetInt(0))     # void return -> return 0
+            return true
         case HirStmt.SLet(name, _, _, _, _, _, val):
             if val as usize == 0 as usize: return false
             mut v = lower_expr(lf, val)
@@ -54,6 +61,35 @@ def lower_stmt(m: LModule, lf: LFunc, s: Pointer[HirStmt]) -> bool:
             lf.add_var(tn)
             lf.emit(LInst.IStoreVar(tn, v2))
             return true
+        case HirStmt.SIf(cond, then_b, else_b):
+            mut cv = lower_expr(lf, cond)
+            if cv < 0: return false
+            mut then_id = lf.new_block()
+            mut else_id = lf.new_block()
+            mut end_id  = lf.new_block()
+            lf.set_term(LTerm.TCondBr(cv, then_id, else_id))
+            lf.set_cur(then_id)
+            if not lower_block(m, lf, then_b): return false
+            lf.set_term(LTerm.TBr(end_id))
+            lf.set_cur(else_id)
+            if not lower_block(m, lf, else_b): return false
+            lf.set_term(LTerm.TBr(end_id))
+            lf.set_cur(end_id)
+            return true
+        case HirStmt.SWhile(cond, body):
+            mut hdr = lf.new_block()
+            mut bdy = lf.new_block()
+            mut ext = lf.new_block()
+            lf.set_term(LTerm.TBr(hdr))
+            lf.set_cur(hdr)
+            mut cv2 = lower_expr(lf, cond)
+            if cv2 < 0: return false
+            lf.set_term(LTerm.TCondBr(cv2, bdy, ext))
+            lf.set_cur(bdy)
+            if not lower_block(m, lf, body): return false
+            lf.set_term(LTerm.TBr(hdr))
+            lf.set_cur(ext)
+            return true
         case HirStmt.SExpr(e):
             return lower_call_stmt(m, lf, e)
         case _:
@@ -64,7 +100,6 @@ def _ident_name(e: Pointer[HirExpr]) -> str:
         case HirExpr.EIdent(n, _, _): return n
         case _: return ""
 
-# `print(<int expr>)` -> ICall(_tr_rt_print_i64, [expr]).
 def lower_call_stmt(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> bool:
     match e.read():
         case HirExpr.ECall(callee, args, _):
@@ -82,6 +117,11 @@ def lower_call_stmt(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> bool:
             return false
 
 # -- expressions: returns the vreg holding the value, or -1 if unsupported ----------
+def _supported_op(op: str) -> bool:
+    if op == "+" or op == "-" or op == "*": return true
+    if op == "<" or op == ">" or op == "==" or op == "!=" or op == "<=" or op == ">=": return true
+    return false
+
 def lower_expr(lf: LFunc, e: Pointer[HirExpr]) -> int:
     match e.read():
         case HirExpr.ELitInt(v, _):
@@ -94,7 +134,7 @@ def lower_expr(lf: LFunc, e: Pointer[HirExpr]) -> int:
             lf.emit(LInst.ILoadVar(d2, name))
             return d2
         case HirExpr.EBinOp(op, l, r, _):
-            if not (op == "+" or op == "-" or op == "*"): return -1
+            if not _supported_op(op): return -1
             mut a = lower_expr(lf, l)
             if a < 0: return -1
             mut b = lower_expr(lf, r)
