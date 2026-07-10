@@ -1,0 +1,20 @@
+# native≡c differential corpus: bool literals/printing, comparison results, string
+# comparison, len().
+def main():
+    mut t = True
+    mut f = False
+    print(t)                # true
+    print(f)                # false
+    mut a = 5
+    mut b = 9
+    print(a < b)            # true
+    print(a == b)           # false
+    print(a < b and b < 10) # true
+    print(not (a < b))      # false
+    mut s1 = "apple"
+    mut s2 = "banana"
+    print(s1 == s2)         # false
+    print(s1 == "apple")    # true
+    print(s1 < s2)          # true (strcmp)
+    print(len(s1))          # 5
+    print(len("hi"))        # 2

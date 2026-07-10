@@ -1,0 +1,15 @@
+# native≡c differential corpus: List[str] literal / push / get / index / len / iteration.
+def main():
+    mut names = ["alice", "bob"]
+    names.push("carol")
+    names.append("dave")
+    print(names.len)        # 4
+    print(names.get(0))     # alice
+    print(names[3])         # dave
+    print(len(names))       # 4
+    for n in names:
+        print(n)            # alice / bob / carol / dave
+    mut joined = ""
+    for n in names:
+        joined = joined + n
+    print(joined)           # alicebobcaroldave

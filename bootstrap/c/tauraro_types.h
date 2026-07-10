@@ -2820,6 +2820,8 @@ typedef struct LFunc {
     List_i64* var_types;
     List_TrStr* params;
     long long tmp_ctr;
+    List_i64* loop_cont;
+    List_i64* loop_brk;
 } LFunc;
 static void _trdrop_LFunc(void* vp) {
     LFunc* self = (LFunc*)vp; (void)self;
@@ -2827,6 +2829,8 @@ static void _trdrop_LFunc(void* vp) {
     List_i64_free(self->vreg_types);
     List_TrStr_free(self->vars);
     List_i64_free(self->var_types);
+    List_i64_free(self->loop_cont);
+    List_i64_free(self->loop_brk);
 }
 #endif
 
@@ -3509,6 +3513,10 @@ __attribute__((hot)) long long LModule_add_string(LModule* self, TrStr s);
 __attribute__((hot)) void LModule_add_extern(LModule* self, TrStr name);
 __attribute__((hot)) bool LModule_is_user_fn(LModule* self, TrStr name);
 __attribute__((hot)) TrStr _print_i64_sym();
+__attribute__((hot)) bool _is_list_tag(long long t);
+__attribute__((hot)) long long _list_elem_tag(long long t);
+__attribute__((hot)) long long _list_tag_for_elem(long long et);
+__attribute__((hot)) bool _is_cmp_op(TrStr op);
 __attribute__((hot)) LModule* lower_to_lir(HirProgram* prog);
 __attribute__((hot)) void _lir_lower_function(LModule* m, HirFunction* f);
 __attribute__((hot)) bool lower_block(LModule* m, LFunc* lf, HirBlock* hb);

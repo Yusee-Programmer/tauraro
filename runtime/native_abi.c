@@ -12,6 +12,18 @@
 /* -- print + string helpers the native backend calls ---------------------------- */
 void _tr_rt_print_i64(long long v) { printf("%lld\n", v); }
 void _tr_rt_print_cstr(const char* s) { fputs(s ? s : "", stdout); fputc('\n', stdout); }
+void _tr_rt_print_bool(long long v) { fputs(v ? "true" : "false", stdout); fputc('\n', stdout); }
+
+/* strcmp / strlen the native backend calls for string comparison and len(). */
+long long _tr_rt_str_cmp(const char* a, const char* b) {
+    if (!a) a = ""; if (!b) b = "";
+    return (long long)strcmp(a, b);
+}
+long long _tr_rt_strlen(const char* s) {
+    if (!s) return 0;
+    long long n = 0; while (s[n]) n++;
+    return n;
+}
 
 /* Concatenate two C-strings into a freshly-allocated one. (No ARC in the native
  * backend yet — this leaks; the C/LLVM backends handle ownership. Fine for -O0 dev.) */

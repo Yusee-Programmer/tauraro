@@ -1,0 +1,34 @@
+# native≡c differential corpus: break / continue in while and for loops.
+def main():
+    mut i = 0
+    while i < 100:
+        if i == 5:
+            break
+        i = i + 1
+    print(i)                # 5
+
+    mut s = 0
+    for j in range(10):
+        if j % 2 == 0:
+            continue
+        s = s + j
+    print(s)                # 1+3+5+7+9 = 25
+
+    mut xs = [10, 20, 30, 40, 50]
+    mut total = 0
+    for x in xs:
+        if x == 30:
+            continue
+        if x == 50:
+            break
+        total = total + x
+    print(total)            # 10+20+40 = 70
+
+    mut k = 0
+    mut found = 0
+    while k < 1000:
+        k = k + 3
+        if k > 20:
+            found = k
+            break
+    print(found)            # 21

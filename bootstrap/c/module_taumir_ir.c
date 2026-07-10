@@ -38,6 +38,10 @@ __attribute__((malloc,returns_nonnull,hot)) LFunc* LFunc_init(TrStr name) {
     /* pass */
     f->tmp_ctr = 0LL;
     /* pass */
+    f->loop_cont = (void*)List_i64_new();
+    /* pass */
+    f->loop_brk = (void*)List_i64_new();
+    /* pass */
     return f;
 }
 
