@@ -2,9 +2,11 @@
 # src/taumir/lower.tr — HIR -> LIR lowering. Covers integer + string + List[int]
 # programs: user functions (params, return values, calls incl. recursion), constants,
 # +/-/*, // /  % integer division/modulo, comparisons, and/or/not, unary minus, bool
-# literals, string literals/variables/concatenation/comparison, len(), List[int]/List[str]
-# literals / .push/.append / .get / xs[i] / .len / iteration, local variables, if / while /
-# for control flow with break/continue, and print. A per-vreg/var value-type tag
+# literals, string literals/variables/concatenation/comparison, len()/abs()/min()/max(),
+# `x in list` membership, List[int]/List[str] literals / .push/.append / .get / xs[i] /
+# .len / iteration, typed user functions (up to 6 args), augmented assignment, local
+# variables, if / elif / while / for control flow with break/continue, and single- or
+# multi-argument print. A per-vreg/var value-type tag
 # (0 = int/i64, 1 = str/char*, 2 = List[int], 3 = List[str], 4 = bool) routes print to
 # _tr_rt_print_{i64,cstr,bool}, "+" to add vs str_concat, comparison to int-cmp vs str_cmp,
 # and method/index/.len/len() to the _tr_rt_{list,str}_* runtime. Anything else sets
@@ -312,25 +314,58 @@ def _ident_name(e: Pointer[HirExpr]) -> str:
         case HirExpr.EIdent(n, _, _): return n
         case _: return ""
 
+# The no-newline writer symbol for a value's type tag (multi-arg print).
+def _write_sym(t: int) -> str:
+    if t == 1: return "_tr_rt_write_cstr"
+    if t == 4: return "_tr_rt_write_bool"
+    return "_tr_rt_write_i64"
+
+def _emit_call0(m: LModule, lf: LFunc, sym: str):
+    m.add_extern(sym)
+    lf.emit(LInst.ICall(-1, sym, Vec[int].init(0)))
+
+# print(...) — Python semantics: each arg written with its type-correct format, single
+# space between, one trailing newline. Single-arg keeps the newline-appending print_*.
+def _lower_print(m: LModule, lf: LFunc, args: Vec[Pointer[HirExpr]]) -> bool:
+    if args.len == 0:
+        _emit_call0(m, lf, "_tr_rt_write_nl")
+        return true
+    if args.len == 1:
+        mut av = lower_expr(m, lf, args.get(0))
+        if av < 0: return false
+        mut avt = lf.vreg_type(av)
+        if _is_list_tag(avt): return false     # printing a whole list -> fall back to C
+        mut sym = _print_i64_sym()
+        if avt == 1: sym = "_tr_rt_print_cstr"
+        elif avt == 4: sym = "_tr_rt_print_bool"
+        m.add_extern(sym)
+        mut cargs = Vec[int].init(1)
+        cargs.push(av)
+        lf.emit(LInst.ICall(-1, sym, cargs))
+        return true
+    mut pi = 0
+    while pi < args.len:
+        if pi > 0: _emit_call0(m, lf, "_tr_rt_write_sp")
+        mut pv = lower_expr(m, lf, args.get(pi))
+        if pv < 0: return false
+        mut pvt = lf.vreg_type(pv)
+        if _is_list_tag(pvt): return false
+        mut wsym = _write_sym(pvt)
+        m.add_extern(wsym)
+        mut wargs = Vec[int].init(1)
+        wargs.push(pv)
+        lf.emit(LInst.ICall(-1, wsym, wargs))
+        pi = pi + 1
+    _emit_call0(m, lf, "_tr_rt_write_nl")
+    return true
+
 # A bare expression statement: print(<expr>) or a user call whose result is discarded.
 def lower_expr_stmt(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> bool:
     match e.read():
         case HirExpr.ECall(callee, args, _):
             mut fname = _ident_name(callee)
             if fname == "print":
-                if args.len != 1: return false
-                mut av = lower_expr(m, lf, args.get(0))
-                if av < 0: return false
-                mut sym = _print_i64_sym()
-                mut avt = lf.vreg_type(av)
-                if avt == 1: sym = "_tr_rt_print_cstr"
-                elif avt == 4: sym = "_tr_rt_print_bool"
-                elif _is_list_tag(avt): return false   # printing a whole list -> fall back to C
-                m.add_extern(sym)
-                mut cargs = Vec[int].init(1)
-                cargs.push(av)
-                lf.emit(LInst.ICall(-1, sym, cargs))
-                return true
+                return _lower_print(m, lf, args)
             mut r = lower_expr(m, lf, e)
             return r >= 0
         case HirExpr.EMethodCall(_, _, _, _):     # e.g. xs.push(v) — value discarded
@@ -410,6 +445,34 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
             lf.emit(LInst.ILoadVar(d2, name))
             lf.set_vreg_type(d2, lf.var_type(name))
             return d2
+        case HirExpr.EIfElse(cond, then_e, else_e, _):
+            # ternary `then if cond else else` -> branch into a hidden result slot.
+            mut tcv = lower_expr(m, lf, cond)
+            if tcv < 0: return -1
+            mut tuid = lf.fresh_id()
+            mut rname = "__tern" + _lir_itoa(tuid)
+            lf.add_var(rname)
+            mut then_b = lf.new_block()
+            mut else_b = lf.new_block()
+            mut end_b = lf.new_block()
+            lf.set_term(LTerm.TCondBr(tcv, then_b, else_b))
+            lf.set_cur(then_b)
+            mut tv = lower_expr(m, lf, then_e)
+            if tv < 0: return -1
+            mut rtype = lf.vreg_type(tv)
+            lf.set_var_type(rname, rtype)
+            lf.emit(LInst.IStoreVar(rname, tv))
+            lf.set_term(LTerm.TBr(end_b))
+            lf.set_cur(else_b)
+            mut ev2 = lower_expr(m, lf, else_e)
+            if ev2 < 0: return -1
+            lf.emit(LInst.IStoreVar(rname, ev2))
+            lf.set_term(LTerm.TBr(end_b))
+            lf.set_cur(end_b)
+            mut trd = lf.new_vreg()
+            lf.emit(LInst.ILoadVar(trd, rname))
+            lf.set_vreg_type(trd, rtype)
+            return trd
         case HirExpr.EUnaryOp(op, sub, _):
             mut sv = lower_expr(m, lf, sub)
             if sv < 0: return -1
@@ -437,6 +500,36 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
             if b < 0: return -1
             mut at = lf.vreg_type(a)
             mut bt = lf.vreg_type(b)
+            # x in <list> -> _tr_rt_list_contains_{i64,str}(list, x) -> bool.
+            if op == "in":
+                if not _is_list_tag(bt): return -1
+                mut want_e = _list_elem_tag(bt)
+                if at != want_e: return -1
+                mut csym = "_tr_rt_list_contains_i64"
+                if want_e == 1: csym = "_tr_rt_list_contains_str"
+                m.add_extern(csym)
+                mut cca = Vec[int].init(2)
+                cca.push(b)
+                cca.push(a)
+                mut cd = lf.new_vreg()
+                lf.emit(LInst.ICall(cd, csym, cca))
+                lf.set_vreg_type(cd, 4)
+                return cd
+            # String repetition: "ab" * 3  or  3 * "ab"  ->  _tr_rt_str_repeat(s, n).
+            if op == "*" and (at == 1 or bt == 1) and (at == 0 or bt == 0):
+                mut sreg = a
+                mut nreg = b
+                if at == 0:
+                    sreg = b
+                    nreg = a
+                m.add_extern("_tr_rt_str_repeat")
+                mut ra = Vec[int].init(2)
+                ra.push(sreg)
+                ra.push(nreg)
+                mut rd = lf.new_vreg()
+                lf.emit(LInst.ICall(rd, "_tr_rt_str_repeat", ra))
+                lf.set_vreg_type(rd, 1)
+                return rd
             if op == "+" and at == 1 and bt == 1:
                 m.add_extern("_tr_rt_str_concat")
                 mut ca = Vec[int].init(2)
@@ -505,6 +598,68 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                     lf.emit(LInst.ICall(sld, "_tr_rt_strlen", sla))
                     return sld
                 return -1
+            if fn == "abs" and args.len == 1:      # abs(int) builtin
+                mut xv2 = lower_expr(m, lf, args.get(0))
+                if xv2 < 0: return -1
+                if lf.vreg_type(xv2) != 0: return -1
+                m.add_extern("_tr_rt_abs_i64")
+                mut aba = Vec[int].init(1)
+                aba.push(xv2)
+                mut abd = lf.new_vreg()
+                lf.emit(LInst.ICall(abd, "_tr_rt_abs_i64", aba))
+                return abd
+            if (fn == "min" or fn == "max") and args.len == 2:   # min/max(int, int) builtin
+                mut mm1 = lower_expr(m, lf, args.get(0))
+                if mm1 < 0: return -1
+                mut mm2 = lower_expr(m, lf, args.get(1))
+                if mm2 < 0: return -1
+                if lf.vreg_type(mm1) != 0 or lf.vreg_type(mm2) != 0: return -1
+                mut msym = "_tr_rt_min_i64"
+                if fn == "max": msym = "_tr_rt_max_i64"
+                m.add_extern(msym)
+                mut mma = Vec[int].init(2)
+                mma.push(mm1)
+                mma.push(mm2)
+                mut mmd = lf.new_vreg()
+                lf.emit(LInst.ICall(mmd, msym, mma))
+                return mmd
+            if fn == "str" and args.len == 1:      # str(int)/str(bool)/str(str)
+                mut cv0 = lower_expr(m, lf, args.get(0))
+                if cv0 < 0: return -1
+                mut cvt = lf.vreg_type(cv0)
+                if cvt == 1: return cv0            # str(str) = identity
+                mut ssym = "_tr_rt_i64_to_str"
+                if cvt == 4: ssym = "_tr_rt_bool_to_str"
+                elif cvt != 0: return -1           # list -> fall back
+                m.add_extern(ssym)
+                mut s2a = Vec[int].init(1)
+                s2a.push(cv0)
+                mut s2d = lf.new_vreg()
+                lf.emit(LInst.ICall(s2d, ssym, s2a))
+                lf.set_vreg_type(s2d, 1)
+                return s2d
+            if (fn == "int" or fn == "_tr_fn_int") and args.len == 1:   # int(str)/int(int)/int(bool)
+                mut iv0 = lower_expr(m, lf, args.get(0))
+                if iv0 < 0: return -1
+                mut ivt = lf.vreg_type(iv0)
+                if ivt == 0: return iv0            # int(int) = identity
+                if ivt == 4:                       # int(bool): already 0/1, just retag
+                    lf.set_vreg_type(iv0, 0)
+                    return iv0
+                if ivt != 1: return -1
+                m.add_extern("_tr_rt_str_to_i64")
+                mut i2a = Vec[int].init(1)
+                i2a.push(iv0)
+                mut i2d = lf.new_vreg()
+                lf.emit(LInst.ICall(i2d, "_tr_rt_str_to_i64", i2a))
+                return i2d
+            if fn == "bool" and args.len == 1:     # bool(x) -> (x != 0)
+                mut bv0 = lower_expr(m, lf, args.get(0))
+                if bv0 < 0: return -1
+                if _is_list_tag(lf.vreg_type(bv0)): return -1
+                mut bnorm = _norm_bool(lf, bv0)
+                lf.set_vreg_type(bnorm, 4)
+                return bnorm
             if not m.is_user_fn(fn): return -1
             if args.len > 6: return -1                 # System V: rdi,rsi,rdx,rcx,r8,r9
             mut rtag = m.fn_ret_tag(fn)
@@ -593,6 +748,14 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                 mut gv2 = _list_get(m, lf, ovm, giv)
                 lf.set_vreg_type(gv2, want_elem)
                 return gv2
+            if method == "pop" and margs.len == 0:
+                m.add_extern("_tr_rt_list_pop_i64")
+                mut poa = Vec[int].init(1)
+                poa.push(ovm)
+                mut pod = lf.new_vreg()
+                lf.emit(LInst.ICall(pod, "_tr_rt_list_pop_i64", poa))
+                lf.set_vreg_type(pod, want_elem)
+                return pod
             return -1
         case _:
             return -1

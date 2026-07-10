@@ -4529,7 +4529,7 @@ extend Sema:
                         return box_hirexpr(HirExpr.EBinOp(op, box_hirexpr(HirExpr.ELitStr(lname, AstType.init("str"))), box_hirexpr(HirExpr.ELitStr(rname, AstType.init("str"))), AstType.init("bool")))
                 mut bin_ty = hir_expr_type(hleft)
                 if bin_ty.name == "void": bin_ty = hir_expr_type(hright)
-                if op == "==" or op == "!=" or op == "<" or op == ">" or op == "<=" or op == ">=" or op == "and" or op == "or" or op == "&&" or op == "||":
+                if op == "==" or op == "!=" or op == "<" or op == ">" or op == "<=" or op == ">=" or op == "and" or op == "or" or op == "&&" or op == "||" or op == "in" or op == "not in":
                     bin_ty = AstType.init("bool")
                 elif op == "*" and (hir_expr_type(hleft).name == "str" or hir_expr_type(hleft).name == "String" or hir_expr_type(hright).name == "str" or hir_expr_type(hright).name == "String"):
                     bin_ty = AstType.init("str")

@@ -25,6 +25,71 @@ long long _tr_rt_strlen(const char* s) {
     return n;
 }
 
+/* No-newline writers + separators, for multi-argument print (Python-style: each arg
+ * written with its own format, single-space separated, one trailing newline). */
+void _tr_rt_write_i64(long long v) { printf("%lld", v); }
+void _tr_rt_write_cstr(const char* s) { fputs(s ? s : "", stdout); }
+void _tr_rt_write_bool(long long v) { fputs(v ? "true" : "false", stdout); }
+void _tr_rt_write_sp(void) { fputc(' ', stdout); }
+void _tr_rt_write_nl(void) { fputc('\n', stdout); }
+
+/* abs / min / max integer builtins. */
+long long _tr_rt_abs_i64(long long x) { return x < 0 ? -x : x; }
+long long _tr_rt_min_i64(long long a, long long b) { return a < b ? a : b; }
+long long _tr_rt_max_i64(long long a, long long b) { return a > b ? a : b; }
+
+/* Conversions: str(int)/str(bool), int(str). (i64_to_str/str_repeat malloc -> leak; -O0 dev.) */
+char* _tr_rt_i64_to_str(long long v) {
+    char buf[32];
+    int n = snprintf(buf, sizeof(buf), "%lld", v);
+    char* r = (char*)malloc((size_t)n + 1);
+    if (!r) return (char*)"";
+    for (int i = 0; i <= n; i++) r[i] = buf[i];
+    return r;
+}
+char* _tr_rt_bool_to_str(long long v) { return (char*)(v ? "true" : "false"); }
+long long _tr_rt_str_to_i64(const char* s) { return s ? (long long)strtoll(s, 0, 10) : 0; }
+
+/* "ab" * 3 -> "ababab" */
+char* _tr_rt_str_repeat(const char* s, long long n) {
+    if (!s) s = "";
+    if (n < 0) n = 0;
+    size_t l = strlen(s);
+    char* r = (char*)malloc(l * (size_t)n + 1);
+    if (!r) return (char*)"";
+    char* p = r;
+    for (long long i = 0; i < n; i++) { for (size_t j = 0; j < l; j++) *p++ = s[j]; }
+    *p = 0;
+    return r;
+}
+
+/* xs.pop() -> last element, shrinking the list. */
+long long _tr_rt_list_pop_i64(void* h) {
+    _TrNList* l = (_TrNList*)h;
+    if (!l || l->len == 0) return 0;
+    l->len--;
+    return l->data[l->len];
+}
+
+/* `x in xs` membership for List[int] / List[str]. */
+long long _tr_rt_list_contains_i64(void* h, long long v) {
+    _TrNList* l = (_TrNList*)h;
+    if (!l) return 0;
+    for (long long i = 0; i < l->len; i++) if (l->data[i] == v) return 1;
+    return 0;
+}
+long long _tr_rt_list_contains_str(void* h, const char* s) {
+    _TrNList* l = (_TrNList*)h;
+    if (!l) return 0;
+    if (!s) s = "";
+    for (long long i = 0; i < l->len; i++) {
+        const char* e = (const char*)l->data[i];
+        if (!e) e = "";
+        if (strcmp(e, s) == 0) return 1;
+    }
+    return 0;
+}
+
 /* Concatenate two C-strings into a freshly-allocated one. (No ARC in the native
  * backend yet — this leaks; the C/LLVM backends handle ownership. Fine for -O0 dev.) */
 char* _tr_rt_str_concat(const char* a, const char* b) {

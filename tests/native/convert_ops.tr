@@ -1,0 +1,29 @@
+# native≡c differential corpus: str()/int()/bool() conversions, string repeat, ternary,
+# List.pop().
+def main():
+    print(str(42))              # 42
+    print(str(True))            # true
+    print("n=" + str(7))        # n=7
+    print(int("123") + 1)       # 124
+    print(int("100") // 7)      # 14
+
+    print("ab" * 3)             # ababab
+    print(3 * "xy")             # xyxyxy
+
+    mut a = 5
+    mut label = "big" if a > 3 else "small"
+    print(label)                # big
+    mut m = 10 if a < 0 else 20
+    print(m)                    # 20
+
+    mut xs = [1, 2, 3, 4]
+    print(xs.pop())             # 4
+    print(xs.pop())             # 3
+    print(xs.len)               # 2
+
+    mut ss = ["x", "y", "z"]
+    print(ss.pop())             # z
+    print(ss.len)               # 2
+
+    mut b = True
+    print(int(b) + 41)          # 42

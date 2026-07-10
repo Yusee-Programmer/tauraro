@@ -3531,6 +3531,9 @@ __attribute__((hot)) bool _lower_for_range(LModule* m, LFunc* lf, TrStr var, Lis
 __attribute__((hot)) bool _lower_for_list(LModule* m, LFunc* lf, TrStr var, HirExpr* iter, HirBlock* body);
 __attribute__((hot)) void _emit_incr(LFunc* lf, TrStr name);
 __attribute__((hot)) TrStr _ident_name(HirExpr* e);
+__attribute__((hot)) TrStr _write_sym(long long t);
+__attribute__((hot)) void _emit_call0(LModule* m, LFunc* lf, TrStr sym);
+__attribute__((hot)) bool _lower_print(LModule* m, LFunc* lf, List_ptr* args);
 __attribute__((hot)) bool lower_expr_stmt(LModule* m, LFunc* lf, HirExpr* e);
 __attribute__((hot)) bool _int_op(TrStr op);
 __attribute__((hot)) TrStr _lir_digit(long long d);
