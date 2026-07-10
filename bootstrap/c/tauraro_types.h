@@ -3586,6 +3586,7 @@ __attribute__((hot)) TrStr _print_i64_sym();
 __attribute__((hot)) bool _is_list_tag(long long t);
 __attribute__((hot)) bool _is_dict_tag(long long t);
 __attribute__((hot)) bool _dict_key_is_str(long long t);
+__attribute__((hot)) long long _dict_val_tag(long long t);
 __attribute__((hot)) TrStr _dict_new_sym(long long t);
 __attribute__((hot)) TrStr _dict_sym(long long t, TrStr op);
 __attribute__((hot)) long long _list_elem_tag(long long t);

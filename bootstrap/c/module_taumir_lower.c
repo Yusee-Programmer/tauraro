@@ -6,6 +6,7 @@ TrStr _print_i64_sym();
 bool _is_list_tag(long long t);
 bool _is_dict_tag(long long t);
 bool _dict_key_is_str(long long t);
+long long _dict_val_tag(long long t);
 TrStr _dict_new_sym(long long t);
 TrStr _dict_sym(long long t, TrStr op);
 long long _list_elem_tag(long long t);
@@ -82,17 +83,27 @@ __attribute__((hot)) bool _is_list_tag(long long t) {
 
 __attribute__((hot)) bool _is_dict_tag(long long t) {
     /* pass */
-    return ((t == 6LL) || (t == 7LL));
+    return ((((t == 6LL) || (t == 7LL)) || (t == 8LL)) || (t == 9LL));
 }
 
 __attribute__((hot)) bool _dict_key_is_str(long long t) {
     /* pass */
-    return (t == 6LL);
+    return ((t == 6LL) || (t == 8LL));
+}
+
+__attribute__((hot)) long long _dict_val_tag(long long t) {
+    /* pass */
+    if (((t == 8LL) || (t == 9LL))) {
+        /* pass */
+        return 1LL;
+    }
+    /* pass */
+    return 0LL;
 }
 
 __attribute__((hot)) TrStr _dict_new_sym(long long t) {
     /* pass */
-    if ((t == 6LL)) {
+    if (((t == 6LL) || (t == 8LL))) {
         /* pass */
         return _tr_str_lit("_tr_rt_sdict_new");
     }
@@ -104,7 +115,7 @@ __attribute__((hot)) TrStr _dict_sym(long long t, TrStr op) {
     /* pass */
     TrStr pfx = _tr_str_lit("_tr_rt_idict_");
     /* pass */
-    if ((t == 6LL)) {
+    if (((t == 6LL) || (t == 8LL))) {
         /* pass */
         TrStr _strtmp_t2241 = _tr_str_lit("_tr_rt_sdict_");
         _tr_str_release(pfx);
@@ -198,17 +209,32 @@ __attribute__((hot)) long long _ast_type_tag(AstType* ty) {
             /* pass */
             AstType* vt = (*((AstType**)List_ptr_get(ty->args, 1LL)));
             /* pass */
-            if (_is_int_typename(vt->name)) {
+            bool kstr = ((strcmp(_tr_strz(kt->name), _tr_strz(_tr_str_lit("str"))) == 0) || (strcmp(_tr_strz(kt->name), _tr_strz(_tr_str_lit("String"))) == 0));
+            /* pass */
+            bool kint = _is_int_typename(kt->name);
+            /* pass */
+            bool vstr = ((strcmp(_tr_strz(vt->name), _tr_strz(_tr_str_lit("str"))) == 0) || (strcmp(_tr_strz(vt->name), _tr_strz(_tr_str_lit("String"))) == 0));
+            /* pass */
+            bool vint = _is_int_typename(vt->name);
+            /* pass */
+            if ((kstr && vint)) {
                 /* pass */
-                if (((strcmp(_tr_strz(kt->name), _tr_strz(_tr_str_lit("str"))) == 0) || (strcmp(_tr_strz(kt->name), _tr_strz(_tr_str_lit("String"))) == 0))) {
-                    /* pass */
-                    return 6LL;
-                }
+                return 6LL;
+            }
+            /* pass */
+            if ((kint && vint)) {
                 /* pass */
-                if (_is_int_typename(kt->name)) {
-                    /* pass */
-                    return 7LL;
-                }
+                return 7LL;
+            }
+            /* pass */
+            if ((kstr && vstr)) {
+                /* pass */
+                return 8LL;
+            }
+            /* pass */
+            if ((kint && vstr)) {
+                /* pass */
+                return 9LL;
             }
         }
         /* pass */
@@ -1074,7 +1100,7 @@ __attribute__((hot)) bool _lower_index_set(LModule* m, LFunc* lf, HirExpr* obj, 
         /* pass */
         long long vv = lower_expr(m, lf, val);
         /* pass */
-        if (((vv < 0LL) || (LFunc_vreg_type(lf, vv) != 0LL))) {
+        if (((vv < 0LL) || (LFunc_vreg_type(lf, vv) != _dict_val_tag(ovt)))) {
             /* pass */
             return false;
         }
@@ -1994,6 +2020,8 @@ __attribute__((hot)) long long _lower_dict_method(LModule* m, LFunc* lf, long lo
         long long gd = LFunc_new_vreg(lf);
         /* pass */
         LFunc_emit(lf, LInst_ctor_ICall(gd, gsym, getargs));
+        /* pass */
+        LFunc_set_vreg_type(lf, gd, _dict_val_tag(dtag));
         /* pass */
         _tr_str_release(gsym);
         return gd;
@@ -3238,17 +3266,18 @@ __auto_type dty = _t2261.data.EDict.ty;
             /* pass */
             long long v0 = _ast_type_tag(hir_expr_type(((HirExpr*)List_ptr_get(vals, 0LL))));
             /* pass */
-            if ((v0 != 0LL)) {
-                /* pass */
-                return (-1LL);
-            }
-            /* pass */
-            if ((k0 == 1LL)) {
+            if (((k0 == 1LL) && (v0 == 0LL))) {
                 /* pass */
                 dtag = 6LL;
-            } else if ((k0 == 0LL)) {
+            } else if (((k0 == 0LL) && (v0 == 0LL))) {
                 /* pass */
                 dtag = 7LL;
+            } else if (((k0 == 1LL) && (v0 == 1LL))) {
+                /* pass */
+                dtag = 8LL;
+            } else if (((k0 == 0LL) && (v0 == 1LL))) {
+                /* pass */
+                dtag = 9LL;
             } else {
                 /* pass */
                 return (-1LL);
@@ -3271,6 +3300,8 @@ __auto_type dty = _t2261.data.EDict.ty;
         LFunc_set_vreg_type(lf, dhv, dtag);
         /* pass */
         bool kstr = _dict_key_is_str(dtag);
+        /* pass */
+        long long vtag = _dict_val_tag(dtag);
         /* pass */
         long long di = 0LL;
         /* pass */
@@ -3304,7 +3335,7 @@ __auto_type dty = _t2261.data.EDict.ty;
                 return (-1LL);
             }
             /* pass */
-            if ((LFunc_vreg_type(lf, vv) != 0LL)) {
+            if ((LFunc_vreg_type(lf, vv) != vtag)) {
                 /* pass */
                 _tr_str_release(dnew);
                 return (-1LL);
@@ -3375,6 +3406,8 @@ __auto_type idx = _t2261.data.EIndex._tr_v_index;
             long long dgd = LFunc_new_vreg(lf);
             /* pass */
             LFunc_emit(lf, LInst_ctor_ICall(dgd, dget, dga));
+            /* pass */
+            LFunc_set_vreg_type(lf, dgd, _dict_val_tag(ovt));
             /* pass */
             _tr_str_release(dget);
             return dgd;
@@ -3705,6 +3738,28 @@ __auto_type margs = _t2261.data.EMethodCall.args;
             List_i64_append(rva, ovm);
             /* pass */
             LFunc_emit(lf, LInst_ctor_ICall((-1LL), _tr_str_lit("_tr_rt_list_reverse"), rva));
+            /* pass */
+            return ovm;
+        }
+        /* pass */
+        if (((strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("extend"))) == 0) && (margs->len == 1LL))) {
+            /* pass */
+            long long exo = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, 0LL)));
+            /* pass */
+            if (((exo < 0LL) || (LFunc_vreg_type(lf, exo) != ovmt))) {
+                /* pass */
+                return (-1LL);
+            }
+            /* pass */
+            LModule_add_extern(m, _tr_str_lit("_tr_rt_list_extend"));
+            /* pass */
+            List_i64* exa = (void*)List_i64_new();
+            /* pass */
+            List_i64_append(exa, ovm);
+            /* pass */
+            List_i64_append(exa, exo);
+            /* pass */
+            LFunc_emit(lf, LInst_ctor_ICall((-1LL), _tr_str_lit("_tr_rt_list_extend"), exa));
             /* pass */
             return ovm;
         }

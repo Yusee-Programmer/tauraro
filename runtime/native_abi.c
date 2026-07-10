@@ -36,6 +36,54 @@ long long _tr_rt_f64_is_inf(double x) { return isinf(x) ? 1 : 0; }
  * a char* stored in the same slot). Declared up top so every _tr_rt_list_* helper sees it. */
 typedef struct { long long* data; long long len; long long cap; } _TrNList;
 
+/* ---- ARC: refcounted heap strings ------------------------------------------------
+ * Every dynamic native string is a heap object with a refcount header immediately
+ * before the char data; string LITERALS are copied into such an object on
+ * materialization so retain/release are uniform (no "is this static?" ambiguity).
+ * Compile with -DTAURARO_NMEM to track live strings for leak assertions. */
+typedef struct { long long rc; } _TrSHdr;
+#ifdef TAURARO_NMEM
+static long long _tr_n_str_live = 0;
+#define _NMEM_INC() (_tr_n_str_live++)
+#define _NMEM_DEC() (_tr_n_str_live--)
+#else
+#define _NMEM_INC() ((void)0)
+#define _NMEM_DEC() ((void)0)
+#endif
+/* Allocate an uninitialized refcounted string with room for `datalen` chars + NUL, rc=1. */
+static char* _tr_rt_str_alloc(size_t datalen) {
+    _TrSHdr* h = (_TrSHdr*)malloc(sizeof(_TrSHdr) + datalen + 1);
+    if (!h) return (char*)0;
+    h->rc = 1; _NMEM_INC();
+    return (char*)(h + 1);
+}
+/* Heap copy of a literal / C-string as a fresh (rc=1) refcounted string. */
+char* _tr_rt_str_new(const char* s) {
+    size_t n = s ? strlen(s) : 0;
+    char* r = _tr_rt_str_alloc(n);
+    if (!r) return (char*)0;
+    for (size_t i = 0; i < n; i++) r[i] = s[i];
+    r[n] = 0;
+    return r;
+}
+void _tr_rt_str_retain(char* s) {
+    if (!s) return;
+    ((_TrSHdr*)s)[-1].rc++;
+}
+void _tr_rt_str_release(char* s) {
+    if (!s) return;
+    _TrSHdr* h = &((_TrSHdr*)s)[-1];
+    if (--h->rc <= 0) { _NMEM_DEC(); free(h); }
+}
+/* Live-string count (only meaningful with -DTAURARO_NMEM; else -1). For leak tests. */
+long long _tr_rt_str_live_count(void) {
+#ifdef TAURARO_NMEM
+    return _tr_n_str_live;
+#else
+    return -1;
+#endif
+}
+
 /* -- print + string helpers the native backend calls ---------------------------- */
 void _tr_rt_print_i64(long long v) { printf("%lld\n", v); }
 void _tr_rt_print_cstr(const char* s) { fputs(s ? s : "", stdout); fputc('\n', stdout); }
@@ -71,12 +119,12 @@ long long _tr_rt_max_i64(long long a, long long b) { return a > b ? a : b; }
 char* _tr_rt_i64_to_str(long long v) {
     char buf[32];
     int n = snprintf(buf, sizeof(buf), "%lld", v);
-    char* r = (char*)malloc((size_t)n + 1);
-    if (!r) return (char*)"";
+    char* r = _tr_rt_str_alloc((size_t)n);
+    if (!r) return _tr_rt_str_new("");
     for (int i = 0; i <= n; i++) r[i] = buf[i];
     return r;
 }
-char* _tr_rt_bool_to_str(long long v) { return (char*)(v ? "true" : "false"); }
+char* _tr_rt_bool_to_str(long long v) { return _tr_rt_str_new(v ? "true" : "false"); }
 long long _tr_rt_str_to_i64(const char* s) { return s ? (long long)strtoll(s, 0, 10) : 0; }
 
 /* "ab" * 3 -> "ababab" */
@@ -84,8 +132,8 @@ char* _tr_rt_str_repeat(const char* s, long long n) {
     if (!s) s = "";
     if (n < 0) n = 0;
     size_t l = strlen(s);
-    char* r = (char*)malloc(l * (size_t)n + 1);
-    if (!r) return (char*)"";
+    char* r = _tr_rt_str_alloc(l * (size_t)n);
+    if (!r) return _tr_rt_str_new("");
     char* p = r;
     for (long long i = 0; i < n; i++) { for (size_t j = 0; j < l; j++) *p++ = s[j]; }
     *p = 0;
@@ -103,13 +151,13 @@ long long _tr_rt_list_pop_i64(void* h) {
 /* String methods (match tauraro_rt.h semantics: isspace/toupper/strstr). malloc -> -O0. */
 char* _tr_rt_str_upper(const char* s) {
     if (!s) s = "";
-    size_t n = strlen(s); char* r = (char*)malloc(n + 1);
+    size_t n = strlen(s); char* r = _tr_rt_str_alloc(n);
     for (size_t i = 0; i <= n; i++) r[i] = (char)toupper((unsigned char)s[i]);
     return r;
 }
 char* _tr_rt_str_lower(const char* s) {
     if (!s) s = "";
-    size_t n = strlen(s); char* r = (char*)malloc(n + 1);
+    size_t n = strlen(s); char* r = _tr_rt_str_alloc(n);
     for (size_t i = 0; i <= n; i++) r[i] = (char)tolower((unsigned char)s[i]);
     return r;
 }
@@ -118,17 +166,17 @@ char* _tr_rt_str_strip(const char* s) {
     while (isspace((unsigned char)*s)) s++;
     const char* e = s + strlen(s);
     while (e > s && isspace((unsigned char)e[-1])) e--;
-    size_t l = (size_t)(e - s); char* r = (char*)malloc(l + 1);
+    size_t l = (size_t)(e - s); char* r = _tr_rt_str_alloc(l);
     for (size_t i = 0; i < l; i++) r[i] = s[i];
     r[l] = 0; return r;
 }
 char* _tr_rt_str_replace(const char* s, const char* a, const char* b) {
     if (!s) s = ""; if (!a) a = ""; if (!b) b = "";
     size_t sl = strlen(s), al = strlen(a), bl = strlen(b);
-    if (al == 0) { char* r = (char*)malloc(sl + 1); for (size_t i = 0; i <= sl; i++) r[i] = s[i]; return r; }
+    if (al == 0) { char* r = _tr_rt_str_alloc(sl); for (size_t i = 0; i <= sl; i++) r[i] = s[i]; return r; }
     int cnt = 0; const char* p = s;
     while ((p = strstr(p, a))) { cnt++; p += al; }
-    char* r = (char*)malloc(sl + (bl > al ? (bl - al) * (size_t)cnt : 0) + 1);
+    char* r = _tr_rt_str_alloc(sl + (bl > al ? (bl - al) * (size_t)cnt : 0));
     char* w = r; p = s; const char* q;
     while ((q = strstr(p, a))) {
         for (const char* c = p; c < q; c++) *w++ = *c;
@@ -155,18 +203,18 @@ long long _tr_rt_str_ends_with(const char* s, const char* p) {
 }
 /* More string methods — bodies mirror tauraro_rt.h exactly (case/whitespace rules). */
 static char* _trn_dup(const char* s) {
-    size_t n = strlen(s); char* r = (char*)malloc(n + 1);
+    size_t n = strlen(s); char* r = _tr_rt_str_alloc(n);
     for (size_t i = 0; i <= n; i++) r[i] = s[i]; return r;
 }
 char* _tr_rt_str_capitalize(const char* s) {
-    if (!s || !*s) { char* e = (char*)malloc(1); e[0] = 0; return e; }
+    if (!s || !*s) { char* e = _tr_rt_str_alloc(0); e[0] = 0; return e; }
     char* r = _trn_dup(s);
     r[0] = (char)toupper((unsigned char)r[0]);
     for (size_t i = 1; r[i]; i++) r[i] = (char)tolower((unsigned char)r[i]);
     return r;
 }
 char* _tr_rt_str_title(const char* s) {
-    if (!s) { char* e = (char*)malloc(1); e[0] = 0; return e; }
+    if (!s) { char* e = _tr_rt_str_alloc(0); e[0] = 0; return e; }
     char* r = _trn_dup(s);
     int ws = 1;
     for (size_t i = 0; r[i]; i++) {
@@ -185,13 +233,13 @@ char* _tr_rt_str_trim_right(const char* s) {
     if (!s) s = "";
     size_t n = strlen(s);
     while (n > 0 && (s[n-1] == ' ' || s[n-1] == '\t' || s[n-1] == '\n' || s[n-1] == '\r')) n--;
-    char* r = (char*)malloc(n + 1);
+    char* r = _tr_rt_str_alloc(n);
     for (size_t i = 0; i < n; i++) r[i] = s[i];
     r[n] = 0; return r;
 }
 char* _tr_rt_str_reverse(const char* s) {
     if (!s) s = "";
-    size_t n = strlen(s); char* r = (char*)malloc(n + 1);
+    size_t n = strlen(s); char* r = _tr_rt_str_alloc(n);
     for (size_t i = 0; i < n; i++) r[i] = s[n-1-i];
     r[n] = 0; return r;
 }
@@ -205,7 +253,7 @@ char* _tr_rt_str_strip_suffix(const char* s, const char* suf) {
     if (!s) s = ""; if (!suf) suf = "";
     size_t sl = strlen(s), sufl = strlen(suf);
     if (sl >= sufl && strcmp(s + sl - sufl, suf) == 0) {
-        char* r = (char*)malloc(sl - sufl + 1);
+        char* r = _tr_rt_str_alloc(sl - sufl);
         for (size_t i = 0; i < sl - sufl; i++) r[i] = s[i];
         r[sl - sufl] = 0; return r;
     }
@@ -216,7 +264,7 @@ char* _tr_rt_str_replace_first(const char* s, const char* a, const char* b) {
     const char* p = strstr(s, a);
     if (!p || !*a) return _trn_dup(s);
     size_t ol = strlen(a), nl = strlen(b), pre = (size_t)(p - s), sl = strlen(s);
-    char* r = (char*)malloc(sl - ol + nl + 1);
+    char* r = _tr_rt_str_alloc(sl - ol + nl);
     char* w = r;
     for (size_t i = 0; i < pre; i++) *w++ = s[i];
     for (size_t j = 0; j < nl; j++) *w++ = b[j];
@@ -234,7 +282,7 @@ char* _tr_rt_str_pad_left(const char* s, long long w) {
     long long n = (long long)strlen(s);
     if (n >= w) return _trn_dup(s);
     long long pad = w - n;
-    char* r = (char*)malloc((size_t)w + 1);
+    char* r = _tr_rt_str_alloc((size_t)w);
     for (long long i = 0; i < pad; i++) r[i] = ' ';
     for (long long i = 0; i < n; i++) r[pad + i] = s[i];
     r[w] = 0; return r;
@@ -243,7 +291,7 @@ char* _tr_rt_str_pad_right(const char* s, long long w) {
     if (!s) s = "";
     long long n = (long long)strlen(s);
     if (n >= w) return _trn_dup(s);
-    char* r = (char*)malloc((size_t)w + 1);
+    char* r = _tr_rt_str_alloc((size_t)w);
     for (long long i = 0; i < n; i++) r[i] = s[i];
     for (long long i = n; i < w; i++) r[i] = ' ';
     r[w] = 0; return r;
@@ -258,13 +306,13 @@ long long _tr_rt_str_contains_char(const char* s, long long c) {
 char* _tr_rt_str_slice(const char* s, long long start, long long end) {
     char* e;
     long long len, sz;
-    if (!s) { e = (char*)malloc(1); e[0] = 0; return e; }
+    if (!s) { e = _tr_rt_str_alloc(0); e[0] = 0; return e; }
     len = (long long)strlen(s);
     if (start < 0) start = 0;
     if (end > len) end = len;
-    if (start >= end) { e = (char*)malloc(1); e[0] = 0; return e; }
+    if (start >= end) { e = _tr_rt_str_alloc(0); e[0] = 0; return e; }
     sz = end - start;
-    e = (char*)malloc((size_t)sz + 1);
+    e = _tr_rt_str_alloc((size_t)sz);
     for (long long i = 0; i < sz; i++) e[i] = s[start + i];
     e[sz] = 0;
     return e;
@@ -309,7 +357,7 @@ void _tr_rt_sdict_set(void* h, const char* k, long long v) {
     unsigned long i = _trn_shash(k);
     for (_SNode* n = d->b[i]; n; n = n->next) if (strcmp(n->key, k) == 0) { n->val = v; return; }
     _SNode* n = (_SNode*)malloc(sizeof(_SNode));
-    size_t kl = strlen(k); n->key = (char*)malloc(kl + 1);
+    size_t kl = strlen(k); n->key = _tr_rt_str_alloc(kl);
     for (size_t j = 0; j <= kl; j++) n->key[j] = k[j];
     n->val = v; n->next = d->b[i]; d->b[i] = n; d->len++;
 }
@@ -356,11 +404,25 @@ void _tr_rt_list_set_i64(void* h, long long i, long long v) {
     _TrNList* l = (_TrNList*)h;
     if (l && i >= 0 && i < l->len) l->data[i] = v;
 }
+/* dst.extend(src): append every element of src to dst (8-byte slots, int or str). */
+void _tr_rt_list_extend(void* dh, void* sh) {
+    _TrNList* d = (_TrNList*)dh;
+    _TrNList* s = (_TrNList*)sh;
+    if (!d || !s) return;
+    for (long long i = 0; i < s->len; i++) {
+        if (d->len == d->cap) {
+            long long nc = d->cap ? d->cap * 2 : 4;
+            d->data = (long long*)realloc(d->data, (size_t)nc * sizeof(long long));
+            d->cap = nc;
+        }
+        d->data[d->len++] = s->data[i];
+    }
+}
 
 /* Int utility methods (x.to_hex() etc.) — match tauraro_rt.h formats. */
 static char* _trn_fmt(const char* fmt, long long v) {
     char b[40]; int n = snprintf(b, sizeof(b), fmt, v);
-    char* r = (char*)malloc((size_t)n + 1);
+    char* r = _tr_rt_str_alloc((size_t)n);
     for (int i = 0; i <= n; i++) r[i] = b[i];
     return r;
 }
@@ -368,12 +430,12 @@ char* _tr_rt_i64_to_hex(long long v)       { return _trn_fmt("%llx", v); }
 char* _tr_rt_i64_to_hex_upper(long long v) { return _trn_fmt("%llX", v); }
 char* _tr_rt_i64_to_oct(long long v)       { return _trn_fmt("%llo", v); }
 char* _tr_rt_i64_to_bin(long long n) {
-    if (n == 0) { char* z = (char*)malloc(2); z[0] = '0'; z[1] = 0; return z; }
+    if (n == 0) { char* z = _tr_rt_str_alloc(1); z[0] = (char)'0'; z[1] = 0; return z; }
     char buf[70]; int pos = 68; buf[69] = 0;
     unsigned long long v = (unsigned long long)n;
     while (v > 0) { buf[pos--] = (char)('0' + (int)(v & 1)); v >>= 1; }
     size_t nd = (size_t)(68 - pos);
-    char* r = (char*)malloc(nd + 1);
+    char* r = _tr_rt_str_alloc(nd);
     for (size_t i = 0; i < nd; i++) r[i] = buf[pos + 1 + i];
     r[nd] = 0;
     return r;
@@ -518,8 +580,8 @@ char* _tr_rt_str_concat(const char* a, const char* b) {
     if (!b) b = "";
     size_t la = 0; while (a[la]) la++;
     size_t lb = 0; while (b[lb]) lb++;
-    char* r = (char*)malloc(la + lb + 1);
-    if (!r) return (char*)"";
+    char* r = _tr_rt_str_alloc(la + lb);
+    if (!r) return _tr_rt_str_new("");
     for (size_t i = 0; i < la; i++) r[i] = a[i];
     for (size_t j = 0; j < lb; j++) r[la + j] = b[j];
     r[la + lb] = 0;

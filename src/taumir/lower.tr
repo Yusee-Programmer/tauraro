@@ -38,24 +38,28 @@ def _print_i64_sym() -> str:
     return "_tr_rt_print_i64"
 
 # Value-type tags: 0=int/i64, 1=str/char*, 2=List[int], 3=List[str], 4=bool, 5=f64,
-# 6=Dict[str,int], 7=Dict[int,int].
+# 6=Dict[str,int], 7=Dict[int,int], 8=Dict[str,str], 9=Dict[int,str].
 def _is_list_tag(t: int) -> bool:
     return t == 2 or t == 3
 
 def _is_dict_tag(t: int) -> bool:
-    return t == 6 or t == 7
+    return t == 6 or t == 7 or t == 8 or t == 9
 
 def _dict_key_is_str(t: int) -> bool:
-    return t == 6
+    return t == 6 or t == 8
+
+def _dict_val_tag(t: int) -> int:      # value-type tag of a dict handle
+    if t == 8 or t == 9: return 1      # str values
+    return 0                           # int values
 
 def _dict_new_sym(t: int) -> str:
-    if t == 6: return "_tr_rt_sdict_new"
+    if t == 6 or t == 8: return "_tr_rt_sdict_new"
     return "_tr_rt_idict_new"
 
-# Dict runtime symbol for op ("set"/"get"/"has"/"len") given the dict tag.
+# Dict runtime symbol for op ("set"/"get"/"has"/"len") given the dict tag (str vs int keys).
 def _dict_sym(t: int, op: str) -> str:
     mut pfx = "_tr_rt_idict_"
-    if t == 6: pfx = "_tr_rt_sdict_"
+    if t == 6 or t == 8: pfx = "_tr_rt_sdict_"
     return pfx + op
 
 def _list_elem_tag(t: int) -> int:      # element value-type held by a list handle
@@ -91,9 +95,14 @@ def _ast_type_tag(ty: AstType) -> int:
         if ty.args.len >= 2:
             mut kt = ty.args.get(0).read()
             mut vt = ty.args.get(1).read()
-            if _is_int_typename(vt.name):        # only int values natively
-                if kt.name == "str" or kt.name == "String": return 6
-                if _is_int_typename(kt.name): return 7
+            mut kstr = kt.name == "str" or kt.name == "String"
+            mut kint = _is_int_typename(kt.name)
+            mut vstr = vt.name == "str" or vt.name == "String"
+            mut vint = _is_int_typename(vt.name)
+            if kstr and vint: return 6
+            if kint and vint: return 7
+            if kstr and vstr: return 8
+            if kint and vstr: return 9
         return -1
     if _is_int_typename(n): return 0
     if n == "void" or n == "" or n == "None": return 0   # void return (no annotation)
@@ -450,7 +459,7 @@ def _lower_index_set(m: LModule, lf: LFunc, obj: Pointer[HirExpr], idx: Pointer[
         if _dict_key_is_str(ovt) and lf.vreg_type(kv) != 1: return false
         if not _dict_key_is_str(ovt) and lf.vreg_type(kv) != 0: return false
         mut vv = lower_expr(m, lf, val)
-        if vv < 0 or lf.vreg_type(vv) != 0: return false
+        if vv < 0 or lf.vreg_type(vv) != _dict_val_tag(ovt): return false
         mut ssym = _dict_sym(ovt, "set")
         m.add_extern(ssym)
         mut sa = Vec[int].init(3)
@@ -800,6 +809,7 @@ def _lower_dict_method(m: LModule, lf: LFunc, recv: int, dtag: int, method: str,
         getargs.push(kv)
         mut gd = lf.new_vreg()
         lf.emit(LInst.ICall(gd, gsym, getargs))
+        lf.set_vreg_type(gd, _dict_val_tag(dtag))
         return gd
     if method == "contains" or method == "has":
         mut hsym = _dict_sym(dtag, "has")
@@ -1288,9 +1298,10 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
             if keys.len > 0:
                 mut k0 = _ast_type_tag(hir_expr_type(keys.get(0)))
                 mut v0 = _ast_type_tag(hir_expr_type(vals.get(0)))
-                if v0 != 0: return -1              # only int values natively
-                if k0 == 1: dtag = 6
-                elif k0 == 0: dtag = 7
+                if k0 == 1 and v0 == 0: dtag = 6
+                elif k0 == 0 and v0 == 0: dtag = 7
+                elif k0 == 1 and v0 == 1: dtag = 8
+                elif k0 == 0 and v0 == 1: dtag = 9
                 else: return -1
             if not _is_dict_tag(dtag): return -1
             mut dnew = _dict_new_sym(dtag)
@@ -1299,6 +1310,7 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
             lf.emit(LInst.ICall(dhv, dnew, Vec[int].init(0)))
             lf.set_vreg_type(dhv, dtag)
             mut kstr = _dict_key_is_str(dtag)
+            mut vtag = _dict_val_tag(dtag)
             mut di = 0
             while di < keys.len:
                 mut kv = lower_expr(m, lf, keys.get(di))
@@ -1307,7 +1319,7 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                 if not kstr and lf.vreg_type(kv) != 0: return -1
                 mut vv = lower_expr(m, lf, vals.get(di))
                 if vv < 0: return -1
-                if lf.vreg_type(vv) != 0: return -1
+                if lf.vreg_type(vv) != vtag: return -1
                 mut dset = _dict_sym(dtag, "set")
                 m.add_extern(dset)
                 mut dsa = Vec[int].init(3)
@@ -1321,7 +1333,7 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
             mut ov = lower_expr(m, lf, obj)
             if ov < 0: return -1
             mut ovt = lf.vreg_type(ov)
-            if _is_dict_tag(ovt):                  # d[k] -> dict get (int value)
+            if _is_dict_tag(ovt):                  # d[k] -> dict get (int or str value)
                 mut dkv = lower_expr(m, lf, idx)
                 if dkv < 0: return -1
                 if _dict_key_is_str(ovt) and lf.vreg_type(dkv) != 1: return -1
@@ -1333,6 +1345,7 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                 dga.push(dkv)
                 mut dgd = lf.new_vreg()
                 lf.emit(LInst.ICall(dgd, dget, dga))
+                lf.set_vreg_type(dgd, _dict_val_tag(ovt))
                 return dgd
             if not _is_list_tag(ovt): return -1
             mut iv = lower_expr(m, lf, idx)
@@ -1453,6 +1466,15 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                 rva.push(ovm)
                 lf.emit(LInst.ICall(-1, "_tr_rt_list_reverse", rva))
                 return ovm                          # in-place; handle discarded at stmt level
+            if method == "extend" and margs.len == 1:
+                mut exo = lower_expr(m, lf, margs.get(0))
+                if exo < 0 or lf.vreg_type(exo) != ovmt: return -1   # same list type
+                m.add_extern("_tr_rt_list_extend")
+                mut exa = Vec[int].init(2)
+                exa.push(ovm)
+                exa.push(exo)
+                lf.emit(LInst.ICall(-1, "_tr_rt_list_extend", exa))
+                return ovm
             if method == "clear" and margs.len == 0:
                 m.add_extern("_tr_rt_list_clear")
                 mut cla = Vec[int].init(1)
