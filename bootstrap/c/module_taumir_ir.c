@@ -198,9 +198,70 @@ __attribute__((malloc,returns_nonnull,hot)) LModule* LModule_init() {
     /* pass */
     m->strings = (void*)List_TrStr_new();
     /* pass */
+    m->globals = (void*)List_TrStr_new();
+    /* pass */
+    m->global_types = (void*)List_i64_new();
+    /* pass */
+    m->global_inits = (void*)List_ptr_new();
+    /* pass */
     m->ok = true;
     /* pass */
     return m;
+}
+
+__attribute__((hot)) long long LModule_add_global(LModule* self, TrStr name, long long tag) {
+    /* pass */
+    long long i = 0LL;
+    /* pass */
+    while ((i < self->globals->len)) {
+        /* pass */
+        if ((strcmp(_tr_strz(List_TrStr_get(self->globals, i)), _tr_strz(name)) == 0)) {
+            /* pass */
+            return i;
+        }
+        /* pass */
+        i = (i + 1LL);
+    }
+    /* pass */
+    List_TrStr_append(self->globals, name);
+    /* pass */
+    List_i64_append(self->global_types, tag);
+    /* pass */
+    return (self->globals->len - 1LL);
+}
+
+__attribute__((hot)) long long LModule_global_index(LModule* self, TrStr name) {
+    /* pass */
+    long long i = 0LL;
+    /* pass */
+    while ((i < self->globals->len)) {
+        /* pass */
+        if ((strcmp(_tr_strz(List_TrStr_get(self->globals, i)), _tr_strz(name)) == 0)) {
+            /* pass */
+            return i;
+        }
+        /* pass */
+        i = (i + 1LL);
+    }
+    /* pass */
+    return (-1LL);
+}
+
+__attribute__((hot)) bool LModule_is_global(LModule* self, TrStr name) {
+    /* pass */
+    return (LModule_global_index(self, name) >= 0LL);
+}
+
+__attribute__((hot)) long long LModule_global_type(LModule* self, TrStr name) {
+    /* pass */
+    long long idx = LModule_global_index(self, name);
+    /* pass */
+    if ((idx >= 0LL)) {
+        /* pass */
+        return List_i64_get(self->global_types, idx);
+    }
+    /* pass */
+    return 0LL;
 }
 
 __attribute__((hot)) long long LModule_fn_ret_tag(LModule* self, TrStr name) {

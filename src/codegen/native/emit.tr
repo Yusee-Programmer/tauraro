@@ -17,4 +17,4 @@ pub def emit_lir_object(m: LModule, out_path: str) -> bool:
     while i < m.funcs.len:
         encoded.push(encode_func(m.funcs.get(i)))
         i = i + 1
-    return write_elf_object(out_path, encoded, m.externs, m.strings)
+    return write_elf_object(out_path, encoded, m.externs, m.strings, m.globals.len)

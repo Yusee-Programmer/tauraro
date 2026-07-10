@@ -43,7 +43,7 @@ def _align8(n: int) -> int:
     while (r % 8) != 0: r = r + 1
     return r
 
-pub def write_elf_object(out_path: str, funcs: Vec[EncodedFunc], externs: Vec[str], strings: Vec[str]) -> bool:
+pub def write_elf_object(out_path: str, funcs: Vec[EncodedFunc], externs: Vec[str], strings: Vec[str], n_globals: int) -> bool:
     # -- .text: concatenate function code; resolve relocations to text offsets ---------
     mut text = ByteBuf.init()
     mut trelocs = Vec[TextReloc].init(4)
@@ -75,11 +75,12 @@ pub def write_elf_object(out_path: str, funcs: Vec[EncodedFunc], externs: Vec[st
         rodata.cstr(strings.get(sxi))
         sxi = sxi + 1
 
-    # -- symbols: [null] [.rodata section sym (LOCAL)] then funcs+externs (GLOBAL) -----
-    # Section indices: 1=.text, 2=.rodata, 3=.rela.text, 4=.symtab, 5=.strtab, 6=.shstrtab
+    # -- symbols: [null] [.rodata sec sym] [.bss sec sym] then funcs+externs (GLOBAL) --
+    # Section indices: 1=.text, 2=.rodata, 3=.bss, 4=.rela.text, 5=.symtab, 6=.strtab,
+    # 7=.shstrtab. Section symbols are LOCAL (indices 1,2), so they precede globals (>=3).
     mut symtab = ByteBuf.init()
     mut strtab = ByteBuf.init()
-    mut sym_names = Vec[str].init(4)     # sym_names[k] -> symtab index k+2
+    mut sym_names = Vec[str].init(4)     # sym_names[k] -> symtab index k+3
     symtab.zeros(24)                     # index 0: null
     strtab.u8(0)
     # index 1: .rodata section symbol
@@ -87,6 +88,13 @@ pub def write_elf_object(out_path: str, funcs: Vec[EncodedFunc], externs: Vec[st
     symtab.u8(3)                         # st_info = LOCAL(0)<<4 | SECTION(3)
     symtab.u8(0)
     symtab.u16(2)                        # st_shndx = .rodata (section 2)
+    symtab.u64(0)
+    symtab.u64(0)
+    # index 2: .bss section symbol (globals live here)
+    symtab.u32(0)
+    symtab.u8(3)                         # LOCAL | SECTION
+    symtab.u8(0)
+    symtab.u16(3)                        # st_shndx = .bss (section 3)
     symtab.u64(0)
     symtab.u64(0)
     # defined functions (GLOBAL FUNC in .text)
@@ -128,9 +136,14 @@ pub def write_elf_object(out_path: str, funcs: Vec[EncodedFunc], externs: Vec[st
             rela.u64(trr.roff)
             rela.u64((1 * 4294967296) + 2)               # (1<<32) | R_X86_64_PC32(2)
             rela.u64(str_off.get(trr.str_idx) - 4)
+        elif trr.kind == 3:
+            # global access: PC32 to the .bss section symbol (index 2), addend = slot*8 - 4
+            rela.u64(trr.roff)
+            rela.u64((2 * 4294967296) + 2)               # (2<<32) | R_X86_64_PC32(2)
+            rela.u64((trr.str_idx * 8) - 4)
         else:
-            # call: PLT32 to the callee symbol (index = sym pos + 2)
-            mut sidx = _index_of(sym_names, trr.sym) + 2
+            # call: PLT32 to the callee symbol (index = sym pos + 3)
+            mut sidx = _index_of(sym_names, trr.sym) + 3
             rela.u64(trr.roff)
             rela.u64((sidx * 4294967296) + 4)            # (sym<<32) | R_X86_64_PLT32(4)
             rela.u64(0 - 4)
@@ -143,6 +156,8 @@ pub def write_elf_object(out_path: str, funcs: Vec[EncodedFunc], externs: Vec[st
     shstr.cstr(".text")
     mut n_rodata = shstr.len
     shstr.cstr(".rodata")
+    mut n_bss = shstr.len
+    shstr.cstr(".bss")
     mut n_rela = shstr.len
     shstr.cstr(".rela.text")
     mut n_symtab = shstr.len
@@ -157,6 +172,7 @@ pub def write_elf_object(out_path: str, funcs: Vec[EncodedFunc], externs: Vec[st
     mut off = _align8(text_off + text.len)
     mut rodata_off = off
     off = _align8(off + rodata.len)
+    mut bss_off = off               # .bss is SHT_NOBITS: nominal offset, no file bytes
     mut rela_off = off
     off = off + rela.len
     mut symtab_off = off
@@ -189,8 +205,8 @@ pub def write_elf_object(out_path: str, funcs: Vec[EncodedFunc], externs: Vec[st
     out.u16(0)          # e_phentsize
     out.u16(0)          # e_phnum
     out.u16(64)         # e_shentsize
-    out.u16(7)          # e_shnum
-    out.u16(6)          # e_shstrndx (.shstrtab = section 6)
+    out.u16(8)          # e_shnum
+    out.u16(7)          # e_shstrndx (.shstrtab = section 7)
 
     out.append_buf(text)
     out.align_to(8)
@@ -202,15 +218,17 @@ pub def write_elf_object(out_path: str, funcs: Vec[EncodedFunc], externs: Vec[st
     out.append_buf(shstr)
     out.align_to(8)
 
-    mut nsyms_globals = 1 + funcs.len + externs.len       # first-global index in .symtab
+    # first-global index in .symtab = # LOCAL syms = null + .rodata-sym + .bss-sym = 3
+    mut bss_size = n_globals * 8
 
-    # Section header table (7 entries)
+    # Section header table (8 entries)
     _shdr(out, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)                              # 0 NULL
     _shdr(out, n_text, 1, 6, 0, text_off, text.len, 0, 0, 16, 0)         # 1 .text (AX)
     _shdr(out, n_rodata, 1, 2, 0, rodata_off, rodata.len, 0, 0, 1, 0)    # 2 .rodata (ALLOC)
-    _shdr(out, n_rela, 4, 64, 0, rela_off, rela.len, 4, 1, 8, 24)        # 3 .rela.text -> symtab(4), .text(1)
-    _shdr(out, n_symtab, 2, 0, 0, symtab_off, symtab.len, 5, 2, 8, 24)   # 4 .symtab -> strtab(5), first-global=2
-    _shdr(out, n_strtab, 3, 0, 0, strtab_off, strtab.len, 0, 0, 1, 0)    # 5 .strtab
-    _shdr(out, n_shstr, 3, 0, 0, shstr_off, shstr.len, 0, 0, 1, 0)       # 6 .shstrtab
+    _shdr(out, n_bss, 8, 3, 0, bss_off, bss_size, 0, 0, 8, 0)            # 3 .bss (NOBITS, WA)
+    _shdr(out, n_rela, 4, 64, 0, rela_off, rela.len, 5, 1, 8, 24)        # 4 .rela.text -> symtab(5), .text(1)
+    _shdr(out, n_symtab, 2, 0, 0, symtab_off, symtab.len, 6, 3, 8, 24)   # 5 .symtab -> strtab(6), first-global=3
+    _shdr(out, n_strtab, 3, 0, 0, strtab_off, strtab.len, 0, 0, 1, 0)    # 6 .strtab
+    _shdr(out, n_shstr, 3, 0, 0, shstr_off, shstr.len, 0, 0, 1, 0)       # 7 .shstrtab
 
     return out.write_file(out_path)

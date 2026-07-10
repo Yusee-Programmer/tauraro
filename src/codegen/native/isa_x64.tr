@@ -211,6 +211,30 @@ pub def encode_func(lf: LFunc) -> EncodedFunc:
                 case LInst.IStoreVar(name, src):
                     _ld_rax(c, _vreg_disp(src))
                     _st_rax(c, _var_disp(lf, name))
+                case LInst.ILoadGlobal(dst, gidx):
+                    c.u8(72)
+                    c.u8(139)
+                    c.u8(5)                # mov rax, [rip+disp32]
+                    mut glr = Reloc()
+                    glr.offset  = c.len
+                    glr.symbol  = ""
+                    glr.kind    = 3        # PC32 to .bss section sym, addend = gidx*8 - 4
+                    glr.str_idx = gidx
+                    e.relocs.push(glr)
+                    c.u32(0)
+                    _st_rax(c, _vreg_disp(dst))
+                case LInst.IStoreGlobal(gidx, src):
+                    _ld_rax(c, _vreg_disp(src))
+                    c.u8(72)
+                    c.u8(137)
+                    c.u8(5)                # mov [rip+disp32], rax
+                    mut gsr = Reloc()
+                    gsr.offset  = c.len
+                    gsr.symbol  = ""
+                    gsr.kind    = 3
+                    gsr.str_idx = gidx
+                    e.relocs.push(gsr)
+                    c.u32(0)
                 case LInst.IBinOp(dst, op, a, b):
                     _ld_rax(c, _vreg_disp(a))
                     _ld_rcx(c, _vreg_disp(b))

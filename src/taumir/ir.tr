@@ -7,6 +7,7 @@
 # yet) — fast COMPILE, -O0 runtime (that's the point; C/LLVM cover release perf).
 
 from core.alloc import alloc
+from hir import HirStmt
 
 pub enum LType:
     LVoid
@@ -22,6 +23,8 @@ pub enum LInst:
     IBinOp(dst: int, op: str, a: int, b: int)
     ILoadVar(dst: int, name: str)
     IStoreVar(name: str, src: int)
+    ILoadGlobal(dst: int, gidx: int)          # dst = module global slot #gidx (.bss)
+    IStoreGlobal(gidx: int, src: int)         # global slot #gidx = src
     ICall(dst: int, callee: str, args: Vec[int])
 
 # Block terminator (exactly one per block).
@@ -159,6 +162,9 @@ pub class LModule:
     pub fn_names: Vec[str]      # user function names (defined in this module; call targets)
     pub fn_ret:   Vec[int]      # parallel to fn_names: return value-type tag (0/1/2/3/4)
     pub strings:  Vec[str]      # string literals -> .rodata (each NUL-terminated)
+    pub globals:      Vec[str]              # module-level variable names (-> .bss slots)
+    pub global_types: Vec[int]              # parallel to globals: value-type tag
+    pub global_inits: Vec[Pointer[HirStmt]] # top-level init statements, run at start of main
     pub ok:       bool
 
 extend LModule:
@@ -169,8 +175,36 @@ extend LModule:
         m.fn_names = Vec[str].init(8)
         m.fn_ret   = Vec[int].init(8)
         m.strings  = Vec[str].init(4)
+        m.globals      = Vec[str].init(4)
+        m.global_types = Vec[int].init(4)
+        m.global_inits = Vec[Pointer[HirStmt]].init(4)
         m.ok       = true
         return m
+
+    # Register a module-level global; returns its slot index (dedup by name).
+    pub def add_global(self, name: str, tag: int) -> int:
+        mut i = 0
+        while i < self.globals.len:
+            if self.globals.get(i) == name: return i
+            i = i + 1
+        self.globals.push(name)
+        self.global_types.push(tag)
+        return self.globals.len - 1
+
+    pub def global_index(self, name: str) -> int:
+        mut i = 0
+        while i < self.globals.len:
+            if self.globals.get(i) == name: return i
+            i = i + 1
+        return -1
+
+    pub def is_global(self, name: str) -> bool:
+        return self.global_index(name) >= 0
+
+    pub def global_type(self, name: str) -> int:
+        mut idx = self.global_index(name)
+        if idx >= 0: return self.global_types.get(idx)
+        return 0
 
     # Return value-type tag of a user function (parallel to fn_names); 0 if unknown.
     pub def fn_ret_tag(self, name: str) -> int:

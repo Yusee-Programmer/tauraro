@@ -24,9 +24,9 @@ __attribute__((malloc,returns_nonnull,hot)) EncodedFunc* EncodedFunc_init(TrStr 
     /* pass */
     e->is_main = false;
     /* pass */
-    ByteBuf* _cltmp_t2250 = ByteBuf_init();
+    ByteBuf* _cltmp_t2253 = ByteBuf_init();
     _tr_obj_release(e->code, _trdrop_ByteBuf);
-    e->code = _cltmp_t2250;
+    e->code = _cltmp_t2253;
     /* pass */
     e->relocs = (void*)List_ptr_new();
     /* pass */
@@ -309,7 +309,7 @@ __attribute__((hot)) EncodedFunc* encode_func(LFunc* lf) {
     /* pass */
     while ((ppi < lf->params->len)) {
         /* pass */
-        ({ TrStr _at_t2251 = (List_TrStr_get(lf->params, ppi)); _st_argreg(c, ppi, _var_disp(lf, _at_t2251)); _tr_str_release(_at_t2251); });
+        ({ TrStr _at_t2254 = (List_TrStr_get(lf->params, ppi)); _st_argreg(c, ppi, _var_disp(lf, _at_t2254)); _tr_str_release(_at_t2254); });
         /* pass */
         ppi = (ppi + 1LL);
     }
@@ -330,17 +330,17 @@ __attribute__((hot)) EncodedFunc* encode_func(LFunc* lf) {
         /* pass */
         while ((ii < blk->insts->len)) {
             /* pass */
-            __auto_type _t2252 = (*((LInst*)List_ptr_get(blk->insts, ii)));
-            if (_t2252.tag == LInst_IConst) {
-                __auto_type dst = _t2252.data.IConst.dst;
-__auto_type v = _t2252.data.IConst.v;
+            __auto_type _t2255 = (*((LInst*)List_ptr_get(blk->insts, ii)));
+            if (_t2255.tag == LInst_IConst) {
+                __auto_type dst = _t2255.data.IConst.dst;
+__auto_type v = _t2255.data.IConst.v;
                 /* pass */
                 _mov_rax_imm64(c, v);
                 /* pass */
                 _st_rax(c, _vreg_disp(dst));
-            } else if (_t2252.tag == LInst_IStr) {
-                __auto_type dst = _t2252.data.IStr.dst;
-__auto_type sidx = _t2252.data.IStr.str_idx;
+            } else if (_t2255.tag == LInst_IStr) {
+                __auto_type dst = _t2255.data.IStr.dst;
+__auto_type sidx = _t2255.data.IStr.str_idx;
                 /* pass */
                 ByteBuf_u8(c, 72LL);
                 /* pass */
@@ -364,25 +364,77 @@ __auto_type sidx = _t2252.data.IStr.str_idx;
                 /* pass */
                 _st_rax(c, _vreg_disp(dst));
                 _tr_obj_release(sr, _trdrop_Reloc);
-            } else if (_t2252.tag == LInst_ILoadVar) {
-                __auto_type dst = _t2252.data.ILoadVar.dst;
-__auto_type name = _t2252.data.ILoadVar.name;
+            } else if (_t2255.tag == LInst_ILoadVar) {
+                __auto_type dst = _t2255.data.ILoadVar.dst;
+__auto_type name = _t2255.data.ILoadVar.name;
                 /* pass */
                 _ld_rax(c, _var_disp(lf, name));
                 /* pass */
                 _st_rax(c, _vreg_disp(dst));
-            } else if (_t2252.tag == LInst_IStoreVar) {
-                __auto_type name = _t2252.data.IStoreVar.name;
-__auto_type src = _t2252.data.IStoreVar.src;
+            } else if (_t2255.tag == LInst_IStoreVar) {
+                __auto_type name = _t2255.data.IStoreVar.name;
+__auto_type src = _t2255.data.IStoreVar.src;
                 /* pass */
                 _ld_rax(c, _vreg_disp(src));
                 /* pass */
                 _st_rax(c, _var_disp(lf, name));
-            } else if (_t2252.tag == LInst_IBinOp) {
-                __auto_type dst = _t2252.data.IBinOp.dst;
-__auto_type op = _t2252.data.IBinOp.op;
-__auto_type a = _t2252.data.IBinOp.a;
-__auto_type b = _t2252.data.IBinOp.b;
+            } else if (_t2255.tag == LInst_ILoadGlobal) {
+                __auto_type dst = _t2255.data.ILoadGlobal.dst;
+__auto_type gidx = _t2255.data.ILoadGlobal.gidx;
+                /* pass */
+                ByteBuf_u8(c, 72LL);
+                /* pass */
+                ByteBuf_u8(c, 139LL);
+                /* pass */
+                ByteBuf_u8(c, 5LL);
+                /* pass */
+                Reloc* glr = ((Reloc*)_tr_obj_alloc(sizeof(Reloc)));
+                /* pass */
+                glr->offset = c->len;
+                /* pass */
+                glr->symbol = _tr_str_lit("");
+                /* pass */
+                glr->kind = 3LL;
+                /* pass */
+                glr->str_idx = gidx;
+                /* pass */
+                List_ptr_append(e->relocs, _tr_obj_retain(glr));
+                /* pass */
+                ByteBuf_u32(c, 0LL);
+                /* pass */
+                _st_rax(c, _vreg_disp(dst));
+                _tr_obj_release(glr, _trdrop_Reloc);
+            } else if (_t2255.tag == LInst_IStoreGlobal) {
+                __auto_type gidx = _t2255.data.IStoreGlobal.gidx;
+__auto_type src = _t2255.data.IStoreGlobal.src;
+                /* pass */
+                _ld_rax(c, _vreg_disp(src));
+                /* pass */
+                ByteBuf_u8(c, 72LL);
+                /* pass */
+                ByteBuf_u8(c, 137LL);
+                /* pass */
+                ByteBuf_u8(c, 5LL);
+                /* pass */
+                Reloc* gsr = ((Reloc*)_tr_obj_alloc(sizeof(Reloc)));
+                /* pass */
+                gsr->offset = c->len;
+                /* pass */
+                gsr->symbol = _tr_str_lit("");
+                /* pass */
+                gsr->kind = 3LL;
+                /* pass */
+                gsr->str_idx = gidx;
+                /* pass */
+                List_ptr_append(e->relocs, _tr_obj_retain(gsr));
+                /* pass */
+                ByteBuf_u32(c, 0LL);
+                _tr_obj_release(gsr, _trdrop_Reloc);
+            } else if (_t2255.tag == LInst_IBinOp) {
+                __auto_type dst = _t2255.data.IBinOp.dst;
+__auto_type op = _t2255.data.IBinOp.op;
+__auto_type a = _t2255.data.IBinOp.a;
+__auto_type b = _t2255.data.IBinOp.b;
                 /* pass */
                 _ld_rax(c, _vreg_disp(a));
                 /* pass */
@@ -415,10 +467,10 @@ __auto_type b = _t2252.data.IBinOp.b;
                 }
                 /* pass */
                 _st_rax(c, _vreg_disp(dst));
-            } else if (_t2252.tag == LInst_ICall) {
-                __auto_type dst = _t2252.data.ICall.dst;
-__auto_type callee = _t2252.data.ICall.callee;
-__auto_type args = _t2252.data.ICall.args;
+            } else if (_t2255.tag == LInst_ICall) {
+                __auto_type dst = _t2255.data.ICall.dst;
+__auto_type callee = _t2255.data.ICall.callee;
+__auto_type args = _t2255.data.ICall.args;
                 /* pass */
                 long long ai = 0LL;
                 /* pass */
@@ -455,24 +507,24 @@ __auto_type args = _t2252.data.ICall.args;
             ii = (ii + 1LL);
         }
         /* pass */
-        __auto_type _t2253 = blk->term;
-        if (_t2253.tag == LTerm_TRetInt) {
-            __auto_type rv = _t2253.data.TRetInt.v;
+        __auto_type _t2256 = blk->term;
+        if (_t2256.tag == LTerm_TRetInt) {
+            __auto_type rv = _t2256.data.TRetInt.v;
             /* pass */
             _emit_return(c, rv);
-        } else if (_t2253.tag == LTerm_TRetVal) {
-            __auto_type rvreg = _t2253.data.TRetVal.v;
+        } else if (_t2256.tag == LTerm_TRetVal) {
+            __auto_type rvreg = _t2256.data.TRetVal.v;
             /* pass */
             _ld_rax(c, _vreg_disp(rvreg));
             /* pass */
             ByteBuf_u8(c, 201LL);
             /* pass */
             ByteBuf_u8(c, 195LL);
-        } else if (_t2253.tag == LTerm_TRetVoid) {
+        } else if (_t2256.tag == LTerm_TRetVoid) {
             /* pass */
             _emit_return(c, 0LL);
-        } else if (_t2253.tag == LTerm_TBr) {
-            __auto_type target = _t2253.data.TBr.target;
+        } else if (_t2256.tag == LTerm_TBr) {
+            __auto_type target = _t2256.data.TBr.target;
             /* pass */
             ByteBuf_u8(c, 233LL);
             /* pass */
@@ -486,10 +538,10 @@ __auto_type args = _t2252.data.ICall.args;
             /* pass */
             ByteBuf_u32(c, 0LL);
             _tr_obj_release(jp, _trdrop_Jump);
-        } else if (_t2253.tag == LTerm_TCondBr) {
-            __auto_type cond = _t2253.data.TCondBr.cond;
-__auto_type tb = _t2253.data.TCondBr.then_b;
-__auto_type eb = _t2253.data.TCondBr.else_b;
+        } else if (_t2256.tag == LTerm_TCondBr) {
+            __auto_type cond = _t2256.data.TCondBr.cond;
+__auto_type tb = _t2256.data.TCondBr.then_b;
+__auto_type eb = _t2256.data.TCondBr.else_b;
             /* pass */
             _ld_rax(c, _vreg_disp(cond));
             /* pass */
@@ -527,7 +579,7 @@ __auto_type eb = _t2253.data.TCondBr.else_b;
             _tr_obj_release(jp2, _trdrop_Jump);
             _tr_obj_release(jp3, _trdrop_Jump);
         } else if (1) {
-            __auto_type _ = _t2253;
+            __auto_type _ = _t2256;
             /* pass */
             _emit_return(c, 0LL);
         }

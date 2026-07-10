@@ -1581,6 +1581,8 @@ typedef enum {
     LInst_IBinOp,
     LInst_ILoadVar,
     LInst_IStoreVar,
+    LInst_ILoadGlobal,
+    LInst_IStoreGlobal,
     LInst_ICall
 } LInst_tag;
 
@@ -1611,6 +1613,14 @@ typedef struct LInst {
         } IStoreVar;
         struct {
             long long dst;
+            long long gidx;
+        } ILoadGlobal;
+        struct {
+            long long gidx;
+            long long src;
+        } IStoreGlobal;
+        struct {
+            long long dst;
             TrStr callee;
             List_i64* args;
         } ICall;
@@ -1622,6 +1632,8 @@ static inline __attribute__((always_inline)) LInst LInst_ctor_IStr(long long dst
 static inline __attribute__((always_inline)) LInst LInst_ctor_IBinOp(long long dst, TrStr op, long long a, long long b) { LInst _r = {.tag=LInst_IBinOp}; _r.data.IBinOp.dst = dst; _r.data.IBinOp.op = _tr_str_retain(op); _r.data.IBinOp.a = a; _r.data.IBinOp.b = b; return _r; }
 static inline __attribute__((always_inline)) LInst LInst_ctor_ILoadVar(long long dst, TrStr name) { LInst _r = {.tag=LInst_ILoadVar}; _r.data.ILoadVar.dst = dst; _r.data.ILoadVar.name = _tr_str_retain(name); return _r; }
 static inline __attribute__((always_inline)) LInst LInst_ctor_IStoreVar(TrStr name, long long src) { LInst _r = {.tag=LInst_IStoreVar}; _r.data.IStoreVar.name = _tr_str_retain(name); _r.data.IStoreVar.src = src; return _r; }
+static inline __attribute__((always_inline)) LInst LInst_ctor_ILoadGlobal(long long dst, long long gidx) { LInst _r = {.tag=LInst_ILoadGlobal}; _r.data.ILoadGlobal.dst = dst; _r.data.ILoadGlobal.gidx = gidx; return _r; }
+static inline __attribute__((always_inline)) LInst LInst_ctor_IStoreGlobal(long long gidx, long long src) { LInst _r = {.tag=LInst_IStoreGlobal}; _r.data.IStoreGlobal.gidx = gidx; _r.data.IStoreGlobal.src = src; return _r; }
 static inline __attribute__((always_inline)) LInst LInst_ctor_ICall(long long dst, TrStr callee, List_i64* args) { LInst _r = {.tag=LInst_ICall}; _r.data.ICall.dst = dst; _r.data.ICall.callee = _tr_str_retain(callee); _r.data.ICall.args = args; return _r; }
 
 typedef enum {
@@ -2843,6 +2855,9 @@ typedef struct LModule {
     List_TrStr* fn_names;
     List_i64* fn_ret;
     List_TrStr* strings;
+    List_TrStr* globals;
+    List_i64* global_types;
+    List_ptr* global_inits;
     bool ok;
 } LModule;
 static void _trdrop_LModule(void* vp) {
@@ -2852,6 +2867,9 @@ static void _trdrop_LModule(void* vp) {
     List_TrStr_free(self->fn_names);
     List_i64_free(self->fn_ret);
     List_TrStr_free(self->strings);
+    List_TrStr_free(self->globals);
+    List_i64_free(self->global_types);
+    List_ptr_free(self->global_inits);
 }
 #endif
 
@@ -3511,6 +3529,10 @@ __attribute__((hot)) long long LFunc_var_index(LFunc* self, TrStr name);
 __attribute__((hot)) void LFunc_set_var_type(LFunc* self, TrStr name, long long t);
 __attribute__((hot)) long long LFunc_var_type(LFunc* self, TrStr name);
 __attribute__((malloc,returns_nonnull,hot)) LModule* LModule_init();
+__attribute__((hot)) long long LModule_add_global(LModule* self, TrStr name, long long tag);
+__attribute__((hot)) long long LModule_global_index(LModule* self, TrStr name);
+__attribute__((hot)) bool LModule_is_global(LModule* self, TrStr name);
+__attribute__((hot)) long long LModule_global_type(LModule* self, TrStr name);
 __attribute__((hot)) long long LModule_fn_ret_tag(LModule* self, TrStr name);
 __attribute__((hot)) long long LModule_add_string(LModule* self, TrStr s);
 __attribute__((hot)) void LModule_add_extern(LModule* self, TrStr name);
@@ -3523,6 +3545,8 @@ __attribute__((hot)) bool _is_cmp_op(TrStr op);
 __attribute__((hot)) bool _is_int_typename(TrStr n);
 __attribute__((hot)) long long _ast_type_tag(AstType* ty);
 __attribute__((hot)) LModule* lower_to_lir(HirProgram* prog);
+__attribute__((hot)) bool _register_global(LModule* m, HirStmt* s);
+__attribute__((hot)) bool _lower_global_init(LModule* m, LFunc* lf, HirStmt* s);
 __attribute__((hot)) void _lir_lower_function(LModule* m, HirFunction* f);
 __attribute__((hot)) bool lower_block(LModule* m, LFunc* lf, HirBlock* hb);
 __attribute__((hot)) bool lower_stmt(LModule* m, LFunc* lf, HirStmt* s);
@@ -3572,7 +3596,7 @@ __attribute__((hot)) EncodedFunc* encode_func(LFunc* lf);
 __attribute__((hot)) long long _index_of(List_TrStr* names, TrStr s);
 __attribute__((hot)) void _shdr(ByteBuf* out, long long name, long long ty, long long flags, long long addr, long long offset, long long size, long long link, long long info, long long align, long long entsize);
 __attribute__((hot)) long long _align8(long long n);
-__attribute__((hot)) bool write_elf_object(TrStr out_path, List_ptr* funcs, List_TrStr* externs, List_TrStr* strings);
+__attribute__((hot)) bool write_elf_object(TrStr out_path, List_ptr* funcs, List_TrStr* externs, List_TrStr* strings, long long n_globals);
 __attribute__((hot)) bool emit_lir_object(LModule* m, TrStr out_path);
 __attribute__((malloc,returns_nonnull,hot)) NativeGenerator* NativeGenerator_init();
 __attribute__((hot)) bool NativeGenerator_emit_object(NativeGenerator* self, HirProgram* prog, TrStr out_path);

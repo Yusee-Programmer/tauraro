@@ -12,7 +12,7 @@
 # and method/index/.len/len() to the _tr_rt_{list,str}_* runtime. Anything else sets
 # LModule.ok = false so the native driver falls back to C.
 
-from hir import HirProgram, HirFunction, HirStmt, HirExpr, HirBlock
+from hir import HirProgram, HirFunction, HirStmt, HirExpr, HirBlock, hir_expr_type
 from taumir.ir import LModule, LFunc, LInst, LTerm
 from ast import AstType
 
@@ -53,7 +53,7 @@ def _ast_type_tag(ty: AstType) -> int:
             return -1
         return 2
     if _is_int_typename(n): return 0
-    if n == "void" or n == "": return 0
+    if n == "void" or n == "" or n == "None": return 0   # void return (no annotation)
     return -1
 
 pub def lower_to_lir(prog: HirProgram) -> LModule:
@@ -65,6 +65,14 @@ pub def lower_to_lir(prog: HirProgram) -> LModule:
             m.fn_names.push(f0.name)
             m.fn_ret.push(_ast_type_tag(f0.ret_ty))
         i = i + 1
+    # Module-level globals: register each top-level var (name + type) so functions can
+    # reference them; the init statements run at the start of main.
+    mut ti = 0
+    while ti < prog.top_level_stmts.len:
+        if not _register_global(m, prog.top_level_stmts.get(ti)):
+            m.ok = false
+            return m
+        ti = ti + 1
     i = 0
     while i < prog.functions.len:
         mut f = prog.functions.get(i)
@@ -73,6 +81,53 @@ pub def lower_to_lir(prog: HirProgram) -> LModule:
             if not m.ok: return m
         i = i + 1
     return m
+
+# Register a top-level statement as a module global (SLet/SAssign of a supported type).
+# Line markers/pass are ignored; anything else -> the module falls back to C (we must not
+# silently skip top-level init code).
+def _register_global(m: LModule, s: Pointer[HirStmt]) -> bool:
+    match s.read():
+        case HirStmt.SLineMarker(_): return true
+        case HirStmt.SPass: return true
+        case HirStmt.SLet(name, _, _, _, _, _, val):
+            if val as usize == 0 as usize: return false
+            mut tag = _ast_type_tag(hir_expr_type(val))
+            if tag < 0: return false
+            m.add_global(name, tag)
+            m.global_inits.push(s)
+            return true
+        case HirStmt.SAssign(target, val):
+            mut nm = _ident_name(target)
+            if nm == "": return false
+            mut tag2 = _ast_type_tag(hir_expr_type(val))
+            if tag2 < 0: return false
+            m.add_global(nm, tag2)
+            m.global_inits.push(s)
+            return true
+        case _:
+            return false
+
+# Lower one global-init statement as a store to its .bss slot (emitted at main's entry).
+def _lower_global_init(m: LModule, lf: LFunc, s: Pointer[HirStmt]) -> bool:
+    match s.read():
+        case HirStmt.SLineMarker(_): return true
+        case HirStmt.SPass: return true
+        case HirStmt.SLet(name, _, _, _, _, _, val):
+            mut v = lower_expr(m, lf, val)
+            if v < 0: return false
+            mut gidx = m.global_index(name)
+            if gidx < 0: return false
+            lf.emit(LInst.IStoreGlobal(gidx, v))
+            return true
+        case HirStmt.SAssign(target, val):
+            mut v2 = lower_expr(m, lf, val)
+            if v2 < 0: return false
+            mut gidx2 = m.global_index(_ident_name(target))
+            if gidx2 < 0: return false
+            lf.emit(LInst.IStoreGlobal(gidx2, v2))
+            return true
+        case _:
+            return false
 
 def _lir_lower_function(m: LModule, f: HirFunction):
     mut lf = LFunc.init(f.name)
@@ -90,6 +145,13 @@ def _lir_lower_function(m: LModule, f: HirFunction):
             lf.set_var_type(p.name, ptag)
         pi = pi + 1
     lf.set_cur(lf.new_block())
+    if lf.is_main:                         # run module global inits before main's body
+        mut gi = 0
+        while gi < m.global_inits.len:
+            if not _lower_global_init(m, lf, m.global_inits.get(gi)):
+                m.ok = false
+                return
+            gi = gi + 1
     if not lower_block(m, lf, f.body):
         m.ok = false
         return
@@ -131,6 +193,9 @@ def lower_stmt(m: LModule, lf: LFunc, s: Pointer[HirStmt]) -> bool:
             if tn == "": return false
             mut v2 = lower_expr(m, lf, val)
             if v2 < 0: return false
+            if lf.var_index(tn) < 0 and m.is_global(tn):    # assign to a module global
+                lf.emit(LInst.IStoreGlobal(m.global_index(tn), v2))
+                return true
             lf.add_var(tn)
             lf.set_var_type(tn, lf.vreg_type(v2))
             lf.emit(LInst.IStoreVar(tn, v2))
@@ -440,6 +505,11 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
             lf.set_vreg_type(db, 4)
             return db
         case HirExpr.EIdent(name, _, _):
+            if lf.var_index(name) < 0 and m.is_global(name):    # module global read
+                mut gd = lf.new_vreg()
+                lf.emit(LInst.ILoadGlobal(gd, m.global_index(name)))
+                lf.set_vreg_type(gd, m.global_type(name))
+                return gd
             lf.add_var(name)
             mut d2 = lf.new_vreg()
             lf.emit(LInst.ILoadVar(d2, name))

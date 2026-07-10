@@ -56,7 +56,7 @@ __attribute__((hot)) long long _align8(long long n) {
     return r;
 }
 
-__attribute__((hot)) bool write_elf_object(TrStr out_path, List_ptr* funcs, List_TrStr* externs, List_TrStr* strings) {
+__attribute__((hot)) bool write_elf_object(TrStr out_path, List_ptr* funcs, List_TrStr* externs, List_TrStr* strings, long long n_globals) {
     /* pass */
     ByteBuf* text = ByteBuf_init();
     /* pass */
@@ -111,7 +111,7 @@ __attribute__((hot)) bool write_elf_object(TrStr out_path, List_ptr* funcs, List
         /* pass */
         List_i64_append(str_off, rodata->len);
         /* pass */
-        ({ TrStr _at_t2254 = (List_TrStr_get(strings, sxi)); ByteBuf_cstr(rodata, _at_t2254); _tr_str_release(_at_t2254); });
+        ({ TrStr _at_t2257 = (List_TrStr_get(strings, sxi)); ByteBuf_cstr(rodata, _at_t2257); _tr_str_release(_at_t2257); });
         /* pass */
         sxi = (sxi + 1LL);
     }
@@ -133,6 +133,18 @@ __attribute__((hot)) bool write_elf_object(TrStr out_path, List_ptr* funcs, List
     ByteBuf_u8(symtab, 0LL);
     /* pass */
     ByteBuf_u16(symtab, 2LL);
+    /* pass */
+    ByteBuf_u64(symtab, 0LL);
+    /* pass */
+    ByteBuf_u64(symtab, 0LL);
+    /* pass */
+    ByteBuf_u32(symtab, 0LL);
+    /* pass */
+    ByteBuf_u8(symtab, 3LL);
+    /* pass */
+    ByteBuf_u8(symtab, 0LL);
+    /* pass */
+    ByteBuf_u16(symtab, 3LL);
     /* pass */
     ByteBuf_u64(symtab, 0LL);
     /* pass */
@@ -208,9 +220,16 @@ __attribute__((hot)) bool write_elf_object(TrStr out_path, List_ptr* funcs, List
             ByteBuf_u64(rela, ((1LL * 4294967296LL) + 2LL));
             /* pass */
             ByteBuf_u64(rela, (List_i64_get(str_off, trr->str_idx) - 4LL));
+        } else if ((trr->kind == 3LL)) {
+            /* pass */
+            ByteBuf_u64(rela, trr->roff);
+            /* pass */
+            ByteBuf_u64(rela, ((2LL * 4294967296LL) + 2LL));
+            /* pass */
+            ByteBuf_u64(rela, ((trr->str_idx * 8LL) - 4LL));
         } else {
             /* pass */
-            long long sidx = (_index_of(sym_names, trr->sym) + 2LL);
+            long long sidx = (_index_of(sym_names, trr->sym) + 3LL);
             /* pass */
             ByteBuf_u64(rela, trr->roff);
             /* pass */
@@ -233,6 +252,10 @@ __attribute__((hot)) bool write_elf_object(TrStr out_path, List_ptr* funcs, List
     long long n_rodata = shstr->len;
     /* pass */
     ByteBuf_cstr(shstr, _tr_str_lit(".rodata"));
+    /* pass */
+    long long n_bss = shstr->len;
+    /* pass */
+    ByteBuf_cstr(shstr, _tr_str_lit(".bss"));
     /* pass */
     long long n_rela = shstr->len;
     /* pass */
@@ -257,6 +280,8 @@ __attribute__((hot)) bool write_elf_object(TrStr out_path, List_ptr* funcs, List
     long long rodata_off = off;
     /* pass */
     off = _align8((off + rodata->len));
+    /* pass */
+    long long bss_off = off;
     /* pass */
     long long rela_off = off;
     /* pass */
@@ -318,9 +343,9 @@ __attribute__((hot)) bool write_elf_object(TrStr out_path, List_ptr* funcs, List
     /* pass */
     ByteBuf_u16(out, 64LL);
     /* pass */
-    ByteBuf_u16(out, 7LL);
+    ByteBuf_u16(out, 8LL);
     /* pass */
-    ByteBuf_u16(out, 6LL);
+    ByteBuf_u16(out, 7LL);
     /* pass */
     ByteBuf_append_buf(out, text);
     /* pass */
@@ -340,7 +365,7 @@ __attribute__((hot)) bool write_elf_object(TrStr out_path, List_ptr* funcs, List
     /* pass */
     ByteBuf_align_to(out, 8LL);
     /* pass */
-    long long nsyms_globals = ((1LL + funcs->len) + externs->len);
+    long long bss_size = (n_globals * 8LL);
     /* pass */
     _shdr(out, 0LL, 0LL, 0LL, 0LL, 0LL, 0LL, 0LL, 0LL, 0LL, 0LL);
     /* pass */
@@ -348,9 +373,11 @@ __attribute__((hot)) bool write_elf_object(TrStr out_path, List_ptr* funcs, List
     /* pass */
     _shdr(out, n_rodata, 1LL, 2LL, 0LL, rodata_off, rodata->len, 0LL, 0LL, 1LL, 0LL);
     /* pass */
-    _shdr(out, n_rela, 4LL, 64LL, 0LL, rela_off, rela->len, 4LL, 1LL, 8LL, 24LL);
+    _shdr(out, n_bss, 8LL, 3LL, 0LL, bss_off, bss_size, 0LL, 0LL, 8LL, 0LL);
     /* pass */
-    _shdr(out, n_symtab, 2LL, 0LL, 0LL, symtab_off, symtab->len, 5LL, 2LL, 8LL, 24LL);
+    _shdr(out, n_rela, 4LL, 64LL, 0LL, rela_off, rela->len, 5LL, 1LL, 8LL, 24LL);
+    /* pass */
+    _shdr(out, n_symtab, 2LL, 0LL, 0LL, symtab_off, symtab->len, 6LL, 3LL, 8LL, 24LL);
     /* pass */
     _shdr(out, n_strtab, 3LL, 0LL, 0LL, strtab_off, strtab->len, 0LL, 0LL, 1LL, 0LL);
     /* pass */
