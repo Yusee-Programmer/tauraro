@@ -42,6 +42,8 @@ __attribute__((malloc,returns_nonnull,hot)) LFunc* LFunc_init(TrStr name) {
     /* pass */
     f->loop_brk = (void*)List_i64_new();
     /* pass */
+    f->fresh_strs = (void*)List_i64_new();
+    /* pass */
     return f;
 }
 

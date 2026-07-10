@@ -2876,6 +2876,7 @@ typedef struct LFunc {
     long long tmp_ctr;
     List_i64* loop_cont;
     List_i64* loop_brk;
+    List_i64* fresh_strs;
 } LFunc;
 static void _trdrop_LFunc(void* vp) {
     LFunc* self = (LFunc*)vp; (void)self;
@@ -2885,6 +2886,7 @@ static void _trdrop_LFunc(void* vp) {
     List_i64_free(self->var_types);
     List_i64_free(self->loop_cont);
     List_i64_free(self->loop_brk);
+    List_i64_free(self->fresh_strs);
 }
 #endif
 
@@ -3613,6 +3615,13 @@ __attribute__((hot)) bool lower_expr_stmt(LModule* m, LFunc* lf, HirExpr* e);
 __attribute__((hot)) bool _int_op(TrStr op);
 __attribute__((hot)) TrStr _lir_digit(long long d);
 __attribute__((hot)) TrStr _lir_itoa(long long n);
+__attribute__((hot)) void _fresh_mark(LFunc* lf, long long v);
+__attribute__((hot)) bool _fresh_take(LFunc* lf, long long v);
+__attribute__((hot)) void _release_str(LModule* m, LFunc* lf, long long v);
+__attribute__((hot)) void _retain_str(LModule* m, LFunc* lf, long long v);
+__attribute__((hot)) void _flush_fresh_strs(LModule* m, LFunc* lf);
+__attribute__((hot)) void _secure_str(LModule* m, LFunc* lf, long long v);
+__attribute__((hot)) bool _is_param(LFunc* lf, TrStr name);
 __attribute__((hot)) long long _norm_bool(LFunc* lf, long long v);
 __attribute__((hot)) long long _str_call0(LModule* m, LFunc* lf, TrStr sym, long long _tr_v_recv, long long restype);
 __attribute__((hot)) long long _str_call1(LModule* m, LFunc* lf, TrStr sym, long long _tr_v_recv, long long arg, long long restype);

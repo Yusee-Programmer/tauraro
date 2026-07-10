@@ -74,6 +74,7 @@ pub class LFunc:
     pub tmp_ctr:    int             # monotonic counter for synthesized (loop) var names
     pub loop_cont:  Vec[int]        # stack of `continue` target block ids (innermost = last)
     pub loop_brk:   Vec[int]        # stack of `break` target block ids (innermost = last)
+    pub fresh_strs: Vec[int]        # ARC: vregs holding a fresh owned str not yet consumed
 
 extend LFunc:
     pub def init(name: str) -> LFunc:
@@ -90,6 +91,7 @@ extend LFunc:
         f.tmp_ctr    = 0
         f.loop_cont  = Vec[int].init(4)
         f.loop_brk   = Vec[int].init(4)
+        f.fresh_strs = Vec[int].init(8)
         return f
 
     # A monotonically increasing id, for building unique synthesized variable names

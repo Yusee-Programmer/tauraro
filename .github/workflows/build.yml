@@ -340,6 +340,13 @@ jobs:
         shell: bash
         run: TAURAROC=./tauraroc${{ matrix.ext }} bash scripts/native_diff.sh
 
+      # Native ARC: the generated retain/release calls must balance — a locals-only string
+      # program must leave 0 refcounted strings live at exit (also catches double-free/UAF).
+      - name: Native ARC leak check
+        if: runner.os == 'Linux'
+        shell: bash
+        run: TAURAROC=./tauraroc${{ matrix.ext }} bash scripts/native_leak_check.sh
+
       # Runtime security regressions (V-001 float-format overflow, etc.) under ASan+UBSan.
       - name: Runtime security tests (ASan/UBSan)
         if: runner.os == 'Linux'

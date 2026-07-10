@@ -169,14 +169,18 @@ def _lower_global_init(m: LModule, lf: LFunc, s: Pointer[HirStmt]) -> bool:
             if v < 0: return false
             mut gidx = m.global_index(name)
             if gidx < 0: return false
+            if lf.vreg_type(v) == 1: _secure_str(m, lf, v)   # global owns its str init
             lf.emit(LInst.IStoreGlobal(gidx, v))
+            _flush_fresh_strs(m, lf)
             return true
         case HirStmt.SAssign(target, val):
             mut v2 = lower_expr(m, lf, val)
             if v2 < 0: return false
             mut gidx2 = m.global_index(_ident_name(target))
             if gidx2 < 0: return false
+            if lf.vreg_type(v2) == 1: _secure_str(m, lf, v2)
             lf.emit(LInst.IStoreGlobal(gidx2, v2))
+            _flush_fresh_strs(m, lf)
             return true
         case _:
             return false
@@ -222,23 +226,35 @@ def lower_stmt(m: LModule, lf: LFunc, s: Pointer[HirStmt]) -> bool:
     match s.read():
         case HirStmt.SLineMarker(_): return true
         case HirStmt.SPass: return true
-        case HirStmt.SAutoDrop(_, _): return true   # native has no ARC yet (leaks; C/LLVM own it)
+        case HirStmt.SAutoDrop(name, _):            # ARC: release an owned str local
+            # Params are BORROWED (the caller owns/releases them) — never drop them here,
+            # or a passed str would be double-freed.
+            if lf.var_index(name) >= 0 and lf.var_type(name) == 1 and not _is_param(lf, name):
+                mut dv = lf.new_vreg()
+                lf.emit(LInst.ILoadVar(dv, name))
+                _release_str(m, lf, dv)
+            return true
         case HirStmt.SFree(_): return true
         case HirStmt.SReturn(val):
             if val as usize != 0 as usize:
                 mut rv = lower_expr(m, lf, val)
                 if rv < 0: return false
+                if lf.vreg_type(rv) == 1: _secure_str(m, lf, rv)   # caller owns the returned str
+                _flush_fresh_strs(m, lf)
                 lf.set_term(LTerm.TRetVal(rv))
             else:
+                _flush_fresh_strs(m, lf)
                 lf.set_term(LTerm.TRetInt(0))
             return true
         case HirStmt.SLet(name, _, _, _, _, _, val):
             if val as usize == 0 as usize: return false
             mut v = lower_expr(m, lf, val)
             if v < 0: return false
+            if lf.vreg_type(v) == 1: _secure_str(m, lf, v)   # variable takes ownership
             lf.add_var(name)
             lf.set_var_type(name, lf.vreg_type(v))
             lf.emit(LInst.IStoreVar(name, v))
+            _flush_fresh_strs(m, lf)
             return true
         case HirStmt.SAssign(target, val):
             # d[k] = v / xs[i] = v  lower to SAssign(EMethodCall(obj, "get_index", [k]), v).
@@ -255,16 +271,25 @@ def lower_stmt(m: LModule, lf: LFunc, s: Pointer[HirStmt]) -> bool:
             if tn == "": return false
             mut v2 = lower_expr(m, lf, val)
             if v2 < 0: return false
+            mut had_old_str = lf.var_index(tn) >= 0 and lf.var_type(tn) == 1
+            if lf.vreg_type(v2) == 1: _secure_str(m, lf, v2)   # secure new BEFORE releasing old
             if lf.var_index(tn) < 0 and m.is_global(tn):    # assign to a module global
                 lf.emit(LInst.IStoreGlobal(m.global_index(tn), v2))
+                _flush_fresh_strs(m, lf)
                 return true
+            if had_old_str:                                  # ARC: release the overwritten str
+                mut oldv = lf.new_vreg()
+                lf.emit(LInst.ILoadVar(oldv, tn))
+                _release_str(m, lf, oldv)
             lf.add_var(tn)
             lf.set_var_type(tn, lf.vreg_type(v2))
             lf.emit(LInst.IStoreVar(tn, v2))
+            _flush_fresh_strs(m, lf)
             return true
         case HirStmt.SIf(cond, then_b, else_b):
             mut cv = lower_expr(m, lf, cond)
             if cv < 0: return false
+            _flush_fresh_strs(m, lf)
             mut then_id = lf.new_block()
             mut else_id = lf.new_block()
             mut end_id  = lf.new_block()
@@ -285,6 +310,7 @@ def lower_stmt(m: LModule, lf: LFunc, s: Pointer[HirStmt]) -> bool:
             lf.set_cur(hdr)
             mut cv2 = lower_expr(m, lf, cond)
             if cv2 < 0: return false
+            _flush_fresh_strs(m, lf)
             lf.set_term(LTerm.TCondBr(cv2, bdy, ext))
             lf.set_cur(bdy)
             lf.loop_cont.push(hdr)          # continue -> re-test condition
@@ -310,7 +336,9 @@ def lower_stmt(m: LModule, lf: LFunc, s: Pointer[HirStmt]) -> bool:
         case HirStmt.SFor(var, iter, body):
             return _lower_for(m, lf, var, iter, body)
         case HirStmt.SExpr(e):
-            return lower_expr_stmt(m, lf, e)
+            mut se_ok = lower_expr_stmt(m, lf, e)
+            _flush_fresh_strs(m, lf)
+            return se_ok
         case _:
             return false
 
@@ -417,6 +445,7 @@ def _lower_for_list(m: LModule, lf: LFunc, var: str, iter: Pointer[HirExpr], bod
     lf.emit(LInst.ILoadVar(iv2, iname))
     mut xval = _list_get(m, lf, hv2, iv2)
     lf.set_vreg_type(xval, elem_t)
+    if elem_t == 1: _retain_str(m, lf, xval)   # loop var owns its own ref (borrow of the list elem)
     lf.add_var(var)
     lf.set_var_type(var, elem_t)
     lf.emit(LInst.IStoreVar(var, xval))
@@ -460,6 +489,7 @@ def _lower_index_set(m: LModule, lf: LFunc, obj: Pointer[HirExpr], idx: Pointer[
         if not _dict_key_is_str(ovt) and lf.vreg_type(kv) != 0: return false
         mut vv = lower_expr(m, lf, val)
         if vv < 0 or lf.vreg_type(vv) != _dict_val_tag(ovt): return false
+        if _dict_val_tag(ovt) == 1: _secure_str(m, lf, vv)   # dict owns the str value by ref
         mut ssym = _dict_sym(ovt, "set")
         m.add_extern(ssym)
         mut sa = Vec[int].init(3)
@@ -473,6 +503,7 @@ def _lower_index_set(m: LModule, lf: LFunc, obj: Pointer[HirExpr], idx: Pointer[
         if iv < 0 or lf.vreg_type(iv) != 0: return false
         mut lvv = lower_expr(m, lf, val)
         if lvv < 0 or lf.vreg_type(lvv) != _list_elem_tag(ovt): return false
+        if _list_elem_tag(ovt) == 1: _secure_str(m, lf, lvv)   # list owns the str element by ref
         m.add_extern("_tr_rt_list_set_i64")
         mut la = Vec[int].init(3)
         la.push(ov)
@@ -579,6 +610,53 @@ def _lir_itoa(n: int) -> str:
         x = x / 10
     return s
 
+# -- ARC (string refcounting) helpers ------------------------------------------------
+# A "fresh" str vreg owns one reference (produced by a literal or a str-returning call);
+# a str loaded from a variable/collection is a borrow (owns nothing). Fresh temps that
+# aren't transferred (stored/returned) are released at the end of their statement.
+def _fresh_mark(lf: LFunc, v: int):
+    lf.fresh_strs.push(v)
+
+def _fresh_take(lf: LFunc, v: int) -> bool:      # consume a fresh temp; true if it was fresh
+    mut i = 0
+    while i < lf.fresh_strs.len:
+        if lf.fresh_strs.get(i) == v:
+            lf.fresh_strs.remove(i)
+            return true
+        i = i + 1
+    return false
+
+def _release_str(m: LModule, lf: LFunc, v: int):
+    m.add_extern("_tr_rt_str_release")
+    mut a = Vec[int].init(1)
+    a.push(v)
+    lf.emit(LInst.ICall(-1, "_tr_rt_str_release", a))
+
+def _retain_str(m: LModule, lf: LFunc, v: int):
+    m.add_extern("_tr_rt_str_retain")
+    mut a = Vec[int].init(1)
+    a.push(v)
+    lf.emit(LInst.ICall(-1, "_tr_rt_str_retain", a))
+
+# Release every fresh str temp still live in the current statement, then clear the set.
+def _flush_fresh_strs(m: LModule, lf: LFunc):
+    while lf.fresh_strs.len > 0:
+        mut v = lf.fresh_strs.pop()
+        _release_str(m, lf, v)
+
+# Secure a str value for storage/return: fresh -> transfer (already owns a ref); borrow
+# -> retain a new ref for the new owner.
+def _secure_str(m: LModule, lf: LFunc, v: int):
+    if not _fresh_take(lf, v):
+        _retain_str(m, lf, v)
+
+def _is_param(lf: LFunc, name: str) -> bool:
+    mut i = 0
+    while i < lf.params.len:
+        if lf.params.get(i) == name: return true
+        i = i + 1
+    return false
+
 # Normalize an i64 vreg to a 0/1 boolean vreg:  (v != 0).
 def _norm_bool(lf: LFunc, v: int) -> int:
     mut z = lf.new_vreg()
@@ -595,6 +673,7 @@ def _str_call0(m: LModule, lf: LFunc, sym: str, recv: int, restype: int) -> int:
     mut d = lf.new_vreg()
     lf.emit(LInst.ICall(d, sym, a))
     lf.set_vreg_type(d, restype)
+    if restype == 1: _fresh_mark(lf, d)   # ARC: str result owns a fresh ref
     return d
 
 # A str method taking one str argument: sym(recv, arg) -> result of type `restype`.
@@ -606,6 +685,7 @@ def _str_call1(m: LModule, lf: LFunc, sym: str, recv: int, arg: int, restype: in
     mut d = lf.new_vreg()
     lf.emit(LInst.ICall(d, sym, a))
     lf.set_vreg_type(d, restype)
+    if restype == 1: _fresh_mark(lf, d)   # ARC: str result owns a fresh ref
     return d
 
 # String methods on a str receiver. New-string results are type 1; find -> int; starts/ends -> bool.
@@ -629,6 +709,7 @@ def _lower_str_method(m: LModule, lf: LFunc, recv: int, method: str, margs: Vec[
         mut rd = lf.new_vreg()
         lf.emit(LInst.ICall(rd, "_tr_rt_str_replace", ra))
         lf.set_vreg_type(rd, 1)
+        _fresh_mark(lf, rd)
         return rd
     if method == "find" and margs.len == 1:
         mut fa = lower_expr(m, lf, margs.get(0))
@@ -671,6 +752,7 @@ def _lower_str_method(m: LModule, lf: LFunc, recv: int, method: str, margs: Vec[
         mut sld = lf.new_vreg()
         lf.emit(LInst.ICall(sld, "_tr_rt_str_slice", sla))
         lf.set_vreg_type(sld, 1)
+        _fresh_mark(lf, sld)
         return sld
     # 0-arg string methods (new string / bool / int results).
     if method == "capitalize" and margs.len == 0:
@@ -727,6 +809,7 @@ def _lower_str_method(m: LModule, lf: LFunc, recv: int, method: str, margs: Vec[
         mut rfd = lf.new_vreg()
         lf.emit(LInst.ICall(rfd, "_tr_rt_str_replace_first", rfa))
         lf.set_vreg_type(rfd, 1)
+        _fresh_mark(lf, rfd)
         return rfd
     return -1
 
@@ -920,7 +1003,14 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
             mut ds = lf.new_vreg()
             lf.emit(LInst.IStr(ds, idx))
             lf.set_vreg_type(ds, 1)
-            return ds
+            m.add_extern("_tr_rt_str_new")   # ARC: copy the .rodata literal into a fresh rc=1 string
+            mut lna = Vec[int].init(1)
+            lna.push(ds)
+            mut lheap = lf.new_vreg()
+            lf.emit(LInst.ICall(lheap, "_tr_rt_str_new", lna))
+            lf.set_vreg_type(lheap, 1)
+            _fresh_mark(lf, lheap)
+            return lheap
         case HirExpr.ELitBool(bval, _):
             mut db = lf.new_vreg()
             mut bconst = 0
@@ -959,18 +1049,23 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
             mut tv = lower_expr(m, lf, then_e)
             if tv < 0: return -1
             mut rtype = lf.vreg_type(tv)
+            # ARC: secure each branch's str value INTO the slot within its own block, so a
+            # fresh temp isn't left in the fresh set to be flushed for the untaken branch.
+            if rtype == 1: _secure_str(m, lf, tv)
             lf.set_var_type(rname, rtype)
             lf.emit(LInst.IStoreVar(rname, tv))
             lf.set_term(LTerm.TBr(end_b))
             lf.set_cur(else_b)
             mut ev2 = lower_expr(m, lf, else_e)
             if ev2 < 0: return -1
+            if rtype == 1: _secure_str(m, lf, ev2)
             lf.emit(LInst.IStoreVar(rname, ev2))
             lf.set_term(LTerm.TBr(end_b))
             lf.set_cur(end_b)
             mut trd = lf.new_vreg()
             lf.emit(LInst.ILoadVar(trd, rname))
             lf.set_vreg_type(trd, rtype)
+            if rtype == 1: _fresh_mark(lf, trd)   # result owns the slot's ref (transferred out)
             return trd
         case HirExpr.EUnaryOp(op, sub, _):
             mut sv = lower_expr(m, lf, sub)
@@ -1075,6 +1170,7 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                 mut rd = lf.new_vreg()
                 lf.emit(LInst.ICall(rd, "_tr_rt_str_repeat", ra))
                 lf.set_vreg_type(rd, 1)
+                _fresh_mark(lf, rd)
                 return rd
             if op == "+" and at == 1 and bt == 1:
                 m.add_extern("_tr_rt_str_concat")
@@ -1084,6 +1180,7 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                 mut dc = lf.new_vreg()
                 lf.emit(LInst.ICall(dc, "_tr_rt_str_concat", ca))
                 lf.set_vreg_type(dc, 1)
+                _fresh_mark(lf, dc)
                 return dc
             # String comparison: <op> maps to  strcmp(a,b) <op> 0.
             if _is_cmp_op(op) and at == 1 and bt == 1:
@@ -1183,6 +1280,7 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                 mut s2d = lf.new_vreg()
                 lf.emit(LInst.ICall(s2d, ssym, s2a))
                 lf.set_vreg_type(s2d, 1)
+                _fresh_mark(lf, s2d)
                 return s2d
             if fn == "float" and args.len == 1:    # float(int)/float(float)
                 mut fv0 = lower_expr(m, lf, args.get(0))
@@ -1264,6 +1362,7 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
             mut d4 = lf.new_vreg()
             lf.emit(LInst.ICall(d4, fn, argvregs))
             lf.set_vreg_type(d4, rtag)                  # result carries the fn's return type
+            if rtag == 1: _fresh_mark(lf, d4)           # ARC: owned str returned by callee
             return d4
         case HirExpr.EList(items, _):
             # List literal -> _tr_rt_list_new + a push per element. Element type is inferred
@@ -1285,6 +1384,7 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                     list_tag = _list_tag_for_elem(evt)
                 elif evt != elem_t:
                     return -1                           # heterogeneous list unsupported
+                if evt == 1: _secure_str(m, lf, ev)     # list owns the str element by ref
                 m.add_extern("_tr_rt_list_push_i64")
                 mut pa = Vec[int].init(2)
                 pa.push(hv)
@@ -1320,6 +1420,7 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                 mut vv = lower_expr(m, lf, vals.get(di))
                 if vv < 0: return -1
                 if lf.vreg_type(vv) != vtag: return -1
+                if vtag == 1: _secure_str(m, lf, vv)     # dict owns the str value by ref
                 mut dset = _dict_sym(dtag, "set")
                 m.add_extern(dset)
                 mut dsa = Vec[int].init(3)
@@ -1391,6 +1492,7 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                 mut av = lower_expr(m, lf, margs.get(0))
                 if av < 0: return -1
                 if lf.vreg_type(av) != want_elem: return -1   # element type must match list
+                if want_elem == 1: _secure_str(m, lf, av)     # list owns the str element by ref
                 m.add_extern("_tr_rt_list_push_i64")
                 mut ppa = Vec[int].init(2)
                 ppa.push(ovm)
