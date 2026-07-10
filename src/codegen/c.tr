@@ -1326,9 +1326,13 @@ pub class CGenerator:
         if entry == "": return
         if self.bare_arch == "riscv":
             # RISC-V (qemu 'virt', loaded to RAM at 0x80000000): the ELF entry is
-            # _start. It parks harts != 0, sets sp, then boots. .data is already in RAM
-            # (loaded from the ELF), so only .bss needs clearing. No vector table.
-            self.w("\n/* --freestanding @entry: RISC-V boot (qemu virt) */\n")
+            # _start — set sp and boot. .data is already in RAM (loaded from the ELF),
+            # so only .bss needs clearing. No vector table. Single-hart is assumed (qemu
+            # 'virt' defaults to -smp 1); we deliberately AVOID a `csrr mhartid` hart
+            # guard because CSR ops need the `zicsr` ISA extension, whose -march naming
+            # (rv64imac_zicsr) isn't accepted by older gcc even when the assembler
+            # demands it — so the plain boot is the portable choice.
+            self.w("\n/* --freestanding @entry: RISC-V boot (qemu virt, single-hart) */\n")
             self.w("extern unsigned _stack_top, __bss_start__, __bss_end__;\n")
             self.w("__attribute__((used)) void _tr_boot(void){\n")
             self.w("    unsigned *d;\n")
@@ -1338,12 +1342,8 @@ pub class CGenerator:
             self.w("    for(;;){}\n}\n")
             self.w("__attribute__((naked, used, section(\".text.init\"))) void _start(void){\n")
             self.w("    __asm__ volatile(\n")
-            self.w("        \"csrr t0, mhartid\\n\"\n")
-            self.w("        \"bnez t0, 1f\\n\"\n")
             self.w("        \"la sp, _stack_top\\n\"\n")
             self.w("        \"call _tr_boot\\n\"\n")
-            self.w("        \"1: wfi\\n\"\n")
-            self.w("        \"j 1b\\n\"\n")
             self.w("    );\n")
             self.w("}\n")
             return
