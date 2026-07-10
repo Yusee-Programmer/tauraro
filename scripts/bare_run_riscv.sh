@@ -30,7 +30,9 @@ echo "  emitted $(find "$APP/build" -name '*.c' | wc -l) C files, all from .tr"
 # -fno-stack-protector: Ubuntu's gcc enables -fstack-protector-strong by default, which
 # emits __stack_chk_fail/__stack_chk_guard refs unresolvable under -nostdlib. -fno-pic /
 # -fno-pie avoids GOT relocations that need a dynamic loader.
-if ! "$GCC" -O2 -march=rv64imac -mabi=lp64 -mcmodel=medany -ffreestanding -nostdlib -fno-builtin \
+# rv64imac_zicsr: the boot code uses `csrr … mhartid`; modern binutils split CSR
+# instructions into the zicsr extension, so it must be named explicitly in -march.
+if ! "$GCC" -O2 -march=rv64imac_zicsr -mabi=lp64 -mcmodel=medany -ffreestanding -nostdlib -fno-builtin \
       -fno-stack-protector -fno-pic -fno-pie \
       -T "$APP/build/app.ld" $WARN -I "$APP/build/include" -I "$APP/build" \
       -o "$APP/build/bare.elf" $(find "$APP/build" -name '*.c') -lgcc 2>/tmp/bare_rv_cc.log; then
