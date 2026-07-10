@@ -1,0 +1,17 @@
+# native≡c differential corpus: integer vars, arithmetic, comparisons.
+def main():
+    mut a = 6
+    mut b = 7
+    print(a + b)        # 13
+    print(a * b)        # 42
+    print(b - a)        # 1
+    mut c = a * b + a - b
+    print(c)            # 41
+    if a < b:
+        print(1)
+    else:
+        print(0)
+    if a == 6:
+        print(1)
+    if b != 6:
+        print(1)

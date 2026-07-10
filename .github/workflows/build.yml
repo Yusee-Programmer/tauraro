@@ -332,6 +332,14 @@ jobs:
         shell: bash
         run: TAURAROC=./tauraroc${{ matrix.ext }} bash scripts/native_run.sh
 
+      # Differential oracle: every tests/native/*.tr compiled by BOTH the C backend and the
+      # native x86-64/ELF backend must produce byte-identical output — proves the
+      # from-scratch machine-code backend matches the reference on all covered features.
+      - name: Native ≡ C differential oracle
+        if: runner.os == 'Linux'
+        shell: bash
+        run: TAURAROC=./tauraroc${{ matrix.ext }} bash scripts/native_diff.sh
+
       - name: Clean up generated build output
         shell: bash
         run: |
