@@ -324,6 +324,14 @@ jobs:
         shell: bash
         run: TAURAROC=./tauraroc${{ matrix.ext }} bash scripts/bare_run_riscv.sh
 
+      # Native backend (Path B): compile a Tauraro program STRAIGHT to an x86-64 ELF
+      # object (no C source, no gcc for the user code), link it with runtime.o + libc,
+      # and run it. Proves the taumir(LIR) -> x86-64 -> ELF -> link pipeline.
+      - name: Native backend run (x86-64/ELF, no C)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: TAURAROC=./tauraroc${{ matrix.ext }} bash scripts/native_run.sh
+
       - name: Clean up generated build output
         shell: bash
         run: |
