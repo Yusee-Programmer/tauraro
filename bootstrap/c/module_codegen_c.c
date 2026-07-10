@@ -5803,6 +5803,25 @@ __attribute__((hot)) TrStr CGenerator_gen_binop(CGenerator* self, TrStr op, HirE
         /* pass */
         if (((strcmp(_tr_strz(rt_n), _tr_strz(_tr_str_lit("Map"))) == 0) || (strcmp(_tr_strz(rt_n), _tr_strz(_tr_str_lit("Dict"))) == 0))) {
             /* pass */
+            AstType* _in_rty = hir_expr_type(r);
+            /* pass */
+            bool _in_int_key = false;
+            /* pass */
+            if ((_in_rty->args->len > 0LL)) {
+                /* pass */
+                AstType* _in_kt = (*((AstType**)List_ptr_get(_in_rty->args, 0LL)));
+                /* pass */
+                if (((((_is_int_type(_in_kt->name) || (strcmp(_tr_strz(_in_kt->name), _tr_strz(_tr_str_lit("int"))) == 0)) || (strcmp(_tr_strz(_in_kt->name), _tr_strz(_tr_str_lit("i64"))) == 0)) || (strcmp(_tr_strz(_in_kt->name), _tr_strz(_tr_str_lit("i32"))) == 0)) || (strcmp(_tr_strz(_in_kt->name), _tr_strz(_tr_str_lit("usize"))) == 0))) {
+                    /* pass */
+                    _in_int_key = true;
+                }
+            }
+            /* pass */
+            if (_in_int_key) {
+                /* pass */
+                return ({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("_tr_idict_contains(")), _tr_strz(rs))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(", "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(ls)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(")"))); _tr_str_release(_cl); _cres; });
+            }
+            /* pass */
             return ({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("_tr_dict_contains(")), _tr_strz(rs))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(", "))); _tr_str_release(_cl); _cres; })); TrStr _cr = (CGenerator_strz(self, ls)); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(")"))); _tr_str_release(_cl); _cres; });
         }
         /* pass */

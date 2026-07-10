@@ -262,6 +262,77 @@ long long _tr_rt_str_contains(const char* s, const char* sub) {
     return strstr(s, sub) != 0 ? 1 : 0;
 }
 
+/* Dict[str,int] / Dict[int,int] — chained hash maps with i64 values. Missing key -> 0
+ * (matches the C backend). No ARC/free yet (leaks; -O0 dev). Fixed bucket count. */
+#define _TRN_DCAP 1024
+typedef struct _SNode { char* key; long long val; struct _SNode* next; } _SNode;
+typedef struct { _SNode** b; long long len; } _SDict;
+typedef struct _INode { long long key; long long val; struct _INode* next; } _INode;
+typedef struct { _INode** b; long long len; } _IDict;
+
+static unsigned long _trn_shash(const char* s) {
+    unsigned long h = 5381; int c;
+    while ((c = (unsigned char)*s++)) h = ((h << 5) + h) + (unsigned long)c;
+    return h % _TRN_DCAP;
+}
+void* _tr_rt_sdict_new(void) {
+    _SDict* d = (_SDict*)malloc(sizeof(_SDict));
+    d->b = (_SNode**)calloc(_TRN_DCAP, sizeof(_SNode*));
+    d->len = 0; return d;
+}
+void _tr_rt_sdict_set(void* h, const char* k, long long v) {
+    _SDict* d = (_SDict*)h; if (!d || !k) return;
+    unsigned long i = _trn_shash(k);
+    for (_SNode* n = d->b[i]; n; n = n->next) if (strcmp(n->key, k) == 0) { n->val = v; return; }
+    _SNode* n = (_SNode*)malloc(sizeof(_SNode));
+    size_t kl = strlen(k); n->key = (char*)malloc(kl + 1);
+    for (size_t j = 0; j <= kl; j++) n->key[j] = k[j];
+    n->val = v; n->next = d->b[i]; d->b[i] = n; d->len++;
+}
+long long _tr_rt_sdict_get(void* h, const char* k) {
+    _SDict* d = (_SDict*)h; if (!d || !k) return 0;
+    for (_SNode* n = d->b[_trn_shash(k)]; n; n = n->next) if (strcmp(n->key, k) == 0) return n->val;
+    return 0;
+}
+long long _tr_rt_sdict_has(void* h, const char* k) {
+    _SDict* d = (_SDict*)h; if (!d || !k) return 0;
+    for (_SNode* n = d->b[_trn_shash(k)]; n; n = n->next) if (strcmp(n->key, k) == 0) return 1;
+    return 0;
+}
+long long _tr_rt_sdict_len(void* h) { _SDict* d = (_SDict*)h; return d ? d->len : 0; }
+
+void* _tr_rt_idict_new(void) {
+    _IDict* d = (_IDict*)malloc(sizeof(_IDict));
+    d->b = (_INode**)calloc(_TRN_DCAP, sizeof(_INode*));
+    d->len = 0; return d;
+}
+void _tr_rt_idict_set(void* h, long long k, long long v) {
+    _IDict* d = (_IDict*)h; if (!d) return;
+    unsigned long i = (unsigned long)((unsigned long long)k % _TRN_DCAP);
+    for (_INode* n = d->b[i]; n; n = n->next) if (n->key == k) { n->val = v; return; }
+    _INode* n = (_INode*)malloc(sizeof(_INode));
+    n->key = k; n->val = v; n->next = d->b[i]; d->b[i] = n; d->len++;
+}
+long long _tr_rt_idict_get(void* h, long long k) {
+    _IDict* d = (_IDict*)h; if (!d) return 0;
+    unsigned long i = (unsigned long)((unsigned long long)k % _TRN_DCAP);
+    for (_INode* n = d->b[i]; n; n = n->next) if (n->key == k) return n->val;
+    return 0;
+}
+long long _tr_rt_idict_has(void* h, long long k) {
+    _IDict* d = (_IDict*)h; if (!d) return 0;
+    unsigned long i = (unsigned long)((unsigned long long)k % _TRN_DCAP);
+    for (_INode* n = d->b[i]; n; n = n->next) if (n->key == k) return 1;
+    return 0;
+}
+long long _tr_rt_idict_len(void* h) { _IDict* d = (_IDict*)h; return d ? d->len : 0; }
+
+/* xs[i] = v for List[int]/List[str] (value is 8 bytes either way). */
+void _tr_rt_list_set_i64(void* h, long long i, long long v) {
+    _TrNList* l = (_TrNList*)h;
+    if (l && i >= 0 && i < l->len) l->data[i] = v;
+}
+
 /* Int utility methods (x.to_hex() etc.) — match tauraro_rt.h formats. */
 static char* _trn_fmt(const char* fmt, long long v) {
     char b[40]; int n = snprintf(b, sizeof(b), fmt, v);
@@ -302,6 +373,36 @@ long long _tr_rt_list_sum_i64(void* h) {
     long long t = 0;
     for (long long i = 0; i < l->len; i++) t += l->data[i];
     return t;
+}
+long long _tr_rt_list_index_i64(void* h, long long v) {
+    _TrNList* l = (_TrNList*)h;
+    if (!l) return -1;
+    for (long long i = 0; i < l->len; i++) if (l->data[i] == v) return i;
+    return -1;
+}
+long long _tr_rt_list_index_str(void* h, const char* s) {
+    _TrNList* l = (_TrNList*)h;
+    if (!l) return -1;
+    if (!s) s = "";
+    for (long long i = 0; i < l->len; i++) {
+        const char* e = (const char*)l->data[i]; if (!e) e = "";
+        if (strcmp(e, s) == 0) return i;
+    }
+    return -1;
+}
+long long _tr_rt_list_min_i64(void* h) {
+    _TrNList* l = (_TrNList*)h;
+    if (!l || l->len == 0) return 0;
+    long long m = l->data[0];
+    for (long long i = 1; i < l->len; i++) if (l->data[i] < m) m = l->data[i];
+    return m;
+}
+long long _tr_rt_list_max_i64(void* h) {
+    _TrNList* l = (_TrNList*)h;
+    if (!l || l->len == 0) return 0;
+    long long m = l->data[0];
+    for (long long i = 1; i < l->len; i++) if (l->data[i] > m) m = l->data[i];
+    return m;
 }
 long long _tr_rt_list_any_i64(void* h) {
     _TrNList* l = (_TrNList*)h;
