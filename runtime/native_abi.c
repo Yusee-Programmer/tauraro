@@ -27,3 +27,33 @@ char* _tr_rt_str_concat(const char* a, const char* b) {
     r[la + lb] = 0;
     return r;
 }
+
+/* -- List[int]: a dynamic i64 array the native backend calls. Opaque handle (void*).
+ * (No ARC/free in the native backend yet — this leaks; fine for -O0 dev.) */
+typedef struct { long long* data; long long len; long long cap; } _TrNList;
+
+void* _tr_rt_list_new(void) {
+    _TrNList* l = (_TrNList*)malloc(sizeof(_TrNList));
+    if (!l) return 0;
+    l->data = 0; l->len = 0; l->cap = 0;
+    return l;
+}
+void _tr_rt_list_push_i64(void* h, long long v) {
+    _TrNList* l = (_TrNList*)h;
+    if (!l) return;
+    if (l->len == l->cap) {
+        long long nc = l->cap ? l->cap * 2 : 4;
+        l->data = (long long*)realloc(l->data, (size_t)nc * sizeof(long long));
+        l->cap = nc;
+    }
+    l->data[l->len++] = v;
+}
+long long _tr_rt_list_len(void* h) {
+    _TrNList* l = (_TrNList*)h;
+    return l ? l->len : 0;
+}
+long long _tr_rt_list_get_i64(void* h, long long i) {
+    _TrNList* l = (_TrNList*)h;
+    if (!l || i < 0 || i >= l->len) return 0;   /* out-of-range -> 0 (native -O0 dev) */
+    return l->data[i];
+}

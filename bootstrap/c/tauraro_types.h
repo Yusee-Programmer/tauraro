@@ -3514,6 +3514,7 @@ __attribute__((hot)) bool lower_stmt(LModule* m, LFunc* lf, HirStmt* s);
 __attribute__((hot)) TrStr _ident_name(HirExpr* e);
 __attribute__((hot)) bool lower_expr_stmt(LModule* m, LFunc* lf, HirExpr* e);
 __attribute__((hot)) bool _int_op(TrStr op);
+__attribute__((hot)) long long _list_get(LModule* m, LFunc* lf, long long handle, long long idx);
 __attribute__((hot)) long long lower_expr(LModule* m, LFunc* lf, HirExpr* e);
 __attribute__((malloc,returns_nonnull,hot)) ByteBuf* ByteBuf_init();
 __attribute__((hot)) void ByteBuf_u8(ByteBuf* self, long long v);

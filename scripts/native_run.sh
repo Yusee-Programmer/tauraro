@@ -24,8 +24,9 @@ echo "=============================================================="
 echo "  Native backend LINK + RUN — x86-64/ELF, 100% Tauraro (no C)"
 echo "=============================================================="
 mkdir -p build
-# Exercises the native backend: string literals, user functions + recursion, params +
-# return values, loops, if/else, and arithmetic — all compiled straight to x86-64, no C.
+# Exercises the native backend: string vars + concat, user functions + recursion, params +
+# return values, loops, if/else, arithmetic, and List[int] (literal/push/get/[]/.len) —
+# all compiled straight to x86-64, no C.
 cat > /tmp/native_p42.tr <<'EOF'
 def fib(n: int) -> int:
     if n < 2:
@@ -37,12 +38,16 @@ def main():
     mut b = " native"
     print(a + b)         # string variables + concatenation -> "hello native"
     print(fib(10))       # 55
+    mut xs = [10, 20, 30]
+    xs.push(40)
+    print(xs.len)        # 4
+    print(xs[2])         # 30
     mut i = 0
     mut s = 0
-    while i < 10:
-        s = s + i
+    while i < xs.len:
+        s = s + xs[i]    # 10+20+30+40
         i = i + 1
-    print(s)             # 45
+    print(s)             # 100
     print("done")
 EOF
 
@@ -63,10 +68,10 @@ fi
 # 4) run.
 out="$(build/native_p42 2>&1)"
 echo "--- output ---"; echo "$out" | sed 's/^/    /'
-expected=$'hello native\n55\n45\ndone'
+expected=$'hello native\n55\n4\n30\n100\ndone'
 if [ "$out" = "$expected" ]; then
-    echo "NATIVE RUN OK ✅ — a Tauraro program (string vars+concat, recursion, loops) compiled straight to x86-64/ELF (no C) ran correctly"
+    echo "NATIVE RUN OK ✅ — a Tauraro program (string vars+concat, recursion, loops, List[int]) compiled straight to x86-64/ELF (no C) ran correctly"
     exit 0
 else
-    echo "FAIL: expected 'hello native/55/45/done', got '$out'"; exit 1
+    echo "FAIL: expected 'hello native/55/4/30/100/done', got '$out'"; exit 1
 fi

@@ -7,6 +7,7 @@ bool lower_stmt(LModule* m, LFunc* lf, HirStmt* s);
 TrStr _ident_name(HirExpr* e);
 bool lower_expr_stmt(LModule* m, LFunc* lf, HirExpr* e);
 bool _int_op(TrStr op);
+long long _list_get(LModule* m, LFunc* lf, long long handle, long long idx);
 long long lower_expr(LModule* m, LFunc* lf, HirExpr* e);
 
 __attribute__((hot)) TrStr _print_i64_sym() {
@@ -345,6 +346,11 @@ __auto_type args = _t2241.data.ECall.args;
         /* pass */
         _tr_str_release(fname);
         return (r >= 0LL);
+    } else if (_t2241.tag == HirExpr_EMethodCall) {
+        /* pass */
+        long long rm = lower_expr(m, lf, e);
+        /* pass */
+        return (rm >= 0LL);
     } else if (1) {
         __auto_type _ = _t2241;
         /* pass */
@@ -365,6 +371,23 @@ __attribute__((hot)) bool _int_op(TrStr op) {
     }
     /* pass */
     return false;
+}
+
+__attribute__((hot)) long long _list_get(LModule* m, LFunc* lf, long long handle, long long idx) {
+    /* pass */
+    LModule_add_extern(m, _tr_str_lit("_tr_rt_list_get_i64"));
+    /* pass */
+    List_i64* gargs = (void*)List_i64_new();
+    /* pass */
+    List_i64_append(gargs, handle);
+    /* pass */
+    List_i64_append(gargs, idx);
+    /* pass */
+    long long gd = LFunc_new_vreg(lf);
+    /* pass */
+    LFunc_emit(lf, LInst_ctor_ICall(gd, _tr_str_lit("_tr_rt_list_get_i64"), gargs));
+    /* pass */
+    return gd;
 }
 
 __attribute__((hot)) long long lower_expr(LModule* m, LFunc* lf, HirExpr* e) {
@@ -509,6 +532,170 @@ __auto_type args = _t2243.data.ECall.args;
         /* pass */
         _tr_str_release(fn);
         return d4;
+    } else if (_t2243.tag == HirExpr_EList) {
+        __auto_type items = _t2243.data.EList.items;
+        /* pass */
+        LModule_add_extern(m, _tr_str_lit("_tr_rt_list_new"));
+        /* pass */
+        long long hv = LFunc_new_vreg(lf);
+        /* pass */
+        LFunc_emit(lf, LInst_ctor_ICall(hv, _tr_str_lit("_tr_rt_list_new"), (void*)List_i64_new()));
+        /* pass */
+        LFunc_set_vreg_type(lf, hv, 2LL);
+        /* pass */
+        long long li = 0LL;
+        /* pass */
+        while ((li < items->len)) {
+            /* pass */
+            long long ev = lower_expr(m, lf, ((HirExpr*)List_ptr_get(items, li)));
+            /* pass */
+            if ((ev < 0LL)) {
+                /* pass */
+                return (-1LL);
+            }
+            /* pass */
+            if ((LFunc_vreg_type(lf, ev) != 0LL)) {
+                /* pass */
+                return (-1LL);
+            }
+            /* pass */
+            LModule_add_extern(m, _tr_str_lit("_tr_rt_list_push_i64"));
+            /* pass */
+            List_i64* pa = (void*)List_i64_new();
+            /* pass */
+            List_i64_append(pa, hv);
+            /* pass */
+            List_i64_append(pa, ev);
+            /* pass */
+            LFunc_emit(lf, LInst_ctor_ICall((-1LL), _tr_str_lit("_tr_rt_list_push_i64"), pa));
+            /* pass */
+            li = (li + 1LL);
+        }
+        /* pass */
+        return hv;
+    } else if (_t2243.tag == HirExpr_EIndex) {
+        __auto_type obj = _t2243.data.EIndex.obj;
+__auto_type idx = _t2243.data.EIndex._tr_v_index;
+        /* pass */
+        long long ov = lower_expr(m, lf, obj);
+        /* pass */
+        if ((ov < 0LL)) {
+            /* pass */
+            return (-1LL);
+        }
+        /* pass */
+        if ((LFunc_vreg_type(lf, ov) != 2LL)) {
+            /* pass */
+            return (-1LL);
+        }
+        /* pass */
+        long long iv = lower_expr(m, lf, idx);
+        /* pass */
+        if ((iv < 0LL)) {
+            /* pass */
+            return (-1LL);
+        }
+        /* pass */
+        return _list_get(m, lf, ov, iv);
+    } else if (_t2243.tag == HirExpr_EPropAccess) {
+        __auto_type obj = _t2243.data.EPropAccess.obj;
+__auto_type prop = _t2243.data.EPropAccess.prop;
+        /* pass */
+        if ((strcmp(_tr_strz(prop), _tr_strz(_tr_str_lit("len"))) != 0)) {
+            /* pass */
+            return (-1LL);
+        }
+        /* pass */
+        long long ovl = lower_expr(m, lf, obj);
+        /* pass */
+        if ((ovl < 0LL)) {
+            /* pass */
+            return (-1LL);
+        }
+        /* pass */
+        if ((LFunc_vreg_type(lf, ovl) != 2LL)) {
+            /* pass */
+            return (-1LL);
+        }
+        /* pass */
+        LModule_add_extern(m, _tr_str_lit("_tr_rt_list_len"));
+        /* pass */
+        List_i64* la = (void*)List_i64_new();
+        /* pass */
+        List_i64_append(la, ovl);
+        /* pass */
+        long long ld = LFunc_new_vreg(lf);
+        /* pass */
+        LFunc_emit(lf, LInst_ctor_ICall(ld, _tr_str_lit("_tr_rt_list_len"), la));
+        /* pass */
+        return ld;
+    } else if (_t2243.tag == HirExpr_EMethodCall) {
+        __auto_type obj = _t2243.data.EMethodCall.obj;
+__auto_type method = _t2243.data.EMethodCall.method;
+__auto_type margs = _t2243.data.EMethodCall.args;
+        /* pass */
+        long long ovm = lower_expr(m, lf, obj);
+        /* pass */
+        if ((ovm < 0LL)) {
+            /* pass */
+            return (-1LL);
+        }
+        /* pass */
+        if ((LFunc_vreg_type(lf, ovm) != 2LL)) {
+            /* pass */
+            return (-1LL);
+        }
+        /* pass */
+        if (((strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("push"))) == 0) || (strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("append"))) == 0))) {
+            /* pass */
+            if ((margs->len != 1LL)) {
+                /* pass */
+                return (-1LL);
+            }
+            /* pass */
+            long long av = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, 0LL)));
+            /* pass */
+            if ((av < 0LL)) {
+                /* pass */
+                return (-1LL);
+            }
+            /* pass */
+            if ((LFunc_vreg_type(lf, av) != 0LL)) {
+                /* pass */
+                return (-1LL);
+            }
+            /* pass */
+            LModule_add_extern(m, _tr_str_lit("_tr_rt_list_push_i64"));
+            /* pass */
+            List_i64* ppa = (void*)List_i64_new();
+            /* pass */
+            List_i64_append(ppa, ovm);
+            /* pass */
+            List_i64_append(ppa, av);
+            /* pass */
+            LFunc_emit(lf, LInst_ctor_ICall((-1LL), _tr_str_lit("_tr_rt_list_push_i64"), ppa));
+            /* pass */
+            return ovm;
+        }
+        /* pass */
+        if ((strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("get"))) == 0)) {
+            /* pass */
+            if ((margs->len != 1LL)) {
+                /* pass */
+                return (-1LL);
+            }
+            /* pass */
+            long long giv = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, 0LL)));
+            /* pass */
+            if ((giv < 0LL)) {
+                /* pass */
+                return (-1LL);
+            }
+            /* pass */
+            return _list_get(m, lf, ovm, giv);
+        }
+        /* pass */
+        return (-1LL);
     } else if (1) {
         __auto_type _ = _t2243;
         /* pass */

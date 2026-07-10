@@ -1,10 +1,12 @@
 # @trusted: compiler systems module.
-# src/taumir/lower.tr — HIR -> LIR lowering. Covers integer + string programs: user
-# functions (params, return values, calls incl. recursion), constants, +/-/* and
-# comparisons, string literals/variables/concatenation, local variables, if / while
-# control flow, and print. A per-vreg/var value-type tag (0 = int/i64, 1 = ptr/char*)
-# routes print to _tr_rt_print_i64 vs _tr_rt_print_cstr and "+" to add vs str_concat.
-# Anything else sets LModule.ok = false so the native driver falls back to C.
+# src/taumir/lower.tr — HIR -> LIR lowering. Covers integer + string + List[int]
+# programs: user functions (params, return values, calls incl. recursion), constants,
+# +/-/* and comparisons, string literals/variables/concatenation, List[int] literals /
+# .push/.append / .get / xs[i] / .len, local variables, if / while control flow, and
+# print. A per-vreg/var value-type tag (0 = int/i64, 1 = ptr/char*, 2 = List[int] handle)
+# routes print to _tr_rt_print_i64 vs _tr_rt_print_cstr, "+" to add vs str_concat, and
+# method/index/.len to the _tr_rt_list_* runtime. Anything else sets LModule.ok = false
+# so the native driver falls back to C.
 
 from hir import HirProgram, HirFunction, HirStmt, HirExpr, HirBlock
 from taumir.ir import LModule, LFunc, LInst, LTerm
@@ -142,6 +144,9 @@ def lower_expr_stmt(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> bool:
                 return true
             mut r = lower_expr(m, lf, e)
             return r >= 0
+        case HirExpr.EMethodCall(_, _, _, _):     # e.g. xs.push(v) — value discarded
+            mut rm = lower_expr(m, lf, e)
+            return rm >= 0
         case _:
             return false
 
@@ -150,6 +155,16 @@ def _int_op(op: str) -> bool:
     if op == "+" or op == "-" or op == "*": return true
     if op == "<" or op == ">" or op == "==" or op == "!=" or op == "<=" or op == ">=": return true
     return false
+
+# xs[i] / xs.get(i) lowering: _tr_rt_list_get_i64(handle, i) returning an i64.
+def _list_get(m: LModule, lf: LFunc, handle: int, idx: int) -> int:
+    m.add_extern("_tr_rt_list_get_i64")
+    mut gargs = Vec[int].init(2)
+    gargs.push(handle)
+    gargs.push(idx)
+    mut gd = lf.new_vreg()
+    lf.emit(LInst.ICall(gd, "_tr_rt_list_get_i64", gargs))
+    return gd
 
 def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
     match e.read():
@@ -205,5 +220,62 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
             mut d4 = lf.new_vreg()
             lf.emit(LInst.ICall(d4, fn, argvregs))
             return d4
+        case HirExpr.EList(items, _):
+            # List[int] literal -> _tr_rt_list_new + a push per element. Value type = 2 (list).
+            m.add_extern("_tr_rt_list_new")
+            mut hv = lf.new_vreg()
+            lf.emit(LInst.ICall(hv, "_tr_rt_list_new", Vec[int].init(0)))
+            lf.set_vreg_type(hv, 2)
+            mut li = 0
+            while li < items.len:
+                mut ev = lower_expr(m, lf, items.get(li))
+                if ev < 0: return -1
+                if lf.vreg_type(ev) != 0: return -1     # only List[int] supported natively
+                m.add_extern("_tr_rt_list_push_i64")
+                mut pa = Vec[int].init(2)
+                pa.push(hv)
+                pa.push(ev)
+                lf.emit(LInst.ICall(-1, "_tr_rt_list_push_i64", pa))
+                li = li + 1
+            return hv
+        case HirExpr.EIndex(obj, idx, _):
+            mut ov = lower_expr(m, lf, obj)
+            if ov < 0: return -1
+            if lf.vreg_type(ov) != 2: return -1
+            mut iv = lower_expr(m, lf, idx)
+            if iv < 0: return -1
+            return _list_get(m, lf, ov, iv)
+        case HirExpr.EPropAccess(obj, prop, _):
+            if prop != "len": return -1
+            mut ovl = lower_expr(m, lf, obj)
+            if ovl < 0: return -1
+            if lf.vreg_type(ovl) != 2: return -1
+            m.add_extern("_tr_rt_list_len")
+            mut la = Vec[int].init(1)
+            la.push(ovl)
+            mut ld = lf.new_vreg()
+            lf.emit(LInst.ICall(ld, "_tr_rt_list_len", la))
+            return ld
+        case HirExpr.EMethodCall(obj, method, margs, _):
+            mut ovm = lower_expr(m, lf, obj)
+            if ovm < 0: return -1
+            if lf.vreg_type(ovm) != 2: return -1
+            if method == "push" or method == "append":
+                if margs.len != 1: return -1
+                mut av = lower_expr(m, lf, margs.get(0))
+                if av < 0: return -1
+                if lf.vreg_type(av) != 0: return -1
+                m.add_extern("_tr_rt_list_push_i64")
+                mut ppa = Vec[int].init(2)
+                ppa.push(ovm)
+                ppa.push(av)
+                lf.emit(LInst.ICall(-1, "_tr_rt_list_push_i64", ppa))
+                return ovm                              # handle (discarded at stmt level)
+            if method == "get":
+                if margs.len != 1: return -1
+                mut giv = lower_expr(m, lf, margs.get(0))
+                if giv < 0: return -1
+                return _list_get(m, lf, ovm, giv)
+            return -1
         case _:
             return -1
