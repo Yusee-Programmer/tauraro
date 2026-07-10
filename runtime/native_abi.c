@@ -137,6 +137,51 @@ long long _tr_rt_list_sum_i64(void* h) {
     for (long long i = 0; i < l->len; i++) t += l->data[i];
     return t;
 }
+long long _tr_rt_list_any_i64(void* h) {
+    _TrNList* l = (_TrNList*)h;
+    if (!l) return 0;
+    for (long long i = 0; i < l->len; i++) if (l->data[i]) return 1;
+    return 0;
+}
+long long _tr_rt_list_all_i64(void* h) {
+    _TrNList* l = (_TrNList*)h;
+    if (!l) return 1;
+    for (long long i = 0; i < l->len; i++) if (!l->data[i]) return 0;
+    return 1;
+}
+long long _tr_rt_list_is_empty(void* h) {
+    _TrNList* l = (_TrNList*)h;
+    return (!l || l->len == 0) ? 1 : 0;
+}
+long long _tr_rt_list_first_i64(void* h) {
+    _TrNList* l = (_TrNList*)h;
+    return (l && l->len > 0) ? l->data[0] : 0;
+}
+long long _tr_rt_list_last_i64(void* h) {
+    _TrNList* l = (_TrNList*)h;
+    return (l && l->len > 0) ? l->data[l->len - 1] : 0;
+}
+void _tr_rt_list_reverse(void* h) {
+    _TrNList* l = (_TrNList*)h;
+    if (!l) return;
+    for (long long i = 0, j = l->len - 1; i < j; i++, j--) {
+        long long t = l->data[i]; l->data[i] = l->data[j]; l->data[j] = t;
+    }
+}
+void _tr_rt_list_clear(void* h) {
+    _TrNList* l = (_TrNList*)h;
+    if (l) l->len = 0;
+}
+/* in-place insertion sort; dir>0 ascending, dir<0 descending. */
+void _tr_rt_list_sort(void* h, long long dir) {
+    _TrNList* l = (_TrNList*)h;
+    if (!l) return;
+    for (long long i = 1; i < l->len; i++) {
+        long long v = l->data[i], j = i - 1;
+        while (j >= 0 && (dir > 0 ? l->data[j] > v : l->data[j] < v)) { l->data[j + 1] = l->data[j]; j--; }
+        l->data[j + 1] = v;
+    }
+}
 
 /* `x in xs` membership for List[int] / List[str]. */
 long long _tr_rt_list_contains_i64(void* h, long long v) {

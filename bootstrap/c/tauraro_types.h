@@ -3599,6 +3599,7 @@ __attribute__((hot)) long long _lower_str_method(LModule* m, LFunc* lf, long lon
 __attribute__((hot)) bool _is_const_int(HirExpr* e);
 __attribute__((hot)) long long _const_int_val(HirExpr* e);
 __attribute__((hot)) void _emit_add_const(LFunc* lf, TrStr name, long long delta);
+__attribute__((hot)) long long _list_call1(LModule* m, LFunc* lf, TrStr sym, long long handle, long long restype);
 __attribute__((hot)) long long _list_get(LModule* m, LFunc* lf, long long handle, long long idx);
 __attribute__((hot)) long long lower_expr(LModule* m, LFunc* lf, HirExpr* e);
 __attribute__((malloc,returns_nonnull,hot)) ByteBuf* ByteBuf_init();

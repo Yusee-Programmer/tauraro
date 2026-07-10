@@ -596,6 +596,16 @@ def _emit_add_const(lf: LFunc, name: str, delta: int):
     lf.emit(LInst.IBinOp(inc, "+", cur, d))
     lf.emit(LInst.IStoreVar(name, inc))
 
+# A 1-arg (list handle) runtime call: sym(handle) -> result of type `restype`.
+def _list_call1(m: LModule, lf: LFunc, sym: str, handle: int, restype: int) -> int:
+    m.add_extern(sym)
+    mut a = Vec[int].init(1)
+    a.push(handle)
+    mut d = lf.new_vreg()
+    lf.emit(LInst.ICall(d, sym, a))
+    lf.set_vreg_type(d, restype)
+    return d
+
 # xs[i] / xs.get(i) lowering: _tr_rt_list_get_i64(handle, i) returning an i64.
 def _list_get(m: LModule, lf: LFunc, handle: int, idx: int) -> int:
     m.add_extern("_tr_rt_list_get_i64")
@@ -889,6 +899,19 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                 mut sud = lf.new_vreg()
                 lf.emit(LInst.ICall(sud, "_tr_rt_list_sum_i64", sua))
                 return sud
+            if (fn == "any" or fn == "all") and args.len == 1:   # any/all(List[int]) -> bool
+                mut anv = lower_expr(m, lf, args.get(0))
+                if anv < 0: return -1
+                if lf.vreg_type(anv) != 2: return -1
+                mut ansym = "_tr_rt_list_any_i64"
+                if fn == "all": ansym = "_tr_rt_list_all_i64"
+                m.add_extern(ansym)
+                mut ana = Vec[int].init(1)
+                ana.push(anv)
+                mut and2 = lf.new_vreg()
+                lf.emit(LInst.ICall(and2, ansym, ana))
+                lf.set_vreg_type(and2, 4)
+                return and2
             if fn == "bool" and args.len == 1:     # bool(x) -> (x != 0)
                 mut bv0 = lower_expr(m, lf, args.get(0))
                 if bv0 < 0: return -1
@@ -994,6 +1017,36 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                 lf.emit(LInst.ICall(pod, "_tr_rt_list_pop_i64", poa))
                 lf.set_vreg_type(pod, want_elem)
                 return pod
+            if method == "is_empty" and margs.len == 0:
+                return _list_call1(m, lf, "_tr_rt_list_is_empty", ovm, 4)
+            if method == "first" and margs.len == 0:
+                return _list_call1(m, lf, "_tr_rt_list_first_i64", ovm, want_elem)
+            if method == "last" and margs.len == 0:
+                return _list_call1(m, lf, "_tr_rt_list_last_i64", ovm, want_elem)
+            if method == "reverse" and margs.len == 0:
+                m.add_extern("_tr_rt_list_reverse")
+                mut rva = Vec[int].init(1)
+                rva.push(ovm)
+                lf.emit(LInst.ICall(-1, "_tr_rt_list_reverse", rva))
+                return ovm                          # in-place; handle discarded at stmt level
+            if method == "clear" and margs.len == 0:
+                m.add_extern("_tr_rt_list_clear")
+                mut cla = Vec[int].init(1)
+                cla.push(ovm)
+                lf.emit(LInst.ICall(-1, "_tr_rt_list_clear", cla))
+                return ovm
+            if (method == "sort" or method == "sort_asc" or method == "sort_desc") and margs.len == 0:
+                if want_elem != 0: return -1        # only List[int] sorts natively
+                mut dirv = lf.new_vreg()
+                mut dir = 1
+                if method == "sort_desc": dir = 0 - 1
+                lf.emit(LInst.IConst(dirv, dir))
+                m.add_extern("_tr_rt_list_sort")
+                mut soa = Vec[int].init(2)
+                soa.push(ovm)
+                soa.push(dirv)
+                lf.emit(LInst.ICall(-1, "_tr_rt_list_sort", soa))
+                return ovm
             return -1
         case _:
             return -1

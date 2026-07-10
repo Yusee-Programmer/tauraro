@@ -33,6 +33,7 @@ long long _lower_str_method(LModule* m, LFunc* lf, long long _tr_v_recv, TrStr m
 bool _is_const_int(HirExpr* e);
 long long _const_int_val(HirExpr* e);
 void _emit_add_const(LFunc* lf, TrStr name, long long delta);
+long long _list_call1(LModule* m, LFunc* lf, TrStr sym, long long handle, long long restype);
 long long _list_get(LModule* m, LFunc* lf, long long handle, long long idx);
 long long lower_expr(LModule* m, LFunc* lf, HirExpr* e);
 
@@ -1409,6 +1410,23 @@ __attribute__((hot)) void _emit_add_const(LFunc* lf, TrStr name, long long delta
     LFunc_emit(lf, LInst_ctor_IStoreVar(name, inc));
 }
 
+__attribute__((hot)) long long _list_call1(LModule* m, LFunc* lf, TrStr sym, long long handle, long long restype) {
+    /* pass */
+    LModule_add_extern(m, sym);
+    /* pass */
+    List_i64* a = (void*)List_i64_new();
+    /* pass */
+    List_i64_append(a, handle);
+    /* pass */
+    long long d = LFunc_new_vreg(lf);
+    /* pass */
+    LFunc_emit(lf, LInst_ctor_ICall(d, sym, a));
+    /* pass */
+    LFunc_set_vreg_type(lf, d, restype);
+    /* pass */
+    return d;
+}
+
 __attribute__((hot)) long long _list_get(LModule* m, LFunc* lf, long long handle, long long idx) {
     /* pass */
     LModule_add_extern(m, _tr_str_lit("_tr_rt_list_get_i64"));
@@ -2166,6 +2184,48 @@ __auto_type args = _t2253.data.ECall.args;
             return sud;
         }
         /* pass */
+        if ((((strcmp(_tr_strz(fn), _tr_strz(_tr_str_lit("any"))) == 0) || (strcmp(_tr_strz(fn), _tr_strz(_tr_str_lit("all"))) == 0)) && (args->len == 1LL))) {
+            /* pass */
+            long long anv = lower_expr(m, lf, ((HirExpr*)List_ptr_get(args, 0LL)));
+            /* pass */
+            if ((anv < 0LL)) {
+                /* pass */
+                _tr_str_release(fn);
+                return (-1LL);
+            }
+            /* pass */
+            if ((LFunc_vreg_type(lf, anv) != 2LL)) {
+                /* pass */
+                _tr_str_release(fn);
+                return (-1LL);
+            }
+            /* pass */
+            TrStr ansym = _tr_str_lit("_tr_rt_list_any_i64");
+            /* pass */
+            if ((strcmp(_tr_strz(fn), _tr_strz(_tr_str_lit("all"))) == 0)) {
+                /* pass */
+                TrStr _strtmp_t2257 = _tr_str_lit("_tr_rt_list_all_i64");
+                _tr_str_release(ansym);
+                ansym = _strtmp_t2257;
+            }
+            /* pass */
+            LModule_add_extern(m, ansym);
+            /* pass */
+            List_i64* ana = (void*)List_i64_new();
+            /* pass */
+            List_i64_append(ana, anv);
+            /* pass */
+            long long and2 = LFunc_new_vreg(lf);
+            /* pass */
+            LFunc_emit(lf, LInst_ctor_ICall(and2, ansym, ana));
+            /* pass */
+            LFunc_set_vreg_type(lf, and2, 4LL);
+            /* pass */
+            _tr_str_release(fn);
+            _tr_str_release(ansym);
+            return and2;
+        }
+        /* pass */
         if (((strcmp(_tr_strz(fn), _tr_strz(_tr_str_lit("bool"))) == 0) && (args->len == 1LL))) {
             /* pass */
             long long bv0 = lower_expr(m, lf, ((HirExpr*)List_ptr_get(args, 0LL)));
@@ -2451,6 +2511,78 @@ __auto_type margs = _t2253.data.EMethodCall.args;
             LFunc_set_vreg_type(lf, pod, want_elem);
             /* pass */
             return pod;
+        }
+        /* pass */
+        if (((strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("is_empty"))) == 0) && (margs->len == 0LL))) {
+            /* pass */
+            return _list_call1(m, lf, _tr_str_lit("_tr_rt_list_is_empty"), ovm, 4LL);
+        }
+        /* pass */
+        if (((strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("first"))) == 0) && (margs->len == 0LL))) {
+            /* pass */
+            return _list_call1(m, lf, _tr_str_lit("_tr_rt_list_first_i64"), ovm, want_elem);
+        }
+        /* pass */
+        if (((strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("last"))) == 0) && (margs->len == 0LL))) {
+            /* pass */
+            return _list_call1(m, lf, _tr_str_lit("_tr_rt_list_last_i64"), ovm, want_elem);
+        }
+        /* pass */
+        if (((strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("reverse"))) == 0) && (margs->len == 0LL))) {
+            /* pass */
+            LModule_add_extern(m, _tr_str_lit("_tr_rt_list_reverse"));
+            /* pass */
+            List_i64* rva = (void*)List_i64_new();
+            /* pass */
+            List_i64_append(rva, ovm);
+            /* pass */
+            LFunc_emit(lf, LInst_ctor_ICall((-1LL), _tr_str_lit("_tr_rt_list_reverse"), rva));
+            /* pass */
+            return ovm;
+        }
+        /* pass */
+        if (((strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("clear"))) == 0) && (margs->len == 0LL))) {
+            /* pass */
+            LModule_add_extern(m, _tr_str_lit("_tr_rt_list_clear"));
+            /* pass */
+            List_i64* cla = (void*)List_i64_new();
+            /* pass */
+            List_i64_append(cla, ovm);
+            /* pass */
+            LFunc_emit(lf, LInst_ctor_ICall((-1LL), _tr_str_lit("_tr_rt_list_clear"), cla));
+            /* pass */
+            return ovm;
+        }
+        /* pass */
+        if (((((strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("sort"))) == 0) || (strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("sort_asc"))) == 0)) || (strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("sort_desc"))) == 0)) && (margs->len == 0LL))) {
+            /* pass */
+            if ((want_elem != 0LL)) {
+                /* pass */
+                return (-1LL);
+            }
+            /* pass */
+            long long dirv = LFunc_new_vreg(lf);
+            /* pass */
+            long long dir = 1LL;
+            /* pass */
+            if ((strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("sort_desc"))) == 0)) {
+                /* pass */
+                dir = (0LL - 1LL);
+            }
+            /* pass */
+            LFunc_emit(lf, LInst_ctor_IConst(dirv, dir));
+            /* pass */
+            LModule_add_extern(m, _tr_str_lit("_tr_rt_list_sort"));
+            /* pass */
+            List_i64* soa = (void*)List_i64_new();
+            /* pass */
+            List_i64_append(soa, ovm);
+            /* pass */
+            List_i64_append(soa, dirv);
+            /* pass */
+            LFunc_emit(lf, LInst_ctor_ICall((-1LL), _tr_str_lit("_tr_rt_list_sort"), soa));
+            /* pass */
+            return ovm;
         }
         /* pass */
         return (-1LL);
