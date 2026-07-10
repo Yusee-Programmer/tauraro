@@ -1,0 +1,63 @@
+# native≡c differential corpus: match statement (literal/or/wildcard/bind patterns).
+def classify(n: int) -> str:
+    match n:
+        case 0:
+            return "zero"
+        case 1:
+            return "one"
+        case 2:
+            return "two"
+        case _:
+            return "many"
+
+def parity(n: int) -> str:
+    match n % 2:
+        case 0:
+            return "even"
+        case _:
+            return "odd"
+
+def main():
+    mut i = 0
+    while i < 5:
+        print(classify(i))          # zero one two many many
+        i = i + 1
+
+    print(parity(10))               # even
+    print(parity(7))                # odd
+
+    # str subject (identifier/borrow)
+    mut cmd = "start"
+    match cmd:
+        case "start":
+            print("starting")       # starting
+        case "stop":
+            print("stopping")
+        case _:
+            print("unknown")
+
+    # or-pattern of int literals
+    mut d = 7
+    match d:
+        case 1:
+            print("mon")
+        case 6 | 7:
+            print("weekend")        # weekend
+        case _:
+            print("weekday")
+
+    # bool subject
+    mut flag = False
+    match flag:
+        case True:
+            print("yes")
+        case _:
+            print("no")             # no
+
+    # bind pattern captures the subject
+    mut v = 99
+    match v:
+        case 1:
+            print("small")
+        case got:
+            print(got)              # 99

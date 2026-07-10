@@ -2026,7 +2026,7 @@ pub class CGenerator:
                 case Pattern.PLitBool(v):
                     if v: cond = subj_t
                     else: cond = "!" + subj_t
-                case Pattern.PLitStr(v): cond = "_tr_str_eq(" + subj_t + ", \"" + _escape_str_for_c(v) + "\")"
+                case Pattern.PLitStr(v): cond = "_tr_str_eq(_tr_strz(" + subj_t + "), \"" + _escape_str_for_c(v) + "\")"
                 case Pattern.PVariant(tn, vn):
                     mut pv_vn = vn
                     if tn == "Option" and (vn == "" or vn == "none"): pv_vn = "None"
@@ -2080,7 +2080,7 @@ pub class CGenerator:
                                 if tn == "Option" and (vn == "" or vn == "none"): or_vn = "None"
                                 pc = subj_t + ".tag == " + tn + "_" + or_vn
                             case Pattern.PLitInt(vi): pc = subj_t + " == " + vi.to_str() + "LL"
-                            case Pattern.PLitStr(vs): pc = "_tr_str_eq(" + subj_t + ", \"" + _escape_str_for_c(vs) + "\")"
+                            case Pattern.PLitStr(vs): pc = "_tr_str_eq(_tr_strz(" + subj_t + "), \"" + _escape_str_for_c(vs) + "\")"
                             case Pattern.PLitBool(bv):
                                 if bv: pc = subj_t
                                 else: pc = "!" + subj_t
@@ -5059,7 +5059,7 @@ pub class CGenerator:
         return safe_method + "(" + obj_s + extra_args + ")"
 
     pub def gen_fstring(self, parts: Vec[HirFStringPart]) -> str:
-        if parts.len == 0: return "\"\""
+        if parts.len == 0: return "_tr_str_lit(\"\")"
         mut fmt = ""
         mut fargs = ""
         mut i = 0
@@ -7330,7 +7330,7 @@ pub class CGenerator:
                             gcond = subj
                         else:
                             gcond = "!" + subj
-                    case Pattern.PLitStr(v):   gcond = "_tr_str_eq(" + subj + ", \"" + _escape_str_for_c(v) + "\")"
+                    case Pattern.PLitStr(v):   gcond = "_tr_str_eq(_tr_strz(" + subj + "), \"" + _escape_str_for_c(v) + "\")"
                     case Pattern.PVariant(tn, vn):
                         mut gpv = vn
                         if tn == "Option" and (vn == "" or vn == "none"): gpv = "None"
@@ -7399,7 +7399,7 @@ pub class CGenerator:
                 case Pattern.PLitBool(v):
                     if v: cond = subj
                     else: cond = "!" + subj
-                case Pattern.PLitStr(v): cond = "_tr_str_eq(" + subj + ", \"" + _escape_str_for_c(v) + "\")"
+                case Pattern.PLitStr(v): cond = "_tr_str_eq(_tr_strz(" + subj + "), \"" + _escape_str_for_c(v) + "\")"
                 case Pattern.PVariant(tn, vn):
                     mut pv_vn = vn
                     if tn == "Option" and (vn == "" or vn == "none"): pv_vn = "None"
@@ -7456,7 +7456,7 @@ pub class CGenerator:
                                 if tn == "Option" and (vn == "" or vn == "none"): or_vn = "None"
                                 pc = subj + ".tag == " + tn + "_" + or_vn
                             case Pattern.PLitInt(vi): pc = subj + " == " + vi.to_str() + "LL"
-                            case Pattern.PLitStr(vs): pc = "_tr_str_eq(" + subj + ", \"" + _escape_str_for_c(vs) + "\")"
+                            case Pattern.PLitStr(vs): pc = "_tr_str_eq(_tr_strz(" + subj + "), \"" + _escape_str_for_c(vs) + "\")"
                             case Pattern.PLitBool(bv):
                                 if bv: pc = subj
                                 else: pc = "!" + subj

@@ -12,9 +12,9 @@
 # and method/index/.len/len() to the _tr_rt_{list,str}_* runtime. Anything else sets
 # LModule.ok = false so the native driver falls back to C.
 
-from hir import HirProgram, HirFunction, HirStmt, HirExpr, HirBlock, hir_expr_type
+from hir import HirProgram, HirFunction, HirStmt, HirExpr, HirBlock, HirMatchArm, hir_expr_type
 from taumir.ir import LModule, LFunc, LInst, LTerm
-from ast import AstType
+from ast import AstType, Pattern
 from core.alloc import alloc
 
 # Reinterpret an f64 literal as its raw i64 bit pattern (emitted as an immediate, then
@@ -333,6 +333,8 @@ def lower_stmt(m: LModule, lf: LFunc, s: Pointer[HirStmt]) -> bool:
             lf.set_term(LTerm.TBr(lf.loop_cont.get(lf.loop_cont.len - 1)))
             lf.set_cur(lf.new_block())
             return true
+        case HirStmt.SMatch(mexpr, marms):
+            return _lower_match(m, lf, mexpr, marms)
         case HirStmt.SFor(var, iter, body):
             return _lower_for(m, lf, var, iter, body)
         case HirStmt.SForUnpack(vars, iter, body):
@@ -343,6 +345,118 @@ def lower_stmt(m: LModule, lf: LFunc, s: Pointer[HirStmt]) -> bool:
             return se_ok
         case _:
             return false
+
+# A single literal pattern -> a bool vreg testing `subj == literal`. Returns -1 if the
+# pattern kind/type is unsupported natively (caller falls back to C).
+#   int/bool: integer ==;  str: _tr_rt_str_cmp(subj, <.rodata literal>) == 0 (no alloc).
+def _lit_pat_cond(m: LModule, lf: LFunc, pat: Pattern, subj: int, st: int) -> int:
+    match pat:
+        case Pattern.PLitInt(v):
+            if st != 0: return -1
+            mut cv = lf.new_vreg()
+            lf.emit(LInst.IConst(cv, v))
+            mut d = lf.new_vreg()
+            lf.emit(LInst.IBinOp(d, "==", subj, cv))
+            lf.set_vreg_type(d, 4)
+            return d
+        case Pattern.PLitBool(bv):
+            if st != 4: return -1
+            mut bc = 0
+            if bv: bc = 1
+            mut cvb = lf.new_vreg()
+            lf.emit(LInst.IConst(cvb, bc))
+            mut db = lf.new_vreg()
+            lf.emit(LInst.IBinOp(db, "==", subj, cvb))
+            lf.set_vreg_type(db, 4)
+            return db
+        case Pattern.PLitStr(sv):
+            if st != 1: return -1
+            mut idx = m.add_string(sv)
+            mut lit = lf.new_vreg()
+            lf.emit(LInst.IStr(lit, idx))       # raw .rodata char* — NOT wrapped, NOT fresh
+            lf.set_vreg_type(lit, 1)
+            m.add_extern("_tr_rt_str_cmp")
+            mut sa = Vec[int].init(2)
+            sa.push(subj)
+            sa.push(lit)
+            mut cmpv = lf.new_vreg()
+            lf.emit(LInst.ICall(cmpv, "_tr_rt_str_cmp", sa))
+            mut z = lf.new_vreg()
+            lf.emit(LInst.IConst(z, 0))
+            mut ds = lf.new_vreg()
+            lf.emit(LInst.IBinOp(ds, "==", cmpv, z))
+            lf.set_vreg_type(ds, 4)
+            return ds
+        case _:
+            return -1
+
+# `match subj: case P: ...` -> if/elif chain over pattern conditions.
+# Supported subjects: int/bool (any expr) and str (identifier/borrow only, so subj is
+# never a fresh temp needing lifetime management). Supported patterns: literal int/str/
+# bool, `_`/bind wildcard (default), and or-patterns of literals. Variant/tuple patterns
+# and guards fall back to C (return false -> whole module compiles via the C backend).
+def _lower_match(m: LModule, lf: LFunc, expr: Pointer[HirExpr], arms: Vec[HirMatchArm]) -> bool:
+    mut subj_ty = hir_expr_type(expr).name
+    mut subj_is_str = subj_ty == "str"
+    if subj_is_str:
+        # Only borrow subjects (identifiers) so subj is not a fresh owned temp.
+        match expr.read():
+            case HirExpr.EIdent(_, _, _): pass
+            case _: return false
+    mut subj = lower_expr(m, lf, expr)
+    if subj < 0: return false
+    mut st = lf.vreg_type(subj)
+    if st != 0 and st != 1 and st != 4: return false
+    _flush_fresh_strs(m, lf)                 # subj is a borrow (int/bool/str-ident): safe to flush
+    mut end_id = lf.new_block()
+    mut i = 0
+    while i < arms.len:
+        mut arm = arms.get(i)
+        if arm.guard as usize != 0 as usize: return false   # guards -> fall back
+        mut is_default = false
+        mut bind_name = ""
+        mut cond = -1
+        match arm.pat:
+            case Pattern.PWild:
+                is_default = true
+            case Pattern.PBind(nm):
+                is_default = true
+                bind_name = nm
+            case Pattern.POr(pats):
+                # OR of literal sub-patterns: cond = c0 or c1 or ...
+                mut oi = 0
+                while oi < pats.len:
+                    mut sc = _lit_pat_cond(m, lf, pats.get(oi), subj, st)
+                    if sc < 0: return false
+                    if cond < 0:
+                        cond = sc
+                    else:
+                        mut merged = lf.new_vreg()
+                        lf.emit(LInst.IBinOp(merged, "+", cond, sc))   # both 0/1 -> sum
+                        cond = _norm_bool(lf, merged)                  # (c0+c1+..) != 0
+                    oi = oi + 1
+                if cond < 0: return false
+            case _:
+                cond = _lit_pat_cond(m, lf, arm.pat, subj, st)
+                if cond < 0: return false                 # variant/tuple -> fall back
+        mut body_id = lf.new_block()
+        mut next_id = lf.new_block()
+        if is_default:
+            lf.set_term(LTerm.TBr(body_id))
+        else:
+            lf.set_term(LTerm.TCondBr(cond, body_id, next_id))
+        lf.set_cur(body_id)
+        if bind_name != "":                                # `case name:` binds subj -> name
+            lf.add_var(bind_name)
+            lf.set_var_type(bind_name, st)
+            lf.emit(LInst.IStoreVar(bind_name, subj))
+        if not lower_block(m, lf, arm.body): return false
+        lf.set_term(LTerm.TBr(end_id))
+        lf.set_cur(next_id)
+        i = i + 1
+    lf.set_term(LTerm.TBr(end_id))       # no arm matched (no default) -> fall through
+    lf.set_cur(end_id)
+    return true
 
 # for-loops lower to counting/index while-loops (no native iterator protocol).
 #   for i in range(a, b):  -> i=a; while i<b: <body>; i=i+1
@@ -746,6 +860,45 @@ def _str_call0(m: LModule, lf: LFunc, sym: str, recv: int, restype: int) -> int:
     lf.emit(LInst.ICall(d, sym, a))
     lf.set_vreg_type(d, restype)
     if restype == 1: _fresh_mark(lf, d)   # ARC: str result owns a fresh ref
+    return d
+
+# Materialize a string literal as a fresh rc=1 heap string (same path as ELitStr).
+def _heap_lit(m: LModule, lf: LFunc, s: str) -> int:
+    mut idx = m.add_string(s)
+    mut ds = lf.new_vreg()
+    lf.emit(LInst.IStr(ds, idx))
+    lf.set_vreg_type(ds, 1)
+    m.add_extern("_tr_rt_str_new")
+    mut a = Vec[int].init(1)
+    a.push(ds)
+    mut h = lf.new_vreg()
+    lf.emit(LInst.ICall(h, "_tr_rt_str_new", a))
+    lf.set_vreg_type(h, 1)
+    _fresh_mark(lf, h)
+    return h
+
+# Convert any supported scalar vreg to a string vreg (borrow returned as-is for str;
+# int/bool/float produce a fresh string). Returns -1 for unsupported types (-> fallback).
+def _reg_to_str(m: LModule, lf: LFunc, reg: int) -> int:
+    mut t = lf.vreg_type(reg)
+    if t == 1: return reg                       # already a string (borrow or fresh)
+    if t == 5:                                  # f64 -> "%g" (arg in xmm0)
+        m.add_extern("_tr_rt_f64_to_str")
+        mut fd = lf.new_vreg()
+        lf.emit(LInst.IFCall1(fd, "_tr_rt_f64_to_str", reg))
+        lf.set_vreg_type(fd, 1)
+        _fresh_mark(lf, fd)
+        return fd
+    mut sym = "_tr_rt_i64_to_str"
+    if t == 4: sym = "_tr_rt_bool_to_str"
+    elif t != 0: return -1                       # list/dict/etc -> fallback to C
+    m.add_extern(sym)
+    mut a = Vec[int].init(1)
+    a.push(reg)
+    mut d = lf.new_vreg()
+    lf.emit(LInst.ICall(d, sym, a))
+    lf.set_vreg_type(d, 1)
+    _fresh_mark(lf, d)
     return d
 
 # A str method taking one str argument: sym(recv, arg) -> result of type `restype`.
@@ -1613,6 +1766,33 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                 lf.emit(LInst.ICall(-1, dset, dsa))
                 di = di + 1
             return dhv
+        case HirExpr.EFString(parts, _):
+            # f"a{x}b" -> concat of parts. Seed with an empty fresh string so the
+            # result is ALWAYS a fresh owned string (never a bare borrow alias).
+            mut acc = _heap_lit(m, lf, "")
+            mut fi = 0
+            while fi < parts.len:
+                mut fp = parts.get(fi)
+                mut pr = -1
+                if fp.is_expr:
+                    if fp.fmt_spec != "": return -1     # format specs -> fall back to C
+                    mut fev = lower_expr(m, lf, fp.expr)
+                    if fev < 0: return -1
+                    pr = _reg_to_str(m, lf, fev)
+                    if pr < 0: return -1
+                else:
+                    pr = _heap_lit(m, lf, fp.text)
+                m.add_extern("_tr_rt_str_concat")
+                mut fca = Vec[int].init(2)
+                fca.push(acc)
+                fca.push(pr)
+                mut fdc = lf.new_vreg()
+                lf.emit(LInst.ICall(fdc, "_tr_rt_str_concat", fca))
+                lf.set_vreg_type(fdc, 1)
+                _fresh_mark(lf, fdc)
+                acc = fdc
+                fi = fi + 1
+            return acc
         case HirExpr.EIndex(obj, idx, _):
             mut ov = lower_expr(m, lf, obj)
             if ov < 0: return -1

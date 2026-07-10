@@ -1,0 +1,20 @@
+# native≡c differential corpus: f-strings (interpolation of int/str/bool/float).
+def main():
+    mut name = "Ada"
+    mut age = 36
+    print(f"hello {name}")                 # hello Ada
+    print(f"{name} is {age}")              # Ada is 36
+    print(f"age={age} name={name}!")       # age=36 name=Ada!
+    mut ok = True
+    print(f"ok? {ok}")                     # ok? true
+    mut pi = 3.14
+    print(f"pi is about {pi}")             # pi is about 3.14
+    mut a = 7
+    mut b = 6
+    print(f"{a} * {b} = {a * b}")          # 7 * 6 = 42
+    print(f"no interpolation here")        # no interpolation here
+    print(f"")                             # (empty line)
+    mut i = 0
+    while i < 3:
+        print(f"line {i}")                 # line 0 / line 1 / line 2
+        i = i + 1
