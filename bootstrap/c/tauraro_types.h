@@ -2841,6 +2841,7 @@ typedef struct LModule {
     List_ptr* funcs;
     List_TrStr* externs;
     List_TrStr* fn_names;
+    List_i64* fn_ret;
     List_TrStr* strings;
     bool ok;
 } LModule;
@@ -2849,6 +2850,7 @@ static void _trdrop_LModule(void* vp) {
     List_ptr_free_obj(self->funcs, _trdrop_LFunc);
     List_TrStr_free(self->externs);
     List_TrStr_free(self->fn_names);
+    List_i64_free(self->fn_ret);
     List_TrStr_free(self->strings);
 }
 #endif
@@ -3509,6 +3511,7 @@ __attribute__((hot)) long long LFunc_var_index(LFunc* self, TrStr name);
 __attribute__((hot)) void LFunc_set_var_type(LFunc* self, TrStr name, long long t);
 __attribute__((hot)) long long LFunc_var_type(LFunc* self, TrStr name);
 __attribute__((malloc,returns_nonnull,hot)) LModule* LModule_init();
+__attribute__((hot)) long long LModule_fn_ret_tag(LModule* self, TrStr name);
 __attribute__((hot)) long long LModule_add_string(LModule* self, TrStr s);
 __attribute__((hot)) void LModule_add_extern(LModule* self, TrStr name);
 __attribute__((hot)) bool LModule_is_user_fn(LModule* self, TrStr name);
@@ -3517,6 +3520,8 @@ __attribute__((hot)) bool _is_list_tag(long long t);
 __attribute__((hot)) long long _list_elem_tag(long long t);
 __attribute__((hot)) long long _list_tag_for_elem(long long et);
 __attribute__((hot)) bool _is_cmp_op(TrStr op);
+__attribute__((hot)) bool _is_int_typename(TrStr n);
+__attribute__((hot)) long long _ast_type_tag(AstType* ty);
 __attribute__((hot)) LModule* lower_to_lir(HirProgram* prog);
 __attribute__((hot)) void _lir_lower_function(LModule* m, HirFunction* f);
 __attribute__((hot)) bool lower_block(LModule* m, LFunc* lf, HirBlock* hb);
@@ -3546,6 +3551,7 @@ __attribute__((hot)) void ByteBuf_align_to(ByteBuf* self, long long align);
 __attribute__((hot)) bool ByteBuf_write_file(ByteBuf* self, TrStr path);
 __attribute__((malloc,returns_nonnull,hot)) EncodedFunc* EncodedFunc_init(TrStr name);
 __attribute__((hot)) long long _argreg_modrm(long long idx);
+__attribute__((hot)) long long _argreg_rex(long long idx);
 __attribute__((hot)) long long _round16(long long n);
 __attribute__((hot)) long long _vreg_disp(long long id);
 __attribute__((hot)) long long _var_disp(LFunc* lf, TrStr name);

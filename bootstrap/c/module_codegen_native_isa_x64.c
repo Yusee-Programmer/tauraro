@@ -1,6 +1,7 @@
 #include "tauraro_types.h"
 
 long long _argreg_modrm(long long idx);
+long long _argreg_rex(long long idx);
 long long _round16(long long n);
 long long _vreg_disp(long long id);
 long long _var_disp(LFunc* lf, TrStr name);
@@ -54,7 +55,22 @@ __attribute__((hot)) long long _argreg_modrm(long long idx) {
         return 141LL;
     }
     /* pass */
-    return 189LL;
+    if ((idx == 4LL)) {
+        /* pass */
+        return 133LL;
+    }
+    /* pass */
+    return 141LL;
+}
+
+__attribute__((hot)) long long _argreg_rex(long long idx) {
+    /* pass */
+    if ((idx >= 4LL)) {
+        /* pass */
+        return 76LL;
+    }
+    /* pass */
+    return 72LL;
 }
 
 __attribute__((hot)) long long _round16(long long n) {
@@ -121,7 +137,7 @@ __attribute__((hot)) void _ld_rcx(ByteBuf* c, long long disp) {
 
 __attribute__((hot)) void _ld_argreg(ByteBuf* c, long long idx, long long disp) {
     /* pass */
-    ByteBuf_u8(c, 72LL);
+    ByteBuf_u8(c, _argreg_rex(idx));
     /* pass */
     ByteBuf_u8(c, 139LL);
     /* pass */
@@ -132,7 +148,7 @@ __attribute__((hot)) void _ld_argreg(ByteBuf* c, long long idx, long long disp) 
 
 __attribute__((hot)) void _st_argreg(ByteBuf* c, long long idx, long long disp) {
     /* pass */
-    ByteBuf_u8(c, 72LL);
+    ByteBuf_u8(c, _argreg_rex(idx));
     /* pass */
     ByteBuf_u8(c, 137LL);
     /* pass */

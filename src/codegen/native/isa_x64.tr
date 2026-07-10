@@ -39,11 +39,20 @@ extend EncodedFunc:
         return e
 
 def _argreg_modrm(idx: int) -> int:
-    if idx == 0: return 189    # rdi -> 0xBD
-    if idx == 1: return 181    # rsi -> 0xB5
-    if idx == 2: return 149    # rdx -> 0x95
-    if idx == 3: return 141    # rcx -> 0x8D
-    return 189
+    # ModRM for `mov <argreg>, [rbp+disp32]` (mod=10, rm=101). System V arg order:
+    # rdi, rsi, rdx, rcx, r8, r9. r8/r9 share low reg-field bits with rax/rcx and are
+    # distinguished by REX.R (see _argreg_rex).
+    if idx == 0: return 189    # rdi -> reg 111 -> 0xBD
+    if idx == 1: return 181    # rsi -> reg 110 -> 0xB5
+    if idx == 2: return 149    # rdx -> reg 010 -> 0x95
+    if idx == 3: return 141    # rcx -> reg 001 -> 0x8D
+    if idx == 4: return 133    # r8  -> reg 000 (+REX.R) -> 0x85
+    return 141                 # r9  -> reg 001 (+REX.R) -> 0x8D
+
+# REX prefix for an arg-register move: REX.W always; REX.R too for r8/r9 (idx >= 4).
+def _argreg_rex(idx: int) -> int:
+    if idx >= 4: return 76     # 0x4C = REX.W | REX.R
+    return 72                  # 0x48 = REX.W
 
 def _round16(n: int) -> int:
     mut r = n
@@ -77,13 +86,13 @@ def _ld_rcx(c: ByteBuf, disp: int):        # mov rcx, [rbp+disp32]
     c.u32(disp)
 
 def _ld_argreg(c: ByteBuf, idx: int, disp: int):   # mov <argreg>, [rbp+disp32]
-    c.u8(72)
+    c.u8(_argreg_rex(idx))
     c.u8(139)
     c.u8(_argreg_modrm(idx))
     c.u32(disp)
 
 def _st_argreg(c: ByteBuf, idx: int, disp: int):   # mov [rbp+disp32], <argreg>
-    c.u8(72)
+    c.u8(_argreg_rex(idx))
     c.u8(137)
     c.u8(_argreg_modrm(idx))
     c.u32(disp)

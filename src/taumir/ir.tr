@@ -157,6 +157,7 @@ pub class LModule:
     pub funcs:    Vec[LFunc]
     pub externs:  Vec[str]
     pub fn_names: Vec[str]      # user function names (defined in this module; call targets)
+    pub fn_ret:   Vec[int]      # parallel to fn_names: return value-type tag (0/1/2/3/4)
     pub strings:  Vec[str]      # string literals -> .rodata (each NUL-terminated)
     pub ok:       bool
 
@@ -166,9 +167,18 @@ extend LModule:
         m.funcs    = Vec[LFunc].init(4)
         m.externs  = Vec[str].init(4)
         m.fn_names = Vec[str].init(8)
+        m.fn_ret   = Vec[int].init(8)
         m.strings  = Vec[str].init(4)
         m.ok       = true
         return m
+
+    # Return value-type tag of a user function (parallel to fn_names); 0 if unknown.
+    pub def fn_ret_tag(self, name: str) -> int:
+        mut i = 0
+        while i < self.fn_names.len:
+            if self.fn_names.get(i) == name: return self.fn_ret.get(i)
+            i = i + 1
+        return 0
 
     # Intern a string literal, returning its index in the .rodata table.
     pub def add_string(self, s: str) -> int:

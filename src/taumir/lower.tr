@@ -12,6 +12,7 @@
 
 from hir import HirProgram, HirFunction, HirStmt, HirExpr, HirBlock
 from taumir.ir import LModule, LFunc, LInst, LTerm
+from ast import AstType
 
 def _print_i64_sym() -> str:
     return "_tr_rt_print_i64"
@@ -31,6 +32,28 @@ def _list_tag_for_elem(et: int) -> int: # list handle tag that holds element typ
 def _is_cmp_op(op: str) -> bool:
     return op == "<" or op == ">" or op == "==" or op == "!=" or op == "<=" or op == ">="
 
+def _is_int_typename(n: str) -> bool:
+    if n == "int" or n == "i64" or n == "i32" or n == "i16" or n == "i8": return true
+    if n == "usize" or n == "isize" or n == "u64" or n == "u32" or n == "u16" or n == "u8": return true
+    return false
+
+# Map a declared AstType to a native value-type tag, or -1 if the native backend can't
+# represent it (float, class, Dict, etc.) — callers treat -1 as "fall back to C".
+def _ast_type_tag(ty: AstType) -> int:
+    mut n = ty.name
+    if n == "str" or n == "String": return 1
+    if n == "bool": return 4
+    if n == "List" or n == "Vec":
+        if ty.args.len > 0:
+            mut et = ty.args.get(0).read()
+            if et.name == "str" or et.name == "String": return 3
+            if _is_int_typename(et.name): return 2
+            return -1
+        return 2
+    if _is_int_typename(n): return 0
+    if n == "void" or n == "": return 0
+    return -1
+
 pub def lower_to_lir(prog: HirProgram) -> LModule:
     mut m = LModule.init()
     mut i = 0
@@ -38,6 +61,7 @@ pub def lower_to_lir(prog: HirProgram) -> LModule:
         mut f0 = prog.functions.get(i)
         if f0.class_name == "" and not f0.is_extern:
             m.fn_names.push(f0.name)
+            m.fn_ret.push(_ast_type_tag(f0.ret_ty))
         i = i + 1
     i = 0
     while i < prog.functions.len:
@@ -53,10 +77,15 @@ def _lir_lower_function(m: LModule, f: HirFunction):
     if f.name == "main": lf.is_main = true
     mut pi = 0
     while pi < f.params.len:
-        mut pn = f.params.get(pi).name
-        if pn != "self":
-            lf.params.push(pn)
-            lf.add_var(pn)
+        mut p = f.params.get(pi)
+        if p.name != "self":
+            mut ptag = _ast_type_tag(p.ty)
+            if ptag < 0:                       # unsupported param type -> fall back to C
+                m.ok = false
+                return
+            lf.params.push(p.name)
+            lf.add_var(p.name)
+            lf.set_var_type(p.name, ptag)
         pi = pi + 1
     lf.set_cur(lf.new_block())
     if not lower_block(m, lf, f.body):
@@ -477,7 +506,9 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                     return sld
                 return -1
             if not m.is_user_fn(fn): return -1
-            if args.len > 4: return -1
+            if args.len > 6: return -1                 # System V: rdi,rsi,rdx,rcx,r8,r9
+            mut rtag = m.fn_ret_tag(fn)
+            if rtag < 0: return -1                      # unsupported return type -> fall back
             mut argvregs = Vec[int].init(args.len)
             mut ai = 0
             while ai < args.len:
@@ -487,6 +518,7 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                 ai = ai + 1
             mut d4 = lf.new_vreg()
             lf.emit(LInst.ICall(d4, fn, argvregs))
+            lf.set_vreg_type(d4, rtag)                  # result carries the fn's return type
             return d4
         case HirExpr.EList(items, _):
             # List literal -> _tr_rt_list_new + a push per element. Element type is inferred

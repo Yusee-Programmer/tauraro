@@ -5,6 +5,8 @@ bool _is_list_tag(long long t);
 long long _list_elem_tag(long long t);
 long long _list_tag_for_elem(long long et);
 bool _is_cmp_op(TrStr op);
+bool _is_int_typename(TrStr n);
+long long _ast_type_tag(AstType* ty);
 void _lir_lower_function(LModule* m, HirFunction* f);
 bool lower_block(LModule* m, LFunc* lf, HirBlock* hb);
 bool lower_stmt(LModule* m, LFunc* lf, HirStmt* s);
@@ -56,6 +58,70 @@ __attribute__((hot)) bool _is_cmp_op(TrStr op) {
     return ((((((strcmp(_tr_strz(op), _tr_strz(_tr_str_lit("<"))) == 0) || (strcmp(_tr_strz(op), _tr_strz(_tr_str_lit(">"))) == 0)) || (strcmp(_tr_strz(op), _tr_strz(_tr_str_lit("=="))) == 0)) || (strcmp(_tr_strz(op), _tr_strz(_tr_str_lit("!="))) == 0)) || (strcmp(_tr_strz(op), _tr_strz(_tr_str_lit("<="))) == 0)) || (strcmp(_tr_strz(op), _tr_strz(_tr_str_lit(">="))) == 0));
 }
 
+__attribute__((hot)) bool _is_int_typename(TrStr n) {
+    /* pass */
+    if ((((((strcmp(_tr_strz(n), _tr_strz(_tr_str_lit("int"))) == 0) || (strcmp(_tr_strz(n), _tr_strz(_tr_str_lit("i64"))) == 0)) || (strcmp(_tr_strz(n), _tr_strz(_tr_str_lit("i32"))) == 0)) || (strcmp(_tr_strz(n), _tr_strz(_tr_str_lit("i16"))) == 0)) || (strcmp(_tr_strz(n), _tr_strz(_tr_str_lit("i8"))) == 0))) {
+        /* pass */
+        return true;
+    }
+    /* pass */
+    if (((((((strcmp(_tr_strz(n), _tr_strz(_tr_str_lit("usize"))) == 0) || (strcmp(_tr_strz(n), _tr_strz(_tr_str_lit("isize"))) == 0)) || (strcmp(_tr_strz(n), _tr_strz(_tr_str_lit("u64"))) == 0)) || (strcmp(_tr_strz(n), _tr_strz(_tr_str_lit("u32"))) == 0)) || (strcmp(_tr_strz(n), _tr_strz(_tr_str_lit("u16"))) == 0)) || (strcmp(_tr_strz(n), _tr_strz(_tr_str_lit("u8"))) == 0))) {
+        /* pass */
+        return true;
+    }
+    /* pass */
+    return false;
+}
+
+__attribute__((hot)) long long _ast_type_tag(AstType* ty) {
+    /* pass */
+    TrStr n = ty->name;
+    /* pass */
+    if (((strcmp(_tr_strz(n), _tr_strz(_tr_str_lit("str"))) == 0) || (strcmp(_tr_strz(n), _tr_strz(_tr_str_lit("String"))) == 0))) {
+        /* pass */
+        return 1LL;
+    }
+    /* pass */
+    if ((strcmp(_tr_strz(n), _tr_strz(_tr_str_lit("bool"))) == 0)) {
+        /* pass */
+        return 4LL;
+    }
+    /* pass */
+    if (((strcmp(_tr_strz(n), _tr_strz(_tr_str_lit("List"))) == 0) || (strcmp(_tr_strz(n), _tr_strz(_tr_str_lit("Vec"))) == 0))) {
+        /* pass */
+        if ((ty->args->len > 0LL)) {
+            /* pass */
+            AstType* et = (*((AstType**)List_ptr_get(ty->args, 0LL)));
+            /* pass */
+            if (((strcmp(_tr_strz(et->name), _tr_strz(_tr_str_lit("str"))) == 0) || (strcmp(_tr_strz(et->name), _tr_strz(_tr_str_lit("String"))) == 0))) {
+                /* pass */
+                return 3LL;
+            }
+            /* pass */
+            if (_is_int_typename(et->name)) {
+                /* pass */
+                return 2LL;
+            }
+            /* pass */
+            return (-1LL);
+        }
+        /* pass */
+        return 2LL;
+    }
+    /* pass */
+    if (_is_int_typename(n)) {
+        /* pass */
+        return 0LL;
+    }
+    /* pass */
+    if (((strcmp(_tr_strz(n), _tr_strz(_tr_str_lit("void"))) == 0) || (strcmp(_tr_strz(n), _tr_strz(_tr_str_lit(""))) == 0))) {
+        /* pass */
+        return 0LL;
+    }
+    /* pass */
+    return (-1LL);
+}
+
 __attribute__((hot)) LModule* lower_to_lir(HirProgram* prog) {
     /* pass */
     LModule* m = LModule_init();
@@ -69,6 +135,8 @@ __attribute__((hot)) LModule* lower_to_lir(HirProgram* prog) {
         if (((strcmp(_tr_strz(f0->class_name), _tr_strz(_tr_str_lit(""))) == 0) && (!f0->is_extern))) {
             /* pass */
             List_TrStr_append(m->fn_names, f0->name);
+            /* pass */
+            List_i64_append(m->fn_ret, _ast_type_tag(f0->ret_ty));
         }
         /* pass */
         i = (i + 1LL);
@@ -109,13 +177,25 @@ __attribute__((hot)) void _lir_lower_function(LModule* m, HirFunction* f) {
     /* pass */
     while ((pi < f->params->len)) {
         /* pass */
-        TrStr pn = ((HirParam*)List_ptr_get(f->params, pi))->name;
+        HirParam* p = ((HirParam*)List_ptr_get(f->params, pi));
         /* pass */
-        if ((strcmp(_tr_strz(pn), _tr_strz(_tr_str_lit("self"))) != 0)) {
+        if ((strcmp(_tr_strz(p->name), _tr_strz(_tr_str_lit("self"))) != 0)) {
             /* pass */
-            List_TrStr_append(lf->params, pn);
+            long long ptag = _ast_type_tag(p->ty);
             /* pass */
-            LFunc_add_var(lf, pn);
+            if ((ptag < 0LL)) {
+                /* pass */
+                m->ok = false;
+                /* pass */
+                _tr_obj_release(lf, _trdrop_LFunc);
+                return;
+            }
+            /* pass */
+            List_TrStr_append(lf->params, p->name);
+            /* pass */
+            LFunc_add_var(lf, p->name);
+            /* pass */
+            LFunc_set_var_type(lf, p->name, ptag);
         }
         /* pass */
         pi = (pi + 1LL);
@@ -1127,7 +1207,15 @@ __auto_type args = _t2246.data.ECall.args;
             return (-1LL);
         }
         /* pass */
-        if ((args->len > 4LL)) {
+        if ((args->len > 6LL)) {
+            /* pass */
+            _tr_str_release(fn);
+            return (-1LL);
+        }
+        /* pass */
+        long long rtag = LModule_fn_ret_tag(m, fn);
+        /* pass */
+        if ((rtag < 0LL)) {
             /* pass */
             _tr_str_release(fn);
             return (-1LL);
@@ -1156,6 +1244,8 @@ __auto_type args = _t2246.data.ECall.args;
         long long d4 = LFunc_new_vreg(lf);
         /* pass */
         LFunc_emit(lf, LInst_ctor_ICall(d4, fn, argvregs));
+        /* pass */
+        LFunc_set_vreg_type(lf, d4, rtag);
         /* pass */
         _tr_str_release(fn);
         return d4;

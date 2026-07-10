@@ -194,11 +194,30 @@ __attribute__((malloc,returns_nonnull,hot)) LModule* LModule_init() {
     /* pass */
     m->fn_names = (void*)List_TrStr_new();
     /* pass */
+    m->fn_ret = (void*)List_i64_new();
+    /* pass */
     m->strings = (void*)List_TrStr_new();
     /* pass */
     m->ok = true;
     /* pass */
     return m;
+}
+
+__attribute__((hot)) long long LModule_fn_ret_tag(LModule* self, TrStr name) {
+    /* pass */
+    long long i = 0LL;
+    /* pass */
+    while ((i < self->fn_names->len)) {
+        /* pass */
+        if ((strcmp(_tr_strz(List_TrStr_get(self->fn_names, i)), _tr_strz(name)) == 0)) {
+            /* pass */
+            return List_i64_get(self->fn_ret, i);
+        }
+        /* pass */
+        i = (i + 1LL);
+    }
+    /* pass */
+    return 0LL;
 }
 
 __attribute__((hot)) long long LModule_add_string(LModule* self, TrStr s) {
