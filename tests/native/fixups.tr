@@ -1,0 +1,24 @@
+# native≡c differential corpus: C-backend bugs fixed + native — str pad/contains_char,
+# list count.
+def main():
+    print("hi".pad_left(5))          # "   hi"
+    print("hi".pad_right(5))         # "hi   "
+    print("x".pad_left(3) + "|")     # "  x|"
+    print("toolong".pad_left(3))     # toolong
+    print("hello".contains_char(108)) # true  ('l')
+    print("hello".contains_char(122)) # false ('z')
+
+    mut xs = [1, 2, 2, 3, 2, 1]
+    print(xs.count(2))               # 3
+    print(xs.count(1))               # 2
+    print(xs.count(9))               # 0
+
+    mut names = ["a", "b", "a", "c", "a"]
+    print(names.count("a"))          # 3
+    print(names.count("z"))          # 0
+
+    # combine: pad each and count
+    mut total = 0
+    mut vals = [5, 5, 5]
+    total = vals.count(5)
+    print(total)                     # 3

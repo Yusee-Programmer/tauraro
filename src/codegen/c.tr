@@ -3941,7 +3941,7 @@ pub class CGenerator:
             if method == "starts_with":   return "_tr_str_starts_with(" + os + ", " + sa0 + ")"
             if method == "ends_with":     return "_tr_str_ends_with(" + os + ", " + sa0 + ")"
             if method == "contains":      return "_tr_str_contains(" + os + ", " + sa0 + ")"
-            if method == "contains_char": return "_tr_str_contains_char(" + os + ", " + sa0 + ")"
+            if method == "contains_char": return "_tr_str_contains_char(" + os + ", (long long)(" + str_arg0 + "))"
             if method == "eq":            return "_tr_str_eq(" + os + ", " + sa0 + ")"
             if method == "is_digit":      return "_tr_str_is_digit(" + os + ")"
             if method == "is_alpha":      return "_tr_str_is_alpha(" + os + ")"
@@ -4346,6 +4346,10 @@ pub class CGenerator:
             if method == "strip" or method == "trim": return self.wrapstr("_tr_str_strip(" + os + ")")
             if method == "trim_left": return self.wrapstr("_tr_str_trim_left(" + os + ")")
             if method == "trim_right": return self.wrapstr("_tr_str_trim_right(" + os + ")")
+            if method == "pad_left" and args.len > 0:
+                return self.wrapstr("_tr_str_pad_left(" + os + ", (long long)(" + self.gen_expr(args.get(0)) + "))")
+            if method == "pad_right" and args.len > 0:
+                return self.wrapstr("_tr_str_pad_right(" + os + ", (long long)(" + self.gen_expr(args.get(0)) + "))")
             if method == "replace" and args.len == 2:
                 return self.wrapstr("_tr_str_replace(" + os + ", " + self.strz(self.gen_expr(args.get(0))) + ", " + self.strz(self.gen_expr(args.get(1))) + ")")
             if method == "split" and args.len > 0:
@@ -4714,6 +4718,10 @@ pub class CGenerator:
                 mut idx_args = self.gen_args_strify(args, elem_sfx)
                 if lsfx == "TrStr": idx_args = self.gen_args(args)
                 return "List_" + lsfx + "_index_of(" + obj_s + ", " + idx_args + ")"
+            if method == "count" and args.len > 0:
+                if lsfx == "TrStr":
+                    return "({ long long _cnt=0; List_TrStr* _cl=" + obj_s + "; for(long long _ci=0;_ci<_cl->len;_ci++) if(strcmp(_tr_strz(_cl->data[_ci]), " + self.strz(self.gen_expr(args.get(0))) + ")==0) _cnt++; _cnt; })"
+                return "({ long long _cnt=0; __auto_type _cl=" + obj_s + "; long long _cv=(long long)(" + self.gen_expr(args.get(0)) + "); for(long long _ci=0;_ci<_cl->len;_ci++) if((long long)_cl->data[_ci]==_cv) _cnt++; _cnt; })"
             # sort() / sort_by(cmp_fn) - in-place sort
             if method == "sort" or method == "sort_asc":
                 return "_tr_list_sort_" + lsfx + "(" + obj_s + ", 1)"

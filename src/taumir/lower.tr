@@ -672,6 +672,18 @@ def _lower_str_method(m: LModule, lf: LFunc, recv: int, method: str, margs: Vec[
         return _str_call0(m, lf, "_tr_rt_str_trim_left", recv, 1)
     if (method == "trim_right" or method == "rstrip") and margs.len == 0:
         return _str_call0(m, lf, "_tr_rt_str_trim_right", recv, 1)
+    if method == "pad_left" and margs.len == 1:
+        mut pla = lower_expr(m, lf, margs.get(0))
+        if pla < 0 or lf.vreg_type(pla) != 0: return -1
+        return _str_call1(m, lf, "_tr_rt_str_pad_left", recv, pla, 1)
+    if method == "pad_right" and margs.len == 1:
+        mut pra = lower_expr(m, lf, margs.get(0))
+        if pra < 0 or lf.vreg_type(pra) != 0: return -1
+        return _str_call1(m, lf, "_tr_rt_str_pad_right", recv, pra, 1)
+    if method == "contains_char" and margs.len == 1:
+        mut cca = lower_expr(m, lf, margs.get(0))
+        if cca < 0 or lf.vreg_type(cca) != 0: return -1
+        return _str_call1(m, lf, "_tr_rt_str_contains_char", recv, cca, 4)
     if method == "reverse" and margs.len == 0:
         return _str_call0(m, lf, "_tr_rt_str_reverse", recv, 1)
     if method == "is_empty" and margs.len == 0:
@@ -1412,6 +1424,18 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                 lf.emit(LInst.ICall(cxd, cxsym, cxargs))
                 lf.set_vreg_type(cxd, 4)
                 return cxd
+            if method == "count" and margs.len == 1:
+                mut cta = lower_expr(m, lf, margs.get(0))
+                if cta < 0 or lf.vreg_type(cta) != want_elem: return -1
+                mut ctsym = "_tr_rt_list_count_i64"
+                if want_elem == 1: ctsym = "_tr_rt_list_count_str"
+                m.add_extern(ctsym)
+                mut ctargs = Vec[int].init(2)
+                ctargs.push(ovm)
+                ctargs.push(cta)
+                mut ctd = lf.new_vreg()
+                lf.emit(LInst.ICall(ctd, ctsym, ctargs))
+                return ctd
             if (method == "min" or method == "min_val" or method == "max" or method == "max_val") and margs.len == 0:
                 if want_elem != 0: return -1        # int lists only
                 mut mmsym = "_tr_rt_list_min_i64"

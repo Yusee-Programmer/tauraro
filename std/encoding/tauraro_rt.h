@@ -882,7 +882,7 @@ static inline int _tr_tcp_connect(const char* host, int port) {
     struct addrinfo hints = {0}, *res = NULL;
     hints.ai_family   = AF_INET;
     hints.ai_socktype = SOCK_STREAM;
-    char port_buf[16]; sprintf(port_buf, "%d", port);
+    char port_buf[16]; snprintf(port_buf, sizeof(port_buf), "%d", port);
     if (getaddrinfo(host, port_buf, &hints, &res) != 0) return -1;
     SOCKET fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
     if (fd == INVALID_SOCKET) { freeaddrinfo(res); return -1; }
@@ -909,7 +909,7 @@ static inline int _tr_tcp_connect(const char* host, int port) {
     struct addrinfo hints = {0}, *res = NULL;
     hints.ai_family   = AF_INET;
     hints.ai_socktype = SOCK_STREAM;
-    char port_buf[16]; sprintf(port_buf, "%d", port);
+    char port_buf[16]; snprintf(port_buf, sizeof(port_buf), "%d", port);
     if (getaddrinfo(host, port_buf, &hints, &res) != 0) return -1;
     int fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
     if (fd < 0) { freeaddrinfo(res); return -1; }
@@ -1895,10 +1895,15 @@ static inline void _tr_rng_free(_TrRng* r) { _tr_free(r); }
 
 
 static inline char* _tr_float_fmt(double f, int decimals) {
-    char fmt[16]; int d = decimals < 0 ? 6 : decimals;
-    sprintf(fmt, "%%.%df", d);
-    char* buf = (char*)_tr_c_malloc(64); if(!buf) return (char*)"";
-    sprintf(buf, fmt, f); return buf;
+    /* SECURITY [V-001]: bound the format (clamp precision, size buffer to fit). */
+    int d = decimals < 0 ? 6 : decimals;
+    if (d > 40) d = 40;
+    char fmt[16];
+    snprintf(fmt, sizeof(fmt), "%%.%df", d);
+    int need = snprintf((char*)0, 0, fmt, f);
+    if (need < 0) need = 63;
+    char* buf = (char*)_tr_c_malloc((size_t)need + 1); if(!buf) return (char*)"";
+    snprintf(buf, (size_t)need + 1, fmt, f); return buf;
 }
 
 #endif /* TAURARO_RT_H */

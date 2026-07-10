@@ -243,6 +243,11 @@ static int vsnprintf(char* buf,size_t cap,const char* fmt,va_list ap){
     return (int)o;
 }
 static int snprintf(char* buf,size_t cap,const char* fmt,...){ va_list ap; va_start(ap,fmt); int r=vsnprintf(buf,cap,fmt,ap); va_end(ap); return r; }
+/* SECURITY [V-001]: freestanding libc-compat shim. Like ISO C sprintf it is UNBOUNDED —
+ * the caller must guarantee `buf` is large enough. The Tauraro runtime itself NEVER calls
+ * this (all internal formatting uses the bounded snprintf above; codegen emits snprintf).
+ * Prefer snprintf(buf, sizeof(buf), ...) in new code. Kept only so freestanding/ported C
+ * that references the `sprintf` symbol still links. */
 static int sprintf(char* buf,const char* fmt,...){ va_list ap; va_start(ap,fmt); int r=vsnprintf(buf,(size_t)-1,fmt,ap); va_end(ap); return r; }
 static int printf(const char* fmt,...){ char b[1024]; va_list ap; va_start(ap,fmt); int r=vsnprintf(b,sizeof(b),fmt,ap); va_end(ap); _TR_WRITE(b); return r; }
 #endif  /* _TR_HAVE_CTYPE */
@@ -3071,7 +3076,7 @@ static inline int _tr_tcp_connect(const char* host, int port) {
     struct addrinfo hints = {0}, *res = NULL;
     hints.ai_family   = AF_INET;
     hints.ai_socktype = SOCK_STREAM;
-    char port_buf[16]; sprintf(port_buf, "%d", port);
+    char port_buf[16]; snprintf(port_buf, sizeof(port_buf), "%d", port);
     if (getaddrinfo(host, port_buf, &hints, &res) != 0) return -1;
     SOCKET fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
     if (fd == INVALID_SOCKET) { freeaddrinfo(res); return -1; }
@@ -3099,7 +3104,7 @@ static inline int _tr_tcp_connect(const char* host, int port) {
     struct addrinfo hints = {0}, *res = NULL;
     hints.ai_family   = AF_INET;
     hints.ai_socktype = SOCK_STREAM;
-    char port_buf[16]; sprintf(port_buf, "%d", port);
+    char port_buf[16]; snprintf(port_buf, sizeof(port_buf), "%d", port);
     if (getaddrinfo(host, port_buf, &hints, &res) != 0) return -1;
     int fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
     if (fd < 0) { freeaddrinfo(res); return -1; }
@@ -3365,6 +3370,25 @@ static char* _tr_str_strip(const char* s) {
     while (end>s && isspace((unsigned char)*end)) end--;
     size_t len=(size_t)(end-s+1);
     char* r=(char*)TAURARO_ALLOC(len+1); memcpy(r,s,len); r[len]='\0'; return r;
+}
+/* pad_left = right-justify (spaces on the left); pad_right = left-justify. */
+static char* _tr_str_pad_left(const char* s, long long w) {
+    if (!s) s = "";
+    long long n = (long long)strlen(s);
+    if (n >= w) { char* c=(char*)TAURARO_ALLOC((size_t)n+1); memcpy(c,s,(size_t)n+1); return c; }
+    long long pad = w - n;
+    char* r = (char*)TAURARO_ALLOC((size_t)w+1);
+    for (long long i=0;i<pad;i++) r[i]=' ';
+    memcpy(r+pad, s, (size_t)n); r[w]='\0'; return r;
+}
+static char* _tr_str_pad_right(const char* s, long long w) {
+    if (!s) s = "";
+    long long n = (long long)strlen(s);
+    if (n >= w) { char* c=(char*)TAURARO_ALLOC((size_t)n+1); memcpy(c,s,(size_t)n+1); return c; }
+    char* r = (char*)TAURARO_ALLOC((size_t)w+1);
+    memcpy(r, s, (size_t)n);
+    for (long long i=n;i<w;i++) r[i]=' ';
+    r[w]='\0'; return r;
 }
 static char* _tr_str_replace(const char* s, const char* old, const char* nw) {
     if (!s||!old||!nw) return (char*)s;
@@ -4856,7 +4880,7 @@ static inline int _tr_tcp_connect_nb(const char* host, int port) {
     _tr_net_init();
     struct addrinfo hints = {0}, *res = NULL;
     hints.ai_family = AF_INET; hints.ai_socktype = SOCK_STREAM;
-    char pbuf[16]; sprintf(pbuf, "%d", port);
+    char pbuf[16]; snprintf(pbuf, sizeof(pbuf), "%d", port);
     if (getaddrinfo(host, pbuf, &hints, &res) != 0) return -1;
     SOCKET fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
     if (fd == INVALID_SOCKET) { freeaddrinfo(res); return -1; }
@@ -4925,10 +4949,20 @@ static inline void _tr_rng_free(_TrRng* r) { _tr_free(r); }
 
 
 static inline char* _tr_float_fmt(double f, int decimals) {
-    char fmt[16]; int d = decimals < 0 ? 6 : decimals;
-    sprintf(fmt, "%%.%df", d);
-    char* buf = (char*)_tr_c_malloc(64); if(!buf) return _tr_empty_heap_str();
-    sprintf(buf, fmt, f); return buf;
+    /* SECURITY [V-001]: bound the format. A large `decimals` (possibly user-controlled)
+     * or a large-magnitude double (integer part up to ~309 digits for 1e308) overflowed
+     * the old fixed 64-byte buffer via unbounded sprintf. Clamp precision, measure the
+     * exact length with snprintf, then allocate to fit. */
+    int d = decimals < 0 ? 6 : decimals;
+    if (d > 40) d = 40;                       /* >17 significant digits is meaningless for double */
+    char fmt[16];
+    snprintf(fmt, sizeof(fmt), "%%.%df", d);
+    int need = snprintf((char*)0, 0, fmt, f); /* measure required length (writes nothing) */
+    if (need < 0) need = 63;
+    char* buf = (char*)_tr_c_malloc((size_t)need + 1);
+    if(!buf) return _tr_empty_heap_str();
+    snprintf(buf, (size_t)need + 1, fmt, f);
+    return buf;
 }
 
 /* ── Platform capability detection ──────────────────────────────────────

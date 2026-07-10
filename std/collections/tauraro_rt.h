@@ -388,7 +388,7 @@ static inline int _tr_tcp_connect(const char* host, int port) {
     struct addrinfo hints = {0}, *res = NULL;
     hints.ai_family   = AF_INET;
     hints.ai_socktype = SOCK_STREAM;
-    char port_buf[16]; sprintf(port_buf, "%d", port);
+    char port_buf[16]; snprintf(port_buf, sizeof(port_buf), "%d", port);
     if (getaddrinfo(host, port_buf, &hints, &res) != 0) return -1;
     SOCKET fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
     if (fd == INVALID_SOCKET) { freeaddrinfo(res); return -1; }
@@ -415,7 +415,7 @@ static inline int _tr_tcp_connect(const char* host, int port) {
     struct addrinfo hints = {0}, *res = NULL;
     hints.ai_family   = AF_INET;
     hints.ai_socktype = SOCK_STREAM;
-    char port_buf[16]; sprintf(port_buf, "%d", port);
+    char port_buf[16]; snprintf(port_buf, sizeof(port_buf), "%d", port);
     if (getaddrinfo(host, port_buf, &hints, &res) != 0) return -1;
     int fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
     if (fd < 0) { freeaddrinfo(res); return -1; }
