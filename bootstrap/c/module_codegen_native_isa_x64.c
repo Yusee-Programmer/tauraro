@@ -11,6 +11,11 @@ void _ld_rcx(ByteBuf* c, long long disp);
 void _ld_argreg(ByteBuf* c, long long idx, long long disp);
 void _st_argreg(ByteBuf* c, long long idx, long long disp);
 void _mov_rax_imm64(ByteBuf* c, long long v);
+void _ld_xmm0(ByteBuf* c, long long disp);
+void _ld_xmm1(ByteBuf* c, long long disp);
+void _st_xmm0(ByteBuf* c, long long disp);
+void _emit_farith(ByteBuf* c, TrStr op);
+long long _fsetcc(TrStr op);
 bool _is_cmp(TrStr op);
 long long _setcc(TrStr op);
 void _emit_arith(ByteBuf* c, TrStr op);
@@ -164,6 +169,98 @@ __attribute__((hot)) void _mov_rax_imm64(ByteBuf* c, long long v) {
     ByteBuf_u8(c, 184LL);
     /* pass */
     ByteBuf_u64(c, v);
+}
+
+__attribute__((hot)) void _ld_xmm0(ByteBuf* c, long long disp) {
+    /* pass */
+    ByteBuf_u8(c, 242LL);
+    /* pass */
+    ByteBuf_u8(c, 15LL);
+    /* pass */
+    ByteBuf_u8(c, 16LL);
+    /* pass */
+    ByteBuf_u8(c, 133LL);
+    /* pass */
+    ByteBuf_u32(c, disp);
+}
+
+__attribute__((hot)) void _ld_xmm1(ByteBuf* c, long long disp) {
+    /* pass */
+    ByteBuf_u8(c, 242LL);
+    /* pass */
+    ByteBuf_u8(c, 15LL);
+    /* pass */
+    ByteBuf_u8(c, 16LL);
+    /* pass */
+    ByteBuf_u8(c, 141LL);
+    /* pass */
+    ByteBuf_u32(c, disp);
+}
+
+__attribute__((hot)) void _st_xmm0(ByteBuf* c, long long disp) {
+    /* pass */
+    ByteBuf_u8(c, 242LL);
+    /* pass */
+    ByteBuf_u8(c, 15LL);
+    /* pass */
+    ByteBuf_u8(c, 17LL);
+    /* pass */
+    ByteBuf_u8(c, 133LL);
+    /* pass */
+    ByteBuf_u32(c, disp);
+}
+
+__attribute__((hot)) void _emit_farith(ByteBuf* c, TrStr op) {
+    /* pass */
+    ByteBuf_u8(c, 242LL);
+    /* pass */
+    ByteBuf_u8(c, 15LL);
+    /* pass */
+    if ((strcmp(_tr_strz(op), _tr_strz(_tr_str_lit("+"))) == 0)) {
+        /* pass */
+        ByteBuf_u8(c, 88LL);
+    } else if ((strcmp(_tr_strz(op), _tr_strz(_tr_str_lit("-"))) == 0)) {
+        /* pass */
+        ByteBuf_u8(c, 92LL);
+    } else if ((strcmp(_tr_strz(op), _tr_strz(_tr_str_lit("*"))) == 0)) {
+        /* pass */
+        ByteBuf_u8(c, 89LL);
+    } else {
+        /* pass */
+        ByteBuf_u8(c, 94LL);
+    }
+    /* pass */
+    ByteBuf_u8(c, 193LL);
+}
+
+__attribute__((hot)) long long _fsetcc(TrStr op) {
+    /* pass */
+    if ((strcmp(_tr_strz(op), _tr_strz(_tr_str_lit("<"))) == 0)) {
+        /* pass */
+        return 146LL;
+    }
+    /* pass */
+    if ((strcmp(_tr_strz(op), _tr_strz(_tr_str_lit(">"))) == 0)) {
+        /* pass */
+        return 151LL;
+    }
+    /* pass */
+    if ((strcmp(_tr_strz(op), _tr_strz(_tr_str_lit("=="))) == 0)) {
+        /* pass */
+        return 148LL;
+    }
+    /* pass */
+    if ((strcmp(_tr_strz(op), _tr_strz(_tr_str_lit("!="))) == 0)) {
+        /* pass */
+        return 149LL;
+    }
+    /* pass */
+    if ((strcmp(_tr_strz(op), _tr_strz(_tr_str_lit("<="))) == 0)) {
+        /* pass */
+        return 150LL;
+    }
+    /* pass */
+    return 147LL;
 }
 
 __attribute__((hot)) bool _is_cmp(TrStr op) {
@@ -502,6 +599,109 @@ __auto_type args = _t2259.data.ICall.args;
                     _st_rax(c, _vreg_disp(dst));
                 }
                 _tr_obj_release(r, _trdrop_Reloc);
+            } else if (_t2259.tag == LInst_IFBinOp) {
+                __auto_type dst = _t2259.data.IFBinOp.dst;
+__auto_type op = _t2259.data.IFBinOp.op;
+__auto_type a = _t2259.data.IFBinOp.a;
+__auto_type b = _t2259.data.IFBinOp.b;
+                /* pass */
+                _ld_xmm0(c, _vreg_disp(a));
+                /* pass */
+                _ld_xmm1(c, _vreg_disp(b));
+                /* pass */
+                if (_is_cmp(op)) {
+                    /* pass */
+                    ByteBuf_u8(c, 102LL);
+                    /* pass */
+                    ByteBuf_u8(c, 15LL);
+                    /* pass */
+                    ByteBuf_u8(c, 47LL);
+                    /* pass */
+                    ByteBuf_u8(c, 193LL);
+                    /* pass */
+                    ByteBuf_u8(c, 15LL);
+                    /* pass */
+                    ByteBuf_u8(c, _fsetcc(op));
+                    /* pass */
+                    ByteBuf_u8(c, 192LL);
+                    /* pass */
+                    ByteBuf_u8(c, 72LL);
+                    /* pass */
+                    ByteBuf_u8(c, 15LL);
+                    /* pass */
+                    ByteBuf_u8(c, 182LL);
+                    /* pass */
+                    ByteBuf_u8(c, 192LL);
+                    /* pass */
+                    _st_rax(c, _vreg_disp(dst));
+                } else {
+                    /* pass */
+                    _emit_farith(c, op);
+                    /* pass */
+                    _st_xmm0(c, _vreg_disp(dst));
+                }
+            } else if (_t2259.tag == LInst_IIToF) {
+                __auto_type dst = _t2259.data.IIToF.dst;
+__auto_type src = _t2259.data.IIToF.src;
+                /* pass */
+                _ld_rax(c, _vreg_disp(src));
+                /* pass */
+                ByteBuf_u8(c, 242LL);
+                /* pass */
+                ByteBuf_u8(c, 72LL);
+                /* pass */
+                ByteBuf_u8(c, 15LL);
+                /* pass */
+                ByteBuf_u8(c, 42LL);
+                /* pass */
+                ByteBuf_u8(c, 192LL);
+                /* pass */
+                _st_xmm0(c, _vreg_disp(dst));
+            } else if (_t2259.tag == LInst_IFToI) {
+                __auto_type dst = _t2259.data.IFToI.dst;
+__auto_type src = _t2259.data.IFToI.src;
+                /* pass */
+                _ld_xmm0(c, _vreg_disp(src));
+                /* pass */
+                ByteBuf_u8(c, 242LL);
+                /* pass */
+                ByteBuf_u8(c, 72LL);
+                /* pass */
+                ByteBuf_u8(c, 15LL);
+                /* pass */
+                ByteBuf_u8(c, 44LL);
+                /* pass */
+                ByteBuf_u8(c, 192LL);
+                /* pass */
+                _st_rax(c, _vreg_disp(dst));
+            } else if (_t2259.tag == LInst_IFCall1) {
+                __auto_type dst = _t2259.data.IFCall1.dst;
+__auto_type callee = _t2259.data.IFCall1.callee;
+__auto_type arg = _t2259.data.IFCall1.arg;
+                /* pass */
+                _ld_xmm0(c, _vreg_disp(arg));
+                /* pass */
+                ByteBuf_u8(c, 232LL);
+                /* pass */
+                Reloc* fr = ((Reloc*)_tr_obj_alloc(sizeof(Reloc)));
+                /* pass */
+                fr->offset = c->len;
+                /* pass */
+                fr->symbol = _tr_str_retain(callee);
+                /* pass */
+                fr->kind = 0LL;
+                /* pass */
+                fr->str_idx = 0LL;
+                /* pass */
+                List_ptr_append(e->relocs, _tr_obj_retain(fr));
+                /* pass */
+                ByteBuf_u32(c, 0LL);
+                /* pass */
+                if ((dst >= 0LL)) {
+                    /* pass */
+                    _st_rax(c, _vreg_disp(dst));
+                }
+                _tr_obj_release(fr, _trdrop_Reloc);
             }
             /* pass */
             ii = (ii + 1LL);

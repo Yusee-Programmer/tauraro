@@ -1583,7 +1583,11 @@ typedef enum {
     LInst_IStoreVar,
     LInst_ILoadGlobal,
     LInst_IStoreGlobal,
-    LInst_ICall
+    LInst_ICall,
+    LInst_IFBinOp,
+    LInst_IIToF,
+    LInst_IFToI,
+    LInst_IFCall1
 } LInst_tag;
 
 typedef struct LInst {
@@ -1624,6 +1628,25 @@ typedef struct LInst {
             TrStr callee;
             List_i64* args;
         } ICall;
+        struct {
+            long long dst;
+            TrStr op;
+            long long a;
+            long long b;
+        } IFBinOp;
+        struct {
+            long long dst;
+            long long src;
+        } IIToF;
+        struct {
+            long long dst;
+            long long src;
+        } IFToI;
+        struct {
+            long long dst;
+            TrStr callee;
+            long long arg;
+        } IFCall1;
     } data;
 } LInst;
 
@@ -1635,6 +1658,10 @@ static inline __attribute__((always_inline)) LInst LInst_ctor_IStoreVar(TrStr na
 static inline __attribute__((always_inline)) LInst LInst_ctor_ILoadGlobal(long long dst, long long gidx) { LInst _r = {.tag=LInst_ILoadGlobal}; _r.data.ILoadGlobal.dst = dst; _r.data.ILoadGlobal.gidx = gidx; return _r; }
 static inline __attribute__((always_inline)) LInst LInst_ctor_IStoreGlobal(long long gidx, long long src) { LInst _r = {.tag=LInst_IStoreGlobal}; _r.data.IStoreGlobal.gidx = gidx; _r.data.IStoreGlobal.src = src; return _r; }
 static inline __attribute__((always_inline)) LInst LInst_ctor_ICall(long long dst, TrStr callee, List_i64* args) { LInst _r = {.tag=LInst_ICall}; _r.data.ICall.dst = dst; _r.data.ICall.callee = _tr_str_retain(callee); _r.data.ICall.args = args; return _r; }
+static inline __attribute__((always_inline)) LInst LInst_ctor_IFBinOp(long long dst, TrStr op, long long a, long long b) { LInst _r = {.tag=LInst_IFBinOp}; _r.data.IFBinOp.dst = dst; _r.data.IFBinOp.op = _tr_str_retain(op); _r.data.IFBinOp.a = a; _r.data.IFBinOp.b = b; return _r; }
+static inline __attribute__((always_inline)) LInst LInst_ctor_IIToF(long long dst, long long src) { LInst _r = {.tag=LInst_IIToF}; _r.data.IIToF.dst = dst; _r.data.IIToF.src = src; return _r; }
+static inline __attribute__((always_inline)) LInst LInst_ctor_IFToI(long long dst, long long src) { LInst _r = {.tag=LInst_IFToI}; _r.data.IFToI.dst = dst; _r.data.IFToI.src = src; return _r; }
+static inline __attribute__((always_inline)) LInst LInst_ctor_IFCall1(long long dst, TrStr callee, long long arg) { LInst _r = {.tag=LInst_IFCall1}; _r.data.IFCall1.dst = dst; _r.data.IFCall1.callee = _tr_str_retain(callee); _r.data.IFCall1.arg = arg; return _r; }
 
 typedef enum {
     LTerm_TRetInt,
@@ -3323,6 +3350,7 @@ __attribute__((hot)) TrStr dump_mir(MirProgram* mp);
 __attribute__((malloc,returns_nonnull,hot)) Symbol* Symbol_init(TrStr name, SymbolKind kind, AstType** ty);
 __attribute__((malloc,returns_nonnull,hot)) Scope* Scope_init();
 __attribute__((hot)) bool _expr_is_self_field(Expr* e);
+__attribute__((hot)) bool _binop_is_float_name(TrStr n);
 __attribute__((hot)) bool _block_mutates_self(Block* b);
 __attribute__((hot)) bool _pblock_mutates_self(Block** pb);
 __attribute__((hot)) bool _stmt_mutates_self(Stmt* s);
@@ -3537,6 +3565,8 @@ __attribute__((hot)) long long LModule_fn_ret_tag(LModule* self, TrStr name);
 __attribute__((hot)) long long LModule_add_string(LModule* self, TrStr s);
 __attribute__((hot)) void LModule_add_extern(LModule* self, TrStr name);
 __attribute__((hot)) bool LModule_is_user_fn(LModule* self, TrStr name);
+__attribute__((hot)) long long _f64_bits(double v);
+__attribute__((hot)) long long _promote_f(LFunc* lf, long long v);
 __attribute__((hot)) TrStr _print_i64_sym();
 __attribute__((hot)) bool _is_list_tag(long long t);
 __attribute__((hot)) long long _list_elem_tag(long long t);
@@ -3594,6 +3624,11 @@ __attribute__((hot)) void _ld_rcx(ByteBuf* c, long long disp);
 __attribute__((hot)) void _ld_argreg(ByteBuf* c, long long idx, long long disp);
 __attribute__((hot)) void _st_argreg(ByteBuf* c, long long idx, long long disp);
 __attribute__((hot)) void _mov_rax_imm64(ByteBuf* c, long long v);
+__attribute__((hot)) void _ld_xmm0(ByteBuf* c, long long disp);
+__attribute__((hot)) void _ld_xmm1(ByteBuf* c, long long disp);
+__attribute__((hot)) void _st_xmm0(ByteBuf* c, long long disp);
+__attribute__((hot)) void _emit_farith(ByteBuf* c, TrStr op);
+__attribute__((hot)) long long _fsetcc(TrStr op);
 __attribute__((hot)) bool _is_cmp(TrStr op);
 __attribute__((hot)) long long _setcc(TrStr op);
 __attribute__((hot)) void _emit_arith(ByteBuf* c, TrStr op);

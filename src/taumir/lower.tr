@@ -15,6 +15,24 @@
 from hir import HirProgram, HirFunction, HirStmt, HirExpr, HirBlock, hir_expr_type
 from taumir.ir import LModule, LFunc, LInst, LTerm
 from ast import AstType
+from core.alloc import alloc
+
+# Reinterpret an f64 literal as its raw i64 bit pattern (emitted as an immediate, then
+# reloaded into an xmm register for float ops). lower.tr is @trusted, so the raw-pointer
+# reinterpret is allowed.
+def _f64_bits(v: float) -> int:
+    unsafe:
+        mut p = alloc[float](1)
+        p.write(v)
+        mut ip = p as Pointer[int]
+        return ip.read()
+
+# int vreg -> f64 vreg (cvtsi2sd).
+def _promote_f(lf: LFunc, v: int) -> int:
+    mut d = lf.new_vreg()
+    lf.emit(LInst.IIToF(d, v))
+    lf.set_vreg_type(d, 5)
+    return d
 
 def _print_i64_sym() -> str:
     return "_tr_rt_print_i64"
@@ -407,6 +425,10 @@ def _lower_print(m: LModule, lf: LFunc, args: Vec[Pointer[HirExpr]]) -> bool:
         if av < 0: return false
         mut avt = lf.vreg_type(av)
         if _is_list_tag(avt): return false     # printing a whole list -> fall back to C
+        if avt == 5:                           # print(f64) -> "%g\n" (arg in xmm0)
+            m.add_extern("_tr_rt_print_f64")
+            lf.emit(LInst.IFCall1(-1, "_tr_rt_print_f64", av))
+            return true
         mut sym = _print_i64_sym()
         if avt == 1: sym = "_tr_rt_print_cstr"
         elif avt == 4: sym = "_tr_rt_print_bool"
@@ -422,11 +444,15 @@ def _lower_print(m: LModule, lf: LFunc, args: Vec[Pointer[HirExpr]]) -> bool:
         if pv < 0: return false
         mut pvt = lf.vreg_type(pv)
         if _is_list_tag(pvt): return false
-        mut wsym = _write_sym(pvt)
-        m.add_extern(wsym)
-        mut wargs = Vec[int].init(1)
-        wargs.push(pv)
-        lf.emit(LInst.ICall(-1, wsym, wargs))
+        if pvt == 5:
+            m.add_extern("_tr_rt_write_f64")
+            lf.emit(LInst.IFCall1(-1, "_tr_rt_write_f64", pv))
+        else:
+            mut wsym = _write_sym(pvt)
+            m.add_extern(wsym)
+            mut wargs = Vec[int].init(1)
+            wargs.push(pv)
+            lf.emit(LInst.ICall(-1, wsym, wargs))
         pi = pi + 1
     _emit_call0(m, lf, "_tr_rt_write_nl")
     return true
@@ -599,6 +625,11 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
             lf.emit(LInst.IConst(db, bconst))
             lf.set_vreg_type(db, 4)
             return db
+        case HirExpr.ELitFloat(fval, _):
+            mut fd = lf.new_vreg()
+            lf.emit(LInst.IConst(fd, _f64_bits(fval)))   # store the f64 bit pattern
+            lf.set_vreg_type(fd, 5)
+            return fd
         case HirExpr.EIdent(name, _, _):
             if lf.var_index(name) < 0 and m.is_global(name):    # module global read
                 mut gd = lf.new_vreg()
@@ -665,6 +696,25 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
             if b < 0: return -1
             mut at = lf.vreg_type(a)
             mut bt = lf.vreg_type(b)
+            # Float arithmetic / comparison (an int operand is promoted to f64, Python-style).
+            if at == 5 or bt == 5:
+                if at != 5 and at != 0: return -1
+                if bt != 5 and bt != 0: return -1
+                mut fa = a
+                mut fb = b
+                if at == 0: fa = _promote_f(lf, a)
+                if bt == 0: fb = _promote_f(lf, b)
+                if op == "+" or op == "-" or op == "*" or op == "/":
+                    mut fdd = lf.new_vreg()
+                    lf.emit(LInst.IFBinOp(fdd, op, fa, fb))
+                    lf.set_vreg_type(fdd, 5)
+                    return fdd
+                if _is_cmp_op(op):
+                    mut fcd = lf.new_vreg()
+                    lf.emit(LInst.IFBinOp(fcd, op, fa, fb))
+                    lf.set_vreg_type(fcd, 4)
+                    return fcd
+                return -1
             # x in <list> -> _tr_rt_list_contains_{i64,str}(list, x) -> bool.
             if op == "in":
                 if not _is_list_tag(bt): return -1
@@ -803,7 +853,14 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                 lf.emit(LInst.ICall(s2d, ssym, s2a))
                 lf.set_vreg_type(s2d, 1)
                 return s2d
-            if (fn == "int" or fn == "_tr_fn_int") and args.len == 1:   # int(str)/int(int)/int(bool)
+            if fn == "float" and args.len == 1:    # float(int)/float(float)
+                mut fv0 = lower_expr(m, lf, args.get(0))
+                if fv0 < 0: return -1
+                mut fvt = lf.vreg_type(fv0)
+                if fvt == 5: return fv0            # float(float) = identity
+                if fvt == 0: return _promote_f(lf, fv0)
+                return -1
+            if (fn == "int" or fn == "_tr_fn_int") and args.len == 1:   # int(str)/int(int)/int(bool)/int(float)
                 mut iv0 = lower_expr(m, lf, args.get(0))
                 if iv0 < 0: return -1
                 mut ivt = lf.vreg_type(iv0)
@@ -811,6 +868,10 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                 if ivt == 4:                       # int(bool): already 0/1, just retag
                     lf.set_vreg_type(iv0, 0)
                     return iv0
+                if ivt == 5:                       # int(float): truncate toward zero
+                    mut itd = lf.new_vreg()
+                    lf.emit(LInst.IFToI(itd, iv0))
+                    return itd
                 if ivt != 1: return -1
                 m.add_extern("_tr_rt_str_to_i64")
                 mut i2a = Vec[int].init(1)

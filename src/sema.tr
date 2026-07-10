@@ -92,6 +92,9 @@ def _expr_is_self_field(e: Pointer[Expr]) -> bool:
                 case _: return false
         case _: return false
 
+def _binop_is_float_name(n: str) -> bool:
+    return n == "float" or n == "f64" or n == "f32"
+
 def _block_mutates_self(b: Block) -> bool:
     mut i = 0
     while i < b.stmts.len:
@@ -4533,6 +4536,8 @@ extend Sema:
                     bin_ty = AstType.init("bool")
                 elif op == "*" and (hir_expr_type(hleft).name == "str" or hir_expr_type(hleft).name == "String" or hir_expr_type(hright).name == "str" or hir_expr_type(hright).name == "String"):
                     bin_ty = AstType.init("str")
+                elif (op == "+" or op == "-" or op == "*" or op == "/") and (_binop_is_float_name(hir_expr_type(hleft).name) or _binop_is_float_name(hir_expr_type(hright).name)):
+                    bin_ty = AstType.init("float")   # int+float etc. promotes to float
                 return box_hirexpr(HirExpr.EBinOp(op, hleft, hright, bin_ty))
             case Expr.EUnaryOp(op, expr):
                 mut hexpr_inner = self.lower_expr(expr)

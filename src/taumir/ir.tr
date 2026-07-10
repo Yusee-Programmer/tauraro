@@ -26,6 +26,10 @@ pub enum LInst:
     ILoadGlobal(dst: int, gidx: int)          # dst = module global slot #gidx (.bss)
     IStoreGlobal(gidx: int, src: int)         # global slot #gidx = src
     ICall(dst: int, callee: str, args: Vec[int])
+    IFBinOp(dst: int, op: str, a: int, b: int)  # f64 arith (+,-,*,/) or compare (-> 0/1 bool)
+    IIToF(dst: int, src: int)                   # int -> f64  (cvtsi2sd)
+    IFToI(dst: int, src: int)                   # f64 -> int  (cvttsd2si, truncates)
+    IFCall1(dst: int, callee: str, arg: int)    # call callee(f64 arg in xmm0); rax -> dst if >=0
 
 # Block terminator (exactly one per block).
 pub enum LTerm:

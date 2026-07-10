@@ -102,6 +102,47 @@ def _mov_rax_imm64(c: ByteBuf, v: int):    # mov rax, imm64
     c.u8(184)
     c.u64(v)
 
+# -- SSE scalar-double helpers (values live as bit patterns in stack slots) ----------
+def _ld_xmm0(c: ByteBuf, disp: int):       # movsd xmm0, [rbp+disp32]
+    c.u8(242)
+    c.u8(15)
+    c.u8(16)
+    c.u8(133)
+    c.u32(disp)
+
+def _ld_xmm1(c: ByteBuf, disp: int):       # movsd xmm1, [rbp+disp32]
+    c.u8(242)
+    c.u8(15)
+    c.u8(16)
+    c.u8(141)
+    c.u32(disp)
+
+def _st_xmm0(c: ByteBuf, disp: int):       # movsd [rbp+disp32], xmm0
+    c.u8(242)
+    c.u8(15)
+    c.u8(17)
+    c.u8(133)
+    c.u32(disp)
+
+# <op>sd xmm0, xmm1  (F2 0F <opcode> C1)
+def _emit_farith(c: ByteBuf, op: str):
+    c.u8(242)
+    c.u8(15)
+    if op == "+":   c.u8(88)    # addsd 0x58
+    elif op == "-": c.u8(92)    # subsd 0x5C
+    elif op == "*": c.u8(89)    # mulsd 0x59
+    else:           c.u8(94)    # divsd 0x5E
+    c.u8(193)                   # modrm C1 (xmm0, xmm1)
+
+# setcc byte for an ORDERED float comparison after `comisd` (unsigned-style flags).
+def _fsetcc(op: str) -> int:
+    if op == "<":  return 146   # setb  0x92
+    if op == ">":  return 151   # seta  0x97
+    if op == "==": return 148   # sete  0x94
+    if op == "!=": return 149   # setne 0x95
+    if op == "<=": return 150   # setbe 0x96
+    return 147                  # setae 0x93  (">=")
+
 def _is_cmp(op: str) -> bool:
     return op == "<" or op == ">" or op == "==" or op == "!=" or op == "<=" or op == ">="
 
@@ -264,6 +305,53 @@ pub def encode_func(lf: LFunc) -> EncodedFunc:
                     r.kind    = 0
                     r.str_idx = 0
                     e.relocs.push(r)
+                    c.u32(0)
+                    if dst >= 0:
+                        _st_rax(c, _vreg_disp(dst))
+                case LInst.IFBinOp(dst, op, a, b):
+                    _ld_xmm0(c, _vreg_disp(a))
+                    _ld_xmm1(c, _vreg_disp(b))
+                    if _is_cmp(op):
+                        c.u8(102)
+                        c.u8(15)
+                        c.u8(47)
+                        c.u8(193)          # comisd xmm0, xmm1
+                        c.u8(15)
+                        c.u8(_fsetcc(op))
+                        c.u8(192)          # setcc al
+                        c.u8(72)
+                        c.u8(15)
+                        c.u8(182)
+                        c.u8(192)          # movzx rax, al
+                        _st_rax(c, _vreg_disp(dst))
+                    else:
+                        _emit_farith(c, op)
+                        _st_xmm0(c, _vreg_disp(dst))
+                case LInst.IIToF(dst, src):
+                    _ld_rax(c, _vreg_disp(src))
+                    c.u8(242)
+                    c.u8(72)
+                    c.u8(15)
+                    c.u8(42)
+                    c.u8(192)              # cvtsi2sd xmm0, rax
+                    _st_xmm0(c, _vreg_disp(dst))
+                case LInst.IFToI(dst, src):
+                    _ld_xmm0(c, _vreg_disp(src))
+                    c.u8(242)
+                    c.u8(72)
+                    c.u8(15)
+                    c.u8(44)
+                    c.u8(192)              # cvttsd2si rax, xmm0
+                    _st_rax(c, _vreg_disp(dst))
+                case LInst.IFCall1(dst, callee, arg):
+                    _ld_xmm0(c, _vreg_disp(arg))
+                    c.u8(232)              # call rel32
+                    mut fr = Reloc()
+                    fr.offset  = c.len
+                    fr.symbol  = callee
+                    fr.kind    = 0
+                    fr.str_idx = 0
+                    e.relocs.push(fr)
                     c.u32(0)
                     if dst >= 0:
                         _st_rax(c, _vreg_disp(dst))

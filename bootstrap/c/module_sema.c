@@ -1,6 +1,7 @@
 #include "tauraro_types.h"
 
 bool _expr_is_self_field(Expr* e);
+bool _binop_is_float_name(TrStr n);
 bool _block_mutates_self(Block* b);
 bool _pblock_mutates_self(Block** pb);
 bool _stmt_mutates_self(Stmt* s);
@@ -9074,6 +9075,9 @@ __auto_type right = _t532.data.EBinOp.right;
         } else if (((strcmp(_tr_strz(op), _tr_strz(_tr_str_lit("*"))) == 0) && ((((strcmp(_tr_strz(hir_expr_type(hleft)->name), _tr_strz(_tr_str_lit("str"))) == 0) || (strcmp(_tr_strz(hir_expr_type(hleft)->name), _tr_strz(_tr_str_lit("String"))) == 0)) || (strcmp(_tr_strz(hir_expr_type(hright)->name), _tr_strz(_tr_str_lit("str"))) == 0)) || (strcmp(_tr_strz(hir_expr_type(hright)->name), _tr_strz(_tr_str_lit("String"))) == 0)))) {
             /* pass */
             bin_ty = AstType_init(_tr_str_lit("str"));
+        } else if ((((((strcmp(_tr_strz(op), _tr_strz(_tr_str_lit("+"))) == 0) || (strcmp(_tr_strz(op), _tr_strz(_tr_str_lit("-"))) == 0)) || (strcmp(_tr_strz(op), _tr_strz(_tr_str_lit("*"))) == 0)) || (strcmp(_tr_strz(op), _tr_strz(_tr_str_lit("/"))) == 0)) && (_binop_is_float_name(hir_expr_type(hleft)->name) || _binop_is_float_name(hir_expr_type(hright)->name)))) {
+            /* pass */
+            bin_ty = AstType_init(_tr_str_lit("float"));
         }
         /* pass */
         return box_hirexpr(HirExpr_ctor_EBinOp(op, hleft, hright, bin_ty));
@@ -11737,6 +11741,11 @@ __attribute__((hot)) bool _expr_is_self_field(Expr* e) {
         __auto_type _ = _t603;
         return false;
     }
+}
+
+__attribute__((hot)) bool _binop_is_float_name(TrStr n) {
+    /* pass */
+    return (((strcmp(_tr_strz(n), _tr_strz(_tr_str_lit("float"))) == 0) || (strcmp(_tr_strz(n), _tr_strz(_tr_str_lit("f64"))) == 0)) || (strcmp(_tr_strz(n), _tr_strz(_tr_str_lit("f32"))) == 0));
 }
 
 __attribute__((hot)) bool _block_mutates_self(Block* b) {

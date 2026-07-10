@@ -1,5 +1,7 @@
 #include "tauraro_types.h"
 
+long long _f64_bits(double v);
+long long _promote_f(LFunc* lf, long long v);
 TrStr _print_i64_sym();
 bool _is_list_tag(long long t);
 long long _list_elem_tag(long long t);
@@ -33,6 +35,30 @@ long long _const_int_val(HirExpr* e);
 void _emit_add_const(LFunc* lf, TrStr name, long long delta);
 long long _list_get(LModule* m, LFunc* lf, long long handle, long long idx);
 long long lower_expr(LModule* m, LFunc* lf, HirExpr* e);
+
+__attribute__((hot)) long long _f64_bits(double v) {
+    /* pass */
+    /* unsafe block */
+    /* pass */
+    double* p = ((double*)_tr_c_calloc((size_t)(1LL), sizeof(double)));
+    /* pass */
+    (*p = v);
+    /* pass */
+    long long* ip = ((long long*)(p));
+    /* pass */
+    return (*ip);
+}
+
+__attribute__((hot)) long long _promote_f(LFunc* lf, long long v) {
+    /* pass */
+    long long d = LFunc_new_vreg(lf);
+    /* pass */
+    LFunc_emit(lf, LInst_ctor_IIToF(d, v));
+    /* pass */
+    LFunc_set_vreg_type(lf, d, 5LL);
+    /* pass */
+    return d;
+}
 
 __attribute__((hot)) TrStr _print_i64_sym() {
     /* pass */
@@ -971,6 +997,15 @@ __attribute__((hot)) bool _lower_print(LModule* m, LFunc* lf, List_ptr* args) {
             return false;
         }
         /* pass */
+        if ((avt == 5LL)) {
+            /* pass */
+            LModule_add_extern(m, _tr_str_lit("_tr_rt_print_f64"));
+            /* pass */
+            LFunc_emit(lf, LInst_ctor_IFCall1((-1LL), _tr_str_lit("_tr_rt_print_f64"), av));
+            /* pass */
+            return true;
+        }
+        /* pass */
         TrStr sym = _print_i64_sym();
         /* pass */
         if ((avt == 1LL)) {
@@ -1020,18 +1055,26 @@ __attribute__((hot)) bool _lower_print(LModule* m, LFunc* lf, List_ptr* args) {
             return false;
         }
         /* pass */
-        TrStr wsym = _write_sym(pvt);
-        /* pass */
-        LModule_add_extern(m, wsym);
-        /* pass */
-        List_i64* wargs = (void*)List_i64_new();
-        /* pass */
-        List_i64_append(wargs, pv);
-        /* pass */
-        LFunc_emit(lf, LInst_ctor_ICall((-1LL), wsym, wargs));
+        if ((pvt == 5LL)) {
+            /* pass */
+            LModule_add_extern(m, _tr_str_lit("_tr_rt_write_f64"));
+            /* pass */
+            LFunc_emit(lf, LInst_ctor_IFCall1((-1LL), _tr_str_lit("_tr_rt_write_f64"), pv));
+        } else {
+            /* pass */
+            TrStr wsym = _write_sym(pvt);
+            /* pass */
+            LModule_add_extern(m, wsym);
+            /* pass */
+            List_i64* wargs = (void*)List_i64_new();
+            /* pass */
+            List_i64_append(wargs, pv);
+            /* pass */
+            LFunc_emit(lf, LInst_ctor_ICall((-1LL), wsym, wargs));
+            _tr_str_release(wsym);
+        }
         /* pass */
         pi = (pi + 1LL);
-        _tr_str_release(wsym);
     }
     /* pass */
     _emit_call0(m, lf, _tr_str_lit("_tr_rt_write_nl"));
@@ -1423,6 +1466,16 @@ __attribute__((hot)) long long lower_expr(LModule* m, LFunc* lf, HirExpr* e) {
         LFunc_set_vreg_type(lf, db, 4LL);
         /* pass */
         return db;
+    } else if (_t2253.tag == HirExpr_ELitFloat) {
+        __auto_type fval = _t2253.data.ELitFloat.val;
+        /* pass */
+        long long fd = LFunc_new_vreg(lf);
+        /* pass */
+        LFunc_emit(lf, LInst_ctor_IConst(fd, _f64_bits(fval)));
+        /* pass */
+        LFunc_set_vreg_type(lf, fd, 5LL);
+        /* pass */
+        return fd;
     } else if (_t2253.tag == HirExpr_EIdent) {
         __auto_type name = _t2253.data.EIdent.name;
         /* pass */
@@ -1588,6 +1641,57 @@ __auto_type r = _t2253.data.EBinOp.right;
         long long at = LFunc_vreg_type(lf, a);
         /* pass */
         long long bt = LFunc_vreg_type(lf, b);
+        /* pass */
+        if (((at == 5LL) || (bt == 5LL))) {
+            /* pass */
+            if (((at != 5LL) && (at != 0LL))) {
+                /* pass */
+                return (-1LL);
+            }
+            /* pass */
+            if (((bt != 5LL) && (bt != 0LL))) {
+                /* pass */
+                return (-1LL);
+            }
+            /* pass */
+            long long fa = a;
+            /* pass */
+            long long fb = b;
+            /* pass */
+            if ((at == 0LL)) {
+                /* pass */
+                fa = _promote_f(lf, a);
+            }
+            /* pass */
+            if ((bt == 0LL)) {
+                /* pass */
+                fb = _promote_f(lf, b);
+            }
+            /* pass */
+            if (((((strcmp(_tr_strz(op), _tr_strz(_tr_str_lit("+"))) == 0) || (strcmp(_tr_strz(op), _tr_strz(_tr_str_lit("-"))) == 0)) || (strcmp(_tr_strz(op), _tr_strz(_tr_str_lit("*"))) == 0)) || (strcmp(_tr_strz(op), _tr_strz(_tr_str_lit("/"))) == 0))) {
+                /* pass */
+                long long fdd = LFunc_new_vreg(lf);
+                /* pass */
+                LFunc_emit(lf, LInst_ctor_IFBinOp(fdd, op, fa, fb));
+                /* pass */
+                LFunc_set_vreg_type(lf, fdd, 5LL);
+                /* pass */
+                return fdd;
+            }
+            /* pass */
+            if (_is_cmp_op(op)) {
+                /* pass */
+                long long fcd = LFunc_new_vreg(lf);
+                /* pass */
+                LFunc_emit(lf, LInst_ctor_IFBinOp(fcd, op, fa, fb));
+                /* pass */
+                LFunc_set_vreg_type(lf, fcd, 4LL);
+                /* pass */
+                return fcd;
+            }
+            /* pass */
+            return (-1LL);
+        }
         /* pass */
         if ((strcmp(_tr_strz(op), _tr_strz(_tr_str_lit("in"))) == 0)) {
             /* pass */
@@ -1948,6 +2052,34 @@ __auto_type args = _t2253.data.ECall.args;
             return s2d;
         }
         /* pass */
+        if (((strcmp(_tr_strz(fn), _tr_strz(_tr_str_lit("float"))) == 0) && (args->len == 1LL))) {
+            /* pass */
+            long long fv0 = lower_expr(m, lf, ((HirExpr*)List_ptr_get(args, 0LL)));
+            /* pass */
+            if ((fv0 < 0LL)) {
+                /* pass */
+                _tr_str_release(fn);
+                return (-1LL);
+            }
+            /* pass */
+            long long fvt = LFunc_vreg_type(lf, fv0);
+            /* pass */
+            if ((fvt == 5LL)) {
+                /* pass */
+                _tr_str_release(fn);
+                return fv0;
+            }
+            /* pass */
+            if ((fvt == 0LL)) {
+                /* pass */
+                _tr_str_release(fn);
+                return _promote_f(lf, fv0);
+            }
+            /* pass */
+            _tr_str_release(fn);
+            return (-1LL);
+        }
+        /* pass */
         if ((((strcmp(_tr_strz(fn), _tr_strz(_tr_str_lit("int"))) == 0) || (strcmp(_tr_strz(fn), _tr_strz(_tr_str_lit("_tr_fn_int"))) == 0)) && (args->len == 1LL))) {
             /* pass */
             long long iv0 = lower_expr(m, lf, ((HirExpr*)List_ptr_get(args, 0LL)));
@@ -1972,6 +2104,16 @@ __auto_type args = _t2253.data.ECall.args;
                 /* pass */
                 _tr_str_release(fn);
                 return iv0;
+            }
+            /* pass */
+            if ((ivt == 5LL)) {
+                /* pass */
+                long long itd = LFunc_new_vreg(lf);
+                /* pass */
+                LFunc_emit(lf, LInst_ctor_IFToI(itd, iv0));
+                /* pass */
+                _tr_str_release(fn);
+                return itd;
             }
             /* pass */
             if ((ivt != 1LL)) {

@@ -1,0 +1,24 @@
+# native≡c differential corpus: f64 literals, arithmetic, comparison, print, conversions.
+def main():
+    mut a = 3.5
+    mut b = 2.0
+    print(a + b)            # 5.5
+    print(a - b)            # 1.5
+    print(a * b)            # 7
+    print(a / b)            # 1.75
+    print(a > b)            # true
+    print(a < b)            # false
+    print(a == 3.5)         # true
+
+    mut x = 10.0
+    mut y = 3.0
+    print(x / y)            # 3.33333
+
+    print(float(7))         # 7
+    print(int(3.9))         # 3  (truncates)
+    print(2 + 1.5)          # 3.5  (int promoted)
+
+    mut acc = 0.0
+    for i in range(5):
+        acc = acc + 0.5
+    print(acc)             # 2.5

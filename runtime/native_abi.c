@@ -9,10 +9,16 @@
 #define _TR_MAIN
 #include "tauraro_rt.h"
 
+/* List[int]/List[str] backing store: a dynamic 8-byte-slot array (a str element is just
+ * a char* stored in the same slot). Declared up top so every _tr_rt_list_* helper sees it. */
+typedef struct { long long* data; long long len; long long cap; } _TrNList;
+
 /* -- print + string helpers the native backend calls ---------------------------- */
 void _tr_rt_print_i64(long long v) { printf("%lld\n", v); }
 void _tr_rt_print_cstr(const char* s) { fputs(s ? s : "", stdout); fputc('\n', stdout); }
 void _tr_rt_print_bool(long long v) { fputs(v ? "true" : "false", stdout); fputc('\n', stdout); }
+void _tr_rt_print_f64(double v) { printf("%g\n", v); }   /* matches C backend's "%g" */
+void _tr_rt_write_f64(double v) { printf("%g", v); }
 
 /* strcmp / strlen the native backend calls for string comparison and len(). */
 long long _tr_rt_str_cmp(const char* a, const char* b) {
@@ -168,8 +174,6 @@ char* _tr_rt_str_concat(const char* a, const char* b) {
 
 /* -- List[int]: a dynamic i64 array the native backend calls. Opaque handle (void*).
  * (No ARC/free in the native backend yet — this leaks; fine for -O0 dev.) */
-typedef struct { long long* data; long long len; long long cap; } _TrNList;
-
 void* _tr_rt_list_new(void) {
     _TrNList* l = (_TrNList*)malloc(sizeof(_TrNList));
     if (!l) return 0;
