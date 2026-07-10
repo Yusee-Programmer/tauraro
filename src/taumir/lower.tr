@@ -847,6 +847,21 @@ def _lower_str_method(m: LModule, lf: LFunc, recv: int, method: str, margs: Vec[
         mut cca = lower_expr(m, lf, margs.get(0))
         if cca < 0 or lf.vreg_type(cca) != 0: return -1
         return _str_call1(m, lf, "_tr_rt_str_contains_char", recv, cca, 4)
+    if method == "center" and margs.len == 1:
+        mut cea = lower_expr(m, lf, margs.get(0))
+        if cea < 0 or lf.vreg_type(cea) != 0: return -1
+        return _str_call1(m, lf, "_tr_rt_str_center", recv, cea, 1)
+    if method == "split" and margs.len == 1:
+        mut spa = lower_expr(m, lf, margs.get(0))
+        if spa < 0 or lf.vreg_type(spa) != 1: return -1
+        m.add_extern("_tr_rt_str_split")
+        mut spargs = Vec[int].init(2)
+        spargs.push(recv)
+        spargs.push(spa)
+        mut spd = lf.new_vreg()
+        lf.emit(LInst.ICall(spd, "_tr_rt_str_split", spargs))
+        lf.set_vreg_type(spd, 3)                 # -> List[str]
+        return spd
     if method == "reverse" and margs.len == 0:
         return _str_call0(m, lf, "_tr_rt_str_reverse", recv, 1)
     if method == "is_empty" and margs.len == 0:
@@ -1646,6 +1661,39 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                 mut mmsym = "_tr_rt_list_min_i64"
                 if method == "max" or method == "max_val": mmsym = "_tr_rt_list_max_i64"
                 return _list_call1(m, lf, mmsym, ovm, 0)
+            if method == "sum" and margs.len == 0:
+                if want_elem != 0: return -1        # int lists only
+                return _list_call1(m, lf, "_tr_rt_list_sum_i64", ovm, 0)
+            if (method == "clone" or method == "copy") and margs.len == 0:
+                m.add_extern("_tr_rt_list_clone")
+                mut cla = Vec[int].init(1)
+                cla.push(ovm)
+                mut cld = lf.new_vreg()
+                lf.emit(LInst.ICall(cld, "_tr_rt_list_clone", cla))
+                lf.set_vreg_type(cld, ovmt)         # same list type
+                return cld
+            if method == "remove" and margs.len == 1:
+                mut rmi = lower_expr(m, lf, margs.get(0))
+                if rmi < 0 or lf.vreg_type(rmi) != 0: return -1
+                m.add_extern("_tr_rt_list_remove")
+                mut rma = Vec[int].init(2)
+                rma.push(ovm)
+                rma.push(rmi)
+                lf.emit(LInst.ICall(-1, "_tr_rt_list_remove", rma))
+                return ovm
+            if method == "join" and margs.len == 1:
+                if ovmt != 3: return -1             # List[str] only
+                mut jsep = lower_expr(m, lf, margs.get(0))
+                if jsep < 0 or lf.vreg_type(jsep) != 1: return -1
+                m.add_extern("_tr_rt_list_join")
+                mut jargs = Vec[int].init(2)
+                jargs.push(ovm)
+                jargs.push(jsep)
+                mut jd = lf.new_vreg()
+                lf.emit(LInst.ICall(jd, "_tr_rt_list_join", jargs))
+                lf.set_vreg_type(jd, 1)
+                _fresh_mark(lf, jd)
+                return jd
             if method == "is_empty" and margs.len == 0:
                 return _list_call1(m, lf, "_tr_rt_list_is_empty", ovm, 4)
             if method == "first" and margs.len == 0:

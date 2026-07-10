@@ -616,3 +616,62 @@ long long _tr_rt_list_get_i64(void* h, long long i) {
     if (!l || i < 0 || i >= l->len) return 0;   /* out-of-range -> 0 (native -O0 dev) */
     return l->data[i];
 }
+
+/* s.center(w) — pad both sides (left = extra/2). */
+char* _tr_rt_str_center(const char* s, long long w) {
+    if (!s) s = "";
+    long long n = (long long)strlen(s);
+    if (n >= w) return _trn_dup(s);
+    long long total = w - n, left = total / 2, right = total - left;
+    char* r = _tr_rt_str_alloc((size_t)w);
+    for (long long i = 0; i < left; i++) r[i] = ' ';
+    for (long long i = 0; i < n; i++) r[left + i] = s[i];
+    for (long long i = 0; i < right; i++) r[left + n + i] = ' ';
+    r[w] = 0;
+    return r;
+}
+/* s.split(sep) -> List[str]. strtok semantics: consecutive seps collapse, empties dropped. */
+void* _tr_rt_str_split(const char* s, const char* sep) {
+    _TrNList* l = (_TrNList*)_tr_rt_list_new();
+    if (!s || !sep || !*sep) return l;
+    size_t sl = strlen(s);
+    char* cp = (char*)malloc(sl + 1);
+    for (size_t i = 0; i <= sl; i++) cp[i] = s[i];
+    char* tok = strtok(cp, sep);
+    while (tok) { _tr_rt_list_push_i64(l, (long long)(size_t)_tr_rt_str_new(tok)); tok = strtok(0, sep); }
+    free(cp);
+    return l;
+}
+/* List[str].join(sep) -> str. */
+char* _tr_rt_list_join(void* h, const char* sep) {
+    _TrNList* l = (_TrNList*)h;
+    if (!l || l->len == 0) return _tr_rt_str_new("");
+    size_t seplen = sep ? strlen(sep) : 0, total = 0;
+    for (long long i = 0; i < l->len; i++) {
+        const char* e = (const char*)l->data[i]; if (e) total += strlen(e);
+        if (i + 1 < l->len) total += seplen;
+    }
+    char* r = _tr_rt_str_alloc(total);
+    char* p = r;
+    for (long long i = 0; i < l->len; i++) {
+        const char* e = (const char*)l->data[i];
+        if (e) { size_t el = strlen(e); for (size_t k = 0; k < el; k++) *p++ = e[k]; }
+        if (i + 1 < l->len && sep) { for (size_t k = 0; k < seplen; k++) *p++ = sep[k]; }
+    }
+    *p = 0;
+    return r;
+}
+/* xs.clone() -> shallow copy (new backing array, same element values). */
+void* _tr_rt_list_clone(void* h) {
+    _TrNList* s = (_TrNList*)h;
+    _TrNList* r = (_TrNList*)_tr_rt_list_new();
+    if (s) for (long long i = 0; i < s->len; i++) _tr_rt_list_push_i64(r, s->data[i]);
+    return r;
+}
+/* xs.remove(i) -> remove the element at index i (shift the rest down). */
+void _tr_rt_list_remove(void* h, long long i) {
+    _TrNList* l = (_TrNList*)h;
+    if (!l || i < 0 || i >= l->len) return;
+    for (long long j = i; j < l->len - 1; j++) l->data[j] = l->data[j + 1];
+    l->len--;
+}

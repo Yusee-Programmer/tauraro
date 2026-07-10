@@ -2037,6 +2037,44 @@ __attribute__((hot)) long long _lower_str_method(LModule* m, LFunc* lf, long lon
         return _str_call1(m, lf, _tr_str_lit("_tr_rt_str_contains_char"), _tr_v_recv, cca, 4LL);
     }
     /* pass */
+    if (((strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("center"))) == 0) && (margs->len == 1LL))) {
+        /* pass */
+        long long cea = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, 0LL)));
+        /* pass */
+        if (((cea < 0LL) || (LFunc_vreg_type(lf, cea) != 0LL))) {
+            /* pass */
+            return (-1LL);
+        }
+        /* pass */
+        return _str_call1(m, lf, _tr_str_lit("_tr_rt_str_center"), _tr_v_recv, cea, 1LL);
+    }
+    /* pass */
+    if (((strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("split"))) == 0) && (margs->len == 1LL))) {
+        /* pass */
+        long long spa = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, 0LL)));
+        /* pass */
+        if (((spa < 0LL) || (LFunc_vreg_type(lf, spa) != 1LL))) {
+            /* pass */
+            return (-1LL);
+        }
+        /* pass */
+        LModule_add_extern(m, _tr_str_lit("_tr_rt_str_split"));
+        /* pass */
+        List_i64* spargs = (void*)List_i64_new();
+        /* pass */
+        List_i64_append(spargs, _tr_v_recv);
+        /* pass */
+        List_i64_append(spargs, spa);
+        /* pass */
+        long long spd = LFunc_new_vreg(lf);
+        /* pass */
+        LFunc_emit(lf, LInst_ctor_ICall(spd, _tr_str_lit("_tr_rt_str_split"), spargs));
+        /* pass */
+        LFunc_set_vreg_type(lf, spd, 3LL);
+        /* pass */
+        return spd;
+    }
+    /* pass */
     if (((strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("reverse"))) == 0) && (margs->len == 0LL))) {
         /* pass */
         return _str_call0(m, lf, _tr_str_lit("_tr_rt_str_reverse"), _tr_v_recv, 1LL);
@@ -4166,6 +4204,88 @@ __auto_type margs = _t2264.data.EMethodCall.args;
             }
             /* pass */
             return _list_call1(m, lf, mmsym, ovm, 0LL);
+        }
+        /* pass */
+        if (((strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("sum"))) == 0) && (margs->len == 0LL))) {
+            /* pass */
+            if ((want_elem != 0LL)) {
+                /* pass */
+                return (-1LL);
+            }
+            /* pass */
+            return _list_call1(m, lf, _tr_str_lit("_tr_rt_list_sum_i64"), ovm, 0LL);
+        }
+        /* pass */
+        if ((((strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("clone"))) == 0) || (strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("copy"))) == 0)) && (margs->len == 0LL))) {
+            /* pass */
+            LModule_add_extern(m, _tr_str_lit("_tr_rt_list_clone"));
+            /* pass */
+            List_i64* cla = (void*)List_i64_new();
+            /* pass */
+            List_i64_append(cla, ovm);
+            /* pass */
+            long long cld = LFunc_new_vreg(lf);
+            /* pass */
+            LFunc_emit(lf, LInst_ctor_ICall(cld, _tr_str_lit("_tr_rt_list_clone"), cla));
+            /* pass */
+            LFunc_set_vreg_type(lf, cld, ovmt);
+            /* pass */
+            return cld;
+        }
+        /* pass */
+        if (((strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("remove"))) == 0) && (margs->len == 1LL))) {
+            /* pass */
+            long long rmi = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, 0LL)));
+            /* pass */
+            if (((rmi < 0LL) || (LFunc_vreg_type(lf, rmi) != 0LL))) {
+                /* pass */
+                return (-1LL);
+            }
+            /* pass */
+            LModule_add_extern(m, _tr_str_lit("_tr_rt_list_remove"));
+            /* pass */
+            List_i64* rma = (void*)List_i64_new();
+            /* pass */
+            List_i64_append(rma, ovm);
+            /* pass */
+            List_i64_append(rma, rmi);
+            /* pass */
+            LFunc_emit(lf, LInst_ctor_ICall((-1LL), _tr_str_lit("_tr_rt_list_remove"), rma));
+            /* pass */
+            return ovm;
+        }
+        /* pass */
+        if (((strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("join"))) == 0) && (margs->len == 1LL))) {
+            /* pass */
+            if ((ovmt != 3LL)) {
+                /* pass */
+                return (-1LL);
+            }
+            /* pass */
+            long long jsep = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, 0LL)));
+            /* pass */
+            if (((jsep < 0LL) || (LFunc_vreg_type(lf, jsep) != 1LL))) {
+                /* pass */
+                return (-1LL);
+            }
+            /* pass */
+            LModule_add_extern(m, _tr_str_lit("_tr_rt_list_join"));
+            /* pass */
+            List_i64* jargs = (void*)List_i64_new();
+            /* pass */
+            List_i64_append(jargs, ovm);
+            /* pass */
+            List_i64_append(jargs, jsep);
+            /* pass */
+            long long jd = LFunc_new_vreg(lf);
+            /* pass */
+            LFunc_emit(lf, LInst_ctor_ICall(jd, _tr_str_lit("_tr_rt_list_join"), jargs));
+            /* pass */
+            LFunc_set_vreg_type(lf, jd, 1LL);
+            /* pass */
+            _fresh_mark(lf, jd);
+            /* pass */
+            return jd;
         }
         /* pass */
         if (((strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("is_empty"))) == 0) && (margs->len == 0LL))) {
