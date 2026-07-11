@@ -2010,6 +2010,26 @@ pub class CGenerator:
     # match-EXPRESSION -> statement-expression with a result temp. Each arm body
     # is a single SExpr(EDo); the matching arm assigns `_mres = ({arm-do})` (a raw
     # owned move — the do-block already produced an rc=1 owned value) and breaks.
+    # Typed binder for a builtin Option/Result payload: the payload slot is a void* box,
+    # so int/float/str payloads must UNBOX per the subject's type argument (bug #19 —
+    # `case Option.Some(fv)` with a float payload used to bind fv as a raw void*).
+    pub def opt_payload_binding(self, subj_hty: AstType, tn: str, vn: str, bind_c: str, slot: str) -> str:
+        mut pay_n = ""
+        if tn == "Option" and vn == "Some":
+            if subj_hty.args.len > 0: pay_n = self.resolve_generic_prim(subj_hty.args.get(0).read().name)
+        elif tn == "Result" and vn == "Ok":
+            if subj_hty.args.len > 0: pay_n = self.resolve_generic_prim(subj_hty.args.get(0).read().name)
+        elif tn == "Result" and vn == "Err":
+            if subj_hty.args.len > 1: pay_n = self.resolve_generic_prim(subj_hty.args.get(1).read().name)
+        if pay_n != "":
+            if _is_float_type(pay_n):
+                return "double " + bind_c + " = _tr_ptr_to_f64(" + slot + ");\n"
+            if _is_int_type(pay_n) or pay_n == "bool":
+                return "long long " + bind_c + " = (long long)(intptr_t)(" + slot + ");\n"
+            if _is_str_type(pay_n):
+                return "TrStr " + bind_c + " = _tr_str_retain(_tr_str_unbox(" + slot + "));\n"
+        return "__auto_type " + bind_c + " = " + slot + ";\n"
+
     pub def gen_match_expr(self, subj: Pointer[HirExpr], arms: Vec[HirMatchArm], ty: AstType) -> str:
         mut old_buf = self.buf
         self.buf = StringBuilder.init(256)
@@ -2048,7 +2068,7 @@ pub class CGenerator:
                             if _ev.name == vn and _ev.fields.len > 0: actual_fld = _ev.fields.get(0).name
                             _vi = _vi + 1
                     self.decl_vars.insert(field, true)
-                    bindings = "__auto_type " + _safe_c_varname(field) + " = " + subj_t + ".data." + vn + "." + _safe_c_varname(actual_fld) + ";\n"
+                    bindings = self.opt_payload_binding(hir_expr_type(subj), tn, vn, _safe_c_varname(field), subj_t + ".data." + vn + "." + _safe_c_varname(actual_fld))
                 case Pattern.PVariantBindMany(tn, vn, fields):
                     cond = subj_t + ".tag == " + tn + "_" + vn
                     mut _bi = 0
@@ -3867,6 +3887,18 @@ pub class CGenerator:
         # aggregate decays to `T*` at element 0 — usable for buffer/DMA/bump-alloc interop.
         if t_n == "Array" and method == "as_ptr":
             return obj_s + ".data"
+
+        # Tuple index t[i] (constant index, typed by sema as the element's type): unbox
+        # the 8-byte slot per element type — str slots hold a boxed TrStr, float slots
+        # hold the f64 bit pattern (bug #16: this used to emit undefined Tuple_get_index).
+        if t_n == "Tuple" and (method == "get_index" or method == "get") and args.len == 1:
+            mut _tix_s = self.gen_expr(args.get(0))
+            mut _tslot = obj_s + ".data[" + _tix_s + "]"
+            if _is_str_type(call_ty.name):
+                return "_tr_str_retain(_tr_str_unbox((void*)(uintptr_t)" + _tslot + "))"
+            if _is_float_type(call_ty.name):
+                return "_tr_ptr_to_f64((void*)(uintptr_t)" + _tslot + ")"
+            return _tslot
 
         # Fallback: when HIR stores void for an EPropAccess type (cross-module field lookup),
         # recover the actual type from the parent class field declaration
@@ -7399,7 +7431,7 @@ pub class CGenerator:
                                 if _gv.name == vn and _gv.fields.len > 0: gaf = _gv.fields.get(0).name
                                 _gvi = _gvi + 1
                         self.decl_vars.insert(field, true)
-                        gbindings = "__auto_type " + _safe_c_varname(field) + " = " + subj + ".data." + vn + "." + _safe_c_varname(gaf) + ";\n"
+                        gbindings = self.opt_payload_binding(hir_expr_type(expr), tn, vn, _safe_c_varname(field), subj + ".data." + vn + "." + _safe_c_varname(gaf))
                     case Pattern.PVariantBindMany(tn, vn, fields):
                         gcond = subj + ".tag == " + tn + "_" + vn
                         mut _gbi = 0
@@ -7470,7 +7502,7 @@ pub class CGenerator:
                                 actual_fld = _ev.fields.get(0).name
                             _vi = _vi + 1
                     self.decl_vars.insert(field, true)
-                    bindings = "__auto_type " + _safe_c_varname(field) + " = " + subj + ".data." + vn + "." + _safe_c_varname(actual_fld) + ";\n"
+                    bindings = self.opt_payload_binding(hir_expr_type(expr), tn, vn, _safe_c_varname(field), subj + ".data." + vn + "." + _safe_c_varname(actual_fld))
                 case Pattern.PVariantBindMany(tn, vn, fields):
                     cond = subj + ".tag == " + tn + "_" + vn
                     mut _bi = 0

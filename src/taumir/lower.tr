@@ -227,6 +227,29 @@ def _push_field_tags_rec(m: LModule, prog: HirProgram, ci: int, lay: ClassLayout
 # pointer — never Vec.set, whose replace-drop over-released shared name strings). All
 # stored names are OWNED copies (_own): the registry must never alias HIR strings.
 def _register_classes(m: LModule, prog: HirProgram):
+    # Builtin generic enums Option[T] / Result[T, E]: registered like user enums with
+    # GENERIC payload slots (-(2+g)); tag values are internal to this backend (each
+    # program compiles wholly through ONE backend), only OUTPUT must match C.
+    mut opt = EnumLayout.init("Option")
+    mut opt_some = VariantLayout.init("Some")
+    opt_some.fields.push("val")
+    opt_some.ftags.push(0 - 2)
+    opt_some.fcls.push("")
+    opt.variants.push(opt_some)
+    opt.variants.push(VariantLayout.init("None"))
+    m.add_enum(opt)
+    mut res = EnumLayout.init("Result")
+    mut res_ok = VariantLayout.init("Ok")
+    res_ok.fields.push("val")
+    res_ok.ftags.push(0 - 2)
+    res_ok.fcls.push("")
+    res.variants.push(res_ok)
+    mut res_err = VariantLayout.init("Err")
+    res_err.fields.push("err")
+    res_err.ftags.push(0 - 3)
+    res_err.fcls.push("")
+    res.variants.push(res_err)
+    m.add_enum(res)
     # Interface names first: an interface-typed param makes its function SPECIALIZE per
     # concrete arg class (zero-cost static dispatch — no vtable, no indirection).
     mut ifi = 0
@@ -279,8 +302,23 @@ def _register_classes(m: LModule, prog: HirProgram):
             mut vlay2 = elay2.variants.get(v2)
             mut p2 = 0
             while p2 < vdef.fields.len:
-                vlay2.ftags.push(_tag_of(m, vdef.fields.get(p2).ty))
-                vlay2.fcls.push(_cls_of_ty(m, vdef.fields.get(p2).ty))
+                # A payload typed as one of the ENUM's generic params is encoded as
+                # -(2+gidx): its concrete tag comes from the USE SITE (the ctor arg's
+                # tag / the match subject's type args) — the slot layout is identical
+                # for every instantiation, so one layout serves them all (zero-cost).
+                mut p2ty = vdef.fields.get(p2).ty
+                mut p2gi = -1
+                if not _is_null_str(p2ty.name):
+                    mut egk = 0
+                    while egk < e2.generics.len:
+                        if e2.generics.get(egk) == p2ty.name: p2gi = egk
+                        egk = egk + 1
+                if p2gi >= 0:
+                    vlay2.ftags.push(0 - (2 + p2gi))
+                    vlay2.fcls.push("")
+                else:
+                    vlay2.ftags.push(_tag_of(m, p2ty))
+                    vlay2.fcls.push(_cls_of_ty(m, p2ty))
                 p2 = p2 + 1
             v2 = v2 + 1
         ei = ei + 1
@@ -345,6 +383,18 @@ def _find_generic_fn(m: LModule, name: str) -> int:
         mut f = m.hir_prog.functions.get(i)
         if f.name == name and f.class_name == "" and not f.is_extern:
             if _fn_is_specializable(m, f): return i
+        i = i + 1
+    return -1
+
+# Find a generic METHOD of `cls` by name (-1 if absent). Direct class only (an
+# inherited generic method falls back — rare, and base-walk would need base HIR access).
+def _find_generic_method(m: LModule, cls: str, method: str) -> int:
+    if _is_null_str(cls) or _is_null_str(method): return -1
+    mut i = 0
+    while i < m.hir_prog.functions.len:
+        mut f = m.hir_prog.functions.get(i)
+        if f.class_name == cls and f.name == method and f.generics.len > 0 and not f.is_extern:
+            return i
         i = i + 1
     return -1
 
@@ -563,10 +613,14 @@ def _lower_enum_ctor(m: LModule, lf: LFunc, ename: str, vname: str, margs: Vec[P
     mut ai = 0
     while ai < margs.len:
         mut ftg = vlay.ftags.get(ai)
-        if ftg < 0 or _is_list_tag(ftg) or _is_dict_tag(ftg): return -1
         mut av = lower_expr(m, lf, margs.get(ai))
         if av < 0: return -1
         mut avt = lf.vreg_type(av)
+        if ftg <= 0 - 2:
+            # generic payload slot: the concrete tag is simply the argument's tag
+            ftg = avt
+            if _is_list_tag(ftg) or _is_dict_tag(ftg) or _is_set_tag(ftg) or ftg == 12: return -1
+        if ftg < 0 or _is_list_tag(ftg) or _is_dict_tag(ftg): return -1
         if ftg == 5:
             if avt == 0: av = _promote_f(lf, av)
             elif avt != 5: return -1
@@ -1009,6 +1063,12 @@ def _lower_match(m: LModule, lf: LFunc, expr: Pointer[HirExpr], arms: Vec[HirMat
     lf.set_cur(end_id)
     return true
 
+# Sema lowers `Option.None` patterns with variant "" or "none" — normalize to "None".
+def _norm_variant(ename: str, vn: str) -> str:
+    if ename == "Option":
+        if _is_null_str(vn) or vn == "" or vn == "none": return "None"
+    return vn
+
 # tag-of-variant condition: (subj.tag == vidx) as a bool vreg.
 def _variant_tag_cond(lf: LFunc, tagv: int, vidx: int) -> int:
     mut cv = lf.new_vreg()
@@ -1019,10 +1079,18 @@ def _variant_tag_cond(lf: LFunc, tagv: int, vidx: int) -> int:
     return dv
 
 # Bind one payload field of `vlay` (field #fldidx of the matched variant) to a local.
-def _bind_payload(m: LModule, lf: LFunc, vlay: VariantLayout, subj: int, fldidx: int, bindname: str) -> bool:
+# `subj_ty` is the match subject's full HIR type: a GENERIC payload slot (ftag -(2+g))
+# resolves its concrete tag/class from subj_ty.args[g] (e.g. Option[int] -> T=int).
+def _bind_payload(m: LModule, lf: LFunc, vlay: VariantLayout, subj: int, subj_ty: AstType, fldidx: int, bindname: str) -> bool:
     if fldidx >= vlay.ftags.len: return false
     mut ftg = vlay.ftags.get(fldidx)
-    if ftg < 0 or _is_list_tag(ftg) or _is_dict_tag(ftg): return false
+    mut bcls = vlay.fcls.get(fldidx)
+    if ftg <= 0 - 2:
+        mut bgi = (0 - ftg) - 2
+        if bgi >= subj_ty.args.len: return false
+        ftg = _tag_of(m, subj_ty.args.get(bgi).read())
+        bcls = _cls_of_ty(m, subj_ty.args.get(bgi).read())
+    if ftg < 0 or _is_list_tag(ftg) or _is_dict_tag(ftg) or _is_set_tag(ftg) or ftg == 12: return false
     mut pv = -1
     if ftg == 5:
         mut praw = _emit_field_get(m, lf, subj, (1 + fldidx) * 8, 0)
@@ -1037,7 +1105,6 @@ def _bind_payload(m: LModule, lf: LFunc, vlay: VariantLayout, subj: int, fldidx:
     lf.add_var(bindname)
     lf.set_var_type(bindname, ftg)
     if ftg == 10 or ftg == 11:
-        mut bcls = vlay.fcls.get(fldidx)
         if not _is_null_str(bcls) and bcls != "": lf.set_var_cls(bindname, _own(bcls))
     lf.emit(LInst.IStoreVar(bindname, pv))
     return true
@@ -1047,6 +1114,7 @@ def _bind_payload(m: LModule, lf: LFunc, vlay: VariantLayout, subj: int, fldidx:
 def _lower_match_enum(m: LModule, lf: LFunc, expr: Pointer[HirExpr], subj: int, arms: Vec[HirMatchArm]) -> bool:
     mut ename = _recv_class(m, lf, expr)
     if ename == "" or not m.is_enum(ename): return false
+    mut subj_hty = hir_expr_type(expr)          # full type incl. generic args (Option[int])
     mut elay = m.enums.get(m.enum_index(ename))
     mut tagv = _emit_field_get(m, lf, subj, 0, 0)     # the variant tag, loaded once
     mut end_id = lf.new_block()
@@ -1063,15 +1131,15 @@ def _lower_match_enum(m: LModule, lf: LFunc, expr: Pointer[HirExpr], subj: int, 
                 is_default = true
                 bind_subj = nm
             case Pattern.PVariant(_, vn):
-                mut vix = elay.variant_index(vn)
+                mut vix = elay.variant_index(_norm_variant(ename, vn))
                 if vix < 0: return false
                 cond = _variant_tag_cond(lf, tagv, vix)
             case Pattern.PVariantBind(_, vnb, _):
-                mut vixb = elay.variant_index(vnb)
+                mut vixb = elay.variant_index(_norm_variant(ename, vnb))
                 if vixb < 0: return false
                 cond = _variant_tag_cond(lf, tagv, vixb)
             case Pattern.PVariantBindMany(_, vnm, _):
-                mut vixm = elay.variant_index(vnm)
+                mut vixm = elay.variant_index(_norm_variant(ename, vnm))
                 if vixm < 0: return false
                 cond = _variant_tag_cond(lf, tagv, vixm)
             case Pattern.POr(orpats):
@@ -1080,7 +1148,7 @@ def _lower_match_enum(m: LModule, lf: LFunc, expr: Pointer[HirExpr], subj: int, 
                     mut oc = -1
                     match orpats.get(oi):
                         case Pattern.PVariant(_, ovn):
-                            mut ovix = elay.variant_index(ovn)
+                            mut ovix = elay.variant_index(_norm_variant(ename, ovn))
                             if ovix < 0: return false
                             oc = _variant_tag_cond(lf, tagv, ovix)
                         case _:
@@ -1110,15 +1178,15 @@ def _lower_match_enum(m: LModule, lf: LFunc, expr: Pointer[HirExpr], subj: int, 
         # Payload binds (positional, inside the matched-variant body).
         match arm.pat:
             case Pattern.PVariantBind(_, vnb2, bnm):
-                mut vlay1 = elay.variants.get(elay.variant_index(vnb2))
+                mut vlay1 = elay.variants.get(elay.variant_index(_norm_variant(ename, vnb2)))
                 if bnm != "_":
-                    if not _bind_payload(m, lf, vlay1, subj, 0, bnm): return false
+                    if not _bind_payload(m, lf, vlay1, subj, subj_hty, 0, bnm): return false
             case Pattern.PVariantBindMany(_, vnm2, bnames):
-                mut vlay2 = elay.variants.get(elay.variant_index(vnm2))
+                mut vlay2 = elay.variants.get(elay.variant_index(_norm_variant(ename, vnm2)))
                 mut bi = 0
                 while bi < bnames.len:
                     if bnames.get(bi) != "_":
-                        if not _bind_payload(m, lf, vlay2, subj, bi, bnames.get(bi)): return false
+                        if not _bind_payload(m, lf, vlay2, subj, subj_hty, bi, bnames.get(bi)): return false
                     bi = bi + 1
             case _:
                 pass
@@ -2818,8 +2886,8 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
             # Unit enum variant `Enum.Variant` (receiver is the enum type name itself).
             match obj.read():
                 case HirExpr.EIdent(uvn, _, _):
-                    if m.is_enum(uvn) and m.enum_variant_index(uvn, prop) >= 0:
-                        return _lower_enum_ctor(m, lf, uvn, prop, Vec[Pointer[HirExpr]].init(0))
+                    if m.is_enum(uvn) and m.enum_variant_index(uvn, _norm_variant(uvn, prop)) >= 0:
+                        return _lower_enum_ctor(m, lf, uvn, _norm_variant(uvn, prop), Vec[Pointer[HirExpr]].init(0))
                 case _:
                     pass
             # Class field read `obj.field` -> _tr_rt_field_get_i(obj, offset).
@@ -2876,8 +2944,9 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                         if smang == "": return -1
                         return _lower_obj_call(m, lf, smang, -1, margs)
                     if m.is_enum(inm):
-                        if m.enum_variant_index(inm, method) >= 0:
-                            return _lower_enum_ctor(m, lf, inm, method, margs)
+                        mut nvm = _norm_variant(inm, method)
+                        if m.enum_variant_index(inm, nvm) >= 0:
+                            return _lower_enum_ctor(m, lf, inm, nvm, margs)
                         return _lower_obj_call(m, lf, inm + "_" + method, -1, margs)
                 case _:
                     pass
@@ -2888,7 +2957,46 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                 mut mangled = recv_cls + "_" + method
                 if m.is_class(recv_cls):
                     mangled = m.resolve_method(recv_cls, method)
-                    if mangled == "": return -1
+                    if mangled == "":
+                        # Generic method `def m[T](self, ..)`: specialize per arg tags,
+                        # exactly like generic free fns (self rides along as param 0).
+                        mut gmix = _find_generic_method(m, recv_cls, method)
+                        if gmix < 0: return -1
+                        mut gm_self = lower_expr(m, lf, obj)
+                        if gm_self < 0: return -1
+                        mut gm_tags = Vec[int].init(margs.len + 1)
+                        mut gm_cls = Vec[str].init(margs.len + 1)
+                        mut gm_regs = Vec[int].init(margs.len + 1)
+                        gm_tags.push(lf.vreg_type(gm_self))
+                        gm_cls.push(_own(recv_cls))
+                        gm_regs.push(gm_self)
+                        mut gm_name = recv_cls + "_" + method + "__m"
+                        mut gmj = 0
+                        while gmj < margs.len:
+                            mut gmv = lower_expr(m, lf, margs.get(gmj))
+                            if gmv < 0: return -1
+                            mut gmt = lf.vreg_type(gmv)
+                            mut gmc = ""
+                            if gmt == 10 or gmt == 11:
+                                gmc = _recv_class(m, lf, margs.get(gmj))
+                                if gmc == "": return -1
+                            gm_regs.push(gmv)
+                            gm_tags.push(gmt)
+                            gm_cls.push(gmc)
+                            if gmj > 0: gm_name = gm_name + "_"
+                            gm_name = gm_name + gmt.to_str()
+                            if gmc != "": gm_name = gm_name + gmc
+                            gmj = gmj + 1
+                        if gm_regs.len > 6: return -1
+                        if not m.is_user_fn(gm_name):
+                            if not _lir_lower_generic(m, m.hir_prog.functions.get(gmix), gm_tags, gm_cls, gm_name):
+                                return -1
+                        mut gm_ret = m.fn_ret_tag(gm_name)
+                        mut gm_d = lf.new_vreg()
+                        lf.emit(LInst.ICall(gm_d, gm_name, gm_regs))
+                        lf.set_vreg_type(gm_d, gm_ret)
+                        if gm_ret == 1: _fresh_mark(lf, gm_d)
+                        return gm_d
                 mut rself = lower_expr(m, lf, obj)
                 if rself < 0: return -1
                 return _lower_obj_call(m, lf, mangled, rself, margs)
@@ -2905,6 +3013,23 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                 return _lower_dict_method(m, lf, ovm, ovmt, method, margs)
             if _is_set_tag(ovmt):
                 return _lower_set_method(m, lf, ovm, ovmt, method, margs)
+            if ovmt == 15 and (method == "get_index" or method == "get") and margs.len == 1:
+                # Tuple index (constant only — tuples are heterogeneous).
+                mut tgt_idx = -1
+                match margs.get(0).read():
+                    case HirExpr.ELitInt(tgt_v, _): tgt_idx = tgt_v
+                    case _: return -1
+                mut tup_hty = hir_expr_type(obj)
+                if tgt_idx < 0 or tgt_idx >= tup_hty.args.len: return -1
+                mut tgt_tag = _tag_of(m, tup_hty.args.get(tgt_idx).read())
+                if tgt_tag < 0 or _is_list_tag(tgt_tag) or _is_dict_tag(tgt_tag) or _is_set_tag(tgt_tag): return -1
+                if tgt_tag == 5:
+                    mut tgr = _emit_field_get(m, lf, ovm, tgt_idx * 8, 0)
+                    mut tgf = lf.new_vreg()
+                    lf.emit(LInst.IBitsF(tgf, tgr))
+                    lf.set_vreg_type(tgf, 5)
+                    return tgf
+                return _emit_field_get(m, lf, ovm, tgt_idx * 8, tgt_tag)
             if not _is_list_tag(ovmt): return -1
             mut want_elem = _list_elem_tag(ovmt)
             if method == "push" or method == "append":

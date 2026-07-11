@@ -5195,6 +5195,17 @@ extend Sema:
                             _gi5 = _gi5 + 1
                 elif self.enums.contains(hobj_ty.name):
                     ret_ty = AstType.init(hobj_ty.name)
+                    # Builtin generic enum ctors carry the payload's CONCRETE type so a
+                    # later `case Option.Some(v):` can bind `v` with the right type
+                    # (Option.Some(2.5) -> Option[float], Result.Err(e) -> Result[void, E]).
+                    if hobj_ty.name == "Option" and method == "Some" and hl.len == 1:
+                        ret_ty.args.push(box_asttype(hir_expr_type(hl.get(0))))
+                    elif hobj_ty.name == "Result" and method == "Ok" and hl.len == 1:
+                        ret_ty.args.push(box_asttype(hir_expr_type(hl.get(0))))
+                        ret_ty.args.push(box_asttype(AstType.init("void")))
+                    elif hobj_ty.name == "Result" and method == "Err" and hl.len == 1:
+                        ret_ty.args.push(box_asttype(AstType.init("void")))
+                        ret_ty.args.push(box_asttype(hir_expr_type(hl.get(0))))
                 elif self.classes.contains(hobj_ty.name):
                     mut _cls = self.classes.get(hobj_ty.name)
                     mut _hty_n = hobj_ty.name
@@ -5393,6 +5404,19 @@ extend Sema:
                     mut didx_args = Vec[Pointer[HirExpr]].init(1)
                     didx_args.push(self.lower_expr(idx_inner))
                     return box_hirexpr(HirExpr.EMethodCall(hexpr_obj, "get_index", didx_args, dval_ty))
+                # Tuple index t[i]: a CONSTANT index types the read as element #i's type
+                # (tuples are heterogeneous, so only literal indices are well-typed).
+                if obj_ty_n == "Tuple":
+                    mut tup_full = hir_expr_type(hexpr_obj)
+                    mut telem_ty = AstType.init("void")
+                    match idx_inner.read():
+                        case Expr.ELitInt(tup_ci):
+                            if tup_ci >= 0 and tup_ci < tup_full.args.len:
+                                telem_ty = tup_full.args.get(tup_ci).read()
+                        case _: pass
+                    mut tup_args = Vec[Pointer[HirExpr]].init(1)
+                    tup_args.push(self.lower_expr(idx_inner))
+                    return box_hirexpr(HirExpr.EMethodCall(hexpr_obj, "get_index", tup_args, telem_ty))
                 if not self.is_primitive_name(obj_ty_n) and obj_ty_n != "str" and obj_ty_n != "Pointer" and obj_ty_n != "List" and obj_ty_n != "Vec":
                     mut call_args = Vec[Pointer[HirExpr]].init(1)
                     call_args.push(self.lower_expr(idx_inner))
