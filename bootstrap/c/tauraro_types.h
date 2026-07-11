@@ -53,10 +53,11 @@ typedef struct Scope Scope;
 typedef struct Sema Sema;
 typedef struct Formatter Formatter;
 typedef struct CGenerator CGenerator;
-typedef struct LlvmGenerator LlvmGenerator;
 typedef struct LBlock LBlock;
 typedef struct LFunc LFunc;
 typedef struct LModule LModule;
+typedef struct LlvmEmitter LlvmEmitter;
+typedef struct LlvmGenerator LlvmGenerator;
 typedef struct ByteBuf ByteBuf;
 typedef struct Reloc Reloc;
 typedef struct Jump Jump;
@@ -133,10 +134,11 @@ static void _trdrop_Scope(void* vp);
 static void _trdrop_Sema(void* vp);
 static void _trdrop_Formatter(void* vp);
 static void _trdrop_CGenerator(void* vp);
-static void _trdrop_LlvmGenerator(void* vp);
 static void _trdrop_LBlock(void* vp);
 static void _trdrop_LFunc(void* vp);
 static void _trdrop_LModule(void* vp);
+static void _trdrop_LlvmEmitter(void* vp);
+static void _trdrop_LlvmGenerator(void* vp);
 static void _trdrop_ByteBuf(void* vp);
 static void _trdrop_Reloc(void* vp);
 static void _trdrop_Jump(void* vp);
@@ -2828,24 +2830,6 @@ static void _trdrop_CGenerator(void* vp) {
 }
 #endif
 
-#ifndef LlvmGenerator_STRUCT_DEFINED
-#define LlvmGenerator_STRUCT_DEFINED
-typedef struct LlvmGenerator {
-    size_t __rc;
-    StringBuilder* buf;
-    long long temp;
-    TrMap* classes;
-    TrMap* enums;
-    TrMap* functions;
-} LlvmGenerator;
-static void _trdrop_LlvmGenerator(void* vp) {
-    LlvmGenerator* self = (LlvmGenerator*)vp; (void)self;
-    Dict_free_objval(self->classes, _trdrop_HirClass);
-    Dict_free_objval(self->enums, _trdrop_HirEnum);
-    Dict_free_objval(self->functions, _trdrop_HirFunction);
-}
-#endif
-
 #ifndef LBlock_STRUCT_DEFINED
 #define LBlock_STRUCT_DEFINED
 typedef struct LBlock {
@@ -2914,6 +2898,36 @@ static void _trdrop_LModule(void* vp) {
     List_TrStr_free(self->globals);
     List_i64_free(self->global_types);
     List_ptr_free(self->global_inits);
+}
+#endif
+
+#ifndef LlvmEmitter_STRUCT_DEFINED
+#define LlvmEmitter_STRUCT_DEFINED
+typedef struct LlvmEmitter {
+    size_t __rc;
+    StringBuilder* out;
+    LModule* m;
+    long long tmp;
+    LFunc* cur;
+    TrStr cur_ret;
+    bool cur_main;
+} LlvmEmitter;
+static void _trdrop_LlvmEmitter(void* vp) {
+    LlvmEmitter* self = (LlvmEmitter*)vp; (void)self;
+    _tr_obj_release(self->m, _trdrop_LModule);
+    _tr_obj_release(self->cur, _trdrop_LFunc);
+    _tr_str_release(self->cur_ret);
+}
+#endif
+
+#ifndef LlvmGenerator_STRUCT_DEFINED
+#define LlvmGenerator_STRUCT_DEFINED
+typedef struct LlvmGenerator {
+    size_t __rc;
+    bool ok;
+} LlvmGenerator;
+static void _trdrop_LlvmGenerator(void* vp) {
+    LlvmGenerator* self = (LlvmGenerator*)vp; (void)self;
 }
 #endif
 
@@ -3546,19 +3560,6 @@ __attribute__((hot)) bool _is_c_keyword(TrStr n);
 __attribute__((hot)) bool _starts_with_tr(TrStr s);
 __attribute__((hot)) bool _is_primitive(TrStr n);
 __attribute__((hot)) TrStr _escape_str_for_c(TrStr s);
-__attribute__((hot)) TrStr llvm_type(AstType* ty);
-__attribute__((malloc,returns_nonnull,hot)) LlvmGenerator* LlvmGenerator_init();
-__attribute__((hot)) void LlvmGenerator_w(LlvmGenerator* self, TrStr s);
-__attribute__((hot)) TrStr LlvmGenerator_next_reg(LlvmGenerator* self);
-__attribute__((hot)) void LlvmGenerator__tr_fn_register(LlvmGenerator* self, HirProgram* prog);
-__attribute__((hot)) void LlvmGenerator_emit_type_decls(LlvmGenerator* self, HirProgram* prog);
-__attribute__((hot)) void LlvmGenerator_emit_func_sig(LlvmGenerator* self, HirFunction* f, TrStr class_name);
-__attribute__((hot)) TrStr LlvmGenerator_gen_expr(LlvmGenerator* self, HirExpr* e_ptr);
-__attribute__((hot)) TrStr LlvmGenerator_gen_binop_llvm(LlvmGenerator* self, TrStr op, HirExpr* left, HirExpr* right, AstType* ty);
-__attribute__((hot)) TrStr LlvmGenerator_gen_call_llvm(LlvmGenerator* self, HirExpr* callee, List_ptr* args);
-__attribute__((hot)) void LlvmGenerator_gen_stmt(LlvmGenerator* self, HirStmt* s_ptr);
-__attribute__((hot)) void LlvmGenerator_gen_block(LlvmGenerator* self, HirBlock* b);
-__attribute__((hot)) TrStr LlvmGenerator_generate(LlvmGenerator* self, HirProgram* prog);
 __attribute__((hot)) LInst* box_linst(LInst i);
 __attribute__((malloc,returns_nonnull,hot)) LBlock* LBlock_init(long long id);
 __attribute__((malloc,returns_nonnull,hot)) LFunc* LFunc_init(TrStr name);
@@ -3644,6 +3645,33 @@ __attribute__((hot)) void _emit_add_const(LFunc* lf, TrStr name, long long delta
 __attribute__((hot)) long long _list_call1(LModule* m, LFunc* lf, TrStr sym, long long handle, long long restype);
 __attribute__((hot)) long long _list_get(LModule* m, LFunc* lf, long long handle, long long idx);
 __attribute__((hot)) long long lower_expr(LModule* m, LFunc* lf, HirExpr* e);
+__attribute__((hot)) TrStr _ll_ty(long long tag);
+__attribute__((hot)) TrStr _ll_ty_name(TrStr n);
+__attribute__((hot)) long long _ll_hexdigit(long long n);
+__attribute__((hot)) TrStr _ll_hexpad16(long long v);
+__attribute__((hot)) long long _ll_str_bytelen(TrStr s);
+__attribute__((hot)) TrStr _ll_str_escape(TrStr s);
+__attribute__((malloc,returns_nonnull,hot)) LlvmEmitter* LlvmEmitter_init(LModule* m);
+__attribute__((hot)) void LlvmEmitter_w(LlvmEmitter* self, TrStr s);
+__attribute__((hot)) TrStr LlvmEmitter_newtmp(LlvmEmitter* self);
+__attribute__((hot)) TrStr LlvmEmitter_vty(LlvmEmitter* self, long long v);
+__attribute__((hot)) TrStr LlvmEmitter_load_vreg(LlvmEmitter* self, long long v);
+__attribute__((hot)) TrStr LlvmEmitter_load_vreg_as(LlvmEmitter* self, long long v, TrStr ty);
+__attribute__((hot)) void LlvmEmitter_store_vreg(LlvmEmitter* self, long long v, TrStr ty, TrStr val);
+__attribute__((hot)) TrStr LlvmEmitter_user_ret_ty(LlvmEmitter* self, TrStr name);
+__attribute__((hot)) void LlvmEmitter_emit_inst(LlvmEmitter* self, LInst inst);
+__attribute__((hot)) void LlvmEmitter_emit_call(LlvmEmitter* self, long long dst, TrStr callee, List_i64* args);
+__attribute__((hot)) void LlvmEmitter_emit_term(LlvmEmitter* self, LTerm t);
+__attribute__((hot)) void LlvmEmitter_emit_function(LlvmEmitter* self, LFunc* lf);
+__attribute__((hot)) void LlvmEmitter_emit_extern_decls(LlvmEmitter* self);
+__attribute__((hot)) void LlvmEmitter_scan_call_decl(LlvmEmitter* self, LInst inst, TrMap* seen);
+__attribute__((hot)) TrStr LlvmEmitter_emit_module(LlvmEmitter* self);
+__attribute__((hot)) TrStr _ll_int_instr(TrStr op);
+__attribute__((hot)) TrStr _ll_icmp_pred(TrStr op);
+__attribute__((hot)) TrStr _ll_float_instr(TrStr op);
+__attribute__((hot)) TrStr _ll_fcmp_pred(TrStr op);
+__attribute__((malloc,returns_nonnull,hot)) LlvmGenerator* LlvmGenerator_init();
+__attribute__((hot)) TrStr LlvmGenerator_generate(LlvmGenerator* self, HirProgram* prog);
 __attribute__((malloc,returns_nonnull,hot)) ByteBuf* ByteBuf_init();
 __attribute__((hot)) void ByteBuf_u8(ByteBuf* self, long long v);
 __attribute__((hot)) void ByteBuf_u16(ByteBuf* self, long long v);
@@ -4960,24 +4988,6 @@ __attribute__((hot)) void core_alloc_dealloc_codegen_c_CGenerator_ptr(codegen_c_
 __attribute__((hot)) core_map_MapNode_str_codegen_c_CGenerator** core_alloc_alloc_core_map_MapNode_str_codegen_c_CGenerator(long long count);
 __attribute__((hot)) void core_alloc_dealloc_core_map_MapNode_str_codegen_c_CGenerator(core_map_MapNode_str_codegen_c_CGenerator** ptr);
 
-typedef LlvmGenerator codegen_llvm_LlvmGenerator;
-struct core_vec_Vec_codegen_llvm_LlvmGenerator { codegen_llvm_LlvmGenerator** data; long long len; long long capacity; };
-typedef struct core_vec_Vec_codegen_llvm_LlvmGenerator core_vec_Vec_codegen_llvm_LlvmGenerator;
-struct core_vec_Vec_codegen_llvm_LlvmGenerator_ptr { codegen_llvm_LlvmGenerator*** data; long long len; long long capacity; };
-typedef struct core_vec_Vec_codegen_llvm_LlvmGenerator_ptr core_vec_Vec_codegen_llvm_LlvmGenerator_ptr;
-struct core_map_MapNode_str_codegen_llvm_LlvmGenerator { char* key; codegen_llvm_LlvmGenerator* value; struct core_map_MapNode_str_codegen_llvm_LlvmGenerator* next; };
-typedef struct core_map_MapNode_str_codegen_llvm_LlvmGenerator core_map_MapNode_str_codegen_llvm_LlvmGenerator;
-struct core_map_Map_str_codegen_llvm_LlvmGenerator { core_map_MapNode_str_codegen_llvm_LlvmGenerator** buckets; long long capacity; long long len; };
-typedef struct core_map_Map_str_codegen_llvm_LlvmGenerator core_map_Map_str_codegen_llvm_LlvmGenerator;
-__attribute__((hot)) codegen_llvm_LlvmGenerator** core_alloc_alloc_codegen_llvm_LlvmGenerator(long long count);
-__attribute__((hot)) codegen_llvm_LlvmGenerator** core_alloc_resize_codegen_llvm_LlvmGenerator(codegen_llvm_LlvmGenerator** ptr, long long new_count);
-__attribute__((hot)) void core_alloc_dealloc_codegen_llvm_LlvmGenerator(codegen_llvm_LlvmGenerator** ptr);
-__attribute__((hot)) codegen_llvm_LlvmGenerator*** core_alloc_alloc_codegen_llvm_LlvmGenerator_ptr(long long count);
-__attribute__((hot)) codegen_llvm_LlvmGenerator*** core_alloc_resize_codegen_llvm_LlvmGenerator_ptr(codegen_llvm_LlvmGenerator*** ptr, long long new_count);
-__attribute__((hot)) void core_alloc_dealloc_codegen_llvm_LlvmGenerator_ptr(codegen_llvm_LlvmGenerator*** ptr);
-__attribute__((hot)) core_map_MapNode_str_codegen_llvm_LlvmGenerator** core_alloc_alloc_core_map_MapNode_str_codegen_llvm_LlvmGenerator(long long count);
-__attribute__((hot)) void core_alloc_dealloc_core_map_MapNode_str_codegen_llvm_LlvmGenerator(core_map_MapNode_str_codegen_llvm_LlvmGenerator** ptr);
-
 typedef LType taumir_ir_LType;
 struct core_vec_Vec_taumir_ir_LType { taumir_ir_LType* data; long long len; long long capacity; };
 typedef struct core_vec_Vec_taumir_ir_LType core_vec_Vec_taumir_ir_LType;
@@ -5067,6 +5077,42 @@ __attribute__((hot)) taumir_ir_LModule*** core_alloc_resize_taumir_ir_LModule_pt
 __attribute__((hot)) void core_alloc_dealloc_taumir_ir_LModule_ptr(taumir_ir_LModule*** ptr);
 __attribute__((hot)) core_map_MapNode_str_taumir_ir_LModule** core_alloc_alloc_core_map_MapNode_str_taumir_ir_LModule(long long count);
 __attribute__((hot)) void core_alloc_dealloc_core_map_MapNode_str_taumir_ir_LModule(core_map_MapNode_str_taumir_ir_LModule** ptr);
+
+typedef LlvmEmitter codegen_llvm_emit_LlvmEmitter;
+struct core_vec_Vec_codegen_llvm_emit_LlvmEmitter { codegen_llvm_emit_LlvmEmitter** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_codegen_llvm_emit_LlvmEmitter core_vec_Vec_codegen_llvm_emit_LlvmEmitter;
+struct core_vec_Vec_codegen_llvm_emit_LlvmEmitter_ptr { codegen_llvm_emit_LlvmEmitter*** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_codegen_llvm_emit_LlvmEmitter_ptr core_vec_Vec_codegen_llvm_emit_LlvmEmitter_ptr;
+struct core_map_MapNode_str_codegen_llvm_emit_LlvmEmitter { char* key; codegen_llvm_emit_LlvmEmitter* value; struct core_map_MapNode_str_codegen_llvm_emit_LlvmEmitter* next; };
+typedef struct core_map_MapNode_str_codegen_llvm_emit_LlvmEmitter core_map_MapNode_str_codegen_llvm_emit_LlvmEmitter;
+struct core_map_Map_str_codegen_llvm_emit_LlvmEmitter { core_map_MapNode_str_codegen_llvm_emit_LlvmEmitter** buckets; long long capacity; long long len; };
+typedef struct core_map_Map_str_codegen_llvm_emit_LlvmEmitter core_map_Map_str_codegen_llvm_emit_LlvmEmitter;
+__attribute__((hot)) codegen_llvm_emit_LlvmEmitter** core_alloc_alloc_codegen_llvm_emit_LlvmEmitter(long long count);
+__attribute__((hot)) codegen_llvm_emit_LlvmEmitter** core_alloc_resize_codegen_llvm_emit_LlvmEmitter(codegen_llvm_emit_LlvmEmitter** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_codegen_llvm_emit_LlvmEmitter(codegen_llvm_emit_LlvmEmitter** ptr);
+__attribute__((hot)) codegen_llvm_emit_LlvmEmitter*** core_alloc_alloc_codegen_llvm_emit_LlvmEmitter_ptr(long long count);
+__attribute__((hot)) codegen_llvm_emit_LlvmEmitter*** core_alloc_resize_codegen_llvm_emit_LlvmEmitter_ptr(codegen_llvm_emit_LlvmEmitter*** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_codegen_llvm_emit_LlvmEmitter_ptr(codegen_llvm_emit_LlvmEmitter*** ptr);
+__attribute__((hot)) core_map_MapNode_str_codegen_llvm_emit_LlvmEmitter** core_alloc_alloc_core_map_MapNode_str_codegen_llvm_emit_LlvmEmitter(long long count);
+__attribute__((hot)) void core_alloc_dealloc_core_map_MapNode_str_codegen_llvm_emit_LlvmEmitter(core_map_MapNode_str_codegen_llvm_emit_LlvmEmitter** ptr);
+
+typedef LlvmGenerator codegen_llvm_LlvmGenerator;
+struct core_vec_Vec_codegen_llvm_LlvmGenerator { codegen_llvm_LlvmGenerator** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_codegen_llvm_LlvmGenerator core_vec_Vec_codegen_llvm_LlvmGenerator;
+struct core_vec_Vec_codegen_llvm_LlvmGenerator_ptr { codegen_llvm_LlvmGenerator*** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_codegen_llvm_LlvmGenerator_ptr core_vec_Vec_codegen_llvm_LlvmGenerator_ptr;
+struct core_map_MapNode_str_codegen_llvm_LlvmGenerator { char* key; codegen_llvm_LlvmGenerator* value; struct core_map_MapNode_str_codegen_llvm_LlvmGenerator* next; };
+typedef struct core_map_MapNode_str_codegen_llvm_LlvmGenerator core_map_MapNode_str_codegen_llvm_LlvmGenerator;
+struct core_map_Map_str_codegen_llvm_LlvmGenerator { core_map_MapNode_str_codegen_llvm_LlvmGenerator** buckets; long long capacity; long long len; };
+typedef struct core_map_Map_str_codegen_llvm_LlvmGenerator core_map_Map_str_codegen_llvm_LlvmGenerator;
+__attribute__((hot)) codegen_llvm_LlvmGenerator** core_alloc_alloc_codegen_llvm_LlvmGenerator(long long count);
+__attribute__((hot)) codegen_llvm_LlvmGenerator** core_alloc_resize_codegen_llvm_LlvmGenerator(codegen_llvm_LlvmGenerator** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_codegen_llvm_LlvmGenerator(codegen_llvm_LlvmGenerator** ptr);
+__attribute__((hot)) codegen_llvm_LlvmGenerator*** core_alloc_alloc_codegen_llvm_LlvmGenerator_ptr(long long count);
+__attribute__((hot)) codegen_llvm_LlvmGenerator*** core_alloc_resize_codegen_llvm_LlvmGenerator_ptr(codegen_llvm_LlvmGenerator*** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_codegen_llvm_LlvmGenerator_ptr(codegen_llvm_LlvmGenerator*** ptr);
+__attribute__((hot)) core_map_MapNode_str_codegen_llvm_LlvmGenerator** core_alloc_alloc_core_map_MapNode_str_codegen_llvm_LlvmGenerator(long long count);
+__attribute__((hot)) void core_alloc_dealloc_core_map_MapNode_str_codegen_llvm_LlvmGenerator(core_map_MapNode_str_codegen_llvm_LlvmGenerator** ptr);
 
 typedef ByteBuf codegen_native_bytebuf_ByteBuf;
 struct core_vec_Vec_codegen_native_bytebuf_ByteBuf { codegen_native_bytebuf_ByteBuf** data; long long len; long long capacity; };

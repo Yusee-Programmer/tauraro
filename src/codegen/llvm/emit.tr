@@ -1,0 +1,384 @@
+# @trusted: compiler systems module — audited raw-pointer core (like Rust std internals)
+# src/codegen/llvm/emit.tr — the LLVM backend (Path A) emitter: lowered IR (src/taumir)
+# -> textual LLVM IR. Compiled to an object by `llc` and linked with runtime.o (the SAME
+# runtime the native backend uses) to produce an executable. LLVM's -O passes (mem2reg,
+# instcombine, ...) give release-quality codegen for free — that is the whole point of A.
+#
+# Codegen model: mirror the native "every vreg + var in a stack slot" shape by emitting an
+# `alloca` per vreg/var and load/store around every use. LLVM's mem2reg promotes those to
+# real SSA registers during optimization, so we get SSA form without building phi nodes.
+
+from core.string import StringBuilder
+from core.map import Map
+from core.vec import Vec
+from taumir.ir import LModule, LFunc, LBlock, LInst, LTerm
+from codegen.llvm.lltype import _ll_ty, _ll_hexpad16, _ll_str_escape, _ll_str_bytelen
+
+pub class LlvmEmitter:
+    pub out:     StringBuilder
+    pub m:       LModule
+    pub tmp:     int             # SSA temp counter (reset per function)
+    pub cur:     LFunc           # function currently being emitted
+    pub cur_ret: str             # LLVM return type of the current function
+    pub cur_main: bool           # is the current function `main` (C entry, returns i32)?
+
+extend LlvmEmitter:
+    pub def init(m: LModule) -> LlvmEmitter:
+        mut e = LlvmEmitter()
+        e.out      = StringBuilder.init(4096)
+        e.m        = m
+        e.tmp      = 0
+        e.cur_ret  = "i64"
+        e.cur_main = false
+        return e
+
+    pub def w(self, s: str):
+        self.out.append(s)
+
+    pub def newtmp(self) -> str:
+        self.tmp = self.tmp + 1
+        return "%t" + self.tmp.to_str()
+
+    # LLVM storage type of a vreg in the current function.
+    pub def vty(self, v: int) -> str:
+        return _ll_ty(self.cur.vreg_type(v))
+
+    # Load vreg #v into a fresh SSA temp; return the temp name.
+    pub def load_vreg(self, v: int) -> str:
+        mut t = self.newtmp()
+        self.w("  " + t + " = load " + self.vty(v) + ", ptr %v" + v.to_str() + "\n")
+        return t
+
+    # Load vreg #v as a given LLVM type (used when the consumer needs a specific type).
+    pub def load_vreg_as(self, v: int, ty: str) -> str:
+        mut t = self.newtmp()
+        self.w("  " + t + " = load " + ty + ", ptr %v" + v.to_str() + "\n")
+        return t
+
+    pub def store_vreg(self, v: int, ty: str, val: str):
+        self.w("  store " + ty + " " + val + ", ptr %v" + v.to_str() + "\n")
+
+    # Return-type tag of a user function (i64 for void — void Tauraro fns become i64 LLVM
+    # fns returning 0, matching the native model where the tag drives everything).
+    pub def user_ret_ty(self, name: str) -> str:
+        return _ll_ty(self.m.fn_ret_tag(name))
+
+    # -- one LIR instruction -> LLVM IR ---------------------------------------------------
+    pub def emit_inst(self, inst: LInst):
+        match inst:
+            case LInst.IConst(dst, v):
+                if self.vty(dst) == "double":
+                    self.w("  store double 0x" + _ll_hexpad16(v) + ", ptr %v" + dst.to_str() + "\n")
+                else:
+                    self.store_vreg(dst, "i64", v.to_str())
+            case LInst.IStr(dst, str_idx):
+                self.store_vreg(dst, "ptr", "@.str." + str_idx.to_str())
+            case LInst.IBinOp(dst, op, a, b):
+                mut la = self.load_vreg_as(a, "i64")
+                mut lb = self.load_vreg_as(b, "i64")
+                mut pred = _ll_icmp_pred(op)
+                if pred != "":
+                    mut c = self.newtmp()
+                    self.w("  " + c + " = icmp " + pred + " i64 " + la + ", " + lb + "\n")
+                    mut z = self.newtmp()
+                    self.w("  " + z + " = zext i1 " + c + " to i64\n")
+                    self.store_vreg(dst, "i64", z)
+                else:
+                    mut r = self.newtmp()
+                    self.w("  " + r + " = " + _ll_int_instr(op) + " i64 " + la + ", " + lb + "\n")
+                    self.store_vreg(dst, "i64", r)
+            case LInst.IFBinOp(dst, op, a, b):
+                mut fa = self.load_vreg_as(a, "double")
+                mut fb = self.load_vreg_as(b, "double")
+                mut fpred = _ll_fcmp_pred(op)
+                if fpred != "":
+                    mut c2 = self.newtmp()
+                    self.w("  " + c2 + " = fcmp " + fpred + " double " + fa + ", " + fb + "\n")
+                    mut z2 = self.newtmp()
+                    self.w("  " + z2 + " = zext i1 " + c2 + " to i64\n")
+                    self.store_vreg(dst, "i64", z2)
+                else:
+                    mut fr = self.newtmp()
+                    self.w("  " + fr + " = " + _ll_float_instr(op) + " double " + fa + ", " + fb + "\n")
+                    self.store_vreg(dst, "double", fr)
+            case LInst.IIToF(dst, src):
+                mut si = self.load_vreg_as(src, "i64")
+                mut rf = self.newtmp()
+                self.w("  " + rf + " = sitofp i64 " + si + " to double\n")
+                self.store_vreg(dst, "double", rf)
+            case LInst.IFToI(dst, src):
+                mut sf = self.load_vreg_as(src, "double")
+                mut ri = self.newtmp()
+                self.w("  " + ri + " = fptosi double " + sf + " to i64\n")
+                self.store_vreg(dst, "i64", ri)
+            case LInst.ILoadVar(dst, name):
+                mut vt = _ll_ty(self.cur.var_type(name))
+                mut t = self.newtmp()
+                self.w("  " + t + " = load " + vt + ", ptr %var_" + name + "\n")
+                self.store_vreg(dst, vt, t)
+            case LInst.IStoreVar(name, src):
+                mut st = self.vty(src)
+                mut ls = self.load_vreg_as(src, st)
+                self.w("  store " + st + " " + ls + ", ptr %var_" + name + "\n")
+            case LInst.ILoadGlobal(dst, gidx):
+                mut gt = _ll_ty(self.m.global_types.get(gidx))
+                mut tg = self.newtmp()
+                self.w("  " + tg + " = load " + gt + ", ptr @g." + gidx.to_str() + "\n")
+                self.store_vreg(dst, gt, tg)
+            case LInst.IStoreGlobal(gidx, src):
+                mut gt2 = self.vty(src)
+                mut lg = self.load_vreg_as(src, gt2)
+                self.w("  store " + gt2 + " " + lg + ", ptr @g." + gidx.to_str() + "\n")
+            case LInst.ICall(dst, callee, args):
+                self.emit_call(dst, callee, args)
+            case LInst.IFCall1(dst, callee, arg):
+                mut a1 = self.load_vreg_as(arg, "double")
+                mut rt1 = "void"
+                if dst >= 0: rt1 = self.vty(dst)
+                if rt1 == "void":
+                    self.w("  call void @" + callee + "(double " + a1 + ")\n")
+                else:
+                    mut r1 = self.newtmp()
+                    self.w("  " + r1 + " = call " + rt1 + " @" + callee + "(double " + a1 + ")\n")
+                    self.store_vreg(dst, rt1, r1)
+            case LInst.IFCallF(dst, callee, arg):
+                mut a2 = self.load_vreg_as(arg, "double")
+                mut r2 = self.newtmp()
+                self.w("  " + r2 + " = call double @" + callee + "(double " + a2 + ")\n")
+                if dst >= 0: self.store_vreg(dst, "double", r2)
+            case LInst.IFCall2F(dst, callee, a, b):
+                mut fa2 = self.load_vreg_as(a, "double")
+                mut fb2 = self.load_vreg_as(b, "double")
+                mut r3 = self.newtmp()
+                self.w("  " + r3 + " = call double @" + callee + "(double " + fa2 + ", double " + fb2 + ")\n")
+                if dst >= 0: self.store_vreg(dst, "double", r3)
+
+    pub def emit_call(self, dst: int, callee: str, args: Vec[int]):
+        # Build the "(<ty> <val>, ...)" argument list.
+        mut arglist = ""
+        mut ai = 0
+        while ai < args.len:
+            mut av = args.get(ai)
+            mut aty = self.vty(av)
+            mut al = self.load_vreg_as(av, aty)
+            if ai > 0: arglist = arglist + ", "
+            arglist = arglist + aty + " " + al
+            ai = ai + 1
+        mut retty = "void"
+        if self.m.is_user_fn(callee):
+            retty = self.user_ret_ty(callee)              # user fns never LLVM-void
+        elif dst >= 0:
+            retty = self.vty(dst)
+        if retty == "void":
+            self.w("  call void @" + callee + "(" + arglist + ")\n")
+        else:
+            mut r = self.newtmp()
+            self.w("  " + r + " = call " + retty + " @" + callee + "(" + arglist + ")\n")
+            if dst >= 0: self.store_vreg(dst, retty, r)
+
+    # -- block terminator -----------------------------------------------------------------
+    pub def emit_term(self, t: LTerm):
+        match t:
+            case LTerm.TRetInt(v):
+                if self.cur_main:
+                    self.w("  ret i32 " + v.to_str() + "\n")
+                elif self.cur_ret == "double":
+                    self.w("  ret double 0.0\n")
+                elif self.cur_ret == "ptr":
+                    self.w("  ret ptr null\n")
+                else:
+                    self.w("  ret i64 " + v.to_str() + "\n")
+            case LTerm.TRetVal(v):
+                if self.cur_main:
+                    mut lv = self.load_vreg_as(v, "i64")
+                    mut tr = self.newtmp()
+                    self.w("  " + tr + " = trunc i64 " + lv + " to i32\n")
+                    self.w("  ret i32 " + tr + "\n")
+                else:
+                    mut lv2 = self.load_vreg_as(v, self.cur_ret)
+                    self.w("  ret " + self.cur_ret + " " + lv2 + "\n")
+            case LTerm.TRetVoid:
+                if self.cur_main: self.w("  ret i32 0\n")
+                elif self.cur_ret == "double": self.w("  ret double 0.0\n")
+                elif self.cur_ret == "ptr": self.w("  ret ptr null\n")
+                else: self.w("  ret i64 0\n")
+            case LTerm.TBr(target):
+                self.w("  br label %bb" + target.to_str() + "\n")
+            case LTerm.TCondBr(cond, then_b, else_b):
+                mut lc = self.load_vreg_as(cond, "i64")
+                mut c = self.newtmp()
+                self.w("  " + c + " = icmp ne i64 " + lc + ", 0\n")
+                self.w("  br i1 " + c + ", label %bb" + then_b.to_str() + ", label %bb" + else_b.to_str() + "\n")
+            case LTerm.TUnset:
+                self.w("  unreachable\n")
+
+    # -- one function ---------------------------------------------------------------------
+    pub def emit_function(self, lf: LFunc):
+        self.tmp = 0
+        self.cur = lf
+        self.cur_main = lf.is_main
+        if lf.is_main:
+            self.cur_ret = "i32"
+        else:
+            self.cur_ret = _ll_ty(self.m.fn_ret_tag(lf.name))
+        mut fname = lf.name
+        # Signature: define <ret> @name(<pty> %arg_<p>, ...)
+        self.w("define " + self.cur_ret + " @" + fname + "(")
+        mut pi = 0
+        while pi < lf.params.len:
+            mut pn = lf.params.get(pi)
+            mut pty = _ll_ty(lf.var_type(pn))
+            if pi > 0: self.w(", ")
+            self.w(pty + " %arg_" + pn)
+            pi = pi + 1
+        self.w(") {\nentry:\n")
+        # Allocas: one per var (params + locals) and one per vreg.
+        mut vi = 0
+        while vi < lf.vars.len:
+            mut vn = lf.vars.get(vi)
+            self.w("  %var_" + vn + " = alloca " + _ll_ty(lf.var_type(vn)) + "\n")
+            vi = vi + 1
+        mut ri = 0
+        while ri < lf.n_vregs:
+            self.w("  %v" + ri.to_str() + " = alloca " + _ll_ty(lf.vreg_type(ri)) + "\n")
+            ri = ri + 1
+        # Store incoming parameters into their var slots.
+        pi = 0
+        while pi < lf.params.len:
+            mut pn2 = lf.params.get(pi)
+            mut pty2 = _ll_ty(lf.var_type(pn2))
+            self.w("  store " + pty2 + " %arg_" + pn2 + ", ptr %var_" + pn2 + "\n")
+            pi = pi + 1
+        self.w("  br label %bb0\n")
+        # Basic blocks in layout order.
+        mut bi = 0
+        while bi < lf.blocks.len:
+            mut blk = lf.blocks.get(bi)
+            self.w("bb" + blk.id.to_str() + ":\n")
+            mut ii = 0
+            while ii < blk.insts.len:
+                self.emit_inst(blk.insts.get(ii).read())
+                ii = ii + 1
+            self.emit_term(blk.term)
+            bi = bi + 1
+        self.w("}\n\n")
+
+    # -- extern declarations (inferred from call sites) ----------------------------------
+    pub def emit_extern_decls(self):
+        mut seen = Map[str, bool].init(64)
+        mut fi = 0
+        while fi < self.m.funcs.len:
+            mut lf = self.m.funcs.get(fi)
+            self.cur = lf
+            mut bi = 0
+            while bi < lf.blocks.len:
+                mut blk = lf.blocks.get(bi)
+                mut ii = 0
+                while ii < blk.insts.len:
+                    self.scan_call_decl(blk.insts.get(ii).read(), seen)
+                    ii = ii + 1
+                bi = bi + 1
+            fi = fi + 1
+
+    pub def scan_call_decl(self, inst: LInst, seen: Map[str, bool]):
+        match inst:
+            case LInst.ICall(dst, callee, args):
+                if self.m.is_user_fn(callee): return
+                if seen.contains(callee): return
+                seen.insert(callee, true)
+                mut retty = "void"
+                if dst >= 0: retty = self.vty(dst)
+                mut params = ""
+                mut ai = 0
+                while ai < args.len:
+                    if ai > 0: params = params + ", "
+                    params = params + self.vty(args.get(ai))
+                    ai = ai + 1
+                self.w("declare " + retty + " @" + callee + "(" + params + ")\n")
+            case LInst.IFCall1(dst, callee, _):
+                if seen.contains(callee): return
+                seen.insert(callee, true)
+                mut rt1 = "void"
+                if dst >= 0: rt1 = self.vty(dst)
+                self.w("declare " + rt1 + " @" + callee + "(double)\n")
+            case LInst.IFCallF(_, callee, _):
+                if seen.contains(callee): return
+                seen.insert(callee, true)
+                self.w("declare double @" + callee + "(double)\n")
+            case LInst.IFCall2F(_, callee, _, _):
+                if seen.contains(callee): return
+                seen.insert(callee, true)
+                self.w("declare double @" + callee + "(double, double)\n")
+            case _:
+                pass
+
+    # -- whole module ---------------------------------------------------------------------
+    pub def emit_module(self) -> str:
+        self.w("; Tauraro LLVM IR — backend A (taumir LIR -> LLVM IR -> llc)\n\n")
+        # String literals -> private constants.
+        mut si = 0
+        while si < self.m.strings.len:
+            mut s = self.m.strings.get(si)
+            mut blen = _ll_str_bytelen(s) + 1
+            self.w("@.str." + si.to_str() + " = private unnamed_addr constant [" + blen.to_str() + " x i8] c\"" + _ll_str_escape(s) + "\\00\"\n")
+            si = si + 1
+        # Module globals -> internal, zero-initialized (.bss equivalent).
+        mut gi = 0
+        while gi < self.m.globals.len:
+            mut gty = _ll_ty(self.m.global_types.get(gi))
+            mut init = "0"
+            if gty == "double": init = "0.0"
+            if gty == "ptr": init = "null"
+            self.w("@g." + gi.to_str() + " = internal global " + gty + " " + init + "\n")
+            gi = gi + 1
+        self.w("\n")
+        self.emit_extern_decls()
+        self.w("\n")
+        mut fi = 0
+        while fi < self.m.funcs.len:
+            self.emit_function(self.m.funcs.get(fi))
+            fi = fi + 1
+        return self.out.to_string().as_str()
+
+# op -> LLVM integer arithmetic/bitwise instruction (non-comparison).
+def _ll_int_instr(op: str) -> str:
+    if op == "+": return "add"
+    if op == "-": return "sub"
+    if op == "*": return "mul"
+    if op == "/": return "sdiv"
+    if op == "//": return "sdiv"
+    if op == "%": return "srem"
+    if op == "&": return "and"
+    if op == "|": return "or"
+    if op == "^": return "xor"
+    if op == "<<": return "shl"
+    if op == ">>": return "ashr"
+    return "add"
+
+# op -> LLVM signed integer comparison predicate, or "" if not a comparison.
+def _ll_icmp_pred(op: str) -> str:
+    if op == "==": return "eq"
+    if op == "!=": return "ne"
+    if op == "<": return "slt"
+    if op == "<=": return "sle"
+    if op == ">": return "sgt"
+    if op == ">=": return "sge"
+    return ""
+
+# op -> LLVM double arithmetic instruction (non-comparison).
+def _ll_float_instr(op: str) -> str:
+    if op == "+": return "fadd"
+    if op == "-": return "fsub"
+    if op == "*": return "fmul"
+    if op == "/": return "fdiv"
+    return "fadd"
+
+# op -> LLVM ordered float comparison predicate, or "" if not a comparison.
+def _ll_fcmp_pred(op: str) -> str:
+    if op == "==": return "oeq"
+    if op == "!=": return "one"
+    if op == "<": return "olt"
+    if op == "<=": return "ole"
+    if op == ">": return "ogt"
+    if op == ">=": return "oge"
+    return ""

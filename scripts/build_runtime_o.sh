@@ -7,7 +7,7 @@
 #   scripts/build_runtime_o.sh [OUT.o]      (default: build/runtime.o)
 set -eu
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"; cd "$ROOT"
-CC="${CC:-cc}"
+CC="${CC:-cc}"; command -v "$CC" >/dev/null 2>&1 || CC=gcc
 OUT="${1:-build/runtime.o}"
 mkdir -p "$(dirname "$OUT")"
 WARN="-Wno-attributes -Wno-unused-function -Wno-builtin-declaration-mismatch"
