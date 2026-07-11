@@ -70,6 +70,7 @@ pub class LFunc:
     pub vreg_types: Vec[int]        # per-vreg value type: 0 = int (i64), 1 = ptr (char*)
     pub vars:       Vec[str]
     pub var_types:  Vec[int]        # parallel to vars: 0 = int, 1 = ptr
+    pub var_cls:    Vec[str]        # parallel to vars: class name if the var holds an object, else ""
     pub params:     Vec[str]        # parameter names in order (System V arg registers -> slots)
     pub tmp_ctr:    int             # monotonic counter for synthesized (loop) var names
     pub loop_cont:  Vec[int]        # stack of `continue` target block ids (innermost = last)
@@ -87,6 +88,7 @@ extend LFunc:
         f.vreg_types = Vec[int].init(8)
         f.vars       = Vec[str].init(4)
         f.var_types  = Vec[int].init(4)
+        f.var_cls    = Vec[str].init(4)
         f.params     = Vec[str].init(4)
         f.tmp_ctr    = 0
         f.loop_cont  = Vec[int].init(4)
@@ -147,6 +149,7 @@ extend LFunc:
             i = i + 1
         self.vars.push(name)
         self.var_types.push(0)
+        self.var_cls.push("")
 
     pub def var_index(self, name: str) -> int:
         mut i = 0
@@ -164,8 +167,41 @@ extend LFunc:
         if idx >= 0: return self.var_types.get(idx)
         return 0
 
+    pub def set_var_cls(self, name: str, cls: str):
+        mut idx = self.var_index(name)
+        if idx >= 0: self.var_cls.set(idx, cls)
+
+    pub def var_cls_of(self, name: str) -> str:
+        mut idx = self.var_index(name)
+        if idx >= 0: return self.var_cls.get(idx)
+        return ""
+
+# A class's memory layout for the LIR backends: every field is an 8-byte slot, so the
+# offset of field #i is i*8 and the instance size is n_fields*8. Independent of the C
+# backend's packed struct layout (each program uses ONE backend; they never share memory).
+pub class ClassLayout:
+    pub name:   str
+    pub fields: Vec[str]        # field names in declaration order
+    pub ftags:  Vec[int]        # parallel: value-type tag of each field
+
+extend ClassLayout:
+    pub def init(name: str) -> ClassLayout:
+        mut c = ClassLayout()
+        c.name   = name
+        c.fields = Vec[str].init(4)
+        c.ftags  = Vec[int].init(4)
+        return c
+
+    pub def field_index(self, fname: str) -> int:
+        mut i = 0
+        while i < self.fields.len:
+            if self.fields.get(i) == fname: return i
+            i = i + 1
+        return -1
+
 pub class LModule:
     pub funcs:    Vec[LFunc]
+    pub classes:  Vec[ClassLayout]     # registered class layouts (object model)
     pub externs:  Vec[str]
     pub fn_names: Vec[str]      # user function names (defined in this module; call targets)
     pub fn_ret:   Vec[int]      # parallel to fn_names: return value-type tag (0/1/2/3/4)
@@ -179,6 +215,7 @@ extend LModule:
     pub def init() -> LModule:
         mut m = LModule()
         m.funcs    = Vec[LFunc].init(4)
+        m.classes  = Vec[ClassLayout].init(4)
         m.externs  = Vec[str].init(4)
         m.fn_names = Vec[str].init(8)
         m.fn_ret   = Vec[int].init(8)
@@ -244,3 +281,42 @@ extend LModule:
             if self.fn_names.get(i) == name: return true
             i = i + 1
         return false
+
+    # -- object model: class layout registry --------------------------------------------
+    pub def add_class(self, cl: ClassLayout):
+        self.classes.push(cl)
+
+    pub def class_index(self, name: str) -> int:
+        if (name as Pointer[char]) as usize == 0 as usize: return -1   # null name -> not a class
+        mut i = 0
+        while i < self.classes.len:
+            if self.classes.get(i).name == name: return i
+            i = i + 1
+        return -1
+
+    pub def is_class(self, name: str) -> bool:
+        return self.class_index(name) >= 0
+
+    # Instance size in bytes (every field is an 8-byte slot).
+    pub def class_size(self, name: str) -> int:
+        mut ci = self.class_index(name)
+        if ci < 0: return 8
+        mut n = self.classes.get(ci).fields.len
+        if n < 1: n = 1
+        return n * 8
+
+    # Byte offset of a field, or -1 if the class/field is unknown.
+    pub def field_offset(self, cls: str, fld: str) -> int:
+        mut ci = self.class_index(cls)
+        if ci < 0: return -1
+        mut fi = self.classes.get(ci).field_index(fld)
+        if fi < 0: return -1
+        return fi * 8
+
+    # Value-type tag of a field, or -1 if unknown.
+    pub def field_tag(self, cls: str, fld: str) -> int:
+        mut ci = self.class_index(cls)
+        if ci < 0: return -1
+        mut fi = self.classes.get(ci).field_index(fld)
+        if fi < 0: return -1
+        return self.classes.get(ci).ftags.get(fi)

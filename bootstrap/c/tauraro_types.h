@@ -55,6 +55,7 @@ typedef struct Formatter Formatter;
 typedef struct CGenerator CGenerator;
 typedef struct LBlock LBlock;
 typedef struct LFunc LFunc;
+typedef struct ClassLayout ClassLayout;
 typedef struct LModule LModule;
 typedef struct LlvmEmitter LlvmEmitter;
 typedef struct LlvmGenerator LlvmGenerator;
@@ -136,6 +137,7 @@ static void _trdrop_Formatter(void* vp);
 static void _trdrop_CGenerator(void* vp);
 static void _trdrop_LBlock(void* vp);
 static void _trdrop_LFunc(void* vp);
+static void _trdrop_ClassLayout(void* vp);
 static void _trdrop_LModule(void* vp);
 static void _trdrop_LlvmEmitter(void* vp);
 static void _trdrop_LlvmGenerator(void* vp);
@@ -2856,6 +2858,7 @@ typedef struct LFunc {
     List_i64* vreg_types;
     List_TrStr* vars;
     List_i64* var_types;
+    List_TrStr* var_cls;
     List_TrStr* params;
     long long tmp_ctr;
     List_i64* loop_cont;
@@ -2868,9 +2871,25 @@ static void _trdrop_LFunc(void* vp) {
     List_i64_free(self->vreg_types);
     List_TrStr_free(self->vars);
     List_i64_free(self->var_types);
+    List_TrStr_free(self->var_cls);
     List_i64_free(self->loop_cont);
     List_i64_free(self->loop_brk);
     List_i64_free(self->fresh_strs);
+}
+#endif
+
+#ifndef ClassLayout_STRUCT_DEFINED
+#define ClassLayout_STRUCT_DEFINED
+typedef struct ClassLayout {
+    size_t __rc;
+    TrStr name;
+    List_TrStr* fields;
+    List_i64* ftags;
+} ClassLayout;
+static void _trdrop_ClassLayout(void* vp) {
+    ClassLayout* self = (ClassLayout*)vp; (void)self;
+    _tr_str_release(self->name);
+    List_i64_free(self->ftags);
 }
 #endif
 
@@ -2879,6 +2898,7 @@ static void _trdrop_LFunc(void* vp) {
 typedef struct LModule {
     size_t __rc;
     List_ptr* funcs;
+    List_ptr* classes;
     List_TrStr* externs;
     List_TrStr* fn_names;
     List_i64* fn_ret;
@@ -2891,6 +2911,7 @@ typedef struct LModule {
 static void _trdrop_LModule(void* vp) {
     LModule* self = (LModule*)vp; (void)self;
     List_ptr_free_obj(self->funcs, _trdrop_LFunc);
+    List_ptr_free_obj(self->classes, _trdrop_ClassLayout);
     List_TrStr_free(self->externs);
     List_TrStr_free(self->fn_names);
     List_i64_free(self->fn_ret);
@@ -3576,6 +3597,10 @@ __attribute__((hot)) void LFunc_add_var(LFunc* self, TrStr name);
 __attribute__((hot)) long long LFunc_var_index(LFunc* self, TrStr name);
 __attribute__((hot)) void LFunc_set_var_type(LFunc* self, TrStr name, long long t);
 __attribute__((hot)) long long LFunc_var_type(LFunc* self, TrStr name);
+__attribute__((hot)) void LFunc_set_var_cls(LFunc* self, TrStr name, TrStr cls);
+__attribute__((hot)) TrStr LFunc_var_cls_of(LFunc* self, TrStr name);
+__attribute__((malloc,returns_nonnull,hot)) ClassLayout* ClassLayout_init(TrStr name);
+__attribute__((hot)) long long ClassLayout_field_index(ClassLayout* self, TrStr fname);
 __attribute__((malloc,returns_nonnull,hot)) LModule* LModule_init();
 __attribute__((hot)) long long LModule_add_global(LModule* self, TrStr name, long long tag);
 __attribute__((hot)) long long LModule_global_index(LModule* self, TrStr name);
@@ -3585,6 +3610,12 @@ __attribute__((hot)) long long LModule_fn_ret_tag(LModule* self, TrStr name);
 __attribute__((hot)) long long LModule_add_string(LModule* self, TrStr s);
 __attribute__((hot)) void LModule_add_extern(LModule* self, TrStr name);
 __attribute__((hot)) bool LModule_is_user_fn(LModule* self, TrStr name);
+__attribute__((hot)) void LModule_add_class(LModule* self, ClassLayout* cl);
+__attribute__((hot)) long long LModule_class_index(LModule* self, TrStr name);
+__attribute__((hot)) bool LModule_is_class(LModule* self, TrStr name);
+__attribute__((hot)) long long LModule_class_size(LModule* self, TrStr name);
+__attribute__((hot)) long long LModule_field_offset(LModule* self, TrStr cls, TrStr fld);
+__attribute__((hot)) long long LModule_field_tag(LModule* self, TrStr cls, TrStr fld);
 __attribute__((hot)) long long _f64_bits(double v);
 __attribute__((hot)) long long _promote_f(LFunc* lf, long long v);
 __attribute__((hot)) TrStr _print_i64_sym();
@@ -3599,10 +3630,17 @@ __attribute__((hot)) long long _list_tag_for_elem(long long et);
 __attribute__((hot)) bool _is_cmp_op(TrStr op);
 __attribute__((hot)) bool _is_int_typename(TrStr n);
 __attribute__((hot)) long long _ast_type_tag(AstType* ty);
+__attribute__((hot)) bool _is_null_str(TrStr s);
+__attribute__((hot)) TrStr _own(TrStr s);
+__attribute__((hot)) long long _tag_of(LModule* m, AstType* ty);
+__attribute__((hot)) TrStr _recv_class(LModule* m, LFunc* lf, HirExpr* obj);
+__attribute__((hot)) void _register_classes(LModule* m, HirProgram* prog);
 __attribute__((hot)) LModule* lower_to_lir(HirProgram* prog);
+__attribute__((hot)) void _lir_lower_method(LModule* m, TrStr class_name, HirFunction* f);
 __attribute__((hot)) bool _register_global(LModule* m, HirStmt* s);
 __attribute__((hot)) bool _lower_global_init(LModule* m, LFunc* lf, HirStmt* s);
 __attribute__((hot)) void _lir_lower_function(LModule* m, HirFunction* f);
+__attribute__((hot)) long long _lower_obj_call(LModule* m, LFunc* lf, TrStr mangled, long long self_vreg, List_ptr* margs);
 __attribute__((hot)) bool lower_block(LModule* m, LFunc* lf, HirBlock* hb);
 __attribute__((hot)) bool lower_stmt(LModule* m, LFunc* lf, HirStmt* s);
 __attribute__((hot)) long long _lit_pat_cond(LModule* m, LFunc* lf, Pattern pat, long long subj, long long st);
@@ -3614,6 +3652,7 @@ __attribute__((hot)) bool _lower_for_unpack(LModule* m, LFunc* lf, List_TrStr* v
 __attribute__((hot)) bool _lower_enumerate(LModule* m, LFunc* lf, TrStr ivar, TrStr evar, HirExpr* listexpr, HirBlock* body);
 __attribute__((hot)) void _emit_incr(LFunc* lf, TrStr name);
 __attribute__((hot)) TrStr _ident_name(HirExpr* e);
+__attribute__((hot)) bool _lower_field_set(LModule* m, LFunc* lf, HirExpr* obj, TrStr prop, HirExpr* val);
 __attribute__((hot)) bool _lower_index_set(LModule* m, LFunc* lf, HirExpr* obj, HirExpr* idx, HirExpr* val);
 __attribute__((hot)) TrStr _write_sym(long long t);
 __attribute__((hot)) void _emit_call0(LModule* m, LFunc* lf, TrStr sym);
@@ -5059,6 +5098,24 @@ __attribute__((hot)) taumir_ir_LFunc*** core_alloc_resize_taumir_ir_LFunc_ptr(ta
 __attribute__((hot)) void core_alloc_dealloc_taumir_ir_LFunc_ptr(taumir_ir_LFunc*** ptr);
 __attribute__((hot)) core_map_MapNode_str_taumir_ir_LFunc** core_alloc_alloc_core_map_MapNode_str_taumir_ir_LFunc(long long count);
 __attribute__((hot)) void core_alloc_dealloc_core_map_MapNode_str_taumir_ir_LFunc(core_map_MapNode_str_taumir_ir_LFunc** ptr);
+
+typedef ClassLayout taumir_ir_ClassLayout;
+struct core_vec_Vec_taumir_ir_ClassLayout { taumir_ir_ClassLayout** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_taumir_ir_ClassLayout core_vec_Vec_taumir_ir_ClassLayout;
+struct core_vec_Vec_taumir_ir_ClassLayout_ptr { taumir_ir_ClassLayout*** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_taumir_ir_ClassLayout_ptr core_vec_Vec_taumir_ir_ClassLayout_ptr;
+struct core_map_MapNode_str_taumir_ir_ClassLayout { char* key; taumir_ir_ClassLayout* value; struct core_map_MapNode_str_taumir_ir_ClassLayout* next; };
+typedef struct core_map_MapNode_str_taumir_ir_ClassLayout core_map_MapNode_str_taumir_ir_ClassLayout;
+struct core_map_Map_str_taumir_ir_ClassLayout { core_map_MapNode_str_taumir_ir_ClassLayout** buckets; long long capacity; long long len; };
+typedef struct core_map_Map_str_taumir_ir_ClassLayout core_map_Map_str_taumir_ir_ClassLayout;
+__attribute__((hot)) taumir_ir_ClassLayout** core_alloc_alloc_taumir_ir_ClassLayout(long long count);
+__attribute__((hot)) taumir_ir_ClassLayout** core_alloc_resize_taumir_ir_ClassLayout(taumir_ir_ClassLayout** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_taumir_ir_ClassLayout(taumir_ir_ClassLayout** ptr);
+__attribute__((hot)) taumir_ir_ClassLayout*** core_alloc_alloc_taumir_ir_ClassLayout_ptr(long long count);
+__attribute__((hot)) taumir_ir_ClassLayout*** core_alloc_resize_taumir_ir_ClassLayout_ptr(taumir_ir_ClassLayout*** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_taumir_ir_ClassLayout_ptr(taumir_ir_ClassLayout*** ptr);
+__attribute__((hot)) core_map_MapNode_str_taumir_ir_ClassLayout** core_alloc_alloc_core_map_MapNode_str_taumir_ir_ClassLayout(long long count);
+__attribute__((hot)) void core_alloc_dealloc_core_map_MapNode_str_taumir_ir_ClassLayout(core_map_MapNode_str_taumir_ir_ClassLayout** ptr);
 
 typedef LModule taumir_ir_LModule;
 struct core_vec_Vec_taumir_ir_LModule { taumir_ir_LModule** data; long long len; long long capacity; };

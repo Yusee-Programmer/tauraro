@@ -13,7 +13,7 @@
 # LModule.ok = false so the native driver falls back to C.
 
 from hir import HirProgram, HirFunction, HirStmt, HirExpr, HirBlock, HirMatchArm, hir_expr_type
-from taumir.ir import LModule, LFunc, LInst, LTerm
+from taumir.ir import LModule, LFunc, LInst, LTerm, ClassLayout
 from ast import AstType, Pattern
 from core.alloc import alloc
 
@@ -108,14 +108,71 @@ def _ast_type_tag(ty: AstType) -> int:
     if n == "void" or n == "" or n == "None": return 0   # void return (no annotation)
     return -1
 
+# True if a `str` value is a null char* (an unset/absent type name), which must never be
+# passed to string ops (strcmp on NULL segfaults).
+def _is_null_str(s: str) -> bool:
+    return (s as Pointer[char]) as usize == 0 as usize
+
+# Return a fresh OWNED copy of a (possibly borrowed) string, so it can be stored in a
+# long-lived registry without aliasing an HIR string that ARC may release elsewhere.
+# Concatenation allocates a new rc=1 buffer; NULL is normalized to "".
+def _own(s: str) -> str:
+    if _is_null_str(s): return ""
+    return s + ""
+
+# Class-aware value-type tag: a registered user class -> 10 (an object pointer), else the
+# scalar/collection tag. tag 10 maps to `ptr` in both backends (an 8-byte heap handle).
+# A null/absent type name -> -1 (untyped -> the module falls back to C, never crashes).
+def _tag_of(m: LModule, ty: AstType) -> int:
+    if _is_null_str(ty.name): return -1
+    if m.is_class(ty.name): return 10
+    return _ast_type_tag(ty)
+
+# Resolve the class name of an object-valued receiver expression. Prefer the HIR type; if
+# that's absent (some param/receiver nodes carry no type), fall back to the per-var class
+# map (populated for class-typed params, self, and object locals). "" = not a known class.
+def _recv_class(m: LModule, lf: LFunc, obj: Pointer[HirExpr]) -> str:
+    mut cn = hir_expr_type(obj).name
+    if not _is_null_str(cn) and m.is_class(cn): return cn
+    match obj.read():
+        case HirExpr.EIdent(nm, _, _):
+            mut vc = lf.var_cls_of(nm)
+            if not _is_null_str(vc) and m.is_class(vc): return vc
+        case _:
+            pass
+    return ""
+
+# Register every class's layout: field names + tags, in declaration order (offset = i*8).
+# Single pass (no throwaway layouts / Vec.set — that dropped intermediate layouts whose
+# drop over-released the shared HIR class-name strings). A field whose type is a class not
+# yet registered gets tag -1 here, which is fine: only int/bool fields are read for now.
+def _register_classes(m: LModule, prog: HirProgram):
+    mut i = 0
+    while i < prog.classes.len:
+        mut c = prog.classes.get(i)
+        mut lay = ClassLayout.init(_own(c.name))
+        mut fi = 0
+        while fi < c.fields.len:
+            mut fld = c.fields.get(fi)
+            lay.fields.push(_own(fld.name))
+            lay.ftags.push(_tag_of(m, fld.ty))
+            fi = fi + 1
+        m.add_class(lay)
+        i = i + 1
+
 pub def lower_to_lir(prog: HirProgram) -> LModule:
     mut m = LModule.init()
+    _register_classes(m, prog)
+    # Register free functions AND class methods (mangled <Class>_<method>) as call targets.
     mut i = 0
     while i < prog.functions.len:
         mut f0 = prog.functions.get(i)
-        if f0.class_name == "" and not f0.is_extern:
-            m.fn_names.push(f0.name)
-            m.fn_ret.push(_ast_type_tag(f0.ret_ty))
+        if not f0.is_extern:
+            if f0.class_name == "":
+                m.fn_names.push(f0.name)
+            else:
+                m.fn_names.push(f0.class_name + "_" + f0.name)
+            m.fn_ret.push(_tag_of(m, f0.ret_ty))
         i = i + 1
     # Module-level globals: register each top-level var (name + type) so functions can
     # reference them; the init statements run at the start of main.
@@ -128,11 +185,44 @@ pub def lower_to_lir(prog: HirProgram) -> LModule:
     i = 0
     while i < prog.functions.len:
         mut f = prog.functions.get(i)
-        if f.class_name == "" and not f.is_extern:
-            _lir_lower_function(m, f)
+        if not f.is_extern:
+            if f.class_name == "":
+                _lir_lower_function(m, f)
+            else:
+                _lir_lower_method(m, f.class_name, f)
             if not m.ok: return m
         i = i + 1
     return m
+
+# Lower a class method as a function named <Class>_<method>. `self` becomes a first
+# parameter of tag 10 (object pointer); other params are class-aware tagged.
+def _lir_lower_method(m: LModule, class_name: str, f: HirFunction):
+    mut lf = LFunc.init(class_name + "_" + f.name)
+    mut pi = 0
+    while pi < f.params.len:
+        mut p = f.params.get(pi)
+        mut ptag = 0
+        if p.name == "self":
+            ptag = 10
+        else:
+            ptag = _tag_of(m, p.ty)
+        if ptag < 0:
+            m.ok = false
+            return
+        lf.params.push(p.name)
+        lf.add_var(p.name)
+        lf.set_var_type(p.name, ptag)
+        if p.name == "self":
+            lf.set_var_cls(p.name, _own(class_name))
+        elif ptag == 10 and not _is_null_str(p.ty.name):
+            lf.set_var_cls(p.name, _own(p.ty.name))
+        pi = pi + 1
+    lf.set_cur(lf.new_block())
+    if not lower_block(m, lf, f.body):
+        m.ok = false
+        return
+    lf.set_term(LTerm.TRetInt(0))
+    m.funcs.push(lf)
 
 # Register a top-level statement as a module global (SLet/SAssign of a supported type).
 # Line markers/pass are ignored; anything else -> the module falls back to C (we must not
@@ -192,13 +282,15 @@ def _lir_lower_function(m: LModule, f: HirFunction):
     while pi < f.params.len:
         mut p = f.params.get(pi)
         if p.name != "self":
-            mut ptag = _ast_type_tag(p.ty)
+            mut ptag = _tag_of(m, p.ty)
             if ptag < 0:                       # unsupported param type -> fall back to C
                 m.ok = false
                 return
             lf.params.push(p.name)
             lf.add_var(p.name)
             lf.set_var_type(p.name, ptag)
+            if ptag == 10 and not _is_null_str(p.ty.name):
+                lf.set_var_cls(p.name, _own(p.ty.name))
         pi = pi + 1
     lf.set_cur(lf.new_block())
     if lf.is_main:                         # run module global inits before main's body
@@ -213,6 +305,24 @@ def _lir_lower_function(m: LModule, f: HirFunction):
         return
     lf.set_term(LTerm.TRetInt(0))
     m.funcs.push(lf)
+
+# Emit a call to a (mangled) user method/constructor. self_vreg >= 0 is prepended as the
+# first argument (instance methods); -1 means a static call (constructors). Result tag is
+# the method's declared return tag. Falls back if the target isn't a lowered user function.
+def _lower_obj_call(m: LModule, lf: LFunc, mangled: str, self_vreg: int, margs: Vec[Pointer[HirExpr]]) -> int:
+    if not m.is_user_fn(mangled): return -1
+    mut cargs = Vec[int].init(margs.len + 1)
+    if self_vreg >= 0: cargs.push(self_vreg)
+    mut ai = 0
+    while ai < margs.len:
+        mut av = lower_expr(m, lf, margs.get(ai))
+        if av < 0: return -1
+        cargs.push(av)
+        ai = ai + 1
+    mut rd = lf.new_vreg()
+    lf.emit(LInst.ICall(rd, mangled, cargs))
+    lf.set_vreg_type(rd, m.fn_ret_tag(mangled))
+    return rd
 
 def lower_block(m: LModule, lf: LFunc, hb: HirBlock) -> bool:
     mut si = 0
@@ -253,6 +363,9 @@ def lower_stmt(m: LModule, lf: LFunc, s: Pointer[HirStmt]) -> bool:
             if lf.vreg_type(v) == 1: _secure_str(m, lf, v)   # variable takes ownership
             lf.add_var(name)
             lf.set_var_type(name, lf.vreg_type(v))
+            if lf.vreg_type(v) == 10:                          # object local -> record its class
+                mut lvcn = hir_expr_type(val).name
+                if not _is_null_str(lvcn) and m.is_class(lvcn): lf.set_var_cls(name, _own(lvcn))
             lf.emit(LInst.IStoreVar(name, v))
             _flush_fresh_strs(m, lf)
             return true
@@ -265,6 +378,8 @@ def lower_stmt(m: LModule, lf: LFunc, s: Pointer[HirStmt]) -> bool:
                     return false
                 case HirExpr.EIndex(iobj, iidx, _):
                     return _lower_index_set(m, lf, iobj, iidx, val)
+                case HirExpr.EPropAccess(pobj, pprop, _):
+                    return _lower_field_set(m, lf, pobj, pprop, val)
                 case _:
                     pass
             mut tn = _ident_name(target)
@@ -664,6 +779,29 @@ def _ident_name(e: Pointer[HirExpr]) -> str:
         case _: return ""
 
 # d[k] = v (dict set) or xs[i] = v (list element store).
+# Class field write `obj.field = val` -> _tr_rt_field_set_i(obj, offset, val). int/bool only
+# for now (str/float/nested-object fields fall back to C — ARC/bitcast come later).
+def _lower_field_set(m: LModule, lf: LFunc, obj: Pointer[HirExpr], prop: str, val: Pointer[HirExpr]) -> bool:
+    mut cls = _recv_class(m, lf, obj)
+    if cls == "": return false
+    mut off = m.field_offset(cls, prop)
+    if off < 0: return false
+    mut vv = lower_expr(m, lf, val)
+    if vv < 0: return false
+    mut vt = lf.vreg_type(vv)
+    if vt != 0 and vt != 4: return false
+    mut ov0 = lower_expr(m, lf, obj)
+    if ov0 < 0: return false
+    mut offc = lf.new_vreg()
+    lf.emit(LInst.IConst(offc, off))
+    m.add_extern("_tr_rt_field_set_i")
+    mut sa = Vec[int].init(3)
+    sa.push(ov0)
+    sa.push(offc)
+    sa.push(vv)
+    lf.emit(LInst.ICall(-1, "_tr_rt_field_set_i", sa))
+    return true
+
 def _lower_index_set(m: LModule, lf: LFunc, obj: Pointer[HirExpr], idx: Pointer[HirExpr], val: Pointer[HirExpr]) -> bool:
     mut ov = lower_expr(m, lf, obj)
     if ov < 0: return false
@@ -1505,6 +1643,17 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
         case HirExpr.ECall(callee, args, _):
             mut fn = _ident_name(callee)
             if fn == "": return -1
+            # Bare construction `ClassName()` -> heap-allocate a zeroed instance.
+            if m.is_class(fn) and args.len == 0:
+                mut szc = lf.new_vreg()
+                lf.emit(LInst.IConst(szc, m.class_size(fn)))
+                m.add_extern("_tr_rt_obj_alloc")
+                mut oaa = Vec[int].init(1)
+                oaa.push(szc)
+                mut od = lf.new_vreg()
+                lf.emit(LInst.ICall(od, "_tr_rt_obj_alloc", oaa))
+                lf.set_vreg_type(od, 10)
+                return od
             if fn == "len" and args.len == 1:      # len(str) / len(list) builtin
                 mut xv = lower_expr(m, lf, args.get(0))
                 if xv < 0: return -1
@@ -1818,6 +1967,26 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
             lf.set_vreg_type(gval, _list_elem_tag(ovt))
             return gval
         case HirExpr.EPropAccess(obj, prop, _):
+            # Class field read `obj.field` -> _tr_rt_field_get_i(obj, offset). int/bool only
+            # for now (str/float/nested-object fields fall back to C — ARC/bitcast later).
+            mut pcls = _recv_class(m, lf, obj)
+            if pcls != "":
+                mut foff = m.field_offset(pcls, prop)
+                if foff < 0: return -1
+                mut ftg = m.field_tag(pcls, prop)
+                if ftg != 0 and ftg != 4: return -1
+                mut fobj = lower_expr(m, lf, obj)
+                if fobj < 0: return -1
+                mut foffc = lf.new_vreg()
+                lf.emit(LInst.IConst(foffc, foff))
+                m.add_extern("_tr_rt_field_get_i")
+                mut fga = Vec[int].init(2)
+                fga.push(fobj)
+                fga.push(foffc)
+                mut fgd = lf.new_vreg()
+                lf.emit(LInst.ICall(fgd, "_tr_rt_field_get_i", fga))
+                lf.set_vreg_type(fgd, ftg)
+                return fgd
             if prop != "len": return -1
             mut ovl = lower_expr(m, lf, obj)
             if ovl < 0: return -1
@@ -1837,6 +2006,20 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
             lf.emit(LInst.ICall(ld, "_tr_rt_list_len", la))
             return ld
         case HirExpr.EMethodCall(obj, method, margs, _):
+            # Static call `ClassName.method(args)` (e.g. a constructor `Point.init(..)`):
+            # obj is the class name itself, not an instance -> call <Class>_<method>(args).
+            match obj.read():
+                case HirExpr.EIdent(inm, _, _):
+                    if m.is_class(inm):
+                        return _lower_obj_call(m, lf, inm + "_" + method, -1, margs)
+                case _:
+                    pass
+            # Instance method `inst.method(args)` on a user class -> <Class>_<method>(self,args).
+            mut recv_cls = _recv_class(m, lf, obj)
+            if recv_cls != "":
+                mut rself = lower_expr(m, lf, obj)
+                if rself < 0: return -1
+                return _lower_obj_call(m, lf, recv_cls + "_" + method, rself, margs)
             mut ovm = lower_expr(m, lf, obj)
             if ovm < 0: return -1
             mut ovmt = lf.vreg_type(ovm)

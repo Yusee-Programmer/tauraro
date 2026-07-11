@@ -28,6 +28,11 @@ __attribute__((hot)) TrStr _ll_ty(long long tag) {
         return _tr_str_lit("ptr");
     }
     /* pass */
+    if ((tag == 10LL)) {
+        /* pass */
+        return _tr_str_lit("ptr");
+    }
+    /* pass */
     return _tr_str_lit("i64");
 }
 

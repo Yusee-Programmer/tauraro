@@ -633,6 +633,22 @@ char* _tr_rt_str_concat(const char* a, const char* b) {
     return r;
 }
 
+/* -- Objects (classes): a class instance is a heap block; every field occupies an 8-byte
+ * slot (offset = field_index*8). The native/LLVM backends model construction and field
+ * access as these runtime calls, so no new codegen is needed. int/bool/ptr fields go
+ * through the *_i pair (raw 8 bytes); float fields reinterpret their bits as i64.
+ * (No ARC yet — instances leak; a leak, never a use-after-free.) */
+void* _tr_rt_obj_alloc(int64_t size) {
+    if (size < 8) size = 8;
+    return calloc(1, (size_t)size);
+}
+int64_t _tr_rt_field_get_i(void* obj, int64_t off) {
+    return *(int64_t*)((char*)obj + off);
+}
+void _tr_rt_field_set_i(void* obj, int64_t off, int64_t v) {
+    *(int64_t*)((char*)obj + off) = v;
+}
+
 /* -- List[int]: a dynamic i64 array the native backend calls. Opaque handle (void*).
  * (No ARC/free in the native backend yet — this leaks; fine for -O0 dev.) */
 void* _tr_rt_list_new(void) {

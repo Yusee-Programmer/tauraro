@@ -1,0 +1,35 @@
+# native≡c / llvm≡c differential corpus: classes (int/bool fields, methods, construction).
+class Rect:
+    w: int
+    h: int
+
+extend Rect:
+    def init(w: int, h: int) -> Rect:
+        mut r = Rect()
+        r.w = w
+        r.h = h
+        return r
+    def area(self) -> int:
+        return self.w * self.h
+    def is_square(self) -> bool:
+        return self.w == self.h
+    def scale(self, k: int):
+        self.w = self.w * k
+        self.h = self.h * k
+
+def bigger(a: Rect, b: Rect) -> int:
+    if a.area() > b.area():
+        return a.area()
+    return b.area()
+
+def main():
+    mut r = Rect.init(3, 4)
+    print(r.area())           # 12
+    print(r.is_square())      # false
+    r.scale(2)
+    print(r.w)                # 6
+    print(r.h)                # 8
+    print(r.area())           # 48
+    mut s = Rect.init(5, 5)
+    print(s.is_square())      # true
+    print(bigger(r, s))       # 48

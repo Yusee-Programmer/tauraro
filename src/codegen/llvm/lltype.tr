@@ -17,6 +17,7 @@ pub def _ll_ty(tag: int) -> str:
     if tag == 2: return "ptr"
     if tag == 3: return "ptr"
     if tag >= 6 and tag <= 9: return "ptr"
+    if tag == 10: return "ptr"          # object (class instance) handle
     return "i64"
 
 # A source type NAME (AstType.name) -> LLVM type, for user-function signatures. void/None
