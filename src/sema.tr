@@ -4049,6 +4049,21 @@ extend Sema:
                         case Pattern.PVariant(_, ex_vn): ex_covered.push(ex_vn)
                         case Pattern.PVariantBind(_, ex_vn2, _): ex_covered.push(ex_vn2)
                         case Pattern.PVariantBindMany(_, ex_vn3, _): ex_covered.push(ex_vn3)
+                        case Pattern.POr(ex_orpats):
+                            # [E-3] A payload BIND inside an or-pattern is unsound: only one
+                            # alternative matches, so the binder may be uninitialized.
+                            mut ex_oi = 0
+                            while ex_oi < ex_orpats.len:
+                                match ex_orpats.get(ex_oi):
+                                    case Pattern.PVariant(_, ex_ovn): ex_covered.push(ex_ovn)
+                                    case Pattern.PVariantBind(_, ex_bvn, _):
+                                        ex_covered.push(ex_bvn)
+                                        self.error("[E-3] Payload binding '" + ex_ty_name + "." + ex_bvn + "(..)' is not allowed inside an or-pattern ('|').\n      FIX: Split the alternatives into separate 'case' arms, or match the variant without binding: 'case " + ex_ty_name + "." + ex_bvn + " | ...:'.")
+                                    case Pattern.PVariantBindMany(_, ex_mvn, _):
+                                        ex_covered.push(ex_mvn)
+                                        self.error("[E-3] Payload binding '" + ex_ty_name + "." + ex_mvn + "(..)' is not allowed inside an or-pattern ('|').\n      FIX: Split the alternatives into separate 'case' arms, or match the variant without binding: 'case " + ex_ty_name + "." + ex_mvn + " | ...:'.")
+                                    case _: pass
+                                ex_oi = ex_oi + 1
                         case _: pass
                     self.enter_scope()
                     # Use the subject's type for PBind so `case x if x.method():` works.
@@ -5709,9 +5724,9 @@ extend Sema:
 
     # -- Rule N-1: Reserved name helpers ---------------------------------------
     pub def is_reserved_error(self, name: str) -> str:
-        if name == "true" or name == "True" or name == "gaskiya": return "built-in boolean constant 'true'"
-        if name == "false" or name == "False" or name == "karya": return "built-in boolean constant 'false'"
-        if name == "none" or name == "None" or name == "babu": return "built-in null constant 'none'"
+        if name == "true" or name == "True": return "built-in boolean constant 'true'"
+        if name == "false" or name == "False": return "built-in boolean constant 'false'"
+        if name == "none" or name == "None": return "built-in null constant 'none'"
         if name == "Some": return "built-in Option constructor 'Some'"
         if name == "Ok": return "built-in Result constructor 'Ok'"
         if name == "Err": return "built-in Result constructor 'Err'"
@@ -5724,8 +5739,8 @@ extend Sema:
     pub def is_reserved_keyword(self, name: str) -> str:
         if name == "print" or name == "input": return "built-in I/O function"
         if name == "range": return "built-in range function"
-        if name == "len" or name == "tsawon": return "built-in len function"
-        if name == "type" or name == "zuwa_rubutu": return "built-in type function"
+        if name == "len": return "built-in len function"
+        if name == "type": return "built-in type function"
         if name == "abs" or name == "max" or name == "min" or name == "sum": return "built-in math function"
         if name == "str" or name == "int" or name == "float" or name == "bool": return "built-in primitive type"
         if name == "List" or name == "Dict": return "built-in container type"

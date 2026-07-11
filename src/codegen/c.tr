@@ -3535,6 +3535,25 @@ pub class CGenerator:
             if base_callee == "_tr_char_to_str" or base_callee == "_tr_char_to_str_alloc":
                 return self.wrapstr(_ext_call)
             return _ext_call
+        # User function: upcast any subclass instance passed where the parent is declared
+        # (parent fields are embedded FIRST, so (Parent*)child is layout-correct; C errors
+        # on the implicit pointer conversion without the cast).
+        if _bc_is_user_fn:
+            mut _uc_fdef = self.functions.get(base_callee)
+            mut _uc_casts = Vec[str].init(args.len)
+            mut _uc_any = false
+            mut _uci = 0
+            while _uci < args.len:
+                mut _uc_cast = ""
+                if _uci < _uc_fdef.params.len:
+                    mut _uc_pn = _uc_fdef.params.get(_uci).ty.name
+                    mut _uc_an = hir_expr_type(args.get(_uci)).name
+                    if self.classes.contains(_uc_pn) and _uc_an != _uc_pn and self._is_subclass_of(_uc_an, _uc_pn):
+                        _uc_cast = "(" + _uc_pn + "*)"
+                        _uc_any = true
+                _uc_casts.push(_uc_cast)
+                _uci = _uci + 1
+            if _uc_any: return callee_s + "(" + self.gen_args_casts(args, _uc_casts) + ")"
         return callee_s + "(" + self.gen_args(args) + ")"
 
     pub def gen_print_call(self, args: Vec[Pointer[HirExpr]]) -> str:
@@ -3763,6 +3782,25 @@ pub class CGenerator:
             case _: return false
 
     pub def gen_args(self, args: Vec[Pointer[HirExpr]]) -> str:
+        return self.gen_args_casts(args, Vec[str].init(0))
+
+    # True when `child` (transitively) extends `parent` (single-inheritance chain walk).
+    pub def _is_subclass_of(self, child: str, parent: str) -> bool:
+        mut cur = child
+        mut depth = 0
+        while depth < 32:
+            if not self.classes.contains(cur): return false
+            mut cdef = self.classes.get(cur)
+            if cdef.base_classes.len < 1: return false
+            cur = cdef.base_classes.get(0)
+            if cur == parent: return true
+            depth = depth + 1
+        return false
+
+    # gen_args with an optional per-argument C cast prefix (casts.get(i), "" = none) —
+    # used to upcast a subclass instance passed where the callee declares the parent
+    # (C requires the explicit (Parent*) cast; the struct-embedding layout makes it safe).
+    pub def gen_args_casts(self, args: Vec[Pointer[HirExpr]], casts: Vec[str]) -> str:
         mut s = ""
         mut i = 0
         while i < args.len:
@@ -3780,6 +3818,8 @@ pub class CGenerator:
                 self.wrap_obj_names.push(otmp)
                 self.wrap_obj_drops.push(self.obj_drop_fn(hir_expr_type(a).name))
                 a_s = otmp
+            if i < casts.len and casts.get(i) != "":
+                a_s = casts.get(i) + "(" + a_s + ")"
             s = s + a_s
             i = i + 1
         return s
@@ -7464,6 +7504,11 @@ pub class CGenerator:
                                 pc = "1"
                                 self.decl_vars.insert(bn, true)
                                 bindings = bindings + "__auto_type " + _safe_c_varname(bn) + " = " + subj + ";\n"
+                            # Payload binds inside `|`: tag-only test (see match-stmt site).
+                            case Pattern.PVariantBind(tnb, vnb, _):
+                                pc = subj + ".tag == " + tnb + "_" + vnb
+                            case Pattern.PVariantBindMany(tnm, vnm, _):
+                                pc = subj + ".tag == " + tnm + "_" + vnm
                             case _: pc = "1"
                         if oi == 0: or_conds = pc
                         else: or_conds = or_conds + " || " + pc

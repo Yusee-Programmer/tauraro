@@ -398,6 +398,14 @@ pub def encode_func(lf: LFunc) -> EncodedFunc:
                     e.relocs.push(f2r)
                     c.u32(0)
                     _st_xmm0(c, _vreg_disp(dst))
+                case LInst.IBitsF(dst, src):
+                    # Reinterpret i64 bits as f64: slots already hold f64 values as raw bit
+                    # patterns in this model, so a bitcast is a plain 8-byte slot copy.
+                    _ld_rax(c, _vreg_disp(src))
+                    _st_rax(c, _vreg_disp(dst))
+                case LInst.IFBits(dst, src):
+                    _ld_rax(c, _vreg_disp(src))
+                    _st_rax(c, _vreg_disp(dst))
             ii = ii + 1
 
         match blk.term:

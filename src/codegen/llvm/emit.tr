@@ -152,6 +152,16 @@ extend LlvmEmitter:
                 mut r3 = self.newtmp()
                 self.w("  " + r3 + " = call double @" + callee + "(double " + fa2 + ", double " + fb2 + ")\n")
                 if dst >= 0: self.store_vreg(dst, "double", r3)
+            case LInst.IBitsF(dst, src):
+                mut bi = self.load_vreg_as(src, "i64")
+                mut bf = self.newtmp()
+                self.w("  " + bf + " = bitcast i64 " + bi + " to double\n")
+                self.store_vreg(dst, "double", bf)
+            case LInst.IFBits(dst, src):
+                mut bd = self.load_vreg_as(src, "double")
+                mut bx = self.newtmp()
+                self.w("  " + bx + " = bitcast double " + bd + " to i64\n")
+                self.store_vreg(dst, "i64", bx)
 
     pub def emit_call(self, dst: int, callee: str, args: Vec[int]):
         # Build the "(<ty> <val>, ...)" argument list.

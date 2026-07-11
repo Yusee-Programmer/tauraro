@@ -105,6 +105,11 @@ def _ast_type_tag(ty: AstType) -> int:
             if kint and vstr: return 9
         return -1
     if _is_int_typename(n): return 0
+    # f64 params/returns are self-consistent per backend: user fns are compiled by the
+    # SAME backend on both sides of a call (native passes the bit pattern in an integer
+    # register; LLVM uses a real `double`). Extern fns never take float via ICall (the
+    # IFCall* forms handle those), so this only affects user-to-user calls.
+    if n == "float" or n == "f64": return 5
     if n == "void" or n == "" or n == "None": return 0   # void return (no annotation)
     return -1
 
@@ -155,6 +160,50 @@ def _recv_class(m: LModule, lf: LFunc, obj: Pointer[HirExpr]) -> str:
             pass
     return ""
 
+# Find a class's index in prog.classes by name (-1 if absent).
+def _prog_class_index(prog: HirProgram, name: str) -> int:
+    if _is_null_str(name): return -1
+    mut i = 0
+    while i < prog.classes.len:
+        if prog.classes.get(i).name == name: return i
+        i = i + 1
+    return -1
+
+# Push the flattened field NAMES of class #ci (base-chain fields FIRST — the same
+# parent-first embedding the C backend uses, so a Dog passed as Animal reads Animal's
+# fields at Animal's offsets). Single inheritance only; unknown/multiple bases -> false
+# (the class is then not registered and every use of it falls back to C).
+def _push_field_names_rec(prog: HirProgram, ci: int, lay: ClassLayout, depth: int) -> bool:
+    if depth > 32: return false                 # cycle guard
+    mut c = prog.classes.get(ci)
+    if c.base_classes.len > 1: return false
+    if c.base_classes.len == 1:
+        mut bi = _prog_class_index(prog, c.base_classes.get(0))
+        if bi < 0: return false
+        if not _push_field_names_rec(prog, bi, lay, depth + 1): return false
+    mut fi = 0
+    while fi < c.fields.len:
+        lay.fields.push(_own(c.fields.get(fi).name))
+        fi = fi + 1
+    return true
+
+# Pass-2 mirror of _push_field_names_rec: push the flattened field TAGS + object class
+# names (same traversal, now that every class/enum name is registered).
+def _push_field_tags_rec(m: LModule, prog: HirProgram, ci: int, lay: ClassLayout, depth: int) -> bool:
+    if depth > 32: return false
+    mut c = prog.classes.get(ci)
+    if c.base_classes.len > 1: return false
+    if c.base_classes.len == 1:
+        mut bi = _prog_class_index(prog, c.base_classes.get(0))
+        if bi < 0: return false
+        if not _push_field_tags_rec(m, prog, bi, lay, depth + 1): return false
+    mut fi = 0
+    while fi < c.fields.len:
+        lay.ftags.push(_tag_of(m, c.fields.get(fi).ty))
+        lay.fcls.push(_cls_of_ty(m, c.fields.get(fi).ty))
+        fi = fi + 1
+    return true
+
 # Register every class's and enum's layout. Pass 1 pushes name-only layouts (so mutual /
 # forward references resolve); pass 2 fills field tags IN PLACE via Vec.get (a heap
 # pointer — never Vec.set, whose replace-drop over-released shared name strings). All
@@ -164,11 +213,9 @@ def _register_classes(m: LModule, prog: HirProgram):
     while i < prog.classes.len:
         mut c = prog.classes.get(i)
         mut lay = ClassLayout.init(_own(c.name))
-        mut fi = 0
-        while fi < c.fields.len:
-            lay.fields.push(_own(c.fields.get(fi).name))
-            fi = fi + 1
-        m.add_class(lay)
+        if c.base_classes.len == 1: lay.base = _own(c.base_classes.get(0))
+        if _push_field_names_rec(prog, i, lay, 0):
+            m.add_class(lay)
         i = i + 1
     mut ei = 0
     while ei < prog.enums.len:
@@ -186,16 +233,17 @@ def _register_classes(m: LModule, prog: HirProgram):
             vi = vi + 1
         m.add_enum(elay)
         ei = ei + 1
-    # Pass 2: fill tags now that every class/enum name is registered.
+    # Pass 2: fill tags now that every class/enum name is registered. Look layouts up BY
+    # NAME (unregistered classes would misalign a parallel index walk).
     i = 0
     while i < prog.classes.len:
         mut c2 = prog.classes.get(i)
-        mut lay2 = m.classes.get(i)
-        mut f2 = 0
-        while f2 < c2.fields.len:
-            lay2.ftags.push(_tag_of(m, c2.fields.get(f2).ty))
-            lay2.fcls.push(_cls_of_ty(m, c2.fields.get(f2).ty))
-            f2 = f2 + 1
+        mut li = m.class_index(c2.name)
+        if li >= 0:
+            mut lay2 = m.classes.get(li)
+            if not _push_field_tags_rec(m, prog, i, lay2, 0):
+                m.ok = false                     # pass-1/pass-2 divergence: impossible, but never mislay
+                return
         i = i + 1
     ei = 0
     while ei < prog.enums.len:
@@ -405,10 +453,21 @@ def _lower_enum_ctor(m: LModule, lf: LFunc, ename: str, vname: str, margs: Vec[P
     mut ai = 0
     while ai < margs.len:
         mut ftg = vlay.ftags.get(ai)
-        if ftg != 0 and ftg != 4 and ftg != 10 and ftg != 11: return -1
+        if ftg < 0 or _is_list_tag(ftg) or _is_dict_tag(ftg): return -1
         mut av = lower_expr(m, lf, margs.get(ai))
         if av < 0: return -1
-        if not _field_tag_ok(lf.vreg_type(av), ftg): return -1
+        mut avt = lf.vreg_type(av)
+        if ftg == 5:
+            if avt == 0: av = _promote_f(lf, av)
+            elif avt != 5: return -1
+            mut pfb = lf.new_vreg()
+            lf.emit(LInst.IFBits(pfb, av))
+            av = pfb
+        elif ftg == 1:
+            if avt != 1: return -1
+            _secure_str(m, lf, av)              # the enum instance owns the payload ref
+        elif not _field_tag_ok(avt, ftg):
+            return -1
         vals.push(av)
         ai = ai + 1
     mut szc = lf.new_vreg()
@@ -433,6 +492,8 @@ def _lower_enum_ctor(m: LModule, lf: LFunc, ename: str, vname: str, margs: Vec[P
 # the method's declared return tag. Falls back if the target isn't a lowered user function.
 def _lower_obj_call(m: LModule, lf: LFunc, mangled: str, self_vreg: int, margs: Vec[Pointer[HirExpr]]) -> int:
     if not m.is_user_fn(mangled): return -1
+    mut rtag = m.fn_ret_tag(mangled)
+    if rtag < 0: return -1                      # unsupported return type -> fall back
     mut cargs = Vec[int].init(margs.len + 1)
     if self_vreg >= 0: cargs.push(self_vreg)
     mut ai = 0
@@ -441,9 +502,11 @@ def _lower_obj_call(m: LModule, lf: LFunc, mangled: str, self_vreg: int, margs: 
         if av < 0: return -1
         cargs.push(av)
         ai = ai + 1
+    if cargs.len > 6: return -1                 # System V: rdi,rsi,rdx,rcx,r8,r9
     mut rd = lf.new_vreg()
     lf.emit(LInst.ICall(rd, mangled, cargs))
-    lf.set_vreg_type(rd, m.fn_ret_tag(mangled))
+    lf.set_vreg_type(rd, rtag)
+    if rtag == 1: _fresh_mark(lf, rd)           # ARC: owned str returned by callee
     return rd
 
 def lower_block(m: LModule, lf: LFunc, hb: HirBlock) -> bool:
@@ -712,8 +775,18 @@ def _variant_tag_cond(lf: LFunc, tagv: int, vidx: int) -> int:
 def _bind_payload(m: LModule, lf: LFunc, vlay: VariantLayout, subj: int, fldidx: int, bindname: str) -> bool:
     if fldidx >= vlay.ftags.len: return false
     mut ftg = vlay.ftags.get(fldidx)
-    if ftg != 0 and ftg != 4 and ftg != 10 and ftg != 11: return false
-    mut pv = _emit_field_get(m, lf, subj, (1 + fldidx) * 8, ftg)
+    if ftg < 0 or _is_list_tag(ftg) or _is_dict_tag(ftg): return false
+    mut pv = -1
+    if ftg == 5:
+        mut praw = _emit_field_get(m, lf, subj, (1 + fldidx) * 8, 0)
+        pv = lf.new_vreg()
+        lf.emit(LInst.IBitsF(pv, praw))
+        lf.set_vreg_type(pv, 5)
+    else:
+        pv = _emit_field_get(m, lf, subj, (1 + fldidx) * 8, ftg)
+        # A str payload bound to a local: the local OWNS a ref (like SLet), so retain the
+        # borrow — balanced if scope-exit releases it, a safe leak if it doesn't.
+        if ftg == 1: _secure_str(m, lf, pv)
     lf.add_var(bindname)
     lf.set_var_type(bindname, ftg)
     if ftg == 10 or ftg == 11:
@@ -1025,10 +1098,24 @@ def _lower_field_set(m: LModule, lf: LFunc, obj: Pointer[HirExpr], prop: str, va
     mut off = m.field_offset(cls, prop)
     if off < 0: return false
     mut ftg = m.field_tag(cls, prop)
-    if ftg != 0 and ftg != 4 and ftg != 10 and ftg != 11: return false
+    if ftg < 0 or _is_list_tag(ftg) or _is_dict_tag(ftg): return false
     mut vv = lower_expr(m, lf, val)
     if vv < 0: return false
-    if not _field_tag_ok(lf.vreg_type(vv), ftg): return false
+    mut vt = lf.vreg_type(vv)
+    if ftg == 5:
+        # float field: promote an int value, then store the raw f64 bit pattern.
+        if vt == 0: vv = _promote_f(lf, vv)
+        elif vt != 5: return false
+        mut fbits = lf.new_vreg()
+        lf.emit(LInst.IFBits(fbits, vv))
+        vv = fbits
+    elif ftg == 1:
+        # str field: the field takes OWNERSHIP of a ref (fresh -> transfer, borrow ->
+        # retain). Objects are never freed yet, so the old value leaks — never a UAF.
+        if vt != 1: return false
+        _secure_str(m, lf, vv)
+    elif not _field_tag_ok(vt, ftg):
+        return false
     mut ov0 = lower_expr(m, lf, obj)
     if ov0 < 0: return false
     _emit_field_set(m, lf, ov0, off, vv)
@@ -2214,16 +2301,23 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                         return _lower_enum_ctor(m, lf, uvn, prop, Vec[Pointer[HirExpr]].init(0))
                 case _:
                     pass
-            # Class field read `obj.field` -> _tr_rt_field_get_i(obj, offset). int/bool/
-            # nested-object fields (str/float fields fall back to C — ARC/bitcast later).
+            # Class field read `obj.field` -> _tr_rt_field_get_i(obj, offset).
+            #   int/bool/object: the raw 8-byte slot. float: slot bits -> IBitsF -> f64.
+            #   str: a BORROW of the field's owned ref (not fresh — consumers retain).
             mut pcls = _recv_class(m, lf, obj)
             if pcls != "" and m.is_class(pcls):
                 mut foff = m.field_offset(pcls, prop)
                 if foff < 0: return -1
                 mut ftg = m.field_tag(pcls, prop)
-                if ftg != 0 and ftg != 4 and ftg != 10 and ftg != 11: return -1
+                if ftg < 0 or _is_list_tag(ftg) or _is_dict_tag(ftg): return -1
                 mut fobj = lower_expr(m, lf, obj)
                 if fobj < 0: return -1
+                if ftg == 5:
+                    mut fraw = _emit_field_get(m, lf, fobj, foff, 0)
+                    mut ffv = lf.new_vreg()
+                    lf.emit(LInst.IBitsF(ffv, fraw))
+                    lf.set_vreg_type(ffv, 5)
+                    return ffv
                 return _emit_field_get(m, lf, fobj, foff, ftg)
             if prop != "len": return -1
             mut ovl = lower_expr(m, lf, obj)
@@ -2249,19 +2343,26 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
             match obj.read():
                 case HirExpr.EIdent(inm, _, _):
                     if m.is_class(inm):
-                        return _lower_obj_call(m, lf, inm + "_" + method, -1, margs)
+                        mut smang = m.resolve_method(inm, method)   # up the base chain
+                        if smang == "": return -1
+                        return _lower_obj_call(m, lf, smang, -1, margs)
                     if m.is_enum(inm):
                         if m.enum_variant_index(inm, method) >= 0:
                             return _lower_enum_ctor(m, lf, inm, method, margs)
                         return _lower_obj_call(m, lf, inm + "_" + method, -1, margs)
                 case _:
                     pass
-            # Instance method `inst.method(args)` on a user class -> <Class>_<method>(self,args).
+            # Instance method `inst.method(args)` on a user class -> <Class>_<method>(self,
+            # args), resolved up the inheritance chain (static dispatch, like the C backend).
             mut recv_cls = _recv_class(m, lf, obj)
             if recv_cls != "":
+                mut mangled = recv_cls + "_" + method
+                if m.is_class(recv_cls):
+                    mangled = m.resolve_method(recv_cls, method)
+                    if mangled == "": return -1
                 mut rself = lower_expr(m, lf, obj)
                 if rself < 0: return -1
-                return _lower_obj_call(m, lf, recv_cls + "_" + method, rself, margs)
+                return _lower_obj_call(m, lf, mangled, rself, margs)
             mut ovm = lower_expr(m, lf, obj)
             if ovm < 0: return -1
             mut ovmt = lf.vreg_type(ovm)

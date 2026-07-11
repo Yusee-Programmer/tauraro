@@ -1597,7 +1597,9 @@ typedef enum {
     LInst_IFToI,
     LInst_IFCall1,
     LInst_IFCallF,
-    LInst_IFCall2F
+    LInst_IFCall2F,
+    LInst_IBitsF,
+    LInst_IFBits
 } LInst_tag;
 
 typedef struct LInst {
@@ -1668,6 +1670,14 @@ typedef struct LInst {
             long long a;
             long long b;
         } IFCall2F;
+        struct {
+            long long dst;
+            long long src;
+        } IBitsF;
+        struct {
+            long long dst;
+            long long src;
+        } IFBits;
     } data;
 } LInst;
 
@@ -1685,6 +1695,8 @@ static inline __attribute__((always_inline)) LInst LInst_ctor_IFToI(long long ds
 static inline __attribute__((always_inline)) LInst LInst_ctor_IFCall1(long long dst, TrStr callee, long long arg) { LInst _r = {.tag=LInst_IFCall1}; _r.data.IFCall1.dst = dst; _r.data.IFCall1.callee = _tr_str_retain(callee); _r.data.IFCall1.arg = arg; return _r; }
 static inline __attribute__((always_inline)) LInst LInst_ctor_IFCallF(long long dst, TrStr callee, long long arg) { LInst _r = {.tag=LInst_IFCallF}; _r.data.IFCallF.dst = dst; _r.data.IFCallF.callee = _tr_str_retain(callee); _r.data.IFCallF.arg = arg; return _r; }
 static inline __attribute__((always_inline)) LInst LInst_ctor_IFCall2F(long long dst, TrStr callee, long long a, long long b) { LInst _r = {.tag=LInst_IFCall2F}; _r.data.IFCall2F.dst = dst; _r.data.IFCall2F.callee = _tr_str_retain(callee); _r.data.IFCall2F.a = a; _r.data.IFCall2F.b = b; return _r; }
+static inline __attribute__((always_inline)) LInst LInst_ctor_IBitsF(long long dst, long long src) { LInst _r = {.tag=LInst_IBitsF}; _r.data.IBitsF.dst = dst; _r.data.IBitsF.src = src; return _r; }
+static inline __attribute__((always_inline)) LInst LInst_ctor_IFBits(long long dst, long long src) { LInst _r = {.tag=LInst_IFBits}; _r.data.IFBits.dst = dst; _r.data.IFBits.src = src; return _r; }
 
 typedef enum {
     LTerm_TRetInt,
@@ -2887,6 +2899,7 @@ static void _trdrop_LFunc(void* vp) {
 typedef struct ClassLayout {
     size_t __rc;
     TrStr name;
+    TrStr base;
     List_TrStr* fields;
     List_i64* ftags;
     List_TrStr* fcls;
@@ -2894,6 +2907,7 @@ typedef struct ClassLayout {
 static void _trdrop_ClassLayout(void* vp) {
     ClassLayout* self = (ClassLayout*)vp; (void)self;
     _tr_str_release(self->name);
+    _tr_str_release(self->base);
     List_i64_free(self->ftags);
     List_TrStr_free(self->fcls);
 }
@@ -3657,6 +3671,7 @@ __attribute__((hot)) bool LModule_is_class(LModule* self, TrStr name);
 __attribute__((hot)) long long LModule_class_size(LModule* self, TrStr name);
 __attribute__((hot)) long long LModule_field_offset(LModule* self, TrStr cls, TrStr fld);
 __attribute__((hot)) long long LModule_field_tag(LModule* self, TrStr cls, TrStr fld);
+__attribute__((hot)) TrStr LModule_resolve_method(LModule* self, TrStr cls, TrStr method);
 __attribute__((hot)) TrStr LModule_field_cls(LModule* self, TrStr cls, TrStr fld);
 __attribute__((hot)) void LModule_add_enum(LModule* self, EnumLayout* el);
 __attribute__((hot)) long long LModule_enum_index(LModule* self, TrStr name);
@@ -3682,6 +3697,9 @@ __attribute__((hot)) TrStr _own(TrStr s);
 __attribute__((hot)) long long _tag_of(LModule* m, AstType* ty);
 __attribute__((hot)) TrStr _cls_of_ty(LModule* m, AstType* ty);
 __attribute__((hot)) TrStr _recv_class(LModule* m, LFunc* lf, HirExpr* obj);
+__attribute__((hot)) long long _prog_class_index(HirProgram* prog, TrStr name);
+__attribute__((hot)) bool _push_field_names_rec(HirProgram* prog, long long ci, ClassLayout* lay, long long depth);
+__attribute__((hot)) bool _push_field_tags_rec(LModule* m, HirProgram* prog, long long ci, ClassLayout* lay, long long depth);
 __attribute__((hot)) void _register_classes(LModule* m, HirProgram* prog);
 __attribute__((hot)) LModule* lower_to_lir(HirProgram* prog);
 __attribute__((hot)) void _lir_lower_method(LModule* m, TrStr class_name, HirFunction* f);
@@ -3994,6 +4012,8 @@ __attribute__((hot)) bool CGenerator__is_fresh_str_expr(CGenerator* self, HirExp
 __attribute__((hot)) bool CGenerator__expr_is_borrow_call(CGenerator* self, HirExpr* e);
 __attribute__((hot)) bool CGenerator__is_fresh_obj_expr(CGenerator* self, HirExpr* e);
 __attribute__((hot)) TrStr CGenerator_gen_args(CGenerator* self, List_ptr* args);
+__attribute__((hot)) bool CGenerator__is_subclass_of(CGenerator* self, TrStr child, TrStr parent);
+__attribute__((hot)) TrStr CGenerator_gen_args_casts(CGenerator* self, List_ptr* args, List_TrStr* casts);
 __attribute__((hot)) TrStr CGenerator_gen_args_strify(CGenerator* self, List_ptr* args, TrStr elem_sfx);
 __attribute__((hot)) TrStr CGenerator_gen_method_call(CGenerator* self, HirExpr* obj, TrStr method, List_ptr* args, AstType* call_ty);
 __attribute__((hot)) TrStr CGenerator_gen_fstring(CGenerator* self, List_ptr* parts);

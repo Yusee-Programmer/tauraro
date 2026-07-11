@@ -1,0 +1,16 @@
+# EXPECT: [E-3]
+# A payload BINDING inside an or-pattern is unsound: only one alternative of the `|`
+# actually matches, so the bound name may be uninitialized in the arm body (and the C
+# backend used to compile such an arm as always-true, silently swallowing every value).
+enum Shape:
+    Circle(r: int)
+    Rect(w: int, h: int)
+    Unit
+
+def main():
+    mut s = Shape.Circle(3)
+    match s:
+        case Shape.Circle(r) | Shape.Unit:
+            print(1)
+        case _:
+            print(2)

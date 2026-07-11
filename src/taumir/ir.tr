@@ -32,6 +32,8 @@ pub enum LInst:
     IFCall1(dst: int, callee: str, arg: int)    # call callee(f64 arg in xmm0); rax -> dst if >=0
     IFCallF(dst: int, callee: str, arg: int)    # call callee(f64 xmm0) -> f64 xmm0 -> dst
     IFCall2F(dst: int, callee: str, a: int, b: int)  # call callee(f64 xmm0, f64 xmm1) -> f64 -> dst
+    IBitsF(dst: int, src: int)                  # reinterpret i64 bit pattern -> f64 (no conversion)
+    IFBits(dst: int, src: int)                  # reinterpret f64 -> i64 bit pattern (no conversion)
 
 # Block terminator (exactly one per block).
 pub enum LTerm:
@@ -181,7 +183,8 @@ extend LFunc:
 # backend's packed struct layout (each program uses ONE backend; they never share memory).
 pub class ClassLayout:
     pub name:   str
-    pub fields: Vec[str]        # field names in declaration order
+    pub base:   str             # parent class name ("" = no base); parent fields lay FIRST
+    pub fields: Vec[str]        # field names in declaration order (incl. inherited, first)
     pub ftags:  Vec[int]        # parallel: value-type tag of each field
     pub fcls:   Vec[str]        # parallel: class/enum name for object fields ("" if scalar)
 
@@ -189,6 +192,7 @@ extend ClassLayout:
     pub def init(name: str) -> ClassLayout:
         mut c = ClassLayout()
         c.name   = name
+        c.base   = ""
         c.fields = Vec[str].init(4)
         c.ftags  = Vec[int].init(4)
         c.fcls   = Vec[str].init(4)
@@ -360,6 +364,22 @@ extend LModule:
         mut fi = self.classes.get(ci).field_index(fld)
         if fi < 0: return -1
         return self.classes.get(ci).ftags.get(fi)
+
+    # Resolve `cls.method` to its mangled function, walking UP the base chain (static
+    # dispatch — matches the C backend's struct-embedding model, which has no vtables).
+    # Returns "" if no class in the chain defines the method.
+    pub def resolve_method(self, cls: str, method: str) -> str:
+        mut cur = cls
+        mut depth = 0
+        while depth < 32:                       # cycle guard
+            mut ci = self.class_index(cur)
+            if ci < 0: return ""
+            mut mangled = cur + "_" + method
+            if self.is_user_fn(mangled): return mangled
+            cur = self.classes.get(ci).base
+            if (cur as Pointer[char]) as usize == 0 as usize or cur == "": return ""
+            depth = depth + 1
+        return ""
 
     # Class/enum name of an object-valued field ("" if scalar/unknown).
     pub def field_cls(self, cls: str, fld: str) -> str:

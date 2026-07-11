@@ -1,0 +1,45 @@
+# native≡c / llvm≡c differential corpus: single inheritance — parent-first field layout,
+# inherited method dispatch (static, up the base chain), override, subclass-as-parent arg.
+class Animal:
+    legs: int
+    weight: int
+
+extend Animal:
+    def init(legs: int, weight: int) -> Animal:
+        mut a = Animal()
+        a.legs = legs
+        a.weight = weight
+        return a
+    def describe(self) -> int:
+        return self.legs * 100 + self.weight
+    def kind(self) -> int:
+        return 0
+
+class Dog extends Animal:
+    tricks: int
+
+extend Dog:
+    def init(weight: int, tricks: int) -> Dog:
+        mut d = Dog()
+        d.legs = 4
+        d.weight = weight
+        d.tricks = tricks
+        return d
+    def kind(self) -> int:
+        return 1
+
+def total_weight(a: Animal, b: Animal) -> int:
+    return a.weight + b.weight
+
+def main():
+    mut a = Animal.init(2, 60)
+    mut d = Dog.init(12, 3)
+    print(a.describe())      # 260
+    print(d.describe())      # 412  (inherited method reads parent-offset fields)
+    print(a.kind())          # 0
+    print(d.kind())          # 1    (override wins)
+    print(d.tricks)          # 3    (child field after parent fields)
+    print(d.legs)            # 4    (parent field via child)
+    d.weight = 14
+    print(d.describe())      # 414
+    print(total_weight(a, d))  # 74  (Dog passed where Animal expected)

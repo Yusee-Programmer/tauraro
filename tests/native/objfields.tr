@@ -1,0 +1,53 @@
+# native≡c / llvm≡c differential corpus: str + float fields on classes, str/float enum
+# payloads, f-string over field values.
+enum Grade:
+    Pass(score: float)
+    Fail(reason: str)
+    Absent
+
+class Student:
+    name: str
+    gpa: float
+    year: int
+
+extend Student:
+    def init(name: str, gpa: float, year: int) -> Student:
+        mut s = Student()
+        s.name = name
+        s.gpa = gpa
+        s.year = year
+        return s
+    def label(self) -> str:
+        return self.name + "/" + str(self.year)
+
+def judge(g: Grade) -> str:
+    match g:
+        case Grade.Pass(score):
+            return "pass " + str(score)
+        case Grade.Fail(reason):
+            return "fail " + reason
+        case Grade.Absent:
+            return "absent"
+    return "?"
+
+def main():
+    mut s = Student.init("ada", 3.5, 2)
+    print(s.name)                 # ada
+    print(s.gpa)                  # 3.5
+    print(s.year)                 # 2
+    print(s.label())              # ada/2
+    s.name = "grace"
+    s.gpa = s.gpa + 0.25
+    print(s.name)                 # grace
+    print(s.gpa)                  # 3.75
+    print(f"{s.name} gpa={s.gpa}")  # grace gpa=3.75
+
+    print(judge(Grade.Pass(3.9)))     # pass 3.9
+    print(judge(Grade.Fail("late")))  # fail late
+    print(judge(Grade.Absent))        # absent
+
+    # str field read into a local (retained), then overwrite the field
+    mut keep = s.name
+    s.name = "kay"
+    print(keep)                   # grace
+    print(s.name)                 # kay
