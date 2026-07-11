@@ -3367,6 +3367,7 @@ extend Sema:
             
         mut he = HirEnum()
         he.name = e.name
+        he.generics = e.generics       # was never set -> NULL vec (crashed .len readers)
         he.variants = hvariants
         he.methods = hmethods
         he.iface_names = e.iface_names
@@ -4314,6 +4315,14 @@ extend Sema:
             case Pattern.PBind(name): self.declare(name, SymbolKind.SVariable, box_asttype(subj_ty), false)
             case Pattern.PVariantBind(type_name, variant_name, field):
                 mut fty = self.variant_field_ty(type_name, variant_name, 0)
+                # Builtin generic enums: the payload's type is the SUBJECT's type argument
+                # (Option[float].Some(v) binds v: float, Result[T,E].Err(e) binds e: E).
+                if type_name == "Option" and variant_name == "Some" and subj_ty.args.len > 0:
+                    fty = subj_ty.args.get(0).read()
+                elif type_name == "Result" and variant_name == "Ok" and subj_ty.args.len > 0:
+                    fty = subj_ty.args.get(0).read()
+                elif type_name == "Result" and variant_name == "Err" and subj_ty.args.len > 1:
+                    fty = subj_ty.args.get(1).read()
                 if fty.name == "void": fty = AstType.init("int")
                 self.declare(field, SymbolKind.SVariable, box_asttype(fty), false)
             case Pattern.PVariantBindMany(type_name, variant_name, fields):
@@ -5062,7 +5071,12 @@ extend Sema:
                         ret_ty = AstType.init_generic("List", box_asttype(_dict_val_ty))
                 # Option[T] built-in method return types
                 elif hobj_ty.name == "Option":
-                    if method == "is_some" or method == "is_none": ret_ty = AstType.init("bool")
+                    # Ctor `Option.Some(x)` carries the payload's CONCRETE type so a later
+                    # `case Option.Some(v):` binds `v` correctly (Option[float], not bare Option).
+                    if method == "Some" and hl.len == 1:
+                        ret_ty = AstType.init("Option")
+                        ret_ty.args.push(box_asttype(hir_expr_type(hl.get(0))))
+                    elif method == "is_some" or method == "is_none": ret_ty = AstType.init("bool")
                     elif method == "unwrap" or method == "expect":
                         if hobj_ty.args.len > 0: ret_ty = hobj_ty.args.get(0).read()
                         else: ret_ty = AstType.init("int")
@@ -5072,7 +5086,16 @@ extend Sema:
                         else: ret_ty = AstType.init("int")
                 # Result[T,E] built-in method return types
                 elif hobj_ty.name == "Result":
-                    if method == "is_ok" or method == "is_err": ret_ty = AstType.init("bool")
+                    # Ctors carry the payload's concrete type positionally (unknown side = void).
+                    if method == "Ok" and hl.len == 1:
+                        ret_ty = AstType.init("Result")
+                        ret_ty.args.push(box_asttype(hir_expr_type(hl.get(0))))
+                        ret_ty.args.push(box_asttype(AstType.init("void")))
+                    elif method == "Err" and hl.len == 1:
+                        ret_ty = AstType.init("Result")
+                        ret_ty.args.push(box_asttype(AstType.init("void")))
+                        ret_ty.args.push(box_asttype(hir_expr_type(hl.get(0))))
+                    elif method == "is_ok" or method == "is_err": ret_ty = AstType.init("bool")
                     elif method == "unwrap" or method == "ok":
                         if hobj_ty.args.len > 0: ret_ty = hobj_ty.args.get(0).read()
                         else: ret_ty = AstType.init("int")

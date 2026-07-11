@@ -295,7 +295,13 @@ def _register_classes(m: LModule, prog: HirProgram):
     ei = 0
     while ei < prog.enums.len:
         mut e2 = prog.enums.get(ei)
-        mut elay2 = m.enums.get(ei)
+        # Look the layout up BY NAME: builtin Option/Result were prepended to m.enums,
+        # so a parallel-index walk would pair user enums with the WRONG layout.
+        mut e2ix = m.enum_index(e2.name)
+        if e2ix < 0:
+            ei = ei + 1
+            continue
+        mut elay2 = m.enums.get(e2ix)
         mut v2 = 0
         while v2 < e2.variants.len:
             mut vdef = e2.variants.get(v2)
