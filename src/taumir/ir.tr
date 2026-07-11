@@ -34,6 +34,9 @@ pub enum LInst:
     IFCall2F(dst: int, callee: str, a: int, b: int)  # call callee(f64 xmm0, f64 xmm1) -> f64 -> dst
     IBitsF(dst: int, src: int)                  # reinterpret i64 bit pattern -> f64 (no conversion)
     IFBits(dst: int, src: int)                  # reinterpret f64 -> i64 bit pattern (no conversion)
+    IAddrVar(dst: int, name: str)               # dst = address of var's stack slot (closure captures)
+    IFuncAddr(dst: int, fname: str)             # dst = address of a defined function
+    ICallInd(dst: int, fnreg: int, args: Vec[int])  # indirect call through the pointer in fnreg
 
 # Block terminator (exactly one per block).
 pub enum LTerm:
@@ -78,6 +81,10 @@ pub class LFunc:
     pub loop_cont:  Vec[int]        # stack of `continue` target block ids (innermost = last)
     pub loop_brk:   Vec[int]        # stack of `break` target block ids (innermost = last)
     pub fresh_strs: Vec[int]        # ARC: vregs holding a fresh owned str not yet consumed
+    pub captures:   Vec[str]        # OUTLINED CLOSURE body: captured var names (by-ref via env)
+    pub cap_tags:   Vec[int]        # parallel: value-type tag of each capture
+    pub var_xret:   Vec[int]        # parallel to vars: closure return tag (-1 = not a closure)
+    pub vreg_xret:  Vec[int]        # parallel to vregs: closure return tag (-1 = not a closure)
 
 extend LFunc:
     pub def init(name: str) -> LFunc:
@@ -96,6 +103,10 @@ extend LFunc:
         f.loop_cont  = Vec[int].init(4)
         f.loop_brk   = Vec[int].init(4)
         f.fresh_strs = Vec[int].init(8)
+        f.captures   = Vec[str].init(2)
+        f.cap_tags   = Vec[int].init(2)
+        f.var_xret   = Vec[int].init(4)
+        f.vreg_xret  = Vec[int].init(8)
         return f
 
     # A monotonically increasing id, for building unique synthesized variable names
@@ -135,6 +146,7 @@ extend LFunc:
         mut id = self.n_vregs
         self.n_vregs = self.n_vregs + 1
         self.vreg_types.push(0)
+        self.vreg_xret.push(-1)
         return id
 
     pub def set_vreg_type(self, id: int, t: int):
@@ -152,6 +164,7 @@ extend LFunc:
         self.vars.push(name)
         self.var_types.push(0)
         self.var_cls.push("")
+        self.var_xret.push(-1)
 
     pub def var_index(self, name: str) -> int:
         mut i = 0
@@ -177,6 +190,31 @@ extend LFunc:
         mut idx = self.var_index(name)
         if idx >= 0: return self.var_cls.get(idx)
         return ""
+
+    # Closure return-tag plumbing: a vreg holding a freshly-built closure records the
+    # closure's return tag; storing it into a var carries the tag to call sites.
+    pub def set_vreg_xret(self, id: int, t: int):
+        if id >= 0 and id < self.vreg_xret.len: self.vreg_xret.set(id, t)
+
+    pub def vreg_xret_of(self, id: int) -> int:
+        if id >= 0 and id < self.vreg_xret.len: return self.vreg_xret.get(id)
+        return -1
+
+    pub def set_var_xret(self, name: str, t: int):
+        mut idx = self.var_index(name)
+        if idx >= 0: self.var_xret.set(idx, t)
+
+    pub def var_xret_of(self, name: str) -> int:
+        mut idx = self.var_index(name)
+        if idx >= 0: return self.var_xret.get(idx)
+        return -1
+
+    pub def capture_index(self, name: str) -> int:
+        mut i = 0
+        while i < self.captures.len:
+            if self.captures.get(i) == name: return i
+            i = i + 1
+        return -1
 
 # A class's memory layout for the LIR backends: every field is an 8-byte slot, so the
 # offset of field #i is i*8 and the instance size is n_fields*8. Independent of the C
@@ -245,6 +283,8 @@ pub class LModule:
     pub funcs:    Vec[LFunc]
     pub classes:  Vec[ClassLayout]     # registered class layouts (object model)
     pub enums:    Vec[EnumLayout]      # registered enum layouts (tagged unions)
+    pub ifaces:   Vec[str]             # interface names: iface-typed params specialize
+                                       # per concrete arg class (zero-cost static dispatch)
     pub externs:  Vec[str]
     pub fn_names: Vec[str]      # user function names (defined in this module; call targets)
     pub fn_ret:   Vec[int]      # parallel to fn_names: return value-type tag (0/1/2/3/4)
@@ -262,6 +302,7 @@ extend LModule:
         m.funcs    = Vec[LFunc].init(4)
         m.classes  = Vec[ClassLayout].init(4)
         m.enums    = Vec[EnumLayout].init(4)
+        m.ifaces   = Vec[str].init(4)
         m.externs  = Vec[str].init(4)
         m.fn_names = Vec[str].init(8)
         m.fn_ret   = Vec[int].init(8)
@@ -422,3 +463,15 @@ extend LModule:
         mut ei = self.enum_index(ename)
         if ei < 0: return -1
         return self.enums.get(ei).variant_index(vname)
+
+    # -- interfaces: name registry (dispatch is fully static via specialization) ---------
+    pub def add_iface(self, name: str):
+        self.ifaces.push(name)
+
+    pub def is_iface(self, name: str) -> bool:
+        if (name as Pointer[char]) as usize == 0 as usize: return false
+        mut i = 0
+        while i < self.ifaces.len:
+            if self.ifaces.get(i) == name: return true
+            i = i + 1
+        return false

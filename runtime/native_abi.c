@@ -444,6 +444,65 @@ long long _tr_rt_idict_get_or(void* h, long long k, long long def) {
     return def;
 }
 
+/* remove for dicts — also backs Set[int]/Set[str] (a set is a dict with value 1). */
+void _tr_rt_idict_remove(void* h, long long k) {
+    _IDict* d = (_IDict*)h; if (!d) return;
+    unsigned long i = (unsigned long)((unsigned long long)k % _TRN_DCAP);
+    _INode** pp = &d->b[i];
+    while (*pp) {
+        if ((*pp)->key == k) { _INode* dead = *pp; *pp = dead->next; free(dead); d->len--; return; }
+        pp = &(*pp)->next;
+    }
+}
+void _tr_rt_sdict_remove(void* h, const char* k) {
+    _SDict* d = (_SDict*)h; if (!d || !k) return;
+    unsigned long i = _trn_shash(k);
+    _SNode** pp = &d->b[i];
+    while (*pp) {
+        if (strcmp((*pp)->key, k) == 0) {
+            _SNode* dead = *pp; *pp = dead->next;
+            _tr_rt_str_release(dead->key); free(dead); d->len--; return;
+        }
+        pp = &(*pp)->next;
+    }
+}
+
+/* whole-list printing, matching the C backend's formats exactly:
+ *   ints  -> [1, 2, 3]     strs -> ['a', 'bb']     floats -> [1.5, 2, 3.25]  (%g) */
+void _tr_rt_write_list_i64(void* h) {
+    _TrNList* l = (_TrNList*)h;
+    fputc('[', stdout);
+    if (l) for (long long i = 0; i < l->len; i++) {
+        if (i) fputs(", ", stdout);
+        printf("%lld", l->data[i]);
+    }
+    fputc(']', stdout);
+}
+void _tr_rt_write_list_str(void* h) {
+    _TrNList* l = (_TrNList*)h;
+    fputc('[', stdout);
+    if (l) for (long long i = 0; i < l->len; i++) {
+        if (i) fputs(", ", stdout);
+        fputc('\'', stdout);
+        fputs(l->data[i] ? (const char*)l->data[i] : "", stdout);
+        fputc('\'', stdout);
+    }
+    fputc(']', stdout);
+}
+void _tr_rt_write_list_f64(void* h) {
+    _TrNList* l = (_TrNList*)h;
+    fputc('[', stdout);
+    if (l) for (long long i = 0; i < l->len; i++) {
+        if (i) fputs(", ", stdout);
+        double v; memcpy(&v, &l->data[i], 8);
+        printf("%g", v);
+    }
+    fputc(']', stdout);
+}
+void _tr_rt_print_list_i64(void* h) { _tr_rt_write_list_i64(h); fputc('\n', stdout); }
+void _tr_rt_print_list_str(void* h) { _tr_rt_write_list_str(h); fputc('\n', stdout); }
+void _tr_rt_print_list_f64(void* h) { _tr_rt_write_list_f64(h); fputc('\n', stdout); }
+
 /* xs[i] = v for List[int]/List[str] (value is 8 bytes either way). */
 void _tr_rt_list_set_i64(void* h, long long i, long long v) {
     _TrNList* l = (_TrNList*)h;
@@ -631,6 +690,12 @@ char* _tr_rt_str_concat(const char* a, const char* b) {
     for (size_t j = 0; j < lb; j++) r[la + j] = b[j];
     r[la + lb] = 0;
     return r;
+}
+
+/* -- assert: on failure report to stderr and abort (passing asserts are free). */
+void _tr_rt_assert_fail(void) {
+    fprintf(stderr, "assertion failed\n");
+    abort();
 }
 
 /* -- Objects (classes): a class instance is a heap block; every field occupies an 8-byte

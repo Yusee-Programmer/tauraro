@@ -1,0 +1,40 @@
+# native≡c / llvm≡c differential corpus: closures — outlined fns + by-ref captures via
+# env block, indirect calls; int/float/str captures, capture mutation, multiple closures.
+def main():
+    mut n = 10
+    mut add_n = def (x: int) -> int:
+        return x + n
+    print(add_n(5))        # 15
+    n = 100
+    print(add_n(5))        # 105  (capture is BY REFERENCE)
+
+    mut count = 0
+    mut tick = def () -> int:
+        count = count + 1
+        return count
+    print(tick())          # 1
+    print(tick())          # 2
+    print(tick())          # 3
+    print(count)           # 3   (mutation visible in the creating frame)
+
+    mut factor = 2.5
+    mut scale = def (x: float) -> float:
+        return x * factor
+    print(scale(4.0))      # 10
+
+    mut greeting = "hello"
+    mut greet = def (who: str) -> str:
+        return greeting + " " + who
+    print(greet("world"))  # hello world
+
+    # two closures over the same variable
+    mut base = 7
+    mut inc = def () -> int:
+        return base + 1
+    mut dec = def () -> int:
+        return base - 1
+    print(inc())           # 8
+    print(dec())           # 6
+    base = 20
+    print(inc())           # 21
+    print(dec())           # 19

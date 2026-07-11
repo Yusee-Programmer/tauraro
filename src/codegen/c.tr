@@ -5425,6 +5425,11 @@ pub class CGenerator:
                 # box's refcount. Without retaining, an auto-drop of `vname`
                 # could free data the (leaked) box's TrStr still points at.
                 self.w(pad + "TrStr " + vname + " = _tr_str_retain(_tr_str_unbox((void*)(uintptr_t)" + tmp + ".data[" + i.to_str() + "]));\n")
+            elif _is_float_type(elem_ty_n):
+                # Float slots hold the f64 BIT PATTERN (stored via _tr_f64_to_ptr):
+                # reinterpret the bits — an arithmetic (double) cast of the raw
+                # integer produced garbage like 4.6e+18.
+                self.w(pad + "double " + vname + " = _tr_ptr_to_f64((void*)(uintptr_t)" + tmp + ".data[" + i.to_str() + "]);\n")
             else:
                 self.w(pad + "long long " + vname + " = " + tmp + ".data[" + i.to_str() + "];\n")
             self.decl_vars.insert(names.get(i), true)

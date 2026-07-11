@@ -162,6 +162,30 @@ extend LlvmEmitter:
                 mut bx = self.newtmp()
                 self.w("  " + bx + " = bitcast double " + bd + " to i64\n")
                 self.store_vreg(dst, "i64", bx)
+            case LInst.IAddrVar(dst, name):
+                # The var's alloca IS its address.
+                self.store_vreg(dst, "ptr", "%var_" + name)
+            case LInst.IFuncAddr(dst, fname):
+                self.store_vreg(dst, "ptr", "@" + fname)
+            case LInst.ICallInd(dst, fnreg, iargs):
+                mut ind_args = ""
+                mut ii2 = 0
+                while ii2 < iargs.len:
+                    mut iav = iargs.get(ii2)
+                    mut iaty = self.vty(iav)
+                    mut ial = self.load_vreg_as(iav, iaty)
+                    if ii2 > 0: ind_args = ind_args + ", "
+                    ind_args = ind_args + iaty + " " + ial
+                    ii2 = ii2 + 1
+                mut fp = self.load_vreg_as(fnreg, "ptr")
+                mut ind_ret = "void"
+                if dst >= 0: ind_ret = self.vty(dst)
+                if ind_ret == "void":
+                    self.w("  call void " + fp + "(" + ind_args + ")\n")
+                else:
+                    mut ir = self.newtmp()
+                    self.w("  " + ir + " = call " + ind_ret + " " + fp + "(" + ind_args + ")\n")
+                    self.store_vreg(dst, ind_ret, ir)
 
     pub def emit_call(self, dst: int, callee: str, args: Vec[int]):
         # Build the "(<ty> <val>, ...)" argument list.

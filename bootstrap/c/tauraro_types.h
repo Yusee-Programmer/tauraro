@@ -1599,7 +1599,10 @@ typedef enum {
     LInst_IFCallF,
     LInst_IFCall2F,
     LInst_IBitsF,
-    LInst_IFBits
+    LInst_IFBits,
+    LInst_IAddrVar,
+    LInst_IFuncAddr,
+    LInst_ICallInd
 } LInst_tag;
 
 typedef struct LInst {
@@ -1678,6 +1681,19 @@ typedef struct LInst {
             long long dst;
             long long src;
         } IFBits;
+        struct {
+            long long dst;
+            TrStr name;
+        } IAddrVar;
+        struct {
+            long long dst;
+            TrStr fname;
+        } IFuncAddr;
+        struct {
+            long long dst;
+            long long fnreg;
+            List_i64* args;
+        } ICallInd;
     } data;
 } LInst;
 
@@ -1697,6 +1713,9 @@ static inline __attribute__((always_inline)) LInst LInst_ctor_IFCallF(long long 
 static inline __attribute__((always_inline)) LInst LInst_ctor_IFCall2F(long long dst, TrStr callee, long long a, long long b) { LInst _r = {.tag=LInst_IFCall2F}; _r.data.IFCall2F.dst = dst; _r.data.IFCall2F.callee = _tr_str_retain(callee); _r.data.IFCall2F.a = a; _r.data.IFCall2F.b = b; return _r; }
 static inline __attribute__((always_inline)) LInst LInst_ctor_IBitsF(long long dst, long long src) { LInst _r = {.tag=LInst_IBitsF}; _r.data.IBitsF.dst = dst; _r.data.IBitsF.src = src; return _r; }
 static inline __attribute__((always_inline)) LInst LInst_ctor_IFBits(long long dst, long long src) { LInst _r = {.tag=LInst_IFBits}; _r.data.IFBits.dst = dst; _r.data.IFBits.src = src; return _r; }
+static inline __attribute__((always_inline)) LInst LInst_ctor_IAddrVar(long long dst, TrStr name) { LInst _r = {.tag=LInst_IAddrVar}; _r.data.IAddrVar.dst = dst; _r.data.IAddrVar.name = _tr_str_retain(name); return _r; }
+static inline __attribute__((always_inline)) LInst LInst_ctor_IFuncAddr(long long dst, TrStr fname) { LInst _r = {.tag=LInst_IFuncAddr}; _r.data.IFuncAddr.dst = dst; _r.data.IFuncAddr.fname = _tr_str_retain(fname); return _r; }
+static inline __attribute__((always_inline)) LInst LInst_ctor_ICallInd(long long dst, long long fnreg, List_i64* args) { LInst _r = {.tag=LInst_ICallInd}; _r.data.ICallInd.dst = dst; _r.data.ICallInd.fnreg = fnreg; _r.data.ICallInd.args = args; return _r; }
 
 typedef enum {
     LTerm_TRetInt,
@@ -2880,6 +2899,10 @@ typedef struct LFunc {
     List_i64* loop_cont;
     List_i64* loop_brk;
     List_i64* fresh_strs;
+    List_TrStr* captures;
+    List_i64* cap_tags;
+    List_i64* var_xret;
+    List_i64* vreg_xret;
 } LFunc;
 static void _trdrop_LFunc(void* vp) {
     LFunc* self = (LFunc*)vp; (void)self;
@@ -2891,6 +2914,10 @@ static void _trdrop_LFunc(void* vp) {
     List_i64_free(self->loop_cont);
     List_i64_free(self->loop_brk);
     List_i64_free(self->fresh_strs);
+    List_TrStr_free(self->captures);
+    List_i64_free(self->cap_tags);
+    List_i64_free(self->var_xret);
+    List_i64_free(self->vreg_xret);
 }
 #endif
 
@@ -2950,6 +2977,7 @@ typedef struct LModule {
     List_ptr* funcs;
     List_ptr* classes;
     List_ptr* enums;
+    List_TrStr* ifaces;
     List_TrStr* externs;
     List_TrStr* fn_names;
     List_i64* fn_ret;
@@ -2965,6 +2993,7 @@ static void _trdrop_LModule(void* vp) {
     List_ptr_free_obj(self->funcs, _trdrop_LFunc);
     List_ptr_free_obj(self->classes, _trdrop_ClassLayout);
     List_ptr_free_obj(self->enums, _trdrop_EnumLayout);
+    List_TrStr_free(self->ifaces);
     List_TrStr_free(self->externs);
     List_TrStr_free(self->fn_names);
     List_i64_free(self->fn_ret);
@@ -3653,6 +3682,11 @@ __attribute__((hot)) void LFunc_set_var_type(LFunc* self, TrStr name, long long 
 __attribute__((hot)) long long LFunc_var_type(LFunc* self, TrStr name);
 __attribute__((hot)) void LFunc_set_var_cls(LFunc* self, TrStr name, TrStr cls);
 __attribute__((hot)) TrStr LFunc_var_cls_of(LFunc* self, TrStr name);
+__attribute__((hot)) void LFunc_set_vreg_xret(LFunc* self, long long id, long long t);
+__attribute__((hot)) long long LFunc_vreg_xret_of(LFunc* self, long long id);
+__attribute__((hot)) void LFunc_set_var_xret(LFunc* self, TrStr name, long long t);
+__attribute__((hot)) long long LFunc_var_xret_of(LFunc* self, TrStr name);
+__attribute__((hot)) long long LFunc_capture_index(LFunc* self, TrStr name);
 __attribute__((malloc,returns_nonnull,hot)) ClassLayout* ClassLayout_init(TrStr name);
 __attribute__((hot)) long long ClassLayout_field_index(ClassLayout* self, TrStr fname);
 __attribute__((malloc,returns_nonnull,hot)) VariantLayout* VariantLayout_init(TrStr name);
@@ -3680,10 +3714,14 @@ __attribute__((hot)) long long LModule_enum_index(LModule* self, TrStr name);
 __attribute__((hot)) bool LModule_is_enum(LModule* self, TrStr name);
 __attribute__((hot)) long long LModule_enum_size(LModule* self, TrStr name);
 __attribute__((hot)) long long LModule_enum_variant_index(LModule* self, TrStr ename, TrStr vname);
+__attribute__((hot)) void LModule_add_iface(LModule* self, TrStr name);
+__attribute__((hot)) bool LModule_is_iface(LModule* self, TrStr name);
 __attribute__((hot)) long long _f64_bits(double v);
 __attribute__((hot)) long long _promote_f(LFunc* lf, long long v);
 __attribute__((hot)) TrStr _print_i64_sym();
 __attribute__((hot)) bool _is_list_tag(long long t);
+__attribute__((hot)) bool _is_set_tag(long long t);
+__attribute__((hot)) TrStr _set_sym(long long t, TrStr op);
 __attribute__((hot)) bool _is_dict_tag(long long t);
 __attribute__((hot)) bool _dict_key_is_str(long long t);
 __attribute__((hot)) long long _dict_val_tag(long long t);
@@ -3704,8 +3742,11 @@ __attribute__((hot)) bool _push_field_names_rec(HirProgram* prog, long long ci, 
 __attribute__((hot)) bool _push_field_tags_rec(LModule* m, HirProgram* prog, long long ci, ClassLayout* lay, long long depth);
 __attribute__((hot)) void _register_classes(LModule* m, HirProgram* prog);
 __attribute__((hot)) LModule* lower_to_lir(HirProgram* prog);
+__attribute__((hot)) bool _fn_has_iface_param(LModule* m, HirFunction* f);
+__attribute__((hot)) bool _fn_is_specializable(LModule* m, HirFunction* f);
 __attribute__((hot)) long long _find_generic_fn(LModule* m, TrStr name);
 __attribute__((hot)) bool _is_generic_param(HirFunction* f, TrStr n);
+__attribute__((hot)) bool _param_is_abstract(LModule* m, HirFunction* f, TrStr ptyname);
 __attribute__((hot)) bool _lir_lower_generic(LModule* m, HirFunction* f, List_i64* argtags, List_TrStr* argcls, TrStr mangled);
 __attribute__((hot)) void _lir_lower_method(LModule* m, TrStr class_name, HirFunction* f);
 __attribute__((hot)) bool _register_global(LModule* m, HirStmt* s);
@@ -3718,6 +3759,7 @@ __attribute__((hot)) long long _lower_enum_ctor(LModule* m, LFunc* lf, TrStr ena
 __attribute__((hot)) long long _lower_obj_call(LModule* m, LFunc* lf, TrStr mangled, long long self_vreg, List_ptr* margs);
 __attribute__((hot)) bool lower_block(LModule* m, LFunc* lf, HirBlock* hb);
 __attribute__((hot)) bool lower_stmt(LModule* m, LFunc* lf, HirStmt* s);
+__attribute__((hot)) long long _lower_set_method(LModule* m, LFunc* lf, long long shv, long long stag, TrStr method, List_ptr* margs);
 __attribute__((hot)) long long _lit_pat_cond(LModule* m, LFunc* lf, Pattern pat, long long subj, long long st);
 __attribute__((hot)) bool _lower_match(LModule* m, LFunc* lf, HirExpr* expr, List_ptr* arms);
 __attribute__((hot)) long long _variant_tag_cond(LFunc* lf, long long tagv, long long vidx);
@@ -3761,6 +3803,7 @@ __attribute__((hot)) long long _const_int_val(HirExpr* e);
 __attribute__((hot)) void _emit_add_const(LFunc* lf, TrStr name, long long delta);
 __attribute__((hot)) long long _list_call1(LModule* m, LFunc* lf, TrStr sym, long long handle, long long restype);
 __attribute__((hot)) long long _list_get(LModule* m, LFunc* lf, long long handle, long long idx);
+__attribute__((hot)) long long _list_get_elem(LModule* m, LFunc* lf, long long ltag, long long handle, long long idx);
 __attribute__((hot)) long long lower_expr(LModule* m, LFunc* lf, HirExpr* e);
 __attribute__((hot)) TrStr _ll_ty(long long tag);
 __attribute__((hot)) TrStr _ll_ty_name(TrStr n);
