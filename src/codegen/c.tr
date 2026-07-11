@@ -1068,10 +1068,13 @@ pub class CGenerator:
         self.proto_buf  = self.mono_buf
         self.w(sig + ";\n")
         self.mono_buf = self.buf
-        # Body -> fn_mono_body (after prototypes).
-        self.buf        = self.fn_mono_body
-        self.struct_buf = self.fn_mono_body
-        self.proto_buf  = self.fn_mono_body
+        # Body -> an ISOLATED builder, appended to fn_mono_body only when COMPLETE.
+        # (Writing directly into fn_mono_body nested one mono's definition inside
+        # another's body when a generic called a generic — invalid C.)
+        mut mono_body_sb = StringBuilder.init(1024)
+        self.buf        = mono_body_sb
+        self.struct_buf = mono_body_sb
+        self.proto_buf  = mono_body_sb
         mut old_class = self.cur_class
         mut old_func = self.cur_func
         self.cur_class = ""
@@ -1092,7 +1095,7 @@ pub class CGenerator:
         self.w("}\n\n")
         self.cur_class = old_class
         self.cur_func = old_func
-        self.fn_mono_body = self.buf
+        self.fn_mono_body.append(mono_body_sb.to_string().as_str())
         self.buf = old_buf
         self.struct_buf = old_sbuf
         self.proto_buf = old_pbuf
@@ -2685,8 +2688,10 @@ pub class CGenerator:
     pub def gen_binop(self, op: str, l: Pointer[HirExpr], r: Pointer[HirExpr]) -> str:
         mut ls = self.gen_expr(l)
         mut rs = self.gen_expr(r)
-        mut lt_n: str = hir_expr_type(l).name
-        mut rt_n: str = hir_expr_type(r).name
+        # Inside a monomorphized generic body a `T`-typed operand must dispatch on its
+        # CONCRETE type (T=str -> _tr_str_cmp/concat, not raw C `>`/`+` on TrStr).
+        mut lt_n: str = self.resolve_generic_prim(hir_expr_type(l).name)
+        mut rt_n: str = self.resolve_generic_prim(hir_expr_type(r).name)
         if op == "+" and (_is_str_type(lt_n) or _is_str_type(rt_n)):
             # `_tr_str_wrap(...)` always produces a freshly-owned, unique
             # TrStr (rc=1, not aliased to any other variable) - e.g. from

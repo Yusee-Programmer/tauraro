@@ -4726,6 +4726,23 @@ extend Sema:
                             # the call result is the signature's return type (last arg).
                             if ret_ty.name == "def" and ret_ty.args.len > 0:
                                 ret_ty = ret_ty.args.get(ret_ty.args.len - 1).read()
+                            # A generic fn returning its type param (-> T) yields the
+                            # CONCRETE type of the first argument declared as that T
+                            # (otherwise `mut a = largest(1, 2)` emits a `T*` local).
+                            if self.fn_defs.contains(n):
+                                mut _gfd = self.fn_defs.get(n)
+                                if _gfd.generics.len > 0 and _gfd.generics.contains(ret_ty.name):
+                                    mut _gsk = 0
+                                    if _gfd.params.len > 0 and _gfd.params.get(0).name == "self": _gsk = 1
+                                    mut _gpi = 0
+                                    while _gpi < _gfd.params.len:
+                                        mut _gpty = _gfd.params.get(_gpi).ty
+                                        if _gpty as usize != 0 as usize and _gpty.read().name == ret_ty.name:
+                                            mut _gaidx = _gpi - _gsk
+                                            if _gaidx >= 0 and _gaidx < hl.len:
+                                                ret_ty = hir_expr_type(hl.get(_gaidx))
+                                                break
+                                        _gpi = _gpi + 1
                     case Expr.EIndex(base, idx):
                         match base.read():
                             case Expr.EIdent(gn):

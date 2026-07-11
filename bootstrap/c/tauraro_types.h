@@ -2957,6 +2957,7 @@ typedef struct LModule {
     List_TrStr* globals;
     List_i64* global_types;
     List_ptr* global_inits;
+    HirProgram* hir_prog;
     bool ok;
 } LModule;
 static void _trdrop_LModule(void* vp) {
@@ -2971,6 +2972,7 @@ static void _trdrop_LModule(void* vp) {
     List_TrStr_free(self->globals);
     List_i64_free(self->global_types);
     List_ptr_free(self->global_inits);
+    _tr_obj_release(self->hir_prog, _trdrop_HirProgram);
 }
 #endif
 
@@ -3702,6 +3704,9 @@ __attribute__((hot)) bool _push_field_names_rec(HirProgram* prog, long long ci, 
 __attribute__((hot)) bool _push_field_tags_rec(LModule* m, HirProgram* prog, long long ci, ClassLayout* lay, long long depth);
 __attribute__((hot)) void _register_classes(LModule* m, HirProgram* prog);
 __attribute__((hot)) LModule* lower_to_lir(HirProgram* prog);
+__attribute__((hot)) long long _find_generic_fn(LModule* m, TrStr name);
+__attribute__((hot)) bool _is_generic_param(HirFunction* f, TrStr n);
+__attribute__((hot)) bool _lir_lower_generic(LModule* m, HirFunction* f, List_i64* argtags, List_TrStr* argcls, TrStr mangled);
 __attribute__((hot)) void _lir_lower_method(LModule* m, TrStr class_name, HirFunction* f);
 __attribute__((hot)) bool _register_global(LModule* m, HirStmt* s);
 __attribute__((hot)) bool _lower_global_init(LModule* m, LFunc* lf, HirStmt* s);

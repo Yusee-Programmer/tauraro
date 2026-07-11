@@ -81,22 +81,22 @@ __attribute__((hot)) void LFunc_set_term(LFunc* self, LTerm t) {
     /* pass */
     LBlock* b = ((LBlock*)List_ptr_get(self->blocks, self->cur));
     /* pass */
-    __auto_type _t2229 = b->term;
-    if (_t2229.tag == LTerm_TUnset) {
+    __auto_type _t2230 = b->term;
+    if (_t2230.tag == LTerm_TUnset) {
         b->term = t;
     } else if (1) {
-        __auto_type _ = _t2229;
+        __auto_type _ = _t2230;
         /* pass */
     }
 }
 
 __attribute__((hot)) bool LFunc_cur_terminated(LFunc* self) {
     /* pass */
-    __auto_type _t2230 = ((LBlock*)List_ptr_get(self->blocks, self->cur))->term;
-    if (_t2230.tag == LTerm_TUnset) {
+    __auto_type _t2231 = ((LBlock*)List_ptr_get(self->blocks, self->cur))->term;
+    if (_t2231.tag == LTerm_TUnset) {
         return false;
     } else if (1) {
-        __auto_type _ = _t2230;
+        __auto_type _ = _t2231;
         return true;
     }
 }
@@ -556,9 +556,9 @@ __attribute__((hot)) TrStr LModule_resolve_method(LModule* self, TrStr cls, TrSt
             return mangled;
         }
         /* pass */
-        TrStr _strtmp_t2231 = ((ClassLayout*)List_ptr_get(self->classes, ci))->base;
+        TrStr _strtmp_t2232 = ((ClassLayout*)List_ptr_get(self->classes, ci))->base;
         _tr_str_release(cur);
-        cur = _strtmp_t2231;
+        cur = _strtmp_t2232;
         /* pass */
         if (((((unsigned long long)(((char*)(_tr_strz(cur))))) == ((unsigned long long)(0LL))) || (strcmp(_tr_strz(cur), _tr_strz(_tr_str_lit(""))) == 0))) {
             /* pass */

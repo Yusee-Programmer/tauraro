@@ -263,12 +263,15 @@ def _register_classes(m: LModule, prog: HirProgram):
 
 pub def lower_to_lir(prog: HirProgram) -> LModule:
     mut m = LModule.init()
+    m.hir_prog = prog                  # generic fns are instantiated lazily at call sites
     _register_classes(m, prog)
     # Register free functions AND class methods (mangled <Class>_<method>) as call targets.
+    # GENERIC functions are skipped here: their bodies only lower against concrete arg
+    # tags, so each instantiation is registered + lowered on demand (see _lir_lower_generic).
     mut i = 0
     while i < prog.functions.len:
         mut f0 = prog.functions.get(i)
-        if not f0.is_extern:
+        if not f0.is_extern and f0.generics.len == 0:
             if f0.class_name == "":
                 m.fn_names.push(f0.name)
             else:
@@ -286,7 +289,7 @@ pub def lower_to_lir(prog: HirProgram) -> LModule:
     i = 0
     while i < prog.functions.len:
         mut f = prog.functions.get(i)
-        if not f.is_extern:
+        if not f.is_extern and f.generics.len == 0:
             if f.class_name == "":
                 _lir_lower_function(m, f)
             else:
@@ -294,6 +297,67 @@ pub def lower_to_lir(prog: HirProgram) -> LModule:
             if not m.ok: return m
         i = i + 1
     return m
+
+# Find a generic FREE function by name in the program (-1 if absent).
+def _find_generic_fn(m: LModule, name: str) -> int:
+    if _is_null_str(name): return -1
+    mut i = 0
+    while i < m.hir_prog.functions.len:
+        mut f = m.hir_prog.functions.get(i)
+        if f.name == name and f.class_name == "" and f.generics.len > 0 and not f.is_extern:
+            return i
+        i = i + 1
+    return -1
+
+# True if `n` names one of the function's generic type parameters.
+def _is_generic_param(f: HirFunction, n: str) -> bool:
+    if _is_null_str(n): return false
+    mut i = 0
+    while i < f.generics.len:
+        if f.generics.get(i) == n: return true
+        i = i + 1
+    return false
+
+# Instantiate a generic function for one combination of argument tags: the body is simply
+# lowered with the call site's CONCRETE param tags (the LIR lowering is tag-driven, so no
+# HIR cloning/substitution is needed — `a > b` compiles to int-cmp, f64-cmp, or str_cmp
+# purely from the tags). Registered under `mangled` BEFORE lowering so self-recursion
+# resolves. Returns false when this combination isn't lowerable (caller falls back to C).
+def _lir_lower_generic(m: LModule, f: HirFunction, argtags: Vec[int], argcls: Vec[str], mangled: str) -> bool:
+    if f.params.len != argtags.len: return false
+    # Return tag: a generic return type takes the tag of the matching generic param.
+    mut rtag = -1
+    if _is_generic_param(f, f.ret_ty.name):
+        mut ri = 0
+        while ri < f.params.len:
+            if not _is_null_str(f.params.get(ri).ty.name):
+                if f.params.get(ri).ty.name == f.ret_ty.name: rtag = argtags.get(ri)
+            ri = ri + 1
+    else:
+        rtag = _tag_of(m, f.ret_ty)
+    if rtag < 0: return false
+    m.fn_names.push(_own(mangled))
+    m.fn_ret.push(rtag)
+    mut lf = LFunc.init(_own(mangled))
+    mut pi = 0
+    while pi < f.params.len:
+        mut p = f.params.get(pi)
+        mut ptag = argtags.get(pi)
+        # A concretely-typed param must agree with the call site's arg tag.
+        if not _is_generic_param(f, p.ty.name):
+            mut want = _tag_of(m, p.ty)
+            if want < 0 or not _field_tag_ok(ptag, want): return false
+        lf.params.push(p.name)
+        lf.add_var(p.name)
+        lf.set_var_type(p.name, ptag)
+        if (ptag == 10 or ptag == 11) and argcls.get(pi) != "":
+            lf.set_var_cls(p.name, _own(argcls.get(pi)))
+        pi = pi + 1
+    lf.set_cur(lf.new_block())
+    if not lower_block(m, lf, f.body): return false
+    lf.set_term(LTerm.TRetInt(0))
+    m.funcs.push(lf)
+    return true
 
 # Lower a class method as a function named <Class>_<method>. `self` becomes a first
 # parameter of tag 10 (object pointer); other params are class-aware tagged.
@@ -2160,7 +2224,39 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                 mut bnorm = _norm_bool(lf, bv0)
                 lf.set_vreg_type(bnorm, 4)
                 return bnorm
-            if not m.is_user_fn(fn): return -1
+            # Generic free fn: instantiate lazily for this combination of ARG TAGS, then
+            # call the mangled specialization (e.g. largest__m0_0 for two ints).
+            if not m.is_user_fn(fn):
+                mut gfi = _find_generic_fn(m, fn)
+                if gfi < 0: return -1
+                if args.len > 6: return -1
+                mut gvregs = Vec[int].init(args.len)
+                mut gtags = Vec[int].init(args.len)
+                mut gcls = Vec[str].init(args.len)
+                mut gmangled = fn + "__m"
+                mut gi = 0
+                while gi < args.len:
+                    mut gav = lower_expr(m, lf, args.get(gi))
+                    if gav < 0: return -1
+                    mut gat = lf.vreg_type(gav)
+                    gvregs.push(gav)
+                    gtags.push(gat)
+                    mut gcn = ""
+                    if gat == 10 or gat == 11:
+                        gcn = _recv_class(m, lf, args.get(gi))
+                    gcls.push(gcn)
+                    if gi > 0: gmangled = gmangled + "_"
+                    gmangled = gmangled + gat.to_str()
+                    gi = gi + 1
+                if not m.is_user_fn(gmangled):
+                    if not _lir_lower_generic(m, m.hir_prog.functions.get(gfi), gtags, gcls, gmangled):
+                        return -1
+                mut grtag = m.fn_ret_tag(gmangled)
+                mut gd = lf.new_vreg()
+                lf.emit(LInst.ICall(gd, gmangled, gvregs))
+                lf.set_vreg_type(gd, grtag)
+                if grtag == 1: _fresh_mark(lf, gd)
+                return gd
             if args.len > 6: return -1                 # System V: rdi,rsi,rdx,rcx,r8,r9
             mut rtag = m.fn_ret_tag(fn)
             if rtag < 0: return -1                      # unsupported return type -> fall back

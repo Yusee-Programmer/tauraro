@@ -7,7 +7,7 @@
 # yet) — fast COMPILE, -O0 runtime (that's the point; C/LLVM cover release perf).
 
 from core.alloc import alloc
-from hir import HirStmt
+from hir import HirStmt, HirProgram
 
 pub enum LType:
     LVoid
@@ -252,6 +252,8 @@ pub class LModule:
     pub globals:      Vec[str]              # module-level variable names (-> .bss slots)
     pub global_types: Vec[int]              # parallel to globals: value-type tag
     pub global_inits: Vec[Pointer[HirStmt]] # top-level init statements, run at start of main
+    pub hir_prog: HirProgram                # the program being lowered (generic fns are
+                                            # instantiated lazily from here at call sites)
     pub ok:       bool
 
 extend LModule:

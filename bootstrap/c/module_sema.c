@@ -9514,6 +9514,42 @@ __auto_type args = _t537.data.ECall.args;
                     /* pass */
                     ret_ty = (*((AstType**)List_ptr_get(ret_ty->args, (ret_ty->args->len - 1LL))));
                 }
+                /* pass */
+                if (_tr_dict_contains(self->fn_defs, _tr_strz(n))) {
+                    /* pass */
+                    FunctionDef* _gfd = ((FunctionDef*)(uintptr_t)_tr_dict_get(self->fn_defs, _tr_strz(n)));
+                    /* pass */
+                    if (((_gfd->generics->len > 0LL) && List_TrStr_contains(_gfd->generics, ret_ty->name))) {
+                        /* pass */
+                        long long _gsk = 0LL;
+                        /* pass */
+                        if (((_gfd->params->len > 0LL) && (strcmp(_tr_strz(((Param*)List_ptr_get(_gfd->params, 0LL))->name), _tr_strz(_tr_str_lit("self"))) == 0))) {
+                            /* pass */
+                            _gsk = 1LL;
+                        }
+                        /* pass */
+                        long long _gpi = 0LL;
+                        /* pass */
+                        while ((_gpi < _gfd->params->len)) {
+                            /* pass */
+                            AstType** _gpty = ((Param*)List_ptr_get(_gfd->params, _gpi))->ty;
+                            /* pass */
+                            if (((((unsigned long long)(_gpty)) != ((unsigned long long)(0LL))) && (strcmp(_tr_strz((*_gpty)->name), _tr_strz(ret_ty->name)) == 0))) {
+                                /* pass */
+                                long long _gaidx = (_gpi - _gsk);
+                                /* pass */
+                                if (((_gaidx >= 0LL) && (_gaidx < hl->len))) {
+                                    /* pass */
+                                    ret_ty = hir_expr_type(((HirExpr*)List_ptr_get(hl, _gaidx)));
+                                    /* pass */
+                                    break;
+                                }
+                            }
+                            /* pass */
+                            _gpi = (_gpi + 1LL);
+                        }
+                    }
+                }
             }
         } else if (_t562.tag == Expr_EIndex) {
             __auto_type base = _t562.data.EIndex.obj;
