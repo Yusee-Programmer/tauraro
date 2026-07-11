@@ -13,7 +13,7 @@
 # LModule.ok = false so the native driver falls back to C.
 
 from hir import HirProgram, HirFunction, HirStmt, HirExpr, HirBlock, HirMatchArm, hir_expr_type
-from taumir.ir import LModule, LFunc, LInst, LTerm, ClassLayout
+from taumir.ir import LModule, LFunc, LInst, LTerm, ClassLayout, EnumLayout, VariantLayout
 from ast import AstType, Pattern
 from core.alloc import alloc
 
@@ -120,32 +120,45 @@ def _own(s: str) -> str:
     if _is_null_str(s): return ""
     return s + ""
 
-# Class-aware value-type tag: a registered user class -> 10 (an object pointer), else the
-# scalar/collection tag. tag 10 maps to `ptr` in both backends (an 8-byte heap handle).
+# Class-aware value-type tag: a registered user class -> 10 (object pointer), a registered
+# enum -> 11 (tagged-union pointer), else the scalar/collection tag. Tags 10/11 map to
+# `ptr` in both backends (an 8-byte heap handle).
 # A null/absent type name -> -1 (untyped -> the module falls back to C, never crashes).
 def _tag_of(m: LModule, ty: AstType) -> int:
     if _is_null_str(ty.name): return -1
     if m.is_class(ty.name): return 10
+    if m.is_enum(ty.name): return 11
     return _ast_type_tag(ty)
 
-# Resolve the class name of an object-valued receiver expression. Prefer the HIR type; if
-# that's absent (some param/receiver nodes carry no type), fall back to the per-var class
-# map (populated for class-typed params, self, and object locals). "" = not a known class.
+# Class/enum name for an object-valued type ("" if scalar/unknown), for var_cls/fcls maps.
+def _cls_of_ty(m: LModule, ty: AstType) -> str:
+    if _is_null_str(ty.name): return ""
+    if m.is_class(ty.name) or m.is_enum(ty.name): return _own(ty.name)
+    return ""
+
+# Resolve the class/enum name of an object-valued receiver expression. Prefer the HIR
+# type; if absent (some param/receiver nodes carry no type), fall back to the per-var
+# class map, or — for chained field access — the field's registered class. "" = unknown.
 def _recv_class(m: LModule, lf: LFunc, obj: Pointer[HirExpr]) -> str:
     mut cn = hir_expr_type(obj).name
-    if not _is_null_str(cn) and m.is_class(cn): return cn
+    if not _is_null_str(cn) and (m.is_class(cn) or m.is_enum(cn)): return cn
     match obj.read():
         case HirExpr.EIdent(nm, _, _):
             mut vc = lf.var_cls_of(nm)
-            if not _is_null_str(vc) and m.is_class(vc): return vc
+            if not _is_null_str(vc) and (m.is_class(vc) or m.is_enum(vc)): return vc
+        case HirExpr.EPropAccess(inner, prop, _):
+            mut icls = _recv_class(m, lf, inner)
+            if icls != "" and m.is_class(icls):
+                mut fc = m.field_cls(icls, prop)
+                if not _is_null_str(fc) and fc != "": return fc
         case _:
             pass
     return ""
 
-# Register every class's layout: field names + tags, in declaration order (offset = i*8).
-# Single pass (no throwaway layouts / Vec.set — that dropped intermediate layouts whose
-# drop over-released the shared HIR class-name strings). A field whose type is a class not
-# yet registered gets tag -1 here, which is fine: only int/bool fields are read for now.
+# Register every class's and enum's layout. Pass 1 pushes name-only layouts (so mutual /
+# forward references resolve); pass 2 fills field tags IN PLACE via Vec.get (a heap
+# pointer — never Vec.set, whose replace-drop over-released shared name strings). All
+# stored names are OWNED copies (_own): the registry must never alias HIR strings.
 def _register_classes(m: LModule, prog: HirProgram):
     mut i = 0
     while i < prog.classes.len:
@@ -153,12 +166,52 @@ def _register_classes(m: LModule, prog: HirProgram):
         mut lay = ClassLayout.init(_own(c.name))
         mut fi = 0
         while fi < c.fields.len:
-            mut fld = c.fields.get(fi)
-            lay.fields.push(_own(fld.name))
-            lay.ftags.push(_tag_of(m, fld.ty))
+            lay.fields.push(_own(c.fields.get(fi).name))
             fi = fi + 1
         m.add_class(lay)
         i = i + 1
+    mut ei = 0
+    while ei < prog.enums.len:
+        mut e = prog.enums.get(ei)
+        mut elay = EnumLayout.init(_own(e.name))
+        mut vi = 0
+        while vi < e.variants.len:
+            mut v = e.variants.get(vi)
+            mut vlay = VariantLayout.init(_own(v.name))
+            mut pf = 0
+            while pf < v.fields.len:
+                vlay.fields.push(_own(v.fields.get(pf).name))
+                pf = pf + 1
+            elay.variants.push(vlay)
+            vi = vi + 1
+        m.add_enum(elay)
+        ei = ei + 1
+    # Pass 2: fill tags now that every class/enum name is registered.
+    i = 0
+    while i < prog.classes.len:
+        mut c2 = prog.classes.get(i)
+        mut lay2 = m.classes.get(i)
+        mut f2 = 0
+        while f2 < c2.fields.len:
+            lay2.ftags.push(_tag_of(m, c2.fields.get(f2).ty))
+            lay2.fcls.push(_cls_of_ty(m, c2.fields.get(f2).ty))
+            f2 = f2 + 1
+        i = i + 1
+    ei = 0
+    while ei < prog.enums.len:
+        mut e2 = prog.enums.get(ei)
+        mut elay2 = m.enums.get(ei)
+        mut v2 = 0
+        while v2 < e2.variants.len:
+            mut vdef = e2.variants.get(v2)
+            mut vlay2 = elay2.variants.get(v2)
+            mut p2 = 0
+            while p2 < vdef.fields.len:
+                vlay2.ftags.push(_tag_of(m, vdef.fields.get(p2).ty))
+                vlay2.fcls.push(_cls_of_ty(m, vdef.fields.get(p2).ty))
+                p2 = p2 + 1
+            v2 = v2 + 1
+        ei = ei + 1
 
 pub def lower_to_lir(prog: HirProgram) -> LModule:
     mut m = LModule.init()
@@ -204,6 +257,7 @@ def _lir_lower_method(m: LModule, class_name: str, f: HirFunction):
         mut ptag = 0
         if p.name == "self":
             ptag = 10
+            if m.is_enum(class_name): ptag = 11
         else:
             ptag = _tag_of(m, p.ty)
         if ptag < 0:
@@ -214,7 +268,7 @@ def _lir_lower_method(m: LModule, class_name: str, f: HirFunction):
         lf.set_var_type(p.name, ptag)
         if p.name == "self":
             lf.set_var_cls(p.name, _own(class_name))
-        elif ptag == 10 and not _is_null_str(p.ty.name):
+        elif (ptag == 10 or ptag == 11) and not _is_null_str(p.ty.name):
             lf.set_var_cls(p.name, _own(p.ty.name))
         pi = pi + 1
     lf.set_cur(lf.new_block())
@@ -289,7 +343,7 @@ def _lir_lower_function(m: LModule, f: HirFunction):
             lf.params.push(p.name)
             lf.add_var(p.name)
             lf.set_var_type(p.name, ptag)
-            if ptag == 10 and not _is_null_str(p.ty.name):
+            if (ptag == 10 or ptag == 11) and not _is_null_str(p.ty.name):
                 lf.set_var_cls(p.name, _own(p.ty.name))
         pi = pi + 1
     lf.set_cur(lf.new_block())
@@ -305,6 +359,74 @@ def _lir_lower_function(m: LModule, f: HirFunction):
         return
     lf.set_term(LTerm.TRetInt(0))
     m.funcs.push(lf)
+
+# A value of tag `vt` may be stored into a field of tag `ftg`: exact match, or int<->bool
+# (both are plain i64 slots; C treats bool as an integer).
+def _field_tag_ok(vt: int, ftg: int) -> bool:
+    if vt == ftg: return true
+    if (vt == 0 or vt == 4) and (ftg == 0 or ftg == 4): return true
+    return false
+
+# Store an i64/ptr vreg into an object field slot: _tr_rt_field_set_i(obj, off, val).
+def _emit_field_set(m: LModule, lf: LFunc, obj: int, off: int, val: int):
+    mut offc = lf.new_vreg()
+    lf.emit(LInst.IConst(offc, off))
+    m.add_extern("_tr_rt_field_set_i")
+    mut sa = Vec[int].init(3)
+    sa.push(obj)
+    sa.push(offc)
+    sa.push(val)
+    lf.emit(LInst.ICall(-1, "_tr_rt_field_set_i", sa))
+
+# Load an object field slot: dst = _tr_rt_field_get_i(obj, off), typed `tag`.
+def _emit_field_get(m: LModule, lf: LFunc, obj: int, off: int, tag: int) -> int:
+    mut offc = lf.new_vreg()
+    lf.emit(LInst.IConst(offc, off))
+    m.add_extern("_tr_rt_field_get_i")
+    mut fgargs = Vec[int].init(2)
+    fgargs.push(obj)
+    fgargs.push(offc)
+    mut gd = lf.new_vreg()
+    lf.emit(LInst.ICall(gd, "_tr_rt_field_get_i", fgargs))
+    lf.set_vreg_type(gd, tag)
+    return gd
+
+# Enum variant construction `Enum.Variant(args)` / unit `Enum.Variant` -> heap-allocate
+# {tag @0, payload @8..} and fill. Payload fields must be int/bool/object (str/float/
+# collection payloads fall back to C for now).
+def _lower_enum_ctor(m: LModule, lf: LFunc, ename: str, vname: str, margs: Vec[Pointer[HirExpr]]) -> int:
+    mut vidx = m.enum_variant_index(ename, vname)
+    if vidx < 0: return -1
+    mut elay = m.enums.get(m.enum_index(ename))
+    mut vlay = elay.variants.get(vidx)
+    if margs.len != vlay.fields.len: return -1
+    # Lower payload args FIRST (they may allocate/call), then the instance.
+    mut vals = Vec[int].init(margs.len)
+    mut ai = 0
+    while ai < margs.len:
+        mut ftg = vlay.ftags.get(ai)
+        if ftg != 0 and ftg != 4 and ftg != 10 and ftg != 11: return -1
+        mut av = lower_expr(m, lf, margs.get(ai))
+        if av < 0: return -1
+        if not _field_tag_ok(lf.vreg_type(av), ftg): return -1
+        vals.push(av)
+        ai = ai + 1
+    mut szc = lf.new_vreg()
+    lf.emit(LInst.IConst(szc, m.enum_size(ename)))
+    m.add_extern("_tr_rt_obj_alloc")
+    mut oaa = Vec[int].init(1)
+    oaa.push(szc)
+    mut od = lf.new_vreg()
+    lf.emit(LInst.ICall(od, "_tr_rt_obj_alloc", oaa))
+    lf.set_vreg_type(od, 11)
+    mut tgc = lf.new_vreg()
+    lf.emit(LInst.IConst(tgc, vidx))
+    _emit_field_set(m, lf, od, 0, tgc)
+    ai = 0
+    while ai < vals.len:
+        _emit_field_set(m, lf, od, (1 + ai) * 8, vals.get(ai))
+        ai = ai + 1
+    return od
 
 # Emit a call to a (mangled) user method/constructor. self_vreg >= 0 is prepended as the
 # first argument (instance methods); -1 means a static call (constructors). Result tag is
@@ -363,9 +485,10 @@ def lower_stmt(m: LModule, lf: LFunc, s: Pointer[HirStmt]) -> bool:
             if lf.vreg_type(v) == 1: _secure_str(m, lf, v)   # variable takes ownership
             lf.add_var(name)
             lf.set_var_type(name, lf.vreg_type(v))
-            if lf.vreg_type(v) == 10:                          # object local -> record its class
+            if lf.vreg_type(v) == 10 or lf.vreg_type(v) == 11:   # object local -> record its class/enum
                 mut lvcn = hir_expr_type(val).name
-                if not _is_null_str(lvcn) and m.is_class(lvcn): lf.set_var_cls(name, _own(lvcn))
+                if not _is_null_str(lvcn) and (m.is_class(lvcn) or m.is_enum(lvcn)):
+                    lf.set_var_cls(name, _own(lvcn))
             lf.emit(LInst.IStoreVar(name, v))
             _flush_fresh_strs(m, lf)
             return true
@@ -512,7 +635,8 @@ def _lit_pat_cond(m: LModule, lf: LFunc, pat: Pattern, subj: int, st: int) -> in
 # and guards fall back to C (return false -> whole module compiles via the C backend).
 def _lower_match(m: LModule, lf: LFunc, expr: Pointer[HirExpr], arms: Vec[HirMatchArm]) -> bool:
     mut subj_ty = hir_expr_type(expr).name
-    mut subj_is_str = subj_ty == "str"
+    mut subj_is_str = false
+    if not _is_null_str(subj_ty): subj_is_str = subj_ty == "str"
     if subj_is_str:
         # Only borrow subjects (identifiers) so subj is not a fresh owned temp.
         match expr.read():
@@ -521,6 +645,8 @@ def _lower_match(m: LModule, lf: LFunc, expr: Pointer[HirExpr], arms: Vec[HirMat
     mut subj = lower_expr(m, lf, expr)
     if subj < 0: return false
     mut st = lf.vreg_type(subj)
+    if st == 11:                             # enum subject -> tag-dispatch chain
+        return _lower_match_enum(m, lf, expr, subj, arms)
     if st != 0 and st != 1 and st != 4: return false
     _flush_fresh_strs(m, lf)                 # subj is a borrow (int/bool/str-ident): safe to flush
     mut end_id = lf.new_block()
@@ -570,6 +696,118 @@ def _lower_match(m: LModule, lf: LFunc, expr: Pointer[HirExpr], arms: Vec[HirMat
         lf.set_cur(next_id)
         i = i + 1
     lf.set_term(LTerm.TBr(end_id))       # no arm matched (no default) -> fall through
+    lf.set_cur(end_id)
+    return true
+
+# tag-of-variant condition: (subj.tag == vidx) as a bool vreg.
+def _variant_tag_cond(lf: LFunc, tagv: int, vidx: int) -> int:
+    mut cv = lf.new_vreg()
+    lf.emit(LInst.IConst(cv, vidx))
+    mut dv = lf.new_vreg()
+    lf.emit(LInst.IBinOp(dv, "==", tagv, cv))
+    lf.set_vreg_type(dv, 4)
+    return dv
+
+# Bind one payload field of `vlay` (field #fldidx of the matched variant) to a local.
+def _bind_payload(m: LModule, lf: LFunc, vlay: VariantLayout, subj: int, fldidx: int, bindname: str) -> bool:
+    if fldidx >= vlay.ftags.len: return false
+    mut ftg = vlay.ftags.get(fldidx)
+    if ftg != 0 and ftg != 4 and ftg != 10 and ftg != 11: return false
+    mut pv = _emit_field_get(m, lf, subj, (1 + fldidx) * 8, ftg)
+    lf.add_var(bindname)
+    lf.set_var_type(bindname, ftg)
+    if ftg == 10 or ftg == 11:
+        mut bcls = vlay.fcls.get(fldidx)
+        if not _is_null_str(bcls) and bcls != "": lf.set_var_cls(bindname, _own(bcls))
+    lf.emit(LInst.IStoreVar(bindname, pv))
+    return true
+
+# `match <enum>:` -> if/elif chain over the instance's tag slot; variant patterns bind
+# payload fields positionally. Guards / unsupported payload types fall back to C.
+def _lower_match_enum(m: LModule, lf: LFunc, expr: Pointer[HirExpr], subj: int, arms: Vec[HirMatchArm]) -> bool:
+    mut ename = _recv_class(m, lf, expr)
+    if ename == "" or not m.is_enum(ename): return false
+    mut elay = m.enums.get(m.enum_index(ename))
+    mut tagv = _emit_field_get(m, lf, subj, 0, 0)     # the variant tag, loaded once
+    mut end_id = lf.new_block()
+    mut i = 0
+    while i < arms.len:
+        mut arm = arms.get(i)
+        if arm.guard as usize != 0 as usize: return false   # guards -> fall back
+        mut is_default = false
+        mut bind_subj = ""
+        mut cond = -1
+        match arm.pat:
+            case Pattern.PWild:
+                is_default = true
+            case Pattern.PBind(nm):
+                is_default = true
+                bind_subj = nm
+            case Pattern.PVariant(_, vn):
+                mut vix = elay.variant_index(vn)
+                if vix < 0: return false
+                cond = _variant_tag_cond(lf, tagv, vix)
+            case Pattern.PVariantBind(_, vnb, _):
+                mut vixb = elay.variant_index(vnb)
+                if vixb < 0: return false
+                cond = _variant_tag_cond(lf, tagv, vixb)
+            case Pattern.PVariantBindMany(_, vnm, _):
+                mut vixm = elay.variant_index(vnm)
+                if vixm < 0: return false
+                cond = _variant_tag_cond(lf, tagv, vixm)
+            case Pattern.POr(orpats):
+                mut oi = 0
+                while oi < orpats.len:
+                    mut oc = -1
+                    match orpats.get(oi):
+                        case Pattern.PVariant(_, ovn):
+                            mut ovix = elay.variant_index(ovn)
+                            if ovix < 0: return false
+                            oc = _variant_tag_cond(lf, tagv, ovix)
+                        case _:
+                            return false            # only tag-only variants in or-patterns
+                    if cond < 0:
+                        cond = oc
+                    else:
+                        mut merged = lf.new_vreg()
+                        lf.emit(LInst.IBinOp(merged, "+", cond, oc))
+                        cond = _norm_bool(lf, merged)
+                    oi = oi + 1
+                if cond < 0: return false
+            case _:
+                return false                        # literal/tuple on enum subject -> fall back
+        mut body_id = lf.new_block()
+        mut next_id = lf.new_block()
+        if is_default:
+            lf.set_term(LTerm.TBr(body_id))
+        else:
+            lf.set_term(LTerm.TCondBr(cond, body_id, next_id))
+        lf.set_cur(body_id)
+        if bind_subj != "":                          # `case name:` binds the whole enum value
+            lf.add_var(bind_subj)
+            lf.set_var_type(bind_subj, 11)
+            lf.set_var_cls(bind_subj, _own(ename))
+            lf.emit(LInst.IStoreVar(bind_subj, subj))
+        # Payload binds (positional, inside the matched-variant body).
+        match arm.pat:
+            case Pattern.PVariantBind(_, vnb2, bnm):
+                mut vlay1 = elay.variants.get(elay.variant_index(vnb2))
+                if bnm != "_":
+                    if not _bind_payload(m, lf, vlay1, subj, 0, bnm): return false
+            case Pattern.PVariantBindMany(_, vnm2, bnames):
+                mut vlay2 = elay.variants.get(elay.variant_index(vnm2))
+                mut bi = 0
+                while bi < bnames.len:
+                    if bnames.get(bi) != "_":
+                        if not _bind_payload(m, lf, vlay2, subj, bi, bnames.get(bi)): return false
+                    bi = bi + 1
+            case _:
+                pass
+        if not lower_block(m, lf, arm.body): return false
+        lf.set_term(LTerm.TBr(end_id))
+        lf.set_cur(next_id)
+        i = i + 1
+    lf.set_term(LTerm.TBr(end_id))
     lf.set_cur(end_id)
     return true
 
@@ -783,23 +1021,17 @@ def _ident_name(e: Pointer[HirExpr]) -> str:
 # for now (str/float/nested-object fields fall back to C — ARC/bitcast come later).
 def _lower_field_set(m: LModule, lf: LFunc, obj: Pointer[HirExpr], prop: str, val: Pointer[HirExpr]) -> bool:
     mut cls = _recv_class(m, lf, obj)
-    if cls == "": return false
+    if cls == "" or not m.is_class(cls): return false
     mut off = m.field_offset(cls, prop)
     if off < 0: return false
+    mut ftg = m.field_tag(cls, prop)
+    if ftg != 0 and ftg != 4 and ftg != 10 and ftg != 11: return false
     mut vv = lower_expr(m, lf, val)
     if vv < 0: return false
-    mut vt = lf.vreg_type(vv)
-    if vt != 0 and vt != 4: return false
+    if not _field_tag_ok(lf.vreg_type(vv), ftg): return false
     mut ov0 = lower_expr(m, lf, obj)
     if ov0 < 0: return false
-    mut offc = lf.new_vreg()
-    lf.emit(LInst.IConst(offc, off))
-    m.add_extern("_tr_rt_field_set_i")
-    mut sa = Vec[int].init(3)
-    sa.push(ov0)
-    sa.push(offc)
-    sa.push(vv)
-    lf.emit(LInst.ICall(-1, "_tr_rt_field_set_i", sa))
+    _emit_field_set(m, lf, ov0, off, vv)
     return true
 
 def _lower_index_set(m: LModule, lf: LFunc, obj: Pointer[HirExpr], idx: Pointer[HirExpr], val: Pointer[HirExpr]) -> bool:
@@ -858,6 +1090,7 @@ def _lower_print(m: LModule, lf: LFunc, args: Vec[Pointer[HirExpr]]) -> bool:
         if av < 0: return false
         mut avt = lf.vreg_type(av)
         if _is_list_tag(avt): return false     # printing a whole list -> fall back to C
+        if avt == 10 or avt == 11: return false  # printing an object/enum -> fall back to C
         if avt == 5:                           # print(f64) -> "%g\n" (arg in xmm0)
             m.add_extern("_tr_rt_print_f64")
             lf.emit(LInst.IFCall1(-1, "_tr_rt_print_f64", av))
@@ -877,6 +1110,7 @@ def _lower_print(m: LModule, lf: LFunc, args: Vec[Pointer[HirExpr]]) -> bool:
         if pv < 0: return false
         mut pvt = lf.vreg_type(pv)
         if _is_list_tag(pvt): return false
+        if pvt == 10 or pvt == 11: return false  # object/enum arg -> fall back to C
         if pvt == 5:
             m.add_extern("_tr_rt_write_f64")
             lf.emit(LInst.IFCall1(-1, "_tr_rt_write_f64", pv))
@@ -1619,6 +1853,12 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                 return rc
             if at == 1 or bt == 1: return -1       # other pointer ops unsupported
             if _is_list_tag(at) or _is_list_tag(bt): return -1   # no list operators in binop
+            if at == 11 or bt == 11: return -1     # enum values: no operators (match instead)
+            if at == 10 or bt == 10:
+                # Class instances: only identity == / != between two objects (an i64
+                # compare of the pointers — matches the C backend's Point* == Point*).
+                if at != 10 or bt != 10: return -1
+                if op != "==" and op != "!=": return -1
             # Logical and/or over pure int/bool operands. Not short-circuit, but the native
             # subset has no side-effecting operands here, so it matches C for 0/1 results:
             #   a and b -> (a!=0)*(b!=0);   a or b -> ((a!=0)+(b!=0)) != 0
@@ -1967,26 +2207,24 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
             lf.set_vreg_type(gval, _list_elem_tag(ovt))
             return gval
         case HirExpr.EPropAccess(obj, prop, _):
-            # Class field read `obj.field` -> _tr_rt_field_get_i(obj, offset). int/bool only
-            # for now (str/float/nested-object fields fall back to C — ARC/bitcast later).
+            # Unit enum variant `Enum.Variant` (receiver is the enum type name itself).
+            match obj.read():
+                case HirExpr.EIdent(uvn, _, _):
+                    if m.is_enum(uvn) and m.enum_variant_index(uvn, prop) >= 0:
+                        return _lower_enum_ctor(m, lf, uvn, prop, Vec[Pointer[HirExpr]].init(0))
+                case _:
+                    pass
+            # Class field read `obj.field` -> _tr_rt_field_get_i(obj, offset). int/bool/
+            # nested-object fields (str/float fields fall back to C — ARC/bitcast later).
             mut pcls = _recv_class(m, lf, obj)
-            if pcls != "":
+            if pcls != "" and m.is_class(pcls):
                 mut foff = m.field_offset(pcls, prop)
                 if foff < 0: return -1
                 mut ftg = m.field_tag(pcls, prop)
-                if ftg != 0 and ftg != 4: return -1
+                if ftg != 0 and ftg != 4 and ftg != 10 and ftg != 11: return -1
                 mut fobj = lower_expr(m, lf, obj)
                 if fobj < 0: return -1
-                mut foffc = lf.new_vreg()
-                lf.emit(LInst.IConst(foffc, foff))
-                m.add_extern("_tr_rt_field_get_i")
-                mut fga = Vec[int].init(2)
-                fga.push(fobj)
-                fga.push(foffc)
-                mut fgd = lf.new_vreg()
-                lf.emit(LInst.ICall(fgd, "_tr_rt_field_get_i", fga))
-                lf.set_vreg_type(fgd, ftg)
-                return fgd
+                return _emit_field_get(m, lf, fobj, foff, ftg)
             if prop != "len": return -1
             mut ovl = lower_expr(m, lf, obj)
             if ovl < 0: return -1
@@ -2006,11 +2244,15 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
             lf.emit(LInst.ICall(ld, "_tr_rt_list_len", la))
             return ld
         case HirExpr.EMethodCall(obj, method, margs, _):
-            # Static call `ClassName.method(args)` (e.g. a constructor `Point.init(..)`):
-            # obj is the class name itself, not an instance -> call <Class>_<method>(args).
+            # Static call `ClassName.method(args)` (e.g. a constructor `Point.init(..)`)
+            # or enum variant construction `Enum.Variant(args)`: obj is the type name.
             match obj.read():
                 case HirExpr.EIdent(inm, _, _):
                     if m.is_class(inm):
+                        return _lower_obj_call(m, lf, inm + "_" + method, -1, margs)
+                    if m.is_enum(inm):
+                        if m.enum_variant_index(inm, method) >= 0:
+                            return _lower_enum_ctor(m, lf, inm, method, margs)
                         return _lower_obj_call(m, lf, inm + "_" + method, -1, margs)
                 case _:
                     pass

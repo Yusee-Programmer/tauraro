@@ -222,6 +222,8 @@ __attribute__((malloc,returns_nonnull,hot)) ClassLayout* ClassLayout_init(TrStr 
     /* pass */
     c->ftags = (void*)List_i64_new();
     /* pass */
+    c->fcls = (void*)List_TrStr_new();
+    /* pass */
     return c;
 }
 
@@ -242,6 +244,49 @@ __attribute__((hot)) long long ClassLayout_field_index(ClassLayout* self, TrStr 
     return (-1LL);
 }
 
+__attribute__((malloc,returns_nonnull,hot)) VariantLayout* VariantLayout_init(TrStr name) {
+    /* pass */
+    VariantLayout* v = ((VariantLayout*)_tr_obj_alloc(sizeof(VariantLayout)));
+    /* pass */
+    v->name = _tr_str_retain(name);
+    /* pass */
+    v->fields = (void*)List_TrStr_new();
+    /* pass */
+    v->ftags = (void*)List_i64_new();
+    /* pass */
+    v->fcls = (void*)List_TrStr_new();
+    /* pass */
+    return v;
+}
+
+__attribute__((malloc,returns_nonnull,hot)) EnumLayout* EnumLayout_init(TrStr name) {
+    /* pass */
+    EnumLayout* e = ((EnumLayout*)_tr_obj_alloc(sizeof(EnumLayout)));
+    /* pass */
+    e->name = _tr_str_retain(name);
+    /* pass */
+    e->variants = (void*)List_ptr_new();
+    /* pass */
+    return e;
+}
+
+__attribute__((hot)) long long EnumLayout_variant_index(EnumLayout* self, TrStr vname) {
+    /* pass */
+    long long i = 0LL;
+    /* pass */
+    while ((i < self->variants->len)) {
+        /* pass */
+        if ((strcmp(_tr_strz(((VariantLayout*)List_ptr_get(self->variants, i))->name), _tr_strz(vname)) == 0)) {
+            /* pass */
+            return i;
+        }
+        /* pass */
+        i = (i + 1LL);
+    }
+    /* pass */
+    return (-1LL);
+}
+
 __attribute__((malloc,returns_nonnull,hot)) LModule* LModule_init() {
     /* pass */
     LModule* m = ((LModule*)_tr_obj_alloc(sizeof(LModule)));
@@ -249,6 +294,8 @@ __attribute__((malloc,returns_nonnull,hot)) LModule* LModule_init() {
     m->funcs = (void*)List_ptr_new();
     /* pass */
     m->classes = (void*)List_ptr_new();
+    /* pass */
+    m->enums = (void*)List_ptr_new();
     /* pass */
     m->externs = (void*)List_TrStr_new();
     /* pass */
@@ -481,6 +528,97 @@ __attribute__((hot)) long long LModule_field_tag(LModule* self, TrStr cls, TrStr
     }
     /* pass */
     return List_i64_get(((ClassLayout*)List_ptr_get(self->classes, ci))->ftags, fi);
+}
+
+__attribute__((hot)) TrStr LModule_field_cls(LModule* self, TrStr cls, TrStr fld) {
+    /* pass */
+    long long ci = LModule_class_index(self, cls);
+    /* pass */
+    if ((ci < 0LL)) {
+        /* pass */
+        return _tr_str_lit("");
+    }
+    /* pass */
+    long long fi = ClassLayout_field_index(((ClassLayout*)List_ptr_get(self->classes, ci)), fld);
+    /* pass */
+    if ((fi < 0LL)) {
+        /* pass */
+        return _tr_str_lit("");
+    }
+    /* pass */
+    return List_TrStr_get(((ClassLayout*)List_ptr_get(self->classes, ci))->fcls, fi);
+}
+
+__attribute__((hot)) void LModule_add_enum(LModule* self, EnumLayout* el) {
+    /* pass */
+    List_ptr_append(self->enums, _tr_obj_retain(el));
+}
+
+__attribute__((hot)) long long LModule_enum_index(LModule* self, TrStr name) {
+    /* pass */
+    if ((((unsigned long long)(((char*)(_tr_strz(name))))) == ((unsigned long long)(0LL)))) {
+        /* pass */
+        return (-1LL);
+    }
+    /* pass */
+    long long i = 0LL;
+    /* pass */
+    while ((i < self->enums->len)) {
+        /* pass */
+        if ((strcmp(_tr_strz(((EnumLayout*)List_ptr_get(self->enums, i))->name), _tr_strz(name)) == 0)) {
+            /* pass */
+            return i;
+        }
+        /* pass */
+        i = (i + 1LL);
+    }
+    /* pass */
+    return (-1LL);
+}
+
+__attribute__((hot)) bool LModule_is_enum(LModule* self, TrStr name) {
+    /* pass */
+    return (LModule_enum_index(self, name) >= 0LL);
+}
+
+__attribute__((hot)) long long LModule_enum_size(LModule* self, TrStr name) {
+    /* pass */
+    long long ei = LModule_enum_index(self, name);
+    /* pass */
+    if ((ei < 0LL)) {
+        /* pass */
+        return 8LL;
+    }
+    /* pass */
+    long long mx = 0LL;
+    /* pass */
+    long long vi = 0LL;
+    /* pass */
+    while ((vi < ((EnumLayout*)List_ptr_get(self->enums, ei))->variants->len)) {
+        /* pass */
+        long long n = ((VariantLayout*)List_ptr_get(((EnumLayout*)List_ptr_get(self->enums, ei))->variants, vi))->fields->len;
+        /* pass */
+        if ((n > mx)) {
+            /* pass */
+            mx = n;
+        }
+        /* pass */
+        vi = (vi + 1LL);
+    }
+    /* pass */
+    return ((1LL + mx) * 8LL);
+}
+
+__attribute__((hot)) long long LModule_enum_variant_index(LModule* self, TrStr ename, TrStr vname) {
+    /* pass */
+    long long ei = LModule_enum_index(self, ename);
+    /* pass */
+    if ((ei < 0LL)) {
+        /* pass */
+        return (-1LL);
+    }
+    /* pass */
+    return EnumLayout_variant_index(((EnumLayout*)List_ptr_get(self->enums, ei)), vname);
 }
 
 __attribute__((hot)) LInst* box_linst(LInst i) {

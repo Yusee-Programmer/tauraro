@@ -1,0 +1,64 @@
+# native≡c / llvm≡c differential corpus: enums (tagged unions) — construction (payload +
+# unit), match with positional binds, or-patterns, wildcard, enum methods, enums in
+# function params/returns, nested class-typed access.
+enum Shape:
+    Circle(r: int)
+    Rect(w: int, h: int)
+    Unit
+
+extend Shape:
+    def corners(self) -> int:
+        match self:
+            case Shape.Rect(w, h):
+                return 4
+            case _:
+                return 0
+        return 0
+
+def area(s: Shape) -> int:
+    match s:
+        case Shape.Circle(r):
+            return 3 * r * r
+        case Shape.Rect(w, h):
+            return w * h
+        case Shape.Unit:
+            return 0
+    return -1
+
+def pick(n: int) -> Shape:
+    if n == 0:
+        return Shape.Circle(2)
+    if n == 1:
+        return Shape.Rect(3, 4)
+    return Shape.Unit
+
+def is_flat(s: Shape) -> bool:
+    match s:
+        case Shape.Circle | Shape.Unit:
+            return false
+        case _:
+            return true
+    return false
+
+def main():
+    print(area(Shape.Circle(7)))      # 147
+    print(area(Shape.Rect(3, 4)))     # 12
+    print(area(Shape.Unit))           # 0
+
+    mut i = 0
+    while i < 3:
+        mut s = pick(i)
+        print(area(s))                # 12 / 12 / 0
+        print(s.corners())            # 0 / 4 / 0
+        i = i + 1
+
+    print(is_flat(Shape.Rect(1, 1))) # true
+    print(is_flat(Shape.Unit))       # false
+
+    # match with wildcard binder over an enum value
+    mut u = pick(2)
+    match u:
+        case Shape.Circle(r):
+            print(r)
+        case other:
+            print(other.corners())    # 0

@@ -56,6 +56,8 @@ typedef struct CGenerator CGenerator;
 typedef struct LBlock LBlock;
 typedef struct LFunc LFunc;
 typedef struct ClassLayout ClassLayout;
+typedef struct VariantLayout VariantLayout;
+typedef struct EnumLayout EnumLayout;
 typedef struct LModule LModule;
 typedef struct LlvmEmitter LlvmEmitter;
 typedef struct LlvmGenerator LlvmGenerator;
@@ -138,6 +140,8 @@ static void _trdrop_CGenerator(void* vp);
 static void _trdrop_LBlock(void* vp);
 static void _trdrop_LFunc(void* vp);
 static void _trdrop_ClassLayout(void* vp);
+static void _trdrop_VariantLayout(void* vp);
+static void _trdrop_EnumLayout(void* vp);
 static void _trdrop_LModule(void* vp);
 static void _trdrop_LlvmEmitter(void* vp);
 static void _trdrop_LlvmGenerator(void* vp);
@@ -2885,11 +2889,43 @@ typedef struct ClassLayout {
     TrStr name;
     List_TrStr* fields;
     List_i64* ftags;
+    List_TrStr* fcls;
 } ClassLayout;
 static void _trdrop_ClassLayout(void* vp) {
     ClassLayout* self = (ClassLayout*)vp; (void)self;
     _tr_str_release(self->name);
     List_i64_free(self->ftags);
+    List_TrStr_free(self->fcls);
+}
+#endif
+
+#ifndef VariantLayout_STRUCT_DEFINED
+#define VariantLayout_STRUCT_DEFINED
+typedef struct VariantLayout {
+    size_t __rc;
+    TrStr name;
+    List_TrStr* fields;
+    List_i64* ftags;
+    List_TrStr* fcls;
+} VariantLayout;
+static void _trdrop_VariantLayout(void* vp) {
+    VariantLayout* self = (VariantLayout*)vp; (void)self;
+    _tr_str_release(self->name);
+    List_i64_free(self->ftags);
+    List_TrStr_free(self->fcls);
+}
+#endif
+
+#ifndef EnumLayout_STRUCT_DEFINED
+#define EnumLayout_STRUCT_DEFINED
+typedef struct EnumLayout {
+    size_t __rc;
+    TrStr name;
+    List_ptr* variants;
+} EnumLayout;
+static void _trdrop_EnumLayout(void* vp) {
+    EnumLayout* self = (EnumLayout*)vp; (void)self;
+    _tr_str_release(self->name);
 }
 #endif
 
@@ -2899,6 +2935,7 @@ typedef struct LModule {
     size_t __rc;
     List_ptr* funcs;
     List_ptr* classes;
+    List_ptr* enums;
     List_TrStr* externs;
     List_TrStr* fn_names;
     List_i64* fn_ret;
@@ -2912,6 +2949,7 @@ static void _trdrop_LModule(void* vp) {
     LModule* self = (LModule*)vp; (void)self;
     List_ptr_free_obj(self->funcs, _trdrop_LFunc);
     List_ptr_free_obj(self->classes, _trdrop_ClassLayout);
+    List_ptr_free_obj(self->enums, _trdrop_EnumLayout);
     List_TrStr_free(self->externs);
     List_TrStr_free(self->fn_names);
     List_i64_free(self->fn_ret);
@@ -3601,6 +3639,9 @@ __attribute__((hot)) void LFunc_set_var_cls(LFunc* self, TrStr name, TrStr cls);
 __attribute__((hot)) TrStr LFunc_var_cls_of(LFunc* self, TrStr name);
 __attribute__((malloc,returns_nonnull,hot)) ClassLayout* ClassLayout_init(TrStr name);
 __attribute__((hot)) long long ClassLayout_field_index(ClassLayout* self, TrStr fname);
+__attribute__((malloc,returns_nonnull,hot)) VariantLayout* VariantLayout_init(TrStr name);
+__attribute__((malloc,returns_nonnull,hot)) EnumLayout* EnumLayout_init(TrStr name);
+__attribute__((hot)) long long EnumLayout_variant_index(EnumLayout* self, TrStr vname);
 __attribute__((malloc,returns_nonnull,hot)) LModule* LModule_init();
 __attribute__((hot)) long long LModule_add_global(LModule* self, TrStr name, long long tag);
 __attribute__((hot)) long long LModule_global_index(LModule* self, TrStr name);
@@ -3616,6 +3657,12 @@ __attribute__((hot)) bool LModule_is_class(LModule* self, TrStr name);
 __attribute__((hot)) long long LModule_class_size(LModule* self, TrStr name);
 __attribute__((hot)) long long LModule_field_offset(LModule* self, TrStr cls, TrStr fld);
 __attribute__((hot)) long long LModule_field_tag(LModule* self, TrStr cls, TrStr fld);
+__attribute__((hot)) TrStr LModule_field_cls(LModule* self, TrStr cls, TrStr fld);
+__attribute__((hot)) void LModule_add_enum(LModule* self, EnumLayout* el);
+__attribute__((hot)) long long LModule_enum_index(LModule* self, TrStr name);
+__attribute__((hot)) bool LModule_is_enum(LModule* self, TrStr name);
+__attribute__((hot)) long long LModule_enum_size(LModule* self, TrStr name);
+__attribute__((hot)) long long LModule_enum_variant_index(LModule* self, TrStr ename, TrStr vname);
 __attribute__((hot)) long long _f64_bits(double v);
 __attribute__((hot)) long long _promote_f(LFunc* lf, long long v);
 __attribute__((hot)) TrStr _print_i64_sym();
@@ -3633,6 +3680,7 @@ __attribute__((hot)) long long _ast_type_tag(AstType* ty);
 __attribute__((hot)) bool _is_null_str(TrStr s);
 __attribute__((hot)) TrStr _own(TrStr s);
 __attribute__((hot)) long long _tag_of(LModule* m, AstType* ty);
+__attribute__((hot)) TrStr _cls_of_ty(LModule* m, AstType* ty);
 __attribute__((hot)) TrStr _recv_class(LModule* m, LFunc* lf, HirExpr* obj);
 __attribute__((hot)) void _register_classes(LModule* m, HirProgram* prog);
 __attribute__((hot)) LModule* lower_to_lir(HirProgram* prog);
@@ -3640,11 +3688,18 @@ __attribute__((hot)) void _lir_lower_method(LModule* m, TrStr class_name, HirFun
 __attribute__((hot)) bool _register_global(LModule* m, HirStmt* s);
 __attribute__((hot)) bool _lower_global_init(LModule* m, LFunc* lf, HirStmt* s);
 __attribute__((hot)) void _lir_lower_function(LModule* m, HirFunction* f);
+__attribute__((hot)) bool _field_tag_ok(long long vt, long long ftg);
+__attribute__((hot)) void _emit_field_set(LModule* m, LFunc* lf, long long obj, long long off, long long val);
+__attribute__((hot)) long long _emit_field_get(LModule* m, LFunc* lf, long long obj, long long off, long long tag);
+__attribute__((hot)) long long _lower_enum_ctor(LModule* m, LFunc* lf, TrStr ename, TrStr vname, List_ptr* margs);
 __attribute__((hot)) long long _lower_obj_call(LModule* m, LFunc* lf, TrStr mangled, long long self_vreg, List_ptr* margs);
 __attribute__((hot)) bool lower_block(LModule* m, LFunc* lf, HirBlock* hb);
 __attribute__((hot)) bool lower_stmt(LModule* m, LFunc* lf, HirStmt* s);
 __attribute__((hot)) long long _lit_pat_cond(LModule* m, LFunc* lf, Pattern pat, long long subj, long long st);
 __attribute__((hot)) bool _lower_match(LModule* m, LFunc* lf, HirExpr* expr, List_ptr* arms);
+__attribute__((hot)) long long _variant_tag_cond(LFunc* lf, long long tagv, long long vidx);
+__attribute__((hot)) bool _bind_payload(LModule* m, LFunc* lf, VariantLayout* vlay, long long subj, long long fldidx, TrStr bindname);
+__attribute__((hot)) bool _lower_match_enum(LModule* m, LFunc* lf, HirExpr* expr, long long subj, List_ptr* arms);
 __attribute__((hot)) bool _lower_for(LModule* m, LFunc* lf, TrStr var, HirExpr* iter, HirBlock* body);
 __attribute__((hot)) bool _lower_for_range(LModule* m, LFunc* lf, TrStr var, List_ptr* args, HirBlock* body);
 __attribute__((hot)) bool _lower_for_list(LModule* m, LFunc* lf, TrStr var, HirExpr* iter, HirBlock* body);
@@ -5116,6 +5171,42 @@ __attribute__((hot)) taumir_ir_ClassLayout*** core_alloc_resize_taumir_ir_ClassL
 __attribute__((hot)) void core_alloc_dealloc_taumir_ir_ClassLayout_ptr(taumir_ir_ClassLayout*** ptr);
 __attribute__((hot)) core_map_MapNode_str_taumir_ir_ClassLayout** core_alloc_alloc_core_map_MapNode_str_taumir_ir_ClassLayout(long long count);
 __attribute__((hot)) void core_alloc_dealloc_core_map_MapNode_str_taumir_ir_ClassLayout(core_map_MapNode_str_taumir_ir_ClassLayout** ptr);
+
+typedef VariantLayout taumir_ir_VariantLayout;
+struct core_vec_Vec_taumir_ir_VariantLayout { taumir_ir_VariantLayout** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_taumir_ir_VariantLayout core_vec_Vec_taumir_ir_VariantLayout;
+struct core_vec_Vec_taumir_ir_VariantLayout_ptr { taumir_ir_VariantLayout*** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_taumir_ir_VariantLayout_ptr core_vec_Vec_taumir_ir_VariantLayout_ptr;
+struct core_map_MapNode_str_taumir_ir_VariantLayout { char* key; taumir_ir_VariantLayout* value; struct core_map_MapNode_str_taumir_ir_VariantLayout* next; };
+typedef struct core_map_MapNode_str_taumir_ir_VariantLayout core_map_MapNode_str_taumir_ir_VariantLayout;
+struct core_map_Map_str_taumir_ir_VariantLayout { core_map_MapNode_str_taumir_ir_VariantLayout** buckets; long long capacity; long long len; };
+typedef struct core_map_Map_str_taumir_ir_VariantLayout core_map_Map_str_taumir_ir_VariantLayout;
+__attribute__((hot)) taumir_ir_VariantLayout** core_alloc_alloc_taumir_ir_VariantLayout(long long count);
+__attribute__((hot)) taumir_ir_VariantLayout** core_alloc_resize_taumir_ir_VariantLayout(taumir_ir_VariantLayout** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_taumir_ir_VariantLayout(taumir_ir_VariantLayout** ptr);
+__attribute__((hot)) taumir_ir_VariantLayout*** core_alloc_alloc_taumir_ir_VariantLayout_ptr(long long count);
+__attribute__((hot)) taumir_ir_VariantLayout*** core_alloc_resize_taumir_ir_VariantLayout_ptr(taumir_ir_VariantLayout*** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_taumir_ir_VariantLayout_ptr(taumir_ir_VariantLayout*** ptr);
+__attribute__((hot)) core_map_MapNode_str_taumir_ir_VariantLayout** core_alloc_alloc_core_map_MapNode_str_taumir_ir_VariantLayout(long long count);
+__attribute__((hot)) void core_alloc_dealloc_core_map_MapNode_str_taumir_ir_VariantLayout(core_map_MapNode_str_taumir_ir_VariantLayout** ptr);
+
+typedef EnumLayout taumir_ir_EnumLayout;
+struct core_vec_Vec_taumir_ir_EnumLayout { taumir_ir_EnumLayout** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_taumir_ir_EnumLayout core_vec_Vec_taumir_ir_EnumLayout;
+struct core_vec_Vec_taumir_ir_EnumLayout_ptr { taumir_ir_EnumLayout*** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_taumir_ir_EnumLayout_ptr core_vec_Vec_taumir_ir_EnumLayout_ptr;
+struct core_map_MapNode_str_taumir_ir_EnumLayout { char* key; taumir_ir_EnumLayout* value; struct core_map_MapNode_str_taumir_ir_EnumLayout* next; };
+typedef struct core_map_MapNode_str_taumir_ir_EnumLayout core_map_MapNode_str_taumir_ir_EnumLayout;
+struct core_map_Map_str_taumir_ir_EnumLayout { core_map_MapNode_str_taumir_ir_EnumLayout** buckets; long long capacity; long long len; };
+typedef struct core_map_Map_str_taumir_ir_EnumLayout core_map_Map_str_taumir_ir_EnumLayout;
+__attribute__((hot)) taumir_ir_EnumLayout** core_alloc_alloc_taumir_ir_EnumLayout(long long count);
+__attribute__((hot)) taumir_ir_EnumLayout** core_alloc_resize_taumir_ir_EnumLayout(taumir_ir_EnumLayout** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_taumir_ir_EnumLayout(taumir_ir_EnumLayout** ptr);
+__attribute__((hot)) taumir_ir_EnumLayout*** core_alloc_alloc_taumir_ir_EnumLayout_ptr(long long count);
+__attribute__((hot)) taumir_ir_EnumLayout*** core_alloc_resize_taumir_ir_EnumLayout_ptr(taumir_ir_EnumLayout*** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_taumir_ir_EnumLayout_ptr(taumir_ir_EnumLayout*** ptr);
+__attribute__((hot)) core_map_MapNode_str_taumir_ir_EnumLayout** core_alloc_alloc_core_map_MapNode_str_taumir_ir_EnumLayout(long long count);
+__attribute__((hot)) void core_alloc_dealloc_core_map_MapNode_str_taumir_ir_EnumLayout(core_map_MapNode_str_taumir_ir_EnumLayout** ptr);
 
 typedef LModule taumir_ir_LModule;
 struct core_vec_Vec_taumir_ir_LModule { taumir_ir_LModule** data; long long len; long long capacity; };
