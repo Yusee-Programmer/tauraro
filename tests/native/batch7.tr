@@ -1,0 +1,67 @@
+# native≡c / llvm≡c differential corpus: tuple indexing t[i] (bug #16 fix), generic
+# methods, Option[T] construction + payload matching (int/str/float payloads).
+class Calc:
+    base: int
+
+extend Calc:
+    def init(base: int) -> Calc:
+        mut c = Calc()
+        c.base = base
+        return c
+    def combine[T](self, x: T) -> T:
+        if self.base > 0:
+            return x + x
+        return x
+
+def find_even(xs: List[int]) -> Option[int]:
+    mut i = 0
+    while i < xs.len:
+        if xs[i] % 2 == 0:
+            return Option.Some(xs[i])
+        i = i + 1
+    return Option.None
+
+def main():
+    # tuple indexing (constant index) — bug #16
+    mut t = (7, "seven", 7.5)
+    print(t[0])            # 7
+    print(t[1])            # seven
+    print(t[2])            # 7.5
+
+    # generic methods (int / float / str instantiations of the same body)
+    mut c = Calc.init(1)
+    print(c.combine(21))       # 42
+    print(c.combine(1.25))     # 2.5
+    print(c.combine("ab"))     # abab
+
+    # Option[int]: construction in returns + payload matching
+    mut r = find_even([1, 3, 4, 5])
+    match r:
+        case Option.Some(v):
+            print(v)           # 4
+        case Option.None:
+            print(-1)
+    mut r2 = find_even([1, 3, 5])
+    match r2:
+        case Option.Some(v2):
+            print(v2)
+        case Option.None:
+            print(-1)          # -1
+
+    # Option[str] payload
+    mut os = Option.Some("hi")
+    match os:
+        case Option.Some(sv):
+            print(sv)          # hi
+        case Option.None:
+            print("none")
+
+    # Option[float] payload with a guard
+    mut of = Option.Some(2.5)
+    match of:
+        case Option.Some(fv) if fv > 1.0:
+            print(fv * 2.0)    # 5
+        case Option.Some(fv2):
+            print(fv2)
+        case Option.None:
+            print(0)

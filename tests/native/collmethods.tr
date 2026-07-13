@@ -1,0 +1,31 @@
+# native≡c differential corpus: str.center/.split, list .join/.clone/.remove/.sum.
+def main():
+    print("hi".center(6))       # "  hi  "
+    print("x".center(5))        # "  x  "
+    print("toolong".center(3))  # toolong
+
+    mut parts = "a,b,c,d".split(",")
+    print(parts.len)            # 4
+    print(parts[0])             # a
+    print(parts[3])             # d
+
+    mut words = "the quick fox".split(" ")
+    print(words.len)            # 3
+    print(words[1])             # quick
+
+    mut xs = ["red", "green", "blue"]
+    print(xs.join("-"))         # red-green-blue
+    print(xs.join(", "))        # red, green, blue
+
+    mut ns = [10, 20, 30, 40]
+    print(ns.sum())             # 100
+    mut cp = ns.clone()
+    print(cp.len)               # 4
+    print(cp[0])                # 10
+    ns.remove(1)                # remove index 1 (20)
+    print(ns.len)               # 3
+    print(ns[1])                # 30
+    print(cp.len)               # 4 (clone unaffected)
+
+    mut joined = parts.join("+")
+    print(joined)               # a+b+c+d

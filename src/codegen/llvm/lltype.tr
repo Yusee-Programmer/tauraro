@@ -1,0 +1,77 @@
+# @trusted: compiler systems module — audited raw-pointer core (like Rust std internals)
+# src/codegen/llvm/lltype.tr — value-type-tag -> LLVM type mapping + text-format helpers
+# for the LLVM backend (Path A). Shared by mod.tr / emit.tr.
+#
+# The LLVM backend consumes the SAME lowered IR (src/taumir) the native backend produces,
+# so it inherits the value-type tags: 0=i64, 1=str/char*, 2=List[int], 3=List[str],
+# 4=bool, 5=f64, 6..9=Dict. In LLVM (opaque pointers) every heap handle collapses to
+# `ptr`, so only three storage types remain: i64, double, ptr.
+
+from core.string import StringBuilder
+
+# A lowered value-type tag -> its LLVM storage type. bool is kept as i64 (0/1) so slots
+# never need i1<->i64 conversion; comparisons zext their i1 result back to i64.
+pub def _ll_ty(tag: int) -> str:
+    if tag == 5: return "double"
+    if tag == 1: return "ptr"
+    if tag == 2: return "ptr"
+    if tag == 3: return "ptr"
+    if tag >= 6 and tag <= 9: return "ptr"
+    if tag == 10: return "ptr"          # object (class instance) handle
+    if tag == 11: return "ptr"          # enum (tagged union) handle
+    if tag == 12: return "ptr"          # closure block {fnptr, capture ptrs...}
+    return "i64"
+
+# A source type NAME (AstType.name) -> LLVM type, for user-function signatures. void/None
+# stay void; everything non-scalar is an opaque ptr.
+pub def _ll_ty_name(n: str) -> str:
+    if n == "void" or n == "None": return "void"
+    if n == "bool": return "i64"
+    if n == "float" or n == "f64" or n == "f32": return "double"
+    if n == "str" or n == "String" or n == "char": return "ptr"
+    if n == "int" or n == "i64" or n == "i32" or n == "i16" or n == "i8": return "i64"
+    if n == "u64" or n == "u32" or n == "u16" or n == "u8" or n == "usize" or n == "isize": return "i64"
+    return "ptr"
+
+pub def _ll_hexdigit(n: int) -> int:
+    if n < 10: return 48 + n            # '0'..'9'
+    return 65 + (n - 10)               # 'A'..'F'
+
+# An i64 (a raw f64 bit pattern) -> 16 uppercase hex digits, for LLVM's `double 0x...`
+# literal (which is the exact IEEE-754 bit pattern, big-endian nibble order).
+pub def _ll_hexpad16(v: int) -> str:
+    mut sb = StringBuilder.init(16)
+    mut k = 15
+    while k >= 0:
+        mut nib = (v >> (4 * k)) & 15
+        sb.append_char(_ll_hexdigit(nib))
+        k = k - 1
+    return sb.to_string().as_str()
+
+# Byte length of a C-style string (up to the first NUL).
+pub def _ll_str_bytelen(s: str) -> int:
+    mut p = s as Pointer[char]
+    mut i = 0
+    while True:
+        if p.offset(i).read() as int == 0: break
+        i = i + 1
+    return i
+
+# Escape a string into an LLVM `c"..."` body: printable ASCII passes through (except `"`
+# and `\`), everything else becomes `\XX`. The caller appends the `\00` terminator.
+pub def _ll_str_escape(s: str) -> str:
+    mut sb = StringBuilder.init(64)
+    mut p = s as Pointer[char]
+    mut i = 0
+    while True:
+        mut c = p.offset(i).read() as int
+        if c == 0: break
+        mut b = c & 255
+        if b >= 32 and b <= 126 and b != 34 and b != 92:
+            sb.append_char(b)
+        else:
+            sb.append("\\")
+            sb.append_char(_ll_hexdigit((b >> 4) & 15))
+            sb.append_char(_ll_hexdigit(b & 15))
+        i = i + 1
+    return sb.to_string().as_str()

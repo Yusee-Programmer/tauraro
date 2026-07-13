@@ -1,0 +1,32 @@
+# native≡c / llvm≡c differential corpus: generic free functions — per-tag lazy
+# monomorphization (int/float/str instantiations of the same body), generic identity,
+# recursion through a generic, multiple instantiations coexisting.
+def largest[T](a: T, b: T) -> T:
+    if a > b:
+        return a
+    return b
+
+def smallest[T](a: T, b: T) -> T:
+    if a < b:
+        return a
+    return b
+
+def pick_first[T](a: T, b: T) -> T:
+    return a
+
+def clamp3[T](lo: T, x: T, hi: T) -> T:
+    return smallest(largest(lo, x), hi)
+
+def main():
+    print(largest(3, 7))              # 7
+    print(largest(2.5, 9.5))          # 9.5
+    print(largest("apple", "pear"))   # pear
+    print(smallest(3, 7))             # 3
+    print(pick_first(11, 22))         # 11
+    print(pick_first("x", "y"))       # x
+    print(clamp3(0, 15, 10))          # 10
+    print(clamp3(0, -3, 10))          # 0
+    print(clamp3(1.5, 2.5, 3.5))      # 2.5
+    mut a = largest(100, 50)
+    mut b = smallest(100, 50)
+    print(a + b)                      # 150

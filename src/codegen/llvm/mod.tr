@@ -1,0 +1,38 @@
+# @trusted: compiler systems module — audited raw-pointer core (like Rust std internals)
+# src/codegen/llvm/ — the LLVM backend (Path A): lowered IR (src/taumir) -> textual LLVM
+# IR -> `llc` -> object -> linked with runtime.o (the SAME runtime the native backend
+# uses). LLVM's optimizer supplies release-quality codegen + free cross-targets.
+#
+#   mod.tr     - LlvmGenerator (this file): the public entry the driver calls
+#   emit.tr    - LlvmEmitter: LIR module -> LLVM IR text
+#   lltype.tr  - value-type-tag -> LLVM type mapping + text-format helpers
+#
+# Coverage == the native backend's, because both consume the same LIR: everything the
+# taumir lowering handles (ints/floats/str/bool/List/Dict/functions/control-flow/f-strings/
+# match) emits real LLVM IR; anything else leaves m.ok=false and generate() returns "" so
+# the driver falls back to the C backend (never silent-wrong).
+
+from hir import HirProgram
+from taumir.lower import lower_to_lir
+from codegen.llvm.emit import LlvmEmitter
+
+pub class LlvmGenerator:
+    pub ok: bool          # false after generate() if the program wasn't fully lowerable
+
+extend LlvmGenerator:
+    pub def init() -> LlvmGenerator:
+        mut g = LlvmGenerator()
+        g.ok = true
+        return g
+
+    # Lower `prog` to LIR and emit LLVM IR text. Returns "" (and sets ok=false) when the
+    # program uses constructs the shared LIR can't represent yet — the driver then falls
+    # back to the C backend.
+    pub def generate(self, prog: HirProgram) -> str:
+        mut m = lower_to_lir(prog)
+        if not m.ok:
+            self.ok = false
+            return ""
+        self.ok = true
+        mut e = LlvmEmitter.init(m)
+        return e.emit_module()

@@ -340,6 +340,31 @@ jobs:
         shell: bash
         run: TAURAROC=./tauraroc${{ matrix.ext }} bash scripts/native_diff.sh
 
+      # Native ARC: the generated retain/release calls must balance — a locals-only string
+      # program must leave 0 refcounted strings live at exit (also catches double-free/UAF).
+      - name: Native ARC leak check
+        if: runner.os == 'Linux'
+        shell: bash
+        run: TAURAROC=./tauraroc${{ matrix.ext }} bash scripts/native_leak_check.sh
+
+      # LLVM backend (Path A): compile a Tauraro program to textual LLVM IR (no C source
+      # for the user code), lower it with clang/llc, link with runtime.o, and run it.
+      # Proves the taumir(LIR) -> LLVM IR -> native pipeline end to end.
+      - name: LLVM backend run (LLVM IR, no C)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          command -v clang >/dev/null 2>&1 || command -v llc >/dev/null 2>&1 || sudo apt-get install -y --no-install-recommends clang || true
+          TAURAROC=./tauraroc${{ matrix.ext }} bash scripts/llvm_run.sh
+
+      # Differential oracle: every tests/native/*.tr compiled by BOTH the C backend and the
+      # LLVM backend must produce byte-identical output. The LLVM backend consumes the same
+      # LIR as native, so this covers its whole feature surface.
+      - name: LLVM ≡ C differential oracle
+        if: runner.os == 'Linux'
+        shell: bash
+        run: TAURAROC=./tauraroc${{ matrix.ext }} bash scripts/llvm_diff.sh
+
       # Runtime security regressions (V-001 float-format overflow, etc.) under ASan+UBSan.
       - name: Runtime security tests (ASan/UBSan)
         if: runner.os == 'Linux'

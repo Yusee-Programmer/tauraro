@@ -1,0 +1,55 @@
+# native≡c / llvm≡c differential corpus: nested class-typed fields (composition) +
+# chained field access + object identity compare + enum-typed field.
+enum Color:
+    Red
+    Blue
+
+class Point:
+    x: int
+    y: int
+
+extend Point:
+    def init(x: int, y: int) -> Point:
+        mut p = Point()
+        p.x = x
+        p.y = y
+        return p
+    def manhattan(self) -> int:
+        return self.x + self.y
+
+class Line:
+    a: Point
+    b: Point
+    tint: Color
+
+extend Line:
+    def init(a: Point, b: Point) -> Line:
+        mut l = Line()
+        l.a = a
+        l.b = b
+        l.tint = Color.Red
+        return l
+    def span(self) -> int:
+        return self.b.x - self.a.x
+
+def main():
+    mut p1 = Point.init(1, 2)
+    mut p2 = Point.init(10, 20)
+    mut ln = Line.init(p1, p2)
+    print(ln.span())              # 9
+    print(ln.a.x)                 # 1  (chained field read)
+    print(ln.b.y)                 # 20
+    print(ln.a.manhattan())       # 3  (method on a field object)
+    ln.a = Point.init(5, 5)       # replace a nested object
+    print(ln.a.manhattan())       # 10
+    print(ln.span())              # 5
+    # object identity
+    mut alias = p2
+    print(alias == p2)            # true
+    print(p1 == p2)               # false
+    # enum-typed field
+    match ln.tint:
+        case Color.Red:
+            print("red")          # red
+        case Color.Blue:
+            print("blue")

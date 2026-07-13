@@ -1,0 +1,37 @@
+# native≡c differential corpus: Dict[str,str], Dict[int,str], list .extend.
+def main():
+    mut d = {"name": "alice", "role": "admin"}
+    print(d["name"])            # alice
+    print(d.get("role"))        # admin
+    print(d.len)                # 2
+    d["city"] = "paris"
+    print(d["city"])            # paris
+    print("name" in d)          # true
+    print("zzz" in d)           # false
+    print(d.contains("role"))   # true
+
+    mut e = {1: "one", 2: "two", 3: "three"}
+    print(e[1])                 # one
+    print(e.get(3))             # three
+    print(e.len)                # 3
+    e[4] = "four"
+    print(e[4])                 # four
+    print(2 in e)               # true
+
+    # concat str values
+    mut greeting = "hello " + d["name"]
+    print(greeting)             # hello alice
+
+    # list extend
+    mut xs = [1, 2, 3]
+    mut ys = [4, 5, 6]
+    xs.extend(ys)
+    print(xs.len)               # 6
+    print(xs[3])                # 4
+    print(xs[5])                # 6
+
+    mut a = ["a", "b"]
+    mut b = ["c", "d"]
+    a.extend(b)
+    print(a.len)                # 4
+    print(a[2])                 # c

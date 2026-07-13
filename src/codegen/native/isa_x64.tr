@@ -398,6 +398,42 @@ pub def encode_func(lf: LFunc) -> EncodedFunc:
                     e.relocs.push(f2r)
                     c.u32(0)
                     _st_xmm0(c, _vreg_disp(dst))
+                case LInst.IBitsF(dst, src):
+                    # Reinterpret i64 bits as f64: slots already hold f64 values as raw bit
+                    # patterns in this model, so a bitcast is a plain 8-byte slot copy.
+                    _ld_rax(c, _vreg_disp(src))
+                    _st_rax(c, _vreg_disp(dst))
+                case LInst.IFBits(dst, src):
+                    _ld_rax(c, _vreg_disp(src))
+                    _st_rax(c, _vreg_disp(dst))
+                case LInst.IAddrVar(dst, name):
+                    c.u8(72)
+                    c.u8(141)
+                    c.u8(133)              # lea rax, [rbp+disp32]
+                    c.u32(_var_disp(lf, name))
+                    _st_rax(c, _vreg_disp(dst))
+                case LInst.IFuncAddr(dst, fname):
+                    c.u8(72)
+                    c.u8(141)
+                    c.u8(5)                # lea rax, [rip+disp32] -> PC32 reloc to fname
+                    mut fnaddr_r = Reloc()      # (not `far` — a legacy Windows macro)
+                    fnaddr_r.offset  = c.len
+                    fnaddr_r.symbol  = fname
+                    fnaddr_r.kind    = 4
+                    fnaddr_r.str_idx = 0
+                    e.relocs.push(fnaddr_r)
+                    c.u32(0)
+                    _st_rax(c, _vreg_disp(dst))
+                case LInst.ICallInd(dst, fnreg, iargs):
+                    mut ci = 0
+                    while ci < iargs.len:
+                        _ld_argreg(c, ci, _vreg_disp(iargs.get(ci)))
+                        ci = ci + 1
+                    _ld_rax(c, _vreg_disp(fnreg))
+                    c.u8(255)              # call rax  (FF D0)
+                    c.u8(208)
+                    if dst >= 0:
+                        _st_rax(c, _vreg_disp(dst))
             ii = ii + 1
 
         match blk.term:

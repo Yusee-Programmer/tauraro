@@ -141,6 +141,12 @@ pub def write_elf_object(out_path: str, funcs: Vec[EncodedFunc], externs: Vec[st
             rela.u64(trr.roff)
             rela.u64((2 * 4294967296) + 2)               # (2<<32) | R_X86_64_PC32(2)
             rela.u64((trr.str_idx * 8) - 4)
+        elif trr.kind == 4:
+            # function address (lea rip-rel): PC32 to the named function symbol, addend -4
+            mut fsidx = _index_of(sym_names, trr.sym) + 3
+            rela.u64(trr.roff)
+            rela.u64((fsidx * 4294967296) + 2)           # (sym<<32) | R_X86_64_PC32(2)
+            rela.u64(0 - 4)
         else:
             # call: PLT32 to the callee symbol (index = sym pos + 3)
             mut sidx = _index_of(sym_names, trr.sym) + 3

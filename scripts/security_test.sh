@@ -16,7 +16,14 @@ rc=0
 for t in tests/security/*.c; do
     [ -f "$t" ] || continue
     name="$(basename "$t" .c)"
-    if ! "$CC" $SAN -O1 -g -I runtime "$t" -o "build/$name" 2>/tmp/sec_build.log; then
+    # Tests that reference the native ARC counter must be linked with native_abi.c and
+    # built with the live-string counter enabled; others are self-contained.
+    if grep -q '_tr_rt_str_live_count' "$t"; then
+        BUILD=("$CC" $SAN -O1 -g -DTAURARO_NMEM -I runtime runtime/native_abi.c "$t" -o "build/$name")
+    else
+        BUILD=("$CC" $SAN -O1 -g -I runtime "$t" -o "build/$name")
+    fi
+    if ! "${BUILD[@]}" 2>/tmp/sec_build.log; then
         echo "  ✗ $name: build failed"; sed -n '1,15p' /tmp/sec_build.log; rc=1; continue
     fi
     if "build/$name"; then

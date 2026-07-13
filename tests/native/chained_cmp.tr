@@ -1,0 +1,18 @@
+# native≡c differential corpus: chained comparison (a < b < c desugars to and-chain).
+def main():
+    mut x = 5
+    print(1 < x)                # true
+    print(1 < x < 10)           # true
+    print(1 < x < 3)            # false
+    print(0 <= x <= 100)        # true
+    print(10 <= x <= 100)       # false
+    mut a = 2
+    mut b = 2
+    mut c = 2
+    print(a == b == c)          # true
+    c = 3
+    print(a == b == c)          # false
+    print(1 < 2 < 3 < 4 < 5)    # true
+    print(1 < 2 < 3 < 2)        # false
+    # a>b>c desugars to (a>b) and (b>c): 5>3 and 3>1 -> true
+    print(x > 3 > 1)            # true

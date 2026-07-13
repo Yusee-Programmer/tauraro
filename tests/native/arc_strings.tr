@@ -1,0 +1,39 @@
+# native ARC exercise (also a native≡c corpus program). String LOCALS only — collections
+# aren't ARC'd yet (slice 1 = strings), so this stays leak-clean: at process exit every
+# string has been released and the leak probe asserts _tr_rt_str_live_count()==0.
+# Exercises: literals, concat, methods, reassignment, str params/returns, ternary,
+# while-loops, branches.
+def shout(s: str) -> str:
+    return s.upper() + "!"
+
+def wrap(s: str, l: str, r: str) -> str:
+    return l + s + r
+
+def main():
+    mut a = "hello"
+    mut b = "world"
+    mut c = a + " " + b
+    print(c)                    # hello world
+    print(shout(a))             # HELLO!
+    print(wrap(b, "[", "]"))    # [world]
+
+    mut d = c
+    d = d + "!!!"               # reassign -> old value released
+    print(d)                    # hello world!!!
+
+    mut x = "big" if a < b else "small"
+    print(x)                    # big
+
+    mut i = 0
+    mut acc = ""
+    while i < 4:
+        acc = acc + "ab"        # per-iteration concat, old acc released
+        i = i + 1
+    print(acc)                  # abababab
+
+    if a.starts_with("he"):
+        mut tmp = a.reverse()
+        print(tmp)              # olleh
+
+    print(a.upper())           # HELLO
+    print("done".title())      # Done

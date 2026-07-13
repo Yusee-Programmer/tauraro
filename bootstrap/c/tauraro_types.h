@@ -53,10 +53,14 @@ typedef struct Scope Scope;
 typedef struct Sema Sema;
 typedef struct Formatter Formatter;
 typedef struct CGenerator CGenerator;
-typedef struct LlvmGenerator LlvmGenerator;
 typedef struct LBlock LBlock;
 typedef struct LFunc LFunc;
+typedef struct ClassLayout ClassLayout;
+typedef struct VariantLayout VariantLayout;
+typedef struct EnumLayout EnumLayout;
 typedef struct LModule LModule;
+typedef struct LlvmEmitter LlvmEmitter;
+typedef struct LlvmGenerator LlvmGenerator;
 typedef struct ByteBuf ByteBuf;
 typedef struct Reloc Reloc;
 typedef struct Jump Jump;
@@ -133,10 +137,14 @@ static void _trdrop_Scope(void* vp);
 static void _trdrop_Sema(void* vp);
 static void _trdrop_Formatter(void* vp);
 static void _trdrop_CGenerator(void* vp);
-static void _trdrop_LlvmGenerator(void* vp);
 static void _trdrop_LBlock(void* vp);
 static void _trdrop_LFunc(void* vp);
+static void _trdrop_ClassLayout(void* vp);
+static void _trdrop_VariantLayout(void* vp);
+static void _trdrop_EnumLayout(void* vp);
 static void _trdrop_LModule(void* vp);
+static void _trdrop_LlvmEmitter(void* vp);
+static void _trdrop_LlvmGenerator(void* vp);
 static void _trdrop_ByteBuf(void* vp);
 static void _trdrop_Reloc(void* vp);
 static void _trdrop_Jump(void* vp);
@@ -1589,7 +1597,12 @@ typedef enum {
     LInst_IFToI,
     LInst_IFCall1,
     LInst_IFCallF,
-    LInst_IFCall2F
+    LInst_IFCall2F,
+    LInst_IBitsF,
+    LInst_IFBits,
+    LInst_IAddrVar,
+    LInst_IFuncAddr,
+    LInst_ICallInd
 } LInst_tag;
 
 typedef struct LInst {
@@ -1660,6 +1673,27 @@ typedef struct LInst {
             long long a;
             long long b;
         } IFCall2F;
+        struct {
+            long long dst;
+            long long src;
+        } IBitsF;
+        struct {
+            long long dst;
+            long long src;
+        } IFBits;
+        struct {
+            long long dst;
+            TrStr name;
+        } IAddrVar;
+        struct {
+            long long dst;
+            TrStr fname;
+        } IFuncAddr;
+        struct {
+            long long dst;
+            long long fnreg;
+            List_i64* args;
+        } ICallInd;
     } data;
 } LInst;
 
@@ -1677,6 +1711,11 @@ static inline __attribute__((always_inline)) LInst LInst_ctor_IFToI(long long ds
 static inline __attribute__((always_inline)) LInst LInst_ctor_IFCall1(long long dst, TrStr callee, long long arg) { LInst _r = {.tag=LInst_IFCall1}; _r.data.IFCall1.dst = dst; _r.data.IFCall1.callee = _tr_str_retain(callee); _r.data.IFCall1.arg = arg; return _r; }
 static inline __attribute__((always_inline)) LInst LInst_ctor_IFCallF(long long dst, TrStr callee, long long arg) { LInst _r = {.tag=LInst_IFCallF}; _r.data.IFCallF.dst = dst; _r.data.IFCallF.callee = _tr_str_retain(callee); _r.data.IFCallF.arg = arg; return _r; }
 static inline __attribute__((always_inline)) LInst LInst_ctor_IFCall2F(long long dst, TrStr callee, long long a, long long b) { LInst _r = {.tag=LInst_IFCall2F}; _r.data.IFCall2F.dst = dst; _r.data.IFCall2F.callee = _tr_str_retain(callee); _r.data.IFCall2F.a = a; _r.data.IFCall2F.b = b; return _r; }
+static inline __attribute__((always_inline)) LInst LInst_ctor_IBitsF(long long dst, long long src) { LInst _r = {.tag=LInst_IBitsF}; _r.data.IBitsF.dst = dst; _r.data.IBitsF.src = src; return _r; }
+static inline __attribute__((always_inline)) LInst LInst_ctor_IFBits(long long dst, long long src) { LInst _r = {.tag=LInst_IFBits}; _r.data.IFBits.dst = dst; _r.data.IFBits.src = src; return _r; }
+static inline __attribute__((always_inline)) LInst LInst_ctor_IAddrVar(long long dst, TrStr name) { LInst _r = {.tag=LInst_IAddrVar}; _r.data.IAddrVar.dst = dst; _r.data.IAddrVar.name = _tr_str_retain(name); return _r; }
+static inline __attribute__((always_inline)) LInst LInst_ctor_IFuncAddr(long long dst, TrStr fname) { LInst _r = {.tag=LInst_IFuncAddr}; _r.data.IFuncAddr.dst = dst; _r.data.IFuncAddr.fname = _tr_str_retain(fname); return _r; }
+static inline __attribute__((always_inline)) LInst LInst_ctor_ICallInd(long long dst, long long fnreg, List_i64* args) { LInst _r = {.tag=LInst_ICallInd}; _r.data.ICallInd.dst = dst; _r.data.ICallInd.fnreg = fnreg; _r.data.ICallInd.args = args; return _r; }
 
 typedef enum {
     LTerm_TRetInt,
@@ -2828,24 +2867,6 @@ static void _trdrop_CGenerator(void* vp) {
 }
 #endif
 
-#ifndef LlvmGenerator_STRUCT_DEFINED
-#define LlvmGenerator_STRUCT_DEFINED
-typedef struct LlvmGenerator {
-    size_t __rc;
-    StringBuilder* buf;
-    long long temp;
-    TrMap* classes;
-    TrMap* enums;
-    TrMap* functions;
-} LlvmGenerator;
-static void _trdrop_LlvmGenerator(void* vp) {
-    LlvmGenerator* self = (LlvmGenerator*)vp; (void)self;
-    Dict_free_objval(self->classes, _trdrop_HirClass);
-    Dict_free_objval(self->enums, _trdrop_HirEnum);
-    Dict_free_objval(self->functions, _trdrop_HirFunction);
-}
-#endif
-
 #ifndef LBlock_STRUCT_DEFINED
 #define LBlock_STRUCT_DEFINED
 typedef struct LBlock {
@@ -2872,10 +2893,16 @@ typedef struct LFunc {
     List_i64* vreg_types;
     List_TrStr* vars;
     List_i64* var_types;
+    List_TrStr* var_cls;
     List_TrStr* params;
     long long tmp_ctr;
     List_i64* loop_cont;
     List_i64* loop_brk;
+    List_i64* fresh_strs;
+    List_TrStr* captures;
+    List_i64* cap_tags;
+    List_i64* var_xret;
+    List_i64* vreg_xret;
 } LFunc;
 static void _trdrop_LFunc(void* vp) {
     LFunc* self = (LFunc*)vp; (void)self;
@@ -2883,8 +2910,63 @@ static void _trdrop_LFunc(void* vp) {
     List_i64_free(self->vreg_types);
     List_TrStr_free(self->vars);
     List_i64_free(self->var_types);
+    List_TrStr_free(self->var_cls);
     List_i64_free(self->loop_cont);
     List_i64_free(self->loop_brk);
+    List_i64_free(self->fresh_strs);
+    List_TrStr_free(self->captures);
+    List_i64_free(self->cap_tags);
+    List_i64_free(self->var_xret);
+    List_i64_free(self->vreg_xret);
+}
+#endif
+
+#ifndef ClassLayout_STRUCT_DEFINED
+#define ClassLayout_STRUCT_DEFINED
+typedef struct ClassLayout {
+    size_t __rc;
+    TrStr name;
+    TrStr base;
+    List_TrStr* fields;
+    List_i64* ftags;
+    List_TrStr* fcls;
+} ClassLayout;
+static void _trdrop_ClassLayout(void* vp) {
+    ClassLayout* self = (ClassLayout*)vp; (void)self;
+    _tr_str_release(self->name);
+    _tr_str_release(self->base);
+    List_i64_free(self->ftags);
+    List_TrStr_free(self->fcls);
+}
+#endif
+
+#ifndef VariantLayout_STRUCT_DEFINED
+#define VariantLayout_STRUCT_DEFINED
+typedef struct VariantLayout {
+    size_t __rc;
+    TrStr name;
+    List_TrStr* fields;
+    List_i64* ftags;
+    List_TrStr* fcls;
+} VariantLayout;
+static void _trdrop_VariantLayout(void* vp) {
+    VariantLayout* self = (VariantLayout*)vp; (void)self;
+    _tr_str_release(self->name);
+    List_i64_free(self->ftags);
+    List_TrStr_free(self->fcls);
+}
+#endif
+
+#ifndef EnumLayout_STRUCT_DEFINED
+#define EnumLayout_STRUCT_DEFINED
+typedef struct EnumLayout {
+    size_t __rc;
+    TrStr name;
+    List_ptr* variants;
+} EnumLayout;
+static void _trdrop_EnumLayout(void* vp) {
+    EnumLayout* self = (EnumLayout*)vp; (void)self;
+    _tr_str_release(self->name);
 }
 #endif
 
@@ -2893,6 +2975,9 @@ static void _trdrop_LFunc(void* vp) {
 typedef struct LModule {
     size_t __rc;
     List_ptr* funcs;
+    List_ptr* classes;
+    List_ptr* enums;
+    List_TrStr* ifaces;
     List_TrStr* externs;
     List_TrStr* fn_names;
     List_i64* fn_ret;
@@ -2900,11 +2985,15 @@ typedef struct LModule {
     List_TrStr* globals;
     List_i64* global_types;
     List_ptr* global_inits;
+    HirProgram* hir_prog;
     bool ok;
 } LModule;
 static void _trdrop_LModule(void* vp) {
     LModule* self = (LModule*)vp; (void)self;
     List_ptr_free_obj(self->funcs, _trdrop_LFunc);
+    List_ptr_free_obj(self->classes, _trdrop_ClassLayout);
+    List_ptr_free_obj(self->enums, _trdrop_EnumLayout);
+    List_TrStr_free(self->ifaces);
     List_TrStr_free(self->externs);
     List_TrStr_free(self->fn_names);
     List_i64_free(self->fn_ret);
@@ -2912,6 +3001,37 @@ static void _trdrop_LModule(void* vp) {
     List_TrStr_free(self->globals);
     List_i64_free(self->global_types);
     List_ptr_free(self->global_inits);
+    _tr_obj_release(self->hir_prog, _trdrop_HirProgram);
+}
+#endif
+
+#ifndef LlvmEmitter_STRUCT_DEFINED
+#define LlvmEmitter_STRUCT_DEFINED
+typedef struct LlvmEmitter {
+    size_t __rc;
+    StringBuilder* out;
+    LModule* m;
+    long long tmp;
+    LFunc* cur;
+    TrStr cur_ret;
+    bool cur_main;
+} LlvmEmitter;
+static void _trdrop_LlvmEmitter(void* vp) {
+    LlvmEmitter* self = (LlvmEmitter*)vp; (void)self;
+    _tr_obj_release(self->m, _trdrop_LModule);
+    _tr_obj_release(self->cur, _trdrop_LFunc);
+    _tr_str_release(self->cur_ret);
+}
+#endif
+
+#ifndef LlvmGenerator_STRUCT_DEFINED
+#define LlvmGenerator_STRUCT_DEFINED
+typedef struct LlvmGenerator {
+    size_t __rc;
+    bool ok;
+} LlvmGenerator;
+static void _trdrop_LlvmGenerator(void* vp) {
+    LlvmGenerator* self = (LlvmGenerator*)vp; (void)self;
 }
 #endif
 
@@ -3258,6 +3378,7 @@ __attribute__((hot)) Expr* Parser_parse_or_expr(Parser* self);
 __attribute__((hot)) Expr* Parser_parse_and_expr(Parser* self);
 __attribute__((hot)) Expr* Parser_parse_not_expr(Parser* self);
 __attribute__((hot)) Expr* Parser_parse_comparison(Parser* self);
+__attribute__((hot)) TrStr Parser__peek_cmp_op(Parser* self);
 __attribute__((hot)) Expr* Parser_parse_bitor_expr(Parser* self);
 __attribute__((hot)) Expr* Parser_parse_bitxor_expr(Parser* self);
 __attribute__((hot)) Expr* Parser_parse_bitand_expr(Parser* self);
@@ -3366,6 +3487,7 @@ __attribute__((malloc,returns_nonnull,hot)) Symbol* Symbol_init(TrStr name, Symb
 __attribute__((malloc,returns_nonnull,hot)) Scope* Scope_init();
 __attribute__((hot)) bool _expr_is_self_field(Expr* e);
 __attribute__((hot)) bool _binop_is_float_name(TrStr n);
+__attribute__((hot)) bool _hl_has_float(List_ptr* hl);
 __attribute__((hot)) bool _block_mutates_self(Block* b);
 __attribute__((hot)) bool _pblock_mutates_self(Block** pb);
 __attribute__((hot)) bool _stmt_mutates_self(Stmt* s);
@@ -3542,19 +3664,6 @@ __attribute__((hot)) bool _is_c_keyword(TrStr n);
 __attribute__((hot)) bool _starts_with_tr(TrStr s);
 __attribute__((hot)) bool _is_primitive(TrStr n);
 __attribute__((hot)) TrStr _escape_str_for_c(TrStr s);
-__attribute__((hot)) TrStr llvm_type(AstType* ty);
-__attribute__((malloc,returns_nonnull,hot)) LlvmGenerator* LlvmGenerator_init();
-__attribute__((hot)) void LlvmGenerator_w(LlvmGenerator* self, TrStr s);
-__attribute__((hot)) TrStr LlvmGenerator_next_reg(LlvmGenerator* self);
-__attribute__((hot)) void LlvmGenerator__tr_fn_register(LlvmGenerator* self, HirProgram* prog);
-__attribute__((hot)) void LlvmGenerator_emit_type_decls(LlvmGenerator* self, HirProgram* prog);
-__attribute__((hot)) void LlvmGenerator_emit_func_sig(LlvmGenerator* self, HirFunction* f, TrStr class_name);
-__attribute__((hot)) TrStr LlvmGenerator_gen_expr(LlvmGenerator* self, HirExpr* e_ptr);
-__attribute__((hot)) TrStr LlvmGenerator_gen_binop_llvm(LlvmGenerator* self, TrStr op, HirExpr* left, HirExpr* right, AstType* ty);
-__attribute__((hot)) TrStr LlvmGenerator_gen_call_llvm(LlvmGenerator* self, HirExpr* callee, List_ptr* args);
-__attribute__((hot)) void LlvmGenerator_gen_stmt(LlvmGenerator* self, HirStmt* s_ptr);
-__attribute__((hot)) void LlvmGenerator_gen_block(LlvmGenerator* self, HirBlock* b);
-__attribute__((hot)) TrStr LlvmGenerator_generate(LlvmGenerator* self, HirProgram* prog);
 __attribute__((hot)) LInst* box_linst(LInst i);
 __attribute__((malloc,returns_nonnull,hot)) LBlock* LBlock_init(long long id);
 __attribute__((malloc,returns_nonnull,hot)) LFunc* LFunc_init(TrStr name);
@@ -3571,6 +3680,18 @@ __attribute__((hot)) void LFunc_add_var(LFunc* self, TrStr name);
 __attribute__((hot)) long long LFunc_var_index(LFunc* self, TrStr name);
 __attribute__((hot)) void LFunc_set_var_type(LFunc* self, TrStr name, long long t);
 __attribute__((hot)) long long LFunc_var_type(LFunc* self, TrStr name);
+__attribute__((hot)) void LFunc_set_var_cls(LFunc* self, TrStr name, TrStr cls);
+__attribute__((hot)) TrStr LFunc_var_cls_of(LFunc* self, TrStr name);
+__attribute__((hot)) void LFunc_set_vreg_xret(LFunc* self, long long id, long long t);
+__attribute__((hot)) long long LFunc_vreg_xret_of(LFunc* self, long long id);
+__attribute__((hot)) void LFunc_set_var_xret(LFunc* self, TrStr name, long long t);
+__attribute__((hot)) long long LFunc_var_xret_of(LFunc* self, TrStr name);
+__attribute__((hot)) long long LFunc_capture_index(LFunc* self, TrStr name);
+__attribute__((malloc,returns_nonnull,hot)) ClassLayout* ClassLayout_init(TrStr name);
+__attribute__((hot)) long long ClassLayout_field_index(ClassLayout* self, TrStr fname);
+__attribute__((malloc,returns_nonnull,hot)) VariantLayout* VariantLayout_init(TrStr name);
+__attribute__((malloc,returns_nonnull,hot)) EnumLayout* EnumLayout_init(TrStr name);
+__attribute__((hot)) long long EnumLayout_variant_index(EnumLayout* self, TrStr vname);
 __attribute__((malloc,returns_nonnull,hot)) LModule* LModule_init();
 __attribute__((hot)) long long LModule_add_global(LModule* self, TrStr name, long long tag);
 __attribute__((hot)) long long LModule_global_index(LModule* self, TrStr name);
@@ -3580,12 +3701,30 @@ __attribute__((hot)) long long LModule_fn_ret_tag(LModule* self, TrStr name);
 __attribute__((hot)) long long LModule_add_string(LModule* self, TrStr s);
 __attribute__((hot)) void LModule_add_extern(LModule* self, TrStr name);
 __attribute__((hot)) bool LModule_is_user_fn(LModule* self, TrStr name);
+__attribute__((hot)) void LModule_add_class(LModule* self, ClassLayout* cl);
+__attribute__((hot)) long long LModule_class_index(LModule* self, TrStr name);
+__attribute__((hot)) bool LModule_is_class(LModule* self, TrStr name);
+__attribute__((hot)) long long LModule_class_size(LModule* self, TrStr name);
+__attribute__((hot)) long long LModule_field_offset(LModule* self, TrStr cls, TrStr fld);
+__attribute__((hot)) long long LModule_field_tag(LModule* self, TrStr cls, TrStr fld);
+__attribute__((hot)) TrStr LModule_resolve_method(LModule* self, TrStr cls, TrStr method);
+__attribute__((hot)) TrStr LModule_field_cls(LModule* self, TrStr cls, TrStr fld);
+__attribute__((hot)) void LModule_add_enum(LModule* self, EnumLayout* el);
+__attribute__((hot)) long long LModule_enum_index(LModule* self, TrStr name);
+__attribute__((hot)) bool LModule_is_enum(LModule* self, TrStr name);
+__attribute__((hot)) long long LModule_enum_size(LModule* self, TrStr name);
+__attribute__((hot)) long long LModule_enum_variant_index(LModule* self, TrStr ename, TrStr vname);
+__attribute__((hot)) void LModule_add_iface(LModule* self, TrStr name);
+__attribute__((hot)) bool LModule_is_iface(LModule* self, TrStr name);
 __attribute__((hot)) long long _f64_bits(double v);
 __attribute__((hot)) long long _promote_f(LFunc* lf, long long v);
 __attribute__((hot)) TrStr _print_i64_sym();
 __attribute__((hot)) bool _is_list_tag(long long t);
+__attribute__((hot)) bool _is_set_tag(long long t);
+__attribute__((hot)) TrStr _set_sym(long long t, TrStr op);
 __attribute__((hot)) bool _is_dict_tag(long long t);
 __attribute__((hot)) bool _dict_key_is_str(long long t);
+__attribute__((hot)) long long _dict_val_tag(long long t);
 __attribute__((hot)) TrStr _dict_new_sym(long long t);
 __attribute__((hot)) TrStr _dict_sym(long long t, TrStr op);
 __attribute__((hot)) long long _list_elem_tag(long long t);
@@ -3593,17 +3732,47 @@ __attribute__((hot)) long long _list_tag_for_elem(long long et);
 __attribute__((hot)) bool _is_cmp_op(TrStr op);
 __attribute__((hot)) bool _is_int_typename(TrStr n);
 __attribute__((hot)) long long _ast_type_tag(AstType* ty);
+__attribute__((hot)) bool _is_null_str(TrStr s);
+__attribute__((hot)) TrStr _own(TrStr s);
+__attribute__((hot)) long long _tag_of(LModule* m, AstType* ty);
+__attribute__((hot)) TrStr _cls_of_ty(LModule* m, AstType* ty);
+__attribute__((hot)) TrStr _recv_class(LModule* m, LFunc* lf, HirExpr* obj);
+__attribute__((hot)) long long _prog_class_index(HirProgram* prog, TrStr name);
+__attribute__((hot)) bool _push_field_names_rec(HirProgram* prog, long long ci, ClassLayout* lay, long long depth);
+__attribute__((hot)) bool _push_field_tags_rec(LModule* m, HirProgram* prog, long long ci, ClassLayout* lay, long long depth);
+__attribute__((hot)) void _register_classes(LModule* m, HirProgram* prog);
 __attribute__((hot)) LModule* lower_to_lir(HirProgram* prog);
+__attribute__((hot)) bool _fn_has_iface_param(LModule* m, HirFunction* f);
+__attribute__((hot)) bool _fn_is_specializable(LModule* m, HirFunction* f);
+__attribute__((hot)) long long _find_generic_fn(LModule* m, TrStr name);
+__attribute__((hot)) bool _is_generic_param(HirFunction* f, TrStr n);
+__attribute__((hot)) bool _param_is_abstract(LModule* m, HirFunction* f, TrStr ptyname);
+__attribute__((hot)) bool _lir_lower_generic(LModule* m, HirFunction* f, List_i64* argtags, List_TrStr* argcls, TrStr mangled);
+__attribute__((hot)) void _lir_lower_method(LModule* m, TrStr class_name, HirFunction* f);
 __attribute__((hot)) bool _register_global(LModule* m, HirStmt* s);
 __attribute__((hot)) bool _lower_global_init(LModule* m, LFunc* lf, HirStmt* s);
 __attribute__((hot)) void _lir_lower_function(LModule* m, HirFunction* f);
+__attribute__((hot)) bool _field_tag_ok(long long vt, long long ftg);
+__attribute__((hot)) void _emit_field_set(LModule* m, LFunc* lf, long long obj, long long off, long long val);
+__attribute__((hot)) long long _emit_field_get(LModule* m, LFunc* lf, long long obj, long long off, long long tag);
+__attribute__((hot)) long long _lower_enum_ctor(LModule* m, LFunc* lf, TrStr ename, TrStr vname, List_ptr* margs);
+__attribute__((hot)) long long _lower_obj_call(LModule* m, LFunc* lf, TrStr mangled, long long self_vreg, List_ptr* margs);
 __attribute__((hot)) bool lower_block(LModule* m, LFunc* lf, HirBlock* hb);
 __attribute__((hot)) bool lower_stmt(LModule* m, LFunc* lf, HirStmt* s);
+__attribute__((hot)) long long _lower_set_method(LModule* m, LFunc* lf, long long shv, long long stag, TrStr method, List_ptr* margs);
+__attribute__((hot)) long long _lit_pat_cond(LModule* m, LFunc* lf, Pattern pat, long long subj, long long st);
+__attribute__((hot)) bool _lower_match(LModule* m, LFunc* lf, HirExpr* expr, List_ptr* arms);
+__attribute__((hot)) long long _variant_tag_cond(LFunc* lf, long long tagv, long long vidx);
+__attribute__((hot)) bool _bind_payload(LModule* m, LFunc* lf, VariantLayout* vlay, long long subj, long long fldidx, TrStr bindname);
+__attribute__((hot)) bool _lower_match_enum(LModule* m, LFunc* lf, HirExpr* expr, long long subj, List_ptr* arms);
 __attribute__((hot)) bool _lower_for(LModule* m, LFunc* lf, TrStr var, HirExpr* iter, HirBlock* body);
 __attribute__((hot)) bool _lower_for_range(LModule* m, LFunc* lf, TrStr var, List_ptr* args, HirBlock* body);
 __attribute__((hot)) bool _lower_for_list(LModule* m, LFunc* lf, TrStr var, HirExpr* iter, HirBlock* body);
+__attribute__((hot)) bool _lower_for_unpack(LModule* m, LFunc* lf, List_TrStr* vars, HirExpr* iter, HirBlock* body);
+__attribute__((hot)) bool _lower_enumerate(LModule* m, LFunc* lf, TrStr ivar, TrStr evar, HirExpr* listexpr, HirBlock* body);
 __attribute__((hot)) void _emit_incr(LFunc* lf, TrStr name);
 __attribute__((hot)) TrStr _ident_name(HirExpr* e);
+__attribute__((hot)) bool _lower_field_set(LModule* m, LFunc* lf, HirExpr* obj, TrStr prop, HirExpr* val);
 __attribute__((hot)) bool _lower_index_set(LModule* m, LFunc* lf, HirExpr* obj, HirExpr* idx, HirExpr* val);
 __attribute__((hot)) TrStr _write_sym(long long t);
 __attribute__((hot)) void _emit_call0(LModule* m, LFunc* lf, TrStr sym);
@@ -3612,8 +3781,17 @@ __attribute__((hot)) bool lower_expr_stmt(LModule* m, LFunc* lf, HirExpr* e);
 __attribute__((hot)) bool _int_op(TrStr op);
 __attribute__((hot)) TrStr _lir_digit(long long d);
 __attribute__((hot)) TrStr _lir_itoa(long long n);
+__attribute__((hot)) void _fresh_mark(LFunc* lf, long long v);
+__attribute__((hot)) bool _fresh_take(LFunc* lf, long long v);
+__attribute__((hot)) void _release_str(LModule* m, LFunc* lf, long long v);
+__attribute__((hot)) void _retain_str(LModule* m, LFunc* lf, long long v);
+__attribute__((hot)) void _flush_fresh_strs(LModule* m, LFunc* lf);
+__attribute__((hot)) void _secure_str(LModule* m, LFunc* lf, long long v);
+__attribute__((hot)) bool _is_param(LFunc* lf, TrStr name);
 __attribute__((hot)) long long _norm_bool(LFunc* lf, long long v);
 __attribute__((hot)) long long _str_call0(LModule* m, LFunc* lf, TrStr sym, long long _tr_v_recv, long long restype);
+__attribute__((hot)) long long _heap_lit(LModule* m, LFunc* lf, TrStr s);
+__attribute__((hot)) long long _reg_to_str(LModule* m, LFunc* lf, long long reg);
 __attribute__((hot)) long long _str_call1(LModule* m, LFunc* lf, TrStr sym, long long _tr_v_recv, long long arg, long long restype);
 __attribute__((hot)) long long _lower_str_method(LModule* m, LFunc* lf, long long _tr_v_recv, TrStr method, List_ptr* margs);
 __attribute__((hot)) TrStr _float_unary_sym(TrStr method);
@@ -3625,7 +3803,35 @@ __attribute__((hot)) long long _const_int_val(HirExpr* e);
 __attribute__((hot)) void _emit_add_const(LFunc* lf, TrStr name, long long delta);
 __attribute__((hot)) long long _list_call1(LModule* m, LFunc* lf, TrStr sym, long long handle, long long restype);
 __attribute__((hot)) long long _list_get(LModule* m, LFunc* lf, long long handle, long long idx);
+__attribute__((hot)) long long _list_get_elem(LModule* m, LFunc* lf, long long ltag, long long handle, long long idx);
 __attribute__((hot)) long long lower_expr(LModule* m, LFunc* lf, HirExpr* e);
+__attribute__((hot)) TrStr _ll_ty(long long tag);
+__attribute__((hot)) TrStr _ll_ty_name(TrStr n);
+__attribute__((hot)) long long _ll_hexdigit(long long n);
+__attribute__((hot)) TrStr _ll_hexpad16(long long v);
+__attribute__((hot)) long long _ll_str_bytelen(TrStr s);
+__attribute__((hot)) TrStr _ll_str_escape(TrStr s);
+__attribute__((malloc,returns_nonnull,hot)) LlvmEmitter* LlvmEmitter_init(LModule* m);
+__attribute__((hot)) void LlvmEmitter_w(LlvmEmitter* self, TrStr s);
+__attribute__((hot)) TrStr LlvmEmitter_newtmp(LlvmEmitter* self);
+__attribute__((hot)) TrStr LlvmEmitter_vty(LlvmEmitter* self, long long v);
+__attribute__((hot)) TrStr LlvmEmitter_load_vreg(LlvmEmitter* self, long long v);
+__attribute__((hot)) TrStr LlvmEmitter_load_vreg_as(LlvmEmitter* self, long long v, TrStr ty);
+__attribute__((hot)) void LlvmEmitter_store_vreg(LlvmEmitter* self, long long v, TrStr ty, TrStr val);
+__attribute__((hot)) TrStr LlvmEmitter_user_ret_ty(LlvmEmitter* self, TrStr name);
+__attribute__((hot)) void LlvmEmitter_emit_inst(LlvmEmitter* self, LInst inst);
+__attribute__((hot)) void LlvmEmitter_emit_call(LlvmEmitter* self, long long dst, TrStr callee, List_i64* args);
+__attribute__((hot)) void LlvmEmitter_emit_term(LlvmEmitter* self, LTerm t);
+__attribute__((hot)) void LlvmEmitter_emit_function(LlvmEmitter* self, LFunc* lf);
+__attribute__((hot)) void LlvmEmitter_emit_extern_decls(LlvmEmitter* self);
+__attribute__((hot)) void LlvmEmitter_scan_call_decl(LlvmEmitter* self, LInst inst, TrMap* seen);
+__attribute__((hot)) TrStr LlvmEmitter_emit_module(LlvmEmitter* self);
+__attribute__((hot)) TrStr _ll_int_instr(TrStr op);
+__attribute__((hot)) TrStr _ll_icmp_pred(TrStr op);
+__attribute__((hot)) TrStr _ll_float_instr(TrStr op);
+__attribute__((hot)) TrStr _ll_fcmp_pred(TrStr op);
+__attribute__((malloc,returns_nonnull,hot)) LlvmGenerator* LlvmGenerator_init();
+__attribute__((hot)) TrStr LlvmGenerator_generate(LlvmGenerator* self, HirProgram* prog);
 __attribute__((malloc,returns_nonnull,hot)) ByteBuf* ByteBuf_init();
 __attribute__((hot)) void ByteBuf_u8(ByteBuf* self, long long v);
 __attribute__((hot)) void ByteBuf_u16(ByteBuf* self, long long v);
@@ -3843,6 +4049,7 @@ __attribute__((hot)) TrStr CGenerator_gen_index(CGenerator* self, HirExpr* o, Hi
 __attribute__((hot)) bool CGenerator__call_arg_needs_shared_unwrap(CGenerator* self, HirExpr* arg, AstType* param_ty);
 __attribute__((hot)) TrStr CGenerator_gen_call(CGenerator* self, HirExpr* callee, List_ptr* args, AstType* call_ty);
 __attribute__((hot)) TrStr CGenerator_gen_print_call(CGenerator* self, List_ptr* args);
+__attribute__((hot)) TrStr CGenerator_gen_to_cstr(CGenerator* self, HirExpr* arg);
 __attribute__((hot)) TrStr CGenerator_gen_print_one(CGenerator* self, HirExpr* arg);
 __attribute__((hot)) TrStr CGenerator_wrap_voidp_arg(CGenerator* self, HirExpr* arg);
 __attribute__((hot)) TrStr CGenerator_unwrap_voidp_as(CGenerator* self, TrStr expr_s, AstType* ty);
@@ -3853,6 +4060,8 @@ __attribute__((hot)) bool CGenerator__is_fresh_str_expr(CGenerator* self, HirExp
 __attribute__((hot)) bool CGenerator__expr_is_borrow_call(CGenerator* self, HirExpr* e);
 __attribute__((hot)) bool CGenerator__is_fresh_obj_expr(CGenerator* self, HirExpr* e);
 __attribute__((hot)) TrStr CGenerator_gen_args(CGenerator* self, List_ptr* args);
+__attribute__((hot)) bool CGenerator__is_subclass_of(CGenerator* self, TrStr child, TrStr parent);
+__attribute__((hot)) TrStr CGenerator_gen_args_casts(CGenerator* self, List_ptr* args, List_TrStr* casts);
 __attribute__((hot)) TrStr CGenerator_gen_args_strify(CGenerator* self, List_ptr* args, TrStr elem_sfx);
 __attribute__((hot)) TrStr CGenerator_gen_method_call(CGenerator* self, HirExpr* obj, TrStr method, List_ptr* args, AstType* call_ty);
 __attribute__((hot)) TrStr CGenerator_gen_fstring(CGenerator* self, List_ptr* parts);
@@ -4941,24 +5150,6 @@ __attribute__((hot)) void core_alloc_dealloc_codegen_c_CGenerator_ptr(codegen_c_
 __attribute__((hot)) core_map_MapNode_str_codegen_c_CGenerator** core_alloc_alloc_core_map_MapNode_str_codegen_c_CGenerator(long long count);
 __attribute__((hot)) void core_alloc_dealloc_core_map_MapNode_str_codegen_c_CGenerator(core_map_MapNode_str_codegen_c_CGenerator** ptr);
 
-typedef LlvmGenerator codegen_llvm_LlvmGenerator;
-struct core_vec_Vec_codegen_llvm_LlvmGenerator { codegen_llvm_LlvmGenerator** data; long long len; long long capacity; };
-typedef struct core_vec_Vec_codegen_llvm_LlvmGenerator core_vec_Vec_codegen_llvm_LlvmGenerator;
-struct core_vec_Vec_codegen_llvm_LlvmGenerator_ptr { codegen_llvm_LlvmGenerator*** data; long long len; long long capacity; };
-typedef struct core_vec_Vec_codegen_llvm_LlvmGenerator_ptr core_vec_Vec_codegen_llvm_LlvmGenerator_ptr;
-struct core_map_MapNode_str_codegen_llvm_LlvmGenerator { char* key; codegen_llvm_LlvmGenerator* value; struct core_map_MapNode_str_codegen_llvm_LlvmGenerator* next; };
-typedef struct core_map_MapNode_str_codegen_llvm_LlvmGenerator core_map_MapNode_str_codegen_llvm_LlvmGenerator;
-struct core_map_Map_str_codegen_llvm_LlvmGenerator { core_map_MapNode_str_codegen_llvm_LlvmGenerator** buckets; long long capacity; long long len; };
-typedef struct core_map_Map_str_codegen_llvm_LlvmGenerator core_map_Map_str_codegen_llvm_LlvmGenerator;
-__attribute__((hot)) codegen_llvm_LlvmGenerator** core_alloc_alloc_codegen_llvm_LlvmGenerator(long long count);
-__attribute__((hot)) codegen_llvm_LlvmGenerator** core_alloc_resize_codegen_llvm_LlvmGenerator(codegen_llvm_LlvmGenerator** ptr, long long new_count);
-__attribute__((hot)) void core_alloc_dealloc_codegen_llvm_LlvmGenerator(codegen_llvm_LlvmGenerator** ptr);
-__attribute__((hot)) codegen_llvm_LlvmGenerator*** core_alloc_alloc_codegen_llvm_LlvmGenerator_ptr(long long count);
-__attribute__((hot)) codegen_llvm_LlvmGenerator*** core_alloc_resize_codegen_llvm_LlvmGenerator_ptr(codegen_llvm_LlvmGenerator*** ptr, long long new_count);
-__attribute__((hot)) void core_alloc_dealloc_codegen_llvm_LlvmGenerator_ptr(codegen_llvm_LlvmGenerator*** ptr);
-__attribute__((hot)) core_map_MapNode_str_codegen_llvm_LlvmGenerator** core_alloc_alloc_core_map_MapNode_str_codegen_llvm_LlvmGenerator(long long count);
-__attribute__((hot)) void core_alloc_dealloc_core_map_MapNode_str_codegen_llvm_LlvmGenerator(core_map_MapNode_str_codegen_llvm_LlvmGenerator** ptr);
-
 typedef LType taumir_ir_LType;
 struct core_vec_Vec_taumir_ir_LType { taumir_ir_LType* data; long long len; long long capacity; };
 typedef struct core_vec_Vec_taumir_ir_LType core_vec_Vec_taumir_ir_LType;
@@ -5031,6 +5222,60 @@ __attribute__((hot)) void core_alloc_dealloc_taumir_ir_LFunc_ptr(taumir_ir_LFunc
 __attribute__((hot)) core_map_MapNode_str_taumir_ir_LFunc** core_alloc_alloc_core_map_MapNode_str_taumir_ir_LFunc(long long count);
 __attribute__((hot)) void core_alloc_dealloc_core_map_MapNode_str_taumir_ir_LFunc(core_map_MapNode_str_taumir_ir_LFunc** ptr);
 
+typedef ClassLayout taumir_ir_ClassLayout;
+struct core_vec_Vec_taumir_ir_ClassLayout { taumir_ir_ClassLayout** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_taumir_ir_ClassLayout core_vec_Vec_taumir_ir_ClassLayout;
+struct core_vec_Vec_taumir_ir_ClassLayout_ptr { taumir_ir_ClassLayout*** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_taumir_ir_ClassLayout_ptr core_vec_Vec_taumir_ir_ClassLayout_ptr;
+struct core_map_MapNode_str_taumir_ir_ClassLayout { char* key; taumir_ir_ClassLayout* value; struct core_map_MapNode_str_taumir_ir_ClassLayout* next; };
+typedef struct core_map_MapNode_str_taumir_ir_ClassLayout core_map_MapNode_str_taumir_ir_ClassLayout;
+struct core_map_Map_str_taumir_ir_ClassLayout { core_map_MapNode_str_taumir_ir_ClassLayout** buckets; long long capacity; long long len; };
+typedef struct core_map_Map_str_taumir_ir_ClassLayout core_map_Map_str_taumir_ir_ClassLayout;
+__attribute__((hot)) taumir_ir_ClassLayout** core_alloc_alloc_taumir_ir_ClassLayout(long long count);
+__attribute__((hot)) taumir_ir_ClassLayout** core_alloc_resize_taumir_ir_ClassLayout(taumir_ir_ClassLayout** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_taumir_ir_ClassLayout(taumir_ir_ClassLayout** ptr);
+__attribute__((hot)) taumir_ir_ClassLayout*** core_alloc_alloc_taumir_ir_ClassLayout_ptr(long long count);
+__attribute__((hot)) taumir_ir_ClassLayout*** core_alloc_resize_taumir_ir_ClassLayout_ptr(taumir_ir_ClassLayout*** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_taumir_ir_ClassLayout_ptr(taumir_ir_ClassLayout*** ptr);
+__attribute__((hot)) core_map_MapNode_str_taumir_ir_ClassLayout** core_alloc_alloc_core_map_MapNode_str_taumir_ir_ClassLayout(long long count);
+__attribute__((hot)) void core_alloc_dealloc_core_map_MapNode_str_taumir_ir_ClassLayout(core_map_MapNode_str_taumir_ir_ClassLayout** ptr);
+
+typedef VariantLayout taumir_ir_VariantLayout;
+struct core_vec_Vec_taumir_ir_VariantLayout { taumir_ir_VariantLayout** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_taumir_ir_VariantLayout core_vec_Vec_taumir_ir_VariantLayout;
+struct core_vec_Vec_taumir_ir_VariantLayout_ptr { taumir_ir_VariantLayout*** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_taumir_ir_VariantLayout_ptr core_vec_Vec_taumir_ir_VariantLayout_ptr;
+struct core_map_MapNode_str_taumir_ir_VariantLayout { char* key; taumir_ir_VariantLayout* value; struct core_map_MapNode_str_taumir_ir_VariantLayout* next; };
+typedef struct core_map_MapNode_str_taumir_ir_VariantLayout core_map_MapNode_str_taumir_ir_VariantLayout;
+struct core_map_Map_str_taumir_ir_VariantLayout { core_map_MapNode_str_taumir_ir_VariantLayout** buckets; long long capacity; long long len; };
+typedef struct core_map_Map_str_taumir_ir_VariantLayout core_map_Map_str_taumir_ir_VariantLayout;
+__attribute__((hot)) taumir_ir_VariantLayout** core_alloc_alloc_taumir_ir_VariantLayout(long long count);
+__attribute__((hot)) taumir_ir_VariantLayout** core_alloc_resize_taumir_ir_VariantLayout(taumir_ir_VariantLayout** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_taumir_ir_VariantLayout(taumir_ir_VariantLayout** ptr);
+__attribute__((hot)) taumir_ir_VariantLayout*** core_alloc_alloc_taumir_ir_VariantLayout_ptr(long long count);
+__attribute__((hot)) taumir_ir_VariantLayout*** core_alloc_resize_taumir_ir_VariantLayout_ptr(taumir_ir_VariantLayout*** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_taumir_ir_VariantLayout_ptr(taumir_ir_VariantLayout*** ptr);
+__attribute__((hot)) core_map_MapNode_str_taumir_ir_VariantLayout** core_alloc_alloc_core_map_MapNode_str_taumir_ir_VariantLayout(long long count);
+__attribute__((hot)) void core_alloc_dealloc_core_map_MapNode_str_taumir_ir_VariantLayout(core_map_MapNode_str_taumir_ir_VariantLayout** ptr);
+
+typedef EnumLayout taumir_ir_EnumLayout;
+struct core_vec_Vec_taumir_ir_EnumLayout { taumir_ir_EnumLayout** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_taumir_ir_EnumLayout core_vec_Vec_taumir_ir_EnumLayout;
+struct core_vec_Vec_taumir_ir_EnumLayout_ptr { taumir_ir_EnumLayout*** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_taumir_ir_EnumLayout_ptr core_vec_Vec_taumir_ir_EnumLayout_ptr;
+struct core_map_MapNode_str_taumir_ir_EnumLayout { char* key; taumir_ir_EnumLayout* value; struct core_map_MapNode_str_taumir_ir_EnumLayout* next; };
+typedef struct core_map_MapNode_str_taumir_ir_EnumLayout core_map_MapNode_str_taumir_ir_EnumLayout;
+struct core_map_Map_str_taumir_ir_EnumLayout { core_map_MapNode_str_taumir_ir_EnumLayout** buckets; long long capacity; long long len; };
+typedef struct core_map_Map_str_taumir_ir_EnumLayout core_map_Map_str_taumir_ir_EnumLayout;
+__attribute__((hot)) taumir_ir_EnumLayout** core_alloc_alloc_taumir_ir_EnumLayout(long long count);
+__attribute__((hot)) taumir_ir_EnumLayout** core_alloc_resize_taumir_ir_EnumLayout(taumir_ir_EnumLayout** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_taumir_ir_EnumLayout(taumir_ir_EnumLayout** ptr);
+__attribute__((hot)) taumir_ir_EnumLayout*** core_alloc_alloc_taumir_ir_EnumLayout_ptr(long long count);
+__attribute__((hot)) taumir_ir_EnumLayout*** core_alloc_resize_taumir_ir_EnumLayout_ptr(taumir_ir_EnumLayout*** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_taumir_ir_EnumLayout_ptr(taumir_ir_EnumLayout*** ptr);
+__attribute__((hot)) core_map_MapNode_str_taumir_ir_EnumLayout** core_alloc_alloc_core_map_MapNode_str_taumir_ir_EnumLayout(long long count);
+__attribute__((hot)) void core_alloc_dealloc_core_map_MapNode_str_taumir_ir_EnumLayout(core_map_MapNode_str_taumir_ir_EnumLayout** ptr);
+
 typedef LModule taumir_ir_LModule;
 struct core_vec_Vec_taumir_ir_LModule { taumir_ir_LModule** data; long long len; long long capacity; };
 typedef struct core_vec_Vec_taumir_ir_LModule core_vec_Vec_taumir_ir_LModule;
@@ -5048,6 +5293,42 @@ __attribute__((hot)) taumir_ir_LModule*** core_alloc_resize_taumir_ir_LModule_pt
 __attribute__((hot)) void core_alloc_dealloc_taumir_ir_LModule_ptr(taumir_ir_LModule*** ptr);
 __attribute__((hot)) core_map_MapNode_str_taumir_ir_LModule** core_alloc_alloc_core_map_MapNode_str_taumir_ir_LModule(long long count);
 __attribute__((hot)) void core_alloc_dealloc_core_map_MapNode_str_taumir_ir_LModule(core_map_MapNode_str_taumir_ir_LModule** ptr);
+
+typedef LlvmEmitter codegen_llvm_emit_LlvmEmitter;
+struct core_vec_Vec_codegen_llvm_emit_LlvmEmitter { codegen_llvm_emit_LlvmEmitter** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_codegen_llvm_emit_LlvmEmitter core_vec_Vec_codegen_llvm_emit_LlvmEmitter;
+struct core_vec_Vec_codegen_llvm_emit_LlvmEmitter_ptr { codegen_llvm_emit_LlvmEmitter*** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_codegen_llvm_emit_LlvmEmitter_ptr core_vec_Vec_codegen_llvm_emit_LlvmEmitter_ptr;
+struct core_map_MapNode_str_codegen_llvm_emit_LlvmEmitter { char* key; codegen_llvm_emit_LlvmEmitter* value; struct core_map_MapNode_str_codegen_llvm_emit_LlvmEmitter* next; };
+typedef struct core_map_MapNode_str_codegen_llvm_emit_LlvmEmitter core_map_MapNode_str_codegen_llvm_emit_LlvmEmitter;
+struct core_map_Map_str_codegen_llvm_emit_LlvmEmitter { core_map_MapNode_str_codegen_llvm_emit_LlvmEmitter** buckets; long long capacity; long long len; };
+typedef struct core_map_Map_str_codegen_llvm_emit_LlvmEmitter core_map_Map_str_codegen_llvm_emit_LlvmEmitter;
+__attribute__((hot)) codegen_llvm_emit_LlvmEmitter** core_alloc_alloc_codegen_llvm_emit_LlvmEmitter(long long count);
+__attribute__((hot)) codegen_llvm_emit_LlvmEmitter** core_alloc_resize_codegen_llvm_emit_LlvmEmitter(codegen_llvm_emit_LlvmEmitter** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_codegen_llvm_emit_LlvmEmitter(codegen_llvm_emit_LlvmEmitter** ptr);
+__attribute__((hot)) codegen_llvm_emit_LlvmEmitter*** core_alloc_alloc_codegen_llvm_emit_LlvmEmitter_ptr(long long count);
+__attribute__((hot)) codegen_llvm_emit_LlvmEmitter*** core_alloc_resize_codegen_llvm_emit_LlvmEmitter_ptr(codegen_llvm_emit_LlvmEmitter*** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_codegen_llvm_emit_LlvmEmitter_ptr(codegen_llvm_emit_LlvmEmitter*** ptr);
+__attribute__((hot)) core_map_MapNode_str_codegen_llvm_emit_LlvmEmitter** core_alloc_alloc_core_map_MapNode_str_codegen_llvm_emit_LlvmEmitter(long long count);
+__attribute__((hot)) void core_alloc_dealloc_core_map_MapNode_str_codegen_llvm_emit_LlvmEmitter(core_map_MapNode_str_codegen_llvm_emit_LlvmEmitter** ptr);
+
+typedef LlvmGenerator codegen_llvm_LlvmGenerator;
+struct core_vec_Vec_codegen_llvm_LlvmGenerator { codegen_llvm_LlvmGenerator** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_codegen_llvm_LlvmGenerator core_vec_Vec_codegen_llvm_LlvmGenerator;
+struct core_vec_Vec_codegen_llvm_LlvmGenerator_ptr { codegen_llvm_LlvmGenerator*** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_codegen_llvm_LlvmGenerator_ptr core_vec_Vec_codegen_llvm_LlvmGenerator_ptr;
+struct core_map_MapNode_str_codegen_llvm_LlvmGenerator { char* key; codegen_llvm_LlvmGenerator* value; struct core_map_MapNode_str_codegen_llvm_LlvmGenerator* next; };
+typedef struct core_map_MapNode_str_codegen_llvm_LlvmGenerator core_map_MapNode_str_codegen_llvm_LlvmGenerator;
+struct core_map_Map_str_codegen_llvm_LlvmGenerator { core_map_MapNode_str_codegen_llvm_LlvmGenerator** buckets; long long capacity; long long len; };
+typedef struct core_map_Map_str_codegen_llvm_LlvmGenerator core_map_Map_str_codegen_llvm_LlvmGenerator;
+__attribute__((hot)) codegen_llvm_LlvmGenerator** core_alloc_alloc_codegen_llvm_LlvmGenerator(long long count);
+__attribute__((hot)) codegen_llvm_LlvmGenerator** core_alloc_resize_codegen_llvm_LlvmGenerator(codegen_llvm_LlvmGenerator** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_codegen_llvm_LlvmGenerator(codegen_llvm_LlvmGenerator** ptr);
+__attribute__((hot)) codegen_llvm_LlvmGenerator*** core_alloc_alloc_codegen_llvm_LlvmGenerator_ptr(long long count);
+__attribute__((hot)) codegen_llvm_LlvmGenerator*** core_alloc_resize_codegen_llvm_LlvmGenerator_ptr(codegen_llvm_LlvmGenerator*** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_codegen_llvm_LlvmGenerator_ptr(codegen_llvm_LlvmGenerator*** ptr);
+__attribute__((hot)) core_map_MapNode_str_codegen_llvm_LlvmGenerator** core_alloc_alloc_core_map_MapNode_str_codegen_llvm_LlvmGenerator(long long count);
+__attribute__((hot)) void core_alloc_dealloc_core_map_MapNode_str_codegen_llvm_LlvmGenerator(core_map_MapNode_str_codegen_llvm_LlvmGenerator** ptr);
 
 typedef ByteBuf codegen_native_bytebuf_ByteBuf;
 struct core_vec_Vec_codegen_native_bytebuf_ByteBuf { codegen_native_bytebuf_ByteBuf** data; long long len; long long capacity; };

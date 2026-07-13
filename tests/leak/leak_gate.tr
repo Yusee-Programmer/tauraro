@@ -194,6 +194,14 @@ def workload():
     ts.add(make_tag("s2-", dd))
     mut tslen = ts.len()
 
+    # Set literals: int-keyed and str-keyed. Locals must be freed on scope exit
+    # (the {..} literal allocates a _TrISet/_TrSet backing store).
+    mut iset = {1, 2, 3, 2, 1}
+    mut isetlen = iset.len
+    iset.add(4)
+    mut sset = {"p", "q", "p"}
+    mut ssetlen = sset.len
+
 def main():
     workload()                                  # warm up (one-time allocations)
     mut before = _tr_mem_live()

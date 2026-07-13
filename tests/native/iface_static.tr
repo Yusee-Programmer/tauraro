@@ -1,0 +1,48 @@
+# native≡c / llvm≡c differential corpus: interface-typed params — the LIR specializes
+# per concrete arg class (zero-cost static dispatch, no vtable); the C backend uses
+# fat-pointer vtables. Outputs must be identical.
+interface Shape:
+    def area(self) -> int
+    def name_tag(self) -> int
+
+class Circle implements Shape:
+    r: int
+
+extend Circle:
+    def init(r: int) -> Circle:
+        mut c = Circle()
+        c.r = r
+        return c
+    def area(self) -> int:
+        return 3 * self.r * self.r
+    def name_tag(self) -> int:
+        return 1
+
+class Square implements Shape:
+    s: int
+
+extend Square:
+    def init(s: int) -> Square:
+        mut q = Square()
+        q.s = s
+        return q
+    def area(self) -> int:
+        return self.s * self.s
+    def name_tag(self) -> int:
+        return 2
+
+def total(a: Shape, b: Shape) -> int:
+    return a.area() + b.area()
+
+def describe(s: Shape) -> int:
+    return s.name_tag() * 1000 + s.area()
+
+def main():
+    mut c = Circle.init(2)
+    mut q = Square.init(3)
+    mut c2 = Circle.init(4)
+    print(total(c, q))          # 12 + 9 = 21
+    print(total(q, c))          # 21   (opposite specialization)
+    print(total(c, c2))         # 12 + 48 = 60  (same-class pair specialization)
+    print(describe(c))          # 1012
+    print(describe(q))          # 2009

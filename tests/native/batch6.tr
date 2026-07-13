@@ -1,0 +1,83 @@
+# native≡c / llvm≡c differential corpus: match guards, assert, print(List), Set,
+# List[float], tuples (literal + unpack + function-returned).
+def minmax(xs: List[int]) -> (int, int):
+    mut lo = xs[0]
+    mut hi = xs[0]
+    mut i = 1
+    while i < xs.len:
+        if xs[i] < lo:
+            lo = xs[i]
+        if xs[i] > hi:
+            hi = xs[i]
+        i = i + 1
+    return (lo, hi)
+
+def classify(n: int) -> str:
+    match n:
+        case x if x > 100:
+            return "huge"
+        case x if x > 10:
+            return "big"
+        case 5:
+            return "five"
+        case _:
+            return "small"
+
+def main():
+    # match guards
+    print(classify(500))       # huge
+    print(classify(50))        # big
+    print(classify(5))         # five
+    print(classify(1))         # small
+
+    # assert (passing)
+    mut n = 7
+    assert n == 7
+    assert n > 0
+    print("asserts ok")
+
+    # print whole lists
+    mut xs = [1, 2, 3]
+    print(xs)                  # [1, 2, 3]
+    mut ss = ["a", "bb"]
+    print(ss)                  # ['a', 'bb']
+    print("list:", xs)         # list: [1, 2, 3]
+
+    # List[float]
+    mut fs = [1.5, 2.0, 3.25]
+    print(fs)                  # [1.5, 2, 3.25]
+    print(fs[0])               # 1.5
+    fs.push(4.75)
+    print(fs.len)              # 4
+    fs[1] = 9.5
+    print(fs[1])               # 9.5
+    mut total = 0.0
+    for f in fs:
+        total = total + f
+    print(total)               # 1.5+9.5+3.25+4.75 = 19
+
+    # Set
+    mut si = {3, 1, 2}
+    print(si.len)              # 3
+    print(2 in si)             # true
+    print(9 in si)             # false
+    si.add(9)
+    print(9 in si)             # true
+    si.remove(1)
+    print(si.len)              # 3
+    print(si.is_empty())       # false
+    mut sw = {"x", "y"}
+    print("x" in sw)           # true
+    print("z" in sw)           # false
+
+    # tuples: literal unpack + function-returned + mixed types
+    mut point = (10, 20)
+    mut px, py = point
+    print(px + py)             # 30
+    mut lo, hi = minmax([7, 3, 9, 1])
+    print(lo * 100 + hi)       # 109
+    mut mixed = (5, "tag", 2.5)
+    mut mi, mtag, mf = mixed
+    print(mi)                  # 5
+    print(mtag)                # tag
+    print(mf)                  # 2.5

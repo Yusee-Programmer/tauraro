@@ -9,30 +9,30 @@ from core.string import StringBuilder
 # --- Keyword table helper -------------------------------------------------------
 
 pub def keyword_to_token(s: str) -> Token:
-    if s == "def" or s == "aiki":       return Token.KwDef
-    if s == "class" or s == "aji":     return Token.KwClass
+    if s == "def":                     return Token.KwDef
+    if s == "class":                   return Token.KwClass
     if s == "enum":                    return Token.KwEnum
     if s == "interface":               return Token.KwInterface
     if s == "extend":                  return Token.KwExtend
-    if s == "struct" or s == "tsari":  return Token.KwStruct
-    if s == "if" or s == "idan":       return Token.KwIf
-    if s == "elif" or s == "koidan":   return Token.KwElif
-    if s == "else" or s == "sai":      return Token.KwElse
-    if s == "for" or s == "ga":        return Token.KwFor
-    if s == "while" or s == "yayinda": return Token.KwWhile
+    if s == "struct":                  return Token.KwStruct
+    if s == "if":                      return Token.KwIf
+    if s == "elif":                    return Token.KwElif
+    if s == "else":                    return Token.KwElse
+    if s == "for":                     return Token.KwFor
+    if s == "while":                   return Token.KwWhile
     if s == "loop":                    return Token.KwLoop
-    if s == "return" or s == "dawo":   return Token.KwReturn
-    if s == "break" or s == "tsaya":   return Token.KwBreak
-    if s == "continue" or s == "ci_gaba": return Token.KwContinue
-    if s == "pass" or s == "wuce":     return Token.KwPass
-    if s == "match" or s == "duba":    return Token.KwMatch
-    if s == "case" or s == "hali":     return Token.KwCase
-    if s == "try" or s == "gwada":     return Token.KwTry
-    if s == "except" or s == "kama":   return Token.KwExcept
-    if s == "finally" or s == "karshe": return Token.KwFinally
-    if s == "raise" or s == "jefa":    return Token.KwRaise
-    if s == "assert" or s == "tabbatar": return Token.KwAssert
-    if s == "with" or s == "tare":     return Token.KwWith
+    if s == "return":                  return Token.KwReturn
+    if s == "break":                   return Token.KwBreak
+    if s == "continue":                return Token.KwContinue
+    if s == "pass":                    return Token.KwPass
+    if s == "match":                   return Token.KwMatch
+    if s == "case":                    return Token.KwCase
+    if s == "try":                     return Token.KwTry
+    if s == "except":                  return Token.KwExcept
+    if s == "finally":                 return Token.KwFinally
+    if s == "raise":                   return Token.KwRaise
+    if s == "assert":                  return Token.KwAssert
+    if s == "with":                    return Token.KwWith
     if s == "defer":                   return Token.KwDefer
     if s == "asm":                     return Token.KwAsm
     if s == "taskgroup" or s == "task_group": return Token.KwTaskGroup
@@ -41,7 +41,7 @@ pub def keyword_to_token(s: str) -> Token:
     if s == "import":                  return Token.KwImport
     if s == "from":                    return Token.KwFrom
     if s == "as":                      return Token.KwAs
-    if s == "in" or s == "ciki" or s == "a_cikin": return Token.KwIn
+    if s == "in":                      return Token.KwIn
     if s == "mut":                     return Token.KwMut
     if s == "shared":                  return Token.KwShared
     if s == "extern":                  return Token.KwExtern
@@ -49,38 +49,38 @@ pub def keyword_to_token(s: str) -> Token:
     if s == "spawn":                   return Token.KwSpawn
     if s == "throws":                  return Token.KwThrows
     if s == "extends":                 return Token.KwExtends
-    if s == "async" or s == "ba_jira": return Token.KwAsync
-    if s == "await" or s == "jira":    return Token.KwAwait
-    if s == "yield" or s == "bayar":   return Token.KwYield
-    if s == "pub" or s == "fito":      return Token.KwPub
+    if s == "async":                   return Token.KwAsync
+    if s == "await":                   return Token.KwAwait
+    if s == "yield":                   return Token.KwYield
+    if s == "pub":                     return Token.KwPub
     if s == "static":                  return Token.KwStatic
     if s == "const":                   return Token.KwConst
     if s == "actor":                   return Token.KwActor
     if s == "super":                   return Token.KwSuper
     if s == "export":                  return Token.KwExport
-    if s == "lambda" or s == "dan_aiki": return Token.KwLambda
+    if s == "lambda":                  return Token.KwLambda
     if s == "decorator":               return Token.KwDecorator
     if s == "macro":                   return Token.KwMacro
     if s == "do":                      return Token.KwDo
     if s == "sizeof":                  return Token.KwSizeOf
     if s == "is":                      return Token.KwIs
-    
-    if s == "true" or s == "gaskiya" or s == "True": return Token.KwTrue
-    if s == "false" or s == "karya" or s == "False": return Token.KwFalse
-    if s == "none" or s == "babu" or s == "None":    return Token.KwNone
-    if s == "and" or s == "da":        return Token.KwAnd
-    if s == "or" or s == "ko":         return Token.KwOr
-    if s == "not" or s == "ba":        return Token.KwNot
+
+    if s == "true" or s == "True":     return Token.KwTrue
+    if s == "false" or s == "False":   return Token.KwFalse
+    if s == "none" or s == "None":     return Token.KwNone
+    if s == "and":                     return Token.KwAnd
+    if s == "or":                      return Token.KwOr
+    if s == "not":                     return Token.KwNot
 
     # Primitive types
-    if s == "int" or s == "lamba" or s == "i64": return Token.KwInt
-    if s == "float" or s == "f64":               return Token.KwFloat
-    if s == "bool":                              return Token.KwBool
-    if s == "char":                              return Token.KwChar
-    if s == "str" or s == "zuwa_rubutu":         return Token.KwStr
-    if s == "String":                            return Token.KwString
-    if s == "void":                              return Token.KwVoid
-    
+    if s == "int" or s == "i64":       return Token.KwInt
+    if s == "float" or s == "f64":     return Token.KwFloat
+    if s == "bool":                    return Token.KwBool
+    if s == "char":                    return Token.KwChar
+    if s == "str":                     return Token.KwStr
+    if s == "String":                  return Token.KwString
+    if s == "void":                    return Token.KwVoid
+
     return Token.Ident(s)
 
 # --- Character helpers ----------------------------------------------------------

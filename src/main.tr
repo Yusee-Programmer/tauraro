@@ -65,7 +65,6 @@ pub def print_usage():
     print("  --sysroot <path>  Override sysroot for the cross-compiler")
     print("  --debug           Compile with ASAN and bounds-check assertions")
     print("  --strict          Treat alloc/dealloc outside 'unsafe:' as a hard error [U-1]")
-    print("Bilingual: all English keywords have Hausa equivalents (aiki=def, aji=class, ...)")
 
 pub def str_ends_with_dot_tr(path: str) -> bool:
     mut p = path as Pointer[char]
@@ -979,8 +978,16 @@ pub def main(args: Vec[str]):
     if verbose: print("[3/5] Code generation (backend=" + backend + ")...")
 
     if backend == "llvm":
+        # LLVM backend (Path A): lowered IR (src/taumir) -> textual LLVM IR. `llc` compiles
+        # the .ll to an object; link with runtime.o to get an executable (see scripts/
+        # llvm_run.sh / llvm_diff.sh). Coverage == native's (same LIR): unsupported programs
+        # leave ok=false and we fall back to the C backend, never emit something wrong.
         mut llvm_gen = LlvmGenerator.init()
         mut llvm_ir = llvm_gen.generate(hir)
+        if not llvm_gen.ok:
+            print(c_red("error") + ": the LLVM backend can't lower this program yet")
+            print("       (it shares the native backend's feature subset). Use --backend c (default).")
+            _tr_exit(2)
         if output_path == "":
             output_path = strip_extension(input_path) + ".ll"
         write_file(output_path, llvm_ir)

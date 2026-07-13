@@ -111,7 +111,7 @@ __attribute__((hot)) bool write_elf_object(TrStr out_path, List_ptr* funcs, List
         /* pass */
         List_i64_append(str_off, rodata->len);
         /* pass */
-        ({ TrStr _at_t2274 = (List_TrStr_get(strings, sxi)); ByteBuf_cstr(rodata, _at_t2274); _tr_str_release(_at_t2274); });
+        ({ TrStr _at_t2396 = (List_TrStr_get(strings, sxi)); ByteBuf_cstr(rodata, _at_t2396); _tr_str_release(_at_t2396); });
         /* pass */
         sxi = (sxi + 1LL);
     }
@@ -227,6 +227,15 @@ __attribute__((hot)) bool write_elf_object(TrStr out_path, List_ptr* funcs, List
             ByteBuf_u64(rela, ((2LL * 4294967296LL) + 2LL));
             /* pass */
             ByteBuf_u64(rela, ((trr->str_idx * 8LL) - 4LL));
+        } else if ((trr->kind == 4LL)) {
+            /* pass */
+            long long fsidx = (_index_of(sym_names, trr->sym) + 3LL);
+            /* pass */
+            ByteBuf_u64(rela, trr->roff);
+            /* pass */
+            ByteBuf_u64(rela, ((fsidx * 4294967296LL) + 2LL));
+            /* pass */
+            ByteBuf_u64(rela, (0LL - 4LL));
         } else {
             /* pass */
             long long sidx = (_index_of(sym_names, trr->sym) + 3LL);

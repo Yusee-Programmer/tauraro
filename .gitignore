@@ -34,9 +34,10 @@ bootstrap/*.zip
 # not build artifacts. (git check-ignore was hiding them from CI.)
 !tests/fuzz/gen.py
 !tests/freestanding/platform.c
-# The native backend's runtime shim is hand-written source (extern entry points to the
-# header-only runtime), not generated C — it must be tracked despite the broad *.c rule.
+# The native backend's runtime shim + leak probe are hand-written source (extern entry
+# points / a destructor), not generated C — must be tracked despite the broad *.c rule.
 !runtime/native_abi.c
+!runtime/native_leak_probe.c
 # Python bytecode is never source:
 __pycache__/
 *.pyc

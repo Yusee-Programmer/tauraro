@@ -95,6 +95,14 @@ def _expr_is_self_field(e: Pointer[Expr]) -> bool:
 def _binop_is_float_name(n: str) -> bool:
     return n == "float" or n == "f64" or n == "f32"
 
+# True if any argument in a lowered call arg list is float-typed (abs/min/max polymorphism).
+def _hl_has_float(hl: Vec[Pointer[HirExpr]]) -> bool:
+    mut i = 0
+    while i < hl.len:
+        if _binop_is_float_name(hir_expr_type(hl.get(i)).name): return true
+        i = i + 1
+    return false
+
 def _block_mutates_self(b: Block) -> bool:
     mut i = 0
     while i < b.stmts.len:
@@ -312,6 +320,9 @@ extend Sema:
         s.globals.insert("range",    Symbol.init("range",    SymbolKind.SFunction, box_asttype(AstType.init("List"))))
         s.globals.insert("type",     Symbol.init("type",     SymbolKind.SFunction, box_asttype(AstType.init("str"))))
         s.globals.insert("str",      Symbol.init("str",      SymbolKind.SFunction, box_asttype(AstType.init("str"))))
+        s.globals.insert("hex",      Symbol.init("hex",      SymbolKind.SFunction, box_asttype(AstType.init("str"))))
+        s.globals.insert("oct",      Symbol.init("oct",      SymbolKind.SFunction, box_asttype(AstType.init("str"))))
+        s.globals.insert("bin",      Symbol.init("bin",      SymbolKind.SFunction, box_asttype(AstType.init("str"))))
         s.globals.insert("int",      Symbol.init("int",      SymbolKind.SFunction, box_asttype(AstType.init("int"))))
         s.globals.insert("float",    Symbol.init("float",    SymbolKind.SFunction, box_asttype(AstType.init("float"))))
         s.globals.insert("bool",     Symbol.init("bool",     SymbolKind.SFunction, box_asttype(AstType.init("bool"))))
@@ -3356,6 +3367,7 @@ extend Sema:
             
         mut he = HirEnum()
         he.name = e.name
+        he.generics = e.generics       # was never set -> NULL vec (crashed .len readers)
         he.variants = hvariants
         he.methods = hmethods
         he.iface_names = e.iface_names
@@ -4038,6 +4050,21 @@ extend Sema:
                         case Pattern.PVariant(_, ex_vn): ex_covered.push(ex_vn)
                         case Pattern.PVariantBind(_, ex_vn2, _): ex_covered.push(ex_vn2)
                         case Pattern.PVariantBindMany(_, ex_vn3, _): ex_covered.push(ex_vn3)
+                        case Pattern.POr(ex_orpats):
+                            # [E-3] A payload BIND inside an or-pattern is unsound: only one
+                            # alternative matches, so the binder may be uninitialized.
+                            mut ex_oi = 0
+                            while ex_oi < ex_orpats.len:
+                                match ex_orpats.get(ex_oi):
+                                    case Pattern.PVariant(_, ex_ovn): ex_covered.push(ex_ovn)
+                                    case Pattern.PVariantBind(_, ex_bvn, _):
+                                        ex_covered.push(ex_bvn)
+                                        self.error("[E-3] Payload binding '" + ex_ty_name + "." + ex_bvn + "(..)' is not allowed inside an or-pattern ('|').\n      FIX: Split the alternatives into separate 'case' arms, or match the variant without binding: 'case " + ex_ty_name + "." + ex_bvn + " | ...:'.")
+                                    case Pattern.PVariantBindMany(_, ex_mvn, _):
+                                        ex_covered.push(ex_mvn)
+                                        self.error("[E-3] Payload binding '" + ex_ty_name + "." + ex_mvn + "(..)' is not allowed inside an or-pattern ('|').\n      FIX: Split the alternatives into separate 'case' arms, or match the variant without binding: 'case " + ex_ty_name + "." + ex_mvn + " | ...:'.")
+                                    case _: pass
+                                ex_oi = ex_oi + 1
                         case _: pass
                     self.enter_scope()
                     # Use the subject's type for PBind so `case x if x.method():` works.
@@ -4288,6 +4315,14 @@ extend Sema:
             case Pattern.PBind(name): self.declare(name, SymbolKind.SVariable, box_asttype(subj_ty), false)
             case Pattern.PVariantBind(type_name, variant_name, field):
                 mut fty = self.variant_field_ty(type_name, variant_name, 0)
+                # Builtin generic enums: the payload's type is the SUBJECT's type argument
+                # (Option[float].Some(v) binds v: float, Result[T,E].Err(e) binds e: E).
+                if type_name == "Option" and variant_name == "Some" and subj_ty.args.len > 0:
+                    fty = subj_ty.args.get(0).read()
+                elif type_name == "Result" and variant_name == "Ok" and subj_ty.args.len > 0:
+                    fty = subj_ty.args.get(0).read()
+                elif type_name == "Result" and variant_name == "Err" and subj_ty.args.len > 1:
+                    fty = subj_ty.args.get(1).read()
                 if fty.name == "void": fty = AstType.init("int")
                 self.declare(field, SymbolKind.SVariable, box_asttype(fty), false)
             case Pattern.PVariantBindMany(type_name, variant_name, fields):
@@ -4318,6 +4353,16 @@ extend Sema:
         if method == "trim_right": return AstType.init("str")
         if method == "to_upper": return AstType.init("str")
         if method == "to_lower": return AstType.init("str")
+        if method == "upper": return AstType.init("str")
+        if method == "lower": return AstType.init("str")
+        if method == "lstrip": return AstType.init("str")
+        if method == "rstrip": return AstType.init("str")
+        if method == "center": return AstType.init("str")
+        if method == "pad_left": return AstType.init("str")
+        if method == "pad_right": return AstType.init("str")
+        if method == "zfill": return AstType.init("str")
+        if method == "format": return AstType.init("str")
+        if method == "chars": return AstType.init_generic("Vec", box_asttype(AstType.init("str")))
         if method == "capitalize": return AstType.init("str")
         if method == "title": return AstType.init("str")
         if method == "reverse": return AstType.init("str")
@@ -4677,6 +4722,8 @@ extend Sema:
                             ret_ty = AstType.init(n)
                         elif self.enums.contains(n):
                             ret_ty = AstType.init(n)
+                        elif (n == "abs" or n == "min" or n == "max") and _hl_has_float(hl):
+                            ret_ty = AstType.init("float")   # abs/min/max are float-in -> float-out
                         elif n == "alloc" or n == "dealloc":
                             ret_ty = AstType.init("Pointer")
                             if not self.in_unsafe:
@@ -4688,6 +4735,23 @@ extend Sema:
                             # the call result is the signature's return type (last arg).
                             if ret_ty.name == "def" and ret_ty.args.len > 0:
                                 ret_ty = ret_ty.args.get(ret_ty.args.len - 1).read()
+                            # A generic fn returning its type param (-> T) yields the
+                            # CONCRETE type of the first argument declared as that T
+                            # (otherwise `mut a = largest(1, 2)` emits a `T*` local).
+                            if self.fn_defs.contains(n):
+                                mut _gfd = self.fn_defs.get(n)
+                                if _gfd.generics.len > 0 and _gfd.generics.contains(ret_ty.name):
+                                    mut _gsk = 0
+                                    if _gfd.params.len > 0 and _gfd.params.get(0).name == "self": _gsk = 1
+                                    mut _gpi = 0
+                                    while _gpi < _gfd.params.len:
+                                        mut _gpty = _gfd.params.get(_gpi).ty
+                                        if _gpty as usize != 0 as usize and _gpty.read().name == ret_ty.name:
+                                            mut _gaidx = _gpi - _gsk
+                                            if _gaidx >= 0 and _gaidx < hl.len:
+                                                ret_ty = hir_expr_type(hl.get(_gaidx))
+                                                break
+                                        _gpi = _gpi + 1
                     case Expr.EIndex(base, idx):
                         match base.read():
                             case Expr.EIdent(gn):
@@ -5007,7 +5071,12 @@ extend Sema:
                         ret_ty = AstType.init_generic("List", box_asttype(_dict_val_ty))
                 # Option[T] built-in method return types
                 elif hobj_ty.name == "Option":
-                    if method == "is_some" or method == "is_none": ret_ty = AstType.init("bool")
+                    # Ctor `Option.Some(x)` carries the payload's CONCRETE type so a later
+                    # `case Option.Some(v):` binds `v` correctly (Option[float], not bare Option).
+                    if method == "Some" and hl.len == 1:
+                        ret_ty = AstType.init("Option")
+                        ret_ty.args.push(box_asttype(hir_expr_type(hl.get(0))))
+                    elif method == "is_some" or method == "is_none": ret_ty = AstType.init("bool")
                     elif method == "unwrap" or method == "expect":
                         if hobj_ty.args.len > 0: ret_ty = hobj_ty.args.get(0).read()
                         else: ret_ty = AstType.init("int")
@@ -5017,7 +5086,16 @@ extend Sema:
                         else: ret_ty = AstType.init("int")
                 # Result[T,E] built-in method return types
                 elif hobj_ty.name == "Result":
-                    if method == "is_ok" or method == "is_err": ret_ty = AstType.init("bool")
+                    # Ctors carry the payload's concrete type positionally (unknown side = void).
+                    if method == "Ok" and hl.len == 1:
+                        ret_ty = AstType.init("Result")
+                        ret_ty.args.push(box_asttype(hir_expr_type(hl.get(0))))
+                        ret_ty.args.push(box_asttype(AstType.init("void")))
+                    elif method == "Err" and hl.len == 1:
+                        ret_ty = AstType.init("Result")
+                        ret_ty.args.push(box_asttype(AstType.init("void")))
+                        ret_ty.args.push(box_asttype(hir_expr_type(hl.get(0))))
+                    elif method == "is_ok" or method == "is_err": ret_ty = AstType.init("bool")
                     elif method == "unwrap" or method == "ok":
                         if hobj_ty.args.len > 0: ret_ty = hobj_ty.args.get(0).read()
                         else: ret_ty = AstType.init("int")
@@ -5140,6 +5218,17 @@ extend Sema:
                             _gi5 = _gi5 + 1
                 elif self.enums.contains(hobj_ty.name):
                     ret_ty = AstType.init(hobj_ty.name)
+                    # Builtin generic enum ctors carry the payload's CONCRETE type so a
+                    # later `case Option.Some(v):` can bind `v` with the right type
+                    # (Option.Some(2.5) -> Option[float], Result.Err(e) -> Result[void, E]).
+                    if hobj_ty.name == "Option" and method == "Some" and hl.len == 1:
+                        ret_ty.args.push(box_asttype(hir_expr_type(hl.get(0))))
+                    elif hobj_ty.name == "Result" and method == "Ok" and hl.len == 1:
+                        ret_ty.args.push(box_asttype(hir_expr_type(hl.get(0))))
+                        ret_ty.args.push(box_asttype(AstType.init("void")))
+                    elif hobj_ty.name == "Result" and method == "Err" and hl.len == 1:
+                        ret_ty.args.push(box_asttype(AstType.init("void")))
+                        ret_ty.args.push(box_asttype(hir_expr_type(hl.get(0))))
                 elif self.classes.contains(hobj_ty.name):
                     mut _cls = self.classes.get(hobj_ty.name)
                     mut _hty_n = hobj_ty.name
@@ -5338,6 +5427,19 @@ extend Sema:
                     mut didx_args = Vec[Pointer[HirExpr]].init(1)
                     didx_args.push(self.lower_expr(idx_inner))
                     return box_hirexpr(HirExpr.EMethodCall(hexpr_obj, "get_index", didx_args, dval_ty))
+                # Tuple index t[i]: a CONSTANT index types the read as element #i's type
+                # (tuples are heterogeneous, so only literal indices are well-typed).
+                if obj_ty_n == "Tuple":
+                    mut tup_full = hir_expr_type(hexpr_obj)
+                    mut telem_ty = AstType.init("void")
+                    match idx_inner.read():
+                        case Expr.ELitInt(tup_ci):
+                            if tup_ci >= 0 and tup_ci < tup_full.args.len:
+                                telem_ty = tup_full.args.get(tup_ci).read()
+                        case _: pass
+                    mut tup_args = Vec[Pointer[HirExpr]].init(1)
+                    tup_args.push(self.lower_expr(idx_inner))
+                    return box_hirexpr(HirExpr.EMethodCall(hexpr_obj, "get_index", tup_args, telem_ty))
                 if not self.is_primitive_name(obj_ty_n) and obj_ty_n != "str" and obj_ty_n != "Pointer" and obj_ty_n != "List" and obj_ty_n != "Vec":
                     mut call_args = Vec[Pointer[HirExpr]].init(1)
                     call_args.push(self.lower_expr(idx_inner))
@@ -5397,6 +5499,19 @@ extend Sema:
                     list_ty.args = Vec[Pointer[AstType]].init(1)
                     list_ty.args.push(box_asttype(hir_expr_type(hitems.get(0))))
                 return box_hirexpr(HirExpr.EList(hitems, list_ty))
+            case Expr.ESet(items):
+                mut sitems = Vec[Pointer[HirExpr]].init(items.len)
+                mut sn = 0
+                while sn < items.len:
+                    sitems.push(self.lower_expr(items.get(sn)))
+                    sn = sn + 1
+                # Infer the element type from the first entry so `.len`/`in`/`.add`
+                # resolve to the right runtime (int-keyed _TrISet vs str _TrSet).
+                mut set_ty = AstType.init("Set")
+                if sitems.len > 0:
+                    set_ty.args = Vec[Pointer[AstType]].init(1)
+                    set_ty.args.push(box_asttype(hir_expr_type(sitems.get(0))))
+                return box_hirexpr(HirExpr.ESet(sitems, set_ty))
             case Expr.EClosure(params, ret_ty, body, is_async):
                 self.enter_scope()
                 mut cap_idx = self.scopes.len - 1   # the closure's OWN scope
@@ -5673,9 +5788,9 @@ extend Sema:
 
     # -- Rule N-1: Reserved name helpers ---------------------------------------
     pub def is_reserved_error(self, name: str) -> str:
-        if name == "true" or name == "True" or name == "gaskiya": return "built-in boolean constant 'true'"
-        if name == "false" or name == "False" or name == "karya": return "built-in boolean constant 'false'"
-        if name == "none" or name == "None" or name == "babu": return "built-in null constant 'none'"
+        if name == "true" or name == "True": return "built-in boolean constant 'true'"
+        if name == "false" or name == "False": return "built-in boolean constant 'false'"
+        if name == "none" or name == "None": return "built-in null constant 'none'"
         if name == "Some": return "built-in Option constructor 'Some'"
         if name == "Ok": return "built-in Result constructor 'Ok'"
         if name == "Err": return "built-in Result constructor 'Err'"
@@ -5688,8 +5803,8 @@ extend Sema:
     pub def is_reserved_keyword(self, name: str) -> str:
         if name == "print" or name == "input": return "built-in I/O function"
         if name == "range": return "built-in range function"
-        if name == "len" or name == "tsawon": return "built-in len function"
-        if name == "type" or name == "zuwa_rubutu": return "built-in type function"
+        if name == "len": return "built-in len function"
+        if name == "type": return "built-in type function"
         if name == "abs" or name == "max" or name == "min" or name == "sum": return "built-in math function"
         if name == "str" or name == "int" or name == "float" or name == "bool": return "built-in primitive type"
         if name == "List" or name == "Dict": return "built-in container type"

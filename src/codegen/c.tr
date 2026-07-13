@@ -1068,10 +1068,13 @@ pub class CGenerator:
         self.proto_buf  = self.mono_buf
         self.w(sig + ";\n")
         self.mono_buf = self.buf
-        # Body -> fn_mono_body (after prototypes).
-        self.buf        = self.fn_mono_body
-        self.struct_buf = self.fn_mono_body
-        self.proto_buf  = self.fn_mono_body
+        # Body -> an ISOLATED builder, appended to fn_mono_body only when COMPLETE.
+        # (Writing directly into fn_mono_body nested one mono's definition inside
+        # another's body when a generic called a generic — invalid C.)
+        mut mono_body_sb = StringBuilder.init(1024)
+        self.buf        = mono_body_sb
+        self.struct_buf = mono_body_sb
+        self.proto_buf  = mono_body_sb
         mut old_class = self.cur_class
         mut old_func = self.cur_func
         self.cur_class = ""
@@ -1092,7 +1095,7 @@ pub class CGenerator:
         self.w("}\n\n")
         self.cur_class = old_class
         self.cur_func = old_func
-        self.fn_mono_body = self.buf
+        self.fn_mono_body.append(mono_body_sb.to_string().as_str())
         self.buf = old_buf
         self.struct_buf = old_sbuf
         self.proto_buf = old_pbuf
@@ -1862,11 +1865,25 @@ pub class CGenerator:
             case HirExpr.EYield(expr, _):
                 return self.gen_expr(expr)
             case HirExpr.ESet(items, _):
-                mut set_ty = AstType.init("ptr")
-                if items.len > 0:
-                    mut first_ty_n: str = hir_expr_type(items.get(0)).name
-                    set_ty = AstType.init(first_ty_n)
-                return self.gen_list_literal(items, set_ty)
+                # Build a real hash set (int-keyed _TrISet or str-keyed _TrSet)
+                # rather than a List, so .len/.add/.contains/`in`/.remove resolve.
+                mut elem_n: str = "int"
+                if items.len > 0: elem_n = hir_expr_type(items.get(0)).name
+                mut is_istr: bool = elem_n == "str"
+                mut cap_s: str = items.len.to_str()
+                if is_istr:
+                    mut sb: str = "({ _TrSet* _tset = _tr_set_new(" + cap_s + "); "
+                    mut si = 0
+                    while si < items.len:
+                        sb = sb + "_tr_set_add(_tset, _tr_strz(" + self.gen_expr(items.get(si)) + ")); "
+                        si = si + 1
+                    return sb + "_tset; })"
+                mut ib: str = "({ _TrISet* _tset = _tr_iset_new(" + cap_s + "); "
+                mut ii = 0
+                while ii < items.len:
+                    ib = ib + "_tr_iset_add(_tset, (int64_t)(" + self.gen_expr(items.get(ii)) + ")); "
+                    ii = ii + 1
+                return ib + "_tset; })"
             case HirExpr.EListComp(element, generators, _):
                 return self.gen_list_comp(element, generators)
             case HirExpr.EGeneratorExpr(element, generators, _):
@@ -1993,6 +2010,26 @@ pub class CGenerator:
     # match-EXPRESSION -> statement-expression with a result temp. Each arm body
     # is a single SExpr(EDo); the matching arm assigns `_mres = ({arm-do})` (a raw
     # owned move — the do-block already produced an rc=1 owned value) and breaks.
+    # Typed binder for a builtin Option/Result payload: the payload slot is a void* box,
+    # so int/float/str payloads must UNBOX per the subject's type argument (bug #19 —
+    # `case Option.Some(fv)` with a float payload used to bind fv as a raw void*).
+    pub def opt_payload_binding(self, subj_hty: AstType, tn: str, vn: str, bind_c: str, slot: str) -> str:
+        mut pay_n = ""
+        if tn == "Option" and vn == "Some":
+            if subj_hty.args.len > 0: pay_n = self.resolve_generic_prim(subj_hty.args.get(0).read().name)
+        elif tn == "Result" and vn == "Ok":
+            if subj_hty.args.len > 0: pay_n = self.resolve_generic_prim(subj_hty.args.get(0).read().name)
+        elif tn == "Result" and vn == "Err":
+            if subj_hty.args.len > 1: pay_n = self.resolve_generic_prim(subj_hty.args.get(1).read().name)
+        if pay_n != "":
+            if _is_float_type(pay_n):
+                return "double " + bind_c + " = _tr_ptr_to_f64(" + slot + ");\n"
+            if _is_int_type(pay_n) or pay_n == "bool":
+                return "long long " + bind_c + " = (long long)(intptr_t)(" + slot + ");\n"
+            if _is_str_type(pay_n):
+                return "TrStr " + bind_c + " = _tr_str_retain(_tr_str_unbox(" + slot + "));\n"
+        return "__auto_type " + bind_c + " = " + slot + ";\n"
+
     pub def gen_match_expr(self, subj: Pointer[HirExpr], arms: Vec[HirMatchArm], ty: AstType) -> str:
         mut old_buf = self.buf
         self.buf = StringBuilder.init(256)
@@ -2012,7 +2049,7 @@ pub class CGenerator:
                 case Pattern.PLitBool(v):
                     if v: cond = subj_t
                     else: cond = "!" + subj_t
-                case Pattern.PLitStr(v): cond = "_tr_str_eq(" + subj_t + ", \"" + _escape_str_for_c(v) + "\")"
+                case Pattern.PLitStr(v): cond = "_tr_str_eq(_tr_strz(" + subj_t + "), \"" + _escape_str_for_c(v) + "\")"
                 case Pattern.PVariant(tn, vn):
                     mut pv_vn = vn
                     if tn == "Option" and (vn == "" or vn == "none"): pv_vn = "None"
@@ -2031,7 +2068,7 @@ pub class CGenerator:
                             if _ev.name == vn and _ev.fields.len > 0: actual_fld = _ev.fields.get(0).name
                             _vi = _vi + 1
                     self.decl_vars.insert(field, true)
-                    bindings = "__auto_type " + _safe_c_varname(field) + " = " + subj_t + ".data." + vn + "." + _safe_c_varname(actual_fld) + ";\n"
+                    bindings = self.opt_payload_binding(hir_expr_type(subj), tn, vn, _safe_c_varname(field), subj_t + ".data." + vn + "." + _safe_c_varname(actual_fld))
                 case Pattern.PVariantBindMany(tn, vn, fields):
                     cond = subj_t + ".tag == " + tn + "_" + vn
                     mut _bi = 0
@@ -2066,7 +2103,7 @@ pub class CGenerator:
                                 if tn == "Option" and (vn == "" or vn == "none"): or_vn = "None"
                                 pc = subj_t + ".tag == " + tn + "_" + or_vn
                             case Pattern.PLitInt(vi): pc = subj_t + " == " + vi.to_str() + "LL"
-                            case Pattern.PLitStr(vs): pc = "_tr_str_eq(" + subj_t + ", \"" + _escape_str_for_c(vs) + "\")"
+                            case Pattern.PLitStr(vs): pc = "_tr_str_eq(_tr_strz(" + subj_t + "), \"" + _escape_str_for_c(vs) + "\")"
                             case Pattern.PLitBool(bv):
                                 if bv: pc = subj_t
                                 else: pc = "!" + subj_t
@@ -2671,8 +2708,10 @@ pub class CGenerator:
     pub def gen_binop(self, op: str, l: Pointer[HirExpr], r: Pointer[HirExpr]) -> str:
         mut ls = self.gen_expr(l)
         mut rs = self.gen_expr(r)
-        mut lt_n: str = hir_expr_type(l).name
-        mut rt_n: str = hir_expr_type(r).name
+        # Inside a monomorphized generic body a `T`-typed operand must dispatch on its
+        # CONCRETE type (T=str -> _tr_str_cmp/concat, not raw C `>`/`+` on TrStr).
+        mut lt_n: str = self.resolve_generic_prim(hir_expr_type(l).name)
+        mut rt_n: str = self.resolve_generic_prim(hir_expr_type(r).name)
         if op == "+" and (_is_str_type(lt_n) or _is_str_type(rt_n)):
             # `_tr_str_wrap(...)` always produces a freshly-owned, unique
             # TrStr (rc=1, not aliased to any other variable) - e.g. from
@@ -2724,6 +2763,14 @@ pub class CGenerator:
                 if _in_int_key:
                     return "_tr_idict_contains(" + rs + ", " + ls + ")"
                 return "_tr_dict_contains(" + rs + ", " + self.strz(ls) + ")"
+            if rt_n == "Set":
+                # int-keyed set -> _tr_iset_contains; str-keyed set -> _tr_set_contains.
+                mut _in_sty = hir_expr_type(r)
+                mut _in_set_str = false
+                if _in_sty.args.len > 0 and _in_sty.args.get(0).read().name == "str": _in_set_str = true
+                if _in_set_str:
+                    return "_tr_set_contains(" + rs + ", " + self.strz(ls) + ")"
+                return "_tr_iset_contains(" + rs + ", (int64_t)(" + ls + "))"
             if self.has_method(rt_n, "__contains__"):
                 return self.cls_method_c_call(rt_n, "__contains__", rs, ls)
             return "_tr_contains(" + self.strz(rs) + ", " + self.strz(ls) + ")"
@@ -2959,6 +3006,15 @@ pub class CGenerator:
             return "exit(0)"
 
         # ord / chr - character conversions
+        if base_callee == "hex":
+            if args.len > 0: return self.wrapstr("_tr_hex_str((long long)(" + self.gen_expr(args.get(0)) + "))")
+            return self.wrapstr("_tr_hex_str(0)")
+        if base_callee == "oct":
+            if args.len > 0: return self.wrapstr("_tr_oct_str((long long)(" + self.gen_expr(args.get(0)) + "))")
+            return self.wrapstr("_tr_oct_str(0)")
+        if base_callee == "bin":
+            if args.len > 0: return self.wrapstr("_tr_bin_str((long long)(" + self.gen_expr(args.get(0)) + "))")
+            return self.wrapstr("_tr_bin_str(0)")
         if base_callee == "ord":
             if args.len > 0:
                 mut ord_t_n: str = hir_expr_type(args.get(0)).name
@@ -3504,6 +3560,25 @@ pub class CGenerator:
             if base_callee == "_tr_char_to_str" or base_callee == "_tr_char_to_str_alloc":
                 return self.wrapstr(_ext_call)
             return _ext_call
+        # User function: upcast any subclass instance passed where the parent is declared
+        # (parent fields are embedded FIRST, so (Parent*)child is layout-correct; C errors
+        # on the implicit pointer conversion without the cast).
+        if _bc_is_user_fn:
+            mut _uc_fdef = self.functions.get(base_callee)
+            mut _uc_casts = Vec[str].init(args.len)
+            mut _uc_any = false
+            mut _uci = 0
+            while _uci < args.len:
+                mut _uc_cast = ""
+                if _uci < _uc_fdef.params.len:
+                    mut _uc_pn = _uc_fdef.params.get(_uci).ty.name
+                    mut _uc_an = hir_expr_type(args.get(_uci)).name
+                    if self.classes.contains(_uc_pn) and _uc_an != _uc_pn and self._is_subclass_of(_uc_an, _uc_pn):
+                        _uc_cast = "(" + _uc_pn + "*)"
+                        _uc_any = true
+                _uc_casts.push(_uc_cast)
+                _uci = _uci + 1
+            if _uc_any: return callee_s + "(" + self.gen_args_casts(args, _uc_casts) + ")"
         return callee_s + "(" + self.gen_args(args) + ")"
 
     pub def gen_print_call(self, args: Vec[Pointer[HirExpr]]) -> str:
@@ -3522,6 +3597,16 @@ pub class CGenerator:
         return out
 
     # A single `print` argument formatted with `printf` and NO trailing newline.
+    # A C char* expression that is the string form of `arg` (for str.format() args).
+    pub def gen_to_cstr(self, arg: Pointer[HirExpr]) -> str:
+        mut tn: str = self.resolve_generic_prim(hir_expr_type(arg).name)
+        mut s: str = self.gen_expr(arg)
+        if _is_int_type(tn): return "_tr_int_to_str((long long)(" + s + "))"
+        if _is_float_type(tn): return "_tr_float_to_str((double)(" + s + "))"
+        if tn == "bool": return "((" + s + ") ? \"true\" : \"false\")"
+        if _is_str_type(tn): return self.strz(s)
+        return "_tr_strz(_TR_AUTO_STR(" + s + "))"
+
     pub def gen_print_one(self, arg: Pointer[HirExpr]) -> str:
         mut ty_n: str = self.resolve_generic_prim(hir_expr_type(arg).name)
         mut s: str = self.gen_expr(arg)
@@ -3722,6 +3807,25 @@ pub class CGenerator:
             case _: return false
 
     pub def gen_args(self, args: Vec[Pointer[HirExpr]]) -> str:
+        return self.gen_args_casts(args, Vec[str].init(0))
+
+    # True when `child` (transitively) extends `parent` (single-inheritance chain walk).
+    pub def _is_subclass_of(self, child: str, parent: str) -> bool:
+        mut cur = child
+        mut depth = 0
+        while depth < 32:
+            if not self.classes.contains(cur): return false
+            mut cdef = self.classes.get(cur)
+            if cdef.base_classes.len < 1: return false
+            cur = cdef.base_classes.get(0)
+            if cur == parent: return true
+            depth = depth + 1
+        return false
+
+    # gen_args with an optional per-argument C cast prefix (casts.get(i), "" = none) —
+    # used to upcast a subclass instance passed where the callee declares the parent
+    # (C requires the explicit (Parent*) cast; the struct-embedding layout makes it safe).
+    pub def gen_args_casts(self, args: Vec[Pointer[HirExpr]], casts: Vec[str]) -> str:
         mut s = ""
         mut i = 0
         while i < args.len:
@@ -3739,6 +3843,8 @@ pub class CGenerator:
                 self.wrap_obj_names.push(otmp)
                 self.wrap_obj_drops.push(self.obj_drop_fn(hir_expr_type(a).name))
                 a_s = otmp
+            if i < casts.len and casts.get(i) != "":
+                a_s = casts.get(i) + "(" + a_s + ")"
             s = s + a_s
             i = i + 1
         return s
@@ -3781,6 +3887,18 @@ pub class CGenerator:
         # aggregate decays to `T*` at element 0 — usable for buffer/DMA/bump-alloc interop.
         if t_n == "Array" and method == "as_ptr":
             return obj_s + ".data"
+
+        # Tuple index t[i] (constant index, typed by sema as the element's type): unbox
+        # the 8-byte slot per element type — str slots hold a boxed TrStr, float slots
+        # hold the f64 bit pattern (bug #16: this used to emit undefined Tuple_get_index).
+        if t_n == "Tuple" and (method == "get_index" or method == "get") and args.len == 1:
+            mut _tix_s = self.gen_expr(args.get(0))
+            mut _tslot = obj_s + ".data[" + _tix_s + "]"
+            if _is_str_type(call_ty.name):
+                return "_tr_str_retain(_tr_str_unbox((void*)(uintptr_t)" + _tslot + "))"
+            if _is_float_type(call_ty.name):
+                return "_tr_ptr_to_f64((void*)(uintptr_t)" + _tslot + ")"
+            return _tslot
 
         # Fallback: when HIR stores void for an EPropAccess type (cross-module field lookup),
         # recover the actual type from the parent class field declaration
@@ -4346,6 +4464,22 @@ pub class CGenerator:
             if method == "strip" or method == "trim": return self.wrapstr("_tr_str_strip(" + os + ")")
             if method == "trim_left": return self.wrapstr("_tr_str_trim_left(" + os + ")")
             if method == "trim_right": return self.wrapstr("_tr_str_trim_right(" + os + ")")
+            if method == "zfill" and args.len > 0:
+                return self.wrapstr("_tr_str_zfill(" + os + ", (long long)(" + self.gen_expr(args.get(0)) + "))")
+            if method == "chars":
+                return "_tr_str_chars(" + os + ")"
+            if method == "format":
+                mut _fa = "(const char*[]){"
+                if args.len == 0:
+                    _fa = _fa + "0"
+                else:
+                    mut _fi = 0
+                    while _fi < args.len:
+                        if _fi > 0: _fa = _fa + ", "
+                        _fa = _fa + self.gen_to_cstr(args.get(_fi))
+                        _fi = _fi + 1
+                _fa = _fa + "}"
+                return self.wrapstr("_tr_str_format(" + os + ", " + _fa + ", " + args.len.to_str() + "LL)")
             if method == "pad_left" and args.len > 0:
                 return self.wrapstr("_tr_str_pad_left(" + os + ", (long long)(" + self.gen_expr(args.get(0)) + "))")
             if method == "pad_right" and args.len > 0:
@@ -5002,7 +5136,7 @@ pub class CGenerator:
         return safe_method + "(" + obj_s + extra_args + ")"
 
     pub def gen_fstring(self, parts: Vec[HirFStringPart]) -> str:
-        if parts.len == 0: return "\"\""
+        if parts.len == 0: return "_tr_str_lit(\"\")"
         mut fmt = ""
         mut fargs = ""
         mut i = 0
@@ -5323,6 +5457,11 @@ pub class CGenerator:
                 # box's refcount. Without retaining, an auto-drop of `vname`
                 # could free data the (leaked) box's TrStr still points at.
                 self.w(pad + "TrStr " + vname + " = _tr_str_retain(_tr_str_unbox((void*)(uintptr_t)" + tmp + ".data[" + i.to_str() + "]));\n")
+            elif _is_float_type(elem_ty_n):
+                # Float slots hold the f64 BIT PATTERN (stored via _tr_f64_to_ptr):
+                # reinterpret the bits — an arithmetic (double) cast of the raw
+                # integer produced garbage like 4.6e+18.
+                self.w(pad + "double " + vname + " = _tr_ptr_to_f64((void*)(uintptr_t)" + tmp + ".data[" + i.to_str() + "]);\n")
             else:
                 self.w(pad + "long long " + vname + " = " + tmp + ".data[" + i.to_str() + "];\n")
             self.decl_vars.insert(names.get(i), true)
@@ -7273,7 +7412,7 @@ pub class CGenerator:
                             gcond = subj
                         else:
                             gcond = "!" + subj
-                    case Pattern.PLitStr(v):   gcond = "_tr_str_eq(" + subj + ", \"" + _escape_str_for_c(v) + "\")"
+                    case Pattern.PLitStr(v):   gcond = "_tr_str_eq(_tr_strz(" + subj + "), \"" + _escape_str_for_c(v) + "\")"
                     case Pattern.PVariant(tn, vn):
                         mut gpv = vn
                         if tn == "Option" and (vn == "" or vn == "none"): gpv = "None"
@@ -7292,7 +7431,7 @@ pub class CGenerator:
                                 if _gv.name == vn and _gv.fields.len > 0: gaf = _gv.fields.get(0).name
                                 _gvi = _gvi + 1
                         self.decl_vars.insert(field, true)
-                        gbindings = "__auto_type " + _safe_c_varname(field) + " = " + subj + ".data." + vn + "." + _safe_c_varname(gaf) + ";\n"
+                        gbindings = self.opt_payload_binding(hir_expr_type(expr), tn, vn, _safe_c_varname(field), subj + ".data." + vn + "." + _safe_c_varname(gaf))
                     case Pattern.PVariantBindMany(tn, vn, fields):
                         gcond = subj + ".tag == " + tn + "_" + vn
                         mut _gbi = 0
@@ -7342,7 +7481,7 @@ pub class CGenerator:
                 case Pattern.PLitBool(v):
                     if v: cond = subj
                     else: cond = "!" + subj
-                case Pattern.PLitStr(v): cond = "_tr_str_eq(" + subj + ", \"" + _escape_str_for_c(v) + "\")"
+                case Pattern.PLitStr(v): cond = "_tr_str_eq(_tr_strz(" + subj + "), \"" + _escape_str_for_c(v) + "\")"
                 case Pattern.PVariant(tn, vn):
                     mut pv_vn = vn
                     if tn == "Option" and (vn == "" or vn == "none"): pv_vn = "None"
@@ -7363,7 +7502,7 @@ pub class CGenerator:
                                 actual_fld = _ev.fields.get(0).name
                             _vi = _vi + 1
                     self.decl_vars.insert(field, true)
-                    bindings = "__auto_type " + _safe_c_varname(field) + " = " + subj + ".data." + vn + "." + _safe_c_varname(actual_fld) + ";\n"
+                    bindings = self.opt_payload_binding(hir_expr_type(expr), tn, vn, _safe_c_varname(field), subj + ".data." + vn + "." + _safe_c_varname(actual_fld))
                 case Pattern.PVariantBindMany(tn, vn, fields):
                     cond = subj + ".tag == " + tn + "_" + vn
                     mut _bi = 0
@@ -7399,7 +7538,7 @@ pub class CGenerator:
                                 if tn == "Option" and (vn == "" or vn == "none"): or_vn = "None"
                                 pc = subj + ".tag == " + tn + "_" + or_vn
                             case Pattern.PLitInt(vi): pc = subj + " == " + vi.to_str() + "LL"
-                            case Pattern.PLitStr(vs): pc = "_tr_str_eq(" + subj + ", \"" + _escape_str_for_c(vs) + "\")"
+                            case Pattern.PLitStr(vs): pc = "_tr_str_eq(_tr_strz(" + subj + "), \"" + _escape_str_for_c(vs) + "\")"
                             case Pattern.PLitBool(bv):
                                 if bv: pc = subj
                                 else: pc = "!" + subj
@@ -7407,6 +7546,11 @@ pub class CGenerator:
                                 pc = "1"
                                 self.decl_vars.insert(bn, true)
                                 bindings = bindings + "__auto_type " + _safe_c_varname(bn) + " = " + subj + ";\n"
+                            # Payload binds inside `|`: tag-only test (see match-stmt site).
+                            case Pattern.PVariantBind(tnb, vnb, _):
+                                pc = subj + ".tag == " + tnb + "_" + vnb
+                            case Pattern.PVariantBindMany(tnm, vnm, _):
+                                pc = subj + ".tag == " + tnm + "_" + vnm
                             case _: pc = "1"
                         if oi == 0: or_conds = pc
                         else: or_conds = or_conds + " || " + pc

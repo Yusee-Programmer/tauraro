@@ -1,0 +1,28 @@
+# native≡c differential corpus: list.swap, s.last_index_of, dict.get_or, int.pow.
+def main():
+    mut xs = [1, 2, 3, 4]
+    xs.swap(0, 3)
+    print(xs[0])                # 4
+    print(xs[3])                # 1
+
+    print("abcabc".last_index_of("b"))   # 4
+    print("abcabc".last_index_of("a"))   # 3
+    print("abcabc".last_index_of("z"))   # -1
+    print("hello".last_index_of("l"))    # 3
+
+    mut d = {"a": 1, "b": 2}
+    print(d.get_or("a", 99))    # 1
+    print(d.get_or("z", 99))    # 99
+    mut e = {10: 100, 20: 200}
+    print(e.get_or(10, -1))     # 100
+    print(e.get_or(30, -1))     # -1
+
+    print((2).pow(8))           # 256
+    print((3).pow(4))           # 81
+    print((5).pow(0))           # 1
+    print((10).pow(3))          # 1000
+
+    mut ss = ["x", "y", "z"]
+    ss.swap(0, 2)
+    print(ss[0])                # z
+    print(ss[2])                # x
