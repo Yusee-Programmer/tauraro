@@ -6588,6 +6588,8 @@ __attribute__((hot)) HirEnum* Sema_lower_enum(Sema* self, EnumDef* e) {
     /* pass */
     he->name = e->name;
     /* pass */
+    he->generics = e->generics;
+    /* pass */
     he->variants = hvariants;
     /* pass */
     he->methods = hmethods;
@@ -8464,6 +8466,17 @@ __auto_type field = _t533.data.PVariantBind.field;
         /* pass */
         AstType* fty = Sema_variant_field_ty(self, type_name, variant_name, 0LL);
         /* pass */
+        if ((((strcmp(_tr_strz(type_name), _tr_strz(_tr_str_lit("Option"))) == 0) && (strcmp(_tr_strz(variant_name), _tr_strz(_tr_str_lit("Some"))) == 0)) && (subj_ty->args->len > 0LL))) {
+            /* pass */
+            fty = (*((AstType**)List_ptr_get(subj_ty->args, 0LL)));
+        } else if ((((strcmp(_tr_strz(type_name), _tr_strz(_tr_str_lit("Result"))) == 0) && (strcmp(_tr_strz(variant_name), _tr_strz(_tr_str_lit("Ok"))) == 0)) && (subj_ty->args->len > 0LL))) {
+            /* pass */
+            fty = (*((AstType**)List_ptr_get(subj_ty->args, 0LL)));
+        } else if ((((strcmp(_tr_strz(type_name), _tr_strz(_tr_str_lit("Result"))) == 0) && (strcmp(_tr_strz(variant_name), _tr_strz(_tr_str_lit("Err"))) == 0)) && (subj_ty->args->len > 1LL))) {
+            /* pass */
+            fty = (*((AstType**)List_ptr_get(subj_ty->args, 1LL)));
+        }
+        /* pass */
         if ((strcmp(_tr_strz(fty->name), _tr_strz(_tr_str_lit("void"))) == 0)) {
             /* pass */
             fty = AstType_init(_tr_str_lit("int"));
@@ -10207,7 +10220,12 @@ __auto_type idx_arg = _t586.data.EIndex._tr_v_index;
             }
         } else if ((strcmp(_tr_strz(hobj_ty->name), _tr_strz(_tr_str_lit("Option"))) == 0)) {
             /* pass */
-            if (((strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("is_some"))) == 0) || (strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("is_none"))) == 0))) {
+            if (((strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("Some"))) == 0) && (hl->len == 1LL))) {
+                /* pass */
+                ret_ty = AstType_init(_tr_str_lit("Option"));
+                /* pass */
+                List_ptr_append(ret_ty->args, box_asttype(hir_expr_type(((HirExpr*)List_ptr_get(hl, 0LL)))));
+            } else if (((strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("is_some"))) == 0) || (strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("is_none"))) == 0))) {
                 /* pass */
                 ret_ty = AstType_init(_tr_str_lit("bool"));
             } else if (((strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("unwrap"))) == 0) || (strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("expect"))) == 0))) {
@@ -10234,7 +10252,21 @@ __auto_type idx_arg = _t586.data.EIndex._tr_v_index;
             }
         } else if ((strcmp(_tr_strz(hobj_ty->name), _tr_strz(_tr_str_lit("Result"))) == 0)) {
             /* pass */
-            if (((strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("is_ok"))) == 0) || (strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("is_err"))) == 0))) {
+            if (((strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("Ok"))) == 0) && (hl->len == 1LL))) {
+                /* pass */
+                ret_ty = AstType_init(_tr_str_lit("Result"));
+                /* pass */
+                List_ptr_append(ret_ty->args, box_asttype(hir_expr_type(((HirExpr*)List_ptr_get(hl, 0LL)))));
+                /* pass */
+                List_ptr_append(ret_ty->args, box_asttype(AstType_init(_tr_str_lit("void"))));
+            } else if (((strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("Err"))) == 0) && (hl->len == 1LL))) {
+                /* pass */
+                ret_ty = AstType_init(_tr_str_lit("Result"));
+                /* pass */
+                List_ptr_append(ret_ty->args, box_asttype(AstType_init(_tr_str_lit("void"))));
+                /* pass */
+                List_ptr_append(ret_ty->args, box_asttype(hir_expr_type(((HirExpr*)List_ptr_get(hl, 0LL)))));
+            } else if (((strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("is_ok"))) == 0) || (strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("is_err"))) == 0))) {
                 /* pass */
                 ret_ty = AstType_init(_tr_str_lit("bool"));
             } else if (((strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("unwrap"))) == 0) || (strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("ok"))) == 0))) {
@@ -10483,6 +10515,21 @@ __auto_type idx_arg = _t586.data.EIndex._tr_v_index;
         } else if (_tr_dict_contains(self->enums, _tr_strz(hobj_ty->name))) {
             /* pass */
             ret_ty = AstType_init(hobj_ty->name);
+            /* pass */
+            if ((((strcmp(_tr_strz(hobj_ty->name), _tr_strz(_tr_str_lit("Option"))) == 0) && (strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("Some"))) == 0)) && (hl->len == 1LL))) {
+                /* pass */
+                List_ptr_append(ret_ty->args, box_asttype(hir_expr_type(((HirExpr*)List_ptr_get(hl, 0LL)))));
+            } else if ((((strcmp(_tr_strz(hobj_ty->name), _tr_strz(_tr_str_lit("Result"))) == 0) && (strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("Ok"))) == 0)) && (hl->len == 1LL))) {
+                /* pass */
+                List_ptr_append(ret_ty->args, box_asttype(hir_expr_type(((HirExpr*)List_ptr_get(hl, 0LL)))));
+                /* pass */
+                List_ptr_append(ret_ty->args, box_asttype(AstType_init(_tr_str_lit("void"))));
+            } else if ((((strcmp(_tr_strz(hobj_ty->name), _tr_strz(_tr_str_lit("Result"))) == 0) && (strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("Err"))) == 0)) && (hl->len == 1LL))) {
+                /* pass */
+                List_ptr_append(ret_ty->args, box_asttype(AstType_init(_tr_str_lit("void"))));
+                /* pass */
+                List_ptr_append(ret_ty->args, box_asttype(hir_expr_type(((HirExpr*)List_ptr_get(hl, 0LL)))));
+            }
         } else if (_tr_dict_contains(self->classes, _tr_strz(hobj_ty->name))) {
             /* pass */
             ClassDef* _cls = ((ClassDef*)(uintptr_t)_tr_dict_get(self->classes, _tr_strz(hobj_ty->name)));
@@ -10902,6 +10949,34 @@ __auto_type idx_inner = _t537.data.EIndex._tr_v_index;
             return box_hirexpr(HirExpr_ctor_EMethodCall(hexpr_obj, _tr_str_lit("get_index"), didx_args, dval_ty));
         }
         /* pass */
+        if ((strcmp(_tr_strz(obj_ty_n), _tr_strz(_tr_str_lit("Tuple"))) == 0)) {
+            /* pass */
+            AstType* tup_full = hir_expr_type(hexpr_obj);
+            /* pass */
+            AstType* telem_ty = AstType_init(_tr_str_lit("void"));
+            /* pass */
+            __auto_type _t602 = (*idx_inner);
+            if (_t602.tag == Expr_ELitInt) {
+                __auto_type tup_ci = _t602.data.ELitInt.val;
+                /* pass */
+                if (((tup_ci >= 0LL) && (tup_ci < tup_full->args->len))) {
+                    /* pass */
+                    telem_ty = (*((AstType**)List_ptr_get(tup_full->args, tup_ci)));
+                }
+            } else if (1) {
+                __auto_type _ = _t602;
+                /* pass */
+            }
+            /* pass */
+            List_ptr* tup_args = (void*)List_ptr_new();
+            /* pass */
+            List_ptr_append(tup_args, Sema_lower_expr(self, idx_inner));
+            /* pass */
+            _tr_str_release(obj_name);
+            _tr_str_release(generic_arg_n);
+            return box_hirexpr(HirExpr_ctor_EMethodCall(hexpr_obj, _tr_str_lit("get_index"), tup_args, telem_ty));
+        }
+        /* pass */
         if ((((((!Sema_is_primitive_name(self, obj_ty_n)) && (strcmp(_tr_strz(obj_ty_n), _tr_strz(_tr_str_lit("str"))) != 0)) && (strcmp(_tr_strz(obj_ty_n), _tr_strz(_tr_str_lit("Pointer"))) != 0)) && (strcmp(_tr_strz(obj_ty_n), _tr_strz(_tr_str_lit("List"))) != 0)) && (strcmp(_tr_strz(obj_ty_n), _tr_strz(_tr_str_lit("Vec"))) != 0))) {
             /* pass */
             List_ptr* call_args = (void*)List_ptr_new();
@@ -11313,7 +11388,7 @@ __auto_type we_else = _t537.data.EWhileExpr.else_body;
         /* pass */
         if ((!self->in_async_fn)) {
             /* pass */
-            ({ TrStr _at_t602 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("[C-4] 'await' used outside an async function. FIX: Declare '")), _tr_strz(self->current_func_name))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("' as 'async def "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(self->current_func_name)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("(...)' to use await inside it."))); _tr_str_release(_cl); _cres; })); Sema_error(self, _at_t602); _tr_str_release(_at_t602); });
+            ({ TrStr _at_t603 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("[C-4] 'await' used outside an async function. FIX: Declare '")), _tr_strz(self->current_func_name))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("' as 'async def "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(self->current_func_name)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("(...)' to use await inside it."))); _tr_str_release(_cl); _cres; })); Sema_error(self, _at_t603); _tr_str_release(_at_t603); });
         }
         /* pass */
         HirExpr* hinner_await = Sema_lower_expr(self, inner_await);
@@ -11538,9 +11613,9 @@ __auto_type args = _t537.data.ESuperMethodCall.args;
                 /* pass */
                 if ((cur_cls->base_classes->len > 0LL)) {
                     /* pass */
-                    TrStr _strtmp_t603 = List_TrStr_get(cur_cls->base_classes, 0LL);
+                    TrStr _strtmp_t604 = List_TrStr_get(cur_cls->base_classes, 0LL);
                     _tr_str_release(resolved_base);
-                    resolved_base = _strtmp_t603;
+                    resolved_base = _strtmp_t604;
                 }
             }
         }
@@ -11582,9 +11657,9 @@ __auto_type prop = _t537.data.ESuperPropAccess.prop;
                 /* pass */
                 if ((cur_cls2->base_classes->len > 0LL)) {
                     /* pass */
-                    TrStr _strtmp_t604 = List_TrStr_get(cur_cls2->base_classes, 0LL);
+                    TrStr _strtmp_t605 = List_TrStr_get(cur_cls2->base_classes, 0LL);
                     _tr_str_release(resolved_base2);
-                    resolved_base2 = _strtmp_t604;
+                    resolved_base2 = _strtmp_t605;
                 }
             }
         }
@@ -11730,12 +11805,12 @@ __attribute__((hot)) bool Sema_block_returns(Sema* self, Block* b) {
             /* pass */
             bool is_sline = false;
             /* pass */
-            __auto_type _t605 = (*sl_s);
-            if (_t605.tag == Stmt_SLine) {
-                __auto_type _ = _t605.data.SLine.n;
+            __auto_type _t606 = (*sl_s);
+            if (_t606.tag == Stmt_SLine) {
+                __auto_type _ = _t606.data.SLine.n;
                 is_sline = true;
             } else if (1) {
-                __auto_type _ = _t605;
+                __auto_type _ = _t606;
                 /* pass */
             }
             /* pass */
@@ -11756,21 +11831,21 @@ __attribute__((hot)) bool Sema_block_returns(Sema* self, Block* b) {
         return false;
     }
     /* pass */
-    __auto_type _t606 = (*last_s);
-    if (_t606.tag == Stmt_SReturn) {
-        __auto_type _ = _t606.data.SReturn.val;
+    __auto_type _t607 = (*last_s);
+    if (_t607.tag == Stmt_SReturn) {
+        __auto_type _ = _t607.data.SReturn.val;
         return true;
-    } else if (_t606.tag == Stmt_SRaise) {
-        __auto_type _ = _t606.data.SRaise.val;
+    } else if (_t607.tag == Stmt_SRaise) {
+        __auto_type _ = _t607.data.SRaise.val;
         return true;
-    } else if (_t606.tag == Stmt_SUnsafe) {
-        __auto_type body = _t606.data.SUnsafe.body;
+    } else if (_t607.tag == Stmt_SUnsafe) {
+        __auto_type body = _t607.data.SUnsafe.body;
         return Sema_block_returns(self, body);
-    } else if (_t606.tag == Stmt_SIf) {
-        __auto_type cond = _t606.data.SIf.cond;
-__auto_type then_b = _t606.data.SIf.then_b;
-__auto_type elifs = _t606.data.SIf.elifs;
-__auto_type else_b = _t606.data.SIf.else_b;
+    } else if (_t607.tag == Stmt_SIf) {
+        __auto_type cond = _t607.data.SIf.cond;
+__auto_type then_b = _t607.data.SIf.then_b;
+__auto_type elifs = _t607.data.SIf.elifs;
+__auto_type else_b = _t607.data.SIf.else_b;
         /* pass */
         if ((else_b->stmts->len == 0LL)) {
             /* pass */
@@ -11778,9 +11853,9 @@ __auto_type else_b = _t606.data.SIf.else_b;
         }
         /* pass */
         return (Sema_block_returns(self, then_b) && Sema_block_returns(self, else_b));
-    } else if (_t606.tag == Stmt_SMatch) {
-        __auto_type subj = _t606.data.SMatch.expr;
-__auto_type arms = _t606.data.SMatch.arms;
+    } else if (_t607.tag == Stmt_SMatch) {
+        __auto_type subj = _t607.data.SMatch.expr;
+__auto_type arms = _t607.data.SMatch.arms;
         /* pass */
         bool has_wild = false;
         /* pass */
@@ -11792,14 +11867,14 @@ __auto_type arms = _t606.data.SMatch.arms;
             /* pass */
             MatchArm* arm = ((MatchArm*)List_ptr_get(arms, mi));
             /* pass */
-            __auto_type _t607 = arm->pat;
-            if (_t607.tag == Pattern_PWild) {
+            __auto_type _t608 = arm->pat;
+            if (_t608.tag == Pattern_PWild) {
                 has_wild = true;
-            } else if (_t607.tag == Pattern_PBind) {
-                __auto_type _ = _t607.data.PBind.name;
+            } else if (_t608.tag == Pattern_PBind) {
+                __auto_type _ = _t608.data.PBind.name;
                 has_wild = true;
             } else if (1) {
-                __auto_type _ = _t607;
+                __auto_type _ = _t608;
                 /* pass */
             }
             /* pass */
@@ -11816,7 +11891,7 @@ __auto_type arms = _t606.data.SMatch.arms;
         /* pass */
         return (has_wild && all_ret);
     } else if (1) {
-        __auto_type _ = _t606;
+        __auto_type _ = _t607;
         return false;
     }
 }
@@ -11888,25 +11963,25 @@ __attribute__((hot)) bool _expr_is_self_field(Expr* e) {
         return false;
     }
     /* pass */
-    __auto_type _t608 = (*e);
-    if (_t608.tag == Expr_EPropAccess) {
-        __auto_type obj = _t608.data.EPropAccess.obj;
+    __auto_type _t609 = (*e);
+    if (_t609.tag == Expr_EPropAccess) {
+        __auto_type obj = _t609.data.EPropAccess.obj;
         /* pass */
         if ((((unsigned long long)(obj)) == ((unsigned long long)(0LL)))) {
             /* pass */
             return false;
         }
         /* pass */
-        __auto_type _t609 = (*obj);
-        if (_t609.tag == Expr_EIdent) {
-            __auto_type nm = _t609.data.EIdent.name;
+        __auto_type _t610 = (*obj);
+        if (_t610.tag == Expr_EIdent) {
+            __auto_type nm = _t610.data.EIdent.name;
             return (strcmp(_tr_strz(nm), _tr_strz(_tr_str_lit("self"))) == 0);
         } else if (1) {
-            __auto_type _ = _t609;
+            __auto_type _ = _t610;
             return false;
         }
     } else if (1) {
-        __auto_type _ = _t608;
+        __auto_type _ = _t609;
         return false;
     }
 }
@@ -11967,14 +12042,14 @@ __attribute__((hot)) bool _stmt_mutates_self(Stmt* s) {
         return false;
     }
     /* pass */
-    __auto_type _t610 = (*s);
-    if (_t610.tag == Stmt_SAssign) {
-        __auto_type tgt = _t610.data.SAssign.target;
+    __auto_type _t611 = (*s);
+    if (_t611.tag == Stmt_SAssign) {
+        __auto_type tgt = _t611.data.SAssign.target;
         return _expr_is_self_field(tgt);
-    } else if (_t610.tag == Stmt_SIf) {
-        __auto_type then_b = _t610.data.SIf.then_b;
-__auto_type elifs = _t610.data.SIf.elifs;
-__auto_type else_b = _t610.data.SIf.else_b;
+    } else if (_t611.tag == Stmt_SIf) {
+        __auto_type then_b = _t611.data.SIf.then_b;
+__auto_type elifs = _t611.data.SIf.elifs;
+__auto_type else_b = _t611.data.SIf.else_b;
         /* pass */
         if (_block_mutates_self(then_b)) {
             /* pass */
@@ -11994,29 +12069,29 @@ __auto_type else_b = _t610.data.SIf.else_b;
         }
         /* pass */
         return _block_mutates_self(else_b);
-    } else if (_t610.tag == Stmt_SWhile) {
-        __auto_type body = _t610.data.SWhile.body;
+    } else if (_t611.tag == Stmt_SWhile) {
+        __auto_type body = _t611.data.SWhile.body;
         return _block_mutates_self(body);
-    } else if (_t610.tag == Stmt_SFor) {
-        __auto_type body = _t610.data.SFor.body;
+    } else if (_t611.tag == Stmt_SFor) {
+        __auto_type body = _t611.data.SFor.body;
         return _block_mutates_self(body);
-    } else if (_t610.tag == Stmt_SForUnpack) {
-        __auto_type body = _t610.data.SForUnpack.body;
+    } else if (_t611.tag == Stmt_SForUnpack) {
+        __auto_type body = _t611.data.SForUnpack.body;
         return _block_mutates_self(body);
-    } else if (_t610.tag == Stmt_SUnsafe) {
-        __auto_type body = _t610.data.SUnsafe.body;
+    } else if (_t611.tag == Stmt_SUnsafe) {
+        __auto_type body = _t611.data.SUnsafe.body;
         return _block_mutates_self(body);
-    } else if (_t610.tag == Stmt_SWith) {
-        __auto_type body = _t610.data.SWith.body;
+    } else if (_t611.tag == Stmt_SWith) {
+        __auto_type body = _t611.data.SWith.body;
         return _block_mutates_self(body);
-    } else if (_t610.tag == Stmt_STaskGroup) {
-        __auto_type body = _t610.data.STaskGroup.body;
+    } else if (_t611.tag == Stmt_STaskGroup) {
+        __auto_type body = _t611.data.STaskGroup.body;
         return _block_mutates_self(body);
-    } else if (_t610.tag == Stmt_SGpuBlock) {
-        __auto_type body = _t610.data.SGpuBlock.body;
+    } else if (_t611.tag == Stmt_SGpuBlock) {
+        __auto_type body = _t611.data.SGpuBlock.body;
         return _block_mutates_self(body);
-    } else if (_t610.tag == Stmt_SMatch) {
-        __auto_type arms = _t610.data.SMatch.arms;
+    } else if (_t611.tag == Stmt_SMatch) {
+        __auto_type arms = _t611.data.SMatch.arms;
         /* pass */
         long long i = 0LL;
         /* pass */
@@ -12031,10 +12106,10 @@ __auto_type else_b = _t610.data.SIf.else_b;
         }
         /* pass */
         return false;
-    } else if (_t610.tag == Stmt_STry) {
-        __auto_type try_body = _t610.data.STry.try_body;
-__auto_type catches = _t610.data.STry.catches;
-__auto_type finally_b = _t610.data.STry.finally_b;
+    } else if (_t611.tag == Stmt_STry) {
+        __auto_type try_body = _t611.data.STry.try_body;
+__auto_type catches = _t611.data.STry.catches;
+__auto_type finally_b = _t611.data.STry.finally_b;
         /* pass */
         if (_block_mutates_self(try_body)) {
             /* pass */
@@ -12054,11 +12129,11 @@ __auto_type finally_b = _t610.data.STry.finally_b;
         }
         /* pass */
         return _block_mutates_self(finally_b);
-    } else if (_t610.tag == Stmt_SDefer) {
-        __auto_type inner = _t610.data.SDefer.stmt;
+    } else if (_t611.tag == Stmt_SDefer) {
+        __auto_type inner = _t611.data.SDefer.stmt;
         return _stmt_mutates_self(inner);
     } else if (1) {
-        __auto_type _ = _t610;
+        __auto_type _ = _t611;
         return false;
     }
 }
