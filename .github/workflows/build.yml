@@ -354,7 +354,12 @@ jobs:
         if: runner.os == 'Linux'
         shell: bash
         run: |
-          command -v clang >/dev/null 2>&1 || command -v llc >/dev/null 2>&1 || sudo apt-get install -y --no-install-recommends clang || true
+          # Opaque pointers need LLVM >= 15 (ubuntu-22.04-arm's default clang is 14):
+          # install clang-15 as a fallback so ARM64 gets real LLVM coverage too.
+          V="$(clang --version 2>/dev/null | grep -oE 'clang version [0-9]+' | grep -oE '[0-9]+' | head -1 || true)"
+          if [ -z "$V" ] || [ "$V" -lt 15 ]; then
+            sudo apt-get install -y --no-install-recommends clang-15 || sudo apt-get install -y --no-install-recommends clang || true
+          fi
           TAURAROC=./tauraroc${{ matrix.ext }} bash scripts/llvm_run.sh
 
       # Differential oracle: every tests/native/*.tr compiled by BOTH the C backend and the
