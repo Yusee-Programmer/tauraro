@@ -686,6 +686,8 @@ __attribute__((hot)) void _register_classes(LModule* m, HirProgram* prog) {
                 /* pass */
                 m->ok = false;
                 /* pass */
+                m->fail_note = ({ TrStr _cl = (({ TrStr _cr = (_own(((HirClass*)List_ptr_get(prog->classes, i))->name)); TrStr _cres = _tr_strx_concat(_tr_strz(_tr_str_lit("class '")), _cr.data); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("': field-tag registration diverged"))); _tr_str_release(_cl); _cres; });
+                /* pass */
                 _tr_obj_release(opt, _trdrop_EnumLayout);
                 _tr_obj_release(opt_some, _trdrop_VariantLayout);
                 _tr_obj_release(res, _trdrop_EnumLayout);
@@ -812,6 +814,8 @@ __attribute__((hot)) LModule* lower_to_lir(HirProgram* prog) {
         if ((!_register_global(m, ((HirStmt*)List_ptr_get(prog->top_level_stmts, ti))))) {
             /* pass */
             m->ok = false;
+            /* pass */
+            m->fail_note = _tr_str_lit("unsupported top-level statement");
             /* pass */
             return m;
         }
@@ -1083,6 +1087,8 @@ __attribute__((hot)) void _lir_lower_method(LModule* m, TrStr class_name, HirFun
             /* pass */
             m->ok = false;
             /* pass */
+            m->fail_note = ({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cr = (_own(class_name)); TrStr _cres = _tr_strx_concat(_tr_strz(_tr_str_lit("method '")), _cr.data); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("."))); _tr_str_release(_cl); _cres; })); TrStr _cr = (_own(f->name)); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("': unsupported param type"))); _tr_str_release(_cl); _cres; });
+            /* pass */
             _tr_obj_release(lf, _trdrop_LFunc);
             return;
         }
@@ -1109,6 +1115,8 @@ __attribute__((hot)) void _lir_lower_method(LModule* m, TrStr class_name, HirFun
     if ((!lower_block(m, lf, f->body))) {
         /* pass */
         m->ok = false;
+        /* pass */
+        m->fail_note = ({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cr = (_own(class_name)); TrStr _cres = _tr_strx_concat(_tr_strz(_tr_str_lit("method '")), _cr.data); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("."))); _tr_str_release(_cl); _cres; })); TrStr _cr = (_own(f->name)); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("': body uses an unsupported construct"))); _tr_str_release(_cl); _cres; });
         /* pass */
         _tr_obj_release(lf, _trdrop_LFunc);
         return;
@@ -1276,6 +1284,8 @@ __attribute__((hot)) void _lir_lower_function(LModule* m, HirFunction* f) {
                 /* pass */
                 m->ok = false;
                 /* pass */
+                m->fail_note = ({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cr = (_own(f->name)); TrStr _cres = _tr_strx_concat(_tr_strz(_tr_str_lit("fn '")), _cr.data); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("': unsupported param type '"))); _tr_str_release(_cl); _cres; })); TrStr _cr = (_own(p->ty->name)); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("'"))); _tr_str_release(_cl); _cres; });
+                /* pass */
                 _tr_obj_release(lf, _trdrop_LFunc);
                 return;
             }
@@ -1318,6 +1328,8 @@ __attribute__((hot)) void _lir_lower_function(LModule* m, HirFunction* f) {
     if ((!lower_block(m, lf, f->body))) {
         /* pass */
         m->ok = false;
+        /* pass */
+        m->fail_note = ({ TrStr _cl = (({ TrStr _cr = (_own(f->name)); TrStr _cres = _tr_strx_concat(_tr_strz(_tr_str_lit("fn '")), _cr.data); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("': body uses an unsupported construct"))); _tr_str_release(_cl); _cres; });
         /* pass */
         _tr_obj_release(lf, _trdrop_LFunc);
         return;

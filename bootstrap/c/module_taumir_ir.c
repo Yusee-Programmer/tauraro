@@ -386,6 +386,8 @@ __attribute__((malloc,returns_nonnull,hot)) LModule* LModule_init() {
     /* pass */
     m->ok = true;
     /* pass */
+    m->fail_note = _tr_str_lit("");
+    /* pass */
     return m;
 }
 

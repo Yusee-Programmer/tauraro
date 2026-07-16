@@ -18,11 +18,13 @@ from codegen.llvm.emit import LlvmEmitter
 
 pub class LlvmGenerator:
     pub ok: bool          # false after generate() if the program wasn't fully lowerable
+    pub fail_note: str    # why lowering fell back ("" = n/a) — for driver diagnostics
 
 extend LlvmGenerator:
     pub def init() -> LlvmGenerator:
         mut g = LlvmGenerator()
         g.ok = true
+        g.fail_note = ""
         return g
 
     # Lower `prog` to LIR and emit LLVM IR text. Returns "" (and sets ok=false) when the
@@ -32,6 +34,7 @@ extend LlvmGenerator:
         mut m = lower_to_lir(prog)
         if not m.ok:
             self.ok = false
+            self.fail_note = m.fail_note
             return ""
         self.ok = true
         mut e = LlvmEmitter.init(m)

@@ -2987,6 +2987,7 @@ typedef struct LModule {
     List_ptr* global_inits;
     HirProgram* hir_prog;
     bool ok;
+    TrStr fail_note;
 } LModule;
 static void _trdrop_LModule(void* vp) {
     LModule* self = (LModule*)vp; (void)self;
@@ -3002,6 +3003,7 @@ static void _trdrop_LModule(void* vp) {
     List_i64_free(self->global_types);
     List_ptr_free(self->global_inits);
     _tr_obj_release(self->hir_prog, _trdrop_HirProgram);
+    _tr_str_release(self->fail_note);
 }
 #endif
 
@@ -3029,9 +3031,11 @@ static void _trdrop_LlvmEmitter(void* vp) {
 typedef struct LlvmGenerator {
     size_t __rc;
     bool ok;
+    TrStr fail_note;
 } LlvmGenerator;
 static void _trdrop_LlvmGenerator(void* vp) {
     LlvmGenerator* self = (LlvmGenerator*)vp; (void)self;
+    _tr_str_release(self->fail_note);
 }
 #endif
 
@@ -3113,10 +3117,12 @@ typedef struct NativeGenerator {
     size_t __rc;
     TrStr target;
     bool ready;
+    TrStr fail_note;
 } NativeGenerator;
 static void _trdrop_NativeGenerator(void* vp) {
     NativeGenerator* self = (NativeGenerator*)vp; (void)self;
     _tr_str_release(self->target);
+    _tr_str_release(self->fail_note);
 }
 #endif
 

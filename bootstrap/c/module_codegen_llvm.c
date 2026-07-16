@@ -7,6 +7,8 @@ __attribute__((malloc,returns_nonnull,hot)) LlvmGenerator* LlvmGenerator_init() 
     /* pass */
     g->ok = true;
     /* pass */
+    g->fail_note = _tr_str_lit("");
+    /* pass */
     return g;
 }
 
@@ -17,6 +19,8 @@ __attribute__((hot)) TrStr LlvmGenerator_generate(LlvmGenerator* self, HirProgra
     if ((!m->ok)) {
         /* pass */
         self->ok = false;
+        /* pass */
+        self->fail_note = m->fail_note;
         /* pass */
         _tr_obj_release(m, _trdrop_LModule);
         return _tr_str_lit("");

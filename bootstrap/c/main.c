@@ -2298,6 +2298,11 @@ __attribute__((hot)) int main(int argc, char** argv) {
             /* pass */
             ({ printf("%s", _tr_strz(({ TrStr _cl = (c_red(_tr_str_lit("error"))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(": the LLVM backend can't lower this program yet"))); _tr_str_release(_cl); _cres; }))); printf("\n"); });
             /* pass */
+            if ((strcmp(_tr_strz(llvm_gen->fail_note), _tr_strz(_tr_str_lit(""))) != 0)) {
+                /* pass */
+                ({ printf("%s", _tr_strz(_tr_strx_concat(_tr_strz(_tr_str_lit("       reason: ")), _tr_strz(llvm_gen->fail_note)))); printf("\n"); });
+            }
+            /* pass */
             ({ printf("%s", _tr_strz(_tr_str_lit("       (it shares the native backend's feature subset). Use --backend c (default)."))); printf("\n"); });
             /* pass */
             exit((int)(2LL));
@@ -2356,6 +2361,11 @@ __attribute__((hot)) int main(int argc, char** argv) {
         if ((!NativeGenerator_emit_object(nat_gen, hir, nat_out))) {
             /* pass */
             ({ printf("%s", _tr_strz(({ TrStr _cl = (c_red(_tr_str_lit("error"))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(": the native backend (--backend native) is not implemented yet"))); _tr_str_release(_cl); _cres; }))); printf("\n"); });
+            /* pass */
+            if ((strcmp(_tr_strz(nat_gen->fail_note), _tr_strz(_tr_str_lit(""))) != 0)) {
+                /* pass */
+                ({ printf("%s", _tr_strz(_tr_strx_concat(_tr_strz(_tr_str_lit("       reason: ")), _tr_strz(nat_gen->fail_note)))); printf("\n"); });
+            }
             /* pass */
             ({ printf("%s", _tr_strz(_tr_str_lit("       it is under construction (x86-64/ELF). Use --backend c (default) or --backend llvm for now."))); printf("\n"); });
             /* pass */

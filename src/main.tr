@@ -986,6 +986,7 @@ pub def main(args: Vec[str]):
         mut llvm_ir = llvm_gen.generate(hir)
         if not llvm_gen.ok:
             print(c_red("error") + ": the LLVM backend can't lower this program yet")
+            if llvm_gen.fail_note != "": print("       reason: " + llvm_gen.fail_note)
             print("       (it shares the native backend's feature subset). Use --backend c (default).")
             _tr_exit(2)
         if output_path == "":
@@ -1003,6 +1004,7 @@ pub def main(args: Vec[str]):
         if nat_out == "": nat_out = strip_extension(input_path) + ".o"
         if not nat_gen.emit_object(hir, nat_out):
             print(c_red("error") + ": the native backend (--backend native) is not implemented yet")
+            if nat_gen.fail_note != "": print("       reason: " + nat_gen.fail_note)
             print("       it is under construction (x86-64/ELF). Use --backend c (default) or --backend llvm for now.")
             _tr_exit(2)
         if verbose: print("[4/5] native object written to " + nat_out)

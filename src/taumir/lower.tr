@@ -290,6 +290,7 @@ def _register_classes(m: LModule, prog: HirProgram):
             mut lay2 = m.classes.get(li)
             if not _push_field_tags_rec(m, prog, i, lay2, 0):
                 m.ok = false                     # pass-1/pass-2 divergence: impossible, but never mislay
+                m.fail_note = "class '" + _own(prog.classes.get(i).name) + "': field-tag registration diverged"
                 return
         i = i + 1
     ei = 0
@@ -352,6 +353,7 @@ pub def lower_to_lir(prog: HirProgram) -> LModule:
     while ti < prog.top_level_stmts.len:
         if not _register_global(m, prog.top_level_stmts.get(ti)):
             m.ok = false
+            m.fail_note = "unsupported top-level statement"
             return m
         ti = ti + 1
     i = 0
@@ -476,6 +478,7 @@ def _lir_lower_method(m: LModule, class_name: str, f: HirFunction):
             ptag = _tag_of(m, p.ty)
         if ptag < 0:
             m.ok = false
+            m.fail_note = "method '" + _own(class_name) + "." + _own(f.name) + "': unsupported param type"
             return
         lf.params.push(p.name)
         lf.add_var(p.name)
@@ -488,6 +491,7 @@ def _lir_lower_method(m: LModule, class_name: str, f: HirFunction):
     lf.set_cur(lf.new_block())
     if not lower_block(m, lf, f.body):
         m.ok = false
+        m.fail_note = "method '" + _own(class_name) + "." + _own(f.name) + "': body uses an unsupported construct"
         return
     lf.set_term(LTerm.TRetInt(0))
     m.funcs.push(lf)
@@ -553,6 +557,7 @@ def _lir_lower_function(m: LModule, f: HirFunction):
             mut ptag = _tag_of(m, p.ty)
             if ptag < 0:                       # unsupported param type -> fall back to C
                 m.ok = false
+                m.fail_note = "fn '" + _own(f.name) + "': unsupported param type '" + _own(p.ty.name) + "'"
                 return
             lf.params.push(p.name)
             lf.add_var(p.name)
@@ -570,6 +575,7 @@ def _lir_lower_function(m: LModule, f: HirFunction):
             gi = gi + 1
     if not lower_block(m, lf, f.body):
         m.ok = false
+        m.fail_note = "fn '" + _own(f.name) + "': body uses an unsupported construct"
         return
     lf.set_term(LTerm.TRetInt(0))
     m.funcs.push(lf)
