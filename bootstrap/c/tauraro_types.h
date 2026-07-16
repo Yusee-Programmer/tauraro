@@ -2987,6 +2987,7 @@ typedef struct LModule {
     List_ptr* global_inits;
     HirProgram* hir_prog;
     bool ok;
+    TrStr fail_note;
 } LModule;
 static void _trdrop_LModule(void* vp) {
     LModule* self = (LModule*)vp; (void)self;
@@ -3002,6 +3003,7 @@ static void _trdrop_LModule(void* vp) {
     List_i64_free(self->global_types);
     List_ptr_free(self->global_inits);
     _tr_obj_release(self->hir_prog, _trdrop_HirProgram);
+    _tr_str_release(self->fail_note);
 }
 #endif
 
@@ -3029,9 +3031,11 @@ static void _trdrop_LlvmEmitter(void* vp) {
 typedef struct LlvmGenerator {
     size_t __rc;
     bool ok;
+    TrStr fail_note;
 } LlvmGenerator;
 static void _trdrop_LlvmGenerator(void* vp) {
     LlvmGenerator* self = (LlvmGenerator*)vp; (void)self;
+    _tr_str_release(self->fail_note);
 }
 #endif
 
@@ -3113,10 +3117,12 @@ typedef struct NativeGenerator {
     size_t __rc;
     TrStr target;
     bool ready;
+    TrStr fail_note;
 } NativeGenerator;
 static void _trdrop_NativeGenerator(void* vp) {
     NativeGenerator* self = (NativeGenerator*)vp; (void)self;
     _tr_str_release(self->target);
+    _tr_str_release(self->fail_note);
 }
 #endif
 
@@ -3745,6 +3751,7 @@ __attribute__((hot)) LModule* lower_to_lir(HirProgram* prog);
 __attribute__((hot)) bool _fn_has_iface_param(LModule* m, HirFunction* f);
 __attribute__((hot)) bool _fn_is_specializable(LModule* m, HirFunction* f);
 __attribute__((hot)) long long _find_generic_fn(LModule* m, TrStr name);
+__attribute__((hot)) long long _find_generic_method(LModule* m, TrStr cls, TrStr method);
 __attribute__((hot)) bool _is_generic_param(HirFunction* f, TrStr n);
 __attribute__((hot)) bool _param_is_abstract(LModule* m, HirFunction* f, TrStr ptyname);
 __attribute__((hot)) bool _lir_lower_generic(LModule* m, HirFunction* f, List_i64* argtags, List_TrStr* argcls, TrStr mangled);
@@ -3762,8 +3769,9 @@ __attribute__((hot)) bool lower_stmt(LModule* m, LFunc* lf, HirStmt* s);
 __attribute__((hot)) long long _lower_set_method(LModule* m, LFunc* lf, long long shv, long long stag, TrStr method, List_ptr* margs);
 __attribute__((hot)) long long _lit_pat_cond(LModule* m, LFunc* lf, Pattern pat, long long subj, long long st);
 __attribute__((hot)) bool _lower_match(LModule* m, LFunc* lf, HirExpr* expr, List_ptr* arms);
+__attribute__((hot)) TrStr _norm_variant(TrStr ename, TrStr vn);
 __attribute__((hot)) long long _variant_tag_cond(LFunc* lf, long long tagv, long long vidx);
-__attribute__((hot)) bool _bind_payload(LModule* m, LFunc* lf, VariantLayout* vlay, long long subj, long long fldidx, TrStr bindname);
+__attribute__((hot)) bool _bind_payload(LModule* m, LFunc* lf, VariantLayout* vlay, long long subj, AstType* subj_ty, long long fldidx, TrStr bindname);
 __attribute__((hot)) bool _lower_match_enum(LModule* m, LFunc* lf, HirExpr* expr, long long subj, List_ptr* arms);
 __attribute__((hot)) bool _lower_for(LModule* m, LFunc* lf, TrStr var, HirExpr* iter, HirBlock* body);
 __attribute__((hot)) bool _lower_for_range(LModule* m, LFunc* lf, TrStr var, List_ptr* args, HirBlock* body);
@@ -4011,6 +4019,7 @@ __attribute__((hot)) void CGenerator_gen_enum_struct(CGenerator* self, HirEnum* 
 __attribute__((hot)) void CGenerator_gen_interface_vtable(CGenerator* self, HirInterface* iface);
 __attribute__((hot)) TrStr CGenerator_gen_one_iface_wrap(CGenerator* self, TrStr cls_name, HirInterface* iface);
 __attribute__((hot)) TrStr CGenerator_gen_expr(CGenerator* self, HirExpr* e_ptr);
+__attribute__((hot)) TrStr CGenerator_opt_payload_binding(CGenerator* self, AstType* subj_hty, TrStr tn, TrStr vn, TrStr bind_c, TrStr slot);
 __attribute__((hot)) TrStr CGenerator_gen_match_expr(CGenerator* self, HirExpr* subj, List_ptr* arms, AstType* ty);
 __attribute__((hot)) bool CGenerator_has_method(CGenerator* self, TrStr cls_name, TrStr method);
 __attribute__((hot)) AstType* CGenerator_cls_method_ret_ty(CGenerator* self, TrStr cls_name, TrStr method);

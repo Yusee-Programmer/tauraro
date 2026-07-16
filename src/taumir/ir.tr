@@ -295,6 +295,7 @@ pub class LModule:
     pub hir_prog: HirProgram                # the program being lowered (generic fns are
                                             # instantiated lazily from here at call sites)
     pub ok:       bool
+    pub fail_note: str                      # when ok=false: which fn/construct failed (diagnostics)
 
 extend LModule:
     pub def init() -> LModule:
@@ -311,6 +312,7 @@ extend LModule:
         m.global_types = Vec[int].init(4)
         m.global_inits = Vec[Pointer[HirStmt]].init(4)
         m.ok       = true
+        m.fail_note = ""
         return m
 
     # Register a module-level global; returns its slot index (dedup by name).

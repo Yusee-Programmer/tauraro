@@ -21,17 +21,24 @@ from codegen.native.emit import emit_lir_object
 pub class NativeGenerator:
     pub target: str          # "x86_64-linux-elf"
     pub ready:  bool
+    pub fail_note: str       # why lowering fell back ("" = n/a) — for driver diagnostics
 
 extend NativeGenerator:
     pub def init() -> NativeGenerator:
         mut g = NativeGenerator()
         g.target = "x86_64-linux-elf"
         g.ready  = true
+        g.fail_note = ""
         return g
 
     # Emit an ELF64 object for `prog` at `out_path`. Returns true on success; false when
     # the program uses constructs the native backend can't lower yet (driver falls back).
     pub def emit_object(self, prog: HirProgram, out_path: str) -> bool:
         mut m = lower_to_lir(prog)
-        if not m.ok: return false
-        return emit_lir_object(m, out_path)
+        if not m.ok:
+            self.fail_note = m.fail_note
+            return false
+        if not emit_lir_object(m, out_path):
+            self.fail_note = "object emission failed (encode/ELF write)"
+            return false
+        return true

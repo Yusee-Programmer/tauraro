@@ -820,7 +820,7 @@ __attribute__((hot)) MirFunction* lower_function(HirFunction* hf) {
     /* pass */
     MirFunction* mf = ((MirFunction*)_tr_obj_alloc(sizeof(MirFunction)));
     /* pass */
-    mf->name = hf->name;
+    mf->name = _tr_str_retain(hf->name);
     /* pass */
     mf->params = (void*)List_TrStr_new();
     /* pass */

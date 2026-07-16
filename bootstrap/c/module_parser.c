@@ -159,7 +159,7 @@ __attribute__((hot)) void Parser_emit_diag(Parser* self, TrStr msg, TrStr hint) 
     /* pass */
     if ((_tr_strlen(_tr_strz(self->current_file)) > 0LL)) {
         /* pass */
-        TrStr _strtmp_t26 = self->current_file;
+        TrStr _strtmp_t26 = _tr_str_retain(self->current_file);
         _tr_str_release(loc);
         loc = _strtmp_t26;
     }
@@ -612,7 +612,7 @@ __attribute__((hot)) List_ptr* Parser_parse_param_list(Parser* self) {
                         /* pass */
                         ty_ptr = box_asttype(bt);
                         /* pass */
-                        TrStr _strtmp_t40 = bt->name;
+                        TrStr _strtmp_t40 = _tr_str_retain(bt->name);
                         _tr_str_release(item_name);
                         item_name = _strtmp_t40;
                     }
@@ -1182,7 +1182,7 @@ __auto_type cast_ty_ptr = _t61.data.ECast.ty;
                 /* pass */
                 if ((((unsigned long long)(cast_ty_ptr)) != ((unsigned long long)(0LL)))) {
                     /* pass */
-                    TrStr _strtmp_t62 = (*cast_ty_ptr)->name;
+                    TrStr _strtmp_t62 = _tr_str_retain((*cast_ty_ptr)->name);
                     _tr_str_release(alias);
                     alias = _strtmp_t62;
                 }
@@ -2944,7 +2944,7 @@ __attribute__((hot)) void Parser_emit_diag_at(Parser* self, long long ln, long l
     /* pass */
     if ((_tr_strlen(_tr_strz(self->current_file)) > 0LL)) {
         /* pass */
-        TrStr _strtmp_t120 = self->current_file;
+        TrStr _strtmp_t120 = _tr_str_retain(self->current_file);
         _tr_str_release(loc);
         loc = _strtmp_t120;
     }

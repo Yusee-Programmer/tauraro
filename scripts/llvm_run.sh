@@ -14,10 +14,23 @@ CC="${CC:-cc}"; command -v "$CC" >/dev/null 2>&1 || CC=gcc
 command -v "$CC" >/dev/null 2>&1 || { echo "(no cc/gcc — skipping LLVM run)"; exit 0; }
 
 # Need an LLVM toolchain: clang (compiles .ll directly) OR llc (+ CC to link).
-HAVE_CLANG=0; command -v clang >/dev/null 2>&1 && HAVE_CLANG=1
-HAVE_LLC=0;   command -v llc   >/dev/null 2>&1 && HAVE_LLC=1
+# Opaque pointers (`ptr`) require LLVM >= 15: pick the newest usable clang/llc, or
+# skip gracefully (e.g. ubuntu-22.04-arm ships clang 14, which rejects `ptr` syntax).
+_llvm_major() { "$1" --version 2>/dev/null | grep -oE '(clang|LLVM) version [0-9]+' | grep -oE '[0-9]+' | head -1; }
+CLANGBIN=""
+for c in clang clang-18 clang-17 clang-16 clang-15; do
+    command -v "$c" >/dev/null 2>&1 || continue
+    v="$(_llvm_major "$c")"; [ -n "$v" ] && [ "$v" -ge 15 ] && { CLANGBIN="$c"; break; }
+done
+LLCBIN=""
+for l in llc llc-18 llc-17 llc-16 llc-15; do
+    command -v "$l" >/dev/null 2>&1 || continue
+    v="$(_llvm_major "$l")"; [ -n "$v" ] && [ "$v" -ge 15 ] && { LLCBIN="$l"; break; }
+done
+HAVE_CLANG=0; [ -n "$CLANGBIN" ] && HAVE_CLANG=1
+HAVE_LLC=0;   [ -n "$LLCBIN" ]   && HAVE_LLC=1
 if [ "$HAVE_CLANG" = 0 ] && [ "$HAVE_LLC" = 0 ]; then
-    echo "(no clang/llc on PATH — skipping LLVM run)"; exit 0
+    echo "(no clang/llc >= 15 on PATH — opaque pointers need LLVM 15+; skipping LLVM run)"; exit 0
 fi
 
 # On mingw/msys the runtime.o + final exe must use the windows-gnu ABI; elsewhere the host
@@ -70,11 +83,11 @@ echo "  emitted build/llvm_p.ll ($(wc -c < build/llvm_p.ll) bytes) — from .tr,
 # Build an executable: prefer clang (accepts .ll directly, applies -O2); else llc -> obj -> CC.
 if [ "$HAVE_CLANG" = 1 ]; then
     CLANG_FLAGS="-O2"; [ -n "$TRIPLE" ] && CLANG_FLAGS="$CLANG_FLAGS -target $TRIPLE"
-    clang $CLANG_FLAGS build/llvm_p.ll build/runtime.o -lm -o build/llvm_p 2>/tmp/llvm_ld.log \
+    "$CLANGBIN" $CLANG_FLAGS build/llvm_p.ll build/runtime.o -lm -o build/llvm_p 2>/tmp/llvm_ld.log \
         || { echo "FAIL: clang compile/link"; sed -n '1,20p' /tmp/llvm_ld.log; exit 1; }
 else
     LLC_FLAGS="-O2 -filetype=obj"; [ -n "$TRIPLE" ] && LLC_FLAGS="$LLC_FLAGS -mtriple=$TRIPLE"
-    llc $LLC_FLAGS build/llvm_p.ll -o build/llvm_p.o 2>/tmp/llvm_llc.log \
+    "$LLCBIN" $LLC_FLAGS build/llvm_p.ll -o build/llvm_p.o 2>/tmp/llvm_llc.log \
         || { echo "FAIL: llc"; sed -n '1,20p' /tmp/llvm_llc.log; exit 1; }
     "$CC" build/llvm_p.o build/runtime.o -lm -o build/llvm_p 2>/tmp/llvm_ld.log \
         || { echo "FAIL: link"; sed -n '1,20p' /tmp/llvm_ld.log; exit 1; }

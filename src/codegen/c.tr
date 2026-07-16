@@ -6562,6 +6562,14 @@ pub class CGenerator:
                                 mut _wrapped_rhs = self.str_retain_wrap(v, _assign_rhs, false)
                                 if self._expr_is_borrow_call(v):
                                     _wrapped_rhs = "_tr_str_retain(" + _wrapped_rhs + ")"   # own not-proven borrow before storing
+                                match v.read():
+                                    case HirExpr.EPropAccess(_, _, _):
+                                        # #21: a str FIELD read is a borrow of the object's
+                                        # own ref; this local OWNS (released on reassign +
+                                        # scope exit), so retain — else the store over-
+                                        # releases the field's buffer (UAF; broke CI inherit).
+                                        _wrapped_rhs = "_tr_str_retain(" + _wrapped_rhs + ")"
+                                    case _: pass
                                 self.w(pad + "TrStr " + _strtmp + " = " + _wrapped_rhs + ";\n")
                                 self.w(pad + "_tr_str_release(" + _safe_c_varname(_an) + ");\n")
                                 self.w(pad + _safe_c_varname(_an) + " = " + _strtmp + ";\n")
@@ -6575,6 +6583,13 @@ pub class CGenerator:
                                 _assign_rhs = self.str_retain_wrap(v, _assign_rhs, false)
                                 if self._expr_is_borrow_call(v):
                                     _assign_rhs = "_tr_str_retain(" + _assign_rhs + ")"   # field must OWN: retain borrow
+                                match v.read():
+                                    case HirExpr.EPropAccess(_, _, _):
+                                        # #21: field-to-field str copy (a.f = b.g) — the RHS
+                                        # is a borrow of b's ref; this field OWNS (released
+                                        # by _trdrop), so retain or b's drop dangles a.f.
+                                        _assign_rhs = "_tr_str_retain(" + _assign_rhs + ")"
+                                    case _: pass
                         case _: pass
                 elif self.is_heap_class_tn(hir_expr_type(t).name) and not self.has_method(hir_expr_type(t).name, "free"):
                     # `ref T` (borrow) field store: no co-ownership — plain store, no
