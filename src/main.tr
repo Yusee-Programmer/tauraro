@@ -244,6 +244,23 @@ pub def strip_trailing_sep_inline(s: str) -> str:
     if last == 47 or last == 92: return s.slice(0, n - 1)
     return s
 
+# Locate runtime/native_abi.c for the LLVM/native link step (same search order as the
+# runtime header: repo layout, beside the binary, beside the input, CWD). Returns "".
+pub def find_native_abi_c(input_path: str) -> str:
+    if file_exists("tauraro/runtime/native_abi.c"): return "tauraro/runtime/native_abi.c"
+    mut bin_dir = _tr_exe_dir() + "/"
+    if file_exists(bin_dir + "native_abi.c"): return bin_dir + "native_abi.c"
+    if file_exists(bin_dir + "runtime/native_abi.c"): return bin_dir + "runtime/native_abi.c"
+    if input_path != "":
+        mut src_dir = dir_of_path(input_path)
+        if file_exists(src_dir + "native_abi.c"): return src_dir + "native_abi.c"
+        mut parent = dir_of_path(strip_trailing_sep_inline(src_dir))
+        if file_exists(parent + "runtime/native_abi.c"): return parent + "runtime/native_abi.c"
+        mut gp = dir_of_path(strip_trailing_sep_inline(parent))
+        if file_exists(gp + "runtime/native_abi.c"): return gp + "runtime/native_abi.c"
+    if file_exists("runtime/native_abi.c"): return "runtime/native_abi.c"
+    return ""
+
 pub def read_runtime_header(bin_path: str, input_path: str) -> str:
     # 1. Canonical repo location relative to CWD.
     if file_exists("tauraro/runtime/tauraro_rt.h"): return read_file("tauraro/runtime/tauraro_rt.h")
@@ -989,10 +1006,61 @@ pub def main(args: Vec[str]):
             if llvm_gen.fail_note != "": print("       reason: " + llvm_gen.fail_note)
             print("       (it shares the native backend's feature subset). Use --backend c (default).")
             _tr_exit(2)
-        if output_path == "":
-            output_path = strip_extension(input_path) + ".ll"
-        write_file(output_path, llvm_ir)
-        if verbose: print("[4/5] LLVM IR written to " + output_path)
+        # IR-only mode: an explicit `-o <name>.ll` writes the textual IR and stops
+        # (used by scripts/llvm_{run,diff}.sh and for inspection).
+        if output_path.ends_with(".ll"):
+            write_file(output_path, llvm_ir)
+            if verbose: print("[4/5] LLVM IR written to " + output_path)
+            return
+        # EXECUTABLE mode (default): IR -> clang (or llc + cc) -> link with the native
+        # runtime -> executable, exactly like the C backend produces one end-to-end.
+        mut lx_ext = ""
+        if _tr_is_windows(): lx_ext = ".exe"
+        mut lx_exe = output_path
+        if lx_exe == "": lx_exe = strip_extension(input_path) + lx_ext
+        make_dir("build")
+        mut lx_ll = "build/llvm_out.ll"
+        write_file(lx_ll, llvm_ir)
+        if verbose: print("[4/5] LLVM IR written to " + lx_ll)
+        # Runtime: compile runtime/native_abi.c once into build/ (the extern _tr_rt_*
+        # entry points the emitted IR calls).
+        mut lx_abi = find_native_abi_c(input_path)
+        if lx_abi == "":
+            print(c_red("error") + ": runtime/native_abi.c not found (needed to link --backend llvm output)")
+            print("       looked beside the compiler binary, the input file, and ./runtime/")
+            _tr_exit(1)
+        mut lx_cc = detect_c_compiler()
+        mut lx_rto = "build/llvm_runtime.o"
+        mut lx_rc = _tr_system(lx_cc + " -O2 -w -c \"-I" + dir_of_path(lx_abi) + "\" \"" + lx_abi + "\" -o " + lx_rto)
+        if lx_rc != 0:
+            print(c_red("error") + ": failed to compile the native runtime (" + lx_abi + ")")
+            _tr_exit(1)
+        # Toolchain: prefer clang (compiles .ll directly, applies -O); fall back to
+        # llc + cc. An old clang (< LLVM 15, no opaque pointers) fails the compile and
+        # falls through to llc automatically.
+        mut lx_null = "/dev/null"
+        if _tr_is_windows(): lx_null = "nul"
+        mut lx_built = false
+        if _tr_system("clang --version >" + lx_null + " 2>&1") == 0:
+            mut lx_cmd = "clang -O" + opt_level + " \"" + lx_ll + "\" " + lx_rto + " -lm -o \"" + lx_exe + "\" 2>build/llvm_link.log"
+            if _tr_system(lx_cmd) == 0: lx_built = true
+        if not lx_built and _tr_system("llc --version >" + lx_null + " 2>&1") == 0:
+            # Pin the GNU triple on Windows: a rustup-shipped llc defaults to the MSVC
+            # target, but we link with gcc/mingw.
+            mut lx_llc_tri = ""
+            if _tr_is_windows(): lx_llc_tri = " -mtriple=x86_64-pc-windows-gnu"
+            if _tr_system("llc -O2 -filetype=obj" + lx_llc_tri + " \"" + lx_ll + "\" -o build/llvm_out.o 2>build/llvm_link.log") == 0:
+                if _tr_system(lx_cc + " build/llvm_out.o " + lx_rto + " -lm -o \"" + lx_exe + "\" 2>>build/llvm_link.log") == 0:
+                    lx_built = true
+        if not lx_built:
+            print(c_red("error") + ": could not compile the LLVM IR to an executable")
+            print("       need clang (LLVM >= 15) or llc on PATH; see build/llvm_link.log")
+            _tr_exit(1)
+        if verbose: print("[5/5] executable written to " + lx_exe)
+        if run_after:
+            mut lx_run = to_runnable_path(lx_exe)
+            if _tr_is_windows(): lx_run = path_to_native(lx_run)
+            _tr_exit(_tr_system("\"" + lx_run + "\""))
         return
 
     if backend == "native":

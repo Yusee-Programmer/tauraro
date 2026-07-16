@@ -3926,6 +3926,7 @@ __attribute__((hot)) TrStr target_extra_flags(TrStr triple);
 __attribute__((hot)) TrStr detect_cross_compiler(TrStr triple);
 __attribute__((hot)) TrStr dir_of_path(TrStr path);
 __attribute__((hot)) TrStr strip_trailing_sep_inline(TrStr s);
+__attribute__((hot)) TrStr find_native_abi_c(TrStr input_path);
 __attribute__((hot)) TrStr read_runtime_header(TrStr bin_path, TrStr input_path);
 __attribute__((hot)) void ensure_runtime_header(TrStr out_dir, TrStr bin_path, TrStr input_path);
 __attribute__((hot)) void sync_headers_to_runtime(TrStr rt_content, TrStr types_content);
