@@ -1926,7 +1926,7 @@ __attribute__((hot)) void Sema__check_spawn_nested_rc(Sema* self, HirExpr* arg_e
     /* pass */
     if ((((strcmp(_tr_strz(n), _tr_strz(_tr_str_lit("Shared"))) == 0) || (strcmp(_tr_strz(n), _tr_strz(_tr_str_lit("Weak"))) == 0)) && (at->args->len > 0LL))) {
         /* pass */
-        TrStr _strtmp_t371 = (*((AstType**)List_ptr_get(at->args, 0LL)))->name;
+        TrStr _strtmp_t371 = _tr_str_retain((*((AstType**)List_ptr_get(at->args, 0LL)))->name);
         _tr_str_release(_cross_cls);
         _cross_cls = _strtmp_t371;
     }
@@ -1945,7 +1945,7 @@ __attribute__((hot)) void Sema__check_spawn_nested_rc(Sema* self, HirExpr* arg_e
         /* pass */
         if ((((strcmp(_tr_strz(n), _tr_strz(_tr_str_lit("Shared"))) == 0) || (strcmp(_tr_strz(n), _tr_strz(_tr_str_lit("Weak"))) == 0)) && (at->args->len > 0LL))) {
             /* pass */
-            TrStr _strtmp_t372 = (*((AstType**)List_ptr_get(at->args, 0LL)))->name;
+            TrStr _strtmp_t372 = _tr_str_retain((*((AstType**)List_ptr_get(at->args, 0LL)))->name);
             _tr_str_release(inner);
             inner = _strtmp_t372;
         }
@@ -2896,7 +2896,7 @@ __attribute__((hot)) bool Sema_field_is_borrow(Sema* self, Expr* obj, TrStr fiel
         /* pass */
         if ((strcmp(_tr_strz(fb_obj), _tr_strz(_tr_str_lit("self"))) == 0)) {
             /* pass */
-            TrStr _strtmp_t382 = self->current_class_name;
+            TrStr _strtmp_t382 = _tr_str_retain(self->current_class_name);
             _tr_str_release(cls_name);
             cls_name = _strtmp_t382;
         } else {
@@ -2905,7 +2905,7 @@ __attribute__((hot)) bool Sema_field_is_borrow(Sema* self, Expr* obj, TrStr fiel
             /* pass */
             if (((strcmp(_tr_strz(fb_sym->name), _tr_strz(_tr_str_lit(""))) != 0) && (((unsigned long long)(fb_sym->ty)) != ((unsigned long long)(0LL))))) {
                 /* pass */
-                TrStr _strtmp_t383 = (*fb_sym->ty)->name;
+                TrStr _strtmp_t383 = _tr_str_retain((*fb_sym->ty)->name);
                 _tr_str_release(cls_name);
                 cls_name = _strtmp_t383;
             }
@@ -5789,7 +5789,7 @@ __auto_type target_ty = _t426.data.DTypeAlias.target;
         /* pass */
         if ((((unsigned long long)(target_ty)) != ((unsigned long long)(0LL)))) {
             /* pass */
-            TrStr _strtmp_t429 = (*target_ty)->name;
+            TrStr _strtmp_t429 = _tr_str_retain((*target_ty)->name);
             _tr_str_release(resolved_name);
             resolved_name = _strtmp_t429;
         }
@@ -5845,7 +5845,7 @@ __attribute__((hot)) HirFunction* Sema_lower_func(Sema* self, FunctionDef* f) {
     /* pass */
     self->in_async_fn = f->is_async;
     /* pass */
-    self->current_func_name = f->name;
+    self->current_func_name = _tr_str_retain(f->name);
     /* pass */
     List_TrStr* saved_func_generics = self->current_func_generics;
     /* pass */
@@ -5916,7 +5916,7 @@ __attribute__((hot)) HirFunction* Sema_lower_func(Sema* self, FunctionDef* f) {
     /* pass */
     if ((((unsigned long long)(f->ret_ty)) != ((unsigned long long)(0LL)))) {
         /* pass */
-        self->current_func_ret_from = (*f->ret_ty)->from_param;
+        self->current_func_ret_from = _tr_str_retain((*f->ret_ty)->from_param);
         /* pass */
         self->current_func_ret_regions = (*f->ret_ty)->from_regions;
         /* pass */
@@ -5950,7 +5950,7 @@ __attribute__((hot)) HirFunction* Sema_lower_func(Sema* self, FunctionDef* f) {
                     /* pass */
                     if ((!Sema_is_primitive_name(self, infer_pty->name))) {
                         /* pass */
-                        TrStr _strtmp_t434 = infer_p->name;
+                        TrStr _strtmp_t434 = _tr_str_retain(infer_p->name);
                         _tr_str_release(infer_from);
                         infer_from = _strtmp_t434;
                         /* pass */
@@ -6066,7 +6066,7 @@ __attribute__((hot)) HirFunction* Sema_lower_func(Sema* self, FunctionDef* f) {
         /* pass */
         HirParam* hp = ((HirParam*)_tr_obj_alloc(sizeof(HirParam)));
         /* pass */
-        hp->name = p->name;
+        hp->name = _tr_str_retain(p->name);
         /* pass */
         hp->ty = p_ty;
         /* pass */
@@ -6078,9 +6078,9 @@ __attribute__((hot)) HirFunction* Sema_lower_func(Sema* self, FunctionDef* f) {
     /* pass */
     HirFunction* hf = ((HirFunction*)_tr_obj_alloc(sizeof(HirFunction)));
     /* pass */
-    hf->name = f->name;
+    hf->name = _tr_str_retain(f->name);
     /* pass */
-    hf->class_name = self->current_class_name;
+    hf->class_name = _tr_str_retain(self->current_class_name);
     /* pass */
     hf->generics = f->generics;
     /* pass */
@@ -6218,7 +6218,7 @@ __attribute__((hot)) HirClass* Sema_lower_class(Sema* self, ClassDef* c) {
     /* pass */
     self->current_line = c->line;
     /* pass */
-    self->current_class_name = c->name;
+    self->current_class_name = _tr_str_retain(c->name);
     /* pass */
     self->current_region_params = c->region_params;
     /* pass */
@@ -6232,7 +6232,7 @@ __attribute__((hot)) HirClass* Sema_lower_class(Sema* self, ClassDef* c) {
         /* pass */
         HirField* hf = ((HirField*)_tr_obj_alloc(sizeof(HirField)));
         /* pass */
-        hf->name = f->name;
+        hf->name = _tr_str_retain(f->name);
         /* pass */
         AstType* f_ty = AstType_init(_tr_str_lit("int"));
         /* pass */
@@ -6331,7 +6331,7 @@ __attribute__((hot)) HirClass* Sema_lower_class(Sema* self, ClassDef* c) {
                         /* pass */
                         if ((((unsigned long long)(_imeth->ret_ty)) != ((unsigned long long)(0LL)))) {
                             /* pass */
-                            TrStr _strtmp_t442 = (*_imeth->ret_ty)->name;
+                            TrStr _strtmp_t442 = _tr_str_retain((*_imeth->ret_ty)->name);
                             _tr_str_release(_iret);
                             _iret = _strtmp_t442;
                         }
@@ -6340,7 +6340,7 @@ __attribute__((hot)) HirClass* Sema_lower_class(Sema* self, ClassDef* c) {
                         /* pass */
                         if ((((unsigned long long)(_cmeth->ret_ty)) != ((unsigned long long)(0LL)))) {
                             /* pass */
-                            TrStr _strtmp_t443 = (*_cmeth->ret_ty)->name;
+                            TrStr _strtmp_t443 = _tr_str_retain((*_cmeth->ret_ty)->name);
                             _tr_str_release(_cret);
                             _cret = _strtmp_t443;
                         }
@@ -6417,7 +6417,7 @@ __attribute__((hot)) HirClass* Sema_lower_class(Sema* self, ClassDef* c) {
                             /* pass */
                             if ((((unsigned long long)(_p->ty)) != ((unsigned long long)(0LL)))) {
                                 /* pass */
-                                TrStr _strtmp_t446 = (*_p->ty)->name;
+                                TrStr _strtmp_t446 = _tr_str_retain((*_p->ty)->name);
                                 _tr_str_release(_pty);
                                 _pty = _strtmp_t446;
                             }
@@ -6434,7 +6434,7 @@ __attribute__((hot)) HirClass* Sema_lower_class(Sema* self, ClassDef* c) {
                     /* pass */
                     if ((((unsigned long long)(_imeth->ret_ty)) != ((unsigned long long)(0LL)))) {
                         /* pass */
-                        TrStr _strtmp_t448 = (*_imeth->ret_ty)->name;
+                        TrStr _strtmp_t448 = _tr_str_retain((*_imeth->ret_ty)->name);
                         _tr_str_release(_iret2);
                         _iret2 = _strtmp_t448;
                     }
@@ -6456,7 +6456,7 @@ __attribute__((hot)) HirClass* Sema_lower_class(Sema* self, ClassDef* c) {
     /* pass */
     HirClass* hc = ((HirClass*)_tr_obj_alloc(sizeof(HirClass)));
     /* pass */
-    hc->name = c->name;
+    hc->name = _tr_str_retain(c->name);
     /* pass */
     hc->generics = c->generics;
     /* pass */
@@ -6483,7 +6483,7 @@ __attribute__((hot)) HirClass* Sema_lower_class(Sema* self, ClassDef* c) {
 
 __attribute__((hot)) HirEnum* Sema_lower_enum(Sema* self, EnumDef* e) {
     /* pass */
-    self->current_class_name = e->name;
+    self->current_class_name = _tr_str_retain(e->name);
     /* pass */
     self->current_region_params = e->region_params;
     /* pass */
@@ -6541,7 +6541,7 @@ __attribute__((hot)) HirEnum* Sema_lower_enum(Sema* self, EnumDef* e) {
             /* pass */
             HirParam* hp = ((HirParam*)_tr_obj_alloc(sizeof(HirParam)));
             /* pass */
-            hp->name = p->name;
+            hp->name = _tr_str_retain(p->name);
             /* pass */
             AstType* p_ty = AstType_init(p->name);
             /* pass */
@@ -6560,7 +6560,7 @@ __attribute__((hot)) HirEnum* Sema_lower_enum(Sema* self, EnumDef* e) {
         /* pass */
         HirVariant* hv = ((HirVariant*)_tr_obj_alloc(sizeof(HirVariant)));
         /* pass */
-        hv->name = v->name;
+        hv->name = _tr_str_retain(v->name);
         /* pass */
         hv->fields = hfields;
         /* pass */
@@ -6586,7 +6586,7 @@ __attribute__((hot)) HirEnum* Sema_lower_enum(Sema* self, EnumDef* e) {
     /* pass */
     HirEnum* he = ((HirEnum*)_tr_obj_alloc(sizeof(HirEnum)));
     /* pass */
-    he->name = e->name;
+    he->name = _tr_str_retain(e->name);
     /* pass */
     he->generics = e->generics;
     /* pass */
@@ -6627,7 +6627,7 @@ __attribute__((hot)) HirInterface* Sema_lower_interface(Sema* self, InterfaceDef
     /* pass */
     HirInterface* hi = ((HirInterface*)_tr_obj_alloc(sizeof(HirInterface)));
     /* pass */
-    hi->name = i_def->name;
+    hi->name = _tr_str_retain(i_def->name);
     /* pass */
     hi->generics = i_def->generics;
     /* pass */
@@ -6844,7 +6844,7 @@ __auto_type args = _t456.data.ECall.args;
                         l3_eff = _strtmp_t461;
                     } else {
                         /* pass */
-                        TrStr _strtmp_t462 = l3_sym->borrows_region;
+                        TrStr _strtmp_t462 = _tr_str_retain(l3_sym->borrows_region);
                         _tr_str_release(l3_eff);
                         l3_eff = _strtmp_t462;
                     }
@@ -8031,7 +8031,7 @@ __auto_type finally_b = _t455.data.STry.finally_b;
             /* pass */
             HirCatchClause* hcc_val = ((HirCatchClause*)_tr_obj_alloc(sizeof(HirCatchClause)));
             /* pass */
-            hcc_val->err_name = cc->err_name;
+            hcc_val->err_name = _tr_str_retain(cc->err_name);
             /* pass */
             hcc_val->err_type = AstType_init(_tr_str_lit("str"));
             /* pass */
@@ -8172,7 +8172,7 @@ __auto_type clobbers = _t455.data.SAsm.clobbers;
             /* pass */
             harm_v->kind = arm->kind;
             /* pass */
-            harm_v->var_name = arm->var_name;
+            harm_v->var_name = _tr_str_retain(arm->var_name);
             /* pass */
             if ((((unsigned long long)(arm->chan_expr)) != ((unsigned long long)(0LL)))) {
                 /* pass */
@@ -9157,7 +9157,7 @@ __auto_type right = _t537.data.EBinOp.right;
                 /* pass */
                 if ((strcmp(_tr_strz(lname), _tr_strz(_tr_str_lit(""))) == 0)) {
                     /* pass */
-                    TrStr _strtmp_t544 = hir_expr_type(hleft)->name;
+                    TrStr _strtmp_t544 = _tr_str_retain(hir_expr_type(hleft)->name);
                     _tr_str_release(lname);
                     lname = _strtmp_t544;
                 }
@@ -9166,7 +9166,7 @@ __auto_type right = _t537.data.EBinOp.right;
                 /* pass */
                 if ((strcmp(_tr_strz(rname), _tr_strz(_tr_str_lit(""))) == 0)) {
                     /* pass */
-                    TrStr _strtmp_t545 = hir_expr_type(hright)->name;
+                    TrStr _strtmp_t545 = _tr_str_retain(hir_expr_type(hright)->name);
                     _tr_str_release(rname);
                     rname = _strtmp_t545;
                 }
@@ -9336,7 +9336,7 @@ __auto_type args = _t537.data.ECall.args;
                         /* pass */
                         HirExpr* isp_obj = Sema_lower_expr(self, ((Expr*)List_ptr_get(args, 0LL)));
                         /* pass */
-                        TrStr _strtmp_t555 = hir_expr_type(isp_obj)->name;
+                        TrStr _strtmp_t555 = _tr_str_retain(hir_expr_type(isp_obj)->name);
                         _tr_str_release(isp_target_n);
                         isp_target_n = _strtmp_t555;
                     }
@@ -10764,7 +10764,7 @@ __auto_type idx_inner = _t537.data.EIndex._tr_v_index;
                 /* pass */
                 generic_arg_ty = ((AstType**)List_ptr_get(generic_args, 0LL));
                 /* pass */
-                TrStr _strtmp_t597 = (*((AstType**)List_ptr_get(generic_args, 0LL)))->name;
+                TrStr _strtmp_t597 = _tr_str_retain((*((AstType**)List_ptr_get(generic_args, 0LL)))->name);
                 _tr_str_release(generic_arg_n);
                 generic_arg_n = _strtmp_t597;
             }
@@ -10775,7 +10775,7 @@ __auto_type idx_inner = _t537.data.EIndex._tr_v_index;
             /* pass */
             generic_arg_ty = targ_ty;
             /* pass */
-            TrStr _strtmp_t598 = (*targ_ty)->name;
+            TrStr _strtmp_t598 = _tr_str_retain((*targ_ty)->name);
             _tr_str_release(generic_arg_n);
             generic_arg_n = _strtmp_t598;
         } else if (_t596.tag == Expr_EIdent) {
@@ -10831,7 +10831,7 @@ __auto_type idx_inner = _t537.data.EIndex._tr_v_index;
             /* pass */
             if ((((unsigned long long)(nested_ty)) != ((unsigned long long)(0LL)))) {
                 /* pass */
-                TrStr _strtmp_t600 = (*nested_ty)->name;
+                TrStr _strtmp_t600 = _tr_str_retain((*nested_ty)->name);
                 _tr_str_release(generic_arg_n);
                 generic_arg_n = _strtmp_t600;
                 /* pass */
@@ -11044,9 +11044,9 @@ __auto_type ty = _t537.data.ECast.ty;
             /* pass */
             hp->is_expr = p_ast->is_expr;
             /* pass */
-            hp->text = p_ast->text;
+            hp->text = _tr_str_retain(p_ast->text);
             /* pass */
-            hp->fmt_spec = p_ast->fmt_spec;
+            hp->fmt_spec = _tr_str_retain(p_ast->fmt_spec);
             /* pass */
             hp->expr = Sema_lower_expr(self, p_ast->expr);
             /* pass */
@@ -11160,7 +11160,7 @@ __auto_type is_async = _t537.data.EClosure.is_async;
             /* pass */
             HirParam* hpa = ((HirParam*)_tr_obj_alloc(sizeof(HirParam)));
             /* pass */
-            hpa->name = pa->name;
+            hpa->name = _tr_str_retain(pa->name);
             /* pass */
             hpa->ty = pa_ty;
             /* pass */
@@ -11447,7 +11447,7 @@ __auto_type generators = _t537.data.EListComp.generators;
             /* pass */
             HirComprehension* hgen_val = ((HirComprehension*)_tr_obj_alloc(sizeof(HirComprehension)));
             /* pass */
-            hgen_val->target = gen_ast->target;
+            hgen_val->target = _tr_str_retain(gen_ast->target);
             /* pass */
             HirExpr* h_iter_lc = Sema_lower_expr(self, gen_ast->iter);
             /* pass */
@@ -11528,7 +11528,7 @@ __auto_type generators = _t537.data.EGeneratorExpr.generators;
             /* pass */
             HirComprehension* hgen_val2 = ((HirComprehension*)_tr_obj_alloc(sizeof(HirComprehension)));
             /* pass */
-            hgen_val2->target = gen_ast2->target;
+            hgen_val2->target = _tr_str_retain(gen_ast2->target);
             /* pass */
             HirExpr* h_iter_ge = Sema_lower_expr(self, gen_ast2->iter);
             /* pass */

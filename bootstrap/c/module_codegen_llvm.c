@@ -20,7 +20,7 @@ __attribute__((hot)) TrStr LlvmGenerator_generate(LlvmGenerator* self, HirProgra
         /* pass */
         self->ok = false;
         /* pass */
-        self->fail_note = m->fail_note;
+        self->fail_note = _tr_str_retain(m->fail_note);
         /* pass */
         _tr_obj_release(m, _trdrop_LModule);
         return _tr_str_lit("");

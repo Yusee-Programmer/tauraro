@@ -86,7 +86,7 @@ __attribute__((hot)) bool write_elf_object(TrStr out_path, List_ptr* funcs, List
             /* pass */
             tr->roff = (base + r->offset);
             /* pass */
-            tr->sym = r->symbol;
+            tr->sym = _tr_str_retain(r->symbol);
             /* pass */
             tr->kind = r->kind;
             /* pass */
@@ -111,7 +111,7 @@ __attribute__((hot)) bool write_elf_object(TrStr out_path, List_ptr* funcs, List
         /* pass */
         List_i64_append(str_off, rodata->len);
         /* pass */
-        ({ TrStr _at_t2421 = (List_TrStr_get(strings, sxi)); ByteBuf_cstr(rodata, _at_t2421); _tr_str_release(_at_t2421); });
+        ({ TrStr _at_t2425 = (List_TrStr_get(strings, sxi)); ByteBuf_cstr(rodata, _at_t2425); _tr_str_release(_at_t2425); });
         /* pass */
         sxi = (sxi + 1LL);
     }
