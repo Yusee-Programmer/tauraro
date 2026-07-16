@@ -19,9 +19,12 @@ fi
 TRIPLE=""
 case "$(uname -s 2>/dev/null)" in *NT*|*MINGW*|*MSYS*|*CYGWIN*) TRIPLE="x86_64-pc-windows-gnu";; esac
 
-mkdir -p build
-bash scripts/build_runtime_o.sh build/runtime.o >/dev/null || { echo "FAIL: runtime.o"; exit 1; }
-RT="$ROOT/build/runtime.o"
+# runtime.o lives OUTSIDE build/ — the per-test `rm -rf build` (stale-state hygiene)
+# must not delete it (that broke every link on CI with __CLANGFAIL__).
+RTDIR="$(mktemp -d)"
+RT="$RTDIR/runtime.o"
+bash scripts/build_runtime_o.sh "$RT" >/dev/null || { echo "FAIL: runtime.o"; exit 1; }
+trap 'rm -rf "$RTDIR"' EXIT
 
 build_llvm_exe() {  # $1=.ll  $2=out-exe ; echoes "" on success or an error tag
     if [ "$HAVE_CLANG" = 1 ]; then
@@ -39,8 +42,8 @@ pass=0; fail=0; skip=0
 for src in tests/native/*.tr; do
     [ -f "$src" ] || continue
     name="$(basename "$src" .tr)"
-    # C backend reference output.
-    rm -rf build/c; "$TAURAROC" "$src" -o "/tmp/${name}_c" >/dev/null 2>&1 \
+    # C backend reference output (clean build/ first: stale-state hygiene).
+    rm -rf build; "$TAURAROC" "$src" -o "/tmp/${name}_c" >/dev/null 2>&1 \
         || { echo "  C-FAIL   $name"; fail=1; continue; }
     c_out="$("/tmp/${name}_c" 2>&1)"
     # LLVM backend output (skip cleanly if the program is outside the LIR subset).
