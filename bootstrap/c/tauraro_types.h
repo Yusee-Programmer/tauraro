@@ -2903,6 +2903,11 @@ typedef struct LFunc {
     List_i64* cap_tags;
     List_i64* var_xret;
     List_i64* vreg_xret;
+    List_i64* try_blks;
+    List_TrStr* try_msgs;
+    List_ptr* defers;
+    long long blk_depth;
+    bool in_defer;
 } LFunc;
 static void _trdrop_LFunc(void* vp) {
     LFunc* self = (LFunc*)vp; (void)self;
@@ -2918,6 +2923,9 @@ static void _trdrop_LFunc(void* vp) {
     List_i64_free(self->cap_tags);
     List_i64_free(self->var_xret);
     List_i64_free(self->vreg_xret);
+    List_i64_free(self->try_blks);
+    List_TrStr_free(self->try_msgs);
+    List_ptr_free(self->defers);
 }
 #endif
 
@@ -2988,10 +2996,11 @@ typedef struct LModule {
     HirProgram* hir_prog;
     bool ok;
     TrStr fail_note;
+    List_TrStr* unavail_names;
+    List_TrStr* unavail_notes;
 } LModule;
 static void _trdrop_LModule(void* vp) {
     LModule* self = (LModule*)vp; (void)self;
-    List_ptr_free_obj(self->funcs, _trdrop_LFunc);
     List_ptr_free_obj(self->classes, _trdrop_ClassLayout);
     List_ptr_free_obj(self->enums, _trdrop_EnumLayout);
     List_TrStr_free(self->ifaces);
@@ -3004,6 +3013,8 @@ static void _trdrop_LModule(void* vp) {
     List_ptr_free(self->global_inits);
     _tr_obj_release(self->hir_prog, _trdrop_HirProgram);
     _tr_str_release(self->fail_note);
+    List_TrStr_free(self->unavail_names);
+    List_TrStr_free(self->unavail_notes);
 }
 #endif
 
@@ -3707,6 +3718,7 @@ __attribute__((hot)) long long LModule_fn_ret_tag(LModule* self, TrStr name);
 __attribute__((hot)) long long LModule_add_string(LModule* self, TrStr s);
 __attribute__((hot)) void LModule_add_extern(LModule* self, TrStr name);
 __attribute__((hot)) bool LModule_is_user_fn(LModule* self, TrStr name);
+__attribute__((hot)) long long LModule_unavail_index(LModule* self, TrStr name);
 __attribute__((hot)) void LModule_add_class(LModule* self, ClassLayout* cl);
 __attribute__((hot)) long long LModule_class_index(LModule* self, TrStr name);
 __attribute__((hot)) bool LModule_is_class(LModule* self, TrStr name);
@@ -3765,6 +3777,7 @@ __attribute__((hot)) long long _emit_field_get(LModule* m, LFunc* lf, long long 
 __attribute__((hot)) long long _lower_enum_ctor(LModule* m, LFunc* lf, TrStr ename, TrStr vname, List_ptr* margs);
 __attribute__((hot)) long long _lower_obj_call(LModule* m, LFunc* lf, TrStr mangled, long long self_vreg, List_ptr* margs);
 __attribute__((hot)) bool lower_block(LModule* m, LFunc* lf, HirBlock* hb);
+__attribute__((hot)) bool _run_defers(LModule* m, LFunc* lf);
 __attribute__((hot)) bool lower_stmt(LModule* m, LFunc* lf, HirStmt* s);
 __attribute__((hot)) long long _lower_set_method(LModule* m, LFunc* lf, long long shv, long long stag, TrStr method, List_ptr* margs);
 __attribute__((hot)) long long _lit_pat_cond(LModule* m, LFunc* lf, Pattern pat, long long subj, long long st);

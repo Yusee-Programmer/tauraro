@@ -40,7 +40,7 @@ def _print_i64_sym() -> str:
 # Value-type tags: 0=int/i64, 1=str/char*, 2=List[int], 3=List[str], 4=bool, 5=f64,
 # 6=Dict[str,int], 7=Dict[int,int], 8=Dict[str,str], 9=Dict[int,str].
 def _is_list_tag(t: int) -> bool:
-    return t == 2 or t == 3 or t == 14      # List[int] / List[str] / List[float]
+    return t == 2 or t == 3 or t == 14 or t == 19   # int / str / float / object elements
 
 def _is_set_tag(t: int) -> bool:
     return t == 13 or t == 16               # Set[int] / Set[str]
@@ -51,33 +51,36 @@ def _set_sym(t: int, op: str) -> str:
     return "_tr_rt_idict_" + op
 
 def _is_dict_tag(t: int) -> bool:
-    return t == 6 or t == 7 or t == 8 or t == 9
+    return t == 6 or t == 7 or t == 8 or t == 9 or t == 17 or t == 18
 
 def _dict_key_is_str(t: int) -> bool:
-    return t == 6 or t == 8
+    return t == 6 or t == 8 or t == 17
 
 def _dict_val_tag(t: int) -> int:      # value-type tag of a dict handle
     if t == 8 or t == 9: return 1      # str values
+    if t == 17 or t == 18: return 5    # float values (stored as f64 bit patterns)
     return 0                           # int values
 
 def _dict_new_sym(t: int) -> str:
-    if t == 6 or t == 8: return "_tr_rt_sdict_new"
+    if _dict_key_is_str(t): return "_tr_rt_sdict_new"
     return "_tr_rt_idict_new"
 
 # Dict runtime symbol for op ("set"/"get"/"has"/"len") given the dict tag (str vs int keys).
 def _dict_sym(t: int, op: str) -> str:
     mut pfx = "_tr_rt_idict_"
-    if t == 6 or t == 8: pfx = "_tr_rt_sdict_"
+    if _dict_key_is_str(t): pfx = "_tr_rt_sdict_"
     return pfx + op
 
 def _list_elem_tag(t: int) -> int:      # element value-type held by a list handle
     if t == 3: return 1
     if t == 14: return 5                # float elements (stored as raw bit patterns)
+    if t == 19: return 10               # class-instance elements (raw 8-byte handles)
     return 0
 
 def _list_tag_for_elem(et: int) -> int: # list handle tag that holds element type `et`
     if et == 1: return 3
     if et == 5: return 14
+    if et == 10: return 19
     return 2
 
 def _is_cmp_op(op: str) -> bool:
@@ -117,10 +120,13 @@ def _ast_type_tag(ty: AstType) -> int:
             mut kint = _is_int_typename(kt.name)
             mut vstr = vt.name == "str" or vt.name == "String"
             mut vint = _is_int_typename(vt.name)
+            mut vflt = vt.name == "float" or vt.name == "f64"
             if kstr and vint: return 6
             if kint and vint: return 7
             if kstr and vstr: return 8
             if kint and vstr: return 9
+            if kstr and vflt: return 17
+            if kint and vflt: return 18
         return -1
     if _is_int_typename(n): return 0
     # f64 params/returns are self-consistent per backend: user fns are compiled by the
@@ -151,6 +157,9 @@ def _tag_of(m: LModule, ty: AstType) -> int:
     if _is_null_str(ty.name): return -1
     if m.is_class(ty.name): return 10
     if m.is_enum(ty.name): return 11
+    if (ty.name == "List" or ty.name == "Vec") and ty.args.len > 0:
+        mut lelem = ty.args.get(0).read()
+        if not _is_null_str(lelem.name) and m.is_class(lelem.name): return 19
     return _ast_type_tag(ty)
 
 # Class/enum name for an object-valued type ("" if scalar/unknown), for var_cls/fcls maps.
@@ -364,8 +373,68 @@ pub def lower_to_lir(prog: HirProgram) -> LModule:
                 _lir_lower_function(m, f)
             else:
                 _lir_lower_method(m, f.class_name, f)
-            if not m.ok: return m
+            if not m.ok:
+                # LAZY REACHABILITY: a function whose body can't lower is only fatal if
+                # something LOWERED actually calls it (checked below). Dead unsupported
+                # code — e.g. an unused helper in an imported module — costs nothing.
+                # `main` is the entry point and always required.
+                if f.name == "main" and f.class_name == "": return m
+                mut un = f.name
+                if f.class_name != "": un = f.class_name + "_" + f.name
+                m.unavail_names.push(_own(un))
+                m.unavail_notes.push(_own(m.fail_note))
+                m.ok = true
+                m.fail_note = ""
         i = i + 1
+    # Reachability CASCADE: a lowered fn that calls / takes the address of an unavailable
+    # fn becomes unavailable itself (its callers may be dead too — e.g. Vec_reverse calls
+    # Vec_swap, but nothing calls Vec_reverse). Iterate to a fixpoint; only if `main`
+    # itself ends up needing unavailable code does the build fail — with the full note.
+    if m.unavail_names.len > 0:
+        mut dropped = Vec[int].init(m.funcs.len)      # parallel to m.funcs: 1 = removed
+        mut di0 = 0
+        while di0 < m.funcs.len:
+            dropped.push(0)
+            di0 = di0 + 1
+        mut changed = true
+        while changed:
+            changed = false
+            mut fi2 = 0
+            while fi2 < m.funcs.len:
+                if dropped.get(fi2) == 0:
+                    mut lfc = m.funcs.get(fi2)
+                    mut hit = -1
+                    mut bi2 = 0
+                    while bi2 < lfc.blocks.len and hit < 0:
+                        mut blk2 = lfc.blocks.get(bi2)
+                        mut ii2 = 0
+                        while ii2 < blk2.insts.len and hit < 0:
+                            match blk2.insts.get(ii2).read():
+                                case LInst.ICall(_, ucallee, _):
+                                    hit = m.unavail_index(ucallee)
+                                case LInst.IFuncAddr(_, ufname):
+                                    hit = m.unavail_index(ufname)
+                                case _: pass
+                            ii2 = ii2 + 1
+                        bi2 = bi2 + 1
+                    if hit >= 0:
+                        mut unote = "'" + _own(lfc.name) + "' calls '" + m.unavail_names.get(hit) + "' — " + m.unavail_notes.get(hit)
+                        if lfc.is_main:
+                            m.ok = false
+                            m.fail_note = unote
+                            return m
+                        m.unavail_names.push(_own(lfc.name))
+                        m.unavail_notes.push(unote)
+                        dropped.set(fi2, 1)
+                        changed = true
+                fi2 = fi2 + 1
+        # Rebuild m.funcs with only the surviving functions.
+        mut kept = Vec[LFunc].init(m.funcs.len)
+        mut ki = 0
+        while ki < m.funcs.len:
+            if dropped.get(ki) == 0: kept.push(m.funcs.get(ki))
+            ki = ki + 1
+        m.funcs = kept
     return m
 
 # True if any parameter of `f` is typed as a registered INTERFACE (such a function
@@ -493,6 +562,11 @@ def _lir_lower_method(m: LModule, class_name: str, f: HirFunction):
         m.ok = false
         m.fail_note = "method '" + _own(class_name) + "." + _own(f.name) + "': body uses an unsupported construct"
         return
+    if not lf.cur_terminated():
+        if not _run_defers(m, lf):
+            m.ok = false
+            m.fail_note = "method '" + _own(class_name) + "." + _own(f.name) + "': deferred statement not lowerable"
+            return
     lf.set_term(LTerm.TRetInt(0))
     m.funcs.push(lf)
 
@@ -577,6 +651,11 @@ def _lir_lower_function(m: LModule, f: HirFunction):
         m.ok = false
         m.fail_note = "fn '" + _own(f.name) + "': body uses an unsupported construct"
         return
+    if not lf.cur_terminated():
+        if not _run_defers(m, lf):
+            m.ok = false
+            m.fail_note = "fn '" + _own(f.name) + "': deferred statement not lowerable"
+            return
     lf.set_term(LTerm.TRetInt(0))
     m.funcs.push(lf)
 
@@ -686,10 +765,28 @@ def _lower_obj_call(m: LModule, lf: LFunc, mangled: str, self_vreg: int, margs: 
     return rd
 
 def lower_block(m: LModule, lf: LFunc, hb: HirBlock) -> bool:
+    lf.blk_depth = lf.blk_depth + 1
     mut si = 0
     while si < hb.stmts.len:
-        if not lower_stmt(m, lf, hb.stmts.get(si)): return false
+        if not lower_stmt(m, lf, hb.stmts.get(si)):
+            lf.blk_depth = lf.blk_depth - 1
+            return false
         si = si + 1
+    lf.blk_depth = lf.blk_depth - 1
+    return true
+
+# Lower the recorded `defer` statements in LIFO order (at a function exit point).
+def _run_defers(m: LModule, lf: LFunc) -> bool:
+    if lf.defers.len == 0: return true
+    if lf.in_defer: return false
+    lf.in_defer = true
+    mut di = lf.defers.len - 1
+    while di >= 0:
+        if not lower_stmt(m, lf, lf.defers.get(di)):
+            lf.in_defer = false
+            return false
+        di = di - 1
+    lf.in_defer = false
     return true
 
 # -- statements ---------------------------------------------------------------------
@@ -707,14 +804,17 @@ def lower_stmt(m: LModule, lf: LFunc, s: Pointer[HirStmt]) -> bool:
             return true
         case HirStmt.SFree(_): return true
         case HirStmt.SReturn(val):
+            if lf.in_defer: return false          # `return` inside a defer: unsupported
             if val as usize != 0 as usize:
                 mut rv = lower_expr(m, lf, val)
                 if rv < 0: return false
                 if lf.vreg_type(rv) == 1: _secure_str(m, lf, rv)   # caller owns the returned str
                 _flush_fresh_strs(m, lf)
+                if not _run_defers(m, lf): return false            # LIFO defers before exit
                 lf.set_term(LTerm.TRetVal(rv))
             else:
                 _flush_fresh_strs(m, lf)
+                if not _run_defers(m, lf): return false
                 lf.set_term(LTerm.TRetInt(0))
             return true
         case HirStmt.SLet(name, _, _, _, _, _, val):
@@ -878,6 +978,110 @@ def lower_stmt(m: LModule, lf: LFunc, s: Pointer[HirStmt]) -> bool:
                 lf.emit(LInst.IStoreVar(mnm, mv))
                 mi = mi + 1
             _flush_fresh_strs(m, lf)
+            return true
+        case HirStmt.SDefer(dstmt):
+            # LIFO at function exit (like the C backend). Only top-level defers are
+            # position-independent, so nested ones fall back (never-wrong).
+            if lf.in_defer: return false
+            if lf.blk_depth != 1: return false
+            lf.defers.push(dstmt)
+            return true
+        case HirStmt.SWith(witems, waliases, wbody):
+            # `with expr as x:` -> x = expr.__enter__(); body; expr.__exit__("", "", "").
+            if witems.len != 1: return false
+            mut wctx = lower_expr(m, lf, witems.get(0))
+            if wctx < 0: return false
+            mut wcls = _recv_class(m, lf, witems.get(0))
+            if wcls == "" or not m.is_class(wcls): return false
+            mut w_enter = m.resolve_method(wcls, "__enter__")
+            mut w_exit = m.resolve_method(wcls, "__exit__")
+            if w_enter == "" or w_exit == "": return false
+            # keep the ctx in a synthetic var (used again for __exit__ after the body)
+            mut w_var = "__with" + lf.fresh_id().to_str()
+            lf.add_var(w_var)
+            lf.set_var_type(w_var, 10)
+            lf.emit(LInst.IStoreVar(w_var, wctx))
+            mut w_ea = Vec[int].init(1)
+            w_ea.push(wctx)
+            mut w_rd = lf.new_vreg()
+            lf.emit(LInst.ICall(w_rd, w_enter, w_ea))
+            lf.set_vreg_type(w_rd, m.fn_ret_tag(w_enter))
+            if waliases.len > 0 and not _is_null_str(waliases.get(0)) and waliases.get(0) != "":
+                mut w_an = waliases.get(0)
+                lf.add_var(w_an)
+                lf.set_var_type(w_an, lf.vreg_type(w_rd))
+                if lf.vreg_type(w_rd) == 10 or lf.vreg_type(w_rd) == 11:
+                    lf.set_var_cls(w_an, _own(wcls))
+                lf.emit(LInst.IStoreVar(w_an, w_rd))
+            if not lower_block(m, lf, wbody): return false
+            # __exit__(self, "", "", "") matches the C backend's call shape (raw .rodata
+            # empty strings; the callee only borrows them).
+            mut w_c2 = lf.new_vreg()
+            lf.emit(LInst.ILoadVar(w_c2, w_var))
+            lf.set_vreg_type(w_c2, 10)
+            mut w_xa = Vec[int].init(4)
+            w_xa.push(w_c2)
+            mut w_ei = 0
+            while w_ei < 3:
+                mut w_es = lf.new_vreg()
+                lf.emit(LInst.IStr(w_es, m.add_string("")))
+                lf.set_vreg_type(w_es, 1)
+                w_xa.push(w_es)
+                w_ei = w_ei + 1
+            lf.emit(LInst.ICall(-1, w_exit, w_xa))
+            return true
+        case HirStmt.STry(try_body, catches, finally_b):
+            # ZERO-COST lexical exceptions: a `raise` inside this try (same function)
+            # is a plain BRANCH to the except block — no setjmp, no runtime, no cost on
+            # the non-throwing path. Cross-frame raises make their fn unavailable (lazy
+            # reachability), so calls into raising code degrade with a precise error.
+            if catches.len != 1: return false            # v1: exactly one catch clause
+            mut tcc = catches.get(0).read()
+            if not _is_null_str(tcc.err_type.name):
+                if tcc.err_type.name != "" and tcc.err_type.name != "void" and tcc.err_type.name != "str": return false
+            mut t_exc = lf.new_block()
+            mut t_end = lf.new_block()
+            mut t_msg = "__exmsg" + lf.fresh_id().to_str()
+            lf.add_var(t_msg)
+            lf.set_var_type(t_msg, 1)
+            mut t_seed = _heap_lit(m, lf, "")             # define the slot (owned empty)
+            _fresh_take(lf, t_seed)                       # slot owns it — don't flush-release
+            lf.emit(LInst.IStoreVar(t_msg, t_seed))
+            lf.try_blks.push(t_exc)
+            lf.try_msgs.push(t_msg)
+            mut t_ok = lower_block(m, lf, try_body)
+            lf.try_blks.pop()
+            lf.try_msgs.pop()
+            if not t_ok: return false
+            if not lower_block(m, lf, finally_b): return false   # normal-path finally
+            lf.set_term(LTerm.TBr(t_end))
+            lf.set_cur(t_exc)
+            if not _is_null_str(tcc.err_name) and tcc.err_name != "":
+                mut t_ev = lf.new_vreg()
+                lf.emit(LInst.ILoadVar(t_ev, t_msg))
+                lf.set_vreg_type(t_ev, 1)
+                _retain_str(m, lf, t_ev)                  # the user binding owns its ref
+                lf.add_var(tcc.err_name)
+                lf.set_var_type(tcc.err_name, 1)
+                lf.emit(LInst.IStoreVar(tcc.err_name, t_ev))
+            if not lower_block(m, lf, tcc.body): return false
+            if not lower_block(m, lf, finally_b): return false   # except-path finally
+            lf.set_term(LTerm.TBr(t_end))
+            lf.set_cur(t_end)
+            return true
+        case HirStmt.SRaise(rval):
+            # Only meaningful INSIDE a lexical try (see STry). Elsewhere the raise would
+            # need cross-frame unwinding -> this fn becomes unavailable, never wrong code.
+            if lf.try_blks.len == 0: return false
+            if rval as usize != 0 as usize:
+                mut rv = lower_expr(m, lf, rval)
+                if rv < 0: return false
+                if lf.vreg_type(rv) != 1: return false    # v1: str messages only
+                _secure_str(m, lf, rv)                    # the msg slot takes ownership
+                lf.emit(LInst.IStoreVar(lf.try_msgs.get(lf.try_msgs.len - 1), rv))
+            _flush_fresh_strs(m, lf)
+            lf.set_term(LTerm.TBr(lf.try_blks.get(lf.try_blks.len - 1)))
+            lf.set_cur(lf.new_block())                    # isolate dead trailing stmts
             return true
         case HirStmt.SMatch(mexpr, marms):
             return _lower_match(m, lf, mexpr, marms)
@@ -1332,6 +1536,11 @@ def _lower_for_list(m: LModule, lf: LFunc, var: str, iter: Pointer[HirExpr], bod
     if elem_t == 1: _retain_str(m, lf, xval)   # loop var owns its own ref (borrow of the list elem)
     lf.add_var(var)
     lf.set_var_type(var, elem_t)
+    if elem_t == 10:                           # object elements: record the class for dispatch
+        mut it_ty = hir_expr_type(iter)
+        if it_ty.args.len > 0 and not _is_null_str(it_ty.args.get(0).read().name):
+            if m.is_class(it_ty.args.get(0).read().name):
+                lf.set_var_cls(var, _own(it_ty.args.get(0).read().name))
     lf.emit(LInst.IStoreVar(var, xval))
     lf.loop_cont.push(latch)            # continue -> latch (bumps the index)
     lf.loop_brk.push(ext)
@@ -1481,6 +1690,10 @@ def _lower_index_set(m: LModule, lf: LFunc, obj: Pointer[HirExpr], idx: Pointer[
         mut vv = lower_expr(m, lf, val)
         if vv < 0 or lf.vreg_type(vv) != _dict_val_tag(ovt): return false
         if _dict_val_tag(ovt) == 1: _secure_str(m, lf, vv)   # dict owns the str value by ref
+        if _dict_val_tag(ovt) == 5:                          # float value: store the bit pattern
+            mut ivb = lf.new_vreg()
+            lf.emit(LInst.IFBits(ivb, vv))
+            vv = ivb
         mut ssym = _dict_sym(ovt, "set")
         m.add_extern(ssym)
         mut sa = Vec[int].init(3)
@@ -2003,6 +2216,11 @@ def _lower_dict_method(m: LModule, lf: LFunc, recv: int, dtag: int, method: str,
         getargs.push(kv)
         mut gd = lf.new_vreg()
         lf.emit(LInst.ICall(gd, gsym, getargs))
+        if _dict_val_tag(dtag) == 5:
+            mut gdf = lf.new_vreg()
+            lf.emit(LInst.IBitsF(gdf, gd))
+            lf.set_vreg_type(gdf, 5)
+            return gdf
         lf.set_vreg_type(gd, _dict_val_tag(dtag))
         return gd
     if method == "contains" or method == "has":
@@ -2729,7 +2947,7 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                 mut ev = lower_expr(m, lf, items.get(li))
                 if ev < 0: return -1
                 mut evt = lf.vreg_type(ev)
-                if evt != 0 and evt != 1 and evt != 5: return -1   # int/str/float elements
+                if evt != 0 and evt != 1 and evt != 5 and evt != 10: return -1   # int/str/float/object
                 if li == 0:
                     elem_t = evt
                     list_tag = _list_tag_for_elem(evt)
@@ -2757,6 +2975,8 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                 elif k0 == 0 and v0 == 0: dtag = 7
                 elif k0 == 1 and v0 == 1: dtag = 8
                 elif k0 == 0 and v0 == 1: dtag = 9
+                elif k0 == 1 and v0 == 5: dtag = 17
+                elif k0 == 0 and v0 == 5: dtag = 18
                 else: return -1
             if not _is_dict_tag(dtag): return -1
             mut dnew = _dict_new_sym(dtag)
@@ -2776,6 +2996,10 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                 if vv < 0: return -1
                 if lf.vreg_type(vv) != vtag: return -1
                 if vtag == 1: _secure_str(m, lf, vv)     # dict owns the str value by ref
+                if vtag == 5:                            # float value: store the bit pattern
+                    mut dvb = lf.new_vreg()
+                    lf.emit(LInst.IFBits(dvb, vv))
+                    vv = dvb
                 mut dset = _dict_sym(dtag, "set")
                 m.add_extern(dset)
                 mut dsa = Vec[int].init(3)
@@ -2888,6 +3112,11 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                 dga.push(dkv)
                 mut dgd = lf.new_vreg()
                 lf.emit(LInst.ICall(dgd, dget, dga))
+                if _dict_val_tag(ovt) == 5:
+                    mut dgf = lf.new_vreg()
+                    lf.emit(LInst.IBitsF(dgf, dgd))
+                    lf.set_vreg_type(dgf, 5)
+                    return dgf
                 lf.set_vreg_type(dgd, _dict_val_tag(ovt))
                 return dgd
             if not _is_list_tag(ovt): return -1

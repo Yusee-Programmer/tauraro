@@ -1,0 +1,46 @@
+# native≡c / llvm≡c differential corpus: LAZY REACHABILITY — unsupported functions that
+# are never called must NOT poison the build (pay only for what you use). Only `main`
+# and the functions it actually reaches need to be lowerable.
+def used(x: int) -> int:
+    return x * 2
+
+# UNUSED: try/except is not lowerable in the LIR — must be skipped, not fatal.
+def dead_try(x: int) -> int:
+    mut r = 0
+    try:
+        r = x
+    except:
+        r = 0 - 1
+    return r
+
+# UNUSED: `with` is not lowerable either.
+def dead_with() -> int:
+    mut n = 0
+    mut xs = [1, 2, 3]
+    for x in xs:
+        n = n + x
+    return n
+
+class Gadget:
+    v: int
+
+extend Gadget:
+    def init(v: int) -> Gadget:
+        mut g = Gadget()
+        g.v = v
+        return g
+    # UNUSED method with an unsupported body construct.
+    def dead_method(self) -> int:
+        mut r = 0
+        try:
+            r = self.v
+        except:
+            r = 0
+        return r
+    def live_method(self) -> int:
+        return self.v + 1
+
+def main():
+    print(used(21))                 # 42
+    mut g = Gadget.init(9)
+    print(g.live_method())          # 10

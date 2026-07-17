@@ -43,6 +43,26 @@ __attribute__((hot)) TrStr _ll_ty(long long tag) {
         return _tr_str_lit("ptr");
     }
     /* pass */
+    if ((tag == 15LL)) {
+        /* pass */
+        return _tr_str_lit("ptr");
+    }
+    /* pass */
+    if (((tag == 13LL) || (tag == 16LL))) {
+        /* pass */
+        return _tr_str_lit("ptr");
+    }
+    /* pass */
+    if (((tag == 14LL) || (tag == 19LL))) {
+        /* pass */
+        return _tr_str_lit("ptr");
+    }
+    /* pass */
+    if (((tag == 17LL) || (tag == 18LL))) {
+        /* pass */
+        return _tr_str_lit("ptr");
+    }
+    /* pass */
     return _tr_str_lit("i64");
 }
 

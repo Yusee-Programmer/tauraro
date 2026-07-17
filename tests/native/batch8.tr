@@ -1,0 +1,54 @@
+# native≡c / llvm≡c differential corpus: Dict float VALUES + List[object].
+class Item:
+    id: int
+    w: int
+
+extend Item:
+    def init(id: int, w: int) -> Item:
+        mut it = Item()
+        it.id = id
+        it.w = w
+        return it
+    def weight(self) -> int:
+        return self.w
+
+def heaviest(items: List[Item]) -> int:
+    mut best = 0 - 1
+    mut bw = 0 - 1
+    mut i = 0
+    while i < items.len:
+        if items[i].weight() > bw:
+            bw = items[i].weight()
+            best = items[i].id
+        i = i + 1
+    return best
+
+def main():
+    # Dict[str, float]
+    mut prices = {"apple": 1.5, "pear": 2.25}
+    print(prices["apple"])          # 1.5
+    print(prices.get("pear"))       # 2.25
+    prices["apple"] = 1.75
+    print(prices["apple"])          # 1.75
+    print("apple" in prices)        # true
+    print(prices.len)               # 2
+
+    # Dict[int, float]
+    mut temps = {1: 20.5, 2: 22.0}
+    print(temps[2])                 # 22
+    temps[3] = 0.0 - 3.5
+    print(temps[3])                 # -3.5
+    mut tsum = 0.0
+    tsum = temps[1] + temps[2] + temps[3]
+    print(tsum)                     # 39
+
+    # List[object]: literal, index, methods on elements, iteration, push
+    mut items = [Item.init(1, 10), Item.init(2, 30), Item.init(3, 20)]
+    print(items.len)                # 3
+    print(items[1].weight())        # 30
+    items.push(Item.init(4, 99))
+    print(heaviest(items))          # 4
+    mut total = 0
+    for it in items:
+        total = total + it.weight()
+    print(total)                    # 159

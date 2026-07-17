@@ -85,6 +85,11 @@ pub class LFunc:
     pub cap_tags:   Vec[int]        # parallel: value-type tag of each capture
     pub var_xret:   Vec[int]        # parallel to vars: closure return tag (-1 = not a closure)
     pub vreg_xret:  Vec[int]        # parallel to vregs: closure return tag (-1 = not a closure)
+    pub try_blks:   Vec[int]        # innermost-last: except-entry block ids (lexical try/except)
+    pub try_msgs:   Vec[str]        # parallel: synthetic var holding the raised message
+    pub defers:     Vec[Pointer[HirStmt]]  # `defer` stmts (LIFO at every function exit)
+    pub blk_depth:  int             # lower_block nesting (1 = the function's own body)
+    pub in_defer:   bool            # lowering a deferred stmt (rejects nested defer/return)
 
 extend LFunc:
     pub def init(name: str) -> LFunc:
@@ -107,6 +112,11 @@ extend LFunc:
         f.cap_tags   = Vec[int].init(2)
         f.var_xret   = Vec[int].init(4)
         f.vreg_xret  = Vec[int].init(8)
+        f.try_blks   = Vec[int].init(2)
+        f.try_msgs   = Vec[str].init(2)
+        f.defers     = Vec[Pointer[HirStmt]].init(2)
+        f.blk_depth  = 0
+        f.in_defer   = false
         return f
 
     # A monotonically increasing id, for building unique synthesized variable names
@@ -296,6 +306,8 @@ pub class LModule:
                                             # instantiated lazily from here at call sites)
     pub ok:       bool
     pub fail_note: str                      # when ok=false: which fn/construct failed (diagnostics)
+    pub unavail_names: Vec[str]             # fns whose BODY couldn't lower (lazy reachability:
+    pub unavail_notes: Vec[str]             # only fatal if a LOWERED fn actually calls one)
 
 extend LModule:
     pub def init() -> LModule:
@@ -313,6 +325,8 @@ extend LModule:
         m.global_inits = Vec[Pointer[HirStmt]].init(4)
         m.ok       = true
         m.fail_note = ""
+        m.unavail_names = Vec[str].init(4)
+        m.unavail_notes = Vec[str].init(4)
         return m
 
     # Register a module-level global; returns its slot index (dedup by name).
@@ -370,6 +384,15 @@ extend LModule:
             if self.fn_names.get(i) == name: return true
             i = i + 1
         return false
+
+    # Index into unavail_names (-1 = the fn lowered fine / unknown).
+    pub def unavail_index(self, name: str) -> int:
+        if (name as Pointer[char]) as usize == 0 as usize: return -1
+        mut i = 0
+        while i < self.unavail_names.len:
+            if self.unavail_names.get(i) == name: return i
+            i = i + 1
+        return -1
 
     # -- object model: class layout registry --------------------------------------------
     pub def add_class(self, cl: ClassLayout):

@@ -1,0 +1,30 @@
+# native≡c / llvm≡c differential corpus: `with` (enter/exit protocol) + `defer` (LIFO
+# at function exit, incl. early returns).
+class Res:
+    id: int
+
+extend Res:
+    def init(id: int) -> Res:
+        mut r = Res()
+        r.id = id
+        return r
+    def __enter__(self) -> Res:
+        print("enter")
+        return self
+    def __exit__(self, et: str, ev: str, tb: str):
+        print("exit")
+
+def early(n: int) -> int:
+    defer print("early-defer")
+    if n > 5:
+        return 100
+    return 0
+
+def main():
+    with Res.init(7) as r:
+        print(r.id)              # enter / 7 / exit
+    defer print("deferred-1")
+    defer print("deferred-2")
+    print("body")
+    print(early(9))              # early-defer / 100
+    print(early(1))              # early-defer / 0

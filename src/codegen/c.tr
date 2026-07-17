@@ -2895,6 +2895,12 @@ pub class CGenerator:
             mut o_full_ty = hir_expr_type(o)
             if o_full_ty.args.len > 0 and _is_str_type(self.resolve_generic_prim(o_full_ty.args.get(0).read().name)):
                 return "_tr_str_lit(" + idx_r + ")"
+            # #25: a List[Class] PARAM types as List_ptr (void** data) — element access
+            # needs an explicit cast or `->field` on the element is invalid C.
+            if o_full_ty.args.len > 0:
+                mut _lie = o_full_ty.args.get(0).read()
+                if self.is_heap_class_tn(_lie.name):
+                    return "((" + _lie.name + "*)" + idx_r + ")"
             return idx_r
         if self.classes.contains(ty_n) and ty_n != "Vec" and ty_n != "List" and ty_n != "Map" and ty_n != "Dict":
             if self.has_method(ty_n, "__getitem__"):
@@ -3703,6 +3709,10 @@ pub class CGenerator:
             mut _dvr = self.obj_retain_wrap(e, e_s, false)
             if self._obj_store_needs_retain(e): _dvr = "_tr_obj_retain(" + _dvr + ")"
             return _dvr
+        # Float value: reinterpret the f64 bits into the void* slot (#24 — passing a
+        # raw double to a void* parameter stored garbage/truncated values).
+        if _is_float_type(self.resolve_generic_prim(hir_expr_type(e).name)):
+            return "_tr_f64_to_ptr((double)(" + e_s + "))"
         return e_s
 
     # Like gen_args, but unwraps any TrStr-typed argument to raw char* via
@@ -5045,6 +5055,10 @@ pub class CGenerator:
                     if _is_str_type(call_ty.name):
                         if self.eliding_get_retain: return "_tr_str_unbox(" + iget_r + ")"
                         return "_tr_str_retain(_tr_str_unbox(" + iget_r + "))"
+                    # Float value (#24): the slot holds the f64 BIT PATTERN — reinterpret,
+                    # never arithmetic-cast (that truncated 1.5 -> 1).
+                    if _is_float_type(call_ty.name):
+                        return "_tr_ptr_to_f64(" + iget_r + ")"
                     if c_ty_c != "void" and c_ty_c != "":
                         return "((" + c_ty_c + ")(uintptr_t)" + iget_r + ")"
                     return iget_r
@@ -5052,6 +5066,8 @@ pub class CGenerator:
                 if _is_str_type(call_ty.name):
                     if self.eliding_get_retain: return "_tr_str_unbox(" + mget_r + ")"
                     return "_tr_str_retain(_tr_str_unbox(" + mget_r + "))"
+                if _is_float_type(call_ty.name):
+                    return "_tr_ptr_to_f64(" + mget_r + ")"
                 if c_ty_c != "void" and c_ty_c != "":
                     return "((" + c_ty_c + ")(uintptr_t)" + mget_r + ")"
                 return mget_r
