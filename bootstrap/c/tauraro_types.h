@@ -2998,6 +2998,8 @@ typedef struct LModule {
     TrStr fail_note;
     List_TrStr* unavail_names;
     List_TrStr* unavail_notes;
+    List_TrStr* subst_names;
+    List_ptr* subst_tys;
 } LModule;
 static void _trdrop_LModule(void* vp) {
     LModule* self = (LModule*)vp; (void)self;
@@ -3015,6 +3017,8 @@ static void _trdrop_LModule(void* vp) {
     _tr_str_release(self->fail_note);
     List_TrStr_free(self->unavail_names);
     List_TrStr_free(self->unavail_notes);
+    List_TrStr_free(self->subst_names);
+    List_ptr_free(self->subst_tys);
 }
 #endif
 
@@ -3734,6 +3738,7 @@ __attribute__((hot)) long long LModule_enum_size(LModule* self, TrStr name);
 __attribute__((hot)) long long LModule_enum_variant_index(LModule* self, TrStr ename, TrStr vname);
 __attribute__((hot)) void LModule_add_iface(LModule* self, TrStr name);
 __attribute__((hot)) bool LModule_is_iface(LModule* self, TrStr name);
+__attribute__((hot)) AstType** box_asttype_lir(AstType* t);
 __attribute__((hot)) long long _f64_bits(double v);
 __attribute__((hot)) long long _promote_f(LFunc* lf, long long v);
 __attribute__((hot)) TrStr _print_i64_sym();
@@ -3753,6 +3758,10 @@ __attribute__((hot)) long long _ast_type_tag(AstType* ty);
 __attribute__((hot)) bool _is_null_str(TrStr s);
 __attribute__((hot)) TrStr _own(TrStr s);
 __attribute__((hot)) long long _tag_of(LModule* m, AstType* ty);
+__attribute__((hot)) AstType* _subst_ty(LModule* m, AstType* ty);
+__attribute__((hot)) long long _prog_generic_class_index(LModule* m, TrStr name);
+__attribute__((hot)) TrStr _mangle_generic(LModule* m, AstType* ty);
+__attribute__((hot)) TrStr _ensure_generic_class(LModule* m, AstType* ty);
 __attribute__((hot)) TrStr _cls_of_ty(LModule* m, AstType* ty);
 __attribute__((hot)) TrStr _recv_class(LModule* m, LFunc* lf, HirExpr* obj);
 __attribute__((hot)) long long _prog_class_index(HirProgram* prog, TrStr name);
@@ -3778,6 +3787,8 @@ __attribute__((hot)) long long _lower_enum_ctor(LModule* m, LFunc* lf, TrStr ena
 __attribute__((hot)) long long _lower_obj_call(LModule* m, LFunc* lf, TrStr mangled, long long self_vreg, List_ptr* margs);
 __attribute__((hot)) bool lower_block(LModule* m, LFunc* lf, HirBlock* hb);
 __attribute__((hot)) bool _run_defers(LModule* m, LFunc* lf);
+__attribute__((hot)) TrStr _dunder_for_op(TrStr op);
+__attribute__((hot)) TrStr _stmt_expr_kind(HirExpr* e);
 __attribute__((hot)) bool lower_stmt(LModule* m, LFunc* lf, HirStmt* s);
 __attribute__((hot)) long long _lower_set_method(LModule* m, LFunc* lf, long long shv, long long stag, TrStr method, List_ptr* margs);
 __attribute__((hot)) long long _lit_pat_cond(LModule* m, LFunc* lf, Pattern pat, long long subj, long long st);

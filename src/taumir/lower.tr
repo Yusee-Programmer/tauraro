@@ -17,6 +17,13 @@ from taumir.ir import LModule, LFunc, LInst, LTerm, ClassLayout, EnumLayout, Var
 from ast import AstType, Pattern
 from core.alloc import alloc
 
+# Box an AstType for the substitution table (lower.tr is @trusted).
+def box_asttype_lir(t: AstType) -> Pointer[AstType]:
+    unsafe:
+        mut p = alloc[AstType](1)
+        p.write(t)
+        return p
+
 # Reinterpret an f64 literal as its raw i64 bit pattern (emitted as an immediate, then
 # reloaded into an xmm register for float ops). lower.tr is @trusted, so the raw-pointer
 # reinterpret is allowed.
@@ -155,17 +162,119 @@ def _own(s: str) -> str:
 # A null/absent type name -> -1 (untyped -> the module falls back to C, never crashes).
 def _tag_of(m: LModule, ty: AstType) -> int:
     if _is_null_str(ty.name): return -1
+    # Active generic-class substitution: T -> the instantiation's concrete type.
+    mut sbi = 0
+    while sbi < m.subst_names.len:
+        if m.subst_names.get(sbi) == ty.name:
+            return _tag_of(m, m.subst_tys.get(sbi).read())
+        sbi = sbi + 1
     if m.is_class(ty.name): return 10
     if m.is_enum(ty.name): return 11
+    # Generic class instantiation Box[int]: ensure its layout+methods, tag = object.
+    if ty.args.len > 0 and _prog_generic_class_index(m, ty.name) >= 0:
+        if _ensure_generic_class(m, ty) != "": return 10
+        return -1
     if (ty.name == "List" or ty.name == "Vec") and ty.args.len > 0:
         mut lelem = ty.args.get(0).read()
         if not _is_null_str(lelem.name) and m.is_class(lelem.name): return 19
     return _ast_type_tag(ty)
 
+# Resolve a type under the ACTIVE substitution (T -> concrete) for cls-name purposes.
+def _subst_ty(m: LModule, ty: AstType) -> AstType:
+    if _is_null_str(ty.name): return ty
+    mut sbi = 0
+    while sbi < m.subst_names.len:
+        if m.subst_names.get(sbi) == ty.name: return m.subst_tys.get(sbi).read()
+        sbi = sbi + 1
+    return ty
+
+# Index of a GENERIC class template in hir_prog.classes (-1 if not one).
+def _prog_generic_class_index(m: LModule, name: str) -> int:
+    if _is_null_str(name): return -1
+    mut i = 0
+    while i < m.hir_prog.classes.len:
+        mut c = m.hir_prog.classes.get(i)
+        if c.name == name and c.generics.len > 0: return i
+        i = i + 1
+    return -1
+
+# Mangle Box[int] -> "Box__gint" (safe in C and LLVM symbol names).
+def _mangle_generic(m: LModule, ty: AstType) -> str:
+    mut n = _own(ty.name)
+    mut ai = 0
+    while ai < ty.args.len:
+        mut at = _subst_ty(m, ty.args.get(ai).read())
+        n = n + "__g" + _own(at.name)
+        ai = ai + 1
+    return n
+
+# Instantiate a generic class for concrete type args: register the layout under the
+# mangled name and lower every method as <mangled>_<method> with the substitution
+# active. Returns the mangled name ("" = not lowerable -> caller falls back).
+def _ensure_generic_class(m: LModule, ty: AstType) -> str:
+    mut gci = _prog_generic_class_index(m, ty.name)
+    if gci < 0: return ""
+    mut c = m.hir_prog.classes.get(gci)
+    if c.generics.len != ty.args.len: return ""
+    if c.base_classes.len > 0: return ""          # generic + inheritance: not yet
+    mut mangled = _mangle_generic(m, ty)
+    if m.is_class(mangled): return mangled        # already instantiated
+    # Push the substitution (restored on ALL exits below).
+    mut sb = 0
+    while sb < c.generics.len:
+        m.subst_names.push(_own(c.generics.get(sb)))
+        m.subst_tys.push(box_asttype_lir(_subst_ty(m, ty.args.get(sb).read())))
+        sb = sb + 1
+    # Layout: field tags under the subst.
+    mut lay = ClassLayout.init(_own(mangled))
+    mut ok = true
+    mut fi = 0
+    while fi < c.fields.len:
+        mut ftg = _tag_of(m, c.fields.get(fi).ty)
+        if ftg < 0:
+            ok = false
+        lay.fields.push(_own(c.fields.get(fi).name))
+        lay.ftags.push(ftg)
+        lay.fcls.push(_cls_of_ty(m, _subst_ty(m, c.fields.get(fi).ty)))
+        fi = fi + 1
+    if ok:
+        m.add_class(lay)
+        # Register method names first (recursion), then lower bodies under the subst.
+        mut prereg = 0
+        while prereg < m.hir_prog.functions.len:
+            mut pf = m.hir_prog.functions.get(prereg)
+            if pf.class_name == ty.name and not pf.is_extern and pf.generics.len == 0:
+                m.fn_names.push(_own(mangled) + "_" + _own(pf.name))
+                m.fn_ret.push(_tag_of(m, pf.ret_ty))
+            prereg = prereg + 1
+        mut mi = 0
+        while mi < m.hir_prog.functions.len:
+            mut mf = m.hir_prog.functions.get(mi)
+            if mf.class_name == ty.name and not mf.is_extern and mf.generics.len == 0:
+                _lir_lower_method(m, mangled, mf)
+                if not m.ok:
+                    # method body not lowerable -> the INSTANTIATION is unavailable
+                    m.unavail_names.push(_own(mangled) + "_" + _own(mf.name))
+                    m.unavail_notes.push(_own(m.fail_note))
+                    m.ok = true
+                    m.fail_note = ""
+            mi = mi + 1
+    # Pop the substitution.
+    sb = 0
+    while sb < c.generics.len:
+        m.subst_names.pop()
+        m.subst_tys.pop()
+        sb = sb + 1
+    if not ok: return ""
+    return mangled
+
 # Class/enum name for an object-valued type ("" if scalar/unknown), for var_cls/fcls maps.
 def _cls_of_ty(m: LModule, ty: AstType) -> str:
     if _is_null_str(ty.name): return ""
     if m.is_class(ty.name) or m.is_enum(ty.name): return _own(ty.name)
+    if ty.args.len > 0 and _prog_generic_class_index(m, ty.name) >= 0:
+        mut gm = _ensure_generic_class(m, ty)
+        if gm != "": return gm
     return ""
 
 # Resolve the class/enum name of an object-valued receiver expression. Prefer the HIR
@@ -174,6 +283,9 @@ def _cls_of_ty(m: LModule, ty: AstType) -> str:
 def _recv_class(m: LModule, lf: LFunc, obj: Pointer[HirExpr]) -> str:
     mut cn = hir_expr_type(obj).name
     if not _is_null_str(cn) and (m.is_class(cn) or m.is_enum(cn)): return cn
+    if not _is_null_str(cn) and hir_expr_type(obj).args.len > 0 and _prog_generic_class_index(m, cn) >= 0:
+        mut grc = _ensure_generic_class(m, hir_expr_type(obj))
+        if grc != "": return grc
     match obj.read():
         case HirExpr.EIdent(nm, _, _):
             mut vc = lf.var_cls_of(nm)
@@ -268,6 +380,9 @@ def _register_classes(m: LModule, prog: HirProgram):
     mut i = 0
     while i < prog.classes.len:
         mut c = prog.classes.get(i)
+        if c.generics.len > 0:
+            i = i + 1
+            continue                       # generic templates instantiate lazily per use
         mut lay = ClassLayout.init(_own(c.name))
         if c.base_classes.len == 1: lay.base = _own(c.base_classes.get(0))
         if _push_field_names_rec(prog, i, lay, 0):
@@ -350,6 +465,9 @@ pub def lower_to_lir(prog: HirProgram) -> LModule:
     while i < prog.functions.len:
         mut f0 = prog.functions.get(i)
         if not f0.is_extern and not _fn_is_specializable(m, f0):
+            if f0.class_name != "" and _prog_generic_class_index(m, f0.class_name) >= 0:
+                i = i + 1
+                continue                   # instantiation-time registration instead
             if f0.class_name == "":
                 m.fn_names.push(f0.name)
             else:
@@ -369,6 +487,9 @@ pub def lower_to_lir(prog: HirProgram) -> LModule:
     while i < prog.functions.len:
         mut f = prog.functions.get(i)
         if not f.is_extern and not _fn_is_specializable(m, f):
+            if f.class_name != "" and _prog_generic_class_index(m, f.class_name) >= 0:
+                i = i + 1
+                continue                   # generic-class methods lower per instantiation
             if f.class_name == "":
                 _lir_lower_function(m, f)
             else:
@@ -790,6 +911,30 @@ def _run_defers(m: LModule, lf: LFunc) -> bool:
     return true
 
 # -- statements ---------------------------------------------------------------------
+# Operator -> dunder method name ("" = no dunder for this op).
+def _dunder_for_op(op: str) -> str:
+    if op == "+": return "__add__"
+    if op == "-": return "__sub__"
+    if op == "*": return "__mul__"
+    if op == "/": return "__truediv__"
+    if op == "%": return "__mod__"
+    if op == "**": return "__pow__"
+    if op == "//": return "__floordiv__"
+    if op == "==": return "__eq__"
+    if op == "!=": return "__ne__"
+    if op == "<": return "__lt__"
+    if op == "<=": return "__le__"
+    if op == ">": return "__gt__"
+    if op == ">=": return "__ge__"
+    return ""
+
+# Human-readable kind of a discarded expression statement (for fail_note granularity).
+def _stmt_expr_kind(e: Pointer[HirExpr]) -> str:
+    match e.read():
+        case HirExpr.ECall(callee, _, _): return "call " + _own(_ident_name(callee)) + "()"
+        case HirExpr.EMethodCall(_, meth, _, _): return "method ." + _own(meth) + "()"
+        case _: return "expression"
+
 def lower_stmt(m: LModule, lf: LFunc, s: Pointer[HirStmt]) -> bool:
     match s.read():
         case HirStmt.SLineMarker(_): return true
@@ -1092,8 +1237,14 @@ def lower_stmt(m: LModule, lf: LFunc, s: Pointer[HirStmt]) -> bool:
         case HirStmt.SExpr(e):
             mut se_ok = lower_expr_stmt(m, lf, e)
             _flush_fresh_strs(m, lf)
+            if not se_ok and m.fail_note == "":
+                m.fail_note = "unsupported expression statement (" + _stmt_expr_kind(e) + ")"
             return se_ok
+        case HirStmt.SUnsafe(_):
+            if m.fail_note == "": m.fail_note = "unsafe: block"
+            return false
         case _:
+            if m.fail_note == "": m.fail_note = "unsupported statement kind"
             return false
 
 # Set methods: a set is a dict-with-value-1, so add/contains/remove/len map straight
@@ -1679,6 +1830,17 @@ def _lower_field_set(m: LModule, lf: LFunc, obj: Pointer[HirExpr], prop: str, va
     return true
 
 def _lower_index_set(m: LModule, lf: LFunc, obj: Pointer[HirExpr], idx: Pointer[HirExpr], val: Pointer[HirExpr]) -> bool:
+    # __setitem__ on a class receiver: obj[i] = v -> obj.__setitem__(i, v).
+    mut sicls = _recv_class(m, lf, obj)
+    if sicls != "" and m.is_class(sicls):
+        mut sim = m.resolve_method(sicls, "__setitem__")
+        if sim != "":
+            mut siself = lower_expr(m, lf, obj)
+            if siself < 0: return false
+            mut siargs = Vec[Pointer[HirExpr]].init(2)
+            siargs.push(idx)
+            siargs.push(val)
+            return _lower_obj_call(m, lf, sim, siself, siargs) >= 0
     mut ov = lower_expr(m, lf, obj)
     if ov < 0: return false
     mut ovt = lf.vreg_type(ov)
@@ -2424,6 +2586,15 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
             if rtype == 1: _fresh_mark(lf, trd)   # result owns the slot's ref (transferred out)
             return trd
         case HirExpr.EUnaryOp(op, sub, _):
+            # __neg__ on a class operand: `-obj` -> obj.__neg__().
+            if op == "-":
+                mut ncls = _recv_class(m, lf, sub)
+                if ncls != "" and m.is_class(ncls):
+                    mut nm2 = m.resolve_method(ncls, "__neg__")
+                    if nm2 != "":
+                        mut nself = lower_expr(m, lf, sub)
+                        if nself < 0: return -1
+                        return _lower_obj_call(m, lf, nm2, nself, Vec[Pointer[HirExpr]].init(0))
             mut sv = lower_expr(m, lf, sub)
             if sv < 0: return -1
             mut svt = lf.vreg_type(sv)
@@ -2459,6 +2630,19 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                 return dcpl
             return -1
         case HirExpr.EBinOp(op, l, r, _):
+            # Dunder dispatch: `x <op> y` where x is a class defining the operator's
+            # dunder method -> a plain method call (zero-cost — same as the C backend).
+            mut ddn = _dunder_for_op(op)
+            if ddn != "":
+                mut lcls_d = _recv_class(m, lf, l)
+                if lcls_d != "" and m.is_class(lcls_d):
+                    mut ddm = m.resolve_method(lcls_d, ddn)
+                    if ddm != "":
+                        mut da = lower_expr(m, lf, l)
+                        if da < 0: return -1
+                        mut dargs = Vec[Pointer[HirExpr]].init(1)
+                        dargs.push(r)
+                        return _lower_obj_call(m, lf, ddm, da, dargs)
             mut a = lower_expr(m, lf, l)
             if a < 0: return -1
             mut b = lower_expr(m, lf, r)
@@ -2620,6 +2804,22 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                 lf.set_vreg_type(kd, kret)
                 if kret == 1: _fresh_mark(lf, kd)
                 return kd
+            # Bare construction of a generic instantiation `Box[T]()` (callee's HIR type
+            # carries the args; under an active subst T resolves concretely).
+            if args.len == 0 and _prog_generic_class_index(m, fn) >= 0:
+                mut gct = hir_expr_type(e)
+                if gct.args.len == 0: return -1
+                mut gcm = _ensure_generic_class(m, gct)
+                if gcm == "": return -1
+                mut gsz = lf.new_vreg()
+                lf.emit(LInst.IConst(gsz, m.class_size(gcm)))
+                m.add_extern("_tr_rt_obj_alloc")
+                mut goa = Vec[int].init(1)
+                goa.push(gsz)
+                mut god = lf.new_vreg()
+                lf.emit(LInst.ICall(god, "_tr_rt_obj_alloc", goa))
+                lf.set_vreg_type(god, 10)
+                return god
             # Bare construction `ClassName()` -> heap-allocate a zeroed instance.
             if m.is_class(fn) and args.len == 0:
                 mut szc = lf.new_vreg()
@@ -2631,6 +2831,15 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                 lf.emit(LInst.ICall(od, "_tr_rt_obj_alloc", oaa))
                 lf.set_vreg_type(od, 10)
                 return od
+            if fn == "len" and args.len == 1 and _recv_class(m, lf, args.get(0)) != "":
+                # len(obj) -> obj.__len__() for a class defining it.
+                mut lncls = _recv_class(m, lf, args.get(0))
+                if m.is_class(lncls):
+                    mut lnm = m.resolve_method(lncls, "__len__")
+                    if lnm != "":
+                        mut lnself = lower_expr(m, lf, args.get(0))
+                        if lnself < 0: return -1
+                        return _lower_obj_call(m, lf, lnm, lnself, Vec[Pointer[HirExpr]].init(0))
             if fn == "len" and args.len == 1:      # len(str) / len(list) builtin
                 mut xv = lower_expr(m, lf, args.get(0))
                 if xv < 0: return -1
@@ -3097,6 +3306,16 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
             lf.set_vreg_xret(cblk, crtag)
             return cblk
         case HirExpr.EIndex(obj, idx, _):
+            # __getitem__ on a class receiver: obj[i] -> obj.__getitem__(i).
+            mut gicls = _recv_class(m, lf, obj)
+            if gicls != "" and m.is_class(gicls):
+                mut gim = m.resolve_method(gicls, "__getitem__")
+                if gim != "":
+                    mut giself = lower_expr(m, lf, obj)
+                    if giself < 0: return -1
+                    mut giargs = Vec[Pointer[HirExpr]].init(1)
+                    giargs.push(idx)
+                    return _lower_obj_call(m, lf, gim, giself, giargs)
             mut ov = lower_expr(m, lf, obj)
             if ov < 0: return -1
             mut ovt = lf.vreg_type(ov)
@@ -3179,7 +3398,11 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
             # Static call `ClassName.method(args)` (e.g. a constructor `Point.init(..)`)
             # or enum variant construction `Enum.Variant(args)`: obj is the type name.
             match obj.read():
-                case HirExpr.EIdent(inm, _, _):
+                case HirExpr.EIdent(inm, ity_g, _):
+                    if _prog_generic_class_index(m, inm) >= 0 and ity_g.args.len > 0:
+                        mut gsm = _ensure_generic_class(m, ity_g)
+                        if gsm == "": return -1
+                        return _lower_obj_call(m, lf, gsm + "_" + method, -1, margs)
                     if m.is_class(inm):
                         mut smang = m.resolve_method(inm, method)   # up the base chain
                         if smang == "": return -1

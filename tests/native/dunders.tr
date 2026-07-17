@@ -1,0 +1,52 @@
+# native≡c / llvm≡c differential corpus: dunder OPERATOR dispatch (a + b -> a.__add__(b)).
+class Vec2:
+    x: int
+    y: int
+
+extend Vec2:
+    def init(x: int, y: int) -> Vec2:
+        mut v = Vec2()
+        v.x = x
+        v.y = y
+        return v
+    def __add__(self, o: Vec2) -> Vec2:
+        return Vec2.init(self.x + o.x, self.y + o.y)
+    def __sub__(self, o: Vec2) -> Vec2:
+        return Vec2.init(self.x - o.x, self.y - o.y)
+    def __eq__(self, o: Vec2) -> bool:
+        return self.x == o.x and self.y == o.y
+    def dot(self, o: Vec2) -> int:
+        return self.x * o.x + self.y * o.y
+
+class Money:
+    cents: int
+
+extend Money:
+    def init(c: int) -> Money:
+        mut m = Money()
+        m.cents = c
+        return m
+    def __add__(self, o: Money) -> Money:
+        return Money.init(self.cents + o.cents)
+    def __lt__(self, o: Money) -> bool:
+        return self.cents < o.cents
+
+def main():
+    mut a = Vec2.init(1, 2)
+    mut b = Vec2.init(3, 4)
+    mut c = a + b
+    print(c.x)                 # 4
+    print(c.y)                 # 6
+    mut d = b - a
+    print(d.x)                 # 2
+    print(d.y)                 # 2
+    print(a == b)              # false
+    print(a == Vec2.init(1, 2))# true
+    print(a.dot(b))            # 11
+
+    mut m1 = Money.init(150)
+    mut m2 = Money.init(75)
+    mut m3 = m1 + m2
+    print(m3.cents)            # 225
+    print(m2 < m1)             # true
+    print(m1 < m2)             # false

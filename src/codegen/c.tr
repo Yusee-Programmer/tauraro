@@ -2305,6 +2305,9 @@ pub class CGenerator:
             if _is_str_type(set_tn): set_fmt = "_tr_fmt_str"
             return "({ List_TrStr* _sl = _tr_set_to_list(" + s + "); char* _r = _tr_collection_to_str((void*)_sl->data, _sl->len, sizeof(TrStr), " + set_fmt + ", \"{\", \"}\", \", \"); List_TrStr_free(_sl); _r; })"
         if cn == "Dict" or cn == "Map":
+            mut key_ty = AstType.init("str")
+            if ty.args.len > 0: key_ty = ty.args.get(0).read()
+            mut key_tn: str = self.resolve_generic_prim(key_ty.name)
             mut val_ty = AstType.init("str")
             if ty.args.len > 1: val_ty = ty.args.get(1).read()
             mut val_tn: str = self.resolve_generic_prim(val_ty.name)
@@ -2315,6 +2318,13 @@ pub class CGenerator:
             if _is_str_type(val_tn): vfmt = "_tr_fmt_str_box"
             mut vsize = "sizeof(void*)"
             if _is_float_type(val_tn): vsize = "sizeof(double)"
+            # #27: an INT-keyed dict is a TrIDict*, not a TrMap*. The _ks (key-stride)
+            # formatter + idict accessors are the right shape, but a deeper
+            # _tr_idict_keys read-back bug (#27b) still yields a garbage 2nd key, so
+            # print(Dict[int, V]) is intentionally NOT emitted here until that's fixed —
+            # falls through to the default obj-str rather than shipping wrong output.
+            if _is_int_type(key_tn):
+                return "_tr_default_obj_str(\"Dict\", (void*)(" + s + "))"
             return "({ List_TrStr* _dk = _tr_dict_keys(" + s + "); List_ptr* _dv = _tr_dict_values(" + s + "); char* _r = _tr_dict_to_str((void*)_dk->data, (void*)_dv->data, _dk->len, " + vsize + ", _tr_fmt_str, " + vfmt + "); List_TrStr_free(_dk); List_ptr_free(_dv); _r; })"
         return "_tr_default_obj_str(\"" + cn + "\", (void*)(" + s + "))"
 
@@ -2573,6 +2583,10 @@ pub class CGenerator:
     pub def is_heap_class_tn(self, tn: str) -> bool:
         if not self.classes.contains(tn): return false
         if self.value_types.contains(tn): return false
+        # #26: a GENERIC template name (Pairq) is not a concrete heap class — its
+        # instances are monos (Pairq_int); dropping by the template name emitted an
+        # undefined _trdrop_<Template> reference.
+        if self.classes.get(tn).generics.len > 0: return false
         # Pointer-aliased types (e.g. AstType, HIR nodes) are shared via raw
         # Pointer[T] that bypasses the refcount — never auto-drop them.
         if self.raw_aliased.contains(tn): return false

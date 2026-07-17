@@ -402,6 +402,10 @@ __attribute__((malloc,returns_nonnull,hot)) LModule* LModule_init() {
     /* pass */
     m->unavail_notes = (void*)List_TrStr_new();
     /* pass */
+    m->subst_names = (void*)List_TrStr_new();
+    /* pass */
+    m->subst_tys = (void*)List_ptr_new();
+    /* pass */
     return m;
 }
 

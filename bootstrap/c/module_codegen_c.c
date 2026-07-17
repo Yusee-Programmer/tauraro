@@ -4997,6 +4997,15 @@ __attribute__((hot)) TrStr CGenerator_gen_collection_to_str(CGenerator* self, Tr
     /* pass */
     if (((strcmp(_tr_strz(cn), _tr_strz(_tr_str_lit("Dict"))) == 0) || (strcmp(_tr_strz(cn), _tr_strz(_tr_str_lit("Map"))) == 0))) {
         /* pass */
+        AstType* key_ty = AstType_init(_tr_str_lit("str"));
+        /* pass */
+        if ((ty->args->len > 0LL)) {
+            /* pass */
+            key_ty = (*((AstType**)List_ptr_get(ty->args, 0LL)));
+        }
+        /* pass */
+        TrStr key_tn = CGenerator_resolve_generic_prim(self, key_ty->name);
+        /* pass */
         AstType* val_ty = AstType_init(_tr_str_lit("str"));
         /* pass */
         if ((ty->args->len > 1LL)) {
@@ -5024,6 +5033,16 @@ __attribute__((hot)) TrStr CGenerator_gen_collection_to_str(CGenerator* self, Tr
             vsize = _strtmp_t1018;
         }
         /* pass */
+        if (_is_int_type(key_tn)) {
+            /* pass */
+            _tr_str_release(key_tn);
+            _tr_str_release(val_tn);
+            _tr_str_release(vfmt);
+            _tr_str_release(vsize);
+            return ({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("_tr_default_obj_str(\"Dict\", (void*)(")), _tr_strz(s))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("))"))); _tr_str_release(_cl); _cres; });
+        }
+        /* pass */
+        _tr_str_release(key_tn);
         _tr_str_release(val_tn);
         return ({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("({ List_TrStr* _dk = _tr_dict_keys(")), _tr_strz(s))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("); List_ptr* _dv = _tr_dict_values("))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(s)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("); char* _r = _tr_dict_to_str((void*)_dk->data, (void*)_dv->data, _dk->len, "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(vsize)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(", _tr_fmt_str, "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(vfmt)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("); List_TrStr_free(_dk); List_ptr_free(_dv); _r; })"))); _tr_str_release(_cl); _cres; });
     }
@@ -5545,6 +5564,11 @@ __attribute__((hot)) bool CGenerator_is_heap_class_tn(CGenerator* self, TrStr tn
     }
     /* pass */
     if (_tr_dict_contains(self->value_types, _tr_strz(tn))) {
+        /* pass */
+        return false;
+    }
+    /* pass */
+    if ((((HirClass*)(uintptr_t)_tr_dict_get(self->classes, _tr_strz(tn)))->generics->len > 0LL)) {
         /* pass */
         return false;
     }

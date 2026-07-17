@@ -5929,6 +5929,23 @@ static char* _tr_dict_to_str(const void* kdata, const void* vdata, size_t len, s
     buf = _tr_sb_append(buf, &blen, &cap, "}");
     return buf;
 }
+/* Like _tr_dict_to_str but with an explicit KEY stride (int-keyed dicts store i64 keys,
+   not sizeof(TrStr) — #27b: the fixed-stride version read garbage past the first key). */
+static char* _tr_dict_to_str_ks(const void* kdata, const void* vdata, size_t len, size_t ksize, size_t vsize, _TrElemFmt kfmt, _TrElemFmt vfmt) {
+    size_t cap, blen = 0;
+    char* buf = _tr_sb_init(&cap);
+    buf = _tr_sb_append(buf, &blen, &cap, "{");
+    for (size_t i = 0; i < len; i++) {
+        if (i > 0) buf = _tr_sb_append(buf, &blen, &cap, ", ");
+        const char* kp = (const char*)kdata + i * ksize;
+        const char* vp = (const char*)vdata + i * vsize;
+        buf = _tr_sb_append(buf, &blen, &cap, kfmt(kp));
+        buf = _tr_sb_append(buf, &blen, &cap, ": ");
+        buf = _tr_sb_append(buf, &blen, &cap, vfmt(vp));
+    }
+    buf = _tr_sb_append(buf, &blen, &cap, "}");
+    return buf;
+}
 /* Element formatters for primitive List/Set element types. */
 static char* _tr_fmt_i64(const void* p)  { return _tr_int_to_str(*(const long long*)p); }
 static char* _tr_fmt_i32(const void* p)  { return _tr_int_to_str((long long)*(const int32_t*)p); }

@@ -8,6 +8,7 @@
 
 from core.alloc import alloc
 from hir import HirStmt, HirProgram
+from ast import AstType
 
 pub enum LType:
     LVoid
@@ -308,6 +309,8 @@ pub class LModule:
     pub fail_note: str                      # when ok=false: which fn/construct failed (diagnostics)
     pub unavail_names: Vec[str]             # fns whose BODY couldn't lower (lazy reachability:
     pub unavail_notes: Vec[str]             # only fatal if a LOWERED fn actually calls one)
+    pub subst_names: Vec[str]               # active generic-class substitution (T -> concrete),
+    pub subst_tys:   Vec[Pointer[AstType]]  # consulted by _tag_of while lowering an instantiation
 
 extend LModule:
     pub def init() -> LModule:
@@ -327,6 +330,8 @@ extend LModule:
         m.fail_note = ""
         m.unavail_names = Vec[str].init(4)
         m.unavail_notes = Vec[str].init(4)
+        m.subst_names = Vec[str].init(2)
+        m.subst_tys   = Vec[Pointer[AstType]].init(2)
         return m
 
     # Register a module-level global; returns its slot index (dedup by name).
