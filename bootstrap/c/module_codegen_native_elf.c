@@ -111,7 +111,7 @@ __attribute__((hot)) bool write_elf_object(TrStr out_path, List_ptr* funcs, List
         /* pass */
         List_i64_append(str_off, rodata->len);
         /* pass */
-        ({ TrStr _at_t2447 = (List_TrStr_get(strings, sxi)); ByteBuf_cstr(rodata, _at_t2447); _tr_str_release(_at_t2447); });
+        ({ TrStr _at_t2453 = (List_TrStr_get(strings, sxi)); ByteBuf_cstr(rodata, _at_t2453); _tr_str_release(_at_t2453); });
         /* pass */
         sxi = (sxi + 1LL);
     }

@@ -1,0 +1,28 @@
+# native≡c / llvm≡c differential corpus: unsafe blocks + raw pointer ops.
+def main():
+    unsafe:
+        mut p = alloc[int](4)
+        p.write(10)
+        p.offset(1).write(20)
+        p.offset(2).write(30)
+        p.offset(3).write(40)
+        print(p.read())            # 10
+        print(p.offset(1).read())  # 20
+        print(p.offset(2).read())  # 30
+        print(p.offset(3).read())  # 40
+        mut sum = 0
+        mut i = 0
+        while i < 4:
+            sum = sum + p.offset(i).read()
+            i = i + 1
+        print(sum)                 # 100
+        dealloc(p)
+
+    unsafe:
+        mut fp = alloc[float](2)
+        fp.write(1.5)
+        fp.offset(1).write(2.5)
+        print(fp.read())           # 1.5
+        print(fp.offset(1).read()) # 2.5
+        print(fp.read() + fp.offset(1).read())  # 4
+        dealloc(fp)

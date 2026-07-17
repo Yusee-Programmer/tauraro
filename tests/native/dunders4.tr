@@ -1,0 +1,27 @@
+# native≡c / llvm≡c differential corpus: __contains__ (`x in obj`).
+class Range2:
+    lo: int
+    hi: int
+extend Range2:
+    def init(lo: int, hi: int) -> Range2:
+        mut r = Range2()
+        r.lo = lo
+        r.hi = hi
+        return r
+    def __contains__(self, x: int) -> bool:
+        return x >= self.lo and x <= self.hi
+
+def main():
+    mut r = Range2.init(5, 10)
+    print(7 in r)              # true
+    print(3 in r)              # false
+    print(10 in r)            # true
+    print(5 in r)             # true
+    print(11 in r)            # false
+    mut cnt = 0
+    mut i = 0
+    while i < 20:
+        if i in r:
+            cnt = cnt + 1
+        i = i + 1
+    print(cnt)                # 6 (5..10)

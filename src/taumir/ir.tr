@@ -311,6 +311,8 @@ pub class LModule:
     pub unavail_notes: Vec[str]             # only fatal if a LOWERED fn actually calls one)
     pub subst_names: Vec[str]               # active generic-class substitution (T -> concrete),
     pub subst_tys:   Vec[Pointer[AstType]]  # consulted by _tag_of while lowering an instantiation
+    pub extfn_names: Vec[str]               # extern "C" fn names (call targets, linker-resolved)
+    pub extfn_ret:   Vec[int]               # parallel: return value-type tag
 
 extend LModule:
     pub def init() -> LModule:
@@ -332,6 +334,8 @@ extend LModule:
         m.unavail_notes = Vec[str].init(4)
         m.subst_names = Vec[str].init(2)
         m.subst_tys   = Vec[Pointer[AstType]].init(2)
+        m.extfn_names = Vec[str].init(4)
+        m.extfn_ret   = Vec[int].init(4)
         return m
 
     # Register a module-level global; returns its slot index (dedup by name).
@@ -389,6 +393,20 @@ extend LModule:
             if self.fn_names.get(i) == name: return true
             i = i + 1
         return false
+
+    pub def is_extern_fn(self, name: str) -> bool:
+        mut i = 0
+        while i < self.extfn_names.len:
+            if self.extfn_names.get(i) == name: return true
+            i = i + 1
+        return false
+
+    pub def extern_ret_tag(self, name: str) -> int:
+        mut i = 0
+        while i < self.extfn_names.len:
+            if self.extfn_names.get(i) == name: return self.extfn_ret.get(i)
+            i = i + 1
+        return 0
 
     # Index into unavail_names (-1 = the fn lowered fine / unknown).
     pub def unavail_index(self, name: str) -> int:

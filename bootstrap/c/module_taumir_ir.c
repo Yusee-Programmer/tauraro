@@ -406,6 +406,10 @@ __attribute__((malloc,returns_nonnull,hot)) LModule* LModule_init() {
     /* pass */
     m->subst_tys = (void*)List_ptr_new();
     /* pass */
+    m->extfn_names = (void*)List_TrStr_new();
+    /* pass */
+    m->extfn_ret = (void*)List_i64_new();
+    /* pass */
     return m;
 }
 
@@ -532,6 +536,40 @@ __attribute__((hot)) bool LModule_is_user_fn(LModule* self, TrStr name) {
     }
     /* pass */
     return false;
+}
+
+__attribute__((hot)) bool LModule_is_extern_fn(LModule* self, TrStr name) {
+    /* pass */
+    long long i = 0LL;
+    /* pass */
+    while ((i < self->extfn_names->len)) {
+        /* pass */
+        if ((strcmp(_tr_strz(List_TrStr_get(self->extfn_names, i)), _tr_strz(name)) == 0)) {
+            /* pass */
+            return true;
+        }
+        /* pass */
+        i = (i + 1LL);
+    }
+    /* pass */
+    return false;
+}
+
+__attribute__((hot)) long long LModule_extern_ret_tag(LModule* self, TrStr name) {
+    /* pass */
+    long long i = 0LL;
+    /* pass */
+    while ((i < self->extfn_names->len)) {
+        /* pass */
+        if ((strcmp(_tr_strz(List_TrStr_get(self->extfn_names, i)), _tr_strz(name)) == 0)) {
+            /* pass */
+            return List_i64_get(self->extfn_ret, i);
+        }
+        /* pass */
+        i = (i + 1LL);
+    }
+    /* pass */
+    return 0LL;
 }
 
 __attribute__((hot)) long long LModule_unavail_index(LModule* self, TrStr name) {

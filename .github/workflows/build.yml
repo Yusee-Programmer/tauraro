@@ -370,6 +370,13 @@ jobs:
         shell: bash
         run: TAURAROC=./tauraroc${{ matrix.ext }} bash scripts/llvm_diff.sh
 
+      # FFI proof: extern "C" calls into a custom C object + `export def` producing a
+      # C-ABI symbol. External linkage can't be tested via the C≡LLVM differential.
+      - name: LLVM FFI (extern C + export)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: TAURAROC=./tauraroc${{ matrix.ext }} bash scripts/llvm_ffi.sh
+
       # Runtime security regressions (V-001 float-format overflow, etc.) under ASan+UBSan.
       - name: Runtime security tests (ASan/UBSan)
         if: runner.os == 'Linux'

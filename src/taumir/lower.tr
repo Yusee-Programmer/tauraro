@@ -162,6 +162,7 @@ def _own(s: str) -> str:
 # A null/absent type name -> -1 (untyped -> the module falls back to C, never crashes).
 def _tag_of(m: LModule, ty: AstType) -> int:
     if _is_null_str(ty.name): return -1
+    if ty.name == "Pointer": return 0        # raw address held in an i64 slot (unsafe ptrs)
     # Active generic-class substitution: T -> the instantiation's concrete type.
     mut sbi = 0
     while sbi < m.subst_names.len:
@@ -458,6 +459,25 @@ pub def lower_to_lir(prog: HirProgram) -> LModule:
     mut m = LModule.init()
     m.hir_prog = prog                  # generic fns are instantiated lazily at call sites
     _register_classes(m, prog)
+    # extern "C" declarations: register each as a linker-resolved call target. A str arg
+    # is a raw char* in the LIR (tag 1 = pointer to the rc string's char data), so it
+    # passes to a C `char*` parameter directly; only scalar/str/ptr sigs are registered.
+    mut efx = 0
+    while efx < prog.extern_funcs.len:
+        mut ef = prog.extern_funcs.get(efx)
+        mut ef_ok = true
+        mut epi = 0
+        while epi < ef.params.len:
+            mut eptag = _tag_of(m, ef.params.get(epi).ty)
+            if eptag != 0 and eptag != 1 and eptag != 4:   # int/str(char*)/bool args only
+                ef_ok = false
+            epi = epi + 1
+        mut ertag = _tag_of(m, ef.ret_ty)
+        if ertag != 0 and ertag != 1 and ertag != 4: ef_ok = false   # (no float ABI yet)
+        if ef_ok:
+            m.extfn_names.push(_own(ef.name))
+            m.extfn_ret.push(ertag)
+        efx = efx + 1
     # Register free functions AND class methods (mangled <Class>_<method>) as call targets.
     # GENERIC functions are skipped here: their bodies only lower against concrete arg
     # tags, so each instantiation is registered + lowered on demand (see _lir_lower_generic).
@@ -911,6 +931,18 @@ def _run_defers(m: LModule, lf: LFunc) -> bool:
     return true
 
 # -- statements ---------------------------------------------------------------------
+# Byte stride of a Pointer[T]'s element. v1 supports only 8-byte elements (int/i64/
+# usize/float/object pointers); narrower/other element types -> 0 (caller falls back).
+def _ptr_stride(m: LModule, pty: AstType) -> int:
+    if pty.args.len == 0: return 8
+    mut en = pty.args.get(0).read().name
+    if _is_null_str(en): return 8
+    if en == "int" or en == "i64" or en == "u64" or en == "usize" or en == "isize": return 8
+    if en == "float" or en == "f64": return 8
+    if m.is_class(en) or m.is_enum(en): return 8
+    if en == "Pointer": return 8
+    return 0
+
 # Operator -> dunder method name ("" = no dunder for this op).
 def _dunder_for_op(op: str) -> str:
     if op == "+": return "__add__"
@@ -1240,9 +1272,8 @@ def lower_stmt(m: LModule, lf: LFunc, s: Pointer[HirStmt]) -> bool:
             if not se_ok and m.fail_note == "":
                 m.fail_note = "unsupported expression statement (" + _stmt_expr_kind(e) + ")"
             return se_ok
-        case HirStmt.SUnsafe(_):
-            if m.fail_note == "": m.fail_note = "unsafe: block"
-            return false
+        case HirStmt.SUnsafe(ubody):
+            return lower_block(m, lf, ubody)
         case _:
             if m.fail_note == "": m.fail_note = "unsupported statement kind"
             return false
@@ -1912,7 +1943,16 @@ def _lower_print(m: LModule, lf: LFunc, args: Vec[Pointer[HirExpr]]) -> bool:
             pla.push(av)
             lf.emit(LInst.ICall(-1, plsym, pla))
             return true
-        if avt == 10 or avt == 11 or _is_set_tag(avt): return false  # object/enum/set -> fall back
+        if avt == 10:                          # print(obj) -> obj.__str__() then print
+            mut ostr = _obj_to_str(m, lf, args.get(0), av)
+            if ostr >= 0:
+                m.add_extern("_tr_rt_print_cstr")
+                mut opa = Vec[int].init(1)
+                opa.push(ostr)
+                lf.emit(LInst.ICall(-1, "_tr_rt_print_cstr", opa))
+                return true
+            return false
+        if avt == 11 or _is_set_tag(avt): return false  # enum/set -> fall back
         if avt == 5:                           # print(f64) -> "%g\n" (arg in xmm0)
             m.add_extern("_tr_rt_print_f64")
             lf.emit(LInst.IFCall1(-1, "_tr_rt_print_f64", av))
@@ -1941,7 +1981,16 @@ def _lower_print(m: LModule, lf: LFunc, args: Vec[Pointer[HirExpr]]) -> bool:
             lf.emit(LInst.ICall(-1, wlsym, wla))
             pi = pi + 1
             continue
-        if pvt == 10 or pvt == 11 or _is_set_tag(pvt): return false  # object/enum/set -> fall back
+        if pvt == 10:
+            mut postr = _obj_to_str(m, lf, args.get(pi), pv)
+            if postr < 0: return false
+            m.add_extern("_tr_rt_write_cstr")
+            mut pwa = Vec[int].init(1)
+            pwa.push(postr)
+            lf.emit(LInst.ICall(-1, "_tr_rt_write_cstr", pwa))
+            pi = pi + 1
+            continue
+        if pvt == 11 or _is_set_tag(pvt): return false  # enum/set -> fall back
         if pvt == 5:
             m.add_extern("_tr_rt_write_f64")
             lf.emit(LInst.IFCall1(-1, "_tr_rt_write_f64", pv))
@@ -2082,6 +2131,21 @@ def _heap_lit(m: LModule, lf: LFunc, s: str) -> int:
 
 # Convert any supported scalar vreg to a string vreg (borrow returned as-is for str;
 # int/bool/float produce a fresh string). Returns -1 for unsupported types (-> fallback).
+# Convert an OBJECT expression to a str via its `__str__` method (fresh owned str).
+# Returns -1 if the class has no __str__ (caller falls back). `objexpr` is the HIR node
+# (needed to resolve the class); `objreg` is its already-lowered vreg (or -1 to lower here).
+def _obj_to_str(m: LModule, lf: LFunc, objexpr: Pointer[HirExpr], objreg: int) -> int:
+    mut ocls = _recv_class(m, lf, objexpr)
+    if ocls == "" or not m.is_class(ocls): return -1
+    mut osm = m.resolve_method(ocls, "__str__")
+    if osm == "": return -1
+    mut oself = objreg
+    if oself < 0:
+        oself = lower_expr(m, lf, objexpr)
+        if oself < 0: return -1
+    mut sd = _lower_obj_call(m, lf, osm, oself, Vec[Pointer[HirExpr]].init(0))
+    return sd
+
 def _reg_to_str(m: LModule, lf: LFunc, reg: int) -> int:
     mut t = lf.vreg_type(reg)
     if t == 1: return reg                       # already a string (borrow or fresh)
@@ -2668,6 +2732,16 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                     lf.set_vreg_type(fcd, 4)
                     return fcd
                 return -1
+            # x in obj -> obj.__contains__(x) for a class defining it.
+            if op == "in" and bt == 10:
+                mut ccls = _recv_class(m, lf, r)
+                if ccls != "" and m.is_class(ccls):
+                    mut ccm = m.resolve_method(ccls, "__contains__")
+                    if ccm != "":
+                        mut cca = Vec[Pointer[HirExpr]].init(1)
+                        cca.push(l)
+                        return _lower_obj_call(m, lf, ccm, b, cca)
+                return -1
             # k in <dict> -> dict has -> bool.
             if op == "in" and _is_dict_tag(bt):
                 if _dict_key_is_str(bt) and at != 1: return -1
@@ -2780,6 +2854,42 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
             if _is_cmp_op(op): lf.set_vreg_type(d3, 4)   # comparison result is a bool
             return d3
         case HirExpr.ECall(callee, args, _):
+            # alloc[T](n) / dealloc(p): the callee is EIdent("alloc") or EIndex(EIdent
+            # ("alloc"), T). Raw pointers only appear in `unsafe:` (front-end enforced).
+            mut alloc_nm = ""
+            match callee.read():
+                case HirExpr.EIdent(anm, _, _): alloc_nm = anm
+                case HirExpr.EIndex(abase, _, _):
+                    match abase.read():
+                        case HirExpr.EIdent(anm2, _, _): alloc_nm = anm2
+                        case _: pass
+                case _: pass
+            if (alloc_nm == "alloc" or alloc_nm == "core_alloc_alloc") and args.len == 1:
+                # n elements of the result Pointer[T] -> _tr_rt_raw_alloc(n * stride).
+                mut aptr_ty = hir_expr_type(e)
+                mut astride = _ptr_stride(m, aptr_ty)
+                if astride == 0: return -1
+                mut acnt = lower_expr(m, lf, args.get(0))
+                if acnt < 0 or lf.vreg_type(acnt) != 0: return -1
+                mut astr_c = lf.new_vreg()
+                lf.emit(LInst.IConst(astr_c, astride))
+                mut anb = lf.new_vreg()
+                lf.emit(LInst.IBinOp(anb, "*", acnt, astr_c))
+                m.add_extern("_tr_rt_raw_alloc")
+                mut aargs = Vec[int].init(1)
+                aargs.push(anb)
+                mut ad = lf.new_vreg()
+                lf.emit(LInst.ICall(ad, "_tr_rt_raw_alloc", aargs))
+                lf.set_vreg_type(ad, 0)          # raw address (i64)
+                return ad
+            if (alloc_nm == "dealloc" or alloc_nm == "core_alloc_dealloc") and args.len == 1:
+                mut dpv = lower_expr(m, lf, args.get(0))
+                if dpv < 0: return -1
+                m.add_extern("_tr_rt_raw_free")
+                mut dfa = Vec[int].init(1)
+                dfa.push(dpv)
+                lf.emit(LInst.ICall(-1, "_tr_rt_raw_free", dfa))
+                return dpv                        # dealloc's value is unused at stmt level
             mut fn = _ident_name(callee)
             if fn == "": return -1
             # Closure call `f(args)` where f is a tag-12 local: indirect call through the
@@ -2930,7 +3040,12 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                 mut mmd = lf.new_vreg()
                 lf.emit(LInst.ICall(mmd, msym, mma))
                 return mmd
-            if fn == "str" and args.len == 1:      # str(int)/str(bool)/str(str)
+            if fn == "str" and args.len == 1:      # str(int)/str(bool)/str(str)/str(obj)
+                mut sobjc = _recv_class(m, lf, args.get(0))
+                if sobjc != "" and m.is_class(sobjc) and m.resolve_method(sobjc, "__str__") != "":
+                    mut sobjr = _obj_to_str(m, lf, args.get(0), -1)
+                    if sobjr >= 0: return sobjr
+                    return -1
                 mut cv0 = lower_expr(m, lf, args.get(0))
                 if cv0 < 0: return -1
                 mut cvt = lf.vreg_type(cv0)
@@ -3021,6 +3136,24 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                 return bnorm
             # Generic free fn: instantiate lazily for this combination of ARG TAGS, then
             # call the mangled specialization (e.g. largest__m0_0 for two ints).
+            if m.is_extern_fn(fn):
+                # extern "C" call: pass scalar/str args by value; str = char* directly.
+                if args.len > 6: return -1
+                mut exargs = Vec[int].init(args.len)
+                mut exi = 0
+                while exi < args.len:
+                    mut exv = lower_expr(m, lf, args.get(exi))
+                    if exv < 0: return -1
+                    mut ext = lf.vreg_type(exv)
+                    if ext != 0 and ext != 1 and ext != 4: return -1
+                    exargs.push(exv)
+                    exi = exi + 1
+                m.add_extern(fn)
+                mut extret = m.extern_ret_tag(fn)
+                mut exd = lf.new_vreg()
+                lf.emit(LInst.ICall(exd, fn, exargs))
+                lf.set_vreg_type(exd, extret)
+                return exd
             if not m.is_user_fn(fn):
                 mut gfi = _find_generic_fn(m, fn)
                 if gfi < 0: return -1
@@ -3228,10 +3361,16 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                 mut pr = -1
                 if fp.is_expr:
                     if fp.fmt_spec != "": return -1     # format specs -> fall back to C
-                    mut fev = lower_expr(m, lf, fp.expr)
-                    if fev < 0: return -1
-                    pr = _reg_to_str(m, lf, fev)
-                    if pr < 0: return -1
+                    # An object interpolation `{obj}` -> obj.__str__().
+                    mut fcls = _recv_class(m, lf, fp.expr)
+                    if fcls != "" and m.is_class(fcls) and m.resolve_method(fcls, "__str__") != "":
+                        pr = _obj_to_str(m, lf, fp.expr, -1)
+                        if pr < 0: return -1
+                    else:
+                        mut fev = lower_expr(m, lf, fp.expr)
+                        if fev < 0: return -1
+                        pr = _reg_to_str(m, lf, fev)
+                        if pr < 0: return -1
                 else:
                     pr = _heap_lit(m, lf, fp.text)
                 m.add_extern("_tr_rt_str_concat")
@@ -3395,6 +3534,54 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
             lf.emit(LInst.ICall(ld, "_tr_rt_list_len", la))
             return ld
         case HirExpr.EMethodCall(obj, method, margs, _):
+            # Raw pointer ops on a Pointer[T] receiver (unsafe code): read/write/offset.
+            if hir_expr_type(obj).name == "Pointer":
+                mut pty = hir_expr_type(obj)
+                mut pstride = _ptr_stride(m, pty)
+                if pstride == 0: return -1
+                mut petag = 0                     # element value-type tag (from T)
+                if pty.args.len > 0:
+                    mut petn = pty.args.get(0).read().name
+                    if petn == "float" or petn == "f64": petag = 5
+                    elif m.is_class(petn): petag = 10
+                    elif m.is_enum(petn): petag = 11
+                mut pbase = lower_expr(m, lf, obj)
+                if pbase < 0: return -1
+                if (method == "offset" or method == "add") and margs.len == 1:
+                    # p.offset(k) -> p + k*stride (a new address, still tag 0).
+                    mut poff = lower_expr(m, lf, margs.get(0))
+                    if poff < 0 or lf.vreg_type(poff) != 0: return -1
+                    mut pstr = lf.new_vreg()
+                    lf.emit(LInst.IConst(pstr, pstride))
+                    mut pscaled = lf.new_vreg()
+                    lf.emit(LInst.IBinOp(pscaled, "*", poff, pstr))
+                    mut padr = lf.new_vreg()
+                    lf.emit(LInst.IBinOp(padr, "+", pbase, pscaled))
+                    lf.set_vreg_type(padr, 0)
+                    return padr
+                if (method == "read" or method == "deref") and margs.len == 0:
+                    # *p -> load an 8-byte value at [p] (float via IBitsF).
+                    if petag == 5:
+                        mut prraw = _emit_field_get(m, lf, pbase, 0, 0)
+                        mut prf = lf.new_vreg()
+                        lf.emit(LInst.IBitsF(prf, prraw))
+                        lf.set_vreg_type(prf, 5)
+                        return prf
+                    return _emit_field_get(m, lf, pbase, 0, petag)
+                if method == "write" and margs.len == 1:
+                    # *p = v.
+                    mut pwv = lower_expr(m, lf, margs.get(0))
+                    if pwv < 0: return -1
+                    if petag == 5:
+                        mut pwvt = lf.vreg_type(pwv)
+                        if pwvt == 0: pwv = _promote_f(lf, pwv)
+                        elif pwvt != 5: return -1
+                        mut pwb = lf.new_vreg()
+                        lf.emit(LInst.IFBits(pwb, pwv))
+                        pwv = pwb
+                    _emit_field_set(m, lf, pbase, 0, pwv)
+                    return pbase
+                return -1
             # Static call `ClassName.method(args)` (e.g. a constructor `Point.init(..)`)
             # or enum variant construction `Enum.Variant(args)`: obj is the type name.
             match obj.read():
@@ -3418,9 +3605,15 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
             # args), resolved up the inheritance chain (static dispatch, like the C backend).
             mut recv_cls = _recv_class(m, lf, obj)
             if recv_cls != "":
-                mut mangled = recv_cls + "_" + method
+                # sema desugars `obj[i]` (class receiver) to EMethodCall(obj,"get_index").
+                # Map that (and its write twin) to the dunder the class actually defines.
+                mut dmethod = method
                 if m.is_class(recv_cls):
-                    mangled = m.resolve_method(recv_cls, method)
+                    if (method == "get_index" or method == "get") and m.resolve_method(recv_cls, "__getitem__") != "":
+                        dmethod = "__getitem__"
+                mut mangled = recv_cls + "_" + dmethod
+                if m.is_class(recv_cls):
+                    mangled = m.resolve_method(recv_cls, dmethod)
                     if mangled == "":
                         # Generic method `def m[T](self, ..)`: specialize per arg tags,
                         # exactly like generic free fns (self rides along as param 0).

@@ -3000,6 +3000,8 @@ typedef struct LModule {
     List_TrStr* unavail_notes;
     List_TrStr* subst_names;
     List_ptr* subst_tys;
+    List_TrStr* extfn_names;
+    List_i64* extfn_ret;
 } LModule;
 static void _trdrop_LModule(void* vp) {
     LModule* self = (LModule*)vp; (void)self;
@@ -3019,6 +3021,8 @@ static void _trdrop_LModule(void* vp) {
     List_TrStr_free(self->unavail_notes);
     List_TrStr_free(self->subst_names);
     List_ptr_free(self->subst_tys);
+    List_TrStr_free(self->extfn_names);
+    List_i64_free(self->extfn_ret);
 }
 #endif
 
@@ -3722,6 +3726,8 @@ __attribute__((hot)) long long LModule_fn_ret_tag(LModule* self, TrStr name);
 __attribute__((hot)) long long LModule_add_string(LModule* self, TrStr s);
 __attribute__((hot)) void LModule_add_extern(LModule* self, TrStr name);
 __attribute__((hot)) bool LModule_is_user_fn(LModule* self, TrStr name);
+__attribute__((hot)) bool LModule_is_extern_fn(LModule* self, TrStr name);
+__attribute__((hot)) long long LModule_extern_ret_tag(LModule* self, TrStr name);
 __attribute__((hot)) long long LModule_unavail_index(LModule* self, TrStr name);
 __attribute__((hot)) void LModule_add_class(LModule* self, ClassLayout* cl);
 __attribute__((hot)) long long LModule_class_index(LModule* self, TrStr name);
@@ -3787,6 +3793,7 @@ __attribute__((hot)) long long _lower_enum_ctor(LModule* m, LFunc* lf, TrStr ena
 __attribute__((hot)) long long _lower_obj_call(LModule* m, LFunc* lf, TrStr mangled, long long self_vreg, List_ptr* margs);
 __attribute__((hot)) bool lower_block(LModule* m, LFunc* lf, HirBlock* hb);
 __attribute__((hot)) bool _run_defers(LModule* m, LFunc* lf);
+__attribute__((hot)) long long _ptr_stride(LModule* m, AstType* pty);
 __attribute__((hot)) TrStr _dunder_for_op(TrStr op);
 __attribute__((hot)) TrStr _stmt_expr_kind(HirExpr* e);
 __attribute__((hot)) bool lower_stmt(LModule* m, LFunc* lf, HirStmt* s);
@@ -3823,6 +3830,7 @@ __attribute__((hot)) bool _is_param(LFunc* lf, TrStr name);
 __attribute__((hot)) long long _norm_bool(LFunc* lf, long long v);
 __attribute__((hot)) long long _str_call0(LModule* m, LFunc* lf, TrStr sym, long long _tr_v_recv, long long restype);
 __attribute__((hot)) long long _heap_lit(LModule* m, LFunc* lf, TrStr s);
+__attribute__((hot)) long long _obj_to_str(LModule* m, LFunc* lf, HirExpr* objexpr, long long objreg);
 __attribute__((hot)) long long _reg_to_str(LModule* m, LFunc* lf, long long reg);
 __attribute__((hot)) long long _str_call1(LModule* m, LFunc* lf, TrStr sym, long long _tr_v_recv, long long arg, long long restype);
 __attribute__((hot)) long long _lower_str_method(LModule* m, LFunc* lf, long long _tr_v_recv, TrStr method, List_ptr* margs);

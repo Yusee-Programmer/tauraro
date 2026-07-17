@@ -707,6 +707,12 @@ void* _tr_rt_obj_alloc(int64_t size) {
     if (size < 8) size = 8;
     return calloc(1, (size_t)size);
 }
+/* Raw allocation for `unsafe:` pointer code — n zeroed bytes, and its free. */
+void* _tr_rt_raw_alloc(int64_t nbytes) {
+    if (nbytes < 1) nbytes = 1;
+    return calloc(1, (size_t)nbytes);
+}
+void _tr_rt_raw_free(void* p) { if (p) free(p); }
 int64_t _tr_rt_field_get_i(void* obj, int64_t off) {
     return *(int64_t*)((char*)obj + off);
 }
