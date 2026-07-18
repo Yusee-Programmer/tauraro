@@ -39,6 +39,16 @@ RT="$RTDIR/runtime.o"
 bash scripts/build_runtime_o.sh "$RT" >/dev/null || { echo "FAIL: runtime.o"; exit 1; }
 trap 'rm -rf "$RTDIR"' EXIT
 
+# Remove build/ and WAIT for the deletion to complete. On Windows/msys, directory
+# deletion is deferred while handles close, so `rm -rf build` returns before build/ is
+# actually gone — a following compiler run then races the async delete and gcc fails with
+# "can't create build/main.o". Block until build/ truly disappears (bounded).
+clean_build() {
+    rm -rf build 2>/dev/null
+    local n=0
+    while [ -d build ] && [ "$n" -lt 50 ]; do sleep 0.1; rm -rf build 2>/dev/null; n=$((n+1)); done
+}
+
 build_llvm_exe() {  # $1=.ll  $2=out-exe ; echoes "" on success or an error tag
     if [ "$HAVE_CLANG" = 1 ]; then
         local f="-O2"; [ -n "$TRIPLE" ] && f="$f -target $TRIPLE"
@@ -56,11 +66,11 @@ for src in tests/native/*.tr; do
     [ -f "$src" ] || continue
     name="$(basename "$src" .tr)"
     # C backend reference output (clean build/ first: stale-state hygiene).
-    rm -rf build; "$TAURAROC" "$src" -o "/tmp/${name}_c" >/dev/null 2>&1 \
+    clean_build; "$TAURAROC" "$src" -o "/tmp/${name}_c" >/dev/null 2>&1 \
         || { echo "  C-FAIL   $name"; fail=1; continue; }
     c_out="$("/tmp/${name}_c" 2>&1)"
     # LLVM backend output (skip cleanly if the program is outside the LIR subset).
-    rm -rf build
+    clean_build
     if ! "$TAURAROC" "$src" --backend llvm -o "/tmp/${name}.ll" >/dev/null 2>&1; then
         echo "  skip     $name (LIR fallback)"; skip=$((skip+1)); continue
     fi

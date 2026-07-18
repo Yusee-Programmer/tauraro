@@ -703,9 +703,58 @@ void _tr_rt_assert_fail(void) {
  * access as these runtime calls, so no new codegen is needed. int/bool/ptr fields go
  * through the *_i pair (raw 8 bytes); float fields reinterpret their bits as i64.
  * (No ARC yet — instances leak; a leak, never a use-after-free.) */
+/* -- object refcounting (ARC for class/enum instances) --------------------------
+ * Every object block carries a hidden header (rc + optional per-class drop fn) that
+ * sits BEFORE the returned data pointer, so field offsets (relative to the data ptr)
+ * are unchanged — the header is transparent to field_get/set. A "drop" releases the
+ * object's owned fields (str/nested-object) but does NOT free the shell; _release frees
+ * the shell once rc hits 0. Objects with no owned fields leave drop=0 (plain free).
+ * Compile with -DTAURARO_NMEM to count live objects for leak assertions. */
+typedef struct { long long rc; void (*drop)(void*); } _TrOHdr;
+#ifdef TAURARO_NMEM
+static long long _tr_n_obj_live = 0;
+#define _OMEM_INC() (_tr_n_obj_live++)
+#define _OMEM_DEC() (_tr_n_obj_live--)
+#else
+#define _OMEM_INC() ((void)0)
+#define _OMEM_DEC() ((void)0)
+#endif
 void* _tr_rt_obj_alloc(int64_t size) {
     if (size < 8) size = 8;
-    return calloc(1, (size_t)size);
+    _TrOHdr* h = (_TrOHdr*)calloc(1, sizeof(_TrOHdr) + (size_t)size);
+    if (!h) return (void*)0;
+    h->rc = 1; h->drop = (void(*)(void*))0; _OMEM_INC();
+    return (void*)(h + 1);
+}
+/* Attach a per-class drop function (called by _release when rc reaches 0, before free). */
+void _tr_rt_obj_set_drop(void* p, void (*d)(void*)) {
+    if (p) ((_TrOHdr*)p)[-1].drop = d;
+}
+void _tr_rt_obj_retain(void* p) {
+    if (p) ((_TrOHdr*)p)[-1].rc++;
+}
+void _tr_rt_obj_release(void* p) {
+    if (!p) return;
+    _TrOHdr* h = &((_TrOHdr*)p)[-1];
+    if (--h->rc <= 0) {
+        if (h->drop) h->drop(p);   /* release owned fields; must NOT free the shell */
+        _OMEM_DEC();
+        free(h);
+    }
+}
+/* Free an object shell directly (no field drop, no rc check) — for drop-fn internals. */
+void _tr_rt_obj_free(void* p) {
+    if (!p) return;
+    _OMEM_DEC();
+    free((_TrOHdr*)p - 1);
+}
+/* Live-object count (only meaningful with -DTAURARO_NMEM; else -1). For leak tests. */
+long long _tr_rt_obj_live_count(void) {
+#ifdef TAURARO_NMEM
+    return _tr_n_obj_live;
+#else
+    return -1;
+#endif
 }
 /* Raw allocation for `unsafe:` pointer code — n zeroed bytes, and its free. */
 void* _tr_rt_raw_alloc(int64_t nbytes) {

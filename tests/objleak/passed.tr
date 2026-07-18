@@ -1,0 +1,31 @@
+# Object-leak oracle: a fresh object passed as a function ARGUMENT is borrowed by the
+# callee (no retain), and released by the caller's scope at end of statement/scope. Also
+# covers an object returned from a producer and consumed inline. Live count at exit = 0.
+extern "C":
+    def _tr_rt_obj_live_count() -> int
+
+class Box:
+    n: int
+
+extend Box:
+    def init(n: int) -> Box:
+        mut b = Box()
+        b.n = n
+        return b
+
+def area(b: Box) -> int:          # borrows b; does not own it
+    return b.n * b.n
+
+def run(k: int) -> int:
+    mut acc = 0
+    mut i = 0
+    while i < k:
+        acc = acc + area(Box.init(i))    # fresh Box borrowed by area, released after the stmt
+        mut keep = Box.init(i + 1)       # owned local, released at scope end
+        acc = acc + area(keep)
+        i = i + 1
+    return acc
+
+def main():
+    print(run(1000))
+    print(_tr_rt_obj_live_count())  # 0 with ARC

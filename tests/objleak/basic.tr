@@ -1,0 +1,31 @@
+# Object-leak oracle case: scalar-field class instances allocated in a loop via the
+# factory-constructor style (init returns a fresh instance). Every Point created inside
+# the loop must be released at end of its scope, so the live count on the last line is 0.
+extern "C":
+    def _tr_rt_obj_live_count() -> int
+
+class Point:
+    x: int
+    y: int
+
+extend Point:
+    def init(x: int, y: int) -> Point:
+        mut p = Point()
+        p.x = x
+        p.y = y
+        return p
+    def sum(self) -> int:
+        return self.x + self.y
+
+def total(n: int) -> int:
+    mut acc = 0
+    mut i = 0
+    while i < n:
+        mut p = Point.init(i, i + 1)
+        acc = acc + p.sum()
+        i = i + 1
+    return acc
+
+def main():
+    print(total(1000))              # 1000000
+    print(_tr_rt_obj_live_count())  # 0 with ARC; 1000 if objects leak

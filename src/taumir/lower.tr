@@ -245,8 +245,11 @@ def _ensure_generic_class(m: LModule, ty: AstType) -> str:
         while prereg < m.hir_prog.functions.len:
             mut pf = m.hir_prog.functions.get(prereg)
             if pf.class_name == ty.name and not pf.is_extern and pf.generics.len == 0:
-                m.fn_names.push(_own(mangled) + "_" + _own(pf.name))
-                m.fn_ret.push(_tag_of(m, pf.ret_ty))
+                mut pfmang = _own(mangled) + "_" + _own(pf.name)
+                mut pfrt = _tag_of(m, pf.ret_ty)
+                m.fn_names.push(pfmang)
+                m.fn_ret.push(pfrt)
+                if pf.returns_owned and (pfrt == 10 or pfrt == 11): m.mark_fn_owned(pfmang)
             prereg = prereg + 1
         mut mi = 0
         while mi < m.hir_prog.functions.len:
@@ -488,11 +491,12 @@ pub def lower_to_lir(prog: HirProgram) -> LModule:
             if f0.class_name != "" and _prog_generic_class_index(m, f0.class_name) >= 0:
                 i = i + 1
                 continue                   # instantiation-time registration instead
-            if f0.class_name == "":
-                m.fn_names.push(f0.name)
-            else:
-                m.fn_names.push(f0.class_name + "_" + f0.name)
-            m.fn_ret.push(_tag_of(m, f0.ret_ty))
+            mut f0mang = f0.name
+            if f0.class_name != "": f0mang = f0.class_name + "_" + f0.name
+            mut f0rt = _tag_of(m, f0.ret_ty)
+            m.fn_names.push(f0mang)
+            m.fn_ret.push(f0rt)
+            if f0.returns_owned and (f0rt == 10 or f0rt == 11): m.mark_fn_owned(f0mang)
         i = i + 1
     # Module-level globals: register each top-level var (name + type) so functions can
     # reference them; the init statements run at the start of main.
@@ -652,6 +656,7 @@ def _lir_lower_generic(m: LModule, f: HirFunction, argtags: Vec[int], argcls: Ve
     if rtag < 0: return false
     m.fn_names.push(_own(mangled))
     m.fn_ret.push(rtag)
+    if f.returns_owned and (rtag == 10 or rtag == 11): m.mark_fn_owned(_own(mangled))
     mut lf = LFunc.init(_own(mangled))
     mut pi = 0
     while pi < f.params.len:
@@ -862,6 +867,9 @@ def _lower_enum_ctor(m: LModule, lf: LFunc, ename: str, vname: str, margs: Vec[P
         elif ftg == 1:
             if avt != 1: return -1
             _secure_str(m, lf, av)              # the enum instance owns the payload ref
+        elif ftg == 10 or ftg == 11:
+            if not _field_tag_ok(avt, ftg): return -1
+            _secure_obj(m, lf, av)              # the enum instance owns the object payload ref
         elif not _field_tag_ok(avt, ftg):
             return -1
         vals.push(av)
@@ -881,6 +889,7 @@ def _lower_enum_ctor(m: LModule, lf: LFunc, ename: str, vname: str, margs: Vec[P
     while ai < vals.len:
         _emit_field_set(m, lf, od, (1 + ai) * 8, vals.get(ai))
         ai = ai + 1
+    _fresh_mark_obj(lf, od)                     # ARC: an enum ctor produces a fresh owned instance
     return od
 
 # Emit a call to a (mangled) user method/constructor. self_vreg >= 0 is prepended as the
@@ -903,6 +912,8 @@ def _lower_obj_call(m: LModule, lf: LFunc, mangled: str, self_vreg: int, margs: 
     lf.emit(LInst.ICall(rd, mangled, cargs))
     lf.set_vreg_type(rd, rtag)
     if rtag == 1: _fresh_mark(lf, rd)           # ARC: owned str returned by callee
+    if (rtag == 10 or rtag == 11) and m.fn_ret_owned(mangled):
+        _fresh_mark_obj(lf, rd)                 # ARC: owned object returned by callee (factory/producer)
     return rd
 
 def lower_block(m: LModule, lf: LFunc, hb: HirBlock) -> bool:
@@ -971,13 +982,21 @@ def lower_stmt(m: LModule, lf: LFunc, s: Pointer[HirStmt]) -> bool:
     match s.read():
         case HirStmt.SLineMarker(_): return true
         case HirStmt.SPass: return true
-        case HirStmt.SAutoDrop(name, _):            # ARC: release an owned str local
+        case HirStmt.SAutoDrop(name, _):            # ARC: release an owned str/object local
             # Params are BORROWED (the caller owns/releases them) — never drop them here,
-            # or a passed str would be double-freed.
-            if lf.var_index(name) >= 0 and lf.var_type(name) == 1 and not _is_param(lf, name):
-                mut dv = lf.new_vreg()
-                lf.emit(LInst.ILoadVar(dv, name))
-                _release_str(m, lf, dv)
+            # or a passed str/object would be double-freed. sema only emits SAutoDrop for
+            # OWNING locals (is_droppable_sym excludes borrowed/moved/escaped), so the
+            # release here is balanced against the retain/transfer at the local's bind.
+            if lf.var_index(name) >= 0 and not _is_param(lf, name):
+                mut dvt = lf.var_type(name)
+                if dvt == 1:
+                    mut dv = lf.new_vreg()
+                    lf.emit(LInst.ILoadVar(dv, name))
+                    _release_str(m, lf, dv)
+                elif dvt == 10 or dvt == 11:
+                    mut ov = lf.new_vreg()
+                    lf.emit(LInst.ILoadVar(ov, name))
+                    _release_obj(m, lf, ov)
             return true
         case HirStmt.SFree(_): return true
         case HirStmt.SReturn(val):
@@ -986,6 +1005,7 @@ def lower_stmt(m: LModule, lf: LFunc, s: Pointer[HirStmt]) -> bool:
                 mut rv = lower_expr(m, lf, val)
                 if rv < 0: return false
                 if lf.vreg_type(rv) == 1: _secure_str(m, lf, rv)   # caller owns the returned str
+                if lf.vreg_type(rv) == 10 or lf.vreg_type(rv) == 11: _secure_obj(m, lf, rv)   # caller owns the returned object
                 _flush_fresh_strs(m, lf)
                 if not _run_defers(m, lf): return false            # LIFO defers before exit
                 lf.set_term(LTerm.TRetVal(rv))
@@ -999,6 +1019,7 @@ def lower_stmt(m: LModule, lf: LFunc, s: Pointer[HirStmt]) -> bool:
             mut v = lower_expr(m, lf, val)
             if v < 0: return false
             if lf.vreg_type(v) == 1: _secure_str(m, lf, v)   # variable takes ownership
+            if lf.vreg_type(v) == 10 or lf.vreg_type(v) == 11: _secure_obj(m, lf, v)   # object local owns a ref
             lf.add_var(name)
             lf.set_var_type(name, lf.vreg_type(v))
             if lf.vreg_type(v) == 10 or lf.vreg_type(v) == 11:   # object local -> record its class/enum
@@ -1052,7 +1073,11 @@ def lower_stmt(m: LModule, lf: LFunc, s: Pointer[HirStmt]) -> bool:
             mut v2 = lower_expr(m, lf, val)
             if v2 < 0: return false
             mut had_old_str = lf.var_index(tn) >= 0 and lf.var_type(tn) == 1
+            mut oldot = 0
+            if lf.var_index(tn) >= 0: oldot = lf.var_type(tn)
+            mut had_old_obj = oldot == 10 or oldot == 11
             if lf.vreg_type(v2) == 1: _secure_str(m, lf, v2)   # secure new BEFORE releasing old
+            if lf.vreg_type(v2) == 10 or lf.vreg_type(v2) == 11: _secure_obj(m, lf, v2)   # object: same
             if lf.var_index(tn) < 0 and m.is_global(tn):    # assign to a module global
                 lf.emit(LInst.IStoreGlobal(m.global_index(tn), v2))
                 _flush_fresh_strs(m, lf)
@@ -1061,6 +1086,10 @@ def lower_stmt(m: LModule, lf: LFunc, s: Pointer[HirStmt]) -> bool:
                 mut oldv = lf.new_vreg()
                 lf.emit(LInst.ILoadVar(oldv, tn))
                 _release_str(m, lf, oldv)
+            if had_old_obj:                                  # ARC: release the overwritten object
+                mut oldov = lf.new_vreg()
+                lf.emit(LInst.ILoadVar(oldov, tn))
+                _release_obj(m, lf, oldov)
             lf.add_var(tn)
             lf.set_var_type(tn, lf.vreg_type(v2))
             lf.emit(LInst.IStoreVar(tn, v2))
@@ -1147,6 +1176,7 @@ def lower_stmt(m: LModule, lf: LFunc, s: Pointer[HirStmt]) -> bool:
                 else:
                     mv = _emit_field_get(m, lf, mtv, mi * 8, mtag)
                     if mtag == 1: _secure_str(m, lf, mv)   # local owns a new ref (tuple keeps its own)
+                    if mtag == 10 or mtag == 11: _secure_obj(m, lf, mv)   # local owns an object ref
                 mut mnm = mnames.get(mi)
                 lf.add_var(mnm)
                 lf.set_var_type(mnm, mtag)
@@ -1497,9 +1527,10 @@ def _bind_payload(m: LModule, lf: LFunc, vlay: VariantLayout, subj: int, subj_ty
         lf.set_vreg_type(pv, 5)
     else:
         pv = _emit_field_get(m, lf, subj, (1 + fldidx) * 8, ftg)
-        # A str payload bound to a local: the local OWNS a ref (like SLet), so retain the
-        # borrow — balanced if scope-exit releases it, a safe leak if it doesn't.
+        # A str/object payload bound to a local: the local OWNS a ref (like SLet), so retain
+        # the borrow — balanced if scope-exit releases it, a safe leak if it doesn't.
         if ftg == 1: _secure_str(m, lf, pv)
+        if ftg == 10 or ftg == 11: _secure_obj(m, lf, pv)
     lf.add_var(bindname)
     lf.set_var_type(bindname, ftg)
     if ftg == 10 or ftg == 11:
@@ -1850,9 +1881,15 @@ def _lower_field_set(m: LModule, lf: LFunc, obj: Pointer[HirExpr], prop: str, va
         vv = fbits
     elif ftg == 1:
         # str field: the field takes OWNERSHIP of a ref (fresh -> transfer, borrow ->
-        # retain). Objects are never freed yet, so the old value leaks — never a UAF.
+        # retain). The overwritten old value leaks (no old-value release yet) — never a UAF.
         if vt != 1: return false
         _secure_str(m, lf, vv)
+    elif ftg == 10 or ftg == 11:
+        # object field takes ownership of a ref (fresh -> transfer, borrow -> retain), so a
+        # source LOCAL later released at scope exit doesn't dangle the field. REQUIRED for
+        # soundness now that object locals are released. Overwritten old value leaks (safe).
+        if not _field_tag_ok(vt, ftg): return false
+        _secure_obj(m, lf, vv)
     elif not _field_tag_ok(vt, ftg):
         return false
     mut ov0 = lower_expr(m, lf, obj)
@@ -1901,6 +1938,7 @@ def _lower_index_set(m: LModule, lf: LFunc, obj: Pointer[HirExpr], idx: Pointer[
         mut lvv = lower_expr(m, lf, val)
         if lvv < 0 or lf.vreg_type(lvv) != _list_elem_tag(ovt): return false
         if _list_elem_tag(ovt) == 1: _secure_str(m, lf, lvv)   # list owns the str element by ref
+        if _list_elem_tag(ovt) == 10: _secure_obj(m, lf, lvv)  # list owns the object element by ref
         if _list_elem_tag(ovt) == 5:                           # store the f64 bit pattern
             mut lvfb = lf.new_vreg()
             lf.emit(LInst.IFBits(lvfb, lvv))
@@ -2077,16 +2115,63 @@ def _retain_str(m: LModule, lf: LFunc, v: int):
     lf.emit(LInst.ICall(-1, "_tr_rt_str_retain", a))
 
 # Release every fresh str temp still live in the current statement, then clear the set.
+# Fresh object temps are drained at the same statement boundaries (a ctor result used
+# only as a receiver/argument and never stored is released here), so this also flushes
+# fresh_objs — every _flush_fresh_strs site is a statement boundary for both.
 def _flush_fresh_strs(m: LModule, lf: LFunc):
     while lf.fresh_strs.len > 0:
         mut v = lf.fresh_strs.pop()
         _release_str(m, lf, v)
+    while lf.fresh_objs.len > 0:
+        mut ov = lf.fresh_objs.pop()
+        _release_obj(m, lf, ov)
 
 # Secure a str value for storage/return: fresh -> transfer (already owns a ref); borrow
 # -> retain a new ref for the new owner.
 def _secure_str(m: LModule, lf: LFunc, v: int):
     if not _fresh_take(lf, v):
         _retain_str(m, lf, v)
+
+# -- ARC (object refcounting) helpers ------------------------------------------------
+# Exact mirror of the str helpers above, for class/enum instances (tags 10/11). A ctor
+# result owns one reference (fresh); an object loaded from a var/field/collection is a
+# borrow. Fresh temps that aren't transferred (stored/returned) are released at the end
+# of their statement. Ownership analysis (which locals own vs borrow, escape/move) is
+# already decided by sema — SAutoDrop markers drive the scope-exit releases.
+def _fresh_mark_obj(lf: LFunc, v: int):
+    lf.fresh_objs.push(v)
+
+def _fresh_take_obj(lf: LFunc, v: int) -> bool:     # consume a fresh obj temp; true if it was fresh
+    mut i = 0
+    while i < lf.fresh_objs.len:
+        if lf.fresh_objs.get(i) == v:
+            lf.fresh_objs.remove(i)
+            return true
+        i = i + 1
+    return false
+
+def _release_obj(m: LModule, lf: LFunc, v: int):
+    m.add_extern("_tr_rt_obj_release")
+    mut a = Vec[int].init(1)
+    a.push(v)
+    lf.emit(LInst.ICall(-1, "_tr_rt_obj_release", a))
+
+def _retain_obj(m: LModule, lf: LFunc, v: int):
+    m.add_extern("_tr_rt_obj_retain")
+    mut a = Vec[int].init(1)
+    a.push(v)
+    lf.emit(LInst.ICall(-1, "_tr_rt_obj_retain", a))
+
+# Release every fresh obj temp still live in the current statement, then clear the set.
+def _flush_fresh_objs(m: LModule, lf: LFunc):
+    while lf.fresh_objs.len > 0:
+        mut v = lf.fresh_objs.pop()
+        _release_obj(m, lf, v)
+
+# Secure an object for storage/return: fresh -> transfer; borrow -> retain a new ref.
+def _secure_obj(m: LModule, lf: LFunc, v: int):
+    if not _fresh_take_obj(lf, v):
+        _retain_obj(m, lf, v)
 
 def _is_param(lf: LFunc, name: str) -> bool:
     mut i = 0
@@ -2929,6 +3014,7 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                 mut god = lf.new_vreg()
                 lf.emit(LInst.ICall(god, "_tr_rt_obj_alloc", goa))
                 lf.set_vreg_type(god, 10)
+                _fresh_mark_obj(lf, god)         # ARC: fresh owned generic-class instance
                 return god
             # Bare construction `ClassName()` -> heap-allocate a zeroed instance.
             if m.is_class(fn) and args.len == 0:
@@ -2940,6 +3026,7 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                 mut od = lf.new_vreg()
                 lf.emit(LInst.ICall(od, "_tr_rt_obj_alloc", oaa))
                 lf.set_vreg_type(od, 10)
+                _fresh_mark_obj(lf, od)          # ARC: fresh owned class instance (bare ctor)
                 return od
             if fn == "len" and args.len == 1 and _recv_class(m, lf, args.get(0)) != "":
                 # len(obj) -> obj.__len__() for a class defining it.
@@ -3223,6 +3310,8 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                     tev = tfb
                 elif tevt == 1:
                     _secure_str(m, lf, tev)      # the tuple owns the str slot's ref
+                elif tevt == 10 or tevt == 11:
+                    _secure_obj(m, lf, tev)      # the tuple owns the object slot's ref
                 tvals.push(tev)
                 tj = tj + 1
             mut tsz = lf.new_vreg()
@@ -3296,6 +3385,7 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                 elif evt != elem_t:
                     return -1                           # heterogeneous list unsupported
                 if evt == 1: _secure_str(m, lf, ev)     # list owns the str element by ref
+                if evt == 10 or evt == 11: _secure_obj(m, lf, ev)   # list owns the object element by ref
                 if evt == 5:                            # store the f64 bit pattern
                     mut evb = lf.new_vreg()
                     lf.emit(LInst.IFBits(evb, ev))
@@ -3695,6 +3785,7 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                 if av < 0: return -1
                 if lf.vreg_type(av) != want_elem: return -1   # element type must match list
                 if want_elem == 1: _secure_str(m, lf, av)     # list owns the str element by ref
+                if want_elem == 10 or want_elem == 11: _secure_obj(m, lf, av)   # list owns the object element by ref
                 if want_elem == 5:                            # store the f64 bit pattern
                     mut avfb = lf.new_vreg()
                     lf.emit(LInst.IFBits(avfb, av))
