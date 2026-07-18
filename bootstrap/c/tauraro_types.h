@@ -2899,6 +2899,7 @@ typedef struct LFunc {
     List_i64* loop_cont;
     List_i64* loop_brk;
     List_i64* fresh_strs;
+    List_i64* fresh_objs;
     List_TrStr* captures;
     List_i64* cap_tags;
     List_i64* var_xret;
@@ -2919,6 +2920,7 @@ static void _trdrop_LFunc(void* vp) {
     List_i64_free(self->loop_cont);
     List_i64_free(self->loop_brk);
     List_i64_free(self->fresh_strs);
+    List_i64_free(self->fresh_objs);
     List_TrStr_free(self->captures);
     List_i64_free(self->cap_tags);
     List_i64_free(self->var_xret);
@@ -3002,6 +3004,7 @@ typedef struct LModule {
     List_ptr* subst_tys;
     List_TrStr* extfn_names;
     List_i64* extfn_ret;
+    List_TrStr* fn_owned_names;
 } LModule;
 static void _trdrop_LModule(void* vp) {
     LModule* self = (LModule*)vp; (void)self;
@@ -3023,6 +3026,7 @@ static void _trdrop_LModule(void* vp) {
     List_ptr_free(self->subst_tys);
     List_TrStr_free(self->extfn_names);
     List_i64_free(self->extfn_ret);
+    List_TrStr_free(self->fn_owned_names);
 }
 #endif
 
@@ -3728,6 +3732,8 @@ __attribute__((hot)) void LModule_add_extern(LModule* self, TrStr name);
 __attribute__((hot)) bool LModule_is_user_fn(LModule* self, TrStr name);
 __attribute__((hot)) bool LModule_is_extern_fn(LModule* self, TrStr name);
 __attribute__((hot)) long long LModule_extern_ret_tag(LModule* self, TrStr name);
+__attribute__((hot)) void LModule_mark_fn_owned(LModule* self, TrStr name);
+__attribute__((hot)) bool LModule_fn_ret_owned(LModule* self, TrStr name);
 __attribute__((hot)) long long LModule_unavail_index(LModule* self, TrStr name);
 __attribute__((hot)) void LModule_add_class(LModule* self, ClassLayout* cl);
 __attribute__((hot)) long long LModule_class_index(LModule* self, TrStr name);
@@ -3826,6 +3832,13 @@ __attribute__((hot)) void _release_str(LModule* m, LFunc* lf, long long v);
 __attribute__((hot)) void _retain_str(LModule* m, LFunc* lf, long long v);
 __attribute__((hot)) void _flush_fresh_strs(LModule* m, LFunc* lf);
 __attribute__((hot)) void _secure_str(LModule* m, LFunc* lf, long long v);
+__attribute__((hot)) void _fresh_mark_obj(LFunc* lf, long long v);
+__attribute__((hot)) bool _fresh_take_obj(LFunc* lf, long long v);
+__attribute__((hot)) void _release_obj(LModule* m, LFunc* lf, long long v);
+__attribute__((hot)) void _retain_obj(LModule* m, LFunc* lf, long long v);
+__attribute__((hot)) void _flush_fresh_objs(LModule* m, LFunc* lf);
+__attribute__((hot)) bool _is_owned_local_return(LFunc* lf, HirExpr* val);
+__attribute__((hot)) void _secure_obj(LModule* m, LFunc* lf, long long v);
 __attribute__((hot)) bool _is_param(LFunc* lf, TrStr name);
 __attribute__((hot)) long long _norm_bool(LFunc* lf, long long v);
 __attribute__((hot)) long long _str_call0(LModule* m, LFunc* lf, TrStr sym, long long _tr_v_recv, long long restype);

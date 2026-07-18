@@ -1005,7 +1005,15 @@ def lower_stmt(m: LModule, lf: LFunc, s: Pointer[HirStmt]) -> bool:
                 mut rv = lower_expr(m, lf, val)
                 if rv < 0: return false
                 if lf.vreg_type(rv) == 1: _secure_str(m, lf, rv)   # caller owns the returned str
-                if lf.vreg_type(rv) == 10 or lf.vreg_type(rv) == 11: _secure_obj(m, lf, rv)   # caller owns the returned object
+                if lf.vreg_type(rv) == 10 or lf.vreg_type(rv) == 11:
+                    # An OWNED object local returned by name TRANSFERS its ref (no retain):
+                    # sema emits no SAutoDrop for it (move-on-return), so retaining would
+                    # leave the caller's object at rc 2. A fresh temp likewise transfers; a
+                    # borrow (param / field access) is retained so the caller owns a new ref.
+                    if not _is_owned_local_return(lf, val):
+                        _secure_obj(m, lf, rv)
+                    else:
+                        _fresh_take_obj(lf, rv)          # consume any fresh mark; do not retain
                 _flush_fresh_strs(m, lf)
                 if not _run_defers(m, lf): return false            # LIFO defers before exit
                 lf.set_term(LTerm.TRetVal(rv))
@@ -2167,6 +2175,22 @@ def _flush_fresh_objs(m: LModule, lf: LFunc):
     while lf.fresh_objs.len > 0:
         mut v = lf.fresh_objs.pop()
         _release_obj(m, lf, v)
+
+# True if `val` returns an OWNED object local BY NAME: an EIdent naming a non-param
+# object local. Such a local owns a ref (secured at its bind), and sema emits no
+# SAutoDrop for it on the return path (move-on-return), so the return TRANSFERS that ref
+# — retaining it would leave the caller's object at rc 2 (a leak). Params are borrows
+# (return retains a new ref for the caller); fresh temps / field reads are handled by
+# _secure_obj (fresh->transfer, borrow->retain).
+def _is_owned_local_return(lf: LFunc, val: Pointer[HirExpr]) -> bool:
+    match val.read():
+        case HirExpr.EIdent(vn, _, _):
+            if lf.var_index(vn) < 0: return false
+            if _is_param(lf, vn): return false
+            mut vt = lf.var_type(vn)
+            return vt == 10 or vt == 11
+        case _:
+            return false
 
 # Secure an object for storage/return: fresh -> transfer; borrow -> retain a new ref.
 def _secure_obj(m: LModule, lf: LFunc, v: int):

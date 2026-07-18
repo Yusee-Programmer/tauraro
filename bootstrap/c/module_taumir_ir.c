@@ -46,6 +46,8 @@ __attribute__((malloc,returns_nonnull,hot)) LFunc* LFunc_init(TrStr name) {
     /* pass */
     f->fresh_strs = (void*)List_i64_new();
     /* pass */
+    f->fresh_objs = (void*)List_i64_new();
+    /* pass */
     f->captures = (void*)List_TrStr_new();
     /* pass */
     f->cap_tags = (void*)List_i64_new();
@@ -410,6 +412,8 @@ __attribute__((malloc,returns_nonnull,hot)) LModule* LModule_init() {
     /* pass */
     m->extfn_ret = (void*)List_i64_new();
     /* pass */
+    m->fn_owned_names = (void*)List_TrStr_new();
+    /* pass */
     return m;
 }
 
@@ -570,6 +574,40 @@ __attribute__((hot)) long long LModule_extern_ret_tag(LModule* self, TrStr name)
     }
     /* pass */
     return 0LL;
+}
+
+__attribute__((hot)) void LModule_mark_fn_owned(LModule* self, TrStr name) {
+    /* pass */
+    long long i = 0LL;
+    /* pass */
+    while ((i < self->fn_owned_names->len)) {
+        /* pass */
+        if ((strcmp(_tr_strz(List_TrStr_get(self->fn_owned_names, i)), _tr_strz(name)) == 0)) {
+            /* pass */
+            return;
+        }
+        /* pass */
+        i = (i + 1LL);
+    }
+    /* pass */
+    List_TrStr_append(self->fn_owned_names, name);
+}
+
+__attribute__((hot)) bool LModule_fn_ret_owned(LModule* self, TrStr name) {
+    /* pass */
+    long long i = 0LL;
+    /* pass */
+    while ((i < self->fn_owned_names->len)) {
+        /* pass */
+        if ((strcmp(_tr_strz(List_TrStr_get(self->fn_owned_names, i)), _tr_strz(name)) == 0)) {
+            /* pass */
+            return true;
+        }
+        /* pass */
+        i = (i + 1LL);
+    }
+    /* pass */
+    return false;
 }
 
 __attribute__((hot)) long long LModule_unavail_index(LModule* self, TrStr name) {

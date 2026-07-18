@@ -377,6 +377,13 @@ jobs:
         shell: bash
         run: TAURAROC=./tauraroc${{ matrix.ext }} bash scripts/llvm_ffi.sh
 
+      # Object-ARC leak oracle: the C≡LLVM output differential is blind to leaks/UAF, so
+      # object refcounting has its own memory oracle (live-object count == 0 at exit).
+      - name: LLVM object-leak oracle (object ARC)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: TAURAROC=./tauraroc${{ matrix.ext }} bash scripts/obj_leak.sh
+
       # Runtime security regressions (V-001 float-format overflow, etc.) under ASan+UBSan.
       - name: Runtime security tests (ASan/UBSan)
         if: runner.os == 'Linux'

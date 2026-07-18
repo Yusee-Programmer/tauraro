@@ -4,24 +4,24 @@
 extern "C":
     def _tr_rt_obj_live_count() -> int
 
-class Box:
+class Widget:
     n: int
 
-extend Box:
-    def init(n: int) -> Box:
-        mut b = Box()
+extend Widget:
+    def init(n: int) -> Widget:
+        mut b = Widget()
         b.n = n
         return b
 
-def area(b: Box) -> int:          # borrows b; does not own it
+def area(b: Widget) -> int:          # borrows b; does not own it
     return b.n * b.n
 
 def run(k: int) -> int:
     mut acc = 0
     mut i = 0
     while i < k:
-        acc = acc + area(Box.init(i))    # fresh Box borrowed by area, released after the stmt
-        mut keep = Box.init(i + 1)       # owned local, released at scope end
+        acc = acc + area(Widget.init(i))    # fresh Widget borrowed by area, released after the stmt
+        mut keep = Widget.init(i + 1)       # owned local, released at scope end
         acc = acc + area(keep)
         i = i + 1
     return acc
