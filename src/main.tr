@@ -917,6 +917,10 @@ pub def main(args: Vec[str]):
     if not file_exists(input_path) and not str_ends_with_dot_tr(input_path):
         input_path = input_path + ".tr"
 
+    if not file_exists(input_path):
+        print(c_red("error") + ": cannot read " + input_path + ": no such file")
+        _tr_exit(1)
+
     if verbose: print("[1/5] Resolving modules: " + input_path)
 
     mut resolver = ModuleResolver.init()

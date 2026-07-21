@@ -126,6 +126,25 @@ pub def _escape_str_for_c(s: str) -> str:
         i = i + 1
     return sb.to_string().as_str()
 
+# Like _escape_str_for_c but for f-string LITERAL text, which becomes part of a printf
+# format string: a bare '%' would be read as a conversion (and eat an argument).
+pub def _escape_fmt_for_c(s: str) -> str:
+    mut sb = StringBuilder.init(64)
+    mut p = s as Pointer[char]
+    mut i = 0
+    while True:
+        mut c = p.offset(i).read() as int
+        if c == 0: break
+        if c == 37: sb.append("%%")
+        elif c == 34: sb.append("\\\"")
+        elif c == 92: sb.append("\\\\")
+        elif c == 10: sb.append("\\n")
+        elif c == 13: sb.append("\\r")
+        elif c == 9: sb.append("\\t")
+        else: sb.append_char(c)
+        i = i + 1
+    return sb.to_string().as_str()
+
 # --- CGenerator class ---------------------------------------------------------
 
 pub class CGenerator:
@@ -1376,9 +1395,12 @@ pub class CGenerator:
         if f.name == "main" or f.name == "_tr_main":
             return "__attribute__((hot)) "
         if f.name == "init":
-            # A value-type `init` returns the struct BY VALUE — `malloc` /
-            # `returns_nonnull` are pointer-only attributes and are invalid here.
+            # A value-type `init` returns the struct BY VALUE, and a `-> void`
+            # init returns nothing — `malloc` / `returns_nonnull` are pointer-only
+            # attributes and are invalid in both cases.
             if self.value_types.contains(f.class_name):
+                return "static __attribute__((hot)) "
+            if f.ret_ty.name == "void" or f.ret_ty.name == "" or f.ret_ty.name == "None":
                 return "static __attribute__((hot)) "
             return "static __attribute__((malloc,returns_nonnull,hot)) "
         return "static __attribute__((hot)) "
@@ -1409,6 +1431,8 @@ pub class CGenerator:
             return "__attribute__((hot)) "
         if f.name == "init":
             if self.value_types.contains(f.class_name):
+                return "__attribute__((hot)) "
+            if f.ret_ty.name == "void" or f.ret_ty.name == "" or f.ret_ty.name == "None":
                 return "__attribute__((hot)) "
             return "__attribute__((malloc,returns_nonnull,hot)) "
         return "__attribute__((hot)) "
@@ -5173,7 +5197,7 @@ pub class CGenerator:
         while i < parts.len:
             mut part = parts.get(i)
             if not part.is_expr:
-                fmt = fmt + _escape_str_for_c(part.text)
+                fmt = fmt + _escape_fmt_for_c(part.text)
             else:
                 mut s = self.gen_expr(part.expr)
                 mut ty_n: str = hir_expr_type(part.expr).name
@@ -5186,15 +5210,45 @@ pub class CGenerator:
                     mut last_c = spec.char_at(spec_n - 1)
                     # Float specs: f, e, E, g, G
                     if last_c == 102 or last_c == 101 or last_c == 69 or last_c == 103 or last_c == 71:
-                        fmt = fmt + "%" + spec
+                        mut fspec = spec
+                        if fspec.starts_with(">") or fspec.starts_with("^") or fspec.starts_with("<"):
+                            fspec = fspec.slice(1, fspec.len())
+                        fmt = fmt + "%" + fspec
                         fargs = fargs + ", (double)(" + s + ")"
-                    # Integer specs: d, i, u, o, x, X
+                    # Integer specs: d, i, u, o, x, X — translate align/group/width into
+                    # a real printf directive (with the "ll" length modifier).
                     elif last_c == 100 or last_c == 105 or last_c == 117 or last_c == 111 or last_c == 120 or last_c == 88:
-                        fmt = fmt + "%" + spec
-                        fargs = fargs + ", (long long)(" + s + ")"
+                        mut iconv_s = spec.slice(spec_n - 1, spec_n)
+                        mut ispec = spec.slice(0, spec_n - 1)
+                        mut igrouped = false
+                        if ispec.len() > 0 and ispec.char_at(ispec.len() - 1) == 44:
+                            igrouped = true
+                            ispec = ispec.slice(0, ispec.len() - 1)
+                        mut ileft = false
+                        if ispec.starts_with(">") or ispec.starts_with("^"):
+                            ispec = ispec.slice(1, ispec.len())
+                        elif ispec.starts_with("<"):
+                            ileft = true
+                            ispec = ispec.slice(1, ispec.len())
+                        mut ipfx = "%"
+                        if ileft: ipfx = "%-"
+                        if igrouped:
+                            fmt = fmt + ipfx + ispec + "s"
+                            fargs = fargs + ", _tr_i64_grouped((long long)(" + s + "))"
+                        else:
+                            fmt = fmt + ipfx + ispec + "ll" + iconv_s
+                            fargs = fargs + ", (long long)(" + s + ")"
                     # String specs: s (width/alignment)
                     elif last_c == 115:
-                        fmt = fmt + "%" + spec
+                        mut sspec = spec
+                        mut sleft = false
+                        if sspec.starts_with(">") or sspec.starts_with("^"):
+                            sspec = sspec.slice(1, sspec.len())
+                        elif sspec.starts_with("<"):
+                            sleft = true
+                            sspec = sspec.slice(1, sspec.len())
+                        if sleft: fmt = fmt + "%-" + sspec
+                        else:     fmt = fmt + "%" + sspec
                         if _is_int_type(ty_n):
                             fargs = fargs + ", _tr_int_to_str(" + s + ")"
                         elif _is_float_type(ty_n):

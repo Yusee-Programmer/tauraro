@@ -88,8 +88,20 @@ long long _tr_rt_str_live_count(void) {
 void _tr_rt_print_i64(long long v) { printf("%lld\n", v); }
 void _tr_rt_print_cstr(const char* s) { fputs(s ? s : "", stdout); fputc('\n', stdout); }
 void _tr_rt_print_bool(long long v) { fputs(v ? "true" : "false", stdout); fputc('\n', stdout); }
-void _tr_rt_print_f64(double v) { printf("%g\n", v); }   /* matches C backend's "%g" */
-void _tr_rt_write_f64(double v) { printf("%g", v); }
+/* MSVCRT %g pads exponents to 3 digits ("1.5e+010"); tauraro prints "1.5e+10". */
+static void _tr_gnorm(char* b) {
+    char* e = strchr(b, 'e');
+    if (!e) return;
+    if ((e[1] == '+' || e[1] == '-') && e[2] == '0' && e[3] && e[4] && !e[5]) {
+        e[2] = e[3]; e[3] = e[4]; e[4] = 0;
+    }
+}
+static void _tr_gfmt(double v, char* b, size_t n) { snprintf(b, n, "%g", v); _tr_gnorm(b); }
+void _tr_rt_print_f64(double v) { char b[32]; _tr_gfmt(v, b, sizeof b); printf("%s\n", b); }   /* matches C backend's "%g" */
+void _tr_rt_write_f64(double v) { char b[32]; _tr_gfmt(v, b, sizeof b); printf("%s", b); }
+char* _tr_rt_char_to_str(long long c) { char b[2]; b[0]=(char)c; b[1]=0; return _tr_rt_str_new(b); }
+void _tr_rt_write_char(long long c) { putchar((int)c); }
+void _tr_rt_print_char(long long c) { putchar((int)c); putchar('\n'); }
 
 /* strcmp / strlen the native backend calls for string comparison and len(). */
 long long _tr_rt_str_cmp(const char* a, const char* b) {
@@ -129,7 +141,69 @@ char* _tr_rt_i64_to_str(long long v) {
 }
 char* _tr_rt_bool_to_str(long long v) { return _tr_rt_str_new(v ? "true" : "false"); }
 long long _tr_rt_str_to_i64(const char* s) { return s ? (long long)strtoll(s, 0, 10) : 0; }
-char* _tr_rt_f64_to_str(double v) { char b[32]; snprintf(b, sizeof(b), "%g", v); return _tr_rt_str_new(b); }
+/* float(str) -> f64 bit pattern (LLVM backend: bits travel in rax, not xmm0). */
+long long _tr_rt_str_to_f64(const char* s) { double d = s ? strtod(s, 0) : 0.0; long long b; memcpy(&b, &d, 8); return b; }
+/* f-string format specs ("{x:.2f}", "{n:,d}", "{v:>6d}") — mirror c.tr gen_fstring. */
+static void _tr_fmtspec_strip_align(const char* spec, int* left, const char** rest) {
+    *left = 0; *rest = spec;
+    if (spec[0] == '>' || spec[0] == '^') *rest = spec + 1;
+    else if (spec[0] == '<') { *left = 1; *rest = spec + 1; }
+}
+char* _tr_rt_fmt_spec_i64(long long v, const char* spec) {
+    char buf[512], fmt[40];
+    if (!spec) spec = "";
+    size_t n = strlen(spec);
+    if (!n) { snprintf(buf, sizeof buf, "%lld", v); return _tr_rt_str_new(buf); }
+    char conv = spec[n - 1];
+    if (conv=='d'||conv=='i'||conv=='u'||conv=='o'||conv=='x'||conv=='X') {
+        char mid[24]; size_t m = n - 1; if (m > sizeof mid - 1) m = sizeof mid - 1;
+        memcpy(mid, spec, m); mid[m] = 0;
+        int left = 0; const char* rest = mid; _tr_fmtspec_strip_align(mid, &left, &rest);
+        size_t rl = strlen(rest);
+        if (rl && rest[rl - 1] == ',') {                  /* grouping: {n:,d} */
+            char w[16]; size_t wm = rl - 1; if (wm > sizeof w - 1) wm = sizeof w - 1;
+            memcpy(w, rest, wm); w[wm] = 0;
+            snprintf(fmt, sizeof fmt, "%%%s%ss", left ? "-" : "", w);
+            snprintf(buf, sizeof buf, fmt, _tr_i64_grouped(v));
+            return _tr_rt_str_new(buf);
+        }
+        snprintf(fmt, sizeof fmt, "%%%s%sll%c", left ? "-" : "", rest, conv);
+        snprintf(buf, sizeof buf, fmt, v);
+        return _tr_rt_str_new(buf);
+    }
+    /* width/alignment only (">10", "<8", "05") */
+    int left = 0; const char* rest = spec; _tr_fmtspec_strip_align(spec, &left, &rest);
+    snprintf(fmt, sizeof fmt, "%%%s%slld", left ? "-" : "", rest);
+    snprintf(buf, sizeof buf, fmt, v);
+    return _tr_rt_str_new(buf);
+}
+char* _tr_rt_fmt_spec_f64(long long bits, const char* spec) {
+    double v; char buf[512], fmt[40];
+    memcpy(&v, &bits, 8);
+    if (!spec) spec = "";
+    size_t n = strlen(spec);
+    if (!n) { _tr_gfmt(v, buf, sizeof buf); return _tr_rt_str_new(buf); }
+    char conv = spec[n - 1];
+    int left = 0; const char* rest = spec; _tr_fmtspec_strip_align(spec, &left, &rest);
+    if (conv=='f'||conv=='e'||conv=='E'||conv=='g'||conv=='G')
+        snprintf(fmt, sizeof fmt, "%%%s%s", left ? "-" : "", rest);
+    else
+        snprintf(fmt, sizeof fmt, "%%%s%sg", left ? "-" : "", rest);
+    snprintf(buf, sizeof buf, fmt, v);
+    return _tr_rt_str_new(buf);
+}
+char* _tr_rt_fmt_spec_str(const char* s, const char* spec) {
+    char buf[1024], fmt[40];
+    if (!s) s = "";
+    if (!spec) spec = "";
+    int left = 0; const char* rest = spec; _tr_fmtspec_strip_align(spec, &left, &rest);
+    size_t rn = strlen(rest);
+    if (rn && rest[rn - 1] == 's') snprintf(fmt, sizeof fmt, "%%%s%s", left ? "-" : "", rest);
+    else                           snprintf(fmt, sizeof fmt, "%%%s%ss", left ? "-" : "", rest);
+    snprintf(buf, sizeof buf, fmt, s);
+    return _tr_rt_str_new(buf);
+}
+char* _tr_rt_f64_to_str(double v) { char b[32]; _tr_gfmt(v, b, sizeof(b)); return _tr_rt_str_new(b); }
 char* _tr_rt_hex_str(long long n) {
     char b[32]; unsigned long long u = n < 0 ? (unsigned long long)(-n) : (unsigned long long)n;
     if (n < 0) snprintf(b, sizeof(b), "-0x%llx", u); else snprintf(b, sizeof(b), "0x%llx", u);
@@ -305,6 +379,12 @@ long long _tr_rt_str_parse_bool(const char* s) {
 }
 long long _tr_rt_str_is_empty(const char* s) { return (!s || !*s) ? 1 : 0; }
 long long _tr_rt_str_ord(const char* s) { return s ? (long long)(unsigned char)s[0] : 0; }
+char* _tr_rt_chr(long long c) {
+    char* r = _tr_rt_str_alloc(1);
+    r[0] = (char)(unsigned char)c;
+    r[1] = 0;
+    return r;
+}
 char* _tr_rt_str_pad_left(const char* s, long long w) {
     if (!s) s = "";
     long long n = (long long)strlen(s);
@@ -344,6 +424,19 @@ char* _tr_rt_str_slice(const char* s, long long start, long long end) {
     for (long long i = 0; i < sz; i++) e[i] = s[start + i];
     e[sz] = 0;
     return e;
+}
+/* str.split_once(sep) -> (left, right) at the first occurrence; right="" if not found. */
+char* _tr_rt_split_once_left(const char* s, const char* sep) {
+    if (!s) return _tr_rt_str_new("");
+    const char* p = (sep && *sep) ? strstr(s, sep) : 0;
+    if (!p) return _tr_rt_str_new(s);
+    return _tr_rt_str_slice(s, 0, (long long)(p - s));
+}
+char* _tr_rt_split_once_right(const char* s, const char* sep) {
+    if (!s) return _tr_rt_str_new("");
+    const char* p = (sep && *sep) ? strstr(s, sep) : 0;
+    if (!p) return _tr_rt_str_new("");
+    return _tr_rt_str_slice(s, (long long)(p - s) + (long long)strlen(sep), (long long)strlen(s));
 }
 long long _tr_rt_str_count(const char* s, const char* sub) {
     if (!s || !sub || !*sub) return 0;
@@ -444,6 +537,42 @@ long long _tr_rt_idict_get_or(void* h, long long k, long long def) {
     return def;
 }
 
+/* Set.to_list(): collect the set's keys into a new _TrNList (a set IS a dict here). */
+void* _tr_rt_iset_to_list(void* h) {
+    _IDict* d = (_IDict*)h;
+    _TrNList* l = (_TrNList*)malloc(sizeof(_TrNList));
+    if (!l) return 0;
+    l->data = 0; l->len = 0; l->cap = 0;
+    if (!d) return l;
+    long long cap = d->len > 8 ? d->len : 8;
+    l->data = (long long*)malloc(cap * 8);
+    l->cap = cap;
+    for (int i = 0; i < _TRN_DCAP; i++) {
+        for (_INode* n = d->b[i]; n; n = n->next) {
+            if (l->len == l->cap) { l->cap *= 2; l->data = (long long*)realloc(l->data, l->cap * 8); }
+            l->data[l->len++] = n->key;
+        }
+    }
+    return l;
+}
+void* _tr_rt_sset_to_list(void* h) {
+    _SDict* d = (_SDict*)h;
+    _TrNList* l = (_TrNList*)malloc(sizeof(_TrNList));
+    if (!l) return 0;
+    l->data = 0; l->len = 0; l->cap = 0;
+    if (!d) return l;
+    long long cap = d->len > 8 ? d->len : 8;
+    l->data = (long long*)malloc(cap * 8);
+    l->cap = cap;
+    for (int i = 0; i < _TRN_DCAP; i++) {
+        for (_SNode* n = d->b[i]; n; n = n->next) {
+            if (l->len == l->cap) { l->cap *= 2; l->data = (long long*)realloc(l->data, l->cap * 8); }
+            l->data[l->len++] = (long long)n->key;
+        }
+    }
+    return l;
+}
+
 /* remove for dicts — also backs Set[int]/Set[str] (a set is a dict with value 1). */
 void _tr_rt_idict_remove(void* h, long long k) {
     _IDict* d = (_IDict*)h; if (!d) return;
@@ -495,7 +624,8 @@ void _tr_rt_write_list_f64(void* h) {
     if (l) for (long long i = 0; i < l->len; i++) {
         if (i) fputs(", ", stdout);
         double v; memcpy(&v, &l->data[i], 8);
-        printf("%g", v);
+        char gb[32]; _tr_gfmt(v, gb, sizeof gb);
+        printf("%s", gb);
     }
     fputc(']', stdout);
 }
@@ -563,6 +693,21 @@ long long _tr_rt_list_sum_i64(void* h) {
     long long t = 0;
     for (long long i = 0; i < l->len; i++) t += l->data[i];
     return t;
+}
+/* float-list sum: elements are stored as raw f64 bit patterns; returns the sum's bit pattern. */
+long long _tr_rt_list_sum_f64(void* h) {
+    _TrNList* l = (_TrNList*)h;
+    if (!l) return 0;
+    double acc = 0.0;
+    for (long long i = 0; i < l->len; i++) {
+        long long b = l->data[i];
+        double v;
+        memcpy(&v, &b, 8);
+        acc += v;
+    }
+    long long out;
+    memcpy(&out, &acc, 8);
+    return out;
 }
 long long _tr_rt_list_index_i64(void* h, long long v) {
     _TrNList* l = (_TrNList*)h;
@@ -654,6 +799,18 @@ void _tr_rt_list_sort(void* h, long long dir) {
     for (long long i = 1; i < l->len; i++) {
         long long v = l->data[i], j = i - 1;
         while (j >= 0 && (dir > 0 ? l->data[j] > v : l->data[j] < v)) { l->data[j + 1] = l->data[j]; j--; }
+        l->data[j + 1] = v;
+    }
+}
+/* in-place insertion sort for string lists (strcmp); dir>0 asc, dir<0 desc. */
+void _tr_rt_list_sort_str(void* h, long long dir) {
+    _TrNList* l = (_TrNList*)h;
+    if (!l) return;
+    for (long long i = 1; i < l->len; i++) {
+        long long v = l->data[i], j = i - 1;
+        const char* vs = (const char*)v;
+        while (j >= 0 && (dir > 0 ? strcmp((const char*)l->data[j], vs) > 0
+                                  : strcmp((const char*)l->data[j], vs) < 0)) { l->data[j + 1] = l->data[j]; j--; }
         l->data[j + 1] = v;
     }
 }
@@ -767,6 +924,43 @@ int64_t _tr_rt_field_get_i(void* obj, int64_t off) {
 }
 void _tr_rt_field_set_i(void* obj, int64_t off, int64_t v) {
     *(int64_t*)((char*)obj + off) = v;
+}
+
+/* Dict item snapshots for the LLVM backend: a _TrNList* of node pointers.
+ * Each _SNode/_INode doubles as the (key@0, val@8) pair the loop reads. */
+void* _tr_rt_dict_items(void* h) {
+    _SDict* d = (_SDict*)h;
+    _TrNList* l = (_TrNList*)malloc(sizeof(_TrNList));
+    if (!l) return 0;
+    l->data = 0; l->len = 0; l->cap = 0;
+    if (!d) return l;
+    long long cap = d->len > 8 ? d->len : 8;
+    l->data = (long long*)malloc(cap * 8);
+    l->cap = cap;
+    for (int i = 0; i < _TRN_DCAP; i++) {
+        for (_SNode* n = d->b[i]; n; n = n->next) {
+            if (l->len == l->cap) { l->cap *= 2; l->data = (long long*)realloc(l->data, l->cap * 8); }
+            l->data[l->len++] = (long long)n;
+        }
+    }
+    return l;
+}
+void* _tr_rt_idict_items(void* h) {
+    _IDict* d = (_IDict*)h;
+    _TrNList* l = (_TrNList*)malloc(sizeof(_TrNList));
+    if (!l) return 0;
+    l->data = 0; l->len = 0; l->cap = 0;
+    if (!d) return l;
+    long long cap = d->len > 8 ? d->len : 8;
+    l->data = (long long*)malloc(cap * 8);
+    l->cap = cap;
+    for (int i = 0; i < _TRN_DCAP; i++) {
+        for (_INode* n = d->b[i]; n; n = n->next) {
+            if (l->len == l->cap) { l->cap *= 2; l->data = (long long*)realloc(l->data, l->cap * 8); }
+            l->data[l->len++] = (long long)n;
+        }
+    }
+    return l;
 }
 
 /* -- List[int]: a dynamic i64 array the native backend calls. Opaque handle (void*).

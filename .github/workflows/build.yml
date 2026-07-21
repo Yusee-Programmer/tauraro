@@ -384,6 +384,14 @@ jobs:
         shell: bash
         run: TAURAROC=./tauraroc${{ matrix.ext }} bash scripts/obj_leak.sh
 
+      # ARC hardening: AddressSanitizer over the LLVM backend catches a use-after-free /
+      # double-free from object refcounting (a UAF can print the right value, so neither the
+      # output differential nor the leak oracle would see it). LeakSanitizer is left off.
+      - name: LLVM ARC ASan hardening
+        if: runner.os == 'Linux'
+        shell: bash
+        run: TAURAROC=./tauraroc${{ matrix.ext }} bash scripts/obj_asan.sh
+
       # Runtime security regressions (V-001 float-format overflow, etc.) under ASan+UBSan.
       - name: Runtime security tests (ASan/UBSan)
         if: runner.os == 'Linux'

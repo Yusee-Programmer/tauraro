@@ -41,13 +41,52 @@ def _promote_f(lf: LFunc, v: int) -> int:
     lf.set_vreg_type(d, 5)
     return d
 
+# `x as <narrow int type>`: reproduce C's two's-complement integer narrowing so the LLVM
+# backend matches the C backend bit-for-bit (u8: x & 0xFF; i8: sign-extend from 8 bits).
+# int/i64/u64/usize/isize (and unknown) are full-width -> no-op.
+def _int_cast_width(tn: str) -> int:        # bit width, or 0 for full-width/no-op
+    if tn == "i8" or tn == "u8": return 8
+    if tn == "i16" or tn == "u16": return 16
+    if tn == "i32" or tn == "u32": return 32
+    return 0
+
+def _int_cast_signed(tn: str) -> bool:
+    return tn == "i8" or tn == "i16" or tn == "i32"
+
+def _narrow_int(lf: LFunc, v: int, tn: str) -> int:
+    mut bits = _int_cast_width(tn)
+    if bits == 0: return v                   # full-width: nothing to do
+    # masked = v & ((1<<bits)-1)
+    mut maskc = lf.new_vreg()
+    lf.emit(LInst.IConst(maskc, (1 << bits) - 1))
+    mut masked = lf.new_vreg()
+    lf.emit(LInst.IBinOp(masked, "&", v, maskc))
+    lf.set_vreg_type(masked, 0)
+    if not _int_cast_signed(tn): return masked
+    # signed: sign-extend from `bits`: ((masked ^ signbit) - signbit)
+    mut sbc = lf.new_vreg()
+    lf.emit(LInst.IConst(sbc, 1 << (bits - 1)))
+    mut xored = lf.new_vreg()
+    lf.emit(LInst.IBinOp(xored, "^", masked, sbc))
+    mut res = lf.new_vreg()
+    lf.emit(LInst.IBinOp(res, "-", xored, sbc))
+    lf.set_vreg_type(res, 0)
+    return res
+
+# Is `tn` an integer/bool cast target (int of any width)?
+def _is_int_cast_target(tn: str) -> bool:
+    if tn == "int" or tn == "i64" or tn == "u64" or tn == "usize" or tn == "isize": return true
+    if tn == "i8" or tn == "u8" or tn == "i16" or tn == "u16" or tn == "i32" or tn == "u32": return true
+    if tn == "bool": return true
+    return false
+
 def _print_i64_sym() -> str:
     return "_tr_rt_print_i64"
 
 # Value-type tags: 0=int/i64, 1=str/char*, 2=List[int], 3=List[str], 4=bool, 5=f64,
 # 6=Dict[str,int], 7=Dict[int,int], 8=Dict[str,str], 9=Dict[int,str].
 def _is_list_tag(t: int) -> bool:
-    return t == 2 or t == 3 or t == 14 or t == 19   # int / str / float / object elements
+    return t == 2 or t == 3 or t == 14 or t == 19 or t == 21   # int / str / float / object / tuple elements
 
 def _is_set_tag(t: int) -> bool:
     return t == 13 or t == 16               # Set[int] / Set[str]
@@ -82,13 +121,45 @@ def _list_elem_tag(t: int) -> int:      # element value-type held by a list hand
     if t == 3: return 1
     if t == 14: return 5                # float elements (stored as raw bit patterns)
     if t == 19: return 10               # class-instance elements (raw 8-byte handles)
+    if t == 21: return 15               # tuple elements (raw 8-byte handles)
     return 0
 
 def _list_tag_for_elem(et: int) -> int: # list handle tag that holds element type `et`
     if et == 1: return 3
     if et == 5: return 14
     if et == 10: return 19
+    if et == 15: return 21
     return 2
+
+# Annotated list type (e.g. the declared type in `let xs: List[str] = []`) -> handle tag.
+def _list_tag_from_ann(m: LModule, ty: AstType) -> int:
+    if ty.name != "List" and ty.name != "Vec": return -1
+    mut t = _tag_of(m, ty)
+    if t == 2 or t == 3 or t == 14 or t == 19 or t == 21: return t
+    if ty.args.len > 0:
+        mut en = ty.args.get(0).read().name
+        if en == "bool": return 2
+        if en == "Tuple" or en == "tuple": return 21
+    return -1
+
+# Annotated dict type (e.g. `let d: Dict[str,int] = {}`) -> handle tag.
+def _dict_tag_from_ann(m: LModule, ty: AstType) -> int:
+    if ty.name != "Dict" and ty.name != "Map": return -1
+    if ty.args.len != 2: return -1
+    mut kt = ty.args.get(0).read()
+    mut vt = ty.args.get(1).read()
+    mut kstr = kt.name == "str" or kt.name == "String"
+    mut kint = _is_int_typename(kt.name)
+    mut vstr = vt.name == "str" or vt.name == "String"
+    mut vint = _is_int_typename(vt.name)
+    mut vflt = vt.name == "float" or vt.name == "f64"
+    if kstr and vint: return 6
+    if kint and vint: return 7
+    if kstr and vstr: return 8
+    if kint and vstr: return 9
+    if kstr and vflt: return 17
+    if kint and vflt: return 18
+    return -1
 
 def _is_cmp_op(op: str) -> bool:
     return op == "<" or op == ">" or op == "==" or op == "!=" or op == "<=" or op == ">="
@@ -109,6 +180,7 @@ def _ast_type_tag(ty: AstType) -> int:
             mut et = ty.args.get(0).read()
             if et.name == "str" or et.name == "String": return 3
             if _is_int_typename(et.name): return 2
+            if et.name == "bool": return 2          # List[bool]: 0/1 elems share the int list repr
             if et.name == "float" or et.name == "f64": return 14
             return -1
         return 2
@@ -119,6 +191,7 @@ def _ast_type_tag(ty: AstType) -> int:
             if _is_int_typename(se.name): return 13
         return -1
     if n == "Tuple": return 15
+    if n == "def": return 0            # first-class function value: raw code address
     if n == "Dict" or n == "Map":
         if ty.args.len >= 2:
             mut kt = ty.args.get(0).read()
@@ -241,6 +314,7 @@ def _ensure_generic_class(m: LModule, ty: AstType) -> str:
     if ok:
         m.add_class(lay)
         # Register method names first (recursion), then lower bodies under the subst.
+        # Methods may live in prog.functions (extend blocks) or class.methods (inline).
         mut prereg = 0
         while prereg < m.hir_prog.functions.len:
             mut pf = m.hir_prog.functions.get(prereg)
@@ -251,6 +325,16 @@ def _ensure_generic_class(m: LModule, ty: AstType) -> str:
                 m.fn_ret.push(pfrt)
                 if pf.returns_owned and (pfrt == 10 or pfrt == 11): m.mark_fn_owned(pfmang)
             prereg = prereg + 1
+        mut prereg2 = 0
+        while prereg2 < c.methods.len:
+            mut pfm = c.methods.get(prereg2)
+            if not pfm.is_extern and pfm.generics.len == 0 and not _method_in_prog_functions(m.hir_prog, ty.name, pfm.name):
+                mut pfmang2 = _own(mangled) + "_" + _own(pfm.name)
+                mut pfrt2 = _tag_of(m, pfm.ret_ty)
+                m.fn_names.push(pfmang2)
+                m.fn_ret.push(pfrt2)
+                if pfm.returns_owned and (pfrt2 == 10 or pfrt2 == 11): m.mark_fn_owned(pfmang2)
+            prereg2 = prereg2 + 1
         mut mi = 0
         while mi < m.hir_prog.functions.len:
             mut mf = m.hir_prog.functions.get(mi)
@@ -263,6 +347,17 @@ def _ensure_generic_class(m: LModule, ty: AstType) -> str:
                     m.ok = true
                     m.fail_note = ""
             mi = mi + 1
+        mut mi2 = 0
+        while mi2 < c.methods.len:
+            mut mfm = c.methods.get(mi2)
+            if not mfm.is_extern and mfm.generics.len == 0 and not _method_in_prog_functions(m.hir_prog, ty.name, mfm.name):
+                _lir_lower_method(m, mangled, mfm)
+                if not m.ok:
+                    m.unavail_names.push(_own(mangled) + "_" + _own(mfm.name))
+                    m.unavail_notes.push(_own(m.fail_note))
+                    m.ok = true
+                    m.fail_note = ""
+            mi2 = mi2 + 1
     # Pop the substitution.
     sb = 0
     while sb < c.generics.len:
@@ -458,13 +553,93 @@ def _register_classes(m: LModule, prog: HirProgram):
             v2 = v2 + 1
         ei = ei + 1
 
+# -- ARC recursive drops: per-class `<Class>__drop` -----------------------------------
+# A class with owned (str / object / enum) fields needs its fields released when an
+# instance's refcount reaches 0. We generate a `<Class>__drop(self)` function that
+# releases each owned field (recursing into object fields via their own header drop) but
+# does NOT free the shell — `_tr_rt_obj_release` frees the shell after the drop returns.
+# The ctor attaches it via `_tr_rt_obj_set_drop`. Scalar-only classes leave drop = 0.
+def _class_needs_drop(lay: ClassLayout) -> bool:
+    mut i = 0
+    while i < lay.ftags.len:
+        mut t = lay.ftags.get(i)
+        if t == 1 or t == 10 or t == 11: return true
+        i = i + 1
+    return false
+
+def _class_needs_drop_by_name(m: LModule, cname: str) -> bool:
+    mut ci = m.class_index(cname)
+    if ci < 0: return false
+    return _class_needs_drop(m.classes.get(ci))
+
+# Emit `_tr_rt_obj_set_drop(obj, &<Class>__drop)` right after allocating an instance of a
+# class that owns fields, so the object carries its field-releaser for when rc hits 0.
+def _attach_class_drop(m: LModule, lf: LFunc, obj: int, cname: str):
+    if not _class_needs_drop_by_name(m, cname): return
+    mut faddr = lf.new_vreg()
+    lf.set_vreg_type(faddr, 12)              # a function pointer -> `ptr` (tag 12 = closure/fnptr)
+    lf.emit(LInst.IFuncAddr(faddr, cname + "__drop"))
+    m.add_extern("_tr_rt_obj_set_drop")
+    mut sda = Vec[int].init(2)
+    sda.push(obj)
+    sda.push(faddr)
+    lf.emit(LInst.ICall(-1, "_tr_rt_obj_set_drop", sda))
+
+# Build the `<Class>__drop(self)` LFunc: release every owned field of `lay`. Inherited
+# fields lay first in `lay.fields`, so a derived class's drop covers the base's fields too.
+def _build_class_drop(m: LModule, lay: ClassLayout):
+    mut dname = lay.name + "__drop"
+    if m.is_user_fn(dname): return                 # dedup
+    m.fn_names.push(dname)
+    m.fn_ret.push(0)                               # returns i64 0; runtime calls it as void
+    mut lf = LFunc.init(dname)
+    lf.params.push("self")
+    lf.add_var("self")
+    lf.set_var_type("self", 10)
+    lf.set_var_cls("self", _own(lay.name))
+    lf.set_cur(lf.new_block())
+    mut i = 0
+    while i < lay.ftags.len:
+        mut t = lay.ftags.get(i)
+        if t == 1:
+            mut s0 = lf.new_vreg()
+            lf.emit(LInst.ILoadVar(s0, "self"))
+            mut fv = _emit_field_get(m, lf, s0, i * 8, 1)
+            _release_str(m, lf, fv)
+        elif t == 10 or t == 11:
+            mut s1 = lf.new_vreg()
+            lf.emit(LInst.ILoadVar(s1, "self"))
+            mut fv2 = _emit_field_get(m, lf, s1, i * 8, t)
+            _release_obj(m, lf, fv2)               # recurses via the field's own header drop
+        i = i + 1
+    lf.set_term(LTerm.TRetInt(0))
+    m.funcs.push(lf)
+
+# Generate drop functions for every non-generic class that owns fields.
+def _gen_class_drops(m: LModule):
+    mut ci = 0
+    while ci < m.classes.len:
+        mut lay = m.classes.get(ci)
+        if _class_needs_drop(lay): _build_class_drop(m, lay)
+        ci = ci + 1
+
+# Extend-block methods live in prog.functions AND (merged by sema) in class.methods /
+# enum.methods — register/lower each only once (the prog.functions copy wins).
+def _method_in_prog_functions(prog: HirProgram, cls: str, name: str) -> bool:
+    mut dfi = 0
+    while dfi < prog.functions.len:
+        mut df = prog.functions.get(dfi)
+        if df.class_name == cls and df.name == name and not df.is_extern: return true
+        dfi = dfi + 1
+    return false
+
 pub def lower_to_lir(prog: HirProgram) -> LModule:
     mut m = LModule.init()
     m.hir_prog = prog                  # generic fns are instantiated lazily at call sites
     _register_classes(m, prog)
     # extern "C" declarations: register each as a linker-resolved call target. A str arg
     # is a raw char* in the LIR (tag 1 = pointer to the rc string's char data), so it
-    # passes to a C `char*` parameter directly; only scalar/str/ptr sigs are registered.
+    # passes to a C `char*` parameter directly; scalar/str/ptr/float sigs are registered.
     mut efx = 0
     while efx < prog.extern_funcs.len:
         mut ef = prog.extern_funcs.get(efx)
@@ -472,11 +647,11 @@ pub def lower_to_lir(prog: HirProgram) -> LModule:
         mut epi = 0
         while epi < ef.params.len:
             mut eptag = _tag_of(m, ef.params.get(epi).ty)
-            if eptag != 0 and eptag != 1 and eptag != 4:   # int/str(char*)/bool args only
+            if eptag != 0 and eptag != 1 and eptag != 4 and eptag != 5:   # int/str/bool/f64 args
                 ef_ok = false
             epi = epi + 1
         mut ertag = _tag_of(m, ef.ret_ty)
-        if ertag != 0 and ertag != 1 and ertag != 4: ef_ok = false   # (no float ABI yet)
+        if ertag != 0 and ertag != 1 and ertag != 4 and ertag != 5: ef_ok = false
         if ef_ok:
             m.extfn_names.push(_own(ef.name))
             m.extfn_ret.push(ertag)
@@ -498,6 +673,37 @@ pub def lower_to_lir(prog: HirProgram) -> LModule:
             m.fn_ret.push(f0rt)
             if f0.returns_owned and (f0rt == 10 or f0rt == 11): m.mark_fn_owned(f0mang)
         i = i + 1
+    # Register methods defined inside class/enum bodies (extend methods are already in
+    # prog.functions; inline methods live in class.methods / enum.methods).
+    mut cmi = 0
+    while cmi < prog.classes.len:
+        mut cm_cls = prog.classes.get(cmi)
+        if cm_cls.generics.len == 0:
+            mut cmi2 = 0
+            while cmi2 < cm_cls.methods.len:
+                mut cm_f = cm_cls.methods.get(cmi2)
+                if not cm_f.is_extern and not _fn_is_specializable(m, cm_f) and not _method_in_prog_functions(prog, cm_cls.name, cm_f.name):
+                    mut cm_mang = cm_cls.name + "_" + cm_f.name
+                    mut cm_rt = _tag_of(m, cm_f.ret_ty)
+                    m.fn_names.push(_own(cm_mang))
+                    m.fn_ret.push(cm_rt)
+                    if cm_f.returns_owned and (cm_rt == 10 or cm_rt == 11): m.mark_fn_owned(cm_mang)
+                cmi2 = cmi2 + 1
+        cmi = cmi + 1
+    mut emi = 0
+    while emi < prog.enums.len:
+        mut em_en = prog.enums.get(emi)
+        mut emi2 = 0
+        while emi2 < em_en.methods.len:
+            mut em_f = em_en.methods.get(emi2)
+            if not em_f.is_extern and not _fn_is_specializable(m, em_f) and not _method_in_prog_functions(prog, em_en.name, em_f.name):
+                mut em_mang = em_en.name + "_" + em_f.name
+                mut em_rt = _tag_of(m, em_f.ret_ty)
+                m.fn_names.push(_own(em_mang))
+                m.fn_ret.push(em_rt)
+                if em_f.returns_owned and (em_rt == 10 or em_rt == 11): m.mark_fn_owned(em_mang)
+            emi2 = emi2 + 1
+        emi = emi + 1
     # Module-level globals: register each top-level var (name + type) so functions can
     # reference them; the init statements run at the start of main.
     mut ti = 0
@@ -531,6 +737,44 @@ pub def lower_to_lir(prog: HirProgram) -> LModule:
                 m.ok = true
                 m.fail_note = ""
         i = i + 1
+    # Lower methods defined inside class/enum bodies.
+    mut cml = 0
+    while cml < prog.classes.len:
+        mut cml_cls = prog.classes.get(cml)
+        if cml_cls.generics.len == 0:
+            mut cml2 = 0
+            while cml2 < cml_cls.methods.len:
+                mut cml_f = cml_cls.methods.get(cml2)
+                if not cml_f.is_extern and not _fn_is_specializable(m, cml_f) and not _method_in_prog_functions(prog, cml_cls.name, cml_f.name):
+                    _lir_lower_method(m, cml_cls.name, cml_f)
+                    if not m.ok:
+                        mut cun = cml_cls.name + "_" + cml_f.name
+                        m.unavail_names.push(_own(cun))
+                        m.unavail_notes.push(_own(m.fail_note))
+                        m.ok = true
+                        m.fail_note = ""
+                cml2 = cml2 + 1
+        cml = cml + 1
+    mut eml = 0
+    while eml < prog.enums.len:
+        mut eml_en = prog.enums.get(eml)
+        mut eml2 = 0
+        while eml2 < eml_en.methods.len:
+            mut eml_f = eml_en.methods.get(eml2)
+            if not eml_f.is_extern and not _fn_is_specializable(m, eml_f) and not _method_in_prog_functions(prog, eml_en.name, eml_f.name):
+                _lir_lower_method(m, eml_en.name, eml_f)
+                if not m.ok:
+                    mut eun = eml_en.name + "_" + eml_f.name
+                    m.unavail_names.push(_own(eun))
+                    m.unavail_notes.push(_own(m.fail_note))
+                    m.ok = true
+                    m.fail_note = ""
+            eml2 = eml2 + 1
+        eml = eml + 1
+    # ARC: generate per-class `<Class>__drop` releasers (classes with owned fields). Done
+    # after method lowering so every class layout is final; drops only call runtime
+    # releases, so they never reference unavailable user fns (the cascade below keeps them).
+    _gen_class_drops(m)
     # Reachability CASCADE: a lowered fn that calls / takes the address of an unavailable
     # fn becomes unavailable itself (its callers may be dead too — e.g. Vec_reverse calls
     # Vec_swap, but nothing calls Vec_reverse). Iterate to a fixpoint; only if `main`
@@ -678,6 +922,56 @@ def _lir_lower_generic(m: LModule, f: HirFunction, argtags: Vec[int], argcls: Ve
     m.funcs.push(lf)
     return true
 
+# Parse a sema-generated monomorphized function name: `base__MONO_concrete`.
+def _mono_base(name: str) -> str:
+    mut marker = "__MONO_"
+    mut idx = name.index_of(marker)
+    if idx < 0: return ""
+    return name.slice(0, idx)
+
+def _mono_concrete(name: str) -> str:
+    mut marker = "__MONO_"
+    mut idx = name.index_of(marker)
+    if idx < 0: return ""
+    return name.slice(idx + marker.len(), name.len())
+
+# Lower a sema-generated monomorphized generic function (e.g. identity__MONO_str).
+# The concrete type is taken from the mangled suffix; v1 supports a single generic param.
+def _lir_lower_mono_fn(m: LModule, f: HirFunction, mangled: str, concrete: AstType) -> bool:
+    if f.generics.len != 1: return false
+    mut ok = true
+    m.subst_names.push(_own(f.generics.get(0)))
+    m.subst_tys.push(box_asttype_lir(concrete))
+    mut rtag = _tag_of(m, f.ret_ty)
+    if rtag < 0: ok = false
+    if ok:
+        m.fn_names.push(_own(mangled))
+        m.fn_ret.push(rtag)
+        if f.returns_owned and (rtag == 10 or rtag == 11): m.mark_fn_owned(_own(mangled))
+        mut lf = LFunc.init(_own(mangled))
+        mut pi = 0
+        while pi < f.params.len:
+            mut p = f.params.get(pi)
+            mut ptag = _tag_of(m, p.ty)
+            if ptag < 0:
+                ok = false
+                break
+            lf.params.push(p.name)
+            lf.add_var(p.name)
+            lf.set_var_type(p.name, ptag)
+            if (ptag == 10 or ptag == 11) and not _is_null_str(p.ty.name):
+                lf.set_var_cls(p.name, _cls_of_ty(m, p.ty))
+            pi = pi + 1
+        if ok:
+            lf.set_cur(lf.new_block())
+            if not lower_block(m, lf, f.body): ok = false
+            if ok:
+                lf.set_term(LTerm.TRetInt(0))
+                m.funcs.push(lf)
+    m.subst_names.pop()
+    m.subst_tys.pop()
+    return ok
+
 # Lower a class method as a function named <Class>_<method>. `self` becomes a first
 # parameter of tag 10 (object pointer); other params are class-aware tagged.
 def _lir_lower_method(m: LModule, class_name: str, f: HirFunction):
@@ -706,12 +1000,14 @@ def _lir_lower_method(m: LModule, class_name: str, f: HirFunction):
     lf.set_cur(lf.new_block())
     if not lower_block(m, lf, f.body):
         m.ok = false
-        m.fail_note = "method '" + _own(class_name) + "." + _own(f.name) + "': body uses an unsupported construct"
+        if m.fail_note == "":
+            m.fail_note = "method '" + _own(class_name) + "." + _own(f.name) + "': body uses an unsupported construct"
         return
     if not lf.cur_terminated():
         if not _run_defers(m, lf):
             m.ok = false
-            m.fail_note = "method '" + _own(class_name) + "." + _own(f.name) + "': deferred statement not lowerable"
+            if m.fail_note == "":
+                m.fail_note = "method '" + _own(class_name) + "." + _own(f.name) + "': deferred statement not lowerable"
             return
     lf.set_term(LTerm.TRetInt(0))
     m.funcs.push(lf)
@@ -795,12 +1091,14 @@ def _lir_lower_function(m: LModule, f: HirFunction):
             gi = gi + 1
     if not lower_block(m, lf, f.body):
         m.ok = false
-        m.fail_note = "fn '" + _own(f.name) + "': body uses an unsupported construct"
+        if m.fail_note == "":
+            m.fail_note = "fn '" + _own(f.name) + "': body uses an unsupported construct"
         return
     if not lf.cur_terminated():
         if not _run_defers(m, lf):
             m.ok = false
-            m.fail_note = "fn '" + _own(f.name) + "': deferred statement not lowerable"
+            if m.fail_note == "":
+                m.fail_note = "fn '" + _own(f.name) + "': deferred statement not lowerable"
             return
     lf.set_term(LTerm.TRetInt(0))
     m.funcs.push(lf)
@@ -978,7 +1276,60 @@ def _stmt_expr_kind(e: Pointer[HirExpr]) -> str:
         case HirExpr.EMethodCall(_, meth, _, _): return "method ." + _own(meth) + "()"
         case _: return "expression"
 
-def lower_stmt(m: LModule, lf: LFunc, s: Pointer[HirStmt]) -> bool:
+def _expr_kind(e: Pointer[HirExpr]) -> str:
+    match e.read():
+        case HirExpr.ELitInt(_, _): return "int literal"
+        case HirExpr.ELitStr(_, _): return "str literal"
+        case HirExpr.ELitBool(_, _): return "bool literal"
+        case HirExpr.ELitChar(_, _): return "char literal"
+        case HirExpr.ELitFloat(_, _): return "float literal"
+        case HirExpr.ERawStr(_, _): return "raw str literal"
+        case HirExpr.EIdent(n, _, _): return "ident '" + _own(n) + "'"
+        case HirExpr.ECall(callee, _, _): return "call " + _own(_ident_name(callee)) + "()"
+        case HirExpr.EMethodCall(_, meth, _, _): return "method ." + _own(meth) + "()"
+        case HirExpr.EIndex(_, _, _): return "index expr"
+        case HirExpr.EPropAccess(_, p, _): return "prop ." + _own(p)
+        case HirExpr.EBinOp(op, _, _, _): return "binary op '" + _own(op) + "'"
+        case HirExpr.EUnaryOp(op, _, _): return "unary op '" + _own(op) + "'"
+        case HirExpr.ECast(_, _): return "cast"
+        case HirExpr.EIfElse(_, _, _, _): return "if-else expr"
+        case HirExpr.EClosure(_, _, _, _, _): return "closure"
+        case HirExpr.ETuple(_, _): return "tuple"
+        case HirExpr.EList(_, _): return "list literal"
+        case HirExpr.ESet(_, _): return "set literal"
+        case HirExpr.EDict(_, _, _): return "dict literal"
+        case HirExpr.EFString(_, _): return "f-string"
+        case HirExpr.ESuperMethodCall(_, meth, _, _): return "super." + _own(meth)
+        case HirExpr.ESuperPropAccess(_, p, _): return "super." + _own(p)
+        case _: return "expression"
+
+def _stmt_kind(s: Pointer[HirStmt]) -> str:
+    match s.read():
+        case HirStmt.SLineMarker(_): return "line marker"
+        case HirStmt.SPass: return "pass"
+        case HirStmt.SAutoDrop(_, _): return "auto-drop"
+        case HirStmt.SFree(_): return "free"
+        case HirStmt.SReturn(_): return "return"
+        case HirStmt.SLet(n, _, _, _, _, _, _): return "let " + _own(n)
+        case HirStmt.SAssign(_, _): return "assign"
+        case HirStmt.SIf(_, _, _): return "if"
+        case HirStmt.SWhile(_, _): return "while"
+        case HirStmt.SBreak(_): return "break"
+        case HirStmt.SContinue: return "continue"
+        case HirStmt.SAssert(_, _): return "assert"
+        case HirStmt.SMultiLet(_, _, _): return "multi-let"
+        case HirStmt.SDefer(_): return "defer"
+        case HirStmt.SWith(_, _, _): return "with"
+        case HirStmt.STry(_, _, _): return "try"
+        case HirStmt.SRaise(_): return "raise"
+        case HirStmt.SMatch(_, _): return "match"
+        case HirStmt.SFor(_, _, _): return "for"
+        case HirStmt.SForUnpack(_, _, _): return "for-unpack"
+        case HirStmt.SExpr(_): return "expr"
+        case HirStmt.SUnsafe(_): return "unsafe"
+        case _: return "statement"
+
+def _lower_stmt_impl(m: LModule, lf: LFunc, s: Pointer[HirStmt]) -> bool:
     match s.read():
         case HirStmt.SLineMarker(_): return true
         case HirStmt.SPass: return true
@@ -1022,14 +1373,36 @@ def lower_stmt(m: LModule, lf: LFunc, s: Pointer[HirStmt]) -> bool:
                 if not _run_defers(m, lf): return false
                 lf.set_term(LTerm.TRetInt(0))
             return true
-        case HirStmt.SLet(name, _, _, _, _, _, val):
+        case HirStmt.SLet(name, _, _, _, _, ty, val):
             if val as usize == 0 as usize: return false
             mut v = lower_expr(m, lf, val)
             if v < 0: return false
-            if lf.vreg_type(v) == 1: _secure_str(m, lf, v)   # variable takes ownership
-            if lf.vreg_type(v) == 10 or lf.vreg_type(v) == 11: _secure_obj(m, lf, v)   # object local owns a ref
+            # An empty list/dict literal `[]`/`{}` has no element info; use the declared type
+            # annotation so the handle tag matches later method/index operations.
+            mut vtag = lf.vreg_type(v)
+            if vtag == 2 or vtag == 3 or vtag == 14 or vtag == 19:
+                mut ann_lt = _list_tag_from_ann(m, ty)
+                if ann_lt >= 0 and ann_lt != vtag:
+                    lf.set_vreg_type(v, ann_lt)
+                    vtag = ann_lt
+            elif _is_dict_tag(vtag):
+                mut ann_dt = _dict_tag_from_ann(m, ty)
+                if ann_dt >= 0 and ann_dt != vtag:
+                    lf.set_vreg_type(v, ann_dt)
+                    vtag = ann_dt
+            elif vtag == 4 and _is_int_typename(ty.name):
+                # `mut x: int = <bool>` — store by the DECLARED type (C formats by it).
+                lf.set_vreg_type(v, 0)
+                vtag = 0
+            elif vtag == 0 and ty.name == "bool":
+                # `mut b: bool = <int>` — normalize to 0/1 and store as bool.
+                mut nbv = _norm_bool(lf, v)
+                v = nbv
+                vtag = 4
+            if vtag == 1: _secure_str(m, lf, v)   # variable takes ownership
+            if vtag == 10 or vtag == 11: _secure_obj(m, lf, v)   # object local owns a ref
             lf.add_var(name)
-            lf.set_var_type(name, lf.vreg_type(v))
+            lf.set_var_type(name, vtag)
             if lf.vreg_type(v) == 10 or lf.vreg_type(v) == 11:   # object local -> record its class/enum
                 mut lvcn = hir_expr_type(val).name
                 if not _is_null_str(lvcn) and (m.is_class(lvcn) or m.is_enum(lvcn)):
@@ -1170,11 +1543,19 @@ def lower_stmt(m: LModule, lf: LFunc, s: Pointer[HirStmt]) -> bool:
             if mtv < 0: return false
             if lf.vreg_type(mtv) != 15: return false
             mut mty = hir_expr_type(mval)
-            if mty.args.len != mnames.len: return false
+            # A fully-typed tuple `(int, str)` uses its declared element tags; an untyped
+            # `Tuple` (e.g. from Vec[Tuple]) has no args — fall back to int slots.
+            if mty.args.len != mnames.len and mty.args.len != 0: return false
+            mut use_decl = mty.args.len == mnames.len
             mut mi = 0
             while mi < mnames.len:
-                mut mtag = _tag_of(m, mty.args.get(mi).read())
-                if mtag < 0 or _is_list_tag(mtag) or _is_dict_tag(mtag) or _is_set_tag(mtag): return false
+                mut mtag = 0
+                mut mcls = ""
+                if use_decl:
+                    mut dty = mty.args.get(mi).read()
+                    mtag = _tag_of(m, dty)
+                    if mtag < 0 or _is_list_tag(mtag) or _is_dict_tag(mtag) or _is_set_tag(mtag): return false
+                    if mtag == 10 or mtag == 11: mcls = _cls_of_ty(m, dty)
                 mut mv = -1
                 if mtag == 5:
                     mut mraw = _emit_field_get(m, lf, mtv, mi * 8, 0)
@@ -1188,8 +1569,8 @@ def lower_stmt(m: LModule, lf: LFunc, s: Pointer[HirStmt]) -> bool:
                 mut mnm = mnames.get(mi)
                 lf.add_var(mnm)
                 lf.set_var_type(mnm, mtag)
-                if (mtag == 10 or mtag == 11):
-                    lf.set_var_cls(mnm, _cls_of_ty(m, mty.args.get(mi).read()))
+                if (mtag == 10 or mtag == 11) and mcls != "":
+                    lf.set_var_cls(mnm, mcls)
                 lf.emit(LInst.IStoreVar(mnm, mv))
                 mi = mi + 1
             _flush_fresh_strs(m, lf)
@@ -1316,6 +1697,12 @@ def lower_stmt(m: LModule, lf: LFunc, s: Pointer[HirStmt]) -> bool:
             if m.fail_note == "": m.fail_note = "unsupported statement kind"
             return false
 
+pub def lower_stmt(m: LModule, lf: LFunc, s: Pointer[HirStmt]) -> bool:
+    mut ok = _lower_stmt_impl(m, lf, s)
+    if not ok and m.fail_note == "":
+        m.fail_note = "unsupported statement: " + _stmt_kind(s)
+    return ok
+
 # Set methods: a set is a dict-with-value-1, so add/contains/remove/len map straight
 # onto the backing idict/sdict runtime (zero extra machinery).
 def _lower_set_method(m: LModule, lf: LFunc, shv: int, stag: int, method: str, margs: Vec[Pointer[HirExpr]]) -> int:
@@ -1342,6 +1729,19 @@ def _lower_set_method(m: LModule, lf: LFunc, shv: int, stag: int, method: str, m
         lf.emit(LInst.IBinOp(ser, "==", sed, sez))
         lf.set_vreg_type(ser, 4)
         return ser
+    if method == "to_list" and margs.len == 0:
+        mut tlsym = "_tr_rt_iset_to_list"
+        mut tltag = 2
+        if stag == 16:
+            tlsym = "_tr_rt_sset_to_list"
+            tltag = 3
+        m.add_extern(tlsym)
+        mut tla = Vec[int].init(1)
+        tla.push(shv)
+        mut tld = lf.new_vreg()
+        lf.emit(LInst.ICall(tld, tlsym, tla))
+        lf.set_vreg_type(tld, tltag)
+        return tld
     if margs.len != 1: return -1
     mut sav = lower_expr(m, lf, margs.get(0))
     if sav < 0: return -1
@@ -1514,6 +1914,57 @@ def _variant_tag_cond(lf: LFunc, tagv: int, vidx: int) -> int:
     lf.set_vreg_type(dv, 4)
     return dv
 
+# Load one payload field of an enum instance as a vreg (borrow; no retain).
+def _load_enum_payload_field(m: LModule, lf: LFunc, subj: int, subj_ty: AstType, vlay: VariantLayout, fldidx: int) -> int:
+    if fldidx >= vlay.ftags.len: return -1
+    mut ftg = vlay.ftags.get(fldidx)
+    mut bcls = vlay.fcls.get(fldidx)
+    if ftg <= 0 - 2:
+        mut bgi = (0 - ftg) - 2
+        if bgi >= subj_ty.args.len: return -1
+        ftg = _tag_of(m, subj_ty.args.get(bgi).read())
+        bcls = _cls_of_ty(m, subj_ty.args.get(bgi).read())
+    if ftg < 0 or _is_list_tag(ftg) or _is_dict_tag(ftg) or _is_set_tag(ftg) or ftg == 12: return -1
+    if ftg == 5:
+        mut praw = _emit_field_get(m, lf, subj, (1 + fldidx) * 8, 0)
+        mut pv = lf.new_vreg()
+        lf.emit(LInst.IBitsF(pv, praw))
+        lf.set_vreg_type(pv, 5)
+        return pv
+    mut pv2 = _emit_field_get(m, lf, subj, (1 + fldidx) * 8, ftg)
+    return pv2
+
+# Enum property access: .is_ok / .is_err / .ok / .err / .is_some / .is_none / .value
+def _lower_enum_prop(m: LModule, lf: LFunc, obj: Pointer[HirExpr], ename: str, prop: str) -> int:
+    mut subj = lower_expr(m, lf, obj)
+    if subj < 0: return -1
+    mut eidx = m.enum_index(ename)
+    if eidx < 0: return -1
+    mut elay = m.enums.get(eidx)
+    mut subj_ty = hir_expr_type(obj)
+    if prop == "is_ok" or prop == "is_some":
+        mut vix = elay.variant_index(_norm_variant(ename, "Ok"))
+        if vix < 0: vix = elay.variant_index(_norm_variant(ename, "Some"))
+        if vix < 0: return -1
+        mut tagv = _emit_field_get(m, lf, subj, 0, 0)
+        return _variant_tag_cond(lf, tagv, vix)
+    if prop == "is_err" or prop == "is_none":
+        mut vix = elay.variant_index(_norm_variant(ename, "Err"))
+        if vix < 0: vix = elay.variant_index(_norm_variant(ename, "None"))
+        if vix < 0: return -1
+        mut tagv = _emit_field_get(m, lf, subj, 0, 0)
+        return _variant_tag_cond(lf, tagv, vix)
+    if prop == "ok" or prop == "value" or prop == "some":
+        mut vix = elay.variant_index(_norm_variant(ename, "Ok"))
+        if vix < 0: vix = elay.variant_index(_norm_variant(ename, "Some"))
+        if vix < 0: return -1
+        return _load_enum_payload_field(m, lf, subj, subj_ty, elay.variants.get(vix), 0)
+    if prop == "err":
+        mut vix = elay.variant_index(_norm_variant(ename, "Err"))
+        if vix < 0: return -1
+        return _load_enum_payload_field(m, lf, subj, subj_ty, elay.variants.get(vix), 0)
+    return -1
+
 # Bind one payload field of `vlay` (field #fldidx of the matched variant) to a local.
 # `subj_ty` is the match subject's full HIR type: a GENERIC payload slot (ftag -(2+g))
 # resolves its concrete tag/class from subj_ty.args[g] (e.g. Option[int] -> T=int).
@@ -1651,9 +2102,48 @@ def _lower_for(m: LModule, lf: LFunc, var: str, iter: Pointer[HirExpr], body: Hi
         case HirExpr.ECall(callee, args, _):
             if _ident_name(callee) == "range":
                 return _lower_for_range(m, lf, var, args, body)
+        case HirExpr.ERange(rstart, rend, rincl, _):
+            return _lower_for_erange(m, lf, var, rstart, rend, rincl, body)
         case _:
             pass
     return _lower_for_list(m, lf, var, iter, body)
+
+# `for i in start..end` (range syntax): an ascending step-1 integer loop. `inclusive` (an
+# `a..=b` range) uses `i <= end` instead of `i < end`.
+def _lower_for_erange(m: LModule, lf: LFunc, var: str, start: Pointer[HirExpr], end: Pointer[HirExpr], inclusive: bool, body: HirBlock) -> bool:
+    mut sv = lower_expr(m, lf, start)
+    if sv < 0 or lf.vreg_type(sv) != 0: return false
+    mut cmp = "<"
+    if inclusive: cmp = "<="
+    lf.add_var(var)
+    lf.set_var_type(var, 0)
+    lf.emit(LInst.IStoreVar(var, sv))
+    mut hdr = lf.new_block()
+    mut bdy = lf.new_block()
+    mut latch = lf.new_block()
+    mut ext = lf.new_block()
+    lf.set_term(LTerm.TBr(hdr))
+    lf.set_cur(hdr)
+    mut vv = lf.new_vreg()
+    lf.emit(LInst.ILoadVar(vv, var))
+    mut ev = lower_expr(m, lf, end)
+    if ev < 0 or lf.vreg_type(ev) != 0: return false
+    mut cond = lf.new_vreg()
+    lf.emit(LInst.IBinOp(cond, cmp, vv, ev))
+    lf.set_term(LTerm.TCondBr(cond, bdy, ext))
+    lf.set_cur(bdy)
+    lf.loop_cont.push(latch)
+    lf.loop_brk.push(ext)
+    mut rok = lower_block(m, lf, body)
+    lf.loop_cont.pop()
+    lf.loop_brk.pop()
+    if not rok: return false
+    lf.set_term(LTerm.TBr(latch))
+    lf.set_cur(latch)
+    _emit_add_const(lf, var, 1)
+    lf.set_term(LTerm.TBr(hdr))
+    lf.set_cur(ext)
+    return true
 
 def _lower_for_range(m: LModule, lf: LFunc, var: str, args: Vec[Pointer[HirExpr]], body: HirBlock) -> bool:
     if args.len < 1 or args.len > 3: return false
@@ -1776,13 +2266,18 @@ def _lower_for_list(m: LModule, lf: LFunc, var: str, iter: Pointer[HirExpr], bod
     lf.set_cur(ext)
     return true
 
-# for i, v in <iter>:  -> only enumerate(List) is supported natively.
+# for i, v in <iter>:  -> enumerate(List), zip(List,List), and dict.items() natively.
 def _lower_for_unpack(m: LModule, lf: LFunc, vars: Vec[str], iter: Pointer[HirExpr], body: HirBlock) -> bool:
     if vars.len != 2: return false
     match iter.read():
         case HirExpr.ECall(callee, args, _):
             if _ident_name(callee) == "enumerate" and args.len == 1:
                 return _lower_enumerate(m, lf, vars.get(0), vars.get(1), args.get(0), body)
+            if _ident_name(callee) == "zip" and args.len == 2:
+                return _lower_zip(m, lf, vars.get(0), vars.get(1), args.get(0), args.get(1), body)
+        case HirExpr.EMethodCall(dobj, dmeth, _, _):
+            if dmeth == "items":
+                return _lower_dict_items_unpack(m, lf, vars.get(0), vars.get(1), dobj, body)
         case _:
             pass
     return false
@@ -1852,6 +2347,121 @@ def _lower_enumerate(m: LModule, lf: LFunc, ivar: str, evar: str, listexpr: Poin
     lf.set_cur(ext)
     return true
 
+# for a, b in zip(xs, ys): -> i=0; while i<min(len(xs),len(ys)): a=xs[i]; b=ys[i]; body; i++
+def _lower_zip(m: LModule, lf: LFunc, v0: str, v1: str, aexpr: Pointer[HirExpr], bexpr: Pointer[HirExpr], body: HirBlock) -> bool:
+    mut av = lower_expr(m, lf, aexpr)
+    if av < 0: return false
+    mut atag = lf.vreg_type(av)
+    if not _is_list_tag(atag): return false
+    mut bv = lower_expr(m, lf, bexpr)
+    if bv < 0: return false
+    mut btag = lf.vreg_type(bv)
+    if not _is_list_tag(btag): return false
+    mut uid = lf.fresh_id()
+    mut aname = "__zipa" + _lir_itoa(uid)
+    mut bname = "__zipb" + _lir_itoa(uid)
+    lf.add_var(aname); lf.set_var_type(aname, atag); lf.emit(LInst.IStoreVar(aname, av))
+    lf.add_var(bname); lf.set_var_type(bname, btag); lf.emit(LInst.IStoreVar(bname, bv))
+    mut z = lf.new_vreg(); lf.emit(LInst.IConst(z, 0))
+    lf.add_var("__zipi" + _lir_itoa(uid)); mut iname = "__zipi" + _lir_itoa(uid)
+    lf.set_var_type(iname, 0); lf.emit(LInst.IStoreVar(iname, z))
+    mut hdr = lf.new_block(); mut bdy = lf.new_block(); mut latch = lf.new_block(); mut ext = lf.new_block()
+    lf.set_term(LTerm.TBr(hdr))
+    lf.set_cur(hdr)
+    mut ahv = lf.new_vreg(); lf.emit(LInst.ILoadVar(ahv, aname))
+    mut bhv = lf.new_vreg(); lf.emit(LInst.ILoadVar(bhv, bname))
+    m.add_extern("_tr_rt_list_len")
+    mut ala = Vec[int].init(1); ala.push(ahv)
+    mut alenv = lf.new_vreg(); lf.emit(LInst.ICall(alenv, "_tr_rt_list_len", ala))
+    mut bla = Vec[int].init(1); bla.push(bhv)
+    mut blenv = lf.new_vreg(); lf.emit(LInst.ICall(blenv, "_tr_rt_list_len", bla))
+    mut iv = lf.new_vreg(); lf.emit(LInst.ILoadVar(iv, iname))
+    mut c1 = lf.new_vreg(); lf.emit(LInst.IBinOp(c1, "<", iv, alenv))
+    mut c2 = lf.new_vreg(); lf.emit(LInst.IBinOp(c2, "<", iv, blenv))
+    mut cond = lf.new_vreg(); lf.emit(LInst.IBinOp(cond, "&", c1, c2))
+    lf.set_term(LTerm.TCondBr(cond, bdy, ext))
+    lf.set_cur(bdy)
+    mut ahv2 = lf.new_vreg(); lf.emit(LInst.ILoadVar(ahv2, aname))
+    mut bhv2 = lf.new_vreg(); lf.emit(LInst.ILoadVar(bhv2, bname))
+    mut iv2 = lf.new_vreg(); lf.emit(LInst.ILoadVar(iv2, iname))
+    mut aelem = _list_get_elem(m, lf, atag, ahv2, iv2)
+    mut belem = _list_get_elem(m, lf, btag, bhv2, iv2)
+    mut aet = _list_elem_tag(atag); mut bet = _list_elem_tag(btag)
+    if aet == 1: _retain_str(m, lf, aelem)
+    if bet == 1: _retain_str(m, lf, belem)
+    lf.add_var(v0); lf.set_var_type(v0, aet); lf.emit(LInst.IStoreVar(v0, aelem))
+    lf.add_var(v1); lf.set_var_type(v1, bet); lf.emit(LInst.IStoreVar(v1, belem))
+    lf.loop_cont.push(latch); lf.loop_brk.push(ext)
+    mut ok = lower_block(m, lf, body)
+    lf.loop_cont.pop(); lf.loop_brk.pop()
+    if not ok: return false
+    lf.set_term(LTerm.TBr(latch))
+    lf.set_cur(latch)
+    _emit_incr(lf, iname)
+    lf.set_term(LTerm.TBr(hdr))
+    lf.set_cur(ext)
+    return true
+
+# for k, v in dict.items(): snapshot items to a List_ptr* of pairs, then index-loop.
+def _lower_dict_items_unpack(m: LModule, lf: LFunc, kvar: str, vvar: str, dictexpr: Pointer[HirExpr], body: HirBlock) -> bool:
+    mut dv = lower_expr(m, lf, dictexpr)
+    if dv < 0: return false
+    mut dtag = lf.vreg_type(dv)
+    if not _is_dict_tag(dtag): return false
+    mut kstr = _dict_key_is_str(dtag)
+    mut vtag = _dict_val_tag(dtag)
+    mut uid = lf.fresh_id()
+    mut dname = "__ditd" + _lir_itoa(uid)
+    lf.add_var(dname); lf.set_var_type(dname, dtag); lf.emit(LInst.IStoreVar(dname, dv))
+    mut isym = "_tr_rt_idict_items"
+    if kstr: isym = "_tr_rt_dict_items"
+    m.add_extern(isym)
+    mut ia = Vec[int].init(1); ia.push(dv)
+    mut items = lf.new_vreg(); lf.emit(LInst.ICall(items, isym, ia))
+    lf.set_vreg_type(items, 3)   # List[str] handle shape is compatible with List_ptr*
+    mut iname = "__diti" + _lir_itoa(uid)
+    mut itemsname = "__ditl" + _lir_itoa(uid)
+    lf.add_var(itemsname); lf.set_var_type(itemsname, 3); lf.emit(LInst.IStoreVar(itemsname, items))
+    mut z = lf.new_vreg(); lf.emit(LInst.IConst(z, 0))
+    lf.add_var(iname); lf.set_var_type(iname, 0); lf.emit(LInst.IStoreVar(iname, z))
+    mut hdr = lf.new_block(); mut bdy = lf.new_block(); mut latch = lf.new_block(); mut ext = lf.new_block()
+    lf.set_term(LTerm.TBr(hdr))
+    lf.set_cur(hdr)
+    mut lhv = lf.new_vreg(); lf.emit(LInst.ILoadVar(lhv, itemsname))
+    m.add_extern("_tr_rt_list_len")
+    mut lla = Vec[int].init(1); lla.push(lhv)
+    mut lenv = lf.new_vreg(); lf.emit(LInst.ICall(lenv, "_tr_rt_list_len", lla))
+    mut iv = lf.new_vreg(); lf.emit(LInst.ILoadVar(iv, iname))
+    mut cond = lf.new_vreg(); lf.emit(LInst.IBinOp(cond, "<", iv, lenv))
+    lf.set_term(LTerm.TCondBr(cond, bdy, ext))
+    lf.set_cur(bdy)
+    mut lhv2 = lf.new_vreg(); lf.emit(LInst.ILoadVar(lhv2, itemsname))
+    mut iv2 = lf.new_vreg(); lf.emit(LInst.ILoadVar(iv2, iname))
+    mut raw = _list_get(m, lf, lhv2, iv2)        # tuple pointer as i64
+    mut koff = 0; mut voff = 8
+    mut keyv = _emit_field_get(m, lf, raw, koff, 0)
+    if kstr:
+        lf.set_vreg_type(keyv, 1)
+    mut valv = _emit_field_get(m, lf, raw, voff, 0)
+    if vtag == 5:
+        mut vf = lf.new_vreg(); lf.emit(LInst.IBitsF(vf, valv)); lf.set_vreg_type(vf, 5); valv = vf
+    else:
+        lf.set_vreg_type(valv, vtag)
+    mut ktag = 0
+    if kstr: ktag = 1
+    lf.add_var(kvar); lf.set_var_type(kvar, ktag); lf.emit(LInst.IStoreVar(kvar, keyv))
+    lf.add_var(vvar); lf.set_var_type(vvar, vtag); lf.emit(LInst.IStoreVar(vvar, valv))
+    lf.loop_cont.push(latch); lf.loop_brk.push(ext)
+    mut ok = lower_block(m, lf, body)
+    lf.loop_cont.pop(); lf.loop_brk.pop()
+    if not ok: return false
+    lf.set_term(LTerm.TBr(latch))
+    lf.set_cur(latch)
+    _emit_incr(lf, iname)
+    lf.set_term(LTerm.TBr(hdr))
+    lf.set_cur(ext)
+    return true
+
 # name = name + 1  (loop counter bump).
 def _emit_incr(lf: LFunc, name: str):
     mut cur = lf.new_vreg()
@@ -1876,11 +2486,17 @@ def _lower_field_set(m: LModule, lf: LFunc, obj: Pointer[HirExpr], prop: str, va
     mut off = m.field_offset(cls, prop)
     if off < 0: return false
     mut ftg = m.field_tag(cls, prop)
-    if ftg < 0 or _is_list_tag(ftg) or _is_dict_tag(ftg): return false
+    if ftg < 0: return false
     mut vv = lower_expr(m, lf, val)
     if vv < 0: return false
     mut vt = lf.vreg_type(vv)
-    if ftg == 5:
+    if _is_list_tag(ftg) or _is_dict_tag(ftg):
+        # collection field: plain pointer store (collections aren't ARC'd). Any
+        # list/dict value has the same runtime repr — retag to the field tag.
+        if _is_list_tag(ftg) and not _is_list_tag(vt): return false
+        if _is_dict_tag(ftg) and not _is_dict_tag(vt): return false
+        lf.set_vreg_type(vv, ftg)
+    elif ftg == 5:
         # float field: promote an int value, then store the raw f64 bit pattern.
         if vt == 0: vv = _promote_f(lf, vv)
         elif vt != 5: return false
@@ -1944,7 +2560,10 @@ def _lower_index_set(m: LModule, lf: LFunc, obj: Pointer[HirExpr], idx: Pointer[
         mut iv = lower_expr(m, lf, idx)
         if iv < 0 or lf.vreg_type(iv) != 0: return false
         mut lvv = lower_expr(m, lf, val)
-        if lvv < 0 or lf.vreg_type(lvv) != _list_elem_tag(ovt): return false
+        if lvv < 0: return false
+        mut lvt = lf.vreg_type(lvv)
+        if _list_elem_tag(ovt) == 0 and lvt == 4: lvt = 0   # bool elems share the int slot
+        if lvt != _list_elem_tag(ovt): return false
         if _list_elem_tag(ovt) == 1: _secure_str(m, lf, lvv)   # list owns the str element by ref
         if _list_elem_tag(ovt) == 10: _secure_obj(m, lf, lvv)  # list owns the object element by ref
         if _list_elem_tag(ovt) == 5:                           # store the f64 bit pattern
@@ -1999,6 +2618,14 @@ def _lower_print(m: LModule, lf: LFunc, args: Vec[Pointer[HirExpr]]) -> bool:
                 return true
             return false
         if avt == 11 or _is_set_tag(avt): return false  # enum/set -> fall back
+        if avt == 15:                          # print(tuple) -> "(a, 'b', 3.14)"
+            mut tstr = _tuple_to_str(m, lf, av, hir_expr_type(args.get(0)))
+            if tstr < 0: return false
+            m.add_extern("_tr_rt_print_cstr")
+            mut tpa = Vec[int].init(1)
+            tpa.push(tstr)
+            lf.emit(LInst.ICall(-1, "_tr_rt_print_cstr", tpa))
+            return true
         if avt == 5:                           # print(f64) -> "%g\n" (arg in xmm0)
             m.add_extern("_tr_rt_print_f64")
             lf.emit(LInst.IFCall1(-1, "_tr_rt_print_f64", av))
@@ -2006,6 +2633,7 @@ def _lower_print(m: LModule, lf: LFunc, args: Vec[Pointer[HirExpr]]) -> bool:
         mut sym = _print_i64_sym()
         if avt == 1: sym = "_tr_rt_print_cstr"
         elif avt == 4: sym = "_tr_rt_print_bool"
+        elif avt == 0 and hir_expr_type(args.get(0)).name == "char": sym = "_tr_rt_print_char"
         m.add_extern(sym)
         mut cargs = Vec[int].init(1)
         cargs.push(av)
@@ -2037,11 +2665,21 @@ def _lower_print(m: LModule, lf: LFunc, args: Vec[Pointer[HirExpr]]) -> bool:
             pi = pi + 1
             continue
         if pvt == 11 or _is_set_tag(pvt): return false  # enum/set -> fall back
+        if pvt == 15:
+            mut ptstr = _tuple_to_str(m, lf, pv, hir_expr_type(args.get(pi)))
+            if ptstr < 0: return false
+            m.add_extern("_tr_rt_write_cstr")
+            mut ptwa = Vec[int].init(1)
+            ptwa.push(ptstr)
+            lf.emit(LInst.ICall(-1, "_tr_rt_write_cstr", ptwa))
+            pi = pi + 1
+            continue
         if pvt == 5:
             m.add_extern("_tr_rt_write_f64")
             lf.emit(LInst.IFCall1(-1, "_tr_rt_write_f64", pv))
         else:
             mut wsym = _write_sym(pvt)
+            if pvt == 0 and hir_expr_type(args.get(pi)).name == "char": wsym = "_tr_rt_write_char"
             m.add_extern(wsym)
             mut wargs = Vec[int].init(1)
             wargs.push(pv)
@@ -2063,7 +2701,10 @@ def lower_expr_stmt(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> bool:
             mut rm = lower_expr(m, lf, e)
             return rm >= 0
         case _:
-            return false
+            # Any other expression statement (super(...).m(), f-string, ...): lower it
+            # for its side effects and discard the value.
+            mut rx = lower_expr(m, lf, e)
+            return rx >= 0
 
 # -- expressions: returns the vreg holding the value, or -1 if unsupported ----------
 def _int_op(op: str) -> bool:
@@ -2277,6 +2918,47 @@ def _reg_to_str(m: LModule, lf: LFunc, reg: int) -> int:
     _fresh_mark(lf, d)
     return d
 
+# a + b as a fresh str (both a,b are str vregs; a may be consumed).
+def _str_concat2(m: LModule, lf: LFunc, a: int, b: int) -> int:
+    m.add_extern("_tr_rt_str_concat")
+    mut ca = Vec[int].init(2)
+    ca.push(a)
+    ca.push(b)
+    mut d = lf.new_vreg()
+    lf.emit(LInst.ICall(d, "_tr_rt_str_concat", ca))
+    lf.set_vreg_type(d, 1)
+    _fresh_mark(lf, d)
+    return d
+
+# Build the Python repr of a tuple handle `tup` of HIR type `ty` as a fresh str.
+def _tuple_to_str(m: LModule, lf: LFunc, tup: int, ty: AstType) -> int:
+    if ty.args.len == 0:
+        return _heap_lit(m, lf, "()")
+    mut acc = _heap_lit(m, lf, "(")
+    mut i = 0
+    while i < ty.args.len:
+        mut etag = _tag_of(m, ty.args.get(i).read())
+        if etag < 0 or _is_list_tag(etag) or _is_dict_tag(etag) or _is_set_tag(etag) or etag == 12 or etag == 15:
+            return -1
+        mut ev = _emit_field_get(m, lf, tup, i * 8, 0)
+        if etag == 5:
+            mut fv = lf.new_vreg()
+            lf.emit(LInst.IBitsF(fv, ev))
+            lf.set_vreg_type(fv, 5)
+            ev = fv
+        else:
+            lf.set_vreg_type(ev, etag)
+        mut es = _reg_to_str(m, lf, ev)
+        if es < 0: return -1
+        if etag == 1:
+            es = _str_concat2(m, lf, _heap_lit(m, lf, "'"), es)
+            es = _str_concat2(m, lf, es, _heap_lit(m, lf, "'"))
+        if i > 0: acc = _str_concat2(m, lf, acc, _heap_lit(m, lf, ", "))
+        acc = _str_concat2(m, lf, acc, es)
+        i = i + 1
+    if ty.args.len == 1: acc = _str_concat2(m, lf, acc, _heap_lit(m, lf, ","))
+    return _str_concat2(m, lf, acc, _heap_lit(m, lf, ")"))
+
 # A str method taking one str argument: sym(recv, arg) -> result of type `restype`.
 def _str_call1(m: LModule, lf: LFunc, sym: str, recv: int, arg: int, restype: int) -> int:
     m.add_extern(sym)
@@ -2291,12 +2973,64 @@ def _str_call1(m: LModule, lf: LFunc, sym: str, recv: int, arg: int, restype: in
 
 # String methods on a str receiver. New-string results are type 1; find -> int; starts/ends -> bool.
 def _lower_str_method(m: LModule, lf: LFunc, recv: int, method: str, margs: Vec[Pointer[HirExpr]]) -> int:
+    if (method == "len" or method == "length") and margs.len == 0:
+        m.add_extern("_tr_rt_strlen")
+        mut la = Vec[int].init(1)
+        la.push(recv)
+        mut ld = lf.new_vreg()
+        lf.emit(LInst.ICall(ld, "_tr_rt_strlen", la))
+        return ld
     if (method == "upper" or method == "to_upper") and margs.len == 0:
         return _str_call0(m, lf, "_tr_rt_str_upper", recv, 1)
     if (method == "lower" or method == "to_lower") and margs.len == 0:
         return _str_call0(m, lf, "_tr_rt_str_lower", recv, 1)
     if (method == "strip" or method == "trim") and margs.len == 0:
         return _str_call0(m, lf, "_tr_rt_str_strip", recv, 1)
+    if method == "to_int" and margs.len == 0:
+        return _str_call0(m, lf, "_tr_rt_str_to_i64", recv, 0)
+    if method == "split_once" and margs.len == 1:
+        # sema types it Vec[str]: a 2-element list [left, right] (right="" if absent).
+        mut soa = lower_expr(m, lf, margs.get(0))
+        if soa < 0 or lf.vreg_type(soa) != 1: return -1
+        m.add_extern("_tr_rt_split_once_left")
+        m.add_extern("_tr_rt_split_once_right")
+        mut sola = Vec[int].init(2)
+        sola.push(recv)
+        sola.push(soa)
+        mut sol = lf.new_vreg()
+        lf.emit(LInst.ICall(sol, "_tr_rt_split_once_left", sola))
+        lf.set_vreg_type(sol, 1)
+        _fresh_mark(lf, sol)
+        _secure_str(m, lf, sol)               # the list takes ownership of the elem ref
+        mut sora = Vec[int].init(2)
+        sora.push(recv)
+        sora.push(soa)
+        mut sor = lf.new_vreg()
+        lf.emit(LInst.ICall(sor, "_tr_rt_split_once_right", sora))
+        lf.set_vreg_type(sor, 1)
+        _fresh_mark(lf, sor)
+        _secure_str(m, lf, sor)               # the list takes ownership of the elem ref
+        m.add_extern("_tr_rt_list_new")
+        mut sols = lf.new_vreg()
+        lf.emit(LInst.ICall(sols, "_tr_rt_list_new", Vec[int].init(0)))
+        lf.set_vreg_type(sols, 3)
+        m.add_extern("_tr_rt_list_push_i64")
+        mut sop1 = Vec[int].init(2)
+        sop1.push(sols)
+        sop1.push(sol)
+        lf.emit(LInst.ICall(-1, "_tr_rt_list_push_i64", sop1))
+        mut sop2 = Vec[int].init(2)
+        sop2.push(sols)
+        sop2.push(sor)
+        lf.emit(LInst.ICall(-1, "_tr_rt_list_push_i64", sop2))
+        return sols
+    if method == "to_float" and margs.len == 0:
+        # runtime returns the f64 bit pattern in rax -> reinterpret as f64
+        mut tf0 = _str_call0(m, lf, "_tr_rt_str_to_f64", recv, 0)
+        mut tff = lf.new_vreg()
+        lf.emit(LInst.IBitsF(tff, tf0))
+        lf.set_vreg_type(tff, 5)
+        return tff
     if method == "replace" and margs.len == 2:
         mut a0 = lower_expr(m, lf, margs.get(0))
         if a0 < 0 or lf.vreg_type(a0) != 1: return -1
@@ -2471,6 +3205,7 @@ def _lower_int_method(m: LModule, lf: LFunc, recv: int, method: str, margs: Vec[
         if method == "to_hex_upper" or method == "to_HEX": return _str_call0(m, lf, "_tr_rt_i64_to_hex_upper", recv, 1)
         if method == "to_oct" or method == "to_octal": return _str_call0(m, lf, "_tr_rt_i64_to_oct", recv, 1)
         if method == "to_bin" or method == "to_binary": return _str_call0(m, lf, "_tr_rt_i64_to_bin", recv, 1)
+        if method == "to_str" or method == "to_string": return _str_call0(m, lf, "_tr_rt_i64_to_str", recv, 1)
         if method == "sign":                       # (x>0) - (x<0)
             mut z = lf.new_vreg()
             lf.emit(LInst.IConst(z, 0))
@@ -2538,6 +3273,27 @@ def _lower_dict_method(m: LModule, lf: LFunc, recv: int, dtag: int, method: str,
         mut godd = lf.new_vreg()
         lf.emit(LInst.ICall(godd, gosym, goa))
         return godd
+    if method == "set" and margs.len == 2:
+        mut sk = lower_expr(m, lf, margs.get(0))
+        if sk < 0: return -1
+        if _dict_key_is_str(dtag) and lf.vreg_type(sk) != 1: return -1
+        if not _dict_key_is_str(dtag) and lf.vreg_type(sk) != 0: return -1
+        mut sv = lower_expr(m, lf, margs.get(1))
+        if sv < 0: return -1
+        mut vtag = _dict_val_tag(dtag)
+        if lf.vreg_type(sv) != vtag: return -1
+        if vtag == 1: _secure_str(m, lf, sv)         # dict owns the str value ref
+        if vtag == 5:                                # float value: store the bit pattern
+            mut svfb = lf.new_vreg()
+            lf.emit(LInst.IFBits(svfb, sv))
+            sv = svfb
+        m.add_extern(_dict_sym(dtag, "set"))
+        mut ssa = Vec[int].init(3)
+        ssa.push(recv)
+        ssa.push(sk)
+        ssa.push(sv)
+        lf.emit(LInst.ICall(-1, _dict_sym(dtag, "set"), ssa))
+        return recv
     if margs.len != 1: return -1
     mut kv = lower_expr(m, lf, margs.get(0))
     if kv < 0: return -1
@@ -2589,6 +3345,13 @@ def _lower_float_method(m: LModule, lf: LFunc, recv: int, method: str, margs: Ve
             lf.emit(LInst.IFCall1(nd, nsym, recv))
             lf.set_vreg_type(nd, 4)
             return nd
+        if method == "to_str" or method == "to_string":
+            m.add_extern("_tr_rt_f64_to_str")
+            mut fsd = lf.new_vreg()
+            lf.emit(LInst.IFCall1(fsd, "_tr_rt_f64_to_str", recv))
+            lf.set_vreg_type(fsd, 1)
+            _fresh_mark(lf, fsd)
+            return fsd
         return -1
     if margs.len == 1 and (method == "pow" or method == "atan2"):
         mut arg = lower_expr(m, lf, margs.get(0))
@@ -2668,7 +3431,7 @@ def _list_get_elem(m: LModule, lf: LFunc, ltag: int, handle: int, idx: int) -> i
     lf.set_vreg_type(raw, _list_elem_tag(ltag))
     return raw
 
-def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
+def _lower_expr_impl(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
     match e.read():
         case HirExpr.ELitInt(v, _):
             mut d = lf.new_vreg()
@@ -2694,11 +3457,101 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
             lf.emit(LInst.IConst(db, bconst))
             lf.set_vreg_type(db, 4)
             return db
+        case HirExpr.ELitChar(cval, _):
+            mut cd = lf.new_vreg()
+            lf.emit(LInst.IConst(cd, cval))          # a char is its byte value (int) in the LIR
+            return cd
+        case HirExpr.ELitNone(nty):
+            # `None`: in an Option context it's the unit variant Option.None (a tag-only
+            # enum instance, same representation for any Option[T]). In any other context
+            # it's a null handle (nullable pointer/object).
+            if nty.name == "Option" or nty.name == "None" or nty.name == "NoneType" or _is_null_str(nty.name):
+                return _lower_enum_ctor(m, lf, "Option", "None", Vec[Pointer[HirExpr]].init(0))
+            mut nnull = lf.new_vreg()
+            lf.emit(LInst.IConst(nnull, 0))
+            lf.set_vreg_type(nnull, 10)
+            return nnull
+        case HirExpr.ERawStr(rsv, _):
+            mut ridx = m.add_string(rsv)             # raw string: literal value already unescaped
+            mut rds = lf.new_vreg()
+            lf.emit(LInst.IStr(rds, ridx))
+            lf.set_vreg_type(rds, 1)
+            m.add_extern("_tr_rt_str_new")
+            mut rna = Vec[int].init(1)
+            rna.push(rds)
+            mut rheap = lf.new_vreg()
+            lf.emit(LInst.ICall(rheap, "_tr_rt_str_new", rna))
+            lf.set_vreg_type(rheap, 1)
+            _fresh_mark(lf, rheap)
+            return rheap
         case HirExpr.ELitFloat(fval, _):
             mut fd = lf.new_vreg()
             lf.emit(LInst.IConst(fd, _f64_bits(fval)))   # store the f64 bit pattern
             lf.set_vreg_type(fd, 5)
             return fd
+        case HirExpr.ESuperMethodCall(sbase, smeth, sargs, _):
+            # super.method(args) -> <Base>.method(self, args), resolved up from the base.
+            mut smang = m.resolve_method(sbase, smeth)
+            if smang == "": return -1
+            mut sselfv = lf.new_vreg()
+            lf.emit(LInst.ILoadVar(sselfv, "self"))
+            lf.set_vreg_type(sselfv, lf.var_type("self"))
+            return _lower_obj_call(m, lf, smang, sselfv, sargs)
+        case HirExpr.ESuperPropAccess(sbase2, sprop, _):
+            # Fields are flattened into the derived layout, so super.field IS self.field.
+            mut scur = lf.var_cls_of("self")
+            if scur == "" or not m.is_class(scur): return -1
+            mut sfoff = m.field_offset(scur, sprop)
+            if sfoff < 0: return -1
+            mut sftg = m.field_tag(scur, sprop)
+            if sftg < 0 or _is_list_tag(sftg) or _is_dict_tag(sftg): return -1
+            mut sselfp = lf.new_vreg()
+            lf.emit(LInst.ILoadVar(sselfp, "self"))
+            lf.set_vreg_type(sselfp, lf.var_type("self"))
+            if sftg == 5:
+                mut sfraw = _emit_field_get(m, lf, sselfp, sfoff, 0)
+                mut sffv = lf.new_vreg()
+                lf.emit(LInst.IBitsF(sffv, sfraw))
+                lf.set_vreg_type(sffv, 5)
+                return sffv
+            return _emit_field_get(m, lf, sselfp, sfoff, sftg)
+        case HirExpr.ECast(cinner, ctty):
+            mut cv = lower_expr(m, lf, cinner)
+            if cv < 0: return -1
+            mut cvt = lf.vreg_type(cv)
+            mut ctn = ctty.name
+            if _is_null_str(ctn): return -1
+            # -> float / f64 / f32 (f32 kept at f64 precision in the LIR)
+            if ctn == "float" or ctn == "f64" or ctn == "f32":
+                if cvt == 5: return cv
+                if cvt == 0 or cvt == 4: return _promote_f(lf, cv)
+                return -1
+            # -> integer of any width / bool
+            if _is_int_cast_target(ctn):
+                mut r = cv
+                if cvt == 5:                          # float -> int (truncates toward 0)
+                    r = lf.new_vreg()
+                    lf.emit(LInst.IFToI(r, cv))
+                    lf.set_vreg_type(r, 0)
+                elif cvt != 0 and cvt != 4:
+                    return -1                         # non-numeric -> int: separate increment
+                r = _narrow_int(lf, r, ctn)
+                if ctn == "bool":
+                    mut rb = _norm_bool(lf, r)
+                    lf.set_vreg_type(rb, 4)
+                    return rb
+                lf.set_vreg_type(r, 0)
+                return r
+            # `x as str` where x is already a str: no-op (str IS char* in the LIR).
+            if (ctn == "str" or ctn == "String") and cvt == 1: return cv
+            # `x as Pointer[T]`: a str/int/object value already IS an address in the LIR
+            # (a bare fn name reaches here as its code address via EIdent/IFuncAddr).
+            if ctn == "Pointer":
+                if cvt == 1 or cvt == 0 or cvt == 10 or cvt == 11:
+                    lf.set_vreg_type(cv, 0)
+                    return cv
+                return -1
+            return -1                                 # str/ptr/List casts: later increment
         case HirExpr.EIdent(name, _, _):
             # Inside an OUTLINED CLOSURE body: a captured name reads through the env —
             # env[1+i] holds the ADDRESS of the creator's stack slot (capture by ref).
@@ -2720,6 +3573,10 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                 lf.emit(LInst.ILoadGlobal(gd, m.global_index(name)))
                 lf.set_vreg_type(gd, m.global_type(name))
                 return gd
+            if lf.var_index(name) < 0 and m.is_user_fn(name):   # fn used as a value: its address
+                mut fav = lf.new_vreg()
+                lf.emit(LInst.IFuncAddr(fav, _own(name)))
+                return fav
             lf.add_var(name)
             mut d2 = lf.new_vreg()
             lf.emit(LInst.ILoadVar(d2, name))
@@ -2801,6 +3658,15 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                 mut dcpl = lf.new_vreg()
                 lf.emit(LInst.IBinOp(dcpl, "^", sv, ones))
                 return dcpl
+            if op == "&":                          # &x -> address of variable's stack slot
+                match sub.read():
+                    case HirExpr.EIdent(aname, _, _):
+                        mut ad = lf.new_vreg()
+                        lf.emit(LInst.IAddrVar(ad, aname))
+                        lf.set_vreg_type(ad, 0)
+                        return ad
+                    case _:
+                        return -1
             return -1
         case HirExpr.EBinOp(op, l, r, _):
             # Dunder dispatch: `x <op> y` where x is a class defining the operator's
@@ -2877,6 +3743,20 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                 lf.emit(LInst.ICall(shd, shas, sha))
                 lf.set_vreg_type(shd, 4)
                 return shd
+            # c in str / sub in str -> bool.
+            if op == "in" and bt == 1:
+                mut ssym = "_tr_rt_str_contains"
+                if at == 0 or at == 4:
+                    ssym = "_tr_rt_str_contains_char"
+                elif at != 1: return -1
+                m.add_extern(ssym)
+                mut ssa2 = Vec[int].init(2)
+                ssa2.push(b)
+                ssa2.push(a)
+                mut ssd = lf.new_vreg()
+                lf.emit(LInst.ICall(ssd, ssym, ssa2))
+                lf.set_vreg_type(ssd, 4)
+                return ssd
             # x in <list> -> _tr_rt_list_contains_{i64,str}(list, x) -> bool.
             if op == "in":
                 if not _is_list_tag(bt): return -1
@@ -2999,8 +3879,43 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                 dfa.push(dpv)
                 lf.emit(LInst.ICall(-1, "_tr_rt_raw_free", dfa))
                 return dpv                        # dealloc's value is unused at stmt level
+            # obj.field(args) where the field holds a def-typed function value: indirect
+            # call through the slot (e.g. a strategy stored in a struct).
+            match callee.read():
+                case HirExpr.EPropAccess(pfo, pfp, _):
+                    mut pfcls = _recv_class(m, lf, pfo)
+                    if pfcls != "" and m.is_class(pfcls):
+                        mut pfoff = m.field_offset(pfcls, pfp)
+                        if pfoff >= 0 and m.field_tag(pfcls, pfp) == 0:
+                            mut pfobj = lower_expr(m, lf, pfo)
+                            if pfobj < 0: return -1
+                            mut pfrt = _tag_of(m, hir_expr_type(e))
+                            if pfrt < 0: return -1
+                            mut pfargs = Vec[int].init(args.len)
+                            mut pfai = 0
+                            while pfai < args.len:
+                                mut pfav = lower_expr(m, lf, args.get(pfai))
+                                if pfav < 0: return -1
+                                pfargs.push(pfav)
+                                pfai = pfai + 1
+                            mut pffn = _emit_field_get(m, lf, pfobj, pfoff, 0)
+                            mut pfd = lf.new_vreg()
+                            lf.emit(LInst.ICallInd(pfd, pffn, pfargs))
+                            lf.set_vreg_type(pfd, pfrt)
+                            if pfrt == 1: _fresh_mark(lf, pfd)
+                            return pfd
+                case _:
+                    pass
             mut fn = _ident_name(callee)
             if fn == "": return -1
+            # Enum variant constructor `Ok(42)` / `None`: the callee is the variant name and
+            # the call expression's HIR type is the enum. Do this before ordinary calls so
+            # variant names shadow any same-named function.
+            mut ecty = hir_expr_type(e)
+            if m.is_enum(ecty.name):
+                mut evn = _norm_variant(ecty.name, fn)
+                if m.enum_variant_index(ecty.name, evn) >= 0:
+                    return _lower_enum_ctor(m, lf, ecty.name, evn, args)
             # Closure call `f(args)` where f is a tag-12 local: indirect call through the
             # block's fn pointer, passing the block itself as the hidden env arg.
             if lf.var_index(fn) >= 0 and lf.var_type(fn) == 12:
@@ -3023,6 +3938,25 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                 lf.set_vreg_type(kd, kret)
                 if kret == 1: _fresh_mark(lf, kd)
                 return kd
+            # First-class function value `f(args)`: f is a def-typed local/param holding a
+            # raw function address (sema guarantees a non-callable never reaches here).
+            if lf.var_index(fn) >= 0 and lf.var_type(fn) == 0 and not m.is_user_fn(fn):
+                mut frt = _tag_of(m, hir_expr_type(e))
+                if frt < 0: return -1
+                mut fargs = Vec[int].init(args.len)
+                mut fai = 0
+                while fai < args.len:
+                    mut fav = lower_expr(m, lf, args.get(fai))
+                    if fav < 0: return -1
+                    fargs.push(fav)
+                    fai = fai + 1
+                mut ffp = lf.new_vreg()
+                lf.emit(LInst.ILoadVar(ffp, fn))
+                mut ffd = lf.new_vreg()
+                lf.emit(LInst.ICallInd(ffd, ffp, fargs))
+                lf.set_vreg_type(ffd, frt)
+                if frt == 1: _fresh_mark(lf, ffd)
+                return ffd
             # Bare construction of a generic instantiation `Box[T]()` (callee's HIR type
             # carries the args; under an active subst T resolves concretely).
             if args.len == 0 and _prog_generic_class_index(m, fn) >= 0:
@@ -3038,6 +3972,7 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                 mut god = lf.new_vreg()
                 lf.emit(LInst.ICall(god, "_tr_rt_obj_alloc", goa))
                 lf.set_vreg_type(god, 10)
+                _attach_class_drop(m, lf, god, gcm)   # ARC: field releaser (if it owns fields)
                 _fresh_mark_obj(lf, god)         # ARC: fresh owned generic-class instance
                 return god
             # Bare construction `ClassName()` -> heap-allocate a zeroed instance.
@@ -3050,6 +3985,7 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                 mut od = lf.new_vreg()
                 lf.emit(LInst.ICall(od, "_tr_rt_obj_alloc", oaa))
                 lf.set_vreg_type(od, 10)
+                _attach_class_drop(m, lf, od, fn)   # ARC: field releaser (if it owns fields)
                 _fresh_mark_obj(lf, od)          # ARC: fresh owned class instance (bare ctor)
                 return od
             if fn == "len" and args.len == 1 and _recv_class(m, lf, args.get(0)) != "":
@@ -3179,12 +4115,22 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                 lf.set_vreg_type(s2d, 1)
                 _fresh_mark(lf, s2d)
                 return s2d
-            if fn == "float" and args.len == 1:    # float(int)/float(float)
+            if fn == "float" and args.len == 1:    # float(int)/float(float)/float(str)
                 mut fv0 = lower_expr(m, lf, args.get(0))
                 if fv0 < 0: return -1
                 mut fvt = lf.vreg_type(fv0)
                 if fvt == 5: return fv0            # float(float) = identity
                 if fvt == 0: return _promote_f(lf, fv0)
+                if fvt == 1:                       # float(str): strtod, bits in rax
+                    m.add_extern("_tr_rt_str_to_f64")
+                    mut fsa = Vec[int].init(1)
+                    fsa.push(fv0)
+                    mut fsr = lf.new_vreg()
+                    lf.emit(LInst.ICall(fsr, "_tr_rt_str_to_f64", fsa))
+                    mut fsf = lf.new_vreg()
+                    lf.emit(LInst.IBitsF(fsf, fsr))
+                    lf.set_vreg_type(fsf, 5)
+                    return fsf
                 return -1
             if (fn == "int" or fn == "_tr_fn_int") and args.len == 1:   # int(str)/int(int)/int(bool)/int(float)
                 mut iv0 = lower_expr(m, lf, args.get(0))
@@ -3228,10 +4174,25 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                 lf.emit(LInst.ICall(and2, ansym, ana))
                 lf.set_vreg_type(and2, 4)
                 return and2
-            if fn == "ord" and args.len == 1:      # ord(str) -> first byte's code
+            if fn == "chr" and args.len == 1:      # chr(int) -> single-char string
+                mut chv = lower_expr(m, lf, args.get(0))
+                if chv < 0: return -1
+                mut cht = lf.vreg_type(chv)
+                if cht != 0 and cht != 4: return -1
+                m.add_extern("_tr_rt_chr")
+                mut cha = Vec[int].init(1)
+                cha.push(chv)
+                mut chd = lf.new_vreg()
+                lf.emit(LInst.ICall(chd, "_tr_rt_chr", cha))
+                lf.set_vreg_type(chd, 1)
+                _fresh_mark(lf, chd)
+                return chd
+            if fn == "ord" and args.len == 1:      # ord(str)/ord(char) -> first byte's code
                 mut ordv = lower_expr(m, lf, args.get(0))
                 if ordv < 0: return -1
-                if lf.vreg_type(ordv) != 1: return -1
+                mut ordt = lf.vreg_type(ordv)
+                if ordt == 0 or ordt == 4: return ordv   # char is already a byte value
+                if ordt != 1: return -1
                 m.add_extern("_tr_rt_str_ord")
                 mut orda = Vec[int].init(1)
                 orda.push(ordv)
@@ -3248,7 +4209,7 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
             # Generic free fn: instantiate lazily for this combination of ARG TAGS, then
             # call the mangled specialization (e.g. largest__m0_0 for two ints).
             if m.is_extern_fn(fn):
-                # extern "C" call: pass scalar/str args by value; str = char* directly.
+                # extern "C" call: pass scalar/str/float args by value; str = char* directly.
                 if args.len > 6: return -1
                 mut exargs = Vec[int].init(args.len)
                 mut exi = 0
@@ -3256,7 +4217,7 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                     mut exv = lower_expr(m, lf, args.get(exi))
                     if exv < 0: return -1
                     mut ext = lf.vreg_type(exv)
-                    if ext != 0 and ext != 1 and ext != 4: return -1
+                    if ext != 0 and ext != 1 and ext != 4 and ext != 5: return -1
                     exargs.push(exv)
                     exi = exi + 1
                 m.add_extern(fn)
@@ -3265,6 +4226,16 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                 lf.emit(LInst.ICall(exd, fn, exargs))
                 lf.set_vreg_type(exd, extret)
                 return exd
+            # Sema-generated monomorphized call (e.g. identity__MONO_str): lower the generic
+            # template under the concrete substitution, then treat it as a normal user fn call.
+            if not m.is_user_fn(fn):
+                mut mbase = _mono_base(fn)
+                if mbase != "":
+                    mut mgfi = _find_generic_fn(m, mbase)
+                    if mgfi >= 0:
+                        mut mct = AstType.init(_mono_concrete(fn))
+                        if not _lir_lower_mono_fn(m, m.hir_prog.functions.get(mgfi), fn, mct):
+                            return -1
             if not m.is_user_fn(fn):
                 mut gfi = _find_generic_fn(m, fn)
                 if gfi < 0: return -1
@@ -3320,7 +4291,18 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
         case HirExpr.ETuple(titems, _):
             # Tuple literal -> heap block of n 8-byte slots (no tag word — the arity/types
             # are static). Elements: floats as bit patterns, strs owned by the tuple.
-            if titems.len == 0: return -1
+            if titems.len == 0:
+                # `()` -> a valid 1-slot block (keeps the pointer non-null for ARC).
+                mut zsz = lf.new_vreg()
+                lf.emit(LInst.IConst(zsz, 8))
+                m.add_extern("_tr_rt_obj_alloc")
+                mut zba = Vec[int].init(1)
+                zba.push(zsz)
+                mut zblk = lf.new_vreg()
+                lf.emit(LInst.ICall(zblk, "_tr_rt_obj_alloc", zba))
+                lf.set_vreg_type(zblk, 15)
+                _fresh_mark_obj(lf, zblk)
+                return zblk
             mut tvals = Vec[int].init(titems.len)
             mut tj = 0
             while tj < titems.len:
@@ -3388,28 +4370,40 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                 lf.emit(LInst.ICall(-1, sadd, sargs))
                 sli = sli + 1
             return shv
-        case HirExpr.EList(items, _):
+        case HirExpr.EList(items, lty):
             # List literal -> _tr_rt_list_new + a push per element. Element type is inferred
             # from the first element (int -> List[int] tag 2, str -> List[str] tag 3); a str
             # element is just a char* (8 bytes), so the same i64 push/get runtime is reused.
+            # Empty literals use the annotated type (e.g. List[str] = []) so later appends match.
             m.add_extern("_tr_rt_list_new")
             mut hv = lf.new_vreg()
             lf.emit(LInst.ICall(hv, "_tr_rt_list_new", Vec[int].init(0)))
             mut elem_t = 0
             mut list_tag = 2
+            if items.len == 0:
+                mut ann_tag = _tag_of(m, lty)
+                if ann_tag == 2 or ann_tag == 3 or ann_tag == 14 or ann_tag == 19:
+                    list_tag = ann_tag
+                    elem_t = _list_elem_tag(ann_tag)
+                elif lty.name == "List" or lty.name == "Vec":
+                    if lty.args.len > 0 and lty.args.get(0).read().name == "bool":
+                        list_tag = 2
+                        elem_t = 0
             mut li = 0
             while li < items.len:
                 mut ev = lower_expr(m, lf, items.get(li))
                 if ev < 0: return -1
                 mut evt = lf.vreg_type(ev)
-                if evt != 0 and evt != 1 and evt != 5 and evt != 10: return -1   # int/str/float/object
+                if evt != 0 and evt != 1 and evt != 4 and evt != 5 and evt != 10: return -1   # int/bool/str/float/object
+                mut eff_t = evt
+                if eff_t == 4: eff_t = 0               # bool stores in an int slot
                 if li == 0:
-                    elem_t = evt
-                    list_tag = _list_tag_for_elem(evt)
-                elif evt != elem_t:
+                    elem_t = eff_t
+                    list_tag = _list_tag_for_elem(elem_t)
+                elif eff_t != elem_t:
                     return -1                           # heterogeneous list unsupported
                 if evt == 1: _secure_str(m, lf, ev)     # list owns the str element by ref
-                if evt == 10 or evt == 11: _secure_obj(m, lf, ev)   # list owns the object element by ref
+                if evt == 10 or evt == 11 or evt == 15: _secure_obj(m, lf, ev)   # list owns the object element by ref
                 if evt == 5:                            # store the f64 bit pattern
                     mut evb = lf.new_vreg()
                     lf.emit(LInst.IFBits(evb, ev))
@@ -3434,7 +4428,15 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                 elif k0 == 1 and v0 == 5: dtag = 17
                 elif k0 == 0 and v0 == 5: dtag = 18
                 else: return -1
-            if not _is_dict_tag(dtag): return -1
+            elif (dty.name == "Dict" or dty.name == "Map") and dty.args.len == 0:
+                # Untyped empty Dict defaults to str->str (matches C's TrMap* default).
+                dtag = 8
+            if not _is_dict_tag(dtag):
+                mut kn = "?"; mut vn = "?"
+                if dty.args.len > 0: kn = dty.args.get(0).read().name
+                if dty.args.len > 1: vn = dty.args.get(1).read().name
+                m.fail_note = "bad dict tag dtag=" + dtag.to_str() + " ty=" + dty.name + " k=" + kn + " v=" + vn
+                return -1
             mut dnew = _dict_new_sym(dtag)
             m.add_extern(dnew)
             mut dhv = lf.new_vreg()
@@ -3474,17 +4476,39 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                 mut fp = parts.get(fi)
                 mut pr = -1
                 if fp.is_expr:
-                    if fp.fmt_spec != "": return -1     # format specs -> fall back to C
-                    # An object interpolation `{obj}` -> obj.__str__().
-                    mut fcls = _recv_class(m, lf, fp.expr)
-                    if fcls != "" and m.is_class(fcls) and m.resolve_method(fcls, "__str__") != "":
-                        pr = _obj_to_str(m, lf, fp.expr, -1)
-                        if pr < 0: return -1
+                    if fp.fmt_spec != "":
+                        # Format spec ("{x:.2f}" / "{n:,d}" / "{v:>6d}"): route the
+                        # value through a runtime fmt helper (returns a fresh str).
+                        mut spev = lower_expr(m, lf, fp.expr)
+                        if spev < 0: return -1
+                        mut spidx = m.add_string(fp.fmt_spec)
+                        mut specv = lf.new_vreg()
+                        lf.emit(LInst.IStr(specv, spidx))
+                        mut spvt = lf.vreg_type(spev)
+                        if spvt == 5:
+                            mut spbits = lf.new_vreg()
+                            lf.emit(LInst.IFBits(spbits, spev))
+                            pr = _str_call1(m, lf, "_tr_rt_fmt_spec_f64", spbits, specv, 1)
+                        elif spvt == 1:
+                            pr = _str_call1(m, lf, "_tr_rt_fmt_spec_str", spev, specv, 1)
+                        elif spvt == 0 or spvt == 4:
+                            pr = _str_call1(m, lf, "_tr_rt_fmt_spec_i64", spev, specv, 1)
+                        else:
+                            return -1
                     else:
-                        mut fev = lower_expr(m, lf, fp.expr)
-                        if fev < 0: return -1
-                        pr = _reg_to_str(m, lf, fev)
-                        if pr < 0: return -1
+                        # An object interpolation `{obj}` -> obj.__str__().
+                        mut fcls = _recv_class(m, lf, fp.expr)
+                        if fcls != "" and m.is_class(fcls) and m.resolve_method(fcls, "__str__") != "":
+                            pr = _obj_to_str(m, lf, fp.expr, -1)
+                            if pr < 0: return -1
+                        else:
+                            mut fev = lower_expr(m, lf, fp.expr)
+                            if fev < 0: return -1
+                            if hir_expr_type(fp.expr).name == "char" and lf.vreg_type(fev) == 0:
+                                pr = _str_call0(m, lf, "_tr_rt_char_to_str", fev, 1)
+                            else:
+                                pr = _reg_to_str(m, lf, fev)
+                            if pr < 0: return -1
                 else:
                     pr = _heap_lit(m, lf, fp.text)
                 m.add_extern("_tr_rt_str_concat")
@@ -3591,6 +4615,10 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                     return dgf
                 lf.set_vreg_type(dgd, _dict_val_tag(ovt))
                 return dgd
+            if ovt == 1:                       # s[i] -> char code (int)
+                mut siv = lower_expr(m, lf, idx)
+                if siv < 0: return -1
+                return _str_call1(m, lf, "_tr_rt_str_char_at", ov, siv, 0)
             if not _is_list_tag(ovt): return -1
             mut iv = lower_expr(m, lf, idx)
             if iv < 0: return -1
@@ -3606,12 +4634,13 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
             # Class field read `obj.field` -> _tr_rt_field_get_i(obj, offset).
             #   int/bool/object: the raw 8-byte slot. float: slot bits -> IBitsF -> f64.
             #   str: a BORROW of the field's owned ref (not fresh — consumers retain).
+            #   list/dict: the container pointer (collections aren't ARC'd).
             mut pcls = _recv_class(m, lf, obj)
             if pcls != "" and m.is_class(pcls):
                 mut foff = m.field_offset(pcls, prop)
                 if foff < 0: return -1
                 mut ftg = m.field_tag(pcls, prop)
-                if ftg < 0 or _is_list_tag(ftg) or _is_dict_tag(ftg): return -1
+                if ftg < 0: return -1
                 mut fobj = lower_expr(m, lf, obj)
                 if fobj < 0: return -1
                 if ftg == 5:
@@ -3621,6 +4650,9 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                     lf.set_vreg_type(ffv, 5)
                     return ffv
                 return _emit_field_get(m, lf, fobj, foff, ftg)
+            if pcls != "" and m.is_enum(pcls):
+                mut ep = _lower_enum_prop(m, lf, obj, pcls, prop)
+                if ep >= 0: return ep
             if prop != "len": return -1
             mut ovl = lower_expr(m, lf, obj)
             if ovl < 0: return -1
@@ -3648,6 +4680,23 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
             lf.emit(LInst.ICall(ld, "_tr_rt_list_len", la))
             return ld
         case HirExpr.EMethodCall(obj, method, margs, _):
+            # Static type methods — the receiver is the TYPE name itself: Str.join(xs,
+            # sep), Str.len(s). Only the forms with a direct runtime symbol are native.
+            match obj.read():
+                case HirExpr.EIdent(styn, _, _):
+                    if styn == "Str" or styn == "str" or styn == "String":
+                        if method == "join" and margs.len == 2:
+                            mut sjl = lower_expr(m, lf, margs.get(0))
+                            if sjl < 0 or lf.vreg_type(sjl) != 3: return -1
+                            mut sjs = lower_expr(m, lf, margs.get(1))
+                            if sjs < 0 or lf.vreg_type(sjs) != 1: return -1
+                            return _str_call1(m, lf, "_tr_rt_list_join", sjl, sjs, 1)
+                        if (method == "len" or method == "length") and margs.len == 1:
+                            mut sll = lower_expr(m, lf, margs.get(0))
+                            if sll < 0 or lf.vreg_type(sll) != 1: return -1
+                            return _str_call0(m, lf, "_tr_rt_strlen", sll, 0)
+                case _:
+                    pass
             # Raw pointer ops on a Pointer[T] receiver (unsafe code): read/write/offset.
             if hir_expr_type(obj).name == "Pointer":
                 mut pty = hir_expr_type(obj)
@@ -3700,6 +4749,29 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
             # or enum variant construction `Enum.Variant(args)`: obj is the type name.
             match obj.read():
                 case HirExpr.EIdent(inm, ity_g, _):
+                    # Set[T].init() / .new() — backed by the same idict/sdict runtime as a set literal.
+                    if inm == "Set" and (method == "init" or method == "new") and margs.len == 0:
+                        mut stag = -1
+                        if ity_g.args.len > 0:
+                            mut se = ity_g.args.get(0).read().name
+                            if se == "str" or se == "String": stag = 16
+                            elif _is_int_typename(se): stag = 13
+                        if stag < 0: return -1
+                        mut newsym = _set_sym(stag, "new")
+                        m.add_extern(newsym)
+                        mut snd = lf.new_vreg()
+                        lf.emit(LInst.ICall(snd, newsym, Vec[int].init(0)))
+                        lf.set_vreg_type(snd, stag)
+                        return snd
+                    # Vec[Tuple].init(n) — pointer list of tuple handles (capacity ignored).
+                    if inm == "Vec" and (method == "init" or method == "new") and ity_g.args.len > 0:
+                        mut ven = ity_g.args.get(0).read().name
+                        if ven == "Tuple" or ven == "tuple":
+                            m.add_extern("_tr_rt_list_new")
+                            mut vnd = lf.new_vreg()
+                            lf.emit(LInst.ICall(vnd, "_tr_rt_list_new", Vec[int].init(0)))
+                            lf.set_vreg_type(vnd, 21)
+                            return vnd
                     if _prog_generic_class_index(m, inm) >= 0 and ity_g.args.len > 0:
                         mut gsm = _ensure_generic_class(m, ity_g)
                         if gsm == "": return -1
@@ -3803,13 +4875,19 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                 return _emit_field_get(m, lf, ovm, tgt_idx * 8, tgt_tag)
             if not _is_list_tag(ovmt): return -1
             mut want_elem = _list_elem_tag(ovmt)
+            if (method == "len" or method == "length") and margs.len == 0:
+                return _str_call0(m, lf, "_tr_rt_list_len", ovm, 0)
             if method == "push" or method == "append":
                 if margs.len != 1: return -1
                 mut av = lower_expr(m, lf, margs.get(0))
                 if av < 0: return -1
-                if lf.vreg_type(av) != want_elem: return -1   # element type must match list
+                mut avt = lf.vreg_type(av)
+                # bool elements are stored in an int slot (0/1).
+                if want_elem == 0 and avt == 4:
+                    avt = 0
+                if avt != want_elem: return -1   # element type must match list
                 if want_elem == 1: _secure_str(m, lf, av)     # list owns the str element by ref
-                if want_elem == 10 or want_elem == 11: _secure_obj(m, lf, av)   # list owns the object element by ref
+                if want_elem == 10 or want_elem == 11 or want_elem == 15: _secure_obj(m, lf, av)   # list owns the object element by ref
                 if want_elem == 5:                            # store the f64 bit pattern
                     mut avfb = lf.new_vreg()
                     lf.emit(LInst.IFBits(avfb, av))
@@ -3835,7 +4913,10 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                 return pod
             if method == "index_of" and margs.len == 1:
                 mut ixa = lower_expr(m, lf, margs.get(0))
-                if ixa < 0 or lf.vreg_type(ixa) != want_elem: return -1
+                if ixa < 0: return -1
+                mut ixat = lf.vreg_type(ixa)
+                if want_elem == 0 and ixat == 4: ixat = 0
+                if ixat != want_elem: return -1
                 mut ixsym = "_tr_rt_list_index_i64"
                 if want_elem == 1: ixsym = "_tr_rt_list_index_str"
                 m.add_extern(ixsym)
@@ -3847,7 +4928,10 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                 return ixd
             if method == "contains" and margs.len == 1:
                 mut cxa = lower_expr(m, lf, margs.get(0))
-                if cxa < 0 or lf.vreg_type(cxa) != want_elem: return -1
+                if cxa < 0: return -1
+                mut cxat = lf.vreg_type(cxa)
+                if want_elem == 0 and cxat == 4: cxat = 0
+                if cxat != want_elem: return -1
                 mut cxsym = "_tr_rt_list_contains_i64"
                 if want_elem == 1: cxsym = "_tr_rt_list_contains_str"
                 m.add_extern(cxsym)
@@ -3860,7 +4944,10 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                 return cxd
             if method == "count" and margs.len == 1:
                 mut cta = lower_expr(m, lf, margs.get(0))
-                if cta < 0 or lf.vreg_type(cta) != want_elem: return -1
+                if cta < 0: return -1
+                mut ctat = lf.vreg_type(cta)
+                if want_elem == 0 and ctat == 4: ctat = 0
+                if ctat != want_elem: return -1
                 mut ctsym = "_tr_rt_list_count_i64"
                 if want_elem == 1: ctsym = "_tr_rt_list_count_str"
                 m.add_extern(ctsym)
@@ -3876,8 +4963,19 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                 if method == "max" or method == "max_val": mmsym = "_tr_rt_list_max_i64"
                 return _list_call1(m, lf, mmsym, ovm, 0)
             if method == "sum" and margs.len == 0:
-                if want_elem != 0: return -1        # int lists only
-                return _list_call1(m, lf, "_tr_rt_list_sum_i64", ovm, 0)
+                if want_elem == 0:
+                    return _list_call1(m, lf, "_tr_rt_list_sum_i64", ovm, 0)
+                if want_elem == 5:
+                    m.add_extern("_tr_rt_list_sum_f64")
+                    mut fsum = lf.new_vreg()
+                    mut fsa = Vec[int].init(1)
+                    fsa.push(ovm)
+                    lf.emit(LInst.ICall(fsum, "_tr_rt_list_sum_f64", fsa))
+                    mut fsr = lf.new_vreg()
+                    lf.emit(LInst.IBitsF(fsr, fsum))
+                    lf.set_vreg_type(fsr, 5)
+                    return fsr
+                return -1
             if (method == "clone" or method == "copy") and margs.len == 0:
                 m.add_extern("_tr_rt_list_clone")
                 mut cla = Vec[int].init(1)
@@ -3948,17 +5046,25 @@ def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                 lf.emit(LInst.ICall(-1, "_tr_rt_list_clear", cla))
                 return ovm
             if (method == "sort" or method == "sort_asc" or method == "sort_desc") and margs.len == 0:
-                if want_elem != 0: return -1        # only List[int] sorts natively
+                if want_elem != 0 and want_elem != 1: return -1
                 mut dirv = lf.new_vreg()
                 mut dir = 1
                 if method == "sort_desc": dir = 0 - 1
                 lf.emit(LInst.IConst(dirv, dir))
-                m.add_extern("_tr_rt_list_sort")
+                mut sortsym = "_tr_rt_list_sort"
+                if want_elem == 1: sortsym = "_tr_rt_list_sort_str"
+                m.add_extern(sortsym)
                 mut soa = Vec[int].init(2)
                 soa.push(ovm)
                 soa.push(dirv)
-                lf.emit(LInst.ICall(-1, "_tr_rt_list_sort", soa))
+                lf.emit(LInst.ICall(-1, sortsym, soa))
                 return ovm
             return -1
         case _:
             return -1
+
+pub def lower_expr(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
+    mut r = _lower_expr_impl(m, lf, e)
+    if r < 0 and m.fail_note == "":
+        m.fail_note = "unsupported expression: " + _expr_kind(e)
+    return r
