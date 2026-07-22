@@ -1,0 +1,29 @@
+# native≡c / llvm≡c differential corpus: custom iterator protocol (__iter__/__next__).
+class Counter:
+    cur: int
+    stop: int
+
+extend Counter:
+    def make(a: int, b: int) -> Counter:
+        mut c = Counter()
+        c.cur = a
+        c.stop = b
+        return c
+    def __iter__(self) -> Counter:
+        return self
+    def __next__(self) -> Option[int]:
+        if self.cur < self.stop:
+            mut v = self.cur
+            self.cur = self.cur + 1
+            return Option.Some(v)
+        return Option.None
+
+def main():
+    mut total = 0
+    for x in Counter.make(0, 5):
+        total = total + x
+    print(total)                # 0+1+2+3+4 = 10
+    mut n = 0
+    for y in Counter.make(10, 13):
+        n = n + y
+    print(n)                    # 10+11+12 = 33

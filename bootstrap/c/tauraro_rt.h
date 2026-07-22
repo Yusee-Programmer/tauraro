@@ -3421,6 +3421,16 @@ static char* _tr_str_replace(const char* s, const char* old, const char* nw) {
     *dst='\0'; return r;
 }
 static char* _tr_int_to_str(long long n)   { char* b=(char*)TAURARO_ALLOC(32); snprintf(b,32,"%lld",n); return b; }
+/* Thousands grouping for f"{n:,d}": 1234567 -> "1,234,567" (fresh heap C string). */
+static char* _tr_i64_grouped(long long v) {
+    char t[24]; int n=0, neg=v<0;
+    unsigned long long u = neg ? 0ull-(unsigned long long)v : (unsigned long long)v;
+    do { t[n++]=(char)('0'+(u%10)); u/=10; } while (u);
+    char* b=(char*)TAURARO_ALLOC(40); int w=0;
+    if (neg) b[w++]='-';
+    for (int i=n-1,c=0;i>=0;i--,c++) { if (c&&c%3==0) b[w++]=','; b[w++]=t[i]; }
+    b[w]=0; return b;
+}
 static char* _tr_float_to_str(double n)    { char* b=(char*)TAURARO_ALLOC(32); snprintf(b,32,"%g",n);   return b; }
 static char* _tr_float_to_c_lit(double n) {
     char* b=(char*)TAURARO_ALLOC(32);

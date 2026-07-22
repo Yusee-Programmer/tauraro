@@ -92,6 +92,9 @@ pub class LFunc:
     pub defers:     Vec[Pointer[HirStmt]]  # `defer` stmts (LIFO at every function exit)
     pub blk_depth:  int             # lower_block nesting (1 = the function's own body)
     pub in_defer:   bool            # lowering a deferred stmt (rejects nested defer/return)
+    pub is_throws:  bool            # `throws E` fn: return -> Result.Ok(v), raise(e) -> Result.Err(e)
+    pub throws_ok_tag:  int         # value-type tag of the Ok payload (declared return type)
+    pub throws_err_tag: int         # value-type tag of the Err payload (throws error type)
 
 extend LFunc:
     pub def init(name: str) -> LFunc:
@@ -120,6 +123,9 @@ extend LFunc:
         f.defers     = Vec[Pointer[HirStmt]].init(2)
         f.blk_depth  = 0
         f.in_defer   = false
+        f.is_throws  = false
+        f.throws_ok_tag  = 0
+        f.throws_err_tag = 0
         return f
 
     # A monotonically increasing id, for building unique synthesized variable names
