@@ -1,0 +1,10 @@
+# native≡c / llvm≡c differential corpus: the `**` exponentiation operator (int + float).
+def main():
+    print(2 ** 10)            # 1024
+    print(3 ** 4)             # 81
+    print(5 ** 0)             # 1
+    mut b = 2
+    mut e = 8
+    print(b ** e)             # 256
+    print(10 ** 3 + 24)       # 1024
+    print(2 ** 3 * 4)         # 32

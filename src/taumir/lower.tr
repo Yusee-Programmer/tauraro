@@ -249,9 +249,24 @@ def _tag_of(m: LModule, ty: AstType) -> int:
         if _ensure_generic_class(m, ty) != "": return 10
         return -1
     if (ty.name == "List" or ty.name == "Vec") and ty.args.len > 0:
-        mut lelem = ty.args.get(0).read()
+        mut lelem = _subst_ty(m, ty.args.get(0).read())
         if not _is_null_str(lelem.name) and m.is_class(lelem.name): return 19
+    # Resolve abstract element/key/value params (List[T], Dict[K,V]) through the active
+    # substitution so a generic-class field like `items: List[T]` gets a concrete tag.
+    if ty.args.len > 0 and m.subst_names.len > 0:
+        return _ast_type_tag(_subst_args(m, ty))
     return _ast_type_tag(ty)
+
+# A copy of `ty` with each top-level type ARGUMENT resolved through the active
+# substitution (List[T] -> List[int]). The head name is left as-is (List stays List).
+def _subst_args(m: LModule, ty: AstType) -> AstType:
+    if ty.args.len == 0: return ty
+    mut r = AstType.init(_own(ty.name))
+    mut i = 0
+    while i < ty.args.len:
+        r.args.push(box_asttype_lir(_subst_ty(m, ty.args.get(i).read())))
+        i = i + 1
+    return r
 
 # Resolve a type under the ACTIVE substitution (T -> concrete) for cls-name purposes.
 def _subst_ty(m: LModule, ty: AstType) -> AstType:
@@ -421,6 +436,51 @@ def _recv_class(m: LModule, lf: LFunc, obj: Pointer[HirExpr]) -> str:
         case _:
             pass
     return ""
+
+# List comprehension `[element for target in iter if cond...]` (single generator, v1):
+# build an empty result list, then lower an equivalent for-loop whose body appends
+# `element` (guarded by the filters) — reusing _lower_for via a SYNTHESIZED HIR body.
+def _lower_list_comp(m: LModule, lf: LFunc, element: Pointer[HirExpr], generators: Vec[Pointer[HirComprehension]], lty: AstType) -> int:
+    if generators.len != 1: return -1
+    mut gen = generators.get(0).read()
+    if gen.is_async: return -1
+    m.add_extern("_tr_rt_list_new")
+    mut hv = lf.new_vreg()
+    lf.emit(LInst.ICall(hv, "_tr_rt_list_new", Vec[int].init(0)))
+    mut ltag = _tag_of(m, lty)
+    if not _is_list_tag(ltag):
+        mut et = _tag_of(m, hir_expr_type(element))
+        if et == 4: et = 0
+        ltag = _list_tag_for_elem(et)
+        if not _is_list_tag(ltag): return -1
+    lf.set_vreg_type(hv, ltag)
+    mut uid = lf.fresh_id()
+    mut lcname = "__lc" + _lir_itoa(uid)
+    lf.add_var(lcname)
+    lf.set_var_type(lcname, ltag)
+    lf.emit(LInst.IStoreVar(lcname, hv))
+    # synthesize `<lcname>.append(element)`, guarded by `if <and of filters>`
+    mut recv = box_hirexpr(HirExpr.EIdent(_own(lcname), lty, false))
+    mut aargs = Vec[Pointer[HirExpr]].init(1)
+    aargs.push(element)
+    mut appstmt = box_hirstmt(HirStmt.SExpr(box_hirexpr(HirExpr.EMethodCall(recv, "append", aargs, AstType.init("void")))))
+    mut body = HirBlock.init()
+    if gen.ifs.len == 0:
+        body.stmts.push(appstmt)
+    else:
+        mut cond = gen.ifs.get(0)
+        mut ci = 1
+        while ci < gen.ifs.len:
+            cond = box_hirexpr(HirExpr.EBinOp("and", cond, gen.ifs.get(ci), AstType.init("bool")))
+            ci = ci + 1
+        mut thenb = HirBlock.init()
+        thenb.stmts.push(appstmt)
+        body.stmts.push(box_hirstmt(HirStmt.SIf(cond, thenb, HirBlock.init())))
+    if not _lower_for(m, lf, _own(gen.target), gen.iter, body): return -1
+    mut res = lf.new_vreg()
+    lf.emit(LInst.ILoadVar(res, lcname))
+    lf.set_vreg_type(res, ltag)
+    return res
 
 # The declared return AstType of `cls.method` (extend-block methods live in prog.functions;
 # inline methods in the HIR class's `methods`). Returns an empty-name AstType if not found.
@@ -1330,10 +1390,11 @@ def _run_defers(m: LModule, lf: LFunc) -> bool:
 # usize/float/object pointers); narrower/other element types -> 0 (caller falls back).
 def _ptr_stride(m: LModule, pty: AstType) -> int:
     if pty.args.len == 0: return 8
-    mut en = pty.args.get(0).read().name
+    mut en = _subst_ty(m, pty.args.get(0).read()).name   # resolve abstract T (Pointer[T])
     if _is_null_str(en): return 8
     if en == "int" or en == "i64" or en == "u64" or en == "usize" or en == "isize": return 8
     if en == "float" or en == "f64": return 8
+    if en == "str" or en == "String" or en == "char" or en == "bool": return 8   # all 8-byte slots
     if m.is_class(en) or m.is_enum(en): return 8
     if en == "Pointer": return 8
     return 0
@@ -3728,6 +3789,10 @@ def _lower_expr_impl(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                 lf.set_vreg_type(tpfv, 5)
                 return tpfv
             return _emit_field_get(m, lf, trl3, 8, toktag)
+        case HirExpr.EListComp(lcelem, lcgens, lcty):
+            return _lower_list_comp(m, lf, lcelem, lcgens, lcty)
+        case HirExpr.EGeneratorExpr(geelem, geegens, geety):
+            return _lower_list_comp(m, lf, geelem, geegens, geety)
         case HirExpr.ELitNone(nty):
             # `None`: in an Option context it's the unit variant Option.None (a tag-only
             # enum instance, same representation for any Option[T]). In any other context
@@ -3811,6 +3876,10 @@ def _lower_expr_impl(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                 return r
             # `x as str` where x is already a str: no-op (str IS char* in the LIR).
             if (ctn == "str" or ctn == "String") and cvt == 1: return cv
+            # `x as char`: a char is a byte value held in an int slot (int/bool -> no-op).
+            if ctn == "char" and (cvt == 0 or cvt == 4):
+                lf.set_vreg_type(cv, 0)
+                return cv
             # `x as Pointer[T]`: a str/int/object value already IS an address in the LIR
             # (a bare fn name reaches here as its code address via EIdent/IFuncAddr).
             if ctn == "Pointer":
@@ -3968,6 +4037,12 @@ def _lower_expr_impl(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                     lf.emit(LInst.IFBinOp(fdd, op, fa, fb))
                     lf.set_vreg_type(fdd, 5)
                     return fdd
+                if op == "**":                          # float exponentiation via libm pow
+                    m.add_extern("_tr_rt_pow")
+                    mut fpw = lf.new_vreg()
+                    lf.emit(LInst.IFCall2F(fpw, "_tr_rt_pow", fa, fb))
+                    lf.set_vreg_type(fpw, 5)
+                    return fpw
                 if _is_cmp_op(op):
                     mut fcd = lf.new_vreg()
                     lf.emit(LInst.IFBinOp(fcd, op, fa, fb))
@@ -4104,6 +4179,14 @@ def _lower_expr_impl(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                 mut oro = _norm_bool(lf, ssum)
                 lf.set_vreg_type(oro, 4)
                 return oro
+            if op == "**" and (at == 0 or at == 4) and (bt == 0 or bt == 4):   # integer exponentiation
+                m.add_extern("_tr_rt_int_pow")
+                mut ipa = Vec[int].init(2)
+                ipa.push(a)
+                ipa.push(b)
+                mut ipd = lf.new_vreg()
+                lf.emit(LInst.ICall(ipd, "_tr_rt_int_pow", ipa))
+                return ipd
             if not _int_op(op): return -1
             mut d3 = lf.new_vreg()
             lf.emit(LInst.IBinOp(d3, op, a, b))
@@ -4988,10 +5071,12 @@ def _lower_expr_impl(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                 mut pty = hir_expr_type(obj)
                 mut pstride = _ptr_stride(m, pty)
                 if pstride == 0: return -1
-                mut petag = 0                     # element value-type tag (from T)
+                mut petag = 0                     # element value-type tag (from T, subst-resolved)
                 if pty.args.len > 0:
-                    mut petn = pty.args.get(0).read().name
+                    mut petn = _subst_ty(m, pty.args.get(0).read()).name
                     if petn == "float" or petn == "f64": petag = 5
+                    elif petn == "str" or petn == "String" or petn == "char": petag = 1
+                    elif petn == "bool": petag = 4
                     elif m.is_class(petn): petag = 10
                     elif m.is_enum(petn): petag = 11
                 mut pbase = lower_expr(m, lf, obj)
@@ -5028,6 +5113,8 @@ def _lower_expr_impl(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                         mut pwb = lf.new_vreg()
                         lf.emit(LInst.IFBits(pwb, pwv))
                         pwv = pwb
+                    elif petag == 1: _secure_str(m, lf, pwv)   # raw memory keeps the str alive (no ARC track -> leak, never UAF)
+                    elif petag == 10 or petag == 11: _secure_obj(m, lf, pwv)
                     _emit_field_set(m, lf, pbase, 0, pwv)
                     return pbase
                 return -1
