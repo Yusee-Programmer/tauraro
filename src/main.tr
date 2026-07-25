@@ -1044,15 +1044,13 @@ pub def main(args: Vec[str]):
         # falls through to llc automatically.
         mut lx_null = "/dev/null"
         if _tr_is_windows(): lx_null = "nul"
-        # coro_stub.c (beside native_abi.c): exported no-op coroutine entry points for the
-        # synchronous-async model, so a program importing std.async.coro links. Best-effort
-        # (try-compile; absent file just leaves it out).
-        mut lx_coro = ""
-        if _tr_system(lx_cc + " -O2 -w -c \"" + dir_of_path(lx_abi) + "/coro_stub.c\" -o build/coro_stub.o 2>" + lx_null) == 0:
-            lx_coro = "build/coro_stub.o "
+        # ws2_32 (Windows) is needed by the runtime's async scheduler reactor (WSAPoll),
+        # now that runtime.o always EXPORTS the coroutine entry points; -lm always.
+        mut lx_libs = " -lm"
+        if _tr_is_windows(): lx_libs = lx_libs + " -lws2_32 -mconsole"
         mut lx_built = false
         if _tr_system("clang --version >" + lx_null + " 2>&1") == 0:
-            mut lx_cmd = "clang -O" + opt_level + " \"" + lx_ll + "\" " + lx_rto + " " + lx_coro + "-lm -o \"" + lx_exe + "\" 2>build/llvm_link.log"
+            mut lx_cmd = "clang -O" + opt_level + " \"" + lx_ll + "\" " + lx_rto + lx_libs + " -o \"" + lx_exe + "\" 2>build/llvm_link.log"
             if _tr_system(lx_cmd) == 0: lx_built = true
         if not lx_built and _tr_system("llc --version >" + lx_null + " 2>&1") == 0:
             # Pin the GNU triple on Windows: a rustup-shipped llc defaults to the MSVC
@@ -1060,7 +1058,7 @@ pub def main(args: Vec[str]):
             mut lx_llc_tri = ""
             if _tr_is_windows(): lx_llc_tri = " -mtriple=x86_64-pc-windows-gnu"
             if _tr_system("llc -O2 -filetype=obj" + lx_llc_tri + " \"" + lx_ll + "\" -o build/llvm_out.o 2>build/llvm_link.log") == 0:
-                if _tr_system(lx_cc + " build/llvm_out.o " + lx_rto + " " + lx_coro + "-lm -o \"" + lx_exe + "\" 2>>build/llvm_link.log") == 0:
+                if _tr_system(lx_cc + " build/llvm_out.o " + lx_rto + lx_libs + " -o \"" + lx_exe + "\" 2>>build/llvm_link.log") == 0:
                     lx_built = true
         if not lx_built:
             print(c_red("error") + ": could not compile the LLVM IR to an executable")

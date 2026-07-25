@@ -3045,16 +3045,24 @@ static int _tr_co_await_timeout(_TrCoro* target, long long ms, long long* out) {
     return target->state == _TRC_DONE;
 }
 
-/* Tauraro-callable handle-based wrappers - extern "C" decls in std/async. */
-static char*     _tr_co_go_h(void* fn, void* arg) { return (char*)_tr_co_go((_tr_coro_fn)fn, arg); }
-static void       _tr_co_spawn_h(void* fn, void* arg) { _tr_co_spawn((_tr_coro_fn)fn, arg); }
-static long long  _tr_co_await_h(char* c)          { return _tr_co_await((_TrCoro*)c); }
-static void       _tr_co_free_h(char* c)           { _tr_co_free((_TrCoro*)c); }
-static void       _tr_co_yield_h(void)             { _tr_co_yield(); }
-static void       _tr_co_sleep_h(long long ms)     { _tr_co_sleep_ms(ms); }
-static int        _tr_co_await_fd_h(long long fd, long long ev) { return _tr_co_await_fd((int)fd, (unsigned int)ev); }
-static void       _tr_co_run_h(void)               { _tr_sched_run(); }
-static int        _tr_co_done_h(char* c)           { return _tr_co_done((_TrCoro*)c); }
+/* Tauraro-callable handle-based wrappers - extern "C" decls in std/async. The C backend
+ * (which #includes this header) keeps them `static inline`. The NATIVE/LLVM backend links
+ * runtime.o (native_abi.c) and needs them as REAL EXPORTED symbols so `await`/`Coro.*`
+ * lower to the true green-thread scheduler — native_abi.c defines _TR_EXPORT_CORO. */
+#ifdef _TR_EXPORT_CORO
+#define _TR_CO_LINK
+#else
+#define _TR_CO_LINK static
+#endif
+_TR_CO_LINK char*     _tr_co_go_h(void* fn, void* arg) { return (char*)_tr_co_go((_tr_coro_fn)fn, arg); }
+_TR_CO_LINK void       _tr_co_spawn_h(void* fn, void* arg) { _tr_co_spawn((_tr_coro_fn)fn, arg); }
+_TR_CO_LINK long long  _tr_co_await_h(char* c)          { return _tr_co_await((_TrCoro*)c); }
+_TR_CO_LINK void       _tr_co_free_h(char* c)           { _tr_co_free((_TrCoro*)c); }
+_TR_CO_LINK void       _tr_co_yield_h(void)             { _tr_co_yield(); }
+_TR_CO_LINK void       _tr_co_sleep_h(long long ms)     { _tr_co_sleep_ms(ms); }
+_TR_CO_LINK int        _tr_co_await_fd_h(long long fd, long long ev) { return _tr_co_await_fd((int)fd, (unsigned int)ev); }
+_TR_CO_LINK void       _tr_co_run_h(void)               { _tr_sched_run(); }
+_TR_CO_LINK int        _tr_co_done_h(char* c)           { return _tr_co_done((_TrCoro*)c); }
 
 #endif /* green-thread scheduler */
 

@@ -27,6 +27,7 @@ done
 
 TRIPLE=""
 case "$(uname -s 2>/dev/null)" in *NT*|*MINGW*|*MSYS*|*CYGWIN*) TRIPLE="x86_64-pc-windows-gnu";; esac
+WINLIB=""; [ -n "$TRIPLE" ] && WINLIB="-lws2_32"  # runtime.o always exports the async scheduler (WSAPoll) now
 
 echo "=============================================================="
 echo "  LLVM backend FFI proof — extern \"C\" + export (C interop)"
@@ -61,13 +62,13 @@ TEOF
 
 if [ -n "$CLANGBIN" ]; then
     F="-O2"; [ -n "$TRIPLE" ] && F="$F -target $TRIPLE"
-    "$CLANGBIN" $F build/ffi_test.ll build/runtime.o build/ffi_stub.o -lm -o build/ffi_test 2>/tmp/ffi_ld.log \
+    "$CLANGBIN" $F build/ffi_test.ll build/runtime.o build/ffi_stub.o  -lm $WINLIB -o build/ffi_test 2>/tmp/ffi_ld.log \
         || { echo "FAIL: clang link"; sed -n '1,20p' /tmp/ffi_ld.log; exit 1; }
 else
     F="-O2 -filetype=obj"; [ -n "$TRIPLE" ] && F="$F -mtriple=$TRIPLE"
     "$LLCBIN" $F build/ffi_test.ll -o build/ffi_test.o 2>/tmp/ffi_llc.log \
         || { echo "FAIL: llc"; sed -n '1,20p' /tmp/ffi_llc.log; exit 1; }
-    "$CC" build/ffi_test.o build/runtime.o build/ffi_stub.o -lm -o build/ffi_test 2>/tmp/ffi_ld.log \
+    "$CC" build/ffi_test.o build/runtime.o build/ffi_stub.o  -lm $WINLIB -o build/ffi_test 2>/tmp/ffi_ld.log \
         || { echo "FAIL: link"; sed -n '1,20p' /tmp/ffi_ld.log; exit 1; }
 fi
 

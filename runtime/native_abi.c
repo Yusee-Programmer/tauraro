@@ -7,6 +7,9 @@
  * backend covers more of the language (strings, collections, ARC, etc.).
  */
 #define _TR_MAIN
+#define _TR_EXPORT_CORO   /* export the coroutine scheduler entry points (_tr_co_*_h) as
+                           * real symbols so the LLVM/native backend's async/await runs on
+                           * the true green-thread scheduler, not a no-op shim. */
 #include "tauraro_rt.h"
 #include <math.h>
 

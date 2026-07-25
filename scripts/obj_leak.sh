@@ -28,6 +28,7 @@ done
 
 TRIPLE=""
 case "$(uname -s 2>/dev/null)" in *NT*|*MINGW*|*MSYS*|*CYGWIN*) TRIPLE="x86_64-pc-windows-gnu";; esac
+WINLIB=""; [ -n "$TRIPLE" ] && WINLIB="-lws2_32"  # runtime.o always exports the async scheduler (WSAPoll) now
 
 echo "=============================================================="
 echo "  LLVM backend object-leak oracle (-DTAURARO_NMEM)"
@@ -48,13 +49,13 @@ for T in tests/objleak/*.tr; do
     fi
     if [ -n "$CLANGBIN" ]; then
         F="-O2"; [ -n "$TRIPLE" ] && F="$F -target $TRIPLE"
-        "$CLANGBIN" $F "$ll" "$RT" -lm -o "$bin" 2>"$WORK/$name.ld.log" \
+        "$CLANGBIN" $F "$ll" "$RT"  -lm $WINLIB -o "$bin" 2>"$WORK/$name.ld.log" \
             || { echo "  $name: FAIL (clang link)"; sed -n '1,8p' "$WORK/$name.ld.log"; fail=$((fail+1)); continue; }
     else
         F="-filetype=obj"; [ -n "$TRIPLE" ] && F="$F -mtriple=$TRIPLE"
         "$LLCBIN" $F "$ll" -o "$WORK/$name.o" 2>"$WORK/$name.llc.log" \
             || { echo "  $name: FAIL (llc)"; sed -n '1,8p' "$WORK/$name.llc.log"; fail=$((fail+1)); continue; }
-        "$CC" "$WORK/$name.o" "$RT" -lm -o "$bin" 2>"$WORK/$name.ld.log" \
+        "$CC" "$WORK/$name.o" "$RT"  -lm $WINLIB -o "$bin" 2>"$WORK/$name.ld.log" \
             || { echo "  $name: FAIL (link)"; sed -n '1,8p' "$WORK/$name.ld.log"; fail=$((fail+1)); continue; }
     fi
     out="$("$bin" 2>&1 | tr -d '\r')"; rc=$?

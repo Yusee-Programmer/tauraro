@@ -1336,6 +1336,133 @@ def _wrap_result(m: LModule, lf: LFunc, vidx: int, payv: int, paytag: int) -> in
     _fresh_mark_obj(lf, od)
     return od
 
+# -- REAL green-threaded async/await --------------------------------------------------
+# `await f(a,b)` runs f on a GREEN THREAD (coroutine) and cooperatively awaits its result,
+# exactly like the C backend: pack args into a raw buffer -> `_tr_co_go_h(wrapper, buf)`
+# creates the coro -> `_tr_co_await_h(co)` drives the scheduler (from the top level) or
+# suspends (inside another coro) until it finishes -> unbox. The per-fn WRAPPER unpacks the
+# buffer, calls f, frees the buffer, returns f's result as a void* (long long).
+def _find_free_fn_idx(m: LModule, name: str) -> int:
+    mut i = 0
+    while i < m.hir_prog.functions.len:
+        mut f = m.hir_prog.functions.get(i)
+        if f.name == name and f.class_name == "" and not f.is_extern and f.generics.len == 0: return i
+        i = i + 1
+    return -1
+
+def _ensure_await_wrapper(m: LModule, fn: str) -> bool:
+    mut wname = "_awaitwrap_" + fn
+    if m.is_user_fn(wname): return true                     # dedup (one wrapper per fn)
+    mut fidx = _find_free_fn_idx(m, fn)
+    if fidx < 0: return false
+    mut hf = m.hir_prog.functions.get(fidx)
+    mut frtag = _tag_of(m, hf.ret_ty)
+    if frtag < 0: return false
+    m.fn_names.push(_own(wname))
+    m.fn_ret.push(0)                                        # wrapper returns i64 (void*)
+    mut wlf = LFunc.init(_own(wname))
+    wlf.params.push("__vp")
+    wlf.add_var("__vp")
+    wlf.set_var_type("__vp", 0)
+    wlf.set_cur(wlf.new_block())
+    mut callargs = Vec[int].init(hf.params.len)
+    mut pi = 0
+    while pi < hf.params.len:
+        mut ptag = _tag_of(m, hf.params.get(pi).ty)
+        if ptag < 0 or _is_list_tag(ptag) or _is_dict_tag(ptag): return false
+        mut vpv = wlf.new_vreg()
+        wlf.emit(LInst.ILoadVar(vpv, "__vp"))
+        wlf.set_vreg_type(vpv, 0)
+        mut argi = _emit_field_get(m, wlf, vpv, pi * 8, ptag)
+        if ptag == 5:
+            mut fb = wlf.new_vreg()
+            wlf.emit(LInst.IBitsF(fb, argi))
+            wlf.set_vreg_type(fb, 5)
+            argi = fb
+        callargs.push(argi)
+        pi = pi + 1
+    if callargs.len > 6: return false
+    mut rd = wlf.new_vreg()
+    wlf.emit(LInst.ICall(rd, _own(fn), callargs))
+    wlf.set_vreg_type(rd, frtag)
+    mut vpf = wlf.new_vreg()
+    wlf.emit(LInst.ILoadVar(vpf, "__vp"))
+    wlf.set_vreg_type(vpf, 0)
+    m.add_extern("_tr_rt_raw_free")
+    mut fa = Vec[int].init(1)
+    fa.push(vpf)
+    wlf.emit(LInst.ICall(-1, "_tr_rt_raw_free", fa))
+    mut ret = rd
+    if frtag == 5:
+        mut rb = wlf.new_vreg()
+        wlf.emit(LInst.IFBits(rb, rd))
+        ret = rb
+    wlf.set_term(LTerm.TRetVal(ret))
+    m.funcs.push(wlf)
+    return true
+
+def _lower_await(m: LModule, lf: LFunc, awexpr: Pointer[HirExpr]) -> int:
+    match awexpr.read():
+        case HirExpr.ECall(callee, args, callty):
+            mut fn = _ident_name(callee)
+            if _is_null_str(fn) or fn == "" or not m.is_user_fn(fn):
+                return lower_expr(m, lf, awexpr)           # non-direct-user-fn await: run inline
+            if not _ensure_await_wrapper(m, fn): return -1
+            mut nargs = args.len
+            m.add_extern("_tr_rt_raw_alloc")
+            mut packsz = nargs * 8
+            if packsz < 8: packsz = 8
+            mut szc = lf.new_vreg()
+            lf.emit(LInst.IConst(szc, packsz))
+            mut aa = Vec[int].init(1)
+            aa.push(szc)
+            mut ab = lf.new_vreg()
+            lf.emit(LInst.ICall(ab, "_tr_rt_raw_alloc", aa))
+            lf.set_vreg_type(ab, 0)
+            mut ai = 0
+            while ai < nargs:
+                mut argv = lower_expr(m, lf, args.get(ai))
+                if argv < 0: return -1
+                mut argt = lf.vreg_type(argv)
+                if argt == 5:
+                    mut afb = lf.new_vreg()
+                    lf.emit(LInst.IFBits(afb, argv))
+                    argv = afb
+                elif argt == 1: _secure_str(m, lf, argv)   # keep alive across the coro (raw store)
+                elif argt == 10 or argt == 11: _secure_obj(m, lf, argv)
+                _emit_field_set(m, lf, ab, ai * 8, argv)
+                ai = ai + 1
+            mut faddr = lf.new_vreg()
+            lf.set_vreg_type(faddr, 12)
+            lf.emit(LInst.IFuncAddr(faddr, "_awaitwrap_" + fn))
+            m.add_extern("_tr_co_go_h")
+            mut ga = Vec[int].init(2)
+            ga.push(faddr)
+            ga.push(ab)
+            mut co = lf.new_vreg()
+            lf.emit(LInst.ICall(co, "_tr_co_go_h", ga))
+            lf.set_vreg_type(co, 0)
+            m.add_extern("_tr_co_await_h")
+            mut wa = Vec[int].init(1)
+            wa.push(co)
+            mut r = lf.new_vreg()
+            lf.emit(LInst.ICall(r, "_tr_co_await_h", wa))
+            m.add_extern("_tr_co_free_h")
+            mut fca = Vec[int].init(1)
+            fca.push(co)
+            lf.emit(LInst.ICall(-1, "_tr_co_free_h", fca))
+            mut rtag = _tag_of(m, callty)
+            if rtag < 0: rtag = 0
+            if rtag == 5:
+                mut rf = lf.new_vreg()
+                lf.emit(LInst.IBitsF(rf, r))
+                lf.set_vreg_type(rf, 5)
+                return rf
+            lf.set_vreg_type(r, rtag)
+            return r
+        case _:
+            return lower_expr(m, lf, awexpr)
+
 # Emit a call to a (mangled) user method/constructor. self_vreg >= 0 is prepended as the
 # first argument (instance methods); -1 means a static call (constructors). Result tag is
 # the method's declared return tag. Falls back if the target isn't a lowered user function.
@@ -3790,12 +3917,11 @@ def _lower_expr_impl(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                 return tpfv
             return _emit_field_get(m, lf, trl3, 8, toktag)
         case HirExpr.EAwait(awexpr, _):
-            # Cooperative async: `await f(args)` blocks for f's RESULT (the C backend runs
-            # f in a coroutine and joins), so its value equals a synchronous call. For
-            # deterministic (value-based) programs this is byte-identical to the C backend.
-            return lower_expr(m, lf, awexpr)
+            # Real green-threaded await: run the callee on a coroutine and cooperatively
+            # await its result (drives the scheduler from the top level).
+            return _lower_await(m, lf, awexpr)
         case HirExpr.EAwaitTimeout(awtexpr, _, _):
-            return lower_expr(m, lf, awtexpr)
+            return _lower_await(m, lf, awtexpr)
         case HirExpr.EListComp(lcelem, lcgens, lcty):
             return _lower_list_comp(m, lf, lcelem, lcgens, lcty)
         case HirExpr.EGeneratorExpr(geelem, geegens, geety):
@@ -5061,12 +5187,23 @@ def _lower_expr_impl(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
             match obj.read():
                 case HirExpr.EIdent(styn, _, _):
                     if styn == "Coro":
-                        # Cooperative scheduling primitives are NO-OPS in the synchronous
-                        # value model — they change scheduling/timing, never the result.
-                        if method == "sleep_ms" or method == "yield_now" or method == "park" or method == "resume" or method == "sleep":
-                            mut cnop = lf.new_vreg()
-                            lf.emit(LInst.IConst(cnop, 0))
-                            return cnop
+                        # Real cooperative scheduling primitives (green threads).
+                        if method == "yield_now":
+                            m.add_extern("_tr_co_yield_h")
+                            lf.emit(LInst.ICall(-1, "_tr_co_yield_h", Vec[int].init(0)))
+                            mut cyd = lf.new_vreg()
+                            lf.emit(LInst.IConst(cyd, 0))
+                            return cyd
+                        if (method == "sleep_ms" or method == "sleep") and margs.len >= 1:
+                            mut msv = lower_expr(m, lf, margs.get(0))
+                            if msv < 0: return -1
+                            m.add_extern("_tr_co_sleep_h")
+                            mut sma = Vec[int].init(1)
+                            sma.push(msv)
+                            lf.emit(LInst.ICall(-1, "_tr_co_sleep_h", sma))
+                            mut csd = lf.new_vreg()
+                            lf.emit(LInst.IConst(csd, 0))
+                            return csd
                     if styn == "Str" or styn == "str" or styn == "String":
                         if method == "join" and margs.len == 2:
                             mut sjl = lower_expr(m, lf, margs.get(0))

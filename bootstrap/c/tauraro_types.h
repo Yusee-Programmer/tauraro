@@ -3821,6 +3821,9 @@ __attribute__((hot)) long long _emit_field_get(LModule* m, LFunc* lf, long long 
 __attribute__((hot)) long long _lower_enum_ctor(LModule* m, LFunc* lf, TrStr ename, TrStr vname, List_ptr* margs);
 __attribute__((hot)) long long _lir_fn_ret_tag(LModule* m, HirFunction* f);
 __attribute__((hot)) long long _wrap_result(LModule* m, LFunc* lf, long long vidx, long long payv, long long paytag);
+__attribute__((hot)) long long _find_free_fn_idx(LModule* m, TrStr name);
+__attribute__((hot)) bool _ensure_await_wrapper(LModule* m, TrStr fn);
+__attribute__((hot)) long long _lower_await(LModule* m, LFunc* lf, HirExpr* awexpr);
 __attribute__((hot)) long long _lower_obj_call(LModule* m, LFunc* lf, TrStr mangled, long long self_vreg, List_ptr* margs);
 __attribute__((hot)) bool lower_block(LModule* m, LFunc* lf, HirBlock* hb);
 __attribute__((hot)) bool _run_defers(LModule* m, LFunc* lf);

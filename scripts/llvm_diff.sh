@@ -49,14 +49,18 @@ clean_build() {
     while [ -d build ] && [ "$n" -lt 50 ]; do sleep 0.1; rm -rf build 2>/dev/null; n=$((n+1)); done
 }
 
+# ws2_32 (Windows) is needed by the runtime's async scheduler reactor (WSAPoll), now that
+# runtime.o always exports the coroutine entry points.
+WINLIB=""; [ -n "$TRIPLE" ] && WINLIB="-lws2_32"
+
 build_llvm_exe() {  # $1=.ll  $2=out-exe ; echoes "" on success or an error tag
     if [ "$HAVE_CLANG" = 1 ]; then
         local f="-O2"; [ -n "$TRIPLE" ] && f="$f -target $TRIPLE"
-        "$CLANGBIN" $f "$1" "$RT" -lm -o "$2" >/tmp/ldiff.log 2>&1 || { echo "__CLANGFAIL__"; return; }
+        "$CLANGBIN" $f "$1" "$RT" -lm $WINLIB -o "$2" >/tmp/ldiff.log 2>&1 || { echo "__CLANGFAIL__"; return; }
     else
         local f="-O2 -filetype=obj"; [ -n "$TRIPLE" ] && f="$f -mtriple=$TRIPLE"
         "$LLCBIN" $f "$1" -o "$2.o" >/tmp/ldiff.log 2>&1 || { echo "__LLCFAIL__"; return; }
-        "$CC" "$2.o" "$RT" -lm -o "$2" >/tmp/ldiff.log 2>&1 || { echo "__LINKFAIL__"; return; }
+        "$CC" "$2.o" "$RT" -lm $WINLIB -o "$2" >/tmp/ldiff.log 2>&1 || { echo "__LINKFAIL__"; return; }
     fi
     echo ""
 }
