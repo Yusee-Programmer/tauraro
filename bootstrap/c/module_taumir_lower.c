@@ -9141,6 +9141,14 @@ __auto_type tokty = _t2403.data.ETryExpr.ty;
         /* pass */
         _tr_str_release(tnm);
         return _emit_field_get(m, lf, trl3, 8LL, toktag);
+    } else if (_t2403.tag == HirExpr_EAwait) {
+        __auto_type awexpr = _t2403.data.EAwait.expr;
+        /* pass */
+        return lower_expr(m, lf, awexpr);
+    } else if (_t2403.tag == HirExpr_EAwaitTimeout) {
+        __auto_type awtexpr = _t2403.data.EAwaitTimeout.expr;
+        /* pass */
+        return lower_expr(m, lf, awtexpr);
     } else if (_t2403.tag == HirExpr_EListComp) {
         __auto_type lcelem = _t2403.data.EListComp.element;
 __auto_type lcgens = _t2403.data.EListComp.generators;
@@ -12505,6 +12513,18 @@ __auto_type margs = _t2403.data.EMethodCall.args;
         __auto_type _t2437 = (*obj);
         if (_t2437.tag == HirExpr_EIdent) {
             __auto_type styn = _t2437.data.EIdent.name;
+            /* pass */
+            if ((strcmp(_tr_strz(styn), _tr_strz(_tr_str_lit("Coro"))) == 0)) {
+                /* pass */
+                if ((((((strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("sleep_ms"))) == 0) || (strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("yield_now"))) == 0)) || (strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("park"))) == 0)) || (strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("resume"))) == 0)) || (strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("sleep"))) == 0))) {
+                    /* pass */
+                    long long cnop = LFunc_new_vreg(lf);
+                    /* pass */
+                    LFunc_emit(lf, LInst_ctor_IConst(cnop, 0LL));
+                    /* pass */
+                    return cnop;
+                }
+            }
             /* pass */
             if ((((strcmp(_tr_strz(styn), _tr_strz(_tr_str_lit("Str"))) == 0) || (strcmp(_tr_strz(styn), _tr_strz(_tr_str_lit("str"))) == 0)) || (strcmp(_tr_strz(styn), _tr_strz(_tr_str_lit("String"))) == 0))) {
                 /* pass */

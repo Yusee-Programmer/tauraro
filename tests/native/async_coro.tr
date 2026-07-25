@@ -1,0 +1,32 @@
+# native≡c / llvm≡c differential corpus: cooperative async WITH the Coro scheduler
+# primitives (sleep_ms/yield_now). The LLVM backend lowers await->synchronous call and
+# treats cooperative yield points as no-ops (they never affect a deterministic result),
+# and links the no-op coro_stub.c — so the values match the C backend's coroutine runtime.
+from std.async.coro import Coro
+
+async def compute(a: int, b: int) -> int:
+    return a * b + 1
+
+async def delayed(n: int) -> int:
+    Coro.sleep_ms(5)
+    return n + 100
+
+async def stepper(base: int) -> int:
+    mut acc = base
+    mut i = 0
+    while i < 3:
+        acc = acc + 1
+        Coro.yield_now()
+        i = i + 1
+    return acc
+
+async def nested(x: int) -> int:
+    mut a: int = await compute(x, 2)
+    mut b: int = await delayed(a)
+    return b
+
+async def main():
+    print(await compute(6, 7))     # 43
+    print(await delayed(5))        # 105
+    print(await stepper(10))       # 13
+    print(await nested(4))         # 109

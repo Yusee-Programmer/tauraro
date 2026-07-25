@@ -38,6 +38,7 @@ bootstrap/*.zip
 # points / a destructor), not generated C — must be tracked despite the broad *.c rule.
 !runtime/native_abi.c
 !runtime/native_leak_probe.c
+!runtime/coro_stub.c
 # Python bytecode is never source:
 __pycache__/
 *.pyc

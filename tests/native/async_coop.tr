@@ -1,0 +1,28 @@
+# native≡c / llvm≡c differential corpus: cooperative async — `async def` + `await`. The
+# LLVM backend lowers `await f()` to a synchronous call (blocks for f's value, exactly the
+# value the C backend's coroutine+join produces), so deterministic programs are identical.
+async def compute(a: int, b: int) -> int:
+    return a * b + 1
+
+async def add_hundred(n: int) -> int:
+    return n + 100
+
+async def nested(x: int) -> int:
+    mut a: int = await compute(x, 2)
+    mut b: int = await add_hundred(a)
+    return b
+
+async def main():
+    mut r1: int = await compute(6, 7)
+    print(r1)                # 43
+    mut r2: int = await add_hundred(5)
+    print(r2)                # 105
+    mut r4: int = await nested(4)
+    print(r4)                # 109
+    mut total = 0
+    mut k = 0
+    while k < 50:
+        mut v: int = await compute(k, 1)
+        total = total + v
+        k = k + 1
+    print(total)             # 1275

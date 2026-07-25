@@ -3789,6 +3789,13 @@ def _lower_expr_impl(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                 lf.set_vreg_type(tpfv, 5)
                 return tpfv
             return _emit_field_get(m, lf, trl3, 8, toktag)
+        case HirExpr.EAwait(awexpr, _):
+            # Cooperative async: `await f(args)` blocks for f's RESULT (the C backend runs
+            # f in a coroutine and joins), so its value equals a synchronous call. For
+            # deterministic (value-based) programs this is byte-identical to the C backend.
+            return lower_expr(m, lf, awexpr)
+        case HirExpr.EAwaitTimeout(awtexpr, _, _):
+            return lower_expr(m, lf, awtexpr)
         case HirExpr.EListComp(lcelem, lcgens, lcty):
             return _lower_list_comp(m, lf, lcelem, lcgens, lcty)
         case HirExpr.EGeneratorExpr(geelem, geegens, geety):
@@ -5053,6 +5060,13 @@ def _lower_expr_impl(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
             # sep), Str.len(s). Only the forms with a direct runtime symbol are native.
             match obj.read():
                 case HirExpr.EIdent(styn, _, _):
+                    if styn == "Coro":
+                        # Cooperative scheduling primitives are NO-OPS in the synchronous
+                        # value model — they change scheduling/timing, never the result.
+                        if method == "sleep_ms" or method == "yield_now" or method == "park" or method == "resume" or method == "sleep":
+                            mut cnop = lf.new_vreg()
+                            lf.emit(LInst.IConst(cnop, 0))
+                            return cnop
                     if styn == "Str" or styn == "str" or styn == "String":
                         if method == "join" and margs.len == 2:
                             mut sjl = lower_expr(m, lf, margs.get(0))
