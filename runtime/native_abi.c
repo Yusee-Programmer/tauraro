@@ -10,6 +10,8 @@
 #define _TR_EXPORT_CORO   /* export the coroutine scheduler entry points (_tr_co_*_h) as
                            * real symbols so the LLVM/native backend's async/await runs on
                            * the true green-thread scheduler, not a no-op shim. */
+#define _TR_EXPORT_RT     /* export the std/core memory helpers (_tr_checked_alloc,
+                           * _tr_c_realloc/free/memcpy) so std collections (Vec/String) link. */
 #include "tauraro_rt.h"
 #include <math.h>
 
@@ -922,6 +924,15 @@ void* _tr_rt_raw_alloc(int64_t nbytes) {
     return calloc(1, (size_t)nbytes);
 }
 void _tr_rt_raw_free(void* p) { if (p) free(p); }
+/* Reinterpret a pointer as its raw i64 address (str/object -> Pointer[T] casts). Keeps
+ * the LLVM types honest: a `ptr` value in, an `i64` out — no in-place vreg-tag punning. */
+int64_t _tr_rt_ptr_addr(void* p) { return (int64_t)(intptr_t)p; }
+
+/* Byte-granular raw pointer access for Pointer[char] (C strings): read/write ONE byte
+ * (0..255) at an address. Used by string-library byte loops (Str.index_of, StrView, ...). */
+int64_t _tr_rt_load_u8(int64_t addr) { return (int64_t)(unsigned char)(*(unsigned char*)(intptr_t)addr); }
+void _tr_rt_store_u8(int64_t addr, int64_t v) { *(unsigned char*)(intptr_t)addr = (unsigned char)v; }
+
 int64_t _tr_rt_field_get_i(void* obj, int64_t off) {
     return *(int64_t*)((char*)obj + off);
 }

@@ -1521,7 +1521,8 @@ def _ptr_stride(m: LModule, pty: AstType) -> int:
     if _is_null_str(en): return 8
     if en == "int" or en == "i64" or en == "u64" or en == "usize" or en == "isize": return 8
     if en == "float" or en == "f64": return 8
-    if en == "str" or en == "String" or en == "char" or en == "bool": return 8   # all 8-byte slots
+    if en == "char" or en == "u8" or en == "i8": return 1        # byte pointer (C strings)
+    if en == "str" or en == "String" or en == "bool": return 8   # 8-byte slots
     if m.is_class(en) or m.is_enum(en): return 8
     if en == "Pointer": return 8
     return 0
@@ -1658,7 +1659,18 @@ def _lower_stmt_impl(m: LModule, lf: LFunc, s: Pointer[HirStmt]) -> bool:
                 lf.set_term(LTerm.TRetInt(0))
             return true
         case HirStmt.SLet(name, _, _, _, _, ty, val):
-            if val as usize == 0 as usize: return false
+            if val as usize == 0 as usize:
+                # Declaration WITHOUT an initializer (`mut x: int`): register the slot from
+                # the type annotation, no store. The front-end's definite-assignment check
+                # guarantees a store (SAssign) reaches every read, so the uninitialized slot
+                # is never observed — matching the C backend's bare `long long x;`. Restricted
+                # to SCALAR tags (int/float/bool): a str/object slot has a drop, and an
+                # unassigned-at-scope-exit slot would release garbage -> fall back to C.
+                mut dtag = _tag_of(m, ty)
+                if dtag != 0 and dtag != 4 and dtag != 5: return false
+                lf.add_var(name)
+                lf.set_var_type(name, dtag)
+                return true
             mut v = lower_expr(m, lf, val)
             if v < 0: return false
             # An empty list/dict literal `[]`/`{}` has no element info; use the declared type
@@ -3879,6 +3891,13 @@ def _lower_expr_impl(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
             mut cd = lf.new_vreg()
             lf.emit(LInst.IConst(cd, cval))          # a char is its byte value (int) in the LIR
             return cd
+        case HirExpr.ESizeOf(_, _):
+            # Every value in the LIR occupies one 8-byte slot (the uniform element stride
+            # used by Pointer[T] ops and collections), so sizeof(T) is 8 — consistent with
+            # _ptr_stride, which is what alloc/access actually use.
+            mut szd = lf.new_vreg()
+            lf.emit(LInst.IConst(szd, 8))
+            return szd
         case HirExpr.ETryExpr(texpr, tokty):
             # `expr?`: expr yields Result[T,E]. If Err, propagate (return the Result from
             # the current `throws` fn); else the expression value is the unwrapped Ok payload.
@@ -4009,16 +4028,35 @@ def _lower_expr_impl(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                 return r
             # `x as str` where x is already a str: no-op (str IS char* in the LIR).
             if (ctn == "str" or ctn == "String") and cvt == 1: return cv
+            # `ptr as str`: a raw Pointer[char] (tag 0 = i64 address) -> an owned rc string
+            # by copying the C string (the C backend wraps in place; copy gives the same
+            # bytes and is UAF-safe — the original buffer just leaks, never a double-free).
+            if (ctn == "str" or ctn == "String") and cvt == 0:
+                m.add_extern("_tr_rt_str_new")
+                mut sna = Vec[int].init(1)
+                sna.push(cv)
+                mut snd = lf.new_vreg()
+                lf.emit(LInst.ICall(snd, "_tr_rt_str_new", sna))
+                lf.set_vreg_type(snd, 1)
+                _fresh_mark(lf, snd)
+                return snd
             # `x as char`: a char is a byte value held in an int slot (int/bool -> no-op).
             if ctn == "char" and (cvt == 0 or cvt == 4):
                 lf.set_vreg_type(cv, 0)
                 return cv
-            # `x as Pointer[T]`: a str/int/object value already IS an address in the LIR
-            # (a bare fn name reaches here as its code address via EIdent/IFuncAddr).
+            # `x as Pointer[T]`: an int address is already tag 0; a str/object PTR value is
+            # reinterpreted to its i64 address (a real ptr->i64, not a vreg-tag pun, so the
+            # LLVM types stay consistent).
             if ctn == "Pointer":
-                if cvt == 1 or cvt == 0 or cvt == 10 or cvt == 11:
-                    lf.set_vreg_type(cv, 0)
-                    return cv
+                if cvt == 0: return cv
+                if cvt == 1 or cvt == 10 or cvt == 11 or cvt == 12:
+                    m.add_extern("_tr_rt_ptr_addr")
+                    mut paa = Vec[int].init(1)
+                    paa.push(cv)
+                    mut pad = lf.new_vreg()
+                    lf.emit(LInst.ICall(pad, "_tr_rt_ptr_addr", paa))
+                    lf.set_vreg_type(pad, 0)
+                    return pad
                 return -1
             return -1                                 # str/ptr/List casts: later increment
         case HirExpr.EIdent(name, _, _):
@@ -4440,6 +4478,16 @@ def _lower_expr_impl(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                 lf.set_vreg_type(ffd, frt)
                 if frt == 1: _fresh_mark(lf, ffd)
                 return ffd
+            # Functor call `obj(args)` where obj is a class instance defining `__call__`
+            # -> obj.__call__(args) (zero-cost static dispatch, same as the other dunders).
+            if lf.var_index(fn) >= 0:
+                mut callcls = _recv_class(m, lf, callee)
+                if callcls != "" and m.is_class(callcls):
+                    mut callm = m.resolve_method(callcls, "__call__")
+                    if callm != "":
+                        mut callself = lower_expr(m, lf, callee)
+                        if callself < 0: return -1
+                        return _lower_obj_call(m, lf, callm, callself, args)
             # Bare construction of a generic instantiation `Box[T]()` (callee's HIR type
             # carries the args; under an active subst T resolves concretely).
             if args.len == 0 and _prog_generic_class_index(m, fn) >= 0:
@@ -5222,11 +5270,12 @@ def _lower_expr_impl(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                 mut pty = hir_expr_type(obj)
                 mut pstride = _ptr_stride(m, pty)
                 if pstride == 0: return -1
+                mut pbyte = pstride == 1          # Pointer[char]/u8/i8: 1-byte access
                 mut petag = 0                     # element value-type tag (from T, subst-resolved)
                 if pty.args.len > 0:
                     mut petn = _subst_ty(m, pty.args.get(0).read()).name
                     if petn == "float" or petn == "f64": petag = 5
-                    elif petn == "str" or petn == "String" or petn == "char": petag = 1
+                    elif petn == "str" or petn == "String": petag = 1
                     elif petn == "bool": petag = 4
                     elif m.is_class(petn): petag = 10
                     elif m.is_enum(petn): petag = 11
@@ -5245,6 +5294,13 @@ def _lower_expr_impl(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                     lf.set_vreg_type(padr, 0)
                     return padr
                 if (method == "read" or method == "deref") and margs.len == 0:
+                    if pbyte:                       # Pointer[char]: load ONE byte -> int (0..255)
+                        m.add_extern("_tr_rt_load_u8")
+                        mut lba = Vec[int].init(1)
+                        lba.push(pbase)
+                        mut lbd = lf.new_vreg()
+                        lf.emit(LInst.ICall(lbd, "_tr_rt_load_u8", lba))
+                        return lbd
                     # *p -> load an 8-byte value at [p] (float via IBitsF).
                     if petag == 5:
                         mut prraw = _emit_field_get(m, lf, pbase, 0, 0)
@@ -5257,6 +5313,13 @@ def _lower_expr_impl(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                     # *p = v.
                     mut pwv = lower_expr(m, lf, margs.get(0))
                     if pwv < 0: return -1
+                    if pbyte:                       # Pointer[char]: store ONE byte
+                        m.add_extern("_tr_rt_store_u8")
+                        mut sba = Vec[int].init(2)
+                        sba.push(pbase)
+                        sba.push(pwv)
+                        lf.emit(LInst.ICall(-1, "_tr_rt_store_u8", sba))
+                        return pbase
                     if petag == 5:
                         mut pwvt = lf.vreg_type(pwv)
                         if pwvt == 0: pwv = _promote_f(lf, pwv)
@@ -5296,6 +5359,21 @@ def _lower_expr_impl(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                             lf.emit(LInst.ICall(vnd, "_tr_rt_list_new", Vec[int].init(0)))
                             lf.set_vreg_type(vnd, 21)
                             return vnd
+                    # List[T].init(cap) / .new() — same list runtime as a `[]` literal; the
+                    # capacity arg is advisory (the runtime list auto-grows), so it's ignored.
+                    # The element T is resolved through any active subst (T -> int in a mono).
+                    if inm == "List" and (method == "init" or method == "new"):
+                        mut ltag2 = -1
+                        if ity_g.args.len > 0:
+                            mut letag = _tag_of(m, _subst_ty(m, ity_g.args.get(0).read()))
+                            if letag == 4: letag = 0
+                            ltag2 = _list_tag_for_elem(letag)
+                        if ltag2 < 0 or not _is_list_tag(ltag2): return -1
+                        m.add_extern("_tr_rt_list_new")
+                        mut lnd = lf.new_vreg()
+                        lf.emit(LInst.ICall(lnd, "_tr_rt_list_new", Vec[int].init(0)))
+                        lf.set_vreg_type(lnd, ltag2)
+                        return lnd
                     if _prog_generic_class_index(m, inm) >= 0 and ity_g.args.len > 0:
                         mut gsm = _ensure_generic_class(m, ity_g)
                         if gsm == "": return -1

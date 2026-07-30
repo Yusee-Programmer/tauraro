@@ -1,0 +1,27 @@
+class Multiplier:
+    factor: int
+    def init(factor: int) -> Multiplier:
+        mut m = Multiplier()
+        m.factor = factor
+        return m
+    def __call__(self, x: int) -> int:
+        return self.factor * x
+
+class Adder:
+    base: int
+    def init(base: int) -> Adder:
+        mut a = Adder()
+        a.base = base
+        return a
+    def __call__(self, x: int, y: int) -> int:
+        return self.base + x + y
+
+def main():
+    mut triple = Multiplier.init(3)
+    mut r1: int = triple(7)
+    mut r2: int = triple(10)
+    print(r1)
+    print(r2)
+    mut add = Adder.init(100)
+    mut r3: int = add(5, 6)
+    print(r3)

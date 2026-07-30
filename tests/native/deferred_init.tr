@@ -1,0 +1,24 @@
+def main():
+    mut x: int
+    x = 42
+    print(x)
+
+    mut flag = true
+    mut y: int
+    if flag: y = 10
+    else:    y = 20
+    print(y)
+
+    mut total: int
+    total = 0
+    for i in range(5): total = total + i
+    print(total)
+
+    mut f: float
+    f = 3.5
+    print(f)
+
+    mut b: bool
+    b = false
+    if b: print(1)
+    else: print(0)

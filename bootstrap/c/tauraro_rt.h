@@ -395,7 +395,16 @@ static inline void* _tr_c_calloc(size_t count, size_t size) {
 static inline void _tr_free(void* p) {
     if (p) { _TR_MEMCOUNT_DEC(); TAURARO_FREE(p); }
 }
-static inline void _tr_c_free(void* ptr) { _tr_free(ptr); }
+/* Runtime memory helpers used by std/core (Vec/String) via `extern "C"` decls. `static
+ * inline` for the C backend (#includes this header, inlines them); EXPORTED as real
+ * symbols for the NATIVE/LLVM backend (native_abi.c #defines _TR_EXPORT_RT) so those std
+ * collections link. */
+#ifdef _TR_EXPORT_RT
+#define _TR_XLINK
+#else
+#define _TR_XLINK static inline
+#endif
+_TR_XLINK void _tr_c_free(void* ptr) { _tr_free(ptr); }
 
 #ifndef TAURARO_KERNEL
 static inline void _tr_print(char* s) { printf("%s\n", s); }
@@ -410,7 +419,7 @@ static inline void _tr_print_raw(char* s) { _TR_WRITE(s); }
 static inline void _tr_eprint(char* s) { _TR_WRITE(s); _TR_WRITE("\n"); }
 #endif
 
-static inline void* _tr_c_realloc(void* ptr, size_t size) {
+_TR_XLINK void* _tr_c_realloc(void* ptr, size_t size) {
     void* p = TAURARO_REALLOC(ptr, size);
     /* realloc(NULL, n) acts as malloc -> a new live block; realloc of an
      * existing block frees the old internally (no _tr_free) and keeps the
@@ -418,7 +427,7 @@ static inline void* _tr_c_realloc(void* ptr, size_t size) {
     if (!ptr && p) _TR_MEMCOUNT_INC();
     return p;
 }
-static inline void* _tr_checked_alloc(size_t sz) {
+_TR_XLINK void* _tr_checked_alloc(size_t sz) {
     void* p = TAURARO_CALLOC(1, sz);
     if (!p && sz > 0) { _TR_OOM_ABORT(); }
     if (p) _TR_MEMCOUNT_INC();
@@ -647,7 +656,7 @@ static inline void _tr_weak_drop(_TrWeakBox* w) {
     _tr_free(w);
 }
 
-static inline void* _tr_c_memcpy(void* dst, void* src, size_t n) { return memcpy(dst, src, n); }
+_TR_XLINK void* _tr_c_memcpy(void* dst, void* src, size_t n) { return memcpy(dst, src, n); }
 static inline void* _tr_c_memset(void* ptr, int val, size_t n) { return memset(ptr, val, n); }
 static inline void* _tr_c_memmove(void* dst, void* src, size_t n) { return memmove(dst, src, n); }
 /* File I/O + env: std-tier only (need <stdio.h>'s FILE / getenv). Gated so a

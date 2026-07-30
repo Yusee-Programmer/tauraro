@@ -1,0 +1,23 @@
+def main():
+    mut a = List[int].init(4)
+    a.push(1)
+    a.push(2)
+    a.push(3)
+    mut i = 0
+    mut total = 0
+    while i < a.len:
+        total = total + a.get(i)
+        i = i + 1
+    print(total)
+    print(a.len)
+
+    mut s = List[str].new()
+    s.push("hi")
+    s.push("yo")
+    print(s.len)
+    print(s.get(0))
+
+    mut f = List[float].init(2)
+    f.push(1.5)
+    f.push(2.5)
+    print(f.get(1))
