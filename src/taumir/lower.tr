@@ -1893,6 +1893,10 @@ def _lower_stmt_impl(m: LModule, lf: LFunc, s: Pointer[HirStmt]) -> bool:
             lf.add_var(w_var)
             lf.set_var_type(w_var, 10)
             lf.emit(LInst.IStoreVar(w_var, wctx))
+            # w_var OWNS the context for the whole block: take a fresh factory result out of
+            # the fresh set (else the body's first flush would release it -> __exit__ reads a
+            # freed object -> its str fields come back empty). Balanced by a release after __exit__.
+            mut w_owns = _fresh_take_obj(lf, wctx)
             mut w_ea = Vec[int].init(1)
             w_ea.push(wctx)
             mut w_rd = lf.new_vreg()
@@ -1921,6 +1925,7 @@ def _lower_stmt_impl(m: LModule, lf: LFunc, s: Pointer[HirStmt]) -> bool:
                 w_xa.push(w_es)
                 w_ei = w_ei + 1
             lf.emit(LInst.ICall(-1, w_exit, w_xa))
+            if w_owns: _release_obj(m, lf, w_c2)   # drop the context we owned (balanced with the fresh-take)
             return true
         case HirStmt.STry(try_body, catches, finally_b):
             # ZERO-COST lexical exceptions: a `raise` inside this try (same function)
@@ -1973,9 +1978,22 @@ def _lower_stmt_impl(m: LModule, lf: LFunc, s: Pointer[HirStmt]) -> bool:
                 lf.set_term(LTerm.TRetVal(errr))
                 lf.set_cur(lf.new_block())
                 return true
-            # Only meaningful INSIDE a lexical try (see STry). Elsewhere the raise would
-            # need cross-frame unwinding -> this fn becomes unavailable, never wrong code.
-            if lf.try_blks.len == 0: return false
+            # Uncaught raise (no lexical try in this fn, not a `throws` fn): PANIC exactly like
+            # the C backend — _tr_exc_raise prints "Unhandled exception" and traps (or longjmps
+            # to a thread panic handler if one is installed). Message must be a str. It doesn't
+            # return, so no terminator is set (the enclosing branch / fn-end supplies one; the
+            # fall-through is never observed at runtime).
+            if lf.try_blks.len == 0:
+                if rval as usize == 0 as usize: return false
+                mut pv = lower_expr(m, lf, rval)
+                if pv < 0: return false
+                if lf.vreg_type(pv) != 1: return false     # str messages only (matches C)
+                m.add_extern("_tr_exc_raise")
+                mut pa = Vec[int].init(1)
+                pa.push(pv)
+                lf.emit(LInst.ICall(-1, "_tr_exc_raise", pa))
+                _flush_fresh_strs(m, lf)
+                return true
             if rval as usize != 0 as usize:
                 mut rv = lower_expr(m, lf, rval)
                 if rv < 0: return false
@@ -2001,7 +2019,7 @@ def _lower_stmt_impl(m: LModule, lf: LFunc, s: Pointer[HirStmt]) -> bool:
         case HirStmt.SUnsafe(ubody):
             return lower_block(m, lf, ubody)
         case _:
-            if m.fail_note == "": m.fail_note = "unsupported statement kind"
+            if m.fail_note == "": m.fail_note = "unsupported statement kind: " + _stmt_kind(s)
             return false
 
 pub def lower_stmt(m: LModule, lf: LFunc, s: Pointer[HirStmt]) -> bool:
@@ -2208,8 +2226,14 @@ def _lower_match(m: LModule, lf: LFunc, expr: Pointer[HirExpr], arms: Vec[HirMat
 
 # Sema lowers `Option.None` patterns with variant "" or "none" — normalize to "None".
 def _norm_variant(ename: str, vn: str) -> str:
+    # Accept the lowercase method-style ctors (Option.some(x)/Option.none(),
+    # Result.ok(v)/Result.err(e)) as aliases for the capitalized variants.
     if ename == "Option":
         if _is_null_str(vn) or vn == "" or vn == "none": return "None"
+        if vn == "some": return "Some"
+    if ename == "Result":
+        if vn == "ok": return "Ok"
+        if vn == "err": return "Err"
     return vn
 
 # tag-of-variant condition: (subj.tag == vidx) as a bool vreg.
@@ -3325,6 +3349,18 @@ def _obj_to_str(m: LModule, lf: LFunc, objexpr: Pointer[HirExpr], objreg: int) -
         if oself < 0: return -1
     mut sd = _lower_obj_call(m, lf, osm, oself, Vec[Pointer[HirExpr]].init(0))
     return sd
+
+    # repr(obj): a class's __repr__ if it has one, else its __str__ (matches the C backend).
+def _obj_repr(m: LModule, lf: LFunc, objexpr: Pointer[HirExpr], objreg: int) -> int:
+    mut rcls = _recv_class(m, lf, objexpr)
+    if rcls == "" or not m.is_class(rcls): return -1
+    mut rm = m.resolve_method(rcls, "__repr__")
+    if rm == "": return _obj_to_str(m, lf, objexpr, objreg)
+    mut rself = objreg
+    if rself < 0:
+        rself = lower_expr(m, lf, objexpr)
+        if rself < 0: return -1
+    return _lower_obj_call(m, lf, rm, rself, Vec[Pointer[HirExpr]].init(0))
 
 def _reg_to_str(m: LModule, lf: LFunc, reg: int) -> int:
     mut t = lf.vreg_type(reg)
@@ -4637,6 +4673,16 @@ def _lower_expr_impl(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                 mut mmd = lf.new_vreg()
                 lf.emit(LInst.ICall(mmd, msym, mma))
                 return mmd
+            if fn == "repr" and args.len == 1:     # repr(obj/str/scalar): __repr__|__str__, else str-cast
+                mut rprc = _recv_class(m, lf, args.get(0))
+                if rprc != "" and m.is_class(rprc):
+                    mut rprr = _obj_repr(m, lf, args.get(0), -1)
+                    if rprr >= 0: return rprr
+                    return -1
+                mut rpv = lower_expr(m, lf, args.get(0))
+                if rpv < 0: return -1
+                if lf.vreg_type(rpv) == 1: return rpv   # repr(str) = the string itself
+                return _reg_to_str(m, lf, rpv)
             if fn == "str" and args.len == 1:      # str(int)/str(bool)/str(str)/str(obj)
                 mut sobjc = _recv_class(m, lf, args.get(0))
                 if sobjc != "" and m.is_class(sobjc) and m.resolve_method(sobjc, "__str__") != "":
@@ -5252,6 +5298,20 @@ def _lower_expr_impl(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                             mut csd = lf.new_vreg()
                             lf.emit(LInst.IConst(csd, 0))
                             return csd
+                    if styn == "Thread":
+                        # Thread.sleep(ms): a timing-only delay (no effect on any computed
+                        # value / stdout). Lower it to the cooperative sleep so it yields to the
+                        # scheduler instead of blocking — output stays identical to the C backend.
+                        if method == "sleep" and margs.len >= 1:
+                            mut tmsv = lower_expr(m, lf, margs.get(0))
+                            if tmsv < 0: return -1
+                            m.add_extern("_tr_co_sleep_h")
+                            mut tsa = Vec[int].init(1)
+                            tsa.push(tmsv)
+                            lf.emit(LInst.ICall(-1, "_tr_co_sleep_h", tsa))
+                            mut tsd = lf.new_vreg()
+                            lf.emit(LInst.IConst(tsd, 0))
+                            return tsd
                     if styn == "Str" or styn == "str" or styn == "String":
                         if method == "join" and margs.len == 2:
                             mut sjl = lower_expr(m, lf, margs.get(0))
@@ -5505,6 +5565,27 @@ def _lower_expr_impl(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                 mut giv = lower_expr(m, lf, margs.get(0))
                 if giv < 0: return -1
                 return _list_get_elem(m, lf, ovmt, ovm, giv)
+            if method == "set" and margs.len == 2:      # list.set(i, v) == list[i] = v
+                mut sti = lower_expr(m, lf, margs.get(0))
+                if sti < 0 or lf.vreg_type(sti) != 0: return -1
+                mut stv = lower_expr(m, lf, margs.get(1))
+                if stv < 0: return -1
+                mut stvt = lf.vreg_type(stv)
+                if want_elem == 0 and stvt == 4: stvt = 0
+                if stvt != want_elem: return -1
+                if want_elem == 1: _secure_str(m, lf, stv)     # list owns the str element (old one leaks, never UAF)
+                if want_elem == 10 or want_elem == 11 or want_elem == 15: _secure_obj(m, lf, stv)
+                if want_elem == 5:                             # store the f64 bit pattern
+                    mut stfb = lf.new_vreg()
+                    lf.emit(LInst.IFBits(stfb, stv))
+                    stv = stfb
+                m.add_extern("_tr_rt_list_set_i64")
+                mut sta = Vec[int].init(3)
+                sta.push(ovm)
+                sta.push(sti)
+                sta.push(stv)
+                lf.emit(LInst.ICall(-1, "_tr_rt_list_set_i64", sta))
+                return ovm
             if method == "pop" and margs.len == 0:
                 m.add_extern("_tr_rt_list_pop_i64")
                 mut poa = Vec[int].init(1)

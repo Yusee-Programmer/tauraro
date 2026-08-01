@@ -1,0 +1,29 @@
+class Point:
+    x: int
+    y: int
+    def init(x: int, y: int) -> Point:
+        mut p = Point()
+        p.x = x
+        p.y = y
+        return p
+    def __str__(self) -> str:
+        return f"({self.x}, {self.y})"
+    def __repr__(self) -> str:
+        return f"Point(x={self.x}, y={self.y})"
+
+class Tag:
+    name: str
+    def init(name: str) -> Tag:
+        mut t = Tag()
+        t.name = name
+        return t
+    def __str__(self) -> str:
+        return f"<{self.name}>"
+
+def main():
+    mut p = Point.init(3, 4)
+    print(repr(p))
+    print(str(p))
+    mut t = Tag.init("hello")
+    print(repr(t))
+    print(repr("plain string"))

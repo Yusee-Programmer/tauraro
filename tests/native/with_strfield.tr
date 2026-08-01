@@ -1,0 +1,26 @@
+class Ctx:
+    name: str
+    n: int
+    def init(name: str) -> Ctx:
+        mut c = Ctx()
+        c.name = name
+        c.n = 0
+        return c
+    def __enter__(self) -> Ctx:
+        print(f"[open] {self.name}")
+        return self
+    def __exit__(self, a: str, b: str, c: str) -> bool:
+        print(f"[close] {self.name} n={self.n}")
+        return false
+    def bump(self):
+        self.n = self.n + 1
+
+def main():
+    with Ctx.init("first") as f:
+        f.bump()
+        f.bump()
+        print("body")
+    with Ctx.init("second") as g:
+        g.bump()
+        print("body2")
+    print("done")

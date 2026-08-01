@@ -3882,6 +3882,7 @@ __attribute__((hot)) long long _norm_bool(LFunc* lf, long long v);
 __attribute__((hot)) long long _str_call0(LModule* m, LFunc* lf, TrStr sym, long long _tr_v_recv, long long restype);
 __attribute__((hot)) long long _heap_lit(LModule* m, LFunc* lf, TrStr s);
 __attribute__((hot)) long long _obj_to_str(LModule* m, LFunc* lf, HirExpr* objexpr, long long objreg);
+__attribute__((hot)) long long _obj_repr(LModule* m, LFunc* lf, HirExpr* objexpr, long long objreg);
 __attribute__((hot)) long long _reg_to_str(LModule* m, LFunc* lf, long long reg);
 __attribute__((hot)) long long _str_concat2(LModule* m, LFunc* lf, long long a, long long b);
 __attribute__((hot)) long long _tuple_to_str(LModule* m, LFunc* lf, long long tup, AstType* ty);

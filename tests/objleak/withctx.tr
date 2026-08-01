@@ -1,0 +1,37 @@
+# Object-leak oracle case: a `with` context manager over an object with a str field,
+# in a loop. The context object we own for the block must be released after __exit__
+# (balanced with the fresh-take), so the live count on the last line is 0.
+extern "C":
+    def _tr_rt_obj_live_count() -> int
+
+class Ctx:
+    name: str
+    n: int
+
+extend Ctx:
+    def init(name: str) -> Ctx:
+        mut c = Ctx()
+        c.name = name
+        c.n = 0
+        return c
+    def __enter__(self) -> Ctx:
+        return self
+    def __exit__(self, a: str, b: str, c: str) -> bool:
+        return false
+    def bump(self):
+        self.n = self.n + 1
+
+def run(iters: int) -> int:
+    mut total = 0
+    mut i = 0
+    while i < iters:
+        with Ctx.init("resource") as r:
+            r.bump()
+            r.bump()
+            total = total + r.n
+        i = i + 1
+    return total
+
+def main():
+    print(run(1000))                # 2000
+    print(_tr_rt_obj_live_count())  # 0

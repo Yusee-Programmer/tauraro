@@ -3341,7 +3341,7 @@ static void _tr_exc_push(jmp_buf* b, char** m) {
     }
 }
 static void _tr_exc_pop(void)  { if (_tr_exc_sp > 0) _tr_exc_sp--; }
-static void _tr_exc_raise(char* msg) {
+_TR_XLINK void _tr_exc_raise(char* msg) {
     if (_tr_exc_sp > 0) {
         _tr_exc_sp--;
         *_tr_exc_msgs[_tr_exc_sp] = msg;
