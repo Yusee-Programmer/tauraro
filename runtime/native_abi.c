@@ -928,6 +928,24 @@ void _tr_rt_raw_free(void* p) { if (p) free(p); }
  * the LLVM types honest: a `ptr` value in, an `i64` out — no in-place vreg-tag punning. */
 int64_t _tr_rt_ptr_addr(void* p) { return (int64_t)(intptr_t)p; }
 
+/* try/except boundary for the native+LLVM backends. setjmp CANNOT be emitted portably in
+ * those backends (on mingw it's a macro over _setjmpex with SEH frame args), so the
+ * setjmp/longjmp stays HERE in the C runtime and the backend outlines the try-body and
+ * except-body to functions (env = captured locals by ref). Mirrors the C backend's
+ * gen_try protocol exactly: push a handler, run try; a raise anywhere below (this frame
+ * or a callee) longjmps back here with the message; on catch, invoke the except fn. */
+void _tr_rt_try_catch(void (*tfn)(void*), void (*cfn)(void*, char*), void* env) {
+    jmp_buf jb; char* em = NULL;
+    _tr_exc_push(&jb, &em);
+    if (setjmp(jb) == 0) {
+        tfn(env);
+        _tr_exc_pop();          /* normal completion: remove our handler */
+    } else {
+        /* _tr_exc_raise already popped (sp-- before longjmp); just run the catch */
+        if (cfn) cfn(env, em);
+    }
+}
+
 /* Byte-granular raw pointer access for Pointer[char] (C strings): read/write ONE byte
  * (0..255) at an address. Used by string-library byte loops (Str.index_of, StrView, ...). */
 int64_t _tr_rt_load_u8(int64_t addr) { return (int64_t)(unsigned char)(*(unsigned char*)(intptr_t)addr); }

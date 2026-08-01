@@ -37,7 +37,7 @@ fi
 # default triple is correct.
 TRIPLE=""
 case "$(uname -s 2>/dev/null)" in *NT*|*MINGW*|*MSYS*|*CYGWIN*) TRIPLE="x86_64-pc-windows-gnu";; esac
-WINLIB=""; [ -n "$TRIPLE" ] && WINLIB="-lws2_32"  # runtime.o always exports the async scheduler (WSAPoll) now
+WINLIB=""; [ -n "$TRIPLE" ] && WINLIB="-lws2_32 -lucrtbase"  # runtime.o always exports the async scheduler (WSAPoll) now
 
 echo "=============================================================="
 echo "  LLVM backend LINK + RUN — taumir LIR -> LLVM IR (no C)"

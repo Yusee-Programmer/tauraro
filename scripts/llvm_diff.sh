@@ -51,7 +51,7 @@ clean_build() {
 
 # ws2_32 (Windows) is needed by the runtime's async scheduler reactor (WSAPoll), now that
 # runtime.o always exports the coroutine entry points.
-WINLIB=""; [ -n "$TRIPLE" ] && WINLIB="-lws2_32"
+WINLIB=""; [ -n "$TRIPLE" ] && WINLIB="-lws2_32 -lucrtbase"
 
 build_llvm_exe() {  # $1=.ll  $2=out-exe ; echoes "" on success or an error tag
     if [ "$HAVE_CLANG" = 1 ]; then

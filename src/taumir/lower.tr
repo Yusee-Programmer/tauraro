@@ -1604,6 +1604,139 @@ def _stmt_kind(s: Pointer[HirStmt]) -> str:
         case HirStmt.SUnsafe(_): return "unsafe"
         case _: return "statement"
 
+# Control-flow-out scan for the setjmp try model: return/break/continue in an OUTLINED
+# try/catch body would leave the outlined fn (not the enclosing one), so those forms fall
+# back to the inline lexical model. Over-conservative (a break inside a body-local loop is
+# actually fine) but always SAFE.
+def _stmt_has_cf(s: Pointer[HirStmt]) -> bool:
+    match s.read():
+        case HirStmt.SReturn(_): return true
+        case HirStmt.SBreak(_): return true
+        case HirStmt.SContinue: return true
+        case HirStmt.SIf(_, tb, eb): return _block_has_cf(tb) or _block_has_cf(eb)
+        case HirStmt.SWhile(_, wb): return _block_has_cf(wb)
+        case HirStmt.SFor(_, _, fb): return _block_has_cf(fb)
+        case HirStmt.SForUnpack(_, _, fb): return _block_has_cf(fb)
+        case HirStmt.SMatch(_, arms):
+            mut j = 0
+            while j < arms.len:
+                if _block_has_cf(arms.get(j).body): return true
+                j = j + 1
+            return false
+        case HirStmt.SWith(_, _, wb): return _block_has_cf(wb)
+        case HirStmt.SUnsafe(ub): return _block_has_cf(ub)
+        case HirStmt.SDefer(ds): return _stmt_has_cf(ds)
+        case HirStmt.STry(tb, cs, fb):
+            if _block_has_cf(tb) or _block_has_cf(fb): return true
+            mut k = 0
+            while k < cs.len:
+                if _block_has_cf(cs.get(k).read().body): return true
+                k = k + 1
+            return false
+        case _: return false
+
+def _block_has_cf(b: HirBlock) -> bool:
+    mut i = 0
+    while i < b.stmts.len:
+        if _stmt_has_cf(b.stmts.get(i)): return true
+        i = i + 1
+    return false
+
+# Cross-frame try/except via the setjmp runtime (`_tr_rt_try_catch`): the try-body and
+# except-body are OUTLINED to functions (env = all enclosing locals captured by ref, same
+# convention as closures — dummy slot 0, captures at 1+i); a raise anywhere below (this
+# fn OR a callee) longjmps back into the helper, which invokes the catch fn. Matches the C
+# backend's gen_try. Returns false (clean, enclosing frame untouched) if outlining a body
+# fails — the STry site then falls back to the inline lexical model or to C.
+def _lower_try_setjmp(m: LModule, lf: LFunc, try_body: HirBlock, catches: Vec[Pointer[HirCatchClause]], finally_b: HirBlock) -> bool:
+    mut has_catch = catches.len == 1        # 0 = try/finally (no except): a null catch fn
+    mut ename = "__exmsg"
+    if has_catch:
+        mut tcc0 = catches.get(0).read()
+        if not _is_null_str(tcc0.err_name) and tcc0.err_name != "": ename = tcc0.err_name
+    # Capture EVERY enclosing local by ref. Reads work for any tag (8-byte load); non-scalar
+    # writes to a capture fall back inside the body lowering -> whole try degrades cleanly.
+    mut capn = Vec[str].init(0)
+    mut capt = Vec[int].init(0)
+    mut vi = 0
+    while vi < lf.vars.len:
+        mut vn = lf.vars.get(vi)
+        capn.push(_own(vn))
+        capt.push(lf.var_type(vn))
+        vi = vi + 1
+    # --- outline the try body -> _trytry_N(__env) ---
+    mut tname = "_trytry_" + m.funcs.len.to_str() + "_" + lf.name
+    mut tlf = LFunc.init(_own(tname))
+    tlf.params.push("__env")
+    tlf.add_var("__env")
+    mut ci = 0
+    while ci < capn.len:
+        tlf.captures.push(_own(capn.get(ci)))
+        tlf.cap_tags.push(capt.get(ci))
+        ci = ci + 1
+    m.fn_names.push(_own(tname))
+    m.fn_ret.push(0)
+    tlf.set_cur(tlf.new_block())
+    if not lower_block(m, tlf, try_body): return false
+    tlf.set_term(LTerm.TRetInt(0))
+    m.funcs.push(tlf)
+    # --- outline the except body -> _trycatch_N(__env, msg) (only when there IS a catch) ---
+    mut cname = ""
+    if has_catch:
+        cname = "_trycatch_" + m.funcs.len.to_str() + "_" + lf.name
+        mut clf = LFunc.init(_own(cname))
+        clf.params.push("__env")
+        clf.add_var("__env")
+        clf.params.push(_own(ename))
+        clf.add_var(_own(ename))
+        clf.set_var_type(ename, 1)               # the bound message is a str
+        mut ci2 = 0
+        while ci2 < capn.len:
+            clf.captures.push(_own(capn.get(ci2)))
+            clf.cap_tags.push(capt.get(ci2))
+            ci2 = ci2 + 1
+        m.fn_names.push(_own(cname))
+        m.fn_ret.push(0)
+        clf.set_cur(clf.new_block())
+        if not lower_block(m, clf, catches.get(0).read().body): return false
+        clf.set_term(LTerm.TRetInt(0))
+        m.funcs.push(clf)
+    # --- enclosing frame: build env [dummy, &cap0, &cap1, ..], call the runtime helper ---
+    mut envsz = lf.new_vreg()
+    lf.emit(LInst.IConst(envsz, (1 + capn.len) * 8))
+    m.add_extern("_tr_rt_obj_alloc")
+    mut ea = Vec[int].init(1)
+    ea.push(envsz)
+    mut env = lf.new_vreg()
+    lf.emit(LInst.ICall(env, "_tr_rt_obj_alloc", ea))
+    lf.set_vreg_type(env, 12)
+    mut ci3 = 0
+    while ci3 < capn.len:
+        mut av = lf.new_vreg()
+        lf.emit(LInst.IAddrVar(av, capn.get(ci3)))
+        lf.set_vreg_type(av, 12)
+        _emit_field_set(m, lf, env, (1 + ci3) * 8, av)
+        ci3 = ci3 + 1
+    mut tfa = lf.new_vreg()
+    lf.emit(LInst.IFuncAddr(tfa, _own(tname)))
+    lf.set_vreg_type(tfa, 12)
+    mut cfa = lf.new_vreg()
+    if has_catch:
+        lf.emit(LInst.IFuncAddr(cfa, _own(cname)))    # the outlined catch fn
+    else:
+        lf.emit(LInst.IConst(cfa, 0))                 # try/finally: null catch (helper swallows)
+    lf.set_vreg_type(cfa, 12)
+    m.add_extern("_tr_rt_try_catch")
+    mut ta = Vec[int].init(3)
+    ta.push(tfa)
+    ta.push(cfa)
+    ta.push(env)
+    lf.emit(LInst.ICall(-1, "_tr_rt_try_catch", ta))
+    _release_obj(m, lf, env)                 # env is scratch (addresses only) — free it (oracle net-zero)
+    # --- finally runs on BOTH paths (inline in the enclosing frame) ---
+    if not lower_block(m, lf, finally_b): return false
+    return true
+
 def _lower_stmt_impl(m: LModule, lf: LFunc, s: Pointer[HirStmt]) -> bool:
     match s.read():
         case HirStmt.SLineMarker(_): return true
@@ -1932,10 +2065,22 @@ def _lower_stmt_impl(m: LModule, lf: LFunc, s: Pointer[HirStmt]) -> bool:
             # is a plain BRANCH to the except block — no setjmp, no runtime, no cost on
             # the non-throwing path. Cross-frame raises make their fn unavailable (lazy
             # reachability), so calls into raising code degrade with a precise error.
-            if catches.len != 1: return false            # v1: exactly one catch clause
+            # try/finally with NO except (catches.len==0): only the setjmp model handles it
+            # (a null catch fn — the helper swallows an uncaught raise, then finally runs).
+            if catches.len == 0:
+                if not _block_has_cf(try_body) and not _block_has_cf(finally_b):
+                    return _lower_try_setjmp(m, lf, try_body, catches, finally_b)
+                return false
+            if catches.len != 1: return false            # v1: 0 or exactly 1 catch clause
             mut tcc = catches.get(0).read()
             if not _is_null_str(tcc.err_type.name):
                 if tcc.err_type.name != "" and tcc.err_type.name != "void" and tcc.err_type.name != "str": return false
+            # When the bodies have no control-flow-out (return/break/continue), use the
+            # setjmp runtime model so a CROSS-FRAME raise (a callee raising) is caught too —
+            # matching the C backend. Bodies WITH control-flow-out stay on the lexical model
+            # (which lowers them inline, so return/break/continue target the right frame).
+            if not _block_has_cf(try_body) and not _block_has_cf(tcc.body) and not _block_has_cf(finally_b):
+                return _lower_try_setjmp(m, lf, try_body, catches, finally_b)
             mut t_exc = lf.new_block()
             mut t_end = lf.new_block()
             mut t_msg = "__exmsg" + lf.fresh_id().to_str()

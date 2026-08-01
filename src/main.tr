@@ -1046,8 +1046,11 @@ pub def main(args: Vec[str]):
         if _tr_is_windows(): lx_null = "nul"
         # ws2_32 (Windows) is needed by the runtime's async scheduler reactor (WSAPoll),
         # now that runtime.o always EXPORTS the coroutine entry points; -lm always.
+        # ucrtbase (Windows) provides __intrinsic_setjmpex, which the try/except runtime
+        # (_tr_rt_try_catch's setjmp) references — clang's default link misses it (gcc
+        # resolves it natively, so the C backend never needed it).
         mut lx_libs = " -lm"
-        if _tr_is_windows(): lx_libs = lx_libs + " -lws2_32 -mconsole"
+        if _tr_is_windows(): lx_libs = lx_libs + " -lws2_32 -lucrtbase -mconsole"
         mut lx_built = false
         if _tr_system("clang --version >" + lx_null + " 2>&1") == 0:
             mut lx_cmd = "clang -O" + opt_level + " \"" + lx_ll + "\" " + lx_rto + lx_libs + " -o \"" + lx_exe + "\" 2>build/llvm_link.log"
