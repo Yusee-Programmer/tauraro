@@ -1357,7 +1357,7 @@ def _ensure_await_wrapper(m: LModule, fn: str) -> bool:
     mut pi = 0
     while pi < hf.params.len:
         mut ptag = _tag_of(m, hf.params.get(pi).ty)
-        if ptag < 0 or _is_list_tag(ptag) or _is_dict_tag(ptag): return false
+        if ptag < 0: return false          # collections pass as their handle (a ptr) — fine
         mut vpv = wlf.new_vreg()
         wlf.emit(LInst.ILoadVar(vpv, "__vp"))
         wlf.set_vreg_type(vpv, 0)
@@ -1509,6 +1509,85 @@ def _lower_spawn(m: LModule, lf: LFunc, expr: Pointer[HirExpr]) -> bool:
             return true
         case _:
             return false
+
+# Builtin "box" instance method -> rtfn(self[, int args...]). rtag>=0 tags the result;
+# rtag<0 means void (returns the self handle). Args must be ints. -1 on shape mismatch.
+def _box_call(m: LModule, lf: LFunc, selfv: int, rtfn: str, margs: Vec[Pointer[HirExpr]], nargs: int, rtag: int) -> int:
+    if margs.len != nargs: return -1
+    m.add_extern(rtfn)
+    mut a = Vec[int].init(nargs + 1)
+    a.push(selfv)
+    mut i = 0
+    while i < nargs:
+        mut av = lower_expr(m, lf, margs.get(i))
+        if av < 0 or lf.vreg_type(av) != 0: return -1
+        a.push(av)
+        i = i + 1
+    if rtag < 0:
+        lf.emit(LInst.ICall(-1, rtfn, a))
+        return selfv
+    mut d = lf.new_vreg()
+    lf.emit(LInst.ICall(d, rtfn, a))
+    lf.set_vreg_type(d, rtag)
+    return d
+
+# ThreadPool.spawn(fn, arg): submit a job to the pool. Like `spawn`, the entry is the
+# await-wrapper (unpacks a 1-slot buffer, calls fn). _tr_threadpool_spawn(pool, wrap, buf).
+def _lower_pool_spawn(m: LModule, lf: LFunc, poolv: int, margs: Vec[Pointer[HirExpr]]) -> int:
+    if margs.len != 2: return -1
+    mut pfn = _ident_name(margs.get(0))
+    if _is_null_str(pfn) or pfn == "" or not m.is_user_fn(pfn): return -1
+    if not _ensure_await_wrapper(m, pfn): return -1
+    m.add_extern("_tr_rt_raw_alloc")
+    mut pszc = lf.new_vreg()
+    lf.emit(LInst.IConst(pszc, 8))
+    mut paa = Vec[int].init(1)
+    paa.push(pszc)
+    mut pbuf = lf.new_vreg()
+    lf.emit(LInst.ICall(pbuf, "_tr_rt_raw_alloc", paa))
+    lf.set_vreg_type(pbuf, 0)
+    mut parg = lower_expr(m, lf, margs.get(1))
+    if parg < 0 or lf.vreg_type(parg) != 0: return -1
+    _emit_field_set(m, lf, pbuf, 0, parg)
+    mut pfaddr = lf.new_vreg()
+    lf.set_vreg_type(pfaddr, 12)
+    lf.emit(LInst.IFuncAddr(pfaddr, "_awaitwrap_" + pfn))
+    m.add_extern("_tr_threadpool_spawn")
+    mut psa = Vec[int].init(3)
+    psa.push(poolv)
+    psa.push(pfaddr)
+    psa.push(pbuf)
+    lf.emit(LInst.ICall(-1, "_tr_threadpool_spawn", psa))
+    return poolv
+
+# Builtin box INSTANCE method dispatch (Mutex/RwLock/Atomic/ThreadPool) -> runtime calls.
+# `init`/`new` are excluded so the type-name receiver falls through to the static block.
+def _lower_box_method(m: LModule, lf: LFunc, obj: Pointer[HirExpr], method: str, margs: Vec[Pointer[HirExpr]]) -> int:
+    mut btn = hir_expr_type(obj).name
+    if btn != "Mutex" and btn != "RwLock" and btn != "Atomic" and btn != "ThreadPool": return -2
+    if method == "init" or method == "new": return -2      # static ctor -> not here
+    mut bself = lower_expr(m, lf, obj)
+    if bself < 0: return -1
+    if btn == "Mutex":
+        if method == "lock" or method == "get": return _box_call(m, lf, bself, "_tr_mutexbox_lock_get", margs, 0, 0)
+        if method == "set": return _box_call(m, lf, bself, "_tr_mutexbox_set_unlock", margs, 1, -1)
+        if method == "unlock": return _box_call(m, lf, bself, "_tr_mutexbox_unlock", margs, 0, -1)
+    elif btn == "RwLock":
+        if method == "read": return _box_call(m, lf, bself, "_tr_rwlbox_read_get", margs, 0, 0)
+        if method == "read_unlock": return _box_call(m, lf, bself, "_tr_rwlbox_read_unlock", margs, 0, -1)
+        if method == "write": return _box_call(m, lf, bself, "_tr_rwlbox_write_get", margs, 0, 0)
+        if method == "write_set": return _box_call(m, lf, bself, "_tr_rwlbox_write_set_unlock", margs, 1, -1)
+    elif btn == "Atomic":
+        if method == "load": return _box_call(m, lf, bself, "_tr_atomic_load", margs, 0, 0)
+        if method == "store": return _box_call(m, lf, bself, "_tr_atomic_store", margs, 1, -1)
+        if method == "add": return _box_call(m, lf, bself, "_tr_atomic_add", margs, 1, 0)
+        if method == "sub": return _box_call(m, lf, bself, "_tr_atomic_sub", margs, 1, 0)
+        if method == "cas" or method == "compare_and_swap": return _box_call(m, lf, bself, "_tr_atomic_cas", margs, 2, 4)
+    elif btn == "ThreadPool":
+        if method == "wait": return _box_call(m, lf, bself, "_tr_threadpool_wait", margs, 0, -1)
+        if method == "free": return _box_call(m, lf, bself, "_tr_threadpool_free", margs, 0, -1)
+        if method == "spawn": return _lower_pool_spawn(m, lf, bself, margs)
+    return -1
 
 # `task_group:` structured concurrency — begin a group, lower the body (spawns push their
 # handles into the group), then JOIN all spawned threads before the block returns. Matches
@@ -4704,6 +4783,24 @@ def _lower_expr_impl(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                     pass
             mut fn = _ident_name(callee)
             if fn == "": return -1
+            # await_all(f(a), g(b), ..): run each call in parallel, join all (fire-and-wait,
+            # result discarded -> 0). Same as `task_group: spawn f(a); spawn g(b); ..`.
+            if fn == "await_all" and args.len > 0:
+                m.add_extern("_tr_tg_begin")
+                lf.emit(LInst.ICall(-1, "_tr_tg_begin", Vec[int].init(0)))
+                lf.in_taskgroup = lf.in_taskgroup + 1
+                mut awi = 0
+                while awi < args.len:
+                    if not _lower_spawn(m, lf, args.get(awi)):
+                        lf.in_taskgroup = lf.in_taskgroup - 1
+                        return -1
+                    awi = awi + 1
+                lf.in_taskgroup = lf.in_taskgroup - 1
+                m.add_extern("_tr_taskgroup_wait")
+                lf.emit(LInst.ICall(-1, "_tr_taskgroup_wait", Vec[int].init(0)))
+                mut awz = lf.new_vreg()
+                lf.emit(LInst.IConst(awz, 0))
+                return awz
             # Enum variant constructor `Ok(42)` / `None`: the callee is the variant name and
             # the call expression's HIR type is the enum. Do this before ordinary calls so
             # variant names shadow any same-named function.
@@ -5571,6 +5668,9 @@ def _lower_expr_impl(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                             return _str_call0(m, lf, "_tr_rt_strlen", sll, 0)
                 case _:
                     pass
+            # Builtin box INSTANCE methods (Mutex/RwLock/Atomic/ThreadPool) -> runtime calls.
+            mut boxr = _lower_box_method(m, lf, obj, method, margs)
+            if boxr != -2: return boxr
             # Builtin Chan[T] channel INSTANCE methods on a Chan-valued receiver -> _tr_chan_*
             # runtime calls. Guard on the method name so `Chan.init(..)` (the type name as
             # receiver) falls through to the static-constructor block below.
@@ -5748,6 +5848,22 @@ def _lower_expr_impl(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                         lf.emit(LInst.ICall(cnd, "_tr_chan_new", cna))
                         lf.set_vreg_type(cnd, 0)          # raw handle (not ARC-managed)
                         return cnd
+                    # Builtin box constructors: Mutex/RwLock/Atomic/ThreadPool.init/new(x) ->
+                    # _tr_<box>_new(x), a raw handle (tag 0, no ARC — methods intercepted above).
+                    if (inm == "Mutex" or inm == "RwLock" or inm == "Atomic" or inm == "ThreadPool") and (method == "init" or method == "new") and margs.len == 1:
+                        mut boxrt = "_tr_mutexbox_new"
+                        if inm == "RwLock": boxrt = "_tr_rwlbox_new"
+                        elif inm == "Atomic": boxrt = "_tr_atomic_new"
+                        elif inm == "ThreadPool": boxrt = "_tr_threadpool_new"
+                        mut bxv = lower_expr(m, lf, margs.get(0))
+                        if bxv < 0 or lf.vreg_type(bxv) != 0: return -1
+                        m.add_extern(boxrt)
+                        mut bxa = Vec[int].init(1)
+                        bxa.push(bxv)
+                        mut bxd = lf.new_vreg()
+                        lf.emit(LInst.ICall(bxd, boxrt, bxa))
+                        lf.set_vreg_type(bxd, 0)
+                        return bxd
                     if _prog_generic_class_index(m, inm) >= 0 and ity_g.args.len > 0:
                         mut gsm = _ensure_generic_class(m, ity_g)
                         if gsm == "": return -1

@@ -1,0 +1,12 @@
+# await_all: run async calls in parallel, join all (fire-and-wait). Workers don't print,
+# so the output is deterministic. Lowers to task_group{spawn each} + wait, like the C backend.
+async def heavy(n: int) -> int:
+    Thread.sleep(1)
+    return n * 2
+
+async def main():
+    print("start")
+    await_all(heavy(1), heavy(2), heavy(3))
+    print("phase1 done")
+    await_all(heavy(10), heavy(20), heavy(30), heavy(40))
+    print("all done")

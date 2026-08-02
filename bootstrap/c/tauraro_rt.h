@@ -1430,12 +1430,12 @@ static inline void _tr_tls_free(_TrTLS* t) { if (t) TAURARO_FREE(t); }
 
 /* ── BARE ThreadPool: runs jobs synchronously (no OS threads) ─────────── */
 typedef struct { int _dummy; } _TrThreadPool;
-static inline long long _tr_threadpool_auto_n(void)  { return 1LL; }
-static inline _TrThreadPool* _tr_threadpool_new(long long n)  { (void)n; return (_TrThreadPool*)TAURARO_CALLOC(1,sizeof(_TrThreadPool)); }
-static inline _TrThreadPool* _tr_threadpool_auto(void)        { return _tr_threadpool_new(1LL); }
-static inline void _tr_threadpool_spawn(_TrThreadPool* p, void*(*fn)(void*), void* arg) { (void)p; fn(arg); }
-static inline void _tr_threadpool_wait(_TrThreadPool* p)      { (void)p; }
-static inline void _tr_threadpool_free(_TrThreadPool* p)      { if(p)TAURARO_FREE(p); }
+_TR_XLINK long long _tr_threadpool_auto_n(void)  { return 1LL; }
+_TR_XLINK _TrThreadPool* _tr_threadpool_new(long long n)  { (void)n; return (_TrThreadPool*)TAURARO_CALLOC(1,sizeof(_TrThreadPool)); }
+_TR_XLINK _TrThreadPool* _tr_threadpool_auto(void)        { return _tr_threadpool_new(1LL); }
+_TR_XLINK void _tr_threadpool_spawn(_TrThreadPool* p, void*(*fn)(void*), void* arg) { (void)p; fn(arg); }
+_TR_XLINK void _tr_threadpool_wait(_TrThreadPool* p)      { (void)p; }
+_TR_XLINK void _tr_threadpool_free(_TrThreadPool* p)      { if(p)TAURARO_FREE(p); }
 
 #else /* POSIX ─────────────────────────────────────────────────────────── */
 
@@ -1688,65 +1688,65 @@ static inline int   _tr_lstack_pop(_TrLockStack* ls, void* b) {
 
 /* ── MutexBox<T>: mutex-guarded single value ─────────────────────────── */
 typedef struct { _TrMutexH* mu; long long data; _Atomic int rc; } _TrMutexBox;
-static inline _TrMutexBox* _tr_mutexbox_new(long long init) {
+_TR_XLINK _TrMutexBox* _tr_mutexbox_new(long long init) {
     _TrMutexBox* b = (_TrMutexBox*)TAURARO_ALLOC(sizeof(_TrMutexBox));
     b->mu = _tr_mutex_new(); b->data = init;
     atomic_store(&b->rc, 1); return b;
 }
-static inline long long _tr_mutexbox_lock_get(_TrMutexBox* b) {
+_TR_XLINK long long _tr_mutexbox_lock_get(_TrMutexBox* b) {
     _tr_mutex_hlock(b->mu); _tr_lstack_push(&_tr_tl_mu_stk, b); return b->data;
 }
-static inline void _tr_mutexbox_set_unlock(_TrMutexBox* b, long long v) {
+_TR_XLINK void _tr_mutexbox_set_unlock(_TrMutexBox* b, long long v) {
     b->data = v; _tr_lstack_pop(&_tr_tl_mu_stk, b); _tr_mutex_hunlock(b->mu);
 }
-static inline void _tr_mutexbox_unlock(_TrMutexBox* b) { _tr_lstack_pop(&_tr_tl_mu_stk, b); _tr_mutex_hunlock(b->mu); }
-static inline void _tr_mutexbox_free(_TrMutexBox* b) {
+_TR_XLINK void _tr_mutexbox_unlock(_TrMutexBox* b) { _tr_lstack_pop(&_tr_tl_mu_stk, b); _tr_mutex_hunlock(b->mu); }
+_TR_XLINK void _tr_mutexbox_free(_TrMutexBox* b) {
     if (!b) return; _tr_mutex_hfree(b->mu); TAURARO_FREE(b);
 }
-static inline _TrMutexBox* _tr_mutexbox_clone(_TrMutexBox* b) {
+_TR_XLINK _TrMutexBox* _tr_mutexbox_clone(_TrMutexBox* b) {
     if (b) atomic_fetch_add(&b->rc, 1); return b;
 }
-static inline void _tr_mutexbox_drop(_TrMutexBox* b) {
+_TR_XLINK void _tr_mutexbox_drop(_TrMutexBox* b) {
     if (!b || atomic_fetch_sub(&b->rc, 1) > 1) return; _tr_mutexbox_free(b);
 }
 /* Auto-unlock cleanup — used by __attribute__((cleanup)) RAII guard in codegen.
  * Fires when the guard variable goes out of scope. No-op if already unlocked
  * (set_unlock/unlock already popped the box from the TLS stack). */
-static inline void _tr_mutexbox_cleanup(_TrMutexBox** bp) {
+_TR_XLINK void _tr_mutexbox_cleanup(_TrMutexBox** bp) {
     if (bp && *bp && _tr_lstack_pop(&_tr_tl_mu_stk, *bp)) _tr_mutex_hunlock((*bp)->mu);
 }
 
 /* ── RwLockBox<T>: reader-writer guarded single value ────────────────── */
 typedef struct { _TrRWL* rw; long long data; _Atomic int rc; } _TrRWLBox;
-static inline _TrRWLBox* _tr_rwlbox_new(long long init) {
+_TR_XLINK _TrRWLBox* _tr_rwlbox_new(long long init) {
     _TrRWLBox* b = (_TrRWLBox*)TAURARO_ALLOC(sizeof(_TrRWLBox));
     b->rw = _tr_rwl_new(); b->data = init;
     atomic_store(&b->rc, 1); return b;
 }
-static inline long long _tr_rwlbox_read_get(_TrRWLBox* b) {
+_TR_XLINK long long _tr_rwlbox_read_get(_TrRWLBox* b) {
     _tr_rwl_read_lock(b->rw); _tr_lstack_push(&_tr_tl_rwl_r_stk, b); return b->data;
 }
-static inline void _tr_rwlbox_read_unlock(_TrRWLBox* b) { _tr_lstack_pop(&_tr_tl_rwl_r_stk, b); _tr_rwl_read_unlock(b->rw); }
-static inline long long _tr_rwlbox_write_get(_TrRWLBox* b) {
+_TR_XLINK void _tr_rwlbox_read_unlock(_TrRWLBox* b) { _tr_lstack_pop(&_tr_tl_rwl_r_stk, b); _tr_rwl_read_unlock(b->rw); }
+_TR_XLINK long long _tr_rwlbox_write_get(_TrRWLBox* b) {
     _tr_rwl_write_lock(b->rw); _tr_lstack_push(&_tr_tl_rwl_w_stk, b); return b->data;
 }
-static inline void _tr_rwlbox_write_set_unlock(_TrRWLBox* b, long long v) {
+_TR_XLINK void _tr_rwlbox_write_set_unlock(_TrRWLBox* b, long long v) {
     b->data = v; _tr_lstack_pop(&_tr_tl_rwl_w_stk, b); _tr_rwl_write_unlock(b->rw);
 }
-static inline void _tr_rwlbox_free(_TrRWLBox* b) {
+_TR_XLINK void _tr_rwlbox_free(_TrRWLBox* b) {
     if (!b) return; _tr_rwl_free(b->rw); TAURARO_FREE(b);
 }
-static inline _TrRWLBox* _tr_rwlbox_clone(_TrRWLBox* b) {
+_TR_XLINK _TrRWLBox* _tr_rwlbox_clone(_TrRWLBox* b) {
     if (b) atomic_fetch_add(&b->rc, 1); return b;
 }
-static inline void _tr_rwlbox_drop(_TrRWLBox* b) {
+_TR_XLINK void _tr_rwlbox_drop(_TrRWLBox* b) {
     if (!b || atomic_fetch_sub(&b->rc, 1) > 1) return; _tr_rwlbox_free(b);
 }
 /* Auto-unlock cleanup for read/write guards. */
-static inline void _tr_rwlbox_cleanup_r(_TrRWLBox** bp) {
+_TR_XLINK void _tr_rwlbox_cleanup_r(_TrRWLBox** bp) {
     if (bp && *bp && _tr_lstack_pop(&_tr_tl_rwl_r_stk, *bp)) _tr_rwl_read_unlock((*bp)->rw);
 }
-static inline void _tr_rwlbox_cleanup_w(_TrRWLBox** bp) {
+_TR_XLINK void _tr_rwlbox_cleanup_w(_TrRWLBox** bp) {
     if (bp && *bp && _tr_lstack_pop(&_tr_tl_rwl_w_stk, *bp)) _tr_rwl_write_unlock((*bp)->rw);
 }
 
@@ -1772,7 +1772,7 @@ static void* _tr_pool_worker(void* arg) {
     }
     return NULL;
 }
-static inline long long _tr_threadpool_auto_n(void) {
+_TR_XLINK long long _tr_threadpool_auto_n(void) {
 #ifdef _WIN32
     SYSTEM_INFO si; GetSystemInfo(&si); return (long long)si.dwNumberOfProcessors;
 #elif defined(_SC_NPROCESSORS_ONLN)
@@ -1785,7 +1785,7 @@ static inline long long _tr_threadpool_auto_n(void) {
     return 1LL;
 #endif
 }
-static inline _TrThreadPool* _tr_threadpool_new(long long n) {
+_TR_XLINK _TrThreadPool* _tr_threadpool_new(long long n) {
     if (n < 1) n = 1;
     _TrThreadPool* p = (_TrThreadPool*)TAURARO_CALLOC(1, sizeof(_TrThreadPool));
     p->n_workers = (int)n;
@@ -1796,18 +1796,18 @@ static inline _TrThreadPool* _tr_threadpool_new(long long n) {
         p->workers[i] = _tr_thread_start(_tr_pool_worker, p);
     return p;
 }
-static inline _TrThreadPool* _tr_threadpool_auto(void) {
+_TR_XLINK _TrThreadPool* _tr_threadpool_auto(void) {
     return _tr_threadpool_new(_tr_threadpool_auto_n());
 }
-static inline void _tr_threadpool_spawn(_TrThreadPool* p, void*(*fn)(void*), void* arg) {
+_TR_XLINK void _tr_threadpool_spawn(_TrThreadPool* p, void*(*fn)(void*), void* arg) {
     _TrPoolItem* item = (_TrPoolItem*)TAURARO_ALLOC(sizeof(_TrPoolItem));
     item->fn = fn; item->arg = arg;
     _tr_wg_add(p->wg, 1);
     /* uintptr_t cast: safe on 32-bit and 64-bit; avoids sign-extension of intptr_t */
     _tr_chan_send(p->queue, (long long)(uintptr_t)(void*)item);
 }
-static inline void _tr_threadpool_wait(_TrThreadPool* p) { _tr_wg_wait(p->wg); }
-static inline void _tr_threadpool_free(_TrThreadPool* p) {
+_TR_XLINK void _tr_threadpool_wait(_TrThreadPool* p) { _tr_wg_wait(p->wg); }
+_TR_XLINK void _tr_threadpool_free(_TrThreadPool* p) {
     if (!p) return;
     _tr_chan_close(p->queue);
     for (int i = 0; i < p->n_workers; i++) _tr_thread_join_wait(p->workers[i]);
@@ -1824,35 +1824,35 @@ static inline void _tr_async_pool_submit(_TrThreadPool* p, void*(*fn)(void*), vo
 
 /* ── Atomic[T]: lock-free atomic integer (C11 _Atomic) ───────────────── */
 typedef struct { _Atomic long long val; } _TrAtomic;
-static inline _TrAtomic* _tr_atomic_new(long long init) {
+_TR_XLINK _TrAtomic* _tr_atomic_new(long long init) {
     _TrAtomic* a = (_TrAtomic*)TAURARO_ALLOC(sizeof(_TrAtomic));
     atomic_init(&a->val, init); return a;
 }
 /* Hot-path ops: null-check removed — codegen never emits NULL _TrAtomic* */
-static inline long long _tr_atomic_load(_TrAtomic* a)               { return atomic_load(&a->val); }
-static inline void      _tr_atomic_store(_TrAtomic* a, long long v)  { atomic_store(&a->val, v); }
-static inline long long _tr_atomic_add(_TrAtomic* a, long long v)    { return atomic_fetch_add(&a->val, v); }
-static inline long long _tr_atomic_sub(_TrAtomic* a, long long v)    { return atomic_fetch_sub(&a->val, v); }
-static inline long long _tr_atomic_swap(_TrAtomic* a, long long v)   { return atomic_exchange(&a->val, v); }
-static inline bool _tr_atomic_cas(_TrAtomic* a, long long expected, long long desired) {
+_TR_XLINK long long _tr_atomic_load(_TrAtomic* a)               { return atomic_load(&a->val); }
+_TR_XLINK void _tr_atomic_store(_TrAtomic* a, long long v)  { atomic_store(&a->val, v); }
+_TR_XLINK long long _tr_atomic_add(_TrAtomic* a, long long v)    { return atomic_fetch_add(&a->val, v); }
+_TR_XLINK long long _tr_atomic_sub(_TrAtomic* a, long long v)    { return atomic_fetch_sub(&a->val, v); }
+_TR_XLINK long long _tr_atomic_swap(_TrAtomic* a, long long v)   { return atomic_exchange(&a->val, v); }
+_TR_XLINK bool _tr_atomic_cas(_TrAtomic* a, long long expected, long long desired) {
     return atomic_compare_exchange_strong(&a->val, &expected, desired);
 }
-static inline void _tr_atomic_free(_TrAtomic* a) { if (a) TAURARO_FREE(a); }
+_TR_XLINK void _tr_atomic_free(_TrAtomic* a) { if (a) TAURARO_FREE(a); }
 
 /* Atomic[T]: explicit memory-order variants (C11 stdatomic) */
-static inline long long _tr_atomic_load_relaxed(_TrAtomic* a) { return atomic_load_explicit(&a->val, memory_order_relaxed); }
-static inline long long _tr_atomic_load_acquire(_TrAtomic* a) { return atomic_load_explicit(&a->val, memory_order_acquire); }
-static inline long long _tr_atomic_load_seqcst(_TrAtomic* a)  { return atomic_load_explicit(&a->val, memory_order_seq_cst); }
-static inline void _tr_atomic_store_relaxed(_TrAtomic* a, long long v) { atomic_store_explicit(&a->val, v, memory_order_relaxed); }
-static inline void _tr_atomic_store_release(_TrAtomic* a, long long v) { atomic_store_explicit(&a->val, v, memory_order_release); }
-static inline void _tr_atomic_store_seqcst(_TrAtomic* a, long long v)  { atomic_store_explicit(&a->val, v, memory_order_seq_cst); }
-static inline long long _tr_atomic_add_relaxed(_TrAtomic* a, long long v) { return atomic_fetch_add_explicit(&a->val, v, memory_order_relaxed); }
-static inline long long _tr_atomic_add_release(_TrAtomic* a, long long v) { return atomic_fetch_add_explicit(&a->val, v, memory_order_release); }
-static inline long long _tr_atomic_add_acqrel(_TrAtomic* a, long long v)  { return atomic_fetch_add_explicit(&a->val, v, memory_order_acq_rel); }
-static inline long long _tr_atomic_sub_relaxed(_TrAtomic* a, long long v) { return atomic_fetch_sub_explicit(&a->val, v, memory_order_relaxed); }
-static inline long long _tr_atomic_sub_release(_TrAtomic* a, long long v) { return atomic_fetch_sub_explicit(&a->val, v, memory_order_release); }
-static inline bool _tr_atomic_cas_weak(_TrAtomic* a, long long exp, long long des)   { return atomic_compare_exchange_weak(&a->val, &exp, des); }
-static inline bool _tr_atomic_cas_acqrel(_TrAtomic* a, long long exp, long long des) {
+_TR_XLINK long long _tr_atomic_load_relaxed(_TrAtomic* a) { return atomic_load_explicit(&a->val, memory_order_relaxed); }
+_TR_XLINK long long _tr_atomic_load_acquire(_TrAtomic* a) { return atomic_load_explicit(&a->val, memory_order_acquire); }
+_TR_XLINK long long _tr_atomic_load_seqcst(_TrAtomic* a)  { return atomic_load_explicit(&a->val, memory_order_seq_cst); }
+_TR_XLINK void _tr_atomic_store_relaxed(_TrAtomic* a, long long v) { atomic_store_explicit(&a->val, v, memory_order_relaxed); }
+_TR_XLINK void _tr_atomic_store_release(_TrAtomic* a, long long v) { atomic_store_explicit(&a->val, v, memory_order_release); }
+_TR_XLINK void _tr_atomic_store_seqcst(_TrAtomic* a, long long v)  { atomic_store_explicit(&a->val, v, memory_order_seq_cst); }
+_TR_XLINK long long _tr_atomic_add_relaxed(_TrAtomic* a, long long v) { return atomic_fetch_add_explicit(&a->val, v, memory_order_relaxed); }
+_TR_XLINK long long _tr_atomic_add_release(_TrAtomic* a, long long v) { return atomic_fetch_add_explicit(&a->val, v, memory_order_release); }
+_TR_XLINK long long _tr_atomic_add_acqrel(_TrAtomic* a, long long v)  { return atomic_fetch_add_explicit(&a->val, v, memory_order_acq_rel); }
+_TR_XLINK long long _tr_atomic_sub_relaxed(_TrAtomic* a, long long v) { return atomic_fetch_sub_explicit(&a->val, v, memory_order_relaxed); }
+_TR_XLINK long long _tr_atomic_sub_release(_TrAtomic* a, long long v) { return atomic_fetch_sub_explicit(&a->val, v, memory_order_release); }
+_TR_XLINK bool _tr_atomic_cas_weak(_TrAtomic* a, long long exp, long long des)   { return atomic_compare_exchange_weak(&a->val, &exp, des); }
+_TR_XLINK bool _tr_atomic_cas_acqrel(_TrAtomic* a, long long exp, long long des) {
     return atomic_compare_exchange_strong_explicit(&a->val, &exp, des, memory_order_acq_rel, memory_order_relaxed);
 }
 
@@ -2023,27 +2023,27 @@ static inline long long _tr_thread_current_id_h(void)                          {
 static inline void  _tr_thread_sleep_ms_h(long long ms)                        { _tr_thread_sleep_ms(ms); }
 
 /* Atomic[T]: lock-free integer */
-static inline char* _tr_atomic_new_h(long long init)                           { return (char*)_tr_atomic_new(init); }
-static inline long long _tr_atomic_load_h(char* a)                             { return _tr_atomic_load((_TrAtomic*)a); }
-static inline void  _tr_atomic_store_h(char* a, long long v)                   { _tr_atomic_store((_TrAtomic*)a, v); }
-static inline long long _tr_atomic_add_h(char* a, long long v)                 { return _tr_atomic_add((_TrAtomic*)a, v); }
-static inline long long _tr_atomic_sub_h(char* a, long long v)                 { return _tr_atomic_sub((_TrAtomic*)a, v); }
-static inline long long _tr_atomic_swap_h(char* a, long long v)                { return _tr_atomic_swap((_TrAtomic*)a, v); }
-static inline bool  _tr_atomic_cas_h(char* a, long long expected, long long desired) { return _tr_atomic_cas((_TrAtomic*)a, expected, desired); }
-static inline void  _tr_atomic_free_h(char* a)                                 { _tr_atomic_free((_TrAtomic*)a); }
-static inline long long _tr_atomic_load_relaxed_h(char* a)                     { return _tr_atomic_load_relaxed((_TrAtomic*)a); }
-static inline long long _tr_atomic_load_acquire_h(char* a)                     { return _tr_atomic_load_acquire((_TrAtomic*)a); }
-static inline long long _tr_atomic_load_seqcst_h(char* a)                      { return _tr_atomic_load_seqcst((_TrAtomic*)a); }
-static inline void  _tr_atomic_store_relaxed_h(char* a, long long v)           { _tr_atomic_store_relaxed((_TrAtomic*)a, v); }
-static inline void  _tr_atomic_store_release_h(char* a, long long v)           { _tr_atomic_store_release((_TrAtomic*)a, v); }
-static inline void  _tr_atomic_store_seqcst_h(char* a, long long v)            { _tr_atomic_store_seqcst((_TrAtomic*)a, v); }
-static inline long long _tr_atomic_add_relaxed_h(char* a, long long v)         { return _tr_atomic_add_relaxed((_TrAtomic*)a, v); }
-static inline long long _tr_atomic_add_release_h(char* a, long long v)         { return _tr_atomic_add_release((_TrAtomic*)a, v); }
-static inline long long _tr_atomic_add_acqrel_h(char* a, long long v)          { return _tr_atomic_add_acqrel((_TrAtomic*)a, v); }
-static inline long long _tr_atomic_sub_relaxed_h(char* a, long long v)         { return _tr_atomic_sub_relaxed((_TrAtomic*)a, v); }
-static inline long long _tr_atomic_sub_release_h(char* a, long long v)         { return _tr_atomic_sub_release((_TrAtomic*)a, v); }
-static inline bool  _tr_atomic_cas_weak_h(char* a, long long exp, long long des)   { return _tr_atomic_cas_weak((_TrAtomic*)a, exp, des); }
-static inline bool  _tr_atomic_cas_acqrel_h(char* a, long long exp, long long des) { return _tr_atomic_cas_acqrel((_TrAtomic*)a, exp, des); }
+_TR_XLINK char* _tr_atomic_new_h(long long init)                           { return (char*)_tr_atomic_new(init); }
+_TR_XLINK long long _tr_atomic_load_h(char* a)                             { return _tr_atomic_load((_TrAtomic*)a); }
+_TR_XLINK void _tr_atomic_store_h(char* a, long long v)                   { _tr_atomic_store((_TrAtomic*)a, v); }
+_TR_XLINK long long _tr_atomic_add_h(char* a, long long v)                 { return _tr_atomic_add((_TrAtomic*)a, v); }
+_TR_XLINK long long _tr_atomic_sub_h(char* a, long long v)                 { return _tr_atomic_sub((_TrAtomic*)a, v); }
+_TR_XLINK long long _tr_atomic_swap_h(char* a, long long v)                { return _tr_atomic_swap((_TrAtomic*)a, v); }
+_TR_XLINK bool _tr_atomic_cas_h(char* a, long long expected, long long desired) { return _tr_atomic_cas((_TrAtomic*)a, expected, desired); }
+_TR_XLINK void _tr_atomic_free_h(char* a)                                 { _tr_atomic_free((_TrAtomic*)a); }
+_TR_XLINK long long _tr_atomic_load_relaxed_h(char* a)                     { return _tr_atomic_load_relaxed((_TrAtomic*)a); }
+_TR_XLINK long long _tr_atomic_load_acquire_h(char* a)                     { return _tr_atomic_load_acquire((_TrAtomic*)a); }
+_TR_XLINK long long _tr_atomic_load_seqcst_h(char* a)                      { return _tr_atomic_load_seqcst((_TrAtomic*)a); }
+_TR_XLINK void _tr_atomic_store_relaxed_h(char* a, long long v)           { _tr_atomic_store_relaxed((_TrAtomic*)a, v); }
+_TR_XLINK void _tr_atomic_store_release_h(char* a, long long v)           { _tr_atomic_store_release((_TrAtomic*)a, v); }
+_TR_XLINK void _tr_atomic_store_seqcst_h(char* a, long long v)            { _tr_atomic_store_seqcst((_TrAtomic*)a, v); }
+_TR_XLINK long long _tr_atomic_add_relaxed_h(char* a, long long v)         { return _tr_atomic_add_relaxed((_TrAtomic*)a, v); }
+_TR_XLINK long long _tr_atomic_add_release_h(char* a, long long v)         { return _tr_atomic_add_release((_TrAtomic*)a, v); }
+_TR_XLINK long long _tr_atomic_add_acqrel_h(char* a, long long v)          { return _tr_atomic_add_acqrel((_TrAtomic*)a, v); }
+_TR_XLINK long long _tr_atomic_sub_relaxed_h(char* a, long long v)         { return _tr_atomic_sub_relaxed((_TrAtomic*)a, v); }
+_TR_XLINK long long _tr_atomic_sub_release_h(char* a, long long v)         { return _tr_atomic_sub_release((_TrAtomic*)a, v); }
+_TR_XLINK bool _tr_atomic_cas_weak_h(char* a, long long exp, long long des)   { return _tr_atomic_cas_weak((_TrAtomic*)a, exp, des); }
+_TR_XLINK bool _tr_atomic_cas_acqrel_h(char* a, long long exp, long long des) { return _tr_atomic_cas_acqrel((_TrAtomic*)a, exp, des); }
 
 /* ThreadLocal[T]: per-thread storage */
 static inline char* _tr_tls_new_h(long long init)                              { return (char*)_tr_tls_new(init); }

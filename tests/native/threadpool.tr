@@ -1,0 +1,16 @@
+# Builtin ThreadPool: submit jobs to a real worker pool, join with wait(). Jobs don't
+# print (deterministic output); wait() joins before "pool done". new/spawn/wait/free ->
+# _tr_threadpool_* runtime (spawn reuses the await-wrapper like `spawn`).
+def job(id: int) -> void:
+    Thread.sleep(1)
+
+async def main():
+    print("start")
+    mut pool: ThreadPool = ThreadPool.new(4)
+    mut i = 0
+    while i < 8:
+        pool.spawn(job, i)
+        i = i + 1
+    pool.wait()
+    pool.free()
+    print("pool done")
