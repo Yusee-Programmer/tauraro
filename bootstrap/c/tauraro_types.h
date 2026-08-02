@@ -1602,7 +1602,8 @@ typedef enum {
     LInst_IFBits,
     LInst_IAddrVar,
     LInst_IFuncAddr,
-    LInst_ICallInd
+    LInst_ICallInd,
+    LInst_IAsm
 } LInst_tag;
 
 typedef struct LInst {
@@ -1694,6 +1695,10 @@ typedef struct LInst {
             long long fnreg;
             List_i64* args;
         } ICallInd;
+        struct {
+            TrStr code;
+            TrStr cons;
+        } IAsm;
     } data;
 } LInst;
 
@@ -1716,6 +1721,7 @@ static inline __attribute__((always_inline)) LInst LInst_ctor_IFBits(long long d
 static inline __attribute__((always_inline)) LInst LInst_ctor_IAddrVar(long long dst, TrStr name) { LInst _r = {.tag=LInst_IAddrVar}; _r.data.IAddrVar.dst = dst; _r.data.IAddrVar.name = _tr_str_retain(name); return _r; }
 static inline __attribute__((always_inline)) LInst LInst_ctor_IFuncAddr(long long dst, TrStr fname) { LInst _r = {.tag=LInst_IFuncAddr}; _r.data.IFuncAddr.dst = dst; _r.data.IFuncAddr.fname = _tr_str_retain(fname); return _r; }
 static inline __attribute__((always_inline)) LInst LInst_ctor_ICallInd(long long dst, long long fnreg, List_i64* args) { LInst _r = {.tag=LInst_ICallInd}; _r.data.ICallInd.dst = dst; _r.data.ICallInd.fnreg = fnreg; _r.data.ICallInd.args = args; return _r; }
+static inline __attribute__((always_inline)) LInst LInst_ctor_IAsm(TrStr code, TrStr cons) { LInst _r = {.tag=LInst_IAsm}; _r.data.IAsm.code = _tr_str_retain(code); _r.data.IAsm.cons = _tr_str_retain(cons); return _r; }
 
 typedef enum {
     LTerm_TRetInt,
@@ -3827,6 +3833,7 @@ __attribute__((hot)) long long _lower_await(LModule* m, LFunc* lf, HirExpr* awex
 __attribute__((hot)) long long _lower_obj_call(LModule* m, LFunc* lf, TrStr mangled, long long self_vreg, List_ptr* margs);
 __attribute__((hot)) bool lower_block(LModule* m, LFunc* lf, HirBlock* hb);
 __attribute__((hot)) bool _run_defers(LModule* m, LFunc* lf);
+__attribute__((hot)) long long _sizeof_tyname(TrStr n);
 __attribute__((hot)) long long _ptr_stride(LModule* m, AstType* pty);
 __attribute__((hot)) TrStr _dunder_for_op(TrStr op);
 __attribute__((hot)) TrStr _stmt_expr_kind(HirExpr* e);

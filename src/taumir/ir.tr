@@ -38,6 +38,7 @@ pub enum LInst:
     IAddrVar(dst: int, name: str)               # dst = address of var's stack slot (closure captures)
     IFuncAddr(dst: int, fname: str)             # dst = address of a defined function
     ICallInd(dst: int, fnreg: int, args: Vec[int])  # indirect call through the pointer in fnreg
+    IAsm(code: str, cons: str)                       # inline asm: LLVM `call void asm sideeffect`
 
 # Block terminator (exactly one per block).
 pub enum LTerm:

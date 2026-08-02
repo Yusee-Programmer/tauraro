@@ -938,7 +938,7 @@ static void _tr_condmutex_lock(_TrCondMutex* cm)    { EnterCriticalSection(&cm->
 static void _tr_condmutex_unlock(_TrCondMutex* cm)  { LeaveCriticalSection(&cm->cs); }
 static void _tr_condmutex_wait(_TrCondMutex* cm)    { SleepConditionVariableCS(&cm->cv, &cm->cs, INFINITE); }
 static void _tr_condmutex_signal(_TrCondMutex* cm)  { WakeConditionVariable(&cm->cv); }
-static void _tr_sleep_ms(long ms) { Sleep((DWORD)(ms < 0 ? 0 : ms)); }
+_TR_XLINK void _tr_sleep_ms(long ms) { Sleep((DWORD)(ms < 0 ? 0 : ms)); }
 static inline long long _tr_time_ns(void) {
     LARGE_INTEGER freq, cnt;
     QueryPerformanceFrequency(&freq); QueryPerformanceCounter(&cnt);
@@ -970,7 +970,7 @@ static void _tr_condmutex_lock(_TrCondMutex* cm)    { (void)cm; }
 static void _tr_condmutex_unlock(_TrCondMutex* cm)  { (void)cm; }
 static void _tr_condmutex_wait(_TrCondMutex* cm)    { (void)cm; }
 static void _tr_condmutex_signal(_TrCondMutex* cm)  { (void)cm; }
-static void _tr_sleep_ms(long ms) { (void)ms; }
+_TR_XLINK void _tr_sleep_ms(long ms) { (void)ms; }
 
 #else
 #include <pthread.h>
@@ -1021,7 +1021,7 @@ static void _tr_condmutex_lock(_TrCondMutex* cm)    { pthread_mutex_lock(&cm->mu
 static void _tr_condmutex_unlock(_TrCondMutex* cm)  { pthread_mutex_unlock(&cm->mu); }
 static void _tr_condmutex_wait(_TrCondMutex* cm)    { pthread_cond_wait(&cm->cv, &cm->mu); }
 static void _tr_condmutex_signal(_TrCondMutex* cm)  { pthread_cond_signal(&cm->cv); }
-static void _tr_sleep_ms(long ms) {
+_TR_XLINK void _tr_sleep_ms(long ms) {
     struct timespec ts = {ms/1000, (ms%1000)*1000000LL}; nanosleep(&ts, NULL);
 }
 #endif
@@ -2265,14 +2265,14 @@ static inline long long _tr_getpid(void) { return (long long)getpid(); }
 #  endif
 #endif
 #ifdef _TR_HAS_TIME
-static inline long long _tr_timestamp(void) { return (long long)time(NULL); }
+_TR_XLINK long long _tr_timestamp(void) { return (long long)time(NULL); }
 #else
-static inline long long _tr_timestamp(void) { return 0LL; }  /* no wall clock */
+_TR_XLINK long long _tr_timestamp(void) { return 0LL; }  /* no wall clock */
 #endif
 
 /* High-resolution millisecond wall-clock: QueryPerformanceCounter on Windows,
    CLOCK_MONOTONIC on POSIX.  Used by std.sys.time.time_ms / elapsed_ms. */
-static inline long long _tr_time_ms(void) {
+_TR_XLINK long long _tr_time_ms(void) {
 #if defined(TAURARO_BARE) && !defined(__wasi__)
     return 0LL;
 #elif defined(_WIN32)
@@ -3437,7 +3437,7 @@ static char* _tr_str_replace(const char* s, const char* old, const char* nw) {
     }
     *dst='\0'; return r;
 }
-static char* _tr_int_to_str(long long n)   { char* b=(char*)TAURARO_ALLOC(32); snprintf(b,32,"%lld",n); return b; }
+_TR_XLINK char* _tr_int_to_str(long long n)   { char* b=(char*)TAURARO_ALLOC(32); snprintf(b,32,"%lld",n); return b; }
 /* Thousands grouping for f"{n:,d}": 1234567 -> "1,234,567" (fresh heap C string). */
 static char* _tr_i64_grouped(long long v) {
     char t[24]; int n=0, neg=v<0;
@@ -3448,7 +3448,7 @@ static char* _tr_i64_grouped(long long v) {
     for (int i=n-1,c=0;i>=0;i--,c++) { if (c&&c%3==0) b[w++]=','; b[w++]=t[i]; }
     b[w]=0; return b;
 }
-static char* _tr_float_to_str(double n)    { char* b=(char*)TAURARO_ALLOC(32); snprintf(b,32,"%g",n);   return b; }
+_TR_XLINK char* _tr_float_to_str(double n)    { char* b=(char*)TAURARO_ALLOC(32); snprintf(b,32,"%g",n);   return b; }
 static char* _tr_float_to_c_lit(double n) {
     char* b=(char*)TAURARO_ALLOC(32);
     int len = snprintf(b,32,"%.17g",n);

@@ -434,6 +434,9 @@ pub def encode_func(lf: LFunc) -> EncodedFunc:
                     c.u8(208)
                     if dst >= 0:
                         _st_rax(c, _vreg_disp(dst))
+                case LInst.IAsm(acode, acons):
+                    pass                   # native can't assemble arbitrary text -> no-op
+                                           # (effect-free asm like nop/barriers stays correct)
             ii = ii + 1
 
         match blk.term:

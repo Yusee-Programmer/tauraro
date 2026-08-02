@@ -186,6 +186,9 @@ extend LlvmEmitter:
                     mut ir = self.newtmp()
                     self.w("  " + ir + " = call " + ind_ret + " " + fp + "(" + ind_args + ")\n")
                     self.store_vreg(dst, ind_ret, ir)
+            case LInst.IAsm(code, cons):
+                # inline asm: `sideeffect` keeps it even with no outputs (never DCE'd).
+                self.w("  call void asm sideeffect \"" + _ll_str_escape(code) + "\", \"" + cons + "\"()\n")
 
     pub def emit_call(self, dst: int, callee: str, args: Vec[int]):
         # Build the "(<ty> <val>, ...)" argument list.

@@ -1512,6 +1512,14 @@ def _run_defers(m: LModule, lf: LFunc) -> bool:
     lf.in_defer = false
     return true
 
+# sizeof(T) in bytes, matching the C backend's sizeof on the C type it maps T to.
+def _sizeof_tyname(n: str) -> int:
+    if _is_null_str(n): return 8
+    if n == "bool" or n == "char" or n == "i8" or n == "u8": return 1
+    if n == "i16" or n == "u16": return 2
+    if n == "i32" or n == "u32" or n == "f32" or n == "float32": return 4
+    return 8                            # int/i64/u64/usize/isize/float/f64/Pointer/objects
+
 # -- statements ---------------------------------------------------------------------
 # Byte stride of a Pointer[T]'s element. v1 supports only 8-byte elements (int/i64/
 # usize/float/object pointers); narrower/other element types -> 0 (caller falls back).
@@ -2163,6 +2171,19 @@ def _lower_stmt_impl(m: LModule, lf: LFunc, s: Pointer[HirStmt]) -> bool:
             return se_ok
         case HirStmt.SUnsafe(ubody):
             return lower_block(m, lf, ubody)
+        case HirStmt.SAsm(code, outputs, inputs, clobbers):
+            # Inline asm (LLVM emits `call void asm sideeffect "code", "cons"()`; native
+            # no-ops it — it can't assemble arbitrary strings, but effect-free asm like
+            # nop/barriers is output-identical). v1: no operands (outputs/inputs empty); a
+            # single clobber -> ~{clob}. Anything richer falls back to C.
+            if not _is_null_str(outputs) and outputs != "": return false
+            if not _is_null_str(inputs) and inputs != "": return false
+            mut cons = ""
+            if not _is_null_str(clobbers) and clobbers != "":
+                if clobbers.contains(","): return false          # v1: single clobber only
+                cons = "~{" + clobbers + "}"
+            lf.emit(LInst.IAsm(_own(code), cons))
+            return true
         case _:
             if m.fail_note == "": m.fail_note = "unsupported statement kind: " + _stmt_kind(s)
             return false
@@ -4072,12 +4093,11 @@ def _lower_expr_impl(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
             mut cd = lf.new_vreg()
             lf.emit(LInst.IConst(cd, cval))          # a char is its byte value (int) in the LIR
             return cd
-        case HirExpr.ESizeOf(_, _):
-            # Every value in the LIR occupies one 8-byte slot (the uniform element stride
-            # used by Pointer[T] ops and collections), so sizeof(T) is 8 — consistent with
-            # _ptr_stride, which is what alloc/access actually use.
+        case HirExpr.ESizeOf(sz_ty, _):
+            # sizeof(T) = the actual byte size of T's C representation (matches the C backend:
+            # bool/char/i8/u8=1, i16/u16=2, i32/u32/f32=4, everything else 8).
             mut szd = lf.new_vreg()
-            lf.emit(LInst.IConst(szd, 8))
+            lf.emit(LInst.IConst(szd, _sizeof_tyname(sz_ty.name)))
             return szd
         case HirExpr.ETryExpr(texpr, tokty):
             # `expr?`: expr yields Result[T,E]. If Err, propagate (return the Result from
