@@ -1,0 +1,17 @@
+# Builtin Chan[T]: a buffered channel used single-threaded here (deterministic) — send /
+# recv / len / close / is_closed all lower to the _tr_chan_* runtime (like List/Dict/Set).
+def main():
+    mut ch: Chan[int] = Chan.init(4)
+    ch.send(10)
+    ch.send(20)
+    ch.send(30)
+    print(ch.len())          # 3
+    print(ch.recv())         # 10
+    print(ch.recv())         # 20
+    print(ch.len())          # 1
+    ch.send(40)
+    print(ch.recv())         # 30
+    print(ch.recv())         # 40
+    print(ch.is_closed())    # false
+    ch.close()
+    print(ch.is_closed())    # true

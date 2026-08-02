@@ -13693,6 +13693,137 @@ __auto_type margs = _t2431.data.EMethodCall.args;
             /* pass */
         }
         /* pass */
+        if (((strcmp(_tr_strz(hir_expr_type(obj)->name), _tr_strz(_tr_str_lit("Chan"))) == 0) && (((((((strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("send"))) == 0) || (strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("recv"))) == 0)) || (strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("try_recv"))) == 0)) || (strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("try_send"))) == 0)) || (strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("close"))) == 0)) || (strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("is_closed"))) == 0)) || (strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("len"))) == 0)))) {
+            /* pass */
+            long long cho = lower_expr(m, lf, obj);
+            /* pass */
+            if ((cho < 0LL)) {
+                /* pass */
+                return (-1LL);
+            }
+            /* pass */
+            if (((strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("send"))) == 0) && (margs->len == 1LL))) {
+                /* pass */
+                long long chv = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, 0LL)));
+                /* pass */
+                if (((chv < 0LL) || (LFunc_vreg_type(lf, chv) != 0LL))) {
+                    /* pass */
+                    return (-1LL);
+                }
+                /* pass */
+                LModule_add_extern(m, _tr_str_lit("_tr_chan_send"));
+                /* pass */
+                List_i64* csa = (void*)List_i64_new();
+                /* pass */
+                List_i64_append(csa, cho);
+                /* pass */
+                List_i64_append(csa, chv);
+                /* pass */
+                LFunc_emit(lf, LInst_ctor_ICall((-1LL), _tr_str_lit("_tr_chan_send"), csa));
+                /* pass */
+                return cho;
+            }
+            /* pass */
+            if ((((strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("recv"))) == 0) || (strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("try_recv"))) == 0)) && (margs->len == 0LL))) {
+                /* pass */
+                TrStr crs = _tr_str_lit("_tr_chan_recv");
+                /* pass */
+                if ((strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("try_recv"))) == 0)) {
+                    /* pass */
+                    TrStr _strtmp_t2466 = _tr_str_lit("_tr_chan_try_recv_val");
+                    _tr_str_release(crs);
+                    crs = _strtmp_t2466;
+                }
+                /* pass */
+                LModule_add_extern(m, crs);
+                /* pass */
+                List_i64* cra = (void*)List_i64_new();
+                /* pass */
+                List_i64_append(cra, cho);
+                /* pass */
+                long long crd = LFunc_new_vreg(lf);
+                /* pass */
+                LFunc_emit(lf, LInst_ctor_ICall(crd, crs, cra));
+                /* pass */
+                LFunc_set_vreg_type(lf, crd, 0LL);
+                /* pass */
+                _tr_str_release(crs);
+                return crd;
+            }
+            /* pass */
+            if (((strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("try_send"))) == 0) && (margs->len == 1LL))) {
+                /* pass */
+                long long ctv = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, 0LL)));
+                /* pass */
+                if (((ctv < 0LL) || (LFunc_vreg_type(lf, ctv) != 0LL))) {
+                    /* pass */
+                    return (-1LL);
+                }
+                /* pass */
+                LModule_add_extern(m, _tr_str_lit("_tr_chan_try_send"));
+                /* pass */
+                List_i64* cta = (void*)List_i64_new();
+                /* pass */
+                List_i64_append(cta, cho);
+                /* pass */
+                List_i64_append(cta, ctv);
+                /* pass */
+                long long ctd = LFunc_new_vreg(lf);
+                /* pass */
+                LFunc_emit(lf, LInst_ctor_ICall(ctd, _tr_str_lit("_tr_chan_try_send"), cta));
+                /* pass */
+                LFunc_set_vreg_type(lf, ctd, 4LL);
+                /* pass */
+                return ctd;
+            }
+            /* pass */
+            if (((strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("close"))) == 0) && (margs->len == 0LL))) {
+                /* pass */
+                LModule_add_extern(m, _tr_str_lit("_tr_chan_close"));
+                /* pass */
+                List_i64* cca = (void*)List_i64_new();
+                /* pass */
+                List_i64_append(cca, cho);
+                /* pass */
+                LFunc_emit(lf, LInst_ctor_ICall((-1LL), _tr_str_lit("_tr_chan_close"), cca));
+                /* pass */
+                return cho;
+            }
+            /* pass */
+            if ((((strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("is_closed"))) == 0) || (strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("len"))) == 0)) && (margs->len == 0LL))) {
+                /* pass */
+                TrStr cqs = _tr_str_lit("_tr_chan_len");
+                /* pass */
+                long long cqtag = 0LL;
+                /* pass */
+                if ((strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("is_closed"))) == 0)) {
+                    /* pass */
+                    TrStr _strtmp_t2467 = _tr_str_lit("_tr_chan_is_closed");
+                    _tr_str_release(cqs);
+                    cqs = _strtmp_t2467;
+                    /* pass */
+                    cqtag = 4LL;
+                }
+                /* pass */
+                LModule_add_extern(m, cqs);
+                /* pass */
+                List_i64* cqa = (void*)List_i64_new();
+                /* pass */
+                List_i64_append(cqa, cho);
+                /* pass */
+                long long cqd = LFunc_new_vreg(lf);
+                /* pass */
+                LFunc_emit(lf, LInst_ctor_ICall(cqd, cqs, cqa));
+                /* pass */
+                LFunc_set_vreg_type(lf, cqd, cqtag);
+                /* pass */
+                _tr_str_release(cqs);
+                return cqd;
+            }
+            /* pass */
+            return (-1LL);
+        }
+        /* pass */
         if ((strcmp(_tr_strz(hir_expr_type(obj)->name), _tr_strz(_tr_str_lit("Pointer"))) == 0)) {
             /* pass */
             AstType* pty = hir_expr_type(obj);
@@ -13853,10 +13984,10 @@ __auto_type margs = _t2431.data.EMethodCall.args;
             return (-1LL);
         }
         /* pass */
-        __auto_type _t2466 = (*obj);
-        if (_t2466.tag == HirExpr_EIdent) {
-            __auto_type inm = _t2466.data.EIdent.name;
-__auto_type ity_g = _t2466.data.EIdent.ty;
+        __auto_type _t2468 = (*obj);
+        if (_t2468.tag == HirExpr_EIdent) {
+            __auto_type inm = _t2468.data.EIdent.name;
+__auto_type ity_g = _t2468.data.EIdent.ty;
             /* pass */
             if ((((strcmp(_tr_strz(inm), _tr_strz(_tr_str_lit("Set"))) == 0) && ((strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("init"))) == 0) || (strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("new"))) == 0))) && (margs->len == 0LL))) {
                 /* pass */
@@ -13944,6 +14075,30 @@ __auto_type ity_g = _t2466.data.EIdent.ty;
                 return lnd;
             }
             /* pass */
+            if ((((strcmp(_tr_strz(inm), _tr_strz(_tr_str_lit("Chan"))) == 0) && ((strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("init"))) == 0) || (strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("new"))) == 0))) && (margs->len == 1LL))) {
+                /* pass */
+                long long ccap = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, 0LL)));
+                /* pass */
+                if (((ccap < 0LL) || (LFunc_vreg_type(lf, ccap) != 0LL))) {
+                    /* pass */
+                    return (-1LL);
+                }
+                /* pass */
+                LModule_add_extern(m, _tr_str_lit("_tr_chan_new"));
+                /* pass */
+                List_i64* cna = (void*)List_i64_new();
+                /* pass */
+                List_i64_append(cna, ccap);
+                /* pass */
+                long long cnd = LFunc_new_vreg(lf);
+                /* pass */
+                LFunc_emit(lf, LInst_ctor_ICall(cnd, _tr_str_lit("_tr_chan_new"), cna));
+                /* pass */
+                LFunc_set_vreg_type(lf, cnd, 0LL);
+                /* pass */
+                return cnd;
+            }
+            /* pass */
             if (((_prog_generic_class_index(m, inm) >= 0LL) && (ity_g->args->len > 0LL))) {
                 /* pass */
                 TrStr gsm = _ensure_generic_class(m, ity_g);
@@ -13954,7 +14109,7 @@ __auto_type ity_g = _t2466.data.EIdent.ty;
                     return (-1LL);
                 }
                 /* pass */
-                return ({ TrStr _at_t2467 = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(gsm), _tr_strz(_tr_str_lit("_")))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(method)); _tr_str_release(_cl); _cres; })); __auto_type _wr = (_lower_obj_call(m, lf, _at_t2467, (-1LL), margs)); _tr_str_release(_at_t2467); _wr; });
+                return ({ TrStr _at_t2469 = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(gsm), _tr_strz(_tr_str_lit("_")))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(method)); _tr_str_release(_cl); _cres; })); __auto_type _wr = (_lower_obj_call(m, lf, _at_t2469, (-1LL), margs)); _tr_str_release(_at_t2469); _wr; });
             }
             /* pass */
             if (LModule_is_class(m, inm)) {
@@ -13980,10 +14135,10 @@ __auto_type ity_g = _t2466.data.EIdent.ty;
                 }
                 /* pass */
                 _tr_str_release(nvm);
-                return ({ TrStr _at_t2468 = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(inm), _tr_strz(_tr_str_lit("_")))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(method)); _tr_str_release(_cl); _cres; })); __auto_type _wr = (_lower_obj_call(m, lf, _at_t2468, (-1LL), margs)); _tr_str_release(_at_t2468); _wr; });
+                return ({ TrStr _at_t2470 = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(inm), _tr_strz(_tr_str_lit("_")))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(method)); _tr_str_release(_cl); _cres; })); __auto_type _wr = (_lower_obj_call(m, lf, _at_t2470, (-1LL), margs)); _tr_str_release(_at_t2470); _wr; });
             }
         } else if (1) {
-            __auto_type _ = _t2466;
+            __auto_type _ = _t2468;
             /* pass */
             /* pass */
         }
@@ -13998,9 +14153,9 @@ __auto_type ity_g = _t2466.data.EIdent.ty;
                 /* pass */
                 if ((((strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("get_index"))) == 0) || (strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("get"))) == 0)) && (strcmp(_tr_strz(LModule_resolve_method(m, recv_cls, _tr_str_lit("__getitem__"))), _tr_strz(_tr_str_lit(""))) != 0))) {
                     /* pass */
-                    TrStr _strtmp_t2469 = _tr_str_lit("__getitem__");
+                    TrStr _strtmp_t2471 = _tr_str_lit("__getitem__");
                     _tr_str_release(dmethod);
-                    dmethod = _strtmp_t2469;
+                    dmethod = _strtmp_t2471;
                 }
             }
             /* pass */
@@ -14008,9 +14163,9 @@ __auto_type ity_g = _t2466.data.EIdent.ty;
             /* pass */
             if (LModule_is_class(m, recv_cls)) {
                 /* pass */
-                TrStr _strtmp_t2470 = LModule_resolve_method(m, recv_cls, dmethod);
+                TrStr _strtmp_t2472 = LModule_resolve_method(m, recv_cls, dmethod);
                 _tr_str_release(mangled);
-                mangled = _strtmp_t2470;
+                mangled = _strtmp_t2472;
                 /* pass */
                 if ((strcmp(_tr_strz(mangled), _tr_strz(_tr_str_lit(""))) == 0)) {
                     /* pass */
@@ -14042,7 +14197,7 @@ __auto_type ity_g = _t2466.data.EIdent.ty;
                     /* pass */
                     List_i64_append(gm_tags, LFunc_vreg_type(lf, gm_self));
                     /* pass */
-                    ({ TrStr _at_t2471 = (_own(recv_cls)); List_TrStr_append(gm_cls, _at_t2471); _tr_str_release(_at_t2471); });
+                    ({ TrStr _at_t2473 = (_own(recv_cls)); List_TrStr_append(gm_cls, _at_t2473); _tr_str_release(_at_t2473); });
                     /* pass */
                     List_i64_append(gm_regs, gm_self);
                     /* pass */
@@ -14072,9 +14227,9 @@ __auto_type ity_g = _t2466.data.EIdent.ty;
                         /* pass */
                         if (((gmt == 10LL) || (gmt == 11LL))) {
                             /* pass */
-                            TrStr _strtmp_t2472 = _recv_class(m, lf, ((HirExpr*)List_ptr_get(margs, gmj)));
+                            TrStr _strtmp_t2474 = _recv_class(m, lf, ((HirExpr*)List_ptr_get(margs, gmj)));
                             _tr_str_release(gmc);
-                            gmc = _strtmp_t2472;
+                            gmc = _strtmp_t2474;
                             /* pass */
                             if ((strcmp(_tr_strz(gmc), _tr_strz(_tr_str_lit(""))) == 0)) {
                                 /* pass */
@@ -14098,20 +14253,20 @@ __auto_type ity_g = _t2466.data.EIdent.ty;
                         /* pass */
                         if ((gmj > 0LL)) {
                             /* pass */
-                            TrStr _strtmp_t2473 = _tr_strx_concat(_tr_strz(gm_name), _tr_strz(_tr_str_lit("_")));
+                            TrStr _strtmp_t2475 = _tr_strx_concat(_tr_strz(gm_name), _tr_strz(_tr_str_lit("_")));
                             _tr_str_release(gm_name);
-                            gm_name = _strtmp_t2473;
+                            gm_name = _strtmp_t2475;
                         }
                         /* pass */
-                        TrStr _strtmp_t2474 = ({ TrStr _cr = (_tr_str_wrap(_tr_int_to_str((long long)(gmt)))); TrStr _cres = _tr_strx_concat(_tr_strz(gm_name), _cr.data); _tr_str_release(_cr); _cres; });
+                        TrStr _strtmp_t2476 = ({ TrStr _cr = (_tr_str_wrap(_tr_int_to_str((long long)(gmt)))); TrStr _cres = _tr_strx_concat(_tr_strz(gm_name), _cr.data); _tr_str_release(_cr); _cres; });
                         _tr_str_release(gm_name);
-                        gm_name = _strtmp_t2474;
+                        gm_name = _strtmp_t2476;
                         /* pass */
                         if ((strcmp(_tr_strz(gmc), _tr_strz(_tr_str_lit(""))) != 0)) {
                             /* pass */
-                            TrStr _strtmp_t2475 = _tr_strx_concat(_tr_strz(gm_name), _tr_strz(gmc));
+                            TrStr _strtmp_t2477 = _tr_strx_concat(_tr_strz(gm_name), _tr_strz(gmc));
                             _tr_str_release(gm_name);
-                            gm_name = _strtmp_t2475;
+                            gm_name = _strtmp_t2477;
                         }
                         /* pass */
                         gmj = (gmj + 1LL);
@@ -14225,12 +14380,12 @@ __auto_type ity_g = _t2466.data.EIdent.ty;
             /* pass */
             long long tgt_idx = (-1LL);
             /* pass */
-            __auto_type _t2476 = (*((HirExpr*)List_ptr_get(margs, 0LL)));
-            if (_t2476.tag == HirExpr_ELitInt) {
-                __auto_type tgt_v = _t2476.data.ELitInt.val;
+            __auto_type _t2478 = (*((HirExpr*)List_ptr_get(margs, 0LL)));
+            if (_t2478.tag == HirExpr_ELitInt) {
+                __auto_type tgt_v = _t2478.data.ELitInt.val;
                 tgt_idx = tgt_v;
             } else if (1) {
-                __auto_type _ = _t2476;
+                __auto_type _ = _t2478;
                 _tr_str_release(recv_cls);
                 return (-1LL);
             }
@@ -14468,9 +14623,9 @@ __auto_type ity_g = _t2466.data.EIdent.ty;
             /* pass */
             if ((want_elem == 1LL)) {
                 /* pass */
-                TrStr _strtmp_t2477 = _tr_str_lit("_tr_rt_list_index_str");
+                TrStr _strtmp_t2479 = _tr_str_lit("_tr_rt_list_index_str");
                 _tr_str_release(ixsym);
-                ixsym = _strtmp_t2477;
+                ixsym = _strtmp_t2479;
             }
             /* pass */
             LModule_add_extern(m, ixsym);
@@ -14517,9 +14672,9 @@ __auto_type ity_g = _t2466.data.EIdent.ty;
             /* pass */
             if ((want_elem == 1LL)) {
                 /* pass */
-                TrStr _strtmp_t2478 = _tr_str_lit("_tr_rt_list_contains_str");
+                TrStr _strtmp_t2480 = _tr_str_lit("_tr_rt_list_contains_str");
                 _tr_str_release(cxsym);
-                cxsym = _strtmp_t2478;
+                cxsym = _strtmp_t2480;
             }
             /* pass */
             LModule_add_extern(m, cxsym);
@@ -14568,9 +14723,9 @@ __auto_type ity_g = _t2466.data.EIdent.ty;
             /* pass */
             if ((want_elem == 1LL)) {
                 /* pass */
-                TrStr _strtmp_t2479 = _tr_str_lit("_tr_rt_list_count_str");
+                TrStr _strtmp_t2481 = _tr_str_lit("_tr_rt_list_count_str");
                 _tr_str_release(ctsym);
-                ctsym = _strtmp_t2479;
+                ctsym = _strtmp_t2481;
             }
             /* pass */
             LModule_add_extern(m, ctsym);
@@ -14602,9 +14757,9 @@ __auto_type ity_g = _t2466.data.EIdent.ty;
             /* pass */
             if (((strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("max"))) == 0) || (strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("max_val"))) == 0))) {
                 /* pass */
-                TrStr _strtmp_t2480 = _tr_str_lit("_tr_rt_list_max_i64");
+                TrStr _strtmp_t2482 = _tr_str_lit("_tr_rt_list_max_i64");
                 _tr_str_release(mmsym);
-                mmsym = _strtmp_t2480;
+                mmsym = _strtmp_t2482;
             }
             /* pass */
             _tr_str_release(recv_cls);
@@ -14850,9 +15005,9 @@ __auto_type ity_g = _t2466.data.EIdent.ty;
             /* pass */
             if ((want_elem == 1LL)) {
                 /* pass */
-                TrStr _strtmp_t2481 = _tr_str_lit("_tr_rt_list_sort_str");
+                TrStr _strtmp_t2483 = _tr_str_lit("_tr_rt_list_sort_str");
                 _tr_str_release(sortsym);
-                sortsym = _strtmp_t2481;
+                sortsym = _strtmp_t2483;
             }
             /* pass */
             LModule_add_extern(m, sortsym);

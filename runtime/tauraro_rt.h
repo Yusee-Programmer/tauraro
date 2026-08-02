@@ -1043,7 +1043,7 @@ typedef struct {
     long long* buf; long long head, tail, count, cap; volatile int closed;
     CRITICAL_SECTION mu; CONDITION_VARIABLE not_empty, not_full;
 } _TrChan;
-static _TrChan* _tr_chan_new(long long cap) {
+_TR_XLINK _TrChan* _tr_chan_new(long long cap) {
     if (cap < 1) cap = 1;
     _TrChan* c = (_TrChan*)calloc(1, sizeof(_TrChan));
     c->buf = (long long*)TAURARO_CALLOC((size_t)cap, sizeof(long long)); c->cap = cap;
@@ -1052,7 +1052,7 @@ static _TrChan* _tr_chan_new(long long cap) {
     InitializeConditionVariable(&c->not_full);
     return c;
 }
-static void _tr_chan_send(_TrChan* c, long long val) {
+_TR_XLINK void _tr_chan_send(_TrChan* c, long long val) {
     EnterCriticalSection(&c->mu);
     while (c->count >= c->cap && !c->closed)
         SleepConditionVariableCS(&c->not_full, &c->mu, INFINITE);
@@ -1062,7 +1062,7 @@ static void _tr_chan_send(_TrChan* c, long long val) {
     }
     LeaveCriticalSection(&c->mu);
 }
-static long long _tr_chan_recv(_TrChan* c) {
+_TR_XLINK long long _tr_chan_recv(_TrChan* c) {
     EnterCriticalSection(&c->mu);
     while (c->count == 0 && !c->closed)
         SleepConditionVariableCS(&c->not_empty, &c->mu, INFINITE);
@@ -1073,19 +1073,19 @@ static long long _tr_chan_recv(_TrChan* c) {
     }
     LeaveCriticalSection(&c->mu); return v;
 }
-static bool _tr_chan_try_send(_TrChan* c, long long val) {
+_TR_XLINK bool _tr_chan_try_send(_TrChan* c, long long val) {
     EnterCriticalSection(&c->mu);
     bool ok = !c->closed && c->count < c->cap;
     if (ok) { c->buf[c->tail]=val; c->tail=(c->tail+1)%c->cap; c->count++; WakeConditionVariable(&c->not_empty); }
     LeaveCriticalSection(&c->mu); return ok;
 }
-static long long _tr_chan_try_recv_val(_TrChan* c) {
+_TR_XLINK long long _tr_chan_try_recv_val(_TrChan* c) {
     EnterCriticalSection(&c->mu);
     long long v = LLONG_MIN;
     if (c->count > 0) { v=c->buf[c->head]; c->head=(c->head+1)%c->cap; c->count--; WakeConditionVariable(&c->not_full); }
     LeaveCriticalSection(&c->mu); return v;
 }
-static bool _tr_chan_send_timeout(_TrChan* c, long long val, long long ms) {
+_TR_XLINK bool _tr_chan_send_timeout(_TrChan* c, long long val, long long ms) {
     EnterCriticalSection(&c->mu);
     ULONGLONG dl = GetTickCount64()+(ULONGLONG)ms; bool ok=true;
     while (c->count>=c->cap && !c->closed) {
@@ -1095,7 +1095,7 @@ static bool _tr_chan_send_timeout(_TrChan* c, long long val, long long ms) {
     if (ok&&!c->closed&&c->count<c->cap){c->buf[c->tail]=val;c->tail=(c->tail+1)%c->cap;c->count++;WakeConditionVariable(&c->not_empty);}else ok=false;
     LeaveCriticalSection(&c->mu); return ok;
 }
-static long long _tr_chan_recv_timeout_val(_TrChan* c, long long ms) {
+_TR_XLINK long long _tr_chan_recv_timeout_val(_TrChan* c, long long ms) {
     EnterCriticalSection(&c->mu);
     ULONGLONG dl=GetTickCount64()+(ULONGLONG)ms;
     while (c->count==0&&!c->closed){
@@ -1106,13 +1106,13 @@ static long long _tr_chan_recv_timeout_val(_TrChan* c, long long ms) {
     if(c->count>0){v=c->buf[c->head];c->head=(c->head+1)%c->cap;c->count--;WakeConditionVariable(&c->not_full);}
     LeaveCriticalSection(&c->mu); return v;
 }
-static void _tr_chan_close(_TrChan* c) {
+_TR_XLINK void _tr_chan_close(_TrChan* c) {
     EnterCriticalSection(&c->mu); c->closed=1;
     WakeAllConditionVariable(&c->not_empty); WakeAllConditionVariable(&c->not_full);
     LeaveCriticalSection(&c->mu);
 }
-static bool   _tr_chan_is_closed(_TrChan* c) { EnterCriticalSection(&c->mu); bool r=c->closed!=0; LeaveCriticalSection(&c->mu); return r; }
-static long long _tr_chan_len(_TrChan* c)    { EnterCriticalSection(&c->mu); long long n=c->count; LeaveCriticalSection(&c->mu); return n; }
+_TR_XLINK bool _tr_chan_is_closed(_TrChan* c) { EnterCriticalSection(&c->mu); bool r=c->closed!=0; LeaveCriticalSection(&c->mu); return r; }
+_TR_XLINK long long _tr_chan_len(_TrChan* c)    { EnterCriticalSection(&c->mu); long long n=c->count; LeaveCriticalSection(&c->mu); return n; }
 static long long _tr_chan_cap(_TrChan* c)    { return c?c->cap:0; }
 static void   _tr_chan_free(_TrChan* c)      { if(!c)return; DeleteCriticalSection(&c->mu); _tr_free(c->buf); _tr_free(c); }
 static long long _tr_chan_recv_ok(_TrChan* c, int* ok) {
@@ -1288,34 +1288,34 @@ static inline void _tr_tls_free(_TrTLS* t) { if (!t) return; TlsFree(t->key); fr
 typedef struct {
     long long* buf; long long head, tail, count, cap; volatile int closed;
 } _TrChan;
-static _TrChan* _tr_chan_new(long long cap) {
+_TR_XLINK _TrChan* _tr_chan_new(long long cap) {
     if (cap < 1) cap = 1;
     _TrChan* c = (_TrChan*)TAURARO_CALLOC(1, sizeof(_TrChan));
     c->buf = (long long*)TAURARO_CALLOC((size_t)cap, sizeof(long long)); c->cap = cap;
     return c;
 }
-static void _tr_chan_send(_TrChan* c, long long val) {
+_TR_XLINK void _tr_chan_send(_TrChan* c, long long val) {
     if (!c || c->closed || c->count >= c->cap) return;
     c->buf[c->tail] = val; c->tail = (c->tail+1)%c->cap; c->count++;
 }
-static long long _tr_chan_recv(_TrChan* c) {
+_TR_XLINK long long _tr_chan_recv(_TrChan* c) {
     if (!c || c->count == 0) return 0LL;
     long long v = c->buf[c->head]; c->head = (c->head+1)%c->cap; c->count--;
     return v;
 }
-static bool _tr_chan_try_send(_TrChan* c, long long val) {
+_TR_XLINK bool _tr_chan_try_send(_TrChan* c, long long val) {
     if (!c || c->closed || c->count >= c->cap) return false;
     c->buf[c->tail]=val; c->tail=(c->tail+1)%c->cap; c->count++; return true;
 }
-static long long _tr_chan_try_recv_val(_TrChan* c) {
+_TR_XLINK long long _tr_chan_try_recv_val(_TrChan* c) {
     if (!c || c->count == 0) return LLONG_MIN;
     long long v=c->buf[c->head]; c->head=(c->head+1)%c->cap; c->count--; return v;
 }
-static bool  _tr_chan_send_timeout(_TrChan* c, long long val, long long ms)  { (void)ms; return _tr_chan_try_send(c, val); }
-static long long _tr_chan_recv_timeout_val(_TrChan* c, long long ms)         { (void)ms; return _tr_chan_try_recv_val(c); }
-static void  _tr_chan_close(_TrChan* c)          { if (c) c->closed = 1; }
-static bool  _tr_chan_is_closed(_TrChan* c)      { return c && c->closed; }
-static long long _tr_chan_len(_TrChan* c)         { return c ? c->count : 0LL; }
+_TR_XLINK bool _tr_chan_send_timeout(_TrChan* c, long long val, long long ms)  { (void)ms; return _tr_chan_try_send(c, val); }
+_TR_XLINK long long _tr_chan_recv_timeout_val(_TrChan* c, long long ms)         { (void)ms; return _tr_chan_try_recv_val(c); }
+_TR_XLINK void _tr_chan_close(_TrChan* c)          { if (c) c->closed = 1; }
+_TR_XLINK bool _tr_chan_is_closed(_TrChan* c)      { return c && c->closed; }
+_TR_XLINK long long _tr_chan_len(_TrChan* c)         { return c ? c->count : 0LL; }
 static long long _tr_chan_cap(_TrChan* c)         { return c ? c->cap : 0LL; }
 static void  _tr_chan_free(_TrChan* c)            { if (!c) return; TAURARO_FREE(c->buf); TAURARO_FREE(c); }
 static long long _tr_chan_recv_ok(_TrChan* c, int* ok) {
@@ -1443,35 +1443,35 @@ typedef struct {
     long long* buf; long long head,tail,count,cap; volatile int closed;
     pthread_mutex_t mu; pthread_cond_t not_empty, not_full;
 } _TrChan;
-static _TrChan* _tr_chan_new(long long cap) {
+_TR_XLINK _TrChan* _tr_chan_new(long long cap) {
     if(cap<1)cap=1; _TrChan* c=(_TrChan*)calloc(1,sizeof(_TrChan));
     c->buf=(long long*)TAURARO_CALLOC((size_t)cap,sizeof(long long)); c->cap=cap;
     pthread_mutex_init(&c->mu,NULL); pthread_cond_init(&c->not_empty,NULL); pthread_cond_init(&c->not_full,NULL); return c;
 }
-static void _tr_chan_send(_TrChan* c, long long val) {
+_TR_XLINK void _tr_chan_send(_TrChan* c, long long val) {
     pthread_mutex_lock(&c->mu);
     while(c->count>=c->cap&&!c->closed) pthread_cond_wait(&c->not_full,&c->mu);
     if(!c->closed){c->buf[c->tail]=val;c->tail=(c->tail+1)%c->cap;c->count++;pthread_cond_signal(&c->not_empty);}
     pthread_mutex_unlock(&c->mu);
 }
-static long long _tr_chan_recv(_TrChan* c) {
+_TR_XLINK long long _tr_chan_recv(_TrChan* c) {
     pthread_mutex_lock(&c->mu);
     while(c->count==0&&!c->closed) pthread_cond_wait(&c->not_empty,&c->mu);
     long long v=0;
     if(c->count>0){v=c->buf[c->head];c->head=(c->head+1)%c->cap;c->count--;pthread_cond_signal(&c->not_full);}
     pthread_mutex_unlock(&c->mu); return v;
 }
-static bool _tr_chan_try_send(_TrChan* c, long long val) {
+_TR_XLINK bool _tr_chan_try_send(_TrChan* c, long long val) {
     pthread_mutex_lock(&c->mu); bool ok=!c->closed&&c->count<c->cap;
     if(ok){c->buf[c->tail]=val;c->tail=(c->tail+1)%c->cap;c->count++;pthread_cond_signal(&c->not_empty);}
     pthread_mutex_unlock(&c->mu); return ok;
 }
-static long long _tr_chan_try_recv_val(_TrChan* c) {
+_TR_XLINK long long _tr_chan_try_recv_val(_TrChan* c) {
     pthread_mutex_lock(&c->mu); long long v=LLONG_MIN;
     if(c->count>0){v=c->buf[c->head];c->head=(c->head+1)%c->cap;c->count--;pthread_cond_signal(&c->not_full);}
     pthread_mutex_unlock(&c->mu); return v;
 }
-static bool _tr_chan_send_timeout(_TrChan* c, long long val, long long ms) {
+_TR_XLINK bool _tr_chan_send_timeout(_TrChan* c, long long val, long long ms) {
     struct timespec ts; clock_gettime(CLOCK_REALTIME,&ts);
     ts.tv_sec+=ms/1000; ts.tv_nsec+=(ms%1000)*1000000LL;
     if(ts.tv_nsec>=1000000000LL){ts.tv_sec++;ts.tv_nsec-=1000000000LL;}
@@ -1480,7 +1480,7 @@ static bool _tr_chan_send_timeout(_TrChan* c, long long val, long long ms) {
     if(ok&&!c->closed&&c->count<c->cap){c->buf[c->tail]=val;c->tail=(c->tail+1)%c->cap;c->count++;pthread_cond_signal(&c->not_empty);}else ok=false;
     pthread_mutex_unlock(&c->mu); return ok;
 }
-static long long _tr_chan_recv_timeout_val(_TrChan* c, long long ms) {
+_TR_XLINK long long _tr_chan_recv_timeout_val(_TrChan* c, long long ms) {
     struct timespec ts; clock_gettime(CLOCK_REALTIME,&ts);
     ts.tv_sec+=ms/1000; ts.tv_nsec+=(ms%1000)*1000000LL;
     if(ts.tv_nsec>=1000000000LL){ts.tv_sec++;ts.tv_nsec-=1000000000LL;}
@@ -1490,12 +1490,12 @@ static long long _tr_chan_recv_timeout_val(_TrChan* c, long long ms) {
     if(c->count>0){v=c->buf[c->head];c->head=(c->head+1)%c->cap;c->count--;pthread_cond_signal(&c->not_full);}
     pthread_mutex_unlock(&c->mu); return v;
 }
-static void _tr_chan_close(_TrChan* c) {
+_TR_XLINK void _tr_chan_close(_TrChan* c) {
     pthread_mutex_lock(&c->mu); c->closed=1;
     pthread_cond_broadcast(&c->not_empty); pthread_cond_broadcast(&c->not_full); pthread_mutex_unlock(&c->mu);
 }
-static bool   _tr_chan_is_closed(_TrChan* c) { pthread_mutex_lock(&c->mu); bool r=c->closed!=0; pthread_mutex_unlock(&c->mu); return r; }
-static long long _tr_chan_len(_TrChan* c)    { pthread_mutex_lock(&c->mu); long long n=c->count; pthread_mutex_unlock(&c->mu); return n; }
+_TR_XLINK bool _tr_chan_is_closed(_TrChan* c) { pthread_mutex_lock(&c->mu); bool r=c->closed!=0; pthread_mutex_unlock(&c->mu); return r; }
+_TR_XLINK long long _tr_chan_len(_TrChan* c)    { pthread_mutex_lock(&c->mu); long long n=c->count; pthread_mutex_unlock(&c->mu); return n; }
 static long long _tr_chan_cap(_TrChan* c)    { return c?c->cap:0; }
 static void   _tr_chan_free(_TrChan* c)      { if(!c)return; pthread_mutex_destroy(&c->mu); pthread_cond_destroy(&c->not_empty); pthread_cond_destroy(&c->not_full); _tr_free(c->buf); _tr_free(c); }
 static long long _tr_chan_recv_ok(_TrChan* c, int* ok) {

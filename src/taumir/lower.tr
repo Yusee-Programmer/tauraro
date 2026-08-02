@@ -5571,6 +5571,62 @@ def _lower_expr_impl(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                             return _str_call0(m, lf, "_tr_rt_strlen", sll, 0)
                 case _:
                     pass
+            # Builtin Chan[T] channel INSTANCE methods on a Chan-valued receiver -> _tr_chan_*
+            # runtime calls. Guard on the method name so `Chan.init(..)` (the type name as
+            # receiver) falls through to the static-constructor block below.
+            if hir_expr_type(obj).name == "Chan" and (method == "send" or method == "recv" or method == "try_recv" or method == "try_send" or method == "close" or method == "is_closed" or method == "len"):
+                mut cho = lower_expr(m, lf, obj)
+                if cho < 0: return -1
+                if method == "send" and margs.len == 1:
+                    mut chv = lower_expr(m, lf, margs.get(0))
+                    if chv < 0 or lf.vreg_type(chv) != 0: return -1
+                    m.add_extern("_tr_chan_send")
+                    mut csa = Vec[int].init(2)
+                    csa.push(cho)
+                    csa.push(chv)
+                    lf.emit(LInst.ICall(-1, "_tr_chan_send", csa))
+                    return cho
+                if (method == "recv" or method == "try_recv") and margs.len == 0:
+                    mut crs = "_tr_chan_recv"
+                    if method == "try_recv": crs = "_tr_chan_try_recv_val"
+                    m.add_extern(crs)
+                    mut cra = Vec[int].init(1)
+                    cra.push(cho)
+                    mut crd = lf.new_vreg()
+                    lf.emit(LInst.ICall(crd, crs, cra))
+                    lf.set_vreg_type(crd, 0)
+                    return crd
+                if method == "try_send" and margs.len == 1:
+                    mut ctv = lower_expr(m, lf, margs.get(0))
+                    if ctv < 0 or lf.vreg_type(ctv) != 0: return -1
+                    m.add_extern("_tr_chan_try_send")
+                    mut cta = Vec[int].init(2)
+                    cta.push(cho)
+                    cta.push(ctv)
+                    mut ctd = lf.new_vreg()
+                    lf.emit(LInst.ICall(ctd, "_tr_chan_try_send", cta))
+                    lf.set_vreg_type(ctd, 4)
+                    return ctd
+                if method == "close" and margs.len == 0:
+                    m.add_extern("_tr_chan_close")
+                    mut cca = Vec[int].init(1)
+                    cca.push(cho)
+                    lf.emit(LInst.ICall(-1, "_tr_chan_close", cca))
+                    return cho
+                if (method == "is_closed" or method == "len") and margs.len == 0:
+                    mut cqs = "_tr_chan_len"
+                    mut cqtag = 0
+                    if method == "is_closed":
+                        cqs = "_tr_chan_is_closed"
+                        cqtag = 4
+                    m.add_extern(cqs)
+                    mut cqa = Vec[int].init(1)
+                    cqa.push(cho)
+                    mut cqd = lf.new_vreg()
+                    lf.emit(LInst.ICall(cqd, cqs, cqa))
+                    lf.set_vreg_type(cqd, cqtag)
+                    return cqd
+                return -1
             # Raw pointer ops on a Pointer[T] receiver (unsafe code): read/write/offset.
             if hir_expr_type(obj).name == "Pointer":
                 mut pty = hir_expr_type(obj)
@@ -5680,6 +5736,18 @@ def _lower_expr_impl(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                         lf.emit(LInst.ICall(lnd, "_tr_rt_list_new", Vec[int].init(0)))
                         lf.set_vreg_type(lnd, ltag2)
                         return lnd
+                    # Chan[T].init(cap)/.new(cap): a BUILTIN typed channel -> _tr_chan_new (a
+                    # raw _TrChan* handle, tag 0 = no ARC). Methods intercepted below.
+                    if inm == "Chan" and (method == "init" or method == "new") and margs.len == 1:
+                        mut ccap = lower_expr(m, lf, margs.get(0))
+                        if ccap < 0 or lf.vreg_type(ccap) != 0: return -1
+                        m.add_extern("_tr_chan_new")
+                        mut cna = Vec[int].init(1)
+                        cna.push(ccap)
+                        mut cnd = lf.new_vreg()
+                        lf.emit(LInst.ICall(cnd, "_tr_chan_new", cna))
+                        lf.set_vreg_type(cnd, 0)          # raw handle (not ARC-managed)
+                        return cnd
                     if _prog_generic_class_index(m, inm) >= 0 and ity_g.args.len > 0:
                         mut gsm = _ensure_generic_class(m, ity_g)
                         if gsm == "": return -1
