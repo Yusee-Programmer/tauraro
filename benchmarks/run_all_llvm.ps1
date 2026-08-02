@@ -69,6 +69,18 @@ function Compile-TauraroLlvm($src, $out) {
     if ($LASTEXITCODE -ne 0) { Write-Warning "Tauraro-LLVM compile failed: $r"; return $false }
     return $true
 }
+# The C and LLVM backends BOTH write to a CWD-relative build\ dir; on Windows a just-run
+# bench.exe (or the LLVM driver's log) can hold a handle, so the next compile fails with
+# "Permission denied" / "resource busy". Wipe build\ (retrying past the transient lock)
+# before every Tauraro compile so each starts from a clean, unlocked directory.
+function Clean-Build {
+    $bd = Join-Path $BENCH "build"; $n = 0
+    while ((Test-Path $bd) -and ($n -lt 50)) {
+        Remove-Item $bd -Recurse -Force -ErrorAction SilentlyContinue
+        if (Test-Path $bd) { Start-Sleep -Milliseconds 100 }
+        $n++
+    }
+}
 
 $benchmarks = @(
     @{ name = "1 - Integer Sum";      dir = "1_sum"         },
@@ -103,12 +115,14 @@ foreach ($b in $benchmarks) {
 
     $c_ok  = Compile-C       "$dir\bench.c"  "$dir\bench_c.exe"
     $rs_ok = Compile-Rust    "$dir\bench.rs" "$dir\bench_rs.exe"
+    Clean-Build
     $tc_ok = Compile-TauraroC "$dir\bench.tr"
     # Measure the C-backend exe BEFORE the LLVM compile reuses build\.
     $tc_exe = "$BENCH\build\bench.exe"
     $tc_res = if ($tc_ok -and (Test-Path $tc_exe)) { Run-Bench $tc_exe } else { @{ Time = $null; PeakMemKB = $null } }
 
     # LLVM backend -> its own exe path (avoids clobbering the C-backend build\).
+    Clean-Build
     $ll_out = "$dir\bench_llvm.exe"
     $ll_ok  = Compile-TauraroLlvm "$dir\bench.tr" $ll_out
     $ll_exe = if (Test-Path $ll_out) { $ll_out } elseif (Test-Path "$dir\bench_llvm") { "$dir\bench_llvm" } else { $null }

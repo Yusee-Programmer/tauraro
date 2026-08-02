@@ -437,6 +437,20 @@ pub def encode_func(lf: LFunc) -> EncodedFunc:
                 case LInst.IAsm(acode, acons):
                     pass                   # native can't assemble arbitrary text -> no-op
                                            # (effect-free asm like nop/barriers stays correct)
+                case LInst.ILoad(dst, base, off):
+                    _ld_rax(c, _vreg_disp(base))    # rax = base address
+                    c.u8(72)                        # mov rax, [rax + off32]  (48 8B 80 disp32)
+                    c.u8(139)
+                    c.u8(128)
+                    c.u32(off)
+                    _st_rax(c, _vreg_disp(dst))     # [dst] = rax
+                case LInst.IStore(base, off, src):
+                    _ld_rax(c, _vreg_disp(base))    # rax = base address
+                    _ld_rcx(c, _vreg_disp(src))     # rcx = value
+                    c.u8(72)                        # mov [rax + off32], rcx  (48 89 88 disp32)
+                    c.u8(137)
+                    c.u8(136)
+                    c.u32(off)
             ii = ii + 1
 
         match blk.term:

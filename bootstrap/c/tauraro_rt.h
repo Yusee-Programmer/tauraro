@@ -918,14 +918,14 @@ static DWORD WINAPI _tr_thread_start_trampoline(LPVOID raw) {
     _tr_thread_has_panic_buf = 0;
     return 0;
 }
-static _TrThread _tr_thread_start(void*(*fn)(void*), void* arg) {
+_TR_XLINK _TrThread _tr_thread_start(void*(*fn)(void*), void* arg) {
     _TrWin32StartArg* s = (_TrWin32StartArg*)malloc(sizeof(_TrWin32StartArg));
     s->fn = fn; s->arg = arg; s->result = NULL;
     SIZE_T ss = (SIZE_T)TAURARO_THREAD_STACK_SIZE;
     return CreateThread(NULL, ss, _tr_thread_start_trampoline, s, 0, NULL);
 }
-static void _tr_thread_detach(_TrThread t) { CloseHandle(t); }
-static void _tr_thread_join_wait(_TrThread t) { WaitForSingleObject(t, INFINITE); CloseHandle(t); }
+_TR_XLINK void _tr_thread_detach(_TrThread t) { CloseHandle(t); }
+_TR_XLINK void _tr_thread_join_wait(_TrThread t) { WaitForSingleObject(t, INFINITE); CloseHandle(t); }
 
 typedef CRITICAL_SECTION _TrMutex;
 static void _tr_mutex_init(_TrMutex* m)   { InitializeCriticalSection(m); }
@@ -955,9 +955,9 @@ static inline char* _tr_path_canonicalize(const char* path) {
 #elif defined(TAURARO_BARE)
 /* ── BARE/WASM: single-threaded primitive stubs ──────────────────────── */
 typedef int _TrThread;
-static _TrThread _tr_thread_start(void*(*fn)(void*), void* arg) { fn(arg); return 0; }
-static void _tr_thread_detach(_TrThread t)      { (void)t; }
-static void _tr_thread_join_wait(_TrThread t)   { (void)t; }
+_TR_XLINK _TrThread _tr_thread_start(void*(*fn)(void*), void* arg) { fn(arg); return 0; }
+_TR_XLINK void _tr_thread_detach(_TrThread t)      { (void)t; }
+_TR_XLINK void _tr_thread_join_wait(_TrThread t)   { (void)t; }
 
 typedef int _TrMutex;
 static void _tr_mutex_init(_TrMutex* m)         { (void)m; }
@@ -997,7 +997,7 @@ static void* _tr_posix_thread_trampoline(void* raw) {
     _tr_thread_has_panic_buf = 0;
     return NULL;
 }
-static _TrThread _tr_thread_start(void*(*fn)(void*), void* arg) {
+_TR_XLINK _TrThread _tr_thread_start(void*(*fn)(void*), void* arg) {
     _TrPosixStartArg* s = (_TrPosixStartArg*)malloc(sizeof(_TrPosixStartArg));
     s->fn = fn; s->arg = arg; s->result = NULL;
     pthread_attr_t attr; pthread_attr_init(&attr);
@@ -1007,8 +1007,8 @@ static _TrThread _tr_thread_start(void*(*fn)(void*), void* arg) {
     pthread_t t; pthread_create(&t, &attr, _tr_posix_thread_trampoline, s);
     pthread_attr_destroy(&attr); return t;
 }
-static void _tr_thread_detach(_TrThread t) { pthread_detach(t); }
-static void _tr_thread_join_wait(_TrThread t) { pthread_join(t, NULL); }
+_TR_XLINK void _tr_thread_detach(_TrThread t) { pthread_detach(t); }
+_TR_XLINK void _tr_thread_join_wait(_TrThread t) { pthread_join(t, NULL); }
 
 typedef pthread_mutex_t _TrMutex;
 static void _tr_mutex_init(_TrMutex* m)   { pthread_mutex_init(m, NULL); }
@@ -1911,11 +1911,11 @@ static inline void _tr_threadobj_free(_TrThreadObj* t) { if (t) TAURARO_FREE(t);
 
 /* ── Thread utilities: current-thread ID and sleep ───────────────────── */
 #ifdef _WIN32
-static inline long long _tr_thread_current_id(void) { return (long long)(uintptr_t)GetCurrentThreadId(); }
+_TR_XLINK long long _tr_thread_current_id(void) { return (long long)(uintptr_t)GetCurrentThreadId(); }
 #elif defined(TAURARO_BARE)
-static inline long long _tr_thread_current_id(void) { return 0LL; }
+_TR_XLINK long long _tr_thread_current_id(void) { return 0LL; }
 #else
-static inline long long _tr_thread_current_id(void) { return (long long)(uintptr_t)pthread_self(); }
+_TR_XLINK long long _tr_thread_current_id(void) { return (long long)(uintptr_t)pthread_self(); }
 #endif
 static inline void _tr_thread_sleep_ms(long long ms) { _tr_sleep_ms((long)(ms < 0 ? 0 : ms)); }
 
@@ -3302,18 +3302,18 @@ static inline _TrThreadPool* _tr_async_pool(void) {
 static inline void _tr_async_pool_shutdown(void) {
     if (_tr_global_async_pool) { _tr_threadpool_free(_tr_global_async_pool); _tr_global_async_pool = NULL; }
 }
-static inline void _tr_tg_begin(void) {
+_TR_XLINK void _tr_tg_begin(void) {
     _tr_tg.cap = 16; _tr_tg.count = 0;
     _tr_tg.ths = (_TrThread*)TAURARO_ALLOC((size_t)_tr_tg.cap * sizeof(_TrThread));
 }
-static inline void _tr_tg_push(_TrThread t) {
+_TR_XLINK void _tr_tg_push(_TrThread t) {
     if (_tr_tg.count >= _tr_tg.cap) {
         _tr_tg.cap *= 2;
         _tr_tg.ths = (_TrThread*)TAURARO_REALLOC(_tr_tg.ths, (size_t)_tr_tg.cap * sizeof(_TrThread));
     }
     _tr_tg.ths[_tr_tg.count++] = t;
 }
-static inline void _tr_taskgroup_wait(void) {
+_TR_XLINK void _tr_taskgroup_wait(void) {
     for (int i = 0; i < _tr_tg.count; i++) _tr_thread_join_wait(_tr_tg.ths[i]);
     if (_tr_tg.ths) { TAURARO_FREE(_tr_tg.ths); _tr_tg.ths = NULL; }
     _tr_tg.count = 0; _tr_tg.cap = 0;

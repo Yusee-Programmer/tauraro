@@ -1223,27 +1223,15 @@ def _field_tag_ok(vt: int, ftg: int) -> bool:
     return false
 
 # Store an i64/ptr vreg into an object field slot: _tr_rt_field_set_i(obj, off, val).
+# Store an object field slot: *(obj+off) = val. INLINE (no runtime call).
 def _emit_field_set(m: LModule, lf: LFunc, obj: int, off: int, val: int):
-    mut offc = lf.new_vreg()
-    lf.emit(LInst.IConst(offc, off))
-    m.add_extern("_tr_rt_field_set_i")
-    mut sa = Vec[int].init(3)
-    sa.push(obj)
-    sa.push(offc)
-    sa.push(val)
-    lf.emit(LInst.ICall(-1, "_tr_rt_field_set_i", sa))
+    lf.emit(LInst.IStore(obj, off, val))
 
-# Load an object field slot: dst = _tr_rt_field_get_i(obj, off), typed `tag`.
+# Load an object field slot: dst = *(obj+off), typed `tag`. INLINE (no runtime call).
 def _emit_field_get(m: LModule, lf: LFunc, obj: int, off: int, tag: int) -> int:
-    mut offc = lf.new_vreg()
-    lf.emit(LInst.IConst(offc, off))
-    m.add_extern("_tr_rt_field_get_i")
-    mut fgargs = Vec[int].init(2)
-    fgargs.push(obj)
-    fgargs.push(offc)
     mut gd = lf.new_vreg()
-    lf.emit(LInst.ICall(gd, "_tr_rt_field_get_i", fgargs))
-    lf.set_vreg_type(gd, tag)
+    lf.set_vreg_type(gd, tag)        # set BEFORE emit so ILoad loads the right LLVM type
+    lf.emit(LInst.ILoad(gd, obj, off))
     return gd
 
 # Enum variant construction `Enum.Variant(args)` / unit `Enum.Variant` -> heap-allocate
@@ -1462,6 +1450,80 @@ def _lower_await(m: LModule, lf: LFunc, awexpr: Pointer[HirExpr]) -> int:
             return r
         case _:
             return lower_expr(m, lf, awexpr)
+
+# `spawn f(args)`: run f on a REAL OS thread (matches the C backend). The thread entry is
+# the SAME `_awaitwrap_<fn>` used by await (both are void*(*)(void*)): it unpacks the packed
+# args, calls f, frees the buffer. Detached by default; inside a task_group the handle is
+# pushed so the group joins it. Thread-safety is enforced by the shared front-end ([T-7]:
+# a plain-rc class can't cross spawn), so packed str/obj args are safe (Sendable/atomic).
+def _lower_spawn(m: LModule, lf: LFunc, expr: Pointer[HirExpr]) -> bool:
+    match expr.read():
+        case HirExpr.ECall(callee, args, _):
+            mut fn = _ident_name(callee)
+            if _is_null_str(fn) or fn == "" or not m.is_user_fn(fn): return false
+            if not _ensure_await_wrapper(m, fn): return false
+            m.add_extern("_tr_rt_raw_alloc")
+            mut packsz = args.len * 8
+            if packsz < 8: packsz = 8
+            mut szc = lf.new_vreg()
+            lf.emit(LInst.IConst(szc, packsz))
+            mut aa = Vec[int].init(1)
+            aa.push(szc)
+            mut buf = lf.new_vreg()
+            lf.emit(LInst.ICall(buf, "_tr_rt_raw_alloc", aa))
+            lf.set_vreg_type(buf, 0)
+            mut ai = 0
+            while ai < args.len:
+                mut argv = lower_expr(m, lf, args.get(ai))
+                if argv < 0: return false
+                mut argt = lf.vreg_type(argv)
+                if argt == 5:
+                    mut afb = lf.new_vreg()
+                    lf.emit(LInst.IFBits(afb, argv))
+                    argv = afb
+                elif argt == 1: _secure_str(m, lf, argv)
+                elif argt == 10 or argt == 11: _secure_obj(m, lf, argv)
+                _emit_field_set(m, lf, buf, ai * 8, argv)
+                ai = ai + 1
+            mut faddr = lf.new_vreg()
+            lf.set_vreg_type(faddr, 12)
+            lf.emit(LInst.IFuncAddr(faddr, "_awaitwrap_" + fn))
+            m.add_extern("_tr_thread_start")
+            mut sa = Vec[int].init(2)
+            sa.push(faddr)
+            sa.push(buf)
+            mut handle = lf.new_vreg()
+            lf.emit(LInst.ICall(handle, "_tr_thread_start", sa))
+            lf.set_vreg_type(handle, 0)
+            if lf.in_taskgroup > 0:
+                m.add_extern("_tr_tg_push")
+                mut pa = Vec[int].init(1)
+                pa.push(handle)
+                lf.emit(LInst.ICall(-1, "_tr_tg_push", pa))
+            else:
+                m.add_extern("_tr_thread_detach")
+                mut da = Vec[int].init(1)
+                da.push(handle)
+                lf.emit(LInst.ICall(-1, "_tr_thread_detach", da))
+            _flush_fresh_strs(m, lf)
+            return true
+        case _:
+            return false
+
+# `task_group:` structured concurrency — begin a group, lower the body (spawns push their
+# handles into the group), then JOIN all spawned threads before the block returns. Matches
+# the C backend's _tr_tg_begin / _tr_taskgroup_wait. Single (non-nested) group in v1.
+def _lower_taskgroup(m: LModule, lf: LFunc, body: HirBlock) -> bool:
+    if lf.in_taskgroup > 0: return false        # nested task_group uses one global group -> fall back
+    m.add_extern("_tr_tg_begin")
+    lf.emit(LInst.ICall(-1, "_tr_tg_begin", Vec[int].init(0)))
+    lf.in_taskgroup = lf.in_taskgroup + 1
+    mut ok = lower_block(m, lf, body)
+    lf.in_taskgroup = lf.in_taskgroup - 1
+    if not ok: return false
+    m.add_extern("_tr_taskgroup_wait")
+    lf.emit(LInst.ICall(-1, "_tr_taskgroup_wait", Vec[int].init(0)))
+    return true
 
 # Emit a call to a (mangled) user method/constructor. self_vreg >= 0 is prepended as the
 # first argument (instance methods); -1 means a static call (constructors). Result tag is
@@ -2171,6 +2233,10 @@ def _lower_stmt_impl(m: LModule, lf: LFunc, s: Pointer[HirStmt]) -> bool:
             return se_ok
         case HirStmt.SUnsafe(ubody):
             return lower_block(m, lf, ubody)
+        case HirStmt.SSpawn(sexpr):
+            return _lower_spawn(m, lf, sexpr)
+        case HirStmt.STaskGroup(tgbody):
+            return _lower_taskgroup(m, lf, tgbody)
         case HirStmt.SAsm(code, outputs, inputs, clobbers):
             # Inline asm (LLVM emits `call void asm sideeffect "code", "cons"()`; native
             # no-ops it — it can't assemble arbitrary strings, but effect-free asm like
@@ -3143,12 +3209,8 @@ def _lower_index_set(m: LModule, lf: LFunc, obj: Pointer[HirExpr], idx: Pointer[
             mut lvfb = lf.new_vreg()
             lf.emit(LInst.IFBits(lvfb, lvv))
             lvv = lvfb
-        m.add_extern("_tr_rt_list_set_i64")
-        mut la = Vec[int].init(3)
-        la.push(ov)
-        la.push(iv)
-        la.push(lvv)
-        lf.emit(LInst.ICall(-1, "_tr_rt_list_set_i64", la))
+        mut la_addr = _inline_list_addr(m, lf, ov, iv)         # data[i] address (inline)
+        lf.emit(LInst.IStore(la_addr, 0, lvv))
         return true
     return false
 
@@ -4041,14 +4103,26 @@ def _list_call1(m: LModule, lf: LFunc, sym: str, handle: int, restype: int) -> i
     lf.set_vreg_type(d, restype)
     return d
 
-# xs[i] / xs.get(i) lowering: _tr_rt_list_get_i64(handle, i) returning an i64.
+# Address of list element #idx: (_TrNList*)handle -> data[idx]. data is the first field
+# (offset 0), so addr = *(handle+0) + idx*8. INLINE (no runtime call) — this is the hot
+# path for array-heavy code; clang/gcc then hoist/vectorize what a call boundary blocked.
+# No bounds check (matches in-range accesses; correct programs never go out of range).
+def _inline_list_addr(m: LModule, lf: LFunc, handle: int, idx: int) -> int:
+    mut data = lf.new_vreg()
+    lf.emit(LInst.ILoad(data, handle, 0))          # data = handle->data (as an i64 address)
+    mut c8 = lf.new_vreg()
+    lf.emit(LInst.IConst(c8, 8))
+    mut i8 = lf.new_vreg()
+    lf.emit(LInst.IBinOp(i8, "*", idx, c8))
+    mut addr = lf.new_vreg()
+    lf.emit(LInst.IBinOp(addr, "+", data, i8))
+    return addr
+
+# xs[i] / xs.get(i): load the i64 slot at data[i] (caller reinterprets per element tag).
 def _list_get(m: LModule, lf: LFunc, handle: int, idx: int) -> int:
-    m.add_extern("_tr_rt_list_get_i64")
-    mut gargs = Vec[int].init(2)
-    gargs.push(handle)
-    gargs.push(idx)
+    mut addr = _inline_list_addr(m, lf, handle, idx)
     mut gd = lf.new_vreg()
-    lf.emit(LInst.ICall(gd, "_tr_rt_list_get_i64", gargs))
+    lf.emit(LInst.ILoad(gd, addr, 0))
     return gd
 
 # Element load typed for the LIST's tag: float lists store raw f64 bit patterns, so the
@@ -5464,6 +5538,13 @@ def _lower_expr_impl(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                             lf.emit(LInst.IConst(csd, 0))
                             return csd
                     if styn == "Thread":
+                        # Thread.current_id() -> the OS thread id (int).
+                        if (method == "current_id" or method == "id") and margs.len == 0:
+                            m.add_extern("_tr_thread_current_id")
+                            mut tcd = lf.new_vreg()
+                            lf.emit(LInst.ICall(tcd, "_tr_thread_current_id", Vec[int].init(0)))
+                            lf.set_vreg_type(tcd, 0)
+                            return tcd
                         # Thread.sleep(ms): a timing-only delay (no effect on any computed
                         # value / stdout). Lower it to the cooperative sleep so it yields to the
                         # scheduler instead of blocking — output stays identical to the C backend.
@@ -5744,12 +5825,8 @@ def _lower_expr_impl(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                     mut stfb = lf.new_vreg()
                     lf.emit(LInst.IFBits(stfb, stv))
                     stv = stfb
-                m.add_extern("_tr_rt_list_set_i64")
-                mut sta = Vec[int].init(3)
-                sta.push(ovm)
-                sta.push(sti)
-                sta.push(stv)
-                lf.emit(LInst.ICall(-1, "_tr_rt_list_set_i64", sta))
+                mut st_addr = _inline_list_addr(m, lf, ovm, sti)   # data[i] address (inline)
+                lf.emit(LInst.IStore(st_addr, 0, stv))
                 return ovm
             if method == "pop" and margs.len == 0:
                 m.add_extern("_tr_rt_list_pop_i64")

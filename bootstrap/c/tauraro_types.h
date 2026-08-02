@@ -1603,7 +1603,9 @@ typedef enum {
     LInst_IAddrVar,
     LInst_IFuncAddr,
     LInst_ICallInd,
-    LInst_IAsm
+    LInst_IAsm,
+    LInst_ILoad,
+    LInst_IStore
 } LInst_tag;
 
 typedef struct LInst {
@@ -1699,6 +1701,16 @@ typedef struct LInst {
             TrStr code;
             TrStr cons;
         } IAsm;
+        struct {
+            long long dst;
+            long long base;
+            long long off;
+        } ILoad;
+        struct {
+            long long base;
+            long long off;
+            long long src;
+        } IStore;
     } data;
 } LInst;
 
@@ -1722,6 +1734,8 @@ static inline __attribute__((always_inline)) LInst LInst_ctor_IAddrVar(long long
 static inline __attribute__((always_inline)) LInst LInst_ctor_IFuncAddr(long long dst, TrStr fname) { LInst _r = {.tag=LInst_IFuncAddr}; _r.data.IFuncAddr.dst = dst; _r.data.IFuncAddr.fname = _tr_str_retain(fname); return _r; }
 static inline __attribute__((always_inline)) LInst LInst_ctor_ICallInd(long long dst, long long fnreg, List_i64* args) { LInst _r = {.tag=LInst_ICallInd}; _r.data.ICallInd.dst = dst; _r.data.ICallInd.fnreg = fnreg; _r.data.ICallInd.args = args; return _r; }
 static inline __attribute__((always_inline)) LInst LInst_ctor_IAsm(TrStr code, TrStr cons) { LInst _r = {.tag=LInst_IAsm}; _r.data.IAsm.code = _tr_str_retain(code); _r.data.IAsm.cons = _tr_str_retain(cons); return _r; }
+static inline __attribute__((always_inline)) LInst LInst_ctor_ILoad(long long dst, long long base, long long off) { LInst _r = {.tag=LInst_ILoad}; _r.data.ILoad.dst = dst; _r.data.ILoad.base = base; _r.data.ILoad.off = off; return _r; }
+static inline __attribute__((always_inline)) LInst LInst_ctor_IStore(long long base, long long off, long long src) { LInst _r = {.tag=LInst_IStore}; _r.data.IStore.base = base; _r.data.IStore.off = off; _r.data.IStore.src = src; return _r; }
 
 typedef enum {
     LTerm_TRetInt,
@@ -2918,6 +2932,7 @@ typedef struct LFunc {
     bool is_throws;
     long long throws_ok_tag;
     long long throws_err_tag;
+    long long in_taskgroup;
 } LFunc;
 static void _trdrop_LFunc(void* vp) {
     LFunc* self = (LFunc*)vp; (void)self;
@@ -3830,6 +3845,8 @@ __attribute__((hot)) long long _wrap_result(LModule* m, LFunc* lf, long long vid
 __attribute__((hot)) long long _find_free_fn_idx(LModule* m, TrStr name);
 __attribute__((hot)) bool _ensure_await_wrapper(LModule* m, TrStr fn);
 __attribute__((hot)) long long _lower_await(LModule* m, LFunc* lf, HirExpr* awexpr);
+__attribute__((hot)) bool _lower_spawn(LModule* m, LFunc* lf, HirExpr* expr);
+__attribute__((hot)) bool _lower_taskgroup(LModule* m, LFunc* lf, HirBlock* body);
 __attribute__((hot)) long long _lower_obj_call(LModule* m, LFunc* lf, TrStr mangled, long long self_vreg, List_ptr* margs);
 __attribute__((hot)) bool lower_block(LModule* m, LFunc* lf, HirBlock* hb);
 __attribute__((hot)) bool _run_defers(LModule* m, LFunc* lf);
@@ -3906,6 +3923,7 @@ __attribute__((hot)) bool _is_const_int(HirExpr* e);
 __attribute__((hot)) long long _const_int_val(HirExpr* e);
 __attribute__((hot)) void _emit_add_const(LFunc* lf, TrStr name, long long delta);
 __attribute__((hot)) long long _list_call1(LModule* m, LFunc* lf, TrStr sym, long long handle, long long restype);
+__attribute__((hot)) long long _inline_list_addr(LModule* m, LFunc* lf, long long handle, long long idx);
 __attribute__((hot)) long long _list_get(LModule* m, LFunc* lf, long long handle, long long idx);
 __attribute__((hot)) long long _list_get_elem(LModule* m, LFunc* lf, long long ltag, long long handle, long long idx);
 __attribute__((hot)) long long _lower_expr_impl(LModule* m, LFunc* lf, HirExpr* e);
@@ -3923,6 +3941,7 @@ __attribute__((hot)) TrStr LlvmEmitter_vty(LlvmEmitter* self, long long v);
 __attribute__((hot)) TrStr LlvmEmitter_load_vreg(LlvmEmitter* self, long long v);
 __attribute__((hot)) TrStr LlvmEmitter_load_vreg_as(LlvmEmitter* self, long long v, TrStr ty);
 __attribute__((hot)) void LlvmEmitter_store_vreg(LlvmEmitter* self, long long v, TrStr ty, TrStr val);
+__attribute__((hot)) TrStr LlvmEmitter_addr_of_base(LlvmEmitter* self, long long v);
 __attribute__((hot)) TrStr LlvmEmitter_user_ret_ty(LlvmEmitter* self, TrStr name);
 __attribute__((hot)) void LlvmEmitter_emit_inst(LlvmEmitter* self, LInst inst);
 __attribute__((hot)) void LlvmEmitter_emit_call(LlvmEmitter* self, long long dst, TrStr callee, List_i64* args);

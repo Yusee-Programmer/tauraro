@@ -1,0 +1,20 @@
+def worker(id: int) -> void:
+    Thread.sleep(1)
+
+def compute(a: int, b: int) -> void:
+    Thread.sleep(1)
+
+async def main():
+    print("start")
+    task_group:
+        spawn worker(1)
+        spawn worker(2)
+        spawn worker(3)
+    print("group1 done")
+    task_group:
+        mut i = 0
+        while i < 5:
+            spawn compute(i, i + 1)
+            i = i + 1
+    print("group2 done")
+    print("all done")

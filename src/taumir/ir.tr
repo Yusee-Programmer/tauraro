@@ -39,6 +39,8 @@ pub enum LInst:
     IFuncAddr(dst: int, fname: str)             # dst = address of a defined function
     ICallInd(dst: int, fnreg: int, args: Vec[int])  # indirect call through the pointer in fnreg
     IAsm(code: str, cons: str)                       # inline asm: LLVM `call void asm sideeffect`
+    ILoad(dst: int, base: int, off: int)             # dst = *(int64_t*)(base + off)  (inline mem load)
+    IStore(base: int, off: int, src: int)            # *(int64_t*)(base + off) = src  (inline mem store)
 
 # Block terminator (exactly one per block).
 pub enum LTerm:
@@ -96,6 +98,7 @@ pub class LFunc:
     pub is_throws:  bool            # `throws E` fn: return -> Result.Ok(v), raise(e) -> Result.Err(e)
     pub throws_ok_tag:  int         # value-type tag of the Ok payload (declared return type)
     pub throws_err_tag: int         # value-type tag of the Err payload (throws error type)
+    pub in_taskgroup:   int         # >0 while lowering a task_group body: spawns join at group end
 
 extend LFunc:
     pub def init(name: str) -> LFunc:
@@ -127,6 +130,7 @@ extend LFunc:
         f.is_throws  = false
         f.throws_ok_tag  = 0
         f.throws_err_tag = 0
+        f.in_taskgroup   = 0
         return f
 
     # A monotonically increasing id, for building unique synthesized variable names

@@ -72,6 +72,8 @@ __attribute__((malloc,returns_nonnull,hot)) LFunc* LFunc_init(TrStr name) {
     /* pass */
     f->throws_err_tag = 0LL;
     /* pass */
+    f->in_taskgroup = 0LL;
+    /* pass */
     return f;
 }
 

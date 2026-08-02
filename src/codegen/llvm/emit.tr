@@ -58,6 +58,16 @@ extend LlvmEmitter:
     pub def store_vreg(self, v: int, ty: str, val: str):
         self.w("  store " + ty + " " + val + ", ptr %v" + v.to_str() + "\n")
 
+    # Load base vreg #v as a `ptr` address (for ILoad/IStore): a ptr-typed vreg is used
+    # directly; an i64 address is inttoptr'd.
+    pub def addr_of_base(self, v: int) -> str:
+        if self.vty(v) == "ptr":
+            return self.load_vreg_as(v, "ptr")
+        mut bi = self.load_vreg_as(v, "i64")
+        mut bp = self.newtmp()
+        self.w("  " + bp + " = inttoptr i64 " + bi + " to ptr\n")
+        return bp
+
     # Return-type tag of a user function (i64 for void — void Tauraro fns become i64 LLVM
     # fns returning 0, matching the native model where the tag drives everything).
     pub def user_ret_ty(self, name: str) -> str:
@@ -189,6 +199,27 @@ extend LlvmEmitter:
             case LInst.IAsm(code, cons):
                 # inline asm: `sideeffect` keeps it even with no outputs (never DCE'd).
                 self.w("  call void asm sideeffect \"" + _ll_str_escape(code) + "\", \"" + cons + "\"()\n")
+            case LInst.ILoad(dst, base, off):
+                # dst = *(base + off), loaded as dst's own type (i64/ptr/double); the base
+                # vreg is an address (ptr directly, or an i64 that we inttoptr).
+                mut lbp = self.addr_of_base(base)
+                mut lep = lbp
+                if off != 0:
+                    lep = self.newtmp()
+                    self.w("  " + lep + " = getelementptr i8, ptr " + lbp + ", i64 " + off.to_str() + "\n")
+                mut ldty = self.vty(dst)
+                mut lv = self.newtmp()
+                self.w("  " + lv + " = load " + ldty + ", ptr " + lep + "\n")
+                self.store_vreg(dst, ldty, lv)
+            case LInst.IStore(base, off, src):
+                mut sbp = self.addr_of_base(base)
+                mut sep = sbp
+                if off != 0:
+                    sep = self.newtmp()
+                    self.w("  " + sep + " = getelementptr i8, ptr " + sbp + ", i64 " + off.to_str() + "\n")
+                mut ssty = self.vty(src)
+                mut ssv = self.load_vreg(src)
+                self.w("  store " + ssty + " " + ssv + ", ptr " + sep + "\n")
 
     pub def emit_call(self, dst: int, callee: str, args: Vec[int]):
         # Build the "(<ty> <val>, ...)" argument list.

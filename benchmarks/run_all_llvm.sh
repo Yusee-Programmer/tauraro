@@ -69,6 +69,16 @@ measure() {
     echo "${time_s:-}|${rss_kb:-}"
 }
 
+# The C and LLVM backends BOTH write to a CWD-relative build/ dir; on Windows a just-run
+# bench(.exe) or the LLVM driver's log can hold a handle, so the next compile fails with
+# "Permission denied" / "resource busy". Wipe build/ (retrying past the transient lock)
+# before every Tauraro compile so each starts from a clean, unlocked directory.
+clean_build() {
+    local n=0
+    rm -rf "$BENCH/build" 2>/dev/null
+    while [ -d "$BENCH/build" ] && [ "$n" -lt 50 ]; do sleep 0.1; rm -rf "$BENCH/build" 2>/dev/null; n=$((n+1)); done
+}
+
 compile_c()    { gcc -O3 -o "$2" "$1" -lm 2>&1; }
 compile_rust() { rustc -C opt-level=3 -C target-cpu=native -o "$2" "$1" 2>&1; }
 # Default Tauraro C backend (writes build/bench(.exe)).
@@ -113,6 +123,7 @@ for entry in "${benchmarks[@]}"; do
     c_ok=0; rs_ok=0; tc_ok=0; ll_ok=0
     compile_c    "$dir/bench.c"  "$dir/bench_c"  &>/dev/null && c_ok=1
     compile_rust "$dir/bench.rs" "$dir/bench_rs" &>/dev/null && rs_ok=1
+    clean_build
     compile_tauraro_c "$dir/bench.tr"            &>/dev/null && tc_ok=1
     # Resolve the C-backend exe (build/bench(.exe)) BEFORE the LLVM compile reuses build/.
     tc_exe=""
@@ -123,6 +134,7 @@ for entry in "${benchmarks[@]}"; do
     [ $tc_ok -eq 1 ] && [ -n "$tc_exe" ] && IFS='|' read -r tc_time tc_mem <<< "$(measure "$tc_exe")"
 
     # LLVM backend -> its own exe path (avoids clobbering the C-backend build/).
+    clean_build
     ll_exe="$dir/bench_llvm"; [ -f "$ll_exe.exe" ] && ll_exe="$ll_exe.exe"
     ll_out="$dir/bench_llvm"
     if compile_tauraro_llvm "$dir/bench.tr" "$ll_out" &>/dev/null; then ll_ok=1; fi
