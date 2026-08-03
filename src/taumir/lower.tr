@@ -236,6 +236,9 @@ def _own(s: str) -> str:
 def _tag_of(m: LModule, ty: AstType) -> int:
     if _is_null_str(ty.name): return -1
     if ty.name == "Pointer": return 0        # raw address held in an i64 slot (unsafe ptrs)
+    # Builtin concurrency handles (Chan/Mutex/RwLock/Atomic/ThreadPool/Thread) are opaque
+    # _tr_*-runtime pointers held in a tag-0 slot (no ARC); lets them be fields/params/etc.
+    if ty.name == "Chan" or ty.name == "Mutex" or ty.name == "RwLock" or ty.name == "Atomic" or ty.name == "ThreadPool" or ty.name == "Thread" or ty.name == "ThreadLocal": return 0
     # Active generic-class substitution: T -> the instantiation's concrete type.
     mut sbi = 0
     while sbi < m.subst_names.len:
@@ -1531,6 +1534,35 @@ def _box_call(m: LModule, lf: LFunc, selfv: int, rtfn: str, margs: Vec[Pointer[H
     lf.set_vreg_type(d, rtag)
     return d
 
+# Pack margs[start..] into a raw arg buffer for a spawn-wrapper (int/float/str/obj slots;
+# str/obj retained so they survive the thread; float as bit pattern). Returns the buf vreg.
+def _pack_spawn_args(m: LModule, lf: LFunc, margs: Vec[Pointer[HirExpr]], start: int) -> int:
+    mut nargs = margs.len - start
+    mut packsz = nargs * 8
+    if packsz < 8: packsz = 8
+    m.add_extern("_tr_rt_raw_alloc")
+    mut szc = lf.new_vreg()
+    lf.emit(LInst.IConst(szc, packsz))
+    mut aa = Vec[int].init(1)
+    aa.push(szc)
+    mut buf = lf.new_vreg()
+    lf.emit(LInst.ICall(buf, "_tr_rt_raw_alloc", aa))
+    lf.set_vreg_type(buf, 0)
+    mut ai = start
+    while ai < margs.len:
+        mut argv = lower_expr(m, lf, margs.get(ai))
+        if argv < 0: return -1
+        mut argt = lf.vreg_type(argv)
+        if argt == 5:
+            mut afb = lf.new_vreg()
+            lf.emit(LInst.IFBits(afb, argv))
+            argv = afb
+        elif argt == 1: _secure_str(m, lf, argv)
+        elif argt == 10 or argt == 11: _secure_obj(m, lf, argv)
+        _emit_field_set(m, lf, buf, (ai - start) * 8, argv)
+        ai = ai + 1
+    return buf
+
 # ThreadPool.spawn(fn, arg): submit a job to the pool. Like `spawn`, the entry is the
 # await-wrapper (unpacks a 1-slot buffer, calls fn). _tr_threadpool_spawn(pool, wrap, buf).
 def _lower_pool_spawn(m: LModule, lf: LFunc, poolv: int, margs: Vec[Pointer[HirExpr]]) -> int:
@@ -1560,12 +1592,34 @@ def _lower_pool_spawn(m: LModule, lf: LFunc, poolv: int, margs: Vec[Pointer[HirE
     lf.emit(LInst.ICall(-1, "_tr_threadpool_spawn", psa))
     return poolv
 
+# A `_tr_*`-prefixed name = a runtime function (linker-resolved), not a user fn.
+def _is_runtime_fn(fn: str) -> bool:
+    if _is_null_str(fn) or fn.len < 4: return false
+    return fn.slice(0, 4) == "_tr_"
+
+# Atomic increment/decrement: rtfn(self, 1) -> the (new) value (int).
+def _atomic_delta(m: LModule, lf: LFunc, selfv: int, rtfn: str) -> int:
+    m.add_extern(rtfn)
+    mut one = lf.new_vreg()
+    lf.emit(LInst.IConst(one, 1))
+    mut a = Vec[int].init(2)
+    a.push(selfv)
+    a.push(one)
+    mut d = lf.new_vreg()
+    lf.emit(LInst.ICall(d, rtfn, a))
+    lf.set_vreg_type(d, 0)
+    return d
+
 # Builtin box INSTANCE method dispatch (Mutex/RwLock/Atomic/ThreadPool) -> runtime calls.
 # `init`/`new` are excluded so the type-name receiver falls through to the static block.
 def _lower_box_method(m: LModule, lf: LFunc, obj: Pointer[HirExpr], method: str, margs: Vec[Pointer[HirExpr]]) -> int:
     mut btn = hir_expr_type(obj).name
-    if btn != "Mutex" and btn != "RwLock" and btn != "Atomic" and btn != "ThreadPool": return -2
-    if method == "init" or method == "new": return -2      # static ctor -> not here
+    if btn != "Mutex" and btn != "RwLock" and btn != "Atomic" and btn != "ThreadPool" and btn != "Thread" and btn != "ThreadLocal": return -2
+    # static ctors are handled by the static block; Thread.spawn/id/sleep (type-name receiver)
+    # are handled by the styn block BEFORE this — but `pool.spawn` (a ThreadPool INSTANCE) must
+    # be handled here, so DON'T exclude "spawn" (only ctors + Thread-static id/current_id/sleep).
+    if method == "init" or method == "new": return -2
+    if btn == "Thread" and (method == "id" or method == "current_id" or method == "sleep"): return -2
     mut bself = lower_expr(m, lf, obj)
     if bself < 0: return -1
     if btn == "Mutex":
@@ -1578,15 +1632,41 @@ def _lower_box_method(m: LModule, lf: LFunc, obj: Pointer[HirExpr], method: str,
         if method == "write": return _box_call(m, lf, bself, "_tr_rwlbox_write_get", margs, 0, 0)
         if method == "write_set": return _box_call(m, lf, bself, "_tr_rwlbox_write_set_unlock", margs, 1, -1)
     elif btn == "Atomic":
-        if method == "load": return _box_call(m, lf, bself, "_tr_atomic_load", margs, 0, 0)
-        if method == "store": return _box_call(m, lf, bself, "_tr_atomic_store", margs, 1, -1)
-        if method == "add": return _box_call(m, lf, bself, "_tr_atomic_add", margs, 1, 0)
-        if method == "sub": return _box_call(m, lf, bself, "_tr_atomic_sub", margs, 1, 0)
+        if method == "load" or method == "get": return _box_call(m, lf, bself, "_tr_atomic_load", margs, 0, 0)
+        if method == "store" or method == "set": return _box_call(m, lf, bself, "_tr_atomic_store", margs, 1, -1)
+        if method == "add" or method == "fetch_add": return _box_call(m, lf, bself, "_tr_atomic_add", margs, 1, 0)
+        if method == "sub" or method == "fetch_sub": return _box_call(m, lf, bself, "_tr_atomic_sub", margs, 1, 0)
         if method == "cas" or method == "compare_and_swap": return _box_call(m, lf, bself, "_tr_atomic_cas", margs, 2, 4)
+        if method == "increment" or method == "inc": return _atomic_delta(m, lf, bself, "_tr_atomic_add")
+        if method == "decrement" or method == "dec": return _atomic_delta(m, lf, bself, "_tr_atomic_sub")
+        # memory-ordering variants (relaxed/acquire/release/acqrel/seqcst)
+        if method == "load_acquire": return _box_call(m, lf, bself, "_tr_atomic_load_acquire", margs, 0, 0)
+        if method == "load_relaxed": return _box_call(m, lf, bself, "_tr_atomic_load_relaxed", margs, 0, 0)
+        if method == "load_seqcst": return _box_call(m, lf, bself, "_tr_atomic_load_seqcst", margs, 0, 0)
+        if method == "store_release": return _box_call(m, lf, bself, "_tr_atomic_store_release", margs, 1, -1)
+        if method == "store_relaxed": return _box_call(m, lf, bself, "_tr_atomic_store_relaxed", margs, 1, -1)
+        if method == "store_seqcst": return _box_call(m, lf, bself, "_tr_atomic_store_seqcst", margs, 1, -1)
+        if method == "add_relaxed": return _box_call(m, lf, bself, "_tr_atomic_add_relaxed", margs, 1, 0)
+        if method == "add_release": return _box_call(m, lf, bself, "_tr_atomic_add_release", margs, 1, 0)
+        if method == "add_acqrel": return _box_call(m, lf, bself, "_tr_atomic_add_acqrel", margs, 1, 0)
+        if method == "sub_relaxed": return _box_call(m, lf, bself, "_tr_atomic_sub_relaxed", margs, 1, 0)
+        if method == "sub_release": return _box_call(m, lf, bself, "_tr_atomic_sub_release", margs, 1, 0)
+        if method == "swap" or method == "exchange": return _box_call(m, lf, bself, "_tr_atomic_swap", margs, 1, 0)
+        if method == "cas_weak": return _box_call(m, lf, bself, "_tr_atomic_cas_weak", margs, 2, 4)
+        if method == "cas_acqrel": return _box_call(m, lf, bself, "_tr_atomic_cas_acqrel", margs, 2, 4)
+        if method == "free": return _box_call(m, lf, bself, "_tr_atomic_free", margs, 0, -1)
     elif btn == "ThreadPool":
         if method == "wait": return _box_call(m, lf, bself, "_tr_threadpool_wait", margs, 0, -1)
         if method == "free": return _box_call(m, lf, bself, "_tr_threadpool_free", margs, 0, -1)
         if method == "spawn": return _lower_pool_spawn(m, lf, bself, margs)
+    elif btn == "Thread":
+        if method == "join": return _box_call(m, lf, bself, "_tr_threadobj_join", margs, 0, -1)
+        if method == "detach": return _box_call(m, lf, bself, "_tr_threadobj_detach", margs, 0, -1)
+        if method == "free": return _box_call(m, lf, bself, "_tr_threadobj_free", margs, 0, -1)
+    elif btn == "ThreadLocal":
+        if method == "get": return _box_call(m, lf, bself, "_tr_tls_get", margs, 0, 0)
+        if method == "set": return _box_call(m, lf, bself, "_tr_tls_set", margs, 1, -1)
+        if method == "free": return _box_call(m, lf, bself, "_tr_tls_free", margs, 0, -1)
     return -1
 
 # `task_group:` structured concurrency — begin a group, lower the body (spawns push their
@@ -1671,6 +1751,7 @@ def _ptr_stride(m: LModule, pty: AstType) -> int:
     if en == "int" or en == "i64" or en == "u64" or en == "usize" or en == "isize": return 8
     if en == "float" or en == "f64": return 8
     if en == "char" or en == "u8" or en == "i8": return 1        # byte pointer (C strings)
+    if en == "i32" or en == "u32" or en == "f32": return 4       # 4-byte word pointer
     if en == "str" or en == "String" or en == "bool": return 8   # 8-byte slots
     if m.is_class(en) or m.is_enum(en): return 8
     if en == "Pointer": return 8
@@ -2316,6 +2397,8 @@ def _lower_stmt_impl(m: LModule, lf: LFunc, s: Pointer[HirStmt]) -> bool:
             return _lower_spawn(m, lf, sexpr)
         case HirStmt.STaskGroup(tgbody):
             return _lower_taskgroup(m, lf, tgbody)
+        case HirStmt.SChanSelect(scases):
+            return _lower_chan_select(m, lf, scases)
         case HirStmt.SAsm(code, outputs, inputs, clobbers):
             # Inline asm (LLVM emits `call void asm sideeffect "code", "cons"()`; native
             # no-ops it — it can't assemble arbitrary strings, but effect-free asm like
@@ -2748,12 +2831,238 @@ def _lower_for(m: LModule, lf: LFunc, var: str, iter: Pointer[HirExpr], body: Hi
             return _lower_for_erange(m, lf, var, rstart, rend, rincl, body)
         case _:
             pass
+    # `for v in ch:` over a builtin Chan — recv until closed+empty (mirrors the C backend's
+    # `while(ok){ v = _tr_chan_recv_ok(ch,&ok); .. }`).
+    if hir_expr_type(iter).name == "Chan":
+        return _lower_for_chan(m, lf, var, iter, body)
     # Custom iterator protocol: `for x in obj` where obj defines __iter__ (and its
     # iterator defines __next__ -> Option[T]). Zero-cost: static __iter__/__next__ calls.
     mut fic = _recv_class(m, lf, iter)
     if fic != "" and m.is_class(fic) and m.resolve_method(fic, "__iter__") != "":
         return _lower_for_iterproto(m, lf, var, iter, body)
     return _lower_for_list(m, lf, var, iter, body)
+
+# chan_select: a poll loop. Each recv/send arm is tried once per iteration (guarded by a
+# `done` flag so only one fires); a default arm runs if none fired; a timeout arm fires when
+# elapsed >= ms; with neither, it busy-polls. Mirrors the C backend (minus rand fairness —
+# arms are tried in order, which is identical for a single arm and functional for many).
+def _sel_recv_arm(m: LModule, lf: LFunc, donev: str, arm: HirChanSelectArm) -> bool:
+    mut dov = lf.new_vreg()
+    lf.emit(LInst.ILoadVar(dov, donev))
+    lf.set_vreg_type(dov, 0)
+    mut armb = lf.new_block()
+    mut skipb = lf.new_block()
+    lf.set_term(LTerm.TCondBr(dov, skipb, armb))   # already done -> skip this arm
+    lf.set_cur(armb)
+    # chan_expr is the whole `ch.recv()` call -> extract the channel receiver `ch`.
+    mut chexpr = arm.chan_expr
+    match chexpr.read():
+        case HirExpr.EMethodCall(mobj, _, _, _): chexpr = mobj
+        case _: pass
+    mut chv = lower_expr(m, lf, chexpr)
+    if chv < 0: return false
+    m.add_extern("_tr_chan_try_recv_val")
+    mut ra = Vec[int].init(1)
+    ra.push(chv)
+    mut rv = lf.new_vreg()
+    lf.emit(LInst.ICall(rv, "_tr_chan_try_recv_val", ra))
+    lf.set_vreg_type(rv, 0)
+    mut minc = lf.new_vreg()
+    lf.emit(LInst.IConst(minc, -9223372036854775807 - 1))   # LLONG_MIN = empty sentinel
+    mut cmp = lf.new_vreg()
+    lf.emit(LInst.IBinOp(cmp, "!=", rv, minc))
+    lf.set_vreg_type(cmp, 4)
+    mut gotb = lf.new_block()
+    lf.set_term(LTerm.TCondBr(cmp, gotb, skipb))   # got a value -> run body; else skip
+    lf.set_cur(gotb)
+    if not _is_null_str(arm.var_name) and arm.var_name != "":
+        lf.add_var(arm.var_name)
+        lf.set_var_type(arm.var_name, 0)
+        lf.emit(LInst.IStoreVar(arm.var_name, rv))
+    if not lower_block(m, lf, arm.body): return false
+    mut one = lf.new_vreg()
+    lf.emit(LInst.IConst(one, 1))
+    lf.emit(LInst.IStoreVar(donev, one))
+    lf.set_term(LTerm.TBr(skipb))
+    lf.set_cur(skipb)
+    return true
+
+def _sel_send_arm(m: LModule, lf: LFunc, donev: str, arm: HirChanSelectArm) -> bool:
+    mut dov = lf.new_vreg()
+    lf.emit(LInst.ILoadVar(dov, donev))
+    lf.set_vreg_type(dov, 0)
+    mut armb = lf.new_block()
+    mut skipb = lf.new_block()
+    lf.set_term(LTerm.TCondBr(dov, skipb, armb))
+    lf.set_cur(armb)
+    # chan_expr is the whole `ch.send(v)` call -> extract channel `ch` + value `v`.
+    mut chexpr = arm.chan_expr
+    mut valexpr = arm.val_expr
+    match chexpr.read():
+        case HirExpr.EMethodCall(mobj, _, sargs, _):
+            chexpr = mobj
+            if sargs.len == 1: valexpr = sargs.get(0)
+        case _: pass
+    mut chv = lower_expr(m, lf, chexpr)
+    if chv < 0: return false
+    mut sv = lower_expr(m, lf, valexpr)
+    if sv < 0 or lf.vreg_type(sv) != 0: return false
+    m.add_extern("_tr_chan_try_send")
+    mut sa = Vec[int].init(2)
+    sa.push(chv)
+    sa.push(sv)
+    mut okv = lf.new_vreg()
+    lf.emit(LInst.ICall(okv, "_tr_chan_try_send", sa))
+    lf.set_vreg_type(okv, 4)
+    mut gotb = lf.new_block()
+    lf.set_term(LTerm.TCondBr(okv, gotb, skipb))
+    lf.set_cur(gotb)
+    if not lower_block(m, lf, arm.body): return false
+    mut one = lf.new_vreg()
+    lf.emit(LInst.IConst(one, 1))
+    lf.emit(LInst.IStoreVar(donev, one))
+    lf.set_term(LTerm.TBr(skipb))
+    lf.set_cur(skipb)
+    return true
+
+# `if not done: { <body>; done=1 }` — used for a `default` arm.
+def _sel_uncond_arm(m: LModule, lf: LFunc, donev: str, body: HirBlock) -> bool:
+    mut dov = lf.new_vreg()
+    lf.emit(LInst.ILoadVar(dov, donev))
+    lf.set_vreg_type(dov, 0)
+    mut armb = lf.new_block()
+    mut skipb = lf.new_block()
+    lf.set_term(LTerm.TCondBr(dov, skipb, armb))
+    lf.set_cur(armb)
+    if not lower_block(m, lf, body): return false
+    mut one = lf.new_vreg()
+    lf.emit(LInst.IConst(one, 1))
+    lf.emit(LInst.IStoreVar(donev, one))
+    lf.set_term(LTerm.TBr(skipb))
+    lf.set_cur(skipb)
+    return true
+
+# `if not done and _tr_time_ms()-start >= ms: { <body>; done=1 }` — a `timeout` arm.
+def _sel_timeout_arm(m: LModule, lf: LFunc, donev: str, tstart: str, arm: HirChanSelectArm) -> bool:
+    mut dov = lf.new_vreg()
+    lf.emit(LInst.ILoadVar(dov, donev))
+    lf.set_vreg_type(dov, 0)
+    mut chkb = lf.new_block()
+    mut skipb = lf.new_block()
+    lf.set_term(LTerm.TCondBr(dov, skipb, chkb))
+    lf.set_cur(chkb)
+    m.add_extern("_tr_time_ms")
+    mut nowv = lf.new_vreg()
+    lf.emit(LInst.ICall(nowv, "_tr_time_ms", Vec[int].init(0)))
+    lf.set_vreg_type(nowv, 0)
+    mut sv2 = lf.new_vreg()
+    lf.emit(LInst.ILoadVar(sv2, tstart))
+    lf.set_vreg_type(sv2, 0)
+    mut elapsed = lf.new_vreg()
+    lf.emit(LInst.IBinOp(elapsed, "-", nowv, sv2))
+    mut msv = lower_expr(m, lf, arm.timeout_ms)
+    if msv < 0 or lf.vreg_type(msv) != 0: return false
+    mut cmp = lf.new_vreg()
+    lf.emit(LInst.IBinOp(cmp, ">=", elapsed, msv))
+    lf.set_vreg_type(cmp, 4)
+    mut fireb = lf.new_block()
+    lf.set_term(LTerm.TCondBr(cmp, fireb, skipb))
+    lf.set_cur(fireb)
+    if not lower_block(m, lf, arm.body): return false
+    mut one = lf.new_vreg()
+    lf.emit(LInst.IConst(one, 1))
+    lf.emit(LInst.IStoreVar(donev, one))
+    lf.set_term(LTerm.TBr(skipb))
+    lf.set_cur(skipb)
+    return true
+
+def _lower_chan_select(m: LModule, lf: LFunc, cases: Vec[Pointer[HirChanSelectArm]]) -> bool:
+    mut donev = "__seldone" + lf.fresh_id().to_str()
+    lf.add_var(donev)
+    lf.set_var_type(donev, 0)
+    mut z = lf.new_vreg()
+    lf.emit(LInst.IConst(z, 0))
+    lf.emit(LInst.IStoreVar(donev, z))
+    mut has_timeout = false
+    mut ci = 0
+    while ci < cases.len:
+        if cases.get(ci).read().kind == 2: has_timeout = true
+        ci = ci + 1
+    mut tstart = ""
+    if has_timeout:
+        tstart = "__selstart" + lf.fresh_id().to_str()
+        lf.add_var(tstart)
+        lf.set_var_type(tstart, 0)
+        m.add_extern("_tr_time_ms")
+        mut tm = lf.new_vreg()
+        lf.emit(LInst.ICall(tm, "_tr_time_ms", Vec[int].init(0)))
+        lf.set_vreg_type(tm, 0)
+        lf.emit(LInst.IStoreVar(tstart, tm))
+    mut loopb = lf.new_block()
+    mut endb = lf.new_block()
+    lf.set_term(LTerm.TBr(loopb))
+    lf.set_cur(loopb)
+    mut ai = 0                                # recv/send arms first (in order)
+    while ai < cases.len:
+        mut arm = cases.get(ai).read()
+        if arm.kind == 0:
+            if not _sel_recv_arm(m, lf, donev, arm): return false
+        elif arm.kind == 1:
+            if not _sel_send_arm(m, lf, donev, arm): return false
+        ai = ai + 1
+    mut aj = 0                                # then default / timeout
+    while aj < cases.len:
+        mut arm2 = cases.get(aj).read()
+        if arm2.kind == 3:
+            if not _sel_uncond_arm(m, lf, donev, arm2.body): return false
+        elif arm2.kind == 2:
+            if not _sel_timeout_arm(m, lf, donev, tstart, arm2): return false
+        aj = aj + 1
+    mut dv = lf.new_vreg()
+    lf.emit(LInst.ILoadVar(dv, donev))
+    lf.set_vreg_type(dv, 0)
+    lf.set_term(LTerm.TCondBr(dv, endb, loopb))   # done -> exit, else keep polling
+    lf.set_cur(endb)
+    return true
+
+# `for v in ch:` over a Chan: loop { v = _tr_chan_recv_ok(ch, &ok); if !ok break; <body> }.
+# The ok slot is pre-zeroed so the runtime's 4-byte int write reads back correctly as i64.
+def _lower_for_chan(m: LModule, lf: LFunc, var: str, iter: Pointer[HirExpr], body: HirBlock) -> bool:
+    mut chv = lower_expr(m, lf, iter)
+    if chv < 0: return false
+    mut okname = "__chok" + lf.fresh_id().to_str()
+    lf.add_var(okname)
+    lf.set_var_type(okname, 0)
+    mut zc = lf.new_vreg()
+    lf.emit(LInst.IConst(zc, 0))
+    lf.emit(LInst.IStoreVar(okname, zc))          # pre-zero (runtime writes low 4 bytes)
+    lf.add_var(var)
+    lf.set_var_type(var, 0)
+    mut loopb = lf.new_block()
+    mut bodyb = lf.new_block()
+    mut endb = lf.new_block()
+    lf.set_term(LTerm.TBr(loopb))
+    lf.set_cur(loopb)
+    mut okaddr = lf.new_vreg()
+    lf.set_vreg_type(okaddr, 12)
+    lf.emit(LInst.IAddrVar(okaddr, okname))
+    m.add_extern("_tr_chan_recv_ok")
+    mut ra = Vec[int].init(2)
+    ra.push(chv)
+    ra.push(okaddr)
+    mut rv = lf.new_vreg()
+    lf.emit(LInst.ICall(rv, "_tr_chan_recv_ok", ra))
+    lf.set_vreg_type(rv, 0)
+    lf.emit(LInst.IStoreVar(var, rv))
+    mut okv = lf.new_vreg()
+    lf.emit(LInst.ILoadVar(okv, okname))
+    lf.set_vreg_type(okv, 0)
+    lf.set_term(LTerm.TCondBr(okv, bodyb, endb))  # ok!=0 -> body, else stop
+    lf.set_cur(bodyb)
+    if not lower_block(m, lf, body): return false
+    lf.set_term(LTerm.TBr(loopb))
+    lf.set_cur(endb)
+    return true
 
 # `for x in obj` via the iterator protocol: it = obj.__iter__(); loop { nx = it.__next__();
 # if nx is Option.None break; x = nx.Some.payload; body }. Mirrors the C backend.
@@ -5158,6 +5467,27 @@ def _lower_expr_impl(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                 lf.emit(LInst.ICall(exd, fn, exargs))
                 lf.set_vreg_type(exd, extret)
                 return exd
+            # A `_tr_*` runtime function called directly (e.g. std collections calling
+            # _tr_checked_alloc/_tr_c_free) — the linker resolves it. Emit an ICall with the
+            # return tag from the call's HIR type. (imported-module extern "C" decls aren't
+            # always merged into prog.extern_funcs, so this catches them regardless.)
+            if _is_runtime_fn(fn) and not m.is_user_fn(fn):
+                if args.len > 6: return -1
+                mut rtargs = Vec[int].init(args.len)
+                mut rti = 0
+                while rti < args.len:
+                    mut rtv = lower_expr(m, lf, args.get(rti))
+                    if rtv < 0: return -1
+                    if lf.vreg_type(rtv) == 5: return -1     # float args need the xmm ABI -> fall back
+                    rtargs.push(rtv)
+                    rti = rti + 1
+                m.add_extern(fn)
+                mut rtret = _tag_of(m, hir_expr_type(e))
+                if rtret < 0: rtret = 0
+                mut rtd = lf.new_vreg()
+                lf.emit(LInst.ICall(rtd, fn, rtargs))
+                lf.set_vreg_type(rtd, rtret)
+                return rtd
             # Sema-generated monomorphized call (e.g. identity__MONO_str): lower the generic
             # template under the concrete substitution, then treat it as a normal user fn call.
             if not m.is_user_fn(fn):
@@ -5655,6 +5985,26 @@ def _lower_expr_impl(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                             mut tsd = lf.new_vreg()
                             lf.emit(LInst.IConst(tsd, 0))
                             return tsd
+                        # Thread.spawn(fn, args..) -> a JOINABLE OS thread handle
+                        # (_tr_threadobj_spawn(_awaitwrap_<fn>, packed-args)). t.join()/detach
+                        # are dispatched on the "Thread"-typed receiver below.
+                        if method == "spawn" and margs.len >= 1:
+                            mut tsfn = _ident_name(margs.get(0))
+                            if _is_null_str(tsfn) or tsfn == "" or not m.is_user_fn(tsfn): return -1
+                            if not _ensure_await_wrapper(m, tsfn): return -1
+                            mut tsbuf = _pack_spawn_args(m, lf, margs, 1)
+                            if tsbuf < 0: return -1
+                            mut tsfa = lf.new_vreg()
+                            lf.set_vreg_type(tsfa, 12)
+                            lf.emit(LInst.IFuncAddr(tsfa, "_awaitwrap_" + tsfn))
+                            m.add_extern("_tr_threadobj_spawn")
+                            mut toa = Vec[int].init(2)
+                            toa.push(tsfa)
+                            toa.push(tsbuf)
+                            mut tod = lf.new_vreg()
+                            lf.emit(LInst.ICall(tod, "_tr_threadobj_spawn", toa))
+                            lf.set_vreg_type(tod, 0)
+                            return tod
                     if styn == "Str" or styn == "str" or styn == "String":
                         if method == "join" and margs.len == 2:
                             mut sjl = lower_expr(m, lf, margs.get(0))
@@ -5733,6 +6083,7 @@ def _lower_expr_impl(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                 mut pstride = _ptr_stride(m, pty)
                 if pstride == 0: return -1
                 mut pbyte = pstride == 1          # Pointer[char]/u8/i8: 1-byte access
+                mut pword = pstride == 4          # Pointer[i32]/u32/f32: 4-byte access
                 mut petag = 0                     # element value-type tag (from T, subst-resolved)
                 if pty.args.len > 0:
                     mut petn = _subst_ty(m, pty.args.get(0).read()).name
@@ -5763,6 +6114,13 @@ def _lower_expr_impl(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                         mut lbd = lf.new_vreg()
                         lf.emit(LInst.ICall(lbd, "_tr_rt_load_u8", lba))
                         return lbd
+                    if pword:                       # Pointer[i32]: load 4 bytes -> int (sign-extended)
+                        m.add_extern("_tr_rt_load_i32")
+                        mut lwa = Vec[int].init(1)
+                        lwa.push(pbase)
+                        mut lwd = lf.new_vreg()
+                        lf.emit(LInst.ICall(lwd, "_tr_rt_load_i32", lwa))
+                        return lwd
                     # *p -> load an 8-byte value at [p] (float via IBitsF).
                     if petag == 5:
                         mut prraw = _emit_field_get(m, lf, pbase, 0, 0)
@@ -5781,6 +6139,13 @@ def _lower_expr_impl(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                         sba.push(pbase)
                         sba.push(pwv)
                         lf.emit(LInst.ICall(-1, "_tr_rt_store_u8", sba))
+                        return pbase
+                    if pword:                       # Pointer[i32]: store 4 bytes (truncate)
+                        m.add_extern("_tr_rt_store_i32")
+                        mut swa = Vec[int].init(2)
+                        swa.push(pbase)
+                        swa.push(pwv)
+                        lf.emit(LInst.ICall(-1, "_tr_rt_store_i32", swa))
                         return pbase
                     if petag == 5:
                         mut pwvt = lf.vreg_type(pwv)
@@ -5850,11 +6215,12 @@ def _lower_expr_impl(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                         return cnd
                     # Builtin box constructors: Mutex/RwLock/Atomic/ThreadPool.init/new(x) ->
                     # _tr_<box>_new(x), a raw handle (tag 0, no ARC — methods intercepted above).
-                    if (inm == "Mutex" or inm == "RwLock" or inm == "Atomic" or inm == "ThreadPool") and (method == "init" or method == "new") and margs.len == 1:
+                    if (inm == "Mutex" or inm == "RwLock" or inm == "Atomic" or inm == "ThreadPool" or inm == "ThreadLocal") and (method == "init" or method == "new") and margs.len == 1:
                         mut boxrt = "_tr_mutexbox_new"
                         if inm == "RwLock": boxrt = "_tr_rwlbox_new"
                         elif inm == "Atomic": boxrt = "_tr_atomic_new"
                         elif inm == "ThreadPool": boxrt = "_tr_threadpool_new"
+                        elif inm == "ThreadLocal": boxrt = "_tr_tls_new"
                         mut bxv = lower_expr(m, lf, margs.get(0))
                         if bxv < 0 or lf.vreg_type(bxv) != 0: return -1
                         m.add_extern(boxrt)

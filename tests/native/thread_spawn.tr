@@ -1,0 +1,12 @@
+# Thread.spawn(fn,arg) -> joinable OS thread; t.join() waits. Workers don't print ->
+# deterministic. new/join -> _tr_threadobj_spawn/_tr_threadobj_join runtime.
+def sleep_task(ms: int) -> void:
+    Thread.sleep(1)
+async def main():
+    print("start")
+    mut t1: Thread = Thread.spawn(sleep_task, 10)
+    mut t2: Thread = Thread.spawn(sleep_task, 20)
+    t1.join()
+    t2.join()
+    print("joined")
+    print(Thread.id() > 0)

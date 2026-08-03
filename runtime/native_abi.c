@@ -950,6 +950,9 @@ void _tr_rt_try_catch(void (*tfn)(void*), void (*cfn)(void*, char*), void* env) 
  * (0..255) at an address. Used by string-library byte loops (Str.index_of, StrView, ...). */
 int64_t _tr_rt_load_u8(int64_t addr) { return (int64_t)(unsigned char)(*(unsigned char*)(intptr_t)addr); }
 void _tr_rt_store_u8(int64_t addr, int64_t v) { *(unsigned char*)(intptr_t)addr = (unsigned char)v; }
+/* 4-byte pointer element access (Pointer[i32]/u32/f32): read sign-extends, write truncates. */
+int64_t _tr_rt_load_i32(int64_t addr) { return (int64_t)(*(int32_t*)(intptr_t)addr); }
+void _tr_rt_store_i32(int64_t addr, int64_t v) { *(int32_t*)(intptr_t)addr = (int32_t)v; }
 
 int64_t _tr_rt_field_get_i(void* obj, int64_t off) {
     return *(int64_t*)((char*)obj + off);

@@ -1115,7 +1115,7 @@ _TR_XLINK bool _tr_chan_is_closed(_TrChan* c) { EnterCriticalSection(&c->mu); bo
 _TR_XLINK long long _tr_chan_len(_TrChan* c)    { EnterCriticalSection(&c->mu); long long n=c->count; LeaveCriticalSection(&c->mu); return n; }
 static long long _tr_chan_cap(_TrChan* c)    { return c?c->cap:0; }
 static void   _tr_chan_free(_TrChan* c)      { if(!c)return; DeleteCriticalSection(&c->mu); _tr_free(c->buf); _tr_free(c); }
-static long long _tr_chan_recv_ok(_TrChan* c, int* ok) {
+_TR_XLINK long long _tr_chan_recv_ok(_TrChan* c, int* ok) {
     EnterCriticalSection(&c->mu);
     while (c->count == 0 && !c->closed)
         SleepConditionVariableCS(&c->not_empty, &c->mu, INFINITE);
@@ -1265,19 +1265,19 @@ static void _tr_timer_stop(_TrTimerState* s) {
 
 /* ── Thread-local storage (Win32 TLS slots) ──────────────────────────── */
 typedef struct { DWORD key; } _TrTLS;
-static inline _TrTLS* _tr_tls_new(long long init) {
+_TR_XLINK _TrTLS* _tr_tls_new(long long init) {
     _TrTLS* t = (_TrTLS*)malloc(sizeof(_TrTLS));
     t->key = TlsAlloc();
     TlsSetValue(t->key, (LPVOID)(uintptr_t)(unsigned long long)init);
     return t;
 }
-static inline long long _tr_tls_get(_TrTLS* t) {
+_TR_XLINK long long _tr_tls_get(_TrTLS* t) {
     return t ? (long long)(uintptr_t)TlsGetValue(t->key) : 0LL;
 }
-static inline void _tr_tls_set(_TrTLS* t, long long v) {
+_TR_XLINK void _tr_tls_set(_TrTLS* t, long long v) {
     if (t) TlsSetValue(t->key, (LPVOID)(uintptr_t)(unsigned long long)v);
 }
-static inline void _tr_tls_free(_TrTLS* t) { if (!t) return; TlsFree(t->key); free(t); }
+_TR_XLINK void _tr_tls_free(_TrTLS* t) { if (!t) return; TlsFree(t->key); free(t); }
 
 #elif defined(TAURARO_BARE)
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -1318,7 +1318,7 @@ _TR_XLINK bool _tr_chan_is_closed(_TrChan* c)      { return c && c->closed; }
 _TR_XLINK long long _tr_chan_len(_TrChan* c)         { return c ? c->count : 0LL; }
 static long long _tr_chan_cap(_TrChan* c)         { return c ? c->cap : 0LL; }
 static void  _tr_chan_free(_TrChan* c)            { if (!c) return; TAURARO_FREE(c->buf); TAURARO_FREE(c); }
-static long long _tr_chan_recv_ok(_TrChan* c, int* ok) {
+_TR_XLINK long long _tr_chan_recv_ok(_TrChan* c, int* ok) {
     if (c && c->count > 0) {
         long long v = c->buf[c->head]; c->head = (c->head+1)%c->cap; c->count--;
         *ok = 1; return v;
@@ -1421,12 +1421,12 @@ static void _tr_timer_stop(_TrTimerState* s) {
 
 /* ── Thread-local storage (bare: single thread, single value) ────────── */
 typedef struct { long long val; } _TrTLS;
-static inline _TrTLS* _tr_tls_new(long long init) {
+_TR_XLINK _TrTLS* _tr_tls_new(long long init) {
     _TrTLS* t = (_TrTLS*)TAURARO_ALLOC(sizeof(_TrTLS)); t->val = init; return t;
 }
-static inline long long _tr_tls_get(_TrTLS* t) { return t ? t->val : 0LL; }
-static inline void _tr_tls_set(_TrTLS* t, long long v) { if (t) t->val = v; }
-static inline void _tr_tls_free(_TrTLS* t) { if (t) TAURARO_FREE(t); }
+_TR_XLINK long long _tr_tls_get(_TrTLS* t) { return t ? t->val : 0LL; }
+_TR_XLINK void _tr_tls_set(_TrTLS* t, long long v) { if (t) t->val = v; }
+_TR_XLINK void _tr_tls_free(_TrTLS* t) { if (t) TAURARO_FREE(t); }
 
 /* ── BARE ThreadPool: runs jobs synchronously (no OS threads) ─────────── */
 typedef struct { int _dummy; } _TrThreadPool;
@@ -1498,7 +1498,7 @@ _TR_XLINK bool _tr_chan_is_closed(_TrChan* c) { pthread_mutex_lock(&c->mu); bool
 _TR_XLINK long long _tr_chan_len(_TrChan* c)    { pthread_mutex_lock(&c->mu); long long n=c->count; pthread_mutex_unlock(&c->mu); return n; }
 static long long _tr_chan_cap(_TrChan* c)    { return c?c->cap:0; }
 static void   _tr_chan_free(_TrChan* c)      { if(!c)return; pthread_mutex_destroy(&c->mu); pthread_cond_destroy(&c->not_empty); pthread_cond_destroy(&c->not_full); _tr_free(c->buf); _tr_free(c); }
-static long long _tr_chan_recv_ok(_TrChan* c, int* ok) {
+_TR_XLINK long long _tr_chan_recv_ok(_TrChan* c, int* ok) {
     pthread_mutex_lock(&c->mu);
     while (c->count == 0 && !c->closed) pthread_cond_wait(&c->not_empty, &c->mu);
     long long v = 0; *ok = 0;
@@ -1647,19 +1647,19 @@ static void _tr_timer_stop(_TrTimerState* s) {
 
 /* ── Thread-local storage (POSIX pthread_key_t) ──────────────────────── */
 typedef struct { pthread_key_t key; } _TrTLS;
-static inline _TrTLS* _tr_tls_new(long long init) {
+_TR_XLINK _TrTLS* _tr_tls_new(long long init) {
     _TrTLS* t = (_TrTLS*)malloc(sizeof(_TrTLS));
     pthread_key_create(&t->key, NULL);
     pthread_setspecific(t->key, (void*)(uintptr_t)(unsigned long long)init);
     return t;
 }
-static inline long long _tr_tls_get(_TrTLS* t) {
+_TR_XLINK long long _tr_tls_get(_TrTLS* t) {
     return t ? (long long)(uintptr_t)pthread_getspecific(t->key) : 0LL;
 }
-static inline void _tr_tls_set(_TrTLS* t, long long v) {
+_TR_XLINK void _tr_tls_set(_TrTLS* t, long long v) {
     if (t) pthread_setspecific(t->key, (void*)(uintptr_t)(unsigned long long)v);
 }
-static inline void _tr_tls_free(_TrTLS* t) {
+_TR_XLINK void _tr_tls_free(_TrTLS* t) {
     if (!t) return; pthread_key_delete(t->key); free(t);
 }
 
@@ -1888,26 +1888,26 @@ static inline _TrThread _tr_thread_start_result(void*(*fn)(void*), void* arg, _T
 }
 #endif
 
-static inline _TrThreadObj* _tr_threadobj_spawn(void*(*fn)(void*), void* arg) {
+_TR_XLINK _TrThreadObj* _tr_threadobj_spawn(void*(*fn)(void*), void* arg) {
     _TrThreadObj* t = (_TrThreadObj*)TAURARO_CALLOC(1, sizeof(_TrThreadObj));
     t->result.panicked = 0; t->result.panic_msg = NULL;
     t->handle = _tr_thread_start_result(fn, arg, &t->result);
     return t;
 }
-static inline void _tr_threadobj_join(_TrThreadObj* t) {
+_TR_XLINK void _tr_threadobj_join(_TrThreadObj* t) {
     if (!t || t->done) return; t->done = 1; _tr_thread_join_wait(t->handle);
 }
 /* Re-raise the thread's panic in the calling thread after join */
-static inline bool _tr_threadobj_panicked(_TrThreadObj* t) {
+_TR_XLINK bool _tr_threadobj_panicked(_TrThreadObj* t) {
     return t && t->result.panicked;
 }
-static inline char* _tr_threadobj_panic_msg(_TrThreadObj* t) {
+_TR_XLINK char* _tr_threadobj_panic_msg(_TrThreadObj* t) {
     return (t && t->result.panic_msg) ? t->result.panic_msg : "";
 }
-static inline void _tr_threadobj_detach(_TrThreadObj* t) {
+_TR_XLINK void _tr_threadobj_detach(_TrThreadObj* t) {
     if (!t || t->done) return; t->done = 1; _tr_thread_detach(t->handle);
 }
-static inline void _tr_threadobj_free(_TrThreadObj* t) { if (t) TAURARO_FREE(t); }
+_TR_XLINK void _tr_threadobj_free(_TrThreadObj* t) { if (t) TAURARO_FREE(t); }
 
 /* ── Thread utilities: current-thread ID and sleep ───────────────────── */
 #ifdef _WIN32
@@ -2013,12 +2013,12 @@ static inline void  _tr_timer_stop_h(char* s)                                  {
 
 /* Thread object (joinable handle) */
 typedef void*(*_TrThreadFn)(void*);
-static inline char* _tr_threadobj_spawn_h(char* fn, char* arg)                 { return (char*)_tr_threadobj_spawn((_TrThreadFn)(uintptr_t)fn, (void*)arg); }
+_TR_XLINK char* _tr_threadobj_spawn_h(char* fn, char* arg)                 { return (char*)_tr_threadobj_spawn((_TrThreadFn)(uintptr_t)fn, (void*)arg); }
 static inline void  _tr_threadobj_join_h(char* t)                              { _tr_threadobj_join((_TrThreadObj*)t); }
 static inline void  _tr_threadobj_detach_h(char* t)                            { _tr_threadobj_detach((_TrThreadObj*)t); }
 static inline void  _tr_threadobj_free_h(char* t)                              { _tr_threadobj_free((_TrThreadObj*)t); }
 static inline bool  _tr_threadobj_panicked_h(char* t)                          { return _tr_threadobj_panicked((_TrThreadObj*)t); }
-static inline char* _tr_threadobj_panic_msg_h(char* t)                         { return _tr_str_dup_owned(_tr_threadobj_panic_msg((_TrThreadObj*)t)); }
+_TR_XLINK char* _tr_threadobj_panic_msg_h(char* t)                         { return _tr_str_dup_owned(_tr_threadobj_panic_msg((_TrThreadObj*)t)); }
 static inline long long _tr_thread_current_id_h(void)                          { return _tr_thread_current_id(); }
 static inline void  _tr_thread_sleep_ms_h(long long ms)                        { _tr_thread_sleep_ms(ms); }
 
@@ -2046,10 +2046,10 @@ _TR_XLINK bool _tr_atomic_cas_weak_h(char* a, long long exp, long long des)   { 
 _TR_XLINK bool _tr_atomic_cas_acqrel_h(char* a, long long exp, long long des) { return _tr_atomic_cas_acqrel((_TrAtomic*)a, exp, des); }
 
 /* ThreadLocal[T]: per-thread storage */
-static inline char* _tr_tls_new_h(long long init)                              { return (char*)_tr_tls_new(init); }
-static inline long long _tr_tls_get_h(char* t)                                 { return _tr_tls_get((_TrTLS*)t); }
-static inline void  _tr_tls_set_h(char* t, long long v)                        { _tr_tls_set((_TrTLS*)t, v); }
-static inline void  _tr_tls_free_h(char* t)                                    { _tr_tls_free((_TrTLS*)t); }
+_TR_XLINK char* _tr_tls_new_h(long long init)                              { return (char*)_tr_tls_new(init); }
+_TR_XLINK long long _tr_tls_get_h(char* t)                                 { return _tr_tls_get((_TrTLS*)t); }
+_TR_XLINK void _tr_tls_set_h(char* t, long long v)                        { _tr_tls_set((_TrTLS*)t, v); }
+_TR_XLINK void _tr_tls_free_h(char* t)                                    { _tr_tls_free((_TrTLS*)t); }
 
 /* ── Core runtime helpers ────────────────────────────────────────────── */
 
@@ -5489,7 +5489,7 @@ typedef struct { SSL_CTX* ctx; SSL* ssl; int fd; } _TrTLSConn;
 #  else
 #    define _TR_SOCK_CLOSE(fd) close(fd)
 #  endif
-static inline char* _tr_tls_connect(char* host, int port) {
+_TR_XLINK char* _tr_tls_connect(char* host, int port) {
     static _Atomic int _tr_ssl_once = 0;
     if (atomic_fetch_add(&_tr_ssl_once,1)==0){SSL_library_init();SSL_load_error_strings();OpenSSL_add_all_algorithms();}
     struct addrinfo hints={0},*res=NULL;
@@ -5508,22 +5508,22 @@ static inline char* _tr_tls_connect(char* host, int port) {
     if(!c){SSL_free(ssl);SSL_CTX_free(ctx);_TR_SOCK_CLOSE(fd);return NULL;}
     c->ctx=ctx;c->ssl=ssl;c->fd=fd; return (char*)c;
 }
-static inline int   _tr_tls_send(char* h, char* d) { if(!h||!d) return -1; return SSL_write(((_TrTLSConn*)h)->ssl,d,(int)strlen(d)); }
-static inline char* _tr_tls_recv(char* h, int cap) {
+_TR_XLINK int _tr_tls_send(char* h, char* d) { if(!h||!d) return -1; return SSL_write(((_TrTLSConn*)h)->ssl,d,(int)strlen(d)); }
+_TR_XLINK char* _tr_tls_recv(char* h, int cap) {
     if(!h||cap<=0) return _tr_strdup("");
     char* buf=(char*)TAURARO_ALLOC((size_t)cap+1); if(!buf) return _tr_strdup("");
     int n=SSL_read(((_TrTLSConn*)h)->ssl,buf,cap);
     if(n<=0){TAURARO_FREE(buf);return _tr_strdup("");}
     buf[n]='\0'; return buf;
 }
-static inline void _tr_tls_close(char* h) {
+_TR_XLINK void _tr_tls_close(char* h) {
     if(!h) return; _TrTLSConn* c=(_TrTLSConn*)h;
     SSL_shutdown(c->ssl);SSL_free(c->ssl);SSL_CTX_free(c->ctx);_TR_SOCK_CLOSE(c->fd);TAURARO_FREE(c);
 }
 /* ── Server side: one SSL_CTX (cert+key), one _TrTLSConn per accepted fd ──
  * SSL_accept/read/write are blocking, so server TLS is for the thread-per-
  * connection model (listen_tls), where blocking a worker thread is fine. */
-static inline char* _tr_tls_server_new(char* cert, char* key) {
+_TR_XLINK char* _tr_tls_server_new(char* cert, char* key) {
     static _Atomic int _tr_ssl_once_s = 0;
     if (atomic_fetch_add(&_tr_ssl_once_s,1)==0){SSL_library_init();SSL_load_error_strings();OpenSSL_add_all_algorithms();}
     SSL_CTX* ctx=SSL_CTX_new(TLS_server_method());
@@ -5532,7 +5532,7 @@ static inline char* _tr_tls_server_new(char* cert, char* key) {
     if(SSL_CTX_use_PrivateKey_file(ctx,key,SSL_FILETYPE_PEM)<=0){SSL_CTX_free(ctx);return NULL;}
     return (char*)ctx;
 }
-static inline char* _tr_tls_accept(char* ctxh, int fd) {
+_TR_XLINK char* _tr_tls_accept(char* ctxh, int fd) {
     if(!ctxh) return NULL;
     SSL* ssl=SSL_new((SSL_CTX*)ctxh); if(!ssl) return NULL;
     SSL_set_fd(ssl,fd);
@@ -5542,15 +5542,15 @@ static inline char* _tr_tls_accept(char* ctxh, int fd) {
     c->ctx=NULL; c->ssl=ssl; c->fd=fd;   /* ctx is shared/server-owned, not freed per-conn */
     return (char*)c;
 }
-static inline void _tr_tls_server_free(char* ctxh) { if(ctxh) SSL_CTX_free((SSL_CTX*)ctxh); }
+_TR_XLINK void _tr_tls_server_free(char* ctxh) { if(ctxh) SSL_CTX_free((SSL_CTX*)ctxh); }
 #else
-static inline char* _tr_tls_connect(char* h, int p) { (void)h;(void)p; return NULL; }
-static inline int   _tr_tls_send(char* h, char* d)  { (void)h;(void)d; return -1; }
-static inline char* _tr_tls_recv(char* h, int c)    { (void)h;(void)c; return _tr_strdup(""); }
-static inline void  _tr_tls_close(char* h)          { (void)h; }
-static inline char* _tr_tls_server_new(char* c, char* k) { (void)c;(void)k; return NULL; }
-static inline char* _tr_tls_accept(char* x, int fd) { (void)x;(void)fd; return NULL; }
-static inline void  _tr_tls_server_free(char* x) { (void)x; }
+_TR_XLINK char* _tr_tls_connect(char* h, int p) { (void)h;(void)p; return NULL; }
+_TR_XLINK int _tr_tls_send(char* h, char* d)  { (void)h;(void)d; return -1; }
+_TR_XLINK char* _tr_tls_recv(char* h, int c)    { (void)h;(void)c; return _tr_strdup(""); }
+_TR_XLINK void _tr_tls_close(char* h)          { (void)h; }
+_TR_XLINK char* _tr_tls_server_new(char* c, char* k) { (void)c;(void)k; return NULL; }
+_TR_XLINK char* _tr_tls_accept(char* x, int fd) { (void)x;(void)fd; return NULL; }
+_TR_XLINK void _tr_tls_server_free(char* x) { (void)x; }
 #endif
 
 /* ═══════════════════════════════════════════════════════════════════════════

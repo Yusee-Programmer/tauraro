@@ -1,0 +1,18 @@
+# Full builtin Atomic API (single-threaded = deterministic): get/set aliases, increment/
+# decrement, swap, add/sub, cas, and memory-ordering variants -> _tr_atomic_* runtime.
+def main():
+    mut a: Atomic[int] = Atomic.new(0)
+    a.set(10)
+    print(a.get())            # 10
+    a.increment()
+    a.increment()
+    print(a.get())            # 12
+    a.decrement()
+    print(a.get())            # 11
+    print(a.swap(100))        # 11 (old)
+    print(a.get())            # 100
+    a.store_release(7)
+    print(a.load_acquire())   # 7
+    a.add(3)
+    a.sub(1)
+    print(a.get())            # 9

@@ -1,0 +1,20 @@
+# chan_select (Go-style select) over a prefilled+closed channel with a default arm ->
+# deterministic. Poll loop: try_recv each arm; default when none ready. Matches the C backend.
+async def main():
+    mut ch: Chan[int] = Chan.init(8)
+    ch.send(10)
+    ch.send(20)
+    ch.send(30)
+    ch.close()
+    mut total = 0
+    mut n = 0
+    mut going = true
+    while going:
+        chan_select:
+            case v = ch.recv():
+                total = total + v
+                n = n + 1
+            case default:
+                going = false
+    print(total)      # 60
+    print(n)          # 3
