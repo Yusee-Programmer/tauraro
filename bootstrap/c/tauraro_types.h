@@ -1605,7 +1605,9 @@ typedef enum {
     LInst_ICallInd,
     LInst_IAsm,
     LInst_ILoad,
-    LInst_IStore
+    LInst_IStore,
+    LInst_ILoadB,
+    LInst_IStoreB
 } LInst_tag;
 
 typedef struct LInst {
@@ -1713,6 +1715,16 @@ typedef struct LInst {
             long long src;
             long long aclass;
         } IStore;
+        struct {
+            long long dst;
+            long long base;
+            long long off;
+        } ILoadB;
+        struct {
+            long long base;
+            long long off;
+            long long src;
+        } IStoreB;
     } data;
 } LInst;
 
@@ -1738,6 +1750,8 @@ static inline __attribute__((always_inline)) LInst LInst_ctor_ICallInd(long long
 static inline __attribute__((always_inline)) LInst LInst_ctor_IAsm(TrStr code, TrStr cons) { LInst _r = {.tag=LInst_IAsm}; _r.data.IAsm.code = _tr_str_retain(code); _r.data.IAsm.cons = _tr_str_retain(cons); return _r; }
 static inline __attribute__((always_inline)) LInst LInst_ctor_ILoad(long long dst, long long base, long long off, long long aclass) { LInst _r = {.tag=LInst_ILoad}; _r.data.ILoad.dst = dst; _r.data.ILoad.base = base; _r.data.ILoad.off = off; _r.data.ILoad.aclass = aclass; return _r; }
 static inline __attribute__((always_inline)) LInst LInst_ctor_IStore(long long base, long long off, long long src, long long aclass) { LInst _r = {.tag=LInst_IStore}; _r.data.IStore.base = base; _r.data.IStore.off = off; _r.data.IStore.src = src; _r.data.IStore.aclass = aclass; return _r; }
+static inline __attribute__((always_inline)) LInst LInst_ctor_ILoadB(long long dst, long long base, long long off) { LInst _r = {.tag=LInst_ILoadB}; _r.data.ILoadB.dst = dst; _r.data.ILoadB.base = base; _r.data.ILoadB.off = off; return _r; }
+static inline __attribute__((always_inline)) LInst LInst_ctor_IStoreB(long long base, long long off, long long src) { LInst _r = {.tag=LInst_IStoreB}; _r.data.IStoreB.base = base; _r.data.IStoreB.off = off; _r.data.IStoreB.src = src; return _r; }
 
 typedef enum {
     LTerm_TRetInt,
@@ -3793,6 +3807,7 @@ __attribute__((hot)) long long _narrow_int(LFunc* lf, long long v, TrStr tn);
 __attribute__((hot)) bool _is_int_cast_target(TrStr tn);
 __attribute__((hot)) TrStr _print_i64_sym();
 __attribute__((hot)) bool _is_list_tag(long long t);
+__attribute__((hot)) long long _list_stride(long long ltag);
 __attribute__((hot)) bool _is_set_tag(long long t);
 __attribute__((hot)) TrStr _set_sym(long long t, TrStr op);
 __attribute__((hot)) bool _is_dict_tag(long long t);
@@ -3948,8 +3963,9 @@ __attribute__((hot)) bool _is_const_int(HirExpr* e);
 __attribute__((hot)) long long _const_int_val(HirExpr* e);
 __attribute__((hot)) void _emit_add_const(LFunc* lf, TrStr name, long long delta);
 __attribute__((hot)) long long _list_call1(LModule* m, LFunc* lf, TrStr sym, long long handle, long long restype);
-__attribute__((hot)) long long _inline_list_addr(LModule* m, LFunc* lf, long long handle, long long idx);
+__attribute__((hot)) long long _inline_list_addr(LModule* m, LFunc* lf, long long handle, long long idx, long long stride);
 __attribute__((hot)) long long _list_get(LModule* m, LFunc* lf, long long handle, long long idx);
+__attribute__((hot)) long long _list_get_raw(LModule* m, LFunc* lf, long long ltag, long long handle, long long idx);
 __attribute__((hot)) long long _list_get_elem(LModule* m, LFunc* lf, long long ltag, long long handle, long long idx);
 __attribute__((hot)) long long _lower_expr_impl(LModule* m, LFunc* lf, HirExpr* e);
 __attribute__((hot)) long long lower_expr(LModule* m, LFunc* lf, HirExpr* e);

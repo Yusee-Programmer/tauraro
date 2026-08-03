@@ -1026,6 +1026,37 @@ long long _tr_rt_list_get_i64(void* h, long long i) {
     return l->data[i];
 }
 
+/* ---- Byte-width lists (List[bool] / List[u8] / List[i8]) --------------------------
+ * Same header as _TrNList (data ptr @0, len @8) so _tr_rt_list_len/new work unchanged,
+ * but `data` points to a 1-byte-per-element buffer (8x less memory + traffic than the
+ * i64-slot list). Inline get/set use a stride-1 address + ILoadB/IStoreB; only push and
+ * whole-list print need a runtime helper. Element values flow as i64 (bool 0/1). */
+void _tr_rt_blist_push(void* h, long long v) {
+    _TrNList* l = (_TrNList*)h;
+    if (!l) return;
+    if (l->len == l->cap) {
+        long long nc = l->cap ? l->cap * 2 : 4;
+        l->data = (long long*)realloc(l->data, (size_t)nc);   /* nc BYTES, not *8 */
+        l->cap = nc;
+    }
+    ((unsigned char*)l->data)[l->len++] = (unsigned char)v;
+}
+long long _tr_rt_blist_get(void* h, long long i) {
+    _TrNList* l = (_TrNList*)h;
+    if (!l || i < 0 || i >= l->len) return 0;
+    return (long long)((unsigned char*)l->data)[i];
+}
+void _tr_rt_write_list_bool(void* h) {
+    _TrNList* l = (_TrNList*)h;
+    fputc('[', stdout);
+    if (l) for (long long i = 0; i < l->len; i++) {
+        if (i) fputs(", ", stdout);
+        fputs(((unsigned char*)l->data)[i] ? "true" : "false", stdout);
+    }
+    fputc(']', stdout);
+}
+void _tr_rt_print_list_bool(void* h) { _tr_rt_write_list_bool(h); fputc('\n', stdout); }
+
 /* s.center(w) — pad both sides (left = extra/2). */
 char* _tr_rt_str_center(const char* s, long long w) {
     if (!s) s = "";

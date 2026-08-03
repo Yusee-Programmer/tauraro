@@ -43,6 +43,8 @@ pub enum LInst:
     IStore(base: int, off: int, src: int, aclass: int)  # *(int64_t*)(base + off) = src  (inline mem store)
                                                      # aclass = TBAA alias class (LLVM only; native ignores):
                                                      # 0 generic, 1 list header, 2 list element, 3 obj field
+    ILoadB(dst: int, base: int, off: int)            # dst = zext(*(uint8_t*)(base + off))  — 1-byte elem load
+    IStoreB(base: int, off: int, src: int)           # *(uint8_t*)(base + off) = trunc(src) — 1-byte elem store
 
 # Block terminator (exactly one per block).
 pub enum LTerm:

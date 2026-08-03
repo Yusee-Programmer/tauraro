@@ -86,7 +86,13 @@ def _print_i64_sym() -> str:
 # Value-type tags: 0=int/i64, 1=str/char*, 2=List[int], 3=List[str], 4=bool, 5=f64,
 # 6=Dict[str,int], 7=Dict[int,int], 8=Dict[str,str], 9=Dict[int,str].
 def _is_list_tag(t: int) -> bool:
-    return t == 2 or t == 3 or t == 14 or t == 19 or t == 21   # int / str / float / object / tuple elements
+    return t == 2 or t == 3 or t == 14 or t == 19 or t == 21 or t == 22   # int / str / float / object / tuple / byte(bool)
+
+# Element storage stride in bytes: byte lists (bool/u8, tag 22) pack 1 byte/elem; every
+# other list uses 8-byte i64 slots. Drives inline address arithmetic + load/store width.
+def _list_stride(ltag: int) -> int:
+    if ltag == 22: return 1
+    return 8
 
 def _is_set_tag(t: int) -> bool:
     return t == 13 or t == 16               # Set[int] / Set[str]
@@ -122,6 +128,7 @@ def _list_elem_tag(t: int) -> int:      # element value-type held by a list hand
     if t == 14: return 5                # float elements (stored as raw bit patterns)
     if t == 19: return 10               # class-instance elements (raw 8-byte handles)
     if t == 21: return 15               # tuple elements (raw 8-byte handles)
+    if t == 22: return 4                # bool elements (packed 1 byte each)
     return 0
 
 def _list_tag_for_elem(et: int) -> int: # list handle tag that holds element type `et`
@@ -129,6 +136,7 @@ def _list_tag_for_elem(et: int) -> int: # list handle tag that holds element typ
     if et == 5: return 14
     if et == 10: return 19
     if et == 15: return 21
+    if et == 4: return 22               # bool -> byte-packed list
     return 2
 
 # Annotated list type (e.g. the declared type in `let xs: List[str] = []`) -> handle tag.
@@ -180,7 +188,7 @@ def _ast_type_tag(ty: AstType) -> int:
             mut et = ty.args.get(0).read()
             if et.name == "str" or et.name == "String": return 3
             if _is_int_typename(et.name): return 2
-            if et.name == "bool": return 2          # List[bool]: 0/1 elems share the int list repr
+            if et.name == "bool": return 22         # List[bool]: 1-byte packed elems (tag 22)
             if et.name == "float" or et.name == "f64": return 14
             return -1
         return 2
@@ -3342,7 +3350,7 @@ def _lower_for_list(m: LModule, lf: LFunc, var: str, iter: Pointer[HirExpr], bod
     lf.emit(LInst.ILoadVar(hv2, hname))
     mut iv2 = lf.new_vreg()
     lf.emit(LInst.ILoadVar(iv2, iname))
-    mut xval = _list_get(m, lf, hv2, iv2)
+    mut xval = _list_get_raw(m, lf, ltag, hv2, iv2)
     if elem_t == 5:                            # float list: slot holds the f64 bit pattern
         # (the raw call result stays tag 0 — typing IT as double would make the LLVM
         # call expect xmm0 while the runtime returns the bits in rax)
@@ -3430,7 +3438,7 @@ def _lower_enumerate(m: LModule, lf: LFunc, ivar: str, evar: str, listexpr: Poin
     lf.emit(LInst.ILoadVar(hv2, hname))
     mut iv2 = lf.new_vreg()
     lf.emit(LInst.ILoadVar(iv2, ivar))
-    mut xval = _list_get(m, lf, hv2, iv2)
+    mut xval = _list_get_raw(m, lf, ltag, hv2, iv2)
     if elem_t == 5:
         mut xfb2 = lf.new_vreg()
         lf.emit(LInst.IBitsF(xfb2, xval))
@@ -3678,8 +3686,11 @@ def _lower_index_set(m: LModule, lf: LFunc, obj: Pointer[HirExpr], idx: Pointer[
             mut lvfb = lf.new_vreg()
             lf.emit(LInst.IFBits(lvfb, lvv))
             lvv = lvfb
-        mut la_addr = _inline_list_addr(m, lf, ov, iv)         # data[i] address (inline)
-        lf.emit(LInst.IStore(la_addr, 0, lvv, 2))              # 2 = list element (TBAA)
+        mut la_addr = _inline_list_addr(m, lf, ov, iv, _list_stride(ovt))   # data[i] address (inline)
+        if ovt == 22:
+            lf.emit(LInst.IStoreB(la_addr, 0, lvv))            # byte list: 1-byte store
+        else:
+            lf.emit(LInst.IStore(la_addr, 0, lvv, 2))          # 2 = list element (TBAA)
         return true
     return false
 
@@ -3707,6 +3718,7 @@ def _lower_print(m: LModule, lf: LFunc, args: Vec[Pointer[HirExpr]]) -> bool:
             mut plsym = "_tr_rt_print_list_i64"
             if avt == 3: plsym = "_tr_rt_print_list_str"
             if avt == 14: plsym = "_tr_rt_print_list_f64"
+            if avt == 22: plsym = "_tr_rt_print_list_bool"    # byte list -> [true, false, ...]
             m.add_extern(plsym)
             mut pla = Vec[int].init(1)
             pla.push(av)
@@ -4576,31 +4588,44 @@ def _list_call1(m: LModule, lf: LFunc, sym: str, handle: int, restype: int) -> i
 # (offset 0), so addr = *(handle+0) + idx*8. INLINE (no runtime call) — this is the hot
 # path for array-heavy code; clang/gcc then hoist/vectorize what a call boundary blocked.
 # No bounds check (matches in-range accesses; correct programs never go out of range).
-def _inline_list_addr(m: LModule, lf: LFunc, handle: int, idx: int) -> int:
+# `stride` = element byte width (8 for i64-slot lists, 1 for byte lists).
+def _inline_list_addr(m: LModule, lf: LFunc, handle: int, idx: int, stride: int) -> int:
     mut data = lf.new_vreg()
     lf.emit(LInst.ILoad(data, handle, 0, 1))       # data = handle->data; aclass 1 = list header.
                                                     # Distinct TBAA from elements (aclass 2) lets LLVM
                                                     # prove element stores never clobber this base
                                                     # pointer -> it hoists the load out of hot loops.
-    mut c8 = lf.new_vreg()
-    lf.emit(LInst.IConst(c8, 8))
-    mut i8 = lf.new_vreg()
-    lf.emit(LInst.IBinOp(i8, "*", idx, c8))
+    mut off = idx
+    if stride != 1:
+        mut c8 = lf.new_vreg()
+        lf.emit(LInst.IConst(c8, stride))
+        off = lf.new_vreg()
+        lf.emit(LInst.IBinOp(off, "*", idx, c8))
     mut addr = lf.new_vreg()
-    lf.emit(LInst.IBinOp(addr, "+", data, i8))
+    lf.emit(LInst.IBinOp(addr, "+", data, off))
     return addr
 
-# xs[i] / xs.get(i): load the i64 slot at data[i] (caller reinterprets per element tag).
+# xs[i] / xs.get(i): load the raw i64 element at data[i] for an 8-byte-slot list.
 def _list_get(m: LModule, lf: LFunc, handle: int, idx: int) -> int:
-    mut addr = _inline_list_addr(m, lf, handle, idx)
+    mut addr = _inline_list_addr(m, lf, handle, idx, 8)
     mut gd = lf.new_vreg()
     lf.emit(LInst.ILoad(gd, addr, 0, 2))           # 2 = list element (TBAA)
     return gd
 
+# Raw element load honoring the list tag's stride: byte lists (tag 22) do a 1-byte
+# zero-extending load; every other list loads an i64 slot.
+def _list_get_raw(m: LModule, lf: LFunc, ltag: int, handle: int, idx: int) -> int:
+    if ltag == 22:
+        mut baddr = _inline_list_addr(m, lf, handle, idx, 1)
+        mut bd = lf.new_vreg()
+        lf.emit(LInst.ILoadB(bd, baddr, 0))
+        return bd
+    return _list_get(m, lf, handle, idx)
+
 # Element load typed for the LIST's tag: float lists store raw f64 bit patterns, so the
 # i64 result is bitcast to double (both backends stay ABI-correct).
 def _list_get_elem(m: LModule, lf: LFunc, ltag: int, handle: int, idx: int) -> int:
-    mut raw = _list_get(m, lf, handle, idx)
+    mut raw = _list_get_raw(m, lf, ltag, handle, idx)
     if ltag == 14:
         mut fv = lf.new_vreg()
         lf.emit(LInst.IBitsF(fv, raw))
@@ -5728,21 +5753,20 @@ def _lower_expr_impl(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
             mut list_tag = 2
             if items.len == 0:
                 mut ann_tag = _tag_of(m, lty)
-                if ann_tag == 2 or ann_tag == 3 or ann_tag == 14 or ann_tag == 19:
+                if ann_tag == 2 or ann_tag == 3 or ann_tag == 14 or ann_tag == 19 or ann_tag == 22:
                     list_tag = ann_tag
                     elem_t = _list_elem_tag(ann_tag)
                 elif lty.name == "List" or lty.name == "Vec":
                     if lty.args.len > 0 and lty.args.get(0).read().name == "bool":
-                        list_tag = 2
-                        elem_t = 0
+                        list_tag = 22
+                        elem_t = 4
             mut li = 0
             while li < items.len:
                 mut ev = lower_expr(m, lf, items.get(li))
                 if ev < 0: return -1
                 mut evt = lf.vreg_type(ev)
                 if evt != 0 and evt != 1 and evt != 4 and evt != 5 and evt != 10: return -1   # int/bool/str/float/object
-                mut eff_t = evt
-                if eff_t == 4: eff_t = 0               # bool stores in an int slot
+                mut eff_t = evt                         # bool keeps tag 4 -> byte-packed list (tag 22)
                 if li == 0:
                     elem_t = eff_t
                     list_tag = _list_tag_for_elem(elem_t)
@@ -5754,11 +5778,13 @@ def _lower_expr_impl(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                     mut evb = lf.new_vreg()
                     lf.emit(LInst.IFBits(evb, ev))
                     ev = evb
-                m.add_extern("_tr_rt_list_push_i64")
+                mut push_sym = "_tr_rt_list_push_i64"
+                if list_tag == 22: push_sym = "_tr_rt_blist_push"   # 1-byte element push
+                m.add_extern(push_sym)
                 mut pa = Vec[int].init(2)
                 pa.push(hv)
                 pa.push(ev)
-                lf.emit(LInst.ICall(-1, "_tr_rt_list_push_i64", pa))
+                lf.emit(LInst.ICall(-1, push_sym, pa))
                 li = li + 1
             lf.set_vreg_type(hv, list_tag)
             return hv
@@ -6277,8 +6303,7 @@ def _lower_expr_impl(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                         mut ltag2 = -1
                         if ity_g.args.len > 0:
                             mut letag = _tag_of(m, _subst_ty(m, ity_g.args.get(0).read()))
-                            if letag == 4: letag = 0
-                            ltag2 = _list_tag_for_elem(letag)
+                            ltag2 = _list_tag_for_elem(letag)   # bool -> tag 22 (byte list)
                         if ltag2 < 0 or not _is_list_tag(ltag2): return -1
                         m.add_extern("_tr_rt_list_new")
                         mut lnd = lf.new_vreg()
@@ -6434,11 +6459,13 @@ def _lower_expr_impl(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                     mut avfb = lf.new_vreg()
                     lf.emit(LInst.IFBits(avfb, av))
                     av = avfb
-                m.add_extern("_tr_rt_list_push_i64")
+                mut apush = "_tr_rt_list_push_i64"
+                if ovmt == 22: apush = "_tr_rt_blist_push"    # 1-byte element push
+                m.add_extern(apush)
                 mut ppa = Vec[int].init(2)
                 ppa.push(ovm)
                 ppa.push(av)
-                lf.emit(LInst.ICall(-1, "_tr_rt_list_push_i64", ppa))
+                lf.emit(LInst.ICall(-1, apush, ppa))
                 return ovm                              # handle (discarded at stmt level)
             if method == "get" or method == "get_index":
                 if margs.len != 1: return -1
@@ -6459,8 +6486,11 @@ def _lower_expr_impl(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                     mut stfb = lf.new_vreg()
                     lf.emit(LInst.IFBits(stfb, stv))
                     stv = stfb
-                mut st_addr = _inline_list_addr(m, lf, ovm, sti)   # data[i] address (inline)
-                lf.emit(LInst.IStore(st_addr, 0, stv, 2))          # 2 = list element (TBAA)
+                mut st_addr = _inline_list_addr(m, lf, ovm, sti, _list_stride(ovmt))   # data[i] address
+                if ovmt == 22:
+                    lf.emit(LInst.IStoreB(st_addr, 0, stv))        # byte list: 1-byte store
+                else:
+                    lf.emit(LInst.IStore(st_addr, 0, stv, 2))      # 2 = list element (TBAA)
                 return ovm
             if method == "pop" and margs.len == 0:
                 m.add_extern("_tr_rt_list_pop_i64")

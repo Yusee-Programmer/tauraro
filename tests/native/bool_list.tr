@@ -1,0 +1,47 @@
+# Byte-packed List[bool] (tag 22, 1 byte/elem): literal, init+push, get/set, index,
+# for-loop, print, len — must be byte-identical between the C and LLVM backends.
+def main():
+    # literal
+    mut xs: List[bool] = [true, false, true, false]
+    print(xs)                       # [true, false, true, false]
+    print(xs.len)                   # 4
+
+    # index get/set
+    print(xs[0])                    # true
+    print(xs[1])                    # false
+    xs[1] = true
+    print(xs[1])                    # true
+
+    # method get/set
+    xs.set(2, false)
+    print(xs.get(2))                # false
+
+    # init + push (the sieve pattern)
+    mut flags = List[bool].init()
+    mut i = 0
+    while i < 6:
+        flags.push(i % 2 == 0)
+        i = i + 1
+    print(flags)                    # [true, false, true, false, true, false]
+
+    # append + for-loop count
+    flags.append(true)
+    mut trues = 0
+    for f in flags:
+        if f:
+            trues = trues + 1
+    print(trues)                    # 4
+
+    # a large one exercises realloc growth
+    mut big = List[bool].init()
+    mut k = 0
+    while k < 1000:
+        big.push(k % 3 == 0)
+        k = k + 1
+    mut c = 0
+    mut j = 0
+    while j < big.len:
+        if big.get(j):
+            c = c + 1
+        j = j + 1
+    print(c)                        # 334

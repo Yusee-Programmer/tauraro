@@ -220,6 +220,30 @@ extend LlvmEmitter:
                 mut ssty = self.vty(src)
                 mut ssv = self.load_vreg(src)
                 self.w("  store " + ssty + " " + ssv + ", ptr " + sep + _tbaa_suffix(aclass) + "\n")
+            case LInst.ILoadB(dst, base, off):
+                # 1-byte element load, zero-extended to the dst's i64 slot (byte lists:
+                # bool/u8). TBAA listelem (!5) matches the wide element path so the base
+                # pointer still hoists out of loops.
+                mut bbp = self.addr_of_base(base)
+                mut bep = bbp
+                if off != 0:
+                    bep = self.newtmp()
+                    self.w("  " + bep + " = getelementptr i8, ptr " + bbp + ", i64 " + off.to_str() + "\n")
+                mut bb = self.newtmp()
+                self.w("  " + bb + " = load i8, ptr " + bep + ", !tbaa !5\n")
+                mut bz = self.newtmp()
+                self.w("  " + bz + " = zext i8 " + bb + " to i64\n")
+                self.store_vreg(dst, "i64", bz)
+            case LInst.IStoreB(base, off, src):
+                mut tbp = self.addr_of_base(base)
+                mut tep = tbp
+                if off != 0:
+                    tep = self.newtmp()
+                    self.w("  " + tep + " = getelementptr i8, ptr " + tbp + ", i64 " + off.to_str() + "\n")
+                mut tsv = self.load_vreg_as(src, "i64")
+                mut tt = self.newtmp()
+                self.w("  " + tt + " = trunc i64 " + tsv + " to i8\n")
+                self.w("  store i8 " + tt + ", ptr " + tep + ", !tbaa !5\n")
 
     pub def emit_call(self, dst: int, callee: str, args: Vec[int]):
         # Build the "(<ty> <val>, ...)" argument list.
