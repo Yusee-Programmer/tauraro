@@ -40,6 +40,9 @@ long long _tr_rt_f64_is_inf(double x) { return isinf(x) ? 1 : 0; }
 /* List[int]/List[str] backing store: a dynamic 8-byte-slot array (a str element is just
  * a char* stored in the same slot). Declared up top so every _tr_rt_list_* helper sees it. */
 typedef struct { long long* data; long long len; long long cap; } _TrNList;
+/* Forward decls: list constructor/push (defined later) — used by dict keys() enumerators. */
+void* _tr_rt_list_new(void);
+void _tr_rt_list_push_i64(void* h, long long v);
 
 /* ---- ARC: refcounted heap strings ------------------------------------------------
  * Every dynamic native string is a heap object with a refcount header immediately
@@ -504,6 +507,16 @@ long long _tr_rt_sdict_has(void* h, const char* k) {
     return 0;
 }
 long long _tr_rt_sdict_len(void* h) { _SDict* d = (_SDict*)h; return d ? d->len : 0; }
+/* keys() -> a fresh str list (tag 3): the LLVM/native backend materializes dict keys into a
+ * list and iterates that (each key an rc string owned by the list). Hash-bucket order. */
+void* _tr_rt_sdict_keys(void* h) {
+    _SDict* d = (_SDict*)h;
+    void* l = _tr_rt_list_new();
+    if (d) for (long long i = 0; i < _TRN_DCAP; i++)
+        for (_SNode* n = d->b[i]; n; n = n->next)
+            _tr_rt_list_push_i64(l, (long long)(size_t)_tr_rt_str_new(n->key));
+    return l;
+}
 long long _tr_rt_sdict_get_or(void* h, const char* k, long long def) {
     _SDict* d = (_SDict*)h; if (!d || !k) return def;
     for (_SNode* n = d->b[_trn_shash(k)]; n; n = n->next) if (strcmp(n->key, k) == 0) return n->val;
@@ -535,6 +548,15 @@ long long _tr_rt_idict_has(void* h, long long k) {
     return 0;
 }
 long long _tr_rt_idict_len(void* h) { _IDict* d = (_IDict*)h; return d ? d->len : 0; }
+/* keys() -> a fresh int list (tag 2) of the dict's int keys. Hash-bucket order. */
+void* _tr_rt_idict_keys(void* h) {
+    _IDict* d = (_IDict*)h;
+    void* l = _tr_rt_list_new();
+    if (d) for (long long i = 0; i < _TRN_DCAP; i++)
+        for (_INode* n = d->b[i]; n; n = n->next)
+            _tr_rt_list_push_i64(l, n->key);
+    return l;
+}
 long long _tr_rt_idict_get_or(void* h, long long k, long long def) {
     _IDict* d = (_IDict*)h; if (!d) return def;
     unsigned long i = (unsigned long)((unsigned long long)k % _TRN_DCAP);

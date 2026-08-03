@@ -4433,6 +4433,19 @@ def _lower_int_method(m: LModule, lf: LFunc, recv: int, method: str, margs: Vec[
 
 # Dict methods on a dict receiver: .get(k) -> int value, .contains(k) -> bool.
 def _lower_dict_method(m: LModule, lf: LFunc, recv: int, dtag: int, method: str, margs: Vec[Pointer[HirExpr]]) -> int:
+    if method == "keys" and margs.len == 0:      # d.keys() -> a fresh key list (str tag 3 / int tag 2)
+        mut ksym = "_tr_rt_idict_keys"
+        mut ktag = 2
+        if _dict_key_is_str(dtag):
+            ksym = "_tr_rt_sdict_keys"
+            ktag = 3
+        m.add_extern(ksym)
+        mut ka = Vec[int].init(1)
+        ka.push(recv)
+        mut kd = lf.new_vreg()
+        lf.emit(LInst.ICall(kd, ksym, ka))
+        lf.set_vreg_type(kd, ktag)
+        return kd
     if method == "get_or" and margs.len == 2:    # d.get_or(k, default) -> int (int-valued dicts)
         if _dict_val_tag(dtag) != 0: return -1
         mut gk = lower_expr(m, lf, margs.get(0))
@@ -4450,7 +4463,7 @@ def _lower_dict_method(m: LModule, lf: LFunc, recv: int, dtag: int, method: str,
         mut godd = lf.new_vreg()
         lf.emit(LInst.ICall(godd, gosym, goa))
         return godd
-    if method == "set" and margs.len == 2:
+    if (method == "set" or method == "insert") and margs.len == 2:
         mut sk = lower_expr(m, lf, margs.get(0))
         if sk < 0: return -1
         if _dict_key_is_str(dtag) and lf.vreg_type(sk) != 1: return -1
