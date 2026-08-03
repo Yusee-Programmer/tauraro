@@ -740,10 +740,64 @@ def _method_in_prog_functions(prog: HirProgram, cls: str, name: str) -> bool:
         dfi = dfi + 1
     return false
 
+# Non-self parameter count of a method (self is the receiver, never an overload arg).
+def _method_nonself_pcount(f: HirFunction) -> int:
+    mut c = 0
+    mut i = 0
+    while i < f.params.len:
+        if f.params.get(i).name != "self": c = c + 1
+        i = i + 1
+    return c
+
+# The emitted symbol name for a method: `Cls_method`, or `Cls_method_<Nargs>arg` when the
+# class overloads that name. `cls` is the (possibly mangled) prefix; overload keys are only
+# ever registered for NON-generic classes, so a mangled generic prefix yields the bare name.
+def _ov_method_name(m: LModule, cls: str, f: HirFunction) -> str:
+    mut base = _own(cls) + "_" + _own(f.name)
+    if m.is_overloaded(cls, f.name):
+        return base + "_" + _method_nonself_pcount(f).to_str() + "arg"
+    return base
+
+# Scan every non-generic class/enum for duplicate method names and mark them overloaded
+# (identical criterion to the C backend's overloaded_sigs pass — keeps C ≡ LLVM symbols).
+def _detect_overloads(m: LModule, prog: HirProgram):
+    mut i = 0
+    while i < prog.classes.len:
+        mut ov_cls = prog.classes.get(i)
+        if ov_cls.generics.len == 0:
+            mut mi = 0
+            while mi < ov_cls.methods.len:
+                mut m1 = ov_cls.methods.get(mi)
+                mut mj = mi + 1
+                while mj < ov_cls.methods.len:
+                    if ov_cls.methods.get(mj).name == m1.name:
+                        m.mark_overloaded(ov_cls.name, m1.name)
+                        mj = ov_cls.methods.len
+                    else:
+                        mj = mj + 1
+                mi = mi + 1
+        i = i + 1
+    i = 0
+    while i < prog.enums.len:
+        mut ov_enm = prog.enums.get(i)
+        mut mi = 0
+        while mi < ov_enm.methods.len:
+            mut m1 = ov_enm.methods.get(mi)
+            mut mj = mi + 1
+            while mj < ov_enm.methods.len:
+                if ov_enm.methods.get(mj).name == m1.name:
+                    m.mark_overloaded(ov_enm.name, m1.name)
+                    mj = ov_enm.methods.len
+                else:
+                    mj = mj + 1
+            mi = mi + 1
+        i = i + 1
+
 pub def lower_to_lir(prog: HirProgram) -> LModule:
     mut m = LModule.init()
     m.hir_prog = prog                  # generic fns are instantiated lazily at call sites
     _register_classes(m, prog)
+    _detect_overloads(m, prog)
     # extern "C" declarations: register each as a linker-resolved call target. A str arg
     # is a raw char* in the LIR (tag 1 = pointer to the rc string's char data), so it
     # passes to a C `char*` parameter directly; scalar/str/ptr/float sigs are registered.
@@ -774,7 +828,7 @@ pub def lower_to_lir(prog: HirProgram) -> LModule:
                 i = i + 1
                 continue                   # instantiation-time registration instead
             mut f0mang = f0.name
-            if f0.class_name != "": f0mang = f0.class_name + "_" + f0.name
+            if f0.class_name != "": f0mang = _ov_method_name(m, f0.class_name, f0)
             mut f0rt = _lir_fn_ret_tag(m, f0)     # throws E -> Result[T,E] (tag 11)
             m.fn_names.push(f0mang)
             m.fn_ret.push(f0rt)
@@ -790,7 +844,7 @@ pub def lower_to_lir(prog: HirProgram) -> LModule:
             while cmi2 < cm_cls.methods.len:
                 mut cm_f = cm_cls.methods.get(cmi2)
                 if not cm_f.is_extern and not _fn_is_specializable(m, cm_f) and not _method_in_prog_functions(prog, cm_cls.name, cm_f.name):
-                    mut cm_mang = cm_cls.name + "_" + cm_f.name
+                    mut cm_mang = _ov_method_name(m, cm_cls.name, cm_f)
                     mut cm_rt = _lir_fn_ret_tag(m, cm_f)   # throws E -> Result (tag 11)
                     m.fn_names.push(_own(cm_mang))
                     m.fn_ret.push(cm_rt)
@@ -804,7 +858,7 @@ pub def lower_to_lir(prog: HirProgram) -> LModule:
         while emi2 < em_en.methods.len:
             mut em_f = em_en.methods.get(emi2)
             if not em_f.is_extern and not _fn_is_specializable(m, em_f) and not _method_in_prog_functions(prog, em_en.name, em_f.name):
-                mut em_mang = em_en.name + "_" + em_f.name
+                mut em_mang = _ov_method_name(m, em_en.name, em_f)
                 mut em_rt = _tag_of(m, em_f.ret_ty)
                 m.fn_names.push(_own(em_mang))
                 m.fn_ret.push(em_rt)
@@ -838,7 +892,7 @@ pub def lower_to_lir(prog: HirProgram) -> LModule:
                 # `main` is the entry point and always required.
                 if f.name == "main" and f.class_name == "": return m
                 mut un = f.name
-                if f.class_name != "": un = f.class_name + "_" + f.name
+                if f.class_name != "": un = _ov_method_name(m, f.class_name, f)
                 m.unavail_names.push(_own(un))
                 m.unavail_notes.push(_own(m.fail_note))
                 m.ok = true
@@ -855,7 +909,7 @@ pub def lower_to_lir(prog: HirProgram) -> LModule:
                 if not cml_f.is_extern and not _fn_is_specializable(m, cml_f) and not _method_in_prog_functions(prog, cml_cls.name, cml_f.name):
                     _lir_lower_method(m, cml_cls.name, cml_f)
                     if not m.ok:
-                        mut cun = cml_cls.name + "_" + cml_f.name
+                        mut cun = _ov_method_name(m, cml_cls.name, cml_f)
                         m.unavail_names.push(_own(cun))
                         m.unavail_notes.push(_own(m.fail_note))
                         m.ok = true
@@ -871,7 +925,7 @@ pub def lower_to_lir(prog: HirProgram) -> LModule:
             if not eml_f.is_extern and not _fn_is_specializable(m, eml_f) and not _method_in_prog_functions(prog, eml_en.name, eml_f.name):
                 _lir_lower_method(m, eml_en.name, eml_f)
                 if not m.ok:
-                    mut eun = eml_en.name + "_" + eml_f.name
+                    mut eun = _ov_method_name(m, eml_en.name, eml_f)
                     m.unavail_names.push(_own(eun))
                     m.unavail_notes.push(_own(m.fail_note))
                     m.ok = true
@@ -1082,7 +1136,7 @@ def _lir_lower_mono_fn(m: LModule, f: HirFunction, mangled: str, concrete: AstTy
 # Lower a class method as a function named <Class>_<method>. `self` becomes a first
 # parameter of tag 10 (object pointer); other params are class-aware tagged.
 def _lir_lower_method(m: LModule, class_name: str, f: HirFunction):
-    mut lf = LFunc.init(class_name + "_" + f.name)
+    mut lf = LFunc.init(_ov_method_name(m, class_name, f))
     if not _is_null_str(f.throws_ty.name) and f.throws_ty.name != "":
         lf.is_throws = true
         lf.throws_ok_tag = _tag_of(m, f.ret_ty)
@@ -6262,7 +6316,7 @@ def _lower_expr_impl(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                         if gsm == "": return -1
                         return _lower_obj_call(m, lf, gsm + "_" + method, -1, margs)
                     if m.is_class(inm):
-                        mut smang = m.resolve_method(inm, method)   # up the base chain
+                        mut smang = m.resolve_method_ov(inm, method, margs.len)   # up the base chain
                         if smang == "": return -1
                         return _lower_obj_call(m, lf, smang, -1, margs)
                     if m.is_enum(inm):
@@ -6284,7 +6338,7 @@ def _lower_expr_impl(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                         dmethod = "__getitem__"
                 mut mangled = recv_cls + "_" + dmethod
                 if m.is_class(recv_cls):
-                    mangled = m.resolve_method(recv_cls, dmethod)
+                    mangled = m.resolve_method_ov(recv_cls, dmethod, margs.len)
                     if mangled == "":
                         # Generic method `def m[T](self, ..)`: specialize per arg tags,
                         # exactly like generic free fns (self rides along as param 0).

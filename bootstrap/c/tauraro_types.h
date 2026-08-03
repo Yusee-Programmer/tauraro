@@ -3031,6 +3031,7 @@ typedef struct LModule {
     List_TrStr* extfn_names;
     List_i64* extfn_ret;
     List_TrStr* fn_owned_names;
+    List_TrStr* overloaded_sigs;
 } LModule;
 static void _trdrop_LModule(void* vp) {
     LModule* self = (LModule*)vp; (void)self;
@@ -3053,6 +3054,7 @@ static void _trdrop_LModule(void* vp) {
     List_TrStr_free(self->extfn_names);
     List_i64_free(self->extfn_ret);
     List_TrStr_free(self->fn_owned_names);
+    List_TrStr_free(self->overloaded_sigs);
 }
 #endif
 
@@ -3749,6 +3751,9 @@ __attribute__((malloc,returns_nonnull,hot)) VariantLayout* VariantLayout_init(Tr
 __attribute__((malloc,returns_nonnull,hot)) EnumLayout* EnumLayout_init(TrStr name);
 __attribute__((hot)) long long EnumLayout_variant_index(EnumLayout* self, TrStr vname);
 __attribute__((malloc,returns_nonnull,hot)) LModule* LModule_init();
+__attribute__((hot)) void LModule_mark_overloaded(LModule* self, TrStr cls, TrStr method);
+__attribute__((hot)) bool LModule_is_overloaded(LModule* self, TrStr cls, TrStr method);
+__attribute__((hot)) TrStr LModule_resolve_method_ov(LModule* self, TrStr cls, TrStr method, long long argc);
 __attribute__((hot)) long long LModule_add_global(LModule* self, TrStr name, long long tag);
 __attribute__((hot)) long long LModule_global_index(LModule* self, TrStr name);
 __attribute__((hot)) bool LModule_is_global(LModule* self, TrStr name);
@@ -3823,6 +3828,9 @@ __attribute__((hot)) void _attach_class_drop(LModule* m, LFunc* lf, long long ob
 __attribute__((hot)) void _build_class_drop(LModule* m, ClassLayout* lay);
 __attribute__((hot)) void _gen_class_drops(LModule* m);
 __attribute__((hot)) bool _method_in_prog_functions(HirProgram* prog, TrStr cls, TrStr name);
+__attribute__((hot)) long long _method_nonself_pcount(HirFunction* f);
+__attribute__((hot)) TrStr _ov_method_name(LModule* m, TrStr cls, HirFunction* f);
+__attribute__((hot)) void _detect_overloads(LModule* m, HirProgram* prog);
 __attribute__((hot)) LModule* lower_to_lir(HirProgram* prog);
 __attribute__((hot)) bool _fn_has_iface_param(LModule* m, HirFunction* f);
 __attribute__((hot)) bool _fn_is_specializable(LModule* m, HirFunction* f);

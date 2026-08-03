@@ -1,0 +1,25 @@
+# Method overloading: same name, different arg counts -> Cls_method_<N>arg mangling
+# (must be byte-identical between the C and LLVM backends).
+class Formatter:
+    pub prefix: str
+
+    pub def init(p: str) -> Formatter:
+        mut f = Formatter()
+        f.prefix = p
+        return f
+
+    pub def render(self, n: int) -> str:
+        return self.prefix + n.to_str()
+
+    pub def render(self, n: int, tag: str) -> str:
+        return self.prefix + tag + n.to_str()
+
+    pub def render(self, a: int, b: int, c: int) -> int:
+        return a + b + c
+
+def main():
+    mut f = Formatter.init(">> ")
+    print(f.render(42))            # >> 42
+    print(f.render(7, "id="))      # >> id=7
+    print(f.render(1, 2, 3))       # 6
+    print("overload ok")

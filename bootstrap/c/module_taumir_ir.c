@@ -424,7 +424,98 @@ __attribute__((malloc,returns_nonnull,hot)) LModule* LModule_init() {
     /* pass */
     m->fn_owned_names = (void*)List_TrStr_new();
     /* pass */
+    m->overloaded_sigs = (void*)List_TrStr_new();
+    /* pass */
     return m;
+}
+
+__attribute__((hot)) void LModule_mark_overloaded(LModule* self, TrStr cls, TrStr method) {
+    /* pass */
+    TrStr key = ({ TrStr _cl = (_tr_strx_concat(_tr_strz(cls), _tr_strz(_tr_str_lit("_")))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(method)); _tr_str_release(_cl); _cres; });
+    /* pass */
+    if (LModule_is_overloaded(self, cls, method)) {
+        /* pass */
+        _tr_str_release(key);
+        return;
+    }
+    /* pass */
+    List_TrStr_append(self->overloaded_sigs, key);
+    _tr_str_release(key);
+}
+
+__attribute__((hot)) bool LModule_is_overloaded(LModule* self, TrStr cls, TrStr method) {
+    /* pass */
+    TrStr key = ({ TrStr _cl = (_tr_strx_concat(_tr_strz(cls), _tr_strz(_tr_str_lit("_")))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(method)); _tr_str_release(_cl); _cres; });
+    /* pass */
+    long long i = 0LL;
+    /* pass */
+    while ((i < self->overloaded_sigs->len)) {
+        /* pass */
+        if ((strcmp(_tr_strz(List_TrStr_get(self->overloaded_sigs, i)), _tr_strz(key)) == 0)) {
+            /* pass */
+            _tr_str_release(key);
+            return true;
+        }
+        /* pass */
+        i = (i + 1LL);
+    }
+    /* pass */
+    _tr_str_release(key);
+    return false;
+}
+
+__attribute__((hot)) TrStr LModule_resolve_method_ov(LModule* self, TrStr cls, TrStr method, long long argc) {
+    /* pass */
+    TrStr cur = _tr_str_retain(cls);
+    /* pass */
+    long long depth = 0LL;
+    /* pass */
+    while ((depth < 32LL)) {
+        /* pass */
+        long long ci = LModule_class_index(self, cur);
+        /* pass */
+        if ((ci < 0LL)) {
+            /* pass */
+            _tr_str_release(cur);
+            return _tr_str_lit("");
+        }
+        /* pass */
+        if (LModule_is_overloaded(self, cur, method)) {
+            /* pass */
+            TrStr mm = ({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(cur), _tr_strz(_tr_str_lit("_")))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(method)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("_"))); _tr_str_release(_cl); _cres; })); TrStr _cr = (_tr_str_wrap(_tr_int_to_str((long long)(argc)))); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("arg"))); _tr_str_release(_cl); _cres; });
+            /* pass */
+            if (LModule_is_user_fn(self, mm)) {
+                /* pass */
+                _tr_str_release(cur);
+                return mm;
+            }
+        }
+        /* pass */
+        TrStr mangled = ({ TrStr _cl = (_tr_strx_concat(_tr_strz(cur), _tr_strz(_tr_str_lit("_")))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(method)); _tr_str_release(_cl); _cres; });
+        /* pass */
+        if (LModule_is_user_fn(self, mangled)) {
+            /* pass */
+            _tr_str_release(cur);
+            return mangled;
+        }
+        /* pass */
+        TrStr _strtmp_t2258 = _tr_str_retain(((ClassLayout*)List_ptr_get(self->classes, ci))->base);
+        _tr_str_release(cur);
+        cur = _strtmp_t2258;
+        /* pass */
+        if (((((unsigned long long)(((char*)(_tr_strz(cur))))) == ((unsigned long long)(0LL))) || (strcmp(_tr_strz(cur), _tr_strz(_tr_str_lit(""))) == 0))) {
+            /* pass */
+            _tr_str_release(cur);
+            _tr_str_release(mangled);
+            return _tr_str_lit("");
+        }
+        /* pass */
+        depth = (depth + 1LL);
+        _tr_str_release(mangled);
+    }
+    /* pass */
+    _tr_str_release(cur);
+    return _tr_str_lit("");
 }
 
 __attribute__((hot)) long long LModule_add_global(LModule* self, TrStr name, long long tag) {
@@ -755,9 +846,9 @@ __attribute__((hot)) TrStr LModule_resolve_method(LModule* self, TrStr cls, TrSt
             return mangled;
         }
         /* pass */
-        TrStr _strtmp_t2258 = _tr_str_retain(((ClassLayout*)List_ptr_get(self->classes, ci))->base);
+        TrStr _strtmp_t2259 = _tr_str_retain(((ClassLayout*)List_ptr_get(self->classes, ci))->base);
         _tr_str_release(cur);
-        cur = _strtmp_t2258;
+        cur = _strtmp_t2259;
         /* pass */
         if (((((unsigned long long)(((char*)(_tr_strz(cur))))) == ((unsigned long long)(0LL))) || (strcmp(_tr_strz(cur), _tr_strz(_tr_str_lit(""))) == 0))) {
             /* pass */

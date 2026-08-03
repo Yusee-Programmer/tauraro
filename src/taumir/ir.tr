@@ -331,6 +331,8 @@ pub class LModule:
     pub fn_owned_names: Vec[str]            # ARC: mangled fns whose object return is OWNED (fresh)
                                             # by the caller (sema returns_owned). Fail-safe SET:
                                             # a missing entry -> treated as a borrow -> leak, never UAF.
+    pub overloaded_sigs: Vec[str]           # "Cls_method" keys where >1 same-name method exists;
+                                            # such methods mangle to Cls_method_<Nargs>arg (matches C).
 
 extend LModule:
     pub def init() -> LModule:
@@ -355,7 +357,42 @@ extend LModule:
         m.extfn_names = Vec[str].init(4)
         m.extfn_ret   = Vec[int].init(4)
         m.fn_owned_names = Vec[str].init(8)
+        m.overloaded_sigs = Vec[str].init(4)
         return m
+
+    # Method-overload registry (mirrors the C backend's overloaded_sigs). A method name
+    # is "overloaded" when its class declares >1 method with that name; such methods are
+    # emitted + dispatched as `Cls_method_<Nargs>arg` (self excluded from the count).
+    pub def mark_overloaded(self, cls: str, method: str):
+        mut key = cls + "_" + method
+        if self.is_overloaded(cls, method): return
+        self.overloaded_sigs.push(key)
+
+    pub def is_overloaded(self, cls: str, method: str) -> bool:
+        mut key = cls + "_" + method
+        mut i = 0
+        while i < self.overloaded_sigs.len:
+            if self.overloaded_sigs.get(i) == key: return true
+            i = i + 1
+        return false
+
+    # resolve_method, but overload-aware: when the defining class marks `method` as
+    # overloaded, prefer the `_<argc>arg`-mangled name; else fall back to the bare name.
+    pub def resolve_method_ov(self, cls: str, method: str, argc: int) -> str:
+        mut cur = cls
+        mut depth = 0
+        while depth < 32:                       # cycle guard
+            mut ci = self.class_index(cur)
+            if ci < 0: return ""
+            if self.is_overloaded(cur, method):
+                mut mm = cur + "_" + method + "_" + argc.to_str() + "arg"
+                if self.is_user_fn(mm): return mm
+            mut mangled = cur + "_" + method
+            if self.is_user_fn(mangled): return mangled
+            cur = self.classes.get(ci).base
+            if (cur as Pointer[char]) as usize == 0 as usize or cur == "": return ""
+            depth = depth + 1
+        return ""
 
     # Register a module-level global; returns its slot index (dedup by name).
     pub def add_global(self, name: str, tag: int) -> int:

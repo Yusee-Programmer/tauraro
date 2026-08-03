@@ -1945,86 +1945,86 @@ static bool _tr_task_await_timeout_ok(_TrTaskState* t, long long ms) {
  * matches the C extern prototype without GCC type-mismatch warnings.       */
 
 /* Channel */
-static inline char* _tr_chan_new_h(long long cap)                              { return (char*)_tr_chan_new(cap); }
-static inline void  _tr_chan_send_h(char* c, long long v)                      { _tr_chan_send((_TrChan*)c, v); }
-static inline long long _tr_chan_recv_h(char* c)                               { return _tr_chan_recv((_TrChan*)c); }
-static inline bool  _tr_chan_try_send_h(char* c, long long v)                  { return _tr_chan_try_send((_TrChan*)c, v); }
-static inline long long _tr_chan_try_recv_val_h(char* c)                       { return _tr_chan_try_recv_val((_TrChan*)c); }
-static inline bool  _tr_chan_send_timeout_h(char* c, long long v, long long ms){ return _tr_chan_send_timeout((_TrChan*)c, v, ms); }
-static inline long long _tr_chan_recv_timeout_val_h(char* c, long long ms)     { return _tr_chan_recv_timeout_val((_TrChan*)c, ms); }
-static inline void  _tr_chan_close_h(char* c)                                  { _tr_chan_close((_TrChan*)c); }
-static inline bool  _tr_chan_is_closed_h(char* c)                              { return _tr_chan_is_closed((_TrChan*)c); }
-static inline long long _tr_chan_len_h(char* c)                                { return _tr_chan_len((_TrChan*)c); }
-static inline long long _tr_chan_cap_h(char* c)                                { return _tr_chan_cap((_TrChan*)c); }
-static inline void  _tr_chan_free_h(char* c)                                   { _tr_chan_free((_TrChan*)c); }
+_TR_XLINK char* _tr_chan_new_h(long long cap)                              { return (char*)_tr_chan_new(cap); }
+_TR_XLINK void  _tr_chan_send_h(char* c, long long v)                      { _tr_chan_send((_TrChan*)c, v); }
+_TR_XLINK long long _tr_chan_recv_h(char* c)                               { return _tr_chan_recv((_TrChan*)c); }
+_TR_XLINK bool  _tr_chan_try_send_h(char* c, long long v)                  { return _tr_chan_try_send((_TrChan*)c, v); }
+_TR_XLINK long long _tr_chan_try_recv_val_h(char* c)                       { return _tr_chan_try_recv_val((_TrChan*)c); }
+_TR_XLINK bool  _tr_chan_send_timeout_h(char* c, long long v, long long ms){ return _tr_chan_send_timeout((_TrChan*)c, v, ms); }
+_TR_XLINK long long _tr_chan_recv_timeout_val_h(char* c, long long ms)     { return _tr_chan_recv_timeout_val((_TrChan*)c, ms); }
+_TR_XLINK void  _tr_chan_close_h(char* c)                                  { _tr_chan_close((_TrChan*)c); }
+_TR_XLINK bool  _tr_chan_is_closed_h(char* c)                              { return _tr_chan_is_closed((_TrChan*)c); }
+_TR_XLINK long long _tr_chan_len_h(char* c)                                { return _tr_chan_len((_TrChan*)c); }
+_TR_XLINK long long _tr_chan_cap_h(char* c)                                { return _tr_chan_cap((_TrChan*)c); }
+_TR_XLINK void  _tr_chan_free_h(char* c)                                   { _tr_chan_free((_TrChan*)c); }
 
 /* Task / Future */
-static inline char* _tr_task_new_h(void)                                       { return (char*)_tr_task_new(); }
-static inline void  _tr_task_complete_h(char* t, long long r)                  { _tr_task_complete((_TrTaskState*)t, r); }
-static inline void  _tr_task_complete_err_h(char* t, char* msg)                { _tr_task_complete_err((_TrTaskState*)t, msg); }
-static inline void  _tr_task_cancel_h(char* t)                                 { _tr_task_cancel((_TrTaskState*)t); }
-static inline long long _tr_task_await_h(char* t)                              { return _tr_task_await((_TrTaskState*)t); }
-static inline bool  _tr_task_await_timeout_h(char* t, long long ms)            { return _tr_task_await_timeout_ok((_TrTaskState*)t, ms); }
-static inline bool  _tr_task_is_done_h(char* t)                                { return _tr_task_is_done((_TrTaskState*)t); }
-static inline bool  _tr_task_is_cancelled_h(char* t)                           { return _tr_task_is_cancelled((_TrTaskState*)t); }
-static inline bool  _tr_task_has_error_h(char* t)                              { return _tr_task_has_error((_TrTaskState*)t); }
-static inline char* _tr_task_get_error_h(char* t)                              { return _tr_task_get_error((_TrTaskState*)t); }
-static inline void  _tr_task_free_h(char* t)                                   { _tr_task_free((_TrTaskState*)t); }
+_TR_XLINK char* _tr_task_new_h(void)                                       { return (char*)_tr_task_new(); }
+_TR_XLINK void  _tr_task_complete_h(char* t, long long r)                  { _tr_task_complete((_TrTaskState*)t, r); }
+_TR_XLINK void  _tr_task_complete_err_h(char* t, char* msg)                { _tr_task_complete_err((_TrTaskState*)t, msg); }
+_TR_XLINK void  _tr_task_cancel_h(char* t)                                 { _tr_task_cancel((_TrTaskState*)t); }
+_TR_XLINK long long _tr_task_await_h(char* t)                              { return _tr_task_await((_TrTaskState*)t); }
+_TR_XLINK bool  _tr_task_await_timeout_h(char* t, long long ms)            { return _tr_task_await_timeout_ok((_TrTaskState*)t, ms); }
+_TR_XLINK bool  _tr_task_is_done_h(char* t)                                { return _tr_task_is_done((_TrTaskState*)t); }
+_TR_XLINK bool  _tr_task_is_cancelled_h(char* t)                           { return _tr_task_is_cancelled((_TrTaskState*)t); }
+_TR_XLINK bool  _tr_task_has_error_h(char* t)                              { return _tr_task_has_error((_TrTaskState*)t); }
+_TR_XLINK char* _tr_task_get_error_h(char* t)                              { return _tr_task_get_error((_TrTaskState*)t); }
+_TR_XLINK void  _tr_task_free_h(char* t)                                   { _tr_task_free((_TrTaskState*)t); }
 
 /* Mutex / RWLock */
-static inline char* _tr_mutex_new_h(void)                                      { return (char*)_tr_mutex_new(); }
-static inline void  _tr_mutex_lock_h(char* m)                                  { _tr_mutex_hlock((_TrMutexH*)m); }
-static inline void  _tr_mutex_unlock_h(char* m)                                { _tr_mutex_hunlock((_TrMutexH*)m); }
-static inline bool  _tr_mutex_trylock_h(char* m)                               { return _tr_mutex_htrylock((_TrMutexH*)m); }
-static inline void  _tr_mutex_free_h(char* m)                                  { _tr_mutex_hfree((_TrMutexH*)m); }
-static inline char* _tr_rwl_new_h(void)                                        { return (char*)_tr_rwl_new(); }
-static inline void  _tr_rwl_read_lock_h(char* r)                               { _tr_rwl_read_lock((_TrRWL*)r); }
-static inline void  _tr_rwl_read_unlock_h(char* r)                             { _tr_rwl_read_unlock((_TrRWL*)r); }
-static inline void  _tr_rwl_write_lock_h(char* r)                              { _tr_rwl_write_lock((_TrRWL*)r); }
-static inline void  _tr_rwl_write_unlock_h(char* r)                            { _tr_rwl_write_unlock((_TrRWL*)r); }
-static inline void  _tr_rwl_free_h(char* r)                                    { _tr_rwl_free((_TrRWL*)r); }
+_TR_XLINK char* _tr_mutex_new_h(void)                                      { return (char*)_tr_mutex_new(); }
+_TR_XLINK void  _tr_mutex_lock_h(char* m)                                  { _tr_mutex_hlock((_TrMutexH*)m); }
+_TR_XLINK void  _tr_mutex_unlock_h(char* m)                                { _tr_mutex_hunlock((_TrMutexH*)m); }
+_TR_XLINK bool  _tr_mutex_trylock_h(char* m)                               { return _tr_mutex_htrylock((_TrMutexH*)m); }
+_TR_XLINK void  _tr_mutex_free_h(char* m)                                  { _tr_mutex_hfree((_TrMutexH*)m); }
+_TR_XLINK char* _tr_rwl_new_h(void)                                        { return (char*)_tr_rwl_new(); }
+_TR_XLINK void  _tr_rwl_read_lock_h(char* r)                               { _tr_rwl_read_lock((_TrRWL*)r); }
+_TR_XLINK void  _tr_rwl_read_unlock_h(char* r)                             { _tr_rwl_read_unlock((_TrRWL*)r); }
+_TR_XLINK void  _tr_rwl_write_lock_h(char* r)                              { _tr_rwl_write_lock((_TrRWL*)r); }
+_TR_XLINK void  _tr_rwl_write_unlock_h(char* r)                            { _tr_rwl_write_unlock((_TrRWL*)r); }
+_TR_XLINK void  _tr_rwl_free_h(char* r)                                    { _tr_rwl_free((_TrRWL*)r); }
 
 /* Semaphore */
-static inline char* _tr_sema_new_h(long long init, long long maxv)             { return (char*)_tr_sema_new(init, maxv); }
-static inline void  _tr_sema_acquire_h(char* s)                                { _tr_sema_acquire((_TrSema*)s); }
-static inline bool  _tr_sema_try_acquire_h(char* s)                            { return _tr_sema_try_acquire((_TrSema*)s); }
-static inline bool  _tr_sema_acquire_timeout_h(char* s, long long ms)          { return _tr_sema_acquire_timeout((_TrSema*)s, ms); }
-static inline void  _tr_sema_release_h(char* s)                                { _tr_sema_release((_TrSema*)s); }
-static inline void  _tr_sema_free_h(char* s)                                   { _tr_sema_free((_TrSema*)s); }
+_TR_XLINK char* _tr_sema_new_h(long long init, long long maxv)             { return (char*)_tr_sema_new(init, maxv); }
+_TR_XLINK void  _tr_sema_acquire_h(char* s)                                { _tr_sema_acquire((_TrSema*)s); }
+_TR_XLINK bool  _tr_sema_try_acquire_h(char* s)                            { return _tr_sema_try_acquire((_TrSema*)s); }
+_TR_XLINK bool  _tr_sema_acquire_timeout_h(char* s, long long ms)          { return _tr_sema_acquire_timeout((_TrSema*)s, ms); }
+_TR_XLINK void  _tr_sema_release_h(char* s)                                { _tr_sema_release((_TrSema*)s); }
+_TR_XLINK void  _tr_sema_free_h(char* s)                                   { _tr_sema_free((_TrSema*)s); }
 
 /* WaitGroup */
-static inline char* _tr_wg_new_h(void)                                         { return (char*)_tr_wg_new(); }
-static inline void  _tr_wg_add_h(char* w, long long n)                         { _tr_wg_add((_TrWG*)w, n); }
-static inline void  _tr_wg_done_h(char* w)                                     { _tr_wg_done((_TrWG*)w); }
-static inline void  _tr_wg_wait_h(char* w)                                     { _tr_wg_wait((_TrWG*)w); }
-static inline bool  _tr_wg_wait_timeout_h(char* w, long long ms)               { return _tr_wg_wait_timeout((_TrWG*)w, ms); }
-static inline void  _tr_wg_free_h(char* w)                                     { _tr_wg_free((_TrWG*)w); }
+_TR_XLINK char* _tr_wg_new_h(void)                                         { return (char*)_tr_wg_new(); }
+_TR_XLINK void  _tr_wg_add_h(char* w, long long n)                         { _tr_wg_add((_TrWG*)w, n); }
+_TR_XLINK void  _tr_wg_done_h(char* w)                                     { _tr_wg_done((_TrWG*)w); }
+_TR_XLINK void  _tr_wg_wait_h(char* w)                                     { _tr_wg_wait((_TrWG*)w); }
+_TR_XLINK bool  _tr_wg_wait_timeout_h(char* w, long long ms)               { return _tr_wg_wait_timeout((_TrWG*)w, ms); }
+_TR_XLINK void  _tr_wg_free_h(char* w)                                     { _tr_wg_free((_TrWG*)w); }
 
 /* Barrier */
-static inline char* _tr_barrier_new_h(long long n)                             { return (char*)_tr_barrier_new(n); }
-static inline void  _tr_barrier_wait_h(char* b)                                { _tr_barrier_wait((_TrBarrier*)b); }
-static inline void  _tr_barrier_free_h(char* b)                                { _tr_barrier_free((_TrBarrier*)b); }
+_TR_XLINK char* _tr_barrier_new_h(long long n)                             { return (char*)_tr_barrier_new(n); }
+_TR_XLINK void  _tr_barrier_wait_h(char* b)                                { _tr_barrier_wait((_TrBarrier*)b); }
+_TR_XLINK void  _tr_barrier_free_h(char* b)                                { _tr_barrier_free((_TrBarrier*)b); }
 
 /* Once */
-static inline char* _tr_once_new_h(void)                                       { return (char*)_tr_once_new(); }
-static inline bool  _tr_once_do_h(char* o)                                     { return _tr_once_do((_TrOnce*)o); }
-static inline void  _tr_once_free_h(char* o)                                   { _tr_once_free((_TrOnce*)o); }
+_TR_XLINK char* _tr_once_new_h(void)                                       { return (char*)_tr_once_new(); }
+_TR_XLINK bool  _tr_once_do_h(char* o)                                     { return _tr_once_do((_TrOnce*)o); }
+_TR_XLINK void  _tr_once_free_h(char* o)                                   { _tr_once_free((_TrOnce*)o); }
 
 /* Timer / Ticker */
-static inline char* _tr_timer_new_h(long long ms, char* ch)                    { return (char*)_tr_timer_new(ms, (_TrChan*)ch); }
-static inline char* _tr_ticker_new_h(long long ms, char* ch)                   { return (char*)_tr_ticker_new(ms, (_TrChan*)ch); }
-static inline void  _tr_timer_stop_h(char* s)                                  { _tr_timer_stop((_TrTimerState*)s); }
+_TR_XLINK char* _tr_timer_new_h(long long ms, char* ch)                    { return (char*)_tr_timer_new(ms, (_TrChan*)ch); }
+_TR_XLINK char* _tr_ticker_new_h(long long ms, char* ch)                   { return (char*)_tr_ticker_new(ms, (_TrChan*)ch); }
+_TR_XLINK void  _tr_timer_stop_h(char* s)                                  { _tr_timer_stop((_TrTimerState*)s); }
 
 /* Thread object (joinable handle) */
 typedef void*(*_TrThreadFn)(void*);
 _TR_XLINK char* _tr_threadobj_spawn_h(char* fn, char* arg)                 { return (char*)_tr_threadobj_spawn((_TrThreadFn)(uintptr_t)fn, (void*)arg); }
-static inline void  _tr_threadobj_join_h(char* t)                              { _tr_threadobj_join((_TrThreadObj*)t); }
-static inline void  _tr_threadobj_detach_h(char* t)                            { _tr_threadobj_detach((_TrThreadObj*)t); }
-static inline void  _tr_threadobj_free_h(char* t)                              { _tr_threadobj_free((_TrThreadObj*)t); }
-static inline bool  _tr_threadobj_panicked_h(char* t)                          { return _tr_threadobj_panicked((_TrThreadObj*)t); }
+_TR_XLINK void  _tr_threadobj_join_h(char* t)                              { _tr_threadobj_join((_TrThreadObj*)t); }
+_TR_XLINK void  _tr_threadobj_detach_h(char* t)                            { _tr_threadobj_detach((_TrThreadObj*)t); }
+_TR_XLINK void  _tr_threadobj_free_h(char* t)                              { _tr_threadobj_free((_TrThreadObj*)t); }
+_TR_XLINK bool  _tr_threadobj_panicked_h(char* t)                          { return _tr_threadobj_panicked((_TrThreadObj*)t); }
 _TR_XLINK char* _tr_threadobj_panic_msg_h(char* t)                         { return _tr_str_dup_owned(_tr_threadobj_panic_msg((_TrThreadObj*)t)); }
-static inline long long _tr_thread_current_id_h(void)                          { return _tr_thread_current_id(); }
-static inline void  _tr_thread_sleep_ms_h(long long ms)                        { _tr_thread_sleep_ms(ms); }
+_TR_XLINK long long _tr_thread_current_id_h(void)                          { return _tr_thread_current_id(); }
+_TR_XLINK void  _tr_thread_sleep_ms_h(long long ms)                        { _tr_thread_sleep_ms(ms); }
 
 /* Atomic[T]: lock-free integer */
 _TR_XLINK char* _tr_atomic_new_h(long long init)                           { return (char*)_tr_atomic_new(init); }
