@@ -93,6 +93,7 @@ pub class LFunc:
     pub try_blks:   Vec[int]        # innermost-last: except-entry block ids (lexical try/except)
     pub try_msgs:   Vec[str]        # parallel: synthetic var holding the raised message
     pub defers:     Vec[Pointer[HirStmt]]  # `defer` stmts (LIFO at every function exit)
+    pub mutex_unlocks: Vec[str]            # Mutex vars locked via .lock()/.get() -> auto-unlock at exit (RAII)
     pub blk_depth:  int             # lower_block nesting (1 = the function's own body)
     pub in_defer:   bool            # lowering a deferred stmt (rejects nested defer/return)
     pub is_throws:  bool            # `throws E` fn: return -> Result.Ok(v), raise(e) -> Result.Err(e)
@@ -125,6 +126,7 @@ extend LFunc:
         f.try_blks   = Vec[int].init(2)
         f.try_msgs   = Vec[str].init(2)
         f.defers     = Vec[Pointer[HirStmt]].init(2)
+        f.mutex_unlocks = Vec[str].init(2)
         f.blk_depth  = 0
         f.in_defer   = false
         f.is_throws  = false

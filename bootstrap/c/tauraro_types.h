@@ -2927,6 +2927,7 @@ typedef struct LFunc {
     List_i64* try_blks;
     List_TrStr* try_msgs;
     List_ptr* defers;
+    List_TrStr* mutex_unlocks;
     long long blk_depth;
     bool in_defer;
     bool is_throws;
@@ -2952,6 +2953,7 @@ static void _trdrop_LFunc(void* vp) {
     List_i64_free(self->try_blks);
     List_TrStr_free(self->try_msgs);
     List_ptr_free(self->defers);
+    List_TrStr_free(self->mutex_unlocks);
 }
 #endif
 
@@ -3850,6 +3852,7 @@ __attribute__((hot)) long long _box_call(LModule* m, LFunc* lf, long long selfv,
 __attribute__((hot)) long long _pack_spawn_args(LModule* m, LFunc* lf, List_ptr* margs, long long start);
 __attribute__((hot)) long long _lower_pool_spawn(LModule* m, LFunc* lf, long long poolv, List_ptr* margs);
 __attribute__((hot)) bool _is_runtime_fn(TrStr fn);
+__attribute__((hot)) void _track_mutex_unlock(LFunc* lf, HirExpr* obj);
 __attribute__((hot)) long long _atomic_delta(LModule* m, LFunc* lf, long long selfv, TrStr rtfn);
 __attribute__((hot)) long long _lower_box_method(LModule* m, LFunc* lf, HirExpr* obj, TrStr method, List_ptr* margs);
 __attribute__((hot)) bool _lower_taskgroup(LModule* m, LFunc* lf, HirBlock* body);

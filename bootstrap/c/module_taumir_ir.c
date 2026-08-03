@@ -62,6 +62,8 @@ __attribute__((malloc,returns_nonnull,hot)) LFunc* LFunc_init(TrStr name) {
     /* pass */
     f->defers = (void*)List_ptr_new();
     /* pass */
+    f->mutex_unlocks = (void*)List_TrStr_new();
+    /* pass */
     f->blk_depth = 0LL;
     /* pass */
     f->in_defer = false;

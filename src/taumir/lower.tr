@@ -1597,6 +1597,16 @@ def _is_runtime_fn(fn: str) -> bool:
     if _is_null_str(fn) or fn.len < 4: return false
     return fn.slice(0, 4) == "_tr_"
 
+# Record a Mutex var (a bare local/param) as locked -> auto-unlock at fn exit (dedup).
+def _track_mutex_unlock(lf: LFunc, obj: Pointer[HirExpr]):
+    mut nm = _ident_name(obj)
+    if _is_null_str(nm) or nm == "": return
+    mut i = 0
+    while i < lf.mutex_unlocks.len:
+        if lf.mutex_unlocks.get(i) == nm: return
+        i = i + 1
+    lf.mutex_unlocks.push(_own(nm))
+
 # Atomic increment/decrement: rtfn(self, 1) -> the (new) value (int).
 def _atomic_delta(m: LModule, lf: LFunc, selfv: int, rtfn: str) -> int:
     m.add_extern(rtfn)
@@ -1623,7 +1633,9 @@ def _lower_box_method(m: LModule, lf: LFunc, obj: Pointer[HirExpr], method: str,
     mut bself = lower_expr(m, lf, obj)
     if bself < 0: return -1
     if btn == "Mutex":
-        if method == "lock" or method == "get": return _box_call(m, lf, bself, "_tr_mutexbox_lock_get", margs, 0, 0)
+        if method == "lock" or method == "get":
+            _track_mutex_unlock(lf, obj)     # RAII: unlock at scope exit if not explicitly unlocked
+            return _box_call(m, lf, bself, "_tr_mutexbox_lock_get", margs, 0, 0)
         if method == "set": return _box_call(m, lf, bself, "_tr_mutexbox_set_unlock", margs, 1, -1)
         if method == "unlock": return _box_call(m, lf, bself, "_tr_mutexbox_unlock", margs, 0, -1)
     elif btn == "RwLock":
@@ -1721,16 +1733,31 @@ def lower_block(m: LModule, lf: LFunc, hb: HirBlock) -> bool:
 
 # Lower the recorded `defer` statements in LIFO order (at a function exit point).
 def _run_defers(m: LModule, lf: LFunc) -> bool:
-    if lf.defers.len == 0: return true
-    if lf.in_defer: return false
-    lf.in_defer = true
-    mut di = lf.defers.len - 1
-    while di >= 0:
-        if not lower_stmt(m, lf, lf.defers.get(di)):
-            lf.in_defer = false
-            return false
-        di = di - 1
-    lf.in_defer = false
+    if lf.defers.len > 0:
+        if lf.in_defer: return false
+        lf.in_defer = true
+        mut di = lf.defers.len - 1
+        while di >= 0:
+            if not lower_stmt(m, lf, lf.defers.get(di)):
+                lf.in_defer = false
+                return false
+            di = di - 1
+        lf.in_defer = false
+    # Mutex RAII auto-unlock: for each mutex locked (via .lock()/.get()) in this fn, call the
+    # idempotent _tr_mutexbox_cleanup(&m) (unlocks IF still locked) at exit — matches the C
+    # backend's __attribute__((cleanup)). Prevents a lock-without-explicit-unlock deadlock.
+    mut mi = 0
+    while mi < lf.mutex_unlocks.len:
+        mut mn = lf.mutex_unlocks.get(mi)
+        if lf.var_index(mn) >= 0:
+            mut ma = lf.new_vreg()
+            lf.set_vreg_type(ma, 12)
+            lf.emit(LInst.IAddrVar(ma, mn))
+            m.add_extern("_tr_mutexbox_cleanup")
+            mut mca = Vec[int].init(1)
+            mca.push(ma)
+            lf.emit(LInst.ICall(-1, "_tr_mutexbox_cleanup", mca))
+        mi = mi + 1
     return true
 
 # sizeof(T) in bytes, matching the C backend's sizeof on the C type it maps T to.

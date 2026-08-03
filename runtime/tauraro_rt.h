@@ -380,30 +380,34 @@ static inline long long _tr_mem_live_strs(void) {
 #endif
 }
 
+/* _TR_XLINK: `static inline` for the C backend; EXPORTED for the NATIVE/LLVM backend
+ * (native_abi.c #defines _TR_EXPORT_RT). Defined HERE (early) so functions above line 400
+ * — the memory + I/O helpers — can use it too. */
+#ifdef _TR_EXPORT_RT
+#define _TR_XLINK
+#else
+#define _TR_XLINK static inline
+#endif
+
 // Wrappers for core library to avoid signature conflicts
-static inline void* _tr_c_malloc(size_t size) {
+_TR_XLINK void* _tr_c_malloc(size_t size) {
     void* p = TAURARO_ALLOC(size);
     if (p) _TR_MEMCOUNT_INC();
     return p;
 }
-static inline void* _tr_c_calloc(size_t count, size_t size) {
+_TR_XLINK void* _tr_c_calloc(size_t count, size_t size) {
     void* p = TAURARO_CALLOC(count, size);
     if (!p && count * size > 0) { _TR_OOM_ABORT(); }
     if (p) _TR_MEMCOUNT_INC();
     return p;
 }
-static inline void _tr_free(void* p) {
+_TR_XLINK void _tr_free(void* p) {
     if (p) { _TR_MEMCOUNT_DEC(); TAURARO_FREE(p); }
 }
 /* Runtime memory helpers used by std/core (Vec/String) via `extern "C"` decls. `static
  * inline` for the C backend (#includes this header, inlines them); EXPORTED as real
  * symbols for the NATIVE/LLVM backend (native_abi.c #defines _TR_EXPORT_RT) so those std
  * collections link. */
-#ifdef _TR_EXPORT_RT
-#define _TR_XLINK
-#else
-#define _TR_XLINK static inline
-#endif
 _TR_XLINK void _tr_c_free(void* ptr) { _tr_free(ptr); }
 
 #ifndef TAURARO_KERNEL
@@ -2346,17 +2350,17 @@ typedef struct {
 #if defined(TAURARO_BARE) || defined(TAURARO_KERNEL)
 /* ── BARE/Kernel: polling stub (no OS event loop) ────────────────────── */
 typedef struct { int _dummy; } _TrIOPoll;
-static inline _TrIOPoll* _tr_iopoll_create(void) {
+_TR_XLINK _TrIOPoll* _tr_iopoll_create(void) {
     return (_TrIOPoll*)TAURARO_CALLOC(1, sizeof(_TrIOPoll));
 }
-static inline void _tr_iopoll_destroy(_TrIOPoll* p) { if (p) TAURARO_FREE(p); }
-static inline int  _tr_iopoll_add(_TrIOPoll* p, int fd, uint32_t ev, void* ud)
+_TR_XLINK void _tr_iopoll_destroy(_TrIOPoll* p) { if (p) TAURARO_FREE(p); }
+_TR_XLINK int  _tr_iopoll_add(_TrIOPoll* p, int fd, uint32_t ev, void* ud)
     { (void)p;(void)fd;(void)ev;(void)ud; return 0; }
-static inline int  _tr_iopoll_mod(_TrIOPoll* p, int fd, uint32_t ev, void* ud)
+_TR_XLINK int  _tr_iopoll_mod(_TrIOPoll* p, int fd, uint32_t ev, void* ud)
     { (void)p;(void)fd;(void)ev;(void)ud; return 0; }
-static inline int  _tr_iopoll_del(_TrIOPoll* p, int fd)
+_TR_XLINK int  _tr_iopoll_del(_TrIOPoll* p, int fd)
     { (void)p;(void)fd; return 0; }
-static inline int  _tr_iopoll_wait(_TrIOPoll* p, _TrIOEvent* ev, int maxev, int timeout_ms)
+_TR_XLINK int  _tr_iopoll_wait(_TrIOPoll* p, _TrIOEvent* ev, int maxev, int timeout_ms)
     { (void)p;(void)ev;(void)maxev;(void)timeout_ms; return 0; }
 
 #elif defined(_WIN32)
@@ -2389,7 +2393,7 @@ typedef struct {
     int        count;
     int        cap;
 } _TrIOPoll;
-static inline _TrIOPoll* _tr_iopoll_create(void) {
+_TR_XLINK _TrIOPoll* _tr_iopoll_create(void) {
     _TrIOPoll* p = (_TrIOPoll*)calloc(1, sizeof(_TrIOPoll));
     if (!p) return NULL;
     p->cap = 64;
@@ -2398,7 +2402,7 @@ static inline _TrIOPoll* _tr_iopoll_create(void) {
     if (!p->pfds || !p->userdata) { _tr_free(p->pfds); _tr_free(p->userdata); _tr_free(p); return NULL; }
     return p;
 }
-static inline void _tr_iopoll_destroy(_TrIOPoll* p) {
+_TR_XLINK void _tr_iopoll_destroy(_TrIOPoll* p) {
     if (p) { _tr_free(p->pfds); _tr_free(p->userdata); _tr_free(p); }
 }
 static inline SHORT _tr_poll_events(uint32_t ev) {
@@ -2407,7 +2411,7 @@ static inline SHORT _tr_poll_events(uint32_t ev) {
     if (ev & TAURARO_POLLOUT) e |= POLLWRNORM;
     return e;
 }
-static inline int _tr_iopoll_add(_TrIOPoll* p, int fd, uint32_t ev, void* ud) {
+_TR_XLINK int _tr_iopoll_add(_TrIOPoll* p, int fd, uint32_t ev, void* ud) {
     if (!p) return -1;
     for (int i = 0; i < p->count; i++) {
         if (p->pfds[i].fd == (SOCKET)fd) {
@@ -2433,9 +2437,9 @@ static inline int _tr_iopoll_add(_TrIOPoll* p, int fd, uint32_t ev, void* ud) {
     p->userdata[idx] = ud;
     return 0;
 }
-static inline int _tr_iopoll_mod(_TrIOPoll* p, int fd, uint32_t ev, void* ud)
+_TR_XLINK int _tr_iopoll_mod(_TrIOPoll* p, int fd, uint32_t ev, void* ud)
     { return _tr_iopoll_add(p, fd, ev, ud); }
-static inline int _tr_iopoll_del(_TrIOPoll* p, int fd) {
+_TR_XLINK int _tr_iopoll_del(_TrIOPoll* p, int fd) {
     if (!p) return -1;
     for (int i = 0; i < p->count; i++) {
         if (p->pfds[i].fd == (SOCKET)fd) {
@@ -2447,7 +2451,7 @@ static inline int _tr_iopoll_del(_TrIOPoll* p, int fd) {
     }
     return -1;
 }
-static inline int _tr_iopoll_wait(_TrIOPoll* p, _TrIOEvent* out, int maxev, int timeout_ms) {
+_TR_XLINK int _tr_iopoll_wait(_TrIOPoll* p, _TrIOEvent* out, int maxev, int timeout_ms) {
     if (!p || !out || maxev <= 0) return 0;
     if (p->count == 0) {
         if (timeout_ms > 0) Sleep((DWORD)timeout_ms);
@@ -2481,15 +2485,15 @@ static inline int _tr_iopoll_wait(_TrIOPoll* p, _TrIOEvent* out, int maxev, int 
 #include <sys/epoll.h>
 #include <unistd.h>
 typedef struct { int epfd; } _TrIOPoll;
-static inline _TrIOPoll* _tr_iopoll_create(void) {
+_TR_XLINK _TrIOPoll* _tr_iopoll_create(void) {
     _TrIOPoll* p = (_TrIOPoll*)calloc(1, sizeof(_TrIOPoll));
     p->epfd = epoll_create1(EPOLL_CLOEXEC);
     return p;
 }
-static inline void _tr_iopoll_destroy(_TrIOPoll* p) {
+_TR_XLINK void _tr_iopoll_destroy(_TrIOPoll* p) {
     if (!p) return; if (p->epfd >= 0) close(p->epfd); free(p);
 }
-static inline int _tr_iopoll_add(_TrIOPoll* p, int fd, uint32_t ev, void* ud) {
+_TR_XLINK int _tr_iopoll_add(_TrIOPoll* p, int fd, uint32_t ev, void* ud) {
     if (!p) return -1;
     struct epoll_event e = {0};
     if (ev & TAURARO_POLLIN)  e.events |= EPOLLIN;
@@ -2497,7 +2501,7 @@ static inline int _tr_iopoll_add(_TrIOPoll* p, int fd, uint32_t ev, void* ud) {
     e.data.ptr = ud;
     return epoll_ctl(p->epfd, EPOLL_CTL_ADD, fd, &e);
 }
-static inline int _tr_iopoll_mod(_TrIOPoll* p, int fd, uint32_t ev, void* ud) {
+_TR_XLINK int _tr_iopoll_mod(_TrIOPoll* p, int fd, uint32_t ev, void* ud) {
     if (!p) return -1;
     struct epoll_event e = {0};
     if (ev & TAURARO_POLLIN)  e.events |= EPOLLIN;
@@ -2505,11 +2509,11 @@ static inline int _tr_iopoll_mod(_TrIOPoll* p, int fd, uint32_t ev, void* ud) {
     e.data.ptr = ud;
     return epoll_ctl(p->epfd, EPOLL_CTL_MOD, fd, &e);
 }
-static inline int _tr_iopoll_del(_TrIOPoll* p, int fd) {
+_TR_XLINK int _tr_iopoll_del(_TrIOPoll* p, int fd) {
     if (!p) return -1;
     return epoll_ctl(p->epfd, EPOLL_CTL_DEL, fd, NULL);
 }
-static inline int _tr_iopoll_wait(_TrIOPoll* p, _TrIOEvent* out, int maxev, int timeout_ms) {
+_TR_XLINK int _tr_iopoll_wait(_TrIOPoll* p, _TrIOEvent* out, int maxev, int timeout_ms) {
     if (!p || !out || maxev <= 0) return 0;
     struct epoll_event evs[256];
     int n = epoll_wait(p->epfd, evs, maxev < 256 ? maxev : 256, timeout_ms);
@@ -2563,14 +2567,14 @@ static inline void _tr_iouring_cqe_seen(_TrIOUring* u, struct io_uring_cqe* cqe)
 #include <sys/event.h>
 #include <unistd.h>
 typedef struct { int kqfd; } _TrIOPoll;
-static inline _TrIOPoll* _tr_iopoll_create(void) {
+_TR_XLINK _TrIOPoll* _tr_iopoll_create(void) {
     _TrIOPoll* p = (_TrIOPoll*)calloc(1, sizeof(_TrIOPoll));
     p->kqfd = kqueue(); return p;
 }
-static inline void _tr_iopoll_destroy(_TrIOPoll* p) {
+_TR_XLINK void _tr_iopoll_destroy(_TrIOPoll* p) {
     if (!p) return; if (p->kqfd >= 0) close(p->kqfd); free(p);
 }
-static inline int _tr_iopoll_add(_TrIOPoll* p, int fd, uint32_t ev, void* ud) {
+_TR_XLINK int _tr_iopoll_add(_TrIOPoll* p, int fd, uint32_t ev, void* ud) {
     if (!p) return -1;
     struct kevent changes[2]; int n = 0;
     if (ev & TAURARO_POLLIN)
@@ -2579,16 +2583,16 @@ static inline int _tr_iopoll_add(_TrIOPoll* p, int fd, uint32_t ev, void* ud) {
         EV_SET(&changes[n++], (uintptr_t)fd, EVFILT_WRITE, EV_ADD|EV_ENABLE, 0, 0, ud);
     return kevent(p->kqfd, changes, n, NULL, 0, NULL);
 }
-static inline int _tr_iopoll_mod(_TrIOPoll* p, int fd, uint32_t ev, void* ud)
+_TR_XLINK int _tr_iopoll_mod(_TrIOPoll* p, int fd, uint32_t ev, void* ud)
     { return _tr_iopoll_add(p, fd, ev, ud); }
-static inline int _tr_iopoll_del(_TrIOPoll* p, int fd) {
+_TR_XLINK int _tr_iopoll_del(_TrIOPoll* p, int fd) {
     if (!p) return -1;
     struct kevent changes[2];
     EV_SET(&changes[0], (uintptr_t)fd, EVFILT_READ,  EV_DELETE, 0, 0, NULL);
     EV_SET(&changes[1], (uintptr_t)fd, EVFILT_WRITE, EV_DELETE, 0, 0, NULL);
     return kevent(p->kqfd, changes, 2, NULL, 0, NULL);
 }
-static inline int _tr_iopoll_wait(_TrIOPoll* p, _TrIOEvent* out, int maxev, int timeout_ms) {
+_TR_XLINK int _tr_iopoll_wait(_TrIOPoll* p, _TrIOEvent* out, int maxev, int timeout_ms) {
     if (!p || !out || maxev <= 0) return 0;
     struct kevent evs[256];
     struct timespec ts = { timeout_ms / 1000, (timeout_ms % 1000) * 1000000L };
@@ -2610,19 +2614,19 @@ static inline int _tr_iopoll_wait(_TrIOPoll* p, _TrIOEvent* out, int maxev, int 
 #else
 /* ── Fallback: no async I/O on unknown platform ───────────────────────── */
 typedef struct { int _dummy; } _TrIOPoll;
-static inline _TrIOPoll* _tr_iopoll_create(void) { return (_TrIOPoll*)calloc(1,sizeof(_TrIOPoll)); }
-static inline void _tr_iopoll_destroy(_TrIOPoll* p) { if(p) free(p); }
-static inline int  _tr_iopoll_add(_TrIOPoll* p,int fd,uint32_t ev,void* ud){(void)p;(void)fd;(void)ev;(void)ud;return -1;}
-static inline int  _tr_iopoll_mod(_TrIOPoll* p,int fd,uint32_t ev,void* ud){(void)p;(void)fd;(void)ev;(void)ud;return -1;}
-static inline int  _tr_iopoll_del(_TrIOPoll* p,int fd){(void)p;(void)fd;return -1;}
-static inline int  _tr_iopoll_wait(_TrIOPoll* p,_TrIOEvent* ev,int m,int t){(void)p;(void)ev;(void)m;(void)t;return 0;}
+_TR_XLINK _TrIOPoll* _tr_iopoll_create(void) { return (_TrIOPoll*)calloc(1,sizeof(_TrIOPoll)); }
+_TR_XLINK void _tr_iopoll_destroy(_TrIOPoll* p) { if(p) free(p); }
+_TR_XLINK int  _tr_iopoll_add(_TrIOPoll* p,int fd,uint32_t ev,void* ud){(void)p;(void)fd;(void)ev;(void)ud;return -1;}
+_TR_XLINK int  _tr_iopoll_mod(_TrIOPoll* p,int fd,uint32_t ev,void* ud){(void)p;(void)fd;(void)ev;(void)ud;return -1;}
+_TR_XLINK int  _tr_iopoll_del(_TrIOPoll* p,int fd){(void)p;(void)fd;return -1;}
+_TR_XLINK int  _tr_iopoll_wait(_TrIOPoll* p,_TrIOEvent* ev,int m,int t){(void)p;(void)ev;(void)m;(void)t;return 0;}
 #endif /* _TrIOPoll platform backends */
 
 /* _tr_iopoll_wait_raw: Tauraro-callable version.
  * out_buf is a caller-allocated byte array; each slot is sizeof(_TrIOEvent).
  * Returns number of events written.  Tauraro code reads fd/events/userdata
  * at offsets 0/4/8 within each 16-byte slot. */
-static inline int _tr_iopoll_wait_raw(char* p_raw, char* out_buf, int maxev, int timeout_ms) {
+_TR_XLINK int _tr_iopoll_wait_raw(char* p_raw, char* out_buf, int maxev, int timeout_ms) {
     _TrIOPoll* p = (_TrIOPoll*)p_raw;
     _TrIOEvent tmp[64];
     if (maxev > 64) maxev = 64;
@@ -2640,15 +2644,15 @@ static inline int _tr_iopoll_wait_raw(char* p_raw, char* out_buf, int maxev, int
 }
 
 /* IOPoll char*-typed _h wrappers for Tauraro Pointer[char] interop */
-static inline char* _tr_iopoll_create_h(void)
+_TR_XLINK char* _tr_iopoll_create_h(void)
     { return (char*)_tr_iopoll_create(); }
-static inline void  _tr_iopoll_destroy_h(char* p)
+_TR_XLINK void  _tr_iopoll_destroy_h(char* p)
     { _tr_iopoll_destroy((_TrIOPoll*)p); }
-static inline int   _tr_iopoll_add_h(char* p, long long fd, long long ev, long long ud)
+_TR_XLINK int   _tr_iopoll_add_h(char* p, long long fd, long long ev, long long ud)
     { return _tr_iopoll_add((_TrIOPoll*)p,(int)fd,(uint32_t)ev,(void*)(uintptr_t)(unsigned long long)ud); }
-static inline int   _tr_iopoll_mod_h(char* p, long long fd, long long ev, long long ud)
+_TR_XLINK int   _tr_iopoll_mod_h(char* p, long long fd, long long ev, long long ud)
     { return _tr_iopoll_mod((_TrIOPoll*)p,(int)fd,(uint32_t)ev,(void*)(uintptr_t)(unsigned long long)ud); }
-static inline int   _tr_iopoll_del_h(char* p, long long fd)
+_TR_XLINK int   _tr_iopoll_del_h(char* p, long long fd)
     { return _tr_iopoll_del((_TrIOPoll*)p,(int)fd); }
 
 /* =========================================================================
@@ -3079,18 +3083,18 @@ _TR_CO_LINK int        _tr_co_done_h(char* c)           { return _tr_co_done((_T
 #if defined(TAURARO_BARE) || defined(TAURARO_WASM)
 /* No networking on bare WASM or freestanding targets */
 static inline int _tr_net_init(void)                                              { return -1; }
-static inline int _tr_tcp_connect(const char* h, int p)                           { (void)h;(void)p; return -1; }
-static inline int _tr_tcp_send(int fd, const char* d, int l)                      { (void)fd;(void)d;(void)l; return -1; }
-static inline int _tr_tcp_recv(int fd, char* b, int c)                            { (void)fd;(void)b;(void)c; return -1; }
-static inline void _tr_tcp_close(int fd)                                           { (void)fd; }
-static inline int _tr_tcp_listen(const char* h, int p, int bl)                    { (void)h;(void)p;(void)bl; return -1; }
-static inline int _tr_tcp_accept(int s)                                            { (void)s; return -1; }
-static inline char* _tr_tcp_peer_addr(int fd)                                      { (void)fd; return (char*)""; }
-static inline int _tr_udp_socket(void)                                             { return -1; }
-static inline int _tr_udp_bind(int fd, int p)                                      { (void)fd;(void)p; return -1; }
-static inline int _tr_udp_send_to(int fd, const char* d, int l, const char* h, int p) { (void)fd;(void)d;(void)l;(void)h;(void)p; return -1; }
-static inline int _tr_udp_recv_from(int fd, char* b, int c, char* src)            { (void)fd;(void)b;(void)c;(void)src; return -1; }
-static inline void _tr_udp_close(int fd)                                           { (void)fd; }
+_TR_XLINK int _tr_tcp_connect(const char* h, int p)                           { (void)h;(void)p; return -1; }
+_TR_XLINK int _tr_tcp_send(int fd, const char* d, int l)                      { (void)fd;(void)d;(void)l; return -1; }
+_TR_XLINK int _tr_tcp_recv(int fd, char* b, int c)                            { (void)fd;(void)b;(void)c; return -1; }
+_TR_XLINK void _tr_tcp_close(int fd)                                           { (void)fd; }
+_TR_XLINK int _tr_tcp_listen(const char* h, int p, int bl)                    { (void)h;(void)p;(void)bl; return -1; }
+_TR_XLINK int _tr_tcp_accept(int s)                                            { (void)s; return -1; }
+_TR_XLINK char* _tr_tcp_peer_addr(int fd)                                      { (void)fd; return (char*)""; }
+_TR_XLINK int _tr_udp_socket(void)                                             { return -1; }
+_TR_XLINK int _tr_udp_bind(int fd, int p)                                      { (void)fd;(void)p; return -1; }
+_TR_XLINK int _tr_udp_send_to(int fd, const char* d, int l, const char* h, int p) { (void)fd;(void)d;(void)l;(void)h;(void)p; return -1; }
+_TR_XLINK int _tr_udp_recv_from(int fd, char* b, int c, char* src)            { (void)fd;(void)b;(void)c;(void)src; return -1; }
+_TR_XLINK void _tr_udp_close(int fd)                                           { (void)fd; }
 static inline char* _tr_dns_resolve(const char* host)                              { (void)host; return (char*)""; }
 static inline char* _tr_dns_reverse(const char* ip)                                { (void)ip;  return (char*)""; }
 #elif defined(_WIN32)
@@ -3105,7 +3109,7 @@ static inline int _tr_net_init(void) {
     WSADATA wsa;
     return WSAStartup(MAKEWORD(2,2), &wsa) == 0 ? 0 : -1;
 }
-static inline int _tr_tcp_connect(const char* host, int port) {
+_TR_XLINK int _tr_tcp_connect(const char* host, int port) {
     _tr_net_init();
     struct addrinfo hints = {0}, *res = NULL;
     hints.ai_family   = AF_INET;
@@ -3120,9 +3124,9 @@ static inline int _tr_tcp_connect(const char* host, int port) {
     freeaddrinfo(res);
     return (int)fd;
 }
-static inline int  _tr_tcp_send(int fd, const char* data, int len) { return send((SOCKET)fd, data, len, 0); }
-static inline int  _tr_tcp_recv(int fd, char* buf, int cap)        { return recv((SOCKET)fd, buf, cap, 0); }
-static inline void _tr_tcp_close(int fd)                           { closesocket((SOCKET)fd); }
+_TR_XLINK int  _tr_tcp_send(int fd, const char* data, int len) { return send((SOCKET)fd, data, len, 0); }
+_TR_XLINK int  _tr_tcp_recv(int fd, char* buf, int cap)        { return recv((SOCKET)fd, buf, cap, 0); }
+_TR_XLINK void _tr_tcp_close(int fd)                           { closesocket((SOCKET)fd); }
 
 #else  /* POSIX */
 
@@ -3134,7 +3138,7 @@ static inline void _tr_tcp_close(int fd)                           { closesocket
 #include <arpa/inet.h>
 
 static inline int _tr_net_init(void) { return 0; }
-static inline int _tr_tcp_connect(const char* host, int port) {
+_TR_XLINK int _tr_tcp_connect(const char* host, int port) {
     struct addrinfo hints = {0}, *res = NULL;
     hints.ai_family   = AF_INET;
     hints.ai_socktype = SOCK_STREAM;
@@ -3148,9 +3152,9 @@ static inline int _tr_tcp_connect(const char* host, int port) {
     freeaddrinfo(res);
     return fd;
 }
-static inline int  _tr_tcp_send(int fd, const char* data, int len) { return (int)send(fd, data, (size_t)len, 0); }
-static inline int  _tr_tcp_recv(int fd, char* buf, int cap)        { return (int)recv(fd, buf, (size_t)cap, 0); }
-static inline void _tr_tcp_close(int fd)                           { close(fd); }
+_TR_XLINK int  _tr_tcp_send(int fd, const char* data, int len) { return (int)send(fd, data, (size_t)len, 0); }
+_TR_XLINK int  _tr_tcp_recv(int fd, char* buf, int cap)        { return (int)recv(fd, buf, (size_t)cap, 0); }
+_TR_XLINK void _tr_tcp_close(int fd)                           { close(fd); }
 #endif
 
 /* ── Platform detection ──────────────────────────────────────────────── */
@@ -4736,7 +4740,7 @@ static inline long long _tr_memory_total_mb(void) {
     MEMORYSTATUSEX ms; ms.dwLength=sizeof(ms); GlobalMemoryStatusEx(&ms);
     return (long long)(ms.ullTotalPhys/(1024LL*1024LL));
 }
-static inline int _tr_tcp_listen(const char* host,int port,int backlog) {
+_TR_XLINK int _tr_tcp_listen(const char* host,int port,int backlog) {
     _tr_net_init();
     SOCKET s=socket(AF_INET,SOCK_STREAM,0); if(s==INVALID_SOCKET) return -1;
     int opt=1; setsockopt(s,SOL_SOCKET,SO_REUSEADDR,(char*)&opt,sizeof(opt));
@@ -4749,36 +4753,36 @@ static inline int _tr_tcp_listen(const char* host,int port,int backlog) {
 /* Disable Nagle's algorithm: without this, every small HTTP response gets
  * delayed ~40ms by Nagle + the peer's delayed-ACK timer, capping keep-alive
  * request latency at ~20-40ms regardless of how fast the handler itself is. */
-static inline void _tr_tcp_set_nodelay(int fd) {
+_TR_XLINK void _tr_tcp_set_nodelay(int fd) {
     int one = 1;
     setsockopt((SOCKET)fd, IPPROTO_TCP, TCP_NODELAY, (char*)&one, sizeof(one));
 }
-static inline int   _tr_tcp_accept(int srv) { SOCKET c=accept((SOCKET)srv,NULL,NULL); if(c!=INVALID_SOCKET) _tr_tcp_set_nodelay((int)c); return (c==INVALID_SOCKET)?-1:(int)c; }
-static inline char* _tr_tcp_peer_addr(int fd) {
+_TR_XLINK int   _tr_tcp_accept(int srv) { SOCKET c=accept((SOCKET)srv,NULL,NULL); if(c!=INVALID_SOCKET) _tr_tcp_set_nodelay((int)c); return (c==INVALID_SOCKET)?-1:(int)c; }
+_TR_XLINK char* _tr_tcp_peer_addr(int fd) {
     struct sockaddr_in a; int al=sizeof(a);
     if(getpeername((SOCKET)fd,(struct sockaddr*)&a,&al)!=0) return _tr_empty_heap_str();
     char* buf=(char*)_tr_c_malloc(64); char ip[32];
     inet_ntop(AF_INET,&a.sin_addr,ip,sizeof(ip));
     _snprintf(buf,63,"%s:%d",ip,(int)ntohs(a.sin_port)); return buf;
 }
-static inline int  _tr_udp_socket(void) { _tr_net_init(); SOCKET s=socket(AF_INET,SOCK_DGRAM,0); return (s==INVALID_SOCKET)?-1:(int)s; }
-static inline int  _tr_udp_bind(int fd,int port) {
+_TR_XLINK int  _tr_udp_socket(void) { _tr_net_init(); SOCKET s=socket(AF_INET,SOCK_DGRAM,0); return (s==INVALID_SOCKET)?-1:(int)s; }
+_TR_XLINK int  _tr_udp_bind(int fd,int port) {
     struct sockaddr_in a; memset(&a,0,sizeof(a));
     a.sin_family=AF_INET; a.sin_port=htons((unsigned short)port); a.sin_addr.s_addr=INADDR_ANY;
     return bind((SOCKET)fd,(struct sockaddr*)&a,sizeof(a))==0?0:-1;
 }
-static inline int  _tr_udp_send_to(int fd,const char* data,int len,const char* host,int port) {
+_TR_XLINK int  _tr_udp_send_to(int fd,const char* data,int len,const char* host,int port) {
     struct sockaddr_in a; memset(&a,0,sizeof(a));
     a.sin_family=AF_INET; a.sin_port=htons((unsigned short)port); a.sin_addr.s_addr=inet_addr(host);
     return (int)sendto((SOCKET)fd,data,len,0,(struct sockaddr*)&a,sizeof(a));
 }
-static inline int  _tr_udp_recv_from(int fd,char* buf,int cap,char* src) {
+_TR_XLINK int  _tr_udp_recv_from(int fd,char* buf,int cap,char* src) {
     struct sockaddr_in a; int al=sizeof(a);
     int n=(int)recvfrom((SOCKET)fd,buf,cap,0,(struct sockaddr*)&a,&al);
     if(n>0&&src){char ip[32];inet_ntop(AF_INET,&a.sin_addr,ip,sizeof(ip));_snprintf(src,63,"%s:%d",ip,(int)ntohs(a.sin_port));}
     return n;
 }
-static inline void _tr_udp_close(int fd) { closesocket((SOCKET)fd); }
+_TR_XLINK void _tr_udp_close(int fd) { closesocket((SOCKET)fd); }
 static inline char* _tr_dns_resolve(const char* host) {
     _tr_net_init();
     struct addrinfo hints={0},*res=NULL; hints.ai_family=AF_INET;
@@ -4852,7 +4856,7 @@ static inline long long _tr_memory_total_mb(void) {
     long p=sysconf(_SC_PHYS_PAGES),s=sysconf(_SC_PAGE_SIZE);
     return (p>0&&s>0)?(long long)p*s/(1024LL*1024LL):0;
 }
-static inline int _tr_tcp_listen(const char* host,int port,int backlog) {
+_TR_XLINK int _tr_tcp_listen(const char* host,int port,int backlog) {
     int s=socket(AF_INET,SOCK_STREAM,0); if(s<0) return -1;
     int opt=1; setsockopt(s,SOL_SOCKET,SO_REUSEADDR,&opt,sizeof(opt));
     struct sockaddr_in a; memset(&a,0,sizeof(a));
@@ -4863,36 +4867,36 @@ static inline int _tr_tcp_listen(const char* host,int port,int backlog) {
 /* Disable Nagle's algorithm: without this, every small HTTP response gets
  * delayed ~40ms by Nagle + the peer's delayed-ACK timer, capping keep-alive
  * request latency at ~20-40ms regardless of how fast the handler itself is. */
-static inline void _tr_tcp_set_nodelay(int fd) {
+_TR_XLINK void _tr_tcp_set_nodelay(int fd) {
     int one = 1;
     setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
 }
-static inline int   _tr_tcp_accept(int srv) { int c=accept(srv,NULL,NULL); if(c>=0) _tr_tcp_set_nodelay(c); return c; }
-static inline char* _tr_tcp_peer_addr(int fd) {
+_TR_XLINK int   _tr_tcp_accept(int srv) { int c=accept(srv,NULL,NULL); if(c>=0) _tr_tcp_set_nodelay(c); return c; }
+_TR_XLINK char* _tr_tcp_peer_addr(int fd) {
     struct sockaddr_in a; socklen_t al=sizeof(a);
     if(getpeername(fd,(struct sockaddr*)&a,&al)<0) return _tr_empty_heap_str();
     char* buf=(char*)_tr_c_malloc(64); char ip[32];
     inet_ntop(AF_INET,&a.sin_addr,ip,sizeof(ip));
     snprintf(buf,63,"%s:%d",ip,(int)ntohs(a.sin_port)); return buf;
 }
-static inline int  _tr_udp_socket(void) { return socket(AF_INET,SOCK_DGRAM,0); }
-static inline int  _tr_udp_bind(int fd,int port) {
+_TR_XLINK int  _tr_udp_socket(void) { return socket(AF_INET,SOCK_DGRAM,0); }
+_TR_XLINK int  _tr_udp_bind(int fd,int port) {
     struct sockaddr_in a; memset(&a,0,sizeof(a));
     a.sin_family=AF_INET; a.sin_port=htons((unsigned short)port); a.sin_addr.s_addr=INADDR_ANY;
     return bind(fd,(struct sockaddr*)&a,sizeof(a))==0?0:-1;
 }
-static inline int  _tr_udp_send_to(int fd,const char* data,int len,const char* host,int port) {
+_TR_XLINK int  _tr_udp_send_to(int fd,const char* data,int len,const char* host,int port) {
     struct sockaddr_in a; memset(&a,0,sizeof(a));
     a.sin_family=AF_INET; a.sin_port=htons((unsigned short)port); a.sin_addr.s_addr=inet_addr(host);
     return (int)sendto(fd,data,len,0,(struct sockaddr*)&a,sizeof(a));
 }
-static inline int  _tr_udp_recv_from(int fd,char* buf,int cap,char* src) {
+_TR_XLINK int  _tr_udp_recv_from(int fd,char* buf,int cap,char* src) {
     struct sockaddr_in a; socklen_t al=sizeof(a);
     int n=(int)recvfrom(fd,buf,cap,0,(struct sockaddr*)&a,&al);
     if(n>0&&src){char ip[32];inet_ntop(AF_INET,&a.sin_addr,ip,sizeof(ip));snprintf(src,63,"%s:%d",ip,(int)ntohs(a.sin_port));}
     return n;
 }
-static inline void _tr_udp_close(int fd) { close(fd); }
+_TR_XLINK void _tr_udp_close(int fd) { close(fd); }
 static inline char* _tr_dns_resolve(const char* host) {
     struct addrinfo hints={0},*res=NULL; hints.ai_family=AF_INET;
     if(getaddrinfo(host,NULL,&hints,&res)!=0) return _tr_empty_heap_str();
@@ -4927,11 +4931,11 @@ static inline void _tr_console_clear(void)     { printf("\033[2J\033[H"); fflush
 #define TAURARO_WOULD_BLOCK (-2)
 
 #if defined(TAURARO_BARE) || defined(TAURARO_KERNEL)
-static inline int  _tr_tcp_set_nonblocking(int fd)                    { (void)fd; return -1; }
-static inline int  _tr_tcp_recv_nb(int fd, char* b, int c)            { (void)fd;(void)b;(void)c; return -1; }
-static inline int  _tr_tcp_send_nb(int fd, const char* d, int l)      { (void)fd;(void)d;(void)l; return -1; }
-static inline int  _tr_tcp_accept_nb(int fd)                          { (void)fd; return TAURARO_WOULD_BLOCK; }
-static inline int  _tr_tcp_connect_nb(const char* h, int p)           { (void)h;(void)p; return -1; }
+_TR_XLINK int  _tr_tcp_set_nonblocking(int fd)                    { (void)fd; return -1; }
+_TR_XLINK int  _tr_tcp_recv_nb(int fd, char* b, int c)            { (void)fd;(void)b;(void)c; return -1; }
+_TR_XLINK int  _tr_tcp_send_nb(int fd, const char* d, int l)      { (void)fd;(void)d;(void)l; return -1; }
+_TR_XLINK int  _tr_tcp_accept_nb(int fd)                          { (void)fd; return TAURARO_WOULD_BLOCK; }
+_TR_XLINK int  _tr_tcp_connect_nb(const char* h, int p)           { (void)h;(void)p; return -1; }
 
 #elif defined(_WIN32)
 #ifndef _TR_NET_INCLUDED
@@ -4940,21 +4944,21 @@ static inline int  _tr_tcp_connect_nb(const char* h, int p)           { (void)h;
 #include <ws2tcpip.h>
 #pragma comment(lib, "ws2_32.lib")
 #endif
-static inline int _tr_tcp_set_nonblocking(int fd) {
+_TR_XLINK int _tr_tcp_set_nonblocking(int fd) {
     u_long mode = 1;
     return ioctlsocket((SOCKET)fd, FIONBIO, &mode) == 0 ? 0 : -1;
 }
-static inline int _tr_tcp_recv_nb(int fd, char* buf, int cap) {
+_TR_XLINK int _tr_tcp_recv_nb(int fd, char* buf, int cap) {
     int n = recv((SOCKET)fd, buf, cap, 0);
     if (n < 0 && WSAGetLastError() == WSAEWOULDBLOCK) return TAURARO_WOULD_BLOCK;
     return n;
 }
-static inline int _tr_tcp_send_nb(int fd, const char* data, int len) {
+_TR_XLINK int _tr_tcp_send_nb(int fd, const char* data, int len) {
     int n = send((SOCKET)fd, data, len, 0);
     if (n < 0 && WSAGetLastError() == WSAEWOULDBLOCK) return TAURARO_WOULD_BLOCK;
     return n;
 }
-static inline int _tr_tcp_accept_nb(int server_fd) {
+_TR_XLINK int _tr_tcp_accept_nb(int server_fd) {
     SOCKET s = accept((SOCKET)server_fd, NULL, NULL);
     if (s == INVALID_SOCKET) {
         return (WSAGetLastError() == WSAEWOULDBLOCK) ? TAURARO_WOULD_BLOCK : -1;
@@ -4962,7 +4966,7 @@ static inline int _tr_tcp_accept_nb(int server_fd) {
     _tr_tcp_set_nodelay((int)s);
     return (int)s;
 }
-static inline int _tr_tcp_connect_nb(const char* host, int port) {
+_TR_XLINK int _tr_tcp_connect_nb(const char* host, int port) {
     _tr_net_init();
     struct addrinfo hints = {0}, *res = NULL;
     hints.ai_family = AF_INET; hints.ai_socktype = SOCK_STREAM;
@@ -4980,28 +4984,28 @@ static inline int _tr_tcp_connect_nb(const char* host, int port) {
 #include <fcntl.h>
 #include <errno.h>
 #include <netinet/tcp.h>
-static inline int _tr_tcp_set_nonblocking(int fd) {
+_TR_XLINK int _tr_tcp_set_nonblocking(int fd) {
     int flags = fcntl(fd, F_GETFL, 0);
     if (flags < 0) return -1;
     return fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0 ? 0 : -1;
 }
-static inline int _tr_tcp_recv_nb(int fd, char* buf, int cap) {
+_TR_XLINK int _tr_tcp_recv_nb(int fd, char* buf, int cap) {
     int n = (int)recv(fd, buf, (size_t)cap, 0);
     if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) return TAURARO_WOULD_BLOCK;
     return n;
 }
-static inline int _tr_tcp_send_nb(int fd, const char* data, int len) {
+_TR_XLINK int _tr_tcp_send_nb(int fd, const char* data, int len) {
     int n = (int)send(fd, data, (size_t)len, 0);
     if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) return TAURARO_WOULD_BLOCK;
     return n;
 }
-static inline int _tr_tcp_accept_nb(int server_fd) {
+_TR_XLINK int _tr_tcp_accept_nb(int server_fd) {
     int fd = accept(server_fd, NULL, NULL);
     if (fd < 0) return (errno == EAGAIN || errno == EWOULDBLOCK) ? TAURARO_WOULD_BLOCK : -1;
     _tr_tcp_set_nodelay(fd);
     return fd;
 }
-static inline int _tr_tcp_connect_nb(const char* host, int port) {
+_TR_XLINK int _tr_tcp_connect_nb(const char* host, int port) {
     struct addrinfo hints = {0}, *res = NULL;
     hints.ai_family = AF_INET; hints.ai_socktype = SOCK_STREAM;
     char pbuf[16]; snprintf(pbuf, sizeof(pbuf), "%d", port);
@@ -5019,7 +5023,7 @@ static inline int _tr_tcp_connect_nb(const char* host, int port) {
 /* Binary-safe non-blocking send: like _tr_tcp_send_nb but takes a raw byte
  * pointer + explicit length (no NUL-terminated str), for framed protocols
  * (e.g. WebSocket) whose payloads contain NUL bytes. */
-static inline int _tr_tcp_send_raw(int fd, char* buf, int len) { return _tr_tcp_send_nb(fd, buf, len); }
+_TR_XLINK int _tr_tcp_send_raw(int fd, char* buf, int len) { return _tr_tcp_send_nb(fd, buf, len); }
 
 /* -- Random (LCG-64) ------------------------------------------------------- */
 typedef struct { unsigned long long s; } _TrRng;
