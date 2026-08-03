@@ -389,6 +389,12 @@ static inline long long _tr_mem_live_strs(void) {
 #define _TR_XLINK static inline
 #endif
 
+/* Forward decl: the rc-prefixed string constructor (defined in native_abi.c). The native/
+ * LLVM backend's `str` is an rc'd char* released via _tr_rt_str_release, so any _h wrapper
+ * that hands a string back to that backend MUST return an rc string (not a raw _tr_checked_
+ * alloc/borrowed pointer, which would corrupt the heap on release). */
+char* _tr_rt_str_new(const char* s);
+
 // Wrappers for core library to avoid signature conflicts
 _TR_XLINK void* _tr_c_malloc(size_t size) {
     void* p = TAURARO_ALLOC(size);
@@ -874,7 +880,7 @@ typedef struct { int panicked; char* panic_msg; } _TrSpawnResult;
 /* Debug helper: prints current process memory usage to stderr, tagged with
  * `label`. Used to bisect memory growth across checkpoints during
  * leak-hunting; not called by normal runtime code. No-op on non-Windows. */
-static inline void _tr_report_mem(const char* label) { (void)label; }
+_TR_XLINK void _tr_report_mem(const char* label) { (void)label; }
 #endif
 
 #ifdef _WIN32
@@ -888,7 +894,7 @@ static inline void _tr_report_mem(const char* label) { (void)label; }
 /* Debug helper: prints current process working-set size to stderr, tagged
  * with `label`. Used to bisect memory growth across checkpoints during
  * leak-hunting; not called by normal runtime code. */
-static inline void _tr_report_mem(const char* label) {
+_TR_XLINK void _tr_report_mem(const char* label) {
     PROCESS_MEMORY_COUNTERS pmc;
     GetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof(pmc));
 #ifdef TAURARO_MEMCOUNT
@@ -1968,7 +1974,7 @@ _TR_XLINK bool  _tr_task_await_timeout_h(char* t, long long ms)            { ret
 _TR_XLINK bool  _tr_task_is_done_h(char* t)                                { return _tr_task_is_done((_TrTaskState*)t); }
 _TR_XLINK bool  _tr_task_is_cancelled_h(char* t)                           { return _tr_task_is_cancelled((_TrTaskState*)t); }
 _TR_XLINK bool  _tr_task_has_error_h(char* t)                              { return _tr_task_has_error((_TrTaskState*)t); }
-_TR_XLINK char* _tr_task_get_error_h(char* t)                              { return _tr_task_get_error((_TrTaskState*)t); }
+_TR_XLINK char* _tr_task_get_error_h(char* t)                              { return _tr_rt_str_new(_tr_task_get_error((_TrTaskState*)t)); }
 _TR_XLINK void  _tr_task_free_h(char* t)                                   { _tr_task_free((_TrTaskState*)t); }
 
 /* Mutex / RWLock */
@@ -2022,7 +2028,7 @@ _TR_XLINK void  _tr_threadobj_join_h(char* t)                              { _tr
 _TR_XLINK void  _tr_threadobj_detach_h(char* t)                            { _tr_threadobj_detach((_TrThreadObj*)t); }
 _TR_XLINK void  _tr_threadobj_free_h(char* t)                              { _tr_threadobj_free((_TrThreadObj*)t); }
 _TR_XLINK bool  _tr_threadobj_panicked_h(char* t)                          { return _tr_threadobj_panicked((_TrThreadObj*)t); }
-_TR_XLINK char* _tr_threadobj_panic_msg_h(char* t)                         { return _tr_str_dup_owned(_tr_threadobj_panic_msg((_TrThreadObj*)t)); }
+_TR_XLINK char* _tr_threadobj_panic_msg_h(char* t)                         { return _tr_rt_str_new(_tr_threadobj_panic_msg((_TrThreadObj*)t)); }
 _TR_XLINK long long _tr_thread_current_id_h(void)                          { return _tr_thread_current_id(); }
 _TR_XLINK void  _tr_thread_sleep_ms_h(long long ms)                        { _tr_thread_sleep_ms(ms); }
 
@@ -3503,7 +3509,7 @@ static inline char* _tr__trstr_s(TrStr x)            { return x.data; }
 )(x)
 static long long _tr_str_to_int(const char* s) { return s ? strtoll(s,NULL,10) : 0LL; }
 static double    _tr_str_to_float(const char* s){ return s ? strtod(s,NULL) : 0.0; }
-static long long _tr_strlen(char* s)     { return s ? (long long)strlen(s) : 0LL; }
+_TR_XLINK long long _tr_strlen(char* s)     { return s ? (long long)strlen(s) : 0LL; }
 
 /* ── String equality ─────────────────────────────────────────────────── */
 static inline bool _tr_str_eq(const char* a, const char* b) {
@@ -3518,7 +3524,7 @@ static inline bool _tr_str_eq(const char* a, const char* b) {
  * literal. Use the canonical _tr_empty_heap_str() (defined near _tr_checked_alloc)
  * for the empty-result fallback (freeing a literal corrupts the heap; this is the
  * ownership-lie class that blocked MIR completion of fns that drop these). */
-static inline char* _tr_str_slice(const char* s, long long start, long long end) {
+_TR_XLINK char* _tr_str_slice(const char* s, long long start, long long end) {
     if (!s) return _tr_empty_heap_str();
     long long len = (long long)strlen(s);
     if (start < 0) start = 0;
@@ -4422,7 +4428,7 @@ static inline TrStr _tr_strx_join_trstr(List_TrStr* parts, const char* sep) {
     return out;
 }
 
-static inline List_TrStr* _tr_str_split(const char* s, const char* sep) {
+_TR_XLINK List_TrStr* _tr_str_split(const char* s, const char* sep) {
     List_TrStr* l=List_TrStr_new(); if(!s||!sep||!*sep) return l;
     char* cp=(char*)malloc(strlen(s)+1); strcpy(cp,s);
     char* tok=strtok(cp,(char*)sep);

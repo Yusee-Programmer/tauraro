@@ -678,6 +678,11 @@ __attribute__((hot)) long long _ast_type_tag(AstType* ty) {
         return 0LL;
     }
     /* pass */
+    if ((strcmp(_tr_strz(n), _tr_strz(_tr_str_lit("char"))) == 0)) {
+        /* pass */
+        return 0LL;
+    }
+    /* pass */
     if (((strcmp(_tr_strz(n), _tr_strz(_tr_str_lit("float"))) == 0) || (strcmp(_tr_strz(n), _tr_strz(_tr_str_lit("f64"))) == 0))) {
         /* pass */
         return 5LL;
@@ -13554,6 +13559,13 @@ __auto_type pfp = _t2448.data.EPropAccess.prop;
             return bnorm;
         }
         /* pass */
+        if (((strcmp(_tr_strz(fn), _tr_strz(_tr_str_lit("_tr_str_lit"))) == 0) || (strcmp(_tr_strz(fn), _tr_strz(_tr_str_lit("_tr_strx_join_trstr"))) == 0))) {
+            /* pass */
+            _tr_str_release(alloc_nm);
+            _tr_str_release(fn);
+            return (-1LL);
+        }
+        /* pass */
         if (LModule_is_extern_fn(m, fn)) {
             /* pass */
             if ((args->len > 6LL)) {
@@ -15015,6 +15027,69 @@ __auto_type margs = _t2439.data.EMethodCall.args;
                     /* pass */
                     return _str_call0(m, lf, _tr_str_lit("_tr_rt_strlen"), sll, 0LL);
                 }
+                /* pass */
+                if (((strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("slice"))) == 0) && (margs->len == 3LL))) {
+                    /* pass */
+                    long long scv = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, 0LL)));
+                    /* pass */
+                    if (((scv < 0LL) || (LFunc_vreg_type(lf, scv) != 1LL))) {
+                        /* pass */
+                        return (-1LL);
+                    }
+                    /* pass */
+                    long long sca = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, 1LL)));
+                    /* pass */
+                    if (((sca < 0LL) || (LFunc_vreg_type(lf, sca) != 0LL))) {
+                        /* pass */
+                        return (-1LL);
+                    }
+                    /* pass */
+                    long long scb = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, 2LL)));
+                    /* pass */
+                    if (((scb < 0LL) || (LFunc_vreg_type(lf, scb) != 0LL))) {
+                        /* pass */
+                        return (-1LL);
+                    }
+                    /* pass */
+                    LModule_add_extern(m, _tr_str_lit("_tr_rt_str_slice"));
+                    /* pass */
+                    List_i64* scargs = (void*)List_i64_new();
+                    /* pass */
+                    List_i64_append(scargs, scv);
+                    /* pass */
+                    List_i64_append(scargs, sca);
+                    /* pass */
+                    List_i64_append(scargs, scb);
+                    /* pass */
+                    long long scd = LFunc_new_vreg(lf);
+                    /* pass */
+                    LFunc_emit(lf, LInst_ctor_ICall(scd, _tr_str_lit("_tr_rt_str_slice"), scargs));
+                    /* pass */
+                    LFunc_set_vreg_type(lf, scd, 1LL);
+                    /* pass */
+                    _fresh_mark(lf, scd);
+                    /* pass */
+                    return scd;
+                }
+                /* pass */
+                if ((((strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("index_of"))) == 0) || (strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("find"))) == 0)) && (margs->len == 2LL))) {
+                    /* pass */
+                    long long sfv = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, 0LL)));
+                    /* pass */
+                    if (((sfv < 0LL) || (LFunc_vreg_type(lf, sfv) != 1LL))) {
+                        /* pass */
+                        return (-1LL);
+                    }
+                    /* pass */
+                    long long sfb = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, 1LL)));
+                    /* pass */
+                    if (((sfb < 0LL) || (LFunc_vreg_type(lf, sfb) != 1LL))) {
+                        /* pass */
+                        return (-1LL);
+                    }
+                    /* pass */
+                    return _str_call1(m, lf, _tr_str_lit("_tr_rt_str_find"), sfv, sfb, 0LL);
+                }
             }
         } else if (1) {
             __auto_type _ = _t2474;
@@ -15557,6 +15632,46 @@ __auto_type ity_g = _t2478.data.EIdent.ty;
         }
         /* pass */
         TrStr recv_cls = _recv_class(m, lf, obj);
+        /* pass */
+        if ((((strcmp(_tr_strz(recv_cls), _tr_strz(_tr_str_lit("StrView"))) == 0) && (strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("to_str"))) == 0)) && (margs->len == 0LL))) {
+            /* pass */
+            long long svo = lower_expr(m, lf, obj);
+            /* pass */
+            if ((svo < 0LL)) {
+                /* pass */
+                _tr_str_release(recv_cls);
+                return (-1LL);
+            }
+            /* pass */
+            long long svdata = _emit_field_get(m, lf, svo, 0LL, 0LL);
+            /* pass */
+            long long svlen = _emit_field_get(m, lf, svo, 8LL, 0LL);
+            /* pass */
+            long long svz = LFunc_new_vreg(lf);
+            /* pass */
+            LFunc_emit(lf, LInst_ctor_IConst(svz, 0LL));
+            /* pass */
+            LModule_add_extern(m, _tr_str_lit("_tr_rt_str_slice"));
+            /* pass */
+            List_i64* sva = (void*)List_i64_new();
+            /* pass */
+            List_i64_append(sva, svdata);
+            /* pass */
+            List_i64_append(sva, svz);
+            /* pass */
+            List_i64_append(sva, svlen);
+            /* pass */
+            long long svd = LFunc_new_vreg(lf);
+            /* pass */
+            LFunc_emit(lf, LInst_ctor_ICall(svd, _tr_str_lit("_tr_rt_str_slice"), sva));
+            /* pass */
+            LFunc_set_vreg_type(lf, svd, 1LL);
+            /* pass */
+            _fresh_mark(lf, svd);
+            /* pass */
+            _tr_str_release(recv_cls);
+            return svd;
+        }
         /* pass */
         if ((strcmp(_tr_strz(recv_cls), _tr_strz(_tr_str_lit(""))) != 0)) {
             /* pass */

@@ -217,6 +217,8 @@ def _ast_type_tag(ty: AstType) -> int:
             if kint and vflt: return 18
         return -1
     if _is_int_typename(n): return 0
+    if n == "char": return 0            # a char is a byte-valued integer scalar (tag 0); print()
+                                        # still renders it as a character via the HIR type name.
     # f64 params/returns are self-consistent per backend: user fns are compiled by the
     # SAME backend on both sides of a call (native passes the bit pattern in an integer
     # register; LLVM uses a real `double`). Extern fns never take float via ICall (the
@@ -5558,6 +5560,13 @@ def _lower_expr_impl(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                 return bnorm
             # Generic free fn: instantiate lazily for this combination of ARG TAGS, then
             # call the mangled specialization (e.g. largest__m0_0 for two ints).
+            # `_tr_str_lit`/`_tr_strx_join_trstr` return the C backend's 16-byte fat-pointer
+            # TrStr by value — an ABI this backend (bare char* strs) can't call, and the
+            # former is a macro (no linkable symbol). Refuse to lower them: any std method
+            # that uses them (StringObj.as_str, Str.join) becomes unavailable and lazy
+            # reachability drops it — SOUND because reachable code routes through the
+            # intercepted Str/StrView builtins (rc'd `_tr_rt_str_*`) instead.
+            if fn == "_tr_str_lit" or fn == "_tr_strx_join_trstr": return -1
             if m.is_extern_fn(fn):
                 # extern "C" call: pass scalar/str/float args by value; str = char* directly.
                 if args.len > 6: return -1
@@ -6126,6 +6135,30 @@ def _lower_expr_impl(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                             mut sll = lower_expr(m, lf, margs.get(0))
                             if sll < 0 or lf.vreg_type(sll) != 1: return -1
                             return _str_call0(m, lf, "_tr_rt_strlen", sll, 0)
+                        # Str.slice(s, start, end): rc'd substring (ARC-managed, NOT the std
+                        # class's raw-malloc `_tr_str_slice` which conflicts with str ARC).
+                        if method == "slice" and margs.len == 3:
+                            mut scv = lower_expr(m, lf, margs.get(0))
+                            if scv < 0 or lf.vreg_type(scv) != 1: return -1
+                            mut sca = lower_expr(m, lf, margs.get(1))
+                            if sca < 0 or lf.vreg_type(sca) != 0: return -1
+                            mut scb = lower_expr(m, lf, margs.get(2))
+                            if scb < 0 or lf.vreg_type(scb) != 0: return -1
+                            m.add_extern("_tr_rt_str_slice")
+                            mut scargs = Vec[int].init(3)
+                            scargs.push(scv); scargs.push(sca); scargs.push(scb)
+                            mut scd = lf.new_vreg()
+                            lf.emit(LInst.ICall(scd, "_tr_rt_str_slice", scargs))
+                            lf.set_vreg_type(scd, 1)
+                            _fresh_mark(lf, scd)
+                            return scd
+                        # Str.index_of(s, sub) -> byte index or -1.
+                        if (method == "index_of" or method == "find") and margs.len == 2:
+                            mut sfv = lower_expr(m, lf, margs.get(0))
+                            if sfv < 0 or lf.vreg_type(sfv) != 1: return -1
+                            mut sfb = lower_expr(m, lf, margs.get(1))
+                            if sfb < 0 or lf.vreg_type(sfb) != 1: return -1
+                            return _str_call1(m, lf, "_tr_rt_str_find", sfv, sfb, 0)
                 case _:
                     pass
             # Builtin box INSTANCE methods (Mutex/RwLock/Atomic/ThreadPool) -> runtime calls.
@@ -6357,6 +6390,26 @@ def _lower_expr_impl(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
             # Instance method `inst.method(args)` on a user class -> <Class>_<method>(self,
             # args), resolved up the inheritance chain (static dispatch, like the C backend).
             mut recv_cls = _recv_class(m, lf, obj)
+            # StrView.to_str(): the ONE std StrView method that allocates. Its user body calls
+            # the raw-malloc `_tr_str_slice` (freed via _tr_c_free) which conflicts with str
+            # ARC (rc release). Intercept it -> rc'd `_tr_rt_str_slice(self.data, 0, self.len)`,
+            # fully within the ARC model. (Every other StrView method is pure pointer math and
+            # lowers fine as the plain user class.)
+            if recv_cls == "StrView" and method == "to_str" and margs.len == 0:
+                mut svo = lower_expr(m, lf, obj)
+                if svo < 0: return -1
+                mut svdata = _emit_field_get(m, lf, svo, 0, 0)   # self.data (Pointer[char])
+                mut svlen = _emit_field_get(m, lf, svo, 8, 0)    # self.len (int)
+                mut svz = lf.new_vreg()
+                lf.emit(LInst.IConst(svz, 0))
+                m.add_extern("_tr_rt_str_slice")
+                mut sva = Vec[int].init(3)
+                sva.push(svdata); sva.push(svz); sva.push(svlen)
+                mut svd = lf.new_vreg()
+                lf.emit(LInst.ICall(svd, "_tr_rt_str_slice", sva))
+                lf.set_vreg_type(svd, 1)
+                _fresh_mark(lf, svd)
+                return svd
             if recv_cls != "":
                 # sema desugars `obj[i]` (class receiver) to EMethodCall(obj,"get_index").
                 # Map that (and its write twin) to the dunder the class actually defines.
