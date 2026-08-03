@@ -1705,11 +1705,13 @@ typedef struct LInst {
             long long dst;
             long long base;
             long long off;
+            long long aclass;
         } ILoad;
         struct {
             long long base;
             long long off;
             long long src;
+            long long aclass;
         } IStore;
     } data;
 } LInst;
@@ -1734,8 +1736,8 @@ static inline __attribute__((always_inline)) LInst LInst_ctor_IAddrVar(long long
 static inline __attribute__((always_inline)) LInst LInst_ctor_IFuncAddr(long long dst, TrStr fname) { LInst _r = {.tag=LInst_IFuncAddr}; _r.data.IFuncAddr.dst = dst; _r.data.IFuncAddr.fname = _tr_str_retain(fname); return _r; }
 static inline __attribute__((always_inline)) LInst LInst_ctor_ICallInd(long long dst, long long fnreg, List_i64* args) { LInst _r = {.tag=LInst_ICallInd}; _r.data.ICallInd.dst = dst; _r.data.ICallInd.fnreg = fnreg; _r.data.ICallInd.args = args; return _r; }
 static inline __attribute__((always_inline)) LInst LInst_ctor_IAsm(TrStr code, TrStr cons) { LInst _r = {.tag=LInst_IAsm}; _r.data.IAsm.code = _tr_str_retain(code); _r.data.IAsm.cons = _tr_str_retain(cons); return _r; }
-static inline __attribute__((always_inline)) LInst LInst_ctor_ILoad(long long dst, long long base, long long off) { LInst _r = {.tag=LInst_ILoad}; _r.data.ILoad.dst = dst; _r.data.ILoad.base = base; _r.data.ILoad.off = off; return _r; }
-static inline __attribute__((always_inline)) LInst LInst_ctor_IStore(long long base, long long off, long long src) { LInst _r = {.tag=LInst_IStore}; _r.data.IStore.base = base; _r.data.IStore.off = off; _r.data.IStore.src = src; return _r; }
+static inline __attribute__((always_inline)) LInst LInst_ctor_ILoad(long long dst, long long base, long long off, long long aclass) { LInst _r = {.tag=LInst_ILoad}; _r.data.ILoad.dst = dst; _r.data.ILoad.base = base; _r.data.ILoad.off = off; _r.data.ILoad.aclass = aclass; return _r; }
+static inline __attribute__((always_inline)) LInst LInst_ctor_IStore(long long base, long long off, long long src, long long aclass) { LInst _r = {.tag=LInst_IStore}; _r.data.IStore.base = base; _r.data.IStore.off = off; _r.data.IStore.src = src; _r.data.IStore.aclass = aclass; return _r; }
 
 typedef enum {
     LTerm_TRetInt,
@@ -3973,6 +3975,7 @@ __attribute__((hot)) void LlvmEmitter_emit_function(LlvmEmitter* self, LFunc* lf
 __attribute__((hot)) void LlvmEmitter_emit_extern_decls(LlvmEmitter* self);
 __attribute__((hot)) void LlvmEmitter_scan_call_decl(LlvmEmitter* self, LInst inst, TrMap* seen);
 __attribute__((hot)) TrStr LlvmEmitter_emit_module(LlvmEmitter* self);
+__attribute__((hot)) TrStr _tbaa_suffix(long long aclass);
 __attribute__((hot)) TrStr _ll_int_instr(TrStr op);
 __attribute__((hot)) TrStr _ll_icmp_pred(TrStr op);
 __attribute__((hot)) TrStr _ll_float_instr(TrStr op);

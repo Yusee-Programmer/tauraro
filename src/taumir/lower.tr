@@ -1282,13 +1282,13 @@ def _field_tag_ok(vt: int, ftg: int) -> bool:
 # Store an i64/ptr vreg into an object field slot: _tr_rt_field_set_i(obj, off, val).
 # Store an object field slot: *(obj+off) = val. INLINE (no runtime call).
 def _emit_field_set(m: LModule, lf: LFunc, obj: int, off: int, val: int):
-    lf.emit(LInst.IStore(obj, off, val))
+    lf.emit(LInst.IStore(obj, off, val, 3))          # 3 = object field (TBAA)
 
 # Load an object field slot: dst = *(obj+off), typed `tag`. INLINE (no runtime call).
 def _emit_field_get(m: LModule, lf: LFunc, obj: int, off: int, tag: int) -> int:
     mut gd = lf.new_vreg()
     lf.set_vreg_type(gd, tag)        # set BEFORE emit so ILoad loads the right LLVM type
-    lf.emit(LInst.ILoad(gd, obj, off))
+    lf.emit(LInst.ILoad(gd, obj, off, 3))            # 3 = object field (TBAA)
     return gd
 
 # Enum variant construction `Enum.Variant(args)` / unit `Enum.Variant` -> heap-allocate
@@ -3679,7 +3679,7 @@ def _lower_index_set(m: LModule, lf: LFunc, obj: Pointer[HirExpr], idx: Pointer[
             lf.emit(LInst.IFBits(lvfb, lvv))
             lvv = lvfb
         mut la_addr = _inline_list_addr(m, lf, ov, iv)         # data[i] address (inline)
-        lf.emit(LInst.IStore(la_addr, 0, lvv))
+        lf.emit(LInst.IStore(la_addr, 0, lvv, 2))              # 2 = list element (TBAA)
         return true
     return false
 
@@ -4578,7 +4578,10 @@ def _list_call1(m: LModule, lf: LFunc, sym: str, handle: int, restype: int) -> i
 # No bounds check (matches in-range accesses; correct programs never go out of range).
 def _inline_list_addr(m: LModule, lf: LFunc, handle: int, idx: int) -> int:
     mut data = lf.new_vreg()
-    lf.emit(LInst.ILoad(data, handle, 0))          # data = handle->data (as an i64 address)
+    lf.emit(LInst.ILoad(data, handle, 0, 1))       # data = handle->data; aclass 1 = list header.
+                                                    # Distinct TBAA from elements (aclass 2) lets LLVM
+                                                    # prove element stores never clobber this base
+                                                    # pointer -> it hoists the load out of hot loops.
     mut c8 = lf.new_vreg()
     lf.emit(LInst.IConst(c8, 8))
     mut i8 = lf.new_vreg()
@@ -4591,7 +4594,7 @@ def _inline_list_addr(m: LModule, lf: LFunc, handle: int, idx: int) -> int:
 def _list_get(m: LModule, lf: LFunc, handle: int, idx: int) -> int:
     mut addr = _inline_list_addr(m, lf, handle, idx)
     mut gd = lf.new_vreg()
-    lf.emit(LInst.ILoad(gd, addr, 0))
+    lf.emit(LInst.ILoad(gd, addr, 0, 2))           # 2 = list element (TBAA)
     return gd
 
 # Element load typed for the LIST's tag: float lists store raw f64 bit patterns, so the
@@ -6457,7 +6460,7 @@ def _lower_expr_impl(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                     lf.emit(LInst.IFBits(stfb, stv))
                     stv = stfb
                 mut st_addr = _inline_list_addr(m, lf, ovm, sti)   # data[i] address (inline)
-                lf.emit(LInst.IStore(st_addr, 0, stv))
+                lf.emit(LInst.IStore(st_addr, 0, stv, 2))          # 2 = list element (TBAA)
                 return ovm
             if method == "pop" and margs.len == 0:
                 m.add_extern("_tr_rt_list_pop_i64")

@@ -1,5 +1,6 @@
 #include "tauraro_types.h"
 
+TrStr _tbaa_suffix(long long aclass);
 TrStr _ll_int_instr(TrStr op);
 TrStr _ll_icmp_pred(TrStr op);
 TrStr _ll_float_instr(TrStr op);
@@ -431,6 +432,7 @@ __auto_type cons = _t2501.data.IAsm.cons;
         __auto_type dst = _t2501.data.ILoad.dst;
 __auto_type base = _t2501.data.ILoad.base;
 __auto_type off = _t2501.data.ILoad.off;
+__auto_type aclass = _t2501.data.ILoad.aclass;
         /* pass */
         TrStr lbp = LlvmEmitter_addr_of_base(self, base);
         /* pass */
@@ -449,7 +451,7 @@ __auto_type off = _t2501.data.ILoad.off;
         /* pass */
         TrStr lv = LlvmEmitter_newtmp(self);
         /* pass */
-        ({ TrStr _at_t2534 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  ")), _tr_strz(lv))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" = load "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(ldty)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(", ptr "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(lep)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\n"))); _tr_str_release(_cl); _cres; })); LlvmEmitter_w(self, _at_t2534); _tr_str_release(_at_t2534); });
+        ({ TrStr _at_t2534 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  ")), _tr_strz(lv))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" = load "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(ldty)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(", ptr "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(lep)); _tr_str_release(_cl); _cres; })); TrStr _cr = (_tbaa_suffix(aclass)); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\n"))); _tr_str_release(_cl); _cres; })); LlvmEmitter_w(self, _at_t2534); _tr_str_release(_at_t2534); });
         /* pass */
         LlvmEmitter_store_vreg(self, dst, ldty, lv);
         _tr_str_release(lbp);
@@ -460,6 +462,7 @@ __auto_type off = _t2501.data.ILoad.off;
         __auto_type base = _t2501.data.IStore.base;
 __auto_type off = _t2501.data.IStore.off;
 __auto_type src = _t2501.data.IStore.src;
+__auto_type aclass = _t2501.data.IStore.aclass;
         /* pass */
         TrStr sbp = LlvmEmitter_addr_of_base(self, base);
         /* pass */
@@ -478,7 +481,7 @@ __auto_type src = _t2501.data.IStore.src;
         /* pass */
         TrStr ssv = LlvmEmitter_load_vreg(self, src);
         /* pass */
-        ({ TrStr _at_t2537 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  store ")), _tr_strz(ssty))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(ssv)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(", ptr "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(sep)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\n"))); _tr_str_release(_cl); _cres; })); LlvmEmitter_w(self, _at_t2537); _tr_str_release(_at_t2537); });
+        ({ TrStr _at_t2537 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  store ")), _tr_strz(ssty))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(ssv)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(", ptr "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(sep)); _tr_str_release(_cl); _cres; })); TrStr _cr = (_tbaa_suffix(aclass)); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\n"))); _tr_str_release(_cl); _cres; })); LlvmEmitter_w(self, _at_t2537); _tr_str_release(_at_t2537); });
         _tr_str_release(sbp);
         _tr_str_release(sep);
         _tr_str_release(ssty);
@@ -935,7 +938,43 @@ __attribute__((hot)) TrStr LlvmEmitter_emit_module(LlvmEmitter* self) {
         fi = (fi + 1LL);
     }
     /* pass */
+    LlvmEmitter_w(self, _tr_str_lit("\n"));
+    /* pass */
+    LlvmEmitter_w(self, _tr_str_lit("!0 = !{!\"tauraro_tbaa_root\"}\n"));
+    /* pass */
+    LlvmEmitter_w(self, _tr_str_lit("!1 = !{!\"listhdr\", !0, i64 0}\n"));
+    /* pass */
+    LlvmEmitter_w(self, _tr_str_lit("!2 = !{!\"listelem\", !0, i64 0}\n"));
+    /* pass */
+    LlvmEmitter_w(self, _tr_str_lit("!3 = !{!\"objfield\", !0, i64 0}\n"));
+    /* pass */
+    LlvmEmitter_w(self, _tr_str_lit("!4 = !{!1, !1, i64 0}\n"));
+    /* pass */
+    LlvmEmitter_w(self, _tr_str_lit("!5 = !{!2, !2, i64 0}\n"));
+    /* pass */
+    LlvmEmitter_w(self, _tr_str_lit("!6 = !{!3, !3, i64 0}\n"));
+    /* pass */
     return StringObj_as_str(StringBuilder_to_string(self->out));
+}
+
+__attribute__((hot)) TrStr _tbaa_suffix(long long aclass) {
+    /* pass */
+    if ((aclass == 1LL)) {
+        /* pass */
+        return _tr_str_lit(", !tbaa !4");
+    }
+    /* pass */
+    if ((aclass == 2LL)) {
+        /* pass */
+        return _tr_str_lit(", !tbaa !5");
+    }
+    /* pass */
+    if ((aclass == 3LL)) {
+        /* pass */
+        return _tr_str_lit(", !tbaa !6");
+    }
+    /* pass */
+    return _tr_str_lit("");
 }
 
 __attribute__((hot)) TrStr _ll_int_instr(TrStr op) {

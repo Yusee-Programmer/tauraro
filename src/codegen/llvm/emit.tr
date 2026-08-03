@@ -199,7 +199,7 @@ extend LlvmEmitter:
             case LInst.IAsm(code, cons):
                 # inline asm: `sideeffect` keeps it even with no outputs (never DCE'd).
                 self.w("  call void asm sideeffect \"" + _ll_str_escape(code) + "\", \"" + cons + "\"()\n")
-            case LInst.ILoad(dst, base, off):
+            case LInst.ILoad(dst, base, off, aclass):
                 # dst = *(base + off), loaded as dst's own type (i64/ptr/double); the base
                 # vreg is an address (ptr directly, or an i64 that we inttoptr).
                 mut lbp = self.addr_of_base(base)
@@ -209,9 +209,9 @@ extend LlvmEmitter:
                     self.w("  " + lep + " = getelementptr i8, ptr " + lbp + ", i64 " + off.to_str() + "\n")
                 mut ldty = self.vty(dst)
                 mut lv = self.newtmp()
-                self.w("  " + lv + " = load " + ldty + ", ptr " + lep + "\n")
+                self.w("  " + lv + " = load " + ldty + ", ptr " + lep + _tbaa_suffix(aclass) + "\n")
                 self.store_vreg(dst, ldty, lv)
-            case LInst.IStore(base, off, src):
+            case LInst.IStore(base, off, src, aclass):
                 mut sbp = self.addr_of_base(base)
                 mut sep = sbp
                 if off != 0:
@@ -219,7 +219,7 @@ extend LlvmEmitter:
                     self.w("  " + sep + " = getelementptr i8, ptr " + sbp + ", i64 " + off.to_str() + "\n")
                 mut ssty = self.vty(src)
                 mut ssv = self.load_vreg(src)
-                self.w("  store " + ssty + " " + ssv + ", ptr " + sep + "\n")
+                self.w("  store " + ssty + " " + ssv + ", ptr " + sep + _tbaa_suffix(aclass) + "\n")
 
     pub def emit_call(self, dst: int, callee: str, args: Vec[int]):
         # Build the "(<ty> <val>, ...)" argument list.
@@ -406,7 +406,28 @@ extend LlvmEmitter:
         while fi < self.m.funcs.len:
             self.emit_function(self.m.funcs.get(fi))
             fi = fi + 1
+        # TBAA type hierarchy (roadmap item b): a root with three disjoint scalar types.
+        # Accesses tagged with different types are proven non-aliasing by LLVM's alias
+        # analysis, so it hoists list base-pointer loads out of hot loops and can vectorize.
+        # SOUND: each memory location has exactly ONE role — a list's header (data ptr/len),
+        # its element buffer, and user-object fields are always separate allocations.
+        self.w("\n")
+        self.w("!0 = !{!\"tauraro_tbaa_root\"}\n")
+        self.w("!1 = !{!\"listhdr\", !0, i64 0}\n")
+        self.w("!2 = !{!\"listelem\", !0, i64 0}\n")
+        self.w("!3 = !{!\"objfield\", !0, i64 0}\n")
+        self.w("!4 = !{!1, !1, i64 0}\n")
+        self.w("!5 = !{!2, !2, i64 0}\n")
+        self.w("!6 = !{!3, !3, i64 0}\n")
         return self.out.to_string().as_str()
+
+# TBAA access-tag suffix for an alias class (see emit_module's metadata footer).
+# 0 = generic (no metadata -> may alias anything, always safe). 1/2/3 -> !4/!5/!6.
+def _tbaa_suffix(aclass: int) -> str:
+    if aclass == 1: return ", !tbaa !4"
+    if aclass == 2: return ", !tbaa !5"
+    if aclass == 3: return ", !tbaa !6"
+    return ""
 
 # op -> LLVM integer arithmetic/bitwise instruction (non-comparison).
 def _ll_int_instr(op: str) -> str:

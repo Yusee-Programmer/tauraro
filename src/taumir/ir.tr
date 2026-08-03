@@ -39,8 +39,10 @@ pub enum LInst:
     IFuncAddr(dst: int, fname: str)             # dst = address of a defined function
     ICallInd(dst: int, fnreg: int, args: Vec[int])  # indirect call through the pointer in fnreg
     IAsm(code: str, cons: str)                       # inline asm: LLVM `call void asm sideeffect`
-    ILoad(dst: int, base: int, off: int)             # dst = *(int64_t*)(base + off)  (inline mem load)
-    IStore(base: int, off: int, src: int)            # *(int64_t*)(base + off) = src  (inline mem store)
+    ILoad(dst: int, base: int, off: int, aclass: int)   # dst = *(int64_t*)(base + off)  (inline mem load)
+    IStore(base: int, off: int, src: int, aclass: int)  # *(int64_t*)(base + off) = src  (inline mem store)
+                                                     # aclass = TBAA alias class (LLVM only; native ignores):
+                                                     # 0 generic, 1 list header, 2 list element, 3 obj field
 
 # Block terminator (exactly one per block).
 pub enum LTerm:

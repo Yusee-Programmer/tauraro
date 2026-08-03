@@ -2987,7 +2987,7 @@ __attribute__((hot)) bool _field_tag_ok(long long vt, long long ftg) {
 
 __attribute__((hot)) void _emit_field_set(LModule* m, LFunc* lf, long long obj, long long off, long long val) {
     /* pass */
-    LFunc_emit(lf, LInst_ctor_IStore(obj, off, val));
+    LFunc_emit(lf, LInst_ctor_IStore(obj, off, val, 3LL));
 }
 
 __attribute__((hot)) long long _emit_field_get(LModule* m, LFunc* lf, long long obj, long long off, long long tag) {
@@ -2996,7 +2996,7 @@ __attribute__((hot)) long long _emit_field_get(LModule* m, LFunc* lf, long long 
     /* pass */
     LFunc_set_vreg_type(lf, gd, tag);
     /* pass */
-    LFunc_emit(lf, LInst_ctor_ILoad(gd, obj, off));
+    LFunc_emit(lf, LInst_ctor_ILoad(gd, obj, off, 3LL));
     /* pass */
     return gd;
 }
@@ -8850,7 +8850,7 @@ __attribute__((hot)) bool _lower_index_set(LModule* m, LFunc* lf, HirExpr* obj, 
         /* pass */
         long long la_addr = _inline_list_addr(m, lf, ov, iv);
         /* pass */
-        LFunc_emit(lf, LInst_ctor_IStore(la_addr, 0LL, lvv));
+        LFunc_emit(lf, LInst_ctor_IStore(la_addr, 0LL, lvv, 2LL));
         /* pass */
         _tr_str_release(sicls);
         return true;
@@ -11013,7 +11013,7 @@ __attribute__((hot)) long long _inline_list_addr(LModule* m, LFunc* lf, long lon
     /* pass */
     long long data = LFunc_new_vreg(lf);
     /* pass */
-    LFunc_emit(lf, LInst_ctor_ILoad(data, handle, 0LL));
+    LFunc_emit(lf, LInst_ctor_ILoad(data, handle, 0LL, 1LL));
     /* pass */
     long long c8 = LFunc_new_vreg(lf);
     /* pass */
@@ -11036,7 +11036,7 @@ __attribute__((hot)) long long _list_get(LModule* m, LFunc* lf, long long handle
     /* pass */
     long long gd = LFunc_new_vreg(lf);
     /* pass */
-    LFunc_emit(lf, LInst_ctor_ILoad(gd, addr, 0LL));
+    LFunc_emit(lf, LInst_ctor_ILoad(gd, addr, 0LL, 2LL));
     /* pass */
     return gd;
 }
@@ -15929,7 +15929,7 @@ __auto_type ity_g = _t2476.data.EIdent.ty;
             /* pass */
             long long st_addr = _inline_list_addr(m, lf, ovm, sti);
             /* pass */
-            LFunc_emit(lf, LInst_ctor_IStore(st_addr, 0LL, stv));
+            LFunc_emit(lf, LInst_ctor_IStore(st_addr, 0LL, stv, 2LL));
             /* pass */
             _tr_str_release(recv_cls);
             return ovm;
