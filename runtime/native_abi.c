@@ -925,8 +925,16 @@ void _tr_rt_obj_release(void* p) {
     if (!p) return;
     _TrOHdr* h = &((_TrOHdr*)p)[-1];
 #ifdef TR_HEAPDBG
-    if (((uintptr_t)p & 7u) != 0) { fprintf(stderr, "TRDBG: obj_release on MISALIGNED ptr %p (not an object)\n", p); fflush(stderr); abort(); }
-    if (h->rc <= 0) { fprintf(stderr, "TRDBG: obj DOUBLE-release, rc=%lld drop=%p\n", (long long)h->rc, (void*)h->drop); fflush(stderr); abort(); }
+    if (((uintptr_t)p & 7u) != 0) {
+        fprintf(stderr, "TRDBG: obj_release MISALIGNED ptr %p ret0=%p ret1=%p ret2=%p\n", p,
+            __builtin_return_address(0),
+            __builtin_extract_return_addr(__builtin_return_address(1)),
+            __builtin_extract_return_addr(__builtin_return_address(2)));
+        fflush(stderr); abort(); }
+    if (h->rc <= 0) {
+        fprintf(stderr, "TRDBG: obj DOUBLE-release p=%p rc=%lld drop=%p f0=%p ret0=%p\n", p, (long long)h->rc,
+            (void*)h->drop, *(void**)p, __builtin_return_address(0));
+        fflush(stderr); abort(); }
 #endif
     if (--h->rc <= 0) {
         if (h->drop) h->drop(p);   /* release owned fields; must NOT free the shell */
