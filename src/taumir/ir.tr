@@ -255,6 +255,7 @@ pub class ClassLayout:
     pub fields: Vec[str]        # field names in declaration order (incl. inherited, first)
     pub ftags:  Vec[int]        # parallel: value-type tag of each field
     pub fcls:   Vec[str]        # parallel: class/enum name for object fields ("" if scalar)
+    pub is_value: bool          # @value_type: stored INLINE by value (no heap handle, copy on assign)
 
 extend ClassLayout:
     pub def init(name: str) -> ClassLayout:
@@ -264,6 +265,7 @@ extend ClassLayout:
         c.fields = Vec[str].init(4)
         c.ftags  = Vec[int].init(4)
         c.fcls   = Vec[str].init(4)
+        c.is_value = false
         return c
 
     pub def field_index(self, fname: str) -> int:
@@ -337,6 +339,8 @@ pub class LModule:
                                             # a missing entry -> treated as a borrow -> leak, never UAF.
     pub overloaded_sigs: Vec[str]           # "Cls_method" keys where >1 same-name method exists;
                                             # such methods mangle to Cls_method_<Nargs>arg (matches C).
+    pub target_llvm: bool                   # true when lowering for the LLVM backend (which passes
+                                            # call args on the stack past 6, unlike the native reg ABI).
 
 extend LModule:
     pub def init() -> LModule:
@@ -362,6 +366,7 @@ extend LModule:
         m.extfn_ret   = Vec[int].init(4)
         m.fn_owned_names = Vec[str].init(8)
         m.overloaded_sigs = Vec[str].init(4)
+        m.target_llvm = false
         return m
 
     # Method-overload registry (mirrors the C backend's overloaded_sigs). A method name
@@ -508,6 +513,12 @@ extend LModule:
 
     pub def is_class(self, name: str) -> bool:
         return self.class_index(name) >= 0
+
+    # True for a @value_type class: stored INLINE by value (no heap handle; copy on assign).
+    pub def is_value_class(self, name: str) -> bool:
+        mut ci = self.class_index(name)
+        if ci < 0: return false
+        return self.classes.get(ci).is_value
 
     # Instance size in bytes (every field is an 8-byte slot).
     pub def class_size(self, name: str) -> int:

@@ -418,14 +418,14 @@ _TR_XLINK void _tr_c_free(void* ptr) { _tr_free(ptr); }
 
 #ifndef TAURARO_KERNEL
 static inline void _tr_print(char* s) { printf("%s\n", s); }
-static inline void _tr_print_raw(char* s) { printf("%s", s); fflush(stdout); }
+_TR_XLINK void _tr_print_raw(char* s) { printf("%s", s); fflush(stdout); }
 static inline void _tr_eprint(char* s) { _TR_DIAG("%s\n", s); fflush(stderr); }
 #else
 #ifndef _TR_WRITE
 #  define _TR_WRITE(s) ((void)(s))   /* freestanding sink: redefine to UART/semihosting */
 #endif
 static inline void _tr_print(char* s) { _TR_WRITE(s); _TR_WRITE("\n"); }
-static inline void _tr_print_raw(char* s) { _TR_WRITE(s); }
+_TR_XLINK void _tr_print_raw(char* s) { _TR_WRITE(s); }
 static inline void _tr_eprint(char* s) { _TR_WRITE(s); _TR_WRITE("\n"); }
 #endif
 
@@ -667,22 +667,22 @@ static inline void _tr_weak_drop(_TrWeakBox* w) {
 }
 
 _TR_XLINK void* _tr_c_memcpy(void* dst, void* src, size_t n) { return memcpy(dst, src, n); }
-static inline void* _tr_c_memset(void* ptr, int val, size_t n) { return memset(ptr, val, n); }
-static inline void* _tr_c_memmove(void* dst, void* src, size_t n) { return memmove(dst, src, n); }
+_TR_XLINK void* _tr_c_memset(void* ptr, int val, size_t n) { return memset(ptr, val, n); }
+_TR_XLINK void* _tr_c_memmove(void* dst, void* src, size_t n) { return memmove(dst, src, n); }
 /* File I/O + env: std-tier only (need <stdio.h>'s FILE / getenv). Gated so a
  * freestanding (TAURARO_BARE) build parses past here — leaving these ungated was
  * the 'FILE undeclared' early-header-failure that made everything after look
  * implicit on bare-metal. */
 #ifndef TAURARO_BARE
-static inline void* _tr_c_fopen(const char* path, const char* mode) { return (void*)fopen(path, mode); }
-static inline int _tr_c_fclose(void* fp) { return fclose((FILE*)fp); }
-static inline size_t _tr_c_fread(void* ptr, size_t size, size_t nmemb, void* fp) { return fread(ptr, size, nmemb, (FILE*)fp); }
-static inline size_t _tr_c_fwrite(const void* ptr, size_t size, size_t nmemb, void* fp) { return fwrite(ptr, size, nmemb, (FILE*)fp); }
-static inline int _tr_c_fseek(void* fp, long offset, int whence) { return fseek((FILE*)fp, offset, whence); }
-static inline long _tr_c_ftell(void* fp) { return ftell((FILE*)fp); }
-static inline char* _tr_getenv(const char* name) { char* v = getenv(name); return v ? v : ""; }
+_TR_XLINK void* _tr_c_fopen(const char* path, const char* mode) { return (void*)fopen(path, mode); }
+_TR_XLINK int _tr_c_fclose(void* fp) { return fclose((FILE*)fp); }
+_TR_XLINK size_t _tr_c_fread(void* ptr, size_t size, size_t nmemb, void* fp) { return fread(ptr, size, nmemb, (FILE*)fp); }
+_TR_XLINK size_t _tr_c_fwrite(const void* ptr, size_t size, size_t nmemb, void* fp) { return fwrite(ptr, size, nmemb, (FILE*)fp); }
+_TR_XLINK int _tr_c_fseek(void* fp, long offset, int whence) { return fseek((FILE*)fp, offset, whence); }
+_TR_XLINK long _tr_c_ftell(void* fp) { return ftell((FILE*)fp); }
+_TR_XLINK char* _tr_getenv(const char* name) { char* v = getenv(name); return v ? v : ""; }
 #else
-static inline char* _tr_getenv(const char* name) { (void)name; return (char*)""; }
+_TR_XLINK char* _tr_getenv(const char* name) { (void)name; return (char*)""; }
 #endif
 #ifdef _WIN32
 static inline int _tr_setenv(const char* name, const char* value) { return _putenv_s(name, value) == 0 ? 0 : -1; }
@@ -2216,7 +2216,7 @@ static int64_t _tr_stdin_isatty(void) {
 
 /* 1 if env var `name` is set to a non-empty value; 0 otherwise. Used for the
  * NO_COLOR convention (https://no-color.org).                               */
-static int64_t _tr_env_set(const char* name) {
+_TR_XLINK int64_t _tr_env_set(const char* name) {
     if (!name) return 0;
     const char* v = getenv(name);
     return (v && v[0]) ? 1 : 0;
@@ -2227,12 +2227,12 @@ static char* _tr_read_stdin_bytes(int64_t n) { (void)n; return _tr_empty_heap_st
 static void _tr_write_stdout(const char* s) { _TR_WRITE(s); }
 static void _tr_flush_stdout(void) { }
 static int64_t _tr_stdin_isatty(void) { return 0; }
-static int64_t _tr_env_set(const char* name) { (void)name; return 0; }
+_TR_XLINK int64_t _tr_env_set(const char* name) { (void)name; return 0; }
 #endif
 
 /* The ESC control byte (0x1b) as an owned string. Lets the diagnostics module
  * build ANSI sequences without depending on core.string (StringBuilder).     */
-static char* _tr_ansi_esc(void) { return _tr_str_dup_owned("\x1b"); }
+_TR_XLINK char* _tr_ansi_esc(void) { return _tr_str_dup_owned("\x1b"); }
 
 
 static inline char* _tr_str_substring(const char* s, int start, int end) {
@@ -2248,7 +2248,7 @@ static inline char* _tr_str_substring(const char* s, int start, int end) {
     return res;
 }
 
-static inline void _tr_exit(long long code) { exit((int)code); }
+_TR_XLINK void _tr_exit(long long code) { exit((int)code); }
 
 #if defined(TAURARO_BARE) && !defined(__wasi__)
 static inline long long _tr_getpid(void) { return 0LL; }
@@ -2313,7 +2313,7 @@ static inline void _tr_enable_vt100(void) {
  * TTY. Windows: stdout is a TTY AND we best-effort enable VT processing so even
  * classic conhost interprets the escapes (Windows Terminal/VS Code already do).
  * Returns 0 when piped/redirected so logs and `... | grep` stay plain ASCII.  */
-static int64_t _tr_stdout_supports_ansi(void) {
+_TR_XLINK int64_t _tr_stdout_supports_ansi(void) {
 #if defined(TAURARO_BARE)
     return 0;   /* no console on bare-metal */
 #elif defined(_WIN32)
@@ -3164,7 +3164,7 @@ _TR_XLINK void _tr_tcp_close(int fd)                           { close(fd); }
 #endif
 
 /* ── Platform detection ──────────────────────────────────────────────── */
-static inline bool _tr_is_windows(void) {
+_TR_XLINK bool _tr_is_windows(void) {
 #ifdef _WIN32
     return true;
 #else
@@ -3177,28 +3177,28 @@ static inline bool _tr_is_windows(void) {
 /* Bare targets with no filesystem */
 static inline int   _tr_mkdir(const char* p)     { (void)p; return -1; }
 static inline int   _tr_rmdir(const char* p)     { (void)p; return -1; }
-static inline bool  _tr_dir_exists(const char* p){ (void)p; return false; }
+_TR_XLINK bool  _tr_dir_exists(const char* p){ (void)p; return false; }
 static inline bool  _tr_is_dir(const char* p)    { (void)p; return false; }
 static inline bool  _tr_is_file(const char* p)   { (void)p; return false; }
-static inline void* _tr_opendir(const char* p)   { (void)p; return NULL; }
-static inline char* _tr_readdir(void* h)         { (void)h; return strdup(""); }
-static inline void  _tr_closedir(void* h)        { (void)h; }
+_TR_XLINK void* _tr_opendir(const char* p)   { (void)p; return NULL; }
+_TR_XLINK char* _tr_readdir(void* h)         { (void)h; return strdup(""); }
+_TR_XLINK void  _tr_closedir(void* h)        { (void)h; }
 #elif defined(_WIN32)
 static inline int  _tr_mkdir(const char* path)     { return CreateDirectoryA(path, NULL) ? 0 : -1; }
 static inline int  _tr_rmdir(const char* path)     { return RemoveDirectoryA(path) ? 0 : -1; }
-static inline bool _tr_dir_exists(const char* path) {
+_TR_XLINK bool _tr_dir_exists(const char* path) {
     if (!path) return false;
     DWORD attr = GetFileAttributesA(path);
     return (attr != INVALID_FILE_ATTRIBUTES && (attr & FILE_ATTRIBUTE_DIRECTORY));
 }
-static inline bool _tr_is_dir(const char* path)  { return _tr_dir_exists(path); }
+_TR_XLINK bool _tr_is_dir(const char* path)  { return _tr_dir_exists(path); }
 static inline bool _tr_is_file(const char* path) {
     if (!path) return false;
     DWORD attr = GetFileAttributesA(path);
     return (attr != INVALID_FILE_ATTRIBUTES && !(attr & FILE_ATTRIBUTE_DIRECTORY));
 }
 typedef struct { HANDLE h; WIN32_FIND_DATAA ffd; int first; } _TrDir;
-static inline void* _tr_opendir(const char* path) {
+_TR_XLINK void* _tr_opendir(const char* path) {
     if (!path) return NULL;
     _TrDir* d = (_TrDir*)malloc(sizeof(_TrDir));
     char pat[4096]; snprintf(pat, sizeof(pat), "%s\\*", path);
@@ -3206,7 +3206,7 @@ static inline void* _tr_opendir(const char* path) {
     if (d->h == INVALID_HANDLE_VALUE) { free(d); return NULL; }
     return (void*)d;
 }
-static inline char* _tr_readdir(void* handle) {
+_TR_XLINK char* _tr_readdir(void* handle) {
     _TrDir* d = (_TrDir*)handle;
     /* Declared `-> str`, so codegen wraps the result as OWNED (rc=1) and will
      * free it. Every path must therefore return heap memory — the end-of-dir
@@ -3217,7 +3217,7 @@ static inline char* _tr_readdir(void* handle) {
     if (FindNextFileA(d->h, &d->ffd)) return strdup(d->ffd.cFileName);
     return strdup("");
 }
-static inline void _tr_closedir(void* handle) {
+_TR_XLINK void _tr_closedir(void* handle) {
     _TrDir* d = (_TrDir*)handle;
     if (d) { if (d->h != INVALID_HANDLE_VALUE) FindClose(d->h); free(d); }
 }
@@ -3227,17 +3227,17 @@ static inline void _tr_closedir(void* handle) {
 #include <dirent.h>
 static inline int  _tr_mkdir(const char* path)     { return mkdir(path, 0755) == 0 ? 0 : -1; }
 static inline int  _tr_rmdir(const char* path)     { return rmdir(path) == 0 ? 0 : -1; }
-static inline bool _tr_dir_exists(const char* path) {
+_TR_XLINK bool _tr_dir_exists(const char* path) {
     if (!path) return false;
     struct stat st; return stat(path, &st) == 0 && S_ISDIR(st.st_mode);
 }
-static inline bool _tr_is_dir(const char* path)  { return _tr_dir_exists(path); }
+_TR_XLINK bool _tr_is_dir(const char* path)  { return _tr_dir_exists(path); }
 static inline bool _tr_is_file(const char* path) {
     if (!path) return false;
     struct stat st; return stat(path, &st) == 0 && S_ISREG(st.st_mode);
 }
-static inline void* _tr_opendir(const char* path)  { return (void*)opendir(path); }
-static inline char* _tr_readdir(void* handle) {
+_TR_XLINK void* _tr_opendir(const char* path)  { return (void*)opendir(path); }
+_TR_XLINK char* _tr_readdir(void* handle) {
     DIR* d = (DIR*)handle;
     /* Always return OWNED heap (codegen frees it); strdup("") at end-of-dir,
      * never a string literal. */
@@ -3245,7 +3245,7 @@ static inline char* _tr_readdir(void* handle) {
     struct dirent* e = readdir(d);
     return e ? strdup(e->d_name) : strdup("");
 }
-static inline void _tr_closedir(void* handle)       { if (handle) closedir((DIR*)handle); }
+_TR_XLINK void _tr_closedir(void* handle)       { if (handle) closedir((DIR*)handle); }
 #endif
 
 /* ── File-system helpers ──────── std-tier only (remove/rename/FILE) ──── */
@@ -3395,7 +3395,7 @@ static char* _tr_str_lower(const char* s) {
     for (int i=0; (r[i]=(char)tolower((unsigned char)s[i])) || s[i]; i++);
     return r;
 }
-static bool _tr_str_contains(const char* s, const char* sub) {
+_TR_XLINK bool _tr_str_contains(const char* s, const char* sub) {
     return s && sub && strstr(s, sub) != NULL;
 }
 static bool _tr_str_starts_with(const char* s, const char* pre) {
@@ -3459,7 +3459,7 @@ static char* _tr_i64_grouped(long long v) {
     b[w]=0; return b;
 }
 _TR_XLINK char* _tr_float_to_str(double n)    { char* b=(char*)TAURARO_ALLOC(32); snprintf(b,32,"%g",n);   return b; }
-static char* _tr_float_to_c_lit(double n) {
+_TR_XLINK char* _tr_float_to_c_lit(double n) {
     char* b=(char*)TAURARO_ALLOC(32);
     int len = snprintf(b,32,"%.17g",n);
     /* %g on whole numbers (e.g. 7.0 -> "7") drops any marker that tells the C
@@ -3512,7 +3512,7 @@ static double    _tr_str_to_float(const char* s){ return s ? strtod(s,NULL) : 0.
 _TR_XLINK long long _tr_strlen(char* s)     { return s ? (long long)strlen(s) : 0LL; }
 
 /* ── String equality ─────────────────────────────────────────────────── */
-static inline bool _tr_str_eq(const char* a, const char* b) {
+_TR_XLINK bool _tr_str_eq(const char* a, const char* b) {
     if (!a && !b) return true;
     if (!a || !b) return false;
     return strcmp(a, b) == 0;
@@ -3698,9 +3698,9 @@ static inline char* _tr_char_to_str_alloc(long long code) { return _tr_char_to_s
 
 /* ── Shell command execution ─────────────────────────────────────────── */
 #ifdef TAURARO_BARE
-static inline int _tr_system(const char* cmd) { (void)cmd; return -1; }
+_TR_XLINK int _tr_system(const char* cmd) { (void)cmd; return -1; }
 #else
-static inline int _tr_system(const char* cmd) { return system(cmd); }
+_TR_XLINK int _tr_system(const char* cmd) { return system(cmd); }
 #endif
 
 /* ── Panic / error ───────────────────────────────────────────────────── */
@@ -5141,7 +5141,7 @@ static inline bool _tr_is_mobile(void) {
 #if defined(__APPLE__)
 #  include <mach-o/dyld.h>
 #endif
-static inline char* _tr_exe_dir(void) {
+_TR_XLINK char* _tr_exe_dir(void) {
 #if defined(_WIN32)
     char* buf=(char*)_tr_c_malloc(4096);
     DWORD n=GetModuleFileNameA(NULL,buf,4096);

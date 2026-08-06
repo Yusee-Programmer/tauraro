@@ -1,0 +1,38 @@
+# @value_type stored INLINE through a raw Pointer[T] buffer (the Vec[T]/Map[K,V] core):
+# sizeof(struct), typed .offset(i) (struct stride), .write(struct) (memcpy), .read() (copy).
+# Byte-identical between the C and LLVM backends.
+@value_type
+pub class Pair:
+    pub a: int
+    pub b: int
+extern "C":
+    def _tr_checked_alloc(size: int) -> Pointer[char]
+    def _tr_c_memset(ptr: Pointer[char], val: int, n: int)
+    def _tr_c_free(ptr: Pointer[char])
+def main():
+    mut n = 5
+    mut sz = n * sizeof(Pair)
+    print(sz)                       # 5 * 16 = 80
+    mut buf = _tr_checked_alloc(sz)
+    _tr_c_memset(buf, 0, sz)
+    # unwritten buckets read as zero (inline, no NULL deref)
+    unsafe:
+        mut z = (buf as Pointer[Pair]).offset(3).read()
+        print(z.a + z.b)            # 0
+    mut i = 0
+    while i < n:
+        unsafe:
+            mut p = Pair()
+            p.a = i
+            p.b = i * 10
+            (buf as Pointer[Pair]).offset(i).write(p)
+        i = i + 1
+    mut total = 0
+    i = 0
+    while i < n:
+        unsafe:
+            mut q = (buf as Pointer[Pair]).offset(i).read()
+            total = total + q.a + q.b
+        i = i + 1
+    print(total)                    # (0..4)*11 = 110
+    _tr_c_free(buf)

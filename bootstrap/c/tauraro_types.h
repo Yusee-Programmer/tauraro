@@ -2982,6 +2982,7 @@ typedef struct ClassLayout {
     List_TrStr* fields;
     List_i64* ftags;
     List_TrStr* fcls;
+    bool is_value;
 } ClassLayout;
 static void _trdrop_ClassLayout(void* vp) {
     ClassLayout* self = (ClassLayout*)vp; (void)self;
@@ -3048,6 +3049,7 @@ typedef struct LModule {
     List_i64* extfn_ret;
     List_TrStr* fn_owned_names;
     List_TrStr* overloaded_sigs;
+    bool target_llvm;
 } LModule;
 static void _trdrop_LModule(void* vp) {
     LModule* self = (LModule*)vp; (void)self;
@@ -3786,6 +3788,7 @@ __attribute__((hot)) long long LModule_unavail_index(LModule* self, TrStr name);
 __attribute__((hot)) void LModule_add_class(LModule* self, ClassLayout* cl);
 __attribute__((hot)) long long LModule_class_index(LModule* self, TrStr name);
 __attribute__((hot)) bool LModule_is_class(LModule* self, TrStr name);
+__attribute__((hot)) bool LModule_is_value_class(LModule* self, TrStr name);
 __attribute__((hot)) long long LModule_class_size(LModule* self, TrStr name);
 __attribute__((hot)) long long LModule_field_offset(LModule* self, TrStr cls, TrStr fld);
 __attribute__((hot)) long long LModule_field_tag(LModule* self, TrStr cls, TrStr fld);
@@ -3848,7 +3851,10 @@ __attribute__((hot)) bool _method_in_prog_functions(HirProgram* prog, TrStr cls,
 __attribute__((hot)) long long _method_nonself_pcount(HirFunction* f);
 __attribute__((hot)) TrStr _ov_method_name(LModule* m, TrStr cls, HirFunction* f);
 __attribute__((hot)) void _detect_overloads(LModule* m, HirProgram* prog);
+__attribute__((hot)) long long _arg_limit(LModule* m);
+__attribute__((hot)) LModule* lower_to_lir_t(HirProgram* prog, bool llvm);
 __attribute__((hot)) LModule* lower_to_lir(HirProgram* prog);
+__attribute__((hot)) LModule* _lower_to_lir_body(LModule* m, HirProgram* prog);
 __attribute__((hot)) bool _fn_has_iface_param(LModule* m, HirFunction* f);
 __attribute__((hot)) bool _fn_is_specializable(LModule* m, HirFunction* f);
 __attribute__((hot)) long long _find_generic_fn(LModule* m, TrStr name);
@@ -3893,6 +3899,9 @@ __attribute__((hot)) TrStr _stmt_kind(HirStmt* s);
 __attribute__((hot)) bool _stmt_has_cf(HirStmt* s);
 __attribute__((hot)) bool _block_has_cf(HirBlock* b);
 __attribute__((hot)) bool _lower_try_setjmp(LModule* m, LFunc* lf, HirBlock* try_body, List_ptr* catches, HirBlock* finally_b);
+__attribute__((hot)) bool _is_vstruct_lvalue(HirExpr* e);
+__attribute__((hot)) long long _copy_value_struct(LModule* m, LFunc* lf, long long src, TrStr cls);
+__attribute__((hot)) long long _value_struct_generic_size(LModule* m, AstType* ty);
 __attribute__((hot)) bool _lower_stmt_impl(LModule* m, LFunc* lf, HirStmt* s);
 __attribute__((hot)) bool lower_stmt(LModule* m, LFunc* lf, HirStmt* s);
 __attribute__((hot)) long long _lower_set_method(LModule* m, LFunc* lf, long long shv, long long stag, TrStr method, List_ptr* margs);

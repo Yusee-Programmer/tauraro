@@ -1,0 +1,32 @@
+# Object-leak oracle: @value_type structs are heap-backed but COPIED on assignment. Every
+# fresh construct AND every copy must be released at scope exit -> 0 live objects at exit.
+extern "C":
+    def _tr_rt_obj_live_count() -> int
+
+@value_type
+pub class Point:
+    pub x: int
+    pub y: int
+extend Point:
+    pub def of(x: int, y: int) -> Point:
+        mut p = Point()
+        p.x = x
+        p.y = y
+        return p
+
+def run(n: int) -> int:
+    mut acc = 0
+    mut i = 0
+    while i < n:
+        mut p = Point.of(i, i + 1)   # fresh construct
+        mut q = p                    # copy (SLet)
+        q.x = 999
+        mut r = Point.of(0, 0)
+        r = p                        # copy (SAssign)
+        acc = acc + p.x + q.x + r.y
+        i = i + 1
+    return acc
+
+def main():
+    print(run(500))
+    print(_tr_rt_obj_live_count())   # must be 0

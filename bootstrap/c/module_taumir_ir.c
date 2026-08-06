@@ -317,6 +317,8 @@ __attribute__((malloc,returns_nonnull,hot)) ClassLayout* ClassLayout_init(TrStr 
     /* pass */
     c->fcls = (void*)List_TrStr_new();
     /* pass */
+    c->is_value = false;
+    /* pass */
     return c;
 }
 
@@ -425,6 +427,8 @@ __attribute__((malloc,returns_nonnull,hot)) LModule* LModule_init() {
     m->fn_owned_names = (void*)List_TrStr_new();
     /* pass */
     m->overloaded_sigs = (void*)List_TrStr_new();
+    /* pass */
+    m->target_llvm = false;
     /* pass */
     return m;
 }
@@ -763,6 +767,18 @@ __attribute__((hot)) long long LModule_class_index(LModule* self, TrStr name) {
 __attribute__((hot)) bool LModule_is_class(LModule* self, TrStr name) {
     /* pass */
     return (LModule_class_index(self, name) >= 0LL);
+}
+
+__attribute__((hot)) bool LModule_is_value_class(LModule* self, TrStr name) {
+    /* pass */
+    long long ci = LModule_class_index(self, name);
+    /* pass */
+    if ((ci < 0LL)) {
+        /* pass */
+        return false;
+    }
+    /* pass */
+    return ((ClassLayout*)List_ptr_get(self->classes, ci))->is_value;
 }
 
 __attribute__((hot)) long long LModule_class_size(LModule* self, TrStr name) {

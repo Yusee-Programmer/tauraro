@@ -1028,6 +1028,20 @@ void* _tr_rt_list_new(void) {
     l->data = 0; l->len = 0; l->cap = 0;
     return l;
 }
+/* Entry glue for a Tauraro `main(args: Vec[str])`: build a str list (tag 3) from the C argv,
+ * each element an rc string. The LLVM backend's real C-ABI main(argc,argv) calls this. */
+void* _tr_rt_argv_list(long long argc, char** argv) {
+    void* l = _tr_rt_list_new();
+    for (long long i = 0; i < argc; i++)
+        _tr_rt_list_push_i64(l, (long long)(size_t)_tr_rt_str_new(argv[i] ? argv[i] : ""));
+    return l;
+}
+/* getenv returns a RAW C string (env block / "" literal), not an rc string; the native/LLVM
+ * backend's tag-1 str is rc-managed, so hand back an rc COPY (else retaining it corrupts). */
+char* _tr_rt_getenv(const char* name) {
+    const char* v = getenv(name);
+    return _tr_rt_str_new(v ? v : "");
+}
 void _tr_rt_list_push_i64(void* h, long long v) {
     _TrNList* l = (_TrNList*)h;
     if (!l) return;

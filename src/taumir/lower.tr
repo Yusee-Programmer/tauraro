@@ -103,14 +103,16 @@ def _set_sym(t: int, op: str) -> str:
     return "_tr_rt_idict_" + op
 
 def _is_dict_tag(t: int) -> bool:
-    return t == 6 or t == 7 or t == 8 or t == 9 or t == 17 or t == 18
+    return t == 6 or t == 7 or t == 8 or t == 9 or t == 17 or t == 18 or t == 24 or t == 25 or t == 26 or t == 27
 
 def _dict_key_is_str(t: int) -> bool:
-    return t == 6 or t == 8 or t == 17
+    return t == 6 or t == 8 or t == 17 or t == 24 or t == 26
 
 def _dict_val_tag(t: int) -> int:      # value-type tag of a dict handle
     if t == 8 or t == 9: return 1      # str values
     if t == 17 or t == 18: return 5    # float values (stored as f64 bit patterns)
+    if t == 24 or t == 25: return 10   # object values (8-byte class-instance handle, ARC-managed)
+    if t == 26 or t == 27: return 4    # bool values (0/1 in an int slot)
     return 0                           # int values
 
 def _dict_new_sym(t: int) -> str:
@@ -209,12 +211,16 @@ def _ast_type_tag(ty: AstType) -> int:
             mut vstr = vt.name == "str" or vt.name == "String"
             mut vint = _is_int_typename(vt.name)
             mut vflt = vt.name == "float" or vt.name == "f64"
+            mut vbool = vt.name == "bool"
+            if vt.name == "Pointer": vint = true    # raw pointer value -> 8-byte int slot
             if kstr and vint: return 6
             if kint and vint: return 7
             if kstr and vstr: return 8
             if kint and vstr: return 9
             if kstr and vflt: return 17
             if kint and vflt: return 18
+            if kstr and vbool: return 26        # str-key, bool-val (stored as 0/1 in an int slot)
+            if kint and vbool: return 27        # int-key, bool-val
         return -1
     if _is_int_typename(n): return 0
     if n == "char": return 0            # a char is a byte-valued integer scalar (tag 0); print()
@@ -257,6 +263,17 @@ def _tag_of(m: LModule, ty: AstType) -> int:
         sbi = sbi + 1
     if m.is_class(ty.name): return 10
     if m.is_enum(ty.name): return 11
+    # Dict/Map -> a builtin idict/sdict tag (BEFORE the generic-class check, so the std Map[K,V]
+    # class is treated as a builtin dict, not compiled). Class/enum VALUES -> obj-valued 24/25.
+    if (ty.name == "Dict" or ty.name == "Map") and ty.args.len >= 2:
+        mut dkk = _subst_ty(m, ty.args.get(0).read())
+        mut dvv = _subst_ty(m, ty.args.get(1).read())
+        if not _is_null_str(dvv.name) and (m.is_class(dvv.name) or m.is_enum(dvv.name)):
+            if dkk.name == "str" or dkk.name == "String": return 24
+            if _is_int_typename(dkk.name): return 25
+        mut _dtg = _ast_type_tag(_subst_args(m, ty))
+        if _is_dict_tag(_dtg): return _dtg
+        return -1
     # Generic class instantiation Box[int]: ensure its layout+methods, tag = object.
     if ty.args.len > 0 and _prog_generic_class_index(m, ty.name) >= 0:
         if _ensure_generic_class(m, ty) != "": return 10
@@ -329,6 +346,7 @@ def _ensure_generic_class(m: LModule, ty: AstType) -> str:
         sb = sb + 1
     # Layout: field tags under the subst.
     mut lay = ClassLayout.init(_own(mangled))
+    lay.is_value = not c.is_class          # @value_type generic instance -> inline value struct
     mut ok = true
     mut fi = 0
     while fi < c.fields.len:
@@ -433,6 +451,7 @@ def _cls_of_ty(m: LModule, ty: AstType) -> str:
 # class map, or — for chained field access — the field's registered class. "" = unknown.
 def _recv_class(m: LModule, lf: LFunc, obj: Pointer[HirExpr]) -> str:
     mut cn = hir_expr_type(obj).name
+    if cn == "Dict" or cn == "Map": return ""   # builtin dict/map: dispatched by its tag, not as a class
     if not _is_null_str(cn) and (m.is_class(cn) or m.is_enum(cn)): return cn
     if not _is_null_str(cn) and hir_expr_type(obj).args.len > 0 and _prog_generic_class_index(m, cn) >= 0:
         mut grc = _ensure_generic_class(m, hir_expr_type(obj))
@@ -601,6 +620,7 @@ def _register_classes(m: LModule, prog: HirProgram):
             continue                       # generic templates instantiate lazily per use
         mut lay = ClassLayout.init(_own(c.name))
         if c.base_classes.len == 1: lay.base = _own(c.base_classes.get(0))
+        lay.is_value = not c.is_class          # @value_type -> inline value struct
         if _push_field_names_rec(prog, i, lay, 0):
             m.add_class(lay)
         i = i + 1
@@ -803,10 +823,23 @@ def _detect_overloads(m: LModule, prog: HirProgram):
             mi = mi + 1
         i = i + 1
 
-pub def lower_to_lir(prog: HirProgram) -> LModule:
+# Max call/param arity: the native x86-64 backend passes args in 6 registers (System V);
+# the LLVM backend spills past 6 onto the stack automatically, so it takes many more.
+def _arg_limit(m: LModule) -> int:
+    if m.target_llvm: return 24
+    return 6
+
+pub def lower_to_lir_t(prog: HirProgram, llvm: bool) -> LModule:
     mut m = LModule.init()
+    m.target_llvm = llvm
     m.hir_prog = prog                  # generic fns are instantiated lazily at call sites
     _register_classes(m, prog)
+    return _lower_to_lir_body(m, prog)
+
+pub def lower_to_lir(prog: HirProgram) -> LModule:
+    return lower_to_lir_t(prog, false)
+
+def _lower_to_lir_body(m: LModule, prog: HirProgram) -> LModule:
     _detect_overloads(m, prog)
     # extern "C" declarations: register each as a linker-resolved call target. A str arg
     # is a raw char* in the LIR (tag 1 = pointer to the rc string's char data), so it
@@ -842,7 +875,7 @@ pub def lower_to_lir(prog: HirProgram) -> LModule:
             mut f0rt = _lir_fn_ret_tag(m, f0)     # throws E -> Result[T,E] (tag 11)
             m.fn_names.push(f0mang)
             m.fn_ret.push(f0rt)
-            if f0.returns_owned and (f0rt == 10 or f0rt == 11): m.mark_fn_owned(f0mang)
+            if (f0.returns_owned or m.is_value_class(f0.ret_ty.name)) and (f0rt == 10 or f0rt == 11): m.mark_fn_owned(f0mang)
         i = i + 1
     # Register methods defined inside class/enum bodies (extend methods are already in
     # prog.functions; inline methods live in class.methods / enum.methods).
@@ -1071,7 +1104,7 @@ def _lir_lower_generic(m: LModule, f: HirFunction, argtags: Vec[int], argcls: Ve
     if rtag < 0: return false
     m.fn_names.push(_own(mangled))
     m.fn_ret.push(rtag)
-    if f.returns_owned and (rtag == 10 or rtag == 11): m.mark_fn_owned(_own(mangled))
+    if (f.returns_owned or m.is_value_class(f.ret_ty.name)) and (rtag == 10 or rtag == 11): m.mark_fn_owned(_own(mangled))
     mut lf = LFunc.init(_own(mangled))
     mut pi = 0
     while pi < f.params.len:
@@ -1241,6 +1274,7 @@ def _lower_global_init(m: LModule, lf: LFunc, s: Pointer[HirStmt]) -> bool:
 def _lir_lower_function(m: LModule, f: HirFunction):
     mut lf = LFunc.init(f.name)
     if f.name == "main": lf.is_main = true
+    if f.name == "main" and f.params.len > 0: m.add_extern("_tr_rt_argv_list")   # argv->args glue
     if not _is_null_str(f.throws_ty.name) and f.throws_ty.name != "":
         lf.is_throws = true                       # return -> Result.Ok, raise -> Result.Err
         lf.throws_ok_tag = _tag_of(m, f.ret_ty)
@@ -1775,7 +1809,7 @@ def _lower_obj_call(m: LModule, lf: LFunc, mangled: str, self_vreg: int, margs: 
         if av < 0: return -1
         cargs.push(av)
         ai = ai + 1
-    if cargs.len > 6: return -1                 # System V: rdi,rsi,rdx,rcx,r8,r9
+    if cargs.len > _arg_limit(m): return -1                 # System V: rdi,rsi,rdx,rcx,r8,r9
     mut rd = lf.new_vreg()
     lf.emit(LInst.ICall(rd, mangled, cargs))
     lf.set_vreg_type(rd, rtag)
@@ -1844,7 +1878,10 @@ def _ptr_stride(m: LModule, pty: AstType) -> int:
     if en == "char" or en == "u8" or en == "i8": return 1        # byte pointer (C strings)
     if en == "i32" or en == "u32" or en == "f32": return 4       # 4-byte word pointer
     if en == "str" or en == "String" or en == "bool": return 8   # 8-byte slots
-    if m.is_class(en) or m.is_enum(en): return 8
+    if m.is_value_class(en): return m.class_size(en)             # @value_type: INLINE, full struct stride
+    mut _pg = _value_struct_generic_size(m, pty.args.get(0).read())   # generic value struct (MapEntry[K,V])
+    if _pg > 0: return _pg
+    if m.is_class(en) or m.is_enum(en): return 8                 # heap class/enum: an 8-byte handle
     if en == "Pointer": return 8
     return 0
 
@@ -1887,7 +1924,7 @@ def _expr_kind(e: Pointer[HirExpr]) -> str:
         case HirExpr.EPropAccess(_, p, _): return "prop ." + _own(p)
         case HirExpr.EBinOp(op, _, _, _): return "binary op '" + _own(op) + "'"
         case HirExpr.EUnaryOp(op, _, _): return "unary op '" + _own(op) + "'"
-        case HirExpr.ECast(_, _): return "cast"
+        case HirExpr.ECast(_, ctty): return "cast to " + _own(ctty.name)
         case HirExpr.EIfElse(_, _, _, _): return "if-else expr"
         case HirExpr.EClosure(_, _, _, _, _): return "closure"
         case HirExpr.ETuple(_, _): return "tuple"
@@ -2058,6 +2095,69 @@ def _lower_try_setjmp(m: LModule, lf: LFunc, try_body: HirBlock, catches: Vec[Po
     if not lower_block(m, lf, finally_b): return false
     return true
 
+# True if `e` is a value-struct L-VALUE (an existing binding whose storage a plain pointer
+# copy would ALIAS) rather than a fresh construct/call result that already owns its storage.
+def _is_vstruct_lvalue(e: Pointer[HirExpr]) -> bool:
+    match e.read():
+        case HirExpr.EIdent(_, _, _): return true
+        case HirExpr.EPropAccess(_, _, _): return true
+        case _: return false
+
+# Copy a @value_type struct (fresh alloc + memcpy) so an assignment gets VALUE semantics.
+# Restricted to all-scalar-field structs (int/bool/float): a str/object field is rc-managed,
+# and a shallow memcpy would alias it -> double-free. Returns -1 (caller falls back) otherwise.
+def _copy_value_struct(m: LModule, lf: LFunc, src: int, cls: str) -> int:
+    mut ci = m.class_index(cls)
+    if ci < 0: return -1
+    mut lay = m.classes.get(ci)
+    mut fi = 0
+    while fi < lay.ftags.len:
+        mut ft = lay.ftags.get(fi)
+        if ft != 0 and ft != 4 and ft != 5 and ft != 1 and ft != 10 and ft != 11: return -1
+        fi = fi + 1
+    mut szc = lf.new_vreg()
+    lf.emit(LInst.IConst(szc, m.class_size(cls)))
+    m.add_extern("_tr_rt_obj_alloc")
+    mut aa = Vec[int].init(1)
+    aa.push(szc)
+    mut dst = lf.new_vreg()
+    lf.emit(LInst.ICall(dst, "_tr_rt_obj_alloc", aa))
+    lf.set_vreg_type(dst, 10)
+    # Copy the raw field bytes...
+    m.add_extern("_tr_c_memcpy")
+    mut cpa = Vec[int].init(3)
+    cpa.push(dst)
+    cpa.push(src)
+    cpa.push(szc)
+    lf.emit(LInst.ICall(-1, "_tr_c_memcpy", cpa))
+    # ...then RETAIN each rc field so the copy owns its own refs, and attach the class drop so
+    # those refs are released when the copy dies (balanced; the source keeps its own refs).
+    _attach_class_drop(m, lf, dst, cls)
+    mut fi2 = 0
+    while fi2 < lay.ftags.len:
+        mut ft2 = lay.ftags.get(fi2)
+        if ft2 == 1 or ft2 == 10 or ft2 == 11:
+            mut fv = _emit_field_get(m, lf, dst, fi2 * 8, ft2)
+            if ft2 == 1: _retain_str(m, lf, fv)
+            else: _retain_obj(m, lf, fv)
+        fi2 = fi2 + 1
+    _fresh_mark_obj(lf, dst)    # a fresh alloc: the binding OWNS it (no extra retain), released once
+    return dst
+
+# Byte size of a GENERIC @value_type struct (e.g. MapEntry[K,V]) whose concrete instance may
+# not be registered yet: every field is an 8-byte slot, so the size is field-count independent
+# of the type arguments. Returns 0 if `ty` isn't a generic value-type class.
+def _value_struct_generic_size(m: LModule, ty: AstType) -> int:
+    mut gi = 0
+    while gi < m.hir_prog.classes.len:
+        mut gc = m.hir_prog.classes.get(gi)
+        if gc.name == ty.name and gc.generics.len > 0 and not gc.is_class:
+            mut n = gc.fields.len
+            if n < 1: n = 1
+            return n * 8
+        gi = gi + 1
+    return 0
+
 def _lower_stmt_impl(m: LModule, lf: LFunc, s: Pointer[HirStmt]) -> bool:
     match s.read():
         case HirStmt.SLineMarker(_): return true
@@ -2150,7 +2250,19 @@ def _lower_stmt_impl(m: LModule, lf: LFunc, s: Pointer[HirStmt]) -> bool:
                 v = nbv
                 vtag = 4
             if vtag == 1: _secure_str(m, lf, v)   # variable takes ownership
-            if vtag == 10 or vtag == 11: _secure_obj(m, lf, v)   # object local owns a ref
+            # @value_type: bind a COPY (value semantics), never an ARC alias. An lvalue source
+            # (existing var/field) is copied; a fresh construct/call result already owns its
+            # storage so it's taken as-is. All-scalar structs only (see _copy_value_struct).
+            mut _vs_cls = ""
+            if vtag == 10: _vs_cls = _val_obj_cls(m, lf, val)
+            mut _is_vstruct = vtag == 10 and not _is_null_str(_vs_cls) and m.is_value_class(_vs_cls)
+            if _is_vstruct and _is_vstruct_lvalue(val):
+                mut _cpv = _copy_value_struct(m, lf, v, _vs_cls)   # value semantics: bind a COPY
+                if _cpv < 0: return false
+                v = _cpv
+                lf.set_vreg_type(v, 10)
+            if vtag == 10 or vtag == 11:
+                _secure_obj(m, lf, v)   # mark for drop (fresh copy/construct -> no retain)
             lf.add_var(name)
             lf.set_var_type(name, vtag)
             if lf.vreg_type(v) == 10 or lf.vreg_type(v) == 11:   # object local -> record its class/enum
@@ -2208,6 +2320,13 @@ def _lower_stmt_impl(m: LModule, lf: LFunc, s: Pointer[HirStmt]) -> bool:
             if lf.var_index(tn) >= 0: oldot = lf.var_type(tn)
             mut had_old_obj = oldot == 10 or oldot == 11
             if lf.vreg_type(v2) == 1: _secure_str(m, lf, v2)   # secure new BEFORE releasing old
+            if lf.vreg_type(v2) == 10:                          # @value_type: assign a COPY (value semantics)
+                mut _av_cls = _val_obj_cls(m, lf, val)
+                if not _is_null_str(_av_cls) and m.is_value_class(_av_cls) and _is_vstruct_lvalue(val):
+                    mut _acp = _copy_value_struct(m, lf, v2, _av_cls)
+                    if _acp < 0: return false
+                    v2 = _acp
+                    lf.set_vreg_type(v2, 10)
             if lf.vreg_type(v2) == 10 or lf.vreg_type(v2) == 11: _secure_obj(m, lf, v2)   # object: same
             if lf.var_index(tn) < 0 and m.is_global(tn):    # assign to a module global
                 lf.emit(LInst.IStoreGlobal(m.global_index(tn), v2))
@@ -3662,6 +3781,7 @@ def _lower_index_set(m: LModule, lf: LFunc, obj: Pointer[HirExpr], idx: Pointer[
         mut vv = lower_expr(m, lf, val)
         if vv < 0 or lf.vreg_type(vv) != _dict_val_tag(ovt): return false
         if _dict_val_tag(ovt) == 1: _secure_str(m, lf, vv)   # dict owns the str value by ref
+        if _dict_val_tag(ovt) == 10 or _dict_val_tag(ovt) == 11: _secure_obj(m, lf, vv)   # obj value
         if _dict_val_tag(ovt) == 5:                          # float value: store the bit pattern
             mut ivb = lf.new_vreg()
             lf.emit(LInst.IFBits(ivb, vv))
@@ -4378,6 +4498,7 @@ def _float_unary_sym(method: str) -> str:
 # Int utility methods on an i64 receiver: to_hex/oct/bin (-> str), sign/clamp/gcd/lcm (-> int).
 def _lower_int_method(m: LModule, lf: LFunc, recv: int, method: str, margs: Vec[Pointer[HirExpr]]) -> int:
     if margs.len == 0:
+        if method == "to_float" or method == "to_f64": return _promote_f(lf, recv)   # int -> f64
         if method == "to_hex": return _str_call0(m, lf, "_tr_rt_i64_to_hex", recv, 1)
         if method == "to_hex_upper" or method == "to_HEX": return _str_call0(m, lf, "_tr_rt_i64_to_hex_upper", recv, 1)
         if method == "to_oct" or method == "to_octal": return _str_call0(m, lf, "_tr_rt_i64_to_oct", recv, 1)
@@ -4433,6 +4554,27 @@ def _lower_int_method(m: LModule, lf: LFunc, recv: int, method: str, margs: Vec[
 
 # Dict methods on a dict receiver: .get(k) -> int value, .contains(k) -> bool.
 def _lower_dict_method(m: LModule, lf: LFunc, recv: int, dtag: int, method: str, margs: Vec[Pointer[HirExpr]]) -> int:
+    if (method == "len" or method == "length") and margs.len == 0:
+        mut lsym = _dict_sym(dtag, "len")
+        m.add_extern(lsym)
+        mut la = Vec[int].init(1)
+        la.push(recv)
+        mut ld = lf.new_vreg()
+        lf.emit(LInst.ICall(ld, lsym, la))
+        lf.set_vreg_type(ld, 0)
+        return ld
+    if method == "remove" and margs.len == 1:
+        mut rk = lower_expr(m, lf, margs.get(0))
+        if rk < 0: return -1
+        if _dict_key_is_str(dtag) and lf.vreg_type(rk) != 1: return -1
+        if not _dict_key_is_str(dtag) and lf.vreg_type(rk) != 0: return -1
+        mut rsym = _dict_sym(dtag, "remove")
+        m.add_extern(rsym)
+        mut ra = Vec[int].init(2)
+        ra.push(recv)
+        ra.push(rk)
+        lf.emit(LInst.ICall(-1, rsym, ra))
+        return recv
     if method == "keys" and margs.len == 0:      # d.keys() -> a fresh key list (str tag 3 / int tag 2)
         mut ksym = "_tr_rt_idict_keys"
         mut ktag = 2
@@ -4473,6 +4615,7 @@ def _lower_dict_method(m: LModule, lf: LFunc, recv: int, dtag: int, method: str,
         mut vtag = _dict_val_tag(dtag)
         if lf.vreg_type(sv) != vtag: return -1
         if vtag == 1: _secure_str(m, lf, sv)         # dict owns the str value ref
+        if vtag == 10 or vtag == 11: _secure_obj(m, lf, sv)   # dict owns the object value ref
         if vtag == 5:                                # float value: store the bit pattern
             mut svfb = lf.new_vreg()
             lf.emit(LInst.IFBits(svfb, sv))
@@ -4680,10 +4823,17 @@ def _lower_expr_impl(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
             lf.emit(LInst.IConst(cd, cval))          # a char is its byte value (int) in the LIR
             return cd
         case HirExpr.ESizeOf(sz_ty, _):
-            # sizeof(T) = the actual byte size of T's C representation (matches the C backend:
-            # bool/char/i8/u8=1, i16/u16=2, i32/u32/f32=4, everything else 8).
+            # sizeof(T) = the byte size of T's representation (bool/char/i8/u8=1, i16/u16=2,
+            # i32/u32/f32=4, else 8). A @value_type is stored INLINE, so its size is the full
+            # struct (nfields*8) — this drives the raw buffer sizing in Vec[T]/Map[K,V].
+            mut _szn = _subst_ty(m, sz_ty).name
+            mut _szval = _sizeof_tyname(_szn)
+            if m.is_value_class(_szn): _szval = m.class_size(_szn)
+            else:
+                mut _szg = _value_struct_generic_size(m, sz_ty)   # sizeof(MapEntry[K,V]) etc.
+                if _szg > 0: _szval = _szg
             mut szd = lf.new_vreg()
-            lf.emit(LInst.IConst(szd, _sizeof_tyname(sz_ty.name)))
+            lf.emit(LInst.IConst(szd, _szval))
             return szd
         case HirExpr.ETryExpr(texpr, tokty):
             # `expr?`: expr yields Result[T,E]. If Err, propagate (return the Result from
@@ -4805,7 +4955,14 @@ def _lower_expr_impl(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                     lf.emit(LInst.IFToI(r, cv))
                     lf.set_vreg_type(r, 0)
                 elif cvt != 0 and cvt != 4:
-                    return -1                         # non-numeric -> int: separate increment
+                    # any pointer-like handle (str/object/enum/closure/list/dict/set/tuple) ->
+                    # its i64 address (e.g. `obj as usize == 0` null / identity checks).
+                    m.add_extern("_tr_rt_ptr_addr")
+                    mut cpa = Vec[int].init(1)
+                    cpa.push(cv)
+                    r = lf.new_vreg()
+                    lf.emit(LInst.ICall(r, "_tr_rt_ptr_addr", cpa))
+                    lf.set_vreg_type(r, 0)
                 r = _narrow_int(lf, r, ctn)
                 if ctn == "bool":
                     mut rb = _norm_bool(lf, r)
@@ -5115,7 +5272,17 @@ def _lower_expr_impl(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                 return rc
             if at == 1 or bt == 1: return -1       # other pointer ops unsupported
             if _is_list_tag(at) or _is_list_tag(bt): return -1   # no list operators in binop
-            if at == 11 or bt == 11: return -1     # enum values: no operators (match instead)
+            if at == 11 or bt == 11:
+                # Enum ==/!= compares the variant TAG at offset 0 (matches the C backend for
+                # nullary-variant enums like the lexer's Token). Other enum operators need match.
+                if at != 11 or bt != 11: return -1
+                if op != "==" and op != "!=": return -1
+                mut eatag = _emit_field_get(m, lf, a, 0, 0)
+                mut ebtag = _emit_field_get(m, lf, b, 0, 0)
+                mut ecd = lf.new_vreg()
+                lf.emit(LInst.IBinOp(ecd, op, eatag, ebtag))
+                lf.set_vreg_type(ecd, 4)
+                return ecd
             if at == 10 or bt == 10:
                 # Class instances: only identity == / != between two objects (an i64
                 # compare of the pointers — matches the C backend's Point* == Point*).
@@ -5216,6 +5383,14 @@ def _lower_expr_impl(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                     pass
             mut fn = _ident_name(callee)
             if fn == "": return -1
+            # Pointer[T](x): construct a raw pointer from an int/ptr value (e.g. `Pointer[Stmt](0)`
+            # = a null pointer). Raw pointers live in an i64 slot (tag 0), so this is the value.
+            if fn == "Pointer" and args.len == 1:
+                mut ptv = lower_expr(m, lf, args.get(0))
+                if ptv < 0: return -1
+                if lf.vreg_type(ptv) != 0: return -1
+                lf.set_vreg_type(ptv, 0)
+                return ptv
             # await_all(f(a), g(b), ..): run each call in parallel, join all (fire-and-wait,
             # result discarded -> 0). Same as `task_group: spawn f(a); spawn g(b); ..`.
             if fn == "await_all" and args.len > 0:
@@ -5580,9 +5755,15 @@ def _lower_expr_impl(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
             # reachability drops it — SOUND because reachable code routes through the
             # intercepted Str/StrView builtins (rc'd `_tr_rt_str_*`) instead.
             if fn == "_tr_str_lit" or fn == "_tr_strx_join_trstr": return -1
+            # `_tr_str_wrap(char*)` is another TrStr macro; remap it to an rc str copy of the
+            # C string (the bare buffer just leaks — read_file etc. call it once per file).
+            if fn == "_tr_str_wrap": fn = "_tr_rt_str_new"
+            # `_tr_getenv` returns a RAW C string (getenv/"" literal); the rc'd variant returns
+            # an rc copy so the backend's str ARC can retain/release it safely.
+            if fn == "_tr_getenv": fn = "_tr_rt_getenv"
             if m.is_extern_fn(fn):
                 # extern "C" call: pass scalar/str/float args by value; str = char* directly.
-                if args.len > 6: return -1
+                if args.len > _arg_limit(m): return -1
                 mut exargs = Vec[int].init(args.len)
                 mut exi = 0
                 while exi < args.len:
@@ -5603,7 +5784,7 @@ def _lower_expr_impl(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
             # return tag from the call's HIR type. (imported-module extern "C" decls aren't
             # always merged into prog.extern_funcs, so this catches them regardless.)
             if _is_runtime_fn(fn) and not m.is_user_fn(fn):
-                if args.len > 6: return -1
+                if args.len > _arg_limit(m): return -1
                 mut rtargs = Vec[int].init(args.len)
                 mut rti = 0
                 while rti < args.len:
@@ -5632,7 +5813,7 @@ def _lower_expr_impl(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
             if not m.is_user_fn(fn):
                 mut gfi = _find_generic_fn(m, fn)
                 if gfi < 0: return -1
-                if args.len > 6: return -1
+                if args.len > _arg_limit(m): return -1
                 mut gvregs = Vec[int].init(args.len)
                 mut gtags = Vec[int].init(args.len)
                 mut gcls = Vec[str].init(args.len)
@@ -5666,7 +5847,7 @@ def _lower_expr_impl(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                 lf.set_vreg_type(gd, grtag)
                 if grtag == 1: _fresh_mark(lf, gd)
                 return gd
-            if args.len > 6: return -1                 # System V: rdi,rsi,rdx,rcx,r8,r9
+            if args.len > _arg_limit(m): return -1                 # System V: rdi,rsi,rdx,rcx,r8,r9
             mut rtag = m.fn_ret_tag(fn)
             if rtag < 0: return -1                      # unsupported return type -> fall back
             mut argvregs = Vec[int].init(args.len)
@@ -6066,6 +6247,13 @@ def _lower_expr_impl(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                 mut dld = lf.new_vreg()
                 lf.emit(LInst.ICall(dld, dlsym, dla))
                 return dld
+            if lf.vreg_type(ovl) == 1:              # str.len (property) -> strlen
+                m.add_extern("_tr_rt_strlen")
+                mut sla = Vec[int].init(1)
+                sla.push(ovl)
+                mut sld = lf.new_vreg()
+                lf.emit(LInst.ICall(sld, "_tr_rt_strlen", sla))
+                return sld
             if not _is_list_tag(lf.vreg_type(ovl)): return -1
             m.add_extern("_tr_rt_list_len")
             mut la = Vec[int].init(1)
@@ -6241,13 +6429,20 @@ def _lower_expr_impl(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                 mut pbyte = pstride == 1          # Pointer[char]/u8/i8: 1-byte access
                 mut pword = pstride == 4          # Pointer[i32]/u32/f32: 4-byte access
                 mut petag = 0                     # element value-type tag (from T, subst-resolved)
+                mut pvcls = ""                    # @value_type element class name ("" = not a value struct)
                 if pty.args.len > 0:
                     mut petn = _subst_ty(m, pty.args.get(0).read()).name
                     if petn == "float" or petn == "f64": petag = 5
                     elif petn == "str" or petn == "String": petag = 1
                     elif petn == "bool": petag = 4
+                    elif m.is_value_class(petn): petag = 10; pvcls = _own(petn)
                     elif m.is_class(petn): petag = 10
                     elif m.is_enum(petn): petag = 11
+                    if pvcls == "" and _value_struct_generic_size(m, pty.args.get(0).read()) > 0:
+                        petag = 10                       # generic value struct (MapEntry[K,V]):
+                        mut _pmg = _ensure_generic_class(m, _subst_ty(m, pty.args.get(0).read()))
+                        if _pmg != "": pvcls = _pmg      # -> the mangled instance (has the layout)
+                        else: pvcls = _own(petn)
                 mut pbase = lower_expr(m, lf, obj)
                 if pbase < 0: return -1
                 if (method == "offset" or method == "add") and margs.len == 1:
@@ -6277,6 +6472,13 @@ def _lower_expr_impl(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                         mut lwd = lf.new_vreg()
                         lf.emit(LInst.ICall(lwd, "_tr_rt_load_i32", lwa))
                         return lwd
+                    # @value_type element stored INLINE at [p]: read() returns a fresh COPY of the
+                    # struct (value semantics; ARC-owned so it releases cleanly). All-scalar
+                    # structs only for now — rc-field structs (str/obj) need a field-wise copy.
+                    if pvcls != "":
+                        mut rcp = _copy_value_struct(m, lf, pbase, pvcls)
+                        if rcp < 0: return -1
+                        return rcp
                     # *p -> load an 8-byte value at [p] (float via IBitsF).
                     if petag == 5:
                         mut prraw = _emit_field_get(m, lf, pbase, 0, 0)
@@ -6289,6 +6491,17 @@ def _lower_expr_impl(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                     # *p = v.
                     mut pwv = lower_expr(m, lf, margs.get(0))
                     if pwv < 0: return -1
+                    # @value_type element: copy the whole struct INLINE (memcpy stride bytes).
+                    if pvcls != "":
+                        mut wsz = lf.new_vreg()
+                        lf.emit(LInst.IConst(wsz, pstride))
+                        m.add_extern("_tr_c_memcpy")
+                        mut wca = Vec[int].init(3)
+                        wca.push(pbase)
+                        wca.push(pwv)
+                        wca.push(wsz)
+                        lf.emit(LInst.ICall(-1, "_tr_c_memcpy", wca))
+                        return pbase
                     if pbyte:                       # Pointer[char]: store ONE byte
                         m.add_extern("_tr_rt_store_u8")
                         mut sba = Vec[int].init(2)
@@ -6320,6 +6533,17 @@ def _lower_expr_impl(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
             match obj.read():
                 case HirExpr.EIdent(inm, ity_g, _):
                     # Set[T].init() / .new() — backed by the same idict/sdict runtime as a set literal.
+                    # Map[K,V].init(cap) / Dict[K,V].init() / .new(): a builtin idict/sdict handle
+                    # (capacity advisory). Values may be int/str/float OR class instances (24/25).
+                    if (inm == "Map" or inm == "Dict") and (method == "init" or method == "new"):
+                        mut mtag = _tag_of(m, ity_g)
+                        if not _is_dict_tag(mtag): return -1
+                        mut mnewsym = _dict_new_sym(mtag)
+                        m.add_extern(mnewsym)
+                        mut mnd = lf.new_vreg()
+                        lf.emit(LInst.ICall(mnd, mnewsym, Vec[int].init(0)))
+                        lf.set_vreg_type(mnd, mtag)
+                        return mnd
                     if inm == "Set" and (method == "init" or method == "new") and margs.len == 0:
                         mut stag = -1
                         if ity_g.args.len > 0:
@@ -6423,6 +6647,21 @@ def _lower_expr_impl(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                 lf.set_vreg_type(svd, 1)
                 _fresh_mark(lf, svd)
                 return svd
+            # StringObj.as_str(): the std string builder's `_tr_str_lit(self.data)` uses the C
+            # backend's TrStr macro (unlowerable here). Intercept -> a fresh rc str copy of the
+            # NUL-terminated buffer, fully in the ARC model. Unblocks all StringBuilder output.
+            if recv_cls == "StringObj" and method == "as_str" and margs.len == 0:
+                mut soo = lower_expr(m, lf, obj)
+                if soo < 0: return -1
+                mut sodata = _emit_field_get(m, lf, soo, 0, 0)   # self.data (Pointer[char])
+                m.add_extern("_tr_rt_str_new")
+                mut soa = Vec[int].init(1)
+                soa.push(sodata)
+                mut sod = lf.new_vreg()
+                lf.emit(LInst.ICall(sod, "_tr_rt_str_new", soa))
+                lf.set_vreg_type(sod, 1)
+                _fresh_mark(lf, sod)
+                return sod
             if recv_cls != "":
                 # sema desugars `obj[i]` (class receiver) to EMethodCall(obj,"get_index").
                 # Map that (and its write twin) to the dunder the class actually defines.

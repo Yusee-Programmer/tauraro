@@ -314,15 +314,21 @@ extend LlvmEmitter:
         else:
             self.cur_ret = _ll_ty(self.m.fn_ret_tag(lf.name))
         mut fname = lf.name
+        # Entry glue: a Tauraro `main(args)` compiles to the real C-ABI main(argc, argv); the
+        # args list is built from argv (else the C runtime passes argc as the "args" pointer).
+        mut main_args = lf.is_main and lf.params.len > 0
         # Signature: define <ret> @name(<pty> %arg_<p>, ...)
         self.w("define " + self.cur_ret + " @" + fname + "(")
-        mut pi = 0
-        while pi < lf.params.len:
-            mut pn = lf.params.get(pi)
-            mut pty = _ll_ty(lf.var_type(pn))
-            if pi > 0: self.w(", ")
-            self.w(pty + " %arg_" + pn)
-            pi = pi + 1
+        if main_args:
+            self.w("i32 %argc, ptr %argv")
+        else:
+            mut pi = 0
+            while pi < lf.params.len:
+                mut pn = lf.params.get(pi)
+                mut pty = _ll_ty(lf.var_type(pn))
+                if pi > 0: self.w(", ")
+                self.w(pty + " %arg_" + pn)
+                pi = pi + 1
         self.w(") {\nentry:\n")
         # Allocas: one per var (params + locals) and one per vreg.
         mut vi = 0
@@ -335,12 +341,18 @@ extend LlvmEmitter:
             self.w("  %v" + ri.to_str() + " = alloca " + _ll_ty(lf.vreg_type(ri)) + "\n")
             ri = ri + 1
         # Store incoming parameters into their var slots.
-        pi = 0
-        while pi < lf.params.len:
-            mut pn2 = lf.params.get(pi)
-            mut pty2 = _ll_ty(lf.var_type(pn2))
-            self.w("  store " + pty2 + " %arg_" + pn2 + ", ptr %var_" + pn2 + "\n")
-            pi = pi + 1
+        if main_args:
+            # Build the args str list from (argc, argv) and bind it to main's parameter.
+            self.w("  %argc64 = sext i32 %argc to i64\n")
+            self.w("  %argl = call ptr @_tr_rt_argv_list(i64 %argc64, ptr %argv)\n")
+            self.w("  store ptr %argl, ptr %var_" + lf.params.get(0) + "\n")
+        else:
+            mut pi = 0
+            while pi < lf.params.len:
+                mut pn2 = lf.params.get(pi)
+                mut pty2 = _ll_ty(lf.var_type(pn2))
+                self.w("  store " + pty2 + " %arg_" + pn2 + ", ptr %var_" + pn2 + "\n")
+                pi = pi + 1
         self.w("  br label %bb0\n")
         # Basic blocks in layout order.
         mut bi = 0
@@ -425,10 +437,25 @@ extend LlvmEmitter:
             gi = gi + 1
         self.w("\n")
         self.emit_extern_decls()
+        self.w("declare ptr @_tr_rt_argv_list(i64, ptr)\n")   # main(argc,argv) entry glue
         self.w("\n")
+        # Emit each function name ONCE. A few identical helpers (box_asttype, the dead
+        # _dummy_instantiations stubs) are duplicated across modules; the C backend keeps
+        # them apart by module-prefixing symbols, but this backend uses bare names, so a
+        # second definition would be an LLVM redefinition. Skipping the duplicate is safe:
+        # the collisions are functionally identical (or dead), so the first definition serves.
+        mut emitted = Vec[str].init(self.m.funcs.len)
         mut fi = 0
         while fi < self.m.funcs.len:
-            self.emit_function(self.m.funcs.get(fi))
+            mut efn = self.m.funcs.get(fi)
+            mut dup = false
+            mut ei = 0
+            while ei < emitted.len:
+                if emitted.get(ei) == efn.name: dup = true; ei = emitted.len
+                else: ei = ei + 1
+            if not dup:
+                emitted.push(efn.name)
+                self.emit_function(efn)
             fi = fi + 1
         # TBAA type hierarchy (roadmap item b): a root with three disjoint scalar types.
         # Accesses tagged with different types are proven non-aliasing by LLVM's alias

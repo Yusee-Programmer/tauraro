@@ -1,0 +1,31 @@
+# Inline value structs in a raw buffer: each read() COPY must be released; buf is raw.
+extern "C":
+    def _tr_rt_obj_live_count() -> int
+    def _tr_checked_alloc(size: int) -> Pointer[char]
+    def _tr_c_free(ptr: Pointer[char])
+@value_type
+pub class Pair:
+    pub a: int
+    pub b: int
+def run(n: int) -> int:
+    mut buf = _tr_checked_alloc(n * sizeof(Pair))
+    mut i = 0
+    while i < n:
+        unsafe:
+            mut p = Pair()
+            p.a = i
+            p.b = i
+            (buf as Pointer[Pair]).offset(i).write(p)
+        i = i + 1
+    mut acc = 0
+    i = 0
+    while i < n:
+        unsafe:
+            mut q = (buf as Pointer[Pair]).offset(i).read()
+            acc = acc + q.a + q.b
+        i = i + 1
+    _tr_c_free(buf)
+    return acc
+def main():
+    print(run(400))
+    print(_tr_rt_obj_live_count())   # 0

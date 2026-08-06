@@ -1,0 +1,34 @@
+# Map[K,V] intercepted as a builtin idict/sdict; obj VALUES (class instances) stored as
+# 8-byte ARC-managed handles (tag 24/25). Byte-identical between C and LLVM backends.
+from core.map import Map
+class Sym:
+    pub v: int
+extend Sym:
+    pub def of(x: int) -> Sym:
+        mut s = Sym()
+        s.v = x
+        return s
+def main():
+    # int-valued map
+    mut mi = Map[str, int].init(8)
+    mi.insert("a", 3)
+    mi.insert("b", 5)
+    mi.set("c", 7)
+    print(mi.get("a") + mi.get("b") + mi.get("c"))   # 15
+    print(mi.len())                                    # 3
+    print(mi.has("a"))                                 # true
+    print(mi.has("z"))                                 # false
+
+    # obj-valued map
+    mut mo = Map[str, Sym].init(8)
+    mo.insert("x", Sym.of(10))
+    mo.insert("y", Sym.of(20))
+    mut s: Sym = mo.get("x")
+    print(s.v + mo.get("y").v)                         # 30
+    print(mo.len())                                    # 2
+
+    # int-keyed map
+    mut mk = Map[int, int].init(8)
+    mk.insert(1, 100)
+    mk.insert(2, 200)
+    print(mk.get(1) + mk.get(2))                       # 300
