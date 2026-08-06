@@ -3883,6 +3883,7 @@ __attribute__((hot)) long long _box_call(LModule* m, LFunc* lf, long long selfv,
 __attribute__((hot)) long long _pack_spawn_args(LModule* m, LFunc* lf, List_ptr* margs, long long start);
 __attribute__((hot)) long long _lower_pool_spawn(LModule* m, LFunc* lf, long long poolv, List_ptr* margs);
 __attribute__((hot)) bool _is_runtime_fn(TrStr fn);
+__attribute__((hot)) bool _is_rc_str_runtime_fn(TrStr fn);
 __attribute__((hot)) void _track_mutex_unlock(LFunc* lf, HirExpr* obj);
 __attribute__((hot)) long long _atomic_delta(LModule* m, LFunc* lf, long long selfv, TrStr rtfn);
 __attribute__((hot)) long long _lower_box_method(LModule* m, LFunc* lf, HirExpr* obj, TrStr method, List_ptr* margs);
@@ -3892,6 +3893,8 @@ __attribute__((hot)) bool lower_block(LModule* m, LFunc* lf, HirBlock* hb);
 __attribute__((hot)) bool _run_defers(LModule* m, LFunc* lf);
 __attribute__((hot)) long long _sizeof_tyname(TrStr n);
 __attribute__((hot)) long long _ptr_stride(LModule* m, AstType* pty);
+__attribute__((hot)) AstType* _class_field_ty(LModule* m, TrStr cls, TrStr fld);
+__attribute__((hot)) AstType* _ptr_chain_ty(LModule* m, HirExpr* e);
 __attribute__((hot)) TrStr _dunder_for_op(TrStr op);
 __attribute__((hot)) TrStr _stmt_expr_kind(HirExpr* e);
 __attribute__((hot)) TrStr _expr_kind(HirExpr* e);

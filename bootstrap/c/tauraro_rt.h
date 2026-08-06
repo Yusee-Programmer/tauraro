@@ -135,6 +135,109 @@
 #  endif
 #endif
 
+#ifdef TR_HEAPDBG
+/* ── Redzone/guard debug allocator ───────────────────────────────────────────
+ * Wrap malloc/calloc/realloc/free with a header (magic|size|id) + trailing magic.
+ * A registry of live blocks is scanned on EVERY op so an overrun/underrun is caught
+ * at the next allocation after the bad write — pinpointing the offending block+id. */
+#define _TRDBG_FRONT 0xA11C0DEBEEF00DULL
+#define _TRDBG_BACK  0xDEADBEEFCAFEBABEULL
+#define _TRDBG_HDR   32
+#define _TRDBG_MAX   400000
+static unsigned char* _trdbg_reg[_TRDBG_MAX];
+static long _trdbg_regn = 0;
+static long _trdbg_id = 0;
+static void _trdbg_die(const char* what, unsigned char* base){
+    unsigned long long id = base ? *(unsigned long long*)(base+16) : 0;
+    unsigned long long sz = base ? *(unsigned long long*)(base+8) : 0;
+    fprintf(stderr, "TRDBG: %s block id=%llu size=%llu\n", what, id, sz); fflush(stderr); abort();
+}
+__declspec(dllimport) int __stdcall IsBadReadPtr(const void*, unsigned long long);
+static void _trdbg_check(unsigned char* base){
+    if (IsBadReadPtr(base, _TRDBG_HDR)) return;   /* stale/freed entry (bookkeeping gap) — skip */
+    if (*(unsigned long long*)base != _TRDBG_FRONT) _trdbg_die("FRONT-guard clobbered", base);
+    unsigned long long sz = *(unsigned long long*)(base+8);
+    if (sz > 0x40000000ULL) return;               /* implausible size (corrupt hdr on a stale block) */
+    if (IsBadReadPtr(base+_TRDBG_HDR+sz, 8)) return;
+    if (*(unsigned long long*)(base+_TRDBG_HDR+sz) != _TRDBG_BACK) _trdbg_die("BACK-guard clobbered (overrun)", base);
+}
+static void _trdbg_scan(void){ long i; for(i=0;i<_trdbg_regn;i++) _trdbg_check(_trdbg_reg[i]); }
+/* Verify a write of n bytes at dst stays within the guarded block that contains dst.
+ * dst outside all registered blocks (raw-malloc list buffer, stack, .rodata) -> skip. */
+static void _trdbg_bounds(void* dst, size_t n){
+    unsigned char* d = (unsigned char*)dst; long i;
+    for(i=0;i<_trdbg_regn;i++){
+        unsigned char* base = _trdbg_reg[i];
+        unsigned long long sz = *(unsigned long long*)(base+8);
+        unsigned char* user = base+_TRDBG_HDR;
+        if(d >= user && d < user+sz){
+            if(d + n > user + sz){
+                fprintf(stderr, "TRDBG: memcpy OVERRUN dst-block id=%llu size=%llu, write %llu bytes at +%lld\n",
+                    *(unsigned long long*)(base+16), sz, (unsigned long long)n, (long long)(d-user));
+                fflush(stderr); abort();
+            }
+            return;
+        }
+    }
+}
+static void* _trdbg_alloc(size_t sz, int zero){
+    _trdbg_scan();
+    unsigned char* base = (unsigned char*)malloc(_TRDBG_HDR + sz + 8);
+    if(!base) return 0;
+    *(unsigned long long*)base = _TRDBG_FRONT;
+    *(unsigned long long*)(base+8) = sz;
+    *(unsigned long long*)(base+16) = (unsigned long long)(++_trdbg_id);
+    *(unsigned long long*)(base+_TRDBG_HDR+sz) = _TRDBG_BACK;
+    if(zero) memset(base+_TRDBG_HDR, 0, sz);
+    if(_trdbg_regn < _TRDBG_MAX) _trdbg_reg[_trdbg_regn++] = base;
+    return base + _TRDBG_HDR;
+}
+/* Registry index of the guarded block whose USER pointer == p, or -1 if p is a raw
+ * (non-guarded) allocation. Looking up by user-ptr (not p-HDR) tolerates a mixed heap
+ * where some blocks come from raw malloc (list buffers) and reach free()/realloc() here. */
+static long _trdbg_find(void* p){
+    long i; for(i=0;i<_trdbg_regn;i++){ if(_trdbg_reg[i]+_TRDBG_HDR == (unsigned char*)p) return i; }
+    return -1;
+}
+static void _trdbg_free(void* p){
+    if(!p) return;
+    long idx = _trdbg_find(p);
+    if(idx < 0){ free(p); return; }                 /* raw (non-guarded) block */
+    unsigned char* base = _trdbg_reg[idx];
+    _trdbg_check(base);
+    _trdbg_reg[idx] = _trdbg_reg[--_trdbg_regn];
+    _trdbg_scan();
+    *(unsigned long long*)base = 0;                  /* poison front so double-free is caught */
+    free(base);
+}
+static void* _trdbg_realloc(void* p, size_t sz){
+    if(!p) return _trdbg_alloc(sz, 0);
+    long idx = _trdbg_find(p);
+    if(idx < 0) return realloc(p, sz);               /* raw (non-guarded) block */
+    unsigned char* base = _trdbg_reg[idx];
+    _trdbg_check(base);
+    _trdbg_reg[idx] = _trdbg_reg[--_trdbg_regn];
+    _trdbg_scan();
+    unsigned char* nb = (unsigned char*)realloc(base, _TRDBG_HDR + sz + 8);
+    if(!nb) return 0;
+    *(unsigned long long*)(nb+8) = sz;
+    *(unsigned long long*)(nb+_TRDBG_HDR+sz) = _TRDBG_BACK;
+    if(_trdbg_regn < _TRDBG_MAX) _trdbg_reg[_trdbg_regn++] = nb;
+    return nb + _TRDBG_HDR;
+}
+#undef TAURARO_ALLOC
+#undef TAURARO_CALLOC
+#undef TAURARO_REALLOC
+#undef TAURARO_FREE
+#define TAURARO_ALLOC(sz)      _trdbg_alloc((sz), 0)
+#define TAURARO_CALLOC(n,sz)   _trdbg_alloc((size_t)(n)*(size_t)(sz), 1)
+#define TAURARO_REALLOC(p,sz)  _trdbg_realloc((p),(sz))
+#define TAURARO_FREE(p)        _trdbg_free((p))
+#  define _TR_HEAPCHK(w) ((void)0)
+#else
+#  define _TR_HEAPCHK(w) ((void)0)
+#endif
+
 /* Normalize the freestanding tier flags: TAURARO_KERNEL (no libc) and
  * TAURARO_NO_OS (bare-metal target) both imply TAURARO_BARE — the canonical
  * "no OS services" flag used to gate file I/O / env / process / stdin below. */
@@ -397,6 +500,7 @@ char* _tr_rt_str_new(const char* s);
 
 // Wrappers for core library to avoid signature conflicts
 _TR_XLINK void* _tr_c_malloc(size_t size) {
+    _TR_HEAPCHK("c_malloc");
     void* p = TAURARO_ALLOC(size);
     if (p) _TR_MEMCOUNT_INC();
     return p;
@@ -408,6 +512,7 @@ _TR_XLINK void* _tr_c_calloc(size_t count, size_t size) {
     return p;
 }
 _TR_XLINK void _tr_free(void* p) {
+    _TR_HEAPCHK("free");
     if (p) { _TR_MEMCOUNT_DEC(); TAURARO_FREE(p); }
 }
 /* Runtime memory helpers used by std/core (Vec/String) via `extern "C"` decls. `static
@@ -430,6 +535,7 @@ static inline void _tr_eprint(char* s) { _TR_WRITE(s); _TR_WRITE("\n"); }
 #endif
 
 _TR_XLINK void* _tr_c_realloc(void* ptr, size_t size) {
+    _TR_HEAPCHK("realloc");
     void* p = TAURARO_REALLOC(ptr, size);
     /* realloc(NULL, n) acts as malloc -> a new live block; realloc of an
      * existing block frees the old internally (no _tr_free) and keeps the
@@ -438,6 +544,7 @@ _TR_XLINK void* _tr_c_realloc(void* ptr, size_t size) {
     return p;
 }
 _TR_XLINK void* _tr_checked_alloc(size_t sz) {
+    _TR_HEAPCHK("checked_alloc");
     void* p = TAURARO_CALLOC(1, sz);
     if (!p && sz > 0) { _TR_OOM_ABORT(); }
     if (p) _TR_MEMCOUNT_INC();
@@ -451,6 +558,7 @@ _TR_XLINK void* _tr_checked_alloc(size_t sz) {
  * aliasing (no ownership proof needed). Retain/release are elided by codegen
  * wherever the borrow checker proves a value is only borrowed (zero-cost). */
 static inline void* _tr_obj_alloc(size_t sz) {
+    _TR_HEAPCHK("obj_alloc");
     void* p = TAURARO_CALLOC(1, sz);
     if (!p && sz > 0) { _TR_OOM_ABORT(); }
     if (p) { *(size_t*)p = 1; _TR_MEMCOUNT_INC(); }   /* rc = 1 */
@@ -666,7 +774,11 @@ static inline void _tr_weak_drop(_TrWeakBox* w) {
     _tr_free(w);
 }
 
-_TR_XLINK void* _tr_c_memcpy(void* dst, void* src, size_t n) { return memcpy(dst, src, n); }
+_TR_XLINK void* _tr_c_memcpy(void* dst, void* src, size_t n) {
+#ifdef TR_HEAPDBG
+    _trdbg_bounds(dst, n);
+#endif
+    return memcpy(dst, src, n); }
 _TR_XLINK void* _tr_c_memset(void* ptr, int val, size_t n) { return memset(ptr, val, n); }
 _TR_XLINK void* _tr_c_memmove(void* dst, void* src, size_t n) { return memmove(dst, src, n); }
 /* File I/O + env: std-tier only (need <stdio.h>'s FILE / getenv). Gated so a
@@ -4769,7 +4881,7 @@ _TR_XLINK char* _tr_tcp_peer_addr(int fd) {
     if(getpeername((SOCKET)fd,(struct sockaddr*)&a,&al)!=0) return _tr_empty_heap_str();
     char* buf=(char*)_tr_c_malloc(64); char ip[32];
     inet_ntop(AF_INET,&a.sin_addr,ip,sizeof(ip));
-    _snprintf(buf,63,"%s:%d",ip,(int)ntohs(a.sin_port)); return buf;
+    snprintf(buf,64,"%s:%d",ip,(int)ntohs(a.sin_port)); return buf;
 }
 _TR_XLINK int  _tr_udp_socket(void) { _tr_net_init(); SOCKET s=socket(AF_INET,SOCK_DGRAM,0); return (s==INVALID_SOCKET)?-1:(int)s; }
 _TR_XLINK int  _tr_udp_bind(int fd,int port) {
@@ -4785,7 +4897,7 @@ _TR_XLINK int  _tr_udp_send_to(int fd,const char* data,int len,const char* host,
 _TR_XLINK int  _tr_udp_recv_from(int fd,char* buf,int cap,char* src) {
     struct sockaddr_in a; int al=sizeof(a);
     int n=(int)recvfrom((SOCKET)fd,buf,cap,0,(struct sockaddr*)&a,&al);
-    if(n>0&&src){char ip[32];inet_ntop(AF_INET,&a.sin_addr,ip,sizeof(ip));_snprintf(src,63,"%s:%d",ip,(int)ntohs(a.sin_port));}
+    if(n>0&&src){char ip[32];inet_ntop(AF_INET,&a.sin_addr,ip,sizeof(ip));snprintf(src,64,"%s:%d",ip,(int)ntohs(a.sin_port));}
     return n;
 }
 _TR_XLINK void _tr_udp_close(int fd) { closesocket((SOCKET)fd); }

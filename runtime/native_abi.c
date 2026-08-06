@@ -60,13 +60,14 @@ static long long _tr_n_str_live = 0;
 #endif
 /* Allocate an uninitialized refcounted string with room for `datalen` chars + NUL, rc=1. */
 static char* _tr_rt_str_alloc(size_t datalen) {
-    _TrSHdr* h = (_TrSHdr*)malloc(sizeof(_TrSHdr) + datalen + 1);
+    _TrSHdr* h = (_TrSHdr*)TAURARO_ALLOC(sizeof(_TrSHdr) + datalen + 1);
     if (!h) return (char*)0;
     h->rc = 1; _NMEM_INC();
     return (char*)(h + 1);
 }
 /* Heap copy of a literal / C-string as a fresh (rc=1) refcounted string. */
 char* _tr_rt_str_new(const char* s) {
+    _TR_HEAPCHK("str_new");
     size_t n = s ? strlen(s) : 0;
     char* r = _tr_rt_str_alloc(n);
     if (!r) return (char*)0;
@@ -81,7 +82,10 @@ void _tr_rt_str_retain(char* s) {
 void _tr_rt_str_release(char* s) {
     if (!s) return;
     _TrSHdr* h = &((_TrSHdr*)s)[-1];
-    if (--h->rc <= 0) { _NMEM_DEC(); free(h); }
+#ifdef TR_HEAPDBG
+    if (h->rc <= 0) { fprintf(stderr, "TRDBG: str double-release, rc=%lld content=[%s]\n", (long long)h->rc, s); fflush(stderr); abort(); }
+#endif
+    if (--h->rc <= 0) { _NMEM_DEC(); TAURARO_FREE(h); }
 }
 /* Live-string count (only meaningful with -DTAURARO_NMEM; else -1). For leak tests. */
 long long _tr_rt_str_live_count(void) {
@@ -920,6 +924,10 @@ void _tr_rt_obj_retain(void* p) {
 void _tr_rt_obj_release(void* p) {
     if (!p) return;
     _TrOHdr* h = &((_TrOHdr*)p)[-1];
+#ifdef TR_HEAPDBG
+    if (((uintptr_t)p & 7u) != 0) { fprintf(stderr, "TRDBG: obj_release on MISALIGNED ptr %p (not an object)\n", p); fflush(stderr); abort(); }
+    if (h->rc <= 0) { fprintf(stderr, "TRDBG: obj DOUBLE-release, rc=%lld drop=%p\n", (long long)h->rc, (void*)h->drop); fflush(stderr); abort(); }
+#endif
     if (--h->rc <= 0) {
         if (h->drop) h->drop(p);   /* release owned fields; must NOT free the shell */
         _OMEM_DEC();
@@ -971,7 +979,11 @@ void _tr_rt_try_catch(void (*tfn)(void*), void (*cfn)(void*, char*), void* env) 
 /* Byte-granular raw pointer access for Pointer[char] (C strings): read/write ONE byte
  * (0..255) at an address. Used by string-library byte loops (Str.index_of, StrView, ...). */
 int64_t _tr_rt_load_u8(int64_t addr) { return (int64_t)(unsigned char)(*(unsigned char*)(intptr_t)addr); }
-void _tr_rt_store_u8(int64_t addr, int64_t v) { *(unsigned char*)(intptr_t)addr = (unsigned char)v; }
+void _tr_rt_store_u8(int64_t addr, int64_t v) {
+#ifdef TR_HEAPDBG
+    _trdbg_bounds((void*)(intptr_t)addr, 1);
+#endif
+    *(unsigned char*)(intptr_t)addr = (unsigned char)v; }
 /* 4-byte pointer element access (Pointer[i32]/u32/f32): read sign-extends, write truncates. */
 int64_t _tr_rt_load_i32(int64_t addr) { return (int64_t)(*(int32_t*)(intptr_t)addr); }
 void _tr_rt_store_i32(int64_t addr, int64_t v) { *(int32_t*)(intptr_t)addr = (int32_t)v; }
