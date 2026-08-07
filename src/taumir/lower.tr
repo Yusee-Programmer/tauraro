@@ -2218,6 +2218,11 @@ def _lower_stmt_impl(m: LModule, lf: LFunc, s: Pointer[HirStmt]) -> bool:
         case HirStmt.SLineMarker(_): return true
         case HirStmt.SPass: return true
         case HirStmt.SAutoDrop(name, _):            # ARC: release an owned str/object local
+            # `_` is a DISCARD binder: a match/let pattern writes it but nothing owns it, and
+            # every `_` in a function aliases ONE backing slot — so a scope-exit drop of `_`
+            # would release whatever stale (or uninitialised) value a prior unrelated `_` bind
+            # left there. Never drop it (matches the C backend, which does not own `_`).
+            if name == "_": return true
             # Params are BORROWED (the caller owns/releases them) — never drop them here,
             # or a passed str/object would be double-freed. sema only emits SAutoDrop for
             # OWNING locals (is_droppable_sym excludes borrowed/moved/escaped), so the
@@ -3048,7 +3053,7 @@ def _lower_match_enum(m: LModule, lf: LFunc, expr: Pointer[HirExpr], subj: int, 
         else:
             lf.set_term(LTerm.TCondBr(cond, body_id, next_id))
         lf.set_cur(body_id)
-        if bind_subj != "":                          # `case name:` binds the whole enum value
+        if bind_subj != "" and bind_subj != "_":     # `case name:` binds the whole enum value ('_' = discard)
             lf.add_var(bind_subj)
             lf.set_var_type(bind_subj, 11)
             lf.set_var_cls(bind_subj, _own(ename))

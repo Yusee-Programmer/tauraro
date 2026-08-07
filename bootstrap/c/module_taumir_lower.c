@@ -5242,6 +5242,11 @@ __attribute__((hot)) bool _lower_stmt_impl(LModule* m, LFunc* lf, HirStmt* s) {
     } else if (_t2363.tag == HirStmt_SAutoDrop) {
         __auto_type name = _t2363.data.SAutoDrop.name;
         /* pass */
+        if ((strcmp(_tr_strz(name), _tr_strz(_tr_str_lit("_"))) == 0)) {
+            /* pass */
+            return true;
+        }
+        /* pass */
         if (((LFunc_var_index(lf, name) >= 0LL) && (!_is_param(lf, name)))) {
             /* pass */
             long long dvt = LFunc_var_type(lf, name);
@@ -7202,7 +7207,7 @@ __attribute__((hot)) bool _lower_match_enum(LModule* m, LFunc* lf, HirExpr* expr
         /* pass */
         LFunc_set_cur(lf, body_id);
         /* pass */
-        if ((strcmp(_tr_strz(bind_subj), _tr_strz(_tr_str_lit(""))) != 0)) {
+        if (((strcmp(_tr_strz(bind_subj), _tr_strz(_tr_str_lit(""))) != 0) && (strcmp(_tr_strz(bind_subj), _tr_strz(_tr_str_lit("_"))) != 0))) {
             /* pass */
             LFunc_add_var(lf, bind_subj);
             /* pass */
