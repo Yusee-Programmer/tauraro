@@ -15,6 +15,32 @@
 #include "tauraro_rt.h"
 #include <math.h>
 
+#if defined(TR_CRASHINFO) && defined(_WIN32)
+#include <windows.h>
+extern IMAGE_DOS_HEADER __ImageBase;
+static LONG WINAPI _tr_crash_filter(EXCEPTION_POINTERS* ep) {
+    unsigned long long base = (unsigned long long)&__ImageBase;
+    fprintf(stderr, "TRCRASH code=0x%lx rip=%p addr=%p base=%p\n",
+        (unsigned long)ep->ExceptionRecord->ExceptionCode, (void*)ep->ContextRecord->Rip,
+        (void*)(ep->ExceptionRecord->NumberParameters >= 2 ? ep->ExceptionRecord->ExceptionInformation[1] : 0),
+        (void*)base);
+    /* Scan the crash stack for return addresses into this module's .text (compiler code) so the
+     * offending caller of obj_release can be resolved via nm. */
+    unsigned long long* sp = (unsigned long long*)ep->ContextRecord->Rsp;
+    int printed = 0;
+    for (int i = 0; i < 200 && printed < 10; i++) {
+        unsigned long long v = sp[i];
+        if (v > base + 0x1000ULL && v < base + 0x1200000ULL) {  /* inside this image's code */
+            fprintf(stderr, "  stk[%d]=%p (+0x%llx)\n", i, (void*)v, v - base);
+            printed++;
+        }
+    }
+    fflush(stderr);
+    return EXCEPTION_EXECUTE_HANDLER;
+}
+__attribute__((constructor)) static void _tr_install_crash_filter(void){ SetUnhandledExceptionFilter(_tr_crash_filter); }
+#endif
+
 /* Float math methods (x.sqrt() etc.) — thin wrappers over libm so the native backend
  * has stable extern symbols. The final link must include -lm. */
 double _tr_rt_sqrt(double x)  { return sqrt(x); }
@@ -907,11 +933,39 @@ static long long _tr_n_obj_live = 0;
 #define _OMEM_INC() ((void)0)
 #define _OMEM_DEC() ((void)0)
 #endif
+#if defined(TR_OBJDBG)
+/* Live-object registry (separate arrays -> NO allocation-layout change, so it does not mask the
+ * -O2 corruption). Scanned on each alloc: a live object whose rc header is garbage was hit by an
+ * inline-store overrun -> report it (+ the size of the block just allocated for context). */
+#define _ODBG_LIVE 262144
+static _TrOHdr* _odbg_live[_ODBG_LIVE];
+static long _odbg_ln = 0;
+static long _odbg_scan_on = 0;
+static void _odbg_add(_TrOHdr* h){ (void)h; }   /* registry/scan disabled (O(n) per free too slow); rely on header check + poison */
+static void _odbg_del(_TrOHdr* h){ (void)h; }
+static void _odbg_scan(long newsize){
+    if(!_odbg_scan_on) return;
+    long i; for(i=0;i<_odbg_ln;i++){
+        long long rc = _odbg_live[i]->rc;
+        if(rc <= 0 || rc > 0x10000000LL){
+            fprintf(stderr, "TRDBG: CORRUPT live obj %p rc=%lld drop=%p (detected after alloc size=%ld)\n",
+                (void*)(_odbg_live[i]+1), rc, (void*)_odbg_live[i]->drop, newsize);
+            fflush(stderr); abort();
+        }
+    }
+}
+#endif
 void* _tr_rt_obj_alloc(int64_t size) {
     if (size < 8) size = 8;
+#if defined(TR_OBJDBG)
+    _odbg_scan(size);
+#endif
     _TrOHdr* h = (_TrOHdr*)calloc(1, sizeof(_TrOHdr) + (size_t)size);
     if (!h) return (void*)0;
     h->rc = 1; h->drop = (void(*)(void*))0; _OMEM_INC();
+#if defined(TR_OBJDBG)
+    _odbg_add(h);
+#endif
     return (void*)(h + 1);
 }
 /* Attach a per-class drop function (called by _release when rc reaches 0, before free). */
@@ -921,24 +975,53 @@ void _tr_rt_obj_set_drop(void* p, void (*d)(void*)) {
 void _tr_rt_obj_retain(void* p) {
     if (p) ((_TrOHdr*)p)[-1].rc++;
 }
+#if defined(TR_OBJDBG)
+/* Ring of recently-freed object pointers + the return-address of the free site, so a later
+ * bad-release can report WHERE the object was (wrongly) freed. Separate arrays -> no layout change. */
+#define _ODBG_RING 8192
+static void* _odbg_fp[_ODBG_RING];
+static void* _odbg_fr[_ODBG_RING];
+static long  _odbg_fi = 0;
+static void _odbg_record_free(void* p, void* ret) {
+    _odbg_fp[_odbg_fi & (_ODBG_RING-1)] = p;
+    _odbg_fr[_odbg_fi & (_ODBG_RING-1)] = ret;
+    _odbg_fi++;
+}
+static void* _odbg_find_free(void* p) {
+    long i; for (i = _odbg_fi-1; i >= 0 && i > _odbg_fi-_ODBG_RING; i--)
+        if (_odbg_fp[i & (_ODBG_RING-1)] == p) return _odbg_fr[i & (_ODBG_RING-1)];
+    return (void*)0;
+}
+#endif
 void _tr_rt_obj_release(void* p) {
     if (!p) return;
     _TrOHdr* h = &((_TrOHdr*)p)[-1];
-#ifdef TR_HEAPDBG
+#if defined(TR_HEAPDBG) || defined(TR_OBJDBG)
+    /* These checks read only the object HEADER — they do NOT change allocation size/layout,
+     * so (unlike the redzone guard) they fire in the exact -O2 heap layout that crashes. */
     if (((uintptr_t)p & 7u) != 0) {
-        fprintf(stderr, "TRDBG: obj_release MISALIGNED ptr %p ret0=%p ret1=%p ret2=%p\n", p,
+        fprintf(stderr, "TRDBG: obj_release MISALIGNED ptr %p ret0=%p ret1=%p\n", p,
             __builtin_return_address(0),
-            __builtin_extract_return_addr(__builtin_return_address(1)),
-            __builtin_extract_return_addr(__builtin_return_address(2)));
+            __builtin_extract_return_addr(__builtin_return_address(1)));
         fflush(stderr); abort(); }
-    if (h->rc <= 0) {
-        fprintf(stderr, "TRDBG: obj DOUBLE-release p=%p rc=%lld drop=%p f0=%p ret0=%p\n", p, (long long)h->rc,
-            (void*)h->drop, *(void**)p, __builtin_return_address(0));
+    if (h->rc <= 0 || h->rc == 0x7EAD7EAD) {
+        void* fsite = (void*)0;
+#if defined(TR_OBJDBG)
+        fsite = _odbg_find_free(p);
+#endif
+        fprintf(stderr, "TRDBG: obj BAD-release p=%p rc=%lld ret0=%p ret1=%p freed-at=%p\n", p, (long long)h->rc,
+            __builtin_return_address(0),
+            __builtin_extract_return_addr(__builtin_return_address(1)), fsite);
         fflush(stderr); abort(); }
 #endif
     if (--h->rc <= 0) {
         if (h->drop) h->drop(p);   /* release owned fields; must NOT free the shell */
         _OMEM_DEC();
+#if defined(TR_OBJDBG)
+        _odbg_del(h);
+        h->rc = 0x7EAD7EAD;        /* poison so a double-release of a not-yet-reused block is caught */
+        _odbg_record_free(p, __builtin_return_address(0));
+#endif
         free(h);
     }
 }
@@ -946,6 +1029,11 @@ void _tr_rt_obj_release(void* p) {
 void _tr_rt_obj_free(void* p) {
     if (!p) return;
     _OMEM_DEC();
+#if defined(TR_OBJDBG)
+    _odbg_del((_TrOHdr*)p - 1);
+    ((_TrOHdr*)p)[-1].rc = 0x7EAD7EAD;
+    _odbg_record_free(p, __builtin_return_address(0));
+#endif
     free((_TrOHdr*)p - 1);
 }
 /* Live-object count (only meaningful with -DTAURARO_NMEM; else -1). For leak tests. */

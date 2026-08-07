@@ -3811,6 +3811,12 @@ def _lower_field_set(m: LModule, lf: LFunc, obj: Pointer[HirExpr], prop: str, va
     mut ov0 = lower_expr(m, lf, obj)
     if ov0 < 0: return false
     _emit_field_set(m, lf, ov0, off, vv)
+    # Release any fresh str/obj temps produced while evaluating the RHS (a field-set is a full
+    # statement boundary — the local-var assign path flushes too). Without this, a fresh temp
+    # like `f.ret_ty = box_asttype(parse_type())`'s parse_type() result lingers past the
+    # statement; if the field-set sits in a conditional branch, the release gets deferred to the
+    # shared join and fires on paths where the temp was never created -> uninitialized release.
+    _flush_fresh_strs(m, lf)
     return true
 
 def _lower_index_set(m: LModule, lf: LFunc, obj: Pointer[HirExpr], idx: Pointer[HirExpr], val: Pointer[HirExpr]) -> bool:
@@ -3848,6 +3854,7 @@ def _lower_index_set(m: LModule, lf: LFunc, obj: Pointer[HirExpr], idx: Pointer[
         sa.push(kv)
         sa.push(vv)
         lf.emit(LInst.ICall(-1, ssym, sa))
+        _flush_fresh_strs(m, lf)      # statement boundary: release fresh key/value temps
         return true
     if _is_list_tag(ovt):
         mut iv = lower_expr(m, lf, idx)
@@ -3868,6 +3875,7 @@ def _lower_index_set(m: LModule, lf: LFunc, obj: Pointer[HirExpr], idx: Pointer[
             lf.emit(LInst.IStoreB(la_addr, 0, lvv))            # byte list: 1-byte store
         else:
             lf.emit(LInst.IStore(la_addr, 0, lvv, 2))          # 2 = list element (TBAA)
+        _flush_fresh_strs(m, lf)      # statement boundary: release fresh index/value temps
         return true
     return false
 
@@ -4701,6 +4709,16 @@ def _lower_dict_method(m: LModule, lf: LFunc, recv: int, dtag: int, method: str,
             lf.set_vreg_type(gdf, 5)
             return gdf
         lf.set_vreg_type(gd, _dict_val_tag(dtag))
+        if _dict_val_tag(dtag) == 10 or _dict_val_tag(dtag) == 11:
+            # Obj-valued dict get returns a BORROW of the stored instance; hand the caller a
+            # co-owned, fresh-marked ref (retain +1). Without this, a caller that owns/releases
+            # the result (e.g. `resolve()` -> a Symbol from a Map[str,Symbol], inferred owned via
+            # its fresh not-found return) over-releases the dict's instance -> double-free.
+            m.add_extern("_tr_rt_obj_retain")
+            mut _gra = Vec[int].init(1)
+            _gra.push(gd)
+            lf.emit(LInst.ICall(-1, "_tr_rt_obj_retain", _gra))
+            _fresh_mark_obj(lf, gd)
         return gd
     if method == "contains" or method == "has":
         mut hsym = _dict_sym(dtag, "has")

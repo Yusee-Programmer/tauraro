@@ -9115,6 +9115,8 @@ __attribute__((hot)) bool _lower_field_set(LModule* m, LFunc* lf, HirExpr* obj, 
     /* pass */
     _emit_field_set(m, lf, ov0, off, vv);
     /* pass */
+    _flush_fresh_strs(m, lf);
+    /* pass */
     _tr_str_release(cls);
     return true;
 }
@@ -9222,6 +9224,8 @@ __attribute__((hot)) bool _lower_index_set(LModule* m, LFunc* lf, HirExpr* obj, 
         /* pass */
         LFunc_emit(lf, LInst_ctor_ICall((-1LL), ssym, sa));
         /* pass */
+        _flush_fresh_strs(m, lf);
+        /* pass */
         _tr_str_release(sicls);
         _tr_str_release(ssym);
         return true;
@@ -9286,6 +9290,8 @@ __attribute__((hot)) bool _lower_index_set(LModule* m, LFunc* lf, HirExpr* obj, 
             /* pass */
             LFunc_emit(lf, LInst_ctor_IStore(la_addr, 0LL, lvv, 2LL));
         }
+        /* pass */
+        _flush_fresh_strs(m, lf);
         /* pass */
         _tr_str_release(sicls);
         return true;
@@ -11325,6 +11331,19 @@ __attribute__((hot)) long long _lower_dict_method(LModule* m, LFunc* lf, long lo
         }
         /* pass */
         LFunc_set_vreg_type(lf, gd, _dict_val_tag(dtag));
+        /* pass */
+        if (((_dict_val_tag(dtag) == 10LL) || (_dict_val_tag(dtag) == 11LL))) {
+            /* pass */
+            LModule_add_extern(m, _tr_str_lit("_tr_rt_obj_retain"));
+            /* pass */
+            List_i64* _gra = (void*)List_i64_new();
+            /* pass */
+            List_i64_append(_gra, gd);
+            /* pass */
+            LFunc_emit(lf, LInst_ctor_ICall((-1LL), _tr_str_lit("_tr_rt_obj_retain"), _gra));
+            /* pass */
+            _fresh_mark_obj(lf, gd);
+        }
         /* pass */
         _tr_str_release(gsym);
         return gd;
