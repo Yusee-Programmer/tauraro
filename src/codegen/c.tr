@@ -2614,6 +2614,11 @@ pub class CGenerator:
         # Pointer-aliased types (e.g. AstType, HIR nodes) are shared via raw
         # Pointer[T] that bypasses the refcount — never auto-drop them.
         if self.raw_aliased.contains(tn): return false
+        # A class with an explicit `free()` (e.g. std/async Channel, WaitGroup) opts OUT of
+        # _trdrop-based auto-ARC and self-manages: no `_trdrop_<T>` is emitted for it (see
+        # emit_drop_fwd_decls / gen_class_struct). Treating it as an auto-ARC heap class would
+        # emit `_tr_obj_release(x, _trdrop_<T>)` referencing an undefined function.
+        if self.has_method(tn, "free"): return false
         if tn == "Vec" or tn == "Map" or tn == "List" or tn == "Dict" or tn == "Set" or tn == "Box" or tn == "Mutex" or tn == "RwLock" or tn == "Atomic" or tn == "Shared" or tn == "Option" or tn == "Result" or tn == "Chan" or tn == "StringBuilder" or tn == "StringObj": return false
         return true
 
@@ -6502,12 +6507,16 @@ pub class CGenerator:
                                 match v.read():
                                     case HirExpr.EPropAccess(_, _, _): pass
                                     case _: self.str_local_names.insert(n, true)
-                        elif self.is_heap_class_tn(hir_expr_type(v).name):
+                        elif self.is_heap_class_tn(hir_expr_type(v).name) and not self.interfaces.contains(ty.name):
                             # Refcounted heap class. A proven borrow is a zero-cost
                             # alias (no retain/release, not tracked). Otherwise this
                             # local OWNS a reference: retain aliases (a fresh ctor /
                             # owned `-> T` result is already rc=1), own `-> ref`
                             # results, and register for release at scope exit.
+                            # NOTE: an INTERFACE-typed target (`x: Animal = dog`) is excluded —
+                            # init_s is already the fat-pointer cast `Dog_as_Animal(dog)`, so an
+                            # `_tr_obj_retain(<struct>)` around it is a C type error. The interface
+                            # local borrows the underlying object (never drop-tracked), so no retain.
                             if self.cur_proven_borrows.contains(n):
                                 pass
                             else:

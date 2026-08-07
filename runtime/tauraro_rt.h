@@ -496,7 +496,7 @@ static inline long long _tr_mem_live_strs(void) {
  * LLVM backend's `str` is an rc'd char* released via _tr_rt_str_release, so any _h wrapper
  * that hands a string back to that backend MUST return an rc string (not a raw _tr_checked_
  * alloc/borrowed pointer, which would corrupt the heap on release). */
-char* _tr_rt_str_new(const char* s);
+_TR_XLINK char* _tr_rt_str_new(const char* s);
 
 // Wrappers for core library to avoid signature conflicts
 _TR_XLINK void* _tr_c_malloc(size_t size) {
@@ -671,6 +671,21 @@ static inline TrStr _tr_str_wrap_impl(char* owned_data) {
     _TR_MEMCOUNT_STR_INC();
     return t;
 }
+
+#ifndef _TR_EXPORT_RT
+/* C backend: the native `char*` rc-string constructor is defined in native_abi.c, which the
+ * header-only C backend does not link. std/async `_h` wrappers (e.g. _tr_task_get_error_h)
+ * call _tr_rt_str_new and their result is immediately `_tr_str_wrap`'d into a TrStr — so the
+ * correct C-backend form is a plain OWNED heap copy (_tr_str_wrap adopts it, rc=1). */
+static inline char* _tr_rt_str_new(const char* s) {
+    size_t n = s ? strlen(s) : 0;
+    char* r = (char*)_tr_checked_alloc(n + 1);
+    if (!r) return (char*)0;
+    if (s && n) memcpy(r, s, n);
+    r[n] = '\0';
+    return r;
+}
+#endif
 static inline TrStr _tr_str_wrap_passthrough(TrStr s) { return s; }
 /* `_tr_str_wrap(x)`: wrap an owned `char*` into a TrStr (rc=1). Some
  * codegen call sites double-wrap (e.g. `_tr_str_wrap(_tr_str_wrap(buffer))`

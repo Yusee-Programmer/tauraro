@@ -5590,6 +5590,11 @@ __attribute__((hot)) bool CGenerator_is_heap_class_tn(CGenerator* self, TrStr tn
         return false;
     }
     /* pass */
+    if (CGenerator_has_method(self, tn, _tr_str_lit("free"))) {
+        /* pass */
+        return false;
+    }
+    /* pass */
     if ((((((((((((((((strcmp(_tr_strz(tn), _tr_strz(_tr_str_lit("Vec"))) == 0) || (strcmp(_tr_strz(tn), _tr_strz(_tr_str_lit("Map"))) == 0)) || (strcmp(_tr_strz(tn), _tr_strz(_tr_str_lit("List"))) == 0)) || (strcmp(_tr_strz(tn), _tr_strz(_tr_str_lit("Dict"))) == 0)) || (strcmp(_tr_strz(tn), _tr_strz(_tr_str_lit("Set"))) == 0)) || (strcmp(_tr_strz(tn), _tr_strz(_tr_str_lit("Box"))) == 0)) || (strcmp(_tr_strz(tn), _tr_strz(_tr_str_lit("Mutex"))) == 0)) || (strcmp(_tr_strz(tn), _tr_strz(_tr_str_lit("RwLock"))) == 0)) || (strcmp(_tr_strz(tn), _tr_strz(_tr_str_lit("Atomic"))) == 0)) || (strcmp(_tr_strz(tn), _tr_strz(_tr_str_lit("Shared"))) == 0)) || (strcmp(_tr_strz(tn), _tr_strz(_tr_str_lit("Option"))) == 0)) || (strcmp(_tr_strz(tn), _tr_strz(_tr_str_lit("Result"))) == 0)) || (strcmp(_tr_strz(tn), _tr_strz(_tr_str_lit("Chan"))) == 0)) || (strcmp(_tr_strz(tn), _tr_strz(_tr_str_lit("StringBuilder"))) == 0)) || (strcmp(_tr_strz(tn), _tr_strz(_tr_str_lit("StringObj"))) == 0))) {
         /* pass */
         return false;
@@ -16213,7 +16218,7 @@ __auto_type slv_call_ty = _t1663.data.EMethodCall.ty;
                             _tr_dict_set(self->str_local_names, _tr_strz(n), true);
                         }
                     }
-                } else if (CGenerator_is_heap_class_tn(self, hir_expr_type(v)->name)) {
+                } else if ((CGenerator_is_heap_class_tn(self, hir_expr_type(v)->name) && (!_tr_dict_contains(self->interfaces, _tr_strz(ty->name))))) {
                     /* pass */
                     if (_tr_dict_contains(self->cur_proven_borrows, _tr_strz(n))) {
                         /* pass */
