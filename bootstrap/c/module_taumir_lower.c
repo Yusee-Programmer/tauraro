@@ -11575,6 +11575,8 @@ __attribute__((hot)) long long _inline_list_addr(LModule* m, LFunc* lf, long lon
     /* pass */
     long long data = LFunc_new_vreg(lf);
     /* pass */
+    LFunc_set_vreg_type(lf, data, 10LL);
+    /* pass */
     LFunc_emit(lf, LInst_ctor_ILoad(data, handle, 0LL, 1LL));
     /* pass */
     long long off = idx;
@@ -11591,6 +11593,8 @@ __attribute__((hot)) long long _inline_list_addr(LModule* m, LFunc* lf, long lon
     }
     /* pass */
     long long addr = LFunc_new_vreg(lf);
+    /* pass */
+    LFunc_set_vreg_type(lf, addr, 10LL);
     /* pass */
     LFunc_emit(lf, LInst_ctor_IBinOp(addr, _tr_str_lit("+"), data, off));
     /* pass */

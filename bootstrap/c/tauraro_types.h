@@ -4004,6 +4004,7 @@ __attribute__((hot)) void LlvmEmitter_emit_extern_decls(LlvmEmitter* self);
 __attribute__((hot)) void LlvmEmitter_scan_call_decl(LlvmEmitter* self, LInst inst, TrMap* seen);
 __attribute__((hot)) TrStr LlvmEmitter_emit_module(LlvmEmitter* self);
 __attribute__((hot)) TrStr _tbaa_suffix(long long aclass);
+__attribute__((hot)) bool _is_fresh_alloc_ret(TrStr name);
 __attribute__((hot)) TrStr _ll_int_instr(TrStr op);
 __attribute__((hot)) TrStr _ll_icmp_pred(TrStr op);
 __attribute__((hot)) TrStr _ll_float_instr(TrStr op);

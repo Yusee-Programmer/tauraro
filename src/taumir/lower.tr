@@ -4827,10 +4827,12 @@ def _list_call1(m: LModule, lf: LFunc, sym: str, handle: int, restype: int) -> i
 # `stride` = element byte width (8 for i64-slot lists, 1 for byte lists).
 def _inline_list_addr(m: LModule, lf: LFunc, handle: int, idx: int, stride: int) -> int:
     mut data = lf.new_vreg()
-    lf.emit(LInst.ILoad(data, handle, 0, 1))       # data = handle->data; aclass 1 = list header.
-                                                    # Distinct TBAA from elements (aclass 2) lets LLVM
-                                                    # prove element stores never clobber this base
-                                                    # pointer -> it hoists the load out of hot loops.
+    lf.set_vreg_type(data, 10)                     # ptr: load the data pointer AS a pointer so the
+    lf.emit(LInst.ILoad(data, handle, 0, 1))       # element address below is a `getelementptr` (below),
+                                                    # not `inttoptr(add i64)`. data = handle->data; aclass
+                                                    # 1 = list header. Distinct TBAA from elements (aclass
+                                                    # 2) lets LLVM hoist this base-pointer load out of hot
+                                                    # loops.
     mut off = idx
     if stride != 1:
         mut c8 = lf.new_vreg()
@@ -4838,6 +4840,12 @@ def _inline_list_addr(m: LModule, lf: LFunc, handle: int, idx: int, stride: int)
         off = lf.new_vreg()
         lf.emit(LInst.IBinOp(off, "*", idx, c8))
     mut addr = lf.new_vreg()
+    lf.set_vreg_type(addr, 10)                     # ptr result: the LLVM emitter lowers a `+` whose dest
+                                                    # is a pointer to `getelementptr i8` (provenance-
+                                                    # preserving), which the vectorizer can analyse —
+                                                    # `inttoptr(add)` addressing blocks it entirely
+                                                    # ("cannot identify array bounds"). Native backend is
+                                                    # unaffected: its `+` is a 64-bit add either way.
     lf.emit(LInst.IBinOp(addr, "+", data, off))
     return addr
 
