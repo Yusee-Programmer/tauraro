@@ -1050,9 +1050,39 @@ pub def main(args: Vec[str]):
         # (_tr_rt_try_catch's setjmp) references — clang's default link misses it (gcc
         # resolves it natively, so the C backend never needed it).
         mut lx_libs = " -lm"
-        if _tr_is_windows(): lx_libs = lx_libs + " -lws2_32 -lucrtbase -mconsole"
+        # GCC-linked variant (the llc paths): mingw gcc defaults to msvcrt and resolves
+        # __intrinsic_setjmpex natively, so it needs NO -lucrtbase — and forcing it would mix
+        # two C runtimes (msvcrt startup + ucrtbase) and crash. Only clang (whose default link
+        # misses setjmpex) gets -lucrtbase.
+        mut lx_libs_gcc = " -lm"
+        if _tr_is_windows():
+            lx_libs = lx_libs + " -lws2_32 -lucrtbase -mconsole"
+            lx_libs_gcc = lx_libs_gcc + " -lws2_32"
         mut lx_built = false
-        if _tr_system("clang --version >" + lx_null + " 2>&1") == 0:
+        # 0. BUNDLED llc — shipped in the release archive beside the compiler binary at
+        #    `<exe_dir>/llvm/llc[.exe]` (see .github/workflows: the cached minimal-LLVM job).
+        #    This makes `--backend llvm` self-contained: NO user-installed LLVM is needed,
+        #    only the C compiler the default C backend already requires — reused here purely
+        #    as the linker driver (`cc obj runtime.o -o exe`), never to compile the IR.
+        mut lx_llc_ext = ""
+        if _tr_is_windows(): lx_llc_ext = ".exe"
+        mut lx_bllc = _tr_exe_dir() + "/llvm/llc" + lx_llc_ext
+        # _tr_exe_dir() is backslash'd on Windows; the appended "/llvm/llc.exe" leaves mixed
+        # separators that cmd.exe won't resolve as an executable. Normalize to native seps.
+        if _tr_is_windows(): lx_bllc = path_to_native(lx_bllc)
+        mut lx_llc_tri0 = ""
+        if _tr_is_windows(): lx_llc_tri0 = " -mtriple=x86_64-pc-windows-gnu"
+        # cmd.exe's `/c "..."` strips the first & last quote of the whole line, mangling a
+        # command that STARTS with a quoted path (the bundled llc). Wrap the entire command
+        # in an extra outer quote pair on Windows so the inner quotes survive. (The gcc/clang
+        # PATH commands below don't start with a quote, so they never hit this.)
+        mut lx_q = ""
+        if _tr_is_windows(): lx_q = "\""
+        if _tr_system(lx_q + "\"" + lx_bllc + "\" --version >" + lx_null + " 2>&1" + lx_q) == 0:
+            if _tr_system(lx_q + "\"" + lx_bllc + "\" -O2 -filetype=obj" + lx_llc_tri0 + " \"" + lx_ll + "\" -o build/llvm_out.o 2>build/llvm_link.log" + lx_q) == 0:
+                if _tr_system(lx_cc + " build/llvm_out.o " + lx_rto + lx_libs_gcc + " -o \"" + lx_exe + "\" 2>>build/llvm_link.log") == 0:
+                    lx_built = true
+        if not lx_built and _tr_system("clang --version >" + lx_null + " 2>&1") == 0:
             mut lx_cmd = "clang -O" + opt_level + " \"" + lx_ll + "\" " + lx_rto + lx_libs + " -o \"" + lx_exe + "\" 2>build/llvm_link.log"
             if _tr_system(lx_cmd) == 0: lx_built = true
         if not lx_built and _tr_system("llc --version >" + lx_null + " 2>&1") == 0:
@@ -1061,11 +1091,12 @@ pub def main(args: Vec[str]):
             mut lx_llc_tri = ""
             if _tr_is_windows(): lx_llc_tri = " -mtriple=x86_64-pc-windows-gnu"
             if _tr_system("llc -O2 -filetype=obj" + lx_llc_tri + " \"" + lx_ll + "\" -o build/llvm_out.o 2>build/llvm_link.log") == 0:
-                if _tr_system(lx_cc + " build/llvm_out.o " + lx_rto + lx_libs + " -o \"" + lx_exe + "\" 2>>build/llvm_link.log") == 0:
+                if _tr_system(lx_cc + " build/llvm_out.o " + lx_rto + lx_libs_gcc + " -o \"" + lx_exe + "\" 2>>build/llvm_link.log") == 0:
                     lx_built = true
         if not lx_built:
             print(c_red("error") + ": could not compile the LLVM IR to an executable")
-            print("       need clang (LLVM >= 15) or llc on PATH; see build/llvm_link.log")
+            print("       need the bundled llc (" + lx_bllc + "), or clang (LLVM >= 15) / llc on PATH;")
+            print("       see build/llvm_link.log")
             _tr_exit(1)
         if verbose: print("[5/5] executable written to " + lx_exe)
         if run_after:
