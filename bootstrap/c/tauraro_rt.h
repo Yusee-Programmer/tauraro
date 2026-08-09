@@ -686,6 +686,15 @@ static inline char* _tr_rt_str_new(const char* s) {
     return r;
 }
 #endif
+
+/* Stage 2 — in-process LLVM object emitter. Prototype only; the definition is in
+ * runtime/tauraro_llvm.c (ALWAYS linked into the compiler): a stub returning -1 by default,
+ * or the real llvm-c emitter when that file is built with -DTAURARO_LLVM_INPROC + linked
+ * against libLLVM. -1 ("not compiled in") makes the compiler fall back to the bundled-llc
+ * subprocess (Stage 1). Kept out of the header as a plain def to avoid mingw's multiple-
+ * definition of a weak body across the many TUs that include this header. */
+int _tr_llvm_emit_object(const char* ll_path, const char* out_path, const char* triple);
+
 static inline TrStr _tr_str_wrap_passthrough(TrStr s) { return s; }
 /* `_tr_str_wrap(x)`: wrap an owned `char*` into a TrStr (rc=1). Some
  * codegen call sites double-wrap (e.g. `_tr_str_wrap(_tr_str_wrap(buffer))`

@@ -9,7 +9,7 @@ if (-not (Test-Path $BOOTSTRAP) -and -not (Get-Command $BOOTSTRAP -ErrorAction S
 }
 
 Write-Host "==> Compiling src/main.tr -> .\tauraroc.exe"
-& $BOOTSTRAP src/main.tr -o tauraroc.exe --static
+& $BOOTSTRAP src/main.tr -o tauraroc.exe --link runtime/tauraro_llvm.c --static
 
 # New bootstrap (v0.0.4+): binary lands in CWD as .\tauraroc.exe
 # Old bootstrap (<=v0.0.3): binary lands in src\build\tauraroc.exe

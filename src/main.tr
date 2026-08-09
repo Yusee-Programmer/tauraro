@@ -25,6 +25,10 @@ extern "C":
     def _tr_getenv(name: str) -> str
     def _tr_exe_dir() -> str   # absolute dir of the running compiler exe (OS-level; reliable even when invoked by bare name via PATH)
     def _tr_print_raw(s: str)  # print without trailing newline (for `tauraroc fmt` stdout output)
+    # Stage 2: in-process LLVM `.ll` -> `.o` via libLLVM (runtime/tauraro_llvm.c). Returns 0 on
+    # success, >0 on an LLVM error, -1 when not compiled in (weak stub) -> caller falls back to
+    # the bundled-llc subprocess (Stage 1). Keeps the textual .ll (differential oracle intact).
+    def _tr_llvm_emit_object(ll_path: str, out_path: str, triple: str) -> int
 
 # --- Helpers ------------------------------------------------------------------
 
@@ -1059,6 +1063,15 @@ pub def main(args: Vec[str]):
             lx_libs = lx_libs + " -lws2_32 -lucrtbase -mconsole"
             lx_libs_gcc = lx_libs_gcc + " -lws2_32"
         mut lx_built = false
+        # -1. IN-PROCESS libLLVM (Stage 2) — when the compiler was built with the tauraro_llvm.c
+        #     shim + libLLVM, emit the object directly through the llvm-c API (no subprocess).
+        #     Returns -1 when not compiled in (weak stub) → fall through to the bundled llc.
+        mut lx_tri = ""
+        if _tr_is_windows(): lx_tri = "x86_64-pc-windows-gnu"
+        mut lx_inproc = _tr_llvm_emit_object(lx_ll, "build/llvm_out.o", lx_tri)
+        if lx_inproc == 0:
+            if _tr_system(lx_cc + " build/llvm_out.o " + lx_rto + lx_libs_gcc + " -o \"" + lx_exe + "\" 2>build/llvm_link.log") == 0:
+                lx_built = true
         # 0. BUNDLED llc — shipped in the release archive beside the compiler binary at
         #    `<exe_dir>/llvm/llc[.exe]` (see .github/workflows: the cached minimal-LLVM job).
         #    This makes `--backend llvm` self-contained: NO user-installed LLVM is needed,

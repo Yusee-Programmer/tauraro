@@ -39,6 +39,8 @@ bootstrap/*.zip
 !runtime/native_abi.c
 !runtime/native_leak_probe.c
 !runtime/coro_stub.c
+# Stage 2 in-process LLVM shim (hand-written llvm-c wrapper; --link'd into the compiler).
+!runtime/tauraro_llvm.c
 # Python bytecode is never source:
 __pycache__/
 *.pyc
