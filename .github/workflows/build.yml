@@ -681,14 +681,23 @@ jobs:
       # ignores the sibling llvm/ dir and copies only the binary):
       #   unzip tauraroc-linux-x64.zip -d bootstrap/tauraroc-linux-x64/
       #   → bootstrap/tauraroc-linux-x64/{tauraroc, llvm/llc}
-      - name: Zip per-platform binaries
+      - name: Zip per-platform SDK bundles
+        # A COMPLETE, self-contained SDK sits at the zip root:
+        #   tauraroc          the compiler
+        #   llvm/llc          bundled minimal LLVM (Stage 1) — no system LLVM needed
+        #   runtime/          native_abi.c + headers, auto-found + compiled by --backend llvm
+        #   std/              the standard library (for `import`)
+        # So `tauraroc prog.tr --backend llvm -o prog` works straight out of the unzip (the
+        # only external need is a C compiler, reused as the linker). The bootstrap seed still
+        # resolves the binary via `find -name tauraroc` (runtime/ and std/ contain no such
+        # file), so this zip doubles as the seed unchanged.
         run: |
           mkdir -p release/assets
           A="$GITHUB_WORKSPACE/release/assets"
-          ( cd release/linux-x64   && zip -r "$A/tauraroc-linux-x64.zip"   tauraroc     llvm )
-          ( cd release/linux-arm64 && zip -r "$A/tauraroc-linux-arm64.zip" tauraroc     llvm )
-          ( cd release/windows-x64 && zip -r "$A/tauraroc-windows-x64.zip" tauraroc.exe llvm )
-          ( cd release/macos-arm64 && zip -r "$A/tauraroc-macos-arm64.zip" tauraroc     llvm )
+          ( cd release/linux-x64   && zip -r "$A/tauraroc-linux-x64.zip"   tauraroc     llvm runtime std )
+          ( cd release/linux-arm64 && zip -r "$A/tauraroc-linux-arm64.zip" tauraroc     llvm runtime std )
+          ( cd release/windows-x64 && zip -r "$A/tauraroc-windows-x64.zip" tauraroc.exe llvm runtime std )
+          ( cd release/macos-arm64 && zip -r "$A/tauraroc-macos-arm64.zip" tauraroc     llvm runtime std )
 
       # -------------------------------------------------------
       # Combined SHA256SUMS.txt: checksums of the release zips
