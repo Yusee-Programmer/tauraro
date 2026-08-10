@@ -2689,6 +2689,7 @@ typedef struct Sema {
     List_TrStr* cur_func_borrowers;
     List_TrStr* cur_func_sources;
     bool strict_mode;
+    bool no_heap;
     TrMap* mutating_methods;
     TrMap* fn_ret_owned;
     TrMap* fn_param_consumes;
@@ -3685,6 +3686,7 @@ __attribute__((hot)) void Sema_collect_stmt_refs(Sema* self, HirStmt* s, List_Tr
 __attribute__((hot)) HirExpr* Sema_lower_do_value(Sema* self, Block* do_body);
 __attribute__((hot)) AstType* Sema_infer_break_type(Sema* self, HirBlock* hb);
 __attribute__((hot)) AstType* Sema_infer_break_type_stmt(Sema* self, HirStmt* s);
+__attribute__((hot)) void Sema_check_no_heap(Sema* self, TrStr what, TrStr fix);
 __attribute__((hot)) HirExpr* Sema_lower_expr(Sema* self, Expr* e_ptr);
 __attribute__((hot)) TrStr Sema_is_reserved_error(Sema* self, TrStr name);
 __attribute__((hot)) TrStr Sema_is_reserved_keyword(Sema* self, TrStr name);

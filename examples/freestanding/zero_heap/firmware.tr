@@ -1,0 +1,159 @@
+# =====================================================================
+# Zero-heap bare-metal firmware — a COMPLETE example of every construct
+# that survives `--no-heap`, the compile-time guarantee that a program
+# never touches the heap (Zig-like, for MCUs / kernels / freestanding).
+#
+#   Build & run (host, validates logic + the zero-heap gate):
+#       tauraroc firmware.tr --no-heap -o firmware && ./firmware
+#   Bare metal (emit C, then cross-compile with your MCU toolchain):
+#       tauraroc firmware.tr --no-heap --freestanding --emit c
+#
+# Uses ONLY: value types, fixed arrays (1D + flat 2D), raw Pointer[T] /
+# MMIO, scalars + bit ops, enums + match, tuples, functions-by-value,
+# global fixed buffers, fixed-point math.  NO List/Dict/Set, NO heap
+# class, NO dynamic strings -> the compiler PROVES no allocation.
+# =====================================================================
+
+# ---- Global fixed-size buffers (real .bss/.data, no allocator) ------
+mut _samples: [int; 16]        # ring buffer of raw ADC samples
+mut _reg: [int; 4]             # simulated memory-mapped GPIO registers
+
+# ---- Value types: stack structs, all-scalar, passed BY VALUE --------
+@value_type
+class Reading:
+    pub raw: int
+    pub milli: int             # fixed-point milli-units (raw * 1000 / 4096)
+    pub def init(r: int) -> Reading:
+        mut x = Reading()
+        x.raw = r
+        x.milli = (r * 1000) / 4096
+        return x
+
+@value_type
+class Stats:
+    pub lo: int
+    pub hi: int
+    pub avg: int
+
+# ---- Enum state machine + match -------------------------------------
+enum Mode:
+    Boot
+    Sampling(int)              # payload = samples remaining
+    Fault(int)                 # payload = error code
+
+def mode_tick(m: Mode) -> int:
+    match m:
+        case Mode.Boot: return 0
+        case Mode.Sampling(n): return n
+        case Mode.Fault(code): return -code
+    return 0    # unreachable; satisfies [F-3] flow analysis
+
+# ---- Bit manipulation (MMIO register ops), C-identical --------------
+def set_bit(v: int, b: int) -> int:   return v | (1 << b)
+def clr_bit(v: int, b: int) -> int:   return v & (0xFFFFFFFF ^ (1 << b))
+def tst_bit(v: int, b: int) -> bool:  return (v & (1 << b)) != 0
+def popcount(v: int) -> int:
+    mut n = v
+    mut c = 0
+    while n != 0:
+        c = c + (n & 1)
+        n = n >> 1
+    return c
+
+# ---- Raw pointer / MMIO write through a fixed cell ------------------
+def mmio_write(idx: int, val: int):
+    unsafe:
+        mut p = _reg.as_ptr()
+        p.offset(idx).write(val)
+def mmio_read(idx: int) -> int:
+    unsafe:
+        mut p = _reg.as_ptr()
+        return p.offset(idx).read()
+
+# ---- Fixed-array reduce -> tuple (min, max) -------------------------
+def min_max(n: int) -> (int, int):
+    mut lo = _samples[0]
+    mut hi = _samples[0]
+    mut i = 1
+    while i < n:
+        mut s = _samples[i]
+        if s < lo: lo = s
+        if s > hi: hi = s
+        i = i + 1
+    return (lo, hi)
+
+# ---- Fixed 2D array (flat) matrix-vector multiply -------------------
+def mat3_apply(m: [int; 9], vx: int, vy: int, vz: int) -> (int, int, int):
+    mut rx = m[0]*vx + m[1]*vy + m[2]*vz
+    mut ry = m[3]*vx + m[4]*vy + m[5]*vz
+    mut rz = m[6]*vx + m[7]*vy + m[8]*vz
+    return (rx, ry, rz)
+
+def compute_stats(n: int) -> Stats:
+    mut mm = min_max(n)
+    mut sum = 0
+    mut i = 0
+    while i < n:
+        sum = sum + _samples[i]
+        i = i + 1
+    mut st = Stats()
+    st.lo = mm[0]
+    st.hi = mm[1]
+    st.avg = sum / n
+    return st
+
+def main():
+    print("=== zero-heap firmware ===")
+
+    # 1) fill the global sample buffer (fixed array + loop)
+    mut i = 0
+    while i < 16:
+        _samples[i] = (i * i * 37) & 0xFFF     # pseudo ADC readings, 12-bit
+        i = i + 1
+
+    # 2) value type + fixed-point
+    mut r = Reading.init(_samples[10])
+    print("sample[10] raw / milli:")
+    print(r.raw)
+    print(r.milli)
+
+    # 3) tuple destructure from a fixed-array reduce
+    mut mm = min_max(16)
+    print("min, max:")
+    print(mm[0])
+    print(mm[1])
+
+    # 4) value-type return aggregating stats
+    mut st = compute_stats(16)
+    print("avg:")
+    print(st.avg)
+
+    # 5) bit ops + MMIO through a raw pointer
+    mut gpio = 0
+    gpio = set_bit(gpio, 3)
+    gpio = set_bit(gpio, 7)
+    gpio = set_bit(gpio, 15)
+    gpio = clr_bit(gpio, 7)
+    mmio_write(0, gpio)
+    print("gpio popcount, bit3, bit7:")
+    print(popcount(mmio_read(0)))
+    print(tst_bit(mmio_read(0), 3))
+    print(tst_bit(mmio_read(0), 7))
+
+    # 6) enum state machine
+    print("mode ticks (sampling 5, fault 2):")
+    print(mode_tick(Mode.Sampling(5)))
+    print(mode_tick(Mode.Fault(2)))
+
+    # 7) fixed 2D matrix transform (identity*2)
+    mut m: [int; 9]
+    m[0] = 2
+    m[4] = 2
+    m[8] = 2
+    mut out = mat3_apply(m, 3, 5, 7)
+    print("2*(3,5,7):")
+    print(out[0])
+    print(out[1])
+    print(out[2])
+
+    print("=== done, no heap touched ===")

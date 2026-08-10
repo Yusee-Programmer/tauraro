@@ -1,0 +1,31 @@
+# Counter-example: EVERY line here allocates on the heap, so under `--no-heap`
+# each raises a distinct [H-1] error and the build is refused. This is the wall
+# that turns "stay off the heap" from discipline into a compile-time guarantee.
+#
+#   tauraroc violations.tr --no-heap        # -> 12x [H-1], no binary produced
+#   tauraroc violations.tr                  # (without the flag) compiles fine
+#
+# The FIX for each is the same: use the value-type / fixed-array [T;N] /
+# Pointer[T] / string-literal subset shown in firmware.tr.
+
+class HeapObj:
+    pub n: int
+    pub def init(a: int) -> HeapObj:
+        mut h = HeapObj()
+        h.n = a
+        return h
+
+def main():
+    mut a = [1, 2, 3]                 # [H-1] list literal        -> [int; 3]
+    mut b = {"k": 1}                  # [H-1] dict literal        -> parallel fixed arrays
+    mut c = {1, 2, 3}                 # [H-1] set literal         -> fixed array + scan / bitset
+    mut d = [x * 2 for x in a]        # [H-1] list comprehension  -> loop into a fixed array
+    mut e = "hi " + "there"           # [H-1] string concat       -> string literals / byte buffer
+    mut f = "ab" * 4                  # [H-1] string repeat       -> fixed byte buffer
+    mut g = f"value is {a}"           # [H-1] f-string            -> print parts separately
+    mut h = List[int].init(8)         # [H-1] List constructor    -> [int; N]
+    mut i = Vec[int].init(8)          # [H-1] Vec constructor     -> [int; N]
+    mut j = Dict[str, int].init(8)    # [H-1] Dict constructor    -> parallel fixed arrays
+    mut k = Set[int].init(8)          # [H-1] Set constructor     -> fixed array + scan
+    mut l = HeapObj.init(5)           # [H-1] heap class          -> mark it @value_type
+    print("unreachable under --no-heap")
