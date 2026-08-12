@@ -178,6 +178,16 @@ jobs:
         run: ./scripts/run_tests.ps1
 
       # -------------------------------------------------------
+      # --no-heap bare-metal guarantee: the zero-heap firmware MUST compile (and run)
+      # while the heap-using counter-example MUST be rejected with [H-1]. Keeps the
+      # compile-time zero-heap wall + its examples honest. (Compile-time only; no cross
+      # toolchain, so it runs on every platform.)
+      # -------------------------------------------------------
+      - name: No-heap oracle (bare-metal zero-heap guarantee)
+        shell: bash
+        run: TAURAROC=./tauraroc${{ matrix.ext }} bash scripts/no_heap_check.sh
+
+      # -------------------------------------------------------
       # Soundness corpus: programs that MUST be rejected under --strict (with the
       # right diagnostic) + safe programs that MUST compile/run. Linux additionally
       # builds the accept corpus with ASan/UBSan so latent UB in generated C is a
