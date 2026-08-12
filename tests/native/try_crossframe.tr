@@ -1,0 +1,29 @@
+def risky(x: int) -> int:
+    if x == 0: raise("cannot divide by zero")
+    return 100 / x
+
+def deep(x: int) -> int:
+    return risky(x) + 1
+
+def main():
+    try:
+        mut a = risky(5)
+        print(a)
+    except e:
+        print(f"caught: {e}")
+
+    try:
+        mut b = risky(0)
+        print(b)
+    except e:
+        print(f"caught: {e}")
+
+    try:
+        mut c = deep(0)
+        print(c)
+    except e:
+        print(f"nested caught: {e}")
+    finally:
+        print("cleanup")
+
+    print("done")

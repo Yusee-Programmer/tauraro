@@ -1,0 +1,15 @@
+# `for v in ch:` — iterate a builtin channel until closed+empty (recv loop). Single-threaded
+# (prefill + close) -> deterministic. Lowers to _tr_chan_recv_ok, like the C backend.
+def main():
+    mut ch: Chan[int] = Chan.init(8)
+    ch.send(10)
+    ch.send(20)
+    ch.send(30)
+    ch.close()
+    mut total = 0
+    mut count = 0
+    for v in ch:
+        total = total + v
+        count = count + 1
+    print(total)      # 60
+    print(count)      # 3

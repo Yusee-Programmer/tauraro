@@ -46,6 +46,8 @@ __attribute__((malloc,returns_nonnull,hot)) LFunc* LFunc_init(TrStr name) {
     /* pass */
     f->fresh_strs = (void*)List_i64_new();
     /* pass */
+    f->fresh_objs = (void*)List_i64_new();
+    /* pass */
     f->captures = (void*)List_TrStr_new();
     /* pass */
     f->cap_tags = (void*)List_i64_new();
@@ -53,6 +55,26 @@ __attribute__((malloc,returns_nonnull,hot)) LFunc* LFunc_init(TrStr name) {
     f->var_xret = (void*)List_i64_new();
     /* pass */
     f->vreg_xret = (void*)List_i64_new();
+    /* pass */
+    f->try_blks = (void*)List_i64_new();
+    /* pass */
+    f->try_msgs = (void*)List_TrStr_new();
+    /* pass */
+    f->defers = (void*)List_ptr_new();
+    /* pass */
+    f->mutex_unlocks = (void*)List_TrStr_new();
+    /* pass */
+    f->blk_depth = 0LL;
+    /* pass */
+    f->in_defer = false;
+    /* pass */
+    f->is_throws = false;
+    /* pass */
+    f->throws_ok_tag = 0LL;
+    /* pass */
+    f->throws_err_tag = 0LL;
+    /* pass */
+    f->in_taskgroup = 0LL;
     /* pass */
     return f;
 }
@@ -89,22 +111,22 @@ __attribute__((hot)) void LFunc_set_term(LFunc* self, LTerm t) {
     /* pass */
     LBlock* b = ((LBlock*)List_ptr_get(self->blocks, self->cur));
     /* pass */
-    __auto_type _t2245 = b->term;
-    if (_t2245.tag == LTerm_TUnset) {
+    __auto_type _t2264 = b->term;
+    if (_t2264.tag == LTerm_TUnset) {
         b->term = t;
     } else if (1) {
-        __auto_type _ = _t2245;
+        __auto_type _ = _t2264;
         /* pass */
     }
 }
 
 __attribute__((hot)) bool LFunc_cur_terminated(LFunc* self) {
     /* pass */
-    __auto_type _t2246 = ((LBlock*)List_ptr_get(self->blocks, self->cur))->term;
-    if (_t2246.tag == LTerm_TUnset) {
+    __auto_type _t2265 = ((LBlock*)List_ptr_get(self->blocks, self->cur))->term;
+    if (_t2265.tag == LTerm_TUnset) {
         return false;
     } else if (1) {
-        __auto_type _ = _t2246;
+        __auto_type _ = _t2265;
         return true;
     }
 }
@@ -295,6 +317,8 @@ __attribute__((malloc,returns_nonnull,hot)) ClassLayout* ClassLayout_init(TrStr 
     /* pass */
     c->fcls = (void*)List_TrStr_new();
     /* pass */
+    c->is_value = false;
+    /* pass */
     return c;
 }
 
@@ -388,7 +412,114 @@ __attribute__((malloc,returns_nonnull,hot)) LModule* LModule_init() {
     /* pass */
     m->fail_note = _tr_str_lit("");
     /* pass */
+    m->unavail_names = (void*)List_TrStr_new();
+    /* pass */
+    m->unavail_notes = (void*)List_TrStr_new();
+    /* pass */
+    m->subst_names = (void*)List_TrStr_new();
+    /* pass */
+    m->subst_tys = (void*)List_ptr_new();
+    /* pass */
+    m->extfn_names = (void*)List_TrStr_new();
+    /* pass */
+    m->extfn_ret = (void*)List_i64_new();
+    /* pass */
+    m->fn_owned_names = (void*)List_TrStr_new();
+    /* pass */
+    m->overloaded_sigs = (void*)List_TrStr_new();
+    /* pass */
+    m->target_llvm = false;
+    /* pass */
     return m;
+}
+
+__attribute__((hot)) void LModule_mark_overloaded(LModule* self, TrStr cls, TrStr method) {
+    /* pass */
+    TrStr key = ({ TrStr _cl = (_tr_strx_concat(_tr_strz(cls), _tr_strz(_tr_str_lit("_")))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(method)); _tr_str_release(_cl); _cres; });
+    /* pass */
+    if (LModule_is_overloaded(self, cls, method)) {
+        /* pass */
+        _tr_str_release(key);
+        return;
+    }
+    /* pass */
+    List_TrStr_append(self->overloaded_sigs, key);
+    _tr_str_release(key);
+}
+
+__attribute__((hot)) bool LModule_is_overloaded(LModule* self, TrStr cls, TrStr method) {
+    /* pass */
+    TrStr key = ({ TrStr _cl = (_tr_strx_concat(_tr_strz(cls), _tr_strz(_tr_str_lit("_")))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(method)); _tr_str_release(_cl); _cres; });
+    /* pass */
+    long long i = 0LL;
+    /* pass */
+    while ((i < self->overloaded_sigs->len)) {
+        /* pass */
+        if ((strcmp(_tr_strz(List_TrStr_get(self->overloaded_sigs, i)), _tr_strz(key)) == 0)) {
+            /* pass */
+            _tr_str_release(key);
+            return true;
+        }
+        /* pass */
+        i = (i + 1LL);
+    }
+    /* pass */
+    _tr_str_release(key);
+    return false;
+}
+
+__attribute__((hot)) TrStr LModule_resolve_method_ov(LModule* self, TrStr cls, TrStr method, long long argc) {
+    /* pass */
+    TrStr cur = _tr_str_retain(cls);
+    /* pass */
+    long long depth = 0LL;
+    /* pass */
+    while ((depth < 32LL)) {
+        /* pass */
+        long long ci = LModule_class_index(self, cur);
+        /* pass */
+        if ((ci < 0LL)) {
+            /* pass */
+            _tr_str_release(cur);
+            return _tr_str_lit("");
+        }
+        /* pass */
+        if (LModule_is_overloaded(self, cur, method)) {
+            /* pass */
+            TrStr mm = ({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(cur), _tr_strz(_tr_str_lit("_")))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(method)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("_"))); _tr_str_release(_cl); _cres; })); TrStr _cr = (_tr_str_wrap(_tr_int_to_str((long long)(argc)))); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("arg"))); _tr_str_release(_cl); _cres; });
+            /* pass */
+            if (LModule_is_user_fn(self, mm)) {
+                /* pass */
+                _tr_str_release(cur);
+                return mm;
+            }
+        }
+        /* pass */
+        TrStr mangled = ({ TrStr _cl = (_tr_strx_concat(_tr_strz(cur), _tr_strz(_tr_str_lit("_")))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(method)); _tr_str_release(_cl); _cres; });
+        /* pass */
+        if (LModule_is_user_fn(self, mangled)) {
+            /* pass */
+            _tr_str_release(cur);
+            return mangled;
+        }
+        /* pass */
+        TrStr _strtmp_t2266 = _tr_str_retain(((ClassLayout*)List_ptr_get(self->classes, ci))->base);
+        _tr_str_release(cur);
+        cur = _strtmp_t2266;
+        /* pass */
+        if (((((unsigned long long)(((char*)(_tr_strz(cur))))) == ((unsigned long long)(0LL))) || (strcmp(_tr_strz(cur), _tr_strz(_tr_str_lit(""))) == 0))) {
+            /* pass */
+            _tr_str_release(cur);
+            _tr_str_release(mangled);
+            return _tr_str_lit("");
+        }
+        /* pass */
+        depth = (depth + 1LL);
+        _tr_str_release(mangled);
+    }
+    /* pass */
+    _tr_str_release(cur);
+    return _tr_str_lit("");
 }
 
 __attribute__((hot)) long long LModule_add_global(LModule* self, TrStr name, long long tag) {
@@ -516,6 +647,96 @@ __attribute__((hot)) bool LModule_is_user_fn(LModule* self, TrStr name) {
     return false;
 }
 
+__attribute__((hot)) bool LModule_is_extern_fn(LModule* self, TrStr name) {
+    /* pass */
+    long long i = 0LL;
+    /* pass */
+    while ((i < self->extfn_names->len)) {
+        /* pass */
+        if ((strcmp(_tr_strz(List_TrStr_get(self->extfn_names, i)), _tr_strz(name)) == 0)) {
+            /* pass */
+            return true;
+        }
+        /* pass */
+        i = (i + 1LL);
+    }
+    /* pass */
+    return false;
+}
+
+__attribute__((hot)) long long LModule_extern_ret_tag(LModule* self, TrStr name) {
+    /* pass */
+    long long i = 0LL;
+    /* pass */
+    while ((i < self->extfn_names->len)) {
+        /* pass */
+        if ((strcmp(_tr_strz(List_TrStr_get(self->extfn_names, i)), _tr_strz(name)) == 0)) {
+            /* pass */
+            return List_i64_get(self->extfn_ret, i);
+        }
+        /* pass */
+        i = (i + 1LL);
+    }
+    /* pass */
+    return 0LL;
+}
+
+__attribute__((hot)) void LModule_mark_fn_owned(LModule* self, TrStr name) {
+    /* pass */
+    long long i = 0LL;
+    /* pass */
+    while ((i < self->fn_owned_names->len)) {
+        /* pass */
+        if ((strcmp(_tr_strz(List_TrStr_get(self->fn_owned_names, i)), _tr_strz(name)) == 0)) {
+            /* pass */
+            return;
+        }
+        /* pass */
+        i = (i + 1LL);
+    }
+    /* pass */
+    List_TrStr_append(self->fn_owned_names, name);
+}
+
+__attribute__((hot)) bool LModule_fn_ret_owned(LModule* self, TrStr name) {
+    /* pass */
+    long long i = 0LL;
+    /* pass */
+    while ((i < self->fn_owned_names->len)) {
+        /* pass */
+        if ((strcmp(_tr_strz(List_TrStr_get(self->fn_owned_names, i)), _tr_strz(name)) == 0)) {
+            /* pass */
+            return true;
+        }
+        /* pass */
+        i = (i + 1LL);
+    }
+    /* pass */
+    return false;
+}
+
+__attribute__((hot)) long long LModule_unavail_index(LModule* self, TrStr name) {
+    /* pass */
+    if ((((unsigned long long)(((char*)(_tr_strz(name))))) == ((unsigned long long)(0LL)))) {
+        /* pass */
+        return (-1LL);
+    }
+    /* pass */
+    long long i = 0LL;
+    /* pass */
+    while ((i < self->unavail_names->len)) {
+        /* pass */
+        if ((strcmp(_tr_strz(List_TrStr_get(self->unavail_names, i)), _tr_strz(name)) == 0)) {
+            /* pass */
+            return i;
+        }
+        /* pass */
+        i = (i + 1LL);
+    }
+    /* pass */
+    return (-1LL);
+}
+
 __attribute__((hot)) void LModule_add_class(LModule* self, ClassLayout* cl) {
     /* pass */
     List_ptr_append(self->classes, _tr_obj_retain(cl));
@@ -546,6 +767,18 @@ __attribute__((hot)) long long LModule_class_index(LModule* self, TrStr name) {
 __attribute__((hot)) bool LModule_is_class(LModule* self, TrStr name) {
     /* pass */
     return (LModule_class_index(self, name) >= 0LL);
+}
+
+__attribute__((hot)) bool LModule_is_value_class(LModule* self, TrStr name) {
+    /* pass */
+    long long ci = LModule_class_index(self, name);
+    /* pass */
+    if ((ci < 0LL)) {
+        /* pass */
+        return false;
+    }
+    /* pass */
+    return ((ClassLayout*)List_ptr_get(self->classes, ci))->is_value;
 }
 
 __attribute__((hot)) long long LModule_class_size(LModule* self, TrStr name) {
@@ -629,9 +862,9 @@ __attribute__((hot)) TrStr LModule_resolve_method(LModule* self, TrStr cls, TrSt
             return mangled;
         }
         /* pass */
-        TrStr _strtmp_t2247 = _tr_str_retain(((ClassLayout*)List_ptr_get(self->classes, ci))->base);
+        TrStr _strtmp_t2267 = _tr_str_retain(((ClassLayout*)List_ptr_get(self->classes, ci))->base);
         _tr_str_release(cur);
-        cur = _strtmp_t2247;
+        cur = _strtmp_t2267;
         /* pass */
         if (((((unsigned long long)(((char*)(_tr_strz(cur))))) == ((unsigned long long)(0LL))) || (strcmp(_tr_strz(cur), _tr_strz(_tr_str_lit(""))) == 0))) {
             /* pass */

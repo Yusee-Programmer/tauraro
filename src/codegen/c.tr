@@ -126,6 +126,25 @@ pub def _escape_str_for_c(s: str) -> str:
         i = i + 1
     return sb.to_string().as_str()
 
+# Like _escape_str_for_c but for f-string LITERAL text, which becomes part of a printf
+# format string: a bare '%' would be read as a conversion (and eat an argument).
+pub def _escape_fmt_for_c(s: str) -> str:
+    mut sb = StringBuilder.init(64)
+    mut p = s as Pointer[char]
+    mut i = 0
+    while True:
+        mut c = p.offset(i).read() as int
+        if c == 0: break
+        if c == 37: sb.append("%%")
+        elif c == 34: sb.append("\\\"")
+        elif c == 92: sb.append("\\\\")
+        elif c == 10: sb.append("\\n")
+        elif c == 13: sb.append("\\r")
+        elif c == 9: sb.append("\\t")
+        else: sb.append_char(c)
+        i = i + 1
+    return sb.to_string().as_str()
+
 # --- CGenerator class ---------------------------------------------------------
 
 pub class CGenerator:
@@ -1376,9 +1395,12 @@ pub class CGenerator:
         if f.name == "main" or f.name == "_tr_main":
             return "__attribute__((hot)) "
         if f.name == "init":
-            # A value-type `init` returns the struct BY VALUE — `malloc` /
-            # `returns_nonnull` are pointer-only attributes and are invalid here.
+            # A value-type `init` returns the struct BY VALUE, and a `-> void`
+            # init returns nothing — `malloc` / `returns_nonnull` are pointer-only
+            # attributes and are invalid in both cases.
             if self.value_types.contains(f.class_name):
+                return "static __attribute__((hot)) "
+            if f.ret_ty.name == "void" or f.ret_ty.name == "" or f.ret_ty.name == "None":
                 return "static __attribute__((hot)) "
             return "static __attribute__((malloc,returns_nonnull,hot)) "
         return "static __attribute__((hot)) "
@@ -1409,6 +1431,8 @@ pub class CGenerator:
             return "__attribute__((hot)) "
         if f.name == "init":
             if self.value_types.contains(f.class_name):
+                return "__attribute__((hot)) "
+            if f.ret_ty.name == "void" or f.ret_ty.name == "" or f.ret_ty.name == "None":
                 return "__attribute__((hot)) "
             return "__attribute__((malloc,returns_nonnull,hot)) "
         return "__attribute__((hot)) "
@@ -2305,6 +2329,9 @@ pub class CGenerator:
             if _is_str_type(set_tn): set_fmt = "_tr_fmt_str"
             return "({ List_TrStr* _sl = _tr_set_to_list(" + s + "); char* _r = _tr_collection_to_str((void*)_sl->data, _sl->len, sizeof(TrStr), " + set_fmt + ", \"{\", \"}\", \", \"); List_TrStr_free(_sl); _r; })"
         if cn == "Dict" or cn == "Map":
+            mut key_ty = AstType.init("str")
+            if ty.args.len > 0: key_ty = ty.args.get(0).read()
+            mut key_tn: str = self.resolve_generic_prim(key_ty.name)
             mut val_ty = AstType.init("str")
             if ty.args.len > 1: val_ty = ty.args.get(1).read()
             mut val_tn: str = self.resolve_generic_prim(val_ty.name)
@@ -2315,6 +2342,13 @@ pub class CGenerator:
             if _is_str_type(val_tn): vfmt = "_tr_fmt_str_box"
             mut vsize = "sizeof(void*)"
             if _is_float_type(val_tn): vsize = "sizeof(double)"
+            # #27: an INT-keyed dict is a TrIDict*, not a TrMap*. The _ks (key-stride)
+            # formatter + idict accessors are the right shape, but a deeper
+            # _tr_idict_keys read-back bug (#27b) still yields a garbage 2nd key, so
+            # print(Dict[int, V]) is intentionally NOT emitted here until that's fixed —
+            # falls through to the default obj-str rather than shipping wrong output.
+            if _is_int_type(key_tn):
+                return "_tr_default_obj_str(\"Dict\", (void*)(" + s + "))"
             return "({ List_TrStr* _dk = _tr_dict_keys(" + s + "); List_ptr* _dv = _tr_dict_values(" + s + "); char* _r = _tr_dict_to_str((void*)_dk->data, (void*)_dv->data, _dk->len, " + vsize + ", _tr_fmt_str, " + vfmt + "); List_TrStr_free(_dk); List_ptr_free(_dv); _r; })"
         return "_tr_default_obj_str(\"" + cn + "\", (void*)(" + s + "))"
 
@@ -2573,9 +2607,18 @@ pub class CGenerator:
     pub def is_heap_class_tn(self, tn: str) -> bool:
         if not self.classes.contains(tn): return false
         if self.value_types.contains(tn): return false
+        # #26: a GENERIC template name (Pairq) is not a concrete heap class — its
+        # instances are monos (Pairq_int); dropping by the template name emitted an
+        # undefined _trdrop_<Template> reference.
+        if self.classes.get(tn).generics.len > 0: return false
         # Pointer-aliased types (e.g. AstType, HIR nodes) are shared via raw
         # Pointer[T] that bypasses the refcount — never auto-drop them.
         if self.raw_aliased.contains(tn): return false
+        # A class with an explicit `free()` (e.g. std/async Channel, WaitGroup) opts OUT of
+        # _trdrop-based auto-ARC and self-manages: no `_trdrop_<T>` is emitted for it (see
+        # emit_drop_fwd_decls / gen_class_struct). Treating it as an auto-ARC heap class would
+        # emit `_tr_obj_release(x, _trdrop_<T>)` referencing an undefined function.
+        if self.has_method(tn, "free"): return false
         if tn == "Vec" or tn == "Map" or tn == "List" or tn == "Dict" or tn == "Set" or tn == "Box" or tn == "Mutex" or tn == "RwLock" or tn == "Atomic" or tn == "Shared" or tn == "Option" or tn == "Result" or tn == "Chan" or tn == "StringBuilder" or tn == "StringObj": return false
         return true
 
@@ -2895,6 +2938,12 @@ pub class CGenerator:
             mut o_full_ty = hir_expr_type(o)
             if o_full_ty.args.len > 0 and _is_str_type(self.resolve_generic_prim(o_full_ty.args.get(0).read().name)):
                 return "_tr_str_lit(" + idx_r + ")"
+            # #25: a List[Class] PARAM types as List_ptr (void** data) — element access
+            # needs an explicit cast or `->field` on the element is invalid C.
+            if o_full_ty.args.len > 0:
+                mut _lie = o_full_ty.args.get(0).read()
+                if self.is_heap_class_tn(_lie.name):
+                    return "((" + _lie.name + "*)" + idx_r + ")"
             return idx_r
         if self.classes.contains(ty_n) and ty_n != "Vec" and ty_n != "List" and ty_n != "Map" and ty_n != "Dict":
             if self.has_method(ty_n, "__getitem__"):
@@ -3703,6 +3752,10 @@ pub class CGenerator:
             mut _dvr = self.obj_retain_wrap(e, e_s, false)
             if self._obj_store_needs_retain(e): _dvr = "_tr_obj_retain(" + _dvr + ")"
             return _dvr
+        # Float value: reinterpret the f64 bits into the void* slot (#24 — passing a
+        # raw double to a void* parameter stored garbage/truncated values).
+        if _is_float_type(self.resolve_generic_prim(hir_expr_type(e).name)):
+            return "_tr_f64_to_ptr((double)(" + e_s + "))"
         return e_s
 
     # Like gen_args, but unwraps any TrStr-typed argument to raw char* via
@@ -5045,6 +5098,10 @@ pub class CGenerator:
                     if _is_str_type(call_ty.name):
                         if self.eliding_get_retain: return "_tr_str_unbox(" + iget_r + ")"
                         return "_tr_str_retain(_tr_str_unbox(" + iget_r + "))"
+                    # Float value (#24): the slot holds the f64 BIT PATTERN — reinterpret,
+                    # never arithmetic-cast (that truncated 1.5 -> 1).
+                    if _is_float_type(call_ty.name):
+                        return "_tr_ptr_to_f64(" + iget_r + ")"
                     if c_ty_c != "void" and c_ty_c != "":
                         return "((" + c_ty_c + ")(uintptr_t)" + iget_r + ")"
                     return iget_r
@@ -5052,6 +5109,8 @@ pub class CGenerator:
                 if _is_str_type(call_ty.name):
                     if self.eliding_get_retain: return "_tr_str_unbox(" + mget_r + ")"
                     return "_tr_str_retain(_tr_str_unbox(" + mget_r + "))"
+                if _is_float_type(call_ty.name):
+                    return "_tr_ptr_to_f64(" + mget_r + ")"
                 if c_ty_c != "void" and c_ty_c != "":
                     return "((" + c_ty_c + ")(uintptr_t)" + mget_r + ")"
                 return mget_r
@@ -5143,7 +5202,7 @@ pub class CGenerator:
         while i < parts.len:
             mut part = parts.get(i)
             if not part.is_expr:
-                fmt = fmt + _escape_str_for_c(part.text)
+                fmt = fmt + _escape_fmt_for_c(part.text)
             else:
                 mut s = self.gen_expr(part.expr)
                 mut ty_n: str = hir_expr_type(part.expr).name
@@ -5156,15 +5215,45 @@ pub class CGenerator:
                     mut last_c = spec.char_at(spec_n - 1)
                     # Float specs: f, e, E, g, G
                     if last_c == 102 or last_c == 101 or last_c == 69 or last_c == 103 or last_c == 71:
-                        fmt = fmt + "%" + spec
+                        mut fspec = spec
+                        if fspec.starts_with(">") or fspec.starts_with("^") or fspec.starts_with("<"):
+                            fspec = fspec.slice(1, fspec.len())
+                        fmt = fmt + "%" + fspec
                         fargs = fargs + ", (double)(" + s + ")"
-                    # Integer specs: d, i, u, o, x, X
+                    # Integer specs: d, i, u, o, x, X — translate align/group/width into
+                    # a real printf directive (with the "ll" length modifier).
                     elif last_c == 100 or last_c == 105 or last_c == 117 or last_c == 111 or last_c == 120 or last_c == 88:
-                        fmt = fmt + "%" + spec
-                        fargs = fargs + ", (long long)(" + s + ")"
+                        mut iconv_s = spec.slice(spec_n - 1, spec_n)
+                        mut ispec = spec.slice(0, spec_n - 1)
+                        mut igrouped = false
+                        if ispec.len() > 0 and ispec.char_at(ispec.len() - 1) == 44:
+                            igrouped = true
+                            ispec = ispec.slice(0, ispec.len() - 1)
+                        mut ileft = false
+                        if ispec.starts_with(">") or ispec.starts_with("^"):
+                            ispec = ispec.slice(1, ispec.len())
+                        elif ispec.starts_with("<"):
+                            ileft = true
+                            ispec = ispec.slice(1, ispec.len())
+                        mut ipfx = "%"
+                        if ileft: ipfx = "%-"
+                        if igrouped:
+                            fmt = fmt + ipfx + ispec + "s"
+                            fargs = fargs + ", _tr_i64_grouped((long long)(" + s + "))"
+                        else:
+                            fmt = fmt + ipfx + ispec + "ll" + iconv_s
+                            fargs = fargs + ", (long long)(" + s + ")"
                     # String specs: s (width/alignment)
                     elif last_c == 115:
-                        fmt = fmt + "%" + spec
+                        mut sspec = spec
+                        mut sleft = false
+                        if sspec.starts_with(">") or sspec.starts_with("^"):
+                            sspec = sspec.slice(1, sspec.len())
+                        elif sspec.starts_with("<"):
+                            sleft = true
+                            sspec = sspec.slice(1, sspec.len())
+                        if sleft: fmt = fmt + "%-" + sspec
+                        else:     fmt = fmt + "%" + sspec
                         if _is_int_type(ty_n):
                             fargs = fargs + ", _tr_int_to_str(" + s + ")"
                         elif _is_float_type(ty_n):
@@ -6418,12 +6507,16 @@ pub class CGenerator:
                                 match v.read():
                                     case HirExpr.EPropAccess(_, _, _): pass
                                     case _: self.str_local_names.insert(n, true)
-                        elif self.is_heap_class_tn(hir_expr_type(v).name):
+                        elif self.is_heap_class_tn(hir_expr_type(v).name) and not self.interfaces.contains(ty.name):
                             # Refcounted heap class. A proven borrow is a zero-cost
                             # alias (no retain/release, not tracked). Otherwise this
                             # local OWNS a reference: retain aliases (a fresh ctor /
                             # owned `-> T` result is already rc=1), own `-> ref`
                             # results, and register for release at scope exit.
+                            # NOTE: an INTERFACE-typed target (`x: Animal = dog`) is excluded —
+                            # init_s is already the fat-pointer cast `Dog_as_Animal(dog)`, so an
+                            # `_tr_obj_retain(<struct>)` around it is a C type error. The interface
+                            # local borrows the underlying object (never drop-tracked), so no retain.
                             if self.cur_proven_borrows.contains(n):
                                 pass
                             else:

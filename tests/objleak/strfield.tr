@@ -1,0 +1,32 @@
+# Object-leak oracle: a class with an owned STR field. When an instance is released, its
+# generated <Class>__drop must release the str field too — so both the object count AND
+# the string count return to 0. The last line prints obj_live + str_live (must be 0).
+extern "C":
+    def _tr_rt_obj_live_count() -> int
+    def _tr_rt_str_live_count() -> int
+
+class Person:
+    name: str
+    age: int
+
+extend Person:
+    def init(name: str, age: int) -> Person:
+        mut p = Person()
+        p.name = name
+        p.age = age
+        return p
+    def greet(self) -> int:
+        return self.age
+
+def run(n: int) -> int:
+    mut acc = 0
+    mut i = 0
+    while i < n:
+        mut p = Person.init("hello world", i)
+        acc = acc + p.greet()
+        i = i + 1
+    return acc
+
+def main():
+    print(run(1000))
+    print(_tr_rt_obj_live_count() + _tr_rt_str_live_count())  # 0 iff the str field is released

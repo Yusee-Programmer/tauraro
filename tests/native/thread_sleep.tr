@@ -1,0 +1,10 @@
+def work(n: int) -> int:
+    Thread.sleep(1)
+    return n * 2
+
+def main():
+    print("start")
+    mut r = work(21)
+    Thread.sleep(2)
+    print(r)
+    print("done")

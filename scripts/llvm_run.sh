@@ -37,6 +37,7 @@ fi
 # default triple is correct.
 TRIPLE=""
 case "$(uname -s 2>/dev/null)" in *NT*|*MINGW*|*MSYS*|*CYGWIN*) TRIPLE="x86_64-pc-windows-gnu";; esac
+WINLIB=""; [ -n "$TRIPLE" ] && WINLIB="-lws2_32 -lucrtbase"  # runtime.o always exports the async scheduler (WSAPoll) now
 
 echo "=============================================================="
 echo "  LLVM backend LINK + RUN — taumir LIR -> LLVM IR (no C)"
@@ -83,13 +84,13 @@ echo "  emitted build/llvm_p.ll ($(wc -c < build/llvm_p.ll) bytes) — from .tr,
 # Build an executable: prefer clang (accepts .ll directly, applies -O2); else llc -> obj -> CC.
 if [ "$HAVE_CLANG" = 1 ]; then
     CLANG_FLAGS="-O2"; [ -n "$TRIPLE" ] && CLANG_FLAGS="$CLANG_FLAGS -target $TRIPLE"
-    "$CLANGBIN" $CLANG_FLAGS build/llvm_p.ll build/runtime.o -lm -o build/llvm_p 2>/tmp/llvm_ld.log \
+    "$CLANGBIN" $CLANG_FLAGS build/llvm_p.ll build/runtime.o  -lm $WINLIB -o build/llvm_p 2>/tmp/llvm_ld.log \
         || { echo "FAIL: clang compile/link"; sed -n '1,20p' /tmp/llvm_ld.log; exit 1; }
 else
     LLC_FLAGS="-O2 -filetype=obj"; [ -n "$TRIPLE" ] && LLC_FLAGS="$LLC_FLAGS -mtriple=$TRIPLE"
     "$LLCBIN" $LLC_FLAGS build/llvm_p.ll -o build/llvm_p.o 2>/tmp/llvm_llc.log \
         || { echo "FAIL: llc"; sed -n '1,20p' /tmp/llvm_llc.log; exit 1; }
-    "$CC" build/llvm_p.o build/runtime.o -lm -o build/llvm_p 2>/tmp/llvm_ld.log \
+    "$CC" build/llvm_p.o build/runtime.o  -lm $WINLIB -o build/llvm_p 2>/tmp/llvm_ld.log \
         || { echo "FAIL: link"; sed -n '1,20p' /tmp/llvm_ld.log; exit 1; }
 fi
 

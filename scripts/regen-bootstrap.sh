@@ -22,4 +22,8 @@ rm -rf build
 rm -rf bootstrap/c
 mkdir -p bootstrap
 cp -r build bootstrap/c
+# The in-process LLVM shim (stub by default) must be in the C seed so the stage0 build
+# resolves _tr_llvm_emit_object. The stage0 command globs bootstrap/c/module_*.c, so copy
+# it in under a module_* name to be picked up without changing the seed compile line.
+cp runtime/tauraro_llvm.c bootstrap/c/module_tauraro_llvm.c
 echo "==> Regenerated bootstrap/c/ ($(find bootstrap/c -type f | wc -l) files). Review + commit the tree."

@@ -1,0 +1,56 @@
+# native≡c / llvm≡c differential corpus: lexical try/except/raise — zero-cost branch
+# model (raise inside a try = a jump; no setjmp on the non-throwing path).
+def checked_div(a: int, b: int) -> int:
+    mut r = 0
+    try:
+        if b == 0:
+            raise "divide by zero"
+        r = a / b
+    except e:
+        print(e)
+        r = 0 - 1
+    return r
+
+def main():
+    print(checked_div(10, 2))     # 5
+    print(checked_div(7, 0))      # divide by zero / -1
+
+    # bare except + normal completion
+    mut n = 0
+    try:
+        n = 41
+    except:
+        n = 0
+    print(n + 1)                  # 42
+
+    # finally runs on both paths
+    mut r = 0
+    try:
+        r = 5
+    except:
+        r = 9
+    finally:
+        r = r + 100
+    print(r)                      # 105
+    try:
+        raise "bang"
+    except:
+        r = 1
+    finally:
+        r = r + 10
+    print(r)                      # 11
+
+    # nested try: inner raise caught by inner; raise in except -> outer.
+    # (Prints markers rather than accumulating a local across the raise: the C
+    # backend's setjmp model leaves non-volatile locals modified inside `try`
+    # INDETERMINATE after longjmp — C bug #22; the LIR branch model has no such UB.)
+    try:
+        try:
+            raise "inner"
+        except:
+            print("caught-inner")
+            raise "escalated"
+        print("unreachable")
+    except e2:
+        print(e2)                 # escalated
+    print("done")

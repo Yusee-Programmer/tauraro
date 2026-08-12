@@ -8,6 +8,7 @@
 
 from core.alloc import alloc
 from hir import HirStmt, HirProgram
+from ast import AstType
 
 pub enum LType:
     LVoid
@@ -37,6 +38,13 @@ pub enum LInst:
     IAddrVar(dst: int, name: str)               # dst = address of var's stack slot (closure captures)
     IFuncAddr(dst: int, fname: str)             # dst = address of a defined function
     ICallInd(dst: int, fnreg: int, args: Vec[int])  # indirect call through the pointer in fnreg
+    IAsm(code: str, cons: str)                       # inline asm: LLVM `call void asm sideeffect`
+    ILoad(dst: int, base: int, off: int, aclass: int)   # dst = *(int64_t*)(base + off)  (inline mem load)
+    IStore(base: int, off: int, src: int, aclass: int)  # *(int64_t*)(base + off) = src  (inline mem store)
+                                                     # aclass = TBAA alias class (LLVM only; native ignores):
+                                                     # 0 generic, 1 list header, 2 list element, 3 obj field
+    ILoadB(dst: int, base: int, off: int)            # dst = zext(*(uint8_t*)(base + off))  — 1-byte elem load
+    IStoreB(base: int, off: int, src: int)           # *(uint8_t*)(base + off) = trunc(src) — 1-byte elem store
 
 # Block terminator (exactly one per block).
 pub enum LTerm:
@@ -81,10 +89,21 @@ pub class LFunc:
     pub loop_cont:  Vec[int]        # stack of `continue` target block ids (innermost = last)
     pub loop_brk:   Vec[int]        # stack of `break` target block ids (innermost = last)
     pub fresh_strs: Vec[int]        # ARC: vregs holding a fresh owned str not yet consumed
+    pub fresh_objs: Vec[int]        # ARC: vregs holding a fresh owned object (ctor result) not yet consumed
     pub captures:   Vec[str]        # OUTLINED CLOSURE body: captured var names (by-ref via env)
     pub cap_tags:   Vec[int]        # parallel: value-type tag of each capture
     pub var_xret:   Vec[int]        # parallel to vars: closure return tag (-1 = not a closure)
     pub vreg_xret:  Vec[int]        # parallel to vregs: closure return tag (-1 = not a closure)
+    pub try_blks:   Vec[int]        # innermost-last: except-entry block ids (lexical try/except)
+    pub try_msgs:   Vec[str]        # parallel: synthetic var holding the raised message
+    pub defers:     Vec[Pointer[HirStmt]]  # `defer` stmts (LIFO at every function exit)
+    pub mutex_unlocks: Vec[str]            # Mutex vars locked via .lock()/.get() -> auto-unlock at exit (RAII)
+    pub blk_depth:  int             # lower_block nesting (1 = the function's own body)
+    pub in_defer:   bool            # lowering a deferred stmt (rejects nested defer/return)
+    pub is_throws:  bool            # `throws E` fn: return -> Result.Ok(v), raise(e) -> Result.Err(e)
+    pub throws_ok_tag:  int         # value-type tag of the Ok payload (declared return type)
+    pub throws_err_tag: int         # value-type tag of the Err payload (throws error type)
+    pub in_taskgroup:   int         # >0 while lowering a task_group body: spawns join at group end
 
 extend LFunc:
     pub def init(name: str) -> LFunc:
@@ -103,10 +122,21 @@ extend LFunc:
         f.loop_cont  = Vec[int].init(4)
         f.loop_brk   = Vec[int].init(4)
         f.fresh_strs = Vec[int].init(8)
+        f.fresh_objs = Vec[int].init(8)
         f.captures   = Vec[str].init(2)
         f.cap_tags   = Vec[int].init(2)
         f.var_xret   = Vec[int].init(4)
         f.vreg_xret  = Vec[int].init(8)
+        f.try_blks   = Vec[int].init(2)
+        f.try_msgs   = Vec[str].init(2)
+        f.defers     = Vec[Pointer[HirStmt]].init(2)
+        f.mutex_unlocks = Vec[str].init(2)
+        f.blk_depth  = 0
+        f.in_defer   = false
+        f.is_throws  = false
+        f.throws_ok_tag  = 0
+        f.throws_err_tag = 0
+        f.in_taskgroup   = 0
         return f
 
     # A monotonically increasing id, for building unique synthesized variable names
@@ -225,6 +255,7 @@ pub class ClassLayout:
     pub fields: Vec[str]        # field names in declaration order (incl. inherited, first)
     pub ftags:  Vec[int]        # parallel: value-type tag of each field
     pub fcls:   Vec[str]        # parallel: class/enum name for object fields ("" if scalar)
+    pub is_value: bool          # @value_type: stored INLINE by value (no heap handle, copy on assign)
 
 extend ClassLayout:
     pub def init(name: str) -> ClassLayout:
@@ -234,6 +265,7 @@ extend ClassLayout:
         c.fields = Vec[str].init(4)
         c.ftags  = Vec[int].init(4)
         c.fcls   = Vec[str].init(4)
+        c.is_value = false
         return c
 
     pub def field_index(self, fname: str) -> int:
@@ -296,6 +328,19 @@ pub class LModule:
                                             # instantiated lazily from here at call sites)
     pub ok:       bool
     pub fail_note: str                      # when ok=false: which fn/construct failed (diagnostics)
+    pub unavail_names: Vec[str]             # fns whose BODY couldn't lower (lazy reachability:
+    pub unavail_notes: Vec[str]             # only fatal if a LOWERED fn actually calls one)
+    pub subst_names: Vec[str]               # active generic-class substitution (T -> concrete),
+    pub subst_tys:   Vec[Pointer[AstType]]  # consulted by _tag_of while lowering an instantiation
+    pub extfn_names: Vec[str]               # extern "C" fn names (call targets, linker-resolved)
+    pub extfn_ret:   Vec[int]               # parallel: return value-type tag
+    pub fn_owned_names: Vec[str]            # ARC: mangled fns whose object return is OWNED (fresh)
+                                            # by the caller (sema returns_owned). Fail-safe SET:
+                                            # a missing entry -> treated as a borrow -> leak, never UAF.
+    pub overloaded_sigs: Vec[str]           # "Cls_method" keys where >1 same-name method exists;
+                                            # such methods mangle to Cls_method_<Nargs>arg (matches C).
+    pub target_llvm: bool                   # true when lowering for the LLVM backend (which passes
+                                            # call args on the stack past 6, unlike the native reg ABI).
 
 extend LModule:
     pub def init() -> LModule:
@@ -313,7 +358,50 @@ extend LModule:
         m.global_inits = Vec[Pointer[HirStmt]].init(4)
         m.ok       = true
         m.fail_note = ""
+        m.unavail_names = Vec[str].init(4)
+        m.unavail_notes = Vec[str].init(4)
+        m.subst_names = Vec[str].init(2)
+        m.subst_tys   = Vec[Pointer[AstType]].init(2)
+        m.extfn_names = Vec[str].init(4)
+        m.extfn_ret   = Vec[int].init(4)
+        m.fn_owned_names = Vec[str].init(8)
+        m.overloaded_sigs = Vec[str].init(4)
+        m.target_llvm = false
         return m
+
+    # Method-overload registry (mirrors the C backend's overloaded_sigs). A method name
+    # is "overloaded" when its class declares >1 method with that name; such methods are
+    # emitted + dispatched as `Cls_method_<Nargs>arg` (self excluded from the count).
+    pub def mark_overloaded(self, cls: str, method: str):
+        mut key = cls + "_" + method
+        if self.is_overloaded(cls, method): return
+        self.overloaded_sigs.push(key)
+
+    pub def is_overloaded(self, cls: str, method: str) -> bool:
+        mut key = cls + "_" + method
+        mut i = 0
+        while i < self.overloaded_sigs.len:
+            if self.overloaded_sigs.get(i) == key: return true
+            i = i + 1
+        return false
+
+    # resolve_method, but overload-aware: when the defining class marks `method` as
+    # overloaded, prefer the `_<argc>arg`-mangled name; else fall back to the bare name.
+    pub def resolve_method_ov(self, cls: str, method: str, argc: int) -> str:
+        mut cur = cls
+        mut depth = 0
+        while depth < 32:                       # cycle guard
+            mut ci = self.class_index(cur)
+            if ci < 0: return ""
+            if self.is_overloaded(cur, method):
+                mut mm = cur + "_" + method + "_" + argc.to_str() + "arg"
+                if self.is_user_fn(mm): return mm
+            mut mangled = cur + "_" + method
+            if self.is_user_fn(mangled): return mangled
+            cur = self.classes.get(ci).base
+            if (cur as Pointer[char]) as usize == 0 as usize or cur == "": return ""
+            depth = depth + 1
+        return ""
 
     # Register a module-level global; returns its slot index (dedup by name).
     pub def add_global(self, name: str, tag: int) -> int:
@@ -371,6 +459,46 @@ extend LModule:
             i = i + 1
         return false
 
+    pub def is_extern_fn(self, name: str) -> bool:
+        mut i = 0
+        while i < self.extfn_names.len:
+            if self.extfn_names.get(i) == name: return true
+            i = i + 1
+        return false
+
+    pub def extern_ret_tag(self, name: str) -> int:
+        mut i = 0
+        while i < self.extfn_names.len:
+            if self.extfn_names.get(i) == name: return self.extfn_ret.get(i)
+            i = i + 1
+        return 0
+
+    # ARC: record that `name` returns an OWNED (fresh) object to its caller. Dedup.
+    pub def mark_fn_owned(self, name: str):
+        mut i = 0
+        while i < self.fn_owned_names.len:
+            if self.fn_owned_names.get(i) == name: return
+            i = i + 1
+        self.fn_owned_names.push(name)
+
+    # ARC: does `name`'s object return transfer ownership (fresh) to the caller? A missing
+    # entry answers false -> the result is treated as a borrow -> at worst a leak, never a UAF.
+    pub def fn_ret_owned(self, name: str) -> bool:
+        mut i = 0
+        while i < self.fn_owned_names.len:
+            if self.fn_owned_names.get(i) == name: return true
+            i = i + 1
+        return false
+
+    # Index into unavail_names (-1 = the fn lowered fine / unknown).
+    pub def unavail_index(self, name: str) -> int:
+        if (name as Pointer[char]) as usize == 0 as usize: return -1
+        mut i = 0
+        while i < self.unavail_names.len:
+            if self.unavail_names.get(i) == name: return i
+            i = i + 1
+        return -1
+
     # -- object model: class layout registry --------------------------------------------
     pub def add_class(self, cl: ClassLayout):
         self.classes.push(cl)
@@ -385,6 +513,12 @@ extend LModule:
 
     pub def is_class(self, name: str) -> bool:
         return self.class_index(name) >= 0
+
+    # True for a @value_type class: stored INLINE by value (no heap handle; copy on assign).
+    pub def is_value_class(self, name: str) -> bool:
+        mut ci = self.class_index(name)
+        if ci < 0: return false
+        return self.classes.get(ci).is_value
 
     # Instance size in bytes (every field is an 8-byte slot).
     pub def class_size(self, name: str) -> int:

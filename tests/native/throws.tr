@@ -1,0 +1,31 @@
+# native≡c / llvm≡c differential corpus: `throws E` functions (Result model) + `?`.
+def check(s: str) throws str -> int:
+    if len(s) == 0:
+        raise("empty")
+    return len(s)
+
+def doubled(s: str) throws str -> int:
+    mut n = check(s)?            # propagate: Err short-circuits, Ok unwraps
+    return n * 2
+
+def main():
+    match check("hello"):
+        case Result.Ok(v):
+            print(v)             # 5
+        case Result.Err(e):
+            print(0)
+    match check(""):
+        case Result.Ok(v):
+            print(v)
+        case Result.Err(e):
+            print(99)            # 99
+    match doubled("abc"):
+        case Result.Ok(v):
+            print(v)             # 6
+        case Result.Err(e):
+            print(0)
+    match doubled(""):
+        case Result.Ok(v):
+            print(v)
+        case Result.Err(e):
+            print(88)            # 88 (propagated Err)

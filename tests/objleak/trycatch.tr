@@ -1,0 +1,36 @@
+# Object-leak oracle: try/except in a loop. The env block (obj_alloc'd scratch that the
+# setjmp model builds per try) must be RELEASED after each _tr_rt_try_catch, so the live
+# count is 0 at exit. (Owned locals DECLARED inside a try body intentionally leak on both
+# backends — longjmp can't run their cleanup — so the Node here lives in the ENCLOSING
+# scope, dropped normally by the loop body regardless of the try.)
+extern "C":
+    def _tr_rt_obj_live_count() -> int
+
+class Node:
+    v: int
+
+extend Node:
+    def init(v: int) -> Node:
+        mut n = Node()
+        n.v = v
+        return n
+
+def safe(x: int) -> int:
+    if x < 0: raise("negative")
+    return x + 1
+
+def run(iters: int) -> int:
+    mut total = 0
+    mut i = 0
+    while i < iters:
+        mut n = Node.init(i)          # enclosing local -> dropped by the loop body
+        try:
+            total = total + safe(n.v) # scalar work; env is built+freed each iteration
+        except e:
+            total = total + 0
+        i = i + 1
+    return total
+
+def main():
+    print(run(1000))                # sum(i+1 for i in 0..999) = 500500
+    print(_tr_rt_obj_live_count())  # 0 (every env freed, every Node dropped)

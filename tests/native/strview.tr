@@ -1,0 +1,30 @@
+# Str / StrView std-library interception (LLVM/native backend routes these to the rc'd
+# _tr_rt_str_* runtime instead of the C backend's fat-pointer TrStr ABI). Must be
+# byte-identical between the C and LLVM backends.
+from string.str import Str
+from string.str import StrView
+
+def main():
+    mut s = "wonderful world"
+    print(Str.len(s))                 # 15
+    print(Str.slice(s, 0, 9))         # wonderful
+    print(Str.slice(s, 10, 15))       # world
+    print(Str.index_of(s, "world"))   # 10
+
+    # StrView: zero-copy views + one materializing to_str()
+    mut v = StrView.all(s)
+    print(v.length())                 # 15
+    print(v.char_at(0))               # w   (borrowed byte read, no copy)
+    mut head = StrView.of(s, 0, 9)
+    print(head.to_str())              # wonderful
+    print(head.char_at(3))            # d
+    mut sub = head.slice(0, 4)        # zero-copy sub-view
+    print(sub.length())               # 4
+    print(sub.to_str())               # wond
+    mut tail = StrView.of(s, 10, 5)
+    print(tail.to_str())              # world
+
+    # slice result flows through a variable (exercises ARC release of the rc string)
+    mut part: str = Str.slice(s, 0, 9)
+    print(part)                       # wonderful
+    print(Str.len(part))              # 9

@@ -1,0 +1,10 @@
+def main():
+    mut x = 5
+    unsafe:
+        asm("nop")
+        asm("nop")
+    x = x + 1
+    print(x)
+    unsafe:
+        asm("", "", "", "memory")
+    print("barrier ok")

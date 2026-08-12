@@ -1,0 +1,35 @@
+# native≡c / llvm≡c differential corpus: __str__ in print / f-string / str().
+class Temp:
+    c: int
+extend Temp:
+    def init(c: int) -> Temp:
+        mut t = Temp()
+        t.c = c
+        return t
+    def __str__(self) -> str:
+        return "Temp(" + str(self.c) + ")"
+
+class Named:
+    tag: str
+extend Named:
+    def init(tag: str) -> Named:
+        mut n = Named()
+        n.tag = tag
+        return n
+    def __str__(self) -> str:
+        return "<" + self.tag + ">"
+
+def main():
+    mut t = Temp.init(21)
+    print(t)                    # Temp(21)
+    print(f"it is {t}!")        # it is Temp(21)!
+    mut s = str(t)
+    print(s)                    # Temp(21)
+    print("val:", t)            # val: Temp(21)
+
+    mut n = Named.init("hi")
+    print(n)                    # <hi>
+    print(f"{n} and {t}")       # <hi> and Temp(21)
+    mut a = Temp.init(1)
+    mut b = Temp.init(2)
+    print(a, b)                 # Temp(1) Temp(2)

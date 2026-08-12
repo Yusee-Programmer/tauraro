@@ -1,0 +1,29 @@
+# native≡c / llvm≡c differential corpus: a generic Pointer[T]-backed container (Vec-like
+# internal pattern): alloc[T], .offset(i).write(v)/.read() with a generic element type.
+class Buf[T]:
+    data: Pointer[T]
+
+extend Buf:
+    def make(cap: int) -> Buf[T]:
+        mut b = Buf()
+        unsafe:
+            b.data = alloc[T](cap)
+        return b
+    def put(self, i: int, v: T) -> void:
+        unsafe:
+            self.data.offset(i).write(v)
+    def at(self, i: int) -> T:
+        unsafe:
+            return self.data.offset(i).read()
+
+def main():
+    mut bi: Buf[int] = Buf[int].make(4)
+    bi.put(0, 42)
+    bi.put(2, 99)
+    print(bi.at(0))        # 42
+    print(bi.at(2))        # 99
+    mut bs: Buf[str] = Buf[str].make(3)
+    bs.put(0, "hello")
+    bs.put(1, "world")
+    print(bs.at(0))        # hello
+    print(bs.at(1))        # world

@@ -1,0 +1,25 @@
+# Builtin sync boxes (Mutex/RwLock/Atomic) used single-threaded -> deterministic. Each
+# lowers to the _tr_mutexbox_*/_tr_rwlbox_*/_tr_atomic_* runtime (like Chan / List / Dict).
+def main():
+    mut m: Mutex[int] = Mutex.init(5)
+    m.lock()
+    print(m.get())          # 5
+    m.set(m.get() + 10)     # sets 15, unlocks
+    print(m.get())          # 15
+
+    mut rw: RwLock[int] = RwLock.init(42)
+    print(rw.read())        # 42
+    rw.read_unlock()
+    mut old = rw.write()    # 42
+    rw.write_set(100)
+    print(old)              # 42
+    print(rw.read())        # 100
+    rw.read_unlock()
+
+    mut a: Atomic[int] = Atomic.new(0)
+    a.store(7)
+    print(a.load())         # 7
+    a.add(3)
+    print(a.load())         # 10
+    a.sub(4)
+    print(a.load())         # 6

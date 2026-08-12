@@ -1,0 +1,40 @@
+# Object-leak oracle: an object that OWNS another object as a field. Releasing the outer
+# must recursively release the inner (Outer__drop calls _tr_rt_obj_release on the inner
+# field), so both instances are reclaimed and the live count returns to 0.
+extern "C":
+    def _tr_rt_obj_live_count() -> int
+
+class Inner:
+    v: int
+
+extend Inner:
+    def init(v: int) -> Inner:
+        mut x = Inner()
+        x.v = v
+        return x
+
+class Outer:
+    inner: Inner
+    tag: int
+
+extend Outer:
+    def init(v: int, t: int) -> Outer:
+        mut o = Outer()
+        o.inner = Inner.init(v)
+        o.tag = t
+        return o
+    def total(self) -> int:
+        return self.inner.v + self.tag
+
+def run(n: int) -> int:
+    mut acc = 0
+    mut i = 0
+    while i < n:
+        mut o = Outer.init(i, i + 1)
+        acc = acc + o.total()
+        i = i + 1
+    return acc
+
+def main():
+    print(run(1000))
+    print(_tr_rt_obj_live_count())  # 0 iff outer AND inner are both released

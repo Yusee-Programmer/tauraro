@@ -58,6 +58,16 @@ extend LlvmEmitter:
     pub def store_vreg(self, v: int, ty: str, val: str):
         self.w("  store " + ty + " " + val + ", ptr %v" + v.to_str() + "\n")
 
+    # Load base vreg #v as a `ptr` address (for ILoad/IStore): a ptr-typed vreg is used
+    # directly; an i64 address is inttoptr'd.
+    pub def addr_of_base(self, v: int) -> str:
+        if self.vty(v) == "ptr":
+            return self.load_vreg_as(v, "ptr")
+        mut bi = self.load_vreg_as(v, "i64")
+        mut bp = self.newtmp()
+        self.w("  " + bp + " = inttoptr i64 " + bi + " to ptr\n")
+        return bp
+
     # Return-type tag of a user function (i64 for void — void Tauraro fns become i64 LLVM
     # fns returning 0, matching the native model where the tag drives everything).
     pub def user_ret_ty(self, name: str) -> str:
@@ -74,19 +84,33 @@ extend LlvmEmitter:
             case LInst.IStr(dst, str_idx):
                 self.store_vreg(dst, "ptr", "@.str." + str_idx.to_str())
             case LInst.IBinOp(dst, op, a, b):
-                mut la = self.load_vreg_as(a, "i64")
-                mut lb = self.load_vreg_as(b, "i64")
-                mut pred = _ll_icmp_pred(op)
-                if pred != "":
-                    mut c = self.newtmp()
-                    self.w("  " + c + " = icmp " + pred + " i64 " + la + ", " + lb + "\n")
-                    mut z = self.newtmp()
-                    self.w("  " + z + " = zext i1 " + c + " to i64\n")
-                    self.store_vreg(dst, "i64", z)
+                # Pointer element addressing (base + byte-offset producing a ptr): emit
+                # `getelementptr i8` instead of `add i64 (+ inttoptr at the load)`. GEP
+                # preserves pointer provenance, so LLVM's SCEV/loop-vectorizer recognises
+                # the affine access pattern and vectorises the loop — inttoptr addressing
+                # blocks it outright ("cannot identify array bounds"). Byte-address-
+                # arithmetic identical; only used where lowering typed the dest as a ptr
+                # (see _inline_list_addr).
+                if op == "+" and self.vty(dst) == "ptr":
+                    mut pbase = self.addr_of_base(a)
+                    mut poff = self.load_vreg_as(b, "i64")
+                    mut pg = self.newtmp()
+                    self.w("  " + pg + " = getelementptr i8, ptr " + pbase + ", i64 " + poff + "\n")
+                    self.store_vreg(dst, "ptr", pg)
                 else:
-                    mut r = self.newtmp()
-                    self.w("  " + r + " = " + _ll_int_instr(op) + " i64 " + la + ", " + lb + "\n")
-                    self.store_vreg(dst, "i64", r)
+                    mut la = self.load_vreg_as(a, "i64")
+                    mut lb = self.load_vreg_as(b, "i64")
+                    mut pred = _ll_icmp_pred(op)
+                    if pred != "":
+                        mut c = self.newtmp()
+                        self.w("  " + c + " = icmp " + pred + " i64 " + la + ", " + lb + "\n")
+                        mut z = self.newtmp()
+                        self.w("  " + z + " = zext i1 " + c + " to i64\n")
+                        self.store_vreg(dst, "i64", z)
+                    else:
+                        mut r = self.newtmp()
+                        self.w("  " + r + " = " + _ll_int_instr(op) + " i64 " + la + ", " + lb + "\n")
+                        self.store_vreg(dst, "i64", r)
             case LInst.IFBinOp(dst, op, a, b):
                 mut fa = self.load_vreg_as(a, "double")
                 mut fb = self.load_vreg_as(b, "double")
@@ -186,6 +210,54 @@ extend LlvmEmitter:
                     mut ir = self.newtmp()
                     self.w("  " + ir + " = call " + ind_ret + " " + fp + "(" + ind_args + ")\n")
                     self.store_vreg(dst, ind_ret, ir)
+            case LInst.IAsm(code, cons):
+                # inline asm: `sideeffect` keeps it even with no outputs (never DCE'd).
+                self.w("  call void asm sideeffect \"" + _ll_str_escape(code) + "\", \"" + cons + "\"()\n")
+            case LInst.ILoad(dst, base, off, aclass):
+                # dst = *(base + off), loaded as dst's own type (i64/ptr/double); the base
+                # vreg is an address (ptr directly, or an i64 that we inttoptr).
+                mut lbp = self.addr_of_base(base)
+                mut lep = lbp
+                if off != 0:
+                    lep = self.newtmp()
+                    self.w("  " + lep + " = getelementptr i8, ptr " + lbp + ", i64 " + off.to_str() + "\n")
+                mut ldty = self.vty(dst)
+                mut lv = self.newtmp()
+                self.w("  " + lv + " = load " + ldty + ", ptr " + lep + _tbaa_suffix(aclass) + "\n")
+                self.store_vreg(dst, ldty, lv)
+            case LInst.IStore(base, off, src, aclass):
+                mut sbp = self.addr_of_base(base)
+                mut sep = sbp
+                if off != 0:
+                    sep = self.newtmp()
+                    self.w("  " + sep + " = getelementptr i8, ptr " + sbp + ", i64 " + off.to_str() + "\n")
+                mut ssty = self.vty(src)
+                mut ssv = self.load_vreg(src)
+                self.w("  store " + ssty + " " + ssv + ", ptr " + sep + _tbaa_suffix(aclass) + "\n")
+            case LInst.ILoadB(dst, base, off):
+                # 1-byte element load, zero-extended to the dst's i64 slot (byte lists:
+                # bool/u8). TBAA listelem (!5) matches the wide element path so the base
+                # pointer still hoists out of loops.
+                mut bbp = self.addr_of_base(base)
+                mut bep = bbp
+                if off != 0:
+                    bep = self.newtmp()
+                    self.w("  " + bep + " = getelementptr i8, ptr " + bbp + ", i64 " + off.to_str() + "\n")
+                mut bb = self.newtmp()
+                self.w("  " + bb + " = load i8, ptr " + bep + ", !tbaa !5\n")
+                mut bz = self.newtmp()
+                self.w("  " + bz + " = zext i8 " + bb + " to i64\n")
+                self.store_vreg(dst, "i64", bz)
+            case LInst.IStoreB(base, off, src):
+                mut tbp = self.addr_of_base(base)
+                mut tep = tbp
+                if off != 0:
+                    tep = self.newtmp()
+                    self.w("  " + tep + " = getelementptr i8, ptr " + tbp + ", i64 " + off.to_str() + "\n")
+                mut tsv = self.load_vreg_as(src, "i64")
+                mut tt = self.newtmp()
+                self.w("  " + tt + " = trunc i64 " + tsv + " to i8\n")
+                self.w("  store i8 " + tt + ", ptr " + tep + ", !tbaa !5\n")
 
     pub def emit_call(self, dst: int, callee: str, args: Vec[int]):
         # Build the "(<ty> <val>, ...)" argument list.
@@ -256,15 +328,21 @@ extend LlvmEmitter:
         else:
             self.cur_ret = _ll_ty(self.m.fn_ret_tag(lf.name))
         mut fname = lf.name
+        # Entry glue: a Tauraro `main(args)` compiles to the real C-ABI main(argc, argv); the
+        # args list is built from argv (else the C runtime passes argc as the "args" pointer).
+        mut main_args = lf.is_main and lf.params.len > 0
         # Signature: define <ret> @name(<pty> %arg_<p>, ...)
         self.w("define " + self.cur_ret + " @" + fname + "(")
-        mut pi = 0
-        while pi < lf.params.len:
-            mut pn = lf.params.get(pi)
-            mut pty = _ll_ty(lf.var_type(pn))
-            if pi > 0: self.w(", ")
-            self.w(pty + " %arg_" + pn)
-            pi = pi + 1
+        if main_args:
+            self.w("i32 %argc, ptr %argv")
+        else:
+            mut pi = 0
+            while pi < lf.params.len:
+                mut pn = lf.params.get(pi)
+                mut pty = _ll_ty(lf.var_type(pn))
+                if pi > 0: self.w(", ")
+                self.w(pty + " %arg_" + pn)
+                pi = pi + 1
         self.w(") {\nentry:\n")
         # Allocas: one per var (params + locals) and one per vreg.
         mut vi = 0
@@ -277,12 +355,18 @@ extend LlvmEmitter:
             self.w("  %v" + ri.to_str() + " = alloca " + _ll_ty(lf.vreg_type(ri)) + "\n")
             ri = ri + 1
         # Store incoming parameters into their var slots.
-        pi = 0
-        while pi < lf.params.len:
-            mut pn2 = lf.params.get(pi)
-            mut pty2 = _ll_ty(lf.var_type(pn2))
-            self.w("  store " + pty2 + " %arg_" + pn2 + ", ptr %var_" + pn2 + "\n")
-            pi = pi + 1
+        if main_args:
+            # Build the args str list from (argc, argv) and bind it to main's parameter.
+            self.w("  %argc64 = sext i32 %argc to i64\n")
+            self.w("  %argl = call ptr @_tr_rt_argv_list(i64 %argc64, ptr %argv)\n")
+            self.w("  store ptr %argl, ptr %var_" + lf.params.get(0) + "\n")
+        else:
+            mut pi = 0
+            while pi < lf.params.len:
+                mut pn2 = lf.params.get(pi)
+                mut pty2 = _ll_ty(lf.var_type(pn2))
+                self.w("  store " + pty2 + " %arg_" + pn2 + ", ptr %var_" + pn2 + "\n")
+                pi = pi + 1
         self.w("  br label %bb0\n")
         # Basic blocks in layout order.
         mut bi = 0
@@ -328,7 +412,9 @@ extend LlvmEmitter:
                     if ai > 0: params = params + ", "
                     params = params + self.vty(args.get(ai))
                     ai = ai + 1
-                self.w("declare " + retty + " @" + callee + "(" + params + ")\n")
+                mut _na = ""
+                if retty == "ptr" and _is_fresh_alloc_ret(callee): _na = "noalias "
+                self.w("declare " + _na + retty + " @" + callee + "(" + params + ")\n")
             case LInst.IFCall1(dst, callee, _):
                 if seen.contains(callee): return
                 seen.insert(callee, true)
@@ -367,12 +453,66 @@ extend LlvmEmitter:
             gi = gi + 1
         self.w("\n")
         self.emit_extern_decls()
+        self.w("declare ptr @_tr_rt_argv_list(i64, ptr)\n")   # main(argc,argv) entry glue
         self.w("\n")
+        # Emit each function name ONCE. A few identical helpers (box_asttype, the dead
+        # _dummy_instantiations stubs) are duplicated across modules; the C backend keeps
+        # them apart by module-prefixing symbols, but this backend uses bare names, so a
+        # second definition would be an LLVM redefinition. Skipping the duplicate is safe:
+        # the collisions are functionally identical (or dead), so the first definition serves.
+        mut emitted = Vec[str].init(self.m.funcs.len)
         mut fi = 0
         while fi < self.m.funcs.len:
-            self.emit_function(self.m.funcs.get(fi))
+            mut efn = self.m.funcs.get(fi)
+            mut dup = false
+            mut ei = 0
+            while ei < emitted.len:
+                if emitted.get(ei) == efn.name: dup = true; ei = emitted.len
+                else: ei = ei + 1
+            if not dup:
+                emitted.push(efn.name)
+                self.emit_function(efn)
             fi = fi + 1
+        # TBAA type hierarchy (roadmap item b): a root with three disjoint scalar types.
+        # Accesses tagged with different types are proven non-aliasing by LLVM's alias
+        # analysis, so it hoists list base-pointer loads out of hot loops and can vectorize.
+        # SOUND: each memory location has exactly ONE role — a list's header (data ptr/len),
+        # its element buffer, and user-object fields are always separate allocations.
+        self.w("\n")
+        self.w("!0 = !{!\"tauraro_tbaa_root\"}\n")
+        self.w("!1 = !{!\"listhdr\", !0, i64 0}\n")
+        self.w("!2 = !{!\"listelem\", !0, i64 0}\n")
+        self.w("!3 = !{!\"objfield\", !0, i64 0}\n")
+        self.w("!4 = !{!1, !1, i64 0}\n")
+        self.w("!5 = !{!2, !2, i64 0}\n")
+        self.w("!6 = !{!3, !3, i64 0}\n")
         return self.out.to_string().as_str()
+
+# TBAA access-tag suffix for an alias class (see emit_module's metadata footer).
+# 0 = generic (no metadata -> may alias anything, always safe). 1/2/3 -> !4/!5/!6.
+def _tbaa_suffix(aclass: int) -> str:
+    if aclass == 1: return ", !tbaa !4"
+    if aclass == 2: return ", !tbaa !5"
+    if aclass == 3: return ", !tbaa !6"
+    return ""
+
+# Roadmap (b): runtime constructors that return a FRESHLY heap-allocated pointer. Their
+# result provably does not alias any pointer already live in the caller, so declaring the
+# return `noalias` lets LLVM's alias analysis prove the new collection/object/string is
+# distinct — hoisting element base-pointer loads out of loops and enabling vectorization.
+# SOUND unconditionally: a fresh malloc can never equal a still-live pointer. Explicit list
+# (never `realloc`/`_tr_c_realloc` — those may return an existing block).
+def _is_fresh_alloc_ret(name: str) -> bool:
+    if name == "malloc" or name == "calloc": return true
+    if name == "_tr_c_malloc" or name == "_tr_c_calloc": return true
+    if name == "_tr_checked_alloc" or name == "_tr_rt_raw_alloc": return true
+    if name == "_tr_rt_list_new" or name == "_tr_rt_argv_list" or name == "_tr_rt_blist_new": return true
+    if name == "_tr_rt_idict_new" or name == "_tr_rt_sdict_new" or name == "_tr_dict_new" or name == "_tr_idict_new": return true
+    if name == "_tr_rt_set_new" or name == "_tr_set_new" or name == "_tr_iset_new" or name == "_tr_pset_new" or name == "_tr_sset_new": return true
+    if name == "_tr_rt_obj_alloc" or name == "_tr_obj_alloc": return true
+    if name == "_tr_rt_str_new" or name == "_tr_str_new" or name == "_tr_rt_str_alloc" or name == "_tr_char_to_str_alloc": return true
+    if name == "_tr_bytes_new" or name == "_tr_range_new" or name == "_tr_shared_new": return true
+    return false
 
 # op -> LLVM integer arithmetic/bitwise instruction (non-comparison).
 def _ll_int_instr(op: str) -> str:

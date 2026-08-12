@@ -1,0 +1,25 @@
+# native≡c / llvm≡c differential corpus: type casts `x as T`, char literals, raw strings.
+def main():
+    # int <-> float
+    mut n = 1000
+    mut f = n as float
+    print(f as int)             # 1000
+    mut f2 = 3.7
+    print(f2 as int)            # 3  (truncates toward zero)
+    mut f3 = -2.9
+    print(f3 as int)            # -2
+    # integer width narrowing (two's-complement, matches C)
+    print(300 as u8 as int)     # 44
+    print(0 - 1 as u8 as int)   # 255
+    print(200 as i8 as int)     # -56
+    print(70000 as u16 as int)  # 4464
+    print(42 as i32 as int)     # 42
+    # char literals are byte values
+    mut c = 'A'
+    print(c as int)             # 65
+    print('z' as int)           # 122
+    if 'a' == 'a':
+        print(1)                # 1
+    # raw string
+    mut r = r"a\nb"
+    print(r)                    # a\nb  (backslash-n literal, not a newline)

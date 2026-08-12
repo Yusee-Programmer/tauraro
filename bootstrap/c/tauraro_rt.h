@@ -135,6 +135,109 @@
 #  endif
 #endif
 
+#ifdef TR_HEAPDBG
+/* ── Redzone/guard debug allocator ───────────────────────────────────────────
+ * Wrap malloc/calloc/realloc/free with a header (magic|size|id) + trailing magic.
+ * A registry of live blocks is scanned on EVERY op so an overrun/underrun is caught
+ * at the next allocation after the bad write — pinpointing the offending block+id. */
+#define _TRDBG_FRONT 0xA11C0DEBEEF00DULL
+#define _TRDBG_BACK  0xDEADBEEFCAFEBABEULL
+#define _TRDBG_HDR   32
+#define _TRDBG_MAX   400000
+static unsigned char* _trdbg_reg[_TRDBG_MAX];
+static long _trdbg_regn = 0;
+static long _trdbg_id = 0;
+static void _trdbg_die(const char* what, unsigned char* base){
+    unsigned long long id = base ? *(unsigned long long*)(base+16) : 0;
+    unsigned long long sz = base ? *(unsigned long long*)(base+8) : 0;
+    fprintf(stderr, "TRDBG: %s block id=%llu size=%llu\n", what, id, sz); fflush(stderr); abort();
+}
+__declspec(dllimport) int __stdcall IsBadReadPtr(const void*, unsigned long long);
+static void _trdbg_check(unsigned char* base){
+    if (IsBadReadPtr(base, _TRDBG_HDR)) return;   /* stale/freed entry (bookkeeping gap) — skip */
+    if (*(unsigned long long*)base != _TRDBG_FRONT) _trdbg_die("FRONT-guard clobbered", base);
+    unsigned long long sz = *(unsigned long long*)(base+8);
+    if (sz > 0x40000000ULL) return;               /* implausible size (corrupt hdr on a stale block) */
+    if (IsBadReadPtr(base+_TRDBG_HDR+sz, 8)) return;
+    if (*(unsigned long long*)(base+_TRDBG_HDR+sz) != _TRDBG_BACK) _trdbg_die("BACK-guard clobbered (overrun)", base);
+}
+static void _trdbg_scan(void){ long i; for(i=0;i<_trdbg_regn;i++) _trdbg_check(_trdbg_reg[i]); }
+/* Verify a write of n bytes at dst stays within the guarded block that contains dst.
+ * dst outside all registered blocks (raw-malloc list buffer, stack, .rodata) -> skip. */
+static void _trdbg_bounds(void* dst, size_t n){
+    unsigned char* d = (unsigned char*)dst; long i;
+    for(i=0;i<_trdbg_regn;i++){
+        unsigned char* base = _trdbg_reg[i];
+        unsigned long long sz = *(unsigned long long*)(base+8);
+        unsigned char* user = base+_TRDBG_HDR;
+        if(d >= user && d < user+sz){
+            if(d + n > user + sz){
+                fprintf(stderr, "TRDBG: memcpy OVERRUN dst-block id=%llu size=%llu, write %llu bytes at +%lld\n",
+                    *(unsigned long long*)(base+16), sz, (unsigned long long)n, (long long)(d-user));
+                fflush(stderr); abort();
+            }
+            return;
+        }
+    }
+}
+static void* _trdbg_alloc(size_t sz, int zero){
+    _trdbg_scan();
+    unsigned char* base = (unsigned char*)malloc(_TRDBG_HDR + sz + 8);
+    if(!base) return 0;
+    *(unsigned long long*)base = _TRDBG_FRONT;
+    *(unsigned long long*)(base+8) = sz;
+    *(unsigned long long*)(base+16) = (unsigned long long)(++_trdbg_id);
+    *(unsigned long long*)(base+_TRDBG_HDR+sz) = _TRDBG_BACK;
+    if(zero) memset(base+_TRDBG_HDR, 0, sz);
+    if(_trdbg_regn < _TRDBG_MAX) _trdbg_reg[_trdbg_regn++] = base;
+    return base + _TRDBG_HDR;
+}
+/* Registry index of the guarded block whose USER pointer == p, or -1 if p is a raw
+ * (non-guarded) allocation. Looking up by user-ptr (not p-HDR) tolerates a mixed heap
+ * where some blocks come from raw malloc (list buffers) and reach free()/realloc() here. */
+static long _trdbg_find(void* p){
+    long i; for(i=0;i<_trdbg_regn;i++){ if(_trdbg_reg[i]+_TRDBG_HDR == (unsigned char*)p) return i; }
+    return -1;
+}
+static void _trdbg_free(void* p){
+    if(!p) return;
+    long idx = _trdbg_find(p);
+    if(idx < 0){ free(p); return; }                 /* raw (non-guarded) block */
+    unsigned char* base = _trdbg_reg[idx];
+    _trdbg_check(base);
+    _trdbg_reg[idx] = _trdbg_reg[--_trdbg_regn];
+    _trdbg_scan();
+    *(unsigned long long*)base = 0;                  /* poison front so double-free is caught */
+    free(base);
+}
+static void* _trdbg_realloc(void* p, size_t sz){
+    if(!p) return _trdbg_alloc(sz, 0);
+    long idx = _trdbg_find(p);
+    if(idx < 0) return realloc(p, sz);               /* raw (non-guarded) block */
+    unsigned char* base = _trdbg_reg[idx];
+    _trdbg_check(base);
+    _trdbg_reg[idx] = _trdbg_reg[--_trdbg_regn];
+    _trdbg_scan();
+    unsigned char* nb = (unsigned char*)realloc(base, _TRDBG_HDR + sz + 8);
+    if(!nb) return 0;
+    *(unsigned long long*)(nb+8) = sz;
+    *(unsigned long long*)(nb+_TRDBG_HDR+sz) = _TRDBG_BACK;
+    if(_trdbg_regn < _TRDBG_MAX) _trdbg_reg[_trdbg_regn++] = nb;
+    return nb + _TRDBG_HDR;
+}
+#undef TAURARO_ALLOC
+#undef TAURARO_CALLOC
+#undef TAURARO_REALLOC
+#undef TAURARO_FREE
+#define TAURARO_ALLOC(sz)      _trdbg_alloc((sz), 0)
+#define TAURARO_CALLOC(n,sz)   _trdbg_alloc((size_t)(n)*(size_t)(sz), 1)
+#define TAURARO_REALLOC(p,sz)  _trdbg_realloc((p),(sz))
+#define TAURARO_FREE(p)        _trdbg_free((p))
+#  define _TR_HEAPCHK(w) ((void)0)
+#else
+#  define _TR_HEAPCHK(w) ((void)0)
+#endif
+
 /* Normalize the freestanding tier flags: TAURARO_KERNEL (no libc) and
  * TAURARO_NO_OS (bare-metal target) both imply TAURARO_BARE — the canonical
  * "no OS services" flag used to gate file I/O / env / process / stdin below. */
@@ -380,37 +483,59 @@ static inline long long _tr_mem_live_strs(void) {
 #endif
 }
 
+/* _TR_XLINK: `static inline` for the C backend; EXPORTED for the NATIVE/LLVM backend
+ * (native_abi.c #defines _TR_EXPORT_RT). Defined HERE (early) so functions above line 400
+ * — the memory + I/O helpers — can use it too. */
+#ifdef _TR_EXPORT_RT
+#define _TR_XLINK
+#else
+#define _TR_XLINK static inline
+#endif
+
+/* Forward decl: the rc-prefixed string constructor (defined in native_abi.c). The native/
+ * LLVM backend's `str` is an rc'd char* released via _tr_rt_str_release, so any _h wrapper
+ * that hands a string back to that backend MUST return an rc string (not a raw _tr_checked_
+ * alloc/borrowed pointer, which would corrupt the heap on release). */
+_TR_XLINK char* _tr_rt_str_new(const char* s);
+
 // Wrappers for core library to avoid signature conflicts
-static inline void* _tr_c_malloc(size_t size) {
+_TR_XLINK void* _tr_c_malloc(size_t size) {
+    _TR_HEAPCHK("c_malloc");
     void* p = TAURARO_ALLOC(size);
     if (p) _TR_MEMCOUNT_INC();
     return p;
 }
-static inline void* _tr_c_calloc(size_t count, size_t size) {
+_TR_XLINK void* _tr_c_calloc(size_t count, size_t size) {
     void* p = TAURARO_CALLOC(count, size);
     if (!p && count * size > 0) { _TR_OOM_ABORT(); }
     if (p) _TR_MEMCOUNT_INC();
     return p;
 }
-static inline void _tr_free(void* p) {
+_TR_XLINK void _tr_free(void* p) {
+    _TR_HEAPCHK("free");
     if (p) { _TR_MEMCOUNT_DEC(); TAURARO_FREE(p); }
 }
-static inline void _tr_c_free(void* ptr) { _tr_free(ptr); }
+/* Runtime memory helpers used by std/core (Vec/String) via `extern "C"` decls. `static
+ * inline` for the C backend (#includes this header, inlines them); EXPORTED as real
+ * symbols for the NATIVE/LLVM backend (native_abi.c #defines _TR_EXPORT_RT) so those std
+ * collections link. */
+_TR_XLINK void _tr_c_free(void* ptr) { _tr_free(ptr); }
 
 #ifndef TAURARO_KERNEL
 static inline void _tr_print(char* s) { printf("%s\n", s); }
-static inline void _tr_print_raw(char* s) { printf("%s", s); fflush(stdout); }
+_TR_XLINK void _tr_print_raw(char* s) { printf("%s", s); fflush(stdout); }
 static inline void _tr_eprint(char* s) { _TR_DIAG("%s\n", s); fflush(stderr); }
 #else
 #ifndef _TR_WRITE
 #  define _TR_WRITE(s) ((void)(s))   /* freestanding sink: redefine to UART/semihosting */
 #endif
 static inline void _tr_print(char* s) { _TR_WRITE(s); _TR_WRITE("\n"); }
-static inline void _tr_print_raw(char* s) { _TR_WRITE(s); }
+_TR_XLINK void _tr_print_raw(char* s) { _TR_WRITE(s); }
 static inline void _tr_eprint(char* s) { _TR_WRITE(s); _TR_WRITE("\n"); }
 #endif
 
-static inline void* _tr_c_realloc(void* ptr, size_t size) {
+_TR_XLINK void* _tr_c_realloc(void* ptr, size_t size) {
+    _TR_HEAPCHK("realloc");
     void* p = TAURARO_REALLOC(ptr, size);
     /* realloc(NULL, n) acts as malloc -> a new live block; realloc of an
      * existing block frees the old internally (no _tr_free) and keeps the
@@ -418,7 +543,8 @@ static inline void* _tr_c_realloc(void* ptr, size_t size) {
     if (!ptr && p) _TR_MEMCOUNT_INC();
     return p;
 }
-static inline void* _tr_checked_alloc(size_t sz) {
+_TR_XLINK void* _tr_checked_alloc(size_t sz) {
+    _TR_HEAPCHK("checked_alloc");
     void* p = TAURARO_CALLOC(1, sz);
     if (!p && sz > 0) { _TR_OOM_ABORT(); }
     if (p) _TR_MEMCOUNT_INC();
@@ -432,6 +558,7 @@ static inline void* _tr_checked_alloc(size_t sz) {
  * aliasing (no ownership proof needed). Retain/release are elided by codegen
  * wherever the borrow checker proves a value is only borrowed (zero-cost). */
 static inline void* _tr_obj_alloc(size_t sz) {
+    _TR_HEAPCHK("obj_alloc");
     void* p = TAURARO_CALLOC(1, sz);
     if (!p && sz > 0) { _TR_OOM_ABORT(); }
     if (p) { *(size_t*)p = 1; _TR_MEMCOUNT_INC(); }   /* rc = 1 */
@@ -544,6 +671,30 @@ static inline TrStr _tr_str_wrap_impl(char* owned_data) {
     _TR_MEMCOUNT_STR_INC();
     return t;
 }
+
+#ifndef _TR_EXPORT_RT
+/* C backend: the native `char*` rc-string constructor is defined in native_abi.c, which the
+ * header-only C backend does not link. std/async `_h` wrappers (e.g. _tr_task_get_error_h)
+ * call _tr_rt_str_new and their result is immediately `_tr_str_wrap`'d into a TrStr — so the
+ * correct C-backend form is a plain OWNED heap copy (_tr_str_wrap adopts it, rc=1). */
+static inline char* _tr_rt_str_new(const char* s) {
+    size_t n = s ? strlen(s) : 0;
+    char* r = (char*)_tr_checked_alloc(n + 1);
+    if (!r) return (char*)0;
+    if (s && n) memcpy(r, s, n);
+    r[n] = '\0';
+    return r;
+}
+#endif
+
+/* Stage 2 — in-process LLVM object emitter. Prototype only; the definition is in
+ * runtime/tauraro_llvm.c (ALWAYS linked into the compiler): a stub returning -1 by default,
+ * or the real llvm-c emitter when that file is built with -DTAURARO_LLVM_INPROC + linked
+ * against libLLVM. -1 ("not compiled in") makes the compiler fall back to the bundled-llc
+ * subprocess (Stage 1). Kept out of the header as a plain def to avoid mingw's multiple-
+ * definition of a weak body across the many TUs that include this header. */
+int _tr_llvm_emit_object(const char* ll_path, const char* out_path, const char* triple);
+
 static inline TrStr _tr_str_wrap_passthrough(TrStr s) { return s; }
 /* `_tr_str_wrap(x)`: wrap an owned `char*` into a TrStr (rc=1). Some
  * codegen call sites double-wrap (e.g. `_tr_str_wrap(_tr_str_wrap(buffer))`
@@ -647,23 +798,27 @@ static inline void _tr_weak_drop(_TrWeakBox* w) {
     _tr_free(w);
 }
 
-static inline void* _tr_c_memcpy(void* dst, void* src, size_t n) { return memcpy(dst, src, n); }
-static inline void* _tr_c_memset(void* ptr, int val, size_t n) { return memset(ptr, val, n); }
-static inline void* _tr_c_memmove(void* dst, void* src, size_t n) { return memmove(dst, src, n); }
+_TR_XLINK void* _tr_c_memcpy(void* dst, void* src, size_t n) {
+#ifdef TR_HEAPDBG
+    _trdbg_bounds(dst, n);
+#endif
+    return memcpy(dst, src, n); }
+_TR_XLINK void* _tr_c_memset(void* ptr, int val, size_t n) { return memset(ptr, val, n); }
+_TR_XLINK void* _tr_c_memmove(void* dst, void* src, size_t n) { return memmove(dst, src, n); }
 /* File I/O + env: std-tier only (need <stdio.h>'s FILE / getenv). Gated so a
  * freestanding (TAURARO_BARE) build parses past here — leaving these ungated was
  * the 'FILE undeclared' early-header-failure that made everything after look
  * implicit on bare-metal. */
 #ifndef TAURARO_BARE
-static inline void* _tr_c_fopen(const char* path, const char* mode) { return (void*)fopen(path, mode); }
-static inline int _tr_c_fclose(void* fp) { return fclose((FILE*)fp); }
-static inline size_t _tr_c_fread(void* ptr, size_t size, size_t nmemb, void* fp) { return fread(ptr, size, nmemb, (FILE*)fp); }
-static inline size_t _tr_c_fwrite(const void* ptr, size_t size, size_t nmemb, void* fp) { return fwrite(ptr, size, nmemb, (FILE*)fp); }
-static inline int _tr_c_fseek(void* fp, long offset, int whence) { return fseek((FILE*)fp, offset, whence); }
-static inline long _tr_c_ftell(void* fp) { return ftell((FILE*)fp); }
-static inline char* _tr_getenv(const char* name) { char* v = getenv(name); return v ? v : ""; }
+_TR_XLINK void* _tr_c_fopen(const char* path, const char* mode) { return (void*)fopen(path, mode); }
+_TR_XLINK int _tr_c_fclose(void* fp) { return fclose((FILE*)fp); }
+_TR_XLINK size_t _tr_c_fread(void* ptr, size_t size, size_t nmemb, void* fp) { return fread(ptr, size, nmemb, (FILE*)fp); }
+_TR_XLINK size_t _tr_c_fwrite(const void* ptr, size_t size, size_t nmemb, void* fp) { return fwrite(ptr, size, nmemb, (FILE*)fp); }
+_TR_XLINK int _tr_c_fseek(void* fp, long offset, int whence) { return fseek((FILE*)fp, offset, whence); }
+_TR_XLINK long _tr_c_ftell(void* fp) { return ftell((FILE*)fp); }
+_TR_XLINK char* _tr_getenv(const char* name) { char* v = getenv(name); return v ? v : ""; }
 #else
-static inline char* _tr_getenv(const char* name) { (void)name; return (char*)""; }
+_TR_XLINK char* _tr_getenv(const char* name) { (void)name; return (char*)""; }
 #endif
 #ifdef _WIN32
 static inline int _tr_setenv(const char* name, const char* value) { return _putenv_s(name, value) == 0 ? 0 : -1; }
@@ -861,7 +1016,7 @@ typedef struct { int panicked; char* panic_msg; } _TrSpawnResult;
 /* Debug helper: prints current process memory usage to stderr, tagged with
  * `label`. Used to bisect memory growth across checkpoints during
  * leak-hunting; not called by normal runtime code. No-op on non-Windows. */
-static inline void _tr_report_mem(const char* label) { (void)label; }
+_TR_XLINK void _tr_report_mem(const char* label) { (void)label; }
 #endif
 
 #ifdef _WIN32
@@ -875,7 +1030,7 @@ static inline void _tr_report_mem(const char* label) { (void)label; }
 /* Debug helper: prints current process working-set size to stderr, tagged
  * with `label`. Used to bisect memory growth across checkpoints during
  * leak-hunting; not called by normal runtime code. */
-static inline void _tr_report_mem(const char* label) {
+_TR_XLINK void _tr_report_mem(const char* label) {
     PROCESS_MEMORY_COUNTERS pmc;
     GetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof(pmc));
 #ifdef TAURARO_MEMCOUNT
@@ -909,14 +1064,14 @@ static DWORD WINAPI _tr_thread_start_trampoline(LPVOID raw) {
     _tr_thread_has_panic_buf = 0;
     return 0;
 }
-static _TrThread _tr_thread_start(void*(*fn)(void*), void* arg) {
+_TR_XLINK _TrThread _tr_thread_start(void*(*fn)(void*), void* arg) {
     _TrWin32StartArg* s = (_TrWin32StartArg*)malloc(sizeof(_TrWin32StartArg));
     s->fn = fn; s->arg = arg; s->result = NULL;
     SIZE_T ss = (SIZE_T)TAURARO_THREAD_STACK_SIZE;
     return CreateThread(NULL, ss, _tr_thread_start_trampoline, s, 0, NULL);
 }
-static void _tr_thread_detach(_TrThread t) { CloseHandle(t); }
-static void _tr_thread_join_wait(_TrThread t) { WaitForSingleObject(t, INFINITE); CloseHandle(t); }
+_TR_XLINK void _tr_thread_detach(_TrThread t) { CloseHandle(t); }
+_TR_XLINK void _tr_thread_join_wait(_TrThread t) { WaitForSingleObject(t, INFINITE); CloseHandle(t); }
 
 typedef CRITICAL_SECTION _TrMutex;
 static void _tr_mutex_init(_TrMutex* m)   { InitializeCriticalSection(m); }
@@ -929,7 +1084,7 @@ static void _tr_condmutex_lock(_TrCondMutex* cm)    { EnterCriticalSection(&cm->
 static void _tr_condmutex_unlock(_TrCondMutex* cm)  { LeaveCriticalSection(&cm->cs); }
 static void _tr_condmutex_wait(_TrCondMutex* cm)    { SleepConditionVariableCS(&cm->cv, &cm->cs, INFINITE); }
 static void _tr_condmutex_signal(_TrCondMutex* cm)  { WakeConditionVariable(&cm->cv); }
-static void _tr_sleep_ms(long ms) { Sleep((DWORD)(ms < 0 ? 0 : ms)); }
+_TR_XLINK void _tr_sleep_ms(long ms) { Sleep((DWORD)(ms < 0 ? 0 : ms)); }
 static inline long long _tr_time_ns(void) {
     LARGE_INTEGER freq, cnt;
     QueryPerformanceFrequency(&freq); QueryPerformanceCounter(&cnt);
@@ -946,9 +1101,9 @@ static inline char* _tr_path_canonicalize(const char* path) {
 #elif defined(TAURARO_BARE)
 /* ── BARE/WASM: single-threaded primitive stubs ──────────────────────── */
 typedef int _TrThread;
-static _TrThread _tr_thread_start(void*(*fn)(void*), void* arg) { fn(arg); return 0; }
-static void _tr_thread_detach(_TrThread t)      { (void)t; }
-static void _tr_thread_join_wait(_TrThread t)   { (void)t; }
+_TR_XLINK _TrThread _tr_thread_start(void*(*fn)(void*), void* arg) { fn(arg); return 0; }
+_TR_XLINK void _tr_thread_detach(_TrThread t)      { (void)t; }
+_TR_XLINK void _tr_thread_join_wait(_TrThread t)   { (void)t; }
 
 typedef int _TrMutex;
 static void _tr_mutex_init(_TrMutex* m)         { (void)m; }
@@ -961,7 +1116,7 @@ static void _tr_condmutex_lock(_TrCondMutex* cm)    { (void)cm; }
 static void _tr_condmutex_unlock(_TrCondMutex* cm)  { (void)cm; }
 static void _tr_condmutex_wait(_TrCondMutex* cm)    { (void)cm; }
 static void _tr_condmutex_signal(_TrCondMutex* cm)  { (void)cm; }
-static void _tr_sleep_ms(long ms) { (void)ms; }
+_TR_XLINK void _tr_sleep_ms(long ms) { (void)ms; }
 
 #else
 #include <pthread.h>
@@ -988,7 +1143,7 @@ static void* _tr_posix_thread_trampoline(void* raw) {
     _tr_thread_has_panic_buf = 0;
     return NULL;
 }
-static _TrThread _tr_thread_start(void*(*fn)(void*), void* arg) {
+_TR_XLINK _TrThread _tr_thread_start(void*(*fn)(void*), void* arg) {
     _TrPosixStartArg* s = (_TrPosixStartArg*)malloc(sizeof(_TrPosixStartArg));
     s->fn = fn; s->arg = arg; s->result = NULL;
     pthread_attr_t attr; pthread_attr_init(&attr);
@@ -998,8 +1153,8 @@ static _TrThread _tr_thread_start(void*(*fn)(void*), void* arg) {
     pthread_t t; pthread_create(&t, &attr, _tr_posix_thread_trampoline, s);
     pthread_attr_destroy(&attr); return t;
 }
-static void _tr_thread_detach(_TrThread t) { pthread_detach(t); }
-static void _tr_thread_join_wait(_TrThread t) { pthread_join(t, NULL); }
+_TR_XLINK void _tr_thread_detach(_TrThread t) { pthread_detach(t); }
+_TR_XLINK void _tr_thread_join_wait(_TrThread t) { pthread_join(t, NULL); }
 
 typedef pthread_mutex_t _TrMutex;
 static void _tr_mutex_init(_TrMutex* m)   { pthread_mutex_init(m, NULL); }
@@ -1012,7 +1167,7 @@ static void _tr_condmutex_lock(_TrCondMutex* cm)    { pthread_mutex_lock(&cm->mu
 static void _tr_condmutex_unlock(_TrCondMutex* cm)  { pthread_mutex_unlock(&cm->mu); }
 static void _tr_condmutex_wait(_TrCondMutex* cm)    { pthread_cond_wait(&cm->cv, &cm->mu); }
 static void _tr_condmutex_signal(_TrCondMutex* cm)  { pthread_cond_signal(&cm->cv); }
-static void _tr_sleep_ms(long ms) {
+_TR_XLINK void _tr_sleep_ms(long ms) {
     struct timespec ts = {ms/1000, (ms%1000)*1000000LL}; nanosleep(&ts, NULL);
 }
 #endif
@@ -1034,7 +1189,7 @@ typedef struct {
     long long* buf; long long head, tail, count, cap; volatile int closed;
     CRITICAL_SECTION mu; CONDITION_VARIABLE not_empty, not_full;
 } _TrChan;
-static _TrChan* _tr_chan_new(long long cap) {
+_TR_XLINK _TrChan* _tr_chan_new(long long cap) {
     if (cap < 1) cap = 1;
     _TrChan* c = (_TrChan*)calloc(1, sizeof(_TrChan));
     c->buf = (long long*)TAURARO_CALLOC((size_t)cap, sizeof(long long)); c->cap = cap;
@@ -1043,7 +1198,7 @@ static _TrChan* _tr_chan_new(long long cap) {
     InitializeConditionVariable(&c->not_full);
     return c;
 }
-static void _tr_chan_send(_TrChan* c, long long val) {
+_TR_XLINK void _tr_chan_send(_TrChan* c, long long val) {
     EnterCriticalSection(&c->mu);
     while (c->count >= c->cap && !c->closed)
         SleepConditionVariableCS(&c->not_full, &c->mu, INFINITE);
@@ -1053,7 +1208,7 @@ static void _tr_chan_send(_TrChan* c, long long val) {
     }
     LeaveCriticalSection(&c->mu);
 }
-static long long _tr_chan_recv(_TrChan* c) {
+_TR_XLINK long long _tr_chan_recv(_TrChan* c) {
     EnterCriticalSection(&c->mu);
     while (c->count == 0 && !c->closed)
         SleepConditionVariableCS(&c->not_empty, &c->mu, INFINITE);
@@ -1064,19 +1219,19 @@ static long long _tr_chan_recv(_TrChan* c) {
     }
     LeaveCriticalSection(&c->mu); return v;
 }
-static bool _tr_chan_try_send(_TrChan* c, long long val) {
+_TR_XLINK bool _tr_chan_try_send(_TrChan* c, long long val) {
     EnterCriticalSection(&c->mu);
     bool ok = !c->closed && c->count < c->cap;
     if (ok) { c->buf[c->tail]=val; c->tail=(c->tail+1)%c->cap; c->count++; WakeConditionVariable(&c->not_empty); }
     LeaveCriticalSection(&c->mu); return ok;
 }
-static long long _tr_chan_try_recv_val(_TrChan* c) {
+_TR_XLINK long long _tr_chan_try_recv_val(_TrChan* c) {
     EnterCriticalSection(&c->mu);
     long long v = LLONG_MIN;
     if (c->count > 0) { v=c->buf[c->head]; c->head=(c->head+1)%c->cap; c->count--; WakeConditionVariable(&c->not_full); }
     LeaveCriticalSection(&c->mu); return v;
 }
-static bool _tr_chan_send_timeout(_TrChan* c, long long val, long long ms) {
+_TR_XLINK bool _tr_chan_send_timeout(_TrChan* c, long long val, long long ms) {
     EnterCriticalSection(&c->mu);
     ULONGLONG dl = GetTickCount64()+(ULONGLONG)ms; bool ok=true;
     while (c->count>=c->cap && !c->closed) {
@@ -1086,7 +1241,7 @@ static bool _tr_chan_send_timeout(_TrChan* c, long long val, long long ms) {
     if (ok&&!c->closed&&c->count<c->cap){c->buf[c->tail]=val;c->tail=(c->tail+1)%c->cap;c->count++;WakeConditionVariable(&c->not_empty);}else ok=false;
     LeaveCriticalSection(&c->mu); return ok;
 }
-static long long _tr_chan_recv_timeout_val(_TrChan* c, long long ms) {
+_TR_XLINK long long _tr_chan_recv_timeout_val(_TrChan* c, long long ms) {
     EnterCriticalSection(&c->mu);
     ULONGLONG dl=GetTickCount64()+(ULONGLONG)ms;
     while (c->count==0&&!c->closed){
@@ -1097,16 +1252,16 @@ static long long _tr_chan_recv_timeout_val(_TrChan* c, long long ms) {
     if(c->count>0){v=c->buf[c->head];c->head=(c->head+1)%c->cap;c->count--;WakeConditionVariable(&c->not_full);}
     LeaveCriticalSection(&c->mu); return v;
 }
-static void _tr_chan_close(_TrChan* c) {
+_TR_XLINK void _tr_chan_close(_TrChan* c) {
     EnterCriticalSection(&c->mu); c->closed=1;
     WakeAllConditionVariable(&c->not_empty); WakeAllConditionVariable(&c->not_full);
     LeaveCriticalSection(&c->mu);
 }
-static bool   _tr_chan_is_closed(_TrChan* c) { EnterCriticalSection(&c->mu); bool r=c->closed!=0; LeaveCriticalSection(&c->mu); return r; }
-static long long _tr_chan_len(_TrChan* c)    { EnterCriticalSection(&c->mu); long long n=c->count; LeaveCriticalSection(&c->mu); return n; }
+_TR_XLINK bool _tr_chan_is_closed(_TrChan* c) { EnterCriticalSection(&c->mu); bool r=c->closed!=0; LeaveCriticalSection(&c->mu); return r; }
+_TR_XLINK long long _tr_chan_len(_TrChan* c)    { EnterCriticalSection(&c->mu); long long n=c->count; LeaveCriticalSection(&c->mu); return n; }
 static long long _tr_chan_cap(_TrChan* c)    { return c?c->cap:0; }
 static void   _tr_chan_free(_TrChan* c)      { if(!c)return; DeleteCriticalSection(&c->mu); _tr_free(c->buf); _tr_free(c); }
-static long long _tr_chan_recv_ok(_TrChan* c, int* ok) {
+_TR_XLINK long long _tr_chan_recv_ok(_TrChan* c, int* ok) {
     EnterCriticalSection(&c->mu);
     while (c->count == 0 && !c->closed)
         SleepConditionVariableCS(&c->not_empty, &c->mu, INFINITE);
@@ -1256,19 +1411,19 @@ static void _tr_timer_stop(_TrTimerState* s) {
 
 /* ── Thread-local storage (Win32 TLS slots) ──────────────────────────── */
 typedef struct { DWORD key; } _TrTLS;
-static inline _TrTLS* _tr_tls_new(long long init) {
+_TR_XLINK _TrTLS* _tr_tls_new(long long init) {
     _TrTLS* t = (_TrTLS*)malloc(sizeof(_TrTLS));
     t->key = TlsAlloc();
     TlsSetValue(t->key, (LPVOID)(uintptr_t)(unsigned long long)init);
     return t;
 }
-static inline long long _tr_tls_get(_TrTLS* t) {
+_TR_XLINK long long _tr_tls_get(_TrTLS* t) {
     return t ? (long long)(uintptr_t)TlsGetValue(t->key) : 0LL;
 }
-static inline void _tr_tls_set(_TrTLS* t, long long v) {
+_TR_XLINK void _tr_tls_set(_TrTLS* t, long long v) {
     if (t) TlsSetValue(t->key, (LPVOID)(uintptr_t)(unsigned long long)v);
 }
-static inline void _tr_tls_free(_TrTLS* t) { if (!t) return; TlsFree(t->key); free(t); }
+_TR_XLINK void _tr_tls_free(_TrTLS* t) { if (!t) return; TlsFree(t->key); free(t); }
 
 #elif defined(TAURARO_BARE)
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -1279,37 +1434,37 @@ static inline void _tr_tls_free(_TrTLS* t) { if (!t) return; TlsFree(t->key); fr
 typedef struct {
     long long* buf; long long head, tail, count, cap; volatile int closed;
 } _TrChan;
-static _TrChan* _tr_chan_new(long long cap) {
+_TR_XLINK _TrChan* _tr_chan_new(long long cap) {
     if (cap < 1) cap = 1;
     _TrChan* c = (_TrChan*)TAURARO_CALLOC(1, sizeof(_TrChan));
     c->buf = (long long*)TAURARO_CALLOC((size_t)cap, sizeof(long long)); c->cap = cap;
     return c;
 }
-static void _tr_chan_send(_TrChan* c, long long val) {
+_TR_XLINK void _tr_chan_send(_TrChan* c, long long val) {
     if (!c || c->closed || c->count >= c->cap) return;
     c->buf[c->tail] = val; c->tail = (c->tail+1)%c->cap; c->count++;
 }
-static long long _tr_chan_recv(_TrChan* c) {
+_TR_XLINK long long _tr_chan_recv(_TrChan* c) {
     if (!c || c->count == 0) return 0LL;
     long long v = c->buf[c->head]; c->head = (c->head+1)%c->cap; c->count--;
     return v;
 }
-static bool _tr_chan_try_send(_TrChan* c, long long val) {
+_TR_XLINK bool _tr_chan_try_send(_TrChan* c, long long val) {
     if (!c || c->closed || c->count >= c->cap) return false;
     c->buf[c->tail]=val; c->tail=(c->tail+1)%c->cap; c->count++; return true;
 }
-static long long _tr_chan_try_recv_val(_TrChan* c) {
+_TR_XLINK long long _tr_chan_try_recv_val(_TrChan* c) {
     if (!c || c->count == 0) return LLONG_MIN;
     long long v=c->buf[c->head]; c->head=(c->head+1)%c->cap; c->count--; return v;
 }
-static bool  _tr_chan_send_timeout(_TrChan* c, long long val, long long ms)  { (void)ms; return _tr_chan_try_send(c, val); }
-static long long _tr_chan_recv_timeout_val(_TrChan* c, long long ms)         { (void)ms; return _tr_chan_try_recv_val(c); }
-static void  _tr_chan_close(_TrChan* c)          { if (c) c->closed = 1; }
-static bool  _tr_chan_is_closed(_TrChan* c)      { return c && c->closed; }
-static long long _tr_chan_len(_TrChan* c)         { return c ? c->count : 0LL; }
+_TR_XLINK bool _tr_chan_send_timeout(_TrChan* c, long long val, long long ms)  { (void)ms; return _tr_chan_try_send(c, val); }
+_TR_XLINK long long _tr_chan_recv_timeout_val(_TrChan* c, long long ms)         { (void)ms; return _tr_chan_try_recv_val(c); }
+_TR_XLINK void _tr_chan_close(_TrChan* c)          { if (c) c->closed = 1; }
+_TR_XLINK bool _tr_chan_is_closed(_TrChan* c)      { return c && c->closed; }
+_TR_XLINK long long _tr_chan_len(_TrChan* c)         { return c ? c->count : 0LL; }
 static long long _tr_chan_cap(_TrChan* c)         { return c ? c->cap : 0LL; }
 static void  _tr_chan_free(_TrChan* c)            { if (!c) return; TAURARO_FREE(c->buf); TAURARO_FREE(c); }
-static long long _tr_chan_recv_ok(_TrChan* c, int* ok) {
+_TR_XLINK long long _tr_chan_recv_ok(_TrChan* c, int* ok) {
     if (c && c->count > 0) {
         long long v = c->buf[c->head]; c->head = (c->head+1)%c->cap; c->count--;
         *ok = 1; return v;
@@ -1412,21 +1567,21 @@ static void _tr_timer_stop(_TrTimerState* s) {
 
 /* ── Thread-local storage (bare: single thread, single value) ────────── */
 typedef struct { long long val; } _TrTLS;
-static inline _TrTLS* _tr_tls_new(long long init) {
+_TR_XLINK _TrTLS* _tr_tls_new(long long init) {
     _TrTLS* t = (_TrTLS*)TAURARO_ALLOC(sizeof(_TrTLS)); t->val = init; return t;
 }
-static inline long long _tr_tls_get(_TrTLS* t) { return t ? t->val : 0LL; }
-static inline void _tr_tls_set(_TrTLS* t, long long v) { if (t) t->val = v; }
-static inline void _tr_tls_free(_TrTLS* t) { if (t) TAURARO_FREE(t); }
+_TR_XLINK long long _tr_tls_get(_TrTLS* t) { return t ? t->val : 0LL; }
+_TR_XLINK void _tr_tls_set(_TrTLS* t, long long v) { if (t) t->val = v; }
+_TR_XLINK void _tr_tls_free(_TrTLS* t) { if (t) TAURARO_FREE(t); }
 
 /* ── BARE ThreadPool: runs jobs synchronously (no OS threads) ─────────── */
 typedef struct { int _dummy; } _TrThreadPool;
-static inline long long _tr_threadpool_auto_n(void)  { return 1LL; }
-static inline _TrThreadPool* _tr_threadpool_new(long long n)  { (void)n; return (_TrThreadPool*)TAURARO_CALLOC(1,sizeof(_TrThreadPool)); }
-static inline _TrThreadPool* _tr_threadpool_auto(void)        { return _tr_threadpool_new(1LL); }
-static inline void _tr_threadpool_spawn(_TrThreadPool* p, void*(*fn)(void*), void* arg) { (void)p; fn(arg); }
-static inline void _tr_threadpool_wait(_TrThreadPool* p)      { (void)p; }
-static inline void _tr_threadpool_free(_TrThreadPool* p)      { if(p)TAURARO_FREE(p); }
+_TR_XLINK long long _tr_threadpool_auto_n(void)  { return 1LL; }
+_TR_XLINK _TrThreadPool* _tr_threadpool_new(long long n)  { (void)n; return (_TrThreadPool*)TAURARO_CALLOC(1,sizeof(_TrThreadPool)); }
+_TR_XLINK _TrThreadPool* _tr_threadpool_auto(void)        { return _tr_threadpool_new(1LL); }
+_TR_XLINK void _tr_threadpool_spawn(_TrThreadPool* p, void*(*fn)(void*), void* arg) { (void)p; fn(arg); }
+_TR_XLINK void _tr_threadpool_wait(_TrThreadPool* p)      { (void)p; }
+_TR_XLINK void _tr_threadpool_free(_TrThreadPool* p)      { if(p)TAURARO_FREE(p); }
 
 #else /* POSIX ─────────────────────────────────────────────────────────── */
 
@@ -1434,35 +1589,35 @@ typedef struct {
     long long* buf; long long head,tail,count,cap; volatile int closed;
     pthread_mutex_t mu; pthread_cond_t not_empty, not_full;
 } _TrChan;
-static _TrChan* _tr_chan_new(long long cap) {
+_TR_XLINK _TrChan* _tr_chan_new(long long cap) {
     if(cap<1)cap=1; _TrChan* c=(_TrChan*)calloc(1,sizeof(_TrChan));
     c->buf=(long long*)TAURARO_CALLOC((size_t)cap,sizeof(long long)); c->cap=cap;
     pthread_mutex_init(&c->mu,NULL); pthread_cond_init(&c->not_empty,NULL); pthread_cond_init(&c->not_full,NULL); return c;
 }
-static void _tr_chan_send(_TrChan* c, long long val) {
+_TR_XLINK void _tr_chan_send(_TrChan* c, long long val) {
     pthread_mutex_lock(&c->mu);
     while(c->count>=c->cap&&!c->closed) pthread_cond_wait(&c->not_full,&c->mu);
     if(!c->closed){c->buf[c->tail]=val;c->tail=(c->tail+1)%c->cap;c->count++;pthread_cond_signal(&c->not_empty);}
     pthread_mutex_unlock(&c->mu);
 }
-static long long _tr_chan_recv(_TrChan* c) {
+_TR_XLINK long long _tr_chan_recv(_TrChan* c) {
     pthread_mutex_lock(&c->mu);
     while(c->count==0&&!c->closed) pthread_cond_wait(&c->not_empty,&c->mu);
     long long v=0;
     if(c->count>0){v=c->buf[c->head];c->head=(c->head+1)%c->cap;c->count--;pthread_cond_signal(&c->not_full);}
     pthread_mutex_unlock(&c->mu); return v;
 }
-static bool _tr_chan_try_send(_TrChan* c, long long val) {
+_TR_XLINK bool _tr_chan_try_send(_TrChan* c, long long val) {
     pthread_mutex_lock(&c->mu); bool ok=!c->closed&&c->count<c->cap;
     if(ok){c->buf[c->tail]=val;c->tail=(c->tail+1)%c->cap;c->count++;pthread_cond_signal(&c->not_empty);}
     pthread_mutex_unlock(&c->mu); return ok;
 }
-static long long _tr_chan_try_recv_val(_TrChan* c) {
+_TR_XLINK long long _tr_chan_try_recv_val(_TrChan* c) {
     pthread_mutex_lock(&c->mu); long long v=LLONG_MIN;
     if(c->count>0){v=c->buf[c->head];c->head=(c->head+1)%c->cap;c->count--;pthread_cond_signal(&c->not_full);}
     pthread_mutex_unlock(&c->mu); return v;
 }
-static bool _tr_chan_send_timeout(_TrChan* c, long long val, long long ms) {
+_TR_XLINK bool _tr_chan_send_timeout(_TrChan* c, long long val, long long ms) {
     struct timespec ts; clock_gettime(CLOCK_REALTIME,&ts);
     ts.tv_sec+=ms/1000; ts.tv_nsec+=(ms%1000)*1000000LL;
     if(ts.tv_nsec>=1000000000LL){ts.tv_sec++;ts.tv_nsec-=1000000000LL;}
@@ -1471,7 +1626,7 @@ static bool _tr_chan_send_timeout(_TrChan* c, long long val, long long ms) {
     if(ok&&!c->closed&&c->count<c->cap){c->buf[c->tail]=val;c->tail=(c->tail+1)%c->cap;c->count++;pthread_cond_signal(&c->not_empty);}else ok=false;
     pthread_mutex_unlock(&c->mu); return ok;
 }
-static long long _tr_chan_recv_timeout_val(_TrChan* c, long long ms) {
+_TR_XLINK long long _tr_chan_recv_timeout_val(_TrChan* c, long long ms) {
     struct timespec ts; clock_gettime(CLOCK_REALTIME,&ts);
     ts.tv_sec+=ms/1000; ts.tv_nsec+=(ms%1000)*1000000LL;
     if(ts.tv_nsec>=1000000000LL){ts.tv_sec++;ts.tv_nsec-=1000000000LL;}
@@ -1481,15 +1636,15 @@ static long long _tr_chan_recv_timeout_val(_TrChan* c, long long ms) {
     if(c->count>0){v=c->buf[c->head];c->head=(c->head+1)%c->cap;c->count--;pthread_cond_signal(&c->not_full);}
     pthread_mutex_unlock(&c->mu); return v;
 }
-static void _tr_chan_close(_TrChan* c) {
+_TR_XLINK void _tr_chan_close(_TrChan* c) {
     pthread_mutex_lock(&c->mu); c->closed=1;
     pthread_cond_broadcast(&c->not_empty); pthread_cond_broadcast(&c->not_full); pthread_mutex_unlock(&c->mu);
 }
-static bool   _tr_chan_is_closed(_TrChan* c) { pthread_mutex_lock(&c->mu); bool r=c->closed!=0; pthread_mutex_unlock(&c->mu); return r; }
-static long long _tr_chan_len(_TrChan* c)    { pthread_mutex_lock(&c->mu); long long n=c->count; pthread_mutex_unlock(&c->mu); return n; }
+_TR_XLINK bool _tr_chan_is_closed(_TrChan* c) { pthread_mutex_lock(&c->mu); bool r=c->closed!=0; pthread_mutex_unlock(&c->mu); return r; }
+_TR_XLINK long long _tr_chan_len(_TrChan* c)    { pthread_mutex_lock(&c->mu); long long n=c->count; pthread_mutex_unlock(&c->mu); return n; }
 static long long _tr_chan_cap(_TrChan* c)    { return c?c->cap:0; }
 static void   _tr_chan_free(_TrChan* c)      { if(!c)return; pthread_mutex_destroy(&c->mu); pthread_cond_destroy(&c->not_empty); pthread_cond_destroy(&c->not_full); _tr_free(c->buf); _tr_free(c); }
-static long long _tr_chan_recv_ok(_TrChan* c, int* ok) {
+_TR_XLINK long long _tr_chan_recv_ok(_TrChan* c, int* ok) {
     pthread_mutex_lock(&c->mu);
     while (c->count == 0 && !c->closed) pthread_cond_wait(&c->not_empty, &c->mu);
     long long v = 0; *ok = 0;
@@ -1638,19 +1793,19 @@ static void _tr_timer_stop(_TrTimerState* s) {
 
 /* ── Thread-local storage (POSIX pthread_key_t) ──────────────────────── */
 typedef struct { pthread_key_t key; } _TrTLS;
-static inline _TrTLS* _tr_tls_new(long long init) {
+_TR_XLINK _TrTLS* _tr_tls_new(long long init) {
     _TrTLS* t = (_TrTLS*)malloc(sizeof(_TrTLS));
     pthread_key_create(&t->key, NULL);
     pthread_setspecific(t->key, (void*)(uintptr_t)(unsigned long long)init);
     return t;
 }
-static inline long long _tr_tls_get(_TrTLS* t) {
+_TR_XLINK long long _tr_tls_get(_TrTLS* t) {
     return t ? (long long)(uintptr_t)pthread_getspecific(t->key) : 0LL;
 }
-static inline void _tr_tls_set(_TrTLS* t, long long v) {
+_TR_XLINK void _tr_tls_set(_TrTLS* t, long long v) {
     if (t) pthread_setspecific(t->key, (void*)(uintptr_t)(unsigned long long)v);
 }
-static inline void _tr_tls_free(_TrTLS* t) {
+_TR_XLINK void _tr_tls_free(_TrTLS* t) {
     if (!t) return; pthread_key_delete(t->key); free(t);
 }
 
@@ -1679,65 +1834,65 @@ static inline int   _tr_lstack_pop(_TrLockStack* ls, void* b) {
 
 /* ── MutexBox<T>: mutex-guarded single value ─────────────────────────── */
 typedef struct { _TrMutexH* mu; long long data; _Atomic int rc; } _TrMutexBox;
-static inline _TrMutexBox* _tr_mutexbox_new(long long init) {
+_TR_XLINK _TrMutexBox* _tr_mutexbox_new(long long init) {
     _TrMutexBox* b = (_TrMutexBox*)TAURARO_ALLOC(sizeof(_TrMutexBox));
     b->mu = _tr_mutex_new(); b->data = init;
     atomic_store(&b->rc, 1); return b;
 }
-static inline long long _tr_mutexbox_lock_get(_TrMutexBox* b) {
+_TR_XLINK long long _tr_mutexbox_lock_get(_TrMutexBox* b) {
     _tr_mutex_hlock(b->mu); _tr_lstack_push(&_tr_tl_mu_stk, b); return b->data;
 }
-static inline void _tr_mutexbox_set_unlock(_TrMutexBox* b, long long v) {
+_TR_XLINK void _tr_mutexbox_set_unlock(_TrMutexBox* b, long long v) {
     b->data = v; _tr_lstack_pop(&_tr_tl_mu_stk, b); _tr_mutex_hunlock(b->mu);
 }
-static inline void _tr_mutexbox_unlock(_TrMutexBox* b) { _tr_lstack_pop(&_tr_tl_mu_stk, b); _tr_mutex_hunlock(b->mu); }
-static inline void _tr_mutexbox_free(_TrMutexBox* b) {
+_TR_XLINK void _tr_mutexbox_unlock(_TrMutexBox* b) { _tr_lstack_pop(&_tr_tl_mu_stk, b); _tr_mutex_hunlock(b->mu); }
+_TR_XLINK void _tr_mutexbox_free(_TrMutexBox* b) {
     if (!b) return; _tr_mutex_hfree(b->mu); TAURARO_FREE(b);
 }
-static inline _TrMutexBox* _tr_mutexbox_clone(_TrMutexBox* b) {
+_TR_XLINK _TrMutexBox* _tr_mutexbox_clone(_TrMutexBox* b) {
     if (b) atomic_fetch_add(&b->rc, 1); return b;
 }
-static inline void _tr_mutexbox_drop(_TrMutexBox* b) {
+_TR_XLINK void _tr_mutexbox_drop(_TrMutexBox* b) {
     if (!b || atomic_fetch_sub(&b->rc, 1) > 1) return; _tr_mutexbox_free(b);
 }
 /* Auto-unlock cleanup — used by __attribute__((cleanup)) RAII guard in codegen.
  * Fires when the guard variable goes out of scope. No-op if already unlocked
  * (set_unlock/unlock already popped the box from the TLS stack). */
-static inline void _tr_mutexbox_cleanup(_TrMutexBox** bp) {
+_TR_XLINK void _tr_mutexbox_cleanup(_TrMutexBox** bp) {
     if (bp && *bp && _tr_lstack_pop(&_tr_tl_mu_stk, *bp)) _tr_mutex_hunlock((*bp)->mu);
 }
 
 /* ── RwLockBox<T>: reader-writer guarded single value ────────────────── */
 typedef struct { _TrRWL* rw; long long data; _Atomic int rc; } _TrRWLBox;
-static inline _TrRWLBox* _tr_rwlbox_new(long long init) {
+_TR_XLINK _TrRWLBox* _tr_rwlbox_new(long long init) {
     _TrRWLBox* b = (_TrRWLBox*)TAURARO_ALLOC(sizeof(_TrRWLBox));
     b->rw = _tr_rwl_new(); b->data = init;
     atomic_store(&b->rc, 1); return b;
 }
-static inline long long _tr_rwlbox_read_get(_TrRWLBox* b) {
+_TR_XLINK long long _tr_rwlbox_read_get(_TrRWLBox* b) {
     _tr_rwl_read_lock(b->rw); _tr_lstack_push(&_tr_tl_rwl_r_stk, b); return b->data;
 }
-static inline void _tr_rwlbox_read_unlock(_TrRWLBox* b) { _tr_lstack_pop(&_tr_tl_rwl_r_stk, b); _tr_rwl_read_unlock(b->rw); }
-static inline long long _tr_rwlbox_write_get(_TrRWLBox* b) {
+_TR_XLINK void _tr_rwlbox_read_unlock(_TrRWLBox* b) { _tr_lstack_pop(&_tr_tl_rwl_r_stk, b); _tr_rwl_read_unlock(b->rw); }
+_TR_XLINK long long _tr_rwlbox_write_get(_TrRWLBox* b) {
     _tr_rwl_write_lock(b->rw); _tr_lstack_push(&_tr_tl_rwl_w_stk, b); return b->data;
 }
-static inline void _tr_rwlbox_write_set_unlock(_TrRWLBox* b, long long v) {
+_TR_XLINK void _tr_rwlbox_write_set_unlock(_TrRWLBox* b, long long v) {
     b->data = v; _tr_lstack_pop(&_tr_tl_rwl_w_stk, b); _tr_rwl_write_unlock(b->rw);
 }
-static inline void _tr_rwlbox_free(_TrRWLBox* b) {
+_TR_XLINK void _tr_rwlbox_free(_TrRWLBox* b) {
     if (!b) return; _tr_rwl_free(b->rw); TAURARO_FREE(b);
 }
-static inline _TrRWLBox* _tr_rwlbox_clone(_TrRWLBox* b) {
+_TR_XLINK _TrRWLBox* _tr_rwlbox_clone(_TrRWLBox* b) {
     if (b) atomic_fetch_add(&b->rc, 1); return b;
 }
-static inline void _tr_rwlbox_drop(_TrRWLBox* b) {
+_TR_XLINK void _tr_rwlbox_drop(_TrRWLBox* b) {
     if (!b || atomic_fetch_sub(&b->rc, 1) > 1) return; _tr_rwlbox_free(b);
 }
 /* Auto-unlock cleanup for read/write guards. */
-static inline void _tr_rwlbox_cleanup_r(_TrRWLBox** bp) {
+_TR_XLINK void _tr_rwlbox_cleanup_r(_TrRWLBox** bp) {
     if (bp && *bp && _tr_lstack_pop(&_tr_tl_rwl_r_stk, *bp)) _tr_rwl_read_unlock((*bp)->rw);
 }
-static inline void _tr_rwlbox_cleanup_w(_TrRWLBox** bp) {
+_TR_XLINK void _tr_rwlbox_cleanup_w(_TrRWLBox** bp) {
     if (bp && *bp && _tr_lstack_pop(&_tr_tl_rwl_w_stk, *bp)) _tr_rwl_write_unlock((*bp)->rw);
 }
 
@@ -1763,7 +1918,7 @@ static void* _tr_pool_worker(void* arg) {
     }
     return NULL;
 }
-static inline long long _tr_threadpool_auto_n(void) {
+_TR_XLINK long long _tr_threadpool_auto_n(void) {
 #ifdef _WIN32
     SYSTEM_INFO si; GetSystemInfo(&si); return (long long)si.dwNumberOfProcessors;
 #elif defined(_SC_NPROCESSORS_ONLN)
@@ -1776,7 +1931,7 @@ static inline long long _tr_threadpool_auto_n(void) {
     return 1LL;
 #endif
 }
-static inline _TrThreadPool* _tr_threadpool_new(long long n) {
+_TR_XLINK _TrThreadPool* _tr_threadpool_new(long long n) {
     if (n < 1) n = 1;
     _TrThreadPool* p = (_TrThreadPool*)TAURARO_CALLOC(1, sizeof(_TrThreadPool));
     p->n_workers = (int)n;
@@ -1787,18 +1942,18 @@ static inline _TrThreadPool* _tr_threadpool_new(long long n) {
         p->workers[i] = _tr_thread_start(_tr_pool_worker, p);
     return p;
 }
-static inline _TrThreadPool* _tr_threadpool_auto(void) {
+_TR_XLINK _TrThreadPool* _tr_threadpool_auto(void) {
     return _tr_threadpool_new(_tr_threadpool_auto_n());
 }
-static inline void _tr_threadpool_spawn(_TrThreadPool* p, void*(*fn)(void*), void* arg) {
+_TR_XLINK void _tr_threadpool_spawn(_TrThreadPool* p, void*(*fn)(void*), void* arg) {
     _TrPoolItem* item = (_TrPoolItem*)TAURARO_ALLOC(sizeof(_TrPoolItem));
     item->fn = fn; item->arg = arg;
     _tr_wg_add(p->wg, 1);
     /* uintptr_t cast: safe on 32-bit and 64-bit; avoids sign-extension of intptr_t */
     _tr_chan_send(p->queue, (long long)(uintptr_t)(void*)item);
 }
-static inline void _tr_threadpool_wait(_TrThreadPool* p) { _tr_wg_wait(p->wg); }
-static inline void _tr_threadpool_free(_TrThreadPool* p) {
+_TR_XLINK void _tr_threadpool_wait(_TrThreadPool* p) { _tr_wg_wait(p->wg); }
+_TR_XLINK void _tr_threadpool_free(_TrThreadPool* p) {
     if (!p) return;
     _tr_chan_close(p->queue);
     for (int i = 0; i < p->n_workers; i++) _tr_thread_join_wait(p->workers[i]);
@@ -1815,35 +1970,35 @@ static inline void _tr_async_pool_submit(_TrThreadPool* p, void*(*fn)(void*), vo
 
 /* ── Atomic[T]: lock-free atomic integer (C11 _Atomic) ───────────────── */
 typedef struct { _Atomic long long val; } _TrAtomic;
-static inline _TrAtomic* _tr_atomic_new(long long init) {
+_TR_XLINK _TrAtomic* _tr_atomic_new(long long init) {
     _TrAtomic* a = (_TrAtomic*)TAURARO_ALLOC(sizeof(_TrAtomic));
     atomic_init(&a->val, init); return a;
 }
 /* Hot-path ops: null-check removed — codegen never emits NULL _TrAtomic* */
-static inline long long _tr_atomic_load(_TrAtomic* a)               { return atomic_load(&a->val); }
-static inline void      _tr_atomic_store(_TrAtomic* a, long long v)  { atomic_store(&a->val, v); }
-static inline long long _tr_atomic_add(_TrAtomic* a, long long v)    { return atomic_fetch_add(&a->val, v); }
-static inline long long _tr_atomic_sub(_TrAtomic* a, long long v)    { return atomic_fetch_sub(&a->val, v); }
-static inline long long _tr_atomic_swap(_TrAtomic* a, long long v)   { return atomic_exchange(&a->val, v); }
-static inline bool _tr_atomic_cas(_TrAtomic* a, long long expected, long long desired) {
+_TR_XLINK long long _tr_atomic_load(_TrAtomic* a)               { return atomic_load(&a->val); }
+_TR_XLINK void _tr_atomic_store(_TrAtomic* a, long long v)  { atomic_store(&a->val, v); }
+_TR_XLINK long long _tr_atomic_add(_TrAtomic* a, long long v)    { return atomic_fetch_add(&a->val, v); }
+_TR_XLINK long long _tr_atomic_sub(_TrAtomic* a, long long v)    { return atomic_fetch_sub(&a->val, v); }
+_TR_XLINK long long _tr_atomic_swap(_TrAtomic* a, long long v)   { return atomic_exchange(&a->val, v); }
+_TR_XLINK bool _tr_atomic_cas(_TrAtomic* a, long long expected, long long desired) {
     return atomic_compare_exchange_strong(&a->val, &expected, desired);
 }
-static inline void _tr_atomic_free(_TrAtomic* a) { if (a) TAURARO_FREE(a); }
+_TR_XLINK void _tr_atomic_free(_TrAtomic* a) { if (a) TAURARO_FREE(a); }
 
 /* Atomic[T]: explicit memory-order variants (C11 stdatomic) */
-static inline long long _tr_atomic_load_relaxed(_TrAtomic* a) { return atomic_load_explicit(&a->val, memory_order_relaxed); }
-static inline long long _tr_atomic_load_acquire(_TrAtomic* a) { return atomic_load_explicit(&a->val, memory_order_acquire); }
-static inline long long _tr_atomic_load_seqcst(_TrAtomic* a)  { return atomic_load_explicit(&a->val, memory_order_seq_cst); }
-static inline void _tr_atomic_store_relaxed(_TrAtomic* a, long long v) { atomic_store_explicit(&a->val, v, memory_order_relaxed); }
-static inline void _tr_atomic_store_release(_TrAtomic* a, long long v) { atomic_store_explicit(&a->val, v, memory_order_release); }
-static inline void _tr_atomic_store_seqcst(_TrAtomic* a, long long v)  { atomic_store_explicit(&a->val, v, memory_order_seq_cst); }
-static inline long long _tr_atomic_add_relaxed(_TrAtomic* a, long long v) { return atomic_fetch_add_explicit(&a->val, v, memory_order_relaxed); }
-static inline long long _tr_atomic_add_release(_TrAtomic* a, long long v) { return atomic_fetch_add_explicit(&a->val, v, memory_order_release); }
-static inline long long _tr_atomic_add_acqrel(_TrAtomic* a, long long v)  { return atomic_fetch_add_explicit(&a->val, v, memory_order_acq_rel); }
-static inline long long _tr_atomic_sub_relaxed(_TrAtomic* a, long long v) { return atomic_fetch_sub_explicit(&a->val, v, memory_order_relaxed); }
-static inline long long _tr_atomic_sub_release(_TrAtomic* a, long long v) { return atomic_fetch_sub_explicit(&a->val, v, memory_order_release); }
-static inline bool _tr_atomic_cas_weak(_TrAtomic* a, long long exp, long long des)   { return atomic_compare_exchange_weak(&a->val, &exp, des); }
-static inline bool _tr_atomic_cas_acqrel(_TrAtomic* a, long long exp, long long des) {
+_TR_XLINK long long _tr_atomic_load_relaxed(_TrAtomic* a) { return atomic_load_explicit(&a->val, memory_order_relaxed); }
+_TR_XLINK long long _tr_atomic_load_acquire(_TrAtomic* a) { return atomic_load_explicit(&a->val, memory_order_acquire); }
+_TR_XLINK long long _tr_atomic_load_seqcst(_TrAtomic* a)  { return atomic_load_explicit(&a->val, memory_order_seq_cst); }
+_TR_XLINK void _tr_atomic_store_relaxed(_TrAtomic* a, long long v) { atomic_store_explicit(&a->val, v, memory_order_relaxed); }
+_TR_XLINK void _tr_atomic_store_release(_TrAtomic* a, long long v) { atomic_store_explicit(&a->val, v, memory_order_release); }
+_TR_XLINK void _tr_atomic_store_seqcst(_TrAtomic* a, long long v)  { atomic_store_explicit(&a->val, v, memory_order_seq_cst); }
+_TR_XLINK long long _tr_atomic_add_relaxed(_TrAtomic* a, long long v) { return atomic_fetch_add_explicit(&a->val, v, memory_order_relaxed); }
+_TR_XLINK long long _tr_atomic_add_release(_TrAtomic* a, long long v) { return atomic_fetch_add_explicit(&a->val, v, memory_order_release); }
+_TR_XLINK long long _tr_atomic_add_acqrel(_TrAtomic* a, long long v)  { return atomic_fetch_add_explicit(&a->val, v, memory_order_acq_rel); }
+_TR_XLINK long long _tr_atomic_sub_relaxed(_TrAtomic* a, long long v) { return atomic_fetch_sub_explicit(&a->val, v, memory_order_relaxed); }
+_TR_XLINK long long _tr_atomic_sub_release(_TrAtomic* a, long long v) { return atomic_fetch_sub_explicit(&a->val, v, memory_order_release); }
+_TR_XLINK bool _tr_atomic_cas_weak(_TrAtomic* a, long long exp, long long des)   { return atomic_compare_exchange_weak(&a->val, &exp, des); }
+_TR_XLINK bool _tr_atomic_cas_acqrel(_TrAtomic* a, long long exp, long long des) {
     return atomic_compare_exchange_strong_explicit(&a->val, &exp, des, memory_order_acq_rel, memory_order_relaxed);
 }
 
@@ -1879,34 +2034,34 @@ static inline _TrThread _tr_thread_start_result(void*(*fn)(void*), void* arg, _T
 }
 #endif
 
-static inline _TrThreadObj* _tr_threadobj_spawn(void*(*fn)(void*), void* arg) {
+_TR_XLINK _TrThreadObj* _tr_threadobj_spawn(void*(*fn)(void*), void* arg) {
     _TrThreadObj* t = (_TrThreadObj*)TAURARO_CALLOC(1, sizeof(_TrThreadObj));
     t->result.panicked = 0; t->result.panic_msg = NULL;
     t->handle = _tr_thread_start_result(fn, arg, &t->result);
     return t;
 }
-static inline void _tr_threadobj_join(_TrThreadObj* t) {
+_TR_XLINK void _tr_threadobj_join(_TrThreadObj* t) {
     if (!t || t->done) return; t->done = 1; _tr_thread_join_wait(t->handle);
 }
 /* Re-raise the thread's panic in the calling thread after join */
-static inline bool _tr_threadobj_panicked(_TrThreadObj* t) {
+_TR_XLINK bool _tr_threadobj_panicked(_TrThreadObj* t) {
     return t && t->result.panicked;
 }
-static inline char* _tr_threadobj_panic_msg(_TrThreadObj* t) {
+_TR_XLINK char* _tr_threadobj_panic_msg(_TrThreadObj* t) {
     return (t && t->result.panic_msg) ? t->result.panic_msg : "";
 }
-static inline void _tr_threadobj_detach(_TrThreadObj* t) {
+_TR_XLINK void _tr_threadobj_detach(_TrThreadObj* t) {
     if (!t || t->done) return; t->done = 1; _tr_thread_detach(t->handle);
 }
-static inline void _tr_threadobj_free(_TrThreadObj* t) { if (t) TAURARO_FREE(t); }
+_TR_XLINK void _tr_threadobj_free(_TrThreadObj* t) { if (t) TAURARO_FREE(t); }
 
 /* ── Thread utilities: current-thread ID and sleep ───────────────────── */
 #ifdef _WIN32
-static inline long long _tr_thread_current_id(void) { return (long long)(uintptr_t)GetCurrentThreadId(); }
+_TR_XLINK long long _tr_thread_current_id(void) { return (long long)(uintptr_t)GetCurrentThreadId(); }
 #elif defined(TAURARO_BARE)
-static inline long long _tr_thread_current_id(void) { return 0LL; }
+_TR_XLINK long long _tr_thread_current_id(void) { return 0LL; }
 #else
-static inline long long _tr_thread_current_id(void) { return (long long)(uintptr_t)pthread_self(); }
+_TR_XLINK long long _tr_thread_current_id(void) { return (long long)(uintptr_t)pthread_self(); }
 #endif
 static inline void _tr_thread_sleep_ms(long long ms) { _tr_sleep_ms((long)(ms < 0 ? 0 : ms)); }
 
@@ -1932,115 +2087,115 @@ static bool _tr_task_await_timeout_ok(_TrTaskState* t, long long ms) {
  * matches the C extern prototype without GCC type-mismatch warnings.       */
 
 /* Channel */
-static inline char* _tr_chan_new_h(long long cap)                              { return (char*)_tr_chan_new(cap); }
-static inline void  _tr_chan_send_h(char* c, long long v)                      { _tr_chan_send((_TrChan*)c, v); }
-static inline long long _tr_chan_recv_h(char* c)                               { return _tr_chan_recv((_TrChan*)c); }
-static inline bool  _tr_chan_try_send_h(char* c, long long v)                  { return _tr_chan_try_send((_TrChan*)c, v); }
-static inline long long _tr_chan_try_recv_val_h(char* c)                       { return _tr_chan_try_recv_val((_TrChan*)c); }
-static inline bool  _tr_chan_send_timeout_h(char* c, long long v, long long ms){ return _tr_chan_send_timeout((_TrChan*)c, v, ms); }
-static inline long long _tr_chan_recv_timeout_val_h(char* c, long long ms)     { return _tr_chan_recv_timeout_val((_TrChan*)c, ms); }
-static inline void  _tr_chan_close_h(char* c)                                  { _tr_chan_close((_TrChan*)c); }
-static inline bool  _tr_chan_is_closed_h(char* c)                              { return _tr_chan_is_closed((_TrChan*)c); }
-static inline long long _tr_chan_len_h(char* c)                                { return _tr_chan_len((_TrChan*)c); }
-static inline long long _tr_chan_cap_h(char* c)                                { return _tr_chan_cap((_TrChan*)c); }
-static inline void  _tr_chan_free_h(char* c)                                   { _tr_chan_free((_TrChan*)c); }
+_TR_XLINK char* _tr_chan_new_h(long long cap)                              { return (char*)_tr_chan_new(cap); }
+_TR_XLINK void  _tr_chan_send_h(char* c, long long v)                      { _tr_chan_send((_TrChan*)c, v); }
+_TR_XLINK long long _tr_chan_recv_h(char* c)                               { return _tr_chan_recv((_TrChan*)c); }
+_TR_XLINK bool  _tr_chan_try_send_h(char* c, long long v)                  { return _tr_chan_try_send((_TrChan*)c, v); }
+_TR_XLINK long long _tr_chan_try_recv_val_h(char* c)                       { return _tr_chan_try_recv_val((_TrChan*)c); }
+_TR_XLINK bool  _tr_chan_send_timeout_h(char* c, long long v, long long ms){ return _tr_chan_send_timeout((_TrChan*)c, v, ms); }
+_TR_XLINK long long _tr_chan_recv_timeout_val_h(char* c, long long ms)     { return _tr_chan_recv_timeout_val((_TrChan*)c, ms); }
+_TR_XLINK void  _tr_chan_close_h(char* c)                                  { _tr_chan_close((_TrChan*)c); }
+_TR_XLINK bool  _tr_chan_is_closed_h(char* c)                              { return _tr_chan_is_closed((_TrChan*)c); }
+_TR_XLINK long long _tr_chan_len_h(char* c)                                { return _tr_chan_len((_TrChan*)c); }
+_TR_XLINK long long _tr_chan_cap_h(char* c)                                { return _tr_chan_cap((_TrChan*)c); }
+_TR_XLINK void  _tr_chan_free_h(char* c)                                   { _tr_chan_free((_TrChan*)c); }
 
 /* Task / Future */
-static inline char* _tr_task_new_h(void)                                       { return (char*)_tr_task_new(); }
-static inline void  _tr_task_complete_h(char* t, long long r)                  { _tr_task_complete((_TrTaskState*)t, r); }
-static inline void  _tr_task_complete_err_h(char* t, char* msg)                { _tr_task_complete_err((_TrTaskState*)t, msg); }
-static inline void  _tr_task_cancel_h(char* t)                                 { _tr_task_cancel((_TrTaskState*)t); }
-static inline long long _tr_task_await_h(char* t)                              { return _tr_task_await((_TrTaskState*)t); }
-static inline bool  _tr_task_await_timeout_h(char* t, long long ms)            { return _tr_task_await_timeout_ok((_TrTaskState*)t, ms); }
-static inline bool  _tr_task_is_done_h(char* t)                                { return _tr_task_is_done((_TrTaskState*)t); }
-static inline bool  _tr_task_is_cancelled_h(char* t)                           { return _tr_task_is_cancelled((_TrTaskState*)t); }
-static inline bool  _tr_task_has_error_h(char* t)                              { return _tr_task_has_error((_TrTaskState*)t); }
-static inline char* _tr_task_get_error_h(char* t)                              { return _tr_task_get_error((_TrTaskState*)t); }
-static inline void  _tr_task_free_h(char* t)                                   { _tr_task_free((_TrTaskState*)t); }
+_TR_XLINK char* _tr_task_new_h(void)                                       { return (char*)_tr_task_new(); }
+_TR_XLINK void  _tr_task_complete_h(char* t, long long r)                  { _tr_task_complete((_TrTaskState*)t, r); }
+_TR_XLINK void  _tr_task_complete_err_h(char* t, char* msg)                { _tr_task_complete_err((_TrTaskState*)t, msg); }
+_TR_XLINK void  _tr_task_cancel_h(char* t)                                 { _tr_task_cancel((_TrTaskState*)t); }
+_TR_XLINK long long _tr_task_await_h(char* t)                              { return _tr_task_await((_TrTaskState*)t); }
+_TR_XLINK bool  _tr_task_await_timeout_h(char* t, long long ms)            { return _tr_task_await_timeout_ok((_TrTaskState*)t, ms); }
+_TR_XLINK bool  _tr_task_is_done_h(char* t)                                { return _tr_task_is_done((_TrTaskState*)t); }
+_TR_XLINK bool  _tr_task_is_cancelled_h(char* t)                           { return _tr_task_is_cancelled((_TrTaskState*)t); }
+_TR_XLINK bool  _tr_task_has_error_h(char* t)                              { return _tr_task_has_error((_TrTaskState*)t); }
+_TR_XLINK char* _tr_task_get_error_h(char* t)                              { return _tr_rt_str_new(_tr_task_get_error((_TrTaskState*)t)); }
+_TR_XLINK void  _tr_task_free_h(char* t)                                   { _tr_task_free((_TrTaskState*)t); }
 
 /* Mutex / RWLock */
-static inline char* _tr_mutex_new_h(void)                                      { return (char*)_tr_mutex_new(); }
-static inline void  _tr_mutex_lock_h(char* m)                                  { _tr_mutex_hlock((_TrMutexH*)m); }
-static inline void  _tr_mutex_unlock_h(char* m)                                { _tr_mutex_hunlock((_TrMutexH*)m); }
-static inline bool  _tr_mutex_trylock_h(char* m)                               { return _tr_mutex_htrylock((_TrMutexH*)m); }
-static inline void  _tr_mutex_free_h(char* m)                                  { _tr_mutex_hfree((_TrMutexH*)m); }
-static inline char* _tr_rwl_new_h(void)                                        { return (char*)_tr_rwl_new(); }
-static inline void  _tr_rwl_read_lock_h(char* r)                               { _tr_rwl_read_lock((_TrRWL*)r); }
-static inline void  _tr_rwl_read_unlock_h(char* r)                             { _tr_rwl_read_unlock((_TrRWL*)r); }
-static inline void  _tr_rwl_write_lock_h(char* r)                              { _tr_rwl_write_lock((_TrRWL*)r); }
-static inline void  _tr_rwl_write_unlock_h(char* r)                            { _tr_rwl_write_unlock((_TrRWL*)r); }
-static inline void  _tr_rwl_free_h(char* r)                                    { _tr_rwl_free((_TrRWL*)r); }
+_TR_XLINK char* _tr_mutex_new_h(void)                                      { return (char*)_tr_mutex_new(); }
+_TR_XLINK void  _tr_mutex_lock_h(char* m)                                  { _tr_mutex_hlock((_TrMutexH*)m); }
+_TR_XLINK void  _tr_mutex_unlock_h(char* m)                                { _tr_mutex_hunlock((_TrMutexH*)m); }
+_TR_XLINK bool  _tr_mutex_trylock_h(char* m)                               { return _tr_mutex_htrylock((_TrMutexH*)m); }
+_TR_XLINK void  _tr_mutex_free_h(char* m)                                  { _tr_mutex_hfree((_TrMutexH*)m); }
+_TR_XLINK char* _tr_rwl_new_h(void)                                        { return (char*)_tr_rwl_new(); }
+_TR_XLINK void  _tr_rwl_read_lock_h(char* r)                               { _tr_rwl_read_lock((_TrRWL*)r); }
+_TR_XLINK void  _tr_rwl_read_unlock_h(char* r)                             { _tr_rwl_read_unlock((_TrRWL*)r); }
+_TR_XLINK void  _tr_rwl_write_lock_h(char* r)                              { _tr_rwl_write_lock((_TrRWL*)r); }
+_TR_XLINK void  _tr_rwl_write_unlock_h(char* r)                            { _tr_rwl_write_unlock((_TrRWL*)r); }
+_TR_XLINK void  _tr_rwl_free_h(char* r)                                    { _tr_rwl_free((_TrRWL*)r); }
 
 /* Semaphore */
-static inline char* _tr_sema_new_h(long long init, long long maxv)             { return (char*)_tr_sema_new(init, maxv); }
-static inline void  _tr_sema_acquire_h(char* s)                                { _tr_sema_acquire((_TrSema*)s); }
-static inline bool  _tr_sema_try_acquire_h(char* s)                            { return _tr_sema_try_acquire((_TrSema*)s); }
-static inline bool  _tr_sema_acquire_timeout_h(char* s, long long ms)          { return _tr_sema_acquire_timeout((_TrSema*)s, ms); }
-static inline void  _tr_sema_release_h(char* s)                                { _tr_sema_release((_TrSema*)s); }
-static inline void  _tr_sema_free_h(char* s)                                   { _tr_sema_free((_TrSema*)s); }
+_TR_XLINK char* _tr_sema_new_h(long long init, long long maxv)             { return (char*)_tr_sema_new(init, maxv); }
+_TR_XLINK void  _tr_sema_acquire_h(char* s)                                { _tr_sema_acquire((_TrSema*)s); }
+_TR_XLINK bool  _tr_sema_try_acquire_h(char* s)                            { return _tr_sema_try_acquire((_TrSema*)s); }
+_TR_XLINK bool  _tr_sema_acquire_timeout_h(char* s, long long ms)          { return _tr_sema_acquire_timeout((_TrSema*)s, ms); }
+_TR_XLINK void  _tr_sema_release_h(char* s)                                { _tr_sema_release((_TrSema*)s); }
+_TR_XLINK void  _tr_sema_free_h(char* s)                                   { _tr_sema_free((_TrSema*)s); }
 
 /* WaitGroup */
-static inline char* _tr_wg_new_h(void)                                         { return (char*)_tr_wg_new(); }
-static inline void  _tr_wg_add_h(char* w, long long n)                         { _tr_wg_add((_TrWG*)w, n); }
-static inline void  _tr_wg_done_h(char* w)                                     { _tr_wg_done((_TrWG*)w); }
-static inline void  _tr_wg_wait_h(char* w)                                     { _tr_wg_wait((_TrWG*)w); }
-static inline bool  _tr_wg_wait_timeout_h(char* w, long long ms)               { return _tr_wg_wait_timeout((_TrWG*)w, ms); }
-static inline void  _tr_wg_free_h(char* w)                                     { _tr_wg_free((_TrWG*)w); }
+_TR_XLINK char* _tr_wg_new_h(void)                                         { return (char*)_tr_wg_new(); }
+_TR_XLINK void  _tr_wg_add_h(char* w, long long n)                         { _tr_wg_add((_TrWG*)w, n); }
+_TR_XLINK void  _tr_wg_done_h(char* w)                                     { _tr_wg_done((_TrWG*)w); }
+_TR_XLINK void  _tr_wg_wait_h(char* w)                                     { _tr_wg_wait((_TrWG*)w); }
+_TR_XLINK bool  _tr_wg_wait_timeout_h(char* w, long long ms)               { return _tr_wg_wait_timeout((_TrWG*)w, ms); }
+_TR_XLINK void  _tr_wg_free_h(char* w)                                     { _tr_wg_free((_TrWG*)w); }
 
 /* Barrier */
-static inline char* _tr_barrier_new_h(long long n)                             { return (char*)_tr_barrier_new(n); }
-static inline void  _tr_barrier_wait_h(char* b)                                { _tr_barrier_wait((_TrBarrier*)b); }
-static inline void  _tr_barrier_free_h(char* b)                                { _tr_barrier_free((_TrBarrier*)b); }
+_TR_XLINK char* _tr_barrier_new_h(long long n)                             { return (char*)_tr_barrier_new(n); }
+_TR_XLINK void  _tr_barrier_wait_h(char* b)                                { _tr_barrier_wait((_TrBarrier*)b); }
+_TR_XLINK void  _tr_barrier_free_h(char* b)                                { _tr_barrier_free((_TrBarrier*)b); }
 
 /* Once */
-static inline char* _tr_once_new_h(void)                                       { return (char*)_tr_once_new(); }
-static inline bool  _tr_once_do_h(char* o)                                     { return _tr_once_do((_TrOnce*)o); }
-static inline void  _tr_once_free_h(char* o)                                   { _tr_once_free((_TrOnce*)o); }
+_TR_XLINK char* _tr_once_new_h(void)                                       { return (char*)_tr_once_new(); }
+_TR_XLINK bool  _tr_once_do_h(char* o)                                     { return _tr_once_do((_TrOnce*)o); }
+_TR_XLINK void  _tr_once_free_h(char* o)                                   { _tr_once_free((_TrOnce*)o); }
 
 /* Timer / Ticker */
-static inline char* _tr_timer_new_h(long long ms, char* ch)                    { return (char*)_tr_timer_new(ms, (_TrChan*)ch); }
-static inline char* _tr_ticker_new_h(long long ms, char* ch)                   { return (char*)_tr_ticker_new(ms, (_TrChan*)ch); }
-static inline void  _tr_timer_stop_h(char* s)                                  { _tr_timer_stop((_TrTimerState*)s); }
+_TR_XLINK char* _tr_timer_new_h(long long ms, char* ch)                    { return (char*)_tr_timer_new(ms, (_TrChan*)ch); }
+_TR_XLINK char* _tr_ticker_new_h(long long ms, char* ch)                   { return (char*)_tr_ticker_new(ms, (_TrChan*)ch); }
+_TR_XLINK void  _tr_timer_stop_h(char* s)                                  { _tr_timer_stop((_TrTimerState*)s); }
 
 /* Thread object (joinable handle) */
 typedef void*(*_TrThreadFn)(void*);
-static inline char* _tr_threadobj_spawn_h(char* fn, char* arg)                 { return (char*)_tr_threadobj_spawn((_TrThreadFn)(uintptr_t)fn, (void*)arg); }
-static inline void  _tr_threadobj_join_h(char* t)                              { _tr_threadobj_join((_TrThreadObj*)t); }
-static inline void  _tr_threadobj_detach_h(char* t)                            { _tr_threadobj_detach((_TrThreadObj*)t); }
-static inline void  _tr_threadobj_free_h(char* t)                              { _tr_threadobj_free((_TrThreadObj*)t); }
-static inline bool  _tr_threadobj_panicked_h(char* t)                          { return _tr_threadobj_panicked((_TrThreadObj*)t); }
-static inline char* _tr_threadobj_panic_msg_h(char* t)                         { return _tr_str_dup_owned(_tr_threadobj_panic_msg((_TrThreadObj*)t)); }
-static inline long long _tr_thread_current_id_h(void)                          { return _tr_thread_current_id(); }
-static inline void  _tr_thread_sleep_ms_h(long long ms)                        { _tr_thread_sleep_ms(ms); }
+_TR_XLINK char* _tr_threadobj_spawn_h(char* fn, char* arg)                 { return (char*)_tr_threadobj_spawn((_TrThreadFn)(uintptr_t)fn, (void*)arg); }
+_TR_XLINK void  _tr_threadobj_join_h(char* t)                              { _tr_threadobj_join((_TrThreadObj*)t); }
+_TR_XLINK void  _tr_threadobj_detach_h(char* t)                            { _tr_threadobj_detach((_TrThreadObj*)t); }
+_TR_XLINK void  _tr_threadobj_free_h(char* t)                              { _tr_threadobj_free((_TrThreadObj*)t); }
+_TR_XLINK bool  _tr_threadobj_panicked_h(char* t)                          { return _tr_threadobj_panicked((_TrThreadObj*)t); }
+_TR_XLINK char* _tr_threadobj_panic_msg_h(char* t)                         { return _tr_rt_str_new(_tr_threadobj_panic_msg((_TrThreadObj*)t)); }
+_TR_XLINK long long _tr_thread_current_id_h(void)                          { return _tr_thread_current_id(); }
+_TR_XLINK void  _tr_thread_sleep_ms_h(long long ms)                        { _tr_thread_sleep_ms(ms); }
 
 /* Atomic[T]: lock-free integer */
-static inline char* _tr_atomic_new_h(long long init)                           { return (char*)_tr_atomic_new(init); }
-static inline long long _tr_atomic_load_h(char* a)                             { return _tr_atomic_load((_TrAtomic*)a); }
-static inline void  _tr_atomic_store_h(char* a, long long v)                   { _tr_atomic_store((_TrAtomic*)a, v); }
-static inline long long _tr_atomic_add_h(char* a, long long v)                 { return _tr_atomic_add((_TrAtomic*)a, v); }
-static inline long long _tr_atomic_sub_h(char* a, long long v)                 { return _tr_atomic_sub((_TrAtomic*)a, v); }
-static inline long long _tr_atomic_swap_h(char* a, long long v)                { return _tr_atomic_swap((_TrAtomic*)a, v); }
-static inline bool  _tr_atomic_cas_h(char* a, long long expected, long long desired) { return _tr_atomic_cas((_TrAtomic*)a, expected, desired); }
-static inline void  _tr_atomic_free_h(char* a)                                 { _tr_atomic_free((_TrAtomic*)a); }
-static inline long long _tr_atomic_load_relaxed_h(char* a)                     { return _tr_atomic_load_relaxed((_TrAtomic*)a); }
-static inline long long _tr_atomic_load_acquire_h(char* a)                     { return _tr_atomic_load_acquire((_TrAtomic*)a); }
-static inline long long _tr_atomic_load_seqcst_h(char* a)                      { return _tr_atomic_load_seqcst((_TrAtomic*)a); }
-static inline void  _tr_atomic_store_relaxed_h(char* a, long long v)           { _tr_atomic_store_relaxed((_TrAtomic*)a, v); }
-static inline void  _tr_atomic_store_release_h(char* a, long long v)           { _tr_atomic_store_release((_TrAtomic*)a, v); }
-static inline void  _tr_atomic_store_seqcst_h(char* a, long long v)            { _tr_atomic_store_seqcst((_TrAtomic*)a, v); }
-static inline long long _tr_atomic_add_relaxed_h(char* a, long long v)         { return _tr_atomic_add_relaxed((_TrAtomic*)a, v); }
-static inline long long _tr_atomic_add_release_h(char* a, long long v)         { return _tr_atomic_add_release((_TrAtomic*)a, v); }
-static inline long long _tr_atomic_add_acqrel_h(char* a, long long v)          { return _tr_atomic_add_acqrel((_TrAtomic*)a, v); }
-static inline long long _tr_atomic_sub_relaxed_h(char* a, long long v)         { return _tr_atomic_sub_relaxed((_TrAtomic*)a, v); }
-static inline long long _tr_atomic_sub_release_h(char* a, long long v)         { return _tr_atomic_sub_release((_TrAtomic*)a, v); }
-static inline bool  _tr_atomic_cas_weak_h(char* a, long long exp, long long des)   { return _tr_atomic_cas_weak((_TrAtomic*)a, exp, des); }
-static inline bool  _tr_atomic_cas_acqrel_h(char* a, long long exp, long long des) { return _tr_atomic_cas_acqrel((_TrAtomic*)a, exp, des); }
+_TR_XLINK char* _tr_atomic_new_h(long long init)                           { return (char*)_tr_atomic_new(init); }
+_TR_XLINK long long _tr_atomic_load_h(char* a)                             { return _tr_atomic_load((_TrAtomic*)a); }
+_TR_XLINK void _tr_atomic_store_h(char* a, long long v)                   { _tr_atomic_store((_TrAtomic*)a, v); }
+_TR_XLINK long long _tr_atomic_add_h(char* a, long long v)                 { return _tr_atomic_add((_TrAtomic*)a, v); }
+_TR_XLINK long long _tr_atomic_sub_h(char* a, long long v)                 { return _tr_atomic_sub((_TrAtomic*)a, v); }
+_TR_XLINK long long _tr_atomic_swap_h(char* a, long long v)                { return _tr_atomic_swap((_TrAtomic*)a, v); }
+_TR_XLINK bool _tr_atomic_cas_h(char* a, long long expected, long long desired) { return _tr_atomic_cas((_TrAtomic*)a, expected, desired); }
+_TR_XLINK void _tr_atomic_free_h(char* a)                                 { _tr_atomic_free((_TrAtomic*)a); }
+_TR_XLINK long long _tr_atomic_load_relaxed_h(char* a)                     { return _tr_atomic_load_relaxed((_TrAtomic*)a); }
+_TR_XLINK long long _tr_atomic_load_acquire_h(char* a)                     { return _tr_atomic_load_acquire((_TrAtomic*)a); }
+_TR_XLINK long long _tr_atomic_load_seqcst_h(char* a)                      { return _tr_atomic_load_seqcst((_TrAtomic*)a); }
+_TR_XLINK void _tr_atomic_store_relaxed_h(char* a, long long v)           { _tr_atomic_store_relaxed((_TrAtomic*)a, v); }
+_TR_XLINK void _tr_atomic_store_release_h(char* a, long long v)           { _tr_atomic_store_release((_TrAtomic*)a, v); }
+_TR_XLINK void _tr_atomic_store_seqcst_h(char* a, long long v)            { _tr_atomic_store_seqcst((_TrAtomic*)a, v); }
+_TR_XLINK long long _tr_atomic_add_relaxed_h(char* a, long long v)         { return _tr_atomic_add_relaxed((_TrAtomic*)a, v); }
+_TR_XLINK long long _tr_atomic_add_release_h(char* a, long long v)         { return _tr_atomic_add_release((_TrAtomic*)a, v); }
+_TR_XLINK long long _tr_atomic_add_acqrel_h(char* a, long long v)          { return _tr_atomic_add_acqrel((_TrAtomic*)a, v); }
+_TR_XLINK long long _tr_atomic_sub_relaxed_h(char* a, long long v)         { return _tr_atomic_sub_relaxed((_TrAtomic*)a, v); }
+_TR_XLINK long long _tr_atomic_sub_release_h(char* a, long long v)         { return _tr_atomic_sub_release((_TrAtomic*)a, v); }
+_TR_XLINK bool _tr_atomic_cas_weak_h(char* a, long long exp, long long des)   { return _tr_atomic_cas_weak((_TrAtomic*)a, exp, des); }
+_TR_XLINK bool _tr_atomic_cas_acqrel_h(char* a, long long exp, long long des) { return _tr_atomic_cas_acqrel((_TrAtomic*)a, exp, des); }
 
 /* ThreadLocal[T]: per-thread storage */
-static inline char* _tr_tls_new_h(long long init)                              { return (char*)_tr_tls_new(init); }
-static inline long long _tr_tls_get_h(char* t)                                 { return _tr_tls_get((_TrTLS*)t); }
-static inline void  _tr_tls_set_h(char* t, long long v)                        { _tr_tls_set((_TrTLS*)t, v); }
-static inline void  _tr_tls_free_h(char* t)                                    { _tr_tls_free((_TrTLS*)t); }
+_TR_XLINK char* _tr_tls_new_h(long long init)                              { return (char*)_tr_tls_new(init); }
+_TR_XLINK long long _tr_tls_get_h(char* t)                                 { return _tr_tls_get((_TrTLS*)t); }
+_TR_XLINK void _tr_tls_set_h(char* t, long long v)                        { _tr_tls_set((_TrTLS*)t, v); }
+_TR_XLINK void _tr_tls_free_h(char* t)                                    { _tr_tls_free((_TrTLS*)t); }
 
 /* ── Core runtime helpers ────────────────────────────────────────────── */
 
@@ -2197,7 +2352,7 @@ static int64_t _tr_stdin_isatty(void) {
 
 /* 1 if env var `name` is set to a non-empty value; 0 otherwise. Used for the
  * NO_COLOR convention (https://no-color.org).                               */
-static int64_t _tr_env_set(const char* name) {
+_TR_XLINK int64_t _tr_env_set(const char* name) {
     if (!name) return 0;
     const char* v = getenv(name);
     return (v && v[0]) ? 1 : 0;
@@ -2208,12 +2363,12 @@ static char* _tr_read_stdin_bytes(int64_t n) { (void)n; return _tr_empty_heap_st
 static void _tr_write_stdout(const char* s) { _TR_WRITE(s); }
 static void _tr_flush_stdout(void) { }
 static int64_t _tr_stdin_isatty(void) { return 0; }
-static int64_t _tr_env_set(const char* name) { (void)name; return 0; }
+_TR_XLINK int64_t _tr_env_set(const char* name) { (void)name; return 0; }
 #endif
 
 /* The ESC control byte (0x1b) as an owned string. Lets the diagnostics module
  * build ANSI sequences without depending on core.string (StringBuilder).     */
-static char* _tr_ansi_esc(void) { return _tr_str_dup_owned("\x1b"); }
+_TR_XLINK char* _tr_ansi_esc(void) { return _tr_str_dup_owned("\x1b"); }
 
 
 static inline char* _tr_str_substring(const char* s, int start, int end) {
@@ -2229,7 +2384,7 @@ static inline char* _tr_str_substring(const char* s, int start, int end) {
     return res;
 }
 
-static inline void _tr_exit(long long code) { exit((int)code); }
+_TR_XLINK void _tr_exit(long long code) { exit((int)code); }
 
 #if defined(TAURARO_BARE) && !defined(__wasi__)
 static inline long long _tr_getpid(void) { return 0LL; }
@@ -2256,14 +2411,14 @@ static inline long long _tr_getpid(void) { return (long long)getpid(); }
 #  endif
 #endif
 #ifdef _TR_HAS_TIME
-static inline long long _tr_timestamp(void) { return (long long)time(NULL); }
+_TR_XLINK long long _tr_timestamp(void) { return (long long)time(NULL); }
 #else
-static inline long long _tr_timestamp(void) { return 0LL; }  /* no wall clock */
+_TR_XLINK long long _tr_timestamp(void) { return 0LL; }  /* no wall clock */
 #endif
 
 /* High-resolution millisecond wall-clock: QueryPerformanceCounter on Windows,
    CLOCK_MONOTONIC on POSIX.  Used by std.sys.time.time_ms / elapsed_ms. */
-static inline long long _tr_time_ms(void) {
+_TR_XLINK long long _tr_time_ms(void) {
 #if defined(TAURARO_BARE) && !defined(__wasi__)
     return 0LL;
 #elif defined(_WIN32)
@@ -2294,7 +2449,7 @@ static inline void _tr_enable_vt100(void) {
  * TTY. Windows: stdout is a TTY AND we best-effort enable VT processing so even
  * classic conhost interprets the escapes (Windows Terminal/VS Code already do).
  * Returns 0 when piped/redirected so logs and `... | grep` stay plain ASCII.  */
-static int64_t _tr_stdout_supports_ansi(void) {
+_TR_XLINK int64_t _tr_stdout_supports_ansi(void) {
 #if defined(TAURARO_BARE)
     return 0;   /* no console on bare-metal */
 #elif defined(_WIN32)
@@ -2337,17 +2492,17 @@ typedef struct {
 #if defined(TAURARO_BARE) || defined(TAURARO_KERNEL)
 /* ── BARE/Kernel: polling stub (no OS event loop) ────────────────────── */
 typedef struct { int _dummy; } _TrIOPoll;
-static inline _TrIOPoll* _tr_iopoll_create(void) {
+_TR_XLINK _TrIOPoll* _tr_iopoll_create(void) {
     return (_TrIOPoll*)TAURARO_CALLOC(1, sizeof(_TrIOPoll));
 }
-static inline void _tr_iopoll_destroy(_TrIOPoll* p) { if (p) TAURARO_FREE(p); }
-static inline int  _tr_iopoll_add(_TrIOPoll* p, int fd, uint32_t ev, void* ud)
+_TR_XLINK void _tr_iopoll_destroy(_TrIOPoll* p) { if (p) TAURARO_FREE(p); }
+_TR_XLINK int  _tr_iopoll_add(_TrIOPoll* p, int fd, uint32_t ev, void* ud)
     { (void)p;(void)fd;(void)ev;(void)ud; return 0; }
-static inline int  _tr_iopoll_mod(_TrIOPoll* p, int fd, uint32_t ev, void* ud)
+_TR_XLINK int  _tr_iopoll_mod(_TrIOPoll* p, int fd, uint32_t ev, void* ud)
     { (void)p;(void)fd;(void)ev;(void)ud; return 0; }
-static inline int  _tr_iopoll_del(_TrIOPoll* p, int fd)
+_TR_XLINK int  _tr_iopoll_del(_TrIOPoll* p, int fd)
     { (void)p;(void)fd; return 0; }
-static inline int  _tr_iopoll_wait(_TrIOPoll* p, _TrIOEvent* ev, int maxev, int timeout_ms)
+_TR_XLINK int  _tr_iopoll_wait(_TrIOPoll* p, _TrIOEvent* ev, int maxev, int timeout_ms)
     { (void)p;(void)ev;(void)maxev;(void)timeout_ms; return 0; }
 
 #elif defined(_WIN32)
@@ -2380,7 +2535,7 @@ typedef struct {
     int        count;
     int        cap;
 } _TrIOPoll;
-static inline _TrIOPoll* _tr_iopoll_create(void) {
+_TR_XLINK _TrIOPoll* _tr_iopoll_create(void) {
     _TrIOPoll* p = (_TrIOPoll*)calloc(1, sizeof(_TrIOPoll));
     if (!p) return NULL;
     p->cap = 64;
@@ -2389,7 +2544,7 @@ static inline _TrIOPoll* _tr_iopoll_create(void) {
     if (!p->pfds || !p->userdata) { _tr_free(p->pfds); _tr_free(p->userdata); _tr_free(p); return NULL; }
     return p;
 }
-static inline void _tr_iopoll_destroy(_TrIOPoll* p) {
+_TR_XLINK void _tr_iopoll_destroy(_TrIOPoll* p) {
     if (p) { _tr_free(p->pfds); _tr_free(p->userdata); _tr_free(p); }
 }
 static inline SHORT _tr_poll_events(uint32_t ev) {
@@ -2398,7 +2553,7 @@ static inline SHORT _tr_poll_events(uint32_t ev) {
     if (ev & TAURARO_POLLOUT) e |= POLLWRNORM;
     return e;
 }
-static inline int _tr_iopoll_add(_TrIOPoll* p, int fd, uint32_t ev, void* ud) {
+_TR_XLINK int _tr_iopoll_add(_TrIOPoll* p, int fd, uint32_t ev, void* ud) {
     if (!p) return -1;
     for (int i = 0; i < p->count; i++) {
         if (p->pfds[i].fd == (SOCKET)fd) {
@@ -2424,9 +2579,9 @@ static inline int _tr_iopoll_add(_TrIOPoll* p, int fd, uint32_t ev, void* ud) {
     p->userdata[idx] = ud;
     return 0;
 }
-static inline int _tr_iopoll_mod(_TrIOPoll* p, int fd, uint32_t ev, void* ud)
+_TR_XLINK int _tr_iopoll_mod(_TrIOPoll* p, int fd, uint32_t ev, void* ud)
     { return _tr_iopoll_add(p, fd, ev, ud); }
-static inline int _tr_iopoll_del(_TrIOPoll* p, int fd) {
+_TR_XLINK int _tr_iopoll_del(_TrIOPoll* p, int fd) {
     if (!p) return -1;
     for (int i = 0; i < p->count; i++) {
         if (p->pfds[i].fd == (SOCKET)fd) {
@@ -2438,7 +2593,7 @@ static inline int _tr_iopoll_del(_TrIOPoll* p, int fd) {
     }
     return -1;
 }
-static inline int _tr_iopoll_wait(_TrIOPoll* p, _TrIOEvent* out, int maxev, int timeout_ms) {
+_TR_XLINK int _tr_iopoll_wait(_TrIOPoll* p, _TrIOEvent* out, int maxev, int timeout_ms) {
     if (!p || !out || maxev <= 0) return 0;
     if (p->count == 0) {
         if (timeout_ms > 0) Sleep((DWORD)timeout_ms);
@@ -2472,15 +2627,15 @@ static inline int _tr_iopoll_wait(_TrIOPoll* p, _TrIOEvent* out, int maxev, int 
 #include <sys/epoll.h>
 #include <unistd.h>
 typedef struct { int epfd; } _TrIOPoll;
-static inline _TrIOPoll* _tr_iopoll_create(void) {
+_TR_XLINK _TrIOPoll* _tr_iopoll_create(void) {
     _TrIOPoll* p = (_TrIOPoll*)calloc(1, sizeof(_TrIOPoll));
     p->epfd = epoll_create1(EPOLL_CLOEXEC);
     return p;
 }
-static inline void _tr_iopoll_destroy(_TrIOPoll* p) {
+_TR_XLINK void _tr_iopoll_destroy(_TrIOPoll* p) {
     if (!p) return; if (p->epfd >= 0) close(p->epfd); free(p);
 }
-static inline int _tr_iopoll_add(_TrIOPoll* p, int fd, uint32_t ev, void* ud) {
+_TR_XLINK int _tr_iopoll_add(_TrIOPoll* p, int fd, uint32_t ev, void* ud) {
     if (!p) return -1;
     struct epoll_event e = {0};
     if (ev & TAURARO_POLLIN)  e.events |= EPOLLIN;
@@ -2488,7 +2643,7 @@ static inline int _tr_iopoll_add(_TrIOPoll* p, int fd, uint32_t ev, void* ud) {
     e.data.ptr = ud;
     return epoll_ctl(p->epfd, EPOLL_CTL_ADD, fd, &e);
 }
-static inline int _tr_iopoll_mod(_TrIOPoll* p, int fd, uint32_t ev, void* ud) {
+_TR_XLINK int _tr_iopoll_mod(_TrIOPoll* p, int fd, uint32_t ev, void* ud) {
     if (!p) return -1;
     struct epoll_event e = {0};
     if (ev & TAURARO_POLLIN)  e.events |= EPOLLIN;
@@ -2496,11 +2651,11 @@ static inline int _tr_iopoll_mod(_TrIOPoll* p, int fd, uint32_t ev, void* ud) {
     e.data.ptr = ud;
     return epoll_ctl(p->epfd, EPOLL_CTL_MOD, fd, &e);
 }
-static inline int _tr_iopoll_del(_TrIOPoll* p, int fd) {
+_TR_XLINK int _tr_iopoll_del(_TrIOPoll* p, int fd) {
     if (!p) return -1;
     return epoll_ctl(p->epfd, EPOLL_CTL_DEL, fd, NULL);
 }
-static inline int _tr_iopoll_wait(_TrIOPoll* p, _TrIOEvent* out, int maxev, int timeout_ms) {
+_TR_XLINK int _tr_iopoll_wait(_TrIOPoll* p, _TrIOEvent* out, int maxev, int timeout_ms) {
     if (!p || !out || maxev <= 0) return 0;
     struct epoll_event evs[256];
     int n = epoll_wait(p->epfd, evs, maxev < 256 ? maxev : 256, timeout_ms);
@@ -2554,14 +2709,14 @@ static inline void _tr_iouring_cqe_seen(_TrIOUring* u, struct io_uring_cqe* cqe)
 #include <sys/event.h>
 #include <unistd.h>
 typedef struct { int kqfd; } _TrIOPoll;
-static inline _TrIOPoll* _tr_iopoll_create(void) {
+_TR_XLINK _TrIOPoll* _tr_iopoll_create(void) {
     _TrIOPoll* p = (_TrIOPoll*)calloc(1, sizeof(_TrIOPoll));
     p->kqfd = kqueue(); return p;
 }
-static inline void _tr_iopoll_destroy(_TrIOPoll* p) {
+_TR_XLINK void _tr_iopoll_destroy(_TrIOPoll* p) {
     if (!p) return; if (p->kqfd >= 0) close(p->kqfd); free(p);
 }
-static inline int _tr_iopoll_add(_TrIOPoll* p, int fd, uint32_t ev, void* ud) {
+_TR_XLINK int _tr_iopoll_add(_TrIOPoll* p, int fd, uint32_t ev, void* ud) {
     if (!p) return -1;
     struct kevent changes[2]; int n = 0;
     if (ev & TAURARO_POLLIN)
@@ -2570,16 +2725,16 @@ static inline int _tr_iopoll_add(_TrIOPoll* p, int fd, uint32_t ev, void* ud) {
         EV_SET(&changes[n++], (uintptr_t)fd, EVFILT_WRITE, EV_ADD|EV_ENABLE, 0, 0, ud);
     return kevent(p->kqfd, changes, n, NULL, 0, NULL);
 }
-static inline int _tr_iopoll_mod(_TrIOPoll* p, int fd, uint32_t ev, void* ud)
+_TR_XLINK int _tr_iopoll_mod(_TrIOPoll* p, int fd, uint32_t ev, void* ud)
     { return _tr_iopoll_add(p, fd, ev, ud); }
-static inline int _tr_iopoll_del(_TrIOPoll* p, int fd) {
+_TR_XLINK int _tr_iopoll_del(_TrIOPoll* p, int fd) {
     if (!p) return -1;
     struct kevent changes[2];
     EV_SET(&changes[0], (uintptr_t)fd, EVFILT_READ,  EV_DELETE, 0, 0, NULL);
     EV_SET(&changes[1], (uintptr_t)fd, EVFILT_WRITE, EV_DELETE, 0, 0, NULL);
     return kevent(p->kqfd, changes, 2, NULL, 0, NULL);
 }
-static inline int _tr_iopoll_wait(_TrIOPoll* p, _TrIOEvent* out, int maxev, int timeout_ms) {
+_TR_XLINK int _tr_iopoll_wait(_TrIOPoll* p, _TrIOEvent* out, int maxev, int timeout_ms) {
     if (!p || !out || maxev <= 0) return 0;
     struct kevent evs[256];
     struct timespec ts = { timeout_ms / 1000, (timeout_ms % 1000) * 1000000L };
@@ -2601,19 +2756,19 @@ static inline int _tr_iopoll_wait(_TrIOPoll* p, _TrIOEvent* out, int maxev, int 
 #else
 /* ── Fallback: no async I/O on unknown platform ───────────────────────── */
 typedef struct { int _dummy; } _TrIOPoll;
-static inline _TrIOPoll* _tr_iopoll_create(void) { return (_TrIOPoll*)calloc(1,sizeof(_TrIOPoll)); }
-static inline void _tr_iopoll_destroy(_TrIOPoll* p) { if(p) free(p); }
-static inline int  _tr_iopoll_add(_TrIOPoll* p,int fd,uint32_t ev,void* ud){(void)p;(void)fd;(void)ev;(void)ud;return -1;}
-static inline int  _tr_iopoll_mod(_TrIOPoll* p,int fd,uint32_t ev,void* ud){(void)p;(void)fd;(void)ev;(void)ud;return -1;}
-static inline int  _tr_iopoll_del(_TrIOPoll* p,int fd){(void)p;(void)fd;return -1;}
-static inline int  _tr_iopoll_wait(_TrIOPoll* p,_TrIOEvent* ev,int m,int t){(void)p;(void)ev;(void)m;(void)t;return 0;}
+_TR_XLINK _TrIOPoll* _tr_iopoll_create(void) { return (_TrIOPoll*)calloc(1,sizeof(_TrIOPoll)); }
+_TR_XLINK void _tr_iopoll_destroy(_TrIOPoll* p) { if(p) free(p); }
+_TR_XLINK int  _tr_iopoll_add(_TrIOPoll* p,int fd,uint32_t ev,void* ud){(void)p;(void)fd;(void)ev;(void)ud;return -1;}
+_TR_XLINK int  _tr_iopoll_mod(_TrIOPoll* p,int fd,uint32_t ev,void* ud){(void)p;(void)fd;(void)ev;(void)ud;return -1;}
+_TR_XLINK int  _tr_iopoll_del(_TrIOPoll* p,int fd){(void)p;(void)fd;return -1;}
+_TR_XLINK int  _tr_iopoll_wait(_TrIOPoll* p,_TrIOEvent* ev,int m,int t){(void)p;(void)ev;(void)m;(void)t;return 0;}
 #endif /* _TrIOPoll platform backends */
 
 /* _tr_iopoll_wait_raw: Tauraro-callable version.
  * out_buf is a caller-allocated byte array; each slot is sizeof(_TrIOEvent).
  * Returns number of events written.  Tauraro code reads fd/events/userdata
  * at offsets 0/4/8 within each 16-byte slot. */
-static inline int _tr_iopoll_wait_raw(char* p_raw, char* out_buf, int maxev, int timeout_ms) {
+_TR_XLINK int _tr_iopoll_wait_raw(char* p_raw, char* out_buf, int maxev, int timeout_ms) {
     _TrIOPoll* p = (_TrIOPoll*)p_raw;
     _TrIOEvent tmp[64];
     if (maxev > 64) maxev = 64;
@@ -2631,15 +2786,15 @@ static inline int _tr_iopoll_wait_raw(char* p_raw, char* out_buf, int maxev, int
 }
 
 /* IOPoll char*-typed _h wrappers for Tauraro Pointer[char] interop */
-static inline char* _tr_iopoll_create_h(void)
+_TR_XLINK char* _tr_iopoll_create_h(void)
     { return (char*)_tr_iopoll_create(); }
-static inline void  _tr_iopoll_destroy_h(char* p)
+_TR_XLINK void  _tr_iopoll_destroy_h(char* p)
     { _tr_iopoll_destroy((_TrIOPoll*)p); }
-static inline int   _tr_iopoll_add_h(char* p, long long fd, long long ev, long long ud)
+_TR_XLINK int   _tr_iopoll_add_h(char* p, long long fd, long long ev, long long ud)
     { return _tr_iopoll_add((_TrIOPoll*)p,(int)fd,(uint32_t)ev,(void*)(uintptr_t)(unsigned long long)ud); }
-static inline int   _tr_iopoll_mod_h(char* p, long long fd, long long ev, long long ud)
+_TR_XLINK int   _tr_iopoll_mod_h(char* p, long long fd, long long ev, long long ud)
     { return _tr_iopoll_mod((_TrIOPoll*)p,(int)fd,(uint32_t)ev,(void*)(uintptr_t)(unsigned long long)ud); }
-static inline int   _tr_iopoll_del_h(char* p, long long fd)
+_TR_XLINK int   _tr_iopoll_del_h(char* p, long long fd)
     { return _tr_iopoll_del((_TrIOPoll*)p,(int)fd); }
 
 /* =========================================================================
@@ -3045,16 +3200,24 @@ static int _tr_co_await_timeout(_TrCoro* target, long long ms, long long* out) {
     return target->state == _TRC_DONE;
 }
 
-/* Tauraro-callable handle-based wrappers - extern "C" decls in std/async. */
-static char*     _tr_co_go_h(void* fn, void* arg) { return (char*)_tr_co_go((_tr_coro_fn)fn, arg); }
-static void       _tr_co_spawn_h(void* fn, void* arg) { _tr_co_spawn((_tr_coro_fn)fn, arg); }
-static long long  _tr_co_await_h(char* c)          { return _tr_co_await((_TrCoro*)c); }
-static void       _tr_co_free_h(char* c)           { _tr_co_free((_TrCoro*)c); }
-static void       _tr_co_yield_h(void)             { _tr_co_yield(); }
-static void       _tr_co_sleep_h(long long ms)     { _tr_co_sleep_ms(ms); }
-static int        _tr_co_await_fd_h(long long fd, long long ev) { return _tr_co_await_fd((int)fd, (unsigned int)ev); }
-static void       _tr_co_run_h(void)               { _tr_sched_run(); }
-static int        _tr_co_done_h(char* c)           { return _tr_co_done((_TrCoro*)c); }
+/* Tauraro-callable handle-based wrappers - extern "C" decls in std/async. The C backend
+ * (which #includes this header) keeps them `static inline`. The NATIVE/LLVM backend links
+ * runtime.o (native_abi.c) and needs them as REAL EXPORTED symbols so `await`/`Coro.*`
+ * lower to the true green-thread scheduler — native_abi.c defines _TR_EXPORT_CORO. */
+#ifdef _TR_EXPORT_CORO
+#define _TR_CO_LINK
+#else
+#define _TR_CO_LINK static
+#endif
+_TR_CO_LINK char*     _tr_co_go_h(void* fn, void* arg) { return (char*)_tr_co_go((_tr_coro_fn)fn, arg); }
+_TR_CO_LINK void       _tr_co_spawn_h(void* fn, void* arg) { _tr_co_spawn((_tr_coro_fn)fn, arg); }
+_TR_CO_LINK long long  _tr_co_await_h(char* c)          { return _tr_co_await((_TrCoro*)c); }
+_TR_CO_LINK void       _tr_co_free_h(char* c)           { _tr_co_free((_TrCoro*)c); }
+_TR_CO_LINK void       _tr_co_yield_h(void)             { _tr_co_yield(); }
+_TR_CO_LINK void       _tr_co_sleep_h(long long ms)     { _tr_co_sleep_ms(ms); }
+_TR_CO_LINK int        _tr_co_await_fd_h(long long fd, long long ev) { return _tr_co_await_fd((int)fd, (unsigned int)ev); }
+_TR_CO_LINK void       _tr_co_run_h(void)               { _tr_sched_run(); }
+_TR_CO_LINK int        _tr_co_done_h(char* c)           { return _tr_co_done((_TrCoro*)c); }
 
 #endif /* green-thread scheduler */
 
@@ -3062,18 +3225,18 @@ static int        _tr_co_done_h(char* c)           { return _tr_co_done((_TrCoro
 #if defined(TAURARO_BARE) || defined(TAURARO_WASM)
 /* No networking on bare WASM or freestanding targets */
 static inline int _tr_net_init(void)                                              { return -1; }
-static inline int _tr_tcp_connect(const char* h, int p)                           { (void)h;(void)p; return -1; }
-static inline int _tr_tcp_send(int fd, const char* d, int l)                      { (void)fd;(void)d;(void)l; return -1; }
-static inline int _tr_tcp_recv(int fd, char* b, int c)                            { (void)fd;(void)b;(void)c; return -1; }
-static inline void _tr_tcp_close(int fd)                                           { (void)fd; }
-static inline int _tr_tcp_listen(const char* h, int p, int bl)                    { (void)h;(void)p;(void)bl; return -1; }
-static inline int _tr_tcp_accept(int s)                                            { (void)s; return -1; }
-static inline char* _tr_tcp_peer_addr(int fd)                                      { (void)fd; return (char*)""; }
-static inline int _tr_udp_socket(void)                                             { return -1; }
-static inline int _tr_udp_bind(int fd, int p)                                      { (void)fd;(void)p; return -1; }
-static inline int _tr_udp_send_to(int fd, const char* d, int l, const char* h, int p) { (void)fd;(void)d;(void)l;(void)h;(void)p; return -1; }
-static inline int _tr_udp_recv_from(int fd, char* b, int c, char* src)            { (void)fd;(void)b;(void)c;(void)src; return -1; }
-static inline void _tr_udp_close(int fd)                                           { (void)fd; }
+_TR_XLINK int _tr_tcp_connect(const char* h, int p)                           { (void)h;(void)p; return -1; }
+_TR_XLINK int _tr_tcp_send(int fd, const char* d, int l)                      { (void)fd;(void)d;(void)l; return -1; }
+_TR_XLINK int _tr_tcp_recv(int fd, char* b, int c)                            { (void)fd;(void)b;(void)c; return -1; }
+_TR_XLINK void _tr_tcp_close(int fd)                                           { (void)fd; }
+_TR_XLINK int _tr_tcp_listen(const char* h, int p, int bl)                    { (void)h;(void)p;(void)bl; return -1; }
+_TR_XLINK int _tr_tcp_accept(int s)                                            { (void)s; return -1; }
+_TR_XLINK char* _tr_tcp_peer_addr(int fd)                                      { (void)fd; return (char*)""; }
+_TR_XLINK int _tr_udp_socket(void)                                             { return -1; }
+_TR_XLINK int _tr_udp_bind(int fd, int p)                                      { (void)fd;(void)p; return -1; }
+_TR_XLINK int _tr_udp_send_to(int fd, const char* d, int l, const char* h, int p) { (void)fd;(void)d;(void)l;(void)h;(void)p; return -1; }
+_TR_XLINK int _tr_udp_recv_from(int fd, char* b, int c, char* src)            { (void)fd;(void)b;(void)c;(void)src; return -1; }
+_TR_XLINK void _tr_udp_close(int fd)                                           { (void)fd; }
 static inline char* _tr_dns_resolve(const char* host)                              { (void)host; return (char*)""; }
 static inline char* _tr_dns_reverse(const char* ip)                                { (void)ip;  return (char*)""; }
 #elif defined(_WIN32)
@@ -3088,7 +3251,7 @@ static inline int _tr_net_init(void) {
     WSADATA wsa;
     return WSAStartup(MAKEWORD(2,2), &wsa) == 0 ? 0 : -1;
 }
-static inline int _tr_tcp_connect(const char* host, int port) {
+_TR_XLINK int _tr_tcp_connect(const char* host, int port) {
     _tr_net_init();
     struct addrinfo hints = {0}, *res = NULL;
     hints.ai_family   = AF_INET;
@@ -3103,9 +3266,9 @@ static inline int _tr_tcp_connect(const char* host, int port) {
     freeaddrinfo(res);
     return (int)fd;
 }
-static inline int  _tr_tcp_send(int fd, const char* data, int len) { return send((SOCKET)fd, data, len, 0); }
-static inline int  _tr_tcp_recv(int fd, char* buf, int cap)        { return recv((SOCKET)fd, buf, cap, 0); }
-static inline void _tr_tcp_close(int fd)                           { closesocket((SOCKET)fd); }
+_TR_XLINK int  _tr_tcp_send(int fd, const char* data, int len) { return send((SOCKET)fd, data, len, 0); }
+_TR_XLINK int  _tr_tcp_recv(int fd, char* buf, int cap)        { return recv((SOCKET)fd, buf, cap, 0); }
+_TR_XLINK void _tr_tcp_close(int fd)                           { closesocket((SOCKET)fd); }
 
 #else  /* POSIX */
 
@@ -3117,7 +3280,7 @@ static inline void _tr_tcp_close(int fd)                           { closesocket
 #include <arpa/inet.h>
 
 static inline int _tr_net_init(void) { return 0; }
-static inline int _tr_tcp_connect(const char* host, int port) {
+_TR_XLINK int _tr_tcp_connect(const char* host, int port) {
     struct addrinfo hints = {0}, *res = NULL;
     hints.ai_family   = AF_INET;
     hints.ai_socktype = SOCK_STREAM;
@@ -3131,13 +3294,13 @@ static inline int _tr_tcp_connect(const char* host, int port) {
     freeaddrinfo(res);
     return fd;
 }
-static inline int  _tr_tcp_send(int fd, const char* data, int len) { return (int)send(fd, data, (size_t)len, 0); }
-static inline int  _tr_tcp_recv(int fd, char* buf, int cap)        { return (int)recv(fd, buf, (size_t)cap, 0); }
-static inline void _tr_tcp_close(int fd)                           { close(fd); }
+_TR_XLINK int  _tr_tcp_send(int fd, const char* data, int len) { return (int)send(fd, data, (size_t)len, 0); }
+_TR_XLINK int  _tr_tcp_recv(int fd, char* buf, int cap)        { return (int)recv(fd, buf, (size_t)cap, 0); }
+_TR_XLINK void _tr_tcp_close(int fd)                           { close(fd); }
 #endif
 
 /* ── Platform detection ──────────────────────────────────────────────── */
-static inline bool _tr_is_windows(void) {
+_TR_XLINK bool _tr_is_windows(void) {
 #ifdef _WIN32
     return true;
 #else
@@ -3150,28 +3313,28 @@ static inline bool _tr_is_windows(void) {
 /* Bare targets with no filesystem */
 static inline int   _tr_mkdir(const char* p)     { (void)p; return -1; }
 static inline int   _tr_rmdir(const char* p)     { (void)p; return -1; }
-static inline bool  _tr_dir_exists(const char* p){ (void)p; return false; }
+_TR_XLINK bool  _tr_dir_exists(const char* p){ (void)p; return false; }
 static inline bool  _tr_is_dir(const char* p)    { (void)p; return false; }
 static inline bool  _tr_is_file(const char* p)   { (void)p; return false; }
-static inline void* _tr_opendir(const char* p)   { (void)p; return NULL; }
-static inline char* _tr_readdir(void* h)         { (void)h; return strdup(""); }
-static inline void  _tr_closedir(void* h)        { (void)h; }
+_TR_XLINK void* _tr_opendir(const char* p)   { (void)p; return NULL; }
+_TR_XLINK char* _tr_readdir(void* h)         { (void)h; return strdup(""); }
+_TR_XLINK void  _tr_closedir(void* h)        { (void)h; }
 #elif defined(_WIN32)
 static inline int  _tr_mkdir(const char* path)     { return CreateDirectoryA(path, NULL) ? 0 : -1; }
 static inline int  _tr_rmdir(const char* path)     { return RemoveDirectoryA(path) ? 0 : -1; }
-static inline bool _tr_dir_exists(const char* path) {
+_TR_XLINK bool _tr_dir_exists(const char* path) {
     if (!path) return false;
     DWORD attr = GetFileAttributesA(path);
     return (attr != INVALID_FILE_ATTRIBUTES && (attr & FILE_ATTRIBUTE_DIRECTORY));
 }
-static inline bool _tr_is_dir(const char* path)  { return _tr_dir_exists(path); }
+_TR_XLINK bool _tr_is_dir(const char* path)  { return _tr_dir_exists(path); }
 static inline bool _tr_is_file(const char* path) {
     if (!path) return false;
     DWORD attr = GetFileAttributesA(path);
     return (attr != INVALID_FILE_ATTRIBUTES && !(attr & FILE_ATTRIBUTE_DIRECTORY));
 }
 typedef struct { HANDLE h; WIN32_FIND_DATAA ffd; int first; } _TrDir;
-static inline void* _tr_opendir(const char* path) {
+_TR_XLINK void* _tr_opendir(const char* path) {
     if (!path) return NULL;
     _TrDir* d = (_TrDir*)malloc(sizeof(_TrDir));
     char pat[4096]; snprintf(pat, sizeof(pat), "%s\\*", path);
@@ -3179,7 +3342,7 @@ static inline void* _tr_opendir(const char* path) {
     if (d->h == INVALID_HANDLE_VALUE) { free(d); return NULL; }
     return (void*)d;
 }
-static inline char* _tr_readdir(void* handle) {
+_TR_XLINK char* _tr_readdir(void* handle) {
     _TrDir* d = (_TrDir*)handle;
     /* Declared `-> str`, so codegen wraps the result as OWNED (rc=1) and will
      * free it. Every path must therefore return heap memory — the end-of-dir
@@ -3190,7 +3353,7 @@ static inline char* _tr_readdir(void* handle) {
     if (FindNextFileA(d->h, &d->ffd)) return strdup(d->ffd.cFileName);
     return strdup("");
 }
-static inline void _tr_closedir(void* handle) {
+_TR_XLINK void _tr_closedir(void* handle) {
     _TrDir* d = (_TrDir*)handle;
     if (d) { if (d->h != INVALID_HANDLE_VALUE) FindClose(d->h); free(d); }
 }
@@ -3200,17 +3363,17 @@ static inline void _tr_closedir(void* handle) {
 #include <dirent.h>
 static inline int  _tr_mkdir(const char* path)     { return mkdir(path, 0755) == 0 ? 0 : -1; }
 static inline int  _tr_rmdir(const char* path)     { return rmdir(path) == 0 ? 0 : -1; }
-static inline bool _tr_dir_exists(const char* path) {
+_TR_XLINK bool _tr_dir_exists(const char* path) {
     if (!path) return false;
     struct stat st; return stat(path, &st) == 0 && S_ISDIR(st.st_mode);
 }
-static inline bool _tr_is_dir(const char* path)  { return _tr_dir_exists(path); }
+_TR_XLINK bool _tr_is_dir(const char* path)  { return _tr_dir_exists(path); }
 static inline bool _tr_is_file(const char* path) {
     if (!path) return false;
     struct stat st; return stat(path, &st) == 0 && S_ISREG(st.st_mode);
 }
-static inline void* _tr_opendir(const char* path)  { return (void*)opendir(path); }
-static inline char* _tr_readdir(void* handle) {
+_TR_XLINK void* _tr_opendir(const char* path)  { return (void*)opendir(path); }
+_TR_XLINK char* _tr_readdir(void* handle) {
     DIR* d = (DIR*)handle;
     /* Always return OWNED heap (codegen frees it); strdup("") at end-of-dir,
      * never a string literal. */
@@ -3218,7 +3381,7 @@ static inline char* _tr_readdir(void* handle) {
     struct dirent* e = readdir(d);
     return e ? strdup(e->d_name) : strdup("");
 }
-static inline void _tr_closedir(void* handle)       { if (handle) closedir((DIR*)handle); }
+_TR_XLINK void _tr_closedir(void* handle)       { if (handle) closedir((DIR*)handle); }
 #endif
 
 /* ── File-system helpers ──────── std-tier only (remove/rename/FILE) ──── */
@@ -3285,18 +3448,18 @@ static inline _TrThreadPool* _tr_async_pool(void) {
 static inline void _tr_async_pool_shutdown(void) {
     if (_tr_global_async_pool) { _tr_threadpool_free(_tr_global_async_pool); _tr_global_async_pool = NULL; }
 }
-static inline void _tr_tg_begin(void) {
+_TR_XLINK void _tr_tg_begin(void) {
     _tr_tg.cap = 16; _tr_tg.count = 0;
     _tr_tg.ths = (_TrThread*)TAURARO_ALLOC((size_t)_tr_tg.cap * sizeof(_TrThread));
 }
-static inline void _tr_tg_push(_TrThread t) {
+_TR_XLINK void _tr_tg_push(_TrThread t) {
     if (_tr_tg.count >= _tr_tg.cap) {
         _tr_tg.cap *= 2;
         _tr_tg.ths = (_TrThread*)TAURARO_REALLOC(_tr_tg.ths, (size_t)_tr_tg.cap * sizeof(_TrThread));
     }
     _tr_tg.ths[_tr_tg.count++] = t;
 }
-static inline void _tr_taskgroup_wait(void) {
+_TR_XLINK void _tr_taskgroup_wait(void) {
     for (int i = 0; i < _tr_tg.count; i++) _tr_thread_join_wait(_tr_tg.ths[i]);
     if (_tr_tg.ths) { TAURARO_FREE(_tr_tg.ths); _tr_tg.ths = NULL; }
     _tr_tg.count = 0; _tr_tg.cap = 0;
@@ -3324,7 +3487,7 @@ static void _tr_exc_push(jmp_buf* b, char** m) {
     }
 }
 static void _tr_exc_pop(void)  { if (_tr_exc_sp > 0) _tr_exc_sp--; }
-static void _tr_exc_raise(char* msg) {
+_TR_XLINK void _tr_exc_raise(char* msg) {
     if (_tr_exc_sp > 0) {
         _tr_exc_sp--;
         *_tr_exc_msgs[_tr_exc_sp] = msg;
@@ -3368,7 +3531,7 @@ static char* _tr_str_lower(const char* s) {
     for (int i=0; (r[i]=(char)tolower((unsigned char)s[i])) || s[i]; i++);
     return r;
 }
-static bool _tr_str_contains(const char* s, const char* sub) {
+_TR_XLINK bool _tr_str_contains(const char* s, const char* sub) {
     return s && sub && strstr(s, sub) != NULL;
 }
 static bool _tr_str_starts_with(const char* s, const char* pre) {
@@ -3420,9 +3583,19 @@ static char* _tr_str_replace(const char* s, const char* old, const char* nw) {
     }
     *dst='\0'; return r;
 }
-static char* _tr_int_to_str(long long n)   { char* b=(char*)TAURARO_ALLOC(32); snprintf(b,32,"%lld",n); return b; }
-static char* _tr_float_to_str(double n)    { char* b=(char*)TAURARO_ALLOC(32); snprintf(b,32,"%g",n);   return b; }
-static char* _tr_float_to_c_lit(double n) {
+_TR_XLINK char* _tr_int_to_str(long long n)   { char* b=(char*)TAURARO_ALLOC(32); snprintf(b,32,"%lld",n); return b; }
+/* Thousands grouping for f"{n:,d}": 1234567 -> "1,234,567" (fresh heap C string). */
+static char* _tr_i64_grouped(long long v) {
+    char t[24]; int n=0, neg=v<0;
+    unsigned long long u = neg ? 0ull-(unsigned long long)v : (unsigned long long)v;
+    do { t[n++]=(char)('0'+(u%10)); u/=10; } while (u);
+    char* b=(char*)TAURARO_ALLOC(40); int w=0;
+    if (neg) b[w++]='-';
+    for (int i=n-1,c=0;i>=0;i--,c++) { if (c&&c%3==0) b[w++]=','; b[w++]=t[i]; }
+    b[w]=0; return b;
+}
+_TR_XLINK char* _tr_float_to_str(double n)    { char* b=(char*)TAURARO_ALLOC(32); snprintf(b,32,"%g",n);   return b; }
+_TR_XLINK char* _tr_float_to_c_lit(double n) {
     char* b=(char*)TAURARO_ALLOC(32);
     int len = snprintf(b,32,"%.17g",n);
     /* %g on whole numbers (e.g. 7.0 -> "7") drops any marker that tells the C
@@ -3472,10 +3645,10 @@ static inline char* _tr__trstr_s(TrStr x)            { return x.data; }
 )(x)
 static long long _tr_str_to_int(const char* s) { return s ? strtoll(s,NULL,10) : 0LL; }
 static double    _tr_str_to_float(const char* s){ return s ? strtod(s,NULL) : 0.0; }
-static long long _tr_strlen(char* s)     { return s ? (long long)strlen(s) : 0LL; }
+_TR_XLINK long long _tr_strlen(char* s)     { return s ? (long long)strlen(s) : 0LL; }
 
 /* ── String equality ─────────────────────────────────────────────────── */
-static inline bool _tr_str_eq(const char* a, const char* b) {
+_TR_XLINK bool _tr_str_eq(const char* a, const char* b) {
     if (!a && !b) return true;
     if (!a || !b) return false;
     return strcmp(a, b) == 0;
@@ -3487,7 +3660,7 @@ static inline bool _tr_str_eq(const char* a, const char* b) {
  * literal. Use the canonical _tr_empty_heap_str() (defined near _tr_checked_alloc)
  * for the empty-result fallback (freeing a literal corrupts the heap; this is the
  * ownership-lie class that blocked MIR completion of fns that drop these). */
-static inline char* _tr_str_slice(const char* s, long long start, long long end) {
+_TR_XLINK char* _tr_str_slice(const char* s, long long start, long long end) {
     if (!s) return _tr_empty_heap_str();
     long long len = (long long)strlen(s);
     if (start < 0) start = 0;
@@ -3661,9 +3834,9 @@ static inline char* _tr_char_to_str_alloc(long long code) { return _tr_char_to_s
 
 /* ── Shell command execution ─────────────────────────────────────────── */
 #ifdef TAURARO_BARE
-static inline int _tr_system(const char* cmd) { (void)cmd; return -1; }
+_TR_XLINK int _tr_system(const char* cmd) { (void)cmd; return -1; }
 #else
-static inline int _tr_system(const char* cmd) { return system(cmd); }
+_TR_XLINK int _tr_system(const char* cmd) { return system(cmd); }
 #endif
 
 /* ── Panic / error ───────────────────────────────────────────────────── */
@@ -4391,7 +4564,7 @@ static inline TrStr _tr_strx_join_trstr(List_TrStr* parts, const char* sep) {
     return out;
 }
 
-static inline List_TrStr* _tr_str_split(const char* s, const char* sep) {
+_TR_XLINK List_TrStr* _tr_str_split(const char* s, const char* sep) {
     List_TrStr* l=List_TrStr_new(); if(!s||!sep||!*sep) return l;
     char* cp=(char*)malloc(strlen(s)+1); strcpy(cp,s);
     char* tok=strtok(cp,(char*)sep);
@@ -4709,7 +4882,7 @@ static inline long long _tr_memory_total_mb(void) {
     MEMORYSTATUSEX ms; ms.dwLength=sizeof(ms); GlobalMemoryStatusEx(&ms);
     return (long long)(ms.ullTotalPhys/(1024LL*1024LL));
 }
-static inline int _tr_tcp_listen(const char* host,int port,int backlog) {
+_TR_XLINK int _tr_tcp_listen(const char* host,int port,int backlog) {
     _tr_net_init();
     SOCKET s=socket(AF_INET,SOCK_STREAM,0); if(s==INVALID_SOCKET) return -1;
     int opt=1; setsockopt(s,SOL_SOCKET,SO_REUSEADDR,(char*)&opt,sizeof(opt));
@@ -4722,36 +4895,36 @@ static inline int _tr_tcp_listen(const char* host,int port,int backlog) {
 /* Disable Nagle's algorithm: without this, every small HTTP response gets
  * delayed ~40ms by Nagle + the peer's delayed-ACK timer, capping keep-alive
  * request latency at ~20-40ms regardless of how fast the handler itself is. */
-static inline void _tr_tcp_set_nodelay(int fd) {
+_TR_XLINK void _tr_tcp_set_nodelay(int fd) {
     int one = 1;
     setsockopt((SOCKET)fd, IPPROTO_TCP, TCP_NODELAY, (char*)&one, sizeof(one));
 }
-static inline int   _tr_tcp_accept(int srv) { SOCKET c=accept((SOCKET)srv,NULL,NULL); if(c!=INVALID_SOCKET) _tr_tcp_set_nodelay((int)c); return (c==INVALID_SOCKET)?-1:(int)c; }
-static inline char* _tr_tcp_peer_addr(int fd) {
+_TR_XLINK int   _tr_tcp_accept(int srv) { SOCKET c=accept((SOCKET)srv,NULL,NULL); if(c!=INVALID_SOCKET) _tr_tcp_set_nodelay((int)c); return (c==INVALID_SOCKET)?-1:(int)c; }
+_TR_XLINK char* _tr_tcp_peer_addr(int fd) {
     struct sockaddr_in a; int al=sizeof(a);
     if(getpeername((SOCKET)fd,(struct sockaddr*)&a,&al)!=0) return _tr_empty_heap_str();
     char* buf=(char*)_tr_c_malloc(64); char ip[32];
     inet_ntop(AF_INET,&a.sin_addr,ip,sizeof(ip));
-    _snprintf(buf,63,"%s:%d",ip,(int)ntohs(a.sin_port)); return buf;
+    snprintf(buf,64,"%s:%d",ip,(int)ntohs(a.sin_port)); return buf;
 }
-static inline int  _tr_udp_socket(void) { _tr_net_init(); SOCKET s=socket(AF_INET,SOCK_DGRAM,0); return (s==INVALID_SOCKET)?-1:(int)s; }
-static inline int  _tr_udp_bind(int fd,int port) {
+_TR_XLINK int  _tr_udp_socket(void) { _tr_net_init(); SOCKET s=socket(AF_INET,SOCK_DGRAM,0); return (s==INVALID_SOCKET)?-1:(int)s; }
+_TR_XLINK int  _tr_udp_bind(int fd,int port) {
     struct sockaddr_in a; memset(&a,0,sizeof(a));
     a.sin_family=AF_INET; a.sin_port=htons((unsigned short)port); a.sin_addr.s_addr=INADDR_ANY;
     return bind((SOCKET)fd,(struct sockaddr*)&a,sizeof(a))==0?0:-1;
 }
-static inline int  _tr_udp_send_to(int fd,const char* data,int len,const char* host,int port) {
+_TR_XLINK int  _tr_udp_send_to(int fd,const char* data,int len,const char* host,int port) {
     struct sockaddr_in a; memset(&a,0,sizeof(a));
     a.sin_family=AF_INET; a.sin_port=htons((unsigned short)port); a.sin_addr.s_addr=inet_addr(host);
     return (int)sendto((SOCKET)fd,data,len,0,(struct sockaddr*)&a,sizeof(a));
 }
-static inline int  _tr_udp_recv_from(int fd,char* buf,int cap,char* src) {
+_TR_XLINK int  _tr_udp_recv_from(int fd,char* buf,int cap,char* src) {
     struct sockaddr_in a; int al=sizeof(a);
     int n=(int)recvfrom((SOCKET)fd,buf,cap,0,(struct sockaddr*)&a,&al);
-    if(n>0&&src){char ip[32];inet_ntop(AF_INET,&a.sin_addr,ip,sizeof(ip));_snprintf(src,63,"%s:%d",ip,(int)ntohs(a.sin_port));}
+    if(n>0&&src){char ip[32];inet_ntop(AF_INET,&a.sin_addr,ip,sizeof(ip));snprintf(src,64,"%s:%d",ip,(int)ntohs(a.sin_port));}
     return n;
 }
-static inline void _tr_udp_close(int fd) { closesocket((SOCKET)fd); }
+_TR_XLINK void _tr_udp_close(int fd) { closesocket((SOCKET)fd); }
 static inline char* _tr_dns_resolve(const char* host) {
     _tr_net_init();
     struct addrinfo hints={0},*res=NULL; hints.ai_family=AF_INET;
@@ -4825,7 +4998,7 @@ static inline long long _tr_memory_total_mb(void) {
     long p=sysconf(_SC_PHYS_PAGES),s=sysconf(_SC_PAGE_SIZE);
     return (p>0&&s>0)?(long long)p*s/(1024LL*1024LL):0;
 }
-static inline int _tr_tcp_listen(const char* host,int port,int backlog) {
+_TR_XLINK int _tr_tcp_listen(const char* host,int port,int backlog) {
     int s=socket(AF_INET,SOCK_STREAM,0); if(s<0) return -1;
     int opt=1; setsockopt(s,SOL_SOCKET,SO_REUSEADDR,&opt,sizeof(opt));
     struct sockaddr_in a; memset(&a,0,sizeof(a));
@@ -4836,36 +5009,36 @@ static inline int _tr_tcp_listen(const char* host,int port,int backlog) {
 /* Disable Nagle's algorithm: without this, every small HTTP response gets
  * delayed ~40ms by Nagle + the peer's delayed-ACK timer, capping keep-alive
  * request latency at ~20-40ms regardless of how fast the handler itself is. */
-static inline void _tr_tcp_set_nodelay(int fd) {
+_TR_XLINK void _tr_tcp_set_nodelay(int fd) {
     int one = 1;
     setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
 }
-static inline int   _tr_tcp_accept(int srv) { int c=accept(srv,NULL,NULL); if(c>=0) _tr_tcp_set_nodelay(c); return c; }
-static inline char* _tr_tcp_peer_addr(int fd) {
+_TR_XLINK int   _tr_tcp_accept(int srv) { int c=accept(srv,NULL,NULL); if(c>=0) _tr_tcp_set_nodelay(c); return c; }
+_TR_XLINK char* _tr_tcp_peer_addr(int fd) {
     struct sockaddr_in a; socklen_t al=sizeof(a);
     if(getpeername(fd,(struct sockaddr*)&a,&al)<0) return _tr_empty_heap_str();
     char* buf=(char*)_tr_c_malloc(64); char ip[32];
     inet_ntop(AF_INET,&a.sin_addr,ip,sizeof(ip));
     snprintf(buf,63,"%s:%d",ip,(int)ntohs(a.sin_port)); return buf;
 }
-static inline int  _tr_udp_socket(void) { return socket(AF_INET,SOCK_DGRAM,0); }
-static inline int  _tr_udp_bind(int fd,int port) {
+_TR_XLINK int  _tr_udp_socket(void) { return socket(AF_INET,SOCK_DGRAM,0); }
+_TR_XLINK int  _tr_udp_bind(int fd,int port) {
     struct sockaddr_in a; memset(&a,0,sizeof(a));
     a.sin_family=AF_INET; a.sin_port=htons((unsigned short)port); a.sin_addr.s_addr=INADDR_ANY;
     return bind(fd,(struct sockaddr*)&a,sizeof(a))==0?0:-1;
 }
-static inline int  _tr_udp_send_to(int fd,const char* data,int len,const char* host,int port) {
+_TR_XLINK int  _tr_udp_send_to(int fd,const char* data,int len,const char* host,int port) {
     struct sockaddr_in a; memset(&a,0,sizeof(a));
     a.sin_family=AF_INET; a.sin_port=htons((unsigned short)port); a.sin_addr.s_addr=inet_addr(host);
     return (int)sendto(fd,data,len,0,(struct sockaddr*)&a,sizeof(a));
 }
-static inline int  _tr_udp_recv_from(int fd,char* buf,int cap,char* src) {
+_TR_XLINK int  _tr_udp_recv_from(int fd,char* buf,int cap,char* src) {
     struct sockaddr_in a; socklen_t al=sizeof(a);
     int n=(int)recvfrom(fd,buf,cap,0,(struct sockaddr*)&a,&al);
     if(n>0&&src){char ip[32];inet_ntop(AF_INET,&a.sin_addr,ip,sizeof(ip));snprintf(src,63,"%s:%d",ip,(int)ntohs(a.sin_port));}
     return n;
 }
-static inline void _tr_udp_close(int fd) { close(fd); }
+_TR_XLINK void _tr_udp_close(int fd) { close(fd); }
 static inline char* _tr_dns_resolve(const char* host) {
     struct addrinfo hints={0},*res=NULL; hints.ai_family=AF_INET;
     if(getaddrinfo(host,NULL,&hints,&res)!=0) return _tr_empty_heap_str();
@@ -4900,11 +5073,11 @@ static inline void _tr_console_clear(void)     { printf("\033[2J\033[H"); fflush
 #define TAURARO_WOULD_BLOCK (-2)
 
 #if defined(TAURARO_BARE) || defined(TAURARO_KERNEL)
-static inline int  _tr_tcp_set_nonblocking(int fd)                    { (void)fd; return -1; }
-static inline int  _tr_tcp_recv_nb(int fd, char* b, int c)            { (void)fd;(void)b;(void)c; return -1; }
-static inline int  _tr_tcp_send_nb(int fd, const char* d, int l)      { (void)fd;(void)d;(void)l; return -1; }
-static inline int  _tr_tcp_accept_nb(int fd)                          { (void)fd; return TAURARO_WOULD_BLOCK; }
-static inline int  _tr_tcp_connect_nb(const char* h, int p)           { (void)h;(void)p; return -1; }
+_TR_XLINK int  _tr_tcp_set_nonblocking(int fd)                    { (void)fd; return -1; }
+_TR_XLINK int  _tr_tcp_recv_nb(int fd, char* b, int c)            { (void)fd;(void)b;(void)c; return -1; }
+_TR_XLINK int  _tr_tcp_send_nb(int fd, const char* d, int l)      { (void)fd;(void)d;(void)l; return -1; }
+_TR_XLINK int  _tr_tcp_accept_nb(int fd)                          { (void)fd; return TAURARO_WOULD_BLOCK; }
+_TR_XLINK int  _tr_tcp_connect_nb(const char* h, int p)           { (void)h;(void)p; return -1; }
 
 #elif defined(_WIN32)
 #ifndef _TR_NET_INCLUDED
@@ -4913,21 +5086,21 @@ static inline int  _tr_tcp_connect_nb(const char* h, int p)           { (void)h;
 #include <ws2tcpip.h>
 #pragma comment(lib, "ws2_32.lib")
 #endif
-static inline int _tr_tcp_set_nonblocking(int fd) {
+_TR_XLINK int _tr_tcp_set_nonblocking(int fd) {
     u_long mode = 1;
     return ioctlsocket((SOCKET)fd, FIONBIO, &mode) == 0 ? 0 : -1;
 }
-static inline int _tr_tcp_recv_nb(int fd, char* buf, int cap) {
+_TR_XLINK int _tr_tcp_recv_nb(int fd, char* buf, int cap) {
     int n = recv((SOCKET)fd, buf, cap, 0);
     if (n < 0 && WSAGetLastError() == WSAEWOULDBLOCK) return TAURARO_WOULD_BLOCK;
     return n;
 }
-static inline int _tr_tcp_send_nb(int fd, const char* data, int len) {
+_TR_XLINK int _tr_tcp_send_nb(int fd, const char* data, int len) {
     int n = send((SOCKET)fd, data, len, 0);
     if (n < 0 && WSAGetLastError() == WSAEWOULDBLOCK) return TAURARO_WOULD_BLOCK;
     return n;
 }
-static inline int _tr_tcp_accept_nb(int server_fd) {
+_TR_XLINK int _tr_tcp_accept_nb(int server_fd) {
     SOCKET s = accept((SOCKET)server_fd, NULL, NULL);
     if (s == INVALID_SOCKET) {
         return (WSAGetLastError() == WSAEWOULDBLOCK) ? TAURARO_WOULD_BLOCK : -1;
@@ -4935,7 +5108,7 @@ static inline int _tr_tcp_accept_nb(int server_fd) {
     _tr_tcp_set_nodelay((int)s);
     return (int)s;
 }
-static inline int _tr_tcp_connect_nb(const char* host, int port) {
+_TR_XLINK int _tr_tcp_connect_nb(const char* host, int port) {
     _tr_net_init();
     struct addrinfo hints = {0}, *res = NULL;
     hints.ai_family = AF_INET; hints.ai_socktype = SOCK_STREAM;
@@ -4953,28 +5126,28 @@ static inline int _tr_tcp_connect_nb(const char* host, int port) {
 #include <fcntl.h>
 #include <errno.h>
 #include <netinet/tcp.h>
-static inline int _tr_tcp_set_nonblocking(int fd) {
+_TR_XLINK int _tr_tcp_set_nonblocking(int fd) {
     int flags = fcntl(fd, F_GETFL, 0);
     if (flags < 0) return -1;
     return fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0 ? 0 : -1;
 }
-static inline int _tr_tcp_recv_nb(int fd, char* buf, int cap) {
+_TR_XLINK int _tr_tcp_recv_nb(int fd, char* buf, int cap) {
     int n = (int)recv(fd, buf, (size_t)cap, 0);
     if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) return TAURARO_WOULD_BLOCK;
     return n;
 }
-static inline int _tr_tcp_send_nb(int fd, const char* data, int len) {
+_TR_XLINK int _tr_tcp_send_nb(int fd, const char* data, int len) {
     int n = (int)send(fd, data, (size_t)len, 0);
     if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) return TAURARO_WOULD_BLOCK;
     return n;
 }
-static inline int _tr_tcp_accept_nb(int server_fd) {
+_TR_XLINK int _tr_tcp_accept_nb(int server_fd) {
     int fd = accept(server_fd, NULL, NULL);
     if (fd < 0) return (errno == EAGAIN || errno == EWOULDBLOCK) ? TAURARO_WOULD_BLOCK : -1;
     _tr_tcp_set_nodelay(fd);
     return fd;
 }
-static inline int _tr_tcp_connect_nb(const char* host, int port) {
+_TR_XLINK int _tr_tcp_connect_nb(const char* host, int port) {
     struct addrinfo hints = {0}, *res = NULL;
     hints.ai_family = AF_INET; hints.ai_socktype = SOCK_STREAM;
     char pbuf[16]; snprintf(pbuf, sizeof(pbuf), "%d", port);
@@ -4992,7 +5165,7 @@ static inline int _tr_tcp_connect_nb(const char* host, int port) {
 /* Binary-safe non-blocking send: like _tr_tcp_send_nb but takes a raw byte
  * pointer + explicit length (no NUL-terminated str), for framed protocols
  * (e.g. WebSocket) whose payloads contain NUL bytes. */
-static inline int _tr_tcp_send_raw(int fd, char* buf, int len) { return _tr_tcp_send_nb(fd, buf, len); }
+_TR_XLINK int _tr_tcp_send_raw(int fd, char* buf, int len) { return _tr_tcp_send_nb(fd, buf, len); }
 
 /* -- Random (LCG-64) ------------------------------------------------------- */
 typedef struct { unsigned long long s; } _TrRng;
@@ -5104,7 +5277,7 @@ static inline bool _tr_is_mobile(void) {
 #if defined(__APPLE__)
 #  include <mach-o/dyld.h>
 #endif
-static inline char* _tr_exe_dir(void) {
+_TR_XLINK char* _tr_exe_dir(void) {
 #if defined(_WIN32)
     char* buf=(char*)_tr_c_malloc(4096);
     DWORD n=GetModuleFileNameA(NULL,buf,4096);
@@ -5462,7 +5635,7 @@ typedef struct { SSL_CTX* ctx; SSL* ssl; int fd; } _TrTLSConn;
 #  else
 #    define _TR_SOCK_CLOSE(fd) close(fd)
 #  endif
-static inline char* _tr_tls_connect(char* host, int port) {
+_TR_XLINK char* _tr_tls_connect(char* host, int port) {
     static _Atomic int _tr_ssl_once = 0;
     if (atomic_fetch_add(&_tr_ssl_once,1)==0){SSL_library_init();SSL_load_error_strings();OpenSSL_add_all_algorithms();}
     struct addrinfo hints={0},*res=NULL;
@@ -5481,22 +5654,22 @@ static inline char* _tr_tls_connect(char* host, int port) {
     if(!c){SSL_free(ssl);SSL_CTX_free(ctx);_TR_SOCK_CLOSE(fd);return NULL;}
     c->ctx=ctx;c->ssl=ssl;c->fd=fd; return (char*)c;
 }
-static inline int   _tr_tls_send(char* h, char* d) { if(!h||!d) return -1; return SSL_write(((_TrTLSConn*)h)->ssl,d,(int)strlen(d)); }
-static inline char* _tr_tls_recv(char* h, int cap) {
+_TR_XLINK int _tr_tls_send(char* h, char* d) { if(!h||!d) return -1; return SSL_write(((_TrTLSConn*)h)->ssl,d,(int)strlen(d)); }
+_TR_XLINK char* _tr_tls_recv(char* h, int cap) {
     if(!h||cap<=0) return _tr_strdup("");
     char* buf=(char*)TAURARO_ALLOC((size_t)cap+1); if(!buf) return _tr_strdup("");
     int n=SSL_read(((_TrTLSConn*)h)->ssl,buf,cap);
     if(n<=0){TAURARO_FREE(buf);return _tr_strdup("");}
     buf[n]='\0'; return buf;
 }
-static inline void _tr_tls_close(char* h) {
+_TR_XLINK void _tr_tls_close(char* h) {
     if(!h) return; _TrTLSConn* c=(_TrTLSConn*)h;
     SSL_shutdown(c->ssl);SSL_free(c->ssl);SSL_CTX_free(c->ctx);_TR_SOCK_CLOSE(c->fd);TAURARO_FREE(c);
 }
 /* ── Server side: one SSL_CTX (cert+key), one _TrTLSConn per accepted fd ──
  * SSL_accept/read/write are blocking, so server TLS is for the thread-per-
  * connection model (listen_tls), where blocking a worker thread is fine. */
-static inline char* _tr_tls_server_new(char* cert, char* key) {
+_TR_XLINK char* _tr_tls_server_new(char* cert, char* key) {
     static _Atomic int _tr_ssl_once_s = 0;
     if (atomic_fetch_add(&_tr_ssl_once_s,1)==0){SSL_library_init();SSL_load_error_strings();OpenSSL_add_all_algorithms();}
     SSL_CTX* ctx=SSL_CTX_new(TLS_server_method());
@@ -5505,7 +5678,7 @@ static inline char* _tr_tls_server_new(char* cert, char* key) {
     if(SSL_CTX_use_PrivateKey_file(ctx,key,SSL_FILETYPE_PEM)<=0){SSL_CTX_free(ctx);return NULL;}
     return (char*)ctx;
 }
-static inline char* _tr_tls_accept(char* ctxh, int fd) {
+_TR_XLINK char* _tr_tls_accept(char* ctxh, int fd) {
     if(!ctxh) return NULL;
     SSL* ssl=SSL_new((SSL_CTX*)ctxh); if(!ssl) return NULL;
     SSL_set_fd(ssl,fd);
@@ -5515,15 +5688,15 @@ static inline char* _tr_tls_accept(char* ctxh, int fd) {
     c->ctx=NULL; c->ssl=ssl; c->fd=fd;   /* ctx is shared/server-owned, not freed per-conn */
     return (char*)c;
 }
-static inline void _tr_tls_server_free(char* ctxh) { if(ctxh) SSL_CTX_free((SSL_CTX*)ctxh); }
+_TR_XLINK void _tr_tls_server_free(char* ctxh) { if(ctxh) SSL_CTX_free((SSL_CTX*)ctxh); }
 #else
-static inline char* _tr_tls_connect(char* h, int p) { (void)h;(void)p; return NULL; }
-static inline int   _tr_tls_send(char* h, char* d)  { (void)h;(void)d; return -1; }
-static inline char* _tr_tls_recv(char* h, int c)    { (void)h;(void)c; return _tr_strdup(""); }
-static inline void  _tr_tls_close(char* h)          { (void)h; }
-static inline char* _tr_tls_server_new(char* c, char* k) { (void)c;(void)k; return NULL; }
-static inline char* _tr_tls_accept(char* x, int fd) { (void)x;(void)fd; return NULL; }
-static inline void  _tr_tls_server_free(char* x) { (void)x; }
+_TR_XLINK char* _tr_tls_connect(char* h, int p) { (void)h;(void)p; return NULL; }
+_TR_XLINK int _tr_tls_send(char* h, char* d)  { (void)h;(void)d; return -1; }
+_TR_XLINK char* _tr_tls_recv(char* h, int c)    { (void)h;(void)c; return _tr_strdup(""); }
+_TR_XLINK void _tr_tls_close(char* h)          { (void)h; }
+_TR_XLINK char* _tr_tls_server_new(char* c, char* k) { (void)c;(void)k; return NULL; }
+_TR_XLINK char* _tr_tls_accept(char* x, int fd) { (void)x;(void)fd; return NULL; }
+_TR_XLINK void _tr_tls_server_free(char* x) { (void)x; }
 #endif
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -5921,6 +6094,23 @@ static char* _tr_dict_to_str(const void* kdata, const void* vdata, size_t len, s
     for (size_t i = 0; i < len; i++) {
         if (i > 0) buf = _tr_sb_append(buf, &blen, &cap, ", ");
         const char* kp = (const char*)kdata + i * sizeof(TrStr);
+        const char* vp = (const char*)vdata + i * vsize;
+        buf = _tr_sb_append(buf, &blen, &cap, kfmt(kp));
+        buf = _tr_sb_append(buf, &blen, &cap, ": ");
+        buf = _tr_sb_append(buf, &blen, &cap, vfmt(vp));
+    }
+    buf = _tr_sb_append(buf, &blen, &cap, "}");
+    return buf;
+}
+/* Like _tr_dict_to_str but with an explicit KEY stride (int-keyed dicts store i64 keys,
+   not sizeof(TrStr) — #27b: the fixed-stride version read garbage past the first key). */
+static char* _tr_dict_to_str_ks(const void* kdata, const void* vdata, size_t len, size_t ksize, size_t vsize, _TrElemFmt kfmt, _TrElemFmt vfmt) {
+    size_t cap, blen = 0;
+    char* buf = _tr_sb_init(&cap);
+    buf = _tr_sb_append(buf, &blen, &cap, "{");
+    for (size_t i = 0; i < len; i++) {
+        if (i > 0) buf = _tr_sb_append(buf, &blen, &cap, ", ");
+        const char* kp = (const char*)kdata + i * ksize;
         const char* vp = (const char*)vdata + i * vsize;
         buf = _tr_sb_append(buf, &blen, &cap, kfmt(kp));
         buf = _tr_sb_append(buf, &blen, &cap, ": ");

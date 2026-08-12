@@ -196,6 +196,7 @@ pub class Sema:
     pub cur_func_borrowers: Vec[str]   # outlives engine: cross-fn ref-borrow edges (borrowers ...)
     pub cur_func_sources:   Vec[str]   # ... and immediate sources) collected during lower_func
     pub strict_mode: bool               # --strict: alloc outside unsafe -> hard [U-1] error
+    pub no_heap: bool                   # --no-heap: reject heap-allocating constructs -> [H-1] error (bare-metal zero-heap guarantee)
     pub mutating_methods: Map[str, bool] # "ClassName.method" -> true if it stores into self.<field> (implicit-borrow check)
     pub fn_ret_owned:    Map[str, bool] # return-ownership inference: fn/method key -> true if it returns an OWNED heap-class ref (see compute_return_ownership)
     pub fn_param_consumes: Map[str, bool] # parameter-ownership inference: "fnkey#i" -> true if the fn CONSUMES (moves/frees/stores/returns) param i; false = PROVEN only-borrowed. Interprocedural monotone fixpoint (compute_param_ownership); the precise per-callee effect the drop heuristics lack.
@@ -296,6 +297,7 @@ extend Sema:
         s.cur_func_borrowers     = Vec[str].init(0)
         s.cur_func_sources       = Vec[str].init(0)
         s.strict_mode            = false
+        s.no_heap                = false
         s.mutating_methods       = Map[str, bool].init(32)
         s.fn_ret_owned           = Map[str, bool].init(64)
         s.fn_param_consumes      = Map[str, bool].init(64)
@@ -4517,6 +4519,15 @@ extend Sema:
                 return self.infer_break_type(fb)
             case _: return AstType.init("void")
 
+    # [H-1] --no-heap: reject a construct that would allocate on the heap, turning the
+    # bare-metal "stay off the heap" discipline into a compile-time guarantee (Zig-like).
+    # The value-type / fixed-array [T;N] / Pointer[T] / StrView / string-literal subset is
+    # untouched — only DYNAMIC allocation (collections, heap class instances, string ops that
+    # build a new string) is refused. No-op unless --no-heap is set.
+    pub def check_no_heap(self, what: str, fix: str):
+        if self.no_heap:
+            self.error("[H-1] " + what + " allocates on the heap, which --no-heap forbids (bare-metal zero-heap build).\n      FIX: " + fix)
+
     pub def lower_expr(self, e_ptr: Pointer[Expr]) -> Pointer[HirExpr]:
         if e_ptr as usize == 0 as usize: return Pointer[HirExpr](0)
         e = e_ptr.read()
@@ -4563,6 +4574,14 @@ extend Sema:
             case Expr.EBinOp(op, left, right):
                 mut hleft = self.lower_expr(left)
                 mut hright = self.lower_expr(right)
+                # [H-1] str `+` (concat) and str `*` (repeat) build a NEW heap string.
+                if self.no_heap and (op == "+" or op == "*"):
+                    mut _nh_l = hir_expr_type(hleft).name
+                    mut _nh_r = hir_expr_type(hright).name
+                    if _nh_l == "str" or _nh_l == "String" or _nh_r == "str" or _nh_r == "String":
+                        mut _nh_what = "string concatenation (+)"
+                        if op == "*": _nh_what = "string repetition (*)"
+                        self.check_no_heap(_nh_what, "keep string literals (they live in rodata) or use a StrView / fixed byte buffer; do not build new strings")
                 # #10 runtime type comparison: `T == U`, `obj == T`, `5 == int`,
                 # etc. When either side is a bare type name (class/enum/interface/
                 # primitive that isn't a variable), compare the TYPE NAMES. A value
@@ -4604,6 +4623,9 @@ extend Sema:
                 if callee as usize != 0 as usize:
                     match callee.read():
                         case Expr.EIdent(ato_n):
+                            # [H-1] `ClassName(...)` on a refcounted heap class allocates + ARC-tracks it.
+                            if self.no_heap and self._is_rc_class(ato_n):
+                                self.check_no_heap("constructing heap class '" + ato_n + "'", "mark the class '@value_type' (stack; all-scalar fields), or place the instance in caller-owned memory via a Pointer[T]")
                             if ato_n == "await_timeout":
                                 if not self.in_async_fn:
                                     self.error("[C-4] 'await_timeout' used outside an async function.")
@@ -4851,6 +4873,20 @@ extend Sema:
             case Expr.EMethodCall(obj, method, args):
                 if method == "__index__" and args.len > 0:
                     return self.lower_expr(box_expr(Expr.EIndex(obj, args.get(0))))
+                # [H-1] heap-collection constructor: `List.init(..)`, `Vec[T].init(..)`,
+                # `Dict.init(..)`, `Set.init(..)`, `Map.init(..)` all allocate a growable buffer.
+                if self.no_heap and (method == "init" or method == "new" or method == "with_capacity") and obj as usize != 0 as usize:
+                    mut _nh_rn = ""
+                    match obj.read():
+                        case Expr.EIdent(_nhn): _nh_rn = _nhn
+                        case Expr.EIndex(_nhbase, _):
+                            if _nhbase as usize != 0 as usize:
+                                match _nhbase.read():
+                                    case Expr.EIdent(_nhn2): _nh_rn = _nhn2
+                                    case _: pass
+                        case _: pass
+                    if _nh_rn == "List" or _nh_rn == "Vec" or _nh_rn == "Dict" or _nh_rn == "Map" or _nh_rn == "Set":
+                        self.check_no_heap(_nh_rn + "." + method + "() (a growable heap collection)", "use a fixed-size array [T; N] (stack), or parallel fixed arrays for a map")
                 mut hl = Vec[Pointer[HirExpr]].init(4)
                 mut k = 0
                 while k < args.len:
@@ -5461,6 +5497,7 @@ extend Sema:
                 if ty as usize == 0 as usize: return self.lower_expr(expr)
                 return box_hirexpr(HirExpr.ECast(self.lower_expr(expr), ty.read()))
             case Expr.EFString(parts):
+                self.check_no_heap("an f-string", "build output in a fixed byte buffer, or print the parts separately; plain string literals are fine (they live in rodata)")
                 mut hparts = Vec[HirFStringPart].init(4)
                 mut m = 0
                 while m < parts.len:
@@ -5489,6 +5526,7 @@ extend Sema:
                     m = m + 1
                 return box_hirexpr(HirExpr.ETuple(hitems, tup_ty))
             case Expr.EList(items):
+                self.check_no_heap("a list literal []", "use a fixed-size array [T; N] (stack, zero-heap) instead")
                 mut hitems = Vec[Pointer[HirExpr]].init(items.len)
                 mut n = 0
                 while n < items.len:
@@ -5500,6 +5538,7 @@ extend Sema:
                     list_ty.args.push(box_asttype(hir_expr_type(hitems.get(0))))
                 return box_hirexpr(HirExpr.EList(hitems, list_ty))
             case Expr.ESet(items):
+                self.check_no_heap("a set literal", "use a fixed-size array [T; N] + linear scan, or a bitset over a fixed word")
                 mut sitems = Vec[Pointer[HirExpr]].init(items.len)
                 mut sn = 0
                 while sn < items.len:
@@ -5655,6 +5694,7 @@ extend Sema:
                 mut await_ty = hir_expr_type(hinner_await)
                 return box_hirexpr(HirExpr.EAwait(hinner_await, await_ty))
             case Expr.EDict(keys, vals):
+                self.check_no_heap("a dict/map literal", "use parallel fixed-size arrays [K; N]/[V; N], or a static lookup table")
                 mut h_keys = Vec[Pointer[HirExpr]].init(keys.len)
                 mut h_vals = Vec[Pointer[HirExpr]].init(vals.len)
                 mut di = 0
@@ -5671,6 +5711,7 @@ extend Sema:
                     dict_ty.args.push(box_asttype(hir_expr_type(h_vals.get(0))))
                 return box_hirexpr(HirExpr.EDict(h_keys, h_vals, dict_ty))
             case Expr.EListComp(element, generators):
+                self.check_no_heap("a list comprehension", "loop over a fixed-size array [T; N] and write into another")
                 self.enter_scope()
                 mut hgens = Vec[Pointer[HirComprehension]].init(generators.len)
                 mut gc: int = 0

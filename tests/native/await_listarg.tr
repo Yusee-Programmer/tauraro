@@ -1,0 +1,17 @@
+# Awaiting a function that takes a List (or any collection) argument: the arg passes as its
+# handle through the packed buffer + await-wrapper. Coroutine (same-thread) -> deterministic.
+async def fetch(id: int) -> str:
+    return f"item-{id}"
+async def process(n: int) -> int:
+    mut data = await fetch(n)
+    return len(data)
+async def pipeline(ids: List[int]) -> int:
+    mut total = 0
+    for id in ids:
+        total = total + await process(id)
+    return total
+async def main():
+    mut ids = [1, 2, 3, 10]
+    print(await pipeline(ids))          # 6+6+6+7 = 25
+    mut more = [100, 200]
+    print(await pipeline(more))         # 8+8 = 16

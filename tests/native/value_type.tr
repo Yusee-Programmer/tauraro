@@ -1,0 +1,41 @@
+# @value_type classes: stored by value with COPY-on-assign semantics (not ARC aliasing).
+# Must be byte-identical between the C and LLVM backends.
+@value_type
+pub class Point:
+    pub x: int
+    pub y: int
+extend Point:
+    pub def of(x: int, y: int) -> Point:
+        mut p = Point()
+        p.x = x
+        p.y = y
+        return p
+    pub def sum(self) -> int:
+        return self.x + self.y
+
+def read_sum(pt: Point) -> int:
+    return pt.x + pt.y
+
+def main():
+    mut p = Point.of(2, 3)
+    print(p.sum())              # 5
+
+    # SLet bind is a COPY: mutating the copy leaves the original intact
+    mut q = p
+    q.x = 100
+    print(p.x)                  # 2
+    print(q.x)                  # 100
+
+    # SAssign is a COPY too
+    mut r = Point.of(0, 0)
+    r = p
+    r.y = 999
+    print(p.y)                  # 3
+    print(r.y)                  # 999
+
+    # pass by value to a read-only fn
+    print(read_sum(p))          # 5
+
+    # a fresh construct bound directly (no copy needed)
+    mut s = Point.of(10, 20)
+    print(s.sum())              # 30

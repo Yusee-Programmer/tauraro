@@ -30,7 +30,25 @@ if [ "$(uname -s)" = "Linux" ]; then
 fi
 
 echo "==> Compiling src/main.tr → ./tauraroc"
-"$BOOTSTRAP" src/main.tr -o tauraroc $STATIC_FLAG
+# The in-process LLVM shim provides _tr_llvm_emit_object so the `--backend llvm` drive links.
+# DEFAULT: --link the plain .c (stub returning -1 → the compiler uses the bundled-llc
+# subprocess, Stage 1). No libLLVM dependency.
+LLVM_SHIM="runtime/tauraro_llvm.c"
+# STAGE 2 opt-in: TAURARO_LLVM_INPROC=1 builds the shim against libLLVM (via llvm-config) so
+# `--backend llvm` emits objects IN-PROCESS (no llc subprocess). Requires libLLVM dev files.
+if [ -n "${TAURARO_LLVM_INPROC:-}" ]; then
+    LC="${LLVM_CONFIG:-llvm-config}"
+    echo "==> Stage 2: in-process libLLVM emission ($("$LC" --version))"
+    "${CC:-gcc}" -DTAURARO_LLVM_INPROC -O2 -c runtime/tauraro_llvm.c \
+        -I"$("$LC" --includedir)" -o build_tauraro_llvm.o
+    LNAME="$("$LC" --libs | tr -d ' ' | sed 's/^-l//')"            # e.g. LLVM-21
+    LDIR="$("$LC" --libdir)"
+    LIMP="$LDIR/lib$LNAME.dll.a"                                   # Windows import lib
+    [ -f "$LIMP" ] || LIMP="$LDIR/lib$LNAME.so"                    # Linux shared
+    [ -f "$LIMP" ] || LIMP="$LDIR/lib$LNAME.dylib"                 # macOS shared
+    LLVM_SHIM="build_tauraro_llvm.o --link $LIMP"
+fi
+"$BOOTSTRAP" src/main.tr -o tauraroc --link $LLVM_SHIM $STATIC_FLAG
 
 # New bootstrap (v0.0.4+): binary lands in CWD as ./tauraroc
 # Old bootstrap (≤v0.0.3): binary lands in src/build/tauraroc

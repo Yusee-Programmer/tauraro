@@ -1,0 +1,46 @@
+# native≡c / llvm≡c differential corpus: GENERIC CLASSES — lazy per-instantiation
+# layouts + method monomorphization (Box__gint / __gstr / __gfloat coexist).
+class Box[T]:
+    val: T
+
+extend Box:
+    def init(v: T) -> Box[T]:
+        mut b = Box[T]()
+        b.val = v
+        return b
+    def get(self) -> T:
+        return self.val
+    def put(self, v: T):
+        self.val = v
+
+class Pairq[T]:
+    a: T
+    b: T
+
+extend Pairq:
+    def init(a: T, b: T) -> Pairq[T]:
+        mut p = Pairq[T]()
+        p.a = a
+        p.b = b
+        return p
+    def sum(self) -> T:
+        return self.a + self.b
+
+def main():
+    mut bi = Box[int].init(42)
+    print(bi.get())            # 42
+    bi.put(7)
+    print(bi.get())            # 7
+    mut bs = Box[str].init("hello")
+    print(bs.get())            # hello
+    mut bf = Box[float].init(2.5)
+    print(bf.get())            # 2.5
+    bf.put(bf.get() * 2.0)
+    print(bf.get())            # 5
+
+    mut pi2 = Pairq[int].init(20, 22)
+    print(pi2.sum())           # 42
+    mut pf = Pairq[float].init(1.25, 2.25)
+    print(pf.sum())            # 3.5
+    mut ps = Pairq[str].init("ab", "cd")
+    print(ps.sum())            # abcd

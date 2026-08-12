@@ -7,8 +7,39 @@
  * backend covers more of the language (strings, collections, ARC, etc.).
  */
 #define _TR_MAIN
+#define _TR_EXPORT_CORO   /* export the coroutine scheduler entry points (_tr_co_*_h) as
+                           * real symbols so the LLVM/native backend's async/await runs on
+                           * the true green-thread scheduler, not a no-op shim. */
+#define _TR_EXPORT_RT     /* export the std/core memory helpers (_tr_checked_alloc,
+                           * _tr_c_realloc/free/memcpy) so std collections (Vec/String) link. */
 #include "tauraro_rt.h"
 #include <math.h>
+
+#if defined(TR_CRASHINFO) && defined(_WIN32)
+#include <windows.h>
+extern IMAGE_DOS_HEADER __ImageBase;
+static LONG WINAPI _tr_crash_filter(EXCEPTION_POINTERS* ep) {
+    unsigned long long base = (unsigned long long)&__ImageBase;
+    fprintf(stderr, "TRCRASH code=0x%lx rip=%p addr=%p base=%p\n",
+        (unsigned long)ep->ExceptionRecord->ExceptionCode, (void*)ep->ContextRecord->Rip,
+        (void*)(ep->ExceptionRecord->NumberParameters >= 2 ? ep->ExceptionRecord->ExceptionInformation[1] : 0),
+        (void*)base);
+    /* Scan the crash stack for return addresses into this module's .text (compiler code) so the
+     * offending caller of obj_release can be resolved via nm. */
+    unsigned long long* sp = (unsigned long long*)ep->ContextRecord->Rsp;
+    int printed = 0;
+    for (int i = 0; i < 200 && printed < 10; i++) {
+        unsigned long long v = sp[i];
+        if (v > base + 0x1000ULL && v < base + 0x1200000ULL) {  /* inside this image's code */
+            fprintf(stderr, "  stk[%d]=%p (+0x%llx)\n", i, (void*)v, v - base);
+            printed++;
+        }
+    }
+    fflush(stderr);
+    return EXCEPTION_EXECUTE_HANDLER;
+}
+__attribute__((constructor)) static void _tr_install_crash_filter(void){ SetUnhandledExceptionFilter(_tr_crash_filter); }
+#endif
 
 /* Float math methods (x.sqrt() etc.) — thin wrappers over libm so the native backend
  * has stable extern symbols. The final link must include -lm. */
@@ -35,6 +66,9 @@ long long _tr_rt_f64_is_inf(double x) { return isinf(x) ? 1 : 0; }
 /* List[int]/List[str] backing store: a dynamic 8-byte-slot array (a str element is just
  * a char* stored in the same slot). Declared up top so every _tr_rt_list_* helper sees it. */
 typedef struct { long long* data; long long len; long long cap; } _TrNList;
+/* Forward decls: list constructor/push (defined later) — used by dict keys() enumerators. */
+void* _tr_rt_list_new(void);
+void _tr_rt_list_push_i64(void* h, long long v);
 
 /* ---- ARC: refcounted heap strings ------------------------------------------------
  * Every dynamic native string is a heap object with a refcount header immediately
@@ -52,13 +86,14 @@ static long long _tr_n_str_live = 0;
 #endif
 /* Allocate an uninitialized refcounted string with room for `datalen` chars + NUL, rc=1. */
 static char* _tr_rt_str_alloc(size_t datalen) {
-    _TrSHdr* h = (_TrSHdr*)malloc(sizeof(_TrSHdr) + datalen + 1);
+    _TrSHdr* h = (_TrSHdr*)TAURARO_ALLOC(sizeof(_TrSHdr) + datalen + 1);
     if (!h) return (char*)0;
     h->rc = 1; _NMEM_INC();
     return (char*)(h + 1);
 }
 /* Heap copy of a literal / C-string as a fresh (rc=1) refcounted string. */
 char* _tr_rt_str_new(const char* s) {
+    _TR_HEAPCHK("str_new");
     size_t n = s ? strlen(s) : 0;
     char* r = _tr_rt_str_alloc(n);
     if (!r) return (char*)0;
@@ -73,7 +108,10 @@ void _tr_rt_str_retain(char* s) {
 void _tr_rt_str_release(char* s) {
     if (!s) return;
     _TrSHdr* h = &((_TrSHdr*)s)[-1];
-    if (--h->rc <= 0) { _NMEM_DEC(); free(h); }
+#ifdef TR_HEAPDBG
+    if (h->rc <= 0) { fprintf(stderr, "TRDBG: str double-release, rc=%lld content=[%s]\n", (long long)h->rc, s); fflush(stderr); abort(); }
+#endif
+    if (--h->rc <= 0) { _NMEM_DEC(); TAURARO_FREE(h); }
 }
 /* Live-string count (only meaningful with -DTAURARO_NMEM; else -1). For leak tests. */
 long long _tr_rt_str_live_count(void) {
@@ -88,8 +126,20 @@ long long _tr_rt_str_live_count(void) {
 void _tr_rt_print_i64(long long v) { printf("%lld\n", v); }
 void _tr_rt_print_cstr(const char* s) { fputs(s ? s : "", stdout); fputc('\n', stdout); }
 void _tr_rt_print_bool(long long v) { fputs(v ? "true" : "false", stdout); fputc('\n', stdout); }
-void _tr_rt_print_f64(double v) { printf("%g\n", v); }   /* matches C backend's "%g" */
-void _tr_rt_write_f64(double v) { printf("%g", v); }
+/* MSVCRT %g pads exponents to 3 digits ("1.5e+010"); tauraro prints "1.5e+10". */
+static void _tr_gnorm(char* b) {
+    char* e = strchr(b, 'e');
+    if (!e) return;
+    if ((e[1] == '+' || e[1] == '-') && e[2] == '0' && e[3] && e[4] && !e[5]) {
+        e[2] = e[3]; e[3] = e[4]; e[4] = 0;
+    }
+}
+static void _tr_gfmt(double v, char* b, size_t n) { snprintf(b, n, "%g", v); _tr_gnorm(b); }
+void _tr_rt_print_f64(double v) { char b[32]; _tr_gfmt(v, b, sizeof b); printf("%s\n", b); }   /* matches C backend's "%g" */
+void _tr_rt_write_f64(double v) { char b[32]; _tr_gfmt(v, b, sizeof b); printf("%s", b); }
+char* _tr_rt_char_to_str(long long c) { char b[2]; b[0]=(char)c; b[1]=0; return _tr_rt_str_new(b); }
+void _tr_rt_write_char(long long c) { putchar((int)c); }
+void _tr_rt_print_char(long long c) { putchar((int)c); putchar('\n'); }
 
 /* strcmp / strlen the native backend calls for string comparison and len(). */
 long long _tr_rt_str_cmp(const char* a, const char* b) {
@@ -129,7 +179,69 @@ char* _tr_rt_i64_to_str(long long v) {
 }
 char* _tr_rt_bool_to_str(long long v) { return _tr_rt_str_new(v ? "true" : "false"); }
 long long _tr_rt_str_to_i64(const char* s) { return s ? (long long)strtoll(s, 0, 10) : 0; }
-char* _tr_rt_f64_to_str(double v) { char b[32]; snprintf(b, sizeof(b), "%g", v); return _tr_rt_str_new(b); }
+/* float(str) -> f64 bit pattern (LLVM backend: bits travel in rax, not xmm0). */
+long long _tr_rt_str_to_f64(const char* s) { double d = s ? strtod(s, 0) : 0.0; long long b; memcpy(&b, &d, 8); return b; }
+/* f-string format specs ("{x:.2f}", "{n:,d}", "{v:>6d}") — mirror c.tr gen_fstring. */
+static void _tr_fmtspec_strip_align(const char* spec, int* left, const char** rest) {
+    *left = 0; *rest = spec;
+    if (spec[0] == '>' || spec[0] == '^') *rest = spec + 1;
+    else if (spec[0] == '<') { *left = 1; *rest = spec + 1; }
+}
+char* _tr_rt_fmt_spec_i64(long long v, const char* spec) {
+    char buf[512], fmt[40];
+    if (!spec) spec = "";
+    size_t n = strlen(spec);
+    if (!n) { snprintf(buf, sizeof buf, "%lld", v); return _tr_rt_str_new(buf); }
+    char conv = spec[n - 1];
+    if (conv=='d'||conv=='i'||conv=='u'||conv=='o'||conv=='x'||conv=='X') {
+        char mid[24]; size_t m = n - 1; if (m > sizeof mid - 1) m = sizeof mid - 1;
+        memcpy(mid, spec, m); mid[m] = 0;
+        int left = 0; const char* rest = mid; _tr_fmtspec_strip_align(mid, &left, &rest);
+        size_t rl = strlen(rest);
+        if (rl && rest[rl - 1] == ',') {                  /* grouping: {n:,d} */
+            char w[16]; size_t wm = rl - 1; if (wm > sizeof w - 1) wm = sizeof w - 1;
+            memcpy(w, rest, wm); w[wm] = 0;
+            snprintf(fmt, sizeof fmt, "%%%s%ss", left ? "-" : "", w);
+            snprintf(buf, sizeof buf, fmt, _tr_i64_grouped(v));
+            return _tr_rt_str_new(buf);
+        }
+        snprintf(fmt, sizeof fmt, "%%%s%sll%c", left ? "-" : "", rest, conv);
+        snprintf(buf, sizeof buf, fmt, v);
+        return _tr_rt_str_new(buf);
+    }
+    /* width/alignment only (">10", "<8", "05") */
+    int left = 0; const char* rest = spec; _tr_fmtspec_strip_align(spec, &left, &rest);
+    snprintf(fmt, sizeof fmt, "%%%s%slld", left ? "-" : "", rest);
+    snprintf(buf, sizeof buf, fmt, v);
+    return _tr_rt_str_new(buf);
+}
+char* _tr_rt_fmt_spec_f64(long long bits, const char* spec) {
+    double v; char buf[512], fmt[40];
+    memcpy(&v, &bits, 8);
+    if (!spec) spec = "";
+    size_t n = strlen(spec);
+    if (!n) { _tr_gfmt(v, buf, sizeof buf); return _tr_rt_str_new(buf); }
+    char conv = spec[n - 1];
+    int left = 0; const char* rest = spec; _tr_fmtspec_strip_align(spec, &left, &rest);
+    if (conv=='f'||conv=='e'||conv=='E'||conv=='g'||conv=='G')
+        snprintf(fmt, sizeof fmt, "%%%s%s", left ? "-" : "", rest);
+    else
+        snprintf(fmt, sizeof fmt, "%%%s%sg", left ? "-" : "", rest);
+    snprintf(buf, sizeof buf, fmt, v);
+    return _tr_rt_str_new(buf);
+}
+char* _tr_rt_fmt_spec_str(const char* s, const char* spec) {
+    char buf[1024], fmt[40];
+    if (!s) s = "";
+    if (!spec) spec = "";
+    int left = 0; const char* rest = spec; _tr_fmtspec_strip_align(spec, &left, &rest);
+    size_t rn = strlen(rest);
+    if (rn && rest[rn - 1] == 's') snprintf(fmt, sizeof fmt, "%%%s%s", left ? "-" : "", rest);
+    else                           snprintf(fmt, sizeof fmt, "%%%s%ss", left ? "-" : "", rest);
+    snprintf(buf, sizeof buf, fmt, s);
+    return _tr_rt_str_new(buf);
+}
+char* _tr_rt_f64_to_str(double v) { char b[32]; _tr_gfmt(v, b, sizeof(b)); return _tr_rt_str_new(b); }
 char* _tr_rt_hex_str(long long n) {
     char b[32]; unsigned long long u = n < 0 ? (unsigned long long)(-n) : (unsigned long long)n;
     if (n < 0) snprintf(b, sizeof(b), "-0x%llx", u); else snprintf(b, sizeof(b), "0x%llx", u);
@@ -305,6 +417,12 @@ long long _tr_rt_str_parse_bool(const char* s) {
 }
 long long _tr_rt_str_is_empty(const char* s) { return (!s || !*s) ? 1 : 0; }
 long long _tr_rt_str_ord(const char* s) { return s ? (long long)(unsigned char)s[0] : 0; }
+char* _tr_rt_chr(long long c) {
+    char* r = _tr_rt_str_alloc(1);
+    r[0] = (char)(unsigned char)c;
+    r[1] = 0;
+    return r;
+}
 char* _tr_rt_str_pad_left(const char* s, long long w) {
     if (!s) s = "";
     long long n = (long long)strlen(s);
@@ -344,6 +462,19 @@ char* _tr_rt_str_slice(const char* s, long long start, long long end) {
     for (long long i = 0; i < sz; i++) e[i] = s[start + i];
     e[sz] = 0;
     return e;
+}
+/* str.split_once(sep) -> (left, right) at the first occurrence; right="" if not found. */
+char* _tr_rt_split_once_left(const char* s, const char* sep) {
+    if (!s) return _tr_rt_str_new("");
+    const char* p = (sep && *sep) ? strstr(s, sep) : 0;
+    if (!p) return _tr_rt_str_new(s);
+    return _tr_rt_str_slice(s, 0, (long long)(p - s));
+}
+char* _tr_rt_split_once_right(const char* s, const char* sep) {
+    if (!s) return _tr_rt_str_new("");
+    const char* p = (sep && *sep) ? strstr(s, sep) : 0;
+    if (!p) return _tr_rt_str_new("");
+    return _tr_rt_str_slice(s, (long long)(p - s) + (long long)strlen(sep), (long long)strlen(s));
 }
 long long _tr_rt_str_count(const char* s, const char* sub) {
     if (!s || !sub || !*sub) return 0;
@@ -406,6 +537,16 @@ long long _tr_rt_sdict_has(void* h, const char* k) {
     return 0;
 }
 long long _tr_rt_sdict_len(void* h) { _SDict* d = (_SDict*)h; return d ? d->len : 0; }
+/* keys() -> a fresh str list (tag 3): the LLVM/native backend materializes dict keys into a
+ * list and iterates that (each key an rc string owned by the list). Hash-bucket order. */
+void* _tr_rt_sdict_keys(void* h) {
+    _SDict* d = (_SDict*)h;
+    void* l = _tr_rt_list_new();
+    if (d) for (long long i = 0; i < _TRN_DCAP; i++)
+        for (_SNode* n = d->b[i]; n; n = n->next)
+            _tr_rt_list_push_i64(l, (long long)(size_t)_tr_rt_str_new(n->key));
+    return l;
+}
 long long _tr_rt_sdict_get_or(void* h, const char* k, long long def) {
     _SDict* d = (_SDict*)h; if (!d || !k) return def;
     for (_SNode* n = d->b[_trn_shash(k)]; n; n = n->next) if (strcmp(n->key, k) == 0) return n->val;
@@ -437,11 +578,56 @@ long long _tr_rt_idict_has(void* h, long long k) {
     return 0;
 }
 long long _tr_rt_idict_len(void* h) { _IDict* d = (_IDict*)h; return d ? d->len : 0; }
+/* keys() -> a fresh int list (tag 2) of the dict's int keys. Hash-bucket order. */
+void* _tr_rt_idict_keys(void* h) {
+    _IDict* d = (_IDict*)h;
+    void* l = _tr_rt_list_new();
+    if (d) for (long long i = 0; i < _TRN_DCAP; i++)
+        for (_INode* n = d->b[i]; n; n = n->next)
+            _tr_rt_list_push_i64(l, n->key);
+    return l;
+}
 long long _tr_rt_idict_get_or(void* h, long long k, long long def) {
     _IDict* d = (_IDict*)h; if (!d) return def;
     unsigned long i = (unsigned long)((unsigned long long)k % _TRN_DCAP);
     for (_INode* n = d->b[i]; n; n = n->next) if (n->key == k) return n->val;
     return def;
+}
+
+/* Set.to_list(): collect the set's keys into a new _TrNList (a set IS a dict here). */
+void* _tr_rt_iset_to_list(void* h) {
+    _IDict* d = (_IDict*)h;
+    _TrNList* l = (_TrNList*)malloc(sizeof(_TrNList));
+    if (!l) return 0;
+    l->data = 0; l->len = 0; l->cap = 0;
+    if (!d) return l;
+    long long cap = d->len > 8 ? d->len : 8;
+    l->data = (long long*)malloc(cap * 8);
+    l->cap = cap;
+    for (int i = 0; i < _TRN_DCAP; i++) {
+        for (_INode* n = d->b[i]; n; n = n->next) {
+            if (l->len == l->cap) { l->cap *= 2; l->data = (long long*)realloc(l->data, l->cap * 8); }
+            l->data[l->len++] = n->key;
+        }
+    }
+    return l;
+}
+void* _tr_rt_sset_to_list(void* h) {
+    _SDict* d = (_SDict*)h;
+    _TrNList* l = (_TrNList*)malloc(sizeof(_TrNList));
+    if (!l) return 0;
+    l->data = 0; l->len = 0; l->cap = 0;
+    if (!d) return l;
+    long long cap = d->len > 8 ? d->len : 8;
+    l->data = (long long*)malloc(cap * 8);
+    l->cap = cap;
+    for (int i = 0; i < _TRN_DCAP; i++) {
+        for (_SNode* n = d->b[i]; n; n = n->next) {
+            if (l->len == l->cap) { l->cap *= 2; l->data = (long long*)realloc(l->data, l->cap * 8); }
+            l->data[l->len++] = (long long)n->key;
+        }
+    }
+    return l;
 }
 
 /* remove for dicts — also backs Set[int]/Set[str] (a set is a dict with value 1). */
@@ -495,7 +681,8 @@ void _tr_rt_write_list_f64(void* h) {
     if (l) for (long long i = 0; i < l->len; i++) {
         if (i) fputs(", ", stdout);
         double v; memcpy(&v, &l->data[i], 8);
-        printf("%g", v);
+        char gb[32]; _tr_gfmt(v, gb, sizeof gb);
+        printf("%s", gb);
     }
     fputc(']', stdout);
 }
@@ -563,6 +750,21 @@ long long _tr_rt_list_sum_i64(void* h) {
     long long t = 0;
     for (long long i = 0; i < l->len; i++) t += l->data[i];
     return t;
+}
+/* float-list sum: elements are stored as raw f64 bit patterns; returns the sum's bit pattern. */
+long long _tr_rt_list_sum_f64(void* h) {
+    _TrNList* l = (_TrNList*)h;
+    if (!l) return 0;
+    double acc = 0.0;
+    for (long long i = 0; i < l->len; i++) {
+        long long b = l->data[i];
+        double v;
+        memcpy(&v, &b, 8);
+        acc += v;
+    }
+    long long out;
+    memcpy(&out, &acc, 8);
+    return out;
 }
 long long _tr_rt_list_index_i64(void* h, long long v) {
     _TrNList* l = (_TrNList*)h;
@@ -657,6 +859,18 @@ void _tr_rt_list_sort(void* h, long long dir) {
         l->data[j + 1] = v;
     }
 }
+/* in-place insertion sort for string lists (strcmp); dir>0 asc, dir<0 desc. */
+void _tr_rt_list_sort_str(void* h, long long dir) {
+    _TrNList* l = (_TrNList*)h;
+    if (!l) return;
+    for (long long i = 1; i < l->len; i++) {
+        long long v = l->data[i], j = i - 1;
+        const char* vs = (const char*)v;
+        while (j >= 0 && (dir > 0 ? strcmp((const char*)l->data[j], vs) > 0
+                                  : strcmp((const char*)l->data[j], vs) < 0)) { l->data[j + 1] = l->data[j]; j--; }
+        l->data[j + 1] = v;
+    }
+}
 
 /* `x in xs` membership for List[int] / List[str]. */
 long long _tr_rt_list_contains_i64(void* h, long long v) {
@@ -703,15 +917,215 @@ void _tr_rt_assert_fail(void) {
  * access as these runtime calls, so no new codegen is needed. int/bool/ptr fields go
  * through the *_i pair (raw 8 bytes); float fields reinterpret their bits as i64.
  * (No ARC yet — instances leak; a leak, never a use-after-free.) */
+/* -- object refcounting (ARC for class/enum instances) --------------------------
+ * Every object block carries a hidden header (rc + optional per-class drop fn) that
+ * sits BEFORE the returned data pointer, so field offsets (relative to the data ptr)
+ * are unchanged — the header is transparent to field_get/set. A "drop" releases the
+ * object's owned fields (str/nested-object) but does NOT free the shell; _release frees
+ * the shell once rc hits 0. Objects with no owned fields leave drop=0 (plain free).
+ * Compile with -DTAURARO_NMEM to count live objects for leak assertions. */
+typedef struct { long long rc; void (*drop)(void*); } _TrOHdr;
+#ifdef TAURARO_NMEM
+static long long _tr_n_obj_live = 0;
+#define _OMEM_INC() (_tr_n_obj_live++)
+#define _OMEM_DEC() (_tr_n_obj_live--)
+#else
+#define _OMEM_INC() ((void)0)
+#define _OMEM_DEC() ((void)0)
+#endif
+#if defined(TR_OBJDBG)
+/* Live-object registry (separate arrays -> NO allocation-layout change, so it does not mask the
+ * -O2 corruption). Scanned on each alloc: a live object whose rc header is garbage was hit by an
+ * inline-store overrun -> report it (+ the size of the block just allocated for context). */
+#define _ODBG_LIVE 262144
+static _TrOHdr* _odbg_live[_ODBG_LIVE];
+static long _odbg_ln = 0;
+static long _odbg_scan_on = 0;
+static void _odbg_add(_TrOHdr* h){ (void)h; }   /* registry/scan disabled (O(n) per free too slow); rely on header check + poison */
+static void _odbg_del(_TrOHdr* h){ (void)h; }
+static void _odbg_scan(long newsize){
+    if(!_odbg_scan_on) return;
+    long i; for(i=0;i<_odbg_ln;i++){
+        long long rc = _odbg_live[i]->rc;
+        if(rc <= 0 || rc > 0x10000000LL){
+            fprintf(stderr, "TRDBG: CORRUPT live obj %p rc=%lld drop=%p (detected after alloc size=%ld)\n",
+                (void*)(_odbg_live[i]+1), rc, (void*)_odbg_live[i]->drop, newsize);
+            fflush(stderr); abort();
+        }
+    }
+}
+#endif
 void* _tr_rt_obj_alloc(int64_t size) {
     if (size < 8) size = 8;
-    return calloc(1, (size_t)size);
+#if defined(TR_OBJDBG)
+    _odbg_scan(size);
+#endif
+    _TrOHdr* h = (_TrOHdr*)calloc(1, sizeof(_TrOHdr) + (size_t)size);
+    if (!h) return (void*)0;
+    h->rc = 1; h->drop = (void(*)(void*))0; _OMEM_INC();
+#if defined(TR_OBJDBG)
+    _odbg_add(h);
+#endif
+    return (void*)(h + 1);
 }
+/* Attach a per-class drop function (called by _release when rc reaches 0, before free). */
+void _tr_rt_obj_set_drop(void* p, void (*d)(void*)) {
+    if (p) ((_TrOHdr*)p)[-1].drop = d;
+}
+void _tr_rt_obj_retain(void* p) {
+    if (p) ((_TrOHdr*)p)[-1].rc++;
+}
+#if defined(TR_OBJDBG)
+/* Ring of recently-freed object pointers + the return-address of the free site, so a later
+ * bad-release can report WHERE the object was (wrongly) freed. Separate arrays -> no layout change. */
+#define _ODBG_RING 8192
+static void* _odbg_fp[_ODBG_RING];
+static void* _odbg_fr[_ODBG_RING];
+static long  _odbg_fi = 0;
+static void _odbg_record_free(void* p, void* ret) {
+    _odbg_fp[_odbg_fi & (_ODBG_RING-1)] = p;
+    _odbg_fr[_odbg_fi & (_ODBG_RING-1)] = ret;
+    _odbg_fi++;
+}
+static void* _odbg_find_free(void* p) {
+    long i; for (i = _odbg_fi-1; i >= 0 && i > _odbg_fi-_ODBG_RING; i--)
+        if (_odbg_fp[i & (_ODBG_RING-1)] == p) return _odbg_fr[i & (_ODBG_RING-1)];
+    return (void*)0;
+}
+#endif
+void _tr_rt_obj_release(void* p) {
+    if (!p) return;
+    _TrOHdr* h = &((_TrOHdr*)p)[-1];
+#if defined(TR_HEAPDBG) || defined(TR_OBJDBG)
+    /* These checks read only the object HEADER — they do NOT change allocation size/layout,
+     * so (unlike the redzone guard) they fire in the exact -O2 heap layout that crashes. */
+    if (((uintptr_t)p & 7u) != 0) {
+        fprintf(stderr, "TRDBG: obj_release MISALIGNED ptr %p ret0=%p ret1=%p\n", p,
+            __builtin_return_address(0),
+            __builtin_extract_return_addr(__builtin_return_address(1)));
+        fflush(stderr); abort(); }
+    if (h->rc <= 0 || h->rc == 0x7EAD7EAD) {
+        void* fsite = (void*)0;
+#if defined(TR_OBJDBG)
+        fsite = _odbg_find_free(p);
+#endif
+        fprintf(stderr, "TRDBG: obj BAD-release p=%p rc=%lld ret0=%p ret1=%p freed-at=%p\n", p, (long long)h->rc,
+            __builtin_return_address(0),
+            __builtin_extract_return_addr(__builtin_return_address(1)), fsite);
+        fflush(stderr); abort(); }
+#endif
+    if (--h->rc <= 0) {
+        if (h->drop) h->drop(p);   /* release owned fields; must NOT free the shell */
+        _OMEM_DEC();
+#if defined(TR_OBJDBG)
+        _odbg_del(h);
+        h->rc = 0x7EAD7EAD;        /* poison so a double-release of a not-yet-reused block is caught */
+        _odbg_record_free(p, __builtin_return_address(0));
+#endif
+        free(h);
+    }
+}
+/* Free an object shell directly (no field drop, no rc check) — for drop-fn internals. */
+void _tr_rt_obj_free(void* p) {
+    if (!p) return;
+    _OMEM_DEC();
+#if defined(TR_OBJDBG)
+    _odbg_del((_TrOHdr*)p - 1);
+    ((_TrOHdr*)p)[-1].rc = 0x7EAD7EAD;
+    _odbg_record_free(p, __builtin_return_address(0));
+#endif
+    free((_TrOHdr*)p - 1);
+}
+/* Live-object count (only meaningful with -DTAURARO_NMEM; else -1). For leak tests. */
+long long _tr_rt_obj_live_count(void) {
+#ifdef TAURARO_NMEM
+    return _tr_n_obj_live;
+#else
+    return -1;
+#endif
+}
+/* Raw allocation for `unsafe:` pointer code — n zeroed bytes, and its free. */
+void* _tr_rt_raw_alloc(int64_t nbytes) {
+    if (nbytes < 1) nbytes = 1;
+    return calloc(1, (size_t)nbytes);
+}
+void _tr_rt_raw_free(void* p) { if (p) free(p); }
+/* Reinterpret a pointer as its raw i64 address (str/object -> Pointer[T] casts). Keeps
+ * the LLVM types honest: a `ptr` value in, an `i64` out — no in-place vreg-tag punning. */
+int64_t _tr_rt_ptr_addr(void* p) { return (int64_t)(intptr_t)p; }
+
+/* try/except boundary for the native+LLVM backends. setjmp CANNOT be emitted portably in
+ * those backends (on mingw it's a macro over _setjmpex with SEH frame args), so the
+ * setjmp/longjmp stays HERE in the C runtime and the backend outlines the try-body and
+ * except-body to functions (env = captured locals by ref). Mirrors the C backend's
+ * gen_try protocol exactly: push a handler, run try; a raise anywhere below (this frame
+ * or a callee) longjmps back here with the message; on catch, invoke the except fn. */
+void _tr_rt_try_catch(void (*tfn)(void*), void (*cfn)(void*, char*), void* env) {
+    jmp_buf jb; char* em = NULL;
+    _tr_exc_push(&jb, &em);
+    if (setjmp(jb) == 0) {
+        tfn(env);
+        _tr_exc_pop();          /* normal completion: remove our handler */
+    } else {
+        /* _tr_exc_raise already popped (sp-- before longjmp); just run the catch */
+        if (cfn) cfn(env, em);
+    }
+}
+
+/* Byte-granular raw pointer access for Pointer[char] (C strings): read/write ONE byte
+ * (0..255) at an address. Used by string-library byte loops (Str.index_of, StrView, ...). */
+int64_t _tr_rt_load_u8(int64_t addr) { return (int64_t)(unsigned char)(*(unsigned char*)(intptr_t)addr); }
+void _tr_rt_store_u8(int64_t addr, int64_t v) {
+#ifdef TR_HEAPDBG
+    _trdbg_bounds((void*)(intptr_t)addr, 1);
+#endif
+    *(unsigned char*)(intptr_t)addr = (unsigned char)v; }
+/* 4-byte pointer element access (Pointer[i32]/u32/f32): read sign-extends, write truncates. */
+int64_t _tr_rt_load_i32(int64_t addr) { return (int64_t)(*(int32_t*)(intptr_t)addr); }
+void _tr_rt_store_i32(int64_t addr, int64_t v) { *(int32_t*)(intptr_t)addr = (int32_t)v; }
+
 int64_t _tr_rt_field_get_i(void* obj, int64_t off) {
     return *(int64_t*)((char*)obj + off);
 }
 void _tr_rt_field_set_i(void* obj, int64_t off, int64_t v) {
     *(int64_t*)((char*)obj + off) = v;
+}
+
+/* Dict item snapshots for the LLVM backend: a _TrNList* of node pointers.
+ * Each _SNode/_INode doubles as the (key@0, val@8) pair the loop reads. */
+void* _tr_rt_dict_items(void* h) {
+    _SDict* d = (_SDict*)h;
+    _TrNList* l = (_TrNList*)malloc(sizeof(_TrNList));
+    if (!l) return 0;
+    l->data = 0; l->len = 0; l->cap = 0;
+    if (!d) return l;
+    long long cap = d->len > 8 ? d->len : 8;
+    l->data = (long long*)malloc(cap * 8);
+    l->cap = cap;
+    for (int i = 0; i < _TRN_DCAP; i++) {
+        for (_SNode* n = d->b[i]; n; n = n->next) {
+            if (l->len == l->cap) { l->cap *= 2; l->data = (long long*)realloc(l->data, l->cap * 8); }
+            l->data[l->len++] = (long long)n;
+        }
+    }
+    return l;
+}
+void* _tr_rt_idict_items(void* h) {
+    _IDict* d = (_IDict*)h;
+    _TrNList* l = (_TrNList*)malloc(sizeof(_TrNList));
+    if (!l) return 0;
+    l->data = 0; l->len = 0; l->cap = 0;
+    if (!d) return l;
+    long long cap = d->len > 8 ? d->len : 8;
+    l->data = (long long*)malloc(cap * 8);
+    l->cap = cap;
+    for (int i = 0; i < _TRN_DCAP; i++) {
+        for (_INode* n = d->b[i]; n; n = n->next) {
+            if (l->len == l->cap) { l->cap *= 2; l->data = (long long*)realloc(l->data, l->cap * 8); }
+            l->data[l->len++] = (long long)n;
+        }
+    }
+    return l;
 }
 
 /* -- List[int]: a dynamic i64 array the native backend calls. Opaque handle (void*).
@@ -721,6 +1135,20 @@ void* _tr_rt_list_new(void) {
     if (!l) return 0;
     l->data = 0; l->len = 0; l->cap = 0;
     return l;
+}
+/* Entry glue for a Tauraro `main(args: Vec[str])`: build a str list (tag 3) from the C argv,
+ * each element an rc string. The LLVM backend's real C-ABI main(argc,argv) calls this. */
+void* _tr_rt_argv_list(long long argc, char** argv) {
+    void* l = _tr_rt_list_new();
+    for (long long i = 0; i < argc; i++)
+        _tr_rt_list_push_i64(l, (long long)(size_t)_tr_rt_str_new(argv[i] ? argv[i] : ""));
+    return l;
+}
+/* getenv returns a RAW C string (env block / "" literal), not an rc string; the native/LLVM
+ * backend's tag-1 str is rc-managed, so hand back an rc COPY (else retaining it corrupts). */
+char* _tr_rt_getenv(const char* name) {
+    const char* v = getenv(name);
+    return _tr_rt_str_new(v ? v : "");
 }
 void _tr_rt_list_push_i64(void* h, long long v) {
     _TrNList* l = (_TrNList*)h;
@@ -741,6 +1169,37 @@ long long _tr_rt_list_get_i64(void* h, long long i) {
     if (!l || i < 0 || i >= l->len) return 0;   /* out-of-range -> 0 (native -O0 dev) */
     return l->data[i];
 }
+
+/* ---- Byte-width lists (List[bool] / List[u8] / List[i8]) --------------------------
+ * Same header as _TrNList (data ptr @0, len @8) so _tr_rt_list_len/new work unchanged,
+ * but `data` points to a 1-byte-per-element buffer (8x less memory + traffic than the
+ * i64-slot list). Inline get/set use a stride-1 address + ILoadB/IStoreB; only push and
+ * whole-list print need a runtime helper. Element values flow as i64 (bool 0/1). */
+void _tr_rt_blist_push(void* h, long long v) {
+    _TrNList* l = (_TrNList*)h;
+    if (!l) return;
+    if (l->len == l->cap) {
+        long long nc = l->cap ? l->cap * 2 : 4;
+        l->data = (long long*)realloc(l->data, (size_t)nc);   /* nc BYTES, not *8 */
+        l->cap = nc;
+    }
+    ((unsigned char*)l->data)[l->len++] = (unsigned char)v;
+}
+long long _tr_rt_blist_get(void* h, long long i) {
+    _TrNList* l = (_TrNList*)h;
+    if (!l || i < 0 || i >= l->len) return 0;
+    return (long long)((unsigned char*)l->data)[i];
+}
+void _tr_rt_write_list_bool(void* h) {
+    _TrNList* l = (_TrNList*)h;
+    fputc('[', stdout);
+    if (l) for (long long i = 0; i < l->len; i++) {
+        if (i) fputs(", ", stdout);
+        fputs(((unsigned char*)l->data)[i] ? "true" : "false", stdout);
+    }
+    fputc(']', stdout);
+}
+void _tr_rt_print_list_bool(void* h) { _tr_rt_write_list_bool(h); fputc('\n', stdout); }
 
 /* s.center(w) — pad both sides (left = extra/2). */
 char* _tr_rt_str_center(const char* s, long long w) {

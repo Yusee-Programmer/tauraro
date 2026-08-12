@@ -20,6 +20,10 @@ pub def _ll_ty(tag: int) -> str:
     if tag == 10: return "ptr"          # object (class instance) handle
     if tag == 11: return "ptr"          # enum (tagged union) handle
     if tag == 12: return "ptr"          # closure block {fnptr, capture ptrs...}
+    if tag == 15: return "ptr"          # tuple block
+    if tag == 13 or tag == 16: return "ptr"   # Set[int] / Set[str]
+    if tag == 14 or tag == 19: return "ptr"   # List[float] / List[object]
+    if tag == 17 or tag == 18: return "ptr"   # Dict float-valued (str/int keyed)
     return "i64"
 
 # A source type NAME (AstType.name) -> LLVM type, for user-function signatures. void/None

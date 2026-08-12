@@ -1,0 +1,12 @@
+# Pointer[i32]: 4-byte pointer element access (read sign-extends, write truncates).
+def main():
+    unsafe:
+        mut p: Pointer[i32] = alloc[i32](4)
+        p.offset(0).write(100)
+        p.offset(1).write(0 - 7)
+        p.offset(2).write(2000000000)
+        mut i = 0
+        while i < 3:
+            print(p.offset(i).read())
+            i = i + 1
+        dealloc(p)

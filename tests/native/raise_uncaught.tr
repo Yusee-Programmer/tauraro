@@ -1,0 +1,20 @@
+class IntBox:
+    v: int
+    def init(v: int) -> IntBox:
+        mut b = IntBox()
+        b.v = v
+        return b
+    def checked(self, n: int) -> int:
+        if n < 0: raise("negative not allowed")
+        return self.v + n
+
+def safe_div(a: int, b: int) -> int:
+    if b == 0: raise("division by zero")
+    return a / b
+
+def main():
+    mut box = IntBox.init(10)
+    print(box.checked(5))
+    print(box.checked(0))
+    print(safe_div(20, 4))
+    print(safe_div(9, 3))

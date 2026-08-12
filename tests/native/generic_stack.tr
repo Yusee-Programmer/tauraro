@@ -1,0 +1,26 @@
+# native≡c / llvm≡c differential corpus: generic class with a List[T] field, constructed
+# via Stack[int].init() (bare Stack() inside init resolves through the T=int substitution).
+class Stack[T]:
+    items: List[T]
+    size: int
+
+extend Stack:
+    def init() -> Stack[T]:
+        mut s = Stack()
+        s.items = []
+        s.size = 0
+        return s
+    def push(self, val: T) -> void:
+        self.items.append(val)
+        self.size = self.size + 1
+    def total(self) -> int:
+        return self.size
+
+def main():
+    mut si: Stack[int] = Stack[int].init()
+    si.push(5)
+    si.push(7)
+    si.push(9)
+    print(si.total())        # 3
+    print(si.items[0])       # 5
+    print(si.items[2])       # 9

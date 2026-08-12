@@ -13,15 +13,19 @@ jobs:
           - os: ubuntu-latest
             platform: linux-x64
             ext: ""
+            llvm_target: X86
           - os: ubuntu-22.04-arm
             platform: linux-arm64
             ext: ""
+            llvm_target: AArch64
           - os: windows-latest
             platform: windows-x64
             ext: ".exe"
+            llvm_target: X86
           - os: macos-latest
             platform: macos-arm64
             ext: ""
+            llvm_target: AArch64
 
     runs-on: ${{ matrix.os }}
 
@@ -172,6 +176,16 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: ./scripts/run_tests.ps1
+
+      # -------------------------------------------------------
+      # --no-heap bare-metal guarantee: the zero-heap firmware MUST compile (and run)
+      # while the heap-using counter-example MUST be rejected with [H-1]. Keeps the
+      # compile-time zero-heap wall + its examples honest. (Compile-time only; no cross
+      # toolchain, so it runs on every platform.)
+      # -------------------------------------------------------
+      - name: No-heap oracle (bare-metal zero-heap guarantee)
+        shell: bash
+        run: TAURAROC=./tauraroc${{ matrix.ext }} bash scripts/no_heap_check.sh
 
       # -------------------------------------------------------
       # Soundness corpus: programs that MUST be rejected under --strict (with the
@@ -370,6 +384,28 @@ jobs:
         shell: bash
         run: TAURAROC=./tauraroc${{ matrix.ext }} bash scripts/llvm_diff.sh
 
+      # FFI proof: extern "C" calls into a custom C object + `export def` producing a
+      # C-ABI symbol. External linkage can't be tested via the C≡LLVM differential.
+      - name: LLVM FFI (extern C + export)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: TAURAROC=./tauraroc${{ matrix.ext }} bash scripts/llvm_ffi.sh
+
+      # Object-ARC leak oracle: the C≡LLVM output differential is blind to leaks/UAF, so
+      # object refcounting has its own memory oracle (live-object count == 0 at exit).
+      - name: LLVM object-leak oracle (object ARC)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: TAURAROC=./tauraroc${{ matrix.ext }} bash scripts/obj_leak.sh
+
+      # ARC hardening: AddressSanitizer over the LLVM backend catches a use-after-free /
+      # double-free from object refcounting (a UAF can print the right value, so neither the
+      # output differential nor the leak oracle would see it). LeakSanitizer is left off.
+      - name: LLVM ARC ASan hardening
+        if: runner.os == 'Linux'
+        shell: bash
+        run: TAURAROC=./tauraroc${{ matrix.ext }} bash scripts/obj_asan.sh
+
       # Runtime security regressions (V-001 float-format overflow, etc.) under ASan+UBSan.
       - name: Runtime security tests (ASan/UBSan)
         if: runner.os == 'Linux'
@@ -395,9 +431,69 @@ jobs:
           cat "tauraroc-${{ matrix.platform }}.sha256"
 
       # -------------------------------------------------------
+      # Minimal `llc`, bundled beside the compiler so `--backend llvm` works
+      # from the release zip with ZERO user-installed LLVM. The compiler finds
+      # it at <exe_dir>/llvm/llc and reuses the system C compiler (which the C
+      # backend already requires) purely as the linker. Only the HOST target is
+      # built (X86 or AArch64) — all the emitted programs need — which is the
+      # dominant size win (~20-40 MB vs a full ~100 MB+ toolchain). Built once
+      # per (LLVM version, platform) and cached; a cache hit restores in seconds.
+      # Pin ONE LLVM major (opaque pointers need >= 15; the llvm-c ABI used by
+      # Stage 2 is stable within a major).
+      # -------------------------------------------------------
+      - name: Cache minimal llc
+        id: cache-llc
+        uses: actions/cache@v4
+        with:
+          path: llvm-min
+          key: llvm-min-19.1.7-${{ matrix.platform }}
+      - name: Install ninja/cmake
+        if: steps.cache-llc.outputs.cache-hit != 'true'
+        uses: seanmiddleditch/gha-setup-ninja@v5
+      - name: Build minimal llc
+        if: steps.cache-llc.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -e
+          git clone --depth 1 -b llvmorg-19.1.7 https://github.com/llvm/llvm-project
+          cmake -S llvm-project/llvm -B llvm-build -G Ninja \
+            -DCMAKE_BUILD_TYPE=MinSizeRel \
+            -DLLVM_TARGETS_TO_BUILD=${{ matrix.llvm_target }} \
+            -DLLVM_INCLUDE_TESTS=OFF -DLLVM_INCLUDE_EXAMPLES=OFF \
+            -DLLVM_INCLUDE_BENCHMARKS=OFF \
+            -DLLVM_ENABLE_ZLIB=OFF -DLLVM_ENABLE_ZSTD=OFF \
+            -DLLVM_ENABLE_TERMINFO=OFF -DLLVM_ENABLE_LIBXML2=OFF
+          ninja -C llvm-build llc   # builds only llc + its deps (not all of LLVM)
+          mkdir -p llvm-min
+          cp "llvm-build/bin/llc${{ matrix.ext }}" "llvm-min/llc${{ matrix.ext }}"
+          strip "llvm-min/llc${{ matrix.ext }}" || true   # MinSizeRel is already small; strip debug syms
+      - name: Stage bundled llc
+        shell: bash
+        run: |
+          mkdir -p llvm
+          cp "llvm-min/llc${{ matrix.ext }}" "llvm/llc${{ matrix.ext }}"
+          "./llvm/llc${{ matrix.ext }}" --version | head -2
+          ls -lh "llvm/llc${{ matrix.ext }}"
+      - name: Verify --backend llvm uses the bundled llc
+        shell: bash
+        env:
+          TAURARO_PATH: ${{ github.workspace }}
+        run: |
+          set -e
+          printf 'def main():\n    mut xs = [10, 20, 30]\n    mut s = 0\n    mut i = 0\n    while i < xs.len:\n        s = s + xs.get(i)\n        i = i + 1\n    print(s)\n' > llc_probe.tr
+          rm -rf build
+          "./tauraroc${{ matrix.ext }}" llc_probe.tr --backend llvm -o "llc_probe${{ matrix.ext }}"
+          test -f build/llvm_out.o          # the bundled-llc path is 2-step (llc -> .o); the .o proves it ran, not a PATH clang
+          OUT=$("./llc_probe${{ matrix.ext }}")
+          echo "llvm-backend output: $OUT"
+          test "$OUT" = "60"
+          rm -f llc_probe.tr "llc_probe${{ matrix.ext }}"
+
+      # -------------------------------------------------------
       # Artifact = the compiler binary plus the source/library/sample
       # trees that make a usable SDK bundle. (Not the whole workspace:
       # no .git, docs, bootstrap scratch, or build output.)
+      # `llvm/llc` rides along so the LLVM backend is self-contained.
       # -------------------------------------------------------
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -407,6 +503,7 @@ jobs:
           path: |
             tauraroc${{ matrix.ext }}
             tauraroc-${{ matrix.platform }}.sha256
+            llvm/llc${{ matrix.ext }}
             src/
             std/
             runtime/
@@ -588,16 +685,29 @@ jobs:
           name: tauraroc-macos-arm64-sha256
           path: release/checksums/
 
-      # zip -j strips the path so the binary sits at the zip root:
-      # unzip tauraroc-linux-x64.zip -d bootstrap/tauraroc-linux-x64/
-      # → bootstrap/tauraroc-linux-x64/tauraroc
-      - name: Zip per-platform binaries
+      # `tauraroc` sits at the zip root, with `llvm/llc` alongside it, so
+      # `--backend llvm` is self-contained from the download AND the bootstrap
+      # seed still resolves the binary (build job: `find -name tauraroc`, which
+      # ignores the sibling llvm/ dir and copies only the binary):
+      #   unzip tauraroc-linux-x64.zip -d bootstrap/tauraroc-linux-x64/
+      #   → bootstrap/tauraroc-linux-x64/{tauraroc, llvm/llc}
+      - name: Zip per-platform SDK bundles
+        # A COMPLETE, self-contained SDK sits at the zip root:
+        #   tauraroc          the compiler
+        #   llvm/llc          bundled minimal LLVM (Stage 1) — no system LLVM needed
+        #   runtime/          native_abi.c + headers, auto-found + compiled by --backend llvm
+        #   std/              the standard library (for `import`)
+        # So `tauraroc prog.tr --backend llvm -o prog` works straight out of the unzip (the
+        # only external need is a C compiler, reused as the linker). The bootstrap seed still
+        # resolves the binary via `find -name tauraroc` (runtime/ and std/ contain no such
+        # file), so this zip doubles as the seed unchanged.
         run: |
           mkdir -p release/assets
-          zip -j release/assets/tauraroc-linux-x64.zip   release/linux-x64/tauraroc
-          zip -j release/assets/tauraroc-linux-arm64.zip release/linux-arm64/tauraroc
-          zip -j release/assets/tauraroc-windows-x64.zip release/windows-x64/tauraroc.exe
-          zip -j release/assets/tauraroc-macos-arm64.zip release/macos-arm64/tauraroc
+          A="$GITHUB_WORKSPACE/release/assets"
+          ( cd release/linux-x64   && zip -r "$A/tauraroc-linux-x64.zip"   tauraroc     llvm runtime std )
+          ( cd release/linux-arm64 && zip -r "$A/tauraroc-linux-arm64.zip" tauraroc     llvm runtime std )
+          ( cd release/windows-x64 && zip -r "$A/tauraroc-windows-x64.zip" tauraroc.exe llvm runtime std )
+          ( cd release/macos-arm64 && zip -r "$A/tauraroc-macos-arm64.zip" tauraroc     llvm runtime std )
 
       # -------------------------------------------------------
       # Combined SHA256SUMS.txt: checksums of the release zips

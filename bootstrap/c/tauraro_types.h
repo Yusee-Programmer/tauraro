@@ -1602,7 +1602,12 @@ typedef enum {
     LInst_IFBits,
     LInst_IAddrVar,
     LInst_IFuncAddr,
-    LInst_ICallInd
+    LInst_ICallInd,
+    LInst_IAsm,
+    LInst_ILoad,
+    LInst_IStore,
+    LInst_ILoadB,
+    LInst_IStoreB
 } LInst_tag;
 
 typedef struct LInst {
@@ -1694,6 +1699,32 @@ typedef struct LInst {
             long long fnreg;
             List_i64* args;
         } ICallInd;
+        struct {
+            TrStr code;
+            TrStr cons;
+        } IAsm;
+        struct {
+            long long dst;
+            long long base;
+            long long off;
+            long long aclass;
+        } ILoad;
+        struct {
+            long long base;
+            long long off;
+            long long src;
+            long long aclass;
+        } IStore;
+        struct {
+            long long dst;
+            long long base;
+            long long off;
+        } ILoadB;
+        struct {
+            long long base;
+            long long off;
+            long long src;
+        } IStoreB;
     } data;
 } LInst;
 
@@ -1716,6 +1747,11 @@ static inline __attribute__((always_inline)) LInst LInst_ctor_IFBits(long long d
 static inline __attribute__((always_inline)) LInst LInst_ctor_IAddrVar(long long dst, TrStr name) { LInst _r = {.tag=LInst_IAddrVar}; _r.data.IAddrVar.dst = dst; _r.data.IAddrVar.name = _tr_str_retain(name); return _r; }
 static inline __attribute__((always_inline)) LInst LInst_ctor_IFuncAddr(long long dst, TrStr fname) { LInst _r = {.tag=LInst_IFuncAddr}; _r.data.IFuncAddr.dst = dst; _r.data.IFuncAddr.fname = _tr_str_retain(fname); return _r; }
 static inline __attribute__((always_inline)) LInst LInst_ctor_ICallInd(long long dst, long long fnreg, List_i64* args) { LInst _r = {.tag=LInst_ICallInd}; _r.data.ICallInd.dst = dst; _r.data.ICallInd.fnreg = fnreg; _r.data.ICallInd.args = args; return _r; }
+static inline __attribute__((always_inline)) LInst LInst_ctor_IAsm(TrStr code, TrStr cons) { LInst _r = {.tag=LInst_IAsm}; _r.data.IAsm.code = _tr_str_retain(code); _r.data.IAsm.cons = _tr_str_retain(cons); return _r; }
+static inline __attribute__((always_inline)) LInst LInst_ctor_ILoad(long long dst, long long base, long long off, long long aclass) { LInst _r = {.tag=LInst_ILoad}; _r.data.ILoad.dst = dst; _r.data.ILoad.base = base; _r.data.ILoad.off = off; _r.data.ILoad.aclass = aclass; return _r; }
+static inline __attribute__((always_inline)) LInst LInst_ctor_IStore(long long base, long long off, long long src, long long aclass) { LInst _r = {.tag=LInst_IStore}; _r.data.IStore.base = base; _r.data.IStore.off = off; _r.data.IStore.src = src; _r.data.IStore.aclass = aclass; return _r; }
+static inline __attribute__((always_inline)) LInst LInst_ctor_ILoadB(long long dst, long long base, long long off) { LInst _r = {.tag=LInst_ILoadB}; _r.data.ILoadB.dst = dst; _r.data.ILoadB.base = base; _r.data.ILoadB.off = off; return _r; }
+static inline __attribute__((always_inline)) LInst LInst_ctor_IStoreB(long long base, long long off, long long src) { LInst _r = {.tag=LInst_IStoreB}; _r.data.IStoreB.base = base; _r.data.IStoreB.off = off; _r.data.IStoreB.src = src; return _r; }
 
 typedef enum {
     LTerm_TRetInt,
@@ -2653,6 +2689,7 @@ typedef struct Sema {
     List_TrStr* cur_func_borrowers;
     List_TrStr* cur_func_sources;
     bool strict_mode;
+    bool no_heap;
     TrMap* mutating_methods;
     TrMap* fn_ret_owned;
     TrMap* fn_param_consumes;
@@ -2899,10 +2936,21 @@ typedef struct LFunc {
     List_i64* loop_cont;
     List_i64* loop_brk;
     List_i64* fresh_strs;
+    List_i64* fresh_objs;
     List_TrStr* captures;
     List_i64* cap_tags;
     List_i64* var_xret;
     List_i64* vreg_xret;
+    List_i64* try_blks;
+    List_TrStr* try_msgs;
+    List_ptr* defers;
+    List_TrStr* mutex_unlocks;
+    long long blk_depth;
+    bool in_defer;
+    bool is_throws;
+    long long throws_ok_tag;
+    long long throws_err_tag;
+    long long in_taskgroup;
 } LFunc;
 static void _trdrop_LFunc(void* vp) {
     LFunc* self = (LFunc*)vp; (void)self;
@@ -2914,10 +2962,15 @@ static void _trdrop_LFunc(void* vp) {
     List_i64_free(self->loop_cont);
     List_i64_free(self->loop_brk);
     List_i64_free(self->fresh_strs);
+    List_i64_free(self->fresh_objs);
     List_TrStr_free(self->captures);
     List_i64_free(self->cap_tags);
     List_i64_free(self->var_xret);
     List_i64_free(self->vreg_xret);
+    List_i64_free(self->try_blks);
+    List_TrStr_free(self->try_msgs);
+    List_ptr_free(self->defers);
+    List_TrStr_free(self->mutex_unlocks);
 }
 #endif
 
@@ -2930,6 +2983,7 @@ typedef struct ClassLayout {
     List_TrStr* fields;
     List_i64* ftags;
     List_TrStr* fcls;
+    bool is_value;
 } ClassLayout;
 static void _trdrop_ClassLayout(void* vp) {
     ClassLayout* self = (ClassLayout*)vp; (void)self;
@@ -2988,10 +3042,18 @@ typedef struct LModule {
     HirProgram* hir_prog;
     bool ok;
     TrStr fail_note;
+    List_TrStr* unavail_names;
+    List_TrStr* unavail_notes;
+    List_TrStr* subst_names;
+    List_ptr* subst_tys;
+    List_TrStr* extfn_names;
+    List_i64* extfn_ret;
+    List_TrStr* fn_owned_names;
+    List_TrStr* overloaded_sigs;
+    bool target_llvm;
 } LModule;
 static void _trdrop_LModule(void* vp) {
     LModule* self = (LModule*)vp; (void)self;
-    List_ptr_free_obj(self->funcs, _trdrop_LFunc);
     List_ptr_free_obj(self->classes, _trdrop_ClassLayout);
     List_ptr_free_obj(self->enums, _trdrop_EnumLayout);
     List_TrStr_free(self->ifaces);
@@ -3004,6 +3066,14 @@ static void _trdrop_LModule(void* vp) {
     List_ptr_free(self->global_inits);
     _tr_obj_release(self->hir_prog, _trdrop_HirProgram);
     _tr_str_release(self->fail_note);
+    List_TrStr_free(self->unavail_names);
+    List_TrStr_free(self->unavail_notes);
+    List_TrStr_free(self->subst_names);
+    List_ptr_free(self->subst_tys);
+    List_TrStr_free(self->extfn_names);
+    List_i64_free(self->extfn_ret);
+    List_TrStr_free(self->fn_owned_names);
+    List_TrStr_free(self->overloaded_sigs);
 }
 #endif
 
@@ -3616,6 +3686,7 @@ __attribute__((hot)) void Sema_collect_stmt_refs(Sema* self, HirStmt* s, List_Tr
 __attribute__((hot)) HirExpr* Sema_lower_do_value(Sema* self, Block* do_body);
 __attribute__((hot)) AstType* Sema_infer_break_type(Sema* self, HirBlock* hb);
 __attribute__((hot)) AstType* Sema_infer_break_type_stmt(Sema* self, HirStmt* s);
+__attribute__((hot)) void Sema_check_no_heap(Sema* self, TrStr what, TrStr fix);
 __attribute__((hot)) HirExpr* Sema_lower_expr(Sema* self, Expr* e_ptr);
 __attribute__((hot)) TrStr Sema_is_reserved_error(Sema* self, TrStr name);
 __attribute__((hot)) TrStr Sema_is_reserved_keyword(Sema* self, TrStr name);
@@ -3670,6 +3741,7 @@ __attribute__((hot)) bool _is_c_keyword(TrStr n);
 __attribute__((hot)) bool _starts_with_tr(TrStr s);
 __attribute__((hot)) bool _is_primitive(TrStr n);
 __attribute__((hot)) TrStr _escape_str_for_c(TrStr s);
+__attribute__((hot)) TrStr _escape_fmt_for_c(TrStr s);
 __attribute__((hot)) LInst* box_linst(LInst i);
 __attribute__((malloc,returns_nonnull,hot)) LBlock* LBlock_init(long long id);
 __attribute__((malloc,returns_nonnull,hot)) LFunc* LFunc_init(TrStr name);
@@ -3699,6 +3771,9 @@ __attribute__((malloc,returns_nonnull,hot)) VariantLayout* VariantLayout_init(Tr
 __attribute__((malloc,returns_nonnull,hot)) EnumLayout* EnumLayout_init(TrStr name);
 __attribute__((hot)) long long EnumLayout_variant_index(EnumLayout* self, TrStr vname);
 __attribute__((malloc,returns_nonnull,hot)) LModule* LModule_init();
+__attribute__((hot)) void LModule_mark_overloaded(LModule* self, TrStr cls, TrStr method);
+__attribute__((hot)) bool LModule_is_overloaded(LModule* self, TrStr cls, TrStr method);
+__attribute__((hot)) TrStr LModule_resolve_method_ov(LModule* self, TrStr cls, TrStr method, long long argc);
 __attribute__((hot)) long long LModule_add_global(LModule* self, TrStr name, long long tag);
 __attribute__((hot)) long long LModule_global_index(LModule* self, TrStr name);
 __attribute__((hot)) bool LModule_is_global(LModule* self, TrStr name);
@@ -3707,9 +3782,15 @@ __attribute__((hot)) long long LModule_fn_ret_tag(LModule* self, TrStr name);
 __attribute__((hot)) long long LModule_add_string(LModule* self, TrStr s);
 __attribute__((hot)) void LModule_add_extern(LModule* self, TrStr name);
 __attribute__((hot)) bool LModule_is_user_fn(LModule* self, TrStr name);
+__attribute__((hot)) bool LModule_is_extern_fn(LModule* self, TrStr name);
+__attribute__((hot)) long long LModule_extern_ret_tag(LModule* self, TrStr name);
+__attribute__((hot)) void LModule_mark_fn_owned(LModule* self, TrStr name);
+__attribute__((hot)) bool LModule_fn_ret_owned(LModule* self, TrStr name);
+__attribute__((hot)) long long LModule_unavail_index(LModule* self, TrStr name);
 __attribute__((hot)) void LModule_add_class(LModule* self, ClassLayout* cl);
 __attribute__((hot)) long long LModule_class_index(LModule* self, TrStr name);
 __attribute__((hot)) bool LModule_is_class(LModule* self, TrStr name);
+__attribute__((hot)) bool LModule_is_value_class(LModule* self, TrStr name);
 __attribute__((hot)) long long LModule_class_size(LModule* self, TrStr name);
 __attribute__((hot)) long long LModule_field_offset(LModule* self, TrStr cls, TrStr fld);
 __attribute__((hot)) long long LModule_field_tag(LModule* self, TrStr cls, TrStr fld);
@@ -3722,10 +3803,16 @@ __attribute__((hot)) long long LModule_enum_size(LModule* self, TrStr name);
 __attribute__((hot)) long long LModule_enum_variant_index(LModule* self, TrStr ename, TrStr vname);
 __attribute__((hot)) void LModule_add_iface(LModule* self, TrStr name);
 __attribute__((hot)) bool LModule_is_iface(LModule* self, TrStr name);
+__attribute__((hot)) AstType** box_asttype_lir(AstType* t);
 __attribute__((hot)) long long _f64_bits(double v);
 __attribute__((hot)) long long _promote_f(LFunc* lf, long long v);
+__attribute__((hot)) long long _int_cast_width(TrStr tn);
+__attribute__((hot)) bool _int_cast_signed(TrStr tn);
+__attribute__((hot)) long long _narrow_int(LFunc* lf, long long v, TrStr tn);
+__attribute__((hot)) bool _is_int_cast_target(TrStr tn);
 __attribute__((hot)) TrStr _print_i64_sym();
 __attribute__((hot)) bool _is_list_tag(long long t);
+__attribute__((hot)) long long _list_stride(long long ltag);
 __attribute__((hot)) bool _is_set_tag(long long t);
 __attribute__((hot)) TrStr _set_sym(long long t, TrStr op);
 __attribute__((hot)) bool _is_dict_tag(long long t);
@@ -3735,19 +3822,41 @@ __attribute__((hot)) TrStr _dict_new_sym(long long t);
 __attribute__((hot)) TrStr _dict_sym(long long t, TrStr op);
 __attribute__((hot)) long long _list_elem_tag(long long t);
 __attribute__((hot)) long long _list_tag_for_elem(long long et);
+__attribute__((hot)) long long _list_tag_from_ann(LModule* m, AstType* ty);
+__attribute__((hot)) long long _dict_tag_from_ann(LModule* m, AstType* ty);
 __attribute__((hot)) bool _is_cmp_op(TrStr op);
 __attribute__((hot)) bool _is_int_typename(TrStr n);
 __attribute__((hot)) long long _ast_type_tag(AstType* ty);
 __attribute__((hot)) bool _is_null_str(TrStr s);
 __attribute__((hot)) TrStr _own(TrStr s);
 __attribute__((hot)) long long _tag_of(LModule* m, AstType* ty);
+__attribute__((hot)) AstType* _subst_args(LModule* m, AstType* ty);
+__attribute__((hot)) AstType* _subst_ty(LModule* m, AstType* ty);
+__attribute__((hot)) long long _prog_generic_class_index(LModule* m, TrStr name);
+__attribute__((hot)) TrStr _mangle_generic(LModule* m, AstType* ty);
+__attribute__((hot)) TrStr _ensure_generic_class(LModule* m, AstType* ty);
+__attribute__((hot)) TrStr _val_obj_cls(LModule* m, LFunc* lf, HirExpr* val);
 __attribute__((hot)) TrStr _cls_of_ty(LModule* m, AstType* ty);
 __attribute__((hot)) TrStr _recv_class(LModule* m, LFunc* lf, HirExpr* obj);
+__attribute__((hot)) long long _lower_list_comp(LModule* m, LFunc* lf, HirExpr* element, List_ptr* generators, AstType* lty);
+__attribute__((hot)) AstType* _hir_method_ret_ty(LModule* m, TrStr cls, TrStr method);
 __attribute__((hot)) long long _prog_class_index(HirProgram* prog, TrStr name);
 __attribute__((hot)) bool _push_field_names_rec(HirProgram* prog, long long ci, ClassLayout* lay, long long depth);
 __attribute__((hot)) bool _push_field_tags_rec(LModule* m, HirProgram* prog, long long ci, ClassLayout* lay, long long depth);
 __attribute__((hot)) void _register_classes(LModule* m, HirProgram* prog);
+__attribute__((hot)) bool _class_needs_drop(ClassLayout* lay);
+__attribute__((hot)) bool _class_needs_drop_by_name(LModule* m, TrStr cname);
+__attribute__((hot)) void _attach_class_drop(LModule* m, LFunc* lf, long long obj, TrStr cname);
+__attribute__((hot)) void _build_class_drop(LModule* m, ClassLayout* lay);
+__attribute__((hot)) void _gen_class_drops(LModule* m);
+__attribute__((hot)) bool _method_in_prog_functions(HirProgram* prog, TrStr cls, TrStr name);
+__attribute__((hot)) long long _method_nonself_pcount(HirFunction* f);
+__attribute__((hot)) TrStr _ov_method_name(LModule* m, TrStr cls, HirFunction* f);
+__attribute__((hot)) void _detect_overloads(LModule* m, HirProgram* prog);
+__attribute__((hot)) long long _arg_limit(LModule* m);
+__attribute__((hot)) LModule* lower_to_lir_t(HirProgram* prog, bool llvm);
 __attribute__((hot)) LModule* lower_to_lir(HirProgram* prog);
+__attribute__((hot)) LModule* _lower_to_lir_body(LModule* m, HirProgram* prog);
 __attribute__((hot)) bool _fn_has_iface_param(LModule* m, HirFunction* f);
 __attribute__((hot)) bool _fn_is_specializable(LModule* m, HirFunction* f);
 __attribute__((hot)) long long _find_generic_fn(LModule* m, TrStr name);
@@ -3755,6 +3864,9 @@ __attribute__((hot)) long long _find_generic_method(LModule* m, TrStr cls, TrStr
 __attribute__((hot)) bool _is_generic_param(HirFunction* f, TrStr n);
 __attribute__((hot)) bool _param_is_abstract(LModule* m, HirFunction* f, TrStr ptyname);
 __attribute__((hot)) bool _lir_lower_generic(LModule* m, HirFunction* f, List_i64* argtags, List_TrStr* argcls, TrStr mangled);
+__attribute__((hot)) TrStr _mono_base(TrStr name);
+__attribute__((hot)) TrStr _mono_concrete(TrStr name);
+__attribute__((hot)) bool _lir_lower_mono_fn(LModule* m, HirFunction* f, TrStr mangled, AstType* concrete);
 __attribute__((hot)) void _lir_lower_method(LModule* m, TrStr class_name, HirFunction* f);
 __attribute__((hot)) bool _register_global(LModule* m, HirStmt* s);
 __attribute__((hot)) bool _lower_global_init(LModule* m, LFunc* lf, HirStmt* s);
@@ -3763,21 +3875,64 @@ __attribute__((hot)) bool _field_tag_ok(long long vt, long long ftg);
 __attribute__((hot)) void _emit_field_set(LModule* m, LFunc* lf, long long obj, long long off, long long val);
 __attribute__((hot)) long long _emit_field_get(LModule* m, LFunc* lf, long long obj, long long off, long long tag);
 __attribute__((hot)) long long _lower_enum_ctor(LModule* m, LFunc* lf, TrStr ename, TrStr vname, List_ptr* margs);
+__attribute__((hot)) long long _lir_fn_ret_tag(LModule* m, HirFunction* f);
+__attribute__((hot)) long long _wrap_result(LModule* m, LFunc* lf, long long vidx, long long payv, long long paytag);
+__attribute__((hot)) long long _find_free_fn_idx(LModule* m, TrStr name);
+__attribute__((hot)) bool _ensure_await_wrapper(LModule* m, TrStr fn);
+__attribute__((hot)) long long _lower_await(LModule* m, LFunc* lf, HirExpr* awexpr);
+__attribute__((hot)) bool _lower_spawn(LModule* m, LFunc* lf, HirExpr* expr);
+__attribute__((hot)) long long _box_call(LModule* m, LFunc* lf, long long selfv, TrStr rtfn, List_ptr* margs, long long nargs, long long rtag);
+__attribute__((hot)) long long _pack_spawn_args(LModule* m, LFunc* lf, List_ptr* margs, long long start);
+__attribute__((hot)) long long _lower_pool_spawn(LModule* m, LFunc* lf, long long poolv, List_ptr* margs);
+__attribute__((hot)) bool _is_runtime_fn(TrStr fn);
+__attribute__((hot)) bool _is_rc_str_runtime_fn(TrStr fn);
+__attribute__((hot)) void _track_mutex_unlock(LFunc* lf, HirExpr* obj);
+__attribute__((hot)) long long _atomic_delta(LModule* m, LFunc* lf, long long selfv, TrStr rtfn);
+__attribute__((hot)) long long _lower_box_method(LModule* m, LFunc* lf, HirExpr* obj, TrStr method, List_ptr* margs);
+__attribute__((hot)) bool _lower_taskgroup(LModule* m, LFunc* lf, HirBlock* body);
 __attribute__((hot)) long long _lower_obj_call(LModule* m, LFunc* lf, TrStr mangled, long long self_vreg, List_ptr* margs);
 __attribute__((hot)) bool lower_block(LModule* m, LFunc* lf, HirBlock* hb);
+__attribute__((hot)) bool _run_defers(LModule* m, LFunc* lf);
+__attribute__((hot)) long long _sizeof_tyname(TrStr n);
+__attribute__((hot)) long long _ptr_stride(LModule* m, AstType* pty);
+__attribute__((hot)) AstType* _class_field_ty(LModule* m, TrStr cls, TrStr fld);
+__attribute__((hot)) AstType* _ptr_chain_ty(LModule* m, HirExpr* e);
+__attribute__((hot)) TrStr _dunder_for_op(TrStr op);
+__attribute__((hot)) TrStr _stmt_expr_kind(HirExpr* e);
+__attribute__((hot)) TrStr _expr_kind(HirExpr* e);
+__attribute__((hot)) TrStr _stmt_kind(HirStmt* s);
+__attribute__((hot)) bool _stmt_has_cf(HirStmt* s);
+__attribute__((hot)) bool _block_has_cf(HirBlock* b);
+__attribute__((hot)) bool _lower_try_setjmp(LModule* m, LFunc* lf, HirBlock* try_body, List_ptr* catches, HirBlock* finally_b);
+__attribute__((hot)) bool _is_vstruct_lvalue(HirExpr* e);
+__attribute__((hot)) long long _copy_value_struct(LModule* m, LFunc* lf, long long src, TrStr cls);
+__attribute__((hot)) long long _value_struct_generic_size(LModule* m, AstType* ty);
+__attribute__((hot)) bool _lower_stmt_impl(LModule* m, LFunc* lf, HirStmt* s);
 __attribute__((hot)) bool lower_stmt(LModule* m, LFunc* lf, HirStmt* s);
 __attribute__((hot)) long long _lower_set_method(LModule* m, LFunc* lf, long long shv, long long stag, TrStr method, List_ptr* margs);
 __attribute__((hot)) long long _lit_pat_cond(LModule* m, LFunc* lf, Pattern pat, long long subj, long long st);
 __attribute__((hot)) bool _lower_match(LModule* m, LFunc* lf, HirExpr* expr, List_ptr* arms);
 __attribute__((hot)) TrStr _norm_variant(TrStr ename, TrStr vn);
 __attribute__((hot)) long long _variant_tag_cond(LFunc* lf, long long tagv, long long vidx);
+__attribute__((hot)) long long _load_enum_payload_field(LModule* m, LFunc* lf, long long subj, AstType* subj_ty, VariantLayout* vlay, long long fldidx);
+__attribute__((hot)) long long _lower_enum_prop(LModule* m, LFunc* lf, HirExpr* obj, TrStr ename, TrStr prop);
 __attribute__((hot)) bool _bind_payload(LModule* m, LFunc* lf, VariantLayout* vlay, long long subj, AstType* subj_ty, long long fldidx, TrStr bindname);
 __attribute__((hot)) bool _lower_match_enum(LModule* m, LFunc* lf, HirExpr* expr, long long subj, List_ptr* arms);
 __attribute__((hot)) bool _lower_for(LModule* m, LFunc* lf, TrStr var, HirExpr* iter, HirBlock* body);
+__attribute__((hot)) bool _sel_recv_arm(LModule* m, LFunc* lf, TrStr donev, HirChanSelectArm* arm);
+__attribute__((hot)) bool _sel_send_arm(LModule* m, LFunc* lf, TrStr donev, HirChanSelectArm* arm);
+__attribute__((hot)) bool _sel_uncond_arm(LModule* m, LFunc* lf, TrStr donev, HirBlock* body);
+__attribute__((hot)) bool _sel_timeout_arm(LModule* m, LFunc* lf, TrStr donev, TrStr tstart, HirChanSelectArm* arm);
+__attribute__((hot)) bool _lower_chan_select(LModule* m, LFunc* lf, List_ptr* cases);
+__attribute__((hot)) bool _lower_for_chan(LModule* m, LFunc* lf, TrStr var, HirExpr* iter, HirBlock* body);
+__attribute__((hot)) bool _lower_for_iterproto(LModule* m, LFunc* lf, TrStr var, HirExpr* iter, HirBlock* body);
+__attribute__((hot)) bool _lower_for_erange(LModule* m, LFunc* lf, TrStr var, HirExpr* start, HirExpr* end, bool inclusive, HirBlock* body);
 __attribute__((hot)) bool _lower_for_range(LModule* m, LFunc* lf, TrStr var, List_ptr* args, HirBlock* body);
 __attribute__((hot)) bool _lower_for_list(LModule* m, LFunc* lf, TrStr var, HirExpr* iter, HirBlock* body);
 __attribute__((hot)) bool _lower_for_unpack(LModule* m, LFunc* lf, List_TrStr* vars, HirExpr* iter, HirBlock* body);
 __attribute__((hot)) bool _lower_enumerate(LModule* m, LFunc* lf, TrStr ivar, TrStr evar, HirExpr* listexpr, HirBlock* body);
+__attribute__((hot)) bool _lower_zip(LModule* m, LFunc* lf, TrStr v0, TrStr v1, HirExpr* aexpr, HirExpr* bexpr, HirBlock* body);
+__attribute__((hot)) bool _lower_dict_items_unpack(LModule* m, LFunc* lf, TrStr kvar, TrStr vvar, HirExpr* dictexpr, HirBlock* body);
 __attribute__((hot)) void _emit_incr(LFunc* lf, TrStr name);
 __attribute__((hot)) TrStr _ident_name(HirExpr* e);
 __attribute__((hot)) bool _lower_field_set(LModule* m, LFunc* lf, HirExpr* obj, TrStr prop, HirExpr* val);
@@ -3785,6 +3940,7 @@ __attribute__((hot)) bool _lower_index_set(LModule* m, LFunc* lf, HirExpr* obj, 
 __attribute__((hot)) TrStr _write_sym(long long t);
 __attribute__((hot)) void _emit_call0(LModule* m, LFunc* lf, TrStr sym);
 __attribute__((hot)) bool _lower_print(LModule* m, LFunc* lf, List_ptr* args);
+__attribute__((hot)) bool _lower_assert_cmp(LModule* m, LFunc* lf, TrStr fname, List_ptr* args);
 __attribute__((hot)) bool lower_expr_stmt(LModule* m, LFunc* lf, HirExpr* e);
 __attribute__((hot)) bool _int_op(TrStr op);
 __attribute__((hot)) TrStr _lir_digit(long long d);
@@ -3795,11 +3951,22 @@ __attribute__((hot)) void _release_str(LModule* m, LFunc* lf, long long v);
 __attribute__((hot)) void _retain_str(LModule* m, LFunc* lf, long long v);
 __attribute__((hot)) void _flush_fresh_strs(LModule* m, LFunc* lf);
 __attribute__((hot)) void _secure_str(LModule* m, LFunc* lf, long long v);
+__attribute__((hot)) void _fresh_mark_obj(LFunc* lf, long long v);
+__attribute__((hot)) bool _fresh_take_obj(LFunc* lf, long long v);
+__attribute__((hot)) void _release_obj(LModule* m, LFunc* lf, long long v);
+__attribute__((hot)) void _retain_obj(LModule* m, LFunc* lf, long long v);
+__attribute__((hot)) void _flush_fresh_objs(LModule* m, LFunc* lf);
+__attribute__((hot)) bool _is_owned_local_return(LFunc* lf, HirExpr* val);
+__attribute__((hot)) void _secure_obj(LModule* m, LFunc* lf, long long v);
 __attribute__((hot)) bool _is_param(LFunc* lf, TrStr name);
 __attribute__((hot)) long long _norm_bool(LFunc* lf, long long v);
 __attribute__((hot)) long long _str_call0(LModule* m, LFunc* lf, TrStr sym, long long _tr_v_recv, long long restype);
 __attribute__((hot)) long long _heap_lit(LModule* m, LFunc* lf, TrStr s);
+__attribute__((hot)) long long _obj_to_str(LModule* m, LFunc* lf, HirExpr* objexpr, long long objreg);
+__attribute__((hot)) long long _obj_repr(LModule* m, LFunc* lf, HirExpr* objexpr, long long objreg);
 __attribute__((hot)) long long _reg_to_str(LModule* m, LFunc* lf, long long reg);
+__attribute__((hot)) long long _str_concat2(LModule* m, LFunc* lf, long long a, long long b);
+__attribute__((hot)) long long _tuple_to_str(LModule* m, LFunc* lf, long long tup, AstType* ty);
 __attribute__((hot)) long long _str_call1(LModule* m, LFunc* lf, TrStr sym, long long _tr_v_recv, long long arg, long long restype);
 __attribute__((hot)) long long _lower_str_method(LModule* m, LFunc* lf, long long _tr_v_recv, TrStr method, List_ptr* margs);
 __attribute__((hot)) TrStr _float_unary_sym(TrStr method);
@@ -3810,8 +3977,11 @@ __attribute__((hot)) bool _is_const_int(HirExpr* e);
 __attribute__((hot)) long long _const_int_val(HirExpr* e);
 __attribute__((hot)) void _emit_add_const(LFunc* lf, TrStr name, long long delta);
 __attribute__((hot)) long long _list_call1(LModule* m, LFunc* lf, TrStr sym, long long handle, long long restype);
+__attribute__((hot)) long long _inline_list_addr(LModule* m, LFunc* lf, long long handle, long long idx, long long stride);
 __attribute__((hot)) long long _list_get(LModule* m, LFunc* lf, long long handle, long long idx);
+__attribute__((hot)) long long _list_get_raw(LModule* m, LFunc* lf, long long ltag, long long handle, long long idx);
 __attribute__((hot)) long long _list_get_elem(LModule* m, LFunc* lf, long long ltag, long long handle, long long idx);
+__attribute__((hot)) long long _lower_expr_impl(LModule* m, LFunc* lf, HirExpr* e);
 __attribute__((hot)) long long lower_expr(LModule* m, LFunc* lf, HirExpr* e);
 __attribute__((hot)) TrStr _ll_ty(long long tag);
 __attribute__((hot)) TrStr _ll_ty_name(TrStr n);
@@ -3826,6 +3996,7 @@ __attribute__((hot)) TrStr LlvmEmitter_vty(LlvmEmitter* self, long long v);
 __attribute__((hot)) TrStr LlvmEmitter_load_vreg(LlvmEmitter* self, long long v);
 __attribute__((hot)) TrStr LlvmEmitter_load_vreg_as(LlvmEmitter* self, long long v, TrStr ty);
 __attribute__((hot)) void LlvmEmitter_store_vreg(LlvmEmitter* self, long long v, TrStr ty, TrStr val);
+__attribute__((hot)) TrStr LlvmEmitter_addr_of_base(LlvmEmitter* self, long long v);
 __attribute__((hot)) TrStr LlvmEmitter_user_ret_ty(LlvmEmitter* self, TrStr name);
 __attribute__((hot)) void LlvmEmitter_emit_inst(LlvmEmitter* self, LInst inst);
 __attribute__((hot)) void LlvmEmitter_emit_call(LlvmEmitter* self, long long dst, TrStr callee, List_i64* args);
@@ -3834,6 +4005,8 @@ __attribute__((hot)) void LlvmEmitter_emit_function(LlvmEmitter* self, LFunc* lf
 __attribute__((hot)) void LlvmEmitter_emit_extern_decls(LlvmEmitter* self);
 __attribute__((hot)) void LlvmEmitter_scan_call_decl(LlvmEmitter* self, LInst inst, TrMap* seen);
 __attribute__((hot)) TrStr LlvmEmitter_emit_module(LlvmEmitter* self);
+__attribute__((hot)) TrStr _tbaa_suffix(long long aclass);
+__attribute__((hot)) bool _is_fresh_alloc_ret(TrStr name);
 __attribute__((hot)) TrStr _ll_int_instr(TrStr op);
 __attribute__((hot)) TrStr _ll_icmp_pred(TrStr op);
 __attribute__((hot)) TrStr _ll_float_instr(TrStr op);
@@ -3926,6 +4099,7 @@ __attribute__((hot)) TrStr target_extra_flags(TrStr triple);
 __attribute__((hot)) TrStr detect_cross_compiler(TrStr triple);
 __attribute__((hot)) TrStr dir_of_path(TrStr path);
 __attribute__((hot)) TrStr strip_trailing_sep_inline(TrStr s);
+__attribute__((hot)) TrStr find_native_abi_c(TrStr input_path);
 __attribute__((hot)) TrStr read_runtime_header(TrStr bin_path, TrStr input_path);
 __attribute__((hot)) void ensure_runtime_header(TrStr out_dir, TrStr bin_path, TrStr input_path);
 __attribute__((hot)) void sync_headers_to_runtime(TrStr rt_content, TrStr types_content);

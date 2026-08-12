@@ -1,0 +1,12 @@
+# native≡c / llvm≡c differential corpus: assert_eq/ne/lt/le/gt/ge builtins.
+# Passing asserts print nothing; the final print(1) confirms all passed.
+def main():
+    assert_eq(10, 10, "int eq")
+    assert_ne(3, 4, "int ne")
+    assert_lt(1, 2, "int lt")
+    assert_le(2, 2, "int le")
+    assert_gt(5, 3, "int gt")
+    assert_ge(4, 4, "int ge")
+    mut x = 7
+    assert_eq(x, 7, "var eq")
+    print(1)

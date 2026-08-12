@@ -1,0 +1,25 @@
+def find(target: int) -> Option[int]:
+    if target > 0: return Option.some(target * 2)
+    return Option.none()
+
+def checked(n: int) -> Result[int, str]:
+    if n == 0: return Result.err("zero")
+    return Result.ok(n + 100)
+
+def main():
+    mut a = find(5)
+    match a:
+        case Option.Some(v): print(v)
+        case Option.None: print(-1)
+    mut b = find(-3)
+    match b:
+        case Option.Some(v): print(v)
+        case Option.None: print(-1)
+    mut c = checked(7)
+    match c:
+        case Result.Ok(v): print(v)
+        case Result.Err(e): print(e)
+    mut d = checked(0)
+    match d:
+        case Result.Ok(v): print(v)
+        case Result.Err(e): print(e)

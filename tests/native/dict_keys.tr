@@ -1,0 +1,29 @@
+# dict .keys() iteration + .insert (LLVM/native backend materializes a key list and walks
+# it). Output is ORDER-INDEPENDENT (sums) so it stays byte-identical to the C backend even
+# though the two backends' hash-bucket orders differ.
+def main():
+    mut d: Dict[str, int] = {}
+    d.insert("alpha", 3)
+    d.insert("beta", 5)
+    d.insert("gamma", 7)
+    d.set("delta", 11)                 # .set is the same as .insert
+
+    mut key_count = 0
+    mut val_sum = 0
+    mut name_len_sum = 0
+    for k in d.keys():
+        key_count = key_count + 1
+        val_sum = val_sum + d.get(k)
+        name_len_sum = name_len_sum + k.len()
+    print(key_count)                   # 4
+    print(val_sum)                     # 26
+    print(name_len_sum)                # 5+4+5+5 = 19
+
+    # int-keyed dict keys()
+    mut m: Dict[int, int] = {}
+    m.insert(10, 100)
+    m.insert(20, 200)
+    mut ksum = 0
+    for kk in m.keys():
+        ksum = ksum + kk + m.get(kk)
+    print(ksum)                        # 10+100+20+200 = 330

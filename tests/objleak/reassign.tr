@@ -1,0 +1,29 @@
+# Object-leak oracle: reassigning an object local in a loop must release the overwritten
+# instance each iteration (secure-new-then-release-old), so the live count at exit is 0.
+extern "C":
+    def _tr_rt_obj_live_count() -> int
+
+class Cell:
+    v: int
+
+extend Cell:
+    def init(v: int) -> Cell:
+        mut c = Cell()
+        c.v = v
+        return c
+    def get(self) -> int:
+        return self.v
+
+def run(n: int) -> int:
+    mut acc = 0
+    mut c = Cell.init(0)
+    mut i = 1
+    while i < n:
+        c = Cell.init(i)       # overwrites the previous Cell -> old one released here
+        acc = acc + c.get()
+        i = i + 1
+    return acc
+
+def main():
+    print(run(1000))                # 499500
+    print(_tr_rt_obj_live_count())  # 0 with ARC

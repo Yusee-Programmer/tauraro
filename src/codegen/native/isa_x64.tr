@@ -434,6 +434,36 @@ pub def encode_func(lf: LFunc) -> EncodedFunc:
                     c.u8(208)
                     if dst >= 0:
                         _st_rax(c, _vreg_disp(dst))
+                case LInst.IAsm(acode, acons):
+                    pass                   # native can't assemble arbitrary text -> no-op
+                                           # (effect-free asm like nop/barriers stays correct)
+                case LInst.ILoad(dst, base, off, _):    # aclass: TBAA hint, LLVM-only; native ignores
+                    _ld_rax(c, _vreg_disp(base))    # rax = base address
+                    c.u8(72)                        # mov rax, [rax + off32]  (48 8B 80 disp32)
+                    c.u8(139)
+                    c.u8(128)
+                    c.u32(off)
+                    _st_rax(c, _vreg_disp(dst))     # [dst] = rax
+                case LInst.IStore(base, off, src, _):   # aclass: TBAA hint, LLVM-only; native ignores
+                    _ld_rax(c, _vreg_disp(base))    # rax = base address
+                    _ld_rcx(c, _vreg_disp(src))     # rcx = value
+                    c.u8(72)                        # mov [rax + off32], rcx  (48 89 88 disp32)
+                    c.u8(137)
+                    c.u8(136)
+                    c.u32(off)
+                case LInst.ILoadB(dst, base, off):  # 1-byte element load, zero-extended
+                    _ld_rax(c, _vreg_disp(base))    # rax = base address
+                    c.u8(15)                        # movzx eax, byte [rax + off32]  (0F B6 80 disp32)
+                    c.u8(182)                       # (writing eax zero-extends to rax)
+                    c.u8(128)
+                    c.u32(off)
+                    _st_rax(c, _vreg_disp(dst))     # [dst] = rax
+                case LInst.IStoreB(base, off, src): # 1-byte element store (low byte of value)
+                    _ld_rax(c, _vreg_disp(base))    # rax = base address
+                    _ld_rcx(c, _vreg_disp(src))     # rcx = value
+                    c.u8(136)                       # mov [rax + off32], cl  (88 88 disp32)
+                    c.u8(136)
+                    c.u32(off)
             ii = ii + 1
 
         match blk.term:
