@@ -49,7 +49,8 @@ pub def print_usage():
     print("  --verbose         Show all pipeline phases")
     print("  --backend <b>     Code generator: c (default, C->gcc/clang), llvm (LLVM IR),")
     print("                      native (x86-64->ELF, under construction)")
-    print("  -o <path>         Output executable name (temp .c files are deleted)")
+    print("  -o <path>         Exact output path (its directory is honored; overrides -d)")
+    print("  -d <dir>          Output directory for the executable (default: current dir)")
     print("  --lib             Build a shared library (.so/.dll) of `export def`s + a C header")
     print("  -O0/-O1/-O2/-O3  Optimization level (default: -O2)")
     print("  -Os               Optimize for size")
@@ -436,6 +437,53 @@ pub def get_filename(path: str) -> str:
         j = j + 1
     if last_sep < 0: return path
     return path.slice(last_sep + 1, n)
+
+# True if `path` contains a directory separator ('/' or '\').
+pub def has_path_sep(path: str) -> bool:
+    mut p = path as Pointer[char]
+    mut i = 0
+    while True:
+        mut c = p.offset(i).read() as int
+        if c == 0: return false
+        if c == 47 or c == 92: return true   # '/' or '\'
+        i = i + 1
+    return false
+
+# Normalize a -d output-directory value to a prefix ending in exactly one
+# separator (e.g. "out" -> "out/"), or "" for the current working directory.
+# Creates the directory so the subsequent write/link succeeds.
+pub def out_dir_prefix(out_dir: str) -> str:
+    if out_dir == "": return ""
+    mut d = out_dir
+    if not (d.ends_with("/") or d.ends_with("\\")):
+        d = d + "/"
+    make_dir(d)
+    return d
+
+# Unified output-path resolver shared by ALL backends (C / LLVM / native) so that
+# `-o` / `-d` / the default behave identically regardless of --backend. Returns
+# the path WITHOUT the artifact extension; the caller appends its own (.exe / ""
+# / .o / .dll) via ensure_ext.
+#   * -o <path> containing a separator (or absolute) -> respected verbatim; -d ignored.
+#   * -o <bare-name>                                 -> placed in the -d dir, else CWD.
+#   * no -o                                          -> input file's stem, in the -d dir else CWD.
+# Note the default is the CURRENT WORKING DIRECTORY (not the input file's dir and
+# not ./build) — the executable lands where the command is run.
+pub def resolve_output_stem(input_path: str, output_path: str, out_dir: str) -> str:
+    if output_path != "" and has_path_sep(output_path):
+        make_dir(dir_of_path(output_path))       # create the -o directory if absent
+        return output_path                       # explicit path wins; honor its dir
+    mut pref = out_dir_prefix(out_dir)           # "" (CWD) or "<dir>/"
+    if output_path != "":
+        return pref + output_path                # bare -o name in the target dir
+    return pref + strip_extension(get_filename(input_path))   # default: input stem
+
+# Append `ext` unless `path` already ends with it (idempotent, so `-o foo.exe`
+# does not become foo.exe.exe). Empty ext is a no-op (Unix executables).
+pub def ensure_ext(path: str, ext: str) -> str:
+    if ext == "": return path
+    if path.ends_with(ext): return path
+    return path + ext
 
 # Count dots to get depth
 pub def get_dot_depth(dot_path: str) -> int:
@@ -829,7 +877,8 @@ pub def main(args: Vec[str]):
         _tr_exit(0)
 
     mut input_path  = ""
-    mut output_path = ""
+    mut output_path = ""             # -o <path> : exact output path (dir honored)
+    mut out_dir     = ""             # -d <dir>  : output DIRECTORY (default: CWD)
     mut backend     = "c"
     mut emit_mode   = "exe"   # "exe" | "c" | "ast" | "mir"
     mut emit_ld     = ""      # --emit-ld PATH : also write a Cortex-M linker script (bare-metal @entry builds)
@@ -879,6 +928,9 @@ pub def main(args: Vec[str]):
         elif arg == "-o" and i + 1 < args.len:
             i = i + 1
             output_path = args.get(i)
+        elif (arg == "-d" or arg == "--dir") and i + 1 < args.len:
+            i = i + 1
+            out_dir = args.get(i)             # drop the executable in this directory
         elif arg == "--link" and i + 1 < args.len:
             i = i + 1
             link_paths.push(args.get(i))
@@ -1030,8 +1082,9 @@ pub def main(args: Vec[str]):
         # runtime -> executable, exactly like the C backend produces one end-to-end.
         mut lx_ext = ""
         if _tr_is_windows(): lx_ext = ".exe"
-        mut lx_exe = output_path
-        if lx_exe == "": lx_exe = strip_extension(input_path) + lx_ext
+        # Unified -o/-d/CWD placement (see resolve_output_stem): default is the
+        # current working directory, -d redirects, -o wins with its own dir.
+        mut lx_exe = ensure_ext(resolve_output_stem(input_path, output_path, out_dir), lx_ext)
         make_dir("build")
         mut lx_ll = "build/llvm_out.ll"
         write_file(lx_ll, llvm_ir)
@@ -1129,8 +1182,8 @@ pub def main(args: Vec[str]):
         # Phase 0: the seam is wired but codegen isn't implemented yet — error clearly
         # rather than emit nothing, so the default (C) or LLVM path is used instead.
         mut nat_gen = NativeGenerator.init()
-        mut nat_out = output_path
-        if nat_out == "": nat_out = strip_extension(input_path) + ".o"
+        # Same -o/-d/CWD rule as the other backends; native emits a .o artifact.
+        mut nat_out = ensure_ext(resolve_output_stem(input_path, output_path, out_dir), ".o")
         if not nat_gen.emit_object(hir, nat_out):
             print(c_red("error") + ": the native backend (--backend native) is not implemented yet")
             if nat_gen.fail_note != "": print("       reason: " + nat_gen.fail_note)
@@ -1327,11 +1380,9 @@ pub def main(args: Vec[str]):
         return
 
     # -- Compile all C files into the output executable ------------------------
-    mut exe_name = ""
-    if output_path != "":
-        exe_name = output_path
-    else:
-        exe_name = strip_extension(get_filename(input_path))
+    # Unified placement: -o exact path, else -d dir, else the CWD (NOT ./build).
+    # Intermediate .c/.o still live in build_dir; only the final artifact moves.
+    mut exe_name = resolve_output_stem(input_path, output_path, out_dir)
     if exe_name == "": exe_name = "a"
 
     # Strip .exe suffix so we append the correct platform extension ourselves
@@ -1352,23 +1403,16 @@ pub def main(args: Vec[str]):
         else: exe_ext = ".so"
     elif not _tr_is_windows():
         exe_ext = ""
-    mut exe_path = ""
-    if output_path != "":
-        # -o given: use exe_name as-is.
-        # With a separator (path/name or /abs/name) it becomes that exact path.
-        # Without a separator (bare name) it lands in CWD as ./name[.exe].
-        exe_path = exe_name + exe_ext
-    else:
-        # Default (no -o): place in ./build/<srcname>[.exe].
-        exe_path = build_dir + exe_name + exe_ext
+    # exe_name already carries the resolved directory (CWD / -d dir / -o path),
+    # so the artifact path is just the stem + platform extension.
+    mut exe_path = exe_name + exe_ext
 
     # --lib: emit a C header declaring the `export def` functions, next to the
     # library, so C/Rust/etc. consumers can link against it.
     if lib_mode:
         mut hdr = c_gen.generate_export_header(hir)
-        mut hdr_path = build_dir + exe_name + ".h"
-        if output_path != "":
-            hdr_path = exe_name + ".h"
+        # Header sits next to the library (exe_name already holds the resolved dir).
+        mut hdr_path = exe_name + ".h"
         write_file(hdr_path, hdr)
         if verbose: print("[lib] header: " + hdr_path)
 
