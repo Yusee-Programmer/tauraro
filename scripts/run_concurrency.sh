@@ -29,6 +29,9 @@ fi
 LIBS="-lm -lpthread"
 case "$(uname -s 2>/dev/null)" in *NT*|*MINGW*|*MSYS*|*CYGWIN*) LIBS="-lm -lws2_32 -mconsole";; esac
 fail=0
+# Bound each run: a concurrency test that deadlocks under the CI scheduler must not stall the
+# whole job forever (timeout -> rc 124 -> the "OK + exit 0" check below reports it as FAIL).
+TMO=""; command -v timeout >/dev/null 2>&1 && TMO="timeout -k 5 30"
 for src in tests/concurrency/*.tr; do
     [ -f "$src" ] || continue
     name="$(basename "$src" .tr)"
@@ -36,7 +39,7 @@ for src in tests/concurrency/*.tr; do
     "$TAURAROC" "$src" --emit c >/dev/null 2>&1 || { echo "FAIL  $name (emit)"; fail=1; continue; }
     "$CC" -O1 $SAN -I build/include -o "build/$name.exe" $(find build -name '*.c') $LIBS >/dev/null 2>&1 \
         || { echo "FAIL  $name (compile)"; fail=1; continue; }
-    out="$("build/$name.exe" 2>&1)"; rc=$?
+    out="$($TMO "build/$name.exe" 2>&1)"; rc=$?
     if [ $rc -eq 0 ] && echo "$out" | grep -q "OK"; then echo "PASS  $name  |  $out"
     else echo "FAIL  $name (rc=$rc): $out"; fail=1; fi
 done

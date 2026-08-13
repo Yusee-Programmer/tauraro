@@ -65,8 +65,9 @@ if ! "$CC" build/native_p42.o build/runtime.o -lm -o build/native_p42 2>/tmp/nat
     echo "FAIL: link"; sed -n '1,20p' /tmp/native_ld.log; exit 1
 fi
 
-# 4) run.
-out="$(build/native_p42 2>&1)"
+# 4) run (bounded so a wedged binary can't stall CI forever).
+_TMO=""; command -v timeout >/dev/null 2>&1 && _TMO="timeout -k 5 30"
+out="$($_TMO build/native_p42 2>&1)"
 echo "--- output ---"; echo "$out" | sed 's/^/    /'
 expected=$'hello native\n55\n4\n30\n100\ndone'
 if [ "$out" = "$expected" ]; then
