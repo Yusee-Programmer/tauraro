@@ -94,7 +94,8 @@ else
         || { echo "FAIL: link"; sed -n '1,20p' /tmp/llvm_ld.log; exit 1; }
 fi
 
-out="$(build/llvm_p 2>&1 | tr -d '\r')"
+_TMO=""; command -v timeout >/dev/null 2>&1 && _TMO="timeout -k 5 30"   # bound the run vs CI hangs
+out="$($_TMO build/llvm_p 2>&1 | tr -d '\r')"
 echo "--- output ---"; echo "$out" | sed 's/^/    /'
 expected=$'hello llvm\n55\n100\nfib10=55 odd\ndone'
 if [ "$out" = "$expected" ]; then

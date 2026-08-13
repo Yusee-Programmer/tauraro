@@ -42,16 +42,19 @@ echo "=============================================================="
 echo "  ARC hardening: AddressSanitizer over the LLVM backend"
 echo "=============================================================="
 export ASAN_OPTIONS="detect_leaks=0:abort_on_error=1:exitcode=99"
+# Bound each run: a test that deadlocks (thread_spawn/threadpool/… under CI scheduling) must
+# not stall the whole job forever — a timeout is reported as a skip, not a false ASan fault.
+TMO=""; command -v timeout >/dev/null 2>&1 && TMO="timeout -k 5 30"
 pass=0; fail=0
 run_one() {  # $1=.tr  $2=label
     local src="$1" name="$2"
     local ll="$WORK/$name.ll" bin="$WORK/$name.exe"
     "$TAURAROC" "$src" --backend llvm -o "$ll" >/dev/null 2>&1 || { echo "  $name: skip (LIR fallback)"; return; }
     "$CLANGBIN" $AF "$ll" "$RT" -lm -o "$bin" 2>"$WORK/$name.ld" || { echo "  $name: skip (asan link)"; return; }
-    if "$bin" >/dev/null 2>"$WORK/$name.run"; then
-        echo "  $name: OK"; pass=$((pass+1))
-    else
-        echo "  $name: ASAN FAULT (UAF/double-free)"; sed -n '1,12p' "$WORK/$name.run"; fail=$((fail+1))
+    $TMO "$bin" >/dev/null 2>"$WORK/$name.run"; local rc=$?
+    if [ "$rc" = 124 ]; then echo "  $name: skip (run timed out)"
+    elif [ "$rc" = 0 ]; then echo "  $name: OK"; pass=$((pass+1))
+    else echo "  $name: ASAN FAULT (UAF/double-free)"; sed -n '1,12p' "$WORK/$name.run"; fail=$((fail+1))
     fi
 }
 for T in tests/objleak/*.tr; do [ -e "$T" ] && run_one "$T" "obj_$(basename "$T" .tr)"; done

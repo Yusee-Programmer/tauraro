@@ -40,6 +40,7 @@ RT="$WORK/runtime_nmem.o"
     || { echo "FAIL: runtime.o (-DTAURARO_NMEM)"; sed -n '1,20p' "$WORK/rt.log"; exit 1; }
 
 pass=0; fail=0
+_TMO=""; command -v timeout >/dev/null 2>&1 && _TMO="timeout -k 5 30"   # bound each run vs CI hangs
 for T in tests/objleak/*.tr; do
     [ -e "$T" ] || { echo "(no tests/objleak/*.tr — nothing to check)"; exit 0; }
     name="$(basename "$T" .tr)"
@@ -58,7 +59,7 @@ for T in tests/objleak/*.tr; do
         "$CC" "$WORK/$name.o" "$RT"  -lm $WINLIB -o "$bin" 2>"$WORK/$name.ld.log" \
             || { echo "  $name: FAIL (link)"; sed -n '1,8p' "$WORK/$name.ld.log"; fail=$((fail+1)); continue; }
     fi
-    out="$("$bin" 2>&1 | tr -d '\r')"; rc=$?
+    out="$($_TMO "$bin" 2>&1 | tr -d '\r')"; rc=$?
     live="$(printf '%s\n' "$out" | tail -1)"
     if [ "$rc" -ne 0 ]; then
         echo "  $name: FAIL (exit $rc — possible double-free/UAF)"; printf '%s\n' "$out" | sed 's/^/      /'; fail=$((fail+1)); continue

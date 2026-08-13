@@ -13,6 +13,7 @@ SAN=""
 if [ "$(uname 2>/dev/null)" = "Linux" ]; then SAN="-fsanitize=address,undefined -fno-sanitize-recover=all"; fi
 
 rc=0
+_TMO=""; command -v timeout >/dev/null 2>&1 && _TMO="timeout -k 5 30"   # bound each run vs CI hangs
 for t in tests/security/*.c; do
     [ -f "$t" ] || continue
     name="$(basename "$t" .c)"
@@ -26,7 +27,7 @@ for t in tests/security/*.c; do
     if ! "${BUILD[@]}" 2>/tmp/sec_build.log; then
         echo "  ✗ $name: build failed"; sed -n '1,15p' /tmp/sec_build.log; rc=1; continue
     fi
-    if "build/$name"; then
+    if $_TMO "build/$name"; then
         echo "  ✓ $name passed"
     else
         echo "  ✗ $name FAILED (exit $?)"; rc=1

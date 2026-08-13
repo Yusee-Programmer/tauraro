@@ -77,6 +77,7 @@ done
 
 # Build one accept source into build/<exe> with the given extra tauraroc flag and
 # extra C flag; echo its stdout, return its exit status. Caller checks both.
+_TMO=""; command -v timeout >/dev/null 2>&1 && _TMO="timeout -k 5 30"   # bound each run vs CI hangs
 build_and_run() {
     local src="$1" exe="$2" tflag="$3" cflag="$4"
     rm -rf build
@@ -84,7 +85,7 @@ build_and_run() {
     # shellcheck disable=SC2046
     "$CC" -O1 $STD $cflag -DTAURARO_NO_RT_HELPERS $WARN -I build/include \
         -o "$exe" $(find build -name '*.c') $LIBS >/dev/null 2>&1 || return 91
-    "$exe" 2>/dev/null
+    $_TMO "$exe" 2>/dev/null
 }
 
 echo

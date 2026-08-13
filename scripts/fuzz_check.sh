@@ -49,6 +49,7 @@ compile() { # <exe> <extra-cflags>
 }
 
 fail=0; ran=0
+_TMO=""; command -v timeout >/dev/null 2>&1 && _TMO="timeout -k 5 25"   # bound each fuzz run vs CI hangs
 i=0
 while [ "$i" -lt "$COUNT" ]; do
     seed="${SEED:-$i}"
@@ -59,13 +60,13 @@ while [ "$i" -lt "$COUNT" ]; do
     rm -rf build
     if ! "$TAURAROC" "$src" --emit c >/dev/null 2>&1; then echo "FAIL seed=$seed (elided emit)"; fail=1; rm -f "$src"; i=$((i+1)); continue; fi
     [ "$(compile build/e.exe "-O2 -DTAURARO_MEMCOUNT")" = OK ] || { echo "FAIL seed=$seed (elided cc)"; fail=1; rm -f "$src"; i=$((i+1)); continue; }
-    out1="$(build/e.exe 2>&1)"; rc1=$?
+    out1="$($_TMO build/e.exe 2>&1)"; rc1=$?
 
     # --- pure ARC (--no-elide, memcount) ---
     rm -rf build
     "$TAURAROC" "$src" --no-elide --emit c >/dev/null 2>&1
     [ "$(compile build/a.exe "-O2 -DTAURARO_MEMCOUNT")" = OK ] || { echo "FAIL seed=$seed (pure-ARC cc)"; fail=1; rm -f "$src"; i=$((i+1)); continue; }
-    out2="$(build/a.exe 2>&1)"; rc2=$?
+    out2="$($_TMO build/a.exe 2>&1)"; rc2=$?
 
     chk1="$(printf '%s\n' "$out1" | grep '^CHK ')"; live1="$(printf '%s\n' "$out1" | grep '^LIVE ' | awk '{print $2}')"
     chk2="$(printf '%s\n' "$out2" | grep '^CHK ')"; live2="$(printf '%s\n' "$out2" | grep '^LIVE ' | awk '{print $2}')"
@@ -81,7 +82,7 @@ while [ "$i" -lt "$COUNT" ]; do
     if [ -z "$bad" ] && [ -n "$ASAN_FLAGS" ]; then
         rm -rf build; "$TAURAROC" "$src" --emit c >/dev/null 2>&1
         if [ "$(compile build/s.exe "$ASAN_FLAGS")" = OK ]; then
-            build/s.exe >/dev/null 2>&1 || bad="ASan/UBSan error (double-free / UAF / UB)"
+            $_TMO build/s.exe >/dev/null 2>&1 || bad="ASan/UBSan error (double-free / UAF / UB)"
         fi
     fi
 
