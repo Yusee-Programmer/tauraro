@@ -382,6 +382,8 @@ jobs:
       - name: LLVM ≡ C differential oracle
         if: runner.os == 'Linux'
         shell: bash
+        timeout-minutes: 20   # the script self-bounds each test; this caps the whole step so a
+                              # pathological hang fails fast instead of stalling the runner.
         run: TAURAROC=./tauraroc${{ matrix.ext }} bash scripts/llvm_diff.sh
 
       # FFI proof: extern "C" calls into a custom C object + `export def` producing a

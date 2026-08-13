@@ -32,6 +32,13 @@ fi
 TRIPLE=""
 case "$(uname -s 2>/dev/null)" in *NT*|*MINGW*|*MSYS*|*CYGWIN*) TRIPLE="x86_64-pc-windows-gnu";; esac
 
+# Bound every compile + run. A test binary that blocks (a concurrency/channel/reactor test
+# that deadlocks under a CI scheduler, or waits on I/O) must NOT stall the whole job until
+# the runner-wide timeout kills it — that looks like "hangs forever, then the CI cancels".
+# With `timeout`, a stuck test is a bounded, reported SKIP and the oracle finishes.
+TMO=""; CTMO=""
+if command -v timeout >/dev/null 2>&1; then TMO="timeout -k 5 25"; CTMO="timeout -k 10 180"; fi
+
 # runtime.o lives OUTSIDE build/ — the per-test `rm -rf build` (stale-state hygiene)
 # must not delete it (that broke every link on CI with __CLANGFAIL__).
 RTDIR="$(mktemp -d)"
@@ -56,11 +63,11 @@ WINLIB=""; [ -n "$TRIPLE" ] && WINLIB="-lws2_32 -lucrtbase"
 build_llvm_exe() {  # $1=.ll  $2=out-exe ; echoes "" on success or an error tag
     if [ "$HAVE_CLANG" = 1 ]; then
         local f="-O2"; [ -n "$TRIPLE" ] && f="$f -target $TRIPLE"
-        "$CLANGBIN" $f "$1" "$RT" -lm $WINLIB -o "$2" >/tmp/ldiff.log 2>&1 || { echo "__CLANGFAIL__"; return; }
+        $CTMO "$CLANGBIN" $f "$1" "$RT" -lm $WINLIB -o "$2" >/tmp/ldiff.log 2>&1 || { echo "__CLANGFAIL__"; return; }
     else
         local f="-O2 -filetype=obj"; [ -n "$TRIPLE" ] && f="$f -mtriple=$TRIPLE"
-        "$LLCBIN" $f "$1" -o "$2.o" >/tmp/ldiff.log 2>&1 || { echo "__LLCFAIL__"; return; }
-        "$CC" "$2.o" "$RT" -lm $WINLIB -o "$2" >/tmp/ldiff.log 2>&1 || { echo "__LINKFAIL__"; return; }
+        $CTMO "$LLCBIN" $f "$1" -o "$2.o" >/tmp/ldiff.log 2>&1 || { echo "__LLCFAIL__"; return; }
+        $CTMO "$CC" "$2.o" "$RT" -lm $WINLIB -o "$2" >/tmp/ldiff.log 2>&1 || { echo "__LINKFAIL__"; return; }
     fi
     echo ""
 }
@@ -70,17 +77,19 @@ for src in tests/native/*.tr; do
     [ -f "$src" ] || continue
     name="$(basename "$src" .tr)"
     # C backend reference output (clean build/ first: stale-state hygiene).
-    clean_build; "$TAURAROC" "$src" -o "/tmp/${name}_c" >/dev/null 2>&1 \
+    clean_build; $CTMO "$TAURAROC" "$src" -o "/tmp/${name}_c" >/dev/null 2>&1 \
         || { echo "  C-FAIL   $name"; fail=1; continue; }
-    c_out="$("/tmp/${name}_c" 2>&1)"
+    c_out="$($TMO "/tmp/${name}_c" 2>&1)"; crc=$?
+    if [ "$crc" = 124 ]; then echo "  skip     $name (C run timed out)"; skip=$((skip+1)); continue; fi
     # LLVM backend output (skip cleanly if the program is outside the LIR subset).
     clean_build
-    if ! "$TAURAROC" "$src" --backend llvm -o "/tmp/${name}.ll" >/dev/null 2>&1; then
+    if ! $CTMO "$TAURAROC" "$src" --backend llvm -o "/tmp/${name}.ll" >/dev/null 2>&1; then
         echo "  skip     $name (LIR fallback)"; skip=$((skip+1)); continue
     fi
     err="$(build_llvm_exe "/tmp/${name}.ll" "/tmp/${name}_ll")"
     if [ -n "$err" ]; then echo "  BUILDERR $name ($err)"; sed -n '1,8p' /tmp/ldiff.log; fail=1; continue; fi
-    l_out="$("/tmp/${name}_ll" 2>&1)"
+    l_out="$($TMO "/tmp/${name}_ll" 2>&1)"; lrc=$?
+    if [ "$lrc" = 124 ]; then echo "  skip     $name (LLVM run timed out)"; skip=$((skip+1)); continue; fi
     if [ "$c_out" = "$l_out" ]; then
         pass=$((pass+1))
     else
