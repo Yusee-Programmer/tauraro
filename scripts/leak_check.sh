@@ -19,6 +19,7 @@ case "$(uname -s 2>/dev/null)" in *NT*|*MINGW*|*MSYS*|*CYGWIN*) LIBS="-lm -lws2_
 
 # Build one gate under a given flag ("" = optimized/elided, "--no-elide" = pure ARC),
 # echo its runtime output, or "" on emit/compile failure.
+_TMO=""; command -v timeout >/dev/null 2>&1 && _TMO="timeout -k 5 30"   # bound each run vs CI hangs
 build_run() {
     local src="$1" name="$2" flag="$3"
     rm -rf build
@@ -26,7 +27,7 @@ build_run() {
     "$CC" -O2 -DTAURARO_MEMCOUNT -DTAURARO_NO_RT_HELPERS $WARN -I build/include \
         -o "build/$name.exe" $(find build -name '*.c') $LIBS >/dev/null 2>&1 \
         || { echo "__COMPILEFAIL__"; return; }
-    "build/$name.exe" 2>&1
+    $_TMO "build/$name.exe" 2>&1
 }
 
 fail=0

@@ -19,13 +19,14 @@ mkdir -p build
 "$CC" -O1 -DTAURARO_NMEM -I runtime -c runtime/native_abi.c -o build/runtime_nmem.o || { echo "FAIL: runtime.o"; exit 1; }
 
 rc=0
+_LKTMO=""; command -v timeout >/dev/null 2>&1 && _LKTMO="timeout -k 5 30"   # bound each run vs CI hangs
 for src in tests/native/arc_strings.tr; do
     name="$(basename "$src" .tr)"
     "$TAURAROC" "$src" --backend native -o "build/${name}_leak.o" || { echo "FAIL: native emit $name"; rc=1; continue; }
     if ! "$CC" "build/${name}_leak.o" build/runtime_nmem.o runtime/native_leak_probe.c -lm -o "build/${name}_leak" 2>/tmp/leak_ld.log; then
         echo "FAIL: link $name"; sed -n '1,10p' /tmp/leak_ld.log; rc=1; continue
     fi
-    if "build/${name}_leak" >/dev/null; then
+    if ${_LKTMO:-} "build/${name}_leak" >/dev/null; then
         echo "  ✓ $name: no leak, no crash"
     else
         echo "  ✗ $name: leak or crash (exit $?)"; rc=1

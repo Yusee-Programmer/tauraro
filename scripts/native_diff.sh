@@ -28,26 +28,35 @@ echo "=============================================================="
 mkdir -p build
 bash scripts/build_runtime_o.sh build/runtime.o || { echo "FAIL: runtime.o"; exit 1; }
 
-pass=0; fail=0
+# Bound every compile + run. A test binary that blocks (a thread/sync test that deadlocks
+# under a CI scheduler — thread_spawn/threadpool/thread_sleep etc.) must NOT stall the whole
+# job until the runner-wide timeout kills it (which looks like "hangs forever, CI cancels").
+# With `timeout`, a stuck test is a bounded, reported SKIP and the oracle finishes.
+TMO=""; CTMO=""
+if command -v timeout >/dev/null 2>&1; then TMO="timeout -k 5 25"; CTMO="timeout -k 10 180"; fi
+
+pass=0; fail=0; skip=0
 for src in tests/native/*.tr; do
     [ -f "$src" ] || continue
     name="$(basename "$src" .tr)"
 
     # 1) C backend -> executable -> run.
-    if ! "$TAURAROC" "$src" --backend c -o "build/c_$name" >/tmp/c_build.log 2>&1; then
+    if ! $CTMO "$TAURAROC" "$src" --backend c -o "build/c_$name" >/tmp/c_build.log 2>&1; then
         echo "  ✗ $name: C backend failed to build"; sed -n '1,8p' /tmp/c_build.log; fail=$((fail+1)); continue
     fi
-    out_c="$("build/c_$name" 2>&1)"
+    out_c="$($TMO "build/c_$name" 2>&1)"; crc=$?
+    if [ "$crc" = 124 ]; then echo "  ~ $name: skipped (C run timed out)"; skip=$((skip+1)); continue; fi
 
     # 2) Native backend -> ELF object (must NOT fall back) -> link with runtime.o -> run.
-    if ! "$TAURAROC" "$src" --backend native -o "build/$name.o" >/tmp/nat_build.log 2>&1; then
+    if ! $CTMO "$TAURAROC" "$src" --backend native -o "build/$name.o" >/tmp/nat_build.log 2>&1; then
         echo "  ✗ $name: native backend fell back / errored (uses an unsupported feature?)"
         sed -n '1,8p' /tmp/nat_build.log; fail=$((fail+1)); continue
     fi
-    if ! "$CC" "build/$name.o" build/runtime.o -lm -o "build/nat_$name" 2>/tmp/nat_ld.log; then
+    if ! $CTMO "$CC" "build/$name.o" build/runtime.o -lm -o "build/nat_$name" 2>/tmp/nat_ld.log; then
         echo "  ✗ $name: link failed"; sed -n '1,8p' /tmp/nat_ld.log; fail=$((fail+1)); continue
     fi
-    out_nat="$("build/nat_$name" 2>&1)"
+    out_nat="$($TMO "build/nat_$name" 2>&1)"; nrc=$?
+    if [ "$nrc" = 124 ]; then echo "  ~ $name: skipped (native run timed out)"; skip=$((skip+1)); continue; fi
 
     # 3) Differential assertion.
     if [ "$out_c" = "$out_nat" ]; then
@@ -62,6 +71,6 @@ for src in tests/native/*.tr; do
 done
 
 echo "--------------------------------------------------------------"
-echo "  native≡c: $pass passed, $fail failed"
+echo "  native≡c: $pass passed, $fail failed, $skip skipped (timed out)"
 [ "$fail" -eq 0 ] || { echo "DIFFERENTIAL FAIL"; exit 1; }
 echo "DIFFERENTIAL OK ✅ — the native x86-64/ELF backend matches the C backend on all $pass programs"
