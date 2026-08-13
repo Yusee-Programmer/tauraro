@@ -31,7 +31,8 @@ else
     if "$AA" -O2 -static $WARN -I build/include -o build/hello_aa $(find build -name '*.c') -lm -lpthread 2>/tmp/aa_cc.log; then
         echo "  aarch64 static build: OK"
         if [ -n "$QEMU" ]; then
-            out="$("$QEMU" build/hello_aa 2>&1)"; echo "  qemu run: $out"
+            _TMO=""; command -v timeout >/dev/null 2>&1 && _TMO="timeout -k 5 30"   # bound qemu vs CI hangs
+            out="$($_TMO "$QEMU" build/hello_aa 2>&1)"; echo "  qemu run: $out"
             echo "$out" | grep -q "CROSS 81 42 cross ok" || { echo "FAIL: unexpected aarch64 output"; fail=1; }
         else
             echo "  (qemu-aarch64 not installed — built but not run)"

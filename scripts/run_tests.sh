@@ -99,23 +99,24 @@ CEOF
         # shared object is found at runtime (ELF: LD_LIBRARY_PATH, Mach-O:
         # DYLD_LIBRARY_PATH; Windows resolves the .dll from the cwd). Without
         # this the consumer fails to start on Linux/macOS -> empty output.
+        _TMO=""; command -v timeout >/dev/null 2>&1 && _TMO="timeout -k 5 30"   # bound run vs CI hangs
         if [ -f "$libdir/consumer" ]; then
             case "$(uname -s)" in
                 Linux)
-                    cout=$(cd "$libdir" && LD_LIBRARY_PATH="$libdir:${LD_LIBRARY_PATH:-}" ./consumer 2>/dev/null)
+                    cout=$(cd "$libdir" && LD_LIBRARY_PATH="$libdir:${LD_LIBRARY_PATH:-}" $_TMO ./consumer 2>/dev/null)
                     ;;
                 Darwin)
-                    cout=$(cd "$libdir" && DYLD_LIBRARY_PATH="$libdir:${DYLD_LIBRARY_PATH:-}" ./consumer 2>/dev/null)
+                    cout=$(cd "$libdir" && DYLD_LIBRARY_PATH="$libdir:${DYLD_LIBRARY_PATH:-}" $_TMO ./consumer 2>/dev/null)
                     ;;
                 MINGW*|MSYS*|CYGWIN*)
-                    cout=$(cd "$libdir" && ./consumer.exe 2>/dev/null)
+                    cout=$(cd "$libdir" && $_TMO ./consumer.exe 2>/dev/null)
                     ;;
                 *)
-                    cout=$(cd "$libdir" && LD_LIBRARY_PATH="$libdir:${LD_LIBRARY_PATH:-}" ./consumer 2>/dev/null)
+                    cout=$(cd "$libdir" && LD_LIBRARY_PATH="$libdir:${LD_LIBRARY_PATH:-}" $_TMO ./consumer 2>/dev/null)
                     ;;
             esac
         fi
-        [ -z "$cout" ] && [ -f "$libdir/consumer.exe" ] && cout=$(cd "$libdir" && ./consumer.exe 2>/dev/null)
+        [ -z "$cout" ] && [ -f "$libdir/consumer.exe" ] && cout=$(cd "$libdir" && $_TMO ./consumer.exe 2>/dev/null)
     fi
     if [ "$cout" != "7 30" ]; then
         echo "  FAILED (got: '$cout')"
