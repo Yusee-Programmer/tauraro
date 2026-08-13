@@ -4,7 +4,7 @@
 
 __attribute__((hot)) void print_version() {
     /* pass */
-    ({ printf("%s", _tr_strz(_tr_str_lit("tauraroc v0.0.7"))); printf("\n"); });
+    ({ printf("%s", _tr_strz(_tr_str_lit("tauraroc v0.0.8"))); printf("\n"); });
 }
 
 __attribute__((hot)) void print_usage() {
