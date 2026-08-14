@@ -55,6 +55,14 @@
 #if defined(TAURARO_NO_OS) || (defined(TAURARO_WASM) && !defined(__wasi__))
 #  define TAURARO_BARE 1
 #endif
+/* KERNEL = Linux kernel module / bare-metal with user-supplied allocator.
+ * Implies BARE (no OS threads/sockets), disables setjmp exceptions. */
+#if defined(TAURARO_KERNEL)
+#  if !defined(TAURARO_BARE)
+#    define TAURARO_BARE 1
+#  endif
+#  define TAURARO_NO_EXCEPTIONS 1
+#endif
 /* ── Orthogonal capability switches ───────────────────────────────────────
  * Historically TAURARO_BARE meant "no OS" and conflated THREE separate things:
  * no libc, no threads, and no networking. wasi breaks that assumption — it HAS a
@@ -67,7 +75,9 @@
  * BARE (bare-metal / no-OS) implies ALL of them, so bare-metal builds behave
  * EXACTLY as before. wasi opts into the last three but keeps its libc. Every
  * former `defined(TAURARO_BARE)` guard is reclassified below to the specific
- * concern it actually gates. */
+ * concern it actually gates. NOTE: derived here — AFTER both the NO_OS/WASM and
+ * the KERNEL paths have finished resolving TAURARO_BARE — so a KERNEL/freestanding
+ * build (which defines BARE only in the block just above) correctly gets all three.  */
 #if defined(TAURARO_BARE)
 #  define TAURARO_NO_LIBC 1
 #endif
@@ -75,14 +85,6 @@
 #  define TAURARO_NO_THREADS    1
 #  define TAURARO_NO_NET        1
 #  define TAURARO_NO_SUBPROCESS 1
-#endif
-/* KERNEL = Linux kernel module / bare-metal with user-supplied allocator.
- * Implies BARE (no OS threads/sockets), disables setjmp exceptions. */
-#if defined(TAURARO_KERNEL)
-#  if !defined(TAURARO_BARE)
-#    define TAURARO_BARE 1
-#  endif
-#  define TAURARO_NO_EXCEPTIONS 1
 #endif
 
 #ifndef TAURARO_KERNEL
