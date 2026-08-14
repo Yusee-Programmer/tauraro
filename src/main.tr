@@ -251,10 +251,11 @@ pub def detect_bundled_zig() -> str:
     if _tr_is_windows(): ext = ".exe"
     mut z = _tr_exe_dir() + "/zig/zig" + ext
     if _tr_is_windows(): z = path_to_native(z)
-    mut null_dev = "/dev/null"
-    if _tr_is_windows(): null_dev = "nul"
-    if _tr_system("\"" + z + "\" version >" + null_dev + " 2>&1") == 0:
-        return z
+    # Detect by file existence, not by executing zig: running a quoted absolute path
+    # via _tr_system hits cmd.exe leading-quote-stripping edge cases on Windows and
+    # pays zig's slow startup. Existence is enough — activate_bundled_zig then puts
+    # the dir on PATH so `zig` resolves by bare name everywhere.
+    if file_exists(z): return z
     return ""
 
 # If a zig is bundled at <exe_dir>/zig/, prepend that directory to PATH so `zig` and
@@ -1373,9 +1374,14 @@ pub def main(args: Vec[str]):
         # bundled zig on PATH). `zig cc` compiles the .ll directly and links via its own
         # lld, one step, needing no system LLVM. Last because zig compiles its libc from
         # source on first use (slow once, then cached); a system clang/llc above is faster.
+        # The runtime is RE-compiled with zig cc here so its libc/ABI matches the zig-
+        # linked program object — a system-gcc(mingw) runtime.o + zig-cc link mismatches
+        # on Windows (different mingw), which is why this must not reuse lx_rto.
         if not lx_built and _tr_system("zig version >" + lx_null + " 2>&1") == 0:
-            if _tr_system("zig cc -O" + opt_level + " \"" + lx_ll + "\" " + lx_rto + lx_libs_gcc + " -o \"" + lx_exe + "\" 2>build/llvm_link.log") == 0:
-                lx_built = true
+            mut lx_zrto = "build/llvm_runtime_zig.o"
+            if _tr_system("zig cc -O2 -w -c \"-I" + dir_of_path(lx_abi) + "\" \"" + lx_abi + "\" -o " + lx_zrto + " 2>build/llvm_link.log") == 0:
+                if _tr_system("zig cc -O" + opt_level + " \"" + lx_ll + "\" " + lx_zrto + lx_libs_gcc + " -o \"" + lx_exe + "\" 2>>build/llvm_link.log") == 0:
+                    lx_built = true
         if not lx_built:
             print(c_red("error") + ": could not compile the LLVM IR to an executable")
             print("       need clang (LLVM >= 15) / llc on PATH, or a bundled/installed zig;")
