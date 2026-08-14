@@ -182,7 +182,15 @@ jobs:
             *) echo "no zig mapping for ${{ matrix.platform }}"; exit 1 ;;
           esac
           curl -fsSL --retry 5 --retry-delay 3 "https://ziglang.org/download/$ZV/zig-$ZA-$ZV.$AEXT" -o "z.$AEXT"
-          mkdir -p zig && tar -xf "z.$AEXT" --strip-components=1 -C zig && rm -f "z.$AEXT"
+          mkdir -p zig
+          if [ "$AEXT" = "zip" ]; then
+            # Git Bash's `tar` is GNU tar (cannot extract .zip). Windows ships bsdtar
+            # (libarchive) at System32/tar.exe, which handles .zip AND --strip-components.
+            "/c/Windows/System32/tar.exe" -xf "z.$AEXT" --strip-components=1 -C zig
+          else
+            tar -xJf "z.$AEXT" --strip-components=1 -C zig
+          fi
+          rm -f "z.$AEXT"
       - name: Verify bundled zig
         shell: bash
         run: |
