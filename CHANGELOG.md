@@ -4,10 +4,10 @@ All notable changes to the Tauraro language and compiler (`tauraroc`) are
 documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
-Versioning follows the pre-1.0 policy described in
-[docs/dev/00_versioning_policy.md](docs/dev/00_versioning_policy.md): until
-1.0, **any** `0.x` bump may contain breaking changes, and there is no
-deprecation period.
+Versioning follows the pre-0.1 policy described in
+[docs/dev/00_versioning_policy.md](docs/dev/00_versioning_policy.md): in the
+current `0.0.x` phase, **any** version bump may contain breaking changes, and
+there is no deprecation period.
 
 ## [Unreleased]
 
