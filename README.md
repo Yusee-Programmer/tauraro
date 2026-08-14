@@ -9,7 +9,7 @@
     <img src="https://img.shields.io/badge/version-v0.0.7-brightgreen?style=flat-square" alt="Version"/>
     <img src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey?style=flat-square" alt="Platform"/>
     <img src="https://img.shields.io/badge/bilingual-English%20%2B%20Hausa-orange?style=flat-square" alt="Bilingual"/>
-    <img src="https://img.shields.io/badge/backend-GCC%20%2F%20Clang-red?style=flat-square" alt="Backend"/>
+    <img src="https://img.shields.io/badge/backends-C%20%C2%B7%20LLVM%20%C2%B7%20WASM%20%C2%B7%20bare--metal-red?style=flat-square" alt="Backends"/>
     <img src="https://img.shields.io/badge/self--hosted-yes-purple?style=flat-square" alt="Self-hosted"/>
   </p>
 
@@ -28,7 +28,9 @@
 
 ## What Is Tauraro?
 
-Tauraro is a compiled, statically-typed language with Python-style indentation syntax. It compiles to C and then to native machine code via GCC or Clang — giving you Python's readability with performance close to hand-written C.
+Tauraro is a compiled, statically-typed language with Python-style indentation syntax — Python's readability with performance close to hand-written C.
+
+It ships as a **batteries-included, cross-platform toolchain**: one download compiles for your machine *and* cross-compiles to Linux/Windows/macOS, ARM/RISC-V, **WebAssembly**, and **bare-metal firmware** — with **nothing else to install**. Two code generators back it: the default **C** backend (widest coverage, `gcc`/`clang`) and an optimizing **LLVM** backend (auto-vectorizing, often faster than C). A bundled **zig** provides clang + `lld` + a libc for every target, so `--backend llvm` and `--target <anything>` work straight out of the box. See **[Compiling, Backends & Cross-Compilation](docs/lang/22_compiling_and_cross_compilation.md)**.
 
 It is also the **first programming language with full bilingual keyword support** — every keyword has both an English and a Hausa equivalent. Programs can be written in either language, or mixed freely.
 
@@ -58,13 +60,16 @@ Download the latest binary from the [Releases](https://github.com/tauraro/taurar
 
 Extract and place `tauraroc` (or `tauraroc.exe` on Windows) somewhere on your `PATH`.
 
-**Requirement:** GCC or Clang must be installed. Tauraro compiles to C and uses the system C compiler to produce the final binary.
+**No prerequisites.** The release SDK bundles a full toolchain (a `zig/` folder beside the
+binary = clang + `lld` + a libc for every target), auto-detected at runtime — so
+`--backend llvm` and cross-compilation work with **nothing else installed**. A system
+`gcc`/`clang`, if present, is preferred for faster *host* builds but isn't required.
 
 Verify your installation:
 
 ```sh
 tauraroc --version
-# tauraroc v0.0.3
+# tauraroc v0.0.8
 ```
 
 ---
@@ -111,19 +116,36 @@ tauraroc --run hello.tr
 
 ```
 tauraroc <file.tr> [options]
+tauraroc fmt [-w] <file.tr>     Format source (stdout, or -w in place)
+tauraroc lint <file.tr>         Analyze and report warnings/errors
 
-  --version         Print compiler version and exit
-  --run             Compile and immediately execute
-  --check           Semantic analysis only, no output
-  --emit c          Print generated C code
-  --emit ast        Print AST and stop
-  --verbose         Show all pipeline phases
-  -o <path>         Output executable path
-  -O0/-O1/-O2/-O3  Optimization level (default: -O2)
-  -Os               Optimize for size
-  -fopenmp          Enable OpenMP for gpu: blocks
-  -I <dir>          Add module search path
+  --version              Print compiler version and exit
+  --run                  Compile and immediately execute
+  --check                Semantic analysis only, no output
+  --backend c|llvm|native  Code generator (default: c)
+  --target <name|triple> Cross-compile: linux-arm64, windows-x64, macos-arm64,
+                         android-*, ios, wasm-wasi, embedded-arm/riscv*, … or a raw triple
+  --static               Statically link (musl on Linux)
+  --sysroot <path>       Override the cross toolchain's sysroot
+  -o <path>              Exact output path (dir honored; overrides -d)
+  -d <dir>               Output directory (default: current dir)
+  --lib                  Build a shared library (.so/.dll) + a C header
+  --emit c|ast|mir       Emit generated C / AST / MIR and stop
+  --emit-ld <path>       Also write a linker script (bare-metal @entry)
+  -O0/-O1/-O2/-O3        Optimization level (default: -O2)
+  -Os                    Optimize for size
+  --debug                AddressSanitizer + bounds-check assertions
+  --strict               Alloc/dealloc outside `unsafe:` is an error [U-1]
+  --no-heap              Reject all heap-allocating constructs [H-1]
+  --no-std               `alloc` tier — pluggable allocator, no OS services
+  --freestanding         `core` tier — no OS, no libc (bare metal)
+  --link <path>          Link a file (.c/.o/.a/.dll/.so)
+  -l<name>               Link a library by name (e.g. -luser32)
+  --verbose              Show all pipeline phases
 ```
+
+Full details, the target matrix, static binaries, WebAssembly, and bare-metal:
+**[Compiling, Backends & Cross-Compilation](docs/lang/22_compiling_and_cross_compilation.md)**.
 
 ---
 
@@ -214,17 +236,21 @@ def main():
     ▼
   HIR            typed intermediate representation
     │
-    ▼
-  C Codegen      emit C source
-    │
-    ▼
-  GCC / Clang    compile to native binary
-    │
-    ▼
-  Executable
+    ├─────────────┬───────────────────┐
+    ▼             ▼                   ▼
+  C Codegen    LLVM Codegen        (native x86-64, WIP)
+    │             │
+    ▼             ▼
+  gcc/clang/    clang/llc/          ← bundled zig provides all of these +
+  zig cc        zig cc                a libc for every --target
+    │             │
+    └──────┬──────┘
+           ▼
+     Executable / .wasm / bare-metal firmware
 ```
 
-All stages are written in Tauraro itself — the compiler is **fully self-hosted**.
+All stages are written in Tauraro itself — the compiler is **fully self-hosted** (the
+LLVM backend compiles the whole compiler and emits byte-identical C to the reference C build).
 
 ---
 

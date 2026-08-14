@@ -126,6 +126,47 @@ added here as each phase lands.
 - CI now runs the regression suite on every platform after building
   `tauraroc` (`.github/workflows/build.yml`).
 
+## [0.0.8]
+
+**Tauraro becomes a batteries-included, cross-platform toolchain.** Full notes in
+[`note.md`](note.md).
+
+### Added
+- **Bundled toolchain (zig).** The release SDK ships a `zig/` folder beside the compiler
+  (clang code generator + `lld` linker + a libc for every target), auto-detected at
+  startup. `--backend llvm` and `--target` now work with **no system compiler, no LLVM,
+  and no per-target sysroot** to install.
+- **Cross-compilation — `--target <name|triple>`, on both the C and LLVM backends.**
+  Linux (x86_64/arm64/arm32/riscv64), Windows (x64/arm64), macOS, Android, iOS,
+  WebAssembly (`wasm`, `wasm-wasi`), and bare-metal (`embedded-arm/arm64/riscv32/riscv64`),
+  or a raw LLVM triple. Hosted targets need no sysroot (zig bundles the libc). `--static`
+  produces fully static binaries (musl on Linux).
+- **WebAssembly is a first-class target.** `--backend llvm --target wasm-wasi` emits a
+  runnable `.wasm`; the runtime gained a WASI profile (single-threaded, no sockets/subprocess).
+- **`--no-heap`** — a compile-time zero-heap guarantee for bare metal: the compiler rejects
+  every heap-allocating construct with `[H-1]`. New `examples/freestanding/zero_heap/`.
+- **`-d <dir>`** to choose the output directory (default: the current working directory,
+  consistent across all backends).
+
+### Changed
+- **LLVM backend self-hosts and is faster than C on most benchmarks** (a `getelementptr`
+  codegen fix unblocked auto-vectorization: MatMul ~4×, Collatz ~3×). It compiles the whole
+  compiler and emits byte-identical C to the reference build.
+- **Bare-metal works via the bundled zig** (`zig cc -target thumb-freestanding-eabi …`) —
+  no dedicated `arm-none-eabi-gcc` required. `TAURARO_BARE` was split into orthogonal
+  `NO_LIBC`/`NO_THREADS`/`NO_NET`/`NO_SUBPROCESS` switches (bare-metal behaves identically).
+- Host builds prefer a fast system `gcc`/`clang` and fall back to bundled `zig cc`.
+
+### Fixed
+- Three C-backend bugs found via the `LLVM ≡ C` differential oracle (interface retain,
+  missing `_trdrop` for `free()`-owning classes, undefined `_tr_rt_str_new`); wildcard-match
+  over-release in the shared LIR lowering; host-vs-target link flags (Winsock/output
+  extension); the WASI `__main_void` entry glue.
+
+### Docs
+- New [Compiling, Backends & Cross-Compilation](docs/lang/22_compiling_and_cross_compilation.md)
+  guide; updated intro, README, and the bare-metal guide.
+
 ## [0.0.5] - in development
 
 ### Memory model (TrStr migration, items #48-#58)
