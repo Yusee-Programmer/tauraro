@@ -23,6 +23,7 @@ extern "C":
     def _tr_is_windows() -> bool
     def _tr_file_delete(path: str) -> int
     def _tr_getenv(name: str) -> str
+    def _tr_setenv(name: str, value: str) -> int   # set an env var for THIS process + its children (used to put bundled zig on PATH)
     def _tr_exe_dir() -> str   # absolute dir of the running compiler exe (OS-level; reliable even when invoked by bare name via PATH)
     def _tr_print_raw(s: str)  # print without trailing newline (for `tauraroc fmt` stdout output)
     # Stage 2: in-process LLVM `.ll` -> `.o` via libLLVM (runtime/tauraro_llvm.c). Returns 0 on
@@ -58,7 +59,7 @@ pub def print_usage():
     print("  -l<name>          Link a library by name (e.g. -luser32, -lgdi32)")
     print("  -l <name>         Same as -l<name> with a space")
     print("  --static          Statically link the output binary")
-    print("  --target <name>   Cross-compile for a target platform:")
+    print("  --target <name>   Cross-compile for a target platform (C and LLVM backends):")
     print("                      android-arm64, android-arm32, android-x86_64, android-x86")
     print("                      ios, ios-sim")
     print("                      linux-arm64, linux-arm32, linux-x86_64, linux-riscv64")
@@ -115,6 +116,11 @@ pub def detect_c_compiler() -> str:
     if _tr_system("gcc --version >" + null_dev + " 2>&1") == 0: return "gcc"
     if _tr_system("clang --version >" + null_dev + " 2>&1") == 0: return "clang"
     if _tr_system("cc --version >" + null_dev + " 2>&1") == 0: return "cc"
+    # No system C compiler: fall back to the bundled `zig cc` (activate_bundled_zig
+    # put it on PATH). This makes tauraro self-contained — it can compile with NOTHING
+    # else installed. Preferred only as a fallback for host builds because a system
+    # gcc/clang is faster (zig cc compiles its libc from source on first use).
+    if _tr_system("zig version >" + null_dev + " 2>&1") == 0: return "zig cc"
     return "gcc"
 
 # True when `cc` is Clang (clang or apple clang).  Used to gate Clang-only flags.
@@ -122,6 +128,7 @@ pub def is_clang_compiler(cc: str) -> bool:
     mut null_dev = "/dev/null"
     if _tr_is_windows(): null_dev = "nul"
     if _tr_str_contains(cc, "clang"): return true
+    if _tr_str_contains(cc, "zig"): return true   # `zig cc` is clang under the hood
     # 'cc' on macOS is Apple Clang - check its --version output
     if _tr_str_eq(cc, "cc"):
         return _tr_system(cc + " --version 2>&1 | grep -qi clang") == 0
@@ -230,6 +237,127 @@ pub def detect_cross_compiler(triple: str) -> str:
     # Universal: clang supports --target natively on all platforms
     if _tr_system("clang --version >" + null_dev + " 2>&1") == 0: return "clang"
     return detect_c_compiler()
+
+# LLD is the universal cross-linker: one linker that targets every architecture,
+# so cross-compiling never needs a per-target GNU `ld`. Prefer the copy bundled
+# beside the compiler (<exe_dir>/llvm/ld.lld), then any lld on PATH; return a clang
+# `-fuse-ld=` flag, or "" to fall back to clang's default linker for the target.
+# Absolute path to a zig bundled beside the compiler (<exe_dir>/zig/zig[.exe]), or
+# "" if none is shipped. A bundled zig makes tauraro fully self-contained: `zig cc`
+# provides clang codegen + lld + a libc for EVERY target, so no system C compiler or
+# per-target sysroot is ever required — host and cross alike.
+pub def detect_bundled_zig() -> str:
+    mut ext = ""
+    if _tr_is_windows(): ext = ".exe"
+    mut z = _tr_exe_dir() + "/zig/zig" + ext
+    if _tr_is_windows(): z = path_to_native(z)
+    mut null_dev = "/dev/null"
+    if _tr_is_windows(): null_dev = "nul"
+    if _tr_system("\"" + z + "\" version >" + null_dev + " 2>&1") == 0:
+        return z
+    return ""
+
+# If a zig is bundled at <exe_dir>/zig/, prepend that directory to PATH so `zig` and
+# `zig cc` resolve by BARE NAME for the rest of this process (and its child compiler
+# invocations). Bare-name resolution sidesteps the cmd.exe leading-quote-strip issue
+# and lets every existing `zig`/`zig cc` code path pick up the bundled toolchain with
+# no change. Returns true if a bundled zig was activated. Idempotent-ish (only the
+# PATH grows). Call once at startup, before any compilation.
+pub def activate_bundled_zig() -> bool:
+    mut zbin = detect_bundled_zig()
+    if zbin == "": return false
+    mut zdir = _tr_exe_dir() + "/zig"
+    if _tr_is_windows(): zdir = path_to_native(zdir)
+    mut sep = ":"
+    if _tr_is_windows(): sep = ";"
+    mut cur = _tr_getenv("PATH")
+    _tr_setenv("PATH", zdir + sep + cur)
+    return true
+
+pub def detect_lld_flag() -> str:
+    mut null_dev = "/dev/null"
+    if _tr_is_windows(): null_dev = "nul"
+    mut ext = ""
+    if _tr_is_windows(): ext = ".exe"
+    mut bundled = _tr_exe_dir() + "/llvm/ld.lld" + ext
+    if _tr_is_windows(): bundled = path_to_native(bundled)
+    if _tr_system("\"" + bundled + "\" --version >" + null_dev + " 2>&1") == 0:
+        return " -fuse-ld=\"" + bundled + "\""
+    if _tr_system("ld.lld --version >" + null_dev + " 2>&1") == 0: return " -fuse-ld=lld"
+    if _tr_system("lld --version >" + null_dev + " 2>&1") == 0:    return " -fuse-ld=lld"
+    return ""
+
+# Map an LLVM target triple to the equivalent `zig cc -target` string. `zig cc` is
+# clang plus BUNDLED libc (glibc/musl for Linux, wasi-libc for WASI, its own for
+# Windows/macOS) for dozens of targets — so it cross-compiles with NO user sysroot.
+# zig uses arch-os-abi like LLVM, but spells a few things differently (mingw ->
+# windows-gnu, bare-metal -> freestanding). Returns "" if we have no mapping.
+pub def zig_target_of(triple: str) -> str:
+    # Windows (MinGW): zig calls it <arch>-windows-gnu.
+    if _tr_str_contains(triple, "mingw") or _tr_str_contains(triple, "windows-gnu"):
+        if _tr_str_contains(triple, "aarch64"): return "aarch64-windows-gnu"
+        return "x86_64-windows-gnu"
+    # WebAssembly: WASI (bundled wasi-libc) vs bare freestanding.
+    if _tr_str_contains(triple, "wasm32-wasi") or _tr_str_contains(triple, "wasm32-wasip"): return "wasm32-wasi"
+    if _tr_str_contains(triple, "wasm"): return "wasm32-freestanding"
+    # Apple: zig targets macOS as <arch>-macos-none (linking frameworks still needs an SDK).
+    if _tr_str_contains(triple, "apple") or _tr_str_contains(triple, "macos") or _tr_str_contains(triple, "darwin"):
+        if _tr_str_contains(triple, "aarch64") or _tr_str_contains(triple, "arm64"): return "aarch64-macos-none"
+        return "x86_64-macos-none"
+    # Bare-metal: zig 'freestanding' OS.
+    if _tr_str_contains(triple, "none-eabi") or _tr_str_contains(triple, "none-elf") or _tr_str_contains(triple, "unknown-elf"):
+        if _tr_str_contains(triple, "aarch64"): return "aarch64-freestanding-none"
+        if _tr_str_contains(triple, "riscv64"): return "riscv64-freestanding-none"
+        if _tr_str_contains(triple, "riscv32"): return "riscv32-freestanding-none"
+        if _tr_str_contains(triple, "arm"):     return "arm-freestanding-eabi"
+        return ""
+    # Android and hosted Linux triples pass through — zig understands e.g.
+    # aarch64-linux-gnu, x86_64-linux-musl, aarch64-linux-android.
+    if _tr_str_contains(triple, "android"): return triple
+    if _tr_str_contains(triple, "linux"):
+        # zig spells 32-bit ARM as 'arm', not 'armv7'.
+        if _tr_str_contains(triple, "armv7"): return "arm" + slice_after_arch(triple)
+        return triple
+    return triple
+
+# Given a triple like "armv7-linux-gnueabihf", return the substring from the first
+# '-' onward ("-linux-gnueabihf") so a caller can swap the arch token.
+pub def slice_after_arch(triple: str) -> str:
+    mut p = triple as Pointer[char]
+    mut i = 0
+    while True:
+        mut c = p.offset(i).read() as int
+        if c == 0: return ""
+        if c == 45: return triple.slice(i, str_len_of(triple))   # '-'
+        i = i + 1
+    return ""
+
+# True if a build's OUTPUT targets Windows (needs Winsock2 / -mconsole): the host
+# OS for a native build, or the TARGET triple when cross-compiling. Keying Windows
+# link libs on the host is wrong when cross-compiling FROM Windows TO Linux/wasm.
+pub def out_is_windows(target: str, triple: str) -> bool:
+    if target == "": return _tr_is_windows()
+    return _tr_str_contains(triple, "windows") or _tr_str_contains(triple, "mingw")
+
+# Length of a NUL-terminated string.
+pub def str_len_of(s: str) -> int:
+    mut p = s as Pointer[char]
+    mut n = 0
+    while p.offset(n).read() as int != 0: n = n + 1
+    return n
+
+# Resolve a cross-compilation C driver for `triple`, returning the compiler PLUS its
+# target-select flag, ready to prepend to the compile/link flags. Shared by both the
+# C and LLVM backends so cross behaves identically. `zig cc` (if installed) is
+# preferred — it bundles a libc for the target, so NO sysroot is needed; otherwise
+# this reproduces the existing NDK -> clang behavior exactly (purely additive).
+pub def resolve_cross_driver(triple: str) -> str:
+    mut null_dev = "/dev/null"
+    if _tr_is_windows(): null_dev = "nul"
+    if _tr_system("zig version >" + null_dev + " 2>&1") == 0:
+        mut zt = zig_target_of(triple)
+        if zt != "": return "zig cc -target " + zt
+    return detect_cross_compiler(triple) + " --target=" + triple
 
 pub def dir_of_path(path: str) -> str:
     mut p = path as Pointer[char]
@@ -564,9 +692,8 @@ pub def compile_all_c(c_files: Vec[str], exe_path: str, inc_dir: str,
     mut cross_flags = ""
     if target != "":
         triple = resolve_target_triple(target)
-        cc = detect_cross_compiler(triple)
-        cross_flags = " --target=" + triple
-        cross_flags = cross_flags + target_extra_flags(triple)
+        cc = resolve_cross_driver(triple)              # compiler + target-select flag (zig cc if installed)
+        cross_flags = target_extra_flags(triple)
         if sysroot != "":
             cross_flags = cross_flags + " --sysroot=\"" + sysroot + "\""
     mut static_flag = ""
@@ -600,8 +727,9 @@ pub def compile_all_c(c_files: Vec[str], exe_path: str, inc_dir: str,
     cmd = cmd + " -lm"
     if debug_mode:
         cmd = cmd + " -fsanitize=address,undefined -g"
-    # On Windows: link Winsock2 when any networking module is present
-    if _tr_is_windows():
+    # Windows OUTPUT: link Winsock2 when any networking module is present.
+    # Target-gated so a Windows->Linux/wasm cross does not request ws2_32.
+    if out_is_windows(target, triple):
         mut need_wsa: bool = false
         mut wi = 0
         while wi < c_files.len:
@@ -643,9 +771,8 @@ pub def compile_all_c_incremental(c_files: Vec[str], needs: Vec[bool], exe_path:
     mut cross_flags = ""
     if target != "":
         triple = resolve_target_triple(target)
-        cc = detect_cross_compiler(triple)
-        cross_flags = " --target=" + triple
-        cross_flags = cross_flags + target_extra_flags(triple)
+        cc = resolve_cross_driver(triple)              # compiler + target-select flag (zig cc if installed)
+        cross_flags = target_extra_flags(triple)
         if sysroot != "":
             cross_flags = cross_flags + " --sysroot=\"" + sysroot + "\""
     mut static_flag = ""
@@ -705,10 +832,11 @@ pub def compile_all_c_incremental(c_files: Vec[str], needs: Vec[bool], exe_path:
         cmd = cmd + " " + lib_flags.get(i)
         i = i + 1
     cmd = cmd + " -lm"
-    if _tr_is_windows():
+    if out_is_windows(target, triple):
         # ws2_32 is needed for sockets AND for the async scheduler's reactor
         # (select/FD_ISSET on Windows). It is a standard system import library,
         # so always link it; -mconsole keeps console apps as console subsystem.
+        # Gated on the TARGET, not the host — a Windows->Linux cross has no ws2_32.
         cmd = cmd + " -lws2_32 -mconsole"
     if verbose: print("  [LINK] " + cmd)
     return _tr_system(cmd)
@@ -847,6 +975,11 @@ pub def run_fmt(path0: str, write_in_place: bool):
 # --- Main entry point ---------------------------------------------------------
 
 pub def main(args: Vec[str]):
+    # If a zig is bundled beside the compiler, put it on PATH first so every
+    # `zig`/`zig cc` toolchain lookup (host fallback + all cross targets) finds it —
+    # making tauraro a self-contained toolchain with no external downloads.
+    activate_bundled_zig()
+
     if args.len < 2:
         print_usage()
         _tr_exit(1)
@@ -1080,8 +1213,46 @@ pub def main(args: Vec[str]):
             return
         # EXECUTABLE mode (default): IR -> clang (or llc + cc) -> link with the native
         # runtime -> executable, exactly like the C backend produces one end-to-end.
+        # --- Cross-compilation target (Phase 1). Empty target = host build. ---
+        # `--target <t>` threads through the LLVM backend just like the C backend:
+        # clang (multi-target) lowers the target-neutral .ll for the triple and LLD
+        # links it. The host-only bundled llc can't retarget, so cross uses clang.
+        mut lx_triple = ""
+        mut lx_is_cross = false
+        if target != "":
+            lx_triple = resolve_target_triple(target)
+            lx_is_cross = true
+        mut lx_tflags = ""
+        if lx_is_cross: lx_tflags = target_extra_flags(lx_triple)
+        # Cross driver: the LLVM backend emits .ll, so the cross compiler must be
+        # clang-family. Prefer `zig cc` (clang + BUNDLED libc → no sysroot for hosted
+        # and wasi targets), else plain clang (needs a sysroot for hosted libc). This
+        # ONE driver does the runtime compile, IR codegen, and the link.
+        mut lx_xcc = ""
+        mut lx_via_zig = false
+        if lx_is_cross:
+            mut lx_xnull = "/dev/null"
+            if _tr_is_windows(): lx_xnull = "nul"
+            if _tr_system("zig version >" + lx_xnull + " 2>&1") == 0:
+                mut lx_zt = zig_target_of(lx_triple)
+                if lx_zt != "":
+                    lx_xcc = "zig cc -target " + lx_zt
+                    lx_via_zig = true
+            if lx_xcc == "" and _tr_system("clang --version >" + lx_xnull + " 2>&1") == 0:
+                lx_xcc = "clang --target=" + lx_triple
+            if lx_xcc == "":
+                print(c_red("error") + ": cross-compiling --backend llvm to " + lx_triple + " needs a clang-family driver")
+                print("       install 'zig' (recommended — zig cc bundles libc, no sysroot) or clang >= 15.")
+                _tr_exit(1)
+            if verbose: print("[llvm] cross driver: " + lx_xcc)
+        # Output extension follows the TARGET when cross-compiling: .wasm for
+        # WebAssembly, .exe for Windows/MinGW, bare for ELF/Mach-O/embedded.
         mut lx_ext = ""
-        if _tr_is_windows(): lx_ext = ".exe"
+        if lx_is_cross:
+            if _tr_str_contains(lx_triple, "wasm"): lx_ext = ".wasm"
+            elif _tr_str_contains(lx_triple, "windows") or _tr_str_contains(lx_triple, "mingw"): lx_ext = ".exe"
+        elif _tr_is_windows():
+            lx_ext = ".exe"
         # Unified -o/-d/CWD placement (see resolve_output_stem): default is the
         # current working directory, -d redirects, -o wins with its own dir.
         mut lx_exe = ensure_ext(resolve_output_stem(input_path, output_path, out_dir), lx_ext)
@@ -1096,11 +1267,22 @@ pub def main(args: Vec[str]):
             print(c_red("error") + ": runtime/native_abi.c not found (needed to link --backend llvm output)")
             print("       looked beside the compiler binary, the input file, and ./runtime/")
             _tr_exit(1)
+        # Cross builds compile the runtime FOR THE TARGET (clang --target= + the same
+        # freestanding/wasm flags the C cross path uses); host builds use the host cc.
         mut lx_cc = detect_c_compiler()
+        mut lx_xflags = ""
+        if lx_is_cross:
+            lx_cc = lx_xcc                    # zig cc -target X / clang --target=X (target flag already included)
+            lx_xflags = lx_tflags
+            if sysroot != "": lx_xflags = lx_xflags + " --sysroot=\"" + sysroot + "\""
         mut lx_rto = "build/llvm_runtime.o"
-        mut lx_rc = _tr_system(lx_cc + " -O2 -w -c \"-I" + dir_of_path(lx_abi) + "\" \"" + lx_abi + "\" -o " + lx_rto)
+        mut lx_rc = _tr_system(lx_cc + lx_xflags + " -O2 -w -c \"-I" + dir_of_path(lx_abi) + "\" \"" + lx_abi + "\" -o " + lx_rto)
         if lx_rc != 0:
             print(c_red("error") + ": failed to compile the native runtime (" + lx_abi + ")")
+            if lx_is_cross:
+                print("       target " + lx_triple + " needs its libc headers/sysroot.")
+                print("       fix: pass --sysroot <path>, or install 'zig' (zig cc bundles libc); freestanding")
+                print("       targets (embedded-*, wasm) need no sysroot once the bare runtime lands (Phase 2/3).")
             _tr_exit(1)
         # Toolchain: prefer clang (compiles .ll directly, applies -O); fall back to
         # llc + cc. An old clang (< LLVM 15, no opaque pointers) fails the compile and
@@ -1122,6 +1304,39 @@ pub def main(args: Vec[str]):
             lx_libs = lx_libs + " -lws2_32 -lucrtbase -mconsole"
             lx_libs_gcc = lx_libs_gcc + " -lws2_32"
         mut lx_built = false
+        # ================= CROSS-COMPILE PATH (Phase 1) =================
+        # For a non-host target, clang is the multi-target code generator (lowers the
+        # target-neutral .ll straight to a target object) and LLD the universal cross
+        # linker. The host-only bundled llc below cannot retarget, so cross skips it.
+        if lx_is_cross:
+            mut lx_xobj = "build/llvm_out.o"
+            # 1) IR -> target object, via the resolved clang-family driver (zig cc/clang).
+            mut lx_cg = lx_xcc + " -O" + opt_level + lx_tflags
+            if sysroot != "": lx_cg = lx_cg + " --sysroot=\"" + sysroot + "\""
+            if _tr_system(lx_cg + " -c \"" + lx_ll + "\" -o " + lx_xobj + " 2>build/llvm_link.log") != 0:
+                print(c_red("error") + ": LLVM cross code generation failed for " + lx_triple + " (see build/llvm_link.log)")
+                _tr_exit(1)
+            if verbose: print("[4/5] target object -> " + lx_xobj + " (" + lx_triple + ")")
+            # 2) Link object + runtime. zig cc bundles its own LLD; plain clang uses LLD
+            #    when present. Freestanding/wasm carry -nostdlib via lx_tflags (no libs);
+            #    hosted targets get -lm; Windows adds the sockets lib the reactor needs.
+            mut lx_xlibs = " -lm"
+            if _tr_str_contains(lx_triple, "wasm") or _tr_str_contains(lx_tflags, "nostdlib"): lx_xlibs = ""
+            elif _tr_str_contains(lx_triple, "windows") or _tr_str_contains(lx_triple, "mingw"): lx_xlibs = " -lm -lws2_32 -mconsole"
+            mut lx_xld = ""
+            if not _tr_str_contains(lx_triple, "wasm") and not lx_via_zig: lx_xld = detect_lld_flag()
+            mut lx_xlink = lx_xcc + lx_tflags
+            if sysroot != "": lx_xlink = lx_xlink + " --sysroot=\"" + sysroot + "\""
+            lx_xlink = lx_xlink + " " + lx_xobj + " " + lx_rto + lx_xlibs + lx_xld + " -o \"" + lx_exe + "\" 2>>build/llvm_link.log"
+            if _tr_system(lx_xlink) == 0:
+                lx_built = true
+            if not lx_built:
+                print(c_red("error") + ": cross-link to " + lx_triple + " failed (see build/llvm_link.log)")
+                print("       install 'zig' (bundles libc+lld, no sysroot), or LLD + a " + lx_triple + " sysroot (--sysroot).")
+                _tr_exit(1)
+            if verbose: print("[5/5] cross LLVM executable -> " + lx_exe + " (" + lx_triple + ")")
+            return
+        # ===============================================================
         # -1. IN-PROCESS libLLVM (Stage 2) — when the compiler was built with the tauraro_llvm.c
         #     shim + libLLVM, emit the object directly through the llvm-c API (no subprocess).
         #     Returns -1 when not compiled in (weak stub) → fall through to the bundled llc.
@@ -1131,29 +1346,10 @@ pub def main(args: Vec[str]):
         if lx_inproc == 0:
             if _tr_system(lx_cc + " build/llvm_out.o " + lx_rto + lx_libs_gcc + " -o \"" + lx_exe + "\" 2>build/llvm_link.log") == 0:
                 lx_built = true
-        # 0. BUNDLED llc — shipped in the release archive beside the compiler binary at
-        #    `<exe_dir>/llvm/llc[.exe]` (see .github/workflows: the cached minimal-LLVM job).
-        #    This makes `--backend llvm` self-contained: NO user-installed LLVM is needed,
-        #    only the C compiler the default C backend already requires — reused here purely
-        #    as the linker driver (`cc obj runtime.o -o exe`), never to compile the IR.
-        mut lx_llc_ext = ""
-        if _tr_is_windows(): lx_llc_ext = ".exe"
-        mut lx_bllc = _tr_exe_dir() + "/llvm/llc" + lx_llc_ext
-        # _tr_exe_dir() is backslash'd on Windows; the appended "/llvm/llc.exe" leaves mixed
-        # separators that cmd.exe won't resolve as an executable. Normalize to native seps.
-        if _tr_is_windows(): lx_bllc = path_to_native(lx_bllc)
-        mut lx_llc_tri0 = ""
-        if _tr_is_windows(): lx_llc_tri0 = " -mtriple=x86_64-pc-windows-gnu"
-        # cmd.exe's `/c "..."` strips the first & last quote of the whole line, mangling a
-        # command that STARTS with a quoted path (the bundled llc). Wrap the entire command
-        # in an extra outer quote pair on Windows so the inner quotes survive. (The gcc/clang
-        # PATH commands below don't start with a quote, so they never hit this.)
-        mut lx_q = ""
-        if _tr_is_windows(): lx_q = "\""
-        if _tr_system(lx_q + "\"" + lx_bllc + "\" --version >" + lx_null + " 2>&1" + lx_q) == 0:
-            if _tr_system(lx_q + "\"" + lx_bllc + "\" -O2 -filetype=obj" + lx_llc_tri0 + " \"" + lx_ll + "\" -o build/llvm_out.o 2>build/llvm_link.log" + lx_q) == 0:
-                if _tr_system(lx_cc + " build/llvm_out.o " + lx_rto + lx_libs_gcc + " -o \"" + lx_exe + "\" 2>>build/llvm_link.log") == 0:
-                    lx_built = true
+        # NOTE: the old bundled `<exe_dir>/llvm/llc` path is gone — the SDK now bundles
+        # ZIG instead, and `zig cc` IS clang (it compiles the .ll directly) plus lld, so
+        # it supersedes a separate llc/lld bundle. The clang / llc / zig-cc fallbacks
+        # below cover, in order of speed, a system LLVM then the self-contained zig.
         if not lx_built and _tr_system("clang --version >" + lx_null + " 2>&1") == 0:
             mut lx_cmd = "clang -O" + opt_level + " \"" + lx_ll + "\" " + lx_rto + lx_libs + " -o \"" + lx_exe + "\" 2>build/llvm_link.log"
             if _tr_system(lx_cmd) == 0: lx_built = true
@@ -1165,9 +1361,16 @@ pub def main(args: Vec[str]):
             if _tr_system("llc -O2 -filetype=obj" + lx_llc_tri + " \"" + lx_ll + "\" -o build/llvm_out.o 2>build/llvm_link.log") == 0:
                 if _tr_system(lx_cc + " build/llvm_out.o " + lx_rto + lx_libs_gcc + " -o \"" + lx_exe + "\" 2>>build/llvm_link.log") == 0:
                     lx_built = true
+        # BUNDLED/PATH zig cc — the self-contained fallback (activate_bundled_zig put a
+        # bundled zig on PATH). `zig cc` compiles the .ll directly and links via its own
+        # lld, one step, needing no system LLVM. Last because zig compiles its libc from
+        # source on first use (slow once, then cached); a system clang/llc above is faster.
+        if not lx_built and _tr_system("zig version >" + lx_null + " 2>&1") == 0:
+            if _tr_system("zig cc -O" + opt_level + " \"" + lx_ll + "\" " + lx_rto + lx_libs_gcc + " -o \"" + lx_exe + "\" 2>build/llvm_link.log") == 0:
+                lx_built = true
         if not lx_built:
             print(c_red("error") + ": could not compile the LLVM IR to an executable")
-            print("       need the bundled llc (" + lx_bllc + "), or clang (LLVM >= 15) / llc on PATH;")
+            print("       need clang (LLVM >= 15) / llc on PATH, or a bundled/installed zig;")
             print("       see build/llvm_link.log")
             _tr_exit(1)
         if verbose: print("[5/5] executable written to " + lx_exe)
@@ -1396,13 +1599,21 @@ pub def main(args: Vec[str]):
                     if en_p.offset(en_len - 1).read() as int == 101:
                         exe_name = exe_name.slice(0, en_len - 4)
 
-    # Output extension: shared library (.dll/.so) in --lib mode, else exe.
-    mut exe_ext = ".exe"
+    # Output extension follows the OUTPUT target (host for a native build, the
+    # --target triple when cross-compiling): .dll/.so for --lib, .exe for Windows,
+    # .wasm for WebAssembly, bare for ELF/Mach-O. Keying on the host would wrongly
+    # append .exe to a Windows->Linux cross artifact.
+    mut tgt_triple = ""
+    if target != "": tgt_triple = resolve_target_triple(target)
+    mut out_win = out_is_windows(target, tgt_triple)
+    mut exe_ext = ""
     if lib_mode:
-        if _tr_is_windows(): exe_ext = ".dll"
+        if out_win: exe_ext = ".dll"
         else: exe_ext = ".so"
-    elif not _tr_is_windows():
-        exe_ext = ""
+    elif out_win:
+        exe_ext = ".exe"
+    elif target != "" and _tr_str_contains(tgt_triple, "wasm"):
+        exe_ext = ".wasm"
     # exe_name already carries the resolved directory (CWD / -d dir / -o path),
     # so the artifact path is just the stem + platform extension.
     mut exe_path = exe_name + exe_ext

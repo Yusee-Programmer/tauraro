@@ -55,6 +55,27 @@
 #if defined(TAURARO_NO_OS) || (defined(TAURARO_WASM) && !defined(__wasi__))
 #  define TAURARO_BARE 1
 #endif
+/* ── Orthogonal capability switches ───────────────────────────────────────
+ * Historically TAURARO_BARE meant "no OS" and conflated THREE separate things:
+ * no libc, no threads, and no networking. wasi breaks that assumption — it HAS a
+ * libc (stdio/file/malloc via wasi-libc) but has NO pthreads, NO BSD sockets, and
+ * NO subprocess. So split the concerns into independent switches:
+ *   TAURARO_NO_LIBC        - no stdio/malloc/file (true bare metal)  == BARE
+ *   TAURARO_NO_THREADS     - no OS threads; locks are no-ops, spawn runs inline
+ *   TAURARO_NO_NET         - no sockets
+ *   TAURARO_NO_SUBPROCESS  - no popen/system
+ * BARE (bare-metal / no-OS) implies ALL of them, so bare-metal builds behave
+ * EXACTLY as before. wasi opts into the last three but keeps its libc. Every
+ * former `defined(TAURARO_BARE)` guard is reclassified below to the specific
+ * concern it actually gates. */
+#if defined(TAURARO_BARE)
+#  define TAURARO_NO_LIBC 1
+#endif
+#if defined(TAURARO_BARE) || defined(__wasi__)
+#  define TAURARO_NO_THREADS    1
+#  define TAURARO_NO_NET        1
+#  define TAURARO_NO_SUBPROCESS 1
+#endif
 /* KERNEL = Linux kernel module / bare-metal with user-supplied allocator.
  * Implies BARE (no OS threads/sockets), disables setjmp exceptions. */
 #if defined(TAURARO_KERNEL)
@@ -74,8 +95,25 @@
 #  include <time.h>
 #  include <math.h>
 #  include <stdatomic.h>
-#  include <setjmp.h>
 #  include <ctype.h>
+#  if defined(__wasi__)
+     /* wasi-libc ships <pthread.h> (types + single-threaded stub functions). The
+      * runtime's async scheduler/timers/TLS use raw pthread_* directly, so pull the
+      * real declarations in; the _Tr* thread/lock wrappers still take the single-
+      * threaded (BARE) path below via TAURARO_NO_THREADS. */
+#    include <pthread.h>
+#  endif
+#  if defined(__wasm__)
+     /* WebAssembly has no setjmp/longjmp without the (unratified) EH proposal, so
+      * <setjmp.h> (even wasi-libc's) fails to compile. The LLVM backend lowers
+      * try/except to plain branches and never calls the runtime's setjmp, so a
+      * no-unwind stub that merely COMPILES is sufficient for wasm targets. */
+     typedef void* jmp_buf[8];
+#    define setjmp(b)      (0)
+#    define longjmp(b, v)  __builtin_trap()
+#  else
+#    include <setjmp.h>
+#  endif
 #else
 /* Kernel / freestanding: caller supplies context headers.
  * At minimum: stddef.h, stdbool.h, stdint.h, stdatomic.h must exist. */
@@ -830,7 +868,8 @@ static inline int _tr_unsetenv(const char* name) { (void)name; return -1; }
 static inline int _tr_setenv(const char* name, const char* value) { return setenv(name, value, 1) == 0 ? 0 : -1; }
 static inline int _tr_unsetenv(const char* name) { return unsetenv(name) == 0 ? 0 : -1; }
 #endif
-#ifdef TAURARO_BARE
+#if defined(TAURARO_BARE) || defined(TAURARO_NO_SUBPROCESS)
+/* No subprocess on bare / wasi: reading a command's output is unsupported. */
 static inline char* _tr_popen_read(const char* cmd) { (void)cmd; return _tr_empty_heap_str(); }
 #else
 static inline char* _tr_popen_read(const char* cmd) {
@@ -990,7 +1029,8 @@ static inline Result Option_ok_or(Option self, void* err) {
 
 /* Thread panic state — forward-declared before platform blocks so trampolines
  * can reference them.  Actual storage definitions live in the _TR_GLOBAL section. */
-#if defined(TAURARO_BARE) || defined(TAURARO_KERNEL)
+#if defined(TAURARO_BARE) || defined(TAURARO_KERNEL) || defined(TAURARO_NO_THREADS)
+/* Single-threaded (bare / wasi): plain globals, no thread-local storage needed. */
 static int     _tr_thread_has_panic_buf   = 0;
 static jmp_buf _tr_thread_panic_jmpbuf;
 static char*   _tr_thread_panic_message   = NULL;
@@ -1011,6 +1051,7 @@ extern _Thread_local char*   _tr_thread_panic_message;
 
 /* Panic result: written by thread, read by joiner via _TrThreadObj */
 typedef struct { int panicked; char* panic_msg; } _TrSpawnResult;
+
 
 #ifndef _WIN32
 /* Debug helper: prints current process memory usage to stderr, tagged with
@@ -1098,8 +1139,8 @@ static inline char* _tr_path_canonicalize(const char* path) {
     return buf;
 }
 
-#elif defined(TAURARO_BARE)
-/* ── BARE/WASM: single-threaded primitive stubs ──────────────────────── */
+#elif defined(TAURARO_BARE) || defined(TAURARO_NO_THREADS)
+/* ── BARE/WASM/WASI: single-threaded primitive stubs (spawn runs inline) ── */
 typedef int _TrThread;
 _TR_XLINK _TrThread _tr_thread_start(void*(*fn)(void*), void* arg) { fn(arg); return 0; }
 _TR_XLINK void _tr_thread_detach(_TrThread t)      { (void)t; }
@@ -1425,9 +1466,9 @@ _TR_XLINK void _tr_tls_set(_TrTLS* t, long long v) {
 }
 _TR_XLINK void _tr_tls_free(_TrTLS* t) { if (!t) return; TlsFree(t->key); free(t); }
 
-#elif defined(TAURARO_BARE)
+#elif defined(TAURARO_NO_THREADS)
 /* ═══════════════════════════════════════════════════════════════════════════
- * BARE/WASM: single-threaded async stubs — no locking, no blocking.
+ * BARE/WASM/WASI: single-threaded async stubs — no locking, no blocking.
  * Channels are lock-free ring buffers; mutexes/semaphores are no-ops.
  * ═══════════════════════════════════════════════════════════════════════════*/
 
@@ -1897,8 +1938,8 @@ _TR_XLINK void _tr_rwlbox_cleanup_w(_TrRWLBox** bp) {
 }
 
 /* ── ThreadPool: fixed-N worker pool with a channel work queue ────────── */
-/* BARE stub is defined inside the BARE platform block above. */
-#ifndef TAURARO_BARE
+/* Single-threaded (bare/wasi) stub is defined inside the NO_THREADS block above. */
+#ifndef TAURARO_NO_THREADS
 typedef struct { void*(*fn)(void*); void* arg; } _TrPoolItem;
 typedef struct {
     _TrChan* queue; _TrThread* workers; int n_workers;
@@ -1960,7 +2001,7 @@ _TR_XLINK void _tr_threadpool_free(_TrThreadPool* p) {
     _tr_chan_free(p->queue); _tr_wg_free(p->wg);
     TAURARO_FREE(p->workers); TAURARO_FREE(p);
 }
-#endif /* !TAURARO_BARE */
+#endif /* !TAURARO_NO_THREADS */
 
 /* Global async pool — submits work to the thread pool; falls back to sync if pool is NULL */
 static inline void _tr_async_pool_submit(_TrThreadPool* p, void*(*fn)(void*), void* arg) {
@@ -2017,7 +2058,7 @@ static inline _TrThread _tr_thread_start_result(void*(*fn)(void*), void* arg, _T
     SIZE_T ss = (SIZE_T)TAURARO_THREAD_STACK_SIZE;
     return CreateThread(NULL, ss, _tr_thread_start_trampoline, s, 0, NULL);
 }
-#elif !defined(TAURARO_BARE)
+#elif !defined(TAURARO_NO_THREADS)
 static inline _TrThread _tr_thread_start_result(void*(*fn)(void*), void* arg, _TrSpawnResult* res) {
     _TrPosixStartArg* s = (_TrPosixStartArg*)malloc(sizeof(_TrPosixStartArg));
     s->fn = fn; s->arg = arg; s->result = res;
@@ -2058,7 +2099,7 @@ _TR_XLINK void _tr_threadobj_free(_TrThreadObj* t) { if (t) TAURARO_FREE(t); }
 /* ── Thread utilities: current-thread ID and sleep ───────────────────── */
 #ifdef _WIN32
 _TR_XLINK long long _tr_thread_current_id(void) { return (long long)(uintptr_t)GetCurrentThreadId(); }
-#elif defined(TAURARO_BARE)
+#elif defined(TAURARO_NO_THREADS)
 _TR_XLINK long long _tr_thread_current_id(void) { return 0LL; }
 #else
 _TR_XLINK long long _tr_thread_current_id(void) { return (long long)(uintptr_t)pthread_self(); }
@@ -3466,7 +3507,7 @@ _TR_XLINK void _tr_taskgroup_wait(void) {
 }
 
 /* ── Per-thread panic state (storage definitions for _TR_MAIN TU) ─── */
-#if !defined(TAURARO_BARE) && !defined(TAURARO_KERNEL)
+#if !defined(TAURARO_BARE) && !defined(TAURARO_KERNEL) && !defined(TAURARO_NO_THREADS)
 _TR_GLOBAL _TR_THREAD_LOCAL int     _tr_thread_has_panic_buf;
 _TR_GLOBAL _TR_THREAD_LOCAL jmp_buf _tr_thread_panic_jmpbuf;
 _TR_GLOBAL _TR_THREAD_LOCAL char*   _tr_thread_panic_message;
@@ -4842,8 +4883,12 @@ static inline char* _tr_strftime(long long ts, const char* fmt) {
 #endif
 
 /* -- OS / System helpers (platform-specific) ------------------------------- */
-#if defined(TAURARO_BARE) && !defined(__wasi__)
-/* Bare / freestanding: no OS services */
+/* This section mixes OS helpers with the blocking-socket TCP API in its real
+ * branches, so it is gated on NO_NET: wasi (no sockets) takes the stub branch —
+ * its OS helpers degrade to sandbox-appropriate values (hostname "embedded",
+ * cpu_count 1) and it uses the tcp stubs already defined above. */
+#if defined(TAURARO_NO_NET)
+/* Bare / wasi / freestanding: no OS network services */
 static inline char* _tr_hostname(void)          { return (char*)"embedded"; }
 static inline char* _tr_username(void)          { return (char*)""; }
 static inline int   _tr_cpu_count(void)         { return 1; }
@@ -5072,7 +5117,7 @@ static inline void _tr_console_clear(void)     { printf("\033[2J\033[H"); fflush
  * ══════════════════════════════════════════════════════════════════════════ */
 #define TAURARO_WOULD_BLOCK (-2)
 
-#if defined(TAURARO_BARE) || defined(TAURARO_KERNEL)
+#if defined(TAURARO_NO_NET)
 _TR_XLINK int  _tr_tcp_set_nonblocking(int fd)                    { (void)fd; return -1; }
 _TR_XLINK int  _tr_tcp_recv_nb(int fd, char* b, int c)            { (void)fd;(void)b;(void)c; return -1; }
 _TR_XLINK int  _tr_tcp_send_nb(int fd, const char* d, int l)      { (void)fd;(void)d;(void)l; return -1; }
@@ -5307,7 +5352,8 @@ _TR_XLINK char* _tr_exe_dir(void) {
  * Shutdown signal — Ctrl+C (SIGINT) / SIGTERM sets a flag, polled by server
  * accept loops to exit cleanly instead of being killed mid-request.
  * ═══════════════════════════════════════════════════════════════════════════ */
-#ifndef TAURARO_BARE
+/* wasi has no signals (needs -D_WASI_EMULATED_SIGNAL); take the no-op stubs. */
+#if !defined(TAURARO_BARE) && !defined(__wasi__)
 #include <signal.h>
 static volatile int _tr_shutdown_flag = 0;
 static void _tr_shutdown_signal_handler(int sig) { (void)sig; _tr_shutdown_flag = 1; }
