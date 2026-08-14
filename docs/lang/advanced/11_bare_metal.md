@@ -144,6 +144,27 @@ qemu-system-riscv64 -machine virt -bios none -nographic -kernel app.elf
 
 See [`examples/freestanding/riscv_hello/`](../../../examples/freestanding/riscv_hello) — a no-OS RISC-V program (bump allocator over a `[u8; N]` arena + NS16550 UART) that prints `fib(20)` on bare metal. Both the Cortex-M and RISC-V paths are link-and-run gated in CI under qemu.
 
+### The freestanding compiler: bundled zig or a dedicated cross-gcc
+
+`--freestanding` emits **C** — you compile it with any freestanding toolchain. You have two choices:
+
+- **The bundled zig** (ships with the SDK, no extra install). `zig cc` targets bare-metal
+  ARM/RISC-V directly:
+  ```bash
+  tauraroc firmware.tr --freestanding --emit c --emit-ld build/app.ld
+  zig cc -target thumb-freestanding-eabi -mcpu=cortex_m3 -ffreestanding -nostdlib \
+      -T build/app.ld -I build/include -o app.elf $(find build -name '*.c')
+  ```
+- **A dedicated cross-gcc** (`arm-none-eabi-gcc`, `riscv64-unknown-elf-gcc`) as shown
+  above — its bundled newlib is handy if you want the standard freestanding headers.
+
+Under `--freestanding` the runtime header (`tauraro_rt.h`) compiles **without any libc** —
+its capabilities are gated by orthogonal switches (`TAURARO_NO_LIBC` / `NO_THREADS` /
+`NO_NET` / `NO_SUBPROCESS`, all implied by the freestanding `TAURARO_KERNEL` tier), so the
+whole standard runtime reduces to single-threaded, no-OS, no-socket code that any bare
+toolchain accepts. (These same switches are what let WebAssembly keep its libc while
+shedding threads/sockets — see [Compiling & Cross-Compilation](../22_compiling_and_cross_compilation.md).)
+
 ---
 
 ## MMIO — writing device drivers

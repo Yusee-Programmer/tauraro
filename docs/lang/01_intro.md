@@ -4,7 +4,7 @@
 
 ## What Tauraro Is
 
-Tauraro is a **compiled, statically-typed, systems programming language** with Python-inspired syntax. It transpiles to C, then uses GCC or Clang to produce a native binary. The result: Python-readable code that runs at C speed with no garbage collector, no virtual machine, and no runtime overhead.
+Tauraro is a **compiled, statically-typed, systems programming language** with Python-inspired syntax. It lowers to a shared intermediate representation, then a *backend* produces a native binary — the default **C** backend (via `gcc`/`clang`/bundled `zig cc`) or an optimizing **LLVM** backend. The result: Python-readable code that runs at C speed with no garbage collector, no virtual machine, and no runtime overhead — and it **cross-compiles to any target** (Linux/Windows/macOS, ARM/RISC-V, WebAssembly, bare-metal) from a single download. See [Compiling, Backends & Cross-Compilation](22_compiling_and_cross_compilation.md).
 
 > **Core promise:** Python syntax. C performance. The compiler handles the hard parts.
 
@@ -124,10 +124,12 @@ Use Tauraro when you want:
 
 ### Installation
 
-Requirements:
-- GCC or Clang (for compiling generated C)
-
-Download the pre-built `tauraroc` binary (`tauraroc.exe` on Windows) from the GitHub releases page and place it anywhere on your `PATH`.
+**No prerequisites.** Download the release `tauraroc-<platform>.zip` from the GitHub
+releases page and unzip it. It's a complete, self-contained SDK: `tauraroc` plus a bundled
+`zig/` toolchain (clang + `lld` + a libc for every target), so the LLVM backend and
+cross-compilation work with **nothing else installed**. A system `gcc`/`clang`, if present,
+is used to speed up *host* builds but isn't required. Put `tauraroc` (or `tauraroc.exe`) on
+your `PATH`.
 
 ```bash
 # Verify the installation:
@@ -221,8 +223,12 @@ tauraroc --check program.tr
 # Show all pipeline phases (verbose output)
 tauraroc --verbose program.tr
 
-# Use the LLVM backend (experimental)
+# Use the optimizing LLVM backend (self-hosting; often faster than C)
 tauraroc --backend llvm program.tr
+
+# Cross-compile to another target (works on both backends)
+tauraroc --target linux-arm64 program.tr
+tauraroc --backend llvm --target wasm-wasi -o program.wasm program.tr
 
 # Strict mode: treat unsafe-outside-unsafe as an error
 tauraroc --strict program.tr
@@ -239,7 +245,9 @@ tauraroc --strict program.tr
 | `--emit ast` | Print the AST and stop |
 | `--emit mir` | Print MIR basic blocks and stop |
 | `--check` | Semantic analysis only, no code generation |
-| `--backend llvm` | Use LLVM IR backend (experimental) |
+| `--backend c\|llvm\|native` | Code generator (default `c`; `llvm` self-hosts + auto-vectorizes) |
+| `--no-heap` | Reject all heap-allocating constructs [H-1] (bare-metal zero-heap) |
+| `--freestanding` / `--no-std` | Bare-metal (`core`) / no-OS (`alloc`) runtime tiers |
 | `--strict` | Enable strict mode: `alloc` outside `unsafe:` is error [U-1] |
 | `-O0` | No optimization |
 | `-O1` | Basic optimization |

@@ -17,24 +17,25 @@ pub def print_version():
 when the version is bumped (the `chore: update version to vX.Y.Z` commits in
 git history are the precedent for this).
 
-## Pre-1.0 policy (current)
+## Pre-0.1 policy (current)
 
-Tauraro is **pre-1.0** (`0.x.y`). Per common pre-1.0 convention (and explicitly
-*not* full SemVer yet, since SemVer reserves `0.x` for "anything may change"):
+Tauraro is **pre-0.1** — still in the earliest `0.0.x` phase (currently
+`v0.0.8`). Per common pre-1.0 convention (and explicitly *not* full SemVer yet,
+since SemVer reserves `0.x` for "anything may change"):
 
-- **Any `0.x` version bump may contain breaking changes** to the language
-  grammar, standard library APIs, generated-code ABI (`TrStr`, runtime
-  helpers in `runtime/tauraro_rt.h`), CLI flags, or `taupkg` manifest format.
-  There is **no deprecation period** during 0.x.
-- We still distinguish three kinds of `0.x.y` bumps by convention, to help
-  readers gauge risk, but none of them carry a stability *guarantee*:
-  - **`x` (minor, e.g. 0.4 → 0.5)**: a body of related work landed (a memory
-    model migration, a new subsystem, a stdlib area). Expect breaking changes.
-  - **`y` (patch, e.g. 0.5.0 → 0.5.1)**: bug fixes / internal-only changes,
-    not expected to break user code, but not guaranteed (pre-1.0).
+- **Any version bump may contain breaking changes** to the language grammar,
+  standard library APIs, generated-code ABI (`TrStr`, runtime helpers in
+  `runtime/tauraro_rt.h`), CLI flags, or `taupkg` manifest format. There is
+  **no deprecation period** in the `0.0.x` series.
+- In the current `0.0.x` scheme the third number is the release counter:
+  - **`0.0.z` bump (e.g. 0.0.7 → 0.0.8)**: a body of related work landed (a
+    memory-model migration, a new backend, a subsystem, a stdlib area). Expect
+    breaking changes.
   - Tags (`v0.0.1`, `v0.0.2`, ...) mark points where the bootstrap/self-host
     fixpoint was verified and a release binary was built — see
     `docs/dev/02_contributing.md` for the blessing checklist.
+- **`0.1`** will be the first *soft* stability checkpoint (see below); **`1.0`**
+  is the eventual full-SemVer milestone.
 - Generated C / runtime ABI (`TrStr`, `_tr_*` helpers) is considered
   **internal** and may change in any `0.x` release. External FFI code that
   pokes at `TrStr` internals directly (rather than going through `extern "C":`
