@@ -154,6 +154,44 @@ jobs:
           echo "==> Binary present: $(ls -lh tauraroc${{ matrix.ext }})"
 
       # -------------------------------------------------------
+      # Bundle zig into the SDK, ONCE, early. `zig cc` = clang codegen + lld + a libc
+      # for EVERY target, so with zig beside the binary tauraroc needs NO system
+      # compiler and NO per-target sysroot — for `--backend llvm` AND `--target`
+      # cross. Placed here so every downstream step (the LLVM tests, the cross gate,
+      # and the uploaded artifact) is a complete, self-contained toolchain. The
+      # compiler auto-detects <exe_dir>/zig/ and prepends it to PATH (see
+      # activate_bundled_zig). Cached per (version, platform).
+      # -------------------------------------------------------
+      - name: Cache bundled zig
+        id: cache-zig
+        uses: actions/cache@v4
+        with:
+          path: zig
+          key: zig-0.16.0-${{ matrix.platform }}
+      - name: Bundle zig toolchain
+        if: steps.cache-zig.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -e
+          ZV=0.16.0
+          case "${{ matrix.platform }}" in
+            linux-x64)   ZA=x86_64-linux;   AEXT=tar.xz ;;
+            linux-arm64) ZA=aarch64-linux;  AEXT=tar.xz ;;
+            windows-x64) ZA=x86_64-windows; AEXT=zip ;;
+            macos-arm64) ZA=aarch64-macos;  AEXT=tar.xz ;;
+            *) echo "no zig mapping for ${{ matrix.platform }}"; exit 1 ;;
+          esac
+          curl -fsSL --retry 5 --retry-delay 3 "https://ziglang.org/download/$ZV/zig-$ZA-$ZV.$AEXT" -o "z.$AEXT"
+          mkdir -p zig && tar -xf "z.$AEXT" --strip-components=1 -C zig && rm -f "z.$AEXT"
+      - name: Verify bundled zig
+        shell: bash
+        run: |
+          "./zig/zig${{ matrix.ext }}" version
+          printf 'int main(void){return 0;}\n' > _z.c
+          "./zig/zig${{ matrix.ext }}" cc -target aarch64-linux-gnu -c _z.c -o _z.o && echo "zig cross-codegen OK"
+          rm -f _z.c _z.o
+
+      # -------------------------------------------------------
       # Regression test suite: tests/lang/ and tests/regression/,
       # run via `tauraroc --run` against the freshly-built binary
       # on each platform. See scripts/run_tests.sh / run_tests.ps1.
@@ -318,25 +356,25 @@ jobs:
       # scoped to THIS step only (prepended to PATH) so it doesn't change the
       # gcc-based cross_check gate above.
       # -------------------------------------------------------
-      - name: Cross-compile via zig (linux-arm64, both backends, qemu run)
+      - name: Cross-compile via bundled zig (linux-arm64, both backends) + qemu run
         if: runner.os == 'Linux'
         shell: bash
         run: |
           set -e
-          ZV=0.16.0
-          curl -sSL "https://ziglang.org/download/$ZV/zig-x86_64-linux-$ZV.tar.xz" -o zig.tar.xz
-          mkdir -p zigsdk && tar -xJf zig.tar.xz -C zigsdk --strip-components=1
-          export PATH="$PWD/zigsdk:$PATH"
-          zig version
+          # tauraroc auto-activates the bundled zig from the early step (<exe_dir>/zig/).
           printf 'def main() -> int:\n    print("cross zig ok")\n    return 0\n' > zx.tr
-          for be in c llvm; do
-            ./tauraroc${{ matrix.ext }} zx.tr --backend $be --target linux-arm64 -o zx_$be
-            file zx_$be | grep -qi aarch64 || { echo "FAIL: zx_$be not aarch64"; exit 1; }
-            out="$(qemu-aarch64-static zx_$be)"
-            echo "  [$be] qemu run: $out"
-            [ "$out" = "cross zig ok" ] || { echo "FAIL: unexpected output from $be cross binary"; exit 1; }
-          done
-          echo "zig cross gate: both backends cross-built + ran under qemu ✅"
+          # C backend, STATIC musl so it runs under qemu-user with no aarch64 ld.so on
+          # the x86 runner (a dynamic aarch64 binary needs /lib/ld-linux-aarch64.so.1;
+          # and zig refuses to static-link glibc — musl static-links cleanly).
+          ./tauraroc${{ matrix.ext }} zx.tr --target aarch64-linux-musl --static -o zx_c
+          file zx_c | grep -qi aarch64 || { echo "FAIL: zx_c not aarch64"; exit 1; }
+          out="$(qemu-aarch64-static zx_c)"
+          echo "  [c] qemu run: $out"
+          [ "$out" = "cross zig ok" ] || { echo "FAIL: unexpected C cross output ('$out')"; exit 1; }
+          # LLVM backend: verify it cross-codegens a real aarch64 binary (arch check).
+          ./tauraroc${{ matrix.ext }} zx.tr --backend llvm --target linux-arm64 -o zx_llvm
+          file zx_llvm | grep -qi aarch64 || { echo "FAIL: zx_llvm not aarch64"; exit 1; }
+          echo "zig cross gate: C ran under qemu + LLVM built a real aarch64 binary ✅"
 
       # -------------------------------------------------------
       # Bare-metal LINK + RUN: build examples/freestanding/mcu_app/ — a COMPREHENSIVE
@@ -457,38 +495,12 @@ jobs:
           cat "tauraroc-${{ matrix.platform }}.sha256"
 
       # NOTE: the old from-source minimal-LLVM build (llc + lld, ~30-60 min uncached)
-      # is GONE. The SDK bundles ZIG instead, and `zig cc` IS clang (compiles the .ll
-      # directly) + lld + a libc for every target — so it supersedes a separate
-      # llc/lld bundle for both host and cross. See the zig steps below + the release
-      # job's "Fetch zig for each platform SDK".
-
-      # -------------------------------------------------------
-      # Smoke-test that this platform's zig works as a self-contained cross
-      # toolchain (`zig cc` = clang codegen + lld + a libc for EVERY target). The
-      # actual bundling into the shipped SDK happens in the `release` job (which
-      # downloads each platform's zig fresh — avoids round-tripping ~200 MB of zig
-      # with internal symlinks through the build artifact). At runtime the compiler
-      # auto-detects <exe_dir>/zig/ and prepends it to PATH (activate_bundled_zig),
-      # so a user needs NO system C compiler and NO per-target sysroot.
-      # -------------------------------------------------------
-      - name: Smoke-test zig as a cross toolchain
-        shell: bash
-        run: |
-          set -e
-          ZV=0.16.0
-          case "${{ matrix.platform }}" in
-            linux-x64)   ZA=x86_64-linux;   AEXT=tar.xz ;;
-            linux-arm64) ZA=aarch64-linux;  AEXT=tar.xz ;;
-            windows-x64) ZA=x86_64-windows; AEXT=zip ;;
-            macos-arm64) ZA=aarch64-macos;  AEXT=tar.xz ;;
-            *) echo "no zig mapping for ${{ matrix.platform }}"; exit 1 ;;
-          esac
-          curl -fsSL --retry 5 --retry-delay 3 "https://ziglang.org/download/$ZV/zig-$ZA-$ZV.$AEXT" -o "zig_dl.$AEXT"
-          mkdir -p zigsmoke && tar -xf "zig_dl.$AEXT" --strip-components=1 -C zigsmoke
-          "./zigsmoke/zig${{ matrix.ext }}" version
-          echo 'int main(void){return 0;}' > _zt.c
-          "./zigsmoke/zig${{ matrix.ext }}" cc -target aarch64-linux-gnu -c _zt.c -o _zt.o && echo "zig cc cross-compile OK"
-          rm -rf _zt.c _zt.o "zig_dl.$AEXT" zigsmoke
+      # is GONE. The SDK bundles ZIG instead (see the early "Bundle zig toolchain"
+      # step), and `zig cc` IS clang (compiles the .ll directly) + lld + a libc for
+      # every target — so it supersedes a separate llc/lld bundle for host and cross.
+      # The step below runs on ALL platforms and relies on the bundled zig (auto-
+      # detected at <exe_dir>/zig/), so --backend llvm works even where no system
+      # clang/llc exists (e.g. Windows).
       - name: Verify --backend llvm builds and runs
         shell: bash
         env:
@@ -506,10 +518,11 @@ jobs:
           rm -f llc_probe.tr "llc_probe${{ matrix.ext }}"
 
       # -------------------------------------------------------
-      # Artifact = the compiler binary plus the source/library/sample
-      # trees that make a usable SDK bundle. (Not the whole workspace:
-      # no .git, docs, bootstrap scratch, or build output.)
-      # `llvm/` (llc + lld) rides along so the LLVM backend + cross-linking are self-contained.
+      # Artifact = the compiler binary + the BUNDLED ZIG TOOLCHAIN + the source/
+      # library/sample trees — a COMPLETE, self-contained SDK. `zig/` (~200 MB) is
+      # `zig cc` = clang + lld + a libc for every target, so one download gives the
+      # full toolchain: --backend llvm and --target cross work with nothing else
+      # installed. (Not the whole workspace: no .git, docs, bootstrap scratch, build.)
       # -------------------------------------------------------
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -519,6 +532,7 @@ jobs:
           path: |
             tauraroc${{ matrix.ext }}
             tauraroc-${{ matrix.platform }}.sha256
+            zig/
             src/
             std/
             runtime/
