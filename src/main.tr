@@ -1258,6 +1258,14 @@ pub def main(args: Vec[str]):
         mut lx_exe = ensure_ext(resolve_output_stem(input_path, output_path, out_dir), lx_ext)
         make_dir("build")
         mut lx_ll = "build/llvm_out.ll"
+        # WASM/WASI entry glue: the wasi crt's `_start` calls `__main_void`. Clang
+        # emits `@__main_void = hidden alias i32(), ptr @main` to wire that to the
+        # program's main; our target-neutral IR omits it, so without it the linker
+        # leaves __main_void -> main unresolved and the module traps `unreachable`
+        # at entry. Add the alias for wasm targets when a @main exists (harmless on
+        # other targets, so it is only appended for wasm to keep IR target-neutral).
+        if lx_is_cross and _tr_str_contains(lx_triple, "wasm") and _tr_str_contains(llvm_ir, "define i32 @main()"):
+            llvm_ir = llvm_ir + "\n@__main_void = hidden alias i32 (), ptr @main\n"
         write_file(lx_ll, llvm_ir)
         if verbose: print("[4/5] LLVM IR written to " + lx_ll)
         # Runtime: compile runtime/native_abi.c once into build/ (the extern _tr_rt_*
