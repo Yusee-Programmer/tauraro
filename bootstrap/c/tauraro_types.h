@@ -4206,6 +4206,9 @@ __attribute__((hot)) TrStr CGenerator_infer_method_targ(CGenerator* self, TrStr 
 __attribute__((hot)) void CGenerator_ensure_mono_method(CGenerator* self, TrStr cls_name, TrStr method, TrStr targ);
 __attribute__((hot)) TrStr CGenerator_get_user_decorator_attr(CGenerator* self, TrStr name);
 __attribute__((hot)) TrStr CGenerator_deco_first_str(CGenerator* self, Decorator* d);
+__attribute__((hot)) long long CGenerator_deco_first_int(CGenerator* self, Decorator* d);
+__attribute__((hot)) TrStr CGenerator_struct_layout(CGenerator* self, HirClass* c);
+__attribute__((hot)) TrStr CGenerator_struct_kw(CGenerator* self, HirClass* c);
 __attribute__((hot)) TrStr CGenerator_hw_attrs(CGenerator* self, HirFunction* f);
 __attribute__((hot)) TrStr CGenerator_hook_macro_for(CGenerator* self, HirFunction* f);
 __attribute__((hot)) TrStr CGenerator_emit_tier_hooks(CGenerator* self, HirProgram* prog);
@@ -4291,6 +4294,7 @@ __attribute__((hot)) TrStr CGenerator_gen_list_literal(CGenerator* self, List_pt
 __attribute__((hot)) TrStr CGenerator_gen_dict_literal(CGenerator* self, List_ptr* keys, List_ptr* vals, AstType* hint_ty);
 __attribute__((hot)) TrStr CGenerator_gen_list_comp(CGenerator* self, HirExpr* element, List_ptr* generators);
 __attribute__((hot)) TrStr CGenerator__comp_src_free_stmt(CGenerator* self, HirExpr* iter_e, long long idx);
+__attribute__((hot)) TrStr CGenerator_cb_trampoline(CGenerator* self, AstType* sig);
 __attribute__((hot)) TrStr CGenerator_gen_closure(CGenerator* self, List_ptr* params, AstType* ret_ty, HirBlock* body, List_ptr* captures);
 __attribute__((hot)) TrStr CGenerator__spawn_wrap_cast_ty(CGenerator* self, TrStr fn_name, HirExpr* arg_expr);
 __attribute__((hot)) void CGenerator_emit_spawn_wrapper_for_expr(CGenerator* self, HirExpr* e);

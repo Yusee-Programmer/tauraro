@@ -278,7 +278,12 @@ pub def hir_expr_type(e: Pointer[HirExpr]) -> AstType:
         case HirExpr.EUnaryOp(_, _, ty): return ty
         case HirExpr.ECall(_, _, ty): return ty
         case HirExpr.EMethodCall(_, _, _, ty): return ty
-        case HirExpr.EPropAccess(_, _, ty): return ty
+        case HirExpr.EPropAccess(_, _, ty):
+            # A `Bits[T; N]` bitfield READS as its storage type T (an integer), so print /
+            # arithmetic / assignment treat it as a scalar. The struct emitter reads the field
+            # DECLARATION's type directly, so the `: N` bitfield form is still emitted.
+            if ty.name == "Bits" and ty.args.len > 0: return ty.args.get(0).read()
+            return ty
         case HirExpr.EIndex(_, _, ty): return ty
         case HirExpr.ECast(_, ty): return ty
         case HirExpr.EFString(_, ty): return ty

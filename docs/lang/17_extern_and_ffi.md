@@ -29,6 +29,123 @@ Tauraro compiles to C, which means the entire C library ecosystem is directly ac
 | `Pointer[void]` | `void*` |
 | `lambda` | Function pointer |
 
+**ABI-exact scalars (`c_*`).** `int`/`i64` are *fixed-width*; C's `int`/`long` are
+platform-dependent. When a header uses `int`/`long`/`size_t`, bind them with the `c_*` family
+so the width always matches the C ABI:
+
+| Tauraro | C | | Tauraro | C |
+|---|---|---|---|---|
+| `c_char` | `char` | | `c_uint` | `unsigned int` |
+| `c_schar` | `signed char` | | `c_long` | `long` |
+| `c_uchar` | `unsigned char` | | `c_ulong` | `unsigned long` |
+| `c_short` | `short` | | `c_longlong` | `long long` |
+| `c_ushort` | `unsigned short` | | `c_size_t` | `size_t` |
+| `c_int` | `int` | | `c_ssize_t` | `ssize_t` |
+| `c_float`/`c_double`/`c_ldouble` | `float`/`double`/`long double` | | `c_int32_t` … `c_uint64_t` | fixed-width `<stdint.h>` |
+
+---
+
+## Matching a C struct's memory layout
+
+To pass a struct by value across FFI, declare a `@value_type` class whose fields match the C
+struct, and control the layout with decorators / field types:
+
+```python
+@value_type
+@packed                     # __attribute__((packed)) — no padding
+class TcpSeg:
+    pub src_port: u16
+    pub dst_port: u16
+    pub seq:      u32        # sizeof == 9, not 12
+
+@value_type
+@aligned(16)                # __attribute__((aligned(16))) — SIMD / cache line / DMA
+class Vec4:
+    pub x: f32
+    pub y: f32
+    pub z: f32
+    pub w: f32
+
+@union                      # overlapping views of the same bytes (implies @value_type)
+class Pixel:
+    pub rgba:  u32
+    pub bytes: [u8; 4]      # sizeof == 4
+
+@value_type
+class GpioMode:
+    pub mode:  Bits[u32; 2] # bitfield: `unsigned int mode : 2;`
+    pub pull:  Bits[u32; 2]
+    pub speed: Bits[u32; 3]
+
+@value_type
+@aligned(16)
+class Simd4:
+    pub lanes: Simd[f32; 4] # GCC/Clang vector: `float lanes __attribute__((vector_size(16)))`
+```
+
+- **`@packed` / `@aligned(N)` / `@union`** are decorators that stack with `@value_type` (and
+  imply it — a layout-controlled aggregate is always a stack value). Reading a `@union` field
+  other than the one last written is type-punning; do it in an `unsafe:` block.
+- **`Bits[T; N]`** is a bitfield of `N` bits stored in `T`; valid only as a struct field. It
+  reads/writes as an ordinary integer.
+- **`Simd[T; N]`** maps to the compiler's vector extension. For most APIs, prefer passing SIMD
+  aggregates by `Pointer[T]`; use `Simd[T; N]` only when the C API takes a vector by value.
+
+See `examples/ffi_struct_layout.tr` for a runnable version.
+
+> Note: printing a raw `c_long`/`c_int` value directly needs a cast (`x as int`) — the
+> auto-formatter only dispatches Tauraro's own scalar types. Their main use (FFI signatures
+> and struct-layout matching) needs no cast.
+>
+> FFI is the main place you cast with `as` — passing `str as Pointer[char]`, erasing types with
+> `x as Pointer[void]`, recovering them with `vp as Pointer[T]`, and `fn as Pointer[void]` for
+> callbacks. See [23 — Casting with `as`](23_casting_with_as.md) for every case, why it's needed,
+> and the exact error without it.
+
+---
+
+## Passing callbacks to C (function pointers + userdata)
+
+A C API that takes a callback usually looks like `f(void (*cb)(args…, void* userdata), void* userdata)`.
+There are two ways to bridge one, both zero-cost. Use `c_int` (not `int`) for the callback's
+parameters so the width matches C's `int`.
+
+**1 — Closure bridge (ergonomic): `c_callback(closure)`.** It returns a C function-pointer
+*trampoline* for the closure's signature; the trampoline threads the closure through the
+callback's **last** argument (the `userdata`). Bind the closure to a local, then pass it as the
+userdata too:
+
+```python
+extern "C":
+    def run_events(cb: Pointer[void], ud: Pointer[void], a: c_int, b: c_int, c: c_int)
+
+mut total = 0
+mut cb = def(ev: c_int):
+    total = total + (ev as int)
+run_events(c_callback(cb), cb as Pointer[void], 10, 20, 12)   # total == 42
+```
+
+Captures are **by reference** into the current frame, so this is sound for callbacks invoked
+*synchronously* (during the call, as above). For a callback that is stored and fired later,
+capture heap-stable state instead of stack locals — or use pattern 2.
+
+**2 — Explicit function + `Pointer[T]` userdata (fully sound, C-idiomatic).** A top-level
+function *is* a plain C function; pass it directly and thread state through a `Pointer[T]`
+userdata you control (the Rust `extern "C" fn` style):
+
+```python
+def on_event(ev: c_int, ud: Pointer[Acc]):
+    unsafe:
+        mut a = ud.read()
+        a.total = a.total + (ev as int)
+        ud.write(a)
+
+run_events(on_event as Pointer[void], (&acc) as Pointer[void], 10, 20, 12)
+```
+
+A **non-capturing** callback needs neither — pass the top-level function directly (see the
+comparator in `examples/16_extern_and_ffi.tr`). See `examples/ffi_callbacks.tr` for both patterns.
+
 ---
 
 ## `extern "C":` Declarations

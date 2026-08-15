@@ -132,6 +132,36 @@ static-call receiver, recover the class name from the literal identifier
 
 ---
 
+## Pointer & `as`-cast idioms in compiler source
+
+The compiler self-hosts, and much of `src/` (`src/taumir/`, `src/codegen/`, `std/core`) is raw-
+pointer systems code marked `# @trusted`. Contributors will read and write these `as` idioms
+constantly. The complete user-facing rules live in
+[`docs/lang/23_casting_with_as.md`](../lang/23_casting_with_as.md); the internals-specific points:
+
+- **Null checks go through `usize`, not `== 0`.** The canonical form in `src/` is
+  `x as usize == 0 as usize` (and `!= 0 as usize`). For a value whose "nullness" is really its
+  buffer pointer — e.g. a possibly-uninitialized `str` name — it's a **double cast**:
+  `(name as Pointer[char]) as usize == 0 as usize`. A bare `p == 0` compiles for a raw
+  `Pointer[T]` but not for a `str`/struct, so the codebase uses the explicit form uniformly.
+- **`0 as usize` / `0 as Pointer[char]` for typed nulls.** Passing a null of the right kind to a
+  runtime helper (`_tr_threadobj_spawn_h(fn, 0 as Pointer[char])`) needs the cast — a bare `0` is
+  `int` and mismatches the `char*` parameter.
+- **`x as Pointer[char]` is the universal "reach the raw bytes" cast.** `_tr_c_free(old as
+  Pointer[char])`, iterating a `str`'s data, handing a buffer to a runtime call. Reinterpreting
+  between `Pointer[A]`/`Pointer[B]` is `-Wincompatible-pointer-types` (an error under our flags),
+  so it must be explicit.
+- **Why the C backend needs them:** these lower to plain C casts (`(T*)x`, `(uintptr_t)x`) — see
+  the `ECast` case in `src/codegen/c.tr` (`List/Vec -> ->data` decay, `str <-> char*` via `strz`
+  / `_tr_str_wrap`, else a straight `((T)(x))`). No cast → the generated C fails to compile
+  (`incompatible type` / `incompatible pointer type` / `-Wint-conversion`), which surfaces as a
+  stage-4 (C compile) failure, not a Tauraro `sema` error — so a missing cast is caught late.
+- Keep casts inside the `# @trusted` core; never let a raw `Pointer[T]` escape into surface
+  language code without converting back to `str`/`@value_type`/`Box[T]` (the `[P-2]` quarantine
+  enforces this for user code).
+
+---
+
 ## Parser / Lexer Pitfalls
 
 ### 9. Keyword tokens as method/field names after `.`

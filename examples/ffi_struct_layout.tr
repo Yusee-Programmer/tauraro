@@ -1,0 +1,68 @@
+# FFI struct-layout controls — make a Tauraro @value_type match a C struct's memory layout
+# byte-for-byte for zero-copy interop:
+#   @packed        — no padding (network/file formats, hardware registers)
+#   @aligned(N)    — force alignment (SIMD, cache lines, DMA)
+#   @union         — overlapping views of the same bytes
+#   Bits[T; N]     — bitfields (hardware register fields)
+#   Simd[T; N]     — GCC/Clang vector types
+# plus the c_* ABI-exact scalar family (c_int/c_long/c_size_t/… map to the C ABI's own
+# widths, unlike the fixed-width i32/i64). All emitted on the C backend.
+
+@value_type
+@packed
+class TcpSeg:                 # 2+2+4+1 = 9 bytes packed (12 with default padding)
+    pub src_port: u16
+    pub dst_port: u16
+    pub seq:      u32
+    pub flags:    u8
+
+@value_type
+@aligned(16)
+class Vec4:
+    pub x: f32
+    pub y: f32
+    pub z: f32
+    pub w: f32
+
+@union
+class Pixel:                  # 4 bytes: rgba and the 4 channel bytes share storage
+    pub rgba:  u32
+    pub bytes: [u8; 4]
+
+@value_type
+class GpioMode:               # 2+2+3 = 7 bits, all in one 4-byte word
+    pub mode:  Bits[u32; 2]
+    pub pull:  Bits[u32; 2]
+    pub speed: Bits[u32; 3]
+
+@value_type
+@aligned(16)
+class Simd4:
+    pub lanes: Simd[f32; 4]   # float __attribute__((vector_size(16)))
+
+# ABI-exact FFI scalars: `int`/`long` are platform-dependent in C, so bind them as c_*.
+# This matches C's `struct timeval { long tv_sec; long tv_usec; }` exactly.
+@value_type
+class CTimeval:
+    pub tv_sec:  c_long
+    pub tv_usec: c_long
+
+def main():
+    print(sizeof(TcpSeg))     # 9  (packed)
+    print(sizeof(Vec4))       # 16
+    print(sizeof(Pixel))      # 4  (union)
+    print(sizeof(GpioMode))   # 4  (bitfields fit one word)
+    print(sizeof(Simd4))      # 16 (4-lane f32 vector)
+
+    mut px = Pixel()
+    px.rgba = 0
+    print(px.bytes.get(0))    # 0  (overlapping view)
+
+    mut g = GpioMode()
+    g.mode = 3
+    g.speed = 6
+    print(g.mode + g.speed)   # 9  (bitfield read/write)
+
+    mut tv = CTimeval()
+    tv.tv_sec = 1700000000
+    print(tv.tv_sec as int)   # 1700000000 (c_long ABI scalar; cast to int for printing)

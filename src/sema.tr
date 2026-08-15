@@ -2200,6 +2200,7 @@ extend Sema:
         if self.is_type_name(name): return true
         # Memory builtins + reflection (not in the globals table).
         if name == "alloc" or name == "dealloc" or name == "realloc" or name == "sizeof" or name == "repr": return true
+        if name == "c_callback": return true
         # Runtime intrinsics are reserved to the `_tr_` prefix and always available.
         if name.len() >= 4 and name.slice(0, 4) == "_tr_": return true
         return false
@@ -4748,6 +4749,10 @@ extend Sema:
                             ret_ty = AstType.init(n)
                         elif (n == "abs" or n == "min" or n == "max") and _hl_has_float(hl):
                             ret_ty = AstType.init("float")   # abs/min/max are float-in -> float-out
+                        elif n == "c_callback":
+                            # c_callback(closure) -> a C function-pointer trampoline (Pointer[void]).
+                            ret_ty = AstType.init("Pointer")
+                            ret_ty.args.push(box_asttype(AstType.init("void")))
                         elif n == "alloc" or n == "dealloc":
                             ret_ty = AstType.init("Pointer")
                             if not self.in_unsafe:

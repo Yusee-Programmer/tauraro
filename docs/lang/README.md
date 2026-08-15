@@ -36,6 +36,7 @@ Every core doc covers: **What it is → When to use it → How it works → Comm
 | 20 | [Advanced Patterns](20_advanced_patterns.md) | Idioms, design patterns, performance, best practices |
 | 21 | [Operator Overloading](21_operator_overloading.md) | Dunder methods: `__add__`, `__str__`, `__iter__`, `with` |
 | 22 | [Compiling, Backends & Cross-Compilation](22_compiling_and_cross_compilation.md) | `--backend c/llvm/native`, `--target` (Linux/Windows/macOS/ARM/RISC-V/WASM/bare-metal), the bundled zig toolchain, `--static`, `--no-heap`, full CLI reference |
+| 23 | [Casting with `as`](23_casting_with_as.md) | Every `as` cast case (numbers, `str`↔`Pointer[char]`, pointer↔pointer, pointer↔`usize`, `Pointer[void]`, callbacks, MMIO) — required vs recommended, why, and the exact error without it |
 
 ---
 

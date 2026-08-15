@@ -359,6 +359,17 @@ extend Parser:
                         match self.peek():
                             case Token.Comma:
                                 self.pos = self.pos + 1
+                            case Token.Semicolon:
+                                # `Name[T; N]` — an int size after `;` (mirrors the fixed-array
+                                # `[T; N]` form). Used by Bits[T; N] (bitfield width) and
+                                # Simd[T; N] (lane count); stored in array_size.
+                                self.pos = self.pos + 1
+                                match self.peek():
+                                    case Token.IntLit(gsz):
+                                        t.array_size = gsz
+                                        self.pos = self.pos + 1
+                                    case _: pass
+                                going = False
                             case _:
                                 going = False
                 match self.peek():
@@ -2179,10 +2190,14 @@ extend Parser:
                         # @value_type marks a class as a stack VALUE type (no heap
                         # box, no refcount, passed/returned by value — like Rust's
                         # &str fat pointer). Everything else is a heap reference type.
+                        # @packed / @aligned(N) / @union describe a C-ABI struct layout, which
+                        # is inherently a stack VALUE type (a union with a refcount header would
+                        # be corrupt), so they imply @value_type — no __rc, passed/returned by value.
                         mut _is_vt = false
                         mut _dvi = 0
                         while _dvi < decorators.len:
-                            if decorators.get(_dvi).name == "value_type": _is_vt = true
+                            mut _dvn = decorators.get(_dvi).name
+                            if _dvn == "value_type" or _dvn == "packed" or _dvn == "aligned" or _dvn == "union": _is_vt = true
                             _dvi = _dvi + 1
                         c.is_class = not _is_vt
                         c.decorators = decorators

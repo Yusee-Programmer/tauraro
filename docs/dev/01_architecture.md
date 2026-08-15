@@ -49,8 +49,7 @@ hand-written scanner over the raw byte buffer (`Pointer[char]`):
 - Tracks `pos`/`line` and an `indent_stack: Vec[int]` for Python-style indentation —
   it emits synthetic `Indent`/`Dedent` tokens so the parser never has to look at
   whitespace.
-- `keyword_to_token(s: str) -> Token` maps identifier text to keyword tokens,
-  including **Hausa keyword aliases** (e.g. `aiki` = `def`, `aji` = `class`).
+- `keyword_to_token(s: str) -> Token` maps identifier text to keyword tokens.
 - Dedicated readers for each literal form: `read_int`, `read_string`,
   `read_triple_string`, `read_char`, `read_fstring`, `read_raw_string`,
   `read_byte_string`, `read_ident`.
@@ -258,8 +257,6 @@ this order:
 
 1. **`src/token.tr`** — add a `Token` variant (e.g. `KwRepeat`).
 2. **`src/lexer.tr`** — add `"repeat" -> Token.KwRepeat` to `keyword_to_token`.
-   (Remember Hausa bilingual aliases if relevant — see
-   `docs/lang/01_intro.md`'s "Bilingual" note.)
 3. **`src/ast.tr`** — add a new `Stmt` variant, e.g.
    `SRepeat(count: Pointer[Expr], body: Block)`.
 4. **`src/parser.tr`** — add `parse_repeat_stmt(self) -> Pointer[Stmt]` and wire it
