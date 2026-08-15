@@ -90,17 +90,18 @@ pub def tokenize_c(src: str) -> Vec[CTok]:
 # ── C type → Tauraro type mapping ──────────────────────────────────────────────
 def map_base(words: str) -> str:
     if words == "void": return "void"
-    if words == "int": return "c_int"
+    if words == "int" or words == "signed" or words == "signed int": return "c_int"
     if words == "unsigned int" or words == "unsigned": return "c_uint"
     if words == "char": return "c_char"
     if words == "unsigned char": return "c_uchar"
     if words == "signed char": return "c_schar"
-    if words == "short" or words == "short int": return "c_short"
-    if words == "unsigned short": return "c_ushort"
-    if words == "long": return "c_long"
-    if words == "unsigned long": return "c_ulong"
-    if words == "long long": return "c_longlong"
-    if words == "unsigned long long": return "c_ulonglong"
+    if words == "short" or words == "short int" or words == "signed short": return "c_short"
+    if words == "unsigned short" or words == "unsigned short int": return "c_ushort"
+    if words == "long" or words == "long int" or words == "signed long": return "c_long"
+    if words == "unsigned long" or words == "unsigned long int": return "c_ulong"
+    if words == "long long" or words == "long long int" or words == "signed long long": return "c_longlong"
+    if words == "unsigned long long" or words == "unsigned long long int": return "c_ulonglong"
+    if words == "va_list" or words == "__builtin_va_list": return "Pointer[void]"   # varargs cursor
     if words == "float": return "c_float"
     if words == "double": return "c_double"
     if words == "long double": return "c_ldouble"
@@ -134,6 +135,16 @@ def map_type(words: str, stars: int) -> str:
     return ty
 
 # ── small helpers ────────────────────────────────────────────────────────────────
+# Primitive type keywords that combine into multi-word types (`unsigned int`, `long long`).
+# When one follows another type word it's STILL part of the type, never a declarator name.
+def _is_prim_type_word(w: str) -> bool:
+    return w == "void" or w == "char" or w == "short" or w == "int" or w == "long" or w == "float" or w == "double" or w == "signed" or w == "unsigned" or w == "_Bool" or w == "bool"
+
+# Storage-class / calling-convention / qualifier words that carry no type information and are
+# dropped from a declarator's type (const char* -> char*, extern int f() -> int f()).
+def _is_ignored_word(w: str) -> bool:
+    return w == "const" or w == "volatile" or w == "extern" or w == "static" or w == "inline" or w == "register" or w == "auto" or w == "__inline" or w == "__inline__" or w == "__forceinline" or w == "restrict" or w == "__restrict" or w == "__restrict__" or w == "__cdecl" or w == "__stdcall" or w == "__fastcall" or w == "__thiscall" or w == "WINAPI" or w == "APIENTRY" or w == "__extension__" or w == "_Noreturn"
+
 # Does a token end a declarator (so the preceding identifier was the NAME)?
 def _is_decl_term(kind: int, text: str) -> bool:
     if kind == 5: return true
@@ -230,6 +241,7 @@ pub class Bindgen:
     pub consts:    StringBuilder
     pub n_funcs:   int
     pub n_structs: int
+    pub seen:      Map[str, bool]    # top-level type/class names already emitted (dedup)
 
 extend Bindgen:
     pub def init(toks: Vec[CTok]) -> Bindgen:
@@ -242,7 +254,14 @@ extend Bindgen:
         b.consts = StringBuilder.init(512)
         b.n_funcs = 0
         b.n_structs = 0
+        b.seen = Map[str, bool].init(64)
         return b
+
+    # True the FIRST time a type/class name is emitted; false on a duplicate.
+    pub def fresh(self, name: str) -> bool:
+        if name == "" or self.seen.contains(name): return false
+        self.seen.insert(name, true)
+        return true
 
     pub def ct(self) -> str:
         return self.toks.get(self.pos).text
@@ -258,6 +277,33 @@ extend Bindgen:
     pub def nt(self) -> str:
         if self.pos + 1 < self.toks.len: return self.toks.get(self.pos + 1).text
         return ""
+
+    pub def skip_balanced_parens(self):
+        if not self.is_punct("("): return
+        mut depth = 0
+        while self.ck() != 5:
+            if self.is_punct("("): depth = depth + 1
+            elif self.is_punct(")"):
+                depth = depth - 1
+                if depth == 0:
+                    self.adv()
+                    return
+            self.adv()
+
+    # Consume a `{ ... } name;` aggregate body without emitting (for a duplicate struct).
+    pub def skip_struct_body(self):
+        if self.is_punct("{"):
+            mut depth = 0
+            while self.ck() != 5:
+                if self.is_punct("{"): depth = depth + 1
+                elif self.is_punct("}"):
+                    depth = depth - 1
+                    self.adv()
+                    if depth == 0: break
+                    continue
+                self.adv()
+        while not self.is_punct(";") and self.ck() != 5: self.adv()
+        if self.is_punct(";"): self.adv()
 
     pub def skip_to_semi(self):
         mut depth = 0
@@ -281,11 +327,14 @@ extend Bindgen:
         while going:
             if self.ck() == 0:
                 mut w = self.ct()
-                if w == "const" or w == "volatile":
+                if _is_ignored_word(w):
                     self.adv()
+                elif w == "__declspec" or w == "__attribute__":
+                    self.adv()
+                    self.skip_balanced_parens()      # __declspec(dllimport) / __attribute__((...))
                 elif w == "struct" or w == "union" or w == "enum":
                     self.adv()
-                elif (words.len >= 1 or stars > 0) and _is_decl_term(self.nk(), self.nt()):
+                elif (words.len >= 1 or stars > 0) and _is_decl_term(self.nk(), self.nt()) and not _is_prim_type_word(w):
                     going = false                    # this ident is the declarator name — leave it
                 else:
                     words.push(w)
@@ -319,6 +368,24 @@ extend Bindgen:
             mut pbase = tw.get(0)
             mut pstars = _to_int(tw.get(1))
             mut pname = ""
+            # inline function-pointer parameter: `RET (*name)(args)` -> `name: Pointer[void]`
+            # (a C function pointer is ABI-identical to void*; pass a fn via `fn as Pointer[void]`
+            # or a closure via `c_callback`).
+            if self.is_punct("(") and self.nt() == "*":
+                self.adv()                            # (
+                while self.is_punct("*"): self.adv()  # * (or **)
+                if self.ck() == 0:
+                    pname = self.ct()
+                    self.adv()
+                if self.is_punct(")"): self.adv()     # )
+                self.skip_balanced_parens()           # (args)
+                if pname == "": pname = "arg" + argn.to_str()
+                if not first: self.funcs.append(", ")
+                first = false
+                self.funcs.append(pname + ": Pointer[void]")
+                argn = argn + 1
+                if self.pos == ploop_before: self.adv()
+                continue
             if self.ck() == 0:
                 pname = self.ct()
                 self.adv()
@@ -347,6 +414,9 @@ extend Bindgen:
         if self.is_punct(";"): self.adv()
 
     pub def emit_struct(self, name: str, is_union: bool):
+        if not self.fresh(name):
+            self.skip_struct_body()                  # duplicate — consume tokens, emit nothing
+            return
         if is_union: self.structs.append("@union\n")
         self.structs.append("@value_type\nclass " + name + ":\n")
         self.adv()
@@ -389,7 +459,7 @@ extend Bindgen:
         if self.is_punct(";"): self.adv()
 
     pub def emit_enum(self, name: str):
-        if name != "": self.types.append("type " + name + " = c_int\n")
+        if name != "" and self.fresh(name): self.types.append("type " + name + " = c_int\n")
         self.adv()
         mut next_val = 0
         while not self.is_punct("}") and self.ck() != 5:
@@ -430,10 +500,22 @@ extend Bindgen:
                     if cname == "": cname = tag
                     self.emit_struct(cname, is_u)
                     return
+                # `typedef struct TAG [*...] NAME;`
+                mut ostars = 0
+                while self.is_punct("*"):
+                    ostars = ostars + 1
+                    self.adv()
                 mut oname = ""
                 if self.ck() == 0:
                     oname = self.ct()
-                if oname != "":
+                if ostars > 0 and oname != "" and tag != "":
+                    # pointer typedef: NAME = Pointer[TAG], TAG an opaque struct
+                    if self.fresh(tag):
+                        self.structs.append("class " + tag + ":\n    pass    # opaque handle\n\n")
+                        self.n_structs = self.n_structs + 1
+                    if self.fresh(oname):
+                        self.types.append("type " + oname + " = Pointer[" + tag + "]\n")
+                elif oname != "" and self.fresh(oname):
                     self.structs.append("class " + oname + ":\n    pass    # opaque handle\n\n")
                     self.n_structs = self.n_structs + 1
                 self.skip_to_semi()
@@ -449,7 +531,7 @@ extend Bindgen:
                 return
             if _typedef_is_fnptr(self.toks, self.pos):
                 mut fpn = _scan_fnptr_name(self.toks, self.pos)
-                if fpn != "": self.types.append("type " + fpn + " = Pointer[void]    # C function pointer\n")
+                if fpn != "" and self.fresh(fpn): self.types.append("type " + fpn + " = Pointer[void]    # C function pointer\n")
                 self.skip_to_semi()
                 return
             mut tw = self.read_type_words()
@@ -457,7 +539,7 @@ extend Bindgen:
             mut astars = _to_int(tw.get(1))
             mut aname = ""
             if self.ck() == 0: aname = self.ct()
-            if aname != "" and abase != "":
+            if aname != "" and abase != "" and aname != abase and self.fresh(aname):
                 self.types.append("type " + aname + " = " + map_type(abase, astars) + "\n")
             self.skip_to_semi()
             return
@@ -471,6 +553,12 @@ extend Bindgen:
             if self.is_punct("{") and tag2 != "":
                 self.emit_struct(tag2, is_u2)
                 return
+            # bare `struct TAG;` — a forward declaration of a truly-opaque struct (e.g. zlib's
+            # internal_state, used only as Pointer[internal_state]); emit an opaque class so the
+            # pointer type resolves.
+            if self.is_punct(";") and tag2 != "" and self.fresh(tag2):
+                self.structs.append("class " + tag2 + ":\n    pass    # opaque (forward-declared)\n\n")
+                self.n_structs = self.n_structs + 1
             self.skip_to_semi()
             return
         if lead == "enum":
@@ -523,11 +611,23 @@ def _marker_file(line: str) -> str:
     if q2 < 0: return ""
     return rest.slice(0, q2)
 
-# Keep only the lines that originate from the TARGET header (not from #include'd system
-# headers). `cc -E` (with markers) alternates `# N "file"` markers as it enters/leaves files;
-# we track the current file and match its basename against the target's.
+# Is a `# N "file" flags...` marker a SYSTEM header (flag `3`)? System headers (from `<...>`
+# includes or system dirs) get flag 3; the target header and its LOCAL `"..."` includes (e.g.
+# zlib's zconf.h) do not — so we bind the library's own headers but not libc.
+def _marker_is_system(line: str) -> bool:
+    mut q1 = line.find("\"")
+    if q1 < 0: return false
+    mut rest = line.slice(q1 + 1, line.len())
+    mut q2 = rest.find("\"")
+    if q2 < 0: return false
+    # flags follow the closing quote, space-separated (`" 1 3 4"`); flag 3 = system header.
+    # Substring `" 3"` matches whether or not a trailing `\r` (Windows line ending) is present.
+    return rest.slice(q2 + 1, rest.len()).find(" 3") >= 0
+
+# Keep only declarations from NON-system files (the target header + its local includes),
+# dropping `#include`d system headers. `cc -E` (with markers) enters/leaves files via
+# `# N "file" flags` markers; flag 3 marks a system header.
 def _filter_to_target(raw: str, target: str) -> str:
-    mut want = _basename(target)
     mut sb = StringBuilder.init(raw.len())
     mut lines = raw.split("\n")
     mut cur_ok = false
@@ -535,9 +635,8 @@ def _filter_to_target(raw: str, target: str) -> str:
     while i < lines.len:
         mut ln = lines.get(i)
         i = i + 1
-        mut mf = _marker_file(ln)
-        if mf != "":
-            cur_ok = _basename(mf) == want
+        if _marker_file(ln) != "":
+            cur_ok = not _marker_is_system(ln)
             continue
         if cur_ok:
             sb.append(ln)

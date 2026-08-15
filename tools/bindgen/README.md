@@ -39,8 +39,20 @@ compile, link, and run against the real library.
 
 ## Status
 
-Works end-to-end: header → bindings → compiled → linked → running program (verified with
-struct-by-value returns, enums, and `#define` constants).
+Validated end-to-end on **two real production libraries** — generated, compiled, linked, and run
+with correct results:
+
+- **zlib** (`zlib.h`, 1938 lines: local `zconf.h`, opaque structs, function pointers, pointer
+  typedefs, forward declarations, ~80 functions, `Z_*` constants) → linked against `libz` →
+  `crc32(0,"hello",5)` = 907060870, `compressBound(1000)` = 1013.
+- **sqlite3** (`sqlite3.h`, 13,775 lines: 292 functions, 32 types, callbacks, `va_list`, inline
+  function-pointer params) → linked against `libsqlite3` → `sqlite3_libversion_number()` = 3050004.
+
+Also verified struct-by-value returns, enums, and `#define` constants on synthetic headers.
+
+> Reading a C-returned **borrowed** `const char*` (e.g. `zlibVersion()`) with `x as str` is
+> unsafe — it wraps a string the library owns as a Tauraro-owned string and frees it on drop.
+> Copy it instead. This is a general FFI ownership rule, not a bindgen issue.
 
 **Done:**
 - Functions, structs (`@value_type`), opaque handles, enums, primitive/fn-pointer typedefs,
