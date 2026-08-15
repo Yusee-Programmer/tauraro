@@ -794,23 +794,9 @@ def emit_defines(bg: Bindgen, defs: str, baseline: Map[str, bool], allow: Map[st
             mut iv = _to_int(val)
             bg.consts.append("const " + nm + ": c_int = " + iv.to_str() + "\n")
 
-def main(args: List[str]):
-    if args.len < 2:
-        print("usage: tauraro-bindgen <header.h> [-o out.tr] [--cc <compiler>]")
-        return
-    mut header = args.get(1)
-    mut out = "bindings.tr"
-    mut cc = "cc"
-    mut i = 2
-    while i < args.len:
-        mut a = args.get(i)
-        if a == "-o" and i + 1 < args.len:
-            out = args.get(i + 1)
-            i = i + 1
-        elif a == "--cc" and i + 1 < args.len:
-            cc = args.get(i + 1)
-            i = i + 1
-        i = i + 1
+# Generate Tauraro FFI bindings for the C header at `header` into `out`, preprocessing with `cc`.
+# The `tauraroc bindgen` subcommand (src/main.tr) parses the CLI and calls this.
+pub def run_bindgen(header: str, out: str, cc: str):
     mut tmp_decls = "_bindgen_decls.i"
     mut tmp_defs  = "_bindgen_defs.i"
     # -E WITH line markers, so declarations from #include'd system headers can be filtered out.

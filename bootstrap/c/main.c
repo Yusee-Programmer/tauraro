@@ -15,6 +15,8 @@ __attribute__((hot)) void print_usage() {
     /* pass */
     ({ printf("%s", _tr_strz(_tr_str_lit("       tauraroc lint <file.tr>       Analyze and report warnings/errors"))); printf("\n"); });
     /* pass */
+    ({ printf("%s", _tr_strz(_tr_str_lit("       tauraroc bindgen <hdr.h>      Generate FFI bindings from a C header (-o out.tr)"))); printf("\n"); });
+    /* pass */
     ({ printf("%s", _tr_strz(_tr_str_lit("Options:"))); printf("\n"); });
     /* pass */
     ({ printf("%s", _tr_strz(_tr_str_lit("  --version         Print version and exit"))); printf("\n"); });
@@ -178,30 +180,30 @@ __attribute__((hot)) TrStr detect_c_compiler() {
     /* pass */
     if (_tr_is_windows()) {
         /* pass */
-        TrStr _strtmp_t2682 = _tr_str_lit("nul");
+        TrStr _strtmp_t2762 = _tr_str_lit("nul");
         _tr_str_release(null_dev);
-        null_dev = _strtmp_t2682;
+        null_dev = _strtmp_t2762;
     }
     /* pass */
-    if (({ TrStr _aet_t2683 = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("gcc --version >")), _tr_strz(null_dev))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" 2>&1"))); _tr_str_release(_cl); _cres; })); __auto_type _wr = ((_tr_system(_aet_t2683.data) == 0LL)); _tr_str_release(_aet_t2683); _wr; })) {
+    if (({ TrStr _aet_t2763 = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("gcc --version >")), _tr_strz(null_dev))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" 2>&1"))); _tr_str_release(_cl); _cres; })); __auto_type _wr = ((_tr_system(_aet_t2763.data) == 0LL)); _tr_str_release(_aet_t2763); _wr; })) {
         /* pass */
         _tr_str_release(null_dev);
         return _tr_str_lit("gcc");
     }
     /* pass */
-    if (({ TrStr _aet_t2684 = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("clang --version >")), _tr_strz(null_dev))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" 2>&1"))); _tr_str_release(_cl); _cres; })); __auto_type _wr = ((_tr_system(_aet_t2684.data) == 0LL)); _tr_str_release(_aet_t2684); _wr; })) {
+    if (({ TrStr _aet_t2764 = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("clang --version >")), _tr_strz(null_dev))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" 2>&1"))); _tr_str_release(_cl); _cres; })); __auto_type _wr = ((_tr_system(_aet_t2764.data) == 0LL)); _tr_str_release(_aet_t2764); _wr; })) {
         /* pass */
         _tr_str_release(null_dev);
         return _tr_str_lit("clang");
     }
     /* pass */
-    if (({ TrStr _aet_t2685 = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("cc --version >")), _tr_strz(null_dev))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" 2>&1"))); _tr_str_release(_cl); _cres; })); __auto_type _wr = ((_tr_system(_aet_t2685.data) == 0LL)); _tr_str_release(_aet_t2685); _wr; })) {
+    if (({ TrStr _aet_t2765 = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("cc --version >")), _tr_strz(null_dev))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" 2>&1"))); _tr_str_release(_cl); _cres; })); __auto_type _wr = ((_tr_system(_aet_t2765.data) == 0LL)); _tr_str_release(_aet_t2765); _wr; })) {
         /* pass */
         _tr_str_release(null_dev);
         return _tr_str_lit("cc");
     }
     /* pass */
-    if (({ TrStr _aet_t2686 = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("zig version >")), _tr_strz(null_dev))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" 2>&1"))); _tr_str_release(_cl); _cres; })); __auto_type _wr = ((_tr_system(_aet_t2686.data) == 0LL)); _tr_str_release(_aet_t2686); _wr; })) {
+    if (({ TrStr _aet_t2766 = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("zig version >")), _tr_strz(null_dev))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" 2>&1"))); _tr_str_release(_cl); _cres; })); __auto_type _wr = ((_tr_system(_aet_t2766.data) == 0LL)); _tr_str_release(_aet_t2766); _wr; })) {
         /* pass */
         _tr_str_release(null_dev);
         return _tr_str_lit("zig cc");
@@ -217,9 +219,9 @@ __attribute__((hot)) bool is_clang_compiler(TrStr cc) {
     /* pass */
     if (_tr_is_windows()) {
         /* pass */
-        TrStr _strtmp_t2687 = _tr_str_lit("nul");
+        TrStr _strtmp_t2767 = _tr_str_lit("nul");
         _tr_str_release(null_dev);
-        null_dev = _strtmp_t2687;
+        null_dev = _strtmp_t2767;
     }
     /* pass */
     if (_tr_str_contains(_tr_strz(cc), _tr_strz(_tr_str_lit("clang")))) {
@@ -237,7 +239,7 @@ __attribute__((hot)) bool is_clang_compiler(TrStr cc) {
     if (_tr_str_eq(_tr_strz(cc), _tr_strz(_tr_str_lit("cc")))) {
         /* pass */
         _tr_str_release(null_dev);
-        return ({ TrStr _aet_t2688 = (_tr_strx_concat(_tr_strz(cc), _tr_strz(_tr_str_lit(" --version 2>&1 | grep -qi clang")))); __auto_type _wr = ((_tr_system(_aet_t2688.data) == 0LL)); _tr_str_release(_aet_t2688); _wr; });
+        return ({ TrStr _aet_t2768 = (_tr_strx_concat(_tr_strz(cc), _tr_strz(_tr_str_lit(" --version 2>&1 | grep -qi clang")))); __auto_type _wr = ((_tr_system(_aet_t2768.data) == 0LL)); _tr_str_release(_aet_t2768); _wr; });
     }
     /* pass */
     _tr_str_release(null_dev);
@@ -353,65 +355,65 @@ __attribute__((hot)) TrStr linker_script_cortex_m() {
     /* pass */
     TrStr s = _tr_str_lit("/* Generated by tauraroc --emit-ld : Cortex-M (mps2-an385) memory map. */\n");
     /* pass */
-    TrStr _strtmp_t2689 = _tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit("ENTRY(_tr_reset)\n")));
+    TrStr _strtmp_t2769 = _tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit("ENTRY(_tr_reset)\n")));
     _tr_str_release(s);
-    s = _strtmp_t2689;
+    s = _strtmp_t2769;
     /* pass */
-    TrStr _strtmp_t2690 = _tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit("MEMORY {\n")));
+    TrStr _strtmp_t2770 = _tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit("MEMORY {\n")));
     _tr_str_release(s);
-    s = _strtmp_t2690;
+    s = _strtmp_t2770;
     /* pass */
-    TrStr _strtmp_t2691 = _tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit("  FLASH (rx)  : ORIGIN = 0x00000000, LENGTH = 4M\n")));
+    TrStr _strtmp_t2771 = _tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit("  FLASH (rx)  : ORIGIN = 0x00000000, LENGTH = 4M\n")));
     _tr_str_release(s);
-    s = _strtmp_t2691;
+    s = _strtmp_t2771;
     /* pass */
-    TrStr _strtmp_t2692 = _tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit("  RAM   (rwx) : ORIGIN = 0x20000000, LENGTH = 4M\n")));
+    TrStr _strtmp_t2772 = _tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit("  RAM   (rwx) : ORIGIN = 0x20000000, LENGTH = 4M\n")));
     _tr_str_release(s);
-    s = _strtmp_t2692;
+    s = _strtmp_t2772;
     /* pass */
-    TrStr _strtmp_t2693 = _tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit("}\n")));
+    TrStr _strtmp_t2773 = _tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit("}\n")));
     _tr_str_release(s);
-    s = _strtmp_t2693;
+    s = _strtmp_t2773;
     /* pass */
-    TrStr _strtmp_t2694 = _tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit("SECTIONS {\n")));
+    TrStr _strtmp_t2774 = _tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit("SECTIONS {\n")));
     _tr_str_release(s);
-    s = _strtmp_t2694;
+    s = _strtmp_t2774;
     /* pass */
-    TrStr _strtmp_t2695 = _tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit("  .isr_vector : { KEEP(*(.isr_vector)) } > FLASH\n")));
+    TrStr _strtmp_t2775 = _tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit("  .isr_vector : { KEEP(*(.isr_vector)) } > FLASH\n")));
     _tr_str_release(s);
-    s = _strtmp_t2695;
+    s = _strtmp_t2775;
     /* pass */
-    TrStr _strtmp_t2696 = _tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit("  .text : { *(.text*) *(.rodata*) } > FLASH\n")));
+    TrStr _strtmp_t2776 = _tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit("  .text : { *(.text*) *(.rodata*) } > FLASH\n")));
     _tr_str_release(s);
-    s = _strtmp_t2696;
+    s = _strtmp_t2776;
     /* pass */
-    TrStr _strtmp_t2697 = _tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit("  _sidata = LOADADDR(.data);\n")));
+    TrStr _strtmp_t2777 = _tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit("  _sidata = LOADADDR(.data);\n")));
     _tr_str_release(s);
-    s = _strtmp_t2697;
+    s = _strtmp_t2777;
     /* pass */
-    TrStr _strtmp_t2698 = _tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit("  .data : { _sdata = .; *(.data*) _edata = .; } > RAM AT > FLASH\n")));
+    TrStr _strtmp_t2778 = _tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit("  .data : { _sdata = .; *(.data*) _edata = .; } > RAM AT > FLASH\n")));
     _tr_str_release(s);
-    s = _strtmp_t2698;
+    s = _strtmp_t2778;
     /* pass */
-    TrStr _strtmp_t2699 = _tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit("  .bss  : { __bss_start__ = .; *(.bss* COMMON) __bss_end__ = .; } > RAM\n")));
+    TrStr _strtmp_t2779 = _tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit("  .bss  : { __bss_start__ = .; *(.bss* COMMON) __bss_end__ = .; } > RAM\n")));
     _tr_str_release(s);
-    s = _strtmp_t2699;
+    s = _strtmp_t2779;
     /* pass */
-    TrStr _strtmp_t2700 = _tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit("  . = ALIGN(8);\n")));
+    TrStr _strtmp_t2780 = _tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit("  . = ALIGN(8);\n")));
     _tr_str_release(s);
-    s = _strtmp_t2700;
+    s = _strtmp_t2780;
     /* pass */
-    TrStr _strtmp_t2701 = _tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit("  . = . + 0x8000;\n")));
+    TrStr _strtmp_t2781 = _tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit("  . = . + 0x8000;\n")));
     _tr_str_release(s);
-    s = _strtmp_t2701;
+    s = _strtmp_t2781;
     /* pass */
-    TrStr _strtmp_t2702 = _tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit("  _stack_top = ORIGIN(RAM) + LENGTH(RAM);\n")));
+    TrStr _strtmp_t2782 = _tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit("  _stack_top = ORIGIN(RAM) + LENGTH(RAM);\n")));
     _tr_str_release(s);
-    s = _strtmp_t2702;
+    s = _strtmp_t2782;
     /* pass */
-    TrStr _strtmp_t2703 = _tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit("}\n")));
+    TrStr _strtmp_t2783 = _tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit("}\n")));
     _tr_str_release(s);
-    s = _strtmp_t2703;
+    s = _strtmp_t2783;
     /* pass */
     return s;
 }
@@ -420,53 +422,53 @@ __attribute__((hot)) TrStr linker_script_riscv() {
     /* pass */
     TrStr s = _tr_str_lit("/* Generated by tauraroc --emit-ld : RISC-V (qemu virt) memory map. */\n");
     /* pass */
-    TrStr _strtmp_t2704 = _tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit("ENTRY(_start)\n")));
+    TrStr _strtmp_t2784 = _tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit("ENTRY(_start)\n")));
     _tr_str_release(s);
-    s = _strtmp_t2704;
+    s = _strtmp_t2784;
     /* pass */
-    TrStr _strtmp_t2705 = _tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit("MEMORY {\n")));
+    TrStr _strtmp_t2785 = _tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit("MEMORY {\n")));
     _tr_str_release(s);
-    s = _strtmp_t2705;
+    s = _strtmp_t2785;
     /* pass */
-    TrStr _strtmp_t2706 = _tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit("  RAM (rwx) : ORIGIN = 0x80000000, LENGTH = 128M\n")));
+    TrStr _strtmp_t2786 = _tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit("  RAM (rwx) : ORIGIN = 0x80000000, LENGTH = 128M\n")));
     _tr_str_release(s);
-    s = _strtmp_t2706;
+    s = _strtmp_t2786;
     /* pass */
-    TrStr _strtmp_t2707 = _tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit("}\n")));
+    TrStr _strtmp_t2787 = _tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit("}\n")));
     _tr_str_release(s);
-    s = _strtmp_t2707;
+    s = _strtmp_t2787;
     /* pass */
-    TrStr _strtmp_t2708 = _tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit("SECTIONS {\n")));
+    TrStr _strtmp_t2788 = _tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit("SECTIONS {\n")));
     _tr_str_release(s);
-    s = _strtmp_t2708;
+    s = _strtmp_t2788;
     /* pass */
-    TrStr _strtmp_t2709 = _tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit("  .text : { KEEP(*(.text.init)) *(.text*) *(.rodata*) } > RAM\n")));
+    TrStr _strtmp_t2789 = _tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit("  .text : { KEEP(*(.text.init)) *(.text*) *(.rodata*) } > RAM\n")));
     _tr_str_release(s);
-    s = _strtmp_t2709;
+    s = _strtmp_t2789;
     /* pass */
-    TrStr _strtmp_t2710 = _tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit("  .data : { *(.data*) *(.sdata*) } > RAM\n")));
+    TrStr _strtmp_t2790 = _tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit("  .data : { *(.data*) *(.sdata*) } > RAM\n")));
     _tr_str_release(s);
-    s = _strtmp_t2710;
+    s = _strtmp_t2790;
     /* pass */
-    TrStr _strtmp_t2711 = _tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit("  .bss  : { __bss_start__ = .; *(.bss* .sbss* COMMON) __bss_end__ = .; } > RAM\n")));
+    TrStr _strtmp_t2791 = _tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit("  .bss  : { __bss_start__ = .; *(.bss* .sbss* COMMON) __bss_end__ = .; } > RAM\n")));
     _tr_str_release(s);
-    s = _strtmp_t2711;
+    s = _strtmp_t2791;
     /* pass */
-    TrStr _strtmp_t2712 = _tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit("  . = ALIGN(16);\n")));
+    TrStr _strtmp_t2792 = _tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit("  . = ALIGN(16);\n")));
     _tr_str_release(s);
-    s = _strtmp_t2712;
+    s = _strtmp_t2792;
     /* pass */
-    TrStr _strtmp_t2713 = _tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit("  . = . + 0x8000;\n")));
+    TrStr _strtmp_t2793 = _tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit("  . = . + 0x8000;\n")));
     _tr_str_release(s);
-    s = _strtmp_t2713;
+    s = _strtmp_t2793;
     /* pass */
-    TrStr _strtmp_t2714 = _tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit("  _stack_top = .;\n")));
+    TrStr _strtmp_t2794 = _tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit("  _stack_top = .;\n")));
     _tr_str_release(s);
-    s = _strtmp_t2714;
+    s = _strtmp_t2794;
     /* pass */
-    TrStr _strtmp_t2715 = _tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit("}\n")));
+    TrStr _strtmp_t2795 = _tr_strx_concat(_tr_strz(s), _tr_strz(_tr_str_lit("}\n")));
     _tr_str_release(s);
-    s = _strtmp_t2715;
+    s = _strtmp_t2795;
     /* pass */
     return s;
 }
@@ -512,9 +514,9 @@ __attribute__((hot)) TrStr detect_cross_compiler(TrStr triple) {
     /* pass */
     if (_tr_is_windows()) {
         /* pass */
-        TrStr _strtmp_t2716 = _tr_str_lit("nul");
+        TrStr _strtmp_t2796 = _tr_str_lit("nul");
         _tr_str_release(null_dev);
-        null_dev = _strtmp_t2716;
+        null_dev = _strtmp_t2796;
     }
     /* pass */
     if (_tr_str_contains(_tr_strz(triple), _tr_strz(_tr_str_lit("android")))) {
@@ -523,23 +525,23 @@ __attribute__((hot)) TrStr detect_cross_compiler(TrStr triple) {
         /* pass */
         if ((strcmp(_tr_strz(ndk), _tr_strz(_tr_str_lit(""))) == 0)) {
             /* pass */
-            TrStr _strtmp_t2717 = _tr_str_lit(_tr_getenv(_tr_strz(_tr_str_lit("ANDROID_NDK_HOME"))));
+            TrStr _strtmp_t2797 = _tr_str_lit(_tr_getenv(_tr_strz(_tr_str_lit("ANDROID_NDK_HOME"))));
             _tr_str_release(ndk);
-            ndk = _strtmp_t2717;
+            ndk = _strtmp_t2797;
         }
         /* pass */
         if ((strcmp(_tr_strz(ndk), _tr_strz(_tr_str_lit(""))) == 0)) {
             /* pass */
-            TrStr _strtmp_t2718 = _tr_str_lit(_tr_getenv(_tr_strz(_tr_str_lit("NDK_HOME"))));
+            TrStr _strtmp_t2798 = _tr_str_lit(_tr_getenv(_tr_strz(_tr_str_lit("NDK_HOME"))));
             _tr_str_release(ndk);
-            ndk = _strtmp_t2718;
+            ndk = _strtmp_t2798;
         }
         /* pass */
         if ((strcmp(_tr_strz(ndk), _tr_strz(_tr_str_lit(""))) != 0)) {
             /* pass */
             TrStr wrapper = ({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(ndk), _tr_strz(_tr_str_lit("/toolchains/llvm/prebuilt/linux-x86_64/bin/")))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(triple)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("-clang"))); _tr_str_release(_cl); _cres; });
             /* pass */
-            if (({ TrStr _aet_t2719 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("\"")), _tr_strz(wrapper))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\" --version >"))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(null_dev)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" 2>&1"))); _tr_str_release(_cl); _cres; })); __auto_type _wr = ((_tr_system(_aet_t2719.data) == 0LL)); _tr_str_release(_aet_t2719); _wr; })) {
+            if (({ TrStr _aet_t2799 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("\"")), _tr_strz(wrapper))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\" --version >"))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(null_dev)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" 2>&1"))); _tr_str_release(_cl); _cres; })); __auto_type _wr = ((_tr_system(_aet_t2799.data) == 0LL)); _tr_str_release(_aet_t2799); _wr; })) {
                 /* pass */
                 _tr_str_release(null_dev);
                 _tr_str_release(ndk);
@@ -548,7 +550,7 @@ __attribute__((hot)) TrStr detect_cross_compiler(TrStr triple) {
         }
     }
     /* pass */
-    if (({ TrStr _aet_t2720 = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("clang --version >")), _tr_strz(null_dev))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" 2>&1"))); _tr_str_release(_cl); _cres; })); __auto_type _wr = ((_tr_system(_aet_t2720.data) == 0LL)); _tr_str_release(_aet_t2720); _wr; })) {
+    if (({ TrStr _aet_t2800 = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("clang --version >")), _tr_strz(null_dev))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" 2>&1"))); _tr_str_release(_cl); _cres; })); __auto_type _wr = ((_tr_system(_aet_t2800.data) == 0LL)); _tr_str_release(_aet_t2800); _wr; })) {
         /* pass */
         _tr_str_release(null_dev);
         return _tr_str_lit("clang");
@@ -564,18 +566,18 @@ __attribute__((hot)) TrStr detect_bundled_zig() {
     /* pass */
     if (_tr_is_windows()) {
         /* pass */
-        TrStr _strtmp_t2721 = _tr_str_lit(".exe");
+        TrStr _strtmp_t2801 = _tr_str_lit(".exe");
         _tr_str_release(ext);
-        ext = _strtmp_t2721;
+        ext = _strtmp_t2801;
     }
     /* pass */
     TrStr z = ({ TrStr _cl = (({ TrStr _cl = (_tr_str_wrap(_tr_exe_dir())); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("/zig/zig"))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(ext)); _tr_str_release(_cl); _cres; });
     /* pass */
     if (_tr_is_windows()) {
         /* pass */
-        TrStr _strtmp_t2722 = path_to_native(z);
+        TrStr _strtmp_t2802 = path_to_native(z);
         _tr_str_release(z);
-        z = _strtmp_t2722;
+        z = _strtmp_t2802;
     }
     /* pass */
     if (file_exists(z)) {
@@ -603,23 +605,23 @@ __attribute__((hot)) bool activate_bundled_zig() {
     /* pass */
     if (_tr_is_windows()) {
         /* pass */
-        TrStr _strtmp_t2723 = path_to_native(zdir);
+        TrStr _strtmp_t2803 = path_to_native(zdir);
         _tr_str_release(zdir);
-        zdir = _strtmp_t2723;
+        zdir = _strtmp_t2803;
     }
     /* pass */
     TrStr sep = _tr_str_lit(":");
     /* pass */
     if (_tr_is_windows()) {
         /* pass */
-        TrStr _strtmp_t2724 = _tr_str_lit(";");
+        TrStr _strtmp_t2804 = _tr_str_lit(";");
         _tr_str_release(sep);
-        sep = _strtmp_t2724;
+        sep = _strtmp_t2804;
     }
     /* pass */
     TrStr cur = _tr_str_lit(_tr_getenv(_tr_strz(_tr_str_lit("PATH"))));
     /* pass */
-    ({ TrStr _aet_t2725 = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(zdir), _tr_strz(sep))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(cur)); _tr_str_release(_cl); _cres; })); _tr_setenv(_tr_strz(_tr_str_lit("PATH")), _aet_t2725.data); _tr_str_release(_aet_t2725); });
+    ({ TrStr _aet_t2805 = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(zdir), _tr_strz(sep))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(cur)); _tr_str_release(_cl); _cres; })); _tr_setenv(_tr_strz(_tr_str_lit("PATH")), _aet_t2805.data); _tr_str_release(_aet_t2805); });
     /* pass */
     _tr_str_release(zbin);
     _tr_str_release(zdir);
@@ -634,37 +636,37 @@ __attribute__((hot)) TrStr detect_lld_flag() {
     /* pass */
     if (_tr_is_windows()) {
         /* pass */
-        TrStr _strtmp_t2726 = _tr_str_lit("nul");
+        TrStr _strtmp_t2806 = _tr_str_lit("nul");
         _tr_str_release(null_dev);
-        null_dev = _strtmp_t2726;
+        null_dev = _strtmp_t2806;
     }
     /* pass */
     TrStr ext = _tr_str_lit("");
     /* pass */
     if (_tr_is_windows()) {
         /* pass */
-        TrStr _strtmp_t2727 = _tr_str_lit(".exe");
+        TrStr _strtmp_t2807 = _tr_str_lit(".exe");
         _tr_str_release(ext);
-        ext = _strtmp_t2727;
+        ext = _strtmp_t2807;
     }
     /* pass */
     TrStr bundled = ({ TrStr _cl = (({ TrStr _cl = (_tr_str_wrap(_tr_exe_dir())); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("/llvm/ld.lld"))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(ext)); _tr_str_release(_cl); _cres; });
     /* pass */
     if (_tr_is_windows()) {
         /* pass */
-        TrStr _strtmp_t2728 = path_to_native(bundled);
+        TrStr _strtmp_t2808 = path_to_native(bundled);
         _tr_str_release(bundled);
-        bundled = _strtmp_t2728;
+        bundled = _strtmp_t2808;
     }
     /* pass */
-    if (({ TrStr _aet_t2729 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("\"")), _tr_strz(bundled))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\" --version >"))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(null_dev)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" 2>&1"))); _tr_str_release(_cl); _cres; })); __auto_type _wr = ((_tr_system(_aet_t2729.data) == 0LL)); _tr_str_release(_aet_t2729); _wr; })) {
+    if (({ TrStr _aet_t2809 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("\"")), _tr_strz(bundled))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\" --version >"))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(null_dev)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" 2>&1"))); _tr_str_release(_cl); _cres; })); __auto_type _wr = ((_tr_system(_aet_t2809.data) == 0LL)); _tr_str_release(_aet_t2809); _wr; })) {
         /* pass */
         _tr_str_release(null_dev);
         _tr_str_release(ext);
         return ({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit(" -fuse-ld=\"")), _tr_strz(bundled))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\""))); _tr_str_release(_cl); _cres; });
     }
     /* pass */
-    if (({ TrStr _aet_t2730 = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("ld.lld --version >")), _tr_strz(null_dev))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" 2>&1"))); _tr_str_release(_cl); _cres; })); __auto_type _wr = ((_tr_system(_aet_t2730.data) == 0LL)); _tr_str_release(_aet_t2730); _wr; })) {
+    if (({ TrStr _aet_t2810 = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("ld.lld --version >")), _tr_strz(null_dev))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" 2>&1"))); _tr_str_release(_cl); _cres; })); __auto_type _wr = ((_tr_system(_aet_t2810.data) == 0LL)); _tr_str_release(_aet_t2810); _wr; })) {
         /* pass */
         _tr_str_release(null_dev);
         _tr_str_release(ext);
@@ -672,7 +674,7 @@ __attribute__((hot)) TrStr detect_lld_flag() {
         return _tr_str_lit(" -fuse-ld=lld");
     }
     /* pass */
-    if (({ TrStr _aet_t2731 = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("lld --version >")), _tr_strz(null_dev))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" 2>&1"))); _tr_str_release(_cl); _cres; })); __auto_type _wr = ((_tr_system(_aet_t2731.data) == 0LL)); _tr_str_release(_aet_t2731); _wr; })) {
+    if (({ TrStr _aet_t2811 = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("lld --version >")), _tr_strz(null_dev))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" 2>&1"))); _tr_str_release(_cl); _cres; })); __auto_type _wr = ((_tr_system(_aet_t2811.data) == 0LL)); _tr_str_release(_aet_t2811); _wr; })) {
         /* pass */
         _tr_str_release(null_dev);
         _tr_str_release(ext);
@@ -817,12 +819,12 @@ __attribute__((hot)) TrStr resolve_cross_driver(TrStr triple) {
     /* pass */
     if (_tr_is_windows()) {
         /* pass */
-        TrStr _strtmp_t2732 = _tr_str_lit("nul");
+        TrStr _strtmp_t2812 = _tr_str_lit("nul");
         _tr_str_release(null_dev);
-        null_dev = _strtmp_t2732;
+        null_dev = _strtmp_t2812;
     }
     /* pass */
-    if (({ TrStr _aet_t2733 = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("zig version >")), _tr_strz(null_dev))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" 2>&1"))); _tr_str_release(_cl); _cres; })); __auto_type _wr = ((_tr_system(_aet_t2733.data) == 0LL)); _tr_str_release(_aet_t2733); _wr; })) {
+    if (({ TrStr _aet_t2813 = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("zig version >")), _tr_strz(null_dev))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" 2>&1"))); _tr_str_release(_cl); _cres; })); __auto_type _wr = ((_tr_system(_aet_t2813.data) == 0LL)); _tr_str_release(_aet_t2813); _wr; })) {
         /* pass */
         TrStr zt = zig_target_of(triple);
         /* pass */
@@ -900,12 +902,12 @@ __attribute__((hot)) TrStr find_native_abi_c(TrStr input_path) {
     /* pass */
     TrStr bin_dir = ({ TrStr _cl = (_tr_str_wrap(_tr_exe_dir())); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("/"))); _tr_str_release(_cl); _cres; });
     /* pass */
-    if (({ TrStr _at_t2734 = (_tr_strx_concat(_tr_strz(bin_dir), _tr_strz(_tr_str_lit("native_abi.c")))); __auto_type _wr = (file_exists(_at_t2734)); _tr_str_release(_at_t2734); _wr; })) {
+    if (({ TrStr _at_t2814 = (_tr_strx_concat(_tr_strz(bin_dir), _tr_strz(_tr_str_lit("native_abi.c")))); __auto_type _wr = (file_exists(_at_t2814)); _tr_str_release(_at_t2814); _wr; })) {
         /* pass */
         return _tr_strx_concat(_tr_strz(bin_dir), _tr_strz(_tr_str_lit("native_abi.c")));
     }
     /* pass */
-    if (({ TrStr _at_t2735 = (_tr_strx_concat(_tr_strz(bin_dir), _tr_strz(_tr_str_lit("runtime/native_abi.c")))); __auto_type _wr = (file_exists(_at_t2735)); _tr_str_release(_at_t2735); _wr; })) {
+    if (({ TrStr _at_t2815 = (_tr_strx_concat(_tr_strz(bin_dir), _tr_strz(_tr_str_lit("runtime/native_abi.c")))); __auto_type _wr = (file_exists(_at_t2815)); _tr_str_release(_at_t2815); _wr; })) {
         /* pass */
         return _tr_strx_concat(_tr_strz(bin_dir), _tr_strz(_tr_str_lit("runtime/native_abi.c")));
     }
@@ -914,24 +916,24 @@ __attribute__((hot)) TrStr find_native_abi_c(TrStr input_path) {
         /* pass */
         TrStr src_dir = dir_of_path(input_path);
         /* pass */
-        if (({ TrStr _at_t2736 = (_tr_strx_concat(_tr_strz(src_dir), _tr_strz(_tr_str_lit("native_abi.c")))); __auto_type _wr = (file_exists(_at_t2736)); _tr_str_release(_at_t2736); _wr; })) {
+        if (({ TrStr _at_t2816 = (_tr_strx_concat(_tr_strz(src_dir), _tr_strz(_tr_str_lit("native_abi.c")))); __auto_type _wr = (file_exists(_at_t2816)); _tr_str_release(_at_t2816); _wr; })) {
             /* pass */
             _tr_str_release(bin_dir);
             return _tr_strx_concat(_tr_strz(src_dir), _tr_strz(_tr_str_lit("native_abi.c")));
         }
         /* pass */
-        TrStr parent = ({ TrStr _at_t2737 = (strip_trailing_sep_inline(src_dir)); __auto_type _wr = (dir_of_path(_at_t2737)); _tr_str_release(_at_t2737); _wr; });
+        TrStr parent = ({ TrStr _at_t2817 = (strip_trailing_sep_inline(src_dir)); __auto_type _wr = (dir_of_path(_at_t2817)); _tr_str_release(_at_t2817); _wr; });
         /* pass */
-        if (({ TrStr _at_t2738 = (_tr_strx_concat(_tr_strz(parent), _tr_strz(_tr_str_lit("runtime/native_abi.c")))); __auto_type _wr = (file_exists(_at_t2738)); _tr_str_release(_at_t2738); _wr; })) {
+        if (({ TrStr _at_t2818 = (_tr_strx_concat(_tr_strz(parent), _tr_strz(_tr_str_lit("runtime/native_abi.c")))); __auto_type _wr = (file_exists(_at_t2818)); _tr_str_release(_at_t2818); _wr; })) {
             /* pass */
             _tr_str_release(bin_dir);
             _tr_str_release(src_dir);
             return _tr_strx_concat(_tr_strz(parent), _tr_strz(_tr_str_lit("runtime/native_abi.c")));
         }
         /* pass */
-        TrStr gp = ({ TrStr _at_t2739 = (strip_trailing_sep_inline(parent)); __auto_type _wr = (dir_of_path(_at_t2739)); _tr_str_release(_at_t2739); _wr; });
+        TrStr gp = ({ TrStr _at_t2819 = (strip_trailing_sep_inline(parent)); __auto_type _wr = (dir_of_path(_at_t2819)); _tr_str_release(_at_t2819); _wr; });
         /* pass */
-        if (({ TrStr _at_t2740 = (_tr_strx_concat(_tr_strz(gp), _tr_strz(_tr_str_lit("runtime/native_abi.c")))); __auto_type _wr = (file_exists(_at_t2740)); _tr_str_release(_at_t2740); _wr; })) {
+        if (({ TrStr _at_t2820 = (_tr_strx_concat(_tr_strz(gp), _tr_strz(_tr_str_lit("runtime/native_abi.c")))); __auto_type _wr = (file_exists(_at_t2820)); _tr_str_release(_at_t2820); _wr; })) {
             /* pass */
             _tr_str_release(bin_dir);
             _tr_str_release(src_dir);
@@ -982,54 +984,54 @@ __attribute__((hot)) TrStr read_runtime_header(TrStr bin_path, TrStr input_path)
         /* pass */
         TrStr src_dir = dir_of_path(input_path);
         /* pass */
-        if (({ TrStr _at_t2741 = (_tr_strx_concat(_tr_strz(src_dir), _tr_strz(_tr_str_lit("tauraro_rt.h")))); __auto_type _wr = (file_exists(_at_t2741)); _tr_str_release(_at_t2741); _wr; })) {
+        if (({ TrStr _at_t2821 = (_tr_strx_concat(_tr_strz(src_dir), _tr_strz(_tr_str_lit("tauraro_rt.h")))); __auto_type _wr = (file_exists(_at_t2821)); _tr_str_release(_at_t2821); _wr; })) {
             /* pass */
             _tr_str_release(bin_dir);
             _tr_str_release(src1);
             _tr_str_release(src1b);
-            return ({ TrStr _at_t2742 = (_tr_strx_concat(_tr_strz(src_dir), _tr_strz(_tr_str_lit("tauraro_rt.h")))); __auto_type _wr = (read_file(_at_t2742)); _tr_str_release(_at_t2742); _wr; });
+            return ({ TrStr _at_t2822 = (_tr_strx_concat(_tr_strz(src_dir), _tr_strz(_tr_str_lit("tauraro_rt.h")))); __auto_type _wr = (read_file(_at_t2822)); _tr_str_release(_at_t2822); _wr; });
         }
         /* pass */
-        TrStr parent = ({ TrStr _at_t2743 = (strip_trailing_sep_inline(src_dir)); __auto_type _wr = (dir_of_path(_at_t2743)); _tr_str_release(_at_t2743); _wr; });
+        TrStr parent = ({ TrStr _at_t2823 = (strip_trailing_sep_inline(src_dir)); __auto_type _wr = (dir_of_path(_at_t2823)); _tr_str_release(_at_t2823); _wr; });
         /* pass */
-        if (({ TrStr _at_t2744 = (_tr_strx_concat(_tr_strz(parent), _tr_strz(_tr_str_lit("runtime/tauraro_rt.h")))); __auto_type _wr = (file_exists(_at_t2744)); _tr_str_release(_at_t2744); _wr; })) {
-            /* pass */
-            _tr_str_release(bin_dir);
-            _tr_str_release(src1);
-            _tr_str_release(src1b);
-            _tr_str_release(src_dir);
-            return ({ TrStr _at_t2745 = (_tr_strx_concat(_tr_strz(parent), _tr_strz(_tr_str_lit("runtime/tauraro_rt.h")))); __auto_type _wr = (read_file(_at_t2745)); _tr_str_release(_at_t2745); _wr; });
-        }
-        /* pass */
-        if (({ TrStr _at_t2746 = (_tr_strx_concat(_tr_strz(parent), _tr_strz(_tr_str_lit("tauraro_rt.h")))); __auto_type _wr = (file_exists(_at_t2746)); _tr_str_release(_at_t2746); _wr; })) {
+        if (({ TrStr _at_t2824 = (_tr_strx_concat(_tr_strz(parent), _tr_strz(_tr_str_lit("runtime/tauraro_rt.h")))); __auto_type _wr = (file_exists(_at_t2824)); _tr_str_release(_at_t2824); _wr; })) {
             /* pass */
             _tr_str_release(bin_dir);
             _tr_str_release(src1);
             _tr_str_release(src1b);
             _tr_str_release(src_dir);
-            return ({ TrStr _at_t2747 = (_tr_strx_concat(_tr_strz(parent), _tr_strz(_tr_str_lit("tauraro_rt.h")))); __auto_type _wr = (read_file(_at_t2747)); _tr_str_release(_at_t2747); _wr; });
+            return ({ TrStr _at_t2825 = (_tr_strx_concat(_tr_strz(parent), _tr_strz(_tr_str_lit("runtime/tauraro_rt.h")))); __auto_type _wr = (read_file(_at_t2825)); _tr_str_release(_at_t2825); _wr; });
         }
         /* pass */
-        TrStr gp = ({ TrStr _at_t2748 = (strip_trailing_sep_inline(parent)); __auto_type _wr = (dir_of_path(_at_t2748)); _tr_str_release(_at_t2748); _wr; });
-        /* pass */
-        if (({ TrStr _at_t2749 = (_tr_strx_concat(_tr_strz(gp), _tr_strz(_tr_str_lit("runtime/tauraro_rt.h")))); __auto_type _wr = (file_exists(_at_t2749)); _tr_str_release(_at_t2749); _wr; })) {
+        if (({ TrStr _at_t2826 = (_tr_strx_concat(_tr_strz(parent), _tr_strz(_tr_str_lit("tauraro_rt.h")))); __auto_type _wr = (file_exists(_at_t2826)); _tr_str_release(_at_t2826); _wr; })) {
             /* pass */
             _tr_str_release(bin_dir);
             _tr_str_release(src1);
             _tr_str_release(src1b);
             _tr_str_release(src_dir);
-            _tr_str_release(parent);
-            return ({ TrStr _at_t2750 = (_tr_strx_concat(_tr_strz(gp), _tr_strz(_tr_str_lit("runtime/tauraro_rt.h")))); __auto_type _wr = (read_file(_at_t2750)); _tr_str_release(_at_t2750); _wr; });
+            return ({ TrStr _at_t2827 = (_tr_strx_concat(_tr_strz(parent), _tr_strz(_tr_str_lit("tauraro_rt.h")))); __auto_type _wr = (read_file(_at_t2827)); _tr_str_release(_at_t2827); _wr; });
         }
         /* pass */
-        if (({ TrStr _at_t2751 = (_tr_strx_concat(_tr_strz(gp), _tr_strz(_tr_str_lit("tauraro_rt.h")))); __auto_type _wr = (file_exists(_at_t2751)); _tr_str_release(_at_t2751); _wr; })) {
+        TrStr gp = ({ TrStr _at_t2828 = (strip_trailing_sep_inline(parent)); __auto_type _wr = (dir_of_path(_at_t2828)); _tr_str_release(_at_t2828); _wr; });
+        /* pass */
+        if (({ TrStr _at_t2829 = (_tr_strx_concat(_tr_strz(gp), _tr_strz(_tr_str_lit("runtime/tauraro_rt.h")))); __auto_type _wr = (file_exists(_at_t2829)); _tr_str_release(_at_t2829); _wr; })) {
             /* pass */
             _tr_str_release(bin_dir);
             _tr_str_release(src1);
             _tr_str_release(src1b);
             _tr_str_release(src_dir);
             _tr_str_release(parent);
-            return ({ TrStr _at_t2752 = (_tr_strx_concat(_tr_strz(gp), _tr_strz(_tr_str_lit("tauraro_rt.h")))); __auto_type _wr = (read_file(_at_t2752)); _tr_str_release(_at_t2752); _wr; });
+            return ({ TrStr _at_t2830 = (_tr_strx_concat(_tr_strz(gp), _tr_strz(_tr_str_lit("runtime/tauraro_rt.h")))); __auto_type _wr = (read_file(_at_t2830)); _tr_str_release(_at_t2830); _wr; });
+        }
+        /* pass */
+        if (({ TrStr _at_t2831 = (_tr_strx_concat(_tr_strz(gp), _tr_strz(_tr_str_lit("tauraro_rt.h")))); __auto_type _wr = (file_exists(_at_t2831)); _tr_str_release(_at_t2831); _wr; })) {
+            /* pass */
+            _tr_str_release(bin_dir);
+            _tr_str_release(src1);
+            _tr_str_release(src1b);
+            _tr_str_release(src_dir);
+            _tr_str_release(parent);
+            return ({ TrStr _at_t2832 = (_tr_strx_concat(_tr_strz(gp), _tr_strz(_tr_str_lit("tauraro_rt.h")))); __auto_type _wr = (read_file(_at_t2832)); _tr_str_release(_at_t2832); _wr; });
         }
         _tr_str_release(src_dir);
         _tr_str_release(parent);
@@ -1414,9 +1416,9 @@ __attribute__((hot)) TrStr out_dir_prefix(TrStr out_dir) {
     /* pass */
     if ((!(_tr_str_ends_with(_tr_strz(d), _tr_strz(_tr_str_lit("/"))) || _tr_str_ends_with(_tr_strz(d), _tr_strz(_tr_str_lit("\\")))))) {
         /* pass */
-        TrStr _strtmp_t2753 = _tr_strx_concat(_tr_strz(d), _tr_strz(_tr_str_lit("/")));
+        TrStr _strtmp_t2833 = _tr_strx_concat(_tr_strz(d), _tr_strz(_tr_str_lit("/")));
         _tr_str_release(d);
-        d = _strtmp_t2753;
+        d = _strtmp_t2833;
     }
     /* pass */
     make_dir(d);
@@ -1428,7 +1430,7 @@ __attribute__((hot)) TrStr resolve_output_stem(TrStr input_path, TrStr output_pa
     /* pass */
     if (((strcmp(_tr_strz(output_path), _tr_strz(_tr_str_lit(""))) != 0) && has_path_sep(output_path))) {
         /* pass */
-        ({ TrStr _at_t2754 = (dir_of_path(output_path)); make_dir(_at_t2754); _tr_str_release(_at_t2754); });
+        ({ TrStr _at_t2834 = (dir_of_path(output_path)); make_dir(_at_t2834); _tr_str_release(_at_t2834); });
         /* pass */
         return _tr_str_retain(output_path);
     }
@@ -1440,7 +1442,7 @@ __attribute__((hot)) TrStr resolve_output_stem(TrStr input_path, TrStr output_pa
         return _tr_strx_concat(_tr_strz(pref), _tr_strz(output_path));
     }
     /* pass */
-    return ({ TrStr _at_t2755 = (get_filename(input_path)); __auto_type _wr = (({ TrStr _cr = (strip_extension(_at_t2755)); TrStr _cres = _tr_strx_concat(_tr_strz(pref), _cr.data); _tr_str_release(_cr); _cres; })); _tr_str_release(_at_t2755); _wr; });
+    return ({ TrStr _at_t2835 = (get_filename(input_path)); __auto_type _wr = (({ TrStr _cr = (strip_extension(_at_t2835)); TrStr _cres = _tr_strx_concat(_tr_strz(pref), _cr.data); _tr_str_release(_cr); _cres; })); _tr_str_release(_at_t2835); _wr; });
 }
 
 __attribute__((hot)) TrStr ensure_ext(TrStr path, TrStr ext) {
@@ -1513,9 +1515,9 @@ __attribute__((hot)) TrStr ensure_builtin_dirs(TrStr build_dir, TrStr dot_path) 
             /* pass */
             TrStr seg = _tr_str_wrap(_tr_str_slice(_tr_strz(dot_path), start, i));
             /* pass */
-            TrStr _strtmp_t2756 = ({ TrStr _cl = (_tr_strx_concat(_tr_strz(current), _tr_strz(seg))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("/"))); _tr_str_release(_cl); _cres; });
+            TrStr _strtmp_t2836 = ({ TrStr _cl = (_tr_strx_concat(_tr_strz(current), _tr_strz(seg))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("/"))); _tr_str_release(_cl); _cres; });
             _tr_str_release(current);
-            current = _strtmp_t2756;
+            current = _strtmp_t2836;
             /* pass */
             make_dir(current);
             /* pass */
@@ -1600,10 +1602,10 @@ __attribute__((hot)) void make_dir(TrStr path) {
     /* pass */
     if (_tr_is_windows()) {
         /* pass */
-        ({ TrStr _aet_t2757 = (({ TrStr _cl = (({ TrStr _cr = (path_to_native(path)); TrStr _cres = _tr_strx_concat(_tr_strz(_tr_str_lit("mkdir \"")), _cr.data); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\" 2>nul >nul"))); _tr_str_release(_cl); _cres; })); _tr_system(_aet_t2757.data); _tr_str_release(_aet_t2757); });
+        ({ TrStr _aet_t2837 = (({ TrStr _cl = (({ TrStr _cr = (path_to_native(path)); TrStr _cres = _tr_strx_concat(_tr_strz(_tr_str_lit("mkdir \"")), _cr.data); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\" 2>nul >nul"))); _tr_str_release(_cl); _cres; })); _tr_system(_aet_t2837.data); _tr_str_release(_aet_t2837); });
     } else {
         /* pass */
-        ({ TrStr _aet_t2758 = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("mkdir -p \"")), _tr_strz(path))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\" 2>/dev/null"))); _tr_str_release(_cl); _cres; })); _tr_system(_aet_t2758.data); _tr_str_release(_aet_t2758); });
+        ({ TrStr _aet_t2838 = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("mkdir -p \"")), _tr_strz(path))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\" 2>/dev/null"))); _tr_str_release(_cl); _cres; })); _tr_system(_aet_t2838.data); _tr_str_release(_aet_t2838); });
     }
 }
 
@@ -1617,23 +1619,23 @@ __attribute__((hot)) long long compile_all_c(List_TrStr* c_files, TrStr exe_path
     /* pass */
     if ((strcmp(_tr_strz(target), _tr_strz(_tr_str_lit(""))) != 0)) {
         /* pass */
-        TrStr _strtmp_t2759 = resolve_target_triple(target);
+        TrStr _strtmp_t2839 = resolve_target_triple(target);
         _tr_str_release(triple);
-        triple = _strtmp_t2759;
+        triple = _strtmp_t2839;
         /* pass */
-        TrStr _strtmp_t2760 = resolve_cross_driver(triple);
+        TrStr _strtmp_t2840 = resolve_cross_driver(triple);
         _tr_str_release(cc);
-        cc = _strtmp_t2760;
+        cc = _strtmp_t2840;
         /* pass */
-        TrStr _strtmp_t2761 = target_extra_flags(triple);
+        TrStr _strtmp_t2841 = target_extra_flags(triple);
         _tr_str_release(cross_flags);
-        cross_flags = _strtmp_t2761;
+        cross_flags = _strtmp_t2841;
         /* pass */
         if ((strcmp(_tr_strz(sysroot), _tr_strz(_tr_str_lit(""))) != 0)) {
             /* pass */
-            TrStr _strtmp_t2762 = ({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(cross_flags), _tr_strz(_tr_str_lit(" --sysroot=\"")))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(sysroot)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\""))); _tr_str_release(_cl); _cres; });
+            TrStr _strtmp_t2842 = ({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(cross_flags), _tr_strz(_tr_str_lit(" --sysroot=\"")))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(sysroot)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\""))); _tr_str_release(_cl); _cres; });
             _tr_str_release(cross_flags);
-            cross_flags = _strtmp_t2762;
+            cross_flags = _strtmp_t2842;
         }
     }
     /* pass */
@@ -1641,36 +1643,36 @@ __attribute__((hot)) long long compile_all_c(List_TrStr* c_files, TrStr exe_path
     /* pass */
     if (static_link) {
         /* pass */
-        TrStr _strtmp_t2763 = _tr_str_lit(" -static");
+        TrStr _strtmp_t2843 = _tr_str_lit(" -static");
         _tr_str_release(static_flag);
-        static_flag = _strtmp_t2763;
+        static_flag = _strtmp_t2843;
     }
     /* pass */
     TrStr warn_flags = _tr_str_lit(" -Wno-string-compare -Wno-comment -Wno-attributes -Wno-unused-value");
     /* pass */
     if (is_clang_compiler(cc)) {
         /* pass */
-        TrStr _strtmp_t2764 = _tr_strx_concat(_tr_strz(warn_flags), _tr_strz(_tr_str_lit(" -Wno-unknown-attributes -Wno-parentheses-equality")));
+        TrStr _strtmp_t2844 = _tr_strx_concat(_tr_strz(warn_flags), _tr_strz(_tr_str_lit(" -Wno-unknown-attributes -Wno-parentheses-equality")));
         _tr_str_release(warn_flags);
-        warn_flags = _strtmp_t2764;
+        warn_flags = _strtmp_t2844;
     }
     /* pass */
     TrStr native_flags = _tr_str_lit("");
     /* pass */
     if (((strcmp(_tr_strz(target), _tr_strz(_tr_str_lit(""))) == 0) && (strcmp(_tr_strz(opt_level), _tr_strz(_tr_str_lit("3"))) == 0))) {
         /* pass */
-        TrStr _strtmp_t2765 = _tr_str_lit(" -march=native -funroll-loops");
+        TrStr _strtmp_t2845 = _tr_str_lit(" -march=native -funroll-loops");
         _tr_str_release(native_flags);
-        native_flags = _strtmp_t2765;
+        native_flags = _strtmp_t2845;
     }
     /* pass */
     TrStr overflow_flag = _tr_str_lit("");
     /* pass */
     if (((strcmp(_tr_strz(opt_level), _tr_strz(_tr_str_lit("3"))) != 0) && (strcmp(_tr_strz(opt_level), _tr_strz(_tr_str_lit("s"))) != 0))) {
         /* pass */
-        TrStr _strtmp_t2766 = _tr_str_lit(" -ftrapv");
+        TrStr _strtmp_t2846 = _tr_str_lit(" -ftrapv");
         _tr_str_release(overflow_flag);
-        overflow_flag = _strtmp_t2766;
+        overflow_flag = _strtmp_t2846;
     }
     /* pass */
     TrStr cmd = ({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(cc), _tr_strz(_tr_str_lit(" -O")))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(opt_level)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(overflow_flag)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(static_flag)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(native_flags)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(cross_flags)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(warn_flags)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" -DTAURARO_NO_RT_HELPERS \"-I"))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(inc_dir)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\" -o \""))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(exe_path)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\""))); _tr_str_release(_cl); _cres; });
@@ -1679,9 +1681,9 @@ __attribute__((hot)) long long compile_all_c(List_TrStr* c_files, TrStr exe_path
     /* pass */
     while ((i < c_files->len)) {
         /* pass */
-        TrStr _strtmp_t2767 = ({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(cmd), _tr_strz(_tr_str_lit(" \"")))); TrStr _cr = (List_TrStr_get(c_files, i)); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\""))); _tr_str_release(_cl); _cres; });
+        TrStr _strtmp_t2847 = ({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(cmd), _tr_strz(_tr_str_lit(" \"")))); TrStr _cr = (List_TrStr_get(c_files, i)); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\""))); _tr_str_release(_cl); _cres; });
         _tr_str_release(cmd);
-        cmd = _strtmp_t2767;
+        cmd = _strtmp_t2847;
         /* pass */
         i = (i + 1LL);
     }
@@ -1690,9 +1692,9 @@ __attribute__((hot)) long long compile_all_c(List_TrStr* c_files, TrStr exe_path
     /* pass */
     while ((i < link_paths->len)) {
         /* pass */
-        TrStr _strtmp_t2768 = ({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(cmd), _tr_strz(_tr_str_lit(" \"")))); TrStr _cr = (List_TrStr_get(link_paths, i)); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\""))); _tr_str_release(_cl); _cres; });
+        TrStr _strtmp_t2848 = ({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(cmd), _tr_strz(_tr_str_lit(" \"")))); TrStr _cr = (List_TrStr_get(link_paths, i)); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\""))); _tr_str_release(_cl); _cres; });
         _tr_str_release(cmd);
-        cmd = _strtmp_t2768;
+        cmd = _strtmp_t2848;
         /* pass */
         i = (i + 1LL);
     }
@@ -1701,22 +1703,22 @@ __attribute__((hot)) long long compile_all_c(List_TrStr* c_files, TrStr exe_path
     /* pass */
     while ((i < lib_flags->len)) {
         /* pass */
-        TrStr _strtmp_t2769 = ({ TrStr _cl = (_tr_strx_concat(_tr_strz(cmd), _tr_strz(_tr_str_lit(" ")))); TrStr _cr = (List_TrStr_get(lib_flags, i)); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; });
+        TrStr _strtmp_t2849 = ({ TrStr _cl = (_tr_strx_concat(_tr_strz(cmd), _tr_strz(_tr_str_lit(" ")))); TrStr _cr = (List_TrStr_get(lib_flags, i)); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; });
         _tr_str_release(cmd);
-        cmd = _strtmp_t2769;
+        cmd = _strtmp_t2849;
         /* pass */
         i = (i + 1LL);
     }
     /* pass */
-    TrStr _strtmp_t2770 = _tr_strx_concat(_tr_strz(cmd), _tr_strz(_tr_str_lit(" -lm")));
+    TrStr _strtmp_t2850 = _tr_strx_concat(_tr_strz(cmd), _tr_strz(_tr_str_lit(" -lm")));
     _tr_str_release(cmd);
-    cmd = _strtmp_t2770;
+    cmd = _strtmp_t2850;
     /* pass */
     if (debug_mode) {
         /* pass */
-        TrStr _strtmp_t2771 = _tr_strx_concat(_tr_strz(cmd), _tr_strz(_tr_str_lit(" -fsanitize=address,undefined -g")));
+        TrStr _strtmp_t2851 = _tr_strx_concat(_tr_strz(cmd), _tr_strz(_tr_str_lit(" -fsanitize=address,undefined -g")));
         _tr_str_release(cmd);
-        cmd = _strtmp_t2771;
+        cmd = _strtmp_t2851;
     }
     /* pass */
     if (out_is_windows(target, triple)) {
@@ -1740,9 +1742,9 @@ __attribute__((hot)) long long compile_all_c(List_TrStr* c_files, TrStr exe_path
         /* pass */
         if (need_wsa) {
             /* pass */
-            TrStr _strtmp_t2772 = _tr_strx_concat(_tr_strz(cmd), _tr_strz(_tr_str_lit(" -lws2_32 -mconsole")));
+            TrStr _strtmp_t2852 = _tr_strx_concat(_tr_strz(cmd), _tr_strz(_tr_str_lit(" -lws2_32 -mconsole")));
             _tr_str_release(cmd);
-            cmd = _strtmp_t2772;
+            cmd = _strtmp_t2852;
         }
     }
     /* pass */
@@ -1790,23 +1792,23 @@ __attribute__((hot)) long long compile_all_c_incremental(List_TrStr* c_files, Li
     /* pass */
     if ((strcmp(_tr_strz(target), _tr_strz(_tr_str_lit(""))) != 0)) {
         /* pass */
-        TrStr _strtmp_t2773 = resolve_target_triple(target);
+        TrStr _strtmp_t2853 = resolve_target_triple(target);
         _tr_str_release(triple);
-        triple = _strtmp_t2773;
+        triple = _strtmp_t2853;
         /* pass */
-        TrStr _strtmp_t2774 = resolve_cross_driver(triple);
+        TrStr _strtmp_t2854 = resolve_cross_driver(triple);
         _tr_str_release(cc);
-        cc = _strtmp_t2774;
+        cc = _strtmp_t2854;
         /* pass */
-        TrStr _strtmp_t2775 = target_extra_flags(triple);
+        TrStr _strtmp_t2855 = target_extra_flags(triple);
         _tr_str_release(cross_flags);
-        cross_flags = _strtmp_t2775;
+        cross_flags = _strtmp_t2855;
         /* pass */
         if ((strcmp(_tr_strz(sysroot), _tr_strz(_tr_str_lit(""))) != 0)) {
             /* pass */
-            TrStr _strtmp_t2776 = ({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(cross_flags), _tr_strz(_tr_str_lit(" --sysroot=\"")))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(sysroot)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\""))); _tr_str_release(_cl); _cres; });
+            TrStr _strtmp_t2856 = ({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(cross_flags), _tr_strz(_tr_str_lit(" --sysroot=\"")))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(sysroot)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\""))); _tr_str_release(_cl); _cres; });
             _tr_str_release(cross_flags);
-            cross_flags = _strtmp_t2776;
+            cross_flags = _strtmp_t2856;
         }
     }
     /* pass */
@@ -1814,54 +1816,54 @@ __attribute__((hot)) long long compile_all_c_incremental(List_TrStr* c_files, Li
     /* pass */
     if (static_link) {
         /* pass */
-        TrStr _strtmp_t2777 = _tr_str_lit(" -static");
+        TrStr _strtmp_t2857 = _tr_str_lit(" -static");
         _tr_str_release(static_flag);
-        static_flag = _strtmp_t2777;
+        static_flag = _strtmp_t2857;
     }
     /* pass */
     TrStr warn_flags = _tr_str_lit(" -Wno-string-compare -Wno-comment -Wno-attributes -Wno-unused-value");
     /* pass */
     if (is_clang_compiler(cc)) {
         /* pass */
-        TrStr _strtmp_t2778 = _tr_strx_concat(_tr_strz(warn_flags), _tr_strz(_tr_str_lit(" -Wno-unknown-attributes -Wno-parentheses-equality")));
+        TrStr _strtmp_t2858 = _tr_strx_concat(_tr_strz(warn_flags), _tr_strz(_tr_str_lit(" -Wno-unknown-attributes -Wno-parentheses-equality")));
         _tr_str_release(warn_flags);
-        warn_flags = _strtmp_t2778;
+        warn_flags = _strtmp_t2858;
     }
     /* pass */
     TrStr native_flags = _tr_str_lit("");
     /* pass */
     if (((strcmp(_tr_strz(target), _tr_strz(_tr_str_lit(""))) == 0) && (strcmp(_tr_strz(opt_level), _tr_strz(_tr_str_lit("3"))) == 0))) {
         /* pass */
-        TrStr _strtmp_t2779 = _tr_str_lit(" -march=native -funroll-loops");
+        TrStr _strtmp_t2859 = _tr_str_lit(" -march=native -funroll-loops");
         _tr_str_release(native_flags);
-        native_flags = _strtmp_t2779;
+        native_flags = _strtmp_t2859;
     }
     /* pass */
     TrStr overflow_flag = _tr_str_lit("");
     /* pass */
     if (((strcmp(_tr_strz(opt_level), _tr_strz(_tr_str_lit("3"))) != 0) && (strcmp(_tr_strz(opt_level), _tr_strz(_tr_str_lit("s"))) != 0))) {
         /* pass */
-        TrStr _strtmp_t2780 = _tr_str_lit(" -ftrapv");
+        TrStr _strtmp_t2860 = _tr_str_lit(" -ftrapv");
         _tr_str_release(overflow_flag);
-        overflow_flag = _strtmp_t2780;
+        overflow_flag = _strtmp_t2860;
     }
     /* pass */
     TrStr dbg = _tr_str_lit("");
     /* pass */
     if (debug_mode) {
         /* pass */
-        TrStr _strtmp_t2781 = _tr_str_lit(" -fsanitize=address,undefined -g");
+        TrStr _strtmp_t2861 = _tr_str_lit(" -fsanitize=address,undefined -g");
         _tr_str_release(dbg);
-        dbg = _strtmp_t2781;
+        dbg = _strtmp_t2861;
     }
     /* pass */
     TrStr pic = _tr_str_lit("");
     /* pass */
     if (build_shared) {
         /* pass */
-        TrStr _strtmp_t2782 = _tr_str_lit(" -fPIC");
+        TrStr _strtmp_t2862 = _tr_str_lit(" -fPIC");
         _tr_str_release(pic);
-        pic = _strtmp_t2782;
+        pic = _strtmp_t2862;
     }
     /* pass */
     TrStr common = ({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit(" -O")), _tr_strz(opt_level))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(overflow_flag)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(static_flag)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(native_flags)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(cross_flags)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(warn_flags)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(dbg)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(pic)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" -DTAURARO_NO_RT_HELPERS \"-I"))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(inc_dir)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\""))); _tr_str_release(_cl); _cres; });
@@ -1931,9 +1933,9 @@ __attribute__((hot)) long long compile_all_c_incremental(List_TrStr* c_files, Li
     /* pass */
     if (build_shared) {
         /* pass */
-        TrStr _strtmp_t2783 = _tr_str_lit(" -shared");
+        TrStr _strtmp_t2863 = _tr_str_lit(" -shared");
         _tr_str_release(shared_flag);
-        shared_flag = _strtmp_t2783;
+        shared_flag = _strtmp_t2863;
     }
     /* pass */
     TrStr cmd = ({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(cc), _tr_strz(common))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(shared_flag)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" -o \""))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(exe_path)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\""))); _tr_str_release(_cl); _cres; });
@@ -1942,9 +1944,9 @@ __attribute__((hot)) long long compile_all_c_incremental(List_TrStr* c_files, Li
     /* pass */
     while ((i < o_files->len)) {
         /* pass */
-        TrStr _strtmp_t2784 = ({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(cmd), _tr_strz(_tr_str_lit(" \"")))); TrStr _cr = (List_TrStr_get(o_files, i)); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\""))); _tr_str_release(_cl); _cres; });
+        TrStr _strtmp_t2864 = ({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(cmd), _tr_strz(_tr_str_lit(" \"")))); TrStr _cr = (List_TrStr_get(o_files, i)); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\""))); _tr_str_release(_cl); _cres; });
         _tr_str_release(cmd);
-        cmd = _strtmp_t2784;
+        cmd = _strtmp_t2864;
         /* pass */
         i = (i + 1LL);
     }
@@ -1953,9 +1955,9 @@ __attribute__((hot)) long long compile_all_c_incremental(List_TrStr* c_files, Li
     /* pass */
     while ((i < link_paths->len)) {
         /* pass */
-        TrStr _strtmp_t2785 = ({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(cmd), _tr_strz(_tr_str_lit(" \"")))); TrStr _cr = (List_TrStr_get(link_paths, i)); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\""))); _tr_str_release(_cl); _cres; });
+        TrStr _strtmp_t2865 = ({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(cmd), _tr_strz(_tr_str_lit(" \"")))); TrStr _cr = (List_TrStr_get(link_paths, i)); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\""))); _tr_str_release(_cl); _cres; });
         _tr_str_release(cmd);
-        cmd = _strtmp_t2785;
+        cmd = _strtmp_t2865;
         /* pass */
         i = (i + 1LL);
     }
@@ -1964,22 +1966,22 @@ __attribute__((hot)) long long compile_all_c_incremental(List_TrStr* c_files, Li
     /* pass */
     while ((i < lib_flags->len)) {
         /* pass */
-        TrStr _strtmp_t2786 = ({ TrStr _cl = (_tr_strx_concat(_tr_strz(cmd), _tr_strz(_tr_str_lit(" ")))); TrStr _cr = (List_TrStr_get(lib_flags, i)); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; });
+        TrStr _strtmp_t2866 = ({ TrStr _cl = (_tr_strx_concat(_tr_strz(cmd), _tr_strz(_tr_str_lit(" ")))); TrStr _cr = (List_TrStr_get(lib_flags, i)); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; });
         _tr_str_release(cmd);
-        cmd = _strtmp_t2786;
+        cmd = _strtmp_t2866;
         /* pass */
         i = (i + 1LL);
     }
     /* pass */
-    TrStr _strtmp_t2787 = _tr_strx_concat(_tr_strz(cmd), _tr_strz(_tr_str_lit(" -lm")));
+    TrStr _strtmp_t2867 = _tr_strx_concat(_tr_strz(cmd), _tr_strz(_tr_str_lit(" -lm")));
     _tr_str_release(cmd);
-    cmd = _strtmp_t2787;
+    cmd = _strtmp_t2867;
     /* pass */
     if (out_is_windows(target, triple)) {
         /* pass */
-        TrStr _strtmp_t2788 = _tr_strx_concat(_tr_strz(cmd), _tr_strz(_tr_str_lit(" -lws2_32 -mconsole")));
+        TrStr _strtmp_t2868 = _tr_strx_concat(_tr_strz(cmd), _tr_strz(_tr_str_lit(" -lws2_32 -mconsole")));
         _tr_str_release(cmd);
-        cmd = _strtmp_t2788;
+        cmd = _strtmp_t2868;
     }
     /* pass */
     if (verbose) {
@@ -2008,15 +2010,15 @@ __attribute__((hot)) long long compile_c_to_exe(TrStr c_path, TrStr exe_path, Tr
     /* pass */
     TrStr opt_flag = _tr_strx_concat(_tr_strz(_tr_str_lit("-O")), _tr_strz(opt_level));
     /* pass */
-    TrStr out_dir = ({ TrStr _at_t2789 = (dir_of_path(c_path)); __auto_type _wr = (strip_trailing_sep(_at_t2789)); _tr_str_release(_at_t2789); _wr; });
+    TrStr out_dir = ({ TrStr _at_t2869 = (dir_of_path(c_path)); __auto_type _wr = (strip_trailing_sep(_at_t2869)); _tr_str_release(_at_t2869); _wr; });
     /* pass */
     TrStr warn_flags = _tr_str_lit(" -Wno-string-compare -Wno-comment -Wno-attributes -Wno-unused-value");
     /* pass */
     if (is_clang_compiler(cc)) {
         /* pass */
-        TrStr _strtmp_t2790 = _tr_strx_concat(_tr_strz(warn_flags), _tr_strz(_tr_str_lit(" -Wno-unknown-attributes -Wno-parentheses-equality")));
+        TrStr _strtmp_t2870 = _tr_strx_concat(_tr_strz(warn_flags), _tr_strz(_tr_str_lit(" -Wno-unknown-attributes -Wno-parentheses-equality")));
         _tr_str_release(warn_flags);
-        warn_flags = _strtmp_t2790;
+        warn_flags = _strtmp_t2870;
     }
     /* pass */
     TrStr cmd = ({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(cc), _tr_strz(_tr_str_lit(" ")))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(opt_flag)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(warn_flags)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" -DTAURARO_NO_RT_HELPERS \"-I"))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(out_dir)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\" -o \""))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(exe_path)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\" \""))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(c_path)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\" -lm"))); _tr_str_release(_cl); _cres; });
@@ -2043,13 +2045,13 @@ __attribute__((hot)) void _print_diag(TrStr level, TrStr msg) {
     /* pass */
     if ((fix_idx >= 0LL)) {
         /* pass */
-        TrStr _strtmp_t2792 = ({ TrStr _wt_t2791 = (_tr_str_wrap(_tr_str_slice(_tr_strz(msg), 0LL, fix_idx))); __auto_type _wr = (_tr_str_wrap(_tr_str_strip(_wt_t2791.data))); _tr_str_release(_wt_t2791); _wr; });
+        TrStr _strtmp_t2872 = ({ TrStr _wt_t2871 = (_tr_str_wrap(_tr_str_slice(_tr_strz(msg), 0LL, fix_idx))); __auto_type _wr = (_tr_str_wrap(_tr_str_strip(_wt_t2871.data))); _tr_str_release(_wt_t2871); _wr; });
         _tr_str_release(main_part);
-        main_part = _strtmp_t2792;
+        main_part = _strtmp_t2872;
         /* pass */
-        TrStr _strtmp_t2794 = ({ TrStr _wt_t2793 = (_tr_str_wrap(_tr_str_slice(_tr_strz(msg), (fix_idx + 4LL), _tr_strlen(_tr_strz(msg))))); __auto_type _wr = (_tr_str_wrap(_tr_str_strip(_wt_t2793.data))); _tr_str_release(_wt_t2793); _wr; });
+        TrStr _strtmp_t2874 = ({ TrStr _wt_t2873 = (_tr_str_wrap(_tr_str_slice(_tr_strz(msg), (fix_idx + 4LL), _tr_strlen(_tr_strz(msg))))); __auto_type _wr = (_tr_str_wrap(_tr_str_strip(_wt_t2873.data))); _tr_str_release(_wt_t2873); _wr; });
         _tr_str_release(fix_part);
-        fix_part = _strtmp_t2794;
+        fix_part = _strtmp_t2874;
     }
     /* pass */
     TrStr loc_str = _tr_str_lit("");
@@ -2070,19 +2072,19 @@ __attribute__((hot)) void _print_diag(TrStr level, TrStr msg) {
         /* pass */
         if ((ln > 0LL)) {
             /* pass */
-            TrStr _strtmp_t2795 = _tr_str_retain(head);
+            TrStr _strtmp_t2875 = _tr_str_retain(head);
             _tr_str_release(loc_str);
-            loc_str = _strtmp_t2795;
+            loc_str = _strtmp_t2875;
             /* pass */
-            TrStr _strtmp_t2796 = loc_file(head);
+            TrStr _strtmp_t2876 = loc_file(head);
             _tr_str_release(file_path);
-            file_path = _strtmp_t2796;
+            file_path = _strtmp_t2876;
             /* pass */
             line_no = ln;
             /* pass */
-            TrStr _strtmp_t2797 = _tr_str_wrap(_tr_str_slice(_tr_strz(main_part), (pe + 2LL), _tr_strlen(_tr_strz(main_part))));
+            TrStr _strtmp_t2877 = _tr_str_wrap(_tr_str_slice(_tr_strz(main_part), (pe + 2LL), _tr_strlen(_tr_strz(main_part))));
             _tr_str_release(body);
-            body = _strtmp_t2797;
+            body = _strtmp_t2877;
         }
     }
     /* pass */
@@ -2090,9 +2092,9 @@ __attribute__((hot)) void _print_diag(TrStr level, TrStr msg) {
     /* pass */
     if ((strcmp(_tr_strz(level), _tr_strz(_tr_str_lit("warning"))) == 0)) {
         /* pass */
-        TrStr _strtmp_t2798 = c_yellow(level);
+        TrStr _strtmp_t2878 = c_yellow(level);
         _tr_str_release(lvl);
-        lvl = _strtmp_t2798;
+        lvl = _strtmp_t2878;
     }
     /* pass */
     ({ printf("%s", _tr_strz(({ TrStr _cl = (_tr_strx_concat(_tr_strz(lvl), _tr_strz(_tr_str_lit(": ")))); TrStr _cr = (c_bold(body)); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; }))); printf("\n"); });
@@ -2105,9 +2107,9 @@ __attribute__((hot)) void _print_diag(TrStr level, TrStr msg) {
         /* pass */
         if ((_tr_strlen(_tr_strz(file_path)) > 0LL)) {
             /* pass */
-            TrStr _strtmp_t2799 = read_file(file_path);
+            TrStr _strtmp_t2879 = read_file(file_path);
             _tr_str_release(src);
-            src = _strtmp_t2799;
+            src = _strtmp_t2879;
         }
         /* pass */
         if ((_tr_strlen(_tr_strz(src)) > 0LL)) {
@@ -2134,9 +2136,9 @@ __attribute__((hot)) void _print_diag(TrStr level, TrStr msg) {
                     /* pass */
                     if ((strcmp(_tr_strz(level), _tr_strz(_tr_str_lit("warning"))) == 0)) {
                         /* pass */
-                        TrStr _strtmp_t2800 = c_yellow(underline);
+                        TrStr _strtmp_t2880 = c_yellow(underline);
                         _tr_str_release(caret);
-                        caret = _strtmp_t2800;
+                        caret = _strtmp_t2880;
                     }
                     /* pass */
                     ({ printf("%s", _tr_strz(({ TrStr _cl = (({ TrStr _cl = (c_dim(gbar)); TrStr _cr = (spaces((col - 1LL))); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(caret)); _tr_str_release(_cl); _cres; }))); printf("\n"); });
@@ -2167,10 +2169,10 @@ __attribute__((hot)) void cleanup_build(TrStr build_dir, List_TrStr* all_c_files
         /* pass */
         if (_tr_is_windows()) {
             /* pass */
-            ({ TrStr _at_t2801 = (List_TrStr_get(all_c_files, di)); TrStr _aet_t2802 = (({ TrStr _cl = (({ TrStr _cr = (path_to_native(_at_t2801)); TrStr _cres = _tr_strx_concat(_tr_strz(_tr_str_lit("del /Q \"")), _cr.data); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\" 2>nul >nul"))); _tr_str_release(_cl); _cres; })); _tr_system(_aet_t2802.data); _tr_str_release(_at_t2801); _tr_str_release(_aet_t2802); });
+            ({ TrStr _at_t2881 = (List_TrStr_get(all_c_files, di)); TrStr _aet_t2882 = (({ TrStr _cl = (({ TrStr _cr = (path_to_native(_at_t2881)); TrStr _cres = _tr_strx_concat(_tr_strz(_tr_str_lit("del /Q \"")), _cr.data); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\" 2>nul >nul"))); _tr_str_release(_cl); _cres; })); _tr_system(_aet_t2882.data); _tr_str_release(_at_t2881); _tr_str_release(_aet_t2882); });
         } else {
             /* pass */
-            ({ TrStr _aet_t2803 = (({ TrStr _cl = (({ TrStr _cr = (List_TrStr_get(all_c_files, di)); TrStr _cres = _tr_strx_concat(_tr_strz(_tr_str_lit("rm -f \"")), _cr.data); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\""))); _tr_str_release(_cl); _cres; })); _tr_system(_aet_t2803.data); _tr_str_release(_aet_t2803); });
+            ({ TrStr _aet_t2883 = (({ TrStr _cl = (({ TrStr _cr = (List_TrStr_get(all_c_files, di)); TrStr _cres = _tr_strx_concat(_tr_strz(_tr_str_lit("rm -f \"")), _cr.data); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\""))); _tr_str_release(_cl); _cres; })); _tr_system(_aet_t2883.data); _tr_str_release(_aet_t2883); });
         }
         /* pass */
         di = (di + 1LL);
@@ -2178,22 +2180,22 @@ __attribute__((hot)) void cleanup_build(TrStr build_dir, List_TrStr* all_c_files
     /* pass */
     if (_tr_is_windows()) {
         /* pass */
-        ({ TrStr _at_t2804 = (_tr_strx_concat(_tr_strz(build_dir), _tr_strz(_tr_str_lit("tauraro_types.h")))); TrStr _aet_t2805 = (({ TrStr _cl = (({ TrStr _cr = (path_to_native(_at_t2804)); TrStr _cres = _tr_strx_concat(_tr_strz(_tr_str_lit("del /Q \"")), _cr.data); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\" 2>nul >nul"))); _tr_str_release(_cl); _cres; })); _tr_system(_aet_t2805.data); _tr_str_release(_at_t2804); _tr_str_release(_aet_t2805); });
+        ({ TrStr _at_t2884 = (_tr_strx_concat(_tr_strz(build_dir), _tr_strz(_tr_str_lit("tauraro_types.h")))); TrStr _aet_t2885 = (({ TrStr _cl = (({ TrStr _cr = (path_to_native(_at_t2884)); TrStr _cres = _tr_strx_concat(_tr_strz(_tr_str_lit("del /Q \"")), _cr.data); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\" 2>nul >nul"))); _tr_str_release(_cl); _cres; })); _tr_system(_aet_t2885.data); _tr_str_release(_at_t2884); _tr_str_release(_aet_t2885); });
         /* pass */
-        ({ TrStr _at_t2806 = (_tr_strx_concat(_tr_strz(build_dir), _tr_strz(_tr_str_lit("tauraro_rt.h")))); TrStr _aet_t2807 = (({ TrStr _cl = (({ TrStr _cr = (path_to_native(_at_t2806)); TrStr _cres = _tr_strx_concat(_tr_strz(_tr_str_lit("del /Q \"")), _cr.data); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\" 2>nul >nul"))); _tr_str_release(_cl); _cres; })); _tr_system(_aet_t2807.data); _tr_str_release(_at_t2806); _tr_str_release(_aet_t2807); });
+        ({ TrStr _at_t2886 = (_tr_strx_concat(_tr_strz(build_dir), _tr_strz(_tr_str_lit("tauraro_rt.h")))); TrStr _aet_t2887 = (({ TrStr _cl = (({ TrStr _cr = (path_to_native(_at_t2886)); TrStr _cres = _tr_strx_concat(_tr_strz(_tr_str_lit("del /Q \"")), _cr.data); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\" 2>nul >nul"))); _tr_str_release(_cl); _cres; })); _tr_system(_aet_t2887.data); _tr_str_release(_at_t2886); _tr_str_release(_aet_t2887); });
         /* pass */
-        ({ TrStr _at_t2808 = (_tr_strx_concat(_tr_strz(build_dir), _tr_strz(_tr_str_lit("include")))); TrStr _aet_t2809 = (({ TrStr _cl = (({ TrStr _cr = (path_to_native(_at_t2808)); TrStr _cres = _tr_strx_concat(_tr_strz(_tr_str_lit("rmdir /S /Q \"")), _cr.data); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\" 2>nul >nul"))); _tr_str_release(_cl); _cres; })); _tr_system(_aet_t2809.data); _tr_str_release(_at_t2808); _tr_str_release(_aet_t2809); });
+        ({ TrStr _at_t2888 = (_tr_strx_concat(_tr_strz(build_dir), _tr_strz(_tr_str_lit("include")))); TrStr _aet_t2889 = (({ TrStr _cl = (({ TrStr _cr = (path_to_native(_at_t2888)); TrStr _cres = _tr_strx_concat(_tr_strz(_tr_str_lit("rmdir /S /Q \"")), _cr.data); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\" 2>nul >nul"))); _tr_str_release(_cl); _cres; })); _tr_system(_aet_t2889.data); _tr_str_release(_at_t2888); _tr_str_release(_aet_t2889); });
         /* pass */
-        ({ TrStr _aet_t2810 = (({ TrStr _cl = (({ TrStr _cr = (path_to_native(build_dir)); TrStr _cres = _tr_strx_concat(_tr_strz(_tr_str_lit("rmdir \"")), _cr.data); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\" 2>nul >nul"))); _tr_str_release(_cl); _cres; })); _tr_system(_aet_t2810.data); _tr_str_release(_aet_t2810); });
+        ({ TrStr _aet_t2890 = (({ TrStr _cl = (({ TrStr _cr = (path_to_native(build_dir)); TrStr _cres = _tr_strx_concat(_tr_strz(_tr_str_lit("rmdir \"")), _cr.data); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\" 2>nul >nul"))); _tr_str_release(_cl); _cres; })); _tr_system(_aet_t2890.data); _tr_str_release(_aet_t2890); });
     } else {
         /* pass */
-        ({ TrStr _aet_t2811 = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("rm -f \"")), _tr_strz(build_dir))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("tauraro_types.h\""))); _tr_str_release(_cl); _cres; })); _tr_system(_aet_t2811.data); _tr_str_release(_aet_t2811); });
+        ({ TrStr _aet_t2891 = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("rm -f \"")), _tr_strz(build_dir))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("tauraro_types.h\""))); _tr_str_release(_cl); _cres; })); _tr_system(_aet_t2891.data); _tr_str_release(_aet_t2891); });
         /* pass */
-        ({ TrStr _aet_t2812 = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("rm -f \"")), _tr_strz(build_dir))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("tauraro_rt.h\""))); _tr_str_release(_cl); _cres; })); _tr_system(_aet_t2812.data); _tr_str_release(_aet_t2812); });
+        ({ TrStr _aet_t2892 = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("rm -f \"")), _tr_strz(build_dir))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("tauraro_rt.h\""))); _tr_str_release(_cl); _cres; })); _tr_system(_aet_t2892.data); _tr_str_release(_aet_t2892); });
         /* pass */
-        ({ TrStr _aet_t2813 = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("rm -rf \"")), _tr_strz(build_dir))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("include\""))); _tr_str_release(_cl); _cres; })); _tr_system(_aet_t2813.data); _tr_str_release(_aet_t2813); });
+        ({ TrStr _aet_t2893 = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("rm -rf \"")), _tr_strz(build_dir))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("include\""))); _tr_str_release(_cl); _cres; })); _tr_system(_aet_t2893.data); _tr_str_release(_aet_t2893); });
         /* pass */
-        ({ TrStr _aet_t2814 = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("rmdir \"")), _tr_strz(build_dir))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\" 2>/dev/null"))); _tr_str_release(_cl); _cres; })); _tr_system(_aet_t2814.data); _tr_str_release(_aet_t2814); });
+        ({ TrStr _aet_t2894 = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("rmdir \"")), _tr_strz(build_dir))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\" 2>/dev/null"))); _tr_str_release(_cl); _cres; })); _tr_system(_aet_t2894.data); _tr_str_release(_aet_t2894); });
     }
 }
 
@@ -2203,9 +2205,9 @@ __attribute__((hot)) void run_fmt(TrStr path0, bool write_in_place) {
     /* pass */
     if (((!file_exists(path)) && (!str_ends_with_dot_tr(path)))) {
         /* pass */
-        TrStr _strtmp_t2815 = _tr_strx_concat(_tr_strz(path), _tr_strz(_tr_str_lit(".tr")));
+        TrStr _strtmp_t2895 = _tr_strx_concat(_tr_strz(path), _tr_strz(_tr_str_lit(".tr")));
         _tr_str_release(path);
-        path = _strtmp_t2815;
+        path = _strtmp_t2895;
     }
     /* pass */
     TrStr source = read_file(path);
@@ -2297,12 +2299,66 @@ __attribute__((hot)) int main(int argc, char** argv) {
         /* pass */
         TrStr a1 = List_TrStr_get(args, 1LL);
         /* pass */
-        if (((strcmp(_tr_strz(a1), _tr_strz(_tr_str_lit("fmt"))) == 0) || (strcmp(_tr_strz(a1), _tr_strz(_tr_str_lit("lint"))) == 0))) {
+        if ((((strcmp(_tr_strz(a1), _tr_strz(_tr_str_lit("fmt"))) == 0) || (strcmp(_tr_strz(a1), _tr_strz(_tr_str_lit("lint"))) == 0)) || (strcmp(_tr_strz(a1), _tr_strz(_tr_str_lit("bindgen"))) == 0))) {
             /* pass */
-            TrStr _strtmp_t2816 = _tr_str_retain(a1);
+            TrStr _strtmp_t2896 = _tr_str_retain(a1);
             _tr_str_release(subcmd);
-            subcmd = _strtmp_t2816;
+            subcmd = _strtmp_t2896;
         }
+    }
+    /* pass */
+    if ((strcmp(_tr_strz(subcmd), _tr_strz(_tr_str_lit("bindgen"))) == 0)) {
+        /* pass */
+        TrStr bg_header = _tr_str_lit("");
+        /* pass */
+        TrStr bg_out = _tr_str_lit("bindings.tr");
+        /* pass */
+        TrStr bg_cc = detect_c_compiler();
+        /* pass */
+        long long bk = 2LL;
+        /* pass */
+        while ((bk < args->len)) {
+            /* pass */
+            TrStr ba = List_TrStr_get(args, bk);
+            /* pass */
+            if (((strcmp(_tr_strz(ba), _tr_strz(_tr_str_lit("-o"))) == 0) && ((bk + 1LL) < args->len))) {
+                /* pass */
+                TrStr _strtmp_t2897 = List_TrStr_get(args, (bk + 1LL));
+                _tr_str_release(bg_out);
+                bg_out = _strtmp_t2897;
+                /* pass */
+                bk = (bk + 1LL);
+            } else if (((strcmp(_tr_strz(ba), _tr_strz(_tr_str_lit("--cc"))) == 0) && ((bk + 1LL) < args->len))) {
+                /* pass */
+                TrStr _strtmp_t2898 = List_TrStr_get(args, (bk + 1LL));
+                _tr_str_release(bg_cc);
+                bg_cc = _strtmp_t2898;
+                /* pass */
+                bk = (bk + 1LL);
+            } else if ((!str_starts_with(ba, _tr_str_lit("-")))) {
+                /* pass */
+                if ((strcmp(_tr_strz(bg_header), _tr_strz(_tr_str_lit(""))) == 0)) {
+                    /* pass */
+                    TrStr _strtmp_t2899 = _tr_str_retain(ba);
+                    _tr_str_release(bg_header);
+                    bg_header = _strtmp_t2899;
+                }
+            }
+            /* pass */
+            bk = (bk + 1LL);
+            _tr_str_release(ba);
+        }
+        /* pass */
+        if ((strcmp(_tr_strz(bg_header), _tr_strz(_tr_str_lit(""))) == 0)) {
+            /* pass */
+            ({ printf("%s", _tr_strz(_tr_str_lit("error: bindgen requires a header: tauraroc bindgen <header.h> [-o out.tr] [--cc <compiler>]"))); printf("\n"); });
+            /* pass */
+            exit((int)(1LL));
+        }
+        /* pass */
+        run_bindgen(bg_header, bg_out, bg_cc);
+        /* pass */
+        exit((int)(0LL));
     }
     /* pass */
     if ((strcmp(_tr_strz(subcmd), _tr_strz(_tr_str_lit("fmt"))) == 0)) {
@@ -2324,9 +2380,9 @@ __attribute__((hot)) int main(int argc, char** argv) {
                 /* pass */
                 if ((strcmp(_tr_strz(fpath), _tr_strz(_tr_str_lit(""))) == 0)) {
                     /* pass */
-                    TrStr _strtmp_t2817 = _tr_str_retain(fa);
+                    TrStr _strtmp_t2900 = _tr_str_retain(fa);
                     _tr_str_release(fpath);
-                    fpath = _strtmp_t2817;
+                    fpath = _strtmp_t2900;
                 }
             }
             /* pass */
@@ -2419,75 +2475,75 @@ __attribute__((hot)) int main(int argc, char** argv) {
             /* pass */
             i = (i + 1LL);
             /* pass */
-            TrStr _strtmp_t2818 = List_TrStr_get(args, i);
+            TrStr _strtmp_t2901 = List_TrStr_get(args, i);
             _tr_str_release(emit_mode);
-            emit_mode = _strtmp_t2818;
+            emit_mode = _strtmp_t2901;
         } else if (((strcmp(_tr_strz(arg), _tr_strz(_tr_str_lit("--emit-ld"))) == 0) && ((i + 1LL) < args->len))) {
             /* pass */
             i = (i + 1LL);
             /* pass */
-            TrStr _strtmp_t2819 = List_TrStr_get(args, i);
+            TrStr _strtmp_t2902 = List_TrStr_get(args, i);
             _tr_str_release(emit_ld);
-            emit_ld = _strtmp_t2819;
+            emit_ld = _strtmp_t2902;
         } else if (((strcmp(_tr_strz(arg), _tr_strz(_tr_str_lit("--backend"))) == 0) && ((i + 1LL) < args->len))) {
             /* pass */
             i = (i + 1LL);
             /* pass */
-            TrStr _strtmp_t2820 = List_TrStr_get(args, i);
+            TrStr _strtmp_t2903 = List_TrStr_get(args, i);
             _tr_str_release(backend);
-            backend = _strtmp_t2820;
+            backend = _strtmp_t2903;
         } else if (((strcmp(_tr_strz(arg), _tr_strz(_tr_str_lit("-o"))) == 0) && ((i + 1LL) < args->len))) {
             /* pass */
             i = (i + 1LL);
             /* pass */
-            TrStr _strtmp_t2821 = List_TrStr_get(args, i);
+            TrStr _strtmp_t2904 = List_TrStr_get(args, i);
             _tr_str_release(output_path);
-            output_path = _strtmp_t2821;
+            output_path = _strtmp_t2904;
         } else if ((((strcmp(_tr_strz(arg), _tr_strz(_tr_str_lit("-d"))) == 0) || (strcmp(_tr_strz(arg), _tr_strz(_tr_str_lit("--dir"))) == 0)) && ((i + 1LL) < args->len))) {
             /* pass */
             i = (i + 1LL);
             /* pass */
-            TrStr _strtmp_t2822 = List_TrStr_get(args, i);
+            TrStr _strtmp_t2905 = List_TrStr_get(args, i);
             _tr_str_release(out_dir);
-            out_dir = _strtmp_t2822;
+            out_dir = _strtmp_t2905;
         } else if (((strcmp(_tr_strz(arg), _tr_strz(_tr_str_lit("--link"))) == 0) && ((i + 1LL) < args->len))) {
             /* pass */
             i = (i + 1LL);
             /* pass */
-            ({ TrStr _at_t2823 = (List_TrStr_get(args, i)); List_TrStr_append(link_paths, _at_t2823); _tr_str_release(_at_t2823); });
+            ({ TrStr _at_t2906 = (List_TrStr_get(args, i)); List_TrStr_append(link_paths, _at_t2906); _tr_str_release(_at_t2906); });
         } else if (((strcmp(_tr_strz(arg), _tr_strz(_tr_str_lit("-l"))) == 0) && ((i + 1LL) < args->len))) {
             /* pass */
             i = (i + 1LL);
             /* pass */
-            ({ TrStr _at_t2824 = (({ TrStr _cr = (List_TrStr_get(args, i)); TrStr _cres = _tr_strx_concat(_tr_strz(_tr_str_lit("-l")), _cr.data); _tr_str_release(_cr); _cres; })); List_TrStr_append(lib_flags, _at_t2824); _tr_str_release(_at_t2824); });
+            ({ TrStr _at_t2907 = (({ TrStr _cr = (List_TrStr_get(args, i)); TrStr _cres = _tr_strx_concat(_tr_strz(_tr_str_lit("-l")), _cr.data); _tr_str_release(_cr); _cres; })); List_TrStr_append(lib_flags, _at_t2907); _tr_str_release(_at_t2907); });
         } else if ((str_starts_with(arg, _tr_str_lit("-l")) && (strcmp(_tr_strz(arg), _tr_strz(_tr_str_lit("-l"))) != 0))) {
             /* pass */
             List_TrStr_append(lib_flags, arg);
         } else if ((strcmp(_tr_strz(arg), _tr_strz(_tr_str_lit("-O0"))) == 0)) {
             /* pass */
-            TrStr _strtmp_t2825 = _tr_str_lit("0");
+            TrStr _strtmp_t2908 = _tr_str_lit("0");
             _tr_str_release(opt_level);
-            opt_level = _strtmp_t2825;
+            opt_level = _strtmp_t2908;
         } else if ((strcmp(_tr_strz(arg), _tr_strz(_tr_str_lit("-O1"))) == 0)) {
             /* pass */
-            TrStr _strtmp_t2826 = _tr_str_lit("1");
+            TrStr _strtmp_t2909 = _tr_str_lit("1");
             _tr_str_release(opt_level);
-            opt_level = _strtmp_t2826;
+            opt_level = _strtmp_t2909;
         } else if ((strcmp(_tr_strz(arg), _tr_strz(_tr_str_lit("-O2"))) == 0)) {
             /* pass */
-            TrStr _strtmp_t2827 = _tr_str_lit("2");
+            TrStr _strtmp_t2910 = _tr_str_lit("2");
             _tr_str_release(opt_level);
-            opt_level = _strtmp_t2827;
+            opt_level = _strtmp_t2910;
         } else if ((strcmp(_tr_strz(arg), _tr_strz(_tr_str_lit("-O3"))) == 0)) {
             /* pass */
-            TrStr _strtmp_t2828 = _tr_str_lit("3");
+            TrStr _strtmp_t2911 = _tr_str_lit("3");
             _tr_str_release(opt_level);
-            opt_level = _strtmp_t2828;
+            opt_level = _strtmp_t2911;
         } else if ((strcmp(_tr_strz(arg), _tr_strz(_tr_str_lit("-Os"))) == 0)) {
             /* pass */
-            TrStr _strtmp_t2829 = _tr_str_lit("s");
+            TrStr _strtmp_t2912 = _tr_str_lit("s");
             _tr_str_release(opt_level);
-            opt_level = _strtmp_t2829;
+            opt_level = _strtmp_t2912;
         } else if ((strcmp(_tr_strz(arg), _tr_strz(_tr_str_lit("--static"))) == 0)) {
             /* pass */
             static_link = true;
@@ -2495,16 +2551,16 @@ __attribute__((hot)) int main(int argc, char** argv) {
             /* pass */
             i = (i + 1LL);
             /* pass */
-            TrStr _strtmp_t2830 = List_TrStr_get(args, i);
+            TrStr _strtmp_t2913 = List_TrStr_get(args, i);
             _tr_str_release(target);
-            target = _strtmp_t2830;
+            target = _strtmp_t2913;
         } else if (((strcmp(_tr_strz(arg), _tr_strz(_tr_str_lit("--sysroot"))) == 0) && ((i + 1LL) < args->len))) {
             /* pass */
             i = (i + 1LL);
             /* pass */
-            TrStr _strtmp_t2831 = List_TrStr_get(args, i);
+            TrStr _strtmp_t2914 = List_TrStr_get(args, i);
             _tr_str_release(sysroot);
-            sysroot = _strtmp_t2831;
+            sysroot = _strtmp_t2914;
         } else if ((strcmp(_tr_strz(arg), _tr_strz(_tr_str_lit("--debug"))) == 0)) {
             /* pass */
             debug_mode = true;
@@ -2519,14 +2575,14 @@ __attribute__((hot)) int main(int argc, char** argv) {
             no_heap = true;
         } else if ((strcmp(_tr_strz(arg), _tr_strz(_tr_str_lit("--freestanding"))) == 0)) {
             /* pass */
-            TrStr _strtmp_t2832 = _tr_str_lit("TAURARO_KERNEL");
+            TrStr _strtmp_t2915 = _tr_str_lit("TAURARO_KERNEL");
             _tr_str_release(tier_define);
-            tier_define = _strtmp_t2832;
+            tier_define = _strtmp_t2915;
         } else if ((strcmp(_tr_strz(arg), _tr_strz(_tr_str_lit("--no-std"))) == 0)) {
             /* pass */
-            TrStr _strtmp_t2833 = _tr_str_lit("TAURARO_NO_OS");
+            TrStr _strtmp_t2916 = _tr_str_lit("TAURARO_NO_OS");
             _tr_str_release(tier_define);
-            tier_define = _strtmp_t2833;
+            tier_define = _strtmp_t2916;
         } else if ((strcmp(_tr_strz(arg), _tr_strz(_tr_str_lit("--lib"))) == 0)) {
             /* pass */
             lib_mode = true;
@@ -2534,9 +2590,9 @@ __attribute__((hot)) int main(int argc, char** argv) {
             /* pass */
             if ((strcmp(_tr_strz(input_path), _tr_strz(_tr_str_lit(""))) == 0)) {
                 /* pass */
-                TrStr _strtmp_t2834 = _tr_str_retain(arg);
+                TrStr _strtmp_t2917 = _tr_str_retain(arg);
                 _tr_str_release(input_path);
-                input_path = _strtmp_t2834;
+                input_path = _strtmp_t2917;
             }
         }
         /* pass */
@@ -2555,9 +2611,9 @@ __attribute__((hot)) int main(int argc, char** argv) {
     /* pass */
     if (((!file_exists(input_path)) && (!str_ends_with_dot_tr(input_path)))) {
         /* pass */
-        TrStr _strtmp_t2835 = _tr_strx_concat(_tr_strz(input_path), _tr_strz(_tr_str_lit(".tr")));
+        TrStr _strtmp_t2918 = _tr_strx_concat(_tr_strz(input_path), _tr_strz(_tr_str_lit(".tr")));
         _tr_str_release(input_path);
-        input_path = _strtmp_t2835;
+        input_path = _strtmp_t2918;
     }
     /* pass */
     if ((!file_exists(input_path))) {
@@ -2574,15 +2630,15 @@ __attribute__((hot)) int main(int argc, char** argv) {
     /* pass */
     ModuleResolver* resolver = ModuleResolver_init();
     /* pass */
-    TrStr bin_dir = ({ TrStr _at_t2836 = (_tr_str_wrap(_tr_exe_dir())); __auto_type _wr = (strip_trailing_sep_inline(_at_t2836)); _tr_str_release(_at_t2836); _wr; });
+    TrStr bin_dir = ({ TrStr _at_t2919 = (_tr_str_wrap(_tr_exe_dir())); __auto_type _wr = (strip_trailing_sep_inline(_at_t2919)); _tr_str_release(_at_t2919); _wr; });
     /* pass */
     ModuleResolver_add_search_path(resolver, bin_dir);
     /* pass */
-    ({ TrStr _at_t2837 = (_tr_strx_concat(_tr_strz(bin_dir), _tr_strz(_tr_str_lit("/std")))); ModuleResolver_add_search_path(resolver, _at_t2837); _tr_str_release(_at_t2837); });
+    ({ TrStr _at_t2920 = (_tr_strx_concat(_tr_strz(bin_dir), _tr_strz(_tr_str_lit("/std")))); ModuleResolver_add_search_path(resolver, _at_t2920); _tr_str_release(_at_t2920); });
     /* pass */
-    ({ TrStr _at_t2838 = (_tr_strx_concat(_tr_strz(bin_dir), _tr_strz(_tr_str_lit("/packages")))); ModuleResolver_add_search_path(resolver, _at_t2838); _tr_str_release(_at_t2838); });
+    ({ TrStr _at_t2921 = (_tr_strx_concat(_tr_strz(bin_dir), _tr_strz(_tr_str_lit("/packages")))); ModuleResolver_add_search_path(resolver, _at_t2921); _tr_str_release(_at_t2921); });
     /* pass */
-    ({ TrStr _at_t2839 = (_tr_strx_concat(_tr_strz(bin_dir), _tr_strz(_tr_str_lit("/packages/sites")))); ModuleResolver_add_search_path(resolver, _at_t2839); _tr_str_release(_at_t2839); });
+    ({ TrStr _at_t2922 = (_tr_strx_concat(_tr_strz(bin_dir), _tr_strz(_tr_str_lit("/packages/sites")))); ModuleResolver_add_search_path(resolver, _at_t2922); _tr_str_release(_at_t2922); });
     /* pass */
     ModuleResolver_add_search_path(resolver, _tr_str_lit("packages"));
     /* pass */
@@ -2598,7 +2654,7 @@ __attribute__((hot)) int main(int argc, char** argv) {
         /* pass */
         while ((epi < ep_count)) {
             /* pass */
-            ({ TrStr _at_t2840 = (get_path_env_entry(tauraro_path_env, epi)); ModuleResolver_add_search_path(resolver, _at_t2840); _tr_str_release(_at_t2840); });
+            ({ TrStr _at_t2923 = (get_path_env_entry(tauraro_path_env, epi)); ModuleResolver_add_search_path(resolver, _at_t2923); _tr_str_release(_at_t2923); });
             /* pass */
             epi = (epi + 1LL);
         }
@@ -2669,7 +2725,7 @@ __attribute__((hot)) int main(int argc, char** argv) {
         /* pass */
         while ((wk < sema->warnings->len)) {
             /* pass */
-            ({ TrStr _at_t2841 = (List_TrStr_get(sema->warnings, wk)); _print_diag(_tr_str_lit("warning"), _at_t2841); _tr_str_release(_at_t2841); });
+            ({ TrStr _at_t2924 = (List_TrStr_get(sema->warnings, wk)); _print_diag(_tr_str_lit("warning"), _at_t2924); _tr_str_release(_at_t2924); });
             /* pass */
             wk = (wk + 1LL);
         }
@@ -2681,7 +2737,7 @@ __attribute__((hot)) int main(int argc, char** argv) {
         /* pass */
         while ((k < sema->errors->len)) {
             /* pass */
-            ({ TrStr _at_t2842 = (List_TrStr_get(sema->errors, k)); _print_diag(_tr_str_lit("error"), _at_t2842); _tr_str_release(_at_t2842); });
+            ({ TrStr _at_t2925 = (List_TrStr_get(sema->errors, k)); _print_diag(_tr_str_lit("error"), _at_t2925); _tr_str_release(_at_t2925); });
             /* pass */
             k = (k + 1LL);
         }
@@ -2808,9 +2864,9 @@ __attribute__((hot)) int main(int argc, char** argv) {
         /* pass */
         if ((strcmp(_tr_strz(target), _tr_strz(_tr_str_lit(""))) != 0)) {
             /* pass */
-            TrStr _strtmp_t2843 = resolve_target_triple(target);
+            TrStr _strtmp_t2926 = resolve_target_triple(target);
             _tr_str_release(lx_triple);
-            lx_triple = _strtmp_t2843;
+            lx_triple = _strtmp_t2926;
             /* pass */
             lx_is_cross = true;
         }
@@ -2819,9 +2875,9 @@ __attribute__((hot)) int main(int argc, char** argv) {
         /* pass */
         if (lx_is_cross) {
             /* pass */
-            TrStr _strtmp_t2844 = target_extra_flags(lx_triple);
+            TrStr _strtmp_t2927 = target_extra_flags(lx_triple);
             _tr_str_release(lx_tflags);
-            lx_tflags = _strtmp_t2844;
+            lx_tflags = _strtmp_t2927;
         }
         /* pass */
         TrStr lx_xcc = _tr_str_lit("");
@@ -2834,30 +2890,30 @@ __attribute__((hot)) int main(int argc, char** argv) {
             /* pass */
             if (_tr_is_windows()) {
                 /* pass */
-                TrStr _strtmp_t2845 = _tr_str_lit("nul");
+                TrStr _strtmp_t2928 = _tr_str_lit("nul");
                 _tr_str_release(lx_xnull);
-                lx_xnull = _strtmp_t2845;
+                lx_xnull = _strtmp_t2928;
             }
             /* pass */
-            if (({ TrStr _aet_t2846 = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("zig version >")), _tr_strz(lx_xnull))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" 2>&1"))); _tr_str_release(_cl); _cres; })); __auto_type _wr = ((_tr_system(_aet_t2846.data) == 0LL)); _tr_str_release(_aet_t2846); _wr; })) {
+            if (({ TrStr _aet_t2929 = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("zig version >")), _tr_strz(lx_xnull))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" 2>&1"))); _tr_str_release(_cl); _cres; })); __auto_type _wr = ((_tr_system(_aet_t2929.data) == 0LL)); _tr_str_release(_aet_t2929); _wr; })) {
                 /* pass */
                 TrStr lx_zt = zig_target_of(lx_triple);
                 /* pass */
                 if ((strcmp(_tr_strz(lx_zt), _tr_strz(_tr_str_lit(""))) != 0)) {
                     /* pass */
-                    TrStr _strtmp_t2847 = _tr_strx_concat(_tr_strz(_tr_str_lit("zig cc -target ")), _tr_strz(lx_zt));
+                    TrStr _strtmp_t2930 = _tr_strx_concat(_tr_strz(_tr_str_lit("zig cc -target ")), _tr_strz(lx_zt));
                     _tr_str_release(lx_xcc);
-                    lx_xcc = _strtmp_t2847;
+                    lx_xcc = _strtmp_t2930;
                     /* pass */
                     lx_via_zig = true;
                 }
             }
             /* pass */
-            if (({ TrStr _aet_t2848 = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("clang --version >")), _tr_strz(lx_xnull))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" 2>&1"))); _tr_str_release(_cl); _cres; })); __auto_type _wr = (((strcmp(_tr_strz(lx_xcc), _tr_strz(_tr_str_lit(""))) == 0) && (_tr_system(_aet_t2848.data) == 0LL))); _tr_str_release(_aet_t2848); _wr; })) {
+            if (({ TrStr _aet_t2931 = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("clang --version >")), _tr_strz(lx_xnull))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" 2>&1"))); _tr_str_release(_cl); _cres; })); __auto_type _wr = (((strcmp(_tr_strz(lx_xcc), _tr_strz(_tr_str_lit(""))) == 0) && (_tr_system(_aet_t2931.data) == 0LL))); _tr_str_release(_aet_t2931); _wr; })) {
                 /* pass */
-                TrStr _strtmp_t2849 = _tr_strx_concat(_tr_strz(_tr_str_lit("clang --target=")), _tr_strz(lx_triple));
+                TrStr _strtmp_t2932 = _tr_strx_concat(_tr_strz(_tr_str_lit("clang --target=")), _tr_strz(lx_triple));
                 _tr_str_release(lx_xcc);
-                lx_xcc = _strtmp_t2849;
+                lx_xcc = _strtmp_t2932;
             }
             /* pass */
             if ((strcmp(_tr_strz(lx_xcc), _tr_strz(_tr_str_lit(""))) == 0)) {
@@ -2881,23 +2937,23 @@ __attribute__((hot)) int main(int argc, char** argv) {
             /* pass */
             if (_tr_str_contains(_tr_strz(lx_triple), _tr_strz(_tr_str_lit("wasm")))) {
                 /* pass */
-                TrStr _strtmp_t2850 = _tr_str_lit(".wasm");
+                TrStr _strtmp_t2933 = _tr_str_lit(".wasm");
                 _tr_str_release(lx_ext);
-                lx_ext = _strtmp_t2850;
+                lx_ext = _strtmp_t2933;
             } else if ((_tr_str_contains(_tr_strz(lx_triple), _tr_strz(_tr_str_lit("windows"))) || _tr_str_contains(_tr_strz(lx_triple), _tr_strz(_tr_str_lit("mingw"))))) {
                 /* pass */
-                TrStr _strtmp_t2851 = _tr_str_lit(".exe");
+                TrStr _strtmp_t2934 = _tr_str_lit(".exe");
                 _tr_str_release(lx_ext);
-                lx_ext = _strtmp_t2851;
+                lx_ext = _strtmp_t2934;
             }
         } else if (_tr_is_windows()) {
             /* pass */
-            TrStr _strtmp_t2852 = _tr_str_lit(".exe");
+            TrStr _strtmp_t2935 = _tr_str_lit(".exe");
             _tr_str_release(lx_ext);
-            lx_ext = _strtmp_t2852;
+            lx_ext = _strtmp_t2935;
         }
         /* pass */
-        TrStr lx_exe = ({ TrStr _at_t2853 = (resolve_output_stem(input_path, output_path, out_dir)); __auto_type _wr = (ensure_ext(_at_t2853, lx_ext)); _tr_str_release(_at_t2853); _wr; });
+        TrStr lx_exe = ({ TrStr _at_t2936 = (resolve_output_stem(input_path, output_path, out_dir)); __auto_type _wr = (ensure_ext(_at_t2936, lx_ext)); _tr_str_release(_at_t2936); _wr; });
         /* pass */
         make_dir(_tr_str_lit("build"));
         /* pass */
@@ -2905,9 +2961,9 @@ __attribute__((hot)) int main(int argc, char** argv) {
         /* pass */
         if (((lx_is_cross && _tr_str_contains(_tr_strz(lx_triple), _tr_strz(_tr_str_lit("wasm")))) && _tr_str_contains(_tr_strz(llvm_ir), _tr_strz(_tr_str_lit("define i32 @main()"))))) {
             /* pass */
-            TrStr _strtmp_t2854 = _tr_strx_concat(_tr_strz(llvm_ir), _tr_strz(_tr_str_lit("\n@__main_void = hidden alias i32 (), ptr @main\n")));
+            TrStr _strtmp_t2937 = _tr_strx_concat(_tr_strz(llvm_ir), _tr_strz(_tr_str_lit("\n@__main_void = hidden alias i32 (), ptr @main\n")));
             _tr_str_release(llvm_ir);
-            llvm_ir = _strtmp_t2854;
+            llvm_ir = _strtmp_t2937;
         }
         /* pass */
         write_file(lx_ll, llvm_ir);
@@ -2934,25 +2990,25 @@ __attribute__((hot)) int main(int argc, char** argv) {
         /* pass */
         if (lx_is_cross) {
             /* pass */
-            TrStr _strtmp_t2855 = _tr_str_retain(lx_xcc);
+            TrStr _strtmp_t2938 = _tr_str_retain(lx_xcc);
             _tr_str_release(lx_cc);
-            lx_cc = _strtmp_t2855;
+            lx_cc = _strtmp_t2938;
             /* pass */
-            TrStr _strtmp_t2856 = _tr_str_retain(lx_tflags);
+            TrStr _strtmp_t2939 = _tr_str_retain(lx_tflags);
             _tr_str_release(lx_xflags);
-            lx_xflags = _strtmp_t2856;
+            lx_xflags = _strtmp_t2939;
             /* pass */
             if ((strcmp(_tr_strz(sysroot), _tr_strz(_tr_str_lit(""))) != 0)) {
                 /* pass */
-                TrStr _strtmp_t2857 = ({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(lx_xflags), _tr_strz(_tr_str_lit(" --sysroot=\"")))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(sysroot)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\""))); _tr_str_release(_cl); _cres; });
+                TrStr _strtmp_t2940 = ({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(lx_xflags), _tr_strz(_tr_str_lit(" --sysroot=\"")))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(sysroot)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\""))); _tr_str_release(_cl); _cres; });
                 _tr_str_release(lx_xflags);
-                lx_xflags = _strtmp_t2857;
+                lx_xflags = _strtmp_t2940;
             }
         }
         /* pass */
         TrStr lx_rto = _tr_str_lit("build/llvm_runtime.o");
         /* pass */
-        long long lx_rc = ({ TrStr _aet_t2858 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(lx_cc), _tr_strz(lx_xflags))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" -O2 -w -c \"-I"))); _tr_str_release(_cl); _cres; })); TrStr _cr = (dir_of_path(lx_abi)); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\" \""))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(lx_abi)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\" -o "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(lx_rto)); _tr_str_release(_cl); _cres; })); __auto_type _wr = (_tr_system(_aet_t2858.data)); _tr_str_release(_aet_t2858); _wr; });
+        long long lx_rc = ({ TrStr _aet_t2941 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(lx_cc), _tr_strz(lx_xflags))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" -O2 -w -c \"-I"))); _tr_str_release(_cl); _cres; })); TrStr _cr = (dir_of_path(lx_abi)); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\" \""))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(lx_abi)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\" -o "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(lx_rto)); _tr_str_release(_cl); _cres; })); __auto_type _wr = (_tr_system(_aet_t2941.data)); _tr_str_release(_aet_t2941); _wr; });
         /* pass */
         if ((lx_rc != 0LL)) {
             /* pass */
@@ -2974,9 +3030,9 @@ __attribute__((hot)) int main(int argc, char** argv) {
         /* pass */
         if (_tr_is_windows()) {
             /* pass */
-            TrStr _strtmp_t2859 = _tr_str_lit("nul");
+            TrStr _strtmp_t2942 = _tr_str_lit("nul");
             _tr_str_release(lx_null);
-            lx_null = _strtmp_t2859;
+            lx_null = _strtmp_t2942;
         }
         /* pass */
         TrStr lx_libs = _tr_str_lit(" -lm");
@@ -2985,13 +3041,13 @@ __attribute__((hot)) int main(int argc, char** argv) {
         /* pass */
         if (_tr_is_windows()) {
             /* pass */
-            TrStr _strtmp_t2860 = _tr_strx_concat(_tr_strz(lx_libs), _tr_strz(_tr_str_lit(" -lws2_32 -lucrtbase -mconsole")));
+            TrStr _strtmp_t2943 = _tr_strx_concat(_tr_strz(lx_libs), _tr_strz(_tr_str_lit(" -lws2_32 -lucrtbase -mconsole")));
             _tr_str_release(lx_libs);
-            lx_libs = _strtmp_t2860;
+            lx_libs = _strtmp_t2943;
             /* pass */
-            TrStr _strtmp_t2861 = _tr_strx_concat(_tr_strz(lx_libs_gcc), _tr_strz(_tr_str_lit(" -lws2_32")));
+            TrStr _strtmp_t2944 = _tr_strx_concat(_tr_strz(lx_libs_gcc), _tr_strz(_tr_str_lit(" -lws2_32")));
             _tr_str_release(lx_libs_gcc);
-            lx_libs_gcc = _strtmp_t2861;
+            lx_libs_gcc = _strtmp_t2944;
         }
         /* pass */
         bool lx_built = false;
@@ -3004,12 +3060,12 @@ __attribute__((hot)) int main(int argc, char** argv) {
             /* pass */
             if ((strcmp(_tr_strz(sysroot), _tr_strz(_tr_str_lit(""))) != 0)) {
                 /* pass */
-                TrStr _strtmp_t2862 = ({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(lx_cg), _tr_strz(_tr_str_lit(" --sysroot=\"")))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(sysroot)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\""))); _tr_str_release(_cl); _cres; });
+                TrStr _strtmp_t2945 = ({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(lx_cg), _tr_strz(_tr_str_lit(" --sysroot=\"")))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(sysroot)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\""))); _tr_str_release(_cl); _cres; });
                 _tr_str_release(lx_cg);
-                lx_cg = _strtmp_t2862;
+                lx_cg = _strtmp_t2945;
             }
             /* pass */
-            if (({ TrStr _aet_t2863 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(lx_cg), _tr_strz(_tr_str_lit(" -c \"")))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(lx_ll)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\" -o "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(lx_xobj)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" 2>build/llvm_link.log"))); _tr_str_release(_cl); _cres; })); __auto_type _wr = ((_tr_system(_aet_t2863.data) != 0LL)); _tr_str_release(_aet_t2863); _wr; })) {
+            if (({ TrStr _aet_t2946 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(lx_cg), _tr_strz(_tr_str_lit(" -c \"")))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(lx_ll)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\" -o "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(lx_xobj)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" 2>build/llvm_link.log"))); _tr_str_release(_cl); _cres; })); __auto_type _wr = ((_tr_system(_aet_t2946.data) != 0LL)); _tr_str_release(_aet_t2946); _wr; })) {
                 /* pass */
                 ({ printf("%s", _tr_strz(({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (c_red(_tr_str_lit("error"))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(": LLVM cross code generation failed for "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(lx_triple)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" (see build/llvm_link.log)"))); _tr_str_release(_cl); _cres; }))); printf("\n"); });
                 /* pass */
@@ -3025,37 +3081,37 @@ __attribute__((hot)) int main(int argc, char** argv) {
             /* pass */
             if ((_tr_str_contains(_tr_strz(lx_triple), _tr_strz(_tr_str_lit("wasm"))) || _tr_str_contains(_tr_strz(lx_tflags), _tr_strz(_tr_str_lit("nostdlib"))))) {
                 /* pass */
-                TrStr _strtmp_t2864 = _tr_str_lit("");
+                TrStr _strtmp_t2947 = _tr_str_lit("");
                 _tr_str_release(lx_xlibs);
-                lx_xlibs = _strtmp_t2864;
+                lx_xlibs = _strtmp_t2947;
             } else if ((_tr_str_contains(_tr_strz(lx_triple), _tr_strz(_tr_str_lit("windows"))) || _tr_str_contains(_tr_strz(lx_triple), _tr_strz(_tr_str_lit("mingw"))))) {
                 /* pass */
-                TrStr _strtmp_t2865 = _tr_str_lit(" -lm -lws2_32 -mconsole");
+                TrStr _strtmp_t2948 = _tr_str_lit(" -lm -lws2_32 -mconsole");
                 _tr_str_release(lx_xlibs);
-                lx_xlibs = _strtmp_t2865;
+                lx_xlibs = _strtmp_t2948;
             }
             /* pass */
             TrStr lx_xld = _tr_str_lit("");
             /* pass */
             if (((!_tr_str_contains(_tr_strz(lx_triple), _tr_strz(_tr_str_lit("wasm")))) && (!lx_via_zig))) {
                 /* pass */
-                TrStr _strtmp_t2866 = detect_lld_flag();
+                TrStr _strtmp_t2949 = detect_lld_flag();
                 _tr_str_release(lx_xld);
-                lx_xld = _strtmp_t2866;
+                lx_xld = _strtmp_t2949;
             }
             /* pass */
             TrStr lx_xlink = _tr_strx_concat(_tr_strz(lx_xcc), _tr_strz(lx_tflags));
             /* pass */
             if ((strcmp(_tr_strz(sysroot), _tr_strz(_tr_str_lit(""))) != 0)) {
                 /* pass */
-                TrStr _strtmp_t2867 = ({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(lx_xlink), _tr_strz(_tr_str_lit(" --sysroot=\"")))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(sysroot)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\""))); _tr_str_release(_cl); _cres; });
+                TrStr _strtmp_t2950 = ({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(lx_xlink), _tr_strz(_tr_str_lit(" --sysroot=\"")))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(sysroot)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\""))); _tr_str_release(_cl); _cres; });
                 _tr_str_release(lx_xlink);
-                lx_xlink = _strtmp_t2867;
+                lx_xlink = _strtmp_t2950;
             }
             /* pass */
-            TrStr _strtmp_t2868 = ({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(lx_xlink), _tr_strz(_tr_str_lit(" ")))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(lx_xobj)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(lx_rto)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(lx_xlibs)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(lx_xld)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" -o \""))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(lx_exe)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\" 2>>build/llvm_link.log"))); _tr_str_release(_cl); _cres; });
+            TrStr _strtmp_t2951 = ({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(lx_xlink), _tr_strz(_tr_str_lit(" ")))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(lx_xobj)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(lx_rto)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(lx_xlibs)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(lx_xld)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" -o \""))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(lx_exe)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\" 2>>build/llvm_link.log"))); _tr_str_release(_cl); _cres; });
             _tr_str_release(lx_xlink);
-            lx_xlink = _strtmp_t2868;
+            lx_xlink = _strtmp_t2951;
             /* pass */
             if ((_tr_system(_tr_strz(lx_xlink)) == 0LL)) {
                 /* pass */
@@ -3122,22 +3178,22 @@ __attribute__((hot)) int main(int argc, char** argv) {
         /* pass */
         if (_tr_is_windows()) {
             /* pass */
-            TrStr _strtmp_t2869 = _tr_str_lit("x86_64-pc-windows-gnu");
+            TrStr _strtmp_t2952 = _tr_str_lit("x86_64-pc-windows-gnu");
             _tr_str_release(lx_tri);
-            lx_tri = _strtmp_t2869;
+            lx_tri = _strtmp_t2952;
         }
         /* pass */
         long long lx_inproc = _tr_llvm_emit_object(_tr_strz(lx_ll), _tr_strz(_tr_str_lit("build/llvm_out.o")), _tr_strz(lx_tri));
         /* pass */
         if ((lx_inproc == 0LL)) {
             /* pass */
-            if (({ TrStr _aet_t2870 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(lx_cc), _tr_strz(_tr_str_lit(" build/llvm_out.o ")))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(lx_rto)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(lx_libs_gcc)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" -o \""))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(lx_exe)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\" 2>build/llvm_link.log"))); _tr_str_release(_cl); _cres; })); __auto_type _wr = ((_tr_system(_aet_t2870.data) == 0LL)); _tr_str_release(_aet_t2870); _wr; })) {
+            if (({ TrStr _aet_t2953 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(lx_cc), _tr_strz(_tr_str_lit(" build/llvm_out.o ")))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(lx_rto)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(lx_libs_gcc)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" -o \""))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(lx_exe)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\" 2>build/llvm_link.log"))); _tr_str_release(_cl); _cres; })); __auto_type _wr = ((_tr_system(_aet_t2953.data) == 0LL)); _tr_str_release(_aet_t2953); _wr; })) {
                 /* pass */
                 lx_built = true;
             }
         }
         /* pass */
-        if (({ TrStr _aet_t2871 = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("clang --version >")), _tr_strz(lx_null))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" 2>&1"))); _tr_str_release(_cl); _cres; })); __auto_type _wr = (((!lx_built) && (_tr_system(_aet_t2871.data) == 0LL))); _tr_str_release(_aet_t2871); _wr; })) {
+        if (({ TrStr _aet_t2954 = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("clang --version >")), _tr_strz(lx_null))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" 2>&1"))); _tr_str_release(_cl); _cres; })); __auto_type _wr = (((!lx_built) && (_tr_system(_aet_t2954.data) == 0LL))); _tr_str_release(_aet_t2954); _wr; })) {
             /* pass */
             TrStr lx_cmd = ({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("clang -O")), _tr_strz(opt_level))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" \""))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(lx_ll)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\" "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(lx_rto)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(lx_libs)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" -o \""))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(lx_exe)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\" 2>build/llvm_link.log"))); _tr_str_release(_cl); _cres; });
             /* pass */
@@ -3147,33 +3203,33 @@ __attribute__((hot)) int main(int argc, char** argv) {
             }
         }
         /* pass */
-        if (({ TrStr _aet_t2872 = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("llc --version >")), _tr_strz(lx_null))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" 2>&1"))); _tr_str_release(_cl); _cres; })); __auto_type _wr = (((!lx_built) && (_tr_system(_aet_t2872.data) == 0LL))); _tr_str_release(_aet_t2872); _wr; })) {
+        if (({ TrStr _aet_t2955 = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("llc --version >")), _tr_strz(lx_null))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" 2>&1"))); _tr_str_release(_cl); _cres; })); __auto_type _wr = (((!lx_built) && (_tr_system(_aet_t2955.data) == 0LL))); _tr_str_release(_aet_t2955); _wr; })) {
             /* pass */
             TrStr lx_llc_tri = _tr_str_lit("");
             /* pass */
             if (_tr_is_windows()) {
                 /* pass */
-                TrStr _strtmp_t2873 = _tr_str_lit(" -mtriple=x86_64-pc-windows-gnu");
+                TrStr _strtmp_t2956 = _tr_str_lit(" -mtriple=x86_64-pc-windows-gnu");
                 _tr_str_release(lx_llc_tri);
-                lx_llc_tri = _strtmp_t2873;
+                lx_llc_tri = _strtmp_t2956;
             }
             /* pass */
-            if (({ TrStr _aet_t2874 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("llc -O2 -filetype=obj")), _tr_strz(lx_llc_tri))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" \""))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(lx_ll)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\" -o build/llvm_out.o 2>build/llvm_link.log"))); _tr_str_release(_cl); _cres; })); __auto_type _wr = ((_tr_system(_aet_t2874.data) == 0LL)); _tr_str_release(_aet_t2874); _wr; })) {
+            if (({ TrStr _aet_t2957 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("llc -O2 -filetype=obj")), _tr_strz(lx_llc_tri))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" \""))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(lx_ll)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\" -o build/llvm_out.o 2>build/llvm_link.log"))); _tr_str_release(_cl); _cres; })); __auto_type _wr = ((_tr_system(_aet_t2957.data) == 0LL)); _tr_str_release(_aet_t2957); _wr; })) {
                 /* pass */
-                if (({ TrStr _aet_t2875 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(lx_cc), _tr_strz(_tr_str_lit(" build/llvm_out.o ")))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(lx_rto)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(lx_libs_gcc)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" -o \""))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(lx_exe)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\" 2>>build/llvm_link.log"))); _tr_str_release(_cl); _cres; })); __auto_type _wr = ((_tr_system(_aet_t2875.data) == 0LL)); _tr_str_release(_aet_t2875); _wr; })) {
+                if (({ TrStr _aet_t2958 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(lx_cc), _tr_strz(_tr_str_lit(" build/llvm_out.o ")))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(lx_rto)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(lx_libs_gcc)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" -o \""))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(lx_exe)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\" 2>>build/llvm_link.log"))); _tr_str_release(_cl); _cres; })); __auto_type _wr = ((_tr_system(_aet_t2958.data) == 0LL)); _tr_str_release(_aet_t2958); _wr; })) {
                     /* pass */
                     lx_built = true;
                 }
             }
         }
         /* pass */
-        if (({ TrStr _aet_t2876 = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("zig version >")), _tr_strz(lx_null))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" 2>&1"))); _tr_str_release(_cl); _cres; })); __auto_type _wr = (((!lx_built) && (_tr_system(_aet_t2876.data) == 0LL))); _tr_str_release(_aet_t2876); _wr; })) {
+        if (({ TrStr _aet_t2959 = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("zig version >")), _tr_strz(lx_null))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" 2>&1"))); _tr_str_release(_cl); _cres; })); __auto_type _wr = (((!lx_built) && (_tr_system(_aet_t2959.data) == 0LL))); _tr_str_release(_aet_t2959); _wr; })) {
             /* pass */
             TrStr lx_zrto = _tr_str_lit("build/llvm_runtime_zig.o");
             /* pass */
-            if (({ TrStr _aet_t2877 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cr = (dir_of_path(lx_abi)); TrStr _cres = _tr_strx_concat(_tr_strz(_tr_str_lit("zig cc -O2 -w -c \"-I")), _cr.data); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\" \""))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(lx_abi)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\" -o "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(lx_zrto)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" 2>build/llvm_link.log"))); _tr_str_release(_cl); _cres; })); __auto_type _wr = ((_tr_system(_aet_t2877.data) == 0LL)); _tr_str_release(_aet_t2877); _wr; })) {
+            if (({ TrStr _aet_t2960 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cr = (dir_of_path(lx_abi)); TrStr _cres = _tr_strx_concat(_tr_strz(_tr_str_lit("zig cc -O2 -w -c \"-I")), _cr.data); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\" \""))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(lx_abi)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\" -o "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(lx_zrto)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" 2>build/llvm_link.log"))); _tr_str_release(_cl); _cres; })); __auto_type _wr = ((_tr_system(_aet_t2960.data) == 0LL)); _tr_str_release(_aet_t2960); _wr; })) {
                 /* pass */
-                if (({ TrStr _aet_t2878 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("zig cc -O")), _tr_strz(opt_level))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" \""))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(lx_ll)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\" "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(lx_zrto)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(lx_libs_gcc)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" -o \""))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(lx_exe)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\" 2>>build/llvm_link.log"))); _tr_str_release(_cl); _cres; })); __auto_type _wr = ((_tr_system(_aet_t2878.data) == 0LL)); _tr_str_release(_aet_t2878); _wr; })) {
+                if (({ TrStr _aet_t2961 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("zig cc -O")), _tr_strz(opt_level))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" \""))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(lx_ll)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\" "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(lx_zrto)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(lx_libs_gcc)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" -o \""))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(lx_exe)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\" 2>>build/llvm_link.log"))); _tr_str_release(_cl); _cres; })); __auto_type _wr = ((_tr_system(_aet_t2961.data) == 0LL)); _tr_str_release(_aet_t2961); _wr; })) {
                     /* pass */
                     lx_built = true;
                 }
@@ -3202,12 +3258,12 @@ __attribute__((hot)) int main(int argc, char** argv) {
             /* pass */
             if (_tr_is_windows()) {
                 /* pass */
-                TrStr _strtmp_t2879 = path_to_native(lx_run);
+                TrStr _strtmp_t2962 = path_to_native(lx_run);
                 _tr_str_release(lx_run);
-                lx_run = _strtmp_t2879;
+                lx_run = _strtmp_t2962;
             }
             /* pass */
-            ({ TrStr _aet_t2880 = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("\"")), _tr_strz(lx_run))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\""))); _tr_str_release(_cl); _cres; })); exit((int)(_tr_system(_aet_t2880.data))); _tr_str_release(_aet_t2880); });
+            ({ TrStr _aet_t2963 = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("\"")), _tr_strz(lx_run))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\""))); _tr_str_release(_cl); _cres; })); exit((int)(_tr_system(_aet_t2963.data))); _tr_str_release(_aet_t2963); });
         }
         /* pass */
         _tr_str_release(subcmd);
@@ -3252,7 +3308,7 @@ __attribute__((hot)) int main(int argc, char** argv) {
         /* pass */
         NativeGenerator* nat_gen = NativeGenerator_init();
         /* pass */
-        TrStr nat_out = ({ TrStr _at_t2881 = (resolve_output_stem(input_path, output_path, out_dir)); __auto_type _wr = (ensure_ext(_at_t2881, _tr_str_lit(".o"))); _tr_str_release(_at_t2881); _wr; });
+        TrStr nat_out = ({ TrStr _at_t2964 = (resolve_output_stem(input_path, output_path, out_dir)); __auto_type _wr = (ensure_ext(_at_t2964, _tr_str_lit(".o"))); _tr_str_release(_at_t2964); _wr; });
         /* pass */
         if ((!NativeGenerator_emit_object(nat_gen, hir, nat_out))) {
             /* pass */
@@ -3310,7 +3366,7 @@ __attribute__((hot)) int main(int argc, char** argv) {
         c_gen->bare_arch = _tr_str_lit("riscv");
     }
     /* pass */
-    TrStr rt_h = ({ TrStr _at_t2882 = (List_TrStr_get(args, 0LL)); __auto_type _wr = (read_runtime_header(_at_t2882, input_path)); _tr_str_release(_at_t2882); _wr; });
+    TrStr rt_h = ({ TrStr _at_t2965 = (List_TrStr_get(args, 0LL)); __auto_type _wr = (read_runtime_header(_at_t2965, input_path)); _tr_str_release(_at_t2965); _wr; });
     /* pass */
     CGenerator_register_program(c_gen, hir);
     /* pass */
@@ -3322,9 +3378,9 @@ __attribute__((hot)) int main(int argc, char** argv) {
     /* pass */
     TrStr types_h = CGenerator_generate_types_header(c_gen, hir);
     /* pass */
-    TrStr _strtmp_t2883 = ({ TrStr _cr = (CGenerator_generate_module_compat(c_gen, resolver->all_decl_modules, resolver->all_decls)); TrStr _cres = _tr_strx_concat(_tr_strz(types_h), _cr.data); _tr_str_release(_cr); _cres; });
+    TrStr _strtmp_t2966 = ({ TrStr _cr = (CGenerator_generate_module_compat(c_gen, resolver->all_decl_modules, resolver->all_decls)); TrStr _cres = _tr_strx_concat(_tr_strz(types_h), _cr.data); _tr_str_release(_cr); _cres; });
     _tr_str_release(types_h);
-    types_h = _strtmp_t2883;
+    types_h = _strtmp_t2966;
     /* pass */
     bool force_all = false;
     /* pass */
@@ -3361,23 +3417,23 @@ __attribute__((hot)) int main(int argc, char** argv) {
     /* pass */
     if (static_link) {
         /* pass */
-        TrStr _strtmp_t2884 = _tr_strx_concat(_tr_strz(flags_sig), _tr_strz(_tr_str_lit(";static")));
+        TrStr _strtmp_t2967 = _tr_strx_concat(_tr_strz(flags_sig), _tr_strz(_tr_str_lit(";static")));
         _tr_str_release(flags_sig);
-        flags_sig = _strtmp_t2884;
+        flags_sig = _strtmp_t2967;
     }
     /* pass */
     if (debug_mode) {
         /* pass */
-        TrStr _strtmp_t2885 = _tr_strx_concat(_tr_strz(flags_sig), _tr_strz(_tr_str_lit(";debug")));
+        TrStr _strtmp_t2968 = _tr_strx_concat(_tr_strz(flags_sig), _tr_strz(_tr_str_lit(";debug")));
         _tr_str_release(flags_sig);
-        flags_sig = _strtmp_t2885;
+        flags_sig = _strtmp_t2968;
     }
     /* pass */
     if ((strcmp(_tr_strz(sysroot), _tr_strz(_tr_str_lit(""))) != 0)) {
         /* pass */
-        TrStr _strtmp_t2886 = ({ TrStr _cl = (_tr_strx_concat(_tr_strz(flags_sig), _tr_strz(_tr_str_lit(";sysroot=")))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(sysroot)); _tr_str_release(_cl); _cres; });
+        TrStr _strtmp_t2969 = ({ TrStr _cl = (_tr_strx_concat(_tr_strz(flags_sig), _tr_strz(_tr_str_lit(";sysroot=")))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(sysroot)); _tr_str_release(_cl); _cres; });
         _tr_str_release(flags_sig);
-        flags_sig = _strtmp_t2886;
+        flags_sig = _strtmp_t2969;
     }
     /* pass */
     TrStr flags_path = _tr_strx_concat(_tr_strz(build_dir), _tr_strz(_tr_str_lit(".build_flags")));
@@ -3397,7 +3453,7 @@ __attribute__((hot)) int main(int argc, char** argv) {
     /* pass */
     if ((strcmp(_tr_strz(rt_h), _tr_strz(_tr_str_lit(""))) != 0)) {
         /* pass */
-        ({ TrStr _at_t2887 = (_tr_strx_concat(_tr_strz(build_dir), _tr_strz(_tr_str_lit("tauraro_rt.h")))); write_file(_at_t2887, rt_h); _tr_str_release(_at_t2887); });
+        ({ TrStr _at_t2970 = (_tr_strx_concat(_tr_strz(build_dir), _tr_strz(_tr_str_lit("tauraro_rt.h")))); write_file(_at_t2970, rt_h); _tr_str_release(_at_t2970); });
     }
     /* pass */
     write_file(types_path, types_h);
@@ -3427,32 +3483,32 @@ __attribute__((hot)) int main(int argc, char** argv) {
             /* pass */
             if ((strcmp(_tr_strz(List_TrStr_get(resolver->all_decl_modules, k)), _tr_strz(dot_path)) == 0)) {
                 /* pass */
-                __auto_type _t2888 = (*((Decl*)List_ptr_get(resolver->all_decls, k)));
-                if (_t2888.tag == Decl_DClass) {
-                    __auto_type c = _t2888.data.DClass.cls;
+                __auto_type _t2971 = (*((Decl*)List_ptr_get(resolver->all_decls, k)));
+                if (_t2971.tag == Decl_DClass) {
+                    __auto_type c = _t2971.data.DClass.cls;
                     /* pass */
                     _tr_dict_set(class_set, _tr_strz(c->name), true);
-                } else if (_t2888.tag == Decl_DFunction) {
-                    __auto_type f = _t2888.data.DFunction.func;
+                } else if (_t2971.tag == Decl_DFunction) {
+                    __auto_type f = _t2971.data.DFunction.func;
                     /* pass */
                     _tr_dict_set(fn_set, _tr_strz(f->name), true);
                     _tr_obj_release(f, _trdrop_FunctionDef);
-                } else if (_t2888.tag == Decl_DEnum) {
-                    __auto_type e = _t2888.data.DEnum.enm;
+                } else if (_t2971.tag == Decl_DEnum) {
+                    __auto_type e = _t2971.data.DEnum.enm;
                     /* pass */
                     _tr_dict_set(class_set, _tr_strz(e->name), true);
-                } else if (_t2888.tag == Decl_DInterface) {
-                    __auto_type iface = _t2888.data.DInterface.iface;
+                } else if (_t2971.tag == Decl_DInterface) {
+                    __auto_type iface = _t2971.data.DInterface.iface;
                     /* pass */
                     _tr_dict_set(class_set, _tr_strz(iface->name), true);
-                } else if (_t2888.tag == Decl_DExtend) {
-                    __auto_type target = _t2888.data.DExtend.target;
-__auto_type methods = _t2888.data.DExtend.methods;
+                } else if (_t2971.tag == Decl_DExtend) {
+                    __auto_type target = _t2971.data.DExtend.target;
+__auto_type methods = _t2971.data.DExtend.methods;
                     /* pass */
                     _tr_dict_set(class_set, _tr_strz(target), true);
                     _tr_str_release(target);
                 } else if (1) {
-                    __auto_type _ = _t2888;
+                    __auto_type _ = _t2971;
                     /* pass */
                 }
             }
@@ -3466,23 +3522,23 @@ __auto_type methods = _t2888.data.DExtend.methods;
         /* pass */
         if (is_builtin_mod(dot_path)) {
             /* pass */
-            TrStr _strtmp_t2889 = ensure_builtin_dirs(build_dir, dot_path);
+            TrStr _strtmp_t2972 = ensure_builtin_dirs(build_dir, dot_path);
             _tr_str_release(c_path);
-            c_path = _strtmp_t2889;
+            c_path = _strtmp_t2972;
             /* pass */
             depth = get_dot_depth(dot_path);
         } else {
             /* pass */
-            TrStr _strtmp_t2890 = ({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(build_dir), _tr_strz(_tr_str_lit("module_")))); TrStr _cr = (dot_to_safe(dot_path)); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(".c"))); _tr_str_release(_cl); _cres; });
+            TrStr _strtmp_t2973 = ({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(build_dir), _tr_strz(_tr_str_lit("module_")))); TrStr _cr = (dot_to_safe(dot_path)); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(".c"))); _tr_str_release(_cl); _cres; });
             _tr_str_release(c_path);
-            c_path = _strtmp_t2890;
+            c_path = _strtmp_t2973;
             /* pass */
             depth = 0LL;
         }
         /* pass */
         if ((c_gen->emit_line_info && (mi < resolver->mod_file_paths->len))) {
             /* pass */
-            c_gen->cur_src_file = ({ TrStr _at_t2891 = (List_TrStr_get(resolver->mod_file_paths, mi)); __auto_type _wr = (to_fwd_slashes(_at_t2891)); _tr_str_release(_at_t2891); _wr; });
+            c_gen->cur_src_file = ({ TrStr _at_t2974 = (List_TrStr_get(resolver->mod_file_paths, mi)); __auto_type _wr = (to_fwd_slashes(_at_t2974)); _tr_str_release(_at_t2974); _wr; });
         }
         /* pass */
         TrStr mod_c = CGenerator_generate_module_c(c_gen, hir, class_set, fn_set, depth);
@@ -3525,32 +3581,32 @@ __auto_type methods = _t2888.data.DExtend.methods;
         /* pass */
         if ((strcmp(_tr_strz(List_TrStr_get(resolver->all_decl_modules, k2)), _tr_strz(_tr_str_lit(""))) == 0)) {
             /* pass */
-            __auto_type _t2892 = (*((Decl*)List_ptr_get(resolver->all_decls, k2)));
-            if (_t2892.tag == Decl_DClass) {
-                __auto_type c = _t2892.data.DClass.cls;
+            __auto_type _t2975 = (*((Decl*)List_ptr_get(resolver->all_decls, k2)));
+            if (_t2975.tag == Decl_DClass) {
+                __auto_type c = _t2975.data.DClass.cls;
                 /* pass */
                 _tr_dict_set(main_class_set, _tr_strz(c->name), true);
-            } else if (_t2892.tag == Decl_DFunction) {
-                __auto_type f = _t2892.data.DFunction.func;
+            } else if (_t2975.tag == Decl_DFunction) {
+                __auto_type f = _t2975.data.DFunction.func;
                 /* pass */
                 _tr_dict_set(main_fn_set, _tr_strz(f->name), true);
                 _tr_obj_release(f, _trdrop_FunctionDef);
-            } else if (_t2892.tag == Decl_DEnum) {
-                __auto_type e = _t2892.data.DEnum.enm;
+            } else if (_t2975.tag == Decl_DEnum) {
+                __auto_type e = _t2975.data.DEnum.enm;
                 /* pass */
                 _tr_dict_set(main_class_set, _tr_strz(e->name), true);
-            } else if (_t2892.tag == Decl_DInterface) {
-                __auto_type iface = _t2892.data.DInterface.iface;
+            } else if (_t2975.tag == Decl_DInterface) {
+                __auto_type iface = _t2975.data.DInterface.iface;
                 /* pass */
                 _tr_dict_set(main_class_set, _tr_strz(iface->name), true);
-            } else if (_t2892.tag == Decl_DExtend) {
-                __auto_type target = _t2892.data.DExtend.target;
-__auto_type methods = _t2892.data.DExtend.methods;
+            } else if (_t2975.tag == Decl_DExtend) {
+                __auto_type target = _t2975.data.DExtend.target;
+__auto_type methods = _t2975.data.DExtend.methods;
                 /* pass */
                 _tr_dict_set(main_class_set, _tr_strz(target), true);
                 _tr_str_release(target);
             } else if (1) {
-                __auto_type _ = _t2892;
+                __auto_type _ = _t2975;
                 /* pass */
             }
         }
@@ -3629,10 +3685,10 @@ __auto_type methods = _t2892.data.DExtend.methods;
         /* pass */
         if (_tr_str_contains(_tr_strz(target), _tr_strz(_tr_str_lit("riscv")))) {
             /* pass */
-            ({ TrStr _at_t2893 = (linker_script_riscv()); write_file(emit_ld, _at_t2893); _tr_str_release(_at_t2893); });
+            ({ TrStr _at_t2976 = (linker_script_riscv()); write_file(emit_ld, _at_t2976); _tr_str_release(_at_t2976); });
         } else {
             /* pass */
-            ({ TrStr _at_t2894 = (linker_script_cortex_m()); write_file(emit_ld, _at_t2894); _tr_str_release(_at_t2894); });
+            ({ TrStr _at_t2977 = (linker_script_cortex_m()); write_file(emit_ld, _at_t2977); _tr_str_release(_at_t2977); });
         }
         /* pass */
         ({ printf("%s", _tr_strz(_tr_strx_concat(_tr_strz(_tr_str_lit("Linker script written to: ")), _tr_strz(emit_ld)))); printf("\n"); });
@@ -3652,7 +3708,7 @@ __auto_type methods = _t2892.data.DExtend.methods;
         /* pass */
         while ((pi < (all_c_files->len - 1LL))) {
             /* pass */
-            ({ TrStr _at_t2895 = (List_TrStr_get(all_c_files, pi)); ({ printf("%s", _tr_strz(({ TrStr _cr = (get_filename(_at_t2895)); TrStr _cres = _tr_strx_concat(_tr_strz(_tr_str_lit("  ")), _cr.data); _tr_str_release(_cr); _cres; }))); printf("\n"); }); _tr_str_release(_at_t2895); });
+            ({ TrStr _at_t2978 = (List_TrStr_get(all_c_files, pi)); ({ printf("%s", _tr_strz(({ TrStr _cr = (get_filename(_at_t2978)); TrStr _cres = _tr_strx_concat(_tr_strz(_tr_str_lit("  ")), _cr.data); _tr_str_release(_cr); _cres; }))); printf("\n"); }); _tr_str_release(_at_t2978); });
             /* pass */
             pi = (pi + 1LL);
         }
@@ -3694,9 +3750,9 @@ __auto_type methods = _t2892.data.DExtend.methods;
     /* pass */
     if ((strcmp(_tr_strz(exe_name), _tr_strz(_tr_str_lit(""))) == 0)) {
         /* pass */
-        TrStr _strtmp_t2896 = _tr_str_lit("a");
+        TrStr _strtmp_t2979 = _tr_str_lit("a");
         _tr_str_release(exe_name);
-        exe_name = _strtmp_t2896;
+        exe_name = _strtmp_t2979;
     }
     /* pass */
     long long en_len = 0LL;
@@ -3718,9 +3774,9 @@ __auto_type methods = _t2892.data.DExtend.methods;
                     /* pass */
                     if ((((long long)((*(en_p + (en_len - 1LL))))) == 101LL)) {
                         /* pass */
-                        TrStr _strtmp_t2897 = _tr_str_wrap(_tr_str_slice(_tr_strz(exe_name), 0LL, (en_len - 4LL)));
+                        TrStr _strtmp_t2980 = _tr_str_wrap(_tr_str_slice(_tr_strz(exe_name), 0LL, (en_len - 4LL)));
                         _tr_str_release(exe_name);
-                        exe_name = _strtmp_t2897;
+                        exe_name = _strtmp_t2980;
                     }
                 }
             }
@@ -3731,9 +3787,9 @@ __auto_type methods = _t2892.data.DExtend.methods;
     /* pass */
     if ((strcmp(_tr_strz(target), _tr_strz(_tr_str_lit(""))) != 0)) {
         /* pass */
-        TrStr _strtmp_t2898 = resolve_target_triple(target);
+        TrStr _strtmp_t2981 = resolve_target_triple(target);
         _tr_str_release(tgt_triple);
-        tgt_triple = _strtmp_t2898;
+        tgt_triple = _strtmp_t2981;
     }
     /* pass */
     bool out_win = out_is_windows(target, tgt_triple);
@@ -3744,25 +3800,25 @@ __auto_type methods = _t2892.data.DExtend.methods;
         /* pass */
         if (out_win) {
             /* pass */
-            TrStr _strtmp_t2899 = _tr_str_lit(".dll");
+            TrStr _strtmp_t2982 = _tr_str_lit(".dll");
             _tr_str_release(exe_ext);
-            exe_ext = _strtmp_t2899;
+            exe_ext = _strtmp_t2982;
         } else {
             /* pass */
-            TrStr _strtmp_t2900 = _tr_str_lit(".so");
+            TrStr _strtmp_t2983 = _tr_str_lit(".so");
             _tr_str_release(exe_ext);
-            exe_ext = _strtmp_t2900;
+            exe_ext = _strtmp_t2983;
         }
     } else if (out_win) {
         /* pass */
-        TrStr _strtmp_t2901 = _tr_str_lit(".exe");
+        TrStr _strtmp_t2984 = _tr_str_lit(".exe");
         _tr_str_release(exe_ext);
-        exe_ext = _strtmp_t2901;
+        exe_ext = _strtmp_t2984;
     } else if (((strcmp(_tr_strz(target), _tr_strz(_tr_str_lit(""))) != 0) && _tr_str_contains(_tr_strz(tgt_triple), _tr_strz(_tr_str_lit("wasm"))))) {
         /* pass */
-        TrStr _strtmp_t2902 = _tr_str_lit(".wasm");
+        TrStr _strtmp_t2985 = _tr_str_lit(".wasm");
         _tr_str_release(exe_ext);
-        exe_ext = _strtmp_t2902;
+        exe_ext = _strtmp_t2985;
     }
     /* pass */
     TrStr exe_path = _tr_strx_concat(_tr_strz(exe_name), _tr_strz(exe_ext));
@@ -3789,49 +3845,49 @@ __auto_type methods = _t2892.data.DExtend.methods;
         /* pass */
         if ((strcmp(_tr_strz(target), _tr_strz(_tr_str_lit(""))) != 0)) {
             /* pass */
-            TrStr _strtmp_t2904 = ({ TrStr _at_t2903 = (resolve_target_triple(target)); __auto_type _wr = (resolve_cross_driver(_at_t2903)); _tr_str_release(_at_t2903); _wr; });
+            TrStr _strtmp_t2987 = ({ TrStr _at_t2986 = (resolve_target_triple(target)); __auto_type _wr = (resolve_cross_driver(_at_t2986)); _tr_str_release(_at_t2986); _wr; });
             _tr_str_release(bm_cc);
-            bm_cc = _strtmp_t2904;
+            bm_cc = _strtmp_t2987;
         }
         /* pass */
         TrStr bm_arch = _tr_str_lit(" -mcpu=cortex-m3 -mthumb");
         /* pass */
         if (_tr_str_contains(_tr_strz(target), _tr_strz(_tr_str_lit("riscv")))) {
             /* pass */
-            TrStr _strtmp_t2905 = _tr_str_lit(" -march=rv64imac -mabi=lp64 -mcmodel=medany");
+            TrStr _strtmp_t2988 = _tr_str_lit(" -march=rv64imac -mabi=lp64 -mcmodel=medany");
             _tr_str_release(bm_arch);
-            bm_arch = _strtmp_t2905;
+            bm_arch = _strtmp_t2988;
         }
         /* pass */
         TrStr bm_lld = _tr_str_lit("");
         /* pass */
         if ((!_tr_str_contains(_tr_strz(bm_cc), _tr_strz(_tr_str_lit("zig"))))) {
             /* pass */
-            TrStr _strtmp_t2906 = detect_lld_flag();
+            TrStr _strtmp_t2989 = detect_lld_flag();
             _tr_str_release(bm_lld);
-            bm_lld = _strtmp_t2906;
+            bm_lld = _strtmp_t2989;
         }
         /* pass */
         TrStr bm_cmd = ({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(bm_cc), _tr_strz(_tr_str_lit(" -O")))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(opt_level)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(bm_arch)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" -ffreestanding -nostdlib -fno-builtin"))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(bm_lld)); _tr_str_release(_cl); _cres; });
         /* pass */
-        TrStr _strtmp_t2907 = ({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(bm_cmd), _tr_strz(_tr_str_lit(" -T \"")))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(emit_ld)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\" \"-I"))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(build_dir)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("include\" \"-I"))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(build_dir)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\""))); _tr_str_release(_cl); _cres; });
+        TrStr _strtmp_t2990 = ({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(bm_cmd), _tr_strz(_tr_str_lit(" -T \"")))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(emit_ld)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\" \"-I"))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(build_dir)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("include\" \"-I"))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(build_dir)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\""))); _tr_str_release(_cl); _cres; });
         _tr_str_release(bm_cmd);
-        bm_cmd = _strtmp_t2907;
+        bm_cmd = _strtmp_t2990;
         /* pass */
         long long bmi = 0LL;
         /* pass */
         while ((bmi < all_c_files->len)) {
             /* pass */
-            TrStr _strtmp_t2908 = ({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(bm_cmd), _tr_strz(_tr_str_lit(" \"")))); TrStr _cr = (List_TrStr_get(all_c_files, bmi)); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\""))); _tr_str_release(_cl); _cres; });
+            TrStr _strtmp_t2991 = ({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(bm_cmd), _tr_strz(_tr_str_lit(" \"")))); TrStr _cr = (List_TrStr_get(all_c_files, bmi)); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\""))); _tr_str_release(_cl); _cres; });
             _tr_str_release(bm_cmd);
-            bm_cmd = _strtmp_t2908;
+            bm_cmd = _strtmp_t2991;
             /* pass */
             bmi = (bmi + 1LL);
         }
         /* pass */
-        TrStr _strtmp_t2909 = ({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(bm_cmd), _tr_strz(_tr_str_lit(" -o \"")))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(bm_elf)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\" 2>build/bare_link.log"))); _tr_str_release(_cl); _cres; });
+        TrStr _strtmp_t2992 = ({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(bm_cmd), _tr_strz(_tr_str_lit(" -o \"")))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(bm_elf)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\" 2>build/bare_link.log"))); _tr_str_release(_cl); _cres; });
         _tr_str_release(bm_cmd);
-        bm_cmd = _strtmp_t2909;
+        bm_cmd = _strtmp_t2992;
         /* pass */
         if (verbose) {
             /* pass */
@@ -3916,12 +3972,12 @@ __auto_type methods = _t2892.data.DExtend.methods;
         /* pass */
         if (_tr_is_windows()) {
             /* pass */
-            TrStr _strtmp_t2910 = path_to_native(run_path);
+            TrStr _strtmp_t2993 = path_to_native(run_path);
             _tr_str_release(run_path);
-            run_path = _strtmp_t2910;
+            run_path = _strtmp_t2993;
         }
         /* pass */
-        long long run_rc = ({ TrStr _aet_t2911 = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("\"")), _tr_strz(run_path))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\""))); _tr_str_release(_cl); _cres; })); __auto_type _wr = (_tr_system(_aet_t2911.data)); _tr_str_release(_aet_t2911); _wr; });
+        long long run_rc = ({ TrStr _aet_t2994 = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("\"")), _tr_strz(run_path))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\""))); _tr_str_release(_cl); _cres; })); __auto_type _wr = (_tr_system(_aet_t2994.data)); _tr_str_release(_aet_t2994); _wr; });
         /* pass */
         exit((int)(run_rc));
     }

@@ -1,0 +1,56 @@
+# A Tauraro "game" drawing a scene through auto-generated raygfx (raylib-shaped) bindings.
+from raygfx import Vector2, Color, Rect
+from raygfx import InitCanvas, CloseCanvas, GetCanvasWidth, ClearBackground
+from raygfx import DrawRectRec, DrawLineV, GetImageColor, ColorToInt, SavePPM, RAYGFX_VERSION
+
+def rgb(r: int, g: int, b: int) -> Color:
+    mut c = Color()
+    c.r = r as u8
+    c.g = g as u8
+    c.b = b as u8
+    c.a = 255 as u8
+    return c
+
+def vec(x: float, y: float) -> Vector2:
+    mut v = Vector2()
+    v.x = x as f32
+    v.y = y as f32
+    return v
+
+def rect(x: float, y: float, w: float, h: float) -> Rect:
+    mut r = Rect()
+    r.x = x as f32
+    r.y = y as f32
+    r.width = w as f32
+    r.height = h as f32
+    return r
+
+def main():
+    print(RAYGFX_VERSION)                          # 100
+
+    InitCanvas(64, 48)
+    ClearBackground(rgb(10, 10, 30))               # dark-blue background (by-value Color)
+
+    # draw a little scene (by-value Rect + Vector2 struct args across the FFI)
+    DrawRectRec(rect(8.0, 8.0, 20.0, 16.0),  rgb(230, 41, 55))    # red rect
+    DrawRectRec(rect(36.0, 24.0, 20.0, 16.0), rgb(0, 200, 80))    # green rect
+    DrawLineV(vec(0.0, 0.0), vec(63.0, 47.0),      rgb(255, 255, 0))   # yellow diagonal
+
+    # read pixels back (by-value Color RETURN across the FFI) and verify the scene
+    mut inside_red = GetImageColor(15, 15)
+    print(inside_red.r as int)                     # 230
+    print(inside_red.g as int)                     # 41
+    print(inside_red.b as int)                     # 55
+
+    mut inside_green = GetImageColor(45, 30)
+    print(inside_green.g as int)                   # 200
+
+    mut bg = GetImageColor(2, 40)
+    print(bg.b as int)                             # 30  (background blue)
+
+    print(GetCanvasWidth())                        # 64
+    print(ColorToInt(rgb(255, 0, 0)) as int)       # 0xFF0000FF = 4278190335
+
+    SavePPM("scene.ppm" as Pointer[char])          # save the rendered image
+    CloseCanvas()
+    print(999)                                     # done marker

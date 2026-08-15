@@ -13,6 +13,7 @@ from diag import c_red, c_yellow, c_green, c_cyan, c_dim, c_bold, spaces, repeat
 from sema import Sema
 from ast import Decl
 from fmt import Formatter
+from bindgen import run_bindgen
 from codegen.c import CGenerator
 from codegen.llvm import LlvmGenerator
 from codegen.native import NativeGenerator
@@ -40,6 +41,7 @@ pub def print_usage():
     print("Usage: tauraroc <file.tr> [options]")
     print("       tauraroc fmt [-w] <file.tr>   Format source (stdout, or -w in place)")
     print("       tauraroc lint <file.tr>       Analyze and report warnings/errors")
+    print("       tauraroc bindgen <hdr.h>      Generate FFI bindings from a C header (-o out.tr)")
     print("Options:")
     print("  --version         Print version and exit")
     print("  --emit c          Emit generated C code to build/")
@@ -989,11 +991,33 @@ pub def main(args: Vec[str]):
         print_version()
         _tr_exit(0)
 
-    # Subcommands: `tauraroc fmt [-w] <file>` and `tauraroc lint <file>`.
+    # Subcommands: `tauraroc fmt [-w] <file>`, `tauraroc lint <file>`, `tauraroc bindgen <hdr>`.
     mut subcmd = ""
     if args.len >= 2:
         mut a1 = args.get(1)
-        if a1 == "fmt" or a1 == "lint": subcmd = a1
+        if a1 == "fmt" or a1 == "lint" or a1 == "bindgen": subcmd = a1
+    if subcmd == "bindgen":
+        # tauraroc bindgen <header.h> [-o out.tr] [--cc <compiler>]  -> generate FFI bindings
+        mut bg_header = ""
+        mut bg_out    = "bindings.tr"
+        mut bg_cc     = detect_c_compiler()
+        mut bk = 2
+        while bk < args.len:
+            mut ba = args.get(bk)
+            if ba == "-o" and bk + 1 < args.len:
+                bg_out = args.get(bk + 1)
+                bk = bk + 1
+            elif ba == "--cc" and bk + 1 < args.len:
+                bg_cc = args.get(bk + 1)
+                bk = bk + 1
+            elif not str_starts_with(ba, "-"):
+                if bg_header == "": bg_header = ba
+            bk = bk + 1
+        if bg_header == "":
+            print("error: bindgen requires a header: tauraroc bindgen <header.h> [-o out.tr] [--cc <compiler>]")
+            _tr_exit(1)
+        run_bindgen(bg_header, bg_out, bg_cc)
+        _tr_exit(0)
     if subcmd == "fmt":
         mut write_in_place = false
         mut fpath = ""

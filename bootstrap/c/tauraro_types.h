@@ -52,6 +52,8 @@ typedef struct Symbol Symbol;
 typedef struct Scope Scope;
 typedef struct Sema Sema;
 typedef struct Formatter Formatter;
+typedef struct CTok CTok;
+typedef struct Bindgen Bindgen;
 typedef struct CGenerator CGenerator;
 typedef struct LBlock LBlock;
 typedef struct LFunc LFunc;
@@ -136,6 +138,8 @@ static void _trdrop_Symbol(void* vp);
 static void _trdrop_Scope(void* vp);
 static void _trdrop_Sema(void* vp);
 static void _trdrop_Formatter(void* vp);
+static void _trdrop_CTok(void* vp);
+static void _trdrop_Bindgen(void* vp);
 static void _trdrop_CGenerator(void* vp);
 static void _trdrop_LBlock(void* vp);
 static void _trdrop_LFunc(void* vp);
@@ -2774,6 +2778,43 @@ static void _trdrop_Formatter(void* vp) {
 }
 #endif
 
+#ifndef CTok_STRUCT_DEFINED
+#define CTok_STRUCT_DEFINED
+typedef struct CTok {
+    size_t __rc;
+    long long kind;
+    TrStr text;
+} CTok;
+static void _trdrop_CTok(void* vp) {
+    CTok* self = (CTok*)vp; (void)self;
+    _tr_str_release(self->text);
+}
+#endif
+
+#ifndef Bindgen_STRUCT_DEFINED
+#define Bindgen_STRUCT_DEFINED
+typedef struct Bindgen {
+    size_t __rc;
+    List_ptr* toks;
+    long long pos;
+    StringBuilder* funcs;
+    StringBuilder* structs;
+    StringBuilder* types;
+    StringBuilder* consts;
+    long long n_funcs;
+    long long n_structs;
+    TrMap* seen;
+    List_TrStr* defined;
+    TrMap* skip_syms;
+    long long n_skipped;
+} Bindgen;
+static void _trdrop_Bindgen(void* vp) {
+    Bindgen* self = (Bindgen*)vp; (void)self;
+    Dict_free(self->seen);
+    List_TrStr_free(self->defined);
+}
+#endif
+
 #ifndef CGenerator_STRUCT_DEFINED
 #define CGenerator_STRUCT_DEFINED
 typedef struct CGenerator {
@@ -3742,6 +3783,53 @@ __attribute__((hot)) void Formatter_emit_decl(Formatter* self, Decl* dp);
 __attribute__((hot)) TrStr Formatter_fn_header_no_colon(Formatter* self, FunctionDef* f);
 __attribute__((hot)) bool Formatter_is_block_decl(Formatter* self, Decl* dp);
 __attribute__((hot)) TrStr Formatter_format_program(Formatter* self, Program* prog);
+__attribute__((malloc,returns_nonnull,hot)) CTok* CTok_init(long long kind, TrStr text);
+__attribute__((hot)) bool _is_alpha(long long c);
+__attribute__((hot)) bool _is_digit(long long c);
+__attribute__((hot)) bool _is_alnum(long long c);
+__attribute__((hot)) bool _is_space(long long c);
+__attribute__((hot)) List_ptr* tokenize_c(TrStr src);
+__attribute__((hot)) TrStr map_base(TrStr words);
+__attribute__((hot)) TrStr map_type(TrStr words, long long stars);
+__attribute__((hot)) TrMap* _runtime_symbols();
+__attribute__((hot)) bool _is_prim_type_word(TrStr w);
+__attribute__((hot)) bool _is_ignored_word(TrStr w);
+__attribute__((hot)) bool _is_decl_term(long long kind, TrStr text);
+__attribute__((hot)) TrStr _join_words(List_TrStr* words);
+__attribute__((hot)) long long _to_int(TrStr s);
+__attribute__((hot)) TrStr _scan_typedef_name(List_ptr* toks, long long pos);
+__attribute__((hot)) bool _typedef_is_fnptr(List_ptr* toks, long long pos);
+__attribute__((hot)) TrStr _scan_fnptr_name(List_ptr* toks, long long pos);
+__attribute__((malloc,returns_nonnull,hot)) Bindgen* Bindgen_init(List_ptr* toks);
+__attribute__((hot)) bool Bindgen_fresh(Bindgen* self, TrStr name);
+__attribute__((hot)) TrStr Bindgen_ct(Bindgen* self);
+__attribute__((hot)) long long Bindgen_ck(Bindgen* self);
+__attribute__((hot)) void Bindgen_adv(Bindgen* self);
+__attribute__((hot)) bool Bindgen_is_punct(Bindgen* self, TrStr p);
+__attribute__((hot)) long long Bindgen_nk(Bindgen* self);
+__attribute__((hot)) TrStr Bindgen_nt(Bindgen* self);
+__attribute__((hot)) void Bindgen_skip_balanced_parens(Bindgen* self);
+__attribute__((hot)) void Bindgen_skip_struct_body(Bindgen* self);
+__attribute__((hot)) void Bindgen_skip_to_semi(Bindgen* self);
+__attribute__((hot)) List_TrStr* Bindgen_read_type_words(Bindgen* self);
+__attribute__((hot)) void Bindgen_emit_func(Bindgen* self, TrStr ret_words, long long ret_stars, TrStr name);
+__attribute__((hot)) void Bindgen_emit_struct(Bindgen* self, TrStr name, bool is_union);
+__attribute__((hot)) void Bindgen_skip_enum_expr(Bindgen* self);
+__attribute__((hot)) void Bindgen_emit_enum(Bindgen* self, TrStr name);
+__attribute__((hot)) void Bindgen_parse_decl(Bindgen* self);
+__attribute__((hot)) void Bindgen_run(Bindgen* self);
+__attribute__((hot)) bool _is_ident_byte(long long c);
+__attribute__((hot)) TrStr _rename_word(TrStr text, TrStr old, TrStr new_);
+__attribute__((hot)) TrStr _basename(TrStr p);
+__attribute__((hot)) TrStr _marker_file(TrStr line);
+__attribute__((hot)) bool _marker_is_system(TrStr line);
+__attribute__((hot)) TrStr _filter_to_target(TrStr raw, TrStr target);
+__attribute__((hot)) TrStr _macro_name(TrStr rest);
+__attribute__((hot)) TrMap* _load_baseline(TrStr cc);
+__attribute__((hot)) TrMap* _target_define_names(TrStr header);
+__attribute__((hot)) TrStr _lstrip(TrStr s);
+__attribute__((hot)) void emit_defines(Bindgen* bg, TrStr defs, TrMap* baseline, TrMap* allow);
+__attribute__((hot)) void run_bindgen(TrStr header, TrStr out, TrStr cc);
 __attribute__((hot)) TrStr _c_dot_to_safe(TrStr s);
 __attribute__((hot)) TrStr _indent_str(long long n);
 __attribute__((hot)) bool _is_invalid_ptr(unsigned long long addr);
@@ -5351,6 +5439,42 @@ __attribute__((hot)) fmt_Formatter*** core_alloc_resize_fmt_Formatter_ptr(fmt_Fo
 __attribute__((hot)) void core_alloc_dealloc_fmt_Formatter_ptr(fmt_Formatter*** ptr);
 __attribute__((hot)) core_map_MapNode_str_fmt_Formatter** core_alloc_alloc_core_map_MapNode_str_fmt_Formatter(long long count);
 __attribute__((hot)) void core_alloc_dealloc_core_map_MapNode_str_fmt_Formatter(core_map_MapNode_str_fmt_Formatter** ptr);
+
+typedef CTok bindgen_CTok;
+struct core_vec_Vec_bindgen_CTok { bindgen_CTok** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_bindgen_CTok core_vec_Vec_bindgen_CTok;
+struct core_vec_Vec_bindgen_CTok_ptr { bindgen_CTok*** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_bindgen_CTok_ptr core_vec_Vec_bindgen_CTok_ptr;
+struct core_map_MapNode_str_bindgen_CTok { char* key; bindgen_CTok* value; struct core_map_MapNode_str_bindgen_CTok* next; };
+typedef struct core_map_MapNode_str_bindgen_CTok core_map_MapNode_str_bindgen_CTok;
+struct core_map_Map_str_bindgen_CTok { core_map_MapNode_str_bindgen_CTok** buckets; long long capacity; long long len; };
+typedef struct core_map_Map_str_bindgen_CTok core_map_Map_str_bindgen_CTok;
+__attribute__((hot)) bindgen_CTok** core_alloc_alloc_bindgen_CTok(long long count);
+__attribute__((hot)) bindgen_CTok** core_alloc_resize_bindgen_CTok(bindgen_CTok** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_bindgen_CTok(bindgen_CTok** ptr);
+__attribute__((hot)) bindgen_CTok*** core_alloc_alloc_bindgen_CTok_ptr(long long count);
+__attribute__((hot)) bindgen_CTok*** core_alloc_resize_bindgen_CTok_ptr(bindgen_CTok*** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_bindgen_CTok_ptr(bindgen_CTok*** ptr);
+__attribute__((hot)) core_map_MapNode_str_bindgen_CTok** core_alloc_alloc_core_map_MapNode_str_bindgen_CTok(long long count);
+__attribute__((hot)) void core_alloc_dealloc_core_map_MapNode_str_bindgen_CTok(core_map_MapNode_str_bindgen_CTok** ptr);
+
+typedef Bindgen bindgen_Bindgen;
+struct core_vec_Vec_bindgen_Bindgen { bindgen_Bindgen** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_bindgen_Bindgen core_vec_Vec_bindgen_Bindgen;
+struct core_vec_Vec_bindgen_Bindgen_ptr { bindgen_Bindgen*** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_bindgen_Bindgen_ptr core_vec_Vec_bindgen_Bindgen_ptr;
+struct core_map_MapNode_str_bindgen_Bindgen { char* key; bindgen_Bindgen* value; struct core_map_MapNode_str_bindgen_Bindgen* next; };
+typedef struct core_map_MapNode_str_bindgen_Bindgen core_map_MapNode_str_bindgen_Bindgen;
+struct core_map_Map_str_bindgen_Bindgen { core_map_MapNode_str_bindgen_Bindgen** buckets; long long capacity; long long len; };
+typedef struct core_map_Map_str_bindgen_Bindgen core_map_Map_str_bindgen_Bindgen;
+__attribute__((hot)) bindgen_Bindgen** core_alloc_alloc_bindgen_Bindgen(long long count);
+__attribute__((hot)) bindgen_Bindgen** core_alloc_resize_bindgen_Bindgen(bindgen_Bindgen** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_bindgen_Bindgen(bindgen_Bindgen** ptr);
+__attribute__((hot)) bindgen_Bindgen*** core_alloc_alloc_bindgen_Bindgen_ptr(long long count);
+__attribute__((hot)) bindgen_Bindgen*** core_alloc_resize_bindgen_Bindgen_ptr(bindgen_Bindgen*** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_bindgen_Bindgen_ptr(bindgen_Bindgen*** ptr);
+__attribute__((hot)) core_map_MapNode_str_bindgen_Bindgen** core_alloc_alloc_core_map_MapNode_str_bindgen_Bindgen(long long count);
+__attribute__((hot)) void core_alloc_dealloc_core_map_MapNode_str_bindgen_Bindgen(core_map_MapNode_str_bindgen_Bindgen** ptr);
 
 typedef CGenerator codegen_c_CGenerator;
 struct core_vec_Vec_codegen_c_CGenerator { codegen_c_CGenerator** data; long long len; long long capacity; };

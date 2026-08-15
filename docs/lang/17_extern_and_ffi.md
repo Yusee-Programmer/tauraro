@@ -12,6 +12,14 @@ Tauraro compiles to C, which means the entire C library ecosystem is directly ac
 - Operating system APIs (Win32, POSIX, ...)
 - Any native library with a C interface
 
+**Generating bindings automatically.** You don't have to hand-write `extern "C"` declarations for
+a whole library — `tauraroc bindgen <header.h> -o <out.tr>` reads a C header and generates the
+Tauraro bindings (functions, `@value_type` structs, enums, typedefs, and constants). It filters out
+`#include`d system headers, maps C types to the `c_*` family, handles struct-by-value and function
+pointers, and resolves symbol collisions (skips libc names the runtime already declares, renames
+type names that clash with Win32 like `Rectangle`). Then just `from <out> import ...`. See
+`tools/bindgen/` and its graphics example.
+
 **C type mapping:**
 
 | Tauraro type | C type |

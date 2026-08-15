@@ -3,15 +3,18 @@
 Generate Tauraro FFI bindings from a C header — the leverage tool that unlocks binding C
 libraries (SDL, GLFW, raylib, sqlite, miniaudio, …) wholesale instead of by hand.
 
-```sh
-# build the tool
-tauraroc tools/bindgen/bindgen.tr -o tauraro-bindgen
+**It's built into the compiler** as a subcommand:
 
-# generate bindings
-./tauraro-bindgen raylib.h -o raylib.tr --cc gcc
+```sh
+tauraroc bindgen raylib.h -o raylib.tr [--cc <compiler>]
 ```
 
-Then `from raylib import ...` in your program.
+Then `from raylib import ...` in your program. (The compiler auto-detects the C compiler for
+preprocessing, so `--cc` is usually unnecessary.)
+
+> This source (`bindgen.tr`) is the standalone copy of the same logic that lives in
+> `src/bindgen.tr`; you can also build it directly with `tauraroc tools/bindgen/bindgen.tr -o
+> tauraro-bindgen` if you want the tool as a separate binary.
 
 ## How it works
 
