@@ -545,6 +545,7 @@ pub class CGenerator:
         # Simd[T; N] outside a struct field degrades to the element type (the vector attribute
         # is emitted only at field sites); prefer passing SIMD aggregates by Pointer[T].
         if n == "Simd" and ty.args.len > 0: return self.type_to_c(ty.args.get(0).read())
+        if n == "c_void": return "void"
         if n == "c_void_ptr" or n == "RawPtr": return "void*"
         if n == "c_size_t": return "size_t"
         if n == "c_ssize_t": return "ssize_t"

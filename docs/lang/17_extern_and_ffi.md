@@ -42,6 +42,7 @@ so the width always matches the C ABI:
 | `c_ushort` | `unsigned short` | | `c_size_t` | `size_t` |
 | `c_int` | `int` | | `c_ssize_t` | `ssize_t` |
 | `c_float`/`c_double`/`c_ldouble` | `float`/`double`/`long double` | | `c_int32_t` … `c_uint64_t` | fixed-width `<stdint.h>` |
+| `c_void` | `void` | | `c_void_ptr` / `RawPtr` | `void*` |
 
 ---
 

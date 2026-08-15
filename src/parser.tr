@@ -647,6 +647,20 @@ extend Parser:
                         return box_stmt(Stmt.SPass)
                 if cs_nm == "chan_select":
                     return self.parse_chan_select_stmt()
+                if cs_nm == "var":
+                    # `var` is an OPTIONAL, explicit variable-declaration marker: `var name
+                    # [: type] [= value]` parses exactly like the bare form (`var age: int` ≡
+                    # `age: int`). It is a CONTEXTUAL keyword — only special when followed by an
+                    # identifier (a declaration); everywhere else `var` stays a normal
+                    # identifier (`var = 5`, `var.x`, `f(var)`), so the compiler's own code and
+                    # user code that use `var` as a name keep working. (Like `type` above.)
+                    mut _var_save = self.pos
+                    self.pos = self.pos + 1
+                    match self.peek():
+                        case Token.Ident(_):
+                            return self.parse_assign_or_expr_stmt()   # parse the decl (var stripped)
+                        case _:
+                            self.pos = _var_save                       # `var` used as an identifier
             case _: pass
         return self.parse_assign_or_expr_stmt()
 
