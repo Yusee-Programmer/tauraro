@@ -432,6 +432,8 @@ __attribute__((malloc,returns_nonnull,hot)) LModule* LModule_init() {
     /* pass */
     m->global_types = (void*)List_i64_new();
     /* pass */
+    m->global_arr = (void*)List_i64_new();
+    /* pass */
     m->global_inits = (void*)List_ptr_new();
     /* pass */
     m->ok = true;
@@ -455,6 +457,8 @@ __attribute__((malloc,returns_nonnull,hot)) LModule* LModule_init() {
     m->overloaded_sigs = (void*)List_TrStr_new();
     /* pass */
     m->target_llvm = false;
+    /* pass */
+    m->no_heap = false;
     /* pass */
     return m;
 }
@@ -566,7 +570,29 @@ __attribute__((hot)) long long LModule_add_global(LModule* self, TrStr name, lon
     /* pass */
     List_i64_append(self->global_types, tag);
     /* pass */
+    List_i64_append(self->global_arr, 0LL);
+    /* pass */
     return (self->globals->len - 1LL);
+}
+
+__attribute__((hot)) void LModule_set_global_arr(LModule* self, long long idx, long long n) {
+    /* pass */
+    if (((idx >= 0LL) && (idx < self->global_arr->len))) {
+        /* pass */
+        List_i64_set(self->global_arr, idx, n);
+    }
+}
+
+__attribute__((hot)) long long LModule_global_arr_of(LModule* self, TrStr name) {
+    /* pass */
+    long long idx = LModule_global_index(self, name);
+    /* pass */
+    if ((idx >= 0LL)) {
+        /* pass */
+        return List_i64_get(self->global_arr, idx);
+    }
+    /* pass */
+    return 0LL;
 }
 
 __attribute__((hot)) long long LModule_global_index(LModule* self, TrStr name) {

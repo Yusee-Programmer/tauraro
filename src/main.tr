@@ -1167,6 +1167,10 @@ pub def main(args: Vec[str]):
     mut sema = Sema.init()
     sema.strict_mode = strict_mode
     sema.no_heap = no_heap
+    # The C backend keeps tuples/enums as stack value structs; the LLVM and native backends
+    # heap-box them. Under --no-heap the latter must reject those constructs to keep the
+    # zero-heap guarantee honest (see [H-1] in sema.check_no_heap / the ETuple case).
+    sema.heap_boxes_tuples = (backend != "c")
     sema.current_file = input_path   # track source file for error messages
     mut hir = sema.analyze(prog)
 
@@ -1200,7 +1204,7 @@ pub def main(args: Vec[str]):
         # llvm_run.sh / llvm_diff.sh). Coverage == native's (same LIR): unsupported programs
         # leave ok=false and we fall back to the C backend, never emit something wrong.
         mut llvm_gen = LlvmGenerator.init()
-        mut llvm_ir = llvm_gen.generate(hir)
+        mut llvm_ir = llvm_gen.generate_nh(hir, no_heap)
         if not llvm_gen.ok:
             print(c_red("error") + ": the LLVM backend can't lower this program yet")
             if llvm_gen.fail_note != "": print("       reason: " + llvm_gen.fail_note)

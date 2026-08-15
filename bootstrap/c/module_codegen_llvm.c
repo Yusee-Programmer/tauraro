@@ -14,7 +14,12 @@ __attribute__((malloc,returns_nonnull,hot)) LlvmGenerator* LlvmGenerator_init() 
 
 __attribute__((hot)) TrStr LlvmGenerator_generate(LlvmGenerator* self, HirProgram* prog) {
     /* pass */
-    LModule* m = lower_to_lir_t(prog, true);
+    return LlvmGenerator_generate_nh(self, prog, false);
+}
+
+__attribute__((hot)) TrStr LlvmGenerator_generate_nh(LlvmGenerator* self, HirProgram* prog, bool no_heap) {
+    /* pass */
+    LModule* m = lower_to_lir_nh(prog, true, no_heap);
     /* pass */
     if ((!m->ok)) {
         /* pass */

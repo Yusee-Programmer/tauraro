@@ -36,6 +36,7 @@ pub enum LInst:
     IBitsF(dst: int, src: int)                  # reinterpret i64 bit pattern -> f64 (no conversion)
     IFBits(dst: int, src: int)                  # reinterpret f64 -> i64 bit pattern (no conversion)
     IAddrVar(dst: int, name: str)               # dst = address of var's stack slot (closure captures)
+    IAddrGlobal(dst: int, gidx: int)            # dst = address of module global slot #gidx (fixed-array base)
     IFuncAddr(dst: int, fname: str)             # dst = address of a defined function
     ICallInd(dst: int, fnreg: int, args: Vec[int])  # indirect call through the pointer in fnreg
     IAsm(code: str, cons: str)                       # inline asm: LLVM `call void asm sideeffect`
@@ -338,6 +339,7 @@ pub class LModule:
     pub strings:  Vec[str]      # string literals -> .rodata (each NUL-terminated)
     pub globals:      Vec[str]              # module-level variable names (-> .bss slots)
     pub global_types: Vec[int]              # parallel to globals: value-type tag
+    pub global_arr:   Vec[int]              # parallel to globals: fixed-array length N (`[T;N]`), else 0
     pub global_inits: Vec[Pointer[HirStmt]] # top-level init statements, run at start of main
     pub hir_prog: HirProgram                # the program being lowered (generic fns are
                                             # instantiated lazily from here at call sites)
@@ -356,6 +358,9 @@ pub class LModule:
                                             # such methods mangle to Cls_method_<Nargs>arg (matches C).
     pub target_llvm: bool                   # true when lowering for the LLVM backend (which passes
                                             # call args on the stack past 6, unlike the native reg ABI).
+    pub no_heap: bool                       # --no-heap: reject heap-allocating LIR constructs (enum
+                                            # ctors box via _tr_rt_obj_alloc) so the zero-heap guarantee
+                                            # holds on the LLVM/native backends (C keeps them on the stack).
 
 extend LModule:
     pub def init() -> LModule:
@@ -370,6 +375,7 @@ extend LModule:
         m.strings  = Vec[str].init(4)
         m.globals      = Vec[str].init(4)
         m.global_types = Vec[int].init(4)
+        m.global_arr   = Vec[int].init(4)
         m.global_inits = Vec[Pointer[HirStmt]].init(4)
         m.ok       = true
         m.fail_note = ""
@@ -382,6 +388,7 @@ extend LModule:
         m.fn_owned_names = Vec[str].init(8)
         m.overloaded_sigs = Vec[str].init(4)
         m.target_llvm = false
+        m.no_heap = false
         return m
 
     # Method-overload registry (mirrors the C backend's overloaded_sigs). A method name
@@ -426,7 +433,18 @@ extend LModule:
             i = i + 1
         self.globals.push(name)
         self.global_types.push(tag)
+        self.global_arr.push(0)
         return self.globals.len - 1
+
+    # Mark global #idx as a fixed-size array of N slots (element tag in global_types); the
+    # emitted decl becomes `@g.idx = internal global [N x i64] zeroinitializer`.
+    pub def set_global_arr(self, idx: int, n: int):
+        if idx >= 0 and idx < self.global_arr.len: self.global_arr.set(idx, n)
+
+    pub def global_arr_of(self, name: str) -> int:
+        mut idx = self.global_index(name)
+        if idx >= 0: return self.global_arr.get(idx)
+        return 0
 
     pub def global_index(self, name: str) -> int:
         mut i = 0

@@ -237,6 +237,8 @@ __attribute__((malloc,returns_nonnull,hot)) Sema* Sema_init() {
     /* pass */
     s->no_heap = false;
     /* pass */
+    s->heap_boxes_tuples = false;
+    /* pass */
     s->mutating_methods = _tr_dict_new(32LL);
     /* pass */
     s->fn_ret_owned = _tr_dict_new(64LL);
@@ -11134,6 +11136,11 @@ __auto_type ty = _t538.data.ECast.ty;
         return box_hirexpr(HirExpr_ctor_EFString(hparts, AstType_init(_tr_str_lit("str"))));
     } else if (_t538.tag == Expr_ETuple) {
         __auto_type items = _t538.data.ETuple.items;
+        /* pass */
+        if ((self->no_heap && self->heap_boxes_tuples)) {
+            /* pass */
+            Sema_check_no_heap(self, _tr_str_lit("a tuple literal (heap-boxed on the LLVM/native backend)"), _tr_str_lit("use the C backend (stack tuples) for --no-heap, or return values via out-params / a @value_type struct"));
+        }
         /* pass */
         List_ptr* hitems = (void*)List_ptr_new();
         /* pass */

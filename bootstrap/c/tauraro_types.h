@@ -1601,6 +1601,7 @@ typedef enum {
     LInst_IBitsF,
     LInst_IFBits,
     LInst_IAddrVar,
+    LInst_IAddrGlobal,
     LInst_IFuncAddr,
     LInst_ICallInd,
     LInst_IAsm,
@@ -1692,6 +1693,10 @@ typedef struct LInst {
         } IAddrVar;
         struct {
             long long dst;
+            long long gidx;
+        } IAddrGlobal;
+        struct {
+            long long dst;
             TrStr fname;
         } IFuncAddr;
         struct {
@@ -1745,6 +1750,7 @@ static inline __attribute__((always_inline)) LInst LInst_ctor_IFCall2F(long long
 static inline __attribute__((always_inline)) LInst LInst_ctor_IBitsF(long long dst, long long src) { LInst _r = {.tag=LInst_IBitsF}; _r.data.IBitsF.dst = dst; _r.data.IBitsF.src = src; return _r; }
 static inline __attribute__((always_inline)) LInst LInst_ctor_IFBits(long long dst, long long src) { LInst _r = {.tag=LInst_IFBits}; _r.data.IFBits.dst = dst; _r.data.IFBits.src = src; return _r; }
 static inline __attribute__((always_inline)) LInst LInst_ctor_IAddrVar(long long dst, TrStr name) { LInst _r = {.tag=LInst_IAddrVar}; _r.data.IAddrVar.dst = dst; _r.data.IAddrVar.name = _tr_str_retain(name); return _r; }
+static inline __attribute__((always_inline)) LInst LInst_ctor_IAddrGlobal(long long dst, long long gidx) { LInst _r = {.tag=LInst_IAddrGlobal}; _r.data.IAddrGlobal.dst = dst; _r.data.IAddrGlobal.gidx = gidx; return _r; }
 static inline __attribute__((always_inline)) LInst LInst_ctor_IFuncAddr(long long dst, TrStr fname) { LInst _r = {.tag=LInst_IFuncAddr}; _r.data.IFuncAddr.dst = dst; _r.data.IFuncAddr.fname = _tr_str_retain(fname); return _r; }
 static inline __attribute__((always_inline)) LInst LInst_ctor_ICallInd(long long dst, long long fnreg, List_i64* args) { LInst _r = {.tag=LInst_ICallInd}; _r.data.ICallInd.dst = dst; _r.data.ICallInd.fnreg = fnreg; _r.data.ICallInd.args = args; return _r; }
 static inline __attribute__((always_inline)) LInst LInst_ctor_IAsm(TrStr code, TrStr cons) { LInst _r = {.tag=LInst_IAsm}; _r.data.IAsm.code = _tr_str_retain(code); _r.data.IAsm.cons = _tr_str_retain(cons); return _r; }
@@ -2690,6 +2696,7 @@ typedef struct Sema {
     List_TrStr* cur_func_sources;
     bool strict_mode;
     bool no_heap;
+    bool heap_boxes_tuples;
     TrMap* mutating_methods;
     TrMap* fn_ret_owned;
     TrMap* fn_param_consumes;
@@ -3040,6 +3047,7 @@ typedef struct LModule {
     List_TrStr* strings;
     List_TrStr* globals;
     List_i64* global_types;
+    List_i64* global_arr;
     List_ptr* global_inits;
     HirProgram* hir_prog;
     bool ok;
@@ -3053,6 +3061,7 @@ typedef struct LModule {
     List_TrStr* fn_owned_names;
     List_TrStr* overloaded_sigs;
     bool target_llvm;
+    bool no_heap;
 } LModule;
 static void _trdrop_LModule(void* vp) {
     LModule* self = (LModule*)vp; (void)self;
@@ -3065,6 +3074,7 @@ static void _trdrop_LModule(void* vp) {
     List_TrStr_free(self->strings);
     List_TrStr_free(self->globals);
     List_i64_free(self->global_types);
+    List_i64_free(self->global_arr);
     List_ptr_free(self->global_inits);
     _tr_obj_release(self->hir_prog, _trdrop_HirProgram);
     _tr_str_release(self->fail_note);
@@ -3779,6 +3789,8 @@ __attribute__((hot)) void LModule_mark_overloaded(LModule* self, TrStr cls, TrSt
 __attribute__((hot)) bool LModule_is_overloaded(LModule* self, TrStr cls, TrStr method);
 __attribute__((hot)) TrStr LModule_resolve_method_ov(LModule* self, TrStr cls, TrStr method, long long argc);
 __attribute__((hot)) long long LModule_add_global(LModule* self, TrStr name, long long tag);
+__attribute__((hot)) void LModule_set_global_arr(LModule* self, long long idx, long long n);
+__attribute__((hot)) long long LModule_global_arr_of(LModule* self, TrStr name);
 __attribute__((hot)) long long LModule_global_index(LModule* self, TrStr name);
 __attribute__((hot)) bool LModule_is_global(LModule* self, TrStr name);
 __attribute__((hot)) long long LModule_global_type(LModule* self, TrStr name);
@@ -3859,6 +3871,7 @@ __attribute__((hot)) TrStr _ov_method_name(LModule* m, TrStr cls, HirFunction* f
 __attribute__((hot)) void _detect_overloads(LModule* m, HirProgram* prog);
 __attribute__((hot)) long long _arg_limit(LModule* m);
 __attribute__((hot)) LModule* lower_to_lir_t(HirProgram* prog, bool llvm);
+__attribute__((hot)) LModule* lower_to_lir_nh(HirProgram* prog, bool llvm, bool no_heap);
 __attribute__((hot)) LModule* lower_to_lir(HirProgram* prog);
 __attribute__((hot)) LModule* _lower_to_lir_body(LModule* m, HirProgram* prog);
 __attribute__((hot)) bool _fn_has_iface_param(LModule* m, HirFunction* f);
@@ -3982,6 +3995,8 @@ __attribute__((hot)) long long _const_int_val(HirExpr* e);
 __attribute__((hot)) void _emit_add_const(LFunc* lf, TrStr name, long long delta);
 __attribute__((hot)) long long _list_call1(LModule* m, LFunc* lf, TrStr sym, long long handle, long long restype);
 __attribute__((hot)) long long _inline_list_addr(LModule* m, LFunc* lf, long long handle, long long idx, long long stride);
+__attribute__((hot)) long long _fixed_arr_len(LModule* m, LFunc* lf, TrStr name);
+__attribute__((hot)) long long _fixed_arr_elem_tag(LModule* m, LFunc* lf, TrStr name);
 __attribute__((hot)) long long _array_elem_addr(LModule* m, LFunc* lf, TrStr name, long long idx);
 __attribute__((hot)) long long _list_get(LModule* m, LFunc* lf, long long handle, long long idx);
 __attribute__((hot)) long long _list_get_raw(LModule* m, LFunc* lf, long long ltag, long long handle, long long idx);
@@ -4018,6 +4033,7 @@ __attribute__((hot)) TrStr _ll_float_instr(TrStr op);
 __attribute__((hot)) TrStr _ll_fcmp_pred(TrStr op);
 __attribute__((malloc,returns_nonnull,hot)) LlvmGenerator* LlvmGenerator_init();
 __attribute__((hot)) TrStr LlvmGenerator_generate(LlvmGenerator* self, HirProgram* prog);
+__attribute__((hot)) TrStr LlvmGenerator_generate_nh(LlvmGenerator* self, HirProgram* prog, bool no_heap);
 __attribute__((malloc,returns_nonnull,hot)) ByteBuf* ByteBuf_init();
 __attribute__((hot)) void ByteBuf_u8(ByteBuf* self, long long v);
 __attribute__((hot)) void ByteBuf_u16(ByteBuf* self, long long v);

@@ -197,6 +197,7 @@ pub class Sema:
     pub cur_func_sources:   Vec[str]   # ... and immediate sources) collected during lower_func
     pub strict_mode: bool               # --strict: alloc outside unsafe -> hard [U-1] error
     pub no_heap: bool                   # --no-heap: reject heap-allocating constructs -> [H-1] error (bare-metal zero-heap guarantee)
+    pub heap_boxes_tuples: bool         # true when the selected backend heap-allocates tuples/enums (llvm/native). The C backend keeps them as stack value structs, so under --no-heap it allows them; the other backends must reject them to keep the zero-heap guarantee honest.
     pub mutating_methods: Map[str, bool] # "ClassName.method" -> true if it stores into self.<field> (implicit-borrow check)
     pub fn_ret_owned:    Map[str, bool] # return-ownership inference: fn/method key -> true if it returns an OWNED heap-class ref (see compute_return_ownership)
     pub fn_param_consumes: Map[str, bool] # parameter-ownership inference: "fnkey#i" -> true if the fn CONSUMES (moves/frees/stores/returns) param i; false = PROVEN only-borrowed. Interprocedural monotone fixpoint (compute_param_ownership); the precise per-callee effect the drop heuristics lack.
@@ -298,6 +299,7 @@ extend Sema:
         s.cur_func_sources       = Vec[str].init(0)
         s.strict_mode            = false
         s.no_heap                = false
+        s.heap_boxes_tuples      = false
         s.mutating_methods       = Map[str, bool].init(32)
         s.fn_ret_owned           = Map[str, bool].init(64)
         s.fn_param_consumes      = Map[str, bool].init(64)
@@ -5511,6 +5513,11 @@ extend Sema:
                     m = m + 1
                 return box_hirexpr(HirExpr.EFString(hparts, AstType.init("str")))
             case Expr.ETuple(items):
+                # [H-1] under --no-heap: a tuple literal heap-allocates on the LLVM/native
+                # backends (the C backend keeps it as a stack `TrTuple` value, so it's allowed
+                # there). Reject it on the heap-boxing backends so the zero-heap guarantee holds.
+                if self.no_heap and self.heap_boxes_tuples:
+                    self.check_no_heap("a tuple literal (heap-boxed on the LLVM/native backend)", "use the C backend (stack tuples) for --no-heap, or return values via out-params / a @value_type struct")
                 mut hitems = Vec[Pointer[HirExpr]].init(items.len)
                 mut n = 0
                 while n < items.len:

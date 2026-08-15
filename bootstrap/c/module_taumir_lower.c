@@ -172,6 +172,8 @@ long long _const_int_val(HirExpr* e);
 void _emit_add_const(LFunc* lf, TrStr name, long long delta);
 long long _list_call1(LModule* m, LFunc* lf, TrStr sym, long long handle, long long restype);
 long long _inline_list_addr(LModule* m, LFunc* lf, long long handle, long long idx, long long stride);
+long long _fixed_arr_len(LModule* m, LFunc* lf, TrStr name);
+long long _fixed_arr_elem_tag(LModule* m, LFunc* lf, TrStr name);
 long long _array_elem_addr(LModule* m, LFunc* lf, TrStr name, long long idx);
 long long _list_get(LModule* m, LFunc* lf, long long handle, long long idx);
 long long _list_get_raw(LModule* m, LFunc* lf, long long ltag, long long handle, long long idx);
@@ -2004,9 +2006,16 @@ __attribute__((hot)) long long _arg_limit(LModule* m) {
 
 __attribute__((hot)) LModule* lower_to_lir_t(HirProgram* prog, bool llvm) {
     /* pass */
+    return lower_to_lir_nh(prog, llvm, false);
+}
+
+__attribute__((hot)) LModule* lower_to_lir_nh(HirProgram* prog, bool llvm, bool no_heap) {
+    /* pass */
     LModule* m = LModule_init();
     /* pass */
     m->target_llvm = llvm;
+    /* pass */
+    m->no_heap = no_heap;
     /* pass */
     HirProgram* _cltmp_t2301 = _tr_obj_retain(prog);
     _tr_obj_release(m->hir_prog, _trdrop_HirProgram);
@@ -2862,7 +2871,29 @@ __attribute__((hot)) bool _register_global(LModule* m, HirStmt* s) {
         return true;
     } else if (_t2328.tag == HirStmt_SLet) {
         __auto_type name = _t2328.data.SLet.name;
+__auto_type ty = _t2328.data.SLet.ty;
 __auto_type val = _t2328.data.SLet.val;
+        /* pass */
+        if ((((m->target_llvm && (strcmp(_tr_strz(ty->name), _tr_strz(_tr_str_lit("Array"))) == 0)) && (ty->array_size > 0LL)) && (ty->args->len > 0LL))) {
+            /* pass */
+            long long getag = _tag_of(m, (*((AstType**)List_ptr_get(ty->args, 0LL))));
+            /* pass */
+            if (((getag != 0LL) && (getag != 4LL))) {
+                /* pass */
+                return false;
+            }
+            /* pass */
+            long long gidx_a = LModule_add_global(m, name, getag);
+            /* pass */
+            LModule_set_global_arr(m, gidx_a, ty->array_size);
+            /* pass */
+            if ((((unsigned long long)(val)) == ((unsigned long long)(0LL)))) {
+                /* pass */
+                return true;
+            }
+            /* pass */
+            return false;
+        }
         /* pass */
         if ((((unsigned long long)(val)) == ((unsigned long long)(0LL)))) {
             /* pass */
@@ -3144,6 +3175,15 @@ __attribute__((hot)) long long _lower_enum_ctor(LModule* m, LFunc* lf, TrStr ena
     long long vidx = LModule_enum_variant_index(m, ename, vname);
     /* pass */
     if ((vidx < 0LL)) {
+        /* pass */
+        return (-1LL);
+    }
+    /* pass */
+    if (m->no_heap) {
+        /* pass */
+        m->ok = false;
+        /* pass */
+        m->fail_note = ({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("[H-1] constructing enum '")), _tr_strz(ename))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("."))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(vname)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("' heap-allocates, which --no-heap forbids on this backend (it boxes via the object allocator).\n      FIX: use the C backend for --no-heap (it keeps enums as stack tagged unions), or avoid heap enums such as Option/Result on the zero-heap path"))); _tr_str_release(_cl); _cres; });
         /* pass */
         return (-1LL);
     }
@@ -9198,7 +9238,7 @@ __attribute__((hot)) bool _lower_index_set(LModule* m, LFunc* lf, HirExpr* obj, 
     /* pass */
     TrStr awn = _ident_name(obj);
     /* pass */
-    if (((strcmp(_tr_strz(awn), _tr_strz(_tr_str_lit(""))) != 0) && (LFunc_var_arr_of(lf, awn) > 0LL))) {
+    if (((strcmp(_tr_strz(awn), _tr_strz(_tr_str_lit(""))) != 0) && (_fixed_arr_len(m, lf, awn) > 0LL))) {
         /* pass */
         long long aiv = lower_expr(m, lf, idx);
         /* pass */
@@ -9220,7 +9260,7 @@ __attribute__((hot)) bool _lower_index_set(LModule* m, LFunc* lf, HirExpr* obj, 
         /* pass */
         long long avt = LFunc_vreg_type(lf, avv);
         /* pass */
-        long long aet = LFunc_var_type(lf, awn);
+        long long aet = _fixed_arr_elem_tag(m, lf, awn);
         /* pass */
         if ((avt == 4LL)) {
             /* pass */
@@ -11706,13 +11746,39 @@ __attribute__((hot)) long long _inline_list_addr(LModule* m, LFunc* lf, long lon
     return addr;
 }
 
+__attribute__((hot)) long long _fixed_arr_len(LModule* m, LFunc* lf, TrStr name) {
+    /* pass */
+    if ((LFunc_var_index(lf, name) >= 0LL)) {
+        /* pass */
+        return LFunc_var_arr_of(lf, name);
+    }
+    /* pass */
+    return LModule_global_arr_of(m, name);
+}
+
+__attribute__((hot)) long long _fixed_arr_elem_tag(LModule* m, LFunc* lf, TrStr name) {
+    /* pass */
+    if ((LFunc_var_index(lf, name) >= 0LL)) {
+        /* pass */
+        return LFunc_var_type(lf, name);
+    }
+    /* pass */
+    return LModule_global_type(m, name);
+}
+
 __attribute__((hot)) long long _array_elem_addr(LModule* m, LFunc* lf, TrStr name, long long idx) {
     /* pass */
     long long base = LFunc_new_vreg(lf);
     /* pass */
     LFunc_set_vreg_type(lf, base, 10LL);
     /* pass */
-    LFunc_emit(lf, LInst_ctor_IAddrVar(base, name));
+    if ((LFunc_var_index(lf, name) >= 0LL)) {
+        /* pass */
+        LFunc_emit(lf, LInst_ctor_IAddrVar(base, name));
+    } else {
+        /* pass */
+        LFunc_emit(lf, LInst_ctor_IAddrGlobal(base, LModule_global_index(m, name)));
+    }
     /* pass */
     long long c8 = LFunc_new_vreg(lf);
     /* pass */
@@ -15502,7 +15568,7 @@ __auto_type idx = _t2454.data.EIndex._tr_v_index;
         /* pass */
         TrStr arn = _ident_name(obj);
         /* pass */
-        if (((strcmp(_tr_strz(arn), _tr_strz(_tr_str_lit(""))) != 0) && (LFunc_var_arr_of(lf, arn) > 0LL))) {
+        if (((strcmp(_tr_strz(arn), _tr_strz(_tr_str_lit(""))) != 0) && (_fixed_arr_len(m, lf, arn) > 0LL))) {
             /* pass */
             long long ariv = lower_expr(m, lf, idx);
             /* pass */
@@ -15519,7 +15585,7 @@ __auto_type idx = _t2454.data.EIndex._tr_v_index;
             /* pass */
             LFunc_emit(lf, LInst_ctor_ILoad(ard, araddr, 0LL, 2LL));
             /* pass */
-            LFunc_set_vreg_type(lf, ard, LFunc_var_type(lf, arn));
+            LFunc_set_vreg_type(lf, ard, _fixed_arr_elem_tag(m, lf, arn));
             /* pass */
             _tr_str_release(gicls);
             _tr_str_release(arn);
@@ -15655,11 +15721,11 @@ __auto_type prop = _t2454.data.EPropAccess.prop;
             /* pass */
             TrStr aln = _ident_name(obj);
             /* pass */
-            if (((strcmp(_tr_strz(aln), _tr_strz(_tr_str_lit(""))) != 0) && (LFunc_var_arr_of(lf, aln) > 0LL))) {
+            if (((strcmp(_tr_strz(aln), _tr_strz(_tr_str_lit(""))) != 0) && (_fixed_arr_len(m, lf, aln) > 0LL))) {
                 /* pass */
                 long long ald = LFunc_new_vreg(lf);
                 /* pass */
-                LFunc_emit(lf, LInst_ctor_IConst(ald, LFunc_var_arr_of(lf, aln)));
+                LFunc_emit(lf, LInst_ctor_IConst(ald, _fixed_arr_len(m, lf, aln)));
                 /* pass */
                 _tr_str_release(aln);
                 return ald;
@@ -16686,7 +16752,7 @@ __auto_type ity_g = _t2498.data.EIdent.ty;
         /* pass */
         TrStr amn = _ident_name(obj);
         /* pass */
-        if (((strcmp(_tr_strz(amn), _tr_strz(_tr_str_lit(""))) != 0) && (LFunc_var_arr_of(lf, amn) > 0LL))) {
+        if (((strcmp(_tr_strz(amn), _tr_strz(_tr_str_lit(""))) != 0) && (_fixed_arr_len(m, lf, amn) > 0LL))) {
             /* pass */
             if ((((strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("get_index"))) == 0) || (strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("get"))) == 0)) && (margs->len == 1LL))) {
                 /* pass */
@@ -16705,7 +16771,7 @@ __auto_type ity_g = _t2498.data.EIdent.ty;
                 /* pass */
                 LFunc_emit(lf, LInst_ctor_ILoad(amd, amaddr, 0LL, 2LL));
                 /* pass */
-                LFunc_set_vreg_type(lf, amd, LFunc_var_type(lf, amn));
+                LFunc_set_vreg_type(lf, amd, _fixed_arr_elem_tag(m, lf, amn));
                 /* pass */
                 _tr_str_release(recv_cls);
                 _tr_str_release(amn);
@@ -16716,7 +16782,7 @@ __auto_type ity_g = _t2498.data.EIdent.ty;
                 /* pass */
                 long long amld = LFunc_new_vreg(lf);
                 /* pass */
-                LFunc_emit(lf, LInst_ctor_IConst(amld, LFunc_var_arr_of(lf, amn)));
+                LFunc_emit(lf, LInst_ctor_IConst(amld, _fixed_arr_len(m, lf, amn)));
                 /* pass */
                 _tr_str_release(recv_cls);
                 _tr_str_release(amn);
