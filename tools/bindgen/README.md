@@ -54,22 +54,27 @@ Also verified struct-by-value returns, enums, and `#define` constants on synthet
 > unsafe — it wraps a string the library owns as a Tauraro-owned string and frees it on drop.
 > Copy it instead. This is a general FFI ownership rule, not a bindgen issue.
 
-**Done:**
-- Functions, structs (`@value_type`), opaque handles, enums, primitive/fn-pointer typedefs,
-  int/hex/string `#define` constants, the `c_*` (incl. `<stdint.h>`) width mapping.
-- **Multi-file headers** — declarations from `#include`d system headers are filtered out via
-  `cc -E` line markers (matched by the target header's basename), so a real header that pulls in
-  `<stdint.h>`/`<stddef.h>` binds only *its own* symbols.
-- **`#define` allowlist** — only macros `#define`d in the target header's own text are emitted
-  (constants from included system headers, e.g. `INT32_MAX`, don't leak in).
+**Handles:**
+- Functions (incl. struct-by-value, inline function-pointer params, `va_list`), structs
+  (`@value_type`), opaque handles, forward-declared opaque structs, pointer typedefs, enums (incl.
+  complex/computed values, which are skipped), primitive/fn-pointer typedefs, int/hex/string
+  `#define` constants, the full `c_*` (incl. `<stdint.h>`) width mapping, and storage-class /
+  calling-convention / `__declspec(…)` / `__attribute__((…))` stripping.
+- **Local vs system includes** — declarations from `#include`d **system** headers (flag `3` in
+  `cc -E` markers) are dropped, while a library's own **local** headers (zlib's `zconf.h`) are
+  bound. Type/struct names are de-duplicated.
+- **`#define` allowlist** — only macros `#define`d in the target header's own text are emitted.
+- **Symbol-collision skip-list** — a symbol the Tauraro runtime already declares (libc `printf`/
+  `malloc`/`qsort`; Win32 `CreateWindow`) is skipped rather than re-declared, so a library header
+  that also declares one compiles without a `conflicting types` error.
 
 **Follow-ups (Phase 1b):**
-- **System-symbol collisions.** A generated symbol can clash with one the Tauraro runtime's
-  system headers already declare (libc `printf`/`qsort`; Win32 `CreateWindow`). A skip-list of
-  runtime-provided symbols is the fix.
-- **Local `#include`s.** Macros/types from a library's *own* sub-headers (not `<system>` ones)
-  should be included; currently only the top header's own `#define`s are emitted.
+- **Local-`#include` `#define`s** — currently only the top header's own `#define`s become
+  constants; macros defined in a library's *own* sub-headers aren't yet emitted.
 - **Function-like `#define` macros** are skipped (they aren't symbols); emit inline wrappers.
-- **Inline function-pointer parameters** (`void (*cb)(int)`) are emitted as `Pointer[void]`.
 - Big libraries with a machine-readable registry (Vulkan XML, GTK GIR) are better generated
   from that registry than from the header.
+
+> **Windows path note:** pass the header (and `-I` dirs) as **Windows paths** (`C:/…`), not MSYS
+> `/c/…` paths — the tool shells out to the compiler via `cmd.exe`, which doesn't understand
+> `/c/…`. Relative paths work fine.

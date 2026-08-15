@@ -135,6 +135,27 @@ def map_type(words: str, stars: int) -> str:
     return ty
 
 # ── small helpers ────────────────────────────────────────────────────────────────
+# Symbols the Tauraro runtime already declares (it pulls in <stdio.h>/<stdlib.h>/<string.h>/
+# <math.h> and, on Windows, <windows.h>). If a library header re-declares one of these, emitting
+# our own `extern` prototype would conflict with the runtime's ("conflicting types for 'printf'"),
+# so we skip it — the call still resolves to the runtime's declaration. (The system-header FILTER
+# already drops these when they come from <system> includes; this catches the rare case where a
+# library's OWN header declares a colliding name, e.g. Win32's CreateWindow.)
+def _runtime_symbols() -> Map[str, bool]:
+    mut names = "printf fprintf sprintf snprintf vprintf vfprintf vsprintf vsnprintf scanf fscanf sscanf fopen fclose fread fwrite fseek ftell fgets fputs fgetc fputc getc putc getchar putchar puts perror fflush freopen setvbuf setbuf rewind remove rename tmpfile ungetc feof ferror clearerr "
+    names = names + "malloc calloc realloc free aligned_alloc abort exit _Exit atexit quick_exit system getenv setenv unsetenv abs labs llabs atoi atol atoll atof strtol strtoul strtoll strtoull strtod strtof rand srand qsort bsearch div ldiv lldiv "
+    names = names + "memcpy memmove memset memcmp memchr strcpy strncpy strcat strncat strcmp strncmp strchr strrchr strstr strlen strnlen strdup strndup strtok strspn strcspn strpbrk strerror strcoll strxfrm strcasecmp strncasecmp "
+    names = names + "sqrt sin cos tan asin acos atan atan2 sinh cosh tanh exp exp2 log log2 log10 pow cbrt hypot floor ceil round trunc fabs fmod ldexp frexp modf fmin fmax copysign nextafter nan isnan isinf signbit "
+    names = names + "read write open close lseek unlink stat fstat mkdir rmdir access dup dup2 pipe fork execve waitpid kill getpid "
+    names = names + "CreateWindow CloseWindow CreateWindowExA CreateWindowExW GetMessage DispatchMessage MessageBox MessageBoxA MessageBoxW "
+    mut m = Map[str, bool].init(512)
+    mut parts = names.split(" ")
+    mut i = 0
+    while i < parts.len:
+        if parts.get(i) != "": m.insert(parts.get(i), true)
+        i = i + 1
+    return m
+
 # Primitive type keywords that combine into multi-word types (`unsigned int`, `long long`).
 # When one follows another type word it's STILL part of the type, never a declarator name.
 def _is_prim_type_word(w: str) -> bool:
@@ -242,6 +263,8 @@ pub class Bindgen:
     pub n_funcs:   int
     pub n_structs: int
     pub seen:      Map[str, bool]    # top-level type/class names already emitted (dedup)
+    pub skip_syms: Map[str, bool]    # libc/runtime symbols to NOT re-declare (collision skip-list)
+    pub n_skipped: int
 
 extend Bindgen:
     pub def init(toks: Vec[CTok]) -> Bindgen:
@@ -255,6 +278,8 @@ extend Bindgen:
         b.n_funcs = 0
         b.n_structs = 0
         b.seen = Map[str, bool].init(64)
+        b.skip_syms = _runtime_symbols()
+        b.n_skipped = 0
         return b
 
     # True the FIRST time a type/class name is emitted; false on a duplicate.
@@ -350,6 +375,11 @@ extend Bindgen:
         return res
 
     pub def emit_func(self, ret_words: str, ret_stars: int, name: str):
+        # Skip a symbol the runtime already declares (would conflict), or a duplicate.
+        if self.skip_syms.contains(name):
+            self.n_skipped = self.n_skipped + 1
+            self.skip_to_semi()
+            return
         self.funcs.append("    def " + name + "(")
         self.adv()
         mut first = true
@@ -458,6 +488,15 @@ extend Bindgen:
         while not self.is_punct(";") and self.ck() != 5: self.adv()
         if self.is_punct(";"): self.adv()
 
+    # Consume an enum value expression up to the next top-level `,` or `}` (paren/bracket-aware).
+    pub def skip_enum_expr(self):
+        mut depth = 0
+        while self.ck() != 5:
+            if self.is_punct("(") or self.is_punct("["): depth = depth + 1
+            elif self.is_punct(")") or self.is_punct("]"): depth = depth - 1
+            elif depth <= 0 and (self.is_punct(",") or self.is_punct("}")): return
+            self.adv()
+
     pub def emit_enum(self, name: str):
         if name != "" and self.fresh(name): self.types.append("type " + name + " = c_int\n")
         self.adv()
@@ -469,13 +508,23 @@ extend Bindgen:
             mut ename = self.ct()
             self.adv()
             mut ev = next_val
+            mut simple = true
             if self.is_punct("="):
                 self.adv()
+                # A simple literal `= 42` / `= 0x10` (immediately followed by `,`/`}`), or a
+                # complex expression (macro call, cast, arithmetic) we can't evaluate -> skip.
                 if self.ck() == 1:
                     ev = _to_int(self.ct())
                     self.adv()
-            self.consts.append("const " + ename + ": c_int = " + ev.to_str() + "\n")
-            next_val = ev + 1
+                    if not (self.is_punct(",") or self.is_punct("}")):
+                        simple = false
+                        self.skip_enum_expr()
+                else:
+                    simple = false
+                    self.skip_enum_expr()
+            if simple and self.fresh(ename):
+                self.consts.append("const " + ename + ": c_int = " + ev.to_str() + "\n")
+                next_val = ev + 1
             if self.is_punct(","): self.adv()
         if self.is_punct("}"): self.adv()
         while not self.is_punct(";") and self.ck() != 5: self.adv()
@@ -757,4 +806,6 @@ def main(args: List[str]):
         sb.append(fs)
     write_file(out, sb.to_string().as_str())
     _tr_system("rm -f _bindgen_decls.i _bindgen_defs.i _bindgen_base.i _bindgen_empty.h _bindgen_err.txt 2>/dev/null")
-    print("bindgen: wrote " + out + " — " + bg.n_structs.to_str() + " types, " + bg.n_funcs.to_str() + " functions")
+    mut msg = "bindgen: wrote " + out + " — " + bg.n_structs.to_str() + " types, " + bg.n_funcs.to_str() + " functions"
+    if bg.n_skipped > 0: msg = msg + " (" + bg.n_skipped.to_str() + " runtime/libc symbols skipped)"
+    print(msg)
