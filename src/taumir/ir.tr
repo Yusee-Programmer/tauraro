@@ -84,6 +84,7 @@ pub class LFunc:
     pub vars:       Vec[str]
     pub var_types:  Vec[int]        # parallel to vars: 0 = int, 1 = ptr
     pub var_cls:    Vec[str]        # parallel to vars: class name if the var holds an object, else ""
+    pub var_arr:    Vec[int]        # parallel to vars: fixed-array length N (`[T;N]`), else 0 (scalar)
     pub params:     Vec[str]        # parameter names in order (System V arg registers -> slots)
     pub tmp_ctr:    int             # monotonic counter for synthesized (loop) var names
     pub loop_cont:  Vec[int]        # stack of `continue` target block ids (innermost = last)
@@ -117,6 +118,7 @@ extend LFunc:
         f.vars       = Vec[str].init(4)
         f.var_types  = Vec[int].init(4)
         f.var_cls    = Vec[str].init(4)
+        f.var_arr    = Vec[int].init(4)
         f.params     = Vec[str].init(4)
         f.tmp_ctr    = 0
         f.loop_cont  = Vec[int].init(4)
@@ -194,6 +196,7 @@ extend LFunc:
         self.vars.push(name)
         self.var_types.push(0)
         self.var_cls.push("")
+        self.var_arr.push(0)
         self.var_xret.push(-1)
 
     pub def var_index(self, name: str) -> int:
@@ -220,6 +223,18 @@ extend LFunc:
         mut idx = self.var_index(name)
         if idx >= 0: return self.var_cls.get(idx)
         return ""
+
+    # Fixed-array length of a var (`[T;N]` -> N); 0 for scalars. The element type tag is
+    # kept in var_types; the alloca becomes `[N x <elem>]` and index access uses IAddrVar +
+    # byte-offset (getelementptr) directly against the var's own storage (no heap handle).
+    pub def set_var_arr(self, name: str, n: int):
+        mut idx = self.var_index(name)
+        if idx >= 0: self.var_arr.set(idx, n)
+
+    pub def var_arr_of(self, name: str) -> int:
+        mut idx = self.var_index(name)
+        if idx >= 0: return self.var_arr.get(idx)
+        return 0
 
     # Closure return-tag plumbing: a vreg holding a freshly-built closure records the
     # closure's return tag; storing it into a var carries the tag to call sites.

@@ -41,8 +41,10 @@ turns that into a binary. Pick one with `--backend`:
 The **C backend is the default and the most complete** — the compiler self-hosts on it.
 The **LLVM backend** shares the same lowering and is *faster on most benchmarks* (a
 `getelementptr` codegen fix unblocked LLVM's auto-vectorizer: MatMul ~4×, Collatz ~3×);
-it covers a large feature subset. If the LLVM backend can't lower something yet it tells
-you clearly — fall back to `--backend c`.
+it covers a large feature subset — including fixed-size arrays `[T; N]`, which lower to an
+inline stack region (`alloca [N x i64]` with `getelementptr` access, **no heap**), so an
+array-heavy `--no-heap` firmware build stays heap-free on the LLVM backend too. If the LLVM
+backend can't lower something yet it tells you clearly — fall back to `--backend c`.
 
 Both backends produce identical observable output — a differential oracle (`LLVM ≡ C`)
 enforces this in CI.

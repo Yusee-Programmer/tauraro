@@ -1641,6 +1641,40 @@ pub def main(args: Vec[str]):
         write_file(hdr_path, hdr)
         if verbose: print("[lib] header: " + hdr_path)
 
+    # -- Turnkey bare-metal link (--freestanding @entry builds) ---------------
+    # When a linker script was generated (--emit-ld), the program has an @entry boot
+    # image: link the emitted C into a freestanding ELF here, in one command, with the
+    # generated linker script + the arch's boot flags (mirrors scripts/bare_run.sh) —
+    # instead of the normal hosted link. The bundled `zig cc` handles freestanding
+    # ARM/RISC-V, so no separate arm-none-eabi/riscv64 toolchain is required (an
+    # installed cross-gcc is used if present). Gated on emit_ld, so no other path is
+    # affected. Produces `<name>.elf`; feed it to qemu / a flasher.
+    if emit_ld != "" and not lib_mode:
+        mut bm_elf = exe_name + ".elf"
+        mut bm_cc = detect_c_compiler()
+        if target != "": bm_cc = resolve_cross_driver(resolve_target_triple(target))
+        mut bm_arch = " -mcpu=cortex-m3 -mthumb"
+        if _tr_str_contains(target, "riscv"): bm_arch = " -march=rv64imac -mabi=lp64 -mcmodel=medany"
+        # A bare-metal cross link needs a MULTI-TARGET linker: the system `ld` is
+        # host-only ("unrecognised emulation mode: elf64lriscv"). zig cc has lld
+        # built in; a clang driver needs -fuse-ld=lld (added when lld is present).
+        mut bm_lld = ""
+        if not _tr_str_contains(bm_cc, "zig"): bm_lld = detect_lld_flag()
+        mut bm_cmd = bm_cc + " -O" + opt_level + bm_arch + " -ffreestanding -nostdlib -fno-builtin" + bm_lld
+        bm_cmd = bm_cmd + " -T \"" + emit_ld + "\" \"-I" + build_dir + "include\" \"-I" + build_dir + "\""
+        mut bmi = 0
+        while bmi < all_c_files.len:
+            bm_cmd = bm_cmd + " \"" + all_c_files.get(bmi) + "\""
+            bmi = bmi + 1
+        bm_cmd = bm_cmd + " -o \"" + bm_elf + "\" 2>build/bare_link.log"
+        if verbose: print("[5/5] bare-metal link -> " + bm_elf + "  (" + bm_cc + ")")
+        if _tr_system(bm_cmd) == 0:
+            print("Bare-metal ELF written to: " + bm_elf)
+            return
+        print(c_red("error") + ": bare-metal link failed (see build/bare_link.log)")
+        print("       need a freestanding toolchain — the bundled zig, or arm-none-eabi / riscv64 gcc.")
+        _tr_exit(1)
+
     if verbose: print("[5/5] Compiling + linking " + str(all_c_files.len) + " modules -> " + exe_path)
     # Incremental compile + link: per-module .o with cache reuse for
     # unchanged modules, then a single link. build/ is intentionally kept

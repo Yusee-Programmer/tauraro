@@ -73,7 +73,10 @@ build_llvm_exe() {  # $1=.ll  $2=out-exe ; echoes "" on success or an error tag
 }
 
 pass=0; fail=0; skip=0
-for src in tests/native/*.tr; do
+# The native corpus is the shared native+llvm subset; tests/llvm/ holds programs the LLVM
+# backend supports but the native backend does not yet (e.g. fixed-size arrays, which the
+# native frame layout isn't array-aware for). Both are validated C≡LLVM here.
+for src in tests/native/*.tr tests/llvm/*.tr; do
     [ -f "$src" ] || continue
     name="$(basename "$src" .tr)"
     # C backend reference output (clean build/ first: stale-state hygiene).

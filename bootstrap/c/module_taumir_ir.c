@@ -36,6 +36,8 @@ __attribute__((malloc,returns_nonnull,hot)) LFunc* LFunc_init(TrStr name) {
     /* pass */
     f->var_cls = (void*)List_TrStr_new();
     /* pass */
+    f->var_arr = (void*)List_i64_new();
+    /* pass */
     f->params = (void*)List_TrStr_new();
     /* pass */
     f->tmp_ctr = 0LL;
@@ -182,6 +184,8 @@ __attribute__((hot)) void LFunc_add_var(LFunc* self, TrStr name) {
     /* pass */
     List_TrStr_append(self->var_cls, _tr_str_lit(""));
     /* pass */
+    List_i64_append(self->var_arr, 0LL);
+    /* pass */
     List_i64_append(self->var_xret, (-1LL));
 }
 
@@ -244,6 +248,28 @@ __attribute__((hot)) TrStr LFunc_var_cls_of(LFunc* self, TrStr name) {
     }
     /* pass */
     return _tr_str_lit("");
+}
+
+__attribute__((hot)) void LFunc_set_var_arr(LFunc* self, TrStr name, long long n) {
+    /* pass */
+    long long idx = LFunc_var_index(self, name);
+    /* pass */
+    if ((idx >= 0LL)) {
+        /* pass */
+        List_i64_set(self->var_arr, idx, n);
+    }
+}
+
+__attribute__((hot)) long long LFunc_var_arr_of(LFunc* self, TrStr name) {
+    /* pass */
+    long long idx = LFunc_var_index(self, name);
+    /* pass */
+    if ((idx >= 0LL)) {
+        /* pass */
+        return List_i64_get(self->var_arr, idx);
+    }
+    /* pass */
+    return 0LL;
 }
 
 __attribute__((hot)) void LFunc_set_vreg_xret(LFunc* self, long long id, long long t) {

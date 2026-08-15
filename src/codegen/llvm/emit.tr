@@ -348,7 +348,13 @@ extend LlvmEmitter:
         mut vi = 0
         while vi < lf.vars.len:
             mut vn = lf.vars.get(vi)
-            self.w("  %var_" + vn + " = alloca " + _ll_ty(lf.var_type(vn)) + "\n")
+            mut van = lf.var_arr.get(vi)
+            if van > 0:
+                # Fixed array `[T;N]`: the var's storage is an inline N-slot region (element is
+                # an i64 slot — int/bool). IAddrVar yields this alloca's address as the base.
+                self.w("  %var_" + vn + " = alloca [" + van.to_str() + " x i64]\n")
+            else:
+                self.w("  %var_" + vn + " = alloca " + _ll_ty(lf.var_type(vn)) + "\n")
             vi = vi + 1
         mut ri = 0
         while ri < lf.n_vregs:

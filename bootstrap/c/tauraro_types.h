@@ -2931,6 +2931,7 @@ typedef struct LFunc {
     List_TrStr* vars;
     List_i64* var_types;
     List_TrStr* var_cls;
+    List_i64* var_arr;
     List_TrStr* params;
     long long tmp_ctr;
     List_i64* loop_cont;
@@ -2959,6 +2960,7 @@ static void _trdrop_LFunc(void* vp) {
     List_TrStr_free(self->vars);
     List_i64_free(self->var_types);
     List_TrStr_free(self->var_cls);
+    List_i64_free(self->var_arr);
     List_i64_free(self->loop_cont);
     List_i64_free(self->loop_brk);
     List_i64_free(self->fresh_strs);
@@ -3760,6 +3762,8 @@ __attribute__((hot)) void LFunc_set_var_type(LFunc* self, TrStr name, long long 
 __attribute__((hot)) long long LFunc_var_type(LFunc* self, TrStr name);
 __attribute__((hot)) void LFunc_set_var_cls(LFunc* self, TrStr name, TrStr cls);
 __attribute__((hot)) TrStr LFunc_var_cls_of(LFunc* self, TrStr name);
+__attribute__((hot)) void LFunc_set_var_arr(LFunc* self, TrStr name, long long n);
+__attribute__((hot)) long long LFunc_var_arr_of(LFunc* self, TrStr name);
 __attribute__((hot)) void LFunc_set_vreg_xret(LFunc* self, long long id, long long t);
 __attribute__((hot)) long long LFunc_vreg_xret_of(LFunc* self, long long id);
 __attribute__((hot)) void LFunc_set_var_xret(LFunc* self, TrStr name, long long t);
@@ -3978,6 +3982,7 @@ __attribute__((hot)) long long _const_int_val(HirExpr* e);
 __attribute__((hot)) void _emit_add_const(LFunc* lf, TrStr name, long long delta);
 __attribute__((hot)) long long _list_call1(LModule* m, LFunc* lf, TrStr sym, long long handle, long long restype);
 __attribute__((hot)) long long _inline_list_addr(LModule* m, LFunc* lf, long long handle, long long idx, long long stride);
+__attribute__((hot)) long long _array_elem_addr(LModule* m, LFunc* lf, TrStr name, long long idx);
 __attribute__((hot)) long long _list_get(LModule* m, LFunc* lf, long long handle, long long idx);
 __attribute__((hot)) long long _list_get_raw(LModule* m, LFunc* lf, long long ltag, long long handle, long long idx);
 __attribute__((hot)) long long _list_get_elem(LModule* m, LFunc* lf, long long ltag, long long handle, long long idx);

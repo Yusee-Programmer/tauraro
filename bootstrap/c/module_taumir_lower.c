@@ -172,6 +172,7 @@ long long _const_int_val(HirExpr* e);
 void _emit_add_const(LFunc* lf, TrStr name, long long delta);
 long long _list_call1(LModule* m, LFunc* lf, TrStr sym, long long handle, long long restype);
 long long _inline_list_addr(LModule* m, LFunc* lf, long long handle, long long idx, long long stride);
+long long _array_elem_addr(LModule* m, LFunc* lf, TrStr name, long long idx);
 long long _list_get(LModule* m, LFunc* lf, long long handle, long long idx);
 long long _list_get_raw(LModule* m, LFunc* lf, long long ltag, long long handle, long long idx);
 long long _list_get_elem(LModule* m, LFunc* lf, long long ltag, long long handle, long long idx);
@@ -5358,6 +5359,45 @@ __auto_type val = _t2371.data.SLet.val;
         /* pass */
         if ((((unsigned long long)(val)) == ((unsigned long long)(0LL)))) {
             /* pass */
+            if ((((m->target_llvm && (strcmp(_tr_strz(ty->name), _tr_strz(_tr_str_lit("Array"))) == 0)) && (ty->array_size > 0LL)) && (ty->args->len > 0LL))) {
+                /* pass */
+                long long aetag = _tag_of(m, (*((AstType**)List_ptr_get(ty->args, 0LL))));
+                /* pass */
+                if (((aetag != 0LL) && (aetag != 4LL))) {
+                    /* pass */
+                    return false;
+                }
+                /* pass */
+                long long alen = ty->array_size;
+                /* pass */
+                LFunc_add_var(lf, name);
+                /* pass */
+                LFunc_set_var_type(lf, name, aetag);
+                /* pass */
+                LFunc_set_var_arr(lf, name, alen);
+                /* pass */
+                long long zc = LFunc_new_vreg(lf);
+                /* pass */
+                LFunc_emit(lf, LInst_ctor_IConst(zc, 0LL));
+                /* pass */
+                long long zi = 0LL;
+                /* pass */
+                while ((zi < alen)) {
+                    /* pass */
+                    long long zidx = LFunc_new_vreg(lf);
+                    /* pass */
+                    LFunc_emit(lf, LInst_ctor_IConst(zidx, zi));
+                    /* pass */
+                    long long zaddr = _array_elem_addr(m, lf, name, zidx);
+                    /* pass */
+                    LFunc_emit(lf, LInst_ctor_IStore(zaddr, 0LL, zc, 2LL));
+                    /* pass */
+                    zi = (zi + 1LL);
+                }
+                /* pass */
+                return true;
+            }
+            /* pass */
             long long dtag = _tag_of(m, ty);
             /* pass */
             if ((((dtag != 0LL) && (dtag != 4LL)) && (dtag != 5LL))) {
@@ -9156,11 +9196,66 @@ __attribute__((hot)) bool _lower_index_set(LModule* m, LFunc* lf, HirExpr* obj, 
         }
     }
     /* pass */
+    TrStr awn = _ident_name(obj);
+    /* pass */
+    if (((strcmp(_tr_strz(awn), _tr_strz(_tr_str_lit(""))) != 0) && (LFunc_var_arr_of(lf, awn) > 0LL))) {
+        /* pass */
+        long long aiv = lower_expr(m, lf, idx);
+        /* pass */
+        if (((aiv < 0LL) || (LFunc_vreg_type(lf, aiv) != 0LL))) {
+            /* pass */
+            _tr_str_release(sicls);
+            _tr_str_release(awn);
+            return false;
+        }
+        /* pass */
+        long long avv = lower_expr(m, lf, val);
+        /* pass */
+        if ((avv < 0LL)) {
+            /* pass */
+            _tr_str_release(sicls);
+            _tr_str_release(awn);
+            return false;
+        }
+        /* pass */
+        long long avt = LFunc_vreg_type(lf, avv);
+        /* pass */
+        long long aet = LFunc_var_type(lf, awn);
+        /* pass */
+        if ((avt == 4LL)) {
+            /* pass */
+            avt = 0LL;
+        }
+        /* pass */
+        if ((aet == 4LL)) {
+            /* pass */
+            aet = 0LL;
+        }
+        /* pass */
+        if ((avt != aet)) {
+            /* pass */
+            _tr_str_release(sicls);
+            _tr_str_release(awn);
+            return false;
+        }
+        /* pass */
+        long long aaddr = _array_elem_addr(m, lf, awn, aiv);
+        /* pass */
+        LFunc_emit(lf, LInst_ctor_IStore(aaddr, 0LL, avv, 2LL));
+        /* pass */
+        _flush_fresh_strs(m, lf);
+        /* pass */
+        _tr_str_release(sicls);
+        _tr_str_release(awn);
+        return true;
+    }
+    /* pass */
     long long ov = lower_expr(m, lf, obj);
     /* pass */
     if ((ov < 0LL)) {
         /* pass */
         _tr_str_release(sicls);
+        _tr_str_release(awn);
         return false;
     }
     /* pass */
@@ -9173,18 +9268,21 @@ __attribute__((hot)) bool _lower_index_set(LModule* m, LFunc* lf, HirExpr* obj, 
         if ((kv < 0LL)) {
             /* pass */
             _tr_str_release(sicls);
+            _tr_str_release(awn);
             return false;
         }
         /* pass */
         if ((_dict_key_is_str(ovt) && (LFunc_vreg_type(lf, kv) != 1LL))) {
             /* pass */
             _tr_str_release(sicls);
+            _tr_str_release(awn);
             return false;
         }
         /* pass */
         if (((!_dict_key_is_str(ovt)) && (LFunc_vreg_type(lf, kv) != 0LL))) {
             /* pass */
             _tr_str_release(sicls);
+            _tr_str_release(awn);
             return false;
         }
         /* pass */
@@ -9193,6 +9291,7 @@ __attribute__((hot)) bool _lower_index_set(LModule* m, LFunc* lf, HirExpr* obj, 
         if (((vv < 0LL) || (LFunc_vreg_type(lf, vv) != _dict_val_tag(ovt)))) {
             /* pass */
             _tr_str_release(sicls);
+            _tr_str_release(awn);
             return false;
         }
         /* pass */
@@ -9232,6 +9331,7 @@ __attribute__((hot)) bool _lower_index_set(LModule* m, LFunc* lf, HirExpr* obj, 
         _flush_fresh_strs(m, lf);
         /* pass */
         _tr_str_release(sicls);
+        _tr_str_release(awn);
         _tr_str_release(ssym);
         return true;
     }
@@ -9243,6 +9343,7 @@ __attribute__((hot)) bool _lower_index_set(LModule* m, LFunc* lf, HirExpr* obj, 
         if (((iv < 0LL) || (LFunc_vreg_type(lf, iv) != 0LL))) {
             /* pass */
             _tr_str_release(sicls);
+            _tr_str_release(awn);
             return false;
         }
         /* pass */
@@ -9251,6 +9352,7 @@ __attribute__((hot)) bool _lower_index_set(LModule* m, LFunc* lf, HirExpr* obj, 
         if ((lvv < 0LL)) {
             /* pass */
             _tr_str_release(sicls);
+            _tr_str_release(awn);
             return false;
         }
         /* pass */
@@ -9264,6 +9366,7 @@ __attribute__((hot)) bool _lower_index_set(LModule* m, LFunc* lf, HirExpr* obj, 
         if ((lvt != _list_elem_tag(ovt))) {
             /* pass */
             _tr_str_release(sicls);
+            _tr_str_release(awn);
             return false;
         }
         /* pass */
@@ -9299,10 +9402,12 @@ __attribute__((hot)) bool _lower_index_set(LModule* m, LFunc* lf, HirExpr* obj, 
         _flush_fresh_strs(m, lf);
         /* pass */
         _tr_str_release(sicls);
+        _tr_str_release(awn);
         return true;
     }
     /* pass */
     _tr_str_release(sicls);
+    _tr_str_release(awn);
     return false;
 }
 
@@ -11597,6 +11702,31 @@ __attribute__((hot)) long long _inline_list_addr(LModule* m, LFunc* lf, long lon
     LFunc_set_vreg_type(lf, addr, 10LL);
     /* pass */
     LFunc_emit(lf, LInst_ctor_IBinOp(addr, _tr_str_lit("+"), data, off));
+    /* pass */
+    return addr;
+}
+
+__attribute__((hot)) long long _array_elem_addr(LModule* m, LFunc* lf, TrStr name, long long idx) {
+    /* pass */
+    long long base = LFunc_new_vreg(lf);
+    /* pass */
+    LFunc_set_vreg_type(lf, base, 10LL);
+    /* pass */
+    LFunc_emit(lf, LInst_ctor_IAddrVar(base, name));
+    /* pass */
+    long long c8 = LFunc_new_vreg(lf);
+    /* pass */
+    LFunc_emit(lf, LInst_ctor_IConst(c8, 8LL));
+    /* pass */
+    long long off = LFunc_new_vreg(lf);
+    /* pass */
+    LFunc_emit(lf, LInst_ctor_IBinOp(off, _tr_str_lit("*"), idx, c8));
+    /* pass */
+    long long addr = LFunc_new_vreg(lf);
+    /* pass */
+    LFunc_set_vreg_type(lf, addr, 10LL);
+    /* pass */
+    LFunc_emit(lf, LInst_ctor_IBinOp(addr, _tr_str_lit("+"), base, off));
     /* pass */
     return addr;
 }
@@ -15370,11 +15500,38 @@ __auto_type idx = _t2454.data.EIndex._tr_v_index;
             }
         }
         /* pass */
+        TrStr arn = _ident_name(obj);
+        /* pass */
+        if (((strcmp(_tr_strz(arn), _tr_strz(_tr_str_lit(""))) != 0) && (LFunc_var_arr_of(lf, arn) > 0LL))) {
+            /* pass */
+            long long ariv = lower_expr(m, lf, idx);
+            /* pass */
+            if (((ariv < 0LL) || (LFunc_vreg_type(lf, ariv) != 0LL))) {
+                /* pass */
+                _tr_str_release(gicls);
+                _tr_str_release(arn);
+                return (-1LL);
+            }
+            /* pass */
+            long long araddr = _array_elem_addr(m, lf, arn, ariv);
+            /* pass */
+            long long ard = LFunc_new_vreg(lf);
+            /* pass */
+            LFunc_emit(lf, LInst_ctor_ILoad(ard, araddr, 0LL, 2LL));
+            /* pass */
+            LFunc_set_vreg_type(lf, ard, LFunc_var_type(lf, arn));
+            /* pass */
+            _tr_str_release(gicls);
+            _tr_str_release(arn);
+            return ard;
+        }
+        /* pass */
         long long ov = lower_expr(m, lf, obj);
         /* pass */
         if ((ov < 0LL)) {
             /* pass */
             _tr_str_release(gicls);
+            _tr_str_release(arn);
             return (-1LL);
         }
         /* pass */
@@ -15387,18 +15544,21 @@ __auto_type idx = _t2454.data.EIndex._tr_v_index;
             if ((dkv < 0LL)) {
                 /* pass */
                 _tr_str_release(gicls);
+                _tr_str_release(arn);
                 return (-1LL);
             }
             /* pass */
             if ((_dict_key_is_str(ovt) && (LFunc_vreg_type(lf, dkv) != 1LL))) {
                 /* pass */
                 _tr_str_release(gicls);
+                _tr_str_release(arn);
                 return (-1LL);
             }
             /* pass */
             if (((!_dict_key_is_str(ovt)) && (LFunc_vreg_type(lf, dkv) != 0LL))) {
                 /* pass */
                 _tr_str_release(gicls);
+                _tr_str_release(arn);
                 return (-1LL);
             }
             /* pass */
@@ -15425,6 +15585,7 @@ __auto_type idx = _t2454.data.EIndex._tr_v_index;
                 LFunc_set_vreg_type(lf, dgf, 5LL);
                 /* pass */
                 _tr_str_release(gicls);
+                _tr_str_release(arn);
                 _tr_str_release(dget);
                 return dgf;
             }
@@ -15432,6 +15593,7 @@ __auto_type idx = _t2454.data.EIndex._tr_v_index;
             LFunc_set_vreg_type(lf, dgd, _dict_val_tag(ovt));
             /* pass */
             _tr_str_release(gicls);
+            _tr_str_release(arn);
             _tr_str_release(dget);
             return dgd;
         }
@@ -15443,16 +15605,19 @@ __auto_type idx = _t2454.data.EIndex._tr_v_index;
             if ((siv < 0LL)) {
                 /* pass */
                 _tr_str_release(gicls);
+                _tr_str_release(arn);
                 return (-1LL);
             }
             /* pass */
             _tr_str_release(gicls);
+            _tr_str_release(arn);
             return _str_call1(m, lf, _tr_str_lit("_tr_rt_str_char_at"), ov, siv, 0LL);
         }
         /* pass */
         if ((!_is_list_tag(ovt))) {
             /* pass */
             _tr_str_release(gicls);
+            _tr_str_release(arn);
             return (-1LL);
         }
         /* pass */
@@ -15461,10 +15626,12 @@ __auto_type idx = _t2454.data.EIndex._tr_v_index;
         if ((iv < 0LL)) {
             /* pass */
             _tr_str_release(gicls);
+            _tr_str_release(arn);
             return (-1LL);
         }
         /* pass */
         _tr_str_release(gicls);
+        _tr_str_release(arn);
         return _list_get_elem(m, lf, ovt, ov, iv);
     } else if (_t2454.tag == HirExpr_EPropAccess) {
         __auto_type obj = _t2454.data.EPropAccess.obj;
@@ -15482,6 +15649,21 @@ __auto_type prop = _t2454.data.EPropAccess.prop;
             __auto_type _ = _t2488;
             /* pass */
             /* pass */
+        }
+        /* pass */
+        if ((strcmp(_tr_strz(prop), _tr_strz(_tr_str_lit("len"))) == 0)) {
+            /* pass */
+            TrStr aln = _ident_name(obj);
+            /* pass */
+            if (((strcmp(_tr_strz(aln), _tr_strz(_tr_str_lit(""))) != 0) && (LFunc_var_arr_of(lf, aln) > 0LL))) {
+                /* pass */
+                long long ald = LFunc_new_vreg(lf);
+                /* pass */
+                LFunc_emit(lf, LInst_ctor_IConst(ald, LFunc_var_arr_of(lf, aln)));
+                /* pass */
+                _tr_str_release(aln);
+                return ald;
+            }
         }
         /* pass */
         TrStr pcls = _recv_class(m, lf, obj);
@@ -16502,6 +16684,50 @@ __auto_type ity_g = _t2498.data.EIdent.ty;
         /* pass */
         TrStr recv_cls = _recv_class(m, lf, obj);
         /* pass */
+        TrStr amn = _ident_name(obj);
+        /* pass */
+        if (((strcmp(_tr_strz(amn), _tr_strz(_tr_str_lit(""))) != 0) && (LFunc_var_arr_of(lf, amn) > 0LL))) {
+            /* pass */
+            if ((((strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("get_index"))) == 0) || (strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("get"))) == 0)) && (margs->len == 1LL))) {
+                /* pass */
+                long long amiv = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, 0LL)));
+                /* pass */
+                if (((amiv < 0LL) || (LFunc_vreg_type(lf, amiv) != 0LL))) {
+                    /* pass */
+                    _tr_str_release(recv_cls);
+                    _tr_str_release(amn);
+                    return (-1LL);
+                }
+                /* pass */
+                long long amaddr = _array_elem_addr(m, lf, amn, amiv);
+                /* pass */
+                long long amd = LFunc_new_vreg(lf);
+                /* pass */
+                LFunc_emit(lf, LInst_ctor_ILoad(amd, amaddr, 0LL, 2LL));
+                /* pass */
+                LFunc_set_vreg_type(lf, amd, LFunc_var_type(lf, amn));
+                /* pass */
+                _tr_str_release(recv_cls);
+                _tr_str_release(amn);
+                return amd;
+            }
+            /* pass */
+            if ((((strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("len"))) == 0) || (strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("length"))) == 0)) && (margs->len == 0LL))) {
+                /* pass */
+                long long amld = LFunc_new_vreg(lf);
+                /* pass */
+                LFunc_emit(lf, LInst_ctor_IConst(amld, LFunc_var_arr_of(lf, amn)));
+                /* pass */
+                _tr_str_release(recv_cls);
+                _tr_str_release(amn);
+                return amld;
+            }
+            /* pass */
+            _tr_str_release(recv_cls);
+            _tr_str_release(amn);
+            return (-1LL);
+        }
+        /* pass */
         if ((((strcmp(_tr_strz(recv_cls), _tr_strz(_tr_str_lit("StrView"))) == 0) && (strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("to_str"))) == 0)) && (margs->len == 0LL))) {
             /* pass */
             long long svo = lower_expr(m, lf, obj);
@@ -16509,6 +16735,7 @@ __auto_type ity_g = _t2498.data.EIdent.ty;
             if ((svo < 0LL)) {
                 /* pass */
                 _tr_str_release(recv_cls);
+                _tr_str_release(amn);
                 return (-1LL);
             }
             /* pass */
@@ -16539,6 +16766,7 @@ __auto_type ity_g = _t2498.data.EIdent.ty;
             _fresh_mark(lf, svd);
             /* pass */
             _tr_str_release(recv_cls);
+            _tr_str_release(amn);
             return svd;
         }
         /* pass */
@@ -16549,6 +16777,7 @@ __auto_type ity_g = _t2498.data.EIdent.ty;
             if ((soo < 0LL)) {
                 /* pass */
                 _tr_str_release(recv_cls);
+                _tr_str_release(amn);
                 return (-1LL);
             }
             /* pass */
@@ -16569,6 +16798,7 @@ __auto_type ity_g = _t2498.data.EIdent.ty;
             _fresh_mark(lf, sod);
             /* pass */
             _tr_str_release(recv_cls);
+            _tr_str_release(amn);
             return sod;
         }
         /* pass */
@@ -16601,6 +16831,7 @@ __auto_type ity_g = _t2498.data.EIdent.ty;
                     if ((gmix < 0LL)) {
                         /* pass */
                         _tr_str_release(recv_cls);
+                        _tr_str_release(amn);
                         _tr_str_release(dmethod);
                         _tr_str_release(mangled);
                         return (-1LL);
@@ -16611,6 +16842,7 @@ __auto_type ity_g = _t2498.data.EIdent.ty;
                     if ((gm_self < 0LL)) {
                         /* pass */
                         _tr_str_release(recv_cls);
+                        _tr_str_release(amn);
                         _tr_str_release(dmethod);
                         _tr_str_release(mangled);
                         return (-1LL);
@@ -16639,6 +16871,7 @@ __auto_type ity_g = _t2498.data.EIdent.ty;
                         if ((gmv < 0LL)) {
                             /* pass */
                             _tr_str_release(recv_cls);
+                            _tr_str_release(amn);
                             _tr_str_release(dmethod);
                             _tr_str_release(mangled);
                             List_i64_free(gm_tags);
@@ -16661,6 +16894,7 @@ __auto_type ity_g = _t2498.data.EIdent.ty;
                             if ((strcmp(_tr_strz(gmc), _tr_strz(_tr_str_lit(""))) == 0)) {
                                 /* pass */
                                 _tr_str_release(recv_cls);
+                                _tr_str_release(amn);
                                 _tr_str_release(dmethod);
                                 _tr_str_release(mangled);
                                 List_i64_free(gm_tags);
@@ -16703,6 +16937,7 @@ __auto_type ity_g = _t2498.data.EIdent.ty;
                     if ((gm_regs->len > 6LL)) {
                         /* pass */
                         _tr_str_release(recv_cls);
+                        _tr_str_release(amn);
                         _tr_str_release(dmethod);
                         _tr_str_release(mangled);
                         List_i64_free(gm_tags);
@@ -16717,6 +16952,7 @@ __auto_type ity_g = _t2498.data.EIdent.ty;
                         if ((!_lir_lower_generic(m, ((HirFunction*)List_ptr_get(m->hir_prog->functions, gmix)), gm_tags, gm_cls, gm_name))) {
                             /* pass */
                             _tr_str_release(recv_cls);
+                            _tr_str_release(amn);
                             _tr_str_release(dmethod);
                             _tr_str_release(mangled);
                             List_i64_free(gm_tags);
@@ -16741,6 +16977,7 @@ __auto_type ity_g = _t2498.data.EIdent.ty;
                     }
                     /* pass */
                     _tr_str_release(recv_cls);
+                    _tr_str_release(amn);
                     _tr_str_release(dmethod);
                     _tr_str_release(mangled);
                     _tr_str_release(gm_name);
@@ -16753,12 +16990,14 @@ __auto_type ity_g = _t2498.data.EIdent.ty;
             if ((rself < 0LL)) {
                 /* pass */
                 _tr_str_release(recv_cls);
+                _tr_str_release(amn);
                 _tr_str_release(dmethod);
                 _tr_str_release(mangled);
                 return (-1LL);
             }
             /* pass */
             _tr_str_release(recv_cls);
+            _tr_str_release(amn);
             _tr_str_release(dmethod);
             return _lower_obj_call(m, lf, mangled, rself, margs);
         }
@@ -16768,6 +17007,7 @@ __auto_type ity_g = _t2498.data.EIdent.ty;
         if ((ovm < 0LL)) {
             /* pass */
             _tr_str_release(recv_cls);
+            _tr_str_release(amn);
             return (-1LL);
         }
         /* pass */
@@ -16776,30 +17016,35 @@ __auto_type ity_g = _t2498.data.EIdent.ty;
         if ((ovmt == 1LL)) {
             /* pass */
             _tr_str_release(recv_cls);
+            _tr_str_release(amn);
             return _lower_str_method(m, lf, ovm, method, margs);
         }
         /* pass */
         if ((ovmt == 5LL)) {
             /* pass */
             _tr_str_release(recv_cls);
+            _tr_str_release(amn);
             return _lower_float_method(m, lf, ovm, method, margs);
         }
         /* pass */
         if ((ovmt == 0LL)) {
             /* pass */
             _tr_str_release(recv_cls);
+            _tr_str_release(amn);
             return _lower_int_method(m, lf, ovm, method, margs);
         }
         /* pass */
         if (_is_dict_tag(ovmt)) {
             /* pass */
             _tr_str_release(recv_cls);
+            _tr_str_release(amn);
             return _lower_dict_method(m, lf, ovm, ovmt, method, margs);
         }
         /* pass */
         if (_is_set_tag(ovmt)) {
             /* pass */
             _tr_str_release(recv_cls);
+            _tr_str_release(amn);
             return _lower_set_method(m, lf, ovm, ovmt, method, margs);
         }
         /* pass */
@@ -16814,6 +17059,7 @@ __auto_type ity_g = _t2498.data.EIdent.ty;
             } else if (1) {
                 __auto_type _ = _t2512;
                 _tr_str_release(recv_cls);
+                _tr_str_release(amn);
                 return (-1LL);
             }
             /* pass */
@@ -16822,6 +17068,7 @@ __auto_type ity_g = _t2498.data.EIdent.ty;
             if (((tgt_idx < 0LL) || (tgt_idx >= tup_hty->args->len))) {
                 /* pass */
                 _tr_str_release(recv_cls);
+                _tr_str_release(amn);
                 return (-1LL);
             }
             /* pass */
@@ -16830,6 +17077,7 @@ __auto_type ity_g = _t2498.data.EIdent.ty;
             if (((((tgt_tag < 0LL) || _is_list_tag(tgt_tag)) || _is_dict_tag(tgt_tag)) || _is_set_tag(tgt_tag))) {
                 /* pass */
                 _tr_str_release(recv_cls);
+                _tr_str_release(amn);
                 return (-1LL);
             }
             /* pass */
@@ -16844,16 +17092,19 @@ __auto_type ity_g = _t2498.data.EIdent.ty;
                 LFunc_set_vreg_type(lf, tgf, 5LL);
                 /* pass */
                 _tr_str_release(recv_cls);
+                _tr_str_release(amn);
                 return tgf;
             }
             /* pass */
             _tr_str_release(recv_cls);
+            _tr_str_release(amn);
             return _emit_field_get(m, lf, ovm, (tgt_idx * 8LL), tgt_tag);
         }
         /* pass */
         if ((!_is_list_tag(ovmt))) {
             /* pass */
             _tr_str_release(recv_cls);
+            _tr_str_release(amn);
             return (-1LL);
         }
         /* pass */
@@ -16862,6 +17113,7 @@ __auto_type ity_g = _t2498.data.EIdent.ty;
         if ((((strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("len"))) == 0) || (strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("length"))) == 0)) && (margs->len == 0LL))) {
             /* pass */
             _tr_str_release(recv_cls);
+            _tr_str_release(amn);
             return _str_call0(m, lf, _tr_str_lit("_tr_rt_list_len"), ovm, 0LL);
         }
         /* pass */
@@ -16870,6 +17122,7 @@ __auto_type ity_g = _t2498.data.EIdent.ty;
             if ((margs->len != 1LL)) {
                 /* pass */
                 _tr_str_release(recv_cls);
+                _tr_str_release(amn);
                 return (-1LL);
             }
             /* pass */
@@ -16878,6 +17131,7 @@ __auto_type ity_g = _t2498.data.EIdent.ty;
             if ((av < 0LL)) {
                 /* pass */
                 _tr_str_release(recv_cls);
+                _tr_str_release(amn);
                 return (-1LL);
             }
             /* pass */
@@ -16891,6 +17145,7 @@ __auto_type ity_g = _t2498.data.EIdent.ty;
             if ((avt != want_elem)) {
                 /* pass */
                 _tr_str_release(recv_cls);
+                _tr_str_release(amn);
                 return (-1LL);
             }
             /* pass */
@@ -16933,6 +17188,7 @@ __auto_type ity_g = _t2498.data.EIdent.ty;
             LFunc_emit(lf, LInst_ctor_ICall((-1LL), apush, ppa));
             /* pass */
             _tr_str_release(recv_cls);
+            _tr_str_release(amn);
             _tr_str_release(apush);
             return ovm;
         }
@@ -16942,6 +17198,7 @@ __auto_type ity_g = _t2498.data.EIdent.ty;
             if ((margs->len != 1LL)) {
                 /* pass */
                 _tr_str_release(recv_cls);
+                _tr_str_release(amn);
                 return (-1LL);
             }
             /* pass */
@@ -16950,10 +17207,12 @@ __auto_type ity_g = _t2498.data.EIdent.ty;
             if ((giv < 0LL)) {
                 /* pass */
                 _tr_str_release(recv_cls);
+                _tr_str_release(amn);
                 return (-1LL);
             }
             /* pass */
             _tr_str_release(recv_cls);
+            _tr_str_release(amn);
             return _list_get_elem(m, lf, ovmt, ovm, giv);
         }
         /* pass */
@@ -16964,6 +17223,7 @@ __auto_type ity_g = _t2498.data.EIdent.ty;
             if (((sti < 0LL) || (LFunc_vreg_type(lf, sti) != 0LL))) {
                 /* pass */
                 _tr_str_release(recv_cls);
+                _tr_str_release(amn);
                 return (-1LL);
             }
             /* pass */
@@ -16972,6 +17232,7 @@ __auto_type ity_g = _t2498.data.EIdent.ty;
             if ((stv < 0LL)) {
                 /* pass */
                 _tr_str_release(recv_cls);
+                _tr_str_release(amn);
                 return (-1LL);
             }
             /* pass */
@@ -16985,6 +17246,7 @@ __auto_type ity_g = _t2498.data.EIdent.ty;
             if ((stvt != want_elem)) {
                 /* pass */
                 _tr_str_release(recv_cls);
+                _tr_str_release(amn);
                 return (-1LL);
             }
             /* pass */
@@ -17018,6 +17280,7 @@ __auto_type ity_g = _t2498.data.EIdent.ty;
             }
             /* pass */
             _tr_str_release(recv_cls);
+            _tr_str_release(amn);
             return ovm;
         }
         /* pass */
@@ -17036,6 +17299,7 @@ __auto_type ity_g = _t2498.data.EIdent.ty;
             LFunc_set_vreg_type(lf, pod, want_elem);
             /* pass */
             _tr_str_release(recv_cls);
+            _tr_str_release(amn);
             return pod;
         }
         /* pass */
@@ -17046,6 +17310,7 @@ __auto_type ity_g = _t2498.data.EIdent.ty;
             if ((ixa < 0LL)) {
                 /* pass */
                 _tr_str_release(recv_cls);
+                _tr_str_release(amn);
                 return (-1LL);
             }
             /* pass */
@@ -17059,6 +17324,7 @@ __auto_type ity_g = _t2498.data.EIdent.ty;
             if ((ixat != want_elem)) {
                 /* pass */
                 _tr_str_release(recv_cls);
+                _tr_str_release(amn);
                 return (-1LL);
             }
             /* pass */
@@ -17084,6 +17350,7 @@ __auto_type ity_g = _t2498.data.EIdent.ty;
             LFunc_emit(lf, LInst_ctor_ICall(ixd, ixsym, ixargs));
             /* pass */
             _tr_str_release(recv_cls);
+            _tr_str_release(amn);
             _tr_str_release(ixsym);
             return ixd;
         }
@@ -17095,6 +17362,7 @@ __auto_type ity_g = _t2498.data.EIdent.ty;
             if ((cxa < 0LL)) {
                 /* pass */
                 _tr_str_release(recv_cls);
+                _tr_str_release(amn);
                 return (-1LL);
             }
             /* pass */
@@ -17108,6 +17376,7 @@ __auto_type ity_g = _t2498.data.EIdent.ty;
             if ((cxat != want_elem)) {
                 /* pass */
                 _tr_str_release(recv_cls);
+                _tr_str_release(amn);
                 return (-1LL);
             }
             /* pass */
@@ -17135,6 +17404,7 @@ __auto_type ity_g = _t2498.data.EIdent.ty;
             LFunc_set_vreg_type(lf, cxd, 4LL);
             /* pass */
             _tr_str_release(recv_cls);
+            _tr_str_release(amn);
             _tr_str_release(cxsym);
             return cxd;
         }
@@ -17146,6 +17416,7 @@ __auto_type ity_g = _t2498.data.EIdent.ty;
             if ((cta < 0LL)) {
                 /* pass */
                 _tr_str_release(recv_cls);
+                _tr_str_release(amn);
                 return (-1LL);
             }
             /* pass */
@@ -17159,6 +17430,7 @@ __auto_type ity_g = _t2498.data.EIdent.ty;
             if ((ctat != want_elem)) {
                 /* pass */
                 _tr_str_release(recv_cls);
+                _tr_str_release(amn);
                 return (-1LL);
             }
             /* pass */
@@ -17184,6 +17456,7 @@ __auto_type ity_g = _t2498.data.EIdent.ty;
             LFunc_emit(lf, LInst_ctor_ICall(ctd, ctsym, ctargs));
             /* pass */
             _tr_str_release(recv_cls);
+            _tr_str_release(amn);
             _tr_str_release(ctsym);
             return ctd;
         }
@@ -17193,6 +17466,7 @@ __auto_type ity_g = _t2498.data.EIdent.ty;
             if ((want_elem != 0LL)) {
                 /* pass */
                 _tr_str_release(recv_cls);
+                _tr_str_release(amn);
                 return (-1LL);
             }
             /* pass */
@@ -17206,6 +17480,7 @@ __auto_type ity_g = _t2498.data.EIdent.ty;
             }
             /* pass */
             _tr_str_release(recv_cls);
+            _tr_str_release(amn);
             return _list_call1(m, lf, mmsym, ovm, 0LL);
         }
         /* pass */
@@ -17214,6 +17489,7 @@ __auto_type ity_g = _t2498.data.EIdent.ty;
             if ((want_elem == 0LL)) {
                 /* pass */
                 _tr_str_release(recv_cls);
+                _tr_str_release(amn);
                 return _list_call1(m, lf, _tr_str_lit("_tr_rt_list_sum_i64"), ovm, 0LL);
             }
             /* pass */
@@ -17236,10 +17512,12 @@ __auto_type ity_g = _t2498.data.EIdent.ty;
                 LFunc_set_vreg_type(lf, fsr, 5LL);
                 /* pass */
                 _tr_str_release(recv_cls);
+                _tr_str_release(amn);
                 return fsr;
             }
             /* pass */
             _tr_str_release(recv_cls);
+            _tr_str_release(amn);
             return (-1LL);
         }
         /* pass */
@@ -17258,6 +17536,7 @@ __auto_type ity_g = _t2498.data.EIdent.ty;
             LFunc_set_vreg_type(lf, cld, ovmt);
             /* pass */
             _tr_str_release(recv_cls);
+            _tr_str_release(amn);
             return cld;
         }
         /* pass */
@@ -17268,6 +17547,7 @@ __auto_type ity_g = _t2498.data.EIdent.ty;
             if (((rmi < 0LL) || (LFunc_vreg_type(lf, rmi) != 0LL))) {
                 /* pass */
                 _tr_str_release(recv_cls);
+                _tr_str_release(amn);
                 return (-1LL);
             }
             /* pass */
@@ -17282,6 +17562,7 @@ __auto_type ity_g = _t2498.data.EIdent.ty;
             LFunc_emit(lf, LInst_ctor_ICall((-1LL), _tr_str_lit("_tr_rt_list_remove"), rma));
             /* pass */
             _tr_str_release(recv_cls);
+            _tr_str_release(amn);
             return ovm;
         }
         /* pass */
@@ -17292,6 +17573,7 @@ __auto_type ity_g = _t2498.data.EIdent.ty;
             if (((swi < 0LL) || (LFunc_vreg_type(lf, swi) != 0LL))) {
                 /* pass */
                 _tr_str_release(recv_cls);
+                _tr_str_release(amn);
                 return (-1LL);
             }
             /* pass */
@@ -17300,6 +17582,7 @@ __auto_type ity_g = _t2498.data.EIdent.ty;
             if (((swj < 0LL) || (LFunc_vreg_type(lf, swj) != 0LL))) {
                 /* pass */
                 _tr_str_release(recv_cls);
+                _tr_str_release(amn);
                 return (-1LL);
             }
             /* pass */
@@ -17316,6 +17599,7 @@ __auto_type ity_g = _t2498.data.EIdent.ty;
             LFunc_emit(lf, LInst_ctor_ICall((-1LL), _tr_str_lit("_tr_rt_list_swap"), swa));
             /* pass */
             _tr_str_release(recv_cls);
+            _tr_str_release(amn);
             return ovm;
         }
         /* pass */
@@ -17324,6 +17608,7 @@ __auto_type ity_g = _t2498.data.EIdent.ty;
             if ((ovmt != 3LL)) {
                 /* pass */
                 _tr_str_release(recv_cls);
+                _tr_str_release(amn);
                 return (-1LL);
             }
             /* pass */
@@ -17332,6 +17617,7 @@ __auto_type ity_g = _t2498.data.EIdent.ty;
             if (((jsep < 0LL) || (LFunc_vreg_type(lf, jsep) != 1LL))) {
                 /* pass */
                 _tr_str_release(recv_cls);
+                _tr_str_release(amn);
                 return (-1LL);
             }
             /* pass */
@@ -17352,24 +17638,28 @@ __auto_type ity_g = _t2498.data.EIdent.ty;
             _fresh_mark(lf, jd);
             /* pass */
             _tr_str_release(recv_cls);
+            _tr_str_release(amn);
             return jd;
         }
         /* pass */
         if (((strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("is_empty"))) == 0) && (margs->len == 0LL))) {
             /* pass */
             _tr_str_release(recv_cls);
+            _tr_str_release(amn);
             return _list_call1(m, lf, _tr_str_lit("_tr_rt_list_is_empty"), ovm, 4LL);
         }
         /* pass */
         if (((strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("first"))) == 0) && (margs->len == 0LL))) {
             /* pass */
             _tr_str_release(recv_cls);
+            _tr_str_release(amn);
             return _list_call1(m, lf, _tr_str_lit("_tr_rt_list_first_i64"), ovm, want_elem);
         }
         /* pass */
         if (((strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("last"))) == 0) && (margs->len == 0LL))) {
             /* pass */
             _tr_str_release(recv_cls);
+            _tr_str_release(amn);
             return _list_call1(m, lf, _tr_str_lit("_tr_rt_list_last_i64"), ovm, want_elem);
         }
         /* pass */
@@ -17384,6 +17674,7 @@ __auto_type ity_g = _t2498.data.EIdent.ty;
             LFunc_emit(lf, LInst_ctor_ICall((-1LL), _tr_str_lit("_tr_rt_list_reverse"), rva));
             /* pass */
             _tr_str_release(recv_cls);
+            _tr_str_release(amn);
             return ovm;
         }
         /* pass */
@@ -17394,6 +17685,7 @@ __auto_type ity_g = _t2498.data.EIdent.ty;
             if (((exo < 0LL) || (LFunc_vreg_type(lf, exo) != ovmt))) {
                 /* pass */
                 _tr_str_release(recv_cls);
+                _tr_str_release(amn);
                 return (-1LL);
             }
             /* pass */
@@ -17408,6 +17700,7 @@ __auto_type ity_g = _t2498.data.EIdent.ty;
             LFunc_emit(lf, LInst_ctor_ICall((-1LL), _tr_str_lit("_tr_rt_list_extend"), exa));
             /* pass */
             _tr_str_release(recv_cls);
+            _tr_str_release(amn);
             return ovm;
         }
         /* pass */
@@ -17422,6 +17715,7 @@ __auto_type ity_g = _t2498.data.EIdent.ty;
             LFunc_emit(lf, LInst_ctor_ICall((-1LL), _tr_str_lit("_tr_rt_list_clear"), cla));
             /* pass */
             _tr_str_release(recv_cls);
+            _tr_str_release(amn);
             return ovm;
         }
         /* pass */
@@ -17430,6 +17724,7 @@ __auto_type ity_g = _t2498.data.EIdent.ty;
             if (((want_elem != 0LL) && (want_elem != 1LL))) {
                 /* pass */
                 _tr_str_release(recv_cls);
+                _tr_str_release(amn);
                 return (-1LL);
             }
             /* pass */
@@ -17464,11 +17759,13 @@ __auto_type ity_g = _t2498.data.EIdent.ty;
             LFunc_emit(lf, LInst_ctor_ICall((-1LL), sortsym, soa));
             /* pass */
             _tr_str_release(recv_cls);
+            _tr_str_release(amn);
             _tr_str_release(sortsym);
             return ovm;
         }
         /* pass */
         _tr_str_release(recv_cls);
+        _tr_str_release(amn);
         return (-1LL);
     } else if (1) {
         __auto_type _ = _t2454;
