@@ -1,0 +1,661 @@
+# tauraro-bindgen — generate Tauraro FFI bindings from a C header.
+#
+#   tauraro-bindgen <header.h> [-o out.tr] [--cc <compiler>]
+#
+# Pipeline (Phase 1): preprocess with the C compiler (`cc -E`, flattening #includes/macros),
+# tokenize the declarations, parse the common C shapes, and emit `extern "C"` prototypes,
+# `@value_type` structs, `type` aliases, enum/`#define` constants. Big libraries with an XML/GIR
+# registry (Vulkan/GTK) are generated from that registry instead — this handles clean C headers.
+#
+# @trusted: systems tool — uses the C-string tokenizer pattern from the compiler's own lexer.
+
+from core.io import read_file, write_file, file_exists
+from core.string import StringBuilder
+
+# ── C tokenizer ────────────────────────────────────────────────────────────────
+# kind: 0=ident/keyword, 1=number, 2=string, 3=char, 4=punct, 5=eof
+pub class CTok:
+    pub kind: int
+    pub text: str
+
+extend CTok:
+    pub def init(kind: int, text: str) -> CTok:
+        mut t = CTok()
+        t.kind = kind
+        t.text = text
+        return t
+
+def _is_alpha(c: int) -> bool:
+    return (c >= 65 and c <= 90) or (c >= 97 and c <= 122) or c == 95
+def _is_digit(c: int) -> bool:
+    return c >= 48 and c <= 57
+def _is_alnum(c: int) -> bool:
+    return _is_alpha(c) or _is_digit(c)
+def _is_space(c: int) -> bool:
+    return c == 32 or c == 9 or c == 10 or c == 13
+
+pub def tokenize_c(src: str) -> Vec[CTok]:
+    mut toks = Vec[CTok].init(256)
+    mut n = src.len()
+    mut i = 0
+    while i < n:
+        mut c = src[i]
+        if _is_space(c):
+            i = i + 1
+            continue
+        if c == 47 and i + 1 < n and src[i + 1] == 47:
+            while i < n and src[i] != 10: i = i + 1
+            continue
+        if c == 47 and i + 1 < n and src[i + 1] == 42:
+            i = i + 2
+            while i + 1 < n and not (src[i] == 42 and src[i + 1] == 47): i = i + 1
+            i = i + 2
+            continue
+        if c == 35:
+            while i < n and src[i] != 10: i = i + 1
+            continue
+        if _is_alpha(c):
+            mut start = i
+            while i < n and _is_alnum(src[i]): i = i + 1
+            toks.push(CTok.init(0, src.slice(start, i)))
+            continue
+        if _is_digit(c):
+            mut start = i
+            while i < n and (_is_alnum(src[i]) or src[i] == 46 or src[i] == 120): i = i + 1
+            toks.push(CTok.init(1, src.slice(start, i)))
+            continue
+        if c == 34:
+            mut start = i
+            i = i + 1
+            while i < n and src[i] != 34:
+                if src[i] == 92: i = i + 1
+                i = i + 1
+            i = i + 1
+            toks.push(CTok.init(2, src.slice(start, i)))
+            continue
+        if c == 39:
+            mut start = i
+            i = i + 1
+            while i < n and src[i] != 39:
+                if src[i] == 92: i = i + 1
+                i = i + 1
+            i = i + 1
+            toks.push(CTok.init(3, src.slice(start, i)))
+            continue
+        toks.push(CTok.init(4, src.slice(i, i + 1)))
+        i = i + 1
+    toks.push(CTok.init(5, ""))
+    return toks
+
+# ── C type → Tauraro type mapping ──────────────────────────────────────────────
+def map_base(words: str) -> str:
+    if words == "void": return "void"
+    if words == "int": return "c_int"
+    if words == "unsigned int" or words == "unsigned": return "c_uint"
+    if words == "char": return "c_char"
+    if words == "unsigned char": return "c_uchar"
+    if words == "signed char": return "c_schar"
+    if words == "short" or words == "short int": return "c_short"
+    if words == "unsigned short": return "c_ushort"
+    if words == "long": return "c_long"
+    if words == "unsigned long": return "c_ulong"
+    if words == "long long": return "c_longlong"
+    if words == "unsigned long long": return "c_ulonglong"
+    if words == "float": return "c_float"
+    if words == "double": return "c_double"
+    if words == "long double": return "c_ldouble"
+    if words == "_Bool" or words == "bool": return "bool"
+    if words == "size_t": return "c_size_t"
+    if words == "ssize_t": return "c_ssize_t"
+    if words == "int8_t": return "c_int8_t"
+    if words == "int16_t": return "c_int16_t"
+    if words == "int32_t": return "c_int32_t"
+    if words == "int64_t": return "c_int64_t"
+    if words == "uint8_t": return "c_uint8_t"
+    if words == "uint16_t": return "c_uint16_t"
+    if words == "uint32_t": return "c_uint32_t"
+    if words == "uint64_t": return "c_uint64_t"
+    if words == "intptr_t": return "c_intptr_t"
+    if words == "uintptr_t": return "c_uintptr_t"
+    if words == "ptrdiff_t": return "c_ptrdiff_t"
+    return words
+
+def map_type(words: str, stars: int) -> str:
+    mut base = map_base(words)
+    if stars <= 0: return base
+    mut inner = base
+    if base == "c_char": inner = "char"
+    if base == "void": inner = "void"
+    mut ty = "Pointer[" + inner + "]"
+    mut d = 1
+    while d < stars:
+        ty = "Pointer[" + ty + "]"
+        d = d + 1
+    return ty
+
+# ── small helpers ────────────────────────────────────────────────────────────────
+# Does a token end a declarator (so the preceding identifier was the NAME)?
+def _is_decl_term(kind: int, text: str) -> bool:
+    if kind == 5: return true
+    if kind != 4: return false
+    return text == "," or text == ";" or text == ")" or text == "[" or text == "=" or text == "(" or text == "}"
+
+def _join_words(words: Vec[str]) -> str:
+    mut s = ""
+    mut i = 0
+    while i < words.len:
+        if i > 0: s = s + " "
+        s = s + words.get(i)
+        i = i + 1
+    return s
+
+def _to_int(s: str) -> int:
+    mut r = 0
+    mut i = 0
+    mut neg = false
+    if s.len() > 0 and s[0] == 45:
+        neg = true
+        i = 1
+    # hex `0x...` (flag constants like GL_TRIANGLES = 0x0004). Cap at 15 hex digits so a
+    # 64-bit constant (e.g. UINT64_MAX) can't overflow int64 — Tauraro's default `-ftrapv`
+    # aborts on overflow, and the exact value of an out-of-range constant doesn't matter.
+    if i + 1 < s.len() and s[i] == 48 and (s[i + 1] == 120 or s[i + 1] == 88):
+        i = i + 2
+        mut hd = 0
+        while i < s.len() and hd < 15:
+            mut hc = s[i]
+            if hc >= 48 and hc <= 57: r = r * 16 + (hc - 48)
+            elif hc >= 97 and hc <= 102: r = r * 16 + (hc - 87)
+            elif hc >= 65 and hc <= 70: r = r * 16 + (hc - 55)
+            else: break
+            i = i + 1
+            hd = hd + 1
+        if neg: return 0 - r
+        return r
+    mut dd = 0
+    while i < s.len() and dd < 18:
+        mut c = s[i]
+        if c >= 48 and c <= 57:
+            r = r * 10 + (c - 48)
+        else:
+            break
+        i = i + 1
+        dd = dd + 1
+    if neg: return 0 - r
+    return r
+
+def _scan_typedef_name(toks: Vec[CTok], pos: int) -> str:
+    mut i = pos
+    mut depth = 0
+    while i < toks.len:
+        mut t = toks.get(i)
+        if t.kind == 4 and t.text == "{": depth = depth + 1
+        elif t.kind == 4 and t.text == "}":
+            depth = depth - 1
+            if depth == 0:
+                if i + 1 < toks.len and toks.get(i + 1).kind == 0:
+                    return toks.get(i + 1).text
+                return ""
+        i = i + 1
+    return ""
+
+def _typedef_is_fnptr(toks: Vec[CTok], pos: int) -> bool:
+    mut i = pos
+    while i + 1 < toks.len:
+        mut t = toks.get(i)
+        if t.kind == 4 and t.text == ";": return false
+        if t.kind == 4 and t.text == "(" and toks.get(i + 1).kind == 4 and toks.get(i + 1).text == "*":
+            return true
+        i = i + 1
+    return false
+
+def _scan_fnptr_name(toks: Vec[CTok], pos: int) -> str:
+    mut i = pos
+    while i + 2 < toks.len:
+        mut t = toks.get(i)
+        if t.kind == 4 and t.text == ";": return ""
+        if t.kind == 4 and t.text == "(" and toks.get(i + 1).kind == 4 and toks.get(i + 1).text == "*":
+            if toks.get(i + 2).kind == 0: return toks.get(i + 2).text
+            return ""
+        i = i + 1
+    return ""
+
+# ── Parser + emitter ────────────────────────────────────────────────────────────
+pub class Bindgen:
+    pub toks:      Vec[CTok]
+    pub pos:       int
+    pub funcs:     StringBuilder
+    pub structs:   StringBuilder
+    pub types:     StringBuilder
+    pub consts:    StringBuilder
+    pub n_funcs:   int
+    pub n_structs: int
+
+extend Bindgen:
+    pub def init(toks: Vec[CTok]) -> Bindgen:
+        mut b = Bindgen()
+        b.toks = toks
+        b.pos = 0
+        b.funcs = StringBuilder.init(1024)
+        b.structs = StringBuilder.init(1024)
+        b.types = StringBuilder.init(512)
+        b.consts = StringBuilder.init(512)
+        b.n_funcs = 0
+        b.n_structs = 0
+        return b
+
+    pub def ct(self) -> str:
+        return self.toks.get(self.pos).text
+    pub def ck(self) -> int:
+        return self.toks.get(self.pos).kind
+    pub def adv(self):
+        if self.pos < self.toks.len - 1: self.pos = self.pos + 1
+    pub def is_punct(self, p: str) -> bool:
+        return self.ck() == 4 and self.ct() == p
+    pub def nk(self) -> int:
+        if self.pos + 1 < self.toks.len: return self.toks.get(self.pos + 1).kind
+        return 5
+    pub def nt(self) -> str:
+        if self.pos + 1 < self.toks.len: return self.toks.get(self.pos + 1).text
+        return ""
+
+    pub def skip_to_semi(self):
+        mut depth = 0
+        while self.ck() != 5:
+            if self.is_punct("{"): depth = depth + 1
+            elif self.is_punct("}"): depth = depth - 1
+            elif self.is_punct(";") and depth <= 0:
+                self.adv()
+                return
+            self.adv()
+
+    # Read the TYPE of a declarator (const/volatile/struct/union/enum stripped) + pointer
+    # stars, STOPPING before the declarator name. An identifier is the name (not a type word)
+    # once we already have a type and the *next* token ends the declarator (`,`/`;`/`)`/`[`/`=`/
+    # `(`/`}`/eof). Leaving the name lets the caller read it — this is what keeps the parser
+    # aligned (a greedy read would swallow the name and desync).
+    pub def read_type_words(self) -> Vec[str]:
+        mut words = Vec[str].init(4)
+        mut stars = 0
+        mut going = true
+        while going:
+            if self.ck() == 0:
+                mut w = self.ct()
+                if w == "const" or w == "volatile":
+                    self.adv()
+                elif w == "struct" or w == "union" or w == "enum":
+                    self.adv()
+                elif (words.len >= 1 or stars > 0) and _is_decl_term(self.nk(), self.nt()):
+                    going = false                    # this ident is the declarator name — leave it
+                else:
+                    words.push(w)
+                    self.adv()
+            elif self.is_punct("*"):
+                stars = stars + 1
+                self.adv()
+            else:
+                going = false
+        mut res = Vec[str].init(2)
+        res.push(_join_words(words))
+        res.push(stars.to_str())
+        return res
+
+    pub def emit_func(self, ret_words: str, ret_stars: int, name: str):
+        self.funcs.append("    def " + name + "(")
+        self.adv()
+        mut first = true
+        mut argn = 0
+        mut variadic = false
+        while not self.is_punct(")") and self.ck() != 5:
+            mut ploop_before = self.pos
+            if self.is_punct("."):
+                self.adv()
+                variadic = true
+                continue
+            if self.is_punct(","):
+                self.adv()
+                continue
+            mut tw = self.read_type_words()
+            mut pbase = tw.get(0)
+            mut pstars = _to_int(tw.get(1))
+            mut pname = ""
+            if self.ck() == 0:
+                pname = self.ct()
+                self.adv()
+            while self.is_punct("["):
+                self.adv()
+                while not self.is_punct("]") and self.ck() != 5: self.adv()
+                if self.is_punct("]"): self.adv()
+                pstars = pstars + 1
+            if pbase == "void" and pstars == 0 and pname == "":
+                continue
+            if pname == "":
+                pname = "arg" + argn.to_str()
+            if not first: self.funcs.append(", ")
+            first = false
+            self.funcs.append(pname + ": " + map_type(pbase, pstars))
+            argn = argn + 1
+            if self.pos == ploop_before: self.adv()   # progress guard
+        if self.is_punct(")"): self.adv()
+        if variadic: self.funcs.append(", args...")
+        self.funcs.append(")")
+        mut rt = map_type(ret_words, ret_stars)
+        if rt != "void": self.funcs.append(" -> " + rt)
+        self.funcs.append("\n")
+        self.n_funcs = self.n_funcs + 1
+        while not self.is_punct(";") and self.ck() != 5: self.adv()
+        if self.is_punct(";"): self.adv()
+
+    pub def emit_struct(self, name: str, is_union: bool):
+        if is_union: self.structs.append("@union\n")
+        self.structs.append("@value_type\nclass " + name + ":\n")
+        self.adv()
+        mut nfields = 0
+        while not self.is_punct("}") and self.ck() != 5:
+            mut floop_before = self.pos
+            mut tw = self.read_type_words()
+            mut fbase = tw.get(0)
+            mut fstars = _to_int(tw.get(1))
+            mut more = true
+            while more:
+                if self.ck() != 0: break
+                mut fname = self.ct()
+                self.adv()
+                mut is_arr = false
+                while self.is_punct("["):
+                    self.adv()
+                    mut arrn = ""
+                    if self.ck() == 1: arrn = self.ct()
+                    while not self.is_punct("]") and self.ck() != 5: self.adv()
+                    if self.is_punct("]"): self.adv()
+                    if arrn != "":
+                        self.structs.append("    pub " + fname + ": [" + map_type(fbase, fstars) + "; " + arrn + "]\n")
+                        nfields = nfields + 1
+                        is_arr = true
+                if not is_arr:
+                    self.structs.append("    pub " + fname + ": " + map_type(fbase, fstars) + "\n")
+                    nfields = nfields + 1
+                if self.is_punct(","):
+                    self.adv()
+                else:
+                    more = false
+            if self.is_punct(";"): self.adv()
+            if self.pos == floop_before: self.adv()   # progress guard
+        if self.is_punct("}"): self.adv()
+        if nfields == 0: self.structs.append("    pass\n")
+        self.structs.append("\n")
+        self.n_structs = self.n_structs + 1
+        while not self.is_punct(";") and self.ck() != 5: self.adv()
+        if self.is_punct(";"): self.adv()
+
+    pub def emit_enum(self, name: str):
+        if name != "": self.types.append("type " + name + " = c_int\n")
+        self.adv()
+        mut next_val = 0
+        while not self.is_punct("}") and self.ck() != 5:
+            if self.ck() != 0:
+                self.adv()
+                continue
+            mut ename = self.ct()
+            self.adv()
+            mut ev = next_val
+            if self.is_punct("="):
+                self.adv()
+                if self.ck() == 1:
+                    ev = _to_int(self.ct())
+                    self.adv()
+            self.consts.append("const " + ename + ": c_int = " + ev.to_str() + "\n")
+            next_val = ev + 1
+            if self.is_punct(","): self.adv()
+        if self.is_punct("}"): self.adv()
+        while not self.is_punct(";") and self.ck() != 5: self.adv()
+        if self.is_punct(";"): self.adv()
+
+    pub def parse_decl(self):
+        if self.ck() == 5: return
+        mut lead = self.ct()
+        if lead == "typedef":
+            self.adv()
+            mut agg = self.ct()
+            if agg == "struct" or agg == "union":
+                mut is_u = agg == "union"
+                self.adv()
+                mut tag = ""
+                if self.ck() == 0:
+                    tag = self.ct()
+                    self.adv()
+                if self.is_punct("{"):
+                    mut tname = _scan_typedef_name(self.toks, self.pos)
+                    mut cname = tname
+                    if cname == "": cname = tag
+                    self.emit_struct(cname, is_u)
+                    return
+                mut oname = ""
+                if self.ck() == 0:
+                    oname = self.ct()
+                if oname != "":
+                    self.structs.append("class " + oname + ":\n    pass    # opaque handle\n\n")
+                    self.n_structs = self.n_structs + 1
+                self.skip_to_semi()
+                return
+            if agg == "enum":
+                self.adv()
+                if self.ck() == 0: self.adv()
+                if self.is_punct("{"):
+                    mut ename = _scan_typedef_name(self.toks, self.pos)
+                    self.emit_enum(ename)
+                    return
+                self.skip_to_semi()
+                return
+            if _typedef_is_fnptr(self.toks, self.pos):
+                mut fpn = _scan_fnptr_name(self.toks, self.pos)
+                if fpn != "": self.types.append("type " + fpn + " = Pointer[void]    # C function pointer\n")
+                self.skip_to_semi()
+                return
+            mut tw = self.read_type_words()
+            mut abase = tw.get(0)
+            mut astars = _to_int(tw.get(1))
+            mut aname = ""
+            if self.ck() == 0: aname = self.ct()
+            if aname != "" and abase != "":
+                self.types.append("type " + aname + " = " + map_type(abase, astars) + "\n")
+            self.skip_to_semi()
+            return
+        if lead == "struct" or lead == "union":
+            mut is_u2 = lead == "union"
+            self.adv()
+            mut tag2 = ""
+            if self.ck() == 0:
+                tag2 = self.ct()
+                self.adv()
+            if self.is_punct("{") and tag2 != "":
+                self.emit_struct(tag2, is_u2)
+                return
+            self.skip_to_semi()
+            return
+        if lead == "enum":
+            self.adv()
+            mut etag = ""
+            if self.ck() == 0:
+                etag = self.ct()
+                self.adv()
+            if self.is_punct("{"):
+                self.emit_enum(etag)
+                return
+            self.skip_to_semi()
+            return
+        mut rw = self.read_type_words()
+        mut rbase = rw.get(0)
+        mut rstars = _to_int(rw.get(1))
+        mut fname = ""
+        if self.ck() == 0:
+            fname = self.ct()
+            self.adv()
+        if fname != "" and self.is_punct("("):
+            self.emit_func(rbase, rstars, fname)
+            return
+        self.skip_to_semi()
+
+    pub def run(self):
+        while self.ck() != 5:
+            mut before = self.pos
+            self.parse_decl()
+            if self.pos == before: self.adv()
+
+# ── driver ──────────────────────────────────────────────────────────────────────
+# The basename of a path (after the last `/` or `\`).
+def _basename(p: str) -> str:
+    mut last = 0
+    mut i = 0
+    while i < p.len():
+        mut c = p[i]
+        if c == 47 or c == 92: last = i + 1
+        i = i + 1
+    return p.slice(last, p.len())
+
+# The filename inside a `# N "file"` cc -E line marker, else "".
+def _marker_file(line: str) -> str:
+    if line.len() < 3 or line[0] != 35 or line[1] != 32: return ""
+    mut q1 = line.find("\"")
+    if q1 < 0: return ""
+    mut rest = line.slice(q1 + 1, line.len())
+    mut q2 = rest.find("\"")
+    if q2 < 0: return ""
+    return rest.slice(0, q2)
+
+# Keep only the lines that originate from the TARGET header (not from #include'd system
+# headers). `cc -E` (with markers) alternates `# N "file"` markers as it enters/leaves files;
+# we track the current file and match its basename against the target's.
+def _filter_to_target(raw: str, target: str) -> str:
+    mut want = _basename(target)
+    mut sb = StringBuilder.init(raw.len())
+    mut lines = raw.split("\n")
+    mut cur_ok = false
+    mut i = 0
+    while i < lines.len:
+        mut ln = lines.get(i)
+        i = i + 1
+        mut mf = _marker_file(ln)
+        if mf != "":
+            cur_ok = _basename(mf) == want
+            continue
+        if cur_ok:
+            sb.append(ln)
+            sb.append("\n")
+    return sb.to_string().as_str()
+
+# The macro NAME from a `#define ` line body (up to the first space or `(`).
+def _macro_name(rest: str) -> str:
+    mut i = 0
+    while i < rest.len():
+        mut c = rest[i]
+        if c == 32 or c == 40: break                 # ' ' or '('
+        i = i + 1
+    return rest.slice(0, i)
+
+# Compiler/platform built-in macros (from `cc -dM -E` on an empty file), so we can subtract
+# them from the header's macros and keep only the library's own `#define`s.
+def _load_baseline(cc: str) -> Map[str, bool]:
+    mut m = Map[str, bool].init(512)
+    write_file("_bindgen_empty.h", "")
+    _tr_system(cc + " -E -dM \"_bindgen_empty.h\" > \"_bindgen_base.i\" 2>_bindgen_err.txt")
+    if not file_exists("_bindgen_base.i"): return m
+    mut lines = read_file("_bindgen_base.i").split("\n")
+    mut i = 0
+    while i < lines.len:
+        mut ln = lines.get(i)
+        i = i + 1
+        if not ln.starts_with("#define "): continue
+        mut nm = _macro_name(ln.slice(8, ln.len()))
+        if nm != "": m.insert(nm, true)
+    return m
+
+# Names `#define`d directly in the target header's raw text — used as an allowlist so
+# constants from #include'd system headers (stdint's INT32_MAX, …) don't leak in.
+def _target_define_names(header: str) -> Map[str, bool]:
+    mut m = Map[str, bool].init(128)
+    if not file_exists(header): return m
+    mut lines = read_file(header).split("\n")
+    mut i = 0
+    while i < lines.len:
+        mut ln = _lstrip(lines.get(i))
+        i = i + 1
+        if not ln.starts_with("#define "): continue
+        mut nm = _macro_name(ln.slice(8, ln.len()))
+        if nm != "": m.insert(nm, true)
+    return m
+
+def _lstrip(s: str) -> str:
+    mut i = 0
+    while i < s.len() and (s[i] == 32 or s[i] == 9): i = i + 1
+    return s.slice(i, s.len())
+
+def emit_defines(bg: Bindgen, defs: str, baseline: Map[str, bool], allow: Map[str, bool]):
+    mut lines = defs.split("\n")
+    mut i = 0
+    while i < lines.len:
+        mut ln = lines.get(i)
+        i = i + 1
+        if not ln.starts_with("#define "): continue
+        mut rest = ln.slice(8, ln.len())
+        mut sp = rest.find(" ")
+        if sp < 0: continue
+        mut nm = rest.slice(0, sp)
+        if nm.find("(") >= 0: continue               # function-like macro -> skip
+        if baseline.contains(nm): continue           # compiler/platform built-in -> skip
+        if not allow.contains(nm): continue          # not defined in the target header -> skip
+        mut val = rest.slice(sp + 1, rest.len())
+        if val.len() == 0: continue
+        mut c0 = val[0]
+        if c0 == 34:
+            bg.consts.append("const " + nm + " = " + val + "\n")   # string constant (cast to Pointer[char] at use)
+        elif (c0 >= 48 and c0 <= 57) or c0 == 45:
+            mut iv = _to_int(val)
+            bg.consts.append("const " + nm + ": c_int = " + iv.to_str() + "\n")
+
+def main(args: List[str]):
+    if args.len < 2:
+        print("usage: tauraro-bindgen <header.h> [-o out.tr] [--cc <compiler>]")
+        return
+    mut header = args.get(1)
+    mut out = "bindings.tr"
+    mut cc = "cc"
+    mut i = 2
+    while i < args.len:
+        mut a = args.get(i)
+        if a == "-o" and i + 1 < args.len:
+            out = args.get(i + 1)
+            i = i + 1
+        elif a == "--cc" and i + 1 < args.len:
+            cc = args.get(i + 1)
+            i = i + 1
+        i = i + 1
+    mut tmp_decls = "_bindgen_decls.i"
+    mut tmp_defs  = "_bindgen_defs.i"
+    # -E WITH line markers, so declarations from #include'd system headers can be filtered out.
+    _tr_system(cc + " -E \"" + header + "\" > \"" + tmp_decls + "\" 2>_bindgen_err.txt")
+    _tr_system(cc + " -E -dM \"" + header + "\" > \"" + tmp_defs + "\" 2>>_bindgen_err.txt")
+    if not file_exists(tmp_decls):
+        print("bindgen: preprocessing failed (see _bindgen_err.txt)")
+        return
+    mut src = _filter_to_target(read_file(tmp_decls), header)
+    mut toks = tokenize_c(src)
+    mut bg = Bindgen.init(toks)
+    bg.run()
+    mut baseline = _load_baseline(cc)
+    emit_defines(bg, read_file(tmp_defs), baseline, _target_define_names(header))
+    mut sb = StringBuilder.init(4096)
+    sb.append("# Auto-generated FFI bindings for " + header + " (tauraro-bindgen).\n\n")
+    mut ts = bg.types.to_string().as_str()
+    if ts != "": sb.append(ts + "\n")
+    mut ss = bg.structs.to_string().as_str()
+    if ss != "": sb.append(ss)
+    mut cs = bg.consts.to_string().as_str()
+    if cs != "": sb.append(cs + "\n")
+    mut fs = bg.funcs.to_string().as_str()
+    if fs != "":
+        sb.append("extern \"C\":\n")
+        sb.append(fs)
+    write_file(out, sb.to_string().as_str())
+    _tr_system("rm -f _bindgen_decls.i _bindgen_defs.i _bindgen_base.i _bindgen_empty.h _bindgen_err.txt 2>/dev/null")
+    print("bindgen: wrote " + out + " — " + bg.n_structs.to_str() + " types, " + bg.n_funcs.to_str() + " functions")
