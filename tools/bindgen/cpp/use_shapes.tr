@@ -1,0 +1,14 @@
+# Drive a real C++ object (geo::Shape) from Tauraro through the bindgen-generated shim.
+from shapes import geo_Shape_new, geo_Shape_delete, geo_Shape_area, geo_Shape_move, geo_Shape_unit, geo_distance
+
+def main():
+    mut s = geo_Shape_new(3.0, 4.0)
+    print("area(3x4)      = " + (geo_Shape_area(s) as float).to_str())   # 12
+    geo_Shape_move(s, 1.0, 1.0)
+    print("area after move= " + (geo_Shape_area(s) as float).to_str())   # 4*5 = 20
+    mut u = geo_Shape_unit()
+    print("unit area      = " + (geo_Shape_area(u) as float).to_str())   # 1
+    print("distance(s,u)  = " + (geo_distance(s, u) as float).to_str())  # 20 + 1 = 21
+    geo_Shape_delete(u)
+    geo_Shape_delete(s)
+    print("ok")

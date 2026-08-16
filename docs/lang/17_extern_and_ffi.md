@@ -20,6 +20,17 @@ pointers, and resolves symbol collisions (skips libc names the runtime already d
 type names that clash with Win32 like `Rectangle`). Then just `from <out> import ...`. See
 `tools/bindgen/` and its graphics example.
 
+**Binding C++ headers.** Add `-h cpp` (default is C): `tauraroc bindgen <header.hpp> -o <out.tr> -h
+cpp`. Because C++ has no stable C-callable ABI (name mangling, `this`, vtables, RAII), the bindgen
+**auto-generates a C++→C shim** (`<out>_shim.cpp`) alongside the `.tr` — covering classes, methods,
+constructors/destructors, static methods, free functions, enums, and namespaces. Compile the shim
+once (`c++ -c <out>_shim.cpp`) and link it (`--link <out>_shim.o -lstdc++`). Opaque C++ objects cross
+as an opaque Tauraro class handle (e.g. `geo::Shape*` ↔ `Shape`); construct with `<pfx>_new(...)`,
+call `<pfx>_method(obj, ...)`, and free with `<pfx>_delete(obj)`. This mode uses **libclang**, which
+is needed *only* for `-h cpp` (C headers never use it); if it is not installed the tool prints
+per-platform install guidance. See `tools/bindgen/cpp/` for the design and a full `shapes.hpp`
+end-to-end example.
+
 **C type mapping:**
 
 | Tauraro type | C type |

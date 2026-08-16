@@ -841,3 +841,429 @@ pub def run_bindgen(header: str, out: str, cc: str):
     mut msg = "bindgen: wrote " + out + " — " + bg.n_structs.to_str() + " types, " + bg.n_funcs.to_str() + " functions"
     if bg.n_skipped > 0: msg = msg + " (" + bg.n_skipped.to_str() + " runtime/libc symbols skipped)"
     print(msg)
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  C++ mode (`-h cpp`) — auto-generate a C++→C shim + Tauraro bindings via libclang.
+#  C++ has no stable C-callable ABI (name mangling, `this`, vtables, RAII), so a C
+#  shim is unavoidable; here the bindgen writes it for you. libclang is used ONLY
+#  for `-h cpp` and is never linked into the compiler — it's detected at use time.
+# ══════════════════════════════════════════════════════════════════════════════
+
+# The clang-c AST walker, emitted + compiled on demand against the detected libclang.
+# It prints a flat IR (NS/CLASS/CTOR/DTOR/METHOD/FUNC/PARAM/ENUM/EVAL) with each C++
+# type pre-spelled, so the Tauraro side never has to parse a C++ type.
+def _cxxwalk_src() -> str:
+    mut sb = StringBuilder.init(4096)
+    sb.append("#include <clang-c/Index.h>\n")
+    sb.append("#include <stdio.h>\n")
+    sb.append("static const char* S(CXString s){ const char* p=clang_getCString(s); return p?p:\"\"; }\n")
+    sb.append("static void params(CXCursor c){\n")
+    sb.append("    int n=clang_Cursor_getNumArguments(c);\n")
+    sb.append("    for(int i=0;i<n;i++){ CXCursor a=clang_Cursor_getArgument(c,i);\n")
+    sb.append("        CXString ty=clang_getTypeSpelling(clang_getArgType(clang_getCursorType(c),i));\n")
+    sb.append("        CXString nm=clang_getCursorSpelling(a);\n")
+    sb.append("        const char* nn=S(nm);\n")
+    sb.append("        if(nn[0]) printf(\"PARAM %s|%s\\n\", S(ty), nn);\n")
+    sb.append("        else      printf(\"PARAM %s|a%d\\n\", S(ty), i);\n")
+    sb.append("        clang_disposeString(ty); clang_disposeString(nm);\n")
+    sb.append("    }\n")
+    sb.append("}\n")
+    sb.append("static enum CXChildVisitResult visit(CXCursor c, CXCursor parent, CXClientData d){\n")
+    sb.append("    enum CXCursorKind k=clang_getCursorKind(c);\n")
+    sb.append("    if(!clang_Location_isFromMainFile(clang_getCursorLocation(c))) return CXChildVisit_Continue;\n")
+    sb.append("    CXString nmS=clang_getCursorSpelling(c); const char* nm=S(nmS);\n")
+    sb.append("    CXString rtS; const char* rt;\n")
+    sb.append("    if(k==CXCursor_Namespace){ printf(\"NS %s\\n\",nm); clang_visitChildren(c,visit,0); printf(\"ENS\\n\"); }\n")
+    sb.append("    else if((k==CXCursor_ClassDecl||k==CXCursor_StructDecl)&&clang_isCursorDefinition(c)){\n")
+    sb.append("        printf(\"CLASS %s\\n\",nm); clang_visitChildren(c,visit,0); printf(\"ECLASS\\n\"); }\n")
+    sb.append("    else if(k==CXCursor_CXXMethod && clang_getCXXAccessSpecifier(c)==CX_CXXPublic){\n")
+    sb.append("        rtS=clang_getTypeSpelling(clang_getResultType(clang_getCursorType(c))); rt=S(rtS);\n")
+    sb.append("        printf(\"METHOD %c%c %s|%s\\n\", clang_CXXMethod_isStatic(c)?'s':'.', clang_CXXMethod_isConst(c)?'c':'.', rt, nm);\n")
+    sb.append("        params(c); printf(\"EMETHOD\\n\"); clang_disposeString(rtS); }\n")
+    sb.append("    else if(k==CXCursor_Constructor && clang_getCXXAccessSpecifier(c)==CX_CXXPublic){ printf(\"CTOR\\n\"); params(c); printf(\"ECTOR\\n\"); }\n")
+    sb.append("    else if(k==CXCursor_Destructor){ printf(\"DTOR\\n\"); }\n")
+    sb.append("    else if(k==CXCursor_FunctionDecl){\n")
+    sb.append("        rtS=clang_getTypeSpelling(clang_getResultType(clang_getCursorType(c))); rt=S(rtS);\n")
+    sb.append("        printf(\"FUNC %s|%s\\n\", rt, nm); params(c); printf(\"EFUNC\\n\"); clang_disposeString(rtS); }\n")
+    sb.append("    else if(k==CXCursor_EnumDecl){ printf(\"ENUM %s\\n\", nm[0]?nm:\"anon\"); clang_visitChildren(c,visit,0); printf(\"EENUM\\n\"); }\n")
+    sb.append("    else if(k==CXCursor_EnumConstantDecl){ printf(\"EVAL %s %lld\\n\", nm, clang_getEnumConstantDeclValue(c)); }\n")
+    sb.append("    clang_disposeString(nmS);\n")
+    sb.append("    return CXChildVisit_Continue;\n")
+    sb.append("}\n")
+    sb.append("int main(int argc,char**argv){\n")
+    sb.append("    CXIndex idx=clang_createIndex(0,0);\n")
+    sb.append("    const char* a[]={\"-x\",\"c++\",\"-std=c++17\"};\n")
+    sb.append("    CXTranslationUnit tu=clang_parseTranslationUnit(idx,argv[1],a,3,0,0,CXTranslationUnit_None);\n")
+    sb.append("    if(!tu){fprintf(stderr,\"parse failed\\n\");return 1;}\n")
+    sb.append("    clang_visitChildren(clang_getTranslationUnitCursor(tu),visit,0);\n")
+    sb.append("    clang_disposeTranslationUnit(tu);clang_disposeIndex(idx);return 0;\n")
+    sb.append("}\n")
+    return sb.to_string().as_str()
+
+# Detect libclang by test-compiling a probe. "" = present; otherwise a guidance string.
+def _detect_libclang(cc: str) -> str:
+    write_file("_cxxprobe.c", "#include <clang-c/Index.h>\nint main(){ clang_createIndex(0,0); return 0; }\n")
+    mut rc = _tr_system(cc + " _cxxprobe.c -o _cxxprobe.exe -lclang 2>_cxx_err.txt")
+    _tr_system("rm -f _cxxprobe.c _cxxprobe.exe 2>/dev/null")
+    if rc == 0: return ""
+    mut g = StringBuilder.init(768)
+    g.append("bindgen: `-h cpp` needs libclang (Clang's C API), which was not found.\n")
+    g.append("         It is required ONLY for C++ headers; plain C headers never use it.\n\n")
+    g.append("Install it:\n")
+    g.append("  Windows       winget install LLVM.LLVM   (or MSYS2: pacman -S mingw-w64-x86_64-clang)\n")
+    g.append("  Debian/Ubuntu sudo apt install libclang-dev\n")
+    g.append("  Fedora        sudo dnf install clang-devel\n")
+    g.append("  Arch          sudo pacman -S clang\n")
+    g.append("  macOS         brew install llvm   (or Xcode Command Line Tools)\n\n")
+    g.append("Download        https://github.com/llvm/llvm-project/releases\n")
+    g.append("Then re-run:    tauraroc bindgen <header.hpp> -h cpp\n")
+    return g.to_string().as_str()
+
+# A parsed C++ type spelling: base words + pointer/reference shape.
+pub class CppType:
+    pub base:    str
+    pub ptr:     int
+    pub was_ptr: bool
+    pub was_ref: bool
+    pub is_prim: bool
+
+def _cpp_parse_type(spelling: str) -> CppType:
+    mut t = CppType()
+    t.base = ""
+    t.ptr = 0
+    t.was_ptr = false
+    t.was_ref = false
+    t.is_prim = false
+    mut norm = ""
+    mut i = 0
+    while i < spelling.len():
+        mut ch = spelling.slice(i, i + 1)
+        if ch == "*": norm = norm + " * "
+        elif ch == "&": norm = norm + " & "
+        else: norm = norm + ch
+        i = i + 1
+    mut words = norm.split(" ")
+    mut bw = ""
+    mut wi = 0
+    while wi < words.len:
+        mut w = words.get(wi)
+        wi = wi + 1
+        if w == "": continue
+        if w == "const" or w == "volatile" or w == "struct" or w == "class" or w == "enum": continue
+        if w == "*": t.ptr = t.ptr + 1; t.was_ptr = true; continue
+        if w == "&": t.ptr = t.ptr + 1; t.was_ref = true; continue
+        if bw == "": bw = w
+        else: bw = bw + " " + w
+    t.base = bw
+    mut mb = map_base(bw)
+    if mb != bw or bw == "void" or bw == "bool": t.is_prim = true
+    return t
+
+# Last "::"-separated segment (strip a C++ namespace qualifier for the Tauraro type name).
+def _last_seg(s: str) -> str:
+    mut parts = s.split("::")
+    if parts.len == 0: return s
+    return parts.get(parts.len - 1)
+
+# C++ type text for a primitive (base + trailing stars), used in shim signatures.
+def _cpp_ctype(t: CppType) -> str:
+    mut s = t.base
+    mut i = 0
+    while i < t.ptr:
+        s = s + "*"
+        i = i + 1
+    return s
+
+# Tauraro type for a parsed C++ type. A class handle crosses as the bare opaque class
+# name — a Tauraro class value is ALREADY one C pointer, so `Shape` == C `Shape*` (which
+# is what the shim returns/takes). `Shape**` would need Pointer[Shape]; by-value/by-ref
+# both collapse to a single boundary pointer.
+def _cpp_tr_type(t: CppType) -> str:
+    if t.is_prim: return map_type(t.base, t.ptr)
+    mut eff = t.ptr
+    if eff < 1: eff = 1
+    mut ty = _last_seg(t.base)
+    mut k = 1
+    while k < eff:
+        ty = "Pointer[" + ty + "]"
+        k = k + 1
+    return ty
+
+# Given a return type + the C++ call expression, produce [shim_ctype, body_stmt, tr_ret].
+def _cpp_ret(rt: CppType, call: str) -> Vec[str]:
+    mut r = Vec[str].init(3)
+    if rt.base == "void" and rt.ptr == 0:
+        r.push("void"); r.push(call + ";"); r.push("")
+        return r
+    if rt.is_prim:
+        r.push(_cpp_ctype(rt)); r.push("return " + call + ";"); r.push(_cpp_tr_type(rt))
+        return r
+    mut trret = _cpp_tr_type(rt)
+    if rt.was_ptr:
+        r.push(rt.base + "*"); r.push("return " + call + ";"); r.push(trret)
+    elif rt.was_ref:
+        r.push(rt.base + "*"); r.push("return &(" + call + ");"); r.push(trret)
+    else:
+        r.push(rt.base + "*"); r.push("return new " + rt.base + "(" + call + ");"); r.push(trret)
+    return r
+
+# Drop the trailing "::segment" of a "::"-joined namespace path.
+def _ns_pop(path: str) -> str:
+    mut parts = path.split("::")
+    if parts.len <= 1: return ""
+    mut r = ""
+    mut i = 0
+    while i < parts.len - 1:
+        if r == "": r = parts.get(i)
+        else: r = r + "::" + parts.get(i)
+        i = i + 1
+    return r
+
+# Join a "::"-path's segments with "_" (the C shim-symbol prefix).
+def _ns_us(path: str) -> str:
+    mut parts = path.split("::")
+    mut r = ""
+    mut i = 0
+    while i < parts.len:
+        if parts.get(i) != "":
+            if r == "": r = parts.get(i)
+            else: r = r + "_" + parts.get(i)
+        i = i + 1
+    return r
+
+def _rstrip_cr(s: str) -> str:
+    mut n = s.len()
+    while n > 0 and s.slice(n - 1, n) == "\r": n = n - 1
+    if n == s.len(): return s
+    return s.slice(0, n)
+
+# Parse the walker's flat IR and emit `<base>.tr` (opaque handles + wrappers) and the
+# `<base>_shim.cpp` (extern "C" bridge with namespace-qualified C++ calls).
+def _cpp_generate(ir: str, header: str, out: str):
+    mut opaque = StringBuilder.init(512)
+    mut consts = StringBuilder.init(512)
+    mut decls  = StringBuilder.init(2048)
+    mut shim   = StringBuilder.init(2048)
+    mut usings = StringBuilder.init(256)
+    mut seen: Map[str, bool] = Map[str, bool].init(64)
+
+    mut ns_path = ""          # "geo" or "geo::detail"
+    mut cur_class = ""        # unqualified, e.g. "Shape"
+    mut cur_class_qual = ""   # "geo::Shape"
+    mut class_pfx = ""        # "geo_Shape"
+    mut n_classes = 0
+    mut n_fns = 0
+
+    mut mode = ""             # "ctor" | "method" | "func"
+    mut m_flags = ".."
+    mut m_ret = ""
+    mut m_name = ""
+    mut params: Vec[str] = Vec[str].init(4)
+
+    mut lines = ir.split("\n")
+    mut li = 0
+    while li < lines.len:
+        mut line = _rstrip_cr(lines.get(li))
+        li = li + 1
+        if line == "": continue
+
+        if line == "CTOR":
+            mode = "ctor"; params = Vec[str].init(4); continue
+        if line == "DTOR":
+            mut ds = class_pfx + "_delete"
+            shim.append("void " + ds + "(" + cur_class_qual + "* self) { delete self; }\n")
+            decls.append("    def " + ds + "(obj: " + cur_class + ")\n")
+            n_fns = n_fns + 1
+            continue
+        if line == "ECLASS":
+            cur_class = ""; continue
+        if line == "ENS":
+            ns_path = _ns_pop(ns_path); continue
+        if line == "EENUM":
+            continue
+
+        if line.starts_with("NS "):
+            mut nn = line.slice(3, line.len())
+            if ns_path == "": ns_path = nn
+            else: ns_path = ns_path + "::" + nn
+            if not seen.contains("using:" + ns_path):
+                usings.append("using namespace " + ns_path + ";\n")
+                seen.insert("using:" + ns_path, true)
+            continue
+        if line.starts_with("CLASS "):
+            cur_class = line.slice(6, line.len())
+            if ns_path == "": cur_class_qual = cur_class
+            else: cur_class_qual = ns_path + "::" + cur_class
+            if ns_path == "": class_pfx = cur_class
+            else: class_pfx = _ns_us(ns_path) + "_" + cur_class
+            if not seen.contains("class:" + cur_class):
+                # Multiline `pass` body (NOT the inline `class X: pass` form, which makes the
+                # parser swallow the following top-level `extern` block).
+                opaque.append("class " + cur_class + ":\n    pass\n")
+                seen.insert("class:" + cur_class, true)
+                n_classes = n_classes + 1
+            continue
+        if line.starts_with("ENUM "):
+            mut en = line.slice(5, line.len())
+            if en != "anon" and not seen.contains("enum:" + en):
+                consts.append("type " + en + " = c_int\n")
+                seen.insert("enum:" + en, true)
+            continue
+        if line.starts_with("EVAL "):
+            mut er = line.slice(5, line.len())
+            mut ep = er.split(" ")
+            mut ename = ep.get(0)
+            mut eval_ = "0"
+            if ep.len > 1: eval_ = ep.get(1)
+            consts.append("const " + ename + " = " + eval_ + "\n")
+            continue
+        if line.starts_with("METHOD "):
+            mut r = line.slice(7, line.len())
+            m_flags = r.slice(0, 2)
+            mut r2 = r.slice(3, r.len())
+            mut rn = r2.split("|")
+            m_ret = rn.get(0)
+            m_name = rn.get(1)
+            mode = "method"; params = Vec[str].init(4); continue
+        if line.starts_with("FUNC "):
+            mut r = line.slice(5, line.len())
+            mut rn = r.split("|")
+            m_ret = rn.get(0)
+            m_name = rn.get(1)
+            m_flags = ".."
+            mode = "func"; params = Vec[str].init(4); continue
+        if line.starts_with("PARAM "):
+            params.push(line.slice(6, line.len()))
+            continue
+
+        if line == "EMETHOD" or line == "ECTOR" or line == "EFUNC":
+            mut is_static = (m_flags.slice(0, 1) == "s")
+            mut is_const  = (m_flags.slice(1, 2) == "c")
+            mut shimp = ""
+            mut trp = ""
+            mut fargs = ""
+            if mode == "method" and not is_static:
+                # C++ shim keeps `self`; the Tauraro binding must NOT — a param literally named
+                # `self` is treated as an implicit method receiver and dropped from the C prototype.
+                if is_const: shimp = "const " + cur_class_qual + "* self"
+                else: shimp = cur_class_qual + "* self"
+                trp = "obj: " + cur_class
+            mut pi = 0
+            while pi < params.len:
+                mut pv = params.get(pi)
+                pi = pi + 1
+                mut bar = pv.split("|")
+                mut ptype = bar.get(0)
+                mut pname = ""
+                if bar.len > 1: pname = bar.get(1)
+                if pname == "": pname = "a" + pi.to_str()
+                if pname == "self": pname = "obj"   # `self` = implicit receiver in Tauraro
+                mut t = _cpp_parse_type(ptype)
+                mut sc = ""
+                mut fw = ""
+                if t.is_prim:
+                    sc = _cpp_ctype(t) + " " + pname
+                    fw = pname
+                else:
+                    mut nd = t.ptr
+                    if nd < 1: nd = 1
+                    mut stars = ""
+                    mut si = 0
+                    while si < nd:
+                        stars = stars + "*"
+                        si = si + 1
+                    sc = t.base + stars + " " + pname
+                    if t.was_ptr: fw = pname
+                    else: fw = "*" + pname
+                mut trt = _cpp_tr_type(t)
+                if shimp == "": shimp = sc
+                else: shimp = shimp + ", " + sc
+                if fargs == "": fargs = fw
+                else: fargs = fargs + ", " + fw
+                if trp == "": trp = pname + ": " + trt
+                else: trp = trp + ", " + pname + ": " + trt
+
+            mut call = ""
+            if mode == "ctor":
+                call = "new " + cur_class_qual + "(" + fargs + ")"
+            elif mode == "method":
+                if is_static: call = cur_class_qual + "::" + m_name + "(" + fargs + ")"
+                else: call = "self->" + m_name + "(" + fargs + ")"
+            else:
+                mut pre = ""
+                if ns_path != "": pre = ns_path + "::"
+                call = pre + m_name + "(" + fargs + ")"
+
+            if mode == "ctor":
+                mut sym = class_pfx + "_new"
+                shim.append(cur_class_qual + "* " + sym + "(" + shimp + ") { return " + call + "; }\n")
+                decls.append("    def " + sym + "(" + trp + ") -> " + cur_class + "\n")
+                n_fns = n_fns + 1
+            else:
+                mut rt = _cpp_parse_type(m_ret)
+                mut ri = _cpp_ret(rt, call)
+                mut sym = ""
+                if mode == "method": sym = class_pfx + "_" + m_name
+                else:
+                    if ns_path == "": sym = m_name
+                    else: sym = _ns_us(ns_path) + "_" + m_name
+                shim.append(ri.get(0) + " " + sym + "(" + shimp + ") { " + ri.get(1) + " }\n")
+                mut d = "    def " + sym + "(" + trp + ")"
+                if ri.get(2) != "": d = d + " -> " + ri.get(2)
+                decls.append(d + "\n")
+                n_fns = n_fns + 1
+            mode = ""
+            continue
+
+    # derive shim file name from the output name
+    mut base = out
+    if base.len() > 3 and base.slice(base.len() - 3, base.len()) == ".tr":
+        base = base.slice(0, base.len() - 3)
+    mut shim_name = base + "_shim.cpp"
+
+    mut sb = StringBuilder.init(4096)
+    sb.append("# Auto-generated C++ FFI bindings for " + header + " (tauraro-bindgen -h cpp).\n")
+    sb.append("# Build the shim once, then link it (and the C++ library) with your program:\n")
+    sb.append("#   c++ -c " + shim_name + " -o " + base + "_shim.o\n")
+    sb.append("#   tauraroc yourapp.tr --link " + base + "_shim.o -lstdc++ -o app\n\n")
+    mut os_ = opaque.to_string().as_str()
+    if os_ != "": sb.append(os_ + "\n")
+    mut cs = consts.to_string().as_str()
+    if cs != "": sb.append(cs + "\n")
+    mut ds2 = decls.to_string().as_str()
+    if ds2 != "":
+        sb.append("extern \"C\":\n")
+        sb.append(ds2)
+    write_file(out, sb.to_string().as_str())
+
+    mut sh = StringBuilder.init(4096)
+    sh.append("// Auto-generated C++ -> C shim for " + header + " (tauraro-bindgen -h cpp).\n")
+    sh.append("// Compile:  c++ -c " + shim_name + "\n")
+    sh.append("#include \"" + header + "\"\n")
+    sh.append(usings.to_string().as_str())
+    sh.append("extern \"C\" {\n")
+    sh.append(shim.to_string().as_str())
+    sh.append("}\n")
+    write_file(shim_name, sh.to_string().as_str())
+
+    print("bindgen: wrote " + out + " + " + shim_name + " — " + n_classes.to_str() + " classes, " + n_fns.to_str() + " wrappers")
+    print("bindgen: next:  c++ -c " + shim_name + "   then link with  --link " + base + "_shim.o -lstdc++")
+
+# Orchestrate C++ binding generation: detect libclang, build+run the walker, generate.
+pub def run_bindgen_cpp(header: str, out: str, cc: str):
+    mut guide = _detect_libclang(cc)
+    if guide != "":
+        print(guide)
+        return
+    write_file("_cxxwalk.c", _cxxwalk_src())
+    mut rc = _tr_system(cc + " _cxxwalk.c -o _cxxwalk.exe -lclang 2>_cxx_err.txt")
+    if rc != 0 or not file_exists("_cxxwalk.exe"):
+        print("bindgen: could not compile the libclang walker (see _cxx_err.txt)")
+        return
+    _tr_system(".\\_cxxwalk.exe \"" + header + "\" > _cxx.ir 2>>_cxx_err.txt")
+    if not file_exists("_cxx.ir"):
+        print("bindgen: the walker produced no output (see _cxx_err.txt)")
+        return
+    mut ir = read_file("_cxx.ir")
+    _cpp_generate(ir, header, out)
+    _tr_system("rm -f _cxxwalk.c _cxxwalk.exe _cxx.ir _cxx_err.txt 2>/dev/null")

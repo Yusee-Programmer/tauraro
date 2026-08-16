@@ -54,6 +54,7 @@ typedef struct Sema Sema;
 typedef struct Formatter Formatter;
 typedef struct CTok CTok;
 typedef struct Bindgen Bindgen;
+typedef struct CppType CppType;
 typedef struct CGenerator CGenerator;
 typedef struct LBlock LBlock;
 typedef struct LFunc LFunc;
@@ -140,6 +141,7 @@ static void _trdrop_Sema(void* vp);
 static void _trdrop_Formatter(void* vp);
 static void _trdrop_CTok(void* vp);
 static void _trdrop_Bindgen(void* vp);
+static void _trdrop_CppType(void* vp);
 static void _trdrop_CGenerator(void* vp);
 static void _trdrop_LBlock(void* vp);
 static void _trdrop_LFunc(void* vp);
@@ -2815,6 +2817,22 @@ static void _trdrop_Bindgen(void* vp) {
 }
 #endif
 
+#ifndef CppType_STRUCT_DEFINED
+#define CppType_STRUCT_DEFINED
+typedef struct CppType {
+    size_t __rc;
+    TrStr base;
+    long long ptr;
+    bool was_ptr;
+    bool was_ref;
+    bool is_prim;
+} CppType;
+static void _trdrop_CppType(void* vp) {
+    CppType* self = (CppType*)vp; (void)self;
+    _tr_str_release(self->base);
+}
+#endif
+
 #ifndef CGenerator_STRUCT_DEFINED
 #define CGenerator_STRUCT_DEFINED
 typedef struct CGenerator {
@@ -3830,6 +3848,18 @@ __attribute__((hot)) TrMap* _target_define_names(TrStr header);
 __attribute__((hot)) TrStr _lstrip(TrStr s);
 __attribute__((hot)) void emit_defines(Bindgen* bg, TrStr defs, TrMap* baseline, TrMap* allow);
 __attribute__((hot)) void run_bindgen(TrStr header, TrStr out, TrStr cc);
+__attribute__((hot)) TrStr _cxxwalk_src();
+__attribute__((hot)) TrStr _detect_libclang(TrStr cc);
+__attribute__((hot)) CppType* _cpp_parse_type(TrStr spelling);
+__attribute__((hot)) TrStr _last_seg(TrStr s);
+__attribute__((hot)) TrStr _cpp_ctype(CppType* t);
+__attribute__((hot)) TrStr _cpp_tr_type(CppType* t);
+__attribute__((hot)) List_TrStr* _cpp_ret(CppType* rt, TrStr call);
+__attribute__((hot)) TrStr _ns_pop(TrStr path);
+__attribute__((hot)) TrStr _ns_us(TrStr path);
+__attribute__((hot)) TrStr _rstrip_cr(TrStr s);
+__attribute__((hot)) void _cpp_generate(TrStr ir, TrStr header, TrStr out);
+__attribute__((hot)) void run_bindgen_cpp(TrStr header, TrStr out, TrStr cc);
 __attribute__((hot)) TrStr _c_dot_to_safe(TrStr s);
 __attribute__((hot)) TrStr _indent_str(long long n);
 __attribute__((hot)) bool _is_invalid_ptr(unsigned long long addr);
@@ -5475,6 +5505,24 @@ __attribute__((hot)) bindgen_Bindgen*** core_alloc_resize_bindgen_Bindgen_ptr(bi
 __attribute__((hot)) void core_alloc_dealloc_bindgen_Bindgen_ptr(bindgen_Bindgen*** ptr);
 __attribute__((hot)) core_map_MapNode_str_bindgen_Bindgen** core_alloc_alloc_core_map_MapNode_str_bindgen_Bindgen(long long count);
 __attribute__((hot)) void core_alloc_dealloc_core_map_MapNode_str_bindgen_Bindgen(core_map_MapNode_str_bindgen_Bindgen** ptr);
+
+typedef CppType bindgen_CppType;
+struct core_vec_Vec_bindgen_CppType { bindgen_CppType** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_bindgen_CppType core_vec_Vec_bindgen_CppType;
+struct core_vec_Vec_bindgen_CppType_ptr { bindgen_CppType*** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_bindgen_CppType_ptr core_vec_Vec_bindgen_CppType_ptr;
+struct core_map_MapNode_str_bindgen_CppType { char* key; bindgen_CppType* value; struct core_map_MapNode_str_bindgen_CppType* next; };
+typedef struct core_map_MapNode_str_bindgen_CppType core_map_MapNode_str_bindgen_CppType;
+struct core_map_Map_str_bindgen_CppType { core_map_MapNode_str_bindgen_CppType** buckets; long long capacity; long long len; };
+typedef struct core_map_Map_str_bindgen_CppType core_map_Map_str_bindgen_CppType;
+__attribute__((hot)) bindgen_CppType** core_alloc_alloc_bindgen_CppType(long long count);
+__attribute__((hot)) bindgen_CppType** core_alloc_resize_bindgen_CppType(bindgen_CppType** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_bindgen_CppType(bindgen_CppType** ptr);
+__attribute__((hot)) bindgen_CppType*** core_alloc_alloc_bindgen_CppType_ptr(long long count);
+__attribute__((hot)) bindgen_CppType*** core_alloc_resize_bindgen_CppType_ptr(bindgen_CppType*** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_bindgen_CppType_ptr(bindgen_CppType*** ptr);
+__attribute__((hot)) core_map_MapNode_str_bindgen_CppType** core_alloc_alloc_core_map_MapNode_str_bindgen_CppType(long long count);
+__attribute__((hot)) void core_alloc_dealloc_core_map_MapNode_str_bindgen_CppType(core_map_MapNode_str_bindgen_CppType** ptr);
 
 typedef CGenerator codegen_c_CGenerator;
 struct core_vec_Vec_codegen_c_CGenerator { codegen_c_CGenerator** data; long long len; long long capacity; };

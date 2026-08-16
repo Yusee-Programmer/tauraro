@@ -12,6 +12,19 @@ tauraroc bindgen raylib.h -o raylib.tr [--cc <compiler>]
 Then `from raylib import ...` in your program. (The compiler auto-detects the C compiler for
 preprocessing, so `--cc` is usually unnecessary.)
 
+**C++ headers** — add `-h cpp` (default is C):
+
+```sh
+tauraroc bindgen widget.hpp -o widget.tr -h cpp     # -> widget.tr + widget_shim.cpp
+```
+
+C++ has no stable C-callable ABI (name mangling, `this`, vtables, RAII), so the bindgen
+**auto-generates a C++→C shim** (`<out>_shim.cpp`) alongside the `.tr` — classes/methods/ctors/dtors/
+static methods/free functions/enums/namespaces. Compile the shim once (`c++ -c widget_shim.cpp`) and
+link it (`--link widget_shim.o -lstdc++`). This mode uses **libclang**, needed *only* for `-h cpp`
+(C headers never touch it); if it's missing the tool prints per-platform install steps. See
+[`cpp/README.md`](cpp/README.md) for the design + the `shapes.hpp` end-to-end example.
+
 > This source (`bindgen.tr`) is the standalone copy of the same logic that lives in
 > `src/bindgen.tr`; you can also build it directly with `tauraroc tools/bindgen/bindgen.tr -o
 > tauraro-bindgen` if you want the tool as a separate binary.

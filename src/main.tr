@@ -13,7 +13,7 @@ from diag import c_red, c_yellow, c_green, c_cyan, c_dim, c_bold, spaces, repeat
 from sema import Sema
 from ast import Decl
 from fmt import Formatter
-from bindgen import run_bindgen
+from bindgen import run_bindgen, run_bindgen_cpp
 from codegen.c import CGenerator
 from codegen.llvm import LlvmGenerator
 from codegen.native import NativeGenerator
@@ -42,6 +42,7 @@ pub def print_usage():
     print("       tauraroc fmt [-w] <file.tr>   Format source (stdout, or -w in place)")
     print("       tauraroc lint <file.tr>       Analyze and report warnings/errors")
     print("       tauraroc bindgen <hdr.h>      Generate FFI bindings from a C header (-o out.tr)")
+    print("       tauraroc bindgen <hdr.hpp> -h cpp  Bind a C++ header (auto C++->C shim via libclang)")
     print("Options:")
     print("  --version         Print version and exit")
     print("  --emit c          Emit generated C code to build/")
@@ -997,10 +998,13 @@ pub def main(args: Vec[str]):
         mut a1 = args.get(1)
         if a1 == "fmt" or a1 == "lint" or a1 == "bindgen": subcmd = a1
     if subcmd == "bindgen":
-        # tauraroc bindgen <header.h> [-o out.tr] [--cc <compiler>]  -> generate FFI bindings
+        # tauraroc bindgen <header.h> [-o out.tr] [--cc <compiler>] [-h cpp]  -> FFI bindings.
+        # Default binds a C header; `-h cpp` binds a C++ header (auto-generates a C++->C shim
+        # via libclang — required only for C++, detected at use time).
         mut bg_header = ""
         mut bg_out    = "bindings.tr"
         mut bg_cc     = detect_c_compiler()
+        mut bg_cpp    = false
         mut bk = 2
         while bk < args.len:
             mut ba = args.get(bk)
@@ -1010,13 +1014,21 @@ pub def main(args: Vec[str]):
             elif ba == "--cc" and bk + 1 < args.len:
                 bg_cc = args.get(bk + 1)
                 bk = bk + 1
+            elif ba == "-h" and bk + 1 < args.len:
+                if args.get(bk + 1) == "cpp": bg_cpp = true
+                bk = bk + 1
+            elif ba == "--cpp":
+                bg_cpp = true
             elif not str_starts_with(ba, "-"):
                 if bg_header == "": bg_header = ba
             bk = bk + 1
         if bg_header == "":
-            print("error: bindgen requires a header: tauraroc bindgen <header.h> [-o out.tr] [--cc <compiler>]")
+            print("error: bindgen requires a header: tauraroc bindgen <header.h> [-o out.tr] [--cc <compiler>] [-h cpp]")
             _tr_exit(1)
-        run_bindgen(bg_header, bg_out, bg_cc)
+        if bg_cpp:
+            run_bindgen_cpp(bg_header, bg_out, bg_cc)
+        else:
+            run_bindgen(bg_header, bg_out, bg_cc)
         _tr_exit(0)
     if subcmd == "fmt":
         mut write_in_place = false
