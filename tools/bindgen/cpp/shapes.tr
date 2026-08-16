@@ -1,0 +1,20 @@
+# Auto-generated C++ FFI bindings for shapes.hpp (tauraro-bindgen -h cpp).
+# Build the shim once, then link it (and the C++ library) with your program:
+#   c++ -c shapes_shim.cpp -o shapes_shim.o
+#   tauraroc yourapp.tr --link shapes_shim.o -lstdc++ -o app
+
+class Shape:
+    pass
+
+type Kind = c_int
+const Circle = 0
+const Square = 2
+const Triangle = 3
+
+extern "C":
+    def geo_Shape_new(x: c_double, y: c_double) -> Shape
+    def geo_Shape_delete(obj: Shape)
+    def geo_Shape_area(obj: Shape) -> c_double
+    def geo_Shape_move(obj: Shape, dx: c_double, dy: c_double)
+    def geo_Shape_unit() -> Shape
+    def geo_distance(a: Shape, b: Shape) -> c_double

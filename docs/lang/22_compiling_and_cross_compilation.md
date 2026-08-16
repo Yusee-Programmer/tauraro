@@ -41,8 +41,10 @@ turns that into a binary. Pick one with `--backend`:
 The **C backend is the default and the most complete** — the compiler self-hosts on it.
 The **LLVM backend** shares the same lowering and is *faster on most benchmarks* (a
 `getelementptr` codegen fix unblocked LLVM's auto-vectorizer: MatMul ~4×, Collatz ~3×);
-it covers a large feature subset. If the LLVM backend can't lower something yet it tells
-you clearly — fall back to `--backend c`.
+it covers a large feature subset — including fixed-size arrays `[T; N]`, which lower to an
+inline stack region (`alloca [N x i64]` with `getelementptr` access, **no heap**), so an
+array-heavy `--no-heap` firmware build stays heap-free on the LLVM backend too. If the LLVM
+backend can't lower something yet it tells you clearly — fall back to `--backend c`.
 
 Both backends produce identical observable output — a differential oracle (`LLVM ≡ C`)
 enforces this in CI.
@@ -179,8 +181,17 @@ tauraroc firmware.tr --no-heap --freestanding --emit c
 
 Rejected: `List`/`Dict`/`Set`/`Vec`/`Map` literals *and* constructors, list comprehensions,
 f-strings, string `+`/`*`, and heap (`non-@value_type`) class construction. Allowed:
-`@value_type` structs, fixed arrays `[T; N]`, raw `Pointer[T]`, `StrView`, enums/tuples,
-scalars, and bit ops. See `examples/freestanding/zero_heap/`.
+`@value_type` structs, fixed arrays `[T; N]` (local **and** global), raw `Pointer[T]`,
+`StrView`, scalars, and bit ops. See `examples/freestanding/zero_heap/`.
+
+**Tuples and enums under `--no-heap`.** On the **C backend** (the recommended freestanding
+path) tuples and enums are stack value structs — a `TrTuple` compound literal and a stack
+tagged union — so `--no-heap` accepts them. The **LLVM and native backends** currently
+heap-box them (via the object allocator), so under `--backend llvm --no-heap` a tuple or
+enum construction is rejected with `[H-1]`, keeping the zero-heap guarantee honest. Use the
+C backend for a zero-heap build that needs tuples/enums, or return values via out-params /
+`@value_type` structs on the LLVM path. (Fixed arrays `[T; N]` are stack-allocated on **all**
+backends — see the note above — so array-heavy firmware stays heap-free everywhere.)
 
 ---
 

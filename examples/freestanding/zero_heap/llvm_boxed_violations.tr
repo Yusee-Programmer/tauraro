@@ -1,0 +1,18 @@
+# Constructs that are STACK values on the C backend (so --no-heap accepts them there) but
+# HEAP-BOXED on the LLVM/native backends. Under `--backend llvm --no-heap` they must be
+# rejected with [H-1] so the zero-heap guarantee stays honest. Build the real firmware with
+# the C backend (`--no-heap`, stack tuples/enums) — or avoid these on the zero-heap LLVM path.
+enum Mode:
+    Idle
+    Active
+
+def divide(a: int, b: int) -> (int, int):
+    return (a / b, a % b)          # tuple literal: TrTuple on C (stack), obj_alloc on LLVM
+
+def main():
+    mut q, r = divide(17, 5)       # multi-return via tuple
+    print(q + r)
+    mut m = Mode.Active            # enum ctor: stack tagged union on C, obj_alloc on LLVM
+    match m:
+        case Mode.Active: print(1)
+        case _: print(0)

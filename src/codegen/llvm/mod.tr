@@ -15,6 +15,7 @@
 from hir import HirProgram
 from taumir.lower import lower_to_lir
 from taumir.lower import lower_to_lir_t
+from taumir.lower import lower_to_lir_nh
 from codegen.llvm.emit import LlvmEmitter
 
 pub class LlvmGenerator:
@@ -32,7 +33,12 @@ extend LlvmGenerator:
     # program uses constructs the shared LIR can't represent yet — the driver then falls
     # back to the C backend.
     pub def generate(self, prog: HirProgram) -> str:
-        mut m = lower_to_lir_t(prog, true)      # LLVM: stack args past 6
+        return self.generate_nh(prog, false)
+
+    # As generate(), plus --no-heap: reject heap-boxing constructs (enum ctors) so a strict
+    # zero-heap LLVM build is provably heap-free.
+    pub def generate_nh(self, prog: HirProgram, no_heap: bool) -> str:
+        mut m = lower_to_lir_nh(prog, true, no_heap)      # LLVM: stack args past 6
         if not m.ok:
             self.ok = false
             self.fail_note = m.fail_note

@@ -1,0 +1,54 @@
+# Passing Tauraro callbacks (with state) to a C API that takes a function pointer + userdata.
+#
+# This example targets a tiny C "library" (a callback+userdata API, like qsort_r / GLib
+# signals / most event loops). Build & run it as:
+#
+#     cat > cbapi.c <<'EOF'
+#     typedef void (*handler)(int ev, void* userdata);
+#     void run_events(handler cb, void* ud, int a, int b, int c) { cb(a,ud); cb(b,ud); cb(c,ud); }
+#     EOF
+#     cc -c cbapi.c -o cbapi.o
+#     tauraroc ffi_callbacks.tr --emit c && cc build/main.c cbapi.o -Ibuild -o demo   # (+ -lws2_32 on Windows)
+#     ./demo        # prints 42 then 42
+#
+# Two patterns, both zero-cost. Use `c_int` (not `int`) for callback params so the width
+# matches C's `int` exactly.
+
+extern "C":
+    def run_events(cb: Pointer[void], ud: Pointer[void], a: c_int, b: c_int, c: c_int)
+
+# ---- Pattern 1: closure bridge via c_callback (ergonomic) --------------------------------
+# `c_callback(cb)` returns a C function-pointer trampoline for the closure's signature; the
+# trampoline threads the closure through the callback's LAST argument (the userdata). Pass the
+# closure itself as the userdata. SAFETY: captures are by-reference into this frame, so this is
+# sound for callbacks invoked *synchronously* (like below); for a callback stored and fired
+# later, capture heap-stable state instead of stack locals.
+def with_closure():
+    mut total = 0
+    mut cb = def(ev: c_int):
+        total = total + (ev as int)
+    run_events(c_callback(cb), cb as Pointer[void], 10, 20, 12)
+    print(total)                       # 42
+
+# ---- Pattern 2: explicit fn + Pointer[T] userdata (fully sound, C-idiomatic) -------------
+# A top-level function IS a plain C function; pass it directly and thread state through a
+# Pointer[T] userdata you control. No closures, no capture — the Rust `extern "C" fn` style.
+@value_type
+class Acc:
+    pub total: int
+
+def on_event(ev: c_int, ud: Pointer[Acc]):
+    unsafe:
+        mut a = ud.read()
+        a.total = a.total + (ev as int)
+        ud.write(a)
+
+def with_userdata():
+    mut acc = Acc()
+    acc.total = 0
+    run_events(on_event as Pointer[void], (&acc) as Pointer[void], 10, 20, 12)
+    print(acc.total)                   # 42
+
+def main():
+    with_closure()
+    with_userdata()

@@ -189,6 +189,9 @@ extend LlvmEmitter:
             case LInst.IAddrVar(dst, name):
                 # The var's alloca IS its address.
                 self.store_vreg(dst, "ptr", "%var_" + name)
+            case LInst.IAddrGlobal(dst, gidx):
+                # The global's symbol IS its address (fixed-array base).
+                self.store_vreg(dst, "ptr", "@g." + gidx.to_str())
             case LInst.IFuncAddr(dst, fname):
                 self.store_vreg(dst, "ptr", "@" + fname)
             case LInst.ICallInd(dst, fnreg, iargs):
@@ -348,7 +351,13 @@ extend LlvmEmitter:
         mut vi = 0
         while vi < lf.vars.len:
             mut vn = lf.vars.get(vi)
-            self.w("  %var_" + vn + " = alloca " + _ll_ty(lf.var_type(vn)) + "\n")
+            mut van = lf.var_arr.get(vi)
+            if van > 0:
+                # Fixed array `[T;N]`: the var's storage is an inline N-slot region (element is
+                # an i64 slot — int/bool). IAddrVar yields this alloca's address as the base.
+                self.w("  %var_" + vn + " = alloca [" + van.to_str() + " x i64]\n")
+            else:
+                self.w("  %var_" + vn + " = alloca " + _ll_ty(lf.var_type(vn)) + "\n")
             vi = vi + 1
         mut ri = 0
         while ri < lf.n_vregs:
@@ -445,11 +454,17 @@ extend LlvmEmitter:
         # Module globals -> internal, zero-initialized (.bss equivalent).
         mut gi = 0
         while gi < self.m.globals.len:
-            mut gty = _ll_ty(self.m.global_types.get(gi))
-            mut init = "0"
-            if gty == "double": init = "0.0"
-            if gty == "ptr": init = "null"
-            self.w("@g." + gi.to_str() + " = internal global " + gty + " " + init + "\n")
+            mut gan = self.m.global_arr.get(gi)
+            if gan > 0:
+                # Fixed-array global `[T;N]`: an inline N-slot .bss region (i64 element slots),
+                # element access via IAddrGlobal + getelementptr.
+                self.w("@g." + gi.to_str() + " = internal global [" + gan.to_str() + " x i64] zeroinitializer\n")
+            else:
+                mut gty = _ll_ty(self.m.global_types.get(gi))
+                mut init = "0"
+                if gty == "double": init = "0.0"
+                if gty == "ptr": init = "null"
+                self.w("@g." + gi.to_str() + " = internal global " + gty + " " + init + "\n")
             gi = gi + 1
         self.w("\n")
         self.emit_extern_decls()

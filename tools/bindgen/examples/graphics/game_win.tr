@@ -1,0 +1,40 @@
+# A Tauraro graphics program that opens a REAL window (via auto-generated raywin bindings).
+from raywin import Vector2, Color, Rect
+from raywin import GfxInit, GfxShouldClose, GfxBegin, GfxEnd, GfxClose, GfxClear, GfxDrawRect, GfxDrawLine
+
+def rgb(r: int, g: int, b: int) -> Color:
+    mut c = Color()
+    c.r = r as u8
+    c.g = g as u8
+    c.b = b as u8
+    c.a = 255 as u8
+    return c
+
+def vec(x: float, y: float) -> Vector2:
+    mut v = Vector2()
+    v.x = x as f32
+    v.y = y as f32
+    return v
+
+def rct(x: float, y: float, w: float, h: float) -> Rect:
+    mut r = Rect()
+    r.x = x as f32
+    r.y = y as f32
+    r.width = w as f32
+    r.height = h as f32
+    return r
+
+def main():
+    GfxInit(320, 240, "Tauraro Graphics - close window or press ESC" as Pointer[char])
+    mut t = 0
+    while GfxShouldClose() == 0:
+        GfxBegin()
+        GfxClear(rgb(10, 10, 35))                                     # dark blue background
+        GfxDrawRect(rct(40.0, 40.0, 80.0, 60.0), rgb(230, 41, 55))    # red rectangle
+        GfxDrawRect(rct(200.0, 140.0, 80.0, 60.0), rgb(0, 200, 80))   # green rectangle
+        GfxDrawLine(vec(0.0, 0.0), vec(319.0, 239.0), rgb(255, 255, 0)) # yellow diagonal
+        mut px = t % 300
+        GfxDrawRect(rct(px as float, 110.0, 20.0, 20.0), rgb(255, 255, 255))  # moving white box
+        GfxEnd()
+        t = t + 2
+    GfxClose()

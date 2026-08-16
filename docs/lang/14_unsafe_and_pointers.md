@@ -308,6 +308,10 @@ Use the class wrapper pattern above to avoid this.
 
 ## Pointer Casts
 
+> For the **complete** cast reference — every `as` case across numbers, strings, pointers,
+> FFI, systems programming, and bare-metal, with the exact compiler error you get without each
+> cast — see [23 — Casting with `as`](23_casting_with_as.md). This section is the pointer subset.
+
 ### When to use
 
 Cast pointers when:

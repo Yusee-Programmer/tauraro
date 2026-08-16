@@ -1,0 +1,35 @@
+# LLVM-only corpus: MODULE-LEVEL fixed arrays `[T; N]` lower to a `.bss` region
+# (`@g = internal global [N x i64] zeroinitializer`) with getelementptr access — NO heap.
+# Exercises int + bool global arrays: zero-init, write/read across functions, `.len`, loops.
+# Native isn't array-global-aware, so this is tests/llvm/ (the C≡LLVM differential guards it).
+mut table: [int; 10]
+mut seen: [bool; 4]
+
+def fill():
+    mut i = 0
+    while i < table.len:
+        table[i] = i * 3
+        i = i + 1
+
+def total() -> int:
+    mut s = 0
+    mut k = 0
+    while k < table.len:
+        s = s + table[k]
+        k = k + 1
+    return s
+
+def main():
+    fill()
+    print(table.len)      # 10
+    print(table[0])       # 0
+    print(table[9])       # 27
+    print(total())        # 3*(0+1+..+9) = 135
+    table[5] = 999
+    print(table[5])       # 999
+    print(total())        # 135 - 15 + 999 = 1119
+
+    seen[2] = True
+    print(seen[0])        # false
+    print(seen[2])        # true
+    print(seen[3])        # false

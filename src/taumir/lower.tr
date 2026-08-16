@@ -830,8 +830,14 @@ def _arg_limit(m: LModule) -> int:
     return 6
 
 pub def lower_to_lir_t(prog: HirProgram, llvm: bool) -> LModule:
+    return lower_to_lir_nh(prog, llvm, false)
+
+# As above, plus the --no-heap flag: reject heap-boxing LIR constructs (enum ctors) so the
+# zero-heap guarantee holds on the LLVM/native backends.
+pub def lower_to_lir_nh(prog: HirProgram, llvm: bool, no_heap: bool) -> LModule:
     mut m = LModule.init()
     m.target_llvm = llvm
+    m.no_heap = no_heap
     m.hir_prog = prog                  # generic fns are instantiated lazily at call sites
     _register_classes(m, prog)
     return _lower_to_lir_body(m, prog)
@@ -1227,7 +1233,20 @@ def _register_global(m: LModule, s: Pointer[HirStmt]) -> bool:
     match s.read():
         case HirStmt.SLineMarker(_): return true
         case HirStmt.SPass: return true
-        case HirStmt.SLet(name, _, _, _, _, _, val):
+        case HirStmt.SLet(name, _, _, _, _, ty, val):
+            # Module-level fixed array `mut buf: [T; N]` (typically no initializer -> zeroed
+            # .bss). LLVM only: `@g = internal global [N x i64] zeroinitializer`, element
+            # access via IAddrGlobal + byte offset. Native globals aren't array-aware -> falls
+            # to C. Element must be a scalar (int/bool).
+            if m.target_llvm and ty.name == "Array" and ty.array_size > 0 and ty.args.len > 0:
+                mut getag = _tag_of(m, ty.args.get(0).read())
+                if getag != 0 and getag != 4: return false
+                mut gidx_a = m.add_global(name, getag)
+                m.set_global_arr(gidx_a, ty.array_size)
+                # no global_inits entry: zeroinitializer handles it; an explicit initializer
+                # list for a global array isn't supported yet (falls through to the val path).
+                if val as usize == 0 as usize: return true
+                return false
             if val as usize == 0 as usize: return false
             mut tag = _ast_type_tag(hir_expr_type(val))
             if tag < 0: return false
@@ -1348,6 +1367,14 @@ def _emit_field_get(m: LModule, lf: LFunc, obj: int, off: int, tag: int) -> int:
 def _lower_enum_ctor(m: LModule, lf: LFunc, ename: str, vname: str, margs: Vec[Pointer[HirExpr]]) -> int:
     mut vidx = m.enum_variant_index(ename, vname)
     if vidx < 0: return -1
+    # [H-1] --no-heap: an enum instance (incl. Option/Result) heap-allocates via
+    # _tr_rt_obj_alloc on the LLVM/native backends (the C backend keeps it as a stack tagged
+    # union). Reject it here — the single choke point every construction form funnels through
+    # — so the zero-heap guarantee is honest. main reaching this yields a clear driver error.
+    if m.no_heap:
+        m.ok = false
+        m.fail_note = "[H-1] constructing enum '" + ename + "." + vname + "' heap-allocates, which --no-heap forbids on this backend (it boxes via the object allocator).\n      FIX: use the C backend for --no-heap (it keeps enums as stack tagged unions), or avoid heap enums such as Option/Result on the zero-heap path"
+        return -1
     mut elay = m.enums.get(m.enum_index(ename))
     mut vlay = elay.variants.get(vidx)
     if margs.len != vlay.fields.len: return -1
@@ -2280,6 +2307,29 @@ def _lower_stmt_impl(m: LModule, lf: LFunc, s: Pointer[HirStmt]) -> bool:
                 # is never observed — matching the C backend's bare `long long x;`. Restricted
                 # to SCALAR tags (int/float/bool): a str/object slot has a drop, and an
                 # unassigned-at-scope-exit slot would release garbage -> fall back to C.
+                # Fixed-size array `mut a: [T; N]` (no initializer): allocate an N-slot region
+                # (the var's own storage) and zero it, matching the C backend's `[T;N]` zero-init.
+                # Element must be a scalar (int/bool) — a heap element would need per-slot drop.
+                # LLVM only: the array lives in an inline `[N x i64]` alloca. The native
+                # backend's frame layout is one 8-byte slot per var (not array-aware yet), so
+                # there it returns false and the C backend handles the function.
+                if m.target_llvm and ty.name == "Array" and ty.array_size > 0 and ty.args.len > 0:
+                    mut aetag = _tag_of(m, ty.args.get(0).read())
+                    if aetag != 0 and aetag != 4: return false
+                    mut alen = ty.array_size
+                    lf.add_var(name)
+                    lf.set_var_type(name, aetag)     # element tag drives the load/store type
+                    lf.set_var_arr(name, alen)
+                    mut zc = lf.new_vreg()
+                    lf.emit(LInst.IConst(zc, 0))
+                    mut zi = 0
+                    while zi < alen:
+                        mut zidx = lf.new_vreg()
+                        lf.emit(LInst.IConst(zidx, zi))
+                        mut zaddr = _array_elem_addr(m, lf, name, zidx)
+                        lf.emit(LInst.IStore(zaddr, 0, zc, 2))
+                        zi = zi + 1
+                    return true
                 mut dtag = _tag_of(m, ty)
                 if dtag != 0 and dtag != 4 and dtag != 5: return false
                 lf.add_var(name)
@@ -3836,6 +3886,23 @@ def _lower_index_set(m: LModule, lf: LFunc, obj: Pointer[HirExpr], idx: Pointer[
             siargs.push(idx)
             siargs.push(val)
             return _lower_obj_call(m, lf, sim, siself, siargs) >= 0
+    # Fixed-array element write `a[i] = v`: store into the array var's own storage (no heap
+    # handle). Detected BEFORE lowering `obj` (a bare array var must not be ILoadVar'd).
+    mut awn = _ident_name(obj)
+    if awn != "" and _fixed_arr_len(m, lf, awn) > 0:
+        mut aiv = lower_expr(m, lf, idx)
+        if aiv < 0 or lf.vreg_type(aiv) != 0: return false
+        mut avv = lower_expr(m, lf, val)
+        if avv < 0: return false
+        mut avt = lf.vreg_type(avv)
+        mut aet = _fixed_arr_elem_tag(m, lf, awn)
+        if avt == 4: avt = 0                # bool/int share the i64 slot
+        if aet == 4: aet = 0
+        if avt != aet: return false
+        mut aaddr = _array_elem_addr(m, lf, awn, aiv)
+        lf.emit(LInst.IStore(aaddr, 0, avv, 2))
+        _flush_fresh_strs(m, lf)
+        return true
     mut ov = lower_expr(m, lf, obj)
     if ov < 0: return false
     mut ovt = lf.vreg_type(ov)
@@ -4847,6 +4914,38 @@ def _inline_list_addr(m: LModule, lf: LFunc, handle: int, idx: int, stride: int)
                                                     # ("cannot identify array bounds"). Native backend is
                                                     # unaffected: its `+` is a 64-bit add either way.
     lf.emit(LInst.IBinOp(addr, "+", data, off))
+    return addr
+
+# Address (ptr vreg) of fixed-array element #idx: &var + idx*8. The array's storage IS the
+# var's own alloca (a `[N x i64]` region on the LLVM side, an N*8-byte stack slot natively),
+# so there's no heap-handle indirection — the base is IAddrVar directly. Stride 8 (int/bool
+# element slot). No bounds check inline (matches the list fast path); correct programs stay
+# in range. Used by fixed-array read/write and zero-init.
+# Fixed-array length of `name` — a local array var if one is in scope, else a module global
+# (a local scalar shadowing a global array returns 0, so the caller skips the array path).
+def _fixed_arr_len(m: LModule, lf: LFunc, name: str) -> int:
+    if lf.var_index(name) >= 0: return lf.var_arr_of(name)
+    return m.global_arr_of(name)
+
+# Element type tag of the fixed array `name` (local var, else global).
+def _fixed_arr_elem_tag(m: LModule, lf: LFunc, name: str) -> int:
+    if lf.var_index(name) >= 0: return lf.var_type(name)
+    return m.global_type(name)
+
+def _array_elem_addr(m: LModule, lf: LFunc, name: str, idx: int) -> int:
+    mut base = lf.new_vreg()
+    lf.set_vreg_type(base, 10)          # ptr: the alloca / global address of the array
+    if lf.var_index(name) >= 0:
+        lf.emit(LInst.IAddrVar(base, name))
+    else:
+        lf.emit(LInst.IAddrGlobal(base, m.global_index(name)))
+    mut c8 = lf.new_vreg()
+    lf.emit(LInst.IConst(c8, 8))
+    mut off = lf.new_vreg()
+    lf.emit(LInst.IBinOp(off, "*", idx, c8))
+    mut addr = lf.new_vreg()
+    lf.set_vreg_type(addr, 10)          # ptr result -> getelementptr i8 (provenance-preserving)
+    lf.emit(LInst.IBinOp(addr, "+", base, off))
     return addr
 
 # xs[i] / xs.get(i): load the raw i64 element at data[i] for an 8-byte-slot list.
@@ -6336,6 +6435,17 @@ def _lower_expr_impl(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                     mut giargs = Vec[Pointer[HirExpr]].init(1)
                     giargs.push(idx)
                     return _lower_obj_call(m, lf, gim, giself, giargs)
+            # Fixed-array element read `a[i]`: load from the array var's own storage. Checked
+            # BEFORE lowering `obj` (a bare array var isn't a scalar to ILoadVar).
+            mut arn = _ident_name(obj)
+            if arn != "" and _fixed_arr_len(m, lf, arn) > 0:
+                mut ariv = lower_expr(m, lf, idx)
+                if ariv < 0 or lf.vreg_type(ariv) != 0: return -1
+                mut araddr = _array_elem_addr(m, lf, arn, ariv)
+                mut ard = lf.new_vreg()
+                lf.emit(LInst.ILoad(ard, araddr, 0, 2))
+                lf.set_vreg_type(ard, _fixed_arr_elem_tag(m, lf, arn))    # element tag (int/bool)
+                return ard
             mut ov = lower_expr(m, lf, obj)
             if ov < 0: return -1
             mut ovt = lf.vreg_type(ov)
@@ -6374,6 +6484,14 @@ def _lower_expr_impl(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                         return _lower_enum_ctor(m, lf, uvn, _norm_variant(uvn, prop), Vec[Pointer[HirExpr]].init(0))
                 case _:
                     pass
+            # Fixed-array `a.len` -> the compile-time length N (an int constant; the size is
+            # part of the type, not stored with the data).
+            if prop == "len":
+                mut aln = _ident_name(obj)
+                if aln != "" and _fixed_arr_len(m, lf, aln) > 0:
+                    mut ald = lf.new_vreg()
+                    lf.emit(LInst.IConst(ald, _fixed_arr_len(m, lf, aln)))
+                    return ald
             # Class field read `obj.field` -> _tr_rt_field_get_i(obj, offset).
             #   int/bool/object: the raw 8-byte slot. float: slot bits -> IBitsF -> f64.
             #   str: a BORROW of the field's owned ref (not fresh — consumers retain).
@@ -6795,6 +6913,23 @@ def _lower_expr_impl(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
             # Instance method `inst.method(args)` on a user class -> <Class>_<method>(self,
             # args), resolved up the inheritance chain (static dispatch, like the C backend).
             mut recv_cls = _recv_class(m, lf, obj)
+            # Fixed-array read `a[i]` (sema desugars to `a.get_index(i)`) and `a.len` — served
+            # from the var's own inline storage (LLVM only; see the SLet registration).
+            mut amn = _ident_name(obj)
+            if amn != "" and _fixed_arr_len(m, lf, amn) > 0:
+                if (method == "get_index" or method == "get") and margs.len == 1:
+                    mut amiv = lower_expr(m, lf, margs.get(0))
+                    if amiv < 0 or lf.vreg_type(amiv) != 0: return -1
+                    mut amaddr = _array_elem_addr(m, lf, amn, amiv)
+                    mut amd = lf.new_vreg()
+                    lf.emit(LInst.ILoad(amd, amaddr, 0, 2))
+                    lf.set_vreg_type(amd, _fixed_arr_elem_tag(m, lf, amn))
+                    return amd
+                if (method == "len" or method == "length") and margs.len == 0:
+                    mut amld = lf.new_vreg()
+                    lf.emit(LInst.IConst(amld, _fixed_arr_len(m, lf, amn)))
+                    return amld
+                return -1
             # StrView.to_str(): the ONE std StrView method that allocates. Its user body calls
             # the raw-malloc `_tr_str_slice` (freed via _tr_c_free) which conflicts with str
             # ARC (rc release). Intercept it -> rc'd `_tr_rt_str_slice(self.data, 0, self.len)`,

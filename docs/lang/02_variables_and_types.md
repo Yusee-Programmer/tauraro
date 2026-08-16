@@ -20,6 +20,18 @@ version = 1            # type inferred: int
 pi: float = 3.14159    # type annotated explicitly
 ```
 
+**Optional `var` keyword.** You can prefix a declaration with `var` to make it explicit that a
+statement *declares* a variable (rather than assigns an existing one). It is entirely optional and
+changes nothing — `var age: int = 30` is identical to `age: int = 30` (both immutable; use `mut`
+for a mutable variable). `var` is a *contextual* keyword: it only marks a declaration when followed
+by a name, so `var` is still a perfectly valid variable or parameter name anywhere else.
+
+```python
+var age: int = 30      # explicit declaration — identical to `age: int = 30`
+var name = "Tauraro"   # inferred type
+count: int = 0         # the bare form works exactly the same (no keyword needed)
+```
+
 Variables declared without `mut` are **immutable** — they cannot be reassigned after declaration.
 The compiler enforces this: any attempt to assign a second value to an immutable binding is a
 hard error. This communicates intent clearly: if a variable never changes, the reader can rely on

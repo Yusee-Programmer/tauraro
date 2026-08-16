@@ -13,6 +13,7 @@ from diag import c_red, c_yellow, c_green, c_cyan, c_dim, c_bold, spaces, repeat
 from sema import Sema
 from ast import Decl
 from fmt import Formatter
+from bindgen import run_bindgen, run_bindgen_cpp
 from codegen.c import CGenerator
 from codegen.llvm import LlvmGenerator
 from codegen.native import NativeGenerator
@@ -40,6 +41,8 @@ pub def print_usage():
     print("Usage: tauraroc <file.tr> [options]")
     print("       tauraroc fmt [-w] <file.tr>   Format source (stdout, or -w in place)")
     print("       tauraroc lint <file.tr>       Analyze and report warnings/errors")
+    print("       tauraroc bindgen <hdr.h>      Generate FFI bindings from a C header (-o out.tr)")
+    print("       tauraroc bindgen <hdr.hpp> -h cpp  Bind a C++ header (auto C++->C shim via libclang)")
     print("Options:")
     print("  --version         Print version and exit")
     print("  --emit c          Emit generated C code to build/")
@@ -989,11 +992,44 @@ pub def main(args: Vec[str]):
         print_version()
         _tr_exit(0)
 
-    # Subcommands: `tauraroc fmt [-w] <file>` and `tauraroc lint <file>`.
+    # Subcommands: `tauraroc fmt [-w] <file>`, `tauraroc lint <file>`, `tauraroc bindgen <hdr>`.
     mut subcmd = ""
     if args.len >= 2:
         mut a1 = args.get(1)
-        if a1 == "fmt" or a1 == "lint": subcmd = a1
+        if a1 == "fmt" or a1 == "lint" or a1 == "bindgen": subcmd = a1
+    if subcmd == "bindgen":
+        # tauraroc bindgen <header.h> [-o out.tr] [--cc <compiler>] [-h cpp]  -> FFI bindings.
+        # Default binds a C header; `-h cpp` binds a C++ header (auto-generates a C++->C shim
+        # via libclang — required only for C++, detected at use time).
+        mut bg_header = ""
+        mut bg_out    = "bindings.tr"
+        mut bg_cc     = detect_c_compiler()
+        mut bg_cpp    = false
+        mut bk = 2
+        while bk < args.len:
+            mut ba = args.get(bk)
+            if ba == "-o" and bk + 1 < args.len:
+                bg_out = args.get(bk + 1)
+                bk = bk + 1
+            elif ba == "--cc" and bk + 1 < args.len:
+                bg_cc = args.get(bk + 1)
+                bk = bk + 1
+            elif ba == "-h" and bk + 1 < args.len:
+                if args.get(bk + 1) == "cpp": bg_cpp = true
+                bk = bk + 1
+            elif ba == "--cpp":
+                bg_cpp = true
+            elif not str_starts_with(ba, "-"):
+                if bg_header == "": bg_header = ba
+            bk = bk + 1
+        if bg_header == "":
+            print("error: bindgen requires a header: tauraroc bindgen <header.h> [-o out.tr] [--cc <compiler>] [-h cpp]")
+            _tr_exit(1)
+        if bg_cpp:
+            run_bindgen_cpp(bg_header, bg_out, bg_cc)
+        else:
+            run_bindgen(bg_header, bg_out, bg_cc)
+        _tr_exit(0)
     if subcmd == "fmt":
         mut write_in_place = false
         mut fpath = ""
@@ -1167,6 +1203,10 @@ pub def main(args: Vec[str]):
     mut sema = Sema.init()
     sema.strict_mode = strict_mode
     sema.no_heap = no_heap
+    # The C backend keeps tuples/enums as stack value structs; the LLVM and native backends
+    # heap-box them. Under --no-heap the latter must reject those constructs to keep the
+    # zero-heap guarantee honest (see [H-1] in sema.check_no_heap / the ETuple case).
+    sema.heap_boxes_tuples = (backend != "c")
     sema.current_file = input_path   # track source file for error messages
     mut hir = sema.analyze(prog)
 
@@ -1200,7 +1240,7 @@ pub def main(args: Vec[str]):
         # llvm_run.sh / llvm_diff.sh). Coverage == native's (same LIR): unsupported programs
         # leave ok=false and we fall back to the C backend, never emit something wrong.
         mut llvm_gen = LlvmGenerator.init()
-        mut llvm_ir = llvm_gen.generate(hir)
+        mut llvm_ir = llvm_gen.generate_nh(hir, no_heap)
         if not llvm_gen.ok:
             print(c_red("error") + ": the LLVM backend can't lower this program yet")
             if llvm_gen.fail_note != "": print("       reason: " + llvm_gen.fail_note)
@@ -1640,6 +1680,40 @@ pub def main(args: Vec[str]):
         mut hdr_path = exe_name + ".h"
         write_file(hdr_path, hdr)
         if verbose: print("[lib] header: " + hdr_path)
+
+    # -- Turnkey bare-metal link (--freestanding @entry builds) ---------------
+    # When a linker script was generated (--emit-ld), the program has an @entry boot
+    # image: link the emitted C into a freestanding ELF here, in one command, with the
+    # generated linker script + the arch's boot flags (mirrors scripts/bare_run.sh) —
+    # instead of the normal hosted link. The bundled `zig cc` handles freestanding
+    # ARM/RISC-V, so no separate arm-none-eabi/riscv64 toolchain is required (an
+    # installed cross-gcc is used if present). Gated on emit_ld, so no other path is
+    # affected. Produces `<name>.elf`; feed it to qemu / a flasher.
+    if emit_ld != "" and not lib_mode:
+        mut bm_elf = exe_name + ".elf"
+        mut bm_cc = detect_c_compiler()
+        if target != "": bm_cc = resolve_cross_driver(resolve_target_triple(target))
+        mut bm_arch = " -mcpu=cortex-m3 -mthumb"
+        if _tr_str_contains(target, "riscv"): bm_arch = " -march=rv64imac -mabi=lp64 -mcmodel=medany"
+        # A bare-metal cross link needs a MULTI-TARGET linker: the system `ld` is
+        # host-only ("unrecognised emulation mode: elf64lriscv"). zig cc has lld
+        # built in; a clang driver needs -fuse-ld=lld (added when lld is present).
+        mut bm_lld = ""
+        if not _tr_str_contains(bm_cc, "zig"): bm_lld = detect_lld_flag()
+        mut bm_cmd = bm_cc + " -O" + opt_level + bm_arch + " -ffreestanding -nostdlib -fno-builtin" + bm_lld
+        bm_cmd = bm_cmd + " -T \"" + emit_ld + "\" \"-I" + build_dir + "include\" \"-I" + build_dir + "\""
+        mut bmi = 0
+        while bmi < all_c_files.len:
+            bm_cmd = bm_cmd + " \"" + all_c_files.get(bmi) + "\""
+            bmi = bmi + 1
+        bm_cmd = bm_cmd + " -o \"" + bm_elf + "\" 2>build/bare_link.log"
+        if verbose: print("[5/5] bare-metal link -> " + bm_elf + "  (" + bm_cc + ")")
+        if _tr_system(bm_cmd) == 0:
+            print("Bare-metal ELF written to: " + bm_elf)
+            return
+        print(c_red("error") + ": bare-metal link failed (see build/bare_link.log)")
+        print("       need a freestanding toolchain — the bundled zig, or arm-none-eabi / riscv64 gcc.")
+        _tr_exit(1)
 
     if verbose: print("[5/5] Compiling + linking " + str(all_c_files.len) + " modules -> " + exe_path)
     # Incremental compile + link: per-module .o with cache reuse for

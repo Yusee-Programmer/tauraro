@@ -1,0 +1,6 @@
+# bindgen -h cpp transient files
+_cxx*
+_cxxprobe*
+build/
+*.o
+use_shapes.exe

@@ -2,13 +2,12 @@
   <img src="assets/tauraro-img.jpg" alt="Tauraro Logo" width="180" style="border-radius: 16px;"/>
 
   <h1>Tauraro</h1>
-  <p><strong>Compiled · Statically Typed · Python Syntax · C Performance · Bilingual</strong></p>
+  <p><strong>Compiled · Statically Typed · Python Syntax · C Performance</strong></p>
 
   <p>
     <img src="https://img.shields.io/badge/license-MIT%20%2F%20Apache%202.0-blue?style=flat-square" alt="License"/>
-    <img src="https://img.shields.io/badge/version-v0.0.7-brightgreen?style=flat-square" alt="Version"/>
+    <img src="https://img.shields.io/badge/version-v0.0.8-brightgreen?style=flat-square" alt="Version"/>
     <img src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey?style=flat-square" alt="Platform"/>
-    <img src="https://img.shields.io/badge/bilingual-English%20%2B%20Hausa-orange?style=flat-square" alt="Bilingual"/>
     <img src="https://img.shields.io/badge/backends-C%20%C2%B7%20LLVM%20%C2%B7%20WASM%20%C2%B7%20bare--metal-red?style=flat-square" alt="Backends"/>
     <img src="https://img.shields.io/badge/self--hosted-yes-purple?style=flat-square" alt="Self-hosted"/>
   </p>
@@ -31,8 +30,6 @@
 Tauraro is a compiled, statically-typed language with Python-style indentation syntax — Python's readability with performance close to hand-written C.
 
 It ships as a **batteries-included, cross-platform toolchain**: one download compiles for your machine *and* cross-compiles to Linux/Windows/macOS, ARM/RISC-V, **WebAssembly**, and **bare-metal firmware** — with **nothing else to install**. Two code generators back it: the default **C** backend (widest coverage, `gcc`/`clang`) and an optimizing **LLVM** backend (auto-vectorizing, often faster than C). A bundled **zig** provides clang + `lld` + a libc for every target, so `--backend llvm` and `--target <anything>` work straight out of the box. See **[Compiling, Backends & Cross-Compilation](docs/lang/22_compiling_and_cross_compilation.md)**.
-
-It is also the **first programming language with full bilingual keyword support** — every keyword has both an English and a Hausa equivalent. Programs can be written in either language, or mixed freely.
 
 ```python
 def greet(name: str) -> str:
@@ -106,7 +103,6 @@ tauraroc --run hello.tr
 | **GPU** | `gpu:` blocks → OpenMP parallel loops |
 | **FFI** | `extern "C"` for calling C libraries |
 | **Closures** | First-class anonymous functions with capture |
-| **Bilingual** | English + Hausa keywords, mix freely |
 
 </div>
 
@@ -146,49 +142,6 @@ tauraroc lint <file.tr>         Analyze and report warnings/errors
 
 Full details, the target matrix, static binaries, WebAssembly, and bare-metal:
 **[Compiling, Backends & Cross-Compilation](docs/lang/22_compiling_and_cross_compilation.md)**.
-
----
-
-## Bilingual Keywords
-
-Every keyword has an English and Hausa equivalent:
-
-<div align="center">
-
-| English | Hausa | Meaning |
-|---------|-------|---------|
-| `def` | `aiki` | define function |
-| `class` | `aji` | define class |
-| `struct` | `tsari` | define struct |
-| `if` | `idan` | conditional |
-| `elif` | `koidan` | else-if |
-| `else` | `sai` | else |
-| `for` | `ga` | for loop |
-| `while` | `yayinda` | while loop |
-| `return` | `dawo` | return |
-| `break` | `tsaya` | break |
-| `continue` | `ci_gaba` | continue |
-| `match` | `duba` | pattern match |
-| `case` | `hali` | match arm |
-| `try` | `gwada` | try block |
-| `except` | `kama` | except handler |
-| `finally` | `karshe` | finally block |
-| `raise` | `jefa` | raise exception |
-| `async` | `ba_jira` | async function |
-| `await` | `jira` | await expression |
-| `import` | `shigo` | import module |
-| `from` | `daga` | from import |
-| `as` | `kamar` | alias |
-| `in` | `a_cikin` | membership / loop |
-| `true` | `gaskiya` | boolean true |
-| `false` | `karya` | boolean false |
-| `none` | `babu` | null / none |
-| `and` | `da` | logical and |
-| `or` | `ko` | logical or |
-| `not` | `ba` | logical not |
-| `print` | `buga` | print to stdout |
-
-</div>
 
 ---
 
@@ -314,6 +267,6 @@ You may use, distribute, and modify Tauraro under the terms of either license.
 
 <div align="center">
 
-<sub>Built with ❤️ — Python syntax · C performance · Hausa soul</sub>
+<sub>Built with ❤️ — Python syntax · C performance</sub>
 
 </div>

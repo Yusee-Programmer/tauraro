@@ -1,0 +1,45 @@
+# LLVM-only corpus: fixed-size arrays `[T; N]` lower to an inline stack region
+# (`alloca [N x i64]`) with getelementptr element access — NO heap allocation. Exercises
+# int + bool element arrays: zero-init, `a[i] = v` write, `a[i]` read, `.len`, in loops.
+# The native backend's frame layout isn't array-aware yet (one slot per var), so this lives
+# in tests/llvm/ rather than tests/native/; the C≡LLVM differential still guards it.
+def sum_squares(n: int) -> int:
+    mut a: [int; 8]
+    mut i = 0
+    while i < n:
+        a[i] = i * i
+        i = i + 1
+    mut s = 0
+    mut j = 0
+    while j < n:
+        s = s + a[j]
+        j = j + 1
+    return s
+
+def main():
+    mut a: [int; 5]
+    mut i = 0
+    while i < 5:
+        a[i] = i + 1
+        i = i + 1
+    print(a.len)          # 5
+    print(a[0])           # 1
+    print(a[4])           # 5
+    a[2] = 99
+    print(a[2])           # 99
+
+    mut total = 0
+    mut k = 0
+    while k < a.len:
+        total = total + a[k]
+        k = k + 1
+    print(total)          # 1+2+99+4+5 = 111
+
+    print(sum_squares(6)) # 0+1+4+9+16+25 = 55
+
+    # bool array: zero-init is false; set one true
+    mut flags: [bool; 4]
+    flags[2] = True
+    print(flags[0])       # false
+    print(flags[2])       # true
+    print(flags[3])       # false

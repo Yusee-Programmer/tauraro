@@ -539,6 +539,13 @@ pub class CGenerator:
         if n == "c_float": return "float"
         if n == "c_double": return "double"
         if n == "c_ldouble": return "long double"
+        # Bits[T; N] outside a struct field degrades to its storage type T (the bitfield
+        # `: N` form is emitted only at field sites in gen_class_struct).
+        if n == "Bits" and ty.args.len > 0: return self.type_to_c(ty.args.get(0).read())
+        # Simd[T; N] outside a struct field degrades to the element type (the vector attribute
+        # is emitted only at field sites); prefer passing SIMD aggregates by Pointer[T].
+        if n == "Simd" and ty.args.len > 0: return self.type_to_c(ty.args.get(0).read())
+        if n == "c_void": return "void"
         if n == "c_void_ptr" or n == "RawPtr": return "void*"
         if n == "c_size_t": return "size_t"
         if n == "c_ssize_t": return "ssize_t"
@@ -1242,6 +1249,37 @@ pub class CGenerator:
             case Expr.ELitStr(v): return v
             case _: return ""
 
+    pub def deco_first_int(self, d: Decorator) -> int:
+        if d.args.len == 0: return 0
+        match d.args.get(0).read():
+            case Expr.ELitInt(v): return v
+            case _: return 0
+
+    # C-ABI layout of a value-type struct from its decorators: returns
+    # ("struct"|"union", " __attribute__((packed))"/" __attribute__((aligned(N)))"/"").
+    # Mirrors hw_attrs but for aggregate declarations — the FFI-struct-matching knobs
+    # (@packed / @aligned(N) / @union). Placed after the `struct`/`union` keyword, which
+    # GCC/Clang accept: `typedef struct __attribute__((packed)) Name { ... } Name;`.
+    pub def struct_layout(self, c: HirClass) -> str:
+        mut attr = ""
+        mut i = 0
+        while i < c.decorators.len:
+            mut d = c.decorators.get(i)
+            if d.name == "packed": attr = attr + " __attribute__((packed))"
+            elif d.name == "aligned": attr = attr + " __attribute__((aligned(" + self.deco_first_int(d).to_str() + ")))"
+            i = i + 1
+        return self.struct_kw(c) + attr
+
+    # The aggregate keyword for a class: "union" if it carries @union, else "struct".
+    # Forward declarations AND the full definition must agree on the tag, or the C
+    # compiler rejects the second as a mismatched tag type.
+    pub def struct_kw(self, c: HirClass) -> str:
+        mut i = 0
+        while i < c.decorators.len:
+            if c.decorators.get(i).name == "union": return "union"
+            i = i + 1
+        return "struct"
+
     # Bare-metal / low-level codegen attributes from decorators: @naked, @interrupt,
     # @used, and @section("name") -> a combined GCC __attribute__((...)) prefix, or ""
     # if the function carries none. Emitted WITHOUT `static` so a reset entry / ISR /
@@ -1592,7 +1630,9 @@ pub class CGenerator:
     pub def gen_class_struct(self, c: HirClass):
         self.ws("#ifndef " + c.name + "_STRUCT_DEFINED\n")
         self.ws("#define " + c.name + "_STRUCT_DEFINED\n")
-        self.ws("typedef struct " + c.name + " {\n")
+        # @packed / @aligned(N) / @union (C-ABI struct-matching knobs) → the aggregate keyword
+        # + attribute; plain classes/value-types get "struct" with no attribute (unchanged).
+        self.ws("typedef " + self.struct_layout(c) + " " + c.name + " {\n")
         # ARC refcount, first member (offset 0) for heap classes. Value types live
         # on the stack by value and need no refcount. Inherited via the base copy
         # is NOT duplicated: emit_base_fields copies only the base's HirFields.
@@ -1608,7 +1648,17 @@ pub class CGenerator:
         mut i: int = 0
         while i < c.fields.len:
             mut f: HirField = c.fields.get(i)
-            self.ws("    " + self.type_to_c(f.ty) + " " + f.name + ";\n")
+            # Bitfield: `pub mode: Bits[u32; 3]` -> `unsigned int mode : 3;`. Only valid as a
+            # struct field (the C bitfield form); array_size carries the width.
+            if f.ty.name == "Bits" and f.ty.args.len > 0:
+                self.ws("    " + self.type_to_c(f.ty.args.get(0).read()) + " " + f.name + " : " + f.ty.array_size.to_str() + ";\n")
+            elif f.ty.name == "Simd" and f.ty.args.len > 0:
+                # `pub v: Simd[f32; 4]` -> a GCC/Clang vector: `float v __attribute__((vector_size(sizeof(float)*4)))`.
+                # sizeof is computed by the C compiler so no element-byte table is needed here.
+                mut _selc = self.type_to_c(f.ty.args.get(0).read())
+                self.ws("    " + _selc + " " + f.name + " __attribute__((vector_size(sizeof(" + _selc + ") * " + f.ty.array_size.to_str() + ")));\n")
+            else:
+                self.ws("    " + self.type_to_c(f.ty) + " " + f.name + ";\n")
             i = i + 1
         if c.fields.len == 0 and c.base_classes.len == 0 and _is_vt:
             self.ws("    char _pad;\n")
@@ -3053,6 +3103,16 @@ pub class CGenerator:
         if base_callee == "_tr_exit":
             if args.len > 0: return "exit((int)(" + self.gen_expr(args.get(0)) + "))"
             return "exit(0)"
+
+        # c_callback(closure) -> a C function-pointer trampoline for the closure's signature.
+        # It threads the closure through the callback's userdata argument (passed LAST): the
+        # user passes the closure itself as the C API's userdata (`cb as Pointer[void]`) and
+        # this trampoline uses it as the env. Only the closure's TYPE is used here (the value
+        # is supplied separately as userdata), so bind the closure to a local first.
+        if base_callee == "c_callback":
+            if args.len == 1:
+                return self.cb_trampoline(hir_expr_type(args.get(0)))
+            return "((void*)0)"
 
         # ord / chr - character conversions
         if base_callee == "hex":
@@ -5696,6 +5756,48 @@ pub class CGenerator:
     # NOTE: the env is heap-allocated and not yet freed (a small per-creation leak;
     # freeing it needs closure-local drop tracking — a follow-up). Escaping closures
     # behave as before (their captures' frame is gone), now without a dangling fn.
+    # Emit (once per signature) a C trampoline that adapts a Tauraro closure to a C callback
+    # `void (*)(args..., void* userdata)`: the userdata IS the closure's env (a `{void* __fn;
+    # ...}` block), so the trampoline reads __fn and calls `__fn(env, args...)`. `sig` is the
+    # closure's "def" type (args = param types followed by the return type). Returns a
+    # statement-expression yielding the trampoline's address as `void*`, with a block-scope
+    # prototype (the definition is appended to closure_buf, flushed at file end — same forward-
+    # reference scheme gen_closure uses). The env pointer's low tag bit is stripped.
+    pub def cb_trampoline(self, sig: AstType) -> str:
+        mut nparams = sig.args.len - 1
+        if nparams < 0: nparams = 0
+        mut retc = "long long"
+        if sig.args.len > 0: retc = self.type_to_c(sig.args.get(sig.args.len - 1).read())
+        if retc == "void": retc = "long long"
+        # type_args_suffix already encodes the whole signature (params + the trailing return
+        # type), so it is a unique, valid-identifier key per distinct callback shape.
+        mut sfx = "void"
+        if sig.args.len > 0: sfx = self.type_args_suffix(sig.args)
+        mut name = "_tr_ccb_" + sfx
+        # param declarations, the fn-pointer cast's param types, and the forwarded call args
+        mut pdecls = ""
+        mut ptypes = ""
+        mut callargs = ""
+        mut i = 0
+        while i < nparams:
+            mut pc = self.type_to_c(sig.args.get(i).read())
+            if pdecls != "": pdecls = pdecls + ", "
+            pdecls = pdecls + pc + " _a" + i.to_str()
+            ptypes = ptypes + ", " + pc
+            callargs = callargs + ", _a" + i.to_str()
+            i = i + 1
+        mut proto_params = "void* __ud"
+        if pdecls != "": proto_params = pdecls + ", void* __ud"
+        mut deckey = "cbtramp_" + name
+        if not self.emitted_fns.contains(deckey):
+            self.emitted_fns.insert(deckey, true)
+            mut def_s = retc + " " + name + "(" + proto_params + ") {\n"
+            def_s = def_s + "    void* __e = (void*)((uintptr_t)__ud & ~(uintptr_t)1);\n"
+            def_s = def_s + "    return (*(" + retc + "(*)(void*" + ptypes + "))(*(void**)__e))(__e" + callargs + ");\n}\n"
+            self.closure_buf.append(def_s)
+        # block-scope prototype at the use site + take its address (matches gen_closure)
+        return "({ " + retc + " " + name + "(" + proto_params + "); (void*)&" + name + "; })"
+
     pub def gen_closure(self, params: Vec[HirParam], ret_ty: AstType, body: HirBlock, captures: Vec[HirParam]) -> str:
         self.closure_count = self.closure_count + 1
         mut cname = "_closure_" + self.closure_count.to_str()
@@ -8026,7 +8128,7 @@ pub class CGenerator:
         while i < prog.classes.len:
             mut cls2 = prog.classes.get(i)
             if cls2.generics.len == 0:
-                self.w("typedef struct " + cls2.name + " " + cls2.name + ";\n")
+                self.w("typedef " + self.struct_kw(cls2) + " " + cls2.name + " " + cls2.name + ";\n")
             i = i + 1
         i = 0
         while i < prog.enums.len:
@@ -8391,7 +8493,7 @@ pub class CGenerator:
                     mut fwd_key = "fwd_" + c2.name
                     if not self.emitted_fns.contains(fwd_key):
                         self.emitted_fns.insert(fwd_key, true)
-                        out.append("typedef struct " + c2.name + " " + c2.name + ";\n")
+                        out.append("typedef " + self.struct_kw(c2) + " " + c2.name + " " + c2.name + ";\n")
             i = i + 1
         i = 0
         while i < prog.enums.len:
