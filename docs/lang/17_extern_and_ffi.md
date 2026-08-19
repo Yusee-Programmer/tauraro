@@ -28,8 +28,10 @@ once (`c++ -c <out>_shim.cpp`) and link it (`--link <out>_shim.o -lstdc++`). Opa
 as an opaque Tauraro class handle (e.g. `geo::Shape*` ↔ `Shape`); construct with `<pfx>_new(...)`,
 call `<pfx>_method(obj, ...)`, and free with `<pfx>_delete(obj)`. This mode uses **libclang**, which
 is needed *only* for `-h cpp` (C headers never use it); if it is not installed the tool prints
-per-platform install guidance. See `tools/bindgen/cpp/` for the design and a full `shapes.hpp`
-end-to-end example.
+per-platform install guidance. For a library that needs its own headers/macros, forward them —
+`tauraroc bindgen wx/wx.h -h cpp -I<dir> -D<MACRO>` (the tool also auto-discovers the compiler's own
+C++ include paths, and reports libclang's diagnostics with a fix hint instead of silently binding
+nothing). See `tools/bindgen/cpp/` for the design and a full `shapes.hpp` end-to-end example.
 
 **C type mapping:**
 

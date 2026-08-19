@@ -64,6 +64,28 @@ extern "C" {
 Generated `.tr` (opaque handle + wrappers): `class Shape: pass` + `extern "C": def geo_Shape_new(...)
 -> Pointer[Shape]`, etc.
 
+## Complex headers: adaptive include discovery + diagnostics
+
+Real-world C++ headers (`wx/wx.h`, Qt, …) pull in library and platform headers that live behind
+`-I` paths and require feature `-D` macros. The bindgen is **adaptive, not prescriptive**:
+
+- **Compiler-queried include paths.** libclang may be built against a *different* toolchain than
+  your `cc`, so its builtin header search can miss `<string>`/`<vector>`. Before walking, the tool
+  runs `cc -x c++ -E -v` on an empty file and parses the `#include <...> search starts here:` block,
+  feeding every directory to libclang as `-I`. This resolves the common case out of the box on
+  Linux/macOS/Windows, for both gcc and clang.
+- **Passthrough flags.** Add the library's own paths/macros — they are forwarded to libclang:
+  ```sh
+  tauraroc bindgen wx/wx.h -h cpp -o wx.tr \
+      -I/usr/include/wx-3.2 -I/usr/lib/wx/include/gtk3-unicode-3.2 -DWXUSINGDLL
+  ```
+  Accepted: `-I<dir>` / `-I <dir>`, `-D<macro>` / `-D <macro>`, `-isystem <dir>`, `-std=…`, `-f…`.
+- **Diagnostics instead of silent failure.** The walker reports libclang's error/fatal diagnostics.
+  If a header can't be fully parsed (e.g. a missing include), the tool prints the exact
+  `fatal error: '…' file not found` and tells you to re-run with the needed `-I`, rather than
+  silently emitting *"0 classes, 0 wrappers"*. If some bindings are produced despite a fatal error,
+  it warns that they may be incomplete.
+
 ## libclang detection (cross-platform)
 
 Detect by **test-compiling a probe** (`#include <clang-c/Index.h>` + `clang_createIndex`); if

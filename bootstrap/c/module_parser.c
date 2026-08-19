@@ -4782,19 +4782,108 @@ __attribute__((hot)) Decl* Parser_parse_class_decl(Parser* self) {
         }
     }
     /* pass */
+    bool inline_body = false;
+    /* pass */
     if ((Parser_peek(self).tag == Token_make_Colon().tag)) {
         /* pass */
         self->pos = (self->pos + 1LL);
+        /* pass */
+        __auto_type _t198 = Parser_peek(self);
+        if ((_t198.tag == Token_Newline || _t198.tag == Token_Eof)) {
+            /* pass */
+            /* pass */
+        } else if (1) {
+            __auto_type _ = _t198;
+            /* pass */
+            inline_body = true;
+        }
+    }
+    /* pass */
+    if (inline_body) {
+        /* pass */
+        bool inl = true;
+        /* pass */
+        while (inl) {
+            /* pass */
+            bool in_pub = false;
+            /* pass */
+            __auto_type _t199 = Parser_peek(self);
+            if (_t199.tag == Token_KwPub) {
+                /* pass */
+                in_pub = true;
+                /* pass */
+                self->pos = (self->pos + 1LL);
+            } else if (1) {
+                __auto_type _ = _t199;
+                /* pass */
+                /* pass */
+            }
+            /* pass */
+            __auto_type _t200 = Parser_peek(self);
+            if (_t200.tag == Token_KwPass) {
+                /* pass */
+                self->pos = (self->pos + 1LL);
+            } else if (_t200.tag == Token_KwDef) {
+                /* pass */
+                long long _iml = Parser_cur_line(self);
+                /* pass */
+                FunctionDef* im = Parser_parse_function_def(self, true);
+                /* pass */
+                im->line = _iml;
+                /* pass */
+                im->is_public = in_pub;
+                /* pass */
+                List_ptr_append(c->methods, _tr_obj_retain(im));
+                _tr_obj_release(im, _trdrop_FunctionDef);
+            } else if (_t200.tag == Token_Ident) {
+                __auto_type ifn = _t200.data.Ident.name;
+                /* pass */
+                self->pos = (self->pos + 1LL);
+                /* pass */
+                AstType** ity = (AstType**)(0LL);
+                /* pass */
+                if ((Parser_peek(self).tag == Token_make_Colon().tag)) {
+                    /* pass */
+                    self->pos = (self->pos + 1LL);
+                    /* pass */
+                    ity = box_asttype(Parser_parse_type(self));
+                }
+                /* pass */
+                List_ptr_append(c->fields, FieldDef_init(ifn, ity));
+            } else if (1) {
+                __auto_type _ = _t200;
+                /* pass */
+                inl = false;
+            }
+            /* pass */
+            __auto_type _t201 = Parser_peek(self);
+            if (_t201.tag == Token_Semicolon) {
+                /* pass */
+                self->pos = (self->pos + 1LL);
+            } else if (1) {
+                __auto_type _ = _t201;
+                /* pass */
+                inl = false;
+            }
+        }
+        /* pass */
+        if ((Parser_peek(self).tag == Token_make_Newline().tag)) {
+            /* pass */
+            self->pos = (self->pos + 1LL);
+        }
+        /* pass */
+        _tr_str_release(name);
+        return box_decl(Decl_ctor_DClass(c));
     }
     /* pass */
     Parser_skip_newlines(self);
     /* pass */
-    __auto_type _t198 = Parser_peek(self);
-    if (_t198.tag == Token_Indent) {
+    __auto_type _t202 = Parser_peek(self);
+    if (_t202.tag == Token_Indent) {
         /* pass */
         self->pos = (self->pos + 1LL);
     } else if (1) {
-        __auto_type _ = _t198;
+        __auto_type _ = _t202;
         /* pass */
         /* pass */
     }
@@ -4807,9 +4896,9 @@ __attribute__((hot)) Decl* Parser_parse_class_decl(Parser* self) {
         /* pass */
         if ((strcmp(_tr_strz(c->docstring), _tr_strz(_tr_str_lit(""))) == 0)) {
             /* pass */
-            __auto_type _t199 = Parser_peek(self);
-            if (_t199.tag == Token_TripleStrLit) {
-                __auto_type _ds = _t199.data.TripleStrLit.val;
+            __auto_type _t203 = Parser_peek(self);
+            if (_t203.tag == Token_TripleStrLit) {
+                __auto_type _ds = _t203.data.TripleStrLit.val;
                 /* pass */
                 c->docstring = _tr_str_retain(_ds);
                 /* pass */
@@ -4817,7 +4906,7 @@ __attribute__((hot)) Decl* Parser_parse_class_decl(Parser* self) {
                 /* pass */
                 Parser_skip_newlines(self);
             } else if (1) {
-                __auto_type _ = _t199;
+                __auto_type _ = _t203;
                 /* pass */
                 /* pass */
             }
@@ -4848,23 +4937,23 @@ __attribute__((hot)) Decl* Parser_parse_class_decl(Parser* self) {
         /* pass */
         bool is_p = false;
         /* pass */
-        __auto_type _t200 = Parser_peek(self);
-        if (_t200.tag == Token_KwPub) {
+        __auto_type _t204 = Parser_peek(self);
+        if (_t204.tag == Token_KwPub) {
             /* pass */
             is_p = true;
             /* pass */
             self->pos = (self->pos + 1LL);
         } else if (1) {
-            __auto_type _ = _t200;
+            __auto_type _ = _t204;
             /* pass */
             /* pass */
         }
         /* pass */
-        __auto_type _t201 = Parser_peek(self);
-        if ((_t201.tag == Token_Dedent || _t201.tag == Token_Eof)) {
+        __auto_type _t205 = Parser_peek(self);
+        if ((_t205.tag == Token_Dedent || _t205.tag == Token_Eof)) {
             /* pass */
             going = false;
-        } else if (_t201.tag == Token_KwDef) {
+        } else if (_t205.tag == Token_KwDef) {
             /* pass */
             long long _mline = Parser_cur_line(self);
             /* pass */
@@ -4878,12 +4967,12 @@ __attribute__((hot)) Decl* Parser_parse_class_decl(Parser* self) {
             /* pass */
             List_ptr_append(c->methods, _tr_obj_retain(m));
             _tr_obj_release(m, _trdrop_FunctionDef);
-        } else if (_t201.tag == Token_KwAsync) {
+        } else if (_t205.tag == Token_KwAsync) {
             /* pass */
             self->pos = (self->pos + 1LL);
             /* pass */
-            __auto_type _t202 = Parser_peek(self);
-            if (_t202.tag == Token_KwDef) {
+            __auto_type _t206 = Parser_peek(self);
+            if (_t206.tag == Token_KwDef) {
                 /* pass */
                 long long _mline = Parser_cur_line(self);
                 /* pass */
@@ -4900,12 +4989,12 @@ __attribute__((hot)) Decl* Parser_parse_class_decl(Parser* self) {
                 List_ptr_append(c->methods, _tr_obj_retain(m));
                 _tr_obj_release(m, _trdrop_FunctionDef);
             } else if (1) {
-                __auto_type _ = _t202;
+                __auto_type _ = _t206;
                 /* pass */
                 /* pass */
             }
-        } else if (_t201.tag == Token_Ident) {
-            __auto_type fname = _t201.data.Ident.name;
+        } else if (_t205.tag == Token_Ident) {
+            __auto_type fname = _t205.data.Ident.name;
             /* pass */
             self->pos = (self->pos + 1LL);
             /* pass */
@@ -4947,13 +5036,13 @@ __attribute__((hot)) Decl* Parser_parse_class_decl(Parser* self) {
             /* pass */
             Parser_expect_newline(self);
             _tr_obj_release(fld, _trdrop_FieldDef);
-        } else if (_t201.tag == Token_KwPass) {
+        } else if (_t205.tag == Token_KwPass) {
             /* pass */
             self->pos = (self->pos + 1LL);
             /* pass */
             Parser_expect_newline(self);
         } else if (1) {
-            __auto_type _ = _t201;
+            __auto_type _ = _t205;
             /* pass */
             self->pos = (self->pos + 1LL);
         }
@@ -4980,13 +5069,13 @@ __attribute__((hot)) Decl* Parser_parse_enum_decl(Parser* self) {
         /* pass */
         self->pos = (self->pos + 1LL);
         /* pass */
-        ({ TrStr _at_t203 = (Parser_consume_ident(self)); List_TrStr_append(e->region_params, _at_t203); _tr_str_release(_at_t203); });
+        ({ TrStr _at_t207 = (Parser_consume_ident(self)); List_TrStr_append(e->region_params, _at_t207); _tr_str_release(_at_t207); });
         /* pass */
         while ((Parser_peek(self).tag == Token_make_Comma().tag)) {
             /* pass */
             self->pos = (self->pos + 1LL);
             /* pass */
-            ({ TrStr _at_t204 = (Parser_consume_ident(self)); List_TrStr_append(e->region_params, _at_t204); _tr_str_release(_at_t204); });
+            ({ TrStr _at_t208 = (Parser_consume_ident(self)); List_TrStr_append(e->region_params, _at_t208); _tr_str_release(_at_t208); });
         }
     }
     /* pass */
@@ -4996,7 +5085,7 @@ __attribute__((hot)) Decl* Parser_parse_enum_decl(Parser* self) {
         /* pass */
         while (true) {
             /* pass */
-            ({ TrStr _at_t205 = (Parser_consume_ident(self)); List_TrStr_append(e->iface_names, _at_t205); _tr_str_release(_at_t205); });
+            ({ TrStr _at_t209 = (Parser_consume_ident(self)); List_TrStr_append(e->iface_names, _at_t209); _tr_str_release(_at_t209); });
             /* pass */
             if ((Parser_peek(self).tag == Token_make_Comma().tag)) {
                 /* pass */
@@ -5008,19 +5097,88 @@ __attribute__((hot)) Decl* Parser_parse_enum_decl(Parser* self) {
         }
     }
     /* pass */
+    bool e_inline = false;
+    /* pass */
     if ((Parser_peek(self).tag == Token_make_Colon().tag)) {
         /* pass */
         self->pos = (self->pos + 1LL);
+        /* pass */
+        __auto_type _t210 = Parser_peek(self);
+        if ((_t210.tag == Token_Newline || _t210.tag == Token_Eof)) {
+            /* pass */
+            /* pass */
+        } else if (1) {
+            __auto_type _ = _t210;
+            /* pass */
+            e_inline = true;
+        }
+    }
+    /* pass */
+    if (e_inline) {
+        /* pass */
+        bool einl = true;
+        /* pass */
+        while (einl) {
+            /* pass */
+            __auto_type _t211 = Parser_peek(self);
+            if (_t211.tag == Token_KwPass) {
+                /* pass */
+                self->pos = (self->pos + 1LL);
+            } else if (_t211.tag == Token_Ident) {
+                __auto_type evn = _t211.data.Ident.name;
+                /* pass */
+                self->pos = (self->pos + 1LL);
+                /* pass */
+                VariantDef* evd = VariantDef_init(evn);
+                /* pass */
+                if ((Parser_peek(self).tag == Token_make_LParen().tag)) {
+                    /* pass */
+                    self->pos = (self->pos + 1LL);
+                    /* pass */
+                    evd->fields = Parser_parse_param_list(self);
+                    /* pass */
+                    if ((Parser_peek(self).tag == Token_make_RParen().tag)) {
+                        /* pass */
+                        self->pos = (self->pos + 1LL);
+                    }
+                }
+                /* pass */
+                List_ptr_append(e->variants, _tr_obj_retain(evd));
+                _tr_obj_release(evd, _trdrop_VariantDef);
+            } else if (1) {
+                __auto_type _ = _t211;
+                /* pass */
+                einl = false;
+            }
+            /* pass */
+            __auto_type _t212 = Parser_peek(self);
+            if ((_t212.tag == Token_Comma || _t212.tag == Token_Semicolon)) {
+                /* pass */
+                self->pos = (self->pos + 1LL);
+            } else if (1) {
+                __auto_type _ = _t212;
+                /* pass */
+                einl = false;
+            }
+        }
+        /* pass */
+        if ((Parser_peek(self).tag == Token_make_Newline().tag)) {
+            /* pass */
+            self->pos = (self->pos + 1LL);
+        }
+        /* pass */
+        _tr_str_release(name);
+        return box_decl(Decl_ctor_DEnum(e));
     }
     /* pass */
     Parser_skip_newlines(self);
     /* pass */
-    __auto_type _t206 = Parser_peek(self);
-    if (_t206.tag == Token_Indent) {
+    __auto_type _t213 = Parser_peek(self);
+    if (_t213.tag == Token_Indent) {
         /* pass */
         self->pos = (self->pos + 1LL);
     } else if (1) {
-        __auto_type _ = _t206;
+        __auto_type _ = _t213;
         /* pass */
         /* pass */
     }
@@ -5056,24 +5214,24 @@ __attribute__((hot)) Decl* Parser_parse_enum_decl(Parser* self) {
         /* pass */
         bool is_p = false;
         /* pass */
-        __auto_type _t207 = Parser_peek(self);
-        if (_t207.tag == Token_KwPub) {
+        __auto_type _t214 = Parser_peek(self);
+        if (_t214.tag == Token_KwPub) {
             /* pass */
             is_p = true;
             /* pass */
             self->pos = (self->pos + 1LL);
         } else if (1) {
-            __auto_type _ = _t207;
+            __auto_type _ = _t214;
             /* pass */
             /* pass */
         }
         /* pass */
-        __auto_type _t208 = Parser_peek(self);
-        if ((_t208.tag == Token_Dedent || _t208.tag == Token_Eof)) {
+        __auto_type _t215 = Parser_peek(self);
+        if ((_t215.tag == Token_Dedent || _t215.tag == Token_Eof)) {
             /* pass */
             going = false;
-        } else if (_t208.tag == Token_Ident) {
-            __auto_type vname = _t208.data.Ident.name;
+        } else if (_t215.tag == Token_Ident) {
+            __auto_type vname = _t215.data.Ident.name;
             /* pass */
             self->pos = (self->pos + 1LL);
             /* pass */
@@ -5095,7 +5253,7 @@ __attribute__((hot)) Decl* Parser_parse_enum_decl(Parser* self) {
             /* pass */
             Parser_expect_newline(self);
             _tr_obj_release(vd, _trdrop_VariantDef);
-        } else if (_t208.tag == Token_KwDef) {
+        } else if (_t215.tag == Token_KwDef) {
             /* pass */
             FunctionDef* m = Parser_parse_function_def(self, true);
             /* pass */
@@ -5105,13 +5263,13 @@ __attribute__((hot)) Decl* Parser_parse_enum_decl(Parser* self) {
             /* pass */
             List_ptr_append(e->methods, _tr_obj_retain(m));
             _tr_obj_release(m, _trdrop_FunctionDef);
-        } else if (_t208.tag == Token_KwPass) {
+        } else if (_t215.tag == Token_KwPass) {
             /* pass */
             self->pos = (self->pos + 1LL);
             /* pass */
             Parser_expect_newline(self);
         } else if (1) {
-            __auto_type _ = _t208;
+            __auto_type _ = _t215;
             /* pass */
             self->pos = (self->pos + 1LL);
         }
@@ -5164,29 +5322,99 @@ __attribute__((hot)) Decl* Parser_parse_interface_decl(Parser* self) {
         /* pass */
         self->pos = (self->pos + 1LL);
         /* pass */
-        ({ TrStr _at_t209 = (Parser_consume_ident(self)); List_TrStr_append(i->region_params, _at_t209); _tr_str_release(_at_t209); });
+        ({ TrStr _at_t216 = (Parser_consume_ident(self)); List_TrStr_append(i->region_params, _at_t216); _tr_str_release(_at_t216); });
         /* pass */
         while ((Parser_peek(self).tag == Token_make_Comma().tag)) {
             /* pass */
             self->pos = (self->pos + 1LL);
             /* pass */
-            ({ TrStr _at_t210 = (Parser_consume_ident(self)); List_TrStr_append(i->region_params, _at_t210); _tr_str_release(_at_t210); });
+            ({ TrStr _at_t217 = (Parser_consume_ident(self)); List_TrStr_append(i->region_params, _at_t217); _tr_str_release(_at_t217); });
         }
     }
+    /* pass */
+    bool i_inline = false;
     /* pass */
     if ((Parser_peek(self).tag == Token_make_Colon().tag)) {
         /* pass */
         self->pos = (self->pos + 1LL);
+        /* pass */
+        __auto_type _t218 = Parser_peek(self);
+        if ((_t218.tag == Token_Newline || _t218.tag == Token_Eof)) {
+            /* pass */
+            /* pass */
+        } else if (1) {
+            __auto_type _ = _t218;
+            /* pass */
+            i_inline = true;
+        }
+    }
+    /* pass */
+    if (i_inline) {
+        /* pass */
+        bool iinl = true;
+        /* pass */
+        while (iinl) {
+            /* pass */
+            bool i_pub = false;
+            /* pass */
+            __auto_type _t219 = Parser_peek(self);
+            if (_t219.tag == Token_KwPub) {
+                /* pass */
+                i_pub = true;
+                /* pass */
+                self->pos = (self->pos + 1LL);
+            } else if (1) {
+                __auto_type _ = _t219;
+                /* pass */
+                /* pass */
+            }
+            /* pass */
+            __auto_type _t220 = Parser_peek(self);
+            if (_t220.tag == Token_KwPass) {
+                /* pass */
+                self->pos = (self->pos + 1LL);
+            } else if (_t220.tag == Token_KwDef) {
+                /* pass */
+                FunctionDef* im2 = Parser_parse_function_def(self, true);
+                /* pass */
+                im2->is_public = i_pub;
+                /* pass */
+                List_ptr_append(i->methods, _tr_obj_retain(im2));
+                _tr_obj_release(im2, _trdrop_FunctionDef);
+            } else if (1) {
+                __auto_type _ = _t220;
+                /* pass */
+                iinl = false;
+            }
+            /* pass */
+            __auto_type _t221 = Parser_peek(self);
+            if (_t221.tag == Token_Semicolon) {
+                /* pass */
+                self->pos = (self->pos + 1LL);
+            } else if (1) {
+                __auto_type _ = _t221;
+                /* pass */
+                iinl = false;
+            }
+        }
+        /* pass */
+        if ((Parser_peek(self).tag == Token_make_Newline().tag)) {
+            /* pass */
+            self->pos = (self->pos + 1LL);
+        }
+        /* pass */
+        _tr_str_release(name);
+        return box_decl(Decl_ctor_DInterface(i));
     }
     /* pass */
     Parser_skip_newlines(self);
     /* pass */
-    __auto_type _t211 = Parser_peek(self);
-    if (_t211.tag == Token_Indent) {
+    __auto_type _t222 = Parser_peek(self);
+    if (_t222.tag == Token_Indent) {
         /* pass */
         self->pos = (self->pos + 1LL);
     } else if (1) {
-        __auto_type _ = _t211;
+        __auto_type _ = _t222;
         /* pass */
         /* pass */
     }
@@ -5199,23 +5427,23 @@ __attribute__((hot)) Decl* Parser_parse_interface_decl(Parser* self) {
         /* pass */
         bool is_p = false;
         /* pass */
-        __auto_type _t212 = Parser_peek(self);
-        if (_t212.tag == Token_KwPub) {
+        __auto_type _t223 = Parser_peek(self);
+        if (_t223.tag == Token_KwPub) {
             /* pass */
             is_p = true;
             /* pass */
             self->pos = (self->pos + 1LL);
         } else if (1) {
-            __auto_type _ = _t212;
+            __auto_type _ = _t223;
             /* pass */
             /* pass */
         }
         /* pass */
-        __auto_type _t213 = Parser_peek(self);
-        if ((_t213.tag == Token_Dedent || _t213.tag == Token_Eof)) {
+        __auto_type _t224 = Parser_peek(self);
+        if ((_t224.tag == Token_Dedent || _t224.tag == Token_Eof)) {
             /* pass */
             going = false;
-        } else if (_t213.tag == Token_KwDef) {
+        } else if (_t224.tag == Token_KwDef) {
             /* pass */
             FunctionDef* m = Parser_parse_function_def(self, true);
             /* pass */
@@ -5223,13 +5451,13 @@ __attribute__((hot)) Decl* Parser_parse_interface_decl(Parser* self) {
             /* pass */
             List_ptr_append(i->methods, _tr_obj_retain(m));
             _tr_obj_release(m, _trdrop_FunctionDef);
-        } else if (_t213.tag == Token_KwPass) {
+        } else if (_t224.tag == Token_KwPass) {
             /* pass */
             self->pos = (self->pos + 1LL);
             /* pass */
             Parser_expect_newline(self);
         } else if (1) {
-            __auto_type _ = _t213;
+            __auto_type _ = _t224;
             /* pass */
             self->pos = (self->pos + 1LL);
         }
@@ -5260,9 +5488,9 @@ __attribute__((hot)) Decl* Parser_parse_extend_decl(Parser* self) {
             /* pass */
             self->pos = (self->pos + 1LL);
             /* pass */
-            TrStr _strtmp_t214 = Parser_consume_ident(self);
+            TrStr _strtmp_t225 = Parser_consume_ident(self);
             _tr_str_release(_erg);
-            _erg = _strtmp_t214;
+            _erg = _strtmp_t225;
         }
     }
     /* pass */
@@ -5273,12 +5501,12 @@ __attribute__((hot)) Decl* Parser_parse_extend_decl(Parser* self) {
     /* pass */
     Parser_skip_newlines(self);
     /* pass */
-    __auto_type _t215 = Parser_peek(self);
-    if (_t215.tag == Token_Indent) {
+    __auto_type _t226 = Parser_peek(self);
+    if (_t226.tag == Token_Indent) {
         /* pass */
         self->pos = (self->pos + 1LL);
     } else if (1) {
-        __auto_type _ = _t215;
+        __auto_type _ = _t226;
         /* pass */
         /* pass */
     }
@@ -5316,23 +5544,23 @@ __attribute__((hot)) Decl* Parser_parse_extend_decl(Parser* self) {
         /* pass */
         bool is_p = false;
         /* pass */
-        __auto_type _t216 = Parser_peek(self);
-        if (_t216.tag == Token_KwPub) {
+        __auto_type _t227 = Parser_peek(self);
+        if (_t227.tag == Token_KwPub) {
             /* pass */
             is_p = true;
             /* pass */
             self->pos = (self->pos + 1LL);
         } else if (1) {
-            __auto_type _ = _t216;
+            __auto_type _ = _t227;
             /* pass */
             /* pass */
         }
         /* pass */
-        __auto_type _t217 = Parser_peek(self);
-        if ((_t217.tag == Token_Dedent || _t217.tag == Token_Eof)) {
+        __auto_type _t228 = Parser_peek(self);
+        if ((_t228.tag == Token_Dedent || _t228.tag == Token_Eof)) {
             /* pass */
             going = false;
-        } else if (_t217.tag == Token_KwDef) {
+        } else if (_t228.tag == Token_KwDef) {
             /* pass */
             FunctionDef* m = Parser_parse_function_def(self, true);
             /* pass */
@@ -5342,13 +5570,13 @@ __attribute__((hot)) Decl* Parser_parse_extend_decl(Parser* self) {
             /* pass */
             List_ptr_append(fl, _tr_obj_retain(m));
             _tr_obj_release(m, _trdrop_FunctionDef);
-        } else if (_t217.tag == Token_KwPass) {
+        } else if (_t228.tag == Token_KwPass) {
             /* pass */
             self->pos = (self->pos + 1LL);
             /* pass */
             Parser_expect_newline(self);
         } else if (1) {
-            __auto_type _ = _t217;
+            __auto_type _ = _t228;
             /* pass */
             self->pos = (self->pos + 1LL);
         }
@@ -5371,17 +5599,17 @@ __attribute__((hot)) Decl* Parser_parse_extern_decl(Parser* self) {
     /* pass */
     TrStr abi = _tr_str_lit("C");
     /* pass */
-    __auto_type _t218 = Parser_peek(self);
-    if (_t218.tag == Token_StrLit) {
-        __auto_type s = _t218.data.StrLit.val;
+    __auto_type _t229 = Parser_peek(self);
+    if (_t229.tag == Token_StrLit) {
+        __auto_type s = _t229.data.StrLit.val;
         /* pass */
         self->pos = (self->pos + 1LL);
         /* pass */
-        TrStr _strtmp_t219 = _tr_str_retain(s);
+        TrStr _strtmp_t230 = _tr_str_retain(s);
         _tr_str_release(abi);
-        abi = _strtmp_t219;
+        abi = _strtmp_t230;
     } else if (1) {
-        __auto_type _ = _t218;
+        __auto_type _ = _t229;
         /* pass */
         /* pass */
     }
@@ -5393,12 +5621,12 @@ __attribute__((hot)) Decl* Parser_parse_extern_decl(Parser* self) {
     /* pass */
     Parser_skip_newlines(self);
     /* pass */
-    __auto_type _t220 = Parser_peek(self);
-    if (_t220.tag == Token_Indent) {
+    __auto_type _t231 = Parser_peek(self);
+    if (_t231.tag == Token_Indent) {
         /* pass */
         self->pos = (self->pos + 1LL);
     } else if (1) {
-        __auto_type _ = _t220;
+        __auto_type _ = _t231;
         /* pass */
         /* pass */
     }
@@ -5413,23 +5641,23 @@ __attribute__((hot)) Decl* Parser_parse_extern_decl(Parser* self) {
         /* pass */
         bool is_p = false;
         /* pass */
-        __auto_type _t221 = Parser_peek(self);
-        if (_t221.tag == Token_KwPub) {
+        __auto_type _t232 = Parser_peek(self);
+        if (_t232.tag == Token_KwPub) {
             /* pass */
             is_p = true;
             /* pass */
             self->pos = (self->pos + 1LL);
         } else if (1) {
-            __auto_type _ = _t221;
+            __auto_type _ = _t232;
             /* pass */
             /* pass */
         }
         /* pass */
-        __auto_type _t222 = Parser_peek(self);
-        if ((_t222.tag == Token_Dedent || _t222.tag == Token_Eof)) {
+        __auto_type _t233 = Parser_peek(self);
+        if ((_t233.tag == Token_Dedent || _t233.tag == Token_Eof)) {
             /* pass */
             going = false;
-        } else if (_t222.tag == Token_KwDef) {
+        } else if (_t233.tag == Token_KwDef) {
             /* pass */
             FunctionDef* m = Parser_parse_function_def(self, false);
             /* pass */
@@ -5450,7 +5678,7 @@ __attribute__((hot)) Decl* Parser_parse_extern_decl(Parser* self) {
             List_ptr_append(fl, _tr_obj_retain(m));
             _tr_obj_release(m, _trdrop_FunctionDef);
         } else if (1) {
-            __auto_type _ = _t222;
+            __auto_type _ = _t233;
             /* pass */
             self->pos = (self->pos + 1LL);
         }

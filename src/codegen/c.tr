@@ -55,10 +55,23 @@ pub def _is_int_type(n: str) -> bool:
     if n == "int" or n == "i64" or n == "i32" or n == "i16" or n == "i8": return true
     if n == "u64" or n == "u32" or n == "u16" or n == "u8": return true
     if n == "usize" or n == "isize" or n == "long long": return true
-    return false
+    return _is_c_int_scalar(n)
 
 pub def _is_float_type(n: str) -> bool:
-    return n == "float" or n == "f64" or n == "f32" or n == "double"
+    if n == "float" or n == "f64" or n == "f32" or n == "double": return true
+    return n == "c_float" or n == "c_double" or n == "c_ldouble"
+
+# The FFI `c_*` integer scalar family (widths in <17_extern_and_ffi>). These behave as
+# integers for codegen decisions (to_str / print / format / arithmetic all cast to a
+# machine integer); their ABI C type is emitted via the dedicated `c_*` map, not here.
+pub def _is_c_int_scalar(n: str) -> bool:
+    if n == "c_int" or n == "c_uint" or n == "c_char" or n == "c_uchar" or n == "c_schar": return true
+    if n == "c_short" or n == "c_ushort" or n == "c_long" or n == "c_ulong": return true
+    if n == "c_longlong" or n == "c_ulonglong" or n == "c_size_t" or n == "c_ssize_t": return true
+    if n == "c_int8_t" or n == "c_int16_t" or n == "c_int32_t" or n == "c_int64_t": return true
+    if n == "c_uint8_t" or n == "c_uint16_t" or n == "c_uint32_t" or n == "c_uint64_t": return true
+    if n == "c_intptr_t" or n == "c_uintptr_t" or n == "c_ptrdiff_t": return true
+    return false
 
 pub def _safe_c_varname(n: str) -> str:
     if _is_c_keyword(n): return "_tr_v_" + n

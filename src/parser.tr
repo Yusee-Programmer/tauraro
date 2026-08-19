@@ -2524,8 +2524,54 @@ extend Parser:
                 if self.peek() == Token.Comma:
                     self.pos = self.pos + 1
                 else: break
+        # Detect an INLINE single-line body (`class X: pass`): a member follows the `:` on the
+        # same line, so the lexer emits no Indent/Dedent. Such a body must terminate at the end
+        # of the line — otherwise the indent-driven loop below runs to Dedent/Eof and swallows
+        # the following top-level block (its `case _` default eats tokens one at a time).
+        mut inline_body = False
         if self.peek() == Token.Colon:
             self.pos = self.pos + 1
+            match self.peek():
+                case Token.Newline | Token.Eof:
+                    pass
+                case _:
+                    inline_body = True
+        if inline_body:
+            mut inl = True
+            while inl:
+                mut in_pub = False
+                match self.peek():
+                    case Token.KwPub:
+                        in_pub = True
+                        self.pos = self.pos + 1
+                    case _:
+                        pass
+                match self.peek():
+                    case Token.KwPass:
+                        self.pos = self.pos + 1
+                    case Token.KwDef:
+                        mut _iml = self.cur_line()
+                        mut im = self.parse_function_def(True)
+                        im.line = _iml
+                        im.is_public = in_pub
+                        c.methods.push(im)
+                    case Token.Ident(ifn):
+                        self.pos = self.pos + 1
+                        mut ity = Pointer[AstType](0)
+                        if self.peek() == Token.Colon:
+                            self.pos = self.pos + 1
+                            ity = box_asttype(self.parse_type())
+                        c.fields.push(FieldDef.init(ifn, ity))
+                    case _:
+                        inl = False
+                match self.peek():
+                    case Token.Semicolon:
+                        self.pos = self.pos + 1
+                    case _:
+                        inl = False
+            if self.peek() == Token.Newline:
+                self.pos = self.pos + 1
+            return box_decl(Decl.DClass(c))
         self.skip_newlines()
         match self.peek():
             case Token.Indent:
@@ -2638,8 +2684,42 @@ extend Parser:
                 if self.peek() == Token.Comma:
                     self.pos = self.pos + 1
                 else: break
+        # Inline single-line body (`enum E: A, B`): terminate at end of line, else the loop
+        # below runs to Dedent/Eof and swallows the following top-level block (see the class
+        # parser for the same fix).
+        mut e_inline = False
         if self.peek() == Token.Colon:
             self.pos = self.pos + 1
+            match self.peek():
+                case Token.Newline | Token.Eof:
+                    pass
+                case _:
+                    e_inline = True
+        if e_inline:
+            mut einl = True
+            while einl:
+                match self.peek():
+                    case Token.KwPass:
+                        self.pos = self.pos + 1
+                    case Token.Ident(evn):
+                        self.pos = self.pos + 1
+                        mut evd = VariantDef.init(evn)
+                        if self.peek() == Token.LParen:
+                            self.pos = self.pos + 1
+                            evd.fields = self.parse_param_list()
+                            if self.peek() == Token.RParen:
+                                self.pos = self.pos + 1
+                        e.variants.push(evd)
+                    case _:
+                        einl = False
+                match self.peek():
+                    case Token.Comma | Token.Semicolon:
+                        self.pos = self.pos + 1
+                    case _:
+                        einl = False
+            if self.peek() == Token.Newline:
+                self.pos = self.pos + 1
+            return box_decl(Decl.DEnum(e))
         self.skip_newlines()
         match self.peek():
             case Token.Indent:
@@ -2714,8 +2794,43 @@ extend Parser:
             while self.peek() == Token.Comma:
                 self.pos = self.pos + 1
                 i.region_params.push(self.consume_ident())
+        # Inline single-line body (`interface I: pass`): terminate at end of line, else the
+        # loop below runs to Dedent/Eof and swallows the following top-level block.
+        mut i_inline = False
         if self.peek() == Token.Colon:
             self.pos = self.pos + 1
+            match self.peek():
+                case Token.Newline | Token.Eof:
+                    pass
+                case _:
+                    i_inline = True
+        if i_inline:
+            mut iinl = True
+            while iinl:
+                mut i_pub = False
+                match self.peek():
+                    case Token.KwPub:
+                        i_pub = True
+                        self.pos = self.pos + 1
+                    case _:
+                        pass
+                match self.peek():
+                    case Token.KwPass:
+                        self.pos = self.pos + 1
+                    case Token.KwDef:
+                        mut im2 = self.parse_function_def(True)
+                        im2.is_public = i_pub
+                        i.methods.push(im2)
+                    case _:
+                        iinl = False
+                match self.peek():
+                    case Token.Semicolon:
+                        self.pos = self.pos + 1
+                    case _:
+                        iinl = False
+            if self.peek() == Token.Newline:
+                self.pos = self.pos + 1
+            return box_decl(Decl.DInterface(i))
         self.skip_newlines()
         match self.peek():
             case Token.Indent:

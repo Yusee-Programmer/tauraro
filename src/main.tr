@@ -1005,6 +1005,7 @@ pub def main(args: Vec[str]):
         mut bg_out    = "bindings.tr"
         mut bg_cc     = detect_c_compiler()
         mut bg_cpp    = false
+        mut bg_extra  = ""    # -h cpp: clang passthrough flags (-I / -D / -std= / -isystem)
         mut bk = 2
         while bk < args.len:
             mut ba = args.get(bk)
@@ -1019,14 +1020,25 @@ pub def main(args: Vec[str]):
                 bk = bk + 1
             elif ba == "--cpp":
                 bg_cpp = true
+            elif ba == "-I" and bk + 1 < args.len:
+                bg_extra = bg_extra + " -I\"" + args.get(bk + 1) + "\""
+                bk = bk + 1
+            elif ba == "-D" and bk + 1 < args.len:
+                bg_extra = bg_extra + " -D" + args.get(bk + 1)
+                bk = bk + 1
+            elif ba == "-isystem" and bk + 1 < args.len:
+                bg_extra = bg_extra + " -isystem \"" + args.get(bk + 1) + "\""
+                bk = bk + 1
+            elif str_starts_with(ba, "-I") or str_starts_with(ba, "-D") or str_starts_with(ba, "-std=") or str_starts_with(ba, "-f"):
+                bg_extra = bg_extra + " " + ba
             elif not str_starts_with(ba, "-"):
                 if bg_header == "": bg_header = ba
             bk = bk + 1
         if bg_header == "":
-            print("error: bindgen requires a header: tauraroc bindgen <header.h> [-o out.tr] [--cc <compiler>] [-h cpp]")
+            print("error: bindgen requires a header: tauraroc bindgen <header.h> [-o out.tr] [--cc <compiler>] [-h cpp] [-I<dir>] [-D<macro>]")
             _tr_exit(1)
         if bg_cpp:
-            run_bindgen_cpp(bg_header, bg_out, bg_cc)
+            run_bindgen_cpp(bg_header, bg_out, bg_cc, bg_extra)
         else:
             run_bindgen(bg_header, bg_out, bg_cc)
         _tr_exit(0)

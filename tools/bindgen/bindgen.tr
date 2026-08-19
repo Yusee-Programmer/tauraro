@@ -843,20 +843,45 @@ def _cxxwalk_src() -> str:
     sb.append("    return CXChildVisit_Continue;\n")
     sb.append("}\n")
     sb.append("int main(int argc,char**argv){\n")
+    sb.append("    if(argc<2){ fprintf(stderr,\"usage: cxxwalk <header> [clang args...]\\n\"); return 2; }\n")
     sb.append("    CXIndex idx=clang_createIndex(0,0);\n")
-    sb.append("    const char* a[]={\"-x\",\"c++\",\"-std=c++17\"};\n")
-    sb.append("    CXTranslationUnit tu=clang_parseTranslationUnit(idx,argv[1],a,3,0,0,CXTranslationUnit_None);\n")
-    sb.append("    if(!tu){fprintf(stderr,\"parse failed\\n\");return 1;}\n")
+    sb.append("    /* clang args are forwarded verbatim from argv[2..] (bindgen builds them:\n")
+    sb.append("       -x c++ -std=... + detected include dirs + user -I/-D flags). */\n")
+    sb.append("    CXTranslationUnit tu=clang_parseTranslationUnit(idx,argv[1],(const char**)(argv+2),argc-2,0,0,CXTranslationUnit_None);\n")
+    sb.append("    if(!tu){ fprintf(stderr,\"cxxwalk: libclang could not create a translation unit\\n\"); return 1; }\n")
+    sb.append("    /* Report error/fatal diagnostics on stderr (bindgen surfaces them); count fatals. */\n")
+    sb.append("    unsigned nd=clang_getNumDiagnostics(tu), nerr=0, nfatal=0;\n")
+    sb.append("    for(unsigned i=0;i<nd;i++){ CXDiagnostic dg=clang_getDiagnostic(tu,i);\n")
+    sb.append("        enum CXDiagnosticSeverity sv=clang_getDiagnosticSeverity(dg);\n")
+    sb.append("        if(sv>=CXDiagnostic_Error){ CXString ds=clang_formatDiagnostic(dg,clang_defaultDiagnosticDisplayOptions());\n")
+    sb.append("            fprintf(stderr,\"DIAG %s\\n\",clang_getCString(ds)); clang_disposeString(ds);\n")
+    sb.append("            nerr++; if(sv==CXDiagnostic_Fatal) nfatal++; }\n")
+    sb.append("        clang_disposeDiagnostic(dg); }\n")
+    sb.append("    fprintf(stderr,\"DIAGERR %u %u\\n\", nerr, nfatal);\n")
     sb.append("    clang_visitChildren(clang_getTranslationUnitCursor(tu),visit,0);\n")
     sb.append("    clang_disposeTranslationUnit(tu);clang_disposeIndex(idx);return 0;\n")
     sb.append("}\n")
     return sb.to_string().as_str()
 
+# ── portable shell helpers (Windows cmd.exe vs POSIX sh) ─────────────────────────
+# `_tr_system` runs cmd.exe on Windows and /bin/sh elsewhere, so `rm`/`/dev/null` and
+# the `.\exe` invocation form are not portable. These normalize both.
+def _rm_files(files: str):
+    if _tr_is_windows():
+        _tr_system("del /q " + files + " >nul 2>&1")
+    else:
+        _tr_system("rm -f " + files + " 2>/dev/null")
+
+# Invoke a just-built executable in the CWD (`.\name.exe` on Windows, `./name.exe` on POSIX).
+def _local_exe(stem: str) -> str:
+    if _tr_is_windows(): return ".\\" + stem + ".exe"
+    return "./" + stem + ".exe"
+
 # Detect libclang by test-compiling a probe. "" = present; otherwise a guidance string.
 def _detect_libclang(cc: str) -> str:
     write_file("_cxxprobe.c", "#include <clang-c/Index.h>\nint main(){ clang_createIndex(0,0); return 0; }\n")
     mut rc = _tr_system(cc + " _cxxprobe.c -o _cxxprobe.exe -lclang 2>_cxx_err.txt")
-    _tr_system("rm -f _cxxprobe.c _cxxprobe.exe 2>/dev/null")
+    _rm_files("_cxxprobe.c _cxxprobe.exe _cxx_err.txt")
     if rc == 0: return ""
     mut g = StringBuilder.init(768)
     g.append("bindgen: `-h cpp` needs libclang (Clang's C API), which was not found.\n")
@@ -1201,8 +1226,86 @@ def _cpp_generate(ir: str, header: str, out: str):
     print("bindgen: wrote " + out + " + " + shim_name + " — " + n_classes.to_str() + " classes, " + n_fns.to_str() + " wrappers")
     print("bindgen: next:  c++ -c " + shim_name + "   then link with  --link " + base + "_shim.o -lstdc++")
 
-# Orchestrate C++ binding generation: detect libclang, build+run the walker, generate.
-pub def run_bindgen_cpp(header: str, out: str, cc: str):
+# ── adaptive clang configuration (query the compiler, don't hardcode paths) ──────
+# Ask the compiler for its default C++ header search dirs and feed them to libclang as
+# `-I`. libclang may be built against a DIFFERENT toolchain than the user's `cc`, so its
+# builtin header detection can miss libstdc++/libc++ — this makes complex headers (that
+# pull in <string>, <vector>, …) resolve out of the box. Works for gcc and clang, on
+# Linux/macOS/Windows (parses the standard `#include <...> search starts here:` block).
+def _cpp_detect_include_dirs(cc: str) -> str:
+    write_file("_cxx_empty.cpp", "\n")
+    _tr_system(cc + " -x c++ -E -v _cxx_empty.cpp > _cxx_pp.txt 2> _cxx_inc.txt")
+    mut out = ""
+    if file_exists("_cxx_inc.txt"):
+        mut txt = read_file("_cxx_inc.txt")
+        mut lines = txt.split("\n")
+        mut collecting = false
+        mut li = 0
+        while li < lines.len:
+            mut ln = _rstrip_cr(lines.get(li))
+            li = li + 1
+            if ln.find("search starts here") >= 0:
+                collecting = true
+                continue
+            if ln.find("End of search list") >= 0:
+                collecting = false
+                continue
+            if collecting:
+                mut d = _lstrip(ln)
+                # macOS annotates framework dirs; strip the marker so the path stays usable.
+                mut fpos = d.find(" (framework directory)")
+                if fpos >= 0: d = d.slice(0, fpos)
+                if d != "":
+                    out = out + " -I\"" + d + "\""
+    _rm_files("_cxx_empty.cpp _cxx_pp.txt _cxx_inc.txt")
+    return out
+
+# The `-std=` flag: honor a user-supplied one, else default to c++17.
+def _cpp_std_flag(extra: str) -> str:
+    if extra.find("-std=") >= 0: return ""
+    return "-std=c++17 "
+
+# Count of fatal diagnostics reported by the walker (parsed from its `DIAGERR nerr nfatal`).
+def _cpp_fatal_count(diag: str) -> int:
+    mut lines = diag.split("\n")
+    mut li = 0
+    mut f = 0
+    while li < lines.len:
+        mut ln = _rstrip_cr(lines.get(li))
+        li = li + 1
+        if ln.find("DIAGERR ") == 0:
+            mut parts = ln.split(" ")
+            if parts.len >= 3: f = _to_int(parts.get(2))
+    return f
+
+# Print the walker's error diagnostics (the `DIAG ...` lines), stripped of the prefix.
+def _cpp_print_diag(diag: str):
+    mut lines = diag.split("\n")
+    mut li = 0
+    mut shown = 0
+    while li < lines.len:
+        mut ln = _rstrip_cr(lines.get(li))
+        li = li + 1
+        if ln.find("DIAG ") == 0 and shown < 12:
+            print("    " + ln.slice(5, ln.len()))
+            shown = shown + 1
+
+# True if the IR has no bindable declaration (only blank lines / whitespace).
+def _cpp_ir_is_empty(ir: str) -> bool:
+    mut lines = ir.split("\n")
+    mut li = 0
+    while li < lines.len:
+        if _rstrip_cr(lines.get(li)) != "": return false
+        li = li + 1
+    return true
+
+def _cpp_cleanup():
+    _rm_files("_cxxwalk.c _cxxwalk.exe _cxx.ir _cxx_err.txt _cxx_diag.txt")
+
+# Orchestrate C++ binding generation: detect libclang, build the walker, discover include
+# paths, run the walker, surface diagnostics, and generate the shim + bindings.
+#   extra = space-joined clang passthrough flags (user `-I`/`-D`/`-std=`), already shell-safe.
+pub def run_bindgen_cpp(header: str, out: str, cc: str, extra: str):
     mut guide = _detect_libclang(cc)
     if guide != "":
         print(guide)
@@ -1212,13 +1315,33 @@ pub def run_bindgen_cpp(header: str, out: str, cc: str):
     if rc != 0 or not file_exists("_cxxwalk.exe"):
         print("bindgen: could not compile the libclang walker (see _cxx_err.txt)")
         return
-    _tr_system(".\\_cxxwalk.exe \"" + header + "\" > _cxx.ir 2>>_cxx_err.txt")
-    if not file_exists("_cxx.ir"):
-        print("bindgen: the walker produced no output (see _cxx_err.txt)")
+    # Build the clang arg list adaptively: language + std + detected include dirs + user flags.
+    mut clang_args = "-x c++ " + _cpp_std_flag(extra) + _cpp_detect_include_dirs(cc)
+    if extra != "": clang_args = clang_args + " " + extra
+    _tr_system(_local_exe("_cxxwalk") + " \"" + header + "\" " + clang_args + " > _cxx.ir 2> _cxx_diag.txt")
+    mut diag = ""
+    if file_exists("_cxx_diag.txt"): diag = read_file("_cxx_diag.txt")
+    mut nfatal = _cpp_fatal_count(diag)
+    if not file_exists("_cxx.ir") or _cpp_ir_is_empty(read_file("_cxx.ir")):
+        print("bindgen: no bindable declarations found in " + header)
+        if diag.find("DIAG ") >= 0:
+            print("bindgen: libclang could not fully parse the header:")
+            _cpp_print_diag(diag)
+            print("")
+            print("  Most 'file not found' errors mean a missing include dir. Re-run with the")
+            print("  library's include path(s) (and any required defines), e.g.:")
+            print("    tauraroc bindgen " + header + " -h cpp -I<include-dir> [-I<more>] [-D<MACRO>]")
+        else:
+            print("  (the header parsed cleanly but declares no public classes/functions to bind.)")
+        _cpp_cleanup()
         return
     mut ir = read_file("_cxx.ir")
     _cpp_generate(ir, header, out)
-    _tr_system("rm -f _cxxwalk.c _cxxwalk.exe _cxx.ir _cxx_err.txt 2>/dev/null")
+    if nfatal > 0:
+        print("bindgen: WARNING — libclang reported " + nfatal.to_str() + " fatal error(s); bindings may be INCOMPLETE:")
+        _cpp_print_diag(diag)
+        print("  Add the missing include dir(s) with -I<dir> for a complete binding.")
+    _cpp_cleanup()
 
 def main(args: List[str]):
     if args.len < 2:
@@ -1228,6 +1351,7 @@ def main(args: List[str]):
     mut out = "bindings.tr"
     mut cc = "cc"
     mut cpp = false
+    mut extra = ""    # clang passthrough flags for -h cpp (-I / -D / -std= / -isystem)
     mut i = 2
     while i < args.len:
         mut a = args.get(i)
@@ -1242,9 +1366,20 @@ def main(args: List[str]):
             i = i + 1
         elif a == "--cpp":
             cpp = true
+        elif a == "-I" and i + 1 < args.len:
+            extra = extra + " -I\"" + args.get(i + 1) + "\""
+            i = i + 1
+        elif a == "-D" and i + 1 < args.len:
+            extra = extra + " -D" + args.get(i + 1)
+            i = i + 1
+        elif a == "-isystem" and i + 1 < args.len:
+            extra = extra + " -isystem \"" + args.get(i + 1) + "\""
+            i = i + 1
+        elif a.starts_with("-I") or a.starts_with("-D") or a.starts_with("-std=") or a.starts_with("-f"):
+            extra = extra + " " + a
         i = i + 1
     if cpp:
-        run_bindgen_cpp(header, out, cc)
+        run_bindgen_cpp(header, out, cc, extra)
         return
     mut tmp_decls = "_bindgen_decls.i"
     mut tmp_defs  = "_bindgen_defs.i"
