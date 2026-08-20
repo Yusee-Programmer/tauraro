@@ -1,0 +1,14 @@
+# Auto-generated C++ FFI bindings for geo.hpp (tauraro-bindgen -h cpp).
+# Build the shim once, then link it (and the C++ library) with your program:
+#   c++ -c geo_shim.cpp -o geo_shim.o
+#   tauraroc yourapp.tr --link geo_shim.o -lstdc++ -o app
+
+@value_type
+class Vec3:
+    pub x: c_float
+    pub y: c_float
+    pub z: c_float
+
+extern "C":
+    def geo_add(a: Vec3, b: Vec3) -> Vec3
+    def geo_length(v: Vec3) -> c_float

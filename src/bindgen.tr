@@ -1165,6 +1165,43 @@ def _cxxwalk_src() -> str:
     sb.append("}\n")
     sb.append("static char g_params[8][64]; static CXType g_args[8]; static int g_np=0;\n")
     sb.append("static char g_cbase[256]={0};   /* container template base (e.g. \"std::map\") for nested-type detection */\n")
+    sb.append("static int g_inst=0;            /* 1 while walking template instantiations (--inst mode) */\n")
+    sb.append("/* Collect NON-system external records used by value, so we can lay them out as @value_type\n")
+    sb.append("   (a library value struct in a filtered sub-header would otherwise be an opaque handle). System\n")
+    sb.append("   records (windows.h) are left on the bare path — zero risk to the working COM handling. */\n")
+    sb.append("static CXCursor g_ext[128]; static char g_extn[128][160]; static int g_next=0;\n")
+    sb.append("static void collect_ext(CXType rec){\n")
+    sb.append("  if(g_inst) return;\n")
+    sb.append("  CXCursor decl=clang_getTypeDeclaration(rec);\n")
+    sb.append("  CXSourceLocation loc=clang_getCursorLocation(decl);\n")
+    sb.append("  if(clang_Location_isFromMainFile(loc)) return;   /* main-file records already emitted via CLASS */\n")
+    sb.append("  if(clang_Location_isInSystemHeader(loc)) return; /* system record -> bare path (unchanged) */\n")
+    sb.append("  if(clang_Type_getSizeOf(rec)<=0) return;\n")
+    sb.append("  CXString sp=clang_getTypeSpelling(rec); const char* r=S(sp); if(strncmp(r,\"const \",6)==0)r+=6; if(strncmp(r,\"volatile \",9)==0)r+=9;\n")
+    sb.append("  if(strstr(r,\"<\")||strstr(r,\"::\")){ clang_disposeString(sp); return; } /* skip templates / nested (kept simple) */\n")
+    sb.append("  for(int i=0;i<g_next;i++) if(strcmp(g_extn[i],r)==0){ clang_disposeString(sp); return; }\n")
+    sb.append("  if(g_next<128){ strncpy(g_extn[g_next],r,159); g_extn[g_next][159]=0; g_ext[g_next]=decl; g_next++; }\n")
+    sb.append("  clang_disposeString(sp);\n")
+    sb.append("}\n")
+    sb.append("static void field_tautype(CXType t){\n")
+    sb.append("  CXType c=clang_getCanonicalType(t);\n")
+    sb.append("  if(c.kind==CXType_ConstantArray){ CXType e=clang_getArrayElementType(c); long long n=clang_getArraySize(c);\n")
+    sb.append("    printf(\"[\"); field_tautype(e); printf(\"; %lld]\", n); return; }\n")
+    sb.append("  if(c.kind==CXType_Pointer){ printf(\"Pointer[void]\"); return; }\n")
+    sb.append("  const char* sc=scalar(c.kind); if(sc[0]){ printf(\"%s\", sc); return; }\n")
+    sb.append("  if(c.kind==CXType_Enum){ printf(\"c_int\"); return; }\n")
+    sb.append("  if(c.kind==CXType_Record){ CXString sp=clang_getTypeSpelling(c); const char* r=S(sp); if(strncmp(r,\"const \",6)==0)r+=6;\n")
+    sb.append("    const char* seg=strrchr(r,':'); printf(\"%s\", seg?seg+1:r); clang_disposeString(sp); return; }\n")
+    sb.append("  printf(\"c_int\");\n")
+    sb.append("}\n")
+    sb.append("static enum CXChildVisitResult sfields(CXCursor c, CXCursor p, CXClientData d){\n")
+    sb.append("  if(clang_getCursorKind(c)==CXCursor_FieldDecl && clang_getCXXAccessSpecifier(c)!=CX_CXXPrivate && clang_getCXXAccessSpecifier(c)!=CX_CXXProtected){\n")
+    sb.append("    printf(\"SFIELD \"); field_tautype(clang_getCursorType(c)); printf(\"|%s\\n\", S(clang_getCursorSpelling(c))); }\n")
+    sb.append("  return CXChildVisit_Continue;\n")
+    sb.append("}\n")
+    sb.append("static void emit_extstructs(void){\n")
+    sb.append("  for(int i=0;i<g_next;i++){ printf(\"XSTRUCT %s\\n\", g_extn[i]); clang_visitChildren(g_ext[i], sfields, 0); printf(\"EXSTRUCT\\n\"); }\n")
+    sb.append("}\n")
     sb.append("/* whole-identifier-token search: does `needle` appear in `hay` bounded by non-ident chars? */\n")
     sb.append("static int has_token(const char* hay, const char* needle){\n")
     sb.append("  int nl=strlen(needle); if(nl==0) return 0; const char* p=hay;\n")
@@ -1223,6 +1260,7 @@ def _cxxwalk_src() -> str:
     sb.append("    if(dep){ printf(\"%d~%d~d~\", depth, ref); clang_disposeString(sp); return; }\n")
     sb.append("    clang_disposeString(sp);\n")
     sb.append("  }\n")
+    sb.append("  if(fcan.kind==CXType_Record && depth==0) collect_ext(fcan);  /* by-value external record -> lay out */\n")
     sb.append("  classify(depth,ref,fcan);\n")
     sb.append("}\n")
     sb.append("static void params(CXCursor c){ int n=clang_Cursor_getNumArguments(c);\n")
@@ -1281,7 +1319,9 @@ def _cxxwalk_src() -> str:
     sb.append("    if(sv>=CXDiagnostic_Error){ CXString ds=clang_formatDiagnostic(dg,clang_defaultDiagnosticDisplayOptions()); fprintf(stderr,\"DIAG %s\\n\",clang_getCString(ds)); clang_disposeString(ds); nerr++; if(sv==CXDiagnostic_Fatal) nfatal++; }\n")
     sb.append("    clang_disposeDiagnostic(dg); }\n")
     sb.append("  fprintf(stderr,\"DIAGERR %u %u\\n\", nerr, nfatal);\n")
+    sb.append("  g_inst=inst_mode;\n")
     sb.append("  clang_visitChildren(clang_getTranslationUnitCursor(tu), inst_mode?inst:visit, 0);\n")
+    sb.append("  if(!inst_mode) emit_extstructs();   /* lay out by-value external (non-system) records */\n")
     sb.append("  clang_disposeTranslationUnit(tu); clang_disposeIndex(idx); return 0; }\n")
     return sb.to_string().as_str()
 
@@ -1754,11 +1794,16 @@ def _cpp_generate(ir: str, header: str, out: str):
             mut tnm = _cpp_ident(tp.get(0))         # sanitized instantiation name (Box<int> -> Box_int_)
             class_names.insert(tnm, true)
             ps_name.push(tnm); ps_pod.push(tp.get(1)); ps_nf.push("0")
-        elif pl.starts_with("FIELD "):
+        elif pl.starts_with("XSTRUCT "):
+            # a by-value external (non-system) record laid out as a value struct.
+            mut xn0 = pl.slice(8, pl.len())
+            class_names.insert(xn0, true)
+            ps_name.push(xn0); ps_pod.push("1"); ps_nf.push("0")
+        elif pl.starts_with("FIELD ") or pl.starts_with("SFIELD "):
             if ps_nf.len > 0:
                 ps_nf.pop()          # mark innermost class as "has fields" (pop top, push "1")
                 ps_nf.push("1")
-        elif pl == "ECLASS":
+        elif pl == "ECLASS" or pl == "EXSTRUCT":
             if ps_name.len > 0:
                 mut nm2 = ps_name.pop()
                 mut pod2 = ps_pod.pop()
@@ -1823,6 +1868,38 @@ def _cpp_generate(ir: str, header: str, out: str):
             if _is_clean_ident(fnm):
                 mut fmap = _cpp_field_type(fdesc, value_structs, enum_names)
                 fld_buf = fld_buf + "    pub " + _cpp_tr_pname(fnm) + ": " + fmap + "\n"
+            continue
+        if line.starts_with("XSTRUCT "):
+            # A by-value external (non-system) record — lay it out as a `@value_type` so it
+            # crosses by value (a library value struct in a filtered sub-header).
+            mut xn = line.slice(8, line.len())
+            cstk_name.push(xn); cstk_qual.push(xn); cstk_pfx.push(xn)
+            class_qual.insert(xn, xn)
+            fld_stack.push(fld_buf)
+            fld_buf = ""
+            continue
+        if line.starts_with("SFIELD "):
+            # An external-record field whose Tauraro type is already resolved by the walker.
+            mut srest = line.slice(7, line.len())
+            mut sbar = srest.split("|")
+            mut sty = sbar.get(0)
+            mut snm = ""
+            if sbar.len > 1: snm = sbar.get(1)
+            if _is_clean_ident(snm):
+                fld_buf = fld_buf + "    pub " + _cpp_tr_pname(snm) + ": " + sty + "\n"
+            continue
+        if line == "EXSTRUCT":
+            if _is_clean_ident(cur_class) and not seen.contains("class:" + cur_class):
+                if fld_buf != "": opaque.append("@value_type\nclass " + cur_class + ":\n" + fld_buf)
+                else: opaque.append("class " + cur_class + ":\n    pass\n")
+                seen.insert("class:" + cur_class, true)
+                n_classes = n_classes + 1
+            if cstk_name.len > 0:
+                cstk_name.pop()
+                cstk_qual.pop()
+                cstk_pfx.pop()
+            if fld_stack.len > 0: fld_buf = fld_stack.pop()
+            else: fld_buf = ""
             continue
         if line == "ENS":
             ns_path = _ns_pop(ns_path); continue

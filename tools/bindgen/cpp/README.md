@@ -237,11 +237,23 @@ accessors bind: `at`/`size`/`empty`/`count`/`clear`. A `const key_type&` key to 
 crossed **by value** (`at(m, 2)`, not `at(m, &2)`) since a const-ref-to-primitive is just the value.
 Verified end-to-end (`use_map.tr`): `at(m, 2)` → `19.5`, `size` → `3`.
 
+### By-value structs from a filtered sub-header are laid out
+
+A library that defines a value struct in a *sub-header* (e.g. `Vec3` in `lib/math3d.hpp`, used by
+value in the main header) used to cross as an opaque handle, because the walker only bound the exact
+main file. Now, when an **external non-system** record is used **by value**, the walker extracts its
+exact field layout via libclang (`clang_getTypeDeclaration` + field iteration, arrays included) and
+emits it as a `@value_type`, so it crosses by value with the correct ABI. Verified (`use_geo.tr`):
+a Tauraro program builds a `Vec3`, passes it by value to `add(Vec3, Vec3)`, and reads the returned
+`Vec3` fields (`sum.x = 11`). **System** records (`windows.h`'s `_GUID`, …) are deliberately left on
+the bare-reference path (`clang_Location_isInSystemHeader`), so `comdef.h` is unaffected.
+
 ## Honest scope / remaining hard tail
 
 - **Iterator-returning methods** (`find`/`begin`/`end`) and comparator/nested-type returns
   (`value_comp`) are skipped — iterators are opaque template types. Use `at`/`operator[]`-style
   keyed access (bound) rather than iteration.
-- **By-value system structs from another header** — a COM API that passes a `VARIANT`/`_GUID` *by
-  value* (not by pointer) still needs the value laid out; the pointer-based COM patterns (the norm)
-  work. Bind by-value-system-struct cases through a narrow shim.
+- **By-value *system* structs** (`windows.h`'s `_GUID`/`VARIANT` passed *by value*, not by pointer)
+  are not laid out — that would need renaming the emitted struct to avoid redefining the one the
+  runtime's system headers already provide, and would risk the working COM pointer handling for a
+  rare case. Pointer-based COM (the norm) works; by-value *library* structs (above) now work too.
