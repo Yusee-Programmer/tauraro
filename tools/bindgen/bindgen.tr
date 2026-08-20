@@ -347,6 +347,36 @@ extend Bindgen:
                 return
             self.adv()
 
+    # Skip a balanced `{ ... }` block, stopping right after the matching `}` (a function
+    # DEFINITION body has no trailing `;`, unlike a struct — so don't seek one).
+    pub def skip_braces(self):
+        if not self.is_punct("{"): return
+        mut depth = 0
+        while self.ck() != 5:
+            if self.is_punct("{"): depth = depth + 1
+            elif self.is_punct("}"):
+                depth = depth - 1
+                self.adv()
+                if depth == 0: return
+                continue
+            self.adv()
+
+    # Skip any run of `__attribute__((...))` / `__declspec(...)` at the current position.
+    pub def skip_attributes(self):
+        while self.ck() == 0 and (self.ct() == "__attribute__" or self.ct() == "__declspec"):
+            self.adv()
+            self.skip_balanced_parens()
+
+    # Lookahead: at the arg-list `(`, is this a function DEFINITION (`(args) {`) rather than a
+    # prototype (`(args);`)? Header definitions are `static`/`inline` stubs (e.g. curl's
+    # typecheck-gcc.h `_curl_*_err_*` warning functions) — never linkable externs, so skip them.
+    pub def func_def_follows(self) -> bool:
+        mut save = self.pos
+        self.skip_balanced_parens()
+        mut isdef = self.is_punct("{")
+        self.pos = save
+        return isdef
+
     # Read the TYPE of a declarator (const/volatile/struct/union/enum stripped) + pointer
     # stars, STOPPING before the declarator name. An identifier is the name (not a type word)
     # once we already have a type and the *next* token ends the declarator (`,`/`;`/`)`/`[`/`=`/
@@ -460,6 +490,71 @@ extend Bindgen:
         mut nfields = 0
         while not self.is_punct("}") and self.ck() != 5:
             mut floop_before = self.pos
+            # Nested aggregate field `struct|union [tag] { ... } name;` — flatten its members
+            # into the parent with a `name_` prefix (layout-equivalent for default alignment),
+            # instead of letting the inner fields leak into the parent (duplicate names) and the
+            # inner `}` prematurely end the parent. Real case: curl_fileinfo's `{...} strings`.
+            if self.ct() == "struct" or self.ct() == "union":
+                mut nsave = self.pos
+                self.adv()                                # struct / union
+                if self.ck() == 0: self.adv()             # optional tag
+                if self.is_punct("{"):
+                    self.adv()                            # {
+                    mut nnames = Vec[str].init(4)
+                    mut ntypes = Vec[str].init(4)
+                    while not self.is_punct("}") and self.ck() != 5:
+                        mut nb = self.pos
+                        # guard: a deeper nested aggregate — skip it (don't corrupt the parent)
+                        if self.ct() == "struct" or self.ct() == "union":
+                            self.adv()
+                            if self.ck() == 0: self.adv()
+                            if self.is_punct("{"):
+                                self.skip_struct_body()
+                                while not self.is_punct(";") and self.ck() != 5: self.adv()
+                                if self.is_punct(";"): self.adv()
+                                if self.pos == nb: self.adv()
+                                continue
+                            self.pos = nb
+                        mut ntw = self.read_type_words()
+                        mut nbase = ntw.get(0)
+                        mut nstars = _to_int(ntw.get(1))
+                        mut nmore = true
+                        while nmore:
+                            if self.ck() != 0: break
+                            mut nnm = self.ct()
+                            self.adv()
+                            mut narr = ""
+                            mut nisarr = false
+                            while self.is_punct("["):
+                                self.adv()
+                                if self.ck() == 1: narr = self.ct()
+                                while not self.is_punct("]") and self.ck() != 5: self.adv()
+                                if self.is_punct("]"): self.adv()
+                                nisarr = true
+                            nnames.push(nnm)
+                            if nisarr and narr != "": ntypes.push("[" + map_type(nbase, nstars) + "; " + narr + "]")
+                            else: ntypes.push(map_type(nbase, nstars))
+                            if self.is_punct(","): self.adv()
+                            else: nmore = false
+                        if self.is_punct(";"): self.adv()
+                        if self.pos == nb: self.adv()
+                    if self.is_punct("}"): self.adv()
+                    mut pfx = ""
+                    if self.ck() == 0:
+                        pfx = self.ct()
+                        self.adv()
+                    while not self.is_punct(";") and self.ck() != 5: self.adv()
+                    if self.is_punct(";"): self.adv()
+                    mut nk = 0
+                    while nk < nnames.len:
+                        mut nfn = nnames.get(nk)
+                        if pfx != "": nfn = pfx + "_" + nfn
+                        self.structs.append("    pub " + nfn + ": " + ntypes.get(nk) + "\n")
+                        nfields = nfields + 1
+                        nk = nk + 1
+                    if self.pos == floop_before: self.adv()
+                    continue
+                self.pos = nsave                          # `struct Tag *field;` — normal field
             mut tw = self.read_type_words()
             mut fbase = tw.get(0)
             mut fstars = _to_int(tw.get(1))
@@ -482,6 +577,7 @@ extend Bindgen:
                 if not is_arr:
                     self.structs.append("    pub " + fname + ": " + map_type(fbase, fstars) + "\n")
                     nfields = nfields + 1
+                self.skip_attributes()                    # `int x __attribute__((packed));`
                 if self.is_punct(","):
                     self.adv()
                 else:
@@ -509,11 +605,14 @@ extend Bindgen:
         self.adv()
         mut next_val = 0
         while not self.is_punct("}") and self.ck() != 5:
+            self.skip_attributes()                    # e.g. `CURL_DEPRECATED` on an enumerator
+            if self.is_punct("}"): break
             if self.ck() != 0:
                 self.adv()
                 continue
             mut ename = self.ct()
             self.adv()
+            self.skip_attributes()                    # `NAME __attribute__((deprecated)) = V`
             mut ev = next_val
             mut simple = true
             if self.is_punct("="):
@@ -636,8 +735,53 @@ extend Bindgen:
             fname = self.ct()
             self.adv()
         if fname != "" and self.is_punct("("):
+            if self.func_def_follows():
+                self.skip_balanced_parens()          # (args)
+                self.skip_braces()                   # { body } — a definition, not a prototype
+                if self.is_punct(";"): self.adv()
+                return
             self.emit_func(rbase, rstars, fname)
             return
+        # Parenthesized declarator: `RET ( [attr|conv]* NAME ) ( args )`. Libraries that wrap
+        # exports in attribute macros produce this (libpng's PNG_EXPORT -> `png_structp
+        # (__attribute__((__cdecl__)) png_create_read_struct)(args)`). Without this, every such
+        # prototype is silently skipped. A leading `*` inside the parens is a function-POINTER
+        # global (not a bindable function) — restore and skip those.
+        if fname == "" and self.is_punct("("):
+            mut saved = self.pos
+            self.adv()                               # (
+            mut pdstars = 0
+            mut scan = true
+            while scan:
+                if self.ck() == 0:
+                    mut dw = self.ct()
+                    if dw == "__attribute__" or dw == "__declspec":
+                        self.adv()
+                        self.skip_balanced_parens()
+                    elif _is_ignored_word(dw):
+                        self.adv()
+                    else:
+                        scan = false
+                elif self.is_punct("*"):
+                    pdstars = pdstars + 1
+                    self.adv()
+                else:
+                    scan = false
+            mut pdname = ""
+            if self.ck() == 0:
+                pdname = self.ct()
+                self.adv()
+            if pdname != "" and pdstars == 0 and self.is_punct(")"):
+                self.adv()                           # )
+                if self.is_punct("("):
+                    if self.func_def_follows():
+                        self.skip_balanced_parens()
+                        self.skip_braces()
+                        if self.is_punct(";"): self.adv()
+                        return
+                    self.emit_func(rbase, rstars, pdname)
+                    return
+            self.pos = saved                         # not a plain function declarator
         self.skip_to_semi()
 
     pub def run(self):
@@ -771,6 +915,129 @@ def _lstrip(s: str) -> str:
     while i < s.len() and (s[i] == 32 or s[i] == 9): i = i + 1
     return s.slice(i, s.len())
 
+# ── opaque fallback for referenced-but-undefined types ───────────────────────────
+# A real library header references types defined in a *system* header (`struct sockaddr`)
+# or a *sub-header* the filter dropped (libpng's `png_error_ptr` from pngconf.h). Those
+# names appear in signatures but are never emitted, so the binding won't compile. This
+# post-pass finds every type-position identifier that is neither a builtin nor emitted,
+# and forward-declares it as `type NAME = Pointer[void]` (an opaque handle). Correct for
+# the common pointer-passed / function-pointer cases; for a by-value-embedded system
+# struct the layout is approximate (documented) but the binding compiles and links.
+def _is_builtin_ty_name(n: str) -> bool:
+    if n == "void" or n == "bool" or n == "char" or n == "int" or n == "float" or n == "str": return true
+    if n == "Pointer": return true
+    return n.starts_with("c_")
+
+# Standard C library types the runtime's system headers already define (via <stdio.h>,
+# <time.h>, <setjmp.h>, <sys/*>, …). A fallback `typedef void* FILE` would CONFLICT with
+# the real definition, so these are skipped — the generated C references resolve to the
+# system type (correct size/layout), and sema passes the name through to C untouched.
+# Only genuine TYPEDEFs usable as a bare name (not `struct tm`/`struct timeval`, which need the
+# `struct` keyword and so must fall through to an opaque fallback instead).
+def _is_libc_ty_name(n: str) -> bool:
+    if n == "FILE" or n == "fpos_t" or n == "va_list" or n == "jmp_buf" or n == "sigjmp_buf": return true
+    if n == "time_t" or n == "clock_t": return true
+    if n == "wchar_t" or n == "wint_t" or n == "mbstate_t": return true
+    if n == "off_t" or n == "off64_t" or n == "mode_t" or n == "pid_t" or n == "uid_t" or n == "gid_t": return true
+    if n == "dev_t" or n == "ino_t" or n == "nlink_t" or n == "blkcnt_t" or n == "blksize_t": return true
+    if n == "fd_set" or n == "sigset_t" or n == "DIR" or n == "pthread_t" or n == "sig_atomic_t": return true
+    return false
+
+# Read a `[A-Za-z_][A-Za-z0-9_]*` at/after `start` (skipping leading spaces/tabs and `[`).
+def _ident_at(text: str, start: int) -> str:
+    mut i = start
+    while i < text.len() and (text[i] == 32 or text[i] == 9 or text[i] == 91): i = i + 1
+    if i >= text.len(): return ""
+    mut c = text[i]
+    if not ((c >= 65 and c <= 90) or (c >= 97 and c <= 122) or c == 95): return ""
+    mut b = i
+    while i < text.len():
+        c = text[i]
+        if (c >= 65 and c <= 90) or (c >= 97 and c <= 122) or (c >= 48 and c <= 57) or c == 95: i = i + 1
+        else: break
+    return text.slice(b, i)
+
+# Emit opaque `type` fallbacks for every undefined type referenced in `body`. `defined` is
+# the set of names the bindgen already emitted (types/classes). Returns the fallback block.
+def _opaque_fallbacks(body: str, defined: Map[str, bool]) -> str:
+    mut want: Map[str, bool] = Map[str, bool].init(64)
+    mut order = Vec[str].init(16)
+    mut i = 0
+    mut n = body.len()
+    while i < n:
+        mut c = body[i]
+        mut nm = ""
+        if c == 58:                                       # ':' type annotation
+            nm = _ident_at(body, i + 1); i = i + 1
+        elif c == 45 and i + 1 < n and body[i + 1] == 62: # '->' return type
+            nm = _ident_at(body, i + 2); i = i + 2
+        elif c == 91:                                     # '[' Pointer[T] / [T; N]
+            nm = _ident_at(body, i + 1); i = i + 1
+        else:
+            i = i + 1
+        if nm == "": continue
+        if _is_builtin_ty_name(nm): continue
+        if _is_libc_ty_name(nm): continue
+        if defined.contains(nm): continue
+        if want.contains(nm): continue
+        want.insert(nm, true)
+        order.push(nm)
+    if order.len == 0: return ""
+    mut sb = StringBuilder.init(256)
+    sb.append("# Opaque fallbacks: types referenced by this header but defined in a system or\n")
+    sb.append("# sub-header (bound as opaque handles; pass by Pointer). Verify by-value layout.\n")
+    mut k = 0
+    while k < order.len:
+        sb.append("type " + order.get(k) + " = Pointer[void]\n")
+        k = k + 1
+    sb.append("\n")
+    return sb.to_string().as_str()
+
+# A single `"..."` literal with no trailing tokens (no concatenation, no macro reference).
+def _is_single_string_literal(val: str) -> bool:
+    if val.len() < 2 or val[0] != 34: return false
+    mut i = 1
+    mut esc = false
+    while i < val.len():
+        mut c = val[i]
+        if esc:
+            esc = false
+        elif c == 92:                 # backslash
+            esc = true
+        elif c == 34:                 # closing quote
+            # valid only if nothing but whitespace follows
+            mut j = i + 1
+            while j < val.len():
+                mut t = val[j]
+                if t != 32 and t != 9: return false
+                j = j + 1
+            return true
+        i = i + 1
+    return false
+
+# A single integer/hex literal (optionally signed), no operators/suffixes/macro refs.
+def _is_single_int_literal(val: str) -> bool:
+    mut n = val.len()
+    # trim trailing whitespace
+    while n > 0 and (val[n - 1] == 32 or val[n - 1] == 9): n = n - 1
+    if n == 0: return false
+    mut i = 0
+    if val[0] == 45 or val[0] == 43: i = 1     # leading sign
+    if i >= n: return false
+    mut hex = false
+    if i + 1 < n and val[i] == 48 and (val[i + 1] == 120 or val[i + 1] == 88):   # 0x / 0X
+        hex = true
+        i = i + 2
+        if i >= n: return false
+    while i < n:
+        mut c = val[i]
+        mut ok = false
+        if c >= 48 and c <= 57: ok = true
+        elif hex and ((c >= 97 and c <= 102) or (c >= 65 and c <= 70)): ok = true
+        if not ok: return false                # operator, suffix (U/L), '.', space, macro char → reject
+        i = i + 1
+    return true
+
 def emit_defines(bg: Bindgen, defs: str, baseline: Map[str, bool], allow: Map[str, bool]):
     mut lines = defs.split("\n")
     mut i = 0
@@ -785,14 +1052,20 @@ def emit_defines(bg: Bindgen, defs: str, baseline: Map[str, bool], allow: Map[st
         if nm.find("(") >= 0: continue               # function-like macro -> skip
         if baseline.contains(nm): continue           # compiler/platform built-in -> skip
         if not allow.contains(nm): continue          # not defined in the target header -> skip
-        mut val = rest.slice(sp + 1, rest.len())
+        mut val = _lstrip(rest.slice(sp + 1, rest.len()))
         if val.len() == 0: continue
         mut c0 = val[0]
         if c0 == 34:
-            bg.consts.append("const " + nm + " = " + val + "\n")   # string constant (cast to Pointer[char] at use)
+            # Only a SINGLE string literal is valid. Reject concatenations / macro references
+            # like `" v " OTHER_MACRO "\n"` (libpng's PNG_HEADER_VERSION_STRING) — those would
+            # emit adjacent literals + a bare identifier, which is not valid Tauraro.
+            if _is_single_string_literal(val):
+                bg.consts.append("const " + nm + " = " + val + "\n")   # cast to Pointer[char] at use
         elif (c0 >= 48 and c0 <= 57) or c0 == 45:
-            mut iv = _to_int(val)
-            bg.consts.append("const " + nm + ": c_int = " + iv.to_str() + "\n")
+            # Only a single clean integer/hex token. Skip arithmetic / suffixed / macro-ref values.
+            if _is_single_int_literal(val):
+                mut iv = _to_int(val)
+                bg.consts.append("const " + nm + ": c_int = " + iv.to_str() + "\n")
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  C++ mode (`-h cpp`) — auto-generate a C++→C shim + Tauraro bindings via libclang.
@@ -1398,12 +1671,16 @@ def main(args: List[str]):
     mut sb = StringBuilder.init(4096)
     sb.append("# Auto-generated FFI bindings for " + header + " (tauraro-bindgen).\n\n")
     mut ts = bg.types.to_string().as_str()
-    if ts != "": sb.append(ts + "\n")
     mut ss = bg.structs.to_string().as_str()
-    if ss != "": sb.append(ss)
     mut cs = bg.consts.to_string().as_str()
-    if cs != "": sb.append(cs + "\n")
     mut fs = bg.funcs.to_string().as_str()
+    # Forward-declare any type referenced by the bindings but defined in a filtered
+    # system/sub-header, so the output compiles (opaque, pass-by-Pointer).
+    mut fb = _opaque_fallbacks(ts + ss + fs, bg.seen)
+    if fb != "": sb.append(fb)
+    if ts != "": sb.append(ts + "\n")
+    if ss != "": sb.append(ss)
+    if cs != "": sb.append(cs + "\n")
     if fs != "":
         sb.append("extern \"C\":\n")
         sb.append(fs)

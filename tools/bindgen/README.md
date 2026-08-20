@@ -55,16 +55,38 @@ compile, link, and run against the real library.
 
 ## Status
 
-Validated end-to-end on **two real production libraries** — generated, compiled, linked, and run
-with correct results:
+Verified on **six large production headers** — all generate bindings that **compile**, and the
+linked ones **run** with correct results:
 
-- **zlib** (`zlib.h`, 1938 lines: local `zconf.h`, opaque structs, function pointers, pointer
-  typedefs, forward declarations, ~80 functions, `Z_*` constants) → linked against `libz` →
-  `crc32(0,"hello",5)` = 907060870, `compressBound(1000)` = 1013.
-- **sqlite3** (`sqlite3.h`, 13,775 lines: 292 functions, 32 types, callbacks, `va_list`, inline
-  function-pointer params) → linked against `libsqlite3` → `sqlite3_libversion_number()` = 3050004.
+| Header | Size | Extracted | Compiles | Linked call |
+|---|---|---|---|---|
+| **sqlite3.h** | 14,349 ln | 32 types, 298 fns | ✅ | `sqlite3_libversion_number()` = 3053004 |
+| **cairo.h** | 3,348 ln | 20 types, 345 fns | ✅ | — |
+| **curl.h** | 3,347 ln | 22 types, 100 fns | ✅ | `curl_easy_init()` ok |
+| **libpng16/png.h** | 3,618 ln | 13 types, 276 fns | ✅ | `png_access_version_number()` = 10658 |
+| **zlib.h** | 2,057 ln | 4 types, 89 fns | ✅ | `compressBound(1000)` = 1013 |
+| **GL/gl.h** | 1,044 ln | 336 fns | ✅ | — |
 
-Also verified struct-by-value returns, enums, and `#define` constants on synthetic headers.
+Getting these to compile drove several parser hardenings that any complex real header needs:
+
+- **Parenthesized/attribute-wrapped declarators** — `RET (__attribute__((__cdecl__)) name)(args)`
+  (libpng's `PNG_EXPORT`). Without this, png bound **0** functions; now 276.
+- **Nested anonymous struct/union fields** — flattened with a `field_` prefix (curl's
+  `curl_fileinfo.strings`), instead of leaking members into the parent (duplicate-member C error).
+- **Function *definitions* in headers** (`static inline`, curl's `typecheck-gcc.h` warning stubs)
+  are skipped — they're never linkable externs.
+- **`__attribute__`/`__declspec` on enumerators and fields** are stripped.
+- **`#define` values that aren't a single clean literal** (string concatenation, macro references,
+  arithmetic) are skipped rather than emitted as invalid Tauraro.
+- **Referenced-but-undefined types** (defined in a filtered system/sub-header — `png_error_ptr`,
+  `struct sockaddr`) are forward-declared as opaque `type X = Pointer[void]`, so the binding
+  compiles. Correct for pointer-passed / function-pointer types; by-value layout is approximate.
+- Scalar **type-alias returns** (`type uLong = c_ulong`; `compressBound() -> uLong`) resolve so
+  `.to_str()`/arithmetic work without a manual cast (compiler-side alias resolution).
+
+> A typedef defined in a filtered *sub-header* is bound opaque (`Pointer[void]`); this is correct
+> for handle/callback types but a scalar typedef so bound needs an `as int`/`as c_ulong` cast if you
+> do arithmetic on it directly. This is the inherent "hard tail" of header binding.
 
 > Reading a C-returned **borrowed** `const char*` (e.g. `zlibVersion()`) with `x as str` is
 > unsafe — it wraps a string the library owns as a Tauraro-owned string and frees it on drop.

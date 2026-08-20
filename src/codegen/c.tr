@@ -225,6 +225,7 @@ pub class CGenerator:
     pub decorator_defs:   Map[str, HirFunction]  # user-defined decorator registry
     pub overloaded_sigs:  Map[str, bool]          # "ClassName_method" keys where multiple overloads exist
     pub type_alias_map:   Map[str, str]           # alias_name -> resolved C type string
+    pub type_alias_tr:    Map[str, str]           # alias_name -> target TAURARO type name (for scalar-alias resolution)
     pub defer_stack:      Vec[str]                # deferred C statements for current function (LIFO)
     pub wrap_temp_decls:  Vec[str]                # pending "TrStr _wtN = (_tr_str_wrap(...))" decls for the current top-level expr
     pub wrap_temp_names:  Vec[str]                # names of the above, to _tr_str_release after the expr is consumed
@@ -301,6 +302,7 @@ pub class CGenerator:
         g.decorator_defs  = Map[str, HirFunction].init(16)
         g.overloaded_sigs = Map[str, bool].init(32)
         g.type_alias_map  = Map[str, str].init(16)
+        g.type_alias_tr   = Map[str, str].init(16)
         g.defer_stack     = Vec[str].init(0)
         g.wrap_temp_decls = Vec[str].init(0)
         g.wrap_temp_names = Vec[str].init(0)
@@ -3993,6 +3995,18 @@ pub class CGenerator:
             i = i + 1
         return s
 
+    # Follow a type-alias chain to its underlying Tauraro type name (`uLongf`->`uLong`->`c_ulong`).
+    # Bounded to avoid an accidental cycle; returns the last name reached.
+    pub def _resolve_alias_tr(self, name: str) -> str:
+        mut cur = name
+        mut hops = 0
+        while hops < 12 and self.type_alias_tr.contains(cur):
+            mut nxt = self.type_alias_tr.get(cur)
+            if nxt == cur or nxt == "": return cur
+            cur = nxt
+            hops = hops + 1
+        return cur
+
     pub def gen_method_call(self, obj: Pointer[HirExpr], method: str, args: Vec[Pointer[HirExpr]], call_ty: AstType) -> str:
         mut obj_s = self.gen_expr(obj)
         mut t_n: str = hir_expr_type(obj).name
@@ -4001,6 +4015,15 @@ pub class CGenerator:
         # dispatch to the concrete type's method (x.show() -> Cat_show, not T_show).
         if self.type_subst.contains(t_n):
             t_n = self.resolve_generic_tyname(t_n)
+
+        # Resolve a scalar type-alias to its underlying primitive so `.to_str()`/`.to_float()`
+        # etc. work on FFI typedefs (`type uLong = c_ulong`; `compressBound() -> uLong`). Only
+        # rewrite when the alias resolves to a numeric/bool/char primitive — never to a class,
+        # so user-class method dispatch is unaffected.
+        if not _is_int_type(t_n) and not _is_float_type(t_n) and self.type_alias_tr.contains(t_n):
+            mut _ual = self._resolve_alias_tr(t_n)
+            if _is_int_type(_ual) or _is_float_type(_ual) or _ual == "bool" or _ual == "char":
+                t_n = _ual
 
         # Fixed-size array element read a[i]: sema lowers to EMethodCall(a,"get_index",[i]).
         # Emit a bounds-checked aggregate index; N is the compile-time length on the type.
@@ -7802,6 +7825,7 @@ pub class CGenerator:
                 mut ta_ty_p = prog.type_alias_types.get(tai)
                 if ta_ty_p as usize != 0 as usize:
                     self.type_alias_map.insert(ta_name, self.type_to_c(ta_ty_p.read()))
+                    self.type_alias_tr.insert(ta_name, ta_ty_p.read().name)
                 tai = tai + 1
         mut i = 0
         while i < prog.classes.len:
