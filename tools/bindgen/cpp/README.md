@@ -190,17 +190,31 @@ The walker resolves each type through its **canonical type** (libclang's `clang_
 Verified end-to-end (`use_canon.tr`): `bounds.w` reads a by-value struct field, `name()` returns a
 native string, `process()` returns a typedef'd `long` with an enum-by-value argument.
 
+## Templates & std:: containers — automated via forced instantiation
+
+A `template<class T> class Box` has no concrete methods until instantiated, so a naive walk skips it.
+Instead of requiring the user to hand-write `template class Box<int>;`, the bindgen does it
+**automatically**:
+
+1. A first walk collects every template specialization that appears in the API (any type spelling
+   with `<…>` — `Box<int>`, `std::vector<int>`).
+2. It generates a synthetic TU (`#include "hdr"` + `template class Box<int>;` per spec) and does a
+   second `--inst` walk. libclang now exposes each instantiation.
+3. For each, the walker binds the primary template's methods with the type parameters **substituted
+   at the CXType level** (a `T`/`value_type`/`type-parameter-0-i` type is replaced by the concrete
+   arg, keeping pointer/ref depth), so `T get()` → `int get()`, `const T& ref()` → `Pointer[c_int]`.
+   Methods whose signature still carries an unresolved dependent type (`vector<_Tp,_Alloc>` self-copy
+   ctor, `at()`'s internal `__alloc_traits<…>` reference) are skipped, so the shim always compiles.
+
+Verified end-to-end: a user template (`use_box.tr`: `Box<int>` — ctor/get/set, `makeBox` returns
+`Box<int>`) and **`std::vector<int>`** (`use_vec.tr`: a C++ function returns a vector; Tauraro reads
+`size()` and elements via `data()`). This automates both the template and the `std::` container tail.
+
 ## Honest scope / remaining hard tail
 
-The walker uses the *real* Clang parser, so parsing is complete, and canonical resolution handles
-scalars/enums/POD-structs/`std::string`. What genuinely remains (the same for every AOT binder):
-
-- **Templates** need explicit instantiation. A `template<class T> class Box` is not a concrete type
-  and a bare `typedef Box<int>` does **not** instantiate it, so libclang has no concrete methods to
-  bind — you must instantiate it (e.g. `template class Box<int>;`) for the members to exist. This is
-  fundamental to AOT binding (SWIG's `%template`, etc.).
-- **`std::` containers other than `string`** (`std::vector`, `std::map`, …) cross as opaque handles;
-  element access needs a thin accessor.
-- **System *record* types from another header** (e.g. Windows COM `comdef.h`'s `_GUID`/`IUnknown`
-  by value) still collide with the system definition the runtime pulls in — the *scalars* now bind
-  correctly, but by-value system structs are the residual tail; bind those through a narrow shim.
+- **std:: container *element* methods** — `at()`/`operator[]`/`front()` return an internal
+  `reference` type that stays dependent, so they're skipped; use `data()` + `size()` for element
+  access (`push_back`, `size`, `capacity`, `empty`, `clear`, `data` all bind).
+- **System *record* types from another header** (Windows COM `comdef.h`'s `_GUID`/`IUnknown` by
+  value) still collide with the definition the runtime pulls in — the *scalars* bind correctly, but
+  by-value system structs are the residual tail; bind those through a narrow shim.

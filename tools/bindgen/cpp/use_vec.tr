@@ -1,0 +1,9 @@
+from vec import nums_range, std__vector_int__size, std__vector_int__data
+def main():
+    mut v = nums_range(4)
+    print("size = " + std__vector_int__size(v).to_str())
+    mut p = std__vector_int__data(v)
+    unsafe:
+        print("v[2] = " + p.offset(2).read().to_str())
+        print("v[3] = " + p.offset(3).read().to_str())
+    print("ok")

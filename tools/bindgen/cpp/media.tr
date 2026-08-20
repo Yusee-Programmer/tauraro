@@ -5,11 +5,9 @@
 
 class Buffer:
     pass
-class Encoder:
-    pass
-class std__string:
-    pass
 class Stats:
+    pass
+class Encoder:
     pass
 class FastEncoder:
     pass
@@ -18,7 +16,7 @@ type Codec = c_int
 const H264 = 0
 const H265 = 1
 const AV1 = 2
-type Flags = c_int
+type Flags = c_uint
 const FLAG_NONE = 0
 const FLAG_FAST = 1
 const FLAG_HQ = 2
@@ -40,8 +38,8 @@ extern "C":
     def media_Encoder_delete(obj: Encoder)
     def media_Encoder_process(obj: Encoder, in_: Buffer, out: Buffer) -> c_int
     def media_Encoder_setFlag(obj: Encoder, f: Flags)
-    def media_Encoder_name(obj: Encoder) -> std__string
-    def media_Encoder_setName(obj: Encoder, n: std__string)
+    def media_Encoder_name(obj: Encoder) -> Pointer[char]
+    def media_Encoder_setName(obj: Encoder, n: Pointer[char])
     def media_Encoder_ratio(obj: Encoder) -> c_double
     def media_Encoder_Stats_new() -> Stats
     def media_Encoder_Stats_frames(obj: Stats) -> c_long

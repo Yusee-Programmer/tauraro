@@ -1139,67 +1139,117 @@ def _cxxwalk_src() -> str:
     sb.append("#include <clang-c/Index.h>\n")
     sb.append("#include <stdio.h>\n")
     sb.append("#include <string.h>\n")
+    sb.append("#include <stdlib.h>\n")
     sb.append("static const char* S(CXString s){ const char* p=clang_getCString(s); return p?p:\"\"; }\n")
     sb.append("static const char* scalar(enum CXTypeKind k){\n")
-    sb.append("  switch(k){\n")
-    sb.append("    case CXType_Bool: return \"bool\";\n")
-    sb.append("    case CXType_Char_S: case CXType_SChar: return \"c_schar\"; case CXType_Char_U: case CXType_UChar: return \"c_uchar\";\n")
-    sb.append("    case CXType_Char16: return \"c_uint16_t\"; case CXType_Char32: return \"c_uint32_t\"; case CXType_WChar: return \"c_int\";\n")
-    sb.append("    case CXType_Short: return \"c_short\"; case CXType_UShort: return \"c_ushort\";\n")
-    sb.append("    case CXType_Int: return \"c_int\"; case CXType_UInt: return \"c_uint\";\n")
-    sb.append("    case CXType_Long: return \"c_long\"; case CXType_ULong: return \"c_ulong\";\n")
-    sb.append("    case CXType_LongLong: return \"c_longlong\"; case CXType_ULongLong: return \"c_ulonglong\";\n")
-    sb.append("    case CXType_Float: return \"c_float\"; case CXType_Double: return \"c_double\"; case CXType_LongDouble: return \"c_ldouble\";\n")
-    sb.append("    default: return \"\";\n")
-    sb.append("  }\n")
+    sb.append("  switch(k){ case CXType_Bool:return \"bool\";\n")
+    sb.append("    case CXType_Char_S:case CXType_SChar:return \"c_schar\"; case CXType_Char_U:case CXType_UChar:return \"c_uchar\";\n")
+    sb.append("    case CXType_Char16:return \"c_uint16_t\"; case CXType_Char32:return \"c_uint32_t\"; case CXType_WChar:return \"c_int\";\n")
+    sb.append("    case CXType_Short:return \"c_short\"; case CXType_UShort:return \"c_ushort\"; case CXType_Int:return \"c_int\"; case CXType_UInt:return \"c_uint\";\n")
+    sb.append("    case CXType_Long:return \"c_long\"; case CXType_ULong:return \"c_ulong\"; case CXType_LongLong:return \"c_longlong\"; case CXType_ULongLong:return \"c_ulonglong\";\n")
+    sb.append("    case CXType_Float:return \"c_float\"; case CXType_Double:return \"c_double\"; case CXType_LongDouble:return \"c_ldouble\"; default:return \"\"; }\n")
     sb.append("}\n")
-    sb.append("// descriptor: ptrdepth~isref~cat~detail   cat: v p e r s u f a\n")
-    sb.append("static void td(CXType t){\n")
-    sb.append("  int depth=0, isref=0;\n")
-    sb.append("  CXType cur=clang_getCanonicalType(t);\n")
-    sb.append("  while(1){\n")
-    sb.append("    if(cur.kind==CXType_Pointer){ depth++; cur=clang_getCanonicalType(clang_getPointeeType(cur)); }\n")
-    sb.append("    else if(cur.kind==CXType_LValueReference||cur.kind==CXType_RValueReference){ isref=1; depth++; cur=clang_getCanonicalType(clang_getPointeeType(cur)); }\n")
-    sb.append("    else break;\n")
-    sb.append("  }\n")
+    sb.append("static char g_params[8][64]; static CXType g_args[8]; static int g_np=0;\n")
+    sb.append("/* whole-identifier-token search: does `needle` appear in `hay` bounded by non-ident chars? */\n")
+    sb.append("static int has_token(const char* hay, const char* needle){\n")
+    sb.append("  int nl=strlen(needle); if(nl==0) return 0; const char* p=hay;\n")
+    sb.append("  while((p=strstr(p,needle))){ char b=(p==hay)?0:p[-1]; char a=p[nl];\n")
+    sb.append("    int lb=!((b>='A'&&b<='Z')||(b>='a'&&b<='z')||(b>='0'&&b<='9')||b=='_');\n")
+    sb.append("    int la=!((a>='A'&&a<='Z')||(a>='a'&&a<='z')||(a>='0'&&a<='9')||a=='_');\n")
+    sb.append("    if(lb&&la) return 1; p+=nl; }\n")
+    sb.append("  return 0;\n")
+    sb.append("}\n")
+    sb.append("static void classify(int depth,int ref,CXType cur){\n")
     sb.append("  enum CXTypeKind k=cur.kind; const char* sc=scalar(k);\n")
-    sb.append("  if(k==CXType_Void) printf(\"%d~%d~v~\", depth, isref);\n")
-    sb.append("  else if(sc[0]) printf(\"%d~%d~p~%s\", depth, isref, sc);\n")
+    sb.append("  if(k==CXType_Void) printf(\"%d~%d~v~\", depth, ref);\n")
+    sb.append("  else if(sc[0]) printf(\"%d~%d~p~%s\", depth, ref, sc);\n")
     sb.append("  else if(k==CXType_Enum){ CXType u=clang_getEnumDeclIntegerType(clang_getTypeDeclaration(cur)); const char* us=scalar(u.kind); if(!us[0])us=\"c_int\";\n")
-    sb.append("    CXString sp=clang_getTypeSpelling(cur); printf(\"%d~%d~e~%s#%s\", depth, isref, S(sp), us); clang_disposeString(sp); }\n")
+    sb.append("    CXString sp=clang_getTypeSpelling(cur); printf(\"%d~%d~e~%s#%s\", depth, ref, S(sp), us); clang_disposeString(sp); }\n")
     sb.append("  else if(k==CXType_Record){ CXString sp=clang_getTypeSpelling(cur); const char* r=S(sp); if(strncmp(r,\"const \",6)==0)r+=6; if(strncmp(r,\"volatile \",9)==0)r+=9;\n")
-    sb.append("    if(strncmp(r,\"std::basic_string\",17)==0) printf(\"%d~%d~s~string\", depth, isref);\n")
-    sb.append("    else printf(\"%d~%d~r~%s\", depth, isref, r);\n")
-    sb.append("    clang_disposeString(sp); }\n")
-    sb.append("  else if(k==CXType_FunctionProto){ CXString sp=clang_getTypeSpelling(clang_getCanonicalType(t)); printf(\"%d~%d~f~%s\", depth, isref, S(sp)); clang_disposeString(sp); }\n")
-    sb.append("  else { CXString sp=clang_getTypeSpelling(cur); printf(\"%d~%d~u~%s\", depth, isref, S(sp)); clang_disposeString(sp); }\n")
+    sb.append("    if(strncmp(r,\"std::basic_string\",17)==0) printf(\"%d~%d~s~string\", depth, ref);\n")
+    sb.append("    else printf(\"%d~%d~r~%s\", depth, ref, r); clang_disposeString(sp); }\n")
+    sb.append("  else if(k==CXType_FunctionProto){ CXString sp=clang_getTypeSpelling(clang_getCanonicalType(cur)); printf(\"%d~%d~f~%s\", depth, ref, S(sp)); clang_disposeString(sp); }\n")
+    sb.append("  else { CXString sp=clang_getTypeSpelling(cur); printf(\"%d~%d~u~%s\", depth, ref, S(sp)); clang_disposeString(sp); }\n")
+    sb.append("}\n")
+    sb.append("static void tds(CXType t){\n")
+    sb.append("  int depth=0,ref=0; CXType cur=t;\n")
+    sb.append("  while(1){ CXType cc=clang_getCanonicalType(cur);\n")
+    sb.append("    if(cc.kind==CXType_Pointer){depth++;cur=clang_getPointeeType(cur);}\n")
+    sb.append("    else if(cc.kind==CXType_LValueReference||cc.kind==CXType_RValueReference){ref=1;depth++;cur=clang_getPointeeType(cur);}\n")
+    sb.append("    else break; }\n")
+    sb.append("  CXType fcan=clang_getCanonicalType(cur);\n")
+    sb.append("  if(g_np>0){\n")
+    sb.append("    // A template-parameter-dependent type has canonical spelling \"type-parameter-0-<i>\" (even\n")
+    sb.append("    // when written via a typedef like value_type/reference) — substitute the concrete arg i.\n")
+    sb.append("    CXString sp=clang_getTypeSpelling(fcan); const char* r=S(sp); if(strncmp(r,\"const \",6)==0)r+=6; if(strncmp(r,\"volatile \",9)==0)r+=9;\n")
+    sb.append("    if(strncmp(r,\"type-parameter-0-\",17)==0){ int idx=atoi(r+17); if(idx>=0 && idx<g_np){ clang_disposeString(sp); classify(depth,ref,clang_getCanonicalType(g_args[idx])); return; } }\n")
+    sb.append("    // fallback: match the parameter name literally (direct `T` uses)\n")
+    sb.append("    for(int i=0;i<g_np;i++){ if(strcmp(r,g_params[i])==0){ clang_disposeString(sp); classify(depth,ref,clang_getCanonicalType(g_args[i])); return; } }\n")
+    sb.append("    // Any type still carrying an un-substituted template param (self-type copy-ctor\n")
+    sb.append("    // `vector<_Tp,_Alloc>`, or an internal `__alloc_traits<…>` type — often kind Unexposed,\n")
+    sb.append("    // not Record) is dependent -> mark 'd' so the generator skips the whole method (its shim\n")
+    sb.append("    // would be un-nameable). Applies regardless of kind.\n")
+    sb.append("    int dep=has_token(r,\"type-parameter\");\n")
+    sb.append("    for(int i=0;i<g_np && !dep;i++) dep=has_token(r,g_params[i]);\n")
+    sb.append("    if(dep){ printf(\"%d~%d~d~\", depth, ref); clang_disposeString(sp); return; }\n")
+    sb.append("    clang_disposeString(sp);\n")
+    sb.append("  }\n")
+    sb.append("  classify(depth,ref,fcan);\n")
     sb.append("}\n")
     sb.append("static void params(CXCursor c){ int n=clang_Cursor_getNumArguments(c);\n")
     sb.append("  for(int i=0;i<n;i++){ CXCursor a=clang_Cursor_getArgument(c,i); CXString nm=clang_getCursorSpelling(a); const char* nn=S(nm);\n")
-    sb.append("    printf(\"PARAM \"); td(clang_getArgType(clang_getCursorType(c),i)); if(nn[0]) printf(\"|%s\\n\",nn); else printf(\"|a%d\\n\",i); clang_disposeString(nm); } }\n")
+    sb.append("    printf(\"PARAM \"); tds(clang_getArgType(clang_getCursorType(c),i)); if(nn[0])printf(\"|%s\\n\",nn); else printf(\"|a%d\\n\",i); clang_disposeString(nm); } }\n")
     sb.append("static enum CXChildVisitResult fld(CXCursor c, CXCursor p, CXClientData d){\n")
-    sb.append("  if(clang_getCursorKind(c)==CXCursor_FieldDecl && clang_getCXXAccessSpecifier(c)==CX_CXXPublic){\n")
-    sb.append("    printf(\"FIELD \"); td(clang_getCursorType(c)); printf(\"|%s\\n\", S(clang_getCursorSpelling(c))); }\n")
+    sb.append("  if(clang_getCursorKind(c)==CXCursor_FieldDecl && clang_getCXXAccessSpecifier(c)==CX_CXXPublic){ printf(\"FIELD \"); tds(clang_getCursorType(c)); printf(\"|%s\\n\", S(clang_getCursorSpelling(c))); }\n")
     sb.append("  return CXChildVisit_Continue; }\n")
     sb.append("static enum CXChildVisitResult visit(CXCursor c, CXCursor p, CXClientData d){\n")
     sb.append("  if(!clang_Location_isFromMainFile(clang_getCursorLocation(c))) return CXChildVisit_Continue;\n")
     sb.append("  enum CXCursorKind k=clang_getCursorKind(c); CXString nmS=clang_getCursorSpelling(c); const char* nm=S(nmS);\n")
     sb.append("  if(k==CXCursor_Namespace){ printf(\"NS %s\\n\",nm); clang_visitChildren(c,visit,0); printf(\"ENS\\n\"); }\n")
     sb.append("  else if((k==CXCursor_ClassDecl||k==CXCursor_StructDecl)&&clang_isCursorDefinition(c)){\n")
-    sb.append("    CXType rt=clang_getCursorType(c);\n")
-    sb.append("    printf(\"CLASS %s %d\\n\",nm, clang_isPODType(rt)); clang_visitChildren(c,fld,0); clang_visitChildren(c,visit,0); printf(\"ECLASS\\n\"); }\n")
+    sb.append("    CXType rt=clang_getCursorType(c); printf(\"CLASS %s %d\\n\",nm, clang_isPODType(rt)); clang_visitChildren(c,fld,0); clang_visitChildren(c,visit,0); printf(\"ECLASS\\n\"); }\n")
     sb.append("  else if(k==CXCursor_CXXMethod && clang_getCXXAccessSpecifier(c)==CX_CXXPublic){\n")
-    sb.append("    printf(\"METHOD %c%c \", clang_CXXMethod_isStatic(c)?'s':'.', clang_CXXMethod_isConst(c)?'c':'.'); td(clang_getResultType(clang_getCursorType(c))); printf(\"|%s\\n\",nm); params(c); printf(\"EMETHOD\\n\"); }\n")
+    sb.append("    printf(\"METHOD %c%c \", clang_CXXMethod_isStatic(c)?'s':'.', clang_CXXMethod_isConst(c)?'c':'.'); tds(clang_getResultType(clang_getCursorType(c))); printf(\"|%s\\n\",nm); params(c); printf(\"EMETHOD\\n\"); }\n")
     sb.append("  else if(k==CXCursor_Constructor && clang_getCXXAccessSpecifier(c)==CX_CXXPublic){ printf(\"CTOR\\n\"); params(c); printf(\"ECTOR\\n\"); }\n")
     sb.append("  else if(k==CXCursor_Destructor) printf(\"DTOR\\n\");\n")
-    sb.append("  else if(k==CXCursor_FunctionDecl){ printf(\"FUNC \"); td(clang_getResultType(clang_getCursorType(c))); printf(\"|%s\\n\",nm); params(c); printf(\"EFUNC\\n\"); }\n")
-    sb.append("  else if(k==CXCursor_EnumDecl){ CXType u=clang_getEnumDeclIntegerType(c); const char* us=scalar(u.kind); if(!us[0])us=\"c_int\";\n")
-    sb.append("    printf(\"ENUM %s %s\\n\", nm[0]?nm:\"anon\", us); clang_visitChildren(c,visit,0); printf(\"EENUM\\n\"); }\n")
+    sb.append("  else if(k==CXCursor_FunctionDecl){ printf(\"FUNC \"); tds(clang_getResultType(clang_getCursorType(c))); printf(\"|%s\\n\",nm); params(c); printf(\"EFUNC\\n\"); }\n")
+    sb.append("  else if(k==CXCursor_EnumDecl){ CXType u=clang_getEnumDeclIntegerType(c); const char* us=scalar(u.kind); if(!us[0])us=\"c_int\"; printf(\"ENUM %s %s\\n\", nm[0]?nm:\"anon\", us); clang_visitChildren(c,visit,0); printf(\"EENUM\\n\"); }\n")
     sb.append("  else if(k==CXCursor_EnumConstantDecl) printf(\"EVAL %s %lld\\n\", nm, (long long)clang_getEnumConstantDeclValue(c));\n")
     sb.append("  clang_disposeString(nmS); return CXChildVisit_Continue; }\n")
-    sb.append("int main(int argc,char**argv){ if(argc<2){fprintf(stderr,\"usage\\n\");return 2;} CXIndex idx=clang_createIndex(0,0);\n")
-    sb.append("  CXTranslationUnit tu=clang_parseTranslationUnit(idx,argv[1],(const char**)(argv+2),argc-2,0,0,0);\n")
-    sb.append("  if(!tu){fprintf(stderr,\"parse failed\\n\");return 1;} clang_visitChildren(clang_getTranslationUnitCursor(tu),visit,0); return 0; }\n")
+    sb.append("static enum CXChildVisitResult collectparams(CXCursor cc, CXCursor pp, CXClientData dd){\n")
+    sb.append("  if(clang_getCursorKind(cc)==CXCursor_TemplateTypeParameter && g_np<8){ strncpy(g_params[g_np], S(clang_getCursorSpelling(cc)), 63); g_params[g_np][63]=0; g_np++; }\n")
+    sb.append("  return CXChildVisit_Continue; }\n")
+    sb.append("static enum CXChildVisitResult imeth(CXCursor c, CXCursor p, CXClientData d){\n")
+    sb.append("  enum CXCursorKind k=clang_getCursorKind(c);\n")
+    sb.append("  if(k==CXCursor_CXXMethod && clang_getCXXAccessSpecifier(c)==CX_CXXPublic){\n")
+    sb.append("    printf(\"METHOD %c%c \", clang_CXXMethod_isStatic(c)?'s':'.', clang_CXXMethod_isConst(c)?'c':'.'); tds(clang_getResultType(clang_getCursorType(c))); printf(\"|%s\\n\", S(clang_getCursorSpelling(c))); params(c); printf(\"EMETHOD\\n\"); }\n")
+    sb.append("  else if(k==CXCursor_Constructor && clang_getCXXAccessSpecifier(c)==CX_CXXPublic){ printf(\"CTOR\\n\"); params(c); printf(\"ECTOR\\n\"); }\n")
+    sb.append("  return CXChildVisit_Continue; }\n")
+    sb.append("static enum CXChildVisitResult inst(CXCursor c, CXCursor p, CXClientData d){\n")
+    sb.append("  if(clang_getCursorKind(c)==CXCursor_ClassDecl && clang_isCursorDefinition(c)){\n")
+    sb.append("    CXCursor tmpl=clang_getSpecializedCursorTemplate(c);\n")
+    sb.append("    if(!clang_Cursor_isNull(tmpl)){\n")
+    sb.append("      CXType ct=clang_getCursorType(c); g_np=0; clang_visitChildren(tmpl, collectparams, 0);\n")
+    sb.append("      int na=clang_Type_getNumTemplateArguments(ct); for(int i=0;i<na && i<8;i++) g_args[i]=clang_Type_getTemplateArgumentAsType(ct,i);\n")
+    sb.append("      printf(\"TCLASS %s %d\\n\", S(clang_getTypeSpelling(ct)), clang_isPODType(ct));\n")
+    sb.append("      clang_visitChildren(tmpl, imeth, 0); printf(\"ECLASS\\n\"); g_np=0;\n")
+    sb.append("    }\n")
+    sb.append("  }\n")
+    sb.append("  return CXChildVisit_Continue; }\n")
+    sb.append("int main(int argc,char**argv){\n")
+    sb.append("  int inst_mode=0, off=1;\n")
+    sb.append("  if(argc>1 && strcmp(argv[1],\"--inst\")==0){ inst_mode=1; off=2; }\n")
+    sb.append("  if(argc<off+1){ fprintf(stderr,\"usage: cxxwalk [--inst] <header> [clang args...]\\n\"); return 2; }\n")
+    sb.append("  CXIndex idx=clang_createIndex(0,0);\n")
+    sb.append("  CXTranslationUnit tu=clang_parseTranslationUnit(idx,argv[off],(const char**)(argv+off+1),argc-off-1,0,0,0);\n")
+    sb.append("  if(!tu){ fprintf(stderr,\"cxxwalk: libclang could not create a translation unit\\n\"); return 1; }\n")
+    sb.append("  unsigned nd=clang_getNumDiagnostics(tu), nerr=0, nfatal=0;\n")
+    sb.append("  for(unsigned i=0;i<nd;i++){ CXDiagnostic dg=clang_getDiagnostic(tu,i); enum CXDiagnosticSeverity sv=clang_getDiagnosticSeverity(dg);\n")
+    sb.append("    if(sv>=CXDiagnostic_Error){ CXString ds=clang_formatDiagnostic(dg,clang_defaultDiagnosticDisplayOptions()); fprintf(stderr,\"DIAG %s\\n\",clang_getCString(ds)); clang_disposeString(ds); nerr++; if(sv==CXDiagnostic_Fatal) nfatal++; }\n")
+    sb.append("    clang_disposeDiagnostic(dg); }\n")
+    sb.append("  fprintf(stderr,\"DIAGERR %u %u\\n\", nerr, nfatal);\n")
+    sb.append("  clang_visitChildren(clang_getTranslationUnitCursor(tu), inst_mode?inst:visit, 0);\n")
+    sb.append("  clang_disposeTranslationUnit(tu); clang_disposeIndex(idx); return 0; }\n")
     return sb.to_string().as_str()
 
 # ── portable shell helpers (Windows cmd.exe vs POSIX sh) ─────────────────────────
@@ -1432,8 +1482,11 @@ def _cpp_ret_ex(desc: str, call: str, value_structs: Map[str, bool], class_names
         mut cpp = _c_to_cpp(detail)
         if rdepth == 0:
             r.push(cpp); r.push("return " + call + ";"); r.push(detail); return r
-        if rref: r.push(cpp + " " + _stars(rdepth)); r.push("return &(" + call + ");"); r.push(_ptr_wrap(detail, rdepth))
-        else: r.push(cpp + " " + _stars(rdepth)); r.push("return " + call + ";"); r.push(_ptr_wrap(detail, rdepth))
+        # C-style cast strips a `const` on a pointer/ref-to-primitive return (e.g. the const
+        # overload of `data()` returning `const int*`).
+        mut cty = cpp + " " + _stars(rdepth)
+        if rref: r.push(cty); r.push("return (" + cty + ")(&(" + call + "));"); r.push(_ptr_wrap(detail, rdepth))
+        else: r.push(cty); r.push("return (" + cty + ")(" + call + ");"); r.push(_ptr_wrap(detail, rdepth))
         return r
     if cat == "e":
         mut espell = detail.split("#").get(0)
@@ -1538,6 +1591,23 @@ def _desc4(desc: str) -> Vec[str]:
     r.push(det)
     return r
 
+# Parse a `TCLASS <spelling> <pod>` payload: the spelling may contain spaces (e.g.
+# `std::vector<int, std::allocator<int>>`), so pod is the LAST space-separated token.
+def _parse_tclass(rest: str) -> Vec[str]:
+    mut parts = rest.split(" ")
+    mut r = Vec[str].init(2)
+    if parts.len < 2:
+        r.push(rest); r.push("0"); return r
+    mut pod = parts.get(parts.len - 1)
+    mut sp = ""
+    mut i = 0
+    while i < parts.len - 1:
+        if sp == "": sp = parts.get(i)
+        else: sp = sp + " " + parts.get(i)
+        i = i + 1
+    r.push(sp); r.push(pod)
+    return r
+
 # `n` pointer stars.
 def _stars(n: int) -> str:
     mut s = ""
@@ -1632,6 +1702,11 @@ def _cpp_generate(ir: str, header: str, out: str):
             if cparts.len > 1: cpod = cparts.get(1)
             class_names.insert(cnm, true)
             ps_name.push(cnm); ps_pod.push(cpod); ps_nf.push("0")
+        elif pl.starts_with("TCLASS "):
+            mut tp = _parse_tclass(pl.slice(7, pl.len()))
+            mut tnm = _cpp_ident(tp.get(0))         # sanitized instantiation name (Box<int> -> Box_int_)
+            class_names.insert(tnm, true)
+            ps_name.push(tnm); ps_pod.push(tp.get(1)); ps_nf.push("0")
         elif pl.starts_with("FIELD "):
             if ps_nf.len > 0:
                 ps_nf.pop()          # mark innermost class as "has fields" (pop top, push "1")
@@ -1715,6 +1790,19 @@ def _cpp_generate(ir: str, header: str, out: str):
                 usings.append("using namespace " + ns_path + ";\n")
                 seen.insert("using:" + ns_path, true)
             continue
+        if line.starts_with("TCLASS "):
+            # A forced template instantiation (`Box<int>`): the Tauraro/symbol name is the
+            # sanitized spelling; the C++ qualified type (for the shim) is the raw spelling.
+            mut tp2 = _parse_tclass(line.slice(7, line.len()))
+            mut tspell = tp2.get(0)
+            mut tname = _cpp_ident(tspell)
+            cstk_name.push(tname)
+            cstk_qual.push(tspell)
+            cstk_pfx.push(tname)
+            class_qual.insert(tname, tspell)
+            fld_stack.push(fld_buf)
+            fld_buf = ""
+            continue
         if line.starts_with("CLASS "):
             mut crest = line.slice(6, line.len())
             mut ncls = crest.split(" ").get(0)     # "CLASS <name> <pod>"
@@ -1782,6 +1870,18 @@ def _cpp_generate(ir: str, header: str, out: str):
                 mode = ""; continue
             # ctor/method need a valid class context (skip anonymous-class members).
             if (mode == "ctor" or mode == "method") and not _is_clean_ident(cur_class):
+                mode = ""; continue
+            # Skip a method with any UNRESOLVED dependent type in its signature (a template
+            # `type-parameter`/`__alloc_traits<…>` that substitution couldn't reduce, e.g.
+            # std::vector's copy-ctor `vector<_Tp,_Alloc>` or `at()`'s internal reference type).
+            # Emitting it would produce an un-nameable C++ shim; the clean methods still bind.
+            mut has_dep = (m_ret.find("type-parameter") >= 0 or m_ret.find("~d~") >= 0)
+            mut pj = 0
+            while pj < params.len:
+                mut pvd = params.get(pj)
+                if pvd.find("type-parameter") >= 0 or pvd.find("~d~") >= 0: has_dep = true
+                pj = pj + 1
+            if has_dep:
                 mode = ""; continue
             mut shimp = ""
             mut trp = ""
@@ -2029,11 +2129,32 @@ def _cpp_ir_is_empty(ir: str) -> bool:
     return true
 
 def _cpp_cleanup():
-    _rm_files("_cxxwalk.c _cxxwalk.exe _cxx.ir _cxx_err.txt _cxx_diag.txt")
+    _rm_files("_cxxwalk.c _cxxwalk.exe _cxx.ir _cxx_err.txt _cxx_diag.txt _cxx_force.cpp _cxx_inst.ir")
 
 # Orchestrate C++ binding generation: detect libclang, build the walker, discover include
 # paths, run the walker, surface diagnostics, and generate the shim + bindings.
 #   extra = space-joined clang passthrough flags (user `-I`/`-D`/`-std=`), already shell-safe.
+# Collect the template specializations that appear in the API (any record descriptor whose
+# spelling contains `<`, e.g. `Box<int>`, `std::vector<int>`). These are what we force-instantiate.
+def _collect_specs(ir: str) -> Vec[str]:
+    mut specs = Vec[str].init(8)
+    mut seen: Map[str, bool] = Map[str, bool].init(16)
+    mut lines = ir.split("\n")
+    mut i = 0
+    while i < lines.len:
+        mut ln = lines.get(i)
+        i = i + 1
+        mut p = ln.find("~r~")
+        if p < 0: continue
+        mut rest = ln.slice(p + 3, ln.len())
+        mut detail = rest
+        mut bar = rest.find("|")
+        if bar >= 0: detail = rest.slice(0, bar)
+        if detail.find("<") >= 0 and not seen.contains(detail):
+            seen.insert(detail, true)
+            specs.push(detail)
+    return specs
+
 pub def run_bindgen_cpp(header: str, out: str, cc: str, extra: str):
     mut guide = _detect_libclang(cc)
     if guide != "":
@@ -2065,7 +2186,26 @@ pub def run_bindgen_cpp(header: str, out: str, cc: str, extra: str):
         _cpp_cleanup()
         return
     mut ir = read_file("_cxx.ir")
+    # TEMPLATE AUTOMATION: force-instantiate every specialization used in the API (`Box<int>`,
+    # `std::vector<int>`), then a second `--inst` walk resolves each into a concrete class with
+    # T-substituted methods. Appended to the IR so the generator binds them like any class.
+    mut specs = _collect_specs(ir)
+    mut n_specs = 0
+    if specs.len > 0:
+        mut fsb = StringBuilder.init(512)
+        fsb.append("#include \"" + header + "\"\n")
+        mut si = 0
+        while si < specs.len:
+            fsb.append("template class " + specs.get(si) + ";\n")
+            si = si + 1
+        write_file("_cxx_force.cpp", fsb.to_string().as_str())
+        _tr_system(_local_exe("_cxxwalk") + " --inst _cxx_force.cpp " + clang_args + " > _cxx_inst.ir 2>> _cxx_diag.txt")
+        if file_exists("_cxx_inst.ir") and not _cpp_ir_is_empty(read_file("_cxx_inst.ir")):
+            ir = ir + "\n" + read_file("_cxx_inst.ir")
+            n_specs = specs.len
     _cpp_generate(ir, header, out)
+    if n_specs > 0:
+        print("bindgen: instantiated " + n_specs.to_str() + " template specialization(s)")
     if nfatal > 0:
         print("bindgen: WARNING — libclang reported " + nfatal.to_str() + " fatal error(s); bindings may be INCOMPLETE:")
         _cpp_print_diag(diag)
