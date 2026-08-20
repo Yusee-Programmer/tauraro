@@ -11,7 +11,8 @@ extern "C" {
 std::map<int, double>* db_prices() { return new std::map<int, double>(db::prices()); }
 std::map<int, double>* std__map_int__double__new() { return new std::map<int, double>(); }
 std::map<int, double>* std__map_int__double__new_2(std::less<int> *__comp, std::allocator<std::pair<const int, double>> *__a) { return new std::map<int, double>(*__comp, *__a); }
-std::map<int, double>* std__map_int__double__new_3(std::allocator<std::pair<const int, double>> *__a) { return new std::map<int, double>(*__a); }
+std::map<int, double>* std__map_int__double__new_3(std::less<int> *__comp) { return new std::map<int, double>(*__comp); }
+std::map<int, double>* std__map_int__double__new_4(std::allocator<std::pair<const int, double>> *__a) { return new std::map<int, double>(*__a); }
 std::allocator<std::pair<const int, double>>* std__map_int__double__get_allocator(const std::map<int, double>* self) { return new std::allocator<std::pair<const int, double>>(self->get_allocator()); }
 bool std__map_int__double__empty(const std::map<int, double>* self) { return self->empty(); }
 size_t std__map_int__double__size(const std::map<int, double>* self) { return self->size(); }

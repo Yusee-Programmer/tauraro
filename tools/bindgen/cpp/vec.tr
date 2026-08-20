@@ -13,7 +13,9 @@ extern "C":
     def std__vector_int__new() -> std__vector_int_
     def std__vector_int__new_2(__a: std__allocator_int_) -> std__vector_int_
     def std__vector_int__new_3(__n: c_ulonglong, __a: std__allocator_int_) -> std__vector_int_
-    def std__vector_int__new_4(__n: c_ulonglong, __value: c_int, __a: std__allocator_int_) -> std__vector_int_
+    def std__vector_int__new_4(__n: c_ulonglong) -> std__vector_int_
+    def std__vector_int__new_5(__n: c_ulonglong, __value: c_int, __a: std__allocator_int_) -> std__vector_int_
+    def std__vector_int__new_6(__n: c_ulonglong, __value: c_int) -> std__vector_int_
     def std__vector_int__assign(obj: std__vector_int_, __n: c_ulonglong, __val: c_int)
     def std__vector_int__size(obj: std__vector_int_) -> c_ulonglong
     def std__vector_int__max_size(obj: std__vector_int_) -> c_ulonglong

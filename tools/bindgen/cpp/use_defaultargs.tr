@@ -1,0 +1,7 @@
+from defaultargs import w_W_new, w_W_area, w_W_area_2, w_W_area_3
+def main():
+    mut o = w_W_new()
+    print("area(3,7) = " + w_W_area(o, 3, 7).to_str())    # full: 37
+    print("area(3)   = " + w_W_area_2(o, 3).to_str())      # bias default 5: 35
+    print("area()    = " + w_W_area_3(o).to_str())         # both defaults: 25
+    print("ok")

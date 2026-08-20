@@ -1214,6 +1214,17 @@ def _cxxwalk_src() -> str:
     sb.append("static void params(CXCursor c){ int n=clang_Cursor_getNumArguments(c);\n")
     sb.append("  for(int i=0;i<n;i++){ CXCursor a=clang_Cursor_getArgument(c,i); CXString nm=clang_getCursorSpelling(a); const char* nn=S(nm);\n")
     sb.append("    printf(\"PARAM \"); tds(clang_getArgType(clang_getCursorType(c),i)); if(nn[0])printf(\"|%s\\n\",nn); else printf(\"|a%d\\n\",i); clang_disposeString(nm); } }\n")
+    sb.append("/* A parameter with a default argument has a child that is neither a type/namespace/template ref\n")
+    sb.append("   (those describe the type) — it's the default-value expression. Count the TRAILING defaults (C++\n")
+    sb.append("   requires defaults to be trailing) so the generator can emit shorter overloads. */\n")
+    sb.append("static int g_hasdef;\n")
+    sb.append("static enum CXChildVisitResult defck(CXCursor c, CXCursor p, CXClientData d){\n")
+    sb.append("  enum CXCursorKind k=clang_getCursorKind(c);\n")
+    sb.append("  if(k!=CXCursor_TypeRef && k!=CXCursor_NamespaceRef && k!=CXCursor_TemplateRef && k!=CXCursor_ParmDecl) g_hasdef=1;\n")
+    sb.append("  return CXChildVisit_Continue; }\n")
+    sb.append("static int count_defaults(CXCursor c){ int n=clang_Cursor_getNumArguments(c), d=0;\n")
+    sb.append("  for(int i=n-1;i>=0;i--){ g_hasdef=0; clang_visitChildren(clang_Cursor_getArgument(c,i), defck, 0); if(g_hasdef) d++; else break; }\n")
+    sb.append("  return d; }\n")
     sb.append("static enum CXChildVisitResult fld(CXCursor c, CXCursor p, CXClientData d){\n")
     sb.append("  if(clang_getCursorKind(c)==CXCursor_FieldDecl && clang_getCXXAccessSpecifier(c)==CX_CXXPublic){ printf(\"FIELD \"); tds(clang_getCursorType(c)); printf(\"|%s\\n\", S(clang_getCursorSpelling(c))); }\n")
     sb.append("  return CXChildVisit_Continue; }\n")
@@ -1225,8 +1236,8 @@ def _cxxwalk_src() -> str:
     sb.append("static void emit_method(CXCursor c){\n")
     sb.append("  enum CXCursorKind k=clang_getCursorKind(c);\n")
     sb.append("  if(k==CXCursor_CXXMethod && clang_getCXXAccessSpecifier(c)==CX_CXXPublic){\n")
-    sb.append("    printf(\"METHOD %c%c \", clang_CXXMethod_isStatic(c)?'s':'.', clang_CXXMethod_isConst(c)?'c':'.'); tds(clang_getResultType(clang_getCursorType(c))); printf(\"|%s\\n\", S(clang_getCursorSpelling(c))); params(c); printf(\"EMETHOD\\n\"); }\n")
-    sb.append("  else if(k==CXCursor_Constructor && clang_getCXXAccessSpecifier(c)==CX_CXXPublic){ printf(\"CTOR\\n\"); params(c); printf(\"ECTOR\\n\"); }\n")
+    sb.append("    printf(\"METHOD %c%c %d \", clang_CXXMethod_isStatic(c)?'s':'.', clang_CXXMethod_isConst(c)?'c':'.', count_defaults(c)); tds(clang_getResultType(clang_getCursorType(c))); printf(\"|%s\\n\", S(clang_getCursorSpelling(c))); params(c); printf(\"EMETHOD\\n\"); }\n")
+    sb.append("  else if(k==CXCursor_Constructor && clang_getCXXAccessSpecifier(c)==CX_CXXPublic){ printf(\"CTOR %d\\n\", count_defaults(c)); params(c); printf(\"ECTOR\\n\"); }\n")
     sb.append("  else if(k==CXCursor_Destructor) printf(\"DTOR\\n\");\n")
     sb.append("}\n")
     sb.append("static enum CXChildVisitResult ownmeth(CXCursor c, CXCursor p, CXClientData d){\n")
@@ -1270,10 +1281,10 @@ def _cxxwalk_src() -> str:
     sb.append("    g_nseenm=saved;\n")
     sb.append("    printf(\"ECLASS\\n\"); }\n")
     sb.append("  else if(k==CXCursor_CXXMethod && clang_getCXXAccessSpecifier(c)==CX_CXXPublic){\n")
-    sb.append("    printf(\"METHOD %c%c \", clang_CXXMethod_isStatic(c)?'s':'.', clang_CXXMethod_isConst(c)?'c':'.'); tds(clang_getResultType(clang_getCursorType(c))); printf(\"|%s\\n\",nm); params(c); printf(\"EMETHOD\\n\"); }\n")
-    sb.append("  else if(k==CXCursor_Constructor && clang_getCXXAccessSpecifier(c)==CX_CXXPublic){ printf(\"CTOR\\n\"); params(c); printf(\"ECTOR\\n\"); }\n")
+    sb.append("    printf(\"METHOD %c%c %d \", clang_CXXMethod_isStatic(c)?'s':'.', clang_CXXMethod_isConst(c)?'c':'.', count_defaults(c)); tds(clang_getResultType(clang_getCursorType(c))); printf(\"|%s\\n\",nm); params(c); printf(\"EMETHOD\\n\"); }\n")
+    sb.append("  else if(k==CXCursor_Constructor && clang_getCXXAccessSpecifier(c)==CX_CXXPublic){ printf(\"CTOR %d\\n\", count_defaults(c)); params(c); printf(\"ECTOR\\n\"); }\n")
     sb.append("  else if(k==CXCursor_Destructor) printf(\"DTOR\\n\");\n")
-    sb.append("  else if(k==CXCursor_FunctionDecl){ printf(\"FUNC \"); tds(clang_getResultType(clang_getCursorType(c))); printf(\"|%s\\n\",nm); params(c); printf(\"EFUNC\\n\"); }\n")
+    sb.append("  else if(k==CXCursor_FunctionDecl){ printf(\"FUNC %d \", count_defaults(c)); tds(clang_getResultType(clang_getCursorType(c))); printf(\"|%s\\n\",nm); params(c); printf(\"EFUNC\\n\"); }\n")
     sb.append("  else if(k==CXCursor_EnumDecl){ CXType u=clang_getEnumDeclIntegerType(c); const char* us=scalar(u.kind); if(!us[0])us=\"c_int\"; printf(\"ENUM %s %s\\n\", nm[0]?nm:\"anon\", us); clang_visitChildren(c,visit,0); printf(\"EENUM\\n\"); }\n")
     sb.append("  else if(k==CXCursor_EnumConstantDecl) printf(\"EVAL %s %lld\\n\", nm, (long long)clang_getEnumConstantDeclValue(c));\n")
     sb.append("  else if(k==CXCursor_TypedefDecl || k==CXCursor_TypeAliasDecl){\n")
@@ -1292,8 +1303,8 @@ def _cxxwalk_src() -> str:
     sb.append("static enum CXChildVisitResult imeth(CXCursor c, CXCursor p, CXClientData d){\n")
     sb.append("  enum CXCursorKind k=clang_getCursorKind(c);\n")
     sb.append("  if(k==CXCursor_CXXMethod && clang_getCXXAccessSpecifier(c)==CX_CXXPublic){\n")
-    sb.append("    printf(\"METHOD %c%c \", clang_CXXMethod_isStatic(c)?'s':'.', clang_CXXMethod_isConst(c)?'c':'.'); tds(clang_getResultType(clang_getCursorType(c))); printf(\"|%s\\n\", S(clang_getCursorSpelling(c))); params(c); printf(\"EMETHOD\\n\"); }\n")
-    sb.append("  else if(k==CXCursor_Constructor && clang_getCXXAccessSpecifier(c)==CX_CXXPublic){ printf(\"CTOR\\n\"); params(c); printf(\"ECTOR\\n\"); }\n")
+    sb.append("    printf(\"METHOD %c%c %d \", clang_CXXMethod_isStatic(c)?'s':'.', clang_CXXMethod_isConst(c)?'c':'.', count_defaults(c)); tds(clang_getResultType(clang_getCursorType(c))); printf(\"|%s\\n\", S(clang_getCursorSpelling(c))); params(c); printf(\"EMETHOD\\n\"); }\n")
+    sb.append("  else if(k==CXCursor_Constructor && clang_getCXXAccessSpecifier(c)==CX_CXXPublic){ printf(\"CTOR %d\\n\", count_defaults(c)); params(c); printf(\"ECTOR\\n\"); }\n")
     sb.append("  return CXChildVisit_Continue; }\n")
     sb.append("static enum CXChildVisitResult inst(CXCursor c, CXCursor p, CXClientData d){\n")
     sb.append("  if(clang_getCursorKind(c)==CXCursor_ClassDecl && clang_isCursorDefinition(c)){\n")
@@ -1827,6 +1838,7 @@ def _cpp_generate(ir: str, header: str, out: str):
     mut m_flags = ".."
     mut m_ret = ""
     mut m_name = ""
+    mut m_ndef = 0     # count of trailing default-argument params (→ shorter overloads)
     mut params: Vec[str] = Vec[str].init(4)
 
     mut lines = ir.split("\n")
@@ -1846,7 +1858,9 @@ def _cpp_generate(ir: str, header: str, out: str):
             cur_class_qual = cstk_qual.get(cstk_qual.len - 1)
             class_pfx = cstk_pfx.get(cstk_pfx.len - 1)
 
-        if line == "CTOR":
+        if line.starts_with("CTOR"):
+            m_ndef = 0
+            if line.len() > 5: m_ndef = _to_int(line.slice(5, line.len()))   # "CTOR <ndef>"
             mode = "ctor"; params = Vec[str].init(4); continue
         if line == "DTOR":
             if not _is_clean_ident(cur_class): continue
@@ -1981,16 +1995,22 @@ def _cpp_generate(ir: str, header: str, out: str):
                 seen.insert("eval:" + ename, true)
             continue
         if line.starts_with("METHOD "):
-            mut r = line.slice(7, line.len())
+            mut r = line.slice(7, line.len())      # "<flags> <ndef> <retdesc>|<name>"
             m_flags = r.slice(0, 2)
-            mut r2 = r.slice(3, r.len())
-            mut rn = r2.split("|")
+            mut r2 = r.slice(3, r.len())           # "<ndef> <retdesc>|<name>"
+            mut sp1 = r2.find(" ")
+            m_ndef = _to_int(r2.slice(0, sp1))
+            mut r3 = r2.slice(sp1 + 1, r2.len())   # "<retdesc>|<name>"
+            mut rn = r3.split("|")
             m_ret = rn.get(0)
             m_name = rn.get(1)
             mode = "method"; params = Vec[str].init(4); continue
         if line.starts_with("FUNC "):
-            mut r = line.slice(5, line.len())
-            mut rn = r.split("|")
+            mut r = line.slice(5, line.len())      # "<ndef> <retdesc>|<name>"
+            mut sp1 = r.find(" ")
+            m_ndef = _to_int(r.slice(0, sp1))
+            mut r3 = r.slice(sp1 + 1, r.len())
+            mut rn = r3.split("|")
             m_ret = rn.get(0)
             m_name = rn.get(1)
             m_flags = ".."
@@ -2021,127 +2041,145 @@ def _cpp_generate(ir: str, header: str, out: str):
                 pj = pj + 1
             if has_dep:
                 mode = ""; continue
-            mut shimp = ""
-            mut trp = ""
-            mut fargs = ""
-            if mode == "method" and not is_static:
-                if is_const: shimp = "const " + cur_class_qual + "* self"
-                else: shimp = cur_class_qual + "* self"
-                trp = "obj: " + cur_class
-            mut pi = 0
-            while pi < params.len:
-                mut pv = params.get(pi)
-                pi = pi + 1
-                mut bar = pv.split("|")
-                mut ptype = bar.get(0)
-                mut pname = ""
-                if bar.len > 1: pname = bar.get(1)
-                if pname == "": pname = "a" + pi.to_str()
-                mut spname = pname
-                if spname == "self": spname = "self_"        # avoid shim receiver collision
-                mut tpname = _cpp_tr_pname(pname)             # avoid Tauraro receiver/keyword
-                # Descriptor-based mapping on the canonical kind.
-                mut d4 = _desc4(ptype)
-                mut pdepth = _to_int(d4.get(0))
-                mut prefk = d4.get(1)              # "0" not-ref | "1" mutable ref | "2" const ref
-                mut pref = (prefk != "0")
-                mut pcat = d4.get(2)
-                mut pdet = d4.get(3)
-                mut sc = ""
-                mut fw = ""
-                mut trt = ""
-                if pcat == "p":
-                    mut cpp = _c_to_cpp(pdet)
-                    if pdepth == 0:
-                        sc = cpp + " " + spname; fw = spname; trt = pdet
-                    elif prefk == "2" and pdepth == 1:
-                        # `const T&` to a primitive is semantically the value — cross BY VALUE
-                        # (the shim's value binds to the C++ const ref). Ergonomic for map::at(key).
-                        sc = cpp + " " + spname; fw = spname; trt = pdet
+            # Emit one wrapper per arity (full down to required) so trailing DEFAULT-ARG params
+            # can be omitted — the C++ call then applies the defaults. Overloads are disambiguated.
+            mut full_params: Vec[str] = Vec[str].init(4)
+            mut fpi = 0
+            while fpi < params.len:
+                full_params.push(params.get(fpi))
+                fpi = fpi + 1
+            mut min_arity = full_params.len - m_ndef
+            if min_arity < 0: min_arity = 0
+            mut arity = full_params.len
+            while arity >= min_arity:
+                mut tparams = Vec[str].init(4)
+                mut tti = 0
+                while tti < arity:
+                    tparams.push(full_params.get(tti))
+                    tti = tti + 1
+                params = tparams
+                mut shimp = ""
+                mut trp = ""
+                mut fargs = ""
+                if mode == "method" and not is_static:
+                    if is_const: shimp = "const " + cur_class_qual + "* self"
+                    else: shimp = cur_class_qual + "* self"
+                    trp = "obj: " + cur_class
+                mut pi = 0
+                while pi < params.len:
+                    mut pv = params.get(pi)
+                    pi = pi + 1
+                    mut bar = pv.split("|")
+                    mut ptype = bar.get(0)
+                    mut pname = ""
+                    if bar.len > 1: pname = bar.get(1)
+                    if pname == "": pname = "a" + pi.to_str()
+                    mut spname = pname
+                    if spname == "self": spname = "self_"        # avoid shim receiver collision
+                    mut tpname = _cpp_tr_pname(pname)             # avoid Tauraro receiver/keyword
+                    # Descriptor-based mapping on the canonical kind.
+                    mut d4 = _desc4(ptype)
+                    mut pdepth = _to_int(d4.get(0))
+                    mut prefk = d4.get(1)              # "0" not-ref | "1" mutable ref | "2" const ref
+                    mut pref = (prefk != "0")
+                    mut pcat = d4.get(2)
+                    mut pdet = d4.get(3)
+                    mut sc = ""
+                    mut fw = ""
+                    mut trt = ""
+                    if pcat == "p":
+                        mut cpp = _c_to_cpp(pdet)
+                        if pdepth == 0:
+                            sc = cpp + " " + spname; fw = spname; trt = pdet
+                        elif prefk == "2" and pdepth == 1:
+                            # `const T&` to a primitive is semantically the value — cross BY VALUE
+                            # (the shim's value binds to the C++ const ref). Ergonomic for map::at(key).
+                            sc = cpp + " " + spname; fw = spname; trt = pdet
+                        else:
+                            sc = cpp + " " + _stars(pdepth) + spname
+                            if pref: fw = "*" + spname
+                            else: fw = spname
+                            trt = _ptr_wrap(pdet, pdepth)
+                    elif pcat == "e":
+                        mut espell = pdet.split("#").get(0)
+                        mut ealias = _last_seg(espell)
+                        if pdepth == 0:
+                            sc = espell + " " + spname; fw = spname; trt = ealias
+                        elif prefk == "2" and pdepth == 1:
+                            sc = espell + " " + spname; fw = spname; trt = ealias
+                        else:
+                            sc = espell + " " + _stars(pdepth) + spname
+                            if pref: fw = "*" + spname
+                            else: fw = spname
+                            trt = _ptr_wrap(ealias, pdepth)
+                    elif pcat == "s" and pdet == "string":
+                        # std::string param: Tauraro passes a C string; the shim builds a temporary.
+                        sc = "const char* " + spname
+                        fw = "std::string(" + spname + ")"
+                        trt = "Pointer[char]"
+                    elif pcat == "f":
+                        # function-pointer param: cross as a raw address; cast to the real fn type.
+                        sc = "void* " + spname
+                        fw = "(" + pdet + ")" + spname
+                        trt = "Pointer[void]"
+                    elif pcat == "r":
+                        mut seg = _last_seg(pdet)
+                        if value_structs.contains(seg) and pdepth == 0:
+                            sc = pdet + " " + spname; fw = spname; trt = seg
+                        else:
+                            mut nd = pdepth
+                            if nd < 1: nd = 1
+                            sc = _cpp_qual(pdet, class_qual) + " " + _stars(nd) + spname
+                            if pdepth == 0: fw = "*" + spname       # by-value non-POD: deref the handle
+                            elif pref: fw = "*" + spname
+                            else: fw = spname
+                            trt = _cpp_opaque_handle(pdet, nd, class_names, value_structs, seen, opaque)
                     else:
-                        sc = cpp + " " + _stars(pdepth) + spname
-                        if pref: fw = "*" + spname
-                        else: fw = spname
-                        trt = _ptr_wrap(pdet, pdepth)
-                elif pcat == "e":
-                    mut espell = pdet.split("#").get(0)
-                    mut ealias = _last_seg(espell)
-                    if pdepth == 0:
-                        sc = espell + " " + spname; fw = spname; trt = ealias
-                    elif prefk == "2" and pdepth == 1:
-                        sc = espell + " " + spname; fw = spname; trt = ealias
-                    else:
-                        sc = espell + " " + _stars(pdepth) + spname
-                        if pref: fw = "*" + spname
-                        else: fw = spname
-                        trt = _ptr_wrap(ealias, pdepth)
-                elif pcat == "s" and pdet == "string":
-                    # std::string param: Tauraro passes a C string; the shim builds a temporary.
-                    sc = "const char* " + spname
-                    fw = "std::string(" + spname + ")"
-                    trt = "Pointer[char]"
-                elif pcat == "f":
-                    # function-pointer param: cross as a raw address; cast to the real fn type.
-                    sc = "void* " + spname
-                    fw = "(" + pdet + ")" + spname
-                    trt = "Pointer[void]"
-                elif pcat == "r":
-                    mut seg = _last_seg(pdet)
-                    if value_structs.contains(seg) and pdepth == 0:
-                        sc = pdet + " " + spname; fw = spname; trt = seg
-                    else:
+                        # s(non-string std) / u(unknown) — opaque handle by pointer.
                         mut nd = pdepth
                         if nd < 1: nd = 1
-                        sc = _cpp_qual(pdet, class_qual) + " " + _stars(nd) + spname
-                        if pdepth == 0: fw = "*" + spname       # by-value non-POD: deref the handle
+                        sc = pdet + " " + _stars(nd) + spname
+                        if pdepth == 0: fw = "*" + spname
                         elif pref: fw = "*" + spname
                         else: fw = spname
                         trt = _cpp_opaque_handle(pdet, nd, class_names, value_structs, seen, opaque)
-                else:
-                    # s(non-string std) / u(unknown) — opaque handle by pointer.
-                    mut nd = pdepth
-                    if nd < 1: nd = 1
-                    sc = pdet + " " + _stars(nd) + spname
-                    if pdepth == 0: fw = "*" + spname
-                    elif pref: fw = "*" + spname
-                    else: fw = spname
-                    trt = _cpp_opaque_handle(pdet, nd, class_names, value_structs, seen, opaque)
-                if shimp == "": shimp = sc
-                else: shimp = shimp + ", " + sc
-                if fargs == "": fargs = fw
-                else: fargs = fargs + ", " + fw
-                if trp == "": trp = tpname + ": " + trt
-                else: trp = trp + ", " + tpname + ": " + trt
+                    if shimp == "": shimp = sc
+                    else: shimp = shimp + ", " + sc
+                    if fargs == "": fargs = fw
+                    else: fargs = fargs + ", " + fw
+                    if trp == "": trp = tpname + ": " + trt
+                    else: trp = trp + ", " + tpname + ": " + trt
 
-            mut call = ""
-            if mode == "ctor":
-                call = "new " + cur_class_qual + "(" + fargs + ")"
-            elif mode == "method":
-                if is_static: call = cur_class_qual + "::" + m_name + "(" + fargs + ")"
-                else: call = "self->" + m_name + "(" + fargs + ")"
-            else:
-                mut pre = ""
-                if ns_path != "": pre = ns_path + "::"
-                call = pre + m_name + "(" + fargs + ")"
-
-            if mode == "ctor":
-                mut sym = _uniq_sym(class_pfx + "_new", sym_used)
-                shim.append(cur_class_qual + "* " + sym + "(" + shimp + ") { return " + call + "; }\n")
-                decls.append("    def " + sym + "(" + trp + ") -> " + cur_class + "\n")
-                n_fns = n_fns + 1
-            else:
-                mut ri = _cpp_ret_ex(m_ret, call, value_structs, class_names, class_qual, seen, opaque)
-                mut sym0 = ""
-                if mode == "method": sym0 = class_pfx + "_" + m_name
+                mut call = ""
+                if mode == "ctor":
+                    call = "new " + cur_class_qual + "(" + fargs + ")"
+                elif mode == "method":
+                    if is_static: call = cur_class_qual + "::" + m_name + "(" + fargs + ")"
+                    else: call = "self->" + m_name + "(" + fargs + ")"
                 else:
-                    if ns_path == "": sym0 = m_name
-                    else: sym0 = _ns_us(ns_path) + "_" + m_name
-                mut sym = _uniq_sym(sym0, sym_used)
-                shim.append(ri.get(0) + " " + sym + "(" + shimp + ") { " + ri.get(1) + " }\n")
-                mut d = "    def " + sym + "(" + trp + ")"
-                if ri.get(2) != "": d = d + " -> " + ri.get(2)
-                decls.append(d + "\n")
-                n_fns = n_fns + 1
+                    mut pre = ""
+                    if ns_path != "": pre = ns_path + "::"
+                    call = pre + m_name + "(" + fargs + ")"
+
+                if mode == "ctor":
+                    mut sym = _uniq_sym(class_pfx + "_new", sym_used)
+                    shim.append(cur_class_qual + "* " + sym + "(" + shimp + ") { return " + call + "; }\n")
+                    decls.append("    def " + sym + "(" + trp + ") -> " + cur_class + "\n")
+                    n_fns = n_fns + 1
+                else:
+                    mut ri = _cpp_ret_ex(m_ret, call, value_structs, class_names, class_qual, seen, opaque)
+                    mut sym0 = ""
+                    if mode == "method": sym0 = class_pfx + "_" + m_name
+                    else:
+                        if ns_path == "": sym0 = m_name
+                        else: sym0 = _ns_us(ns_path) + "_" + m_name
+                    mut sym = _uniq_sym(sym0, sym_used)
+                    shim.append(ri.get(0) + " " + sym + "(" + shimp + ") { " + ri.get(1) + " }\n")
+                    mut d = "    def " + sym + "(" + trp + ")"
+                    if ri.get(2) != "": d = d + " -> " + ri.get(2)
+                    decls.append(d + "\n")
+                    n_fns = n_fns + 1
+                arity = arity - 1
             mode = ""
             continue
 

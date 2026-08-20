@@ -273,6 +273,17 @@ appear only behind a typedef. (Extreme std template headers like `<sstream>`/`<r
 little — their instantiations are enormous and error-prone; that's a std-specific edge, not a
 user-header limitation.)
 
+### Default arguments generate overloads
+
+A method/ctor/free function with trailing default arguments — `int area(int scale=2, int bias=5)`
+— now emits **one wrapper per callable arity**, from full down to the shortest legal call, so the
+C++ defaults are honoured. `area` binds as `W_area(o,scale,bias)`, `W_area_2(o,scale)` (bias=5),
+and `W_area_3(o)` (scale=2, bias=5). The walker counts trailing parameters that carry a default
+(anything past the `TypeRef`/`ParmDecl` skeleton), and the generator loops arity from full to
+`full-ndefault`, truncating the parameter list each pass. Verified (`use_defaultargs.tr`):
+`37 / 35 / 25`. Real `std::vector` picks this up automatically — its count/value/allocator ctors
+now expose the shorter forms too.
+
 ## Honest scope / remaining hard tail
 
 - **Iterator-returning methods** (`find`/`begin`/`end`) and comparator/nested-type returns
@@ -280,7 +291,6 @@ user-header limitation.)
   keyed access (bound) rather than iteration.
 - **Free-function templates** (`template<class T> T max(T,T)`) aren't auto-instantiated (unlike class
   templates, they have no usage site to key on) — add a typedef/alias to force one.
-- **Default arguments** — a method with a default arg binds, but you pass every argument.
 - **By-value *system* structs** (`windows.h`'s `_GUID` passed by value) — pointer-based COM works.
 - **By-value *system* structs** (`windows.h`'s `_GUID`/`VARIANT` passed *by value*, not by pointer)
   are not laid out — that would need renaming the emitted struct to avoid redefining the one the

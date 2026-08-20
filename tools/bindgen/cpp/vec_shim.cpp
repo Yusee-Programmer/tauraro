@@ -12,7 +12,9 @@ std::vector<int>* nums_range(int n) { return new std::vector<int>(nums::range(n)
 std::vector<int>* std__vector_int__new() { return new std::vector<int>(); }
 std::vector<int>* std__vector_int__new_2(std::allocator<int> *__a) { return new std::vector<int>(*__a); }
 std::vector<int>* std__vector_int__new_3(unsigned long long __n, std::allocator<int> *__a) { return new std::vector<int>(__n, *__a); }
-std::vector<int>* std__vector_int__new_4(unsigned long long __n, int __value, std::allocator<int> *__a) { return new std::vector<int>(__n, __value, *__a); }
+std::vector<int>* std__vector_int__new_4(unsigned long long __n) { return new std::vector<int>(__n); }
+std::vector<int>* std__vector_int__new_5(unsigned long long __n, int __value, std::allocator<int> *__a) { return new std::vector<int>(__n, __value, *__a); }
+std::vector<int>* std__vector_int__new_6(unsigned long long __n, int __value) { return new std::vector<int>(__n, __value); }
 void std__vector_int__assign(std::vector<int>* self, unsigned long long __n, int __val) { self->assign(__n, __val); }
 unsigned long long std__vector_int__size(const std::vector<int>* self) { return self->size(); }
 unsigned long long std__vector_int__max_size(const std::vector<int>* self) { return self->max_size(); }
