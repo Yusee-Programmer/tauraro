@@ -167,11 +167,40 @@ wrappers, compiles):
   emitting un-parseable output.
 - **Referenced-but-undefined external types** are forward-declared opaque so the `.tr` compiles.
 
-## Honest scope / hard tail
+## Canonical-type resolution (the walker knows every type's real size/kind)
 
-The walker uses the *real* Clang parser, so parsing is complete. Remaining hard-tail cases (the same
-every C++ binder faces): **templates** need explicit instantiation to bind (a `template<class T>`
-is skipped); **`std::` containers** cross as opaque handles (no element access without hand-written
-accessors); a system-value-typedef-heavy header (e.g. Windows COM `comdef.h`, referencing hundreds
-of `windows.h` typedefs like `HRESULT`=`long`) parses but doesn't fully compile, because those
-value typedefs can't be auto-sized — bind such libraries through a hand-written narrow shim.
+The walker resolves each type through its **canonical type** (libclang's `clang_getCanonicalType`
++ `getSizeOf` + `getEnumDeclIntegerType` + record layout), and emits a compact descriptor
+`ptrdepth~isref~cat~detail` that the generator maps deterministically. This dissolves most of the
+"hard tail":
+
+- **Typedef'd scalars are auto-resolved** — `HRESULT`→`long`→`c_long`, `DWORD`→`unsigned long`→
+  `c_ulong`, `WORD`→`c_ushort`. The old claim that value typedefs "can't be auto-sized" was wrong:
+  libclang gives the exact canonical builtin. A header full of typedef'd scalars now binds with the
+  correct ABI, no hand-written shim.
+- **POD structs cross by value** — a trivially-copyable struct with public fields becomes a real
+  `@value_type` with those fields (from libclang's field layout), so it is passed/returned by value
+  and its fields are read directly in Tauraro (`r.w`). See `canon.hpp` (`Rect`).
+- **`std::string` is first-class** — a `std::string` parameter accepts a native Tauraro string
+  (the shim builds a temporary), and a `std::string` return comes back as a heap C string the
+  caller owns. No hand-written accessor. (`canon.hpp` `name()`/`setName()`.)
+- **Enums cross by value** as their true underlying integer (`enum class Plain : unsigned char`
+  → `c_uchar`), not always `c_int`.
+
+Verified end-to-end (`use_canon.tr`): `bounds.w` reads a by-value struct field, `name()` returns a
+native string, `process()` returns a typedef'd `long` with an enum-by-value argument.
+
+## Honest scope / remaining hard tail
+
+The walker uses the *real* Clang parser, so parsing is complete, and canonical resolution handles
+scalars/enums/POD-structs/`std::string`. What genuinely remains (the same for every AOT binder):
+
+- **Templates** need explicit instantiation. A `template<class T> class Box` is not a concrete type
+  and a bare `typedef Box<int>` does **not** instantiate it, so libclang has no concrete methods to
+  bind — you must instantiate it (e.g. `template class Box<int>;`) for the members to exist. This is
+  fundamental to AOT binding (SWIG's `%template`, etc.).
+- **`std::` containers other than `string`** (`std::vector`, `std::map`, …) cross as opaque handles;
+  element access needs a thin accessor.
+- **System *record* types from another header** (e.g. Windows COM `comdef.h`'s `_GUID`/`IUnknown`
+  by value) still collide with the system definition the runtime pulls in — the *scalars* now bind
+  correctly, but by-value system structs are the residual tail; bind those through a narrow shim.

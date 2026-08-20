@@ -1127,65 +1127,79 @@ pub def run_bindgen(header: str, out: str, cc: str):
 # ══════════════════════════════════════════════════════════════════════════════
 
 # The clang-c AST walker, emitted + compiled on demand against the detected libclang.
-# It prints a flat IR (NS/CLASS/CTOR/DTOR/METHOD/FUNC/PARAM/ENUM/EVAL) with each C++
-# type pre-spelled, so the Tauraro side never has to parse a C++ type.
+# It resolves each type via the CANONICAL type (so `HRESULT`->`long`, typedefs collapse,
+# enums expose their underlying integer, records are laid out) and prints a flat IR where
+# every type is a compact descriptor `ptrdepth~isref~cat~detail` (cat: v=void p=primitive
+# e=enum r=record s=std u=unknown f=fnptr) — the Tauraro side maps on the canonical kind,
+# never parsing a C++ type spelling heuristically. CLASS carries a POD flag; FIELD lines give
+# a POD struct's members for by-value layout; ENUM carries its underlying c_* type.
+
 def _cxxwalk_src() -> str:
-    mut sb = StringBuilder.init(4096)
+    mut sb = StringBuilder.init(8192)
     sb.append("#include <clang-c/Index.h>\n")
     sb.append("#include <stdio.h>\n")
+    sb.append("#include <string.h>\n")
     sb.append("static const char* S(CXString s){ const char* p=clang_getCString(s); return p?p:\"\"; }\n")
-    sb.append("static void params(CXCursor c){\n")
-    sb.append("    int n=clang_Cursor_getNumArguments(c);\n")
-    sb.append("    for(int i=0;i<n;i++){ CXCursor a=clang_Cursor_getArgument(c,i);\n")
-    sb.append("        CXString ty=clang_getTypeSpelling(clang_getArgType(clang_getCursorType(c),i));\n")
-    sb.append("        CXString nm=clang_getCursorSpelling(a);\n")
-    sb.append("        const char* nn=S(nm);\n")
-    sb.append("        if(nn[0]) printf(\"PARAM %s|%s\\n\", S(ty), nn);\n")
-    sb.append("        else      printf(\"PARAM %s|a%d\\n\", S(ty), i);\n")
-    sb.append("        clang_disposeString(ty); clang_disposeString(nm);\n")
-    sb.append("    }\n")
+    sb.append("static const char* scalar(enum CXTypeKind k){\n")
+    sb.append("  switch(k){\n")
+    sb.append("    case CXType_Bool: return \"bool\";\n")
+    sb.append("    case CXType_Char_S: case CXType_SChar: return \"c_schar\"; case CXType_Char_U: case CXType_UChar: return \"c_uchar\";\n")
+    sb.append("    case CXType_Char16: return \"c_uint16_t\"; case CXType_Char32: return \"c_uint32_t\"; case CXType_WChar: return \"c_int\";\n")
+    sb.append("    case CXType_Short: return \"c_short\"; case CXType_UShort: return \"c_ushort\";\n")
+    sb.append("    case CXType_Int: return \"c_int\"; case CXType_UInt: return \"c_uint\";\n")
+    sb.append("    case CXType_Long: return \"c_long\"; case CXType_ULong: return \"c_ulong\";\n")
+    sb.append("    case CXType_LongLong: return \"c_longlong\"; case CXType_ULongLong: return \"c_ulonglong\";\n")
+    sb.append("    case CXType_Float: return \"c_float\"; case CXType_Double: return \"c_double\"; case CXType_LongDouble: return \"c_ldouble\";\n")
+    sb.append("    default: return \"\";\n")
+    sb.append("  }\n")
     sb.append("}\n")
-    sb.append("static enum CXChildVisitResult visit(CXCursor c, CXCursor parent, CXClientData d){\n")
-    sb.append("    enum CXCursorKind k=clang_getCursorKind(c);\n")
-    sb.append("    if(!clang_Location_isFromMainFile(clang_getCursorLocation(c))) return CXChildVisit_Continue;\n")
-    sb.append("    CXString nmS=clang_getCursorSpelling(c); const char* nm=S(nmS);\n")
-    sb.append("    CXString rtS; const char* rt;\n")
-    sb.append("    if(k==CXCursor_Namespace){ printf(\"NS %s\\n\",nm); clang_visitChildren(c,visit,0); printf(\"ENS\\n\"); }\n")
-    sb.append("    else if((k==CXCursor_ClassDecl||k==CXCursor_StructDecl)&&clang_isCursorDefinition(c)){\n")
-    sb.append("        printf(\"CLASS %s\\n\",nm); clang_visitChildren(c,visit,0); printf(\"ECLASS\\n\"); }\n")
-    sb.append("    else if(k==CXCursor_CXXMethod && clang_getCXXAccessSpecifier(c)==CX_CXXPublic){\n")
-    sb.append("        rtS=clang_getTypeSpelling(clang_getResultType(clang_getCursorType(c))); rt=S(rtS);\n")
-    sb.append("        printf(\"METHOD %c%c %s|%s\\n\", clang_CXXMethod_isStatic(c)?'s':'.', clang_CXXMethod_isConst(c)?'c':'.', rt, nm);\n")
-    sb.append("        params(c); printf(\"EMETHOD\\n\"); clang_disposeString(rtS); }\n")
-    sb.append("    else if(k==CXCursor_Constructor && clang_getCXXAccessSpecifier(c)==CX_CXXPublic){ printf(\"CTOR\\n\"); params(c); printf(\"ECTOR\\n\"); }\n")
-    sb.append("    else if(k==CXCursor_Destructor){ printf(\"DTOR\\n\"); }\n")
-    sb.append("    else if(k==CXCursor_FunctionDecl){\n")
-    sb.append("        rtS=clang_getTypeSpelling(clang_getResultType(clang_getCursorType(c))); rt=S(rtS);\n")
-    sb.append("        printf(\"FUNC %s|%s\\n\", rt, nm); params(c); printf(\"EFUNC\\n\"); clang_disposeString(rtS); }\n")
-    sb.append("    else if(k==CXCursor_EnumDecl){ printf(\"ENUM %s\\n\", nm[0]?nm:\"anon\"); clang_visitChildren(c,visit,0); printf(\"EENUM\\n\"); }\n")
-    sb.append("    else if(k==CXCursor_EnumConstantDecl){ printf(\"EVAL %s %lld\\n\", nm, clang_getEnumConstantDeclValue(c)); }\n")
-    sb.append("    clang_disposeString(nmS);\n")
-    sb.append("    return CXChildVisit_Continue;\n")
+    sb.append("// descriptor: ptrdepth~isref~cat~detail   cat: v p e r s u f a\n")
+    sb.append("static void td(CXType t){\n")
+    sb.append("  int depth=0, isref=0;\n")
+    sb.append("  CXType cur=clang_getCanonicalType(t);\n")
+    sb.append("  while(1){\n")
+    sb.append("    if(cur.kind==CXType_Pointer){ depth++; cur=clang_getCanonicalType(clang_getPointeeType(cur)); }\n")
+    sb.append("    else if(cur.kind==CXType_LValueReference||cur.kind==CXType_RValueReference){ isref=1; depth++; cur=clang_getCanonicalType(clang_getPointeeType(cur)); }\n")
+    sb.append("    else break;\n")
+    sb.append("  }\n")
+    sb.append("  enum CXTypeKind k=cur.kind; const char* sc=scalar(k);\n")
+    sb.append("  if(k==CXType_Void) printf(\"%d~%d~v~\", depth, isref);\n")
+    sb.append("  else if(sc[0]) printf(\"%d~%d~p~%s\", depth, isref, sc);\n")
+    sb.append("  else if(k==CXType_Enum){ CXType u=clang_getEnumDeclIntegerType(clang_getTypeDeclaration(cur)); const char* us=scalar(u.kind); if(!us[0])us=\"c_int\";\n")
+    sb.append("    CXString sp=clang_getTypeSpelling(cur); printf(\"%d~%d~e~%s#%s\", depth, isref, S(sp), us); clang_disposeString(sp); }\n")
+    sb.append("  else if(k==CXType_Record){ CXString sp=clang_getTypeSpelling(cur); const char* r=S(sp); if(strncmp(r,\"const \",6)==0)r+=6; if(strncmp(r,\"volatile \",9)==0)r+=9;\n")
+    sb.append("    if(strncmp(r,\"std::basic_string\",17)==0) printf(\"%d~%d~s~string\", depth, isref);\n")
+    sb.append("    else printf(\"%d~%d~r~%s\", depth, isref, r);\n")
+    sb.append("    clang_disposeString(sp); }\n")
+    sb.append("  else if(k==CXType_FunctionProto){ CXString sp=clang_getTypeSpelling(clang_getCanonicalType(t)); printf(\"%d~%d~f~%s\", depth, isref, S(sp)); clang_disposeString(sp); }\n")
+    sb.append("  else { CXString sp=clang_getTypeSpelling(cur); printf(\"%d~%d~u~%s\", depth, isref, S(sp)); clang_disposeString(sp); }\n")
     sb.append("}\n")
-    sb.append("int main(int argc,char**argv){\n")
-    sb.append("    if(argc<2){ fprintf(stderr,\"usage: cxxwalk <header> [clang args...]\\n\"); return 2; }\n")
-    sb.append("    CXIndex idx=clang_createIndex(0,0);\n")
-    sb.append("    /* clang args are forwarded verbatim from argv[2..] (bindgen builds them:\n")
-    sb.append("       -x c++ -std=... + detected include dirs + user -I/-D flags). */\n")
-    sb.append("    CXTranslationUnit tu=clang_parseTranslationUnit(idx,argv[1],(const char**)(argv+2),argc-2,0,0,CXTranslationUnit_None);\n")
-    sb.append("    if(!tu){ fprintf(stderr,\"cxxwalk: libclang could not create a translation unit\\n\"); return 1; }\n")
-    sb.append("    /* Report error/fatal diagnostics on stderr (bindgen surfaces them); count fatals. */\n")
-    sb.append("    unsigned nd=clang_getNumDiagnostics(tu), nerr=0, nfatal=0;\n")
-    sb.append("    for(unsigned i=0;i<nd;i++){ CXDiagnostic dg=clang_getDiagnostic(tu,i);\n")
-    sb.append("        enum CXDiagnosticSeverity sv=clang_getDiagnosticSeverity(dg);\n")
-    sb.append("        if(sv>=CXDiagnostic_Error){ CXString ds=clang_formatDiagnostic(dg,clang_defaultDiagnosticDisplayOptions());\n")
-    sb.append("            fprintf(stderr,\"DIAG %s\\n\",clang_getCString(ds)); clang_disposeString(ds);\n")
-    sb.append("            nerr++; if(sv==CXDiagnostic_Fatal) nfatal++; }\n")
-    sb.append("        clang_disposeDiagnostic(dg); }\n")
-    sb.append("    fprintf(stderr,\"DIAGERR %u %u\\n\", nerr, nfatal);\n")
-    sb.append("    clang_visitChildren(clang_getTranslationUnitCursor(tu),visit,0);\n")
-    sb.append("    clang_disposeTranslationUnit(tu);clang_disposeIndex(idx);return 0;\n")
-    sb.append("}\n")
+    sb.append("static void params(CXCursor c){ int n=clang_Cursor_getNumArguments(c);\n")
+    sb.append("  for(int i=0;i<n;i++){ CXCursor a=clang_Cursor_getArgument(c,i); CXString nm=clang_getCursorSpelling(a); const char* nn=S(nm);\n")
+    sb.append("    printf(\"PARAM \"); td(clang_getArgType(clang_getCursorType(c),i)); if(nn[0]) printf(\"|%s\\n\",nn); else printf(\"|a%d\\n\",i); clang_disposeString(nm); } }\n")
+    sb.append("static enum CXChildVisitResult fld(CXCursor c, CXCursor p, CXClientData d){\n")
+    sb.append("  if(clang_getCursorKind(c)==CXCursor_FieldDecl && clang_getCXXAccessSpecifier(c)==CX_CXXPublic){\n")
+    sb.append("    printf(\"FIELD \"); td(clang_getCursorType(c)); printf(\"|%s\\n\", S(clang_getCursorSpelling(c))); }\n")
+    sb.append("  return CXChildVisit_Continue; }\n")
+    sb.append("static enum CXChildVisitResult visit(CXCursor c, CXCursor p, CXClientData d){\n")
+    sb.append("  if(!clang_Location_isFromMainFile(clang_getCursorLocation(c))) return CXChildVisit_Continue;\n")
+    sb.append("  enum CXCursorKind k=clang_getCursorKind(c); CXString nmS=clang_getCursorSpelling(c); const char* nm=S(nmS);\n")
+    sb.append("  if(k==CXCursor_Namespace){ printf(\"NS %s\\n\",nm); clang_visitChildren(c,visit,0); printf(\"ENS\\n\"); }\n")
+    sb.append("  else if((k==CXCursor_ClassDecl||k==CXCursor_StructDecl)&&clang_isCursorDefinition(c)){\n")
+    sb.append("    CXType rt=clang_getCursorType(c);\n")
+    sb.append("    printf(\"CLASS %s %d\\n\",nm, clang_isPODType(rt)); clang_visitChildren(c,fld,0); clang_visitChildren(c,visit,0); printf(\"ECLASS\\n\"); }\n")
+    sb.append("  else if(k==CXCursor_CXXMethod && clang_getCXXAccessSpecifier(c)==CX_CXXPublic){\n")
+    sb.append("    printf(\"METHOD %c%c \", clang_CXXMethod_isStatic(c)?'s':'.', clang_CXXMethod_isConst(c)?'c':'.'); td(clang_getResultType(clang_getCursorType(c))); printf(\"|%s\\n\",nm); params(c); printf(\"EMETHOD\\n\"); }\n")
+    sb.append("  else if(k==CXCursor_Constructor && clang_getCXXAccessSpecifier(c)==CX_CXXPublic){ printf(\"CTOR\\n\"); params(c); printf(\"ECTOR\\n\"); }\n")
+    sb.append("  else if(k==CXCursor_Destructor) printf(\"DTOR\\n\");\n")
+    sb.append("  else if(k==CXCursor_FunctionDecl){ printf(\"FUNC \"); td(clang_getResultType(clang_getCursorType(c))); printf(\"|%s\\n\",nm); params(c); printf(\"EFUNC\\n\"); }\n")
+    sb.append("  else if(k==CXCursor_EnumDecl){ CXType u=clang_getEnumDeclIntegerType(c); const char* us=scalar(u.kind); if(!us[0])us=\"c_int\";\n")
+    sb.append("    printf(\"ENUM %s %s\\n\", nm[0]?nm:\"anon\", us); clang_visitChildren(c,visit,0); printf(\"EENUM\\n\"); }\n")
+    sb.append("  else if(k==CXCursor_EnumConstantDecl) printf(\"EVAL %s %lld\\n\", nm, (long long)clang_getEnumConstantDeclValue(c));\n")
+    sb.append("  clang_disposeString(nmS); return CXChildVisit_Continue; }\n")
+    sb.append("int main(int argc,char**argv){ if(argc<2){fprintf(stderr,\"usage\\n\");return 2;} CXIndex idx=clang_createIndex(0,0);\n")
+    sb.append("  CXTranslationUnit tu=clang_parseTranslationUnit(idx,argv[1],(const char**)(argv+2),argc-2,0,0,0);\n")
+    sb.append("  if(!tu){fprintf(stderr,\"parse failed\\n\");return 1;} clang_visitChildren(clang_getTranslationUnitCursor(tu),visit,0); return 0; }\n")
     return sb.to_string().as_str()
 
 # ── portable shell helpers (Windows cmd.exe vs POSIX sh) ─────────────────────────
@@ -1372,12 +1386,15 @@ def _cpp_ret(rt: CppType, call: str) -> Vec[str]:
 # class uses its bare name (already an emitted `class X: pass`); an unknown/std type is
 # sanitized (`std::string` -> `std__string`) and registered as an opaque class on demand.
 # `nd` is the pointer depth (>=1); extra levels wrap in Pointer[...].
-def _cpp_opaque_handle(base: str, nd: int, class_names: Map[str, bool], seen: Map[str, bool], opaque: StringBuilder) -> str:
+def _cpp_opaque_handle(base: str, nd: int, class_names: Map[str, bool], value_structs: Map[str, bool], seen: Map[str, bool], opaque: StringBuilder) -> str:
     mut seg = _last_seg(base)
     mut handle = seg
     if _is_libc_ty_name(seg):
         # A standard libc type (FILE, …) is already defined by the runtime's system headers;
         # reference it bare (resolves in C) rather than emitting a conflicting opaque class.
+        handle = seg
+    elif value_structs.contains(seg):
+        # A POD value-struct — emitted as `@value_type class seg` by ECLASS; use its bare name.
         handle = seg
     elif not class_names.contains(seg):
         handle = _cpp_ident(base)
@@ -1399,33 +1416,52 @@ def _cpp_qual(base: str, class_qual: Map[str, str]) -> str:
     if class_qual.contains(seg): return class_qual.get(seg)
     return base
 
-# Enum/class-aware return lowering: [shim_ctype, body_stmt, tr_ret]. Enums cross by value as
-# their c_int alias; classes/std/unknown cross as opaque handles (heap-copied / addressed).
-def _cpp_ret_ex(m_ret: str, call: str, enum_names: Map[str, bool], class_names: Map[str, bool], class_qual: Map[str, str], seen: Map[str, bool], opaque: StringBuilder) -> Vec[str]:
+# Descriptor-based return lowering: [shim_ctype, body_stmt, tr_ret]. Primitives (incl. resolved
+# typedefs) and enums cross by value; a POD struct crosses by value; std::string returns as a
+# heap `char*`; other records/std/unknown cross as opaque handles (heap-copied / addressed).
+def _cpp_ret_ex(desc: str, call: str, value_structs: Map[str, bool], class_names: Map[str, bool], class_qual: Map[str, str], seen: Map[str, bool], opaque: StringBuilder) -> Vec[str]:
     mut r = Vec[str].init(3)
-    mut rt = _cpp_parse_type(m_ret)
-    if rt.base == "void" and rt.ptr == 0:
-        r.push("void"); r.push(call + ";"); r.push("")
+    mut d4 = _desc4(desc)
+    mut rdepth = _to_int(d4.get(0))
+    mut rref = (d4.get(1) == "1")
+    mut cat = d4.get(2)
+    mut detail = d4.get(3)
+    if cat == "v":
+        r.push("void"); r.push(call + ";"); r.push(""); return r
+    if cat == "p":
+        mut cpp = _c_to_cpp(detail)
+        if rdepth == 0:
+            r.push(cpp); r.push("return " + call + ";"); r.push(detail); return r
+        if rref: r.push(cpp + " " + _stars(rdepth)); r.push("return &(" + call + ");"); r.push(_ptr_wrap(detail, rdepth))
+        else: r.push(cpp + " " + _stars(rdepth)); r.push("return " + call + ";"); r.push(_ptr_wrap(detail, rdepth))
         return r
-    if rt.is_prim:
-        r.push(_cpp_ctype(rt)); r.push("return " + call + ";"); r.push(_cpp_tr_type(rt))
+    if cat == "e":
+        mut espell = detail.split("#").get(0)
+        mut ealias = _last_seg(espell)
+        if rdepth == 0:
+            r.push(espell); r.push("return " + call + ";"); r.push(ealias); return r
+        if rref: r.push(espell + "*"); r.push("return &(" + call + ");"); r.push(_ptr_wrap(ealias, rdepth))
+        else: r.push(espell + "*"); r.push("return " + call + ";"); r.push(_ptr_wrap(ealias, rdepth))
         return r
-    if enum_names.contains(_last_seg(rt.base)) and rt.ptr == 0:
-        r.push(_last_seg(rt.base)); r.push("return " + call + ";"); r.push(_last_seg(rt.base))
-        return r
-    mut nd = rt.ptr
+    if cat == "s" and detail == "string":
+        # std::string -> a heap `char*` copy (owned by the caller; free with the runtime's free).
+        r.push("char*"); r.push("return _tr_cpp_strdup(" + call + ");"); r.push("Pointer[char]"); return r
+    if cat == "f":
+        r.push("void*"); r.push("return (void*)(" + call + ");"); r.push("Pointer[void]"); return r
+    mut seg = _last_seg(detail)
+    if cat == "r" and value_structs.contains(seg) and rdepth == 0:
+        r.push(_cpp_qual(detail, class_qual)); r.push("return " + call + ";"); r.push(seg); return r
+    mut nd = rdepth
     if nd < 1: nd = 1
-    mut handle = _cpp_opaque_handle(rt.base, nd, class_names, seen, opaque)
-    mut cb = _cpp_qual(rt.base, class_qual)
-    # C-style cast on ptr/ref returns strips a `const` the return spelling carried (e.g.
-    # `const std::string& name()`), which would otherwise fail to convert to the non-const
-    # `T*` shim return. The Tauraro side sees one opaque handle regardless of const.
-    if rt.was_ptr:
-        r.push(cb + "*"); r.push("return (" + cb + "*)(" + call + ");"); r.push(handle)
-    elif rt.was_ref:
+    mut handle = _cpp_opaque_handle(detail, nd, class_names, value_structs, seen, opaque)
+    mut cb = _cpp_qual(detail, class_qual)
+    # C-style cast on ptr/ref returns strips a `const` the return carried (e.g. `const T&`).
+    if rdepth == 0:
+        r.push(cb + "*"); r.push("return new " + cb + "(" + call + ");"); r.push(handle)
+    elif rref:
         r.push(cb + "*"); r.push("return (" + cb + "*)(&(" + call + "));"); r.push(handle)
     else:
-        r.push(cb + "*"); r.push("return new " + cb + "(" + call + ");"); r.push(handle)
+        r.push(cb + "*"); r.push("return (" + cb + "*)(" + call + ");"); r.push(handle)
     return r
 
 # Drop the trailing "::segment" of a "::"-joined namespace path.
@@ -1458,6 +1494,92 @@ def _rstrip_cr(s: str) -> str:
     if n == s.len(): return s
     return s.slice(0, n)
 
+# ── descriptor-based type mapping (canonical kinds from libclang) ────────────────
+# The walker resolves each type to `ptrdepth~isref~cat~detail`; these turn a descriptor
+# into the Tauraro type, the C++ shim type, and the call-forwarding expression.
+
+# c_* scalar name -> its concrete C++ type (for the shim). ABI-exact; the typedef the header
+# used (HRESULT, DWORD, …) is irrelevant — the canonical builtin is what matters.
+def _c_to_cpp(cn: str) -> str:
+    if cn == "void": return "void"
+    if cn == "bool": return "bool"
+    if cn == "c_int": return "int"
+    if cn == "c_uint": return "unsigned int"
+    if cn == "c_char": return "char"
+    if cn == "c_schar": return "signed char"
+    if cn == "c_uchar": return "unsigned char"
+    if cn == "c_short": return "short"
+    if cn == "c_ushort": return "unsigned short"
+    if cn == "c_long": return "long"
+    if cn == "c_ulong": return "unsigned long"
+    if cn == "c_longlong": return "long long"
+    if cn == "c_ulonglong": return "unsigned long long"
+    if cn == "c_float": return "float"
+    if cn == "c_double": return "double"
+    if cn == "c_ldouble": return "long double"
+    return cn
+
+# Split a descriptor into [ptrdepth, isref, cat, detail] (detail may contain '~'/'#').
+def _desc4(desc: str) -> Vec[str]:
+    mut parts = desc.split("~")
+    mut r = Vec[str].init(4)
+    if parts.len < 3:
+        r.push("0"); r.push("0"); r.push("u"); r.push(desc)
+        return r
+    r.push(parts.get(0))
+    r.push(parts.get(1))
+    r.push(parts.get(2))
+    mut det = ""
+    if parts.len > 3: det = parts.get(3)
+    mut k = 4
+    while k < parts.len:
+        det = det + "~" + parts.get(k)
+        k = k + 1
+    r.push(det)
+    return r
+
+# `n` pointer stars.
+def _stars(n: int) -> str:
+    mut s = ""
+    mut i = 0
+    while i < n:
+        s = s + "*"
+        i = i + 1
+    return s
+
+# Wrap `inner` in `n` levels of Pointer[...].
+def _ptr_wrap(inner: str, n: int) -> str:
+    mut t = inner
+    mut i = 0
+    while i < n:
+        t = "Pointer[" + t + "]"
+        i = i + 1
+    return t
+
+# The Tauraro type for a `@value_type` struct field, from its descriptor. Primitives/enums
+# inline by value; a nested value-struct inlines by value; a non-POD embedded record is
+# approximated as Pointer[void] (rare); pointers wrap.
+def _cpp_field_type(desc: str, value_structs: Map[str, bool], enum_names: Map[str, bool]) -> str:
+    mut d4 = _desc4(desc)
+    mut depth = _to_int(d4.get(0))
+    mut cat = d4.get(2)
+    mut detail = d4.get(3)
+    if cat == "p":
+        if depth == 0: return detail
+        return _ptr_wrap(detail, depth)
+    if cat == "e":
+        mut ealias = _last_seg(detail.split("#").get(0))
+        if depth == 0: return ealias
+        return _ptr_wrap(ealias, depth)
+    if cat == "r":
+        mut seg = _last_seg(detail)
+        if depth == 0:
+            if value_structs.contains(seg): return seg
+            return "Pointer[void]"
+        return _ptr_wrap(seg, depth)
+    if depth == 0: return "Pointer[void]"
+    return _ptr_wrap("void", depth)
+
 # Parse the walker's flat IR and emit `<base>.tr` (opaque handles + wrappers) and the
 # `<base>_shim.cpp` (extern "C" bridge with namespace-qualified C++ calls).
 def _cpp_generate(ir: str, header: str, out: str):
@@ -1478,22 +1600,48 @@ def _cpp_generate(ir: str, header: str, out: str):
     mut cstk_name: Vec[str] = Vec[str].init(4)
     mut cstk_qual: Vec[str] = Vec[str].init(4)
     mut cstk_pfx:  Vec[str] = Vec[str].init(4)
+    # Value-struct field collection (deferred body emission at ECLASS). `fld_buf` = current
+    # class's `pub name: type` lines; `fld_stack` saves the parent's on nesting.
+    mut fld_buf = ""
+    mut fld_stack: Vec[str] = Vec[str].init(4)
 
-    # Pre-scan: which names are ENUMs (value types, cross by value as c_int) vs CLASSes (opaque
-    # handles, cross by pointer). Needed because a param/return type is just a spelling.
-    mut enum_names:  Map[str, bool] = Map[str, bool].init(32)
-    mut class_names: Map[str, bool] = Map[str, bool].init(32)
-    mut class_qual:  Map[str, str]  = Map[str, str].init(32)   # last-seg name -> qualified C++ name
+    # Pre-scan: ENUM names, CLASS names, and which classes are POD value-structs (POD + >=1
+    # public field → cross by value as `@value_type`). A `CLASS <name> <pod>` line is followed
+    # by `FIELD` lines until `ECLASS`; count them per (nested) class via a small stack.
+    mut enum_names:    Map[str, bool] = Map[str, bool].init(32)
+    mut class_names:   Map[str, bool] = Map[str, bool].init(32)
+    mut value_structs: Map[str, bool] = Map[str, bool].init(32)
+    mut class_qual:    Map[str, str]  = Map[str, str].init(32)   # last-seg name -> qualified C++ name
+    mut ps_name: Vec[str] = Vec[str].init(4)
+    mut ps_pod:  Vec[str] = Vec[str].init(4)
+    mut ps_nf:   Vec[str] = Vec[str].init(4)
     mut plines = ir.split("\n")
     mut pli = 0
     while pli < plines.len:
         mut pl = _rstrip_cr(plines.get(pli))
         pli = pli + 1
         if pl.starts_with("ENUM "):
-            mut en0 = pl.slice(5, pl.len())
-            if en0 != "anon": enum_names.insert(en0, true)
+            mut erest = pl.slice(5, pl.len())
+            mut ename0 = erest.split(" ").get(0)
+            if ename0 != "anon": enum_names.insert(ename0, true)
         elif pl.starts_with("CLASS "):
-            class_names.insert(pl.slice(6, pl.len()), true)
+            mut crest = pl.slice(6, pl.len())
+            mut cparts = crest.split(" ")
+            mut cnm = cparts.get(0)
+            mut cpod = "0"
+            if cparts.len > 1: cpod = cparts.get(1)
+            class_names.insert(cnm, true)
+            ps_name.push(cnm); ps_pod.push(cpod); ps_nf.push("0")
+        elif pl.starts_with("FIELD "):
+            if ps_nf.len > 0:
+                ps_nf.pop()          # mark innermost class as "has fields" (pop top, push "1")
+                ps_nf.push("1")
+        elif pl == "ECLASS":
+            if ps_name.len > 0:
+                mut nm2 = ps_name.pop()
+                mut pod2 = ps_pod.pop()
+                mut nf2 = ps_nf.pop()
+                if pod2 == "1" and nf2 == "1": value_structs.insert(nm2, true)
 
     mut mode = ""             # "ctor" | "method" | "func"
     mut m_flags = ".."
@@ -1527,10 +1675,32 @@ def _cpp_generate(ir: str, header: str, out: str):
             n_fns = n_fns + 1
             continue
         if line == "ECLASS":
+            # Emit the class body now (deferred): a POD value-struct becomes `@value_type` with
+            # its fields (crosses by value); anything else is an opaque handle.
+            if _is_clean_ident(cur_class) and not seen.contains("class:" + cur_class):
+                if value_structs.contains(cur_class) and fld_buf != "":
+                    opaque.append("@value_type\nclass " + cur_class + ":\n" + fld_buf)
+                else:
+                    opaque.append("class " + cur_class + ":\n    pass\n")
+                seen.insert("class:" + cur_class, true)
+                n_classes = n_classes + 1
             if cstk_name.len > 0:
                 cstk_name.pop()
                 cstk_qual.pop()
                 cstk_pfx.pop()
+            if fld_stack.len > 0: fld_buf = fld_stack.pop()
+            else: fld_buf = ""
+            continue
+        if line.starts_with("FIELD "):
+            # A public data field of the current class (used only for value-struct layout).
+            mut frest = line.slice(6, line.len())
+            mut fbar = frest.split("|")
+            mut fdesc = fbar.get(0)
+            mut fnm = ""
+            if fbar.len > 1: fnm = fbar.get(1)
+            if _is_clean_ident(fnm):
+                mut fmap = _cpp_field_type(fdesc, value_structs, enum_names)
+                fld_buf = fld_buf + "    pub " + _cpp_tr_pname(fnm) + ": " + fmap + "\n"
             continue
         if line == "ENS":
             ns_path = _ns_pop(ns_path); continue
@@ -1546,7 +1716,8 @@ def _cpp_generate(ir: str, header: str, out: str):
                 seen.insert("using:" + ns_path, true)
             continue
         if line.starts_with("CLASS "):
-            mut ncls = line.slice(6, line.len())
+            mut crest = line.slice(6, line.len())
+            mut ncls = crest.split(" ").get(0)     # "CLASS <name> <pod>"
             # qualified name / prefix build on the ENCLOSING class (nested) or namespace.
             mut nqual = ncls
             mut npfx = ncls
@@ -1558,19 +1729,19 @@ def _cpp_generate(ir: str, header: str, out: str):
             cstk_qual.push(nqual)
             cstk_pfx.push(npfx)
             class_qual.insert(ncls, nqual)
-            if _is_clean_ident(ncls) and not seen.contains("class:" + ncls):
-                # Multiline `pass` body (NOT the inline `class X: pass` form, which makes the
-                # parser swallow the following top-level `extern` block).
-                opaque.append("class " + ncls + ":\n    pass\n")
-                seen.insert("class:" + ncls, true)
-                n_classes = n_classes + 1
+            # Push field-collection context (body is emitted at ECLASS, once fields are known).
+            fld_stack.push(fld_buf)
+            fld_buf = ""
             continue
         if line.starts_with("ENUM "):
-            mut en = line.slice(5, line.len())
-            # Anonymous enums spell as `(unnamed enum at …)` — skip the `type` alias (invalid
-            # identifier); its EVAL constants still emit under their own valid names.
+            # `ENUM <name> <underlying-c-type>` — alias to the real underlying integer, not always c_int.
+            mut erest = line.slice(5, line.len())
+            mut eps = erest.split(" ")
+            mut en = eps.get(0)
+            mut eunder = "c_int"
+            if eps.len > 1: eunder = eps.get(1)
             if _is_clean_ident(en) and not seen.contains("enum:" + en):
-                consts.append("type " + en + " = c_int\n")
+                consts.append("type " + en + " = " + eunder + "\n")
                 seen.insert("enum:" + en, true)
             continue
         if line.starts_with("EVAL "):
@@ -1631,32 +1802,65 @@ def _cpp_generate(ir: str, header: str, out: str):
                 mut spname = pname
                 if spname == "self": spname = "self_"        # avoid shim receiver collision
                 mut tpname = _cpp_tr_pname(pname)             # avoid Tauraro receiver/keyword
-                mut t = _cpp_parse_type(ptype)
-                mut enum_hit = enum_names.contains(_last_seg(t.base))
+                # Descriptor-based mapping on the canonical kind.
+                mut d4 = _desc4(ptype)
+                mut pdepth = _to_int(d4.get(0))
+                mut pref = (d4.get(1) == "1")
+                mut pcat = d4.get(2)
+                mut pdet = d4.get(3)
                 mut sc = ""
                 mut fw = ""
                 mut trt = ""
-                if t.is_prim:
-                    sc = _cpp_ctype(t) + " " + spname
-                    fw = spname
-                    trt = _cpp_tr_type(t)
-                elif enum_hit and t.ptr == 0:
-                    # enum by value: crosses as its c_int alias, NOT an opaque pointer.
-                    sc = _last_seg(t.base) + " " + spname
-                    fw = spname
-                    trt = _last_seg(t.base)
+                if pcat == "p":
+                    mut cpp = _c_to_cpp(pdet)
+                    if pdepth == 0:
+                        sc = cpp + " " + spname; fw = spname; trt = pdet
+                    else:
+                        sc = cpp + " " + _stars(pdepth) + spname
+                        if pref: fw = "*" + spname
+                        else: fw = spname
+                        trt = _ptr_wrap(pdet, pdepth)
+                elif pcat == "e":
+                    mut espell = pdet.split("#").get(0)
+                    mut ealias = _last_seg(espell)
+                    if pdepth == 0:
+                        sc = espell + " " + spname; fw = spname; trt = ealias
+                    else:
+                        sc = espell + " " + _stars(pdepth) + spname
+                        if pref: fw = "*" + spname
+                        else: fw = spname
+                        trt = _ptr_wrap(ealias, pdepth)
+                elif pcat == "s" and pdet == "string":
+                    # std::string param: Tauraro passes a C string; the shim builds a temporary.
+                    sc = "const char* " + spname
+                    fw = "std::string(" + spname + ")"
+                    trt = "Pointer[char]"
+                elif pcat == "f":
+                    # function-pointer param: cross as a raw address; cast to the real fn type.
+                    sc = "void* " + spname
+                    fw = "(" + pdet + ")" + spname
+                    trt = "Pointer[void]"
+                elif pcat == "r":
+                    mut seg = _last_seg(pdet)
+                    if value_structs.contains(seg) and pdepth == 0:
+                        sc = pdet + " " + spname; fw = spname; trt = seg
+                    else:
+                        mut nd = pdepth
+                        if nd < 1: nd = 1
+                        sc = _cpp_qual(pdet, class_qual) + " " + _stars(nd) + spname
+                        if pdepth == 0: fw = "*" + spname       # by-value non-POD: deref the handle
+                        elif pref: fw = "*" + spname
+                        else: fw = spname
+                        trt = _cpp_opaque_handle(pdet, nd, class_names, value_structs, seen, opaque)
                 else:
-                    mut nd = t.ptr
+                    # s(non-string std) / u(unknown) — opaque handle by pointer.
+                    mut nd = pdepth
                     if nd < 1: nd = 1
-                    mut stars = ""
-                    mut si = 0
-                    while si < nd:
-                        stars = stars + "*"
-                        si = si + 1
-                    sc = _cpp_qual(t.base, class_qual) + stars + " " + spname
-                    if t.was_ptr: fw = spname
-                    else: fw = "*" + spname
-                    trt = _cpp_opaque_handle(t.base, nd, class_names, seen, opaque)
+                    sc = pdet + " " + _stars(nd) + spname
+                    if pdepth == 0: fw = "*" + spname
+                    elif pref: fw = "*" + spname
+                    else: fw = spname
+                    trt = _cpp_opaque_handle(pdet, nd, class_names, value_structs, seen, opaque)
                 if shimp == "": shimp = sc
                 else: shimp = shimp + ", " + sc
                 if fargs == "": fargs = fw
@@ -1681,7 +1885,7 @@ def _cpp_generate(ir: str, header: str, out: str):
                 decls.append("    def " + sym + "(" + trp + ") -> " + cur_class + "\n")
                 n_fns = n_fns + 1
             else:
-                mut ri = _cpp_ret_ex(m_ret, call, enum_names, class_names, class_qual, seen, opaque)
+                mut ri = _cpp_ret_ex(m_ret, call, value_structs, class_names, class_qual, seen, opaque)
                 mut sym0 = ""
                 if mode == "method": sym0 = class_pfx + "_" + m_name
                 else:
@@ -1739,6 +1943,9 @@ def _cpp_generate(ir: str, header: str, out: str):
     sh.append("// Auto-generated C++ -> C shim for " + header + " (tauraro-bindgen -h cpp).\n")
     sh.append("// Compile:  c++ -c " + shim_name + "\n")
     sh.append("#include \"" + header + "\"\n")
+    sh.append("#include <string>\n#include <cstring>\n#include <cstdlib>\n")
+    sh.append("// std::string return -> heap char* copy (caller owns it; free with the runtime free).\n")
+    sh.append("static char* _tr_cpp_strdup(const std::string& s){ char* p=(char*)malloc(s.size()+1); if(p){ memcpy(p, s.c_str(), s.size()); p[s.size()]=0; } return p; }\n")
     sh.append(usings.to_string().as_str())
     sh.append("extern \"C\" {\n")
     sh.append(shim.to_string().as_str())
