@@ -3866,6 +3866,7 @@ __attribute__((hot)) TrStr _local_exe(TrStr stem);
 __attribute__((hot)) TrStr _detect_libclang(TrStr cc);
 __attribute__((hot)) CppType* _cpp_parse_type(TrStr spelling);
 __attribute__((hot)) TrStr _last_seg(TrStr s);
+__attribute__((hot)) TrStr _cpp_op_name(TrStr mname, long long nparams, bool is_member);
 __attribute__((hot)) TrStr _cpp_ident(TrStr s);
 __attribute__((hot)) bool _is_clean_ident(TrStr s);
 __attribute__((hot)) bool _is_tr_keyword(TrStr n);

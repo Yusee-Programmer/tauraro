@@ -159,8 +159,10 @@ wrappers, compiles):
   and plain `enum` both.
 - **`std::` / template / unknown types** become opaque handles (`std::string` → `std__string`),
   passed by pointer, so the binding compiles; the shim uses the real C++ type.
-- **Operator overloads** (`operator=`, `operator==`, …) are skipped (not valid C identifiers, not
-  callable by name from FFI).
+- **Operator overloads** bind under clean wrapper names (`operator+` → `op_add`, `operator==` →
+  `op_eq`, `operator[]` → `op_index`, `operator*` → `op_deref`/`op_mul`, …) — see the dedicated
+  section below. The shim still calls the real `operator@`. A handful (copy/move assignment,
+  address-of, conversion operators, `new`/`delete`) are skipped.
 - **Reserved-word / receiver-colliding parameter names** (`in`, `self`, …) are sanitized on the
   Tauraro side (`in_`); const-ref/const-ptr returns are `const`-cast in the shim.
 - **Anonymous enums/classes** (clang spells them `(unnamed enum at …)`) are skipped rather than
@@ -284,11 +286,35 @@ and `W_area_3(o)` (scale=2, bias=5). The walker counts trailing parameters that 
 `37 / 35 / 25`. Real `std::vector` picks this up automatically — its count/value/allocator ctors
 now expose the shorter forms too.
 
+### Operator overloads bind under named wrappers
+
+C++ operator overloads — pervasive in idiomatic headers (math/geometry types, comparisons,
+indexing, smart-pointer deref, functors) — now bind. Each `operator@` maps to a clean identifier
+and the shim calls the real operator via explicit syntax (`self->operator+(o)`):
+
+| C++ | wrapper | C++ | wrapper | C++ | wrapper |
+|-----|---------|-----|---------|-----|---------|
+| `a+b` | `op_add` | `a==b` | `op_eq` | `a[i]` | `op_index` |
+| `a-b` | `op_sub` | `a!=b` | `op_ne` | `a()` | `op_call` |
+| `a*b` | `op_mul` | `a<b` | `op_lt` | `*a` (unary) | `op_deref` |
+| `a/b` | `op_div` | `a<=b` | `op_le` | `a->` | `op_arrow` |
+| `-a` (unary) | `op_neg` | `a+=b` | `op_iadd` | `++a` | `op_inc` |
+
+(plus `op_mod`, `op_gt`/`op_ge`, `op_isub`/`op_imul`/`op_idiv`, `op_lshift`/`op_rshift`,
+`op_bitand`/`op_bitor`/`op_xor`/`op_bitnot`, `op_land`/`op_lor`/`op_lnot`, `op_dec`). Unary vs
+binary `*`/`+`/`-` are disambiguated by arity (member: 0 params = unary). **Skipped:** copy/move
+assignment (`operator=` — aliasing/self-ref), unary address-of, conversion operators
+(`operator bool`), and `operator new`/`delete`. Verified end-to-end (`use_operators.tr`): a `Vec2`
+with `+ - -(unary) [] == < +=` all compute correctly through the FFI.
+
 ## Honest scope / remaining hard tail
 
-- **Iterator-returning methods** (`find`/`begin`/`end`) and comparator/nested-type returns
-  (`value_comp`) are skipped — iterators are opaque template types. Use `at`/`operator[]`-style
-  keyed access (bound) rather than iteration.
+- **Node-based container iteration** (`std::list`/`map`/`set` via `begin()`/`end()` + `++`) is not
+  yet turnkey: `operator*` (`op_deref`) and `operator[]` bind, but a template iterator's
+  `operator++` returns its *own* dependent self-type (`__normal_iterator<…>&`), which the
+  instantiation walker marks dependent and skips, and the `==`/`!=` used to test end are *free*
+  namespace-scope templates (not members). **Random-access containers iterate fine today** via the
+  bound `at(i)`/`size()` (or the iterator's `op_index`); node-based traversal is the residual.
 - **Free-function templates** (`template<class T> T max(T,T)`) aren't auto-instantiated (unlike class
   templates, they have no usage site to key on) — add a typedef/alias to force one.
 - **By-value *system* structs** (`windows.h`'s `_GUID` passed by value) — pointer-based COM works.

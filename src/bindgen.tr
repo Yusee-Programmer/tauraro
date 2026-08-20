@@ -1476,6 +1476,66 @@ def _last_seg(s: str) -> str:
     if parts.len == 0: return s
     return parts.get(parts.len - 1)
 
+# Map a C++ operator method spelling ("operator*", "operator[]", "operator==") to a clean
+# wrapper identifier ("op_deref", "op_index", "op_eq"). Returns "" to SKIP (copy/move
+# assignment, address-of, conversion operators, new/delete) — those don't cross an FFI
+# boundary sanely. `nparams` = declared parameter count; `is_member` distinguishes a member
+# operator (unary=0 params, binary=1) from a free operator (unary=1, binary=2). Arity only
+# matters for the glyphs that are both unary and binary (* + - &). Binding operators is what
+# makes iterators (*/++/==), arithmetic/comparison types (+ - == <) and operator[] usable.
+def _cpp_op_name(mname: str, nparams: int, is_member: bool) -> str:
+    if mname.len() < 9: return ""              # "operator" + at least one glyph char
+    mut g = mname.slice(8, mname.len())        # the operator glyph(s): "*", "==", "[]", "++"
+    # Conversion operators ("operator bool"), new/delete/co_await: glyph starts with a letter
+    # or space — un-nameable / not a real operation to expose. Skip.
+    mut c0 = g[0]
+    if (c0 >= 65 and c0 <= 90) or (c0 >= 97 and c0 <= 122) or c0 == 32: return ""
+    mut unary = false
+    if is_member: unary = (nparams == 0)
+    else: unary = (nparams <= 1)
+    if g == "[]": return "op_index"
+    if g == "()": return "op_call"
+    if g == "->": return "op_arrow"
+    if g == "++": return "op_inc"
+    if g == "--": return "op_dec"
+    if g == "==": return "op_eq"
+    if g == "!=": return "op_ne"
+    if g == "<=": return "op_le"
+    if g == ">=": return "op_ge"
+    if g == "<": return "op_lt"
+    if g == ">": return "op_gt"
+    if g == "<<": return "op_lshift"
+    if g == ">>": return "op_rshift"
+    if g == "+=": return "op_iadd"
+    if g == "-=": return "op_isub"
+    if g == "*=": return "op_imul"
+    if g == "/=": return "op_idiv"
+    if g == "%=": return "op_imod"
+    if g == "&=": return "op_iand"
+    if g == "|=": return "op_ior"
+    if g == "^=": return "op_ixor"
+    if g == "*":
+        if unary: return "op_deref"
+        return "op_mul"
+    if g == "+":
+        if unary: return "op_pos"
+        return "op_add"
+    if g == "-":
+        if unary: return "op_neg"
+        return "op_sub"
+    if g == "/": return "op_div"
+    if g == "%": return "op_mod"
+    if g == "&":
+        if unary: return ""                    # unary address-of — skip
+        return "op_bitand"
+    if g == "|": return "op_bitor"
+    if g == "^": return "op_xor"
+    if g == "~": return "op_bitnot"
+    if g == "!": return "op_lnot"
+    if g == "&&": return "op_land"
+    if g == "||": return "op_lor"
+    return ""                                  # "=" (assignment), compound-shift, unknown → skip
+
 # Sanitize any C++ type/name spelling into a valid Tauraro/C identifier (`std::string` ->
 # `std__string`, `vector<int>` -> `vector_int_`). Used for opaque handles of std::/template/
 # unknown types so the binding compiles.
@@ -2074,10 +2134,15 @@ def _cpp_generate(ir: str, header: str, out: str):
         if line == "EMETHOD" or line == "ECTOR" or line == "EFUNC":
             mut is_static = (m_flags.slice(0, 1) == "s")
             mut is_const  = (m_flags.slice(1, 2) == "c")
-            # Skip operator overloads (`operator=`, `operator[]`, …) — not valid C identifiers and
-            # not callable by name from Tauraro FFI. Also skip a method with no class context.
+            # Operator overloads: bind under a clean wrapper name (op_add/op_eq/op_deref/op_index…)
+            # while the shim still calls the real `operator@` — this is what makes iterators,
+            # arithmetic/comparison types and operator[] usable across the FFI. A handful
+            # (assignment, address-of, conversion, new/delete) map to "" and are still skipped.
+            mut m_sym = m_name
             if mode != "ctor" and m_name.len() >= 8 and m_name.slice(0, 8) == "operator":
-                mode = ""; continue
+                m_sym = _cpp_op_name(m_name, params.len, mode == "method")
+                if m_sym == "":
+                    mode = ""; continue
             # ctor/method need a valid class context (skip anonymous-class members).
             if (mode == "ctor" or mode == "method") and not _is_clean_ident(cur_class):
                 mode = ""; continue
@@ -2221,10 +2286,10 @@ def _cpp_generate(ir: str, header: str, out: str):
                 else:
                     mut ri = _cpp_ret_ex(m_ret, call, value_structs, class_names, class_qual, seen, opaque)
                     mut sym0 = ""
-                    if mode == "method": sym0 = class_pfx + "_" + m_name
+                    if mode == "method": sym0 = class_pfx + "_" + m_sym
                     else:
-                        if ns_path == "": sym0 = m_name
-                        else: sym0 = _ns_us(ns_path) + "_" + m_name
+                        if ns_path == "": sym0 = m_sym
+                        else: sym0 = _ns_us(ns_path) + "_" + m_sym
                     mut sym = _uniq_sym(sym0, sym_used)
                     shim.append(ri.get(0) + " " + sym + "(" + shimp + ") { " + ri.get(1) + " }\n")
                     mut d = "    def " + sym + "(" + trp + ")"

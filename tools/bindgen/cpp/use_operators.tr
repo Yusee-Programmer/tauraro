@@ -1,0 +1,15 @@
+from operators import vm_Vec2_new, vm_Vec2_op_add, vm_Vec2_op_sub, vm_Vec2_op_neg, vm_Vec2_op_index, vm_Vec2_op_eq, vm_Vec2_op_lt, vm_Vec2_op_iadd
+def main():
+    mut a = vm_Vec2_new(3, 4)
+    mut b = vm_Vec2_new(1, 2)
+    mut c = vm_Vec2_op_add(a, b)
+    print("a+b = (" + vm_Vec2_op_index(c,0).to_str() + "," + vm_Vec2_op_index(c,1).to_str() + ")")
+    mut d = vm_Vec2_op_sub(a, b)
+    print("a-b = (" + vm_Vec2_op_index(d,0).to_str() + "," + vm_Vec2_op_index(d,1).to_str() + ")")
+    mut n = vm_Vec2_op_neg(a)
+    print("-a  = (" + vm_Vec2_op_index(n,0).to_str() + "," + vm_Vec2_op_index(n,1).to_str() + ")")
+    print("a==b: " + vm_Vec2_op_eq(a, b).to_str())
+    print("b<a : " + vm_Vec2_op_lt(b, a).to_str())
+    mut e = vm_Vec2_op_iadd(a, b)
+    print("a+=b: (" + vm_Vec2_op_index(e,0).to_str() + "," + vm_Vec2_op_index(e,1).to_str() + ")")
+    print("ok")
