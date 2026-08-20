@@ -143,10 +143,35 @@ tauraroc use_shapes.tr --link shapes.o --link shapes_shim.o -lstdc++ -o use_shap
 - The instance-method receiver is named **`obj`**, never `self` — a param literally named `self` is
   treated as an implicit method receiver and dropped from the emitted C prototype.
 
-## Honest scope
+## Complex-header hardening (validated)
 
-The walker uses the *real* Clang parser, so parsing is complete. The **generator** will cover the
-high-value cases first — classes, methods, ctors/dtors, static methods, free functions, enums,
-namespaces, primitive + pointer params. The genuinely hard tail (templates needing explicit
-instantiation, `std::` containers in signatures, operator overloads, multiple/virtual inheritance,
-exception translation) is the same tail every C++ binding tool faces and is added incrementally.
+The generator is hardened for the features a real C++ API uses, verified end-to-end on
+`media.hpp` (overloads, nested classes, inheritance, operators, enums, `std::`, references,
+by-value returns — driven from `use_media.tr`) and on libstdc++ `<complex>` (2,751 lines → 90
+wrappers, compiles):
+
+- **Overloaded functions/methods/ctors** get a `_2`, `_3`, … suffix (C and Tauraro have no
+  overloading) — `encode` / `encode_2`, `Buffer_new` / `Buffer_new_2`.
+- **Nested classes** (`Encoder::Stats`) — the receiver is tracked on a class *stack*, so a method
+  after a nested class still binds to the right parent, and the shim uses the fully-qualified
+  C++ name (`media::Encoder::Stats`).
+- **Enums cross by value** as their `c_int` alias (not as an opaque pointer) — scoped `enum class`
+  and plain `enum` both.
+- **`std::` / template / unknown types** become opaque handles (`std::string` → `std__string`),
+  passed by pointer, so the binding compiles; the shim uses the real C++ type.
+- **Operator overloads** (`operator=`, `operator==`, …) are skipped (not valid C identifiers, not
+  callable by name from FFI).
+- **Reserved-word / receiver-colliding parameter names** (`in`, `self`, …) are sanitized on the
+  Tauraro side (`in_`); const-ref/const-ptr returns are `const`-cast in the shim.
+- **Anonymous enums/classes** (clang spells them `(unnamed enum at …)`) are skipped rather than
+  emitting un-parseable output.
+- **Referenced-but-undefined external types** are forward-declared opaque so the `.tr` compiles.
+
+## Honest scope / hard tail
+
+The walker uses the *real* Clang parser, so parsing is complete. Remaining hard-tail cases (the same
+every C++ binder faces): **templates** need explicit instantiation to bind (a `template<class T>`
+is skipped); **`std::` containers** cross as opaque handles (no element access without hand-written
+accessors); a system-value-typedef-heavy header (e.g. Windows COM `comdef.h`, referencing hundreds
+of `windows.h` typedefs like `HRESULT`=`long`) parses but doesn't fully compile, because those
+value typedefs can't be auto-sized — bind such libraries through a hand-written narrow shim.

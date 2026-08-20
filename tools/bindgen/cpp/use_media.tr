@@ -1,0 +1,17 @@
+# Drive the complex media:: C++ API from Tauraro via the bindgen-generated shim.
+from media import media_Buffer_new_2, media_Buffer_at, media_Buffer_delete, media_encode, media_encode_2, media_Encoder_new, media_Encoder_ratio, media_Encoder_stats, media_Encoder_Stats_frames, media_FastEncoder_new, media_FastEncoder_turbo, media_distance
+
+def main():
+    mut b = media_Buffer_new_2(16)
+    print("at(5)            = " + media_Buffer_at(b, 5).to_str())
+    print("encode(H265)     = " + media_encode(b, H265).to_str())        # overload 1
+    print("encode(H265,10)  = " + media_encode_2(b, H265, 10).to_str())  # overload 2
+    mut e = media_Encoder_new(AV1)
+    print("ratio            = " + media_Encoder_ratio(e).to_str())
+    mut st = media_Encoder_stats(e)                                      # nested class handle
+    print("Stats.frames     = " + media_Encoder_Stats_frames(st).to_str())
+    mut f = media_FastEncoder_new()                                      # inheritance
+    print("FastEncoder.turbo= " + media_FastEncoder_turbo(f).to_str())
+    print("distance(3,10)   = " + media_distance(3.0, 10.0).to_str())
+    media_Buffer_delete(b)
+    print("ok")

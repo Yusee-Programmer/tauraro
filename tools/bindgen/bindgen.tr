@@ -1215,6 +1215,65 @@ def _last_seg(s: str) -> str:
     if parts.len == 0: return s
     return parts.get(parts.len - 1)
 
+# Sanitize any C++ type/name spelling into a valid Tauraro/C identifier (`std::string` ->
+# `std__string`, `vector<int>` -> `vector_int_`). Used for opaque handles of std::/template/
+# unknown types so the binding compiles.
+def _cpp_ident(s: str) -> str:
+    mut out = ""
+    mut i = 0
+    while i < s.len():
+        mut c = s[i]
+        if (c >= 65 and c <= 90) or (c >= 97 and c <= 122) or (c >= 48 and c <= 57) or c == 95:
+            out = out + s.slice(i, i + 1)
+        else:
+            out = out + "_"
+        i = i + 1
+    if out == "": return "T_"
+    mut c0 = out[0]
+    if c0 >= 48 and c0 <= 57: return "T_" + out    # can't start with a digit
+    return out
+
+# True if `s` is a clean identifier (letter/underscore start, then alnum/underscore). Used to
+# reject anonymous/ill-named clang spellings like `(unnamed enum at f.h:60:3)` or an empty
+# anonymous-class name, which would otherwise emit un-parseable Tauraro.
+def _is_clean_ident(s: str) -> bool:
+    if s.len() == 0: return false
+    mut c0 = s[0]
+    if not ((c0 >= 65 and c0 <= 90) or (c0 >= 97 and c0 <= 122) or c0 == 95): return false
+    mut i = 1
+    while i < s.len():
+        mut c = s[i]
+        if not ((c >= 65 and c <= 90) or (c >= 97 and c <= 122) or (c >= 48 and c <= 57) or c == 95): return false
+        i = i + 1
+    return true
+
+# Tauraro reserved words that cannot be a bare parameter name (would be a parse error).
+def _is_tr_keyword(n: str) -> bool:
+    if n == "in" or n == "is" or n == "as" or n == "or" or n == "and" or n == "not": return true
+    if n == "if" or n == "else" or n == "elif" or n == "for" or n == "while" or n == "match" or n == "case": return true
+    if n == "def" or n == "return" or n == "class" or n == "enum" or n == "type" or n == "interface": return true
+    if n == "mut" or n == "pub" or n == "ref" or n == "from" or n == "import" or n == "pass": return true
+    if n == "break" or n == "continue" or n == "true" or n == "false" or n == "none": return true
+    if n == "super" or n == "with" or n == "try" or n == "raise" or n == "async" or n == "await": return true
+    if n == "var" or n == "do" or n == "loop" or n == "defer" or n == "actor" or n == "decorator": return true
+    if n == "extend" or n == "implements" or n == "extends" or n == "throws" or n == "spawn": return true
+    return false
+
+# Disambiguate an overloaded C symbol: first use keeps the name, later ones get `_2`, `_3`, …
+# (C++ has no overloading across `extern "C"`, and Tauraro has no def-overloading either).
+def _uniq_sym(base_sym: str, used: Map[str, int]) -> str:
+    if used.contains(base_sym):
+        mut n = used.get(base_sym) + 1
+        used.insert(base_sym, n)
+        return base_sym + "_" + n.to_str()
+    used.insert(base_sym, 1)
+    return base_sym
+
+# The Tauraro-side parameter name: avoid the implicit receiver (`obj`/`self`) and keywords.
+def _cpp_tr_pname(pname: str) -> str:
+    if pname == "self" or pname == "obj" or _is_tr_keyword(pname): return pname + "_"
+    return pname
+
 # C++ type text for a primitive (base + trailing stars), used in shim signatures.
 def _cpp_ctype(t: CppType) -> str:
     mut s = t.base
@@ -1255,6 +1314,66 @@ def _cpp_ret(rt: CppType, call: str) -> Vec[str]:
         r.push(rt.base + "*"); r.push("return &(" + call + ");"); r.push(trret)
     else:
         r.push(rt.base + "*"); r.push("return new " + rt.base + "(" + call + ");"); r.push(trret)
+    return r
+
+# The Tauraro opaque-handle type for a class / std:: / template / unknown C++ type. A known
+# class uses its bare name (already an emitted `class X: pass`); an unknown/std type is
+# sanitized (`std::string` -> `std__string`) and registered as an opaque class on demand.
+# `nd` is the pointer depth (>=1); extra levels wrap in Pointer[...].
+def _cpp_opaque_handle(base: str, nd: int, class_names: Map[str, bool], seen: Map[str, bool], opaque: StringBuilder) -> str:
+    mut seg = _last_seg(base)
+    mut handle = seg
+    if _is_libc_ty_name(seg):
+        # A standard libc type (FILE, …) is already defined by the runtime's system headers;
+        # reference it bare (resolves in C) rather than emitting a conflicting opaque class.
+        handle = seg
+    elif not class_names.contains(seg):
+        handle = _cpp_ident(base)
+        if not seen.contains("class:" + handle):
+            opaque.append("class " + handle + ":\n    pass\n")
+            seen.insert("class:" + handle, true)
+    mut ty = handle
+    mut k = 1
+    while k < nd:
+        ty = "Pointer[" + ty + "]"
+        k = k + 1
+    return ty
+
+# Resolve a class type's C++ spelling to its fully-qualified name (`Stats` -> `media::Encoder::Stats`)
+# using the qualified names collected on the class stack, so a nested/namespaced class type
+# resolves in the shim (bare `Stats` isn't visible even with `using namespace`).
+def _cpp_qual(base: str, class_qual: Map[str, str]) -> str:
+    mut seg = _last_seg(base)
+    if class_qual.contains(seg): return class_qual.get(seg)
+    return base
+
+# Enum/class-aware return lowering: [shim_ctype, body_stmt, tr_ret]. Enums cross by value as
+# their c_int alias; classes/std/unknown cross as opaque handles (heap-copied / addressed).
+def _cpp_ret_ex(m_ret: str, call: str, enum_names: Map[str, bool], class_names: Map[str, bool], class_qual: Map[str, str], seen: Map[str, bool], opaque: StringBuilder) -> Vec[str]:
+    mut r = Vec[str].init(3)
+    mut rt = _cpp_parse_type(m_ret)
+    if rt.base == "void" and rt.ptr == 0:
+        r.push("void"); r.push(call + ";"); r.push("")
+        return r
+    if rt.is_prim:
+        r.push(_cpp_ctype(rt)); r.push("return " + call + ";"); r.push(_cpp_tr_type(rt))
+        return r
+    if enum_names.contains(_last_seg(rt.base)) and rt.ptr == 0:
+        r.push(_last_seg(rt.base)); r.push("return " + call + ";"); r.push(_last_seg(rt.base))
+        return r
+    mut nd = rt.ptr
+    if nd < 1: nd = 1
+    mut handle = _cpp_opaque_handle(rt.base, nd, class_names, seen, opaque)
+    mut cb = _cpp_qual(rt.base, class_qual)
+    # C-style cast on ptr/ref returns strips a `const` the return spelling carried (e.g.
+    # `const std::string& name()`), which would otherwise fail to convert to the non-const
+    # `T*` shim return. The Tauraro side sees one opaque handle regardless of const.
+    if rt.was_ptr:
+        r.push(cb + "*"); r.push("return (" + cb + "*)(" + call + ");"); r.push(handle)
+    elif rt.was_ref:
+        r.push(cb + "*"); r.push("return (" + cb + "*)(&(" + call + "));"); r.push(handle)
+    else:
+        r.push(cb + "*"); r.push("return new " + cb + "(" + call + ");"); r.push(handle)
     return r
 
 # Drop the trailing "::segment" of a "::"-joined namespace path.
@@ -1298,11 +1417,31 @@ def _cpp_generate(ir: str, header: str, out: str):
     mut seen: Map[str, bool] = Map[str, bool].init(64)
 
     mut ns_path = ""          # "geo" or "geo::detail"
-    mut cur_class = ""        # unqualified, e.g. "Shape"
-    mut cur_class_qual = ""   # "geo::Shape"
-    mut class_pfx = ""        # "geo_Shape"
     mut n_classes = 0
     mut n_fns = 0
+    mut sym_used: Map[str, int] = Map[str, int].init(64)   # overload disambiguation
+
+    # Class STACK (nested classes: `Encoder::Stats`) — on ECLASS we must restore the parent's
+    # class as the receiver, not blank it (else a following method gets an empty `obj:` type).
+    mut cstk_name: Vec[str] = Vec[str].init(4)
+    mut cstk_qual: Vec[str] = Vec[str].init(4)
+    mut cstk_pfx:  Vec[str] = Vec[str].init(4)
+
+    # Pre-scan: which names are ENUMs (value types, cross by value as c_int) vs CLASSes (opaque
+    # handles, cross by pointer). Needed because a param/return type is just a spelling.
+    mut enum_names:  Map[str, bool] = Map[str, bool].init(32)
+    mut class_names: Map[str, bool] = Map[str, bool].init(32)
+    mut class_qual:  Map[str, str]  = Map[str, str].init(32)   # last-seg name -> qualified C++ name
+    mut plines = ir.split("\n")
+    mut pli = 0
+    while pli < plines.len:
+        mut pl = _rstrip_cr(plines.get(pli))
+        pli = pli + 1
+        if pl.starts_with("ENUM "):
+            mut en0 = pl.slice(5, pl.len())
+            if en0 != "anon": enum_names.insert(en0, true)
+        elif pl.starts_with("CLASS "):
+            class_names.insert(pl.slice(6, pl.len()), true)
 
     mut mode = ""             # "ctor" | "method" | "func"
     mut m_flags = ".."
@@ -1317,16 +1456,30 @@ def _cpp_generate(ir: str, header: str, out: str):
         li = li + 1
         if line == "": continue
 
+        # current class context = top of the stack
+        mut cur_class = ""
+        mut cur_class_qual = ""
+        mut class_pfx = ""
+        if cstk_name.len > 0:
+            cur_class = cstk_name.get(cstk_name.len - 1)
+            cur_class_qual = cstk_qual.get(cstk_qual.len - 1)
+            class_pfx = cstk_pfx.get(cstk_pfx.len - 1)
+
         if line == "CTOR":
             mode = "ctor"; params = Vec[str].init(4); continue
         if line == "DTOR":
-            mut ds = class_pfx + "_delete"
+            if not _is_clean_ident(cur_class): continue
+            mut ds = _uniq_sym(class_pfx + "_delete", sym_used)
             shim.append("void " + ds + "(" + cur_class_qual + "* self) { delete self; }\n")
             decls.append("    def " + ds + "(obj: " + cur_class + ")\n")
             n_fns = n_fns + 1
             continue
         if line == "ECLASS":
-            cur_class = ""; continue
+            if cstk_name.len > 0:
+                cstk_name.pop()
+                cstk_qual.pop()
+                cstk_pfx.pop()
+            continue
         if line == "ENS":
             ns_path = _ns_pop(ns_path); continue
         if line == "EENUM":
@@ -1341,21 +1494,30 @@ def _cpp_generate(ir: str, header: str, out: str):
                 seen.insert("using:" + ns_path, true)
             continue
         if line.starts_with("CLASS "):
-            cur_class = line.slice(6, line.len())
-            if ns_path == "": cur_class_qual = cur_class
-            else: cur_class_qual = ns_path + "::" + cur_class
-            if ns_path == "": class_pfx = cur_class
-            else: class_pfx = _ns_us(ns_path) + "_" + cur_class
-            if not seen.contains("class:" + cur_class):
+            mut ncls = line.slice(6, line.len())
+            # qualified name / prefix build on the ENCLOSING class (nested) or namespace.
+            mut nqual = ncls
+            mut npfx = ncls
+            if cur_class_qual != "": nqual = cur_class_qual + "::" + ncls
+            elif ns_path != "": nqual = ns_path + "::" + ncls
+            if class_pfx != "": npfx = class_pfx + "_" + ncls
+            elif ns_path != "": npfx = _ns_us(ns_path) + "_" + ncls
+            cstk_name.push(ncls)
+            cstk_qual.push(nqual)
+            cstk_pfx.push(npfx)
+            class_qual.insert(ncls, nqual)
+            if _is_clean_ident(ncls) and not seen.contains("class:" + ncls):
                 # Multiline `pass` body (NOT the inline `class X: pass` form, which makes the
                 # parser swallow the following top-level `extern` block).
-                opaque.append("class " + cur_class + ":\n    pass\n")
-                seen.insert("class:" + cur_class, true)
+                opaque.append("class " + ncls + ":\n    pass\n")
+                seen.insert("class:" + ncls, true)
                 n_classes = n_classes + 1
             continue
         if line.starts_with("ENUM "):
             mut en = line.slice(5, line.len())
-            if en != "anon" and not seen.contains("enum:" + en):
+            # Anonymous enums spell as `(unnamed enum at …)` — skip the `type` alias (invalid
+            # identifier); its EVAL constants still emit under their own valid names.
+            if _is_clean_ident(en) and not seen.contains("enum:" + en):
                 consts.append("type " + en + " = c_int\n")
                 seen.insert("enum:" + en, true)
             continue
@@ -1365,7 +1527,9 @@ def _cpp_generate(ir: str, header: str, out: str):
             mut ename = ep.get(0)
             mut eval_ = "0"
             if ep.len > 1: eval_ = ep.get(1)
-            consts.append("const " + ename + " = " + eval_ + "\n")
+            if not seen.contains("eval:" + ename):
+                consts.append("const " + ename + " = " + eval_ + "\n")
+                seen.insert("eval:" + ename, true)
             continue
         if line.starts_with("METHOD "):
             mut r = line.slice(7, line.len())
@@ -1389,12 +1553,17 @@ def _cpp_generate(ir: str, header: str, out: str):
         if line == "EMETHOD" or line == "ECTOR" or line == "EFUNC":
             mut is_static = (m_flags.slice(0, 1) == "s")
             mut is_const  = (m_flags.slice(1, 2) == "c")
+            # Skip operator overloads (`operator=`, `operator[]`, …) — not valid C identifiers and
+            # not callable by name from Tauraro FFI. Also skip a method with no class context.
+            if mode != "ctor" and m_name.len() >= 8 and m_name.slice(0, 8) == "operator":
+                mode = ""; continue
+            # ctor/method need a valid class context (skip anonymous-class members).
+            if (mode == "ctor" or mode == "method") and not _is_clean_ident(cur_class):
+                mode = ""; continue
             mut shimp = ""
             mut trp = ""
             mut fargs = ""
             if mode == "method" and not is_static:
-                # C++ shim keeps `self`; the Tauraro binding must NOT — a param literally named
-                # `self` is treated as an implicit method receiver and dropped from the C prototype.
                 if is_const: shimp = "const " + cur_class_qual + "* self"
                 else: shimp = cur_class_qual + "* self"
                 trp = "obj: " + cur_class
@@ -1407,13 +1576,23 @@ def _cpp_generate(ir: str, header: str, out: str):
                 mut pname = ""
                 if bar.len > 1: pname = bar.get(1)
                 if pname == "": pname = "a" + pi.to_str()
-                if pname == "self": pname = "obj"   # `self` = implicit receiver in Tauraro
+                mut spname = pname
+                if spname == "self": spname = "self_"        # avoid shim receiver collision
+                mut tpname = _cpp_tr_pname(pname)             # avoid Tauraro receiver/keyword
                 mut t = _cpp_parse_type(ptype)
+                mut enum_hit = enum_names.contains(_last_seg(t.base))
                 mut sc = ""
                 mut fw = ""
+                mut trt = ""
                 if t.is_prim:
-                    sc = _cpp_ctype(t) + " " + pname
-                    fw = pname
+                    sc = _cpp_ctype(t) + " " + spname
+                    fw = spname
+                    trt = _cpp_tr_type(t)
+                elif enum_hit and t.ptr == 0:
+                    # enum by value: crosses as its c_int alias, NOT an opaque pointer.
+                    sc = _last_seg(t.base) + " " + spname
+                    fw = spname
+                    trt = _last_seg(t.base)
                 else:
                     mut nd = t.ptr
                     if nd < 1: nd = 1
@@ -1422,16 +1601,16 @@ def _cpp_generate(ir: str, header: str, out: str):
                     while si < nd:
                         stars = stars + "*"
                         si = si + 1
-                    sc = t.base + stars + " " + pname
-                    if t.was_ptr: fw = pname
-                    else: fw = "*" + pname
-                mut trt = _cpp_tr_type(t)
+                    sc = _cpp_qual(t.base, class_qual) + stars + " " + spname
+                    if t.was_ptr: fw = spname
+                    else: fw = "*" + spname
+                    trt = _cpp_opaque_handle(t.base, nd, class_names, seen, opaque)
                 if shimp == "": shimp = sc
                 else: shimp = shimp + ", " + sc
                 if fargs == "": fargs = fw
                 else: fargs = fargs + ", " + fw
-                if trp == "": trp = pname + ": " + trt
-                else: trp = trp + ", " + pname + ": " + trt
+                if trp == "": trp = tpname + ": " + trt
+                else: trp = trp + ", " + tpname + ": " + trt
 
             mut call = ""
             if mode == "ctor":
@@ -1445,18 +1624,18 @@ def _cpp_generate(ir: str, header: str, out: str):
                 call = pre + m_name + "(" + fargs + ")"
 
             if mode == "ctor":
-                mut sym = class_pfx + "_new"
+                mut sym = _uniq_sym(class_pfx + "_new", sym_used)
                 shim.append(cur_class_qual + "* " + sym + "(" + shimp + ") { return " + call + "; }\n")
                 decls.append("    def " + sym + "(" + trp + ") -> " + cur_class + "\n")
                 n_fns = n_fns + 1
             else:
-                mut rt = _cpp_parse_type(m_ret)
-                mut ri = _cpp_ret(rt, call)
-                mut sym = ""
-                if mode == "method": sym = class_pfx + "_" + m_name
+                mut ri = _cpp_ret_ex(m_ret, call, enum_names, class_names, class_qual, seen, opaque)
+                mut sym0 = ""
+                if mode == "method": sym0 = class_pfx + "_" + m_name
                 else:
-                    if ns_path == "": sym = m_name
-                    else: sym = _ns_us(ns_path) + "_" + m_name
+                    if ns_path == "": sym0 = m_name
+                    else: sym0 = _ns_us(ns_path) + "_" + m_name
+                mut sym = _uniq_sym(sym0, sym_used)
                 shim.append(ri.get(0) + " " + sym + "(" + shimp + ") { " + ri.get(1) + " }\n")
                 mut d = "    def " + sym + "(" + trp + ")"
                 if ri.get(2) != "": d = d + " -> " + ri.get(2)
@@ -1477,10 +1656,28 @@ def _cpp_generate(ir: str, header: str, out: str):
     sb.append("#   c++ -c " + shim_name + " -o " + base + "_shim.o\n")
     sb.append("#   tauraroc yourapp.tr --link " + base + "_shim.o -lstdc++ -o app\n\n")
     mut os_ = opaque.to_string().as_str()
-    if os_ != "": sb.append(os_ + "\n")
     mut cs = consts.to_string().as_str()
-    if cs != "": sb.append(cs + "\n")
     mut ds2 = decls.to_string().as_str()
+    # Forward-declare any type referenced by the bindings but never defined here (external
+    # library/system typedefs — e.g. Windows COM's HRESULT/DWORD, or a sub-header type) as an
+    # opaque handle, so the generated .tr compiles. Build the defined-name set from what we
+    # emitted (opaque classes + enum/type aliases), skip libc types, and prepend the rest.
+    mut defined_names: Map[str, bool] = Map[str, bool].init(64)
+    mut dlns = (os_ + "\n" + cs).split("\n")
+    mut dii = 0
+    while dii < dlns.len:
+        mut dl = dlns.get(dii)
+        dii = dii + 1
+        if dl.starts_with("class "):
+            mut dn = _ident_at(dl, 6)
+            if dn != "": defined_names.insert(dn, true)
+        elif dl.starts_with("type "):
+            mut dn = _ident_at(dl, 5)
+            if dn != "": defined_names.insert(dn, true)
+    mut fb = _opaque_fallbacks(os_ + ds2, defined_names)
+    if fb != "": sb.append(fb)
+    if os_ != "": sb.append(os_ + "\n")
+    if cs != "": sb.append(cs + "\n")
     if ds2 != "":
         sb.append("extern \"C\":\n")
         sb.append(ds2)
