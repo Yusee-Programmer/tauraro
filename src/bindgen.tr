@@ -1328,6 +1328,15 @@ def _cxxwalk_src() -> str:
     sb.append("  else if(k==CXCursor_FunctionDecl){ printf(\"FUNC \"); tds(clang_getResultType(clang_getCursorType(c))); printf(\"|%s\\n\",nm); params(c); printf(\"EFUNC\\n\"); }\n")
     sb.append("  else if(k==CXCursor_EnumDecl){ CXType u=clang_getEnumDeclIntegerType(c); const char* us=scalar(u.kind); if(!us[0])us=\"c_int\"; printf(\"ENUM %s %s\\n\", nm[0]?nm:\"anon\", us); clang_visitChildren(c,visit,0); printf(\"EENUM\\n\"); }\n")
     sb.append("  else if(k==CXCursor_EnumConstantDecl) printf(\"EVAL %s %lld\\n\", nm, (long long)clang_getEnumConstantDeclValue(c));\n")
+    sb.append("  else if(k==CXCursor_TypedefDecl || k==CXCursor_TypeAliasDecl){\n")
+    sb.append("    // `typedef basic_stringstream<char> stringstream;` — a typedef to a template specialization\n")
+    sb.append("    // that no signature references. Emit a TDSPEC hint so bindgen force-instantiates + binds it\n")
+    sb.append("    // (fixes template-only headers like <sstream>/<random>). std::string is handled by its typemap.\n")
+    sb.append("    CXType u=clang_getCanonicalType(clang_getTypedefDeclUnderlyingType(c));\n")
+    sb.append("    if(u.kind==CXType_Record && clang_Type_getNumTemplateArguments(u)>0){\n")
+    sb.append("      CXString us=clang_getTypeSpelling(u); const char* r=S(us);\n")
+    sb.append("      if(strncmp(r,\"std::basic_string<char\",22)!=0) printf(\"TDSPEC %s\\n\", r);\n")
+    sb.append("      clang_disposeString(us); } }\n")
     sb.append("  clang_disposeString(nmS); return CXChildVisit_Continue; }\n")
     sb.append("static enum CXChildVisitResult collectparams(CXCursor cc, CXCursor pp, CXClientData dd){\n")
     sb.append("  if(clang_getCursorKind(cc)==CXCursor_TemplateTypeParameter && g_np<8){ strncpy(g_params[g_np], S(clang_getCursorSpelling(cc)), 63); g_params[g_np][63]=0; g_np++; }\n")
@@ -1349,7 +1358,13 @@ def _cxxwalk_src() -> str:
     sb.append("      int na=clang_Type_getNumTemplateArguments(ct); for(int i=0;i<na && i<8;i++) g_args[i]=clang_Type_getTemplateArgumentAsType(ct,i);\n")
     sb.append("      CXString cts=clang_getTypeSpelling(ct); { const char* cs=S(cts); const char* lt=strchr(cs,'<'); int bl=lt?(int)(lt-cs):(int)strlen(cs); if(bl>255)bl=255; memcpy(g_cbase,cs,bl); g_cbase[bl]=0; }\n")
     sb.append("      printf(\"TCLASS %s %d\\n\", S(cts), clang_isPODType(ct)); clang_disposeString(cts);\n")
-    sb.append("      clang_visitChildren(def, imeth, 0); printf(\"ECLASS\\n\"); g_np=0; g_cbase[0]=0;\n")
+    sb.append("      clang_visitChildren(def, imeth, 0);\n")
+    sb.append("      // Smart pointers: `get()` returns `element_type*` via a metafunction-dependent typedef that\n")
+    sb.append("      // libclang won't reduce, and it's inherited from a template base — so synthesize it directly.\n")
+    sb.append("      // The element type is the first template arg (a pointer to it). Enables extracting the pointee.\n")
+    sb.append("      if(na>0 && (strcmp(g_cbase,\"std::shared_ptr\")==0 || strcmp(g_cbase,\"std::unique_ptr\")==0 || strcmp(g_cbase,\"std::weak_ptr\")==0)){\n")
+    sb.append("        printf(\"METHOD .c \"); classify(1,0,clang_getCanonicalType(g_args[0])); printf(\"|get\\n\"); printf(\"EMETHOD\\n\"); }\n")
+    sb.append("      printf(\"ECLASS\\n\"); g_np=0; g_cbase[0]=0;\n")
     sb.append("    }\n")
     sb.append("  }\n")
     sb.append("  return CXChildVisit_Continue; }\n")
@@ -1571,8 +1586,12 @@ def _cpp_opaque_handle(base: str, nd: int, class_names: Map[str, bool], value_st
         if not seen.contains("class:" + handle):
             opaque.append("class " + handle + ":\n    pass\n")
             seen.insert("class:" + handle, true)
+    # An opaque class handle is ALREADY one C pointer (bare name == `T*`), so a pointer depth of
+    # `nd` wraps nd-1 times. A `@value_type` struct is a VALUE, so `T*` needs one full wrap — wrap
+    # all nd levels (e.g. `shared_ptr::get()` returning a `Thing*` where Thing is a POD struct).
     mut ty = handle
     mut k = 1
+    if value_structs.contains(seg): k = 0
     while k < nd:
         ty = "Pointer[" + ty + "]"
         k = k + 1
@@ -1868,6 +1887,7 @@ def _cpp_generate(ir: str, header: str, out: str):
         mut line = _rstrip_cr(lines.get(li))
         li = li + 1
         if line == "": continue
+        if line.starts_with("TDSPEC "): continue   # instantiation hint, consumed by _collect_specs
 
         # current class context = top of the stack
         mut cur_class = ""
@@ -2319,8 +2339,16 @@ def _collect_specs(ir: str) -> Vec[str]:
     mut lines = ir.split("\n")
     mut i = 0
     while i < lines.len:
-        mut ln = lines.get(i)
+        mut ln = _rstrip_cr(lines.get(i))
         i = i + 1
+        # `TDSPEC <spelling>` — a typedef'd template specialization (e.g. `stringstream`), which no
+        # signature references; the whole rest of the line is the spec to instantiate.
+        if ln.starts_with("TDSPEC "):
+            mut td = ln.slice(7, ln.len())
+            if td.find("<") >= 0 and not seen.contains(td):
+                seen.insert(td, true)
+                specs.push(td)
+            continue
         mut p = ln.find("~r~")
         if p < 0: continue
         mut rest = ln.slice(p + 3, ln.len())

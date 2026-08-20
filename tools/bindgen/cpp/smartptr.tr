@@ -1,0 +1,18 @@
+# Auto-generated C++ FFI bindings for smartptr.hpp (tauraro-bindgen -h cpp).
+# Build the shim once, then link it (and the C++ library) with your program:
+#   c++ -c smartptr_shim.cpp -o smartptr_shim.o
+#   tauraroc yourapp.tr --link smartptr_shim.o -lstdc++ -o app
+
+@value_type
+class Thing:
+    pub v: c_int
+class std__shared_ptr_w__Thing_:
+    pass
+class std__nullptr_t:
+    pass
+
+extern "C":
+    def w_make(v: c_int) -> std__shared_ptr_w__Thing_
+    def std__shared_ptr_w__Thing__new() -> std__shared_ptr_w__Thing_
+    def std__shared_ptr_w__Thing__new_2(a0: std__nullptr_t) -> std__shared_ptr_w__Thing_
+    def std__shared_ptr_w__Thing__get(obj: std__shared_ptr_w__Thing_) -> Pointer[Thing]

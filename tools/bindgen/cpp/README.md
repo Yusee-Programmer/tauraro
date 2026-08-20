@@ -257,19 +257,31 @@ bases aren't bound twice). Verified (`use_inherit.tr`): `Leaf` binds `id`/`kind`
 levels up), `midv` (from `Mid`), and its own `leafv` — all callable. This closes the single biggest
 gap for real-world C++ headers, which are overwhelmingly class hierarchies.
 
+### Smart pointers expose `get()`
+
+`std::shared_ptr<T>` / `unique_ptr` / `weak_ptr` now bind a `get()` that returns the pointee `T*`
+(`Pointer[T]`). `get()` is inherited from a *template* base (`__shared_ptr<T,…>`) and returns a
+metafunction-dependent typedef libclang won't reduce, so it's **synthesized** directly from the smart
+pointer's first template argument. Verified (`use_smartptr.tr`): a `shared_ptr<Thing>` is returned
+from C++, `get()` yields a `Pointer[Thing]`, and the pointee's field is read (`Thing.v = 42`).
+
+### Typedef'd template specializations are instantiated
+
+A `typedef Ring<int> IntRing;` (or `using`) that no function references now force-instantiates
+`Ring<int>` and binds its methods (`Ring_int__push/pop/size`). This picks up template types that
+appear only behind a typedef. (Extreme std template headers like `<sstream>`/`<random>` still bind
+little — their instantiations are enormous and error-prone; that's a std-specific edge, not a
+user-header limitation.)
+
 ## Honest scope / remaining hard tail
 
-- **Smart pointers** (`std::shared_ptr`/`unique_ptr`) bind as opaque handles with their constructors,
-  but `get()`/`operator->` are inherited from a *template* base (`__shared_ptr<T, …>`) — template-base
-  inheritance with re-indexed parameters is the deep tail, so the pointee isn't extracted. Pass smart
-  pointers through as handles; unwrap on the C++ side.
 - **Iterator-returning methods** (`find`/`begin`/`end`) and comparator/nested-type returns
   (`value_comp`) are skipped — iterators are opaque template types. Use `at`/`operator[]`-style
   keyed access (bound) rather than iteration.
 - **Free-function templates** (`template<class T> T max(T,T)`) aren't auto-instantiated (unlike class
   templates, they have no usage site to key on) — add a typedef/alias to force one.
-- **Default arguments** — a method with a default arg binds, but you pass every argument (the default
-  isn't re-exposed as a shorter overload).
+- **Default arguments** — a method with a default arg binds, but you pass every argument.
+- **By-value *system* structs** (`windows.h`'s `_GUID` passed by value) — pointer-based COM works.
 - **By-value *system* structs** (`windows.h`'s `_GUID`/`VARIANT` passed *by value*, not by pointer)
   are not laid out — that would need renaming the emitted struct to avoid redefining the one the
   runtime's system headers already provide, and would risk the working COM pointer handling for a
