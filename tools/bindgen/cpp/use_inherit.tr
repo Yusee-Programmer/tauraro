@@ -1,0 +1,8 @@
+from inherit import w_Leaf_new, w_Leaf_id, w_Leaf_kind, w_Leaf_midv, w_Leaf_leafv
+def main():
+    mut l = w_Leaf_new()
+    print("id=" + w_Leaf_id(l).to_str())        # inherited from Base (2 levels up): 100
+    print("kind=" + w_Leaf_kind(l).to_str())    # inherited: 1
+    print("midv=" + w_Leaf_midv(l).to_str())    # inherited from Mid: 20
+    print("leafv=" + w_Leaf_leafv(l).to_str())  # own: 30
+    print("ok")

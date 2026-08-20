@@ -248,11 +248,28 @@ a Tauraro program builds a `Vec3`, passes it by value to `add(Vec3, Vec3)`, and 
 `Vec3` fields (`sum.x = 11`). **System** records (`windows.h`'s `_GUID`, …) are deliberately left on
 the bare-reference path (`clang_Location_isInSystemHeader`), so `comdef.h` is unaffected.
 
+### Inherited methods are bound (class hierarchies)
+
+A derived class now exposes its **public base-class methods**, not just its own — the shim calls them
+through the derived pointer (public inheritance upcasts). This is transitive (a `Leaf : Mid : Base`
+binds `Base`'s methods too) and deduplicated (an override wins over the inherited version; diamond
+bases aren't bound twice). Verified (`use_inherit.tr`): `Leaf` binds `id`/`kind` (from `Base`, two
+levels up), `midv` (from `Mid`), and its own `leafv` — all callable. This closes the single biggest
+gap for real-world C++ headers, which are overwhelmingly class hierarchies.
+
 ## Honest scope / remaining hard tail
 
+- **Smart pointers** (`std::shared_ptr`/`unique_ptr`) bind as opaque handles with their constructors,
+  but `get()`/`operator->` are inherited from a *template* base (`__shared_ptr<T, …>`) — template-base
+  inheritance with re-indexed parameters is the deep tail, so the pointee isn't extracted. Pass smart
+  pointers through as handles; unwrap on the C++ side.
 - **Iterator-returning methods** (`find`/`begin`/`end`) and comparator/nested-type returns
   (`value_comp`) are skipped — iterators are opaque template types. Use `at`/`operator[]`-style
   keyed access (bound) rather than iteration.
+- **Free-function templates** (`template<class T> T max(T,T)`) aren't auto-instantiated (unlike class
+  templates, they have no usage site to key on) — add a typedef/alias to force one.
+- **Default arguments** — a method with a default arg binds, but you pass every argument (the default
+  isn't re-exposed as a shorter overload).
 - **By-value *system* structs** (`windows.h`'s `_GUID`/`VARIANT` passed *by value*, not by pointer)
   are not laid out — that would need renaming the emitted struct to avoid redefining the one the
   runtime's system headers already provide, and would risk the working COM pointer handling for a

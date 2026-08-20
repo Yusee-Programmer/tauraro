@@ -27,11 +27,16 @@ void media_Encoder_setFlag(media::Encoder* self, media::Flags f) { self->setFlag
 char* media_Encoder_name(const media::Encoder* self) { return _tr_cpp_strdup(self->name()); }
 void media_Encoder_setName(media::Encoder* self, const char* n) { self->setName(std::string(n)); }
 double media_Encoder_ratio(const media::Encoder* self) { return self->ratio(); }
+media::Encoder::Stats* media_Encoder_stats(const media::Encoder* self) { return new media::Encoder::Stats(self->stats()); }
 media::Encoder::Stats* media_Encoder_Stats_new() { return new media::Encoder::Stats(); }
 long media_Encoder_Stats_frames(const media::Encoder::Stats* self) { return self->frames(); }
-media::Encoder::Stats* media_Encoder_stats(const media::Encoder* self) { return new media::Encoder::Stats(self->stats()); }
 media::FastEncoder* media_FastEncoder_new() { return new media::FastEncoder(); }
 int media_FastEncoder_process(media::FastEncoder* self, media::Buffer *in, media::Buffer *out) { return self->process(*in, *out); }
 int media_FastEncoder_turbo(media::FastEncoder* self) { return self->turbo(); }
+void media_FastEncoder_setFlag(media::FastEncoder* self, media::Flags f) { self->setFlag(f); }
+char* media_FastEncoder_name(const media::FastEncoder* self) { return _tr_cpp_strdup(self->name()); }
+void media_FastEncoder_setName(media::FastEncoder* self, const char* n) { self->setName(std::string(n)); }
+double media_FastEncoder_ratio(const media::FastEncoder* self) { return self->ratio(); }
+media::Encoder::Stats* media_FastEncoder_stats(const media::FastEncoder* self) { return new media::Encoder::Stats(self->stats()); }
 double media_distance(double a, double b) { return media::distance(a, b); }
 }

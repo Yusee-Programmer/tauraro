@@ -41,10 +41,15 @@ extern "C":
     def media_Encoder_name(obj: Encoder) -> Pointer[char]
     def media_Encoder_setName(obj: Encoder, n: Pointer[char])
     def media_Encoder_ratio(obj: Encoder) -> c_double
+    def media_Encoder_stats(obj: Encoder) -> Stats
     def media_Encoder_Stats_new() -> Stats
     def media_Encoder_Stats_frames(obj: Stats) -> c_long
-    def media_Encoder_stats(obj: Encoder) -> Stats
     def media_FastEncoder_new() -> FastEncoder
     def media_FastEncoder_process(obj: FastEncoder, in_: Buffer, out: Buffer) -> c_int
     def media_FastEncoder_turbo(obj: FastEncoder) -> c_int
+    def media_FastEncoder_setFlag(obj: FastEncoder, f: Flags)
+    def media_FastEncoder_name(obj: FastEncoder) -> Pointer[char]
+    def media_FastEncoder_setName(obj: FastEncoder, n: Pointer[char])
+    def media_FastEncoder_ratio(obj: FastEncoder) -> c_double
+    def media_FastEncoder_stats(obj: FastEncoder) -> Stats
     def media_distance(a: c_double, b: c_double) -> c_double

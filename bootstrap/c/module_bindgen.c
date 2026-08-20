@@ -3076,6 +3076,84 @@ __attribute__((hot)) TrStr _cxxwalk_src() {
     /* pass */
     StringBuilder_append(sb, _tr_str_lit("  return CXChildVisit_Continue; }\n"));
     /* pass */
+    StringBuilder_append(sb, _tr_str_lit("/* Inherited-method support: bind a derived class's PUBLIC base methods too (the shim calls them\n"));
+    /* pass */
+    StringBuilder_append(sb, _tr_str_lit("   through the derived pointer — public inheritance upcasts). Dedup by name so an override / diamond\n"));
+    /* pass */
+    StringBuilder_append(sb, _tr_str_lit("   base isn't bound twice; own methods are recorded first so they win. */\n"));
+    /* pass */
+    StringBuilder_append(sb, _tr_str_lit("static char g_seenm[512][96]; static int g_nseenm=0;\n"));
+    /* pass */
+    StringBuilder_append(sb, _tr_str_lit("static int seen_method(const char* nm){ for(int i=0;i<g_nseenm;i++) if(strcmp(g_seenm[i],nm)==0) return 1; if(g_nseenm<512){ strncpy(g_seenm[g_nseenm],nm,95); g_seenm[g_nseenm][95]=0; g_nseenm++; } return 0; }\n"));
+    /* pass */
+    StringBuilder_append(sb, _tr_str_lit("static void emit_method(CXCursor c){\n"));
+    /* pass */
+    StringBuilder_append(sb, _tr_str_lit("  enum CXCursorKind k=clang_getCursorKind(c);\n"));
+    /* pass */
+    StringBuilder_append(sb, _tr_str_lit("  if(k==CXCursor_CXXMethod && clang_getCXXAccessSpecifier(c)==CX_CXXPublic){\n"));
+    /* pass */
+    StringBuilder_append(sb, _tr_str_lit("    printf(\"METHOD %c%c \", clang_CXXMethod_isStatic(c)?'s':'.', clang_CXXMethod_isConst(c)?'c':'.'); tds(clang_getResultType(clang_getCursorType(c))); printf(\"|%s\\n\", S(clang_getCursorSpelling(c))); params(c); printf(\"EMETHOD\\n\"); }\n"));
+    /* pass */
+    StringBuilder_append(sb, _tr_str_lit("  else if(k==CXCursor_Constructor && clang_getCXXAccessSpecifier(c)==CX_CXXPublic){ printf(\"CTOR\\n\"); params(c); printf(\"ECTOR\\n\"); }\n"));
+    /* pass */
+    StringBuilder_append(sb, _tr_str_lit("  else if(k==CXCursor_Destructor) printf(\"DTOR\\n\");\n"));
+    /* pass */
+    StringBuilder_append(sb, _tr_str_lit("}\n"));
+    /* pass */
+    StringBuilder_append(sb, _tr_str_lit("static enum CXChildVisitResult ownmeth(CXCursor c, CXCursor p, CXClientData d){\n"));
+    /* pass */
+    StringBuilder_append(sb, _tr_str_lit("  enum CXCursorKind k=clang_getCursorKind(c);\n"));
+    /* pass */
+    StringBuilder_append(sb, _tr_str_lit("  if(k==CXCursor_CXXMethod && clang_getCXXAccessSpecifier(c)==CX_CXXPublic) seen_method(S(clang_getCursorSpelling(c)));\n"));
+    /* pass */
+    StringBuilder_append(sb, _tr_str_lit("  if(k==CXCursor_CXXMethod||k==CXCursor_Constructor||k==CXCursor_Destructor) emit_method(c);\n"));
+    /* pass */
+    StringBuilder_append(sb, _tr_str_lit("  return CXChildVisit_Continue; }\n"));
+    /* pass */
+    StringBuilder_append(sb, _tr_str_lit("static void emit_inherited(CXCursor basespec);\n"));
+    /* pass */
+    StringBuilder_append(sb, _tr_str_lit("static enum CXChildVisitResult inheritm(CXCursor c, CXCursor p, CXClientData d){\n"));
+    /* pass */
+    StringBuilder_append(sb, _tr_str_lit("  enum CXCursorKind k=clang_getCursorKind(c);\n"));
+    /* pass */
+    StringBuilder_append(sb, _tr_str_lit("  if(k==CXCursor_CXXMethod && clang_getCXXAccessSpecifier(c)==CX_CXXPublic && !clang_CXXMethod_isStatic(c)){\n"));
+    /* pass */
+    StringBuilder_append(sb, _tr_str_lit("    const char* nm=S(clang_getCursorSpelling(c));\n"));
+    /* pass */
+    StringBuilder_append(sb, _tr_str_lit("    if(nm[0]!='~' && !seen_method(nm)) emit_method(c); }\n"));
+    /* pass */
+    StringBuilder_append(sb, _tr_str_lit("  else if(k==CXCursor_CXXBaseSpecifier && clang_getCXXAccessSpecifier(c)==CX_CXXPublic) emit_inherited(c);\n"));
+    /* pass */
+    StringBuilder_append(sb, _tr_str_lit("  return CXChildVisit_Continue; }\n"));
+    /* pass */
+    StringBuilder_append(sb, _tr_str_lit("static void emit_inherited(CXCursor basespec){\n"));
+    /* pass */
+    StringBuilder_append(sb, _tr_str_lit("  CXType bt=clang_getCursorType(basespec);\n"));
+    /* pass */
+    StringBuilder_append(sb, _tr_str_lit("  CXString bs=clang_getTypeSpelling(bt); const char* br=S(bs); int istmpl=(strstr(br,\"<\")!=NULL); clang_disposeString(bs);\n"));
+    /* pass */
+    StringBuilder_append(sb, _tr_str_lit("  if(istmpl) return;                            /* skip template-base inheritance (kept simple) */\n"));
+    /* pass */
+    StringBuilder_append(sb, _tr_str_lit("  CXCursor bd=clang_getTypeDeclaration(bt); CXCursor bdef=clang_getCursorDefinition(bd); if(clang_Cursor_isNull(bdef)) bdef=bd;\n"));
+    /* pass */
+    StringBuilder_append(sb, _tr_str_lit("  clang_visitChildren(bdef, inheritm, 0); }\n"));
+    /* pass */
+    StringBuilder_append(sb, _tr_str_lit("static enum CXChildVisitResult basespec(CXCursor c, CXCursor p, CXClientData d){\n"));
+    /* pass */
+    StringBuilder_append(sb, _tr_str_lit("  if(clang_getCursorKind(c)==CXCursor_CXXBaseSpecifier && clang_getCXXAccessSpecifier(c)==CX_CXXPublic) emit_inherited(c);\n"));
+    /* pass */
+    StringBuilder_append(sb, _tr_str_lit("  return CXChildVisit_Continue; }\n"));
+    /* pass */
+    StringBuilder_append(sb, _tr_str_lit("static enum CXChildVisitResult visit(CXCursor c, CXCursor p, CXClientData d);\n"));
+    /* pass */
+    StringBuilder_append(sb, _tr_str_lit("static enum CXChildVisitResult nested(CXCursor c, CXCursor p, CXClientData d){\n"));
+    /* pass */
+    StringBuilder_append(sb, _tr_str_lit("  enum CXCursorKind k=clang_getCursorKind(c);\n"));
+    /* pass */
+    StringBuilder_append(sb, _tr_str_lit("  if(((k==CXCursor_ClassDecl||k==CXCursor_StructDecl)&&clang_isCursorDefinition(c)) || k==CXCursor_EnumDecl) return visit(c,p,d);\n"));
+    /* pass */
+    StringBuilder_append(sb, _tr_str_lit("  return CXChildVisit_Continue; }\n"));
+    /* pass */
     StringBuilder_append(sb, _tr_str_lit("static enum CXChildVisitResult visit(CXCursor c, CXCursor p, CXClientData d){\n"));
     /* pass */
     StringBuilder_append(sb, _tr_str_lit("  if(!clang_Location_isFromMainFile(clang_getCursorLocation(c))) return CXChildVisit_Continue;\n"));
@@ -3086,7 +3164,21 @@ __attribute__((hot)) TrStr _cxxwalk_src() {
     /* pass */
     StringBuilder_append(sb, _tr_str_lit("  else if((k==CXCursor_ClassDecl||k==CXCursor_StructDecl)&&clang_isCursorDefinition(c)){\n"));
     /* pass */
-    StringBuilder_append(sb, _tr_str_lit("    CXType rt=clang_getCursorType(c); printf(\"CLASS %s %d\\n\",nm, clang_isPODType(rt)); clang_visitChildren(c,fld,0); clang_visitChildren(c,visit,0); printf(\"ECLASS\\n\"); }\n"));
+    StringBuilder_append(sb, _tr_str_lit("    CXType rt=clang_getCursorType(c); printf(\"CLASS %s %d\\n\",nm, clang_isPODType(rt));\n"));
+    /* pass */
+    StringBuilder_append(sb, _tr_str_lit("    int saved=g_nseenm; g_nseenm=0;             /* per-class method-name dedup set */\n"));
+    /* pass */
+    StringBuilder_append(sb, _tr_str_lit("    clang_visitChildren(c,fld,0);\n"));
+    /* pass */
+    StringBuilder_append(sb, _tr_str_lit("    clang_visitChildren(c,ownmeth,0);           /* own methods/ctors/dtor (records names) */\n"));
+    /* pass */
+    StringBuilder_append(sb, _tr_str_lit("    clang_visitChildren(c,basespec,0);          /* inherited public methods (deduped) */\n"));
+    /* pass */
+    StringBuilder_append(sb, _tr_str_lit("    clang_visitChildren(c,nested,0);            /* nested classes + enums */\n"));
+    /* pass */
+    StringBuilder_append(sb, _tr_str_lit("    g_nseenm=saved;\n"));
+    /* pass */
+    StringBuilder_append(sb, _tr_str_lit("    printf(\"ECLASS\\n\"); }\n"));
     /* pass */
     StringBuilder_append(sb, _tr_str_lit("  else if(k==CXCursor_CXXMethod && clang_getCXXAccessSpecifier(c)==CX_CXXPublic){\n"));
     /* pass */

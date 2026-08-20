@@ -1,0 +1,25 @@
+# Auto-generated C++ FFI bindings for inherit.hpp (tauraro-bindgen -h cpp).
+# Build the shim once, then link it (and the C++ library) with your program:
+#   c++ -c inherit_shim.cpp -o inherit_shim.o
+#   tauraroc yourapp.tr --link inherit_shim.o -lstdc++ -o app
+
+class Base:
+    pass
+class Mid:
+    pass
+class Leaf:
+    pass
+
+extern "C":
+    def w_Base_new(id: c_int) -> Base
+    def w_Base_id(obj: Base) -> c_int
+    def w_Base_kind(obj: Base) -> c_int
+    def w_Mid_new() -> Mid
+    def w_Mid_midv(obj: Mid) -> c_int
+    def w_Mid_id(obj: Mid) -> c_int
+    def w_Mid_kind(obj: Mid) -> c_int
+    def w_Leaf_new() -> Leaf
+    def w_Leaf_leafv(obj: Leaf) -> c_int
+    def w_Leaf_id(obj: Leaf) -> c_int
+    def w_Leaf_kind(obj: Leaf) -> c_int
+    def w_Leaf_midv(obj: Leaf) -> c_int
