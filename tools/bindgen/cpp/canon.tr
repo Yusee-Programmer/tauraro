@@ -1,0 +1,25 @@
+# Auto-generated C++ FFI bindings for canon.hpp (tauraro-bindgen -h cpp).
+# Build the shim once, then link it (and the C++ library) with your program:
+#   c++ -c canon_shim.cpp -o canon_shim.o
+#   tauraroc yourapp.tr --link canon_shim.o -lstdc++ -o app
+
+@value_type
+class Rect:
+    pub x: c_int
+    pub y: c_int
+    pub w: c_int
+    pub h: c_int
+class Buffer:
+    pass
+
+type Codec = c_int
+const H264 = 0
+const H265 = 1
+
+extern "C":
+    def media_Buffer_new(cap: c_int) -> Buffer
+    def media_Buffer_at(obj: Buffer, i: c_int) -> c_int
+    def media_Buffer_bounds(obj: Buffer) -> Rect
+    def media_Buffer_name(obj: Buffer) -> Pointer[char]
+    def media_Buffer_setName(obj: Buffer, n: Pointer[char])
+    def media_process(b: Buffer, c: Codec) -> c_long

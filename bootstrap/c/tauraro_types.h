@@ -3853,6 +3853,7 @@ __attribute__((hot)) TrMap* _target_define_names(TrStr header);
 __attribute__((hot)) TrStr _lstrip(TrStr s);
 __attribute__((hot)) bool _is_builtin_ty_name(TrStr n);
 __attribute__((hot)) bool _is_libc_ty_name(TrStr n);
+__attribute__((hot)) bool _is_system_record_ty(TrStr n);
 __attribute__((hot)) TrStr _ident_at(TrStr text, long long start);
 __attribute__((hot)) TrStr _opaque_fallbacks(TrStr body, TrMap* defined);
 __attribute__((hot)) bool _is_single_string_literal(TrStr val);

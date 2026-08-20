@@ -27,6 +27,7 @@ TrMap* _target_define_names(TrStr header);
 TrStr _lstrip(TrStr s);
 bool _is_builtin_ty_name(TrStr n);
 bool _is_libc_ty_name(TrStr n);
+bool _is_system_record_ty(TrStr n);
 TrStr _ident_at(TrStr text, long long start);
 TrStr _opaque_fallbacks(TrStr body, TrMap* defined);
 bool _is_single_string_literal(TrStr val);
@@ -2343,6 +2344,46 @@ __attribute__((hot)) bool _is_libc_ty_name(TrStr n) {
     return false;
 }
 
+__attribute__((hot)) bool _is_system_record_ty(TrStr n) {
+    /* pass */
+    if (((((((strcmp(_tr_strz(n), _tr_strz(_tr_str_lit("_GUID"))) == 0) || (strcmp(_tr_strz(n), _tr_strz(_tr_str_lit("GUID"))) == 0)) || (strcmp(_tr_strz(n), _tr_strz(_tr_str_lit("IID"))) == 0)) || (strcmp(_tr_strz(n), _tr_strz(_tr_str_lit("CLSID"))) == 0)) || (strcmp(_tr_strz(n), _tr_strz(_tr_str_lit("FMTID"))) == 0)) || (strcmp(_tr_strz(n), _tr_strz(_tr_str_lit("UUID"))) == 0))) {
+        /* pass */
+        return true;
+    }
+    /* pass */
+    if ((((((strcmp(_tr_strz(n), _tr_strz(_tr_str_lit("IUnknown"))) == 0) || (strcmp(_tr_strz(n), _tr_strz(_tr_str_lit("IDispatch"))) == 0)) || (strcmp(_tr_strz(n), _tr_strz(_tr_str_lit("IErrorInfo"))) == 0)) || (strcmp(_tr_strz(n), _tr_strz(_tr_str_lit("ITypeInfo"))) == 0)) || (strcmp(_tr_strz(n), _tr_strz(_tr_str_lit("ITypeLib"))) == 0))) {
+        /* pass */
+        return true;
+    }
+    /* pass */
+    if ((((((strcmp(_tr_strz(n), _tr_strz(_tr_str_lit("IStream"))) == 0) || (strcmp(_tr_strz(n), _tr_strz(_tr_str_lit("ISequentialStream"))) == 0)) || (strcmp(_tr_strz(n), _tr_strz(_tr_str_lit("IStorage"))) == 0)) || (strcmp(_tr_strz(n), _tr_strz(_tr_str_lit("IRecordInfo"))) == 0)) || (strcmp(_tr_strz(n), _tr_strz(_tr_str_lit("IServiceProvider"))) == 0))) {
+        /* pass */
+        return true;
+    }
+    /* pass */
+    if ((((((strcmp(_tr_strz(n), _tr_strz(_tr_str_lit("VARIANT"))) == 0) || (strcmp(_tr_strz(n), _tr_strz(_tr_str_lit("VARIANTARG"))) == 0)) || (strcmp(_tr_strz(n), _tr_strz(_tr_str_lit("DECIMAL"))) == 0)) || (strcmp(_tr_strz(n), _tr_strz(_tr_str_lit("SAFEARRAY"))) == 0)) || (strcmp(_tr_strz(n), _tr_strz(_tr_str_lit("SAFEARRAYBOUND"))) == 0))) {
+        /* pass */
+        return true;
+    }
+    /* pass */
+    if (((((((strcmp(_tr_strz(n), _tr_strz(_tr_str_lit("DISPPARAMS"))) == 0) || (strcmp(_tr_strz(n), _tr_strz(_tr_str_lit("EXCEPINFO"))) == 0)) || (strcmp(_tr_strz(n), _tr_strz(_tr_str_lit("CY"))) == 0)) || (strcmp(_tr_strz(n), _tr_strz(_tr_str_lit("BSTRBLOB"))) == 0)) || (strcmp(_tr_strz(n), _tr_strz(_tr_str_lit("BLOB"))) == 0)) || (strcmp(_tr_strz(n), _tr_strz(_tr_str_lit("FLAGGED_WORD_BLOB"))) == 0))) {
+        /* pass */
+        return true;
+    }
+    /* pass */
+    if ((((((((strcmp(_tr_strz(n), _tr_strz(_tr_str_lit("POINT"))) == 0) || (strcmp(_tr_strz(n), _tr_strz(_tr_str_lit("POINTL"))) == 0)) || (strcmp(_tr_strz(n), _tr_strz(_tr_str_lit("SIZE"))) == 0)) || (strcmp(_tr_strz(n), _tr_strz(_tr_str_lit("SIZEL"))) == 0)) || (strcmp(_tr_strz(n), _tr_strz(_tr_str_lit("RECT"))) == 0)) || (strcmp(_tr_strz(n), _tr_strz(_tr_str_lit("RECTL"))) == 0)) || (strcmp(_tr_strz(n), _tr_strz(_tr_str_lit("FILETIME"))) == 0))) {
+        /* pass */
+        return true;
+    }
+    /* pass */
+    if ((((((strcmp(_tr_strz(n), _tr_strz(_tr_str_lit("LARGE_INTEGER"))) == 0) || (strcmp(_tr_strz(n), _tr_strz(_tr_str_lit("ULARGE_INTEGER"))) == 0)) || (strcmp(_tr_strz(n), _tr_strz(_tr_str_lit("LUID"))) == 0)) || (strcmp(_tr_strz(n), _tr_strz(_tr_str_lit("MSG"))) == 0)) || (strcmp(_tr_strz(n), _tr_strz(_tr_str_lit("POINTS"))) == 0))) {
+        /* pass */
+        return true;
+    }
+    /* pass */
+    return false;
+}
+
 __attribute__((hot)) TrStr _ident_at(TrStr text, long long start) {
     /* pass */
     long long i = start;
@@ -2894,6 +2935,20 @@ __attribute__((hot)) TrStr _cxxwalk_src() {
     StringBuilder_append(sb, _tr_str_lit("    // fallback: match the parameter name literally (direct `T` uses)\n"));
     /* pass */
     StringBuilder_append(sb, _tr_str_lit("    for(int i=0;i<g_np;i++){ if(strcmp(r,g_params[i])==0){ clang_disposeString(sp); classify(depth,ref,clang_getCanonicalType(g_args[i])); return; } }\n"));
+    /* pass */
+    StringBuilder_append(sb, _tr_str_lit("    // Sequence-container element accessors: `X::reference`/`::const_reference` = `value_type&` and\n"));
+    /* pass */
+    StringBuilder_append(sb, _tr_str_lit("    // `::pointer`/`::const_pointer` = `value_type*` — libstdc++ routes these through an\n"));
+    /* pass */
+    StringBuilder_append(sb, _tr_str_lit("    // `__alloc_traits<…>` typedef that stays dependent, but for vector/string/deque/list/set the\n"));
+    /* pass */
+    StringBuilder_append(sb, _tr_str_lit("    // element type is the FIRST template arg. Resolve to it so at()/front()/back()/[] bind.\n"));
+    /* pass */
+    StringBuilder_append(sb, _tr_str_lit("    { const char* seg=strrchr(r,':'); if(g_np>0 && seg && seg>r+1 && seg[-1]==':'){ seg++;\n"));
+    /* pass */
+    StringBuilder_append(sb, _tr_str_lit("        if(strcmp(seg,\"reference\")==0||strcmp(seg,\"const_reference\")==0){ clang_disposeString(sp); classify(depth+1,1,clang_getCanonicalType(g_args[0])); return; }\n"));
+    /* pass */
+    StringBuilder_append(sb, _tr_str_lit("        if(strcmp(seg,\"pointer\")==0||strcmp(seg,\"const_pointer\")==0){ clang_disposeString(sp); classify(depth+1,0,clang_getCanonicalType(g_args[0])); return; } } }\n"));
     /* pass */
     StringBuilder_append(sb, _tr_str_lit("    // Any type still carrying an un-substituted template param (self-type copy-ctor\n"));
     /* pass */
@@ -3463,7 +3518,7 @@ __attribute__((hot)) TrStr _cpp_opaque_handle(TrStr base, long long nd, TrMap* c
     /* pass */
     TrStr handle = _tr_str_retain(seg);
     /* pass */
-    if (_is_libc_ty_name(seg)) {
+    if ((_is_libc_ty_name(seg) || _is_system_record_ty(seg))) {
         /* pass */
         TrStr _strtmp_t891 = _tr_str_retain(seg);
         _tr_str_release(handle);

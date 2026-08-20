@@ -210,11 +210,27 @@ Verified end-to-end: a user template (`use_box.tr`: `Box<int>` — ctor/get/set,
 `Box<int>`) and **`std::vector<int>`** (`use_vec.tr`: a C++ function returns a vector; Tauraro reads
 `size()` and elements via `data()`). This automates both the template and the `std::` container tail.
 
+### Sequence-container element accessors resolve
+
+`at()`/`front()`/`back()`/`operator[]` on `vector`/`string`/`deque`/`list` return a `reference`
+(`value_type&`) that libstdc++ routes through an `__alloc_traits<…>` typedef which stays dependent.
+The walker recognizes the `::reference`/`::const_reference`/`::pointer` member-typedef suffix and
+resolves it to the container's **first template argument** (its element type), so those accessors
+bind and return `Pointer[<elem>]`. Verified: `at(3)` on a `std::vector<int>` returns the element `9`.
+
+### System / COM record types no longer conflict
+
+A record type the runtime's system headers already define (Windows COM `_GUID`, `IUnknown`,
+`IDispatch`, `VARIANT`, `RECT`, …) is now referenced **bare** instead of getting a conflicting
+opaque `class _GUID` (`struct _GUID` redefinition). `comdef.h` — the Windows COM smart-pointer
+header — now compiles: its typedef'd scalars resolve canonically and its COM object types resolve
+against the real `windows.h` definitions.
+
 ## Honest scope / remaining hard tail
 
-- **std:: container *element* methods** — `at()`/`operator[]`/`front()` return an internal
-  `reference` type that stays dependent, so they're skipped; use `data()` + `size()` for element
-  access (`push_back`, `size`, `capacity`, `empty`, `clear`, `data` all bind).
-- **System *record* types from another header** (Windows COM `comdef.h`'s `_GUID`/`IUnknown` by
-  value) still collide with the definition the runtime pulls in — the *scalars* bind correctly, but
-  by-value system structs are the residual tail; bind those through a narrow shim.
+- **Associative containers** (`std::map`/`set` with a custom comparator) don't expose their member
+  methods cleanly through libclang's specialization cursor yet (a deeper AST issue than element-type
+  resolution) — sequence containers (`vector`/`string`/`deque`) are fully covered.
+- **By-value system structs from another header** — a COM API that passes a `VARIANT`/`_GUID` *by
+  value* (not by pointer) still needs the value laid out; the pointer-based COM patterns (the norm)
+  now work. Bind by-value-system-struct cases through a narrow shim.

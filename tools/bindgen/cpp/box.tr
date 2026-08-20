@@ -1,0 +1,14 @@
+# Auto-generated C++ FFI bindings for box.hpp (tauraro-bindgen -h cpp).
+# Build the shim once, then link it (and the C++ library) with your program:
+#   c++ -c box_shim.cpp -o box_shim.o
+#   tauraroc yourapp.tr --link box_shim.o -lstdc++ -o app
+
+class Box_int_:
+    pass
+
+extern "C":
+    def app_makeBox(x: c_int) -> Box_int_
+    def Box_int__new(v: c_int) -> Box_int_
+    def Box_int__get(obj: Box_int_) -> c_int
+    def Box_int__set(obj: Box_int_, v: c_int)
+    def Box_int__tag(obj: Box_int_) -> c_int

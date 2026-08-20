@@ -943,6 +943,20 @@ def _is_libc_ty_name(n: str) -> bool:
     if n == "fd_set" or n == "sigset_t" or n == "DIR" or n == "pthread_t" or n == "sig_atomic_t": return true
     return false
 
+# Common Windows/COM system RECORD types, which the runtime's system headers (windows.h, objidl,
+# …) already define. Emitting an opaque `class _GUID` would clash (`struct _GUID` redefinition);
+# referencing the name bare lets the generated C resolve it against the real definition. Fixes
+# pointer-to-COM-object bindings (IUnknown*, IDispatch*) in headers like comdef.h without conflict.
+def _is_system_record_ty(n: str) -> bool:
+    if n == "_GUID" or n == "GUID" or n == "IID" or n == "CLSID" or n == "FMTID" or n == "UUID": return true
+    if n == "IUnknown" or n == "IDispatch" or n == "IErrorInfo" or n == "ITypeInfo" or n == "ITypeLib": return true
+    if n == "IStream" or n == "ISequentialStream" or n == "IStorage" or n == "IRecordInfo" or n == "IServiceProvider": return true
+    if n == "VARIANT" or n == "VARIANTARG" or n == "DECIMAL" or n == "SAFEARRAY" or n == "SAFEARRAYBOUND": return true
+    if n == "DISPPARAMS" or n == "EXCEPINFO" or n == "CY" or n == "BSTRBLOB" or n == "BLOB" or n == "FLAGGED_WORD_BLOB": return true
+    if n == "POINT" or n == "POINTL" or n == "SIZE" or n == "SIZEL" or n == "RECT" or n == "RECTL" or n == "FILETIME": return true
+    if n == "LARGE_INTEGER" or n == "ULARGE_INTEGER" or n == "LUID" or n == "MSG" or n == "POINTS": return true
+    return false
+
 # Read a `[A-Za-z_][A-Za-z0-9_]*` at/after `start` (skipping leading spaces/tabs and `[`).
 def _ident_at(text: str, start: int) -> str:
     mut i = start
@@ -1133,6 +1147,13 @@ def _cxxwalk_src() -> str:
     sb.append("    if(strncmp(r,\"type-parameter-0-\",17)==0){ int idx=atoi(r+17); if(idx>=0 && idx<g_np){ clang_disposeString(sp); classify(depth,ref,clang_getCanonicalType(g_args[idx])); return; } }\n")
     sb.append("    // fallback: match the parameter name literally (direct `T` uses)\n")
     sb.append("    for(int i=0;i<g_np;i++){ if(strcmp(r,g_params[i])==0){ clang_disposeString(sp); classify(depth,ref,clang_getCanonicalType(g_args[i])); return; } }\n")
+    sb.append("    // Sequence-container element accessors: `X::reference`/`::const_reference` = `value_type&` and\n")
+    sb.append("    // `::pointer`/`::const_pointer` = `value_type*` — libstdc++ routes these through an\n")
+    sb.append("    // `__alloc_traits<…>` typedef that stays dependent, but for vector/string/deque/list/set the\n")
+    sb.append("    // element type is the FIRST template arg. Resolve to it so at()/front()/back()/[] bind.\n")
+    sb.append("    { const char* seg=strrchr(r,':'); if(g_np>0 && seg && seg>r+1 && seg[-1]==':'){ seg++;\n")
+    sb.append("        if(strcmp(seg,\"reference\")==0||strcmp(seg,\"const_reference\")==0){ clang_disposeString(sp); classify(depth+1,1,clang_getCanonicalType(g_args[0])); return; }\n")
+    sb.append("        if(strcmp(seg,\"pointer\")==0||strcmp(seg,\"const_pointer\")==0){ clang_disposeString(sp); classify(depth+1,0,clang_getCanonicalType(g_args[0])); return; } } }\n")
     sb.append("    // Any type still carrying an un-substituted template param (self-type copy-ctor\n")
     sb.append("    // `vector<_Tp,_Alloc>`, or an internal `__alloc_traits<…>` type — often kind Unexposed,\n")
     sb.append("    // not Record) is dependent -> mark 'd' so the generator skips the whole method (its shim\n")
@@ -1387,9 +1408,10 @@ def _cpp_ret(rt: CppType, call: str) -> Vec[str]:
 def _cpp_opaque_handle(base: str, nd: int, class_names: Map[str, bool], value_structs: Map[str, bool], seen: Map[str, bool], opaque: StringBuilder) -> str:
     mut seg = _last_seg(base)
     mut handle = seg
-    if _is_libc_ty_name(seg):
-        # A standard libc type (FILE, …) is already defined by the runtime's system headers;
-        # reference it bare (resolves in C) rather than emitting a conflicting opaque class.
+    if _is_libc_ty_name(seg) or _is_system_record_ty(seg):
+        # A standard libc / Windows-COM system type is already defined by the runtime's system
+        # headers; reference it bare (resolves in C) rather than emitting a conflicting opaque
+        # class (`struct _GUID` redefinition). Fixes pointer-to-COM-object bindings.
         handle = seg
     elif value_structs.contains(seg):
         # A POD value-struct — emitted as `@value_type class seg` by ECLASS; use its bare name.
