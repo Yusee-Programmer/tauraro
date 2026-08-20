@@ -226,11 +226,22 @@ opaque `class _GUID` (`struct _GUID` redefinition). `comdef.h` — the Windows C
 header — now compiles: its typedef'd scalars resolve canonically and its COM object types resolve
 against the real `windows.h` definitions.
 
+### Associative containers (`std::map`/`set`) bind too
+
+`getSpecializedCursorTemplate` can return a forward *declaration* of the container's primary
+template (true for `std::map`/`set`), which has no member cursors — hence the earlier "0 methods".
+The walker now takes `clang_getCursorDefinition(...)` first, so the real definition's methods are
+visited (49 for `std::map<int,double>`). Combined with `type-parameter-0-i` substitution and the
+member-typedef suffix resolver (`::reference`→`value_type&`, `::size_type`→`size_t`), the useful
+accessors bind: `at`/`size`/`empty`/`count`/`clear`. A `const key_type&` key to a *primitive* is
+crossed **by value** (`at(m, 2)`, not `at(m, &2)`) since a const-ref-to-primitive is just the value.
+Verified end-to-end (`use_map.tr`): `at(m, 2)` → `19.5`, `size` → `3`.
+
 ## Honest scope / remaining hard tail
 
-- **Associative containers** (`std::map`/`set` with a custom comparator) don't expose their member
-  methods cleanly through libclang's specialization cursor yet (a deeper AST issue than element-type
-  resolution) — sequence containers (`vector`/`string`/`deque`) are fully covered.
+- **Iterator-returning methods** (`find`/`begin`/`end`) and comparator/nested-type returns
+  (`value_comp`) are skipped — iterators are opaque template types. Use `at`/`operator[]`-style
+  keyed access (bound) rather than iteration.
 - **By-value system structs from another header** — a COM API that passes a `VARIANT`/`_GUID` *by
   value* (not by pointer) still needs the value laid out; the pointer-based COM patterns (the norm)
-  now work. Bind by-value-system-struct cases through a narrow shim.
+  work. Bind by-value-system-struct cases through a narrow shim.

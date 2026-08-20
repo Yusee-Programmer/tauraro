@@ -1112,6 +1112,7 @@ def _cxxwalk_src() -> str:
     sb.append("    case CXType_Float:return \"c_float\"; case CXType_Double:return \"c_double\"; case CXType_LongDouble:return \"c_ldouble\"; default:return \"\"; }\n")
     sb.append("}\n")
     sb.append("static char g_params[8][64]; static CXType g_args[8]; static int g_np=0;\n")
+    sb.append("static char g_cbase[256]={0};   /* container template base (e.g. \"std::map\") for nested-type detection */\n")
     sb.append("/* whole-identifier-token search: does `needle` appear in `hay` bounded by non-ident chars? */\n")
     sb.append("static int has_token(const char* hay, const char* needle){\n")
     sb.append("  int nl=strlen(needle); if(nl==0) return 0; const char* p=hay;\n")
@@ -1134,10 +1135,11 @@ def _cxxwalk_src() -> str:
     sb.append("  else { CXString sp=clang_getTypeSpelling(cur); printf(\"%d~%d~u~%s\", depth, ref, S(sp)); clang_disposeString(sp); }\n")
     sb.append("}\n")
     sb.append("static void tds(CXType t){\n")
+    sb.append("  // ref: 0 = not-a-reference (value or pointer); 1 = mutable `T&`; 2 = const `const T&`.\n")
     sb.append("  int depth=0,ref=0; CXType cur=t;\n")
     sb.append("  while(1){ CXType cc=clang_getCanonicalType(cur);\n")
     sb.append("    if(cc.kind==CXType_Pointer){depth++;cur=clang_getPointeeType(cur);}\n")
-    sb.append("    else if(cc.kind==CXType_LValueReference||cc.kind==CXType_RValueReference){ref=1;depth++;cur=clang_getPointeeType(cur);}\n")
+    sb.append("    else if(cc.kind==CXType_LValueReference||cc.kind==CXType_RValueReference){ CXType pt=clang_getPointeeType(cur); ref=clang_isConstQualifiedType(clang_getCanonicalType(pt))?2:1; depth++; cur=pt; }\n")
     sb.append("    else break; }\n")
     sb.append("  CXType fcan=clang_getCanonicalType(cur);\n")
     sb.append("  if(g_np>0){\n")
@@ -1153,13 +1155,19 @@ def _cxxwalk_src() -> str:
     sb.append("    // element type is the FIRST template arg. Resolve to it so at()/front()/back()/[] bind.\n")
     sb.append("    { const char* seg=strrchr(r,':'); if(g_np>0 && seg && seg>r+1 && seg[-1]==':'){ seg++;\n")
     sb.append("        if(strcmp(seg,\"reference\")==0||strcmp(seg,\"const_reference\")==0){ clang_disposeString(sp); classify(depth+1,1,clang_getCanonicalType(g_args[0])); return; }\n")
-    sb.append("        if(strcmp(seg,\"pointer\")==0||strcmp(seg,\"const_pointer\")==0){ clang_disposeString(sp); classify(depth+1,0,clang_getCanonicalType(g_args[0])); return; } } }\n")
+    sb.append("        if(strcmp(seg,\"pointer\")==0||strcmp(seg,\"const_pointer\")==0){ clang_disposeString(sp); classify(depth+1,0,clang_getCanonicalType(g_args[0])); return; }\n")
+    sb.append("        // container `size_type`/`difference_type` also route through dependent allocator traits.\n")
+    sb.append("        if(strcmp(seg,\"size_type\")==0){ printf(\"%d~%d~p~c_size_t\", depth, ref); clang_disposeString(sp); return; }\n")
+    sb.append("        if(strcmp(seg,\"difference_type\")==0){ printf(\"%d~%d~p~c_ptrdiff_t\", depth, ref); clang_disposeString(sp); return; } } }\n")
     sb.append("    // Any type still carrying an un-substituted template param (self-type copy-ctor\n")
     sb.append("    // `vector<_Tp,_Alloc>`, or an internal `__alloc_traits<…>` type — often kind Unexposed,\n")
     sb.append("    // not Record) is dependent -> mark 'd' so the generator skips the whole method (its shim\n")
     sb.append("    // would be un-nameable). Applies regardless of kind.\n")
     sb.append("    int dep=has_token(r,\"type-parameter\");\n")
     sb.append("    for(int i=0;i<g_np && !dep;i++) dep=has_token(r,g_params[i]);\n")
+    sb.append("    // a NESTED type of the container written without template args (`std::map::value_compare`,\n")
+    sb.append("    // an uninstantiated `iterator`) is un-nameable in the shim -> skip the method.\n")
+    sb.append("    if(!dep && g_cbase[0]){ char nb[262]; snprintf(nb,sizeof nb,\"%s::\",g_cbase); if(strstr(r,nb)) dep=1; }\n")
     sb.append("    if(dep){ printf(\"%d~%d~d~\", depth, ref); clang_disposeString(sp); return; }\n")
     sb.append("    clang_disposeString(sp);\n")
     sb.append("  }\n")
@@ -1198,10 +1206,14 @@ def _cxxwalk_src() -> str:
     sb.append("  if(clang_getCursorKind(c)==CXCursor_ClassDecl && clang_isCursorDefinition(c)){\n")
     sb.append("    CXCursor tmpl=clang_getSpecializedCursorTemplate(c);\n")
     sb.append("    if(!clang_Cursor_isNull(tmpl)){\n")
-    sb.append("      CXType ct=clang_getCursorType(c); g_np=0; clang_visitChildren(tmpl, collectparams, 0);\n")
+    sb.append("      // `getSpecializedCursorTemplate` may return a forward DECLARATION of the template (true for\n")
+    sb.append("      // std::map/set), which has no member cursors; get the DEFINITION so its methods are visible.\n")
+    sb.append("      CXCursor def=clang_getCursorDefinition(tmpl); if(clang_Cursor_isNull(def)) def=tmpl;\n")
+    sb.append("      CXType ct=clang_getCursorType(c); g_np=0; clang_visitChildren(def, collectparams, 0);\n")
     sb.append("      int na=clang_Type_getNumTemplateArguments(ct); for(int i=0;i<na && i<8;i++) g_args[i]=clang_Type_getTemplateArgumentAsType(ct,i);\n")
-    sb.append("      printf(\"TCLASS %s %d\\n\", S(clang_getTypeSpelling(ct)), clang_isPODType(ct));\n")
-    sb.append("      clang_visitChildren(tmpl, imeth, 0); printf(\"ECLASS\\n\"); g_np=0;\n")
+    sb.append("      CXString cts=clang_getTypeSpelling(ct); { const char* cs=S(cts); const char* lt=strchr(cs,'<'); int bl=lt?(int)(lt-cs):(int)strlen(cs); if(bl>255)bl=255; memcpy(g_cbase,cs,bl); g_cbase[bl]=0; }\n")
+    sb.append("      printf(\"TCLASS %s %d\\n\", S(cts), clang_isPODType(ct)); clang_disposeString(cts);\n")
+    sb.append("      clang_visitChildren(def, imeth, 0); printf(\"ECLASS\\n\"); g_np=0; g_cbase[0]=0;\n")
     sb.append("    }\n")
     sb.append("  }\n")
     sb.append("  return CXChildVisit_Continue; }\n")
@@ -1443,7 +1455,7 @@ def _cpp_ret_ex(desc: str, call: str, value_structs: Map[str, bool], class_names
     mut r = Vec[str].init(3)
     mut d4 = _desc4(desc)
     mut rdepth = _to_int(d4.get(0))
-    mut rref = (d4.get(1) == "1")
+    mut rref = (d4.get(1) != "0")
     mut cat = d4.get(2)
     mut detail = d4.get(3)
     if cat == "v":
@@ -1540,6 +1552,19 @@ def _c_to_cpp(cn: str) -> str:
     if cn == "c_float": return "float"
     if cn == "c_double": return "double"
     if cn == "c_ldouble": return "long double"
+    if cn == "c_size_t": return "size_t"
+    if cn == "c_ssize_t": return "ptrdiff_t"
+    if cn == "c_ptrdiff_t": return "ptrdiff_t"
+    if cn == "c_intptr_t": return "intptr_t"
+    if cn == "c_uintptr_t": return "uintptr_t"
+    if cn == "c_int8_t": return "signed char"
+    if cn == "c_uint8_t": return "unsigned char"
+    if cn == "c_int16_t": return "short"
+    if cn == "c_uint16_t": return "unsigned short"
+    if cn == "c_int32_t": return "int"
+    if cn == "c_uint32_t": return "unsigned int"
+    if cn == "c_int64_t": return "long long"
+    if cn == "c_uint64_t": return "unsigned long long"
     return cn
 
 # Split a descriptor into [ptrdepth, isref, cat, detail] (detail may contain '~'/'#').
@@ -1875,7 +1900,8 @@ def _cpp_generate(ir: str, header: str, out: str):
                 # Descriptor-based mapping on the canonical kind.
                 mut d4 = _desc4(ptype)
                 mut pdepth = _to_int(d4.get(0))
-                mut pref = (d4.get(1) == "1")
+                mut prefk = d4.get(1)              # "0" not-ref | "1" mutable ref | "2" const ref
+                mut pref = (prefk != "0")
                 mut pcat = d4.get(2)
                 mut pdet = d4.get(3)
                 mut sc = ""
@@ -1884,6 +1910,10 @@ def _cpp_generate(ir: str, header: str, out: str):
                 if pcat == "p":
                     mut cpp = _c_to_cpp(pdet)
                     if pdepth == 0:
+                        sc = cpp + " " + spname; fw = spname; trt = pdet
+                    elif prefk == "2" and pdepth == 1:
+                        # `const T&` to a primitive is semantically the value — cross BY VALUE
+                        # (the shim's value binds to the C++ const ref). Ergonomic for map::at(key).
                         sc = cpp + " " + spname; fw = spname; trt = pdet
                     else:
                         sc = cpp + " " + _stars(pdepth) + spname
@@ -1894,6 +1924,8 @@ def _cpp_generate(ir: str, header: str, out: str):
                     mut espell = pdet.split("#").get(0)
                     mut ealias = _last_seg(espell)
                     if pdepth == 0:
+                        sc = espell + " " + spname; fw = spname; trt = ealias
+                    elif prefk == "2" and pdepth == 1:
                         sc = espell + " " + spname; fw = spname; trt = ealias
                     else:
                         sc = espell + " " + _stars(pdepth) + spname
