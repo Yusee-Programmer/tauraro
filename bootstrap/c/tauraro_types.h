@@ -4486,6 +4486,10 @@ __attribute__((hot)) TrStr CGenerator_generate_types_header(CGenerator* self, Hi
 __attribute__((hot)) TrStr CGenerator_generate_module_compat(CGenerator* self, List_TrStr* all_decl_modules, List_ptr* all_decls);
 __attribute__((hot)) TrStr CGenerator_generate_module_c(CGenerator* self, HirProgram* prog, TrMap* class_set, TrMap* fn_set, long long depth);
 __attribute__((hot)) TrStr CGenerator_generate_export_header(CGenerator* self, HirProgram* prog);
+__attribute__((hot)) bool CGenerator__cpp_export_ty_ok(CGenerator* self, AstType* ty);
+__attribute__((hot)) bool CGenerator__cpp_export_fn_ok(CGenerator* self, HirFunction* f);
+__attribute__((hot)) TrStr CGenerator__cpp_wrap_fn(CGenerator* self, HirFunction* f);
+__attribute__((hot)) TrStr CGenerator_generate_export_cpp_header(CGenerator* self, HirProgram* prog, TrStr ns);
 __attribute__((hot)) TrStr CGenerator_generate_main_c(CGenerator* self, HirProgram* prog, TrMap* class_set, TrMap* fn_set);
 
 

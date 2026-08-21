@@ -56,6 +56,7 @@ pub def print_usage():
     print("  -o <path>         Exact output path (its directory is honored; overrides -d)")
     print("  -d <dir>          Output directory for the executable (default: current dir)")
     print("  --lib             Build a shared library (.so/.dll) of `export def`s + a C header")
+    print("  --export-cpp      Also emit an ergonomic C++ header to call Tauraro from C++ (implies --lib)")
     print("  -O0/-O1/-O2/-O3  Optimization level (default: -O2)")
     print("  -Os               Optimize for size")
     print("  --link <path>     Link a file by path (.c .o .a .dll .lib .so)")
@@ -1184,6 +1185,7 @@ pub def main(args: Vec[str]):
     mut tier_define = ""                 # --freestanding=>TAURARO_KERNEL (no libc), --no-std=>TAURARO_NO_OS (no OS); auto-emitted so the bare-metal build needs no hand-passed -D
     mut lib_mode    = false              # --lib           : build a shared library (.so/.dll) of `export def`s + a header
     mut no_auto_cpp = false              # --no-auto-cpp    : don't auto-compile/link bindgen C++ shims (link them manually with --link)
+    mut export_cpp  = false              # --export-cpp     : also emit an ergonomic C++ header (call Tauraro from C++); implies --lib
 
     # `tauraroc lint <file>` runs resolution + semantic analysis and reports
     # warnings/errors without producing an executable (like --check, but framed
@@ -1246,6 +1248,9 @@ pub def main(args: Vec[str]):
             no_elide = true
         elif arg == "--no-auto-cpp":
             no_auto_cpp = true
+        elif arg == "--export-cpp":
+            export_cpp = true
+            lib_mode = true              # a C++ header is only useful with a linkable library
         elif arg == "--no-heap":
             no_heap = true                   # [H-1] reject heap-allocating types (str-alloc/List/Dict/Set/heap class)
         elif arg == "--freestanding":
@@ -1799,6 +1804,15 @@ pub def main(args: Vec[str]):
         mut hdr_path = exe_name + ".h"
         write_file(hdr_path, hdr)
         if verbose: print("[lib] header: " + hdr_path)
+        # --export-cpp: also emit an ergonomic C++ header so C++ can CALL Tauraro
+        # (the reverse of `bindgen`). Namespace = the library's base name.
+        if export_cpp:
+            mut ns = get_filename(exe_name)
+            if ns == "": ns = "tauraro"
+            mut cpp_hdr = c_gen.generate_export_cpp_header(hir, ns)
+            mut cpp_hdr_path = exe_name + ".hpp"
+            write_file(cpp_hdr_path, cpp_hdr)
+            print("[export-cpp] C++ header: " + cpp_hdr_path + "  (namespace " + ns + ")")
 
     # -- Turnkey bare-metal link (--freestanding @entry builds) ---------------
     # When a linker script was generated (--emit-ld), the program has an @entry boot

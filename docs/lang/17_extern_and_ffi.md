@@ -313,11 +313,39 @@ pub export def greet(name: str) -> void:
 
 `export` suppresses name mangling — the symbol appears in the object file exactly as written. `export` implies `pub`.
 
-The corresponding C header you would ship to callers:
-```c
-int64_t add(int64_t a, int64_t b);
-void    greet(const char* name);
+Build a linkable library plus a C header for callers with `--lib`:
+```sh
+tauraroc mylib.tr --lib -o mylib      # -> mylib.dll/.so + mylib.h
 ```
+
+### Calling from C++ (`--export-cpp`)
+
+Add `--export-cpp` (it implies `--lib`) to also emit an **ergonomic, self-contained C++ header** —
+this is the mirror image of `bindgen` (which lets Tauraro call C++). Because Tauraro compiles to C,
+the C ABI *is* the bridge, so no IDL or bridge module is needed (simpler than Rust `cxx` or Swift
+interop):
+
+```sh
+tauraroc mathlib.tr --export-cpp -o mathlib   # -> mathlib.dll/.so + mathlib.h + mathlib.hpp
+```
+
+```cpp
+#include "mathlib.hpp"          // self-contained: no Tauraro runtime header needed
+#include <iostream>
+int main() {
+    std::cout << mathlib::add(3, 4) << "\n";        // 7   (scalars pass straight through)
+    std::cout << mathlib::greet("world") << "\n";   // "hello, world!"  (std::string <-> str)
+}
+```
+```sh
+g++ app.cpp mathlib.dll -o app        # link the Tauraro library like any other
+```
+
+Each `export def` appears both as a raw `extern "C"` symbol and as an inline wrapper in
+`namespace <libname>` that maps `str` to/from `std::string` and passes scalars through. Functions
+whose signature uses a non-self-contained type (`List`/`Dict`, a class instance, or `throws`) are
+omitted from the C++ view (still reachable through the raw C `--lib` header) so the `.hpp` never
+drags in the runtime and always compiles standalone.
 
 ### Common Mistakes
 
