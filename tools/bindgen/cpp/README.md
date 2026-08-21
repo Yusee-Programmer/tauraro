@@ -403,6 +403,17 @@ Verified end-to-end (`use_callback.tr`): a Tauraro `def dbl(x, user)` is passed 
 (`dbl as Pointer[void]`), invoked by the C++ `apply`, and returns `42`. So a Tauraro function can be a
 C callback across the FFI.
 
+### Global variables & static class constants get value accessors
+
+A namespace-scope global (`extern const int VERSION;`, `const double PI = 3.14159;`) and a public
+**static class constant** (`static const int MAX = 100;`) each get a zero-arg **value accessor**
+`<pfx>_<name>() -> <type>` whose shim simply `return`s the (possibly `extern`-linked) value. Using an
+accessor rather than baking in a literal means it works for `extern` constants defined in a `.cpp`, for
+runtime-initialized globals, and for non-scalar types (returned as a handle) — no compile-time value
+needed. Verified (`use_globals.tr`): `cfg_VERSION()` = 7 (an `extern` global defined in the `.cpp`),
+`cfg_PI()` = 3.14159, and `cfg_Limits_MAX()` = 100 (a static class constant). The accessors are
+exception-safe like every other wrapper.
+
 ## Honest scope / remaining hard tail
 
 - **Free-function templates** (`template<class T> T max(T,T)`) aren't auto-instantiated (unlike class

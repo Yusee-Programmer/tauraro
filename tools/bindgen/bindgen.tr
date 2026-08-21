@@ -1229,6 +1229,9 @@ def _cxxwalk_src() -> str:
     sb.append("static enum CXChildVisitResult fld(CXCursor c, CXCursor p, CXClientData d){\n")
     sb.append("  if(clang_getCursorKind(c)==CXCursor_FieldDecl && clang_getCXXAccessSpecifier(c)==CX_CXXPublic){ printf(\"FIELD \"); tds(clang_getCursorType(c)); printf(\"|%s\\n\", S(clang_getCursorSpelling(c))); }\n")
     sb.append("  return CXChildVisit_Continue; }\n")
+    sb.append("static enum CXChildVisitResult gvar(CXCursor c, CXCursor p, CXClientData d){\n")
+    sb.append("  if(clang_getCursorKind(c)==CXCursor_VarDecl && clang_getCXXAccessSpecifier(c)==CX_CXXPublic){ printf(\"GVAR \"); tds(clang_getCursorType(c)); printf(\"|%s\\n\", S(clang_getCursorSpelling(c))); }\n")
+    sb.append("  return CXChildVisit_Continue; }\n")
     sb.append("/* Inherited-method support: bind a derived class's PUBLIC base methods too (the shim calls them\n")
     sb.append("   through the derived pointer — public inheritance upcasts). Dedup by name so an override / diamond\n")
     sb.append("   base isn't bound twice; own methods are recorded first so they win. */\n")
@@ -1276,6 +1279,7 @@ def _cxxwalk_src() -> str:
     sb.append("    CXType rt=clang_getCursorType(c); printf(\"CLASS %s %d\\n\",nm, clang_isPODType(rt));\n")
     sb.append("    int saved=g_nseenm; g_nseenm=0;             /* per-class method-name dedup set */\n")
     sb.append("    clang_visitChildren(c,fld,0);\n")
+    sb.append("    clang_visitChildren(c,gvar,0);\n")
     sb.append("    clang_visitChildren(c,ownmeth,0);           /* own methods/ctors/dtor (records names) */\n")
     sb.append("    clang_visitChildren(c,basespec,0);          /* inherited public methods (deduped) */\n")
     sb.append("    clang_visitChildren(c,nested,0);            /* nested classes + enums */\n")
@@ -1286,6 +1290,7 @@ def _cxxwalk_src() -> str:
     sb.append("  else if(k==CXCursor_Constructor && clang_getCXXAccessSpecifier(c)==CX_CXXPublic){ printf(\"CTOR %d\\n\", count_defaults(c)); params(c); printf(\"ECTOR\\n\"); }\n")
     sb.append("  else if(k==CXCursor_Destructor) printf(\"DTOR\\n\");\n")
     sb.append("  else if(k==CXCursor_FunctionDecl){ printf(\"FUNC %d \", count_defaults(c)); tds(clang_getResultType(clang_getCursorType(c))); printf(\"|%s\\n\",nm); params(c); printf(\"EFUNC\\n\"); }\n")
+    sb.append("  else if(k==CXCursor_VarDecl){ printf(\"GVAR \"); tds(clang_getCursorType(c)); printf(\"|%s\\n\",nm); }\n")
     sb.append("  else if(k==CXCursor_EnumDecl){ CXType u=clang_getEnumDeclIntegerType(c); const char* us=scalar(u.kind); if(!us[0])us=\"c_int\"; printf(\"ENUM %s %s\\n\", nm[0]?nm:\"anon\", us); clang_visitChildren(c,visit,0); printf(\"EENUM\\n\"); }\n")
     sb.append("  else if(k==CXCursor_EnumConstantDecl) printf(\"EVAL %s %lld\\n\", nm, (long long)clang_getEnumConstantDeclValue(c));\n")
     sb.append("  else if(k==CXCursor_TypedefDecl || k==CXCursor_TypeAliasDecl){\n")
@@ -2041,6 +2046,32 @@ def _cpp_generate(ir: str, header: str, out: str):
                 mut md = "    def " + msym + "(obj: " + cur_class + ", i: c_long)"
                 if mri.get(2) != "": md = md + " -> " + mri.get(2)
                 decls.append(md + "\n")
+                n_fns = n_fns + 1
+            continue
+        if line.starts_with("GVAR "):
+            # A global variable / static class constant (`cfg::VERSION`, `Limits::MAX`). Synthesize a
+            # zero-arg value accessor `<pfx>_<name>() -> <type>` returning the (possibly extern-linked)
+            # value — works for `extern`/non-literal constants where a compile-time value isn't visible.
+            mut grest = line.slice(5, line.len())
+            mut gbar = grest.split("|")
+            mut gvdesc = gbar.get(0)
+            mut gvnm = ""
+            if gbar.len > 1: gvnm = gbar.get(1)
+            if _is_clean_ident(gvnm) and gvdesc.find("type-parameter") < 0 and gvdesc.find("~d~") < 0:
+                mut gqual = gvnm
+                mut gsym0 = gvnm
+                if cur_class != "":
+                    gqual = cur_class_qual + "::" + gvnm
+                    gsym0 = class_pfx + "_" + gvnm
+                elif ns_path != "":
+                    gqual = ns_path + "::" + gvnm
+                    gsym0 = _ns_us(ns_path) + "_" + gvnm
+                mut gvri = _cpp_ret_ex(gvdesc, gqual, value_structs, class_names, class_qual, seen, opaque)
+                mut gvs = _uniq_sym(gsym0, sym_used)
+                shim.append(gvri.get(0) + " " + gvs + "() { " + _shim_body(gvri.get(0), gvri.get(1)) + " }\n")
+                mut gvd = "    def " + gvs + "()"
+                if gvri.get(2) != "": gvd = gvd + " -> " + gvri.get(2)
+                decls.append(gvd + "\n")
                 n_fns = n_fns + 1
             continue
         if line.starts_with("XSTRUCT "):
