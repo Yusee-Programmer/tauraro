@@ -1232,7 +1232,7 @@ def _cxxwalk_src() -> str:
     sb.append("    if(depth==0 && clang_Type_getNumTemplateArguments(cur)<1 && clang_Type_getSizeOf(cur)==CXTypeLayoutError_Incomplete){ printf(\"%d~%d~d~\", depth, ref); return; }\n")
     sb.append("    if(depth==0 && is_noncopyable(cur)){ printf(\"%d~%d~d~\", depth, ref); return; }\n")
     sb.append("    CXString sp=clang_getTypeSpelling(cur); const char* r=S(sp); if(strncmp(r,\"const \",6)==0)r+=6; if(strncmp(r,\"volatile \",9)==0)r+=9;\n")
-    sb.append("    if(strncmp(r,\"std::basic_string\",17)==0) printf(\"%d~%d~s~string\", depth, ref);\n")
+    sb.append("    if(strncmp(r,\"std::basic_string\",17)==0 && (strstr(r,\"basic_string<char,\")||strstr(r,\"basic_string<char>\"))) printf(\"%d~%d~s~string\", depth, ref);\n")
     sb.append("    else printf(\"%d~%d~r~%s\", depth, ref, r); clang_disposeString(sp); }\n")
     sb.append("  else if(k==CXType_FunctionProto){ CXString sp=clang_getTypeSpelling(clang_getCanonicalType(cur)); printf(\"%d~%d~f~%s\", depth, ref, S(sp)); clang_disposeString(sp); }\n")
     sb.append("  else { CXString sp=clang_getTypeSpelling(cur); printf(\"%d~%d~u~%s\", depth, ref, S(sp)); clang_disposeString(sp); }\n")
@@ -1309,12 +1309,17 @@ def _cxxwalk_src() -> str:
     sb.append("   base isn't bound twice; own methods are recorded first so they win. */\n")
     sb.append("static char g_seenm[512][96]; static int g_nseenm=0;\n")
     sb.append("static int g_abstract=0;\n")
+    sb.append("static char g_curclass[256]={0};\n")
     sb.append("static int seen_method(const char* nm){ for(int i=0;i<g_nseenm;i++) if(strcmp(g_seenm[i],nm)==0) return 1; if(g_nseenm<512){ strncpy(g_seenm[g_nseenm],nm,95); g_seenm[g_nseenm][95]=0; g_nseenm++; } return 0; }\n")
     sb.append("static void emit_method(CXCursor c){\n")
     sb.append("  enum CXCursorKind k=clang_getCursorKind(c);\n")
     sb.append("  if((k==CXCursor_CXXMethod||k==CXCursor_Constructor) && clang_getCursorAvailability(c)==CXAvailability_NotAvailable) return;\n")
     sb.append("  if(k==CXCursor_CXXMethod && clang_getCXXAccessSpecifier(c)==CX_CXXPublic){\n")
-    sb.append("    printf(\"METHOD %c%c %d \", clang_CXXMethod_isStatic(c)?'s':'.', clang_CXXMethod_isConst(c)?'c':'.', count_defaults(c)); tds(clang_getResultType(clang_getCursorType(c))); printf(\"|%s\\n\", S(clang_getCursorSpelling(c))); params(c); printf(\"EMETHOD\\n\"); }\n")
+    sb.append("    printf(\"METHOD %c%c %d \", clang_CXXMethod_isStatic(c)?'s':'.', clang_CXXMethod_isConst(c)?'c':'.', count_defaults(c)); tds(clang_getResultType(clang_getCursorType(c)));\n")
+    sb.append("    { CXString mn=clang_getCursorSpelling(c); CXString pn=clang_getCursorSpelling(clang_getCursorSemanticParent(c)); const char* pns=S(pn);\n")
+    sb.append("      if(g_curclass[0] && pns[0] && strcmp(pns,g_curclass)!=0) printf(\"|%s|%s\\n\", S(mn), pns); else printf(\"|%s\\n\", S(mn));\n")
+    sb.append("      clang_disposeString(mn); clang_disposeString(pn); }\n")
+    sb.append("    params(c); printf(\"EMETHOD\\n\"); }\n")
     sb.append("  else if(k==CXCursor_Constructor && clang_getCXXAccessSpecifier(c)==CX_CXXPublic && !g_abstract){ printf(\"CTOR %d\\n\", count_defaults(c)); params(c); printf(\"ECTOR\\n\"); }\n")
     sb.append("  else if(k==CXCursor_Destructor) printf(\"DTOR\\n\");\n")
     sb.append("}\n")
@@ -1382,13 +1387,14 @@ def _cxxwalk_src() -> str:
     sb.append("    CXType rt=clang_getCursorType(c); printf(\"CLASS %s %d\\n\",nm, clang_isPODType(rt));\n")
     sb.append("    int saved=g_nseenm; g_nseenm=0;             /* per-class method-name dedup set */\n")
     sb.append("    int savedabs=g_abstract; g_abstract=clang_CXXRecord_isAbstract(c);\n")
+    sb.append("    char savedcc[256]; strncpy(savedcc,g_curclass,255); savedcc[255]=0; strncpy(g_curclass,nm,255); g_curclass[255]=0;\n")
     sb.append("    clang_visitChildren(c,fld,0);\n")
     sb.append("    clang_visitChildren(c,gvar,0);\n")
     sb.append("    clang_visitChildren(c,ownmeth,0);           /* own methods/ctors/dtor (records names) */\n")
     sb.append("    clang_visitChildren(c,collectprot,0);       /* exclude names re-declared protected in a base */\n")
     sb.append("    clang_visitChildren(c,basespec,0);          /* inherited public methods (deduped) */\n")
     sb.append("    clang_visitChildren(c,nested,0);            /* nested classes + enums */\n")
-    sb.append("    g_nseenm=saved; g_abstract=savedabs;\n")
+    sb.append("    g_nseenm=saved; g_abstract=savedabs; strncpy(g_curclass,savedcc,255); g_curclass[255]=0;\n")
     sb.append("    printf(\"ECLASS\\n\"); }\n")
     sb.append("  else if(k==CXCursor_CXXMethod && clang_getCXXAccessSpecifier(c)==CX_CXXPublic){\n")
     sb.append("    printf(\"METHOD %c%c %d \", clang_CXXMethod_isStatic(c)?'s':'.', clang_CXXMethod_isConst(c)?'c':'.', count_defaults(c)); tds(clang_getResultType(clang_getCursorType(c))); printf(\"|%s\\n\",nm); params(c); printf(\"EMETHOD\\n\"); }\n")
@@ -2046,6 +2052,7 @@ def _cpp_generate(ir: str, header: str, out: str):
     mut m_flags = ".."
     mut m_ret = ""
     mut m_name = ""
+    mut m_qual = ""    # base-class qualifier for an inherited method (`self->Base::method(...)`)
     mut m_ndef = 0     # count of trailing default-argument params (→ shorter overloads)
     mut params: Vec[str] = Vec[str].init(4)
 
@@ -2336,10 +2343,12 @@ def _cpp_generate(ir: str, header: str, out: str):
             mut r2 = r.slice(3, r.len())           # "<ndef> <retdesc>|<name>"
             mut sp1 = r2.find(" ")
             m_ndef = _to_int(r2.slice(0, sp1))
-            mut r3 = r2.slice(sp1 + 1, r2.len())   # "<retdesc>|<name>"
+            mut r3 = r2.slice(sp1 + 1, r2.len())   # "<retdesc>|<name>[|<basequal>]"
             mut rn = r3.split("|")
             m_ret = rn.get(0)
             m_name = rn.get(1)
+            m_qual = ""
+            if rn.len > 2: m_qual = rn.get(2)      # inherited method -> qualify the call
             mode = "method"; params = Vec[str].init(4); continue
         if line.starts_with("FUNC "):
             mut r = line.slice(5, line.len())      # "<ndef> <retdesc>|<name>"
@@ -2349,6 +2358,7 @@ def _cpp_generate(ir: str, header: str, out: str):
             mut rn = r3.split("|")
             m_ret = rn.get(0)
             m_name = rn.get(1)
+            m_qual = ""
             m_flags = ".."
             mode = "func"; params = Vec[str].init(4); continue
         if line.starts_with("PARAM "):
@@ -2512,8 +2522,13 @@ def _cpp_generate(ir: str, header: str, out: str):
                 if mode == "ctor":
                     call = "new " + cur_class_qual + "(" + fargs + ")"
                 elif mode == "method":
+                    # An inherited method carries its declaring base (`m_qual`) so the call is
+                    # base-qualified — this dodges name-hiding by a same-name derived overload and
+                    # resolves ambiguity when the name exists in multiple bases.
+                    mut mcall = m_name
+                    if m_qual != "": mcall = m_qual + "::" + m_name
                     if is_static: call = cur_class_qual + "::" + m_name + "(" + fargs + ")"
-                    else: call = "self->" + m_name + "(" + fargs + ")"
+                    else: call = "self->" + mcall + "(" + fargs + ")"
                 else:
                     mut pre = ""
                     if ns_path != "": pre = ns_path + "::"

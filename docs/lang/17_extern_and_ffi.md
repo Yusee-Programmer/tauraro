@@ -64,6 +64,7 @@ so the width always matches the C ABI:
 | `c_int` | `int` | | `c_ssize_t` | `ssize_t` |
 | `c_float`/`c_double`/`c_ldouble` | `float`/`double`/`long double` | | `c_int32_t` … `c_uint64_t` | fixed-width `<stdint.h>` |
 | `c_void` | `void` | | `c_void_ptr` / `RawPtr` | `void*` |
+| `c_wchar` | `wchar_t` | | `c_char16` / `c_char32` | `char16_t` / `char32_t` |
 
 ---
 

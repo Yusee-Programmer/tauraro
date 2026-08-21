@@ -444,11 +444,24 @@ wrappers each) drove five more fixes, several requiring new Tauraro FFI types:
 - **Reference-type template arguments** — an internal template instantiated with a reference arg
   (`wxArgNormalizer<const wxString&>`) produced `T& *` (pointer-to-reference); the substitution now
   strips the reference first.
+- **Base-qualified inherited-method calls** — a derived widget that *hides* an inherited overload (e.g.
+  `wxButton::Create` vs `wxWindow::Create`, or an inherited `IsEmpty` reachable through two bases) made
+  the shim's `self->Create(…)` resolve to the wrong/ambiguous overload ("no viable conversion",
+  "too few arguments", "member found by ambiguous name lookup"). The walker now records each inherited
+  method's owning base and the generator emits `self->wxWindow::Create(…)` — a base-qualified call that
+  pins the exact signature it bound. Safe because any *overridden* method is bound by the derived class
+  itself, so a base-qualified call is only emitted for methods the derived class doesn't redefine.
+- **Narrow vs wide `std::string`** — only `std::basic_string<char>` maps to native `str`; `std::wstring` /
+  `u16string` / `u32string` now stay opaque handles instead of being fed into the narrow-string bridge
+  (which produced "no matching constructor" / "cannot take the address of an rvalue" inside wx's
+  `wxArgNormalizerWchar` varargs machinery).
 
-Combined effect on a widget batch: `control`/`dcclient`/`window` now **compile fully**, and the rest
-dropped from ~20 errors each to 1–6. The last residuals are diverse wx-internal-method edge cases
-(a couple of default-arg-arity mismatches on `MSW*` methods, validator defaults) with no dominant
-category left.
+Combined effect on the widget batch: `control`/`dcclient`/`window`/`button`/`frame`/`combobox`/`gauge`/
+`checkbox`/`slider` now **compile fully** (from ~20 errors each); only `listctrl`/`notebook` remain, at a
+single residual error apiece — `&(self->get())` taking the address of a by-value return deep inside wx's
+internal `wxArgNormalizer` varargs template (not user-facing API, the class of edge case every binding
+tool hand-ignores). No corpus regression: narrow `std::string` fixtures (`use_mapiter.tr` with a
+`std::map<std::string,int>`) still bind and run (`apple -> 10`, `pear -> 20`).
 
 ### Coverage harness over wxWidgets (measurement-driven hardening)
 
