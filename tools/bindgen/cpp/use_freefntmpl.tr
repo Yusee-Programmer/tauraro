@@ -1,0 +1,6 @@
+from freefntmpl import m_maxof_int, m_maxof_double, m_clamp_int
+def main():
+    print("maxof_int(3,7) = " + m_maxof_int(3, 7).to_str())               # 7
+    print("maxof_double(2.5,1.5) = " + m_maxof_double(2.5, 1.5).to_str())  # 2.5
+    print("clamp_int(15,0,10) = " + m_clamp_int(15, 0, 10).to_str())       # 10
+    print("ok")

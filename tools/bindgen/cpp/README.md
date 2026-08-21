@@ -414,10 +414,22 @@ needed. Verified (`use_globals.tr`): `cfg_VERSION()` = 7 (an `extern` global def
 `cfg_PI()` = 3.14159, and `cfg_Limits_MAX()` = 100 (a static class constant). The accessors are
 exception-safe like every other wrapper.
 
+### Free-function templates (math-utility shape) are instantiated for int/double
+
+libclang never hands back a bindable concrete `FunctionDecl` for a free-function template (unlike class
+templates), so a `template<class T> T maxof(T,T)` can't be keyed on a usage site. For the classic
+**all-`T` math-utility shape** — a single type parameter where the return and every parameter is
+`T`/`T&`/`const T&` (`maxof`, `clamp`, `abs`, `lerp`, `gcd`, …) — the walker emits an `FTMPL` marker and
+the generator synthesizes instantiations for `int` and `double` by explicitly calling `ns::name<TYPE>(…)`
+in the shim. If the template is header-only the shim instantiates it at compile time (no `.cpp` needed).
+This fires **only for the header's own templates** (the walker filters to the main file), so it never
+pulls in `<algorithm>`'s `std::max`/etc. Verified (`use_freefntmpl.tr`): `maxof_int(3,7)=7`,
+`maxof_double(2.5,1.5)=2.5`, `clamp_int(15,0,10)=10`. Templates with a non-`T` shape (containers,
+multiple type params, pointers) are still skipped — they need a concrete usage type the bindgen can't
+infer.
+
 ## Honest scope / remaining hard tail
 
-- **Free-function templates** (`template<class T> T max(T,T)`) aren't auto-instantiated (unlike class
-  templates, they have no usage site to key on) — add a typedef/alias to force one.
 - **By-value *system* structs** (`windows.h`'s `_GUID` passed by value) — pointer-based COM works.
 - **By-value *system* structs** (`windows.h`'s `_GUID`/`VARIANT` passed *by value*, not by pointer)
   are not laid out — that would need renaming the emitted struct to avoid redefining the one the

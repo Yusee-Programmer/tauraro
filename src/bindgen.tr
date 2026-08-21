@@ -1318,6 +1318,22 @@ def _cxxwalk_src() -> str:
     sb.append("static enum CXChildVisitResult basespec(CXCursor c, CXCursor p, CXClientData d){\n")
     sb.append("  if(clang_getCursorKind(c)==CXCursor_CXXBaseSpecifier && clang_getCXXAccessSpecifier(c)==CX_CXXPublic) emit_inherited(c);\n")
     sb.append("  return CXChildVisit_Continue; }\n")
+    sb.append("static int g_ntp; static char g_tpname[64];\n")
+    sb.append("static enum CXChildVisitResult ftcount(CXCursor cc, CXCursor pp, CXClientData dd){\n")
+    sb.append("  if(clang_getCursorKind(cc)==CXCursor_TemplateTypeParameter){ g_ntp++; strncpy(g_tpname, S(clang_getCursorSpelling(cc)), 63); g_tpname[63]=0; }\n")
+    sb.append("  return CXChildVisit_Continue; }\n")
+    sb.append("static int is_tparam(CXType t){\n")
+    sb.append("  if(t.kind==CXType_LValueReference||t.kind==CXType_RValueReference) t=clang_getPointeeType(t);\n")
+    sb.append("  CXString s=clang_getTypeSpelling(t); const char* r=S(s); if(strncmp(r,\"const \",6)==0)r+=6;\n")
+    sb.append("  int ok=(strcmp(r,g_tpname)==0); clang_disposeString(s); return ok; }\n")
+    sb.append("static void emit_ftmpl(CXCursor c, const char* nm){\n")
+    sb.append("  g_ntp=0; g_tpname[0]=0; clang_visitChildren(c, ftcount, 0);\n")
+    sb.append("  if(g_ntp!=1 || !g_tpname[0]) return;\n")
+    sb.append("  CXType ft=clang_getCursorType(c);\n")
+    sb.append("  if(!is_tparam(clang_getResultType(ft))) return;\n")
+    sb.append("  int np=clang_getNumArgTypes(ft); if(np<0) return;\n")
+    sb.append("  for(int i=0;i<np;i++){ if(!is_tparam(clang_getArgType(ft,i))) return; }\n")
+    sb.append("  printf(\"FTMPL %d|%s\\n\", np, nm); }\n")
     sb.append("static enum CXChildVisitResult visit(CXCursor c, CXCursor p, CXClientData d);\n")
     sb.append("static enum CXChildVisitResult nested(CXCursor c, CXCursor p, CXClientData d){\n")
     sb.append("  enum CXCursorKind k=clang_getCursorKind(c);\n")
@@ -1343,6 +1359,7 @@ def _cxxwalk_src() -> str:
     sb.append("  else if(k==CXCursor_Destructor) printf(\"DTOR\\n\");\n")
     sb.append("  else if(k==CXCursor_FunctionDecl){ printf(\"FUNC %d \", count_defaults(c)); tds(clang_getResultType(clang_getCursorType(c))); printf(\"|%s\\n\",nm); params(c); printf(\"EFUNC\\n\"); }\n")
     sb.append("  else if(k==CXCursor_VarDecl){ printf(\"GVAR \"); tds(clang_getCursorType(c)); printf(\"|%s\\n\",nm); }\n")
+    sb.append("  else if(k==CXCursor_FunctionTemplate) emit_ftmpl(c, nm);\n")
     sb.append("  else if(k==CXCursor_EnumDecl){ CXType u=clang_getEnumDeclIntegerType(c); const char* us=scalar(u.kind); if(!us[0])us=\"c_int\"; printf(\"ENUM %s %s\\n\", nm[0]?nm:\"anon\", us); clang_visitChildren(c,visit,0); printf(\"EENUM\\n\"); }\n")
     sb.append("  else if(k==CXCursor_EnumConstantDecl) printf(\"EVAL %s %lld\\n\", nm, (long long)clang_getEnumConstantDeclValue(c));\n")
     sb.append("  else if(k==CXCursor_TypedefDecl || k==CXCursor_TypeAliasDecl){\n")
@@ -2125,6 +2142,51 @@ def _cpp_generate(ir: str, header: str, out: str):
                 if gvri.get(2) != "": gvd = gvd + " -> " + gvri.get(2)
                 decls.append(gvd + "\n")
                 n_fns = n_fns + 1
+            continue
+        if line.starts_with("FTMPL "):
+            # A free-function template of the all-`T` math shape — instantiate it for common scalar
+            # types (int, double) since libclang can't hand us a concrete FunctionDecl. The shim
+            # explicitly calls `ns::name<TYPE>(a0, …)`. Params/return all cross by value.
+            mut ftrest = line.slice(6, line.len())
+            mut ftbar = ftrest.split("|")
+            mut ftnp = _to_int(ftbar.get(0))
+            mut ftnm = ""
+            if ftbar.len > 1: ftnm = ftbar.get(1)
+            if _is_clean_ident(ftnm) and ftnp >= 0:
+                mut ftys = Vec[str].init(2)
+                ftys.push("int")
+                ftys.push("double")
+                mut fctys = Vec[str].init(2)
+                fctys.push("c_int")
+                fctys.push("c_double")
+                mut fti = 0
+                while fti < ftys.len:
+                    mut fcpp = ftys.get(fti)
+                    mut fcty = fctys.get(fti)
+                    fti = fti + 1
+                    mut fshimp = ""
+                    mut ftrp = ""
+                    mut fcallargs = ""
+                    mut fpi = 0
+                    while fpi < ftnp:
+                        mut fan = "a" + fpi.to_str()
+                        fpi = fpi + 1
+                        if fshimp != "": fshimp = fshimp + ", "
+                        fshimp = fshimp + fcpp + " " + fan
+                        if ftrp != "": ftrp = ftrp + ", "
+                        ftrp = ftrp + fan + ": " + fcty
+                        if fcallargs != "": fcallargs = fcallargs + ", "
+                        fcallargs = fcallargs + fan
+                    mut fqual = ftnm
+                    mut ftsym0 = ftnm + "_" + fcpp
+                    if ns_path != "":
+                        fqual = ns_path + "::" + ftnm
+                        ftsym0 = _ns_us(ns_path) + "_" + ftnm + "_" + fcpp
+                    mut ftsym = _uniq_sym(ftsym0, sym_used)
+                    mut fcall = fqual + "<" + fcpp + ">(" + fcallargs + ")"
+                    shim.append(fcpp + " " + ftsym + "(" + fshimp + ") { " + _shim_body(fcpp, "return " + fcall + ";") + " }\n")
+                    decls.append("    def " + ftsym + "(" + ftrp + ") -> " + fcty + "\n")
+                    n_fns = n_fns + 1
             continue
         if line.starts_with("XSTRUCT "):
             # A by-value external (non-system) record — lay it out as a `@value_type` so it
