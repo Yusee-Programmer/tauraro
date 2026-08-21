@@ -324,14 +324,33 @@ a function returning `std::pair<int,int>` and one returning `std::pair<int,doubl
 correctly (`first`/`second`, mixed element types). A POD value-struct still crosses by value with
 direct field access (unchanged — the accessor path is only for non-POD/opaque handles).
 
+### Node-based containers get an index accessor (`_nth`) for iteration
+
+A node-based container (`std::list`/`forward_list`/`set`/`multiset`/`unordered_set`/`unordered_multiset`)
+has no `at()`/`operator[]`, and its iterators can't be exposed directly (a template iterator's
+`operator++` returns a dependent self-type; `==`/`!=` are free namespace-scope templates). Instead the
+instantiation walker detects `begin()`+`end()` and emits an `_nth(obj, i) -> <elem>` accessor whose
+shim uses **`auto`+`std::advance`** — side-stepping the un-nameable iterator type entirely:
+
+```
+mut lst = make_list()
+mut i = 0
+while i < list_size(lst):        # size() is bound
+    use(list_nth(lst, i))        # synthesized: auto it=begin(); advance(it,i); return *it;
+    i = i + 1
+```
+
+Verified (`use_iterate.tr`): a returned `std::list<int>` (size 3, sum 60) and `std::set<int>`
+(`nth(0)=5`, `nth(2)=25`) both traverse correctly. The element type is the container's first template
+arg, classified through libclang canonical types (so `list<Widget>` yields a handle, `list<string>` a
+`char*`, etc.). Random-access containers (`vector`/`deque`) are deliberately excluded — they already
+bind `at(i)`/`operator[]`. `std::map`/`unordered_map` traversal (element is a `pair`) is the residual.
+
 ## Honest scope / remaining hard tail
 
-- **Node-based container iteration** (`std::list`/`map`/`set` via `begin()`/`end()` + `++`) is not
-  yet turnkey: `operator*` (`op_deref`) and `operator[]` bind, but a template iterator's
-  `operator++` returns its *own* dependent self-type (`__normal_iterator<…>&`), which the
-  instantiation walker marks dependent and skips, and the `==`/`!=` used to test end are *free*
-  namespace-scope templates (not members). **Random-access containers iterate fine today** via the
-  bound `at(i)`/`size()` (or the iterator's `op_index`); node-based traversal is the residual.
+- **`std::map`/`unordered_map` traversal** — the map itself binds (`at(key)`/`size()`/`operator[]`);
+  iterating all entries isn't wired because the element is a `pair<const K,V>` (a distinct
+  instantiation). Keyed access works today; whole-map enumeration is the residual.
 - **Free-function templates** (`template<class T> T max(T,T)`) aren't auto-instantiated (unlike class
   templates, they have no usage site to key on) — add a typedef/alias to force one.
 - **By-value *system* structs** (`windows.h`'s `_GUID` passed by value) — pointer-based COM works.

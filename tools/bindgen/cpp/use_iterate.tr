@@ -1,0 +1,14 @@
+from iterate import c_mklist, c_mkset, std__list_int__size, std__list_int__nth, std__set_int__size, std__set_int__nth
+def main():
+    mut l = c_mklist()
+    mut n = std__list_int__size(l)
+    mut sumL = 0
+    mut i = 0
+    while i < n:
+        sumL = sumL + std__list_int__nth(l, i)
+        i = i + 1
+    print("list size=" + n.to_str() + " sum=" + sumL.to_str())
+    mut s = c_mkset()
+    mut m = std__set_int__size(s)
+    print("set size=" + m.to_str() + " nth0=" + std__set_int__nth(s,0).to_str() + " nth2=" + std__set_int__nth(s,2).to_str())
+    print("ok")

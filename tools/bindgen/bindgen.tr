@@ -1114,6 +1114,7 @@ def _cxxwalk_src() -> str:
     sb.append("static char g_params[8][64]; static CXType g_args[8]; static int g_np=0;\n")
     sb.append("static char g_cbase[256]={0};   /* container template base (e.g. \"std::map\") for nested-type detection */\n")
     sb.append("static int g_inst=0;            /* 1 while walking template instantiations (--inst mode) */\n")
+    sb.append("static int g_hasbegin=0, g_hasend=0;   /* container exposes begin()/end() -> emit ITER helper */\n")
     sb.append("/* Collect NON-system external records used by value, so we can lay them out as @value_type\n")
     sb.append("   (a library value struct in a filtered sub-header would otherwise be an opaque handle). System\n")
     sb.append("   records (windows.h) are left on the bare path — zero risk to the working COM handling. */\n")
@@ -1305,6 +1306,9 @@ def _cxxwalk_src() -> str:
     sb.append("  if(k==CXCursor_FieldDecl && clang_getCXXAccessSpecifier(c)==CX_CXXPublic){\n")
     sb.append("    printf(\"FIELD \"); tds(clang_getCursorType(c)); printf(\"|%s\\n\", S(clang_getCursorSpelling(c))); }\n")
     sb.append("  else if(k==CXCursor_CXXMethod && clang_getCXXAccessSpecifier(c)==CX_CXXPublic){\n")
+    sb.append("    { CXString ms=clang_getCursorSpelling(c); const char* mn=clang_getCString(ms);\n")
+    sb.append("      if(strcmp(mn,\"begin\")==0) g_hasbegin=1; else if(strcmp(mn,\"end\")==0) g_hasend=1;\n")
+    sb.append("      clang_disposeString(ms); }\n")
     sb.append("    printf(\"METHOD %c%c %d \", clang_CXXMethod_isStatic(c)?'s':'.', clang_CXXMethod_isConst(c)?'c':'.', count_defaults(c)); tds(clang_getResultType(clang_getCursorType(c))); printf(\"|%s\\n\", S(clang_getCursorSpelling(c))); params(c); printf(\"EMETHOD\\n\"); }\n")
     sb.append("  else if(k==CXCursor_Constructor && clang_getCXXAccessSpecifier(c)==CX_CXXPublic){ printf(\"CTOR %d\\n\", count_defaults(c)); params(c); printf(\"ECTOR\\n\"); }\n")
     sb.append("  return CXChildVisit_Continue; }\n")
@@ -1319,12 +1323,18 @@ def _cxxwalk_src() -> str:
     sb.append("      int na=clang_Type_getNumTemplateArguments(ct); for(int i=0;i<na && i<8;i++) g_args[i]=clang_Type_getTemplateArgumentAsType(ct,i);\n")
     sb.append("      CXString cts=clang_getTypeSpelling(ct); { const char* cs=S(cts); const char* lt=strchr(cs,'<'); int bl=lt?(int)(lt-cs):(int)strlen(cs); if(bl>255)bl=255; memcpy(g_cbase,cs,bl); g_cbase[bl]=0; }\n")
     sb.append("      printf(\"TCLASS %s %d\\n\", S(cts), clang_isPODType(ct)); clang_disposeString(cts);\n")
+    sb.append("      g_hasbegin=0; g_hasend=0;\n")
     sb.append("      clang_visitChildren(def, imeth, 0);\n")
     sb.append("      // Smart pointers: `get()` returns `element_type*` via a metafunction-dependent typedef that\n")
     sb.append("      // libclang won't reduce, and it's inherited from a template base — so synthesize it directly.\n")
     sb.append("      // The element type is the first template arg (a pointer to it). Enables extracting the pointee.\n")
     sb.append("      if(na>0 && (strcmp(g_cbase,\"std::shared_ptr\")==0 || strcmp(g_cbase,\"std::unique_ptr\")==0 || strcmp(g_cbase,\"std::weak_ptr\")==0)){\n")
     sb.append("        printf(\"METHOD .c \"); classify(1,0,clang_getCanonicalType(g_args[0])); printf(\"|get\\n\"); printf(\"EMETHOD\\n\"); }\n")
+    sb.append("      if(na>0 && g_hasbegin && g_hasend &&\n")
+    sb.append("         (strcmp(g_cbase,\"std::list\")==0||strcmp(g_cbase,\"std::forward_list\")==0||\n")
+    sb.append("          strcmp(g_cbase,\"std::set\")==0||strcmp(g_cbase,\"std::multiset\")==0||\n")
+    sb.append("          strcmp(g_cbase,\"std::unordered_set\")==0||strcmp(g_cbase,\"std::unordered_multiset\")==0)){\n")
+    sb.append("        printf(\"ITER \"); classify(0,0,clang_getCanonicalType(g_args[0])); printf(\"\\n\"); }\n")
     sb.append("      printf(\"ECLASS\\n\"); g_np=0; g_cbase[0]=0;\n")
     sb.append("    }\n")
     sb.append("  }\n")
@@ -1975,6 +1985,22 @@ def _cpp_generate(ir: str, header: str, out: str):
                     decls.append(fd + "\n")
                     n_fns = n_fns + 1
             continue
+        if line.starts_with("ITER "):
+            # An instantiated sequence/set container (`std::list<int>`, `std::set<T>`) that exposes
+            # begin()/end() — synthesize an index accessor `<pfx>_nth(obj, i) -> <elem>` so a
+            # node-based container (no `at()`) is traversable across the FFI. The shim uses
+            # `auto`+`std::advance`, side-stepping the un-nameable iterator type. `size()` is
+            # already bound, so counting the elements needs no extra wrapper.
+            mut idesc = line.slice(5, line.len())      # element descriptor `ptr~ref~cat~detail`
+            if _is_clean_ident(cur_class) and idesc.find("type-parameter") < 0 and idesc.find("~d~") < 0:
+                mut iri = _cpp_ret_ex(idesc, "(*it)", value_structs, class_names, class_qual, seen, opaque)
+                mut isym = _uniq_sym(class_pfx + "_nth", sym_used)
+                shim.append(iri.get(0) + " " + isym + "(" + cur_class_qual + "* self, long i) { auto it = self->begin(); std::advance(it, (long)i); " + iri.get(1) + " }\n")
+                mut id = "    def " + isym + "(obj: " + cur_class + ", i: c_long)"
+                if iri.get(2) != "": id = id + " -> " + iri.get(2)
+                decls.append(id + "\n")
+                n_fns = n_fns + 1
+            continue
         if line.starts_with("XSTRUCT "):
             # A by-value external (non-system) record — lay it out as a `@value_type` so it
             # crosses by value (a library value struct in a filtered sub-header).
@@ -2309,7 +2335,7 @@ def _cpp_generate(ir: str, header: str, out: str):
     sh.append("// Auto-generated C++ -> C shim for " + header + " (tauraro-bindgen -h cpp).\n")
     sh.append("// Compile:  c++ -c " + shim_name + "\n")
     sh.append("#include \"" + header + "\"\n")
-    sh.append("#include <string>\n#include <cstring>\n#include <cstdlib>\n")
+    sh.append("#include <string>\n#include <cstring>\n#include <cstdlib>\n#include <iterator>\n")
     sh.append("// std::string return -> heap char* copy (caller owns it; free with the runtime free).\n")
     sh.append("static char* _tr_cpp_strdup(const std::string& s){ char* p=(char*)malloc(s.size()+1); if(p){ memcpy(p, s.c_str(), s.size()); p[s.size()]=0; } return p; }\n")
     sh.append(usings.to_string().as_str())
