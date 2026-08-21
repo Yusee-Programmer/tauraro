@@ -18,8 +18,31 @@ for you** so you never hand-write it.
    libclang, run it on the header, and read a flat **IR** of the public API.
 3. **Emit two files** from the IR: `foo_shim.cpp` (`extern "C"` wrappers) and `foo.tr` (opaque
    handles + wrapper declarations), reusing the existing C-path type mapping + collision handling.
-4. You compile the shim once (`c++ -c foo_shim.cpp`) and link it — the one extra step you'd do for
-   any C++ library. You wrote zero shim code.
+   The `.tr` carries machine-readable link pragmas (`# tauraro-cpp-shim:` / `-cflags:` / `-lib:`).
+4. You just `import foo` and build. **`tauraroc` auto-compiles the shim and links it (`-lstdc++`)** —
+   no manual `c++ -c` / `--link`. You wrote zero shim code and run zero shim build steps.
+
+## Zero-cost, zero-build-step linking (Gap 2 closed)
+
+The shim used to be an extra `.o` you compiled and linked by hand, and an extra indirection per
+call. Both are gone:
+
+- **No build step.** `tauraroc` reads the `# tauraro-cpp-*` pragmas from every imported binding
+  (the resolver already loads each `.tr`), compiles each shim once — cached by source content in
+  `build/<name>_shim.cpp.o` — and appends it plus `-lstdc++` to the link line. The final link is
+  driven by the C++ front-end (`g++`/`clang++`/`zig c++`) so libstdc++ and the exception personality
+  are pulled in. You only link the C++ *library* itself; the generated shim is automatic.
+- **Zero-cost.** On a gcc / `zig cc` toolchain the whole program (Tauraro C objects + shim) is
+  compiled as LTO bitcode and linked with `-flto`, so the `extern "C"` wrapper is **inlined away** —
+  the double indirection `caller → wrapper → method` collapses. Measured on `use_geo.tr`: the
+  non-LTO baseline keeps 4 calls (`main→geo_add→geo::add`, `main→geo_length→geo::length`); the LTO
+  build fuses them into a single constant-propagated `geo_add.constprop.0` with the method bodies
+  inlined. A call into C++ costs what the C++ method costs — no shim tax.
+- **Robust fallbacks.** A bare `clang` host without lld/LLVMgold can't LTO-link bitcode, so LTO is
+  skipped there (the shim is still auto-linked, just not inlined). Cross builds skip LTO too.
+  `--no-auto-cpp` restores the fully-manual path (`c++ -c foo_shim.cpp` + `--link foo_shim.o
+  -lstdc++`). Validated: the full `use_*.tr` corpus (21 fixtures) builds + runs with **no manual
+  shim `--link` and no `-lstdc++`**.
 
 **Proven:** `cxxwalk.c` compiles against the local libclang and already extracts the full public
 API — classes, constructors/destructors, methods (with `static`/`const` flags), parameters (type +

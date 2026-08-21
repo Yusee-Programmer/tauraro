@@ -23,8 +23,7 @@ type names that clash with Win32 like `Rectangle`). Then just `from <out> import
 **Binding C++ headers.** Add `-h cpp` (default is C): `tauraroc bindgen <header.hpp> -o <out.tr> -h
 cpp`. Because C++ has no stable C-callable ABI (name mangling, `this`, vtables, RAII), the bindgen
 **auto-generates a C++→C shim** (`<out>_shim.cpp`) alongside the `.tr` — covering classes, methods,
-constructors/destructors, static methods, free functions, enums, and namespaces. Compile the shim
-once (`c++ -c <out>_shim.cpp`) and link it (`--link <out>_shim.o -lstdc++`). Opaque C++ objects cross
+constructors/destructors, static methods, free functions, enums, and namespaces. Opaque C++ objects cross
 as an opaque Tauraro class handle (e.g. `geo::Shape*` ↔ `Shape`); construct with `<pfx>_new(...)`,
 call `<pfx>_method(obj, ...)`, and free with `<pfx>_delete(obj)`. This mode uses **libclang**, which
 is needed *only* for `-h cpp` (C headers never use it); if it is not installed the tool prints
@@ -32,6 +31,16 @@ per-platform install guidance. For a library that needs its own headers/macros, 
 `tauraroc bindgen wx/wx.h -h cpp -I<dir> -D<MACRO>` (the tool also auto-discovers the compiler's own
 C++ include paths, and reports libclang's diagnostics with a fix hint instead of silently binding
 nothing). See `tools/bindgen/cpp/` for the design and a full `shapes.hpp` end-to-end example.
+
+**Zero-cost, zero-build-step linking.** You don't compile or link the shim by hand. The generated
+binding records the shim in machine-readable header pragmas (`# tauraro-cpp-shim:` / `-cflags:` /
+`-lib:`), and when you `import` the module `tauraroc` **auto-compiles the shim and links it (plus
+`-lstdc++`) for you** — just build your program. On a gcc / `zig cc` toolchain the whole program is
+built with `-flto`, so the `extern "C"` wrapper is **inlined away at link time**: a call into C++
+costs exactly what the C++ method costs, with no shim indirection (unlike a hand-linked `.o`). You
+still link the C++ *library* itself (`--link foo.o` or `-lfoo`) — only the generated shim is
+automatic. Opt out with `--no-auto-cpp` (then link `<out>_shim.o -lstdc++` manually). On a bare
+`clang` host without lld the shim is still auto-linked; only the LTO inlining is skipped.
 
 **C type mapping:**
 

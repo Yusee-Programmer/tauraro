@@ -1934,7 +1934,7 @@ def _fnptr_cast(fnty: str) -> str:
 
 # Parse the walker's flat IR and emit `<base>.tr` (opaque handles + wrappers) and the
 # `<base>_shim.cpp` (extern "C" bridge with namespace-qualified C++ calls).
-def _cpp_generate(ir: str, header: str, out: str):
+def _cpp_generate(ir: str, header: str, out: str, shim_cflags: str):
     mut opaque = StringBuilder.init(512)
     mut consts = StringBuilder.init(512)
     mut decls  = StringBuilder.init(2048)
@@ -2522,9 +2522,13 @@ def _cpp_generate(ir: str, header: str, out: str):
 
     mut sb = StringBuilder.init(4096)
     sb.append("# Auto-generated C++ FFI bindings for " + header + " (tauraro-bindgen -h cpp).\n")
-    sb.append("# Build the shim once, then link it (and the C++ library) with your program:\n")
-    sb.append("#   c++ -c " + shim_name + " -o " + base + "_shim.o\n")
-    sb.append("#   tauraroc yourapp.tr --link " + base + "_shim.o -lstdc++ -o app\n\n")
+    # Machine-readable link pragmas: `tauraroc` reads these from any imported binding,
+    # auto-compiles the shim and links it (zero-cost — LTO inlines the wrapper away).
+    # Just `import` this module; no manual `c++ -c` / `--link -lstdc++` step is needed.
+    sb.append("# tauraro-cpp-shim: " + _basename(shim_name) + "\n")
+    sb.append("# tauraro-cpp-lib: stdc++\n")
+    if shim_cflags != "": sb.append("# tauraro-cpp-cflags: " + shim_cflags + "\n")
+    sb.append("# (opt out with --no-auto-cpp, then: c++ -c " + shim_name + " ; tauraroc app.tr --link " + base + "_shim.o -lstdc++)\n\n")
     mut os_ = opaque.to_string().as_str()
     mut cs = consts.to_string().as_str()
     mut ds2 = decls.to_string().as_str()
@@ -2579,7 +2583,7 @@ def _cpp_generate(ir: str, header: str, out: str):
     write_file(shim_name, sh.to_string().as_str())
 
     print("bindgen: wrote " + out + " + " + shim_name + " — " + n_classes.to_str() + " classes, " + n_fns.to_str() + " wrappers")
-    print("bindgen: next:  c++ -c " + shim_name + "   then link with  --link " + base + "_shim.o -lstdc++")
+    print("bindgen: next:  import this module and build — tauraroc auto-compiles + links the shim (zero-cost).")
 
 # ── adaptive clang configuration (query the compiler, don't hardcode paths) ──────
 # Ask the compiler for its default C++ header search dirs and feed them to libclang as
@@ -2737,7 +2741,12 @@ pub def run_bindgen_cpp(header: str, out: str, cc: str, extra: str):
         if file_exists("_cxx_inst.ir") and not _cpp_ir_is_empty(read_file("_cxx_inst.ir")):
             ir = ir + "\n" + read_file("_cxx_inst.ir")
             n_specs = specs.len
-    _cpp_generate(ir, header, out)
+    # Flags needed to compile the shim (same std + user -I/-D used for parsing); recorded
+    # in the binding so `tauraroc` can auto-compile it. Compiler-detected system include
+    # dirs are omitted — the C++ driver adds its own.
+    mut shim_cflags = _cpp_std_flag(extra)
+    if extra != "": shim_cflags = shim_cflags + " " + extra
+    _cpp_generate(ir, header, out, shim_cflags)
     if n_specs > 0:
         print("bindgen: instantiated " + n_specs.to_str() + " template specialization(s)")
     if nfatal > 0:
