@@ -346,6 +346,27 @@ arg, classified through libclang canonical types (so `list<Widget>` yields a han
 `char*`, etc.). Random-access containers (`vector`/`deque`) are deliberately excluded — they already
 bind `at(i)`/`operator[]`. `std::map`/`unordered_map` traversal (element is a `pair`) is the residual.
 
+### Exception safety — a throwing C++ function never crashes the caller
+
+A C++ exception propagating through an `extern "C"` boundary is **undefined behavior** — in practice it
+`std::terminate`s the whole process. Since most real C++ APIs throw (`std::stoi`, `vector::at`,
+`map::at` on a missing key, stream/filesystem ops, validating constructors), **every** generated wrapper
+body is enclosed in `try { … } catch (const std::exception& e) { … } catch (...) { … }`. On an
+exception the wrapper records the message in a thread-local and returns a zero/default value (`return
+{};`), so the caller keeps running. Two accessors are always emitted:
+
+```
+tauraro_cpp_clear_error()                      # reset before a call you want to check
+mut r = risky(-1)                              # throws in C++ -> caught, returns 0 (no crash)
+mut msg = tauraro_cpp_last_error() as str      # "" if fine, else the exception message
+if msg != "":  handle_error(msg)
+```
+
+`try/catch` is zero-cost on the happy path (table-based unwinding — no overhead unless an exception
+actually fires). Verified (`use_exceptions.tr`): `risky(-1)` throws `std::runtime_error("negative
+input")`, the wrapper returns 0 with `tauraro_cpp_last_error()` = `"negative input"`, and the next call
+`risky(7)=14` still works — the process never crashes.
+
 ## Honest scope / remaining hard tail
 
 - **`std::map`/`unordered_map` traversal** — the map itself binds (`at(key)`/`size()`/`operator[]`);

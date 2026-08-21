@@ -1833,6 +1833,15 @@ def _cpp_field_type(desc: str, value_structs: Map[str, bool], enum_names: Map[st
     if depth == 0: return "Pointer[void]"
     return _ptr_wrap("void", depth)
 
+# Wrap a shim function body in try/catch so a C++ exception NEVER propagates through the
+# `extern "C"` boundary (which is undefined behavior — it `std::terminate`s the whole process).
+# On an exception we record the message in a thread-local (readable via `tauraro_cpp_last_error()`)
+# and return a zero/default value. Zero-cost on the happy path (table-based unwinding).
+def _shim_body(ret_ctype: str, body: str) -> str:
+    mut zero = "return {};"
+    if ret_ctype == "void": zero = "return;"
+    return "try { " + body + " } catch (const std::exception& e) { _tr_cpp_set_error(e.what()); " + zero + " } catch (...) { _tr_cpp_set_error(\"C++ exception\"); " + zero + " }"
+
 # Parse the walker's flat IR and emit `<base>.tr` (opaque handles + wrappers) and the
 # `<base>_shim.cpp` (extern "C" bridge with namespace-qualified C++ calls).
 def _cpp_generate(ir: str, header: str, out: str):
@@ -1937,7 +1946,7 @@ def _cpp_generate(ir: str, header: str, out: str):
         if line == "DTOR":
             if not _is_clean_ident(cur_class): continue
             mut ds = _uniq_sym(class_pfx + "_delete", sym_used)
-            shim.append("void " + ds + "(" + cur_class_qual + "* self) { delete self; }\n")
+            shim.append("void " + ds + "(" + cur_class_qual + "* self) { " + _shim_body("void", "delete self;") + " }\n")
             decls.append("    def " + ds + "(obj: " + cur_class + ")\n")
             n_fns = n_fns + 1
             continue
@@ -1979,7 +1988,7 @@ def _cpp_generate(ir: str, header: str, out: str):
                     # lowering (`_cpp_ret_ex`) with the field access as the "call" expression.
                     mut fri = _cpp_ret_ex(fdesc, "self->" + fnm, value_structs, class_names, class_qual, seen, opaque)
                     mut fsym = _uniq_sym(class_pfx + "_" + fnm, sym_used)
-                    shim.append(fri.get(0) + " " + fsym + "(" + cur_class_qual + "* self) { " + fri.get(1) + " }\n")
+                    shim.append(fri.get(0) + " " + fsym + "(" + cur_class_qual + "* self) { " + _shim_body(fri.get(0), fri.get(1)) + " }\n")
                     mut fd = "    def " + fsym + "(obj: " + cur_class + ")"
                     if fri.get(2) != "": fd = fd + " -> " + fri.get(2)
                     decls.append(fd + "\n")
@@ -1995,7 +2004,7 @@ def _cpp_generate(ir: str, header: str, out: str):
             if _is_clean_ident(cur_class) and idesc.find("type-parameter") < 0 and idesc.find("~d~") < 0:
                 mut iri = _cpp_ret_ex(idesc, "(*it)", value_structs, class_names, class_qual, seen, opaque)
                 mut isym = _uniq_sym(class_pfx + "_nth", sym_used)
-                shim.append(iri.get(0) + " " + isym + "(" + cur_class_qual + "* self, long i) { auto it = self->begin(); std::advance(it, (long)i); " + iri.get(1) + " }\n")
+                shim.append(iri.get(0) + " " + isym + "(" + cur_class_qual + "* self, long i) { " + _shim_body(iri.get(0), "auto it = self->begin(); std::advance(it, (long)i); " + iri.get(1)) + " }\n")
                 mut id = "    def " + isym + "(obj: " + cur_class + ", i: c_long)"
                 if iri.get(2) != "": id = id + " -> " + iri.get(2)
                 decls.append(id + "\n")
@@ -2272,7 +2281,7 @@ def _cpp_generate(ir: str, header: str, out: str):
 
                 if mode == "ctor":
                     mut sym = _uniq_sym(class_pfx + "_new", sym_used)
-                    shim.append(cur_class_qual + "* " + sym + "(" + shimp + ") { return " + call + "; }\n")
+                    shim.append(cur_class_qual + "* " + sym + "(" + shimp + ") { " + _shim_body(cur_class_qual + "*", "return " + call + ";") + " }\n")
                     decls.append("    def " + sym + "(" + trp + ") -> " + cur_class + "\n")
                     n_fns = n_fns + 1
                 else:
@@ -2283,7 +2292,7 @@ def _cpp_generate(ir: str, header: str, out: str):
                         if ns_path == "": sym0 = m_sym
                         else: sym0 = _ns_us(ns_path) + "_" + m_sym
                     mut sym = _uniq_sym(sym0, sym_used)
-                    shim.append(ri.get(0) + " " + sym + "(" + shimp + ") { " + ri.get(1) + " }\n")
+                    shim.append(ri.get(0) + " " + sym + "(" + shimp + ") { " + _shim_body(ri.get(0), ri.get(1)) + " }\n")
                     mut d = "    def " + sym + "(" + trp + ")"
                     if ri.get(2) != "": d = d + " -> " + ri.get(2)
                     decls.append(d + "\n")
@@ -2328,6 +2337,11 @@ def _cpp_generate(ir: str, header: str, out: str):
     if cs != "": sb.append(cs + "\n")
     if ds2 != "":
         sb.append("extern \"C\":\n")
+        # Exception-safety accessors: after any wrapper call, a NON-EMPTY last-error (read via
+        # `tauraro_cpp_last_error() as str`) means a C++ exception was caught (the call returned a
+        # zero value); clear it with tauraro_cpp_clear_error() before a fresh call.
+        sb.append("    def tauraro_cpp_last_error() -> Pointer[char]\n")
+        sb.append("    def tauraro_cpp_clear_error()\n")
         sb.append(ds2)
     write_file(out, sb.to_string().as_str())
 
@@ -2338,8 +2352,15 @@ def _cpp_generate(ir: str, header: str, out: str):
     sh.append("#include <string>\n#include <cstring>\n#include <cstdlib>\n#include <iterator>\n")
     sh.append("// std::string return -> heap char* copy (caller owns it; free with the runtime free).\n")
     sh.append("static char* _tr_cpp_strdup(const std::string& s){ char* p=(char*)malloc(s.size()+1); if(p){ memcpy(p, s.c_str(), s.size()); p[s.size()]=0; } return p; }\n")
+    sh.append("// Exception safety: a C++ exception must never cross `extern \"C\"` (it would std::terminate).\n")
+    sh.append("// Every wrapper catches, records the message here, and returns a zero value; the caller\n")
+    sh.append("// can read/clear it via tauraro_cpp_last_error()/tauraro_cpp_clear_error().\n")
+    sh.append("static thread_local std::string _tr_cpp_err;\n")
+    sh.append("static void _tr_cpp_set_error(const char* m){ _tr_cpp_err = m ? m : \"C++ exception\"; }\n")
     sh.append(usings.to_string().as_str())
     sh.append("extern \"C\" {\n")
+    sh.append("const char* tauraro_cpp_last_error(void){ return _tr_cpp_strdup(_tr_cpp_err); }\n")
+    sh.append("void tauraro_cpp_clear_error(void){ _tr_cpp_err.clear(); }\n")
     sh.append(shim.to_string().as_str())
     sh.append("}\n")
     write_file(shim_name, sh.to_string().as_str())

@@ -1,0 +1,10 @@
+from exceptions import e_risky, tauraro_cpp_last_error, tauraro_cpp_clear_error
+def main():
+    tauraro_cpp_clear_error()
+    print("risky(5) = " + e_risky(5).to_str())          # 10
+    mut bad = e_risky(-1)                                 # throws in C++ -> caught, no crash
+    mut err = tauraro_cpp_last_error() as str
+    print("after throw: ret=" + bad.to_str() + " err=" + err)   # ret=0 err=negative input
+    tauraro_cpp_clear_error()
+    print("risky(7) = " + e_risky(7).to_str())          # 14 (still works)
+    print("ok")
