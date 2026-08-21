@@ -2855,7 +2855,7 @@ __attribute__((hot)) TrStr _cxxwalk_src() {
     /* pass */
     StringBuilder_append(sb, _tr_str_lit("  switch(k){ case CXType_Bool:return \"bool\";\n"));
     /* pass */
-    StringBuilder_append(sb, _tr_str_lit("    case CXType_Char_S:case CXType_SChar:return \"c_schar\"; case CXType_Char_U:case CXType_UChar:return \"c_uchar\";\n"));
+    StringBuilder_append(sb, _tr_str_lit("    case CXType_Char_S:case CXType_Char_U:return \"c_char\"; case CXType_SChar:return \"c_schar\"; case CXType_UChar:return \"c_uchar\";\n"));
     /* pass */
     StringBuilder_append(sb, _tr_str_lit("    case CXType_Char16:return \"c_char16\"; case CXType_Char32:return \"c_char32\"; case CXType_WChar:return \"c_wchar\";\n"));
     /* pass */
@@ -3399,6 +3399,16 @@ __attribute__((hot)) TrStr _cxxwalk_src() {
     /* pass */
     StringBuilder_append(sb, _tr_str_lit("  return CXChildVisit_Continue; }\n"));
     /* pass */
+    StringBuilder_append(sb, _tr_str_lit("static int g_ownmc;\n"));
+    /* pass */
+    StringBuilder_append(sb, _tr_str_lit("static enum CXChildVisitResult ownmc_cb(CXCursor cc, CXCursor pp, CXClientData dd){\n"));
+    /* pass */
+    StringBuilder_append(sb, _tr_str_lit("  enum CXCursorKind kk=clang_getCursorKind(cc);\n"));
+    /* pass */
+    StringBuilder_append(sb, _tr_str_lit("  if(kk==CXCursor_CXXMethod||kk==CXCursor_Constructor) g_ownmc++;\n"));
+    /* pass */
+    StringBuilder_append(sb, _tr_str_lit("  return CXChildVisit_Continue; }\n"));
+    /* pass */
     StringBuilder_append(sb, _tr_str_lit("static enum CXChildVisitResult inst(CXCursor c, CXCursor p, CXClientData d){\n"));
     /* pass */
     StringBuilder_append(sb, _tr_str_lit("  if((clang_getCursorKind(c)==CXCursor_ClassDecl || clang_getCursorKind(c)==CXCursor_StructDecl) && clang_isCursorDefinition(c)){\n"));
@@ -3423,7 +3433,15 @@ __attribute__((hot)) TrStr _cxxwalk_src() {
     /* pass */
     StringBuilder_append(sb, _tr_str_lit("      g_hasbegin=0; g_hasend=0;\n"));
     /* pass */
-    StringBuilder_append(sb, _tr_str_lit("      clang_visitChildren(def, imeth, 0);\n"));
+    StringBuilder_append(sb, _tr_str_lit("      // Explicit specialization (own members>0) OVERRIDES the primary -> bind ITS members\n"));
+    /* pass */
+    StringBuilder_append(sb, _tr_str_lit("      // (concrete, no substitution); implicit instantiation (0) -> primary + arg substitution.\n"));
+    /* pass */
+    StringBuilder_append(sb, _tr_str_lit("      g_ownmc=0; clang_visitChildren(c, ownmc_cb, 0);\n"));
+    /* pass */
+    StringBuilder_append(sb, _tr_str_lit("      CXCursor msrc = (g_ownmc>0) ? c : def;\n"));
+    /* pass */
+    StringBuilder_append(sb, _tr_str_lit("      clang_visitChildren(msrc, imeth, 0);\n"));
     /* pass */
     StringBuilder_append(sb, _tr_str_lit("      // Smart pointers: `get()` returns `element_type*` via a metafunction-dependent typedef that\n"));
     /* pass */

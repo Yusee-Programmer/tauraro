@@ -455,13 +455,25 @@ wrappers each) drove five more fixes, several requiring new Tauraro FFI types:
   `u16string` / `u32string` now stay opaque handles instead of being fed into the narrow-string bridge
   (which produced "no matching constructor" / "cannot take the address of an rvalue" inside wx's
   `wxArgNormalizerWchar` varargs machinery).
+- **Explicit template specializations bind their OWN members** — force-instantiation used to bind the
+  *primary* template's methods and substitute the specialization's type args. That is correct for an
+  *implicit* instantiation (`std::vector<int>`), but wrong for an *explicit/partial* specialization that
+  **overrides** the primary — e.g. `wxArgNormalizer<const wxUniChar&> : wxArgNormalizer<wchar_t>`, whose
+  real `get()` is inherited from a *differently*-instantiated base and returns `wchar_t`, not `wxUniChar`.
+  Binding the primary's `T get()` + substituting produced `&(self->get())` on a by-value `wchar_t` return
+  ("cannot take the address of an rvalue"). The walker now counts the specialization's own member
+  functions: `>0` ⇒ explicit specialization ⇒ bind its own (concrete, no substitution) members; `0` ⇒
+  implicit instantiation ⇒ primary + arg substitution (unchanged for the whole std-container corpus).
+- **Plain `char` is `c_char`, not `c_schar`** — `char`, `signed char`, and `unsigned char` are three
+  distinct C types. The walker mapped plain `char` (`CXType_Char_S`/`_Char_U`) to `c_schar`, so a
+  `const char*` ctor param bound as `signed char*` and failed to match (`no matching constructor` /
+  `cannot initialize 'char**' with 'signed char**'`). Plain `char` now maps to `c_char` (→ `char`);
+  `signed char`/`unsigned char` keep `c_schar`/`c_uchar`.
 
-Combined effect on the widget batch: `control`/`dcclient`/`window`/`button`/`frame`/`combobox`/`gauge`/
-`checkbox`/`slider` now **compile fully** (from ~20 errors each); only `listctrl`/`notebook` remain, at a
-single residual error apiece — `&(self->get())` taking the address of a by-value return deep inside wx's
-internal `wxArgNormalizer` varargs template (not user-facing API, the class of edge case every binding
-tool hand-ignores). No corpus regression: narrow `std::string` fixtures (`use_mapiter.tr` with a
-`std::map<std::string,int>`) still bind and run (`apple -> 10`, `pear -> 20`).
+Combined effect on the widget batch: **every widget header now compiles fully** — `control`, `dcclient`,
+`window`, `button`, `frame`, `combobox`, `gauge`, `checkbox`, `slider`, **and `listctrl`/`notebook`** (all
+from ~20 errors each to 0). No corpus regression: the full `use_*.tr` fixture suite (22 fixtures incl.
+char/`std::string`-heavy `canon`/`fields`/`globals`/`operators`/`mapiter`) binds, compiles, and **runs**.
 
 ### Coverage harness over wxWidgets (measurement-driven hardening)
 
