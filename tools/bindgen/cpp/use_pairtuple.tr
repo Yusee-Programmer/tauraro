@@ -1,0 +1,9 @@
+from pairtuple import m_order, m_stats, std__pair_int__int__first, std__pair_int__int__second, std__pair_int__double__first, std__pair_int__double__second
+def main():
+    mut p = m_order(9, 4)
+    print("min = " + std__pair_int__int__first(p).to_str())
+    print("max = " + std__pair_int__int__second(p).to_str())
+    mut s = m_stats(10)
+    print("stats.n = " + std__pair_int__double__first(s).to_str())
+    print("stats.h = " + std__pair_int__double__second(s).to_str())
+    print("ok")

@@ -307,6 +307,23 @@ assignment (`operator=` — aliasing/self-ref), unary address-of, conversion ope
 (`operator bool`), and `operator new`/`delete`. Verified end-to-end (`use_operators.tr`): a `Vec2`
 with `+ - -(unary) [] == < +=` all compute correctly through the FFI.
 
+### Public data members become read-accessors (incl. `std::pair`/`std::tuple`)
+
+A class/struct that has **public data members** but isn't a trivially-copyable POD (it has a
+constructor, virtual, etc.) can't cross by value — yet its fields used to be invisible (only its
+methods bound). Each public field now generates a read-accessor wrapper `<pfx>_<field>(obj) ->
+<fieldtype>` (shim: `return self->field;`). This is extremely common in real library types (a
+`Config`/`Point`-style class with public fields *and* helper methods). Verified (`use_fields.tr`):
+a non-POD `Point{int x,y; double weight; Point(...); int sum();}` exposes `Point_x/_y/_weight`
+alongside `Point_sum`.
+
+Crucially this also makes **`std::pair`/`std::tuple` returns usable**: the forced-instantiation
+walker now recognizes `struct` specializations (not just `class`) and emits their fields, so
+`std::pair<A,B>` binds `pair_first(obj)->A` / `pair_second(obj)->B`. Verified (`use_pairtuple.tr`):
+a function returning `std::pair<int,int>` and one returning `std::pair<int,double>` are both read
+correctly (`first`/`second`, mixed element types). A POD value-struct still crosses by value with
+direct field access (unchanged — the accessor path is only for non-POD/opaque handles).
+
 ## Honest scope / remaining hard tail
 
 - **Node-based container iteration** (`std::list`/`map`/`set` via `begin()`/`end()` + `++`) is not

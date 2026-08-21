@@ -1302,12 +1302,14 @@ def _cxxwalk_src() -> str:
     sb.append("  return CXChildVisit_Continue; }\n")
     sb.append("static enum CXChildVisitResult imeth(CXCursor c, CXCursor p, CXClientData d){\n")
     sb.append("  enum CXCursorKind k=clang_getCursorKind(c);\n")
-    sb.append("  if(k==CXCursor_CXXMethod && clang_getCXXAccessSpecifier(c)==CX_CXXPublic){\n")
+    sb.append("  if(k==CXCursor_FieldDecl && clang_getCXXAccessSpecifier(c)==CX_CXXPublic){\n")
+    sb.append("    printf(\"FIELD \"); tds(clang_getCursorType(c)); printf(\"|%s\\n\", S(clang_getCursorSpelling(c))); }\n")
+    sb.append("  else if(k==CXCursor_CXXMethod && clang_getCXXAccessSpecifier(c)==CX_CXXPublic){\n")
     sb.append("    printf(\"METHOD %c%c %d \", clang_CXXMethod_isStatic(c)?'s':'.', clang_CXXMethod_isConst(c)?'c':'.', count_defaults(c)); tds(clang_getResultType(clang_getCursorType(c))); printf(\"|%s\\n\", S(clang_getCursorSpelling(c))); params(c); printf(\"EMETHOD\\n\"); }\n")
     sb.append("  else if(k==CXCursor_Constructor && clang_getCXXAccessSpecifier(c)==CX_CXXPublic){ printf(\"CTOR %d\\n\", count_defaults(c)); params(c); printf(\"ECTOR\\n\"); }\n")
     sb.append("  return CXChildVisit_Continue; }\n")
     sb.append("static enum CXChildVisitResult inst(CXCursor c, CXCursor p, CXClientData d){\n")
-    sb.append("  if(clang_getCursorKind(c)==CXCursor_ClassDecl && clang_isCursorDefinition(c)){\n")
+    sb.append("  if((clang_getCursorKind(c)==CXCursor_ClassDecl || clang_getCursorKind(c)==CXCursor_StructDecl) && clang_isCursorDefinition(c)){\n")
     sb.append("    CXCursor tmpl=clang_getSpecializedCursorTemplate(c);\n")
     sb.append("    if(!clang_Cursor_isNull(tmpl)){\n")
     sb.append("      // `getSpecializedCursorTemplate` may return a forward DECLARATION of the template (true for\n")
@@ -1947,15 +1949,31 @@ def _cpp_generate(ir: str, header: str, out: str):
             else: fld_buf = ""
             continue
         if line.starts_with("FIELD "):
-            # A public data field of the current class (used only for value-struct layout).
+            # A public data field of the current class. A POD value-struct crosses by value and
+            # exposes fields directly, so we collect them into `fld_buf` for the struct layout.
+            # A NON-POD class (opaque handle — has a ctor/vtable, e.g. std::pair, or any library
+            # class with public members alongside methods) can't cross by value, so instead we
+            # synthesize a read-ACCESSOR wrapper `<pfx>_<field>(obj) -> <fieldtype>` calling
+            # `self-><field>` — this is what makes those public members readable across the FFI.
             mut frest = line.slice(6, line.len())
             mut fbar = frest.split("|")
             mut fdesc = fbar.get(0)
             mut fnm = ""
             if fbar.len > 1: fnm = fbar.get(1)
             if _is_clean_ident(fnm):
-                mut fmap = _cpp_field_type(fdesc, value_structs, enum_names)
-                fld_buf = fld_buf + "    pub " + _cpp_tr_pname(fnm) + ": " + fmap + "\n"
+                if value_structs.contains(cur_class):
+                    mut fmap = _cpp_field_type(fdesc, value_structs, enum_names)
+                    fld_buf = fld_buf + "    pub " + _cpp_tr_pname(fnm) + ": " + fmap + "\n"
+                elif _is_clean_ident(cur_class) and fdesc.find("type-parameter") < 0 and fdesc.find("~d~") < 0:
+                    # Opaque-class public field -> synthesize a read accessor. Reuse the return
+                    # lowering (`_cpp_ret_ex`) with the field access as the "call" expression.
+                    mut fri = _cpp_ret_ex(fdesc, "self->" + fnm, value_structs, class_names, class_qual, seen, opaque)
+                    mut fsym = _uniq_sym(class_pfx + "_" + fnm, sym_used)
+                    shim.append(fri.get(0) + " " + fsym + "(" + cur_class_qual + "* self) { " + fri.get(1) + " }\n")
+                    mut fd = "    def " + fsym + "(obj: " + cur_class + ")"
+                    if fri.get(2) != "": fd = fd + " -> " + fri.get(2)
+                    decls.append(fd + "\n")
+                    n_fns = n_fns + 1
             continue
         if line.starts_with("XSTRUCT "):
             # A by-value external (non-system) record — lay it out as a `@value_type` so it
