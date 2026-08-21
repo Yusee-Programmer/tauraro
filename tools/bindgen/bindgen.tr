@@ -1166,7 +1166,9 @@ def _cxxwalk_src() -> str:
     sb.append("  else if(sc[0]) printf(\"%d~%d~p~%s\", depth, ref, sc);\n")
     sb.append("  else if(k==CXType_Enum){ CXType u=clang_getEnumDeclIntegerType(clang_getTypeDeclaration(cur)); const char* us=scalar(u.kind); if(!us[0])us=\"c_int\";\n")
     sb.append("    CXString sp=clang_getTypeSpelling(cur); printf(\"%d~%d~e~%s#%s\", depth, ref, S(sp), us); clang_disposeString(sp); }\n")
-    sb.append("  else if(k==CXType_Record){ CXString sp=clang_getTypeSpelling(cur); const char* r=S(sp); if(strncmp(r,\"const \",6)==0)r+=6; if(strncmp(r,\"volatile \",9)==0)r+=9;\n")
+    sb.append("  else if(k==CXType_Record){\n")
+    sb.append("    if(depth==0 && clang_Type_getNumTemplateArguments(cur)<1 && clang_Type_getSizeOf(cur)==CXTypeLayoutError_Incomplete){ printf(\"%d~%d~d~\", depth, ref); return; }\n")
+    sb.append("    CXString sp=clang_getTypeSpelling(cur); const char* r=S(sp); if(strncmp(r,\"const \",6)==0)r+=6; if(strncmp(r,\"volatile \",9)==0)r+=9;\n")
     sb.append("    if(strncmp(r,\"std::basic_string\",17)==0) printf(\"%d~%d~s~string\", depth, ref);\n")
     sb.append("    else printf(\"%d~%d~r~%s\", depth, ref, r); clang_disposeString(sp); }\n")
     sb.append("  else if(k==CXType_FunctionProto){ CXString sp=clang_getTypeSpelling(clang_getCanonicalType(cur)); printf(\"%d~%d~f~%s\", depth, ref, S(sp)); clang_disposeString(sp); }\n")
@@ -1236,12 +1238,13 @@ def _cxxwalk_src() -> str:
     sb.append("   through the derived pointer — public inheritance upcasts). Dedup by name so an override / diamond\n")
     sb.append("   base isn't bound twice; own methods are recorded first so they win. */\n")
     sb.append("static char g_seenm[512][96]; static int g_nseenm=0;\n")
+    sb.append("static int g_abstract=0;\n")
     sb.append("static int seen_method(const char* nm){ for(int i=0;i<g_nseenm;i++) if(strcmp(g_seenm[i],nm)==0) return 1; if(g_nseenm<512){ strncpy(g_seenm[g_nseenm],nm,95); g_seenm[g_nseenm][95]=0; g_nseenm++; } return 0; }\n")
     sb.append("static void emit_method(CXCursor c){\n")
     sb.append("  enum CXCursorKind k=clang_getCursorKind(c);\n")
     sb.append("  if(k==CXCursor_CXXMethod && clang_getCXXAccessSpecifier(c)==CX_CXXPublic){\n")
     sb.append("    printf(\"METHOD %c%c %d \", clang_CXXMethod_isStatic(c)?'s':'.', clang_CXXMethod_isConst(c)?'c':'.', count_defaults(c)); tds(clang_getResultType(clang_getCursorType(c))); printf(\"|%s\\n\", S(clang_getCursorSpelling(c))); params(c); printf(\"EMETHOD\\n\"); }\n")
-    sb.append("  else if(k==CXCursor_Constructor && clang_getCXXAccessSpecifier(c)==CX_CXXPublic){ printf(\"CTOR %d\\n\", count_defaults(c)); params(c); printf(\"ECTOR\\n\"); }\n")
+    sb.append("  else if(k==CXCursor_Constructor && clang_getCXXAccessSpecifier(c)==CX_CXXPublic && !g_abstract){ printf(\"CTOR %d\\n\", count_defaults(c)); params(c); printf(\"ECTOR\\n\"); }\n")
     sb.append("  else if(k==CXCursor_Destructor) printf(\"DTOR\\n\");\n")
     sb.append("}\n")
     sb.append("static enum CXChildVisitResult ownmeth(CXCursor c, CXCursor p, CXClientData d){\n")
@@ -1294,12 +1297,13 @@ def _cxxwalk_src() -> str:
     sb.append("  else if((k==CXCursor_ClassDecl||k==CXCursor_StructDecl)&&clang_isCursorDefinition(c)){\n")
     sb.append("    CXType rt=clang_getCursorType(c); printf(\"CLASS %s %d\\n\",nm, clang_isPODType(rt));\n")
     sb.append("    int saved=g_nseenm; g_nseenm=0;             /* per-class method-name dedup set */\n")
+    sb.append("    int savedabs=g_abstract; g_abstract=clang_CXXRecord_isAbstract(c);\n")
     sb.append("    clang_visitChildren(c,fld,0);\n")
     sb.append("    clang_visitChildren(c,gvar,0);\n")
     sb.append("    clang_visitChildren(c,ownmeth,0);           /* own methods/ctors/dtor (records names) */\n")
     sb.append("    clang_visitChildren(c,basespec,0);          /* inherited public methods (deduped) */\n")
     sb.append("    clang_visitChildren(c,nested,0);            /* nested classes + enums */\n")
-    sb.append("    g_nseenm=saved;\n")
+    sb.append("    g_nseenm=saved; g_abstract=savedabs;\n")
     sb.append("    printf(\"ECLASS\\n\"); }\n")
     sb.append("  else if(k==CXCursor_CXXMethod && clang_getCXXAccessSpecifier(c)==CX_CXXPublic){\n")
     sb.append("    printf(\"METHOD %c%c %d \", clang_CXXMethod_isStatic(c)?'s':'.', clang_CXXMethod_isConst(c)?'c':'.', count_defaults(c)); tds(clang_getResultType(clang_getCursorType(c))); printf(\"|%s\\n\",nm); params(c); printf(\"EMETHOD\\n\"); }\n")
@@ -2074,9 +2078,14 @@ def _cpp_generate(ir: str, header: str, out: str):
             mut gvdesc = gbar.get(0)
             mut gvnm = ""
             if gbar.len > 1: gvnm = gbar.get(1)
-            if _is_clean_ident(gvnm) and gvdesc.find("type-parameter") < 0 and gvdesc.find("~d~") < 0:
+            mut gcat = _desc4(gvdesc).get(2)
+            # Skip an array / function-pointer / void global — the value accessor can't `new[]` or
+            # copy those (e.g. wx's `const char wxPanelNameStr[]`); only scalar/enum/record/string.
+            if _is_clean_ident(gvnm) and gvdesc.find("type-parameter") < 0 and gvdesc.find("~d~") < 0 and gcat != "u" and gcat != "f" and gcat != "v":
                 mut gqual = gvnm
-                mut gsym0 = gvnm
+                # At true global scope the accessor `g_<name>` avoids colliding with the C++ global
+                # of the same name; namespaced/class-static get the ns/class prefix as before.
+                mut gsym0 = "g_" + gvnm
                 if cur_class != "":
                     gqual = cur_class_qual + "::" + gvnm
                     gsym0 = class_pfx + "_" + gvnm
@@ -2432,7 +2441,11 @@ def _cpp_generate(ir: str, header: str, out: str):
                     mut sym0 = ""
                     if mode == "method": sym0 = class_pfx + "_" + m_sym
                     else:
-                        if ns_path == "": sym0 = m_sym
+                        # A free function at TRUE global scope (no namespace) — the wrapper's
+                        # `extern "C"` symbol would collide with the C++ function of the same name
+                        # (legacy `wxFoo()`-style APIs), so prefix it `g_`. Namespaced free functions
+                        # already carry the namespace prefix and don't collide.
+                        if ns_path == "": sym0 = "g_" + m_sym
                         else: sym0 = _ns_us(ns_path) + "_" + m_sym
                     mut sym = _uniq_sym(sym0, sym_used)
                     shim.append(ri.get(0) + " " + sym + "(" + shimp + ") { " + _shim_body(ri.get(0), ri.get(1)) + " }\n")

@@ -2977,7 +2977,11 @@ __attribute__((hot)) TrStr _cxxwalk_src() {
     /* pass */
     StringBuilder_append(sb, _tr_str_lit("    CXString sp=clang_getTypeSpelling(cur); printf(\"%d~%d~e~%s#%s\", depth, ref, S(sp), us); clang_disposeString(sp); }\n"));
     /* pass */
-    StringBuilder_append(sb, _tr_str_lit("  else if(k==CXType_Record){ CXString sp=clang_getTypeSpelling(cur); const char* r=S(sp); if(strncmp(r,\"const \",6)==0)r+=6; if(strncmp(r,\"volatile \",9)==0)r+=9;\n"));
+    StringBuilder_append(sb, _tr_str_lit("  else if(k==CXType_Record){\n"));
+    /* pass */
+    StringBuilder_append(sb, _tr_str_lit("    if(depth==0 && clang_Type_getNumTemplateArguments(cur)<1 && clang_Type_getSizeOf(cur)==CXTypeLayoutError_Incomplete){ printf(\"%d~%d~d~\", depth, ref); return; }\n"));
+    /* pass */
+    StringBuilder_append(sb, _tr_str_lit("    CXString sp=clang_getTypeSpelling(cur); const char* r=S(sp); if(strncmp(r,\"const \",6)==0)r+=6; if(strncmp(r,\"volatile \",9)==0)r+=9;\n"));
     /* pass */
     StringBuilder_append(sb, _tr_str_lit("    if(strncmp(r,\"std::basic_string\",17)==0) printf(\"%d~%d~s~string\", depth, ref);\n"));
     /* pass */
@@ -3117,6 +3121,8 @@ __attribute__((hot)) TrStr _cxxwalk_src() {
     /* pass */
     StringBuilder_append(sb, _tr_str_lit("static char g_seenm[512][96]; static int g_nseenm=0;\n"));
     /* pass */
+    StringBuilder_append(sb, _tr_str_lit("static int g_abstract=0;\n"));
+    /* pass */
     StringBuilder_append(sb, _tr_str_lit("static int seen_method(const char* nm){ for(int i=0;i<g_nseenm;i++) if(strcmp(g_seenm[i],nm)==0) return 1; if(g_nseenm<512){ strncpy(g_seenm[g_nseenm],nm,95); g_seenm[g_nseenm][95]=0; g_nseenm++; } return 0; }\n"));
     /* pass */
     StringBuilder_append(sb, _tr_str_lit("static void emit_method(CXCursor c){\n"));
@@ -3127,7 +3133,7 @@ __attribute__((hot)) TrStr _cxxwalk_src() {
     /* pass */
     StringBuilder_append(sb, _tr_str_lit("    printf(\"METHOD %c%c %d \", clang_CXXMethod_isStatic(c)?'s':'.', clang_CXXMethod_isConst(c)?'c':'.', count_defaults(c)); tds(clang_getResultType(clang_getCursorType(c))); printf(\"|%s\\n\", S(clang_getCursorSpelling(c))); params(c); printf(\"EMETHOD\\n\"); }\n"));
     /* pass */
-    StringBuilder_append(sb, _tr_str_lit("  else if(k==CXCursor_Constructor && clang_getCXXAccessSpecifier(c)==CX_CXXPublic){ printf(\"CTOR %d\\n\", count_defaults(c)); params(c); printf(\"ECTOR\\n\"); }\n"));
+    StringBuilder_append(sb, _tr_str_lit("  else if(k==CXCursor_Constructor && clang_getCXXAccessSpecifier(c)==CX_CXXPublic && !g_abstract){ printf(\"CTOR %d\\n\", count_defaults(c)); params(c); printf(\"ECTOR\\n\"); }\n"));
     /* pass */
     StringBuilder_append(sb, _tr_str_lit("  else if(k==CXCursor_Destructor) printf(\"DTOR\\n\");\n"));
     /* pass */
@@ -3233,6 +3239,8 @@ __attribute__((hot)) TrStr _cxxwalk_src() {
     /* pass */
     StringBuilder_append(sb, _tr_str_lit("    int saved=g_nseenm; g_nseenm=0;             /* per-class method-name dedup set */\n"));
     /* pass */
+    StringBuilder_append(sb, _tr_str_lit("    int savedabs=g_abstract; g_abstract=clang_CXXRecord_isAbstract(c);\n"));
+    /* pass */
     StringBuilder_append(sb, _tr_str_lit("    clang_visitChildren(c,fld,0);\n"));
     /* pass */
     StringBuilder_append(sb, _tr_str_lit("    clang_visitChildren(c,gvar,0);\n"));
@@ -3243,7 +3251,7 @@ __attribute__((hot)) TrStr _cxxwalk_src() {
     /* pass */
     StringBuilder_append(sb, _tr_str_lit("    clang_visitChildren(c,nested,0);            /* nested classes + enums */\n"));
     /* pass */
-    StringBuilder_append(sb, _tr_str_lit("    g_nseenm=saved;\n"));
+    StringBuilder_append(sb, _tr_str_lit("    g_nseenm=saved; g_abstract=savedabs;\n"));
     /* pass */
     StringBuilder_append(sb, _tr_str_lit("    printf(\"ECLASS\\n\"); }\n"));
     /* pass */
@@ -5281,11 +5289,13 @@ __attribute__((hot)) void _cpp_generate(TrStr ir, TrStr header, TrStr out) {
                 gvnm = _strtmp_t989;
             }
             /* pass */
-            if (((_is_clean_ident(gvnm) && (({ char* _t990 = strstr(_tr_strz(gvdesc), _tr_strz(_tr_str_lit("type-parameter"))); _t990 ? (long long)(_t990 - (_tr_strz(gvdesc))) : -1LL; }) < 0LL)) && (({ char* _t991 = strstr(_tr_strz(gvdesc), _tr_strz(_tr_str_lit("~d~"))); _t991 ? (long long)(_t991 - (_tr_strz(gvdesc))) : -1LL; }) < 0LL))) {
+            TrStr gcat = List_TrStr_get(_desc4(gvdesc), 2LL);
+            /* pass */
+            if ((((((_is_clean_ident(gvnm) && (({ char* _t990 = strstr(_tr_strz(gvdesc), _tr_strz(_tr_str_lit("type-parameter"))); _t990 ? (long long)(_t990 - (_tr_strz(gvdesc))) : -1LL; }) < 0LL)) && (({ char* _t991 = strstr(_tr_strz(gvdesc), _tr_strz(_tr_str_lit("~d~"))); _t991 ? (long long)(_t991 - (_tr_strz(gvdesc))) : -1LL; }) < 0LL)) && (strcmp(_tr_strz(gcat), _tr_strz(_tr_str_lit("u"))) != 0)) && (strcmp(_tr_strz(gcat), _tr_strz(_tr_str_lit("f"))) != 0)) && (strcmp(_tr_strz(gcat), _tr_strz(_tr_str_lit("v"))) != 0))) {
                 /* pass */
                 TrStr gqual = _tr_str_retain(gvnm);
                 /* pass */
-                TrStr gsym0 = _tr_str_retain(gvnm);
+                TrStr gsym0 = _tr_strx_concat(_tr_strz(_tr_str_lit("g_")), _tr_strz(gvnm));
                 /* pass */
                 if ((strcmp(_tr_strz(cur_class), _tr_strz(_tr_str_lit(""))) != 0)) {
                     /* pass */
@@ -6343,7 +6353,7 @@ __attribute__((hot)) void _cpp_generate(TrStr ir, TrStr header, TrStr out) {
                         /* pass */
                         if ((strcmp(_tr_strz(ns_path), _tr_strz(_tr_str_lit(""))) == 0)) {
                             /* pass */
-                            TrStr _strtmp_t1140 = _tr_str_retain(m_sym);
+                            TrStr _strtmp_t1140 = _tr_strx_concat(_tr_strz(_tr_str_lit("g_")), _tr_strz(m_sym));
                             _tr_str_release(sym0);
                             sym0 = _strtmp_t1140;
                         } else {

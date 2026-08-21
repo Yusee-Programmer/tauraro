@@ -1,0 +1,7 @@
+from cpp_realworld import g_make_square, Shape_area, g_display_depth, g_LIB_VERSION
+def main():
+    mut sq = g_make_square(6)                        # global free fn -> Shape* (a Square)
+    print("area = " + Shape_area(sq).to_str())        # 36 (virtual dispatch through base)
+    print("depth = " + g_display_depth().to_str())    # 32 (global free fn, g_-prefixed)
+    print("version = " + g_LIB_VERSION().to_str())    # 5 (global variable accessor)
+    print("ok")

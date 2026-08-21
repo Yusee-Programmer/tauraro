@@ -428,8 +428,38 @@ pulls in `<algorithm>`'s `std::max`/etc. Verified (`use_freefntmpl.tr`): `maxof_
 multiple type params, pointers) are still skipped — they need a concrete usage type the bindgen can't
 infer.
 
+### Real-world validation: wxWidgets 3.2
+
+Pointed at real **wxWidgets** headers (`wx/gdicmn.h`, `wx/colour.h`, `wx/pen.h`, `wx/brush.h`,
+`wx/font.h`), the bindgen binds and **the generated shim compiles** (e.g. `wx/gdicmn.h` → 16 classes,
+245 wrappers: `wxPoint`/`wxSize`/`wxRect`/`wxColour`/`wxColourDatabase` with ctors, methods, operators).
+Getting there surfaced and fixed four robustness issues that generalize well beyond wx:
+
+1. **Parse with clang's own headers.** Windows C++ headers pull in `windows.h` → GCC intrinsics
+   (`ia32intrin.h`) that libclang can't parse. Use **`--cc clang++`** so the bindgen feeds *clang's*
+   resource include dirs (its own intrinsics) — `wx/wx.h` then parses with zero errors.
+2. **Incomplete-type wrappers are skipped.** A method/global whose type is only forward-declared here
+   (`wxColour` in `gdicmn.h`) used by value can't be `new`'d/returned — the walker marks a *non-template*
+   incomplete record dependent so the wrapper is skipped. (Template specializations like
+   `std::map<int,double>` are "incomplete" only until forced-instantiation, so they're excluded from this.)
+3. **Global-scope names don't collide.** A legacy `wxFoo()`-style free function or `wxDefaultSize`-style
+   global at true global scope would give an `extern "C"` wrapper the same name as the C++ entity. Those
+   wrappers get a `g_` prefix (`g_wxDisplaySize`), and array/function/void globals are skipped.
+4. **Abstract classes get no constructor.** `wxColourBase` has pure virtuals; `new wxColourBase()` is
+   illegal, so `clang_CXXRecord_isAbstract` gates out the constructor wrappers (methods still bind, and
+   you obtain instances via factories / derived types).
+
+These are exercised portably (no wx needed) by `use_cpp_realworld.tr`: an abstract `Shape` (no ctor) +
+`Incomplete makeThing()` (skipped) + `make_square()->Shape*` (global fn) + `display_depth()` (global fn) +
+`LIB_VERSION` (global var) → `area=36` (virtual dispatch), `depth=32`, `version=5`. **Note:** *running* a
+full wx program additionally needs the wxWidgets libraries linked — a wx build-config step, independent
+of the bindgen; the shim compiling clean is the binding-correctness proof.
+
 ## Honest scope / remaining hard tail
 
+- **Umbrella headers** (`wx/wx.h`, which is only `#include`s) bind nothing on their own — point the
+  bindgen at the *specific* header whose classes you want (`wx/frame.h`), since only declarations in the
+  passed file are bound (system/other-header decls are intentionally skipped).
 - **By-value *system* structs** (`windows.h`'s `_GUID` passed by value) — pointer-based COM works.
 - **By-value *system* structs** (`windows.h`'s `_GUID`/`VARIANT` passed *by value*, not by pointer)
   are not laid out — that would need renaming the emitted struct to avoid redefining the one the
