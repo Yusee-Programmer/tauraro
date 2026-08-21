@@ -1,0 +1,10 @@
+from wchartype import g_wsum, g_wat
+def main():
+    mut buf: [c_wchar; 4]
+    buf[0] = 72 as c_wchar
+    buf[1] = 105 as c_wchar
+    buf[2] = 33 as c_wchar
+    buf[3] = 0 as c_wchar
+    print("wsum = " + g_wsum(buf.as_ptr(), 3).to_str())    # 72+105+33 = 210
+    print("wat(1) = " + g_wat(buf.as_ptr(), 1).to_str())    # 105
+    print("ok")

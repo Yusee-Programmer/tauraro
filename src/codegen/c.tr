@@ -71,6 +71,7 @@ pub def _is_c_int_scalar(n: str) -> bool:
     if n == "c_int8_t" or n == "c_int16_t" or n == "c_int32_t" or n == "c_int64_t": return true
     if n == "c_uint8_t" or n == "c_uint16_t" or n == "c_uint32_t" or n == "c_uint64_t": return true
     if n == "c_intptr_t" or n == "c_uintptr_t" or n == "c_ptrdiff_t": return true
+    if n == "c_wchar" or n == "c_char16" or n == "c_char32": return true
     return false
 
 pub def _safe_c_varname(n: str) -> str:
@@ -551,6 +552,11 @@ pub class CGenerator:
         if n == "c_char": return "char"
         if n == "c_uchar": return "unsigned char"
         if n == "c_schar": return "signed char"
+        # Wide / Unicode character types — distinct C++ types (a `const wchar_t*` param won't accept
+        # an `int*`), so they need dedicated FFI names rather than aliasing to an integer.
+        if n == "c_wchar": return "wchar_t"
+        if n == "c_char16": return "char16_t"
+        if n == "c_char32": return "char32_t"
         if n == "c_float": return "float"
         if n == "c_double": return "double"
         if n == "c_ldouble": return "long double"

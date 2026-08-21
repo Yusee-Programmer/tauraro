@@ -428,6 +428,51 @@ pulls in `<algorithm>`'s `std::max`/etc. Verified (`use_freefntmpl.tr`): `maxof_
 multiple type params, pointers) are still skipped — they need a concrete usage type the bindgen can't
 infer.
 
+### FFI type completeness + wx widget-header hardening (round 2)
+
+Extending the harness to wx's deep-inheritance **widget** headers (`button`/`control`/`frame`/… — 500+
+wrappers each) drove five more fixes, several requiring new Tauraro FFI types:
+
+- **New `c_*` character types** — `c_wchar` (→ `wchar_t`), `c_char16` (→ `char16_t`), `c_char32`
+  (→ `char32_t`). Windows `wxChar` is `wchar_t`; it used to map to `c_int`, so a `const wchar_t*` param
+  became `int*` and wouldn't compile. These are real Tauraro types (recognized by sema as copy scalars,
+  emitted by codegen), so bindings pass wide strings correctly. Verified (`use_wchartype.tr`): a
+  `[c_wchar; 4]` buffer through `wsum`/`wat` → `wsum=210`, `wat(1)=105`.
+- **Non-copyable types** — a record with a deleted or private copy constructor (`wxDECLARE_NO_COPY_CLASS`)
+  can't be `new`'d-by-copy; its by-value uses are skipped (by-reference stays a handle).
+- **`= delete`d functions** — a deleted constructor/method (e.g. a deleted copy ctor) is never wrapped.
+- **Reference-type template arguments** — an internal template instantiated with a reference arg
+  (`wxArgNormalizer<const wxString&>`) produced `T& *` (pointer-to-reference); the substitution now
+  strips the reference first.
+
+Combined effect on a widget batch: `control`/`dcclient`/`window` now **compile fully**, and the rest
+dropped from ~20 errors each to 1–6. The last residuals are diverse wx-internal-method edge cases
+(a couple of default-arg-arity mismatches on `MSW*` methods, validator defaults) with no dominant
+category left.
+
+### Coverage harness over wxWidgets (measurement-driven hardening)
+
+A harness (`/tmp/harness/run.sh`-style: bindgen each header, then `clang++ -c` the shim, aggregate
+error categories) was run over a broad sample of real wx headers. **Value-class / utility / container
+headers compile cleanly** (e.g. `gdicmn` 246, `filename` 188, `region` 79, `pen`, `dir`, `ffile`,
+`tokenzr` — 12/12 in one batch, 1099 wrappers, 0 shim failures). The **deep-inheritance widget headers**
+(`button`/`control`/`frame` — 500+ wrappers each) surfaced more bugs, several now fixed:
+
+- **Array parameters** (`const int vals[]`, `wxPoint pts[]`) were lowered to invalid `T[] *p`; they now
+  decay to a pointer (`Pointer[c_int]`) as C requires.
+- **Member-function-pointer parameters** (`wxEvtHandler::Connect`'s `void (T::*)(wxEvent&)`) produced
+  un-compilable syntax; such a method is now skipped (a pointer-to-member can't cross a C ABI).
+- **Protected `using`-re-declarations** — wx does `protected: using wxEvtHandler::ProcessEvent;`, which
+  changes an inherited public method to protected; those names are now collected across the base chain
+  and excluded, so the shim never calls an inaccessible member.
+
+Verified portably by `use_widgets.tr` (no wx needed): a `Widget` whose base method is re-`protected`'d
+via `using` (excluded), a member-fn-pointer method (skipped), and an array-param `sum(const int[], n)`
+→ `sum([10,20,30,40]) = 100`. The residual widget-header tail (still failing to fully compile) is the
+genuinely hard part every binding tool hits: `wxChar`/`wchar_t` string params, classes with **deleted
+copy constructors**, and **members ambiguous across multiple base classes** — these need per-case
+handling (SWIG/wxPython carry large hand-written `%ignore` lists for exactly these).
+
 ### Real-world validation: wxWidgets 3.2
 
 Pointed at real **wxWidgets** headers (`wx/gdicmn.h`, `wx/colour.h`, `wx/pen.h`, `wx/brush.h`,

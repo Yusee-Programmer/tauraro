@@ -695,6 +695,21 @@ __attribute__((hot)) TrStr CGenerator_type_to_c(CGenerator* self, AstType* ty) {
         return _tr_str_lit("signed char");
     }
     /* pass */
+    if ((strcmp(_tr_strz(n), _tr_strz(_tr_str_lit("c_wchar"))) == 0)) {
+        /* pass */
+        return _tr_str_lit("wchar_t");
+    }
+    /* pass */
+    if ((strcmp(_tr_strz(n), _tr_strz(_tr_str_lit("c_char16"))) == 0)) {
+        /* pass */
+        return _tr_str_lit("char16_t");
+    }
+    /* pass */
+    if ((strcmp(_tr_strz(n), _tr_strz(_tr_str_lit("c_char32"))) == 0)) {
+        /* pass */
+        return _tr_str_lit("char32_t");
+    }
+    /* pass */
     if ((strcmp(_tr_strz(n), _tr_strz(_tr_str_lit("c_float"))) == 0)) {
         /* pass */
         return _tr_str_lit("float");
@@ -22401,6 +22416,11 @@ __attribute__((hot)) bool _is_c_int_scalar(TrStr n) {
     }
     /* pass */
     if ((((strcmp(_tr_strz(n), _tr_strz(_tr_str_lit("c_intptr_t"))) == 0) || (strcmp(_tr_strz(n), _tr_strz(_tr_str_lit("c_uintptr_t"))) == 0)) || (strcmp(_tr_strz(n), _tr_strz(_tr_str_lit("c_ptrdiff_t"))) == 0))) {
+        /* pass */
+        return true;
+    }
+    /* pass */
+    if ((((strcmp(_tr_strz(n), _tr_strz(_tr_str_lit("c_wchar"))) == 0) || (strcmp(_tr_strz(n), _tr_strz(_tr_str_lit("c_char16"))) == 0)) || (strcmp(_tr_strz(n), _tr_strz(_tr_str_lit("c_char32"))) == 0))) {
         /* pass */
         return true;
     }

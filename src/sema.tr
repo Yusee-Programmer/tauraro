@@ -5919,6 +5919,9 @@ extend Sema:
         if name == "i64" or name == "i32" or name == "i16" or name == "i8": return true
         if name == "u64" or name == "u32" or name == "u16" or name == "u8" or name == "usize": return true
         if name == "f64" or name == "f32" or name == "lambda": return true
+        # The FFI `c_*` scalar family (integers, floats, chars, size/ptr, stdint) — value types with
+        # copy semantics, exempt from ownership-move tracking, so C/C++ bindings pass them freely.
+        if name.starts_with("c_") and name != "c_void_ptr" and name != "c_FILE": return true
         # Built-in reference-counted / shared types - exempt from ownership-move tracking.
         # These types carry their own reference counting or atomic synchronisation;
         # passing them to multiple functions or spawned threads is always safe.

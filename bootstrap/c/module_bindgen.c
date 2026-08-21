@@ -2857,7 +2857,7 @@ __attribute__((hot)) TrStr _cxxwalk_src() {
     /* pass */
     StringBuilder_append(sb, _tr_str_lit("    case CXType_Char_S:case CXType_SChar:return \"c_schar\"; case CXType_Char_U:case CXType_UChar:return \"c_uchar\";\n"));
     /* pass */
-    StringBuilder_append(sb, _tr_str_lit("    case CXType_Char16:return \"c_uint16_t\"; case CXType_Char32:return \"c_uint32_t\"; case CXType_WChar:return \"c_int\";\n"));
+    StringBuilder_append(sb, _tr_str_lit("    case CXType_Char16:return \"c_char16\"; case CXType_Char32:return \"c_char32\"; case CXType_WChar:return \"c_wchar\";\n"));
     /* pass */
     StringBuilder_append(sb, _tr_str_lit("    case CXType_Short:return \"c_short\"; case CXType_UShort:return \"c_ushort\"; case CXType_Int:return \"c_int\"; case CXType_UInt:return \"c_uint\";\n"));
     /* pass */
@@ -2965,6 +2965,26 @@ __attribute__((hot)) TrStr _cxxwalk_src() {
     /* pass */
     StringBuilder_append(sb, _tr_str_lit("}\n"));
     /* pass */
+    StringBuilder_append(sb, _tr_str_lit("static int g_noncopy;\n"));
+    /* pass */
+    StringBuilder_append(sb, _tr_str_lit("static enum CXChildVisitResult copyctorck(CXCursor c, CXCursor p, CXClientData d){\n"));
+    /* pass */
+    StringBuilder_append(sb, _tr_str_lit("  if(clang_getCursorKind(c)==CXCursor_Constructor && clang_CXXConstructor_isCopyConstructor(c)){\n"));
+    /* pass */
+    StringBuilder_append(sb, _tr_str_lit("    enum CXAvailabilityKind av=clang_getCursorAvailability(c);\n"));
+    /* pass */
+    StringBuilder_append(sb, _tr_str_lit("    enum CX_CXXAccessSpecifier acc=clang_getCXXAccessSpecifier(c);\n"));
+    /* pass */
+    StringBuilder_append(sb, _tr_str_lit("    if(av==CXAvailability_NotAvailable || acc==CX_CXXPrivate || acc==CX_CXXProtected) g_noncopy=1; }\n"));
+    /* pass */
+    StringBuilder_append(sb, _tr_str_lit("  return CXChildVisit_Continue; }\n"));
+    /* pass */
+    StringBuilder_append(sb, _tr_str_lit("static int is_noncopyable(CXType t){\n"));
+    /* pass */
+    StringBuilder_append(sb, _tr_str_lit("  CXCursor dc=clang_getTypeDeclaration(t); CXCursor def=clang_getCursorDefinition(dc); if(clang_Cursor_isNull(def)) def=dc;\n"));
+    /* pass */
+    StringBuilder_append(sb, _tr_str_lit("  g_noncopy=0; clang_visitChildren(def, copyctorck, 0); return g_noncopy; }\n"));
+    /* pass */
     StringBuilder_append(sb, _tr_str_lit("static void classify(int depth,int ref,CXType cur){\n"));
     /* pass */
     StringBuilder_append(sb, _tr_str_lit("  enum CXTypeKind k=cur.kind; const char* sc=scalar(k);\n"));
@@ -2981,6 +3001,8 @@ __attribute__((hot)) TrStr _cxxwalk_src() {
     /* pass */
     StringBuilder_append(sb, _tr_str_lit("    if(depth==0 && clang_Type_getNumTemplateArguments(cur)<1 && clang_Type_getSizeOf(cur)==CXTypeLayoutError_Incomplete){ printf(\"%d~%d~d~\", depth, ref); return; }\n"));
     /* pass */
+    StringBuilder_append(sb, _tr_str_lit("    if(depth==0 && is_noncopyable(cur)){ printf(\"%d~%d~d~\", depth, ref); return; }\n"));
+    /* pass */
     StringBuilder_append(sb, _tr_str_lit("    CXString sp=clang_getTypeSpelling(cur); const char* r=S(sp); if(strncmp(r,\"const \",6)==0)r+=6; if(strncmp(r,\"volatile \",9)==0)r+=9;\n"));
     /* pass */
     StringBuilder_append(sb, _tr_str_lit("    if(strncmp(r,\"std::basic_string\",17)==0) printf(\"%d~%d~s~string\", depth, ref);\n"));
@@ -2992,6 +3014,16 @@ __attribute__((hot)) TrStr _cxxwalk_src() {
     StringBuilder_append(sb, _tr_str_lit("  else { CXString sp=clang_getTypeSpelling(cur); printf(\"%d~%d~u~%s\", depth, ref, S(sp)); clang_disposeString(sp); }\n"));
     /* pass */
     StringBuilder_append(sb, _tr_str_lit("}\n"));
+    /* pass */
+    StringBuilder_append(sb, _tr_str_lit("static void classify_arg(int depth,int ref,CXType t){\n"));
+    /* pass */
+    StringBuilder_append(sb, _tr_str_lit("  CXType c=clang_getCanonicalType(t);\n"));
+    /* pass */
+    StringBuilder_append(sb, _tr_str_lit("  if(c.kind==CXType_LValueReference||c.kind==CXType_RValueReference){\n"));
+    /* pass */
+    StringBuilder_append(sb, _tr_str_lit("    CXType pt=clang_getPointeeType(c); ref=clang_isConstQualifiedType(clang_getCanonicalType(pt))?2:1; depth++; c=clang_getCanonicalType(pt); }\n"));
+    /* pass */
+    StringBuilder_append(sb, _tr_str_lit("  classify(depth,ref,c); }\n"));
     /* pass */
     StringBuilder_append(sb, _tr_str_lit("static void tds(CXType t){\n"));
     /* pass */
@@ -3005,9 +3037,13 @@ __attribute__((hot)) TrStr _cxxwalk_src() {
     /* pass */
     StringBuilder_append(sb, _tr_str_lit("    else if(cc.kind==CXType_LValueReference||cc.kind==CXType_RValueReference){ CXType pt=clang_getPointeeType(cur); ref=clang_isConstQualifiedType(clang_getCanonicalType(pt))?2:1; depth++; cur=pt; }\n"));
     /* pass */
+    StringBuilder_append(sb, _tr_str_lit("    else if(cc.kind==CXType_ConstantArray||cc.kind==CXType_IncompleteArray||cc.kind==CXType_VariableArray||cc.kind==CXType_DependentSizedArray){ depth++; cur=clang_getArrayElementType(cc); }\n"));
+    /* pass */
     StringBuilder_append(sb, _tr_str_lit("    else break; }\n"));
     /* pass */
     StringBuilder_append(sb, _tr_str_lit("  CXType fcan=clang_getCanonicalType(cur);\n"));
+    /* pass */
+    StringBuilder_append(sb, _tr_str_lit("  if(fcan.kind==CXType_MemberPointer){ printf(\"%d~%d~d~\", depth, ref); return; }\n"));
     /* pass */
     StringBuilder_append(sb, _tr_str_lit("  if(g_np>0){\n"));
     /* pass */
@@ -3017,11 +3053,11 @@ __attribute__((hot)) TrStr _cxxwalk_src() {
     /* pass */
     StringBuilder_append(sb, _tr_str_lit("    CXString sp=clang_getTypeSpelling(fcan); const char* r=S(sp); if(strncmp(r,\"const \",6)==0)r+=6; if(strncmp(r,\"volatile \",9)==0)r+=9;\n"));
     /* pass */
-    StringBuilder_append(sb, _tr_str_lit("    if(strncmp(r,\"type-parameter-0-\",17)==0){ int idx=atoi(r+17); if(idx>=0 && idx<g_np){ clang_disposeString(sp); classify(depth,ref,clang_getCanonicalType(g_args[idx])); return; } }\n"));
+    StringBuilder_append(sb, _tr_str_lit("    if(strncmp(r,\"type-parameter-0-\",17)==0){ int idx=atoi(r+17); if(idx>=0 && idx<g_np){ clang_disposeString(sp); classify_arg(depth,ref,g_args[idx]); return; } }\n"));
     /* pass */
     StringBuilder_append(sb, _tr_str_lit("    // fallback: match the parameter name literally (direct `T` uses)\n"));
     /* pass */
-    StringBuilder_append(sb, _tr_str_lit("    for(int i=0;i<g_np;i++){ if(strcmp(r,g_params[i])==0){ clang_disposeString(sp); classify(depth,ref,clang_getCanonicalType(g_args[i])); return; } }\n"));
+    StringBuilder_append(sb, _tr_str_lit("    for(int i=0;i<g_np;i++){ if(strcmp(r,g_params[i])==0){ clang_disposeString(sp); classify_arg(depth,ref,g_args[i]); return; } }\n"));
     /* pass */
     StringBuilder_append(sb, _tr_str_lit("    // Sequence-container element accessors: `X::reference`/`::const_reference` = `value_type&` and\n"));
     /* pass */
@@ -3129,6 +3165,8 @@ __attribute__((hot)) TrStr _cxxwalk_src() {
     /* pass */
     StringBuilder_append(sb, _tr_str_lit("  enum CXCursorKind k=clang_getCursorKind(c);\n"));
     /* pass */
+    StringBuilder_append(sb, _tr_str_lit("  if((k==CXCursor_CXXMethod||k==CXCursor_Constructor) && clang_getCursorAvailability(c)==CXAvailability_NotAvailable) return;\n"));
+    /* pass */
     StringBuilder_append(sb, _tr_str_lit("  if(k==CXCursor_CXXMethod && clang_getCXXAccessSpecifier(c)==CX_CXXPublic){\n"));
     /* pass */
     StringBuilder_append(sb, _tr_str_lit("    printf(\"METHOD %c%c %d \", clang_CXXMethod_isStatic(c)?'s':'.', clang_CXXMethod_isConst(c)?'c':'.', count_defaults(c)); tds(clang_getResultType(clang_getCursorType(c))); printf(\"|%s\\n\", S(clang_getCursorSpelling(c))); params(c); printf(\"EMETHOD\\n\"); }\n"));
@@ -3182,6 +3220,32 @@ __attribute__((hot)) TrStr _cxxwalk_src() {
     StringBuilder_append(sb, _tr_str_lit("  if(clang_getCursorKind(c)==CXCursor_CXXBaseSpecifier && clang_getCXXAccessSpecifier(c)==CX_CXXPublic) emit_inherited(c);\n"));
     /* pass */
     StringBuilder_append(sb, _tr_str_lit("  return CXChildVisit_Continue; }\n"));
+    /* pass */
+    StringBuilder_append(sb, _tr_str_lit("static void collect_prot_base(CXCursor bs);\n"));
+    /* pass */
+    StringBuilder_append(sb, _tr_str_lit("static enum CXChildVisitResult collectprot(CXCursor c, CXCursor p, CXClientData d){\n"));
+    /* pass */
+    StringBuilder_append(sb, _tr_str_lit("  enum CXCursorKind k=clang_getCursorKind(c);\n"));
+    /* pass */
+    StringBuilder_append(sb, _tr_str_lit("  if(k==CXCursor_CXXMethod||k==CXCursor_UsingDeclaration){ enum CX_CXXAccessSpecifier a=clang_getCXXAccessSpecifier(c);\n"));
+    /* pass */
+    StringBuilder_append(sb, _tr_str_lit("    if(a==CX_CXXProtected||a==CX_CXXPrivate) seen_method(S(clang_getCursorSpelling(c))); }\n"));
+    /* pass */
+    StringBuilder_append(sb, _tr_str_lit("  else if(k==CXCursor_CXXBaseSpecifier) collect_prot_base(c);\n"));
+    /* pass */
+    StringBuilder_append(sb, _tr_str_lit("  return CXChildVisit_Continue; }\n"));
+    /* pass */
+    StringBuilder_append(sb, _tr_str_lit("static void collect_prot_base(CXCursor bs){\n"));
+    /* pass */
+    StringBuilder_append(sb, _tr_str_lit("  CXType bt=clang_getCursorType(bs);\n"));
+    /* pass */
+    StringBuilder_append(sb, _tr_str_lit("  CXString sp=clang_getTypeSpelling(bt); const char* r=S(sp); int istmpl=(strstr(r,\"<\")!=NULL); clang_disposeString(sp);\n"));
+    /* pass */
+    StringBuilder_append(sb, _tr_str_lit("  if(istmpl) return;\n"));
+    /* pass */
+    StringBuilder_append(sb, _tr_str_lit("  CXCursor bd=clang_getTypeDeclaration(bt); CXCursor bdef=clang_getCursorDefinition(bd); if(clang_Cursor_isNull(bdef)) bdef=bd;\n"));
+    /* pass */
+    StringBuilder_append(sb, _tr_str_lit("  clang_visitChildren(bdef, collectprot, 0); }\n"));
     /* pass */
     StringBuilder_append(sb, _tr_str_lit("static int g_ntp; static char g_tpname[64];\n"));
     /* pass */
@@ -3246,6 +3310,8 @@ __attribute__((hot)) TrStr _cxxwalk_src() {
     StringBuilder_append(sb, _tr_str_lit("    clang_visitChildren(c,gvar,0);\n"));
     /* pass */
     StringBuilder_append(sb, _tr_str_lit("    clang_visitChildren(c,ownmeth,0);           /* own methods/ctors/dtor (records names) */\n"));
+    /* pass */
+    StringBuilder_append(sb, _tr_str_lit("    clang_visitChildren(c,collectprot,0);       /* exclude names re-declared protected in a base */\n"));
     /* pass */
     StringBuilder_append(sb, _tr_str_lit("    clang_visitChildren(c,basespec,0);          /* inherited public methods (deduped) */\n"));
     /* pass */
@@ -4494,6 +4560,21 @@ __attribute__((hot)) TrStr _c_to_cpp(TrStr cn) {
     if ((strcmp(_tr_strz(cn), _tr_strz(_tr_str_lit("c_uchar"))) == 0)) {
         /* pass */
         return _tr_str_lit("unsigned char");
+    }
+    /* pass */
+    if ((strcmp(_tr_strz(cn), _tr_strz(_tr_str_lit("c_wchar"))) == 0)) {
+        /* pass */
+        return _tr_str_lit("wchar_t");
+    }
+    /* pass */
+    if ((strcmp(_tr_strz(cn), _tr_strz(_tr_str_lit("c_char16"))) == 0)) {
+        /* pass */
+        return _tr_str_lit("char16_t");
+    }
+    /* pass */
+    if ((strcmp(_tr_strz(cn), _tr_strz(_tr_str_lit("c_char32"))) == 0)) {
+        /* pass */
+        return _tr_str_lit("char32_t");
     }
     /* pass */
     if ((strcmp(_tr_strz(cn), _tr_strz(_tr_str_lit("c_short"))) == 0)) {

@@ -12023,6 +12023,11 @@ __attribute__((hot)) bool Sema_is_primitive_name(Sema* self, TrStr name) {
         return true;
     }
     /* pass */
+    if (((_tr_str_starts_with(_tr_strz(name), _tr_strz(_tr_str_lit("c_"))) && (strcmp(_tr_strz(name), _tr_strz(_tr_str_lit("c_void_ptr"))) != 0)) && (strcmp(_tr_strz(name), _tr_strz(_tr_str_lit("c_FILE"))) != 0))) {
+        /* pass */
+        return true;
+    }
+    /* pass */
     if (((((strcmp(_tr_strz(name), _tr_strz(_tr_str_lit("str"))) == 0) || (strcmp(_tr_strz(name), _tr_strz(_tr_str_lit("Str"))) == 0)) || (strcmp(_tr_strz(name), _tr_strz(_tr_str_lit("StringObj"))) == 0)) || (strcmp(_tr_strz(name), _tr_strz(_tr_str_lit("Bytes"))) == 0))) {
         /* pass */
         return true;
