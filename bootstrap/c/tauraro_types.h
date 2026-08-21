@@ -3888,6 +3888,7 @@ __attribute__((hot)) TrStr _stars(long long n);
 __attribute__((hot)) TrStr _ptr_wrap(TrStr inner, long long n);
 __attribute__((hot)) TrStr _cpp_field_type(TrStr desc, TrMap* value_structs, TrMap* enum_names);
 __attribute__((hot)) TrStr _shim_body(TrStr ret_ctype, TrStr body);
+__attribute__((hot)) TrStr _fnptr_cast(TrStr fnty);
 __attribute__((hot)) void _cpp_generate(TrStr ir, TrStr header, TrStr out);
 __attribute__((hot)) TrStr _cpp_detect_include_dirs(TrStr cc);
 __attribute__((hot)) TrStr _cpp_std_flag(TrStr extra);

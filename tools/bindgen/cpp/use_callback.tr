@@ -1,0 +1,8 @@
+from callback import lib_apply
+def dbl(x: c_int, user: Pointer[void]) -> c_int:
+    return x * 2
+def main():
+    mut u = 0 as Pointer[void]
+    mut r = lib_apply(dbl as Pointer[void], 21, u)     # Tauraro fn passed as C callback
+    print("apply(dbl, 21) = " + r.to_str())             # 42
+    print("ok")

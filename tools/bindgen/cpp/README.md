@@ -385,6 +385,24 @@ actually fires). Verified (`use_exceptions.tr`): `risky(-1)` throws `std::runtim
 input")`, the wrapper returns 0 with `tauraro_cpp_last_error()` = `"negative input"`, and the next call
 `risky(7)=14` still works — the process never crashes.
 
+### Callbacks & `void*` — function-pointer and opaque-pointer parameters
+
+Callback-based APIs (event handlers, comparators, visitors, allocators) and opaque `void*` data are
+pervasive in real headers. Both now bind correctly:
+
+- A **`void*`** parameter (userdata, buffer, opaque handle) crosses as `Pointer[void]` (pass
+  `0 as Pointer[void]` for null). `const void*` too.
+- A **function-pointer** parameter — including one hidden behind a `typedef` (`typedef int
+  (*Transform)(int, void*)`) — crosses as `Pointer[void]`, and the shim C-casts it back to the exact
+  function-pointer type so the C++ call is well-typed. (Two fixes made this work: the walker now
+  resolves a typedef-to-pointer to its canonical pointee — otherwise the callback classified as an
+  empty/unknown type and produced a non-compiling shim — and the generator builds a proper
+  `RET (*)(ARGS)` cast.)
+
+Verified end-to-end (`use_callback.tr`): a Tauraro `def dbl(x, user)` is passed as the callback
+(`dbl as Pointer[void]`), invoked by the C++ `apply`, and returns `42`. So a Tauraro function can be a
+C callback across the FFI.
+
 ## Honest scope / remaining hard tail
 
 - **Free-function templates** (`template<class T> T max(T,T)`) aren't auto-instantiated (unlike class

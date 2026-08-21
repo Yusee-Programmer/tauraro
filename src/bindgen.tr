@@ -1228,7 +1228,7 @@ def _cxxwalk_src() -> str:
     sb.append("  // ref: 0 = not-a-reference (value or pointer); 1 = mutable `T&`; 2 = const `const T&`.\n")
     sb.append("  int depth=0,ref=0; CXType cur=t;\n")
     sb.append("  while(1){ CXType cc=clang_getCanonicalType(cur);\n")
-    sb.append("    if(cc.kind==CXType_Pointer){depth++;cur=clang_getPointeeType(cur);}\n")
+    sb.append("    if(cc.kind==CXType_Pointer){depth++; CXType pt=clang_getPointeeType(cur); if(pt.kind==CXType_Invalid) pt=clang_getPointeeType(cc); cur=pt;}\n")
     sb.append("    else if(cc.kind==CXType_LValueReference||cc.kind==CXType_RValueReference){ CXType pt=clang_getPointeeType(cur); ref=clang_isConstQualifiedType(clang_getCanonicalType(pt))?2:1; depth++; cur=pt; }\n")
     sb.append("    else break; }\n")
     sb.append("  CXType fcan=clang_getCanonicalType(cur);\n")
@@ -1899,6 +1899,14 @@ def _shim_body(ret_ctype: str, body: str) -> str:
     if ret_ctype == "void": zero = "return;"
     return "try { " + body + " } catch (const std::exception& e) { _tr_cpp_set_error(e.what()); " + zero + " } catch (...) { _tr_cpp_set_error(\"C++ exception\"); " + zero + " }"
 
+# Turn a function TYPE spelling (`void (int, void *)`) into a function POINTER type
+# (`void (*)(int, void *)`) by inserting `(*)` before the argument list — needed to C-cast a
+# `void*` back to a callable in the shim.
+def _fnptr_cast(fnty: str) -> str:
+    mut p = fnty.find("(")
+    if p < 0: return fnty
+    return fnty.slice(0, p) + "(*)" + fnty.slice(p, fnty.len())
+
 # Parse the walker's flat IR and emit `<base>.tr` (opaque handles + wrappers) and the
 # `<base>_shim.cpp` (extern "C" bridge with namespace-qualified C++ calls).
 def _cpp_generate(ir: str, header: str, out: str):
@@ -2314,9 +2322,18 @@ def _cpp_generate(ir: str, header: str, out: str):
                         trt = "Pointer[char]"
                     elif pcat == "f":
                         # function-pointer param: cross as a raw address; cast to the real fn type.
+                        # `pdet` is the function *type* (`void (int, void*)`); make it a function
+                        # POINTER type (`void (*)(int, void*)`) so the C-cast of a `void*` is valid.
                         sc = "void* " + spname
-                        fw = "(" + pdet + ")" + spname
+                        fw = "(" + _fnptr_cast(pdet) + ")" + spname
                         trt = "Pointer[void]"
+                    elif pcat == "v":
+                        # `void*` (callback userdata, opaque buffer) — cross as a raw pointer.
+                        mut nd = pdepth
+                        if nd < 1: nd = 1
+                        sc = "void " + _stars(nd) + spname
+                        fw = spname
+                        trt = _ptr_wrap("void", nd)
                     elif pcat == "r":
                         mut seg = _last_seg(pdet)
                         if value_structs.contains(seg) and pdepth == 0:
@@ -2329,6 +2346,14 @@ def _cpp_generate(ir: str, header: str, out: str):
                             elif pref: fw = "*" + spname
                             else: fw = spname
                             trt = _cpp_opaque_handle(pdet, nd, class_names, value_structs, seen, opaque)
+                    elif pdet == "":
+                        # A type libclang couldn't spell (empty detail) — fall back to a raw void
+                        # pointer so the shim still compiles instead of emitting a nameless type.
+                        mut nd = pdepth
+                        if nd < 1: nd = 1
+                        sc = "void " + _stars(nd) + spname
+                        fw = spname
+                        trt = _ptr_wrap("void", nd)
                     else:
                         # s(non-string std) / u(unknown) — opaque handle by pointer.
                         mut nd = pdepth
