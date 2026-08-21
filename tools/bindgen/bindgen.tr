@@ -1335,6 +1335,11 @@ def _cxxwalk_src() -> str:
     sb.append("          strcmp(g_cbase,\"std::set\")==0||strcmp(g_cbase,\"std::multiset\")==0||\n")
     sb.append("          strcmp(g_cbase,\"std::unordered_set\")==0||strcmp(g_cbase,\"std::unordered_multiset\")==0)){\n")
     sb.append("        printf(\"ITER \"); classify(0,0,clang_getCanonicalType(g_args[0])); printf(\"\\n\"); }\n")
+    sb.append("      if(na>=2 && g_hasbegin && g_hasend &&\n")
+    sb.append("         (strcmp(g_cbase,\"std::map\")==0||strcmp(g_cbase,\"std::multimap\")==0||\n")
+    sb.append("          strcmp(g_cbase,\"std::unordered_map\")==0||strcmp(g_cbase,\"std::unordered_multimap\")==0)){\n")
+    sb.append("        printf(\"ITERMAPKEY \"); classify(0,0,clang_getCanonicalType(g_args[0])); printf(\"\\n\");\n")
+    sb.append("        printf(\"ITERMAPVAL \"); classify(0,0,clang_getCanonicalType(g_args[1])); printf(\"\\n\"); }\n")
     sb.append("      printf(\"ECLASS\\n\"); g_np=0; g_cbase[0]=0;\n")
     sb.append("    }\n")
     sb.append("  }\n")
@@ -2008,6 +2013,26 @@ def _cpp_generate(ir: str, header: str, out: str):
                 mut id = "    def " + isym + "(obj: " + cur_class + ", i: c_long)"
                 if iri.get(2) != "": id = id + " -> " + iri.get(2)
                 decls.append(id + "\n")
+                n_fns = n_fns + 1
+            continue
+        if line.starts_with("ITERMAPKEY ") or line.starts_with("ITERMAPVAL "):
+            # Associative map (`std::map`/`unordered_map`): element is `pair<const K,V>`, so enumerate
+            # via TWO accessors — `_key_nth(i) -> K` (it->first) and `_val_nth(i) -> V` (it->second),
+            # both auto+advance. Together with `size()` this walks the whole map across the FFI.
+            mut is_key = line.starts_with("ITERMAPKEY ")
+            mut mdesc = line.slice(11, line.len())
+            if _is_clean_ident(cur_class) and mdesc.find("type-parameter") < 0 and mdesc.find("~d~") < 0:
+                mut mfield = "(it->second)"
+                mut mname = "_val_nth"
+                if is_key:
+                    mfield = "(it->first)"
+                    mname = "_key_nth"
+                mut mri = _cpp_ret_ex(mdesc, mfield, value_structs, class_names, class_qual, seen, opaque)
+                mut msym = _uniq_sym(class_pfx + mname, sym_used)
+                shim.append(mri.get(0) + " " + msym + "(" + cur_class_qual + "* self, long i) { " + _shim_body(mri.get(0), "auto it = self->begin(); std::advance(it, (long)i); " + mri.get(1)) + " }\n")
+                mut md = "    def " + msym + "(obj: " + cur_class + ", i: c_long)"
+                if mri.get(2) != "": md = md + " -> " + mri.get(2)
+                decls.append(md + "\n")
                 n_fns = n_fns + 1
             continue
         if line.starts_with("XSTRUCT "):

@@ -344,7 +344,25 @@ Verified (`use_iterate.tr`): a returned `std::list<int>` (size 3, sum 60) and `s
 (`nth(0)=5`, `nth(2)=25`) both traverse correctly. The element type is the container's first template
 arg, classified through libclang canonical types (so `list<Widget>` yields a handle, `list<string>` a
 `char*`, etc.). Random-access containers (`vector`/`deque`) are deliberately excluded — they already
-bind `at(i)`/`operator[]`. `std::map`/`unordered_map` traversal (element is a `pair`) is the residual.
+bind `at(i)`/`operator[]`.
+
+**Associative maps enumerate via two accessors.** `std::map`/`multimap`/`unordered_map`/
+`unordered_multimap` have an element type of `pair<const K,V>`, so the walker emits BOTH the key and
+value types and the generator synthesizes `_key_nth(i) -> K` (`it->first`) and `_val_nth(i) -> V`
+(`it->second`), again via `auto`+`std::advance`. With the bound `size()` this walks a whole map across
+the FFI:
+
+```
+mut i = 0
+while i < map_size(m):
+    use_entry(map_key_nth(m, i), map_val_nth(m, i))
+    i = i + 1
+```
+
+Verified (`use_mapiter.tr`): a `std::map<int,double>` enumerates `1→1.5, 2→2.5, 3→3.5` and a
+`std::map<std::string,int>` enumerates `apple→10, pear→20` (string keys via `key_nth() as str`). This
+completes container coverage — every standard container is now enumerable (`vector`/`deque`/`array` by
+index, `list`/`set`/`unordered_set` via `_nth`, maps via `_key_nth`/`_val_nth`).
 
 ### Exception safety — a throwing C++ function never crashes the caller
 
@@ -369,9 +387,6 @@ input")`, the wrapper returns 0 with `tauraro_cpp_last_error()` = `"negative inp
 
 ## Honest scope / remaining hard tail
 
-- **`std::map`/`unordered_map` traversal** — the map itself binds (`at(key)`/`size()`/`operator[]`);
-  iterating all entries isn't wired because the element is a `pair<const K,V>` (a distinct
-  instantiation). Keyed access works today; whole-map enumeration is the residual.
 - **Free-function templates** (`template<class T> T max(T,T)`) aren't auto-instantiated (unlike class
   templates, they have no usage site to key on) — add a typedef/alias to force one.
 - **By-value *system* structs** (`windows.h`'s `_GUID` passed by value) — pointer-based COM works.
