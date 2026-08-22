@@ -33,6 +33,15 @@ C++ include paths, and reports libclang's diagnostics with a fix hint instead of
 nothing). See `tools/bindgen/cpp/` for the design and a full `shapes.hpp` end-to-end example.
 `std::string_view` parameters and returns are marshalled to/from a native `str`, just like `std::string`.
 
+**Callbacks — `std::function<R(Args)>` parameters** accept a plain Tauraro function: bind the param as
+`Pointer[void]` and pass a top-level `def` with `myfn as Pointer[void]`. The shim casts it to the
+matching function pointer, which C++ constructs the `std::function` from:
+
+```python
+def dbl(x: int) -> int: return x * 2
+g_apply_fn(dbl as Pointer[void], 20)     # C++ calls back into dbl -> 41
+```
+
 **Auto-discover a library's flags with `--pkg`.** Instead of hand-passing `-I`/`-D`/`-l`, add
 `--pkg <name>` and the bindgen queries **pkg-config** for the library's compile flags (used to parse
 the header) and link flags (recorded in the binding so `tauraroc` auto-links them). The whole workflow

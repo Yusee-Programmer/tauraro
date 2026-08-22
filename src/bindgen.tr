@@ -1236,7 +1236,8 @@ def _cxxwalk_src() -> str:
     sb.append("    if(depth==0 && clang_Type_getNumTemplateArguments(cur)<1 && clang_Type_getSizeOf(cur)==CXTypeLayoutError_Incomplete){ printf(\"%d~%d~d~\", depth, ref); return; }\n")
     sb.append("    if(depth==0 && is_noncopyable(cur)){ printf(\"%d~%d~d~\", depth, ref); return; }\n")
     sb.append("    CXString sp=clang_getTypeSpelling(cur); const char* r=S(sp); if(strncmp(r,\"const \",6)==0)r+=6; if(strncmp(r,\"volatile \",9)==0)r+=9;\n")
-    sb.append("    if(strncmp(r,\"std::basic_string\",17)==0 && (strstr(r,\"basic_string<char,\")||strstr(r,\"basic_string<char>\")||strstr(r,\"basic_string_view<char,\")||strstr(r,\"basic_string_view<char>\"))) printf(\"%d~%d~s~string\", depth, ref);\n")
+    sb.append("    if(strncmp(r,\"std::function<\",14)==0 && clang_Type_getNumTemplateArguments(cur)>=1){ CXType _ft=clang_Type_getTemplateArgumentAsType(cur,0); CXString _fs=clang_getTypeSpelling(_ft); printf(\"%d~%d~f~%s\", depth, ref, S(_fs)); clang_disposeString(_fs); }\n")
+    sb.append("    else if(strncmp(r,\"std::basic_string\",17)==0 && (strstr(r,\"basic_string<char,\")||strstr(r,\"basic_string<char>\")||strstr(r,\"basic_string_view<char,\")||strstr(r,\"basic_string_view<char>\"))) printf(\"%d~%d~s~string\", depth, ref);\n")
     sb.append("    else printf(\"%d~%d~r~%s\", depth, ref, r); clang_disposeString(sp); }\n")
     sb.append("  else if(k==CXType_FunctionProto){ CXString sp=clang_getTypeSpelling(clang_getCanonicalType(cur)); printf(\"%d~%d~f~%s\", depth, ref, S(sp)); clang_disposeString(sp); }\n")
     sb.append("  else { CXString sp=clang_getTypeSpelling(cur); printf(\"%d~%d~u~%s\", depth, ref, S(sp)); clang_disposeString(sp); }\n")
@@ -2490,10 +2491,13 @@ def _cpp_generate(ir: str, header: str, out: str, shim_cflags: str, pkglibs: str
                         trt = "Pointer[void]"
                     elif pcat == "v":
                         # `void*` (callback userdata, opaque buffer) — cross as a raw pointer.
+                        # A reference to a pointer (`void*&`, e.g. wx's tree-iteration cookie) crosses as
+                        # one extra level (`void**`); deref it at the call so it binds to the `T&`.
                         mut nd = pdepth
                         if nd < 1: nd = 1
                         sc = "void " + _stars(nd) + spname
-                        fw = spname
+                        if pref: fw = "*" + spname
+                        else: fw = spname
                         trt = _ptr_wrap("void", nd)
                     elif pcat == "r":
                         mut seg = _last_seg(pdet)
