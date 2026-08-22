@@ -1323,6 +1323,11 @@ def _cxxwalk_src() -> str:
     sb.append("  int np=clang_getNumArgTypes(ft); if(np<0) return;\n")
     sb.append("  for(int i=0;i<np;i++){ if(!is_tparam(clang_getArgType(ft,i))) return; }\n")
     sb.append("  printf(\"FTMPL %d|%s\\n\", np, nm); }\n")
+    sb.append("static enum CXChildVisitResult _tpk_cb(CXCursor cc, CXCursor pp, CXClientData dd){\n")
+    sb.append("  enum CXCursorKind kk=clang_getCursorKind(cc);\n")
+    sb.append("  if(kk==CXCursor_TemplateTypeParameter||kk==CXCursor_NonTypeTemplateParameter||kk==CXCursor_TemplateTemplateParameter){ *(int*)dd=1; return CXChildVisit_Break; }\n")
+    sb.append("  return CXChildVisit_Continue; }\n")
+    sb.append("static int is_template_pattern(CXCursor c){ int f=0; clang_visitChildren(c,_tpk_cb,&f); return f; }\n")
     sb.append("static enum CXChildVisitResult visit(CXCursor c, CXCursor p, CXClientData d);\n")
     sb.append("static enum CXChildVisitResult nested(CXCursor c, CXCursor p, CXClientData d){\n")
     sb.append("  enum CXCursorKind k=clang_getCursorKind(c);\n")
@@ -1331,9 +1336,11 @@ def _cxxwalk_src() -> str:
     sb.append("static enum CXChildVisitResult visit(CXCursor c, CXCursor p, CXClientData d){\n")
     sb.append("  if(!clang_Location_isFromMainFile(clang_getCursorLocation(c))) return CXChildVisit_Continue;\n")
     sb.append("  enum CXCursorKind k=clang_getCursorKind(c); CXString nmS=clang_getCursorSpelling(c); const char* nm=S(nmS);\n")
+    sb.append("  if(k==CXCursor_ClassTemplate||k==CXCursor_ClassTemplatePartialSpecialization){ clang_disposeString(nmS); return CXChildVisit_Continue; }\n")
     sb.append("  if(k==CXCursor_Namespace){ printf(\"NS %s\\n\",nm); clang_visitChildren(c,visit,0); printf(\"ENS\\n\"); }\n")
     sb.append("  else if((k==CXCursor_ClassDecl||k==CXCursor_StructDecl)&&clang_isCursorDefinition(c)){\n")
-    sb.append("    CXType rt=clang_getCursorType(c); printf(\"CLASS %s %d\\n\",nm, clang_isPODType(rt));\n")
+    sb.append("    if(is_template_pattern(c)){ clang_disposeString(nmS); return CXChildVisit_Continue; }\n")
+    sb.append("    CXType rt=clang_getCursorType(c); if(!clang_Cursor_isNull(clang_getSpecializedCursorTemplate(c))){ CXString tsx=clang_getTypeSpelling(rt); printf(\"TCLASS %s %d\\n\", clang_getCString(tsx), clang_isPODType(rt)); clang_disposeString(tsx); } else { printf(\"CLASS %s %d\\n\",nm, clang_isPODType(rt)); }\n")
     sb.append("    int saved=g_nseenm; g_nseenm=0;             /* per-class method-name dedup set */\n")
     sb.append("    int savedabs=g_abstract; g_abstract=clang_CXXRecord_isAbstract(c);\n")
     sb.append("    char savedcc[256]; strncpy(savedcc,g_curclass,255); savedcc[255]=0; strncpy(g_curclass,nm,255); g_curclass[255]=0;\n")
@@ -1385,6 +1392,7 @@ def _cxxwalk_src() -> str:
     sb.append("  return CXChildVisit_Continue; }\n")
     sb.append("static enum CXChildVisitResult inst(CXCursor c, CXCursor p, CXClientData d){\n")
     sb.append("  if((clang_getCursorKind(c)==CXCursor_ClassDecl || clang_getCursorKind(c)==CXCursor_StructDecl) && clang_isCursorDefinition(c)){\n")
+    sb.append("    if(is_template_pattern(c)) return CXChildVisit_Continue;   /* partial spec / primary pattern — not a concrete instantiation */\n")
     sb.append("    CXCursor tmpl=clang_getSpecializedCursorTemplate(c);\n")
     sb.append("    if(!clang_Cursor_isNull(tmpl)){\n")
     sb.append("      // `getSpecializedCursorTemplate` may return a forward DECLARATION of the template (true for\n")
@@ -2669,6 +2677,23 @@ def _cpp_cleanup():
 # Orchestrate C++ binding generation: detect libclang, build the walker, discover include
 # paths, run the walker, surface diagnostics, and generate the shim + bindings.
 #   extra = space-joined clang passthrough flags (user `-I`/`-D`/`-std=`), already shell-safe.
+# An expression-template proxy specialization: a NON-std class-template instantiation whose
+# template ARGUMENTS are themselves template-ids (nested `<...>`), e.g. GMP's lazy
+# `__gmp_expr<mpz_t, __gmp_unary_expr<long, __gmp_fac_function>>`. Such CRTP proxies are the
+# transient result of an operation and are never user-constructible — force-instantiating them
+# yields a constructor that takes the internal operation functor and does not compile (the exact
+# C++ that cannot cross a C ABI). We therefore skip binding them as standalone classes. Methods
+# that RETURN a proxy still get a working copy-ctor wrapper, and GMP's value constructor evaluates
+# the proxy when the result is materialized into a value type (`__gmp_expr<T,T>`). `std::` nested
+# instantiations (e.g. `vector<pair<int,int>>`) are safe to instantiate and are kept.
+def _is_expr_proxy_spec(s: str) -> bool:
+    mut lt = s.find("<")
+    if lt < 0: return false
+    mut inner = s.slice(lt + 1, s.len())
+    if inner.find("<") < 0: return false
+    if s.starts_with("std::"): return false
+    return true
+
 # Collect the template specializations that appear in the API (any record descriptor whose
 # spelling contains `<`, e.g. `Box<int>`, `std::vector<int>`). These are what we force-instantiate.
 def _collect_specs(ir: str) -> Vec[str]:
@@ -2683,7 +2708,7 @@ def _collect_specs(ir: str) -> Vec[str]:
         # signature references; the whole rest of the line is the spec to instantiate.
         if ln.starts_with("TDSPEC "):
             mut td = ln.slice(7, ln.len())
-            if td.find("<") >= 0 and not seen.contains(td):
+            if td.find("<") >= 0 and not _is_expr_proxy_spec(td) and not seen.contains(td):
                 seen.insert(td, true)
                 specs.push(td)
             continue
@@ -2693,7 +2718,7 @@ def _collect_specs(ir: str) -> Vec[str]:
         mut detail = rest
         mut bar = rest.find("|")
         if bar >= 0: detail = rest.slice(0, bar)
-        if detail.find("<") >= 0 and not seen.contains(detail):
+        if detail.find("<") >= 0 and not _is_expr_proxy_spec(detail) and not seen.contains(detail):
             seen.insert(detail, true)
             specs.push(detail)
     return specs
