@@ -1083,12 +1083,13 @@ def emit_defines(bg: Bindgen, defs: str, baseline: Map[str, bool], allow: Map[st
 
 # Generate Tauraro FFI bindings for the C header at `header` into `out`, preprocessing with `cc`.
 # The `tauraroc bindgen` subcommand (src/main.tr) parses the CLI and calls this.
-pub def run_bindgen(header: str, out: str, cc: str):
+pub def run_bindgen(header: str, out: str, cc: str, extra: str, pkglibs: str):
     mut tmp_decls = "_bindgen_decls.i"
     mut tmp_defs  = "_bindgen_defs.i"
     # -E WITH line markers, so declarations from #include'd system headers can be filtered out.
-    _tr_system(cc + " -E \"" + header + "\" > \"" + tmp_decls + "\" 2>_bindgen_err.txt")
-    _tr_system(cc + " -E -dM \"" + header + "\" > \"" + tmp_defs + "\" 2>>_bindgen_err.txt")
+    # `extra` carries -I/-D (including any discovered via --pkg) so the header parses.
+    _tr_system(cc + extra + " -E \"" + header + "\" > \"" + tmp_decls + "\" 2>_bindgen_err.txt")
+    _tr_system(cc + extra + " -E -dM \"" + header + "\" > \"" + tmp_defs + "\" 2>>_bindgen_err.txt")
     if not file_exists(tmp_decls):
         print("bindgen: preprocessing failed (see _bindgen_err.txt)")
         return
@@ -1099,7 +1100,10 @@ pub def run_bindgen(header: str, out: str, cc: str):
     mut baseline = _load_baseline(cc)
     emit_defines(bg, read_file(tmp_defs), baseline, _target_define_names(header))
     mut sb = StringBuilder.init(4096)
-    sb.append("# Auto-generated FFI bindings for " + header + " (tauraro-bindgen).\n\n")
+    sb.append("# Auto-generated FFI bindings for " + header + " (tauraro-bindgen).\n")
+    # --pkg: record the library's link flags so `tauraroc` auto-links them (no manual --link/-l).
+    if pkglibs != "": sb.append("# tauraro-cpp-linkflags:" + pkglibs + "\n")
+    sb.append("\n")
     mut ts = bg.types.to_string().as_str()
     mut ss = bg.structs.to_string().as_str()
     mut cs = bg.consts.to_string().as_str()
@@ -1232,7 +1236,7 @@ def _cxxwalk_src() -> str:
     sb.append("    if(depth==0 && clang_Type_getNumTemplateArguments(cur)<1 && clang_Type_getSizeOf(cur)==CXTypeLayoutError_Incomplete){ printf(\"%d~%d~d~\", depth, ref); return; }\n")
     sb.append("    if(depth==0 && is_noncopyable(cur)){ printf(\"%d~%d~d~\", depth, ref); return; }\n")
     sb.append("    CXString sp=clang_getTypeSpelling(cur); const char* r=S(sp); if(strncmp(r,\"const \",6)==0)r+=6; if(strncmp(r,\"volatile \",9)==0)r+=9;\n")
-    sb.append("    if(strncmp(r,\"std::basic_string\",17)==0 && (strstr(r,\"basic_string<char,\")||strstr(r,\"basic_string<char>\"))) printf(\"%d~%d~s~string\", depth, ref);\n")
+    sb.append("    if(strncmp(r,\"std::basic_string\",17)==0 && (strstr(r,\"basic_string<char,\")||strstr(r,\"basic_string<char>\")||strstr(r,\"basic_string_view<char,\")||strstr(r,\"basic_string_view<char>\"))) printf(\"%d~%d~s~string\", depth, ref);\n")
     sb.append("    else printf(\"%d~%d~r~%s\", depth, ref, r); clang_disposeString(sp); }\n")
     sb.append("  else if(k==CXType_FunctionProto){ CXString sp=clang_getTypeSpelling(clang_getCanonicalType(cur)); printf(\"%d~%d~f~%s\", depth, ref, S(sp)); clang_disposeString(sp); }\n")
     sb.append("  else { CXString sp=clang_getTypeSpelling(cur); printf(\"%d~%d~u~%s\", depth, ref, S(sp)); clang_disposeString(sp); }\n")
@@ -1986,7 +1990,7 @@ def _fnptr_cast(fnty: str) -> str:
 
 # Parse the walker's flat IR and emit `<base>.tr` (opaque handles + wrappers) and the
 # `<base>_shim.cpp` (extern "C" bridge with namespace-qualified C++ calls).
-def _cpp_generate(ir: str, header: str, out: str, shim_cflags: str):
+def _cpp_generate(ir: str, header: str, out: str, shim_cflags: str, pkglibs: str):
     mut opaque = StringBuilder.init(512)
     mut consts = StringBuilder.init(512)
     mut decls  = StringBuilder.init(2048)
@@ -2582,6 +2586,7 @@ def _cpp_generate(ir: str, header: str, out: str, shim_cflags: str):
     # Just `import` this module; no manual `c++ -c` / `--link -lstdc++` step is needed.
     sb.append("# tauraro-cpp-shim: " + _basename(shim_name) + "\n")
     sb.append("# tauraro-cpp-lib: stdc++\n")
+    if pkglibs != "": sb.append("# tauraro-cpp-linkflags:" + pkglibs + "\n")
     if shim_cflags != "": sb.append("# tauraro-cpp-cflags: " + shim_cflags + "\n")
     sb.append("# (opt out with --no-auto-cpp, then: c++ -c " + shim_name + " ; tauraroc app.tr --link " + base + "_shim.o -lstdc++)\n\n")
     mut os_ = opaque.to_string().as_str()
@@ -2621,9 +2626,9 @@ def _cpp_generate(ir: str, header: str, out: str, shim_cflags: str):
     sh.append("// Auto-generated C++ -> C shim for " + header + " (tauraro-bindgen -h cpp).\n")
     sh.append("// Compile:  c++ -c " + shim_name + "\n")
     sh.append("#include \"" + header + "\"\n")
-    sh.append("#include <string>\n#include <cstring>\n#include <cstdlib>\n#include <iterator>\n")
+    sh.append("#include <string>\n#include <string_view>\n#include <cstring>\n#include <cstdlib>\n#include <iterator>\n")
     sh.append("// std::string return -> heap char* copy (caller owns it; free with the runtime free).\n")
-    sh.append("static char* _tr_cpp_strdup(const std::string& s){ char* p=(char*)malloc(s.size()+1); if(p){ memcpy(p, s.c_str(), s.size()); p[s.size()]=0; } return p; }\n")
+    sh.append("static char* _tr_cpp_strdup(std::string_view s){ char* p=(char*)malloc(s.size()+1); if(p){ memcpy(p, s.data(), s.size()); p[s.size()]=0; } return p; }\n")
     sh.append("// Exception safety: a C++ exception must never cross `extern \"C\"` (it would std::terminate).\n")
     sh.append("// Every wrapper catches, records the message here, and returns a zero value; the caller\n")
     sh.append("// can read/clear it via tauraro_cpp_last_error()/tauraro_cpp_clear_error().\n")
@@ -2748,7 +2753,7 @@ def _collect_specs(ir: str) -> Vec[str]:
             specs.push(detail)
     return specs
 
-pub def run_bindgen_cpp(header: str, out: str, cc: str, extra: str):
+pub def run_bindgen_cpp(header: str, out: str, cc: str, extra: str, pkglibs: str):
     mut guide = _detect_libclang(cc)
     if guide != "":
         print(guide)
@@ -2801,7 +2806,7 @@ pub def run_bindgen_cpp(header: str, out: str, cc: str, extra: str):
     # dirs are omitted — the C++ driver adds its own.
     mut shim_cflags = _cpp_std_flag(extra)
     if extra != "": shim_cflags = shim_cflags + " " + extra
-    _cpp_generate(ir, header, out, shim_cflags)
+    _cpp_generate(ir, header, out, shim_cflags, pkglibs)
     if n_specs > 0:
         print("bindgen: instantiated " + n_specs.to_str() + " template specialization(s)")
     if nfatal > 0:

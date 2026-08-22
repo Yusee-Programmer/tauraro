@@ -31,6 +31,20 @@ per-platform install guidance. For a library that needs its own headers/macros, 
 `tauraroc bindgen wx/wx.h -h cpp -I<dir> -D<MACRO>` (the tool also auto-discovers the compiler's own
 C++ include paths, and reports libclang's diagnostics with a fix hint instead of silently binding
 nothing). See `tools/bindgen/cpp/` for the design and a full `shapes.hpp` end-to-end example.
+`std::string_view` parameters and returns are marshalled to/from a native `str`, just like `std::string`.
+
+**Auto-discover a library's flags with `--pkg`.** Instead of hand-passing `-I`/`-D`/`-l`, add
+`--pkg <name>` and the bindgen queries **pkg-config** for the library's compile flags (used to parse
+the header) and link flags (recorded in the binding so `tauraroc` auto-links them). The whole workflow
+becomes:
+
+```sh
+tauraroc bindgen /usr/include/zlib.h -o zlib.tr --pkg zlib   # discovers -I… and -lz
+tauraroc app.tr -o app                                       # from zlib import … — auto-links zlib
+```
+
+No `--link`, no `-lz`. Verified end-to-end: a program computing `crc32("hello")` via the auto-bound,
+auto-linked zlib runs correctly. `--pkg` works on both the C and C++ (`-h cpp`) paths.
 
 **Zero-cost, zero-build-step linking.** You don't compile or link the shim by hand. The generated
 binding records the shim in machine-readable header pragmas (`# tauraro-cpp-shim:` / `-cflags:` /
@@ -58,6 +72,12 @@ automatic. Opt out with `--no-auto-cpp` (then link `<out>_shim.o -lstdc++` manua
 | `Pointer[T]` | `T*` |
 | `Pointer[void]` | `void*` |
 | `lambda` | Function pointer |
+
+**C string returns are safe by default.** A C function returning `const char*` (a string the library
+still owns — `zlibVersion()`, `sqlite3_errmsg()`, `getenv()`, …) binds as `-> Pointer[char]`; converting
+it with `ptr as str` produces a **borrowed** view (never freed), so it can't double-free the library's
+string. If you own a freshly-allocated buffer and want it freed together with the string, adopt it
+explicitly with `_tr_str_wrap(ptr)` instead of `as str`.
 
 **ABI-exact scalars (`c_*`).** `int`/`i64` are *fixed-width*; C's `int`/`long` are
 platform-dependent. When a header uses `int`/`long`/`size_t`, bind them with the `c_*` family

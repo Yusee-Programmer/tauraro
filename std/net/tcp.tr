@@ -29,6 +29,7 @@ extern "C":
     def _tr_tcp_send_raw(fd: int, buf: Pointer[char], len: int) -> int
     def _tr_tcp_accept_nb(server_fd: int) -> int
     def _tr_c_malloc(size: int) -> Pointer[char]
+    def _tr_str_wrap(s: Pointer[char]) -> str
     def _tr_free(p: Pointer[char])
     # Green-thread reactor: park the current coroutine until fd is ready.
     def _tr_co_await_fd_h(fd: int, ev: int) -> int
@@ -97,7 +98,7 @@ extend TcpStream:
             return ""
         unsafe:
             buf.offset(n).write('\0')
-        return buf as str
+        return _tr_str_wrap(buf)
 
     # ── Non-blocking API (use with IOPoll) ────────────────────────────────────
 
@@ -136,7 +137,7 @@ extend TcpStream:
             return ""
         unsafe:
             buf.offset(n).write('\0')
-        return buf as str
+        return _tr_str_wrap(buf)
 
     # Non-blocking send.  Returns -2 (WOULD_BLOCK) if the send buffer is full.
     pub def send_nb(self, data: str) -> int:
@@ -180,7 +181,7 @@ extend TcpStream:
                 return ""
             else:
                 unsafe: buf.offset(n).write('\0')
-                return buf as str
+                return _tr_str_wrap(buf)
         return ""   # unreachable (loop only exits via return); satisfies F-3
 
     # Send all of `data`, awaiting writability as the send buffer drains.

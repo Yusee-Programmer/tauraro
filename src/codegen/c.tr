@@ -1911,14 +1911,13 @@ pub class CGenerator:
                 if _is_str_type(target_ty.name):
                     mut cast_src_full_n: str = hir_expr_type(expr).name
                     if _is_str_type(cast_src_full_n): return self.gen_expr(expr)
-                    # Raw pointer (e.g. `buffer as str` where buffer: Pointer[char],
-                    # typically a freshly-malloc'd buffer being handed off as an
-                    # owned string, as in read_file): wrap as an OWNED TrStr
-                    # (rc=1) so the buffer is freed when the string is released.
-                    # NOT a boxed-TrStr unbox (that's for `_tr_str_box`-produced
-                    # void* slots, e.g. Dict.get(k) as str).
+                    # Raw pointer (e.g. an FFI `const char*` return like `zlibVersion() as str`):
+                    # wrap as a BORROWED TrStr (rc=NULL) so it is NEVER freed — safe by default for
+                    # C string returns the callee still owns. Code that hands off a freshly-malloc'd
+                    # buffer to be freed with the string uses `_tr_str_wrap(...)` explicitly instead.
+                    # NOT a boxed-TrStr unbox (that's for `_tr_str_box`-produced void* slots).
                     if cast_src_full_n == "Pointer":
-                        return "_tr_str_wrap((char*)(" + self.gen_expr(expr) + "))"
+                        return "_tr_str_lit((char*)(" + self.gen_expr(expr) + "))"
                     return "_tr_str_unbox(" + self.gen_expr(expr) + ")"
                 # TrStr -> Pointer[char]/char*: extract the raw char* via strz
                 # (TrStr is a struct, can't C-cast it directly to a pointer).
