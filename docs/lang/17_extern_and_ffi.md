@@ -341,11 +341,58 @@ int main() {
 g++ app.cpp mathlib.dll -o app        # link the Tauraro library like any other
 ```
 
-Each `export def` appears both as a raw `extern "C"` symbol and as an inline wrapper in
-`namespace <libname>` that maps `str` to/from `std::string` and passes scalars through. Functions
-whose signature uses a non-self-contained type (`List`/`Dict`, a class instance, or `throws`) are
-omitted from the C++ view (still reachable through the raw C `--lib` header) so the `.hpp` never
-drags in the runtime and always compiles standalone.
+Each `export def` appears as an inline wrapper in `namespace <libname>` that maps `str` to/from
+`std::string` and passes scalars through.
+
+**Tauraro classes become C++ RAII wrappers.** A class reachable through the exported API (returned or
+taken by an `export def`) is exposed as a C++ class over an opaque handle, with **Tauraro's ARC mapped
+to C++ value semantics** — copy retains, destruction releases, move steals. Its static factory
+`def init(...) -> C` becomes a C++ constructor, and its instance methods forward through the handle:
+
+```python
+class Counter:
+    mut n: int
+    def init(start: int) -> Counter:      # static factory = the C++ constructor
+        mut c = Counter(); c.n = start; return c
+    def bump(self, by: int) -> int:
+        self.n = self.n + by; return self.n
+
+export def make_counter(start: int) -> Counter:
+    return Counter.init(start)
+```
+```cpp
+#include "counter.hpp"
+counter::Counter c(10);              // direct construction (calls Counter.init)
+c.bump(5);                           // -> 15   (method forwards through the handle)
+counter::Counter c2 = c;             // copy => ARC retain; both released automatically
+auto f = counter::make_counter(100); // factory returning a Counter, owned by the C++ value
+```
+
+**Collections marshal to the C++ standard library:**
+
+| Tauraro | C++ |
+|---|---|
+| `List[T]` / `Vec[T]` — element is a scalar, `str`, **or a class** | `std::vector<T>` (a `List[Class]` becomes `std::vector<Class-wrapper>`, return-only) |
+| `Dict[K, V]` / `Map[K, V]` — key `str` or int; value int / `bool` / `float` / `str` | `std::map<K, V>` |
+| `(T0, T1, …)` tuple — int / `bool` / `float` / `str` slots | `std::tuple<…>` |
+
+These work as parameters and returns — the wrapper builds the Tauraro collection from the C++ container
+(and frees it) on the way in, and materialises the result into the C++ container on the way out:
+
+```cpp
+std::vector<long long> v = mylib::nums();          // List[int]  -> std::vector
+std::map<std::string,long long> m = mylib::scores(); // Dict[str,int] -> std::map
+auto [code, msg] = mylib::status();                // (int, str) -> std::tuple, structured binding
+long long s = mylib::total({1, 2, 3});             // std::vector -> List[int] param
+```
+
+The header is **self-contained** — it declares only a stable `extern "C"` bridge ABI (retain/release/
+construct/method for classes; len/get/new/push/free for collections; box/unbox for boxed tuple/dict
+slots), all generated *into* the library where the runtime lives, so it never `#include`s
+`tauraro_rt.h`. Signatures using a not-yet-bridged type (**nested** collections like `List[List[int]]`
+or `Dict[str, List[int]]`, a `List[Class]` **parameter** — return-only for now — or `throws`) are
+omitted from the C++ view (still reachable through the raw C `--lib` header), so the `.hpp` always
+compiles standalone.
 
 ### Common Mistakes
 

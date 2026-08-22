@@ -15,6 +15,7 @@ from ast import Decl
 from fmt import Formatter
 from bindgen import run_bindgen, run_bindgen_cpp
 from codegen.c import CGenerator
+from codegen.cpp_export import CppExporter
 from codegen.llvm import LlvmGenerator
 from codegen.native import NativeGenerator
 from mir import lower_program, dump_mir
@@ -1733,6 +1734,10 @@ pub def main(args: Vec[str]):
     if c_gen.emit_line_info:
         c_gen.cur_src_file = to_fwd_slashes(input_path)
     mut main_c      = c_gen.generate_main_c(hir, main_class_set, main_fn_set)
+    # --export-cpp: append the stable extern-"C" bridges the generated C++ header binds to.
+    mut cpp_exporter = CppExporter.init(c_gen)
+    if export_cpp:
+        main_c = main_c + cpp_exporter.generate_cpp_class_bridges(hir)
     mut main_c_path = build_dir + "main.c"
     mut main_changed = true
     if not force_all:
@@ -1809,7 +1814,7 @@ pub def main(args: Vec[str]):
         if export_cpp:
             mut ns = get_filename(exe_name)
             if ns == "": ns = "tauraro"
-            mut cpp_hdr = c_gen.generate_export_cpp_header(hir, ns)
+            mut cpp_hdr = cpp_exporter.generate_export_cpp_header(hir, ns)
             mut cpp_hdr_path = exe_name + ".hpp"
             write_file(cpp_hdr_path, cpp_hdr)
             print("[export-cpp] C++ header: " + cpp_hdr_path + "  (namespace " + ns + ")")

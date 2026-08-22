@@ -4371,20 +4371,11 @@ __attribute__((hot)) Decl* Parser_parse_from_import(Parser* self) {
         /* pass */
         if (going) {
             /* pass */
-            TrStr item_name = Parser_consume_ident(self);
-            /* pass */
-            if ((strcmp(_tr_strz(item_name), _tr_strz(_tr_str_lit(""))) != 0)) {
+            if ((Parser_peek(self).tag == Token_make_Star().tag)) {
                 /* pass */
-                ImportItem* item = ImportItem_init(item_name);
+                self->pos = (self->pos + 1LL);
                 /* pass */
-                if ((Parser_peek(self).tag == Token_make_KwAs().tag)) {
-                    /* pass */
-                    self->pos = (self->pos + 1LL);
-                    /* pass */
-                    item->alias = Parser_consume_ident(self);
-                }
-                /* pass */
-                List_ptr_append(il, _tr_obj_retain(item));
+                List_ptr_append(il, ImportItem_init(_tr_str_lit("*")));
                 /* pass */
                 if ((Parser_peek(self).tag == Token_make_Comma().tag)) {
                     /* pass */
@@ -4395,7 +4386,32 @@ __attribute__((hot)) Decl* Parser_parse_from_import(Parser* self) {
                 }
             } else {
                 /* pass */
-                going = false;
+                TrStr item_name = Parser_consume_ident(self);
+                /* pass */
+                if ((strcmp(_tr_strz(item_name), _tr_strz(_tr_str_lit(""))) != 0)) {
+                    /* pass */
+                    ImportItem* item = ImportItem_init(item_name);
+                    /* pass */
+                    if ((Parser_peek(self).tag == Token_make_KwAs().tag)) {
+                        /* pass */
+                        self->pos = (self->pos + 1LL);
+                        /* pass */
+                        item->alias = Parser_consume_ident(self);
+                    }
+                    /* pass */
+                    List_ptr_append(il, _tr_obj_retain(item));
+                    /* pass */
+                    if ((Parser_peek(self).tag == Token_make_Comma().tag)) {
+                        /* pass */
+                        self->pos = (self->pos + 1LL);
+                    } else if ((!multi)) {
+                        /* pass */
+                        going = false;
+                    }
+                } else {
+                    /* pass */
+                    going = false;
+                }
             }
         }
     }

@@ -56,6 +56,7 @@ typedef struct CTok CTok;
 typedef struct Bindgen Bindgen;
 typedef struct CppType CppType;
 typedef struct CGenerator CGenerator;
+typedef struct CppExporter CppExporter;
 typedef struct LBlock LBlock;
 typedef struct LFunc LFunc;
 typedef struct ClassLayout ClassLayout;
@@ -143,6 +144,7 @@ static void _trdrop_CTok(void* vp);
 static void _trdrop_Bindgen(void* vp);
 static void _trdrop_CppType(void* vp);
 static void _trdrop_CGenerator(void* vp);
+static void _trdrop_CppExporter(void* vp);
 static void _trdrop_LBlock(void* vp);
 static void _trdrop_LFunc(void* vp);
 static void _trdrop_ClassLayout(void* vp);
@@ -2972,6 +2974,26 @@ static void _trdrop_CGenerator(void* vp) {
 }
 #endif
 
+#ifndef CppExporter_STRUCT_DEFINED
+#define CppExporter_STRUCT_DEFINED
+typedef struct CppExporter {
+    size_t __rc;
+    CGenerator* gen;
+    TrMap* cls_set;
+    TrMap* list_elems;
+    TrMap* dict_variants;
+    bool needs_tuple;
+    bool needs_list_ptr;
+} CppExporter;
+static void _trdrop_CppExporter(void* vp) {
+    CppExporter* self = (CppExporter*)vp; (void)self;
+    _tr_obj_release(self->gen, _trdrop_CGenerator);
+    Dict_free(self->cls_set);
+    Dict_free_strval(self->list_elems);
+    Dict_free_strval(self->dict_variants);
+}
+#endif
+
 #ifndef LBlock_STRUCT_DEFINED
 #define LBlock_STRUCT_DEFINED
 typedef struct LBlock {
@@ -4486,11 +4508,52 @@ __attribute__((hot)) TrStr CGenerator_generate_types_header(CGenerator* self, Hi
 __attribute__((hot)) TrStr CGenerator_generate_module_compat(CGenerator* self, List_TrStr* all_decl_modules, List_ptr* all_decls);
 __attribute__((hot)) TrStr CGenerator_generate_module_c(CGenerator* self, HirProgram* prog, TrMap* class_set, TrMap* fn_set, long long depth);
 __attribute__((hot)) TrStr CGenerator_generate_export_header(CGenerator* self, HirProgram* prog);
-__attribute__((hot)) bool CGenerator__cpp_export_ty_ok(CGenerator* self, AstType* ty);
-__attribute__((hot)) bool CGenerator__cpp_export_fn_ok(CGenerator* self, HirFunction* f);
-__attribute__((hot)) TrStr CGenerator__cpp_wrap_fn(CGenerator* self, HirFunction* f);
-__attribute__((hot)) TrStr CGenerator_generate_export_cpp_header(CGenerator* self, HirProgram* prog, TrStr ns);
 __attribute__((hot)) TrStr CGenerator_generate_main_c(CGenerator* self, HirProgram* prog, TrMap* class_set, TrMap* fn_set);
+__attribute__((malloc,returns_nonnull,hot)) CppExporter* CppExporter_init(CGenerator* gen);
+__attribute__((hot)) TrStr CppExporter__cpp_ty_kind(CppExporter* self, AstType* ty);
+__attribute__((hot)) bool CppExporter__cpp_list_ok(CppExporter* self, AstType* ty);
+__attribute__((hot)) TrStr CppExporter__cpp_list_elem_kind(CppExporter* self, AstType* ty);
+__attribute__((hot)) TrStr CppExporter__cpp_list_sfx(CppExporter* self, AstType* ty);
+__attribute__((hot)) TrStr CppExporter__cpp_list_elem_c(CppExporter* self, AstType* ty);
+__attribute__((hot)) TrStr CppExporter__cpp_list_elem_cpp(CppExporter* self, AstType* ty);
+__attribute__((hot)) bool CppExporter__cpp_slot_ok(CppExporter* self, TrStr name);
+__attribute__((hot)) TrStr CppExporter__cpp_slot_kind(CppExporter* self, TrStr name);
+__attribute__((hot)) TrStr CppExporter__cpp_slot_c(CppExporter* self, TrStr kind);
+__attribute__((hot)) TrStr CppExporter__cpp_slot_cpp(CppExporter* self, TrStr kind);
+__attribute__((hot)) bool CppExporter__cpp_dict_ok(CppExporter* self, AstType* ty);
+__attribute__((hot)) TrStr CppExporter__cpp_dict_kkind(CppExporter* self, AstType* ty);
+__attribute__((hot)) TrStr CppExporter__cpp_dict_vkind(CppExporter* self, AstType* ty);
+__attribute__((hot)) TrStr CppExporter__cpp_dict_variant(CppExporter* self, AstType* ty);
+__attribute__((hot)) TrStr CppExporter__cpp_dict_key_cpp(CppExporter* self, AstType* ty);
+__attribute__((hot)) TrStr CppExporter__cpp_dict_v_cpp(CppExporter* self, AstType* ty);
+__attribute__((hot)) bool CppExporter__cpp_tuple_ok(CppExporter* self, AstType* ty);
+__attribute__((hot)) TrStr CppExporter__cpp_tuple_elem_cpp(CppExporter* self, AstType* ty, long long i);
+__attribute__((hot)) void CppExporter__note_export_ty(CppExporter* self, AstType* ty);
+__attribute__((hot)) void CppExporter_collect_export_classes(CppExporter* self, HirProgram* prog);
+__attribute__((hot)) bool CppExporter__cpp_export_ty_ok(CppExporter* self, AstType* ty);
+__attribute__((hot)) bool CppExporter__cpp_is_class_list(CppExporter* self, AstType* ty);
+__attribute__((hot)) bool CppExporter__cpp_export_fn_ok(CppExporter* self, HirFunction* f);
+__attribute__((hot)) bool CppExporter__cpp_kind_bridged(CppExporter* self, TrStr k);
+__attribute__((hot)) bool CppExporter__cpp_fn_needs_bridge(CppExporter* self, HirFunction* f);
+__attribute__((hot)) bool CppExporter__cpp_method_ok(CppExporter* self, HirFunction* m);
+__attribute__((hot)) TrStr CppExporter__cpp_tuple_type_cpp(CppExporter* self, AstType* ty);
+__attribute__((hot)) TrStr CppExporter__cpp_c_ty(CppExporter* self, AstType* ty);
+__attribute__((hot)) TrStr CppExporter__cpp_c_arg(CppExporter* self, AstType* ty, TrStr name);
+__attribute__((hot)) TrStr CppExporter__cpp_param_decl(CppExporter* self, AstType* ty, TrStr name);
+__attribute__((hot)) TrStr CppExporter__cpp_call_arg(CppExporter* self, AstType* ty, TrStr name);
+__attribute__((hot)) TrStr CppExporter__cpp_ret_type(CppExporter* self, AstType* ty);
+__attribute__((hot)) TrStr CppExporter__cpp_ret_stmt(CppExporter* self, AstType* ty, TrStr call);
+__attribute__((hot)) bool CppExporter__cpp_kind_marshal(CppExporter* self, TrStr k);
+__attribute__((hot)) bool CppExporter__cpp_fn_has_list(CppExporter* self, HirFunction* f);
+__attribute__((hot)) TrStr CppExporter__cpp_wrap_fn(CppExporter* self, HirFunction* f);
+__attribute__((hot)) bool CppExporter__cpp_init_ok(CppExporter* self, HirFunction* m);
+__attribute__((hot)) long long CppExporter__cpp_init_idx(CppExporter* self, HirClass* c);
+__attribute__((hot)) TrStr CppExporter__cpp_class_decl(CppExporter* self, HirClass* c);
+__attribute__((hot)) TrStr CppExporter_generate_cpp_class_bridges(CppExporter* self, HirProgram* prog);
+__attribute__((hot)) TrStr CppExporter__cpp_list_bridges(CppExporter* self);
+__attribute__((hot)) TrStr CppExporter_generate_export_cpp_header(CppExporter* self, HirProgram* prog, TrStr ns);
+__attribute__((hot)) TrStr CppExporter__cpp_class_bridge_protos(CppExporter* self, HirClass* c);
+__attribute__((hot)) TrStr CppExporter__cpp_free_fn_bridge_proto(CppExporter* self, HirFunction* f);
 
 
 /* === Module-prefixed typedef aliases (auto-generated) === */
@@ -5588,6 +5651,24 @@ __attribute__((hot)) codegen_c_CGenerator*** core_alloc_resize_codegen_c_CGenera
 __attribute__((hot)) void core_alloc_dealloc_codegen_c_CGenerator_ptr(codegen_c_CGenerator*** ptr);
 __attribute__((hot)) core_map_MapNode_str_codegen_c_CGenerator** core_alloc_alloc_core_map_MapNode_str_codegen_c_CGenerator(long long count);
 __attribute__((hot)) void core_alloc_dealloc_core_map_MapNode_str_codegen_c_CGenerator(core_map_MapNode_str_codegen_c_CGenerator** ptr);
+
+typedef CppExporter codegen_cpp_export_CppExporter;
+struct core_vec_Vec_codegen_cpp_export_CppExporter { codegen_cpp_export_CppExporter** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_codegen_cpp_export_CppExporter core_vec_Vec_codegen_cpp_export_CppExporter;
+struct core_vec_Vec_codegen_cpp_export_CppExporter_ptr { codegen_cpp_export_CppExporter*** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_codegen_cpp_export_CppExporter_ptr core_vec_Vec_codegen_cpp_export_CppExporter_ptr;
+struct core_map_MapNode_str_codegen_cpp_export_CppExporter { char* key; codegen_cpp_export_CppExporter* value; struct core_map_MapNode_str_codegen_cpp_export_CppExporter* next; };
+typedef struct core_map_MapNode_str_codegen_cpp_export_CppExporter core_map_MapNode_str_codegen_cpp_export_CppExporter;
+struct core_map_Map_str_codegen_cpp_export_CppExporter { core_map_MapNode_str_codegen_cpp_export_CppExporter** buckets; long long capacity; long long len; };
+typedef struct core_map_Map_str_codegen_cpp_export_CppExporter core_map_Map_str_codegen_cpp_export_CppExporter;
+__attribute__((hot)) codegen_cpp_export_CppExporter** core_alloc_alloc_codegen_cpp_export_CppExporter(long long count);
+__attribute__((hot)) codegen_cpp_export_CppExporter** core_alloc_resize_codegen_cpp_export_CppExporter(codegen_cpp_export_CppExporter** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_codegen_cpp_export_CppExporter(codegen_cpp_export_CppExporter** ptr);
+__attribute__((hot)) codegen_cpp_export_CppExporter*** core_alloc_alloc_codegen_cpp_export_CppExporter_ptr(long long count);
+__attribute__((hot)) codegen_cpp_export_CppExporter*** core_alloc_resize_codegen_cpp_export_CppExporter_ptr(codegen_cpp_export_CppExporter*** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_codegen_cpp_export_CppExporter_ptr(codegen_cpp_export_CppExporter*** ptr);
+__attribute__((hot)) core_map_MapNode_str_codegen_cpp_export_CppExporter** core_alloc_alloc_core_map_MapNode_str_codegen_cpp_export_CppExporter(long long count);
+__attribute__((hot)) void core_alloc_dealloc_core_map_MapNode_str_codegen_cpp_export_CppExporter(core_map_MapNode_str_codegen_cpp_export_CppExporter** ptr);
 
 typedef LType taumir_ir_LType;
 struct core_vec_Vec_taumir_ir_LType { taumir_ir_LType* data; long long len; long long capacity; };

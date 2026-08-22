@@ -2327,20 +2327,31 @@ extend Parser:
                 case _:
                     pass
             if going:
-                mut item_name = self.consume_ident()
-                if item_name != "":
-                    mut item = ImportItem.init(item_name)
-                    # Optional per-item alias:  Name as Alias
-                    if self.peek() == Token.KwAs:
-                        self.pos = self.pos + 1
-                        item.alias = self.consume_ident()
-                    il.push(item)
+                # `from <module> import *` — wildcard: bring in ALL public names of the module.
+                # (In Tauraro's unity build a module import already exposes every `pub` decl, so
+                # `*` is recorded as a marker item and the resolver loads the whole module.)
+                if self.peek() == Token.Star:
+                    self.pos = self.pos + 1
+                    il.push(ImportItem.init("*"))
                     if self.peek() == Token.Comma:
                         self.pos = self.pos + 1
                     elif not multi:
                         going = false
                 else:
-                    going = false
+                    mut item_name = self.consume_ident()
+                    if item_name != "":
+                        mut item = ImportItem.init(item_name)
+                        # Optional per-item alias:  Name as Alias
+                        if self.peek() == Token.KwAs:
+                            self.pos = self.pos + 1
+                            item.alias = self.consume_ident()
+                        il.push(item)
+                        if self.peek() == Token.Comma:
+                            self.pos = self.pos + 1
+                        elif not multi:
+                            going = false
+                    else:
+                        going = false
         # Consume the closing ) or ]
         if multi:
             match self.peek():

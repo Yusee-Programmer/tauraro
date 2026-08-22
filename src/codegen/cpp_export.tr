@@ -1,0 +1,828 @@
+# @trusted: compiler systems module — audited raw-pointer core (like Rust std internals)
+# ─────────────────────────────────────────────────────────────────────────────
+# C++ EXPORT  (`tauraroc --export-cpp`)  —  the reverse of `bindgen`.
+#
+# Emits a self-contained, ergonomic C++ header so C++ code can CALL Tauraro:
+#   • free `export def`s        -> inline `namespace <lib>` wrappers
+#   • `str`   <-> std::string,  scalars pass through
+#   • Tauraro classes           -> C++ RAII wrappers over an opaque handle (ARC
+#                                  mapped to copy=retain / dtor=release / move)
+#   • `List[T]`                 <-> std::vector<T>  (scalar/str elements)
+#
+# It leans on `CGenerator` purely for C-ABI knowledge (type_to_c / list suffixes /
+# gen_func_sig / the class & value-type tables) and stays OUT of the C code
+# generator itself. The stable `extern "C"` bridge functions are emitted INTO the
+# library (see `bridges`, appended to main.c), so the header never needs the
+# Tauraro runtime — because Tauraro compiles to C, the C ABI is already the bridge
+# (no IDL / bridge module, unlike Rust cxx or Swift interop).
+# ─────────────────────────────────────────────────────────────────────────────
+from core.string import StringBuilder
+from core.map import Map
+from core.vec import Vec
+from hir import HirProgram, HirFunction, HirClass
+from ast import AstType
+from codegen.c import CGenerator, _is_int_type, _is_float_type, _is_invalid_ptr
+
+pub class CppExporter:
+    pub gen:        CGenerator          # C-ABI knowledge (type mapping, suffixes, gen_func_sig)
+    pub cls_set:    Map[str, bool]      # heap classes reachable through the export API -> RAII wrappers
+    pub list_elems: Map[str, str]       # List element C-ABI suffix (i64/f64/bool/TrStr) -> element C type
+    pub dict_variants: Map[str, str]      # Dict[str,V] value kind (i64/f64/bool/str) -> value C type
+    pub needs_tuple: bool               # any exported tuple -> emit the shared TrTuple box/unbox bridges
+    pub needs_list_ptr: bool            # any exported List[Class] -> emit the List_ptr (void* element) bridges
+
+    pub def init(gen: CGenerator) -> CppExporter:
+        mut e = CppExporter()
+        e.gen = gen
+        e.cls_set = Map[str, bool].init(16)
+        e.list_elems = Map[str, str].init(8)
+        e.dict_variants = Map[str, str].init(8)
+        e.needs_tuple = false
+        e.needs_list_ptr = false
+        return e
+
+    # Classify a type for the C++ export surface. Scalars pass through, `str` maps to the
+    # 2-pointer POD `TrStr`, an exported heap class maps to an opaque `void*` handle wrapped
+    # in a RAII class. Anything else ("no": Result, List/Dict, value-type struct) is not yet
+    # self-contained, so functions using it are omitted from the C++ view (still reachable
+    # via the raw C `--lib` header).
+    def _cpp_ty_kind(self, ty: AstType) -> str:
+        mut n = ty.name
+        if n == "" or n == "void": return "void"
+        if n == "str": return "str"
+        if n == "bool": return "scalar"
+        if _is_int_type(n) or _is_float_type(n): return "scalar"
+        if (n == "List" or n == "Vec") and self._cpp_list_ok(ty): return "list"
+        if (n == "Dict" or n == "Map") and self._cpp_dict_ok(ty): return "dict"
+        if (n == "Tuple" or n == "tuple") and self._cpp_tuple_ok(ty): return "tuple"
+        if self.cls_set.contains(n): return "class"
+        return "no"
+
+    # A `List[T]`/`Vec[T]` is bridged when its element is a scalar, `str`, or an exported class
+    # (nested lists/dicts are deferred). Element kind is checked directly to bound the recursion.
+    def _cpp_list_ok(self, ty: AstType) -> bool:
+        if ty.args.len == 0: return false
+        mut ek = self._cpp_ty_kind(ty.args.get(0).read())
+        return ek == "scalar" or ek == "str" or ek == "class"
+    def _cpp_list_elem_kind(self, ty: AstType) -> str:     # "scalar" / "str" / "class"
+        return self._cpp_ty_kind(ty.args.get(0).read())
+    def _cpp_list_sfx(self, ty: AstType) -> str:
+        return self.gen.list_sfx(self.gen.list_elem_suffix(ty.args.get(0).read().name))
+    def _cpp_list_elem_c(self, ty: AstType) -> str:        # element type in the C bridge
+        mut elem = ty.args.get(0).read()
+        if elem.name == "str": return "TrStr"
+        return self.gen.type_to_c(elem)
+    def _cpp_list_elem_cpp(self, ty: AstType) -> str:      # std::vector element type
+        mut elem = ty.args.get(0).read()
+        if elem.name == "str": return "std::string"
+        if self.cls_set.contains(elem.name): return elem.name    # the C++ RAII wrapper
+        return self.gen.type_to_c(elem)
+
+    # A Dict value / Tuple slot is bridgeable when it is an int type, `bool`, `float`, or `str` — each
+    # puns cleanly into the runtime's slot (int/bool -> long long, float -> f64 bit-pun, str -> box).
+    def _cpp_slot_ok(self, name: str) -> bool:
+        return _is_int_type(name) or name == "bool" or _is_float_type(name) or name == "str"
+    # The slot's C-ABI kind: "str" (boxed) / "f64" (double) / "i64" (int + bool).
+    def _cpp_slot_kind(self, name: str) -> str:
+        if name == "str": return "str"
+        if _is_float_type(name): return "f64"
+        return "i64"
+    def _cpp_slot_c(self, kind: str) -> str:               # bridge type for a slot kind
+        if kind == "str": return "TrStr"
+        if kind == "f64": return "double"
+        return "long long"
+    def _cpp_slot_cpp(self, kind: str) -> str:             # C++ std-container element type
+        if kind == "str": return "std::string"
+        if kind == "f64": return "double"
+        return "long long"
+
+    # `Dict[K, V]` / `Map[K, V]` with a str-or-int key and an int/bool/float/str value ->
+    # std::map<Kcpp, Vcpp>. str keys use TrMap, int keys use TrIDict.
+    def _cpp_dict_ok(self, ty: AstType) -> bool:
+        if ty.args.len < 2: return false
+        mut kn = ty.args.get(0).read().name
+        if kn != "str" and not _is_int_type(kn): return false
+        return self._cpp_slot_ok(ty.args.get(1).read().name)
+    def _cpp_dict_kkind(self, ty: AstType) -> str:         # "s" (str keys) or "i" (int keys)
+        if ty.args.get(0).read().name == "str": return "s"
+        return "i"
+    def _cpp_dict_vkind(self, ty: AstType) -> str:
+        return self._cpp_slot_kind(ty.args.get(1).read().name)
+    def _cpp_dict_variant(self, ty: AstType) -> str:       # bridge-family tag, e.g. "s_i64" / "i_str"
+        return self._cpp_dict_kkind(ty) + "_" + self._cpp_dict_vkind(ty)
+    def _cpp_dict_key_cpp(self, ty: AstType) -> str:       # std::map key type
+        if ty.args.get(0).read().name == "str": return "std::string"
+        return "long long"
+    def _cpp_dict_v_cpp(self, ty: AstType) -> str:         # std::map value type
+        return self._cpp_slot_cpp(self._cpp_dict_vkind(ty))
+
+    # A fixed-arity tuple whose every element is an int/bool/float/str slot -> std::tuple<...>.
+    def _cpp_tuple_ok(self, ty: AstType) -> bool:
+        if ty.args.len == 0: return false
+        mut i = 0
+        while i < ty.args.len:
+            if not self._cpp_slot_ok(ty.args.get(i).read().name): return false
+            i = i + 1
+        return true
+    def _cpp_tuple_elem_cpp(self, ty: AstType, i: int) -> str:
+        return self._cpp_slot_cpp(self._cpp_slot_kind(ty.args.get(i).read().name))
+
+    # Heap classes reachable through the `export def` API (as a return or parameter type) get
+    # a C++ RAII wrapper. Value-type classes / enums are excluded (a later phase).
+    def _note_export_ty(self, ty: AstType):
+        mut n = ty.name
+        if n != "" and self.gen.classes.contains(n) and not self.gen.value_types.contains(n) and not self.gen.enums.contains(n):
+            self.cls_set.insert(n, true)
+        if n == "List" or n == "Vec":
+            if ty.args.len > 0: self._note_export_ty(ty.args.get(0).read())   # register an element class first
+            if self._cpp_list_ok(ty):
+                if self._cpp_list_elem_kind(ty) == "class":
+                    self.needs_list_ptr = true
+                else:
+                    self.list_elems.insert(self._cpp_list_sfx(ty), self._cpp_list_elem_c(ty))
+        if (n == "Dict" or n == "Map") and self._cpp_dict_ok(ty):
+            self.dict_variants.insert(self._cpp_dict_variant(ty), self._cpp_slot_c(self._cpp_dict_vkind(ty)))
+            if self._cpp_dict_kkind(ty) == "s":
+                self.list_elems.insert("TrStr", "TrStr")     # str keys materialize through the List_TrStr bridge
+            else:
+                self.list_elems.insert("i64", "long long")   # int keys materialize through the List_i64 bridge
+        if (n == "Tuple" or n == "tuple") and self._cpp_tuple_ok(ty):
+            self.needs_tuple = true
+
+    pub def collect_export_classes(self, prog: HirProgram):
+        self.cls_set = Map[str, bool].init(16)
+        self.list_elems = Map[str, str].init(8)
+        self.dict_variants = Map[str, str].init(8)
+        self.needs_tuple = false
+        self.needs_list_ptr = false
+        if _is_invalid_ptr(prog as usize) or _is_invalid_ptr(prog.functions as usize): return
+        mut i = 0
+        while i < prog.functions.len:
+            mut f = prog.functions.get(i)
+            i = i + 1
+            if _is_invalid_ptr(f as usize): continue
+            if not (f.is_export and not f.is_extern): continue
+            self._note_export_ty(f.ret_ty)
+            mut j = 0
+            while j < f.params.len:
+                self._note_export_ty(f.params.get(j).ty)
+                j = j + 1
+
+    def _cpp_export_ty_ok(self, ty: AstType) -> bool:
+        return self._cpp_ty_kind(ty) != "no"
+
+    # True if `ty` is a `List` whose element is an exported class (List[Class]).
+    def _cpp_is_class_list(self, ty: AstType) -> bool:
+        return (ty.name == "List" or ty.name == "Vec") and self._cpp_list_ok(ty) and self._cpp_list_elem_kind(ty) == "class"
+
+    def _cpp_export_fn_ok(self, f: HirFunction) -> bool:
+        if f.throws_ty.name != "": return false        # returns Result -> not self-contained
+        if not self._cpp_export_ty_ok(f.ret_ty): return false
+        mut i = 0
+        while i < f.params.len:
+            mut pty = f.params.get(i).ty
+            if not self._cpp_export_ty_ok(pty): return false
+            # List[Class] is materialize-only (ownership of a passed-in vector<wrapper> is ambiguous
+            # across the FFI) — it is supported as a RETURN, not as a parameter.
+            if self._cpp_is_class_list(pty): return false
+            i = i + 1
+        return true
+
+    # A function needs a `tr__<fn>` void*-bridge when any class or list crosses the ABI (those
+    # travel as opaque handles); pure scalar/str functions are called directly.
+    # A kind that travels as an opaque handle / boxed value and therefore needs a `tr__<fn>` bridge.
+    def _cpp_kind_bridged(self, k: str) -> bool:
+        return k == "class" or k == "list" or k == "dict" or k == "tuple"
+    def _cpp_fn_needs_bridge(self, f: HirFunction) -> bool:
+        if self._cpp_kind_bridged(self._cpp_ty_kind(f.ret_ty)): return true
+        mut i = 0
+        while i < f.params.len:
+            if self._cpp_kind_bridged(self._cpp_ty_kind(f.params.get(i).ty)): return true
+            i = i + 1
+        return false
+
+    # A method is bridged when its non-self params + return are scalar/str/void (class-to-class
+    # method chaining is deferred). init/dunder methods are handled separately (as constructors).
+    def _cpp_method_ok(self, m: HirFunction) -> bool:
+        if m.throws_ty.name != "": return false
+        mut rk = self._cpp_ty_kind(m.ret_ty)
+        if rk != "void" and rk != "str" and rk != "scalar": return false
+        mut has_self = false
+        mut i = 0
+        while i < m.params.len:
+            if m.params.get(i).name == "self":
+                has_self = true
+                i = i + 1
+                continue
+            mut k = self._cpp_ty_kind(m.params.get(i).ty)
+            if k != "str" and k != "scalar": return false
+            i = i + 1
+        return has_self          # only instance methods forward through the handle
+
+    # The full `std::tuple<...>` C++ type for a tuple AstType.
+    def _cpp_tuple_type_cpp(self, ty: AstType) -> str:
+        mut s = "std::tuple<"
+        mut i = 0
+        while i < ty.args.len:
+            if i > 0: s = s + ", "
+            s = s + self._cpp_tuple_elem_cpp(ty, i)
+            i = i + 1
+        return s + ">"
+
+    # ── fragment helpers (shared by free-fn wrappers, methods, and the C bridges) ──
+    # C bridge parameter/return type: class/list/dict -> void* handle, tuple -> TrTuple by value,
+    # str -> TrStr, scalar -> its C type.
+    def _cpp_c_ty(self, ty: AstType) -> str:
+        mut k = self._cpp_ty_kind(ty)
+        if k == "class" or k == "list" or k == "dict": return "void*"
+        if k == "tuple": return "TrTuple"
+        if k == "str": return "TrStr"
+        if k == "void": return "void"
+        return self.gen.type_to_c(ty)
+    # Argument passed from a bridge INTO the real Tauraro symbol (cast the void* handle back).
+    def _cpp_c_arg(self, ty: AstType, name: str) -> str:
+        mut k = self._cpp_ty_kind(ty)
+        if k == "class": return "(" + ty.name + "*)" + name
+        if k == "list": return "(List_" + self._cpp_list_sfx(ty) + "*)" + name
+        if k == "dict": return "(TrMap*)" + name
+        return name
+    # C++ wrapper parameter declaration.
+    def _cpp_param_decl(self, ty: AstType, name: str) -> str:
+        mut k = self._cpp_ty_kind(ty)
+        if k == "str": return "const std::string& " + name
+        if k == "class": return "const " + ty.name + "& " + name
+        if k == "list": return "const std::vector<" + self._cpp_list_elem_cpp(ty) + ">& " + name
+        if k == "dict": return "const std::map<" + self._cpp_dict_key_cpp(ty) + ", " + self._cpp_dict_v_cpp(ty) + ">& " + name
+        if k == "tuple": return "const " + self._cpp_tuple_type_cpp(ty) + "& " + name
+        return self.gen.type_to_c(ty) + " " + name
+    # Argument passed from a C++ wrapper INTO the C symbol / bridge.
+    def _cpp_call_arg(self, ty: AstType, name: str) -> str:
+        mut k = self._cpp_ty_kind(ty)
+        if k == "str": return "TrStr{ (char*)" + name + ".c_str(), (long*)0 }"
+        if k == "class": return name + ".raw()"
+        return name
+    def _cpp_ret_type(self, ty: AstType) -> str:
+        mut k = self._cpp_ty_kind(ty)
+        if k == "str": return "std::string"
+        if k == "class": return ty.name
+        if k == "list": return "std::vector<" + self._cpp_list_elem_cpp(ty) + ">"
+        if k == "dict": return "std::map<" + self._cpp_dict_key_cpp(ty) + ", " + self._cpp_dict_v_cpp(ty) + ">"
+        if k == "tuple": return self._cpp_tuple_type_cpp(ty)
+        if k == "void": return "void"
+        return self.gen.type_to_c(ty)
+    # C++ return statement wrapping the C call expression `call` (simple kinds only — list/dict/tuple
+    # go through the multi-statement path in _cpp_wrap_fn).
+    def _cpp_ret_stmt(self, ty: AstType, call: str) -> str:
+        mut k = self._cpp_ty_kind(ty)
+        if k == "void": return call + ";"
+        if k == "str": return "TrStr _r = " + call + "; return std::string(_r.data ? _r.data : \"\");"
+        if k == "class": return "return " + ty.name + "::_wrap(" + call + ");"
+        return "return " + call + ";"
+
+    # True when a `List`/`Dict`/tuple crosses this function's boundary (needs a build/materialize loop).
+    def _cpp_kind_marshal(self, k: str) -> bool:
+        return k == "list" or k == "dict" or k == "tuple"
+    def _cpp_fn_has_list(self, f: HirFunction) -> bool:
+        if self._cpp_kind_marshal(self._cpp_ty_kind(f.ret_ty)): return true
+        mut i = 0
+        while i < f.params.len:
+            if self._cpp_kind_marshal(self._cpp_ty_kind(f.params.get(i).ty)): return true
+            i = i + 1
+        return false
+
+    # The C++ inline wrapper for a free `export def`. Bridged functions (class or list in the
+    # signature) forward through the generated `tr__<fn>` void*-bridge; pure scalar/str functions
+    # call the symbol directly. `List[...]` params/returns are marshalled to/from std::vector.
+    def _cpp_wrap_fn(self, f: HirFunction) -> str:
+        mut target = "::" + f.name
+        if self._cpp_fn_needs_bridge(f): target = "tr__" + f.name
+        mut wb = StringBuilder.init(256)
+        wb.append("    inline " + self._cpp_ret_type(f.ret_ty) + " " + f.name + "(")
+        mut i = 0
+        while i < f.params.len:
+            mut p = f.params.get(i)
+            mut pn = p.name
+            if pn == "": pn = "a" + i.to_str()
+            if i > 0: wb.append(", ")
+            wb.append(self._cpp_param_decl(p.ty, pn))
+            i = i + 1
+        # Simple case (no list marshalling): a one-line forward.
+        if not self._cpp_fn_has_list(f):
+            mut call_args = ""
+            i = 0
+            while i < f.params.len:
+                mut p2 = f.params.get(i)
+                mut pn2 = p2.name
+                if pn2 == "": pn2 = "a" + i.to_str()
+                if i > 0: call_args = call_args + ", "
+                call_args = call_args + self._cpp_call_arg(p2.ty, pn2)
+                i = i + 1
+            wb.append(") { " + self._cpp_ret_stmt(f.ret_ty, target + "(" + call_args + ")") + " }\n")
+            return wb.to_string().as_str()
+        # List marshalling: build param lists, call, free them, then materialize the result.
+        wb.append(") {\n")
+        mut call_args = ""
+        mut frees = ""
+        i = 0
+        while i < f.params.len:
+            mut p3 = f.params.get(i)
+            mut pn3 = p3.name
+            if pn3 == "": pn3 = "a" + i.to_str()
+            if i > 0: call_args = call_args + ", "
+            mut pk = self._cpp_ty_kind(p3.ty)
+            if pk == "list":
+                mut sfx = self._cpp_list_sfx(p3.ty)
+                mut tmp = "_l" + i.to_str()
+                mut econv = "_e"
+                if p3.ty.args.get(0).read().name == "str": econv = "TrStr{ (char*)_e.c_str(), (long*)0 }"
+                wb.append("        void* " + tmp + " = tr__list_" + sfx + "_new();\n")
+                wb.append("        for (const auto& _e : " + pn3 + ") tr__list_" + sfx + "_push(" + tmp + ", " + econv + ");\n")
+                call_args = call_args + tmp
+                frees = frees + "        tr__list_" + sfx + "_free(" + tmp + ");\n"
+            elif pk == "dict":
+                mut vt = self._cpp_dict_variant(p3.ty)
+                mut vk = self._cpp_dict_vkind(p3.ty)
+                mut tmp = "_d" + i.to_str()
+                mut kconv = "_kv.first"
+                if self._cpp_dict_kkind(p3.ty) == "s": kconv = "TrStr{ (char*)_kv.first.c_str(), (long*)0 }"
+                mut vconv = "_kv.second"
+                if vk == "str": vconv = "TrStr{ (char*)_kv.second.c_str(), (long*)0 }"
+                wb.append("        void* " + tmp + " = tr__dict_" + vt + "_new();\n")
+                wb.append("        for (const auto& _kv : " + pn3 + ") tr__dict_" + vt + "_set(" + tmp + ", " + kconv + ", " + vconv + ");\n")
+                call_args = call_args + tmp
+                frees = frees + "        tr__dict_" + vt + "_free(" + tmp + ");\n"
+            elif pk == "tuple":
+                mut tmp = "_t" + i.to_str()
+                wb.append("        TrTuple " + tmp + " = {};\n")
+                mut ti = 0
+                while ti < p3.ty.args.len:
+                    mut sk = self._cpp_slot_kind(p3.ty.args.get(ti).read().name)
+                    mut g = "std::get<" + ti.to_str() + ">(" + pn3 + ")"
+                    if sk == "str":
+                        wb.append("        " + tmp + ".data[" + ti.to_str() + "] = tr__box_str(TrStr{ (char*)" + g + ".c_str(), (long*)0 });\n")
+                    elif sk == "f64":
+                        wb.append("        " + tmp + ".data[" + ti.to_str() + "] = tr__box_f64(" + g + ");\n")
+                    else:
+                        wb.append("        " + tmp + ".data[" + ti.to_str() + "] = (long long)" + g + ";\n")
+                    ti = ti + 1
+                call_args = call_args + tmp
+            else:
+                call_args = call_args + self._cpp_call_arg(p3.ty, pn3)
+            i = i + 1
+        mut call_expr = target + "(" + call_args + ")"
+        mut rk = self._cpp_ty_kind(f.ret_ty)
+        if rk == "void":
+            wb.append("        " + call_expr + ";\n" + frees)
+        else:
+            wb.append("        " + self._cpp_c_ty(f.ret_ty) + " _r = " + call_expr + ";\n" + frees)
+            if rk == "list":
+                mut ecpp = self._cpp_list_elem_cpp(f.ret_ty)
+                if self._cpp_list_elem_kind(f.ret_ty) == "class":
+                    # List[Class]: each element ptr moves into a RAII wrapper (the wrapper owns that ref);
+                    # free the list structure only — List_ptr_free does NOT release the elements.
+                    wb.append("        long long _n = tr__list_ptr_len(_r);\n")
+                    wb.append("        std::vector<" + ecpp + "> _v; _v.reserve((size_t)_n);\n")
+                    wb.append("        for (long long _i = 0; _i < _n; ++_i) _v.push_back(" + ecpp + "::_wrap((void*)tr__list_ptr_get(_r, _i)));\n")
+                    wb.append("        tr__list_ptr_free_shallow(_r);\n        return _v;\n")
+                else:
+                    mut rsfx = self._cpp_list_sfx(f.ret_ty)
+                    wb.append("        long long _n = tr__list_" + rsfx + "_len(_r);\n")
+                    wb.append("        std::vector<" + ecpp + "> _v; _v.reserve((size_t)_n);\n")
+                    if f.ret_ty.args.get(0).read().name == "str":
+                        wb.append("        for (long long _i = 0; _i < _n; ++_i) { TrStr _s = tr__list_" + rsfx + "_get(_r, _i); _v.push_back(std::string(_s.data ? _s.data : \"\")); }\n")
+                    else:
+                        wb.append("        for (long long _i = 0; _i < _n; ++_i) _v.push_back(tr__list_" + rsfx + "_get(_r, _i));\n")
+                    wb.append("        tr__list_" + rsfx + "_free(_r);\n        return _v;\n")
+            elif rk == "dict":
+                mut vt = self._cpp_dict_variant(f.ret_ty)
+                mut vk = self._cpp_dict_vkind(f.ret_ty)
+                mut ksfx = "TrStr"
+                if self._cpp_dict_kkind(f.ret_ty) == "i": ksfx = "i64"
+                wb.append("        void* _ks = tr__dict_" + vt + "_keys(_r);\n")
+                wb.append("        long long _n = tr__list_" + ksfx + "_len(_ks);\n")
+                wb.append("        std::map<" + self._cpp_dict_key_cpp(f.ret_ty) + ", " + self._cpp_dict_v_cpp(f.ret_ty) + "> _m;\n")
+                wb.append("        for (long long _i = 0; _i < _n; ++_i) {\n")
+                if ksfx == "TrStr":
+                    wb.append("            TrStr _k = tr__list_TrStr_get(_ks, _i); std::string _kk2(_k.data ? _k.data : \"\");\n")
+                else:
+                    wb.append("            long long _k = tr__list_i64_get(_ks, _i); long long _kk2 = _k;\n")
+                if vk == "str":
+                    wb.append("            TrStr _vv = tr__dict_" + vt + "_get(_r, _k); _m[_kk2] = std::string(_vv.data ? _vv.data : \"\");\n")
+                else:
+                    wb.append("            _m[_kk2] = tr__dict_" + vt + "_get(_r, _k);\n")
+                wb.append("        }\n")
+                wb.append("        tr__list_" + ksfx + "_free(_ks); tr__dict_" + vt + "_free(_r);\n        return _m;\n")
+            elif rk == "tuple":
+                mut parts = ""
+                mut ti = 0
+                while ti < f.ret_ty.args.len:
+                    mut ev = "_te" + ti.to_str()
+                    mut sk = self._cpp_slot_kind(f.ret_ty.args.get(ti).read().name)
+                    mut slot = "_r.data[" + ti.to_str() + "]"
+                    if sk == "str":
+                        wb.append("        TrStr _ts" + ti.to_str() + " = tr__unbox_str(" + slot + "); std::string " + ev + "(_ts" + ti.to_str() + ".data ? _ts" + ti.to_str() + ".data : \"\");\n")
+                    elif sk == "f64":
+                        wb.append("        double " + ev + " = tr__unbox_f64(" + slot + ");\n")
+                    else:
+                        wb.append("        long long " + ev + " = (long long)" + slot + ";\n")
+                    if ti > 0: parts = parts + ", "
+                    parts = parts + ev
+                    ti = ti + 1
+                wb.append("        return std::make_tuple(" + parts + ");\n")
+            elif rk == "str":
+                wb.append("        return std::string(_r.data ? _r.data : \"\");\n")
+            elif rk == "class":
+                wb.append("        return " + f.ret_ty.name + "::_wrap(_r);\n")
+            else:
+                wb.append("        return _r;\n")
+        wb.append("    }\n")
+        return wb.to_string().as_str()
+
+    # Tauraro's idiomatic constructor is a STATIC factory `def init(args) -> ClassName` (no `self`,
+    # returns the class) — the same shape the compiler uses everywhere (`Point.init(3,4)`). It is
+    # bridgeable when it takes no `self`, returns the class, and its params are scalar/str.
+    def _cpp_init_ok(self, m: HirFunction) -> bool:
+        if m.throws_ty.name != "": return false
+        if self._cpp_ty_kind(m.ret_ty) != "class": return false
+        mut i = 0
+        while i < m.params.len:
+            mut p = m.params.get(i)
+            if p.name == "self": return false          # instance-style init isn't a usable factory
+            mut k = self._cpp_ty_kind(p.ty)
+            if k != "str" and k != "scalar": return false
+            i = i + 1
+        return true
+
+    # Index of the class's `init` method (its constructor), or -1 if none/too-complex.
+    def _cpp_init_idx(self, c: HirClass) -> int:
+        mut i = 0
+        while i < c.methods.len:
+            mut m = c.methods.get(i)
+            if not _is_invalid_ptr(m as usize) and m.name == "init" and self._cpp_init_ok(m):
+                return i
+            i = i + 1
+        return -1
+
+    # Emit the C++ RAII wrapper class for an exported Tauraro class: opaque `void*` handle,
+    # ARC mapped to C++ value semantics (copy = retain, dtor = release, move = steal), a
+    # constructor from `init`, and a forwarding method per bridged method.
+    def _cpp_class_decl(self, c: HirClass) -> str:
+        mut C = c.name
+        mut wb = StringBuilder.init(512)
+        wb.append("    class " + C + " {\n")
+        wb.append("        void* h_;\n")
+        wb.append("        explicit " + C + "(void* _p): h_(_p) {}\n")
+        wb.append("    public:\n")
+        wb.append("        static " + C + " _wrap(void* _p) { return " + C + "(_p); }\n")
+        wb.append("        " + C + "(const " + C + "& o): h_(o.h_ ? tr__" + C + "_retain(o.h_) : nullptr) {}\n")
+        wb.append("        " + C + "(" + C + "&& o) noexcept : h_(o.h_) { o.h_ = nullptr; }\n")
+        wb.append("        " + C + "& operator=(const " + C + "& o) { if (this != &o) { if (h_) tr__" + C + "_release(h_); h_ = o.h_ ? tr__" + C + "_retain(o.h_) : nullptr; } return *this; }\n")
+        wb.append("        " + C + "& operator=(" + C + "&& o) noexcept { if (this != &o) { if (h_) tr__" + C + "_release(h_); h_ = o.h_; o.h_ = nullptr; } return *this; }\n")
+        wb.append("        ~" + C + "() { if (h_) tr__" + C + "_release(h_); }\n")
+        wb.append("        void* raw() const { return h_; }\n")
+        # constructor from init()
+        mut iidx = self._cpp_init_idx(c)
+        if iidx >= 0:
+            mut im = c.methods.get(iidx)
+            wb.append("        explicit " + C + "(")
+            mut cargs = ""
+            mut pi = 0
+            mut emitted = 0
+            while pi < im.params.len:
+                mut p = im.params.get(pi)
+                pi = pi + 1
+                if p.name == "self": continue
+                if emitted > 0:
+                    wb.append(", ")
+                    cargs = cargs + ", "
+                wb.append(self._cpp_param_decl(p.ty, p.name))
+                cargs = cargs + self._cpp_call_arg(p.ty, p.name)
+                emitted = emitted + 1
+            wb.append("): h_(tr__" + C + "_new(" + cargs + ")) {}\n")
+        # forwarding methods
+        mut mi = 0
+        while mi < c.methods.len:
+            mut m = c.methods.get(mi)
+            mi = mi + 1
+            if _is_invalid_ptr(m as usize): continue
+            if m.name == "init" or m.name.starts_with("__"): continue
+            if not self._cpp_method_ok(m): continue
+            wb.append("        " + self._cpp_ret_type(m.ret_ty) + " " + m.name + "(")
+            mut margs = "h_"
+            mut pj = 0
+            mut me = 0
+            while pj < m.params.len:
+                mut mp = m.params.get(pj)
+                pj = pj + 1
+                if mp.name == "self": continue
+                if me > 0: wb.append(", ")
+                wb.append(self._cpp_param_decl(mp.ty, mp.name))
+                margs = margs + ", " + self._cpp_call_arg(mp.ty, mp.name)
+                me = me + 1
+            wb.append(") { " + self._cpp_ret_stmt(m.ret_ty, "tr__" + C + "_" + m.name + "(" + margs + ")") + " }\n")
+        wb.append("    };\n")
+        return wb.to_string().as_str()
+
+    # The extern-"C" bridge functions, emitted INTO the library (appended to main.c where the
+    # ARC runtime + class internals are in scope). These are the stable ABI the C++ header
+    # binds to, so the header itself never includes tauraro_rt.h.
+    pub def generate_cpp_class_bridges(self, prog: HirProgram) -> str:
+        self.collect_export_classes(prog)
+        mut b = StringBuilder.init(2048)
+        b.append("\n/* --export-cpp: stable extern-\"C\" bridges over the ARC runtime (for the C++ header). */\n")
+        b.append("#ifdef __cplusplus\nextern \"C\" {\n#endif\n")
+        mut ci = 0
+        if not _is_invalid_ptr(prog as usize) and not _is_invalid_ptr(prog.classes as usize):
+            while ci < prog.classes.len:
+                mut c = prog.classes.get(ci)
+                ci = ci + 1
+                if _is_invalid_ptr(c as usize): continue
+                if not self.cls_set.contains(c.name): continue
+                mut C = c.name
+                b.append("TR_EXPORT void* tr__" + C + "_retain(void* p){ return _tr_obj_retain(p); }\n")
+                b.append("TR_EXPORT void tr__" + C + "_release(void* p){ _tr_obj_release(p, _trdrop_" + C + "); }\n")
+                mut iidx = self._cpp_init_idx(c)
+                if iidx >= 0:
+                    mut im = c.methods.get(iidx)
+                    b.append("TR_EXPORT void* tr__" + C + "_new(")
+                    mut ip = 0
+                    mut ie = 0
+                    mut iargs = ""
+                    while ip < im.params.len:
+                        mut p = im.params.get(ip)
+                        ip = ip + 1
+                        if p.name == "self": continue
+                        if ie > 0:
+                            b.append(", ")
+                            iargs = iargs + ", "
+                        b.append(self._cpp_c_ty(p.ty) + " " + p.name)
+                        iargs = iargs + p.name
+                        ie = ie + 1
+                    b.append("){ return (void*)" + C + "_init(" + iargs + "); }\n")
+                mut mi = 0
+                while mi < c.methods.len:
+                    mut m = c.methods.get(mi)
+                    mi = mi + 1
+                    if _is_invalid_ptr(m as usize): continue
+                    if m.name == "init" or m.name.starts_with("__"): continue
+                    if not self._cpp_method_ok(m): continue
+                    b.append("TR_EXPORT " + self._cpp_c_ty(m.ret_ty) + " tr__" + C + "_" + m.name + "(void* s")
+                    mut margs = "(" + C + "*)s"
+                    mut pj = 0
+                    while pj < m.params.len:
+                        mut mp = m.params.get(pj)
+                        pj = pj + 1
+                        if mp.name == "self": continue
+                        b.append(", " + self._cpp_c_ty(mp.ty) + " " + mp.name)
+                        margs = margs + ", " + self._cpp_c_arg(mp.ty, mp.name)
+                    b.append("){ ")
+                    if self._cpp_ty_kind(m.ret_ty) == "void":
+                        b.append(C + "_" + m.name + "(" + margs + "); }\n")
+                    else:
+                        b.append("return " + C + "_" + m.name + "(" + margs + "); }\n")
+        # bridges for class-touching free functions (void* handles across the ABI)
+        mut fi = 0
+        if not _is_invalid_ptr(prog as usize) and not _is_invalid_ptr(prog.functions as usize):
+            while fi < prog.functions.len:
+                mut f = prog.functions.get(fi)
+                fi = fi + 1
+                if _is_invalid_ptr(f as usize): continue
+                if not (f.is_export and not f.is_extern): continue
+                if not self._cpp_export_fn_ok(f) or not self._cpp_fn_needs_bridge(f): continue
+                b.append("TR_EXPORT " + self._cpp_c_ty(f.ret_ty) + " tr__" + f.name + "(")
+                mut fargs = ""
+                mut pi2 = 0
+                while pi2 < f.params.len:
+                    mut p = f.params.get(pi2)
+                    mut pn = p.name
+                    if pn == "": pn = "a" + pi2.to_str()
+                    if pi2 > 0:
+                        b.append(", ")
+                        fargs = fargs + ", "
+                    b.append(self._cpp_c_ty(p.ty) + " " + pn)
+                    fargs = fargs + self._cpp_c_arg(p.ty, pn)
+                    pi2 = pi2 + 1
+                b.append("){ ")
+                mut frk = self._cpp_ty_kind(f.ret_ty)
+                if frk == "void":
+                    b.append(f.name + "(" + fargs + "); }\n")
+                elif frk == "class" or frk == "list" or frk == "dict":
+                    b.append("return (void*)" + f.name + "(" + fargs + "); }\n")
+                else:
+                    b.append("return " + f.name + "(" + fargs + "); }\n")   # scalar/str/tuple return by value
+        b.append(self._cpp_list_bridges())
+        b.append("#ifdef __cplusplus\n}\n#endif\n")
+        return b.to_string().as_str()
+
+    # Per-element-type List bridges (deduped by C-ABI suffix): a stable void*-over-`List_<sfx>`
+    # ABI (len/get/new/push/free) the C++ std::vector marshalling binds to.
+    def _cpp_list_bridges(self) -> str:
+        mut b = StringBuilder.init(512)
+        mut keys = self.list_elems.keys()
+        mut i = 0
+        while i < keys.len:
+            mut sfx = keys.get(i)
+            i = i + 1
+            mut ec = self.list_elems.get(sfx)          # element C type (long long / double / TrStr / bool)
+            mut L = "List_" + sfx
+            b.append("TR_EXPORT long long tr__list_" + sfx + "_len(void* l){ return (long long)((" + L + "*)l)->len; }\n")
+            b.append("TR_EXPORT " + ec + " tr__list_" + sfx + "_get(void* l, long long i){ return " + L + "_get((" + L + "*)l, i); }\n")
+            b.append("TR_EXPORT void* tr__list_" + sfx + "_new(void){ return (void*)" + L + "_new(); }\n")
+            b.append("TR_EXPORT void tr__list_" + sfx + "_push(void* l, " + ec + " v){ " + L + "_append((" + L + "*)l, v); }\n")
+            b.append("TR_EXPORT void tr__list_" + sfx + "_free(void* l){ " + L + "_free((" + L + "*)l); }\n")
+        # Dict bridges per variant "<kk>_<vk>": str keys (kk=s -> TrMap) or int keys (kk=i -> TrIDict),
+        # value kind i64/f64/str. `_tr_dict_set`/`_tr_idict_set` are macros that pun the value into void*.
+        mut dk = self.dict_variants.keys()
+        mut di = 0
+        while di < dk.len:
+            mut V = dk.get(di)
+            di = di + 1
+            mut kk = V.slice(0, 1)
+            mut vk = V.slice(2, V.len())
+            mut kc = "long long"
+            mut newfn = "_tr_idict_new(8)"
+            mut keysfn = "_tr_idict_keys((TrIDict*)d)"
+            mut getraw = "_tr_idict_get((TrIDict*)d, k)"
+            mut setpre = "_tr_idict_set((TrIDict*)d, k, "
+            if kk == "s":
+                kc = "TrStr"
+                newfn = "_tr_dict_new(8)"
+                keysfn = "_tr_dict_keys((TrMap*)d)"
+                getraw = "_tr_dict_get((TrMap*)d, _tr_strz(k))"
+                setpre = "_tr_dict_set((TrMap*)d, _tr_strz(k), "
+            b.append("TR_EXPORT void* tr__dict_" + V + "_new(void){ return (void*)" + newfn + "; }\n")
+            b.append("TR_EXPORT void* tr__dict_" + V + "_keys(void* d){ return (void*)" + keysfn + "; }\n")
+            mut vc = "long long"
+            mut getval = "(long long)(uintptr_t)" + getraw
+            mut setval = setpre + "v)"
+            if vk == "f64":
+                vc = "double"
+                getval = "_tr_ptr_to_f64(" + getraw + ")"
+                setval = setpre + "_tr_f64_to_ptr(v))"
+            elif vk == "str":
+                vc = "TrStr"
+                getval = "_tr_str_unbox(" + getraw + ")"
+                setval = setpre + "_tr_str_box(v))"
+            b.append("TR_EXPORT " + vc + " tr__dict_" + V + "_get(void* d, " + kc + " k){ return " + getval + "; }\n")
+            b.append("TR_EXPORT void tr__dict_" + V + "_set(void* d, " + kc + " k, " + vc + " v){ " + setval + "; }\n")
+            mut freefn = "Dict_free((Dict*)d)"
+            if kk == "s" and vk == "str": freefn = "Dict_free_strval((Dict*)d)"
+            elif kk == "i" and vk == "str": freefn = "_tr_idict_free_strval((TrIDict*)d)"
+            elif kk == "i": freefn = "_tr_idict_free((TrIDict*)d)"
+            b.append("TR_EXPORT void tr__dict_" + V + "_free(void* d){ " + freefn + "; }\n")
+        # List[Class] bridges: elements are class pointers in a List_ptr (void** data). `_free_shallow`
+        # frees the list structure only — each element's ref moves into a C++ RAII wrapper.
+        if self.needs_list_ptr:
+            b.append("TR_EXPORT long long tr__list_ptr_len(void* l){ return (long long)((List_ptr*)l)->len; }\n")
+            b.append("TR_EXPORT void* tr__list_ptr_get(void* l, long long i){ return List_ptr_get((List_ptr*)l, i); }\n")
+            b.append("TR_EXPORT void tr__list_ptr_free_shallow(void* l){ List_ptr_free((List_ptr*)l); }\n")
+        # Tuple slot box/unbox: str slots are boxed pointers, float slots are f64-bit-punned; int/bool
+        # slots are read/written directly as long long.
+        if self.needs_tuple:
+            b.append("TR_EXPORT long long tr__box_str(TrStr s){ return (long long)(uintptr_t)_tr_str_box(s); }\n")
+            b.append("TR_EXPORT TrStr tr__unbox_str(long long p){ return _tr_str_unbox((void*)(uintptr_t)p); }\n")
+            b.append("TR_EXPORT long long tr__box_f64(double d){ return (long long)(uintptr_t)_tr_f64_to_ptr(d); }\n")
+            b.append("TR_EXPORT double tr__unbox_f64(long long p){ return _tr_ptr_to_f64((void*)(uintptr_t)p); }\n")
+        return b.to_string().as_str()
+
+    # `tauraroc --export-cpp`: a self-contained C++ header that lets C++ CALL Tauraro. Free
+    # `export def`s become ergonomic inline wrappers in `namespace <ns>` (std::string <-> str,
+    # scalars pass through) and exported classes become RAII wrappers over an opaque handle
+    # (ARC -> C++ value semantics). The reverse direction of bindgen: Tauraro emits C, so the
+    # C ABI is already the bridge — no IDL/bridge module (simpler than Rust cxx / Swift interop).
+    pub def generate_export_cpp_header(self, prog: HirProgram, ns: str) -> str:
+        self.collect_export_classes(prog)
+        mut sb = StringBuilder.init(4096)
+        sb.append("/* Generated by `tauraroc --export-cpp`. Call Tauraro from C++: include this,\n")
+        sb.append("   link the Tauraro library, and use the `" + ns + "::` wrappers. */\n")
+        sb.append("#ifndef TAURARO_CPP_EXPORTS_H\n#define TAURARO_CPP_EXPORTS_H\n\n")
+        sb.append("#include <string>\n#include <cstdint>\n")
+        if self.list_elems.keys().len > 0: sb.append("#include <vector>\n")
+        if self.dict_variants.keys().len > 0: sb.append("#include <map>\n")
+        if self.needs_tuple: sb.append("#include <tuple>\n")
+        sb.append("\n")
+        # Raw C ABI. TrStr is Tauraro's borrowed/owned string view (data + optional rc);
+        # declared here so the header needs nothing from the Tauraro runtime.
+        sb.append("extern \"C\" {\n")
+        sb.append("typedef struct { char* data; long* rc; } TrStr;\n")
+        if self.needs_tuple: sb.append("typedef struct { long long data[8]; } TrTuple;\n")
+        # per-List-element bridge prototypes
+        mut lk = self.list_elems.keys()
+        mut li = 0
+        while li < lk.len:
+            mut sfx = lk.get(li)
+            li = li + 1
+            mut ec = self.list_elems.get(sfx)
+            sb.append("long long tr__list_" + sfx + "_len(void*); " + ec + " tr__list_" + sfx + "_get(void*, long long); void* tr__list_" + sfx + "_new(void); void tr__list_" + sfx + "_push(void*, " + ec + "); void tr__list_" + sfx + "_free(void*);\n")
+        # Dict bridge prototypes, per variant "<kk>_<vk>" (kk=s: TrStr key; kk=i: long long key).
+        mut dkk = self.dict_variants.keys()
+        mut dii = 0
+        while dii < dkk.len:
+            mut V = dkk.get(dii)
+            dii = dii + 1
+            mut vc = self.dict_variants.get(V)              # value C type (long long / double / TrStr)
+            mut kc = "long long"
+            if V.slice(0, 1) == "s": kc = "TrStr"
+            sb.append("void* tr__dict_" + V + "_new(void); void* tr__dict_" + V + "_keys(void*); " + vc + " tr__dict_" + V + "_get(void*, " + kc + "); void tr__dict_" + V + "_set(void*, " + kc + ", " + vc + "); void tr__dict_" + V + "_free(void*);\n")
+        # List[Class] bridge prototypes
+        if self.needs_list_ptr:
+            sb.append("long long tr__list_ptr_len(void*); void* tr__list_ptr_get(void*, long long); void tr__list_ptr_free_shallow(void*);\n")
+        # Tuple bridge prototypes
+        if self.needs_tuple:
+            sb.append("long long tr__box_str(TrStr); TrStr tr__unbox_str(long long); long long tr__box_f64(double); double tr__unbox_f64(long long);\n")
+        # per-class retain/release/new/method bridge prototypes
+        mut ci = 0
+        if not _is_invalid_ptr(prog as usize) and not _is_invalid_ptr(prog.classes as usize):
+            while ci < prog.classes.len:
+                mut c = prog.classes.get(ci)
+                ci = ci + 1
+                if _is_invalid_ptr(c as usize): continue
+                if not self.cls_set.contains(c.name): continue
+                sb.append(self._cpp_class_bridge_protos(c))
+        # free-function prototypes: raw symbol for pure fns, tr__ bridge for class-touching fns
+        mut i = 0
+        if not _is_invalid_ptr(prog as usize) and not _is_invalid_ptr(prog.functions as usize):
+            while i < prog.functions.len:
+                mut f = prog.functions.get(i)
+                if not _is_invalid_ptr(f as usize):
+                    if f.is_export and not f.is_extern and self._cpp_export_fn_ok(f):
+                        if self._cpp_fn_needs_bridge(f):
+                            sb.append(self._cpp_free_fn_bridge_proto(f))
+                        else:
+                            mut sig = self.gen.gen_func_sig(f, "")
+                            if sig.starts_with("TR_EXPORT "): sig = sig.slice(10, sig.len())
+                            sb.append(sig + ";\n")
+                i = i + 1
+        sb.append("}\n\n")
+        # Ergonomic C++ layer: classes first (free fns may return them), then free functions.
+        sb.append("namespace " + ns + " {\n")
+        ci = 0
+        if not _is_invalid_ptr(prog as usize) and not _is_invalid_ptr(prog.classes as usize):
+            while ci < prog.classes.len:
+                mut c = prog.classes.get(ci)
+                ci = ci + 1
+                if _is_invalid_ptr(c as usize): continue
+                if not self.cls_set.contains(c.name): continue
+                sb.append(self._cpp_class_decl(c))
+        i = 0
+        if not _is_invalid_ptr(prog as usize) and not _is_invalid_ptr(prog.functions as usize):
+            while i < prog.functions.len:
+                mut f = prog.functions.get(i)
+                if not _is_invalid_ptr(f as usize):
+                    if f.is_export and not f.is_extern and self._cpp_export_fn_ok(f):
+                        sb.append(self._cpp_wrap_fn(f))
+                i = i + 1
+        sb.append("}  // namespace " + ns + "\n\n#endif\n")
+        return sb.to_string().as_str()
+
+    # extern-"C" prototypes for a class's bridge functions (mirrors generate_cpp_class_bridges).
+    def _cpp_class_bridge_protos(self, c: HirClass) -> str:
+        mut C = c.name
+        mut b = StringBuilder.init(256)
+        b.append("void* tr__" + C + "_retain(void*); void tr__" + C + "_release(void*);\n")
+        mut iidx = self._cpp_init_idx(c)
+        if iidx >= 0:
+            mut im = c.methods.get(iidx)
+            b.append("void* tr__" + C + "_new(")
+            mut ip = 0
+            mut ie = 0
+            while ip < im.params.len:
+                mut p = im.params.get(ip)
+                ip = ip + 1
+                if p.name == "self": continue
+                if ie > 0: b.append(", ")
+                b.append(self._cpp_c_ty(p.ty))
+                ie = ie + 1
+            if ie == 0: b.append("void")
+            b.append(");\n")
+        mut mi = 0
+        while mi < c.methods.len:
+            mut m = c.methods.get(mi)
+            mi = mi + 1
+            if _is_invalid_ptr(m as usize): continue
+            if m.name == "init" or m.name.starts_with("__"): continue
+            if not self._cpp_method_ok(m): continue
+            b.append(self._cpp_c_ty(m.ret_ty) + " tr__" + C + "_" + m.name + "(void*")
+            mut pj = 0
+            while pj < m.params.len:
+                mut mp = m.params.get(pj)
+                pj = pj + 1
+                if mp.name == "self": continue
+                b.append(", " + self._cpp_c_ty(mp.ty))
+            b.append(");\n")
+        return b.to_string().as_str()
+
+    def _cpp_free_fn_bridge_proto(self, f: HirFunction) -> str:
+        mut b = StringBuilder.init(128)
+        b.append(self._cpp_c_ty(f.ret_ty) + " tr__" + f.name + "(")
+        mut pi = 0
+        mut e = 0
+        while pi < f.params.len:
+            if e > 0: b.append(", ")
+            b.append(self._cpp_c_ty(f.params.get(pi).ty))
+            e = e + 1
+            pi = pi + 1
+        if e == 0: b.append("void")
+        b.append(");\n")
+        return b.to_string().as_str()
+
