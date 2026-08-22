@@ -3918,6 +3918,7 @@ __attribute__((hot)) long long _cpp_fatal_count(TrStr diag);
 __attribute__((hot)) void _cpp_print_diag(TrStr diag);
 __attribute__((hot)) bool _cpp_ir_is_empty(TrStr ir);
 __attribute__((hot)) void _cpp_cleanup();
+__attribute__((hot)) bool _is_expr_proxy_spec(TrStr s);
 __attribute__((hot)) List_TrStr* _collect_specs(TrStr ir);
 __attribute__((hot)) void run_bindgen_cpp(TrStr header, TrStr out, TrStr cc, TrStr extra, TrStr pkglibs);
 __attribute__((hot)) TrStr _c_dot_to_safe(TrStr s);

@@ -9,12 +9,12 @@ methods in the generated `.tr`.
 | | |
 |---|---|
 | **Libraries tested** | 70 |
-| **PASS** (header binds; C++ shim compiles) | **69** |
-| **PARTIAL** (binds, some shim errors) | 1 |
+| **PASS** (header binds; C++ shim compiles) | **70** |
+| **PARTIAL** (binds, some shim errors) | 0 |
 | **FAIL** (nothing binds) | 0 |
-| **Total wrappers bound** | **37,097** |
+| **Total wrappers bound** | **37,068** |
 
-By path: **46 C libraries**, **11 standard C headers**, **12 C++ libraries** (wxWidgets), **1 C++ PARTIAL** (gmpxx).
+By path: **46 C libraries**, **11 standard C headers**, **13 C++ libraries** (wxWidgets + gmpxx). **Every tested header now binds and, for C++, compiles its shim clean** — including GMP's `__gmp_expr` expression templates (see Notes), the case where every other C-shim binder stops.
 
 ## C libraries
 
@@ -87,7 +87,7 @@ By path: **46 C libraries**, **11 standard C headers**, **12 C++ libraries** (wx
 
 | Library / header | Wrappers | Shim compiles | Status |
 |---|--:|:-:|---|
-| gmpxx | 1100 | no | PARTIAL:20 |
+| gmpxx | 1071 | yes | PASS |
 | wx/frame | 611 | yes | PASS |
 | wx/button | 536 | yes | PASS |
 | wx/slider | 524 | yes | PASS |
@@ -103,9 +103,22 @@ By path: **46 C libraries**, **11 standard C headers**, **12 C++ libraries** (wx
 
 ## Notes
 
-- **gmpxx** (the one PARTIAL) fails only on GMP's `__gmp_expr` **expression templates** — lazy CRTP
-  proxy types that, by design, cannot cross a C ABI. Every C-shim binder (SWIG, cxx) hits the same
-  wall; the non-expression parts of gmpxx (1,100 wrappers) still bind.
+- **gmpxx — SOLVED** (was the one PARTIAL). GMP's `__gmp_expr` **expression templates** are lazy CRTP
+  proxy types — the canonical "C++ that can't cross a C ABI" where SWIG and cxx both stop. Two root
+  causes were fixed in the libclang walker + generator:
+  1. libclang surfaces GMP's template *instantiations* (`__gmp_expr<mpz_t,mpz_t>` = `mpz_class`, etc.)
+     as plain `ClassDecl` cursors with the **bare** spelling `__gmp_expr` (no `<args>`). The walker now
+     detects a specialization (`clang_getSpecializedCursorTemplate`) and emits it as a `TCLASS` with its
+     **full type spelling**, so the shim uses the valid `__gmp_expr<mpz_t, mpz_t>` type, not the bare name.
+  2. Expression-template **proxy** results (`__gmp_expr<T, __gmp_unary_expr<…>>`) are never user-
+     constructible; force-instantiating them yields uncompilable `_new` constructors. The generator now
+     skips force-instantiating *non-std nested-template* specializations (the structural signature of a
+     proxy), while methods that return one still get a working copy-ctor wrapper.
+
+  Result: the gmpxx shim compiles **clean (20 → 0 errors)**, 56 classes / 1,071 wrappers. Validated
+  end-to-end: `mpz_class` construction, `get_si(42)=42`, and a real arbitrary-precision bignum round-trip
+  `123456789012345678901234567890` all cross the C ABI at runtime. No regression to normal or nested
+  `std::` template instantiation (`Box<int>`, `std::vector<std::pair<int,int>>` unaffected).
 - Pointing bindgen at the right *public* header matters: `libtiff` binds via `tiffio.h` (201), not
   the internal `tiff.h`; `freetype` via `freetype/freetype.h`, not the `ft2build.h` macro shim.
 - All bindings used `--pkg <name>` (pkg-config) for include/link flags where available.
