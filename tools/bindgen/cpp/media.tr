@@ -1,0 +1,55 @@
+# Auto-generated C++ FFI bindings for media.hpp (tauraro-bindgen -h cpp).
+# Build the shim once, then link it (and the C++ library) with your program:
+#   c++ -c media_shim.cpp -o media_shim.o
+#   tauraroc yourapp.tr --link media_shim.o -lstdc++ -o app
+
+class Buffer:
+    pass
+class Stats:
+    pass
+class Encoder:
+    pass
+class FastEncoder:
+    pass
+
+type Codec = c_int
+const H264 = 0
+const H265 = 1
+const AV1 = 2
+type Flags = c_uint
+const FLAG_NONE = 0
+const FLAG_FAST = 1
+const FLAG_HQ = 2
+
+extern "C":
+    def media_Buffer_new() -> Buffer
+    def media_Buffer_new_2(capacity: c_int) -> Buffer
+    def media_Buffer_delete(obj: Buffer)
+    def media_Buffer_size(obj: Buffer) -> c_int
+    def media_Buffer_append(obj: Buffer, byte: c_int)
+    def media_Buffer_appendAll(obj: Buffer, data: Pointer[c_int], n: c_int)
+    def media_Buffer_at(obj: Buffer, i: c_int) -> c_int
+    def media_Buffer_withCapacity(cap: c_int) -> Buffer
+    def media_Buffer_clone(obj: Buffer) -> Buffer
+    def media_encode(b: Buffer, c: Codec) -> c_int
+    def media_encode_2(b: Buffer, c: Codec, quality: c_int) -> c_int
+    def media_Encoder_new(c: Codec) -> Encoder
+    def media_Encoder_new_2(c: Codec, threads: c_int) -> Encoder
+    def media_Encoder_delete(obj: Encoder)
+    def media_Encoder_process(obj: Encoder, in_: Buffer, out: Buffer) -> c_int
+    def media_Encoder_setFlag(obj: Encoder, f: Flags)
+    def media_Encoder_name(obj: Encoder) -> Pointer[char]
+    def media_Encoder_setName(obj: Encoder, n: Pointer[char])
+    def media_Encoder_ratio(obj: Encoder) -> c_double
+    def media_Encoder_stats(obj: Encoder) -> Stats
+    def media_Encoder_Stats_new() -> Stats
+    def media_Encoder_Stats_frames(obj: Stats) -> c_long
+    def media_FastEncoder_new() -> FastEncoder
+    def media_FastEncoder_process(obj: FastEncoder, in_: Buffer, out: Buffer) -> c_int
+    def media_FastEncoder_turbo(obj: FastEncoder) -> c_int
+    def media_FastEncoder_setFlag(obj: FastEncoder, f: Flags)
+    def media_FastEncoder_name(obj: FastEncoder) -> Pointer[char]
+    def media_FastEncoder_setName(obj: FastEncoder, n: Pointer[char])
+    def media_FastEncoder_ratio(obj: FastEncoder) -> c_double
+    def media_FastEncoder_stats(obj: FastEncoder) -> Stats
+    def media_distance(a: c_double, b: c_double) -> c_double

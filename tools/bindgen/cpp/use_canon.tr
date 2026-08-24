@@ -1,0 +1,9 @@
+# Canonical-resolution: POD struct by value, std::string as native string, typedef'd long, enum.
+from canon import media_Buffer_new, media_Buffer_bounds, media_Buffer_name, media_process
+def main():
+    mut b = media_Buffer_new(8)
+    mut r = media_Buffer_bounds(b)                  # @value_type struct, direct field access
+    print("bounds.w = " + r.w.to_str())
+    print("name     = " + (media_Buffer_name(b) as str))   # std::string -> str
+    print("process  = " + media_process(b, H265).to_str()) # HRESULT(long) + enum by value
+    print("ok")

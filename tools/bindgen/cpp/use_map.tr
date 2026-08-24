@@ -1,0 +1,10 @@
+# std::map<int,double> bound automatically (forced instantiation): at()/size()/empty().
+from mapdemo import db_prices, std__map_int__double__at, std__map_int__double__size, std__map_int__double__empty
+def main():
+    mut m = db_prices()
+    print("size     = " + std__map_int__double__size(m).to_str())
+    mut v = std__map_int__double__at(m, 2)                 # at(key) — key by value, returns Pointer[c_double]
+    unsafe:
+        print("price[2] = " + v.read().to_str())
+    print("empty    = " + std__map_int__double__empty(m).to_str())
+    print("ok")

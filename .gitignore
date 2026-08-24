@@ -5,6 +5,7 @@
 *.py
 *.c
 *.log
+*.i
 
 # Generated build directories (tauraroc output, cargo, etc.)
 build/

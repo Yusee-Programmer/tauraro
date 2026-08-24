@@ -12,6 +12,7 @@ extern "C":
     def _tr_c_fseek(fp: Pointer[char], offset: int, whence: int) -> int
     def _tr_c_ftell(fp: Pointer[char]) -> int
     def _tr_c_malloc(size: int) -> Pointer[char]
+    def _tr_str_wrap(s: Pointer[char]) -> str
 
 # ─── BufReader ────────────────────────────────────────────────────────────────
 
@@ -48,7 +49,7 @@ extend BufReader:
         _tr_c_fread(buf, 1, size, self._fp)
         unsafe:
             buf.offset(size).write('\0')
-        return buf as str
+        return _tr_str_wrap(buf)
 
     # Read all lines split on "\n".
     pub def readlines(self) -> Vec[str]:

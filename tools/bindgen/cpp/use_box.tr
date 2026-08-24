@@ -1,0 +1,10 @@
+from box import Box_int__new, Box_int__get, Box_int__set, Box_int__tag, app_makeBox
+def main():
+    mut b = Box_int__new(42)                 # template ctor Box<int>(42)
+    print("get      = " + Box_int__get(b).to_str())      # 42
+    Box_int__set(b, 99)
+    print("after set= " + Box_int__get(b).to_str())      # 99
+    print("tag      = " + Box_int__tag(b).to_str())       # 7
+    mut m = app_makeBox(5)                    # returns Box<int>(50)
+    print("makeBox  = " + Box_int__get(m).to_str())       # 50
+    print("ok")

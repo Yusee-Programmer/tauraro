@@ -1,0 +1,10 @@
+from widgets import Widget_new, Widget_sum
+def main():
+    mut w = Widget_new()
+    mut arr: [c_int; 4]
+    arr[0] = 10
+    arr[1] = 20
+    arr[2] = 30
+    arr[3] = 40
+    print("sum = " + Widget_sum(w, arr.as_ptr(), 4).to_str())   # 100
+    print("ok")

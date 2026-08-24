@@ -12,7 +12,9 @@ Tauraro compiles to C, which means the entire C library ecosystem is directly ac
 - Operating system APIs (Win32, POSIX, ...)
 - Any native library with a C interface
 
-**Generating bindings automatically.** You don't have to hand-write `extern "C"` declarations for
+**Generating bindings automatically.** *For a full guide with best practices, `--pkg` auto-discovery,
+the C++ type-mapping table, and troubleshooting, see **[Chapter 24 — Bindgen](24_bindgen.md)**.*
+You don't have to hand-write `extern "C"` declarations for
 a whole library — `tauraroc bindgen <header.h> -o <out.tr>` reads a C header and generates the
 Tauraro bindings (functions, `@value_type` structs, enums, typedefs, and constants). It filters out
 `#include`d system headers, maps C types to the `c_*` family, handles struct-by-value and function
@@ -23,13 +25,47 @@ type names that clash with Win32 like `Rectangle`). Then just `from <out> import
 **Binding C++ headers.** Add `-h cpp` (default is C): `tauraroc bindgen <header.hpp> -o <out.tr> -h
 cpp`. Because C++ has no stable C-callable ABI (name mangling, `this`, vtables, RAII), the bindgen
 **auto-generates a C++→C shim** (`<out>_shim.cpp`) alongside the `.tr` — covering classes, methods,
-constructors/destructors, static methods, free functions, enums, and namespaces. Compile the shim
-once (`c++ -c <out>_shim.cpp`) and link it (`--link <out>_shim.o -lstdc++`). Opaque C++ objects cross
+constructors/destructors, static methods, free functions, enums, and namespaces. Opaque C++ objects cross
 as an opaque Tauraro class handle (e.g. `geo::Shape*` ↔ `Shape`); construct with `<pfx>_new(...)`,
 call `<pfx>_method(obj, ...)`, and free with `<pfx>_delete(obj)`. This mode uses **libclang**, which
 is needed *only* for `-h cpp` (C headers never use it); if it is not installed the tool prints
-per-platform install guidance. See `tools/bindgen/cpp/` for the design and a full `shapes.hpp`
-end-to-end example.
+per-platform install guidance. For a library that needs its own headers/macros, forward them —
+`tauraroc bindgen wx/wx.h -h cpp -I<dir> -D<MACRO>` (the tool also auto-discovers the compiler's own
+C++ include paths, and reports libclang's diagnostics with a fix hint instead of silently binding
+nothing). See `tools/bindgen/cpp/` for the design and a full `shapes.hpp` end-to-end example.
+`std::string_view` parameters and returns are marshalled to/from a native `str`, just like `std::string`.
+
+**Callbacks — `std::function<R(Args)>` parameters** accept a plain Tauraro function: bind the param as
+`Pointer[void]` and pass a top-level `def` with `myfn as Pointer[void]`. The shim casts it to the
+matching function pointer, which C++ constructs the `std::function` from:
+
+```python
+def dbl(x: int) -> int: return x * 2
+g_apply_fn(dbl as Pointer[void], 20)     # C++ calls back into dbl -> 41
+```
+
+**Auto-discover a library's flags with `--pkg`.** Instead of hand-passing `-I`/`-D`/`-l`, add
+`--pkg <name>` and the bindgen queries **pkg-config** for the library's compile flags (used to parse
+the header) and link flags (recorded in the binding so `tauraroc` auto-links them). The whole workflow
+becomes:
+
+```sh
+tauraroc bindgen /usr/include/zlib.h -o zlib.tr --pkg zlib   # discovers -I… and -lz
+tauraroc app.tr -o app                                       # from zlib import … — auto-links zlib
+```
+
+No `--link`, no `-lz`. Verified end-to-end: a program computing `crc32("hello")` via the auto-bound,
+auto-linked zlib runs correctly. `--pkg` works on both the C and C++ (`-h cpp`) paths.
+
+**Zero-cost, zero-build-step linking.** You don't compile or link the shim by hand. The generated
+binding records the shim in machine-readable header pragmas (`# tauraro-cpp-shim:` / `-cflags:` /
+`-lib:`), and when you `import` the module `tauraroc` **auto-compiles the shim and links it (plus
+`-lstdc++`) for you** — just build your program. On a gcc / `zig cc` toolchain the whole program is
+built with `-flto`, so the `extern "C"` wrapper is **inlined away at link time**: a call into C++
+costs exactly what the C++ method costs, with no shim indirection (unlike a hand-linked `.o`). You
+still link the C++ *library* itself (`--link foo.o` or `-lfoo`) — only the generated shim is
+automatic. Opt out with `--no-auto-cpp` (then link `<out>_shim.o -lstdc++` manually). On a bare
+`clang` host without lld the shim is still auto-linked; only the LTO inlining is skipped.
 
 **C type mapping:**
 
@@ -48,6 +84,12 @@ end-to-end example.
 | `Pointer[void]` | `void*` |
 | `lambda` | Function pointer |
 
+**C string returns are safe by default.** A C function returning `const char*` (a string the library
+still owns — `zlibVersion()`, `sqlite3_errmsg()`, `getenv()`, …) binds as `-> Pointer[char]`; converting
+it with `ptr as str` produces a **borrowed** view (never freed), so it can't double-free the library's
+string. If you own a freshly-allocated buffer and want it freed together with the string, adopt it
+explicitly with `_tr_str_wrap(ptr)` instead of `as str`.
+
 **ABI-exact scalars (`c_*`).** `int`/`i64` are *fixed-width*; C's `int`/`long` are
 platform-dependent. When a header uses `int`/`long`/`size_t`, bind them with the `c_*` family
 so the width always matches the C ABI:
@@ -62,6 +104,7 @@ so the width always matches the C ABI:
 | `c_int` | `int` | | `c_ssize_t` | `ssize_t` |
 | `c_float`/`c_double`/`c_ldouble` | `float`/`double`/`long double` | | `c_int32_t` … `c_uint64_t` | fixed-width `<stdint.h>` |
 | `c_void` | `void` | | `c_void_ptr` / `RawPtr` | `void*` |
+| `c_wchar` | `wchar_t` | | `c_char16` / `c_char32` | `char16_t` / `char32_t` |
 
 ---
 
@@ -301,11 +344,86 @@ pub export def greet(name: str) -> void:
 
 `export` suppresses name mangling — the symbol appears in the object file exactly as written. `export` implies `pub`.
 
-The corresponding C header you would ship to callers:
-```c
-int64_t add(int64_t a, int64_t b);
-void    greet(const char* name);
+Build a linkable library plus a C header for callers with `--lib`:
+```sh
+tauraroc mylib.tr --lib -o mylib      # -> mylib.dll/.so + mylib.h
 ```
+
+### Calling from C++ (`--export-cpp`)
+
+Add `--export-cpp` (it implies `--lib`) to also emit an **ergonomic, self-contained C++ header** —
+this is the mirror image of `bindgen` (which lets Tauraro call C++). Because Tauraro compiles to C,
+the C ABI *is* the bridge, so no IDL or bridge module is needed (simpler than Rust `cxx` or Swift
+interop):
+
+```sh
+tauraroc mathlib.tr --export-cpp -o mathlib   # -> mathlib.dll/.so + mathlib.h + mathlib.hpp
+```
+
+```cpp
+#include "mathlib.hpp"          // self-contained: no Tauraro runtime header needed
+#include <iostream>
+int main() {
+    std::cout << mathlib::add(3, 4) << "\n";        // 7   (scalars pass straight through)
+    std::cout << mathlib::greet("world") << "\n";   // "hello, world!"  (std::string <-> str)
+}
+```
+```sh
+g++ app.cpp mathlib.dll -o app        # link the Tauraro library like any other
+```
+
+Each `export def` appears as an inline wrapper in `namespace <libname>` that maps `str` to/from
+`std::string` and passes scalars through.
+
+**Tauraro classes become C++ RAII wrappers.** A class reachable through the exported API (returned or
+taken by an `export def`) is exposed as a C++ class over an opaque handle, with **Tauraro's ARC mapped
+to C++ value semantics** — copy retains, destruction releases, move steals. Its static factory
+`def init(...) -> C` becomes a C++ constructor, and its instance methods forward through the handle:
+
+```python
+class Counter:
+    mut n: int
+    def init(start: int) -> Counter:      # static factory = the C++ constructor
+        mut c = Counter(); c.n = start; return c
+    def bump(self, by: int) -> int:
+        self.n = self.n + by; return self.n
+
+export def make_counter(start: int) -> Counter:
+    return Counter.init(start)
+```
+```cpp
+#include "counter.hpp"
+counter::Counter c(10);              // direct construction (calls Counter.init)
+c.bump(5);                           // -> 15   (method forwards through the handle)
+counter::Counter c2 = c;             // copy => ARC retain; both released automatically
+auto f = counter::make_counter(100); // factory returning a Counter, owned by the C++ value
+```
+
+**Collections marshal to the C++ standard library:**
+
+| Tauraro | C++ |
+|---|---|
+| `List[T]` / `Vec[T]` — element is a scalar, `str`, **or a class** | `std::vector<T>` (a `List[Class]` becomes `std::vector<Class-wrapper>`, return-only) |
+| `Dict[K, V]` / `Map[K, V]` — key `str` or int; value int / `bool` / `float` / `str` | `std::map<K, V>` |
+| `(T0, T1, …)` tuple — int / `bool` / `float` / `str` slots | `std::tuple<…>` |
+
+These work as parameters and returns — the wrapper builds the Tauraro collection from the C++ container
+(and frees it) on the way in, and materialises the result into the C++ container on the way out:
+
+```cpp
+std::vector<long long> v = mylib::nums();          // List[int]  -> std::vector
+std::map<std::string,long long> m = mylib::scores(); // Dict[str,int] -> std::map
+auto [code, msg] = mylib::status();                // (int, str) -> std::tuple, structured binding
+long long s = mylib::total({1, 2, 3});             // std::vector -> List[int] param
+```
+
+The header is **self-contained** — it declares only a stable `extern "C"` bridge ABI (retain/release/
+construct/method for classes; len/get/new/push/free for collections; box/unbox for boxed tuple/dict
+slots), all generated *into* the library where the runtime lives, so it never `#include`s
+`tauraro_rt.h`. Signatures using a not-yet-bridged type (**nested** collections like `List[List[int]]`
+or `Dict[str, List[int]]`, a `List[Class]` **parameter** — return-only for now — or `throws`) are
+omitted from the C++ view (still reachable through the raw C `--lib` header), so the `.hpp` always
+compiles standalone.
 
 ### Common Mistakes
 

@@ -1,0 +1,28 @@
+# Auto-generated C++ FFI bindings for mapdemo.hpp (tauraro-bindgen -h cpp).
+# Build the shim once, then link it (and the C++ library) with your program:
+#   c++ -c mapdemo_shim.cpp -o mapdemo_shim.o
+#   tauraroc yourapp.tr --link mapdemo_shim.o -lstdc++ -o app
+
+class std__map_int__double_:
+    pass
+class std__less_int_:
+    pass
+class std__allocator_std__pair_const_int__double__:
+    pass
+
+extern "C":
+    def db_prices() -> std__map_int__double_
+    def std__map_int__double__new() -> std__map_int__double_
+    def std__map_int__double__new_2(__comp: std__less_int_, __a: std__allocator_std__pair_const_int__double__) -> std__map_int__double_
+    def std__map_int__double__new_3(__comp: std__less_int_) -> std__map_int__double_
+    def std__map_int__double__new_4(__a: std__allocator_std__pair_const_int__double__) -> std__map_int__double_
+    def std__map_int__double__get_allocator(obj: std__map_int__double_) -> std__allocator_std__pair_const_int__double__
+    def std__map_int__double__empty(obj: std__map_int__double_) -> bool
+    def std__map_int__double__size(obj: std__map_int__double_) -> c_size_t
+    def std__map_int__double__max_size(obj: std__map_int__double_) -> c_size_t
+    def std__map_int__double__at(obj: std__map_int__double_, __k: c_int) -> Pointer[c_double]
+    def std__map_int__double__at_2(obj: std__map_int__double_, __k: c_int) -> Pointer[c_double]
+    def std__map_int__double__erase(obj: std__map_int__double_, __x: c_int) -> c_size_t
+    def std__map_int__double__clear(obj: std__map_int__double_)
+    def std__map_int__double__key_comp(obj: std__map_int__double_) -> std__less_int_
+    def std__map_int__double__count(obj: std__map_int__double_, __x: c_int) -> c_size_t

@@ -7,6 +7,7 @@ extern "C":
     def _tr_udp_recv_from(fd: int, buf: Pointer[char], cap: int, src: Pointer[char]) -> int
     def _tr_udp_close(fd: int)
     def _tr_c_malloc(size: int) -> Pointer[char]
+    def _tr_str_wrap(s: Pointer[char]) -> str
 
 pub class UdpSocket:
     pub fd:   int
@@ -51,7 +52,7 @@ extend UdpSocket:
         if n <= 0: return ""
         unsafe:
             buf.offset(n).write('\0')
-        return buf as str
+        return _tr_str_wrap(buf)
 
     # Receive a datagram and also return the sender address as "ip:port".
     pub def recv_from(self, cap: int) -> str:

@@ -1,0 +1,8 @@
+# std::shared_ptr<Thing> — get() extracts the pointee (synthesized smart-pointer accessor).
+from smartptr import w_make, std__shared_ptr_w__Thing__get
+def main():
+    mut ptr = w_make(42)
+    mut t = std__shared_ptr_w__Thing__get(ptr)
+    unsafe:
+        print("Thing.v = " + t.read().v.to_str())
+    print("ok")

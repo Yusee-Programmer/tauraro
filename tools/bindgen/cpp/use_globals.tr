@@ -1,0 +1,7 @@
+from globals import cfg_VERSION, cfg_PI, cfg_Limits_MAX, cfg_Limits_current
+def main():
+    print("VERSION = " + cfg_VERSION().to_str())        # 7 (extern global)
+    print("PI = " + cfg_PI().to_str())                  # 3.14159 (in-header const)
+    print("MAX = " + cfg_Limits_MAX().to_str())          # 100 (static class const)
+    print("current = " + cfg_Limits_current().to_str())  # 55 (static method)
+    print("ok")

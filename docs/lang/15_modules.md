@@ -46,6 +46,7 @@ The `mod.tr` form: a directory with a `mod.tr` file inside. This lets you split 
 | `import mod as alias` | Long module paths; alias makes usage concise |
 | `from mod import name` | Using 1-3 specific names from a module |
 | `from mod import name as alias` | Avoiding name collisions between two imports |
+| `from mod import *` | Bringing in *all* of a module's public names at once |
 
 ### `import`
 
@@ -101,6 +102,25 @@ from graphics.vec import Vec2   # ERROR: 'Vec2' already imported in this scope
 ```python
 from graphics.vec import Vec2 as GVec2
 ```
+
+### `from ... import *` (wildcard import)
+
+```python
+from math.geometry import *
+from core.string import *
+
+def main():
+    mut a = circle_area(5.0)     # every public name of the module is in scope
+    mut u = to_upper("hello")
+```
+
+**How it works:** `*` brings in **all** of the module's public (`pub`) declarations — functions,
+classes, enums, constants — without listing them. Private (non-`pub`) names are never imported. Works
+with dotted paths (`from a.b.c import *`) and alongside other imports on separate lines. As with any
+import, a name collision with another in-scope symbol is a compile error.
+
+**When to prefer it:** pulling in a module whose whole surface you use (a prelude, a math library). For
+1–3 names, an explicit `from mod import a, b` reads better and documents the dependency.
 
 ### `from ... import ... as` (aliased selective import)
 

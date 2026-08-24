@@ -1,0 +1,39 @@
+# Auto-generated C++ FFI bindings for vec.hpp (tauraro-bindgen -h cpp).
+# Build the shim once, then link it (and the C++ library) with your program:
+#   c++ -c vec_shim.cpp -o vec_shim.o
+#   tauraroc yourapp.tr --link vec_shim.o -lstdc++ -o app
+
+class std__vector_int_:
+    pass
+class std__allocator_int_:
+    pass
+
+extern "C":
+    def nums_range(n: c_int) -> std__vector_int_
+    def std__vector_int__new() -> std__vector_int_
+    def std__vector_int__new_2(__a: std__allocator_int_) -> std__vector_int_
+    def std__vector_int__new_3(__n: c_ulonglong, __a: std__allocator_int_) -> std__vector_int_
+    def std__vector_int__new_4(__n: c_ulonglong) -> std__vector_int_
+    def std__vector_int__new_5(__n: c_ulonglong, __value: c_int, __a: std__allocator_int_) -> std__vector_int_
+    def std__vector_int__new_6(__n: c_ulonglong, __value: c_int) -> std__vector_int_
+    def std__vector_int__assign(obj: std__vector_int_, __n: c_ulonglong, __val: c_int)
+    def std__vector_int__size(obj: std__vector_int_) -> c_ulonglong
+    def std__vector_int__max_size(obj: std__vector_int_) -> c_ulonglong
+    def std__vector_int__resize(obj: std__vector_int_, __new_size: c_ulonglong)
+    def std__vector_int__resize_2(obj: std__vector_int_, __new_size: c_ulonglong, __x: c_int)
+    def std__vector_int__shrink_to_fit(obj: std__vector_int_)
+    def std__vector_int__capacity(obj: std__vector_int_) -> c_ulonglong
+    def std__vector_int__empty(obj: std__vector_int_) -> bool
+    def std__vector_int__reserve(obj: std__vector_int_, __n: c_ulonglong)
+    def std__vector_int__at(obj: std__vector_int_, __n: c_ulonglong) -> Pointer[c_int]
+    def std__vector_int__at_2(obj: std__vector_int_, __n: c_ulonglong) -> Pointer[c_int]
+    def std__vector_int__front(obj: std__vector_int_) -> Pointer[c_int]
+    def std__vector_int__front_2(obj: std__vector_int_) -> Pointer[c_int]
+    def std__vector_int__back(obj: std__vector_int_) -> Pointer[c_int]
+    def std__vector_int__back_2(obj: std__vector_int_) -> Pointer[c_int]
+    def std__vector_int__data(obj: std__vector_int_) -> Pointer[c_int]
+    def std__vector_int__data_2(obj: std__vector_int_) -> Pointer[c_int]
+    def std__vector_int__push_back(obj: std__vector_int_, __x: c_int)
+    def std__vector_int__push_back_2(obj: std__vector_int_, __x: Pointer[c_int])
+    def std__vector_int__pop_back(obj: std__vector_int_)
+    def std__vector_int__clear(obj: std__vector_int_)

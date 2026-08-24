@@ -113,22 +113,22 @@ __attribute__((hot)) void LFunc_set_term(LFunc* self, LTerm t) {
     /* pass */
     LBlock* b = ((LBlock*)List_ptr_get(self->blocks, self->cur));
     /* pass */
-    __auto_type _t2468 = b->term;
-    if (_t2468.tag == LTerm_TUnset) {
+    __auto_type _t2869 = b->term;
+    if (_t2869.tag == LTerm_TUnset) {
         b->term = t;
     } else if (1) {
-        __auto_type _ = _t2468;
+        __auto_type _ = _t2869;
         /* pass */
     }
 }
 
 __attribute__((hot)) bool LFunc_cur_terminated(LFunc* self) {
     /* pass */
-    __auto_type _t2469 = ((LBlock*)List_ptr_get(self->blocks, self->cur))->term;
-    if (_t2469.tag == LTerm_TUnset) {
+    __auto_type _t2870 = ((LBlock*)List_ptr_get(self->blocks, self->cur))->term;
+    if (_t2870.tag == LTerm_TUnset) {
         return false;
     } else if (1) {
-        __auto_type _ = _t2469;
+        __auto_type _ = _t2870;
         return true;
     }
 }
@@ -533,9 +533,9 @@ __attribute__((hot)) TrStr LModule_resolve_method_ov(LModule* self, TrStr cls, T
             return mangled;
         }
         /* pass */
-        TrStr _strtmp_t2470 = _tr_str_retain(((ClassLayout*)List_ptr_get(self->classes, ci))->base);
+        TrStr _strtmp_t2871 = _tr_str_retain(((ClassLayout*)List_ptr_get(self->classes, ci))->base);
         _tr_str_release(cur);
-        cur = _strtmp_t2470;
+        cur = _strtmp_t2871;
         /* pass */
         if (((((unsigned long long)(((char*)(_tr_strz(cur))))) == ((unsigned long long)(0LL))) || (strcmp(_tr_strz(cur), _tr_strz(_tr_str_lit(""))) == 0))) {
             /* pass */
@@ -914,9 +914,9 @@ __attribute__((hot)) TrStr LModule_resolve_method(LModule* self, TrStr cls, TrSt
             return mangled;
         }
         /* pass */
-        TrStr _strtmp_t2471 = _tr_str_retain(((ClassLayout*)List_ptr_get(self->classes, ci))->base);
+        TrStr _strtmp_t2872 = _tr_str_retain(((ClassLayout*)List_ptr_get(self->classes, ci))->base);
         _tr_str_release(cur);
-        cur = _strtmp_t2471;
+        cur = _strtmp_t2872;
         /* pass */
         if (((((unsigned long long)(((char*)(_tr_strz(cur))))) == ((unsigned long long)(0LL))) || (strcmp(_tr_strz(cur), _tr_strz(_tr_str_lit(""))) == 0))) {
             /* pass */

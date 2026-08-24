@@ -1,0 +1,8 @@
+from fields import n_Point_new, n_Point_x, n_Point_y, n_Point_weight, n_Point_sum
+def main():
+    mut p = n_Point_new(3, 4)
+    print("x = " + n_Point_x(p).to_str())
+    print("y = " + n_Point_y(p).to_str())
+    print("weight = " + n_Point_weight(p).to_str())
+    print("sum = " + n_Point_sum(p).to_str())
+    print("ok")

@@ -201,7 +201,7 @@ __attribute__((hot)) TrStr StringBuilder_to_owned(StringBuilder* self) {
     /* pass */
     _tr_c_memcpy(out, self->buf->data, sz);
     /* pass */
-    return _tr_str_wrap((char*)(out));
+    return _tr_str_wrap(_tr_str_wrap(out));
 }
 
 __attribute__((hot)) TrStr StringBuilder_as_str(StringBuilder* self) {

@@ -347,6 +347,36 @@ extend Bindgen:
                 return
             self.adv()
 
+    # Skip a balanced `{ ... }` block, stopping right after the matching `}` (a function
+    # DEFINITION body has no trailing `;`, unlike a struct — so don't seek one).
+    pub def skip_braces(self):
+        if not self.is_punct("{"): return
+        mut depth = 0
+        while self.ck() != 5:
+            if self.is_punct("{"): depth = depth + 1
+            elif self.is_punct("}"):
+                depth = depth - 1
+                self.adv()
+                if depth == 0: return
+                continue
+            self.adv()
+
+    # Skip any run of `__attribute__((...))` / `__declspec(...)` at the current position.
+    pub def skip_attributes(self):
+        while self.ck() == 0 and (self.ct() == "__attribute__" or self.ct() == "__declspec"):
+            self.adv()
+            self.skip_balanced_parens()
+
+    # Lookahead: at the arg-list `(`, is this a function DEFINITION (`(args) {`) rather than a
+    # prototype (`(args);`)? Header definitions are `static`/`inline` stubs (e.g. curl's
+    # typecheck-gcc.h `_curl_*_err_*` warning functions) — never linkable externs, so skip them.
+    pub def func_def_follows(self) -> bool:
+        mut save = self.pos
+        self.skip_balanced_parens()
+        mut isdef = self.is_punct("{")
+        self.pos = save
+        return isdef
+
     # Read the TYPE of a declarator (const/volatile/struct/union/enum stripped) + pointer
     # stars, STOPPING before the declarator name. An identifier is the name (not a type word)
     # once we already have a type and the *next* token ends the declarator (`,`/`;`/`)`/`[`/`=`/
@@ -460,6 +490,71 @@ extend Bindgen:
         mut nfields = 0
         while not self.is_punct("}") and self.ck() != 5:
             mut floop_before = self.pos
+            # Nested aggregate field `struct|union [tag] { ... } name;` — flatten its members
+            # into the parent with a `name_` prefix (layout-equivalent for default alignment),
+            # instead of letting the inner fields leak into the parent (duplicate names) and the
+            # inner `}` prematurely end the parent. Real case: curl_fileinfo's `{...} strings`.
+            if self.ct() == "struct" or self.ct() == "union":
+                mut nsave = self.pos
+                self.adv()                                # struct / union
+                if self.ck() == 0: self.adv()             # optional tag
+                if self.is_punct("{"):
+                    self.adv()                            # {
+                    mut nnames = Vec[str].init(4)
+                    mut ntypes = Vec[str].init(4)
+                    while not self.is_punct("}") and self.ck() != 5:
+                        mut nb = self.pos
+                        # guard: a deeper nested aggregate — skip it (don't corrupt the parent)
+                        if self.ct() == "struct" or self.ct() == "union":
+                            self.adv()
+                            if self.ck() == 0: self.adv()
+                            if self.is_punct("{"):
+                                self.skip_struct_body()
+                                while not self.is_punct(";") and self.ck() != 5: self.adv()
+                                if self.is_punct(";"): self.adv()
+                                if self.pos == nb: self.adv()
+                                continue
+                            self.pos = nb
+                        mut ntw = self.read_type_words()
+                        mut nbase = ntw.get(0)
+                        mut nstars = _to_int(ntw.get(1))
+                        mut nmore = true
+                        while nmore:
+                            if self.ck() != 0: break
+                            mut nnm = self.ct()
+                            self.adv()
+                            mut narr = ""
+                            mut nisarr = false
+                            while self.is_punct("["):
+                                self.adv()
+                                if self.ck() == 1: narr = self.ct()
+                                while not self.is_punct("]") and self.ck() != 5: self.adv()
+                                if self.is_punct("]"): self.adv()
+                                nisarr = true
+                            nnames.push(nnm)
+                            if nisarr and narr != "": ntypes.push("[" + map_type(nbase, nstars) + "; " + narr + "]")
+                            else: ntypes.push(map_type(nbase, nstars))
+                            if self.is_punct(","): self.adv()
+                            else: nmore = false
+                        if self.is_punct(";"): self.adv()
+                        if self.pos == nb: self.adv()
+                    if self.is_punct("}"): self.adv()
+                    mut pfx = ""
+                    if self.ck() == 0:
+                        pfx = self.ct()
+                        self.adv()
+                    while not self.is_punct(";") and self.ck() != 5: self.adv()
+                    if self.is_punct(";"): self.adv()
+                    mut nk = 0
+                    while nk < nnames.len:
+                        mut nfn = nnames.get(nk)
+                        if pfx != "": nfn = pfx + "_" + nfn
+                        self.structs.append("    pub " + nfn + ": " + ntypes.get(nk) + "\n")
+                        nfields = nfields + 1
+                        nk = nk + 1
+                    if self.pos == floop_before: self.adv()
+                    continue
+                self.pos = nsave                          # `struct Tag *field;` — normal field
             mut tw = self.read_type_words()
             mut fbase = tw.get(0)
             mut fstars = _to_int(tw.get(1))
@@ -482,6 +577,7 @@ extend Bindgen:
                 if not is_arr:
                     self.structs.append("    pub " + fname + ": " + map_type(fbase, fstars) + "\n")
                     nfields = nfields + 1
+                self.skip_attributes()                    # `int x __attribute__((packed));`
                 if self.is_punct(","):
                     self.adv()
                 else:
@@ -509,11 +605,14 @@ extend Bindgen:
         self.adv()
         mut next_val = 0
         while not self.is_punct("}") and self.ck() != 5:
+            self.skip_attributes()                    # e.g. `CURL_DEPRECATED` on an enumerator
+            if self.is_punct("}"): break
             if self.ck() != 0:
                 self.adv()
                 continue
             mut ename = self.ct()
             self.adv()
+            self.skip_attributes()                    # `NAME __attribute__((deprecated)) = V`
             mut ev = next_val
             mut simple = true
             if self.is_punct("="):
@@ -636,8 +735,53 @@ extend Bindgen:
             fname = self.ct()
             self.adv()
         if fname != "" and self.is_punct("("):
+            if self.func_def_follows():
+                self.skip_balanced_parens()          # (args)
+                self.skip_braces()                   # { body } — a definition, not a prototype
+                if self.is_punct(";"): self.adv()
+                return
             self.emit_func(rbase, rstars, fname)
             return
+        # Parenthesized declarator: `RET ( [attr|conv]* NAME ) ( args )`. Libraries that wrap
+        # exports in attribute macros produce this (libpng's PNG_EXPORT -> `png_structp
+        # (__attribute__((__cdecl__)) png_create_read_struct)(args)`). Without this, every such
+        # prototype is silently skipped. A leading `*` inside the parens is a function-POINTER
+        # global (not a bindable function) — restore and skip those.
+        if fname == "" and self.is_punct("("):
+            mut saved = self.pos
+            self.adv()                               # (
+            mut pdstars = 0
+            mut scan = true
+            while scan:
+                if self.ck() == 0:
+                    mut dw = self.ct()
+                    if dw == "__attribute__" or dw == "__declspec":
+                        self.adv()
+                        self.skip_balanced_parens()
+                    elif _is_ignored_word(dw):
+                        self.adv()
+                    else:
+                        scan = false
+                elif self.is_punct("*"):
+                    pdstars = pdstars + 1
+                    self.adv()
+                else:
+                    scan = false
+            mut pdname = ""
+            if self.ck() == 0:
+                pdname = self.ct()
+                self.adv()
+            if pdname != "" and pdstars == 0 and self.is_punct(")"):
+                self.adv()                           # )
+                if self.is_punct("("):
+                    if self.func_def_follows():
+                        self.skip_balanced_parens()
+                        self.skip_braces()
+                        if self.is_punct(";"): self.adv()
+                        return
+                    self.emit_func(rbase, rstars, pdname)
+                    return
+            self.pos = saved                         # not a plain function declarator
         self.skip_to_semi()
 
     pub def run(self):
@@ -771,6 +915,143 @@ def _lstrip(s: str) -> str:
     while i < s.len() and (s[i] == 32 or s[i] == 9): i = i + 1
     return s.slice(i, s.len())
 
+# ── opaque fallback for referenced-but-undefined types ───────────────────────────
+# A real library header references types defined in a *system* header (`struct sockaddr`)
+# or a *sub-header* the filter dropped (libpng's `png_error_ptr` from pngconf.h). Those
+# names appear in signatures but are never emitted, so the binding won't compile. This
+# post-pass finds every type-position identifier that is neither a builtin nor emitted,
+# and forward-declares it as `type NAME = Pointer[void]` (an opaque handle). Correct for
+# the common pointer-passed / function-pointer cases; for a by-value-embedded system
+# struct the layout is approximate (documented) but the binding compiles and links.
+def _is_builtin_ty_name(n: str) -> bool:
+    if n == "void" or n == "bool" or n == "char" or n == "int" or n == "float" or n == "str": return true
+    if n == "Pointer": return true
+    return n.starts_with("c_")
+
+# Standard C library types the runtime's system headers already define (via <stdio.h>,
+# <time.h>, <setjmp.h>, <sys/*>, …). A fallback `typedef void* FILE` would CONFLICT with
+# the real definition, so these are skipped — the generated C references resolve to the
+# system type (correct size/layout), and sema passes the name through to C untouched.
+# Only genuine TYPEDEFs usable as a bare name (not `struct tm`/`struct timeval`, which need the
+# `struct` keyword and so must fall through to an opaque fallback instead).
+def _is_libc_ty_name(n: str) -> bool:
+    if n == "FILE" or n == "fpos_t" or n == "va_list" or n == "jmp_buf" or n == "sigjmp_buf": return true
+    if n == "time_t" or n == "clock_t": return true
+    if n == "wchar_t" or n == "wint_t" or n == "mbstate_t": return true
+    if n == "off_t" or n == "off64_t" or n == "mode_t" or n == "pid_t" or n == "uid_t" or n == "gid_t": return true
+    if n == "dev_t" or n == "ino_t" or n == "nlink_t" or n == "blkcnt_t" or n == "blksize_t": return true
+    if n == "fd_set" or n == "sigset_t" or n == "DIR" or n == "pthread_t" or n == "sig_atomic_t": return true
+    return false
+
+# Common Windows/COM system RECORD types, which the runtime's system headers (windows.h, objidl,
+# …) already define. Emitting an opaque `class _GUID` would clash (`struct _GUID` redefinition);
+# referencing the name bare lets the generated C resolve it against the real definition. Fixes
+# pointer-to-COM-object bindings (IUnknown*, IDispatch*) in headers like comdef.h without conflict.
+def _is_system_record_ty(n: str) -> bool:
+    if n == "_GUID" or n == "GUID" or n == "IID" or n == "CLSID" or n == "FMTID" or n == "UUID": return true
+    if n == "IUnknown" or n == "IDispatch" or n == "IErrorInfo" or n == "ITypeInfo" or n == "ITypeLib": return true
+    if n == "IStream" or n == "ISequentialStream" or n == "IStorage" or n == "IRecordInfo" or n == "IServiceProvider": return true
+    if n == "VARIANT" or n == "VARIANTARG" or n == "DECIMAL" or n == "SAFEARRAY" or n == "SAFEARRAYBOUND": return true
+    if n == "DISPPARAMS" or n == "EXCEPINFO" or n == "CY" or n == "BSTRBLOB" or n == "BLOB" or n == "FLAGGED_WORD_BLOB": return true
+    if n == "POINT" or n == "POINTL" or n == "SIZE" or n == "SIZEL" or n == "RECT" or n == "RECTL" or n == "FILETIME": return true
+    if n == "LARGE_INTEGER" or n == "ULARGE_INTEGER" or n == "LUID" or n == "MSG" or n == "POINTS": return true
+    return false
+
+# Read a `[A-Za-z_][A-Za-z0-9_]*` at/after `start` (skipping leading spaces/tabs and `[`).
+def _ident_at(text: str, start: int) -> str:
+    mut i = start
+    while i < text.len() and (text[i] == 32 or text[i] == 9 or text[i] == 91): i = i + 1
+    if i >= text.len(): return ""
+    mut c = text[i]
+    if not ((c >= 65 and c <= 90) or (c >= 97 and c <= 122) or c == 95): return ""
+    mut b = i
+    while i < text.len():
+        c = text[i]
+        if (c >= 65 and c <= 90) or (c >= 97 and c <= 122) or (c >= 48 and c <= 57) or c == 95: i = i + 1
+        else: break
+    return text.slice(b, i)
+
+# Emit opaque `type` fallbacks for every undefined type referenced in `body`. `defined` is
+# the set of names the bindgen already emitted (types/classes). Returns the fallback block.
+def _opaque_fallbacks(body: str, defined: Map[str, bool]) -> str:
+    mut want: Map[str, bool] = Map[str, bool].init(64)
+    mut order = Vec[str].init(16)
+    mut i = 0
+    mut n = body.len()
+    while i < n:
+        mut c = body[i]
+        mut nm = ""
+        if c == 58:                                       # ':' type annotation
+            nm = _ident_at(body, i + 1); i = i + 1
+        elif c == 45 and i + 1 < n and body[i + 1] == 62: # '->' return type
+            nm = _ident_at(body, i + 2); i = i + 2
+        elif c == 91:                                     # '[' Pointer[T] / [T; N]
+            nm = _ident_at(body, i + 1); i = i + 1
+        else:
+            i = i + 1
+        if nm == "": continue
+        if _is_builtin_ty_name(nm): continue
+        if _is_libc_ty_name(nm): continue
+        if defined.contains(nm): continue
+        if want.contains(nm): continue
+        want.insert(nm, true)
+        order.push(nm)
+    if order.len == 0: return ""
+    mut sb = StringBuilder.init(256)
+    sb.append("# Opaque fallbacks: types referenced by this header but defined in a system or\n")
+    sb.append("# sub-header (bound as opaque handles; pass by Pointer). Verify by-value layout.\n")
+    mut k = 0
+    while k < order.len:
+        sb.append("type " + order.get(k) + " = Pointer[void]\n")
+        k = k + 1
+    sb.append("\n")
+    return sb.to_string().as_str()
+
+# A single `"..."` literal with no trailing tokens (no concatenation, no macro reference).
+def _is_single_string_literal(val: str) -> bool:
+    if val.len() < 2 or val[0] != 34: return false
+    mut i = 1
+    mut esc = false
+    while i < val.len():
+        mut c = val[i]
+        if esc:
+            esc = false
+        elif c == 92:                 # backslash
+            esc = true
+        elif c == 34:                 # closing quote
+            # valid only if nothing but whitespace follows
+            mut j = i + 1
+            while j < val.len():
+                mut t = val[j]
+                if t != 32 and t != 9: return false
+                j = j + 1
+            return true
+        i = i + 1
+    return false
+
+# A single integer/hex literal (optionally signed), no operators/suffixes/macro refs.
+def _is_single_int_literal(val: str) -> bool:
+    mut n = val.len()
+    # trim trailing whitespace
+    while n > 0 and (val[n - 1] == 32 or val[n - 1] == 9): n = n - 1
+    if n == 0: return false
+    mut i = 0
+    if val[0] == 45 or val[0] == 43: i = 1     # leading sign
+    if i >= n: return false
+    mut hex = false
+    if i + 1 < n and val[i] == 48 and (val[i + 1] == 120 or val[i + 1] == 88):   # 0x / 0X
+        hex = true
+        i = i + 2
+        if i >= n: return false
+    while i < n:
+        mut c = val[i]
+        mut ok = false
+        if c >= 48 and c <= 57: ok = true
+        elif hex and ((c >= 97 and c <= 102) or (c >= 65 and c <= 70)): ok = true
+        if not ok: return false                # operator, suffix (U/L), '.', space, macro char → reject
+        i = i + 1
+    return true
+
 def emit_defines(bg: Bindgen, defs: str, baseline: Map[str, bool], allow: Map[str, bool]):
     mut lines = defs.split("\n")
     mut i = 0
@@ -785,23 +1066,30 @@ def emit_defines(bg: Bindgen, defs: str, baseline: Map[str, bool], allow: Map[st
         if nm.find("(") >= 0: continue               # function-like macro -> skip
         if baseline.contains(nm): continue           # compiler/platform built-in -> skip
         if not allow.contains(nm): continue          # not defined in the target header -> skip
-        mut val = rest.slice(sp + 1, rest.len())
+        mut val = _lstrip(rest.slice(sp + 1, rest.len()))
         if val.len() == 0: continue
         mut c0 = val[0]
         if c0 == 34:
-            bg.consts.append("const " + nm + " = " + val + "\n")   # string constant (cast to Pointer[char] at use)
+            # Only a SINGLE string literal is valid. Reject concatenations / macro references
+            # like `" v " OTHER_MACRO "\n"` (libpng's PNG_HEADER_VERSION_STRING) — those would
+            # emit adjacent literals + a bare identifier, which is not valid Tauraro.
+            if _is_single_string_literal(val):
+                bg.consts.append("const " + nm + " = " + val + "\n")   # cast to Pointer[char] at use
         elif (c0 >= 48 and c0 <= 57) or c0 == 45:
-            mut iv = _to_int(val)
-            bg.consts.append("const " + nm + ": c_int = " + iv.to_str() + "\n")
+            # Only a single clean integer/hex token. Skip arithmetic / suffixed / macro-ref values.
+            if _is_single_int_literal(val):
+                mut iv = _to_int(val)
+                bg.consts.append("const " + nm + ": c_int = " + iv.to_str() + "\n")
 
 # Generate Tauraro FFI bindings for the C header at `header` into `out`, preprocessing with `cc`.
 # The `tauraroc bindgen` subcommand (src/main.tr) parses the CLI and calls this.
-pub def run_bindgen(header: str, out: str, cc: str):
+pub def run_bindgen(header: str, out: str, cc: str, extra: str, pkglibs: str):
     mut tmp_decls = "_bindgen_decls.i"
     mut tmp_defs  = "_bindgen_defs.i"
     # -E WITH line markers, so declarations from #include'd system headers can be filtered out.
-    _tr_system(cc + " -E \"" + header + "\" > \"" + tmp_decls + "\" 2>_bindgen_err.txt")
-    _tr_system(cc + " -E -dM \"" + header + "\" > \"" + tmp_defs + "\" 2>>_bindgen_err.txt")
+    # `extra` carries -I/-D (including any discovered via --pkg) so the header parses.
+    _tr_system(cc + extra + " -E \"" + header + "\" > \"" + tmp_decls + "\" 2>_bindgen_err.txt")
+    _tr_system(cc + extra + " -E -dM \"" + header + "\" > \"" + tmp_defs + "\" 2>>_bindgen_err.txt")
     if not file_exists(tmp_decls):
         print("bindgen: preprocessing failed (see _bindgen_err.txt)")
         return
@@ -812,14 +1100,21 @@ pub def run_bindgen(header: str, out: str, cc: str):
     mut baseline = _load_baseline(cc)
     emit_defines(bg, read_file(tmp_defs), baseline, _target_define_names(header))
     mut sb = StringBuilder.init(4096)
-    sb.append("# Auto-generated FFI bindings for " + header + " (tauraro-bindgen).\n\n")
+    sb.append("# Auto-generated FFI bindings for " + header + " (tauraro-bindgen).\n")
+    # --pkg: record the library's link flags so `tauraroc` auto-links them (no manual --link/-l).
+    if pkglibs != "": sb.append("# tauraro-cpp-linkflags:" + pkglibs + "\n")
+    sb.append("\n")
     mut ts = bg.types.to_string().as_str()
-    if ts != "": sb.append(ts + "\n")
     mut ss = bg.structs.to_string().as_str()
-    if ss != "": sb.append(ss)
     mut cs = bg.consts.to_string().as_str()
-    if cs != "": sb.append(cs + "\n")
     mut fs = bg.funcs.to_string().as_str()
+    # Forward-declare any type referenced by the bindings but defined in a filtered
+    # system/sub-header, so the output compiles (opaque, pass-by-Pointer).
+    mut fb = _opaque_fallbacks(ts + ss + fs, bg.seen)
+    if fb != "": sb.append(fb)
+    if ts != "": sb.append(ts + "\n")
+    if ss != "": sb.append(ss)
+    if cs != "": sb.append(cs + "\n")
     if fs != "":
         sb.append("extern \"C\":\n")
         sb.append(fs)
@@ -837,7 +1132,7 @@ pub def run_bindgen(header: str, out: str, cc: str):
             result = _rename_word(result, dn, dn + "_")
             n_renamed = n_renamed + 1
     write_file(out, result)
-    _tr_system("rm -f _bindgen_decls.i _bindgen_defs.i _bindgen_base.i _bindgen_empty.h _bindgen_err.txt 2>/dev/null")
+    _rm_files("_bindgen_decls.i _bindgen_defs.i _bindgen_base.i _bindgen_empty.h _bindgen_err.txt")
     mut msg = "bindgen: wrote " + out + " — " + bg.n_structs.to_str() + " types, " + bg.n_funcs.to_str() + " functions"
     if bg.n_skipped > 0: msg = msg + " (" + bg.n_skipped.to_str() + " runtime/libc symbols skipped)"
     print(msg)
@@ -850,61 +1145,384 @@ pub def run_bindgen(header: str, out: str, cc: str):
 # ══════════════════════════════════════════════════════════════════════════════
 
 # The clang-c AST walker, emitted + compiled on demand against the detected libclang.
-# It prints a flat IR (NS/CLASS/CTOR/DTOR/METHOD/FUNC/PARAM/ENUM/EVAL) with each C++
-# type pre-spelled, so the Tauraro side never has to parse a C++ type.
+# It resolves each type via the CANONICAL type (so `HRESULT`->`long`, typedefs collapse,
+# enums expose their underlying integer, records are laid out) and prints a flat IR where
+# every type is a compact descriptor `ptrdepth~isref~cat~detail` (cat: v=void p=primitive
+# e=enum r=record s=std u=unknown f=fnptr) — the Tauraro side maps on the canonical kind,
+# never parsing a C++ type spelling heuristically. CLASS carries a POD flag; FIELD lines give
+# a POD struct's members for by-value layout; ENUM carries its underlying c_* type.
+
 def _cxxwalk_src() -> str:
-    mut sb = StringBuilder.init(4096)
+    mut sb = StringBuilder.init(8192)
     sb.append("#include <clang-c/Index.h>\n")
     sb.append("#include <stdio.h>\n")
+    sb.append("#include <string.h>\n")
+    sb.append("#include <stdlib.h>\n")
     sb.append("static const char* S(CXString s){ const char* p=clang_getCString(s); return p?p:\"\"; }\n")
-    sb.append("static void params(CXCursor c){\n")
-    sb.append("    int n=clang_Cursor_getNumArguments(c);\n")
-    sb.append("    for(int i=0;i<n;i++){ CXCursor a=clang_Cursor_getArgument(c,i);\n")
-    sb.append("        CXString ty=clang_getTypeSpelling(clang_getArgType(clang_getCursorType(c),i));\n")
-    sb.append("        CXString nm=clang_getCursorSpelling(a);\n")
-    sb.append("        const char* nn=S(nm);\n")
-    sb.append("        if(nn[0]) printf(\"PARAM %s|%s\\n\", S(ty), nn);\n")
-    sb.append("        else      printf(\"PARAM %s|a%d\\n\", S(ty), i);\n")
-    sb.append("        clang_disposeString(ty); clang_disposeString(nm);\n")
+    sb.append("static const char* scalar(enum CXTypeKind k){\n")
+    sb.append("  switch(k){ case CXType_Bool:return \"bool\";\n")
+    sb.append("    case CXType_Char_S:case CXType_Char_U:return \"c_char\"; case CXType_SChar:return \"c_schar\"; case CXType_UChar:return \"c_uchar\";\n")
+    sb.append("    case CXType_Char16:return \"c_char16\"; case CXType_Char32:return \"c_char32\"; case CXType_WChar:return \"c_wchar\";\n")
+    sb.append("    case CXType_Short:return \"c_short\"; case CXType_UShort:return \"c_ushort\"; case CXType_Int:return \"c_int\"; case CXType_UInt:return \"c_uint\";\n")
+    sb.append("    case CXType_Long:return \"c_long\"; case CXType_ULong:return \"c_ulong\"; case CXType_LongLong:return \"c_longlong\"; case CXType_ULongLong:return \"c_ulonglong\";\n")
+    sb.append("    case CXType_Float:return \"c_float\"; case CXType_Double:return \"c_double\"; case CXType_LongDouble:return \"c_ldouble\"; default:return \"\"; }\n")
+    sb.append("}\n")
+    sb.append("static char g_params[8][64]; static CXType g_args[8]; static int g_np=0;\n")
+    sb.append("static char g_cbase[256]={0};   /* container template base (e.g. \"std::map\") for nested-type detection */\n")
+    sb.append("static int g_inst=0;            /* 1 while walking template instantiations (--inst mode) */\n")
+    sb.append("static int g_hasbegin=0, g_hasend=0;   /* container exposes begin()/end() -> emit ITER helper */\n")
+    sb.append("/* Collect NON-system external records used by value, so we can lay them out as @value_type\n")
+    sb.append("   (a library value struct in a filtered sub-header would otherwise be an opaque handle). System\n")
+    sb.append("   records (windows.h) are left on the bare path — zero risk to the working COM handling. */\n")
+    sb.append("static CXCursor g_ext[128]; static char g_extn[128][160]; static int g_next=0;\n")
+    sb.append("static void collect_ext(CXType rec){\n")
+    sb.append("  if(g_inst) return;\n")
+    sb.append("  CXCursor decl=clang_getTypeDeclaration(rec);\n")
+    sb.append("  CXSourceLocation loc=clang_getCursorLocation(decl);\n")
+    sb.append("  if(clang_Location_isFromMainFile(loc)) return;   /* main-file records already emitted via CLASS */\n")
+    sb.append("  if(clang_Location_isInSystemHeader(loc)) return; /* system record -> bare path (unchanged) */\n")
+    sb.append("  if(clang_Type_getSizeOf(rec)<=0) return;\n")
+    sb.append("  CXString sp=clang_getTypeSpelling(rec); const char* r=S(sp); if(strncmp(r,\"const \",6)==0)r+=6; if(strncmp(r,\"volatile \",9)==0)r+=9;\n")
+    sb.append("  if(strstr(r,\"<\")||strstr(r,\"::\")){ clang_disposeString(sp); return; } /* skip templates / nested (kept simple) */\n")
+    sb.append("  for(int i=0;i<g_next;i++) if(strcmp(g_extn[i],r)==0){ clang_disposeString(sp); return; }\n")
+    sb.append("  if(g_next<128){ strncpy(g_extn[g_next],r,159); g_extn[g_next][159]=0; g_ext[g_next]=decl; g_next++; }\n")
+    sb.append("  clang_disposeString(sp);\n")
+    sb.append("}\n")
+    sb.append("static void field_tautype(CXType t){\n")
+    sb.append("  CXType c=clang_getCanonicalType(t);\n")
+    sb.append("  if(c.kind==CXType_ConstantArray){ CXType e=clang_getArrayElementType(c); long long n=clang_getArraySize(c);\n")
+    sb.append("    printf(\"[\"); field_tautype(e); printf(\"; %lld]\", n); return; }\n")
+    sb.append("  if(c.kind==CXType_Pointer){ printf(\"Pointer[void]\"); return; }\n")
+    sb.append("  const char* sc=scalar(c.kind); if(sc[0]){ printf(\"%s\", sc); return; }\n")
+    sb.append("  if(c.kind==CXType_Enum){ printf(\"c_int\"); return; }\n")
+    sb.append("  if(c.kind==CXType_Record){ CXString sp=clang_getTypeSpelling(c); const char* r=S(sp); if(strncmp(r,\"const \",6)==0)r+=6;\n")
+    sb.append("    const char* seg=strrchr(r,':'); printf(\"%s\", seg?seg+1:r); clang_disposeString(sp); return; }\n")
+    sb.append("  printf(\"c_int\");\n")
+    sb.append("}\n")
+    sb.append("static enum CXChildVisitResult sfields(CXCursor c, CXCursor p, CXClientData d){\n")
+    sb.append("  if(clang_getCursorKind(c)==CXCursor_FieldDecl && clang_getCXXAccessSpecifier(c)!=CX_CXXPrivate && clang_getCXXAccessSpecifier(c)!=CX_CXXProtected){\n")
+    sb.append("    printf(\"SFIELD \"); field_tautype(clang_getCursorType(c)); printf(\"|%s\\n\", S(clang_getCursorSpelling(c))); }\n")
+    sb.append("  return CXChildVisit_Continue;\n")
+    sb.append("}\n")
+    sb.append("static void emit_extstructs(void){\n")
+    sb.append("  for(int i=0;i<g_next;i++){ printf(\"XSTRUCT %s\\n\", g_extn[i]); clang_visitChildren(g_ext[i], sfields, 0); printf(\"EXSTRUCT\\n\"); }\n")
+    sb.append("}\n")
+    sb.append("/* whole-identifier-token search: does `needle` appear in `hay` bounded by non-ident chars? */\n")
+    sb.append("static int has_token(const char* hay, const char* needle){\n")
+    sb.append("  int nl=strlen(needle); if(nl==0) return 0; const char* p=hay;\n")
+    sb.append("  while((p=strstr(p,needle))){ char b=(p==hay)?0:p[-1]; char a=p[nl];\n")
+    sb.append("    int lb=!((b>='A'&&b<='Z')||(b>='a'&&b<='z')||(b>='0'&&b<='9')||b=='_');\n")
+    sb.append("    int la=!((a>='A'&&a<='Z')||(a>='a'&&a<='z')||(a>='0'&&a<='9')||a=='_');\n")
+    sb.append("    if(lb&&la) return 1; p+=nl; }\n")
+    sb.append("  return 0;\n")
+    sb.append("}\n")
+    sb.append("static int g_noncopy;\n")
+    sb.append("static enum CXChildVisitResult copyctorck(CXCursor c, CXCursor p, CXClientData d){\n")
+    sb.append("  if(clang_getCursorKind(c)==CXCursor_Constructor && clang_CXXConstructor_isCopyConstructor(c)){\n")
+    sb.append("    enum CXAvailabilityKind av=clang_getCursorAvailability(c);\n")
+    sb.append("    enum CX_CXXAccessSpecifier acc=clang_getCXXAccessSpecifier(c);\n")
+    sb.append("    if(av==CXAvailability_NotAvailable || acc==CX_CXXPrivate || acc==CX_CXXProtected) g_noncopy=1; }\n")
+    sb.append("  return CXChildVisit_Continue; }\n")
+    sb.append("static int is_noncopyable(CXType t){\n")
+    sb.append("  CXCursor dc=clang_getTypeDeclaration(t); CXCursor def=clang_getCursorDefinition(dc); if(clang_Cursor_isNull(def)) def=dc;\n")
+    sb.append("  g_noncopy=0; clang_visitChildren(def, copyctorck, 0); return g_noncopy; }\n")
+    sb.append("static void classify(int depth,int ref,CXType cur){\n")
+    sb.append("  enum CXTypeKind k=cur.kind; const char* sc=scalar(k);\n")
+    sb.append("  if(k==CXType_Void) printf(\"%d~%d~v~\", depth, ref);\n")
+    sb.append("  else if(sc[0]) printf(\"%d~%d~p~%s\", depth, ref, sc);\n")
+    sb.append("  else if(k==CXType_Enum){ CXType u=clang_getEnumDeclIntegerType(clang_getTypeDeclaration(cur)); const char* us=scalar(u.kind); if(!us[0])us=\"c_int\";\n")
+    sb.append("    CXString sp=clang_getTypeSpelling(cur); printf(\"%d~%d~e~%s#%s\", depth, ref, S(sp), us); clang_disposeString(sp); }\n")
+    sb.append("  else if(k==CXType_Record){\n")
+    sb.append("    if(depth==0 && clang_Type_getNumTemplateArguments(cur)<1 && clang_Type_getSizeOf(cur)==CXTypeLayoutError_Incomplete){ printf(\"%d~%d~d~\", depth, ref); return; }\n")
+    sb.append("    if(depth==0 && is_noncopyable(cur)){ printf(\"%d~%d~d~\", depth, ref); return; }\n")
+    sb.append("    CXString sp=clang_getTypeSpelling(cur); const char* r=S(sp); if(strncmp(r,\"const \",6)==0)r+=6; if(strncmp(r,\"volatile \",9)==0)r+=9;\n")
+    sb.append("    if(strncmp(r,\"std::function<\",14)==0 && clang_Type_getNumTemplateArguments(cur)>=1){ CXType _ft=clang_Type_getTemplateArgumentAsType(cur,0); CXString _fs=clang_getTypeSpelling(_ft); printf(\"%d~%d~f~%s\", depth, ref, S(_fs)); clang_disposeString(_fs); }\n")
+    sb.append("    else if(strncmp(r,\"std::basic_string\",17)==0 && (strstr(r,\"basic_string<char,\")||strstr(r,\"basic_string<char>\")||strstr(r,\"basic_string_view<char,\")||strstr(r,\"basic_string_view<char>\"))) printf(\"%d~%d~s~string\", depth, ref);\n")
+    sb.append("    else printf(\"%d~%d~r~%s\", depth, ref, r); clang_disposeString(sp); }\n")
+    sb.append("  else if(k==CXType_FunctionProto){ CXString sp=clang_getTypeSpelling(clang_getCanonicalType(cur)); printf(\"%d~%d~f~%s\", depth, ref, S(sp)); clang_disposeString(sp); }\n")
+    sb.append("  else { CXString sp=clang_getTypeSpelling(cur); printf(\"%d~%d~u~%s\", depth, ref, S(sp)); clang_disposeString(sp); }\n")
+    sb.append("}\n")
+    sb.append("static void classify_arg(int depth,int ref,CXType t){\n")
+    sb.append("  CXType c=clang_getCanonicalType(t);\n")
+    sb.append("  if(c.kind==CXType_LValueReference||c.kind==CXType_RValueReference){\n")
+    sb.append("    CXType pt=clang_getPointeeType(c); ref=clang_isConstQualifiedType(clang_getCanonicalType(pt))?2:1; depth++; c=clang_getCanonicalType(pt); }\n")
+    sb.append("  classify(depth,ref,c); }\n")
+    sb.append("static void tds(CXType t){\n")
+    sb.append("  // ref: 0 = not-a-reference (value or pointer); 1 = mutable `T&`; 2 = const `const T&`.\n")
+    sb.append("  int depth=0,ref=0; CXType cur=t;\n")
+    sb.append("  while(1){ CXType cc=clang_getCanonicalType(cur);\n")
+    sb.append("    if(cc.kind==CXType_Pointer){depth++; CXType pt=clang_getPointeeType(cur); if(pt.kind==CXType_Invalid) pt=clang_getPointeeType(cc); cur=pt;}\n")
+    sb.append("    else if(cc.kind==CXType_LValueReference||cc.kind==CXType_RValueReference){ CXType pt=clang_getPointeeType(cur); ref=clang_isConstQualifiedType(clang_getCanonicalType(pt))?2:1; depth++; cur=pt; }\n")
+    sb.append("    else if(cc.kind==CXType_ConstantArray||cc.kind==CXType_IncompleteArray||cc.kind==CXType_VariableArray||cc.kind==CXType_DependentSizedArray){ depth++; cur=clang_getArrayElementType(cc); }\n")
+    sb.append("    else break; }\n")
+    sb.append("  CXType fcan=clang_getCanonicalType(cur);\n")
+    sb.append("  if(fcan.kind==CXType_MemberPointer){ printf(\"%d~%d~d~\", depth, ref); return; }\n")
+    sb.append("  if(g_np>0){\n")
+    sb.append("    // A template-parameter-dependent type has canonical spelling \"type-parameter-0-<i>\" (even\n")
+    sb.append("    // when written via a typedef like value_type/reference) — substitute the concrete arg i.\n")
+    sb.append("    CXString sp=clang_getTypeSpelling(fcan); const char* r=S(sp); if(strncmp(r,\"const \",6)==0)r+=6; if(strncmp(r,\"volatile \",9)==0)r+=9;\n")
+    sb.append("    if(strncmp(r,\"type-parameter-0-\",17)==0){ int idx=atoi(r+17); if(idx>=0 && idx<g_np){ clang_disposeString(sp); classify_arg(depth,ref,g_args[idx]); return; } }\n")
+    sb.append("    // fallback: match the parameter name literally (direct `T` uses)\n")
+    sb.append("    for(int i=0;i<g_np;i++){ if(strcmp(r,g_params[i])==0){ clang_disposeString(sp); classify_arg(depth,ref,g_args[i]); return; } }\n")
+    sb.append("    // Sequence-container element accessors: `X::reference`/`::const_reference` = `value_type&` and\n")
+    sb.append("    // `::pointer`/`::const_pointer` = `value_type*` — libstdc++ routes these through an\n")
+    sb.append("    // `__alloc_traits<…>` typedef that stays dependent, but for vector/string/deque/list/set the\n")
+    sb.append("    // element type is the FIRST template arg. Resolve to it so at()/front()/back()/[] bind.\n")
+    sb.append("    { const char* seg=strrchr(r,':'); if(g_np>0 && seg && seg>r+1 && seg[-1]==':'){ seg++;\n")
+    sb.append("        if(strcmp(seg,\"reference\")==0||strcmp(seg,\"const_reference\")==0){ clang_disposeString(sp); classify(depth+1,1,clang_getCanonicalType(g_args[0])); return; }\n")
+    sb.append("        if(strcmp(seg,\"pointer\")==0||strcmp(seg,\"const_pointer\")==0){ clang_disposeString(sp); classify(depth+1,0,clang_getCanonicalType(g_args[0])); return; }\n")
+    sb.append("        // container `size_type`/`difference_type` also route through dependent allocator traits.\n")
+    sb.append("        if(strcmp(seg,\"size_type\")==0){ printf(\"%d~%d~p~c_size_t\", depth, ref); clang_disposeString(sp); return; }\n")
+    sb.append("        if(strcmp(seg,\"difference_type\")==0){ printf(\"%d~%d~p~c_ptrdiff_t\", depth, ref); clang_disposeString(sp); return; } } }\n")
+    sb.append("    // Any type still carrying an un-substituted template param (self-type copy-ctor\n")
+    sb.append("    // `vector<_Tp,_Alloc>`, or an internal `__alloc_traits<…>` type — often kind Unexposed,\n")
+    sb.append("    // not Record) is dependent -> mark 'd' so the generator skips the whole method (its shim\n")
+    sb.append("    // would be un-nameable). Applies regardless of kind.\n")
+    sb.append("    int dep=has_token(r,\"type-parameter\");\n")
+    sb.append("    for(int i=0;i<g_np && !dep;i++) dep=has_token(r,g_params[i]);\n")
+    sb.append("    // a NESTED type of the container written without template args (`std::map::value_compare`,\n")
+    sb.append("    // an uninstantiated `iterator`) is un-nameable in the shim -> skip the method.\n")
+    sb.append("    if(!dep && g_cbase[0]){ char nb[262]; snprintf(nb,sizeof nb,\"%s::\",g_cbase); if(strstr(r,nb)) dep=1; }\n")
+    sb.append("    if(dep){ printf(\"%d~%d~d~\", depth, ref); clang_disposeString(sp); return; }\n")
+    sb.append("    clang_disposeString(sp);\n")
+    sb.append("  }\n")
+    sb.append("  if(fcan.kind==CXType_Record && depth==0) collect_ext(fcan);  /* by-value external record -> lay out */\n")
+    sb.append("  classify(depth,ref,fcan);\n")
+    sb.append("}\n")
+    sb.append("static void params(CXCursor c){ int n=clang_Cursor_getNumArguments(c);\n")
+    sb.append("  for(int i=0;i<n;i++){ CXCursor a=clang_Cursor_getArgument(c,i); CXString nm=clang_getCursorSpelling(a); const char* nn=S(nm);\n")
+    sb.append("    printf(\"PARAM \"); tds(clang_getArgType(clang_getCursorType(c),i)); if(nn[0])printf(\"|%s\\n\",nn); else printf(\"|a%d\\n\",i); clang_disposeString(nm); } }\n")
+    sb.append("/* A parameter with a default argument has a child that is neither a type/namespace/template ref\n")
+    sb.append("   (those describe the type) — it's the default-value expression. Count the TRAILING defaults (C++\n")
+    sb.append("   requires defaults to be trailing) so the generator can emit shorter overloads. */\n")
+    sb.append("static int g_hasdef;\n")
+    sb.append("static enum CXChildVisitResult defck(CXCursor c, CXCursor p, CXClientData d){\n")
+    sb.append("  enum CXCursorKind k=clang_getCursorKind(c);\n")
+    sb.append("  if(k!=CXCursor_TypeRef && k!=CXCursor_NamespaceRef && k!=CXCursor_TemplateRef && k!=CXCursor_ParmDecl) g_hasdef=1;\n")
+    sb.append("  return CXChildVisit_Continue; }\n")
+    sb.append("static int count_defaults(CXCursor c){ int n=clang_Cursor_getNumArguments(c), d=0;\n")
+    sb.append("  for(int i=n-1;i>=0;i--){ g_hasdef=0; clang_visitChildren(clang_Cursor_getArgument(c,i), defck, 0); if(g_hasdef) d++; else break; }\n")
+    sb.append("  return d; }\n")
+    sb.append("static enum CXChildVisitResult fld(CXCursor c, CXCursor p, CXClientData d){\n")
+    sb.append("  if(clang_getCursorKind(c)==CXCursor_FieldDecl && clang_getCXXAccessSpecifier(c)==CX_CXXPublic){ printf(\"FIELD \"); tds(clang_getCursorType(c)); printf(\"|%s\\n\", S(clang_getCursorSpelling(c))); }\n")
+    sb.append("  return CXChildVisit_Continue; }\n")
+    sb.append("static enum CXChildVisitResult gvar(CXCursor c, CXCursor p, CXClientData d){\n")
+    sb.append("  if(clang_getCursorKind(c)==CXCursor_VarDecl && clang_getCXXAccessSpecifier(c)==CX_CXXPublic){ printf(\"GVAR \"); tds(clang_getCursorType(c)); printf(\"|%s\\n\", S(clang_getCursorSpelling(c))); }\n")
+    sb.append("  return CXChildVisit_Continue; }\n")
+    sb.append("/* Inherited-method support: bind a derived class's PUBLIC base methods too (the shim calls them\n")
+    sb.append("   through the derived pointer — public inheritance upcasts). Dedup by name so an override / diamond\n")
+    sb.append("   base isn't bound twice; own methods are recorded first so they win. */\n")
+    sb.append("static char g_seenm[512][96]; static int g_nseenm=0;\n")
+    sb.append("static int g_abstract=0;\n")
+    sb.append("static char g_curclass[256]={0};\n")
+    sb.append("static int seen_method(const char* nm){ for(int i=0;i<g_nseenm;i++) if(strcmp(g_seenm[i],nm)==0) return 1; if(g_nseenm<512){ strncpy(g_seenm[g_nseenm],nm,95); g_seenm[g_nseenm][95]=0; g_nseenm++; } return 0; }\n")
+    sb.append("static void emit_method(CXCursor c){\n")
+    sb.append("  enum CXCursorKind k=clang_getCursorKind(c);\n")
+    sb.append("  if((k==CXCursor_CXXMethod||k==CXCursor_Constructor) && clang_getCursorAvailability(c)==CXAvailability_NotAvailable) return;\n")
+    sb.append("  if(k==CXCursor_CXXMethod && clang_getCXXAccessSpecifier(c)==CX_CXXPublic){\n")
+    sb.append("    printf(\"METHOD %c%c %d \", clang_CXXMethod_isStatic(c)?'s':'.', clang_CXXMethod_isConst(c)?'c':'.', count_defaults(c)); tds(clang_getResultType(clang_getCursorType(c)));\n")
+    sb.append("    { CXString mn=clang_getCursorSpelling(c); CXString pn=clang_getCursorSpelling(clang_getCursorSemanticParent(c)); const char* pns=S(pn);\n")
+    sb.append("      if(g_curclass[0] && pns[0] && strcmp(pns,g_curclass)!=0) printf(\"|%s|%s\\n\", S(mn), pns); else printf(\"|%s\\n\", S(mn));\n")
+    sb.append("      clang_disposeString(mn); clang_disposeString(pn); }\n")
+    sb.append("    params(c); printf(\"EMETHOD\\n\"); }\n")
+    sb.append("  else if(k==CXCursor_Constructor && clang_getCXXAccessSpecifier(c)==CX_CXXPublic && !g_abstract){ printf(\"CTOR %d\\n\", count_defaults(c)); params(c); printf(\"ECTOR\\n\"); }\n")
+    sb.append("  else if(k==CXCursor_Destructor) printf(\"DTOR\\n\");\n")
+    sb.append("}\n")
+    sb.append("static enum CXChildVisitResult ownmeth(CXCursor c, CXCursor p, CXClientData d){\n")
+    sb.append("  enum CXCursorKind k=clang_getCursorKind(c);\n")
+    sb.append("  if(k==CXCursor_CXXMethod && clang_getCXXAccessSpecifier(c)==CX_CXXPublic) seen_method(S(clang_getCursorSpelling(c)));\n")
+    sb.append("  if(k==CXCursor_CXXMethod||k==CXCursor_Constructor||k==CXCursor_Destructor) emit_method(c);\n")
+    sb.append("  return CXChildVisit_Continue; }\n")
+    sb.append("static void emit_inherited(CXCursor basespec);\n")
+    sb.append("static enum CXChildVisitResult inheritm(CXCursor c, CXCursor p, CXClientData d){\n")
+    sb.append("  enum CXCursorKind k=clang_getCursorKind(c);\n")
+    sb.append("  if(k==CXCursor_CXXMethod && clang_getCXXAccessSpecifier(c)==CX_CXXPublic && !clang_CXXMethod_isStatic(c)){\n")
+    sb.append("    const char* nm=S(clang_getCursorSpelling(c));\n")
+    sb.append("    if(nm[0]!='~' && !seen_method(nm)) emit_method(c); }\n")
+    sb.append("  else if(k==CXCursor_CXXBaseSpecifier && clang_getCXXAccessSpecifier(c)==CX_CXXPublic) emit_inherited(c);\n")
+    sb.append("  return CXChildVisit_Continue; }\n")
+    sb.append("static void emit_inherited(CXCursor basespec){\n")
+    sb.append("  CXType bt=clang_getCursorType(basespec);\n")
+    sb.append("  CXString bs=clang_getTypeSpelling(bt); const char* br=S(bs); int istmpl=(strstr(br,\"<\")!=NULL); clang_disposeString(bs);\n")
+    sb.append("  if(istmpl) return;                            /* skip template-base inheritance (kept simple) */\n")
+    sb.append("  CXCursor bd=clang_getTypeDeclaration(bt); CXCursor bdef=clang_getCursorDefinition(bd); if(clang_Cursor_isNull(bdef)) bdef=bd;\n")
+    sb.append("  clang_visitChildren(bdef, inheritm, 0); }\n")
+    sb.append("static enum CXChildVisitResult basespec(CXCursor c, CXCursor p, CXClientData d){\n")
+    sb.append("  if(clang_getCursorKind(c)==CXCursor_CXXBaseSpecifier && clang_getCXXAccessSpecifier(c)==CX_CXXPublic) emit_inherited(c);\n")
+    sb.append("  return CXChildVisit_Continue; }\n")
+    sb.append("static void collect_prot_base(CXCursor bs);\n")
+    sb.append("static enum CXChildVisitResult collectprot(CXCursor c, CXCursor p, CXClientData d){\n")
+    sb.append("  enum CXCursorKind k=clang_getCursorKind(c);\n")
+    sb.append("  if(k==CXCursor_CXXMethod||k==CXCursor_UsingDeclaration){ enum CX_CXXAccessSpecifier a=clang_getCXXAccessSpecifier(c);\n")
+    sb.append("    if(a==CX_CXXProtected||a==CX_CXXPrivate) seen_method(S(clang_getCursorSpelling(c))); }\n")
+    sb.append("  else if(k==CXCursor_CXXBaseSpecifier) collect_prot_base(c);\n")
+    sb.append("  return CXChildVisit_Continue; }\n")
+    sb.append("static void collect_prot_base(CXCursor bs){\n")
+    sb.append("  CXType bt=clang_getCursorType(bs);\n")
+    sb.append("  CXString sp=clang_getTypeSpelling(bt); const char* r=S(sp); int istmpl=(strstr(r,\"<\")!=NULL); clang_disposeString(sp);\n")
+    sb.append("  if(istmpl) return;\n")
+    sb.append("  CXCursor bd=clang_getTypeDeclaration(bt); CXCursor bdef=clang_getCursorDefinition(bd); if(clang_Cursor_isNull(bdef)) bdef=bd;\n")
+    sb.append("  clang_visitChildren(bdef, collectprot, 0); }\n")
+    sb.append("static int g_ntp; static char g_tpname[64];\n")
+    sb.append("static enum CXChildVisitResult ftcount(CXCursor cc, CXCursor pp, CXClientData dd){\n")
+    sb.append("  if(clang_getCursorKind(cc)==CXCursor_TemplateTypeParameter){ g_ntp++; strncpy(g_tpname, S(clang_getCursorSpelling(cc)), 63); g_tpname[63]=0; }\n")
+    sb.append("  return CXChildVisit_Continue; }\n")
+    sb.append("static int is_tparam(CXType t){\n")
+    sb.append("  if(t.kind==CXType_LValueReference||t.kind==CXType_RValueReference) t=clang_getPointeeType(t);\n")
+    sb.append("  CXString s=clang_getTypeSpelling(t); const char* r=S(s); if(strncmp(r,\"const \",6)==0)r+=6;\n")
+    sb.append("  int ok=(strcmp(r,g_tpname)==0); clang_disposeString(s); return ok; }\n")
+    sb.append("static void emit_ftmpl(CXCursor c, const char* nm){\n")
+    sb.append("  g_ntp=0; g_tpname[0]=0; clang_visitChildren(c, ftcount, 0);\n")
+    sb.append("  if(g_ntp!=1 || !g_tpname[0]) return;\n")
+    sb.append("  CXType ft=clang_getCursorType(c);\n")
+    sb.append("  if(!is_tparam(clang_getResultType(ft))) return;\n")
+    sb.append("  int np=clang_getNumArgTypes(ft); if(np<0) return;\n")
+    sb.append("  for(int i=0;i<np;i++){ if(!is_tparam(clang_getArgType(ft,i))) return; }\n")
+    sb.append("  printf(\"FTMPL %d|%s\\n\", np, nm); }\n")
+    sb.append("static enum CXChildVisitResult _tpk_cb(CXCursor cc, CXCursor pp, CXClientData dd){\n")
+    sb.append("  enum CXCursorKind kk=clang_getCursorKind(cc);\n")
+    sb.append("  if(kk==CXCursor_TemplateTypeParameter||kk==CXCursor_NonTypeTemplateParameter||kk==CXCursor_TemplateTemplateParameter){ *(int*)dd=1; return CXChildVisit_Break; }\n")
+    sb.append("  return CXChildVisit_Continue; }\n")
+    sb.append("/* An uninstantiated primary/partial class template (has template-parameter children) can't be\n")
+    sb.append("   bound as a concrete class — its methods would reference the bare template name (`__gmp_expr`\n")
+    sb.append("   without <args>). Only concrete classes and full instantiations are bindable. */\n")
+    sb.append("static int is_template_pattern(CXCursor c){ int f=0; clang_visitChildren(c,_tpk_cb,&f); return f; }\n")
+    sb.append("static enum CXChildVisitResult visit(CXCursor c, CXCursor p, CXClientData d);\n")
+    sb.append("static enum CXChildVisitResult nested(CXCursor c, CXCursor p, CXClientData d){\n")
+    sb.append("  enum CXCursorKind k=clang_getCursorKind(c);\n")
+    sb.append("  if(((k==CXCursor_ClassDecl||k==CXCursor_StructDecl)&&clang_isCursorDefinition(c)) || k==CXCursor_EnumDecl) return visit(c,p,d);\n")
+    sb.append("  return CXChildVisit_Continue; }\n")
+    sb.append("static enum CXChildVisitResult visit(CXCursor c, CXCursor p, CXClientData d){\n")
+    sb.append("  if(!clang_Location_isFromMainFile(clang_getCursorLocation(c))) return CXChildVisit_Continue;\n")
+    sb.append("  enum CXCursorKind k=clang_getCursorKind(c); CXString nmS=clang_getCursorSpelling(c); const char* nm=S(nmS);\n")
+    sb.append("  if(k==CXCursor_ClassTemplate||k==CXCursor_ClassTemplatePartialSpecialization){ clang_disposeString(nmS); return CXChildVisit_Continue; }\n")
+    sb.append("  if(k==CXCursor_Namespace){ printf(\"NS %s\\n\",nm); clang_visitChildren(c,visit,0); printf(\"ENS\\n\"); }\n")
+    sb.append("  else if((k==CXCursor_ClassDecl||k==CXCursor_StructDecl)&&clang_isCursorDefinition(c)){\n")
+    sb.append("    if(is_template_pattern(c)){ clang_disposeString(nmS); return CXChildVisit_Continue; }\n")
+    sb.append("    CXType rt=clang_getCursorType(c); if(!clang_Cursor_isNull(clang_getSpecializedCursorTemplate(c))){ CXString tsx=clang_getTypeSpelling(rt); printf(\"TCLASS %s %d\\n\", clang_getCString(tsx), clang_isPODType(rt)); clang_disposeString(tsx); } else { printf(\"CLASS %s %d\\n\",nm, clang_isPODType(rt)); }\n")
+    sb.append("    int saved=g_nseenm; g_nseenm=0;             /* per-class method-name dedup set */\n")
+    sb.append("    int savedabs=g_abstract; g_abstract=clang_CXXRecord_isAbstract(c);\n")
+    sb.append("    char savedcc[256]; strncpy(savedcc,g_curclass,255); savedcc[255]=0; strncpy(g_curclass,nm,255); g_curclass[255]=0;\n")
+    sb.append("    clang_visitChildren(c,fld,0);\n")
+    sb.append("    clang_visitChildren(c,gvar,0);\n")
+    sb.append("    clang_visitChildren(c,ownmeth,0);           /* own methods/ctors/dtor (records names) */\n")
+    sb.append("    clang_visitChildren(c,collectprot,0);       /* exclude names re-declared protected in a base */\n")
+    sb.append("    clang_visitChildren(c,basespec,0);          /* inherited public methods (deduped) */\n")
+    sb.append("    clang_visitChildren(c,nested,0);            /* nested classes + enums */\n")
+    sb.append("    g_nseenm=saved; g_abstract=savedabs; strncpy(g_curclass,savedcc,255); g_curclass[255]=0;\n")
+    sb.append("    printf(\"ECLASS\\n\"); }\n")
+    sb.append("  else if(k==CXCursor_CXXMethod && clang_getCXXAccessSpecifier(c)==CX_CXXPublic){\n")
+    sb.append("    printf(\"METHOD %c%c %d \", clang_CXXMethod_isStatic(c)?'s':'.', clang_CXXMethod_isConst(c)?'c':'.', count_defaults(c)); tds(clang_getResultType(clang_getCursorType(c))); printf(\"|%s\\n\",nm); params(c); printf(\"EMETHOD\\n\"); }\n")
+    sb.append("  else if(k==CXCursor_Constructor && clang_getCXXAccessSpecifier(c)==CX_CXXPublic){ printf(\"CTOR %d\\n\", count_defaults(c)); params(c); printf(\"ECTOR\\n\"); }\n")
+    sb.append("  else if(k==CXCursor_Destructor) printf(\"DTOR\\n\");\n")
+    sb.append("  else if(k==CXCursor_FunctionDecl){ printf(\"FUNC %d \", count_defaults(c)); tds(clang_getResultType(clang_getCursorType(c))); printf(\"|%s\\n\",nm); params(c); printf(\"EFUNC\\n\"); }\n")
+    sb.append("  else if(k==CXCursor_VarDecl){ printf(\"GVAR \"); tds(clang_getCursorType(c)); printf(\"|%s\\n\",nm); }\n")
+    sb.append("  else if(k==CXCursor_FunctionTemplate) emit_ftmpl(c, nm);\n")
+    sb.append("  else if(k==CXCursor_EnumDecl){ CXType u=clang_getEnumDeclIntegerType(c); const char* us=scalar(u.kind); if(!us[0])us=\"c_int\"; printf(\"ENUM %s %s\\n\", nm[0]?nm:\"anon\", us); clang_visitChildren(c,visit,0); printf(\"EENUM\\n\"); }\n")
+    sb.append("  else if(k==CXCursor_EnumConstantDecl) printf(\"EVAL %s %lld\\n\", nm, (long long)clang_getEnumConstantDeclValue(c));\n")
+    sb.append("  else if(k==CXCursor_TypedefDecl || k==CXCursor_TypeAliasDecl){\n")
+    sb.append("    // `typedef basic_stringstream<char> stringstream;` — a typedef to a template specialization\n")
+    sb.append("    // that no signature references. Emit a TDSPEC hint so bindgen force-instantiates + binds it\n")
+    sb.append("    // (fixes template-only headers like <sstream>/<random>). std::string is handled by its typemap.\n")
+    sb.append("    CXType u=clang_getCanonicalType(clang_getTypedefDeclUnderlyingType(c));\n")
+    sb.append("    if(u.kind==CXType_Record && clang_Type_getNumTemplateArguments(u)>0){\n")
+    sb.append("      CXString us=clang_getTypeSpelling(u); const char* r=S(us);\n")
+    sb.append("      if(strncmp(r,\"std::basic_string<char\",22)!=0) printf(\"TDSPEC %s\\n\", r);\n")
+    sb.append("      clang_disposeString(us); } }\n")
+    sb.append("  clang_disposeString(nmS); return CXChildVisit_Continue; }\n")
+    sb.append("static enum CXChildVisitResult collectparams(CXCursor cc, CXCursor pp, CXClientData dd){\n")
+    sb.append("  if(clang_getCursorKind(cc)==CXCursor_TemplateTypeParameter && g_np<8){ strncpy(g_params[g_np], S(clang_getCursorSpelling(cc)), 63); g_params[g_np][63]=0; g_np++; }\n")
+    sb.append("  return CXChildVisit_Continue; }\n")
+    sb.append("static enum CXChildVisitResult imeth(CXCursor c, CXCursor p, CXClientData d){\n")
+    sb.append("  enum CXCursorKind k=clang_getCursorKind(c);\n")
+    sb.append("  if(k==CXCursor_FieldDecl && clang_getCXXAccessSpecifier(c)==CX_CXXPublic){\n")
+    sb.append("    printf(\"FIELD \"); tds(clang_getCursorType(c)); printf(\"|%s\\n\", S(clang_getCursorSpelling(c))); }\n")
+    sb.append("  else if(k==CXCursor_CXXMethod && clang_getCXXAccessSpecifier(c)==CX_CXXPublic){\n")
+    sb.append("    { CXString ms=clang_getCursorSpelling(c); const char* mn=clang_getCString(ms);\n")
+    sb.append("      if(strcmp(mn,\"begin\")==0) g_hasbegin=1; else if(strcmp(mn,\"end\")==0) g_hasend=1;\n")
+    sb.append("      clang_disposeString(ms); }\n")
+    sb.append("    printf(\"METHOD %c%c %d \", clang_CXXMethod_isStatic(c)?'s':'.', clang_CXXMethod_isConst(c)?'c':'.', count_defaults(c)); tds(clang_getResultType(clang_getCursorType(c))); printf(\"|%s\\n\", S(clang_getCursorSpelling(c))); params(c); printf(\"EMETHOD\\n\"); }\n")
+    sb.append("  else if(k==CXCursor_Constructor && clang_getCXXAccessSpecifier(c)==CX_CXXPublic){ printf(\"CTOR %d\\n\", count_defaults(c)); params(c); printf(\"ECTOR\\n\"); }\n")
+    sb.append("  return CXChildVisit_Continue; }\n")
+    sb.append("static int g_ownmc;\n")
+    sb.append("static enum CXChildVisitResult ownmc_cb(CXCursor cc, CXCursor pp, CXClientData dd){\n")
+    sb.append("  enum CXCursorKind kk=clang_getCursorKind(cc);\n")
+    sb.append("  if(kk==CXCursor_CXXMethod||kk==CXCursor_Constructor) g_ownmc++;\n")
+    sb.append("  return CXChildVisit_Continue; }\n")
+    sb.append("static enum CXChildVisitResult inst(CXCursor c, CXCursor p, CXClientData d){\n")
+    sb.append("  if((clang_getCursorKind(c)==CXCursor_ClassDecl || clang_getCursorKind(c)==CXCursor_StructDecl) && clang_isCursorDefinition(c)){\n")
+    sb.append("    if(is_template_pattern(c)) return CXChildVisit_Continue;   /* partial spec / primary pattern (`__gmp_expr<T,T>`) — not a concrete instantiation */\n")
+    sb.append("    CXCursor tmpl=clang_getSpecializedCursorTemplate(c);\n")
+    sb.append("    if(!clang_Cursor_isNull(tmpl)){\n")
+    sb.append("      // `getSpecializedCursorTemplate` may return a forward DECLARATION of the template (true for\n")
+    sb.append("      // std::map/set), which has no member cursors; get the DEFINITION so its methods are visible.\n")
+    sb.append("      CXCursor def=clang_getCursorDefinition(tmpl); if(clang_Cursor_isNull(def)) def=tmpl;\n")
+    sb.append("      CXType ct=clang_getCursorType(c); g_np=0; clang_visitChildren(def, collectparams, 0);\n")
+    sb.append("      int na=clang_Type_getNumTemplateArguments(ct); for(int i=0;i<na && i<8;i++) g_args[i]=clang_Type_getTemplateArgumentAsType(ct,i);\n")
+    sb.append("      CXString cts=clang_getTypeSpelling(ct); { const char* cs=S(cts); const char* lt=strchr(cs,'<'); int bl=lt?(int)(lt-cs):(int)strlen(cs); if(bl>255)bl=255; memcpy(g_cbase,cs,bl); g_cbase[bl]=0; }\n")
+    sb.append("      printf(\"TCLASS %s %d\\n\", S(cts), clang_isPODType(ct)); clang_disposeString(cts);\n")
+    sb.append("      g_hasbegin=0; g_hasend=0;\n")
+    sb.append("      // Explicit specialization (own members>0) OVERRIDES the primary -> bind ITS members\n")
+    sb.append("      // (concrete, no substitution); implicit instantiation (0) -> primary + arg substitution.\n")
+    sb.append("      g_ownmc=0; clang_visitChildren(c, ownmc_cb, 0);\n")
+    sb.append("      CXCursor msrc = (g_ownmc>0) ? c : def;\n")
+    sb.append("      clang_visitChildren(msrc, imeth, 0);\n")
+    sb.append("      // Smart pointers: `get()` returns `element_type*` via a metafunction-dependent typedef that\n")
+    sb.append("      // libclang won't reduce, and it's inherited from a template base — so synthesize it directly.\n")
+    sb.append("      // The element type is the first template arg (a pointer to it). Enables extracting the pointee.\n")
+    sb.append("      if(na>0 && (strcmp(g_cbase,\"std::shared_ptr\")==0 || strcmp(g_cbase,\"std::unique_ptr\")==0 || strcmp(g_cbase,\"std::weak_ptr\")==0)){\n")
+    sb.append("        printf(\"METHOD .c \"); classify(1,0,clang_getCanonicalType(g_args[0])); printf(\"|get\\n\"); printf(\"EMETHOD\\n\"); }\n")
+    sb.append("      if(na>0 && g_hasbegin && g_hasend &&\n")
+    sb.append("         (strcmp(g_cbase,\"std::list\")==0||strcmp(g_cbase,\"std::forward_list\")==0||\n")
+    sb.append("          strcmp(g_cbase,\"std::set\")==0||strcmp(g_cbase,\"std::multiset\")==0||\n")
+    sb.append("          strcmp(g_cbase,\"std::unordered_set\")==0||strcmp(g_cbase,\"std::unordered_multiset\")==0)){\n")
+    sb.append("        printf(\"ITER \"); classify(0,0,clang_getCanonicalType(g_args[0])); printf(\"\\n\"); }\n")
+    sb.append("      if(na>=2 && g_hasbegin && g_hasend &&\n")
+    sb.append("         (strcmp(g_cbase,\"std::map\")==0||strcmp(g_cbase,\"std::multimap\")==0||\n")
+    sb.append("          strcmp(g_cbase,\"std::unordered_map\")==0||strcmp(g_cbase,\"std::unordered_multimap\")==0)){\n")
+    sb.append("        printf(\"ITERMAPKEY \"); classify(0,0,clang_getCanonicalType(g_args[0])); printf(\"\\n\");\n")
+    sb.append("        printf(\"ITERMAPVAL \"); classify(0,0,clang_getCanonicalType(g_args[1])); printf(\"\\n\"); }\n")
+    sb.append("      printf(\"ECLASS\\n\"); g_np=0; g_cbase[0]=0;\n")
     sb.append("    }\n")
-    sb.append("}\n")
-    sb.append("static enum CXChildVisitResult visit(CXCursor c, CXCursor parent, CXClientData d){\n")
-    sb.append("    enum CXCursorKind k=clang_getCursorKind(c);\n")
-    sb.append("    if(!clang_Location_isFromMainFile(clang_getCursorLocation(c))) return CXChildVisit_Continue;\n")
-    sb.append("    CXString nmS=clang_getCursorSpelling(c); const char* nm=S(nmS);\n")
-    sb.append("    CXString rtS; const char* rt;\n")
-    sb.append("    if(k==CXCursor_Namespace){ printf(\"NS %s\\n\",nm); clang_visitChildren(c,visit,0); printf(\"ENS\\n\"); }\n")
-    sb.append("    else if((k==CXCursor_ClassDecl||k==CXCursor_StructDecl)&&clang_isCursorDefinition(c)){\n")
-    sb.append("        printf(\"CLASS %s\\n\",nm); clang_visitChildren(c,visit,0); printf(\"ECLASS\\n\"); }\n")
-    sb.append("    else if(k==CXCursor_CXXMethod && clang_getCXXAccessSpecifier(c)==CX_CXXPublic){\n")
-    sb.append("        rtS=clang_getTypeSpelling(clang_getResultType(clang_getCursorType(c))); rt=S(rtS);\n")
-    sb.append("        printf(\"METHOD %c%c %s|%s\\n\", clang_CXXMethod_isStatic(c)?'s':'.', clang_CXXMethod_isConst(c)?'c':'.', rt, nm);\n")
-    sb.append("        params(c); printf(\"EMETHOD\\n\"); clang_disposeString(rtS); }\n")
-    sb.append("    else if(k==CXCursor_Constructor && clang_getCXXAccessSpecifier(c)==CX_CXXPublic){ printf(\"CTOR\\n\"); params(c); printf(\"ECTOR\\n\"); }\n")
-    sb.append("    else if(k==CXCursor_Destructor){ printf(\"DTOR\\n\"); }\n")
-    sb.append("    else if(k==CXCursor_FunctionDecl){\n")
-    sb.append("        rtS=clang_getTypeSpelling(clang_getResultType(clang_getCursorType(c))); rt=S(rtS);\n")
-    sb.append("        printf(\"FUNC %s|%s\\n\", rt, nm); params(c); printf(\"EFUNC\\n\"); clang_disposeString(rtS); }\n")
-    sb.append("    else if(k==CXCursor_EnumDecl){ printf(\"ENUM %s\\n\", nm[0]?nm:\"anon\"); clang_visitChildren(c,visit,0); printf(\"EENUM\\n\"); }\n")
-    sb.append("    else if(k==CXCursor_EnumConstantDecl){ printf(\"EVAL %s %lld\\n\", nm, clang_getEnumConstantDeclValue(c)); }\n")
-    sb.append("    clang_disposeString(nmS);\n")
-    sb.append("    return CXChildVisit_Continue;\n")
-    sb.append("}\n")
+    sb.append("  }\n")
+    sb.append("  return CXChildVisit_Continue; }\n")
     sb.append("int main(int argc,char**argv){\n")
-    sb.append("    CXIndex idx=clang_createIndex(0,0);\n")
-    sb.append("    const char* a[]={\"-x\",\"c++\",\"-std=c++17\"};\n")
-    sb.append("    CXTranslationUnit tu=clang_parseTranslationUnit(idx,argv[1],a,3,0,0,CXTranslationUnit_None);\n")
-    sb.append("    if(!tu){fprintf(stderr,\"parse failed\\n\");return 1;}\n")
-    sb.append("    clang_visitChildren(clang_getTranslationUnitCursor(tu),visit,0);\n")
-    sb.append("    clang_disposeTranslationUnit(tu);clang_disposeIndex(idx);return 0;\n")
-    sb.append("}\n")
+    sb.append("  int inst_mode=0, off=1;\n")
+    sb.append("  if(argc>1 && strcmp(argv[1],\"--inst\")==0){ inst_mode=1; off=2; }\n")
+    sb.append("  if(argc<off+1){ fprintf(stderr,\"usage: cxxwalk [--inst] <header> [clang args...]\\n\"); return 2; }\n")
+    sb.append("  CXIndex idx=clang_createIndex(0,0);\n")
+    sb.append("  CXTranslationUnit tu=clang_parseTranslationUnit(idx,argv[off],(const char**)(argv+off+1),argc-off-1,0,0,0);\n")
+    sb.append("  if(!tu){ fprintf(stderr,\"cxxwalk: libclang could not create a translation unit\\n\"); return 1; }\n")
+    sb.append("  unsigned nd=clang_getNumDiagnostics(tu), nerr=0, nfatal=0;\n")
+    sb.append("  for(unsigned i=0;i<nd;i++){ CXDiagnostic dg=clang_getDiagnostic(tu,i); enum CXDiagnosticSeverity sv=clang_getDiagnosticSeverity(dg);\n")
+    sb.append("    if(sv>=CXDiagnostic_Error){ CXString ds=clang_formatDiagnostic(dg,clang_defaultDiagnosticDisplayOptions()); fprintf(stderr,\"DIAG %s\\n\",clang_getCString(ds)); clang_disposeString(ds); nerr++; if(sv==CXDiagnostic_Fatal) nfatal++; }\n")
+    sb.append("    clang_disposeDiagnostic(dg); }\n")
+    sb.append("  fprintf(stderr,\"DIAGERR %u %u\\n\", nerr, nfatal);\n")
+    sb.append("  g_inst=inst_mode;\n")
+    sb.append("  clang_visitChildren(clang_getTranslationUnitCursor(tu), inst_mode?inst:visit, 0);\n")
+    sb.append("  if(!inst_mode) emit_extstructs();   /* lay out by-value external (non-system) records */\n")
+    sb.append("  clang_disposeTranslationUnit(tu); clang_disposeIndex(idx); return 0; }\n")
     return sb.to_string().as_str()
+
+# ── portable shell helpers (Windows cmd.exe vs POSIX sh) ─────────────────────────
+# `_tr_system` runs cmd.exe on Windows and /bin/sh elsewhere, so `rm`/`/dev/null` and
+# the `.\exe` invocation form are not portable. These normalize both.
+def _rm_files(files: str):
+    if _tr_is_windows():
+        _tr_system("del /q " + files + " >nul 2>&1")
+    else:
+        _tr_system("rm -f " + files + " 2>/dev/null")
+
+# Invoke a just-built executable in the CWD (`.\name.exe` on Windows, `./name.exe` on POSIX).
+def _local_exe(stem: str) -> str:
+    if _tr_is_windows(): return ".\\" + stem + ".exe"
+    return "./" + stem + ".exe"
 
 # Detect libclang by test-compiling a probe. "" = present; otherwise a guidance string.
 def _detect_libclang(cc: str) -> str:
     write_file("_cxxprobe.c", "#include <clang-c/Index.h>\nint main(){ clang_createIndex(0,0); return 0; }\n")
     mut rc = _tr_system(cc + " _cxxprobe.c -o _cxxprobe.exe -lclang 2>_cxx_err.txt")
-    _tr_system("rm -f _cxxprobe.c _cxxprobe.exe 2>/dev/null")
+    _rm_files("_cxxprobe.c _cxxprobe.exe _cxx_err.txt")
     if rc == 0: return ""
     mut g = StringBuilder.init(768)
     g.append("bindgen: `-h cpp` needs libclang (Clang's C API), which was not found.\n")
@@ -965,6 +1583,125 @@ def _last_seg(s: str) -> str:
     if parts.len == 0: return s
     return parts.get(parts.len - 1)
 
+# Map a C++ operator method spelling ("operator*", "operator[]", "operator==") to a clean
+# wrapper identifier ("op_deref", "op_index", "op_eq"). Returns "" to SKIP (copy/move
+# assignment, address-of, conversion operators, new/delete) — those don't cross an FFI
+# boundary sanely. `nparams` = declared parameter count; `is_member` distinguishes a member
+# operator (unary=0 params, binary=1) from a free operator (unary=1, binary=2). Arity only
+# matters for the glyphs that are both unary and binary (* + - &). Binding operators is what
+# makes iterators (*/++/==), arithmetic/comparison types (+ - == <) and operator[] usable.
+def _cpp_op_name(mname: str, nparams: int, is_member: bool) -> str:
+    if mname.len() < 9: return ""              # "operator" + at least one glyph char
+    mut g = mname.slice(8, mname.len())        # the operator glyph(s): "*", "==", "[]", "++"
+    # Conversion operators ("operator bool"), new/delete/co_await: glyph starts with a letter
+    # or space — un-nameable / not a real operation to expose. Skip.
+    mut c0 = g[0]
+    if (c0 >= 65 and c0 <= 90) or (c0 >= 97 and c0 <= 122) or c0 == 32: return ""
+    mut unary = false
+    if is_member: unary = (nparams == 0)
+    else: unary = (nparams <= 1)
+    if g == "[]": return "op_index"
+    if g == "()": return "op_call"
+    if g == "->": return "op_arrow"
+    if g == "++": return "op_inc"
+    if g == "--": return "op_dec"
+    if g == "==": return "op_eq"
+    if g == "!=": return "op_ne"
+    if g == "<=": return "op_le"
+    if g == ">=": return "op_ge"
+    if g == "<": return "op_lt"
+    if g == ">": return "op_gt"
+    if g == "<<": return "op_lshift"
+    if g == ">>": return "op_rshift"
+    if g == "+=": return "op_iadd"
+    if g == "-=": return "op_isub"
+    if g == "*=": return "op_imul"
+    if g == "/=": return "op_idiv"
+    if g == "%=": return "op_imod"
+    if g == "&=": return "op_iand"
+    if g == "|=": return "op_ior"
+    if g == "^=": return "op_ixor"
+    if g == "*":
+        if unary: return "op_deref"
+        return "op_mul"
+    if g == "+":
+        if unary: return "op_pos"
+        return "op_add"
+    if g == "-":
+        if unary: return "op_neg"
+        return "op_sub"
+    if g == "/": return "op_div"
+    if g == "%": return "op_mod"
+    if g == "&":
+        if unary: return ""                    # unary address-of — skip
+        return "op_bitand"
+    if g == "|": return "op_bitor"
+    if g == "^": return "op_xor"
+    if g == "~": return "op_bitnot"
+    if g == "!": return "op_lnot"
+    if g == "&&": return "op_land"
+    if g == "||": return "op_lor"
+    return ""                                  # "=" (assignment), compound-shift, unknown → skip
+
+# Sanitize any C++ type/name spelling into a valid Tauraro/C identifier (`std::string` ->
+# `std__string`, `vector<int>` -> `vector_int_`). Used for opaque handles of std::/template/
+# unknown types so the binding compiles.
+def _cpp_ident(s: str) -> str:
+    mut out = ""
+    mut i = 0
+    while i < s.len():
+        mut c = s[i]
+        if (c >= 65 and c <= 90) or (c >= 97 and c <= 122) or (c >= 48 and c <= 57) or c == 95:
+            out = out + s.slice(i, i + 1)
+        else:
+            out = out + "_"
+        i = i + 1
+    if out == "": return "T_"
+    mut c0 = out[0]
+    if c0 >= 48 and c0 <= 57: return "T_" + out    # can't start with a digit
+    return out
+
+# True if `s` is a clean identifier (letter/underscore start, then alnum/underscore). Used to
+# reject anonymous/ill-named clang spellings like `(unnamed enum at f.h:60:3)` or an empty
+# anonymous-class name, which would otherwise emit un-parseable Tauraro.
+def _is_clean_ident(s: str) -> bool:
+    if s.len() == 0: return false
+    mut c0 = s[0]
+    if not ((c0 >= 65 and c0 <= 90) or (c0 >= 97 and c0 <= 122) or c0 == 95): return false
+    mut i = 1
+    while i < s.len():
+        mut c = s[i]
+        if not ((c >= 65 and c <= 90) or (c >= 97 and c <= 122) or (c >= 48 and c <= 57) or c == 95): return false
+        i = i + 1
+    return true
+
+# Tauraro reserved words that cannot be a bare parameter name (would be a parse error).
+def _is_tr_keyword(n: str) -> bool:
+    if n == "in" or n == "is" or n == "as" or n == "or" or n == "and" or n == "not": return true
+    if n == "if" or n == "else" or n == "elif" or n == "for" or n == "while" or n == "match" or n == "case": return true
+    if n == "def" or n == "return" or n == "class" or n == "enum" or n == "type" or n == "interface": return true
+    if n == "mut" or n == "pub" or n == "ref" or n == "from" or n == "import" or n == "pass": return true
+    if n == "break" or n == "continue" or n == "true" or n == "false" or n == "none": return true
+    if n == "super" or n == "with" or n == "try" or n == "raise" or n == "async" or n == "await": return true
+    if n == "var" or n == "do" or n == "loop" or n == "defer" or n == "actor" or n == "decorator": return true
+    if n == "extend" or n == "implements" or n == "extends" or n == "throws" or n == "spawn": return true
+    return false
+
+# Disambiguate an overloaded C symbol: first use keeps the name, later ones get `_2`, `_3`, …
+# (C++ has no overloading across `extern "C"`, and Tauraro has no def-overloading either).
+def _uniq_sym(base_sym: str, used: Map[str, int]) -> str:
+    if used.contains(base_sym):
+        mut n = used.get(base_sym) + 1
+        used.insert(base_sym, n)
+        return base_sym + "_" + n.to_str()
+    used.insert(base_sym, 1)
+    return base_sym
+
+# The Tauraro-side parameter name: avoid the implicit receiver (`obj`/`self`) and keywords.
+def _cpp_tr_pname(pname: str) -> str:
+    if pname == "self" or pname == "obj" or _is_tr_keyword(pname): return pname + "_"
+    return pname
+
 # C++ type text for a primitive (base + trailing stars), used in shim signatures.
 def _cpp_ctype(t: CppType) -> str:
     mut s = t.base
@@ -1007,6 +1744,96 @@ def _cpp_ret(rt: CppType, call: str) -> Vec[str]:
         r.push(rt.base + "*"); r.push("return new " + rt.base + "(" + call + ");"); r.push(trret)
     return r
 
+# The Tauraro opaque-handle type for a class / std:: / template / unknown C++ type. A known
+# class uses its bare name (already an emitted `class X: pass`); an unknown/std type is
+# sanitized (`std::string` -> `std__string`) and registered as an opaque class on demand.
+# `nd` is the pointer depth (>=1); extra levels wrap in Pointer[...].
+def _cpp_opaque_handle(base: str, nd: int, class_names: Map[str, bool], value_structs: Map[str, bool], seen: Map[str, bool], opaque: StringBuilder) -> str:
+    mut seg = _last_seg(base)
+    mut handle = seg
+    if _is_libc_ty_name(seg) or _is_system_record_ty(seg):
+        # A standard libc / Windows-COM system type is already defined by the runtime's system
+        # headers; reference it bare (resolves in C) rather than emitting a conflicting opaque
+        # class (`struct _GUID` redefinition). Fixes pointer-to-COM-object bindings.
+        handle = seg
+    elif value_structs.contains(seg):
+        # A POD value-struct — emitted as `@value_type class seg` by ECLASS; use its bare name.
+        handle = seg
+    elif not class_names.contains(seg):
+        handle = _cpp_ident(base)
+        if not seen.contains("class:" + handle):
+            opaque.append("class " + handle + ":\n    pass\n")
+            seen.insert("class:" + handle, true)
+    # An opaque class handle is ALREADY one C pointer (bare name == `T*`), so a pointer depth of
+    # `nd` wraps nd-1 times. A `@value_type` struct is a VALUE, so `T*` needs one full wrap — wrap
+    # all nd levels (e.g. `shared_ptr::get()` returning a `Thing*` where Thing is a POD struct).
+    mut ty = handle
+    mut k = 1
+    if value_structs.contains(seg): k = 0
+    while k < nd:
+        ty = "Pointer[" + ty + "]"
+        k = k + 1
+    return ty
+
+# Resolve a class type's C++ spelling to its fully-qualified name (`Stats` -> `media::Encoder::Stats`)
+# using the qualified names collected on the class stack, so a nested/namespaced class type
+# resolves in the shim (bare `Stats` isn't visible even with `using namespace`).
+def _cpp_qual(base: str, class_qual: Map[str, str]) -> str:
+    mut seg = _last_seg(base)
+    if class_qual.contains(seg): return class_qual.get(seg)
+    return base
+
+# Descriptor-based return lowering: [shim_ctype, body_stmt, tr_ret]. Primitives (incl. resolved
+# typedefs) and enums cross by value; a POD struct crosses by value; std::string returns as a
+# heap `char*`; other records/std/unknown cross as opaque handles (heap-copied / addressed).
+def _cpp_ret_ex(desc: str, call: str, value_structs: Map[str, bool], class_names: Map[str, bool], class_qual: Map[str, str], seen: Map[str, bool], opaque: StringBuilder) -> Vec[str]:
+    mut r = Vec[str].init(3)
+    mut d4 = _desc4(desc)
+    mut rdepth = _to_int(d4.get(0))
+    mut rref = (d4.get(1) != "0")
+    mut cat = d4.get(2)
+    mut detail = d4.get(3)
+    if cat == "v":
+        r.push("void"); r.push(call + ";"); r.push(""); return r
+    if cat == "p":
+        mut cpp = _c_to_cpp(detail)
+        if rdepth == 0:
+            r.push(cpp); r.push("return " + call + ";"); r.push(detail); return r
+        # C-style cast strips a `const` on a pointer/ref-to-primitive return (e.g. the const
+        # overload of `data()` returning `const int*`).
+        mut cty = cpp + " " + _stars(rdepth)
+        if rref: r.push(cty); r.push("return (" + cty + ")(&(" + call + "));"); r.push(_ptr_wrap(detail, rdepth))
+        else: r.push(cty); r.push("return (" + cty + ")(" + call + ");"); r.push(_ptr_wrap(detail, rdepth))
+        return r
+    if cat == "e":
+        mut espell = detail.split("#").get(0)
+        mut ealias = _last_seg(espell)
+        if rdepth == 0:
+            r.push(espell); r.push("return " + call + ";"); r.push(ealias); return r
+        if rref: r.push(espell + "*"); r.push("return &(" + call + ");"); r.push(_ptr_wrap(ealias, rdepth))
+        else: r.push(espell + "*"); r.push("return " + call + ";"); r.push(_ptr_wrap(ealias, rdepth))
+        return r
+    if cat == "s" and detail == "string":
+        # std::string -> a heap `char*` copy (owned by the caller; free with the runtime's free).
+        r.push("char*"); r.push("return _tr_cpp_strdup(" + call + ");"); r.push("Pointer[char]"); return r
+    if cat == "f":
+        r.push("void*"); r.push("return (void*)(" + call + ");"); r.push("Pointer[void]"); return r
+    mut seg = _last_seg(detail)
+    if cat == "r" and value_structs.contains(seg) and rdepth == 0:
+        r.push(_cpp_qual(detail, class_qual)); r.push("return " + call + ";"); r.push(seg); return r
+    mut nd = rdepth
+    if nd < 1: nd = 1
+    mut handle = _cpp_opaque_handle(detail, nd, class_names, value_structs, seen, opaque)
+    mut cb = _cpp_qual(detail, class_qual)
+    # C-style cast on ptr/ref returns strips a `const` the return carried (e.g. `const T&`).
+    if rdepth == 0:
+        r.push(cb + "*"); r.push("return new " + cb + "(" + call + ");"); r.push(handle)
+    elif rref:
+        r.push(cb + "*"); r.push("return (" + cb + "*)(&(" + call + "));"); r.push(handle)
+    else:
+        r.push(cb + "*"); r.push("return (" + cb + "*)(" + call + ");"); r.push(handle)
+    return r
+
 # Drop the trailing "::segment" of a "::"-joined namespace path.
 def _ns_pop(path: str) -> str:
     mut parts = path.split("::")
@@ -1037,9 +1864,145 @@ def _rstrip_cr(s: str) -> str:
     if n == s.len(): return s
     return s.slice(0, n)
 
+# ── descriptor-based type mapping (canonical kinds from libclang) ────────────────
+# The walker resolves each type to `ptrdepth~isref~cat~detail`; these turn a descriptor
+# into the Tauraro type, the C++ shim type, and the call-forwarding expression.
+
+# c_* scalar name -> its concrete C++ type (for the shim). ABI-exact; the typedef the header
+# used (HRESULT, DWORD, …) is irrelevant — the canonical builtin is what matters.
+def _c_to_cpp(cn: str) -> str:
+    if cn == "void": return "void"
+    if cn == "bool": return "bool"
+    if cn == "c_int": return "int"
+    if cn == "c_uint": return "unsigned int"
+    if cn == "c_char": return "char"
+    if cn == "c_schar": return "signed char"
+    if cn == "c_uchar": return "unsigned char"
+    if cn == "c_wchar": return "wchar_t"
+    if cn == "c_char16": return "char16_t"
+    if cn == "c_char32": return "char32_t"
+    if cn == "c_short": return "short"
+    if cn == "c_ushort": return "unsigned short"
+    if cn == "c_long": return "long"
+    if cn == "c_ulong": return "unsigned long"
+    if cn == "c_longlong": return "long long"
+    if cn == "c_ulonglong": return "unsigned long long"
+    if cn == "c_float": return "float"
+    if cn == "c_double": return "double"
+    if cn == "c_ldouble": return "long double"
+    if cn == "c_size_t": return "size_t"
+    if cn == "c_ssize_t": return "ptrdiff_t"
+    if cn == "c_ptrdiff_t": return "ptrdiff_t"
+    if cn == "c_intptr_t": return "intptr_t"
+    if cn == "c_uintptr_t": return "uintptr_t"
+    if cn == "c_int8_t": return "signed char"
+    if cn == "c_uint8_t": return "unsigned char"
+    if cn == "c_int16_t": return "short"
+    if cn == "c_uint16_t": return "unsigned short"
+    if cn == "c_int32_t": return "int"
+    if cn == "c_uint32_t": return "unsigned int"
+    if cn == "c_int64_t": return "long long"
+    if cn == "c_uint64_t": return "unsigned long long"
+    return cn
+
+# Split a descriptor into [ptrdepth, isref, cat, detail] (detail may contain '~'/'#').
+def _desc4(desc: str) -> Vec[str]:
+    mut parts = desc.split("~")
+    mut r = Vec[str].init(4)
+    if parts.len < 3:
+        r.push("0"); r.push("0"); r.push("u"); r.push(desc)
+        return r
+    r.push(parts.get(0))
+    r.push(parts.get(1))
+    r.push(parts.get(2))
+    mut det = ""
+    if parts.len > 3: det = parts.get(3)
+    mut k = 4
+    while k < parts.len:
+        det = det + "~" + parts.get(k)
+        k = k + 1
+    r.push(det)
+    return r
+
+# Parse a `TCLASS <spelling> <pod>` payload: the spelling may contain spaces (e.g.
+# `std::vector<int, std::allocator<int>>`), so pod is the LAST space-separated token.
+def _parse_tclass(rest: str) -> Vec[str]:
+    mut parts = rest.split(" ")
+    mut r = Vec[str].init(2)
+    if parts.len < 2:
+        r.push(rest); r.push("0"); return r
+    mut pod = parts.get(parts.len - 1)
+    mut sp = ""
+    mut i = 0
+    while i < parts.len - 1:
+        if sp == "": sp = parts.get(i)
+        else: sp = sp + " " + parts.get(i)
+        i = i + 1
+    r.push(sp); r.push(pod)
+    return r
+
+# `n` pointer stars.
+def _stars(n: int) -> str:
+    mut s = ""
+    mut i = 0
+    while i < n:
+        s = s + "*"
+        i = i + 1
+    return s
+
+# Wrap `inner` in `n` levels of Pointer[...].
+def _ptr_wrap(inner: str, n: int) -> str:
+    mut t = inner
+    mut i = 0
+    while i < n:
+        t = "Pointer[" + t + "]"
+        i = i + 1
+    return t
+
+# The Tauraro type for a `@value_type` struct field, from its descriptor. Primitives/enums
+# inline by value; a nested value-struct inlines by value; a non-POD embedded record is
+# approximated as Pointer[void] (rare); pointers wrap.
+def _cpp_field_type(desc: str, value_structs: Map[str, bool], enum_names: Map[str, bool]) -> str:
+    mut d4 = _desc4(desc)
+    mut depth = _to_int(d4.get(0))
+    mut cat = d4.get(2)
+    mut detail = d4.get(3)
+    if cat == "p":
+        if depth == 0: return detail
+        return _ptr_wrap(detail, depth)
+    if cat == "e":
+        mut ealias = _last_seg(detail.split("#").get(0))
+        if depth == 0: return ealias
+        return _ptr_wrap(ealias, depth)
+    if cat == "r":
+        mut seg = _last_seg(detail)
+        if depth == 0:
+            if value_structs.contains(seg): return seg
+            return "Pointer[void]"
+        return _ptr_wrap(seg, depth)
+    if depth == 0: return "Pointer[void]"
+    return _ptr_wrap("void", depth)
+
+# Wrap a shim function body in try/catch so a C++ exception NEVER propagates through the
+# `extern "C"` boundary (which is undefined behavior — it `std::terminate`s the whole process).
+# On an exception we record the message in a thread-local (readable via `tauraro_cpp_last_error()`)
+# and return a zero/default value. Zero-cost on the happy path (table-based unwinding).
+def _shim_body(ret_ctype: str, body: str) -> str:
+    mut zero = "return {};"
+    if ret_ctype == "void": zero = "return;"
+    return "try { " + body + " } catch (const std::exception& e) { _tr_cpp_set_error(e.what()); " + zero + " } catch (...) { _tr_cpp_set_error(\"C++ exception\"); " + zero + " }"
+
+# Turn a function TYPE spelling (`void (int, void *)`) into a function POINTER type
+# (`void (*)(int, void *)`) by inserting `(*)` before the argument list — needed to C-cast a
+# `void*` back to a callable in the shim.
+def _fnptr_cast(fnty: str) -> str:
+    mut p = fnty.find("(")
+    if p < 0: return fnty
+    return fnty.slice(0, p) + "(*)" + fnty.slice(p, fnty.len())
+
 # Parse the walker's flat IR and emit `<base>.tr` (opaque handles + wrappers) and the
 # `<base>_shim.cpp` (extern "C" bridge with namespace-qualified C++ calls).
-def _cpp_generate(ir: str, header: str, out: str):
+def _cpp_generate(ir: str, header: str, out: str, shim_cflags: str, pkglibs: str):
     mut opaque = StringBuilder.init(512)
     mut consts = StringBuilder.init(512)
     mut decls  = StringBuilder.init(2048)
@@ -1048,16 +2011,74 @@ def _cpp_generate(ir: str, header: str, out: str):
     mut seen: Map[str, bool] = Map[str, bool].init(64)
 
     mut ns_path = ""          # "geo" or "geo::detail"
-    mut cur_class = ""        # unqualified, e.g. "Shape"
-    mut cur_class_qual = ""   # "geo::Shape"
-    mut class_pfx = ""        # "geo_Shape"
     mut n_classes = 0
     mut n_fns = 0
+    mut sym_used: Map[str, int] = Map[str, int].init(64)   # overload disambiguation
+
+    # Class STACK (nested classes: `Encoder::Stats`) — on ECLASS we must restore the parent's
+    # class as the receiver, not blank it (else a following method gets an empty `obj:` type).
+    mut cstk_name: Vec[str] = Vec[str].init(4)
+    mut cstk_qual: Vec[str] = Vec[str].init(4)
+    mut cstk_pfx:  Vec[str] = Vec[str].init(4)
+    # Value-struct field collection (deferred body emission at ECLASS). `fld_buf` = current
+    # class's `pub name: type` lines; `fld_stack` saves the parent's on nesting.
+    mut fld_buf = ""
+    mut fld_stack: Vec[str] = Vec[str].init(4)
+
+    # Pre-scan: ENUM names, CLASS names, and which classes are POD value-structs (POD + >=1
+    # public field → cross by value as `@value_type`). A `CLASS <name> <pod>` line is followed
+    # by `FIELD` lines until `ECLASS`; count them per (nested) class via a small stack.
+    mut enum_names:    Map[str, bool] = Map[str, bool].init(32)
+    mut class_names:   Map[str, bool] = Map[str, bool].init(32)
+    mut value_structs: Map[str, bool] = Map[str, bool].init(32)
+    mut class_qual:    Map[str, str]  = Map[str, str].init(32)   # last-seg name -> qualified C++ name
+    mut ps_name: Vec[str] = Vec[str].init(4)
+    mut ps_pod:  Vec[str] = Vec[str].init(4)
+    mut ps_nf:   Vec[str] = Vec[str].init(4)
+    mut plines = ir.split("\n")
+    mut pli = 0
+    while pli < plines.len:
+        mut pl = _rstrip_cr(plines.get(pli))
+        pli = pli + 1
+        if pl.starts_with("ENUM "):
+            mut erest = pl.slice(5, pl.len())
+            mut ename0 = erest.split(" ").get(0)
+            if ename0 != "anon": enum_names.insert(ename0, true)
+        elif pl.starts_with("CLASS "):
+            mut crest = pl.slice(6, pl.len())
+            mut cparts = crest.split(" ")
+            mut cnm = cparts.get(0)
+            mut cpod = "0"
+            if cparts.len > 1: cpod = cparts.get(1)
+            class_names.insert(cnm, true)
+            ps_name.push(cnm); ps_pod.push(cpod); ps_nf.push("0")
+        elif pl.starts_with("TCLASS "):
+            mut tp = _parse_tclass(pl.slice(7, pl.len()))
+            mut tnm = _cpp_ident(tp.get(0))         # sanitized instantiation name (Box<int> -> Box_int_)
+            class_names.insert(tnm, true)
+            ps_name.push(tnm); ps_pod.push(tp.get(1)); ps_nf.push("0")
+        elif pl.starts_with("XSTRUCT "):
+            # a by-value external (non-system) record laid out as a value struct.
+            mut xn0 = pl.slice(8, pl.len())
+            class_names.insert(xn0, true)
+            ps_name.push(xn0); ps_pod.push("1"); ps_nf.push("0")
+        elif pl.starts_with("FIELD ") or pl.starts_with("SFIELD "):
+            if ps_nf.len > 0:
+                ps_nf.pop()          # mark innermost class as "has fields" (pop top, push "1")
+                ps_nf.push("1")
+        elif pl == "ECLASS" or pl == "EXSTRUCT":
+            if ps_name.len > 0:
+                mut nm2 = ps_name.pop()
+                mut pod2 = ps_pod.pop()
+                mut nf2 = ps_nf.pop()
+                if pod2 == "1" and nf2 == "1": value_structs.insert(nm2, true)
 
     mut mode = ""             # "ctor" | "method" | "func"
     mut m_flags = ".."
     mut m_ret = ""
     mut m_name = ""
+    mut m_qual = ""    # base-class qualifier for an inherited method (`self->Base::method(...)`)
+    mut m_ndef = 0     # count of trailing default-argument params (→ shorter overloads)
     mut params: Vec[str] = Vec[str].init(4)
 
     mut lines = ir.split("\n")
@@ -1066,17 +2087,216 @@ def _cpp_generate(ir: str, header: str, out: str):
         mut line = _rstrip_cr(lines.get(li))
         li = li + 1
         if line == "": continue
+        if line.starts_with("TDSPEC "): continue   # instantiation hint, consumed by _collect_specs
 
-        if line == "CTOR":
+        # current class context = top of the stack
+        mut cur_class = ""
+        mut cur_class_qual = ""
+        mut class_pfx = ""
+        if cstk_name.len > 0:
+            cur_class = cstk_name.get(cstk_name.len - 1)
+            cur_class_qual = cstk_qual.get(cstk_qual.len - 1)
+            class_pfx = cstk_pfx.get(cstk_pfx.len - 1)
+
+        if line.starts_with("CTOR"):
+            m_ndef = 0
+            if line.len() > 5: m_ndef = _to_int(line.slice(5, line.len()))   # "CTOR <ndef>"
             mode = "ctor"; params = Vec[str].init(4); continue
         if line == "DTOR":
-            mut ds = class_pfx + "_delete"
-            shim.append("void " + ds + "(" + cur_class_qual + "* self) { delete self; }\n")
+            if not _is_clean_ident(cur_class): continue
+            mut ds = _uniq_sym(class_pfx + "_delete", sym_used)
+            shim.append("void " + ds + "(" + cur_class_qual + "* self) { " + _shim_body("void", "delete self;") + " }\n")
             decls.append("    def " + ds + "(obj: " + cur_class + ")\n")
             n_fns = n_fns + 1
             continue
         if line == "ECLASS":
-            cur_class = ""; continue
+            # Emit the class body now (deferred): a POD value-struct becomes `@value_type` with
+            # its fields (crosses by value); anything else is an opaque handle.
+            if _is_clean_ident(cur_class) and not seen.contains("class:" + cur_class):
+                if value_structs.contains(cur_class) and fld_buf != "":
+                    opaque.append("@value_type\nclass " + cur_class + ":\n" + fld_buf)
+                else:
+                    opaque.append("class " + cur_class + ":\n    pass\n")
+                seen.insert("class:" + cur_class, true)
+                n_classes = n_classes + 1
+            if cstk_name.len > 0:
+                cstk_name.pop()
+                cstk_qual.pop()
+                cstk_pfx.pop()
+            if fld_stack.len > 0: fld_buf = fld_stack.pop()
+            else: fld_buf = ""
+            continue
+        if line.starts_with("FIELD "):
+            # A public data field of the current class. A POD value-struct crosses by value and
+            # exposes fields directly, so we collect them into `fld_buf` for the struct layout.
+            # A NON-POD class (opaque handle — has a ctor/vtable, e.g. std::pair, or any library
+            # class with public members alongside methods) can't cross by value, so instead we
+            # synthesize a read-ACCESSOR wrapper `<pfx>_<field>(obj) -> <fieldtype>` calling
+            # `self-><field>` — this is what makes those public members readable across the FFI.
+            mut frest = line.slice(6, line.len())
+            mut fbar = frest.split("|")
+            mut fdesc = fbar.get(0)
+            mut fnm = ""
+            if fbar.len > 1: fnm = fbar.get(1)
+            if _is_clean_ident(fnm):
+                if value_structs.contains(cur_class):
+                    mut fmap = _cpp_field_type(fdesc, value_structs, enum_names)
+                    fld_buf = fld_buf + "    pub " + _cpp_tr_pname(fnm) + ": " + fmap + "\n"
+                elif _is_clean_ident(cur_class) and fdesc.find("type-parameter") < 0 and fdesc.find("~d~") < 0:
+                    # Opaque-class public field -> synthesize a read accessor. Reuse the return
+                    # lowering (`_cpp_ret_ex`) with the field access as the "call" expression.
+                    mut fri = _cpp_ret_ex(fdesc, "self->" + fnm, value_structs, class_names, class_qual, seen, opaque)
+                    mut fsym = _uniq_sym(class_pfx + "_" + fnm, sym_used)
+                    shim.append(fri.get(0) + " " + fsym + "(" + cur_class_qual + "* self) { " + _shim_body(fri.get(0), fri.get(1)) + " }\n")
+                    mut fd = "    def " + fsym + "(obj: " + cur_class + ")"
+                    if fri.get(2) != "": fd = fd + " -> " + fri.get(2)
+                    decls.append(fd + "\n")
+                    n_fns = n_fns + 1
+            continue
+        if line.starts_with("ITER "):
+            # An instantiated sequence/set container (`std::list<int>`, `std::set<T>`) that exposes
+            # begin()/end() — synthesize an index accessor `<pfx>_nth(obj, i) -> <elem>` so a
+            # node-based container (no `at()`) is traversable across the FFI. The shim uses
+            # `auto`+`std::advance`, side-stepping the un-nameable iterator type. `size()` is
+            # already bound, so counting the elements needs no extra wrapper.
+            mut idesc = line.slice(5, line.len())      # element descriptor `ptr~ref~cat~detail`
+            if _is_clean_ident(cur_class) and idesc.find("type-parameter") < 0 and idesc.find("~d~") < 0:
+                mut iri = _cpp_ret_ex(idesc, "(*it)", value_structs, class_names, class_qual, seen, opaque)
+                mut isym = _uniq_sym(class_pfx + "_nth", sym_used)
+                shim.append(iri.get(0) + " " + isym + "(" + cur_class_qual + "* self, long i) { " + _shim_body(iri.get(0), "auto it = self->begin(); std::advance(it, (long)i); " + iri.get(1)) + " }\n")
+                mut id = "    def " + isym + "(obj: " + cur_class + ", i: c_long)"
+                if iri.get(2) != "": id = id + " -> " + iri.get(2)
+                decls.append(id + "\n")
+                n_fns = n_fns + 1
+            continue
+        if line.starts_with("ITERMAPKEY ") or line.starts_with("ITERMAPVAL "):
+            # Associative map (`std::map`/`unordered_map`): element is `pair<const K,V>`, so enumerate
+            # via TWO accessors — `_key_nth(i) -> K` (it->first) and `_val_nth(i) -> V` (it->second),
+            # both auto+advance. Together with `size()` this walks the whole map across the FFI.
+            mut is_key = line.starts_with("ITERMAPKEY ")
+            mut mdesc = line.slice(11, line.len())
+            if _is_clean_ident(cur_class) and mdesc.find("type-parameter") < 0 and mdesc.find("~d~") < 0:
+                mut mfield = "(it->second)"
+                mut mname = "_val_nth"
+                if is_key:
+                    mfield = "(it->first)"
+                    mname = "_key_nth"
+                mut mri = _cpp_ret_ex(mdesc, mfield, value_structs, class_names, class_qual, seen, opaque)
+                mut msym = _uniq_sym(class_pfx + mname, sym_used)
+                shim.append(mri.get(0) + " " + msym + "(" + cur_class_qual + "* self, long i) { " + _shim_body(mri.get(0), "auto it = self->begin(); std::advance(it, (long)i); " + mri.get(1)) + " }\n")
+                mut md = "    def " + msym + "(obj: " + cur_class + ", i: c_long)"
+                if mri.get(2) != "": md = md + " -> " + mri.get(2)
+                decls.append(md + "\n")
+                n_fns = n_fns + 1
+            continue
+        if line.starts_with("GVAR "):
+            # A global variable / static class constant (`cfg::VERSION`, `Limits::MAX`). Synthesize a
+            # zero-arg value accessor `<pfx>_<name>() -> <type>` returning the (possibly extern-linked)
+            # value — works for `extern`/non-literal constants where a compile-time value isn't visible.
+            mut grest = line.slice(5, line.len())
+            mut gbar = grest.split("|")
+            mut gvdesc = gbar.get(0)
+            mut gvnm = ""
+            if gbar.len > 1: gvnm = gbar.get(1)
+            mut gcat = _desc4(gvdesc).get(2)
+            # Skip an array / function-pointer / void global — the value accessor can't `new[]` or
+            # copy those (e.g. wx's `const char wxPanelNameStr[]`); only scalar/enum/record/string.
+            if _is_clean_ident(gvnm) and gvdesc.find("type-parameter") < 0 and gvdesc.find("~d~") < 0 and gcat != "u" and gcat != "f" and gcat != "v":
+                mut gqual = gvnm
+                # At true global scope the accessor `g_<name>` avoids colliding with the C++ global
+                # of the same name; namespaced/class-static get the ns/class prefix as before.
+                mut gsym0 = "g_" + gvnm
+                if cur_class != "":
+                    gqual = cur_class_qual + "::" + gvnm
+                    gsym0 = class_pfx + "_" + gvnm
+                elif ns_path != "":
+                    gqual = ns_path + "::" + gvnm
+                    gsym0 = _ns_us(ns_path) + "_" + gvnm
+                mut gvri = _cpp_ret_ex(gvdesc, gqual, value_structs, class_names, class_qual, seen, opaque)
+                mut gvs = _uniq_sym(gsym0, sym_used)
+                shim.append(gvri.get(0) + " " + gvs + "() { " + _shim_body(gvri.get(0), gvri.get(1)) + " }\n")
+                mut gvd = "    def " + gvs + "()"
+                if gvri.get(2) != "": gvd = gvd + " -> " + gvri.get(2)
+                decls.append(gvd + "\n")
+                n_fns = n_fns + 1
+            continue
+        if line.starts_with("FTMPL "):
+            # A free-function template of the all-`T` math shape — instantiate it for common scalar
+            # types (int, double) since libclang can't hand us a concrete FunctionDecl. The shim
+            # explicitly calls `ns::name<TYPE>(a0, …)`. Params/return all cross by value.
+            mut ftrest = line.slice(6, line.len())
+            mut ftbar = ftrest.split("|")
+            mut ftnp = _to_int(ftbar.get(0))
+            mut ftnm = ""
+            if ftbar.len > 1: ftnm = ftbar.get(1)
+            if _is_clean_ident(ftnm) and ftnp >= 0:
+                mut ftys = Vec[str].init(2)
+                ftys.push("int")
+                ftys.push("double")
+                mut fctys = Vec[str].init(2)
+                fctys.push("c_int")
+                fctys.push("c_double")
+                mut fti = 0
+                while fti < ftys.len:
+                    mut fcpp = ftys.get(fti)
+                    mut fcty = fctys.get(fti)
+                    fti = fti + 1
+                    mut fshimp = ""
+                    mut ftrp = ""
+                    mut fcallargs = ""
+                    mut fpi = 0
+                    while fpi < ftnp:
+                        mut fan = "a" + fpi.to_str()
+                        fpi = fpi + 1
+                        if fshimp != "": fshimp = fshimp + ", "
+                        fshimp = fshimp + fcpp + " " + fan
+                        if ftrp != "": ftrp = ftrp + ", "
+                        ftrp = ftrp + fan + ": " + fcty
+                        if fcallargs != "": fcallargs = fcallargs + ", "
+                        fcallargs = fcallargs + fan
+                    mut fqual = ftnm
+                    mut ftsym0 = ftnm + "_" + fcpp
+                    if ns_path != "":
+                        fqual = ns_path + "::" + ftnm
+                        ftsym0 = _ns_us(ns_path) + "_" + ftnm + "_" + fcpp
+                    mut ftsym = _uniq_sym(ftsym0, sym_used)
+                    mut fcall = fqual + "<" + fcpp + ">(" + fcallargs + ")"
+                    shim.append(fcpp + " " + ftsym + "(" + fshimp + ") { " + _shim_body(fcpp, "return " + fcall + ";") + " }\n")
+                    decls.append("    def " + ftsym + "(" + ftrp + ") -> " + fcty + "\n")
+                    n_fns = n_fns + 1
+            continue
+        if line.starts_with("XSTRUCT "):
+            # A by-value external (non-system) record — lay it out as a `@value_type` so it
+            # crosses by value (a library value struct in a filtered sub-header).
+            mut xn = line.slice(8, line.len())
+            cstk_name.push(xn); cstk_qual.push(xn); cstk_pfx.push(xn)
+            class_qual.insert(xn, xn)
+            fld_stack.push(fld_buf)
+            fld_buf = ""
+            continue
+        if line.starts_with("SFIELD "):
+            # An external-record field whose Tauraro type is already resolved by the walker.
+            mut srest = line.slice(7, line.len())
+            mut sbar = srest.split("|")
+            mut sty = sbar.get(0)
+            mut snm = ""
+            if sbar.len > 1: snm = sbar.get(1)
+            if _is_clean_ident(snm):
+                fld_buf = fld_buf + "    pub " + _cpp_tr_pname(snm) + ": " + sty + "\n"
+            continue
+        if line == "EXSTRUCT":
+            if _is_clean_ident(cur_class) and not seen.contains("class:" + cur_class):
+                if fld_buf != "": opaque.append("@value_type\nclass " + cur_class + ":\n" + fld_buf)
+                else: opaque.append("class " + cur_class + ":\n    pass\n")
+                seen.insert("class:" + cur_class, true)
+                n_classes = n_classes + 1
+            if cstk_name.len > 0:
+                cstk_name.pop()
+                cstk_qual.pop()
+                cstk_pfx.pop()
+            if fld_stack.len > 0: fld_buf = fld_stack.pop()
+            else: fld_buf = ""
+            continue
         if line == "ENS":
             ns_path = _ns_pop(ns_path); continue
         if line == "EENUM":
@@ -1090,23 +2310,46 @@ def _cpp_generate(ir: str, header: str, out: str):
                 usings.append("using namespace " + ns_path + ";\n")
                 seen.insert("using:" + ns_path, true)
             continue
+        if line.starts_with("TCLASS "):
+            # A forced template instantiation (`Box<int>`): the Tauraro/symbol name is the
+            # sanitized spelling; the C++ qualified type (for the shim) is the raw spelling.
+            mut tp2 = _parse_tclass(line.slice(7, line.len()))
+            mut tspell = tp2.get(0)
+            mut tname = _cpp_ident(tspell)
+            cstk_name.push(tname)
+            cstk_qual.push(tspell)
+            cstk_pfx.push(tname)
+            class_qual.insert(tname, tspell)
+            fld_stack.push(fld_buf)
+            fld_buf = ""
+            continue
         if line.starts_with("CLASS "):
-            cur_class = line.slice(6, line.len())
-            if ns_path == "": cur_class_qual = cur_class
-            else: cur_class_qual = ns_path + "::" + cur_class
-            if ns_path == "": class_pfx = cur_class
-            else: class_pfx = _ns_us(ns_path) + "_" + cur_class
-            if not seen.contains("class:" + cur_class):
-                # Multiline `pass` body (NOT the inline `class X: pass` form, which makes the
-                # parser swallow the following top-level `extern` block).
-                opaque.append("class " + cur_class + ":\n    pass\n")
-                seen.insert("class:" + cur_class, true)
-                n_classes = n_classes + 1
+            mut crest = line.slice(6, line.len())
+            mut ncls = crest.split(" ").get(0)     # "CLASS <name> <pod>"
+            # qualified name / prefix build on the ENCLOSING class (nested) or namespace.
+            mut nqual = ncls
+            mut npfx = ncls
+            if cur_class_qual != "": nqual = cur_class_qual + "::" + ncls
+            elif ns_path != "": nqual = ns_path + "::" + ncls
+            if class_pfx != "": npfx = class_pfx + "_" + ncls
+            elif ns_path != "": npfx = _ns_us(ns_path) + "_" + ncls
+            cstk_name.push(ncls)
+            cstk_qual.push(nqual)
+            cstk_pfx.push(npfx)
+            class_qual.insert(ncls, nqual)
+            # Push field-collection context (body is emitted at ECLASS, once fields are known).
+            fld_stack.push(fld_buf)
+            fld_buf = ""
             continue
         if line.starts_with("ENUM "):
-            mut en = line.slice(5, line.len())
-            if en != "anon" and not seen.contains("enum:" + en):
-                consts.append("type " + en + " = c_int\n")
+            # `ENUM <name> <underlying-c-type>` — alias to the real underlying integer, not always c_int.
+            mut erest = line.slice(5, line.len())
+            mut eps = erest.split(" ")
+            mut en = eps.get(0)
+            mut eunder = "c_int"
+            if eps.len > 1: eunder = eps.get(1)
+            if _is_clean_ident(en) and not seen.contains("enum:" + en):
+                consts.append("type " + en + " = " + eunder + "\n")
                 seen.insert("enum:" + en, true)
             continue
         if line.starts_with("EVAL "):
@@ -1115,21 +2358,32 @@ def _cpp_generate(ir: str, header: str, out: str):
             mut ename = ep.get(0)
             mut eval_ = "0"
             if ep.len > 1: eval_ = ep.get(1)
-            consts.append("const " + ename + " = " + eval_ + "\n")
+            if not seen.contains("eval:" + ename):
+                consts.append("const " + ename + " = " + eval_ + "\n")
+                seen.insert("eval:" + ename, true)
             continue
         if line.starts_with("METHOD "):
-            mut r = line.slice(7, line.len())
+            mut r = line.slice(7, line.len())      # "<flags> <ndef> <retdesc>|<name>"
             m_flags = r.slice(0, 2)
-            mut r2 = r.slice(3, r.len())
-            mut rn = r2.split("|")
+            mut r2 = r.slice(3, r.len())           # "<ndef> <retdesc>|<name>"
+            mut sp1 = r2.find(" ")
+            m_ndef = _to_int(r2.slice(0, sp1))
+            mut r3 = r2.slice(sp1 + 1, r2.len())   # "<retdesc>|<name>[|<basequal>]"
+            mut rn = r3.split("|")
             m_ret = rn.get(0)
             m_name = rn.get(1)
+            m_qual = ""
+            if rn.len > 2: m_qual = rn.get(2)      # inherited method -> qualify the call
             mode = "method"; params = Vec[str].init(4); continue
         if line.starts_with("FUNC "):
-            mut r = line.slice(5, line.len())
-            mut rn = r.split("|")
+            mut r = line.slice(5, line.len())      # "<ndef> <retdesc>|<name>"
+            mut sp1 = r.find(" ")
+            m_ndef = _to_int(r.slice(0, sp1))
+            mut r3 = r.slice(sp1 + 1, r.len())
+            mut rn = r3.split("|")
             m_ret = rn.get(0)
             m_name = rn.get(1)
+            m_qual = ""
             m_flags = ".."
             mode = "func"; params = Vec[str].init(4); continue
         if line.starts_with("PARAM "):
@@ -1139,79 +2393,198 @@ def _cpp_generate(ir: str, header: str, out: str):
         if line == "EMETHOD" or line == "ECTOR" or line == "EFUNC":
             mut is_static = (m_flags.slice(0, 1) == "s")
             mut is_const  = (m_flags.slice(1, 2) == "c")
-            mut shimp = ""
-            mut trp = ""
-            mut fargs = ""
-            if mode == "method" and not is_static:
-                # C++ shim keeps `self`; the Tauraro binding must NOT — a param literally named
-                # `self` is treated as an implicit method receiver and dropped from the C prototype.
-                if is_const: shimp = "const " + cur_class_qual + "* self"
-                else: shimp = cur_class_qual + "* self"
-                trp = "obj: " + cur_class
-            mut pi = 0
-            while pi < params.len:
-                mut pv = params.get(pi)
-                pi = pi + 1
-                mut bar = pv.split("|")
-                mut ptype = bar.get(0)
-                mut pname = ""
-                if bar.len > 1: pname = bar.get(1)
-                if pname == "": pname = "a" + pi.to_str()
-                if pname == "self": pname = "obj"   # `self` = implicit receiver in Tauraro
-                mut t = _cpp_parse_type(ptype)
-                mut sc = ""
-                mut fw = ""
-                if t.is_prim:
-                    sc = _cpp_ctype(t) + " " + pname
-                    fw = pname
-                else:
-                    mut nd = t.ptr
-                    if nd < 1: nd = 1
-                    mut stars = ""
-                    mut si = 0
-                    while si < nd:
-                        stars = stars + "*"
-                        si = si + 1
-                    sc = t.base + stars + " " + pname
-                    if t.was_ptr: fw = pname
-                    else: fw = "*" + pname
-                mut trt = _cpp_tr_type(t)
-                if shimp == "": shimp = sc
-                else: shimp = shimp + ", " + sc
-                if fargs == "": fargs = fw
-                else: fargs = fargs + ", " + fw
-                if trp == "": trp = pname + ": " + trt
-                else: trp = trp + ", " + pname + ": " + trt
+            # Operator overloads: bind under a clean wrapper name (op_add/op_eq/op_deref/op_index…)
+            # while the shim still calls the real `operator@` — this is what makes iterators,
+            # arithmetic/comparison types and operator[] usable across the FFI. A handful
+            # (assignment, address-of, conversion, new/delete) map to "" and are still skipped.
+            mut m_sym = m_name
+            if mode != "ctor" and m_name.len() >= 8 and m_name.slice(0, 8) == "operator":
+                m_sym = _cpp_op_name(m_name, params.len, mode == "method")
+                if m_sym == "":
+                    mode = ""; continue
+            # ctor/method need a valid class context (skip anonymous-class members).
+            if (mode == "ctor" or mode == "method") and not _is_clean_ident(cur_class):
+                mode = ""; continue
+            # Skip a method with any UNRESOLVED dependent type in its signature (a template
+            # `type-parameter`/`__alloc_traits<…>` that substitution couldn't reduce, e.g.
+            # std::vector's copy-ctor `vector<_Tp,_Alloc>` or `at()`'s internal reference type).
+            # Emitting it would produce an un-nameable C++ shim; the clean methods still bind.
+            mut has_dep = (m_ret.find("type-parameter") >= 0 or m_ret.find("~d~") >= 0)
+            mut pj = 0
+            while pj < params.len:
+                mut pvd = params.get(pj)
+                if pvd.find("type-parameter") >= 0 or pvd.find("~d~") >= 0: has_dep = true
+                pj = pj + 1
+            if has_dep:
+                mode = ""; continue
+            # Emit one wrapper per arity (full down to required) so trailing DEFAULT-ARG params
+            # can be omitted — the C++ call then applies the defaults. Overloads are disambiguated.
+            mut full_params: Vec[str] = Vec[str].init(4)
+            mut fpi = 0
+            while fpi < params.len:
+                full_params.push(params.get(fpi))
+                fpi = fpi + 1
+            mut min_arity = full_params.len - m_ndef
+            if min_arity < 0: min_arity = 0
+            mut arity = full_params.len
+            while arity >= min_arity:
+                mut tparams = Vec[str].init(4)
+                mut tti = 0
+                while tti < arity:
+                    tparams.push(full_params.get(tti))
+                    tti = tti + 1
+                params = tparams
+                mut shimp = ""
+                mut trp = ""
+                mut fargs = ""
+                if mode == "method" and not is_static:
+                    if is_const: shimp = "const " + cur_class_qual + "* self"
+                    else: shimp = cur_class_qual + "* self"
+                    trp = "obj: " + cur_class
+                mut pi = 0
+                while pi < params.len:
+                    mut pv = params.get(pi)
+                    pi = pi + 1
+                    mut bar = pv.split("|")
+                    mut ptype = bar.get(0)
+                    mut pname = ""
+                    if bar.len > 1: pname = bar.get(1)
+                    if pname == "": pname = "a" + pi.to_str()
+                    mut spname = pname
+                    if spname == "self": spname = "self_"        # avoid shim receiver collision
+                    mut tpname = _cpp_tr_pname(pname)             # avoid Tauraro receiver/keyword
+                    # Descriptor-based mapping on the canonical kind.
+                    mut d4 = _desc4(ptype)
+                    mut pdepth = _to_int(d4.get(0))
+                    mut prefk = d4.get(1)              # "0" not-ref | "1" mutable ref | "2" const ref
+                    mut pref = (prefk != "0")
+                    mut pcat = d4.get(2)
+                    mut pdet = d4.get(3)
+                    mut sc = ""
+                    mut fw = ""
+                    mut trt = ""
+                    if pcat == "p":
+                        mut cpp = _c_to_cpp(pdet)
+                        if pdepth == 0:
+                            sc = cpp + " " + spname; fw = spname; trt = pdet
+                        elif prefk == "2" and pdepth == 1:
+                            # `const T&` to a primitive is semantically the value — cross BY VALUE
+                            # (the shim's value binds to the C++ const ref). Ergonomic for map::at(key).
+                            sc = cpp + " " + spname; fw = spname; trt = pdet
+                        else:
+                            sc = cpp + " " + _stars(pdepth) + spname
+                            if pref: fw = "*" + spname
+                            else: fw = spname
+                            trt = _ptr_wrap(pdet, pdepth)
+                    elif pcat == "e":
+                        mut espell = pdet.split("#").get(0)
+                        mut ealias = _last_seg(espell)
+                        if pdepth == 0:
+                            sc = espell + " " + spname; fw = spname; trt = ealias
+                        elif prefk == "2" and pdepth == 1:
+                            sc = espell + " " + spname; fw = spname; trt = ealias
+                        else:
+                            sc = espell + " " + _stars(pdepth) + spname
+                            if pref: fw = "*" + spname
+                            else: fw = spname
+                            trt = _ptr_wrap(ealias, pdepth)
+                    elif pcat == "s" and pdet == "string":
+                        # std::string param: Tauraro passes a C string; the shim builds a temporary.
+                        sc = "const char* " + spname
+                        fw = "std::string(" + spname + ")"
+                        trt = "Pointer[char]"
+                    elif pcat == "f":
+                        # function-pointer param: cross as a raw address; cast to the real fn type.
+                        # `pdet` is the function *type* (`void (int, void*)`); make it a function
+                        # POINTER type (`void (*)(int, void*)`) so the C-cast of a `void*` is valid.
+                        sc = "void* " + spname
+                        fw = "(" + _fnptr_cast(pdet) + ")" + spname
+                        trt = "Pointer[void]"
+                    elif pcat == "v":
+                        # `void*` (callback userdata, opaque buffer) — cross as a raw pointer.
+                        # A reference to a pointer (`void*&`, e.g. wx's tree-iteration cookie) crosses as
+                        # one extra level (`void**`); deref it at the call so it binds to the `T&`.
+                        mut nd = pdepth
+                        if nd < 1: nd = 1
+                        sc = "void " + _stars(nd) + spname
+                        if pref: fw = "*" + spname
+                        else: fw = spname
+                        trt = _ptr_wrap("void", nd)
+                    elif pcat == "r":
+                        mut seg = _last_seg(pdet)
+                        if value_structs.contains(seg) and pdepth == 0:
+                            sc = pdet + " " + spname; fw = spname; trt = seg
+                        else:
+                            mut nd = pdepth
+                            if nd < 1: nd = 1
+                            sc = _cpp_qual(pdet, class_qual) + " " + _stars(nd) + spname
+                            if pdepth == 0: fw = "*" + spname       # by-value non-POD: deref the handle
+                            elif pref: fw = "*" + spname
+                            else: fw = spname
+                            trt = _cpp_opaque_handle(pdet, nd, class_names, value_structs, seen, opaque)
+                    elif pdet == "":
+                        # A type libclang couldn't spell (empty detail) — fall back to a raw void
+                        # pointer so the shim still compiles instead of emitting a nameless type.
+                        mut nd = pdepth
+                        if nd < 1: nd = 1
+                        sc = "void " + _stars(nd) + spname
+                        fw = spname
+                        trt = _ptr_wrap("void", nd)
+                    else:
+                        # s(non-string std) / u(unknown) — opaque handle by pointer.
+                        mut nd = pdepth
+                        if nd < 1: nd = 1
+                        sc = pdet + " " + _stars(nd) + spname
+                        if pdepth == 0: fw = "*" + spname
+                        elif pref: fw = "*" + spname
+                        else: fw = spname
+                        trt = _cpp_opaque_handle(pdet, nd, class_names, value_structs, seen, opaque)
+                    if shimp == "": shimp = sc
+                    else: shimp = shimp + ", " + sc
+                    if fargs == "": fargs = fw
+                    else: fargs = fargs + ", " + fw
+                    if trp == "": trp = tpname + ": " + trt
+                    else: trp = trp + ", " + tpname + ": " + trt
 
-            mut call = ""
-            if mode == "ctor":
-                call = "new " + cur_class_qual + "(" + fargs + ")"
-            elif mode == "method":
-                if is_static: call = cur_class_qual + "::" + m_name + "(" + fargs + ")"
-                else: call = "self->" + m_name + "(" + fargs + ")"
-            else:
-                mut pre = ""
-                if ns_path != "": pre = ns_path + "::"
-                call = pre + m_name + "(" + fargs + ")"
-
-            if mode == "ctor":
-                mut sym = class_pfx + "_new"
-                shim.append(cur_class_qual + "* " + sym + "(" + shimp + ") { return " + call + "; }\n")
-                decls.append("    def " + sym + "(" + trp + ") -> " + cur_class + "\n")
-                n_fns = n_fns + 1
-            else:
-                mut rt = _cpp_parse_type(m_ret)
-                mut ri = _cpp_ret(rt, call)
-                mut sym = ""
-                if mode == "method": sym = class_pfx + "_" + m_name
+                mut call = ""
+                if mode == "ctor":
+                    call = "new " + cur_class_qual + "(" + fargs + ")"
+                elif mode == "method":
+                    # An inherited method carries its declaring base (`m_qual`) so the call is
+                    # base-qualified — this dodges name-hiding by a same-name derived overload and
+                    # resolves ambiguity when the name exists in multiple bases.
+                    mut mcall = m_name
+                    if m_qual != "": mcall = m_qual + "::" + m_name
+                    if is_static: call = cur_class_qual + "::" + m_name + "(" + fargs + ")"
+                    else: call = "self->" + mcall + "(" + fargs + ")"
                 else:
-                    if ns_path == "": sym = m_name
-                    else: sym = _ns_us(ns_path) + "_" + m_name
-                shim.append(ri.get(0) + " " + sym + "(" + shimp + ") { " + ri.get(1) + " }\n")
-                mut d = "    def " + sym + "(" + trp + ")"
-                if ri.get(2) != "": d = d + " -> " + ri.get(2)
-                decls.append(d + "\n")
-                n_fns = n_fns + 1
+                    mut pre = ""
+                    if ns_path != "": pre = ns_path + "::"
+                    call = pre + m_name + "(" + fargs + ")"
+
+                if mode == "ctor":
+                    mut sym = _uniq_sym(class_pfx + "_new", sym_used)
+                    shim.append(cur_class_qual + "* " + sym + "(" + shimp + ") { " + _shim_body(cur_class_qual + "*", "return " + call + ";") + " }\n")
+                    decls.append("    def " + sym + "(" + trp + ") -> " + cur_class + "\n")
+                    n_fns = n_fns + 1
+                else:
+                    mut ri = _cpp_ret_ex(m_ret, call, value_structs, class_names, class_qual, seen, opaque)
+                    mut sym0 = ""
+                    if mode == "method": sym0 = class_pfx + "_" + m_sym
+                    else:
+                        # A free function at TRUE global scope (no namespace) — the wrapper's
+                        # `extern "C"` symbol would collide with the C++ function of the same name
+                        # (legacy `wxFoo()`-style APIs), so prefix it `g_`. Namespaced free functions
+                        # already carry the namespace prefix and don't collide.
+                        if ns_path == "": sym0 = "g_" + m_sym
+                        else: sym0 = _ns_us(ns_path) + "_" + m_sym
+                    mut sym = _uniq_sym(sym0, sym_used)
+                    shim.append(ri.get(0) + " " + sym + "(" + shimp + ") { " + _shim_body(ri.get(0), ri.get(1)) + " }\n")
+                    mut d = "    def " + sym + "(" + trp + ")"
+                    if ri.get(2) != "": d = d + " -> " + ri.get(2)
+                    decls.append(d + "\n")
+                    n_fns = n_fns + 1
+                arity = arity - 1
             mode = ""
             continue
 
@@ -1223,16 +2596,44 @@ def _cpp_generate(ir: str, header: str, out: str):
 
     mut sb = StringBuilder.init(4096)
     sb.append("# Auto-generated C++ FFI bindings for " + header + " (tauraro-bindgen -h cpp).\n")
-    sb.append("# Build the shim once, then link it (and the C++ library) with your program:\n")
-    sb.append("#   c++ -c " + shim_name + " -o " + base + "_shim.o\n")
-    sb.append("#   tauraroc yourapp.tr --link " + base + "_shim.o -lstdc++ -o app\n\n")
+    # Machine-readable link pragmas: `tauraroc` reads these from any imported binding,
+    # auto-compiles the shim and links it (zero-cost — LTO inlines the wrapper away).
+    # Just `import` this module; no manual `c++ -c` / `--link -lstdc++` step is needed.
+    sb.append("# tauraro-cpp-shim: " + _basename(shim_name) + "\n")
+    sb.append("# tauraro-cpp-lib: stdc++\n")
+    if pkglibs != "": sb.append("# tauraro-cpp-linkflags:" + pkglibs + "\n")
+    if shim_cflags != "": sb.append("# tauraro-cpp-cflags: " + shim_cflags + "\n")
+    sb.append("# (opt out with --no-auto-cpp, then: c++ -c " + shim_name + " ; tauraroc app.tr --link " + base + "_shim.o -lstdc++)\n\n")
     mut os_ = opaque.to_string().as_str()
-    if os_ != "": sb.append(os_ + "\n")
     mut cs = consts.to_string().as_str()
-    if cs != "": sb.append(cs + "\n")
     mut ds2 = decls.to_string().as_str()
+    # Forward-declare any type referenced by the bindings but never defined here (external
+    # library/system typedefs — e.g. Windows COM's HRESULT/DWORD, or a sub-header type) as an
+    # opaque handle, so the generated .tr compiles. Build the defined-name set from what we
+    # emitted (opaque classes + enum/type aliases), skip libc types, and prepend the rest.
+    mut defined_names: Map[str, bool] = Map[str, bool].init(64)
+    mut dlns = (os_ + "\n" + cs).split("\n")
+    mut dii = 0
+    while dii < dlns.len:
+        mut dl = dlns.get(dii)
+        dii = dii + 1
+        if dl.starts_with("class "):
+            mut dn = _ident_at(dl, 6)
+            if dn != "": defined_names.insert(dn, true)
+        elif dl.starts_with("type "):
+            mut dn = _ident_at(dl, 5)
+            if dn != "": defined_names.insert(dn, true)
+    mut fb = _opaque_fallbacks(os_ + ds2, defined_names)
+    if fb != "": sb.append(fb)
+    if os_ != "": sb.append(os_ + "\n")
+    if cs != "": sb.append(cs + "\n")
     if ds2 != "":
         sb.append("extern \"C\":\n")
+        # Exception-safety accessors: after any wrapper call, a NON-EMPTY last-error (read via
+        # `tauraro_cpp_last_error() as str`) means a C++ exception was caught (the call returned a
+        # zero value); clear it with tauraro_cpp_clear_error() before a fresh call.
+        sb.append("    def tauraro_cpp_last_error() -> Pointer[char]\n")
+        sb.append("    def tauraro_cpp_clear_error()\n")
         sb.append(ds2)
     write_file(out, sb.to_string().as_str())
 
@@ -1240,17 +2641,151 @@ def _cpp_generate(ir: str, header: str, out: str):
     sh.append("// Auto-generated C++ -> C shim for " + header + " (tauraro-bindgen -h cpp).\n")
     sh.append("// Compile:  c++ -c " + shim_name + "\n")
     sh.append("#include \"" + header + "\"\n")
+    sh.append("#include <string>\n#include <string_view>\n#include <cstring>\n#include <cstdlib>\n#include <iterator>\n")
+    sh.append("// std::string return -> heap char* copy (caller owns it; free with the runtime free).\n")
+    sh.append("static char* _tr_cpp_strdup(std::string_view s){ char* p=(char*)malloc(s.size()+1); if(p){ memcpy(p, s.data(), s.size()); p[s.size()]=0; } return p; }\n")
+    sh.append("// Exception safety: a C++ exception must never cross `extern \"C\"` (it would std::terminate).\n")
+    sh.append("// Every wrapper catches, records the message here, and returns a zero value; the caller\n")
+    sh.append("// can read/clear it via tauraro_cpp_last_error()/tauraro_cpp_clear_error().\n")
+    sh.append("static thread_local std::string _tr_cpp_err;\n")
+    sh.append("static void _tr_cpp_set_error(const char* m){ _tr_cpp_err = m ? m : \"C++ exception\"; }\n")
     sh.append(usings.to_string().as_str())
     sh.append("extern \"C\" {\n")
+    sh.append("const char* tauraro_cpp_last_error(void){ return _tr_cpp_strdup(_tr_cpp_err); }\n")
+    sh.append("void tauraro_cpp_clear_error(void){ _tr_cpp_err.clear(); }\n")
     sh.append(shim.to_string().as_str())
     sh.append("}\n")
     write_file(shim_name, sh.to_string().as_str())
 
     print("bindgen: wrote " + out + " + " + shim_name + " — " + n_classes.to_str() + " classes, " + n_fns.to_str() + " wrappers")
-    print("bindgen: next:  c++ -c " + shim_name + "   then link with  --link " + base + "_shim.o -lstdc++")
+    print("bindgen: next:  import this module and build — tauraroc auto-compiles + links the shim (zero-cost).")
 
-# Orchestrate C++ binding generation: detect libclang, build+run the walker, generate.
-pub def run_bindgen_cpp(header: str, out: str, cc: str):
+# ── adaptive clang configuration (query the compiler, don't hardcode paths) ──────
+# Ask the compiler for its default C++ header search dirs and feed them to libclang as
+# `-I`. libclang may be built against a DIFFERENT toolchain than the user's `cc`, so its
+# builtin header detection can miss libstdc++/libc++ — this makes complex headers (that
+# pull in <string>, <vector>, …) resolve out of the box. Works for gcc and clang, on
+# Linux/macOS/Windows (parses the standard `#include <...> search starts here:` block).
+def _cpp_detect_include_dirs(cc: str) -> str:
+    write_file("_cxx_empty.cpp", "\n")
+    _tr_system(cc + " -x c++ -E -v _cxx_empty.cpp > _cxx_pp.txt 2> _cxx_inc.txt")
+    mut out = ""
+    if file_exists("_cxx_inc.txt"):
+        mut txt = read_file("_cxx_inc.txt")
+        mut lines = txt.split("\n")
+        mut collecting = false
+        mut li = 0
+        while li < lines.len:
+            mut ln = _rstrip_cr(lines.get(li))
+            li = li + 1
+            if ln.find("search starts here") >= 0:
+                collecting = true
+                continue
+            if ln.find("End of search list") >= 0:
+                collecting = false
+                continue
+            if collecting:
+                mut d = _lstrip(ln)
+                # macOS annotates framework dirs; strip the marker so the path stays usable.
+                mut fpos = d.find(" (framework directory)")
+                if fpos >= 0: d = d.slice(0, fpos)
+                if d != "":
+                    out = out + " -I\"" + d + "\""
+    _rm_files("_cxx_empty.cpp _cxx_pp.txt _cxx_inc.txt")
+    return out
+
+# The `-std=` flag: honor a user-supplied one, else default to c++17.
+def _cpp_std_flag(extra: str) -> str:
+    if extra.find("-std=") >= 0: return ""
+    return "-std=c++17 "
+
+# Count of fatal diagnostics reported by the walker (parsed from its `DIAGERR nerr nfatal`).
+def _cpp_fatal_count(diag: str) -> int:
+    mut lines = diag.split("\n")
+    mut li = 0
+    mut f = 0
+    while li < lines.len:
+        mut ln = _rstrip_cr(lines.get(li))
+        li = li + 1
+        if ln.find("DIAGERR ") == 0:
+            mut parts = ln.split(" ")
+            if parts.len >= 3: f = _to_int(parts.get(2))
+    return f
+
+# Print the walker's error diagnostics (the `DIAG ...` lines), stripped of the prefix.
+def _cpp_print_diag(diag: str):
+    mut lines = diag.split("\n")
+    mut li = 0
+    mut shown = 0
+    while li < lines.len:
+        mut ln = _rstrip_cr(lines.get(li))
+        li = li + 1
+        if ln.find("DIAG ") == 0 and shown < 12:
+            print("    " + ln.slice(5, ln.len()))
+            shown = shown + 1
+
+# True if the IR has no bindable declaration (only blank lines / whitespace).
+def _cpp_ir_is_empty(ir: str) -> bool:
+    mut lines = ir.split("\n")
+    mut li = 0
+    while li < lines.len:
+        if _rstrip_cr(lines.get(li)) != "": return false
+        li = li + 1
+    return true
+
+def _cpp_cleanup():
+    _rm_files("_cxxwalk.c _cxxwalk.exe _cxx.ir _cxx_err.txt _cxx_diag.txt _cxx_force.cpp _cxx_inst.ir")
+
+# Orchestrate C++ binding generation: detect libclang, build the walker, discover include
+# paths, run the walker, surface diagnostics, and generate the shim + bindings.
+#   extra = space-joined clang passthrough flags (user `-I`/`-D`/`-std=`), already shell-safe.
+# An expression-template proxy specialization: a NON-std class-template instantiation whose
+# template ARGUMENTS are themselves template-ids (nested `<...>`), e.g. GMP's lazy
+# `__gmp_expr<mpz_t, __gmp_unary_expr<long, __gmp_fac_function>>`. Such CRTP proxies are the
+# transient result of an operation and are never user-constructible — force-instantiating them
+# yields a constructor that takes the internal operation functor and does not compile (the exact
+# C++ that cannot cross a C ABI). We therefore skip binding them as standalone classes. Methods
+# that RETURN a proxy still get a working copy-ctor wrapper, and GMP's value constructor evaluates
+# the proxy when the result is materialized into a value type (`__gmp_expr<T,T>`). `std::` nested
+# instantiations (e.g. `vector<pair<int,int>>`) are safe to instantiate and are kept.
+def _is_expr_proxy_spec(s: str) -> bool:
+    mut lt = s.find("<")
+    if lt < 0: return false
+    mut inner = s.slice(lt + 1, s.len())
+    if inner.find("<") < 0: return false
+    if s.starts_with("std::"): return false
+    return true
+
+# Collect the template specializations that appear in the API (any record descriptor whose
+# spelling contains `<`, e.g. `Box<int>`, `std::vector<int>`). These are what we force-instantiate.
+def _collect_specs(ir: str) -> Vec[str]:
+    mut specs = Vec[str].init(8)
+    mut seen: Map[str, bool] = Map[str, bool].init(16)
+    mut lines = ir.split("\n")
+    mut i = 0
+    while i < lines.len:
+        mut ln = _rstrip_cr(lines.get(i))
+        i = i + 1
+        # `TDSPEC <spelling>` — a typedef'd template specialization (e.g. `stringstream`), which no
+        # signature references; the whole rest of the line is the spec to instantiate.
+        if ln.starts_with("TDSPEC "):
+            mut td = ln.slice(7, ln.len())
+            if td.find("<") >= 0 and not _is_expr_proxy_spec(td) and not seen.contains(td):
+                seen.insert(td, true)
+                specs.push(td)
+            continue
+        mut p = ln.find("~r~")
+        if p < 0: continue
+        mut rest = ln.slice(p + 3, ln.len())
+        mut detail = rest
+        mut bar = rest.find("|")
+        if bar >= 0: detail = rest.slice(0, bar)
+        if detail.find("<") >= 0 and not _is_expr_proxy_spec(detail) and not seen.contains(detail):
+            seen.insert(detail, true)
+            specs.push(detail)
+    return specs
+
+pub def run_bindgen_cpp(header: str, out: str, cc: str, extra: str, pkglibs: str):
     mut guide = _detect_libclang(cc)
     if guide != "":
         print(guide)
@@ -1260,10 +2795,54 @@ pub def run_bindgen_cpp(header: str, out: str, cc: str):
     if rc != 0 or not file_exists("_cxxwalk.exe"):
         print("bindgen: could not compile the libclang walker (see _cxx_err.txt)")
         return
-    _tr_system(".\\_cxxwalk.exe \"" + header + "\" > _cxx.ir 2>>_cxx_err.txt")
-    if not file_exists("_cxx.ir"):
-        print("bindgen: the walker produced no output (see _cxx_err.txt)")
+    # Build the clang arg list adaptively: language + std + detected include dirs + user flags.
+    mut clang_args = "-x c++ " + _cpp_std_flag(extra) + _cpp_detect_include_dirs(cc)
+    if extra != "": clang_args = clang_args + " " + extra
+    _tr_system(_local_exe("_cxxwalk") + " \"" + header + "\" " + clang_args + " > _cxx.ir 2> _cxx_diag.txt")
+    mut diag = ""
+    if file_exists("_cxx_diag.txt"): diag = read_file("_cxx_diag.txt")
+    mut nfatal = _cpp_fatal_count(diag)
+    if not file_exists("_cxx.ir") or _cpp_ir_is_empty(read_file("_cxx.ir")):
+        print("bindgen: no bindable declarations found in " + header)
+        if diag.find("DIAG ") >= 0:
+            print("bindgen: libclang could not fully parse the header:")
+            _cpp_print_diag(diag)
+            print("")
+            print("  Most 'file not found' errors mean a missing include dir. Re-run with the")
+            print("  library's include path(s) (and any required defines), e.g.:")
+            print("    tauraroc bindgen " + header + " -h cpp -I<include-dir> [-I<more>] [-D<MACRO>]")
+        else:
+            print("  (the header parsed cleanly but declares no public classes/functions to bind.)")
+        _cpp_cleanup()
         return
     mut ir = read_file("_cxx.ir")
-    _cpp_generate(ir, header, out)
-    _tr_system("rm -f _cxxwalk.c _cxxwalk.exe _cxx.ir _cxx_err.txt 2>/dev/null")
+    # TEMPLATE AUTOMATION: force-instantiate every specialization used in the API (`Box<int>`,
+    # `std::vector<int>`), then a second `--inst` walk resolves each into a concrete class with
+    # T-substituted methods. Appended to the IR so the generator binds them like any class.
+    mut specs = _collect_specs(ir)
+    mut n_specs = 0
+    if specs.len > 0:
+        mut fsb = StringBuilder.init(512)
+        fsb.append("#include \"" + header + "\"\n")
+        mut si = 0
+        while si < specs.len:
+            fsb.append("template class " + specs.get(si) + ";\n")
+            si = si + 1
+        write_file("_cxx_force.cpp", fsb.to_string().as_str())
+        _tr_system(_local_exe("_cxxwalk") + " --inst _cxx_force.cpp " + clang_args + " > _cxx_inst.ir 2>> _cxx_diag.txt")
+        if file_exists("_cxx_inst.ir") and not _cpp_ir_is_empty(read_file("_cxx_inst.ir")):
+            ir = ir + "\n" + read_file("_cxx_inst.ir")
+            n_specs = specs.len
+    # Flags needed to compile the shim (same std + user -I/-D used for parsing); recorded
+    # in the binding so `tauraroc` can auto-compile it. Compiler-detected system include
+    # dirs are omitted — the C++ driver adds its own.
+    mut shim_cflags = _cpp_std_flag(extra)
+    if extra != "": shim_cflags = shim_cflags + " " + extra
+    _cpp_generate(ir, header, out, shim_cflags, pkglibs)
+    if n_specs > 0:
+        print("bindgen: instantiated " + n_specs.to_str() + " template specialization(s)")
+    if nfatal > 0:
+        print("bindgen: WARNING — libclang reported " + nfatal.to_str() + " fatal error(s); bindings may be INCOMPLETE:")
+        _cpp_print_diag(diag)
+        print("  Add the missing include dir(s) with -I<dir> for a complete binding.")
+    _cpp_cleanup()

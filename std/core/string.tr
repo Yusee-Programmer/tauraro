@@ -6,6 +6,7 @@
 
 extern "C":
     def _tr_checked_alloc(size: int) -> Pointer[char]
+    def _tr_str_wrap(s: Pointer[char]) -> str
     def _tr_c_realloc(ptr: Pointer[char], size: int) -> Pointer[char]
     def _tr_c_free(ptr: Pointer[char])
     def _tr_c_memcpy(dst: Pointer[char], src: Pointer[char], n: int)
@@ -114,7 +115,7 @@ extend StringBuilder:
         mut sz = self.buf.len + 1
         mut out = _tr_checked_alloc(sz)
         _tr_c_memcpy(out, self.buf.data, sz)
-        return out as str
+        return _tr_str_wrap(out)
 
     pub def as_str(self) -> str:
         return self.buf.as_str()

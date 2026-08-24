@@ -55,10 +55,24 @@ pub def _is_int_type(n: str) -> bool:
     if n == "int" or n == "i64" or n == "i32" or n == "i16" or n == "i8": return true
     if n == "u64" or n == "u32" or n == "u16" or n == "u8": return true
     if n == "usize" or n == "isize" or n == "long long": return true
-    return false
+    return _is_c_int_scalar(n)
 
 pub def _is_float_type(n: str) -> bool:
-    return n == "float" or n == "f64" or n == "f32" or n == "double"
+    if n == "float" or n == "f64" or n == "f32" or n == "double": return true
+    return n == "c_float" or n == "c_double" or n == "c_ldouble"
+
+# The FFI `c_*` integer scalar family (widths in <17_extern_and_ffi>). These behave as
+# integers for codegen decisions (to_str / print / format / arithmetic all cast to a
+# machine integer); their ABI C type is emitted via the dedicated `c_*` map, not here.
+pub def _is_c_int_scalar(n: str) -> bool:
+    if n == "c_int" or n == "c_uint" or n == "c_char" or n == "c_uchar" or n == "c_schar": return true
+    if n == "c_short" or n == "c_ushort" or n == "c_long" or n == "c_ulong": return true
+    if n == "c_longlong" or n == "c_ulonglong" or n == "c_size_t" or n == "c_ssize_t": return true
+    if n == "c_int8_t" or n == "c_int16_t" or n == "c_int32_t" or n == "c_int64_t": return true
+    if n == "c_uint8_t" or n == "c_uint16_t" or n == "c_uint32_t" or n == "c_uint64_t": return true
+    if n == "c_intptr_t" or n == "c_uintptr_t" or n == "c_ptrdiff_t": return true
+    if n == "c_wchar" or n == "c_char16" or n == "c_char32": return true
+    return false
 
 pub def _safe_c_varname(n: str) -> str:
     if _is_c_keyword(n): return "_tr_v_" + n
@@ -212,6 +226,7 @@ pub class CGenerator:
     pub decorator_defs:   Map[str, HirFunction]  # user-defined decorator registry
     pub overloaded_sigs:  Map[str, bool]          # "ClassName_method" keys where multiple overloads exist
     pub type_alias_map:   Map[str, str]           # alias_name -> resolved C type string
+    pub type_alias_tr:    Map[str, str]           # alias_name -> target TAURARO type name (for scalar-alias resolution)
     pub defer_stack:      Vec[str]                # deferred C statements for current function (LIFO)
     pub wrap_temp_decls:  Vec[str]                # pending "TrStr _wtN = (_tr_str_wrap(...))" decls for the current top-level expr
     pub wrap_temp_names:  Vec[str]                # names of the above, to _tr_str_release after the expr is consumed
@@ -288,6 +303,7 @@ pub class CGenerator:
         g.decorator_defs  = Map[str, HirFunction].init(16)
         g.overloaded_sigs = Map[str, bool].init(32)
         g.type_alias_map  = Map[str, str].init(16)
+        g.type_alias_tr   = Map[str, str].init(16)
         g.defer_stack     = Vec[str].init(0)
         g.wrap_temp_decls = Vec[str].init(0)
         g.wrap_temp_names = Vec[str].init(0)
@@ -536,6 +552,11 @@ pub class CGenerator:
         if n == "c_char": return "char"
         if n == "c_uchar": return "unsigned char"
         if n == "c_schar": return "signed char"
+        # Wide / Unicode character types — distinct C++ types (a `const wchar_t*` param won't accept
+        # an `int*`), so they need dedicated FFI names rather than aliasing to an integer.
+        if n == "c_wchar": return "wchar_t"
+        if n == "c_char16": return "char16_t"
+        if n == "c_char32": return "char32_t"
         if n == "c_float": return "float"
         if n == "c_double": return "double"
         if n == "c_ldouble": return "long double"
@@ -1890,14 +1911,13 @@ pub class CGenerator:
                 if _is_str_type(target_ty.name):
                     mut cast_src_full_n: str = hir_expr_type(expr).name
                     if _is_str_type(cast_src_full_n): return self.gen_expr(expr)
-                    # Raw pointer (e.g. `buffer as str` where buffer: Pointer[char],
-                    # typically a freshly-malloc'd buffer being handed off as an
-                    # owned string, as in read_file): wrap as an OWNED TrStr
-                    # (rc=1) so the buffer is freed when the string is released.
-                    # NOT a boxed-TrStr unbox (that's for `_tr_str_box`-produced
-                    # void* slots, e.g. Dict.get(k) as str).
+                    # Raw pointer (e.g. an FFI `const char*` return like `zlibVersion() as str`):
+                    # wrap as a BORROWED TrStr (rc=NULL) so it is NEVER freed — safe by default for
+                    # C string returns the callee still owns. Code that hands off a freshly-malloc'd
+                    # buffer to be freed with the string uses `_tr_str_wrap(...)` explicitly instead.
+                    # NOT a boxed-TrStr unbox (that's for `_tr_str_box`-produced void* slots).
                     if cast_src_full_n == "Pointer":
-                        return "_tr_str_wrap((char*)(" + self.gen_expr(expr) + "))"
+                        return "_tr_str_lit((char*)(" + self.gen_expr(expr) + "))"
                     return "_tr_str_unbox(" + self.gen_expr(expr) + ")"
                 # TrStr -> Pointer[char]/char*: extract the raw char* via strz
                 # (TrStr is a struct, can't C-cast it directly to a pointer).
@@ -3980,6 +4000,18 @@ pub class CGenerator:
             i = i + 1
         return s
 
+    # Follow a type-alias chain to its underlying Tauraro type name (`uLongf`->`uLong`->`c_ulong`).
+    # Bounded to avoid an accidental cycle; returns the last name reached.
+    pub def _resolve_alias_tr(self, name: str) -> str:
+        mut cur = name
+        mut hops = 0
+        while hops < 12 and self.type_alias_tr.contains(cur):
+            mut nxt = self.type_alias_tr.get(cur)
+            if nxt == cur or nxt == "": return cur
+            cur = nxt
+            hops = hops + 1
+        return cur
+
     pub def gen_method_call(self, obj: Pointer[HirExpr], method: str, args: Vec[Pointer[HirExpr]], call_ty: AstType) -> str:
         mut obj_s = self.gen_expr(obj)
         mut t_n: str = hir_expr_type(obj).name
@@ -3988,6 +4020,15 @@ pub class CGenerator:
         # dispatch to the concrete type's method (x.show() -> Cat_show, not T_show).
         if self.type_subst.contains(t_n):
             t_n = self.resolve_generic_tyname(t_n)
+
+        # Resolve a scalar type-alias to its underlying primitive so `.to_str()`/`.to_float()`
+        # etc. work on FFI typedefs (`type uLong = c_ulong`; `compressBound() -> uLong`). Only
+        # rewrite when the alias resolves to a numeric/bool/char primitive — never to a class,
+        # so user-class method dispatch is unaffected.
+        if not _is_int_type(t_n) and not _is_float_type(t_n) and self.type_alias_tr.contains(t_n):
+            mut _ual = self._resolve_alias_tr(t_n)
+            if _is_int_type(_ual) or _is_float_type(_ual) or _ual == "bool" or _ual == "char":
+                t_n = _ual
 
         # Fixed-size array element read a[i]: sema lowers to EMethodCall(a,"get_index",[i]).
         # Emit a bounds-checked aggregate index; N is the compile-time length on the type.
@@ -7789,6 +7830,7 @@ pub class CGenerator:
                 mut ta_ty_p = prog.type_alias_types.get(tai)
                 if ta_ty_p as usize != 0 as usize:
                     self.type_alias_map.insert(ta_name, self.type_to_c(ta_ty_p.read()))
+                    self.type_alias_tr.insert(ta_name, ta_ty_p.read().name)
                 tai = tai + 1
         mut i = 0
         while i < prog.classes.len:

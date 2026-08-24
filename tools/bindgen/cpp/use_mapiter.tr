@@ -1,0 +1,17 @@
+from mapiter import q_scores, q_counts, std__map_int__double__size, std__map_int__double__key_nth, std__map_int__double__val_nth, std__map_std__basic_string_char___int__size, std__map_std__basic_string_char___int__key_nth, std__map_std__basic_string_char___int__val_nth
+def main():
+    mut m = q_scores()
+    mut n = std__map_int__double__size(m)
+    print("scores size=" + n.to_str())
+    mut i = 0
+    while i < n:
+        print("  " + std__map_int__double__key_nth(m,i).to_str() + " -> " + std__map_int__double__val_nth(m,i).to_str())
+        i = i + 1
+    mut c = q_counts()
+    mut cn = std__map_std__basic_string_char___int__size(c)
+    print("counts size=" + cn.to_str())
+    mut j = 0
+    while j < cn:
+        print("  " + (std__map_std__basic_string_char___int__key_nth(c,j) as str) + " -> " + std__map_std__basic_string_char___int__val_nth(c,j).to_str())
+        j = j + 1
+    print("ok")
