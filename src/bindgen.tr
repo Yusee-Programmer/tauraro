@@ -1116,9 +1116,267 @@ def emit_defines(bg: Bindgen, defs: str, baseline: Map[str, bool], allow: Map[st
                 mut iv = _to_int(val)
                 bg.consts.append("const " + nm + ": c_int = " + iv.to_str() + "\n")
 
-# Generate Tauraro FFI bindings for the C header at `header` into `out`, preprocessing with `cc`.
-# The `tauraroc bindgen` subcommand (src/main.tr) parses the CLI and calls this.
-pub def run_bindgen(header: str, out: str, cc: str, extra: str, pkglibs: str):
+# ── function-like macro shims (--macros) ─────────────────────────────────────────
+# C function-like macros (`Py_INCREF(op)`, …) are UNTYPED and have no linkable symbol, so they
+# cannot be bound as `extern` functions. The only correct automation is a real wrapper function
+# per macro, VERIFIED by the C++ compiler. We take each argument as `void*` and let the compiler
+# tell us whether the macro yields a value (return it, bridged through intptr_t → Pointer[void]) or
+# is a void action — dropping any macro whose wrapper does not compile. The wrappers are namespaced
+# `m_<NAME>` so they never collide with a real same-named function/macro.
+
+# The C++ driver matching a C compiler name (the macro shim is built as C++ by the auto-linker).
+def _cxx_of(cc: str) -> str:
+    if cc == "gcc": return "g++"
+    if cc == "clang": return "clang++"
+    if cc.find("++") >= 0: return cc
+    return "c++"
+
+# Emit an argument list. mode: 0 = C declaration, 1 = call, 2 = Tauraro `def` params. atype selects the
+# argument type: 0 = `void*`/`Pointer[void]` (ergonomic for pointer args), 1 = `intptr_t`/`c_intptr_t`
+# (a machine word usable as BOTH a pointer-cast source and an integer subscript — recovers macros that
+# index with an integer arg, e.g. `PyList_GET_ITEM(op, i)`).
+def _macro_args(n: int, mode: int, atype: int) -> str:
+    mut s = ""
+    mut i = 0
+    while i < n:
+        if i > 0: s = s + ", "
+        if mode == 0:
+            if atype == 0: s = s + "void* a" + i.to_str()
+            else: s = s + "intptr_t a" + i.to_str()
+        elif mode == 1:
+            s = s + "a" + i.to_str()
+        else:
+            if atype == 0: s = s + "a" + i.to_str() + ": Pointer[void]"
+            else: s = s + "a" + i.to_str() + ": c_intptr_t"
+        i = i + 1
+    return s
+
+# Collect `#define NAME(params) body` from the `-dM` dump, minus compiler built-ins. Returns
+# `NAME|ARITY` entries; skips variadic macros, reserved `__`-names, and empty (decorator) bodies.
+def _collect_fn_macros(defs: str, baseline: Map[str, bool]) -> Vec[str]:
+    mut out = Vec[str].init(64)
+    mut seen: Map[str, bool] = Map[str, bool].init(128)
+    mut lines = defs.split("\n")
+    mut i = 0
+    while i < lines.len:
+        mut ln = lines.get(i)
+        i = i + 1
+        if not ln.starts_with("#define "): continue
+        mut rest = ln.slice(8, ln.len())
+        mut par = rest.find("(")
+        if par <= 0: continue
+        mut sp = rest.find(" ")
+        if sp >= 0 and sp < par: continue               # object-like (`#define X (a)+...`) — not fn-like
+        mut nm = rest.slice(0, par)
+        if nm.starts_with("__"): continue               # reserved / internal
+        if baseline.contains(nm): continue              # compiler/platform built-in
+        if seen.contains(nm): continue
+        mut close = rest.find(")")
+        if close < 0 or close < par: continue
+        mut plist = rest.slice(par + 1, close)
+        if plist.find("...") >= 0: continue             # variadic — can't shim generically
+        mut body = _lstrip(rest.slice(close + 1, rest.len()))
+        if body == "": continue                         # empty body (decorator macro like Py_DEPRECATED)
+        mut arity = 0
+        mut pt = plist.trim()
+        if pt != "":
+            arity = 1
+            mut ci = 0
+            while ci < pt.len():
+                if pt[ci] == 44: arity = arity + 1       # comma
+                ci = ci + 1
+        if arity > 8: continue
+        seen.insert(nm, true)
+        out.push(nm + "|" + arity.to_str())
+    return out
+
+# True if the diagnostics contain any hard error.
+def _has_cc_error(errtxt: str) -> bool:
+    return errtxt.find(": error:") >= 0 or errtxt.find(": error :") >= 0
+
+# Names the compiler blames: every macro named in an `in expansion of macro '<NAME>'` note. This is
+# ROBUST where line numbers are not — a macro-expansion error is reported at the macro's definition
+# site (a system header) and one bad macro (unbalanced delimiters) cascades into every shim after it,
+# but the compiler always names the offending macro in an expansion note.
+def _macro_bad_names(errtxt: str) -> Map[str, bool]:
+    mut m: Map[str, bool] = Map[str, bool].init(64)
+    mut key = "in expansion of macro "
+    mut lines = errtxt.split("\n")
+    mut i = 0
+    while i < lines.len:
+        mut ln = lines.get(i)
+        i = i + 1
+        mut fp = ln.find(key)
+        if fp < 0: continue
+        mut after = ln.slice(fp + key.len(), ln.len())
+        mut q1 = after.find("'")
+        if q1 < 0: continue
+        mut rest2 = after.slice(q1 + 1, after.len())
+        mut q2 = rest2.find("'")
+        if q2 < 0: continue
+        mut nm = rest2.slice(0, q2)
+        if nm != "": m.insert(nm, true)
+    return m
+
+# One `void*` shim per macro whose name is in `cand`, in the given form: 0 = VALUE
+# (`return (void*)(intptr_t)(M(…))`) or 1 = VOID (`(void)(M(…))`). Returns the ORDER of names emitted
+# (line 3+pos) so a direct-error line maps back to a macro.
+# One C shim body for macro `nm`/arity `ar` in the given form (0 = VALUE `(void*)(intptr_t)(M(…))`,
+# 1 = VOID `(void)(M(…))`) and argument type `atype` (0 = void*, 1 = intptr_t). `sym` is the wrapper name.
+def _macro_shim_line(sym: str, nm: str, ar: int, form: int, atype: int) -> str:
+    if form == 0:
+        return "void* " + sym + "(" + _macro_args(ar, 0, atype) + "){ return (void*)(intptr_t)(" + nm + "(" + _macro_args(ar, 1, atype) + ")); }\n"
+    return "void " + sym + "(" + _macro_args(ar, 0, atype) + "){ (void)(" + nm + "(" + _macro_args(ar, 1, atype) + ")); }\n"
+
+def _macro_probe_write(header: str, macros: ref Vec[str], cand: Map[str, bool], form: int, atype: int) -> Vec[str]:
+    mut probe = StringBuilder.init(8192)
+    probe.append("#include \"" + header + "\"\n")
+    probe.append("#include <stdint.h>\n")
+    mut order: Vec[str] = Vec[str].init(64)
+    mut k = 0
+    while k < macros.len:
+        mut ent = macros.get(k)
+        k = k + 1
+        mut bar = ent.find("|")
+        mut nm = ent.slice(0, bar)
+        if not cand.contains(nm): continue
+        mut ar = _to_int(ent.slice(bar + 1, ent.len()))
+        probe.append(_macro_shim_line("mP_" + nm, nm, ar, form, atype))
+        order.push(nm)
+    write_file("_macroprobe.c", probe.to_string().as_str())
+    return order
+
+# The set of `cand` macro names the compiler rejects in `form`: (a) named in an `in expansion of
+# macro '…'` note (macro-body/type errors), and (b) at a direct-error shim line (token-paste, void-in-
+# value, …, which carry no note) mapped via `order`. Cascade VICTIM diagnostics are skipped so an
+# unbalanced-delimiter macro only costs itself, not every shim after it. `-fpermissive`: the shim is
+# built as C++, but these are C APIs — a `void*` implicitly converting to `FILE*`/`char*` is a C-ism
+# C++ rejects; downgrading it to a warning is ABI-correct (the void* already holds the right pointer).
+def _macro_form_bad(header: str, macros: ref Vec[str], cand: Map[str, bool], form: int, atype: int, cxx: str, extra: str) -> Map[str, bool]:
+    mut order = _macro_probe_write(header, macros, cand, form, atype)
+    _tr_system(cxx + " -std=c++17 -fsyntax-only -fmax-errors=0 -fpermissive -w " + extra + " _macroprobe.c > _macroprobe.err 2>&1")
+    mut errtxt = ""
+    if file_exists("_macroprobe.err"): errtxt = read_file("_macroprobe.err")
+    mut bad = _macro_bad_names(errtxt)
+    mut key = "_macroprobe.c:"
+    mut lines = errtxt.split("\n")
+    mut i = 0
+    while i < lines.len:
+        mut ln = lines.get(i)
+        i = i + 1
+        if ln.find(": error:") < 0: continue
+        if ln.find("is not allowed here") >= 0: continue     # cascade victim — keep it
+        if ln.find("expected unqualified-id") >= 0: continue
+        if ln.find("expected declaration") >= 0: continue
+        mut fp = ln.find(key)
+        if fp < 0: continue
+        mut after = ln.slice(fp + key.len(), ln.len())
+        mut colon = after.find(":")
+        if colon < 0: continue
+        mut idx = _to_int(after.slice(0, colon)) - 3         # line 3 = first shim
+        if idx >= 0 and idx < order.len: bad.insert(order.get(idx), true)
+    return bad
+
+# Iteratively drop rejected macros (of `cand`) until `form` compiles clean; return the survivors.
+def _macro_verify_form(header: str, macros: ref Vec[str], cand: Map[str, bool], form: int, atype: int, cxx: str, extra: str) -> Map[str, bool]:
+    mut cur = cand
+    mut iter = 0
+    while iter < 12:
+        iter = iter + 1
+        mut bad = _macro_form_bad(header, macros, cur, form, atype, cxx, extra)
+        if bad.len == 0: break
+        mut next: Map[str, bool] = Map[str, bool].init(64)
+        mut k = 0
+        while k < macros.len:
+            mut ent = macros.get(k)
+            k = k + 1
+            mut nm = ent.slice(0, ent.find("|"))
+            if cur.contains(nm) and not bad.contains(nm): next.insert(nm, true)
+        if next.len == cur.len: break                        # no progress — stop
+        cur = next
+    return cur
+
+# Candidate name set = every macro NOT already claimed by an earlier pass (`done`).
+def _macro_remaining(macros: ref Vec[str], done: Map[str, bool]) -> Map[str, bool]:
+    mut m: Map[str, bool] = Map[str, bool].init(64)
+    mut k = 0
+    while k < macros.len:
+        mut ent = macros.get(k)
+        k = k + 1
+        mut nm = ent.slice(0, ent.find("|"))
+        if not done.contains(nm): m.insert(nm, true)
+    return m
+
+# Fold a survivor set into `done` (so later passes skip already-bound macros).
+def _macro_mark_done(done: ref Map[str, bool], ok: ref Map[str, bool], macros: ref Vec[str]):
+    mut k = 0
+    while k < macros.len:
+        mut ent = macros.get(k)
+        k = k + 1
+        mut nm = ent.slice(0, ent.find("|"))
+        if ok.contains(nm): done.insert(nm, true)
+
+# Generate a compile-verified macro-shim `.c` for `macros`, returning the Tauraro `def` lines for the
+# survivors (empty if none). FOUR passes over the leftovers of the previous, in preference order:
+#   1. value / void* args   (ergonomic pointer args, returns a value)
+#   2. void  / void* args   (action macros like Py_INCREF)
+#   3. value / intptr_t args (recovers integer-index macros like PyList_GET_ITEM(op, i))
+#   4. void  / intptr_t args
+# Every macro the compiler rejects is dropped — by NAME, so one bad macro cannot take out the file.
+# Whatever survives none of the four is genuinely un-shimmable (a TYPE argument, a statement/`return`
+# body, or `##` token-pasting). `cxx` must match the shim's build driver.
+def _gen_macro_shims(header: str, out: str, macros: Vec[str], cxx: str, extra: str) -> str:
+    if macros.len == 0: return ""
+    mut n_total = macros.len
+    mut done: Map[str, bool] = Map[str, bool].init(64)
+    mut val_vp = _macro_verify_form(header, macros, _macro_remaining(macros, done), 0, 0, cxx, extra)
+    _macro_mark_done(done, val_vp, macros)
+    mut void_vp = _macro_verify_form(header, macros, _macro_remaining(macros, done), 1, 0, cxx, extra)
+    _macro_mark_done(done, void_vp, macros)
+    mut val_ip = _macro_verify_form(header, macros, _macro_remaining(macros, done), 0, 1, cxx, extra)
+    _macro_mark_done(done, val_ip, macros)
+    mut void_ip = _macro_verify_form(header, macros, _macro_remaining(macros, done), 1, 1, cxx, extra)
+    _tr_system("rm -f _macroprobe.c _macroprobe.err 2>/dev/null")
+    # Emit the final shim + bindings, each macro in whichever form/arg-type it passed.
+    mut shim = StringBuilder.init(8192)
+    shim.append("// Auto-generated macro shims for " + header + " (tauraro-bindgen --macros).\n")
+    shim.append("#include \"" + header + "\"\n")
+    shim.append("#include <stdint.h>\n")
+    shim.append("extern \"C\" {\n")
+    mut binds = StringBuilder.init(4096)
+    mut kept = 0
+    mut n_ip = 0
+    mut k2 = 0
+    while k2 < macros.len:
+        mut ent = macros.get(k2)
+        k2 = k2 + 1
+        mut bar = ent.find("|")
+        mut nm = ent.slice(0, bar)
+        mut ar = _to_int(ent.slice(bar + 1, ent.len()))
+        mut form = -1
+        mut atype = 0
+        if val_vp.contains(nm): form = 0
+        elif void_vp.contains(nm): form = 1
+        elif val_ip.contains(nm):
+            form = 0
+            atype = 1
+        elif void_ip.contains(nm):
+            form = 1
+            atype = 1
+        if form < 0: continue
+        shim.append(_macro_shim_line("m_" + nm, nm, ar, form, atype))
+        mut bl = "    def m_" + nm + "(" + _macro_args(ar, 2, atype) + ")"
+        if form == 0: bl = bl + " -> Pointer[void]"
+        binds.append(bl + "\n")
+        kept = kept + 1
+        if atype == 1: n_ip = n_ip + 1
+    shim.append("}\n")
+    if kept == 0: return ""
+    write_file(out + "_macros.c", shim.to_string().as_str())
+    print("bindgen: macro shims: " + kept.to_str() + " of " + n_total.to_str() + " function-like macros bound (" + n_ip.to_str() + " via intptr args) -> " + out + "_macros.c (m_<NAME>)")
+    return binds.to_string().as_str()
+
+pub def run_bindgen(header: str, out: str, cc: str, extra: str, pkglibs: str, want_macros: bool):
     mut tmp_decls = "_bindgen_decls.i"
     mut tmp_defs  = "_bindgen_defs.i"
     # -E WITH line markers, so declarations from #include'd system headers can be filtered out.
@@ -1134,8 +1392,18 @@ pub def run_bindgen(header: str, out: str, cc: str, extra: str, pkglibs: str):
     bg.run()
     mut baseline = _load_baseline(cc)
     emit_defines(bg, read_file(tmp_defs), baseline, _target_define_names(header))
+    mut macro_binds = ""
+    mut macro_shim = ""
+    if want_macros:
+        macro_binds = _gen_macro_shims(header, out, _collect_fn_macros(read_file(tmp_defs), baseline), _cxx_of(cc), extra)
+        if macro_binds != "": macro_shim = _basename(out) + "_macros.c"
     mut sb = StringBuilder.init(4096)
     sb.append("# Auto-generated FFI bindings for " + header + " (tauraro-bindgen).\n")
+    if macro_shim != "":
+        sb.append("# tauraro-cpp-shim: " + macro_shim + "
+")
+        sb.append("# tauraro-cpp-cflags: -fpermissive " + extra + "
+")
     # --pkg: record the library's link flags so `tauraroc` auto-links them (no manual --link/-l).
     if pkglibs != "": sb.append("# tauraro-cpp-linkflags:" + pkglibs + "\n")
     sb.append("\n")
@@ -1143,6 +1411,7 @@ pub def run_bindgen(header: str, out: str, cc: str, extra: str, pkglibs: str):
     mut ss = bg.structs.to_string().as_str()
     mut cs = bg.consts.to_string().as_str()
     mut fs = bg.funcs.to_string().as_str()
+    if macro_binds != "": fs = fs + macro_binds     # function-like macro shims (--macros)
     # Forward-declare any type referenced by the bindings but defined in a filtered
     # system/sub-header, so the output compiles (opaque, pass-by-Pointer).
     mut fb = _opaque_fallbacks(ts + ss + fs, bg.seen)

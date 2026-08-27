@@ -1134,6 +1134,7 @@ pub def main(args: Vec[str]):
         mut bg_cpp    = false
         mut bg_extra  = ""    # -h cpp: clang passthrough flags (-I / -D / -std= / -isystem)
         mut bg_pkglibs = ""   # --pkg <name>: link flags discovered via pkg-config (-L / -l)
+        mut bg_macros = false # --macros: also bind function-like C macros via a compile-verified shim
         mut bk = 2
         while bk < args.len:
             mut ba = args.get(bk)
@@ -1159,6 +1160,8 @@ pub def main(args: Vec[str]):
                 bk = bk + 1
             elif ba == "--cpp":
                 bg_cpp = true
+            elif ba == "--macros":
+                bg_macros = true
             elif ba == "-I" and bk + 1 < args.len:
                 bg_extra = bg_extra + " -I\"" + args.get(bk + 1) + "\""
                 bk = bk + 1
@@ -1179,7 +1182,7 @@ pub def main(args: Vec[str]):
         if bg_cpp:
             run_bindgen_cpp(bg_header, bg_out, bg_cc, bg_extra, bg_pkglibs)
         else:
-            run_bindgen(bg_header, bg_out, bg_cc, bg_extra, bg_pkglibs)
+            run_bindgen(bg_header, bg_out, bg_cc, bg_extra, bg_pkglibs, bg_macros)
         _tr_exit(0)
     if subcmd == "fmt":
         mut write_in_place = false
