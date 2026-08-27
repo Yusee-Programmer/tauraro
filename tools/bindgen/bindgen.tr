@@ -447,6 +447,7 @@ extend Bindgen:
                 if self.is_punct(")"): self.adv()     # )
                 self.skip_balanced_parens()           # (args)
                 if pname == "": pname = "arg" + argn.to_str()
+                if _is_tr_keyword(pname): pname = pname + "_"   # e.g. a C param named `def`
                 if not first: self.funcs.append(", ")
                 first = false
                 self.funcs.append(pname + ": Pointer[void]")
@@ -465,6 +466,7 @@ extend Bindgen:
                 continue
             if pname == "":
                 pname = "arg" + argn.to_str()
+            if _is_tr_keyword(pname): pname = pname + "_"   # C params named `def`/`type`/… are Tauraro keywords
             if not first: self.funcs.append(", ")
             first = false
             self.funcs.append(pname + ": " + map_type(pbase, pstars))
@@ -558,8 +560,41 @@ extend Bindgen:
             mut tw = self.read_type_words()
             mut fbase = tw.get(0)
             mut fstars = _to_int(tw.get(1))
+            # Inline function-pointer member `RET (*name)(params);` -> `name: Pointer[void]`
+            # (a C function pointer is ABI-identical to void*). read_type_words leaves the cursor
+            # at the `(` of the `(*name)` group; without this the params leak in as bogus fields
+            # (real case: GDExtension's `void (*initialize)(void*, level)` vtable structs).
+            if self.is_punct("(") and self.nt() == "*":
+                self.adv()                                    # (
+                while self.is_punct("*"): self.adv()          # one or more *
+                mut fpname = ""
+                if self.ck() == 0:
+                    fpname = self.ct()
+                    self.adv()
+                while not self.is_punct(")") and self.ck() != 5: self.adv()
+                if self.is_punct(")"): self.adv()             # )
+                self.skip_balanced_parens()                   # (params)
+                if fpname != "":
+                    self.structs.append("    pub " + fpname + ": Pointer[void]\n")
+                    nfields = nfields + 1
+                self.skip_attributes()
+                if self.is_punct(";"): self.adv()
+                if self.pos == floop_before: self.adv()
+                continue
             mut more = true
+            mut first_decl = true
             while more:
+                # Per-declarator pointer depth. `TYPE *a, *b, *c;` shares one base type but each
+                # declarator carries its OWN `*`s — read_type_words folded the FIRST declarator's
+                # stars into fstars, so subsequent ones must recount from 0 (else b/c lose the base
+                # type -> `Pointer[]`; real case: CPython's `PyObject *ht_name, *ht_slots;`).
+                mut dstars = fstars
+                if not first_decl:
+                    dstars = 0
+                    while self.is_punct("*"):
+                        dstars = dstars + 1
+                        self.adv()
+                first_decl = false
                 if self.ck() != 0: break
                 mut fname = self.ct()
                 self.adv()
@@ -571,11 +606,11 @@ extend Bindgen:
                     while not self.is_punct("]") and self.ck() != 5: self.adv()
                     if self.is_punct("]"): self.adv()
                     if arrn != "":
-                        self.structs.append("    pub " + fname + ": [" + map_type(fbase, fstars) + "; " + arrn + "]\n")
+                        self.structs.append("    pub " + fname + ": [" + map_type(fbase, dstars) + "; " + arrn + "]\n")
                         nfields = nfields + 1
                         is_arr = true
                 if not is_arr:
-                    self.structs.append("    pub " + fname + ": " + map_type(fbase, fstars) + "\n")
+                    self.structs.append("    pub " + fname + ": " + map_type(fbase, dstars) + "\n")
                     nfields = nfields + 1
                 self.skip_attributes()                    # `int x __attribute__((packed));`
                 if self.is_punct(","):
@@ -1337,6 +1372,9 @@ def _cxxwalk_src() -> str:
     sb.append("  if(!clang_Location_isFromMainFile(clang_getCursorLocation(c))) return CXChildVisit_Continue;\n")
     sb.append("  enum CXCursorKind k=clang_getCursorKind(c); CXString nmS=clang_getCursorSpelling(c); const char* nm=S(nmS);\n")
     sb.append("  if(k==CXCursor_ClassTemplate||k==CXCursor_ClassTemplatePartialSpecialization){ clang_disposeString(nmS); return CXChildVisit_Continue; }\n")
+    # extern "C" { ... } is a LinkageSpec (not a namespace) — just recurse into it, else every decl
+    # inside is invisible (e.g. Godot's gdextension_interface.h wraps its whole API in extern "C").
+    sb.append("  if(k==CXCursor_LinkageSpec){ clang_visitChildren(c,visit,0); clang_disposeString(nmS); return CXChildVisit_Continue; }\n")
     sb.append("  if(k==CXCursor_Namespace){ printf(\"NS %s\\n\",nm); clang_visitChildren(c,visit,0); printf(\"ENS\\n\"); }\n")
     sb.append("  else if((k==CXCursor_ClassDecl||k==CXCursor_StructDecl)&&clang_isCursorDefinition(c)){\n")
     sb.append("    if(is_template_pattern(c)){ clang_disposeString(nmS); return CXChildVisit_Continue; }\n")

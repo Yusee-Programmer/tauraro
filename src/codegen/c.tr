@@ -870,6 +870,12 @@ pub class CGenerator:
             self.buf        = self.mono_buf
             self.struct_buf = self.mono_buf
             self.proto_buf  = self.mono_buf
+            # A fixed array of a user value-struct needs that struct COMPLETE here (an array of an
+            # incomplete type is illegal C). The struct body is normally emitted later in struct_buf,
+            # but mono_buf is flushed early — so emit the element body first (idempotent via its
+            # `#ifndef <name>_STRUCT_DEFINED` guard). Real case: CPython's `setentry smalltable[8]`.
+            if self.classes.contains(elem.name):
+                self.gen_class_struct(self.classes.get(elem.name))
             self.w("typedef struct " + nm + " { " + elem_c + " data[" + ty.array_size.to_str() + "]; } " + nm + ";\n")
             self.buf        = old_buf
             self.struct_buf = old_sbuf
