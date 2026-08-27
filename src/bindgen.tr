@@ -1135,11 +1135,22 @@ def _cxx_of(cc: str) -> str:
 # argument type: 0 = `void*`/`Pointer[void]` (ergonomic for pointer args), 1 = `intptr_t`/`c_intptr_t`
 # (a machine word usable as BOTH a pointer-cast source and an integer subscript — recovers macros that
 # index with an integer arg, e.g. `PyList_GET_ITEM(op, i)`).
-def _macro_args(n: int, mode: int, atype: int) -> str:
+def _macro_args(n: int, mode: int, atype: int, tp: int) -> str:
     mut s = ""
+    mut first = true
     mut i = 0
     while i < n:
-        if i > 0: s = s + ", "
+        if i == tp:
+            # baked TYPE position: a literal `char` in the CALL (a pointer cast `(char*)…` is
+            # runtime-identity), and ABSENT from the shim's parameter list / Tauraro signature.
+            if mode == 1:
+                if not first: s = s + ", "
+                s = s + "char"
+                first = false
+            i = i + 1
+            continue
+        if not first: s = s + ", "
+        first = false
         if mode == 0:
             if atype == 0: s = s + "void* a" + i.to_str()
             else: s = s + "intptr_t a" + i.to_str()
@@ -1152,6 +1163,58 @@ def _macro_args(n: int, mode: int, atype: int) -> str:
     return s
 
 # Collect `#define NAME(params) body` from the `-dM` dump, minus compiler built-ins. Returns
+# A collected macro is `NAME|ARITY|TYPEPOS`. TYPEPOS = the single argument position used as a POINTER
+# cast `(param *)` (so a placeholder type can be baked there — runtime-identity), or -1 if none.
+def _ent_name(e: str) -> str: return e.slice(0, e.find("|"))
+def _ent_arity(e: str) -> int:
+    mut r = e.slice(e.find("|") + 1, e.len())
+    mut b = r.find("|")
+    if b < 0: return _to_int(r)
+    return _to_int(r.slice(0, b))
+def _ent_typepos(e: str) -> int:
+    mut r = e.slice(e.find("|") + 1, e.len())
+    mut b = r.find("|")
+    if b < 0: return -1
+    return _to_int(r.slice(b + 1, r.len()))
+
+# Is one of `c`'s bytes an identifier char (for word-boundary tests)?
+def _is_ident_ch(c: int) -> bool:
+    return (c >= 48 and c <= 57) or (c >= 65 and c <= 90) or (c >= 97 and c <= 122) or c == 95
+
+# Does `body` use `pname` as a whole word immediately followed (mod spaces) by `*` — i.e. a POINTER
+# cast `(pname *)`? Only pointer casts are safe to type-erase (a scalar `(pname)` cast truncates).
+def _param_ptr_type(body: str, pname: str) -> bool:
+    mut plen = pname.len()
+    if plen == 0: return false
+    mut i = 0
+    while i + plen <= body.len():
+        if body.slice(i, i + plen) == pname:
+            mut okb = true
+            if i > 0 and _is_ident_ch(body[i - 1]): okb = false
+            mut j = i + plen
+            mut oka = true
+            if j < body.len() and _is_ident_ch(body[j]): oka = false
+            if okb and oka:
+                while j < body.len() and (body[j] == 32 or body[j] == 9): j = j + 1
+                if j < body.len() and body[j] == 42: return true    # '*'
+        i = i + 1
+    return false
+
+# `()`/`[]`/`{}` balance of a macro body — an unbalanced one (e.g. a `{` block-opener) cannot be a
+# function body and, worse, cascades errors over every shim after it in the probe. Depth-only (not
+# type-matched) is enough to catch the openers/closers.
+def _balanced_delims(s: str) -> bool:
+    mut depth = 0
+    mut i = 0
+    while i < s.len():
+        mut c = s[i]
+        if c == 40 or c == 91 or c == 123: depth = depth + 1        # ( [ {
+        elif c == 41 or c == 93 or c == 125:
+            depth = depth - 1
+            if depth < 0: return false
+        i = i + 1
+    return depth == 0
+
 # `NAME|ARITY` entries; skips variadic macros, reserved `__`-names, and empty (decorator) bodies.
 def _collect_fn_macros(defs: str, baseline: Map[str, bool]) -> Vec[str]:
     mut out = Vec[str].init(64)
@@ -1177,6 +1240,8 @@ def _collect_fn_macros(defs: str, baseline: Map[str, bool]) -> Vec[str]:
         if plist.find("...") >= 0: continue             # variadic — can't shim generically
         mut body = _lstrip(rest.slice(close + 1, rest.len()))
         if body == "": continue                         # empty body (decorator macro like Py_DEPRECATED)
+        if not _balanced_delims(body): continue         # opens/closes a brace/paren (Py_BEGIN_CRITICAL_SECTION
+                                                        # → `{`) — un-shimmable AND cascades over later shims
         mut arity = 0
         mut pt = plist.trim()
         if pt != "":
@@ -1186,8 +1251,23 @@ def _collect_fn_macros(defs: str, baseline: Map[str, bool]) -> Vec[str]:
                 if pt[ci] == 44: arity = arity + 1       # comma
                 ci = ci + 1
         if arity > 8: continue
+        # TYPE-ERASURE candidate: exactly one parameter used as a pointer cast `(param *)`, and no
+        # `sizeof`/`offsetof`/`##` (those genuinely need the concrete type). We can bake a placeholder
+        # type there and expose only the value args — the pointer value is unchanged by the cast type.
+        mut typepos = -1
+        if arity > 0 and body.find("sizeof") < 0 and body.find("offsetof") < 0 and body.find("##") < 0:
+            mut parts = plist.split(",")
+            mut pi = 0
+            mut nfound = 0
+            while pi < parts.len:
+                mut pnm = parts.get(pi).trim()
+                if _param_ptr_type(body, pnm):
+                    typepos = pi
+                    nfound = nfound + 1
+                pi = pi + 1
+            if nfound != 1: typepos = -1                 # only the single-pointer-type case is unambiguous
         seen.insert(nm, true)
-        out.push(nm + "|" + arity.to_str())
+        out.push(nm + "|" + arity.to_str() + "|" + typepos.to_str())
     return out
 
 # True if the diagnostics contain any hard error.
@@ -1223,12 +1303,17 @@ def _macro_bad_names(errtxt: str) -> Map[str, bool]:
 # (line 3+pos) so a direct-error line maps back to a macro.
 # One C shim body for macro `nm`/arity `ar` in the given form (0 = VALUE `(void*)(intptr_t)(M(…))`,
 # 1 = VOID `(void)(M(…))`) and argument type `atype` (0 = void*, 1 = intptr_t). `sym` is the wrapper name.
-def _macro_shim_line(sym: str, nm: str, ar: int, form: int, atype: int) -> str:
+def _macro_shim_line(sym: str, nm: str, ar: int, form: int, atype: int, tp: int) -> str:
     if form == 0:
-        return "void* " + sym + "(" + _macro_args(ar, 0, atype) + "){ return (void*)(intptr_t)(" + nm + "(" + _macro_args(ar, 1, atype) + ")); }\n"
-    return "void " + sym + "(" + _macro_args(ar, 0, atype) + "){ (void)(" + nm + "(" + _macro_args(ar, 1, atype) + ")); }\n"
+        return "void* " + sym + "(" + _macro_args(ar, 0, atype, tp) + "){ return (void*)(intptr_t)(" + nm + "(" + _macro_args(ar, 1, atype, tp) + ")); }\n"
+    # VOID form as a bare STATEMENT (not `(void)(…)`) so a self-contained statement macro like a
+    # `do { … } while(0)` compiles too. A macro that `return`s a value is still rejected here (return
+    # with a value in a void function is an error), and one referencing undeclared names likewise.
+    return "void " + sym + "(" + _macro_args(ar, 0, atype, tp) + "){ " + nm + "(" + _macro_args(ar, 1, atype, tp) + "); }\n"
 
-def _macro_probe_write(header: str, macros: ref Vec[str], cand: Map[str, bool], form: int, atype: int) -> Vec[str]:
+# `bake`: when true, each macro's recorded pointer-type position is erased (a placeholder `char` is
+# baked there); macros with no such position are skipped. When false, tp=-1 (all args are runtime).
+def _macro_probe_write(header: str, macros: ref Vec[str], cand: Map[str, bool], form: int, atype: int, bake: bool) -> Vec[str]:
     mut probe = StringBuilder.init(8192)
     probe.append("#include \"" + header + "\"\n")
     probe.append("#include <stdint.h>\n")
@@ -1237,11 +1322,13 @@ def _macro_probe_write(header: str, macros: ref Vec[str], cand: Map[str, bool], 
     while k < macros.len:
         mut ent = macros.get(k)
         k = k + 1
-        mut bar = ent.find("|")
-        mut nm = ent.slice(0, bar)
+        mut nm = _ent_name(ent)
         if not cand.contains(nm): continue
-        mut ar = _to_int(ent.slice(bar + 1, ent.len()))
-        probe.append(_macro_shim_line("mP_" + nm, nm, ar, form, atype))
+        mut tp = 0 - 1
+        if bake:
+            tp = _ent_typepos(ent)
+            if tp < 0: continue
+        probe.append(_macro_shim_line("mP_" + nm, nm, _ent_arity(ent), form, atype, tp))
         order.push(nm)
     write_file("_macroprobe.c", probe.to_string().as_str())
     return order
@@ -1252,8 +1339,8 @@ def _macro_probe_write(header: str, macros: ref Vec[str], cand: Map[str, bool], 
 # unbalanced-delimiter macro only costs itself, not every shim after it. `-fpermissive`: the shim is
 # built as C++, but these are C APIs — a `void*` implicitly converting to `FILE*`/`char*` is a C-ism
 # C++ rejects; downgrading it to a warning is ABI-correct (the void* already holds the right pointer).
-def _macro_form_bad(header: str, macros: ref Vec[str], cand: Map[str, bool], form: int, atype: int, cxx: str, extra: str) -> Map[str, bool]:
-    mut order = _macro_probe_write(header, macros, cand, form, atype)
+def _macro_form_bad(header: str, macros: ref Vec[str], cand: Map[str, bool], form: int, atype: int, bake: bool, cxx: str, extra: str) -> Map[str, bool]:
+    mut order = _macro_probe_write(header, macros, cand, form, atype, bake)
     _tr_system(cxx + " -std=c++17 -fsyntax-only -fmax-errors=0 -fpermissive -w " + extra + " _macroprobe.c > _macroprobe.err 2>&1")
     mut errtxt = ""
     if file_exists("_macroprobe.err"): errtxt = read_file("_macroprobe.err")
@@ -1278,19 +1365,19 @@ def _macro_form_bad(header: str, macros: ref Vec[str], cand: Map[str, bool], for
     return bad
 
 # Iteratively drop rejected macros (of `cand`) until `form` compiles clean; return the survivors.
-def _macro_verify_form(header: str, macros: ref Vec[str], cand: Map[str, bool], form: int, atype: int, cxx: str, extra: str) -> Map[str, bool]:
+def _macro_verify_form(header: str, macros: ref Vec[str], cand: Map[str, bool], form: int, atype: int, bake: bool, cxx: str, extra: str) -> Map[str, bool]:
     mut cur = cand
     mut iter = 0
     while iter < 12:
         iter = iter + 1
-        mut bad = _macro_form_bad(header, macros, cur, form, atype, cxx, extra)
+        mut bad = _macro_form_bad(header, macros, cur, form, atype, bake, cxx, extra)
         if bad.len == 0: break
         mut next: Map[str, bool] = Map[str, bool].init(64)
         mut k = 0
         while k < macros.len:
             mut ent = macros.get(k)
             k = k + 1
-            mut nm = ent.slice(0, ent.find("|"))
+            mut nm = _ent_name(ent)
             if cur.contains(nm) and not bad.contains(nm): next.insert(nm, true)
         if next.len == cur.len: break                        # no progress — stop
         cur = next
@@ -1316,28 +1403,56 @@ def _macro_mark_done(done: ref Map[str, bool], ok: ref Map[str, bool], macros: r
         mut nm = ent.slice(0, ent.find("|"))
         if ok.contains(nm): done.insert(nm, true)
 
+# Run one verification pass and RECORD each survivor's chosen strategy in `plan` (name -> "form|atype|
+# bake"), folding them into `done` so later passes skip them.
+def _macro_pass(header: str, macros: ref Vec[str], done: ref Map[str, bool], plan: ref Map[str, str], form: int, atype: int, bake: bool, cxx: str, extra: str):
+    mut cand = _macro_remaining(macros, done)
+    if bake:
+        # A bake pass only applies to macros with a bakeable pointer-type position; without this the
+        # tp<0 macros (skipped in the probe, hence never erroring) would be falsely marked as survivors.
+        mut c2: Map[str, bool] = Map[str, bool].init(64)
+        mut ci = 0
+        while ci < macros.len:
+            mut e2 = macros.get(ci)
+            ci = ci + 1
+            mut n2 = _ent_name(e2)
+            if cand.contains(n2) and _ent_typepos(e2) >= 0: c2.insert(n2, true)
+        cand = c2
+    mut ok = _macro_verify_form(header, macros, cand, form, atype, bake, cxx, extra)
+    mut bk = "0"
+    if bake: bk = "1"
+    mut k = 0
+    while k < macros.len:
+        mut ent = macros.get(k)
+        k = k + 1
+        mut nm = _ent_name(ent)
+        if ok.contains(nm) and not done.contains(nm):
+            done.insert(nm, true)
+            plan.insert(nm, form.to_str() + "|" + atype.to_str() + "|" + bk)
+
 # Generate a compile-verified macro-shim `.c` for `macros`, returning the Tauraro `def` lines for the
-# survivors (empty if none). FOUR passes over the leftovers of the previous, in preference order:
-#   1. value / void* args   (ergonomic pointer args, returns a value)
-#   2. void  / void* args   (action macros like Py_INCREF)
-#   3. value / intptr_t args (recovers integer-index macros like PyList_GET_ITEM(op, i))
-#   4. void  / intptr_t args
-# Every macro the compiler rejects is dropped — by NAME, so one bad macro cannot take out the file.
-# Whatever survives none of the four is genuinely un-shimmable (a TYPE argument, a statement/`return`
-# body, or `##` token-pasting). `cxx` must match the shim's build driver.
+# survivors (empty if none). Passes over the leftovers of the previous, in preference order:
+#   1-2. value / void  form, void* args   (pointer args; action macros like Py_INCREF)
+#   3-4. value / void  form, intptr args  (integer-index macros like PyList_GET_ITEM(op, i))
+#   5-6. value / void  form, TYPE-ERASED  (a `(type*)` cast arg is baked to a placeholder — recovers
+#        type-argument macros like PyObject_New/PyObject_GC_New, semantically sound for pointer casts).
+# Every macro the compiler rejects is dropped by NAME (one bad macro can't take out the file). What
+# survives NONE is genuinely un-shimmable: a runtime-meaningless construct (`##` token-paste, X-macro,
+# attribute/declaration decorator, `sizeof`/`offsetof`, `static_assert`) or a scalar-cast/field/context
+# macro — things with no callable denotation. `cxx` must match the shim's build driver.
 def _gen_macro_shims(header: str, out: str, macros: Vec[str], cxx: str, extra: str) -> str:
     if macros.len == 0: return ""
     mut n_total = macros.len
     mut done: Map[str, bool] = Map[str, bool].init(64)
-    mut val_vp = _macro_verify_form(header, macros, _macro_remaining(macros, done), 0, 0, cxx, extra)
-    _macro_mark_done(done, val_vp, macros)
-    mut void_vp = _macro_verify_form(header, macros, _macro_remaining(macros, done), 1, 0, cxx, extra)
-    _macro_mark_done(done, void_vp, macros)
-    mut val_ip = _macro_verify_form(header, macros, _macro_remaining(macros, done), 0, 1, cxx, extra)
-    _macro_mark_done(done, val_ip, macros)
-    mut void_ip = _macro_verify_form(header, macros, _macro_remaining(macros, done), 1, 1, cxx, extra)
+    mut plan: Map[str, str] = Map[str, str].init(64)
+    _macro_pass(header, macros, done, plan, 0, 0, false, cxx, extra)   # value / void*
+    _macro_pass(header, macros, done, plan, 1, 0, false, cxx, extra)   # void  / void*
+    _macro_pass(header, macros, done, plan, 0, 1, false, cxx, extra)   # value / intptr
+    _macro_pass(header, macros, done, plan, 1, 1, false, cxx, extra)   # void  / intptr
+    _macro_pass(header, macros, done, plan, 0, 0, true,  cxx, extra)   # value / type-erased
+    _macro_pass(header, macros, done, plan, 1, 0, true,  cxx, extra)   # void  / type-erased
     _tr_system("rm -f _macroprobe.c _macroprobe.err 2>/dev/null")
-    # Emit the final shim + bindings, each macro in whichever form/arg-type it passed.
+    # Emit the final shim + bindings, each macro in the strategy its plan records.
     mut shim = StringBuilder.init(8192)
     shim.append("// Auto-generated macro shims for " + header + " (tauraro-bindgen --macros).\n")
     shim.append("#include \"" + header + "\"\n")
@@ -1346,34 +1461,30 @@ def _gen_macro_shims(header: str, out: str, macros: Vec[str], cxx: str, extra: s
     mut binds = StringBuilder.init(4096)
     mut kept = 0
     mut n_ip = 0
+    mut n_te = 0
     mut k2 = 0
     while k2 < macros.len:
         mut ent = macros.get(k2)
         k2 = k2 + 1
-        mut bar = ent.find("|")
-        mut nm = ent.slice(0, bar)
-        mut ar = _to_int(ent.slice(bar + 1, ent.len()))
-        mut form = -1
-        mut atype = 0
-        if val_vp.contains(nm): form = 0
-        elif void_vp.contains(nm): form = 1
-        elif val_ip.contains(nm):
-            form = 0
-            atype = 1
-        elif void_ip.contains(nm):
-            form = 1
-            atype = 1
-        if form < 0: continue
-        shim.append(_macro_shim_line("m_" + nm, nm, ar, form, atype))
-        mut bl = "    def m_" + nm + "(" + _macro_args(ar, 2, atype) + ")"
+        mut nm = _ent_name(ent)
+        if not plan.contains(nm): continue
+        mut ar = _ent_arity(ent)
+        mut spec = plan.get(nm).split("|")
+        mut form = _to_int(spec.get(0))
+        mut atype = _to_int(spec.get(1))
+        mut tp = 0 - 1
+        if spec.get(2) == "1": tp = _ent_typepos(ent)
+        shim.append(_macro_shim_line("m_" + nm, nm, ar, form, atype, tp))
+        mut bl = "    def m_" + nm + "(" + _macro_args(ar, 2, atype, tp) + ")"
         if form == 0: bl = bl + " -> Pointer[void]"
         binds.append(bl + "\n")
         kept = kept + 1
         if atype == 1: n_ip = n_ip + 1
+        if tp >= 0: n_te = n_te + 1
     shim.append("}\n")
     if kept == 0: return ""
     write_file(out + "_macros.c", shim.to_string().as_str())
-    print("bindgen: macro shims: " + kept.to_str() + " of " + n_total.to_str() + " function-like macros bound (" + n_ip.to_str() + " via intptr args) -> " + out + "_macros.c (m_<NAME>)")
+    print("bindgen: macro shims: " + kept.to_str() + " of " + n_total.to_str() + " function-like macros bound (" + n_ip.to_str() + " intptr, " + n_te.to_str() + " type-erased) -> " + out + "_macros.c (m_<NAME>)")
     return binds.to_string().as_str()
 
 pub def run_bindgen(header: str, out: str, cc: str, extra: str, pkglibs: str, want_macros: bool):
