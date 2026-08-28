@@ -2367,6 +2367,14 @@ extend Parser:
         mut path = self.consume_module_ident()
         while self.peek() == Token.Dot:
             self.pos = self.pos + 1
+            # `import module.*` — wildcard shorthand, equivalent to `from module import *`
+            # (brings every `pub` name of the module into scope unqualified).
+            if self.peek() == Token.Star:
+                self.pos = self.pos + 1
+                self.expect_newline()
+                mut ils = Vec[ImportItem].init(1)
+                ils.push(ImportItem.init("*"))
+                return box_decl(Decl.DFromImport(path, ils))
             path = path + "." + self.consume_module_ident()
         mut alias = ""
         if self.peek() == Token.KwAs:

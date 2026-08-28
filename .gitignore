@@ -14,6 +14,12 @@ bench/
 g1/
 g2/
 
+# Bootstrap fixpoint scratch dirs (gen2/gen3 object + emitted-C outputs)
+g2c/
+g3c/
+g2new/
+g3new/
+
 # Runtime headers copied into benchmark build dirs
 **/tauraro_rt.h
 **/tauraro_types.h

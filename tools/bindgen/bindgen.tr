@@ -1575,19 +1575,28 @@ def _cxxwalk_src() -> str:
     sb.append("  return CXChildVisit_Continue; }\n")
     sb.append("static int is_noncopyable(CXType t){\n")
     sb.append("  CXCursor dc=clang_getTypeDeclaration(t); CXCursor def=clang_getCursorDefinition(dc); if(clang_Cursor_isNull(def)) def=dc;\n")
-    sb.append("  g_noncopy=0; clang_visitChildren(def, copyctorck, 0); return g_noncopy; }\n")
+    sb.append("  g_noncopy=0; clang_visitChildren(def, copyctorck, 0);\n")
+    # an instantiation (std::unique_ptr<T>) may not expose the deleted copy ctor — check the primary template too
+    sb.append("  if(!g_noncopy){ CXCursor tm=clang_getSpecializedCursorTemplate(dc); if(!clang_Cursor_isNull(tm)){ CXCursor td=clang_getCursorDefinition(tm); if(clang_Cursor_isNull(td)) td=tm; clang_visitChildren(td, copyctorck, 0); } }\n")
+    sb.append("  return g_noncopy; }\n")
     sb.append("static void classify(int depth,int ref,CXType cur){\n")
+    # An unresolved parameter pack (`Params...`, e.g. llvm::function_ref's operator()) has `...` in its
+    # spelling and cannot be shimmed — skip the whole method rather than emit a broken void* param.
+    sb.append("  { CXString _ps=clang_getTypeSpelling(cur); int _pk=(strstr(clang_getCString(_ps),\"...\")!=0); clang_disposeString(_ps); if(_pk){ printf(\"%d~%d~d~\", depth, ref); return; } }\n")
     sb.append("  enum CXTypeKind k=cur.kind; const char* sc=scalar(k);\n")
     sb.append("  if(k==CXType_Void) printf(\"%d~%d~v~\", depth, ref);\n")
     sb.append("  else if(sc[0]) printf(\"%d~%d~p~%s\", depth, ref, sc);\n")
     sb.append("  else if(k==CXType_Enum){ CXType u=clang_getEnumDeclIntegerType(clang_getTypeDeclaration(cur)); const char* us=scalar(u.kind); if(!us[0])us=\"c_int\";\n")
     sb.append("    CXString sp=clang_getTypeSpelling(cur); printf(\"%d~%d~e~%s#%s\", depth, ref, S(sp), us); clang_disposeString(sp); }\n")
     sb.append("  else if(k==CXType_Record){\n")
-    sb.append("    if(depth==0 && clang_Type_getNumTemplateArguments(cur)<1 && clang_Type_getSizeOf(cur)==CXTypeLayoutError_Incomplete){ printf(\"%d~%d~d~\", depth, ref); return; }\n")
+    # Incomplete by-value: skip UNLESS its primary template is DEFINED (force-instantiable, e.g.
+    # std::map). A forward-declared-only template like llvm::ArrayRef<T>/Expected<T> can never be
+    # completed, so a by-value shim of it won't compile — mark it `d` (skip the whole method).
+    sb.append("    if(depth==0 && clang_Type_getSizeOf(cur)==CXTypeLayoutError_Incomplete){ CXCursor _td=clang_getTypeDeclaration(cur); CXCursor _tm=clang_getSpecializedCursorTemplate(_td); if(clang_Cursor_isNull(_tm) || clang_Cursor_isNull(clang_getCursorDefinition(_tm))){ printf(\"%d~%d~d~\", depth, ref); return; } }\n")
     sb.append("    if(depth==0 && is_noncopyable(cur)){ printf(\"%d~%d~d~\", depth, ref); return; }\n")
     sb.append("    CXString sp=clang_getTypeSpelling(cur); const char* r=S(sp); if(strncmp(r,\"const \",6)==0)r+=6; if(strncmp(r,\"volatile \",9)==0)r+=9;\n")
     sb.append("    if(strncmp(r,\"std::function<\",14)==0 && clang_Type_getNumTemplateArguments(cur)>=1){ CXType _ft=clang_Type_getTemplateArgumentAsType(cur,0); CXString _fs=clang_getTypeSpelling(_ft); printf(\"%d~%d~f~%s\", depth, ref, S(_fs)); clang_disposeString(_fs); }\n")
-    sb.append("    else if(strncmp(r,\"std::basic_string\",17)==0 && (strstr(r,\"basic_string<char,\")||strstr(r,\"basic_string<char>\")||strstr(r,\"basic_string_view<char,\")||strstr(r,\"basic_string_view<char>\"))) printf(\"%d~%d~s~string\", depth, ref);\n")
+    sb.append("    else if(strncmp(r,\"std::basic_string\",17)==0 && (strstr(r,\"basic_string<char,\")||strstr(r,\"basic_string<char>\")||strstr(r,\"basic_string_view<char,\")||strstr(r,\"basic_string_view<char>\"))){ if(ref==1){ printf(\"%d~%d~d~\", depth, ref); } else { printf(\"%d~%d~s~string\", depth, ref); } }\n")
     sb.append("    else printf(\"%d~%d~r~%s\", depth, ref, r); clang_disposeString(sp); }\n")
     sb.append("  else if(k==CXType_FunctionProto){ CXString sp=clang_getTypeSpelling(clang_getCanonicalType(cur)); printf(\"%d~%d~f~%s\", depth, ref, S(sp)); clang_disposeString(sp); }\n")
     sb.append("  else { CXString sp=clang_getTypeSpelling(cur); printf(\"%d~%d~u~%s\", depth, ref, S(sp)); clang_disposeString(sp); }\n")
@@ -2764,6 +2773,10 @@ def _cpp_generate(ir: str, header: str, out: str, shim_cflags: str, pkglibs: str
             while pj < params.len:
                 mut pvd = params.get(pj)
                 if pvd.find("type-parameter") >= 0 or pvd.find("~d~") >= 0: has_dep = true
+                # A CALL operator with a by-value UNKNOWN param (`0~…~u~`) is an unresolved callable
+                # wrapper (e.g. llvm::function_ref::operator()(Params...)); the shim would pass `void*`
+                # where a concrete value is required. Skip just that method so the class still binds.
+                if m_name == "operator()" and pvd.starts_with("0~") and pvd.find("~u~") >= 0: has_dep = true
                 pj = pj + 1
             if has_dep:
                 mode = ""; continue

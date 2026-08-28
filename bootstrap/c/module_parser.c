@@ -4444,6 +4444,19 @@ __attribute__((hot)) Decl* Parser_parse_import(Parser* self) {
         /* pass */
         self->pos = (self->pos + 1LL);
         /* pass */
+        if ((Parser_peek(self).tag == Token_make_Star().tag)) {
+            /* pass */
+            self->pos = (self->pos + 1LL);
+            /* pass */
+            Parser_expect_newline(self);
+            /* pass */
+            List_ptr* ils = (void*)List_ptr_new();
+            /* pass */
+            List_ptr_append(ils, ImportItem_init(_tr_str_lit("*")));
+            /* pass */
+            return box_decl(Decl_ctor_DFromImport(path, ils));
+        }
+        /* pass */
         TrStr _strtmp_t185 = ({ TrStr _cl = (_tr_strx_concat(_tr_strz(path), _tr_strz(_tr_str_lit(".")))); TrStr _cr = (Parser_consume_module_ident(self)); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; });
         _tr_str_release(path);
         path = _strtmp_t185;
