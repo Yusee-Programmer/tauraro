@@ -12,9 +12,11 @@
 #
 # STATUS: foundation. This lowering builds the CFG and keeps expressions opaque
 # (carrying the original HIR expr) — flattening expressions into MIR operands and
-# re-pointing the C backend at the MIR come later, each fixpoint-verified. This
-# module is additive: nothing in the live HIR->C pipeline calls it yet; `--emit
-# mir` dumps it for inspection.
+# re-pointing the C backend at the MIR come later, each fixpoint-verified. The borrow
+# analysis, however, IS live: sema.tr calls mir_proven_borrows / mir_borrow_conflicts /
+# mir_shared_ref_param_violations / mir_if_drop_plan on this CFG every compile (NLL
+# liveness + outlives engine -> refcount elision, plus --strict [B-1]/[B-3] borrow
+# errors). `--emit mir` also dumps the CFG for inspection.
 
 from hir import HirProgram, HirFunction, HirBlock, HirStmt, HirExpr, hir_expr_type
 from core.vec import Vec

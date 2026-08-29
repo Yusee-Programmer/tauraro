@@ -1,7 +1,7 @@
 # @trusted: compiler systems module — audited raw-pointer core.
 # src/codegen/native/bytebuf.tr — a little-endian byte buffer for emitting machine code
-# and object files, with a binary file writer. Fixed capacity (the skeleton objects are
-# < 1 KB); grows to a resizable buffer when real programs need it.
+# and object files, with a binary file writer. Fixed 64 KB capacity (not yet resizable —
+# a very large module would need a grow path).
 
 from core.alloc import alloc
 

@@ -7570,7 +7570,6 @@ __auto_type else_b = _t468.data.SIf.else_b;
             }
         }
         /* pass */
-        List_TrStr_free(si_then_inited);
         return box_hirstmt(HirStmt_ctor_SIf(hcond, hthen, helse));
     } else if (_t468.tag == Stmt_SWhile) {
         __auto_type cond = _t468.data.SWhile.cond;
@@ -7647,8 +7646,6 @@ __auto_type decorators = _t468.data.SWhile.decorators;
             sw_ii = (sw_ii + 1LL);
         }
         /* pass */
-        List_TrStr_free(sw_loop_moved);
-        List_TrStr_free(sw_loop_inited);
         return box_hirstmt(HirStmt_ctor_SWhile(sw_cond, sw_body));
     } else if (_t468.tag == Stmt_SFor) {
         __auto_type var = _t468.data.SFor.var;
@@ -7758,8 +7755,6 @@ __auto_type for_is_ref = _t468.data.SFor.is_ref;
         Sema_exit_scope(self);
         /* pass */
         _tr_obj_release(sf_body, _trdrop_HirBlock);
-        List_TrStr_free(sf_loop_moved);
-        List_TrStr_free(sf_loop_inited);
         return hstmt;
     } else if (_t468.tag == Stmt_SForUnpack) {
         __auto_type vars = _t468.data.SForUnpack.vars;
@@ -10171,7 +10166,7 @@ __auto_type idx_arg = _t607.data.EIndex._tr_v_index;
         } else if ((((strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("checked_add"))) == 0) || (strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("checked_sub"))) == 0)) || (strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("checked_mul"))) == 0))) {
             /* pass */
             ret_ty = AstType_init_generic(_tr_str_lit("Option"), box_asttype(AstType_init(_tr_str_lit("int"))));
-        } else if (((((((((strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("abs"))) == 0) || (strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("min"))) == 0)) || (strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("max"))) == 0)) || (strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("pow"))) == 0)) || (strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("sign"))) == 0)) || (strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("clamp"))) == 0)) || (strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("gcd"))) == 0)) || (strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("lcm"))) == 0))) {
+        } else if ((((((((((strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("abs"))) == 0) || (strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("min"))) == 0)) || (strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("max"))) == 0)) || (strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("pow"))) == 0)) || (strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("sign"))) == 0)) || (strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("clamp"))) == 0)) || (strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("gcd"))) == 0)) || (strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("lcm"))) == 0)) && (((((((((((((((strcmp(_tr_strz(hobj_ty->name), _tr_strz(_tr_str_lit("int"))) == 0) || (strcmp(_tr_strz(hobj_ty->name), _tr_strz(_tr_str_lit("i8"))) == 0)) || (strcmp(_tr_strz(hobj_ty->name), _tr_strz(_tr_str_lit("i16"))) == 0)) || (strcmp(_tr_strz(hobj_ty->name), _tr_strz(_tr_str_lit("i32"))) == 0)) || (strcmp(_tr_strz(hobj_ty->name), _tr_strz(_tr_str_lit("i64"))) == 0)) || (strcmp(_tr_strz(hobj_ty->name), _tr_strz(_tr_str_lit("isize"))) == 0)) || (strcmp(_tr_strz(hobj_ty->name), _tr_strz(_tr_str_lit("u8"))) == 0)) || (strcmp(_tr_strz(hobj_ty->name), _tr_strz(_tr_str_lit("u16"))) == 0)) || (strcmp(_tr_strz(hobj_ty->name), _tr_strz(_tr_str_lit("u32"))) == 0)) || (strcmp(_tr_strz(hobj_ty->name), _tr_strz(_tr_str_lit("u64"))) == 0)) || (strcmp(_tr_strz(hobj_ty->name), _tr_strz(_tr_str_lit("usize"))) == 0)) || (strcmp(_tr_strz(hobj_ty->name), _tr_strz(_tr_str_lit("float"))) == 0)) || (strcmp(_tr_strz(hobj_ty->name), _tr_strz(_tr_str_lit("f32"))) == 0)) || (strcmp(_tr_strz(hobj_ty->name), _tr_strz(_tr_str_lit("f64"))) == 0)) || (strcmp(_tr_strz(hobj_ty->name), _tr_strz(_tr_str_lit("char"))) == 0)))) {
             /* pass */
             ret_ty = hobj_ty;
         } else if ((((strcmp(_tr_strz(hobj_ty->name), _tr_strz(_tr_str_lit("float"))) == 0) || (strcmp(_tr_strz(hobj_ty->name), _tr_strz(_tr_str_lit("f64"))) == 0)) || (strcmp(_tr_strz(hobj_ty->name), _tr_strz(_tr_str_lit("f32"))) == 0))) {

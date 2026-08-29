@@ -747,27 +747,37 @@ jobs:
           fetch windows-x64 x86_64-windows zip
           fetch macos-arm64 aarch64-macos  tar.xz
 
-      - name: Zip per-platform SDK bundles
-        # A COMPLETE, self-contained SDK sits at the zip root:
-        #   tauraroc          the compiler
-        #   zig/              bundled zig — `zig cc` = clang (compiles the LLVM .ll) + lld
-        #                     + a libc for EVERY target. Powers --backend llvm AND cross
-        #                     (--target) with NO system compiler or per-target sysroot.
-        #   runtime/          native_abi.c + headers, auto-found + compiled by the backends
-        #   std/              the standard library (for `import`)
-        # So `tauraroc prog.tr --backend llvm -o prog` AND `tauraroc prog.tr --target linux-arm64`
-        # both work straight out of the unzip. The bootstrap seed still
-        # resolves the binary via `find -name tauraroc` (runtime/ and std/ contain no such
-        # file), so this zip doubles as the seed unchanged.
+      - name: Package per-platform SDK bundles
+        # A COMPLETE, self-contained SDK inside ONE top-level folder
+        # `tauraroc-<platform>/`, so `taupkg install-tauraro` drops it cleanly into
+        # ~/.taupkg/bin/tauraroc-<platform>/ with NOTHING else (no src/docs/benchmarks
+        # junk in ~/.taupkg/bin). Contents — ONLY what the SDK needs, plus examples:
+        #   tauraroc[.exe]   the compiler
+        #   zig/             bundled zig — `zig cc` = clang (compiles the LLVM .ll) + lld
+        #                    + a libc for EVERY target. Powers --backend llvm AND cross
+        #                    (--target) with NO system compiler/sysroot. Sits NEXT TO the
+        #                    binary so the compiler auto-detects <exe_dir>/zig/.
+        #   runtime/         native_abi.c + headers, auto-found + compiled by the backends
+        #   std/             the standard library (for `import`)
+        #   examples/        runnable sample programs
+        # `tauraroc prog.tr --backend llvm` AND `--target linux-arm64` both work straight
+        # from the unzip. The bootstrap seed still resolves the binary via
+        # `find -name tauraroc` (recurses into the folder), so this zip doubles as the seed.
         run: |
+          set -e
           mkdir -p release/assets
           A="$GITHUB_WORKSPACE/release/assets"
-          # `zig/` rides along so cross-compilation to any target is self-contained
-          # (zig cc = clang + lld + libc for every target; no system compiler/sysroot).
-          ( cd release/linux-x64   && zip -qr "$A/tauraroc-linux-x64.zip"   tauraroc     zig runtime std )
-          ( cd release/linux-arm64 && zip -qr "$A/tauraroc-linux-arm64.zip" tauraroc     zig runtime std )
-          ( cd release/windows-x64 && zip -qr "$A/tauraroc-windows-x64.zip" tauraroc.exe zig runtime std )
-          ( cd release/macos-arm64 && zip -qr "$A/tauraroc-macos-arm64.zip" tauraroc     zig runtime std )
+          pack() {  # <platform> <binary-name>
+            plat="$1"; bin="$2"; d="release/$plat"; stem="tauraroc-$plat"
+            ( cd "$d" \
+                && mkdir -p "$stem" \
+                && mv "$bin" runtime std zig examples "$stem/" \
+                && zip -qr "$A/$stem.zip" "$stem" )
+          }
+          pack linux-x64   tauraroc
+          pack linux-arm64 tauraroc
+          pack windows-x64 tauraroc.exe
+          pack macos-arm64 tauraroc
 
       # -------------------------------------------------------
       # Combined SHA256SUMS.txt: checksums of the release zips

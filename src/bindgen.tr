@@ -2,7 +2,7 @@
 #
 #   tauraro-bindgen <header.h> [-o out.tr] [--cc <compiler>]
 #
-# Pipeline (Phase 1): preprocess with the C compiler (`cc -E`, flattening #includes/macros),
+# Pipeline: preprocess with the C compiler (`cc -E`, flattening #includes/macros),
 # tokenize the declarations, parse the common C shapes, and emit `extern "C"` prototypes,
 # `@value_type` structs, `type` aliases, enum/`#define` constants. Big libraries with an XML/GIR
 # registry (Vulkan/GTK) are generated from that registry instead — this handles clean C headers.
@@ -447,6 +447,7 @@ extend Bindgen:
                 if self.is_punct(")"): self.adv()     # )
                 self.skip_balanced_parens()           # (args)
                 if pname == "": pname = "arg" + argn.to_str()
+                if _is_tr_keyword(pname): pname = pname + "_"   # e.g. a C param named `def`
                 if not first: self.funcs.append(", ")
                 first = false
                 self.funcs.append(pname + ": Pointer[void]")
@@ -465,6 +466,7 @@ extend Bindgen:
                 continue
             if pname == "":
                 pname = "arg" + argn.to_str()
+            if _is_tr_keyword(pname): pname = pname + "_"   # C params named `def`/`type`/… are Tauraro keywords
             if not first: self.funcs.append(", ")
             first = false
             self.funcs.append(pname + ": " + map_type(pbase, pstars))
@@ -558,8 +560,41 @@ extend Bindgen:
             mut tw = self.read_type_words()
             mut fbase = tw.get(0)
             mut fstars = _to_int(tw.get(1))
+            # Inline function-pointer member `RET (*name)(params);` -> `name: Pointer[void]`
+            # (a C function pointer is ABI-identical to void*). read_type_words leaves the cursor
+            # at the `(` of the `(*name)` group; without this the params leak in as bogus fields
+            # (real case: GDExtension's `void (*initialize)(void*, level)` vtable structs).
+            if self.is_punct("(") and self.nt() == "*":
+                self.adv()                                    # (
+                while self.is_punct("*"): self.adv()          # one or more *
+                mut fpname = ""
+                if self.ck() == 0:
+                    fpname = self.ct()
+                    self.adv()
+                while not self.is_punct(")") and self.ck() != 5: self.adv()
+                if self.is_punct(")"): self.adv()             # )
+                self.skip_balanced_parens()                   # (params)
+                if fpname != "":
+                    self.structs.append("    pub " + fpname + ": Pointer[void]\n")
+                    nfields = nfields + 1
+                self.skip_attributes()
+                if self.is_punct(";"): self.adv()
+                if self.pos == floop_before: self.adv()
+                continue
             mut more = true
+            mut first_decl = true
             while more:
+                # Per-declarator pointer depth. `TYPE *a, *b, *c;` shares one base type but each
+                # declarator carries its OWN `*`s — read_type_words folded the FIRST declarator's
+                # stars into fstars, so subsequent ones must recount from 0 (else b/c lose the base
+                # type -> `Pointer[]`; real case: CPython's `PyObject *ht_name, *ht_slots;`).
+                mut dstars = fstars
+                if not first_decl:
+                    dstars = 0
+                    while self.is_punct("*"):
+                        dstars = dstars + 1
+                        self.adv()
+                first_decl = false
                 if self.ck() != 0: break
                 mut fname = self.ct()
                 self.adv()
@@ -571,11 +606,11 @@ extend Bindgen:
                     while not self.is_punct("]") and self.ck() != 5: self.adv()
                     if self.is_punct("]"): self.adv()
                     if arrn != "":
-                        self.structs.append("    pub " + fname + ": [" + map_type(fbase, fstars) + "; " + arrn + "]\n")
+                        self.structs.append("    pub " + fname + ": [" + map_type(fbase, dstars) + "; " + arrn + "]\n")
                         nfields = nfields + 1
                         is_arr = true
                 if not is_arr:
-                    self.structs.append("    pub " + fname + ": " + map_type(fbase, fstars) + "\n")
+                    self.structs.append("    pub " + fname + ": " + map_type(fbase, dstars) + "\n")
                     nfields = nfields + 1
                 self.skip_attributes()                    # `int x __attribute__((packed));`
                 if self.is_punct(","):
@@ -1081,9 +1116,378 @@ def emit_defines(bg: Bindgen, defs: str, baseline: Map[str, bool], allow: Map[st
                 mut iv = _to_int(val)
                 bg.consts.append("const " + nm + ": c_int = " + iv.to_str() + "\n")
 
-# Generate Tauraro FFI bindings for the C header at `header` into `out`, preprocessing with `cc`.
-# The `tauraroc bindgen` subcommand (src/main.tr) parses the CLI and calls this.
-pub def run_bindgen(header: str, out: str, cc: str, extra: str, pkglibs: str):
+# ── function-like macro shims (--macros) ─────────────────────────────────────────
+# C function-like macros (`Py_INCREF(op)`, …) are UNTYPED and have no linkable symbol, so they
+# cannot be bound as `extern` functions. The only correct automation is a real wrapper function
+# per macro, VERIFIED by the C++ compiler. We take each argument as `void*` and let the compiler
+# tell us whether the macro yields a value (return it, bridged through intptr_t → Pointer[void]) or
+# is a void action — dropping any macro whose wrapper does not compile. The wrappers are namespaced
+# `m_<NAME>` so they never collide with a real same-named function/macro.
+
+# The C++ driver matching a C compiler name (the macro shim is built as C++ by the auto-linker).
+def _cxx_of(cc: str) -> str:
+    if cc == "gcc": return "g++"
+    if cc == "clang": return "clang++"
+    if cc.find("++") >= 0: return cc
+    return "c++"
+
+# Emit an argument list. mode: 0 = C declaration, 1 = call, 2 = Tauraro `def` params. atype selects the
+# argument type: 0 = `void*`/`Pointer[void]` (ergonomic for pointer args), 1 = `intptr_t`/`c_intptr_t`
+# (a machine word usable as BOTH a pointer-cast source and an integer subscript — recovers macros that
+# index with an integer arg, e.g. `PyList_GET_ITEM(op, i)`).
+def _macro_args(n: int, mode: int, atype: int, tp: int) -> str:
+    mut s = ""
+    mut first = true
+    mut i = 0
+    while i < n:
+        if i == tp:
+            # baked TYPE position: a literal `char` in the CALL (a pointer cast `(char*)…` is
+            # runtime-identity), and ABSENT from the shim's parameter list / Tauraro signature.
+            if mode == 1:
+                if not first: s = s + ", "
+                s = s + "char"
+                first = false
+            i = i + 1
+            continue
+        if not first: s = s + ", "
+        first = false
+        if mode == 0:
+            if atype == 0: s = s + "void* a" + i.to_str()
+            else: s = s + "intptr_t a" + i.to_str()
+        elif mode == 1:
+            s = s + "a" + i.to_str()
+        else:
+            if atype == 0: s = s + "a" + i.to_str() + ": Pointer[void]"
+            else: s = s + "a" + i.to_str() + ": c_intptr_t"
+        i = i + 1
+    return s
+
+# Collect `#define NAME(params) body` from the `-dM` dump, minus compiler built-ins. Returns
+# A collected macro is `NAME|ARITY|TYPEPOS`. TYPEPOS = the single argument position used as a POINTER
+# cast `(param *)` (so a placeholder type can be baked there — runtime-identity), or -1 if none.
+def _ent_name(e: str) -> str: return e.slice(0, e.find("|"))
+def _ent_arity(e: str) -> int:
+    mut r = e.slice(e.find("|") + 1, e.len())
+    mut b = r.find("|")
+    if b < 0: return _to_int(r)
+    return _to_int(r.slice(0, b))
+def _ent_typepos(e: str) -> int:
+    mut r = e.slice(e.find("|") + 1, e.len())
+    mut b = r.find("|")
+    if b < 0: return -1
+    return _to_int(r.slice(b + 1, r.len()))
+
+# Is one of `c`'s bytes an identifier char (for word-boundary tests)?
+def _is_ident_ch(c: int) -> bool:
+    return (c >= 48 and c <= 57) or (c >= 65 and c <= 90) or (c >= 97 and c <= 122) or c == 95
+
+# Does `body` use `pname` as a whole word immediately followed (mod spaces) by `*` — i.e. a POINTER
+# cast `(pname *)`? Only pointer casts are safe to type-erase (a scalar `(pname)` cast truncates).
+def _param_ptr_type(body: str, pname: str) -> bool:
+    mut plen = pname.len()
+    if plen == 0: return false
+    mut i = 0
+    while i + plen <= body.len():
+        if body.slice(i, i + plen) == pname:
+            mut okb = true
+            if i > 0 and _is_ident_ch(body[i - 1]): okb = false
+            mut j = i + plen
+            mut oka = true
+            if j < body.len() and _is_ident_ch(body[j]): oka = false
+            if okb and oka:
+                while j < body.len() and (body[j] == 32 or body[j] == 9): j = j + 1
+                if j < body.len() and body[j] == 42: return true    # '*'
+        i = i + 1
+    return false
+
+# `()`/`[]`/`{}` balance of a macro body — an unbalanced one (e.g. a `{` block-opener) cannot be a
+# function body and, worse, cascades errors over every shim after it in the probe. Depth-only (not
+# type-matched) is enough to catch the openers/closers.
+def _balanced_delims(s: str) -> bool:
+    mut depth = 0
+    mut i = 0
+    while i < s.len():
+        mut c = s[i]
+        if c == 40 or c == 91 or c == 123: depth = depth + 1        # ( [ {
+        elif c == 41 or c == 93 or c == 125:
+            depth = depth - 1
+            if depth < 0: return false
+        i = i + 1
+    return depth == 0
+
+# `NAME|ARITY` entries; skips variadic macros, reserved `__`-names, and empty (decorator) bodies.
+def _collect_fn_macros(defs: str, baseline: Map[str, bool]) -> Vec[str]:
+    mut out = Vec[str].init(64)
+    mut seen: Map[str, bool] = Map[str, bool].init(128)
+    mut lines = defs.split("\n")
+    mut i = 0
+    while i < lines.len:
+        mut ln = lines.get(i)
+        i = i + 1
+        if not ln.starts_with("#define "): continue
+        mut rest = ln.slice(8, ln.len())
+        mut par = rest.find("(")
+        if par <= 0: continue
+        mut sp = rest.find(" ")
+        if sp >= 0 and sp < par: continue               # object-like (`#define X (a)+...`) — not fn-like
+        mut nm = rest.slice(0, par)
+        if nm.starts_with("__"): continue               # reserved / internal
+        if baseline.contains(nm): continue              # compiler/platform built-in
+        if seen.contains(nm): continue
+        mut close = rest.find(")")
+        if close < 0 or close < par: continue
+        mut plist = rest.slice(par + 1, close)
+        if plist.find("...") >= 0: continue             # variadic — can't shim generically
+        mut body = _lstrip(rest.slice(close + 1, rest.len()))
+        if body == "": continue                         # empty body (decorator macro like Py_DEPRECATED)
+        if not _balanced_delims(body): continue         # opens/closes a brace/paren (Py_BEGIN_CRITICAL_SECTION
+                                                        # → `{`) — un-shimmable AND cascades over later shims
+        mut arity = 0
+        mut pt = plist.trim()
+        if pt != "":
+            arity = 1
+            mut ci = 0
+            while ci < pt.len():
+                if pt[ci] == 44: arity = arity + 1       # comma
+                ci = ci + 1
+        if arity > 8: continue
+        # TYPE-ERASURE candidate: exactly one parameter used as a pointer cast `(param *)`, and no
+        # `sizeof`/`offsetof`/`##` (those genuinely need the concrete type). We can bake a placeholder
+        # type there and expose only the value args — the pointer value is unchanged by the cast type.
+        mut typepos = -1
+        if arity > 0 and body.find("sizeof") < 0 and body.find("offsetof") < 0 and body.find("##") < 0:
+            mut parts = plist.split(",")
+            mut pi = 0
+            mut nfound = 0
+            while pi < parts.len:
+                mut pnm = parts.get(pi).trim()
+                if _param_ptr_type(body, pnm):
+                    typepos = pi
+                    nfound = nfound + 1
+                pi = pi + 1
+            if nfound != 1: typepos = -1                 # only the single-pointer-type case is unambiguous
+        seen.insert(nm, true)
+        out.push(nm + "|" + arity.to_str() + "|" + typepos.to_str())
+    return out
+
+# True if the diagnostics contain any hard error.
+def _has_cc_error(errtxt: str) -> bool:
+    return errtxt.find(": error:") >= 0 or errtxt.find(": error :") >= 0
+
+# Names the compiler blames: every macro named in an `in expansion of macro '<NAME>'` note. This is
+# ROBUST where line numbers are not — a macro-expansion error is reported at the macro's definition
+# site (a system header) and one bad macro (unbalanced delimiters) cascades into every shim after it,
+# but the compiler always names the offending macro in an expansion note.
+def _macro_bad_names(errtxt: str) -> Map[str, bool]:
+    mut m: Map[str, bool] = Map[str, bool].init(64)
+    mut key = "in expansion of macro "
+    mut lines = errtxt.split("\n")
+    mut i = 0
+    while i < lines.len:
+        mut ln = lines.get(i)
+        i = i + 1
+        mut fp = ln.find(key)
+        if fp < 0: continue
+        mut after = ln.slice(fp + key.len(), ln.len())
+        mut q1 = after.find("'")
+        if q1 < 0: continue
+        mut rest2 = after.slice(q1 + 1, after.len())
+        mut q2 = rest2.find("'")
+        if q2 < 0: continue
+        mut nm = rest2.slice(0, q2)
+        if nm != "": m.insert(nm, true)
+    return m
+
+# One `void*` shim per macro whose name is in `cand`, in the given form: 0 = VALUE
+# (`return (void*)(intptr_t)(M(…))`) or 1 = VOID (`(void)(M(…))`). Returns the ORDER of names emitted
+# (line 3+pos) so a direct-error line maps back to a macro.
+# One C shim body for macro `nm`/arity `ar` in the given form (0 = VALUE `(void*)(intptr_t)(M(…))`,
+# 1 = VOID `(void)(M(…))`) and argument type `atype` (0 = void*, 1 = intptr_t). `sym` is the wrapper name.
+def _macro_shim_line(sym: str, nm: str, ar: int, form: int, atype: int, tp: int) -> str:
+    if form == 0:
+        return "void* " + sym + "(" + _macro_args(ar, 0, atype, tp) + "){ return (void*)(intptr_t)(" + nm + "(" + _macro_args(ar, 1, atype, tp) + ")); }\n"
+    # VOID form as a bare STATEMENT (not `(void)(…)`) so a self-contained statement macro like a
+    # `do { … } while(0)` compiles too. A macro that `return`s a value is still rejected here (return
+    # with a value in a void function is an error), and one referencing undeclared names likewise.
+    return "void " + sym + "(" + _macro_args(ar, 0, atype, tp) + "){ " + nm + "(" + _macro_args(ar, 1, atype, tp) + "); }\n"
+
+# `bake`: when true, each macro's recorded pointer-type position is erased (a placeholder `char` is
+# baked there); macros with no such position are skipped. When false, tp=-1 (all args are runtime).
+def _macro_probe_write(header: str, macros: ref Vec[str], cand: Map[str, bool], form: int, atype: int, bake: bool) -> Vec[str]:
+    mut probe = StringBuilder.init(8192)
+    probe.append("#include \"" + header + "\"\n")
+    probe.append("#include <stdint.h>\n")
+    mut order: Vec[str] = Vec[str].init(64)
+    mut k = 0
+    while k < macros.len:
+        mut ent = macros.get(k)
+        k = k + 1
+        mut nm = _ent_name(ent)
+        if not cand.contains(nm): continue
+        mut tp = 0 - 1
+        if bake:
+            tp = _ent_typepos(ent)
+            if tp < 0: continue
+        probe.append(_macro_shim_line("mP_" + nm, nm, _ent_arity(ent), form, atype, tp))
+        order.push(nm)
+    write_file("_macroprobe.c", probe.to_string().as_str())
+    return order
+
+# The set of `cand` macro names the compiler rejects in `form`: (a) named in an `in expansion of
+# macro '…'` note (macro-body/type errors), and (b) at a direct-error shim line (token-paste, void-in-
+# value, …, which carry no note) mapped via `order`. Cascade VICTIM diagnostics are skipped so an
+# unbalanced-delimiter macro only costs itself, not every shim after it. `-fpermissive`: the shim is
+# built as C++, but these are C APIs — a `void*` implicitly converting to `FILE*`/`char*` is a C-ism
+# C++ rejects; downgrading it to a warning is ABI-correct (the void* already holds the right pointer).
+def _macro_form_bad(header: str, macros: ref Vec[str], cand: Map[str, bool], form: int, atype: int, bake: bool, cxx: str, extra: str) -> Map[str, bool]:
+    mut order = _macro_probe_write(header, macros, cand, form, atype, bake)
+    _tr_system(cxx + " -std=c++17 -fsyntax-only -fmax-errors=0 -fpermissive -w " + extra + " _macroprobe.c > _macroprobe.err 2>&1")
+    mut errtxt = ""
+    if file_exists("_macroprobe.err"): errtxt = read_file("_macroprobe.err")
+    mut bad = _macro_bad_names(errtxt)
+    mut key = "_macroprobe.c:"
+    mut lines = errtxt.split("\n")
+    mut i = 0
+    while i < lines.len:
+        mut ln = lines.get(i)
+        i = i + 1
+        if ln.find(": error:") < 0: continue
+        if ln.find("is not allowed here") >= 0: continue     # cascade victim — keep it
+        if ln.find("expected unqualified-id") >= 0: continue
+        if ln.find("expected declaration") >= 0: continue
+        mut fp = ln.find(key)
+        if fp < 0: continue
+        mut after = ln.slice(fp + key.len(), ln.len())
+        mut colon = after.find(":")
+        if colon < 0: continue
+        mut idx = _to_int(after.slice(0, colon)) - 3         # line 3 = first shim
+        if idx >= 0 and idx < order.len: bad.insert(order.get(idx), true)
+    return bad
+
+# Iteratively drop rejected macros (of `cand`) until `form` compiles clean; return the survivors.
+def _macro_verify_form(header: str, macros: ref Vec[str], cand: Map[str, bool], form: int, atype: int, bake: bool, cxx: str, extra: str) -> Map[str, bool]:
+    mut cur = cand
+    mut iter = 0
+    while iter < 12:
+        iter = iter + 1
+        mut bad = _macro_form_bad(header, macros, cur, form, atype, bake, cxx, extra)
+        if bad.len == 0: break
+        mut next: Map[str, bool] = Map[str, bool].init(64)
+        mut k = 0
+        while k < macros.len:
+            mut ent = macros.get(k)
+            k = k + 1
+            mut nm = _ent_name(ent)
+            if cur.contains(nm) and not bad.contains(nm): next.insert(nm, true)
+        if next.len == cur.len: break                        # no progress — stop
+        cur = next
+    return cur
+
+# Candidate name set = every macro NOT already claimed by an earlier pass (`done`).
+def _macro_remaining(macros: ref Vec[str], done: Map[str, bool]) -> Map[str, bool]:
+    mut m: Map[str, bool] = Map[str, bool].init(64)
+    mut k = 0
+    while k < macros.len:
+        mut ent = macros.get(k)
+        k = k + 1
+        mut nm = ent.slice(0, ent.find("|"))
+        if not done.contains(nm): m.insert(nm, true)
+    return m
+
+# Fold a survivor set into `done` (so later passes skip already-bound macros).
+def _macro_mark_done(done: ref Map[str, bool], ok: ref Map[str, bool], macros: ref Vec[str]):
+    mut k = 0
+    while k < macros.len:
+        mut ent = macros.get(k)
+        k = k + 1
+        mut nm = ent.slice(0, ent.find("|"))
+        if ok.contains(nm): done.insert(nm, true)
+
+# Run one verification pass and RECORD each survivor's chosen strategy in `plan` (name -> "form|atype|
+# bake"), folding them into `done` so later passes skip them.
+def _macro_pass(header: str, macros: ref Vec[str], done: ref Map[str, bool], plan: ref Map[str, str], form: int, atype: int, bake: bool, cxx: str, extra: str):
+    mut cand = _macro_remaining(macros, done)
+    if bake:
+        # A bake pass only applies to macros with a bakeable pointer-type position; without this the
+        # tp<0 macros (skipped in the probe, hence never erroring) would be falsely marked as survivors.
+        mut c2: Map[str, bool] = Map[str, bool].init(64)
+        mut ci = 0
+        while ci < macros.len:
+            mut e2 = macros.get(ci)
+            ci = ci + 1
+            mut n2 = _ent_name(e2)
+            if cand.contains(n2) and _ent_typepos(e2) >= 0: c2.insert(n2, true)
+        cand = c2
+    mut ok = _macro_verify_form(header, macros, cand, form, atype, bake, cxx, extra)
+    mut bk = "0"
+    if bake: bk = "1"
+    mut k = 0
+    while k < macros.len:
+        mut ent = macros.get(k)
+        k = k + 1
+        mut nm = _ent_name(ent)
+        if ok.contains(nm) and not done.contains(nm):
+            done.insert(nm, true)
+            plan.insert(nm, form.to_str() + "|" + atype.to_str() + "|" + bk)
+
+# Generate a compile-verified macro-shim `.c` for `macros`, returning the Tauraro `def` lines for the
+# survivors (empty if none). Passes over the leftovers of the previous, in preference order:
+#   1-2. value / void  form, void* args   (pointer args; action macros like Py_INCREF)
+#   3-4. value / void  form, intptr args  (integer-index macros like PyList_GET_ITEM(op, i))
+#   5-6. value / void  form, TYPE-ERASED  (a `(type*)` cast arg is baked to a placeholder — recovers
+#        type-argument macros like PyObject_New/PyObject_GC_New, semantically sound for pointer casts).
+# Every macro the compiler rejects is dropped by NAME (one bad macro can't take out the file). What
+# survives NONE is genuinely un-shimmable: a runtime-meaningless construct (`##` token-paste, X-macro,
+# attribute/declaration decorator, `sizeof`/`offsetof`, `static_assert`) or a scalar-cast/field/context
+# macro — things with no callable denotation. `cxx` must match the shim's build driver.
+def _gen_macro_shims(header: str, out: str, macros: Vec[str], cxx: str, extra: str) -> str:
+    if macros.len == 0: return ""
+    mut n_total = macros.len
+    mut done: Map[str, bool] = Map[str, bool].init(64)
+    mut plan: Map[str, str] = Map[str, str].init(64)
+    _macro_pass(header, macros, done, plan, 0, 0, false, cxx, extra)   # value / void*
+    _macro_pass(header, macros, done, plan, 1, 0, false, cxx, extra)   # void  / void*
+    _macro_pass(header, macros, done, plan, 0, 1, false, cxx, extra)   # value / intptr
+    _macro_pass(header, macros, done, plan, 1, 1, false, cxx, extra)   # void  / intptr
+    _macro_pass(header, macros, done, plan, 0, 0, true,  cxx, extra)   # value / type-erased
+    _macro_pass(header, macros, done, plan, 1, 0, true,  cxx, extra)   # void  / type-erased
+    _tr_system("rm -f _macroprobe.c _macroprobe.err 2>/dev/null")
+    # Emit the final shim + bindings, each macro in the strategy its plan records.
+    mut shim = StringBuilder.init(8192)
+    shim.append("// Auto-generated macro shims for " + header + " (tauraro-bindgen --macros).\n")
+    shim.append("#include \"" + header + "\"\n")
+    shim.append("#include <stdint.h>\n")
+    shim.append("extern \"C\" {\n")
+    mut binds = StringBuilder.init(4096)
+    mut kept = 0
+    mut n_ip = 0
+    mut n_te = 0
+    mut k2 = 0
+    while k2 < macros.len:
+        mut ent = macros.get(k2)
+        k2 = k2 + 1
+        mut nm = _ent_name(ent)
+        if not plan.contains(nm): continue
+        mut ar = _ent_arity(ent)
+        mut spec = plan.get(nm).split("|")
+        mut form = _to_int(spec.get(0))
+        mut atype = _to_int(spec.get(1))
+        mut tp = 0 - 1
+        if spec.get(2) == "1": tp = _ent_typepos(ent)
+        shim.append(_macro_shim_line("m_" + nm, nm, ar, form, atype, tp))
+        mut bl = "    def m_" + nm + "(" + _macro_args(ar, 2, atype, tp) + ")"
+        if form == 0: bl = bl + " -> Pointer[void]"
+        binds.append(bl + "\n")
+        kept = kept + 1
+        if atype == 1: n_ip = n_ip + 1
+        if tp >= 0: n_te = n_te + 1
+    shim.append("}\n")
+    if kept == 0: return ""
+    write_file(out + "_macros.c", shim.to_string().as_str())
+    print("bindgen: macro shims: " + kept.to_str() + " of " + n_total.to_str() + " function-like macros bound (" + n_ip.to_str() + " intptr, " + n_te.to_str() + " type-erased) -> " + out + "_macros.c (m_<NAME>)")
+    return binds.to_string().as_str()
+
+pub def run_bindgen(header: str, out: str, cc: str, extra: str, pkglibs: str, want_macros: bool):
     mut tmp_decls = "_bindgen_decls.i"
     mut tmp_defs  = "_bindgen_defs.i"
     # -E WITH line markers, so declarations from #include'd system headers can be filtered out.
@@ -1099,8 +1503,18 @@ pub def run_bindgen(header: str, out: str, cc: str, extra: str, pkglibs: str):
     bg.run()
     mut baseline = _load_baseline(cc)
     emit_defines(bg, read_file(tmp_defs), baseline, _target_define_names(header))
+    mut macro_binds = ""
+    mut macro_shim = ""
+    if want_macros:
+        macro_binds = _gen_macro_shims(header, out, _collect_fn_macros(read_file(tmp_defs), baseline), _cxx_of(cc), extra)
+        if macro_binds != "": macro_shim = _basename(out) + "_macros.c"
     mut sb = StringBuilder.init(4096)
     sb.append("# Auto-generated FFI bindings for " + header + " (tauraro-bindgen).\n")
+    if macro_shim != "":
+        sb.append("# tauraro-cpp-shim: " + macro_shim + "
+")
+        sb.append("# tauraro-cpp-cflags: -fpermissive " + extra + "
+")
     # --pkg: record the library's link flags so `tauraroc` auto-links them (no manual --link/-l).
     if pkglibs != "": sb.append("# tauraro-cpp-linkflags:" + pkglibs + "\n")
     sb.append("\n")
@@ -1108,6 +1522,7 @@ pub def run_bindgen(header: str, out: str, cc: str, extra: str, pkglibs: str):
     mut ss = bg.structs.to_string().as_str()
     mut cs = bg.consts.to_string().as_str()
     mut fs = bg.funcs.to_string().as_str()
+    if macro_binds != "": fs = fs + macro_binds     # function-like macro shims (--macros)
     # Forward-declare any type referenced by the bindings but defined in a filtered
     # system/sub-header, so the output compiles (opaque, pass-by-Pointer).
     mut fb = _opaque_fallbacks(ts + ss + fs, bg.seen)
@@ -1225,19 +1640,28 @@ def _cxxwalk_src() -> str:
     sb.append("  return CXChildVisit_Continue; }\n")
     sb.append("static int is_noncopyable(CXType t){\n")
     sb.append("  CXCursor dc=clang_getTypeDeclaration(t); CXCursor def=clang_getCursorDefinition(dc); if(clang_Cursor_isNull(def)) def=dc;\n")
-    sb.append("  g_noncopy=0; clang_visitChildren(def, copyctorck, 0); return g_noncopy; }\n")
+    sb.append("  g_noncopy=0; clang_visitChildren(def, copyctorck, 0);\n")
+    # an instantiation (std::unique_ptr<T>) may not expose the deleted copy ctor — check the primary template too
+    sb.append("  if(!g_noncopy){ CXCursor tm=clang_getSpecializedCursorTemplate(dc); if(!clang_Cursor_isNull(tm)){ CXCursor td=clang_getCursorDefinition(tm); if(clang_Cursor_isNull(td)) td=tm; clang_visitChildren(td, copyctorck, 0); } }\n")
+    sb.append("  return g_noncopy; }\n")
     sb.append("static void classify(int depth,int ref,CXType cur){\n")
+    # An unresolved parameter pack (`Params...`, e.g. llvm::function_ref's operator()) has `...` in its
+    # spelling and cannot be shimmed — skip the whole method rather than emit a broken void* param.
+    sb.append("  { CXString _ps=clang_getTypeSpelling(cur); int _pk=(strstr(clang_getCString(_ps),\"...\")!=0); clang_disposeString(_ps); if(_pk){ printf(\"%d~%d~d~\", depth, ref); return; } }\n")
     sb.append("  enum CXTypeKind k=cur.kind; const char* sc=scalar(k);\n")
     sb.append("  if(k==CXType_Void) printf(\"%d~%d~v~\", depth, ref);\n")
     sb.append("  else if(sc[0]) printf(\"%d~%d~p~%s\", depth, ref, sc);\n")
     sb.append("  else if(k==CXType_Enum){ CXType u=clang_getEnumDeclIntegerType(clang_getTypeDeclaration(cur)); const char* us=scalar(u.kind); if(!us[0])us=\"c_int\";\n")
     sb.append("    CXString sp=clang_getTypeSpelling(cur); printf(\"%d~%d~e~%s#%s\", depth, ref, S(sp), us); clang_disposeString(sp); }\n")
     sb.append("  else if(k==CXType_Record){\n")
-    sb.append("    if(depth==0 && clang_Type_getNumTemplateArguments(cur)<1 && clang_Type_getSizeOf(cur)==CXTypeLayoutError_Incomplete){ printf(\"%d~%d~d~\", depth, ref); return; }\n")
+    # Incomplete by-value: skip UNLESS its primary template is DEFINED (force-instantiable, e.g.
+    # std::map). A forward-declared-only template like llvm::ArrayRef<T>/Expected<T> can never be
+    # completed, so a by-value shim of it won't compile — mark it `d` (skip the whole method).
+    sb.append("    if(depth==0 && clang_Type_getSizeOf(cur)==CXTypeLayoutError_Incomplete){ CXCursor _td=clang_getTypeDeclaration(cur); CXCursor _tm=clang_getSpecializedCursorTemplate(_td); if(clang_Cursor_isNull(_tm) || clang_Cursor_isNull(clang_getCursorDefinition(_tm))){ printf(\"%d~%d~d~\", depth, ref); return; } }\n")
     sb.append("    if(depth==0 && is_noncopyable(cur)){ printf(\"%d~%d~d~\", depth, ref); return; }\n")
     sb.append("    CXString sp=clang_getTypeSpelling(cur); const char* r=S(sp); if(strncmp(r,\"const \",6)==0)r+=6; if(strncmp(r,\"volatile \",9)==0)r+=9;\n")
     sb.append("    if(strncmp(r,\"std::function<\",14)==0 && clang_Type_getNumTemplateArguments(cur)>=1){ CXType _ft=clang_Type_getTemplateArgumentAsType(cur,0); CXString _fs=clang_getTypeSpelling(_ft); printf(\"%d~%d~f~%s\", depth, ref, S(_fs)); clang_disposeString(_fs); }\n")
-    sb.append("    else if(strncmp(r,\"std::basic_string\",17)==0 && (strstr(r,\"basic_string<char,\")||strstr(r,\"basic_string<char>\")||strstr(r,\"basic_string_view<char,\")||strstr(r,\"basic_string_view<char>\"))) printf(\"%d~%d~s~string\", depth, ref);\n")
+    sb.append("    else if(strncmp(r,\"std::basic_string\",17)==0 && (strstr(r,\"basic_string<char,\")||strstr(r,\"basic_string<char>\")||strstr(r,\"basic_string_view<char,\")||strstr(r,\"basic_string_view<char>\"))){ if(ref==1){ printf(\"%d~%d~d~\", depth, ref); } else { printf(\"%d~%d~s~string\", depth, ref); } }\n")
     sb.append("    else printf(\"%d~%d~r~%s\", depth, ref, r); clang_disposeString(sp); }\n")
     sb.append("  else if(k==CXType_FunctionProto){ CXString sp=clang_getTypeSpelling(clang_getCanonicalType(cur)); printf(\"%d~%d~f~%s\", depth, ref, S(sp)); clang_disposeString(sp); }\n")
     sb.append("  else { CXString sp=clang_getTypeSpelling(cur); printf(\"%d~%d~u~%s\", depth, ref, S(sp)); clang_disposeString(sp); }\n")
@@ -1396,6 +1820,9 @@ def _cxxwalk_src() -> str:
     sb.append("  if(!clang_Location_isFromMainFile(clang_getCursorLocation(c))) return CXChildVisit_Continue;\n")
     sb.append("  enum CXCursorKind k=clang_getCursorKind(c); CXString nmS=clang_getCursorSpelling(c); const char* nm=S(nmS);\n")
     sb.append("  if(k==CXCursor_ClassTemplate||k==CXCursor_ClassTemplatePartialSpecialization){ clang_disposeString(nmS); return CXChildVisit_Continue; }\n")
+    # extern "C" { ... } is a LinkageSpec (not a namespace) — just recurse into it, else every decl
+    # inside is invisible (e.g. Godot's gdextension_interface.h wraps its whole API in extern "C").
+    sb.append("  if(k==CXCursor_LinkageSpec){ clang_visitChildren(c,visit,0); clang_disposeString(nmS); return CXChildVisit_Continue; }\n")
     sb.append("  if(k==CXCursor_Namespace){ printf(\"NS %s\\n\",nm); clang_visitChildren(c,visit,0); printf(\"ENS\\n\"); }\n")
     sb.append("  else if((k==CXCursor_ClassDecl||k==CXCursor_StructDecl)&&clang_isCursorDefinition(c)){\n")
     sb.append("    if(is_template_pattern(c)){ clang_disposeString(nmS); return CXChildVisit_Continue; }\n")
@@ -2414,6 +2841,10 @@ def _cpp_generate(ir: str, header: str, out: str, shim_cflags: str, pkglibs: str
             while pj < params.len:
                 mut pvd = params.get(pj)
                 if pvd.find("type-parameter") >= 0 or pvd.find("~d~") >= 0: has_dep = true
+                # A CALL operator with a by-value UNKNOWN param (`0~…~u~`) is an unresolved callable
+                # wrapper (e.g. llvm::function_ref::operator()(Params...)); the shim would pass `void*`
+                # where a concrete value is required. Skip just that method so the class still binds.
+                if m_name == "operator()" and pvd.starts_with("0~") and pvd.find("~u~") >= 0: has_dep = true
                 pj = pj + 1
             if has_dep:
                 mode = ""; continue

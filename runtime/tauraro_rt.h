@@ -1069,6 +1069,8 @@ _TR_XLINK void _tr_report_mem(const char* label) { (void)label; }
 #include <windows.h>
 #include <psapi.h>
 #pragma comment(lib, "psapi.lib")
+#include <bcrypt.h>
+#pragma comment(lib, "bcrypt.lib")   /* MSVC; MinGW links via -lbcrypt */
 
 /* Debug helper: prints current process working-set size to stderr, tagged
  * with `label`. Used to bisect memory growth across checkpoints during
@@ -2496,7 +2498,13 @@ _TR_XLINK int64_t _tr_stdout_supports_ansi(void) {
 #if defined(TAURARO_BARE)
     return 0;   /* no console on bare-metal */
 #elif defined(_WIN32)
-    if (!_isatty(_fileno(stdout))) return 0;
+    /* Detect a real console via GetConsoleMode — robust where _isatty under-reports
+     * (PowerShell wraps stdout so _isatty(stdout) is often false for a live console).
+     * GetConsoleMode succeeds only for an actual console handle, and fails when the
+     * output is redirected to a file/pipe (so logs and `| grep` stay plain). */
+    HANDLE _h = GetStdHandle(STD_OUTPUT_HANDLE);
+    DWORD _m = 0;
+    if (_h == INVALID_HANDLE_VALUE || !GetConsoleMode(_h, &_m)) return 0;
     _tr_enable_vt100();
     return 1;
 #else
@@ -4077,7 +4085,7 @@ static inline TrTuple List_TrTuple_pop(List_TrTuple* l) { if(!l||l->len==0) retu
 static inline void List_TrTuple_set(List_TrTuple* l, long long i, TrTuple v) { if(l&&(size_t)i<l->len) l->data[i]=v; }
 static inline void List_TrTuple_free(List_TrTuple* l) { if(l){ _tr_free(l->data); _tr_free(l); } }
 
-/* ── List types (bootstrap phase) ─────────────────────────────────── */
+/* ── List types (bootstrap) ───────────────────────────────────────── */
 
 typedef struct { long long* __restrict__ data; size_t len; size_t capacity; } List_i64;
 static inline List_i64* List_i64_new(void) { List_i64* l=(List_i64*)malloc(sizeof(List_i64)); l->data=(long long*)malloc(sizeof(long long)*8); l->len=0; l->capacity=8; return l; }
@@ -5528,6 +5536,257 @@ static inline char* _tr_sha256_bytes_of(char* input, int ilen) {
     _tr_sha256_final(&ctx,dig);
     char* out=(char*)TAURARO_ALLOC(32); if(!out) return NULL;
     memcpy(out,dig,32); return out;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * Ed25519 signatures — TweetNaCl subset (public domain), pure C.
+ * Exposes hex-string wrappers: _tr_ed25519_{gen_seed,pubkey,sign,verify}.
+ * ═══════════════════════════════════════════════════════════════════════════ */
+typedef int64_t _tr_gf[16];
+static int _tr_cv32(const uint8_t*, const uint8_t*);
+static const uint64_t _tr_edK[80] = {
+  0x428a2f98d728ae22ULL,0x7137449123ef65cdULL,0xb5c0fbcfec4d3b2fULL,0xe9b5dba58189dbbcULL,
+  0x3956c25bf348b538ULL,0x59f111f1b605d019ULL,0x923f82a4af194f9bULL,0xab1c5ed5da6d8118ULL,
+  0xd807aa98a3030242ULL,0x12835b0145706fbeULL,0x243185be4ee4b28cULL,0x550c7dc3d5ffb4e2ULL,
+  0x72be5d74f27b896fULL,0x80deb1fe3b1696b1ULL,0x9bdc06a725c71235ULL,0xc19bf174cf692694ULL,
+  0xe49b69c19ef14ad2ULL,0xefbe4786384f25e3ULL,0x0fc19dc68b8cd5b5ULL,0x240ca1cc77ac9c65ULL,
+  0x2de92c6f592b0275ULL,0x4a7484aa6ea6e483ULL,0x5cb0a9dcbd41fbd4ULL,0x76f988da831153b5ULL,
+  0x983e5152ee66dfabULL,0xa831c66d2db43210ULL,0xb00327c898fb213fULL,0xbf597fc7beef0ee4ULL,
+  0xc6e00bf33da88fc2ULL,0xd5a79147930aa725ULL,0x06ca6351e003826fULL,0x142929670a0e6e70ULL,
+  0x27b70a8546d22ffcULL,0x2e1b21385c26c926ULL,0x4d2c6dfc5ac42aedULL,0x53380d139d95b3dfULL,
+  0x650a73548baf63deULL,0x766a0abb3c77b2a8ULL,0x81c2c92e47edaee6ULL,0x92722c851482353bULL,
+  0xa2bfe8a14cf10364ULL,0xa81a664bbc423001ULL,0xc24b8b70d0f89791ULL,0xc76c51a30654be30ULL,
+  0xd192e819d6ef5218ULL,0xd69906245565a910ULL,0xf40e35855771202aULL,0x106aa07032bbd1b8ULL,
+  0x19a4c116b8d2d0c8ULL,0x1e376c085141ab53ULL,0x2748774cdf8eeb99ULL,0x34b0bcb5e19b48a8ULL,
+  0x391c0cb3c5c95a63ULL,0x4ed8aa4ae3418acbULL,0x5b9cca4f7763e373ULL,0x682e6ff3d6b2b8a3ULL,
+  0x748f82ee5defb2fcULL,0x78a5636f43172f60ULL,0x84c87814a1f0ab72ULL,0x8cc702081a6439ecULL,
+  0x90befffa23631e28ULL,0xa4506cebde82bde9ULL,0xbef9a3f7b2c67915ULL,0xc67178f2e372532bULL,
+  0xca273eceea26619cULL,0xd186b8c721c0c207ULL,0xeada7dd6cde0eb1eULL,0xf57d4f7fee6ed178ULL,
+  0x06f067aa72176fbaULL,0x0a637dc5a2c898a6ULL,0x113f9804bef90daeULL,0x1b710b35131c471bULL,
+  0x28db77f523047d84ULL,0x32caab7b40c72493ULL,0x3c9ebe0a15c9bebcULL,0x431d67c49c100d4cULL,
+  0x4cc5d4becb3e42b6ULL,0x597f299cfc657e2aULL,0x5fcb6fab3ad6faecULL,0x6c44198c4a475817ULL
+};
+static uint64_t _tr_edl64(const uint8_t*x){ uint64_t i,u=0; for(i=0;i<8;i++) u=(u<<8)|x[i]; return u; }
+static void _tr_edts64(uint8_t*x,uint64_t u){ int i; for(i=7;i>=0;--i){ x[i]=(uint8_t)u; u>>=8; } }
+#define _TR_EDR(x,c) (((x)>>(c))|((x)<<(64-(c))))
+#define _TR_EDCh(x,y,z) ((x&y)^(~x&z))
+#define _TR_EDMaj(x,y,z) ((x&y)^(x&z)^(y&z))
+#define _TR_EDSg0(x) (_TR_EDR(x,28)^_TR_EDR(x,34)^_TR_EDR(x,39))
+#define _TR_EDSg1(x) (_TR_EDR(x,14)^_TR_EDR(x,18)^_TR_EDR(x,41))
+#define _TR_EDsg0(x) (_TR_EDR(x,1)^_TR_EDR(x,8)^((x)>>7))
+#define _TR_EDsg1(x) (_TR_EDR(x,19)^_TR_EDR(x,61)^((x)>>6))
+static int _tr_edhashblocks(uint8_t*x,const uint8_t*m,uint64_t n){
+  uint64_t z[8],b[8],a[8],w[16],t; int i,j;
+  for(i=0;i<8;i++) z[i]=a[i]=_tr_edl64(x+8*i);
+  while(n>=128){
+    for(i=0;i<16;i++) w[i]=_tr_edl64(m+8*i);
+    for(i=0;i<80;i++){
+      for(j=0;j<8;j++) b[j]=a[j];
+      t=a[7]+_TR_EDSg1(a[4])+_TR_EDCh(a[4],a[5],a[6])+_tr_edK[i]+w[i%16];
+      b[7]=t+_TR_EDSg0(a[0])+_TR_EDMaj(a[0],a[1],a[2]);
+      b[3]+=t;
+      for(j=0;j<8;j++) a[(j+1)%8]=b[j];
+      if(i%16==15) for(j=0;j<16;j++) w[j]+=w[(j+9)%16]+_TR_EDsg0(w[(j+1)%16])+_TR_EDsg1(w[(j+14)%16]);
+    }
+    for(i=0;i<8;i++){ a[i]+=z[i]; z[i]=a[i]; }
+    m+=128; n-=128;
+  }
+  for(i=0;i<8;i++) _tr_edts64(x+8*i,z[i]);
+  return (int)n;
+}
+static const uint8_t _tr_edIv[64]={
+  0x6a,0x09,0xe6,0x67,0xf3,0xbc,0xc9,0x08,0xbb,0x67,0xae,0x85,0x84,0xca,0xa7,0x3b,
+  0x3c,0x6e,0xf3,0x72,0xfe,0x94,0xf8,0x2b,0xa5,0x4f,0xf5,0x3a,0x5f,0x1d,0x36,0xf1,
+  0x51,0x0e,0x52,0x7f,0xad,0xe6,0x82,0xd1,0x9b,0x05,0x68,0x8c,0x2b,0x3e,0x6c,0x1f,
+  0x1f,0x83,0xd9,0xab,0xfb,0x41,0xbd,0x6b,0x5b,0xe0,0xcd,0x19,0x13,0x7e,0x21,0x79
+};
+static void _tr_edhash(uint8_t*out,const uint8_t*m,uint64_t n){
+  uint8_t h[64],x[256]; uint64_t i,b=n;
+  for(i=0;i<64;i++) h[i]=_tr_edIv[i];
+  _tr_edhashblocks(h,m,n);
+  m+=n; n&=127; m-=n;
+  for(i=0;i<256;i++) x[i]=0;
+  for(i=0;i<n;i++) x[i]=m[i];
+  x[n]=128;
+  n=256-128*(n<112);
+  x[n-9]=(uint8_t)(b>>61);
+  _tr_edts64(x+n-8,b<<3);
+  _tr_edhashblocks(h,x,n);
+  for(i=0;i<64;i++) out[i]=h[i];
+}
+static const _tr_gf _tr_gf0={0}, _tr_gf1={1},
+  _tr_edD={0x78a3,0x1359,0x4dca,0x75eb,0xd8ab,0x4141,0x0a4d,0x0070,0xe898,0x7779,0x4079,0x8cc7,0xfe73,0x2b6f,0x6cee,0x5203},
+  _tr_edD2={0xf159,0x26b2,0x9b94,0xebd6,0xb156,0x8283,0x149a,0x00e0,0xd130,0xeef3,0x80f2,0x198e,0xfce7,0x56df,0xd9dc,0x2406},
+  _tr_edX={0xd51a,0x8f25,0x2d60,0xc956,0xa7b2,0x9525,0xc760,0x692c,0xdc5c,0xfdd6,0xe231,0xc0a4,0x53fe,0xcd6e,0x36d3,0x2169},
+  _tr_edY={0x6658,0x6666,0x6666,0x6666,0x6666,0x6666,0x6666,0x6666,0x6666,0x6666,0x6666,0x6666,0x6666,0x6666,0x6666,0x6666},
+  _tr_edI={0xa0b0,0x4a0e,0x1b27,0xc4ee,0xe478,0xad2f,0x1806,0x2f43,0xd7a7,0x3dfb,0x0099,0x2b4d,0xdf0b,0x4fc1,0x2480,0x2b83};
+static void _tr_edset(_tr_gf r,const _tr_gf a){ int i; for(i=0;i<16;i++) r[i]=a[i]; }
+static void _tr_edcar(_tr_gf o){ int i; int64_t c; for(i=0;i<16;i++){ o[i]+=(1LL<<16); c=o[i]>>16; o[(i+1)*(i<15)]+=c-1+37*(c-1)*(i==15); o[i]-=c<<16; } }
+static void _tr_edsel(_tr_gf p,_tr_gf q,int b){ int64_t t,i,c=~(b-1); for(i=0;i<16;i++){ t=c&(p[i]^q[i]); p[i]^=t; q[i]^=t; } }
+static void _tr_edpack25519(uint8_t*o,const _tr_gf n){
+  int i,j,b; _tr_gf m,t;
+  for(i=0;i<16;i++) t[i]=n[i];
+  _tr_edcar(t); _tr_edcar(t); _tr_edcar(t);
+  for(j=0;j<2;j++){
+    m[0]=t[0]-0xffed;
+    for(i=1;i<15;i++){ m[i]=t[i]-0xffff-((m[i-1]>>16)&1); m[i-1]&=0xffff; }
+    m[15]=t[15]-0x7fff-((m[14]>>16)&1);
+    b=(int)((m[15]>>16)&1);
+    m[14]&=0xffff;
+    _tr_edsel(t,m,1-b);
+  }
+  for(i=0;i<16;i++){ o[2*i]=(uint8_t)(t[i]&0xff); o[2*i+1]=(uint8_t)(t[i]>>8); }
+}
+static int _tr_edneq(const _tr_gf a,const _tr_gf b){ uint8_t c[32],d[32]; _tr_edpack25519(c,a); _tr_edpack25519(d,b); return _tr_cv32(c,d); }
+static uint8_t _tr_edpar(const _tr_gf a){ uint8_t d[32]; _tr_edpack25519(d,a); return d[0]&1; }
+static void _tr_edunpack25519(_tr_gf o,const uint8_t*n){ int i; for(i=0;i<16;i++) o[i]=n[2*i]+((int64_t)n[2*i+1]<<8); o[15]&=0x7fff; }
+static void _tr_edA(_tr_gf o,const _tr_gf a,const _tr_gf b){ int i; for(i=0;i<16;i++) o[i]=a[i]+b[i]; }
+static void _tr_edZ(_tr_gf o,const _tr_gf a,const _tr_gf b){ int i; for(i=0;i<16;i++) o[i]=a[i]-b[i]; }
+static void _tr_edM(_tr_gf o,const _tr_gf a,const _tr_gf b){ int64_t i,j,t[31]; for(i=0;i<31;i++) t[i]=0; for(i=0;i<16;i++) for(j=0;j<16;j++) t[i+j]+=a[i]*b[j]; for(i=0;i<15;i++) t[i]+=38*t[i+16]; for(i=0;i<16;i++) o[i]=t[i]; _tr_edcar(o); _tr_edcar(o); }
+static void _tr_edS(_tr_gf o,const _tr_gf a){ _tr_edM(o,a,a); }
+static void _tr_edinv(_tr_gf o,const _tr_gf i){ _tr_gf c; int a; for(a=0;a<16;a++) c[a]=i[a]; for(a=253;a>=0;a--){ _tr_edS(c,c); if(a!=2&&a!=4) _tr_edM(c,c,i); } for(a=0;a<16;a++) o[a]=c[a]; }
+static void _tr_edpow2523(_tr_gf o,const _tr_gf i){ _tr_gf c; int a; for(a=0;a<16;a++) c[a]=i[a]; for(a=250;a>=0;a--){ _tr_edS(c,c); if(a!=1) _tr_edM(c,c,i); } for(a=0;a<16;a++) o[a]=c[a]; }
+static int _tr_cv32(const uint8_t*x,const uint8_t*y){ uint32_t d=0; int i; for(i=0;i<32;i++) d|=(uint32_t)(x[i]^y[i]); return (int)((1&((d-1)>>8))-1); }
+static void _tr_edadd(_tr_gf p[4],_tr_gf q[4]){
+  _tr_gf a,b,c,d,t,e,f,g,h;
+  _tr_edZ(a,p[1],p[0]); _tr_edZ(t,q[1],q[0]); _tr_edM(a,a,t);
+  _tr_edA(b,p[0],p[1]); _tr_edA(t,q[0],q[1]); _tr_edM(b,b,t);
+  _tr_edM(c,p[3],q[3]); _tr_edM(c,c,_tr_edD2);
+  _tr_edM(d,p[2],q[2]); _tr_edA(d,d,d);
+  _tr_edZ(e,b,a); _tr_edZ(f,d,c); _tr_edA(g,d,c); _tr_edA(h,b,a);
+  _tr_edM(p[0],e,f); _tr_edM(p[1],h,g); _tr_edM(p[2],g,f); _tr_edM(p[3],e,h);
+}
+static void _tr_edcswap(_tr_gf p[4],_tr_gf q[4],uint8_t b){ int i; for(i=0;i<4;i++) _tr_edsel(p[i],q[i],b); }
+static void _tr_edpack(uint8_t*r,_tr_gf p[4]){
+  _tr_gf tx,ty,zi;
+  _tr_edinv(zi,p[2]); _tr_edM(tx,p[0],zi); _tr_edM(ty,p[1],zi);
+  _tr_edpack25519(r,ty); r[31]^=_tr_edpar(tx)<<7;
+}
+static void _tr_edscalarmult(_tr_gf p[4],_tr_gf q[4],const uint8_t*s){
+  int i;
+  _tr_edset(p[0],_tr_gf0); _tr_edset(p[1],_tr_gf1); _tr_edset(p[2],_tr_gf1); _tr_edset(p[3],_tr_gf0);
+  for(i=255;i>=0;--i){ uint8_t b=(s[i/8]>>(i&7))&1; _tr_edcswap(p,q,b); _tr_edadd(q,p); _tr_edadd(p,p); _tr_edcswap(p,q,b); }
+}
+static void _tr_edscalarbase(_tr_gf p[4],const uint8_t*s){
+  _tr_gf q[4];
+  _tr_edset(q[0],_tr_edX); _tr_edset(q[1],_tr_edY); _tr_edset(q[2],_tr_gf1); _tr_edM(q[3],_tr_edX,_tr_edY);
+  _tr_edscalarmult(p,q,s);
+}
+static void _tr_edkeypair(uint8_t*pk,uint8_t*sk,const uint8_t*seed){
+  uint8_t d[64]; _tr_gf p[4]; int i;
+  for(i=0;i<32;i++) sk[i]=seed[i];
+  _tr_edhash(d,sk,32); d[0]&=248; d[31]&=127; d[31]|=64;
+  _tr_edscalarbase(p,d); _tr_edpack(pk,p);
+  for(i=0;i<32;i++) sk[32+i]=pk[i];
+}
+static const uint64_t _tr_edL[32]={0xed,0xd3,0xf5,0x5c,0x1a,0x63,0x12,0x58,0xd6,0x9c,0xf7,0xa2,0xde,0xf9,0xde,0x14,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0x10};
+static void _tr_edmodL(uint8_t*r,int64_t x[64]){
+  int64_t carry,i,j;
+  for(i=63;i>=32;--i){
+    carry=0;
+    for(j=i-32;j<i-12;++j){ x[j]+=carry-16*x[i]*_tr_edL[j-(i-32)]; carry=(x[j]+128)>>8; x[j]-=carry<<8; }
+    x[j]+=carry; x[i]=0;
+  }
+  carry=0;
+  for(j=0;j<32;j++){ x[j]+=carry-(x[31]>>4)*_tr_edL[j]; carry=x[j]>>8; x[j]&=255; }
+  for(j=0;j<32;j++) x[j]-=carry*_tr_edL[j];
+  for(i=0;i<32;i++){ x[i+1]+=x[i]>>8; r[i]=(uint8_t)(x[i]&255); }
+}
+static void _tr_edreduce(uint8_t*r){ int64_t x[64],i; for(i=0;i<64;i++) x[i]=(uint64_t)r[i]; for(i=0;i<64;i++) r[i]=0; _tr_edmodL(r,x); }
+static void _tr_edsign(uint8_t*sm,uint64_t*smlen,const uint8_t*m,uint64_t n,const uint8_t*sk){
+  uint8_t d[64],h[64],r[64]; int64_t i,j,x[64]; _tr_gf p[4];
+  _tr_edhash(d,sk,32); d[0]&=248; d[31]&=127; d[31]|=64;
+  *smlen=n+64;
+  for(i=0;i<(int64_t)n;i++) sm[64+i]=m[i];
+  for(i=0;i<32;i++) sm[32+i]=d[32+i];
+  _tr_edhash(r,sm+32,n+32); _tr_edreduce(r);
+  _tr_edscalarbase(p,r); _tr_edpack(sm,p);
+  for(i=0;i<32;i++) sm[i+32]=sk[i+32];
+  _tr_edhash(h,sm,n+64); _tr_edreduce(h);
+  for(i=0;i<64;i++) x[i]=0;
+  for(i=0;i<32;i++) x[i]=(uint64_t)r[i];
+  for(i=0;i<32;i++) for(j=0;j<32;j++) x[i+j]+=(int64_t)h[i]*(uint64_t)d[j];
+  _tr_edmodL(sm+32,x);
+}
+static int _tr_edunpackneg(_tr_gf r[4],const uint8_t p[32]){
+  _tr_gf t,chk,num,den,den2,den4,den6;
+  _tr_edset(r[2],_tr_gf1); _tr_edunpack25519(r[1],p);
+  _tr_edS(num,r[1]); _tr_edM(den,num,_tr_edD); _tr_edZ(num,num,r[2]); _tr_edA(den,r[2],den);
+  _tr_edS(den2,den); _tr_edS(den4,den2); _tr_edM(den6,den4,den2); _tr_edM(t,den6,num); _tr_edM(t,t,den);
+  _tr_edpow2523(t,t); _tr_edM(t,t,num); _tr_edM(t,t,den); _tr_edM(t,t,den); _tr_edM(r[0],t,den);
+  _tr_edS(chk,r[0]); _tr_edM(chk,chk,den);
+  if(_tr_edneq(chk,num)) _tr_edM(r[0],r[0],_tr_edI);
+  _tr_edS(chk,r[0]); _tr_edM(chk,chk,den);
+  if(_tr_edneq(chk,num)) return -1;
+  if(_tr_edpar(r[0])==(p[31]>>7)) _tr_edZ(r[0],_tr_gf0,r[0]);
+  _tr_edM(r[3],r[0],r[1]);
+  return 0;
+}
+static int _tr_edsign_open(uint8_t*m,uint64_t*mlen,const uint8_t*sm,uint64_t n,const uint8_t*pk){
+  uint8_t t[32],h[64]; _tr_gf p[4],q[4]; uint64_t i;
+  *mlen=(uint64_t)-1;
+  if(n<64) return -1;
+  if(_tr_edunpackneg(q,pk)) return -1;
+  for(i=0;i<n;i++) m[i]=sm[i];
+  for(i=0;i<32;i++) m[i+32]=pk[i];
+  _tr_edhash(h,m,n); _tr_edreduce(h);
+  _tr_edscalarmult(p,q,h); _tr_edscalarbase(q,sm+32); _tr_edadd(p,q); _tr_edpack(t,p);
+  n-=64;
+  if(_tr_cv32(sm,t)){ for(i=0;i<n;i++) m[i]=0; return -1; }
+  for(i=0;i<n;i++) m[i]=sm[i+64];
+  *mlen=n; return 0;
+}
+/* Secure OS randomness (BCryptGenRandom on Windows, /dev/urandom on POSIX). */
+static int _tr_os_random(uint8_t*buf,int n){
+#if defined(_WIN32) && !defined(TAURARO_BARE)
+    if(BCryptGenRandom(NULL,buf,(unsigned long)n,BCRYPT_USE_SYSTEM_PREFERRED_RNG)==0) return 1;
+    { int i; for(i=0;i<n;i++) buf[i]=(uint8_t)(rand()&0xff); } return 0;
+#elif !defined(TAURARO_BARE)
+    FILE* f=fopen("/dev/urandom","rb");
+    if(f){ size_t r=fread(buf,1,(size_t)n,f); fclose(f); if(r==(size_t)n) return 1; }
+    { int i; for(i=0;i<n;i++) buf[i]=(uint8_t)(rand()&0xff); } return 0;
+#else
+    { int i; for(i=0;i<n;i++) buf[i]=(uint8_t)(rand()&0xff); } return 0;
+#endif
+}
+static int _tr_ed_hexval(char c){ if(c>='0'&&c<='9') return c-'0'; if(c>='a'&&c<='f') return c-'a'+10; if(c>='A'&&c<='F') return c-'A'+10; return 0; }
+static void _tr_ed_unhex(const char*h,uint8_t*out,int nbytes){ int i; for(i=0;i<nbytes;i++) out[i]=(uint8_t)((_tr_ed_hexval(h[2*i])<<4)|_tr_ed_hexval(h[2*i+1])); }
+static char* _tr_ed_tohex(const uint8_t*b,int n){ char* o=(char*)TAURARO_ALLOC((size_t)(2*n+1)); if(!o) return NULL; int i; for(i=0;i<n;i++){ o[2*i]=_tr_hex_lc[b[i]>>4]; o[2*i+1]=_tr_hex_lc[b[i]&15]; } o[2*n]='\0'; return o; }
+
+/* ── Tauraro-facing hex wrappers ── */
+/* 32-byte random seed as 64-char hex (the private key). */
+static inline char* _tr_ed25519_gen_seed(void){ uint8_t s[32]; _tr_os_random(s,32); return _tr_ed_tohex(s,32); }
+/* Public key (64-char hex) derived from a 64-char seed hex. */
+static inline char* _tr_ed25519_pubkey(char* seed_hex){
+    uint8_t seed[32],pk[32],sk[64];
+    if(!seed_hex||strlen(seed_hex)<64) return _tr_strdup("");
+    _tr_ed_unhex(seed_hex,seed,32); _tr_edkeypair(pk,sk,seed);
+    return _tr_ed_tohex(pk,32);
+}
+/* Detached signature (128-char hex) of `msg` (ilen bytes) under `seed_hex`. */
+static inline char* _tr_ed25519_sign(char* msg, int ilen, char* seed_hex){
+    uint8_t seed[32],pk[32],sk[64];
+    if(!seed_hex||strlen(seed_hex)<64) return _tr_strdup("");
+    _tr_ed_unhex(seed_hex,seed,32); _tr_edkeypair(pk,sk,seed);
+    if(ilen<0) ilen=0;
+    uint8_t* sm=(uint8_t*)TAURARO_ALLOC((size_t)ilen+64); if(!sm) return _tr_strdup("");
+    uint64_t smlen;
+    _tr_edsign(sm,&smlen,(const uint8_t*)(msg?msg:""),(uint64_t)ilen,sk);
+    char* out=_tr_ed_tohex(sm,64); TAURARO_FREE(sm); return out;
+}
+/* Verify a detached signature. Returns 1 if valid, 0 otherwise. */
+static inline int _tr_ed25519_verify(char* msg, int ilen, char* sig_hex, char* pk_hex){
+    uint8_t sig[64],pk[32];
+    if(!sig_hex||strlen(sig_hex)<128||!pk_hex||strlen(pk_hex)<64) return 0;
+    _tr_ed_unhex(sig_hex,sig,64); _tr_ed_unhex(pk_hex,pk,32);
+    if(ilen<0) ilen=0;
+    uint8_t* sm=(uint8_t*)TAURARO_ALLOC((size_t)ilen+64);
+    uint8_t* mo=(uint8_t*)TAURARO_ALLOC((size_t)ilen+64);
+    if(!sm||!mo){ if(sm)TAURARO_FREE(sm); if(mo)TAURARO_FREE(mo); return 0; }
+    memcpy(sm,sig,64); if(ilen>0) memcpy(sm+64,msg,(size_t)ilen);
+    uint64_t mlen; int rc=_tr_edsign_open(mo,&mlen,sm,(uint64_t)ilen+64,pk);
+    TAURARO_FREE(sm); TAURARO_FREE(mo);
+    return rc==0?1:0;
 }
 
 /* ── SHA-1 + WebSocket accept key ─────────────────────────────────────────

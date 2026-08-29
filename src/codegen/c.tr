@@ -870,6 +870,12 @@ pub class CGenerator:
             self.buf        = self.mono_buf
             self.struct_buf = self.mono_buf
             self.proto_buf  = self.mono_buf
+            # A fixed array of a user value-struct needs that struct COMPLETE here (an array of an
+            # incomplete type is illegal C). The struct body is normally emitted later in struct_buf,
+            # but mono_buf is flushed early — so emit the element body first (idempotent via its
+            # `#ifndef <name>_STRUCT_DEFINED` guard). Real case: CPython's `setentry smalltable[8]`.
+            if self.classes.contains(elem.name):
+                self.gen_class_struct(self.classes.get(elem.name))
             self.w("typedef struct " + nm + " { " + elem_c + " data[" + ty.array_size.to_str() + "]; } " + nm + ";\n")
             self.buf        = old_buf
             self.struct_buf = old_sbuf
@@ -2553,6 +2559,29 @@ pub class CGenerator:
     # literal (`[..]`/`{..}`), a comprehension, or a `List/Dict/Set/Map[..].init/new()`.
     # Anything else (an ident, a field read, an arbitrary call) may ALIAS an existing
     # collection, which — since collections aren't refcounted — must not be auto-freed.
+    # True when a collection-typed local is initialized from a BORROW: an
+    # accessor that hands back a collection owned by some container (or aliases
+    # another binding). e.g. `mut got = m.get("k")` where m: Map[str, Vec[T]] —
+    # `got` points at the Vec the map still owns. Registering such a local for
+    # auto-drop frees the shared buffer while the container keeps the pointer
+    # (double-free / use-after-free — 0xC0000374 on Windows). Fresh collections
+    # (literals, Type.init(), keys()/values()/clone(), free-fn results) are NOT
+    # borrows and remain owned by the local.
+    pub def _coll_init_is_borrow(self, v: Pointer[HirExpr]) -> bool:
+        if _is_invalid_ptr(v as usize): return false
+        match v.read():
+            case HirExpr.EMethodCall(recv, m, _, _):
+                if m == "get" or m == "get_or":
+                    if _is_invalid_ptr(recv as usize): return false
+                    return self._is_coll_type_name(hir_expr_type(recv).name)
+                return false
+            case HirExpr.EIndex(recv, _, _):
+                if _is_invalid_ptr(recv as usize): return false
+                return self._is_coll_type_name(hir_expr_type(recv).name)
+            case HirExpr.EPropAccess(_, _, _): return true
+            case HirExpr.EIdent(_, _, _): return true
+            case _: return false
+
     pub def _is_fresh_coll_expr(self, e: Pointer[HirExpr]) -> bool:
         if _is_invalid_ptr(e as usize): return false
         match e.read():
@@ -6445,11 +6474,15 @@ pub class CGenerator:
                     if _init_sfx != "ptr":
                         c_ty = "List_" + self.list_sfx(_init_sfx) + "*"
                 if c_ty == "void" and v as usize != 0 as usize: c_ty = "__auto_type"
+                # A local bound to a borrow (container.get(), field alias, ident
+                # alias) does NOT own its collection — skip auto-drop registration
+                # so the container's own drop is the sole owner (no double-free).
+                mut _init_is_borrow = self._coll_init_is_borrow(v)
                 # Track the List_<sfx>* suffix for this local so SAutoDrop can
                 # call the matching List_<sfx>_free (only List/Vec need a
                 # suffix; Dict/Map/Set are uniformly TrMap*/_TrSet*, freed via
                 # Dict_free regardless of element type).
-                if (ty.name == "List" or ty.name == "Vec") and c_ty.starts_with("List_") and c_ty.ends_with("*"):
+                if (not _init_is_borrow) and (ty.name == "List" or ty.name == "Vec") and c_ty.starts_with("List_") and c_ty.ends_with("*"):
                     mut _lsfx = c_ty.slice(5, c_ty.len() - 1)
                     # A heap-class-element list is List_ptr; encode the element class
                     # ("ptr@Tag") so SAutoDrop frees via List_ptr_free_obj(l, _trdrop_Tag),
@@ -6459,9 +6492,9 @@ pub class CGenerator:
                         mut _elt = ty.args.get(0).read().name
                         if self.is_heap_class_tn(_elt): _lsfx = "ptr@" + _elt
                     self.coll_local_sfx.insert(n, _lsfx)
-                elif (ty.name == "Dict" or ty.name == "Map" or ty.name == "Set") and (c_ty == "TrIDict*" or c_ty == "_TrISet*"):
+                elif (not _init_is_borrow) and (ty.name == "Dict" or ty.name == "Map" or ty.name == "Set") and (c_ty == "TrIDict*" or c_ty == "_TrISet*"):
                     self.coll_local_idict.insert(n, true)
-                elif (ty.name == "Dict" or ty.name == "Map" or ty.name == "Set") and (c_ty.starts_with("Dict_") or c_ty.starts_with("Set_")) and c_ty.ends_with("*"):
+                elif (not _init_is_borrow) and (ty.name == "Dict" or ty.name == "Map" or ty.name == "Set") and (c_ty.starts_with("Dict_") or c_ty.starts_with("Set_")) and c_ty.ends_with("*"):
                     # Typed inline value-type collection (Dict_str_Point* / Set_Point*):
                     # auto-drop frees via the typed <struct>_free.
                     self.coll_local_vtcoll.insert(n, c_ty.slice(0, c_ty.len() - 1))
@@ -6469,19 +6502,19 @@ pub class CGenerator:
                 # Use the declared type's args, but fall back to the init value's
                 # type args when the local is inferred (`mut m = Map[str,str].init`)
                 # and lost its args on the declared type.
-                if (ty.name == "Dict" or ty.name == "Map") and ty.args.len > 1 and _is_str_type(ty.args.get(1).read().name):
+                if (not _init_is_borrow) and (ty.name == "Dict" or ty.name == "Map") and ty.args.len > 1 and _is_str_type(ty.args.get(1).read().name):
                     self.coll_local_strval.insert(n, true)
                 # Heap-class-VALUE Dict/Map: the dict co-owns each value (insert-retain),
                 # so its drop must release them. Encode "d@<i|s>@<ValueClass>" in
                 # coll_local_sfx (read only by SAutoDrop) → Dict_free_objval / _tr_idict_free_objval.
-                if (ty.name == "Dict" or ty.name == "Map") and ty.args.len > 1 and self.is_heap_class_tn(ty.args.get(1).read().name):
+                if (not _init_is_borrow) and (ty.name == "Dict" or ty.name == "Map") and ty.args.len > 1 and self.is_heap_class_tn(ty.args.get(1).read().name):
                     mut _dvc = ty.args.get(1).read().name
                     if self.coll_local_idict.contains(n):
                         self.coll_local_sfx.insert(n, "d@i@" + _dvc)
                     else:
                         self.coll_local_sfx.insert(n, "d@s@" + _dvc)
                 # Heap-class Set (_TrPtrSet): free via _tr_pset_free_obj releasing each element.
-                if ty.name == "Set" and c_ty == "_TrPtrSet*" and ty.args.len > 0 and self.is_heap_class_tn(ty.args.get(0).read().name):
+                if (not _init_is_borrow) and ty.name == "Set" and c_ty == "_TrPtrSet*" and ty.args.len > 0 and self.is_heap_class_tn(ty.args.get(0).read().name):
                     self.coll_local_sfx.insert(n, "s@" + ty.args.get(0).read().name)
                 # ? propagation in let binding
                 if v as usize != 0 as usize:

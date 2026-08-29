@@ -5040,8 +5040,11 @@ extend Sema:
                 elif method == "checked_add" or method == "checked_sub" or method == "checked_mul":
                     # Returns Option[int] - integer checked arithmetic
                     ret_ty = AstType.init_generic("Option", box_asttype(AstType.init("int")))
-                elif method == "abs" or method == "min" or method == "max" or method == "pow" or method == "sign" or method == "clamp" or method == "gcd" or method == "lcm":
-                    ret_ty = hobj_ty  # same numeric type
+                elif (method == "abs" or method == "min" or method == "max" or method == "pow" or method == "sign" or method == "clamp" or method == "gcd" or method == "lcm") and (hobj_ty.name == "int" or hobj_ty.name == "i8" or hobj_ty.name == "i16" or hobj_ty.name == "i32" or hobj_ty.name == "i64" or hobj_ty.name == "isize" or hobj_ty.name == "u8" or hobj_ty.name == "u16" or hobj_ty.name == "u32" or hobj_ty.name == "u64" or hobj_ty.name == "usize" or hobj_ty.name == "float" or hobj_ty.name == "f32" or hobj_ty.name == "f64" or hobj_ty.name == "char"):
+                    # Numeric math methods return the same numeric type — but ONLY for a
+                    # numeric receiver. A user class may legitimately define a method named
+                    # `sign`/`min`/`pow`/etc.; those must fall through to class-method lookup.
+                    ret_ty = hobj_ty
                 # Float math methods - return float
                 elif hobj_ty.name == "float" or hobj_ty.name == "f64" or hobj_ty.name == "f32":
                     if method == "floor" or method == "ceil" or method == "round" or method == "sqrt" or method == "fabs" or method == "log" or method == "log2" or method == "log10" or method == "exp" or method == "sin" or method == "cos" or method == "tan" or method == "asin" or method == "acos" or method == "atan" or method == "atan2" or method == "pow":
