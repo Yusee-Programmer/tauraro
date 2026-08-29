@@ -128,7 +128,7 @@ pub class CppExporter:
         return self._cpp_slot_cpp(self._cpp_slot_kind(ty.args.get(i).read().name))
 
     # Heap classes reachable through the `export def` API (as a return or parameter type) get
-    # a C++ RAII wrapper. Value-type classes / enums are excluded (a later phase).
+    # a C++ RAII wrapper. Value-type classes / enums are excluded (not wrapped).
     def _note_export_ty(self, ty: AstType):
         mut n = ty.name
         if n != "" and self.gen.classes.contains(n) and not self.gen.value_types.contains(n) and not self.gen.enums.contains(n):

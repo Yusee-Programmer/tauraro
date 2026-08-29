@@ -8,11 +8,15 @@
 #   isa_x64.tr  - x86-64 instruction selection + encoding
 #   elf.tr      - ELF64 object writer (sections, symbols, relocations)
 #   emit.tr     - orchestration (LIR -> encoded funcs -> .o)
-#   (regalloc.tr / frame.tr / select.tr land in Phase 2 as the op set grows)
+#   (no separate regalloc/frame/select — the codegen model is stack-slot-per-vreg,
+#    i.e. all-spill: fast to compile, -O0-quality runtime; C/LLVM cover release perf)
 #
-# Phase 1 (skeleton): lowers `def main(): print(<int>)` -> a call to _tr_rt_print_i64
-# with an immediate, emits a real ELF64 .o. Anything else -> emit_object returns false
-# and the driver prints a clear "use --backend c" message (never silent-wrong).
+# Lowers the full supported language: user fns + recursion, control flow, int/float/str/
+# bool, List/Dict/Set + ~150 methods, f-strings, match, and the OBJECT MODEL — classes +
+# single inheritance + ARC field drops, enums as tagged unions, generic classes, interfaces
+# (zero-cost static specialization), operator dunders. A construct it can't lower yet ->
+# emit_object returns false + fail_note and the driver falls back to --backend c (never
+# silent-wrong). Differentially verified byte-identical vs the C backend in CI.
 
 from hir import HirProgram
 from taumir.lower import lower_to_lir

@@ -2,7 +2,7 @@
 #
 #   tauraro-bindgen <header.h> [-o out.tr] [--cc <compiler>]
 #
-# Pipeline (Phase 1): preprocess with the C compiler (`cc -E`, flattening #includes/macros),
+# Pipeline: preprocess with the C compiler (`cc -E`, flattening #includes/macros),
 # tokenize the declarations, parse the common C shapes, and emit `extern "C"` prototypes,
 # `@value_type` structs, `type` aliases, enum/`#define` constants. Big libraries with an XML/GIR
 # registry (Vulkan/GTK) are generated from that registry instead — this handles clean C headers.

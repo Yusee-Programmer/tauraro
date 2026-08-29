@@ -52,7 +52,7 @@ pub def print_usage():
     print("  --emit mir        Emit MIR basic blocks and stop")
     print("  --run             Compile and immediately execute")
     print("  --check           Run semantic analysis only (no codegen)")
-    print("  --verbose         Show all pipeline phases")
+    print("  --verbose         Show all pipeline stages")
     print("  --backend <b>     Code generator: c (default, C->gcc/clang), llvm (LLVM IR),")
     print("                      native (x86-64->ELF, under construction)")
     print("  -o <path>         Exact output path (its directory is honored; overrides -d)")
@@ -1435,7 +1435,7 @@ pub def main(args: Vec[str]):
             return
         # EXECUTABLE mode (default): IR -> clang (or llc + cc) -> link with the native
         # runtime -> executable, exactly like the C backend produces one end-to-end.
-        # --- Cross-compilation target (Phase 1). Empty target = host build. ---
+        # --- Cross-compilation target. Empty target = host build. ---
         # `--target <t>` threads through the LLVM backend just like the C backend:
         # clang (multi-target) lowers the target-neutral .ll for the triple and LLD
         # links it. The host-only bundled llc can't retarget, so cross uses clang.
@@ -1512,7 +1512,7 @@ pub def main(args: Vec[str]):
             if lx_is_cross:
                 print("       target " + lx_triple + " needs its libc headers/sysroot.")
                 print("       fix: pass --sysroot <path>, or install 'zig' (zig cc bundles libc); freestanding")
-                print("       targets (embedded-*, wasm) need no sysroot once the bare runtime lands (Phase 2/3).")
+                print("       freestanding targets (embedded-*, wasm) need no sysroot.")
             _tr_exit(1)
         # Toolchain: prefer clang (compiles .ll directly, applies -O); fall back to
         # llc + cc. An old clang (< LLVM 15, no opaque pointers) fails the compile and
@@ -1534,7 +1534,7 @@ pub def main(args: Vec[str]):
             lx_libs = lx_libs + " -lws2_32 -lbcrypt -lucrtbase -mconsole"
             lx_libs_gcc = lx_libs_gcc + " -lws2_32 -lbcrypt"
         mut lx_built = false
-        # ================= CROSS-COMPILE PATH (Phase 1) =================
+        # ================= CROSS-COMPILE PATH =================
         # For a non-host target, clang is the multi-target code generator (lowers the
         # target-neutral .ll straight to a target object) and LLD the universal cross
         # linker. The host-only bundled llc below cannot retarget, so cross skips it.
@@ -1617,15 +1617,15 @@ pub def main(args: Vec[str]):
 
     if backend == "native":
         # Native backend (Path B): lowered IR -> x86-64 -> ELF -> link with runtime.o.
-        # Phase 0: the seam is wired but codegen isn't implemented yet — error clearly
-        # rather than emit nothing, so the default (C) or LLVM path is used instead.
+        # emit_object lowers the supported language (incl. the object model); if it hits a
+        # construct it can't lower yet it returns false + fail_note and we fall back cleanly.
         mut nat_gen = NativeGenerator.init()
         # Same -o/-d/CWD rule as the other backends; native emits a .o artifact.
         mut nat_out = ensure_ext(resolve_output_stem(input_path, output_path, out_dir), ".o")
         if not nat_gen.emit_object(hir, nat_out):
-            print(c_red("error") + ": the native backend (--backend native) is not implemented yet")
+            print(c_red("error") + ": this program uses a construct the native backend can't lower yet")
             if nat_gen.fail_note != "": print("       reason: " + nat_gen.fail_note)
-            print("       it is under construction (x86-64/ELF). Use --backend c (default) or --backend llvm for now.")
+            print("       use --backend c (default) or --backend llvm for the full language.")
             _tr_exit(2)
         if verbose: print("[4/5] native object written to " + nat_out)
         return
