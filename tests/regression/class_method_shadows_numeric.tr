@@ -1,0 +1,41 @@
+# tests/regression/class_method_shadows_numeric.tr
+# Regression: a user class may define methods whose names collide with numeric
+# builtins (`sign`, `abs`, `min`, `max`, `pow`, `clamp`, `gcd`, `lcm`). Those must
+# resolve to the USER method (with its real return type), not the numeric builtin
+# that returns the receiver type. Previously `C.sign(...)` was typed as returning
+# `C` (the class), so `let s = C.sign(...)` then `s.len()` mis-compiled.
+
+from std.test import TestRunner
+
+pub class Signer:
+    _d: int
+
+extend Signer:
+    # returns str, NOT Signer — must not be shadowed by the numeric `sign` builtin
+    pub def sign(a: str, b: str) -> str:
+        return a + "|" + b
+    pub def abs(x: str) -> str:
+        return "abs:" + x
+    pub def pow(base: str, e: str) -> str:
+        return base + "^" + e
+
+def main():
+    mut t = TestRunner.init("class_method_shadows_numeric")
+
+    t.section("class methods named like numeric builtins keep their return type")
+    mut s = Signer.sign("msg", "key")        # inferred str, not Signer
+    t.assert_eq_int(s.len(), 7, "sign() result is a str of length 7")
+    t.assert_eq_str(s, "msg|key", "sign() returns the concatenation")
+
+    mut a = Signer.abs("v")
+    t.assert_eq_str(a, "abs:v", "abs() returns a str")
+
+    mut p = Signer.pow("2", "8")
+    t.assert_eq_str(p, "2^8", "pow() returns a str")
+
+    t.section("numeric builtins still work on real numbers")
+    mut n: int = 0 - 5
+    t.assert_eq_int(n.abs(), 5, "int.abs() still works")
+    t.assert_eq_int((3).sign(), 1, "int.sign() still works")
+
+    t.summary()

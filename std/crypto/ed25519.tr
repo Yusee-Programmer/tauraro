@@ -1,0 +1,48 @@
+# std.crypto.ed25519 — Ed25519 digital signatures (TweetNaCl, pure C).
+#
+# Keys and signatures are hex strings:
+#   - a private key is a 32-byte seed  → 64 hex chars
+#   - a public key   is 32 bytes       → 64 hex chars
+#   - a signature    is 64 bytes       → 128 hex chars (detached)
+#
+# Usage:
+#   from std.crypto.ed25519 import Ed25519
+#   mut seed = Ed25519.gen_seed()          # keep this secret
+#   mut pk   = Ed25519.pubkey(seed)        # share this
+#   mut sig  = Ed25519.sign("message", seed)
+#   mut ok   = Ed25519.verify("message", sig, pk)   # -> bool
+
+extern "C":
+    def _tr_ed25519_gen_seed() -> str
+    def _tr_ed25519_pubkey(seed_hex: str) -> str
+    def _tr_ed25519_sign(msg: str, ilen: int, seed_hex: str) -> str
+    def _tr_ed25519_verify(msg: str, ilen: int, sig_hex: str, pk_hex: str) -> int
+
+pub class Ed25519:
+    _dummy: int
+
+extend Ed25519:
+    # Generate a fresh random 32-byte seed (the private key) as 64-char hex,
+    # using the OS CSPRNG (BCryptGenRandom / /dev/urandom).
+    pub def gen_seed() -> str:
+        return _tr_ed25519_gen_seed()
+
+    # Derive the 64-char-hex public key from a seed.
+    pub def pubkey(seed_hex: str) -> str:
+        return _tr_ed25519_pubkey(seed_hex)
+
+    # Sign a message (its whole length) with `seed_hex`; returns 128-char-hex.
+    pub def sign(msg: str, seed_hex: str) -> str:
+        return _tr_ed25519_sign(msg, msg.len(), seed_hex)
+
+    # Sign exactly `ilen` bytes of `msg`.
+    pub def sign_bytes(msg: str, ilen: int, seed_hex: str) -> str:
+        return _tr_ed25519_sign(msg, ilen, seed_hex)
+
+    # Verify a detached signature over `msg` against `pk_hex`. Returns true if valid.
+    pub def verify(msg: str, sig_hex: str, pk_hex: str) -> bool:
+        return _tr_ed25519_verify(msg, msg.len(), sig_hex, pk_hex) == 1
+
+    # Verify exactly `ilen` bytes of `msg`.
+    pub def verify_bytes(msg: str, ilen: int, sig_hex: str, pk_hex: str) -> bool:
+        return _tr_ed25519_verify(msg, ilen, sig_hex, pk_hex) == 1

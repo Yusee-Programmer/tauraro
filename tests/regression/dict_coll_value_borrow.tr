@@ -1,0 +1,50 @@
+# tests/regression/dict_coll_value_borrow.tr
+# Regression: a collection-typed local bound to a container accessor is a BORROW.
+#
+#   mut got = m.get("k")   # m: Dict[str, List[int]]  -> got aliases the dict's list
+#   got.push(20)
+#
+# The dict still owns that list, so `got` must NOT be registered for auto-drop.
+# Previously codegen emitted List_<sfx>_free(got) at scope end; two gets of the
+# same key produced two frees of the same buffer (double-free / use-after-free,
+# 0xC0000374 heap corruption on Windows). This test both mutates through the
+# borrow and reads it back to prove the buffer stays live and un-freed.
+
+from std.test import TestRunner
+
+def main():
+    mut t = TestRunner.init("dict_coll_value_borrow")
+
+    t.section("Dict[str, List[int]] get-then-push (borrow, no double-free)")
+    mut m: Dict[str, List[int]] = {}
+    mut v: List[int] = [10]
+    m.set("k", v)
+    mut got = m.get("k")      # borrow of the dict-owned list
+    got.push(20)
+    got.push(30)
+    mut back = m.get("k")     # second borrow of the SAME list
+    t.assert_eq_int(back.len, 3, "mutation through borrow persisted (len)")
+    t.assert_eq_int(back.get(0), 10, "elem 0")
+    t.assert_eq_int(back.get(1), 20, "pushed elem 1")
+    t.assert_eq_int(back.get(2), 30, "pushed elem 2")
+
+    t.section("many keys, each a borrowed list mutated in place")
+    mut g: Dict[str, List[int]] = {}
+    mut i: int = 0
+    while i < 20:
+        mut key: str = "k-" + i.to_str()
+        mut fresh: List[int] = [i]
+        g.set(key, fresh)
+        i += 1
+    i = 0
+    while i < 20:
+        mut key2: str = "k-" + i.to_str()
+        mut lst = g.get(key2)
+        lst.push(i * 2)
+        i += 1
+    mut sample = g.get("k-7")
+    t.assert_eq_int(sample.len, 2, "k-7 list grew via borrow")
+    t.assert_eq_int(sample.get(0), 7, "k-7 seed")
+    t.assert_eq_int(sample.get(1), 14, "k-7 pushed")
+
+    t.summary()

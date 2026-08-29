@@ -4450,6 +4450,7 @@ __attribute__((hot)) void CGenerator_set_proven_borrows(CGenerator* self, List_T
 __attribute__((hot)) TrStr CGenerator_str_retain_wrap(CGenerator* self, HirExpr* e, TrStr s, bool is_return);
 __attribute__((hot)) void CGenerator__scan_ptr_aliased(CGenerator* self, AstType* t);
 __attribute__((hot)) bool CGenerator__is_coll_type_name(CGenerator* self, TrStr n);
+__attribute__((hot)) bool CGenerator__coll_init_is_borrow(CGenerator* self, HirExpr* v);
 __attribute__((hot)) bool CGenerator__is_fresh_coll_expr(CGenerator* self, HirExpr* e);
 __attribute__((hot)) void CGenerator__scan_coll_fields(CGenerator* self, HirProgram* prog);
 __attribute__((hot)) void CGenerator__scan_coll_fields_block(CGenerator* self, HirBlock* b);
