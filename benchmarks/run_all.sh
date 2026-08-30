@@ -80,8 +80,13 @@ compile_rust() {
 }
 
 compile_tauraro() {
-    local src="$1"
-    "$TAU_EXE" -O3 "$src" 2>&1
+    local src="$1" out="$2"
+    # Pin the output path with -o so we always measure THIS build. Older tauraroc
+    # placed the exe in a CWD-relative build/ dir; current tauraroc emits <cwd>/bench.
+    # -o makes it deterministic (and creates the parent dir); without it the exe lands
+    # where the runner doesn't look and every row reports FAIL.
+    rm -f "$out"
+    "$TAU_EXE" -O3 -o "$out" "$src" 2>&1
 }
 
 # Format a maybe-empty number with a unit, else "FAIL".
@@ -130,7 +135,7 @@ for entry in "${benchmarks[@]}"; do
 
     if compile_c  "$dir/bench.c"  "$dir/bench_c"  2>/dev/null; then c_ok=1; fi
     if compile_rust "$dir/bench.rs" "$dir/bench_rs" 2>/dev/null; then rs_ok=1; fi
-    if compile_tauraro "$dir/bench.tr"              2>/dev/null; then tr_ok=1; fi
+    if compile_tauraro "$dir/bench.tr" "$BENCH/build/bench" 2>/dev/null; then tr_ok=1; fi
 
     printf "  ${GRY}Running...${RST}\n"
 
@@ -140,13 +145,11 @@ for entry in "${benchmarks[@]}"; do
 
     if [ $c_ok -eq 1 ]; then IFS='|' read -r c_time c_mem <<< "$(measure "$dir/bench_c")"; fi
     if [ $rs_ok -eq 1 ]; then IFS='|' read -r rs_time rs_mem <<< "$(measure "$dir/bench_rs")"; fi
-    # Self-hosted tauraroc places the exe in build/bench(.exe)
+    # compile_tauraro pinned the exe to $BENCH/build/bench via -o (accept a .exe
+    # suffix in case a host toolchain adds one).
     tr_exe=""
-    if   [ $tr_ok -eq 1 ] && [ -x "$dir/build/bench.exe" ];   then tr_exe="$dir/build/bench.exe"
-    elif [ $tr_ok -eq 1 ] && [ -x "$dir/build/bench" ];       then tr_exe="$dir/build/bench"
+    if   [ $tr_ok -eq 1 ] && [ -x "$BENCH/build/bench" ];     then tr_exe="$BENCH/build/bench"
     elif [ $tr_ok -eq 1 ] && [ -x "$BENCH/build/bench.exe" ]; then tr_exe="$BENCH/build/bench.exe"
-    elif [ $tr_ok -eq 1 ] && [ -x "$BENCH/build/bench" ];     then tr_exe="$BENCH/build/bench"
-    elif [ $tr_ok -eq 1 ] && [ -x "$dir/bench" ];             then tr_exe="$dir/bench"
     fi
     if [ -n "$tr_exe" ]; then IFS='|' read -r tr_time tr_mem <<< "$(measure "$tr_exe")"; fi
 

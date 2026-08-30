@@ -5,6 +5,12 @@ $ROOT    = Resolve-Path "$PSScriptRoot\..\.."
 $BENCH   = $PSScriptRoot
 $TAU_EXE = "$ROOT\tauraro\tauraroc.exe"
 
+# Per-run wall-clock ceiling. Benchmarks like Newton/Collatz legitimately take
+# 20-25s, and under full-suite CPU load that stretches further -- 60s spuriously
+# killed valid runs and reported them as FAIL. 300s leaves ample headroom while
+# still bounding a genuinely hung program.
+$RUN_TIMEOUT_S = 300
+
 function Run-Bench($exe) {
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName               = $exe
@@ -12,31 +18,42 @@ function Run-Bench($exe) {
     $psi.UseShellExecute        = $false
     $proc = [System.Diagnostics.Process]::Start($psi)
 
-    $peakMem = 0L
+    # Drain stdout on a background task so the child never blocks on a full OS pipe
+    # buffer while we poll memory below (that read-after-exit pattern deadlocks any
+    # program that prints more than a pipe's worth of output).
+    $stdoutTask = $proc.StandardOutput.ReadToEndAsync()
+
+    $peakMem  = 0L
+    $timedOut = $false
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
     while (-not $proc.HasExited) {
         try {
             $proc.Refresh()
-            if ($proc.PeakWorkingSet64 -gt $peakMem) { $peakMem = $proc.PeakWorkingSet64 }
+            # Peak PRIVATE committed bytes -- reflects what the program actually
+            # allocated. Working set (physical RAM) is OS-managed and inflates/trims
+            # under memory pressure, so it reported e.g. 69 MB for an allocation-free
+            # loop one run and 3 MB the next. Paged/private commit is stable.
+            if ($proc.PeakPagedMemorySize64 -gt $peakMem) { $peakMem = $proc.PeakPagedMemorySize64 }
         } catch {}
-        if ($sw.Elapsed.TotalSeconds -gt 60) {
+        if ($sw.Elapsed.TotalSeconds -gt $RUN_TIMEOUT_S) {
+            $timedOut = $true
             try { $proc.Kill() } catch {}
             break
         }
-        Start-Sleep -Milliseconds 2
+        Start-Sleep -Milliseconds 5
     }
-    $out = $proc.StandardOutput.ReadToEnd()
     try {
         $proc.Refresh()
-        if ($proc.PeakWorkingSet64 -gt $peakMem) { $peakMem = $proc.PeakWorkingSet64 }
+        if ($proc.PeakPagedMemorySize64 -gt $peakMem) { $peakMem = $proc.PeakPagedMemorySize64 }
     } catch {}
+    $out = $stdoutTask.Result
 
     $time_s = $null
     $line = $out -split "`n" | Where-Object { $_ -match "TIME_MS:(\d+)" } | Select-Object -First 1
     if ($line -match "TIME_MS:(\d+)") {
         $time_s = [double]$Matches[1] / 1000.0
     }
-    return @{ Time = $time_s; PeakMemKB = [math]::Round($peakMem / 1024.0, 1) }
+    return @{ Time = $time_s; PeakMemKB = [math]::Round($peakMem / 1024.0, 1); TimedOut = $timedOut }
 }
 
 function Compile-C($src, $out) {
@@ -52,13 +69,18 @@ function Compile-Rust($src, $out) {
     return $true
 }
 
-function Compile-Tauraro($src) {
+function Compile-Tauraro($src, $out) {
     if (-not (Test-Path $TAU_EXE)) {
         Write-Warning "Self-hosted compiler not found at: $TAU_EXE"
         Write-Warning "Build it first: run the bootstrap in tauraro/src/"
         return $false
     }
-    $r = & $TAU_EXE -O3 $src 2>&1
+    # Force the output path with -o so we always measure THIS build. Older tauraroc
+    # placed the exe in a CWD-relative build/ dir; current tauraroc emits <cwd>\bench.exe.
+    # -o pins it to $out regardless, and creates the parent dir. (Without this the exe
+    # lands somewhere the runner doesn't look, and the whole run reports FAIL.)
+    Remove-Item -Force $out -ErrorAction SilentlyContinue
+    $r = & $TAU_EXE -O3 -o $out $src 2>&1
     if ($LASTEXITCODE -ne 0) { Write-Warning "Tauraro compile failed: $r"; return $false }
     return $true
 }
@@ -99,7 +121,7 @@ foreach ($b in $benchmarks) {
 
     $c_ok  = Compile-C        "$dir\bench.c"  "$dir\bench_c.exe"
     $rs_ok = Compile-Rust     "$dir\bench.rs" "$dir\bench_rs.exe"
-    $tr_ok = Compile-Tauraro  "$dir\bench.tr"
+    $tr_ok = Compile-Tauraro  "$dir\bench.tr" "$BENCH\build\bench.exe"
 
     Write-Host "  Running..." -ForegroundColor DarkGray
     $c_res  = if ($c_ok)  { Run-Bench "$dir\bench_c.exe"  } else { @{ Time = $null; PeakMemKB = $null } }
@@ -117,9 +139,9 @@ foreach ($b in $benchmarks) {
 
     $results += [PSCustomObject]@{
         Benchmark = $b.name
-        C_sec     = if ($null -ne $c_time)  { [math]::Round($c_time,  3) } else { "FAIL" }
-        Rust_sec  = if ($null -ne $rs_time) { [math]::Round($rs_time, 3) } else { "FAIL" }
-        Tau_sec   = if ($null -ne $tr_time) { [math]::Round($tr_time, 3) } else { "FAIL" }
+        C_sec     = if ($null -ne $c_time)  { [math]::Round($c_time,  3) } elseif ($c_res.TimedOut)  { "TIMEOUT" } else { "FAIL" }
+        Rust_sec  = if ($null -ne $rs_time) { [math]::Round($rs_time, 3) } elseif ($rs_res.TimedOut) { "TIMEOUT" } else { "FAIL" }
+        Tau_sec   = if ($null -ne $tr_time) { [math]::Round($tr_time, 3) } elseif ($tr_res.TimedOut) { "TIMEOUT" } else { "FAIL" }
         TauOverC  = if ($null -ne $tau_c_ratio)  { "${tau_c_ratio}x" }  else { "--" }
         TauOverRs = if ($null -ne $tau_rs_ratio) { "${tau_rs_ratio}x" } else { "--" }
         C_memKB   = if ($null -ne $c_res.PeakMemKB)  { $c_res.PeakMemKB }  else { "FAIL" }

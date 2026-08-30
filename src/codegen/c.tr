@@ -381,6 +381,7 @@ pub class CGenerator:
         self.wlt("typedef struct List_" + n + " { " + n + "* data; size_t len; size_t capacity; } List_" + n + ";\n")
         self.wlt("static inline List_" + n + "* List_" + n + "_new(void) { List_" + n + "* l=(List_" + n + "*)malloc(sizeof(List_" + n + ")); l->data=(" + n + "*)malloc(sizeof(" + n + ")*8); l->len=0; l->capacity=8; return l; }\n")
         self.wlt("static inline void List_" + n + "_append(List_" + n + "* l, " + n + " val) { if(l->len==l->capacity){ l->capacity*=2; l->data=(" + n + "*)realloc(l->data,sizeof(" + n + ")*l->capacity); } l->data[l->len++]=val; }\n")
+        self.wlt("static inline void List_" + n + "_reserve(List_" + n + "* l, long long cap) { if(l && (size_t)cap > l->capacity){ l->data=(" + n + "*)realloc(l->data,sizeof(" + n + ")*(size_t)cap); l->capacity=(size_t)cap; } }\n")
         self.wlt("static inline " + n + " List_" + n + "_get(List_" + n + "* l, long long i) { _tr_bounds_check(i, l->len); return l->data[i]; }\n")
         self.wlt("static inline " + n + " List_" + n + "_pop(List_" + n + "* l) { if(!l||l->len==0) return (" + n + "){0}; l->len--; return l->data[l->len]; }\n")
         self.wlt("static inline void List_" + n + "_free(List_" + n + "* l) { if(l){ free(l->data); free(l); } }\n")
@@ -5027,6 +5028,10 @@ pub class CGenerator:
                 return "List_" + lsfx + "_swap(" + obj_s + ", " + self.gen_args(args) + ")"
             if method == "clear":
                 return "List_" + lsfx + "_clear(" + obj_s + ")"
+            if method == "reserve":
+                # Pre-size to an exact capacity in one allocation (calloc-style) so a
+                # known-size fill loop never reallocs -> peak memory matches C, no 2x.
+                return "List_" + lsfx + "_reserve(" + obj_s + ", " + self.gen_args(args) + ")"
             if method == "is_empty":
                 return "List_" + lsfx + "_is_empty(" + obj_s + ")"
             if method == "extend":

@@ -81,8 +81,9 @@ clean_build() {
 
 compile_c()    { gcc -O3 -o "$2" "$1" -lm 2>&1; }
 compile_rust() { rustc -C opt-level=3 -C target-cpu=native -o "$2" "$1" 2>&1; }
-# Default Tauraro C backend (writes build/bench(.exe)).
-compile_tauraro_c()    { "$TAU_EXE" -O3 "$1" 2>&1; }
+# Default Tauraro C backend. Pin the exe with -o (current tauraroc emits <cwd>/bench,
+# not build/bench) so the runner measures THIS build instead of reporting FAIL.
+compile_tauraro_c()    { rm -f "$2"; "$TAU_EXE" -O3 -o "$2" "$1" 2>&1; }
 # LLVM backend -- produces the exe directly at $2 (the driver links platform libs itself).
 compile_tauraro_llvm() { "$TAU_EXE" --backend llvm -O3 "$1" -o "$2" 2>&1; }
 
@@ -124,10 +125,11 @@ for entry in "${benchmarks[@]}"; do
     compile_c    "$dir/bench.c"  "$dir/bench_c"  &>/dev/null && c_ok=1
     compile_rust "$dir/bench.rs" "$dir/bench_rs" &>/dev/null && rs_ok=1
     clean_build
-    compile_tauraro_c "$dir/bench.tr"            &>/dev/null && tc_ok=1
-    # Resolve the C-backend exe (build/bench(.exe)) BEFORE the LLVM compile reuses build/.
+    compile_tauraro_c "$dir/bench.tr" "$BENCH/build/bench" &>/dev/null && tc_ok=1
+    # C-backend exe was pinned to $BENCH/build/bench via -o; resolve it BEFORE the LLVM
+    # compile reuses build/ (accept a .exe suffix in case a host toolchain adds one).
     tc_exe=""
-    for cand in "$dir/build/bench.exe" "$dir/build/bench" "$BENCH/build/bench.exe" "$BENCH/build/bench"; do
+    for cand in "$BENCH/build/bench" "$BENCH/build/bench.exe"; do
         [ -x "$cand" ] && { tc_exe="$cand"; break; }
     done
     tc_time=""; tc_mem=""

@@ -3327,90 +3327,105 @@ static void _trdrop_FnMacroExpander(void* vp) {
 typedef struct List_Token { Token* data; size_t len; size_t capacity; } List_Token;
 static inline List_Token* List_Token_new(void) { List_Token* l=(List_Token*)malloc(sizeof(List_Token)); l->data=(Token*)malloc(sizeof(Token)*8); l->len=0; l->capacity=8; return l; }
 static inline void List_Token_append(List_Token* l, Token val) { if(l->len==l->capacity){ l->capacity*=2; l->data=(Token*)realloc(l->data,sizeof(Token)*l->capacity); } l->data[l->len++]=val; }
+static inline void List_Token_reserve(List_Token* l, long long cap) { if(l && (size_t)cap > l->capacity){ l->data=(Token*)realloc(l->data,sizeof(Token)*(size_t)cap); l->capacity=(size_t)cap; } }
 static inline Token List_Token_get(List_Token* l, long long i) { _tr_bounds_check(i, l->len); return l->data[i]; }
 static inline Token List_Token_pop(List_Token* l) { if(!l||l->len==0) return (Token){0}; l->len--; return l->data[l->len]; }
 static inline void List_Token_free(List_Token* l) { if(l){ free(l->data); free(l); } }
 typedef struct List_Pattern { Pattern* data; size_t len; size_t capacity; } List_Pattern;
 static inline List_Pattern* List_Pattern_new(void) { List_Pattern* l=(List_Pattern*)malloc(sizeof(List_Pattern)); l->data=(Pattern*)malloc(sizeof(Pattern)*8); l->len=0; l->capacity=8; return l; }
 static inline void List_Pattern_append(List_Pattern* l, Pattern val) { if(l->len==l->capacity){ l->capacity*=2; l->data=(Pattern*)realloc(l->data,sizeof(Pattern)*l->capacity); } l->data[l->len++]=val; }
+static inline void List_Pattern_reserve(List_Pattern* l, long long cap) { if(l && (size_t)cap > l->capacity){ l->data=(Pattern*)realloc(l->data,sizeof(Pattern)*(size_t)cap); l->capacity=(size_t)cap; } }
 static inline Pattern List_Pattern_get(List_Pattern* l, long long i) { _tr_bounds_check(i, l->len); return l->data[i]; }
 static inline Pattern List_Pattern_pop(List_Pattern* l) { if(!l||l->len==0) return (Pattern){0}; l->len--; return l->data[l->len]; }
 static inline void List_Pattern_free(List_Pattern* l) { if(l){ free(l->data); free(l); } }
 typedef struct List_Ownership { Ownership* data; size_t len; size_t capacity; } List_Ownership;
 static inline List_Ownership* List_Ownership_new(void) { List_Ownership* l=(List_Ownership*)malloc(sizeof(List_Ownership)); l->data=(Ownership*)malloc(sizeof(Ownership)*8); l->len=0; l->capacity=8; return l; }
 static inline void List_Ownership_append(List_Ownership* l, Ownership val) { if(l->len==l->capacity){ l->capacity*=2; l->data=(Ownership*)realloc(l->data,sizeof(Ownership)*l->capacity); } l->data[l->len++]=val; }
+static inline void List_Ownership_reserve(List_Ownership* l, long long cap) { if(l && (size_t)cap > l->capacity){ l->data=(Ownership*)realloc(l->data,sizeof(Ownership)*(size_t)cap); l->capacity=(size_t)cap; } }
 static inline Ownership List_Ownership_get(List_Ownership* l, long long i) { _tr_bounds_check(i, l->len); return l->data[i]; }
 static inline Ownership List_Ownership_pop(List_Ownership* l) { if(!l||l->len==0) return (Ownership){0}; l->len--; return l->data[l->len]; }
 static inline void List_Ownership_free(List_Ownership* l) { if(l){ free(l->data); free(l); } }
 typedef struct List_Expr { Expr* data; size_t len; size_t capacity; } List_Expr;
 static inline List_Expr* List_Expr_new(void) { List_Expr* l=(List_Expr*)malloc(sizeof(List_Expr)); l->data=(Expr*)malloc(sizeof(Expr)*8); l->len=0; l->capacity=8; return l; }
 static inline void List_Expr_append(List_Expr* l, Expr val) { if(l->len==l->capacity){ l->capacity*=2; l->data=(Expr*)realloc(l->data,sizeof(Expr)*l->capacity); } l->data[l->len++]=val; }
+static inline void List_Expr_reserve(List_Expr* l, long long cap) { if(l && (size_t)cap > l->capacity){ l->data=(Expr*)realloc(l->data,sizeof(Expr)*(size_t)cap); l->capacity=(size_t)cap; } }
 static inline Expr List_Expr_get(List_Expr* l, long long i) { _tr_bounds_check(i, l->len); return l->data[i]; }
 static inline Expr List_Expr_pop(List_Expr* l) { if(!l||l->len==0) return (Expr){0}; l->len--; return l->data[l->len]; }
 static inline void List_Expr_free(List_Expr* l) { if(l){ free(l->data); free(l); } }
 typedef struct List_Stmt { Stmt* data; size_t len; size_t capacity; } List_Stmt;
 static inline List_Stmt* List_Stmt_new(void) { List_Stmt* l=(List_Stmt*)malloc(sizeof(List_Stmt)); l->data=(Stmt*)malloc(sizeof(Stmt)*8); l->len=0; l->capacity=8; return l; }
 static inline void List_Stmt_append(List_Stmt* l, Stmt val) { if(l->len==l->capacity){ l->capacity*=2; l->data=(Stmt*)realloc(l->data,sizeof(Stmt)*l->capacity); } l->data[l->len++]=val; }
+static inline void List_Stmt_reserve(List_Stmt* l, long long cap) { if(l && (size_t)cap > l->capacity){ l->data=(Stmt*)realloc(l->data,sizeof(Stmt)*(size_t)cap); l->capacity=(size_t)cap; } }
 static inline Stmt List_Stmt_get(List_Stmt* l, long long i) { _tr_bounds_check(i, l->len); return l->data[i]; }
 static inline Stmt List_Stmt_pop(List_Stmt* l) { if(!l||l->len==0) return (Stmt){0}; l->len--; return l->data[l->len]; }
 static inline void List_Stmt_free(List_Stmt* l) { if(l){ free(l->data); free(l); } }
 typedef struct List_Decl { Decl* data; size_t len; size_t capacity; } List_Decl;
 static inline List_Decl* List_Decl_new(void) { List_Decl* l=(List_Decl*)malloc(sizeof(List_Decl)); l->data=(Decl*)malloc(sizeof(Decl)*8); l->len=0; l->capacity=8; return l; }
 static inline void List_Decl_append(List_Decl* l, Decl val) { if(l->len==l->capacity){ l->capacity*=2; l->data=(Decl*)realloc(l->data,sizeof(Decl)*l->capacity); } l->data[l->len++]=val; }
+static inline void List_Decl_reserve(List_Decl* l, long long cap) { if(l && (size_t)cap > l->capacity){ l->data=(Decl*)realloc(l->data,sizeof(Decl)*(size_t)cap); l->capacity=(size_t)cap; } }
 static inline Decl List_Decl_get(List_Decl* l, long long i) { _tr_bounds_check(i, l->len); return l->data[i]; }
 static inline Decl List_Decl_pop(List_Decl* l) { if(!l||l->len==0) return (Decl){0}; l->len--; return l->data[l->len]; }
 static inline void List_Decl_free(List_Decl* l) { if(l){ free(l->data); free(l); } }
 typedef struct List_HirExpr { HirExpr* data; size_t len; size_t capacity; } List_HirExpr;
 static inline List_HirExpr* List_HirExpr_new(void) { List_HirExpr* l=(List_HirExpr*)malloc(sizeof(List_HirExpr)); l->data=(HirExpr*)malloc(sizeof(HirExpr)*8); l->len=0; l->capacity=8; return l; }
 static inline void List_HirExpr_append(List_HirExpr* l, HirExpr val) { if(l->len==l->capacity){ l->capacity*=2; l->data=(HirExpr*)realloc(l->data,sizeof(HirExpr)*l->capacity); } l->data[l->len++]=val; }
+static inline void List_HirExpr_reserve(List_HirExpr* l, long long cap) { if(l && (size_t)cap > l->capacity){ l->data=(HirExpr*)realloc(l->data,sizeof(HirExpr)*(size_t)cap); l->capacity=(size_t)cap; } }
 static inline HirExpr List_HirExpr_get(List_HirExpr* l, long long i) { _tr_bounds_check(i, l->len); return l->data[i]; }
 static inline HirExpr List_HirExpr_pop(List_HirExpr* l) { if(!l||l->len==0) return (HirExpr){0}; l->len--; return l->data[l->len]; }
 static inline void List_HirExpr_free(List_HirExpr* l) { if(l){ free(l->data); free(l); } }
 typedef struct List_HirStmt { HirStmt* data; size_t len; size_t capacity; } List_HirStmt;
 static inline List_HirStmt* List_HirStmt_new(void) { List_HirStmt* l=(List_HirStmt*)malloc(sizeof(List_HirStmt)); l->data=(HirStmt*)malloc(sizeof(HirStmt)*8); l->len=0; l->capacity=8; return l; }
 static inline void List_HirStmt_append(List_HirStmt* l, HirStmt val) { if(l->len==l->capacity){ l->capacity*=2; l->data=(HirStmt*)realloc(l->data,sizeof(HirStmt)*l->capacity); } l->data[l->len++]=val; }
+static inline void List_HirStmt_reserve(List_HirStmt* l, long long cap) { if(l && (size_t)cap > l->capacity){ l->data=(HirStmt*)realloc(l->data,sizeof(HirStmt)*(size_t)cap); l->capacity=(size_t)cap; } }
 static inline HirStmt List_HirStmt_get(List_HirStmt* l, long long i) { _tr_bounds_check(i, l->len); return l->data[i]; }
 static inline HirStmt List_HirStmt_pop(List_HirStmt* l) { if(!l||l->len==0) return (HirStmt){0}; l->len--; return l->data[l->len]; }
 static inline void List_HirStmt_free(List_HirStmt* l) { if(l){ free(l->data); free(l); } }
 typedef struct List_MirStmt { MirStmt* data; size_t len; size_t capacity; } List_MirStmt;
 static inline List_MirStmt* List_MirStmt_new(void) { List_MirStmt* l=(List_MirStmt*)malloc(sizeof(List_MirStmt)); l->data=(MirStmt*)malloc(sizeof(MirStmt)*8); l->len=0; l->capacity=8; return l; }
 static inline void List_MirStmt_append(List_MirStmt* l, MirStmt val) { if(l->len==l->capacity){ l->capacity*=2; l->data=(MirStmt*)realloc(l->data,sizeof(MirStmt)*l->capacity); } l->data[l->len++]=val; }
+static inline void List_MirStmt_reserve(List_MirStmt* l, long long cap) { if(l && (size_t)cap > l->capacity){ l->data=(MirStmt*)realloc(l->data,sizeof(MirStmt)*(size_t)cap); l->capacity=(size_t)cap; } }
 static inline MirStmt List_MirStmt_get(List_MirStmt* l, long long i) { _tr_bounds_check(i, l->len); return l->data[i]; }
 static inline MirStmt List_MirStmt_pop(List_MirStmt* l) { if(!l||l->len==0) return (MirStmt){0}; l->len--; return l->data[l->len]; }
 static inline void List_MirStmt_free(List_MirStmt* l) { if(l){ free(l->data); free(l); } }
 typedef struct List_MirTerm { MirTerm* data; size_t len; size_t capacity; } List_MirTerm;
 static inline List_MirTerm* List_MirTerm_new(void) { List_MirTerm* l=(List_MirTerm*)malloc(sizeof(List_MirTerm)); l->data=(MirTerm*)malloc(sizeof(MirTerm)*8); l->len=0; l->capacity=8; return l; }
 static inline void List_MirTerm_append(List_MirTerm* l, MirTerm val) { if(l->len==l->capacity){ l->capacity*=2; l->data=(MirTerm*)realloc(l->data,sizeof(MirTerm)*l->capacity); } l->data[l->len++]=val; }
+static inline void List_MirTerm_reserve(List_MirTerm* l, long long cap) { if(l && (size_t)cap > l->capacity){ l->data=(MirTerm*)realloc(l->data,sizeof(MirTerm)*(size_t)cap); l->capacity=(size_t)cap; } }
 static inline MirTerm List_MirTerm_get(List_MirTerm* l, long long i) { _tr_bounds_check(i, l->len); return l->data[i]; }
 static inline MirTerm List_MirTerm_pop(List_MirTerm* l) { if(!l||l->len==0) return (MirTerm){0}; l->len--; return l->data[l->len]; }
 static inline void List_MirTerm_free(List_MirTerm* l) { if(l){ free(l->data); free(l); } }
 typedef struct List_SymbolKind { SymbolKind* data; size_t len; size_t capacity; } List_SymbolKind;
 static inline List_SymbolKind* List_SymbolKind_new(void) { List_SymbolKind* l=(List_SymbolKind*)malloc(sizeof(List_SymbolKind)); l->data=(SymbolKind*)malloc(sizeof(SymbolKind)*8); l->len=0; l->capacity=8; return l; }
 static inline void List_SymbolKind_append(List_SymbolKind* l, SymbolKind val) { if(l->len==l->capacity){ l->capacity*=2; l->data=(SymbolKind*)realloc(l->data,sizeof(SymbolKind)*l->capacity); } l->data[l->len++]=val; }
+static inline void List_SymbolKind_reserve(List_SymbolKind* l, long long cap) { if(l && (size_t)cap > l->capacity){ l->data=(SymbolKind*)realloc(l->data,sizeof(SymbolKind)*(size_t)cap); l->capacity=(size_t)cap; } }
 static inline SymbolKind List_SymbolKind_get(List_SymbolKind* l, long long i) { _tr_bounds_check(i, l->len); return l->data[i]; }
 static inline SymbolKind List_SymbolKind_pop(List_SymbolKind* l) { if(!l||l->len==0) return (SymbolKind){0}; l->len--; return l->data[l->len]; }
 static inline void List_SymbolKind_free(List_SymbolKind* l) { if(l){ free(l->data); free(l); } }
 typedef struct List_LType { LType* data; size_t len; size_t capacity; } List_LType;
 static inline List_LType* List_LType_new(void) { List_LType* l=(List_LType*)malloc(sizeof(List_LType)); l->data=(LType*)malloc(sizeof(LType)*8); l->len=0; l->capacity=8; return l; }
 static inline void List_LType_append(List_LType* l, LType val) { if(l->len==l->capacity){ l->capacity*=2; l->data=(LType*)realloc(l->data,sizeof(LType)*l->capacity); } l->data[l->len++]=val; }
+static inline void List_LType_reserve(List_LType* l, long long cap) { if(l && (size_t)cap > l->capacity){ l->data=(LType*)realloc(l->data,sizeof(LType)*(size_t)cap); l->capacity=(size_t)cap; } }
 static inline LType List_LType_get(List_LType* l, long long i) { _tr_bounds_check(i, l->len); return l->data[i]; }
 static inline LType List_LType_pop(List_LType* l) { if(!l||l->len==0) return (LType){0}; l->len--; return l->data[l->len]; }
 static inline void List_LType_free(List_LType* l) { if(l){ free(l->data); free(l); } }
 typedef struct List_LInst { LInst* data; size_t len; size_t capacity; } List_LInst;
 static inline List_LInst* List_LInst_new(void) { List_LInst* l=(List_LInst*)malloc(sizeof(List_LInst)); l->data=(LInst*)malloc(sizeof(LInst)*8); l->len=0; l->capacity=8; return l; }
 static inline void List_LInst_append(List_LInst* l, LInst val) { if(l->len==l->capacity){ l->capacity*=2; l->data=(LInst*)realloc(l->data,sizeof(LInst)*l->capacity); } l->data[l->len++]=val; }
+static inline void List_LInst_reserve(List_LInst* l, long long cap) { if(l && (size_t)cap > l->capacity){ l->data=(LInst*)realloc(l->data,sizeof(LInst)*(size_t)cap); l->capacity=(size_t)cap; } }
 static inline LInst List_LInst_get(List_LInst* l, long long i) { _tr_bounds_check(i, l->len); return l->data[i]; }
 static inline LInst List_LInst_pop(List_LInst* l) { if(!l||l->len==0) return (LInst){0}; l->len--; return l->data[l->len]; }
 static inline void List_LInst_free(List_LInst* l) { if(l){ free(l->data); free(l); } }
 typedef struct List_LTerm { LTerm* data; size_t len; size_t capacity; } List_LTerm;
 static inline List_LTerm* List_LTerm_new(void) { List_LTerm* l=(List_LTerm*)malloc(sizeof(List_LTerm)); l->data=(LTerm*)malloc(sizeof(LTerm)*8); l->len=0; l->capacity=8; return l; }
 static inline void List_LTerm_append(List_LTerm* l, LTerm val) { if(l->len==l->capacity){ l->capacity*=2; l->data=(LTerm*)realloc(l->data,sizeof(LTerm)*l->capacity); } l->data[l->len++]=val; }
+static inline void List_LTerm_reserve(List_LTerm* l, long long cap) { if(l && (size_t)cap > l->capacity){ l->data=(LTerm*)realloc(l->data,sizeof(LTerm)*(size_t)cap); l->capacity=(size_t)cap; } }
 static inline LTerm List_LTerm_get(List_LTerm* l, long long i) { _tr_bounds_check(i, l->len); return l->data[i]; }
 static inline LTerm List_LTerm_pop(List_LTerm* l) { if(!l||l->len==0) return (LTerm){0}; l->len--; return l->data[l->len]; }
 static inline void List_LTerm_free(List_LTerm* l) { if(l){ free(l->data); free(l); } }
 typedef struct List_MacroVal { MacroVal* data; size_t len; size_t capacity; } List_MacroVal;
 static inline List_MacroVal* List_MacroVal_new(void) { List_MacroVal* l=(List_MacroVal*)malloc(sizeof(List_MacroVal)); l->data=(MacroVal*)malloc(sizeof(MacroVal)*8); l->len=0; l->capacity=8; return l; }
 static inline void List_MacroVal_append(List_MacroVal* l, MacroVal val) { if(l->len==l->capacity){ l->capacity*=2; l->data=(MacroVal*)realloc(l->data,sizeof(MacroVal)*l->capacity); } l->data[l->len++]=val; }
+static inline void List_MacroVal_reserve(List_MacroVal* l, long long cap) { if(l && (size_t)cap > l->capacity){ l->data=(MacroVal*)realloc(l->data,sizeof(MacroVal)*(size_t)cap); l->capacity=(size_t)cap; } }
 static inline MacroVal List_MacroVal_get(List_MacroVal* l, long long i) { _tr_bounds_check(i, l->len); return l->data[i]; }
 static inline MacroVal List_MacroVal_pop(List_MacroVal* l) { if(!l||l->len==0) return (MacroVal){0}; l->len--; return l->data[l->len]; }
 static inline void List_MacroVal_free(List_MacroVal* l) { if(l){ free(l->data); free(l); } }

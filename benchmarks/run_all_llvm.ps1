@@ -17,6 +17,8 @@ if (-not $haveClang -and -not $haveLlc) {
     exit 1
 }
 
+$RUN_TIMEOUT_S = 300   # slow benchmarks (~20-25s) stretch under load; 60s spuriously FAILed them
+
 function Run-Bench($exe) {
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName               = $exe
@@ -24,26 +26,31 @@ function Run-Bench($exe) {
     $psi.UseShellExecute        = $false
     $proc = [System.Diagnostics.Process]::Start($psi)
 
-    $peakMem = 0L
+    # Drain stdout async so the child never blocks on a full pipe while we poll memory.
+    $stdoutTask = $proc.StandardOutput.ReadToEndAsync()
+
+    $peakMem  = 0L
+    $timedOut = $false
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
     while (-not $proc.HasExited) {
         try {
             $proc.Refresh()
-            if ($proc.PeakWorkingSet64 -gt $peakMem) { $peakMem = $proc.PeakWorkingSet64 }
+            # Peak PRIVATE committed bytes -- stable; working set is OS-inflated under memory pressure.
+            if ($proc.PeakPagedMemorySize64 -gt $peakMem) { $peakMem = $proc.PeakPagedMemorySize64 }
         } catch {}
-        if ($sw.Elapsed.TotalSeconds -gt 60) { try { $proc.Kill() } catch {}; break }
-        Start-Sleep -Milliseconds 2
+        if ($sw.Elapsed.TotalSeconds -gt $RUN_TIMEOUT_S) { $timedOut = $true; try { $proc.Kill() } catch {}; break }
+        Start-Sleep -Milliseconds 5
     }
-    $out = $proc.StandardOutput.ReadToEnd()
     try {
         $proc.Refresh()
-        if ($proc.PeakWorkingSet64 -gt $peakMem) { $peakMem = $proc.PeakWorkingSet64 }
+        if ($proc.PeakPagedMemorySize64 -gt $peakMem) { $peakMem = $proc.PeakPagedMemorySize64 }
     } catch {}
+    $out = $stdoutTask.Result
 
     $time_s = $null
     $line = $out -split "`n" | Where-Object { $_ -match "TIME_MS:(\d+)" } | Select-Object -First 1
     if ($line -match "TIME_MS:(\d+)") { $time_s = [double]$Matches[1] / 1000.0 }
-    return @{ Time = $time_s; PeakMemKB = [math]::Round($peakMem / 1024.0, 1) }
+    return @{ Time = $time_s; PeakMemKB = [math]::Round($peakMem / 1024.0, 1); TimedOut = $timedOut }
 }
 
 function Compile-C($src, $out) {
@@ -56,9 +63,11 @@ function Compile-Rust($src, $out) {
     if ($LASTEXITCODE -ne 0) { Write-Warning "Rust compile failed: $r"; return $false }
     return $true
 }
-function Compile-TauraroC($src) {
+function Compile-TauraroC($src, $out) {
     if (-not (Test-Path $TAU_EXE)) { Write-Warning "Compiler not found: $TAU_EXE"; return $false }
-    $r = & $TAU_EXE -O3 $src 2>&1
+    # Pin the exe with -o (current tauraroc emits <cwd>\bench.exe, not build\bench.exe).
+    Remove-Item -Force $out -ErrorAction SilentlyContinue
+    $r = & $TAU_EXE -O3 -o $out $src 2>&1
     if ($LASTEXITCODE -ne 0) { Write-Warning "Tauraro-C compile failed: $r"; return $false }
     return $true
 }
@@ -116,7 +125,7 @@ foreach ($b in $benchmarks) {
     $c_ok  = Compile-C       "$dir\bench.c"  "$dir\bench_c.exe"
     $rs_ok = Compile-Rust    "$dir\bench.rs" "$dir\bench_rs.exe"
     Clean-Build
-    $tc_ok = Compile-TauraroC "$dir\bench.tr"
+    $tc_ok = Compile-TauraroC "$dir\bench.tr" "$BENCH\build\bench.exe"
     # Measure the C-backend exe BEFORE the LLVM compile reuses build\.
     $tc_exe = "$BENCH\build\bench.exe"
     $tc_res = if ($tc_ok -and (Test-Path $tc_exe)) { Run-Bench $tc_exe } else { @{ Time = $null; PeakMemKB = $null } }

@@ -4330,6 +4330,23 @@ typedef struct { uint32_t* data; size_t len; size_t capacity; } List_u32;
 static inline List_u32* List_u32_new(void) { List_u32* l=(List_u32*)malloc(sizeof(List_u32)); l->data=(uint32_t*)malloc(sizeof(uint32_t)*8); l->len=0; l->capacity=8; return l; }
 static inline void List_u32_append(List_u32* l, uint32_t val) { if(l->len==l->capacity){ l->capacity*=2; l->data=(uint32_t*)realloc(l->data,sizeof(uint32_t)*l->capacity); } l->data[l->len++]=val; }
 static inline void List_u32_free(List_u32* l) { if(l){ _tr_free(l->data); _tr_free(l); } }
+/* Pre-size a List to an EXACT capacity in one allocation (grows only; never shrinks).
+ * Mirrors C's calloc for known-size arrays (e.g. a sieve): reserving up front means the
+ * fill loop never reallocs, so peak memory == the final buffer — no doubling slack and
+ * no realloc transient (old+new buffers coexisting) that otherwise ~2x's peak RSS. */
+#define _TR_LIST_RESERVE(LT) static inline void LT##_reserve(LT* l, long long cap){ if(l && (size_t)cap > l->capacity){ l->data = realloc(l->data, sizeof(*l->data) * (size_t)cap); l->capacity = (size_t)cap; } }
+_TR_LIST_RESERVE(List_bool)
+_TR_LIST_RESERVE(List_char)
+_TR_LIST_RESERVE(List_f64)
+_TR_LIST_RESERVE(List_i32)
+_TR_LIST_RESERVE(List_i64)
+_TR_LIST_RESERVE(List_i8)
+_TR_LIST_RESERVE(List_ptr)
+_TR_LIST_RESERVE(List_str)
+_TR_LIST_RESERVE(List_TrStr)
+_TR_LIST_RESERVE(List_TrTuple)
+_TR_LIST_RESERVE(List_u32)
+_TR_LIST_RESERVE(List_u8)
 /* ── Extended Vec/List operations: remove, swap, clear, is_empty, extend ──── */
 static inline void List_i64_remove(List_i64* l, long long i) { if(!l||(size_t)i>=l->len) return; for(size_t j=(size_t)i;j<l->len-1;j++) l->data[j]=l->data[j+1]; l->len--; }
 static inline void List_i64_swap(List_i64* l, long long a, long long b) { if(!l||(size_t)a>=l->len||(size_t)b>=l->len) return; long long t=l->data[a]; l->data[a]=l->data[b]; l->data[b]=t; }
