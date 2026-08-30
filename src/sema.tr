@@ -1010,7 +1010,10 @@ extend Sema:
         # are stored inline and need no per-element drop.
         if self.classes.contains(n):
             if not self.classes.get(n).is_class: return false   # @value_type: inline, no drop
-            if n == "Vec" or n == "Map" or n == "List" or n == "Dict" or n == "Set" or n == "Box" or n == "Mutex" or n == "RwLock" or n == "Atomic" or n == "Shared" or n == "Option" or n == "Result" or n == "Chan" or n == "StringBuilder" or n == "StringObj": return false
+            # "Box" excluded intentionally omitted: a builtin Box[T] never lands in
+            # self.classes (guarded above), so tn=="Box" here is a user `class Box` whose
+            # elements the collection co-owns and must drop (fixes Vec[Box] leak, F-1).
+            if n == "Vec" or n == "Map" or n == "List" or n == "Dict" or n == "Set" or n == "Mutex" or n == "RwLock" or n == "Atomic" or n == "Shared" or n == "Option" or n == "Result" or n == "Chan" or n == "StringBuilder" or n == "StringObj": return false
             return true
         return false
 
@@ -1279,8 +1282,20 @@ extend Sema:
                 mut et = targs.get(0).read().name
                 if not self._coll_elem_droppable(et): return false
                 return true
+        # A Mutex[T] local owns its box (rc=1): drop it at scope exit. `_tr_mutexbox_drop`
+        # unlocks a still-held guard, then — when the box owns a FRESH, unaliased payload
+        # (_tr_mutexbox_new_owned) — releases that payload (closes the F-3/F-4 leak). A
+        # BORROWED payload (Mutex[App].init(self)) is never owned, so never double-freed.
+        # Move/borrow/init guards as for any owned local.
+        if tn == "Mutex":
+            if sym.is_moved or sym.is_maybe_moved or sym.is_freed: return false
+            if sym.active_borrows > 0: return false
+            if not sym.is_init or sym.is_maybe_init: return false
+            return true
         if not self.classes.contains(tn): return false
-        if tn == "Vec" or tn == "Map" or tn == "List" or tn == "Dict" or tn == "Box" or tn == "Mutex" or tn == "RwLock" or tn == "Atomic" or tn == "Shared" or tn == "Option" or tn == "Result" or tn == "Chan": return false
+        # "Box" omitted: builtin Box[T] is not in self.classes (guarded above), so a
+        # tn=="Box" here is a user `class Box` — a droppable owned local, not the builtin.
+        if tn == "Vec" or tn == "Map" or tn == "List" or tn == "Dict" or tn == "Mutex" or tn == "RwLock" or tn == "Atomic" or tn == "Shared" or tn == "Option" or tn == "Result" or tn == "Chan": return false
         # StringBuilder/StringObj methods like as_str()/to_str() can return a
         # pointer that aliases the instance's own internal buffer; auto-freeing
         # the instance would dangle that alias. Require an explicit .free().

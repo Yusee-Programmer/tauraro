@@ -1,0 +1,31 @@
+# EXPECT: pass
+# Borrowed-payload Mutex (watax's `Mutex[App].init(self)` pattern): the mutex
+# holds a BORROW of `app` — `app` is still used after the mutex is built, so it
+# is aliased, not moved. The mutex must therefore NOT own or release the payload;
+# `app` is dropped exactly once by its own local at scope exit.
+#
+# This is the regression net for the F-3/F-4 Mutex payload-release fix: if a
+# payload-release change mis-classifies this borrowed payload as owned, `app`
+# gets released by BOTH the mutex drop and `app`'s own drop -> double-free, which
+# ASan catches here on Linux CI. It passes today (the mutex leaks the payload in
+# the *fresh* case, but never double-frees a borrow).
+from std.async.mutex import Mutex
+
+class App:
+    pub n: int
+extend App:
+    pub def init(n: int) -> App:
+        mut a = App()
+        a.n = n
+        return a
+    pub def bump(self) -> int:
+        return self.n + 1
+
+def main():
+    mut app = App.init(41)              # owned local -> dropped once at scope exit
+    mut guard = Mutex[App].init(app)    # payload is a BORROW of app (app reused below)
+    mut g = guard.get()
+    mut sum = g.bump()
+    guard.unlock()
+    sum = sum + app.bump()              # app still valid: the mutex did not own it
+    print(sum)

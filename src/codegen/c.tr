@@ -2719,7 +2719,12 @@ pub class CGenerator:
         # emit_drop_fwd_decls / gen_class_struct). Treating it as an auto-ARC heap class would
         # emit `_tr_obj_release(x, _trdrop_<T>)` referencing an undefined function.
         if self.has_method(tn, "free"): return false
-        if tn == "Vec" or tn == "Map" or tn == "List" or tn == "Dict" or tn == "Set" or tn == "Box" or tn == "Mutex" or tn == "RwLock" or tn == "Atomic" or tn == "Shared" or tn == "Option" or tn == "Result" or tn == "Chan" or tn == "StringBuilder" or tn == "StringObj": return false
+        # NOTE: "Box" is intentionally NOT excluded here. The builtin Box[T] wrapper is
+        # never registered in self.classes (line 2708 already returns false for it), so
+        # reaching this point with tn=="Box" means the program DEFINED `class Box` — a
+        # genuine user heap class with an emitted _trdrop_Box. Excluding it by name was a
+        # collision bug that left user classes named Box un-dropped (leaked F-1/F-3/F-4).
+        if tn == "Vec" or tn == "Map" or tn == "List" or tn == "Dict" or tn == "Set" or tn == "Mutex" or tn == "RwLock" or tn == "Atomic" or tn == "Shared" or tn == "Option" or tn == "Result" or tn == "Chan" or tn == "StringBuilder" or tn == "StringObj": return false
         return true
 
     # Class-instance analogue of str_retain_wrap: retain when a heap-class value
@@ -3502,9 +3507,16 @@ pub class CGenerator:
                         return "_tr_chan_new(" + ch_cap + ")"
                 if oi_ctor_name == "Mutex":
                     if variant == "init":
-                        mut mx_val = "0LL"
-                        if args.len > 0: mx_val = "(long long)(" + self.gen_expr(args.get(0)) + ")"
-                        return "_tr_mutexbox_new(" + mx_val + ")"
+                        if args.len > 0:
+                            mut _mx_a0 = args.get(0)
+                            mut _mx_pt = hir_expr_type(_mx_a0).name
+                            mut mx_val = "(long long)(" + self.gen_expr(_mx_a0) + ")"
+                            # A FRESH heap-class payload is OWNED by the mutex -> release it
+                            # on drop (F-3). A borrow (a var / self / element .get()) is not.
+                            if self._is_fresh_obj_expr(_mx_a0) and self.is_heap_class_tn(_mx_pt):
+                                return "_tr_mutexbox_new_owned(" + mx_val + ", (void(*)(void*))" + self.obj_drop_fn(_mx_pt) + ")"
+                            return "_tr_mutexbox_new(" + mx_val + ")"
+                        return "_tr_mutexbox_new(0LL)"
                 if oi_ctor_name == "RwLock":
                     if variant == "init":
                         mut rw_val = "0LL"
@@ -3964,7 +3976,13 @@ pub class CGenerator:
                     return false
                 match recv.read():
                     case HirExpr.EIdent(rn, _, _):
-                        if self.classes.contains(rn): rt = rn
+                        if self.classes.contains(rn):
+                            # `<Class>.init(...)` is a constructor — always a FRESH,
+                            # owned instance (rc=1), regardless of return-ownership
+                            # registration. (The owned-fn lookup below only covers
+                            # user factory methods.)
+                            if m == "init": return true
+                            rt = rn
                     case _: pass
                 return self._fn_owned_lookup(rt + "." + m)
             case _: return false
@@ -4306,9 +4324,14 @@ pub class CGenerator:
         # Mutex[T] method dispatch - also handles Mutex.init() static constructor
         if t_n == "Mutex" or obj_s == "Mutex":
             if method == "init":
-                mut mx_init_v = "0LL"
-                if args.len > 0: mx_init_v = "(long long)(" + self.gen_expr(args.get(0)) + ")"
-                return "_tr_mutexbox_new(" + mx_init_v + ")"
+                if args.len > 0:
+                    mut _mi_a0 = args.get(0)
+                    mut _mi_pt = hir_expr_type(_mi_a0).name
+                    mut mx_init_v = "(long long)(" + self.gen_expr(_mi_a0) + ")"
+                    if self._is_fresh_obj_expr(_mi_a0) and self.is_heap_class_tn(_mi_pt):
+                        return "_tr_mutexbox_new_owned(" + mx_init_v + ", (void(*)(void*))" + self.obj_drop_fn(_mi_pt) + ")"
+                    return "_tr_mutexbox_new(" + mx_init_v + ")"
+                return "_tr_mutexbox_new(0LL)"
             if method == "lock" or method == "get":
                 mut mx_get = "_tr_mutexbox_lock_get(" + obj_s + ")"
                 mut mx_obj_ty = hir_expr_type(obj)
@@ -7140,6 +7163,11 @@ pub class CGenerator:
                     # Weak[T] handle: drop the weak ref (frees the block if it was the
                     # last one and the payload is already gone).
                     self.w(pad + "_tr_weak_drop(" + _safe_c_varname(adn) + ");\n")
+                elif adc == "Mutex":
+                    # Mutex[T] local: rc-guarded drop — frees the box (unlocking a
+                    # still-held guard) and releases an owned fresh payload. Only fires
+                    # for non-moved/non-shared locals (is_droppable_sym gates it).
+                    self.w(pad + "_tr_mutexbox_drop(" + _safe_c_varname(adn) + ");\n")
                 elif self.value_types.contains(adc):
                     # Value type (@value_type): lives on the stack, holds no owned
                     # heap, no refcount — nothing to drop.
