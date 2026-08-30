@@ -36,7 +36,7 @@ from the current directory (up to 16 levels) looking for this file — see
 | `[package]` | `version` | Yes | Version string (e.g. `"0.1.0"`). Also required for validity. |
 | `[package]` | `desc` | No | One-line description. Defaults to `""`. |
 | `[package]` | `license` | No | Defaults to `"MIT"` if omitted. |
-| `[package]` | `bin` | No | Entry-point `.tr` file, relative to the project root. Defaults to `"src/main.tr"` if empty. |
+| `[package]` | `bin` | No | Entry-point `.tr` file, relative to the project root. Defaults to `"src/main.tr"` if empty. **For a pure library, point this at the library module — `src/<pkgname>.tr` (e.g. `src/watax.tr`) — not a `main.tr`.** `taupkg build` then compile-checks that module (tauraroc synthesizes the program entry for a module that defines no `main`). |
 | `[package]` | `authors` | No | Currently parsed as a single string value pushed into a `Vec[str]` (one entry, even if the TOML value is an array-looking string). |
 | `[deps]` | `<name> = "<source>"` | No | Runtime dependencies. Key = package name, value = source URI (see below). |
 | `[build-deps]` | `<name> = "<source>"` | No | Build-time-only dependencies. Same source URI forms as `[deps]`. |
@@ -51,21 +51,23 @@ else is optional and defaults sensibly.
 [package]
 name    = "watax"
 version = "0.1.0"
-desc    = ""
+desc    = "A fast, ergonomic web framework for Tauraro."
 license = "MIT"
-bin     = "src/main.tr"
+# A pure library's entry point IS its library module (watax.tr) — not a main.tr.
+bin     = "src/watax.tr"
 
 [deps]
-templa = "local:C:\\Users\\Yusee Habibu\\tauProject\\templa"
+templa = "github:Yusee-Programmer/templa"
 ```
 
 - `name`/`version` — required identity of the package.
-- `bin = "src/main.tr"` — watax ships a `main.tr` (used for its own
-  examples/tests), but **library consumers never run this file directly** —
-  they import `from watax import App, ...` (see "Directory Layout" below).
-- `[deps] templa = "local:..."` — watax depends on a sibling project
-  (`templa`, a templating engine) via an absolute local path during
-  development. See "Local Path Dependencies" below.
+- `bin = "src/watax.tr"` — watax is a **pure library**: its entry point is the
+  library module `watax.tr`, not a `main.tr`. Consumers write
+  `from watax import App, ...` (which resolves to `src/watax.tr` — see "Directory
+  Layout" below), and `taupkg build` compile-checks that module. A package only
+  needs a `main.tr` when it also ships a runnable binary/CLI.
+- `[deps] templa = "github:..."` — watax depends on the `templa` templating
+  engine, fetched from GitHub. See "Source URI Forms" below.
 
 ### Source URI Forms (for `[deps]` / `[build-deps]` / `[sources]`)
 

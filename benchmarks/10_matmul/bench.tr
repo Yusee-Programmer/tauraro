@@ -12,6 +12,9 @@ def main():
     mut a = List[f64].init()
     mut b = List[f64].init()
     mut c = List[f64].init()
+    a.reserve(nn)                 # pre-size exactly (like C) — no growth reallocs / transient
+    b.reserve(nn)
+    c.reserve(nn)
     mut fill = 0
     while fill < nn:
         a.push(fill as f64 * 0.000001)
