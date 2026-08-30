@@ -2498,7 +2498,13 @@ _TR_XLINK int64_t _tr_stdout_supports_ansi(void) {
 #if defined(TAURARO_BARE)
     return 0;   /* no console on bare-metal */
 #elif defined(_WIN32)
-    if (!_isatty(_fileno(stdout))) return 0;
+    /* Detect a real console via GetConsoleMode — robust where _isatty under-reports
+     * (PowerShell wraps stdout so _isatty(stdout) is often false for a live console).
+     * GetConsoleMode succeeds only for an actual console handle, and fails when the
+     * output is redirected to a file/pipe (so logs and `| grep` stay plain). */
+    HANDLE _h = GetStdHandle(STD_OUTPUT_HANDLE);
+    DWORD _m = 0;
+    if (_h == INVALID_HANDLE_VALUE || !GetConsoleMode(_h, &_m)) return 0;
     _tr_enable_vt100();
     return 1;
 #else
@@ -4079,7 +4085,7 @@ static inline TrTuple List_TrTuple_pop(List_TrTuple* l) { if(!l||l->len==0) retu
 static inline void List_TrTuple_set(List_TrTuple* l, long long i, TrTuple v) { if(l&&(size_t)i<l->len) l->data[i]=v; }
 static inline void List_TrTuple_free(List_TrTuple* l) { if(l){ _tr_free(l->data); _tr_free(l); } }
 
-/* ── List types (bootstrap phase) ─────────────────────────────────── */
+/* ── List types (bootstrap) ───────────────────────────────────────── */
 
 typedef struct { long long* __restrict__ data; size_t len; size_t capacity; } List_i64;
 static inline List_i64* List_i64_new(void) { List_i64* l=(List_i64*)malloc(sizeof(List_i64)); l->data=(long long*)malloc(sizeof(long long)*8); l->len=0; l->capacity=8; return l; }
@@ -4324,6 +4330,23 @@ typedef struct { uint32_t* data; size_t len; size_t capacity; } List_u32;
 static inline List_u32* List_u32_new(void) { List_u32* l=(List_u32*)malloc(sizeof(List_u32)); l->data=(uint32_t*)malloc(sizeof(uint32_t)*8); l->len=0; l->capacity=8; return l; }
 static inline void List_u32_append(List_u32* l, uint32_t val) { if(l->len==l->capacity){ l->capacity*=2; l->data=(uint32_t*)realloc(l->data,sizeof(uint32_t)*l->capacity); } l->data[l->len++]=val; }
 static inline void List_u32_free(List_u32* l) { if(l){ _tr_free(l->data); _tr_free(l); } }
+/* Pre-size a List to an EXACT capacity in one allocation (grows only; never shrinks).
+ * Mirrors C's calloc for known-size arrays (e.g. a sieve): reserving up front means the
+ * fill loop never reallocs, so peak memory == the final buffer — no doubling slack and
+ * no realloc transient (old+new buffers coexisting) that otherwise ~2x's peak RSS. */
+#define _TR_LIST_RESERVE(LT) static inline void LT##_reserve(LT* l, long long cap){ if(l && (size_t)cap > l->capacity){ l->data = realloc(l->data, sizeof(*l->data) * (size_t)cap); l->capacity = (size_t)cap; } }
+_TR_LIST_RESERVE(List_bool)
+_TR_LIST_RESERVE(List_char)
+_TR_LIST_RESERVE(List_f64)
+_TR_LIST_RESERVE(List_i32)
+_TR_LIST_RESERVE(List_i64)
+_TR_LIST_RESERVE(List_i8)
+_TR_LIST_RESERVE(List_ptr)
+_TR_LIST_RESERVE(List_str)
+_TR_LIST_RESERVE(List_TrStr)
+_TR_LIST_RESERVE(List_TrTuple)
+_TR_LIST_RESERVE(List_u32)
+_TR_LIST_RESERVE(List_u8)
 /* ── Extended Vec/List operations: remove, swap, clear, is_empty, extend ──── */
 static inline void List_i64_remove(List_i64* l, long long i) { if(!l||(size_t)i>=l->len) return; for(size_t j=(size_t)i;j<l->len-1;j++) l->data[j]=l->data[j+1]; l->len--; }
 static inline void List_i64_swap(List_i64* l, long long a, long long b) { if(!l||(size_t)a>=l->len||(size_t)b>=l->len) return; long long t=l->data[a]; l->data[a]=l->data[b]; l->data[b]=t; }

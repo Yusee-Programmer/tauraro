@@ -8,6 +8,7 @@ def main():
 
     mut n = 50000000
     mut sieve = List[bool].init()
+    sieve.reserve(n + 1)          # pre-size exactly (like C's calloc) — no growth reallocs
     mut fill = 0
     while fill <= n:
         sieve.push(false)
