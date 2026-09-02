@@ -17,6 +17,8 @@ extern "C":
     def _tr_gpu_module_load_ptx(ptx: str) -> Pointer[char]
     def _tr_gpu_module_load_source(src: str) -> Pointer[char]
     def _tr_gpu_module_load_il(il: Pointer[char], nbytes: int) -> Pointer[char]
+    def _tr_gpu_read_file(path: str) -> Pointer[char]
+    def _tr_gpu_read_file_len() -> int
     def _tr_gpu_module_free(h: Pointer[char])
     def _tr_gpu_kernel_get(m: Pointer[char], name: str) -> Pointer[char]
     def _tr_gpu_kernel_free(h: Pointer[char])
@@ -77,6 +79,20 @@ extend Module:
     # Alias: load a SPIR-V binary (OpenCL/Vulkan compute).
     pub def load_spirv(il: Pointer[char], nbytes: int) -> Module:
         return Module.load_il(il, nbytes)
+
+    # Load a precompiled kernel module from a file: a `.spv` (SPIR-V, OpenCL) or `.ptx`
+    # produced by `tauraroc kernels.tr --emit gpu | llc ...`. Binary-safe (SPIR-V has
+    # embedded NULs). The whole `@kernel`-authored workflow lands here:
+    #     mut m = Module.load_file("kernels.spv")
+    #     mut k = m.kernel("saxpy")
+    pub def load_file(path: str) -> Module:
+        mut bytes = _tr_gpu_read_file(path)
+        if (bytes as usize) == (0 as usize):
+            mut m0 = Module()
+            m0.handle = 0 as Pointer[char]
+            return m0
+        mut n = _tr_gpu_read_file_len()
+        return Module.load_il(bytes, n)
 
     # True when the module loaded/compiled successfully.
     pub def is_valid(self) -> bool:

@@ -4,18 +4,23 @@
 
 ## Overview
 
-Tauraro provides two mechanisms for low-level parallel and hardware-specific code:
+Tauraro provides three mechanisms for parallel and hardware-specific code:
 
 | Feature | Purpose |
 |---------|---------|
-| `std.gpu.Gpu` | OpenMP-backed parallel dispatch — the supported way to run work across CPU cores |
+| `std.gpu.Gpu` | OpenMP-backed parallel dispatch — run work across CPU cores |
+| `@kernel def` | GPU kernels — compiled to PTX (CUDA) / SPIR-V (OpenCL) and launched via `std.gpu` |
 | `asm(...)` | Inline assembly — must be inside `unsafe:` |
 
-> **Parallelism lives in the standard library.** Use the `std.gpu` module
-> (`from std.gpu import Gpu`) for data-parallel work. There is no `gpu:` language
-> block and no `@parallel`/`@vectorize` decorators — parallelism is a library
-> feature, not a syntax feature, which keeps the language small. For raw OpenMP
-> pragmas beyond `std.gpu`, drop to `extern "C"`.
+> **The device API and CPU dispatch live in the standard library** (`std.gpu`);
+> only the `@kernel` decorator is a language-level marker (it selects a function
+> for GPU code generation). There is no `gpu:` block — the deprecated keyword was
+> retired in favour of `std.gpu`. For raw OpenMP pragmas beyond `std.gpu`, drop
+> to `extern "C"`.
+
+See the [`std.gpu` library reference](../std/gpu.md) for the full device,
+buffer, and kernel-launch API. This chapter covers the language-facing pieces:
+CPU dispatch (`Gpu.parallel`), GPU kernels (`@kernel`), and inline `asm`.
 
 ---
 
@@ -103,6 +108,88 @@ Write to pre-allocated indexed positions (`output[i] = ...`) instead.
 2. Pre-allocate the output array before calling `Gpu.parallel` — do not call `append` from inside it.
 3. Wrap the `Gpu.parallel` call in `unsafe:` (it takes a raw `Pointer[void]`).
 4. Benchmark with and without `-fopenmp` to verify the parallelism is helping.
+
+---
+
+## GPU Kernels: `@kernel`
+
+A `@kernel`-decorated function is compiled to GPU IR (NVPTX → PTX for CUDA, or
+SPIR-V for OpenCL/Vulkan) by the `--emit gpu` backend, then loaded and launched
+through `std.gpu`. The **same function is also valid host code** — it runs
+serially on the CPU — so it doubles as the correctness reference for its GPU
+form.
+
+### Writing a kernel
+
+```python
+from std.gpu import gpu_global_id
+
+@kernel
+def saxpy(y: Pointer[f32], x: Pointer[f32], a: f32, n: i32):
+    mut i = gpu_global_id(0)
+    if i < n:
+        unsafe:
+            y.offset(i).write(a * x.offset(i).read() + y.offset(i).read())
+```
+
+A kernel is a *data-parallel leaf*. It may use:
+
+- **Parameters** — `Pointer[T]` (a global-memory buffer) and scalars
+  (`i32`, `i64`/`int`, `f32`, `f64`/`float`, `bool`); no `self`; returns nothing.
+- **Body** — local `mut` variables, arithmetic/comparisons, `if`/`while`, and
+  indexed access `p.offset(i).read()` / `p.offset(i).write(v)` inside `unsafe:`.
+- **Index/sync builtins** (from `std.gpu`): `gpu_global_id(d)`,
+  `gpu_local_id(d)`, `gpu_group_id(d)`, `gpu_local_size(d)`,
+  `gpu_global_size(d)`, `gpu_num_groups(d)`, `gpu_barrier()`.
+
+Anything outside this subset (heap allocation, `str`, `List`/`Dict`, closures,
+recursion, exceptions) is a compile error from the GPU backend — never a silent
+miscompile.
+
+> **Type widths matter.** `float` = `f64` and `int` = `i64`, so use `f32`/`i32`
+> for 32-bit GPU buffers and match the buffer element type to the kernel
+> parameter type. See [`std.gpu` — Type-width rules](../std/gpu.md#type-width-rules).
+
+### Compiling a kernel
+
+```bash
+# helper wraps `tauraroc --emit gpu | llc`
+bash scripts/gpu_compile.sh kernels.tr spirv kernels.spv    # OpenCL / Vulkan
+bash scripts/gpu_compile.sh kernels.tr nvptx kernels.ptx    # CUDA (SM=sm_80 for arch)
+
+# or by hand
+tauraroc kernels.tr --emit gpu --gpu-target spirv | llc -mtriple=spirv64-unknown-unknown -filetype=obj -o kernels.spv
+tauraroc kernels.tr --emit gpu --gpu-target nvptx | llc -mtriple=nvptx64-nvidia-cuda -mcpu=sm_50 -o kernels.ptx
+```
+
+`--emit gpu` prints LLVM IR for every `@kernel` in the file (targeting
+`--gpu-target spirv` or `nvptx`); `llc` lowers it to a loadable module.
+
+### Launching a kernel
+
+```python
+from std.gpu import Device, Buffer, Module
+
+mut m = Module.load_file("kernels.spv")          # or "kernels.ptx" on CUDA
+mut k = m.kernel("saxpy")
+k.arg_buffer(0, y.handle).arg_buffer(1, x.handle).arg_f64(2, 3.0).arg_i32(3, n)
+k.launch1d(n, 64)                                 # ceil(n/64) blocks × 64 threads
+Device.synchronize()
+mut result = y.download()
+```
+
+`launch1d(n, bs)` pads the launch up to a multiple of `bs`, so the kernel must
+guard `if i < n`. Full buffer/launch API in the
+[`std.gpu` reference](../std/gpu.md).
+
+### How it works
+
+The `@kernel` marker selects the function for the GPU backend
+(`src/codegen/gpu`), which walks its HIR and emits LLVM IR with GPU calling
+conventions, `addrspace(1)` buffer pointers, and hardware intrinsics for the
+index builtins. The GPU index builtins are ordinary `std.gpu` functions with
+trivial host bodies, so the kernel type-checks and runs on the CPU unchanged.
+See the developer note [09 — GPU backend](../dev/09_gpu_backend.md).
 
 ---
 

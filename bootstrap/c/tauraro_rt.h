@@ -7086,6 +7086,26 @@ static int64_t _tr_gpu_launch(void* handle, int64_t gx,int64_t gy,int64_t gz, in
     _tr_gpu_seterr("launch: no GPU backend (kernels require CUDA or OpenCL)");
     return -1;
 }
+/* Read a whole file as raw bytes (binary-safe, unlike read_file which stops at NUL) for
+ * loading a precompiled kernel module (.spv is binary, .ptx is text). Returns the buffer;
+ * the byte length is retrieved via _tr_gpu_read_file_len() immediately after (both calls
+ * run in the same std.gpu translation unit, so the static length stays consistent). */
+static int64_t _tr_gpu_last_file_len = 0;
+static void* _tr_gpu_read_file(char* path){
+    _tr_gpu_last_file_len = 0;
+    if (!path) return 0;
+    FILE* f = fopen(path, "rb");
+    if (!f) return 0;
+    fseek(f, 0, SEEK_END); long sz = ftell(f); rewind(f);
+    if (sz < 0){ fclose(f); return 0; }
+    void* buf = TAURARO_ALLOC((size_t)sz + 1);
+    if (!buf){ fclose(f); return 0; }
+    size_t rd = fread(buf, 1, (size_t)sz, f); fclose(f);
+    ((char*)buf)[rd] = 0;
+    _tr_gpu_last_file_len = (int64_t)rd;
+    return buf;
+}
+static int64_t _tr_gpu_read_file_len(void){ return _tr_gpu_last_file_len; }
 static int64_t _tr_gpu_synchronize(void){
     _tr_gpu_init();
     if (_tr_gpu.backend==TR_GPU_CUDA && _tr_gpu.cuCtxSynchronize) return _tr_gpu.cuCtxSynchronize()==0?0:-1;
