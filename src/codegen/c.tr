@@ -168,6 +168,8 @@ pub class CGenerator:
     pub list_types_buf: StringBuilder   # value-type List_T definitions (emitted after structs)
     pub proto_buf:      StringBuilder   # function prototypes
     pub mono_buf:       StringBuilder   # monomorphized generic class code
+    pub mtxcd_emitted:  Map[str, bool]              # F-4: emitted `_mtxcd_*` wrappers (dedup)
+    pub mtx_cd_specs:   Vec[str]                    # F-4: Mutex[Coll[..]] payload SPECS ("kind|keykind|typename") recorded by scan_mono_ty (strings, not pointers, so no dangling)
     pub fn_mono_body:   StringBuilder   # monomorphized generic FREE-function bodies (flushed after all prototypes)
     pub temp_count:     int
     pub classes:        Map[str, HirClass]
@@ -245,6 +247,8 @@ pub class CGenerator:
         g.list_types_buf = StringBuilder.init(2048)
         g.proto_buf     = StringBuilder.init(8192)
         g.mono_buf      = StringBuilder.init(8192)
+        g.mtxcd_emitted = Map[str, bool].init(8)
+        g.mtx_cd_specs  = Vec[str].init(8)
         g.fn_mono_body  = StringBuilder.init(4096)
         g.temp_count    = 0
         g.classes       = Map[str, HirClass].init(128)
@@ -2790,6 +2794,8 @@ pub class CGenerator:
                 mut rt = hir_expr_type(recv).name
                 match recv.read():
                     case HirExpr.EIdent(rn, _, _):
+                        # Static constructor `ClassName.init(...)`/`.new(...)` → fresh OWNED.
+                        if self.classes.contains(rn) and (m == "init" or m == "new"): return true
                         if self.classes.contains(rn): rt = rn
                     case _: pass
                 return self._fn_owned_lookup(rt + "." + m)
@@ -2837,6 +2843,12 @@ pub class CGenerator:
                     return true
                 match recv.read():
                     case HirExpr.EIdent(rn, _, _):
+                        # A static constructor `ClassName.init(...)`/`.new(...)` yields a
+                        # FRESH owned instance (rc=1) — TRANSFER it (no retain), exactly
+                        # like the `ClassName(...)` ECall constructor. Fixes F-1: a fresh
+                        # `Box.init(k)` pushed into a Vec[Box] was retained (rc=2), leaking
+                        # the temporary's ref since the container releases only one.
+                        if self.classes.contains(rn) and (m == "init" or m == "new"): return false
                         if self.classes.contains(rn): rt = rn
                     case _: pass
                 return not self._fn_owned_lookup(rt + "." + m)
@@ -2845,6 +2857,86 @@ pub class CGenerator:
     # Name of the per-class field-drop function (releases owned str/class fields).
     pub def obj_drop_fn(self, tn: str) -> str:
         return "_trdrop_" + tn
+
+    # F-4: build a stable SPEC string "kind|keykind|typename" for a Mutex collection
+    # payload type (or "" if we can't free it here — conservative, a leak not a
+    # double-free). Kinds: d=dict/map, l=list/vec. keykind: s=str, i=int, ''=n/a.
+    # `typename` = the dict VALUE or list ELEMENT type. A string (not a pointer) so it
+    # survives past scan_mono_ty's temporary AstTypes.
+    pub def _mtxcd_spec(self, ptp: Pointer[AstType]) -> str:
+        if _is_invalid_ptr(ptp as usize): return ""
+        mut pt = ptp.read()
+        mut cn = pt.name
+        if cn == "Map" or cn == "Dict":
+            if pt.args.len < 2: return ""
+            mut kt = pt.args.get(0).read().name
+            mut kk = "s"
+            if _is_int_type(kt) or kt == "int": kk = "i"
+            return "d|" + kk + "|" + pt.args.get(1).read().name
+        if cn == "Vec" or cn == "List":
+            if pt.args.len < 1: return ""
+            if not self.is_heap_class_tn(pt.args.get(0).read().name): return ""
+            return "l||" + pt.args.get(0).read().name
+        return ""
+
+    # Wrapper name from a spec, or "" for an empty spec. (Same mapping used at the
+    # Mutex.init call site and by the header emission, so the two always agree.)
+    pub def _mtxcd_name_from_spec(self, spec: str) -> str:
+        if spec == "": return ""
+        mut parts = spec.split("|")
+        if parts.len < 3: return ""
+        mut kind = parts.get(0)
+        if kind == "d": return "_mtxcd_d" + parts.get(1) + "_" + _safe_c_varname(parts.get(2))
+        if kind == "l": return "_mtxcd_l_" + _safe_c_varname(parts.get(2))
+        return ""
+
+    # The wrapper's single collection-free-call body, from a spec.
+    pub def _mtxcd_body_from_spec(self, spec: str) -> str:
+        mut parts = spec.split("|")
+        if parts.len < 3: return ""
+        mut kind = parts.get(0)
+        mut kk = parts.get(1)
+        mut tn = parts.get(2)
+        if kind == "d":
+            if kk == "i":
+                if self.is_heap_class_tn(tn): return "_tr_idict_free_objval((TrIDict*)p, " + self.obj_drop_fn(tn) + ");"
+                return "_tr_idict_free((TrIDict*)p);"
+            if self.is_heap_class_tn(tn): return "Dict_free_objval((TrMap*)p, " + self.obj_drop_fn(tn) + ");"
+            if tn == "str": return "Dict_free_strval((TrMap*)p);"
+            return "Dict_free((TrMap*)p);"
+        if kind == "l":
+            if self.is_heap_class_tn(tn): return "List_ptr_free_obj((List_ptr*)p, " + self.obj_drop_fn(tn) + ");"
+        return ""
+
+    # NAME of the wrapper for a payload type — used at the Mutex.init call site.
+    pub def _mtxcd_name(self, ptp: Pointer[AstType]) -> str:
+        return self._mtxcd_name_from_spec(self._mtxcd_spec(ptp))
+
+    # Emit the `_mtxcd_*` payload-free wrappers recorded by scan_mono_ty into the
+    # (already buffer-redirected) shared header, deduped. `static inline` so each TU
+    # that constructs a `Mutex[Coll[..]]` gets its own copy (no cross-TU linkage).
+    pub def emit_mtxcd_wrappers(self):
+        mut i = 0
+        while i < self.mtx_cd_specs.len:
+            mut spec = self.mtx_cd_specs.get(i)
+            mut nm = self._mtxcd_name_from_spec(spec)
+            mut body = self._mtxcd_body_from_spec(spec)
+            if nm != "" and body != "" and not self.mtxcd_emitted.contains(nm):
+                self.mtxcd_emitted.insert(nm, true)
+                self.ws("static inline void " + nm + "(void* p) { if (p) { " + body + " } }\n")
+            i = i + 1
+
+    # A Mutex payload that is a FRESH collection the mutex should own: a collection
+    # constructor `Coll[..].init()/.new()` or a `[...]`/`{...}` literal. A bare
+    # variable (a borrow/alias) is NOT owned — freeing it would double-free.
+    pub def _mutex_payload_fresh_coll(self, e: Pointer[HirExpr]) -> bool:
+        if _is_invalid_ptr(e as usize): return false
+        match e.read():
+            case HirExpr.EMethodCall(_, m, _, _): return m == "init" or m == "new"
+            case HirExpr.EList(_, _): return true
+            case HirExpr.EDict(_, _, _): return true
+            case HirExpr.ESet(_, _): return true
+            case _: return false
 
     pub def gen_cond_expr(self, cond: Pointer[HirExpr]) -> str:
         mut cond_s = self.gen_expr(cond)
@@ -3515,6 +3607,10 @@ pub class CGenerator:
                             # on drop (F-3). A borrow (a var / self / element .get()) is not.
                             if self._is_fresh_obj_expr(_mx_a0) and self.is_heap_class_tn(_mx_pt):
                                 return "_tr_mutexbox_new_owned(" + mx_val + ", (void(*)(void*))" + self.obj_drop_fn(_mx_pt) + ")"
+                            # F-4: a FRESH collection payload (`Map/Vec/…[..].init()`) is owned too.
+                            if self._mutex_payload_fresh_coll(_mx_a0):
+                                mut _mx_cd = self._mtxcd_name(box_asttype(hir_expr_type(_mx_a0)))
+                                if _mx_cd != "": return "_tr_mutexbox_new_owned_coll(" + mx_val + ", (void(*)(void*))" + _mx_cd + ")"
                             return "_tr_mutexbox_new(" + mx_val + ")"
                         return "_tr_mutexbox_new(0LL)"
                 if oi_ctor_name == "RwLock":
@@ -4330,6 +4426,10 @@ pub class CGenerator:
                     mut mx_init_v = "(long long)(" + self.gen_expr(_mi_a0) + ")"
                     if self._is_fresh_obj_expr(_mi_a0) and self.is_heap_class_tn(_mi_pt):
                         return "_tr_mutexbox_new_owned(" + mx_init_v + ", (void(*)(void*))" + self.obj_drop_fn(_mi_pt) + ")"
+                    # F-4: a FRESH collection payload is owned by the mutex too.
+                    if self._mutex_payload_fresh_coll(_mi_a0):
+                        mut _mi_cd = self._mtxcd_name(box_asttype(hir_expr_type(_mi_a0)))
+                        if _mi_cd != "": return "_tr_mutexbox_new_owned_coll(" + mx_init_v + ", (void(*)(void*))" + _mi_cd + ")"
                     return "_tr_mutexbox_new(" + mx_init_v + ")"
                 return "_tr_mutexbox_new(0LL)"
             if method == "lock" or method == "get":
@@ -8065,6 +8165,12 @@ pub class CGenerator:
             if self.value_types.contains(elty.name) and elty.args.len > 0 and self.classes.contains(elty.name):
                 self.ensure_mono(self.classes.get(elty.name), elty.args)
                 self.value_list_elems.push(elty.name + "_" + self.type_args_suffix(elty.args))
+        # F-4: a `Mutex[Coll[..]]` needs a `_mtxcd_*` free wrapper for its owned
+        # collection payload — record a payload SPEC string so emit_mtxcd_wrappers emits
+        # the wrapper into the header (post-redirect, visible in every TU).
+        if ty.name == "Mutex" and ty.args.len > 0:
+            mut _mspec = self._mtxcd_spec(ty.args.get(0))
+            if _mspec != "": self.mtx_cd_specs.push(_mspec)
         # Dict/Map with a non-generic value-type VALUE -> record a typed inline dict.
         if (ty.name == "Map" or ty.name == "Dict") and ty.args.len > 1:
             mut vty = ty.args.get(1).read()
@@ -8670,6 +8776,9 @@ pub class CGenerator:
         # Must come before function prototypes so that Vec[UserType] list structs
         # (e.g. List_JsonVal) are defined before any prototype uses them.
         self.emit_drop_fwd_decls(prog)
+        # F-4: emit the Mutex-collection-payload free wrappers AFTER the _trdrop_*
+        # forward decls they call (and after the collection frees from the runtime).
+        self.emit_mtxcd_wrappers()
         i = 0
         while i < prog.enums.len:
             mut e3 = prog.enums.get(i)

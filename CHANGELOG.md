@@ -17,6 +17,20 @@ codegen-safety / diagnostics / stdlib / tooling improvements). Entries will be
 added here as each phase lands.
 
 ### Fixed
+- **F-1 collection-push leak closed.** `v.push(Box.init(k))` for a `Vec[HeapClass]`
+  RETAINED the fresh constructor result (rc 1→2) instead of MOVING it, leaking the
+  temporary's reference (the container releases only one). Static constructors
+  `Class.init(...)`/`Class.new(...)` are now recognised as fresh owned values that
+  TRANSFER on store (`_obj_store_needs_retain`/`_obj_expr_owns_ref`), like the
+  `Class(...)` form. `f_vec_box` `LIVE 0`.
+- **F-4 Mutex-owned-collection leak closed.** A `Mutex[Coll[..]]` wrapping a FRESH
+  collection (e.g. `Mutex[Map[str, Box]].init(Map[str, Box].init(8))`) never freed
+  the collection (or its owned elements) on drop. `_TrMutexBox` gained a `cdrop`
+  slot; codegen emits `_tr_mutexbox_new_owned_coll(..., _mtxcd_*)`, where `_mtxcd_*`
+  is a generated `static inline` wrapper (recorded by the mono scan, emitted into the
+  shared header) calling the collection's typed free. Borrowed payloads stay
+  non-owning (no double-free). `f_mutex_map` `LIVE 0`. With this, **all four fuzz
+  findings F-1..F-4 are leak-free and promoted to the CORE regression gate.**
 - **Latent runtime bug in `Dict`/`Map[K,bool]`/sets:** `Dict_has` reported key
   presence as `Dict_get(d,key) != NULL`, so any key stored with a `false`/`NULL`
   value was wrongly reported **absent**. This silently broke every false-valued

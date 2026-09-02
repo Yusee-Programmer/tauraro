@@ -148,8 +148,13 @@ def f_shared(k):           # shared wrap of an existing value + clone (atomic AR
 # key presence, so every false-valued entry (the whole consumes summary) was
 # invisible. `.free()` is now detected as consuming its receiver so a consumed local
 # (f_consume) is never double-dropped. LIVE 0, differential matches, fixpoint holds.
-CORE = [f_consume, f_nested, f_shared, f_mutex_get, f_owned_use]
-HARD = [f_vec_box, f_mutex_map]
+# ALL of F-1..F-4 are now CLOSED, so every fragment is CORE (the standing green gate).
+# f_vec_box (F-1): a fresh ctor pushed into a Vec[T] was retained not moved (leaked the
+# temporary's ref) — `_obj_store_needs_retain`/`_obj_expr_owns_ref` now treat a static
+# `Class.init/new` as a transfer. f_mutex_map (F-4): a Mutex owning a fresh COLLECTION
+# payload frees it on drop via a generated `_mtxcd_*` wrapper (runtime `cdrop`).
+CORE = [f_consume, f_nested, f_shared, f_mutex_get, f_owned_use, f_vec_box, f_mutex_map]
+HARD = []
 
 def main():
     seed = int(sys.argv[1]) if len(sys.argv) > 1 else 0

@@ -5137,15 +5137,17 @@ extend Sema:
                         if _rsym.name != "" and _rsym.is_shared: _recv_is_shared = true
                     case _: pass
                 # [E-1] Method call on an UNDEFINED receiver: `Foo.bar(...)` where the
-                # bare identifier `Foo` is neither a value in scope (local/param/module
-                # global/function) nor any known type. Without this the codegen silently
-                # emits a bogus free `bar(Foo, ...)` call -> invalid C — the exact failure
-                # of a renamed/removed std type used as a static receiver, e.g.
-                # `JsonValue.init_object()` after json.tr dropped `JsonValue`.
+                # bare identifier `Foo` resolves to NOTHING (not a local/param/global/
+                # function, not an imported symbol, not any known type). Without this the
+                # codegen silently emits a bogus free `bar(Foo, ...)` call -> invalid C —
+                # the exact failure of a renamed/removed std type used as a static
+                # receiver, e.g. `JsonValue.init_object()` after json.tr dropped it.
+                # NB: builtin module statics (`OS`/`Process`/`Env`/…) are imported `pub
+                # class`es that resolve to a symbol even when the def isn't in
+                # self.classes for this unit — so keying on `resolve(...)=="" ` (truly
+                # unresolved), not on the symbol KIND, avoids false-flagging them.
                 if _recv_name != "" and not self.is_local_var(_recv_name) and not self._is_known_type_name(_recv_name):
-                    mut _rv_sym = self.resolve(_recv_name)
-                    mut _rv_is_value = _rv_sym.name != "" and (_rv_sym.kind == SymbolKind.SVariable or _rv_sym.kind == SymbolKind.SFunction)
-                    if not _rv_is_value:
+                    if self.resolve(_recv_name).name == "":
                         self.error("[E-1] '" + _recv_name + "' is not a defined type or value, so '" + _recv_name + "." + method + "(...)' cannot be resolved.\n      FIX: check the spelling, import the type, or define it — a call on an unknown name would otherwise emit invalid C.")
                 # Callable-field call: obj.f(args) where f is a def(...)-typed
                 # FIELD (not a method) -> lower to field access + indirect call.
@@ -6153,6 +6155,14 @@ extend Sema:
         if name == "Vec" or name == "List" or name == "Map" or name == "Dict" or name == "Set" or name == "Box" or name == "Tuple" or name == "tuple" or name == "Pointer": return true
         if name == "Mutex" or name == "RwLock" or name == "Atomic" or name == "Shared" or name == "Weak" or name == "Option" or name == "Result" or name == "Chan" or name == "Channel": return true
         if name == "Thread" or name == "ThreadPool" or name == "ThreadLocal" or name == "Coro": return true
+        # Builtin module-static receivers: recognized by NAME (the compiler special-cases
+        # `OS.is_windows()`, `Process.system()`, `Env.get_var()`, etc.). Some are std
+        # `pub class`es whose def isn't registered in self.classes for a given unit and
+        # don't bind a resolvable symbol, so they must be listed here or the [E-1]
+        # unknown-receiver guard false-flags valid code (e.g. taupkg).
+        if name == "OS" or name == "Process" or name == "Env" or name == "Hash" or name == "File": return true
+        if name == "Math" or name == "Clock" or name == "Time" or name == "Random" or name == "Hmac": return true
+        if name == "Json" or name == "JsonDoc" or name == "JsonWriter" or name == "JsonReader": return true
         return false
 
     pub def is_primitive_name(self, name: str) -> bool:

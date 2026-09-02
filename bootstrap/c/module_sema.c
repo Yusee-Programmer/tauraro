@@ -10380,11 +10380,7 @@ __auto_type args = _t560.data.EMethodCall.args;
         /* pass */
         if ((((strcmp(_tr_strz(_recv_name), _tr_strz(_tr_str_lit(""))) != 0) && (!Sema_is_local_var(self, _recv_name))) && (!Sema__is_known_type_name(self, _recv_name)))) {
             /* pass */
-            Symbol* _rv_sym = Sema_resolve(self, _recv_name);
-            /* pass */
-            bool _rv_is_value = ((strcmp(_tr_strz(_rv_sym->name), _tr_strz(_tr_str_lit(""))) != 0) && ((_rv_sym->kind.tag == SymbolKind_make_SVariable().tag) || (_rv_sym->kind.tag == SymbolKind_make_SFunction().tag)));
-            /* pass */
-            if ((!_rv_is_value)) {
+            if ((strcmp(_tr_strz(Sema_resolve(self, _recv_name)->name), _tr_strz(_tr_str_lit(""))) == 0)) {
                 /* pass */
                 ({ TrStr _at_t611 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("[E-1] '")), _tr_strz(_recv_name))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("' is not a defined type or value, so '"))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_recv_name)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("."))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(method)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("(...)' cannot be resolved.\n      FIX: check the spelling, import the type, or define it — a call on an unknown name would otherwise emit invalid C."))); _tr_str_release(_cl); _cres; })); Sema_error(self, _at_t611); _tr_str_release(_at_t611); });
             }
@@ -12494,6 +12490,21 @@ __attribute__((hot)) bool Sema__is_known_type_name(Sema* self, TrStr name) {
     }
     /* pass */
     if (((((strcmp(_tr_strz(name), _tr_strz(_tr_str_lit("Thread"))) == 0) || (strcmp(_tr_strz(name), _tr_strz(_tr_str_lit("ThreadPool"))) == 0)) || (strcmp(_tr_strz(name), _tr_strz(_tr_str_lit("ThreadLocal"))) == 0)) || (strcmp(_tr_strz(name), _tr_strz(_tr_str_lit("Coro"))) == 0))) {
+        /* pass */
+        return true;
+    }
+    /* pass */
+    if ((((((strcmp(_tr_strz(name), _tr_strz(_tr_str_lit("OS"))) == 0) || (strcmp(_tr_strz(name), _tr_strz(_tr_str_lit("Process"))) == 0)) || (strcmp(_tr_strz(name), _tr_strz(_tr_str_lit("Env"))) == 0)) || (strcmp(_tr_strz(name), _tr_strz(_tr_str_lit("Hash"))) == 0)) || (strcmp(_tr_strz(name), _tr_strz(_tr_str_lit("File"))) == 0))) {
+        /* pass */
+        return true;
+    }
+    /* pass */
+    if ((((((strcmp(_tr_strz(name), _tr_strz(_tr_str_lit("Math"))) == 0) || (strcmp(_tr_strz(name), _tr_strz(_tr_str_lit("Clock"))) == 0)) || (strcmp(_tr_strz(name), _tr_strz(_tr_str_lit("Time"))) == 0)) || (strcmp(_tr_strz(name), _tr_strz(_tr_str_lit("Random"))) == 0)) || (strcmp(_tr_strz(name), _tr_strz(_tr_str_lit("Hmac"))) == 0))) {
+        /* pass */
+        return true;
+    }
+    /* pass */
+    if (((((strcmp(_tr_strz(name), _tr_strz(_tr_str_lit("Json"))) == 0) || (strcmp(_tr_strz(name), _tr_strz(_tr_str_lit("JsonDoc"))) == 0)) || (strcmp(_tr_strz(name), _tr_strz(_tr_str_lit("JsonWriter"))) == 0)) || (strcmp(_tr_strz(name), _tr_strz(_tr_str_lit("JsonReader"))) == 0))) {
         /* pass */
         return true;
     }
