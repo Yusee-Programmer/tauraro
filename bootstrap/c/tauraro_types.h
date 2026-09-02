@@ -3802,6 +3802,7 @@ __attribute__((hot)) TrStr Sema_is_reserved_error(Sema* self, TrStr name);
 __attribute__((hot)) TrStr Sema_is_reserved_keyword(Sema* self, TrStr name);
 __attribute__((hot)) bool Sema_block_returns(Sema* self, Block* b);
 __attribute__((hot)) bool Sema_is_primitive(Sema* self, AstType* ty);
+__attribute__((hot)) bool Sema__is_known_type_name(Sema* self, TrStr name);
 __attribute__((hot)) bool Sema_is_primitive_name(Sema* self, TrStr name);
 __attribute__((hot)) Symbol** box_symbol(Symbol* s);
 __attribute__((malloc,returns_nonnull,hot)) Formatter* Formatter_init(List_i64* c_lines, List_TrStr* c_texts, List_bool* c_trailing);

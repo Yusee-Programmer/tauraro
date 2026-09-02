@@ -17,6 +17,22 @@ codegen-safety / diagnostics / stdlib / tooling improvements). Entries will be
 added here as each phase lands.
 
 ### Fixed
+- A method call on a receiver that names **no defined type or value** (e.g. a
+  renamed/removed type used as a static receiver, `JsonValue.init_object()` after
+  `std.encoding.json` dropped `JsonValue`) silently emitted a bogus free
+  `init_object(JsonValue)` call, producing an `implicit declaration` C compile
+  error with no source-level diagnostic. Such calls are now a hard **`[E-1]`**
+  error naming the unresolved receiver (`src/sema.tr`, new `_is_known_type_name`
+  guard). Module-statics (`Str`/`Clock`/`OS`), module globals, instances, generic
+  parameters, and all builtin generics are unaffected (self-host `--check` clean,
+  fixpoint holds). Regression: `tests/soundness/reject/unknown_receiver_method.tr`.
+- The static constructors `Option.some(x)` / `Result.ok(x)` / `Result.err(x)`
+  dropped their payload type when assigned to an **unannotated** local, so
+  `mut o = Option.some(5)` inferred a bare `Option` (not `Option[int]`) and a
+  following `o.unwrap()` mis-resolved to a bogus free `unwrap(o)` call. The
+  lowercase constructors now carry the concrete payload type (`src/sema.tr`,
+  guarded by a static receiver so the instance `.ok()`/`.err()` accessors are
+  unaffected). Regression: `tests/regression/option_result_ctor_infer.tr`.
 - Whole-number float literals (e.g. `7.0`) were emitted into generated C
   without a `.`/exponent marker (`%.17g` of `7.0` is `"7"`), so expressions
   like `7.0 / 2.0` silently became integer division (`3` instead of `3.5`).

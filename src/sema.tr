@@ -2535,7 +2535,8 @@ extend Sema:
                     mut pk = keys.get(xi) + "#" + pi.to_str()
                     if pn != "self" and self.fn_param_consumes.contains(pk):
                         if not self.fn_param_consumes.get(pk):
-                            if self._param_consumed_in_block(pn, f.body):
+                            mut _cc = self._param_consumed_in_block(pn, f.body)
+                            if _cc:
                                 self.fn_param_consumes.insert(pk, true)
                                 changed = true
                     pi = pi + 1
@@ -4950,6 +4951,17 @@ extend Sema:
                         mut _rsym = self.resolve(_rn)
                         if _rsym.name != "" and _rsym.is_shared: _recv_is_shared = true
                     case _: pass
+                # [E-1] Method call on an UNDEFINED receiver: `Foo.bar(...)` where the
+                # bare identifier `Foo` is neither a value in scope (local/param/module
+                # global/function) nor any known type. Without this the codegen silently
+                # emits a bogus free `bar(Foo, ...)` call -> invalid C — the exact failure
+                # of a renamed/removed std type used as a static receiver, e.g.
+                # `JsonValue.init_object()` after json.tr dropped `JsonValue`.
+                if _recv_name != "" and not self.is_local_var(_recv_name) and not self._is_known_type_name(_recv_name):
+                    mut _rv_sym = self.resolve(_recv_name)
+                    mut _rv_is_value = _rv_sym.name != "" and (_rv_sym.kind == SymbolKind.SVariable or _rv_sym.kind == SymbolKind.SFunction)
+                    if not _rv_is_value:
+                        self.error("[E-1] '" + _recv_name + "' is not a defined type or value, so '" + _recv_name + "." + method + "(...)' cannot be resolved.\n      FIX: check the spelling, import the type, or define it — a call on an unknown name would otherwise emit invalid C.")
                 # Callable-field call: obj.f(args) where f is a def(...)-typed
                 # FIELD (not a method) -> lower to field access + indirect call.
                 if self.classes.contains(hobj_ty.name):
@@ -5132,11 +5144,15 @@ extend Sema:
                         ret_ty = AstType.init_generic("List", box_asttype(_dict_val_ty))
                 # Option[T] built-in method return types
                 elif hobj_ty.name == "Option":
-                    # Ctor `Option.Some(x)` carries the payload's CONCRETE type so a later
-                    # `case Option.Some(v):` binds `v` correctly (Option[float], not bare Option).
-                    if method == "Some" and hl.len == 1:
+                    # Static ctor `Option.some(x)` / `Option.Some(x)` carries the payload's
+                    # CONCRETE type so an UNANNOTATED `mut o = Option.some(5)` infers
+                    # `o: Option[int]` (else `o.unwrap()` can't resolve -> bogus free call).
+                    # `_recv_name == "Option"` gates the lowercase form so it never shadows a
+                    # hypothetical instance method; capital `Some` is unambiguous.
+                    if (method == "Some" or (method == "some" and _recv_name == "Option")) and hl.len == 1:
                         ret_ty = AstType.init("Option")
                         ret_ty.args.push(box_asttype(hir_expr_type(hl.get(0))))
+                    elif (method == "None" or (method == "none" and _recv_name == "Option")): ret_ty = AstType.init("Option")
                     elif method == "is_some" or method == "is_none": ret_ty = AstType.init("bool")
                     elif method == "unwrap" or method == "expect":
                         if hobj_ty.args.len > 0: ret_ty = hobj_ty.args.get(0).read()
@@ -5147,12 +5163,16 @@ extend Sema:
                         else: ret_ty = AstType.init("int")
                 # Result[T,E] built-in method return types
                 elif hobj_ty.name == "Result":
-                    # Ctors carry the payload's concrete type positionally (unknown side = void).
-                    if method == "Ok" and hl.len == 1:
+                    # Static ctors carry the payload's concrete type positionally (unknown
+                    # side = void) so `mut r = Result.ok(3.14)` infers `r: Result[float, void]`.
+                    # Lowercase `ok`/`err` are gated on `_recv_name == "Result"` so they are
+                    # read as CONSTRUCTORS on the type, not the instance `.ok()`/`.err()`
+                    # accessors handled below; capital `Ok`/`Err` are unambiguous.
+                    if (method == "Ok" or (method == "ok" and _recv_name == "Result")) and hl.len == 1:
                         ret_ty = AstType.init("Result")
                         ret_ty.args.push(box_asttype(hir_expr_type(hl.get(0))))
                         ret_ty.args.push(box_asttype(AstType.init("void")))
-                    elif method == "Err" and hl.len == 1:
+                    elif (method == "Err" or (method == "err" and _recv_name == "Result")) and hl.len == 1:
                         ret_ty = AstType.init("Result")
                         ret_ty.args.push(box_asttype(AstType.init("void")))
                         ret_ty.args.push(box_asttype(hir_expr_type(hl.get(0))))
@@ -5932,6 +5952,24 @@ extend Sema:
             case _: return false
 
     pub def is_primitive(self, ty: AstType) -> bool: return self.is_primitive_name(ty.name)
+    # True if `name` denotes SOME resolvable type: a primitive, a string type, a
+    # 1-char generic parameter (T/K/V/E), a user class/enum/interface, or a builtin
+    # generic/collection/concurrency/module-static type. Used to detect a method
+    # call whose receiver is a bare identifier naming NO known type (a
+    # silent-miscompile hazard — codegen would emit a bogus free call).
+    pub def _is_known_type_name(self, name: str) -> bool:
+        if name == "": return true
+        if self.is_primitive_name(name): return true
+        if name == "str" or name == "Str" or name == "StringObj" or name == "StringBuilder" or name == "ptr" or name == "object": return true
+        if _tr_strlen(name) == 1: return true   # generic type parameter (T, K, V, E, U, ...)
+        if self.classes.contains(name): return true
+        if self.enums.contains(name): return true
+        if self.interfaces as usize != 0 as usize and self.interfaces.contains(name): return true
+        if name == "Vec" or name == "List" or name == "Map" or name == "Dict" or name == "Set" or name == "Box" or name == "Tuple" or name == "tuple" or name == "Pointer": return true
+        if name == "Mutex" or name == "RwLock" or name == "Atomic" or name == "Shared" or name == "Weak" or name == "Option" or name == "Result" or name == "Chan" or name == "Channel": return true
+        if name == "Thread" or name == "ThreadPool" or name == "ThreadLocal" or name == "Coro": return true
+        return false
+
     pub def is_primitive_name(self, name: str) -> bool:
         if name == "int" or name == "float" or name == "bool" or name == "char" or name == "void" or name == "None": return true
         if name == "i64" or name == "i32" or name == "i16" or name == "i8": return true
