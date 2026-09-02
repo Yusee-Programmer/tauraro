@@ -3967,7 +3967,18 @@ static void*     Dict_get(Dict* d, char* key) {
     while (n) { if (strcmp(n->key,key)==0) return n->value; n=n->next; }
     return NULL;
 }
-static bool      Dict_has(Dict* d, char* key) { return Dict_get(d,key)!=NULL; }
+/* Key PRESENCE — must walk the chain, NOT test the value. A key stored with a
+ * value that is NULL / (void*)0 (e.g. a `Dict[K,bool]`/`Map[K,bool]` holding
+ * `false`, or a set element) is still present; `Dict_get(...)!=NULL` wrongly
+ * reported it absent, silently breaking every false-valued dict (this is what
+ * made the compiler's own `consumes(fn,i)` summary invisible). */
+static bool      Dict_has(Dict* d, char* key) {
+    if (!d||!key||d->cap==0) return false;
+    size_t i=_dict_hash(key,d->cap);
+    _DictNode* n=d->buckets[i];
+    while (n) { if (strcmp(n->key,key)==0) return true; n=n->next; }
+    return false;
+}
 static long long Dict_len(Dict* d)  { return d?(long long)d->len:0LL; }
 static void      Dict_remove(Dict* d, char* key) {
     if (!d||!key||d->cap==0) return;

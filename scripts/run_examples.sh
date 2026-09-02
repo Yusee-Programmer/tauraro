@@ -37,7 +37,10 @@ mkdir -p "$GOLD"
 # Build-only (non-deterministic output: thread interleaving / panic timing). These
 # are still compiled — the drift-catching half — but not run/golden-checked. A file
 # may also opt in per-file with a `# EXAMPLE: no-run` header.
-NO_RUN=" 15_concurrency 22_thread_atomic 23_thread_safety 24_advanced_concurrency 25_new_features 27_async_and_panic 01_channels 02_thread_pool 03_producer_consumer 04_select 05_green_threads 06_scoped_threads 07_combined_pipeline "
+# ffi_callbacks declares `extern "C" run_events(...)` but ships no C implementation
+# (it demonstrates the callback ABI); it needs a companion C object to link+run, which
+# CI doesn't provide — so build-check only (a bad extern signature still fails the build).
+NO_RUN=" 15_concurrency 22_thread_atomic 23_thread_safety 24_advanced_concurrency 25_new_features 27_async_and_panic 01_channels 02_thread_pool 03_producer_consumer 04_select 05_green_threads 06_scoped_threads 07_combined_pipeline ffi_callbacks "
 # Skipped entirely (need a special toolchain/target the default CI job lacks).
 SKIP_LIST=" "
 
@@ -48,7 +51,10 @@ pass=0; fail=0; norun=0; skip=0
 
 # Only top-level tutorial examples + the concurrency set are golden-checkable;
 # freestanding/ needs embedded targets and is covered by its own build.
-mapfile -t FILES < <(find examples -maxdepth 2 -name '*.tr' | grep -vE '/freestanding/' | sort)
+# NB: no `mapfile` — macOS ships Bash 3.2, which lacks it. Read into the array the
+# portable way (process substitution + read loop works on Bash 3.2+).
+FILES=()
+while IFS= read -r _f; do FILES+=("$_f"); done < <(find examples -maxdepth 2 -name '*.tr' | grep -vE '/freestanding/' | sort)
 
 for src in "${FILES[@]}"; do
     name="$(basename "$src" .tr)"

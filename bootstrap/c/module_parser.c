@@ -3973,8 +3973,11 @@ __attribute__((hot)) Expr* Parser_parse_fstring(Parser* self, TrStr raw) {
                     /* pass */
                     List_ptr_append(fl, FStringPart_init_expr(e));
                 }
+                _tr_obj_release(parser, _trdrop_Parser);
             }
             _tr_str_release(expr_str);
+            StringBuilder__tr_fn_free(expr_sb);
+            _tr_obj_release(lexer, _trdrop_Lexer);
         } else {
             /* pass */
             StringBuilder_append_char(sb, c);
@@ -3988,6 +3991,7 @@ __attribute__((hot)) Expr* Parser_parse_fstring(Parser* self, TrStr raw) {
         ({ TrStr _at_t172 = (StringObj_as_str(StringBuilder_to_string(sb))); List_ptr_append(fl, FStringPart_init_text(_at_t172)); _tr_str_release(_at_t172); });
     }
     /* pass */
+    StringBuilder__tr_fn_free(sb);
     return box_expr(Expr_ctor_EFString(fl));
 }
 

@@ -11,6 +11,26 @@ debugging watax" into "found by a script." All four below were found by the scri
 
 ## Fixed
 
+### F-2 — borrowed `free`-class leak  ✅ CLOSED
+`FUZZ_ONLY=f_owned_use` now reports `LIVE 0`, differential matches (no UAF), and
+`f_consume` stays `LIVE 0` (no double-free). Closing it required fixing a **latent
+runtime bug** first: `Dict_has` reported presence as `Dict_get(d,key)!=NULL`, so any
+key stored with a `false`/NULL value (a `Dict[K,bool]`/`Map[K,bool]` holding `false`,
+a set element) was invisible — which silently disabled the compiler's own
+`consumes(fn,i)` summary (`fn_param_consumes`, a `Map[str,bool]`). It now walks the
+bucket chain (`runtime/tauraro_rt.h`). With `consumes` finally visible:
+1. **Apply the summary** — a new post-pass `apply_borrow_drops` (`src/sema.tr`,
+   docs/dev/07 Stage 2) adds the auto-drop the conservative class-arg escape
+   (`mark_coll_arg`) suppressed, but ONLY for a fresh owned local (constructor/owned
+   factory) that `_param_consumed_in_block` PROVES is not consumed. Additive +
+   strictly conservative → a miss is a leak, never a double-free.
+2. **`return x.score()` is a borrow** — a pure-scalar return can't own/alias a heap
+   param (`_pc_owns_return`), so `use_named` is correctly classified borrow.
+3. **`.free()` consumes its receiver** — so `consume_named`'s owned arg is detected
+   consumed and NOT also auto-dropped (would double-free).
+Verified: soundness 18/18 + 8/8, gen2≡gen3 fixpoint, differential match. Promoted to
+`CORE`. Pending the Linux ASan pass before it is considered fully sealed.
+
 ### F-3 — `Mutex[T]` local leaks its guarded content `T`  ✅ CLOSED
 `FUZZ_ONLY=f_mutex_get` now reports `LIVE 0`, and the elided/pure-ARC differential
 matches (no UAF). Two bugs had to be fixed together:
@@ -45,15 +65,6 @@ Linux ASan pass (the UAF net this box can't run) before it is considered fully s
 interaction: reading an element with `v.get(i)` marks the **container** escaped (to
 avoid freeing the borrowed element), after which the container itself is never
 released. Severity: leak, not UAF. Still the highest-value remaining fix.
-
-### F-2 — class-with-`free()` passed to a *borrowing* function leaks it
-`FUZZ_ONLY=f_owned_use`. The class-with-`free` double-free fix (is_droppable_sym) is
-conservative: a `free()`-class passed as a non-receiver argument is marked
-`coll_escaped` and never auto-dropped — correct when the callee frees it, but a
-**leak** when the callee only borrows it (`use_named(a)` reads, doesn't free). "A
-leak at worst, never a UAF," as documented — but a precision gap. A proper fix needs
-per-callee "does this parameter take ownership / free it?" analysis (a job for the
-MIR ownership pass).
 
 ### F-4 — `Mutex[Map[K,V]].get()` without an annotation loses the value type
 `FUZZ_ONLY=f_mutex_map`. `mut m = Mutex[Map[str, Box]].init(...)` (no explicit type
