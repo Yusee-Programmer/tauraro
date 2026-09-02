@@ -1,0 +1,44 @@
+# std.gpu.kernel_builtins — the index/sync builtins usable inside a @kernel function.
+#
+# These are ordinary functions with trivial HOST implementations, so a @kernel def is
+# valid, type-checked Tauraro that also *runs on the CPU* (serially) — the built-in
+# differential reference for its GPU form. The GPU backend (src/codegen/gpu) recognises
+# these by name and lowers them to hardware intrinsics:
+#   gpu_global_id(d)   -> global work-item index in dimension d (0/1/2)
+#   gpu_local_id(d)    -> work-item index within its block
+#   gpu_group_id(d)    -> block index
+#   gpu_local_size(d)  -> block dimension (threads per block)
+#   gpu_global_size(d) -> total grid dimension
+#   gpu_num_groups(d)  -> number of blocks
+#   gpu_barrier()      -> block-wide synchronization barrier
+#
+# Example:
+#   from std.gpu import gpu_global_id
+#   @kernel
+#   def saxpy(y: Pointer[f32], x: Pointer[f32], a: f32, n: i32):
+#       mut i = gpu_global_id(0)
+#       if i < n:
+#           unsafe:
+#               mut r = a * x.offset(i).read() + y.offset(i).read()
+#               y.offset(i).write(r)
+
+pub def gpu_global_id(dim: int) -> int:
+    return 0
+
+pub def gpu_local_id(dim: int) -> int:
+    return 0
+
+pub def gpu_group_id(dim: int) -> int:
+    return 0
+
+pub def gpu_local_size(dim: int) -> int:
+    return 1
+
+pub def gpu_global_size(dim: int) -> int:
+    return 1
+
+pub def gpu_num_groups(dim: int) -> int:
+    return 1
+
+pub def gpu_barrier():
+    pass

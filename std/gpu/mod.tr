@@ -1,41 +1,47 @@
-# std.gpu — GPU / parallel dispatch utilities.
+# std.gpu — Portable GPU compute for Tauraro.
 #
-# Replaces the deprecated core `gpu:` keyword.
-# Uses extern "C" bridges to OpenMP, CUDA, or OpenCL depending on
-# what the host C compiler supports.
+# A unified, zero-cost compute API that runs on CUDA, OpenCL, or the CPU,
+# chosen automatically at runtime. There is NO build- or link-time dependency
+# on any GPU SDK: the vendor driver is loaded dynamically at first use and the
+# backend degrades gracefully to the CPU when no GPU is present.
 #
-# Usage:
-#   from std.gpu import Gpu
+# Quick import:
+#   from std.gpu import Device, Backend, Buffer, Module, Kernel, Dim3, Gpu
 #
-#   Gpu.parallel(items, worker_func)   # CPU-parallel via OpenMP
-#   Gpu.kernel("my_kernel", args)      # CUDA / OpenCL kernel launch
+# Or per-module:
+#   from std.gpu.device   import Device, Backend
+#   from std.gpu.buffer   import Buffer
+#   from std.gpu.kernel   import Module, Kernel, Dim3
+#   from std.gpu.parallel import Gpu
+#
+# --- Device / buffer round-trip (works on any machine, GPU or not) ----------
+#   from std.gpu import Device, Buffer
+#   from std.core.vec import Vec
+#
+#   Device.detect()
+#   print(Device.backend_name())          # "CUDA" / "OpenCL" / "CPU"
+#   mut host = Vec[float].init(4)
+#   host.push(1.0); host.push(2.0); host.push(3.0); host.push(4.0)
+#   mut dev = Buffer[float].from_vec(host)
+#   mut back = dev.download()             # Vec[float] with the same data
+#   dev.free()
+#
+# --- Real kernel launch (OpenCL source shown; requires a GPU) ----------------
+#   from std.gpu import Device, Buffer, Module, Kernel
+#
+#   src = "__kernel void scale(__global float* a, float k){"
+#         " int i = get_global_id(0); a[i] = a[i]*k; }"
+#   mut m = Module.load_source(src)
+#   if m.is_valid():
+#       mut k = m.kernel("scale")
+#       k.arg_buffer(0, dev.handle).arg_f32(1, 2.0)
+#       k.launch1d(dev.len, 64)
+#       Device.synchronize()
+#   else:
+#       print(Device.last_error())
 
-from std.core.vec import Vec
-
-extern "C":
-    def _tr_gpu_openmp_parallel_i64(n: int, fn_ptr: Pointer[void])
-    def _tr_gpu_is_openmp() -> bool
-    def _tr_gpu_thread_id() -> int
-    def _tr_gpu_num_threads() -> int
-
-pub class Gpu:
-    _dummy: int
-
-extend Gpu:
-    # True when OpenMP is available at runtime.
-    pub def has_openmp() -> bool:
-        return _tr_gpu_is_openmp()
-
-    # Current OpenMP thread index (0 on non-OpenMP builds).
-    pub def thread_id() -> int:
-        return _tr_gpu_thread_id()
-
-    # Total number of OpenMP threads (1 on non-OpenMP builds).
-    pub def num_threads() -> int:
-        return _tr_gpu_num_threads()
-
-    # Run n iterations in parallel using OpenMP.
-    # fn_ptr must be a function pointer taking a single int (the iteration index).
-    # On non-OpenMP builds, runs sequentially.
-    pub def parallel(n: int, fn_ptr: Pointer[void]):
-        _tr_gpu_openmp_parallel_i64(n, fn_ptr)
+from std.gpu.device   import Device, Backend
+from std.gpu.buffer   import Buffer
+from std.gpu.kernel   import Module, Kernel, Dim3
+from std.gpu.parallel import Gpu
+from std.gpu.kernel_builtins import gpu_global_id, gpu_local_id, gpu_group_id, gpu_local_size, gpu_global_size, gpu_num_groups, gpu_barrier

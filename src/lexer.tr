@@ -36,7 +36,9 @@ pub def keyword_to_token(s: str) -> Token:
     if s == "defer":                   return Token.KwDefer
     if s == "asm":                     return Token.KwAsm
     if s == "taskgroup" or s == "task_group": return Token.KwTaskGroup
-    if s == "gpu":                     return Token.KwGpu
+    # NOTE: `gpu` is NOT a keyword. The deprecated `gpu:` block statement was
+    # retired in favour of the std.gpu library; freeing the identifier lets the
+    # `std.gpu.*` module path and `from std.gpu import ...` parse normally.
     if s == "implements":              return Token.KwImplements
     if s == "import":                  return Token.KwImport
     if s == "from":                    return Token.KwFrom

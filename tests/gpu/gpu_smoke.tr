@@ -1,0 +1,87 @@
+# std.gpu smoke test — verifies the portable compute API end to end.
+# Runs correctly on any machine: on a GPU it uses CUDA/OpenCL, otherwise the
+# CPU fallback makes buffers host memory so the round-trip still checks out.
+
+from std.gpu import Device, Backend, Buffer, Module, Kernel, Dim3, Gpu
+from std.core.vec import Vec
+
+def main():
+    print("=== std.gpu ===")
+    mut be = Device.detect()
+    print(f"backend: {Device.backend_name()}")
+    print(f"device:  {Device.name()}")
+    print(f"count:   {Device.count()}")
+    print(f"has_gpu: {Device.has_gpu()}")
+
+    # ── Buffer round-trip (float) ────────────────────────────────────────────
+    mut host = Vec[float].init(4)
+    host.push(1.5)
+    host.push(2.5)
+    host.push(3.5)
+    host.push(4.5)
+    mut dev = Buffer[float].from_vec(host)
+    print(f"buffer valid: {dev.is_valid()}  bytes: {dev.byte_size()}  len: {dev.len}")
+    mut back = dev.download()
+    mut sum: float = 0.0
+    mut i = 0
+    while i < back.len:
+        sum += back.get(i)
+        i += 1
+    print(f"roundtrip sum: {sum}")     # expect 12.0
+    dev.free()
+
+    # ── Buffer round-trip (int) via raw pointers ─────────────────────────────
+    mut src = Vec[int].init(5)
+    src.push(10)
+    src.push(20)
+    src.push(30)
+    src.push(40)
+    src.push(50)
+    mut ib = Buffer[int].alloc(5)
+    ib.copy_from_ptr(src.data as Pointer[int], 5)
+    mut dstv = Vec[int].init(5)
+    dstv.len = 5
+    ib.copy_to_ptr(dstv.data as Pointer[int], 5)
+    mut isum = 0
+    mut j = 0
+    while j < 5:
+        isum += dstv.get(j)
+        j += 1
+    print(f"int roundtrip sum: {isum}")   # expect 150
+    ib.free()
+
+    # ── zeros + fill ─────────────────────────────────────────────────────────
+    mut zb = Buffer[int].zeros(3)
+    mut zv = zb.download()
+    print(f"zeros: {zv.get(0)} {zv.get(1)} {zv.get(2)}")  # 0 0 0
+    zb.free()
+
+    # ── Kernel path (graceful without a GPU) ─────────────────────────────────
+    # IMPORTANT: Tauraro `float` is 64-bit (maps to C `double`), and `int` is
+    # 64-bit. So Buffer[float] is a buffer of doubles — the kernel must use
+    # `__global double*` (with the fp64 pragma) and a `double` scalar bound via
+    # arg_f64. For 32-bit GPU floats, use a 32-bit element type + arg_f32.
+    #
+    # Idiomatic bounds-checked kernel: launch1d pads the global size up to a
+    # multiple of the block, so the kernel must guard `i < n`.
+    src_cl = "#pragma OPENCL EXTENSION cl_khr_fp64 : enable\n__kernel void scale(__global double* a, double k, int n){ int i=get_global_id(0); if(i<n) a[i]=a[i]*k; }"
+    mut m = Module.load_source(src_cl)
+    if m.is_valid():
+        print("module compiled (GPU present)")
+        mut k = m.kernel("scale")
+        if k.is_valid():
+            mut gbuf = Buffer[float].from_vec(host)
+            k.arg_buffer(0, gbuf.handle).arg_f64(1, 2.0).arg_i32(2, gbuf.len)
+            mut rc = k.launch1d(gbuf.len, 64)
+            Device.synchronize()
+            mut out = gbuf.download()
+            print(f"kernel rc={rc} out0={out.get(0)} out3={out.get(3)}")  # expect 3.0, 9.0
+            gbuf.free()
+            k.free()
+        m.free()
+    else:
+        print(f"no GPU kernel backend: {Device.last_error()}")
+
+    # ── OpenMP CPU dispatch still available ──────────────────────────────────
+    print(f"openmp: {Gpu.has_openmp()}  threads: {Gpu.num_threads()}")
+    print("=== done ===")

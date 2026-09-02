@@ -1472,6 +1472,11 @@ pub class CGenerator:
                 return "static __attribute__((hot)) "
             if f.ret_ty.name == "void" or f.ret_ty.name == "" or f.ret_ty.name == "None":
                 return "static __attribute__((hot)) "
+            # `malloc`/`returns_nonnull` are pointer-only. They apply when the
+            # factory returns a heap class pointer; an `init` returning an enum
+            # or primitive (by value) must NOT carry them.
+            if not self.classes.contains(f.ret_ty.name):
+                return "static __attribute__((hot)) "
             return "static __attribute__((malloc,returns_nonnull,hot)) "
         return "static __attribute__((hot)) "
 
@@ -1503,6 +1508,8 @@ pub class CGenerator:
             if self.value_types.contains(f.class_name):
                 return "__attribute__((hot)) "
             if f.ret_ty.name == "void" or f.ret_ty.name == "" or f.ret_ty.name == "None":
+                return "__attribute__((hot)) "
+            if not self.classes.contains(f.ret_ty.name):
                 return "__attribute__((hot)) "
             return "__attribute__((malloc,returns_nonnull,hot)) "
         return "__attribute__((hot)) "

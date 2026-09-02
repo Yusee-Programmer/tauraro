@@ -1,0 +1,139 @@
+# std.gpu.kernel — GPU modules, kernels and launch configuration.
+#
+# A Module is a compiled kernel container:
+#   * Module.load_ptx(ptx)      — CUDA backend: load a PTX/cubin image.
+#   * Module.load_source(src)   — OpenCL backend: compile OpenCL-C source.
+#
+# A Kernel is one entry point inside a Module. Set arguments positionally,
+# then launch with a grid/block configuration:
+#
+#   mut m = Module.load_source(src)
+#   mut k = m.kernel("saxpy")
+#   k.arg_buffer(0, y.handle).arg_buffer(1, x.handle).arg_f32(2, 2.0).arg_i32(3, n)
+#   k.launch1d(n, 256)
+#   Device.synchronize()
+
+extern "C":
+    def _tr_gpu_module_load_ptx(ptx: str) -> Pointer[char]
+    def _tr_gpu_module_load_source(src: str) -> Pointer[char]
+    def _tr_gpu_module_load_il(il: Pointer[char], nbytes: int) -> Pointer[char]
+    def _tr_gpu_module_free(h: Pointer[char])
+    def _tr_gpu_kernel_get(m: Pointer[char], name: str) -> Pointer[char]
+    def _tr_gpu_kernel_free(h: Pointer[char])
+    def _tr_gpu_kernel_set_arg_buf(h: Pointer[char], idx: int, buf: Pointer[char])
+    def _tr_gpu_kernel_set_arg_i32(h: Pointer[char], idx: int, v: int)
+    def _tr_gpu_kernel_set_arg_i64(h: Pointer[char], idx: int, v: int)
+    def _tr_gpu_kernel_set_arg_f32(h: Pointer[char], idx: int, v: float)
+    def _tr_gpu_kernel_set_arg_f64(h: Pointer[char], idx: int, v: float)
+    def _tr_gpu_launch(h: Pointer[char], gx: int, gy: int, gz: int, bx: int, by: int, bz: int) -> int
+
+# A 3-D launch extent (grid dimensions or block dimensions).
+pub class Dim3:
+    pub x: int
+    pub y: int
+    pub z: int
+
+extend Dim3:
+    pub def init(x: int, y: int, z: int) -> Dim3:
+        mut d = Dim3()
+        d.x = x
+        d.y = y
+        d.z = z
+        return d
+
+    # 1-D extent: (x, 1, 1).
+    pub def of(x: int) -> Dim3:
+        return Dim3.init(x, 1, 1)
+
+    # 2-D extent: (x, y, 1).
+    pub def xy(x: int, y: int) -> Dim3:
+        return Dim3.init(x, y, 1)
+
+pub class Module:
+    pub handle: Pointer[char]
+
+extend Module:
+    # CUDA: load a PTX or cubin image (as a text/byte string).
+    pub def load_ptx(ptx: str) -> Module:
+        mut m = Module()
+        m.handle = _tr_gpu_module_load_ptx(ptx)
+        return m
+
+    # OpenCL: compile OpenCL-C source at runtime.
+    pub def load_source(src: str) -> Module:
+        mut m = Module()
+        m.handle = _tr_gpu_module_load_source(src)
+        return m
+
+    # Load a binary IL module from `nbytes` bytes at `il`:
+    #   * OpenCL backend  → SPIR-V (needs an OpenCL 2.1+ / SPIR-V-capable driver)
+    #   * CUDA backend    → PTX or cubin image
+    # This is the target of the compiler's `@kernel` → LLVM → PTX/SPIR-V path.
+    pub def load_il(il: Pointer[char], nbytes: int) -> Module:
+        mut m = Module()
+        m.handle = _tr_gpu_module_load_il(il, nbytes)
+        return m
+
+    # Alias: load a SPIR-V binary (OpenCL/Vulkan compute).
+    pub def load_spirv(il: Pointer[char], nbytes: int) -> Module:
+        return Module.load_il(il, nbytes)
+
+    # True when the module loaded/compiled successfully.
+    pub def is_valid(self) -> bool:
+        return (self.handle as usize) != (0 as usize)
+
+    # Look up a kernel entry point by name.
+    pub def kernel(self, name: str) -> Kernel:
+        mut k = Kernel()
+        k.handle = _tr_gpu_kernel_get(self.handle, name)
+        return k
+
+    pub def free(self):
+        _tr_gpu_module_free(self.handle)
+
+pub class Kernel:
+    pub handle: Pointer[char]
+
+extend Kernel:
+    # True when the kernel entry point was found.
+    pub def is_valid(self) -> bool:
+        return (self.handle as usize) != (0 as usize)
+
+    # Bind a device buffer as argument `idx`, given its handle (`buf.handle`).
+    # Returns self for chaining, e.g. k.arg_buffer(0, a.handle).arg_f32(1, 2.0)
+    pub def arg_buffer(self, idx: int, handle: Pointer[char]) -> Kernel:
+        _tr_gpu_kernel_set_arg_buf(self.handle, idx, handle)
+        return self
+
+    pub def arg_i32(self, idx: int, v: int) -> Kernel:
+        _tr_gpu_kernel_set_arg_i32(self.handle, idx, v)
+        return self
+
+    pub def arg_i64(self, idx: int, v: int) -> Kernel:
+        _tr_gpu_kernel_set_arg_i64(self.handle, idx, v)
+        return self
+
+    pub def arg_f32(self, idx: int, v: float) -> Kernel:
+        _tr_gpu_kernel_set_arg_f32(self.handle, idx, v)
+        return self
+
+    pub def arg_f64(self, idx: int, v: float) -> Kernel:
+        _tr_gpu_kernel_set_arg_f64(self.handle, idx, v)
+        return self
+
+    # Launch with explicit grid (number of blocks) and block (threads/block).
+    # Returns 0 on success, non-zero on failure (see Device.last_error()).
+    pub def launch(self, grid: Dim3, block: Dim3) -> int:
+        return _tr_gpu_launch(self.handle, grid.x, grid.y, grid.z, block.x, block.y, block.z)
+
+    # Convenience 1-D launch covering `n` elements with `block_size` threads
+    # per block (grid size is computed with ceil division).
+    pub def launch1d(self, n: int, block_size: int) -> int:
+        mut bs = block_size
+        if bs < 1: bs = 1
+        mut blocks = (n + bs - 1) / bs
+        if blocks < 1: blocks = 1
+        return _tr_gpu_launch(self.handle, blocks, 1, 1, bs, 1, 1)
+
+    pub def free(self):
+        _tr_gpu_kernel_free(self.handle)

@@ -1,0 +1,107 @@
+# @trusted: compiler systems module — audited raw-pointer core (like Rust std internals)
+# src/codegen/gpu/ — the GPU kernel backend (Route B): a `@kernel`-decorated Tauraro
+# function -> textual LLVM IR targeting NVPTX (CUDA PTX) or SPIR-V (OpenCL/Vulkan).
+# `llc`/`clang` then lowers the .ll to a PTX/SPIR-V module which std.gpu loads at
+# runtime via Module.load_ptx / Module.load_il.
+#
+#   mod.tr   - GpuGenerator (this file): the driver entry (--emit gpu)
+#   emit.tr  - GpuEmitter: one @kernel HirFunction -> LLVM IR (alloca-based; mem2reg
+#              in llc/opt supplies SSA), for a chosen GPU target
+#
+# The kernel SUBSET is deliberately small (data-parallel leaves): typed pointer params
+# (Pointer[T] -> global-memory buffers), scalar params/locals, arithmetic, comparisons,
+# if/while, indexed load/store (p.offset(i).read()/.write()), and the GPU index builtins
+# (gpu_global_id/local_id/group_id/... — ordinary std stubs on the host). Anything else
+# leaves ok=false so the driver reports a clear error rather than emitting broken IR.
+
+from hir import HirProgram
+from hir import HirFunction
+from codegen.gpu.emit import GpuEmitter
+from codegen.gpu.emit import fn_is_kernel
+from core.string import StringBuilder
+
+pub class GpuGenerator:
+    pub ok: bool
+    pub fail_note: str
+    pub n_kernels: int
+
+extend GpuGenerator:
+    pub def init() -> GpuGenerator:
+        mut g = GpuGenerator()
+        g.ok = true
+        g.fail_note = ""
+        g.n_kernels = 0
+        return g
+
+    # Emit an LLVM IR module (as text) containing every @kernel function in `prog`,
+    # targeting `target` = "nvptx" (CUDA PTX) or "spirv" (OpenCL/Vulkan SPIR-V).
+    pub def emit(self, prog: HirProgram, target: str) -> str:
+        mut tgt = target
+        if tgt == "": tgt = "spirv"
+        mut sb = StringBuilder.init(2048)
+        # Module header: target triple + datalayout + builtin declarations.
+        if tgt == "nvptx":
+            sb.append("; Tauraro GPU kernels -> NVPTX (CUDA PTX)\n")
+            sb.append("target triple = \"nvptx64-nvidia-cuda\"\n")
+            sb.append("target datalayout = \"e-i64:64-i128:128-v16:16-v32:32-n16:32:64\"\n\n")
+            sb.append("declare i32 @llvm.nvvm.read.ptx.sreg.tid.x()\n")
+            sb.append("declare i32 @llvm.nvvm.read.ptx.sreg.tid.y()\n")
+            sb.append("declare i32 @llvm.nvvm.read.ptx.sreg.tid.z()\n")
+            sb.append("declare i32 @llvm.nvvm.read.ptx.sreg.ntid.x()\n")
+            sb.append("declare i32 @llvm.nvvm.read.ptx.sreg.ntid.y()\n")
+            sb.append("declare i32 @llvm.nvvm.read.ptx.sreg.ntid.z()\n")
+            sb.append("declare i32 @llvm.nvvm.read.ptx.sreg.ctaid.x()\n")
+            sb.append("declare i32 @llvm.nvvm.read.ptx.sreg.ctaid.y()\n")
+            sb.append("declare i32 @llvm.nvvm.read.ptx.sreg.ctaid.z()\n")
+            sb.append("declare i32 @llvm.nvvm.read.ptx.sreg.nctaid.x()\n")
+            sb.append("declare void @llvm.nvvm.barrier0()\n\n")
+        else:
+            sb.append("; Tauraro GPU kernels -> SPIR-V (OpenCL)\n")
+            sb.append("target triple = \"spirv64-unknown-unknown\"\n\n")
+            sb.append("declare spir_func i64 @_Z13get_global_idj(i32)\n")
+            sb.append("declare spir_func i64 @_Z12get_local_idj(i32)\n")
+            sb.append("declare spir_func i64 @_Z12get_group_idj(i32)\n")
+            sb.append("declare spir_func i64 @_Z14get_local_sizej(i32)\n")
+            sb.append("declare spir_func i64 @_Z15get_global_sizej(i32)\n")
+            sb.append("declare spir_func i64 @_Z14get_num_groupsj(i32)\n")
+            sb.append("declare spir_func void @_Z7barrierj(i32)\n\n")
+
+        mut fi = 0
+        while fi < prog.functions.len:
+            mut f = prog.functions.get(fi)
+            if fn_is_kernel(f):
+                self.n_kernels = self.n_kernels + 1
+                mut e = GpuEmitter.init(tgt)
+                sb.append(e.emit_kernel(f))
+                if not e.ok:
+                    self.ok = false
+                    if self.fail_note == "": self.fail_note = "kernel '" + f.name + "': " + e.fail_note
+            fi = fi + 1
+
+        if self.n_kernels == 0:
+            self.ok = false
+            if self.fail_note == "": self.fail_note = "no @kernel functions found"
+
+        # NVPTX: mark each kernel in !nvvm.annotations (belt-and-braces with ptx_kernel CC).
+        if tgt == "nvptx" and self.n_kernels > 0:
+            sb.append("\n!nvvm.annotations = !{")
+            mut fi2 = 0
+            mut ki = 0
+            while fi2 < prog.functions.len:
+                mut f2 = prog.functions.get(fi2)
+                if fn_is_kernel(f2):
+                    if ki > 0: sb.append(", ")
+                    sb.append("!" + ki.to_str())
+                    ki = ki + 1
+                fi2 = fi2 + 1
+            sb.append("}\n")
+            mut fi3 = 0
+            mut ki2 = 0
+            while fi3 < prog.functions.len:
+                mut f3 = prog.functions.get(fi3)
+                if fn_is_kernel(f3):
+                    sb.append("!" + ki2.to_str() + " = !{ptr @" + f3.name + ", !\"kernel\", i32 1}\n")
+                    ki2 = ki2 + 1
+                fi3 = fi3 + 1
+
+        return sb.to_string().as_str()

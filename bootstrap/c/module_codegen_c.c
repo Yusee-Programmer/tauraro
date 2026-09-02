@@ -2794,6 +2794,12 @@ __attribute__((hot)) TrStr CGenerator_get_inline_attrs(CGenerator* self, HirFunc
             return _tr_str_lit("static __attribute__((hot)) ");
         }
         /* pass */
+        if ((!_tr_dict_contains(self->classes, _tr_strz(f->ret_ty->name)))) {
+            /* pass */
+            _tr_str_release(hw);
+            return _tr_str_lit("static __attribute__((hot)) ");
+        }
+        /* pass */
         _tr_str_release(hw);
         return _tr_str_lit("static __attribute__((malloc,returns_nonnull,hot)) ");
     }
@@ -2900,6 +2906,12 @@ __attribute__((hot)) TrStr CGenerator_get_proto_attrs(CGenerator* self, HirFunct
         }
         /* pass */
         if ((((strcmp(_tr_strz(f->ret_ty->name), _tr_strz(_tr_str_lit("void"))) == 0) || (strcmp(_tr_strz(f->ret_ty->name), _tr_strz(_tr_str_lit(""))) == 0)) || (strcmp(_tr_strz(f->ret_ty->name), _tr_strz(_tr_str_lit("None"))) == 0))) {
+            /* pass */
+            _tr_str_release(hwp);
+            return _tr_str_lit("__attribute__((hot)) ");
+        }
+        /* pass */
+        if ((!_tr_dict_contains(self->classes, _tr_strz(f->ret_ty->name)))) {
             /* pass */
             _tr_str_release(hwp);
             return _tr_str_lit("__attribute__((hot)) ");

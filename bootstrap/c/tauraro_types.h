@@ -71,6 +71,9 @@ typedef struct Jump Jump;
 typedef struct EncodedFunc EncodedFunc;
 typedef struct TextReloc TextReloc;
 typedef struct NativeGenerator NativeGenerator;
+typedef struct GVal GVal;
+typedef struct GpuEmitter GpuEmitter;
+typedef struct GpuGenerator GpuGenerator;
 typedef struct MacroCtx MacroCtx;
 typedef struct FnMacroExpander FnMacroExpander;
 typedef struct Token Token;
@@ -159,6 +162,9 @@ static void _trdrop_Jump(void* vp);
 static void _trdrop_EncodedFunc(void* vp);
 static void _trdrop_TextReloc(void* vp);
 static void _trdrop_NativeGenerator(void* vp);
+static void _trdrop_GVal(void* vp);
+static void _trdrop_GpuEmitter(void* vp);
+static void _trdrop_GpuGenerator(void* vp);
 static void _trdrop_MacroCtx(void* vp);
 static void _trdrop_FnMacroExpander(void* vp);
 
@@ -3295,6 +3301,58 @@ static void _trdrop_NativeGenerator(void* vp) {
 }
 #endif
 
+#ifndef GVal_STRUCT_DEFINED
+#define GVal_STRUCT_DEFINED
+typedef struct GVal {
+    size_t __rc;
+    TrStr ty;
+    TrStr val;
+} GVal;
+static void _trdrop_GVal(void* vp) {
+    GVal* self = (GVal*)vp; (void)self;
+    _tr_str_release(self->ty);
+    _tr_str_release(self->val);
+}
+#endif
+
+#ifndef GpuEmitter_STRUCT_DEFINED
+#define GpuEmitter_STRUCT_DEFINED
+typedef struct GpuEmitter {
+    size_t __rc;
+    StringBuilder* sb;
+    TrStr target;
+    long long tmp;
+    long long lbl;
+    bool ok;
+    TrStr fail_note;
+    List_TrStr* var_names;
+    List_TrStr* var_ll;
+    List_TrStr* var_elem;
+} GpuEmitter;
+static void _trdrop_GpuEmitter(void* vp) {
+    GpuEmitter* self = (GpuEmitter*)vp; (void)self;
+    _tr_str_release(self->target);
+    _tr_str_release(self->fail_note);
+    List_TrStr_free(self->var_names);
+    List_TrStr_free(self->var_ll);
+    List_TrStr_free(self->var_elem);
+}
+#endif
+
+#ifndef GpuGenerator_STRUCT_DEFINED
+#define GpuGenerator_STRUCT_DEFINED
+typedef struct GpuGenerator {
+    size_t __rc;
+    bool ok;
+    TrStr fail_note;
+    long long n_kernels;
+} GpuGenerator;
+static void _trdrop_GpuGenerator(void* vp) {
+    GpuGenerator* self = (GpuGenerator*)vp; (void)self;
+    _tr_str_release(self->fail_note);
+}
+#endif
+
 #ifndef MacroCtx_STRUCT_DEFINED
 #define MacroCtx_STRUCT_DEFINED
 typedef struct MacroCtx {
@@ -4302,6 +4360,47 @@ __attribute__((hot)) bool write_elf_object(TrStr out_path, List_ptr* funcs, List
 __attribute__((hot)) bool emit_lir_object(LModule* m, TrStr out_path);
 __attribute__((malloc,returns_nonnull,hot)) NativeGenerator* NativeGenerator_init();
 __attribute__((hot)) bool NativeGenerator_emit_object(NativeGenerator* self, HirProgram* prog, TrStr out_path);
+__attribute__((hot)) bool fn_is_kernel(HirFunction* f);
+__attribute__((hot)) bool _gpu_is_float(TrStr t);
+__attribute__((hot)) long long _gpu_iwidth(TrStr t);
+__attribute__((hot)) TrStr _gpu_scalar_ty(TrStr n);
+__attribute__((hot)) GVal* GVal_make(TrStr ty, TrStr val);
+__attribute__((malloc,returns_nonnull,hot)) GpuEmitter* GpuEmitter_init(TrStr target);
+__attribute__((hot)) void GpuEmitter_w(GpuEmitter* self, TrStr s);
+__attribute__((hot)) TrStr GpuEmitter_fresh(GpuEmitter* self);
+__attribute__((hot)) TrStr GpuEmitter_newlbl(GpuEmitter* self);
+__attribute__((hot)) void GpuEmitter_fail(GpuEmitter* self, TrStr why);
+__attribute__((hot)) void GpuEmitter_add_var(GpuEmitter* self, TrStr name, AstType* ty);
+__attribute__((hot)) TrStr GpuEmitter_var_slot_ty(GpuEmitter* self, TrStr name);
+__attribute__((hot)) TrStr GpuEmitter_var_elem_ty(GpuEmitter* self, TrStr name);
+__attribute__((hot)) void GpuEmitter_scan_vars_block(GpuEmitter* self, HirBlock* b);
+__attribute__((hot)) void GpuEmitter_scan_vars_stmt(GpuEmitter* self, HirStmt s);
+__attribute__((hot)) TrStr GpuEmitter_emit_kernel(GpuEmitter* self, HirFunction* f);
+__attribute__((hot)) void GpuEmitter_emit_block(GpuEmitter* self, HirBlock* b);
+__attribute__((hot)) void GpuEmitter_emit_stmt(GpuEmitter* self, HirStmt s);
+__attribute__((hot)) void GpuEmitter_emit_assign(GpuEmitter* self, HirExpr target, HirExpr* val);
+__attribute__((hot)) void GpuEmitter_emit_stmt_expr(GpuEmitter* self, HirExpr e);
+__attribute__((hot)) void GpuEmitter_emit_store(GpuEmitter* self, HirExpr chain, HirExpr* valp);
+__attribute__((hot)) GVal* GpuEmitter_emit_ptr(GpuEmitter* self, HirExpr e);
+__attribute__((hot)) GVal* GpuEmitter_emit_expr(GpuEmitter* self, HirExpr* ep);
+__attribute__((hot)) GVal* GpuEmitter_emit_expr_hir(GpuEmitter* self, HirExpr e);
+__attribute__((hot)) GVal* GpuEmitter_emit_load(GpuEmitter* self, HirExpr chain);
+__attribute__((hot)) TrStr GpuEmitter_callee_name(GpuEmitter* self, HirExpr c);
+__attribute__((hot)) GVal* GpuEmitter_emit_call(GpuEmitter* self, HirExpr callee, List_ptr* args);
+__attribute__((hot)) GVal* GpuEmitter_emit_gpu_builtin(GpuEmitter* self, TrStr nm, long long dim);
+__attribute__((hot)) GVal* GpuEmitter_i32_to_i64(GpuEmitter* self, TrStr v);
+__attribute__((hot)) GVal* GpuEmitter_emit_binop(GpuEmitter* self, TrStr op, HirExpr* lp, HirExpr* rp);
+__attribute__((hot)) TrStr GpuEmitter_cmp_pred(GpuEmitter* self, TrStr op, bool isf);
+__attribute__((hot)) TrStr GpuEmitter_common_ty(GpuEmitter* self, TrStr a, TrStr b);
+__attribute__((hot)) TrStr GpuEmitter_coerce(GpuEmitter* self, GVal* v, TrStr target);
+__attribute__((hot)) TrStr GpuEmitter_coerce_bool(GpuEmitter* self, GVal* v);
+__attribute__((hot)) long long GpuEmitter_literal_int(GpuEmitter* self, HirExpr e);
+__attribute__((hot)) TrStr GpuEmitter_float_lit(GpuEmitter* self, double v);
+__attribute__((hot)) long long _gpu_f64_bits(double v);
+__attribute__((hot)) long long _hexdig(long long n);
+__attribute__((hot)) TrStr _hex16(long long v);
+__attribute__((malloc,returns_nonnull,hot)) GpuGenerator* GpuGenerator_init();
+__attribute__((hot)) TrStr GpuGenerator_emit(GpuGenerator* self, HirProgram* prog, TrStr target);
 __attribute__((hot)) MacroVal* box_mv(MacroVal v);
 __attribute__((hot)) MacroVal* mrec(List_TrStr* keys, List_ptr* vals);
 __attribute__((hot)) MacroVal* mrec_get(MacroVal* recptr, TrStr key);
@@ -6014,6 +6113,60 @@ __attribute__((hot)) codegen_native_NativeGenerator*** core_alloc_resize_codegen
 __attribute__((hot)) void core_alloc_dealloc_codegen_native_NativeGenerator_ptr(codegen_native_NativeGenerator*** ptr);
 __attribute__((hot)) core_map_MapNode_str_codegen_native_NativeGenerator** core_alloc_alloc_core_map_MapNode_str_codegen_native_NativeGenerator(long long count);
 __attribute__((hot)) void core_alloc_dealloc_core_map_MapNode_str_codegen_native_NativeGenerator(core_map_MapNode_str_codegen_native_NativeGenerator** ptr);
+
+typedef GVal codegen_gpu_emit_GVal;
+struct core_vec_Vec_codegen_gpu_emit_GVal { codegen_gpu_emit_GVal** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_codegen_gpu_emit_GVal core_vec_Vec_codegen_gpu_emit_GVal;
+struct core_vec_Vec_codegen_gpu_emit_GVal_ptr { codegen_gpu_emit_GVal*** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_codegen_gpu_emit_GVal_ptr core_vec_Vec_codegen_gpu_emit_GVal_ptr;
+struct core_map_MapNode_str_codegen_gpu_emit_GVal { char* key; codegen_gpu_emit_GVal* value; struct core_map_MapNode_str_codegen_gpu_emit_GVal* next; };
+typedef struct core_map_MapNode_str_codegen_gpu_emit_GVal core_map_MapNode_str_codegen_gpu_emit_GVal;
+struct core_map_Map_str_codegen_gpu_emit_GVal { core_map_MapNode_str_codegen_gpu_emit_GVal** buckets; long long capacity; long long len; };
+typedef struct core_map_Map_str_codegen_gpu_emit_GVal core_map_Map_str_codegen_gpu_emit_GVal;
+__attribute__((hot)) codegen_gpu_emit_GVal** core_alloc_alloc_codegen_gpu_emit_GVal(long long count);
+__attribute__((hot)) codegen_gpu_emit_GVal** core_alloc_resize_codegen_gpu_emit_GVal(codegen_gpu_emit_GVal** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_codegen_gpu_emit_GVal(codegen_gpu_emit_GVal** ptr);
+__attribute__((hot)) codegen_gpu_emit_GVal*** core_alloc_alloc_codegen_gpu_emit_GVal_ptr(long long count);
+__attribute__((hot)) codegen_gpu_emit_GVal*** core_alloc_resize_codegen_gpu_emit_GVal_ptr(codegen_gpu_emit_GVal*** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_codegen_gpu_emit_GVal_ptr(codegen_gpu_emit_GVal*** ptr);
+__attribute__((hot)) core_map_MapNode_str_codegen_gpu_emit_GVal** core_alloc_alloc_core_map_MapNode_str_codegen_gpu_emit_GVal(long long count);
+__attribute__((hot)) void core_alloc_dealloc_core_map_MapNode_str_codegen_gpu_emit_GVal(core_map_MapNode_str_codegen_gpu_emit_GVal** ptr);
+
+typedef GpuEmitter codegen_gpu_emit_GpuEmitter;
+struct core_vec_Vec_codegen_gpu_emit_GpuEmitter { codegen_gpu_emit_GpuEmitter** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_codegen_gpu_emit_GpuEmitter core_vec_Vec_codegen_gpu_emit_GpuEmitter;
+struct core_vec_Vec_codegen_gpu_emit_GpuEmitter_ptr { codegen_gpu_emit_GpuEmitter*** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_codegen_gpu_emit_GpuEmitter_ptr core_vec_Vec_codegen_gpu_emit_GpuEmitter_ptr;
+struct core_map_MapNode_str_codegen_gpu_emit_GpuEmitter { char* key; codegen_gpu_emit_GpuEmitter* value; struct core_map_MapNode_str_codegen_gpu_emit_GpuEmitter* next; };
+typedef struct core_map_MapNode_str_codegen_gpu_emit_GpuEmitter core_map_MapNode_str_codegen_gpu_emit_GpuEmitter;
+struct core_map_Map_str_codegen_gpu_emit_GpuEmitter { core_map_MapNode_str_codegen_gpu_emit_GpuEmitter** buckets; long long capacity; long long len; };
+typedef struct core_map_Map_str_codegen_gpu_emit_GpuEmitter core_map_Map_str_codegen_gpu_emit_GpuEmitter;
+__attribute__((hot)) codegen_gpu_emit_GpuEmitter** core_alloc_alloc_codegen_gpu_emit_GpuEmitter(long long count);
+__attribute__((hot)) codegen_gpu_emit_GpuEmitter** core_alloc_resize_codegen_gpu_emit_GpuEmitter(codegen_gpu_emit_GpuEmitter** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_codegen_gpu_emit_GpuEmitter(codegen_gpu_emit_GpuEmitter** ptr);
+__attribute__((hot)) codegen_gpu_emit_GpuEmitter*** core_alloc_alloc_codegen_gpu_emit_GpuEmitter_ptr(long long count);
+__attribute__((hot)) codegen_gpu_emit_GpuEmitter*** core_alloc_resize_codegen_gpu_emit_GpuEmitter_ptr(codegen_gpu_emit_GpuEmitter*** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_codegen_gpu_emit_GpuEmitter_ptr(codegen_gpu_emit_GpuEmitter*** ptr);
+__attribute__((hot)) core_map_MapNode_str_codegen_gpu_emit_GpuEmitter** core_alloc_alloc_core_map_MapNode_str_codegen_gpu_emit_GpuEmitter(long long count);
+__attribute__((hot)) void core_alloc_dealloc_core_map_MapNode_str_codegen_gpu_emit_GpuEmitter(core_map_MapNode_str_codegen_gpu_emit_GpuEmitter** ptr);
+
+typedef GpuGenerator codegen_gpu_GpuGenerator;
+struct core_vec_Vec_codegen_gpu_GpuGenerator { codegen_gpu_GpuGenerator** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_codegen_gpu_GpuGenerator core_vec_Vec_codegen_gpu_GpuGenerator;
+struct core_vec_Vec_codegen_gpu_GpuGenerator_ptr { codegen_gpu_GpuGenerator*** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_codegen_gpu_GpuGenerator_ptr core_vec_Vec_codegen_gpu_GpuGenerator_ptr;
+struct core_map_MapNode_str_codegen_gpu_GpuGenerator { char* key; codegen_gpu_GpuGenerator* value; struct core_map_MapNode_str_codegen_gpu_GpuGenerator* next; };
+typedef struct core_map_MapNode_str_codegen_gpu_GpuGenerator core_map_MapNode_str_codegen_gpu_GpuGenerator;
+struct core_map_Map_str_codegen_gpu_GpuGenerator { core_map_MapNode_str_codegen_gpu_GpuGenerator** buckets; long long capacity; long long len; };
+typedef struct core_map_Map_str_codegen_gpu_GpuGenerator core_map_Map_str_codegen_gpu_GpuGenerator;
+__attribute__((hot)) codegen_gpu_GpuGenerator** core_alloc_alloc_codegen_gpu_GpuGenerator(long long count);
+__attribute__((hot)) codegen_gpu_GpuGenerator** core_alloc_resize_codegen_gpu_GpuGenerator(codegen_gpu_GpuGenerator** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_codegen_gpu_GpuGenerator(codegen_gpu_GpuGenerator** ptr);
+__attribute__((hot)) codegen_gpu_GpuGenerator*** core_alloc_alloc_codegen_gpu_GpuGenerator_ptr(long long count);
+__attribute__((hot)) codegen_gpu_GpuGenerator*** core_alloc_resize_codegen_gpu_GpuGenerator_ptr(codegen_gpu_GpuGenerator*** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_codegen_gpu_GpuGenerator_ptr(codegen_gpu_GpuGenerator*** ptr);
+__attribute__((hot)) core_map_MapNode_str_codegen_gpu_GpuGenerator** core_alloc_alloc_core_map_MapNode_str_codegen_gpu_GpuGenerator(long long count);
+__attribute__((hot)) void core_alloc_dealloc_core_map_MapNode_str_codegen_gpu_GpuGenerator(core_map_MapNode_str_codegen_gpu_GpuGenerator** ptr);
 
 typedef MacroVal macros_MacroVal;
 struct core_vec_Vec_macros_MacroVal { macros_MacroVal* data; long long len; long long capacity; };

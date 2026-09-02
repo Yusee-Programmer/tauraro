@@ -18,6 +18,7 @@ from codegen.c import CGenerator
 from codegen.cpp_export import CppExporter
 from codegen.llvm import LlvmGenerator
 from codegen.native import NativeGenerator
+from codegen.gpu import GpuGenerator
 from mir import lower_program, dump_mir
 from macros import expand_macros
 
@@ -1224,7 +1225,8 @@ pub def main(args: Vec[str]):
     mut output_path = ""             # -o <path> : exact output path (dir honored)
     mut out_dir     = ""             # -d <dir>  : output DIRECTORY (default: CWD)
     mut backend     = "c"
-    mut emit_mode   = "exe"   # "exe" | "c" | "ast" | "mir"
+    mut emit_mode   = "exe"   # "exe" | "c" | "ast" | "mir" | "gpu"
+    mut gpu_target  = "spirv" # --gpu-target <spirv|nvptx> : GPU kernel IR flavor for --emit gpu
     mut emit_ld     = ""      # --emit-ld PATH : also write a Cortex-M linker script (bare-metal @entry builds)
     mut run_after   = false
     mut check_only  = false
@@ -1268,6 +1270,9 @@ pub def main(args: Vec[str]):
         elif arg == "--emit-ld" and i + 1 < args.len:
             i = i + 1
             emit_ld = args.get(i)
+        elif arg == "--gpu-target" and i + 1 < args.len:
+            i = i + 1
+            gpu_target = args.get(i)
         elif arg == "--backend" and i + 1 < args.len:
             i = i + 1
             backend = args.get(i)
@@ -1411,6 +1416,18 @@ pub def main(args: Vec[str]):
     if emit_mode == "mir":
         mut mir_prog = lower_program(hir)
         print(dump_mir(mir_prog))
+        return
+
+    if emit_mode == "gpu":
+        # GPU kernel backend (Route B): @kernel functions -> LLVM IR for NVPTX/SPIR-V.
+        # `llc`/`clang` then lowers the printed .ll to a PTX/SPIR-V module that std.gpu
+        # loads via Module.load_ptx / Module.load_il.
+        mut gpu_gen = GpuGenerator.init()
+        mut gpu_ir = gpu_gen.emit(hir, gpu_target)
+        if not gpu_gen.ok:
+            _print_diag("error", "[GPU] " + gpu_gen.fail_note)
+            _tr_exit(1)
+        print(gpu_ir)
         return
 
     if verbose: print("[3/5] Code generation (backend=" + backend + ")...")
