@@ -56,28 +56,35 @@ Verified locally: soundness corpus clean (reject 17/17, accept 8/8), gen2≡gen3
 fixpoint holds, CORE fuzz gate green. Promoted to `CORE` in `gen.py`. Pending the
 Linux ASan pass (the UAF net this box can't run) before it is considered fully sealed.
 
-## Open
+### F-1 — `Vec[HeapClass]` push leaks the pushed element  ✅ CLOSED
+`FUZZ_ONLY=f_vec_box` now `LIVE 0`, differential matches. Two parts: the earlier
+`Box`-collision fix made the *elements* drop (`7200 → 3600`); the rest was
+`v.push(Box.init(k))` emitting `List_ptr_append(v, _tr_obj_retain(Box_init(k)))` — a
+fresh ctor (rc=1) was RETAINED (rc=2) instead of MOVED, leaking the temporary's ref
+(the container releases only one). `_obj_store_needs_retain` / `_obj_expr_owns_ref`
+now recognise a static constructor `Class.init(...)`/`.new(...)` as a fresh owned
+value that TRANSFERS (no retain), exactly like the `Class(...)` ECall constructor.
 
-### F-1 — `Vec[HeapClass]` with an element `.get()` borrow leaks the container  (halved)
-`FUZZ_ONLY=f_vec_box`. The `Box`-collision fix above also applies here: the `Box`
-*elements* now drop, so the leak dropped from ~16 to ~8 allocs/iteration (`LIVE
-7200 → 3600`). What remains is the original `container_borrows` / `coll_escaped`
-interaction: reading an element with `v.get(i)` marks the **container** escaped (to
-avoid freeing the borrowed element), after which the container itself is never
-released. Severity: leak, not UAF. Still the highest-value remaining fix.
+### F-4 — `Mutex[Coll[..]]` leaks its owned collection payload  ✅ CLOSED
+`FUZZ_ONLY=f_mutex_map` now `LIVE 0`, differential matches. Two halves: the
+INFERENCE half (`Mutex[Map[str,Box]].init(...)` unannotated no longer drops the
+nested value type — see the Track-1 static-ctor inference work) and the LEAK half:
+a `Mutex` wrapping a FRESH collection now OWNS it. `_TrMutexBox` gained a `cdrop`
+slot (`runtime/tauraro_rt.h`); codegen emits `_tr_mutexbox_new_owned_coll(...,
+_mtxcd_*)` where `_mtxcd_*` is a `static inline` wrapper (recorded by `scan_mono_ty`,
+emitted into the shared header) that calls the collection's typed free
+(`Dict_free_objval(..., _trdrop_Box)` etc.). A collection is not an rc-object, so it
+goes through `cdrop`, never `_tr_obj_release`. A borrowed (non-fresh) payload is not
+owned — no double-free.
 
-### F-4 — `Mutex[Map[K,V]].get()` without an annotation loses the value type
-`FUZZ_ONLY=f_mutex_map`. `mut m = Mutex[Map[str, Box]].init(...)` (no explicit type
-annotation) infers `m`'s type with the **nested** `Map[str, Box]` args dropped, so
-`m.get().get(key)` emits `((V*)...)` — an undeclared generic placeholder → C compile
-error. Root cause: type inference from a `Outer[Inner[A,B]].init(...)` constructor
-call flattens the inner generic args. Workaround (what watax does): annotate the
-local — `mut m: Mutex[Map[str, Box]] = ...`. Fix: preserve nested type args in
-constructor-call return-type inference.
+All four fuzz findings (F-1..F-4) are now leak-free and promoted to the `CORE` gate.
 
-## How these map to the roadmap
+## How these were fixed
 
-F-1 and F-2 are precisely the "is_droppable_sym heuristic has holes" problem the MIR
-ownership analysis is meant to retire: a principled last-use + ownership-transfer
-analysis would drop the container in F-1 and know the borrow in F-2 doesn't need
-suppression. They are the concrete motivating cases for that work.
+F-1..F-4 were the "is_droppable_sym heuristic has holes" cases the MIR ownership
+work targets. The keystone was making the interprocedural `consumes(fn,i)` summary
+actually usable (it was silently disabled by the `Dict_has` runtime bug — see F-2),
+then applying it (`apply_borrow_drops`) plus precise transfer/borrow/consume rules
+(static-ctor transfer, pure-scalar-return borrow, `.free()` consume, Mutex-owns-
+collection). Every fix validated by the differential oracle (elide ≡ pure-ARC) + the
+gen2≡gen3 fixpoint; the Linux ASan CI is the final UAF gate.

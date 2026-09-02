@@ -2845,6 +2845,8 @@ typedef struct CGenerator {
     StringBuilder* list_types_buf;
     StringBuilder* proto_buf;
     StringBuilder* mono_buf;
+    TrMap* mtxcd_emitted;
+    List_TrStr* mtx_cd_specs;
     StringBuilder* fn_mono_body;
     long long temp_count;
     TrMap* classes;
@@ -2916,6 +2918,8 @@ typedef struct CGenerator {
 } CGenerator;
 static void _trdrop_CGenerator(void* vp) {
     CGenerator* self = (CGenerator*)vp; (void)self;
+    Dict_free(self->mtxcd_emitted);
+    List_TrStr_free(self->mtx_cd_specs);
     Dict_free_objval(self->classes, _trdrop_HirClass);
     Dict_free_objval(self->enums, _trdrop_HirEnum);
     Dict_free_objval(self->interfaces, _trdrop_HirInterface);
@@ -4489,6 +4493,12 @@ __attribute__((hot)) bool CGenerator__obj_expr_owns_ref(CGenerator* self, HirExp
 __attribute__((hot)) bool CGenerator__store_target_is_borrow_field(CGenerator* self, HirExpr* t);
 __attribute__((hot)) bool CGenerator__obj_store_needs_retain(CGenerator* self, HirExpr* e);
 __attribute__((hot)) TrStr CGenerator_obj_drop_fn(CGenerator* self, TrStr tn);
+__attribute__((hot)) TrStr CGenerator__mtxcd_spec(CGenerator* self, AstType** ptp);
+__attribute__((hot)) TrStr CGenerator__mtxcd_name_from_spec(CGenerator* self, TrStr spec);
+__attribute__((hot)) TrStr CGenerator__mtxcd_body_from_spec(CGenerator* self, TrStr spec);
+__attribute__((hot)) TrStr CGenerator__mtxcd_name(CGenerator* self, AstType** ptp);
+__attribute__((hot)) void CGenerator_emit_mtxcd_wrappers(CGenerator* self);
+__attribute__((hot)) bool CGenerator__mutex_payload_fresh_coll(CGenerator* self, HirExpr* e);
 __attribute__((hot)) TrStr CGenerator_gen_cond_expr(CGenerator* self, HirExpr* cond);
 __attribute__((hot)) TrStr CGenerator_gen_binop(CGenerator* self, TrStr op, HirExpr* l, HirExpr* r);
 __attribute__((hot)) TrStr CGenerator_gen_unary(CGenerator* self, TrStr op, HirExpr* expr);

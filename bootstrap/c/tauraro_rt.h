@@ -1882,16 +1882,24 @@ static inline int   _tr_lstack_pop(_TrLockStack* ls, void* b) {
  * FRESH, unaliased T — see the codegen's _mutex_owns_payload). It is NULL when
  * the payload is a borrow (e.g. `Mutex[App].init(self)`), so a borrowed payload
  * is never double-freed. Guarded by rc so a Shared[Mutex]/clone only frees at 0. */
-typedef struct { _TrMutexH* mu; long long data; void (*pdrop)(void*); _Atomic int rc; } _TrMutexBox;
+/* pdrop: heap-CLASS payload field-drop (used via _tr_obj_release, F-3).
+ * cdrop: COLLECTION payload direct-destroy (calls the collection's free, F-4) —
+ *        a collection is not an rc-object, so it must NOT go through _tr_obj_release. */
+typedef struct { _TrMutexH* mu; long long data; void (*pdrop)(void*); void (*cdrop)(void*); _Atomic int rc; } _TrMutexBox;
 _TR_XLINK _TrMutexBox* _tr_mutexbox_new(long long init) {
     _TrMutexBox* b = (_TrMutexBox*)TAURARO_ALLOC(sizeof(_TrMutexBox));
-    b->mu = _tr_mutex_new(); b->data = init; b->pdrop = 0;
+    b->mu = _tr_mutex_new(); b->data = init; b->pdrop = 0; b->cdrop = 0;
     atomic_store(&b->rc, 1); return b;
 }
 /* Owning constructor: the box takes ownership of the payload and releases it via
  * `pdrop` when the box is freed (rc reaches 0). */
 _TR_XLINK _TrMutexBox* _tr_mutexbox_new_owned(long long init, void (*pdrop)(void*)) {
     _TrMutexBox* b = _tr_mutexbox_new(init); b->pdrop = pdrop; return b;
+}
+/* F-4: the box owns a FRESH collection payload; `cdrop` fully frees it (and its
+ * owned elements) at rc==0. Codegen emits a per-payload `_mtxcd_*` wrapper. */
+_TR_XLINK _TrMutexBox* _tr_mutexbox_new_owned_coll(long long init, void (*cdrop)(void*)) {
+    _TrMutexBox* b = _tr_mutexbox_new(init); b->cdrop = cdrop; return b;
 }
 _TR_XLINK long long _tr_mutexbox_lock_get(_TrMutexBox* b) {
     _tr_mutex_hlock(b->mu); _tr_lstack_push(&_tr_tl_mu_stk, b); return b->data;
@@ -1909,7 +1917,8 @@ _TR_XLINK void _tr_mutexbox_free(_TrMutexBox* b) {
     /* Owned heap-class payload: release one strong ref (rc-- -> free + field-drop
      * at 0). pdrop is the class's _trdrop_<T> field-releaser; non-NULL iff the box
      * owns the payload (created via _tr_mutexbox_new_owned from a FRESH T). */
-    if (b->pdrop && b->data) _tr_obj_release((void*)(intptr_t)b->data, b->pdrop);
+    if (b->cdrop && b->data)      b->cdrop((void*)(intptr_t)b->data);              /* F-4: free the owned collection */
+    else if (b->pdrop && b->data) _tr_obj_release((void*)(intptr_t)b->data, b->pdrop); /* F-3: release the owned heap-class */
     _tr_mutex_hfree(b->mu); TAURARO_FREE(b);
 }
 _TR_XLINK _TrMutexBox* _tr_mutexbox_clone(_TrMutexBox* b) {
