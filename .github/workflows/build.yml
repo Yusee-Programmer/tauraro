@@ -256,6 +256,18 @@ jobs:
         run: ./scripts/run_soundness.ps1
 
       # -------------------------------------------------------
+      # Example harness: build EVERY example under examples/ (a build failure means
+      # an example drifted onto a removed/renamed API), run the deterministic ones,
+      # and diff stdout against examples/golden/<name>.out when a golden exists.
+      # This is the net that catches the "stale example / removed API" class of drift.
+      # See scripts/run_examples.sh (record goldens with `--record`).
+      # -------------------------------------------------------
+      - name: Example harness (Linux / macOS)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: TAURAROC=./tauraroc${{ matrix.ext }} bash scripts/run_examples.sh
+
+      # -------------------------------------------------------
       # Leak gate + differential ARC-soundness oracle (Linux / macOS):
       # runs the leak-prone workload under -DTAURARO_MEMCOUNT with borrow
       # elision ON and OFF (--no-elide = pure-ARC ground truth). BOTH must be

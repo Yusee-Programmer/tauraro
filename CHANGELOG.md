@@ -17,6 +17,39 @@ codegen-safety / diagnostics / stdlib / tooling improvements). Entries will be
 added here as each phase lands.
 
 ### Fixed
+- **Latent runtime bug in `Dict`/`Map[K,bool]`/sets:** `Dict_has` reported key
+  presence as `Dict_get(d,key) != NULL`, so any key stored with a `false`/`NULL`
+  value was wrongly reported **absent**. This silently broke every false-valued
+  dict/set — and, crucially, made the compiler's own interprocedural
+  `consumes(fn,i)` ownership summary (`fn_param_consumes`, a `Map[str,bool]`)
+  invisible. Fixed to walk the bucket chain by key (`runtime/tauraro_rt.h`). The
+  compiler's other `Map[str,bool]` were unaffected because they only ever store
+  `true`, which is why this went unnoticed.
+- **F-2 borrow-vs-consume leak closed.** With `consumes(fn,i)` finally visible, a
+  new post-pass `apply_borrow_drops` (`src/sema.tr`) reclaims a fresh owned local
+  that is passed only to functions that BORROW it — the auto-drop the conservative
+  class-arg escape used to suppress (a leak). It is additive and strictly
+  conservative (adds a drop only for a local proven not-consumed), a `.free()` call
+  is now detected as consuming its receiver (so a consumed local is never
+  double-dropped), and a pure-scalar return (`return x.score()`) is correctly read
+  as a borrow. Verified: `f_owned_use` `LIVE 0`, soundness 18/18+8/8, gen2≡gen3
+  fixpoint. Promoted to the `CORE` fuzz gate.
+- A method call on a receiver that names **no defined type or value** (e.g. a
+  renamed/removed type used as a static receiver, `JsonValue.init_object()` after
+  `std.encoding.json` dropped `JsonValue`) silently emitted a bogus free
+  `init_object(JsonValue)` call, producing an `implicit declaration` C compile
+  error with no source-level diagnostic. Such calls are now a hard **`[E-1]`**
+  error naming the unresolved receiver (`src/sema.tr`, new `_is_known_type_name`
+  guard). Module-statics (`Str`/`Clock`/`OS`), module globals, instances, generic
+  parameters, and all builtin generics are unaffected (self-host `--check` clean,
+  fixpoint holds). Regression: `tests/soundness/reject/unknown_receiver_method.tr`.
+- The static constructors `Option.some(x)` / `Result.ok(x)` / `Result.err(x)`
+  dropped their payload type when assigned to an **unannotated** local, so
+  `mut o = Option.some(5)` inferred a bare `Option` (not `Option[int]`) and a
+  following `o.unwrap()` mis-resolved to a bogus free `unwrap(o)` call. The
+  lowercase constructors now carry the concrete payload type (`src/sema.tr`,
+  guarded by a static receiver so the instance `.ok()`/`.err()` accessors are
+  unaffected). Regression: `tests/regression/option_result_ctor_infer.tr`.
 - Whole-number float literals (e.g. `7.0`) were emitted into generated C
   without a `.`/exponent marker (`%.17g` of `7.0` is `"7"`), so expressions
   like `7.0 / 2.0` silently became integer division (`3` instead of `3.5`).

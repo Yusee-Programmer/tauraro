@@ -137,8 +137,19 @@ def f_shared(k):           # shared wrap of an existing value + clone (atomic AR
 # default set the CI gate fuzzes, so any failure is a REGRESSION. HARD adds patterns
 # that currently expose open bugs the fuzzer found (see tests/fuzz/FINDINGS.md) —
 # enable with FUZZ_HARD=1 to hunt/track them without reddening the regression gate.
-CORE = [f_consume, f_nested, f_shared]
-HARD = [f_owned_use, f_vec_box, f_mutex_get, f_mutex_map]
+# f_mutex_get PROMOTED to CORE: the Mutex-owns-fresh-payload fix (_tr_mutexbox_new_owned)
+# plus the user-class-named-Box collision fix (is_heap_class_tn / is_droppable_sym /
+# _coll_elem_droppable no longer exclude a user `class Box`) close it — LIVE 0, and the
+# elided/pure-ARC differential matches. It now guards against F-3 regressing.
+# f_owned_use PROMOTED to CORE (F-2 closed): the interprocedural consumes(fn,i)
+# summary is now APPLIED (apply_borrow_drops adds the drop the conservative class-arg
+# escape suppressed for a proven borrow-only owned local). Unblocked by fixing a
+# latent runtime bug — Dict_has tested the VALUE (`Dict_get(...)!=NULL`) instead of
+# key presence, so every false-valued entry (the whole consumes summary) was
+# invisible. `.free()` is now detected as consuming its receiver so a consumed local
+# (f_consume) is never double-dropped. LIVE 0, differential matches, fixpoint holds.
+CORE = [f_consume, f_nested, f_shared, f_mutex_get, f_owned_use]
+HARD = [f_vec_box, f_mutex_map]
 
 def main():
     seed = int(sys.argv[1]) if len(sys.argv) > 1 else 0

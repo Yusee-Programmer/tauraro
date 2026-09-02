@@ -174,6 +174,7 @@ __attribute__((hot)) void Lexer_skip_comment(Lexer* self, bool trailing) {
         ({ TrStr _at_t6 = (StringObj_as_str(StringBuilder_to_string(sb))); List_TrStr_append(self->comment_texts, _at_t6); _tr_str_release(_at_t6); });
         /* pass */
         List_bool_append(self->comment_trailing, trailing);
+        StringBuilder__tr_fn_free(sb);
     } else {
         /* pass */
         while (((!Lexer_at_end(self)) && (!char_is_newline(Lexer_peek(self))))) {

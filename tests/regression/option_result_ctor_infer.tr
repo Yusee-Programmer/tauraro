@@ -1,0 +1,29 @@
+# tests/regression/option_result_ctor_infer.tr
+# Regression: `mut o = Option.some(x)` / `Result.ok(x)` / `Result.err(x)` WITHOUT a
+# type annotation must infer o's type as Option[typeof x] / Result[..], so a
+# following o.unwrap()/o.is_some() resolves. Previously the static ctor dropped the
+# payload type (o became a BARE `Option`), so `o.unwrap()` mis-resolved and codegen
+# emitted a bogus free `unwrap(o)` call -> C compile error. (bug.txt Bug B)
+
+from std.test import TestRunner
+
+def main():
+    mut t = TestRunner.init("option_result_ctor_infer")
+
+    t.section("Option.some(...) unannotated")
+    mut oi = Option.some(5)
+    t.assert_eq_int(oi.unwrap(), 5, "Option.some(int).unwrap()")
+    t.assert_true(oi.is_some(), "Option.some(int).is_some()")
+    mut os = Option.some("hi")
+    t.assert_eq_str(os.unwrap(), "hi", "Option.some(str).unwrap()")
+    mut of = Option.some(6.5)
+    t.assert_eq_float(of.unwrap(), 6.5, 0.0001, "Option.some(float).unwrap()")
+
+    t.section("Result.ok(...) / Result.err(...) unannotated")
+    mut ro = Result.ok(3)
+    t.assert_true(ro.is_ok(), "Result.ok(int).is_ok()")
+    t.assert_eq_int(ro.unwrap(), 3, "Result.ok(int).unwrap()")
+    mut re = Result.err("bad")
+    t.assert_true(re.is_err(), "Result.err(str).is_err()")
+
+    t.summary()

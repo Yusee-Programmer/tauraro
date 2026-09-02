@@ -1010,7 +1010,10 @@ extend Sema:
         # are stored inline and need no per-element drop.
         if self.classes.contains(n):
             if not self.classes.get(n).is_class: return false   # @value_type: inline, no drop
-            if n == "Vec" or n == "Map" or n == "List" or n == "Dict" or n == "Set" or n == "Box" or n == "Mutex" or n == "RwLock" or n == "Atomic" or n == "Shared" or n == "Option" or n == "Result" or n == "Chan" or n == "StringBuilder" or n == "StringObj": return false
+            # "Box" excluded intentionally omitted: a builtin Box[T] never lands in
+            # self.classes (guarded above), so tn=="Box" here is a user `class Box` whose
+            # elements the collection co-owns and must drop (fixes Vec[Box] leak, F-1).
+            if n == "Vec" or n == "Map" or n == "List" or n == "Dict" or n == "Set" or n == "Mutex" or n == "RwLock" or n == "Atomic" or n == "Shared" or n == "Option" or n == "Result" or n == "Chan" or n == "StringBuilder" or n == "StringObj": return false
             return true
         return false
 
@@ -1279,8 +1282,20 @@ extend Sema:
                 mut et = targs.get(0).read().name
                 if not self._coll_elem_droppable(et): return false
                 return true
+        # A Mutex[T] local owns its box (rc=1): drop it at scope exit. `_tr_mutexbox_drop`
+        # unlocks a still-held guard, then — when the box owns a FRESH, unaliased payload
+        # (_tr_mutexbox_new_owned) — releases that payload (closes the F-3/F-4 leak). A
+        # BORROWED payload (Mutex[App].init(self)) is never owned, so never double-freed.
+        # Move/borrow/init guards as for any owned local.
+        if tn == "Mutex":
+            if sym.is_moved or sym.is_maybe_moved or sym.is_freed: return false
+            if sym.active_borrows > 0: return false
+            if not sym.is_init or sym.is_maybe_init: return false
+            return true
         if not self.classes.contains(tn): return false
-        if tn == "Vec" or tn == "Map" or tn == "List" or tn == "Dict" or tn == "Box" or tn == "Mutex" or tn == "RwLock" or tn == "Atomic" or tn == "Shared" or tn == "Option" or tn == "Result" or tn == "Chan": return false
+        # "Box" omitted: builtin Box[T] is not in self.classes (guarded above), so a
+        # tn=="Box" here is a user `class Box` — a droppable owned local, not the builtin.
+        if tn == "Vec" or tn == "Map" or tn == "List" or tn == "Dict" or tn == "Mutex" or tn == "RwLock" or tn == "Atomic" or tn == "Shared" or tn == "Option" or tn == "Result" or tn == "Chan": return false
         # StringBuilder/StringObj methods like as_str()/to_str() can return a
         # pointer that aliases the instance's own internal buffer; auto-freeing
         # the instance would dangle that alias. Require an explicit .free().
@@ -2375,9 +2390,12 @@ extend Sema:
         # a call-result local is auto-dropped — enabling reclamation of owned
         # factory/free-function results without ever over-releasing a borrow.
         self.compute_return_ownership(hp)
-        # Parameter-ownership summary (consumes(fn,i)). Computed here, not yet consumed
-        # by codegen — lands the interprocedural analysis infrastructure at zero risk.
+        # Parameter-ownership summary (consumes(fn,i)): the interprocedural monotone
+        # fixpoint the drop heuristics lack, over the fully-lowered program.
         self.compute_param_ownership(hp)
+        # F-2: apply it — add the auto-drops the conservative class-arg escape wrongly
+        # suppressed for locals that are only BORROWED (never consumed) by their callees.
+        self.apply_borrow_drops(hp)
         return hp
 
     # ---- Return-ownership inference (whole-program monotone fixpoint) ----
@@ -2526,6 +2544,174 @@ extend Sema:
                     pi = pi + 1
                 xi = xi + 1
 
+    # A pure scalar type: a by-value primitive that CANNOT hold a pointer, so a
+    # value of this type can never own or alias a heap object. (NB: excludes `str`
+    # and the c_* family — a str aliases its buffer, a c_ptr may be a pointer.)
+    pub def _is_pure_scalar(self, tn: str) -> bool:
+        if tn == "int" or tn == "float" or tn == "bool" or tn == "char" or tn == "void": return true
+        if tn == "i8" or tn == "i16" or tn == "i32" or tn == "i64": return true
+        if tn == "u8" or tn == "u16" or tn == "u32" or tn == "u64" or tn == "usize": return true
+        if tn == "f32" or tn == "f64": return true
+        return false
+
+    # True if a `return E` / `raise E` could transfer OR alias a heap value (so a
+    # heap param appearing in E may be consumed). A pure-scalar E cannot — false.
+    pub def _pc_owns_return(self, e: Pointer[HirExpr]) -> bool:
+        if e as usize == 0 as usize: return true
+        if _is_invalid_ptr(e as usize): return true
+        return not self._is_pure_scalar(hir_expr_type(e).name)
+
+    # ── F-2: reclaim borrow-only owned locals (additive; safe-direction) ──────────
+    # docs/dev/07 Stage 2, applied as a POST-PASS (after compute_param_ownership).
+    # The conservative class-arg escape (`mark_coll_arg`) excludes ANY class instance
+    # passed as a non-receiver arg from auto-drop — even when the callee only BORROWS
+    # it — so a fresh owned local passed to a borrowing function leaks (F-2). Here we
+    # ADD BACK exactly those drops: for a local whose initializer is a fresh
+    # constructor/owned-factory of a droppable class, that is NOT consumed anywhere in
+    # its block (`_param_consumed_in_block`, which consults the now-correct
+    # `consumes(fn,i)` fixpoint), and that is NOT already dropped/reassigned.
+    #
+    # Soundness: ADDITIVE and STRICTLY CONSERVATIVE. `_param_consumed_in_block` returns
+    # true on ANY uncertainty (unknown/extern/indirect callee, method-arg, store,
+    # return, free, spawn), so a drop is added ONLY when the local is PROVEN borrow-only
+    # and locally owned. Missing a case → a leak (unchanged), never a double-free/UAF.
+    pub def apply_borrow_drops(self, hp: HirProgram):
+        mut fi = 0
+        while fi < hp.functions.len:
+            self._borrow_drops_block(hp.functions.get(fi).body)
+            fi = fi + 1
+        mut ci = 0
+        while ci < hp.classes.len:
+            mut c = hp.classes.get(ci)
+            mut mi = 0
+            while mi < c.methods.len:
+                self._borrow_drops_block(c.methods.get(mi).body)
+                mi = mi + 1
+            ci = ci + 1
+        mut eni = 0
+        while eni < hp.enums.len:
+            mut en = hp.enums.get(eni)
+            mut emi = 0
+            while emi < en.methods.len:
+                self._borrow_drops_block(en.methods.get(emi).body)
+                emi = emi + 1
+            eni = eni + 1
+
+    pub def _borrow_drops_block(self, b: HirBlock):
+        if b as usize == 0 as usize: return
+        mut i = 0
+        while i < b.stmts.len:
+            self._borrow_drops_recurse_stmt(b.stmts.get(i))
+            i = i + 1
+        mut add_names = Vec[str].init(2)
+        mut add_cls   = Vec[str].init(2)
+        i = 0
+        while i < b.stmts.len:
+            match b.stmts.get(i).read():
+                case HirStmt.SLet(nm, _own, _mut2, _cst, _shr, _ty, val):
+                    mut cn = _ty.name
+                    if self._is_owned_droppable_class(cn) and self._is_fresh_owned_producer(val, cn):
+                        if not self._block_has_drop_or_reassign(b, nm):
+                            if not self._param_consumed_in_block(nm, b):
+                                add_names.push(nm)
+                                add_cls.push(cn)
+                case _: pass
+            i = i + 1
+        mut ai = 0
+        while ai < add_names.len:
+            self._insert_drop_before_terminator(b, add_names.get(ai), add_cls.get(ai))
+            ai = ai + 1
+
+    pub def _borrow_drops_recurse_stmt(self, sp: Pointer[HirStmt]):
+        if sp as usize == 0 as usize: return
+        match sp.read():
+            case HirStmt.SIf(_, tb, eb):
+                self._borrow_drops_block(tb)
+                self._borrow_drops_block(eb)
+            case HirStmt.SWhile(_, wb): self._borrow_drops_block(wb)
+            case HirStmt.SFor(_, _, fb): self._borrow_drops_block(fb)
+            case HirStmt.SForUnpack(_, _, fub): self._borrow_drops_block(fub)
+            case HirStmt.SMatch(_, arms):
+                mut ai = 0
+                while ai < arms.len:
+                    self._borrow_drops_block(arms.get(ai).body)
+                    ai = ai + 1
+            case HirStmt.SUnsafe(ub): self._borrow_drops_block(ub)
+            case HirStmt.SWith(_, _, wb): self._borrow_drops_block(wb)
+            case HirStmt.STaskGroup(tb): self._borrow_drops_block(tb)
+            case HirStmt.STry(tb, catches, fb):
+                self._borrow_drops_block(tb)
+                self._borrow_drops_block(fb)
+                mut ci = 0
+                while ci < catches.len:
+                    self._borrow_drops_block(catches.get(ci).read().body)
+                    ci = ci + 1
+            case _: pass
+
+    # True iff `val` produces a FRESH, unaliased, locally-OWNED value of class `cn`:
+    # a direct constructor `cn(...)`/`cn.init(...)`/`cn.new(...)`, or a call to an
+    # OWNED-returning function/method (`fn_ret_owned`) — a factory like `make_named`.
+    pub def _is_fresh_owned_producer(self, val: Pointer[HirExpr], cn: str) -> bool:
+        if val as usize == 0 as usize: return false
+        if _is_invalid_ptr(val as usize): return false
+        match val.read():
+            case HirExpr.ECall(callee, _, _):
+                match callee.read():
+                    case HirExpr.EIdent(fnm, _, _):
+                        if fnm == cn: return true
+                        if self.fn_ret_owned.contains(fnm) and self.fn_ret_owned.get(fnm): return true
+                    case _: pass
+            case HirExpr.EMethodCall(obj, m, _, _):
+                if m == "init" or m == "new": return true
+                mut mkey = hir_expr_type(obj).name + "." + m
+                if self.fn_ret_owned.contains(mkey) and self.fn_ret_owned.get(mkey): return true
+            case _: pass
+        return false
+
+    pub def _is_owned_droppable_class(self, cn: str) -> bool:
+        if not self.classes.contains(cn): return false
+        if self.classes.get(cn).generics.len > 0: return false
+        if self.class_method_exists(cn, "free"): return true
+        return self._is_rc_class(cn)
+
+    pub def _block_has_drop_or_reassign(self, b: HirBlock, nm: str) -> bool:
+        mut i = 0
+        while i < b.stmts.len:
+            match b.stmts.get(i).read():
+                case HirStmt.SAutoDrop(dn, _):
+                    if dn == nm: return true
+                case HirStmt.SFree(dn):
+                    if dn == nm: return true
+                case HirStmt.SAssign(tgt, _):
+                    match tgt.read():
+                        case HirExpr.EIdent(tn2, _, _):
+                            if tn2 == nm: return true
+                        case _: pass
+                case _: pass
+            i = i + 1
+        return false
+
+    pub def _insert_drop_before_terminator(self, b: HirBlock, nm: str, cn: str):
+        mut drop = box_hirstmt(HirStmt.SAutoDrop(nm, cn))
+        mut n = b.stmts.len
+        if n == 0:
+            b.stmts.push(drop)
+            return
+        mut last = b.stmts.get(n - 1)
+        mut is_term = false
+        match last.read():
+            case HirStmt.SReturn(_): is_term = true
+            case HirStmt.SRaise(_): is_term = true
+            case HirStmt.SBreak(_): is_term = true
+            case HirStmt.SContinue: is_term = true
+            case _: pass
+        if is_term:
+            b.stmts.remove(n - 1)
+            b.stmts.push(drop)
+            b.stmts.push(last)
+        else:
+            b.stmts.push(drop)
+
     pub def _pc_is_ident(self, ep: Pointer[HirExpr], name: str) -> bool:
         if ep as usize == 0 as usize: return false
         match ep.read():
@@ -2589,8 +2775,18 @@ extend Sema:
     pub def _param_consumed_in_stmt(self, pname: str, sp: Pointer[HirStmt]) -> bool:
         if sp as usize == 0 as usize: return false
         match sp.read():
-            case HirStmt.SReturn(e): return self._pc_refs(e, pname)          # returned -> transferred
-            case HirStmt.SRaise(e): return self._pc_refs(e, pname)
+            case HirStmt.SReturn(e):
+                # A PURE-SCALAR return value (int/float/bool/…) cannot own or alias a
+                # heap param, so the param was only BORROWED to compute it (e.g.
+                # `return x.score()` returns an int — x is not transferred). Only a
+                # return that could carry a pointer (str/class/collection) transfers or
+                # aliases the param. Actual consumption elsewhere in the body
+                # (free/store/consuming-call) is still caught by the other cases.
+                if not self._pc_owns_return(e): return false
+                return self._pc_refs(e, pname)
+            case HirStmt.SRaise(e):
+                if not self._pc_owns_return(e): return false
+                return self._pc_refs(e, pname)
             case HirStmt.SFree(nm): return nm == pname                       # freed -> consumed
             case HirStmt.SSpawn(e): return self._pc_refs(e, pname)           # crosses a thread -> consumed
             case HirStmt.SAssign(tgt, val):
@@ -2642,6 +2838,11 @@ extend Sema:
                     j = j + 1
                 return self._param_consumed_in_expr(pname, callee)
             case HirExpr.EMethodCall(obj, method, args, _):
+                # `pname.free()` DESTROYS the receiver (class-with-free destructor
+                # convention) — treat it as CONSUMING pname, so a caller that hands its
+                # owned value to a function whose body frees it is not ALSO auto-dropped
+                # (would double-free). Any other method leaves the receiver borrowed.
+                if method == "free" and self._pc_is_ident(obj, pname): return true
                 mut j2 = 0
                 while j2 < args.len:
                     if self._pc_is_ident(args.get(j2), pname): return true            # receiver-type deferred -> conservative
@@ -4935,6 +5136,17 @@ extend Sema:
                         mut _rsym = self.resolve(_rn)
                         if _rsym.name != "" and _rsym.is_shared: _recv_is_shared = true
                     case _: pass
+                # [E-1] Method call on an UNDEFINED receiver: `Foo.bar(...)` where the
+                # bare identifier `Foo` is neither a value in scope (local/param/module
+                # global/function) nor any known type. Without this the codegen silently
+                # emits a bogus free `bar(Foo, ...)` call -> invalid C — the exact failure
+                # of a renamed/removed std type used as a static receiver, e.g.
+                # `JsonValue.init_object()` after json.tr dropped `JsonValue`.
+                if _recv_name != "" and not self.is_local_var(_recv_name) and not self._is_known_type_name(_recv_name):
+                    mut _rv_sym = self.resolve(_recv_name)
+                    mut _rv_is_value = _rv_sym.name != "" and (_rv_sym.kind == SymbolKind.SVariable or _rv_sym.kind == SymbolKind.SFunction)
+                    if not _rv_is_value:
+                        self.error("[E-1] '" + _recv_name + "' is not a defined type or value, so '" + _recv_name + "." + method + "(...)' cannot be resolved.\n      FIX: check the spelling, import the type, or define it — a call on an unknown name would otherwise emit invalid C.")
                 # Callable-field call: obj.f(args) where f is a def(...)-typed
                 # FIELD (not a method) -> lower to field access + indirect call.
                 if self.classes.contains(hobj_ty.name):
@@ -5117,11 +5329,15 @@ extend Sema:
                         ret_ty = AstType.init_generic("List", box_asttype(_dict_val_ty))
                 # Option[T] built-in method return types
                 elif hobj_ty.name == "Option":
-                    # Ctor `Option.Some(x)` carries the payload's CONCRETE type so a later
-                    # `case Option.Some(v):` binds `v` correctly (Option[float], not bare Option).
-                    if method == "Some" and hl.len == 1:
+                    # Static ctor `Option.some(x)` / `Option.Some(x)` carries the payload's
+                    # CONCRETE type so an UNANNOTATED `mut o = Option.some(5)` infers
+                    # `o: Option[int]` (else `o.unwrap()` can't resolve -> bogus free call).
+                    # `_recv_name == "Option"` gates the lowercase form so it never shadows a
+                    # hypothetical instance method; capital `Some` is unambiguous.
+                    if (method == "Some" or (method == "some" and _recv_name == "Option")) and hl.len == 1:
                         ret_ty = AstType.init("Option")
                         ret_ty.args.push(box_asttype(hir_expr_type(hl.get(0))))
+                    elif (method == "None" or (method == "none" and _recv_name == "Option")): ret_ty = AstType.init("Option")
                     elif method == "is_some" or method == "is_none": ret_ty = AstType.init("bool")
                     elif method == "unwrap" or method == "expect":
                         if hobj_ty.args.len > 0: ret_ty = hobj_ty.args.get(0).read()
@@ -5132,12 +5348,16 @@ extend Sema:
                         else: ret_ty = AstType.init("int")
                 # Result[T,E] built-in method return types
                 elif hobj_ty.name == "Result":
-                    # Ctors carry the payload's concrete type positionally (unknown side = void).
-                    if method == "Ok" and hl.len == 1:
+                    # Static ctors carry the payload's concrete type positionally (unknown
+                    # side = void) so `mut r = Result.ok(3.14)` infers `r: Result[float, void]`.
+                    # Lowercase `ok`/`err` are gated on `_recv_name == "Result"` so they are
+                    # read as CONSTRUCTORS on the type, not the instance `.ok()`/`.err()`
+                    # accessors handled below; capital `Ok`/`Err` are unambiguous.
+                    if (method == "Ok" or (method == "ok" and _recv_name == "Result")) and hl.len == 1:
                         ret_ty = AstType.init("Result")
                         ret_ty.args.push(box_asttype(hir_expr_type(hl.get(0))))
                         ret_ty.args.push(box_asttype(AstType.init("void")))
-                    elif method == "Err" and hl.len == 1:
+                    elif (method == "Err" or (method == "err" and _recv_name == "Result")) and hl.len == 1:
                         ret_ty = AstType.init("Result")
                         ret_ty.args.push(box_asttype(AstType.init("void")))
                         ret_ty.args.push(box_asttype(hir_expr_type(hl.get(0))))
@@ -5917,6 +6137,24 @@ extend Sema:
             case _: return false
 
     pub def is_primitive(self, ty: AstType) -> bool: return self.is_primitive_name(ty.name)
+    # True if `name` denotes SOME resolvable type: a primitive, a string type, a
+    # 1-char generic parameter (T/K/V/E), a user class/enum/interface, or a builtin
+    # generic/collection/concurrency/module-static type. Used to detect a method
+    # call whose receiver is a bare identifier naming NO known type (a
+    # silent-miscompile hazard — codegen would emit a bogus free call).
+    pub def _is_known_type_name(self, name: str) -> bool:
+        if name == "": return true
+        if self.is_primitive_name(name): return true
+        if name == "str" or name == "Str" or name == "StringObj" or name == "StringBuilder" or name == "ptr" or name == "object": return true
+        if _tr_strlen(name) == 1: return true   # generic type parameter (T, K, V, E, U, ...)
+        if self.classes.contains(name): return true
+        if self.enums.contains(name): return true
+        if self.interfaces as usize != 0 as usize and self.interfaces.contains(name): return true
+        if name == "Vec" or name == "List" or name == "Map" or name == "Dict" or name == "Set" or name == "Box" or name == "Tuple" or name == "tuple" or name == "Pointer": return true
+        if name == "Mutex" or name == "RwLock" or name == "Atomic" or name == "Shared" or name == "Weak" or name == "Option" or name == "Result" or name == "Chan" or name == "Channel": return true
+        if name == "Thread" or name == "ThreadPool" or name == "ThreadLocal" or name == "Coro": return true
+        return false
+
     pub def is_primitive_name(self, name: str) -> bool:
         if name == "int" or name == "float" or name == "bool" or name == "char" or name == "void" or name == "None": return true
         if name == "i64" or name == "i32" or name == "i16" or name == "i8": return true

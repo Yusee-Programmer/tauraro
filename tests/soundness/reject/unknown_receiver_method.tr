@@ -1,0 +1,10 @@
+# EXPECT: [E-1]
+# A method call on a receiver that names NO defined type or value must be a hard
+# compile error, not a silent free-function call. Here `JsonValue` is not a defined
+# type (e.g. a renamed/removed std type used as a static receiver). Previously the
+# codegen emitted a bogus `init_object(JsonValue)` free call -> invalid C, with no
+# diagnostic. The compiler must reject it with [E-1]. (bug.txt Bug C)
+
+def main():
+    mut o = JsonValue.init_object()
+    print("unreachable")
