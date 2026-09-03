@@ -4120,6 +4120,28 @@ static inline void   _tr_idict_remove(TrIDict* d, long long k) {
 }
 static inline long long _tr_idict_len(TrIDict* d) { return d ? (long long)d->len : 0LL; }
 
+/* ── Built-in function value (def(...)->R / lambda) ──────────────────────
+ * A plain 2-word {fn, env} struct, NOT a tagged pointer. `env==NULL` means a
+ * bare named-function reference (call `fn` directly); `env!=NULL` means a
+ * closure (call `fn` with `env` as the hidden first arg). A prior tagged-
+ * pointer scheme (low bit of a single void* distinguished the two cases)
+ * broke on ARM/Thumb, where bit 0 of EVERY function pointer is already fixed
+ * to 1 by the ABI (the "Thumb bit", needed for BX/BLX mode switching) -- so
+ * the tag test was always true, and a plain function call jumped through
+ * garbage read from inside the function's own machine code. This struct form
+ * has no pointer-bit dependency and is portable to every target. */
+typedef struct { void* fn; void* env; } TrFnVal;
+
+/* List_TrFnVal: vector of function values (Vec[def(...)->R]). Predefined
+ * here so codegen needn't lazily emit it (mirrors List_TrTuple below). */
+typedef struct { TrFnVal* data; size_t len; size_t capacity; } List_TrFnVal;
+static inline List_TrFnVal* List_TrFnVal_new(void) { List_TrFnVal* l=(List_TrFnVal*)malloc(sizeof(List_TrFnVal)); l->data=(TrFnVal*)malloc(sizeof(TrFnVal)*8); l->len=0; l->capacity=8; return l; }
+static inline void List_TrFnVal_append(List_TrFnVal* l, TrFnVal val) { if(l->len==l->capacity){ l->capacity*=2; l->data=(TrFnVal*)realloc(l->data,sizeof(TrFnVal)*l->capacity); } l->data[l->len++]=val; }
+static inline TrFnVal List_TrFnVal_get(List_TrFnVal* l, long long i) { _tr_bounds_check(i, l->len); return l->data[i]; }
+static inline TrFnVal List_TrFnVal_pop(List_TrFnVal* l) { if(!l||l->len==0){ TrFnVal z={0}; return z; } l->len--; return l->data[l->len]; }
+static inline void List_TrFnVal_set(List_TrFnVal* l, long long i, TrFnVal v) { if(l&&(size_t)i<l->len) l->data[i]=v; }
+static inline void List_TrFnVal_free(List_TrFnVal* l) { if(l){ _tr_free(l->data); _tr_free(l); } }
+
 /* ── Built-in Tuple (up to 8 elements, all stored as long long) ────────── */
 typedef struct { long long data[8]; } TrTuple;
 
@@ -4393,6 +4415,7 @@ _TR_LIST_RESERVE(List_ptr)
 _TR_LIST_RESERVE(List_str)
 _TR_LIST_RESERVE(List_TrStr)
 _TR_LIST_RESERVE(List_TrTuple)
+_TR_LIST_RESERVE(List_TrFnVal)
 _TR_LIST_RESERVE(List_u32)
 _TR_LIST_RESERVE(List_u8)
 /* ── Extended Vec/List operations: remove, swap, clear, is_empty, extend ──── */

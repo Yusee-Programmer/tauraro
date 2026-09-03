@@ -302,7 +302,22 @@ For a **comprehensive multi-module** version — a GPIO driver, a SysTick timer,
 - **Use a pluggable allocator, not libc.** Under `--freestanding` the runtime `#error`s if `TAURARO_ALLOC/…` are undefined — supply them with `@allocator`/`@free`/`@realloc`/`@calloc`.
 - **Float formatting is basic** in the freestanding `snprintf`-lite (integers/hex/strings are exact). Fine for logging; not IEEE-precise. Hosted uses the real libc.
 - **`@interrupt`/`@naked` don't compile on hosted x86** — they are only valid on the cross target.
-- **Link with `-lgcc`** on Cortex-M for the 64-bit arithmetic helpers the CPU lacks.
+- **Link with `-lgcc`** on Cortex-M for the 64-bit arithmetic helpers the CPU lacks (the turnkey `--target embedded-arm --emit-ld ... -o app` link does this for you automatically).
+- **Always drive real MMIO through `std.hal.mmio`, never a hand-rolled raw pointer write.** A plain `(addr as Pointer[u32]).write(v)` is NOT `volatile` — at the optimization levels the turnkey link uses by default, the compiler is free to treat repeated writes to the same address (e.g. polling a UART TX register in a loop) as dead stores and keep only the LAST one, which looks exactly like "only the last byte of everything I print shows up." `std.hal.mmio.write32`/`read32`/etc. are the volatile-qualified, compiler-never-elides-or-reorders versions — use them for every device register, not just as an example.
+
+## Function values on bare metal
+
+`def(...)->R` and `lambda` values (a bare top-level function reference, a
+closure, storing either in a class field or `Dict`/`List`) work identically
+on `--freestanding` and hosted — calling a function value, reassigning it,
+passing it as an argument, and closures (both a stack-bound local and one
+passed inline as an argument) are all verified running on real Cortex-M3/Thumb
+under qemu. Internally this is a plain 2-word `{fn, env}` struct (`TrFnVal`),
+not a tagged pointer — a prior tagged-pointer scheme broke specifically on
+ARM/Thumb, where bit 0 of every function pointer is already fixed to 1 by the
+ABI (the "Thumb bit"), so the discriminant test used for closure-vs-plain-fn
+was never reliable there. If you're on an older Tauraro build and a stored
+function value hangs or faults when called under `--freestanding`, update.
 
 ---
 

@@ -524,9 +524,10 @@ pub class CGenerator:
         if n == "Array" and ty.array_size > 0 and ty.args.len > 0:
             return self.ensure_array_type(ty)
 
-        # Function-pointer type (def(...)->R): stored as a void* function pointer.
-        # Zero-cost: the call site casts back to the exact signature before calling.
-        if n == "def": return "void*"
+        # Function-value type (def(...)->R): a plain {fn,env} struct (TrFnVal, see
+        # runtime header) -- NOT a tagged pointer. The call site casts .fn back to
+        # the exact signature before calling; .env==NULL means a bare function.
+        if n == "def": return "TrFnVal"
 
         # Check active type substitution first (used during monomorphization)
         if self.type_subst.contains(n): return self.type_subst.get(n)
@@ -713,7 +714,7 @@ pub class CGenerator:
 
         if n == "Result": return "Result"
         if n == "Option": return "Option"
-        if n == "lambda": return "void*"
+        if n == "lambda": return "TrFnVal"
         if self.enums.contains(n): return n
         if self.interfaces.contains(n):
             mut gi_iface = self.interfaces.get(n)
@@ -764,6 +765,12 @@ pub class CGenerator:
         # List_TrTuple is predefined in the runtime header, so no ensure here.
         if actual_n == "Tuple" or actual_n == "tuple":
             return "TrTuple"
+        # Function value (Vec[def(...)->R] / Vec[lambda]): stored by value as
+        # TrFnVal ({fn,env} struct, not a raw pointer -- must NOT fall through
+        # to the generic "ptr" bucket below, which assumes pointer-sized
+        # elements). List_TrFnVal is predefined in the runtime header.
+        if actual_n == "def" or actual_n == "lambda":
+            return "TrFnVal"
         mut sfx = self.type_suffix(actual_n)
         if sfx == "i64" or sfx == "f64" or sfx == "str" or sfx == "bool" or sfx == "i8" or sfx == "i32" or sfx == "char" or sfx == "u8" or sfx == "u32":
             return sfx
@@ -1933,8 +1940,9 @@ pub class CGenerator:
                 if _is_c_keyword(n) and self.decl_vars.contains(n): return "_tr_v_" + n
                 if n == "argv" and self.cur_func == "main": return "_tr_main_argv"
                 # A top-level function used as a value (not a call target) is a
-                # zero-cost function pointer: emit its address as void*.
-                if self.functions.contains(n) and not self.decl_vars.contains(n): return "(void*)" + n
+                # zero-cost TrFnVal: its address as .fn, NULL .env (bare function,
+                # not a closure -- see gen_call's dispatch on .env).
+                if self.functions.contains(n) and not self.decl_vars.contains(n): return "((TrFnVal){(void*)" + n + ", NULL})"
                 return n
             case HirExpr.EBinOp(op, l, r, _): return self.gen_binop(op, l, r)
             case HirExpr.EUnaryOp(op, expr, _): return self.gen_unary(op, expr)
@@ -1955,6 +1963,14 @@ pub class CGenerator:
                     mut cast_src_ty: str = hir_expr_type(expr).name
                     if cast_src_ty == "List" or cast_src_ty == "Vec":
                         return "((" + self.type_to_c(target_ty) + ")(" + self.gen_expr(expr) + "->data))"
+                    # def(...)->R / lambda -> Pointer[void]: the `c_callback` FFI bridge
+                    # threads a closure through a C API's userdata pointer, and
+                    # cb_trampoline treats that userdata AS the closure's env pointer
+                    # (see gen_call's c_callback + cb_trampoline). TrFnVal is a 2-word
+                    # struct now (not a raw pointer), so extract `.env` rather than
+                    # attempting a struct-to-pointer cast (invalid C).
+                    if cast_src_ty == "def" or cast_src_ty == "lambda":
+                        return "((" + self.type_to_c(target_ty) + ")(" + self.gen_expr(expr) + ").env)"
                 # `as str`: TrStr is a struct, can't C-cast to it. If the source
                 # expr is already str-typed it's a no-op; otherwise it's a
                 # generic/void* result (e.g. Dict.get(k) as str) - unbox it.
@@ -3880,18 +3896,29 @@ pub class CGenerator:
             case _: pass
         if (callee_ty_n == "lambda" or callee_ty_n == "void*" or callee_ty_n == "def") and not _callee_direct_fn:
             mut ret_cty = self.type_to_c(call_ty)
-            if ret_cty == "void" or ret_cty == "void*": ret_cty = "long long"
+            # `call_ty` (this call EXPRESSION's inferred type) isn't always narrowed
+            # to the callee's declared return type for an indirect call through an
+            # erased def(...)->R/lambda value -- it can come back as the callee's
+            # OWN type name (formerly "void*", now "TrFnVal" since that's what
+            # type_to_c emits for def/lambda). Both cases mean "the real scalar
+            # return type is unknown here"; "long long" is wide enough to carry it
+            # back correctly for any scalar/pointer return (existing limitation,
+            # unchanged by the TrFnVal switch: this still can't correctly call a
+            # def(...)->R value whose OWN return type is itself def(...)->R or
+            # another struct-by-value type like str/Tuple/Option/Result).
+            if ret_cty == "void" or ret_cty == "void*" or ret_cty == "TrFnVal": ret_cty = "long long"
             mut arg_types = ""
             mut ai2 = 0
             while ai2 < args.len:
                 if ai2 > 0: arg_types = arg_types + ", "
                 arg_types = arg_types + self.type_to_c(hir_expr_type(args.get(ai2)))
                 ai2 = ai2 + 1
-            # A def-typed value is either a CLOSURE (a tagged heap env whose first
-            # word is the fn pointer, called with the env as the first arg) or a
-            # bare NAMED-function pointer (untagged, called directly). Branch on
-            # the tag. `gen_args` is emitted once and reused in both arms; only the
-            # taken arm runs at runtime.
+            # A def-typed value is a TrFnVal {fn, env} struct: a CLOSURE has a
+            # non-NULL env (call `fn` with the env as the hidden first arg); a
+            # bare NAMED-function reference has env==NULL (call `fn` directly).
+            # No pointer-bit tagging (that scheme broke on ARM/Thumb, where bit 0
+            # of every function pointer is already fixed to 1 by the ABI). `gen_args`
+            # is emitted once and reused in both arms; only the taken arm runs.
             mut _cargs = self.gen_args(args)
             mut env_sig = "void*"
             if arg_types != "": env_sig = "void*, " + arg_types
@@ -3900,7 +3927,7 @@ pub class CGenerator:
             mut env_args = "__ce"
             if args.len > 0: env_args = "__ce, " + _cargs
             mut dir_args = _cargs
-            return "({ void* __cl = (void*)(" + callee_s + "); void* __ce = (void*)((uintptr_t)__cl & ~(uintptr_t)1); ((uintptr_t)__cl & 1) ? ((" + ret_cty + "(*)(" + env_sig + "))(*(void**)__ce))(" + env_args + ") : ((" + ret_cty + "(*)(" + dir_sig + "))__cl)(" + dir_args + "); })"
+            return "({ TrFnVal __cl = (" + callee_s + "); void* __ce = __cl.env; __ce ? ((" + ret_cty + "(*)(" + env_sig + "))__cl.fn)(" + env_args + ") : ((" + ret_cty + "(*)(" + dir_sig + "))__cl.fn)(" + dir_args + "); })"
 
         # __call__ dispatch: callee is a variable holding a callable object
         mut callee_cls_ty: str = hir_expr_type(callee).name
@@ -6253,8 +6280,8 @@ pub class CGenerator:
             addrs = addrs + ", " + addr
             ki = ki + 1
         # Stash the pieces so a `let`-bound closure can build a STACK env (no heap,
-        # no leak — see the SLet EClosure path). A tagged low bit marks a closure
-        # env vs a bare named-function pointer at the call site.
+        # no leak — see the SLet EClosure path). The env's address becomes a
+        # TrFnVal's `.env` field at the call site (non-NULL = closure).
         self.last_clo_cname = cname
         self.last_clo_estruct = estruct
         self.last_clo_ptypes = ptypes
@@ -6276,7 +6303,7 @@ pub class CGenerator:
                 addr2 = "__env->p_" + sn2
             crt = crt + " __c->p_" + sn2 + " = " + addr2 + ";"
             kj = kj + 1
-        crt = crt + " (void*)((uintptr_t)__c | (uintptr_t)1); })"
+        crt = crt + " ((TrFnVal){(void*)&" + cname + ", (void*)__c}); })"
         return crt
 
     # -- Spawn wrapper pre-scan ------------------------------------------------
@@ -6855,10 +6882,10 @@ pub class CGenerator:
                         case HirExpr.EClosure(cl_params, cl_ret_ty, cl_body, _, cl_caps):
                             mut _cdrop = self.gen_closure(cl_params, cl_ret_ty, cl_body, cl_caps)
                             mut _cenv = "__clenv_" + self.last_clo_cname
-                            # block-scope prototype so &fn resolves; stack env; tag.
+                            # block-scope prototype so &fn resolves; stack env; TrFnVal.
                             self.w(pad + self.last_clo_ret + " " + self.last_clo_cname + "(void*" + self.last_clo_ptypes + ");\n")
                             self.w(pad + self.last_clo_estruct + " " + _cenv + " = " + self.last_clo_init + ";\n")
-                            self.w(pad + "void* " + _safe_c_varname(n) + " = (void*)((uintptr_t)&" + _cenv + " | (uintptr_t)1);\n")
+                            self.w(pad + "TrFnVal " + _safe_c_varname(n) + " = ((TrFnVal){(void*)&" + self.last_clo_cname + ", (void*)&" + _cenv + "});\n")
                             self.decl_vars.insert(n, true)
                             return
                         case _: pass
