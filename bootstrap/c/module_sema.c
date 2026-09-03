@@ -289,6 +289,8 @@ __attribute__((malloc,returns_nonnull,hot)) Sema* Sema_init() {
     /* pass */
     _tr_dict_set(s->globals, _tr_strz(_tr_str_lit("bin")), Symbol_init(_tr_str_lit("bin"), SymbolKind_make_SFunction(), box_asttype(AstType_init(_tr_str_lit("str")))));
     /* pass */
+    _tr_dict_set(s->globals, _tr_strz(_tr_str_lit("kernel_launch")), Symbol_init(_tr_str_lit("kernel_launch"), SymbolKind_make_SFunction(), box_asttype(AstType_init(_tr_str_lit("int")))));
+    /* pass */
     _tr_dict_set(s->globals, _tr_strz(_tr_str_lit("int")), Symbol_init(_tr_str_lit("int"), SymbolKind_make_SFunction(), box_asttype(AstType_init(_tr_str_lit("int")))));
     /* pass */
     _tr_dict_set(s->globals, _tr_strz(_tr_str_lit("float")), Symbol_init(_tr_str_lit("float"), SymbolKind_make_SFunction(), box_asttype(AstType_init(_tr_str_lit("float")))));

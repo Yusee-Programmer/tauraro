@@ -124,10 +124,24 @@ accessors and provides WEAK empty defaults under `_TR_MAIN`, which the strong bl
 overrides (verified on mingw); so a program built WITHOUT `--gpu-embed` links fine
 and `Module.embedded()` returns invalid. std: `Module.embedded()` loads the blob.
 
+## `kernel_launch` (type-directed launch)
+
+`kernel_launch("name", grid, block, args…)` collapses load + bind + launch into
+one call. Sema registers `kernel_launch` as a builtin (globals, like `print`) so
+its heterogeneous args pass without a param list. The C backend intercepts it in
+`gen_call` (`gen_kernel_launch`): looks up the `@kernel` HirFunction by the string
+name (`self.functions`), then emits a GCC statement-expression that caches the
+kernel from the embedded module, hoists grid/block (so `Dim3.of(n)` runs once),
+binds each arg by the kernel's PARAMETER type (`Pointer[T]`→`set_arg_buf` of the
+`Buffer[T]`'s `->handle` or a raw handle; scalars→`set_arg_<f32|f64|i32|i64>`),
+and launches. Returns the launch rc. Requires `--gpu-embed`.
+
+> Runtime hardening this surfaced: `_tr_gpu_kern_stage` now guards a NULL kernel
+> (a failed load → `set_arg_*` was crashing), and `_tr_gpu_module_load_il`
+> checks the SPIR-V magic before `clCreateProgramWithIL` (feeding it PTX crashed
+> the driver).
+
 ## Roadmap
 
-- **`kernel_launch(fn, grid, block, args…)`** — type-directed launch. Needs the
-  compiler to synthesize a launcher known to sema *before* it checks user code,
-  then marshal each arg by the kernel's signature. Larger sema+codegen feature.
 - `__local` shared memory with `gpu_barrier`; 2-D/3-D grids; `@device` helper
-  functions.
+  functions; compile-time arg/param-count checking for `kernel_launch`.

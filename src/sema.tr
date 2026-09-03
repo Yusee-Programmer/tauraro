@@ -327,6 +327,10 @@ extend Sema:
         s.globals.insert("hex",      Symbol.init("hex",      SymbolKind.SFunction, box_asttype(AstType.init("str"))))
         s.globals.insert("oct",      Symbol.init("oct",      SymbolKind.SFunction, box_asttype(AstType.init("str"))))
         s.globals.insert("bin",      Symbol.init("bin",      SymbolKind.SFunction, box_asttype(AstType.init("str"))))
+        # kernel_launch("name", grid, block, args...): type-directed GPU kernel launch.
+        # A builtin (like print) so its heterogeneous args pass; the C backend rewrites
+        # it into module load + per-arg bind (by the @kernel's signature) + launch.
+        s.globals.insert("kernel_launch", Symbol.init("kernel_launch", SymbolKind.SFunction, box_asttype(AstType.init("int"))))
         s.globals.insert("int",      Symbol.init("int",      SymbolKind.SFunction, box_asttype(AstType.init("int"))))
         s.globals.insert("float",    Symbol.init("float",    SymbolKind.SFunction, box_asttype(AstType.init("float"))))
         s.globals.insert("bool",     Symbol.init("bool",     SymbolKind.SFunction, box_asttype(AstType.init("bool"))))

@@ -4609,6 +4609,8 @@ __attribute__((hot)) TrStr CGenerator_gen_unary(CGenerator* self, TrStr op, HirE
 __attribute__((hot)) TrStr CGenerator_gen_prop_access(CGenerator* self, HirExpr* o, TrStr p);
 __attribute__((hot)) TrStr CGenerator_gen_index(CGenerator* self, HirExpr* o, HirExpr* idx);
 __attribute__((hot)) bool CGenerator__call_arg_needs_shared_unwrap(CGenerator* self, HirExpr* arg, AstType* param_ty);
+__attribute__((hot)) TrStr CGenerator__gpu_arg_kind(CGenerator* self, AstType* pty);
+__attribute__((hot)) TrStr CGenerator_gen_kernel_launch(CGenerator* self, List_ptr* args);
 __attribute__((hot)) TrStr CGenerator_gen_call(CGenerator* self, HirExpr* callee, List_ptr* args, AstType* call_ty);
 __attribute__((hot)) TrStr CGenerator_gen_print_call(CGenerator* self, List_ptr* args);
 __attribute__((hot)) TrStr CGenerator_gen_to_cstr(CGenerator* self, HirExpr* arg);

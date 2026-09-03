@@ -7006,6 +7006,15 @@ static void* _tr_gpu_module_load_il(void* il, int64_t len){
     }
     if (_tr_gpu.backend==TR_GPU_OPENCL){
         if (!_tr_gpu.clCreateProgramWithIL){ _tr_gpu_seterr("SPIR-V modules require an OpenCL 2.1+ driver (clCreateProgramWithIL unavailable)"); return 0; }
+        /* Guard: clCreateProgramWithIL expects SPIR-V; feeding it a PTX blob (wrong
+         * magic) can CRASH some drivers. Verify the SPIR-V magic (0x07230203) first. */
+        {
+            const unsigned char* _b=(const unsigned char*)il;
+            if (len<4 || !(_b[0]==0x03 && _b[1]==0x02 && _b[2]==0x23 && _b[3]==0x07)){
+                _tr_gpu_seterr("module is not SPIR-V (rebuild with --gpu-embed spirv / --gpu-target spirv for the OpenCL backend)");
+                return 0;
+            }
+        }
         _TrGpuMod* m=(_TrGpuMod*)TAURARO_ALLOC(sizeof(_TrGpuMod)); if(!m) return 0; memset(m,0,sizeof(*m)); m->backend=TR_GPU_OPENCL;
         _cl_int e=0;
         m->cl_prog=_tr_gpu.clCreateProgramWithIL(_tr_gpu.cl_ctx, il, (size_t)len, &e);
@@ -7045,7 +7054,7 @@ static void _tr_gpu_kernel_free(void* handle){
     TAURARO_FREE(k);
 }
 static void _tr_gpu_kern_stage(_TrGpuKern* k, int idx, const void* data, size_t sz){
-    if (idx<0||idx>=TR_GPU_MAX_ARGS) return;
+    if (!k || idx<0||idx>=TR_GPU_MAX_ARGS) return;   /* NULL kernel (failed load) → no-op */
     if (sz>16) sz=16;
     memcpy(k->argbuf[idx], data, sz);
     k->argptr[idx]=k->argbuf[idx];

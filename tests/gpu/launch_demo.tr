@@ -1,0 +1,29 @@
+# kernel_launch demo: one typed call replaces module-load + arg-bind + launch.
+#   ./tauraroc.exe tests/gpu/launch_demo.tr --gpu-embed nvptx -o launch_demo && ./launch_demo
+# The compiler marshals each arg by `addone`'s signature: the Buffer goes as a
+# device handle, the int as an i32.
+
+from std.gpu import Device, Buffer, Dim3, gpu_global_id
+from std.core.vec import Vec
+
+@kernel
+def addone(a: Pointer[i32], n: i32):
+    mut i = gpu_global_id(0)
+    if i < n:
+        unsafe:
+            a.offset(i).write(a.offset(i).read() + 1)
+
+def main():
+    Device.detect()
+    print(f"backend: {Device.backend_name()}")
+
+    mut n = 8
+    mut buf = Buffer[i32].zeros(n)
+
+    # One typed call: load (cached) + bind (buf -> handle, n -> i32) + launch.
+    mut rc = kernel_launch("addone", Dim3.of(1), Dim3.of(64), buf, n)
+    Device.synchronize()
+    print(f"launch rc={rc}")   # 0 on a real GPU; -1 here (nvptx blob on OpenCL)
+
+    buf.free()
+    print("done")

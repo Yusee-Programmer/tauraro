@@ -3207,9 +3207,76 @@ pub class CGenerator:
                 case _: pass
         return false
 
+    # The runtime arg-setter suffix for a kernel parameter type: "buf" for a buffer
+    # pointer, else the scalar width (f32/f64/i32/i64).
+    pub def _gpu_arg_kind(self, pty: AstType) -> str:
+        if pty.name == "Pointer": return "buf"
+        if pty.name == "f32": return "f32"
+        if pty.name == "f64" or pty.name == "float" or pty.name == "double": return "f64"
+        if pty.name == "i32" or pty.name == "u32" or pty.name == "c_int": return "i32"
+        return "i64"
+
+    # Emit `kernel_launch("name", grid, block, a0, a1, ...)` as a GCC statement
+    # expression: cache the kernel (from the --gpu-embed'd module), bind each arg by
+    # the @kernel's parameter type, then launch over the grid/block. Returns the
+    # launch rc (0 = ok). Buffer args may be passed as a Buffer[T] (its .handle is
+    # taken) or as a raw device handle.
+    pub def gen_kernel_launch(self, args: Vec[Pointer[HirExpr]]) -> str:
+        if args.len < 3:
+            return "((long long)(-1))"
+        mut kname = ""
+        match args.get(0).read():
+            case HirExpr.ELitStr(sv, _): kname = sv
+            case _: pass
+        if kname == "" or not self.functions.contains(kname):
+            return "((long long)(-1)) /* kernel_launch: unknown @kernel */"
+        mut kfn = self.functions.get(kname)
+        mut grid_ct  = self.type_to_c(hir_expr_type(args.get(1)))
+        mut block_ct = self.type_to_c(hir_expr_type(args.get(2)))
+        mut grid_s   = self.gen_expr(args.get(1))
+        mut block_s  = self.gen_expr(args.get(2))
+        mut kv = "_klk" + self.next_temp()   # per-site cached kernel handle
+        mut gv = "_klg" + self.next_temp()
+        mut bv = "_klb" + self.next_temp()
+        mut s = "({ static void* " + kv + " = 0; if (!" + kv + ") { void* _klm"
+        s = s + " = _tr_gpu_module_load_il(_tr_gpu_embedded_blob(), _tr_gpu_embedded_len()); "
+        s = s + kv + " = _tr_gpu_kernel_get(_klm, \"" + kname + "\"); } "
+        # Hoist grid/block so they're evaluated ONCE (each field read otherwise re-runs
+        # a fresh Dim3.of(n)).
+        s = s + grid_ct + " " + gv + " = (" + grid_s + "); "
+        s = s + block_ct + " " + bv + " = (" + block_s + "); "
+        # Bind arguments args[3..] positionally to the kernel params.
+        mut i = 3
+        while i < args.len:
+            mut pi = i - 3
+            if pi >= kfn.params.len: break
+            mut pty = kfn.params.get(pi).ty
+            mut kind = self._gpu_arg_kind(pty)
+            mut aexpr = self.gen_expr(args.get(i))
+            if kind == "buf":
+                # Buffer[T] -> its .handle; a raw Pointer[char] handle passes through.
+                mut ah = "(" + aexpr + ")"
+                if hir_expr_type(args.get(i)).name == "Buffer":
+                    ah = "(" + aexpr + ")->handle"
+                s = s + "_tr_gpu_kernel_set_arg_buf(" + kv + ", " + pi.to_str() + ", " + ah + "); "
+            else:
+                s = s + "_tr_gpu_kernel_set_arg_" + kind + "(" + kv + ", " + pi.to_str() + ", (" + aexpr + ")); "
+            i = i + 1
+        # Launch over grid (blocks) x block (threads/block). Dim3 is a heap class (->).
+        s = s + "_tr_gpu_launch(" + kv + ", " + gv + "->x, " + gv + "->y, " + gv + "->z, "
+        s = s + bv + "->x, " + bv + "->y, " + bv + "->z); })"
+        return s
+
     pub def gen_call(self, callee: Pointer[HirExpr], args: Vec[Pointer[HirExpr]], call_ty: AstType) -> str:
+        # kernel_launch("name", grid, block, args...): rewrite into a cached kernel
+        # load + per-arg bind (typed by the @kernel's signature) + launch.
+        match callee.read():
+            case HirExpr.EIdent(_kl_n, _, _):
+                if _kl_n == "kernel_launch": return self.gen_kernel_launch(args)
+            case _: pass
+
         mut callee_s = self.gen_expr(callee)
-        
+
         # Check if callee is a generic built-in call target like alloc[T] or dealloc[T]
         mut base_callee = callee_s
         mut has_generic = false

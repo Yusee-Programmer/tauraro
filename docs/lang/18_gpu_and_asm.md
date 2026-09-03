@@ -194,6 +194,15 @@ mut result = y.download()
 guard `if i < n`. Full buffer/launch API in the
 [`std.gpu` reference](../std/gpu.md).
 
+**One-liner with `kernel_launch`** (kernels must be `--gpu-embed`'d): the compiler
+marshals each argument by the kernel's signature — a `Buffer[T]` is bound as a
+device buffer, scalars by width — so load + bind + launch collapse to:
+
+```python
+from std.gpu import Dim3
+kernel_launch("saxpy", Dim3.of(blocks), Dim3.of(256), y, x, 2.0, n)
+```
+
 ### How it works
 
 The `@kernel` marker selects the function for the GPU backend

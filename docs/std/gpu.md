@@ -238,6 +238,20 @@ k.launch1d(n, 256)
 `Module.embedded()` returns an invalid module (see `is_valid()`) when the program
 was built without `--gpu-embed`, so it degrades gracefully.
 
+Even simpler — **`kernel_launch`** collapses load + per-arg bind + launch into one
+typed call. The compiler marshals each argument by the `@kernel`'s signature (a
+`Buffer[T]` goes as a device buffer, scalars by width), so you don't touch
+`Module`/`Kernel`/`arg_*`:
+
+```tauraro
+from std.gpu import Dim3
+kernel_launch("saxpy", Dim3.of(blocks), Dim3.of(256), y, x, 2.0, n)
+```
+
+`kernel_launch("name", grid, block, args…)` requires the kernels to be embedded
+(`--gpu-embed`) and returns the launch rc (0 = ok). Buffer args may be a
+`Buffer[T]` (its handle is taken automatically) or a raw device handle.
+
 ### Explicit: `--emit gpu` + a `.spv`/`.ptx` file
 
 ```
