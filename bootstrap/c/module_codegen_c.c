@@ -6953,6 +6953,15 @@ __attribute__((hot)) TrStr CGenerator_gen_kernel_launch(CGenerator* self, List_p
     /* pass */
     HirFunction* kfn = ((HirFunction*)(uintptr_t)_tr_dict_get(self->functions, _tr_strz(kname)));
     /* pass */
+    long long _kl_want = kfn->params->len;
+    /* pass */
+    long long _kl_got = (args->len - 3LL);
+    /* pass */
+    if ((_kl_got != _kl_want)) {
+        /* pass */
+        return ({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("((long long)_tr_gpu_kernel_launch_ARG_COUNT_MISMATCH_")), _tr_strz(kname))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("_wants"))); _tr_str_release(_cl); _cres; })); TrStr _cr = (_tr_str_wrap(_tr_int_to_str((long long)(_kl_want)))); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("_got"))); _tr_str_release(_cl); _cres; })); TrStr _cr = (_tr_str_wrap(_tr_int_to_str((long long)(_kl_got)))); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("())"))); _tr_str_release(_cl); _cres; });
+    }
+    /* pass */
     TrStr grid_ct = CGenerator_type_to_c(self, hir_expr_type(((HirExpr*)List_ptr_get(args, 1LL))));
     /* pass */
     TrStr block_ct = CGenerator_type_to_c(self, hir_expr_type(((HirExpr*)List_ptr_get(args, 2LL))));

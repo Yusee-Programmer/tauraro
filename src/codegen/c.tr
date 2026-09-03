@@ -3231,6 +3231,13 @@ pub class CGenerator:
         if kname == "" or not self.functions.contains(kname):
             return "((long long)(-1)) /* kernel_launch: unknown @kernel */"
         mut kfn = self.functions.get(kname)
+        # Compile-time arg-count check: kernel_launch(name, grid, block, <one arg per
+        # kernel param>). A mismatch references a descriptive undefined symbol so the
+        # C compile fails with a clear name rather than binding garbage.
+        mut _kl_want = kfn.params.len
+        mut _kl_got = args.len - 3
+        if _kl_got != _kl_want:
+            return "((long long)_tr_gpu_kernel_launch_ARG_COUNT_MISMATCH_" + kname + "_wants" + _kl_want.to_str() + "_got" + _kl_got.to_str() + "())"
         mut grid_ct  = self.type_to_c(hir_expr_type(args.get(1)))
         mut block_ct = self.type_to_c(hir_expr_type(args.get(2)))
         mut grid_s   = self.gen_expr(args.get(1))

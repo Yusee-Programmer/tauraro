@@ -204,8 +204,49 @@ A kernel is a data-parallel leaf. It may use:
   | `gpu_barrier()` | Block-wide synchronization barrier |
 
 Anything outside this subset (heap allocation, `str`, `List`/`Dict`, closures,
-recursion, exceptions, method calls other than pointer `read`/`write`) is a
-compile error from the GPU backend — it never miscompiles silently.
+recursion, exceptions, method calls other than pointer `read`/`write` and
+`@device` calls) is a compile error from the GPU backend — it never
+miscompiles silently.
+
+### Multi-dimensional grids
+
+Every index builtin takes a dimension argument (`0`/`1`/`2` = x/y/z), so a
+2-D/3-D kernel needs no special syntax — just call `gpu_global_id(1)` for the
+y index (and `gpu_global_id(2)` for z):
+
+```tauraro
+@kernel
+def transpose(dst: Pointer[f32], src: Pointer[f32], w: i32, h: i32):
+    mut x = gpu_global_id(0)
+    mut y = gpu_global_id(1)
+    if x < w and y < h:
+        unsafe:
+            dst.offset(y + x * h).write(src.offset(x + y * w).read())
+```
+
+Launch with a 2-D grid via `Dim3.of(bx, by)` for both the grid and block dims.
+
+### `@device` helper functions
+
+`@device def f(...) -> T: ...` marks a plain GPU-side helper — not a kernel
+entry point — that a `@kernel` (or another `@device` fn) can call, regardless
+of declaration order:
+
+```tauraro
+@device
+def scale_bias(v: f32, k: f32, b: f32) -> f32:
+    return v * k + b
+
+@kernel
+def apply(a: Pointer[f32], k: f32, b: f32, n: i32):
+    mut i = gpu_global_id(0)
+    if i < n:
+        unsafe:
+            a.offset(i).write(scale_bias(a.offset(i).read(), k, b))
+```
+
+Unlike a `@kernel` (always returns nothing), a `@device` fn returns a scalar
+or `Pointer[T]` like a normal function.
 
 ### Type widths
 
@@ -251,6 +292,14 @@ kernel_launch("saxpy", Dim3.of(blocks), Dim3.of(256), y, x, 2.0, n)
 `kernel_launch("name", grid, block, args…)` requires the kernels to be embedded
 (`--gpu-embed`) and returns the launch rc (0 = ok). Buffer args may be a
 `Buffer[T]` (its handle is taken automatically) or a raw device handle.
+
+Passing the wrong number of trailing args is caught at **compile time**, not
+launch time — the generated code names the exact kernel and expected/actual
+counts:
+
+```
+error: implicit declaration of function '_tr_gpu_kernel_launch_ARG_COUNT_MISMATCH_saxpy_wants4_got3'
+```
 
 ### Explicit: `--emit gpu` + a `.spv`/`.ptx` file
 

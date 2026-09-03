@@ -3330,6 +3330,8 @@ typedef struct GpuEmitter {
     List_TrStr* var_names;
     List_TrStr* var_ll;
     List_TrStr* var_elem;
+    TrStr ret_llty;
+    List_ptr* dev_fns;
 } GpuEmitter;
 static void _trdrop_GpuEmitter(void* vp) {
     GpuEmitter* self = (GpuEmitter*)vp; (void)self;
@@ -3338,6 +3340,7 @@ static void _trdrop_GpuEmitter(void* vp) {
     List_TrStr_free(self->var_names);
     List_TrStr_free(self->var_ll);
     List_TrStr_free(self->var_elem);
+    _tr_str_release(self->ret_llty);
 }
 #endif
 
@@ -4363,11 +4366,13 @@ __attribute__((hot)) bool emit_lir_object(LModule* m, TrStr out_path);
 __attribute__((malloc,returns_nonnull,hot)) NativeGenerator* NativeGenerator_init();
 __attribute__((hot)) bool NativeGenerator_emit_object(NativeGenerator* self, HirProgram* prog, TrStr out_path);
 __attribute__((hot)) bool fn_is_kernel(HirFunction* f);
+__attribute__((hot)) bool fn_is_device(HirFunction* f);
 __attribute__((hot)) bool _gpu_is_float(TrStr t);
 __attribute__((hot)) long long _gpu_iwidth(TrStr t);
 __attribute__((hot)) TrStr _gpu_scalar_ty(TrStr n);
 __attribute__((hot)) GVal* GVal_make(TrStr ty, TrStr val);
 __attribute__((malloc,returns_nonnull,hot)) GpuEmitter* GpuEmitter_init(TrStr target);
+__attribute__((hot)) TrStr GpuEmitter__gpu_ret_ty(GpuEmitter* self, AstType* t);
 __attribute__((hot)) void GpuEmitter_w(GpuEmitter* self, TrStr s);
 __attribute__((hot)) TrStr GpuEmitter_fresh(GpuEmitter* self);
 __attribute__((hot)) TrStr GpuEmitter_newlbl(GpuEmitter* self);
@@ -4378,6 +4383,7 @@ __attribute__((hot)) TrStr GpuEmitter_var_elem_ty(GpuEmitter* self, TrStr name);
 __attribute__((hot)) void GpuEmitter_scan_vars_block(GpuEmitter* self, HirBlock* b);
 __attribute__((hot)) void GpuEmitter_scan_vars_stmt(GpuEmitter* self, HirStmt s);
 __attribute__((hot)) TrStr GpuEmitter_emit_kernel(GpuEmitter* self, HirFunction* f);
+__attribute__((hot)) TrStr GpuEmitter_emit_device_fn(GpuEmitter* self, HirFunction* f);
 __attribute__((hot)) void GpuEmitter_emit_block(GpuEmitter* self, HirBlock* b);
 __attribute__((hot)) void GpuEmitter_emit_stmt(GpuEmitter* self, HirStmt s);
 __attribute__((hot)) void GpuEmitter_emit_assign(GpuEmitter* self, HirExpr target, HirExpr* val);

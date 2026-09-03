@@ -141,7 +141,43 @@ and launches. Returns the launch rc. Requires `--gpu-embed`.
 > checks the SPIR-V magic before `clCreateProgramWithIL` (feeding it PTX crashed
 > the driver).
 
+`kernel_launch` also checks the arg count against the `@kernel`'s declared
+param count at compile time: a mismatch emits a call to a nonexistent,
+descriptively-named C function (`_tr_gpu_kernel_launch_ARG_COUNT_MISMATCH_
+<kernel>_wants<N>_got<M>`) instead of the real launch, so gcc's "implicit
+declaration" error names the exact kernel and the wanted/got counts — there's
+no error-reporting path in `CGenerator` today, so this is the chosen way to
+surface a clear compile-time failure instead of a confusing runtime crash.
+
+## 2-D/3-D grids
+
+`gpu_global_id(dim)`/`gpu_local_id(dim)`/etc. take a dimension argument
+(0/1/2 = x/y/z) that was already threaded through to the right sreg
+intrinsic (NVPTX) or mangled `get_*` call (SPIR-V) from the first cut of the
+backend — a kernel indexing `gpu_global_id(0)` and `gpu_global_id(1)` (e.g. a
+2-D transpose) just works with no codegen changes. See
+`tests/gpu/kernels_2d.tr`.
+
+## `@device` helper functions
+
+`@device def helper(...) -> T: ...` marks a plain GPU-callable function (not
+a kernel entry point) — a `@kernel` (or another `@device` fn) can call it.
+`GpuGenerator.emit` (`mod.tr`) collects every `@device` HirFunction into a
+`dev_fns: Vec[HirFunction]` and emits each one FIRST, as an ordinary LLVM
+function (real return type, no `ptx_kernel`/kernel calling convention, no
+`!nvvm.annotations` entry) — before any `@kernel`, so a kernel can call a
+`@device` fn regardless of source order. Every emitter (kernels and device
+fns alike) gets the full `dev_fns` list so calls resolve in any direction.
+
+`GpuEmitter.emit_call` (`emit.tr`) checks `dev_fns` for a name match after
+the builtin-dispatch table; on a hit it coerces each argument to the callee's
+declared param type and emits `call <rty> @<name>(...)` (or a discarded
+`call void @...` for a void device fn). `emit_device_fn` sets `ret_llty` from
+the declared return type (`_gpu_ret_ty`: void/None→`void`, `Pointer[T]`→`ptr
+addrspace(1)`, else the scalar LLVM type) and `SReturn` now honors it instead
+of always doing `ret void` — kernels still return void, but a `@device` fn
+returns whatever it declares. See `tests/gpu/device_fn.tr`.
+
 ## Roadmap
 
-- `__local` shared memory with `gpu_barrier`; 2-D/3-D grids; `@device` helper
-  functions; compile-time arg/param-count checking for `kernel_launch`.
+- `__local` shared memory with `gpu_barrier`.

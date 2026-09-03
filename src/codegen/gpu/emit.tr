@@ -21,6 +21,15 @@ pub def fn_is_kernel(f: HirFunction) -> bool:
         i = i + 1
     return false
 
+# True when `f` carries the @device decorator (a GPU-side helper a @kernel can call;
+# emitted as a regular function, not a kernel entry point).
+pub def fn_is_device(f: HirFunction) -> bool:
+    mut i = 0
+    while i < f.decorators.len:
+        if f.decorators.get(i).name == "device": return true
+        i = i + 1
+    return false
+
 # --- scalar/pointer type mapping ----------------------------------------------------------
 pub def _gpu_is_float(t: str) -> bool:
     return t == "float" or t == "double"
@@ -64,6 +73,8 @@ pub class GpuEmitter:
     pub var_names: Vec[str]  # every local/param name
     pub var_ll:    Vec[str]  # its LLVM slot type ("ptr addrspace(1)" for buffers)
     pub var_elem:  Vec[str]  # element LLVM type for pointer vars, else ""
+    pub ret_llty:  str       # the function's LLVM return type ("void" for a kernel)
+    pub dev_fns:   Vec[HirFunction]  # @device helpers this function may call
 
 extend GpuEmitter:
     pub def init(target: str) -> GpuEmitter:
@@ -77,7 +88,15 @@ extend GpuEmitter:
         e.var_names = Vec[str].init(8)
         e.var_ll = Vec[str].init(8)
         e.var_elem = Vec[str].init(8)
+        e.ret_llty = "void"
+        e.dev_fns = Vec[HirFunction].init(0)
         return e
+
+    # A function's LLVM return type: void for None/void, else the scalar mapping.
+    pub def _gpu_ret_ty(self, t: AstType) -> str:
+        if t.name == "void" or t.name == "None" or t.name == "": return "void"
+        if t.name == "Pointer": return "ptr addrspace(1)"
+        return _gpu_scalar_ty(t.name)
 
     pub def w(self, s: str):
         self.sb.append(s)
@@ -189,6 +208,48 @@ extend GpuEmitter:
             return "; kernel '" + f.name + "' NOT emitted: " + self.fail_note + "\n\n"
         return self.sb.to_string().as_str()
 
+    # A @device helper: a regular GPU function (no kernel CC) with a return value,
+    # callable from @kernel bodies. Same statement/expression subset as a kernel.
+    pub def emit_device_fn(self, f: HirFunction) -> str:
+        self.ret_llty = self._gpu_ret_ty(f.ret_ty)
+        mut pi = 0
+        while pi < f.params.len:
+            mut p = f.params.get(pi)
+            self.add_var(p.name, p.ty)
+            pi = pi + 1
+        self.scan_vars_block(f.body)
+        # Signature (no kernel calling convention).
+        self.w("define " + self.ret_llty + " @" + f.name + "(")
+        mut pj = 0
+        while pj < f.params.len:
+            mut pp = f.params.get(pj)
+            if pj > 0: self.w(", ")
+            self.w(self.var_slot_ty(pp.name) + " %arg_" + pp.name)
+            pj = pj + 1
+        self.w(") {\nentry:\n")
+        mut vi = 0
+        while vi < self.var_names.len:
+            self.w("  %var_" + self.var_names.get(vi) + " = alloca " + self.var_ll.get(vi) + "\n")
+            vi = vi + 1
+        mut pk = 0
+        while pk < f.params.len:
+            mut pn = f.params.get(pk).name
+            self.w("  store " + self.var_slot_ty(pn) + " %arg_" + pn + ", ptr %var_" + pn + "\n")
+            pk = pk + 1
+        self.emit_block(f.body)
+        # Fallthrough terminator (LLVM requires every block to end in a return).
+        if self.ret_llty == "void":
+            self.w("  ret void\n}\n\n")
+        elif _gpu_is_float(self.ret_llty):
+            self.w("  ret " + self.ret_llty + " 0.0\n}\n\n")
+        elif self.ret_llty == "ptr addrspace(1)":
+            self.w("  ret " + self.ret_llty + " null\n}\n\n")
+        else:
+            self.w("  ret " + self.ret_llty + " 0\n}\n\n")
+        if not self.ok:
+            return "; device fn '" + f.name + "' NOT emitted: " + self.fail_note + "\n\n"
+        return self.sb.to_string().as_str()
+
     pub def emit_block(self, b: HirBlock):
         mut i = 0
         while i < b.stmts.len:
@@ -236,7 +297,15 @@ extend GpuEmitter:
             case HirStmt.SUnsafe(body):
                 self.emit_block(body)
             case HirStmt.SReturn(val):
-                self.w("  ret void\n")
+                if self.ret_llty == "void" or (val as usize) == (0 as usize):
+                    self.w("  ret void\n")
+                else:
+                    mut rv = self.emit_expr(val)
+                    if self.ret_llty == "ptr addrspace(1)":
+                        self.w("  ret ptr addrspace(1) " + rv.val + "\n")
+                    else:
+                        mut cv = self.coerce(rv, self.ret_llty)
+                        self.w("  ret " + self.ret_llty + " " + cv + "\n")
                 # a fresh unreachable block absorbs any trailing IR in this basic block
                 mut lu = self.newlbl()
                 self.w(lu + ":\n")
@@ -393,7 +462,35 @@ extend GpuEmitter:
             mut dim = 0
             if args.len == 1: dim = self.literal_int(args.get(0).read())
             return self.emit_gpu_builtin(nm, dim)
-        self.fail("call to '" + nm + "' not allowed in kernel")
+        # A call to a @device helper: coerce each arg to the callee's parameter type
+        # and emit a direct call.
+        mut di = 0
+        while di < self.dev_fns.len:
+            mut df = self.dev_fns.get(di)
+            if df.name == nm:
+                mut rty = self._gpu_ret_ty(df.ret_ty)
+                mut argstr = ""
+                mut ai = 0
+                while ai < args.len:
+                    if ai > 0: argstr = argstr + ", "
+                    mut av = self.emit_expr(args.get(ai))
+                    mut aty = av.ty
+                    mut aval = av.val
+                    if ai < df.params.len:
+                        mut ptt = self._gpu_ret_ty(df.params.get(ai).ty)
+                        if ptt != "ptr addrspace(1)" and aty != ptt:
+                            aval = self.coerce(av, ptt)
+                            aty = ptt
+                    argstr = argstr + aty + " " + aval
+                    ai = ai + 1
+                if rty == "void":
+                    self.w("  call void @" + nm + "(" + argstr + ")\n")
+                    return GVal.make("i64", "0")
+                mut r = self.fresh()
+                self.w("  " + r + " = call " + rty + " @" + nm + "(" + argstr + ")\n")
+                return GVal.make(rty, r)
+            di = di + 1
+        self.fail("call to '" + nm + "' not allowed in kernel (mark it @device, or use a GPU builtin)")
         return GVal.make("i64", "0")
 
     pub def emit_gpu_builtin(self, nm: str, dim: int) -> GVal:

@@ -150,6 +150,42 @@ miscompile.
 > for 32-bit GPU buffers and match the buffer element type to the kernel
 > parameter type. See [`std.gpu` — Type-width rules](../std/gpu.md#type-width-rules).
 
+**Multi-dimensional grids** — every index builtin takes a dimension argument
+(`0`/`1`/`2` = x/y/z), so a 2-D or 3-D kernel is just:
+
+```python
+@kernel
+def transpose(dst: Pointer[f32], src: Pointer[f32], w: i32, h: i32):
+    mut x = gpu_global_id(0)
+    mut y = gpu_global_id(1)
+    if x < w and y < h:
+        unsafe:
+            dst.offset(y + x * h).write(src.offset(x + y * w).read())
+```
+
+Launch it with a 2-D `Dim3`: `kernel_launch("transpose", Dim3.of(bx, by), Dim3.of(16, 16), dst, src, w, h)`.
+
+**`@device` helper functions** — factor shared logic out of a kernel with a
+plain `@device` function; it compiles to an ordinary GPU-side function (not a
+kernel entry point) that any `@kernel` or other `@device` fn can call, in
+either declaration order:
+
+```python
+@device
+def scale_bias(v: f32, k: f32, b: f32) -> f32:
+    return v * k + b
+
+@kernel
+def apply(a: Pointer[f32], k: f32, b: f32, n: i32):
+    mut i = gpu_global_id(0)
+    if i < n:
+        unsafe:
+            a.offset(i).write(scale_bias(a.offset(i).read(), k, b))
+```
+
+A `@device` fn can return a scalar or `Pointer[T]` — unlike a `@kernel`, which
+always returns nothing.
+
 ### Compiling a kernel
 
 **Easiest — `--gpu-embed`:** the compiler auto-compiles every `@kernel` and bakes
@@ -201,6 +237,13 @@ device buffer, scalars by width — so load + bind + launch collapse to:
 ```python
 from std.gpu import Dim3
 kernel_launch("saxpy", Dim3.of(blocks), Dim3.of(256), y, x, 2.0, n)
+```
+
+Passing the wrong number of trailing args is a **compile-time** error naming
+the kernel and the expected/actual counts, not a runtime crash:
+
+```
+error: implicit declaration of function '_tr_gpu_kernel_launch_ARG_COUNT_MISMATCH_saxpy_wants4_got3'
 ```
 
 ### How it works

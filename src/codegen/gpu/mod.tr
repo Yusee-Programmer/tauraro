@@ -18,7 +18,9 @@ from hir import HirProgram
 from hir import HirFunction
 from codegen.gpu.emit import GpuEmitter
 from codegen.gpu.emit import fn_is_kernel
+from codegen.gpu.emit import fn_is_device
 from core.string import StringBuilder
+from core.vec import Vec
 
 pub class GpuGenerator:
     pub ok: bool
@@ -66,12 +68,32 @@ extend GpuGenerator:
             sb.append("declare spir_func i64 @_Z14get_num_groupsj(i32)\n")
             sb.append("declare spir_func void @_Z7barrierj(i32)\n\n")
 
+        # Collect @device helpers (regular GPU functions a @kernel may call).
+        mut dev_fns = Vec[HirFunction].init(4)
+        mut df = 0
+        while df < prog.functions.len:
+            mut fd = prog.functions.get(df)
+            if fn_is_device(fd): dev_fns.push(fd)
+            df = df + 1
+
+        # Emit @device helpers FIRST (so kernels/other helpers can call them).
+        mut de = 0
+        while de < dev_fns.len:
+            mut e0 = GpuEmitter.init(tgt)
+            e0.dev_fns = dev_fns
+            sb.append(e0.emit_device_fn(dev_fns.get(de)))
+            if not e0.ok:
+                self.ok = false
+                if self.fail_note == "": self.fail_note = "device fn '" + dev_fns.get(de).name + "': " + e0.fail_note
+            de = de + 1
+
         mut fi = 0
         while fi < prog.functions.len:
             mut f = prog.functions.get(fi)
             if fn_is_kernel(f):
                 self.n_kernels = self.n_kernels + 1
                 mut e = GpuEmitter.init(tgt)
+                e.dev_fns = dev_fns
                 sb.append(e.emit_kernel(f))
                 if not e.ok:
                     self.ok = false
