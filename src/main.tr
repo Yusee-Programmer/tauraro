@@ -482,7 +482,17 @@ pub def zig_target_of(triple: str) -> str:
         if _tr_str_contains(triple, "aarch64"): return "aarch64-freestanding-none"
         if _tr_str_contains(triple, "riscv64"): return "riscv64-freestanding-none"
         if _tr_str_contains(triple, "riscv32"): return "riscv32-freestanding-none"
-        if _tr_str_contains(triple, "arm"):     return "arm-freestanding-eabi"
+        # "arm" (A32/ARM-mode) here, NOT "thumb": the turnkey bare-metal link
+        # (below) always builds Cortex-M with `-mthumb`, and zig's prebuilt
+        # compiler_rt for the "arm-freestanding-eabi" target ships inline asm
+        # with predicated (conditional, non-IT-wrapped) instructions that are
+        # valid A32 but rejected by a Thumb-2-only assembler ("<inline
+        # asm>:14:2: predicated instructions must be in IT block") -- the
+        # "thumb-freestanding-eabi" target's compiler_rt doesn't have this
+        # problem, confirmed by linking+running examples/freestanding/mps2_pure.tr
+        # under qemu (both the plain-hello and a 200-element List-growth stress
+        # test) with the "thumb-" target and NOT with "arm-".
+        if _tr_str_contains(triple, "arm"):     return "thumb-freestanding-eabi"
         return ""
     # Android and hosted Linux triples pass through — zig understands e.g.
     # aarch64-linux-gnu, x86_64-linux-musl, aarch64-linux-android.
@@ -1938,20 +1948,40 @@ pub def main(args: Vec[str]):
         mut bm_elf = exe_name + ".elf"
         mut bm_cc = detect_c_compiler()
         if target != "": bm_cc = resolve_cross_driver(resolve_target_triple(target))
+        mut bm_is_zig = _tr_str_contains(bm_cc, "zig")
+        # zig's target parser wants the CPU name with an UNDERSCORE (cortex_m3);
+        # a real gcc/clang cross driver wants the usual hyphenated spelling
+        # (cortex-m3) -- passing the wrong one to either fails to parse the CPU
+        # at all ("info: available CPUs for architecture 'arm': ...").
         mut bm_arch = " -mcpu=cortex-m3 -mthumb"
+        if bm_is_zig: bm_arch = " -mcpu=cortex_m3 -mthumb"
         if _tr_str_contains(target, "riscv"): bm_arch = " -march=rv64imac -mabi=lp64 -mcmodel=medany"
         # A bare-metal cross link needs a MULTI-TARGET linker: the system `ld` is
         # host-only ("unrecognised emulation mode: elf64lriscv"). zig cc has lld
         # built in; a clang driver needs -fuse-ld=lld (added when lld is present).
         mut bm_lld = ""
-        if not _tr_str_contains(bm_cc, "zig"): bm_lld = detect_lld_flag()
-        mut bm_cmd = bm_cc + " -O" + opt_level + bm_arch + " -ffreestanding -nostdlib -fno-builtin" + bm_lld
+        if not bm_is_zig: bm_lld = detect_lld_flag()
+        # zig cc enables UBSan by default (nothing freestanding provides its
+        # handlers) and its own `-nostdlib` also drops compiler_rt (the
+        # soft-float/64-bit helpers a Cortex-M3 lacks in hardware) -- so a zig
+        # link needs `-nostartfiles` (keeps compiler_rt, still skips the hosted
+        # C startup files) + `-fno-sanitize=undefined` instead of plain
+        # `-nostdlib`. A real arm-none-eabi-gcc driver keeps `-nostdlib` but
+        # then needs `-lgcc` at the link line's end for the same helpers.
+        mut bm_nostdlib = " -nostdlib"
+        mut bm_ubsan = ""
+        mut bm_libgcc = " -lgcc"
+        if bm_is_zig:
+            bm_nostdlib = " -nostartfiles"
+            bm_ubsan = " -fno-sanitize=undefined"
+            bm_libgcc = ""
+        mut bm_cmd = bm_cc + " -O" + opt_level + bm_arch + " -ffreestanding" + bm_nostdlib + " -fno-builtin" + bm_ubsan + bm_lld
         bm_cmd = bm_cmd + " -T \"" + emit_ld + "\" \"-I" + build_dir + "include\" \"-I" + build_dir + "\""
         mut bmi = 0
         while bmi < all_c_files.len:
             bm_cmd = bm_cmd + " \"" + all_c_files.get(bmi) + "\""
             bmi = bmi + 1
-        bm_cmd = bm_cmd + " -o \"" + bm_elf + "\" 2>build/bare_link.log"
+        bm_cmd = bm_cmd + bm_libgcc + " -o \"" + bm_elf + "\" 2>build/bare_link.log"
         if verbose: print("[5/5] bare-metal link -> " + bm_elf + "  (" + bm_cc + ")")
         if _tr_system(bm_cmd) == 0:
             print("Bare-metal ELF written to: " + bm_elf)

@@ -6125,22 +6125,73 @@ extend Sema:
                 if else_b.stmts.len == 0: return false
                 return self.block_returns(then_b) and self.block_returns(else_b)
             case Stmt.SMatch(subj, arms):
-                # Exhaustive if there is a wildcard/bind arm and every arm body returns.
+                # Exhaustive if there is a wildcard/bind arm and every arm body returns,
+                # OR (no wildcard) every arm's pattern names a variant of the SAME known
+                # enum and together they cover ALL of its declared variants -- [F-3]
+                # otherwise false-flags a match that already lists every variant, forcing
+                # a redundant/unreachable `case _:` just to satisfy this checker.
                 mut has_wild = false
                 mut all_ret = true
+                mut _fr_tnames = Vec[str].init(4)
+                mut _fr_vnames = Vec[str].init(4)
                 mut mi = 0
                 while mi < arms.len:
                     mut arm = arms.get(mi)
                     match arm.pat:
                         case Pattern.PWild: has_wild = true
                         case Pattern.PBind(_): has_wild = true
-                        case _: pass
+                        case _: self.pattern_covers(arm.pat, _fr_tnames, _fr_vnames)
                     if arm.body as usize != 0 as usize:
                         if not self.block_returns(arm.body.read()):
                             all_ret = false
                     mi = mi + 1
-                return has_wild and all_ret
+                if has_wild: return all_ret
+                if not all_ret: return false
+                if _fr_vnames.len == 0: return false
+                mut _fr_ety = _fr_tnames.get(0)
+                mut _fr_same_ty = true
+                mut _fr_ti = 1
+                while _fr_ti < _fr_tnames.len:
+                    if _fr_tnames.get(_fr_ti) != _fr_ety: _fr_same_ty = false
+                    _fr_ti = _fr_ti + 1
+                if not _fr_same_ty: return false
+                if not self.enums.contains(_fr_ety): return false
+                mut _fr_edef = self.enums.get(_fr_ety)
+                mut _fr_ei = 0
+                while _fr_ei < _fr_edef.variants.len:
+                    mut _fr_vn = _fr_edef.variants.get(_fr_ei).name
+                    mut _fr_found = false
+                    mut _fr_vi = 0
+                    while _fr_vi < _fr_vnames.len:
+                        if _fr_vnames.get(_fr_vi) == _fr_vn: _fr_found = true
+                        _fr_vi = _fr_vi + 1
+                    if not _fr_found: return false
+                    _fr_ei = _fr_ei + 1
+                return true
             case _: return false
+
+    # Variant names a pattern covers, for [F-3] enum-match exhaustiveness (no
+    # wildcard needed if every declared variant is otherwise listed). Recurses
+    # into `POr` sub-patterns; appends (type_name, variant) pairs positionally
+    # into the two out-accumulators (Tauraro has no `&` out-params, so a Vec
+    # passed in and mutated by the callee is the idiom here).
+    pub def pattern_covers(self, p: Pattern, tnames: Vec[str], vnames: Vec[str]):
+        match p:
+            case Pattern.PVariant(tn, vn):
+                tnames.push(tn)
+                vnames.push(vn)
+            case Pattern.PVariantBind(tn, vn, _):
+                tnames.push(tn)
+                vnames.push(vn)
+            case Pattern.PVariantBindMany(tn, vn, _):
+                tnames.push(tn)
+                vnames.push(vn)
+            case Pattern.POr(pats):
+                mut oi = 0
+                while oi < pats.len:
+                    self.pattern_covers(pats.get(oi), tnames, vnames)
+                    oi = oi + 1
+            case _: pass
 
     pub def is_primitive(self, ty: AstType) -> bool: return self.is_primitive_name(ty.name)
     # True if `name` denotes SOME resolvable type: a primitive, a string type, a

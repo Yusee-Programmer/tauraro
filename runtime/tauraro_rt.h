@@ -1055,14 +1055,24 @@ extern _Thread_local char*   _tr_thread_panic_message;
 typedef struct { int panicked; char* panic_msg; } _TrSpawnResult;
 
 
-#ifndef _WIN32
+/* _WIN32 is a TARGET/compiler macro, not a "windows.h is actually available"
+ * guarantee -- a cross build (TAURARO_KERNEL/TAURARO_BARE, e.g. Cortex-M via
+ * `zig cc -target thumb-freestanding-eabi` on a Windows host) can still see
+ * _WIN32 defined by the driver while having no OS, no windows.h, and no
+ * psapi/bcrypt libs to link. Every "_WIN32 means hosted Windows" branch below
+ * must also check `!defined(TAURARO_BARE)`, or it tries to pull in headers
+ * that don't exist for the target and the freestanding build fails to compile
+ * (or, worse, is worked around per-project by manually `-U`-ing the macros).
+ */
+#if !defined(_WIN32) || defined(TAURARO_BARE)
 /* Debug helper: prints current process memory usage to stderr, tagged with
  * `label`. Used to bisect memory growth across checkpoints during
- * leak-hunting; not called by normal runtime code. No-op on non-Windows. */
+ * leak-hunting; not called by normal runtime code. No-op on non-Windows
+ * (and on any bare-metal/kernel target, Windows-triple macros notwithstanding). */
 _TR_XLINK void _tr_report_mem(const char* label) { (void)label; }
 #endif
 
-#ifdef _WIN32
+#if defined(_WIN32) && !defined(TAURARO_BARE)
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif

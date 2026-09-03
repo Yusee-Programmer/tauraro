@@ -3877,6 +3877,7 @@ __attribute__((hot)) HirExpr* Sema_lower_expr(Sema* self, Expr* e_ptr);
 __attribute__((hot)) TrStr Sema_is_reserved_error(Sema* self, TrStr name);
 __attribute__((hot)) TrStr Sema_is_reserved_keyword(Sema* self, TrStr name);
 __attribute__((hot)) bool Sema_block_returns(Sema* self, Block* b);
+__attribute__((hot)) void Sema_pattern_covers(Sema* self, Pattern p, List_TrStr* tnames, List_TrStr* vnames);
 __attribute__((hot)) bool Sema_is_primitive(Sema* self, AstType* ty);
 __attribute__((hot)) bool Sema__is_known_type_name(Sema* self, TrStr name);
 __attribute__((hot)) bool Sema_is_primitive_name(Sema* self, TrStr name);
@@ -4634,6 +4635,7 @@ __attribute__((hot)) bool CGenerator__is_subclass_of(CGenerator* self, TrStr chi
 __attribute__((hot)) TrStr CGenerator_gen_args_casts(CGenerator* self, List_ptr* args, List_TrStr* casts);
 __attribute__((hot)) TrStr CGenerator_gen_args_strify(CGenerator* self, List_ptr* args, TrStr elem_sfx);
 __attribute__((hot)) TrStr CGenerator__resolve_alias_tr(CGenerator* self, TrStr name);
+__attribute__((hot)) TrStr CGenerator_gen_iface_wrapped_args(CGenerator* self, List_ptr* params, List_ptr* args);
 __attribute__((hot)) TrStr CGenerator_gen_method_call(CGenerator* self, HirExpr* obj, TrStr method, List_ptr* args, AstType* call_ty);
 __attribute__((hot)) TrStr CGenerator_gen_fstring(CGenerator* self, List_ptr* parts);
 __attribute__((hot)) TrStr CGenerator_gen_tuple(CGenerator* self, List_ptr* items);

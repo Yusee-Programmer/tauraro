@@ -3324,6 +3324,15 @@ pub class CGenerator:
                     case _: pass
             case _: pass
 
+        # Original (pre-mangle) callee name, for `self.functions` lookups below --
+        # that map is keyed by the HIR function name, never by the C-keyword-escaped
+        # `_tr_fn_`-prefixed form. Looking functions up by the mangled name (as this
+        # code used to) makes a call to a keyword-colliding function (e.g. `register`)
+        # silently miss both the interface-upcast wrapping below AND the `_bc_is_user_fn`
+        # check further down, misrouting it into the raw-extern-call path meant for
+        # runtime `_tr_*` helpers (since the mangled name also starts with `_tr_`).
+        mut orig_callee_name = base_callee
+
         # Mangle C reserved keywords used as call targets
         if _is_c_keyword(base_callee): base_callee = "_tr_fn_" + base_callee
 
@@ -3804,8 +3813,8 @@ pub class CGenerator:
             case _: pass
 
         # If callee is a known function, auto-wrap class args that target interface params
-        if self.functions.contains(callee_s):
-            mut fn_def = self.functions.get(callee_s)
+        if self.functions.contains(orig_callee_name):
+            mut fn_def = self.functions.get(orig_callee_name)
             mut self_skip = 0
             if fn_def.params as usize != 0 as usize and fn_def.params.len > 0 and fn_def.params.get(0).name == "self":
                 self_skip = 1
@@ -3928,7 +3937,7 @@ pub class CGenerator:
         # self.functions (with is_extern=true) since prog.functions includes
         # extern decls -- those must still go through the char*-unwrapping
         # path below, so check is_extern rather than mere presence.
-        mut _bc_is_user_fn = self.functions.contains(base_callee) and not self.functions.get(base_callee).is_extern
+        mut _bc_is_user_fn = self.functions.contains(orig_callee_name) and not self.functions.get(orig_callee_name).is_extern
         if _starts_with_tr(base_callee) and not _bc_is_user_fn and base_callee != "_tr_str_len":
             mut _ext_call = callee_s + "(" + self.gen_args_extern(args) + ")"
             if _is_str_type(call_ty.name):
@@ -3944,7 +3953,7 @@ pub class CGenerator:
         # (parent fields are embedded FIRST, so (Parent*)child is layout-correct; C errors
         # on the implicit pointer conversion without the cast).
         if _bc_is_user_fn:
-            mut _uc_fdef = self.functions.get(base_callee)
+            mut _uc_fdef = self.functions.get(orig_callee_name)
             mut _uc_casts = Vec[str].init(args.len)
             mut _uc_any = false
             mut _uci = 0
@@ -4268,6 +4277,51 @@ pub class CGenerator:
             cur = nxt
             hops = hops + 1
         return cur
+
+    # Generate a method call's (non-self) argument list, auto-wrapping any arg
+    # into `ActualClass_as_ExpectedInterface(x)` where the method's declared param
+    # is interface-typed and the arg's static type is a concrete class -- the same
+    # upcast a free-function call already applies (see gen_call). `params` is the
+    # target method's OWN HirFunction.params, which (unlike a free function's) may
+    # still carry a leading `self` entry -- skip it so index 0 lines up with
+    # `args.get(0)`. Empty/not-found (e.g. the base-class-fallback caller, which
+    # doesn't track this) just falls back to a plain `gen_args`.
+    pub def gen_iface_wrapped_args(self, params: Vec[HirParam], args: Vec[Pointer[HirExpr]]) -> str:
+        if params as usize == 0 as usize or params.len == 0: return self.gen_args(args)
+        mut self_skip = 0
+        if params.get(0).name == "self": self_skip = 1
+        mut any_wrapped = false
+        mut ai = 0
+        while ai < args.len:
+            mut pi = ai + self_skip
+            if pi < params.len and self.interfaces.contains(params.get(pi).ty.name):
+                mut actual_ty_n = hir_expr_type(args.get(ai)).name
+                if self.classes.contains(actual_ty_n): any_wrapped = true
+            ai = ai + 1
+        if not any_wrapped: return self.gen_args(args)
+        mut wrapped_args = ""
+        ai = 0
+        while ai < args.len:
+            if ai > 0: wrapped_args = wrapped_args + ", "
+            mut arg_s = self.gen_expr(args.get(ai))
+            mut pi2 = ai + self_skip
+            if pi2 < params.len:
+                mut _p_iface_ty = params.get(pi2).ty
+                mut expected_iface = _p_iface_ty.name
+                if self.interfaces.contains(expected_iface):
+                    mut _ep_iface = self.interfaces.get(expected_iface)
+                    if _ep_iface.generics.len > 0 and _p_iface_ty.args.len > 0:
+                        expected_iface = expected_iface + "_" + self.type_args_suffix(_p_iface_ty.args)
+                    mut actual_ty_e = hir_expr_type(args.get(ai))
+                    mut actual_ty_n = actual_ty_e.name
+                    if self.classes.contains(actual_ty_n):
+                        mut _acls = self.classes.get(actual_ty_n)
+                        if _acls.generics.len > 0 and actual_ty_e.args.len > 0:
+                            actual_ty_n = actual_ty_n + "_" + self.type_args_suffix(actual_ty_e.args)
+                        arg_s = actual_ty_n + "_as_" + expected_iface + "(" + arg_s + ")"
+            wrapped_args = wrapped_args + arg_s
+            ai = ai + 1
+        return wrapped_args
 
     pub def gen_method_call(self, obj: Pointer[HirExpr], method: str, args: Vec[Pointer[HirExpr]], call_ty: AstType) -> str:
         mut obj_s = self.gen_expr(obj)
@@ -5128,11 +5182,13 @@ pub class CGenerator:
             # Check if method exists in own class; if not, fall back to base class dispatch
             mut ucls_inh: HirClass = self.classes.get(class_name)
             mut has_own_method: bool = false
+            mut _mc_params: Vec[HirParam] = Vec[HirParam].init(0)
             mut mci: int = 0
             while mci < ucls_inh.methods.len:
                 mut mdef: HirFunction = ucls_inh.methods.get(mci)
                 if mdef.name == method:
                     has_own_method = true
+                    _mc_params = mdef.params
                 mci = mci + 1
             if not has_own_method and ucls_inh.base_classes.len > 0:
                 mut base_cls_n: str = ucls_inh.base_classes.get(0)
@@ -5150,7 +5206,13 @@ pub class CGenerator:
             mut self_arg = obj_s
             if self.vt_call_needs_ptr_self(class_name, method): self_arg = "&(" + obj_s + ")"
             mut s = dispatch_name + "(" + self_arg
-            if args.len > 0: s = s + ", " + self.gen_args(args)
+            # Auto-wrap a concrete-class arg into `Class_as_Interface(x)` when the
+            # method's OWN param is interface-typed -- a free-function call already
+            # does this (gen_call); a method call had no equivalent, so passing a
+            # concrete object where the callee expects an interface was a hard C
+            # compile error ("passing 'X*' to parameter of incompatible type
+            # 'Y_obj'") instead of the implicit upcast every other call form gets.
+            if args.len > 0: s = s + ", " + self.gen_iface_wrapped_args(_mc_params, args)
             return s + ")"
 
         if self.enums.contains(class_name):
