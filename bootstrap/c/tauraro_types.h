@@ -4435,6 +4435,7 @@ __attribute__((hot)) void FnMacroExpander_visit_block(FnMacroExpander* self, Blo
 __attribute__((hot)) void FnMacroExpander_visit_stmt(FnMacroExpander* self, Stmt* sptr);
 __attribute__((hot)) void FnMacroExpander_expand_decl(FnMacroExpander* self, Decl* dptr);
 __attribute__((hot)) long long expand_macros(Program* prog);
+__attribute__((hot)) TrStr gpu_blob_c(TrStr bin_path);
 __attribute__((hot)) void print_version();
 __attribute__((hot)) void print_usage();
 __attribute__((hot)) bool str_ends_with_dot_tr(TrStr path);

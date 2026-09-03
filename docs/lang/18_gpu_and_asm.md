@@ -152,6 +152,17 @@ miscompile.
 
 ### Compiling a kernel
 
+**Easiest — `--gpu-embed`:** the compiler auto-compiles every `@kernel` and bakes
+the module into the binary; load it with `Module.embedded()` (no file, no `llc`
+step in your workflow):
+
+```bash
+tauraroc app.tr --gpu-embed spirv -o app     # OpenCL / Vulkan
+tauraroc app.tr --gpu-embed nvptx -o app     # CUDA
+```
+
+**Explicit — compile to a `.spv`/`.ptx` file:**
+
 ```bash
 # helper wraps `tauraroc --emit gpu | llc`
 bash scripts/gpu_compile.sh kernels.tr spirv kernels.spv    # OpenCL / Vulkan
@@ -170,7 +181,8 @@ tauraroc kernels.tr --emit gpu --gpu-target nvptx | llc -mtriple=nvptx64-nvidia-
 ```python
 from std.gpu import Device, Buffer, Module
 
-mut m = Module.load_file("kernels.spv")          # or "kernels.ptx" on CUDA
+mut m = Module.embedded()                        # if built with --gpu-embed
+# mut m = Module.load_file("kernels.spv")        # or a precompiled file
 mut k = m.kernel("saxpy")
 k.arg_buffer(0, y.handle).arg_buffer(1, x.handle).arg_f64(2, 3.0).arg_i32(3, n)
 k.launch1d(n, 64)                                 # ceil(n/64) blocks × 64 threads

@@ -7106,6 +7106,21 @@ static void* _tr_gpu_read_file(char* path){
     return buf;
 }
 static int64_t _tr_gpu_read_file_len(void){ return _tr_gpu_last_file_len; }
+
+/* Embedded kernel module accessors. When a program is built with `--gpu-embed`,
+ * the compiler emits a `_tr_gpu_blob.c` with STRONG definitions of these (the
+ * compiled PTX/SPIR-V bytes). These WEAK defaults (empty) let Module.embedded()
+ * link and degrade gracefully when nothing was embedded. The prototypes are
+ * visible to EVERY TU (std.gpu's kernel.c calls them); only _TR_MAIN provides
+ * the weak definitions. */
+char*     _tr_gpu_embedded_blob(void);
+long long _tr_gpu_embedded_len(void);
+#ifdef _TR_MAIN
+#if defined(__GNUC__)
+__attribute__((weak)) char*     _tr_gpu_embedded_blob(void){ return 0; }
+__attribute__((weak)) long long _tr_gpu_embedded_len(void){ return 0; }
+#endif
+#endif
 static int64_t _tr_gpu_synchronize(void){
     _tr_gpu_init();
     if (_tr_gpu.backend==TR_GPU_CUDA && _tr_gpu.cuCtxSynchronize) return _tr_gpu.cuCtxSynchronize()==0?0:-1;

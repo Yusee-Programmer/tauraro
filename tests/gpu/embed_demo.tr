@@ -1,0 +1,24 @@
+# --gpu-embed demo: an @kernel + Module.embedded(), no separate llc step / .spv file.
+#   ./tauraroc.exe tests/gpu/embed_demo.tr --gpu-embed nvptx -o embed_demo && ./embed_demo
+# The compiler auto-compiles `addone` to a GPU module and bakes it into the binary;
+# _tr_gpu_embedded_len() > 0 proves it. (Built WITHOUT --gpu-embed -> length 0.)
+
+from std.gpu import Device, Module, gpu_global_id
+
+extern "C":
+    def _tr_gpu_embedded_len() -> int
+
+@kernel
+def addone(a: Pointer[i32], n: i32):
+    mut i = gpu_global_id(0)
+    if i < n:
+        unsafe:
+            a.offset(i).write(a.offset(i).read() + 1)
+
+def main():
+    Device.detect()
+    print(f"backend: {Device.backend_name()}")
+    print(f"embedded bytes: {_tr_gpu_embedded_len()}")
+    mut m = Module.embedded()
+    print(f"embedded module valid: {m.is_valid()}")
+    print("done")

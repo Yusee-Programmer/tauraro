@@ -136,7 +136,8 @@ Device.synchronize()
 
 | Method | Backend | Description |
 |---|---|---|
-| `Module.load_file(path)` | any | Load a precompiled `.spv` (OpenCL) or `.ptx` (CUDA) file — **the usual entry for `@kernel` output** |
+| `Module.embedded()` | any | Load the module **auto-embedded at build time** via `--gpu-embed` — no file, no separate `llc` step (**the easiest entry**) |
+| `Module.load_file(path)` | any | Load a precompiled `.spv` (OpenCL) or `.ptx` (CUDA) file |
 | `Module.load_ptx(ptx)` | CUDA | Load a PTX/cubin image from a string |
 | `Module.load_spirv(il, n)` | OpenCL | Load `n` bytes of SPIR-V from a pointer |
 | `Module.load_il(il, n)` | any | SPIR-V (OpenCL) or PTX/cubin (CUDA) from a pointer |
@@ -216,6 +217,28 @@ is a buffer of *doubles* — a matching kernel must use `Pointer[f64]` and
 ---
 
 ## The kernel build workflow
+
+### Easiest: `--gpu-embed` (auto-embed)
+
+Build with `--gpu-embed` and the compiler auto-compiles every `@kernel` to a GPU
+module and **bakes it into the binary** — no separate `llc` step, no `.spv`/`.ptx`
+file, no paths to manage. Load it with `Module.embedded()`:
+
+```sh
+tauraroc app.tr --gpu-embed spirv -o app     # OpenCL / Vulkan  (needs llc on PATH)
+tauraroc app.tr --gpu-embed nvptx -o app     # CUDA
+```
+
+```tauraro
+mut k = Module.embedded().kernel("saxpy")     # the whole build step is gone
+k.arg_buffer(0, y.handle).arg_buffer(1, x.handle).arg_f64(2, 2.0).arg_i32(3, n)
+k.launch1d(n, 256)
+```
+
+`Module.embedded()` returns an invalid module (see `is_valid()`) when the program
+was built without `--gpu-embed`, so it degrades gracefully.
+
+### Explicit: `--emit gpu` + a `.spv`/`.ptx` file
 
 ```
 @kernel def   ──tauraroc --emit gpu──▶  LLVM IR  ──llc──▶  .spv (OpenCL) / .ptx (CUDA)

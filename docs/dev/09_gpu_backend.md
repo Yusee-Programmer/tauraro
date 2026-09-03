@@ -113,6 +113,21 @@ CUDA. Exposed in `std/gpu/kernel.tr` as `Module.load_il` / `load_spirv` /
   `GpuEmitter.emit_gpu_builtin`.
 - **New statement/expression** → a `case` in `emit_stmt` / `emit_expr_hir`
   (keep the "unsupported → `fail()`" default).
-- **Roadmap**: auto-embed the compiled PTX/SPIR-V as a string constant +
-  type-directed `kernel_launch(fn, grid, block, args…)`; `__local` shared memory
-  with `gpu_barrier`; 2-D/3-D grids; `@device` helper functions.
+## Auto-embed (`--gpu-embed`)
+
+`tauraroc app.tr --gpu-embed spirv|nvptx` bakes the compiled kernel module into
+the binary: after sema, `main.tr` runs `GpuGenerator` → writes `_tr_gpu_kernels.ll`
+→ shells `llc` → reads the bytes (`_tr_gpu_read_file`) → emits `_tr_gpu_blob.c`
+(`gpu_blob_c`, a `static const unsigned char[]` + STRONG `_tr_gpu_embedded_blob`/
+`_len` accessors) → pushes it into `all_c_files`. The runtime declares those
+accessors and provides WEAK empty defaults under `_TR_MAIN`, which the strong blob
+overrides (verified on mingw); so a program built WITHOUT `--gpu-embed` links fine
+and `Module.embedded()` returns invalid. std: `Module.embedded()` loads the blob.
+
+## Roadmap
+
+- **`kernel_launch(fn, grid, block, args…)`** — type-directed launch. Needs the
+  compiler to synthesize a launcher known to sema *before* it checks user code,
+  then marshal each arg by the kernel's signature. Larger sema+codegen feature.
+- `__local` shared memory with `gpu_barrier`; 2-D/3-D grids; `@device` helper
+  functions.

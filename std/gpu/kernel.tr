@@ -19,6 +19,8 @@ extern "C":
     def _tr_gpu_module_load_il(il: Pointer[char], nbytes: int) -> Pointer[char]
     def _tr_gpu_read_file(path: str) -> Pointer[char]
     def _tr_gpu_read_file_len() -> int
+    def _tr_gpu_embedded_blob() -> Pointer[char]
+    def _tr_gpu_embedded_len() -> int
     def _tr_gpu_module_free(h: Pointer[char])
     def _tr_gpu_kernel_get(m: Pointer[char], name: str) -> Pointer[char]
     def _tr_gpu_kernel_free(h: Pointer[char])
@@ -79,6 +81,19 @@ extend Module:
     # Alias: load a SPIR-V binary (OpenCL/Vulkan compute).
     pub def load_spirv(il: Pointer[char], nbytes: int) -> Module:
         return Module.load_il(il, nbytes)
+
+    # Load the kernel module EMBEDDED at build time via `tauraroc … --gpu-embed`.
+    # No separate compile step or `.spv`/`.ptx` file — the compiler compiled every
+    # @kernel and baked the bytes into the program. Returns an invalid Module (see
+    # is_valid()) when nothing was embedded.
+    #   mut k = Module.embedded().kernel("saxpy")
+    pub def embedded() -> Module:
+        mut n = _tr_gpu_embedded_len()
+        if n <= 0:
+            mut m0 = Module()
+            m0.handle = 0 as Pointer[char]
+            return m0
+        return Module.load_il(_tr_gpu_embedded_blob(), n)
 
     # Load a precompiled kernel module from a file: a `.spv` (SPIR-V, OpenCL) or `.ptx`
     # produced by `tauraroc kernels.tr --emit gpu | llc ...`. Binary-safe (SPIR-V has
