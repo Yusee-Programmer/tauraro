@@ -180,6 +180,7 @@ pub class CGenerator:
     pub decl_vars:      Map[str, bool]
     pub str_local_names: Map[str, bool]  # TrStr-typed locals declared via SLet in current function (retain/release tracked)
     pub class_local_names: Map[str, bool]  # heap-class-typed locals in current function that OWN a refcount (released at scope exit; reset in seed_params)
+    pub class_local_mono: Map[str, str]    # heap-class local name -> its monomorphized C prefix (e.g. "Buffer_f64") so SAutoDrop's free()/drop call uses the mono name, not the bare generic ("Buffer")
     pub fn_owned: Map[str, bool]  # return-ownership inference (from sema HirFunction.returns_owned): fn key ("name" or "Class.method") -> returns an OWNED heap-class ref; drives _obj_expr_owns_ref
     pub raw_aliased: Map[str, bool]  # class names reachable as Pointer[T] anywhere in the program — their instances are aliased by RAW pointers that bypass refcounting, so they must NEVER be auto-dropped (is_heap_class_tn excludes them). e.g. AstType via AstType.args: Vec[Pointer[AstType]]
     pub coll_field_owned: Map[str, bool]  # "Class.field" collection field with a FRESH-collection assignment (candidate to free in _trdrop_T)
@@ -259,6 +260,7 @@ pub class CGenerator:
         g.decl_vars     = Map[str, bool].init(64)
         g.str_local_names = Map[str, bool].init(16)
         g.class_local_names = Map[str, bool].init(16)
+        g.class_local_mono = Map[str, str].init(16)
         g.fn_owned = Map[str, bool].init(64)
         g.raw_aliased = Map[str, bool].init(32)
         g.coll_field_owned = Map[str, bool].init(32)
@@ -365,6 +367,7 @@ pub class CGenerator:
         # single common entry for every function/method emit — avoids resetting at
         # each of the ~13 emit sites).
         self.class_local_names = Map[str, bool].init(16)
+        self.class_local_mono = Map[str, str].init(16)
         # A `-> ref` function returns a BORROW: it does NOT retain on return, and its
         # callers must NOT free the result (see _is_fresh_str_expr / _expr_is_borrow_call).
         self.cur_ret_is_borrow = f.ret_ty.is_borrow
@@ -886,6 +889,35 @@ pub class CGenerator:
             self.struct_buf = old_sbuf
             self.proto_buf  = old_pbuf
         return nm
+
+    # The monomorphized C prefix for a (possibly generic) class type: "Buffer_f64" for
+    # Buffer[float], or the bare name for a non-generic / un-parameterized class. Matches
+    # ensure_mono's `cls.name + "_" + type_args_suffix(args)`. Used so SAutoDrop's free/
+    # drop call targets the concrete instance, not the (undefined) generic template.
+    pub def mono_cprefix(self, t: AstType) -> str:
+        if self.classes.contains(t.name) and t.args.len > 0:
+            return t.name + "_" + self.type_args_suffix(t.args)
+        return t.name
+
+    # Record a heap-class local's concrete monomorphized C prefix (e.g. "Buffer_f64") so
+    # SAutoDrop names its free/drop fn on the instance, not the generic template. An
+    # un-annotated `mut h = Holder[int].make(5)` has no type args on the SLet type NOR the
+    # call result, so fall back to the factory RECEIVER's type args (`Holder[int]`).
+    pub def capture_local_mono(self, name: str, ty: AstType, v: Pointer[HirExpr]):
+        if self.classes.contains(ty.name) and ty.args.len > 0:
+            self.class_local_mono.insert(name, self.mono_cprefix(ty))
+            return
+        if v as usize != 0 as usize:
+            mut vt = hir_expr_type(v)
+            if self.classes.contains(vt.name) and vt.args.len > 0:
+                self.class_local_mono.insert(name, self.mono_cprefix(vt))
+                return
+            match v.read():
+                case HirExpr.EMethodCall(recv, _, _, _):
+                    mut rt = hir_expr_type(recv)
+                    if self.classes.contains(rt.name) and rt.args.len > 0:
+                        self.class_local_mono.insert(name, self.mono_cprefix(rt))
+                case _: pass
 
     pub def ensure_mono(self, cls: HirClass, type_args: Vec[Pointer[AstType]]):
         mut sfx = self.type_args_suffix(type_args)
@@ -6586,6 +6618,10 @@ pub class CGenerator:
                             # a returned local transfers (no retain — excluded from drops).
                             self.w(pad + "return " + self.obj_retain_wrap(e, self.str_retain_wrap(e, ret_s2, true), true) + ";\n")
             case HirStmt.SLet(n, _, _, is_const, is_shared, ty, v):
+                # Record a generic-class local's mono C prefix up front (before any
+                # branch), so an SAutoDrop free/drop names the concrete instance. The
+                # helper self-guards (only records when it finds concrete class args).
+                self.capture_local_mono(n, ty, v)
                 mut c_ty = self.type_to_c(ty)
                 # If SLet.ty is Vec/List without generic args, recover c_ty from the init expression
                 if c_ty == "List_ptr*" and v as usize != 0 as usize:
@@ -6888,6 +6924,7 @@ pub class CGenerator:
                                     self.w(pad + _sa_cty + " " + _safe_c_varname(n) + " = " + _sa_rhs + ";\n")
                                     if _sa_owns:
                                         self.class_local_names.insert(n, true)
+                                    self.capture_local_mono(n, hir_expr_type(v), v)
                             else:
                                 self.w(pad + "__auto_type " + _safe_c_varname(n) + " = " + _sa_rhs + ";\n")
                             self.decl_vars.insert(n, true)
@@ -7319,6 +7356,12 @@ pub class CGenerator:
                             self.w(pad + "Dict_free(" + _safe_c_varname(adn) + ");\n")
                 else:
                     mut _adn_safe = _safe_c_varname(adn)
+                    # For a monomorphized generic-class local (e.g. Buffer[float]) the drop
+                    # target is the concrete instance ("Buffer_f64"), not the generic
+                    # template ("Buffer" -> undefined Buffer__tr_fn_free). class_local_mono
+                    # holds the mono C prefix, recorded at the local's declaration.
+                    mut _adc_c = adc
+                    if self.class_local_mono.contains(adn): _adc_c = self.class_local_mono.get(adn)
                     if self.is_heap_class_tn(adc) and not self.has_method(adc, "free"):
                         # Refcounted plain class: release OUR reference. The struct is
                         # freed and its owned fields dropped (via _trdrop_T) only when
@@ -7326,7 +7369,7 @@ pub class CGenerator:
                         # class_local_names so only OWNING locals release (balances
                         # retain-on-bind/store/return); borrows never enter that set.
                         if self.class_local_names.contains(adn):
-                            self.w(pad + "_tr_obj_release(" + _adn_safe + ", " + self.obj_drop_fn(adc) + ");\n")
+                            self.w(pad + "_tr_obj_release(" + _adn_safe + ", " + self.obj_drop_fn(_adc_c) + ");\n")
                     elif self.has_method(adc, "free"):
                         # User-managed class (defines free()): capture each owned str
                         # field BEFORE free() (so free() can still read it), run free(),
@@ -7347,7 +7390,7 @@ pub class CGenerator:
                                     _ad_tmps.push(_ad_tmp)
                                 _ad_fi = _ad_fi + 1
                         if self.has_method(adc, "free"):
-                            self.w(pad + self.cls_method_c_call(adc, "free", adn, "") + ";\n")
+                            self.w(pad + self.cls_method_c_call(_adc_c, "free", adn, "") + ";\n")
                         mut _ad_ti = 0
                         while _ad_ti < _ad_tmps.len:
                             self.w(pad + "_tr_str_release(" + _ad_tmps.get(_ad_ti) + ");\n")

@@ -20,9 +20,9 @@ __attribute__((hot)) TrStr GpuGenerator_emit(GpuGenerator* self, HirProgram* pro
     /* pass */
     if ((strcmp(_tr_strz(tgt), _tr_strz(_tr_str_lit(""))) == 0)) {
         /* pass */
-        TrStr _strtmp_t3397 = _tr_str_lit("spirv");
+        TrStr _strtmp_t3402 = _tr_str_lit("spirv");
         _tr_str_release(tgt);
-        tgt = _strtmp_t3397;
+        tgt = _strtmp_t3402;
     }
     /* pass */
     StringBuilder* sb = StringBuilder_init(2048LL);
@@ -89,7 +89,7 @@ __attribute__((hot)) TrStr GpuGenerator_emit(GpuGenerator* self, HirProgram* pro
             /* pass */
             GpuEmitter* e = GpuEmitter_init(tgt);
             /* pass */
-            ({ TrStr _sbt_t3398 = (GpuEmitter_emit_kernel(e, f)); StringBuilder_append(sb, _sbt_t3398); _tr_str_release(_sbt_t3398); });
+            ({ TrStr _sbt_t3403 = (GpuEmitter_emit_kernel(e, f)); StringBuilder_append(sb, _sbt_t3403); _tr_str_release(_sbt_t3403); });
             /* pass */
             if ((!e->ok)) {
                 /* pass */
@@ -134,7 +134,7 @@ __attribute__((hot)) TrStr GpuGenerator_emit(GpuGenerator* self, HirProgram* pro
                     StringBuilder_append(sb, _tr_str_lit(", "));
                 }
                 /* pass */
-                ({ TrStr _sbt_t3399 = (({ TrStr _cr = (_tr_str_wrap(_tr_int_to_str((long long)(ki)))); TrStr _cres = _tr_strx_concat(_tr_strz(_tr_str_lit("!")), _cr.data); _tr_str_release(_cr); _cres; })); StringBuilder_append(sb, _sbt_t3399); _tr_str_release(_sbt_t3399); });
+                ({ TrStr _sbt_t3404 = (({ TrStr _cr = (_tr_str_wrap(_tr_int_to_str((long long)(ki)))); TrStr _cres = _tr_strx_concat(_tr_strz(_tr_str_lit("!")), _cr.data); _tr_str_release(_cr); _cres; })); StringBuilder_append(sb, _sbt_t3404); _tr_str_release(_sbt_t3404); });
                 /* pass */
                 ki = (ki + 1LL);
             }
@@ -154,7 +154,7 @@ __attribute__((hot)) TrStr GpuGenerator_emit(GpuGenerator* self, HirProgram* pro
             /* pass */
             if (fn_is_kernel(f3)) {
                 /* pass */
-                ({ TrStr _sbt_t3400 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cr = (_tr_str_wrap(_tr_int_to_str((long long)(ki2)))); TrStr _cres = _tr_strx_concat(_tr_strz(_tr_str_lit("!")), _cr.data); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" = !{ptr @"))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(f3->name)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(", !\"kernel\", i32 1}\n"))); _tr_str_release(_cl); _cres; })); StringBuilder_append(sb, _sbt_t3400); _tr_str_release(_sbt_t3400); });
+                ({ TrStr _sbt_t3405 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cr = (_tr_str_wrap(_tr_int_to_str((long long)(ki2)))); TrStr _cres = _tr_strx_concat(_tr_strz(_tr_str_lit("!")), _cr.data); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" = !{ptr @"))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(f3->name)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(", !\"kernel\", i32 1}\n"))); _tr_str_release(_cl); _cres; })); StringBuilder_append(sb, _sbt_t3405); _tr_str_release(_sbt_t3405); });
                 /* pass */
                 ki2 = (ki2 + 1LL);
             }

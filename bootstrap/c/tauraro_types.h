@@ -2863,6 +2863,7 @@ typedef struct CGenerator {
     TrMap* decl_vars;
     TrMap* str_local_names;
     TrMap* class_local_names;
+    TrMap* class_local_mono;
     TrMap* fn_owned;
     TrMap* raw_aliased;
     TrMap* coll_field_owned;
@@ -2934,6 +2935,7 @@ static void _trdrop_CGenerator(void* vp) {
     Dict_free(self->decl_vars);
     Dict_free(self->str_local_names);
     Dict_free(self->class_local_names);
+    Dict_free_strval(self->class_local_mono);
     Dict_free(self->fn_owned);
     Dict_free(self->raw_aliased);
     Dict_free(self->coll_field_owned);
@@ -4530,6 +4532,8 @@ __attribute__((hot)) TrStr CGenerator_list_sfx(CGenerator* self, TrStr elem_sfx)
 __attribute__((hot)) TrStr CGenerator_type_args_suffix(CGenerator* self, List_ptr* args);
 __attribute__((hot)) TrStr CGenerator_synth_class_suffix(CGenerator* self, HirClass* ucls);
 __attribute__((hot)) TrStr CGenerator_ensure_array_type(CGenerator* self, AstType* ty);
+__attribute__((hot)) TrStr CGenerator_mono_cprefix(CGenerator* self, AstType* t);
+__attribute__((hot)) void CGenerator_capture_local_mono(CGenerator* self, TrStr name, AstType* ty, HirExpr* v);
 __attribute__((hot)) void CGenerator_ensure_mono(CGenerator* self, HirClass* cls, List_ptr* type_args);
 __attribute__((hot)) TrStr CGenerator_infer_generic_targ(CGenerator* self, TrStr fname, List_ptr* args);
 __attribute__((hot)) void CGenerator_ensure_mono_func(CGenerator* self, TrStr fname, TrStr targ);
