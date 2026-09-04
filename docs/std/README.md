@@ -15,7 +15,7 @@ building libraries with `taupkg`)
 | [`std.compress`](compress.md) | Compression: zlib compress/decompress, raw deflate/inflate (`-lz` required) |
 | [`std.crypto`](crypto.md) | Cryptography: SHA-256, HMAC-SHA256, MD5, UUID v4 |
 | [`std.encoding`](encoding.md) | Data encoding: JSON, Base64, Hex |
-| [`std.gpu`](../lang/18_gpu_and_asm.md) | OpenMP-backed parallel dispatch (`Gpu.parallel`); replaces the deprecated `gpu:` block |
+| [`std.gpu`](gpu.md) | GPU compute: CUDA/OpenCL/CPU device API (`Device`/`Buffer[T]`/`Module`/`Kernel`), Tauraro `@kernel` → PTX/SPIR-V, and OpenMP CPU dispatch (`Gpu.parallel`) |
 | [`std.io`](io.md) | File I/O, directory operations, path manipulation, console, buffered I/O |
 | [`std.iter`](iter.md) | Range construction, int/float vector transforms, folds, prefix sums, normalization |
 | [`std.math`](math.md) | Integer math, floating-point math, bitwise operations, statistics, random |

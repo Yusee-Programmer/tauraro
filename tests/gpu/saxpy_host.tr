@@ -1,0 +1,54 @@
+# Host program for the @kernel workflow (Route B).
+#
+# Build the kernel module first (compiles tests/gpu/kernels.tr's @kernel functions):
+#     bash scripts/gpu_compile.sh tests/gpu/kernels.tr spirv kernels.spv     # OpenCL
+#     bash scripts/gpu_compile.sh tests/gpu/kernels.tr nvptx  kernels.ptx    # CUDA
+# then build + run this host:
+#     ./tauraroc.exe tests/gpu/saxpy_host.tr -o saxpy_host && ./saxpy_host
+#
+# It loads the precompiled module by path and launches the `saxpy` kernel:
+#     y[i] = a*x[i] + y[i]
+
+from std.gpu import Device, Buffer, Module
+from std.core.vec import Vec
+
+def main():
+    Device.detect()
+    print(f"backend: {Device.backend_name()}  device: {Device.name()}")
+
+    # Load the precompiled module first (SPIR-V for OpenCL; "kernels.ptx" on CUDA).
+    # Do the validity checks before allocating buffers so an early exit is clean.
+    mut m = Module.load_file("kernels.spv")
+    if not m.is_valid():
+        print(f"load_file failed: {Device.last_error()}")
+        return
+    mut k = m.kernel("saxpy")
+    if not k.is_valid():
+        print(f"kernel not found: {Device.last_error()}")
+        m.free()
+        return
+
+    mut n = 8
+    mut hy = Vec[float].init(n)
+    mut hx = Vec[float].init(n)
+    mut i = 0
+    while i < n:
+        hy.push(1.0)
+        hx.push(2.0)
+        i += 1
+
+    mut y = Buffer[float].from_vec(hy)
+    mut x = Buffer[float].from_vec(hx)
+
+    # saxpy(y, x, a, n): a = 3.0  ->  y = 3*2 + 1 = 7 for every element
+    k.arg_buffer(0, y.handle).arg_buffer(1, x.handle).arg_f64(2, 3.0).arg_i32(3, n)
+    mut rc = k.launch1d(n, 64)
+    Device.synchronize()
+
+    mut out = y.download()
+    print(f"launch rc={rc}  out0={out.get(0)}  out7={out.get(n - 1)}")   # expect 7.0
+
+    x.free()
+    y.free()
+    k.free()
+    m.free()

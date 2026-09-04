@@ -1,0 +1,17 @@
+# @device helper called from a @kernel: the helper is emitted as a regular GPU
+# function and the kernel calls it.
+from std.gpu import gpu_global_id
+
+@device
+def scale_bias(v: f32, k: f32, b: f32) -> f32:
+    return v * k + b
+
+@kernel
+def apply(a: Pointer[f32], k: f32, b: f32, n: i32):
+    mut i = gpu_global_id(0)
+    if i < n:
+        unsafe:
+            a.offset(i).write(scale_bias(a.offset(i).read(), k, b))
+
+def main():
+    print("device fn")

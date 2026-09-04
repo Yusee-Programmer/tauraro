@@ -425,6 +425,14 @@ print(total)    # 15 — outer variable was modified
 > environment is currently heap-allocated and not yet reclaimed, so creating many
 > closures in a hot loop leaks a small amount; binding a closure once and reusing
 > it is fine. (Env reclamation via scope-based drop is a planned follow-up.)
+>
+> "Interchangeable wherever a `def(...)->R` is expected" means what it says and
+> no more: a `lambda`-typed variable that happens to hold a plain function
+> reference (not an actual closure) can flow into `def(...)->R`-typed code. It
+> does NOT mean `lambda` and `def(...)->R` are the same type or can be swapped
+> as *parameter* declarations — see [Common Mistakes](#common-mistakes) below
+> and [First-Class Functions](#first-class-functions-callables) further below
+> for that distinction.
 
 **Stateful counter:**
 ```python
@@ -472,12 +480,25 @@ square = def (x: int) -> int: return x * x    # ERROR: closure must be assigned 
 ```
 Fix: `mut square = def (x: int) -> int: return x * x`
 
-**Expecting closures to have a concrete callable type other than `lambda`:**
+**Confusing `lambda` (closures) with `def(...) -> R` (function values):**
 ```python
-def run(f: def(int) -> int) -> void:    # ERROR: not valid syntax
+def run(f: lambda) -> void:             # a CLOSURE param — accepts `lambda x: ...`
+                                         # or a `def (x) -> R:` closure literal,
+                                         # NOT a bare top-level function name.
     ...
+
+def run2(f: def(int) -> int) -> void:   # a FUNCTION-VALUE param — this IS valid
+    ...                                 # syntax, and accepts a top-level function
+                                         # name directly: run2(add1, ...).
 ```
-Fix: Always use `lambda` as the parameter type: `def run(f: lambda) -> void:`
+`lambda` is the type of **closures** (capture an environment; see
+[First-Class Functions](#first-class-functions-callables) below for the difference).
+`def(...) -> R` is the type of a **named top-level function value** (zero-cost
+function pointer, no captured environment) — it is valid as a parameter type,
+a class field type, and a local variable type, and is "the idiomatic way to
+take a callback or handler" (see the `def(...) -> R` section below). Don't mix
+the two up: passing a bare function name where `lambda` is declared, or a
+closure literal where `def(...) -> R` is declared, is the actual error.
 
 **Closing over a loop variable and expecting a snapshot:**
 ```python

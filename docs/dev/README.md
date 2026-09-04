@@ -19,6 +19,9 @@ Documentation](../std/README.md) instead.
 | 04 | [Codegen Guide](04_codegen_guide.md) | How specific features lower to C: generics, enums/match, closures, interfaces/vtables, Sendable/concurrency, channels/select, `ETypeArg` |
 | 05 | [Building Libraries](05_building_libraries.md) | `taupkg` manifests, package layout conventions, `local:` deps, `TAURARO_PATH`, worked example, publishing |
 | 06 | [Best Practices & Pitfalls](06_best_practices_pitfalls.md) | Curated list of hard-won lessons: memory/string pitfalls, codegen correctness, parser/lexer traps, build/bootstrap traps |
+| 07 | [MIR Ownership Plan](07_mir_ownership_plan.md) | The sound interprocedural consumes-fixpoint ownership analysis (retiring heuristics) |
+| 08 | [Runtime Tiers & Freestanding](08_runtime_tiers_and_freestanding.md) | `TAURARO_KERNEL`/`NO_LIBC`/`NO_THREADS`/`NO_NET` tiers, bare-metal builds |
+| 09 | [GPU Kernel Backend](09_gpu_backend.md) | `@kernel` → LLVM IR → PTX/SPIR-V (`src/codegen/gpu`), the host→GPU deltas, runtime loading, validation |
 
 ---
 

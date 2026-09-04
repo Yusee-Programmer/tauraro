@@ -171,6 +171,16 @@ vendored package's own sibling-relative imports (e.g. `from app import App`
 inside `watax.tr`) resolve without any extra configuration, and
 `from <pkgname> import X` finds `<pkgname>/src/<pkgname>.tr`.
 
+**The `std.` prefix is optional.** Search path 5 (`<compiler_bin>/`) and search
+path 6 (`<compiler_bin>/std/`) are BOTH always active, so a standard-library
+module resolves either way: `from core.vec import Vec` (via path 6) and `from
+std.core.vec import Vec` (via path 5) name the exact same file. Elsewhere in
+these docs you'll see both spellings used interchangeably (compare the tables
+above, which use the `std.` form, against `examples/28_first_class_functions.tr`
+and `std/hal/mmio.c`-importing bare-metal examples, which don't) — neither is
+more "correct"; prefer whichever form the nearest example you're extending
+already uses, for consistency within that file.
+
 **Recursive resolution:** Each imported module is scanned for its own imports, which are resolved transitively. The compiler builds the full dependency graph before emitting any C.
 
 **Error for missing module:**

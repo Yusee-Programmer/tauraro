@@ -289,6 +289,8 @@ __attribute__((malloc,returns_nonnull,hot)) Sema* Sema_init() {
     /* pass */
     _tr_dict_set(s->globals, _tr_strz(_tr_str_lit("bin")), Symbol_init(_tr_str_lit("bin"), SymbolKind_make_SFunction(), box_asttype(AstType_init(_tr_str_lit("str")))));
     /* pass */
+    _tr_dict_set(s->globals, _tr_strz(_tr_str_lit("kernel_launch")), Symbol_init(_tr_str_lit("kernel_launch"), SymbolKind_make_SFunction(), box_asttype(AstType_init(_tr_str_lit("int")))));
+    /* pass */
     _tr_dict_set(s->globals, _tr_strz(_tr_str_lit("int")), Symbol_init(_tr_str_lit("int"), SymbolKind_make_SFunction(), box_asttype(AstType_init(_tr_str_lit("int")))));
     /* pass */
     _tr_dict_set(s->globals, _tr_strz(_tr_str_lit("float")), Symbol_init(_tr_str_lit("float"), SymbolKind_make_SFunction(), box_asttype(AstType_init(_tr_str_lit("float")))));
@@ -12402,6 +12404,10 @@ __auto_type arms = _t638.data.SMatch.arms;
         /* pass */
         bool all_ret = true;
         /* pass */
+        List_TrStr* _fr_tnames = (void*)List_TrStr_new();
+        /* pass */
+        List_TrStr* _fr_vnames = (void*)List_TrStr_new();
+        /* pass */
         long long mi = 0LL;
         /* pass */
         while ((mi < arms->len)) {
@@ -12416,7 +12422,7 @@ __auto_type arms = _t638.data.SMatch.arms;
                 has_wild = true;
             } else if (1) {
                 __auto_type _ = _t639;
-                /* pass */
+                Sema_pattern_covers(self, arm->pat, _fr_tnames, _fr_vnames);
             }
             /* pass */
             if ((((unsigned long long)(arm->body)) != ((unsigned long long)(0LL)))) {
@@ -12430,10 +12436,126 @@ __auto_type arms = _t638.data.SMatch.arms;
             mi = (mi + 1LL);
         }
         /* pass */
-        return (has_wild && all_ret);
+        if (has_wild) {
+            /* pass */
+            return all_ret;
+        }
+        /* pass */
+        if ((!all_ret)) {
+            /* pass */
+            return false;
+        }
+        /* pass */
+        if ((_fr_vnames->len == 0LL)) {
+            /* pass */
+            return false;
+        }
+        /* pass */
+        TrStr _fr_ety = List_TrStr_get(_fr_tnames, 0LL);
+        /* pass */
+        bool _fr_same_ty = true;
+        /* pass */
+        long long _fr_ti = 1LL;
+        /* pass */
+        while ((_fr_ti < _fr_tnames->len)) {
+            /* pass */
+            if ((strcmp(_tr_strz(List_TrStr_get(_fr_tnames, _fr_ti)), _tr_strz(_fr_ety)) != 0)) {
+                /* pass */
+                _fr_same_ty = false;
+            }
+            /* pass */
+            _fr_ti = (_fr_ti + 1LL);
+        }
+        /* pass */
+        if ((!_fr_same_ty)) {
+            /* pass */
+            _tr_str_release(_fr_ety);
+            return false;
+        }
+        /* pass */
+        if ((!_tr_dict_contains(self->enums, _tr_strz(_fr_ety)))) {
+            /* pass */
+            _tr_str_release(_fr_ety);
+            return false;
+        }
+        /* pass */
+        EnumDef* _fr_edef = ((EnumDef*)(uintptr_t)_tr_dict_get(self->enums, _tr_strz(_fr_ety)));
+        /* pass */
+        long long _fr_ei = 0LL;
+        /* pass */
+        while ((_fr_ei < _fr_edef->variants->len)) {
+            /* pass */
+            TrStr _fr_vn = ((VariantDef*)List_ptr_get(_fr_edef->variants, _fr_ei))->name;
+            /* pass */
+            bool _fr_found = false;
+            /* pass */
+            long long _fr_vi = 0LL;
+            /* pass */
+            while ((_fr_vi < _fr_vnames->len)) {
+                /* pass */
+                if ((strcmp(_tr_strz(List_TrStr_get(_fr_vnames, _fr_vi)), _tr_strz(_fr_vn)) == 0)) {
+                    /* pass */
+                    _fr_found = true;
+                }
+                /* pass */
+                _fr_vi = (_fr_vi + 1LL);
+            }
+            /* pass */
+            if ((!_fr_found)) {
+                /* pass */
+                _tr_str_release(_fr_ety);
+                return false;
+            }
+            /* pass */
+            _fr_ei = (_fr_ei + 1LL);
+        }
+        /* pass */
+        _tr_str_release(_fr_ety);
+        return true;
     } else if (1) {
         __auto_type _ = _t638;
         return false;
+    }
+}
+
+__attribute__((hot)) void Sema_pattern_covers(Sema* self, Pattern p, List_TrStr* tnames, List_TrStr* vnames) {
+    /* pass */
+    __auto_type _t640 = p;
+    if (_t640.tag == Pattern_PVariant) {
+        __auto_type tn = _t640.data.PVariant.type_name;
+__auto_type vn = _t640.data.PVariant.variant;
+        /* pass */
+        List_TrStr_append(tnames, tn);
+        /* pass */
+        List_TrStr_append(vnames, vn);
+    } else if (_t640.tag == Pattern_PVariantBind) {
+        __auto_type tn = _t640.data.PVariantBind.type_name;
+__auto_type vn = _t640.data.PVariantBind.variant;
+        /* pass */
+        List_TrStr_append(tnames, tn);
+        /* pass */
+        List_TrStr_append(vnames, vn);
+    } else if (_t640.tag == Pattern_PVariantBindMany) {
+        __auto_type tn = _t640.data.PVariantBindMany.type_name;
+__auto_type vn = _t640.data.PVariantBindMany.variant;
+        /* pass */
+        List_TrStr_append(tnames, tn);
+        /* pass */
+        List_TrStr_append(vnames, vn);
+    } else if (_t640.tag == Pattern_POr) {
+        __auto_type pats = _t640.data.POr.patterns;
+        /* pass */
+        long long oi = 0LL;
+        /* pass */
+        while ((oi < pats->len)) {
+            /* pass */
+            Sema_pattern_covers(self, List_Pattern_get(pats, oi), tnames, vnames);
+            /* pass */
+            oi = (oi + 1LL);
+        }
+    } else if (1) {
+        __auto_type _ = _t640;
+        /* pass */
     }
 }
 
@@ -12579,25 +12701,25 @@ __attribute__((hot)) bool _expr_is_self_field(Expr* e) {
         return false;
     }
     /* pass */
-    __auto_type _t640 = (*e);
-    if (_t640.tag == Expr_EPropAccess) {
-        __auto_type obj = _t640.data.EPropAccess.obj;
+    __auto_type _t641 = (*e);
+    if (_t641.tag == Expr_EPropAccess) {
+        __auto_type obj = _t641.data.EPropAccess.obj;
         /* pass */
         if ((((unsigned long long)(obj)) == ((unsigned long long)(0LL)))) {
             /* pass */
             return false;
         }
         /* pass */
-        __auto_type _t641 = (*obj);
-        if (_t641.tag == Expr_EIdent) {
-            __auto_type nm = _t641.data.EIdent.name;
+        __auto_type _t642 = (*obj);
+        if (_t642.tag == Expr_EIdent) {
+            __auto_type nm = _t642.data.EIdent.name;
             return (strcmp(_tr_strz(nm), _tr_strz(_tr_str_lit("self"))) == 0);
         } else if (1) {
-            __auto_type _ = _t641;
+            __auto_type _ = _t642;
             return false;
         }
     } else if (1) {
-        __auto_type _ = _t640;
+        __auto_type _ = _t641;
         return false;
     }
 }
@@ -12658,14 +12780,14 @@ __attribute__((hot)) bool _stmt_mutates_self(Stmt* s) {
         return false;
     }
     /* pass */
-    __auto_type _t642 = (*s);
-    if (_t642.tag == Stmt_SAssign) {
-        __auto_type tgt = _t642.data.SAssign.target;
+    __auto_type _t643 = (*s);
+    if (_t643.tag == Stmt_SAssign) {
+        __auto_type tgt = _t643.data.SAssign.target;
         return _expr_is_self_field(tgt);
-    } else if (_t642.tag == Stmt_SIf) {
-        __auto_type then_b = _t642.data.SIf.then_b;
-__auto_type elifs = _t642.data.SIf.elifs;
-__auto_type else_b = _t642.data.SIf.else_b;
+    } else if (_t643.tag == Stmt_SIf) {
+        __auto_type then_b = _t643.data.SIf.then_b;
+__auto_type elifs = _t643.data.SIf.elifs;
+__auto_type else_b = _t643.data.SIf.else_b;
         /* pass */
         if (_block_mutates_self(then_b)) {
             /* pass */
@@ -12685,29 +12807,29 @@ __auto_type else_b = _t642.data.SIf.else_b;
         }
         /* pass */
         return _block_mutates_self(else_b);
-    } else if (_t642.tag == Stmt_SWhile) {
-        __auto_type body = _t642.data.SWhile.body;
+    } else if (_t643.tag == Stmt_SWhile) {
+        __auto_type body = _t643.data.SWhile.body;
         return _block_mutates_self(body);
-    } else if (_t642.tag == Stmt_SFor) {
-        __auto_type body = _t642.data.SFor.body;
+    } else if (_t643.tag == Stmt_SFor) {
+        __auto_type body = _t643.data.SFor.body;
         return _block_mutates_self(body);
-    } else if (_t642.tag == Stmt_SForUnpack) {
-        __auto_type body = _t642.data.SForUnpack.body;
+    } else if (_t643.tag == Stmt_SForUnpack) {
+        __auto_type body = _t643.data.SForUnpack.body;
         return _block_mutates_self(body);
-    } else if (_t642.tag == Stmt_SUnsafe) {
-        __auto_type body = _t642.data.SUnsafe.body;
+    } else if (_t643.tag == Stmt_SUnsafe) {
+        __auto_type body = _t643.data.SUnsafe.body;
         return _block_mutates_self(body);
-    } else if (_t642.tag == Stmt_SWith) {
-        __auto_type body = _t642.data.SWith.body;
+    } else if (_t643.tag == Stmt_SWith) {
+        __auto_type body = _t643.data.SWith.body;
         return _block_mutates_self(body);
-    } else if (_t642.tag == Stmt_STaskGroup) {
-        __auto_type body = _t642.data.STaskGroup.body;
+    } else if (_t643.tag == Stmt_STaskGroup) {
+        __auto_type body = _t643.data.STaskGroup.body;
         return _block_mutates_self(body);
-    } else if (_t642.tag == Stmt_SGpuBlock) {
-        __auto_type body = _t642.data.SGpuBlock.body;
+    } else if (_t643.tag == Stmt_SGpuBlock) {
+        __auto_type body = _t643.data.SGpuBlock.body;
         return _block_mutates_self(body);
-    } else if (_t642.tag == Stmt_SMatch) {
-        __auto_type arms = _t642.data.SMatch.arms;
+    } else if (_t643.tag == Stmt_SMatch) {
+        __auto_type arms = _t643.data.SMatch.arms;
         /* pass */
         long long i = 0LL;
         /* pass */
@@ -12722,10 +12844,10 @@ __auto_type else_b = _t642.data.SIf.else_b;
         }
         /* pass */
         return false;
-    } else if (_t642.tag == Stmt_STry) {
-        __auto_type try_body = _t642.data.STry.try_body;
-__auto_type catches = _t642.data.STry.catches;
-__auto_type finally_b = _t642.data.STry.finally_b;
+    } else if (_t643.tag == Stmt_STry) {
+        __auto_type try_body = _t643.data.STry.try_body;
+__auto_type catches = _t643.data.STry.catches;
+__auto_type finally_b = _t643.data.STry.finally_b;
         /* pass */
         if (_block_mutates_self(try_body)) {
             /* pass */
@@ -12745,11 +12867,11 @@ __auto_type finally_b = _t642.data.STry.finally_b;
         }
         /* pass */
         return _block_mutates_self(finally_b);
-    } else if (_t642.tag == Stmt_SDefer) {
-        __auto_type inner = _t642.data.SDefer.stmt;
+    } else if (_t643.tag == Stmt_SDefer) {
+        __auto_type inner = _t643.data.SDefer.stmt;
         return _stmt_mutates_self(inner);
     } else if (1) {
-        __auto_type _ = _t642;
+        __auto_type _ = _t643;
         return false;
     }
 }

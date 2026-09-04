@@ -1,0 +1,679 @@
+# @trusted: compiler systems module — audited raw-pointer core (like Rust std internals)
+# src/codegen/gpu/emit.tr — GpuEmitter: one @kernel HirFunction -> LLVM IR text for a GPU
+# target ("nvptx" | "spirv"). Alloca-based (a slot per var; llc/opt mem2reg gives SSA), so
+# we never compute phi nodes by hand. Restricted to the data-parallel kernel subset; any
+# unsupported node sets ok=false with a note so the driver errors instead of miscompiling.
+
+from hir import HirFunction
+from hir import HirParam
+from hir import HirBlock
+from hir import HirStmt
+from hir import HirExpr
+from hir import hir_expr_type
+from ast import AstType
+from core.string import StringBuilder
+
+# True when `f` carries the @kernel decorator.
+pub def fn_is_kernel(f: HirFunction) -> bool:
+    mut i = 0
+    while i < f.decorators.len:
+        if f.decorators.get(i).name == "kernel": return true
+        i = i + 1
+    return false
+
+# True when `f` carries the @device decorator (a GPU-side helper a @kernel can call;
+# emitted as a regular function, not a kernel entry point).
+pub def fn_is_device(f: HirFunction) -> bool:
+    mut i = 0
+    while i < f.decorators.len:
+        if f.decorators.get(i).name == "device": return true
+        i = i + 1
+    return false
+
+# --- scalar/pointer type mapping ----------------------------------------------------------
+pub def _gpu_is_float(t: str) -> bool:
+    return t == "float" or t == "double"
+
+pub def _gpu_iwidth(t: str) -> int:
+    if t == "i1": return 1
+    if t == "i8": return 8
+    if t == "i16": return 16
+    if t == "i32": return 32
+    return 64
+
+# AstType name -> LLVM scalar type (pointers handled separately).
+pub def _gpu_scalar_ty(n: str) -> str:
+    if n == "f32": return "float"
+    if n == "f64" or n == "float" or n == "double": return "double"
+    if n == "bool": return "i1"
+    if n == "i8" or n == "u8" or n == "c_char" or n == "char" or n == "c_schar" or n == "c_uchar": return "i8"
+    if n == "i16" or n == "u16": return "i16"
+    if n == "i32" or n == "u32" or n == "c_int": return "i32"
+    return "i64"
+
+# A value carried through expression emission: its LLVM type + SSA text.
+pub class GVal:
+    pub ty:  str
+    pub val: str
+
+extend GVal:
+    pub def make(ty: str, val: str) -> GVal:
+        mut v = GVal()
+        v.ty = ty
+        v.val = val
+        return v
+
+pub class GpuEmitter:
+    pub sb:     StringBuilder
+    pub target: str          # "nvptx" | "spirv"
+    pub tmp:    int
+    pub lbl:    int
+    pub ok:     bool
+    pub fail_note: str
+    pub var_names: Vec[str]  # every local/param name
+    pub var_ll:    Vec[str]  # its LLVM slot type ("ptr addrspace(1)" for buffers)
+    pub var_elem:  Vec[str]  # element LLVM type for pointer vars, else ""
+    pub ret_llty:  str       # the function's LLVM return type ("void" for a kernel)
+    pub dev_fns:   Vec[HirFunction]  # @device helpers this function may call
+
+extend GpuEmitter:
+    pub def init(target: str) -> GpuEmitter:
+        mut e = GpuEmitter()
+        e.sb = StringBuilder.init(1024)
+        e.target = target
+        e.tmp = 0
+        e.lbl = 0
+        e.ok = true
+        e.fail_note = ""
+        e.var_names = Vec[str].init(8)
+        e.var_ll = Vec[str].init(8)
+        e.var_elem = Vec[str].init(8)
+        e.ret_llty = "void"
+        e.dev_fns = Vec[HirFunction].init(0)
+        return e
+
+    # A function's LLVM return type: void for None/void, else the scalar mapping.
+    pub def _gpu_ret_ty(self, t: AstType) -> str:
+        if t.name == "void" or t.name == "None" or t.name == "": return "void"
+        if t.name == "Pointer": return "ptr addrspace(1)"
+        return _gpu_scalar_ty(t.name)
+
+    pub def w(self, s: str):
+        self.sb.append(s)
+
+    pub def fresh(self) -> str:
+        mut r = "%t" + self.tmp.to_str()
+        self.tmp = self.tmp + 1
+        return r
+
+    pub def newlbl(self) -> str:
+        mut r = "L" + self.lbl.to_str()
+        self.lbl = self.lbl + 1
+        return r
+
+    pub def fail(self, why: str):
+        self.ok = false
+        if self.fail_note == "": self.fail_note = why
+
+    # Record a variable's slot type (+ element type when it's a Pointer[T]).
+    pub def add_var(self, name: str, ty: AstType):
+        mut i = 0
+        while i < self.var_names.len:
+            if self.var_names.get(i) == name: return
+            i = i + 1
+        if ty.name == "Pointer" and ty.args.len > 0:
+            mut et = _gpu_scalar_ty(ty.args.get(0).read().name)
+            self.var_names.push(name)
+            self.var_ll.push("ptr addrspace(1)")
+            self.var_elem.push(et)
+        else:
+            self.var_names.push(name)
+            self.var_ll.push(_gpu_scalar_ty(ty.name))
+            self.var_elem.push("")
+
+    pub def var_slot_ty(self, name: str) -> str:
+        mut i = 0
+        while i < self.var_names.len:
+            if self.var_names.get(i) == name: return self.var_ll.get(i)
+            i = i + 1
+        return "i64"
+
+    pub def var_elem_ty(self, name: str) -> str:
+        mut i = 0
+        while i < self.var_names.len:
+            if self.var_names.get(i) == name: return self.var_elem.get(i)
+            i = i + 1
+        return ""
+
+    # ---- prescan: collect every SLet-declared local (recursing into blocks) --------------
+    pub def scan_vars_block(self, b: HirBlock):
+        mut i = 0
+        while i < b.stmts.len:
+            self.scan_vars_stmt(b.stmts.get(i).read())
+            i = i + 1
+
+    pub def scan_vars_stmt(self, s: HirStmt):
+        match s:
+            case HirStmt.SLet(name, ownership, is_mut, is_const, is_shared, ty, val):
+                mut vt = ty
+                if vt.name == "": vt = hir_expr_type(val)
+                self.add_var(name, vt)
+            case HirStmt.SIf(cond, then_b, else_b):
+                self.scan_vars_block(then_b)
+                self.scan_vars_block(else_b)
+            case HirStmt.SWhile(cond, body):
+                self.scan_vars_block(body)
+            case HirStmt.SUnsafe(body):
+                self.scan_vars_block(body)
+            case _:
+                pass
+
+    # ---- kernel emission -----------------------------------------------------------------
+    pub def emit_kernel(self, f: HirFunction) -> str:
+        # Register params, then prescan locals.
+        mut pi = 0
+        while pi < f.params.len:
+            mut p = f.params.get(pi)
+            self.add_var(p.name, p.ty)
+            pi = pi + 1
+        self.scan_vars_block(f.body)
+
+        mut cc = "spir_kernel"
+        if self.target == "nvptx": cc = "ptx_kernel"
+
+        # Signature.
+        self.w("define " + cc + " void @" + f.name + "(")
+        mut pj = 0
+        while pj < f.params.len:
+            mut pp = f.params.get(pj)
+            if pj > 0: self.w(", ")
+            self.w(self.var_slot_ty(pp.name) + " %arg_" + pp.name)
+            pj = pj + 1
+        self.w(") {\nentry:\n")
+
+        # Allocas (params + locals) and param stores.
+        mut vi = 0
+        while vi < self.var_names.len:
+            self.w("  %var_" + self.var_names.get(vi) + " = alloca " + self.var_ll.get(vi) + "\n")
+            vi = vi + 1
+        mut pk = 0
+        while pk < f.params.len:
+            mut pn = f.params.get(pk).name
+            self.w("  store " + self.var_slot_ty(pn) + " %arg_" + pn + ", ptr %var_" + pn + "\n")
+            pk = pk + 1
+
+        self.emit_block(f.body)
+        self.w("  ret void\n}\n\n")
+        if not self.ok:
+            return "; kernel '" + f.name + "' NOT emitted: " + self.fail_note + "\n\n"
+        return self.sb.to_string().as_str()
+
+    # A @device helper: a regular GPU function (no kernel CC) with a return value,
+    # callable from @kernel bodies. Same statement/expression subset as a kernel.
+    pub def emit_device_fn(self, f: HirFunction) -> str:
+        self.ret_llty = self._gpu_ret_ty(f.ret_ty)
+        mut pi = 0
+        while pi < f.params.len:
+            mut p = f.params.get(pi)
+            self.add_var(p.name, p.ty)
+            pi = pi + 1
+        self.scan_vars_block(f.body)
+        # Signature (no kernel calling convention).
+        self.w("define " + self.ret_llty + " @" + f.name + "(")
+        mut pj = 0
+        while pj < f.params.len:
+            mut pp = f.params.get(pj)
+            if pj > 0: self.w(", ")
+            self.w(self.var_slot_ty(pp.name) + " %arg_" + pp.name)
+            pj = pj + 1
+        self.w(") {\nentry:\n")
+        mut vi = 0
+        while vi < self.var_names.len:
+            self.w("  %var_" + self.var_names.get(vi) + " = alloca " + self.var_ll.get(vi) + "\n")
+            vi = vi + 1
+        mut pk = 0
+        while pk < f.params.len:
+            mut pn = f.params.get(pk).name
+            self.w("  store " + self.var_slot_ty(pn) + " %arg_" + pn + ", ptr %var_" + pn + "\n")
+            pk = pk + 1
+        self.emit_block(f.body)
+        # Fallthrough terminator (LLVM requires every block to end in a return).
+        if self.ret_llty == "void":
+            self.w("  ret void\n}\n\n")
+        elif _gpu_is_float(self.ret_llty):
+            self.w("  ret " + self.ret_llty + " 0.0\n}\n\n")
+        elif self.ret_llty == "ptr addrspace(1)":
+            self.w("  ret " + self.ret_llty + " null\n}\n\n")
+        else:
+            self.w("  ret " + self.ret_llty + " 0\n}\n\n")
+        if not self.ok:
+            return "; device fn '" + f.name + "' NOT emitted: " + self.fail_note + "\n\n"
+        return self.sb.to_string().as_str()
+
+    pub def emit_block(self, b: HirBlock):
+        mut i = 0
+        while i < b.stmts.len:
+            self.emit_stmt(b.stmts.get(i).read())
+            i = i + 1
+
+    pub def emit_stmt(self, s: HirStmt):
+        match s:
+            case HirStmt.SLet(name, ownership, is_mut, is_const, is_shared, ty, val):
+                mut v = self.emit_expr(val)
+                mut slot = self.var_slot_ty(name)
+                mut cv = self.coerce(v, slot)
+                self.w("  store " + slot + " " + cv + ", ptr %var_" + name + "\n")
+            case HirStmt.SAssign(target, val):
+                self.emit_assign(target.read(), val)
+            case HirStmt.SExpr(expr):
+                self.emit_stmt_expr(expr.read())
+            case HirStmt.SIf(cond, then_b, else_b):
+                mut c = self.emit_expr(cond)
+                mut cc = self.coerce_bool(c)
+                mut lt = self.newlbl()
+                mut le = self.newlbl()
+                mut lend = self.newlbl()
+                self.w("  br i1 " + cc + ", label %" + lt + ", label %" + le + "\n")
+                self.w(lt + ":\n")
+                self.emit_block(then_b)
+                self.w("  br label %" + lend + "\n")
+                self.w(le + ":\n")
+                self.emit_block(else_b)
+                self.w("  br label %" + lend + "\n")
+                self.w(lend + ":\n")
+            case HirStmt.SWhile(cond, body):
+                mut lc = self.newlbl()
+                mut lb = self.newlbl()
+                mut lend2 = self.newlbl()
+                self.w("  br label %" + lc + "\n")
+                self.w(lc + ":\n")
+                mut cnd = self.emit_expr(cond)
+                mut cb = self.coerce_bool(cnd)
+                self.w("  br i1 " + cb + ", label %" + lb + ", label %" + lend2 + "\n")
+                self.w(lb + ":\n")
+                self.emit_block(body)
+                self.w("  br label %" + lc + "\n")
+                self.w(lend2 + ":\n")
+            case HirStmt.SUnsafe(body):
+                self.emit_block(body)
+            case HirStmt.SReturn(val):
+                if self.ret_llty == "void" or (val as usize) == (0 as usize):
+                    self.w("  ret void\n")
+                else:
+                    mut rv = self.emit_expr(val)
+                    if self.ret_llty == "ptr addrspace(1)":
+                        self.w("  ret ptr addrspace(1) " + rv.val + "\n")
+                    else:
+                        mut cv = self.coerce(rv, self.ret_llty)
+                        self.w("  ret " + self.ret_llty + " " + cv + "\n")
+                # a fresh unreachable block absorbs any trailing IR in this basic block
+                mut lu = self.newlbl()
+                self.w(lu + ":\n")
+            case HirStmt.SPass:
+                pass
+            case HirStmt.SLineMarker(n):
+                pass
+            case _:
+                self.fail("unsupported statement in kernel")
+
+    # `x = expr` (target must be a plain local in the subset).
+    pub def emit_assign(self, target: HirExpr, val: Pointer[HirExpr]):
+        match target:
+            case HirExpr.EIdent(name, ty, is_move):
+                mut v = self.emit_expr(val)
+                mut slot = self.var_slot_ty(name)
+                mut cv = self.coerce(v, slot)
+                self.w("  store " + slot + " " + cv + ", ptr %var_" + name + "\n")
+            case _:
+                self.fail("unsupported assignment target in kernel")
+
+    # A statement-position expression: `p.offset(i).write(v)`, `gpu_barrier()`, or discard.
+    pub def emit_stmt_expr(self, e: HirExpr):
+        match e:
+            case HirExpr.EMethodCall(obj, method, args, ty):
+                if method == "write" and args.len == 1:
+                    self.emit_store(obj.read(), args.get(0))
+                    return
+                # otherwise fall through to a discarded value
+                mut _v = self.emit_expr_hir(e)
+            case HirExpr.ECall(callee, args, ty):
+                if self.callee_name(callee.read()) == "gpu_barrier":
+                    if self.target == "nvptx": self.w("  call void @llvm.nvvm.barrier0()\n")
+                    else: self.w("  call spir_func void @_Z7barrierj(i32 1)\n")
+                    return
+                mut _v2 = self.emit_expr_hir(e)
+            case _:
+                mut _v3 = self.emit_expr_hir(e)
+
+    # store: `<ptr>.offset(i).write(v)` -> getelementptr + store
+    pub def emit_store(self, chain: HirExpr, valp: Pointer[HirExpr]):
+        # chain must be EMethodCall(<ptr>, "offset", [i])
+        match chain:
+            case HirExpr.EMethodCall(pobj, pmeth, pargs, pty):
+                if pmeth != "offset" or pargs.len != 1:
+                    self.fail("store target must be p.offset(i).write(v)")
+                    return
+                mut pr = self.emit_ptr(pobj.read())
+                mut idx = self.emit_expr(pargs.get(0))
+                mut i64idx = self.coerce(idx, "i64")
+                mut gep = self.fresh()
+                self.w("  " + gep + " = getelementptr " + pr.ty + ", ptr addrspace(1) " + pr.val + ", i64 " + i64idx + "\n")
+                mut v = self.emit_expr(valp)
+                mut cv = self.coerce(v, pr.ty)
+                self.w("  store " + pr.ty + " " + cv + ", ptr addrspace(1) " + gep + "\n")
+            case _:
+                self.fail("store target must be p.offset(i).write(v)")
+
+    # Emit a pointer expression -> GVal where .ty is the ELEMENT type and .val is the
+    # `ptr addrspace(1)` value. Supports a bare pointer local/param (optionally cast).
+    pub def emit_ptr(self, e: HirExpr) -> GVal:
+        match e:
+            case HirExpr.EIdent(name, ty, is_move):
+                mut et = self.var_elem_ty(name)
+                if et == "": et = "float"
+                mut r = self.fresh()
+                self.w("  " + r + " = load ptr addrspace(1), ptr %var_" + name + "\n")
+                return GVal.make(et, r)
+            case HirExpr.ECast(inner, target_ty):
+                mut g = self.emit_ptr(inner.read())
+                if target_ty.name == "Pointer" and target_ty.args.len > 0:
+                    g.ty = _gpu_scalar_ty(target_ty.args.get(0).read().name)
+                return g
+            case _:
+                self.fail("unsupported pointer expression in kernel")
+                return GVal.make("float", "null")
+
+    # ---- expressions ---------------------------------------------------------------------
+    pub def emit_expr(self, ep: Pointer[HirExpr]) -> GVal:
+        return self.emit_expr_hir(ep.read())
+
+    pub def emit_expr_hir(self, e: HirExpr) -> GVal:
+        match e:
+            case HirExpr.ELitInt(val, ty):
+                mut t = _gpu_scalar_ty(ty.name)
+                if _gpu_is_float(t): t = "i64"
+                return GVal.make(t, val.to_str())
+            case HirExpr.ELitFloat(val, ty):
+                mut ft = _gpu_scalar_ty(ty.name)
+                if not _gpu_is_float(ft): ft = "double"
+                return GVal.make(ft, self.float_lit(val))
+            case HirExpr.ELitBool(val, ty):
+                if val: return GVal.make("i1", "1")
+                return GVal.make("i1", "0")
+            case HirExpr.EIdent(name, ty, is_move):
+                mut slot = self.var_slot_ty(name)
+                mut r = self.fresh()
+                self.w("  " + r + " = load " + slot + ", ptr %var_" + name + "\n")
+                return GVal.make(slot, r)
+            case HirExpr.EBinOp(op, left, right, ty):
+                return self.emit_binop(op, left, right)
+            case HirExpr.EUnaryOp(op, expr, ty):
+                mut v = self.emit_expr(expr)
+                if op == "-":
+                    mut r = self.fresh()
+                    if _gpu_is_float(v.ty): self.w("  " + r + " = fneg " + v.ty + " " + v.val + "\n")
+                    else: self.w("  " + r + " = sub " + v.ty + " 0, " + v.val + "\n")
+                    return GVal.make(v.ty, r)
+                return v
+            case HirExpr.ECast(inner, target_ty):
+                mut iv = self.emit_expr(inner)
+                mut tt = _gpu_scalar_ty(target_ty.name)
+                if target_ty.name == "Pointer": return iv
+                return GVal.make(tt, self.coerce(iv, tt))
+            case HirExpr.EMethodCall(obj, method, args, ty):
+                if method == "read" and args.len == 0:
+                    return self.emit_load(obj.read())
+                self.fail("unsupported method '" + method + "' in kernel")
+                return GVal.make("i64", "0")
+            case HirExpr.ECall(callee, args, ty):
+                return self.emit_call(callee.read(), args)
+            case _:
+                self.fail("unsupported expression in kernel")
+                return GVal.make("i64", "0")
+
+    # `p.offset(i).read()` -> getelementptr + load
+    pub def emit_load(self, chain: HirExpr) -> GVal:
+        match chain:
+            case HirExpr.EMethodCall(pobj, pmeth, pargs, pty):
+                if pmeth != "offset" or pargs.len != 1:
+                    self.fail("load must be p.offset(i).read()")
+                    return GVal.make("i64", "0")
+                mut pr = self.emit_ptr(pobj.read())
+                mut idx = self.emit_expr(pargs.get(0))
+                mut i64idx = self.coerce(idx, "i64")
+                mut gep = self.fresh()
+                self.w("  " + gep + " = getelementptr " + pr.ty + ", ptr addrspace(1) " + pr.val + ", i64 " + i64idx + "\n")
+                mut r = self.fresh()
+                self.w("  " + r + " = load " + pr.ty + ", ptr addrspace(1) " + gep + "\n")
+                return GVal.make(pr.ty, r)
+            case _:
+                self.fail("load must be p.offset(i).read()")
+                return GVal.make("i64", "0")
+
+    pub def callee_name(self, c: HirExpr) -> str:
+        match c:
+            case HirExpr.EIdent(name, ty, is_move): return name
+            case _: return ""
+
+    # GPU index/sync builtins (ordinary std stubs on the host; intrinsics on the GPU).
+    pub def emit_call(self, callee: HirExpr, args: Vec[Pointer[HirExpr]]) -> GVal:
+        mut nm = self.callee_name(callee)
+        if nm == "gpu_global_id" or nm == "gpu_local_id" or nm == "gpu_group_id" or nm == "gpu_local_size" or nm == "gpu_global_size" or nm == "gpu_num_groups":
+            mut dim = 0
+            if args.len == 1: dim = self.literal_int(args.get(0).read())
+            return self.emit_gpu_builtin(nm, dim)
+        # A call to a @device helper: coerce each arg to the callee's parameter type
+        # and emit a direct call.
+        mut di = 0
+        while di < self.dev_fns.len:
+            mut df = self.dev_fns.get(di)
+            if df.name == nm:
+                mut rty = self._gpu_ret_ty(df.ret_ty)
+                mut argstr = ""
+                mut ai = 0
+                while ai < args.len:
+                    if ai > 0: argstr = argstr + ", "
+                    mut av = self.emit_expr(args.get(ai))
+                    mut aty = av.ty
+                    mut aval = av.val
+                    if ai < df.params.len:
+                        mut ptt = self._gpu_ret_ty(df.params.get(ai).ty)
+                        if ptt != "ptr addrspace(1)" and aty != ptt:
+                            aval = self.coerce(av, ptt)
+                            aty = ptt
+                    argstr = argstr + aty + " " + aval
+                    ai = ai + 1
+                if rty == "void":
+                    self.w("  call void @" + nm + "(" + argstr + ")\n")
+                    return GVal.make("i64", "0")
+                mut r = self.fresh()
+                self.w("  " + r + " = call " + rty + " @" + nm + "(" + argstr + ")\n")
+                return GVal.make(rty, r)
+            di = di + 1
+        self.fail("call to '" + nm + "' not allowed in kernel (mark it @device, or use a GPU builtin)")
+        return GVal.make("i64", "0")
+
+    pub def emit_gpu_builtin(self, nm: str, dim: int) -> GVal:
+        if self.target == "nvptx":
+            mut axis = "x"
+            if dim == 1: axis = "y"
+            if dim == 2: axis = "z"
+            if nm == "gpu_local_id":
+                mut r = self.fresh()
+                self.w("  " + r + " = call i32 @llvm.nvvm.read.ptx.sreg.tid." + axis + "()\n")
+                return self.i32_to_i64(r)
+            if nm == "gpu_group_id":
+                mut r2 = self.fresh()
+                self.w("  " + r2 + " = call i32 @llvm.nvvm.read.ptx.sreg.ctaid." + axis + "()\n")
+                return self.i32_to_i64(r2)
+            if nm == "gpu_local_size":
+                mut r3 = self.fresh()
+                self.w("  " + r3 + " = call i32 @llvm.nvvm.read.ptx.sreg.ntid." + axis + "()\n")
+                return self.i32_to_i64(r3)
+            if nm == "gpu_num_groups":
+                mut r4 = self.fresh()
+                self.w("  " + r4 + " = call i32 @llvm.nvvm.read.ptx.sreg.nctaid." + axis + "()\n")
+                return self.i32_to_i64(r4)
+            # gpu_global_id / gpu_global_size: ctaid*ntid (+ tid) / nctaid*ntid
+            mut ct = self.fresh(); self.w("  " + ct + " = call i32 @llvm.nvvm.read.ptx.sreg.ctaid." + axis + "()\n")
+            mut nt = self.fresh(); self.w("  " + nt + " = call i32 @llvm.nvvm.read.ptx.sreg.ntid." + axis + "()\n")
+            mut m = self.fresh(); self.w("  " + m + " = mul i32 " + ct + ", " + nt + "\n")
+            if nm == "gpu_global_size":
+                mut nc = self.fresh(); self.w("  " + nc + " = call i32 @llvm.nvvm.read.ptx.sreg.nctaid." + axis + "()\n")
+                mut gs = self.fresh(); self.w("  " + gs + " = mul i32 " + nc + ", " + nt + "\n")
+                return self.i32_to_i64(gs)
+            mut tid = self.fresh(); self.w("  " + tid + " = call i32 @llvm.nvvm.read.ptx.sreg.tid." + axis + "()\n")
+            mut g = self.fresh(); self.w("  " + g + " = add i32 " + m + ", " + tid + "\n")
+            return self.i32_to_i64(g)
+        # SPIR-V: mangled OpenCL builtins returning size_t (i64).
+        mut mangled = "@_Z13get_global_idj"
+        if nm == "gpu_local_id": mangled = "@_Z12get_local_idj"
+        if nm == "gpu_group_id": mangled = "@_Z12get_group_idj"
+        if nm == "gpu_local_size": mangled = "@_Z14get_local_sizej"
+        if nm == "gpu_global_size": mangled = "@_Z15get_global_sizej"
+        if nm == "gpu_num_groups": mangled = "@_Z14get_num_groupsj"
+        mut sr = self.fresh()
+        self.w("  " + sr + " = call spir_func i64 " + mangled + "(i32 " + dim.to_str() + ")\n")
+        return GVal.make("i64", sr)
+
+    pub def i32_to_i64(self, v: str) -> GVal:
+        mut r = self.fresh()
+        self.w("  " + r + " = sext i32 " + v + " to i64\n")
+        return GVal.make("i64", r)
+
+    # ---- binary ops with type unification ------------------------------------------------
+    pub def emit_binop(self, op: str, lp: Pointer[HirExpr], rp: Pointer[HirExpr]) -> GVal:
+        mut l = self.emit_expr(lp)
+        mut r = self.emit_expr(rp)
+        mut ct = self.common_ty(l.ty, r.ty)
+        mut la = self.coerce(l, ct)
+        mut ra = self.coerce(r, ct)
+        mut isf = _gpu_is_float(ct)
+        mut res = self.fresh()
+        if op == "+":
+            if isf: self.w("  " + res + " = fadd " + ct + " " + la + ", " + ra + "\n")
+            else:   self.w("  " + res + " = add " + ct + " " + la + ", " + ra + "\n")
+            return GVal.make(ct, res)
+        if op == "-":
+            if isf: self.w("  " + res + " = fsub " + ct + " " + la + ", " + ra + "\n")
+            else:   self.w("  " + res + " = sub " + ct + " " + la + ", " + ra + "\n")
+            return GVal.make(ct, res)
+        if op == "*":
+            if isf: self.w("  " + res + " = fmul " + ct + " " + la + ", " + ra + "\n")
+            else:   self.w("  " + res + " = mul " + ct + " " + la + ", " + ra + "\n")
+            return GVal.make(ct, res)
+        if op == "/":
+            if isf: self.w("  " + res + " = fdiv " + ct + " " + la + ", " + ra + "\n")
+            else:   self.w("  " + res + " = sdiv " + ct + " " + la + ", " + ra + "\n")
+            return GVal.make(ct, res)
+        if op == "%":
+            if isf: self.w("  " + res + " = frem " + ct + " " + la + ", " + ra + "\n")
+            else:   self.w("  " + res + " = srem " + ct + " " + la + ", " + ra + "\n")
+            return GVal.make(ct, res)
+        # comparisons -> i1
+        mut pred = self.cmp_pred(op, isf)
+        if pred == "":
+            self.fail("unsupported operator '" + op + "' in kernel")
+            return GVal.make("i64", "0")
+        if isf: self.w("  " + res + " = fcmp " + pred + " " + ct + " " + la + ", " + ra + "\n")
+        else:   self.w("  " + res + " = icmp " + pred + " " + ct + " " + la + ", " + ra + "\n")
+        return GVal.make("i1", res)
+
+    pub def cmp_pred(self, op: str, isf: bool) -> str:
+        if op == "==":
+            if isf: return "oeq"
+            return "eq"
+        if op == "!=":
+            if isf: return "one"
+            return "ne"
+        if op == "<":
+            if isf: return "olt"
+            return "slt"
+        if op == "<=":
+            if isf: return "ole"
+            return "sle"
+        if op == ">":
+            if isf: return "ogt"
+            return "sgt"
+        if op == ">=":
+            if isf: return "oge"
+            return "sge"
+        return ""
+
+    pub def common_ty(self, a: str, b: str) -> str:
+        if a == b: return a
+        mut af = _gpu_is_float(a)
+        mut bf = _gpu_is_float(b)
+        if af or bf:
+            if a == "double" or b == "double": return "double"
+            return "float"
+        # both integer: widen to the larger
+        if _gpu_iwidth(a) >= _gpu_iwidth(b): return a
+        return b
+
+    # Convert a value to `target` LLVM type, emitting the right cast.
+    pub def coerce(self, v: GVal, target: str) -> str:
+        if v.ty == target: return v.val
+        mut r = self.fresh()
+        mut sf = _gpu_is_float(v.ty)
+        mut tf = _gpu_is_float(target)
+        if sf and tf:
+            if target == "double": self.w("  " + r + " = fpext float " + v.val + " to double\n")
+            else: self.w("  " + r + " = fptrunc double " + v.val + " to float\n")
+            return r
+        if tf and not sf:
+            self.w("  " + r + " = sitofp " + v.ty + " " + v.val + " to " + target + "\n")
+            return r
+        if sf and not tf:
+            self.w("  " + r + " = fptosi " + v.ty + " " + v.val + " to " + target + "\n")
+            return r
+        mut sw = _gpu_iwidth(v.ty)
+        mut tw = _gpu_iwidth(target)
+        if tw > sw:
+            self.w("  " + r + " = sext " + v.ty + " " + v.val + " to " + target + "\n")
+            return r
+        if tw < sw:
+            self.w("  " + r + " = trunc " + v.ty + " " + v.val + " to " + target + "\n")
+            return r
+        return v.val
+
+    # An i1 for a branch condition (comparisons already yield i1; ints get `!= 0`).
+    pub def coerce_bool(self, v: GVal) -> str:
+        if v.ty == "i1": return v.val
+        mut r = self.fresh()
+        if _gpu_is_float(v.ty): self.w("  " + r + " = fcmp one " + v.ty + " " + v.val + ", 0.0\n")
+        else: self.w("  " + r + " = icmp ne " + v.ty + " " + v.val + ", 0\n")
+        return r
+
+    # ---- literal helpers -----------------------------------------------------------------
+    pub def literal_int(self, e: HirExpr) -> int:
+        match e:
+            case HirExpr.ELitInt(val, ty): return val
+            case _: return 0
+
+    # An f64 value -> an LLVM float literal. LLVM accepts the exact IEEE-754 double bit
+    # pattern as `0xHHHHHHHHHHHHHHHH`, which round-trips for both `float` and `double`.
+    pub def float_lit(self, v: float) -> str:
+        return "0x" + _hex16(_gpu_f64_bits(v))
+
+# Reinterpret an f64 as its raw i64 bit pattern (compile-time constant; emit.tr is @trusted
+# so the raw-pointer reinterpret is allowed).
+pub def _gpu_f64_bits(v: float) -> int:
+    unsafe:
+        mut p = alloc[float](1)
+        p.write(v)
+        mut ip = p as Pointer[int]
+        return ip.read()
+
+pub def _hexdig(n: int) -> int:
+    if n < 10: return 48 + n
+    return 65 + (n - 10)
+
+pub def _hex16(v: int) -> str:
+    mut sb = StringBuilder.init(16)
+    mut k = 15
+    while k >= 0:
+        mut nib = (v >> (4 * k)) & 15
+        sb.append_char(_hexdig(nib))
+        k = k - 1
+    return sb.to_string().as_str()

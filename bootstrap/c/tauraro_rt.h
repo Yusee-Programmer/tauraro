@@ -1055,14 +1055,24 @@ extern _Thread_local char*   _tr_thread_panic_message;
 typedef struct { int panicked; char* panic_msg; } _TrSpawnResult;
 
 
-#ifndef _WIN32
+/* _WIN32 is a TARGET/compiler macro, not a "windows.h is actually available"
+ * guarantee -- a cross build (TAURARO_KERNEL/TAURARO_BARE, e.g. Cortex-M via
+ * `zig cc -target thumb-freestanding-eabi` on a Windows host) can still see
+ * _WIN32 defined by the driver while having no OS, no windows.h, and no
+ * psapi/bcrypt libs to link. Every "_WIN32 means hosted Windows" branch below
+ * must also check `!defined(TAURARO_BARE)`, or it tries to pull in headers
+ * that don't exist for the target and the freestanding build fails to compile
+ * (or, worse, is worked around per-project by manually `-U`-ing the macros).
+ */
+#if !defined(_WIN32) || defined(TAURARO_BARE)
 /* Debug helper: prints current process memory usage to stderr, tagged with
  * `label`. Used to bisect memory growth across checkpoints during
- * leak-hunting; not called by normal runtime code. No-op on non-Windows. */
+ * leak-hunting; not called by normal runtime code. No-op on non-Windows
+ * (and on any bare-metal/kernel target, Windows-triple macros notwithstanding). */
 _TR_XLINK void _tr_report_mem(const char* label) { (void)label; }
 #endif
 
-#ifdef _WIN32
+#if defined(_WIN32) && !defined(TAURARO_BARE)
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
@@ -4110,6 +4120,28 @@ static inline void   _tr_idict_remove(TrIDict* d, long long k) {
 }
 static inline long long _tr_idict_len(TrIDict* d) { return d ? (long long)d->len : 0LL; }
 
+/* ── Built-in function value (def(...)->R / lambda) ──────────────────────
+ * A plain 2-word {fn, env} struct, NOT a tagged pointer. `env==NULL` means a
+ * bare named-function reference (call `fn` directly); `env!=NULL` means a
+ * closure (call `fn` with `env` as the hidden first arg). A prior tagged-
+ * pointer scheme (low bit of a single void* distinguished the two cases)
+ * broke on ARM/Thumb, where bit 0 of EVERY function pointer is already fixed
+ * to 1 by the ABI (the "Thumb bit", needed for BX/BLX mode switching) -- so
+ * the tag test was always true, and a plain function call jumped through
+ * garbage read from inside the function's own machine code. This struct form
+ * has no pointer-bit dependency and is portable to every target. */
+typedef struct { void* fn; void* env; } TrFnVal;
+
+/* List_TrFnVal: vector of function values (Vec[def(...)->R]). Predefined
+ * here so codegen needn't lazily emit it (mirrors List_TrTuple below). */
+typedef struct { TrFnVal* data; size_t len; size_t capacity; } List_TrFnVal;
+static inline List_TrFnVal* List_TrFnVal_new(void) { List_TrFnVal* l=(List_TrFnVal*)malloc(sizeof(List_TrFnVal)); l->data=(TrFnVal*)malloc(sizeof(TrFnVal)*8); l->len=0; l->capacity=8; return l; }
+static inline void List_TrFnVal_append(List_TrFnVal* l, TrFnVal val) { if(l->len==l->capacity){ l->capacity*=2; l->data=(TrFnVal*)realloc(l->data,sizeof(TrFnVal)*l->capacity); } l->data[l->len++]=val; }
+static inline TrFnVal List_TrFnVal_get(List_TrFnVal* l, long long i) { _tr_bounds_check(i, l->len); return l->data[i]; }
+static inline TrFnVal List_TrFnVal_pop(List_TrFnVal* l) { if(!l||l->len==0){ TrFnVal z={0}; return z; } l->len--; return l->data[l->len]; }
+static inline void List_TrFnVal_set(List_TrFnVal* l, long long i, TrFnVal v) { if(l&&(size_t)i<l->len) l->data[i]=v; }
+static inline void List_TrFnVal_free(List_TrFnVal* l) { if(l){ _tr_free(l->data); _tr_free(l); } }
+
 /* ── Built-in Tuple (up to 8 elements, all stored as long long) ────────── */
 typedef struct { long long data[8]; } TrTuple;
 
@@ -4383,6 +4415,7 @@ _TR_LIST_RESERVE(List_ptr)
 _TR_LIST_RESERVE(List_str)
 _TR_LIST_RESERVE(List_TrStr)
 _TR_LIST_RESERVE(List_TrTuple)
+_TR_LIST_RESERVE(List_TrFnVal)
 _TR_LIST_RESERVE(List_u32)
 _TR_LIST_RESERVE(List_u8)
 /* ── Extended Vec/List operations: remove, swap, clear, is_empty, extend ──── */
@@ -6597,5 +6630,547 @@ static int64_t _tr_list_any_i64(List_i64* l, _tr_pred_fn p) { return _tr_list_an
 static int64_t _tr_list_all_i64(List_i64* l, _tr_pred_fn p) { return _tr_list_all_ptr((List_ptr*)l, p); }
 static int64_t _tr_list_any_f64(List_f64* l, _tr_pred_fn p) { return _tr_list_any_ptr((List_ptr*)l, p); }
 static int64_t _tr_list_all_f64(List_f64* l, _tr_pred_fn p) { return _tr_list_all_ptr((List_ptr*)l, p); }
+
+/* ══════════════════════════════════════════════════════════════════════════
+ *  std.gpu — Portable GPU compute runtime
+ *
+ *  ZERO build/link dependency on any GPU SDK. The CUDA Driver API and the
+ *  OpenCL API are stable C ABIs; we redeclare the minimal subset we use and
+ *  load the vendor driver library at RUNTIME (LoadLibrary / dlopen). No
+ *  -lcuda / -lOpenCL, no CUDA/OpenCL headers required to build.
+ *
+ *  Backend selection order:  CUDA -> OpenCL -> CPU.
+ *
+ *  On a machine with no GPU driver the backend degrades to CPU: device
+ *  buffers become host allocations and H2D/D2H copies become memcpy, so
+ *  buffer programs stay CORRECT everywhere. Kernel launch requires a real
+ *  GPU and reports an error string via _tr_gpu_last_error() on the CPU path.
+ * ════════════════════════════════════════════════════════════════════════ */
+#if !defined(TAURARO_NO_OS) && !defined(TAURARO_KERNEL) && !defined(__wasi__)
+
+#if defined(_WIN32)
+  /* windows.h already included above */
+  typedef HMODULE _TrDl;
+  static _TrDl _tr_gpu_dlopen(const char* n){ return LoadLibraryA(n); }
+  static void* _tr_gpu_dlsym(_TrDl h, const char* s){ return (void*)(intptr_t)GetProcAddress(h, s); }
+#else
+  #include <dlfcn.h>
+  typedef void* _TrDl;
+  static _TrDl _tr_gpu_dlopen(const char* n){ return dlopen(n, RTLD_NOW | RTLD_LOCAL); }
+  static void* _tr_gpu_dlsym(_TrDl h, const char* s){ return dlsym(h, s); }
+#endif
+
+enum { TR_GPU_CPU = 0, TR_GPU_CUDA = 1, TR_GPU_OPENCL = 2 };
+#define TR_GPU_MAX_ARGS 32
+
+/* ── CUDA Driver API (redeclared; loaded at runtime) ───────────────────────── */
+typedef int                 _CUresult;
+typedef int                 _CUdevice;
+typedef unsigned long long  _CUdeviceptr;
+typedef void*               _CUcontext;
+typedef void*               _CUmodule;
+typedef void*               _CUfunction;
+typedef void*               _CUstream;
+/* cuDeviceGetAttribute indices */
+#define TR_CU_ATTR_CC_MAJOR 75
+#define TR_CU_ATTR_CC_MINOR 76
+
+typedef _CUresult (*_pcuInit)(unsigned int);
+typedef _CUresult (*_pcuDeviceGetCount)(int*);
+typedef _CUresult (*_pcuDeviceGet)(_CUdevice*, int);
+typedef _CUresult (*_pcuDeviceGetName)(char*, int, _CUdevice);
+typedef _CUresult (*_pcuDeviceGetAttribute)(int*, int, _CUdevice);
+typedef _CUresult (*_pcuDeviceTotalMem)(size_t*, _CUdevice);
+typedef _CUresult (*_pcuCtxCreate)(_CUcontext*, unsigned int, _CUdevice);
+typedef _CUresult (*_pcuCtxDestroy)(_CUcontext);
+typedef _CUresult (*_pcuCtxSynchronize)(void);
+typedef _CUresult (*_pcuMemAlloc)(_CUdeviceptr*, size_t);
+typedef _CUresult (*_pcuMemFree)(_CUdeviceptr);
+typedef _CUresult (*_pcuMemcpyHtoD)(_CUdeviceptr, const void*, size_t);
+typedef _CUresult (*_pcuMemcpyDtoH)(void*, _CUdeviceptr, size_t);
+typedef _CUresult (*_pcuMemsetD8)(_CUdeviceptr, unsigned char, size_t);
+typedef _CUresult (*_pcuModuleLoadData)(_CUmodule*, const void*);
+typedef _CUresult (*_pcuModuleUnload)(_CUmodule);
+typedef _CUresult (*_pcuModuleGetFunction)(_CUfunction*, _CUmodule, const char*);
+typedef _CUresult (*_pcuLaunchKernel)(_CUfunction, unsigned,unsigned,unsigned,
+                                      unsigned,unsigned,unsigned, unsigned,
+                                      _CUstream, void**, void**);
+
+/* ── OpenCL API (redeclared; loaded at runtime) ────────────────────────────── */
+typedef int                 _cl_int;
+typedef unsigned int        _cl_uint;
+typedef unsigned long long  _cl_bitfield;
+typedef void* _cl_platform_id; typedef void* _cl_device_id;  typedef void* _cl_context;
+typedef void* _cl_command_queue; typedef void* _cl_mem; typedef void* _cl_program; typedef void* _cl_kernel;
+#define TR_CL_DEVICE_TYPE_GPU     (1<<2)
+#define TR_CL_DEVICE_TYPE_ALL     0xFFFFFFFF
+#define TR_CL_DEVICE_NAME         0x102B
+#define TR_CL_DEVICE_GLOBAL_MEM   0x101F
+#define TR_CL_MEM_READ_WRITE      (1<<0)
+#define TR_CL_TRUE                1
+#define TR_CL_PROGRAM_BUILD_LOG   0x1183
+
+typedef _cl_int (*_pclGetPlatformIDs)(_cl_uint, _cl_platform_id*, _cl_uint*);
+typedef _cl_int (*_pclGetDeviceIDs)(_cl_platform_id, _cl_bitfield, _cl_uint, _cl_device_id*, _cl_uint*);
+typedef _cl_int (*_pclGetDeviceInfo)(_cl_device_id, _cl_uint, size_t, void*, size_t*);
+typedef _cl_context (*_pclCreateContext)(const intptr_t*, _cl_uint, const _cl_device_id*, void*, void*, _cl_int*);
+typedef _cl_command_queue (*_pclCreateCommandQueue)(_cl_context, _cl_device_id, _cl_bitfield, _cl_int*);
+typedef _cl_mem (*_pclCreateBuffer)(_cl_context, _cl_bitfield, size_t, void*, _cl_int*);
+typedef _cl_int (*_pclEnqueueWriteBuffer)(_cl_command_queue, _cl_mem, _cl_uint, size_t, size_t, const void*, _cl_uint, const void*, void*);
+typedef _cl_int (*_pclEnqueueReadBuffer)(_cl_command_queue, _cl_mem, _cl_uint, size_t, size_t, void*, _cl_uint, const void*, void*);
+typedef _cl_int (*_pclReleaseMemObject)(_cl_mem);
+typedef _cl_program (*_pclCreateProgramWithSource)(_cl_context, _cl_uint, const char**, const size_t*, _cl_int*);
+typedef _cl_program (*_pclCreateProgramWithIL)(_cl_context, const void*, size_t, _cl_int*);
+typedef _cl_int (*_pclBuildProgram)(_cl_program, _cl_uint, const _cl_device_id*, const char*, void*, void*);
+typedef _cl_int (*_pclGetProgramBuildInfo)(_cl_program, _cl_device_id, _cl_uint, size_t, void*, size_t*);
+typedef _cl_kernel (*_pclCreateKernel)(_cl_program, const char*, _cl_int*);
+typedef _cl_int (*_pclSetKernelArg)(_cl_kernel, _cl_uint, size_t, const void*);
+typedef _cl_int (*_pclEnqueueNDRangeKernel)(_cl_command_queue, _cl_kernel, _cl_uint, const size_t*, const size_t*, const size_t*, _cl_uint, const void*, void*);
+typedef _cl_int (*_pclFinish)(_cl_command_queue);
+typedef _cl_int (*_pclReleaseKernel)(_cl_kernel);
+typedef _cl_int (*_pclReleaseProgram)(_cl_program);
+typedef _cl_int (*_pclReleaseMemQueue)(_cl_command_queue);
+
+typedef struct {
+    int   inited;
+    int   backend;
+    int   dev_count;
+    int   cc_major, cc_minor;
+    long long total_mem;
+    char  name[256];
+    char  err[512];
+    /* CUDA */
+    _TrDl cu_lib; _CUcontext cu_ctx; _CUdevice cu_dev;
+    _pcuMemAlloc cuMemAlloc; _pcuMemFree cuMemFree;
+    _pcuMemcpyHtoD cuMemcpyHtoD; _pcuMemcpyDtoH cuMemcpyDtoH; _pcuMemsetD8 cuMemsetD8;
+    _pcuModuleLoadData cuModuleLoadData; _pcuModuleUnload cuModuleUnload;
+    _pcuModuleGetFunction cuModuleGetFunction; _pcuLaunchKernel cuLaunchKernel;
+    _pcuCtxSynchronize cuCtxSynchronize;
+    /* OpenCL */
+    _TrDl cl_lib; _cl_platform_id cl_plat; _cl_device_id cl_dev;
+    _cl_context cl_ctx; _cl_command_queue cl_q;
+    _pclCreateBuffer clCreateBuffer; _pclEnqueueWriteBuffer clEnqueueWriteBuffer;
+    _pclEnqueueReadBuffer clEnqueueReadBuffer; _pclReleaseMemObject clReleaseMemObject;
+    _pclCreateProgramWithSource clCreateProgramWithSource; _pclCreateProgramWithIL clCreateProgramWithIL; _pclBuildProgram clBuildProgram;
+    _pclGetProgramBuildInfo clGetProgramBuildInfo;
+    _pclCreateKernel clCreateKernel; _pclSetKernelArg clSetKernelArg;
+    _pclEnqueueNDRangeKernel clEnqueueNDRangeKernel; _pclFinish clFinish;
+    _pclReleaseKernel clReleaseKernel; _pclReleaseProgram clReleaseProgram;
+} _TrGpuState;
+/* SINGLE shared instance across all translation units. If this were `static`,
+ * each emitted module (buffer.c, kernel.c, main.c, …) would get its OWN GPU
+ * context/queue — a buffer created in one module could not be seen by a kernel
+ * launched from another, silently producing no result. The primary TU
+ * (_TR_MAIN) owns the definition; every other TU sees it via `extern`. */
+#ifdef _TR_MAIN
+_TrGpuState _tr_gpu = {0};
+#else
+extern _TrGpuState _tr_gpu;
+#endif
+
+typedef struct { int backend; size_t size; void* host; _CUdeviceptr cu_ptr; _cl_mem cl_mem; } _TrGpuBuf;
+typedef struct { int backend; _CUmodule cu_mod; _cl_program cl_prog; } _TrGpuMod;
+typedef struct {
+    int backend; _CUfunction cu_fn; _cl_kernel cl_k; int nargs;
+    unsigned char argbuf[TR_GPU_MAX_ARGS][16];
+    void* argptr[TR_GPU_MAX_ARGS];
+} _TrGpuKern;
+
+static void _tr_gpu_seterr(const char* m){ snprintf(_tr_gpu.err, sizeof(_tr_gpu.err), "%s", m ? m : ""); }
+
+/* Try `base` then `base_v2` (CUDA versioned symbols). */
+static void* _tr_gpu_cusym(_TrDl h, const char* base){
+    char buf[128]; void* p;
+    snprintf(buf, sizeof(buf), "%s_v2", base);
+    p = _tr_gpu_dlsym(h, buf);
+    if (!p) p = _tr_gpu_dlsym(h, base);
+    return p;
+}
+
+static int _tr_gpu_try_cuda(void){
+    static const char* libs[] = {
+#if defined(_WIN32)
+        "nvcuda.dll",
+#elif defined(__APPLE__)
+        "/usr/local/cuda/lib/libcuda.dylib", "libcuda.dylib",
+#else
+        "libcuda.so.1", "libcuda.so",
+#endif
+        0 };
+    _TrDl h = 0; int i;
+    for (i=0; libs[i]; i++){ h = _tr_gpu_dlopen(libs[i]); if (h) break; }
+    if (!h) return 0;
+    _pcuInit             pInit  = (_pcuInit)_tr_gpu_dlsym(h, "cuInit");
+    _pcuDeviceGetCount   pCnt   = (_pcuDeviceGetCount)_tr_gpu_dlsym(h, "cuDeviceGetCount");
+    _pcuDeviceGet        pGet   = (_pcuDeviceGet)_tr_gpu_dlsym(h, "cuDeviceGet");
+    _pcuDeviceGetName    pName  = (_pcuDeviceGetName)_tr_gpu_dlsym(h, "cuDeviceGetName");
+    _pcuDeviceGetAttribute pAttr= (_pcuDeviceGetAttribute)_tr_gpu_dlsym(h, "cuDeviceGetAttribute");
+    _pcuDeviceTotalMem   pMem   = (_pcuDeviceTotalMem)_tr_gpu_cusym(h, "cuDeviceTotalMem");
+    _pcuCtxCreate        pCtx   = (_pcuCtxCreate)_tr_gpu_cusym(h, "cuCtxCreate");
+    if (!pInit || !pCnt || !pGet || !pCtx) return 0;
+    if (pInit(0) != 0) return 0;
+    int cnt = 0;
+    if (pCnt(&cnt) != 0 || cnt <= 0) return 0;
+    _CUdevice dev = 0;
+    if (pGet(&dev, 0) != 0) return 0;
+    _CUcontext ctx = 0;
+    if (pCtx(&ctx, 0, dev) != 0) return 0;
+    _tr_gpu.cu_lib = h; _tr_gpu.cu_ctx = ctx; _tr_gpu.cu_dev = dev; _tr_gpu.dev_count = cnt;
+    if (pName) pName(_tr_gpu.name, sizeof(_tr_gpu.name), dev); else snprintf(_tr_gpu.name,sizeof(_tr_gpu.name),"CUDA device");
+    if (pAttr){ int mj=0,mn=0; pAttr(&mj,TR_CU_ATTR_CC_MAJOR,dev); pAttr(&mn,TR_CU_ATTR_CC_MINOR,dev); _tr_gpu.cc_major=mj; _tr_gpu.cc_minor=mn; }
+    if (pMem){ size_t tm=0; pMem(&tm, dev); _tr_gpu.total_mem=(long long)tm; }
+    _tr_gpu.cuMemAlloc=(_pcuMemAlloc)_tr_gpu_cusym(h,"cuMemAlloc");
+    _tr_gpu.cuMemFree=(_pcuMemFree)_tr_gpu_cusym(h,"cuMemFree");
+    _tr_gpu.cuMemcpyHtoD=(_pcuMemcpyHtoD)_tr_gpu_cusym(h,"cuMemcpyHtoD");
+    _tr_gpu.cuMemcpyDtoH=(_pcuMemcpyDtoH)_tr_gpu_cusym(h,"cuMemcpyDtoH");
+    _tr_gpu.cuMemsetD8=(_pcuMemsetD8)_tr_gpu_cusym(h,"cuMemsetD8");
+    _tr_gpu.cuModuleLoadData=(_pcuModuleLoadData)_tr_gpu_dlsym(h,"cuModuleLoadData");
+    _tr_gpu.cuModuleUnload=(_pcuModuleUnload)_tr_gpu_dlsym(h,"cuModuleUnload");
+    _tr_gpu.cuModuleGetFunction=(_pcuModuleGetFunction)_tr_gpu_dlsym(h,"cuModuleGetFunction");
+    _tr_gpu.cuLaunchKernel=(_pcuLaunchKernel)_tr_gpu_dlsym(h,"cuLaunchKernel");
+    _tr_gpu.cuCtxSynchronize=(_pcuCtxSynchronize)_tr_gpu_dlsym(h,"cuCtxSynchronize");
+    _tr_gpu.backend = TR_GPU_CUDA;
+    return 1;
+}
+
+static int _tr_gpu_try_opencl(void){
+    static const char* libs[] = {
+#if defined(_WIN32)
+        "OpenCL.dll",
+#elif defined(__APPLE__)
+        "/System/Library/Frameworks/OpenCL.framework/OpenCL", "libOpenCL.so",
+#else
+        "libOpenCL.so.1", "libOpenCL.so",
+#endif
+        0 };
+    _TrDl h = 0; int i;
+    for (i=0; libs[i]; i++){ h = _tr_gpu_dlopen(libs[i]); if (h) break; }
+    if (!h) return 0;
+    _pclGetPlatformIDs pPlat = (_pclGetPlatformIDs)_tr_gpu_dlsym(h,"clGetPlatformIDs");
+    _pclGetDeviceIDs   pDev  = (_pclGetDeviceIDs)_tr_gpu_dlsym(h,"clGetDeviceIDs");
+    _pclGetDeviceInfo  pInfo = (_pclGetDeviceInfo)_tr_gpu_dlsym(h,"clGetDeviceInfo");
+    _pclCreateContext  pCtx  = (_pclCreateContext)_tr_gpu_dlsym(h,"clCreateContext");
+    _pclCreateCommandQueue pQ= (_pclCreateCommandQueue)_tr_gpu_dlsym(h,"clCreateCommandQueue");
+    if (!pPlat || !pDev || !pCtx || !pQ) return 0;
+    _cl_uint nplat = 0;
+    if (pPlat(0, 0, &nplat) != 0 || nplat == 0) return 0;
+    _cl_platform_id plats[8]; if (nplat > 8) nplat = 8;
+    if (pPlat(nplat, plats, 0) != 0) return 0;
+    _cl_device_id dev = 0; _cl_platform_id plat = 0; _cl_uint pi;
+    for (pi = 0; pi < nplat; pi++){
+        _cl_uint nd = 0;
+        if (pDev(plats[pi], TR_CL_DEVICE_TYPE_GPU, 1, &dev, &nd) == 0 && nd > 0){ plat = plats[pi]; break; }
+    }
+    if (!dev){ /* fall back to any device type */
+        for (pi = 0; pi < nplat; pi++){
+            _cl_uint nd = 0;
+            if (pDev(plats[pi], TR_CL_DEVICE_TYPE_ALL, 1, &dev, &nd) == 0 && nd > 0){ plat = plats[pi]; break; }
+        }
+    }
+    if (!dev) return 0;
+    _cl_int err = 0;
+    _cl_context ctx = pCtx(0, 1, &dev, 0, 0, &err);
+    if (!ctx || err != 0) return 0;
+    _cl_command_queue q = pQ(ctx, dev, 0, &err);
+    if (!q || err != 0) return 0;
+    _tr_gpu.cl_lib=h; _tr_gpu.cl_plat=plat; _tr_gpu.cl_dev=dev; _tr_gpu.cl_ctx=ctx; _tr_gpu.cl_q=q; _tr_gpu.dev_count=1;
+    if (pInfo){ pInfo(dev, TR_CL_DEVICE_NAME, sizeof(_tr_gpu.name), _tr_gpu.name, 0);
+                _cl_bitfield gm=0; pInfo(dev, TR_CL_DEVICE_GLOBAL_MEM, sizeof(gm), &gm, 0); _tr_gpu.total_mem=(long long)gm; }
+    else snprintf(_tr_gpu.name,sizeof(_tr_gpu.name),"OpenCL device");
+    _tr_gpu.clCreateBuffer=(_pclCreateBuffer)_tr_gpu_dlsym(h,"clCreateBuffer");
+    _tr_gpu.clEnqueueWriteBuffer=(_pclEnqueueWriteBuffer)_tr_gpu_dlsym(h,"clEnqueueWriteBuffer");
+    _tr_gpu.clEnqueueReadBuffer=(_pclEnqueueReadBuffer)_tr_gpu_dlsym(h,"clEnqueueReadBuffer");
+    _tr_gpu.clReleaseMemObject=(_pclReleaseMemObject)_tr_gpu_dlsym(h,"clReleaseMemObject");
+    _tr_gpu.clCreateProgramWithSource=(_pclCreateProgramWithSource)_tr_gpu_dlsym(h,"clCreateProgramWithSource");
+    _tr_gpu.clCreateProgramWithIL=(_pclCreateProgramWithIL)_tr_gpu_dlsym(h,"clCreateProgramWithIL");
+    _tr_gpu.clBuildProgram=(_pclBuildProgram)_tr_gpu_dlsym(h,"clBuildProgram");
+    _tr_gpu.clGetProgramBuildInfo=(_pclGetProgramBuildInfo)_tr_gpu_dlsym(h,"clGetProgramBuildInfo");
+    _tr_gpu.clCreateKernel=(_pclCreateKernel)_tr_gpu_dlsym(h,"clCreateKernel");
+    _tr_gpu.clSetKernelArg=(_pclSetKernelArg)_tr_gpu_dlsym(h,"clSetKernelArg");
+    _tr_gpu.clEnqueueNDRangeKernel=(_pclEnqueueNDRangeKernel)_tr_gpu_dlsym(h,"clEnqueueNDRangeKernel");
+    _tr_gpu.clFinish=(_pclFinish)_tr_gpu_dlsym(h,"clFinish");
+    _tr_gpu.clReleaseKernel=(_pclReleaseKernel)_tr_gpu_dlsym(h,"clReleaseKernel");
+    _tr_gpu.clReleaseProgram=(_pclReleaseProgram)_tr_gpu_dlsym(h,"clReleaseProgram");
+    _tr_gpu.backend = TR_GPU_OPENCL;
+    /* Warm up the launch path once. Some OpenCL drivers (notably older Intel
+     * Gen graphics) defer/miss the *first* kernel enqueue in a process even
+     * though clFinish reports success; a prior throwaway launch makes every
+     * subsequent user launch reliable. Costs microseconds, runs once. */
+    if (_tr_gpu.clCreateProgramWithSource && _tr_gpu.clBuildProgram && _tr_gpu.clCreateKernel &&
+        _tr_gpu.clCreateBuffer && _tr_gpu.clSetKernelArg && _tr_gpu.clEnqueueNDRangeKernel &&
+        _tr_gpu.clFinish && _tr_gpu.clReleaseMemObject && _tr_gpu.clReleaseKernel && _tr_gpu.clReleaseProgram &&
+        _tr_gpu.clEnqueueWriteBuffer){
+        /* Prime BOTH an fp32 and an fp64 compute path: some drivers JIT/prime
+         * per element-type, so a real double-typed launch must run once. */
+        const char* ws = "#ifdef cl_khr_fp64\n#pragma OPENCL EXTENSION cl_khr_fp64 : enable\n__kernel void _tr_warm(__global double* a,double k,int n){int i=get_global_id(0); if(i<n) a[i]=a[i]*k;}\n#else\n__kernel void _tr_warm(__global float* a,float k,int n){int i=get_global_id(0); if(i<n) a[i]=a[i]*k;}\n#endif";
+        size_t wl = strlen(ws); _cl_int we=0;
+        _cl_program wp = _tr_gpu.clCreateProgramWithSource(_tr_gpu.cl_ctx,1,&ws,&wl,&we);
+        if (wp && we==0 && _tr_gpu.clBuildProgram(wp,1,&_tr_gpu.cl_dev,0,0,0)==0){
+            _cl_kernel wk = _tr_gpu.clCreateKernel(wp,"_tr_warm",&we);
+            _cl_mem wb = _tr_gpu.clCreateBuffer(_tr_gpu.cl_ctx,TR_CL_MEM_READ_WRITE,8,0,&we);
+            if (wk && wb){
+                double init=1.0; _tr_gpu.clEnqueueWriteBuffer(_tr_gpu.cl_q,wb,TR_CL_TRUE,0,8,&init,0,0,0);
+                double kk=2.0; int nn=1;
+                _tr_gpu.clSetKernelArg(wk,0,sizeof(_cl_mem),&wb);
+                _tr_gpu.clSetKernelArg(wk,1,8,&kk);
+                _tr_gpu.clSetKernelArg(wk,2,4,&nn);
+                size_t wg=1; _tr_gpu.clEnqueueNDRangeKernel(_tr_gpu.cl_q,wk,1,0,&wg,0,0,0,0);
+                _tr_gpu.clFinish(_tr_gpu.cl_q);
+            }
+            if (wb) _tr_gpu.clReleaseMemObject(wb);
+            if (wk) _tr_gpu.clReleaseKernel(wk);
+            _tr_gpu.clReleaseProgram(wp);
+        } else if (wp) { _tr_gpu.clReleaseProgram(wp); }
+    }
+    return 1;
+}
+
+static int64_t _tr_gpu_init(void){
+    if (_tr_gpu.inited) return (int64_t)_tr_gpu.backend;
+    _tr_gpu.inited = 1;
+    _tr_gpu.backend = TR_GPU_CPU;
+    snprintf(_tr_gpu.name, sizeof(_tr_gpu.name), "CPU (no GPU backend)");
+    if (_tr_gpu_try_cuda()) { _tr_gpu_seterr(""); return (int64_t)_tr_gpu.backend; }
+    if (_tr_gpu_try_opencl()) { _tr_gpu_seterr(""); return (int64_t)_tr_gpu.backend; }
+    _tr_gpu_seterr("no CUDA or OpenCL device found; using CPU fallback");
+    return (int64_t)_tr_gpu.backend;
+}
+
+static int64_t _tr_gpu_backend(void){ _tr_gpu_init(); return (int64_t)_tr_gpu.backend; }
+static char* _tr_gpu_backend_name(void){
+    _tr_gpu_init();
+    const char* n = _tr_gpu.backend==TR_GPU_CUDA ? "CUDA" : (_tr_gpu.backend==TR_GPU_OPENCL ? "OpenCL" : "CPU");
+    return _tr_strdup((char*)n);
+}
+static char* _tr_gpu_device_name(void){ _tr_gpu_init(); return _tr_strdup(_tr_gpu.name); }
+static int64_t _tr_gpu_device_count(void){ _tr_gpu_init(); return (int64_t)_tr_gpu.dev_count; }
+static char* _tr_gpu_last_error(void){ return _tr_strdup(_tr_gpu.err); }
+static int64_t _tr_gpu_compute_capability(void){ _tr_gpu_init(); return (int64_t)(_tr_gpu.cc_major*10 + _tr_gpu.cc_minor); }
+static int64_t _tr_gpu_total_mem(void){ _tr_gpu_init(); return (int64_t)_tr_gpu.total_mem; }
+static int64_t _tr_gpu_has_device(void){ return _tr_gpu_init() != TR_GPU_CPU ? 1 : 0; }
+
+/* ── Buffers ───────────────────────────────────────────────────────────────── */
+static void* _tr_gpu_malloc(int64_t size){
+    _tr_gpu_init();
+    if (size <= 0) size = 1;
+    _TrGpuBuf* b = (_TrGpuBuf*)TAURARO_ALLOC(sizeof(_TrGpuBuf));
+    if (!b){ _tr_gpu_seterr("gpu_malloc: out of host memory"); return 0; }
+    memset(b, 0, sizeof(*b)); b->backend=_tr_gpu.backend; b->size=(size_t)size;
+    if (_tr_gpu.backend==TR_GPU_CUDA && _tr_gpu.cuMemAlloc){
+        if (_tr_gpu.cuMemAlloc(&b->cu_ptr, b->size)!=0){ _tr_gpu_seterr("cuMemAlloc failed"); TAURARO_FREE(b); return 0; }
+    } else if (_tr_gpu.backend==TR_GPU_OPENCL && _tr_gpu.clCreateBuffer){
+        _cl_int e=0; b->cl_mem=_tr_gpu.clCreateBuffer(_tr_gpu.cl_ctx, TR_CL_MEM_READ_WRITE, b->size, 0, &e);
+        if (!b->cl_mem || e!=0){ _tr_gpu_seterr("clCreateBuffer failed"); TAURARO_FREE(b); return 0; }
+    } else {
+        b->host = TAURARO_ALLOC(b->size);
+        if (!b->host){ _tr_gpu_seterr("gpu_malloc: out of host memory"); TAURARO_FREE(b); return 0; }
+        memset(b->host, 0, b->size);
+    }
+    return b;
+}
+static void _tr_gpu_free(void* handle){
+    _TrGpuBuf* b=(_TrGpuBuf*)handle; if (!b) return;
+    if (b->backend==TR_GPU_CUDA && _tr_gpu.cuMemFree && b->cu_ptr) _tr_gpu.cuMemFree(b->cu_ptr);
+    else if (b->backend==TR_GPU_OPENCL && _tr_gpu.clReleaseMemObject && b->cl_mem) _tr_gpu.clReleaseMemObject(b->cl_mem);
+    else if (b->host) TAURARO_FREE(b->host);
+    TAURARO_FREE(b);
+}
+static int64_t _tr_gpu_buffer_size(void* handle){ _TrGpuBuf* b=(_TrGpuBuf*)handle; return b?(int64_t)b->size:0; }
+static int64_t _tr_gpu_h2d(void* handle, void* src, int64_t n){
+    _TrGpuBuf* b=(_TrGpuBuf*)handle; if (!b||!src) return -1;
+    size_t sz=(size_t)n; if (sz>b->size) sz=b->size;
+    if (b->backend==TR_GPU_CUDA){ if(_tr_gpu.cuMemcpyHtoD(b->cu_ptr,src,sz)!=0){_tr_gpu_seterr("cuMemcpyHtoD failed");return -1;} }
+    else if (b->backend==TR_GPU_OPENCL){ if(_tr_gpu.clEnqueueWriteBuffer(_tr_gpu.cl_q,b->cl_mem,TR_CL_TRUE,0,sz,src,0,0,0)!=0){_tr_gpu_seterr("clEnqueueWriteBuffer failed");return -1;} }
+    else memcpy(b->host, src, sz);
+    return 0;
+}
+static int64_t _tr_gpu_d2h(void* handle, void* dst, int64_t n){
+    _TrGpuBuf* b=(_TrGpuBuf*)handle; if (!b||!dst) return -1;
+    size_t sz=(size_t)n; if (sz>b->size) sz=b->size;
+    if (b->backend==TR_GPU_CUDA){ if(_tr_gpu.cuMemcpyDtoH(dst,b->cu_ptr,sz)!=0){_tr_gpu_seterr("cuMemcpyDtoH failed");return -1;} }
+    else if (b->backend==TR_GPU_OPENCL){ if(_tr_gpu.clEnqueueReadBuffer(_tr_gpu.cl_q,b->cl_mem,TR_CL_TRUE,0,sz,dst,0,0,0)!=0){_tr_gpu_seterr("clEnqueueReadBuffer failed");return -1;} }
+    else memcpy(dst, b->host, sz);
+    return 0;
+}
+static int64_t _tr_gpu_memset(void* handle, int64_t val, int64_t n){
+    _TrGpuBuf* b=(_TrGpuBuf*)handle; if (!b) return -1;
+    size_t sz=(size_t)n; if (sz>b->size) sz=b->size;
+    if (b->backend==TR_GPU_CUDA){ if(_tr_gpu.cuMemsetD8(b->cu_ptr,(unsigned char)val,sz)!=0){_tr_gpu_seterr("cuMemsetD8 failed");return -1;} }
+    else if (b->backend==TR_GPU_OPENCL){ /* no direct fill in 1.x subset: stage on host */
+        void* tmp=TAURARO_ALLOC(sz); if(!tmp) return -1; memset(tmp,(int)val,sz);
+        int64_t r=_tr_gpu_h2d(handle,tmp,(int64_t)sz); TAURARO_FREE(tmp); return r; }
+    else memset(b->host,(int)val,sz);
+    return 0;
+}
+
+/* ── Modules & kernels ─────────────────────────────────────────────────────── */
+static void* _tr_gpu_module_load_ptx(char* ptx){
+    _tr_gpu_init();
+    if (_tr_gpu.backend!=TR_GPU_CUDA || !_tr_gpu.cuModuleLoadData){ _tr_gpu_seterr("PTX modules require the CUDA backend"); return 0; }
+    _TrGpuMod* m=(_TrGpuMod*)TAURARO_ALLOC(sizeof(_TrGpuMod)); if(!m) return 0; memset(m,0,sizeof(*m)); m->backend=TR_GPU_CUDA;
+    if (_tr_gpu.cuModuleLoadData(&m->cu_mod, ptx)!=0){ _tr_gpu_seterr("cuModuleLoadData failed (bad PTX?)"); TAURARO_FREE(m); return 0; }
+    return m;
+}
+static void* _tr_gpu_module_load_source(char* src){
+    _tr_gpu_init();
+    if (_tr_gpu.backend!=TR_GPU_OPENCL || !_tr_gpu.clCreateProgramWithSource){ _tr_gpu_seterr("source kernels require the OpenCL backend (use load_ptx for CUDA)"); return 0; }
+    _TrGpuMod* m=(_TrGpuMod*)TAURARO_ALLOC(sizeof(_TrGpuMod)); if(!m) return 0; memset(m,0,sizeof(*m)); m->backend=TR_GPU_OPENCL;
+    _cl_int e=0; const char* s=src; size_t len=strlen(src);
+    m->cl_prog=_tr_gpu.clCreateProgramWithSource(_tr_gpu.cl_ctx,1,&s,&len,&e);
+    if (!m->cl_prog||e!=0){ _tr_gpu_seterr("clCreateProgramWithSource failed"); TAURARO_FREE(m); return 0; }
+    if (_tr_gpu.clBuildProgram(m->cl_prog,1,&_tr_gpu.cl_dev,0,0,0)!=0){
+        char log[2048]; log[0]=0;
+        if (_tr_gpu.clGetProgramBuildInfo) _tr_gpu.clGetProgramBuildInfo(m->cl_prog,_tr_gpu.cl_dev,TR_CL_PROGRAM_BUILD_LOG,sizeof(log),log,0);
+        char msg[2176]; snprintf(msg,sizeof(msg),"clBuildProgram failed: %s",log); _tr_gpu_seterr(msg);
+        if (_tr_gpu.clReleaseProgram) _tr_gpu.clReleaseProgram(m->cl_prog);
+        TAURARO_FREE(m); return 0;
+    }
+    return m;
+}
+/* Load a binary intermediate-language module: SPIR-V for OpenCL (via
+ * clCreateProgramWithIL, needs an OpenCL 2.1+ / SPIR-V-capable driver), or a
+ * PTX/cubin image for CUDA (same path as load_ptx). `il` points to `len` bytes. */
+static void* _tr_gpu_module_load_il(void* il, int64_t len){
+    _tr_gpu_init();
+    if (_tr_gpu.backend==TR_GPU_CUDA && _tr_gpu.cuModuleLoadData){
+        _TrGpuMod* m=(_TrGpuMod*)TAURARO_ALLOC(sizeof(_TrGpuMod)); if(!m) return 0; memset(m,0,sizeof(*m)); m->backend=TR_GPU_CUDA;
+        if (_tr_gpu.cuModuleLoadData(&m->cu_mod, il)!=0){ _tr_gpu_seterr("cuModuleLoadData failed (bad PTX/cubin?)"); TAURARO_FREE(m); return 0; }
+        return m;
+    }
+    if (_tr_gpu.backend==TR_GPU_OPENCL){
+        if (!_tr_gpu.clCreateProgramWithIL){ _tr_gpu_seterr("SPIR-V modules require an OpenCL 2.1+ driver (clCreateProgramWithIL unavailable)"); return 0; }
+        /* Guard: clCreateProgramWithIL expects SPIR-V; feeding it a PTX blob (wrong
+         * magic) can CRASH some drivers. Verify the SPIR-V magic (0x07230203) first. */
+        {
+            const unsigned char* _b=(const unsigned char*)il;
+            if (len<4 || !(_b[0]==0x03 && _b[1]==0x02 && _b[2]==0x23 && _b[3]==0x07)){
+                _tr_gpu_seterr("module is not SPIR-V (rebuild with --gpu-embed spirv / --gpu-target spirv for the OpenCL backend)");
+                return 0;
+            }
+        }
+        _TrGpuMod* m=(_TrGpuMod*)TAURARO_ALLOC(sizeof(_TrGpuMod)); if(!m) return 0; memset(m,0,sizeof(*m)); m->backend=TR_GPU_OPENCL;
+        _cl_int e=0;
+        m->cl_prog=_tr_gpu.clCreateProgramWithIL(_tr_gpu.cl_ctx, il, (size_t)len, &e);
+        if (!m->cl_prog||e!=0){ char msg[96]; snprintf(msg,sizeof(msg),"clCreateProgramWithIL failed: %d",(int)e); _tr_gpu_seterr(msg); TAURARO_FREE(m); return 0; }
+        if (_tr_gpu.clBuildProgram(m->cl_prog,1,&_tr_gpu.cl_dev,0,0,0)!=0){
+            char log[2048]; log[0]=0;
+            if (_tr_gpu.clGetProgramBuildInfo) _tr_gpu.clGetProgramBuildInfo(m->cl_prog,_tr_gpu.cl_dev,TR_CL_PROGRAM_BUILD_LOG,sizeof(log),log,0);
+            char msg[2176]; snprintf(msg,sizeof(msg),"clBuildProgram(SPIR-V) failed: %s",log); _tr_gpu_seterr(msg);
+            if (_tr_gpu.clReleaseProgram) _tr_gpu.clReleaseProgram(m->cl_prog);
+            TAURARO_FREE(m); return 0;
+        }
+        return m;
+    }
+    _tr_gpu_seterr("IL modules require a CUDA or OpenCL backend");
+    return 0;
+}
+static void _tr_gpu_module_free(void* handle){
+    _TrGpuMod* m=(_TrGpuMod*)handle; if(!m) return;
+    if (m->backend==TR_GPU_CUDA && _tr_gpu.cuModuleUnload && m->cu_mod) _tr_gpu.cuModuleUnload(m->cu_mod);
+    else if (m->backend==TR_GPU_OPENCL && _tr_gpu.clReleaseProgram && m->cl_prog) _tr_gpu.clReleaseProgram(m->cl_prog);
+    TAURARO_FREE(m);
+}
+static void* _tr_gpu_kernel_get(void* modh, char* name){
+    _TrGpuMod* m=(_TrGpuMod*)modh; if(!m||!name){ _tr_gpu_seterr("kernel_get: null module"); return 0; }
+    _TrGpuKern* k=(_TrGpuKern*)TAURARO_ALLOC(sizeof(_TrGpuKern)); if(!k) return 0; memset(k,0,sizeof(*k)); k->backend=m->backend;
+    if (m->backend==TR_GPU_CUDA){
+        if (_tr_gpu.cuModuleGetFunction(&k->cu_fn,m->cu_mod,name)!=0){ _tr_gpu_seterr("cuModuleGetFunction: kernel not found"); TAURARO_FREE(k); return 0; }
+    } else if (m->backend==TR_GPU_OPENCL){
+        _cl_int e=0; k->cl_k=_tr_gpu.clCreateKernel(m->cl_prog,name,&e);
+        if (!k->cl_k||e!=0){ _tr_gpu_seterr("clCreateKernel: kernel not found"); TAURARO_FREE(k); return 0; }
+    } else { _tr_gpu_seterr("kernel_get: no GPU backend"); TAURARO_FREE(k); return 0; }
+    return k;
+}
+static void _tr_gpu_kernel_free(void* handle){
+    _TrGpuKern* k=(_TrGpuKern*)handle; if(!k) return;
+    if (k->backend==TR_GPU_OPENCL && _tr_gpu.clReleaseKernel && k->cl_k) _tr_gpu.clReleaseKernel(k->cl_k);
+    TAURARO_FREE(k);
+}
+static void _tr_gpu_kern_stage(_TrGpuKern* k, int idx, const void* data, size_t sz){
+    if (!k || idx<0||idx>=TR_GPU_MAX_ARGS) return;   /* NULL kernel (failed load) → no-op */
+    if (sz>16) sz=16;
+    memcpy(k->argbuf[idx], data, sz);
+    k->argptr[idx]=k->argbuf[idx];
+    if (idx+1>k->nargs) k->nargs=idx+1;
+    if (k->backend==TR_GPU_OPENCL && _tr_gpu.clSetKernelArg){
+        _cl_int e = _tr_gpu.clSetKernelArg(k->cl_k,(_cl_uint)idx,sz,k->argbuf[idx]);
+        if (e != 0){ char m[96]; snprintf(m,sizeof(m),"clSetKernelArg[%d] failed: %d", idx, (int)e); _tr_gpu_seterr(m); }
+    }
+}
+static void _tr_gpu_kernel_set_arg_buf(void* handle, int64_t idx, void* bufh){
+    _TrGpuKern* k=(_TrGpuKern*)handle; _TrGpuBuf* b=(_TrGpuBuf*)bufh; if(!k||!b) return;
+    if (k->backend==TR_GPU_CUDA) _tr_gpu_kern_stage(k,(int)idx,&b->cu_ptr,sizeof(b->cu_ptr));
+    else _tr_gpu_kern_stage(k,(int)idx,&b->cl_mem,sizeof(b->cl_mem));
+}
+static void _tr_gpu_kernel_set_arg_i32(void* h,int64_t idx,int64_t v){ int x=(int)v; _tr_gpu_kern_stage((_TrGpuKern*)h,(int)idx,&x,sizeof(x)); }
+static void _tr_gpu_kernel_set_arg_i64(void* h,int64_t idx,int64_t v){ _tr_gpu_kern_stage((_TrGpuKern*)h,(int)idx,&v,sizeof(v)); }
+static void _tr_gpu_kernel_set_arg_f32(void* h,int64_t idx,double v){ float f=(float)v; _tr_gpu_kern_stage((_TrGpuKern*)h,(int)idx,&f,sizeof(f)); }
+static void _tr_gpu_kernel_set_arg_f64(void* h,int64_t idx,double v){ _tr_gpu_kern_stage((_TrGpuKern*)h,(int)idx,&v,sizeof(v)); }
+
+static int64_t _tr_gpu_launch(void* handle, int64_t gx,int64_t gy,int64_t gz, int64_t bx,int64_t by,int64_t bz){
+    _TrGpuKern* k=(_TrGpuKern*)handle; if(!k){ _tr_gpu_seterr("launch: null kernel"); return -1; }
+    if (gx<1)gx=1; if(gy<1)gy=1; if(gz<1)gz=1; if(bx<1)bx=1; if(by<1)by=1; if(bz<1)bz=1;
+    if (k->backend==TR_GPU_CUDA){
+        void* params[TR_GPU_MAX_ARGS]; int i; for(i=0;i<k->nargs;i++) params[i]=k->argptr[i];
+        if (_tr_gpu.cuLaunchKernel(k->cu_fn,(unsigned)gx,(unsigned)gy,(unsigned)gz,(unsigned)bx,(unsigned)by,(unsigned)bz,0,0,params,0)!=0){ _tr_gpu_seterr("cuLaunchKernel failed"); return -1; }
+        return 0;
+    } else if (k->backend==TR_GPU_OPENCL){
+        size_t global[3]={(size_t)(gx*bx),(size_t)(gy*by),(size_t)(gz*bz)};
+        size_t local[3]={(size_t)bx,(size_t)by,(size_t)bz};
+        _cl_uint dims = (gz*bz>1)?3:((gy*by>1)?2:1);
+        /* Pass local=NULL: let the driver choose a valid work-group size. This
+         * avoids CL_INVALID_WORK_GROUP_SIZE when the requested block does not
+         * divide the global size or exceeds the kernel's device maximum. */
+        _cl_int e = _tr_gpu.clEnqueueNDRangeKernel(_tr_gpu.cl_q,k->cl_k,dims,0,global,0,0,0,0);
+        if (e!=0){ char m[96]; snprintf(m,sizeof(m),"clEnqueueNDRangeKernel failed: %d",(int)e); _tr_gpu_seterr(m); return -1; }
+        return 0;
+    }
+    _tr_gpu_seterr("launch: no GPU backend (kernels require CUDA or OpenCL)");
+    return -1;
+}
+/* Read a whole file as raw bytes (binary-safe, unlike read_file which stops at NUL) for
+ * loading a precompiled kernel module (.spv is binary, .ptx is text). Returns the buffer;
+ * the byte length is retrieved via _tr_gpu_read_file_len() immediately after (both calls
+ * run in the same std.gpu translation unit, so the static length stays consistent). */
+static int64_t _tr_gpu_last_file_len = 0;
+static void* _tr_gpu_read_file(char* path){
+    _tr_gpu_last_file_len = 0;
+    if (!path) return 0;
+    FILE* f = fopen(path, "rb");
+    if (!f) return 0;
+    fseek(f, 0, SEEK_END); long sz = ftell(f); rewind(f);
+    if (sz < 0){ fclose(f); return 0; }
+    void* buf = TAURARO_ALLOC((size_t)sz + 1);
+    if (!buf){ fclose(f); return 0; }
+    size_t rd = fread(buf, 1, (size_t)sz, f); fclose(f);
+    ((char*)buf)[rd] = 0;
+    _tr_gpu_last_file_len = (int64_t)rd;
+    return buf;
+}
+static int64_t _tr_gpu_read_file_len(void){ return _tr_gpu_last_file_len; }
+
+/* Embedded kernel module accessors. When a program is built with `--gpu-embed`,
+ * the compiler emits a `_tr_gpu_blob.c` with STRONG definitions of these (the
+ * compiled PTX/SPIR-V bytes). These WEAK defaults (empty) let Module.embedded()
+ * link and degrade gracefully when nothing was embedded. The prototypes are
+ * visible to EVERY TU (std.gpu's kernel.c calls them); only _TR_MAIN provides
+ * the weak definitions. */
+char*     _tr_gpu_embedded_blob(void);
+long long _tr_gpu_embedded_len(void);
+#ifdef _TR_MAIN
+#if defined(__GNUC__)
+__attribute__((weak)) char*     _tr_gpu_embedded_blob(void){ return 0; }
+__attribute__((weak)) long long _tr_gpu_embedded_len(void){ return 0; }
+#endif
+#endif
+static int64_t _tr_gpu_synchronize(void){
+    _tr_gpu_init();
+    if (_tr_gpu.backend==TR_GPU_CUDA && _tr_gpu.cuCtxSynchronize) return _tr_gpu.cuCtxSynchronize()==0?0:-1;
+    if (_tr_gpu.backend==TR_GPU_OPENCL && _tr_gpu.clFinish) return _tr_gpu.clFinish(_tr_gpu.cl_q)==0?0:-1;
+    return 0;
+}
+
+
+#endif /* !TAURARO_NO_OS && !TAURARO_KERNEL && !__wasi__ */
 
 #endif /* TAURARO_RT_H */

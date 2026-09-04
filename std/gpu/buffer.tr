@@ -1,0 +1,81 @@
+# std.gpu.buffer — Typed device memory buffers.
+#
+# Buffer[T] owns a block of device memory holding `len` elements of type T.
+# The element size is computed with sizeof(T), so the same code is correct for
+# int, float, and value-type structs.
+#
+# On the CPU fallback backend the "device" allocation is ordinary host memory
+# and the H2D/D2H copies are memcpy, so Buffer[T] round-trips correctly on any
+# machine — useful for testing kernels' host-side glue without a GPU.
+#
+# Call `free()` when done. (Buffers are not auto-dropped: device lifetime is
+# explicit, matching the rest of std for native handles.)
+
+from std.core.vec import Vec
+
+extern "C":
+    def _tr_gpu_malloc(size: int) -> Pointer[char]
+    def _tr_gpu_free(h: Pointer[char])
+    def _tr_gpu_h2d(h: Pointer[char], src: Pointer[char], n: int) -> int
+    def _tr_gpu_d2h(h: Pointer[char], dst: Pointer[char], n: int) -> int
+    def _tr_gpu_memset(h: Pointer[char], val: int, n: int) -> int
+    def _tr_gpu_buffer_size(h: Pointer[char]) -> int
+
+pub class Buffer[T]:
+    pub handle: Pointer[char]   # opaque _TrGpuBuf*
+    pub len:    int             # element count
+
+extend Buffer[T]:
+    # Allocate `n` uninitialized elements on the device.
+    pub def alloc(n: int) -> Buffer[T]:
+        mut b = Buffer[T]()
+        b.handle = _tr_gpu_malloc(n * sizeof(T))
+        b.len = n
+        return b
+
+    # Allocate `n` elements and zero them.
+    pub def zeros(n: int) -> Buffer[T]:
+        mut b = Buffer[T].alloc(n)
+        b.fill_bytes(0)
+        return b
+
+    # Upload a host Vec[T] into a fresh device buffer.
+    pub def from_vec(v: Vec[T]) -> Buffer[T]:
+        mut b = Buffer[T].alloc(v.len)
+        _tr_gpu_h2d(b.handle, v.data, v.len * sizeof(T))
+        return b
+
+    # True when the underlying allocation succeeded.
+    pub def is_valid(self) -> bool:
+        return (self.handle as usize) != (0 as usize)
+
+    # Copy `n` elements from a host raw pointer into this device buffer.
+    pub def copy_from_ptr(self, src: Pointer[T], n: int):
+        _tr_gpu_h2d(self.handle, src as Pointer[char], n * sizeof(T))
+
+    # Copy `n` elements from this device buffer into a host raw pointer.
+    pub def copy_to_ptr(self, dst: Pointer[T], n: int):
+        _tr_gpu_d2h(self.handle, dst as Pointer[char], n * sizeof(T))
+
+    # Upload every element of a host Vec[T] (clamped to this buffer's size).
+    pub def upload(self, v: Vec[T]):
+        _tr_gpu_h2d(self.handle, v.data, v.len * sizeof(T))
+
+    # Download this buffer's contents into a fresh host Vec[T].
+    pub def download(self) -> Vec[T]:
+        mut v = Vec[T].init(self.len)
+        v.len = self.len
+        _tr_gpu_d2h(self.handle, v.data, self.len * sizeof(T))
+        return v
+
+    # Set every byte of the buffer to `val` (like C memset).
+    pub def fill_bytes(self, val: int):
+        _tr_gpu_memset(self.handle, val, self.len * sizeof(T))
+
+    # Allocated size in bytes.
+    pub def byte_size(self) -> int:
+        return _tr_gpu_buffer_size(self.handle)
+
+    # Release the device allocation.
+    pub def free(self):
+        _tr_gpu_free(self.handle)

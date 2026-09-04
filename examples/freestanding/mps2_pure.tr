@@ -5,10 +5,22 @@
 #   @entry                            -> the reset trampoline + .isr_vector table
 #   --emit-ld build/app.ld            -> the linker script
 #
-# Build + run:
+# Build + run — turnkey (compiler drives the link itself, via an installed
+# arm-none-eabi-gcc or the bundled zig; --target picks the cross driver):
+#   tauraroc examples/freestanding/mps2_pure.tr --freestanding --target embedded-arm \
+#       --emit-ld build/app.ld -o app
+#   qemu-system-arm -M mps2-an385 -nographic -kernel app.elf
+#
+# Build + run — manual (equivalent, useful for passing extra flags by hand):
 #   tauraroc examples/freestanding/mps2_pure.tr --freestanding --emit c --emit-ld build/app.ld
 #   arm-none-eabi-gcc -mcpu=cortex-m3 -mthumb -nostdlib -T build/app.ld \
 #       -I build/include -o app.elf $(find build -name '*.c') -lgcc
+#   # or with the bundled zig (note -nostartfiles, not -nostdlib -- it keeps
+#   # zig's compiler_rt, which a Cortex-M3 needs for soft-float/64-bit ops;
+#   # and -fno-sanitize=undefined, since freestanding has no UBSan handlers):
+#   zig cc -target thumb-freestanding-eabi -mcpu=cortex_m3 -ffreestanding \
+#       -nostartfiles -fno-sanitize=undefined -T build/app.ld -I build/include \
+#       -I build -o app.elf $(find build -name '*.c')
 #   qemu-system-arm -M mps2-an385 -nographic -kernel app.elf
 
 from std.hal.mmio import write32
@@ -17,23 +29,73 @@ from std.hal.mmio import write32
 # _heap_next uses a non-zero global initializer — the @entry reset trampoline now
 # runs Tauraro's global-initializer pass (emit_global_inits), so this works exactly
 # as it would in a hosted program.
+#
+# Every live allocation is preceded by an 8-byte size header (written by
+# heap_alloc, read back by heap_realloc), so heap_realloc can always recover a
+# pointer's true allocated size -- not just for the most-recently-allocated
+# block. Without this a bump allocator's realloc has no way to know how many
+# bytes to copy, which is fatal: every List/Dict/str append reallocs, so any
+# real program silently loses data past the first grow. heap_realloc must
+# satisfy all of:
+#   a) COPY the old bytes forward -- a fresh block with no copy discards them.
+#   b) GROW IN PLACE when the block is the newest allocation (bump the
+#      pointer forward instead of copying) -- otherwise appends are O(n^2)
+#      and a nontrivial collection never finishes on an emulated MCU.
+#   c) NEVER move _heap_next backwards on a shrink -- a bump allocator has no
+#      free list, so "shrinking" must keep the same footprint; moving
+#      backwards would hand the "freed" tail to the next caller while this
+#      block is still live.
+#   d) NEVER return a zero-length block -- a 0-byte request that doesn't
+#      advance the bump pointer hands the SAME address to the next caller,
+#      so two live objects would share bytes. Round up, minimum 8.
 mut _heap_next: usize = 0x20080000 as usize
+
+def _heap_round(n: usize) -> usize:
+    mut r = n
+    if r < (8 as usize): r = 8 as usize
+    return ((r + (7 as usize)) / (8 as usize)) * (8 as usize)
 
 @allocator
 def heap_alloc(n: usize) -> Pointer[u8]:
     unsafe:
-        mut p = _heap_next as Pointer[u8]
-        _heap_next = _heap_next + ((n + 7) / 8) * 8
+        mut sz = _heap_round(n)
+        mut hdr = _heap_next as Pointer[usize]
+        hdr.write(sz)
+        mut p = (_heap_next + (8 as usize)) as Pointer[u8]
+        _heap_next = _heap_next + (8 as usize) + sz
         return p
 @free
 def heap_free(p: Pointer[u8]):
     pass
 @realloc
 def heap_realloc(p: Pointer[u8], n: usize) -> Pointer[u8]:
-    return heap_alloc(n)
+    unsafe:
+        mut old_hdr = ((p as usize) - (8 as usize)) as Pointer[usize]
+        mut old_sz = old_hdr.read()
+        mut sz = _heap_round(n)
+        if sz <= old_sz:
+            return p                              # (c) shrink in place, never move
+        if (p as usize) + old_sz == _heap_next:
+            _heap_next = _heap_next + (sz - old_sz)   # (b) grow in place
+            old_hdr.write(sz)
+            return p
+        mut newp = heap_alloc(n)
+        mut i: usize = 0 as usize
+        while i < old_sz:                         # (a) copy old contents forward
+            newp.offset(i).write(p.offset(i).read())
+            i = i + (1 as usize)
+        return newp
 @calloc
 def heap_calloc(n: usize, sz: usize) -> Pointer[u8]:
-    return heap_alloc(n * sz)
+    unsafe:
+        mut total = n * sz
+        mut p = heap_alloc(total)
+        mut rounded = _heap_round(total)
+        mut i: usize = 0 as usize
+        while i < rounded:                        # zero, per calloc semantics
+            p.offset(i).write(0 as u8)
+            i = i + (1 as usize)
+        return p
 
 # ---- UART output sink: CMSDK UART0 @ 0x40004000 ----
 @output

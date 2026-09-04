@@ -180,6 +180,7 @@ pub class CGenerator:
     pub decl_vars:      Map[str, bool]
     pub str_local_names: Map[str, bool]  # TrStr-typed locals declared via SLet in current function (retain/release tracked)
     pub class_local_names: Map[str, bool]  # heap-class-typed locals in current function that OWN a refcount (released at scope exit; reset in seed_params)
+    pub class_local_mono: Map[str, str]    # heap-class local name -> its monomorphized C prefix (e.g. "Buffer_f64") so SAutoDrop's free()/drop call uses the mono name, not the bare generic ("Buffer")
     pub fn_owned: Map[str, bool]  # return-ownership inference (from sema HirFunction.returns_owned): fn key ("name" or "Class.method") -> returns an OWNED heap-class ref; drives _obj_expr_owns_ref
     pub raw_aliased: Map[str, bool]  # class names reachable as Pointer[T] anywhere in the program — their instances are aliased by RAW pointers that bypass refcounting, so they must NEVER be auto-dropped (is_heap_class_tn excludes them). e.g. AstType via AstType.args: Vec[Pointer[AstType]]
     pub coll_field_owned: Map[str, bool]  # "Class.field" collection field with a FRESH-collection assignment (candidate to free in _trdrop_T)
@@ -259,6 +260,7 @@ pub class CGenerator:
         g.decl_vars     = Map[str, bool].init(64)
         g.str_local_names = Map[str, bool].init(16)
         g.class_local_names = Map[str, bool].init(16)
+        g.class_local_mono = Map[str, str].init(16)
         g.fn_owned = Map[str, bool].init(64)
         g.raw_aliased = Map[str, bool].init(32)
         g.coll_field_owned = Map[str, bool].init(32)
@@ -365,6 +367,7 @@ pub class CGenerator:
         # single common entry for every function/method emit — avoids resetting at
         # each of the ~13 emit sites).
         self.class_local_names = Map[str, bool].init(16)
+        self.class_local_mono = Map[str, str].init(16)
         # A `-> ref` function returns a BORROW: it does NOT retain on return, and its
         # callers must NOT free the result (see _is_fresh_str_expr / _expr_is_borrow_call).
         self.cur_ret_is_borrow = f.ret_ty.is_borrow
@@ -521,9 +524,10 @@ pub class CGenerator:
         if n == "Array" and ty.array_size > 0 and ty.args.len > 0:
             return self.ensure_array_type(ty)
 
-        # Function-pointer type (def(...)->R): stored as a void* function pointer.
-        # Zero-cost: the call site casts back to the exact signature before calling.
-        if n == "def": return "void*"
+        # Function-value type (def(...)->R): a plain {fn,env} struct (TrFnVal, see
+        # runtime header) -- NOT a tagged pointer. The call site casts .fn back to
+        # the exact signature before calling; .env==NULL means a bare function.
+        if n == "def": return "TrFnVal"
 
         # Check active type substitution first (used during monomorphization)
         if self.type_subst.contains(n): return self.type_subst.get(n)
@@ -710,7 +714,7 @@ pub class CGenerator:
 
         if n == "Result": return "Result"
         if n == "Option": return "Option"
-        if n == "lambda": return "void*"
+        if n == "lambda": return "TrFnVal"
         if self.enums.contains(n): return n
         if self.interfaces.contains(n):
             mut gi_iface = self.interfaces.get(n)
@@ -761,6 +765,12 @@ pub class CGenerator:
         # List_TrTuple is predefined in the runtime header, so no ensure here.
         if actual_n == "Tuple" or actual_n == "tuple":
             return "TrTuple"
+        # Function value (Vec[def(...)->R] / Vec[lambda]): stored by value as
+        # TrFnVal ({fn,env} struct, not a raw pointer -- must NOT fall through
+        # to the generic "ptr" bucket below, which assumes pointer-sized
+        # elements). List_TrFnVal is predefined in the runtime header.
+        if actual_n == "def" or actual_n == "lambda":
+            return "TrFnVal"
         mut sfx = self.type_suffix(actual_n)
         if sfx == "i64" or sfx == "f64" or sfx == "str" or sfx == "bool" or sfx == "i8" or sfx == "i32" or sfx == "char" or sfx == "u8" or sfx == "u32":
             return sfx
@@ -886,6 +896,35 @@ pub class CGenerator:
             self.struct_buf = old_sbuf
             self.proto_buf  = old_pbuf
         return nm
+
+    # The monomorphized C prefix for a (possibly generic) class type: "Buffer_f64" for
+    # Buffer[float], or the bare name for a non-generic / un-parameterized class. Matches
+    # ensure_mono's `cls.name + "_" + type_args_suffix(args)`. Used so SAutoDrop's free/
+    # drop call targets the concrete instance, not the (undefined) generic template.
+    pub def mono_cprefix(self, t: AstType) -> str:
+        if self.classes.contains(t.name) and t.args.len > 0:
+            return t.name + "_" + self.type_args_suffix(t.args)
+        return t.name
+
+    # Record a heap-class local's concrete monomorphized C prefix (e.g. "Buffer_f64") so
+    # SAutoDrop names its free/drop fn on the instance, not the generic template. An
+    # un-annotated `mut h = Holder[int].make(5)` has no type args on the SLet type NOR the
+    # call result, so fall back to the factory RECEIVER's type args (`Holder[int]`).
+    pub def capture_local_mono(self, name: str, ty: AstType, v: Pointer[HirExpr]):
+        if self.classes.contains(ty.name) and ty.args.len > 0:
+            self.class_local_mono.insert(name, self.mono_cprefix(ty))
+            return
+        if v as usize != 0 as usize:
+            mut vt = hir_expr_type(v)
+            if self.classes.contains(vt.name) and vt.args.len > 0:
+                self.class_local_mono.insert(name, self.mono_cprefix(vt))
+                return
+            match v.read():
+                case HirExpr.EMethodCall(recv, _, _, _):
+                    mut rt = hir_expr_type(recv)
+                    if self.classes.contains(rt.name) and rt.args.len > 0:
+                        self.class_local_mono.insert(name, self.mono_cprefix(rt))
+                case _: pass
 
     pub def ensure_mono(self, cls: HirClass, type_args: Vec[Pointer[AstType]]):
         mut sfx = self.type_args_suffix(type_args)
@@ -1472,6 +1511,11 @@ pub class CGenerator:
                 return "static __attribute__((hot)) "
             if f.ret_ty.name == "void" or f.ret_ty.name == "" or f.ret_ty.name == "None":
                 return "static __attribute__((hot)) "
+            # `malloc`/`returns_nonnull` are pointer-only. They apply when the
+            # factory returns a heap class pointer; an `init` returning an enum
+            # or primitive (by value) must NOT carry them.
+            if not self.classes.contains(f.ret_ty.name):
+                return "static __attribute__((hot)) "
             return "static __attribute__((malloc,returns_nonnull,hot)) "
         return "static __attribute__((hot)) "
 
@@ -1503,6 +1547,8 @@ pub class CGenerator:
             if self.value_types.contains(f.class_name):
                 return "__attribute__((hot)) "
             if f.ret_ty.name == "void" or f.ret_ty.name == "" or f.ret_ty.name == "None":
+                return "__attribute__((hot)) "
+            if not self.classes.contains(f.ret_ty.name):
                 return "__attribute__((hot)) "
             return "__attribute__((malloc,returns_nonnull,hot)) "
         return "__attribute__((hot)) "
@@ -1894,8 +1940,9 @@ pub class CGenerator:
                 if _is_c_keyword(n) and self.decl_vars.contains(n): return "_tr_v_" + n
                 if n == "argv" and self.cur_func == "main": return "_tr_main_argv"
                 # A top-level function used as a value (not a call target) is a
-                # zero-cost function pointer: emit its address as void*.
-                if self.functions.contains(n) and not self.decl_vars.contains(n): return "(void*)" + n
+                # zero-cost TrFnVal: its address as .fn, NULL .env (bare function,
+                # not a closure -- see gen_call's dispatch on .env).
+                if self.functions.contains(n) and not self.decl_vars.contains(n): return "((TrFnVal){(void*)" + n + ", NULL})"
                 return n
             case HirExpr.EBinOp(op, l, r, _): return self.gen_binop(op, l, r)
             case HirExpr.EUnaryOp(op, expr, _): return self.gen_unary(op, expr)
@@ -1916,6 +1963,27 @@ pub class CGenerator:
                     mut cast_src_ty: str = hir_expr_type(expr).name
                     if cast_src_ty == "List" or cast_src_ty == "Vec":
                         return "((" + self.type_to_c(target_ty) + ")(" + self.gen_expr(expr) + "->data))"
+                    # def(...)->R / lambda -> Pointer[T]: TWO genuinely different call
+                    # sites use this exact syntax for opposite purposes, confirmed by
+                    # examples/ffi_callbacks.tr (both patterns in one file):
+                    #   - `on_event as Pointer[void]` (Pattern 2, a BARE top-level
+                    #     function, no captures) wants the FUNCTION POINTER, e.g. to pass
+                    #     directly to a C API or Coro.spawn/Thread.spawn-style raw-pointer
+                    #     entry point.
+                    #   - `cb as Pointer[void]` (Pattern 1, cb a real CLOSURE) is the
+                    #     `c_callback` FFI bridge threading the closure through a C API's
+                    #     userdata slot; cb_trampoline treats that userdata AS the
+                    #     closure's env pointer, so this wants `.env`.
+                    # A bare function's TrFnVal always has `.env == NULL` (see gen_expr's
+                    # EIdent case); a real closure's `.env` is never NULL (it's the
+                    # env struct's address). So branch on that AT RUNTIME rather than by
+                    # syntax (a function reference reached through a local variable,
+                    # e.g. `mut f = add1; f as Pointer[void]`, has no distinguishing
+                    # syntax from a closure local) -- evaluate the source ONCE (statement
+                    # expression) and pick whichever field is non-null.
+                    if cast_src_ty == "def" or cast_src_ty == "lambda":
+                        mut _fv_c_ty = self.type_to_c(target_ty)
+                        return "({ TrFnVal __fv = (" + self.gen_expr(expr) + "); (" + _fv_c_ty + ")(__fv.env ? __fv.env : (void*)__fv.fn); })"
                 # `as str`: TrStr is a struct, can't C-cast to it. If the source
                 # expr is already str-typed it's a no-op; otherwise it's a
                 # generic/void* result (e.g. Dict.get(k) as str) - unbox it.
@@ -3168,9 +3236,83 @@ pub class CGenerator:
                 case _: pass
         return false
 
+    # The runtime arg-setter suffix for a kernel parameter type: "buf" for a buffer
+    # pointer, else the scalar width (f32/f64/i32/i64).
+    pub def _gpu_arg_kind(self, pty: AstType) -> str:
+        if pty.name == "Pointer": return "buf"
+        if pty.name == "f32": return "f32"
+        if pty.name == "f64" or pty.name == "float" or pty.name == "double": return "f64"
+        if pty.name == "i32" or pty.name == "u32" or pty.name == "c_int": return "i32"
+        return "i64"
+
+    # Emit `kernel_launch("name", grid, block, a0, a1, ...)` as a GCC statement
+    # expression: cache the kernel (from the --gpu-embed'd module), bind each arg by
+    # the @kernel's parameter type, then launch over the grid/block. Returns the
+    # launch rc (0 = ok). Buffer args may be passed as a Buffer[T] (its .handle is
+    # taken) or as a raw device handle.
+    pub def gen_kernel_launch(self, args: Vec[Pointer[HirExpr]]) -> str:
+        if args.len < 3:
+            return "((long long)(-1))"
+        mut kname = ""
+        match args.get(0).read():
+            case HirExpr.ELitStr(sv, _): kname = sv
+            case _: pass
+        if kname == "" or not self.functions.contains(kname):
+            return "((long long)(-1)) /* kernel_launch: unknown @kernel */"
+        mut kfn = self.functions.get(kname)
+        # Compile-time arg-count check: kernel_launch(name, grid, block, <one arg per
+        # kernel param>). A mismatch references a descriptive undefined symbol so the
+        # C compile fails with a clear name rather than binding garbage.
+        mut _kl_want = kfn.params.len
+        mut _kl_got = args.len - 3
+        if _kl_got != _kl_want:
+            return "((long long)_tr_gpu_kernel_launch_ARG_COUNT_MISMATCH_" + kname + "_wants" + _kl_want.to_str() + "_got" + _kl_got.to_str() + "())"
+        mut grid_ct  = self.type_to_c(hir_expr_type(args.get(1)))
+        mut block_ct = self.type_to_c(hir_expr_type(args.get(2)))
+        mut grid_s   = self.gen_expr(args.get(1))
+        mut block_s  = self.gen_expr(args.get(2))
+        mut kv = "_klk" + self.next_temp()   # per-site cached kernel handle
+        mut gv = "_klg" + self.next_temp()
+        mut bv = "_klb" + self.next_temp()
+        mut s = "({ static void* " + kv + " = 0; if (!" + kv + ") { void* _klm"
+        s = s + " = _tr_gpu_module_load_il(_tr_gpu_embedded_blob(), _tr_gpu_embedded_len()); "
+        s = s + kv + " = _tr_gpu_kernel_get(_klm, \"" + kname + "\"); } "
+        # Hoist grid/block so they're evaluated ONCE (each field read otherwise re-runs
+        # a fresh Dim3.of(n)).
+        s = s + grid_ct + " " + gv + " = (" + grid_s + "); "
+        s = s + block_ct + " " + bv + " = (" + block_s + "); "
+        # Bind arguments args[3..] positionally to the kernel params.
+        mut i = 3
+        while i < args.len:
+            mut pi = i - 3
+            if pi >= kfn.params.len: break
+            mut pty = kfn.params.get(pi).ty
+            mut kind = self._gpu_arg_kind(pty)
+            mut aexpr = self.gen_expr(args.get(i))
+            if kind == "buf":
+                # Buffer[T] -> its .handle; a raw Pointer[char] handle passes through.
+                mut ah = "(" + aexpr + ")"
+                if hir_expr_type(args.get(i)).name == "Buffer":
+                    ah = "(" + aexpr + ")->handle"
+                s = s + "_tr_gpu_kernel_set_arg_buf(" + kv + ", " + pi.to_str() + ", " + ah + "); "
+            else:
+                s = s + "_tr_gpu_kernel_set_arg_" + kind + "(" + kv + ", " + pi.to_str() + ", (" + aexpr + ")); "
+            i = i + 1
+        # Launch over grid (blocks) x block (threads/block). Dim3 is a heap class (->).
+        s = s + "_tr_gpu_launch(" + kv + ", " + gv + "->x, " + gv + "->y, " + gv + "->z, "
+        s = s + bv + "->x, " + bv + "->y, " + bv + "->z); })"
+        return s
+
     pub def gen_call(self, callee: Pointer[HirExpr], args: Vec[Pointer[HirExpr]], call_ty: AstType) -> str:
+        # kernel_launch("name", grid, block, args...): rewrite into a cached kernel
+        # load + per-arg bind (typed by the @kernel's signature) + launch.
+        match callee.read():
+            case HirExpr.EIdent(_kl_n, _, _):
+                if _kl_n == "kernel_launch": return self.gen_kernel_launch(args)
+            case _: pass
+
         mut callee_s = self.gen_expr(callee)
-        
+
         # Check if callee is a generic built-in call target like alloc[T] or dealloc[T]
         mut base_callee = callee_s
         mut has_generic = false
@@ -3210,6 +3352,15 @@ pub class CGenerator:
                                 case _: pass
                     case _: pass
             case _: pass
+
+        # Original (pre-mangle) callee name, for `self.functions` lookups below --
+        # that map is keyed by the HIR function name, never by the C-keyword-escaped
+        # `_tr_fn_`-prefixed form. Looking functions up by the mangled name (as this
+        # code used to) makes a call to a keyword-colliding function (e.g. `register`)
+        # silently miss both the interface-upcast wrapping below AND the `_bc_is_user_fn`
+        # check further down, misrouting it into the raw-extern-call path meant for
+        # runtime `_tr_*` helpers (since the mangled name also starts with `_tr_`).
+        mut orig_callee_name = base_callee
 
         # Mangle C reserved keywords used as call targets
         if _is_c_keyword(base_callee): base_callee = "_tr_fn_" + base_callee
@@ -3691,8 +3842,8 @@ pub class CGenerator:
             case _: pass
 
         # If callee is a known function, auto-wrap class args that target interface params
-        if self.functions.contains(callee_s):
-            mut fn_def = self.functions.get(callee_s)
+        if self.functions.contains(orig_callee_name):
+            mut fn_def = self.functions.get(orig_callee_name)
             mut self_skip = 0
             if fn_def.params as usize != 0 as usize and fn_def.params.len > 0 and fn_def.params.get(0).name == "self":
                 self_skip = 1
@@ -3758,18 +3909,29 @@ pub class CGenerator:
             case _: pass
         if (callee_ty_n == "lambda" or callee_ty_n == "void*" or callee_ty_n == "def") and not _callee_direct_fn:
             mut ret_cty = self.type_to_c(call_ty)
-            if ret_cty == "void" or ret_cty == "void*": ret_cty = "long long"
+            # `call_ty` (this call EXPRESSION's inferred type) isn't always narrowed
+            # to the callee's declared return type for an indirect call through an
+            # erased def(...)->R/lambda value -- it can come back as the callee's
+            # OWN type name (formerly "void*", now "TrFnVal" since that's what
+            # type_to_c emits for def/lambda). Both cases mean "the real scalar
+            # return type is unknown here"; "long long" is wide enough to carry it
+            # back correctly for any scalar/pointer return (existing limitation,
+            # unchanged by the TrFnVal switch: this still can't correctly call a
+            # def(...)->R value whose OWN return type is itself def(...)->R or
+            # another struct-by-value type like str/Tuple/Option/Result).
+            if ret_cty == "void" or ret_cty == "void*" or ret_cty == "TrFnVal": ret_cty = "long long"
             mut arg_types = ""
             mut ai2 = 0
             while ai2 < args.len:
                 if ai2 > 0: arg_types = arg_types + ", "
                 arg_types = arg_types + self.type_to_c(hir_expr_type(args.get(ai2)))
                 ai2 = ai2 + 1
-            # A def-typed value is either a CLOSURE (a tagged heap env whose first
-            # word is the fn pointer, called with the env as the first arg) or a
-            # bare NAMED-function pointer (untagged, called directly). Branch on
-            # the tag. `gen_args` is emitted once and reused in both arms; only the
-            # taken arm runs at runtime.
+            # A def-typed value is a TrFnVal {fn, env} struct: a CLOSURE has a
+            # non-NULL env (call `fn` with the env as the hidden first arg); a
+            # bare NAMED-function reference has env==NULL (call `fn` directly).
+            # No pointer-bit tagging (that scheme broke on ARM/Thumb, where bit 0
+            # of every function pointer is already fixed to 1 by the ABI). `gen_args`
+            # is emitted once and reused in both arms; only the taken arm runs.
             mut _cargs = self.gen_args(args)
             mut env_sig = "void*"
             if arg_types != "": env_sig = "void*, " + arg_types
@@ -3778,7 +3940,7 @@ pub class CGenerator:
             mut env_args = "__ce"
             if args.len > 0: env_args = "__ce, " + _cargs
             mut dir_args = _cargs
-            return "({ void* __cl = (void*)(" + callee_s + "); void* __ce = (void*)((uintptr_t)__cl & ~(uintptr_t)1); ((uintptr_t)__cl & 1) ? ((" + ret_cty + "(*)(" + env_sig + "))(*(void**)__ce))(" + env_args + ") : ((" + ret_cty + "(*)(" + dir_sig + "))__cl)(" + dir_args + "); })"
+            return "({ TrFnVal __cl = (" + callee_s + "); void* __ce = __cl.env; __ce ? ((" + ret_cty + "(*)(" + env_sig + "))__cl.fn)(" + env_args + ") : ((" + ret_cty + "(*)(" + dir_sig + "))__cl.fn)(" + dir_args + "); })"
 
         # __call__ dispatch: callee is a variable holding a callable object
         mut callee_cls_ty: str = hir_expr_type(callee).name
@@ -3815,7 +3977,7 @@ pub class CGenerator:
         # self.functions (with is_extern=true) since prog.functions includes
         # extern decls -- those must still go through the char*-unwrapping
         # path below, so check is_extern rather than mere presence.
-        mut _bc_is_user_fn = self.functions.contains(base_callee) and not self.functions.get(base_callee).is_extern
+        mut _bc_is_user_fn = self.functions.contains(orig_callee_name) and not self.functions.get(orig_callee_name).is_extern
         if _starts_with_tr(base_callee) and not _bc_is_user_fn and base_callee != "_tr_str_len":
             mut _ext_call = callee_s + "(" + self.gen_args_extern(args) + ")"
             if _is_str_type(call_ty.name):
@@ -3831,7 +3993,7 @@ pub class CGenerator:
         # (parent fields are embedded FIRST, so (Parent*)child is layout-correct; C errors
         # on the implicit pointer conversion without the cast).
         if _bc_is_user_fn:
-            mut _uc_fdef = self.functions.get(base_callee)
+            mut _uc_fdef = self.functions.get(orig_callee_name)
             mut _uc_casts = Vec[str].init(args.len)
             mut _uc_any = false
             mut _uci = 0
@@ -4155,6 +4317,51 @@ pub class CGenerator:
             cur = nxt
             hops = hops + 1
         return cur
+
+    # Generate a method call's (non-self) argument list, auto-wrapping any arg
+    # into `ActualClass_as_ExpectedInterface(x)` where the method's declared param
+    # is interface-typed and the arg's static type is a concrete class -- the same
+    # upcast a free-function call already applies (see gen_call). `params` is the
+    # target method's OWN HirFunction.params, which (unlike a free function's) may
+    # still carry a leading `self` entry -- skip it so index 0 lines up with
+    # `args.get(0)`. Empty/not-found (e.g. the base-class-fallback caller, which
+    # doesn't track this) just falls back to a plain `gen_args`.
+    pub def gen_iface_wrapped_args(self, params: Vec[HirParam], args: Vec[Pointer[HirExpr]]) -> str:
+        if params as usize == 0 as usize or params.len == 0: return self.gen_args(args)
+        mut self_skip = 0
+        if params.get(0).name == "self": self_skip = 1
+        mut any_wrapped = false
+        mut ai = 0
+        while ai < args.len:
+            mut pi = ai + self_skip
+            if pi < params.len and self.interfaces.contains(params.get(pi).ty.name):
+                mut actual_ty_n = hir_expr_type(args.get(ai)).name
+                if self.classes.contains(actual_ty_n): any_wrapped = true
+            ai = ai + 1
+        if not any_wrapped: return self.gen_args(args)
+        mut wrapped_args = ""
+        ai = 0
+        while ai < args.len:
+            if ai > 0: wrapped_args = wrapped_args + ", "
+            mut arg_s = self.gen_expr(args.get(ai))
+            mut pi2 = ai + self_skip
+            if pi2 < params.len:
+                mut _p_iface_ty = params.get(pi2).ty
+                mut expected_iface = _p_iface_ty.name
+                if self.interfaces.contains(expected_iface):
+                    mut _ep_iface = self.interfaces.get(expected_iface)
+                    if _ep_iface.generics.len > 0 and _p_iface_ty.args.len > 0:
+                        expected_iface = expected_iface + "_" + self.type_args_suffix(_p_iface_ty.args)
+                    mut actual_ty_e = hir_expr_type(args.get(ai))
+                    mut actual_ty_n = actual_ty_e.name
+                    if self.classes.contains(actual_ty_n):
+                        mut _acls = self.classes.get(actual_ty_n)
+                        if _acls.generics.len > 0 and actual_ty_e.args.len > 0:
+                            actual_ty_n = actual_ty_n + "_" + self.type_args_suffix(actual_ty_e.args)
+                        arg_s = actual_ty_n + "_as_" + expected_iface + "(" + arg_s + ")"
+            wrapped_args = wrapped_args + arg_s
+            ai = ai + 1
+        return wrapped_args
 
     pub def gen_method_call(self, obj: Pointer[HirExpr], method: str, args: Vec[Pointer[HirExpr]], call_ty: AstType) -> str:
         mut obj_s = self.gen_expr(obj)
@@ -5015,11 +5222,13 @@ pub class CGenerator:
             # Check if method exists in own class; if not, fall back to base class dispatch
             mut ucls_inh: HirClass = self.classes.get(class_name)
             mut has_own_method: bool = false
+            mut _mc_params: Vec[HirParam] = Vec[HirParam].init(0)
             mut mci: int = 0
             while mci < ucls_inh.methods.len:
                 mut mdef: HirFunction = ucls_inh.methods.get(mci)
                 if mdef.name == method:
                     has_own_method = true
+                    _mc_params = mdef.params
                 mci = mci + 1
             if not has_own_method and ucls_inh.base_classes.len > 0:
                 mut base_cls_n: str = ucls_inh.base_classes.get(0)
@@ -5037,7 +5246,13 @@ pub class CGenerator:
             mut self_arg = obj_s
             if self.vt_call_needs_ptr_self(class_name, method): self_arg = "&(" + obj_s + ")"
             mut s = dispatch_name + "(" + self_arg
-            if args.len > 0: s = s + ", " + self.gen_args(args)
+            # Auto-wrap a concrete-class arg into `Class_as_Interface(x)` when the
+            # method's OWN param is interface-typed -- a free-function call already
+            # does this (gen_call); a method call had no equivalent, so passing a
+            # concrete object where the callee expects an interface was a hard C
+            # compile error ("passing 'X*' to parameter of incompatible type
+            # 'Y_obj'") instead of the implicit upcast every other call form gets.
+            if args.len > 0: s = s + ", " + self.gen_iface_wrapped_args(_mc_params, args)
             return s + ")"
 
         if self.enums.contains(class_name):
@@ -6078,8 +6293,8 @@ pub class CGenerator:
             addrs = addrs + ", " + addr
             ki = ki + 1
         # Stash the pieces so a `let`-bound closure can build a STACK env (no heap,
-        # no leak — see the SLet EClosure path). A tagged low bit marks a closure
-        # env vs a bare named-function pointer at the call site.
+        # no leak — see the SLet EClosure path). The env's address becomes a
+        # TrFnVal's `.env` field at the call site (non-NULL = closure).
         self.last_clo_cname = cname
         self.last_clo_estruct = estruct
         self.last_clo_ptypes = ptypes
@@ -6101,7 +6316,7 @@ pub class CGenerator:
                 addr2 = "__env->p_" + sn2
             crt = crt + " __c->p_" + sn2 + " = " + addr2 + ";"
             kj = kj + 1
-        crt = crt + " (void*)((uintptr_t)__c | (uintptr_t)1); })"
+        crt = crt + " ((TrFnVal){(void*)&" + cname + ", (void*)__c}); })"
         return crt
 
     # -- Spawn wrapper pre-scan ------------------------------------------------
@@ -6579,6 +6794,10 @@ pub class CGenerator:
                             # a returned local transfers (no retain — excluded from drops).
                             self.w(pad + "return " + self.obj_retain_wrap(e, self.str_retain_wrap(e, ret_s2, true), true) + ";\n")
             case HirStmt.SLet(n, _, _, is_const, is_shared, ty, v):
+                # Record a generic-class local's mono C prefix up front (before any
+                # branch), so an SAutoDrop free/drop names the concrete instance. The
+                # helper self-guards (only records when it finds concrete class args).
+                self.capture_local_mono(n, ty, v)
                 mut c_ty = self.type_to_c(ty)
                 # If SLet.ty is Vec/List without generic args, recover c_ty from the init expression
                 if c_ty == "List_ptr*" and v as usize != 0 as usize:
@@ -6676,10 +6895,10 @@ pub class CGenerator:
                         case HirExpr.EClosure(cl_params, cl_ret_ty, cl_body, _, cl_caps):
                             mut _cdrop = self.gen_closure(cl_params, cl_ret_ty, cl_body, cl_caps)
                             mut _cenv = "__clenv_" + self.last_clo_cname
-                            # block-scope prototype so &fn resolves; stack env; tag.
+                            # block-scope prototype so &fn resolves; stack env; TrFnVal.
                             self.w(pad + self.last_clo_ret + " " + self.last_clo_cname + "(void*" + self.last_clo_ptypes + ");\n")
                             self.w(pad + self.last_clo_estruct + " " + _cenv + " = " + self.last_clo_init + ";\n")
-                            self.w(pad + "void* " + _safe_c_varname(n) + " = (void*)((uintptr_t)&" + _cenv + " | (uintptr_t)1);\n")
+                            self.w(pad + "TrFnVal " + _safe_c_varname(n) + " = ((TrFnVal){(void*)&" + self.last_clo_cname + ", (void*)&" + _cenv + "});\n")
                             self.decl_vars.insert(n, true)
                             return
                         case _: pass
@@ -6881,6 +7100,7 @@ pub class CGenerator:
                                     self.w(pad + _sa_cty + " " + _safe_c_varname(n) + " = " + _sa_rhs + ";\n")
                                     if _sa_owns:
                                         self.class_local_names.insert(n, true)
+                                    self.capture_local_mono(n, hir_expr_type(v), v)
                             else:
                                 self.w(pad + "__auto_type " + _safe_c_varname(n) + " = " + _sa_rhs + ";\n")
                             self.decl_vars.insert(n, true)
@@ -7312,6 +7532,12 @@ pub class CGenerator:
                             self.w(pad + "Dict_free(" + _safe_c_varname(adn) + ");\n")
                 else:
                     mut _adn_safe = _safe_c_varname(adn)
+                    # For a monomorphized generic-class local (e.g. Buffer[float]) the drop
+                    # target is the concrete instance ("Buffer_f64"), not the generic
+                    # template ("Buffer" -> undefined Buffer__tr_fn_free). class_local_mono
+                    # holds the mono C prefix, recorded at the local's declaration.
+                    mut _adc_c = adc
+                    if self.class_local_mono.contains(adn): _adc_c = self.class_local_mono.get(adn)
                     if self.is_heap_class_tn(adc) and not self.has_method(adc, "free"):
                         # Refcounted plain class: release OUR reference. The struct is
                         # freed and its owned fields dropped (via _trdrop_T) only when
@@ -7319,7 +7545,7 @@ pub class CGenerator:
                         # class_local_names so only OWNING locals release (balances
                         # retain-on-bind/store/return); borrows never enter that set.
                         if self.class_local_names.contains(adn):
-                            self.w(pad + "_tr_obj_release(" + _adn_safe + ", " + self.obj_drop_fn(adc) + ");\n")
+                            self.w(pad + "_tr_obj_release(" + _adn_safe + ", " + self.obj_drop_fn(_adc_c) + ");\n")
                     elif self.has_method(adc, "free"):
                         # User-managed class (defines free()): capture each owned str
                         # field BEFORE free() (so free() can still read it), run free(),
@@ -7340,7 +7566,7 @@ pub class CGenerator:
                                     _ad_tmps.push(_ad_tmp)
                                 _ad_fi = _ad_fi + 1
                         if self.has_method(adc, "free"):
-                            self.w(pad + self.cls_method_c_call(adc, "free", adn, "") + ";\n")
+                            self.w(pad + self.cls_method_c_call(_adc_c, "free", adn, "") + ";\n")
                         mut _ad_ti = 0
                         while _ad_ti < _ad_tmps.len:
                             self.w(pad + "_tr_str_release(" + _ad_tmps.get(_ad_ti) + ");\n")

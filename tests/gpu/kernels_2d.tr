@@ -1,0 +1,14 @@
+# 2-D grid kernel: uses gpu_global_id(0) and gpu_global_id(1).
+from std.gpu import gpu_global_id
+
+@kernel
+def transpose(dst: Pointer[f32], src: Pointer[f32], w: i32, h: i32):
+    mut x = gpu_global_id(0)
+    mut y = gpu_global_id(1)
+    if x < w:
+        if y < h:
+            unsafe:
+                dst.offset(y * w + x).write(src.offset(x * h + y).read())
+
+def main():
+    print("2d")

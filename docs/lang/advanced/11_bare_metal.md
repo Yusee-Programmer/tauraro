@@ -152,11 +152,36 @@ See [`examples/freestanding/riscv_hello/`](../../../examples/freestanding/riscv_
   ARM/RISC-V directly:
   ```bash
   tauraroc firmware.tr --freestanding --emit c --emit-ld build/app.ld
-  zig cc -target thumb-freestanding-eabi -mcpu=cortex_m3 -ffreestanding -nostdlib \
+  zig cc -target thumb-freestanding-eabi -mcpu=cortex_m3 -ffreestanding \
+      -nostartfiles -fno-sanitize=undefined \
       -T build/app.ld -I build/include -o app.elf $(find build -name '*.c')
+  ```
+  Two flags matter here and are easy to get wrong (both fatal at link time, not
+  compile time):
+  - **`-nostartfiles`, not `-nostdlib`.** `-nostdlib` also drops zig's
+    `compiler_rt`, so every soft-float and 64-bit helper the target lacks in
+    hardware fails to link (`undefined symbol: __aeabi_dsub, __aeabi_dmul,
+    __aeabi_uldivmod, ...`). `-nostartfiles` still omits the hosted C startup
+    files while keeping `compiler_rt`. (The `arm-none-eabi-gcc` path below
+    solves the same problem with `-lgcc` instead — zig's `-nostdlib` just has
+    no built-in equivalent.)
+  - **`-fno-sanitize=undefined`.** zig enables UBSan by default, and nothing
+    freestanding provides its handlers (`undefined symbol:
+    __ubsan_handle_add_overflow, ..._type_mismatch_v1, ...`).
+
+  Simplest of all: skip the manual `zig cc` invocation entirely and let the
+  compiler drive it (same two flags, applied automatically) — pass `--target
+  embedded-arm` (or `embedded-riscv64`) alongside `--freestanding --emit-ld`
+  and a plain `-o app` turnkey-links the ELF:
+  ```bash
+  tauraroc firmware.tr --freestanding --target embedded-arm --emit-ld build/app.ld -o app
   ```
 - **A dedicated cross-gcc** (`arm-none-eabi-gcc`, `riscv64-unknown-elf-gcc`) as shown
   above — its bundled newlib is handy if you want the standard freestanding headers.
+
+> `ld.lld: warning: cannot find entry symbol _start; not setting start address`
+> is expected and harmless on Cortex-M — the `.isr_vector` table drives reset,
+> there's no `_start` to look for.
 
 Under `--freestanding` the runtime header (`tauraro_rt.h`) compiles **without any libc** —
 its capabilities are gated by orthogonal switches (`TAURARO_NO_LIBC` / `NO_THREADS` /
@@ -195,19 +220,59 @@ def led_read() -> u32:
 #   qemu-system-arm -M mps2-an385 -nographic -kernel app.elf
 from std.hal.mmio import write32
 
+# A correct bump allocator needs an 8-byte size header before each block, so
+# heap_realloc can always recover a pointer's true allocated size and COPY the
+# old bytes forward -- without it, every List/Dict/str append (which reallocs)
+# silently discards everything appended before the last grow. See
+# examples/freestanding/mps2_pure.tr for the fully-commented version and why
+# each piece (copy, grow-in-place, never-shrink-backwards, minimum size)
+# matters.
 mut _heap_next: usize = 0x20080000 as usize
+
+def _heap_round(n: usize) -> usize:
+    mut r = n
+    if r < (8 as usize): r = 8 as usize
+    return ((r + (7 as usize)) / (8 as usize)) * (8 as usize)
+
 @allocator
 def heap_alloc(n: usize) -> Pointer[u8]:
     unsafe:
-        mut p = _heap_next as Pointer[u8]
-        _heap_next = _heap_next + ((n + 7) / 8) * 8
+        mut sz = _heap_round(n)
+        mut hdr = _heap_next as Pointer[usize]
+        hdr.write(sz)
+        mut p = (_heap_next + (8 as usize)) as Pointer[u8]
+        _heap_next = _heap_next + (8 as usize) + sz
         return p
 @free
 def heap_free(p: Pointer[u8]): pass
 @realloc
-def heap_realloc(p: Pointer[u8], n: usize) -> Pointer[u8]: return heap_alloc(n)
+def heap_realloc(p: Pointer[u8], n: usize) -> Pointer[u8]:
+    unsafe:
+        mut old_hdr = ((p as usize) - (8 as usize)) as Pointer[usize]
+        mut old_sz = old_hdr.read()
+        mut sz = _heap_round(n)
+        if sz <= old_sz: return p
+        if (p as usize) + old_sz == _heap_next:
+            _heap_next = _heap_next + (sz - old_sz)
+            old_hdr.write(sz)
+            return p
+        mut newp = heap_alloc(n)
+        mut i: usize = 0 as usize
+        while i < old_sz:
+            newp.offset(i).write(p.offset(i).read())
+            i = i + (1 as usize)
+        return newp
 @calloc
-def heap_calloc(n: usize, sz: usize) -> Pointer[u8]: return heap_alloc(n * sz)
+def heap_calloc(n: usize, sz: usize) -> Pointer[u8]:
+    unsafe:
+        mut total = n * sz
+        mut p = heap_alloc(total)
+        mut rounded = _heap_round(total)
+        mut i: usize = 0 as usize
+        while i < rounded:
+            p.offset(i).write(0 as u8)
+            i = i + (1 as usize)
+        return p
 
 @output
 def uart_write(s: Pointer[char]):
@@ -237,7 +302,22 @@ For a **comprehensive multi-module** version — a GPIO driver, a SysTick timer,
 - **Use a pluggable allocator, not libc.** Under `--freestanding` the runtime `#error`s if `TAURARO_ALLOC/…` are undefined — supply them with `@allocator`/`@free`/`@realloc`/`@calloc`.
 - **Float formatting is basic** in the freestanding `snprintf`-lite (integers/hex/strings are exact). Fine for logging; not IEEE-precise. Hosted uses the real libc.
 - **`@interrupt`/`@naked` don't compile on hosted x86** — they are only valid on the cross target.
-- **Link with `-lgcc`** on Cortex-M for the 64-bit arithmetic helpers the CPU lacks.
+- **Link with `-lgcc`** on Cortex-M for the 64-bit arithmetic helpers the CPU lacks (the turnkey `--target embedded-arm --emit-ld ... -o app` link does this for you automatically).
+- **Always drive real MMIO through `std.hal.mmio`, never a hand-rolled raw pointer write.** A plain `(addr as Pointer[u32]).write(v)` is NOT `volatile` — at the optimization levels the turnkey link uses by default, the compiler is free to treat repeated writes to the same address (e.g. polling a UART TX register in a loop) as dead stores and keep only the LAST one, which looks exactly like "only the last byte of everything I print shows up." `std.hal.mmio.write32`/`read32`/etc. are the volatile-qualified, compiler-never-elides-or-reorders versions — use them for every device register, not just as an example.
+
+## Function values on bare metal
+
+`def(...)->R` and `lambda` values (a bare top-level function reference, a
+closure, storing either in a class field or `Dict`/`List`) work identically
+on `--freestanding` and hosted — calling a function value, reassigning it,
+passing it as an argument, and closures (both a stack-bound local and one
+passed inline as an argument) are all verified running on real Cortex-M3/Thumb
+under qemu. Internally this is a plain 2-word `{fn, env}` struct (`TrFnVal`),
+not a tagged pointer — a prior tagged-pointer scheme broke specifically on
+ARM/Thumb, where bit 0 of every function pointer is already fixed to 1 by the
+ABI (the "Thumb bit"), so the discriminant test used for closure-vs-plain-fn
+was never reliable there. If you're on an older Tauraro build and a stored
+function value hangs or faults when called under `--freestanding`, update.
 
 ---
 

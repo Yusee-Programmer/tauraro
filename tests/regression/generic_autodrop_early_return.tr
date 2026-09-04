@@ -1,0 +1,36 @@
+# Regression: ARC auto-drop of a monomorphized generic-class owned local at an EARLY
+# return must call the CONCRETE instance's free (Holder_i64__tr_fn_free), not the
+# generic template name (Holder__tr_fn_free — an undefined C reference).
+#
+# Before the fix, `maybe(true)` below emitted `Holder__tr_fn_free(...)` at the early
+# return and the C compile failed with "implicit declaration of function". See
+# docs/dev/09_gpu_backend.md and the std.gpu work that surfaced it.
+
+pub class Holder[T]:
+    pub val: T
+
+extend Holder[T]:
+    pub def make(v: T) -> Holder[T]:
+        mut h = Holder[T]()
+        h.val = v
+        return h
+
+    pub def get(self) -> T:
+        return self.val
+
+    # A user-managed class (defines free()) — this is the branch that mis-named
+    # the drop function for the generic base instead of the mono instance.
+    pub def free(self):
+        pass
+
+def maybe(flag: bool) -> int:
+    mut h = Holder[int].make(5)
+    if flag:
+        return 0          # early return: `h` is a live owned generic-class local
+    mut r = h.get()
+    h.free()
+    return r
+
+def main():
+    print(maybe(true))    # 0
+    print(maybe(false))   # 5

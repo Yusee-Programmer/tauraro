@@ -1441,11 +1441,6 @@ __attribute__((hot)) Token keyword_to_token(TrStr s) {
         return Token_make_KwTaskGroup();
     }
     /* pass */
-    if ((strcmp(_tr_strz(s), _tr_strz(_tr_str_lit("gpu"))) == 0)) {
-        /* pass */
-        return Token_make_KwGpu();
-    }
-    /* pass */
     if ((strcmp(_tr_strz(s), _tr_strz(_tr_str_lit("implements"))) == 0)) {
         /* pass */
         return Token_make_KwImplements();

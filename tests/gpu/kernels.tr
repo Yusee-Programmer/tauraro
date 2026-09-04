@@ -1,0 +1,24 @@
+# GPU kernels written in Tauraro. Each is valid host code (runs serially as the CPU
+# reference) AND compiles to GPU IR via `tauraroc tests/gpu/kernels.tr --emit gpu`.
+
+from std.gpu import gpu_global_id
+
+@kernel
+def saxpy(y: Pointer[f32], x: Pointer[f32], a: f32, n: i32):
+    mut i = gpu_global_id(0)
+    if i < n:
+        unsafe:
+            mut xv = x.offset(i).read()
+            mut yv = y.offset(i).read()
+            y.offset(i).write(a * xv + yv)
+
+@kernel
+def vadd(out: Pointer[i32], a: Pointer[i32], b: Pointer[i32], n: i32):
+    mut i = gpu_global_id(0)
+    if i < n:
+        unsafe:
+            mut s = a.offset(i).read() + b.offset(i).read()
+            out.offset(i).write(s)
+
+def main():
+    print("kernels defined")

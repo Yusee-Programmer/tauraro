@@ -71,6 +71,9 @@ typedef struct Jump Jump;
 typedef struct EncodedFunc EncodedFunc;
 typedef struct TextReloc TextReloc;
 typedef struct NativeGenerator NativeGenerator;
+typedef struct GVal GVal;
+typedef struct GpuEmitter GpuEmitter;
+typedef struct GpuGenerator GpuGenerator;
 typedef struct MacroCtx MacroCtx;
 typedef struct FnMacroExpander FnMacroExpander;
 typedef struct Token Token;
@@ -159,6 +162,9 @@ static void _trdrop_Jump(void* vp);
 static void _trdrop_EncodedFunc(void* vp);
 static void _trdrop_TextReloc(void* vp);
 static void _trdrop_NativeGenerator(void* vp);
+static void _trdrop_GVal(void* vp);
+static void _trdrop_GpuEmitter(void* vp);
+static void _trdrop_GpuGenerator(void* vp);
 static void _trdrop_MacroCtx(void* vp);
 static void _trdrop_FnMacroExpander(void* vp);
 
@@ -2857,6 +2863,7 @@ typedef struct CGenerator {
     TrMap* decl_vars;
     TrMap* str_local_names;
     TrMap* class_local_names;
+    TrMap* class_local_mono;
     TrMap* fn_owned;
     TrMap* raw_aliased;
     TrMap* coll_field_owned;
@@ -2928,6 +2935,7 @@ static void _trdrop_CGenerator(void* vp) {
     Dict_free(self->decl_vars);
     Dict_free(self->str_local_names);
     Dict_free(self->class_local_names);
+    Dict_free_strval(self->class_local_mono);
     Dict_free(self->fn_owned);
     Dict_free(self->raw_aliased);
     Dict_free(self->coll_field_owned);
@@ -3291,6 +3299,61 @@ typedef struct NativeGenerator {
 static void _trdrop_NativeGenerator(void* vp) {
     NativeGenerator* self = (NativeGenerator*)vp; (void)self;
     _tr_str_release(self->target);
+    _tr_str_release(self->fail_note);
+}
+#endif
+
+#ifndef GVal_STRUCT_DEFINED
+#define GVal_STRUCT_DEFINED
+typedef struct GVal {
+    size_t __rc;
+    TrStr ty;
+    TrStr val;
+} GVal;
+static void _trdrop_GVal(void* vp) {
+    GVal* self = (GVal*)vp; (void)self;
+    _tr_str_release(self->ty);
+    _tr_str_release(self->val);
+}
+#endif
+
+#ifndef GpuEmitter_STRUCT_DEFINED
+#define GpuEmitter_STRUCT_DEFINED
+typedef struct GpuEmitter {
+    size_t __rc;
+    StringBuilder* sb;
+    TrStr target;
+    long long tmp;
+    long long lbl;
+    bool ok;
+    TrStr fail_note;
+    List_TrStr* var_names;
+    List_TrStr* var_ll;
+    List_TrStr* var_elem;
+    TrStr ret_llty;
+    List_ptr* dev_fns;
+} GpuEmitter;
+static void _trdrop_GpuEmitter(void* vp) {
+    GpuEmitter* self = (GpuEmitter*)vp; (void)self;
+    _tr_str_release(self->target);
+    _tr_str_release(self->fail_note);
+    List_TrStr_free(self->var_names);
+    List_TrStr_free(self->var_ll);
+    List_TrStr_free(self->var_elem);
+    _tr_str_release(self->ret_llty);
+}
+#endif
+
+#ifndef GpuGenerator_STRUCT_DEFINED
+#define GpuGenerator_STRUCT_DEFINED
+typedef struct GpuGenerator {
+    size_t __rc;
+    bool ok;
+    TrStr fail_note;
+    long long n_kernels;
+} GpuGenerator;
+static void _trdrop_GpuGenerator(void* vp) {
+    GpuGenerator* self = (GpuGenerator*)vp; (void)self;
     _tr_str_release(self->fail_note);
 }
 #endif
@@ -3814,6 +3877,7 @@ __attribute__((hot)) HirExpr* Sema_lower_expr(Sema* self, Expr* e_ptr);
 __attribute__((hot)) TrStr Sema_is_reserved_error(Sema* self, TrStr name);
 __attribute__((hot)) TrStr Sema_is_reserved_keyword(Sema* self, TrStr name);
 __attribute__((hot)) bool Sema_block_returns(Sema* self, Block* b);
+__attribute__((hot)) void Sema_pattern_covers(Sema* self, Pattern p, List_TrStr* tnames, List_TrStr* vnames);
 __attribute__((hot)) bool Sema_is_primitive(Sema* self, AstType* ty);
 __attribute__((hot)) bool Sema__is_known_type_name(Sema* self, TrStr name);
 __attribute__((hot)) bool Sema_is_primitive_name(Sema* self, TrStr name);
@@ -4302,6 +4366,50 @@ __attribute__((hot)) bool write_elf_object(TrStr out_path, List_ptr* funcs, List
 __attribute__((hot)) bool emit_lir_object(LModule* m, TrStr out_path);
 __attribute__((malloc,returns_nonnull,hot)) NativeGenerator* NativeGenerator_init();
 __attribute__((hot)) bool NativeGenerator_emit_object(NativeGenerator* self, HirProgram* prog, TrStr out_path);
+__attribute__((hot)) bool fn_is_kernel(HirFunction* f);
+__attribute__((hot)) bool fn_is_device(HirFunction* f);
+__attribute__((hot)) bool _gpu_is_float(TrStr t);
+__attribute__((hot)) long long _gpu_iwidth(TrStr t);
+__attribute__((hot)) TrStr _gpu_scalar_ty(TrStr n);
+__attribute__((hot)) GVal* GVal_make(TrStr ty, TrStr val);
+__attribute__((malloc,returns_nonnull,hot)) GpuEmitter* GpuEmitter_init(TrStr target);
+__attribute__((hot)) TrStr GpuEmitter__gpu_ret_ty(GpuEmitter* self, AstType* t);
+__attribute__((hot)) void GpuEmitter_w(GpuEmitter* self, TrStr s);
+__attribute__((hot)) TrStr GpuEmitter_fresh(GpuEmitter* self);
+__attribute__((hot)) TrStr GpuEmitter_newlbl(GpuEmitter* self);
+__attribute__((hot)) void GpuEmitter_fail(GpuEmitter* self, TrStr why);
+__attribute__((hot)) void GpuEmitter_add_var(GpuEmitter* self, TrStr name, AstType* ty);
+__attribute__((hot)) TrStr GpuEmitter_var_slot_ty(GpuEmitter* self, TrStr name);
+__attribute__((hot)) TrStr GpuEmitter_var_elem_ty(GpuEmitter* self, TrStr name);
+__attribute__((hot)) void GpuEmitter_scan_vars_block(GpuEmitter* self, HirBlock* b);
+__attribute__((hot)) void GpuEmitter_scan_vars_stmt(GpuEmitter* self, HirStmt s);
+__attribute__((hot)) TrStr GpuEmitter_emit_kernel(GpuEmitter* self, HirFunction* f);
+__attribute__((hot)) TrStr GpuEmitter_emit_device_fn(GpuEmitter* self, HirFunction* f);
+__attribute__((hot)) void GpuEmitter_emit_block(GpuEmitter* self, HirBlock* b);
+__attribute__((hot)) void GpuEmitter_emit_stmt(GpuEmitter* self, HirStmt s);
+__attribute__((hot)) void GpuEmitter_emit_assign(GpuEmitter* self, HirExpr target, HirExpr* val);
+__attribute__((hot)) void GpuEmitter_emit_stmt_expr(GpuEmitter* self, HirExpr e);
+__attribute__((hot)) void GpuEmitter_emit_store(GpuEmitter* self, HirExpr chain, HirExpr* valp);
+__attribute__((hot)) GVal* GpuEmitter_emit_ptr(GpuEmitter* self, HirExpr e);
+__attribute__((hot)) GVal* GpuEmitter_emit_expr(GpuEmitter* self, HirExpr* ep);
+__attribute__((hot)) GVal* GpuEmitter_emit_expr_hir(GpuEmitter* self, HirExpr e);
+__attribute__((hot)) GVal* GpuEmitter_emit_load(GpuEmitter* self, HirExpr chain);
+__attribute__((hot)) TrStr GpuEmitter_callee_name(GpuEmitter* self, HirExpr c);
+__attribute__((hot)) GVal* GpuEmitter_emit_call(GpuEmitter* self, HirExpr callee, List_ptr* args);
+__attribute__((hot)) GVal* GpuEmitter_emit_gpu_builtin(GpuEmitter* self, TrStr nm, long long dim);
+__attribute__((hot)) GVal* GpuEmitter_i32_to_i64(GpuEmitter* self, TrStr v);
+__attribute__((hot)) GVal* GpuEmitter_emit_binop(GpuEmitter* self, TrStr op, HirExpr* lp, HirExpr* rp);
+__attribute__((hot)) TrStr GpuEmitter_cmp_pred(GpuEmitter* self, TrStr op, bool isf);
+__attribute__((hot)) TrStr GpuEmitter_common_ty(GpuEmitter* self, TrStr a, TrStr b);
+__attribute__((hot)) TrStr GpuEmitter_coerce(GpuEmitter* self, GVal* v, TrStr target);
+__attribute__((hot)) TrStr GpuEmitter_coerce_bool(GpuEmitter* self, GVal* v);
+__attribute__((hot)) long long GpuEmitter_literal_int(GpuEmitter* self, HirExpr e);
+__attribute__((hot)) TrStr GpuEmitter_float_lit(GpuEmitter* self, double v);
+__attribute__((hot)) long long _gpu_f64_bits(double v);
+__attribute__((hot)) long long _hexdig(long long n);
+__attribute__((hot)) TrStr _hex16(long long v);
+__attribute__((malloc,returns_nonnull,hot)) GpuGenerator* GpuGenerator_init();
+__attribute__((hot)) TrStr GpuGenerator_emit(GpuGenerator* self, HirProgram* prog, TrStr target);
 __attribute__((hot)) MacroVal* box_mv(MacroVal v);
 __attribute__((hot)) MacroVal* mrec(List_TrStr* keys, List_ptr* vals);
 __attribute__((hot)) MacroVal* mrec_get(MacroVal* recptr, TrStr key);
@@ -4334,6 +4442,7 @@ __attribute__((hot)) void FnMacroExpander_visit_block(FnMacroExpander* self, Blo
 __attribute__((hot)) void FnMacroExpander_visit_stmt(FnMacroExpander* self, Stmt* sptr);
 __attribute__((hot)) void FnMacroExpander_expand_decl(FnMacroExpander* self, Decl* dptr);
 __attribute__((hot)) long long expand_macros(Program* prog);
+__attribute__((hot)) TrStr gpu_blob_c(TrStr bin_path);
 __attribute__((hot)) void print_version();
 __attribute__((hot)) void print_usage();
 __attribute__((hot)) bool str_ends_with_dot_tr(TrStr path);
@@ -4431,6 +4540,8 @@ __attribute__((hot)) TrStr CGenerator_list_sfx(CGenerator* self, TrStr elem_sfx)
 __attribute__((hot)) TrStr CGenerator_type_args_suffix(CGenerator* self, List_ptr* args);
 __attribute__((hot)) TrStr CGenerator_synth_class_suffix(CGenerator* self, HirClass* ucls);
 __attribute__((hot)) TrStr CGenerator_ensure_array_type(CGenerator* self, AstType* ty);
+__attribute__((hot)) TrStr CGenerator_mono_cprefix(CGenerator* self, AstType* t);
+__attribute__((hot)) void CGenerator_capture_local_mono(CGenerator* self, TrStr name, AstType* ty, HirExpr* v);
 __attribute__((hot)) void CGenerator_ensure_mono(CGenerator* self, HirClass* cls, List_ptr* type_args);
 __attribute__((hot)) TrStr CGenerator_infer_generic_targ(CGenerator* self, TrStr fname, List_ptr* args);
 __attribute__((hot)) void CGenerator_ensure_mono_func(CGenerator* self, TrStr fname, TrStr targ);
@@ -4505,6 +4616,8 @@ __attribute__((hot)) TrStr CGenerator_gen_unary(CGenerator* self, TrStr op, HirE
 __attribute__((hot)) TrStr CGenerator_gen_prop_access(CGenerator* self, HirExpr* o, TrStr p);
 __attribute__((hot)) TrStr CGenerator_gen_index(CGenerator* self, HirExpr* o, HirExpr* idx);
 __attribute__((hot)) bool CGenerator__call_arg_needs_shared_unwrap(CGenerator* self, HirExpr* arg, AstType* param_ty);
+__attribute__((hot)) TrStr CGenerator__gpu_arg_kind(CGenerator* self, AstType* pty);
+__attribute__((hot)) TrStr CGenerator_gen_kernel_launch(CGenerator* self, List_ptr* args);
 __attribute__((hot)) TrStr CGenerator_gen_call(CGenerator* self, HirExpr* callee, List_ptr* args, AstType* call_ty);
 __attribute__((hot)) TrStr CGenerator_gen_print_call(CGenerator* self, List_ptr* args);
 __attribute__((hot)) TrStr CGenerator_gen_to_cstr(CGenerator* self, HirExpr* arg);
@@ -4522,6 +4635,7 @@ __attribute__((hot)) bool CGenerator__is_subclass_of(CGenerator* self, TrStr chi
 __attribute__((hot)) TrStr CGenerator_gen_args_casts(CGenerator* self, List_ptr* args, List_TrStr* casts);
 __attribute__((hot)) TrStr CGenerator_gen_args_strify(CGenerator* self, List_ptr* args, TrStr elem_sfx);
 __attribute__((hot)) TrStr CGenerator__resolve_alias_tr(CGenerator* self, TrStr name);
+__attribute__((hot)) TrStr CGenerator_gen_iface_wrapped_args(CGenerator* self, List_ptr* params, List_ptr* args);
 __attribute__((hot)) TrStr CGenerator_gen_method_call(CGenerator* self, HirExpr* obj, TrStr method, List_ptr* args, AstType* call_ty);
 __attribute__((hot)) TrStr CGenerator_gen_fstring(CGenerator* self, List_ptr* parts);
 __attribute__((hot)) TrStr CGenerator_gen_tuple(CGenerator* self, List_ptr* items);
@@ -6014,6 +6128,60 @@ __attribute__((hot)) codegen_native_NativeGenerator*** core_alloc_resize_codegen
 __attribute__((hot)) void core_alloc_dealloc_codegen_native_NativeGenerator_ptr(codegen_native_NativeGenerator*** ptr);
 __attribute__((hot)) core_map_MapNode_str_codegen_native_NativeGenerator** core_alloc_alloc_core_map_MapNode_str_codegen_native_NativeGenerator(long long count);
 __attribute__((hot)) void core_alloc_dealloc_core_map_MapNode_str_codegen_native_NativeGenerator(core_map_MapNode_str_codegen_native_NativeGenerator** ptr);
+
+typedef GVal codegen_gpu_emit_GVal;
+struct core_vec_Vec_codegen_gpu_emit_GVal { codegen_gpu_emit_GVal** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_codegen_gpu_emit_GVal core_vec_Vec_codegen_gpu_emit_GVal;
+struct core_vec_Vec_codegen_gpu_emit_GVal_ptr { codegen_gpu_emit_GVal*** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_codegen_gpu_emit_GVal_ptr core_vec_Vec_codegen_gpu_emit_GVal_ptr;
+struct core_map_MapNode_str_codegen_gpu_emit_GVal { char* key; codegen_gpu_emit_GVal* value; struct core_map_MapNode_str_codegen_gpu_emit_GVal* next; };
+typedef struct core_map_MapNode_str_codegen_gpu_emit_GVal core_map_MapNode_str_codegen_gpu_emit_GVal;
+struct core_map_Map_str_codegen_gpu_emit_GVal { core_map_MapNode_str_codegen_gpu_emit_GVal** buckets; long long capacity; long long len; };
+typedef struct core_map_Map_str_codegen_gpu_emit_GVal core_map_Map_str_codegen_gpu_emit_GVal;
+__attribute__((hot)) codegen_gpu_emit_GVal** core_alloc_alloc_codegen_gpu_emit_GVal(long long count);
+__attribute__((hot)) codegen_gpu_emit_GVal** core_alloc_resize_codegen_gpu_emit_GVal(codegen_gpu_emit_GVal** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_codegen_gpu_emit_GVal(codegen_gpu_emit_GVal** ptr);
+__attribute__((hot)) codegen_gpu_emit_GVal*** core_alloc_alloc_codegen_gpu_emit_GVal_ptr(long long count);
+__attribute__((hot)) codegen_gpu_emit_GVal*** core_alloc_resize_codegen_gpu_emit_GVal_ptr(codegen_gpu_emit_GVal*** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_codegen_gpu_emit_GVal_ptr(codegen_gpu_emit_GVal*** ptr);
+__attribute__((hot)) core_map_MapNode_str_codegen_gpu_emit_GVal** core_alloc_alloc_core_map_MapNode_str_codegen_gpu_emit_GVal(long long count);
+__attribute__((hot)) void core_alloc_dealloc_core_map_MapNode_str_codegen_gpu_emit_GVal(core_map_MapNode_str_codegen_gpu_emit_GVal** ptr);
+
+typedef GpuEmitter codegen_gpu_emit_GpuEmitter;
+struct core_vec_Vec_codegen_gpu_emit_GpuEmitter { codegen_gpu_emit_GpuEmitter** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_codegen_gpu_emit_GpuEmitter core_vec_Vec_codegen_gpu_emit_GpuEmitter;
+struct core_vec_Vec_codegen_gpu_emit_GpuEmitter_ptr { codegen_gpu_emit_GpuEmitter*** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_codegen_gpu_emit_GpuEmitter_ptr core_vec_Vec_codegen_gpu_emit_GpuEmitter_ptr;
+struct core_map_MapNode_str_codegen_gpu_emit_GpuEmitter { char* key; codegen_gpu_emit_GpuEmitter* value; struct core_map_MapNode_str_codegen_gpu_emit_GpuEmitter* next; };
+typedef struct core_map_MapNode_str_codegen_gpu_emit_GpuEmitter core_map_MapNode_str_codegen_gpu_emit_GpuEmitter;
+struct core_map_Map_str_codegen_gpu_emit_GpuEmitter { core_map_MapNode_str_codegen_gpu_emit_GpuEmitter** buckets; long long capacity; long long len; };
+typedef struct core_map_Map_str_codegen_gpu_emit_GpuEmitter core_map_Map_str_codegen_gpu_emit_GpuEmitter;
+__attribute__((hot)) codegen_gpu_emit_GpuEmitter** core_alloc_alloc_codegen_gpu_emit_GpuEmitter(long long count);
+__attribute__((hot)) codegen_gpu_emit_GpuEmitter** core_alloc_resize_codegen_gpu_emit_GpuEmitter(codegen_gpu_emit_GpuEmitter** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_codegen_gpu_emit_GpuEmitter(codegen_gpu_emit_GpuEmitter** ptr);
+__attribute__((hot)) codegen_gpu_emit_GpuEmitter*** core_alloc_alloc_codegen_gpu_emit_GpuEmitter_ptr(long long count);
+__attribute__((hot)) codegen_gpu_emit_GpuEmitter*** core_alloc_resize_codegen_gpu_emit_GpuEmitter_ptr(codegen_gpu_emit_GpuEmitter*** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_codegen_gpu_emit_GpuEmitter_ptr(codegen_gpu_emit_GpuEmitter*** ptr);
+__attribute__((hot)) core_map_MapNode_str_codegen_gpu_emit_GpuEmitter** core_alloc_alloc_core_map_MapNode_str_codegen_gpu_emit_GpuEmitter(long long count);
+__attribute__((hot)) void core_alloc_dealloc_core_map_MapNode_str_codegen_gpu_emit_GpuEmitter(core_map_MapNode_str_codegen_gpu_emit_GpuEmitter** ptr);
+
+typedef GpuGenerator codegen_gpu_GpuGenerator;
+struct core_vec_Vec_codegen_gpu_GpuGenerator { codegen_gpu_GpuGenerator** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_codegen_gpu_GpuGenerator core_vec_Vec_codegen_gpu_GpuGenerator;
+struct core_vec_Vec_codegen_gpu_GpuGenerator_ptr { codegen_gpu_GpuGenerator*** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_codegen_gpu_GpuGenerator_ptr core_vec_Vec_codegen_gpu_GpuGenerator_ptr;
+struct core_map_MapNode_str_codegen_gpu_GpuGenerator { char* key; codegen_gpu_GpuGenerator* value; struct core_map_MapNode_str_codegen_gpu_GpuGenerator* next; };
+typedef struct core_map_MapNode_str_codegen_gpu_GpuGenerator core_map_MapNode_str_codegen_gpu_GpuGenerator;
+struct core_map_Map_str_codegen_gpu_GpuGenerator { core_map_MapNode_str_codegen_gpu_GpuGenerator** buckets; long long capacity; long long len; };
+typedef struct core_map_Map_str_codegen_gpu_GpuGenerator core_map_Map_str_codegen_gpu_GpuGenerator;
+__attribute__((hot)) codegen_gpu_GpuGenerator** core_alloc_alloc_codegen_gpu_GpuGenerator(long long count);
+__attribute__((hot)) codegen_gpu_GpuGenerator** core_alloc_resize_codegen_gpu_GpuGenerator(codegen_gpu_GpuGenerator** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_codegen_gpu_GpuGenerator(codegen_gpu_GpuGenerator** ptr);
+__attribute__((hot)) codegen_gpu_GpuGenerator*** core_alloc_alloc_codegen_gpu_GpuGenerator_ptr(long long count);
+__attribute__((hot)) codegen_gpu_GpuGenerator*** core_alloc_resize_codegen_gpu_GpuGenerator_ptr(codegen_gpu_GpuGenerator*** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_codegen_gpu_GpuGenerator_ptr(codegen_gpu_GpuGenerator*** ptr);
+__attribute__((hot)) core_map_MapNode_str_codegen_gpu_GpuGenerator** core_alloc_alloc_core_map_MapNode_str_codegen_gpu_GpuGenerator(long long count);
+__attribute__((hot)) void core_alloc_dealloc_core_map_MapNode_str_codegen_gpu_GpuGenerator(core_map_MapNode_str_codegen_gpu_GpuGenerator** ptr);
 
 typedef MacroVal macros_MacroVal;
 struct core_vec_Vec_macros_MacroVal { macros_MacroVal* data; long long len; long long capacity; };

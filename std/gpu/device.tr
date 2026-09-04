@@ -1,0 +1,90 @@
+# std.gpu.device — GPU device discovery and control.
+#
+# The runtime picks the best available backend at first use:
+#   CUDA  ->  OpenCL  ->  CPU (graceful fallback).
+#
+# Backend detection is done by dynamically loading the vendor driver
+# (nvcuda.dll / libcuda.so, OpenCL.dll / libOpenCL.so) at RUNTIME — there is
+# no build- or link-time dependency on any GPU SDK. On a machine with no GPU
+# the backend is Cpu: device buffers become host memory and copies become
+# memcpy, so buffer code stays correct everywhere (kernel launches, which need
+# real hardware, report an error via Device.last_error()).
+
+extern "C":
+    def _tr_gpu_init() -> int
+    def _tr_gpu_backend() -> int
+    def _tr_gpu_backend_name() -> str
+    def _tr_gpu_device_name() -> str
+    def _tr_gpu_device_count() -> int
+    def _tr_gpu_last_error() -> str
+    def _tr_gpu_compute_capability() -> int
+    def _tr_gpu_total_mem() -> int
+    def _tr_gpu_has_device() -> int
+    def _tr_gpu_synchronize() -> int
+
+# Which compute backend the runtime selected.
+pub enum Backend:
+    Cpu
+    Cuda
+    OpenCL
+
+extend Backend:
+    pub def name(self) -> str:
+        match self:
+            case Backend.Cuda:   return "CUDA"
+            case Backend.OpenCL: return "OpenCL"
+            case Backend.Cpu:    return "CPU"
+            case _:              return "CPU"
+
+# Device is a zero-field namespace over the process-wide GPU context.
+# All methods are static — call them as `Device.name()`, `Device.synchronize()`.
+pub class Device:
+    _dummy: int
+
+extend Device:
+    # Force backend selection now (otherwise done lazily on first use).
+    # Returns the active Backend.
+    pub def detect() -> Backend:
+        mut b = _tr_gpu_init()
+        return Device._backend_of(b)
+
+    pub def _backend_of(b: int) -> Backend:
+        if b == 1: return Backend.Cuda
+        if b == 2: return Backend.OpenCL
+        return Backend.Cpu
+
+    # The active backend.
+    pub def backend() -> Backend:
+        return Device._backend_of(_tr_gpu_backend())
+
+    # Human-readable backend name: "CUDA" / "OpenCL" / "CPU".
+    pub def backend_name() -> str:
+        return _tr_gpu_backend_name()
+
+    # Selected device name (e.g. "NVIDIA GeForce RTX 4090"), or a CPU note.
+    pub def name() -> str:
+        return _tr_gpu_device_name()
+
+    # Number of GPU devices discovered by the active backend (0 on CPU).
+    pub def count() -> int:
+        return _tr_gpu_device_count()
+
+    # True when a real GPU backend (CUDA or OpenCL) is active.
+    pub def has_gpu() -> bool:
+        return _tr_gpu_has_device() != 0
+
+    # CUDA compute capability as major*10+minor (e.g. 89 for sm_89); 0 otherwise.
+    pub def compute_capability() -> int:
+        return _tr_gpu_compute_capability()
+
+    # Total device memory in bytes (0 on CPU).
+    pub def total_memory() -> int:
+        return _tr_gpu_total_mem()
+
+    # Block until all queued device work has finished.
+    pub def synchronize():
+        _tr_gpu_synchronize()
+
+    # Last error message from a GPU operation ("" when none).
+    pub def last_error() -> str:
+        return _tr_gpu_last_error()
