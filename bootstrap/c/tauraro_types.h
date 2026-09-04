@@ -4460,6 +4460,7 @@ __attribute__((hot)) TrStr linker_script_cortex_m();
 __attribute__((hot)) TrStr linker_script_riscv();
 __attribute__((hot)) bool hir_has_export_fn(HirProgram* prog, TrStr name);
 __attribute__((hot)) TrStr uefi_zig_stub(TrStr entry_name, bool has_heap_init, long long heap_size_mb);
+__attribute__((hot)) TrStr uefi_zig_stub_frame(TrStr entry_name, bool has_heap_init, long long heap_size_mb);
 __attribute__((hot)) TrStr target_extra_flags(TrStr triple);
 __attribute__((hot)) TrStr detect_cross_compiler(TrStr triple);
 __attribute__((hot)) TrStr detect_bundled_zig();
