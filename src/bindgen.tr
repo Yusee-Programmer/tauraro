@@ -219,6 +219,37 @@ def _to_int(s: str) -> int:
     if neg: return 0 - r
     return r
 
+# GCC/clang allow an attribute annotation between a struct/union body's closing
+# `}` and its typedef name -- e.g. `} __attribute__((packed)) Name;` (this is
+# exactly how SDL_AudioCVT is declared: `} SDL_AUDIOCVT_PACKED SDL_AudioCVT;`
+# with SDL_AUDIOCVT_PACKED a macro expanding to `__attribute__((packed))`).
+# `__declspec(...)` (MSVC-style, also seen after preprocessing on some Windows
+# headers) can appear in the same position. Given `i` at the first token to
+# check, skip zero or more such annotations and return the new position --
+# so the caller lands on the REAL name token, not `__attribute__`/`__declspec`
+# itself (which is a syntactically valid C identifier, so treating it as "the
+# name" silently produces a wrong-but-plausible binding instead of an error).
+def _skip_gnu_attrs(toks: Vec[CTok], pos: int) -> int:
+    mut i = pos
+    while i < toks.len:
+        mut t = toks.get(i)
+        if t.kind != 0: break
+        if t.text != "__attribute__" and t.text != "__declspec": break
+        i = i + 1
+        if i >= toks.len: break
+        if not (toks.get(i).kind == 4 and toks.get(i).text == "("): break
+        mut depth = 0
+        while i < toks.len:
+            mut pt = toks.get(i)
+            if pt.kind == 4 and pt.text == "(": depth = depth + 1
+            elif pt.kind == 4 and pt.text == ")":
+                depth = depth - 1
+                if depth == 0:
+                    i = i + 1
+                    break
+            i = i + 1
+    return i
+
 def _scan_typedef_name(toks: Vec[CTok], pos: int) -> str:
     mut i = pos
     mut depth = 0
@@ -228,8 +259,9 @@ def _scan_typedef_name(toks: Vec[CTok], pos: int) -> str:
         elif t.kind == 4 and t.text == "}":
             depth = depth - 1
             if depth == 0:
-                if i + 1 < toks.len and toks.get(i + 1).kind == 0:
-                    return toks.get(i + 1).text
+                mut ni = _skip_gnu_attrs(toks, i + 1)
+                if ni < toks.len and toks.get(ni).kind == 0:
+                    return toks.get(ni).text
                 return ""
         i = i + 1
     return ""
@@ -506,14 +538,27 @@ extend Bindgen:
                     mut ntypes = Vec[str].init(4)
                     while not self.is_punct("}") and self.ck() != 5:
                         mut nb = self.pos
-                        # guard: a deeper nested aggregate — skip it (don't corrupt the parent)
+                        # guard: a deeper (2nd-level+) nested aggregate — skip it (don't corrupt
+                        # the parent). `skip_struct_body()` ALREADY consumes the body AND the
+                        # trailing field name + `;` internally (it loops "skip to `;`" itself,
+                        # same as the two lines that used to follow this call) — a second,
+                        # separate "skip to `;`" here had NO brace-depth tracking of its own, so
+                        # on a real 2-level-nested field (SDL_GameControllerButtonBind's
+                        # `union { ...; struct { int hat; int hat_mask; } hat; } value;` is the
+                        # real-world case that found this) it blindly consumed the ENCLOSING
+                        # union's own closing `}` as if it were ordinary skipped content. That
+                        # desynced brace-depth tracking for everything parsed afterward in the
+                        # whole translation unit: the level-1 union's `while not is_punct("}")`
+                        # loop never saw its `}` and kept consuming subsequent top-level struct/
+                        # function declarations as if they were more union members (reproduced
+                        # minimally: a nested `struct{...}field;` inside a `union{...}value;`
+                        # inside a `typedef struct{...}`, followed by ordinary functions — the
+                        # functions silently became fields of the struct, "0 functions" emitted).
                         if self.ct() == "struct" or self.ct() == "union":
                             self.adv()
                             if self.ck() == 0: self.adv()
                             if self.is_punct("{"):
                                 self.skip_struct_body()
-                                while not self.is_punct(";") and self.ck() != 5: self.adv()
-                                if self.is_punct(";"): self.adv()
                                 if self.pos == nb: self.adv()
                                 continue
                             self.pos = nb

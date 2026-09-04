@@ -12,6 +12,7 @@ bool _is_ignored_word(TrStr w);
 bool _is_decl_term(long long kind, TrStr text);
 TrStr _join_words(List_TrStr* words);
 long long _to_int(TrStr s);
+long long _skip_gnu_attrs(List_ptr* toks, long long pos);
 TrStr _scan_typedef_name(List_ptr* toks, long long pos);
 bool _typedef_is_fnptr(List_ptr* toks, long long pos);
 TrStr _scan_fnptr_name(List_ptr* toks, long long pos);
@@ -658,16 +659,6 @@ __attribute__((hot)) void Bindgen_emit_struct(Bindgen* self, TrStr name, bool is
                         if (Bindgen_is_punct(self, _tr_str_lit("{"))) {
                             /* pass */
                             Bindgen_skip_struct_body(self);
-                            /* pass */
-                            while (((!Bindgen_is_punct(self, _tr_str_lit(";"))) && (Bindgen_ck(self) != 5LL))) {
-                                /* pass */
-                                Bindgen_adv(self);
-                            }
-                            /* pass */
-                            if (Bindgen_is_punct(self, _tr_str_lit(";"))) {
-                                /* pass */
-                                Bindgen_adv(self);
-                            }
                             /* pass */
                             if ((self->pos == nb)) {
                                 /* pass */
@@ -2053,6 +2044,64 @@ __attribute__((hot)) long long _to_int(TrStr s) {
     return r;
 }
 
+__attribute__((hot)) long long _skip_gnu_attrs(List_ptr* toks, long long pos) {
+    /* pass */
+    long long i = pos;
+    /* pass */
+    while ((i < toks->len)) {
+        /* pass */
+        CTok* t = ((CTok*)List_ptr_get(toks, i));
+        /* pass */
+        if ((t->kind != 0LL)) {
+            /* pass */
+            break;
+        }
+        /* pass */
+        if (((strcmp(_tr_strz(t->text), _tr_strz(_tr_str_lit("__attribute__"))) != 0) && (strcmp(_tr_strz(t->text), _tr_strz(_tr_str_lit("__declspec"))) != 0))) {
+            /* pass */
+            break;
+        }
+        /* pass */
+        i = (i + 1LL);
+        /* pass */
+        if ((i >= toks->len)) {
+            /* pass */
+            break;
+        }
+        /* pass */
+        if ((!((((CTok*)List_ptr_get(toks, i))->kind == 4LL) && (strcmp(_tr_strz(((CTok*)List_ptr_get(toks, i))->text), _tr_strz(_tr_str_lit("("))) == 0)))) {
+            /* pass */
+            break;
+        }
+        /* pass */
+        long long depth = 0LL;
+        /* pass */
+        while ((i < toks->len)) {
+            /* pass */
+            CTok* pt = ((CTok*)List_ptr_get(toks, i));
+            /* pass */
+            if (((pt->kind == 4LL) && (strcmp(_tr_strz(pt->text), _tr_strz(_tr_str_lit("("))) == 0))) {
+                /* pass */
+                depth = (depth + 1LL);
+            } else if (((pt->kind == 4LL) && (strcmp(_tr_strz(pt->text), _tr_strz(_tr_str_lit(")"))) == 0))) {
+                /* pass */
+                depth = (depth - 1LL);
+                /* pass */
+                if ((depth == 0LL)) {
+                    /* pass */
+                    i = (i + 1LL);
+                    /* pass */
+                    break;
+                }
+            }
+            /* pass */
+            i = (i + 1LL);
+        }
+    }
+    /* pass */
+    return i;
+}
+
 __attribute__((hot)) TrStr _scan_typedef_name(List_ptr* toks, long long pos) {
     /* pass */
     long long i = pos;
@@ -2072,9 +2121,11 @@ __attribute__((hot)) TrStr _scan_typedef_name(List_ptr* toks, long long pos) {
             /* pass */
             if ((depth == 0LL)) {
                 /* pass */
-                if ((((i + 1LL) < toks->len) && (((CTok*)List_ptr_get(toks, (i + 1LL)))->kind == 0LL))) {
+                long long ni = _skip_gnu_attrs(toks, (i + 1LL));
+                /* pass */
+                if (((ni < toks->len) && (((CTok*)List_ptr_get(toks, ni))->kind == 0LL))) {
                     /* pass */
-                    return _tr_str_retain(((CTok*)List_ptr_get(toks, (i + 1LL)))->text);
+                    return _tr_str_retain(((CTok*)List_ptr_get(toks, ni))->text);
                 }
                 /* pass */
                 return _tr_str_lit("");
