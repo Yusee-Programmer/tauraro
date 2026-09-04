@@ -3932,6 +3932,7 @@ __attribute__((hot)) bool _is_ignored_word(TrStr w);
 __attribute__((hot)) bool _is_decl_term(long long kind, TrStr text);
 __attribute__((hot)) TrStr _join_words(List_TrStr* words);
 __attribute__((hot)) long long _to_int(TrStr s);
+__attribute__((hot)) long long _skip_gnu_attrs(List_ptr* toks, long long pos);
 __attribute__((hot)) TrStr _scan_typedef_name(List_ptr* toks, long long pos);
 __attribute__((hot)) bool _typedef_is_fnptr(List_ptr* toks, long long pos);
 __attribute__((hot)) TrStr _scan_fnptr_name(List_ptr* toks, long long pos);
@@ -4457,6 +4458,8 @@ __attribute__((hot)) bool auto_link_cpp_shims(List_TrStr* mod_file_paths, TrStr 
 __attribute__((hot)) TrStr resolve_target_triple(TrStr target);
 __attribute__((hot)) TrStr linker_script_cortex_m();
 __attribute__((hot)) TrStr linker_script_riscv();
+__attribute__((hot)) bool hir_has_export_fn(HirProgram* prog, TrStr name);
+__attribute__((hot)) TrStr uefi_zig_stub(TrStr entry_name, bool has_heap_init, long long heap_size_mb);
 __attribute__((hot)) TrStr target_extra_flags(TrStr triple);
 __attribute__((hot)) TrStr detect_cross_compiler(TrStr triple);
 __attribute__((hot)) TrStr detect_bundled_zig();
