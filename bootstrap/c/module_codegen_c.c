@@ -3877,7 +3877,9 @@ __auto_type target_ty = _t1474.data.ECast.target_ty;
             /* pass */
             if (((strcmp(_tr_strz(cast_src_ty), _tr_strz(_tr_str_lit("def"))) == 0) || (strcmp(_tr_strz(cast_src_ty), _tr_strz(_tr_str_lit("lambda"))) == 0))) {
                 /* pass */
-                return ({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cr = (CGenerator_type_to_c(self, target_ty)); TrStr _cres = _tr_strx_concat(_tr_strz(_tr_str_lit("((")), _cr.data); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(")("))); _tr_str_release(_cl); _cres; })); TrStr _cr = (CGenerator_gen_expr(self, expr)); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(").env)"))); _tr_str_release(_cl); _cres; });
+                TrStr _fv_c_ty = CGenerator_type_to_c(self, target_ty);
+                /* pass */
+                return ({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cr = (CGenerator_gen_expr(self, expr)); TrStr _cres = _tr_strx_concat(_tr_strz(_tr_str_lit("({ TrFnVal __fv = (")), _cr.data); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("); ("))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_fv_c_ty)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(")(__fv.env ? __fv.env : (void*)__fv.fn); })"))); _tr_str_release(_cl); _cres; });
             }
         }
         /* pass */

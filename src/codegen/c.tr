@@ -1963,14 +1963,27 @@ pub class CGenerator:
                     mut cast_src_ty: str = hir_expr_type(expr).name
                     if cast_src_ty == "List" or cast_src_ty == "Vec":
                         return "((" + self.type_to_c(target_ty) + ")(" + self.gen_expr(expr) + "->data))"
-                    # def(...)->R / lambda -> Pointer[void]: the `c_callback` FFI bridge
-                    # threads a closure through a C API's userdata pointer, and
-                    # cb_trampoline treats that userdata AS the closure's env pointer
-                    # (see gen_call's c_callback + cb_trampoline). TrFnVal is a 2-word
-                    # struct now (not a raw pointer), so extract `.env` rather than
-                    # attempting a struct-to-pointer cast (invalid C).
+                    # def(...)->R / lambda -> Pointer[T]: TWO genuinely different call
+                    # sites use this exact syntax for opposite purposes, confirmed by
+                    # examples/ffi_callbacks.tr (both patterns in one file):
+                    #   - `on_event as Pointer[void]` (Pattern 2, a BARE top-level
+                    #     function, no captures) wants the FUNCTION POINTER, e.g. to pass
+                    #     directly to a C API or Coro.spawn/Thread.spawn-style raw-pointer
+                    #     entry point.
+                    #   - `cb as Pointer[void]` (Pattern 1, cb a real CLOSURE) is the
+                    #     `c_callback` FFI bridge threading the closure through a C API's
+                    #     userdata slot; cb_trampoline treats that userdata AS the
+                    #     closure's env pointer, so this wants `.env`.
+                    # A bare function's TrFnVal always has `.env == NULL` (see gen_expr's
+                    # EIdent case); a real closure's `.env` is never NULL (it's the
+                    # env struct's address). So branch on that AT RUNTIME rather than by
+                    # syntax (a function reference reached through a local variable,
+                    # e.g. `mut f = add1; f as Pointer[void]`, has no distinguishing
+                    # syntax from a closure local) -- evaluate the source ONCE (statement
+                    # expression) and pick whichever field is non-null.
                     if cast_src_ty == "def" or cast_src_ty == "lambda":
-                        return "((" + self.type_to_c(target_ty) + ")(" + self.gen_expr(expr) + ").env)"
+                        mut _fv_c_ty = self.type_to_c(target_ty)
+                        return "({ TrFnVal __fv = (" + self.gen_expr(expr) + "); (" + _fv_c_ty + ")(__fv.env ? __fv.env : (void*)__fv.fn); })"
                 # `as str`: TrStr is a struct, can't C-cast to it. If the source
                 # expr is already str-typed it's a no-op; otherwise it's a
                 # generic/void* result (e.g. Dict.get(k) as str) - unbox it.

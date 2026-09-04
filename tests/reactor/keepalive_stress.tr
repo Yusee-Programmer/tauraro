@@ -17,8 +17,25 @@ extern "C":
     def _tr_c_free(ptr: Pointer[char])
 
 # Sendable holder so the server can cross the Thread.spawn boundary.
+#
+# Shared[SrvCfg], not a bare SrvCfg: a plain Sendable class's refcount is
+# thread-LOCAL (non-atomic) -- retaining/releasing it from the spawning
+# thread and the new server thread concurrently races that count, which can
+# corrupt it and free the object while the server thread is still reading
+# cfg.port. `--strict` catches this at compile time as [T-7] (see
+# tests/soundness/reject/rc_class_across_thread.tr, the same shape as the
+# bug this comment replaces); this test doesn't compile under --strict, so
+# the race was silent until it segfaulted under Linux CI's specific thread
+# scheduling. Shared[T] uses an atomic refcount (like Rust's Arc), which is
+# sound to retain/release from multiple threads concurrently.
 class SrvCfg implements Sendable:
     pub port: int
+
+extend SrvCfg:
+    pub def init(p: int) -> SrvCfg:
+        mut c = SrvCfg()
+        c.port = p
+        return c
 
 # ── Green-thread echo server ──────────────────────────────────────────────────
 
@@ -60,7 +77,7 @@ def _echo_accept(arg: Pointer[char]):
             Coro.await_readable(lfd)
 
 # Server thread entry: bind, then run the cooperative scheduler forever.
-def _server_entry(cfg: SrvCfg):
+def _server_entry(cfg: Shared[SrvCfg]):
     mut listener = TcpListener.listen("127.0.0.1", cfg.port)
     listener.set_nonblocking()
     unsafe: Coro.spawn(_echo_accept as Pointer[char], listener.fd as Pointer[char])
@@ -91,8 +108,7 @@ def _client_worker(port: int, rounds: int, errors: Atomic[int]):
 
 async def main():
     mut port = 18765
-    mut cfg = SrvCfg()
-    cfg.port = port
+    shared cfg = SrvCfg.init(port)
     # Detached server thread (runs the reactor forever; killed on process exit).
     # NOTE: spawn + detach are split across two statements — chaining
     # `Thread.spawn(..).detach()` makes codegen miss the spawn-wrapper emission.
