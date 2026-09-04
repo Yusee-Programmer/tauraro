@@ -4488,6 +4488,7 @@ __attribute__((hot)) TrStr get_filename(TrStr path);
 __attribute__((hot)) bool has_path_sep(TrStr path);
 __attribute__((hot)) TrStr out_dir_prefix(TrStr out_dir);
 __attribute__((hot)) TrStr resolve_output_stem(TrStr input_path, TrStr output_path, TrStr out_dir);
+__attribute__((hot)) TrStr ascii_lower(TrStr s);
 __attribute__((hot)) TrStr ensure_ext(TrStr path, TrStr ext);
 __attribute__((hot)) long long get_dot_depth(TrStr dot_path);
 __attribute__((hot)) TrStr ensure_builtin_dirs(TrStr build_dir, TrStr dot_path);

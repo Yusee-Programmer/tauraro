@@ -1930,6 +1930,42 @@ __attribute__((hot)) TrStr resolve_output_stem(TrStr input_path, TrStr output_pa
     return ({ TrStr _at_t3599 = (get_filename(input_path)); __auto_type _wr = (({ TrStr _cr = (strip_extension(_at_t3599)); TrStr _cres = _tr_strx_concat(_tr_strz(pref), _cr.data); _tr_str_release(_cr); _cres; })); _tr_str_release(_at_t3599); _wr; });
 }
 
+__attribute__((hot)) TrStr ascii_lower(TrStr s) {
+    /* pass */
+    /* unsafe block */
+    /* pass */
+    char* p = ((char*)(_tr_strz(s)));
+    /* pass */
+    long long n = 0LL;
+    /* pass */
+    while ((((long long)((*(p + n)))) != 0LL)) {
+        /* pass */
+        n = (n + 1LL);
+    }
+    /* pass */
+    char* buf = ((char*)_tr_c_calloc((size_t)((n + 1LL)), sizeof(char)));
+    /* pass */
+    long long i = 0LL;
+    /* pass */
+    while ((i < n)) {
+        /* pass */
+        long long c = ((long long)((*(p + i))));
+        /* pass */
+        if (((c >= 65LL) && (c <= 90LL))) {
+            /* pass */
+            c = (c + 32LL);
+        }
+        /* pass */
+        (*(buf + i) = ((char)(c)));
+        /* pass */
+        i = (i + 1LL);
+    }
+    /* pass */
+    (*(buf + n) = ((char)(0LL)));
+    /* pass */
+    return _tr_str_lit((char*)(buf));
+}
+
 __attribute__((hot)) TrStr ensure_ext(TrStr path, TrStr ext) {
     /* pass */
     if ((strcmp(_tr_strz(ext), _tr_strz(_tr_str_lit(""))) == 0)) {
@@ -1937,7 +1973,7 @@ __attribute__((hot)) TrStr ensure_ext(TrStr path, TrStr ext) {
         return _tr_str_retain(path);
     }
     /* pass */
-    if (_tr_str_ends_with(_tr_strz(path), _tr_strz(ext))) {
+    if (_tr_str_ends_with(_tr_strz(ascii_lower(path)), _tr_strz(ascii_lower(ext)))) {
         /* pass */
         return _tr_str_retain(path);
     }

@@ -843,11 +843,31 @@ pub def resolve_output_stem(input_path: str, output_path: str, out_dir: str) -> 
         return pref + output_path                # bare -o name in the target dir
     return pref + strip_extension(get_filename(input_path))   # default: input stem
 
+# ASCII-only lowercase (extensions are always ASCII -- .exe/.efi/.dll/.so/...
+# -- so this needn't handle Unicode case folding).
+def ascii_lower(s: str) -> str:
+    unsafe:
+        mut p = s as Pointer[char]
+        mut n = 0
+        while p.offset(n).read() as int != 0: n = n + 1
+        mut buf = alloc[char](n + 1)
+        mut i = 0
+        while i < n:
+            mut c = p.offset(i).read() as int
+            if c >= 65 and c <= 90: c = c + 32   # 'A'-'Z' -> 'a'-'z'
+            buf.offset(i).write(c as char)
+            i = i + 1
+        buf.offset(n).write(0 as char)
+        return buf as str
+
 # Append `ext` unless `path` already ends with it (idempotent, so `-o foo.exe`
-# does not become foo.exe.exe). Empty ext is a no-op (Unix executables).
+# does not become foo.exe.exe; case-insensitive so `-o App.EFI` isn't seen as
+# missing its own `.efi` suffix and doubled to "App.EFI.efi" -- Windows/FAT/
+# UEFI filenames are conventionally case-insensitive). Empty ext is a no-op
+# (Unix executables).
 pub def ensure_ext(path: str, ext: str) -> str:
     if ext == "": return path
-    if path.ends_with(ext): return path
+    if ascii_lower(path).ends_with(ascii_lower(ext)): return path
     return path + ext
 
 # Count dots to get depth
