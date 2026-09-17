@@ -8286,6 +8286,40 @@ pub class CGenerator:
                             self.w(pad + "_tr_obj_release(" + _cfld + ", " + _cdrop + ");\n")
                             self.w(pad + _cfld + " = " + _cltmp2 + ";\n")
                             return
+                        case HirExpr.EIndex(_ei_obj, _ei_key, _):
+                            # `list[i] = obj` where list: List[Class] -- gen_index()'s
+                            # normal rvalue form for a heap-class element is
+                            # `((T*)arr->data[i])`: a cast wrapped AROUND the already-
+                            # indexed void* slot. That's a valid rvalue (reads the slot,
+                            # reinterprets the pointer) but NOT a valid lvalue -- a cast
+                            # expression is never assignable in C ("lvalue required as
+                            # left operand of assignment"), so `list[i] = obj` failed to
+                            # even compile the generated C. Root cause: gen_index() (used
+                            # for both read and write call sites) only ever produces the
+                            # rvalue-shaped cast. Fix here at the one lvalue call site:
+                            # index the RAW void* data slot (no cast) as the assignment
+                            # target -- `arr->data[i]` IS a valid `void*` lvalue.
+                            #
+                            # Ordering matters, same as the EPropAccess case just above:
+                            # retain the NEW value into a temp FIRST, THEN release the old
+                            # slot, THEN store the temp. `list[i] = list[i]` (or any RHS
+                            # that reads back the same slot, e.g. `mut r = list[i]; ...;
+                            # list[i] = r`) means the "old" and "new" pointers can be
+                            # IDENTICAL -- releasing before retaining would drop the
+                            # refcount to 0 and free the object out from under the very
+                            # value about to be stored (use-after-free). Confirmed via
+                            # minimal repro (List[Item] append, mutate through a local,
+                            # store back) before this fix: release-before-retain produced
+                            # a freed/garbage value on read-back; this order fixed it.
+                            mut _ei_obj_s = self.gen_expr(_ei_obj)
+                            mut _ei_key_s = self.gen_expr(_ei_key)
+                            mut _ei_slot = _ei_obj_s + "->data[(_tr_bounds_check(" + _ei_key_s + ", " + _ei_obj_s + "->len), " + _ei_key_s + ")]"
+                            mut _ei_old = "((" + _ctn + "*)" + _ei_slot + ")"
+                            mut _ei_tmp = "_eitmp" + self.next_temp()
+                            self.w(pad + _cty2 + " " + _ei_tmp + " = " + _crhs + ";\n")
+                            self.w(pad + "_tr_obj_release(" + _ei_old + ", " + _cdrop + ");\n")
+                            self.w(pad + _ei_slot + " = (void*)(" + _ei_tmp + ");\n")
+                            return
                         case _: pass
                     _assign_rhs = _crhs
                 # Assigning a concrete class value into an interface-typed slot (a field,
