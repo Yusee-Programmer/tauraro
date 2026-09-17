@@ -750,8 +750,17 @@ jobs:
   # -----------------------------------------------------------------
   benchmark:
     needs: build
+    # Same class of bug as build-termux-android (see its comment): this job only
+    # actually depends on the linux-x64 leg's artifact, but the bare `needs: build`
+    # default (success() on the WHOLE 4-way matrix) means an unrelated leg failing
+    # (e.g. a flaky Windows or macOS run) would silently skip benchmarks too. Lead
+    # with !cancelled() so only an actual cancellation short-circuits it; the other
+    # conditions (push/master/canonical-repo) still gate it exactly as before, and
+    # "Download tauraroc (linux-x64 build artifact)" below still fails the job if
+    # that specific leg didn't produce an artifact.
     if: >-
-      github.event_name == 'push'
+      !cancelled()
+      && github.event_name == 'push'
       && github.ref == 'refs/heads/master'
       && github.repository == 'tauraro/tauraro'
     runs-on: ubuntu-latest
