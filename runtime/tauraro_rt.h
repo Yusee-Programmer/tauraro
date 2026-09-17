@@ -10,10 +10,6 @@
 #ifndef TAURARO_RT_H
 #define TAURARO_RT_H
 
-/* TEMPORARY diagnostic instrumentation for the watax coroutine-scheduler
- * heap-corruption investigation - remove before landing. */
-#define TR_CORO_TRACE 1
-
 /* TR_EXPORT — symbol-visibility attribute for `export def` functions, so they
  * appear in the dynamic symbol table of a shared library (`tauraroc --lib`).
  * On Windows: __declspec(dllexport); on ELF/Mach-O: default visibility. */
@@ -2647,9 +2643,6 @@ static inline SHORT _tr_poll_events(uint32_t ev) {
 }
 _TR_XLINK int _tr_iopoll_add(_TrIOPoll* p, int fd, uint32_t ev, void* ud) {
     if (!p) return -1;
-#ifdef TR_CORO_TRACE
-    fprintf(stderr, "[TRACE] _tr_iopoll_add p=%p fd=%d ev=%u ud=%p count=%d cap=%d\n", (void*)p, fd, ev, ud, p->count, p->cap); fflush(stderr);
-#endif
     for (int i = 0; i < p->count; i++) {
         if (p->pfds[i].fd == (SOCKET)fd) {
             p->pfds[i].events = _tr_poll_events(ev);
@@ -2678,9 +2671,6 @@ _TR_XLINK int _tr_iopoll_mod(_TrIOPoll* p, int fd, uint32_t ev, void* ud)
     { return _tr_iopoll_add(p, fd, ev, ud); }
 _TR_XLINK int _tr_iopoll_del(_TrIOPoll* p, int fd) {
     if (!p) return -1;
-#ifdef TR_CORO_TRACE
-    fprintf(stderr, "[TRACE] _tr_iopoll_del p=%p fd=%d count=%d\n", (void*)p, fd, p->count); fflush(stderr);
-#endif
     for (int i = 0; i < p->count; i++) {
         if (p->pfds[i].fd == (SOCKET)fd) {
             p->count--;
@@ -3189,18 +3179,12 @@ static _TrCoro* _tr_co_go(_tr_coro_fn fn, void* arg) {
     c->ctx.uc_link = &_tr_g.main_ctx;
     makecontext(&c->ctx, _tr_co_entry, 0);
 #endif
-#ifdef TR_CORO_TRACE
-    fprintf(stderr, "[TRACE] _tr_co_go NEW c=%p fn=%p arg=%p\n", (void*)c, (void*)fn, arg); fflush(stderr);
-#endif
     _tr_rpush(c);
     return c;
 }
 
 static void _tr_co_free(_TrCoro* c) {
     if (!c) return;
-#ifdef TR_CORO_TRACE
-    fprintf(stderr, "[TRACE] _tr_co_free c=%p io_armed_fd=%d exc_chain=%p\n", (void*)c, c->io_armed_fd, (void*)c->exc_chain); fflush(stderr);
-#endif
     /* Drop any lingering reactor registration before freeing this coro, so a
      * later readiness event on its fd can never deliver to (and dereference) a
      * freed coro. Runs on the scheduler thread the instant the coro returns:
@@ -3212,21 +3196,12 @@ static void _tr_co_free(_TrCoro* c) {
         c->io_armed_fd = -1;
     }
     if (c->exc_chain && --c->exc_chain->refcount == 0) free(c->exc_chain);
-#ifdef TR_CORO_TRACE
-    fprintf(stderr, "[TRACE] _tr_co_free about to DeleteFiber c->ctx=%p\n", (void*)c->ctx); fflush(stderr);
-#endif
 #if defined(_WIN32)
     if (c->ctx) DeleteFiber(c->ctx);
 #else
     if (c->stack) munmap(c->stack, _TR_CORO_STACK);
 #endif
-#ifdef TR_CORO_TRACE
-    fprintf(stderr, "[TRACE] _tr_co_free DeleteFiber RETURNED, ABOUT TO free(c) c=%p\n", (void*)c); fflush(stderr);
-#endif
     free(c);
-#ifdef TR_CORO_TRACE
-    fprintf(stderr, "[TRACE] _tr_co_free free(c) DONE\n"); fflush(stderr);
-#endif
 }
 
 /* Run one scheduler step: dispatch a ready coro, or block on the reactor /
@@ -3234,9 +3209,6 @@ static void _tr_co_free(_TrCoro* c) {
 static int _tr_sched_step(void) {
     _TrCoro* c = _tr_rpop();
     if (c) {
-#ifdef TR_CORO_TRACE
-        fprintf(stderr, "[TRACE] _tr_sched_step RUN c=%p io_armed_fd=%d\n", (void*)c, c->io_armed_fd); fflush(stderr);
-#endif
         _tr_g.current = c;
         c->state = _TRC_RUN;
         _tr_co_to_coro(c);
@@ -3246,9 +3218,6 @@ static int _tr_sched_step(void) {
         if (c->state == _TRC_DONE && c->detached) _tr_co_free(c);
         return 1;
     }
-#ifdef TR_CORO_TRACE
-    fprintf(stderr, "[TRACE] _tr_sched_step IDLE-CHECK n_sleep=%d n_io=%d reactor=%p\n", _tr_g.n_sleep, _tr_g.n_io, (void*)_tr_g.reactor); fflush(stderr);
-#endif
     if (_tr_g.n_sleep == 0 && _tr_g.n_io == 0) return 0;   /* fully idle */
 
     /* Compute the next timer deadline. */
@@ -3267,16 +3236,8 @@ static int _tr_sched_step(void) {
          * and head-of-line latency for the connections at the back. */
         _TrIOEvent evs[256];
         int n = _tr_iopoll_wait(_tr_g.reactor, evs, 256, timeout);
-#ifdef TR_CORO_TRACE
-        if (n > 0) { fprintf(stderr, "[TRACE] _tr_iopoll_wait returned n=%d\n", n); fflush(stderr); }
-#endif
         for (int i = 0; i < n; i++) {
             _TrCoro* k = (_TrCoro*)evs[i].userdata;
-#ifdef TR_CORO_TRACE
-            fprintf(stderr, "[TRACE] event[%d] fd=%d userdata(k)=%p", i, evs[i].fd, (void*)k); fflush(stderr);
-            if (k) { fprintf(stderr, " k->state=%d k->io_fd=%d", (int)k->state, k->io_fd); fflush(stderr); }
-            fprintf(stderr, "\n"); fflush(stderr);
-#endif
             if (k && k->state == _TRC_SUSP && k->io_fd >= 0) {
                 /* Persistent registration: do NOT _tr_iopoll_del here. The fd
                  * stays armed (k->io_armed_fd) so the next await on the same
@@ -3376,9 +3337,6 @@ static int _tr_co_await_fd(int fd, unsigned int events) {
     _TrCoro* c = _tr_g.current;
     if (!c) return 1;
     if (!_tr_g.reactor) _tr_g.reactor = _tr_iopoll_create();
-#ifdef TR_CORO_TRACE
-    fprintf(stderr, "[TRACE] _tr_co_await_fd c=%p fd=%d events=%u io_armed_fd(before)=%d\n", (void*)c, fd, events, c->io_armed_fd); fflush(stderr);
-#endif
     c->io_fd = fd;
     c->state = _TRC_SUSP;
     /* Persistent registration: keep the fd armed across awaits. The common
@@ -3808,17 +3766,9 @@ _TR_XLINK int _tr_tcp_connect(const char* host, int port) {
         closesocket(fd); freeaddrinfo(res); return -1;
     }
     freeaddrinfo(res);
-#ifdef TR_CORO_TRACE
-    fprintf(stderr, "[TRACE] _tr_tcp_connect(BLOCKING) host=%s port=%d -> fd=%d t=%lld\n", host, port, (int)fd, (long long)GetTickCount64()); fflush(stderr);
-#endif
     return (int)fd;
 }
-_TR_XLINK int  _tr_tcp_send(int fd, const char* data, int len) {
-#ifdef TR_CORO_TRACE
-    fprintf(stderr, "[TRACE] _tr_tcp_send(BLOCKING) fd=%d len=%d t=%lld\n", fd, len, (long long)GetTickCount64()); fflush(stderr);
-#endif
-    return send((SOCKET)fd, data, len, 0);
-}
+_TR_XLINK int  _tr_tcp_send(int fd, const char* data, int len) { return send((SOCKET)fd, data, len, 0); }
 _TR_XLINK int  _tr_tcp_recv(int fd, char* buf, int cap)        { return recv((SOCKET)fd, buf, cap, 0); }
 _TR_XLINK void _tr_tcp_close(int fd) {
     /* Drop any lingering _TrIOPoll registration for this fd BEFORE the OS
@@ -3836,9 +3786,6 @@ _TR_XLINK void _tr_tcp_close(int fd) {
      * actually becomes invalid, closes that window entirely regardless of
      * the owning coroutine's own lifecycle. _tr_iopoll_del is a safe no-op
      * when the fd was never registered. */
-#ifdef TR_CORO_TRACE
-    fprintf(stderr, "[TRACE] _tr_tcp_close fd=%d\n", fd); fflush(stderr);
-#endif
 #if !defined(TAURARO_BARE) && !defined(TAURARO_WASM)
     if (_tr_g.reactor) _tr_iopoll_del(_tr_g.reactor, fd);
 #endif
@@ -5899,9 +5846,6 @@ _TR_XLINK int _tr_tcp_set_nonblocking(int fd) {
 }
 _TR_XLINK int _tr_tcp_recv_nb(int fd, char* buf, int cap) {
     int n = recv((SOCKET)fd, buf, cap, 0);
-#ifdef TR_CORO_TRACE
-    fprintf(stderr, "[TRACE] _tr_tcp_recv_nb fd=%d cap=%d -> n=%d wsaerr=%d t=%lld\n", fd, cap, n, (n<0)?WSAGetLastError():0, (long long)GetTickCount64()); fflush(stderr);
-#endif
     if (n < 0 && WSAGetLastError() == WSAEWOULDBLOCK) return TAURARO_WOULD_BLOCK;
     return n;
 }
