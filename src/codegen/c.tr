@@ -5588,7 +5588,21 @@ pub class CGenerator:
                 mut tl_v = "0LL"
                 if args.len > 0: tl_v = "(long long)(" + self.gen_expr(args.get(0)) + ")"
                 return "_tr_tls_new(" + tl_v + ")"
-            if method == "get": return "_tr_tls_get(" + obj_s + ")"
+            if method == "get":
+                # The slot is stored as a bit-cast `long long` (see `.new`/`.set`
+                # below); for a scalar T that's already the right representation,
+                # but for a class/pointer T the raw call left a `long long` where
+                # a `Foo*` was expected (-Wint-conversion, and a hard compile
+                # error on this project's gcc flags) - reinterpret it back to the
+                # slot's declared element type here, the same way Tuple element
+                # reads already cast their boxed slot (see the `t_n == "Tuple"`
+                # case above).
+                mut tl_get_ety = ""
+                mut tl_hty = hir_expr_type(obj)
+                if tl_hty.args.len > 0: tl_get_ety = tl_hty.args.get(0).read().name
+                if tl_get_ety != "" and not _is_int_type(tl_get_ety) and tl_get_ety != "bool" and tl_get_ety != "char" and not _is_float_type(tl_get_ety):
+                    return "((" + self.type_to_c(tl_hty.args.get(0).read()) + ")_tr_tls_get(" + obj_s + "))"
+                return "_tr_tls_get(" + obj_s + ")"
             if method == "set":
                 mut tl_sv = "0LL"
                 if args.len > 0: tl_sv = "(long long)(" + self.gen_expr(args.get(0)) + ")"
