@@ -6082,19 +6082,30 @@ static inline bool _tr_shutdown_requested(void) { return false; }
  * REGEX — POSIX regex.h on Linux/Mac/MinGW; stubs on MSVC and bare-metal.
  * ═══════════════════════════════════════════════════════════════════════════ */
 #ifndef TAURARO_BARE
-#  if defined(__linux__) || defined(__APPLE__) || defined(__unix__) || defined(__MINGW32__) || defined(__MINGW64__)
-     /* MinGW-w64 ships a real POSIX regex.h (TRE-backed, C:\msys64\mingw64\
-      * include\regex.h) -- confirmed present and functional. The previous
-      * guard excluded every Windows target (`std/regex/mod.tr`'s own header
-      * comment claimed "MinGW/GCC/Clang auto-detect it", which was simply
-      * never true: `__unix__`/`__linux__`/`__APPLE__` are never defined
-      * under MinGW). Every `_tr_regex_*` call silently used the stub branch
-      * below instead (compiles fine, always returns null/false/-1) -- found
-      * because nothing in this codebase had ever actually run a regex
-      * end-to-end on Windows before. MSVC (no `__MINGW32__`) still has no
-      * bundled regex.h, so it correctly keeps using the stub branch. */
+#  if defined(__linux__) || defined(__APPLE__) || defined(__unix__)
+     /* Always part of the platform libc on these targets. */
 #    include <regex.h>
 #    define TAURARO_HAVE_REGEX 1
+#  elif (defined(__MINGW32__) || defined(__MINGW64__)) && defined(__has_include)
+     /* Some MinGW-w64 distributions (e.g. MSYS2 with mingw-w64-x86_64-libtre/
+      * -systre installed) ship a real POSIX regex.h; others (e.g. the plain
+      * mingw64 toolchain on GitHub Actions' windows-latest runner) do not.
+      * `__MINGW32__`/`__MINGW64__` being defined does NOT imply the header
+      * exists -- an earlier version of this guard assumed it did (based on
+      * this being true on one specific local MSYS2 install) and broke CI's
+      * Windows build entirely ("fatal error: regex.h: No such file or
+      * directory") the first time it ran somewhere without those packages.
+      * `__has_include` (GCC 5+/Clang, universally available on any toolchain
+      * modern enough to build this compiler) checks for the file directly
+      * instead of inferring its presence from the platform macro. Falls back
+      * to the stub branch below (compiles fine, always returns null/false/
+      * -1) when the header truly isn't there, or on a `__has_include`-less
+      * MinGW-adjacent toolchain — always previously-correct behavior for
+      * anything that isn't Linux/Mac/Unix. */
+#    if __has_include(<regex.h>)
+#      include <regex.h>
+#      define TAURARO_HAVE_REGEX 1
+#    endif
 #  endif
 #endif
 

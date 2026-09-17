@@ -10,10 +10,6 @@
 #ifndef TAURARO_RT_H
 #define TAURARO_RT_H
 
-/* TEMPORARY diagnostic instrumentation for the watax coroutine-scheduler
- * heap-corruption investigation - remove before landing. */
-#define TR_CORO_TRACE 1
-
 /* TR_EXPORT — symbol-visibility attribute for `export def` functions, so they
  * appear in the dynamic symbol table of a shared library (`tauraroc --lib`).
  * On Windows: __declspec(dllexport); on ELF/Mach-O: default visibility. */
@@ -2647,9 +2643,6 @@ static inline SHORT _tr_poll_events(uint32_t ev) {
 }
 _TR_XLINK int _tr_iopoll_add(_TrIOPoll* p, int fd, uint32_t ev, void* ud) {
     if (!p) return -1;
-#ifdef TR_CORO_TRACE
-    fprintf(stderr, "[TRACE] _tr_iopoll_add p=%p fd=%d ev=%u ud=%p count=%d cap=%d\n", (void*)p, fd, ev, ud, p->count, p->cap); fflush(stderr);
-#endif
     for (int i = 0; i < p->count; i++) {
         if (p->pfds[i].fd == (SOCKET)fd) {
             p->pfds[i].events = _tr_poll_events(ev);
@@ -2678,9 +2671,6 @@ _TR_XLINK int _tr_iopoll_mod(_TrIOPoll* p, int fd, uint32_t ev, void* ud)
     { return _tr_iopoll_add(p, fd, ev, ud); }
 _TR_XLINK int _tr_iopoll_del(_TrIOPoll* p, int fd) {
     if (!p) return -1;
-#ifdef TR_CORO_TRACE
-    fprintf(stderr, "[TRACE] _tr_iopoll_del p=%p fd=%d count=%d\n", (void*)p, fd, p->count); fflush(stderr);
-#endif
     for (int i = 0; i < p->count; i++) {
         if (p->pfds[i].fd == (SOCKET)fd) {
             p->count--;
@@ -3189,18 +3179,12 @@ static _TrCoro* _tr_co_go(_tr_coro_fn fn, void* arg) {
     c->ctx.uc_link = &_tr_g.main_ctx;
     makecontext(&c->ctx, _tr_co_entry, 0);
 #endif
-#ifdef TR_CORO_TRACE
-    fprintf(stderr, "[TRACE] _tr_co_go NEW c=%p fn=%p arg=%p\n", (void*)c, (void*)fn, arg); fflush(stderr);
-#endif
     _tr_rpush(c);
     return c;
 }
 
 static void _tr_co_free(_TrCoro* c) {
     if (!c) return;
-#ifdef TR_CORO_TRACE
-    fprintf(stderr, "[TRACE] _tr_co_free c=%p io_armed_fd=%d exc_chain=%p\n", (void*)c, c->io_armed_fd, (void*)c->exc_chain); fflush(stderr);
-#endif
     /* Drop any lingering reactor registration before freeing this coro, so a
      * later readiness event on its fd can never deliver to (and dereference) a
      * freed coro. Runs on the scheduler thread the instant the coro returns:
@@ -3217,9 +3201,6 @@ static void _tr_co_free(_TrCoro* c) {
 #else
     if (c->stack) munmap(c->stack, _TR_CORO_STACK);
 #endif
-#ifdef TR_CORO_TRACE
-    fprintf(stderr, "[TRACE] _tr_co_free ABOUT TO free(c) c=%p\n", (void*)c); fflush(stderr);
-#endif
     free(c);
 }
 
@@ -3228,9 +3209,6 @@ static void _tr_co_free(_TrCoro* c) {
 static int _tr_sched_step(void) {
     _TrCoro* c = _tr_rpop();
     if (c) {
-#ifdef TR_CORO_TRACE
-        fprintf(stderr, "[TRACE] _tr_sched_step RUN c=%p io_armed_fd=%d\n", (void*)c, c->io_armed_fd); fflush(stderr);
-#endif
         _tr_g.current = c;
         c->state = _TRC_RUN;
         _tr_co_to_coro(c);
@@ -3240,9 +3218,6 @@ static int _tr_sched_step(void) {
         if (c->state == _TRC_DONE && c->detached) _tr_co_free(c);
         return 1;
     }
-#ifdef TR_CORO_TRACE
-    fprintf(stderr, "[TRACE] _tr_sched_step IDLE-CHECK n_sleep=%d n_io=%d reactor=%p\n", _tr_g.n_sleep, _tr_g.n_io, (void*)_tr_g.reactor); fflush(stderr);
-#endif
     if (_tr_g.n_sleep == 0 && _tr_g.n_io == 0) return 0;   /* fully idle */
 
     /* Compute the next timer deadline. */
@@ -3261,16 +3236,8 @@ static int _tr_sched_step(void) {
          * and head-of-line latency for the connections at the back. */
         _TrIOEvent evs[256];
         int n = _tr_iopoll_wait(_tr_g.reactor, evs, 256, timeout);
-#ifdef TR_CORO_TRACE
-        if (n > 0) { fprintf(stderr, "[TRACE] _tr_iopoll_wait returned n=%d\n", n); fflush(stderr); }
-#endif
         for (int i = 0; i < n; i++) {
             _TrCoro* k = (_TrCoro*)evs[i].userdata;
-#ifdef TR_CORO_TRACE
-            fprintf(stderr, "[TRACE] event[%d] fd=%d userdata(k)=%p", i, evs[i].fd, (void*)k); fflush(stderr);
-            if (k) { fprintf(stderr, " k->state=%d k->io_fd=%d", (int)k->state, k->io_fd); fflush(stderr); }
-            fprintf(stderr, "\n"); fflush(stderr);
-#endif
             if (k && k->state == _TRC_SUSP && k->io_fd >= 0) {
                 /* Persistent registration: do NOT _tr_iopoll_del here. The fd
                  * stays armed (k->io_armed_fd) so the next await on the same
@@ -3370,9 +3337,6 @@ static int _tr_co_await_fd(int fd, unsigned int events) {
     _TrCoro* c = _tr_g.current;
     if (!c) return 1;
     if (!_tr_g.reactor) _tr_g.reactor = _tr_iopoll_create();
-#ifdef TR_CORO_TRACE
-    fprintf(stderr, "[TRACE] _tr_co_await_fd c=%p fd=%d events=%u io_armed_fd(before)=%d\n", (void*)c, fd, events, c->io_armed_fd); fflush(stderr);
-#endif
     c->io_fd = fd;
     c->state = _TRC_SUSP;
     /* Persistent registration: keep the fd armed across awaits. The common
@@ -3802,17 +3766,9 @@ _TR_XLINK int _tr_tcp_connect(const char* host, int port) {
         closesocket(fd); freeaddrinfo(res); return -1;
     }
     freeaddrinfo(res);
-#ifdef TR_CORO_TRACE
-    fprintf(stderr, "[TRACE] _tr_tcp_connect(BLOCKING) host=%s port=%d -> fd=%d t=%lld\n", host, port, (int)fd, (long long)GetTickCount64()); fflush(stderr);
-#endif
     return (int)fd;
 }
-_TR_XLINK int  _tr_tcp_send(int fd, const char* data, int len) {
-#ifdef TR_CORO_TRACE
-    fprintf(stderr, "[TRACE] _tr_tcp_send(BLOCKING) fd=%d len=%d t=%lld\n", fd, len, (long long)GetTickCount64()); fflush(stderr);
-#endif
-    return send((SOCKET)fd, data, len, 0);
-}
+_TR_XLINK int  _tr_tcp_send(int fd, const char* data, int len) { return send((SOCKET)fd, data, len, 0); }
 _TR_XLINK int  _tr_tcp_recv(int fd, char* buf, int cap)        { return recv((SOCKET)fd, buf, cap, 0); }
 _TR_XLINK void _tr_tcp_close(int fd) {
     /* Drop any lingering _TrIOPoll registration for this fd BEFORE the OS
@@ -3830,9 +3786,6 @@ _TR_XLINK void _tr_tcp_close(int fd) {
      * actually becomes invalid, closes that window entirely regardless of
      * the owning coroutine's own lifecycle. _tr_iopoll_del is a safe no-op
      * when the fd was never registered. */
-#ifdef TR_CORO_TRACE
-    fprintf(stderr, "[TRACE] _tr_tcp_close fd=%d\n", fd); fflush(stderr);
-#endif
 #if !defined(TAURARO_BARE) && !defined(TAURARO_WASM)
     if (_tr_g.reactor) _tr_iopoll_del(_tr_g.reactor, fd);
 #endif
@@ -5893,9 +5846,6 @@ _TR_XLINK int _tr_tcp_set_nonblocking(int fd) {
 }
 _TR_XLINK int _tr_tcp_recv_nb(int fd, char* buf, int cap) {
     int n = recv((SOCKET)fd, buf, cap, 0);
-#ifdef TR_CORO_TRACE
-    fprintf(stderr, "[TRACE] _tr_tcp_recv_nb fd=%d cap=%d -> n=%d wsaerr=%d t=%lld\n", fd, cap, n, (n<0)?WSAGetLastError():0, (long long)GetTickCount64()); fflush(stderr);
-#endif
     if (n < 0 && WSAGetLastError() == WSAEWOULDBLOCK) return TAURARO_WOULD_BLOCK;
     return n;
 }
@@ -6132,19 +6082,30 @@ static inline bool _tr_shutdown_requested(void) { return false; }
  * REGEX — POSIX regex.h on Linux/Mac/MinGW; stubs on MSVC and bare-metal.
  * ═══════════════════════════════════════════════════════════════════════════ */
 #ifndef TAURARO_BARE
-#  if defined(__linux__) || defined(__APPLE__) || defined(__unix__) || defined(__MINGW32__) || defined(__MINGW64__)
-     /* MinGW-w64 ships a real POSIX regex.h (TRE-backed, C:\msys64\mingw64\
-      * include\regex.h) -- confirmed present and functional. The previous
-      * guard excluded every Windows target (`std/regex/mod.tr`'s own header
-      * comment claimed "MinGW/GCC/Clang auto-detect it", which was simply
-      * never true: `__unix__`/`__linux__`/`__APPLE__` are never defined
-      * under MinGW). Every `_tr_regex_*` call silently used the stub branch
-      * below instead (compiles fine, always returns null/false/-1) -- found
-      * because nothing in this codebase had ever actually run a regex
-      * end-to-end on Windows before. MSVC (no `__MINGW32__`) still has no
-      * bundled regex.h, so it correctly keeps using the stub branch. */
+#  if defined(__linux__) || defined(__APPLE__) || defined(__unix__)
+     /* Always part of the platform libc on these targets. */
 #    include <regex.h>
 #    define TAURARO_HAVE_REGEX 1
+#  elif (defined(__MINGW32__) || defined(__MINGW64__)) && defined(__has_include)
+     /* Some MinGW-w64 distributions (e.g. MSYS2 with mingw-w64-x86_64-libtre/
+      * -systre installed) ship a real POSIX regex.h; others (e.g. the plain
+      * mingw64 toolchain on GitHub Actions' windows-latest runner) do not.
+      * `__MINGW32__`/`__MINGW64__` being defined does NOT imply the header
+      * exists -- an earlier version of this guard assumed it did (based on
+      * this being true on one specific local MSYS2 install) and broke CI's
+      * Windows build entirely ("fatal error: regex.h: No such file or
+      * directory") the first time it ran somewhere without those packages.
+      * `__has_include` (GCC 5+/Clang, universally available on any toolchain
+      * modern enough to build this compiler) checks for the file directly
+      * instead of inferring its presence from the platform macro. Falls back
+      * to the stub branch below (compiles fine, always returns null/false/
+      * -1) when the header truly isn't there, or on a `__has_include`-less
+      * MinGW-adjacent toolchain — always previously-correct behavior for
+      * anything that isn't Linux/Mac/Unix. */
+#    if __has_include(<regex.h>)
+#      include <regex.h>
+#      define TAURARO_HAVE_REGEX 1
+#    endif
 #  endif
 #endif
 

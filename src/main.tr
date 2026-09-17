@@ -1101,6 +1101,7 @@ pub def compile_all_c(c_files: Vec[str], exe_path: str, inc_dir: str,
     if out_is_windows(target, triple):
         mut need_wsa: bool = false
         mut need_systre: bool = false
+        mut need_psapi: bool = false
         mut wi = 0
         while wi < c_files.len:
             mut cf = c_files.get(wi)
@@ -1116,11 +1117,17 @@ pub def compile_all_c(c_files: Vec[str], exe_path: str, inc_dir: str,
             # same conditional-detection shape as need_wsa just above.
             if _tr_str_contains(cf, "regex.c") or _tr_str_contains(cf, "/regex/"):
                 need_systre = true
+            # std.prof's memory stats (RSS/peak RSS) call GetProcessMemoryInfo,
+            # which lives in psapi.dll/-lpsapi on MinGW.
+            if _tr_str_contains(cf, "prof.c") or _tr_str_contains(cf, "/prof/"):
+                need_psapi = true
             wi = wi + 1
         if need_wsa:
             cmd = cmd + " -lws2_32 -lbcrypt -mconsole"
         if need_systre:
             cmd = cmd + " -lsystre -ltre"
+        if need_psapi:
+            cmd = cmd + " -lpsapi"
     if verbose: print("  [CC] " + cmd)
     return _tr_system(cmd)
 
@@ -1234,13 +1241,18 @@ pub def compile_all_c_incremental(c_files: Vec[str], needs: Vec[bool], exe_path:
         # compile+link path); this is the separate-compile-then-link path's
         # own copy of the same detection, over .o filenames instead of .c.
         mut need_systre2: bool = false
+        mut need_psapi2: bool = false
         mut oi = 0
         while oi < o_files.len:
             if _tr_str_contains(o_files.get(oi), "regex.o"):
                 need_systre2 = true
+            if _tr_str_contains(o_files.get(oi), "prof.o"):
+                need_psapi2 = true
             oi = oi + 1
         if need_systre2:
             cmd = cmd + " -lsystre -ltre"
+        if need_psapi2:
+            cmd = cmd + " -lpsapi"
     if verbose: print("  [LINK] " + cmd)
     return _tr_system(cmd)
 
