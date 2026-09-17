@@ -1,0 +1,74 @@
+# std.log.format — Render a single log event as text or JSON-lines.
+#
+# Text:  2026-09-16T18:00:00 INFO request handled method=GET status=200 ms=12
+# JSON:  {"ts":"2026-09-16T18:00:00","level":"info","target":"http","msg":"request handled","method":"GET","status":200,"ms":12}
+
+from std.core.string import StringBuilder
+from std.string.fmt import Fmt
+from std.encoding.json import JsonWriter, _json_escape
+from std.log.level import LogLevel
+from std.log.field import Field, Fields, FIELD_STR, FIELD_INT, FIELD_FLOAT, FIELD_BOOL
+
+pub class LogFormat:
+    _dummy: int
+
+extend LogFormat:
+    # Human-readable single-line text format.
+    #   <ISO8601 timestamp> <LEVEL> <target?> <message> key=val key=val ...
+    pub def text(ts: str, level: LogLevel, target: str, msg: str, fields: Fields) -> str:
+        mut sb = StringBuilder.init(64)
+        sb.append(ts)
+        sb.append_char(32)
+        sb.append(level.name())
+        if target != "":
+            sb.append_char(32)
+            sb.append_char(91)
+            sb.append(target)
+            sb.append_char(93)
+        sb.append_char(32)
+        sb.append(msg)
+        mut i = 0
+        while i < fields.items.len:
+            mut f = fields.items.get(i)
+            sb.append_char(32)
+            sb.append(f.key)
+            sb.append_char(61)
+            sb.append(_field_value_text(f))
+            i = i + 1
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    # JSON-lines format: one compact JSON object per call, safely escaped via
+    # std.encoding.json's JsonWriter (reused rather than hand-rolled concatenation).
+    pub def json(ts: str, level: LogLevel, target: str, msg: str, fields: Fields) -> str:
+        mut w = JsonWriter.init(128)
+        w.begin_object()
+        w.field_str("ts", ts)
+        w.field_str("level", level.name_lower())
+        if target != "":
+            w.field_str("target", target)
+        w.field_str("msg", msg)
+        mut i = 0
+        while i < fields.items.len:
+            mut f = fields.items.get(i)
+            if f.tag == FIELD_STR():
+                w.field_str(f.key, f.sval)
+            elif f.tag == FIELD_INT():
+                w.field_int(f.key, f.ival)
+            elif f.tag == FIELD_BOOL():
+                w.field_bool(f.key, f.bval)
+            else:
+                w.key(f.key)
+                w.sb.append(Fmt.float_to_str(f.fval, 6))
+            i = i + 1
+        w.end_object()
+        mut out = w.finish()
+        w.free()
+        return out
+
+pub def _field_value_text(f: Field) -> str:
+    if f.tag == FIELD_STR():  return f.sval
+    if f.tag == FIELD_INT():  return Fmt.int_to_str(f.ival)
+    if f.tag == FIELD_BOOL(): return Fmt.bool_to_str(f.bval)
+    return Fmt.float_to_str(f.fval, 6)

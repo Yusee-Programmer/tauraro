@@ -11,16 +11,18 @@ building libraries with `taupkg`)
 | Module | Description |
 |---|---|
 | [`std.async`](async.md) | Concurrency: channels, tasks, mutexes, semaphores, barriers, StructuredGroup, IOPoll, EventLoop |
+| `std.cli` | clap-style CLI parsing: flags, typed options, positionals, subcommands, auto-generated `--help` (`Cli`/`CliArgs`) |
 | [`std.collections`](collections.md) | Data structures: Stack, Queue, Deque, Set (with algebra), Counter, Pair/Triple, MinHeap/MaxHeap, LinkedList, Graph |
 | [`std.compress`](compress.md) | Compression: zlib compress/decompress, raw deflate/inflate (`-lz` required) |
-| [`std.crypto`](crypto.md) | Cryptography: SHA-256, HMAC-SHA256, MD5, UUID v4 |
-| [`std.encoding`](encoding.md) | Data encoding: JSON, Base64, Hex |
+| [`std.crypto`](crypto.md) | Cryptography: SHA-256, HMAC-SHA256, SHA-1, MD5 (currently broken, see `Hash.md5` docstring), UUID v3/v4/v5, ULID (incl. monotonic) |
+| [`std.encoding`](encoding.md) | Data encoding: JSON, TOML, YAML (`std.encoding.yaml` — parser complete but blocked by an unresolved compiler bug, see module notes), Base64, Hex |
 | [`std.gpu`](gpu.md) | GPU compute: CUDA/OpenCL/CPU device API (`Device`/`Buffer[T]`/`Module`/`Kernel`), Tauraro `@kernel` → PTX/SPIR-V, and OpenMP CPU dispatch (`Gpu.parallel`) |
 | [`std.io`](io.md) | File I/O, directory operations, path manipulation, console, buffered I/O |
 | [`std.iter`](iter.md) | Range construction, int/float vector transforms, folds, prefix sums, normalization |
+| `std.log` | Leveled structured logging: text/JSON formats, stdout/file sinks, per-target filtering (`Logger`/`Fields`) |
 | [`std.math`](math.md) | Integer math, floating-point math, bitwise operations, statistics, random |
 | [`std.net`](net.md) | TCP, UDP, DNS, URL, HTTP client (7 verbs), HTTPS client (OpenSSL), HTTP server + router |
-| [`std.regex`](regex.md) | POSIX extended regex: match, find, replace, split, count |
+| [`std.regex`](regex.md) | POSIX extended regex: match, find, replace, split, count, capture groups (numbered + named), `Match`/`Captures`, backreference replace |
 | [`std.string`](string.md) | String utilities (Str), formatting (Fmt), parsing, line/word splitting, `split_to_vec` |
 | [`std.sys`](sys.md) | Environment variables, file system, process control, timing, OS info, platform detection, graceful-shutdown signal handling |
 | [`std.test`](test.md) | Lightweight unit-testing framework |

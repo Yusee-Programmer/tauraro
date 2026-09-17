@@ -5481,10 +5481,20 @@ static inline bool _tr_shutdown_requested(void) { return false; }
 #endif
 
 /* ═══════════════════════════════════════════════════════════════════════════
- * REGEX — POSIX regex.h on Linux/Mac; stubs on Windows and bare-metal.
+ * REGEX — POSIX regex.h on Linux/Mac/MinGW; stubs on MSVC and bare-metal.
  * ═══════════════════════════════════════════════════════════════════════════ */
 #ifndef TAURARO_BARE
-#  if defined(__linux__) || defined(__APPLE__) || defined(__unix__)
+#  if defined(__linux__) || defined(__APPLE__) || defined(__unix__) || defined(__MINGW32__) || defined(__MINGW64__)
+     /* MinGW-w64 ships a real POSIX regex.h (TRE-backed, C:\msys64\mingw64\
+      * include\regex.h) -- confirmed present and functional. The previous
+      * guard excluded every Windows target (`std/regex/mod.tr`'s own header
+      * comment claimed "MinGW/GCC/Clang auto-detect it", which was simply
+      * never true: `__unix__`/`__linux__`/`__APPLE__` are never defined
+      * under MinGW). Every `_tr_regex_*` call silently used the stub branch
+      * below instead (compiles fine, always returns null/false/-1) -- found
+      * because nothing in this codebase had ever actually run a regex
+      * end-to-end on Windows before. MSVC (no `__MINGW32__`) still has no
+      * bundled regex.h, so it correctly keeps using the stub branch. */
 #    include <regex.h>
 #    define TAURARO_HAVE_REGEX 1
 #  endif
@@ -5514,6 +5524,45 @@ static inline int _tr_regex_find_len(char* handle, char* text, int from) {
     regmatch_t m;
     if (regexec(&((_TrRegex*)handle)->re, text + from, 1, &m, 0) != 0) return -1;
     return (int)(m.rm_eo - m.rm_so);
+}
+/* Number of capture groups (parenthesized subexpressions) in the compiled
+ * pattern, NOT counting the whole-match group 0. */
+static inline int _tr_regex_ngroups(char* handle) {
+    if (!handle) return 0;
+    return (int)((_TrRegex*)handle)->re.re_nsub;
+}
+/* Run one match at-or-after byte offset `from` and return a heap int array
+ * shaped [found(0/1), n_slots, start0, end0, start1, end1, ...] where slot 0
+ * is the whole match and slots 1..n_slots-1 are capture groups (a group that
+ * did not participate gets start=end=-1). `n_slots` = re_nsub+1. Caller must
+ * free the returned array with _tr_regex_free_ints(). Returns NULL only on
+ * allocation failure (a non-match still returns a valid array with found=0). */
+static inline int* _tr_regex_exec_groups(char* handle, char* text, int from) {
+    if (!handle || !text) return NULL;
+    _TrRegex* r = (_TrRegex*)handle;
+    size_t nslots = r->re.re_nsub + 1;
+    regmatch_t* mvec = (regmatch_t*)TAURARO_ALLOC(nslots * sizeof(regmatch_t));
+    if (!mvec) return NULL;
+    int* out = (int*)TAURARO_ALLOC((2 + 2 * nslots) * sizeof(int));
+    if (!out) { TAURARO_FREE(mvec); return NULL; }
+    int rc = regexec(&r->re, text + from, nslots, mvec, 0);
+    out[1] = (int)nslots;
+    if (rc != 0) {
+        out[0] = 0;
+        for (size_t i = 0; i < nslots; i++) { out[2 + 2*i] = -1; out[2 + 2*i + 1] = -1; }
+        TAURARO_FREE(mvec);
+        return out;
+    }
+    out[0] = 1;
+    for (size_t i = 0; i < nslots; i++) {
+        if (mvec[i].rm_so < 0) { out[2 + 2*i] = -1; out[2 + 2*i + 1] = -1; }
+        else { out[2 + 2*i] = from + (int)mvec[i].rm_so; out[2 + 2*i + 1] = from + (int)mvec[i].rm_eo; }
+    }
+    TAURARO_FREE(mvec);
+    return out;
+}
+static inline void _tr_regex_free_ints(int* p) {
+    if (p) TAURARO_FREE(p);
 }
 static inline char* _tr_regex_replace_first(char* handle, char* text, char* repl) {
     if (!handle || !text || !repl) return _tr_strdup(text ? text : "");
@@ -5559,6 +5608,9 @@ static inline char* _tr_regex_compile(char* p, int i) { (void)p;(void)i; return 
 static inline bool  _tr_regex_match(char* h, char* t) { (void)h;(void)t; return false; }
 static inline int   _tr_regex_find_start(char* h, char* t, int f) { (void)h;(void)t;(void)f; return -1; }
 static inline int   _tr_regex_find_len(char* h, char* t, int f) { (void)h;(void)t;(void)f; return -1; }
+static inline int   _tr_regex_ngroups(char* h) { (void)h; return 0; }
+static inline int*  _tr_regex_exec_groups(char* h, char* t, int f) { (void)h;(void)t;(void)f; return NULL; }
+static inline void  _tr_regex_free_ints(int* p) { (void)p; }
 static inline char* _tr_regex_replace_first(char* h, char* t, char* r) { (void)h;(void)r; return _tr_strdup(t?t:""); }
 static inline char* _tr_regex_replace_all(char* h, char* t, char* r) { (void)h;(void)r; return _tr_strdup(t?t:""); }
 static inline int   _tr_regex_count(char* h, char* t) { (void)h;(void)t; return 0; }
@@ -5982,7 +6034,12 @@ static inline char* _tr_uuid_v4(void) {
 }
 
 /* ── MD5 (compact, for legacy use) ─────────────────────────────────────── */
-static inline char* _tr_md5_hex(char* s) {
+/* Shared MD5 core, driven by an EXPLICIT length rather than strlen() --
+ * `_tr_md5_hex` (below) passes strlen(s) for ordinary C-string callers;
+ * `_tr_md5_bytes_hex` passes a caller-supplied length so raw byte buffers
+ * containing embedded NULs (e.g. UUID v3's 16-byte namespace + name) hash
+ * correctly instead of being silently truncated at the first \0. */
+static inline char* _tr_md5_hex_core(char* s, size_t ilen) {
     /* Minimal MD5; message expanded inline. */
     static const uint32_t T[64]={
         0xd76aa478,0xe8c7b756,0x242070db,0xc1bdceee,0xf57c0faf,0x4787c62a,0xa8304613,0xfd469501,
@@ -5998,11 +6055,10 @@ static inline char* _tr_md5_hex(char* s) {
                              5, 9,14,20,5, 9,14,20,5, 9,14,20,5, 9,14,20,
                              4,11,16,23,4,11,16,23,4,11,16,23,4,11,16,23,
                              6,10,15,21,6,10,15,21,6,10,15,21,6,10,15,21};
-    size_t ilen = s ? strlen(s) : 0;
     size_t padlen = ((ilen+8)/64+1)*64;
     uint8_t* msg = (uint8_t*)TAURARO_CALLOC(1,padlen);
     if(!msg) return _tr_strdup("00000000000000000000000000000000");
-    if(s) memcpy(msg,s,ilen);
+    if(s && ilen>0) memcpy(msg,s,ilen);
     msg[ilen]=0x80;
     uint64_t bits=(uint64_t)ilen*8;
     for(int i=0;i<8;i++) msg[padlen-8+i]=(uint8_t)(bits>>(uint64_t)(i*8));
@@ -6029,6 +6085,77 @@ static inline char* _tr_md5_hex(char* s) {
         out[i*8+j*2]=_tr_hex_lc[byte>>4]; out[i*8+j*2+1]=_tr_hex_lc[byte&15];
     }
     out[32]='\0'; return out;
+}
+static inline char* _tr_md5_hex(char* s) {
+    return _tr_md5_hex_core(s, s ? strlen(s) : 0);
+}
+static inline char* _tr_md5_bytes_hex(char* s, int ilen) {
+    return _tr_md5_hex_core(s, ilen > 0 ? (size_t)ilen : 0);
+}
+
+/* ── SHA-1 (general-purpose hex digest) ───────────────────────────────────
+ * Reuses the _TrSHA1Ctx machinery already defined above for the WebSocket
+ * handshake (_tr_ws_accept). SHA-1 is cryptographically broken for security
+ * use but is still required for UUID v5 (RFC 4122 namespace UUIDs, which are
+ * standardized on SHA-1) and general checksumming. */
+static inline char* _tr_sha1_hex(char* s) {
+    _TrSHA1Ctx c; uint8_t dig[20];
+    _tr_sha1_init(&c);
+    if(s) _tr_sha1_update(&c,(const uint8_t*)s,strlen(s));
+    _tr_sha1_final(&c,dig);
+    char* out=(char*)TAURARO_ALLOC(41); if(!out) return NULL;
+    for(int i=0;i<20;i++){out[i*2]=_tr_hex_lc[dig[i]>>4];out[i*2+1]=_tr_hex_lc[dig[i]&15];}
+    out[40]='\0'; return out;
+}
+/* SHA-1 of exactly `ilen` raw bytes (for UUID v5, whose input is 16 raw
+ * namespace bytes concatenated with the name — not always a plain C string). */
+static inline char* _tr_sha1_bytes_hex(char* input, int ilen) {
+    _TrSHA1Ctx c; uint8_t dig[20];
+    _tr_sha1_init(&c);
+    if(input&&ilen>0) _tr_sha1_update(&c,(const uint8_t*)input,(size_t)ilen);
+    _tr_sha1_final(&c,dig);
+    char* out=(char*)TAURARO_ALLOC(41); if(!out) return NULL;
+    for(int i=0;i<20;i++){out[i*2]=_tr_hex_lc[dig[i]>>4];out[i*2+1]=_tr_hex_lc[dig[i]&15];}
+    out[40]='\0'; return out;
+}
+
+/* ── Raw random bytes, hex-encoded ────────────────────────────────────────
+ * Reuses _tr_os_random (BCryptGenRandom on Windows / /dev/urandom on POSIX,
+ * PRNG fallback otherwise) — the same secure-randomness source already used
+ * by the Ed25519 signing code, and the same fallback strategy _tr_uuid_v4
+ * uses. Returned as lowercase hex (2*n chars + NUL) so it's always a clean,
+ * embedded-NUL-free `str` regardless of what byte values come out. */
+static inline char* _tr_rand_bytes_hex(int n) {
+    if(n<=0) return _tr_strdup("");
+    uint8_t* buf=(uint8_t*)TAURARO_ALLOC((size_t)n);
+    if(!buf) return _tr_strdup("");
+    _tr_os_random(buf,n);
+    char* out=(char*)TAURARO_ALLOC((size_t)(2*n+1)); if(!out){TAURARO_FREE(buf);return _tr_strdup("");}
+    for(int i=0;i<n;i++){out[i*2]=_tr_hex_lc[buf[i]>>4];out[i*2+1]=_tr_hex_lc[buf[i]&15];}
+    out[2*n]='\0';
+    TAURARO_FREE(buf);
+    return out;
+}
+
+/* ── Real Unix-epoch milliseconds (wall-clock, NOT monotonic) ────────────
+ * _tr_time_ms() above is QueryPerformanceCounter/CLOCK_MONOTONIC — great for
+ * measuring elapsed time, useless as a calendar timestamp (its epoch is
+ * arbitrary / boot-relative). ULID needs real Unix-epoch milliseconds. */
+_TR_XLINK long long _tr_epoch_ms(void) {
+#if defined(TAURARO_BARE) && !defined(__wasi__)
+    return 0LL;
+#elif defined(_WIN32)
+    FILETIME ft; GetSystemTimeAsFileTime(&ft);
+    unsigned long long t = ((unsigned long long)ft.dwHighDateTime << 32) | ft.dwLowDateTime;
+    /* FILETIME: 100ns intervals since 1601-01-01. Convert to ms since 1970-01-01. */
+    return (long long)((t / 10000ULL) - 11644473600000ULL);
+#elif defined(_TR_HAS_TIME)
+    struct timespec _ts;
+    clock_gettime(CLOCK_REALTIME, &_ts);
+    return (long long)_ts.tv_sec * 1000LL + (long long)_ts.tv_nsec / 1000000LL;
+#else
+    return (long long)time(NULL) * 1000LL;
+#endif
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════

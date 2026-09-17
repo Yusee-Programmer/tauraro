@@ -1,0 +1,59 @@
+# std.log.level — LogLevel enum and helpers.
+
+pub enum LogLevel:
+    Trace
+    Debug
+    Info
+    Warn
+    Error
+
+extend LogLevel:
+    # Numeric rank used for filtering (higher = more severe).
+    pub def rank(self) -> int:
+        match self:
+            case LogLevel.Trace: return 0
+            case LogLevel.Debug: return 1
+            case LogLevel.Info:  return 2
+            case LogLevel.Warn:  return 3
+            case LogLevel.Error: return 4
+            case _:              return 2
+
+    # Fixed-width uppercase name, as used in the text formatter.
+    pub def name(self) -> str:
+        match self:
+            case LogLevel.Trace: return "TRACE"
+            case LogLevel.Debug: return "DEBUG"
+            case LogLevel.Info:  return "INFO"
+            case LogLevel.Warn:  return "WARN"
+            case LogLevel.Error: return "ERROR"
+            case _:              return "INFO"
+
+    # Lowercase name, as used in JSON output.
+    pub def name_lower(self) -> str:
+        match self:
+            case LogLevel.Trace: return "trace"
+            case LogLevel.Debug: return "debug"
+            case LogLevel.Info:  return "info"
+            case LogLevel.Warn:  return "warn"
+            case LogLevel.Error: return "error"
+            case _:              return "info"
+
+    # True when self is at least as severe as `min` — the core filtering check.
+    pub def at_least(self, min: LogLevel) -> bool:
+        return self.rank() >= min.rank()
+
+# Parse a level name (case-insensitive). Falls back to Info on anything unrecognized.
+pub def level_from_str(s: str) -> LogLevel:
+    mut p = s as Pointer[char]
+    mut n = 0
+    while p.offset(n).read() as int != 0: n = n + 1
+    # Lowercase the first char is enough to disambiguate trace/debug/info/warn/error.
+    mut c0 = p.offset(0).read() as int
+    if c0 >= 65 and c0 <= 90: c0 = c0 + 32   # 'A'-'Z' -> 'a'-'z'
+    if n == 0: return LogLevel.Info
+    if c0 == 116: return LogLevel.Trace   # 't'
+    if c0 == 100: return LogLevel.Debug   # 'd'
+    if c0 == 105: return LogLevel.Info    # 'i'
+    if c0 == 119: return LogLevel.Warn    # 'w'
+    if c0 == 101: return LogLevel.Error   # 'e'
+    return LogLevel.Info

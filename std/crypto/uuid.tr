@@ -1,18 +1,400 @@
-# std.crypto.uuid — UUID v4 generation.
+# std.crypto.uuid — UUID (v3, v4, v5) and ULID generation/parsing.
 #
-# On POSIX uses /dev/urandom; on Windows falls back to rand().
+# UUID v4 uses secure OS randomness (BCryptGenRandom on Windows, /dev/urandom
+# on POSIX, PRNG fallback elsewhere — same source as std.crypto.ed25519).
+# UUID v3/v5 are deterministic namespace+name hashes (MD5 / SHA-1, RFC 4122).
+# ULID is a 128-bit, lexicographically-sortable alternative to UUID: a 48-bit
+# millisecond timestamp followed by 80 bits of randomness, Crockford Base32
+# encoded to 26 characters.
 #
 # Usage:
-#   from std.crypto.uuid import UUID
-#   mut id = UUID.v4()   # e.g. "550e8400-e29b-41d4-a716-446655440000"
+#   from std.crypto.uuid import UUID, ULID, MonotonicUlid
+#
+#   mut id  = UUID.v4()                      # "550e8400-e29b-41d4-a716-446655440000"
+#   mut ok  = UUID.is_valid(id)               # -> bool
+#   mut dns = UUID.v3(UUID.NAMESPACE_DNS, "example.com")
+#   mut dns5 = UUID.v5(UUID.NAMESPACE_DNS, "example.com")
+#
+#   mut u = ULID.generate()                   # "01ARZ3NDEKTSV4RRFFQ69G5FAV"
+#   mut ts = ULID.timestamp_ms(u)             # -> int, embedded ms since epoch
+#
+#   mut gen = MonotonicUlid.init()
+#   mut a = gen.next()
+#   mut b = gen.next()                        # b > a lexicographically, always
+
+from std.core.string import StringBuilder
 
 extern "C":
     def _tr_uuid_v4() -> str
+    def _tr_md5_hex(s: str) -> str
+    def _tr_md5_bytes_hex(input: str, ilen: int) -> str
+    def _tr_sha1_bytes_hex(input: str, ilen: int) -> str
+    def _tr_rand_bytes_hex(n: int) -> str
+    def _tr_epoch_ms() -> int
+    def _tr_strlen(s: str) -> int
+
+# ─── shared hex helpers (kept local so this module has no cross-dependency
+#     on std.encoding.hex — both files independently define the same tiny
+#     nibble tables) ───────────────────────────────────────────────────────
+
+pub def _uuid_hex_val(c: int) -> int:
+    if c >= 48 and c <= 57:  return c - 48      # '0'-'9'
+    if c >= 97 and c <= 102: return c - 87      # 'a'-'f'
+    if c >= 65 and c <= 70:  return c - 55      # 'A'-'F'
+    return -1
+
+pub def _uuid_hex_lo(n: int) -> int:
+    if n < 10: return n + 48
+    return n + 87
+
+# Decode a hex string into a raw-byte str (may contain embedded NULs —
+# callers must track length explicitly, never call strlen() on the result).
+pub def _uuid_hex_decode(s: str) -> str:
+    mut p = s as Pointer[char]
+    mut n = _tr_strlen(s)
+    mut sb = StringBuilder.init(n / 2 + 2)
+    mut i = 0
+    while i + 1 < n:
+        mut hi = _uuid_hex_val(p.offset(i).read() as int)
+        mut lo = _uuid_hex_val(p.offset(i + 1).read() as int)
+        if hi < 0 or lo < 0:
+            sb.free()
+            return ""
+        sb.append_char(((hi << 4) | lo) % 256)
+        i = i + 2
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+# Concatenate `ns_bytes[0..ns_len)` (raw bytes, MAY contain embedded NULs --
+# see _uuid_hex_decode's own warning) with `name` (ordinary text) into one
+# raw-byte str, safe to pass to _tr_md5_bytes_hex/_tr_sha1_bytes_hex with an
+# explicit length. Deliberately NOT `ns_bytes + name` (plain `str` `+`) --
+# that was the actual bug behind v3/v5 initially returning wrong (and, for
+# v5, IDENTICAL-regardless-of-name) digests: concatenation silently stopped
+# at ns_bytes' first embedded NUL byte, dropping the rest of the namespace
+# AND all of `name` before the hash ever saw them. Confirmed via a known-
+# answer test vector before landing this fix, not assumed.
+def _uuid_concat_bytes(ns_bytes: str, ns_len: int, name: str) -> str:
+    mut p = ns_bytes as Pointer[char]
+    mut nl = _tr_strlen(name)
+    mut sb = StringBuilder.init(ns_len + nl + 1)
+    mut i = 0
+    while i < ns_len:
+        sb.append_char(p.offset(i).read() as int)
+        i = i + 1
+    mut q = name as Pointer[char]
+    mut j = 0
+    while j < nl:
+        sb.append_char(q.offset(j).read() as int)
+        j = j + 1
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+# ─── UUID ───────────────────────────────────────────────────────────────────
 
 pub class UUID:
     _dummy: int
 
 extend UUID:
+    # The nil UUID: all-zero.
+    pub def nil() -> str:
+        return "00000000-0000-0000-0000-000000000000"
+
+    # Standard RFC 4122 namespace UUIDs, for use with v3()/v5().
+    pub def NAMESPACE_DNS() -> str:
+        return "6ba7b810-9dad-11d1-80b4-00c04fd430c8"
+
+    pub def NAMESPACE_URL() -> str:
+        return "6ba7b811-9dad-11d1-80b4-00c04fd430c8"
+
+    pub def NAMESPACE_OID() -> str:
+        return "6ba7b812-9dad-11d1-80b4-00c04fd430c8"
+
+    pub def NAMESPACE_X500() -> str:
+        return "6ba7b814-9dad-11d1-80b4-00c04fd430c8"
+
     # Generate a random UUID v4 string in canonical 8-4-4-4-12 hex format.
     pub def v4() -> str:
         return _tr_uuid_v4()
+
+    # Check whether `s` is a syntactically valid UUID: 36 chars, hyphens at
+    # positions 8/13/18/23, hex digits everywhere else. Does not check
+    # version/variant bits (accepts any RFC-4122-shaped string, incl. nil).
+    pub def is_valid(s: str) -> bool:
+        mut n = _tr_strlen(s)
+        if n != 36: return false
+        mut p = s as Pointer[char]
+        mut i = 0
+        while i < 36:
+            mut c = p.offset(i).read() as int
+            if i == 8 or i == 13 or i == 18 or i == 23:
+                if c != 45: return false   # '-'
+            else:
+                if _uuid_hex_val(c) < 0: return false
+            i = i + 1
+        return true
+
+    # Extract the version nibble (1-5) from a canonical UUID string.
+    # Returns -1 if the string isn't a validly-shaped UUID.
+    pub def version(s: str) -> int:
+        if not UUID.is_valid(s): return -1
+        mut p = s as Pointer[char]
+        return _uuid_hex_val(p.offset(14).read() as int)
+
+    # Case-insensitive equality of two UUID strings.
+    pub def equals(a: str, b: str) -> bool:
+        mut na = _tr_strlen(a)
+        mut nb = _tr_strlen(b)
+        if na != nb: return false
+        mut pa = a as Pointer[char]
+        mut pb = b as Pointer[char]
+        mut i = 0
+        while i < na:
+            mut ca = pa.offset(i).read() as int
+            mut cb = pb.offset(i).read() as int
+            if ca >= 65 and ca <= 90: ca = ca + 32   # lowercase
+            if cb >= 65 and cb <= 90: cb = cb + 32
+            if ca != cb: return false
+            i = i + 1
+        return true
+
+    # ── Internal: format 16 raw digest bytes (as hex-decoded str) into a
+    #    canonical UUID string, forcing the version and RFC-4122 variant bits.
+    pub def _format_from_digest(digest: str, version_nibble: int) -> str:
+        mut p = digest as Pointer[char]
+        mut b: [int; 16]
+        mut i = 0
+        while i < 16:
+            # `& 255` (not `% 256`) — on platforms where `char` is signed,
+            # a raw byte >= 0x80 reads back as a negative int, and `%` on a
+            # negative operand doesn't wrap the way `& 255` does.
+            b[i] = (p.offset(i).read() as int) & 255
+            i = i + 1
+        b[6] = (b[6] & 15) | (version_nibble << 4)
+        b[8] = (b[8] & 63) | 128
+        mut sb = StringBuilder.init(40)
+        i = 0
+        while i < 16:
+            sb.append_char(_uuid_hex_lo((b[i] >> 4) & 15))
+            sb.append_char(_uuid_hex_lo(b[i] & 15))
+            if i == 3 or i == 5 or i == 7 or i == 9:
+                sb.append_char(45)   # '-'
+            i = i + 1
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    # UUID v3: deterministic, MD5(namespace_bytes + name) with version=3.
+    # `namespace` must be a canonical UUID string (e.g. UUID.NAMESPACE_DNS()).
+    #
+    # KNOWN BROKEN as of this writing: the runtime's hand-rolled `_tr_md5_hex`
+    # (bootstrap/c/tauraro_rt.h and runtime/tauraro_rt.h, now `_tr_md5_hex_core`)
+    # produces INCORRECT digests -- confirmed against known-answer vectors
+    # (`_tr_md5_hex("abc")` returns `c3ef16ee4475f3000f4c483edfeff40d`, not the
+    # real MD5("abc") = `900150983cd24fb0d6963f7d28e17f72`; same divergence on
+    # the empty string and "a"). This predates this module entirely -- the
+    # SAME wrong output comes from the ORIGINAL, completely untouched
+    # compiler build, so it is not something this session's changes caused.
+    # A byte-level review of the algorithm (T-table, shift table, round
+    # functions, message schedule, padding, little-endian word order, final
+    # combine) against the reference MD5 spec found no discrepancy, so the
+    # bug is somewhere subtler than a transcription error and needs a real
+    # step-by-step trace to isolate -- left as a known, documented gap rather
+    # than guessed at further. UUID v5 (SHA-1-based, below) does NOT share
+    # this bug (its SHA-1 core is verified correct against known-answer
+    # vectors) -- prefer `UUID.v5()` over `UUID.v3()` until this is fixed;
+    # RFC 4122 itself recommends v5 over v3 for the same reason (MD5 is
+    # weaker than SHA-1) even where v3 works correctly elsewhere.
+    pub def v3(namespace: str, name: str) -> str:
+        mut ns_hex = UUID._compact_hex(namespace)
+        mut ns_bytes = _uuid_hex_decode(ns_hex)
+        mut ns_len = _tr_strlen(ns_hex) / 2
+        mut msg = _uuid_concat_bytes(ns_bytes, ns_len, name)
+        mut mlen = ns_len + _tr_strlen(name)
+        mut digest_hex = _tr_md5_bytes_hex(msg, mlen)
+        mut digest = _uuid_hex_decode(digest_hex)
+        return UUID._format_from_digest(digest, 3)
+
+    # UUID v5: deterministic, SHA-1(namespace_bytes + name) with version=5.
+    # SHA-1 produces 20 bytes; only the first 16 are used (per RFC 4122).
+    pub def v5(namespace: str, name: str) -> str:
+        mut ns_hex = UUID._compact_hex(namespace)
+        mut ns_bytes = _uuid_hex_decode(ns_hex)
+        mut ns_len = _tr_strlen(ns_hex) / 2
+        mut msg = _uuid_concat_bytes(ns_bytes, ns_len, name)
+        mut mlen = ns_len + _tr_strlen(name)
+        mut digest_hex = _tr_sha1_bytes_hex(msg, mlen)
+        mut digest = _uuid_hex_decode(digest_hex)
+        return UUID._format_from_digest(digest, 5)
+
+    # Strip hyphens from a canonical UUID string, leaving 32 hex chars.
+    pub def _compact_hex(s: str) -> str:
+        mut p = s as Pointer[char]
+        mut n = _tr_strlen(s)
+        mut sb = StringBuilder.init(n + 1)
+        mut i = 0
+        while i < n:
+            mut c = p.offset(i).read() as int
+            if c != 45: sb.append_char(c)
+            i = i + 1
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+# ─── ULID ───────────────────────────────────────────────────────────────────
+#
+# Crockford Base32 alphabet (no I, L, O, U — avoids visual ambiguity).
+# Layout (26 chars total):
+#   chars  0-9  (10 chars, 50 bits, top 2 always 0) = 48-bit ms timestamp
+#   chars 10-25 (16 chars, 80 bits)                 = randomness
+
+pub def _ulid_alphabet() -> str:
+    return "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
+
+pub def _ulid_char_at(idx: int) -> int:
+    return (_ulid_alphabet() as Pointer[char]).offset(idx).read() as int
+
+pub def _ulid_char_val(c: int) -> int:
+    mut cu = c
+    if cu >= 97 and cu <= 122: cu = cu - 32   # uppercase
+    mut a = _ulid_alphabet() as Pointer[char]
+    mut i = 0
+    while i < 32:
+        if a.offset(i).read() as int == cu: return i
+        i = i + 1
+    return -1
+
+# Encode a nonnegative integer into `nchars` base32 digits (most-significant
+# digit first), 5 bits per digit.
+pub def _ulid_encode_int(value: int, nchars: int) -> str:
+    mut sb = StringBuilder.init(nchars + 1)
+    mut i = nchars - 1
+    while i >= 0:
+        mut shift = i * 5
+        mut digit = (value >> shift) % 32
+        sb.append_char(_ulid_char_at(digit))
+        i = i - 1
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+# Decode `nchars` base32 digits starting at byte offset `start` of `s` back
+# into an integer. Returns -1 if any character is invalid.
+pub def _ulid_decode_int(s: str, start: int, nchars: int) -> int:
+    mut p = s as Pointer[char]
+    mut value = 0
+    mut i = 0
+    while i < nchars:
+        mut v = _ulid_char_val(p.offset(start + i).read() as int)
+        if v < 0: return -1
+        value = (value << 5) | v
+        i = i + 1
+    return value
+
+pub class ULID:
+    _dummy: int
+
+extend ULID:
+    # Generate a fresh ULID string for the current wall-clock time.
+    pub def generate() -> str:
+        return ULID.from_parts(_tr_epoch_ms(), ULID._fresh_randomness())
+
+    # Build a ULID string from an explicit 48-bit ms timestamp and an 80-bit
+    # randomness value packed as (rand_hi: top 40 bits, rand_lo: bottom 40
+    # bits) — see MonotonicUlid for why randomness is split this way.
+    pub def from_parts(ms: int, rand_hi_lo: (int, int)) -> str:
+        mut rand_hi = rand_hi_lo[0]
+        mut rand_lo = rand_hi_lo[1]
+        mut ts_part = _ulid_encode_int(ms, 10)
+        mut r_hi_part = _ulid_encode_int(rand_hi, 8)
+        mut r_lo_part = _ulid_encode_int(rand_lo, 8)
+        return ts_part + r_hi_part + r_lo_part
+
+    # Draw fresh 80 bits of secure randomness, split into two 40-bit halves.
+    pub def _fresh_randomness() -> (int, int):
+        mut hexs = _tr_rand_bytes_hex(10)   # 10 bytes = 80 bits = 20 hex chars
+        mut p = hexs as Pointer[char]
+        mut hi = 0
+        mut i = 0
+        while i < 10:
+            hi = (hi << 4) | _uuid_hex_val(p.offset(i).read() as int)
+            i = i + 1
+        mut lo = 0
+        i = 10
+        while i < 20:
+            lo = (lo << 4) | _uuid_hex_val(p.offset(i).read() as int)
+            i = i + 1
+        return (hi, lo)
+
+    # Validate ULID shape: 26 chars, all valid Crockford Base32 digits, and
+    # the timestamp's top digit (idx 0) must be small enough that the 48-bit
+    # timestamp field doesn't overflow (Crockford digit 0 must be < 8).
+    pub def is_valid(s: str) -> bool:
+        mut n = _tr_strlen(s)
+        if n != 26: return false
+        mut p = s as Pointer[char]
+        mut i = 0
+        while i < 26:
+            if _ulid_char_val(p.offset(i).read() as int) < 0: return false
+            i = i + 1
+        if _ulid_char_val(p.offset(0).read() as int) >= 8: return false
+        return true
+
+    # Extract the embedded millisecond timestamp from a ULID string.
+    # Returns -1 if `s` isn't validly shaped.
+    pub def timestamp_ms(s: str) -> int:
+        if not ULID.is_valid(s): return -1
+        return _ulid_decode_int(s, 0, 10)
+
+# ─── Monotonic ULID generator ──────────────────────────────────────────────
+#
+# Per the ULID spec: when two ULIDs are generated within the same
+# millisecond, instead of drawing fresh randomness (which could sort either
+# way), increment the previous randomness by 1. This guarantees strictly
+# increasing lexicographic order for same-instance generators even at high
+# throughput, up to 2^80 IDs per millisecond before overflow (at which point
+# this implementation falls back to fresh randomness for the next call,
+# matching the reference ULID implementations' documented behavior).
+
+pub class MonotonicUlid:
+    pub last_ms:  int
+    pub rand_hi:  int
+    pub rand_lo:  int
+
+extend MonotonicUlid:
+    pub def init() -> MonotonicUlid:
+        mut g = MonotonicUlid()
+        g.last_ms = -1
+        g.rand_hi = 0
+        g.rand_lo = 0
+        return g
+
+    # Produce the next ULID from this generator. Strictly greater than the
+    # previous one (by string comparison) as long as the wall clock doesn't
+    # go backwards by more than is tolerable — if it does, this still
+    # produces a valid ULID, just not one guaranteed to sort after the last.
+    pub def next(self) -> str:
+        mut now = _tr_epoch_ms()
+        if now == self.last_ms:
+            # Same millisecond: increment the 80-bit randomness by 1.
+            if self.rand_lo == 1099511627775:   # 2^40 - 1, lo half full
+                self.rand_lo = 0
+                if self.rand_hi == 1099511627775:
+                    # Full 80-bit overflow (astronomically unlikely): fall
+                    # back to fresh randomness rather than wrapping to 0,
+                    # which would break monotonicity.
+                    mut fresh = ULID._fresh_randomness()
+                    self.rand_hi = fresh[0]
+                    self.rand_lo = fresh[1]
+                else:
+                    self.rand_hi = self.rand_hi + 1
+            else:
+                self.rand_lo = self.rand_lo + 1
+        else:
+            mut fresh = ULID._fresh_randomness()
+            self.rand_hi = fresh[0]
+            self.rand_lo = fresh[1]
+            self.last_ms = now
+        return ULID.from_parts(self.last_ms, (self.rand_hi, self.rand_lo))

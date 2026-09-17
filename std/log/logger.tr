@@ -1,0 +1,157 @@
+# std.log.logger — Logger: leveled, structured, multi-sink logging.
+#
+# Usage:
+#   from std.log import Logger, LogLevel, Fields
+#
+#   mut log = Logger.init("http")            # target/subsystem tag
+#   log.set_min_level(LogLevel.Info)         # below this, calls are no-ops
+#   log.add_file_sink("app.log")             # also append to a file
+#   log.set_format_json(true)                # JSON-lines instead of text
+#
+#   log.info_f("request handled", Fields.new().str("method", "GET").int("status", 200))
+#   log.debug("suppressed at Info level")    # cheap no-op: level checked first
+#
+# Levels: trace < debug < info < warn < error. A logger's `min_level` is the
+# threshold below which calls do no formatting work at all — the level check
+# happens before any string building, which is the whole performance story
+# for a logging library.
+
+from std.sys.datetime import DateTime
+from std.log.level import LogLevel
+from std.log.field import Fields
+from std.log.format import LogFormat
+from std.log.sink import StdoutSink, FileSink
+
+pub class Logger:
+    pub target:      str          # subsystem/module tag, e.g. "http", "db"; "" = untagged
+    pub min_level:   LogLevel
+    pub json_format: bool         # false = human-readable text, true = JSON-lines
+    pub to_stdout:   bool         # stdout sink enabled (default true)
+    pub _stdout:     StdoutSink
+    pub _has_file:   bool
+    pub _file:       FileSink
+
+extend Logger:
+    # Create a logger tagged with `target` (pass "" for an untagged logger).
+    # Defaults: min_level=Info, text format, stdout sink on, no file sink.
+    pub def init(target: str) -> Logger:
+        mut l       = Logger()
+        l.target    = target
+        l.min_level = LogLevel.Info
+        l.json_format = false
+        l.to_stdout   = true
+        l._stdout     = StdoutSink.init()
+        l._has_file   = false
+        l._file       = FileSink()
+        return l
+
+    # ── Configuration ─────────────────────────────────────────────────────────
+
+    # Calls below this level become cheap no-ops (checked before any formatting).
+    pub def set_min_level(self, level: LogLevel):
+        self.min_level = level
+
+    pub def get_min_level(self) -> LogLevel:
+        return self.min_level
+
+    # Switch between human-readable text (default) and JSON-lines output.
+    pub def set_format_json(self, on: bool):
+        self.json_format = on
+
+    # Enable/disable the stdout sink independently of the file sink.
+    pub def set_stdout(self, on: bool):
+        self.to_stdout = on
+
+    # Attach a file sink (append mode). Replaces any previously attached file sink.
+    pub def add_file_sink(self, path: str) -> bool:
+        if self._has_file:
+            self._file.close_sink()
+        self._file     = FileSink.init(path)
+        self._has_file = self._file._open
+        return self._has_file
+
+    # Detach the file sink, closing the underlying file handle.
+    pub def remove_file_sink(self):
+        if self._has_file:
+            self._file.close_sink()
+            self._has_file = false
+
+    # ── Core dispatch ─────────────────────────────────────────────────────────
+
+    # True when a call at `level` would actually produce output — lets callers
+    # skip building expensive Fields themselves if they want to go further than
+    # the automatic short-circuit in trace/debug/info/warn/error already gives.
+    pub def enabled(self, level: LogLevel) -> bool:
+        return level.at_least(self.min_level)
+
+    def _emit(self, level: LogLevel, msg: str, fields: Fields):
+        # Level check happens first: below min_level, we do zero formatting work.
+        if not level.at_least(self.min_level): return
+        mut ts   = DateTime.now().strftime("%Y-%m-%dT%H:%M:%S")
+        mut line = ""
+        if self.json_format:
+            line = LogFormat.json(ts, level, self.target, msg, fields)
+        else:
+            line = LogFormat.text(ts, level, self.target, msg, fields)
+        if self.to_stdout:
+            self._stdout.emit_line(line)
+        if self._has_file:
+            self._file.emit_line(line)
+
+    # ── Level methods (message only) ──────────────────────────────────────────
+    # Each checks the level FIRST and returns before touching Fields/formatting
+    # at all when the call is filtered out — that's the whole cost story for a
+    # logging library: a suppressed debug() call is just one comparison.
+
+    pub def trace(self, msg: str):
+        if not LogLevel.Trace.at_least(self.min_level): return
+        self._emit(LogLevel.Trace, msg, Fields.new())
+
+    pub def debug(self, msg: str):
+        if not LogLevel.Debug.at_least(self.min_level): return
+        self._emit(LogLevel.Debug, msg, Fields.new())
+
+    pub def info(self, msg: str):
+        if not LogLevel.Info.at_least(self.min_level): return
+        self._emit(LogLevel.Info, msg, Fields.new())
+
+    pub def warn(self, msg: str):
+        if not LogLevel.Warn.at_least(self.min_level): return
+        self._emit(LogLevel.Warn, msg, Fields.new())
+
+    pub def error(self, msg: str):
+        if not LogLevel.Error.at_least(self.min_level): return
+        self._emit(LogLevel.Error, msg, Fields.new())
+
+    # ── Level methods (message + structured fields) ──────────────────────────
+    # Same short-circuit: if the caller already built `fields` themselves the
+    # allocation happened before the call, so check `enabled()` first when
+    # fields are expensive to build — see the module doc for the pattern.
+
+    pub def trace_f(self, msg: str, fields: Fields):
+        if not LogLevel.Trace.at_least(self.min_level): return
+        self._emit(LogLevel.Trace, msg, fields)
+
+    pub def debug_f(self, msg: str, fields: Fields):
+        if not LogLevel.Debug.at_least(self.min_level): return
+        self._emit(LogLevel.Debug, msg, fields)
+
+    pub def info_f(self, msg: str, fields: Fields):
+        if not LogLevel.Info.at_least(self.min_level): return
+        self._emit(LogLevel.Info, msg, fields)
+
+    pub def warn_f(self, msg: str, fields: Fields):
+        if not LogLevel.Warn.at_least(self.min_level): return
+        self._emit(LogLevel.Warn, msg, fields)
+
+    pub def error_f(self, msg: str, fields: Fields):
+        if not LogLevel.Error.at_least(self.min_level): return
+        self._emit(LogLevel.Error, msg, fields)
+
+    # ── Cleanup ────────────────────────────────────────────────────────────────
+
+    pub def close(self):
+        self._stdout.flush()
+        if self._has_file:
+            self._file.close_sink()
+            self._has_file = false

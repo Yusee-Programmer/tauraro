@@ -1,0 +1,600 @@
+# std.cli.parser — clap-style command-line argument parser.
+#
+# Builder API:
+#
+#   from std.cli import Cli
+#
+#   mut app = Cli.init("mytool", "does a thing")
+#   app.flag("verbose", "v", "enable verbose output")
+#   app.option("output", "o", "output path", "")        # name, short, help, default
+#   app.positional("input", "input file to process", true)   # name, help, required
+#
+#   mut parsed = app.parse(args)   # args: Vec[str], e.g. Env.init().user_args()
+#   if not parsed.ok:
+#       print(parsed.error)
+#       Process.exit(1)
+#   if parsed.has_flag("verbose"): print("verbose on")
+#   print(parsed.get_option("output"))
+#
+# Subcommands:
+#
+#   mut app = Cli.init("mytool", "does a thing")
+#   mut build = app.subcommand("build", "build the project")
+#   build.flag("release", "r", "build in release mode")
+#   mut parsed = app.parse(args)
+#   if parsed.subcommand_name == "build":
+#       if parsed.sub.has_flag("release"): ...
+#
+# --help/-h is generated automatically for the app and every subcommand.
+# --version prints Cli.version when one has been set via app.version(...).
+#
+# Values are stored as strings; typed extraction (get_int/get_float/get_bool)
+# parses on demand and is validated at parse() time for options declared with
+# option_typed(), which reports a clear type error immediately.
+
+from std.core.vec import Vec
+from std.string.str import Str
+
+# ── Value-type tags (mirrors TomlValue's tag-int convention) ───────────────────
+
+pub def CLI_STR()   -> int: return 1
+pub def CLI_INT()   -> int: return 2
+pub def CLI_FLOAT() -> int: return 3
+pub def CLI_BOOL()  -> int: return 4
+
+# ── Internal spec records ───────────────────────────────────────────────────────
+
+pub class CliFlagSpec:
+    pub name:  str
+    pub short_name: str
+    pub help:  str
+
+pub class CliOptionSpec:
+    pub name:     str
+    pub short_name:    str
+    pub help:     str
+    pub default_: str
+    pub kind:     int   # CLI_STR / CLI_INT / CLI_FLOAT / CLI_BOOL
+    pub required: bool
+
+pub class CliPositionalSpec:
+    pub name:     str
+    pub help:     str
+    pub required: bool
+
+extend CliFlagSpec:
+    pub def init(name: str, short: str, help: str) -> CliFlagSpec:
+        mut f = CliFlagSpec()
+        f.name  = name
+        f.short_name = short
+        f.help  = help
+        return f
+
+extend CliOptionSpec:
+    pub def init(name: str, short: str, help: str, default_: str, kind: int, required: bool) -> CliOptionSpec:
+        mut o = CliOptionSpec()
+        o.name     = name
+        o.short_name    = short
+        o.help     = help
+        o.default_ = default_
+        o.kind     = kind
+        o.required = required
+        return o
+
+extend CliPositionalSpec:
+    pub def init(name: str, help: str, required: bool) -> CliPositionalSpec:
+        mut p = CliPositionalSpec()
+        p.name     = name
+        p.help     = help
+        p.required = required
+        return p
+
+# ── Parsed result ────────────────────────────────────────────────────────────
+
+pub class CliArgs:
+    pub ok:               bool
+    pub error:            str
+    pub flag_names:       Vec[str]   # flags that were present
+    pub option_names:     Vec[str]   # every option name that got a value (explicit or default)
+    pub option_values:    Vec[str]
+    pub positional_names: Vec[str]
+    pub positional_values: Vec[str]
+    pub subcommand_name:  str        # "" when no subcommand matched
+    pub sub_holder:       Vec[CliArgs]   # 0 or 1 elements: nested parsed result for the matched subcommand
+    pub help_requested:   bool
+    pub version_requested: bool
+
+extend CliArgs:
+    pub def init() -> CliArgs:
+        mut a = CliArgs()
+        a.ok                 = true
+        a.error              = ""
+        a.flag_names         = Vec[str].init(4)
+        a.option_names       = Vec[str].init(4)
+        a.option_values      = Vec[str].init(4)
+        a.positional_names   = Vec[str].init(4)
+        a.positional_values  = Vec[str].init(4)
+        a.subcommand_name    = ""
+        a.sub_holder         = Vec[CliArgs].init(1)
+        a.help_requested     = false
+        a.version_requested  = false
+        return a
+
+    pub def fail(msg: str) -> CliArgs:
+        mut a = CliArgs.init()
+        a.ok    = false
+        a.error = msg
+        return a
+
+    # ── Flags ────────────────────────────────────────────────────────────────
+
+    pub def has_flag(self, name: str) -> bool:
+        mut i = 0
+        while i < self.flag_names.len:
+            if Str.eq(self.flag_names.get(i), name): return true
+            i = i + 1
+        return false
+
+    # ── Options (string) ─────────────────────────────────────────────────────
+
+    pub def has_option(self, name: str) -> bool:
+        mut i = 0
+        while i < self.option_names.len:
+            if Str.eq(self.option_names.get(i), name): return true
+            i = i + 1
+        return false
+
+    pub def get_option(self, name: str) -> str:
+        mut i = 0
+        while i < self.option_names.len:
+            if Str.eq(self.option_names.get(i), name): return self.option_values.get(i)
+            i = i + 1
+        return ""
+
+    pub def get_option_int(self, name: str) -> int:
+        return Str.parse_int(self.get_option(name))
+
+    pub def get_option_float(self, name: str) -> float:
+        return Str.parse_float(self.get_option(name))
+
+    pub def get_option_bool(self, name: str) -> bool:
+        return Str.parse_bool(self.get_option(name))
+
+    # ── Positionals ───────────────────────────────────────────────────────────
+
+    pub def get_positional(self, name: str) -> str:
+        mut i = 0
+        while i < self.positional_names.len:
+            if Str.eq(self.positional_names.get(i), name): return self.positional_values.get(i)
+            i = i + 1
+        return ""
+
+    pub def has_positional(self, name: str) -> bool:
+        mut i = 0
+        while i < self.positional_names.len:
+            if Str.eq(self.positional_names.get(i), name): return true
+            i = i + 1
+        return false
+
+    # ── Subcommand ───────────────────────────────────────────────────────────
+
+    pub def has_subcommand(self) -> bool:
+        return not Str.eq(self.subcommand_name, "")
+
+    pub def subcommand(self) -> CliArgs:
+        return self.sub_holder.get(0)
+
+# ── Type-checking helper: is s a valid integer literal? ─────────────────────
+
+pub def _cli_is_valid_int(s: str) -> bool:
+    mut n = Str.len(s)
+    if n == 0: return false
+    mut p = s as Pointer[char]
+    mut i = 0
+    mut c = p.offset(0).read() as int
+    if c == 45 or c == 43:
+        i = 1
+        if n == 1: return false
+    while i < n:
+        mut ci = p.offset(i).read() as int
+        if ci < 48 or ci > 57: return false
+        i = i + 1
+    return true
+
+pub def _cli_is_valid_float(s: str) -> bool:
+    mut n = Str.len(s)
+    if n == 0: return false
+    mut p = s as Pointer[char]
+    mut i = 0
+    mut c = p.offset(0).read() as int
+    if c == 45 or c == 43: i = 1
+    if i >= n: return false
+    mut seen_digit = false
+    mut seen_dot   = false
+    while i < n:
+        mut ci = p.offset(i).read() as int
+        if ci >= 48 and ci <= 57:
+            seen_digit = true
+        elif ci == 46 and not seen_dot:
+            seen_dot = true
+        else:
+            return false
+        i = i + 1
+    return seen_digit
+
+pub def _cli_is_valid_bool(s: str) -> bool:
+    return Str.eq(s, "true") or Str.eq(s, "false") or Str.eq(s, "1") or Str.eq(s, "0") or Str.eq(s, "yes") or Str.eq(s, "no")
+
+pub def _cli_kind_name(kind: int) -> str:
+    if kind == CLI_INT():   return "int"
+    if kind == CLI_FLOAT(): return "float"
+    if kind == CLI_BOOL():  return "bool"
+    return "str"
+
+# ── The app / builder ────────────────────────────────────────────────────────
+
+pub class Cli:
+    pub name:         str
+    pub about:        str
+    pub version_str:  str
+    pub flags:        Vec[CliFlagSpec]
+    pub options:      Vec[CliOptionSpec]
+    pub positionals:  Vec[CliPositionalSpec]
+    pub sub_names:    Vec[str]
+    pub sub_apps:     Vec[Cli]
+
+extend Cli:
+    # Create a new CLI app. name is used in --help/usage text and error messages.
+    pub def init(name: str, about: str) -> Cli:
+        mut c = Cli()
+        c.name        = name
+        c.about       = about
+        c.version_str = ""
+        c.flags       = Vec[CliFlagSpec].init(4)
+        c.options     = Vec[CliOptionSpec].init(4)
+        c.positionals = Vec[CliPositionalSpec].init(4)
+        c.sub_names   = Vec[str].init(2)
+        c.sub_apps    = Vec[Cli].init(2)
+        return c
+
+    # Set the string printed by --version.
+    pub def version(self, v: str):
+        self.version_str = v
+
+    # ── Declaring the surface ─────────────────────────────────────────────────
+
+    # A boolean flag, e.g. --verbose / -v. short may be "" for no short form.
+    pub def flag(self, name: str, short: str, help: str):
+        self.flags.push(CliFlagSpec.init(name, short, help))
+
+    # A string-valued option with a default, e.g. --output <path> / -o <path>.
+    pub def option(self, name: str, short: str, help: str, default_: str):
+        self.options.push(CliOptionSpec.init(name, short, help, default_, CLI_STR(), false))
+
+    # A required string-valued option (no default; parse() fails if absent).
+    pub def option_required(self, name: str, short: str, help: str):
+        self.options.push(CliOptionSpec.init(name, short, help, "", CLI_STR(), true))
+
+    # A typed option (CLI_INT()/CLI_FLOAT()/CLI_BOOL()). parse() validates the
+    # value's shape and fails with a clear type error if it doesn't match.
+    pub def option_typed(self, name: str, short: str, help: str, default_: str, kind: int):
+        self.options.push(CliOptionSpec.init(name, short, help, default_, kind, false))
+
+    pub def option_typed_required(self, name: str, short: str, help: str, kind: int):
+        self.options.push(CliOptionSpec.init(name, short, help, "", kind, true))
+
+    # A positional argument, consumed in declaration order. Required positionals
+    # must all precede optional ones.
+    pub def positional(self, name: str, help: str, required: bool):
+        self.positionals.push(CliPositionalSpec.init(name, help, required))
+
+    # Register a subcommand and return its own Cli builder to configure further.
+    pub def subcommand(self, name: str, about: str) -> Cli:
+        mut sub = Cli.init(self.name + " " + name, about)
+        self.sub_names.push(name)
+        self.sub_apps.push(sub)
+        return sub
+
+    # ── Lookup helpers ────────────────────────────────────────────────────────
+
+    pub def _find_flag_by_long(self, name: str) -> int:
+        mut i = 0
+        while i < self.flags.len:
+            if Str.eq(self.flags.get(i).name, name): return i
+            i = i + 1
+        return -1
+
+    pub def _find_flag_by_short(self, short: str) -> int:
+        mut i = 0
+        while i < self.flags.len:
+            mut s = self.flags.get(i).short_name
+            if not Str.eq(s, "") and Str.eq(s, short): return i
+            i = i + 1
+        return -1
+
+    pub def _find_option_by_long(self, name: str) -> int:
+        mut i = 0
+        while i < self.options.len:
+            if Str.eq(self.options.get(i).name, name): return i
+            i = i + 1
+        return -1
+
+    pub def _find_option_by_short(self, short: str) -> int:
+        mut i = 0
+        while i < self.options.len:
+            mut s = self.options.get(i).short_name
+            if not Str.eq(s, "") and Str.eq(s, short): return i
+            i = i + 1
+        return -1
+
+    pub def _find_sub(self, name: str) -> int:
+        mut i = 0
+        while i < self.sub_names.len:
+            if Str.eq(self.sub_names.get(i), name): return i
+            i = i + 1
+        return -1
+
+    # ── Parsing ───────────────────────────────────────────────────────────────
+
+    # Parse args (typically Env.init().user_args() — argv WITHOUT the program
+    # name). Returns a CliArgs; check `.ok` before reading values. If the user
+    # passed -h/--help, `.help_requested` is set to true and .ok is true (the
+    # caller decides whether to print help and exit(0)).
+    pub def parse(self, args: Vec[str]) -> CliArgs:
+        mut result = CliArgs.init()
+
+        # Seed option defaults up front so get_option() always has a value.
+        mut oi = 0
+        while oi < self.options.len:
+            mut spec = self.options.get(oi)
+            result.option_names.push(spec.name)
+            result.option_values.push(spec.default_)
+            oi = oi + 1
+
+        mut i             = 0
+        mut positional_at = 0   # index into self.positionals for the next positional value
+        mut seen_options  = Vec[str].init(4)   # names explicitly supplied (for required-check)
+
+        while i < args.len:
+            mut arg = args.get(i)
+
+            if Str.eq(arg, "-h") or Str.eq(arg, "--help"):
+                result.help_requested = true
+                i = i + 1
+                continue
+
+            if Str.eq(arg, "--version"):
+                result.version_requested = true
+                i = i + 1
+                continue
+
+            if Str.starts_with(arg, "--"):
+                mut name = Str.slice(arg, 2, Str.len(arg))
+                # --name=value form
+                mut eq = Str.index_of(name, "=")
+                if eq >= 0:
+                    mut val_inline = Str.slice(name, eq + 1, Str.len(name))
+                    name = Str.slice(name, 0, eq)
+                    mut oidx = self._find_option_by_long(name)
+                    if oidx < 0:
+                        return CliArgs.fail("unknown option '--" + name + "'" + self._did_you_mean(name))
+                    mut check = self._check_typed(self.options.get(oidx), val_inline)
+                    if not Str.eq(check, ""): return CliArgs.fail(check)
+                    self._store_option(result, oidx, val_inline)
+                    seen_options.push(name)
+                    i = i + 1
+                    continue
+
+                mut fidx = self._find_flag_by_long(name)
+                if fidx >= 0:
+                    result.flag_names.push(name)
+                    i = i + 1
+                    continue
+
+                mut oidx2 = self._find_option_by_long(name)
+                if oidx2 >= 0:
+                    if i + 1 >= args.len:
+                        return CliArgs.fail("option '--" + name + "' requires a value")
+                    mut val = args.get(i + 1)
+                    mut check2 = self._check_typed(self.options.get(oidx2), val)
+                    if not Str.eq(check2, ""): return CliArgs.fail(check2)
+                    self._store_option(result, oidx2, val)
+                    seen_options.push(name)
+                    i = i + 2
+                    continue
+
+                return CliArgs.fail("unknown flag '--" + name + "'" + self._did_you_mean(name))
+
+            elif Str.starts_with(arg, "-") and not Str.eq(arg, "-"):
+                mut short = Str.slice(arg, 1, Str.len(arg))
+
+                mut fidx2 = self._find_flag_by_short(short)
+                if fidx2 >= 0:
+                    result.flag_names.push(self.flags.get(fidx2).name)
+                    i = i + 1
+                    continue
+
+                mut oidx3 = self._find_option_by_short(short)
+                if oidx3 >= 0:
+                    if i + 1 >= args.len:
+                        return CliArgs.fail("option '-" + short + "' requires a value")
+                    mut val2 = args.get(i + 1)
+                    mut spec3 = self.options.get(oidx3)
+                    mut check3 = self._check_typed(spec3, val2)
+                    if not Str.eq(check3, ""): return CliArgs.fail(check3)
+                    self._store_option(result, oidx3, val2)
+                    seen_options.push(spec3.name)
+                    i = i + 2
+                    continue
+
+                return CliArgs.fail("unknown flag '-" + short + "'")
+
+            else:
+                # Not an option-looking token: subcommand (only as the very
+                # first free token) or a positional value.
+                if self.sub_names.len > 0 and Str.eq(result.subcommand_name, "") and positional_at == 0 and result.positional_values.len == 0:
+                    mut sidx = self._find_sub(arg)
+                    if sidx >= 0:
+                        mut sub_app    = self.sub_apps.get(sidx)
+                        mut rest       = Vec[str].init(args.len - i)
+                        mut j          = i + 1
+                        while j < args.len:
+                            rest.push(args.get(j))
+                            j = j + 1
+                        mut sub_result = sub_app.parse(rest)
+                        if not sub_result.ok:
+                            return CliArgs.fail(sub_result.error)
+                        result.subcommand_name = arg
+                        result.sub_holder.push(sub_result)
+                        result.help_requested    = result.help_requested or sub_result.help_requested
+                        result.version_requested = result.version_requested or sub_result.version_requested
+                        return result
+                    else:
+                        return CliArgs.fail("unknown subcommand '" + arg + "'" + self._did_you_mean_sub(arg))
+
+                if positional_at >= self.positionals.len:
+                    return CliArgs.fail("unexpected argument '" + arg + "'")
+                mut pspec = self.positionals.get(positional_at)
+                result.positional_names.push(pspec.name)
+                result.positional_values.push(arg)
+                positional_at = positional_at + 1
+                i = i + 1
+
+        if result.help_requested or result.version_requested:
+            return result
+
+        # Required-option check.
+        mut ri = 0
+        while ri < self.options.len:
+            mut rspec = self.options.get(ri)
+            if rspec.required:
+                mut supplied = false
+                mut si = 0
+                while si < seen_options.len:
+                    if Str.eq(seen_options.get(si), rspec.name): supplied = true
+                    si = si + 1
+                if not supplied:
+                    return CliArgs.fail("missing required option '--" + rspec.name + "'")
+            ri = ri + 1
+
+        # Required-positional check.
+        while positional_at < self.positionals.len:
+            mut pspec2 = self.positionals.get(positional_at)
+            if pspec2.required:
+                return CliArgs.fail("missing required argument '<" + pspec2.name + ">'")
+            positional_at = positional_at + 1
+
+        return result
+
+    pub def _store_option(self, result: CliArgs, oidx: int, val: str):
+        mut spec = self.options.get(oidx)
+        mut k    = 0
+        while k < result.option_names.len:
+            if Str.eq(result.option_names.get(k), spec.name):
+                result.option_values.set(k, val)
+                return
+            k = k + 1
+        result.option_names.push(spec.name)
+        result.option_values.push(val)
+
+    # Return "" if val matches spec's declared kind, else a human-readable error.
+    pub def _check_typed(self, spec: CliOptionSpec, val: str) -> str:
+        if spec.kind == CLI_INT():
+            if not _cli_is_valid_int(val):
+                return "invalid value '" + val + "' for '--" + spec.name + "': expected an integer"
+        elif spec.kind == CLI_FLOAT():
+            if not _cli_is_valid_float(val):
+                return "invalid value '" + val + "' for '--" + spec.name + "': expected a number"
+        elif spec.kind == CLI_BOOL():
+            if not _cli_is_valid_bool(val):
+                return "invalid value '" + val + "' for '--" + spec.name + "': expected true/false"
+        return ""
+
+    pub def _did_you_mean(self, name: str) -> str:
+        return ""
+
+    pub def _did_you_mean_sub(self, name: str) -> str:
+        return ""
+
+    # ── Help / usage text ────────────────────────────────────────────────────
+
+    # Build the full --help text as a string (also used by print_help()).
+    pub def help_text(self) -> str:
+        mut out = self.name
+        if not Str.eq(self.about, ""):
+            out = out + " — " + self.about
+        out = out + "\n\nUSAGE:\n    " + self.name
+
+        if self.sub_names.len > 0:
+            out = out + " <SUBCOMMAND>"
+        mut fi = 0
+        while fi < self.flags.len:
+            out = out + " [--" + self.flags.get(fi).name + "]"
+            fi = fi + 1
+        mut oi = 0
+        while oi < self.options.len:
+            mut spec = self.options.get(oi)
+            if spec.required:
+                out = out + " --" + spec.name + " <" + _cli_kind_name(spec.kind) + ">"
+            else:
+                out = out + " [--" + spec.name + " <" + _cli_kind_name(spec.kind) + ">]"
+            oi = oi + 1
+        mut pi = 0
+        while pi < self.positionals.len:
+            mut pspec = self.positionals.get(pi)
+            if pspec.required:
+                out = out + " <" + pspec.name + ">"
+            else:
+                out = out + " [" + pspec.name + "]"
+            pi = pi + 1
+        out = out + "\n"
+
+        if self.positionals.len > 0:
+            out = out + "\nARGS:\n"
+            mut pi2 = 0
+            while pi2 < self.positionals.len:
+                mut pspec2 = self.positionals.get(pi2)
+                out = out + "    " + Str.rpad(pspec2.name, 16, 32) + pspec2.help
+                if not pspec2.required: out = out + " (optional)"
+                out = out + "\n"
+                pi2 = pi2 + 1
+
+        if self.flags.len > 0 or self.options.len > 0:
+            out = out + "\nOPTIONS:\n"
+            out = out + "    " + Str.rpad("-h, --help", 24, 32) + "print help and exit\n"
+            if not Str.eq(self.version_str, ""):
+                out = out + "    " + Str.rpad("--version", 24, 32) + "print version and exit\n"
+            mut fi2 = 0
+            while fi2 < self.flags.len:
+                mut fspec = self.flags.get(fi2)
+                mut label = "--" + fspec.name
+                if not Str.eq(fspec.short_name, ""): label = "-" + fspec.short_name + ", " + label
+                out = out + "    " + Str.rpad(label, 24, 32) + fspec.help + "\n"
+                fi2 = fi2 + 1
+            mut oi2 = 0
+            while oi2 < self.options.len:
+                mut ospec = self.options.get(oi2)
+                mut label2 = "--" + ospec.name + " <" + _cli_kind_name(ospec.kind) + ">"
+                if not Str.eq(ospec.short_name, ""): label2 = "-" + ospec.short_name + ", " + label2
+                out = out + "    " + Str.rpad(label2, 24, 32) + ospec.help
+                if ospec.required:
+                    out = out + " (required)"
+                elif not Str.eq(ospec.default_, ""):
+                    out = out + " [default: " + ospec.default_ + "]"
+                out = out + "\n"
+                oi2 = oi2 + 1
+
+        if self.sub_names.len > 0:
+            out = out + "\nSUBCOMMANDS:\n"
+            mut si = 0
+            while si < self.sub_names.len:
+                out = out + "    " + Str.rpad(self.sub_names.get(si), 16, 32) + self.sub_apps.get(si).about + "\n"
+                si = si + 1
+
+        return out
+
+    pub def print_help(self):
+        print(self.help_text())
+
+    pub def print_version(self):
+        print(self.name + " " + self.version_str)

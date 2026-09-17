@@ -1,0 +1,965 @@
+# std.encoding.yaml — YAML 1.1/1.2 common-subset parser and serializer.
+#
+# Supports: comments (`#`), block mappings (`key: value`, indentation-nested),
+# block sequences (`- item`, indentation-nested, including `- key: value`
+# sequences of mappings), flow mappings (`{k: v, ...}`), flow sequences
+# (`[a, b, ...]`), plain/single-quoted/double-quoted scalar strings
+# (double-quoted supports backslash escapes; single-quoted supports the YAML
+# `''` -> `'` literal-quote escape), integers, floats, and booleans.
+# Anchors (`&name`) and aliases (`*name`) ARE supported, in both flow and
+# block position (an alias reuses the previously-anchored `YamlValue` node by
+# reference — safe because YamlValue is an ARC tree/DAG and a well-formed
+# YAML document's aliases can never point back up to one of their own
+# ancestors, so no reference cycle can form).
+#
+# Booleans: this parser follows YAML 1.1's boolean set — `true`/`false`,
+# `yes`/`no`, and `on`/`off` (case-insensitive) are all recognized as
+# booleans when unquoted. Quote a value (`"yes"`) to force it to stay a string.
+#
+# Deliberately OUT OF SCOPE (documented here rather than silently mishandled,
+# same policy as std.encoding.toml's dates-as-strings deferral):
+#   - Multi-document streams via `---` / `...` separators are not parsed by
+#     `Yaml.parse` (it reads a single document; leading/trailing `---`/`...`
+#     marker lines are simply skipped as transparent). Use `Yaml.parse_multi`
+#     to split and parse a full multi-document stream.
+#   - Block scalars (`|` literal and `>` folded, with chomping indicators
+#     `-`/`+`) are not implemented. Use quoted or flow-style strings for
+#     multi-line content instead.
+#   - Tags (`!!str`, `!!binary`, custom `!tag`) are not interpreted; a `!`
+#     tag token on a node is skipped over (ignored), not applied.
+#   - Merge keys (`<<:`) are not implemented.
+#   - Dates/timestamps are parsed as plain strings, exactly like TOML's dates.
+#
+# SAFE API: `YamlValue` is an ARC class — the parse tree is a tree (or, with
+# aliases, a DAG — still acyclic by construction) of owned ARC nodes;
+# reclaimed automatically. No raw pointers are exposed, so callers never need
+# `unsafe:` (the parser's internal string-slicing does, exactly like TOML's):
+#   from std.encoding.yaml import YamlValue, Yaml
+#   mut y = Yaml.parse("title: hello\nserver:\n  port: 8080\n")
+#   print(y.obj_get("server").obj_get("port").get_int())
+#   print(Yaml.stringify(y))   # round-trips to canonical block YAML
+
+from std.core.vec import Vec
+from std.core.string import StringBuilder
+
+extern "C":
+    def _tr_strlen(s: str) -> int
+    def _tr_str_to_float(s: str) -> float
+    def _tr_str_to_int(s: str) -> int
+    def _tr_int_to_str(n: int) -> str
+    def _tr_float_to_str(n: float) -> str
+
+# YamlValue.tag constants (mirrors the JSON/TOML models). tag 0 = null/absent.
+pub def YAML_NULL()  -> int: return 0
+pub def YAML_BOOL()  -> int: return 1
+pub def YAML_INT()   -> int: return 2
+pub def YAML_FLOAT() -> int: return 3
+pub def YAML_STR()   -> int: return 4
+pub def YAML_ARRAY() -> int: return 5
+pub def YAML_TABLE() -> int: return 6
+
+pub class YamlValue:
+    pub tag:   int
+    pub b_val: bool
+    pub i_val: int
+    pub f_val: float
+    pub s_val: str
+    pub items: Vec[YamlValue]   # array items OR table values (owned/shared children)
+    pub keys:  Vec[str]         # table keys (parallel to items)
+
+extend YamlValue:
+    pub def _new() -> YamlValue:
+        mut v = YamlValue()
+        v.tag   = 0
+        v.b_val = false
+        v.i_val = 0
+        v.f_val = 0.0
+        v.s_val = ""
+        v.items = Vec[YamlValue].init(4)
+        v.keys  = Vec[str].init(4)
+        return v
+
+    # The absent value (tag 0, same as null), returned by obj_get/array_get on a miss.
+    pub def absent() -> YamlValue:
+        return YamlValue._new()
+
+    pub def init_null() -> YamlValue:
+        return YamlValue._new()
+
+    pub def init_bool(b: bool) -> YamlValue:
+        mut v = YamlValue._new(); v.tag = 1; v.b_val = b
+        return v
+
+    pub def init_int(n: int) -> YamlValue:
+        mut v = YamlValue._new(); v.tag = 2; v.i_val = n
+        return v
+
+    pub def init_float(f: float) -> YamlValue:
+        mut v = YamlValue._new(); v.tag = 3; v.f_val = f
+        return v
+
+    pub def init_str(s: str) -> YamlValue:
+        mut v = YamlValue._new(); v.tag = 4; v.s_val = s
+        return v
+
+    pub def init_array() -> YamlValue:
+        mut v = YamlValue._new(); v.tag = 5
+        return v
+
+    pub def init_table() -> YamlValue:
+        mut v = YamlValue._new(); v.tag = 6
+        return v
+
+    pub def is_none(self)  -> bool: return self.tag == 0
+    pub def is_null(self)  -> bool: return self.tag == 0
+    pub def is_bool(self)  -> bool: return self.tag == 1
+    pub def is_int(self)   -> bool: return self.tag == 2
+    pub def is_float(self) -> bool: return self.tag == 3
+    pub def is_str(self)   -> bool: return self.tag == 4
+    pub def is_array(self) -> bool: return self.tag == 5
+    pub def is_table(self) -> bool: return self.tag == 6
+
+    pub def get_bool(self)  -> bool:  return self.b_val
+    pub def get_int(self)   -> int:   return self.i_val
+    pub def get_float(self) -> float: return self.f_val
+    pub def get_str(self)   -> str:   return self.s_val
+
+    pub def push(self, v: YamlValue):
+        self.items.push(v)
+
+    pub def array_len(self) -> int:
+        return self.items.len
+
+    pub def array_get(self, i: int) -> YamlValue:
+        if i < 0 or i >= self.items.len: return YamlValue.absent()
+        return self.items.get(i)
+
+    pub def obj_set(self, key: str, v: YamlValue):
+        mut i = 0
+        while i < self.keys.len:
+            if self.keys.get(i) == key:
+                self.items.set(i, v)
+                return
+            i = i + 1
+        self.keys.push(key)
+        self.items.push(v)
+
+    pub def obj_get(self, key: str) -> YamlValue:
+        mut i = 0
+        while i < self.keys.len:
+            if self.keys.get(i) == key:
+                return self.items.get(i)
+            i = i + 1
+        return YamlValue.absent()
+
+    pub def obj_has(self, key: str) -> bool:
+        mut i = 0
+        while i < self.keys.len:
+            if self.keys.get(i) == key: return true
+            i = i + 1
+        return false
+
+    pub def obj_len(self) -> int:
+        return self.keys.len
+
+    pub def obj_key(self, i: int) -> str:
+        return self.keys.get(i)
+
+    pub def obj_val(self, i: int) -> YamlValue:
+        return self.items.get(i)
+
+# ─── Line pre-scan ──────────────────────────────────────────────────────────
+#
+# YAML's block structure is line/indentation oriented, so the parser first
+# splits the source into logical lines (comments stripped, trailing
+# whitespace trimmed) each tagged with its indent depth (count of leading
+# spaces). Blank/comment-only/document-marker lines become empty-content
+# lines (start == end) so they're transparent to the block parser but still
+# occupy a slot. Block parsing then walks this line array purely by indent
+# comparison. Flow constructs (`{...}` / `[...]`) and quoted strings are
+# scanned via a small cursor re-based onto each line's [start, end) span.
+
+pub class YamlLine:
+    pub indent: int
+    pub start:  int   # offset of first content char in the ORIGINAL source
+    pub end:    int   # offset just past the last content char (before comment/EOL)
+
+pub class YamlParser:
+    pub src:   str
+    pub pos:   int
+    pub len:   int
+    pub lines: Vec[YamlLine]
+    pub anchor_names: Vec[str]
+    pub anchor_vals:  Vec[YamlValue]
+    pub next_idx: int   # out-parameter: index of first unconsumed line after a parse_* call
+
+extend YamlParser:
+    pub def init(src: str) -> YamlParser:
+        mut p = YamlParser()
+        p.src   = src
+        p.pos   = 0
+        p.len   = _tr_strlen(src)
+        p.lines = Vec[YamlLine].init(16)
+        p.anchor_names = Vec[str].init(4)
+        p.anchor_vals  = Vec[YamlValue].init(4)
+        p.next_idx = 0
+        p._scan_lines()
+        return p
+
+    def _srcat(self, i: int) -> int:
+        if i < 0 or i >= self.len: return 0
+        return (self.src as Pointer[char]).offset(i).read() as int
+
+    def _scan_lines(self):
+        mut i = 0
+        while i < self.len:
+            mut indent = 0
+            while i < self.len and self._srcat(i) == 32:
+                indent = indent + 1
+                i = i + 1
+            mut lstart = i
+            mut in_squote = false
+            mut in_dquote = false
+            while i < self.len and self._srcat(i) != 10:
+                mut c = self._srcat(i)
+                if c == 39 and not in_dquote: in_squote = not in_squote
+                elif c == 34 and not in_squote: in_dquote = not in_dquote
+                elif c == 35 and not in_squote and not in_dquote:
+                    if i == lstart or self._srcat(i - 1) == 32 or self._srcat(i - 1) == 9:
+                        break
+                i = i + 1
+            mut lend = i
+            while lend > lstart and (self._srcat(lend - 1) == 32 or self._srcat(lend - 1) == 9 or self._srcat(lend - 1) == 13):
+                lend = lend - 1
+            while i < self.len and self._srcat(i) != 10:
+                i = i + 1
+            if i < self.len: i = i + 1  # consume '\n'
+
+            mut ln = YamlLine()
+            ln.indent = indent
+            ln.start  = lstart
+            ln.end    = lend
+            if lend > lstart:
+                mut seg = self.src.slice(lstart, lend)
+                if seg == "---" or seg == "...":
+                    ln.start = lstart
+                    ln.end   = lstart
+            self.lines.push(ln)
+
+    def _is_blank(self, idx: int) -> bool:
+        mut ln = self.lines.get(idx)
+        return ln.end <= ln.start
+
+    # First non-blank line at index >= from (lines.len if none).
+    def _next_content(self, from: int) -> int:
+        mut i = from
+        while i < self.lines.len and self._is_blank(i):
+            i = i + 1
+        return i
+
+    # ─── Anchors / aliases ──────────────────────────────────────────────────
+
+    def _register_anchor(self, name: str, v: YamlValue):
+        mut i = 0
+        while i < self.anchor_names.len:
+            if self.anchor_names.get(i) == name:
+                self.anchor_vals.set(i, v)
+                return
+            i = i + 1
+        self.anchor_names.push(name)
+        self.anchor_vals.push(v)
+
+    def _lookup_anchor(self, name: str) -> YamlValue:
+        mut i = 0
+        while i < self.anchor_names.len:
+            if self.anchor_names.get(i) == name:
+                return self.anchor_vals.get(i)
+            i = i + 1
+        return YamlValue.absent()
+
+    # ─── Scalar classification ───────────────────────────────────────────────
+
+    def _is_bool_word(self, w: str) -> int:
+        # -1 = not a bool, 0 = false, 1 = true. YAML 1.1 set: true/false,
+        # yes/no, on/off (case-insensitive).
+        mut lw = _yaml_lower(w)
+        if lw == "true" or lw == "yes" or lw == "on": return 1
+        if lw == "false" or lw == "no" or lw == "off": return 0
+        return 0 - 1
+
+    def _looks_numeric(self, w: str) -> bool:
+        mut n = _tr_strlen(w)
+        if n == 0: return false
+        mut i = 0
+        mut c0 = (w as Pointer[char]).offset(0).read() as int
+        if c0 == 43 or c0 == 45: i = 1
+        if i >= n: return false
+        mut saw_digit = false
+        while i < n:
+            mut c = (w as Pointer[char]).offset(i).read() as int
+            if c >= 48 and c <= 57: saw_digit = true
+            elif c == 46 or c == 101 or c == 69 or c == 43 or c == 45: pass
+            else: return false
+            i = i + 1
+        return saw_digit
+
+    def _classify_plain(self, w: str) -> YamlValue:
+        if w == "" or w == "~" or w == "null" or w == "Null" or w == "NULL":
+            return YamlValue.init_null()
+        mut bw = self._is_bool_word(w)
+        if bw == 1: return YamlValue.init_bool(true)
+        if bw == 0: return YamlValue.init_bool(false)
+        if self._looks_numeric(w):
+            mut is_float = false
+            mut n = _tr_strlen(w)
+            mut i = 0
+            while i < n:
+                mut c = (w as Pointer[char]).offset(i).read() as int
+                if c == 46 or c == 101 or c == 69: is_float = true
+                i = i + 1
+            if is_float:
+                return YamlValue.init_float(_tr_str_to_float(w))
+            return YamlValue.init_int(_tr_str_to_int(w))
+        return YamlValue.init_str(w)
+
+    # ─── Cursor-based scanning (flow collections + quoted scalars) ─────────
+    # `self.pos`/`self.len` are temporarily re-based onto a sub-span of the
+    # source by callers (see `_parse_span`) so this logic is shared between
+    # flow parsing on a single value-span and top-level flow-document parsing.
+
+    def _cur(self) -> int:
+        return self._srcat(self.pos)
+
+    def _adv(self):
+        self.pos = self.pos + 1
+
+    pub def _peek_at(self, off: int) -> int:
+        return self._srcat(self.pos + off)
+
+    def _skip_flow_ws(self):
+        while self.pos < self.len:
+            mut c = self._cur()
+            if c == 32 or c == 9 or c == 10 or c == 13:
+                self._adv()
+            elif c == 35:
+                while self.pos < self.len and self._cur() != 10:
+                    self._adv()
+            else:
+                break
+
+    def _is_name_char(self, c: int) -> bool:
+        if c >= 97 and c <= 122: return true
+        if c >= 65 and c <= 90:  return true
+        if c >= 48 and c <= 57:  return true
+        if c == 95 or c == 45 or c == 46: return true
+        return false
+
+    def _parse_dquote(self) -> str:
+        self._adv()  # opening "
+        mut sb = StringBuilder.init(32)
+        while self.pos < self.len:
+            mut c = self._cur()
+            if c == 34:
+                self._adv()
+                break
+            if c == 92:
+                self._adv()
+                mut esc = self._cur()
+                self._adv()
+                if esc == 110: sb.append_char(10)
+                elif esc == 116: sb.append_char(9)
+                elif esc == 114: sb.append_char(13)
+                elif esc == 92: sb.append_char(92)
+                elif esc == 34: sb.append_char(34)
+                elif esc == 48: sb.append_char(0)
+                elif esc == 97: sb.append_char(7)
+                elif esc == 98: sb.append_char(8)
+                elif esc == 102: sb.append_char(12)
+                elif esc == 118: sb.append_char(11)
+                elif esc == 101: sb.append_char(27)
+                else: sb.append_char(esc)
+            else:
+                sb.append_char(c)
+                self._adv()
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    def _parse_squote(self) -> str:
+        self._adv()  # opening '
+        mut sb = StringBuilder.init(32)
+        while self.pos < self.len:
+            mut c = self._cur()
+            if c == 39:
+                if self._peek_at(1) == 39:
+                    sb.append_char(39)
+                    self._adv()
+                    self._adv()
+                else:
+                    self._adv()
+                    break
+            else:
+                sb.append_char(c)
+                self._adv()
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    # Plain (unquoted) scalar in flow context: runs until `,]}` or a `:`
+    # followed by whitespace/EOF/`,]}`, or a ` #` comment, or EOL.
+    def _parse_flow_plain(self) -> str:
+        mut start = self.pos
+        while self.pos < self.len:
+            mut c = self._cur()
+            if c == 44 or c == 93 or c == 125 or c == 10 or c == 13: break
+            if c == 58:
+                mut nc = self._peek_at(1)
+                if nc == 32 or nc == 9 or nc == 0 or nc == 44 or nc == 93 or nc == 125 or nc == 10: break
+            if c == 35 and (self.pos == start or self._srcat(self.pos - 1) == 32 or self._srcat(self.pos - 1) == 9): break
+            self._adv()
+        return _yaml_trim(self.src.slice(start, self.pos))
+
+    def _parse_flow_value(self) -> YamlValue:
+        self._skip_flow_ws()
+        mut c = self._cur()
+        if c == 42:  # '*' alias
+            self._adv()
+            mut start = self.pos
+            while self.pos < self.len and self._is_name_char(self._cur()):
+                self._adv()
+            mut name = self.src.slice(start, self.pos)
+            return self._lookup_anchor(name)
+        mut anchor_name = ""
+        mut has_anchor = false
+        if c == 38:  # '&' anchor
+            self._adv()
+            mut start = self.pos
+            while self.pos < self.len and self._is_name_char(self._cur()):
+                self._adv()
+            anchor_name = self.src.slice(start, self.pos)
+            has_anchor = true
+            self._skip_flow_ws()
+            c = self._cur()
+        if c == 33:  # '!' tag token — skipped, ignored (see module header)
+            self._adv()
+            while self.pos < self.len and self._cur() != 32 and self._cur() != 9 and self._cur() != 10 and self._cur() != 44 and self._cur() != 93 and self._cur() != 125:
+                self._adv()
+            self._skip_flow_ws()
+            c = self._cur()
+        mut v = YamlValue.init_null()
+        if c == 34: v = YamlValue.init_str(self._parse_dquote())
+        elif c == 39: v = YamlValue.init_str(self._parse_squote())
+        elif c == 91: v = self._parse_flow_seq()
+        elif c == 123: v = self._parse_flow_map()
+        else: v = self._classify_plain(self._parse_flow_plain())
+        if has_anchor: self._register_anchor(anchor_name, v)
+        return v
+
+    def _parse_flow_seq(self) -> YamlValue:
+        self._adv()  # '['
+        mut arr = YamlValue.init_array()
+        while true:
+            self._skip_flow_ws()
+            mut c = self._cur()
+            if c == 93: self._adv(); break
+            if c == 0: break
+            mut item = self._parse_flow_value()
+            arr.push(item)
+            self._skip_flow_ws()
+            if self._cur() == 44: self._adv()
+        return arr
+
+    def _parse_flow_map(self) -> YamlValue:
+        self._adv()  # '{'
+        mut tbl = YamlValue.init_table()
+        while true:
+            self._skip_flow_ws()
+            mut c = self._cur()
+            if c == 125: self._adv(); break
+            if c == 0: break
+            mut key = ""
+            if c == 34: key = self._parse_dquote()
+            elif c == 39: key = self._parse_squote()
+            else: key = self._parse_flow_plain()
+            self._skip_flow_ws()
+            if self._cur() == 58: self._adv()
+            mut val = self._parse_flow_value()
+            tbl.obj_set(key, val)
+            self._skip_flow_ws()
+            if self._cur() == 44: self._adv()
+        return tbl
+
+    # Parse a value from the source span [off, end) (a single logical line's
+    # worth of text — used for both scalar values and one-line flow
+    # collections). Whitespace-trims the span first. Temporarily re-bases the
+    # cursor (`self.pos`/`self.len`) onto the span, then restores it.
+    def _parse_span(self, off: int, end: int) -> YamlValue:
+        mut a = off
+        mut b = end
+        while a < b and (self._srcat(a) == 32 or self._srcat(a) == 9):
+            a = a + 1
+        while b > a and (self._srcat(b - 1) == 32 or self._srcat(b - 1) == 9):
+            b = b - 1
+        if b <= a: return YamlValue.init_null()
+        mut saved_pos = self.pos
+        mut saved_len = self.len
+        self.pos = a
+        self.len = b
+        mut v = self._parse_flow_value()
+        self.pos = saved_pos
+        self.len = saved_len
+        return v
+
+    # Parse bare/quoted key text from span [off, end).
+    def _parse_key_span(self, off: int, end: int) -> str:
+        mut a = off
+        mut b = end
+        while a < b and (self._srcat(a) == 32 or self._srcat(a) == 9):
+            a = a + 1
+        while b > a and (self._srcat(b - 1) == 32 or self._srcat(b - 1) == 9):
+            b = b - 1
+        if b <= a: return ""
+        mut c0 = self._srcat(a)
+        if c0 == 34 or c0 == 39:
+            mut saved_pos = self.pos
+            mut saved_len = self.len
+            self.pos = a
+            self.len = b
+            mut s = ""
+            if c0 == 34: s = self._parse_dquote()
+            else: s = self._parse_squote()
+            self.pos = saved_pos
+            self.len = saved_len
+            return s
+        return _yaml_trim(self.src.slice(a, b))
+
+    # Find the top-level ':' that separates a mapping key from its value in
+    # [off, end) — i.e. not inside quotes or flow brackets, and followed by
+    # whitespace or end-of-span (so "http://x" isn't mistaken for a key).
+    # Returns -1 if there is none (segment is a plain scalar/seq-item, not a
+    # "key: value" pair).
+    def _find_map_colon(self, off: int, end: int) -> int:
+        mut i = off
+        mut depth = 0
+        mut in_s = false
+        mut in_d = false
+        while i < end:
+            mut c = self._srcat(i)
+            if c == 39 and not in_d: in_s = not in_s
+            elif c == 34 and not in_s: in_d = not in_d
+            elif not in_s and not in_d:
+                if c == 91 or c == 123: depth = depth + 1
+                elif c == 93 or c == 125: depth = depth - 1
+                elif c == 58 and depth == 0:
+                    mut nc = self._srcat(i + 1)
+                    if nc == 32 or nc == 9 or i + 1 >= end: return i
+            i = i + 1
+        return -1
+
+    # ─── Block parsing (indentation-driven) ─────────────────────────────────
+    #
+    # A block node starting at line `idx` is a sequence ("- ...") if that
+    # line is a dash item, otherwise a mapping ("key: ..."). Every block
+    # parse_* function sets `self.next_idx` to the index of the first line it
+    # did not consume.
+
+    def _line_is_seq_item(self, ln: YamlLine) -> bool:
+        if ln.end <= ln.start: return false
+        if self._srcat(ln.start) != 45: return false  # '-'
+        mut nc = self._srcat(ln.start + 1)
+        return nc == 32 or nc == 9 or (ln.start + 1) >= ln.end
+
+    # Parse the block node beginning at the first non-blank line at index >=
+    # `idx`, whose indent must be >= `min_indent` (else this yields null and
+    # consumes nothing).
+    pub def parse_block_node(self, idx: int, min_indent: int) -> YamlValue:
+        mut i = self._next_content(idx)
+        if i >= self.lines.len:
+            self.next_idx = i
+            return YamlValue.init_null()
+        mut ln = self.lines.get(i)
+        if ln.indent < min_indent:
+            self.next_idx = idx
+            return YamlValue.init_null()
+        if self._line_is_seq_item(ln):
+            return self._parse_seq(i, ln.indent)
+        return self._parse_map(i, ln.indent)
+
+    # Sequence: consecutive "- ..." lines at exactly `indent`.
+    def _parse_seq(self, start_idx: int, indent: int) -> YamlValue:
+        mut arr = YamlValue.init_array()
+        mut i = start_idx
+        while true:
+            i = self._next_content(i)
+            if i >= self.lines.len: break
+            mut ln = self.lines.get(i)
+            if ln.indent != indent or not self._line_is_seq_item(ln): break
+            mut content_start = ln.start + 1
+            while content_start < ln.end and (self._srcat(content_start) == 32 or self._srcat(content_start) == 9):
+                content_start = content_start + 1
+            if content_start >= ln.end:
+                # "-" alone: item is a nested block on following deeper lines.
+                mut item = self.parse_block_node(i + 1, indent + 1)
+                arr.push(item)
+                i = self.next_idx
+            else:
+                # Synthesize a virtual line covering the dash's remainder so
+                # nested "- - x" / "- key: v" reuse the same map/seq-item
+                # detection logic as a top-level line, anchored at
+                # `content_start`'s column.
+                mut virt = YamlLine()
+                virt.indent = content_start - (ln.start - ln.indent)
+                virt.start  = content_start
+                virt.end    = ln.end
+                if self._line_is_seq_item(virt):
+                    mut item = self._parse_seq_inline(i, content_start, ln.end, virt.indent)
+                    arr.push(item)
+                    i = self.next_idx
+                else:
+                    mut colon = self._find_map_colon(content_start, ln.end)
+                    if colon >= 0:
+                        mut item = self._parse_map_inline(i, content_start, ln.end, virt.indent)
+                        arr.push(item)
+                        i = self.next_idx
+                    else:
+                        mut item = self._parse_span(content_start, ln.end)
+                        arr.push(item)
+                        i = i + 1
+        self.next_idx = i
+        return arr
+
+    # A "- - ..." nested sequence marker that starts mid-line: treat the
+    # remainder as a one-element seq whose item may itself continue onto
+    # deeper-indented following lines (mirrors `_parse_seq`'s single-dash case).
+    def _parse_seq_inline(self, line_idx: int, off: int, end: int, col: int) -> YamlValue:
+        mut arr = YamlValue.init_array()
+        mut content_start = off + 1
+        while content_start < end and (self._srcat(content_start) == 32 or self._srcat(content_start) == 9):
+            content_start = content_start + 1
+        if content_start >= end:
+            mut item = self.parse_block_node(line_idx + 1, col + 1)
+            arr.push(item)
+        else:
+            mut colon = self._find_map_colon(content_start, end)
+            if colon >= 0:
+                mut item = self._parse_map_inline(line_idx, content_start, end, col + 1)
+                arr.push(item)
+                self.next_idx = self.next_idx
+            else:
+                mut item = self._parse_span(content_start, end)
+                arr.push(item)
+                self.next_idx = line_idx + 1
+        return arr
+
+    # Mapping: consecutive "key: value" lines at exactly `indent`.
+    def _parse_map(self, start_idx: int, indent: int) -> YamlValue:
+        mut tbl = YamlValue.init_table()
+        mut i = start_idx
+        while true:
+            i = self._next_content(i)
+            if i >= self.lines.len: break
+            mut ln = self.lines.get(i)
+            if ln.indent != indent or self._line_is_seq_item(ln): break
+            i = self._consume_map_line(i, ln.start, ln.end, indent, tbl)
+        self.next_idx = i
+        return tbl
+
+    # Parse a mapping that starts mid-line (right after a "- ") at column
+    # `entry_col`; its first key is [off, end) of `line_idx`, and subsequent
+    # sibling keys are expected at indent `entry_col` on following lines.
+    def _parse_map_inline(self, line_idx: int, off: int, end: int, entry_col: int) -> YamlValue:
+        mut tbl = YamlValue.init_table()
+        mut i = self._consume_map_line(line_idx, off, end, entry_col, tbl)
+        while true:
+            i = self._next_content(i)
+            if i >= self.lines.len: break
+            mut ln = self.lines.get(i)
+            if ln.indent != entry_col or self._line_is_seq_item(ln): break
+            i = self._consume_map_line(i, ln.start, ln.end, entry_col, tbl)
+        self.next_idx = i
+        return tbl
+
+    # Consume one "key: value" entry whose key/value text lives in [off, end)
+    # of physical line `line_idx`, inserting it into `tbl`. Returns the index
+    # of the first line after this entry (which may swallow several
+    # deeper-indented lines if the value is a nested block).
+    def _consume_map_line(self, line_idx: int, off: int, end: int, indent: int, tbl: YamlValue) -> int:
+        mut colon = self._find_map_colon(off, end)
+        mut key = ""
+        mut val_off = off
+        if colon >= 0:
+            key = self._parse_key_span(off, colon)
+            val_off = colon + 1
+        else:
+            key = self._parse_key_span(off, end)
+            val_off = end
+        while val_off < end and (self._srcat(val_off) == 32 or self._srcat(val_off) == 9):
+            val_off = val_off + 1
+        if val_off >= end:
+            mut ni = self._next_content(line_idx + 1)
+            if ni < self.lines.len and self.lines.get(ni).indent > indent:
+                mut v = self.parse_block_node(line_idx + 1, indent + 1)
+                tbl.obj_set(key, v)
+                return self.next_idx
+            else:
+                tbl.obj_set(key, YamlValue.init_null())
+                return line_idx + 1
+        else:
+            mut v = self._parse_span(val_off, end)
+            tbl.obj_set(key, v)
+            return line_idx + 1
+
+def _yaml_lower(s: str) -> str:
+    mut n = _tr_strlen(s)
+    mut sb = StringBuilder.init(n + 1)
+    mut i = 0
+    while i < n:
+        mut c = (s as Pointer[char]).offset(i).read() as int
+        if c >= 65 and c <= 90: c = c + 32
+        sb.append_char(c)
+        i = i + 1
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+def _yaml_trim(s: str) -> str:
+    mut n = _tr_strlen(s)
+    mut a = 0
+    mut b = n
+    while a < b and _yaml_is_ws((s as Pointer[char]).offset(a).read() as int):
+        a = a + 1
+    while b > a and _yaml_is_ws((s as Pointer[char]).offset(b - 1).read() as int):
+        b = b - 1
+    if a == 0 and b == n: return s
+    mut out = ""
+    unsafe:
+        out = s.slice(a, b)
+    return out
+
+def _yaml_is_ws(c: int) -> bool:
+    return c == 32 or c == 9 or c == 13 or c == 10
+
+# ─── Serializer ───────────────────────────────────────────────────────────
+
+pub def _yaml_scalar_needs_quotes(s: str) -> bool:
+    mut n = _tr_strlen(s)
+    if n == 0: return true
+    mut p = s as Pointer[char]
+    mut c0 = p.offset(0).read() as int
+    if c0 == 33 or c0 == 38 or c0 == 42 or c0 == 35 or c0 == 124 or c0 == 62 or c0 == 39 or c0 == 34 or c0 == 37 or c0 == 64 or c0 == 96 or c0 == 45 or c0 == 63 or c0 == 58 or c0 == 91 or c0 == 93 or c0 == 123 or c0 == 125 or c0 == 44 or c0 == 32:
+        return true
+    mut i = 0
+    while i < n:
+        mut c = p.offset(i).read() as int
+        if c == 58 or c == 35 or c == 10 or c == 13 or c == 39 or c == 34:
+            return true
+        i = i + 1
+    if s == "true" or s == "false" or s == "yes" or s == "no" or s == "on" or s == "off":
+        return true
+    if s == "True" or s == "False" or s == "Yes" or s == "No" or s == "On" or s == "Off":
+        return true
+    if s == "null" or s == "~" or s == "Null" or s == "NULL":
+        return true
+    return false
+
+pub def _yaml_escape_dquote(s: str, sb: StringBuilder):
+    mut p = s as Pointer[char]
+    mut i = 0
+    mut n = _tr_strlen(s)
+    while i < n:
+        mut c = p.offset(i).read() as int
+        if c == 92: sb.append("\\\\")
+        elif c == 34: sb.append("\\\"")
+        elif c == 10: sb.append("\\n")
+        elif c == 9:  sb.append("\\t")
+        elif c == 13: sb.append("\\r")
+        else: sb.append_char(c)
+        i = i + 1
+
+pub def _yaml_write_scalar(node: YamlValue, sb: StringBuilder):
+    if node.tag == 0:
+        sb.append("null")
+    elif node.tag == 1:
+        if node.b_val: sb.append("true")
+        else: sb.append("false")
+    elif node.tag == 2:
+        sb.append(_tr_int_to_str(node.i_val))
+    elif node.tag == 3:
+        sb.append(_tr_float_to_str(node.f_val))
+    elif node.tag == 4:
+        if _yaml_scalar_needs_quotes(node.s_val):
+            sb.append("\"")
+            _yaml_escape_dquote(node.s_val, sb)
+            sb.append("\"")
+        else:
+            sb.append(node.s_val)
+
+pub def _yaml_write_flow(node: YamlValue, sb: StringBuilder):
+    if node.tag == 5:
+        sb.append("[")
+        mut i = 0
+        while i < node.items.len:
+            if i > 0: sb.append(", ")
+            _yaml_write_flow(node.items.get(i), sb)
+            i = i + 1
+        sb.append("]")
+    elif node.tag == 6:
+        sb.append("{")
+        mut i = 0
+        while i < node.keys.len:
+            if i > 0: sb.append(", ")
+            sb.append(node.keys.get(i))
+            sb.append(": ")
+            _yaml_write_flow(node.items.get(i), sb)
+            i = i + 1
+        sb.append("}")
+    else:
+        _yaml_write_scalar(node, sb)
+
+def _yaml_indent(sb: StringBuilder, depth: int):
+    mut i = 0
+    while i < depth:
+        sb.append("  ")
+        i = i + 1
+
+# Write a block node (table or array) at the given indent depth.
+pub def _yaml_write_block(node: YamlValue, depth: int, sb: StringBuilder):
+    if node.tag == 6:
+        if node.keys.len == 0:
+            sb.append("{}\n")
+            return
+        mut i = 0
+        while i < node.keys.len:
+            _yaml_indent(sb, depth)
+            sb.append(node.keys.get(i))
+            sb.append(":")
+            mut v = node.items.get(i)
+            if v.tag == 6 and v.keys.len > 0:
+                sb.append("\n")
+                _yaml_write_block(v, depth + 1, sb)
+            elif v.tag == 5 and v.items.len > 0:
+                sb.append("\n")
+                _yaml_write_block(v, depth, sb)
+            else:
+                sb.append(" ")
+                _yaml_write_flow(v, sb)
+                sb.append("\n")
+            i = i + 1
+    elif node.tag == 5:
+        if node.items.len == 0:
+            _yaml_indent(sb, depth)
+            sb.append("[]\n")
+            return
+        mut i = 0
+        while i < node.items.len:
+            _yaml_indent(sb, depth)
+            sb.append("-")
+            mut v = node.items.get(i)
+            if v.tag == 6 and v.keys.len > 0:
+                sb.append(" ")
+                _yaml_write_block_inline_map(v, depth + 1, sb)
+            elif v.tag == 5 and v.items.len > 0:
+                sb.append("\n")
+                _yaml_write_block(v, depth + 1, sb)
+            else:
+                sb.append(" ")
+                _yaml_write_flow(v, sb)
+                sb.append("\n")
+            i = i + 1
+    else:
+        _yaml_indent(sb, depth)
+        _yaml_write_flow(node, sb)
+        sb.append("\n")
+
+# Write a mapping as the inline continuation right after a "- " sequence
+# marker: the first key stays on the dash's line, subsequent keys are
+# indented to align under it.
+def _yaml_write_block_inline_map(node: YamlValue, depth: int, sb: StringBuilder):
+    mut i = 0
+    while i < node.keys.len:
+        if i > 0: _yaml_indent(sb, depth)
+        sb.append(node.keys.get(i))
+        sb.append(":")
+        mut v = node.items.get(i)
+        if v.tag == 6 and v.keys.len > 0:
+            sb.append("\n")
+            _yaml_write_block(v, depth + 1, sb)
+        elif v.tag == 5 and v.items.len > 0:
+            sb.append("\n")
+            _yaml_write_block(v, depth + 1, sb)
+        else:
+            sb.append(" ")
+            _yaml_write_flow(v, sb)
+            sb.append("\n")
+        i = i + 1
+
+# ─── Public API ────────────────────────────────────────────────────────────
+
+pub class Yaml:
+    _dummy: int
+
+extend Yaml:
+    pub def parse(src: str) -> YamlValue:
+        mut p = YamlParser.init(src)
+        mut v = p.parse_block_node(0, 0)
+        return v
+
+    pub def stringify(v: YamlValue) -> str:
+        if v.tag == 0: return "null\n"
+        mut sb = StringBuilder.init(256)
+        if v.tag == 6 or v.tag == 5:
+            _yaml_write_block(v, 0, sb)
+        else:
+            _yaml_write_flow(v, sb)
+            sb.append("\n")
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    # Split a multi-document YAML stream on `---` document-start markers and
+    # parse each document independently. `---`/`...` must appear alone on
+    # their own line (after optional indentation) — the common case.
+    pub def parse_multi(src: str) -> Vec[YamlValue]:
+        mut out = Vec[YamlValue].init(4)
+        mut docs = Vec[str].init(4)
+        mut sb = StringBuilder.init(128)
+        mut n = _tr_strlen(src)
+        mut i = 0
+        mut any_content = false
+        while i < n:
+            mut line_start = i
+            while i < n and (src as Pointer[char]).offset(i).read() as int != 10:
+                i = i + 1
+            mut line = src.slice(line_start, i)
+            if i < n: i = i + 1  # consume '\n'
+            mut trimmed = _yaml_trim(line)
+            if trimmed == "---":
+                if any_content:
+                    docs.push(sb.to_owned())
+                    sb.clear()
+                    any_content = false
+            elif trimmed == "...":
+                if any_content:
+                    docs.push(sb.to_owned())
+                    sb.clear()
+                    any_content = false
+            else:
+                sb.append(line)
+                sb.append("\n")
+                if trimmed != "": any_content = true
+        if any_content or docs.len == 0:
+            docs.push(sb.to_owned())
+        sb.free()
+        mut di = 0
+        while di < docs.len:
+            out.push(Yaml.parse(docs.get(di)))
+            di = di + 1
+        return out
+
+    pub def table()            -> YamlValue: return YamlValue.init_table()
+    pub def bool_val(b: bool)   -> YamlValue: return YamlValue.init_bool(b)
+    pub def int_val(n: int)     -> YamlValue: return YamlValue.init_int(n)
+    pub def float_val(f: float) -> YamlValue: return YamlValue.init_float(f)
+    pub def str_val(s: str)     -> YamlValue: return YamlValue.init_str(s)
+    pub def null_val()          -> YamlValue: return YamlValue.init_null()
+    pub def array()             -> YamlValue: return YamlValue.init_array()

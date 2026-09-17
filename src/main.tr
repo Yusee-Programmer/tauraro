@@ -1100,14 +1100,27 @@ pub def compile_all_c(c_files: Vec[str], exe_path: str, inc_dir: str,
     # Target-gated so a Windows->Linux/wasm cross does not request ws2_32.
     if out_is_windows(target, triple):
         mut need_wsa: bool = false
+        mut need_systre: bool = false
         mut wi = 0
         while wi < c_files.len:
             mut cf = c_files.get(wi)
             if _tr_str_contains(cf, "tcp.c") or _tr_str_contains(cf, "/net/"):
                 need_wsa = true
+            # std.regex on MinGW compiles against a real <regex.h> now
+            # (TAURARO_HAVE_REGEX covers __MINGW32__/__MINGW64__ -- see
+            # runtime/tauraro_rt.h's own note on this), but that header's
+            # regcomp/regexec/regfree/regerror symbols live in MSYS2's
+            # libsystre (a POSIX-named wrapper over libtre; libtre itself
+            # only exports tre_-prefixed names, confirmed via `nm` on both
+            # .dll.a files) -- link it whenever a regex module is present,
+            # same conditional-detection shape as need_wsa just above.
+            if _tr_str_contains(cf, "regex.c") or _tr_str_contains(cf, "/regex/"):
+                need_systre = true
             wi = wi + 1
         if need_wsa:
             cmd = cmd + " -lws2_32 -lbcrypt -mconsole"
+        if need_systre:
+            cmd = cmd + " -lsystre -ltre"
     if verbose: print("  [CC] " + cmd)
     return _tr_system(cmd)
 
@@ -1216,6 +1229,18 @@ pub def compile_all_c_incremental(c_files: Vec[str], needs: Vec[bool], exe_path:
         # so always link it; -mconsole keeps console apps as console subsystem.
         # Gated on the TARGET, not the host — a Windows->Linux cross has no ws2_32.
         cmd = cmd + " -lws2_32 -lbcrypt -mconsole"
+        # std.regex on MinGW needs libsystre/libtre -- see the identical,
+        # more-commented check in link_c_files above (single-command
+        # compile+link path); this is the separate-compile-then-link path's
+        # own copy of the same detection, over .o filenames instead of .c.
+        mut need_systre2: bool = false
+        mut oi = 0
+        while oi < o_files.len:
+            if _tr_str_contains(o_files.get(oi), "regex.o"):
+                need_systre2 = true
+            oi = oi + 1
+        if need_systre2:
+            cmd = cmd + " -lsystre -ltre"
     if verbose: print("  [LINK] " + cmd)
     return _tr_system(cmd)
 
