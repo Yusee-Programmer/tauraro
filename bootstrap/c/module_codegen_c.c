@@ -161,6 +161,8 @@ __attribute__((malloc,returns_nonnull,hot)) CGenerator* CGenerator_init() {
     /* pass */
     g->cur_src_file = _tr_str_lit("");
     /* pass */
+    g->enable_prof = false;
+    /* pass */
     return g;
 }
 
@@ -23420,6 +23422,11 @@ __auto_type gvval = _t2836.data.SLet.val;
     /* pass */
     CGenerator_w(self, _tr_str_lit("    _tr_init_console();\n"));
     /* pass */
+    if (self->enable_prof) {
+        /* pass */
+        CGenerator_w(self, _tr_str_lit("    _tr_prof_cpu_start(1000);\n"));
+    }
+    /* pass */
     bool main_has_args = false;
     /* pass */
     TrStr main_args_name = _tr_str_lit("args");
@@ -23507,6 +23514,13 @@ __auto_type tlv = _t2853.data.SLet.val;
         }
         /* pass */
         i = (i + 1LL);
+    }
+    /* pass */
+    if (self->enable_prof) {
+        /* pass */
+        CGenerator_w(self, _tr_str_lit("    _tr_prof_cpu_stop();\n"));
+        /* pass */
+        CGenerator_w(self, _tr_str_lit("    { char* _tr_prof_rep = _tr_prof_cpu_report(); fputs(_tr_prof_rep, stderr); free(_tr_prof_rep); }\n"));
     }
     /* pass */
     CGenerator_w(self, _tr_str_lit("#ifndef TAURARO_BARE\n"));
@@ -25241,6 +25255,11 @@ __auto_type gv_val = _t2984.data.SAssign.val;
     /* pass */
     CGenerator_w(self, _tr_str_lit("    _tr_init_console();\n"));
     /* pass */
+    if (self->enable_prof) {
+        /* pass */
+        CGenerator_w(self, _tr_str_lit("    _tr_prof_cpu_start(1000);\n"));
+    }
+    /* pass */
     bool main_has_args = false;
     /* pass */
     TrStr main_args_name = _tr_str_lit("args");
@@ -25346,6 +25365,13 @@ __auto_type tlv2 = _t2995.data.SLet.val;
             /* pass */
             i = (i + 1LL);
         }
+    }
+    /* pass */
+    if (self->enable_prof) {
+        /* pass */
+        CGenerator_w(self, _tr_str_lit("    _tr_prof_cpu_stop();\n"));
+        /* pass */
+        CGenerator_w(self, _tr_str_lit("    { char* _tr_prof_rep = _tr_prof_cpu_report(); fputs(_tr_prof_rep, stderr); free(_tr_prof_rep); }\n"));
     }
     /* pass */
     CGenerator_w(self, _tr_str_lit("#ifndef TAURARO_BARE\n"));

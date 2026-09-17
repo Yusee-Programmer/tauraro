@@ -2927,6 +2927,7 @@ typedef struct CGenerator {
     List_TrStr* loop_done_stack;
     bool emit_line_info;
     TrStr cur_src_file;
+    bool enable_prof;
 } CGenerator;
 static void _trdrop_CGenerator(void* vp) {
     CGenerator* self = (CGenerator*)vp; (void)self;

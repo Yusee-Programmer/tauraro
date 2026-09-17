@@ -1586,6 +1586,7 @@ pub def main(args: Vec[str]):
     mut target      = ""                 # --target <name> : cross-compilation target
     mut sysroot     = ""                 # --sysroot <path>: explicit sysroot
     mut debug_mode  = false              # --debug         : ASAN + assertions
+    mut prof_mode   = false              # --prof          : auto-wrap main() with CPU sampling start/stop, dump a flat profile to stderr on exit
     mut strict_mode = false              # --strict        : alloc outside unsafe -> hard error
     mut no_elide    = false              # --no-elide      : disable zero-copy borrow elision -> pure ARC (differential-soundness oracle)
     mut no_heap     = false              # --no-heap       : reject heap-allocating types (List/Dict/Set/heap class/dynamic str) -> structurally zero-heap for bare metal
@@ -1656,6 +1657,8 @@ pub def main(args: Vec[str]):
             sysroot = args.get(i)
         elif arg == "--debug":
             debug_mode = true
+        elif arg == "--prof":
+            prof_mode = true
         elif arg == "--strict":
             strict_mode = true
         elif arg == "--no-elide":
@@ -2027,6 +2030,13 @@ pub def main(args: Vec[str]):
     # --debug: emit `#line N "src.tr"` directives so GCC/GDB diagnostics and
     # backtraces map generated C back to the original Tauraro source.
     c_gen.emit_line_info = debug_mode
+    # --prof: auto-wrap the compiled program's main() with CPU sampling
+    # start/stop and a flat profile dump to stderr on exit -- lets `tauraroc
+    # --run --prof foo.tr` or a `tauraroc foo.tr -o foo --prof` build profile
+    # itself with zero source changes. std.prof's CpuProfiler/MemProf/Registry
+    # remain available as an explicit, opt-in alternative for anyone who wants
+    # to profile only part of their program instead of the whole run.
+    c_gen.enable_prof = prof_mode
     # --no-elide: force pure ARC (no zero-copy borrow elision). Used by the
     # differential-soundness oracle: an elided build and a --no-elide build must
     # produce identical observable output; any divergence is an unsound elision.

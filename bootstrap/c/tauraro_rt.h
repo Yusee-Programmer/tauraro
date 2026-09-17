@@ -3050,6 +3050,24 @@ typedef struct {
     int          n_sleep;
     int          n_io;
     int          inited;
+#if defined(_WIN32)
+    /* Free-list of finished-but-not-torn-down fibers, reused by _tr_co_go
+     * instead of a fresh CreateFiber (linked via each _TrCoro's own `next`
+     * field, which is otherwise only used for the ready queue - a pooled
+     * coroutine is on neither queue, so reusing it here is conflict-free).
+     * Windows-only: CreateFiber/SwitchToFiber/DeleteFiber became unreliable
+     * (a real, reproduced hang inside DeleteFiber, and a second hang around
+     * SwitchToFiber into a freshly-created fiber even with DeleteFiber
+     * skipped) under sustained per-connection coroutine churn combined with
+     * real socket I/O on those fibers - see watax's reactor.tr and
+     * project_watax_coroutine_reactor.md. Reusing fibers instead of
+     * create/destroying one per request avoids the high-churn pattern that
+     * triggers it, and is a legitimate perf win besides (skips
+     * CreateFiber's allocation on every request). Unbounded (never
+     * DeleteFiber once pooled) - a worker's fiber count settles at its own
+     * peak concurrent-coroutine count and never both grows AND shrinks. */
+    _TrCoro*     pool_free;
+#endif
 } _TrSchedG;
 /* Per-OS-thread scheduler (thread-per-core multicore = N worker threads, each
  * with its own independent scheduler + reactor). It MUST be a single shared
@@ -3128,12 +3146,23 @@ static void _tr_co_to_coro(_TrCoro* to) {
 }
 
 #if defined(_WIN32)
+/* Loops so the SAME fiber can be reused for a later, unrelated coroutine
+ * (see _TrSchedG.pool_free): after finishing one task, park via
+ * SwitchToFiber exactly as before, but if _tr_co_go later pulls this exact
+ * _TrCoro back out of the pool and refills c->fn/c->arg, resuming this
+ * fiber lands right back at the top of the loop and just runs the new task
+ * - no new CreateFiber needed. Windows fiber functions must never actually
+ * `return` (the OS implicitly calls ExitThread if one does), so this loops
+ * forever; a pooled-but-never-reused fiber simply stays parked here for
+ * the rest of the worker thread's life, which is fine (it costs no CPU). */
 static void CALLBACK _tr_co_entry(LPVOID p) {
     _TrCoro* c = (_TrCoro*)p;
-    c->result = (long long)(uintptr_t)c->fn(c->arg);
-    c->state = _TRC_DONE;
-    if (c->joiner) { _TrCoro* j = c->joiner; c->joiner = NULL; _tr_rpush(j); }
-    SwitchToFiber(_tr_g.main_ctx);   /* control returns to the scheduler */
+    for (;;) {
+        c->result = (long long)(uintptr_t)c->fn(c->arg);
+        c->state = _TRC_DONE;
+        if (c->joiner) { _TrCoro* j = c->joiner; c->joiner = NULL; _tr_rpush(j); }
+        SwitchToFiber(_tr_g.main_ctx);   /* control returns to the scheduler */
+    }
 }
 #else
 static void _tr_co_entry(void) {
@@ -3150,6 +3179,28 @@ static void _tr_co_entry(void) {
 /* Spawn a coroutine running fn(arg); returns its handle. */
 static _TrCoro* _tr_co_go(_tr_coro_fn fn, void* arg) {
     _tr_sched_ensure();
+#if defined(_WIN32)
+    /* Reuse a pooled fiber if one is idle (see _TrSchedG.pool_free) instead
+     * of CreateFiber - avoids the high-churn create/destroy pattern that's
+     * unreliable under sustained load. A pooled _TrCoro's fiber is still
+     * alive, parked inside _tr_co_entry's loop; refilling fn/arg and
+     * clearing the rest back to a fresh-spawn state is enough for it to run
+     * the new task exactly like a brand-new coroutine would. */
+    if (_tr_g.pool_free) {
+        _TrCoro* c = _tr_g.pool_free;
+        _tr_g.pool_free = c->next;
+        c->fn = fn; c->arg = arg;
+        c->state = _TRC_READY;
+        c->result = 0; c->wake_at = 0;
+        c->io_fd = -1; c->io_armed_fd = -1; c->io_armed_ev = 0;
+        c->detached = 0; c->joiner = NULL; c->next = NULL; c->snext = NULL;
+        c->failed = 0; c->fail_msg = NULL;
+        c->exc_chain = _tr_exc_chain_get();
+        c->exc_chain->refcount++;
+        _tr_rpush(c);
+        return c;
+    }
+#endif
     _TrCoro* c = (_TrCoro*)calloc(1, sizeof(_TrCoro));
     c->fn = fn; c->arg = arg; c->io_fd = -1; c->io_armed_fd = -1;
     /* Inherit whatever exception chain is currently active - the awaiter's
@@ -3197,11 +3248,17 @@ static void _tr_co_free(_TrCoro* c) {
     }
     if (c->exc_chain && --c->exc_chain->refcount == 0) free(c->exc_chain);
 #if defined(_WIN32)
-    if (c->ctx) DeleteFiber(c->ctx);
+    /* Park into the pool instead of DeleteFiber (see _TrSchedG.pool_free
+     * and _tr_co_go) - the fiber itself is still alive, parked inside
+     * _tr_co_entry's loop right after its SwitchToFiber(main_ctx), ready to
+     * be resumed with a new fn/arg later. Reuses the `next` field, which is
+     * free right now (this coro is on neither the ready nor sleep queue). */
+    c->next = _tr_g.pool_free;
+    _tr_g.pool_free = c;
 #else
     if (c->stack) munmap(c->stack, _TR_CORO_STACK);
-#endif
     free(c);
+#endif
 }
 
 /* Run one scheduler step: dispatch a ready coro, or block on the reactor /
@@ -7933,6 +7990,269 @@ static int64_t _tr_gpu_synchronize(void){
     if (_tr_gpu.backend==TR_GPU_OPENCL && _tr_gpu.clFinish) return _tr_gpu.clFinish(_tr_gpu.cl_q)==0?0:-1;
     return 0;
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * PROFILER (std.prof) — CPU sampling + process memory stats.
+ * ═══════════════════════════════════════════════════════════════════════════
+ * CPU profiling is STATISTICAL SAMPLING, not instrumentation: zero compiler
+ * codegen changes, near-zero overhead when off, ~1-2% when sampling at the
+ * default 1ms interval. Each sample captures the LEAF program counter only
+ * (not a full unwound call stack) -- a flat "which function was on-CPU X% of
+ * the time" profile, the same shape py-spy's/pprof's simplest mode give.
+ * Full call-graph sampling (stack unwinding per sample) is a real, deliberate
+ * gap for a future round: it needs either frame-pointer walking (unreliable
+ * under -O2, which commonly omits frame pointers) or DWARF/CFI-based
+ * unwinding (a much larger, riskier undertaking) -- leaf-only sampling ships
+ * something genuinely useful now without that risk.
+ *
+ * POSIX: SIGPROF + setitimer(ITIMER_PROF, ...) -- the signal fires ON
+ * whichever thread is actually consuming CPU time, so the handler reads its
+ * OWN interrupted PC straight from the ucontext_t signal argument. No thread
+ * suspension needed; this is the same basic mechanism gprof/perf use.
+ *
+ * Windows has no SIGPROF equivalent: a dedicated sampler thread periodically
+ * SuspendThread()s the profiled thread, reads its instruction pointer via
+ * GetThreadContext, then ResumeThread()s it. GetCurrentThread() returns a
+ * pseudo-handle only valid for self-referencing calls -- DuplicateHandle is
+ * required to get a real handle usable from another thread.
+ *
+ * Symbol resolution is best-effort and happens at REPORT time (after
+ * _tr_prof_cpu_stop(), never inside the signal handler or while a thread is
+ * suspended -- dladdr() is not guaranteed async-signal-safe, and doing
+ * meaningful work on a thread you're holding suspended is asking for a
+ * deadlock if it owned a lock the resolver needs). POSIX resolves via
+ * dladdr() (works when the binary isn't fully stripped). Windows v1
+ * deliberately does NOT link a symbol-resolution library (dbghelp) here --
+ * this session already broke CI once by assuming a library/header was
+ * universally present on every MinGW distribution when it wasn't (see the
+ * TAURARO_HAVE_REGEX history above) -- so Windows reports raw hex addresses
+ * only; post-process with addr2line/dumpbin against the same binary if you
+ * need names. An unresolved POSIX address falls back to the same raw-address
+ * form, so the two platforms degrade identically when a name isn't
+ * available, rather than Windows being a lesser case. */
+#ifndef TAURARO_BARE
+
+/* Explicit, self-contained includes (harmless to repeat if already pulled in
+ * elsewhere -- every one of these has a standard include guard) rather than
+ * relying on some other section of this file having included them first. */
+#if defined(_WIN32)
+#  ifndef WIN32_LEAN_AND_MEAN
+#    define WIN32_LEAN_AND_MEAN
+#  endif
+#  include <windows.h>
+#  include <psapi.h>
+#elif defined(__APPLE__)
+#  include <signal.h>
+#  include <sys/time.h>
+#  include <sys/resource.h>
+#  include <ucontext.h>
+#  include <dlfcn.h>
+#  include <mach/mach.h>
+#else /* Linux and other POSIX */
+#  include <signal.h>
+#  include <sys/time.h>
+#  include <sys/resource.h>
+#  include <ucontext.h>
+#  include <dlfcn.h>
+#  include <unistd.h>
+#endif
+
+#define _TR_PROF_MAX_SAMPLES 65536
+
+typedef struct { void* pc; long long count; } _TrProfBucket;
+
+static void*         _tr_prof_raw_pcs[_TR_PROF_MAX_SAMPLES];
+static volatile long  _tr_prof_raw_count = 0;
+static volatile int   _tr_prof_running = 0;
+static long long      _tr_prof_interval_us = 1000; /* default 1ms */
+
+#if defined(_WIN32)
+static HANDLE _tr_prof_target_thread = NULL;
+static HANDLE _tr_prof_sampler_thread = NULL;
+static DWORD WINAPI _tr_prof_sampler_fn(LPVOID arg) {
+    (void)arg;
+    while (_tr_prof_running) {
+        DWORD ms = (DWORD)(_tr_prof_interval_us / 1000);
+        Sleep(ms > 0 ? ms : 1);
+        if (!_tr_prof_running) break;
+        if (SuspendThread(_tr_prof_target_thread) == (DWORD)-1) continue;
+        CONTEXT ctx; memset(&ctx, 0, sizeof(ctx));
+        ctx.ContextFlags = CONTEXT_CONTROL;
+        if (GetThreadContext(_tr_prof_target_thread, &ctx)) {
+            long idx = _tr_prof_raw_count;
+            if (idx < _TR_PROF_MAX_SAMPLES) {
+#if defined(_M_X64) || defined(__x86_64__)
+                _tr_prof_raw_pcs[idx] = (void*)(uintptr_t)ctx.Rip;
+#else
+                _tr_prof_raw_pcs[idx] = (void*)(uintptr_t)ctx.Eip;
+#endif
+                _tr_prof_raw_count = idx + 1;
+            }
+        }
+        ResumeThread(_tr_prof_target_thread);
+    }
+    return 0;
+}
+_TR_XLINK void _tr_prof_cpu_start(long long interval_us) {
+    if (_tr_prof_running) return;
+    _tr_prof_interval_us = interval_us > 0 ? interval_us : 1000;
+    _tr_prof_raw_count = 0;
+    DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(),
+                     &_tr_prof_target_thread, 0, FALSE, DUPLICATE_SAME_ACCESS);
+    _tr_prof_running = 1;
+    _tr_prof_sampler_thread = CreateThread(NULL, 0, _tr_prof_sampler_fn, NULL, 0, NULL);
+}
+_TR_XLINK void _tr_prof_cpu_stop(void) {
+    if (!_tr_prof_running) return;
+    _tr_prof_running = 0;
+    if (_tr_prof_sampler_thread) { WaitForSingleObject(_tr_prof_sampler_thread, INFINITE); CloseHandle(_tr_prof_sampler_thread); _tr_prof_sampler_thread = NULL; }
+    if (_tr_prof_target_thread) { CloseHandle(_tr_prof_target_thread); _tr_prof_target_thread = NULL; }
+}
+static char* _tr_prof_symbolize(void* pc) { (void)pc; return NULL; /* see module header: no dbghelp in v1 */ }
+#else /* POSIX */
+static void _tr_prof_sigprof_handler(int sig, siginfo_t* info, void* ucontext) {
+    (void)sig; (void)info;
+    ucontext_t* uc = (ucontext_t*)ucontext;
+    void* pc = NULL;
+#if defined(__linux__) && (defined(__x86_64__) || defined(__amd64__))
+    pc = (void*)uc->uc_mcontext.gregs[REG_RIP];
+#elif defined(__linux__) && defined(__aarch64__)
+    pc = (void*)uc->uc_mcontext.pc;
+#elif defined(__linux__) && defined(__i386__)
+    pc = (void*)uc->uc_mcontext.gregs[REG_EIP];
+#elif defined(__APPLE__) && defined(__x86_64__)
+    pc = (void*)uc->uc_mcontext->__ss.__rip;
+#elif defined(__APPLE__) && defined(__aarch64__)
+    pc = (void*)uc->uc_mcontext->__ss.__pc;
+#else
+    pc = NULL; /* unrecognized arch: sampling silently captures nothing rather than guessing wrong */
+#endif
+    if (pc) {
+        long idx = _tr_prof_raw_count;
+        if (idx < _TR_PROF_MAX_SAMPLES) { _tr_prof_raw_pcs[idx] = pc; _tr_prof_raw_count = idx + 1; }
+    }
+}
+_TR_XLINK void _tr_prof_cpu_start(long long interval_us) {
+    if (_tr_prof_running) return;
+    _tr_prof_interval_us = interval_us > 0 ? interval_us : 1000;
+    _tr_prof_raw_count = 0;
+    struct sigaction sa; memset(&sa, 0, sizeof(sa));
+    sa.sa_sigaction = _tr_prof_sigprof_handler;
+    sa.sa_flags = SA_SIGINFO | SA_RESTART;
+    sigemptyset(&sa.sa_mask);
+    sigaction(SIGPROF, &sa, NULL);
+    struct itimerval it;
+    it.it_interval.tv_sec = (time_t)(_tr_prof_interval_us / 1000000);
+    it.it_interval.tv_usec = (suseconds_t)(_tr_prof_interval_us % 1000000);
+    it.it_value = it.it_interval;
+    setitimer(ITIMER_PROF, &it, NULL);
+    _tr_prof_running = 1;
+}
+_TR_XLINK void _tr_prof_cpu_stop(void) {
+    if (!_tr_prof_running) return;
+    struct itimerval it; memset(&it, 0, sizeof(it));
+    setitimer(ITIMER_PROF, &it, NULL);
+    signal(SIGPROF, SIG_IGN);
+    _tr_prof_running = 0;
+}
+static char* _tr_prof_symbolize(void* pc) {
+    Dl_info info;
+    if (dladdr(pc, &info) && info.dli_sname) return _tr_strdup(info.dli_sname);
+    return NULL;
+}
+#endif
+
+/* Aggregate raw PC samples into (pc,count) buckets, sort by count desc,
+ * format as a text report. Only ever called after _tr_prof_cpu_stop() (never
+ * while sampling is active), so it's free to malloc/symbolize/sort. */
+_TR_XLINK char* _tr_prof_cpu_report(void) {
+    long n = _tr_prof_raw_count;
+    if (n == 0) return _tr_strdup("(no CPU samples captured)\n");
+    /* Naive O(n^2) bucket aggregation -- n is bounded by _TR_PROF_MAX_SAMPLES
+     * (65536) and this runs once, off the hot path, so simplicity wins. */
+    _TrProfBucket* buckets = (_TrProfBucket*)malloc(sizeof(_TrProfBucket) * (size_t)n);
+    long nb = 0;
+    if (buckets) {
+        for (long i = 0; i < n; i++) {
+            void* pc = _tr_prof_raw_pcs[i];
+            long found = -1;
+            for (long j = 0; j < nb; j++) { if (buckets[j].pc == pc) { found = j; break; } }
+            if (found >= 0) buckets[found].count++;
+            else { buckets[nb].pc = pc; buckets[nb].count = 1; nb++; }
+        }
+        /* Insertion sort by count desc -- nb (distinct PCs) is typically small. */
+        for (long i = 1; i < nb; i++) {
+            _TrProfBucket key = buckets[i];
+            long j = i - 1;
+            while (j >= 0 && buckets[j].count < key.count) { buckets[j + 1] = buckets[j]; j--; }
+            buckets[j + 1] = key;
+        }
+    }
+    size_t cap = 256 + (size_t)nb * 128 + 64;
+    char* out = (char*)malloc(cap);
+    if (!out) { if (buckets) free(buckets); return _tr_strdup("(profile report: out of memory)\n"); }
+    size_t used = 0;
+    int w = snprintf(out + used, cap - used, "CPU profile: %ld samples, %ld distinct PCs\n", n, nb);
+    used += (w > 0) ? (size_t)w : 0;
+    for (long i = 0; i < nb && used + 200 < cap; i++) {
+        double pct = 100.0 * (double)buckets[i].count / (double)n;
+        char* sym = _tr_prof_symbolize(buckets[i].pc);
+        if (sym) {
+            w = snprintf(out + used, cap - used, "  %6.2f%%  %6lld  %s (%p)\n", pct, buckets[i].count, sym, buckets[i].pc);
+            free(sym);
+        } else {
+            w = snprintf(out + used, cap - used, "  %6.2f%%  %6lld  %p\n", pct, buckets[i].count, buckets[i].pc);
+        }
+        used += (w > 0) ? (size_t)w : 0;
+    }
+    if (buckets) free(buckets);
+    return out;
+}
+
+/* ── Process memory stats (RSS / peak RSS), in bytes; -1 if unavailable ──── */
+#if defined(_WIN32)
+_TR_XLINK long long _tr_prof_mem_rss_bytes(void) {
+    PROCESS_MEMORY_COUNTERS pmc;
+    if (GetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof(pmc))) return (long long)pmc.WorkingSetSize;
+    return -1;
+}
+_TR_XLINK long long _tr_prof_mem_peak_rss_bytes(void) {
+    PROCESS_MEMORY_COUNTERS pmc;
+    if (GetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof(pmc))) return (long long)pmc.PeakWorkingSetSize;
+    return -1;
+}
+#elif defined(__APPLE__)
+_TR_XLINK long long _tr_prof_mem_rss_bytes(void) {
+    struct mach_task_basic_info info;
+    mach_msg_type_number_t cnt = MACH_TASK_BASIC_INFO_COUNT;
+    if (task_info(mach_task_self(), MACH_TASK_BASIC_INFO, (task_info_t)&info, &cnt) == KERN_SUCCESS)
+        return (long long)info.resident_size;
+    return -1;
+}
+_TR_XLINK long long _tr_prof_mem_peak_rss_bytes(void) {
+    struct rusage ru;
+    if (getrusage(RUSAGE_SELF, &ru) == 0) return (long long)ru.ru_maxrss; /* already bytes on macOS */
+    return -1;
+}
+#else /* Linux and other POSIX */
+_TR_XLINK long long _tr_prof_mem_rss_bytes(void) {
+    FILE* f = fopen("/proc/self/statm", "r");
+    if (!f) return -1;
+    long long pages = 0, rss_pages = 0;
+    int ok = fscanf(f, "%lld %lld", &pages, &rss_pages);
+    fclose(f);
+    if (ok != 2) return -1;
+    long page_sz = sysconf(_SC_PAGESIZE);
+    return rss_pages * (long long)page_sz;
+}
+_TR_XLINK long long _tr_prof_mem_peak_rss_bytes(void) {
+    struct rusage ru;
+    if (getrusage(RUSAGE_SELF, &ru) == 0) return (long long)ru.ru_maxrss * 1024LL; /* KB on Linux */
+    return -1;
+}
+#endif
+
+#endif /* !TAURARO_BARE (profiler needs real OS services: threads/signals/timers/proc info) */
 
 
 #endif /* !TAURARO_NO_OS && !TAURARO_KERNEL && !__wasi__ */

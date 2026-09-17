@@ -1,0 +1,36 @@
+# std.prof.memory — process-level memory snapshots (RSS / peak RSS).
+#
+# Scope note: this reports PROCESS-WIDE resident memory via the OS (working
+# set on Windows, /proc/self/statm on Linux, task_info on macOS) -- it does
+# NOT attribute memory to allocation sites or Tauraro types/classes (a heap
+# profiler in the pprof/valgrind-massif sense). That would need hooking
+# TAURARO_ALLOC/TAURARO_FREE, which are called from thousands of call sites
+# across this runtime; wrapping them unconditionally risks the exact kind of
+# subtle, hard-to-isolate bug this session already spent real effort chasing
+# down elsewhere (MD5, the parser's keyword-as-parameter-name corruption) --
+# left as a deliberate, documented gap for a future round rather than rushed.
+# "How much memory is my program using right now, and what was its peak"
+# is still genuinely useful on its own and needs zero allocator hooking.
+#
+# Usage:
+#   from std.prof import MemProf
+#
+#   print("RSS: " + str(MemProf.rss_bytes() / 1024 / 1024) + " MB")
+#   print("Peak RSS: " + str(MemProf.peak_rss_bytes() / 1024 / 1024) + " MB")
+
+extern "C":
+    def _tr_prof_mem_rss_bytes() -> int
+    def _tr_prof_mem_peak_rss_bytes() -> int
+
+pub class MemProf:
+    _dummy: int
+
+extend MemProf:
+    # Current resident set size in bytes, or -1 if unavailable on this platform.
+    pub def rss_bytes() -> int:
+        return _tr_prof_mem_rss_bytes()
+
+    # Peak resident set size (high-water mark) in bytes since process start,
+    # or -1 if unavailable on this platform.
+    pub def peak_rss_bytes() -> int:
+        return _tr_prof_mem_peak_rss_bytes()

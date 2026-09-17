@@ -240,6 +240,7 @@ pub class CGenerator:
     pub loop_done_stack:  Vec[str]               # `while:` EXPRESSION normal-exit flag per enclosing loop ("" = none)
     pub emit_line_info:   bool                    # --debug: emit `#line N "src.tr"` directives for SLineMarker
     pub cur_src_file:     str                     # source file of the module currently being generated (for #line)
+    pub enable_prof:      bool                    # --prof: auto-wrap main() with CPU sampling start/stop/report
 
     pub def init() -> CGenerator:
         mut g = CGenerator()
@@ -321,6 +322,7 @@ pub class CGenerator:
         g.loop_done_stack = Vec[str].init(4)
         g.emit_line_info  = false
         g.cur_src_file    = ""
+        g.enable_prof     = false
         return g
 
     pub def next_temp(self) -> str:
@@ -10008,6 +10010,8 @@ pub class CGenerator:
         # with this function's own C parameters in the same scope.
         self.w("    _tr_argc = _tr_c_argc; _tr_argv = _tr_c_argv;\n")
         self.w("    _tr_init_console();\n")
+        if self.enable_prof:
+            self.w("    _tr_prof_cpu_start(1000);\n")
         # NOTE: the global async pool is created LAZILY on first use (see
         # _tr_async_pool() in the runtime). Eagerly spawning one worker thread
         # per CPU here cost ~1-2 MB of stack per core (~64+ MB on big machines)
@@ -10060,6 +10064,16 @@ pub class CGenerator:
                 self.cur_func  = ""
             i = i + 1
 
+        if self.enable_prof:
+            # _tr_prof_cpu_stop() then _tr_prof_cpu_report(): the report call
+            # itself also stops sampling first if somehow still running (see
+            # CpuProfiler.report() in std/prof/cpu.tr), but stopping here
+            # explicitly means the pool/asyncpool shutdown calls just below
+            # never run while a sampler thread might still be suspending this
+            # one -- report() alone would still be correct, this is just
+            # tidier ordering.
+            self.w("    _tr_prof_cpu_stop();\n")
+            self.w("    { char* _tr_prof_rep = _tr_prof_cpu_report(); fputs(_tr_prof_rep, stderr); free(_tr_prof_rep); }\n")
         self.w("#ifndef TAURARO_BARE\n")
         self.w("    _tr_async_pool_shutdown();\n")
         self.w("    _tr_asyncpool_default_shutdown();\n")
@@ -10890,6 +10904,8 @@ pub class CGenerator:
         # with this function's own C parameters in the same scope.
         self.w("    _tr_argc = _tr_c_argc; _tr_argv = _tr_c_argv;\n")
         self.w("    _tr_init_console();\n")
+        if self.enable_prof:
+            self.w("    _tr_prof_cpu_start(1000);\n")
         # NOTE: the global async pool is created LAZILY on first use (see
         # _tr_async_pool() in the runtime). Eagerly spawning one worker thread
         # per CPU here cost ~1-2 MB of stack per core (~64+ MB on big machines)
@@ -10948,6 +10964,9 @@ pub class CGenerator:
                         self.cur_func  = ""
                 i = i + 1
 
+        if self.enable_prof:
+            self.w("    _tr_prof_cpu_stop();\n")
+            self.w("    { char* _tr_prof_rep = _tr_prof_cpu_report(); fputs(_tr_prof_rep, stderr); free(_tr_prof_rep); }\n")
         self.w("#ifndef TAURARO_BARE\n")
         self.w("    _tr_async_pool_shutdown();\n")
         self.w("    _tr_asyncpool_default_shutdown();\n")

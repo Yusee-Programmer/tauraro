@@ -3462,6 +3462,8 @@ __attribute__((hot)) int main(int _tr_c_argc, char** _tr_c_argv) {
     /* pass */
     bool debug_mode = false;
     /* pass */
+    bool prof_mode = false;
+    /* pass */
     bool strict_mode = false;
     /* pass */
     bool no_elide = false;
@@ -3612,6 +3614,9 @@ __attribute__((hot)) int main(int _tr_c_argc, char** _tr_c_argv) {
         } else if ((strcmp(_tr_strz(arg), _tr_strz(_tr_str_lit("--debug"))) == 0)) {
             /* pass */
             debug_mode = true;
+        } else if ((strcmp(_tr_strz(arg), _tr_strz(_tr_str_lit("--prof"))) == 0)) {
+            /* pass */
+            prof_mode = true;
         } else if ((strcmp(_tr_strz(arg), _tr_strz(_tr_str_lit("--strict"))) == 0)) {
             /* pass */
             strict_mode = true;
@@ -4482,6 +4487,8 @@ __attribute__((hot)) int main(int _tr_c_argc, char** _tr_c_argv) {
     CGenerator* c_gen = CGenerator_init();
     /* pass */
     c_gen->emit_line_info = debug_mode;
+    /* pass */
+    c_gen->enable_prof = prof_mode;
     /* pass */
     c_gen->no_elide = no_elide;
     /* pass */
