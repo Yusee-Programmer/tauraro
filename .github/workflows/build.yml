@@ -603,6 +603,16 @@ jobs:
   # -----------------------------------------------------------------
   build-termux-android:
     needs: build
+    # `build` is a 4-way matrix (linux-x64/linux-arm64/windows-x64/macos-arm64); this
+    # job only actually depends on the linux-arm64 leg's artifact. Without this `if`,
+    # GitHub Actions' default `needs` condition is `success()` on the WHOLE matrix job
+    # - so an unrelated failure (e.g. a flaky Windows or macOS leg) marks `build` as
+    # failed overall and this job gets silently SKIPPED, even though linux-arm64 built
+    # fine and the artifact it needs exists. `!cancelled()` runs it whenever the
+    # workflow wasn't cancelled outright; the "Download linux-arm64 bootstrap artifact"
+    # step below still fails the job (correctly) if that specific leg didn't produce
+    # an artifact, so failure here stays correlated with the actual dependency.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-22.04-arm
     steps:
       - name: Checkout
