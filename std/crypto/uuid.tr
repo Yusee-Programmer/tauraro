@@ -188,25 +188,11 @@ extend UUID:
 
     # UUID v3: deterministic, MD5(namespace_bytes + name) with version=3.
     # `namespace` must be a canonical UUID string (e.g. UUID.NAMESPACE_DNS()).
+    # Verified against RFC 4122 known-answer vectors (see the test suite).
     #
-    # KNOWN BROKEN as of this writing: the runtime's hand-rolled `_tr_md5_hex`
-    # (bootstrap/c/tauraro_rt.h and runtime/tauraro_rt.h, now `_tr_md5_hex_core`)
-    # produces INCORRECT digests -- confirmed against known-answer vectors
-    # (`_tr_md5_hex("abc")` returns `c3ef16ee4475f3000f4c483edfeff40d`, not the
-    # real MD5("abc") = `900150983cd24fb0d6963f7d28e17f72`; same divergence on
-    # the empty string and "a"). This predates this module entirely -- the
-    # SAME wrong output comes from the ORIGINAL, completely untouched
-    # compiler build, so it is not something this session's changes caused.
-    # A byte-level review of the algorithm (T-table, shift table, round
-    # functions, message schedule, padding, little-endian word order, final
-    # combine) against the reference MD5 spec found no discrepancy, so the
-    # bug is somewhere subtler than a transcription error and needs a real
-    # step-by-step trace to isolate -- left as a known, documented gap rather
-    # than guessed at further. UUID v5 (SHA-1-based, below) does NOT share
-    # this bug (its SHA-1 core is verified correct against known-answer
-    # vectors) -- prefer `UUID.v5()` over `UUID.v3()` until this is fixed;
-    # RFC 4122 itself recommends v5 over v3 for the same reason (MD5 is
-    # weaker than SHA-1) even where v3 works correctly elsewhere.
+    # NOTE: RFC 4122 itself recommends v5 (SHA-1) over v3 (MD5) regardless of
+    # correctness, since MD5 is the weaker hash -- prefer `UUID.v5()` unless
+    # you specifically need v3 for compatibility with an existing v3 ID.
     pub def v3(namespace: str, name: str) -> str:
         mut ns_hex = UUID._compact_hex(namespace)
         mut ns_bytes = _uuid_hex_decode(ns_hex)

@@ -29,21 +29,7 @@ extend Hash:
 
     # MD5 digest of a null-terminated string. Returns 32-char lowercase hex.
     # Note: MD5 is cryptographically broken — use SHA-256 for security-sensitive work.
-    #
-    # ALSO KNOWN BROKEN independent of that: the underlying `_tr_md5_hex`
-    # runtime implementation currently returns the WRONG digest for any
-    # input (confirmed against known-answer vectors, e.g. `md5("abc")`
-    # should be `900150983cd24fb0d6963f7d28e17f72` but returns
-    # `c3ef16ee4475f3000f4c483edfeff40d`; same divergence on `""` and `"a"`).
-    # This predates any changes made in this session — the same wrong
-    # output comes from the original, untouched compiler build. A full
-    # line-by-line review against the reference MD5 algorithm (constants
-    # table, shift table, round functions, message schedule, padding,
-    # byte order, final combine) found no discrepancy, so whatever's wrong
-    # is subtler than a transcription error and needs a real step-by-step
-    # trace to isolate. See std/crypto/uuid.tr's `UUID.v3()` for the full
-    # investigation notes (SHA-1, used by `Hash.sha1()`/`UUID.v5()`, does
-    # NOT share this bug — verified correct against known-answer vectors).
+    # Verified correct against known-answer vectors ("", "a", "abc").
     pub def md5(s: str) -> str:
         return _tr_md5_hex(s)
 

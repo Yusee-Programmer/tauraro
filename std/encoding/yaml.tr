@@ -251,8 +251,17 @@ extend YamlParser:
         return ln.end <= ln.start
 
     # First non-blank line at index >= from (lines.len if none).
-    def _next_content(self, from: int) -> int:
-        mut i = from
+    # NOT named `from` -- `from` is a Tauraro keyword; a parameter introduces
+    # a new binding (same category as a `mut`/`let` variable name), which the
+    # language correctly disallows for keywords. The real bug this exposed:
+    # the parser didn't cleanly ERROR on `from: int` as a param name -- it
+    # silently mis-parsed it and lost track of the rest of this extend
+    # block's remaining methods (they never got registered at all, with no
+    # diagnostic), rather than either accepting it or reporting a clear
+    # parse error. Confirmed via compiler-side instrumentation before
+    # landing this rename, not guessed.
+    def _next_content(self, start_idx: int) -> int:
+        mut i = start_idx
         while i < self.lines.len and self._is_blank(i):
             i = i + 1
         return i
@@ -695,7 +704,40 @@ extend YamlParser:
             val_off = end
         while val_off < end and (self._srcat(val_off) == 32 or self._srcat(val_off) == 9):
             val_off = val_off + 1
-        if val_off >= end:
+        # Trim trailing whitespace to find where the value text actually ends
+        # (needed to detect a bare "&name" with nothing else on the line).
+        mut vend = end
+        while vend > val_off and (self._srcat(vend - 1) == 32 or self._srcat(vend - 1) == 9):
+            vend = vend - 1
+        # `key: &name` with NOTHING else on the line -- the anchor's real
+        # value is a nested block on the following more-indented lines (or
+        # null if none follows), NOT the literal text "&name". Previously
+        # this fell into the plain-scalar branch below, which parsed "&name"
+        # as if it were a flow value: `_parse_flow_value` read the anchor
+        # name, found nothing left in the (line-scoped) span afterward, and
+        # registered the anchor against an empty/null value instead of the
+        # block that follows -- confirmed via a real repro (`base: &defaults`
+        # + an indented mapping) before landing this fix.
+        mut anchor_only_name = ""
+        if vend > val_off and self._srcat(val_off) == 38:   # '&'
+            mut ai = val_off + 1
+            while ai < vend and self._is_name_char(self._srcat(ai)):
+                ai = ai + 1
+            if ai == vend and ai > val_off + 1:
+                anchor_only_name = self.src.slice(val_off + 1, vend)
+        if anchor_only_name != "":
+            mut ni2 = self._next_content(line_idx + 1)
+            if ni2 < self.lines.len and self.lines.get(ni2).indent > indent:
+                mut v2 = self.parse_block_node(line_idx + 1, indent + 1)
+                self._register_anchor(anchor_only_name, v2)
+                tbl.obj_set(key, v2)
+                return self.next_idx
+            else:
+                mut v2n = YamlValue.init_null()
+                self._register_anchor(anchor_only_name, v2n)
+                tbl.obj_set(key, v2n)
+                return line_idx + 1
+        elif val_off >= end:
             mut ni = self._next_content(line_idx + 1)
             if ni < self.lines.len and self.lines.get(ni).indent > indent:
                 mut v = self.parse_block_node(line_idx + 1, indent + 1)
@@ -839,7 +881,19 @@ pub def _yaml_write_block(node: YamlValue, depth: int, sb: StringBuilder):
                 _yaml_write_block(v, depth + 1, sb)
             elif v.tag == 5 and v.items.len > 0:
                 sb.append("\n")
-                _yaml_write_block(v, depth, sb)
+                # depth+1, NOT depth: YAML itself permits a sequence at the
+                # SAME indent as its parent key ("nums:\n- 1\n- 2"), but this
+                # parser's block-nesting check requires the child's indent to
+                # be STRICTLY GREATER than the parent's (see _consume_map_line
+                # / parse_block_node's "indent > indent" comparisons) -- it
+                # doesn't special-case sequences the way the YAML spec does.
+                # Writing at `depth` (the previous behavior) therefore
+                # produced output this same parser couldn't read back: a
+                # round-trip parse->stringify->parse silently lost the whole
+                # array (indent NOT > parent -> falls to the "no nested
+                # block" branch -> key mapped to null). Confirmed via a real
+                # round-trip repro before landing this fix.
+                _yaml_write_block(v, depth + 1, sb)
             else:
                 sb.append(" ")
                 _yaml_write_flow(v, sb)

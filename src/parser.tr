@@ -608,6 +608,21 @@ extend Parser:
                     pass
             if going:
                 mut item_name = self.consume_ident()
+                # A keyword token (e.g. `from`, `match`) here previously fell
+                # through silently: consume_ident() returns "" WITHOUT
+                # advancing self.pos, and the `else` branch below just set
+                # going=False and returned whatever params were collected so
+                # far -- no diagnostic, and the unconsumed keyword token then
+                # desynced whatever the caller parsed next. Confirmed via a
+                # real repro: `def f(self, from: int)` silently truncated an
+                # entire `extend` block's remaining methods with zero error
+                # output. A parameter introduces a new binding (same category
+                # as a `mut`/`let` name), so a keyword here is correctly
+                # invalid -- but it must be a clear error, not silent parser
+                # corruption.
+                if item_name == "" and self.peek() != Token.RParen and self.peek() != Token.Eof:
+                    self.emit_diag("expected a parameter name, found a reserved keyword", "reserved words cannot be used as a parameter name (they introduce a new binding, same as a 'mut'/'let' variable) — rename this parameter.")
+                    self.pos = self.pos + 1
                 if item_name != "":
                     mut ty_ptr = Pointer[AstType](0)
                     match self.peek():

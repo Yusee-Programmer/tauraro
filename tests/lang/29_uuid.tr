@@ -35,15 +35,10 @@ def main():
     t.assert_eq_int(UUID.version(dns1), 3, "v3 version nibble is 3")
     t.assert_eq_str(dns1, dns2, "v3 is deterministic for same namespace+name")
     t.assert_ne_str(dns1, dns3, "v3 differs for different name")
-    # NOT asserted here: a known-answer check against the real RFC 4122
-    # value ("9073926b-929f-31c2-abc9-fad77ae3e8eb", verified independently
-    # via Python's hashlib/uuid modules). The runtime's `_tr_md5_hex` is a
-    # pre-existing, confirmed-broken MD5 implementation (wrong even for
-    # MD5("abc") on the original, untouched compiler -- see the long comment
-    # on UUID.v3() in std/crypto/uuid.tr for the full investigation). v3's
-    # OTHER properties (validity, version nibble, determinism, sensitivity
-    # to the input) all hold and are asserted above; only the actual digest
-    # value is wrong. Prefer UUID.v5() (SHA-1-based, verified correct below).
+    # Known-answer test: UUID v3 of NAMESPACE_DNS + "example.com" is a fixed,
+    # well-known value per RFC 4122's reference algorithm (independently
+    # verified via Python's hashlib/uuid modules).
+    t.assert_eq_str(dns1, "9073926b-929f-31c2-abc9-fad77ae3e8eb", "v3 known-answer (DNS, example.com)")
 
     t.section("UUID v5 (SHA-1 namespace)")
     mut dns5_1 = UUID.v5(UUID.NAMESPACE_DNS(), "example.com")
