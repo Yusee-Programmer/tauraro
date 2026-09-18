@@ -214,6 +214,15 @@ jobs:
           LDFLAGS: "-lm -lpthread -lrt"
         run: bash scripts/run_tests.sh
 
+      # TEMPORARY: diagnosing why tests/lang/30_regex.tr misbehaves at runtime on
+      # this runner's MinGW (links fine, but regex matching itself is wrong) --
+      # see scripts/regex_diag.ps1's own header comment. Remove this step once
+      # the real fix lands.
+      - name: TEMP regex diagnostic (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/regex_diag.ps1
+
       - name: Run regression test suite (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
