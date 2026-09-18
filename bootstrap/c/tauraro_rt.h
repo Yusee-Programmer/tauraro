@@ -6285,6 +6285,15 @@ static inline int _tr_regex_count(char* handle, char* text) {
 static inline void _tr_regex_free(char* handle) {
     if (!handle) return; regfree(&((_TrRegex*)handle)->re); TAURARO_FREE(handle);
 }
+/* Lets Tauraro-level code (std/regex/mod.tr, and its own tests) check whether
+ * real regex support is compiled in at all, instead of only being able to
+ * infer it indirectly from every call silently no-op'ing -- some toolchains
+ * (confirmed: GitHub's windows-latest MinGW image, which has been observed to
+ * both ship and NOT ship <regex.h> across different runs of the SAME runner
+ * label) genuinely have no POSIX regex available, and callers need a clean
+ * way to detect and skip rather than getting "no match" results that look
+ * like real failures. */
+_TR_XLINK bool _tr_regex_available(void) { return true; }
 #else
 static inline char* _tr_regex_compile(char* p, int i) { (void)p;(void)i; return NULL; }
 static inline bool  _tr_regex_match(char* h, char* t) { (void)h;(void)t; return false; }
@@ -6297,6 +6306,7 @@ static inline char* _tr_regex_replace_first(char* h, char* t, char* r) { (void)h
 static inline char* _tr_regex_replace_all(char* h, char* t, char* r) { (void)h;(void)r; return _tr_strdup(t?t:""); }
 static inline int   _tr_regex_count(char* h, char* t) { (void)h;(void)t; return 0; }
 static inline void  _tr_regex_free(char* h) { (void)h; }
+_TR_XLINK bool _tr_regex_available(void) { return false; }
 #endif
 
 /* ═══════════════════════════════════════════════════════════════════════════

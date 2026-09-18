@@ -5265,16 +5265,27 @@ __attribute__((hot)) void Sema__insert_drop_before_terminator(Sema* self, HirBlo
     /* pass */
     bool is_term = false;
     /* pass */
+    HirExpr* term_val = (HirExpr*)(0LL);
+    /* pass */
     __auto_type _t447 = (*last);
     if (_t447.tag == HirStmt_SReturn) {
-        __auto_type _ = _t447.data.SReturn.val;
+        __auto_type rv = _t447.data.SReturn.val;
+        /* pass */
         is_term = true;
+        /* pass */
+        term_val = rv;
     } else if (_t447.tag == HirStmt_SRaise) {
-        __auto_type _ = _t447.data.SRaise.val;
+        __auto_type rv2 = _t447.data.SRaise.val;
+        /* pass */
         is_term = true;
+        /* pass */
+        term_val = rv2;
     } else if (_t447.tag == HirStmt_SBreak) {
-        __auto_type _ = _t447.data.SBreak.val;
+        __auto_type bv3 = _t447.data.SBreak.val;
+        /* pass */
         is_term = true;
+        /* pass */
+        term_val = bv3;
     } else if (_t447.tag == HirStmt_SContinue) {
         is_term = true;
     } else if (1) {
@@ -5283,6 +5294,32 @@ __attribute__((hot)) void Sema__insert_drop_before_terminator(Sema* self, HirBlo
     }
     /* pass */
     if (is_term) {
+        /* pass */
+        List_TrStr* term_refs = (void*)List_TrStr_new();
+        /* pass */
+        if ((((unsigned long long)(term_val)) != ((unsigned long long)(0LL)))) {
+            /* pass */
+            Sema_collect_idents(self, term_val, term_refs);
+        }
+        /* pass */
+        bool nm_referenced = false;
+        /* pass */
+        long long tri = 0LL;
+        /* pass */
+        while ((tri < term_refs->len)) {
+            /* pass */
+            if ((strcmp(_tr_strz(List_TrStr_get(term_refs, tri)), _tr_strz(nm)) == 0)) {
+                /* pass */
+                nm_referenced = true;
+            }
+            /* pass */
+            tri = (tri + 1LL);
+        }
+        /* pass */
+        if (nm_referenced) {
+            /* pass */
+            return;
+        }
         /* pass */
         List_ptr_remove(b->stmts, (n - 1LL));
         /* pass */

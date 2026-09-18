@@ -2442,7 +2442,7 @@ __attribute__((hot)) long long compile_all_c(List_TrStr* c_files, TrStr exe_path
         static_flag = _strtmp_t3830;
     }
     /* pass */
-    TrStr warn_flags = _tr_str_lit(" -Wno-string-compare -Wno-comment -Wno-attributes -Wno-unused-value");
+    TrStr warn_flags = _tr_str_lit(" -fno-strict-aliasing -Wno-string-compare -Wno-comment -Wno-attributes -Wno-unused-value");
     /* pass */
     if (is_clang_compiler(cc)) {
         /* pass */
@@ -2643,7 +2643,7 @@ __attribute__((hot)) long long compile_all_c_incremental(List_TrStr* c_files, Li
         static_flag = _strtmp_t3846;
     }
     /* pass */
-    TrStr warn_flags = _tr_str_lit(" -Wno-string-compare -Wno-comment -Wno-attributes -Wno-unused-value");
+    TrStr warn_flags = _tr_str_lit(" -fno-strict-aliasing -Wno-string-compare -Wno-comment -Wno-attributes -Wno-unused-value");
     /* pass */
     if (is_clang_compiler(cc)) {
         /* pass */
@@ -2886,7 +2886,7 @@ __attribute__((hot)) long long compile_wasm_incremental(List_TrStr* c_files, Lis
     /* pass */
     TrStr cc = _tr_str_lit("zig cc -target wasm32-freestanding");
     /* pass */
-    TrStr warn_flags = _tr_str_lit(" -Wno-string-compare -Wno-comment -Wno-attributes -Wno-unused-value -Wno-unknown-attributes -Wno-parentheses-equality");
+    TrStr warn_flags = _tr_str_lit(" -fno-strict-aliasing -Wno-string-compare -Wno-comment -Wno-attributes -Wno-unused-value -Wno-unknown-attributes -Wno-parentheses-equality");
     /* pass */
     TrStr wasm_flags = _tr_str_lit(" -nostdlib --no-standard-libraries -fno-sanitize=undefined -DTAURARO_WASM=1 -DTAURARO_NO_OS=1");
     /* pass */
@@ -2987,7 +2987,7 @@ __attribute__((hot)) long long compile_c_to_exe(TrStr c_path, TrStr exe_path, Tr
     /* pass */
     TrStr out_dir = ({ TrStr _at_t3866 = (dir_of_path(c_path)); __auto_type _wr = (strip_trailing_sep(_at_t3866)); _tr_str_release(_at_t3866); _wr; });
     /* pass */
-    TrStr warn_flags = _tr_str_lit(" -Wno-string-compare -Wno-comment -Wno-attributes -Wno-unused-value");
+    TrStr warn_flags = _tr_str_lit(" -fno-strict-aliasing -Wno-string-compare -Wno-comment -Wno-attributes -Wno-unused-value");
     /* pass */
     if (is_clang_compiler(cc)) {
         /* pass */
