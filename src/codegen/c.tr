@@ -7379,7 +7379,14 @@ pub class CGenerator:
                 match aa_callee.read():
                     case HirExpr.EIdent(nn, _, _): aa_fn_n = nn
                     case HirExpr.EPropAccess(th_obj2, th_var2, _):
-                        # Thread.spawn(fn, arg) static call - emit spawn wrapper
+                        # Thread.spawn(fn, arg) static call - emit spawn wrapper.
+                        # th_obj2 isn't always a bare `Thread` EIdent: a chained
+                        # call like `Thread.spawn(fn, arg).detach()` nests the
+                        # spawn call itself as th_obj2 (the receiver of
+                        # `.detach()`) - recurse into it unconditionally so its
+                        # own wrapper still gets emitted regardless of what
+                        # method is chained onto the spawn call.
+                        self.prescan_await_all_in_expr(th_obj2)
                         mut th_ctor2 = ""
                         match th_obj2.read():
                             case HirExpr.EIdent(thn2, _, _): th_ctor2 = thn2
@@ -7498,6 +7505,13 @@ pub class CGenerator:
                                         self.w("    _ab[0] = (long long)" + sp_fn_nm + "(" + sp_cs + ");\n")
                                     self.w("    free(_ab); return NULL;\n")
                                     self.w("}\n")
+                # Recurse into the receiver: a chained call like
+                # `Thread.spawn(fn, arg).detach()` represents `.detach()` as
+                # this EMethodCall with pool_obj = the nested Thread.spawn(...)
+                # expression - without this, that inner spawn's wrapper is
+                # never emitted (pool_meth == "detach", not "spawn", so none
+                # of the cases above fire for it).
+                self.prescan_await_all_in_expr(pool_obj)
             case _: pass
 
     pub def prescan_spawns(self, prog: HirProgram):
