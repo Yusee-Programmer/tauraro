@@ -1091,7 +1091,19 @@ pub def compile_all_c(c_files: Vec[str], exe_path: str, inc_dir: str,
     mut static_flag = ""
     if static_link: static_flag = " -static"
     # Flags valid on both GCC and Clang.
-    mut warn_flags = " -Wno-string-compare -Wno-comment -Wno-attributes -Wno-unused-value"
+    # -fno-strict-aliasing: generated C reinterprets pointers between
+    # unrelated types constantly (Pointer[char] casts, TrStr/_tr_strz
+    # boxing, void* runtime helpers) - none of it goes through unions or
+    # memcpy, so it's all strict-aliasing UB in the strict sense. At -O2
+    # GCC's strict-aliasing-based optimizations (load/store reordering,
+    # caching a value across what looks like a non-aliasing write) then
+    # produce genuinely wrong codegen - this is not a false-positive
+    # warning, it manifests as real, hard-to-reproduce heap corruption at
+    # runtime. Confirmed empirically: the same generated C compiled with
+    # clang(-cl), or with plain gcc + this flag alone added, runs clean;
+    # unmodified gcc -O2 without it crashes ~100% of the time under any
+    # workload exercising more than a trivial amount of the runtime.
+    mut warn_flags = " -fno-strict-aliasing -Wno-string-compare -Wno-comment -Wno-attributes -Wno-unused-value"
     # Clang-only: suppress warnings that are Clang-specific or have no GCC equivalent.
     if is_clang_compiler(cc):
         warn_flags = warn_flags + " -Wno-unknown-attributes -Wno-parentheses-equality"
@@ -1191,7 +1203,19 @@ pub def compile_all_c_incremental(c_files: Vec[str], needs: Vec[bool], exe_path:
             cross_flags = cross_flags + " --sysroot=\"" + sysroot + "\""
     mut static_flag = ""
     if static_link: static_flag = " -static"
-    mut warn_flags = " -Wno-string-compare -Wno-comment -Wno-attributes -Wno-unused-value"
+    # -fno-strict-aliasing: generated C reinterprets pointers between
+    # unrelated types constantly (Pointer[char] casts, TrStr/_tr_strz
+    # boxing, void* runtime helpers) - none of it goes through unions or
+    # memcpy, so it's all strict-aliasing UB in the strict sense. At -O2
+    # GCC's strict-aliasing-based optimizations (load/store reordering,
+    # caching a value across what looks like a non-aliasing write) then
+    # produce genuinely wrong codegen - this is not a false-positive
+    # warning, it manifests as real, hard-to-reproduce heap corruption at
+    # runtime. Confirmed empirically: the same generated C compiled with
+    # clang(-cl), or with plain gcc + this flag alone added, runs clean;
+    # unmodified gcc -O2 without it crashes ~100% of the time under any
+    # workload exercising more than a trivial amount of the runtime.
+    mut warn_flags = " -fno-strict-aliasing -Wno-string-compare -Wno-comment -Wno-attributes -Wno-unused-value"
     if is_clang_compiler(cc):
         warn_flags = warn_flags + " -Wno-unknown-attributes -Wno-parentheses-equality"
     mut native_flags = ""
@@ -1308,7 +1332,9 @@ pub def compile_all_c_incremental(c_files: Vec[str], needs: Vec[bool], exe_path:
 pub def compile_wasm_incremental(c_files: Vec[str], needs: Vec[bool], exe_path: str, inc_dir: str,
                       opt_level: str, verbose: bool, memory_mb: int) -> int:
     mut cc = "zig cc -target wasm32-freestanding"
-    mut warn_flags = " -Wno-string-compare -Wno-comment -Wno-attributes -Wno-unused-value -Wno-unknown-attributes -Wno-parentheses-equality"
+    # -fno-strict-aliasing: see the identical comment on the native/cross
+    # compile_incremental warn_flags above - same generated C, same UB.
+    mut warn_flags = " -fno-strict-aliasing -Wno-string-compare -Wno-comment -Wno-attributes -Wno-unused-value -Wno-unknown-attributes -Wno-parentheses-equality"
     # Same target_extra_flags("wasm32-unknown-unknown") flags the generic cross
     # path would apply, inlined here since this function bypasses that path.
     # -fno-sanitize=undefined: zig cc enables UBSan by default for freestanding
@@ -1369,7 +1395,19 @@ pub def compile_c_to_exe(c_path: str, exe_path: str, opt_level: str, verbose: bo
     mut cc = detect_c_compiler()
     mut opt_flag = "-O" + opt_level
     mut out_dir = strip_trailing_sep(dir_of_path(c_path))
-    mut warn_flags = " -Wno-string-compare -Wno-comment -Wno-attributes -Wno-unused-value"
+    # -fno-strict-aliasing: generated C reinterprets pointers between
+    # unrelated types constantly (Pointer[char] casts, TrStr/_tr_strz
+    # boxing, void* runtime helpers) - none of it goes through unions or
+    # memcpy, so it's all strict-aliasing UB in the strict sense. At -O2
+    # GCC's strict-aliasing-based optimizations (load/store reordering,
+    # caching a value across what looks like a non-aliasing write) then
+    # produce genuinely wrong codegen - this is not a false-positive
+    # warning, it manifests as real, hard-to-reproduce heap corruption at
+    # runtime. Confirmed empirically: the same generated C compiled with
+    # clang(-cl), or with plain gcc + this flag alone added, runs clean;
+    # unmodified gcc -O2 without it crashes ~100% of the time under any
+    # workload exercising more than a trivial amount of the runtime.
+    mut warn_flags = " -fno-strict-aliasing -Wno-string-compare -Wno-comment -Wno-attributes -Wno-unused-value"
     if is_clang_compiler(cc):
         warn_flags = warn_flags + " -Wno-unknown-attributes -Wno-parentheses-equality"
     mut cmd = cc + " " + opt_flag + warn_flags + " -DTAURARO_NO_RT_HELPERS \"-I" + out_dir + "\" -o \"" + exe_path + "\" \"" + c_path + "\" -lm"
