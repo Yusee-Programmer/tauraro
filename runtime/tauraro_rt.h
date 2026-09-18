@@ -2947,10 +2947,18 @@ static _TrExcChain* _tr_excchain_new(void) {
 #endif
 #if defined(TAURARO_BARE) || defined(TAURARO_KERNEL)
 #  define _TR_THREAD_LOCAL
+#elif defined(__GNUC__) || defined(__clang__)
+/* clang (incl. clang-cl, which also defines _MSC_VER for header
+ * compatibility) must be checked before _MSC_VER here - it always
+ * defines __clang__, and __thread is what agrees with the `extern
+ * __thread ...` forward declarations above (also __GNUC__-first), so a
+ * real-MSVC-vs-clang-cl mismatch on this check order previously gave
+ * the panic-state TLS globals two different storage-class keywords for
+ * the same symbol (declared __thread, defined __declspec(thread)) -
+ * clang correctly rejects that as inconsistent TLS dynamic/static init. */
+#  define _TR_THREAD_LOCAL __thread
 #elif defined(_MSC_VER)
 #  define _TR_THREAD_LOCAL __declspec(thread)
-#elif defined(__GNUC__) || defined(__clang__)
-#  define _TR_THREAD_LOCAL __thread
 #else
 #  define _TR_THREAD_LOCAL _Thread_local
 #endif
@@ -4005,10 +4013,18 @@ static inline void _tr_bounds_check(long long i, size_t len) {
 /* Thread-local storage qualifier for per-thread exception stacks */
 #if defined(TAURARO_BARE) || defined(TAURARO_KERNEL)
 #  define _TR_THREAD_LOCAL
+#elif defined(__GNUC__) || defined(__clang__)
+/* clang (incl. clang-cl, which also defines _MSC_VER for header
+ * compatibility) must be checked before _MSC_VER here - it always
+ * defines __clang__, and __thread is what agrees with the `extern
+ * __thread ...` forward declarations above (also __GNUC__-first), so a
+ * real-MSVC-vs-clang-cl mismatch on this check order previously gave
+ * the panic-state TLS globals two different storage-class keywords for
+ * the same symbol (declared __thread, defined __declspec(thread)) -
+ * clang correctly rejects that as inconsistent TLS dynamic/static init. */
+#  define _TR_THREAD_LOCAL __thread
 #elif defined(_MSC_VER)
 #  define _TR_THREAD_LOCAL __declspec(thread)
-#elif defined(__GNUC__) || defined(__clang__)
-#  define _TR_THREAD_LOCAL __thread
 #else
 #  define _TR_THREAD_LOCAL _Thread_local
 #endif
@@ -6269,6 +6285,15 @@ static inline int _tr_regex_count(char* handle, char* text) {
 static inline void _tr_regex_free(char* handle) {
     if (!handle) return; regfree(&((_TrRegex*)handle)->re); TAURARO_FREE(handle);
 }
+/* Lets Tauraro-level code (std/regex/mod.tr, and its own tests) check whether
+ * real regex support is compiled in at all, instead of only being able to
+ * infer it indirectly from every call silently no-op'ing -- some toolchains
+ * (confirmed: GitHub's windows-latest MinGW image, which has been observed to
+ * both ship and NOT ship <regex.h> across different runs of the SAME runner
+ * label) genuinely have no POSIX regex available, and callers need a clean
+ * way to detect and skip rather than getting "no match" results that look
+ * like real failures. */
+_TR_XLINK bool _tr_regex_available(void) { return true; }
 #else
 static inline char* _tr_regex_compile(char* p, int i) { (void)p;(void)i; return NULL; }
 static inline bool  _tr_regex_match(char* h, char* t) { (void)h;(void)t; return false; }
@@ -6281,6 +6306,7 @@ static inline char* _tr_regex_replace_first(char* h, char* t, char* r) { (void)h
 static inline char* _tr_regex_replace_all(char* h, char* t, char* r) { (void)h;(void)r; return _tr_strdup(t?t:""); }
 static inline int   _tr_regex_count(char* h, char* t) { (void)h;(void)t; return 0; }
 static inline void  _tr_regex_free(char* h) { (void)h; }
+_TR_XLINK bool _tr_regex_available(void) { return false; }
 #endif
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -8246,9 +8272,21 @@ _TR_XLINK long long _tr_prof_mem_rss_bytes(void) {
     return rss_pages * (long long)page_sz;
 }
 _TR_XLINK long long _tr_prof_mem_peak_rss_bytes(void) {
+    /* ru_maxrss (kernel's own high-water mark) and /proc/self/statm's current RSS
+     * are two SEPARATELY updated counters (statm reads mm->rss_stat directly;
+     * ru_maxrss is refreshed from update_hiwater_rss(), flushed to the shared
+     * counter on its own schedule) -- right after a burst of allocation they can
+     * transiently disagree, occasionally leaving ru_maxrss a step behind the
+     * current reading even though it's conceptually "peak so far". Since this
+     * profiler doesn't poll continuously, the only durable promise we can make
+     * for "peak" is the max of everything we've actually observed -- which must
+     * include right now -- so fold the current reading in explicitly. */
+    long long cur = _tr_prof_mem_rss_bytes();
     struct rusage ru;
-    if (getrusage(RUSAGE_SELF, &ru) == 0) return (long long)ru.ru_maxrss * 1024LL; /* KB on Linux */
-    return -1;
+    long long peak = -1;
+    if (getrusage(RUSAGE_SELF, &ru) == 0) peak = (long long)ru.ru_maxrss * 1024LL; /* KB on Linux */
+    if (cur > peak) return cur;
+    return peak;
 }
 #endif
 

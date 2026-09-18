@@ -8,6 +8,17 @@ from std.regex import Regex, Captures, Match
 def main():
     mut t = TestRunner.init("30_regex")
 
+    # Some toolchains genuinely have no POSIX <regex.h> at all -- confirmed on
+    # GitHub's windows-latest MinGW image, which has been observed to both
+    # ship and NOT ship it across different runs of the SAME runner label.
+    # When that's the case every Regex method is running the documented
+    # "safe no-op" stub, so every match below would legitimately fail --
+    # skip cleanly instead of reporting those as real regressions.
+    if not Regex.available():
+        t.skip("std.regex requires <regex.h> (TAURARO_HAVE_REGEX) -- not available on this platform/toolchain")
+        t.summary()
+        return
+
     t.section("pre-existing: match/contains")
     mut re1 = Regex.compile("^[a-z]+$")
     t.assert_true(re1.match("hello"), "match: whole-string match")

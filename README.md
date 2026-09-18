@@ -6,7 +6,7 @@
 
   <p>
     <img src="https://img.shields.io/badge/license-MIT%20%2F%20Apache%202.0-blue?style=flat-square" alt="License"/>
-    <img src="https://img.shields.io/badge/version-v0.0.8-brightgreen?style=flat-square" alt="Version"/>
+    <img src="https://img.shields.io/badge/version-v0.0.9-brightgreen?style=flat-square" alt="Version"/>
     <img src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS%20%7C%20Android(termux)-lightgrey?style=flat-square" alt="Platform"/>
     <img src="https://img.shields.io/badge/backends-C%20%C2%B7%20LLVM%20%C2%B7%20WASM%20%C2%B7%20bare--metal-red?style=flat-square" alt="Backends"/>
     <img src="https://img.shields.io/badge/self--hosted-yes-purple?style=flat-square" alt="Self-hosted"/>
@@ -67,7 +67,7 @@ Verify your installation:
 
 ```sh
 tauraroc --version
-# tauraroc v0.0.8
+# tauraroc v0.0.9
 ```
 
 ---
@@ -101,9 +101,10 @@ tauraroc --run hello.tr
 | **Concurrency** | `spawn`, `task_group:`, `await_all`, `Thread.spawn`, `AsyncPool` (work-stealing, multi-core), `Chan[T]`, `Mutex[T]`, `Atomic[T]` |
 | **Data race safety** | `Sendable` interface enforced at compile time on all spawn/thread boundaries |
 | **Unsafe** | `unsafe:`, `Pointer[T]`, inline `asm()` |
-| **GPU** | `gpu:` blocks → OpenMP parallel loops |
-| **FFI** | `extern "C"` for calling C libraries |
+| **GPU** | `gpu:` blocks → OpenMP parallel loops; `std.gpu` portable compute (CUDA/OpenCL/CPU) + `@kernel` → PTX/SPIR-V |
+| **FFI** | `extern "C"` for calling C libraries; `bindgen` for C/C++ headers |
 | **Closures** | First-class anonymous functions with capture |
+| **Profiling** | `std.prof` — CPU sampling, memory stats, metrics (`Counter`/`Gauge`/`Histogram`); also `tauraroc --prof` |
 
 </div>
 
@@ -121,7 +122,8 @@ tauraroc lint <file.tr>         Analyze and report warnings/errors
   --check                Semantic analysis only, no output
   --backend c|llvm|native  Code generator (default: c)
   --target <name|triple> Cross-compile: linux-arm64, windows-x64, macos-arm64,
-                         android-*, ios, wasm-wasi, embedded-arm/riscv*, … or a raw triple
+                         android-*, ios, wasm-wasi, embedded-arm/riscv*,
+                         uefi-x64 (turnkey .efi), … or a raw triple
   --static               Statically link (musl on Linux)
   --sysroot <path>       Override the cross toolchain's sysroot
   -o <path>              Exact output path (dir honored; overrides -d)
@@ -134,6 +136,8 @@ tauraroc lint <file.tr>         Analyze and report warnings/errors
   --debug                AddressSanitizer + bounds-check assertions
   --strict               Alloc/dealloc outside `unsafe:` is an error [U-1]
   --no-heap              Reject all heap-allocating constructs [H-1]
+  --prof                 Auto-wrap main() with CPU sampling; prints a flat
+                         profile to stderr on exit (see std.prof)
   --no-std               `alloc` tier — pluggable allocator, no OS services
   --freestanding         `core` tier — no OS, no libc (bare metal)
   --link <path>          Link a file (.c/.o/.a/.dll/.so)
@@ -254,6 +258,11 @@ The full language reference lives in [`docs/lang/`](docs/lang/):
 | 19 | [Compiler Error Reference](docs/lang/19_compiler_errors.md) |
 | 20 | [Advanced Patterns](docs/lang/20_advanced_patterns.md) |
 | 21 | [Operator Overloading](docs/lang/21_operator_overloading.md) |
+| 22 | [Compiling, Backends & Cross-Compilation](docs/lang/22_compiling_and_cross_compilation.md) |
+| 23 | [Casting with `as`](docs/lang/23_casting_with_as.md) |
+| 24 | [`bindgen` — C/C++ Header Binding](docs/lang/24_bindgen.md) |
+
+Standard library reference lives in [`docs/std/`](docs/std/README.md).
 
 ---
 

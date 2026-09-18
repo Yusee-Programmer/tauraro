@@ -2773,13 +2773,40 @@ extend Sema:
             return
         mut last = b.stmts.get(n - 1)
         mut is_term = false
+        mut term_val = Pointer[HirExpr](0)
         match last.read():
-            case HirStmt.SReturn(_): is_term = true
-            case HirStmt.SRaise(_): is_term = true
-            case HirStmt.SBreak(_): is_term = true
+            case HirStmt.SReturn(rv):
+                is_term = true
+                term_val = rv
+            case HirStmt.SRaise(rv2):
+                is_term = true
+                term_val = rv2
+            case HirStmt.SBreak(bv3):
+                is_term = true
+                term_val = bv3
             case HirStmt.SContinue: is_term = true
             case _: pass
         if is_term:
+            # #F-2 soundness gap: `nm` was judged "not consumed" by
+            # _param_consumed_in_block, which only tracks whether the WHOLE
+            # value was passed/stored/returned elsewhere - it does not see a
+            # plain field read like `return nm.status`. Blindly inserting the
+            # drop right before the terminator then frees `nm` before that
+            # same terminator statement reads it - a real, confirmed (via
+            # AddressSanitizer) use-after-free, not the leak-only failure
+            # mode this pass documents as its worst case. Reuse the same
+            # collect_idents-based check lower_block's own SReturn handling
+            # already uses for exactly this purpose, and skip the drop
+            # (leak, not UAF) when the terminator's own expression still
+            # references `nm`.
+            mut term_refs = Vec[str].init(2)
+            if term_val as usize != 0 as usize: self.collect_idents(term_val, term_refs)
+            mut nm_referenced = false
+            mut tri = 0
+            while tri < term_refs.len:
+                if term_refs.get(tri) == nm: nm_referenced = true
+                tri = tri + 1
+            if nm_referenced: return
             b.stmts.remove(n - 1)
             b.stmts.push(drop)
             b.stmts.push(last)

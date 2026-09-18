@@ -3,7 +3,7 @@
 ```tauraro
 from std.crypto.hash import Hash
 from std.crypto.hmac import Hmac
-from std.crypto.uuid import UUID
+from std.crypto.uuid import UUID, ULID, MonotonicUlid
 ```
 
 > SHA-256, HMAC-SHA256, and MD5 are implemented in pure C — no external library required.
@@ -65,6 +65,13 @@ print(tag2)
 | Method | Signature | Returns | Description |
 |---|---|---|---|
 | `UUID.v4` | `() -> str` | `str` | Random UUID v4 in canonical `8-4-4-4-12` hex format. |
+| `UUID.v3` | `(namespace: str, name: str) -> str` | `str` | Namespace + name based UUID v3 (MD5). Deterministic: same namespace+name always produces the same UUID. |
+| `UUID.v5` | `(namespace: str, name: str) -> str` | `str` | Namespace + name based UUID v5 (SHA-1). Preferred over v3 (MD5 is weaker); same determinism guarantee. |
+| `UUID.NAMESPACE_DNS` / `_URL` / `_OID` / `_X500` | `() -> str` | `str` | RFC 4122 standard namespace UUIDs, for use as `UUID.v3`/`v5`'s `namespace` argument. |
+| `UUID.nil` | `() -> str` | `str` | The nil UUID (`00000000-0000-0000-0000-000000000000`). |
+| `UUID.is_valid` | `(s: str) -> bool` | `bool` | Whether `s` is a syntactically valid UUID string. |
+| `UUID.version` | `(s: str) -> int` | `int` | The UUID's version nibble (4, 3, 5, ...), or -1 if invalid. |
+| `UUID.equals` | `(a: str, b: str) -> bool` | `bool` | Case-insensitive UUID string equality. |
 
 ### Example
 
@@ -74,4 +81,40 @@ from std.crypto.uuid import UUID
 mut id = UUID.v4()
 print(id)
 # e.g. "550e8400-e29b-41d4-a716-446655440000"
+
+mut dns_id = UUID.v5(UUID.NAMESPACE_DNS(), "example.com")
+print(dns_id)
+# deterministic -- same namespace + name always produces this same UUID
+```
+
+---
+
+## std.crypto.uuid — ULID
+
+Lexicographically sortable, timestamp-prefixed identifiers (26 Crockford
+base32 characters: 48-bit millisecond timestamp + 80 bits of randomness).
+
+| Method | Signature | Returns | Description |
+|---|---|---|---|
+| `ULID.generate` | `() -> str` | `str` | A fresh ULID using the current time + fresh randomness. |
+| `ULID.from_parts` | `(ms: int, rand_hi_lo: (int, int)) -> str` | `str` | Build a ULID from an explicit millisecond timestamp and randomness (for deterministic tests). |
+| `ULID.is_valid` | `(s: str) -> bool` | `bool` | Whether `s` is a syntactically valid ULID string. |
+| `ULID.timestamp_ms` | `(s: str) -> int` | `int` | Extract the millisecond timestamp encoded in a ULID. |
+
+`MonotonicUlid` guarantees strictly increasing ULIDs even when multiple are
+generated within the same millisecond (bumps the random component instead
+of colliding):
+
+```tauraro
+from std.crypto.uuid import ULID, MonotonicUlid
+
+mut a = ULID.generate()
+mut b = ULID.generate()
+# a and b sort lexicographically by generation time, but two ULIDs generated
+# in the same millisecond via ULID.generate() alone are not guaranteed ordered
+
+mut gen = MonotonicUlid.init()
+mut u1 = gen.next()
+mut u2 = gen.next()
+# u1 < u2 always, even generated back-to-back in the same millisecond
 ```

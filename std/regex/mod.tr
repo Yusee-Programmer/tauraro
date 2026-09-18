@@ -26,6 +26,7 @@ from std.string.str import Str
 from std.core.string import StringBuilder
 
 extern "C":
+    def _tr_regex_available() -> bool
     def _tr_regex_compile(pattern: str, icase: int) -> Pointer[char]
     def _tr_regex_match(handle: Pointer[char], text: str) -> bool
     def _tr_regex_find_start(handle: Pointer[char], text: str, from_: int) -> int
@@ -54,6 +55,14 @@ pub class Regex:
     group_names: Vec[str]
 
 extend Regex:
+    # True when this build was compiled with real POSIX regex support
+    # (TAURARO_HAVE_REGEX). False means every Regex method below is running
+    # the documented "safe no-op" stub (compile() always returns a handle
+    # that never matches) -- check this before relying on match results
+    # rather than treating a stub's "no match" as a real negative result.
+    pub def available() -> bool:
+        return _tr_regex_available()
+
     # Strip `(?<name>...)`/`(?P<name>...)` named-group syntax down to plain
     # `(...)` (POSIX ERE has no named-group syntax of its own), returning
     # the rewritten pattern and pushing each group's name (or "" if
@@ -322,13 +331,25 @@ extend Captures:
         c._names = Vec[str].init(1)
         return c
 
+    # `_raw` is NULL whenever the underlying Regex's `handle` was itself NULL --
+    # either a genuine compile failure, or TAURARO_HAVE_REGEX not being defined
+    # at all (no <regex.h> on this platform/toolchain; see this module's own
+    # header comment on the MSVC/no-regex.h stub path). The C-level stub
+    # already promises "safe no-op results" for that case, but reading
+    # `_raw.offset(0)` on a null pointer broke that promise -- it hit Tauraro's
+    # own bounds check ("Index 0 out of bounds (length 0)") and aborted the
+    # whole program instead of just reporting "didn't match". Every other
+    # Captures method (has/start/end/group) already routes through `len()`'s
+    # bounds check, so fixing these two closes the gap for all of them.
     pub def matched(self) -> bool:
+        if self._raw == none as Pointer[c_int]: return false
         unsafe:
             return (self._raw.offset(0).read() as int) == 1
 
     # Number of slots (group 0 + every capture group) -- NOT the same as
     # "number of groups that participated"; use `.has(n)` for that.
     pub def len(self) -> int:
+        if self._raw == none as Pointer[c_int]: return 0
         unsafe:
             return self._raw.offset(1).read() as int
 

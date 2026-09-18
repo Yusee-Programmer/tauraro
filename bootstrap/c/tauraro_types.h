@@ -4458,6 +4458,7 @@ __attribute__((hot)) TrStr strip_extension(TrStr path);
 __attribute__((hot)) bool str_starts_with(TrStr s, TrStr prefix);
 __attribute__((hot)) TrStr detect_c_compiler();
 __attribute__((hot)) bool is_clang_compiler(TrStr cc);
+__attribute__((hot)) bool mingw_regex_libs_link(TrStr cc, TrStr cross_flags);
 __attribute__((hot)) TrStr pkg_config_query(TrStr name, TrStr kind);
 __attribute__((hot)) TrStr cxx_of(TrStr cc);
 __attribute__((hot)) bool cpp_lto_ok(TrStr cc, TrStr target);

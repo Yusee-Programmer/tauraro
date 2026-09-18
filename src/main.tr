@@ -68,7 +68,7 @@ pub def gpu_blob_c(bin_path: str) -> str:
     return sb.to_owned()
 
 pub def print_version():
-    print("tauraroc v0.0.8")
+    print("tauraroc v0.0.9")
 
 pub def print_usage():
     print("Usage: tauraroc <file.tr> [options]")
@@ -173,6 +173,29 @@ pub def is_clang_compiler(cc: str) -> bool:
     if _tr_str_eq(cc, "cc"):
         return _tr_system(cc + " --version 2>&1 | grep -qi clang") == 0
     return false
+
+# Probe whether `-lsystre -ltre` actually resolve with this C driver, instead of
+# assuming they do just because <regex.h> exists. Same lesson this codebase already
+# hit once with the regex.h __has_include CI fix: MinGW distributions vary in what
+# they bundle. Some (MSYS2-derived) need the separate systre/tre import libraries;
+# others (e.g. the winlibs-based MinGW GitHub's windows-latest runner ships) provide
+# <regex.h> with regcomp/regexec/regfree/regerror already resolvable through the
+# default libc/libmingwex, and `-lsystre -ltre` simply don't exist as files there —
+# a hard link failure, even though regex would have worked fine without them.
+# A real test-compile+link (not a filename guess) is the only way to know which case
+# we're in, so this runs once per build that actually uses std.regex on Windows.
+pub def mingw_regex_libs_link(cc: str, cross_flags: str) -> bool:
+    mut null_dev = "/dev/null"
+    if _tr_is_windows(): null_dev = "nul"
+    mut probe_c = "_tr_regexprobe.c"
+    mut probe_exe = "_tr_regexprobe.exe"
+    write_file(probe_c, "#include <regex.h>\nint main(void){regex_t r; regcomp(&r,\"a\",0); regfree(&r); return 0;}\n")
+    mut rc = _tr_system(cc + cross_flags + " \"" + probe_c + "\" -lsystre -ltre -o \"" + probe_exe + "\" >" + null_dev + " 2>&1")
+    if _tr_is_windows():
+        _tr_system("del \"" + probe_c + "\" \"" + probe_exe + "\" >nul 2>nul")
+    else:
+        _tr_system("rm -f \"" + probe_c + "\" \"" + probe_exe + "\" 2>/dev/null")
+    return rc == 0
 
 # ── Library flag discovery (`tauraroc bindgen --pkg <name>`) ──────────────────
 # Query pkg-config for a library's compile (`--cflags`) or link (`--libs`) flags so a
@@ -1068,7 +1091,19 @@ pub def compile_all_c(c_files: Vec[str], exe_path: str, inc_dir: str,
     mut static_flag = ""
     if static_link: static_flag = " -static"
     # Flags valid on both GCC and Clang.
-    mut warn_flags = " -Wno-string-compare -Wno-comment -Wno-attributes -Wno-unused-value"
+    # -fno-strict-aliasing: generated C reinterprets pointers between
+    # unrelated types constantly (Pointer[char] casts, TrStr/_tr_strz
+    # boxing, void* runtime helpers) - none of it goes through unions or
+    # memcpy, so it's all strict-aliasing UB in the strict sense. At -O2
+    # GCC's strict-aliasing-based optimizations (load/store reordering,
+    # caching a value across what looks like a non-aliasing write) then
+    # produce genuinely wrong codegen - this is not a false-positive
+    # warning, it manifests as real, hard-to-reproduce heap corruption at
+    # runtime. Confirmed empirically: the same generated C compiled with
+    # clang(-cl), or with plain gcc + this flag alone added, runs clean;
+    # unmodified gcc -O2 without it crashes ~100% of the time under any
+    # workload exercising more than a trivial amount of the runtime.
+    mut warn_flags = " -fno-strict-aliasing -Wno-string-compare -Wno-comment -Wno-attributes -Wno-unused-value"
     # Clang-only: suppress warnings that are Clang-specific or have no GCC equivalent.
     if is_clang_compiler(cc):
         warn_flags = warn_flags + " -Wno-unknown-attributes -Wno-parentheses-equality"
@@ -1109,12 +1144,13 @@ pub def compile_all_c(c_files: Vec[str], exe_path: str, inc_dir: str,
                 need_wsa = true
             # std.regex on MinGW compiles against a real <regex.h> now
             # (TAURARO_HAVE_REGEX covers __MINGW32__/__MINGW64__ -- see
-            # runtime/tauraro_rt.h's own note on this), but that header's
-            # regcomp/regexec/regfree/regerror symbols live in MSYS2's
-            # libsystre (a POSIX-named wrapper over libtre; libtre itself
-            # only exports tre_-prefixed names, confirmed via `nm` on both
-            # .dll.a files) -- link it whenever a regex module is present,
-            # same conditional-detection shape as need_wsa just above.
+            # runtime/tauraro_rt.h's own note on this), but on SOME MinGW
+            # distributions (MSYS2-derived) regcomp/regexec/regfree/regerror
+            # live in a separate libsystre (a POSIX-named wrapper over
+            # libtre) -- other distributions bundle those symbols directly
+            # and have no such library file at all, so -lsystre/-ltre are
+            # only added below after mingw_regex_libs_link() actually
+            # confirms they exist and are needed (see its own comment).
             if _tr_str_contains(cf, "regex.c") or _tr_str_contains(cf, "/regex/"):
                 need_systre = true
             # std.prof's memory stats (RSS/peak RSS) call GetProcessMemoryInfo,
@@ -1124,7 +1160,7 @@ pub def compile_all_c(c_files: Vec[str], exe_path: str, inc_dir: str,
             wi = wi + 1
         if need_wsa:
             cmd = cmd + " -lws2_32 -lbcrypt -mconsole"
-        if need_systre:
+        if need_systre and mingw_regex_libs_link(cc, cross_flags):
             cmd = cmd + " -lsystre -ltre"
         if need_psapi:
             cmd = cmd + " -lpsapi"
@@ -1167,7 +1203,19 @@ pub def compile_all_c_incremental(c_files: Vec[str], needs: Vec[bool], exe_path:
             cross_flags = cross_flags + " --sysroot=\"" + sysroot + "\""
     mut static_flag = ""
     if static_link: static_flag = " -static"
-    mut warn_flags = " -Wno-string-compare -Wno-comment -Wno-attributes -Wno-unused-value"
+    # -fno-strict-aliasing: generated C reinterprets pointers between
+    # unrelated types constantly (Pointer[char] casts, TrStr/_tr_strz
+    # boxing, void* runtime helpers) - none of it goes through unions or
+    # memcpy, so it's all strict-aliasing UB in the strict sense. At -O2
+    # GCC's strict-aliasing-based optimizations (load/store reordering,
+    # caching a value across what looks like a non-aliasing write) then
+    # produce genuinely wrong codegen - this is not a false-positive
+    # warning, it manifests as real, hard-to-reproduce heap corruption at
+    # runtime. Confirmed empirically: the same generated C compiled with
+    # clang(-cl), or with plain gcc + this flag alone added, runs clean;
+    # unmodified gcc -O2 without it crashes ~100% of the time under any
+    # workload exercising more than a trivial amount of the runtime.
+    mut warn_flags = " -fno-strict-aliasing -Wno-string-compare -Wno-comment -Wno-attributes -Wno-unused-value"
     if is_clang_compiler(cc):
         warn_flags = warn_flags + " -Wno-unknown-attributes -Wno-parentheses-equality"
     mut native_flags = ""
@@ -1236,10 +1284,11 @@ pub def compile_all_c_incremental(c_files: Vec[str], needs: Vec[bool], exe_path:
         # so always link it; -mconsole keeps console apps as console subsystem.
         # Gated on the TARGET, not the host — a Windows->Linux cross has no ws2_32.
         cmd = cmd + " -lws2_32 -lbcrypt -mconsole"
-        # std.regex on MinGW needs libsystre/libtre -- see the identical,
-        # more-commented check in link_c_files above (single-command
-        # compile+link path); this is the separate-compile-then-link path's
-        # own copy of the same detection, over .o filenames instead of .c.
+        # std.regex on MinGW may need libsystre/libtre -- see mingw_regex_libs_link()'s
+        # own comment (only added once a real test-link confirms they exist and are
+        # needed, not just guessed from the .o filename); this is the
+        # separate-compile-then-link path's own copy of the same detection, over
+        # .o filenames instead of .c.
         mut need_systre2: bool = false
         mut need_psapi2: bool = false
         mut oi = 0
@@ -1249,7 +1298,7 @@ pub def compile_all_c_incremental(c_files: Vec[str], needs: Vec[bool], exe_path:
             if _tr_str_contains(o_files.get(oi), "prof.o"):
                 need_psapi2 = true
             oi = oi + 1
-        if need_systre2:
+        if need_systre2 and mingw_regex_libs_link(cc, cross_flags):
             cmd = cmd + " -lsystre -ltre"
         if need_psapi2:
             cmd = cmd + " -lpsapi"
@@ -1283,7 +1332,9 @@ pub def compile_all_c_incremental(c_files: Vec[str], needs: Vec[bool], exe_path:
 pub def compile_wasm_incremental(c_files: Vec[str], needs: Vec[bool], exe_path: str, inc_dir: str,
                       opt_level: str, verbose: bool, memory_mb: int) -> int:
     mut cc = "zig cc -target wasm32-freestanding"
-    mut warn_flags = " -Wno-string-compare -Wno-comment -Wno-attributes -Wno-unused-value -Wno-unknown-attributes -Wno-parentheses-equality"
+    # -fno-strict-aliasing: see the identical comment on the native/cross
+    # compile_incremental warn_flags above - same generated C, same UB.
+    mut warn_flags = " -fno-strict-aliasing -Wno-string-compare -Wno-comment -Wno-attributes -Wno-unused-value -Wno-unknown-attributes -Wno-parentheses-equality"
     # Same target_extra_flags("wasm32-unknown-unknown") flags the generic cross
     # path would apply, inlined here since this function bypasses that path.
     # -fno-sanitize=undefined: zig cc enables UBSan by default for freestanding
@@ -1344,7 +1395,19 @@ pub def compile_c_to_exe(c_path: str, exe_path: str, opt_level: str, verbose: bo
     mut cc = detect_c_compiler()
     mut opt_flag = "-O" + opt_level
     mut out_dir = strip_trailing_sep(dir_of_path(c_path))
-    mut warn_flags = " -Wno-string-compare -Wno-comment -Wno-attributes -Wno-unused-value"
+    # -fno-strict-aliasing: generated C reinterprets pointers between
+    # unrelated types constantly (Pointer[char] casts, TrStr/_tr_strz
+    # boxing, void* runtime helpers) - none of it goes through unions or
+    # memcpy, so it's all strict-aliasing UB in the strict sense. At -O2
+    # GCC's strict-aliasing-based optimizations (load/store reordering,
+    # caching a value across what looks like a non-aliasing write) then
+    # produce genuinely wrong codegen - this is not a false-positive
+    # warning, it manifests as real, hard-to-reproduce heap corruption at
+    # runtime. Confirmed empirically: the same generated C compiled with
+    # clang(-cl), or with plain gcc + this flag alone added, runs clean;
+    # unmodified gcc -O2 without it crashes ~100% of the time under any
+    # workload exercising more than a trivial amount of the runtime.
+    mut warn_flags = " -fno-strict-aliasing -Wno-string-compare -Wno-comment -Wno-attributes -Wno-unused-value"
     if is_clang_compiler(cc):
         warn_flags = warn_flags + " -Wno-unknown-attributes -Wno-parentheses-equality"
     mut cmd = cc + " " + opt_flag + warn_flags + " -DTAURARO_NO_RT_HELPERS \"-I" + out_dir + "\" -o \"" + exe_path + "\" \"" + c_path + "\" -lm"
