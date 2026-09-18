@@ -1,0 +1,21 @@
+# std.log — Leveled, structured, multi-sink logging.
+#
+# Usage:
+#   from std.log import Logger, LogLevel, Fields
+#
+#   mut log = Logger.init("http")            # target/subsystem tag
+#   log.set_min_level(LogLevel.Info)         # below this, calls are no-ops
+#   log.add_file_sink("app.log")             # also append to a file
+#   log.set_format_json(true)                # JSON-lines instead of text
+#
+#   log.info_f("request handled", Fields.new().str("method", "GET").int("status", 200))
+#   log.debug("suppressed at Info level")    # cheap no-op: level checked first
+#
+# See std/log/logger.tr, std/log/level.tr, std/log/field.tr, std/log/format.tr,
+# std/log/sink.tr for the individual pieces this module re-exports.
+
+from std.log.level import LogLevel, level_from_str
+from std.log.field import Field, Fields, FIELD_STR, FIELD_INT, FIELD_FLOAT, FIELD_BOOL
+from std.log.format import LogFormat
+from std.log.sink import LogSink, StdoutSink, FileSink
+from std.log.logger import Logger

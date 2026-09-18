@@ -1,0 +1,75 @@
+# tests/lang/32_prof.tr - std.prof: metrics (Counter/Gauge/Histogram/Registry),
+# process memory stats, and CPU sampling.
+
+from std.test import TestRunner
+from std.prof import CpuProfiler, MemProf, Registry
+from std.string.str import Str
+
+def busy_work(iterations: int) -> int:
+    mut total = 0
+    mut i = 0
+    while i < iterations:
+        total = total + (i % 7)
+        i = i + 1
+    return total
+
+def main():
+    mut t = TestRunner.init("32_prof")
+
+    t.section("Counter")
+    mut reg = Registry.init()
+    mut c = reg.counter("requests_total")
+    t.assert_eq_int(c.get(), 0, "counter starts at 0")
+    c.inc()
+    c.inc()
+    c.inc_by(5)
+    t.assert_eq_int(c.get(), 7, "counter inc/inc_by accumulate")
+    mut c2 = reg.counter("requests_total")
+    t.assert_eq_int(c2.get(), 7, "registry.counter() returns the SAME counter on repeat lookup")
+
+    t.section("Gauge")
+    mut g = reg.gauge("queue_depth")
+    t.assert_eq_float(g.get(), 0.0, 0.0001, "gauge starts at 0.0")
+    g.set(12.0)
+    t.assert_eq_float(g.get(), 12.0, 0.0001, "gauge.set")
+    g.add(3.0)
+    t.assert_eq_float(g.get(), 15.0, 0.0001, "gauge.add")
+
+    t.section("Histogram")
+    mut bounds: Vec[float] = Vec[float].init(3)
+    bounds.push(1.0)
+    bounds.push(10.0)
+    bounds.push(100.0)
+    mut h = reg.histogram("latency_ms", bounds)
+    h.observe(0.5)
+    h.observe(5.0)
+    h.observe(5.0)
+    h.observe(50.0)
+    h.observe(500.0)
+    t.assert_eq_int(h.count, 5, "histogram count")
+    t.assert_eq_float(h.sum, 560.5, 0.0001, "histogram sum")
+    t.assert_eq_int(h.bucket_counts.get(0), 1, "bucket <=1.0 has the 0.5 observation")
+    t.assert_eq_int(h.bucket_counts.get(1), 3, "bucket <=10.0 has 0.5, 5.0, 5.0 (cumulative)")
+    t.assert_eq_int(h.bucket_counts.get(2), 4, "bucket <=100.0 has all but the 500.0 observation")
+
+    t.section("Registry.report()")
+    mut report_text = reg.report()
+    t.assert_true(Str.contains(report_text, "counter requests_total = 7"), "report includes counter")
+    t.assert_true(Str.contains(report_text, "gauge queue_depth = 15"), "report includes gauge")
+    t.assert_true(Str.contains(report_text, "histogram latency_ms"), "report includes histogram")
+
+    t.section("MemProf")
+    mut rss = MemProf.rss_bytes()
+    mut peak = MemProf.peak_rss_bytes()
+    t.assert_true(rss > 0, "rss_bytes() reports a positive value on this platform")
+    t.assert_true(peak > 0, "peak_rss_bytes() reports a positive value on this platform")
+    t.assert_true(peak >= rss, "peak RSS is never less than current RSS")
+
+    t.section("CpuProfiler")
+    mut prof = CpuProfiler.start_interval(500)   # 0.5ms, so a short busy loop still gets several samples
+    mut result = busy_work(50000000)
+    mut cpu_report = prof.report()
+    t.assert_true(Str.contains(cpu_report, "CPU profile:"), "cpu report has the summary header")
+    t.assert_true(result >= 0, "busy_work actually ran (sanity check the loop wasn't optimized away oddly)")
+
+    t.summary()

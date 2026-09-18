@@ -253,6 +253,204 @@ extend Parser:
                 pass
         return ""
 
+    # Like consume_ident but accepts ANY keyword token as a method/property
+    # name. Used ONLY where a keyword can never be grammatically ambiguous
+    # with its own statement-starting meaning: immediately after `.` (member
+    # access / method call: `re.match(...)`) and as a method's own name in a
+    # `def <name>(self, ...)` inside a class/extend/interface body. NOT used
+    # for new variable/binding names (`mut`/`let`) or free-function names --
+    # those keep the strict consume_ident(), where `mut if = 1` etc. must
+    # stay an error. Falls back to consume_ident() first (covers the
+    # primitive-type keywords and the small curated list already special-
+    # cased there), then the rest of the keyword table.
+    pub def consume_method_ident(self) -> str:
+        mut base = self.consume_ident()
+        if base != "": return base
+        # NOTE: every case body below is written across TWO lines (advance,
+        # then return) rather than one `case X: a; return b` line. A real
+        # codegen bug was found and confirmed here: a single-line match-case
+        # with a semicolon-separated multi-statement body gets lowered as if
+        # the statements after the first were SEPARATE match arms with an
+        # implicit always-true guard, not as one case's own body -- e.g.
+        # `case Token.KwDef: self.pos = self.pos + 1; return "def"` compiled
+        # to C as `if (tag==KwDef) { pos++; } else if (1) { return "def"; }
+        # else if (tag==KwClass) { ... }`, so the `return "def"` fired for
+        # EVERY token that wasn't literally KwDef, unconditionally, without
+        # even consuming it. Every other match statement in this compiler's
+        # own source already uses one-statement-per-line case bodies (see
+        # consume_ident right above) -- this function now matches that
+        # proven-working shape instead of chasing the single-line-multi-
+        # statement lowering bug itself.
+        match self.peek():
+            case Token.KwDef:
+                self.pos = self.pos + 1
+                return "def"
+            case Token.KwClass:
+                self.pos = self.pos + 1
+                return "class"
+            case Token.KwEnum:
+                self.pos = self.pos + 1
+                return "enum"
+            case Token.KwInterface:
+                self.pos = self.pos + 1
+                return "interface"
+            case Token.KwStruct:
+                self.pos = self.pos + 1
+                return "struct"
+            case Token.KwIf:
+                self.pos = self.pos + 1
+                return "if"
+            case Token.KwElif:
+                self.pos = self.pos + 1
+                return "elif"
+            case Token.KwElse:
+                self.pos = self.pos + 1
+                return "else"
+            case Token.KwFor:
+                self.pos = self.pos + 1
+                return "for"
+            case Token.KwWhile:
+                self.pos = self.pos + 1
+                return "while"
+            case Token.KwLoop:
+                self.pos = self.pos + 1
+                return "loop"
+            case Token.KwReturn:
+                self.pos = self.pos + 1
+                return "return"
+            case Token.KwBreak:
+                self.pos = self.pos + 1
+                return "break"
+            case Token.KwContinue:
+                self.pos = self.pos + 1
+                return "continue"
+            case Token.KwPass:
+                self.pos = self.pos + 1
+                return "pass"
+            case Token.KwMatch:
+                self.pos = self.pos + 1
+                return "match"
+            case Token.KwCase:
+                self.pos = self.pos + 1
+                return "case"
+            case Token.KwTry:
+                self.pos = self.pos + 1
+                return "try"
+            case Token.KwExcept:
+                self.pos = self.pos + 1
+                return "except"
+            case Token.KwFinally:
+                self.pos = self.pos + 1
+                return "finally"
+            case Token.KwRaise:
+                self.pos = self.pos + 1
+                return "raise"
+            case Token.KwAssert:
+                self.pos = self.pos + 1
+                return "assert"
+            case Token.KwWith:
+                self.pos = self.pos + 1
+                return "with"
+            case Token.KwDefer:
+                self.pos = self.pos + 1
+                return "defer"
+            case Token.KwAsm:
+                self.pos = self.pos + 1
+                return "asm"
+            case Token.KwTaskGroup:
+                self.pos = self.pos + 1
+                return "taskgroup"
+            case Token.KwImplements:
+                self.pos = self.pos + 1
+                return "implements"
+            case Token.KwImport:
+                self.pos = self.pos + 1
+                return "import"
+            case Token.KwFrom:
+                self.pos = self.pos + 1
+                return "from"
+            case Token.KwAs:
+                self.pos = self.pos + 1
+                return "as"
+            case Token.KwIn:
+                self.pos = self.pos + 1
+                return "in"
+            case Token.KwMut:
+                self.pos = self.pos + 1
+                return "mut"
+            case Token.KwShared:
+                self.pos = self.pos + 1
+                return "shared"
+            case Token.KwExtern:
+                self.pos = self.pos + 1
+                return "extern"
+            case Token.KwUnsafe:
+                self.pos = self.pos + 1
+                return "unsafe"
+            case Token.KwThrows:
+                self.pos = self.pos + 1
+                return "throws"
+            case Token.KwExtends:
+                self.pos = self.pos + 1
+                return "extends"
+            case Token.KwAwait:
+                self.pos = self.pos + 1
+                return "await"
+            case Token.KwYield:
+                self.pos = self.pos + 1
+                return "yield"
+            case Token.KwPub:
+                self.pos = self.pos + 1
+                return "pub"
+            case Token.KwStatic:
+                self.pos = self.pos + 1
+                return "static"
+            case Token.KwConst:
+                self.pos = self.pos + 1
+                return "const"
+            case Token.KwActor:
+                self.pos = self.pos + 1
+                return "actor"
+            case Token.KwSuper:
+                self.pos = self.pos + 1
+                return "super"
+            case Token.KwExport:
+                self.pos = self.pos + 1
+                return "export"
+            case Token.KwDecorator:
+                self.pos = self.pos + 1
+                return "decorator"
+            case Token.KwMacro:
+                self.pos = self.pos + 1
+                return "macro"
+            case Token.KwDo:
+                self.pos = self.pos + 1
+                return "do"
+            case Token.KwSizeOf:
+                self.pos = self.pos + 1
+                return "sizeof"
+            case Token.KwIs:
+                self.pos = self.pos + 1
+                return "is"
+            case Token.KwTrue:
+                self.pos = self.pos + 1
+                return "true"
+            case Token.KwFalse:
+                self.pos = self.pos + 1
+                return "false"
+            case Token.KwAnd:
+                self.pos = self.pos + 1
+                return "and"
+            case Token.KwOr:
+                self.pos = self.pos + 1
+                return "or"
+            case Token.KwNot:
+                self.pos = self.pos + 1
+                return "not"
+            case _:
+                pass
+        return ""
+
     # Like consume_ident but also accepts keyword tokens that may appear as
     # directory/module names in dotted import paths (e.g. std.async.task).
     pub def consume_module_ident(self) -> str:
@@ -410,6 +608,21 @@ extend Parser:
                     pass
             if going:
                 mut item_name = self.consume_ident()
+                # A keyword token (e.g. `from`, `match`) here previously fell
+                # through silently: consume_ident() returns "" WITHOUT
+                # advancing self.pos, and the `else` branch below just set
+                # going=False and returned whatever params were collected so
+                # far -- no diagnostic, and the unconsumed keyword token then
+                # desynced whatever the caller parsed next. Confirmed via a
+                # real repro: `def f(self, from: int)` silently truncated an
+                # entire `extend` block's remaining methods with zero error
+                # output. A parameter introduces a new binding (same category
+                # as a `mut`/`let` name), so a keyword here is correctly
+                # invalid -- but it must be a clear error, not silent parser
+                # corruption.
+                if item_name == "" and self.peek() != Token.RParen and self.peek() != Token.Eof:
+                    self.emit_diag("expected a parameter name, found a reserved keyword", "reserved words cannot be used as a parameter name (they introduce a new binding, same as a 'mut'/'let' variable) — rename this parameter.")
+                    self.pos = self.pos + 1
                 if item_name != "":
                     mut ty_ptr = Pointer[AstType](0)
                     match self.peek():
@@ -1589,7 +1802,7 @@ extend Parser:
             match self.peek():
                 case Token.Dot:
                     self.pos = self.pos + 1
-                    mut attr = self.consume_ident()
+                    mut attr = self.consume_method_ident()
                     match self.peek():
                         case Token.LParen:
                             self.pos = self.pos + 1
@@ -2426,7 +2639,7 @@ extend Parser:
 
     pub def parse_function_def(self, is_method: bool) -> FunctionDef:
         self.pos = self.pos + 1
-        mut name = self.consume_ident()
+        mut name = if is_method: self.consume_method_ident() else: self.consume_ident()
         mut f = FunctionDef.init(name)
         if self.peek() == Token.LBracket:
             self.pos = self.pos + 1

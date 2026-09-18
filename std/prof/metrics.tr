@@ -1,0 +1,183 @@
+# std.prof.metrics — Counter / Gauge / Histogram + a Registry to collect them.
+#
+# General-purpose instrumentation, independent of the CPU/memory profilers --
+# use it for request counts, queue depths, latency distributions, or (see the
+# module-level note on networking below) your own std.net call sites.
+#
+# Usage:
+#   from std.prof import Registry
+#
+#   mut reg = Registry.init()
+#   reg.counter("requests_total").inc()
+#   reg.gauge("queue_depth").set(12.0)
+#   reg.histogram("request_ms", [1.0, 10.0, 100.0, 1000.0]).observe(42.0)
+#   print(reg.report())
+#
+# Networking: there is deliberately no automatic std.net hook here. Wrapping
+# TcpStream's send/recv/connect to silently increment counters would touch an
+# already-working, already-tested module purely for this feature -- given how
+# many subtle, previously-hidden bugs this session found by touching working
+# code (MD5, the parser's keyword-as-parameter-name corruption, the YAML
+# block-anchor/round-trip bugs), that risk wasn't worth taking for a v1.
+# Instead, call `reg.counter("net.bytes_sent").inc_by(n)` etc. yourself around
+# your own std.net.tcp calls -- same Registry, same report() output, zero risk
+# to std.net. Auto-instrumentation is a reasonable future addition once this
+# module has real mileage.
+
+pub class Counter:
+    pub name:  str
+    pub value: int
+
+extend Counter:
+    pub def init(name: str) -> Counter:
+        mut c = Counter()
+        c.name  = name
+        c.value = 0
+        return c
+
+    pub def inc(self):
+        self.value = self.value + 1
+
+    pub def inc_by(self, n: int):
+        self.value = self.value + n
+
+    pub def get(self) -> int:
+        return self.value
+
+pub class Gauge:
+    pub name:  str
+    pub value: float
+
+extend Gauge:
+    pub def init(name: str) -> Gauge:
+        mut g = Gauge()
+        g.name  = name
+        g.value = 0.0
+        return g
+
+    pub def set(self, v: float):
+        self.value = v
+
+    pub def add(self, delta: float):
+        self.value = self.value + delta
+
+    pub def get(self) -> float:
+        return self.value
+
+# Fixed-bucket histogram: `bounds` are upper-inclusive bucket edges (e.g.
+# [1.0, 10.0, 100.0] means buckets "<=1", "<=10", "<=100"; a value greater
+# than every bound is counted in `count`/`sum` but no individual bucket --
+# add a final bound of a very large number if you want a catch-all bucket).
+pub class Histogram:
+    pub name:          str
+    pub bucket_bounds: Vec[float]
+    pub bucket_counts: Vec[int]
+    pub count:         int
+    pub sum:           float
+
+extend Histogram:
+    pub def init(name: str, bounds: Vec[float]) -> Histogram:
+        mut h = Histogram()
+        h.name = name
+        h.bucket_bounds = bounds
+        mut counts = Vec[int].init(bounds.len)
+        mut i = 0
+        while i < bounds.len:
+            counts.push(0)
+            i = i + 1
+        h.bucket_counts = counts
+        h.count = 0
+        h.sum = 0.0
+        return h
+
+    pub def observe(self, v: float):
+        self.count = self.count + 1
+        self.sum = self.sum + v
+        mut i = 0
+        while i < self.bucket_bounds.len:
+            if v <= self.bucket_bounds.get(i):
+                self.bucket_counts.set(i, self.bucket_counts.get(i) + 1)
+            i = i + 1
+
+    # Mean of all observed values, or 0.0 if none have been observed.
+    pub def mean(self) -> float:
+        if self.count == 0: return 0.0
+        return self.sum / (self.count as float)
+
+pub class Registry:
+    pub counter_names:   Vec[str]
+    pub counter_vals:    Vec[Counter]
+    pub gauge_names:     Vec[str]
+    pub gauge_vals:      Vec[Gauge]
+    pub histogram_names: Vec[str]
+    pub histogram_vals:  Vec[Histogram]
+
+extend Registry:
+    pub def init() -> Registry:
+        mut r = Registry()
+        r.counter_names   = Vec[str].init(4)
+        r.counter_vals    = Vec[Counter].init(4)
+        r.gauge_names     = Vec[str].init(4)
+        r.gauge_vals      = Vec[Gauge].init(4)
+        r.histogram_names = Vec[str].init(4)
+        r.histogram_vals  = Vec[Histogram].init(4)
+        return r
+
+    # Returns the existing Counter for `name`, creating one (starting at 0)
+    # on first use.
+    pub def counter(self, name: str) -> Counter:
+        mut i = 0
+        while i < self.counter_names.len:
+            if self.counter_names.get(i) == name: return self.counter_vals.get(i)
+            i = i + 1
+        mut c = Counter.init(name)
+        self.counter_names.push(name)
+        self.counter_vals.push(c)
+        return c
+
+    pub def gauge(self, name: str) -> Gauge:
+        mut i = 0
+        while i < self.gauge_names.len:
+            if self.gauge_names.get(i) == name: return self.gauge_vals.get(i)
+            i = i + 1
+        mut g = Gauge.init(name)
+        self.gauge_names.push(name)
+        self.gauge_vals.push(g)
+        return g
+
+    # `bounds` is only used the FIRST time `name` is requested (creating the
+    # histogram); subsequent calls with a different `bounds` are ignored and
+    # the already-created histogram (with its original bounds) is returned.
+    pub def histogram(self, name: str, bounds: Vec[float]) -> Histogram:
+        mut i = 0
+        while i < self.histogram_names.len:
+            if self.histogram_names.get(i) == name: return self.histogram_vals.get(i)
+            i = i + 1
+        mut h = Histogram.init(name, bounds)
+        self.histogram_names.push(name)
+        self.histogram_vals.push(h)
+        return h
+
+    # Plain-text dump of every metric registered so far.
+    pub def report(self) -> str:
+        mut out = ""
+        mut i = 0
+        while i < self.counter_names.len:
+            mut c = self.counter_vals.get(i)
+            out = out + "counter " + c.name + " = " + str(c.value) + "\n"
+            i = i + 1
+        i = 0
+        while i < self.gauge_names.len:
+            mut g = self.gauge_vals.get(i)
+            out = out + "gauge " + g.name + " = " + str(g.value) + "\n"
+            i = i + 1
+        i = 0
+        while i < self.histogram_names.len:
+            mut h = self.histogram_vals.get(i)
+            out = out + "histogram " + h.name + " count=" + str(h.count) + " sum=" + str(h.sum) + " mean=" + str(h.mean()) + "\n"
+            mut j = 0
+            while j < h.bucket_bounds.len:
+                out = out + "  <=" + str(h.bucket_bounds.get(j)) + ": " + str(h.bucket_counts.get(j)) + "\n"
+                j = j + 1
+            i = i + 1
+        return out

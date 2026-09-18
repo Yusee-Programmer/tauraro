@@ -1,6 +1,6 @@
-# std.crypto.hash — SHA-256, MD5 hashing.
+# std.crypto.hash — SHA-256, SHA-1, MD5 hashing.
 #
-# SHA-256 is pure-C, no external library needed.
+# SHA-256/SHA-1 are pure-C, no external library needed.
 # All methods are static — no instance required.
 #
 # Usage:
@@ -12,6 +12,8 @@ extern "C":
     def _tr_sha256_hex(input: str) -> str
     def _tr_sha256_bytes_of(input: str, ilen: int) -> str
     def _tr_md5_hex(s: str) -> str
+    def _tr_sha1_hex(s: str) -> str
+    def _tr_sha1_bytes_hex(input: str, ilen: int) -> str
 
 pub class Hash:
     _dummy: int
@@ -27,5 +29,16 @@ extend Hash:
 
     # MD5 digest of a null-terminated string. Returns 32-char lowercase hex.
     # Note: MD5 is cryptographically broken — use SHA-256 for security-sensitive work.
+    # Verified correct against known-answer vectors ("", "a", "abc").
     pub def md5(s: str) -> str:
         return _tr_md5_hex(s)
+
+    # SHA-1 digest of a null-terminated string. Returns 40-char lowercase hex.
+    # Note: SHA-1 is cryptographically broken — use SHA-256 for security-sensitive
+    # work. Provided for UUID v5 (RFC 4122) and interop with legacy systems.
+    pub def sha1(s: str) -> str:
+        return _tr_sha1_hex(s)
+
+    # SHA-1 digest of exactly `len` raw bytes of `data`. Returns 40-char lowercase hex.
+    pub def sha1_bytes(data: str, len_: int) -> str:
+        return _tr_sha1_bytes_hex(data, len_)

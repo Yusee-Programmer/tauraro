@@ -223,6 +223,7 @@ backends — see the note above — so array-heavy firmware stays heap-free ever
 | `-O0`/`-O1`/`-O2`/`-O3` | Optimization level (default `-O2`). |
 | `-Os` | Optimize for size. |
 | `--debug` | AddressSanitizer + bounds-check assertions. |
+| `--prof` | Auto-wrap `main()` with CPU sampling; prints a flat profile to stderr on exit (zero source changes). See [`std.prof`](../std/prof.md). |
 
 ### Linking
 | Flag | Meaning |

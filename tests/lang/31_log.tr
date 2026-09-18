@@ -1,0 +1,70 @@
+# tests/lang/31_log.tr - std.log: level filtering, structured fields, text +
+# JSON output, and a real file sink round-trip.
+
+from std.test import TestRunner
+from std.log import Logger, LogLevel, Fields
+from std.io.file import read_file, file_exists
+from std.sys.env import Env
+from std.string.str import Str
+
+def temp_dir() -> str:
+    mut e = Env.init()
+    mut t = e.get_var("TEMP")
+    if t != "": return t
+    t = e.get_var("TMPDIR")
+    if t != "": return t
+    return "/tmp"
+
+def main():
+    mut t = TestRunner.init("31_log")
+
+    t.section("level filtering")
+    mut log1 = Logger.init("")
+    log1.set_stdout(false)
+    log1.set_min_level(LogLevel.Warn)
+    t.assert_false(log1.enabled(LogLevel.Info), "info suppressed under Warn min level")
+    t.assert_true(log1.enabled(LogLevel.Error), "error passes under Warn min level")
+    log1.close()
+
+    t.section("LogLevel rank + name")
+    t.assert_true(LogLevel.Error.at_least(LogLevel.Info), "error >= info")
+    t.assert_false(LogLevel.Debug.at_least(LogLevel.Info), "debug < info")
+    t.assert_eq_str(LogLevel.Warn.name(), "WARN", "uppercase name")
+    t.assert_eq_str(LogLevel.Warn.name_lower(), "warn", "lowercase name")
+
+    t.section("structured fields -- text format via a file sink")
+    mut tmp_path = temp_dir() + "/tauraro_log_test_text.log"
+    mut log2 = Logger.init("http")
+    log2.set_stdout(false)
+    log2.set_min_level(LogLevel.Info)
+    log2.add_file_sink(tmp_path)
+    log2.info_f("request handled", Fields.new().str("method", "GET").int("status", 200))
+    log2.debug("this should not appear -- below min level")
+    log2.close()
+
+    t.assert_true(file_exists(tmp_path), "file sink created the log file")
+    mut contents = read_file(tmp_path)
+    t.assert_true(Str.contains(contents, "INFO"), "text line has level")
+    t.assert_true(Str.contains(contents, "[http]"), "text line has target tag")
+    t.assert_true(Str.contains(contents, "request handled"), "text line has message")
+    t.assert_true(Str.contains(contents, "method=GET"), "text line has string field")
+    t.assert_true(Str.contains(contents, "status=200"), "text line has int field")
+    t.assert_false(Str.contains(contents, "this should not appear"), "debug call below min level was suppressed")
+
+    t.section("structured fields -- JSON format via a file sink")
+    mut tmp_path2 = temp_dir() + "/tauraro_log_test_json.log"
+    mut log3 = Logger.init("db")
+    log3.set_stdout(false)
+    log3.set_format_json(true)
+    log3.add_file_sink(tmp_path2)
+    log3.warn_f("slow query", Fields.new().str("table", "users").float("ms", 42.5).bool("cached", false))
+    log3.close()
+
+    mut jcontents = read_file(tmp_path2)
+    t.assert_true(Str.contains(jcontents, "\"level\":\"warn\""), "json has lowercase level")
+    t.assert_true(Str.contains(jcontents, "\"target\":\"db\""), "json has target")
+    t.assert_true(Str.contains(jcontents, "\"msg\":\"slow query\""), "json has message")
+    t.assert_true(Str.contains(jcontents, "\"table\":\"users\""), "json has string field")
+    t.assert_true(Str.contains(jcontents, "\"cached\":false"), "json has bool field")
+
+    t.summary()

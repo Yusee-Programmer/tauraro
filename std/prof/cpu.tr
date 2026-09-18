@@ -1,0 +1,54 @@
+# std.prof.cpu — statistical CPU sampling profiler.
+#
+# Zero compiler codegen changes: a timer/signal periodically records the
+# LEAF program counter of the running program (not a full unwound call
+# stack) -- a flat "which function was on-CPU X% of the time" profile, the
+# same shape py-spy's/pprof's simplest mode give. See runtime/tauraro_rt.h's
+# own header comment on the PROFILER section for the full platform-by-
+# platform mechanism (SIGPROF+setitimer on POSIX, a SuspendThread-based
+# sampler thread on Windows) and its honestly-documented limits (leaf-only,
+# not full call-graph; Windows reports raw addresses, not symbol names).
+#
+# Usage:
+#   from std.prof import CpuProfiler
+#
+#   mut prof = CpuProfiler.start()      # default 1ms sampling interval
+#   ... do work ...
+#   prof.stop()
+#   print(prof.report())                # flat text profile
+
+extern "C":
+    def _tr_prof_cpu_start(interval_us: int)
+    def _tr_prof_cpu_stop()
+    def _tr_prof_cpu_report() -> str
+
+pub class CpuProfiler:
+    _running: bool
+
+extend CpuProfiler:
+    # Begin sampling at the default interval (1000us = 1ms, a reasonable
+    # balance of resolution vs overhead).
+    pub def start() -> CpuProfiler:
+        return CpuProfiler.start_interval(1000)
+
+    # Begin sampling at an explicit interval in microseconds.
+    pub def start_interval(interval_us: int) -> CpuProfiler:
+        _tr_prof_cpu_start(interval_us)
+        mut p = CpuProfiler()
+        p._running = true
+        return p
+
+    # Stop sampling. Safe to call more than once (a no-op after the first).
+    pub def stop(self):
+        if self._running:
+            _tr_prof_cpu_stop()
+            self._running = false
+
+    # Flat text profile of everything sampled since start() (across every
+    # start()/stop() cycle since the process began, not just this instance --
+    # the sample buffer is process-wide). Stops sampling first if still
+    # running, since symbolizing/reporting while a thread might be mid-
+    # suspend is not safe.
+    pub def report(self) -> str:
+        self.stop()
+        return _tr_prof_cpu_report()

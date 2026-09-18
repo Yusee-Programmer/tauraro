@@ -240,6 +240,7 @@ pub class CGenerator:
     pub loop_done_stack:  Vec[str]               # `while:` EXPRESSION normal-exit flag per enclosing loop ("" = none)
     pub emit_line_info:   bool                    # --debug: emit `#line N "src.tr"` directives for SLineMarker
     pub cur_src_file:     str                     # source file of the module currently being generated (for #line)
+    pub enable_prof:      bool                    # --prof: auto-wrap main() with CPU sampling start/stop/report
 
     pub def init() -> CGenerator:
         mut g = CGenerator()
@@ -321,6 +322,7 @@ pub class CGenerator:
         g.loop_done_stack = Vec[str].init(4)
         g.emit_line_info  = false
         g.cur_src_file    = ""
+        g.enable_prof     = false
         return g
 
     pub def next_temp(self) -> str:
@@ -5588,7 +5590,21 @@ pub class CGenerator:
                 mut tl_v = "0LL"
                 if args.len > 0: tl_v = "(long long)(" + self.gen_expr(args.get(0)) + ")"
                 return "_tr_tls_new(" + tl_v + ")"
-            if method == "get": return "_tr_tls_get(" + obj_s + ")"
+            if method == "get":
+                # The slot is stored as a bit-cast `long long` (see `.new`/`.set`
+                # below); for a scalar T that's already the right representation,
+                # but for a class/pointer T the raw call left a `long long` where
+                # a `Foo*` was expected (-Wint-conversion, and a hard compile
+                # error on this project's gcc flags) - reinterpret it back to the
+                # slot's declared element type here, the same way Tuple element
+                # reads already cast their boxed slot (see the `t_n == "Tuple"`
+                # case above).
+                mut tl_get_ety = ""
+                mut tl_hty = hir_expr_type(obj)
+                if tl_hty.args.len > 0: tl_get_ety = tl_hty.args.get(0).read().name
+                if tl_get_ety != "" and not _is_int_type(tl_get_ety) and tl_get_ety != "bool" and tl_get_ety != "char" and not _is_float_type(tl_get_ety):
+                    return "((" + self.type_to_c(tl_hty.args.get(0).read()) + ")_tr_tls_get(" + obj_s + "))"
+                return "_tr_tls_get(" + obj_s + ")"
             if method == "set":
                 mut tl_sv = "0LL"
                 if args.len > 0: tl_sv = "(long long)(" + self.gen_expr(args.get(0)) + ")"
@@ -7363,7 +7379,14 @@ pub class CGenerator:
                 match aa_callee.read():
                     case HirExpr.EIdent(nn, _, _): aa_fn_n = nn
                     case HirExpr.EPropAccess(th_obj2, th_var2, _):
-                        # Thread.spawn(fn, arg) static call - emit spawn wrapper
+                        # Thread.spawn(fn, arg) static call - emit spawn wrapper.
+                        # th_obj2 isn't always a bare `Thread` EIdent: a chained
+                        # call like `Thread.spawn(fn, arg).detach()` nests the
+                        # spawn call itself as th_obj2 (the receiver of
+                        # `.detach()`) - recurse into it unconditionally so its
+                        # own wrapper still gets emitted regardless of what
+                        # method is chained onto the spawn call.
+                        self.prescan_await_all_in_expr(th_obj2)
                         mut th_ctor2 = ""
                         match th_obj2.read():
                             case HirExpr.EIdent(thn2, _, _): th_ctor2 = thn2
@@ -7482,6 +7505,13 @@ pub class CGenerator:
                                         self.w("    _ab[0] = (long long)" + sp_fn_nm + "(" + sp_cs + ");\n")
                                     self.w("    free(_ab); return NULL;\n")
                                     self.w("}\n")
+                # Recurse into the receiver: a chained call like
+                # `Thread.spawn(fn, arg).detach()` represents `.detach()` as
+                # this EMethodCall with pool_obj = the nested Thread.spawn(...)
+                # expression - without this, that inner spawn's wrapper is
+                # never emitted (pool_meth == "detach", not "spawn", so none
+                # of the cases above fire for it).
+                self.prescan_await_all_in_expr(pool_obj)
             case _: pass
 
     pub def prescan_spawns(self, prog: HirProgram):
@@ -8285,6 +8315,40 @@ pub class CGenerator:
                             self.w(pad + _cty2 + " " + _cltmp2 + " = " + _fld_rhs + ";\n")
                             self.w(pad + "_tr_obj_release(" + _cfld + ", " + _cdrop + ");\n")
                             self.w(pad + _cfld + " = " + _cltmp2 + ";\n")
+                            return
+                        case HirExpr.EIndex(_ei_obj, _ei_key, _):
+                            # `list[i] = obj` where list: List[Class] -- gen_index()'s
+                            # normal rvalue form for a heap-class element is
+                            # `((T*)arr->data[i])`: a cast wrapped AROUND the already-
+                            # indexed void* slot. That's a valid rvalue (reads the slot,
+                            # reinterprets the pointer) but NOT a valid lvalue -- a cast
+                            # expression is never assignable in C ("lvalue required as
+                            # left operand of assignment"), so `list[i] = obj` failed to
+                            # even compile the generated C. Root cause: gen_index() (used
+                            # for both read and write call sites) only ever produces the
+                            # rvalue-shaped cast. Fix here at the one lvalue call site:
+                            # index the RAW void* data slot (no cast) as the assignment
+                            # target -- `arr->data[i]` IS a valid `void*` lvalue.
+                            #
+                            # Ordering matters, same as the EPropAccess case just above:
+                            # retain the NEW value into a temp FIRST, THEN release the old
+                            # slot, THEN store the temp. `list[i] = list[i]` (or any RHS
+                            # that reads back the same slot, e.g. `mut r = list[i]; ...;
+                            # list[i] = r`) means the "old" and "new" pointers can be
+                            # IDENTICAL -- releasing before retaining would drop the
+                            # refcount to 0 and free the object out from under the very
+                            # value about to be stored (use-after-free). Confirmed via
+                            # minimal repro (List[Item] append, mutate through a local,
+                            # store back) before this fix: release-before-retain produced
+                            # a freed/garbage value on read-back; this order fixed it.
+                            mut _ei_obj_s = self.gen_expr(_ei_obj)
+                            mut _ei_key_s = self.gen_expr(_ei_key)
+                            mut _ei_slot = _ei_obj_s + "->data[(_tr_bounds_check(" + _ei_key_s + ", " + _ei_obj_s + "->len), " + _ei_key_s + ")]"
+                            mut _ei_old = "((" + _ctn + "*)" + _ei_slot + ")"
+                            mut _ei_tmp = "_eitmp" + self.next_temp()
+                            self.w(pad + _cty2 + " " + _ei_tmp + " = " + _crhs + ";\n")
+                            self.w(pad + "_tr_obj_release(" + _ei_old + ", " + _cdrop + ");\n")
+                            self.w(pad + _ei_slot + " = (void*)(" + _ei_tmp + ");\n")
                             return
                         case _: pass
                     _assign_rhs = _crhs
@@ -9960,6 +10024,8 @@ pub class CGenerator:
         # with this function's own C parameters in the same scope.
         self.w("    _tr_argc = _tr_c_argc; _tr_argv = _tr_c_argv;\n")
         self.w("    _tr_init_console();\n")
+        if self.enable_prof:
+            self.w("    _tr_prof_cpu_start(1000);\n")
         # NOTE: the global async pool is created LAZILY on first use (see
         # _tr_async_pool() in the runtime). Eagerly spawning one worker thread
         # per CPU here cost ~1-2 MB of stack per core (~64+ MB on big machines)
@@ -10012,6 +10078,16 @@ pub class CGenerator:
                 self.cur_func  = ""
             i = i + 1
 
+        if self.enable_prof:
+            # _tr_prof_cpu_stop() then _tr_prof_cpu_report(): the report call
+            # itself also stops sampling first if somehow still running (see
+            # CpuProfiler.report() in std/prof/cpu.tr), but stopping here
+            # explicitly means the pool/asyncpool shutdown calls just below
+            # never run while a sampler thread might still be suspending this
+            # one -- report() alone would still be correct, this is just
+            # tidier ordering.
+            self.w("    _tr_prof_cpu_stop();\n")
+            self.w("    { char* _tr_prof_rep = _tr_prof_cpu_report(); fputs(_tr_prof_rep, stderr); free(_tr_prof_rep); }\n")
         self.w("#ifndef TAURARO_BARE\n")
         self.w("    _tr_async_pool_shutdown();\n")
         self.w("    _tr_asyncpool_default_shutdown();\n")
@@ -10842,6 +10918,8 @@ pub class CGenerator:
         # with this function's own C parameters in the same scope.
         self.w("    _tr_argc = _tr_c_argc; _tr_argv = _tr_c_argv;\n")
         self.w("    _tr_init_console();\n")
+        if self.enable_prof:
+            self.w("    _tr_prof_cpu_start(1000);\n")
         # NOTE: the global async pool is created LAZILY on first use (see
         # _tr_async_pool() in the runtime). Eagerly spawning one worker thread
         # per CPU here cost ~1-2 MB of stack per core (~64+ MB on big machines)
@@ -10900,6 +10978,9 @@ pub class CGenerator:
                         self.cur_func  = ""
                 i = i + 1
 
+        if self.enable_prof:
+            self.w("    _tr_prof_cpu_stop();\n")
+            self.w("    { char* _tr_prof_rep = _tr_prof_cpu_report(); fputs(_tr_prof_rep, stderr); free(_tr_prof_rep); }\n")
         self.w("#ifndef TAURARO_BARE\n")
         self.w("    _tr_async_pool_shutdown();\n")
         self.w("    _tr_asyncpool_default_shutdown();\n")

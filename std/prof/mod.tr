@@ -1,0 +1,22 @@
+# std.prof — profiling: CPU sampling, process memory stats, and general
+# metrics (counters/gauges/histograms, usable for networking or anything
+# else you want to instrument).
+#
+# Usage:
+#   from std.prof import CpuProfiler, MemProf, Registry
+#
+#   mut prof = CpuProfiler.start()
+#   mut reg  = Registry.init()
+#   reg.counter("requests_total").inc()
+#   ... do work ...
+#   print(prof.report())
+#   print("RSS: " + str(MemProf.rss_bytes()))
+#   print(reg.report())
+#
+# See std/prof/cpu.tr, std/prof/memory.tr, std/prof/metrics.tr for the
+# individual pieces this module re-exports, including each one's own
+# documented scope and limitations.
+
+from std.prof.cpu import CpuProfiler
+from std.prof.memory import MemProf
+from std.prof.metrics import Counter, Gauge, Histogram, Registry

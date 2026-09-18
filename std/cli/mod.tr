@@ -1,0 +1,26 @@
+# std.cli — clap-style command-line argument parser.
+#
+# Usage:
+#   from std.cli import Cli
+#   from std.sys.env import Env
+#
+#   def main():
+#       mut app = Cli.init("mytool", "does a thing")
+#       app.flag("verbose", "v", "enable verbose output")
+#       app.option("output", "o", "output path", "a.out")
+#       app.positional("input", "input file", true)
+#
+#       mut parsed = app.parse(Env.init().user_args())
+#       if parsed.help_requested:
+#           app.print_help()
+#           return
+#       if not parsed.ok:
+#           print("error: " + parsed.error)
+#           return
+#
+#       if parsed.has_flag("verbose"): print("verbose on")
+#       print(parsed.get_option("output"))
+#       print(parsed.get_positional("input"))
+
+from std.cli.parser import Cli, CliArgs, CliFlagSpec, CliOptionSpec, CliPositionalSpec
+from std.cli.parser import CLI_STR, CLI_INT, CLI_FLOAT, CLI_BOOL

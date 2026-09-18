@@ -1,0 +1,107 @@
+# std.log.field — Structured key/value fields attached to a log call.
+#
+# A Field carries one typed value (string/int/float/bool). Build a set of
+# fields with `Fields.new()` and the `.str()/.int()/.float()/.bool()` chain
+# methods, then hand the result to a Logger call:
+#
+#   log.info("request handled", Fields.new()
+#       .str("method", "GET")
+#       .int("status", 200)
+#       .int("ms", 12))
+
+from std.core.vec import Vec
+
+pub def FIELD_STR()   -> int: return 0
+pub def FIELD_INT()   -> int: return 1
+pub def FIELD_FLOAT() -> int: return 2
+pub def FIELD_BOOL()  -> int: return 3
+
+# NOT @value_type: a value-type class must be POD (no owned heap fields —
+# see docs/lang/advanced/05_decorators.md's hard rules), but `sval: str`
+# below is an owned heap field that would leak on every Field (a value type
+# is never dropped/released). A regular ARC class is the correct shape here
+# regardless of the small-struct-copy cost — correctness over a micro-opt on
+# a type that's constructed a handful of times per log call, not per frame.
+pub class Field:
+    pub key:   str
+    pub tag:   int
+    pub sval:  str
+    pub ival:  int
+    pub fval:  float
+    pub bval:  bool
+
+extend Field:
+    pub def str(key: str, val: str) -> Field:
+        mut f = Field()
+        f.key  = key
+        f.tag  = FIELD_STR()
+        f.sval = val
+        f.ival = 0
+        f.fval = 0.0
+        f.bval = false
+        return f
+
+    pub def int(key: str, val: int) -> Field:
+        mut f = Field()
+        f.key  = key
+        f.tag  = FIELD_INT()
+        f.sval = ""
+        f.ival = val
+        f.fval = 0.0
+        f.bval = false
+        return f
+
+    pub def float(key: str, val: float) -> Field:
+        mut f = Field()
+        f.key  = key
+        f.tag  = FIELD_FLOAT()
+        f.sval = ""
+        f.ival = 0
+        f.fval = val
+        f.bval = false
+        return f
+
+    pub def bool(key: str, val: bool) -> Field:
+        mut f = Field()
+        f.key  = key
+        f.tag  = FIELD_BOOL()
+        f.sval = ""
+        f.ival = 0
+        f.fval = 0.0
+        f.bval = val
+        return f
+
+# Ordered collection of Fields for one log call. Build with the fluent
+# `.str()/.int()/.float()/.bool()` chain, e.g.:
+#
+#   Fields.new().str("method", "GET").int("status", 200)
+pub class Fields:
+    pub items: Vec[Field]
+
+extend Fields:
+    pub def new() -> Fields:
+        mut fs = Fields()
+        fs.items = Vec[Field].init(4)
+        return fs
+
+    pub def empty() -> Fields:
+        return Fields.new()
+
+    pub def str(self, key: str, val: str) -> Fields:
+        self.items.push(Field.str(key, val))
+        return self
+
+    pub def int(self, key: str, val: int) -> Fields:
+        self.items.push(Field.int(key, val))
+        return self
+
+    pub def float(self, key: str, val: float) -> Fields:
+        self.items.push(Field.float(key, val))
+        return self
+
+    pub def bool(self, key: str, val: bool) -> Fields:
+        self.items.push(Field.bool(key, val))
+        return self
+
+    pub def len(self) -> int:
+        return self.items.len

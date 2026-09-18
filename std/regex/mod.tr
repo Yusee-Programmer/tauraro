@@ -8,8 +8,22 @@
 #   mut re = Regex.compile("^[a-z]+$")
 #   if re.match("hello"): print("ok")
 #   re.free()
+#
+# Capture groups: `caps = re.captures(text, 0)` (numbered, `caps.group(n)`)
+# and named groups via `(?<name>...)` or Python-style `(?P<name>...)`
+# (`caps.get("name")`) are supported — POSIX ERE has no native named-group
+# syntax, so the name is stripped client-side before compiling and the
+# name->index mapping is kept alongside the compiled pattern.
+#
+# LIMITATIONS (real POSIX ERE constraints, not wrapper gaps): no lazy
+# quantifiers (`*?`, `+?`), no lookahead/lookbehind (`(?=...)`, `(?!...)`,
+# `(?<=...)`, `(?<!...)`), no non-capturing groups (`(?:...)` — POSIX ERE has
+# no such construct, so every unescaped `(` outside a bracket expression is
+# a capturing group). None of these are emulated here; a genuinely different
+# (non-POSIX) engine would be needed for them.
 
 from std.string.str import Str
+from std.core.string import StringBuilder
 
 extern "C":
     def _tr_regex_compile(pattern: str, icase: int) -> Pointer[char]
@@ -20,26 +34,115 @@ extern "C":
     def _tr_regex_replace_all(handle: Pointer[char], text: str, repl: str) -> str
     def _tr_regex_count(handle: Pointer[char], text: str) -> int
     def _tr_regex_free(handle: Pointer[char])
+    def _tr_regex_ngroups(handle: Pointer[char]) -> int
+    def _tr_regex_exec_groups(handle: Pointer[char], text: str, from_: int) -> Pointer[c_int]
+    def _tr_regex_free_ints(p: Pointer[c_int])
+
+# True for an ASCII letter/digit/underscore — used to scan a `$name`
+# backreference token in a replacement string.
+def _is_name_char(c: int) -> bool:
+    if c >= 97 and c <= 122: return true   # a-z
+    if c >= 65 and c <= 90:  return true   # A-Z
+    if c >= 48 and c <= 57:  return true   # 0-9
+    if c == 95: return true                # _
+    return false
 
 pub class Regex:
     handle: Pointer[char]
     pattern_: str
     ignore_case: bool
+    group_names: Vec[str]
 
 extend Regex:
+    # Strip `(?<name>...)`/`(?P<name>...)` named-group syntax down to plain
+    # `(...)` (POSIX ERE has no named-group syntax of its own), returning
+    # the rewritten pattern and pushing each group's name (or "" if
+    # unnamed) onto `self.group_names`, in group-number order, index 0
+    # first (an unused placeholder for "group 0" / the whole match).
+    #
+    # An INSTANCE METHOD mutating `self.group_names` directly (not a free
+    # function taking a `Vec[str]` out-parameter) — two real bugs were found
+    # and worked around to land it this way:
+    # 1. A `(str, Vec[str])` tuple return miscompiled its second (pointer)
+    #    slot as a bare int64 in the generated C ("assignment to
+    #    'List_TrStr *' from 'long long int'").
+    # 2. Passing a `Vec[str]` field (`r.group_names`) as a plain function
+    #    ARGUMENT to a separate free function silently moved it: the free
+    #    function's own copy of the reference got dropped when it returned,
+    #    leaving the field pointing at freed memory (surfaced as a bogus
+    #    "Index 0 out of bounds (length 0)" the next time the field was
+    #    read). Calling `self.group_names.push(...)` — a method call ON a
+    #    field, the same dot-call pattern already required for `Captures`/
+    #    `Match` above — stays a borrow instead of a move, like `self`
+    #    itself already does everywhere else in this file.
+    # Skips bracket expressions (`[...]`) and backslash-escaped characters,
+    # since an unescaped `(` only starts a group outside of both.
+    def _preprocess_pattern(self, pattern: str) -> str:
+        mut out = StringBuilder.init(Str.len(pattern) + 8)
+        self.group_names.push("")   # index 0: unused (whole-match slot has no name)
+        mut i = 0
+        mut n = Str.len(pattern)
+        mut in_bracket = false
+        while i < n:
+            mut c = Str.char_at(pattern, i)
+            if in_bracket:
+                out.append_char(c)
+                if c == 93: in_bracket = false   # ']'
+                i = i + 1
+            elif c == 92 and i + 1 < n:   # backslash escape: copy both chars verbatim
+                out.append_char(c)
+                out.append_char(Str.char_at(pattern, i + 1))
+                i = i + 2
+            elif c == 91:   # '[' -- enter bracket expression
+                in_bracket = true
+                out.append_char(c)
+                i = i + 1
+            elif c == 40:   # '(' -- a new capturing group
+                mut named  = false
+                mut j = i + 1
+                if j < n and Str.char_at(pattern, j) == 63:   # '?'
+                    mut k = j + 1
+                    if k < n and Str.char_at(pattern, k) == 80: k = k + 1   # optional 'P'
+                    if k < n and Str.char_at(pattern, k) == 60:             # '<'
+                        mut namebuf = StringBuilder.init(16)
+                        mut m = k + 1
+                        while m < n and Str.char_at(pattern, m) != 62:   # until '>'
+                            namebuf.append_char(Str.char_at(pattern, m))
+                            m = m + 1
+                        if m < n:
+                            named = true
+                            self.group_names.push(namebuf.to_owned())
+                            out.append_char(40)
+                            i = m + 1
+                        namebuf.free()
+                if not named:
+                    self.group_names.push("")
+                    out.append_char(40)
+                    i = i + 1
+            else:
+                out.append_char(c)
+                i = i + 1
+        mut result = out.to_owned()
+        out.free()
+        return result
+
     # Compile a POSIX extended regex. Pass ignore_case=true for case-insensitive matching.
     pub def compile(pattern: str) -> Regex:
         mut r         = Regex.init()
         r.pattern_    = pattern
         r.ignore_case = false
-        r.handle      = _tr_regex_compile(pattern, 0)
+        r.group_names = Vec[str].init(4)
+        mut clean_pattern = r._preprocess_pattern(pattern)
+        r.handle      = _tr_regex_compile(clean_pattern, 0)
         return r
 
     pub def compile_icase(pattern: str) -> Regex:
         mut r         = Regex.init()
         r.pattern_    = pattern
         r.ignore_case = true
-        r.handle      = _tr_regex_compile(pattern, 1)
+        r.group_names = Vec[str].init(4)
+        mut clean_pattern = r._preprocess_pattern(pattern)
+        r.handle      = _tr_regex_compile(clean_pattern, 1)
         return r
 
     # True when the entire string is matched by the pattern.
@@ -118,6 +221,226 @@ extend Regex:
     pub def free(self):
         _tr_regex_free(self.handle)
 
+    # ── Capture groups ───────────────────────────────────────────────────────
+
+    # Run one match at-or-after byte offset `from_` and return every capture
+    # group's boundaries (group 0 = whole match). Always returns a Captures;
+    # check `.matched()` before reading groups. Caller must call `.free()`.
+    pub def captures(self, text: str, from_: int) -> Captures:
+        mut raw = _tr_regex_exec_groups(self.handle, text, from_)
+        mut c   = Captures.init()
+        c._raw   = raw
+        c._text  = text
+        c._names = self.group_names
+        return c
+
+    # Like `find`, but returns a Match (whole-match text/position + capture
+    # groups) instead of a bare substring. Caller must call `.free()`.
+    pub def find_match(self, text: str, from_: int) -> Match:
+        mut m = Match.init()
+        m.caps = Regex.captures(self, text, from_)
+        return m
+
+    # Like `find_all`, but returns Match objects (with capture groups) instead
+    # of bare substrings. Caller must free() every element.
+    pub def find_all_matches(self, text: str) -> Vec[Match]:
+        mut out = Vec[Match].init(4)
+        mut pos = 0
+        mut tl  = Str.len(text)
+        while pos < tl:
+            mut start = Regex.find_start(self, text, pos)
+            if start < 0:
+                break
+            mut len_ = Regex.find_len(self, text, start)
+            out.push(Regex.find_match(self, text, start))
+            if len_ == 0:
+                pos = start + 1
+            else:
+                pos = start + len_
+        return out
+
+    # replace_first/replace_all with `$1`/`$name`/`$$` backreference expansion
+    # in the replacement string (`$$` = literal `$`, `$<digits>` = numbered
+    # group, `$<name>` = named group -- unknown/unmatched groups expand to "").
+    pub def replace_first_expand(self, text: str, repl: str) -> str:
+        mut caps = Regex.captures(self, text, 0)
+        if not caps.matched():
+            caps.free()
+            return text
+        mut s0  = caps.start(0)
+        mut e0  = caps.end(0)
+        mut out = Str.slice(text, 0, s0) + _expand_replacement(repl, caps) + Str.slice(text, e0, Str.len(text))
+        caps.free()
+        return out
+
+    pub def replace_all_expand(self, text: str, repl: str) -> str:
+        mut sb  = StringBuilder.init(Str.len(text) + 16)
+        mut pos = 0
+        mut tl  = Str.len(text)
+        while pos <= tl:
+            mut caps = Regex.captures(self, text, pos)
+            if not caps.matched():
+                caps.free()
+                break
+            mut s0 = caps.start(0)
+            mut e0 = caps.end(0)
+            sb.append(Str.slice(text, pos, s0))
+            sb.append(_expand_replacement(repl, caps))
+            caps.free()
+            if e0 == s0:
+                if s0 < tl: sb.append_char(Str.char_at(text, s0))
+                pos = s0 + 1
+            else:
+                pos = e0
+        sb.append(Str.slice(text, pos, tl))
+        mut result = sb.to_owned()
+        sb.free()
+        return result
+
     def init() -> Regex:
-        mut r         = Regex { handle: none as Pointer[char], pattern_: "", ignore_case: false }
+        mut r = Regex()
+        r.handle      = none as Pointer[char]
+        r.pattern_    = ""
+        r.ignore_case = false
+        r.group_names = Vec[str].init(1)
         return r
+
+# One matched pattern's capture-group boundaries (group 0 = whole match).
+# Obtained from `Regex.captures()` / used internally by `Match`. Always
+# check `.matched()` first -- a non-match still returns a valid (empty)
+# Captures, it does not raise. Call `.free()` when done.
+pub class Captures:
+    _raw:   Pointer[c_int]
+    _text:  str
+    _names: Vec[str]
+
+extend Captures:
+    pub def init() -> Captures:
+        mut c = Captures()
+        c._raw   = none as Pointer[c_int]
+        c._text  = ""
+        c._names = Vec[str].init(1)
+        return c
+
+    pub def matched(self) -> bool:
+        unsafe:
+            return (self._raw.offset(0).read() as int) == 1
+
+    # Number of slots (group 0 + every capture group) -- NOT the same as
+    # "number of groups that participated"; use `.has(n)` for that.
+    pub def len(self) -> int:
+        unsafe:
+            return self._raw.offset(1).read() as int
+
+    # True when group `n` participated in the match (0 = whole match).
+    pub def has(self, n: int) -> bool:
+        if n < 0 or n >= Captures.len(self): return false
+        return Captures.start(self, n) >= 0
+
+    # Raw byte start offset of group `n`, or -1 if it didn't participate / is out of range.
+    pub def start(self, n: int) -> int:
+        if n < 0 or n >= Captures.len(self): return -1
+        unsafe:
+            return self._raw.offset(2 + 2 * n).read() as int
+
+    # Raw byte end offset of group `n`, or -1 if it didn't participate / is out of range.
+    pub def end(self, n: int) -> int:
+        if n < 0 or n >= Captures.len(self): return -1
+        unsafe:
+            return self._raw.offset(2 + 2 * n + 1).read() as int
+
+    # Text of group `n` (0 = whole match), or "" if it didn't participate.
+    pub def group(self, n: int) -> str:
+        mut s = Captures.start(self, n)
+        mut e = Captures.end(self, n)
+        if s < 0 or e < 0: return ""
+        return Str.slice(self._text, s, e)
+
+    # Text of the named group `name` (from `(?<name>...)`/`(?P<name>...)`),
+    # or "" if that name doesn't exist on this pattern or didn't participate.
+    pub def get(self, name: str) -> str:
+        mut idx = Captures._index_of(self, name)
+        if idx < 0: return ""
+        return Captures.group(self, idx)
+
+    def _index_of(self, name: str) -> int:
+        mut i = 0
+        while i < self._names.len:
+            if self._names.get(i) == name: return i
+            i = i + 1
+        return -1
+
+    pub def free(self):
+        unsafe:
+            _tr_regex_free_ints(self._raw)
+
+# A single match (whole-match text/position + its capture groups). A thin,
+# more ergonomic wrapper over Captures for `find_match`/`find_all_matches`.
+pub class Match:
+    caps: Captures
+
+extend Match:
+    pub def init() -> Match:
+        mut m = Match()
+        m.caps = Captures.init()
+        return m
+
+    pub def text(self) -> str:
+        return self.caps.group(0)
+
+    pub def start(self) -> int:
+        return self.caps.start(0)
+
+    pub def end(self) -> int:
+        return self.caps.end(0)
+
+    pub def group(self, n: int) -> str:
+        return self.caps.group(n)
+
+    pub def get(self, name: str) -> str:
+        return self.caps.get(name)
+
+    pub def free(self):
+        self.caps.free()
+
+# Expand `$1`/`$name`/`$$` tokens in a replacement string against one
+# Captures result. Unknown/unmatched groups expand to "".
+def _expand_replacement(repl: str, caps: Captures) -> str:
+    mut sb = StringBuilder.init(Str.len(repl) + 8)
+    mut i  = 0
+    mut n  = Str.len(repl)
+    while i < n:
+        mut c = Str.char_at(repl, i)
+        if c == 36 and i + 1 < n:   # '$'
+            mut c1 = Str.char_at(repl, i + 1)
+            if c1 == 36:   # literal "$$"
+                sb.append_char(36)
+                i = i + 2
+            elif c1 >= 48 and c1 <= 57:   # "$<digits>"
+                mut j = i + 1
+                mut numbuf = StringBuilder.init(4)
+                while j < n and Str.char_at(repl, j) >= 48 and Str.char_at(repl, j) <= 57:
+                    numbuf.append_char(Str.char_at(repl, j))
+                    j = j + 1
+                mut gi = Str.parse_int(numbuf.to_owned())
+                numbuf.free()
+                sb.append(caps.group(gi))
+                i = j
+            elif _is_name_char(c1):   # "$name"
+                mut j2 = i + 1
+                mut namebuf = StringBuilder.init(16)
+                while j2 < n and _is_name_char(Str.char_at(repl, j2)):
+                    namebuf.append_char(Str.char_at(repl, j2))
+                    j2 = j2 + 1
+                sb.append(caps.get(namebuf.to_owned()))
+                namebuf.free()
+                i = j2
+            else:
+                sb.append_char(c)
+                i = i + 1
+        else:
+            sb.append_char(c)
+            i = i + 1
+    mut out = sb.to_owned()
+    sb.free()
+    return out

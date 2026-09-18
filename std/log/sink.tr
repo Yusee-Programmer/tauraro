@@ -1,0 +1,75 @@
+# std.log.sink — Pluggable log output destinations.
+#
+# `LogSink` is the extension point: implement `emit_line(self, line: str)`
+# (and optionally `flush`/`close_sink`) on any class to plug a new
+# destination into a Logger. Two sinks ship built in:
+#
+#   StdoutSink — writes to standard output (println per event)
+#   FileSink   — appends to a file on disk (real file I/O, one write per event)
+#
+# A third-party sink (e.g. syslog, a network collector) just needs to
+# `implements LogSink` and be wired into a Logger the same way the Logger
+# class itself wires in its own stdout_sink/file_sink fields — see
+# std/log/logger.tr for how the two built-in sinks are driven.
+
+from std.io.file import File
+
+# NOTE on method names: NOT `write`/`close` (the obvious names) — a class
+# implementing an interface with a method named `write` or `close` (both
+# POSIX/Windows C stdlib function names) silently loses its OWN forward
+# declaration in the generated C (the vtable-adapter function ends up
+# calling an undeclared `<Class>_write`/`<Class>_close`, a real compile
+# error: "undeclared identifier ... did you mean <Class>_init"). Same root
+# cause already documented for an interface method named `open` elsewhere in
+# this toolkit (worked around the same way: renamed, not compiler-patched).
+# `flush` is unaffected (not a libc symbol here) and keeps its natural name.
+pub interface LogSink:
+    def emit_line(self, line: str)
+    def flush(self)
+    def close_sink(self)
+
+# Writes each formatted line to standard output.
+pub class StdoutSink implements LogSink:
+    _dummy: int
+
+extend StdoutSink:
+    pub def init() -> StdoutSink:
+        return StdoutSink()
+
+    pub def emit_line(self, line: str):
+        print(line)
+
+    pub def flush(self):
+        pass
+
+    pub def close_sink(self):
+        pass
+
+# Appends each formatted line to a file on disk (real file I/O via std.io.file;
+# the file is opened once in append mode and kept open for the sink's lifetime).
+pub class FileSink implements LogSink:
+    pub path: str
+    pub _f:   File
+    pub _open: bool
+
+extend FileSink:
+    # Open (or create) `path` for appending. Call close_sink() when done, or
+    # let it be dropped — subsequent writes silently no-op once closed.
+    pub def init(path: str) -> FileSink:
+        mut s   = FileSink()
+        s.path  = path
+        s._f    = File.init(path, "ab")
+        s._open = s._f.is_open()
+        return s
+
+    pub def emit_line(self, line: str):
+        if not self._open: return
+        self._f.writeln(line)
+
+    pub def flush(self):
+        pass
+
+    pub def close_sink(self):
+        if self._open:
+            self._f.close()
+            self._open = false

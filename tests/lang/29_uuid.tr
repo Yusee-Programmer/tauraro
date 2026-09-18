@@ -1,0 +1,113 @@
+# tests/lang/29_uuid.tr - std.crypto.uuid: UUID v4/v3/v5, is_valid, ULID
+# (generate + monotonic ordering + timestamp round-trip).
+
+from std.test import TestRunner
+from std.crypto.uuid import UUID, ULID, MonotonicUlid
+
+def main():
+    mut t = TestRunner.init("29_uuid")
+
+    t.section("UUID v4")
+    mut id1 = UUID.v4()
+    mut id2 = UUID.v4()
+    t.assert_eq_int(id1.len(), 36, "v4 length is 36")
+    t.assert_ne_str(id1, id2, "two v4 calls differ")
+    t.assert_true(UUID.is_valid(id1), "v4 output is valid")
+    t.assert_eq_int(UUID.version(id1), 4, "v4 version nibble is 4")
+
+    t.section("UUID.is_valid")
+    t.assert_true(UUID.is_valid("550e8400-e29b-41d4-a716-446655440000"), "canonical example is valid")
+    t.assert_false(UUID.is_valid("550e8400-e29b-41d4-a716-44665544000"), "too short is invalid")
+    t.assert_false(UUID.is_valid("550e8400e29b41d4a716446655440000"), "missing hyphens is invalid")
+    t.assert_false(UUID.is_valid("zzze8400-e29b-41d4-a716-446655440000"), "non-hex chars invalid")
+    t.assert_true(UUID.is_valid(UUID.nil()), "nil UUID is valid shape")
+    t.assert_eq_str(UUID.nil(), "00000000-0000-0000-0000-000000000000", "nil UUID value")
+
+    t.section("UUID.equals")
+    t.assert_true(UUID.equals("550E8400-E29B-41D4-A716-446655440000", "550e8400-e29b-41d4-a716-446655440000"), "case-insensitive equality")
+    t.assert_false(UUID.equals(id1, id2), "distinct UUIDs not equal")
+
+    t.section("UUID v3 (MD5 namespace)")
+    mut dns1 = UUID.v3(UUID.NAMESPACE_DNS(), "example.com")
+    mut dns2 = UUID.v3(UUID.NAMESPACE_DNS(), "example.com")
+    mut dns3 = UUID.v3(UUID.NAMESPACE_DNS(), "example.org")
+    t.assert_true(UUID.is_valid(dns1), "v3 output is valid")
+    t.assert_eq_int(UUID.version(dns1), 3, "v3 version nibble is 3")
+    t.assert_eq_str(dns1, dns2, "v3 is deterministic for same namespace+name")
+    t.assert_ne_str(dns1, dns3, "v3 differs for different name")
+    # Known-answer test: UUID v3 of NAMESPACE_DNS + "example.com" is a fixed,
+    # well-known value per RFC 4122's reference algorithm (independently
+    # verified via Python's hashlib/uuid modules).
+    t.assert_eq_str(dns1, "9073926b-929f-31c2-abc9-fad77ae3e8eb", "v3 known-answer (DNS, example.com)")
+
+    t.section("UUID v5 (SHA-1 namespace)")
+    mut dns5_1 = UUID.v5(UUID.NAMESPACE_DNS(), "example.com")
+    mut dns5_2 = UUID.v5(UUID.NAMESPACE_DNS(), "example.com")
+    mut dns5_3 = UUID.v5(UUID.NAMESPACE_URL(), "example.com")
+    t.assert_true(UUID.is_valid(dns5_1), "v5 output is valid")
+    t.assert_eq_int(UUID.version(dns5_1), 5, "v5 version nibble is 5")
+    t.assert_eq_str(dns5_1, dns5_2, "v5 is deterministic for same namespace+name")
+    t.assert_ne_str(dns5_1, dns5_3, "v5 differs for different namespace")
+    t.assert_ne_str(dns5_1, dns1, "v5 differs from v3 for the same namespace+name")
+    # Known-answer test: UUID v5 of NAMESPACE_DNS + "example.com" is a fixed,
+    # well-known value per RFC 4122's reference algorithm.
+    t.assert_eq_str(dns5_1, "cfbff0d1-9375-5685-968c-48ce8b15ae17", "v5 known-answer (DNS, example.com)")
+
+    t.section("ULID.generate")
+    mut u1 = ULID.generate()
+    mut u2 = ULID.generate()
+    t.assert_eq_int(u1.len(), 26, "ULID length is 26")
+    t.assert_true(ULID.is_valid(u1), "generated ULID is valid")
+    t.assert_ne_str(u1, u2, "two ULID.generate() calls differ")
+
+    t.section("ULID.is_valid")
+    t.assert_true(ULID.is_valid("01ARZ3NDEKTSV4RRFFQ69G5FAV"), "spec example is valid")
+    t.assert_false(ULID.is_valid("01ARZ3NDEKTSV4RRFFQ69G5FA"), "too short is invalid")
+    t.assert_false(ULID.is_valid("01ARZ3NDEKTSV4RRFFQ69G5FAVX"), "too long is invalid")
+    t.assert_false(ULID.is_valid("01ARZ3NDEKTSV4RRFFQ69G5FAI"), "ambiguous char I is invalid")
+    t.assert_false(ULID.is_valid("ZZZZZZZZZZZZZZZZZZZZZZZZZZ"), "overflowing timestamp digit is invalid")
+
+    t.section("ULID timestamp round-trip")
+    mut before = ULID.timestamp_ms("01ARZ3NDEKTSV4RRFFQ69G5FAV")
+    t.assert_gt_int(before, 0, "spec example decodes to a positive timestamp")
+    # Spec example 01ARZ3NDEK... decodes (Crockford Base32) to this exact ms value.
+    t.assert_eq_int(before, 1469922850259, "ULID known-answer timestamp decode")
+
+    mut u3 = ULID.generate()
+    mut ts3 = ULID.timestamp_ms(u3)
+    t.assert_gt_int(ts3, 1700000000000, "freshly generated ULID timestamp looks like 'now' (after 2023)")
+
+    t.section("ULID lexicographic sortability (single instant)")
+    # Two ULIDs generated back-to-back (via ULID.generate(), not the
+    # monotonic generator) should still normally sort by timestamp prefix;
+    # here we just confirm the timestamp portion is stable within one ms
+    # or increasing across calls a few ms apart.
+    mut early = ULID.timestamp_ms(u1)
+    mut later = ULID.timestamp_ms(u2)
+    t.assert_ge_int(later, early, "timestamps are monotonic non-decreasing across sequential generate() calls")
+
+    t.section("MonotonicUlid ordering")
+    mut gen = MonotonicUlid.init()
+    mut m1 = gen.next()
+    mut m2 = gen.next()
+    mut m3 = gen.next()
+    t.assert_true(ULID.is_valid(m1), "monotonic ULID #1 is valid")
+    t.assert_true(ULID.is_valid(m2), "monotonic ULID #2 is valid")
+    t.assert_true(ULID.is_valid(m3), "monotonic ULID #3 is valid")
+    t.assert_true(m2 > m1, "monotonic ULID #2 sorts after #1")
+    t.assert_true(m3 > m2, "monotonic ULID #3 sorts after #2")
+
+    # Generate a larger burst to increase the chance several land in the same
+    # millisecond, exercising the same-ms increment path, and confirm strict
+    # ordering holds throughout.
+    mut prev = gen.next()
+    mut all_increasing = true
+    mut i = 0
+    while i < 200:
+        mut cur = gen.next()
+        if not (cur > prev): all_increasing = false
+        prev = cur
+        i = i + 1
+    t.assert_true(all_increasing, "200-ULID burst from MonotonicUlid is strictly increasing")
+
+    t.summary()

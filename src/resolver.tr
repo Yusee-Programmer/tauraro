@@ -337,6 +337,14 @@ extend ModuleResolver:
             # 1. Package directory: <base>/<dir>/mod.tr
             mut pkg_path = base + "/" + dir_path + "/mod.tr"
             if file_exists(pkg_path):
+                # mod.tr commonly re-exports from sibling files that actually
+                # live one level down in <base>/<dir>/src/ (e.g. templa's
+                # mod.tr does `from lexer import lex` where lexer.tr is at
+                # templa/src/lexer.tr, not next to mod.tr itself). Add both
+                # the package dir and its src/ subdir so mod.tr's own
+                # relative imports resolve, mirroring case 3 below.
+                self.add_search_path(base + "/" + dir_path)
+                self.add_search_path(base + "/" + dir_path + "/src")
                 mut already = self.visited.contains(pkg_path)
                 self.resolve_file(pkg_path, false)
                 if not already:

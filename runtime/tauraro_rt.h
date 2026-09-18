@@ -3050,6 +3050,24 @@ typedef struct {
     int          n_sleep;
     int          n_io;
     int          inited;
+#if defined(_WIN32)
+    /* Free-list of finished-but-not-torn-down fibers, reused by _tr_co_go
+     * instead of a fresh CreateFiber (linked via each _TrCoro's own `next`
+     * field, which is otherwise only used for the ready queue - a pooled
+     * coroutine is on neither queue, so reusing it here is conflict-free).
+     * Windows-only: CreateFiber/SwitchToFiber/DeleteFiber became unreliable
+     * (a real, reproduced hang inside DeleteFiber, and a second hang around
+     * SwitchToFiber into a freshly-created fiber even with DeleteFiber
+     * skipped) under sustained per-connection coroutine churn combined with
+     * real socket I/O on those fibers - see watax's reactor.tr and
+     * project_watax_coroutine_reactor.md. Reusing fibers instead of
+     * create/destroying one per request avoids the high-churn pattern that
+     * triggers it, and is a legitimate perf win besides (skips
+     * CreateFiber's allocation on every request). Unbounded (never
+     * DeleteFiber once pooled) - a worker's fiber count settles at its own
+     * peak concurrent-coroutine count and never both grows AND shrinks. */
+    _TrCoro*     pool_free;
+#endif
 } _TrSchedG;
 /* Per-OS-thread scheduler (thread-per-core multicore = N worker threads, each
  * with its own independent scheduler + reactor). It MUST be a single shared
@@ -3128,12 +3146,23 @@ static void _tr_co_to_coro(_TrCoro* to) {
 }
 
 #if defined(_WIN32)
+/* Loops so the SAME fiber can be reused for a later, unrelated coroutine
+ * (see _TrSchedG.pool_free): after finishing one task, park via
+ * SwitchToFiber exactly as before, but if _tr_co_go later pulls this exact
+ * _TrCoro back out of the pool and refills c->fn/c->arg, resuming this
+ * fiber lands right back at the top of the loop and just runs the new task
+ * - no new CreateFiber needed. Windows fiber functions must never actually
+ * `return` (the OS implicitly calls ExitThread if one does), so this loops
+ * forever; a pooled-but-never-reused fiber simply stays parked here for
+ * the rest of the worker thread's life, which is fine (it costs no CPU). */
 static void CALLBACK _tr_co_entry(LPVOID p) {
     _TrCoro* c = (_TrCoro*)p;
-    c->result = (long long)(uintptr_t)c->fn(c->arg);
-    c->state = _TRC_DONE;
-    if (c->joiner) { _TrCoro* j = c->joiner; c->joiner = NULL; _tr_rpush(j); }
-    SwitchToFiber(_tr_g.main_ctx);   /* control returns to the scheduler */
+    for (;;) {
+        c->result = (long long)(uintptr_t)c->fn(c->arg);
+        c->state = _TRC_DONE;
+        if (c->joiner) { _TrCoro* j = c->joiner; c->joiner = NULL; _tr_rpush(j); }
+        SwitchToFiber(_tr_g.main_ctx);   /* control returns to the scheduler */
+    }
 }
 #else
 static void _tr_co_entry(void) {
@@ -3150,6 +3179,28 @@ static void _tr_co_entry(void) {
 /* Spawn a coroutine running fn(arg); returns its handle. */
 static _TrCoro* _tr_co_go(_tr_coro_fn fn, void* arg) {
     _tr_sched_ensure();
+#if defined(_WIN32)
+    /* Reuse a pooled fiber if one is idle (see _TrSchedG.pool_free) instead
+     * of CreateFiber - avoids the high-churn create/destroy pattern that's
+     * unreliable under sustained load. A pooled _TrCoro's fiber is still
+     * alive, parked inside _tr_co_entry's loop; refilling fn/arg and
+     * clearing the rest back to a fresh-spawn state is enough for it to run
+     * the new task exactly like a brand-new coroutine would. */
+    if (_tr_g.pool_free) {
+        _TrCoro* c = _tr_g.pool_free;
+        _tr_g.pool_free = c->next;
+        c->fn = fn; c->arg = arg;
+        c->state = _TRC_READY;
+        c->result = 0; c->wake_at = 0;
+        c->io_fd = -1; c->io_armed_fd = -1; c->io_armed_ev = 0;
+        c->detached = 0; c->joiner = NULL; c->next = NULL; c->snext = NULL;
+        c->failed = 0; c->fail_msg = NULL;
+        c->exc_chain = _tr_exc_chain_get();
+        c->exc_chain->refcount++;
+        _tr_rpush(c);
+        return c;
+    }
+#endif
     _TrCoro* c = (_TrCoro*)calloc(1, sizeof(_TrCoro));
     c->fn = fn; c->arg = arg; c->io_fd = -1; c->io_armed_fd = -1;
     /* Inherit whatever exception chain is currently active - the awaiter's
@@ -3197,11 +3248,17 @@ static void _tr_co_free(_TrCoro* c) {
     }
     if (c->exc_chain && --c->exc_chain->refcount == 0) free(c->exc_chain);
 #if defined(_WIN32)
-    if (c->ctx) DeleteFiber(c->ctx);
+    /* Park into the pool instead of DeleteFiber (see _TrSchedG.pool_free
+     * and _tr_co_go) - the fiber itself is still alive, parked inside
+     * _tr_co_entry's loop right after its SwitchToFiber(main_ctx), ready to
+     * be resumed with a new fn/arg later. Reuses the `next` field, which is
+     * free right now (this coro is on neither the ready nor sleep queue). */
+    c->next = _tr_g.pool_free;
+    _tr_g.pool_free = c;
 #else
     if (c->stack) munmap(c->stack, _TR_CORO_STACK);
-#endif
     free(c);
+#endif
 }
 
 /* Run one scheduler step: dispatch a ready coro, or block on the reactor /
@@ -3770,7 +3827,27 @@ _TR_XLINK int _tr_tcp_connect(const char* host, int port) {
 }
 _TR_XLINK int  _tr_tcp_send(int fd, const char* data, int len) { return send((SOCKET)fd, data, len, 0); }
 _TR_XLINK int  _tr_tcp_recv(int fd, char* buf, int cap)        { return recv((SOCKET)fd, buf, cap, 0); }
-_TR_XLINK void _tr_tcp_close(int fd)                           { closesocket((SOCKET)fd); }
+_TR_XLINK void _tr_tcp_close(int fd) {
+    /* Drop any lingering _TrIOPoll registration for this fd BEFORE the OS
+     * can hand the same fd number to a brand new socket (the very next
+     * accept() on this same thread's reactor, in particular). _tr_co_free
+     * already does this cleanup, but only when the OWNING coroutine itself
+     * finishes and gets freed - a coroutine that closes its stream mid-
+     * request (e.g. App._serve_conn -> conn.close()) leaves a stale
+     * registration alive for however long the coroutine has left to run.
+     * If the fd is reused by a new connection before that coroutine
+     * finishes, a readiness event on the reused fd delivers to the OLD
+     * coroutine's userdata pointer - a genuine, reproduced use-after-free
+     * (confirmed via a real crash under watax's per-core coroutine reactor;
+     * see watax's reactor.tr). Deregistering here, at the moment the fd
+     * actually becomes invalid, closes that window entirely regardless of
+     * the owning coroutine's own lifecycle. _tr_iopoll_del is a safe no-op
+     * when the fd was never registered. */
+#if !defined(TAURARO_BARE) && !defined(TAURARO_WASM)
+    if (_tr_g.reactor) _tr_iopoll_del(_tr_g.reactor, fd);
+#endif
+    closesocket((SOCKET)fd);
+}
 
 #else  /* POSIX */
 
@@ -3798,7 +3875,15 @@ _TR_XLINK int _tr_tcp_connect(const char* host, int port) {
 }
 _TR_XLINK int  _tr_tcp_send(int fd, const char* data, int len) { return (int)send(fd, data, (size_t)len, 0); }
 _TR_XLINK int  _tr_tcp_recv(int fd, char* buf, int cap)        { return (int)recv(fd, buf, (size_t)cap, 0); }
-_TR_XLINK void _tr_tcp_close(int fd)                           { close(fd); }
+_TR_XLINK void _tr_tcp_close(int fd) {
+    /* See the Windows _tr_tcp_close's comment: deregister from this
+     * thread's _TrIOPoll HERE, not deferred to _tr_co_free, so a reused fd
+     * can never deliver a readiness event to a stale coroutine pointer. */
+#if !defined(TAURARO_BARE) && !defined(TAURARO_WASM)
+    if (_tr_g.reactor) _tr_iopoll_del(_tr_g.reactor, fd);
+#endif
+    close(fd);
+}
 #endif
 
 /* ── Platform detection ──────────────────────────────────────────────── */
@@ -6051,12 +6136,33 @@ static inline bool _tr_shutdown_requested(void) { return false; }
 #endif
 
 /* ═══════════════════════════════════════════════════════════════════════════
- * REGEX — POSIX regex.h on Linux/Mac; stubs on Windows and bare-metal.
+ * REGEX — POSIX regex.h on Linux/Mac/MinGW; stubs on MSVC and bare-metal.
  * ═══════════════════════════════════════════════════════════════════════════ */
 #ifndef TAURARO_BARE
 #  if defined(__linux__) || defined(__APPLE__) || defined(__unix__)
+     /* Always part of the platform libc on these targets. */
 #    include <regex.h>
 #    define TAURARO_HAVE_REGEX 1
+#  elif (defined(__MINGW32__) || defined(__MINGW64__)) && defined(__has_include)
+     /* Some MinGW-w64 distributions (e.g. MSYS2 with mingw-w64-x86_64-libtre/
+      * -systre installed) ship a real POSIX regex.h; others (e.g. the plain
+      * mingw64 toolchain on GitHub Actions' windows-latest runner) do not.
+      * `__MINGW32__`/`__MINGW64__` being defined does NOT imply the header
+      * exists -- an earlier version of this guard assumed it did (based on
+      * this being true on one specific local MSYS2 install) and broke CI's
+      * Windows build entirely ("fatal error: regex.h: No such file or
+      * directory") the first time it ran somewhere without those packages.
+      * `__has_include` (GCC 5+/Clang, universally available on any toolchain
+      * modern enough to build this compiler) checks for the file directly
+      * instead of inferring its presence from the platform macro. Falls back
+      * to the stub branch below (compiles fine, always returns null/false/
+      * -1) when the header truly isn't there, or on a `__has_include`-less
+      * MinGW-adjacent toolchain — always previously-correct behavior for
+      * anything that isn't Linux/Mac/Unix. */
+#    if __has_include(<regex.h>)
+#      include <regex.h>
+#      define TAURARO_HAVE_REGEX 1
+#    endif
 #  endif
 #endif
 
@@ -6084,6 +6190,45 @@ static inline int _tr_regex_find_len(char* handle, char* text, int from) {
     regmatch_t m;
     if (regexec(&((_TrRegex*)handle)->re, text + from, 1, &m, 0) != 0) return -1;
     return (int)(m.rm_eo - m.rm_so);
+}
+/* Number of capture groups (parenthesized subexpressions) in the compiled
+ * pattern, NOT counting the whole-match group 0. */
+static inline int _tr_regex_ngroups(char* handle) {
+    if (!handle) return 0;
+    return (int)((_TrRegex*)handle)->re.re_nsub;
+}
+/* Run one match at-or-after byte offset `from` and return a heap int array
+ * shaped [found(0/1), n_slots, start0, end0, start1, end1, ...] where slot 0
+ * is the whole match and slots 1..n_slots-1 are capture groups (a group that
+ * did not participate gets start=end=-1). `n_slots` = re_nsub+1. Caller must
+ * free the returned array with _tr_regex_free_ints(). Returns NULL only on
+ * allocation failure (a non-match still returns a valid array with found=0). */
+static inline int* _tr_regex_exec_groups(char* handle, char* text, int from) {
+    if (!handle || !text) return NULL;
+    _TrRegex* r = (_TrRegex*)handle;
+    size_t nslots = r->re.re_nsub + 1;
+    regmatch_t* mvec = (regmatch_t*)TAURARO_ALLOC(nslots * sizeof(regmatch_t));
+    if (!mvec) return NULL;
+    int* out = (int*)TAURARO_ALLOC((2 + 2 * nslots) * sizeof(int));
+    if (!out) { TAURARO_FREE(mvec); return NULL; }
+    int rc = regexec(&r->re, text + from, nslots, mvec, 0);
+    out[1] = (int)nslots;
+    if (rc != 0) {
+        out[0] = 0;
+        for (size_t i = 0; i < nslots; i++) { out[2 + 2*i] = -1; out[2 + 2*i + 1] = -1; }
+        TAURARO_FREE(mvec);
+        return out;
+    }
+    out[0] = 1;
+    for (size_t i = 0; i < nslots; i++) {
+        if (mvec[i].rm_so < 0) { out[2 + 2*i] = -1; out[2 + 2*i + 1] = -1; }
+        else { out[2 + 2*i] = from + (int)mvec[i].rm_so; out[2 + 2*i + 1] = from + (int)mvec[i].rm_eo; }
+    }
+    TAURARO_FREE(mvec);
+    return out;
+}
+static inline void _tr_regex_free_ints(int* p) {
+    if (p) TAURARO_FREE(p);
 }
 static inline char* _tr_regex_replace_first(char* handle, char* text, char* repl) {
     if (!handle || !text || !repl) return _tr_strdup(text ? text : "");
@@ -6129,6 +6274,9 @@ static inline char* _tr_regex_compile(char* p, int i) { (void)p;(void)i; return 
 static inline bool  _tr_regex_match(char* h, char* t) { (void)h;(void)t; return false; }
 static inline int   _tr_regex_find_start(char* h, char* t, int f) { (void)h;(void)t;(void)f; return -1; }
 static inline int   _tr_regex_find_len(char* h, char* t, int f) { (void)h;(void)t;(void)f; return -1; }
+static inline int   _tr_regex_ngroups(char* h) { (void)h; return 0; }
+static inline int*  _tr_regex_exec_groups(char* h, char* t, int f) { (void)h;(void)t;(void)f; return NULL; }
+static inline void  _tr_regex_free_ints(int* p) { (void)p; }
 static inline char* _tr_regex_replace_first(char* h, char* t, char* r) { (void)h;(void)r; return _tr_strdup(t?t:""); }
 static inline char* _tr_regex_replace_all(char* h, char* t, char* r) { (void)h;(void)r; return _tr_strdup(t?t:""); }
 static inline int   _tr_regex_count(char* h, char* t) { (void)h;(void)t; return 0; }
@@ -6494,6 +6642,79 @@ static inline void _tr_sha1_final(_TrSHA1Ctx* c, uint8_t* out){
     uint8_t lb[8]; for(int i=0;i<8;i++) lb[i]=(uint8_t)(total>>(56-i*8)); _tr_sha1_update(c,lb,8);
     for(int i=0;i<5;i++){ out[i*4]=(uint8_t)(c->h[i]>>24);out[i*4+1]=(uint8_t)(c->h[i]>>16);out[i*4+2]=(uint8_t)(c->h[i]>>8);out[i*4+3]=(uint8_t)c->h[i]; }
 }
+/* std.crypto.hash's Hash.sha1()/.sha1_bytes() (std/crypto/hash.tr) declare
+ * these two as extern "C" but neither was ever defined here - any program
+ * that reaches Hash.sha1/.sha1_bytes (or merely compiles a translation unit
+ * that pulls in hash.c at all, e.g. transitively via std/net/websocket.tr)
+ * failed with "implicit declaration of function '_tr_sha1_hex'" and a hard
+ * link/compile error. Mirrors _tr_sha256_hex/_tr_sha256_bytes_of exactly,
+ * reusing the SHA-1 primitives above that _tr_ws_accept already relies on. */
+static inline char* _tr_sha1_hex(char* input) {
+    _TrSHA1Ctx ctx; uint8_t dig[20];
+    _tr_sha1_init(&ctx);
+    if(input) _tr_sha1_update(&ctx,(const uint8_t*)input,strlen(input));
+    _tr_sha1_final(&ctx,dig);
+    char* out=(char*)TAURARO_ALLOC(41); if(!out) return NULL;
+    for(int i=0;i<20;i++){out[i*2]=_tr_hex_lc[dig[i]>>4];out[i*2+1]=_tr_hex_lc[dig[i]&15];}
+    out[40]='\0'; return out;
+}
+static inline char* _tr_sha1_bytes_hex(char* input, int ilen) {
+    _TrSHA1Ctx ctx; uint8_t dig[20];
+    _tr_sha1_init(&ctx);
+    if(input&&ilen>0) _tr_sha1_update(&ctx,(const uint8_t*)input,(size_t)ilen);
+    _tr_sha1_final(&ctx,dig);
+    char* out=(char*)TAURARO_ALLOC(41); if(!out) return NULL;
+    for(int i=0;i<20;i++){out[i*2]=_tr_hex_lc[dig[i]>>4];out[i*2+1]=_tr_hex_lc[dig[i]&15];}
+    out[40]='\0'; return out;
+}
+
+/* ── Raw random bytes, hex-encoded ────────────────────────────────────────
+ * Reuses _tr_os_random (BCryptGenRandom on Windows / /dev/urandom on POSIX,
+ * PRNG fallback otherwise) — the same secure-randomness source already used
+ * by the Ed25519 signing code, and the same fallback strategy _tr_uuid_v4
+ * uses. Returned as lowercase hex (2*n chars + NUL) so it's always a clean,
+ * embedded-NUL-free `str` regardless of what byte values come out.
+ * NOTE: mirrored here from bootstrap/c/tauraro_rt.h, which had this
+ * function but this file (the one actually used to compile USER programs)
+ * didn't -- found via a real build failure ("implicit declaration of
+ * function '_tr_rand_bytes_hex'") the first time anything using
+ * std.crypto.uuid's ULID support was compiled after this file and the
+ * bootstrap copy diverged. Keep both copies in sync. */
+static inline char* _tr_rand_bytes_hex(int n) {
+    if(n<=0) return _tr_strdup("");
+    uint8_t* buf=(uint8_t*)TAURARO_ALLOC((size_t)n);
+    if(!buf) return _tr_strdup("");
+    _tr_os_random(buf,n);
+    char* out=(char*)TAURARO_ALLOC((size_t)(2*n+1)); if(!out){TAURARO_FREE(buf);return _tr_strdup("");}
+    for(int i=0;i<n;i++){out[i*2]=_tr_hex_lc[buf[i]>>4];out[i*2+1]=_tr_hex_lc[buf[i]&15];}
+    out[2*n]='\0';
+    TAURARO_FREE(buf);
+    return out;
+}
+
+/* ── Real Unix-epoch milliseconds (wall-clock, NOT monotonic) ────────────
+ * _tr_time_ms() above is QueryPerformanceCounter/CLOCK_MONOTONIC — great for
+ * measuring elapsed time, useless as a calendar timestamp (its epoch is
+ * arbitrary / boot-relative). ULID needs real Unix-epoch milliseconds.
+ * NOTE: mirrored here from bootstrap/c/tauraro_rt.h -- see the note on
+ * _tr_rand_bytes_hex just above. */
+_TR_XLINK long long _tr_epoch_ms(void) {
+#if defined(TAURARO_BARE) && !defined(__wasi__)
+    return 0LL;
+#elif defined(_WIN32)
+    FILETIME ft; GetSystemTimeAsFileTime(&ft);
+    unsigned long long t = ((unsigned long long)ft.dwHighDateTime << 32) | ft.dwLowDateTime;
+    /* FILETIME: 100ns intervals since 1601-01-01. Convert to ms since 1970-01-01. */
+    return (long long)((t / 10000ULL) - 11644473600000ULL);
+#elif defined(_TR_HAS_TIME)
+    struct timespec _ts;
+    clock_gettime(CLOCK_REALTIME, &_ts);
+    return (long long)_ts.tv_sec * 1000LL + (long long)_ts.tv_nsec / 1000000LL;
+#else
+    return (long long)time(NULL) * 1000LL;
+#endif
+}
+
 static inline char* _tr_ws_accept(char* key){
     static const char* GUID="258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
     static const char* B64="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -6552,7 +6773,12 @@ static inline char* _tr_uuid_v4(void) {
 }
 
 /* ── MD5 (compact, for legacy use) ─────────────────────────────────────── */
-static inline char* _tr_md5_hex(char* s) {
+/* Shared MD5 core, driven by an EXPLICIT length rather than strlen() --
+ * `_tr_md5_hex` (below) passes strlen(s) for ordinary C-string callers;
+ * `_tr_md5_bytes_hex` passes a caller-supplied length so raw byte buffers
+ * containing embedded NULs (e.g. UUID v3's 16-byte namespace + name) hash
+ * correctly instead of being silently truncated at the first \0. */
+static inline char* _tr_md5_hex_core(char* s, size_t ilen) {
     /* Minimal MD5; message expanded inline. */
     static const uint32_t T[64]={
         0xd76aa478,0xe8c7b756,0x242070db,0xc1bdceee,0xf57c0faf,0x4787c62a,0xa8304613,0xfd469501,
@@ -6568,11 +6794,10 @@ static inline char* _tr_md5_hex(char* s) {
                              5, 9,14,20,5, 9,14,20,5, 9,14,20,5, 9,14,20,
                              4,11,16,23,4,11,16,23,4,11,16,23,4,11,16,23,
                              6,10,15,21,6,10,15,21,6,10,15,21,6,10,15,21};
-    size_t ilen = s ? strlen(s) : 0;
     size_t padlen = ((ilen+8)/64+1)*64;
     uint8_t* msg = (uint8_t*)TAURARO_CALLOC(1,padlen);
     if(!msg) return _tr_strdup("00000000000000000000000000000000");
-    if(s) memcpy(msg,s,ilen);
+    if(s && ilen>0) memcpy(msg,s,ilen);
     msg[ilen]=0x80;
     uint64_t bits=(uint64_t)ilen*8;
     for(int i=0;i<8;i++) msg[padlen-8+i]=(uint8_t)(bits>>(uint64_t)(i*8));
@@ -6583,7 +6808,14 @@ static inline char* _tr_md5_hex(char* s) {
         for(int i=0;i<64;i++){
             uint32_t F,g2;
             if(i<16){F=(_TR_CH(B,C,D));g2=(uint32_t)i;}
-            else if(i<32){F=(D^(B&(C^D)));g2=(uint32_t)(5*i+1)%16;}
+            /* Round 2 (G function): MUST be C^(D&(B^C)) -- the compact bit
+             * trick for RFC 1321's G(x,y,z)=(x&z)|(y&~z) with (x,y,z)=(B,C,D).
+             * This previously read D^(B&(C^D)) (B and D swapped), a real,
+             * confirmed bug: it made every MD5 digest wrong (e.g. MD5("abc")
+             * returned c3ef16ee... instead of the correct 90015098...).
+             * Verified against known-answer vectors ("", "a", "abc") for
+             * both the broken and fixed formula before landing this. */
+            else if(i<32){F=(C^(D&(B^C)));g2=(uint32_t)(5*i+1)%16;}
             else if(i<48){F=(B^C^D);g2=(uint32_t)(3*i+5)%16;}
             else{F=(C^(B|(~D)));g2=(uint32_t)(7*i)%16;}
             F=F+A+T[i]+M[g2];
@@ -6599,6 +6831,12 @@ static inline char* _tr_md5_hex(char* s) {
         out[i*8+j*2]=_tr_hex_lc[byte>>4]; out[i*8+j*2+1]=_tr_hex_lc[byte&15];
     }
     out[32]='\0'; return out;
+}
+static inline char* _tr_md5_hex(char* s) {
+    return _tr_md5_hex_core(s, s ? strlen(s) : 0);
+}
+static inline char* _tr_md5_bytes_hex(char* s, int ilen) {
+    return _tr_md5_hex_core(s, ilen > 0 ? (size_t)ilen : 0);
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -7752,6 +7990,269 @@ static int64_t _tr_gpu_synchronize(void){
     if (_tr_gpu.backend==TR_GPU_OPENCL && _tr_gpu.clFinish) return _tr_gpu.clFinish(_tr_gpu.cl_q)==0?0:-1;
     return 0;
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * PROFILER (std.prof) — CPU sampling + process memory stats.
+ * ═══════════════════════════════════════════════════════════════════════════
+ * CPU profiling is STATISTICAL SAMPLING, not instrumentation: zero compiler
+ * codegen changes, near-zero overhead when off, ~1-2% when sampling at the
+ * default 1ms interval. Each sample captures the LEAF program counter only
+ * (not a full unwound call stack) -- a flat "which function was on-CPU X% of
+ * the time" profile, the same shape py-spy's/pprof's simplest mode give.
+ * Full call-graph sampling (stack unwinding per sample) is a real, deliberate
+ * gap for a future round: it needs either frame-pointer walking (unreliable
+ * under -O2, which commonly omits frame pointers) or DWARF/CFI-based
+ * unwinding (a much larger, riskier undertaking) -- leaf-only sampling ships
+ * something genuinely useful now without that risk.
+ *
+ * POSIX: SIGPROF + setitimer(ITIMER_PROF, ...) -- the signal fires ON
+ * whichever thread is actually consuming CPU time, so the handler reads its
+ * OWN interrupted PC straight from the ucontext_t signal argument. No thread
+ * suspension needed; this is the same basic mechanism gprof/perf use.
+ *
+ * Windows has no SIGPROF equivalent: a dedicated sampler thread periodically
+ * SuspendThread()s the profiled thread, reads its instruction pointer via
+ * GetThreadContext, then ResumeThread()s it. GetCurrentThread() returns a
+ * pseudo-handle only valid for self-referencing calls -- DuplicateHandle is
+ * required to get a real handle usable from another thread.
+ *
+ * Symbol resolution is best-effort and happens at REPORT time (after
+ * _tr_prof_cpu_stop(), never inside the signal handler or while a thread is
+ * suspended -- dladdr() is not guaranteed async-signal-safe, and doing
+ * meaningful work on a thread you're holding suspended is asking for a
+ * deadlock if it owned a lock the resolver needs). POSIX resolves via
+ * dladdr() (works when the binary isn't fully stripped). Windows v1
+ * deliberately does NOT link a symbol-resolution library (dbghelp) here --
+ * this session already broke CI once by assuming a library/header was
+ * universally present on every MinGW distribution when it wasn't (see the
+ * TAURARO_HAVE_REGEX history above) -- so Windows reports raw hex addresses
+ * only; post-process with addr2line/dumpbin against the same binary if you
+ * need names. An unresolved POSIX address falls back to the same raw-address
+ * form, so the two platforms degrade identically when a name isn't
+ * available, rather than Windows being a lesser case. */
+#ifndef TAURARO_BARE
+
+/* Explicit, self-contained includes (harmless to repeat if already pulled in
+ * elsewhere -- every one of these has a standard include guard) rather than
+ * relying on some other section of this file having included them first. */
+#if defined(_WIN32)
+#  ifndef WIN32_LEAN_AND_MEAN
+#    define WIN32_LEAN_AND_MEAN
+#  endif
+#  include <windows.h>
+#  include <psapi.h>
+#elif defined(__APPLE__)
+#  include <signal.h>
+#  include <sys/time.h>
+#  include <sys/resource.h>
+#  include <ucontext.h>
+#  include <dlfcn.h>
+#  include <mach/mach.h>
+#else /* Linux and other POSIX */
+#  include <signal.h>
+#  include <sys/time.h>
+#  include <sys/resource.h>
+#  include <ucontext.h>
+#  include <dlfcn.h>
+#  include <unistd.h>
+#endif
+
+#define _TR_PROF_MAX_SAMPLES 65536
+
+typedef struct { void* pc; long long count; } _TrProfBucket;
+
+static void*         _tr_prof_raw_pcs[_TR_PROF_MAX_SAMPLES];
+static volatile long  _tr_prof_raw_count = 0;
+static volatile int   _tr_prof_running = 0;
+static long long      _tr_prof_interval_us = 1000; /* default 1ms */
+
+#if defined(_WIN32)
+static HANDLE _tr_prof_target_thread = NULL;
+static HANDLE _tr_prof_sampler_thread = NULL;
+static DWORD WINAPI _tr_prof_sampler_fn(LPVOID arg) {
+    (void)arg;
+    while (_tr_prof_running) {
+        DWORD ms = (DWORD)(_tr_prof_interval_us / 1000);
+        Sleep(ms > 0 ? ms : 1);
+        if (!_tr_prof_running) break;
+        if (SuspendThread(_tr_prof_target_thread) == (DWORD)-1) continue;
+        CONTEXT ctx; memset(&ctx, 0, sizeof(ctx));
+        ctx.ContextFlags = CONTEXT_CONTROL;
+        if (GetThreadContext(_tr_prof_target_thread, &ctx)) {
+            long idx = _tr_prof_raw_count;
+            if (idx < _TR_PROF_MAX_SAMPLES) {
+#if defined(_M_X64) || defined(__x86_64__)
+                _tr_prof_raw_pcs[idx] = (void*)(uintptr_t)ctx.Rip;
+#else
+                _tr_prof_raw_pcs[idx] = (void*)(uintptr_t)ctx.Eip;
+#endif
+                _tr_prof_raw_count = idx + 1;
+            }
+        }
+        ResumeThread(_tr_prof_target_thread);
+    }
+    return 0;
+}
+_TR_XLINK void _tr_prof_cpu_start(long long interval_us) {
+    if (_tr_prof_running) return;
+    _tr_prof_interval_us = interval_us > 0 ? interval_us : 1000;
+    _tr_prof_raw_count = 0;
+    DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(),
+                     &_tr_prof_target_thread, 0, FALSE, DUPLICATE_SAME_ACCESS);
+    _tr_prof_running = 1;
+    _tr_prof_sampler_thread = CreateThread(NULL, 0, _tr_prof_sampler_fn, NULL, 0, NULL);
+}
+_TR_XLINK void _tr_prof_cpu_stop(void) {
+    if (!_tr_prof_running) return;
+    _tr_prof_running = 0;
+    if (_tr_prof_sampler_thread) { WaitForSingleObject(_tr_prof_sampler_thread, INFINITE); CloseHandle(_tr_prof_sampler_thread); _tr_prof_sampler_thread = NULL; }
+    if (_tr_prof_target_thread) { CloseHandle(_tr_prof_target_thread); _tr_prof_target_thread = NULL; }
+}
+static char* _tr_prof_symbolize(void* pc) { (void)pc; return NULL; /* see module header: no dbghelp in v1 */ }
+#else /* POSIX */
+static void _tr_prof_sigprof_handler(int sig, siginfo_t* info, void* ucontext) {
+    (void)sig; (void)info;
+    ucontext_t* uc = (ucontext_t*)ucontext;
+    void* pc = NULL;
+#if defined(__linux__) && (defined(__x86_64__) || defined(__amd64__))
+    pc = (void*)uc->uc_mcontext.gregs[REG_RIP];
+#elif defined(__linux__) && defined(__aarch64__)
+    pc = (void*)uc->uc_mcontext.pc;
+#elif defined(__linux__) && defined(__i386__)
+    pc = (void*)uc->uc_mcontext.gregs[REG_EIP];
+#elif defined(__APPLE__) && defined(__x86_64__)
+    pc = (void*)uc->uc_mcontext->__ss.__rip;
+#elif defined(__APPLE__) && defined(__aarch64__)
+    pc = (void*)uc->uc_mcontext->__ss.__pc;
+#else
+    pc = NULL; /* unrecognized arch: sampling silently captures nothing rather than guessing wrong */
+#endif
+    if (pc) {
+        long idx = _tr_prof_raw_count;
+        if (idx < _TR_PROF_MAX_SAMPLES) { _tr_prof_raw_pcs[idx] = pc; _tr_prof_raw_count = idx + 1; }
+    }
+}
+_TR_XLINK void _tr_prof_cpu_start(long long interval_us) {
+    if (_tr_prof_running) return;
+    _tr_prof_interval_us = interval_us > 0 ? interval_us : 1000;
+    _tr_prof_raw_count = 0;
+    struct sigaction sa; memset(&sa, 0, sizeof(sa));
+    sa.sa_sigaction = _tr_prof_sigprof_handler;
+    sa.sa_flags = SA_SIGINFO | SA_RESTART;
+    sigemptyset(&sa.sa_mask);
+    sigaction(SIGPROF, &sa, NULL);
+    struct itimerval it;
+    it.it_interval.tv_sec = (time_t)(_tr_prof_interval_us / 1000000);
+    it.it_interval.tv_usec = (suseconds_t)(_tr_prof_interval_us % 1000000);
+    it.it_value = it.it_interval;
+    setitimer(ITIMER_PROF, &it, NULL);
+    _tr_prof_running = 1;
+}
+_TR_XLINK void _tr_prof_cpu_stop(void) {
+    if (!_tr_prof_running) return;
+    struct itimerval it; memset(&it, 0, sizeof(it));
+    setitimer(ITIMER_PROF, &it, NULL);
+    signal(SIGPROF, SIG_IGN);
+    _tr_prof_running = 0;
+}
+static char* _tr_prof_symbolize(void* pc) {
+    Dl_info info;
+    if (dladdr(pc, &info) && info.dli_sname) return _tr_strdup(info.dli_sname);
+    return NULL;
+}
+#endif
+
+/* Aggregate raw PC samples into (pc,count) buckets, sort by count desc,
+ * format as a text report. Only ever called after _tr_prof_cpu_stop() (never
+ * while sampling is active), so it's free to malloc/symbolize/sort. */
+_TR_XLINK char* _tr_prof_cpu_report(void) {
+    long n = _tr_prof_raw_count;
+    if (n == 0) return _tr_strdup("(no CPU samples captured)\n");
+    /* Naive O(n^2) bucket aggregation -- n is bounded by _TR_PROF_MAX_SAMPLES
+     * (65536) and this runs once, off the hot path, so simplicity wins. */
+    _TrProfBucket* buckets = (_TrProfBucket*)malloc(sizeof(_TrProfBucket) * (size_t)n);
+    long nb = 0;
+    if (buckets) {
+        for (long i = 0; i < n; i++) {
+            void* pc = _tr_prof_raw_pcs[i];
+            long found = -1;
+            for (long j = 0; j < nb; j++) { if (buckets[j].pc == pc) { found = j; break; } }
+            if (found >= 0) buckets[found].count++;
+            else { buckets[nb].pc = pc; buckets[nb].count = 1; nb++; }
+        }
+        /* Insertion sort by count desc -- nb (distinct PCs) is typically small. */
+        for (long i = 1; i < nb; i++) {
+            _TrProfBucket key = buckets[i];
+            long j = i - 1;
+            while (j >= 0 && buckets[j].count < key.count) { buckets[j + 1] = buckets[j]; j--; }
+            buckets[j + 1] = key;
+        }
+    }
+    size_t cap = 256 + (size_t)nb * 128 + 64;
+    char* out = (char*)malloc(cap);
+    if (!out) { if (buckets) free(buckets); return _tr_strdup("(profile report: out of memory)\n"); }
+    size_t used = 0;
+    int w = snprintf(out + used, cap - used, "CPU profile: %ld samples, %ld distinct PCs\n", n, nb);
+    used += (w > 0) ? (size_t)w : 0;
+    for (long i = 0; i < nb && used + 200 < cap; i++) {
+        double pct = 100.0 * (double)buckets[i].count / (double)n;
+        char* sym = _tr_prof_symbolize(buckets[i].pc);
+        if (sym) {
+            w = snprintf(out + used, cap - used, "  %6.2f%%  %6lld  %s (%p)\n", pct, buckets[i].count, sym, buckets[i].pc);
+            free(sym);
+        } else {
+            w = snprintf(out + used, cap - used, "  %6.2f%%  %6lld  %p\n", pct, buckets[i].count, buckets[i].pc);
+        }
+        used += (w > 0) ? (size_t)w : 0;
+    }
+    if (buckets) free(buckets);
+    return out;
+}
+
+/* ── Process memory stats (RSS / peak RSS), in bytes; -1 if unavailable ──── */
+#if defined(_WIN32)
+_TR_XLINK long long _tr_prof_mem_rss_bytes(void) {
+    PROCESS_MEMORY_COUNTERS pmc;
+    if (GetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof(pmc))) return (long long)pmc.WorkingSetSize;
+    return -1;
+}
+_TR_XLINK long long _tr_prof_mem_peak_rss_bytes(void) {
+    PROCESS_MEMORY_COUNTERS pmc;
+    if (GetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof(pmc))) return (long long)pmc.PeakWorkingSetSize;
+    return -1;
+}
+#elif defined(__APPLE__)
+_TR_XLINK long long _tr_prof_mem_rss_bytes(void) {
+    struct mach_task_basic_info info;
+    mach_msg_type_number_t cnt = MACH_TASK_BASIC_INFO_COUNT;
+    if (task_info(mach_task_self(), MACH_TASK_BASIC_INFO, (task_info_t)&info, &cnt) == KERN_SUCCESS)
+        return (long long)info.resident_size;
+    return -1;
+}
+_TR_XLINK long long _tr_prof_mem_peak_rss_bytes(void) {
+    struct rusage ru;
+    if (getrusage(RUSAGE_SELF, &ru) == 0) return (long long)ru.ru_maxrss; /* already bytes on macOS */
+    return -1;
+}
+#else /* Linux and other POSIX */
+_TR_XLINK long long _tr_prof_mem_rss_bytes(void) {
+    FILE* f = fopen("/proc/self/statm", "r");
+    if (!f) return -1;
+    long long pages = 0, rss_pages = 0;
+    int ok = fscanf(f, "%lld %lld", &pages, &rss_pages);
+    fclose(f);
+    if (ok != 2) return -1;
+    long page_sz = sysconf(_SC_PAGESIZE);
+    return rss_pages * (long long)page_sz;
+}
+_TR_XLINK long long _tr_prof_mem_peak_rss_bytes(void) {
+    struct rusage ru;
+    if (getrusage(RUSAGE_SELF, &ru) == 0) return (long long)ru.ru_maxrss * 1024LL; /* KB on Linux */
+    return -1;
+}
+#endif
+
+#endif /* !TAURARO_BARE (profiler needs real OS services: threads/signals/timers/proc info) */
 
 
 #endif /* !TAURARO_NO_OS && !TAURARO_KERNEL && !__wasi__ */

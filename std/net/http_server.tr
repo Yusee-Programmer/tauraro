@@ -996,11 +996,21 @@ extend HttpServer:
     # treat that as "no more requests on this connection".
     pub def read_next(self, stream: TcpStream) -> HttpRequest:
         mut raw = HttpServer._read_full(self, stream)
-        if Str.len(raw) == 0 or Str.index_of(raw, "\r\n\r\n") < 0:
-            unsafe: _tr_c_free(raw as Pointer[char])
+        if Str.len(raw) == 0:
+            # _read_full's only empty-length return is TcpStream.recv()'s
+            # closed-connection case, which is the borrowed "" literal (see
+            # recv_async's close path in std/net/tcp.tr) - not a heap
+            # allocation, so it must NOT be passed to _tr_c_free (that would
+            # free a pointer into the binary's static data and corrupt the
+            # heap on the very next unrelated malloc).
             mut empty = HttpRequest.init()
             empty.method = ""
             return empty
+        if Str.index_of(raw, "\r\n\r\n") < 0:
+            unsafe: _tr_c_free(raw as Pointer[char])
+            mut empty2 = HttpRequest.init()
+            empty2.method = ""
+            return empty2
         mut req = HttpParser.parse(raw)
         unsafe: _tr_c_free(raw as Pointer[char])
         # Flag oversized requests from the (already-parsed) Content-Length header
@@ -1019,7 +1029,12 @@ extend HttpServer:
     # closed or sent garbage (caller should stop serving it), true otherwise.
     pub def read_next_into(self, stream: TcpStream, req: HttpRequest) -> bool:
         mut raw = HttpServer._read_full(self, stream)
-        if Str.len(raw) == 0 or Str.index_of(raw, "\r\n\r\n") < 0:
+        if Str.len(raw) == 0:
+            # See the identical comment in read_next() above: this is the
+            # borrowed "" literal from a closed connection, not an owned
+            # heap allocation - do not _tr_c_free it.
+            return false
+        if Str.index_of(raw, "\r\n\r\n") < 0:
             unsafe: _tr_c_free(raw as Pointer[char])
             return false
         HttpParser.parse_into(req, raw)
