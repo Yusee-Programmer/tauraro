@@ -571,17 +571,20 @@ jobs:
           path: tauraroc-${{ matrix.platform }}.sha256
 
   # -----------------------------------------------------------------
-  # Termux / Android build: a STATICALLY-linked aarch64 Linux binary.
+  # Android build: a STATICALLY-linked aarch64 Linux binary.
   #
   # Why this needs its own job instead of just using the linux-arm64 matrix
   # artifact above: that build is dynamically linked against Ubuntu's own
   # glibc, with a hardcoded ELF PT_INTERP pointing at Ubuntu's dynamic linker
-  # path (e.g. /lib/ld-linux-aarch64.so.1). Termux's filesystem is entirely
-  # under /data/data/com.termux/files/usr — there is no /lib/ld-linux-...
-  # there, so the dynamically-linked binary fails with exactly the
-  # "linker/loader" errors this job exists to fix. A `-static` build has NO
-  # PT_INTERP at all, so it runs on any compatible-kernel aarch64 Linux
-  # userspace (Termux/Android included) regardless of filesystem layout.
+  # path (e.g. /lib/ld-linux-aarch64.so.1). No Android Linux environment has
+  # that path — Termux's filesystem is entirely under
+  # /data/data/com.termux/files/usr, and proot-based distros (UserLAnd,
+  # Andronix, GNURoot, ...) have their own equally nonstandard layout — so a
+  # dynamically-linked binary fails with exactly the "linker/loader" errors
+  # this job exists to fix, no matter which app is hosting the shell. A
+  # `-static` build has NO PT_INTERP at all, so it runs on any
+  # compatible-kernel aarch64 Linux userspace REGARDLESS of filesystem
+  # layout — Termux, any proot-based distro, or anything else.
   #
   # Why NOT musl (zig's usual cross-compile path) and NOT zig at all:
   #   - musl lacks full `ucontext.h` (makecontext/swapcontext) support, which
@@ -632,7 +635,9 @@ jobs:
           LDFLAGS: "-lm -lpthread -lrt"
           # TAURARO_STATIC (scripts/build.sh): passes --static to tauraroc
           # itself, so the produced binary has no ELF PT_INTERP at all —
-          # this is the entire fix for Termux's "linker/loader issues".
+          # this is the entire fix for Android's "linker/loader issues"
+          # (Termux, proot-based distros, or any other way of hosting a
+          # Linux userspace on the device).
           TAURARO_STATIC: "1"
         run: |
           set -e
@@ -653,7 +658,7 @@ jobs:
             ldd tauraroc
             exit 1
           fi
-          echo "OK: no dynamic dependencies — safe to run under Termux's own filesystem layout"
+          echo "OK: no dynamic dependencies — safe to run under any Android Linux environment's own filesystem layout (Termux, a proot-based distro, ...)"
 
       - name: Run regression test suite against the static binary
         shell: bash
@@ -672,13 +677,14 @@ jobs:
       # "linux-arm64"'s zig is aarch64, the exact arch this job runs on, so
       # this normally CACHE-HITS the copy the main `build` job's own
       # ubuntu-22.04-arm leg already populated, no second ~200 MB download).
-      # Without this, this build's tauraroc would have no --backend llvm
-      # and no --target cross-compilation at all inside Termux, since
-      # Termux ships neither a system clang/llvm nor per-target sysroots by
-      # default - `zig cc` is what makes both self-contained. zig's own
-      # official Linux releases are static (musl-linked) binaries, so the
-      # bundled zig itself has the same "runs under Termux" property this
-      # whole job is built around for tauraroc.
+      # Without this, this build's tauraroc would have no --backend llvm and
+      # no --target cross-compilation at all in the common case (Termux ships
+      # neither a system clang/llvm nor per-target sysroots by default, and a
+      # minimal proot-based distro may not either) - `zig cc` is what makes
+      # both self-contained regardless of what the host environment provides.
+      # zig's own official Linux releases are static (musl-linked) binaries,
+      # so the bundled zig itself has the same "runs under any Android Linux
+      # environment" property this whole job is built around for tauraroc.
       # -------------------------------------------------------
       - name: Cache bundled zig
         id: cache-zig
