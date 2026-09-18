@@ -16,6 +16,12 @@ spec, automated regression suite + CI, incremental compilation, and a batch of
 codegen-safety / diagnostics / stdlib / tooling improvements). Entries will be
 added here as each phase lands.
 
+## [0.0.9]
+
+**Correctness and reliability hardening across concurrency, generics, and the
+standard library, plus a new profiling module and a substantially more
+trustworthy CI pipeline.** Full notes in [`note.md`](note.md).
+
 ### Fixed
 - **`Type.auto()`-style zero-arg static factory constructors (e.g.
   `ThreadPool.auto()`) never had their return type inferred** — confirmed
@@ -312,6 +318,44 @@ added here as each phase lands.
   this, but `scripts/regen-bootstrap.ps1` never did, so a bootstrap
   regenerated on Windows silently omitted it. Added the missing file and
   brought the PowerShell script to parity with the shell one.
+- **`build-termux-android` and the `benchmark` CI job were silently
+  skipped whenever any *unrelated* leg of the 4-way build matrix failed**
+  (GitHub Actions' default `needs` condition is `success()` on the whole
+  matrix job, not the one leg each of these jobs actually depends on).
+  Both now run whenever the workflow itself wasn't cancelled, so a flaky
+  macOS/Windows leg can no longer hide a real Android or benchmark
+  regression.
+- **`TAURARO_HAVE_REGEX`'s MinGW branch assumed `__MINGW32__`/
+  `__MINGW64__` implies `<regex.h>` exists** — broke CI outright the first
+  time it ran on a MinGW distribution without the header. Now gated on
+  `__has_include(<regex.h>)`.
+- **Windows `-lsystre -ltre` linking was guessed from a filename
+  convention** (added whenever a regex module was compiled), which failed
+  on a MinGW distribution that has `<regex.h>` but not those specific
+  import libraries. Replaced with a real standalone compile+link probe
+  that only adds the flags when they actually resolve.
+- **The real, final Windows regex bug**: `std.regex`'s `Captures.matched()`/
+  `.len()` dereferenced a null pointer when the underlying compile had
+  failed or regex support wasn't available at all, crashing with a
+  bounds-check panic ("Index 0 out of bounds") instead of the module's own
+  documented "safe no-op" contract. This was the true root cause behind
+  the Windows CI investigation above — GitHub's `windows-latest` runner
+  image was confirmed (via a temporary diagnostic CI step) to not have a
+  stable MinGW toolchain composition across different runs of the same
+  runner label, so relying on `<regex.h>` always being present or always
+  absent was never going to be reliable. `Regex.available()` now lets
+  callers detect this and `tests/lang/30_regex.tr` skips cleanly instead
+  of reporting spurious failures.
+- **A real Linux-only `MemProf.peak_rss_bytes()` race**: it compared
+  against `getrusage().ru_maxrss` while `rss_bytes()` reads
+  `/proc/self/statm`'s current RSS — two independently-updated kernel
+  counters that can transiently disagree right after a burst of
+  allocation. Fixed by folding the current reading into the returned peak.
+- An over-strict `CpuProfiler` test assertion required the sampling
+  summary header unconditionally; statistical sampling can legitimately
+  capture zero samples during a short run on a contended CI runner, and
+  the runtime already has a distinct, well-formed message for that case —
+  the test now accepts either.
 
 ### Changed
 - **Async/await is now a green-thread runtime.** `async def` / `await` no
@@ -414,6 +458,36 @@ added here as each phase lands.
   `tauraroc --run`.
 - CI now runs the regression suite on every platform after building
   `tauraroc` (`.github/workflows/build.yml`).
+- **`std.prof`**: a new profiling module. `CpuProfiler` (statistical CPU
+  sampling — `SIGPROF`/`ITIMER_PROF` on POSIX, a `SuspendThread`-based
+  sampler thread on Windows), `MemProf` (process RSS/peak RSS), and
+  `Counter`/`Gauge`/`Histogram`/`Registry` metrics. New `tauraroc --prof`
+  CLI flag auto-instruments a program's `main()` with CPU sampling and
+  prints a flat profile to stderr on exit — zero source changes required.
+- **`std.gpu`**: portable GPU compute — a runtime device API
+  (`Device`/`Buffer[T]`/`Module`/`Kernel`/`Dim3`) backed by CUDA/OpenCL/CPU
+  via runtime `dlopen` (no GPU SDK needed to build), plus `@kernel`-
+  annotated functions compiling to real PTX/SPIR-V. GPU program linking is
+  now automatic.
+- **`--target uefi-x64`**: a turnkey UEFI target — the compiler generates
+  its own UEFI boot glue, no hand-written stub required. Real
+  keyboard/mouse input and a small native UI "chrome" layer for
+  interactive UEFI applications.
+- **`std.cli`**: clap-style CLI parsing — flags, typed options,
+  positionals, subcommands, auto-generated `--help` (`Cli`/`CliArgs`).
+- **`std.log`**: leveled structured logging — text/JSON formats,
+  stdout/file sinks, per-target filtering (`Logger`/`Fields`).
+- **`std.encoding.yaml`**: a YAML parser and serializer (block/flow
+  styles, anchors).
+- **`std.regex`** gains capture groups (numbered and named, via
+  `(?<name>...)`/`(?P<name>...)`), `Match`/`Captures` objects, and
+  `$1`/`$name`/`$$` backreference replace; `Regex.available()` lets
+  callers detect platforms with no POSIX `<regex.h>` at all.
+- **`std.crypto`** gains UUID v3/v5 (namespace + name based) and ULID
+  (including a monotonic variant); **MD5 fixed** — the round-2 (`G`)
+  function had its `B`/`D` operands transposed, so every previous digest
+  was wrong for every input. Verified against RFC 4122 known-answer
+  vectors.
 
 ## [0.0.8]
 

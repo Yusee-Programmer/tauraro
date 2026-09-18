@@ -1,6 +1,6 @@
 # std.encoding
 
-Data encoding and decoding: JSON, Base64, and hexadecimal.
+Data encoding and decoding: JSON, TOML, YAML, Base64, and hexadecimal.
 
 ## Import
 
@@ -10,6 +10,8 @@ from std.encoding import JsonDoc, JsonRef, JsonWriter, Json, Base64, Hex
 
 # Or import specific sub-modules
 from std.encoding.json   import JsonDoc, JsonRef, JsonWriter, Json
+from std.encoding.toml   import TomlValue, Toml
+from std.encoding.yaml   import YamlValue, Yaml
 from std.encoding.base64 import Base64
 from std.encoding.hex    import Hex
 ```
@@ -145,6 +147,61 @@ def main():
     w.end_object()
     print(w.finish())   # {"name":"Tauraro","stable":true}
 ```
+
+---
+
+## TOML — `std.encoding.toml`
+
+A TOML parser and serializer: comments, bare/quoted keys, basic & literal
+strings, `_`-separated integers, floats, booleans, arrays, inline tables,
+and `[table]`/`[a.b.c]` nested table headers.
+
+```tauraro
+from std.encoding.toml import Toml, TomlValue
+
+mut doc = Toml.parse("name = \"Tauraro\"\nversion = 9\n\n[deps]\nfoo = \"1.0\"\n")
+print(doc.obj_get("name").get_str())            # "Tauraro"
+print(doc.obj_get("deps").obj_get("foo").get_str())  # "1.0"
+
+print(Toml.stringify(doc))   # round-trips back to TOML text
+```
+
+**`TomlValue`** is a tagged tree node (`@value_type`), mirroring
+`JsonDoc`'s shape:
+
+| Method | Description |
+|---|---|
+| `.is_none()` / `.is_bool()` / `.is_int()` / `.is_float()` / `.is_str()` / `.is_array()` / `.is_table()` | type check |
+| `.get_bool()` / `.get_int()` / `.get_float()` / `.get_str()` | value accessors |
+| `.array_len()` / `.array_get(i: int)` | array access |
+| `.obj_get(key: str)` | table field lookup (a `TOML_TABLE` value) |
+| `TomlValue.init_bool/_int/_float/_str/_array/_table(...)` | build a value tree to pass to `Toml.stringify` |
+
+**`Toml`** static helpers: `Toml.parse(src: str) -> TomlValue`,
+`Toml.stringify(v: TomlValue) -> str`.
+
+---
+
+## YAML — `std.encoding.yaml`
+
+A YAML parser and serializer: block and flow styles, comments, anchors.
+Same tagged-tree shape as TOML/JSON.
+
+```tauraro
+from std.encoding.yaml import Yaml, YamlValue
+
+mut doc = Yaml.parse("name: Tauraro\nitems:\n  - a\n  - b\n")
+print(doc.obj_get("name").get_str())             # "Tauraro"
+print(doc.obj_get("items").array_get(0).get_str())  # "a"
+
+print(Yaml.stringify(doc))   # round-trips back to YAML text
+```
+
+**`YamlValue`** methods mirror `TomlValue`'s (`.is_null()`/`.is_bool()`/
+.../`.obj_get(key)`/`.array_get(i)`/`.array_len()`), plus
+`YamlValue.init_null()` for an explicit YAML `null`. **`Yaml`** static
+helpers: `Yaml.parse(src: str) -> YamlValue`, `Yaml.stringify(v: YamlValue)
+-> str`.
 
 ---
 

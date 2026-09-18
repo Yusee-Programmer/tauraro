@@ -101,6 +101,7 @@ tauraroc app.tr --target aarch64-linux-musl --static # fully static ARM64 binary
 | **Apple mobile** | `ios`, `ios-sim` |
 | **WebAssembly** | `wasm`, `wasm-wasi` |
 | **Bare-metal** | `embedded-arm`, `embedded-arm64`, `embedded-riscv32`, `embedded-riscv64` |
+| **UEFI** | `uefi-x64` — turnkey: the compiler generates its own UEFI boot glue, pair with `--freestanding` for a self-contained `.efi` binary, no `--emit-ld`/hand-written stub needed |
 
 Or pass a **raw LLVM triple**: `--target aarch64-linux-gnu`, `--target
 x86_64-linux-musl`, `--target aarch64-linux-android34`, etc.

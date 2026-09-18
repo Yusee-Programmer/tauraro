@@ -401,7 +401,6 @@ __attribute__((hot)) bool write_elf_object(TrStr out_path, List_ptr* funcs, List
     _tr_obj_release(strtab, _trdrop_ByteBuf);
     _tr_obj_release(rela, _trdrop_ByteBuf);
     _tr_obj_release(shstr, _trdrop_ByteBuf);
-    _tr_obj_release(out, _trdrop_ByteBuf);
     return ByteBuf_write_file(out, out_path);
 }
 

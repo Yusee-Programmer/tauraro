@@ -20,7 +20,7 @@ git history are the precedent for this).
 ## Pre-0.1 policy (current)
 
 Tauraro is **pre-0.1** — still in the earliest `0.0.x` phase (currently
-`v0.0.8`). Per common pre-1.0 convention (and explicitly *not* full SemVer yet,
+`v0.0.9`). Per common pre-1.0 convention (and explicitly *not* full SemVer yet,
 since SemVer reserves `0.x` for "anything may change"):
 
 - **Any version bump may contain breaking changes** to the language grammar,
