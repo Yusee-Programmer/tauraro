@@ -645,6 +645,18 @@ pub class CGenerator:
 
         # User-defined generic class takes precedence over built-in Vec/Map/List
         # Exclude built-in concurrency types - they always map to their runtime _Tr* handles
+        #
+        # [bug2.txt BUG A/B, DEFERRED -- not fixed this session] A user/stdlib class
+        # literally named Vec/Map/Dict/List (e.g. std/core/map.tr's own from-scratch
+        # `pub class Map[K, V]`) is UNCONDITIONALLY excluded here, even when a real,
+        # separate class of that name exists -- an arity-based disambiguation
+        # (exclude only when the real class's generics.len != this usage's args.len)
+        # was attempted and reverted after a CONFIRMED regression: this compiler's
+        # OWN source uses the builtin 2-arg `Map[K, V]` shorthand legitimately
+        # (src/codegen/c.tr's own `functions: Map[str, HirFunction]` field), the
+        # exact same arity a real 2-generic Map[K,V] class has -- arity alone
+        # cannot safely disambiguate them. See _is_real_generic_class_by_arity
+        # (below, permanently inert/always-false) for the full writeup.
         if self.classes.contains(n) and n != "Vec" and n != "Map" and n != "Dict" and n != "List" and not self.is_rt_concurrency_type(n):
             mut ucls = self.classes.get(n)
             mut is_val = self.value_types.contains(n)
@@ -936,6 +948,11 @@ pub class CGenerator:
     # ensure_mono's `cls.name + "_" + type_args_suffix(args)`. Used so SAutoDrop's free/
     # drop call targets the concrete instance, not the (undefined) generic template.
     pub def mono_cprefix(self, t: AstType) -> str:
+        # Guard against the builtin Map/Dict/List/Vec shorthand (e.g. `Map[int]`,
+        # 1 arg): only a real class with MATCHING arity (see
+        # _is_real_generic_class_by_arity) gets its mono C prefix synthesized here.
+        if (t.name == "Vec" or t.name == "Map" or t.name == "Dict" or t.name == "List") and not self._is_real_generic_class_by_arity(t.name, t.args.len):
+            return t.name
         if self.classes.contains(t.name) and t.args.len > 0:
             return t.name + "_" + self.type_args_suffix(t.args)
         return t.name
@@ -945,11 +962,18 @@ pub class CGenerator:
     # un-annotated `mut h = Holder[int].make(5)` has no type args on the SLet type NOR the
     # call result, so fall back to the factory RECEIVER's type args (`Holder[int]`).
     pub def capture_local_mono(self, name: str, ty: AstType, v: Pointer[HirExpr]):
+        # Never record a class_local_mono entry for the BUILTIN Map/Dict/List/Vec
+        # shorthand (e.g. `Map[int]`, 1 arg, not a real matching-arity class) --
+        # doing so would make SAutoDrop's `not self.class_local_mono.contains(adn)`
+        # guard (see the Dict/Map/Set + List/Vec SAutoDrop branches) wrongly skip
+        # the correct builtin free path for a genuine builtin-dict/list local.
+        if (ty.name == "Vec" or ty.name == "Map" or ty.name == "Dict" or ty.name == "List") and not self._is_real_generic_class_by_arity(ty.name, ty.args.len): return
         if self.classes.contains(ty.name) and ty.args.len > 0:
             self.class_local_mono.insert(name, self.mono_cprefix(ty))
             return
         if v as usize != 0 as usize:
             mut vt = hir_expr_type(v)
+            if (vt.name == "Vec" or vt.name == "Map" or vt.name == "Dict" or vt.name == "List") and not self._is_real_generic_class_by_arity(vt.name, vt.args.len): return
             if self.classes.contains(vt.name) and vt.args.len > 0:
                 self.class_local_mono.insert(name, self.mono_cprefix(vt))
                 return
@@ -1070,9 +1094,6 @@ pub class CGenerator:
         mut _cmb_obuf  = self.buf
         mut _cmb_osbuf = self.struct_buf
         mut _cmb_opbuf = self.proto_buf
-        self.buf        = self.fn_mono_body
-        self.struct_buf = self.fn_mono_body
-        self.proto_buf  = self.fn_mono_body
         while mi < cls.methods.len:
             mut m = cls.methods.get(mi)
             mut old_class = self.cur_class
@@ -1114,10 +1135,31 @@ pub class CGenerator:
             self.seed_params(m)
             self.cur_self_is_ptr = self.value_types.contains(mono_name) and self.vt_method_mutates_self(m)
             mut sig = self.get_inline_attrs(m) + self.gen_func_sig(m, mono_name)
+            # Body -> an ISOLATED builder, appended to fn_mono_body only when COMPLETE.
+            # Same fix/rationale as ensure_mono_func_n's identical isolation (same
+            # file): writing directly into the SHARED self.fn_mono_body here nested
+            # a called generic free function's/method's own complete prototype+body
+            # (emitted re-entrantly via ensure_mono_func_n/ensure_mono while THIS
+            # method's body was only partially written) into the middle of this
+            # method's still-open `{ ... }` — a confirmed corruption (e.g. a generic
+            # method calling a generic free function `_hash_bytes[K](...)` spliced
+            # `_hash_bytes__MONO_str`'s whole definition between this method's `{`
+            # and its first real statement: "invalid storage class for function").
+            # Isolating this method's own body avoids interleaving; the nested
+            # mono's own body still lands in fn_mono_body BEFORE this append, so
+            # ordering (nested defined before its caller) is preserved.
+            mut mono_method_body_sb = StringBuilder.init(1024)
+            self.buf        = mono_method_body_sb
+            self.struct_buf = mono_method_body_sb
+            self.proto_buf  = mono_method_body_sb
             self.w(sig + " {\n")
             self.gen_func_body(m.body, 1)
             self.cur_self_is_ptr = old_self_is_ptr
             self.w("}\n\n")
+            self.fn_mono_body.append(mono_method_body_sb.to_string().as_str())
+            self.buf        = self.fn_mono_body
+            self.struct_buf = self.fn_mono_body
+            self.proto_buf  = self.fn_mono_body
             self.cur_class = old_class
             self.cur_func  = old_func
             self.cur_throws_ty = old_throws
@@ -1128,7 +1170,11 @@ pub class CGenerator:
             self.coll_local_strval = old_coll_local_strval
             self.coll_local_vtcoll = old_coll_local_vtcoll
             mi = mi + 1
-        self.fn_mono_body = self.buf
+        # Each iteration above already appends its isolated body into
+        # self.fn_mono_body directly and restores self.buf to point at it, so
+        # (unlike before this fix) there's nothing further to save back here --
+        # self.fn_mono_body is already fully up to date even when cls.methods
+        # is empty (zero iterations: self.buf/fn_mono_body were never touched).
         self.buf        = _cmb_obuf
         self.struct_buf = _cmb_osbuf
         self.proto_buf  = _cmb_opbuf
@@ -2868,7 +2914,7 @@ pub class CGenerator:
 
     pub def mono_cls_name_for(self, ty: AstType) -> str:
         mut cn: str = ty.name
-        if self.classes.contains(cn) and cn != "Vec" and cn != "Map" and cn != "Dict" and cn != "List":
+        if self.classes.contains(cn) and (not (cn == "Vec" or cn == "Map" or cn == "Dict" or cn == "List") or self._is_real_generic_class_by_arity(cn, ty.args.len)):
             mut ucls = self.classes.get(cn)
             if ucls.generics.len > 0 and ty.args.len > 0:
                 mut sfx = self.type_args_suffix(ty.args)
@@ -3246,6 +3292,67 @@ pub class CGenerator:
             if ty.args.len > 0 and self.is_heap_class_tn(ty.args.get(0).read().name):
                 return "_tr_pset_free_obj(" + fld_c + ", " + self.obj_drop_fn(ty.args.get(0).read().name) + ")"
             return ""
+        return ""
+
+    # [REVERTED / deferred -- see bug2.txt BUG A/B final writeup] This helper
+    # was an attempt to let a REAL user/stdlib generic class literally named
+    # Map/Dict/List/Vec (e.g. std/core/map.tr's own from-scratch
+    # `pub class Map[K, V]`) be distinguished from the BUILTIN
+    # Map/Dict/List/Vec collection shorthand by comparing the usage's type-
+    # arg COUNT against the real class's declared generic-param count.
+    #
+    # This is UNSAFE and was reverted after a confirmed regression: it is
+    # NOT just List/Vec (both always 1 arg, ambiguous with a real 1-generic
+    # class) that collides -- Map/Dict ALSO collide at 2 args. The compiler's
+    # OWN source (src/codegen/c.tr's `functions: Map[str, HirFunction]`,
+    # src/bindgen.tr's many `Map[str, bool]` locals/fields/params) uses the
+    # BUILTIN 2-arg Map[K, V] shorthand (str/int key, explicit value type,
+    # including object-valued dicts) extensively and legitimately -- these
+    # are NOT std/core/map.tr's real class, but have the exact same arity
+    # (2) as a genuine `Map[str, int]` usage of the real class. Turning this
+    # helper "on" (return self.classes.get(n).generics.len == arg_count for
+    # Map/Dict) broke the compiler's OWN self-hosting build
+    # (`bootstrap/c/` regen from a compiler built with this helper active
+    # failed to compile: `Map_str_HirFunction__rehash` mono'd from
+    # std/core/map.tr's real (but separately broken, see BUG C) class
+    # instead of the intended builtin str-keyed object-valued dict) --
+    # confirmed via a from-scratch `gcc -Ibootstrap/c bootstrap/c/*.c` build
+    # after `regen-bootstrap.ps1`, not merely a test-suite failure.
+    #
+    # There is no syntactic arity-only signal that safely distinguishes
+    # "Map[K, V] meaning the real class" from "Map[K, V] meaning the builtin
+    # str/int-keyed dict with an explicit value type" -- both are always
+    # exactly N args for whatever N the real class happens to declare.
+    # Always returns false (fully inert) so every call site below falls back
+    # to its PRE-EXISTING (unconditional builtin-shorthand) behavior --
+    # bug2.txt's BUG A/B (Map/Dict/List/Vec name-shadowing a real class) is
+    # therefore NOT fixed this session; kept as a documented, deferred gap
+    # (see this session's final report) rather than shipped with a
+    # confirmed self-hosting-breaking regression.
+    pub def _is_real_generic_class_by_arity(self, n: str, arg_count: int) -> bool:
+        return false
+
+    # The element-suffix a List[T]/Vec[T] field's type maps to, RESTRICTED to the
+    # suffixes the runtime's `_tr_list_clone_<sfx>` family (runtime/tauraro_rt.h)
+    # actually provides: i64, f64, TrStr (str elements), ptr. Used by the
+    # field-to-field List/Vec UAF fix (SAssign, EPropAccess target) to decide
+    # whether a genuine deep-clone retain is possible for this element type.
+    # "ptr" is DELIBERATELY EXCLUDED here even though _tr_list_clone_ptr exists:
+    # list_elem_suffix's "ptr" bucket is ambiguous -- it's the catch-all for BOTH
+    # a genuine non-owning raw-pointer element AND a heap-CLASS element (needing
+    # a per-element retain via List_ptr_free_obj's drop-fn pairing, not a bare
+    # pointer copy), and _tr_list_clone_ptr only does a bare pointer copy (no
+    # retain) -- unsafe to use blindly for a class element. Returns "" when the
+    # element type isn't one of the safe, unambiguous cases (i64/f64/str), so the
+    # caller falls back to the pre-existing (still-aliasing, not newly broken)
+    # behavior rather than emitting a call to a nonexistent/unsafe clone helper.
+    pub def _list_clone_elem_suffix(self, ty: AstType) -> str:
+        if ty.name != "List" and ty.name != "Vec": return ""
+        if ty.args.len == 0: return ""
+        mut et = ty.args.get(0).read().name
+        if _is_str_type(et): return "TrStr"
+        mut sfx = self.list_elem_suffix(et)
+        if sfx == "i64" or sfx == "f64": return sfx
         return ""
 
     pub def is_heap_class_tn(self, tn: str) -> bool:
@@ -4295,7 +4402,7 @@ pub class CGenerator:
                 # call to an undeclared function instead of allocating the real type.
                 mut n = n0
                 if self.type_subst.contains(n): n = self.resolve_generic_tyname(n)
-                if self.classes.contains(n) and n != "Vec" and n != "Map" and n != "Dict" and n != "List":
+                if self.classes.contains(n) and (not (n == "Vec" or n == "Map" or n == "Dict" or n == "List") or self._is_real_generic_class_by_arity(n, ident_ty.args.len)):
                     mut ucls = self.classes.get(n)
                     # Value type (@value_type): construct on the STACK by value, no
                     # heap allocation, no refcount. Resolve the monomorphized name
@@ -5927,8 +6034,11 @@ pub class CGenerator:
         if method == "get_index" and self.has_method(class_name, "__getitem__") and args.len > 0:
             return self.cls_method_c_call(class_name, "__getitem__", obj_s, self.gen_args(args))
 
-        # User-defined generic class: dispatch through monomorphized name
-        if self.classes.contains(class_name) and class_name != "Vec" and class_name != "Map" and class_name != "Dict" and class_name != "List":
+        # User-defined generic class: dispatch through monomorphized name.
+        # A real class literally named Vec/Map/Dict/List is included here (not
+        # excluded) when its generic-param count matches this receiver's
+        # type-arg count -- see _is_real_generic_class_by_arity.
+        if self.classes.contains(class_name) and (not (class_name == "Vec" or class_name == "Map" or class_name == "Dict" or class_name == "List") or self._is_real_generic_class_by_arity(class_name, hir_expr_type(obj).args.len)):
             mut ucls = self.classes.get(class_name)
             if ucls.generics.len > 0:
                 if hir_expr_type(obj).args.len > 0:
@@ -5984,8 +6094,12 @@ pub class CGenerator:
                         ms_g = ms_g + ", " + self.gen_args(args)
                     return ms_g + ")"
 
-        # Non-generic user class dispatch
-        if self.classes.contains(class_name) and class_name != "Vec" and class_name != "Map" and class_name != "Dict" and class_name != "List":
+        # Non-generic user class dispatch. Same arity-aware guard as the generic
+        # branch just above (see _is_real_generic_class_by_arity) -- in practice a
+        # real ARITY-MATCHED Map/Dict/List/Vec class always has generics.len > 0
+        # and already returns inside that branch, but keeping this guard
+        # consistent avoids a latent gap if that assumption ever changes.
+        if self.classes.contains(class_name) and (not (class_name == "Vec" or class_name == "Map" or class_name == "Dict" or class_name == "List") or self._is_real_generic_class_by_arity(class_name, hir_expr_type(obj).args.len)):
             # Generic METHOD (its own `[T]`): monomorphize per inferred type arg and
             # dispatch to the specialized copy (like a generic free function, but with self).
             # Only when the ENCLOSING CLASS ITSELF is non-generic (`Wrapper.echo[T]` on a
@@ -6109,7 +6223,15 @@ pub class CGenerator:
                 if pty.args.len > 0: elem_sfx = self.list_elem_suffix(pty.args.get(0).read().name)
             case _: pass
 
-        # List[T] / Vec[T] method dispatch (Vec maps to List in the C runtime)
+        # List[T] / Vec[T] method dispatch (Vec maps to List in the C runtime).
+        # UNLIKE Map/Dict (see _is_real_generic_class_by_arity's own comment for
+        # the full rationale), List/Vec do NOT get an arity-based real-class guard
+        # here: the builtin List/Vec shorthand is ALSO always exactly 1 type arg
+        # (the element type), the SAME arity a real 1-generic class Vec[T]/List[T]
+        # would have (e.g. std/core/vec.tr's own class Vec[T]) -- arity alone
+        # cannot disambiguate them. Applying one caused a confirmed regression
+        # (std/encoding/json.tr's builtin Vec[bool] field wrongly dispatching to
+        # std/core/vec.tr's real Vec[T] class's monomorphized methods).
         mut is_list_vec: bool = class_name == "List" or class_name == "Vec" or (class_name == "int" and (method == "append" or method == "push" or method == "pop" or method == "set" or method == "get" or method == "free" or method == "contains"))
         if not is_list_vec and class_name as usize != 0 as usize:
             mut cp2 = class_name as Pointer[char]
@@ -6342,8 +6464,19 @@ pub class CGenerator:
             if method == "free":
                 return sfn + "free(" + obj_s + ")"
 
-        # Map/Dict method dispatch
-        mut is_map_dict: bool = class_name == "Map" or class_name == "Dict" or class_name == "TrMap"
+        # Map/Dict method dispatch.
+        # [bug2.txt BUG A, DEFERRED] An earlier version of this guard tried to
+        # exclude a real class literally named Map/Dict (matching arity) from
+        # the builtin path here -- reverted (see _is_real_generic_class_by_arity's
+        # doc comment, same file, for the full rationale: this compiler's OWN
+        # `self.classes: Map[str, ClassDef]` field, a legitimate 2-arg BUILTIN
+        # object-valued dict, has the same arity as a real class and was wrongly
+        # redirected, breaking self-hosting). Kept as an explicit `false` call
+        # through the shared (permanently inert) helper rather than a bare
+        # `false` literal, so re-enabling the helper later re-enables this site
+        # too, automatically, with no separate edit needed here.
+        mut _md_is_real_cls = self._is_real_generic_class_by_arity(class_name, hir_expr_type(obj).args.len)
+        mut is_map_dict: bool = (class_name == "Map" or class_name == "Dict" or class_name == "TrMap") and not _md_is_real_cls
         if not is_map_dict and class_name as usize != 0 as usize:
             mut cp = class_name as Pointer[char]
             if cp.offset(0).read() as int == 77 and cp.offset(1).read() as int == 97 and cp.offset(2).read() as int == 112 and cp.offset(3).read() as int == 95:
@@ -8362,6 +8495,38 @@ pub class CGenerator:
                                         _assign_rhs = "_tr_str_retain(" + _assign_rhs + ")"
                                     case _: pass
                         case _: pass
+                elif (hir_expr_type(t).name == "List" or hir_expr_type(t).name == "Vec") and hir_expr_type(t).args.len > 0 and self._list_clone_elem_suffix(hir_expr_type(t)) != "":
+                    # [UAF, DEFERRED] `objA.field = objB.field` on a List[T]/Vec[T] field
+                    # (T a plain value type -- see _list_clone_elem_suffix) is a genuine,
+                    # narrow use-after-free: the builtin List/Vec runtime handle carries no
+                    # refcount header, so a plain pointer copy (below) makes both fields
+                    # alias the same heap buffer, and the moment the SOURCE object drops,
+                    # the target field dangles (found building tauregex: Captures._starts/
+                    # _ends aliased Matcher.caps_start/caps_end, freed the instant Matcher
+                    # went out of scope).
+                    #
+                    # A deep-copy-via-_tr_list_clone_<sfx> fix was attempted here (clone the
+                    # RHS into a temp, free the LHS's old value, store the clone) and gated
+                    # to fire only when BOTH sides are field accesses, to avoid the earlier,
+                    # even-broader version's crash on the extremely common `self.field =
+                    # saved_local` restore idiom (save a field into a local, overwrite the
+                    # field, restore from the local later -- e.g. sema.tr's own lower_func
+                    # saving/restoring current_func_outlives_a/_b around nested function
+                    # compilation: the restore's clone-from-an-already-freed-local crashed).
+                    # Even narrowed to both-sides-field-access, self-hosting fixpoint
+                    # verification (gen2 compiling itself) still hit a SECOND, differently-
+                    # shaped heap corruption elsewhere (_trdrop_HirMatchArm, reached via
+                    # Sema.lower_func/lower_class) -- indicating the "clone + free old value
+                    # on any field=field List/Vec store" shape is unsafe for more field-
+                    # aliasing patterns in this compiler's own source than can be safely
+                    # enumerated in one pass. Reverted to the pre-fix plain pointer copy
+                    # (safe, self-hosting-verified) rather than ship a fix that trades one
+                    # narrow, rare UAF for compiler-crashing heap corruption. The original
+                    # tauregex-shaped bug remains open; a real fix needs either a refcounted
+                    # List/Vec runtime handle or restricting the clone to call sites proven
+                    # not to alias a live local (out of scope for a same-session patch).
+                    self.w(pad + self.gen_expr(t) + " = " + _assign_rhs + ";\n")
+                    return
                 elif self.is_heap_class_tn(hir_expr_type(t).name) and not self.has_method(hir_expr_type(t).name, "free"):
                     # `ref T` (borrow) field store: no co-ownership — plain store, no
                     # retain, no release-old (symmetric with the drop side, which skips
@@ -8698,7 +8863,7 @@ pub class CGenerator:
                 elif adc == "str":
                     if self.str_local_names.contains(adn):
                         self.w(pad + "_tr_str_release(" + _safe_c_varname(adn) + ");\n")
-                elif adc == "List" or adc == "Vec":
+                elif (adc == "List" or adc == "Vec") and not self.class_local_mono.contains(adn):
                     if self.coll_local_sfx.contains(adn):
                         mut _ad_sfx = self.coll_local_sfx.get(adn)
                         if _ad_sfx.len() > 4 and _ad_sfx.slice(0, 4) == "ptr@":
@@ -8706,7 +8871,15 @@ pub class CGenerator:
                             self.w(pad + "List_ptr_free_obj(" + _safe_c_varname(adn) + ", " + self.obj_drop_fn(_ad_sfx.slice(4, _ad_sfx.len())) + ");\n")
                         else:
                             self.w(pad + "List_" + _ad_sfx + "_free(" + _safe_c_varname(adn) + ");\n")
-                elif adc == "Dict" or adc == "Map" or adc == "Set":
+                # `not self.class_local_mono.contains(adn)`: a local recorded here is a REAL
+                # generic-class instance (e.g. a class literally named Map[K, V] with
+                # matching arity -- see _is_real_generic_class_by_arity), not the builtin
+                # Dict/Map/Set/List/Vec runtime -- its drop falls through to the generic
+                # mono-aware branch below (class_local_mono holds its concrete mono C
+                # prefix, e.g. "Map_str_i64"), instead of wrongly calling the builtin
+                # Dict_free/_tr_idict_free/etc. on a struct pointer of a totally different
+                # (incompatible) layout.
+                elif (adc == "Dict" or adc == "Map" or adc == "Set") and not self.class_local_mono.contains(adn):
                     mut _ad_strval = self.coll_local_strval.contains(adn)
                     mut _ad_dsfx = ""
                     if self.coll_local_sfx.contains(adn): _ad_dsfx = self.coll_local_sfx.get(adn)
@@ -9578,7 +9751,7 @@ pub class CGenerator:
         # typedef is visible everywhere, not lazily during a later pass.
         if ty.name == "Array" and ty.array_size > 0 and ty.args.len > 0:
             self.ensure_array_type(ty)
-        if ty.args.len > 0 and self.classes.contains(ty.name) and ty.name != "Vec" and ty.name != "Map" and ty.name != "Dict" and ty.name != "List":
+        if ty.args.len > 0 and self.classes.contains(ty.name) and (not (ty.name == "Vec" or ty.name == "Map" or ty.name == "Dict" or ty.name == "List") or self._is_real_generic_class_by_arity(ty.name, ty.args.len)):
             mut ucls = self.classes.get(ty.name)
             if ucls.generics.len > 0:
                 self.ensure_mono(ucls, ty.args)
