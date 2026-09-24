@@ -656,7 +656,7 @@ __attribute__((hot)) List_Token* Lexer_tokenize(Lexer* self) {
     /* pass */
     if (((self->pos == 0LL) && (self->len >= 3LL))) {
         /* pass */
-        if ((((Lexer_peek_at(self, 0LL) == 239LL) && (Lexer_peek_at(self, 1LL) == 187LL)) && (Lexer_peek_at(self, 2LL) == 191LL))) {
+        if (((((Lexer_peek_at(self, 0LL) & 255LL) == 239LL) && ((Lexer_peek_at(self, 1LL) & 255LL) == 187LL)) && ((Lexer_peek_at(self, 2LL) & 255LL) == 191LL))) {
             /* pass */
             self->pos = (self->pos + 3LL);
         }
