@@ -1,0 +1,614 @@
+# std.net.websocket — WebSocket protocol (RFC 6455), client and server, on
+# top of std.net.tcp's TcpStream/TcpListener.
+#
+# Pure Tauraro: the handshake reuses std.crypto.hash (SHA-1) and
+# std.encoding.hex/std.encoding.base64 (Sec-WebSocket-Accept). No new runtime
+# C code is needed — framing (FIN/opcode/MASK/length/payload) is built and
+# parsed directly on raw byte buffers via TcpStream.recv_into/send_raw.
+#
+# Random bytes (client's Sec-WebSocket-Key, per-frame masking keys) use a
+# small self-contained splitmix64-style generator (_WsRng below) seeded from
+# _tr_time_ns(), NOT std.math.random.Random: Random.next_int()'s LCG relies on
+# signed-multiply wraparound to work (that's the generator's whole mixing
+# step), but this compiler's own default build (tauraroc --run, i.e. any
+# opt level other than -O3/-Os) passes gcc `-ftrapv`, which turns that
+# *intentional* overflow into a hard trap (SIGTRAP/abort) on essentially the
+# very first call — reproduced in isolation and logged as a real stdlib bug.
+# _WsRng avoids the whole class of trouble by doing its mixing in `u64`
+# (unsigned — wraps silently under -ftrapv, same as plain C).
+#
+# Usage — server side (fold into an accepted TcpStream from TcpListener):
+#   from std.net.tcp       import TcpListener
+#   from std.net.websocket import WebSocketServer
+#
+#   mut srv = TcpListener.listen("127.0.0.1", 9001)
+#   mut raw = srv.accept()
+#   mut conn = WebSocketServer.accept_upgrade(raw)
+#   if conn.ok:
+#       mut msg = conn.recv()
+#       if msg.is_text(): conn.send_text("echo: " + msg.text)
+#       conn.close()
+#
+# Usage — client side:
+#   from std.net.websocket import WebSocketClient
+#
+#   mut conn = WebSocketClient.connect("ws://127.0.0.1:9001/")
+#   if conn.ok:
+#       conn.send_text("hello")
+#       mut msg = conn.recv()
+#       print(msg.text)
+#       conn.close()
+#
+# NOT covered (v1 scope): wss:// (TLS), permessage-deflate / other
+# extensions, fragmented messages (continuation frames are read but not
+# reassembled — see WsConn.recv), subprotocol negotiation.
+
+from std.core.string import StringBuilder
+from std.net.tcp      import TcpStream, TcpListener
+from std.net.url      import Url
+from std.string.str   import Str
+from std.crypto.hash  import Hash
+from std.encoding.hex    import Hex
+from std.encoding.base64 import Base64
+
+extern "C":
+    def _tr_c_malloc(size: int) -> Pointer[char]
+    def _tr_free(p: Pointer[char])
+    def _tr_c_free(p: Pointer[char])
+    def _tr_str_wrap(s: Pointer[char]) -> str
+    def _tr_time_ns() -> int
+
+# ── _WsRng — splitmix64-style byte generator (see file header for why this
+# exists instead of std.math.random.Random) ─────────────────────────────────
+
+pub class _WsRng:
+    pub state: u64
+
+extend _WsRng:
+    # Seed from the monotonic nanosecond clock XORed with a per-call salt, so
+    # two _WsRng instances created back-to-back (e.g. client mask + server
+    # reading a client's key) don't collide even when _tr_time_ns()'s
+    # resolution is coarser than the gap between the two calls.
+    pub def new(salt: int) -> _WsRng:
+        mut r = _WsRng()
+        mut t: u64 = _tr_time_ns() as u64
+        mut s: u64 = salt as u64
+        r.state = t ^ (s * (2654435761 as u64)) ^ (9223372036854775807 as u64)
+        if r.state == (0 as u64): r.state = 88172645463325252 as u64
+        return r
+
+    # splitmix64 step: advance state, return a well-mixed 64-bit value. All
+    # arithmetic is on `u64` (unsigned), so it wraps silently instead of
+    # tripping -ftrapv the way a signed LCG does (see file header).
+    pub def next_u64(self) -> u64:
+        self.state = self.state + (2695921657785499 as u64)
+        mut z: u64 = self.state
+        z = (z ^ (z >> 30)) * (13787848793156543929 as u64)
+        z = (z ^ (z >> 27)) * (10723151780598845931 as u64)
+        z = z ^ (z >> 31)
+        return z
+
+    # One random byte, 0-255.
+    pub def next_byte(self) -> int:
+        return (self.next_u64() as int) & 255
+
+# RFC 6455 §1.3 fixed handshake magic GUID.
+pub def WS_MAGIC() -> str: return "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+
+# ── Opcodes (RFC 6455 §5.2) ─────────────────────────────────────────────────
+
+pub def WS_OP_CONTINUATION() -> int: return 0
+pub def WS_OP_TEXT()         -> int: return 1
+pub def WS_OP_BINARY()       -> int: return 2
+pub def WS_OP_CLOSE()        -> int: return 8
+pub def WS_OP_PING()         -> int: return 9
+pub def WS_OP_PONG()         -> int: return 10
+
+# ── WsMessage — a received, fully-decoded frame ─────────────────────────────
+
+pub class WsMessage:
+    pub kind: int          # one of WS_OP_* (TEXT/BINARY/CLOSE/PING/PONG)
+    pub text: str          # populated for TEXT (and CLOSE's optional reason)
+    pub data: Pointer[char] # raw payload bytes (populated for all kinds)
+    pub len:  int           # payload length in bytes
+    pub ok:   bool          # false = connection error / peer closed abruptly
+
+extend WsMessage:
+    pub def init(kind: int, data: Pointer[char], len_: int) -> WsMessage:
+        mut m = WsMessage()
+        m.kind = kind
+        m.data = data
+        m.len  = len_
+        m.ok   = true
+        if kind == WS_OP_TEXT():
+            m.text = WsMessage._bytes_to_str(data, len_)
+        else:
+            m.text = ""
+        return m
+
+    pub def error() -> WsMessage:
+        mut m = WsMessage()
+        m.kind = -1
+        m.text = ""
+        m.data = 0 as Pointer[char]
+        m.len  = 0
+        m.ok   = false
+        return m
+
+    # Copy `len_` raw bytes into a freshly heap-allocated NUL-terminated str
+    # (safe even if `len_` is 0; not safe to call on payloads containing an
+    # embedded NUL if the caller then uses C-string-length functions on it —
+    # use .data/.len directly for binary payloads).
+    def _bytes_to_str(data: Pointer[char], len_: int) -> str:
+        mut buf = _tr_c_malloc(len_ + 1)
+        mut i = 0
+        while i < len_:
+            unsafe: buf.offset(i).write(data.offset(i).read())
+            i = i + 1
+        unsafe: buf.offset(len_).write('\0')
+        return _tr_str_wrap(buf)
+
+    pub def is_text(self)   -> bool: return self.kind == WS_OP_TEXT()
+    pub def is_binary(self) -> bool: return self.kind == WS_OP_BINARY()
+    pub def is_close(self)  -> bool: return self.kind == WS_OP_CLOSE()
+    pub def is_ping(self)   -> bool: return self.kind == WS_OP_PING()
+    pub def is_pong(self)   -> bool: return self.kind == WS_OP_PONG()
+
+    pub def free(self):
+        if (self.data as usize) != 0:
+            unsafe: _tr_free(self.data)
+
+# ── Internal byte-buffer helpers ────────────────────────────────────────────
+
+# Normalize a raw Pointer[char] byte read to an unsigned 0-255 int (char may
+# be signed on this platform, so bytes >= 0x80 read back negative).
+pub def _byte_at(p: Pointer[char], i: int) -> int:
+    unsafe:
+        return (p.offset(i).read() as int) & 255
+
+pub def _put_byte(p: Pointer[char], i: int, v: int):
+    unsafe: p.offset(i).write((v & 255) as char)
+
+# ── Frame encode/decode ──────────────────────────────────────────────────────
+
+pub class WsConn:
+    pub stream:    TcpStream
+    pub is_client: bool     # true => outgoing frames MUST be masked
+    pub ok:        bool     # false after handshake failure / fatal I/O error
+    pub closed:    bool     # true once the close handshake has completed
+    pub err:       str      # last error message (handshake or protocol)
+    pub _rng:      _WsRng
+
+extend WsConn:
+    pub def init(stream: TcpStream, is_client: bool) -> WsConn:
+        mut c = WsConn()
+        c.stream    = stream
+        c.is_client = is_client
+        c.ok        = true
+        c.closed    = false
+        c.err       = ""
+        c._rng      = _WsRng.new(stream.fd)
+        return c
+
+    def _fail(self, msg: str) -> WsConn:
+        self.ok  = false
+        self.err = msg
+        return self
+
+    # ── Sending ───────────────────────────────────────────────────────────
+
+    # Build and send one complete (FIN=1, unfragmented) frame with the given
+    # opcode and raw payload. Client frames are masked per RFC 6455 §5.3;
+    # server frames are sent unmasked.
+    pub def _send_frame(self, opcode: int, payload: Pointer[char], plen: int) -> bool:
+        # Note: does NOT check self.closed — close() itself must be able to
+        # send exactly one CLOSE frame through this path as part of completing
+        # the close handshake (self.closed is set at the START of close() as
+        # a re-entrancy guard, before the handshake runs). Public senders
+        # (send_text/send_binary/send_ping/send_pong) are the ones that must
+        # refuse to send after closing; see their own self.closed checks.
+        if not self.stream.is_connected(): return false
+        mut mask_len = 0
+        if self.is_client: mask_len = 4
+        mut hdr_len = 2
+        if plen > 65535:
+            hdr_len = 10
+        elif plen > 125:
+            hdr_len = 4
+        mut total = hdr_len + mask_len + plen
+        mut buf = _tr_c_malloc(total + 1)
+        # Byte 0: FIN=1, RSV=0, opcode.
+        _put_byte(buf, 0, 128 | (opcode & 15))
+        # Byte 1..: MASK bit + payload-length field.
+        mut mask_bit = 0
+        if self.is_client: mask_bit = 128
+        if plen <= 125:
+            _put_byte(buf, 1, mask_bit | plen)
+        elif plen <= 65535:
+            _put_byte(buf, 1, mask_bit | 126)
+            _put_byte(buf, 2, (plen >> 8) & 255)
+            _put_byte(buf, 3, plen & 255)
+        else:
+            _put_byte(buf, 1, mask_bit | 127)
+            # 64-bit big-endian length; payloads here are always well under
+            # 2^32 so the high 4 bytes are always zero.
+            _put_byte(buf, 2, 0)
+            _put_byte(buf, 3, 0)
+            _put_byte(buf, 4, 0)
+            _put_byte(buf, 5, 0)
+            _put_byte(buf, 6, (plen >> 24) & 255)
+            _put_byte(buf, 7, (plen >> 16) & 255)
+            _put_byte(buf, 8, (plen >> 8) & 255)
+            _put_byte(buf, 9, plen & 255)
+        mut body_off = hdr_len
+        if self.is_client:
+            # Random 4-byte masking key, then XOR-masked payload (RFC 6455 §5.3).
+            mut m0 = self._rng.next_byte()
+            mut m1 = self._rng.next_byte()
+            mut m2 = self._rng.next_byte()
+            mut m3 = self._rng.next_byte()
+            _put_byte(buf, hdr_len, m0)
+            _put_byte(buf, hdr_len + 1, m1)
+            _put_byte(buf, hdr_len + 2, m2)
+            _put_byte(buf, hdr_len + 3, m3)
+            body_off = hdr_len + 4
+            mut mkeys = Vec4.init(m0, m1, m2, m3)
+            mut i = 0
+            while i < plen:
+                mut src = _byte_at(payload, i)
+                mut mk  = mkeys.at(i % 4)
+                _put_byte(buf, body_off + i, src ^ mk)
+                i = i + 1
+        else:
+            mut i = 0
+            while i < plen:
+                _put_byte(buf, body_off + i, _byte_at(payload, i))
+                i = i + 1
+        unsafe: buf.offset(total).write('\0')
+        mut sent = self.stream.send_raw(buf, total)
+        unsafe: _tr_free(buf)
+        return sent == total
+
+    # Send a UTF-8 text frame.
+    pub def send_text(self, msg: str) -> bool:
+        if self.closed: return false
+        mut p = msg as Pointer[char]
+        mut n = Str.len(msg)
+        return self._send_frame(WS_OP_TEXT(), p, n)
+
+    # Send a binary frame of exactly `len_` bytes from `data`.
+    pub def send_binary(self, data: str, len_: int) -> bool:
+        if self.closed: return false
+        mut p = data as Pointer[char]
+        return self._send_frame(WS_OP_BINARY(), p, len_)
+
+    # Send a Ping frame (optionally carrying a small payload).
+    pub def send_ping(self, msg: str) -> bool:
+        if self.closed: return false
+        mut p = msg as Pointer[char]
+        mut n = Str.len(msg)
+        return self._send_frame(WS_OP_PING(), p, n)
+
+    # Send a Pong frame (used internally to auto-respond to Ping; exposed
+    # for callers that want unsolicited Pongs). Not guarded by self.closed:
+    # close()'s own wait loop calls this to answer a Ping received while
+    # waiting for the peer's Close reply, which must still go out even though
+    # self.closed was already set to true as close()'s re-entrancy guard.
+    pub def send_pong(self, msg: str) -> bool:
+        mut p = msg as Pointer[char]
+        mut n = Str.len(msg)
+        return self._send_frame(WS_OP_PONG(), p, n)
+
+    # ── Receiving ─────────────────────────────────────────────────────────
+
+    # Read exactly `n` bytes into a fresh buffer, blocking until all arrive
+    # (or the connection closes early). Returns a null Pointer on failure.
+    def _read_exact(self, n: int) -> Pointer[char]:
+        if n == 0: return _tr_c_malloc(1)
+        mut buf  = _tr_c_malloc(n)
+        mut have = 0
+        while have < n:
+            mut got = self.stream.recv_into(buf.offset(have), n - have)
+            if got <= 0:
+                unsafe: _tr_free(buf)
+                return 0 as Pointer[char]
+            have = have + got
+        return buf
+
+    # Read and decode one frame. Automatically responds to Ping with Pong
+    # (RFC 6455 §5.5.2) and retries to hand the caller the next real message,
+    # so callers never see raw Ping frames from recv() — call recv_raw() if
+    # you need to observe Pings yourself.
+    pub def recv(self) -> WsMessage:
+        while true:
+            mut m = self.recv_raw()
+            if not m.ok: return m
+            if m.is_ping():
+                self.send_pong(m.text)
+                m.free()
+                # loop for the next frame
+            else:
+                return m
+        return WsMessage.error()   # unreachable; satisfies F-3
+
+    # Read and decode exactly one frame with no special handling (caller
+    # must respond to Ping/Close itself if desired). Fragmented messages
+    # (FIN=0 continuation sequences) are NOT reassembled — each physical
+    # frame is returned as-is; production servers/clients that don't
+    # fragment (this module's own send_text/send_binary never do) are
+    # unaffected.
+    pub def recv_raw(self) -> WsMessage:
+        mut hdr = self._read_exact(2)
+        if (hdr as usize) == 0: return WsMessage.error()
+        mut b0 = _byte_at(hdr, 0)
+        mut b1 = _byte_at(hdr, 1)
+        unsafe: _tr_free(hdr)
+        mut opcode = b0 & 15
+        mut masked = (b1 & 128) != 0
+        mut plen   = b1 & 127
+        if plen == 126:
+            mut ext = self._read_exact(2)
+            if (ext as usize) == 0: return WsMessage.error()
+            plen = (_byte_at(ext, 0) << 8) | _byte_at(ext, 1)
+            unsafe: _tr_free(ext)
+        elif plen == 127:
+            mut ext = self._read_exact(8)
+            if (ext as usize) == 0: return WsMessage.error()
+            # High 4 bytes are ignored (payloads this module handles never
+            # approach 2^32 bytes); low 4 bytes give the actual length.
+            plen = (_byte_at(ext, 4) << 24) | (_byte_at(ext, 5) << 16) | (_byte_at(ext, 6) << 8) | _byte_at(ext, 7)
+            unsafe: _tr_free(ext)
+        mut mask_key = 0 as Pointer[char]
+        if masked:
+            mask_key = self._read_exact(4)
+            if (mask_key as usize) == 0: return WsMessage.error()
+        mut payload = self._read_exact(plen)
+        if (payload as usize) == 0:
+            if (mask_key as usize) != 0: unsafe: _tr_free(mask_key)
+            return WsMessage.error()
+        if masked:
+            mut mkeys = Vec4.init(_byte_at(mask_key, 0), _byte_at(mask_key, 1), _byte_at(mask_key, 2), _byte_at(mask_key, 3))
+            unsafe: _tr_free(mask_key)
+            mut i = 0
+            while i < plen:
+                mut src = _byte_at(payload, i)
+                mut mk  = mkeys.at(i % 4)
+                _put_byte(payload, i, src ^ mk)
+                i = i + 1
+        if opcode == WS_OP_CLOSE():
+            mut m = WsMessage.init(WS_OP_CLOSE(), payload, plen)
+            if plen >= 2:
+                mut reason = WsMessage._bytes_to_str(payload.offset(2), plen - 2)
+                m.text = reason
+            return m
+        return WsMessage.init(opcode, payload, plen)
+
+    # ── Close handshake ──────────────────────────────────────────────────
+
+    # Perform a clean close (RFC 6455 §7.1.2): send a Close frame, wait for
+    # the peer's Close frame in response (ignoring/auto-answering any Ping
+    # in between), then close the underlying TCP connection. Safe to call
+    # more than once (a no-op after the first call).
+    pub def close(self) -> bool:
+        if self.closed:
+            return true
+        self.closed = true
+        mut sent_ok = self._send_frame(WS_OP_CLOSE(), "" as Pointer[char], 0)
+        mut got_close = false
+        if sent_ok and self.stream.is_connected():
+            # Wait (bounded by the peer's own good behaviour / TCP close) for
+            # the peer's Close reply. Any non-Close frame received here is a
+            # Ping (auto-answered) or a stray data frame we discard, per
+            # RFC 6455 — once a Close has been sent, no further application
+            # messages should be processed.
+            mut tries = 0
+            while tries < 100:
+                mut m = self.recv_raw()
+                if not m.ok:
+                    break
+                if m.is_close():
+                    m.free()
+                    got_close = true
+                    break
+                if m.is_ping():
+                    self.send_pong(m.text)
+                m.free()
+                tries = tries + 1
+        self.stream.close()
+        return sent_ok and got_close
+
+    pub def is_connected(self) -> bool:
+        return self.ok and self.stream.is_connected()
+
+# ── Tiny fixed 4-element int "vector" (avoids pulling in generic Vec[int]
+# machinery just to carry a 4-byte masking key through XOR loops). ─────────
+
+pub class Vec4:
+    pub a: int
+    pub b: int
+    pub c: int
+    pub d: int
+
+extend Vec4:
+    pub def init(a: int, b: int, c: int, d: int) -> Vec4:
+        mut v = Vec4()
+        v.a = a
+        v.b = b
+        v.c = c
+        v.d = d
+        return v
+
+    pub def at(self, i: int) -> int:
+        if i == 0: return self.a
+        if i == 1: return self.b
+        if i == 2: return self.c
+        return self.d
+
+# ── Handshake — shared helpers ──────────────────────────────────────────────
+
+# Compute the expected Sec-WebSocket-Accept value for a given
+# Sec-WebSocket-Key, per RFC 6455 §1.3:
+#   base64(SHA-1(key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"))
+# Hash.sha1 returns a hex string (the digest as text), so it's converted
+# back to the 20 raw digest bytes via Hex.decode before base64-encoding —
+# Base64.encode treats a Tauraro str as raw bytes, so this composition
+# yields exactly the RFC's `base64(raw SHA-1 digest)`.
+pub def ws_accept_value(key: str) -> str:
+    mut combined = key + WS_MAGIC()
+    mut hex_digest = Hash.sha1(combined)
+    mut raw_digest = Hex.decode(hex_digest)
+    return Base64.encode(raw_digest)
+
+# Generate a fresh random 16-byte Sec-WebSocket-Key, base64-encoded (24 chars
+# incl. "==" padding), per RFC 6455 §4.1.
+pub def ws_generate_key() -> str:
+    mut rng = _WsRng.new(1)
+    mut raw = _tr_c_malloc(17)
+    mut i = 0
+    while i < 16:
+        _put_byte(raw, i, rng.next_byte())
+        i = i + 1
+    unsafe: raw.offset(16).write('\0')
+    mut raw_s = _tr_str_wrap(raw)
+    mut encoded = Base64.encode(raw_s)
+    unsafe: _tr_c_free(raw_s as Pointer[char])
+    return encoded
+
+# Case-insensitive HTTP header lookup on a raw request/response header block
+# (lines separated by "\r\n"). Returns "" when absent.
+pub def _header_lookup(raw: str, name: str) -> str:
+    mut lower_raw  = Str.to_lower(raw)
+    mut lower_name = Str.to_lower(name)
+    mut needle = lower_name + ":"
+    mut idx = Str.index_of(lower_raw, needle)
+    unsafe: _tr_c_free(lower_name as Pointer[char])
+    if idx < 0:
+        unsafe: _tr_c_free(lower_raw as Pointer[char])
+        return ""
+    # Re-locate the same offset in the ORIGINAL (non-lowered) string so the
+    # returned value preserves its original case.
+    mut vstart = idx + Str.len(needle)
+    unsafe: _tr_c_free(lower_raw as Pointer[char])
+    mut rlen = Str.len(raw)
+    while vstart < rlen and Str.char_at(raw, vstart) == 32: vstart = vstart + 1
+    mut vend = vstart
+    while vend < rlen and Str.char_at(raw, vend) != 13 and Str.char_at(raw, vend) != 10:
+        vend = vend + 1
+    return Str.slice(raw, vstart, vend)
+
+# ── WebSocketClient ──────────────────────────────────────────────────────────
+
+pub class WebSocketClient:
+    _dummy: int
+
+extend WebSocketClient:
+    # Parse a ws://host:port/path URL, open a TCP connection, perform the
+    # RFC 6455 opening handshake (client side), and verify the server's
+    # Sec-WebSocket-Accept matches the value computed from the key we sent.
+    # Returns a WsConn; check .ok before using it — .err holds a message on
+    # failure ("connect failed", "bad status line", "Sec-WebSocket-Accept
+    # mismatch", etc.).
+    pub def connect(url: str) -> WsConn:
+        mut u = Url.parse(url)
+        mut port = u.port
+        if port == 0: port = 80
+        mut host = u.host
+        mut path = u.path
+        if Str.len(path) == 0: path = "/"
+        if Str.len(host) == 0:
+            mut bad = TcpStream()
+            bad.connected = false
+            mut c = WsConn.init(bad, true)
+            u.free()
+            return c._fail("invalid ws:// URL (no host)")
+        mut stream = TcpStream.connect(host, port)
+        if not stream.is_connected():
+            mut c = WsConn.init(stream, true)
+            u.free()
+            return c._fail("connect failed")
+        mut key = ws_generate_key()
+        mut expected = ws_accept_value(key)
+        mut sb = StringBuilder.init(256)
+        sb.append("GET ")
+        sb.append(path)
+        sb.append(" HTTP/1.1\r\nHost: ")
+        sb.append(host)
+        sb.append("\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: ")
+        sb.append(key)
+        sb.append("\r\nSec-WebSocket-Version: 13\r\n\r\n")
+        mut wire = sb.to_owned()
+        sb.free()
+        stream.send(wire)
+        unsafe: _tr_c_free(wire as Pointer[char])
+        mut raw = stream.recv(4096)
+        u.free()
+        mut conn = WsConn.init(stream, true)
+        if Str.len(raw) == 0:
+            unsafe: _tr_c_free(key as Pointer[char])
+            unsafe: _tr_c_free(expected as Pointer[char])
+            return conn._fail("no handshake response (connection closed)")
+        if Str.index_of(raw, "101") < 0:
+            unsafe: _tr_c_free(key as Pointer[char])
+            unsafe: _tr_c_free(expected as Pointer[char])
+            unsafe: _tr_c_free(raw as Pointer[char])
+            return conn._fail("server did not return HTTP 101 Switching Protocols")
+        mut got_accept = _header_lookup(raw, "Sec-WebSocket-Accept")
+        unsafe: _tr_c_free(raw as Pointer[char])
+        unsafe: _tr_c_free(key as Pointer[char])
+        mut ok = Str.eq(got_accept, expected)
+        unsafe: _tr_c_free(got_accept as Pointer[char])
+        unsafe: _tr_c_free(expected as Pointer[char])
+        if not ok:
+            return conn._fail("Sec-WebSocket-Accept mismatch")
+        conn.ok = true
+        return conn
+
+# ── WebSocketServer ───────────────────────────────────────────────────────
+
+pub class WebSocketServer:
+    _dummy: int
+
+extend WebSocketServer:
+    # Given an already-accept()-ed TcpStream (from a TcpListener), read the
+    # raw HTTP Upgrade request, verify it, and complete the RFC 6455 opening
+    # handshake (server side): compute the correct Sec-WebSocket-Accept from
+    # the client's Sec-WebSocket-Key and send the HTTP 101 response. Returns
+    # a WsConn; check .ok before using it.
+    pub def accept_upgrade(stream: TcpStream) -> WsConn:
+        mut conn = WsConn.init(stream, false)
+        if not stream.is_connected():
+            return conn._fail("stream not connected")
+        mut raw = stream.recv(8192)
+        if Str.len(raw) == 0:
+            return conn._fail("empty request")
+        if Str.index_of(raw, "GET ") != 0:
+            unsafe: _tr_c_free(raw as Pointer[char])
+            return conn._fail("not a GET request")
+        mut upgrade_hdr = _header_lookup(raw, "Upgrade")
+        mut lower_upgrade = Str.to_lower(upgrade_hdr)
+        mut has_upgrade = Str.contains(lower_upgrade, "websocket")
+        unsafe: _tr_c_free(upgrade_hdr as Pointer[char])
+        unsafe: _tr_c_free(lower_upgrade as Pointer[char])
+        if not has_upgrade:
+            unsafe: _tr_c_free(raw as Pointer[char])
+            return conn._fail("missing/invalid Upgrade header")
+        mut key = _header_lookup(raw, "Sec-WebSocket-Key")
+        unsafe: _tr_c_free(raw as Pointer[char])
+        if Str.len(key) == 0:
+            unsafe: _tr_c_free(key as Pointer[char])
+            return conn._fail("missing Sec-WebSocket-Key")
+        mut accept_val = ws_accept_value(key)
+        unsafe: _tr_c_free(key as Pointer[char])
+        mut sb = StringBuilder.init(256)
+        sb.append("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ")
+        sb.append(accept_val)
+        sb.append("\r\n\r\n")
+        unsafe: _tr_c_free(accept_val as Pointer[char])
+        mut wire = sb.to_owned()
+        sb.free()
+        mut sent = stream.send(wire)
+        unsafe: _tr_c_free(wire as Pointer[char])
+        if sent <= 0:
+            return conn._fail("failed to send handshake response")
+        conn.ok = true
+        return conn

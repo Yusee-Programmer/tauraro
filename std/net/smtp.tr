@@ -1,0 +1,451 @@
+# std.net.smtp — Outbound SMTP client (RFC 5321 subset).
+#
+# Built entirely on std.net.tcp (TcpStream) and the same OpenSSL TLS primitive
+# std.net.https uses (_tr_tls_connect/_tr_tls_send/_tr_tls_recv/_tr_tls_close)
+# — no new runtime C code.
+#
+# Supports:
+#   - Plaintext SMTP (port 25/587) and implicit TLS (port 465, "smtps").
+#   - EHLO/HELO, multi-line reply parsing (250-... continuation / 250 final).
+#   - MAIL FROM / RCPT TO (multiple recipients) / DATA with RFC 5321
+#     dot-stuffing of body lines that start with '.'.
+#   - AUTH LOGIN and AUTH PLAIN (base64-encoded per RFC 4954 / SASL).
+#   - STARTTLS is advertised-and-requested but NOT upgraded in place — see the
+#     "LIMITATIONS" note below.
+#
+# Usage:
+#   from std.net.smtp import SmtpClient
+#
+#   mut client = SmtpClient.connect("smtp.example.com", 587)
+#   client.ehlo("myhost")
+#   client.auth_login("user@example.com", "password")
+#   client.send_mail("from@example.com", ["to@example.com"], "Subject line", "Body text")
+#   client.quit()
+#
+# Implicit TLS (e.g. port 465):
+#   mut client = SmtpClient.connect_tls("smtp.example.com", 465)
+#   client.ehlo("myhost")
+#   ...
+#
+# LIMITATIONS (v1):
+#   - STARTTLS-upgrade-on-an-existing-plaintext-connection is NOT implemented.
+#     std/net/https.tr's TLS primitive (_tr_tls_connect) only knows how to
+#     open a FRESH TLS connection (hostname -> new fd -> TLS handshake); the
+#     runtime has no "wrap an already-connected fd in TLS" client-side
+#     function (only a server-side equivalent, _tr_tls_accept, exists, for
+#     TLS-terminating servers). So `starttls()` here sends the STARTTLS
+#     command and reads the server's 220 response (useful for servers that
+#     require it before accepting AUTH), but the connection itself stays
+#     plaintext afterwards — do not rely on it for confidentiality. For a
+#     real security boundary use connect_tls() (implicit TLS, port 465)
+#     instead, which is fully functional (fresh TLS from the first byte).
+#   - No MIME multipart / attachment support — send_mail() sends a single
+#     text/plain body (headers + blank line + body).
+#
+# ── Wire framing rules this module gets right ────────────────────────────────
+#   - SMTP replies can span multiple lines: all but the last line of a
+#     multi-line reply use "CODE-text" (hyphen); the last line uses
+#     "CODE text" (space). We keep reading lines until we see a line whose
+#     4th character is a space (not '-') and its code matches.
+#   - All wire lines are CRLF-terminated, not bare '\n'.
+#   - Any body line that itself starts with '.' is dot-stuffed (prefixed with
+#     an extra '.') before being sent, per RFC 5321 4.5.2, so it is never
+#     confused with the end-of-DATA marker ("." on its own line).
+
+from std.net.tcp import TcpStream
+from std.encoding.base64 import Base64
+from std.core.string import StringBuilder
+from std.string.str import Str
+from std.sys.time import Clock
+
+extern "C":
+    def _tr_c_free(ptr: Pointer[char])
+    def _tr_tls_connect(host: str, port: int) -> Pointer[char]
+    def _tr_tls_send(handle: Pointer[char], data: str) -> int
+    def _tr_tls_recv(handle: Pointer[char], cap: int) -> str
+    def _tr_tls_close(handle: Pointer[char])
+
+# ─── SmtpResponse ───────────────────────────────────────────────────────────
+# One parsed (possibly multi-line) SMTP reply: the 3-digit code plus the full
+# raw text (all lines, newline-joined, hyphens/leading code stripped).
+
+pub class SmtpResponse:
+    pub code: int
+    pub text: str
+    pub ok:   bool   # true when code is 2xx or 3xx (not a failure)
+
+extend SmtpResponse:
+    pub def init(code: int, text: str) -> SmtpResponse:
+        mut r = SmtpResponse()
+        r.code = code
+        r.text = text
+        r.ok   = code >= 200 and code < 400
+        return r
+
+    pub def is_error(self) -> bool:
+        return not self.ok
+
+# ─── SmtpClient ─────────────────────────────────────────────────────────────
+
+pub class SmtpClient:
+    pub host:      str
+    pub port:      int
+    pub connected: bool
+    pub use_tls:   bool          # true when this connection is TLS (implicit TLS)
+    pub _tls:      Pointer[char] # non-null when use_tls
+    pub _stream:   TcpStream     # valid when not use_tls
+    pub last_code: int
+    pub last_text: str
+    pub _caps:     str           # raw EHLO capability text (for supports_starttls/auth)
+    pub _rbuf:     str           # leftover bytes read past the last parsed reply line
+
+extend SmtpClient:
+    # ── Construction ─────────────────────────────────────────────────────────
+
+    # Connect over plaintext TCP (typical for port 25/587, then optionally
+    # call starttls() before auth — see LIMITATIONS above).
+    pub def connect(host: str, port: int) -> SmtpClient:
+        mut c = SmtpClient()
+        c.host      = host
+        c.port      = port
+        c.use_tls   = false
+        c._tls      = 0 as Pointer[char]
+        c._stream   = TcpStream.connect(host, port)
+        c.connected = c._stream.connected
+        c.last_code = 0
+        c.last_text = ""
+        c._caps     = ""
+        c._rbuf     = ""
+        if c.connected:
+            mut greeting = c._read_response()
+            c.last_code = greeting.code
+            c.last_text = greeting.text
+        return c
+
+    # Connect over implicit TLS (typical for port 465).
+    pub def connect_tls(host: str, port: int) -> SmtpClient:
+        mut c = SmtpClient()
+        c.host      = host
+        c.port      = port
+        c.use_tls   = true
+        c._tls      = _tr_tls_connect(host, port)
+        c.connected = (c._tls as usize) != 0
+        c.last_code = 0
+        c.last_text = ""
+        c._caps     = ""
+        c._rbuf     = ""
+        if c.connected:
+            mut greeting = c._read_response()
+            c.last_code = greeting.code
+            c.last_text = greeting.text
+        return c
+
+    # ── Low-level I/O ────────────────────────────────────────────────────────
+
+    def _raw_send(self, data: str):
+        if self.use_tls:
+            _tr_tls_send(self._tls, data)
+        else:
+            self._stream.send(data)
+
+    def _raw_recv(self, cap: int) -> str:
+        if self.use_tls:
+            return _tr_tls_recv(self._tls, cap)
+        return self._stream.recv(cap)
+
+    # Send one command line, CRLF-terminated (callers pass the command WITHOUT
+    # a trailing newline; str literals in Tauraro source are '\n' — SMTP needs
+    # CRLF on the wire, so we always append "\r\n" here rather than relying on
+    # the caller's line endings).
+    def _send_line(self, line: str):
+        self._raw_send(line + "\r\n")
+
+    # Read one raw CRLF-terminated line from the socket, buffering any bytes
+    # read past the line ending for the next call (recv() can return more
+    # than one line, or a partial line, per TCP's stream semantics).
+    def _read_line(self) -> str:
+        while true:
+            mut nl = Str.index_of(self._rbuf, "\n")
+            if nl >= 0:
+                mut line = Str.slice(self._rbuf, 0, nl)
+                # Strip a trailing '\r' if present (CRLF line ending).
+                mut llen = Str.len(line)
+                if llen > 0 and Str.char_at(line, llen - 1) == 13:
+                    mut trimmed = Str.slice(line, 0, llen - 1)
+                    line = trimmed
+                self._rbuf = Str.slice(self._rbuf, nl + 1, Str.len(self._rbuf))
+                return line
+            mut chunk = self._raw_recv(4096)
+            if Str.len(chunk) == 0:
+                # Connection closed: return whatever is left (may be "").
+                mut rest = self._rbuf
+                self._rbuf = ""
+                return rest
+            self._rbuf = self._rbuf + chunk
+        return ""   # unreachable (loop only exits via return); satisfies F-3
+
+    # Read a full (possibly multi-line) SMTP reply. A continuation line looks
+    # like "250-STARTTLS" (hyphen after the 3-digit code); the final line of
+    # the reply looks like "250 OK" (space after the code) — RFC 5321 §4.2.
+    def _read_response(self) -> SmtpResponse:
+        mut sb   = StringBuilder.init(128)
+        mut code = 0
+        mut first = true
+        while true:
+            mut line = self._read_line()
+            mut llen = Str.len(line)
+            if llen < 4:
+                # Malformed/short line (e.g. connection dropped) — bail out
+                # with whatever we parsed so far rather than looping forever.
+                if code == 0: code = 0
+                break
+            mut d1 = Str.char_at(line, 0) - 48
+            mut d2 = Str.char_at(line, 1) - 48
+            mut d3 = Str.char_at(line, 2) - 48
+            mut this_code = code
+            if d1 >= 0 and d1 <= 9 and d2 >= 0 and d2 <= 9 and d3 >= 0 and d3 <= 9:
+                this_code = d1 * 100 + d2 * 10 + d3
+            if code == 0: code = this_code
+            mut sep = Str.char_at(line, 3)   # '-' (45) = continuation, ' ' (32) = final
+            mut payload = Str.slice(line, 4, llen)
+            if not first: sb.append_char(10)
+            sb.append(payload)
+            first = false
+            if sep != 45:
+                break   # final line of this reply
+        mut text = sb.to_owned()
+        sb.free()
+        return SmtpResponse.init(code, text)
+
+    def _cmd(self, line: str) -> SmtpResponse:
+        self._send_line(line)
+        mut r = self._read_response()
+        self.last_code = r.code
+        self.last_text = r.text
+        return r
+
+    # ── Protocol ─────────────────────────────────────────────────────────────
+
+    # Send EHLO and record the capability list (used by supports_starttls()/
+    # supports_auth()). Falls back to HELO if the server rejects EHLO.
+    pub def ehlo(self, client_host: str) -> SmtpResponse:
+        mut r = self._cmd("EHLO " + client_host)
+        if r.is_error():
+            r = self._cmd("HELO " + client_host)
+            self._caps = ""
+            return r
+        self._caps = r.text
+        return r
+
+    pub def helo(self, client_host: str) -> SmtpResponse:
+        mut r = self._cmd("HELO " + client_host)
+        self._caps = ""
+        return r
+
+    pub def supports_starttls(self) -> bool:
+        return Str.contains(self._caps, "STARTTLS")
+
+    pub def supports_auth(self) -> bool:
+        return Str.contains(self._caps, "AUTH")
+
+    # Send STARTTLS and read the server's 220 confirmation. See the
+    # LIMITATIONS note at the top of this file: this does NOT actually
+    # upgrade the socket to TLS (the runtime has no client-side "wrap an
+    # existing fd" TLS primitive) — it only performs the command/response
+    # handshake step. Returns false immediately (no command sent) if the
+    # server never advertised STARTTLS in its EHLO capabilities.
+    pub def starttls(self) -> SmtpResponse:
+        if not self.supports_starttls():
+            return SmtpResponse.init(0, "STARTTLS not advertised by server")
+        return self._cmd("STARTTLS")
+
+    # ── AUTH ─────────────────────────────────────────────────────────────────
+
+    # AUTH LOGIN: two round-trips, base64(username) then base64(password).
+    pub def auth_login(self, username: str, password: str) -> SmtpResponse:
+        mut r1 = self._cmd("AUTH LOGIN")
+        if r1.is_error(): return r1
+        mut r2 = self._cmd(Base64.encode(username))
+        if r2.is_error(): return r2
+        mut r3 = self._cmd(Base64.encode(password))
+        return r3
+
+    # AUTH PLAIN: single base64 blob of "\0username\0password".
+    pub def auth_plain(self, username: str, password: str) -> SmtpResponse:
+        mut blob = "\0" + username + "\0" + password
+        mut encoded = Base64.encode(blob)
+        return self._cmd("AUTH PLAIN " + encoded)
+
+    # ── Envelope / message ───────────────────────────────────────────────────
+
+    pub def mail_from(self, addr: str) -> SmtpResponse:
+        return self._cmd("MAIL FROM:<" + addr + ">")
+
+    pub def rcpt_to(self, addr: str) -> SmtpResponse:
+        return self._cmd("RCPT TO:<" + addr + ">")
+
+    # Send DATA, then the dot-stuffed CRLF-terminated body, then the
+    # terminating "." line. `body` is the full RFC 5322 message (headers +
+    # blank line + text) with '\n' line endings (Tauraro string-literal
+    # convention) — this translates every line ending to CRLF and dot-stuffs
+    # any line that starts with '.' before it hits the wire.
+    pub def data(self, body: str) -> SmtpResponse:
+        mut r = self._cmd("DATA")
+        if r.is_error(): return r
+        mut wire = SmtpClient._build_dot_stuffed(body)
+        self._raw_send(wire)
+        unsafe: _tr_c_free(wire as Pointer[char])
+        mut final_r = self._read_response()
+        self.last_code = final_r.code
+        self.last_text = final_r.text
+        return final_r
+
+    # Translate a '\n'-delimited message body into CRLF-terminated, dot-stuffed
+    # wire bytes, ending with the "\r\n.\r\n" end-of-data marker.
+    def _build_dot_stuffed(body: str) -> str:
+        mut sb    = StringBuilder.init(Str.len(body) + 16)
+        mut lines = Str.split(body, "\n")
+        mut n     = len(lines)
+        mut i     = 0
+        while i < n:
+            mut line = lines[i]
+            # Strip a trailing '\r' if the source already had CRLF endings,
+            # so we don't double up when we append our own "\r\n" below.
+            mut llen = Str.len(line)
+            if llen > 0 and Str.char_at(line, llen - 1) == 13:
+                line = Str.slice(line, 0, llen - 1)
+            if Str.len(line) > 0 and Str.char_at(line, 0) == 46:
+                sb.append_char(46)   # dot-stuff: prepend an extra '.'
+            sb.append(line)
+            sb.append("\r\n")
+            i = i + 1
+        sb.append(".\r\n")
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    pub def rset(self) -> SmtpResponse:
+        return self._cmd("RSET")
+
+    pub def noop(self) -> SmtpResponse:
+        return self._cmd("NOOP")
+
+    pub def quit(self) -> SmtpResponse:
+        mut r = self._cmd("QUIT")
+        self.close()
+        return r
+
+    pub def close(self):
+        if self.use_tls:
+            if (self._tls as usize) != 0:
+                _tr_tls_close(self._tls)
+                self._tls = 0 as Pointer[char]
+        else:
+            self._stream.close()
+        self.connected = false
+
+    pub def is_connected(self) -> bool:
+        return self.connected
+
+    # ── High-level convenience ───────────────────────────────────────────────
+
+    # Build an RFC 5322 message: From/To/Subject/Date headers + blank line +
+    # body. `to` is joined with ", " for the To: header.
+    def _build_message(from_addr: str, to: List[str], subject: str, body: str) -> str:
+        mut sb = StringBuilder.init(Str.len(body) + 256)
+        sb.append("From: ")
+        sb.append(from_addr)
+        sb.append("\n")
+        sb.append("To: ")
+        mut n = len(to)
+        mut i = 0
+        while i < n:
+            sb.append(to[i])
+            if i < n - 1: sb.append(", ")
+            i = i + 1
+        sb.append("\n")
+        sb.append("Subject: ")
+        sb.append(subject)
+        sb.append("\n")
+        sb.append("Date: ")
+        sb.append(SmtpClient._rfc2822_date(Clock.timestamp()))
+        sb.append("\n")
+        sb.append("\n")
+        sb.append(body)
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    # Minimal RFC 5322 §3.3 date formatter (e.g. "Thu, 1 Jan 1970 00:00:00 +0000")
+    # from a Unix timestamp (seconds, UTC). Pure integer arithmetic — no libc
+    # gmtime() is exposed to Tauraro, so this is a small self-contained
+    # civil-calendar conversion (Howard Hinnant's days_from_civil algorithm).
+    def _rfc2822_date(ts: int) -> str:
+        mut days = ts / 86400
+        mut rem  = ts - days * 86400
+        if rem < 0:
+            rem  = rem + 86400
+            days = days - 1
+        mut hh = rem / 3600
+        mut mm = (rem - hh * 3600) / 60
+        mut ss = rem - hh * 3600 - mm * 60
+
+        # Day-of-week: 1970-01-01 was a Thursday (index 4, 0=Sunday).
+        mut dow = (days + 4) % 7
+        if dow < 0: dow = dow + 7
+
+        # civil_from_days (Hinnant): days since epoch -> (year, month, day).
+        mut z = days + 719468
+        mut era = z / 146097
+        if z < 0: era = (z - 146096) / 146097
+        mut doe = z - era * 146097
+        mut yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365
+        mut y   = yoe + era * 400
+        mut doy = doe - (365 * yoe + yoe / 4 - yoe / 100)
+        mut mp  = (5 * doy + 2) / 153
+        mut d   = doy - (153 * mp + 2) / 5 + 1
+        mut m   = mp + 3
+        if mp >= 10: m = mp - 9
+        if m <= 2: y = y + 1
+
+        mut dow_names = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+        mut mon_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+        mut sb = StringBuilder.init(32)
+        sb.append(dow_names[dow])
+        sb.append(", ")
+        sb.append_int(d)
+        sb.append(" ")
+        sb.append(mon_names[m - 1])
+        sb.append(" ")
+        sb.append_int(y)
+        sb.append(" ")
+        if hh < 10: sb.append_char(48)
+        sb.append_int(hh)
+        sb.append(":")
+        if mm < 10: sb.append_char(48)
+        sb.append_int(mm)
+        sb.append(":")
+        if ss < 10: sb.append_char(48)
+        sb.append_int(ss)
+        sb.append(" +0000")
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    # Send a plain-text email in one call: MAIL FROM, RCPT TO (each
+    # recipient), DATA with a formatted message. Stops at the first error
+    # response and returns it; returns the DATA response on full success.
+    pub def send_mail(self, from_addr: str, to: List[str], subject: str, body: str) -> SmtpResponse:
+        mut r = self.mail_from(from_addr)
+        if r.is_error(): return r
+        mut n = len(to)
+        mut i = 0
+        while i < n:
+            mut rr = self.rcpt_to(to[i])
+            if rr.is_error(): return rr
+            i = i + 1
+        mut msg = SmtpClient._build_message(from_addr, to, subject, body)
+        mut final_r = self.data(msg)
+        unsafe: _tr_c_free(msg as Pointer[char])
+        return final_r

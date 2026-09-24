@@ -1,0 +1,230 @@
+# tests/lang/38_websocket.tr
+# std.net.websocket — RFC 6455 WebSocket, client and server, real end-to-end
+# interop over a loopback TCP connection.
+#
+# One server thread (blocking TcpListener.accept -> WebSocketServer.accept_upgrade)
+# and one client thread (WebSocketClient.connect) are spawned together inside a
+# `task_group:` block (see tests/reactor/keepalive_stress.tr for the same
+# accept-loop-in-a-thread pattern this test follows, minus the coroutine
+# reactor — this test only needs ONE connection, so a plain blocking accept
+# is enough and keeps the test simple/bounded).
+#
+# Both threads report every assertion outcome back to the main thread via
+# `Atomic[int]` counters (real ints/ports are Sendable with no wrapping
+# needed — see docs/lang/16_concurrency.md's Sendable section) rather than
+# calling `t.assert_*` directly from a spawned thread, since TestRunner's
+# internal counters are plain (non-atomic) ints and mutating them
+# concurrently from two OS threads would itself be a data race. main()
+# awaits the whole task_group (bounded: client has a fixed 300ms settle
+# delay before connecting, and every socket op below it is a normal blocking
+# call on a real loopback connection - no unbounded waits), then asserts on
+# the counters after the threads have both finished and joined.
+
+from std.test import TestRunner
+from std.net.tcp import TcpStream, TcpListener
+from std.net.websocket import WebSocketClient, WebSocketServer, WsConn, WsMessage
+from std.string.str import Str
+
+extern "C":
+    def _tr_c_malloc(size: int) -> Pointer[char]
+
+# ── Result codes reported back from each thread via Atomic[int] counters ───
+# Each flag is 0 (not reached / failed) or 1 (passed) so the main thread can
+# assert on each check individually after the task_group completes.
+
+def server_thread(port: int, r_bind: Atomic[int], r_handshake: Atomic[int],
+                   r_text: Atomic[int], r_binary: Atomic[int], r_close: Atomic[int]):
+    mut listener = TcpListener.listen("127.0.0.1", port)
+    if not listener.listening:
+        return
+    r_bind.add(1)
+
+    mut raw = listener.accept()
+    mut conn = WebSocketServer.accept_upgrade(raw)
+    if not conn.ok:
+        listener.close()
+        return
+    r_handshake.add(1)
+
+    # Text: client -> server
+    mut msg = conn.recv()
+    if msg.ok and msg.is_text() and Str.eq(msg.text, "hello from client"):
+        r_text.add(1)
+    msg.free()
+    # Text: server -> client
+    conn.send_text("hello from server")
+
+    # Binary round trip: receive N bytes, echo them back unchanged.
+    mut bmsg = conn.recv()
+    if bmsg.ok and bmsg.is_binary() and bmsg.len == 5:
+        mut all_match = true
+        mut i = 0
+        while i < 5:
+            mut got = 0
+            unsafe: got = (bmsg.data.offset(i).read() as int) & 255
+            if got != i + 10: all_match = false
+            i = i + 1
+        if all_match: r_binary.add(1)
+    conn.send_binary(bmsg.data as str, bmsg.len)
+    bmsg.free()
+
+    # Clean close, server-initiated.
+    if conn.close(): r_close.add(1)
+    listener.close()
+
+def client_thread(port: int, r_connect: Atomic[int], r_accept_hdr: Atomic[int],
+                   r_text: Atomic[int], r_binary: Atomic[int], r_ping: Atomic[int],
+                   r_close: Atomic[int]):
+    # Give the server thread time to bind + start accept() before connecting
+    # (matches tests/reactor/keepalive_stress.tr's Thread.sleep(400) pattern
+    # for "let the listener bind" — 300ms is ample on loopback).
+    Thread.sleep(300)
+
+    mut url = "ws://127.0.0.1:" + str(port) + "/"
+    mut conn = WebSocketClient.connect(url)
+    if not conn.ok:
+        return
+    r_connect.add(1)
+    # The handshake having produced .ok == true already proves the client
+    # verified Sec-WebSocket-Accept correctly against the key it sent (see
+    # WebSocketClient.connect: it fails with "Sec-WebSocket-Accept mismatch"
+    # otherwise) — record that explicitly as its own signal.
+    r_accept_hdr.add(1)
+
+    # Text: client -> server, then server -> client
+    conn.send_text("hello from client")
+    mut msg = conn.recv()
+    if msg.ok and msg.is_text() and Str.eq(msg.text, "hello from server"):
+        r_text.add(1)
+    msg.free()
+
+    # Binary round trip: send 5 bytes [10,11,12,13,14], expect identical echo.
+    mut buf = _tr_c_malloc(5)
+    mut i = 0
+    while i < 5:
+        unsafe: buf.offset(i).write((i + 10) as char)
+        i = i + 1
+    conn.send_binary(buf as str, 5)
+    mut echo = conn.recv()
+    if echo.ok and echo.is_binary() and echo.len == 5:
+        mut all_match = true
+        mut j = 0
+        while j < 5:
+            mut got = 0
+            unsafe: got = (echo.data.offset(j).read() as int) & 255
+            if got != j + 10: all_match = false
+            j = j + 1
+        if all_match: r_binary.add(1)
+    echo.free()
+
+    # Ping: send one: per RFC 6455 the peer (and our own recv(), which
+    # auto-answers incoming Pings with a Pong) must keep functioning — proven
+    # by the fact that the close handshake right after this still completes.
+    if conn.send_ping("hb"): r_ping.add(1)
+
+    # Clean close, client-initiated.
+    if conn.close(): r_close.add(1)
+
+async def main():
+    mut t = TestRunner.init("38_websocket")
+    mut port = 19700
+
+    t.section("handshake + framing (client<->server over real TCP loopback)")
+
+    mut s_bind      : Atomic[int] = Atomic.new(0)
+    mut s_handshake : Atomic[int] = Atomic.new(0)
+    mut s_text      : Atomic[int] = Atomic.new(0)
+    mut s_binary    : Atomic[int] = Atomic.new(0)
+    mut s_close     : Atomic[int] = Atomic.new(0)
+    mut c_connect   : Atomic[int] = Atomic.new(0)
+    mut c_accept_hdr: Atomic[int] = Atomic.new(0)
+    mut c_text      : Atomic[int] = Atomic.new(0)
+    mut c_binary    : Atomic[int] = Atomic.new(0)
+    mut c_ping      : Atomic[int] = Atomic.new(0)
+    mut c_close     : Atomic[int] = Atomic.new(0)
+
+    task_group:
+        spawn server_thread(port, s_bind, s_handshake, s_text, s_binary, s_close)
+        spawn client_thread(port, c_connect, c_accept_hdr, c_text, c_binary, c_ping, c_close)
+
+    # ── Server-side assertions ──────────────────────────────────────────
+    t.assert_eq_int(s_bind.load(), 1, "server: TcpListener bound successfully")
+    t.assert_eq_int(s_handshake.load(), 1, "server: accept_upgrade completed the RFC 6455 handshake")
+    t.assert_eq_int(s_text.load(), 1, "server: received the client's text message correctly")
+    t.assert_eq_int(s_binary.load(), 1, "server: received the client's binary message correctly (byte-for-byte)")
+    t.assert_eq_int(s_close.load(), 1, "server: close() completed the clean close handshake (sent Close, got peer's Close reply)")
+
+    # ── Client-side assertions ──────────────────────────────────────────
+    t.assert_eq_int(c_connect.load(), 1, "client: WebSocketClient.connect() reported .ok == true")
+    t.assert_eq_int(c_accept_hdr.load(), 1, "client: Sec-WebSocket-Accept was verified against the client's own key (connect() fails otherwise)")
+    t.assert_eq_int(c_text.load(), 1, "client: received the server's text reply correctly")
+    t.assert_eq_int(c_binary.load(), 1, "client: received the server's binary echo correctly (byte-for-byte)")
+    t.assert_eq_int(c_ping.load(), 1, "client: send_ping() succeeded and the connection kept working afterwards")
+    t.assert_eq_int(c_close.load(), 1, "client: close() completed the clean close handshake")
+
+    s_bind.free()
+    s_handshake.free()
+    s_text.free()
+    s_binary.free()
+    s_close.free()
+    c_connect.free()
+    c_accept_hdr.free()
+    c_text.free()
+    c_binary.free()
+    c_ping.free()
+    c_close.free()
+
+    # ── Unit-level coverage: handshake math + framing helpers, no sockets ──
+    t.section("ws_accept_value — RFC 6455 known-answer vector")
+    from std.net.websocket import ws_accept_value
+    mut acc = ws_accept_value("dGhlIHNhbXBsZSBub25jZQ==")
+    t.assert_eq_str(acc, "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=", "ws_accept_value matches the RFC 6455 section 1.3 example exactly")
+
+    t.section("ws_generate_key — client key shape")
+    from std.net.websocket import ws_generate_key
+    mut k1 = ws_generate_key()
+    mut k2 = ws_generate_key()
+    t.assert_eq_int(Str.len(k1), 24, "ws_generate_key produces a 24-char base64 string (16 raw bytes + padding)")
+    t.assert_ne_str(k1, k2, "two successive ws_generate_key calls produce different keys")
+
+    t.section("WsMessage helpers")
+    # WsMessage.free() unconditionally _tr_free()s a non-null .data (correct
+    # for its real callers - recv_raw() always hands it a fresh _tr_c_malloc
+    # buffer) - so these unit-level constructions must pass heap-allocated
+    # buffers too (not a `"literal" as Pointer[char]` cast into static
+    # string-literal memory, which is not something WsMessage.free() can
+    # legally _tr_free()).
+    mut hi_buf = _tr_c_malloc(3)
+    unsafe:
+        hi_buf.offset(0).write('h')
+        hi_buf.offset(1).write('i')
+        hi_buf.offset(2).write('\0')
+
+    mut tm = WsMessage.init(1, hi_buf, 2)
+    t.assert_true(tm.is_text(), "WsMessage with opcode 1 reports is_text() true")
+    t.assert_false(tm.is_binary(), "WsMessage with opcode 1 reports is_binary() false")
+    t.assert_eq_str(tm.text, "hi", "WsMessage TEXT ctor decodes .text from the raw payload bytes")
+    tm.free()
+
+    mut bin_buf = _tr_c_malloc(3)
+    unsafe:
+        bin_buf.offset(0).write('h')
+        bin_buf.offset(1).write('i')
+        bin_buf.offset(2).write('\0')
+    mut bm = WsMessage.init(2, bin_buf, 2)
+    t.assert_true(bm.is_binary(), "WsMessage with opcode 2 reports is_binary() true")
+    bm.free()
+
+    mut pm = WsMessage.init(9, _tr_c_malloc(1), 0)
+    t.assert_true(pm.is_ping(), "WsMessage with opcode 9 reports is_ping() true")
+    pm.free()
+
+    mut om = WsMessage.init(10, _tr_c_malloc(1), 0)
+    t.assert_true(om.is_pong(), "WsMessage with opcode 10 reports is_pong() true")
+    om.free()
+
+    mut cm = WsMessage.init(8, _tr_c_malloc(1), 0)
+    t.assert_true(cm.is_close(), "WsMessage with opcode 8 reports is_close() true")
+    cm.free()
+
+    t.summary()
