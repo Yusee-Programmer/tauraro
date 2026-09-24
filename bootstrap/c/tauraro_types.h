@@ -4676,6 +4676,7 @@ __attribute__((hot)) TrStr CGenerator__comp_src_free_stmt(CGenerator* self, HirE
 __attribute__((hot)) TrStr CGenerator_cb_trampoline(CGenerator* self, AstType* sig);
 __attribute__((hot)) TrStr CGenerator_gen_closure(CGenerator* self, List_ptr* params, AstType* ret_ty, HirBlock* body, List_ptr* captures);
 __attribute__((hot)) TrStr CGenerator__spawn_wrap_cast_ty(CGenerator* self, TrStr fn_name, HirExpr* arg_expr);
+__attribute__((hot)) TrStr CGenerator__spawn_wrap_cast_ty_n(CGenerator* self, TrStr fn_name, long long pi, HirExpr* arg_expr);
 __attribute__((hot)) void CGenerator_emit_spawn_wrapper_for_expr(CGenerator* self, HirExpr* e);
 __attribute__((hot)) void CGenerator_prescan_block_spawns(CGenerator* self, HirBlock* block);
 __attribute__((hot)) void CGenerator_prescan_stmt_spawns(CGenerator* self, HirStmt* s);

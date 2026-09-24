@@ -11123,14 +11123,13 @@ __auto_type idx_arg = _t636.data.EIndex._tr_v_index;
             } else if ((((strcmp(_tr_strz(hobj_ty->name), _tr_strz(_tr_str_lit("Map"))) == 0) || (strcmp(_tr_strz(hobj_ty->name), _tr_strz(_tr_str_lit("Dict"))) == 0)) && (hobj_ty->args->len > 1LL))) {
                 /* pass */
                 ret_ty = (*((AstType**)List_ptr_get(hobj_ty->args, 1LL)));
-            } else if ((hobj_ty->args->len > 0LL)) {
-                /* pass */
-                ret_ty = (*((AstType**)List_ptr_get(hobj_ty->args, 0LL)));
             } else if (_tr_dict_contains(self->classes, _tr_strz(hobj_ty->name))) {
                 /* pass */
                 ClassDef* _gcls = ((ClassDef*)(uintptr_t)_tr_dict_get(self->classes, _tr_strz(hobj_ty->name)));
                 /* pass */
                 long long _gmi = 0LL;
+                /* pass */
+                bool _gfound = false;
                 /* pass */
                 while ((_gmi < _gcls->methods->len)) {
                     /* pass */
@@ -11141,11 +11140,26 @@ __auto_type idx_arg = _t636.data.EIndex._tr_v_index;
                         if ((((unsigned long long)(_gmdef->ret_ty)) != ((unsigned long long)(0LL)))) {
                             /* pass */
                             ret_ty = (*_gmdef->ret_ty);
+                            /* pass */
+                            if (((_gcls->generics->len > 0LL) && (hobj_ty->args->len > 0LL))) {
+                                /* pass */
+                                ret_ty = Sema__subst_ret_generics(self, ret_ty, _gcls->generics, hobj_ty->args);
+                            }
+                            /* pass */
+                            _gfound = true;
                         }
                     }
                     /* pass */
                     _gmi = (_gmi + 1LL);
                 }
+                /* pass */
+                if (((!_gfound) && (hobj_ty->args->len > 0LL))) {
+                    /* pass */
+                    ret_ty = (*((AstType**)List_ptr_get(hobj_ty->args, 0LL)));
+                }
+            } else if ((hobj_ty->args->len > 0LL)) {
+                /* pass */
+                ret_ty = (*((AstType**)List_ptr_get(hobj_ty->args, 0LL)));
             }
         } else if ((strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("alloc"))) == 0)) {
             /* pass */
