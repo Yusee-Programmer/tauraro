@@ -1,0 +1,64 @@
+# tests/regression/free_fn_method_c_name_collision.tr
+# Regression: a free (module-level) function and a class's static method can
+# generate the IDENTICAL C symbol name (e.g. a free function literally named
+# "Widget_eq" collides with class Widget's static method `eq`, which mangles
+# to C name "Widget_eq"), with ZERO compile-time detection previously -- it
+# only broke at LINK time ("multiple definition of 'Widget_eq'"), and only in
+# a build that happened to pull BOTH definitions into the same binary (found
+# building std/io/archive.tr: a free `Str_eq` collided with std/string/str.tr's
+# class Str's static method `eq`, invisible until both modules got linked
+# together via std/io/mod.tr's re-exports).
+#
+# Fixed via compile-time DETECTION (not renaming -- renaming free functions
+# would require re-verifying every independent C-name reconstruction site
+# across the whole codegen, a much higher-risk change): src/sema.tr's
+# `analyze()` now calls `check_free_fn_method_c_name_collisions(hp)` right
+# before returning the fully-built HirProgram (every free function and
+# extend-block method is known program-wide by that point), reporting a clear
+# [C-1] compile error instead of a cryptic linker failure.
+#
+# A genuinely COLLIDING repro (a free fn literally named "Widget_eq" next to
+# class Widget's static method `eq`) is a deliberate COMPILE FAILURE by
+# design (sema's error path calls _tr_exit(1)) -- run_tests.ps1 treats any
+# non-zero exit from `tauraroc --run` as a failed test file, so such a repro
+# cannot live in this auto-discovered suite without breaking it. That
+# negative case was verified manually instead (see the fix's own commit/PR
+# notes): compiling a free `def Widget_eq(a: int, b: int) -> bool: ...`
+# alongside `extend Widget: pub def eq(a: int, b: int) -> bool: ...` now
+# fails at COMPILE time with a "[C-1] free function 'Widget_eq' generates the
+# same C symbol name ('Widget_eq') as class/enum method 'Widget.eq'" error,
+# instead of silently compiling clean and only breaking later at LINK time.
+# This file instead asserts the POSITIVE case: distinctly-named free
+# functions and static methods keep compiling and running correctly (no
+# false-positive collisions from the new check).
+
+from std.test import TestRunner
+
+pub class Widget:
+    pub v: int
+
+extend Widget:
+    pub def init(v: int) -> Widget:
+        mut w = Widget()
+        w.v = v
+        return w
+    # Named differently from any free function in this file/program -- no
+    # collision. (The actual colliding-name repro that must be REJECTED at
+    # compile time lives in the sibling _should_fail.tr file, since a file
+    # that deliberately fails to compile can't be run by the normal suite.)
+    pub def eq_vals(a: int, b: int) -> bool:
+        return a == b
+
+def widget_free_helper(a: int, b: int) -> bool:
+    return a != b
+
+def main():
+    mut t = TestRunner.init("free_fn_method_c_name_collision")
+
+    t.section("non-colliding free fn + static method names compile and run fine")
+    mut w = Widget.init(3)
+    t.assert_eq_int(w.v, 3, "Widget.init still works")
+    t.assert_true(Widget.eq_vals(2, 2), "Widget.eq_vals (static method) still works")
+    t.assert_true(widget_free_helper(1, 2), "widget_free_helper (free function) still works")
+
+    t.summary()

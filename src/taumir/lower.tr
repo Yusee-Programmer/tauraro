@@ -263,6 +263,25 @@ def _tag_of(m: LModule, ty: AstType) -> int:
         sbi = sbi + 1
     if m.is_class(ty.name): return 10
     if m.is_enum(ty.name): return 11
+    # [bug2.txt BUG A/B, DEFERRED -- not fixed this session] A real user/stdlib
+    # class literally named Map/Dict/List/Vec/Set (e.g. std/core/map.tr's own
+    # from-scratch `pub class Map[K, V]`) is unconditionally swallowed by the
+    # builtin-collection special-cases below, regardless of arity -- m.is_class
+    # above NEVER catches this since a generic class's ClassLayout is only
+    # registered under its MONOMORPHIZED name (e.g. "Map_str_i64") once
+    # instantiated, never the bare generic name. An arity-based disambiguation
+    # (real class's generics.len == this usage's args.len) was attempted and
+    # reverted after a CONFIRMED regression: it is NOT just List/Vec (builtin
+    # shorthand always 1 arg, ambiguous with any real 1-generic class of that
+    # name) that collides -- Map/Dict's builtin shorthand can ALSO be 2 args
+    # (explicit key+value type, e.g. an object-valued dict), the same arity a
+    # real 2-generic Map[K,V]/Dict[K,V] class would have. This compiler's own
+    # source (src/codegen/c.tr's `functions: Map[str, HirFunction]`) uses
+    # exactly that legitimate 2-arg builtin shape -- turning the arity guard on
+    # broke the compiler's OWN self-hosting build. See this session's final
+    # report for the full writeup; _is_real_generic_class_arity_match (below)
+    # is kept in the source, permanently inert (always returns false), so a
+    # future attempt has this investigation as a documented starting point.
     # Dict/Map -> a builtin idict/sdict tag (BEFORE the generic-class check, so the std Map[K,V]
     # class is treated as a builtin dict, not compiled). Class/enum VALUES -> obj-valued 24/25.
     if (ty.name == "Dict" or ty.name == "Map") and ty.args.len >= 2:
@@ -316,6 +335,28 @@ def _prog_generic_class_index(m: LModule, name: str) -> int:
         if c.name == name and c.generics.len > 0: return i
         i = i + 1
     return -1
+
+# [REVERTED / deferred -- see bug2.txt BUG A/B final writeup, and the identical
+# (fully inert) sibling in src/codegen/c.tr's _is_real_generic_class_by_arity for
+# the complete rationale] This was an attempt to distinguish a REAL user/stdlib
+# generic class literally named Map/Dict/List/Vec from the BUILTIN collection
+# shorthand by comparing type-arg COUNT against the real class's declared
+# generic-param count. Reverted after a CONFIRMED regression: this compiler's
+# OWN source uses the builtin 2-arg `Map[K, V]` shorthand extensively and
+# legitimately (e.g. src/codegen/c.tr's `functions: Map[str, HirFunction]`,
+# many `Map[str, bool]` uses in src/bindgen.tr) -- these have the EXACT SAME
+# arity as a genuine real-class `Map[str, int]` usage, so arity alone cannot
+# safely disambiguate them. Turning this on broke the compiler's own
+# self-hosting build (regenerating bootstrap/c/ from a compiler built with
+# this active, then recompiling THAT, failed: `functions` got wrongly
+# monomorphized against std/core/map.tr's real class instead of the intended
+# builtin str-keyed object-valued dict). Always returns false (fully inert);
+# every call site falls back to its pre-existing, unconditional
+# builtin-shorthand behavior. bug2.txt's BUG A/B is NOT fixed this session --
+# documented as a deferred gap in the final report, not shipped with a
+# confirmed self-hosting-breaking regression.
+def _is_real_generic_class_arity_match(m: LModule, name: str, arg_count: int) -> bool:
+    return false
 
 # Mangle Box[int] -> "Box__gint" (safe in C and LLVM symbol names).
 def _mangle_generic(m: LModule, ty: AstType) -> str:
@@ -6853,6 +6894,11 @@ def _lower_expr_impl(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                     # Set[T].init() / .new() — backed by the same idict/sdict runtime as a set literal.
                     # Map[K,V].init(cap) / Dict[K,V].init() / .new(): a builtin idict/sdict handle
                     # (capacity advisory). Values may be int/str/float OR class instances (24/25).
+                    # [bug2.txt BUG A/B, DEFERRED] this unconditionally treats ANY `Map[...]`/
+                    # `Dict[...]` static .init()/.new() call as the builtin, even when a real
+                    # class of that name exists (arity-based disambiguation was attempted and
+                    # reverted -- see _tag_of's comment, same file, for the full rationale: it
+                    # broke this compiler's own self-hosting build).
                     if (inm == "Map" or inm == "Dict") and (method == "init" or method == "new"):
                         mut mtag = _tag_of(m, ity_g)
                         if not _is_dict_tag(mtag): return -1

@@ -2470,7 +2470,45 @@ extend Sema:
         # F-2: apply it — add the auto-drops the conservative class-arg escape wrongly
         # suppressed for locals that are only BORROWED (never consumed) by their callees.
         self.apply_borrow_drops(hp)
+        self.check_free_fn_method_c_name_collisions(hp)
         return hp
+
+    # [Bug: free-fn/class-method C-namespace collision] A free (module-level,
+    # non-extern) function and a class/enum (static-)method share ONE flat C
+    # namespace with no distinguishing prefix: codegen/c.tr's gen_func_sig
+    # mangles a free function to its bare name (`f.name`, keyword-escaped) and
+    # a method to `<ClassName>_<method>` -- so a free function that happens to
+    # be named e.g. "Str_eq" collides with class Str's static method `eq`
+    # (also "Str_eq"). Both compile individually with zero diagnostics; it only
+    # breaks at LINK time ("multiple definition of 'Str_eq'"), and only in a
+    # build that happens to pull in both modules together -- exactly what
+    # happened building std/io/archive.tr (a free `Str_eq` collided with
+    # std/string/str.tr's `Str.eq`, invisible until std/io/mod.tr wired both
+    # in). Detected here at compile time instead, across the WHOLE program
+    # (hp.functions has every free function and every extend-block method by
+    # this point), with a clear diagnostic instead of a cryptic linker error.
+    # Only free functions ARE renameable without an ABI break (methods keep
+    # their `<Class>_<method>` scheme, extern "C" functions keep their exact
+    # declared name for FFI) -- so this reports the collision rather than
+    # silently renaming, keeping the fix contained/zero-blast-radius.
+    pub def check_free_fn_method_c_name_collisions(self, hp: HirProgram):
+        mut method_c_names = Map[str, str].init(32)   # C name -> "Class.method" (for the message)
+        mut mi = 0
+        while mi < hp.functions.len:
+            mut mf = hp.functions.get(mi)
+            if mf.class_name != "" and not mf.is_extern:
+                mut mc_name = mf.class_name + "_" + mf.name
+                if not method_c_names.contains(mc_name):
+                    method_c_names.insert(mc_name, mf.class_name + "." + mf.name)
+            mi = mi + 1
+        mut fi = 0
+        while fi < hp.functions.len:
+            mut ff = hp.functions.get(fi)
+            if ff.class_name == "" and not ff.is_extern and ff.name != "main" and ff.generics.len == 0:
+                mut fc_name = ff.name
+                if method_c_names.contains(fc_name):
+                    self.error("[C-1] free function '" + ff.name + "' generates the same C symbol name ('" + fc_name + "') as class/enum method '" + method_c_names.get(fc_name) + "'.\n      This compiles cleanly on its own but fails at LINK time ('multiple definition of \"" + fc_name + "\"') the moment a build pulls in both definitions.\n      FIX: rename one of the two (the free function '" + ff.name + "', or the method '" + method_c_names.get(fc_name) + "').")
+            fi = fi + 1
 
     # ---- Return-ownership inference (whole-program monotone fixpoint) ----
     # A function returns an OWNED heap-class reference iff EVERY return path yields

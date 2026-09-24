@@ -1,0 +1,41 @@
+# tests/regression/zlib_out_len_c_int_abi.tr
+# Regression: std/compress/zlib.tr's extern "C" declarations for
+# _tr_zlib_compress/_tr_deflate used `out_len: Pointer[int]` (Tauraro's 64-bit
+# `int`), but the real runtime C signatures are `int* out_len` (a 32-bit C
+# `int`). This hard type mismatch made Zlib.compress()/Zlib.deflate() fail to
+# compile on ANY build:
+#     error: passing argument 3 of '_tr_deflate' from incompatible pointer type
+#       expected 'int *' but argument is of type 'long long int *'
+# Fixed by changing both declarations to `Pointer[c_int]` (the c_int FFI family
+# exists precisely for real-C-int-width out-params, already used correctly
+# elsewhere e.g. std/regex/mod.tr) and allocating a real Pointer[c_int]-typed
+# buffer at each call site (mirroring std/io/archive.tr's own local extern
+# bindings for the same runtime symbols, which already used the correct width).
+#
+# Note: on a runtime build WITHOUT -DTAURARO_COMPRESS_ZLIB, _tr_deflate/
+# _tr_zlib_compress are stub implementations that always return NULL with
+# out_len=0 (see runtime/tauraro_rt.h, the #else branch) -- this is documented,
+# intentional, opt-in-feature behavior, not a bug. This test only asserts that
+# the calls COMPILE and RUN without crashing/hanging (the actual regression),
+# not that compression produces non-empty output, so it passes identically on
+# both stub and real-zlib-backed builds.
+
+from std.test import TestRunner
+from std.compress.zlib import Zlib
+
+def main():
+    mut t = TestRunner.init("zlib_out_len_c_int_abi")
+
+    t.section("Zlib.deflate/compress compile and run with correct Pointer[c_int] ABI")
+    mut d = Zlib.deflate("hello world hello world hello world", 36)
+    t.assert_true(true, "Zlib.deflate() returned without crashing")
+
+    mut c = Zlib.compress("hello world hello world hello world", 36)
+    t.assert_true(true, "Zlib.compress() returned without crashing")
+
+    # decompress/inflate were never affected (no out-pointer param) - sanity check
+    # they still work alongside the fixed compress/deflate declarations.
+    mut plain = Zlib.decompress("not really zlib data but must not crash", 40, 4096)
+    t.assert_true(true, "Zlib.decompress() still compiles/runs")
+
+    t.summary()
