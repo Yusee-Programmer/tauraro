@@ -8,6 +8,7 @@ from std.io.path       import Path
 from std.io.console    import Console
 from std.io.poll       import IOPoll, IOEvent
 from std.io.event_loop import EventLoop
+from std.io.archive    import ZipWriter, ZipReader, Crc32
 from std.sys.fs        import Fs
 ```
 
@@ -399,6 +400,79 @@ while loop.is_running():
 | `destroy` | `(self)` | `void` | Stop the loop and destroy its underlying `IOPoll`. |
 
 > **Note** — `run()` only counts and tallies events; it does not itself dispatch them to handlers. For real servers, drive your own loop with `poll_once()` as shown above, or process the `Vec[IOEvent]` returned by `run`'s underlying `poll_once` calls yourself.
+
+---
+
+## Archive (ZIP) — `std.io.archive`
+
+**When**: You need to create or read real `.zip` files — bundling multiple files into one archive, or unpacking one — without shelling out to a `zip`/`unzip` CLI tool.
+**Why**: A pure-Tauraro implementation of the PKZIP APPNOTE format (local file header + central directory + end-of-central-directory record), byte-correct enough that real ZIP tools can read `ZipWriter`'s output. Compression uses the same raw-DEFLATE runtime routines `std.compress.zlib.Zlib` wraps; every entry's CRC32 (IEEE 802.3 / PKZIP polynomial `0xEDB88320`) is verified on decompression, so a corrupted archive is detected rather than silently handed back as wrong data.
+
+```tauraro
+from std.io.archive import ZipWriter, ZipReader
+
+mut w = ZipWriter.init()
+w.add_file("hello.txt", "hello world", 11)   # DEFLATE if it shrinks the data, else STORED
+mut zip_bytes = w.finish()
+```
+
+### ZipWriter class
+
+| Method | Signature | Returns | Description |
+|---|---|---|---|
+| `init` | `() -> ZipWriter` | `ZipWriter` | Create an empty archive builder. |
+| `add_file` | `(self, name: str, data: str, len_: int)` | `void` | Add an entry, compressed with DEFLATE when that actually shrinks `data`; otherwise falls back to STORED automatically (always correct, e.g. also true when compression is unavailable). |
+| `add_file_stored` | `(self, name: str, data: str, len_: int)` | `void` | Add an entry with no compression, regardless of size. |
+| `finish` | `(self) -> str` | `str` | Write the central directory + end-of-central-directory record and return the complete ZIP file bytes. |
+| `total_len` | `(self) -> int` | `int` | Exact byte length of the archive built so far — call **after** `finish()` for the final archive size. The returned bytes may contain embedded NULs, so this length (not `strlen`) is authoritative. |
+
+### ZipReader class
+
+Parses the central directory up front (cheap — no decompression); each entry's payload is only decompressed when you call `read_entry`.
+
+| Method | Signature | Returns | Description |
+|---|---|---|---|
+| `open` | `(data: str, len_: int) -> ZipReader` | `ZipReader` | Parse the central directory of a ZIP byte buffer. Check `.ok` for success. |
+| `entry_count` | `(self) -> int` | `int` | Number of entries in the archive. |
+| `entry_name` | `(self, i: int) -> str` | `str` | Name of entry `i`, or `""` if out of range. |
+| `entry_size` | `(self, i: int) -> int` | `int` | Uncompressed size of entry `i`, or `-1` if out of range. |
+| `find_entry` | `(self, name: str) -> int` | `int` | Index of the entry named `name`, or `-1` if not present. |
+| `read_entry` | `(self, i: int) -> str` | `str` | Decompress entry `i` (STORED or DEFLATE, per its header) and verify its CRC32. Returns the exact original bytes, or `""` with an error message printed if the CRC32 does not match — never silently returns corrupted data. |
+
+Fields: `ok: bool` — `true` when the central directory parsed successfully.
+
+### Crc32 class
+
+| Method | Signature | Returns | Description |
+|---|---|---|---|
+| `Crc32.compute` | `(data: str, len_: int) -> int` | `int` | CRC32 (IEEE 802.3 / ZIP / PNG / gzip polynomial `0xEDB88320`) of the first `len_` bytes of `data`. `Crc32.compute("123456789", 9) == 0xCBF43926` is the standard check value. |
+
+### Example
+
+```tauraro
+from std.io.archive import ZipWriter, ZipReader
+from std.io.file     import write_file, read_file, file_exists
+from std.string.str  import Str
+
+# Write a multi-entry archive
+mut w = ZipWriter.init()
+w.add_file("readme.txt", "hello archive", 13)          # compressed if it helps
+w.add_file_stored("data.bin", "raw bytes here", 14)     # forced STORED
+w.add_file("empty.txt", "", 0)                          # empty entries are fine
+mut zip_bytes = w.finish()
+mut zip_len   = w.total_len()
+write_file("out.zip", zip_bytes)
+
+# Read it back
+mut r = ZipReader.open(zip_bytes, zip_len)
+print(str(r.entry_count()))          # 3
+
+mut i = r.find_entry("readme.txt")
+if i >= 0:
+    print(r.read_entry(i))            # "hello archive" (CRC32-verified)
+
+mut miss = r.find_entry("nope.txt")   # -1 — not present
+```
 
 ---
 

@@ -1,0 +1,487 @@
+# std.io.archive — Real ZIP file reading and writing (PKZIP APPNOTE format).
+#
+# Pure Tauraro: local file header + central directory + end-of-central-
+# directory record, byte-exact per spec. Compression goes through the same
+# runtime routines std.compress.zlib.Zlib wraps (_tr_deflate/_tr_inflate,
+# raw DEFLATE, no zlib/gzip wrapper) or STORED (no compression). CRC32
+# (IEEE 802.3, polynomial 0xEDB88320 — the ZIP/PNG/gzip polynomial) is
+# implemented from scratch here: a 256-entry lookup table built once, plus
+# a byte-at-a-time update loop.
+#
+# Usage:
+#   from std.io.archive import ZipWriter, ZipReader, Crc32
+#
+#   mut w = ZipWriter.init()
+#   w.add_file("hello.txt", "hello world", 11)
+#   mut zip_bytes = w.finish()
+#   write_file("out.zip", zip_bytes)         # std.io.file
+#
+#   mut r = ZipReader.open(zip_bytes, Str.len(zip_bytes))
+#   mut i = r.find_entry("hello.txt")
+#   mut content = r.read_entry(i)            # CRC32-verified on decompress
+#
+# Note on binary strings: ZIP bytes (headers + compressed data) may contain
+# embedded NUL bytes, so every length here is tracked explicitly — nothing
+# in this file relies on C strlen()/NUL-termination for archive payloads.
+# Local extern bindings below declare _tr_deflate/_tr_inflate with the
+# correct C-ABI out_len pointer width (Pointer[c_int], a real C 'int') —
+# these are the exact same runtime symbols std.compress.zlib.Zlib calls.
+
+extern "C":
+    def _tr_c_malloc(size: int) -> Pointer[char]
+    def _tr_c_realloc(ptr: Pointer[char], size: int) -> Pointer[char]
+    def _tr_c_free(ptr: Pointer[char])
+    def _tr_c_memcpy(dst: Pointer[char], src: Pointer[char], n: int)
+    def _tr_str_wrap(s: Pointer[char]) -> str
+    def _tr_deflate(input: str, ilen: int, out_len: Pointer[c_int]) -> str
+    def _tr_inflate(input: str, ilen: int, max_out: int) -> str
+
+from std.core.vec import Vec
+
+# ── CRC32 (IEEE 802.3 / zlib / PKZIP polynomial 0xEDB88320) ───────────────────
+
+pub class Crc32Table:
+    pub ptr:   Pointer[int]
+    pub ready: bool
+
+mut _crc32_holder = Crc32Table()
+
+pub class Crc32:
+    _dummy: int
+
+extend Crc32:
+    def _build_table() -> Pointer[int]:
+        mut tbl = _tr_c_malloc(256 * 8) as Pointer[int]
+        mut i = 0
+        while i < 256:
+            mut c: int = i
+            mut k = 0
+            while k < 8:
+                if c & 1 == 1:
+                    c = 0xEDB88320 ^ (c >> 1)
+                else:
+                    c = c >> 1
+                k = k + 1
+            unsafe:
+                tbl.offset(i).write(c)
+            i = i + 1
+        unsafe:
+            return tbl
+
+    def _table() -> Pointer[int]:
+        if not _crc32_holder.ready:
+            _crc32_holder.ptr   = Crc32._build_table()
+            _crc32_holder.ready = true
+        return _crc32_holder.ptr
+
+    # Compute CRC32 over `len_` bytes starting at byte 0 of `data` (a str
+    # used as a raw byte buffer — embedded NULs are fine since len_ is
+    # tracked explicitly, not via strlen).
+    pub def compute(data: str, len_: int) -> int:
+        mut tbl = Crc32._table()
+        mut crc: int = 0xFFFFFFFF
+        mut p = data as Pointer[char]
+        mut i = 0
+        while i < len_:
+            mut byte = p.offset(i).read() as int & 0xFF
+            mut idx  = (crc ^ byte) & 0xFF
+            unsafe:
+                mut t = tbl.offset(idx).read()
+                crc = (t ^ (crc >> 8)) & 0xFFFFFFFF
+            i = i + 1
+        return crc ^ 0xFFFFFFFF
+
+# ── Raw growable byte buffer (internal) ────────────────────────────────────────
+#
+# Builds ZIP bytes (headers + payload) with explicit length tracking — never
+# strlen-based — so embedded NUL bytes in compressed/binary data are safe.
+
+pub class ByteBuf:
+    pub data: Pointer[char]
+    pub len:  int
+    pub cap:  int
+
+extend ByteBuf:
+    pub def init(cap: int) -> ByteBuf:
+        mut c = cap
+        if c < 16: c = 16
+        mut b = ByteBuf()
+        b.data = _tr_c_malloc(c)
+        b.len  = 0
+        b.cap  = c
+        return b
+
+    def _ensure(self, extra: int):
+        if self.len + extra <= self.cap: return
+        mut nc = self.cap * 2 + extra
+        self.data = _tr_c_realloc(self.data, nc)
+        self.cap  = nc
+
+    pub def push_u8(self, v: int):
+        self._ensure(1)
+        unsafe:
+            self.data.offset(self.len).write((v & 0xFF) as char)
+        self.len = self.len + 1
+
+    pub def push_u16le(self, v: int):
+        self.push_u8(v & 0xFF)
+        self.push_u8((v >> 8) & 0xFF)
+
+    pub def push_u32le(self, v: int):
+        self.push_u8(v & 0xFF)
+        self.push_u8((v >> 8) & 0xFF)
+        self.push_u8((v >> 16) & 0xFF)
+        self.push_u8((v >> 24) & 0xFF)
+
+    # Append `n` raw bytes starting at byte 0 of `s` (explicit length; safe
+    # for embedded NULs).
+    pub def push_bytes(self, s: str, n: int):
+        if n <= 0: return
+        self._ensure(n)
+        unsafe:
+            _tr_c_memcpy(self.data.offset(self.len), s as Pointer[char], n)
+        self.len = self.len + n
+
+    # Append every byte currently in `other` (used to splice the central
+    # directory after the entry payloads).
+    pub def push_buf(self, other: ByteBuf):
+        self.push_raw(other.data, other.len)
+
+    pub def push_raw(self, p: Pointer[char], n: int):
+        if n <= 0: return
+        self._ensure(n)
+        unsafe:
+            _tr_c_memcpy(self.data.offset(self.len), p, n)
+        self.len = self.len + n
+
+    # Materialize the buffer's current contents as a str (byte-exact,
+    # NUL-terminated for compatibility but the true length is self.len —
+    # callers must keep tracking it explicitly, e.g. via ZipWriter/ZipReader
+    # APIs that always hand back a paired length).
+    pub def to_str(self) -> str:
+        mut out = _tr_c_malloc(self.len + 1)
+        if self.len > 0:
+            unsafe: _tr_c_memcpy(out, self.data, self.len)
+        unsafe: out.offset(self.len).write('\0')
+        return _tr_str_wrap(out)
+
+    pub def free(self):
+        _tr_c_free(self.data)
+        self.data = 0 as Pointer[char]
+        self.len  = 0
+        self.cap  = 0
+
+# ── Little-endian byte readers over a raw str buffer ───────────────────────────
+
+def _rd_u16(data: str, off: int) -> int:
+    mut p = data as Pointer[char]
+    mut b0 = p.offset(off).read() as int & 0xFF
+    mut b1 = p.offset(off + 1).read() as int & 0xFF
+    return b0 | (b1 << 8)
+
+def _rd_u32(data: str, off: int) -> int:
+    mut p = data as Pointer[char]
+    mut b0 = p.offset(off).read() as int & 0xFF
+    mut b1 = p.offset(off + 1).read() as int & 0xFF
+    mut b2 = p.offset(off + 2).read() as int & 0xFF
+    mut b3 = p.offset(off + 3).read() as int & 0xFF
+    return b0 | (b1 << 8) | (b2 << 16) | (b3 << 24)
+
+# Copy `n` raw bytes starting at `off` in `data` into a fresh, explicitly-
+# length-tracked str (safe for embedded NULs — never uses strlen).
+def _raw_slice(data: str, off: int, n: int) -> str:
+    mut out = _tr_c_malloc(n + 1)
+    if n > 0:
+        unsafe:
+            _tr_c_memcpy(out, (data as Pointer[char]).offset(off), n)
+    unsafe: out.offset(n).write('\0')
+    return _tr_str_wrap(out)
+
+# ── Compression method constants ───────────────────────────────────────────────
+
+pub def METHOD_STORED() -> int: return 0
+pub def METHOD_DEFLATE() -> int: return 8
+
+# ── ZipWriter ───────────────────────────────────────────────────────────────────
+
+# Per-entry bookkeeping needed to emit the central directory in finish().
+pub class ZipCentralRec:
+    pub name:      str
+    pub name_len:  int
+    pub method:    int
+    pub crc32:     int
+    pub csize:     int
+    pub usize:     int
+    pub lh_offset: int
+
+pub class ZipWriter:
+    pub body:    ByteBuf          # local file headers + compressed payloads
+    pub records: Vec[ZipCentralRec]
+
+extend ZipWriter:
+    pub def init() -> ZipWriter:
+        mut w = ZipWriter()
+        w.body    = ByteBuf.init(256)
+        w.records = Vec[ZipCentralRec].init(4)
+        return w
+
+    # Add one entry, compressed with DEFLATE when that actually shrinks the
+    # data; falls back to STORED automatically when DEFLATE isn't available
+    # (e.g. this runtime build lacks -DTAURARO_COMPRESS_ZLIB) or doesn't
+    # help (tiny/incompressible input) — always correct either way.
+    pub def add_file(self, name: str, data: str, len_: int):
+        mut crc = Crc32.compute(data, len_)
+        mut method = METHOD_STORED()
+        mut payload = data
+        mut plen    = len_
+
+        if len_ > 0:
+            mut outlen_buf = _tr_c_malloc(8) as Pointer[c_int]
+            unsafe: outlen_buf.write(0 as c_int)
+            mut compressed = _tr_deflate(data, len_, outlen_buf)
+            mut clen = 0
+            unsafe: clen = outlen_buf.read() as int
+            _tr_c_free(outlen_buf as Pointer[char])
+            if clen > 0 and clen < len_:
+                method  = METHOD_DEFLATE()
+                payload = compressed
+                plen    = clen
+
+        self._write_entry(name, method, crc, payload, plen, len_)
+
+    # Add one entry with no compression, regardless of size (useful as a
+    # correctness baseline / for already-compressed content).
+    pub def add_file_stored(self, name: str, data: str, len_: int):
+        mut crc = Crc32.compute(data, len_)
+        self._write_entry(name, METHOD_STORED(), crc, data, len_, len_)
+
+    def _write_entry(self, name: str, method: int, crc: int, payload: str, plen: int, usize: int):
+        mut name_len = _archive_str_len(name)
+        mut lh_offset = self.body.len
+
+        # Local file header (PKZIP APPNOTE 4.3.7).
+        self.body.push_u32le(0x04034b50)   # signature
+        self.body.push_u16le(20)           # version needed to extract
+        self.body.push_u16le(0)            # general purpose bit flag
+        self.body.push_u16le(method)       # compression method
+        self.body.push_u16le(0)            # last mod file time (placeholder)
+        self.body.push_u16le(0x21)         # last mod file date (placeholder)
+        self.body.push_u32le(crc)          # crc-32 of uncompressed data
+        self.body.push_u32le(plen)         # compressed size
+        self.body.push_u32le(usize)        # uncompressed size
+        self.body.push_u16le(name_len)     # file name length
+        self.body.push_u16le(0)            # extra field length
+        self.body.push_bytes(name, name_len)
+        self.body.push_bytes(payload, plen)
+
+        mut rec = ZipCentralRec()
+        rec.name      = name
+        rec.name_len  = name_len
+        rec.method    = method
+        rec.crc32     = crc
+        rec.csize     = plen
+        rec.usize     = usize
+        rec.lh_offset = lh_offset
+        self.records.push(rec)
+
+    # Write the central directory + end-of-central-directory record and
+    # return the complete ZIP file bytes. The returned str's true length is
+    # self.total_len() (may contain embedded NULs — do not use strlen on it).
+    pub def finish(self) -> str:
+        mut cd = ByteBuf.init(256)
+        mut cd_offset = self.body.len
+
+        mut i = 0
+        while i < self.records.len:
+            mut rec = self.records.get(i)
+            cd.push_u32le(0x02014b50)  # central directory signature
+            cd.push_u16le(20)          # version made by
+            cd.push_u16le(20)          # version needed to extract
+            cd.push_u16le(0)           # general purpose bit flag
+            cd.push_u16le(rec.method)  # compression method
+            cd.push_u16le(0)           # last mod file time
+            cd.push_u16le(0x21)        # last mod file date
+            cd.push_u32le(rec.crc32)
+            cd.push_u32le(rec.csize)
+            cd.push_u32le(rec.usize)
+            cd.push_u16le(rec.name_len)
+            cd.push_u16le(0)           # extra field length
+            cd.push_u16le(0)           # file comment length
+            cd.push_u16le(0)           # disk number start
+            cd.push_u16le(0)           # internal file attributes
+            cd.push_u32le(0)           # external file attributes
+            cd.push_u32le(rec.lh_offset)
+            cd.push_bytes(rec.name, rec.name_len)
+            i = i + 1
+
+        mut cd_size = cd.len
+
+        self.body.push_buf(cd)
+
+        # End of central directory record (PKZIP APPNOTE 4.3.16).
+        self.body.push_u32le(0x06054b50)   # EOCD signature
+        self.body.push_u16le(0)            # number of this disk
+        self.body.push_u16le(0)            # disk with start of CD
+        self.body.push_u16le(self.records.len)   # entries on this disk
+        self.body.push_u16le(self.records.len)   # total entries
+        self.body.push_u32le(cd_size)      # size of central directory
+        self.body.push_u32le(cd_offset)    # offset of central directory
+        self.body.push_u16le(0)            # comment length
+
+        cd.free()
+        return self.body.to_str()
+
+    # True byte length of the buffer built so far (self.body.len). Call
+    # AFTER finish() to know the exact length of the returned str (it may
+    # contain embedded NULs, so str-length-by-strlen is not reliable).
+    pub def total_len(self) -> int:
+        return self.body.len
+
+def _archive_str_len(s: str) -> int:
+    mut p = s as Pointer[char]
+    mut n = 0
+    while p.offset(n).read() as int != 0: n = n + 1
+    return n
+
+# ── ZipReader ───────────────────────────────────────────────────────────────────
+
+pub class ZipEntry:
+    pub name:      str
+    pub method:    int
+    pub crc32:     int
+    pub csize:     int
+    pub usize:     int
+    pub lh_offset: int
+
+pub class ZipReader:
+    pub data:    str
+    pub len:     int
+    pub entries: Vec[ZipEntry]
+    pub ok:      bool   # false if the central directory could not be parsed
+
+extend ZipReader:
+    # Parse the central directory of a ZIP byte buffer (`len_` explicit —
+    # never relies on strlen since ZIP bytes may contain NULs). Entries are
+    # enumerated up front; payloads are only decompressed on read_entry().
+    pub def open(data: str, len_: int) -> ZipReader:
+        mut r = ZipReader()
+        r.data    = data
+        r.len     = len_
+        r.entries = Vec[ZipEntry].init(4)
+        r.ok      = false
+
+        # Find the End Of Central Directory record by scanning backward for
+        # its signature (there is no comment support here, so it always
+        # sits at len_ - 22, but scan a short tail window to be robust to a
+        # trailing comment field written by other tools).
+        mut eocd_off = -1
+        mut scan_from = r.len - 22
+        mut min_scan  = r.len - 22 - 65536
+        if min_scan < 0: min_scan = 0
+        mut pos = scan_from
+        while pos >= min_scan and eocd_off < 0:
+            if pos >= 0 and _rd_u32(data, pos) == 0x06054b50:
+                eocd_off = pos
+            pos = pos - 1
+        if eocd_off < 0: return r
+
+        mut total_entries = _rd_u16(data, eocd_off + 10)
+        mut cd_size        = _rd_u16(data, eocd_off + 12)   # unused, kept for clarity
+        mut cd_offset       = _rd_u32(data, eocd_off + 16)
+
+        mut off = cd_offset
+        mut n = 0
+        while n < total_entries:
+            if _rd_u32(data, off) != 0x02014b50: return r   # malformed
+            mut method     = _rd_u16(data, off + 10)
+            mut crc        = _rd_u32(data, off + 16)
+            mut csize      = _rd_u32(data, off + 20)
+            mut usize      = _rd_u32(data, off + 24)
+            mut name_len   = _rd_u16(data, off + 28)
+            mut extra_len  = _rd_u16(data, off + 30)
+            mut comment_len = _rd_u16(data, off + 32)
+            mut lh_offset  = _rd_u32(data, off + 42)
+
+            mut name = _raw_slice(data, off + 46, name_len)
+
+            mut e = ZipEntry()
+            e.name      = name
+            e.method    = method
+            e.crc32     = crc
+            e.csize     = csize
+            e.usize     = usize
+            e.lh_offset = lh_offset
+            r.entries.push(e)
+
+            off = off + 46 + name_len + extra_len + comment_len
+            n = n + 1
+
+        r.ok = true
+        return r
+
+    pub def entry_count(self) -> int:
+        return self.entries.len
+
+    pub def entry_name(self, i: int) -> str:
+        if i < 0 or i >= self.entries.len: return ""
+        return self.entries.get(i).name
+
+    pub def entry_size(self, i: int) -> int:
+        if i < 0 or i >= self.entries.len: return -1
+        return self.entries.get(i).usize
+
+    # Index of the entry named `name`, or -1 if not present.
+    pub def find_entry(self, name: str) -> int:
+        mut i = 0
+        while i < self.entries.len:
+            if _archive_str_eq(self.entries.get(i).name, name): return i
+            i = i + 1
+        return -1
+
+    # Decompress entry `i` and verify its CRC32 against the stored value.
+    # On mismatch, prints a clear error and returns "" rather than silently
+    # handing back corrupted bytes.
+    pub def read_entry(self, i: int) -> str:
+        if i < 0 or i >= self.entries.len: return ""
+        mut e = self.entries.get(i)
+
+        # Local header holds the same fields but its name/extra field
+        # lengths can legally differ in length from the central directory's
+        # copy (rare in practice) — read them from the local header itself
+        # to find where the payload actually starts.
+        mut lh = e.lh_offset
+        if _rd_u32(self.data, lh) != 0x04034b50:
+            print("ZipReader.read_entry: bad local file header signature for '" + e.name + "'")
+            return ""
+        mut lh_name_len  = _rd_u16(self.data, lh + 26)
+        mut lh_extra_len = _rd_u16(self.data, lh + 28)
+        mut payload_off  = lh + 30 + lh_name_len + lh_extra_len
+
+        mut raw = _raw_slice(self.data, payload_off, e.csize)
+
+        mut plain = ""
+        if e.method == METHOD_STORED():
+            plain = raw
+        else:
+            if e.usize <= 0:
+                plain = ""
+            else:
+                plain = _tr_inflate(raw, e.csize, e.usize)
+
+        mut got_crc = Crc32.compute(plain, e.usize)
+        if got_crc != e.crc32:
+            print("ZipReader.read_entry: CRC32 mismatch for '" + e.name + "' (expected " + str(e.crc32) + ", got " + str(got_crc) + ") — data is corrupted")
+            return ""
+        return plain
+
+def _archive_str_eq(a: str, b: str) -> bool:
+    mut pa = a as Pointer[char]
+    mut pb = b as Pointer[char]
+    mut i  = 0
+    while True:
+        mut ca = pa.offset(i).read() as int
+        mut cb = pb.offset(i).read() as int
+        if ca != cb: return false
+        if ca == 0: return true
+        i = i + 1
+    return true
