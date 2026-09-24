@@ -1,0 +1,98 @@
+# tests/lang/35_ini.tr - INI parser/serializer: sections, both separators,
+# both comment styles, inline comments, quoted values, pre-section (global)
+# keys, whitespace trimming, has()/missing-key, programmatic set(), and
+# round-trip.
+
+from std.test import TestRunner
+from std.encoding.ini import IniDoc, Ini
+
+def main():
+    mut t = TestRunner.init("35_ini")
+
+    t.section("basic sections/keys")
+    mut doc = Ini.parse("[server]\nhost = localhost\nport = 8080\n\n[client]\ntimeout = 30\n")
+    t.assert_eq_str(doc.get("server", "host"), "localhost", "server.host")
+    t.assert_eq_str(doc.get("server", "port"), "8080", "server.port")
+    t.assert_eq_str(doc.get("client", "timeout"), "30", "client.timeout")
+
+    t.section("separators: '=' and ':'")
+    mut d2 = Ini.parse("[a]\nx = 1\ny: 2\n")
+    t.assert_eq_str(d2.get("a", "x"), "1", "'=' separator")
+    t.assert_eq_str(d2.get("a", "y"), "2", "':' separator")
+
+    t.section("comments: ';' and '#' (full-line)")
+    mut d3 = Ini.parse("[a]\n; this is a comment\nx = 1\n# also a comment\ny = 2\n")
+    t.assert_eq_str(d3.get("a", "x"), "1", "value after ';' comment line")
+    t.assert_eq_str(d3.get("a", "y"), "2", "value after '#' comment line")
+
+    t.section("inline comments")
+    mut d4 = Ini.parse("[a]\nx = 1 ; trailing comment\ny = 2 # trailing comment\n")
+    t.assert_eq_str(d4.get("a", "x"), "1", "inline ';' comment stripped")
+    t.assert_eq_str(d4.get("a", "y"), "2", "inline '#' comment stripped")
+
+    t.section("quoted values")
+    mut d5 = Ini.parse("[a]\nx = \"hello world\"\ny = 'single quoted'\n")
+    t.assert_eq_str(d5.get("a", "x"), "hello world", "double-quoted value")
+    t.assert_eq_str(d5.get("a", "y"), "single quoted", "single-quoted value")
+
+    t.section("quotes protect comment chars inside value")
+    mut d6 = Ini.parse("[a]\nx = \"has ; a semi and # a hash\"\n")
+    t.assert_eq_str(d6.get("a", "x"), "has ; a semi and # a hash", "comment chars inside quotes preserved")
+
+    t.section("values before any section header (implicit default section)")
+    mut d7 = Ini.parse("root_key = root_val\n[a]\nx = 1\n")
+    t.assert_eq_str(d7.get("", "root_key"), "root_val", "global key lands in default section")
+    t.assert_eq_str(d7.get("a", "x"), "1", "section key still parsed after global key")
+
+    t.section("whitespace trimming")
+    mut d8 = Ini.parse("[  spaced  ]\n   key   =   value with internal   spaces   \n")
+    t.assert_eq_str(d8.get("spaced", "key"), "value with internal   spaces", "section name + key + value trimmed (internal spaces kept)")
+
+    t.section("has() / missing-key behavior")
+    mut d9 = Ini.parse("[a]\nx = 1\n")
+    t.assert_true(d9.has("a", "x"), "has() true for present key")
+    t.assert_false(d9.has("a", "missing"), "has() false for missing key")
+    t.assert_false(d9.has("nosuch", "x"), "has() false for missing section")
+    t.assert_eq_str(d9.get("a", "missing"), "", "get() returns empty string for missing key")
+    t.assert_eq_str(d9.get("nosuch", "x"), "", "get() returns empty string for missing section")
+
+    t.section("enumeration: section_names() / keys()")
+    mut d10 = Ini.parse("a = 1\n[s1]\nk1 = v1\nk2 = v2\n[s2]\nk3 = v3\n")
+    mut names = d10.section_names()
+    t.assert_eq_int(names.len, 3, "section_names count (default + s1 + s2)")
+    t.assert_eq_str(names.get(0), "", "first section is the default one")
+    t.assert_eq_str(names.get(1), "s1", "second section name")
+    t.assert_eq_str(names.get(2), "s2", "third section name")
+    mut s1_keys = d10.keys("s1")
+    t.assert_eq_int(s1_keys.len, 2, "keys() count for s1")
+    t.assert_eq_str(s1_keys.get(0), "k1", "keys() order preserved (k1)")
+    t.assert_eq_str(s1_keys.get(1), "k2", "keys() order preserved (k2)")
+
+    t.section("programmatic set() + stringify")
+    mut d11 = Ini.doc()
+    d11.set("db", "host", "127.0.0.1")
+    d11.set("db", "port", "5432")
+    d11.set("db", "name", "value with spaces")
+    d11.set("db", "note", "  leading and trailing spaces  ")
+    mut out = Ini.stringify(d11)
+    t.assert_contains(out, "[db]", "stringify emits section header")
+    t.assert_contains(out, "host = 127.0.0.1", "stringify emits plain value")
+    t.assert_contains(out, "name = value with spaces", "stringify leaves internal-space value unquoted")
+    t.assert_contains(out, "note = \"  leading and trailing spaces  \"", "stringify quotes value needing protection (leading/trailing ws)")
+
+    t.section("set() overwrites existing key")
+    mut d12 = Ini.parse("[a]\nx = 1\n")
+    d12.set("a", "x", "2")
+    t.assert_eq_str(d12.get("a", "x"), "2", "set() overwrites existing key in place")
+
+    t.section("round-trip: parse -> stringify -> parse")
+    mut original = "[server]\nhost = localhost\nport = 8080\nname = \"my server\"\n\n[client]\nretries = 3\n"
+    mut parsed = Ini.parse(original)
+    mut serialized = Ini.stringify(parsed)
+    mut reparsed = Ini.parse(serialized)
+    t.assert_eq_str(reparsed.get("server", "host"), "localhost", "round-trip server.host")
+    t.assert_eq_str(reparsed.get("server", "port"), "8080", "round-trip server.port")
+    t.assert_eq_str(reparsed.get("server", "name"), "my server", "round-trip quoted-with-space value")
+    t.assert_eq_str(reparsed.get("client", "retries"), "3", "round-trip client.retries")
+
+    t.summary()

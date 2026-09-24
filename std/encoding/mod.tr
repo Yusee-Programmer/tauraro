@@ -4,6 +4,9 @@
 #
 #   from std.encoding.json   import JsonDoc, JsonRef, JsonWriter, Json
 #   from std.encoding.toml   import TomlValue, TomlParser, Toml
+#   from std.encoding.csv    import CsvDoc, CsvParser, Csv
+#   from std.encoding.xml    import XmlElement, XmlParser, Xml
+#   from std.encoding.ini    import IniDoc, IniSection, IniParser, Ini
 #   from std.encoding.base64 import Base64
 #   from std.encoding.hex    import Hex
 
@@ -14,5 +17,15 @@ from std.encoding.json   import Json
 from std.encoding.toml   import TomlValue
 from std.encoding.toml   import TomlParser
 from std.encoding.toml   import Toml
+from std.encoding.csv    import CsvDoc
+from std.encoding.csv    import CsvParser
+from std.encoding.csv    import Csv
+from std.encoding.xml    import XmlElement
+from std.encoding.xml    import XmlParser
+from std.encoding.xml    import Xml
+from std.encoding.ini    import IniDoc
+from std.encoding.ini    import IniSection
+from std.encoding.ini    import IniParser
+from std.encoding.ini    import Ini
 from std.encoding.base64 import Base64
 from std.encoding.hex    import Hex

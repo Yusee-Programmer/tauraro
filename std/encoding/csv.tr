@@ -1,0 +1,286 @@
+# std.encoding.csv — RFC 4180 CSV parser and serializer.
+#
+# A CSV document is a 2D grid of strings (rows of fields) — not a nested
+# tree like JSON/TOML/YAML, so the API here is shaped around row/field
+# access rather than the TomlValue/YamlValue tagged-node model.
+#
+# Supports: quoted fields (`"a,b"`), escaped quotes inside quoted fields
+# (`""` -> `"`), fields containing embedded commas/newlines when quoted,
+# both `\n` and `\r\n` line endings, a trailing newline or lack thereof at
+# EOF, custom delimiters (e.g. `;` or tab), and an optional header row
+# (`Csv.parse_with_header`) for lookup-by-column-name.
+#
+# SAFE API: `CsvDoc` is an ARC class — the parsed grid is a `Vec[Vec[str]]`
+# of owned rows; reclaimed automatically. No raw pointers are exposed, so
+# callers never need `unsafe:` (the parser's internal scanning does, exactly
+# like TOML/YAML's):
+#   from std.encoding.csv import CsvDoc, Csv
+#   mut doc = Csv.parse("name,age\nAda,36\n\"Grace,M\",85\n")
+#   print(doc.field(1, 0))          # "Ada"
+#   print(doc.row_count())          # 3
+#   print(Csv.stringify(doc.rows))  # round-trips to canonical CSV
+
+from std.core.vec import Vec
+from std.core.string import StringBuilder
+
+extern "C":
+    def _tr_strlen(s: str) -> int
+
+# Default field delimiter: ',' (44).
+pub def CSV_COMMA() -> int: return 44
+
+pub class CsvDoc:
+    pub rows:        Vec[Vec[str]]   # all rows, including the header row if any
+    pub has_header:   bool
+    pub header:       Vec[str]       # column names (empty if has_header is false)
+
+extend CsvDoc:
+    pub def _new() -> CsvDoc:
+        mut d = CsvDoc()
+        d.rows       = Vec[Vec[str]].init(8)
+        d.has_header = false
+        d.header     = Vec[str].init(4)
+        return d
+
+    pub def row_count(self) -> int:
+        return self.rows.len
+
+    # Number of columns in `row` (0 if the row index is out of range).
+    pub def col_count(self, row: int) -> int:
+        if row < 0 or row >= self.rows.len: return 0
+        mut r = self.rows.get(row)
+        return r.len
+
+    pub def row(self, row: int) -> Vec[str]:
+        return self.rows.get(row)
+
+    pub def field(self, row: int, col: int) -> str:
+        if row < 0 or row >= self.rows.len: return ""
+        mut r = self.rows.get(row)
+        if col < 0 or col >= r.len: return ""
+        return r.get(col)
+
+    # Column index of `name` in the header row (-1 if there's no header or
+    # the name isn't found).
+    pub def col_index(self, name: str) -> int:
+        if not self.has_header: return -1
+        mut i = 0
+        while i < self.header.len:
+            if self.header.get(i) == name: return i
+            i = i + 1
+        return -1
+
+    # Field lookup by column name — `row` is a data-row index (0 = the first
+    # row AFTER the header). Returns "" if there's no header, no such column,
+    # or the row/column is out of range.
+    pub def field_by_name(self, row: int, name: str) -> str:
+        mut ci = self.col_index(name)
+        if ci < 0: return ""
+        mut data_row = row
+        if self.has_header: data_row = row + 1
+        return self.field(data_row, ci)
+
+    # Number of data rows (excludes the header row, if any).
+    pub def data_row_count(self) -> int:
+        if self.has_header:
+            if self.rows.len == 0: return 0
+            return self.rows.len - 1
+        return self.rows.len
+
+# ─── Parser ─────────────────────────────────────────────────────────────────
+
+pub class CsvParser:
+    pub src:   str
+    pub pos:   int
+    pub len:   int
+    pub delim: int
+
+extend CsvParser:
+    pub def init(src: str, delim: int) -> CsvParser:
+        mut p = CsvParser()
+        p.src   = src
+        p.pos   = 0
+        p.len   = _tr_strlen(src)
+        p.delim = delim
+        return p
+
+    pub def cur(self) -> int:
+        if self.pos >= self.len: return 0
+        return (self.src as Pointer[char]).offset(self.pos).read() as int
+
+    pub def peek_at(self, off: int) -> int:
+        mut q = self.pos + off
+        if q >= self.len: return 0
+        return (self.src as Pointer[char]).offset(q).read() as int
+
+    pub def advance(self):
+        self.pos = self.pos + 1
+
+    # Parse one field starting at self.pos. Consumes up to (not including)
+    # the next delimiter, newline, or EOF.
+    pub def parse_field(self) -> str:
+        if self.cur() == 34:  # '"' -- quoted field
+            return self.parse_quoted_field()
+        mut sb = StringBuilder.init(16)
+        while self.pos < self.len:
+            mut c = self.cur()
+            if c == self.delim or c == 10 or c == 13: break
+            sb.append_char(c)
+            self.advance()
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    # Parse a double-quoted field: `"..."`, where `""` inside the quotes is
+    # an escaped literal `"`, and any other character (including raw
+    # newlines) is taken verbatim until the closing quote.
+    pub def parse_quoted_field(self) -> str:
+        self.advance()  # opening '"'
+        mut sb = StringBuilder.init(32)
+        while self.pos < self.len:
+            mut c = self.cur()
+            if c == 34:
+                if self.peek_at(1) == 34:
+                    sb.append_char(34)
+                    self.advance()
+                    self.advance()
+                else:
+                    self.advance()  # closing quote
+                    break
+            else:
+                sb.append_char(c)
+                self.advance()
+        # Trailing bytes between the closing quote and the next delimiter/
+        # newline (malformed input, e.g. `"a"b`) are appended verbatim so
+        # nothing is silently dropped.
+        while self.pos < self.len:
+            mut c2 = self.cur()
+            if c2 == self.delim or c2 == 10 or c2 == 13: break
+            sb.append_char(c2)
+            self.advance()
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    # Consume a single line ending: "\r\n", "\n", or "\r" alone. Returns
+    # true if one was consumed.
+    pub def consume_eol(self) -> bool:
+        if self.cur() == 13:
+            self.advance()
+            if self.cur() == 10: self.advance()
+            return true
+        if self.cur() == 10:
+            self.advance()
+            return true
+        return false
+
+    # Parse one row (Vec of fields), consuming its trailing line ending (if
+    # any). A completely empty line (immediate EOL or EOF) still yields a
+    # one-element row containing a single empty field, matching how a lone
+    # blank CSV line is normally read — EXCEPT at true end-of-input with no
+    # trailing content, which yields no row at all (see `parse`).
+    pub def parse_row(self) -> Vec[str]:
+        mut row = Vec[str].init(4)
+        row.push(self.parse_field())
+        while self.cur() == self.delim:
+            self.advance()
+            row.push(self.parse_field())
+        self.consume_eol()
+        return row
+
+    pub def parse(self) -> Vec[Vec[str]]:
+        mut rows = Vec[Vec[str]].init(8)
+        while self.pos < self.len:
+            mut row = self.parse_row()
+            rows.push(row)
+        return rows
+
+# ─── Serializer ─────────────────────────────────────────────────────────────
+
+# True if `field` must be quoted to round-trip safely with delimiter `delim`
+# (contains the delimiter, a double quote, a newline, or a carriage return).
+pub def _csv_needs_quotes(field: str, delim: int) -> bool:
+    mut n = _tr_strlen(field)
+    mut p = field as Pointer[char]
+    mut i = 0
+    while i < n:
+        mut c = p.offset(i).read() as int
+        if c == delim or c == 34 or c == 10 or c == 13: return true
+        i = i + 1
+    return false
+
+pub def _csv_write_field(field: str, delim: int, sb: StringBuilder):
+    if not _csv_needs_quotes(field, delim):
+        sb.append(field)
+        return
+    sb.append_char(34)
+    mut n = _tr_strlen(field)
+    mut p = field as Pointer[char]
+    mut i = 0
+    while i < n:
+        mut c = p.offset(i).read() as int
+        if c == 34: sb.append("\"\"")
+        else: sb.append_char(c)
+        i = i + 1
+    sb.append_char(34)
+
+pub def _csv_write_row(row: Vec[str], delim: int, sb: StringBuilder):
+    mut i = 0
+    while i < row.len:
+        if i > 0: sb.append_char(delim)
+        _csv_write_field(row.get(i), delim, sb)
+        i = i + 1
+    sb.append("\r\n")
+
+# ─── Public API ─────────────────────────────────────────────────────────────
+
+pub class Csv:
+    _dummy: int
+
+extend Csv:
+    # Parse CSV text (comma-delimited) into a CsvDoc.
+    pub def parse(src: str) -> CsvDoc:
+        return Csv.parse_with_delimiter(src, CSV_COMMA())
+
+    # Parse CSV text with a custom field delimiter (e.g. 59 for ';', 9 for
+    # tab) into a CsvDoc.
+    pub def parse_with_delimiter(src: str, delim: int) -> CsvDoc:
+        mut doc = CsvDoc._new()
+        if _tr_strlen(src) == 0:
+            return doc
+        mut p = CsvParser.init(src, delim)
+        doc.rows = p.parse()
+        return doc
+
+    # Parse CSV text (comma-delimited), treating row 0 as column headers.
+    pub def parse_with_header(src: str) -> CsvDoc:
+        mut doc = Csv.parse(src)
+        if doc.rows.len > 0:
+            doc.has_header = true
+            doc.header     = doc.rows.get(0)
+        return doc
+
+    # Parse CSV text with a custom delimiter, treating row 0 as headers.
+    pub def parse_with_header_and_delimiter(src: str, delim: int) -> CsvDoc:
+        mut doc = Csv.parse_with_delimiter(src, delim)
+        if doc.rows.len > 0:
+            doc.has_header = true
+            doc.header     = doc.rows.get(0)
+        return doc
+
+    # Serialize rows of fields back to CSV text (comma-delimited, CRLF line
+    # endings per RFC 4180). Fields are minimally quoted — only when they
+    # contain the delimiter, a double quote, or a newline.
+    pub def stringify(rows: Vec[Vec[str]]) -> str:
+        return Csv.stringify_with_delimiter(rows, CSV_COMMA())
+
+    # Serialize rows of fields back to CSV text using a custom delimiter.
+    pub def stringify_with_delimiter(rows: Vec[Vec[str]], delim: int) -> str:
+        mut sb = StringBuilder.init(256)
+        mut i = 0
+        while i < rows.len:
+            _csv_write_row(rows.get(i), delim, sb)
+            i = i + 1
+        mut out = sb.to_owned()
+        sb.free()
+        return out

@@ -1,0 +1,429 @@
+# std.encoding.xml — XML parser and serializer (practical subset).
+#
+# Supports: elements (`<tag>...</tag>` and self-closing `<tag/>`), attributes
+# (`attr="value"` and `attr='value'`), nested elements, text content,
+# comments (`<!-- ... -->`, skipped/discarded), the XML declaration
+# (`<?xml version="1.0" ...?>`, skipped/discarded), and the 5 predefined
+# entities (`&lt; &gt; &amp; &apos; &quot;`) in both text content and
+# attribute values.
+#
+# Deliberately OUT OF SCOPE (documented here rather than silently
+# mishandled, same policy as std.encoding.toml/yaml's own deferrals):
+#   - DTDs (`<!DOCTYPE ...>`) are skipped as an opaque markup declaration,
+#     not parsed or validated against.
+#   - Custom/numeric entity references (`&amp;#65;`, `&custom;`) are not
+#     resolved — only the 5 predefined entities are recognized. A `&` that
+#     doesn't start one of those 5 is passed through literally.
+#   - `<![CDATA[ ... ]]>` sections are not implemented; use plain text
+#     content (with entity-escaping) instead.
+#   - Processing instructions other than the leading `<?xml ... ?>`
+#     declaration (e.g. `<?xml-stylesheet ... ?>`) are skipped like
+#     comments, not captured.
+#   - XML namespaces (`xmlns`, `ns:tag`) are NOT treated specially — a
+#     prefixed tag/attribute name is kept verbatim as a single string
+#     (e.g. `"ns:tag"`), with no prefix/local-name splitting or URI
+#     resolution.
+#   - Mixed content (text interleaved with child elements at the same
+#     level) is preserved as best-effort concatenated text via `.text()`;
+#     there is no ordered content-node list distinguishing "text before
+#     child A" from "text after child A".
+#
+# SAFE API: `XmlElement` is an ARC class — the parse tree is a tree of
+# owned ARC nodes (acyclic, so no [S-2] cycle; reclaimed recursively by
+# ARC). No raw pointers are exposed, so callers never need `unsafe:`:
+#   from std.encoding.xml import XmlElement, Xml
+#   mut root = Xml.parse("<config><port>8080</port></config>")
+#   print(root.find_child("port").text())
+#   print(Xml.stringify(root))   # round-trips to XML text
+
+from std.core.vec import Vec
+from std.core.string import StringBuilder
+
+extern "C":
+    def _tr_strlen(s: str) -> int
+
+pub class XmlElement:
+    pub tag:       str
+    pub text_val:  str          # direct text content (concatenated)
+    pub attr_keys: Vec[str]
+    pub attr_vals: Vec[str]
+    pub kids:      Vec[XmlElement]
+
+extend XmlElement:
+    pub def _new(tag: str) -> XmlElement:
+        mut e = XmlElement()
+        e.tag       = tag
+        e.text_val  = ""
+        e.attr_keys = Vec[str].init(4)
+        e.attr_vals = Vec[str].init(4)
+        e.kids      = Vec[XmlElement].init(4)
+        return e
+
+    pub def tag_name(self) -> str:
+        return self.tag
+
+    pub def text(self) -> str:
+        return self.text_val
+
+    pub def set_text(self, s: str):
+        self.text_val = s
+
+    pub def append_text(self, s: str):
+        self.text_val = self.text_val + s
+
+    pub def set_attr(self, name: str, value: str):
+        mut i = 0
+        while i < self.attr_keys.len:
+            if self.attr_keys.get(i) == name:
+                self.attr_vals.set(i, value)
+                return
+            i = i + 1
+        self.attr_keys.push(name)
+        self.attr_vals.push(value)
+
+    pub def attr(self, name: str) -> str:
+        mut i = 0
+        while i < self.attr_keys.len:
+            if self.attr_keys.get(i) == name:
+                return self.attr_vals.get(i)
+            i = i + 1
+        return ""
+
+    pub def has_attr(self, name: str) -> bool:
+        mut i = 0
+        while i < self.attr_keys.len:
+            if self.attr_keys.get(i) == name: return true
+            i = i + 1
+        return false
+
+    pub def attr_count(self) -> int:
+        return self.attr_keys.len
+
+    pub def attr_name_at(self, i: int) -> str:
+        return self.attr_keys.get(i)
+
+    pub def attr_val_at(self, i: int) -> str:
+        return self.attr_vals.get(i)
+
+    pub def add_child(self, child: XmlElement):
+        self.kids.push(child)
+
+    pub def children(self) -> Vec[XmlElement]:
+        return self.kids
+
+    pub def child_count(self) -> int:
+        return self.kids.len
+
+    pub def child_at(self, i: int) -> XmlElement:
+        return self.kids.get(i)
+
+    # First direct child whose tag matches `tag`, or an empty sentinel
+    # element (tag_name() == "") if none matches.
+    pub def find_child(self, tag: str) -> XmlElement:
+        mut i = 0
+        while i < self.kids.len:
+            mut c = self.kids.get(i)
+            if c.tag == tag: return c
+            i = i + 1
+        return XmlElement._new("")
+
+    pub def find_all(self, tag: str) -> Vec[XmlElement]:
+        mut out = Vec[XmlElement].init(4)
+        mut i = 0
+        while i < self.kids.len:
+            mut c = self.kids.get(i)
+            if c.tag == tag: out.push(c)
+            i = i + 1
+        return out
+
+    # True for the sentinel returned by find_child on a miss.
+    pub def is_none(self) -> bool:
+        return self.tag == ""
+
+# ─── Parser ─────────────────────────────────────────────────────────────────
+
+pub class XmlParser:
+    pub src: str
+    pub pos: int
+    pub len: int
+
+extend XmlParser:
+    pub def init(src: str) -> XmlParser:
+        mut p = XmlParser()
+        p.src = src
+        p.pos = 0
+        p.len = _tr_strlen(src)
+        return p
+
+    pub def cur(self) -> int:
+        if self.pos >= self.len: return 0
+        return (self.src as Pointer[char]).offset(self.pos).read() as int
+
+    pub def peek_at(self, off: int) -> int:
+        mut q = self.pos + off
+        if q >= self.len: return 0
+        return (self.src as Pointer[char]).offset(q).read() as int
+
+    pub def advance(self):
+        self.pos = self.pos + 1
+
+    pub def starts_with(self, s: str) -> bool:
+        mut n = _tr_strlen(s)
+        if self.pos + n > self.len: return false
+        mut i = 0
+        while i < n:
+            if self.peek_at(i) != ((s as Pointer[char]).offset(i).read() as int):
+                return false
+            i = i + 1
+        return true
+
+    pub def skip_ws(self):
+        while self.pos < self.len:
+            mut c = self.cur()
+            if c == 32 or c == 9 or c == 10 or c == 13:
+                self.advance()
+            else:
+                break
+
+    pub def is_name_start(self, c: int) -> bool:
+        if c >= 97 and c <= 122: return true   # a-z
+        if c >= 65 and c <= 90:  return true   # A-Z
+        if c == 95 or c == 58:   return true   # '_' ':'
+        return false
+
+    pub def is_name_char(self, c: int) -> bool:
+        if self.is_name_start(c): return true
+        if c >= 48 and c <= 57: return true    # 0-9
+        if c == 45 or c == 46:  return true    # '-' '.'
+        return false
+
+    pub def parse_name(self) -> str:
+        mut sb = StringBuilder.init(16)
+        while self.pos < self.len and self.is_name_char(self.cur()):
+            sb.append_char(self.cur())
+            self.advance()
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    # Skip a prolog/misc item at the current position if there is one:
+    # `<?...?>` PI (incl. the xml declaration), `<!--...-->` comment, or
+    # `<!DOCTYPE ...>` (skipped opaquely, `>` inside brackets not handled —
+    # out of scope, matches the "no DTD support" policy above).
+    # Returns true if something was skipped.
+    pub def skip_misc(self) -> bool:
+        self.skip_ws()
+        if self.starts_with("<?"):
+            self.pos = self.pos + 2
+            while self.pos < self.len and not self.starts_with("?>"):
+                self.advance()
+            if self.starts_with("?>"): self.pos = self.pos + 2
+            return true
+        if self.starts_with("<!--"):
+            self.pos = self.pos + 4
+            while self.pos < self.len and not self.starts_with("-->"):
+                self.advance()
+            if self.starts_with("-->"): self.pos = self.pos + 3
+            return true
+        if self.starts_with("<!"):
+            while self.pos < self.len and self.cur() != 62:  # '>'
+                self.advance()
+            if self.cur() == 62: self.advance()
+            return true
+        return false
+
+    pub def skip_all_misc(self):
+        while self.skip_misc():
+            self.skip_ws()
+
+    # Expand the 5 predefined entities (and pass through anything else
+    # verbatim, including bare '&').
+    pub def unescape(self, raw: str) -> str:
+        mut sb = StringBuilder.init(_tr_strlen(raw))
+        mut n = _tr_strlen(raw)
+        mut p = raw as Pointer[char]
+        mut i = 0
+        while i < n:
+            mut c = p.offset(i).read() as int
+            if c == 38:  # '&'
+                if i + 3 < n and p.offset(i+1).read() as int == 108 and p.offset(i+2).read() as int == 116 and p.offset(i+3).read() as int == 59:
+                    sb.append_char(60); i = i + 4  # &lt; -> <
+                elif i + 3 < n and p.offset(i+1).read() as int == 103 and p.offset(i+2).read() as int == 116 and p.offset(i+3).read() as int == 59:
+                    sb.append_char(62); i = i + 4  # &gt; -> >
+                elif i + 4 < n and p.offset(i+1).read() as int == 97 and p.offset(i+2).read() as int == 109 and p.offset(i+3).read() as int == 112 and p.offset(i+4).read() as int == 59:
+                    sb.append_char(38); i = i + 5  # &amp; -> &
+                elif i + 5 < n and p.offset(i+1).read() as int == 97 and p.offset(i+2).read() as int == 112 and p.offset(i+3).read() as int == 111 and p.offset(i+4).read() as int == 115 and p.offset(i+5).read() as int == 59:
+                    sb.append_char(39); i = i + 6  # &apos; -> '
+                elif i + 5 < n and p.offset(i+1).read() as int == 113 and p.offset(i+2).read() as int == 117 and p.offset(i+3).read() as int == 111 and p.offset(i+4).read() as int == 116 and p.offset(i+5).read() as int == 59:
+                    sb.append_char(34); i = i + 6  # &quot; -> "
+                else:
+                    sb.append_char(c); i = i + 1
+            else:
+                sb.append_char(c); i = i + 1
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    pub def parse_attr_value(self) -> str:
+        mut q = self.cur()   # 34 '"' or 39 '\''
+        self.advance()
+        mut start = self.pos
+        while self.pos < self.len and self.cur() != q:
+            self.advance()
+        mut raw = ""
+        unsafe:
+            raw = self.src.slice(start, self.pos)
+        if self.cur() == q: self.advance()
+        return self.unescape(raw)
+
+    # Parse attributes up to (not including) the closing '>' or the
+    # self-close '/'. Populates `el`.
+    pub def parse_attrs(self, el: XmlElement):
+        while true:
+            self.skip_ws()
+            mut c = self.cur()
+            if c == 0 or c == 62 or c == 47:  # NUL '>' '/'
+                break
+            mut name = self.parse_name()
+            if name == "": break
+            self.skip_ws()
+            mut value = ""
+            if self.cur() == 61:  # '='
+                self.advance()
+                self.skip_ws()
+                if self.cur() == 34 or self.cur() == 39:
+                    value = self.parse_attr_value()
+            el.set_attr(name, value)
+
+    # Parse one element starting at '<'. Assumes self.cur() == '<' and the
+    # next char begins a name (not '/', '?', '!').
+    pub def parse_element(self) -> XmlElement:
+        self.advance()  # '<'
+        mut tag = self.parse_name()
+        mut el = XmlElement._new(tag)
+        self.parse_attrs(el)
+        self.skip_ws()
+        if self.cur() == 47:  # '/' self-closing
+            self.advance()
+            if self.cur() == 62: self.advance()
+            return el
+        if self.cur() == 62: self.advance()  # '>'
+
+        mut sb = StringBuilder.init(16)
+        while self.pos < self.len:
+            self.skip_all_misc()
+            if self.pos >= self.len: break
+            mut c = self.cur()
+            if c == 60:  # '<'
+                if self.peek_at(1) == 47:  # "</" closing tag
+                    self.pos = self.pos + 2
+                    self.skip_ws()
+                    # consume the close-tag name (not validated against
+                    # the open tag — permissive, matches the "practical
+                    # subset" scoping documented at module top).
+                    self.parse_name()
+                    self.skip_ws()
+                    if self.cur() == 62: self.advance()
+                    break
+                else:
+                    # Flush any pending text before descending.
+                    mut pending = sb.to_owned()
+                    if _tr_strlen(pending) > 0:
+                        el.append_text(pending)
+                    sb.clear()
+                    mut child = self.parse_element()
+                    el.add_child(child)
+            else:
+                mut start = self.pos
+                while self.pos < self.len and self.cur() != 60:
+                    self.advance()
+                mut raw = ""
+                unsafe:
+                    raw = self.src.slice(start, self.pos)
+                sb.append(self.unescape(raw))
+        mut trailing = sb.to_owned()
+        sb.free()
+        if _tr_strlen(trailing) > 0:
+            el.append_text(trailing)
+        return el
+
+    pub def parse(self) -> XmlElement:
+        self.skip_all_misc()
+        if self.pos < self.len and self.cur() == 60:
+            return self.parse_element()
+        return XmlElement._new("")
+
+# ─── Serializer ─────────────────────────────────────────────────────────────
+
+pub def _xml_escape_text(s: str, sb: StringBuilder):
+    mut p = s as Pointer[char]
+    mut i = 0
+    mut n = _tr_strlen(s)
+    while i < n:
+        mut c = p.offset(i).read() as int
+        if c == 60: sb.append("&lt;")
+        elif c == 62: sb.append("&gt;")
+        elif c == 38: sb.append("&amp;")
+        else: sb.append_char(c)
+        i = i + 1
+
+pub def _xml_escape_attr(s: str, sb: StringBuilder):
+    mut p = s as Pointer[char]
+    mut i = 0
+    mut n = _tr_strlen(s)
+    while i < n:
+        mut c = p.offset(i).read() as int
+        if c == 60: sb.append("&lt;")
+        elif c == 62: sb.append("&gt;")
+        elif c == 38: sb.append("&amp;")
+        elif c == 34: sb.append("&quot;")
+        elif c == 39: sb.append("&apos;")
+        else: sb.append_char(c)
+        i = i + 1
+
+pub def _xml_write_element(el: XmlElement, sb: StringBuilder):
+    sb.append("<")
+    sb.append(el.tag)
+    mut i = 0
+    while i < el.attr_keys.len:
+        sb.append(" ")
+        sb.append(el.attr_keys.get(i))
+        sb.append("=\"")
+        _xml_escape_attr(el.attr_vals.get(i), sb)
+        sb.append("\"")
+        i = i + 1
+    mut has_text = _tr_strlen(el.text_val) > 0
+    mut has_kids = el.kids.len > 0
+    if not has_text and not has_kids:
+        sb.append("/>")
+        return
+    sb.append(">")
+    if has_text:
+        _xml_escape_text(el.text_val, sb)
+    i = 0
+    while i < el.kids.len:
+        _xml_write_element(el.kids.get(i), sb)
+        i = i + 1
+    sb.append("</")
+    sb.append(el.tag)
+    sb.append(">")
+
+# ─── Public API ──────────────────────────────────────────────────────────────
+
+pub class Xml:
+    _dummy: int
+
+extend Xml:
+    pub def parse(src: str) -> XmlElement:
+        mut p = XmlParser.init(src)
+        return p.parse()
+
+    pub def stringify(root: XmlElement) -> str:
+        mut sb = StringBuilder.init(256)
+        _xml_write_element(root, sb)
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    pub def element(tag: str) -> XmlElement:
+        return XmlElement._new(tag)
