@@ -450,9 +450,11 @@ pub class Lexer:
         return keyword_to_token(sb.to_string().as_str())
 
     pub def tokenize(self) -> Vec[Token]:
-        # Skip UTF-8 BOM if present
+        # Skip UTF-8 BOM if present. `char` is signed in the generated C, so
+        # peek_at's `.read() as int` sign-extends bytes >= 0x80 (0xEF becomes
+        # -17, not 239) — mask to the low byte before comparing.
         if self.pos == 0 and self.len >= 3:
-            if self.peek_at(0) == 239 and self.peek_at(1) == 187 and self.peek_at(2) == 191:
+            if (self.peek_at(0) & 255) == 239 and (self.peek_at(1) & 255) == 187 and (self.peek_at(2) & 255) == 191:
                 self.pos = self.pos + 3
 
         mut tokens = Vec[Token].init(1024)
