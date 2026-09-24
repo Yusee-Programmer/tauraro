@@ -1,0 +1,538 @@
+# std.math.bigint — Arbitrary-precision integers (BigInt).
+#
+# Representation: sign-magnitude.  The magnitude is stored as a Vec[int] of
+# "limbs" in base 10^9, least-significant limb first (limb 0 is the ones
+# place, limb 1 is the 10^9s place, etc). `sign` is -1, 0, or 1; a value of
+# 0 always has sign 0 and a single limb [0] (never negative zero, never an
+# empty magnitude — this keeps every method below from needing a zero-length
+# special case).
+#
+# Why base 10^9 instead of a binary base (2^32 / 2^62)?  Tauraro's `int` is a
+# 64-bit signed integer (see docs/lang/02_variables_and_types.md), so the
+# product of two limbs is at most (10^9 - 1)^2 ≈ 9.99 * 10^17, and adding a
+# carry on top of that still fits comfortably under the signed 64-bit max of
+# ~9.22 * 10^18 — so limb*limb+carry can never overflow `int`.  In exchange
+# for that one arithmetic constraint, `to_str`/`from_str` become trivial
+# (each limb is exactly 9 decimal digits, zero-padded) instead of requiring a
+# separate binary<->decimal conversion algorithm. Since this module's whole
+# job is decimal I/O plus arithmetic, base 10^9 wins on both simplicity and
+# correctness confidence, at the cost of a little arithmetic density compared
+# to a binary base (each limb carries "only" 9 decimal digits instead of ~9.6
+# for 2^32, a negligible difference).
+#
+# All magnitudes are stored normalized: no trailing (most-significant) zero
+# limbs, except the single limb [0] used to represent the value zero.
+
+from std.core.vec import Vec
+
+const LIMB_BASE = 1000000000    # 10^9 — see module doc comment above
+
+pub class BigInt:
+    pub sign:  int         # -1, 0, or 1
+    pub limbs: Vec[int]    # base-10^9 limbs, least-significant first
+
+# Internal helper: unsigned (quotient, remainder) pair for magnitude division.
+# A plain class rather than a tuple return — tuple slots are 64-bit scalars
+# (see docs/lang/07_collections.md) and Vec[int] is a heap-backed struct, not
+# a scalar, so it doesn't fit a tuple slot safely. Not part of the public API
+# (leading underscore) — only BigInt's own division methods use it.
+pub class _DivModMag:
+    pub q: Vec[int]
+    pub r: Vec[int]
+
+extend BigInt:
+    # ── Construction ──────────────────────────────────────────────────────────
+
+    # Internal: build a BigInt from a sign and a limb vector, normalizing
+    # (stripping high zero limbs, and forcing sign=0 / limbs=[0] for zero).
+    def _make(sign: int, limbs: Vec[int]) -> BigInt:
+        mut l = limbs
+        while l.len > 1 and l.get(l.len - 1) == 0:
+            l.pop()
+        mut s = sign
+        if l.len == 1 and l.get(0) == 0: s = 0
+        mut b = BigInt()
+        b.sign  = s
+        b.limbs = l
+        return b
+
+    pub def zero() -> BigInt:
+        mut l = Vec[int].init(1)
+        l.push(0)
+        return BigInt._make(0, l)
+
+    pub def from_int(n: int) -> BigInt:
+        if n == 0: return BigInt.zero()
+        mut s = 1
+        mut mag = n
+        if n < 0:
+            s = -1
+            mag = 0 - n     # safe: int min-value edge case not reachable from decimal literals in practice
+        mut l = Vec[int].init(3)
+        if mag == 0:
+            l.push(0)
+        while mag > 0:
+            l.push(mag - (mag / LIMB_BASE) * LIMB_BASE)
+            mag = mag / LIMB_BASE
+        return BigInt._make(s, l)
+
+    # Parse a decimal string, optionally prefixed with '-' (or '+').
+    # Malformed input (empty string, bare sign, or a non-digit character)
+    # returns BigInt.zero() — this module never raises/aborts on bad input,
+    # so callers that need strict validation should pre-validate the string
+    # themselves (e.g. with a regex) before calling from_str.
+    pub def from_str(s: str) -> BigInt:
+        mut p   = s as Pointer[char]
+        mut n   = 0
+        while p.offset(n).read() as int != 0: n = n + 1
+        if n == 0: return BigInt.zero()
+
+        mut start = 0
+        mut sign  = 1
+        mut c0 = p.offset(0).read() as int
+        if c0 == 45:            # '-'
+            sign  = -1
+            start = 1
+        else:
+            if c0 == 43:         # '+'
+                start = 1
+        if start >= n: return BigInt.zero()    # bare "-" / "+" / ""
+
+        # Validate every remaining character is an ASCII digit; on any
+        # non-digit, bail out to zero rather than parse garbage silently.
+        mut i = start
+        while i < n:
+            mut c = p.offset(i).read() as int
+            if c < 48 or c > 57: return BigInt.zero()
+            i = i + 1
+
+        # Skip leading zeros (but keep at least one digit) so the magnitude
+        # we build below is already normalized.
+        mut ds = start
+        while ds < n - 1 and (p.offset(ds).read() as int) == 48:
+            ds = ds + 1
+        if ds == n - 1 and (p.offset(ds).read() as int) == 48:
+            return BigInt.zero()    # all zeros, e.g. "000" or "-0"
+
+        mut digit_count = n - ds
+        mut limb_count  = (digit_count + 8) / 9    # ceil(digit_count / 9)
+        mut l = Vec[int].init(limb_count)
+        mut j = 0
+        while j < limb_count: l.push(0); j = j + 1
+
+        # Fill limbs from least-significant (rightmost 9 chars) upward.
+        mut limb_idx = 0
+        mut end      = n           # exclusive end of the current 9-digit window
+        while end > ds:
+            mut wstart = end - 9
+            if wstart < ds: wstart = ds
+            mut val = 0
+            mut k = wstart
+            while k < end:
+                val = val * 10 + ((p.offset(k).read() as int) - 48)
+                k = k + 1
+            l.set(limb_idx, val)
+            limb_idx = limb_idx + 1
+            end = wstart
+
+        return BigInt._make(sign, l)
+
+    # ── String conversion ────────────────────────────────────────────────────
+
+    pub def to_str(self) -> str:
+        if self.sign == 0: return "0"
+        mut out = ""
+        if self.sign < 0: out = "-"
+
+        mut top = self.limbs.len - 1
+        out = out + str(self.limbs.get(top))    # most-significant limb: no zero-padding
+        mut i = top - 1
+        while i >= 0:
+            out = out + BigInt._pad9(self.limbs.get(i))
+            i = i - 1
+        return out
+
+    # Zero-pad a single limb value (0..999999999) to exactly 9 digits.
+    def _pad9(v: int) -> str:
+        mut s = str(v)
+        mut need = 9 - s.len()
+        mut pad = ""
+        mut i = 0
+        while i < need:
+            pad = pad + "0"
+            i = i + 1
+        return pad + s
+
+    # Convert back to a native int.  Behavior when the value does not fit in
+    # a signed 64-bit int is DOCUMENTED as truncation: only the low-order
+    # magnitude limbs that fit are combined (equivalent to the value modulo
+    # 10^18-ish, then re-signed) — this is a lossy, "best-effort" conversion,
+    # not a saturating clamp. Use `.to_str()` (or check the magnitude against
+    # known bounds yourself) whenever you must detect overflow.
+    #
+    # Implementation note: the actual conversion lives in `to_int_checked`
+    # rather than directly in this method's body. The compiler's C backend
+    # (src/codegen/c.tr, gen_method_call) intercepts any call written as
+    # `<expr>.to_int()` as a *built-in* primitive-conversion pseudo-method —
+    # keyed purely on the literal call-site name, before it ever checks
+    # whether the receiver is a user-defined class — and emits a raw
+    # pointer-to-int cast instead of dispatching to this method (confirmed
+    # via isolated repro; see bug2.txt at the repo root). `to_str` has an
+    # explicit user-class guard against this in the compiler; `to_int` does
+    # not. Until that's fixed upstream, call the `pub`-exposed
+    # `to_int_checked` for a currently-working call site; `to_int` is kept
+    # as the documented public API name for when the compiler bug is fixed.
+    pub def to_int(self) -> int:
+        return self.to_int_checked()
+
+    # See the note on `to_int` above — same conversion, different method
+    # name so it isn't intercepted by the compiler's reserved-name bug.
+    #
+    # Accumulates in `u64`, not `int`: for an oversized BigInt the running
+    # total legitimately exceeds signed 64-bit range partway through the
+    # limb-combining loop (that overflow IS the truncation this method
+    # documents). Doing that arithmetic in signed `int` hit real undefined
+    # behavior — this codebase's non-release builds compile with `-ftrapv`
+    # (see src/main.tr's `compile_all_c_incremental`, `overflow_flag`), so a
+    # signed-int overflow traps at runtime instead of silently wrapping,
+    # which manifested as this method hanging (not crashing) on values like
+    # 123456789123456789123456789 (confirmed via isolated repro; see
+    # bug2.txt). `u64` overflow wraps silently and portably (documented
+    # behavior, see docs/lang/02_variables_and_types.md), so accumulating in
+    # `u64` and reinterpreting the final bit pattern as `int` at the very end
+    # gives the same "modulo 2^64, then re-signed" truncation without
+    # depending on any UB.
+    pub def to_int_checked(self) -> int:
+        if self.sign == 0: return 0
+        mut result: u64 = 0
+        mut base_u: u64 = LIMB_BASE as u64
+        mut i = self.limbs.len - 1
+        while i >= 0:
+            result = result * base_u + (self.limbs.get(i) as u64)
+            i = i - 1
+        mut signed_result = result as int
+        if self.sign < 0: return 0 - signed_result
+        return signed_result
+
+    # ── Sign / magnitude queries ─────────────────────────────────────────────
+
+    pub def is_zero(self) -> bool:
+        return self.sign == 0
+
+    pub def is_negative(self) -> bool:
+        return self.sign < 0
+
+    pub def negate(self) -> BigInt:
+        return BigInt._make(0 - self.sign, self.limbs.clone())
+
+    pub def abs(self) -> BigInt:
+        if self.sign < 0: return self.negate()
+        return BigInt._make(self.sign, self.limbs.clone())
+
+    # ── Magnitude helpers (unsigned compare/add/sub on limb vectors) ────────
+
+    # -1 / 0 / 1 comparing |a| vs |b|, ignoring sign.
+    def _cmp_mag(a: Vec[int], b: Vec[int]) -> int:
+        if a.len != b.len:
+            if a.len < b.len: return -1
+            return 1
+        mut i = a.len - 1
+        while i >= 0:
+            mut av = a.get(i)
+            mut bv = b.get(i)
+            if av != bv:
+                if av < bv: return -1
+                return 1
+            i = i - 1
+        return 0
+
+    # |a| + |b|, as a normalized-shape (no leading-zero-strip needed by
+    # caller — caller normalizes via _make) limb vector.
+    def _add_mag(a: Vec[int], b: Vec[int]) -> Vec[int]:
+        mut n = a.len
+        if b.len > n: n = b.len
+        mut out = Vec[int].init(n + 1)
+        mut carry = 0
+        mut i = 0
+        while i < n:
+            mut av = 0
+            if i < a.len: av = a.get(i)
+            mut bv = 0
+            if i < b.len: bv = b.get(i)
+            mut s = av + bv + carry
+            if s >= LIMB_BASE:
+                s = s - LIMB_BASE
+                carry = 1
+            else:
+                carry = 0
+            out.push(s)
+            i = i + 1
+        if carry > 0: out.push(carry)
+        return out
+
+    # |a| - |b|, REQUIRES |a| >= |b| (caller's responsibility to order args).
+    def _sub_mag(a: Vec[int], b: Vec[int]) -> Vec[int]:
+        mut out = Vec[int].init(a.len)
+        mut borrow = 0
+        mut i = 0
+        while i < a.len:
+            mut av = a.get(i)
+            mut bv = 0
+            if i < b.len: bv = b.get(i)
+            mut d = av - bv - borrow
+            if d < 0:
+                d = d + LIMB_BASE
+                borrow = 1
+            else:
+                borrow = 0
+            out.push(d)
+            i = i + 1
+        return out
+
+    # ── Arithmetic ────────────────────────────────────────────────────────────
+
+    pub def add(self, other: BigInt) -> BigInt:
+        if self.sign == 0: return BigInt._make(other.sign, other.limbs.clone())
+        if other.sign == 0: return BigInt._make(self.sign, self.limbs.clone())
+
+        if self.sign == other.sign:
+            return BigInt._make(self.sign, BigInt._add_mag(self.limbs, other.limbs))
+
+        # Opposite signs: subtract the smaller magnitude from the larger,
+        # result takes the sign of whichever operand has the larger magnitude.
+        mut c = BigInt._cmp_mag(self.limbs, other.limbs)
+        if c == 0: return BigInt.zero()
+        if c > 0:
+            return BigInt._make(self.sign, BigInt._sub_mag(self.limbs, other.limbs))
+        return BigInt._make(other.sign, BigInt._sub_mag(other.limbs, self.limbs))
+
+    pub def sub(self, other: BigInt) -> BigInt:
+        return self.add(other.negate())
+
+    pub def mul(self, other: BigInt) -> BigInt:
+        if self.sign == 0 or other.sign == 0: return BigInt.zero()
+        mut a = self.limbs
+        mut b = other.limbs
+        mut out = Vec[int].init(a.len + b.len)
+        mut z = 0
+        while z < a.len + b.len: out.push(0); z = z + 1
+
+        # Textbook O(n*m) long multiplication with per-limb carry propagation.
+        # Each out[i+j] accumulates products; since a limb*limb product is at
+        # most ~10^18 and out[i+j] can itself hold a partial sum before the
+        # carry-normalization pass below, we normalize into <LIMB_BASE limbs
+        # immediately after each inner-loop accumulation to keep every value
+        # well within int range (never letting unnormalized sums compound
+        # across the whole row).
+        mut i = 0
+        while i < a.len:
+            mut carry = 0
+            mut j = 0
+            while j < b.len:
+                mut cur = out.get(i + j) + a.get(i) * b.get(j) + carry
+                out.set(i + j, cur - (cur / LIMB_BASE) * LIMB_BASE)
+                carry = cur / LIMB_BASE
+                j = j + 1
+            mut k = i + b.len
+            while carry > 0:
+                mut cur = out.get(k) + carry
+                out.set(k, cur - (cur / LIMB_BASE) * LIMB_BASE)
+                carry = cur / LIMB_BASE
+                k = k + 1
+            i = i + 1
+
+        mut result_sign = self.sign * other.sign
+        return BigInt._make(result_sign, out)
+
+    # Unsigned magnitude division: returns (quotient, remainder) as a
+    # _DivModMag, both non-negative limb vectors, with
+    # |a| = quotient*|b| + remainder and 0 <= remainder < |b|. Uses long
+    # division one base-10^9 digit at a time (via binary search against a
+    # shifted, scaled divisor) — O(n^2) but simple to get right, which
+    # matters more here than raw speed.
+    def _divmod_mag(a: Vec[int], b: Vec[int]) -> _DivModMag:
+        if BigInt._cmp_mag(a, b) < 0:
+            mut zero_l = Vec[int].init(1)
+            zero_l.push(0)
+            mut r0 = _DivModMag()
+            r0.q = zero_l
+            r0.r = a.clone()
+            return r0
+
+        mut quot = Vec[int].init(a.len)
+        mut i = 0
+        while i < a.len: quot.push(0); i = i + 1
+
+        mut rem_l = Vec[int].init(1)
+        rem_l.push(0)
+        mut rem = BigInt._make(0, rem_l)
+        mut divisor = BigInt._make(1, b)
+
+        # Process limbs from most-significant to least, base-10^9 long
+        # division: at each step, rem = rem*BASE + next_limb, then find the
+        # largest digit d in [0, BASE) such that divisor*d <= rem, via binary
+        # search (avoids a slow linear scan up to 10^9).
+        mut idx = a.len - 1
+        while idx >= 0:
+            mut shifted_limbs = Vec[int].init(rem.limbs.len + 1)
+            mut si = 0
+            while si < rem.limbs.len:
+                shifted_limbs.push(rem.limbs.get(si))
+                si = si + 1
+            shifted_limbs.push(0)
+            # multiply rem by BASE (shift up one limb) then add a.get(idx)
+            mut k = shifted_limbs.len - 1
+            while k > 0:
+                shifted_limbs.set(k, shifted_limbs.get(k - 1))
+                k = k - 1
+            shifted_limbs.set(0, a.get(idx))
+            rem = BigInt._make(1, shifted_limbs)
+            if rem.sign == 0: rem = BigInt._make(0, rem.limbs)
+
+            # Binary search for the largest digit d with divisor*d <= rem.
+            mut lo = 0
+            mut hi = LIMB_BASE - 1
+            mut best = 0
+            while lo <= hi:
+                mut mid = (lo + hi) / 2
+                mut cand = divisor.mul(BigInt.from_int(mid))
+                if BigInt._cmp_mag(cand.limbs, rem.limbs) <= 0:
+                    best = mid
+                    lo = mid + 1
+                else:
+                    hi = mid - 1
+            quot.set(idx, best)
+            mut sub_amt = divisor.mul(BigInt.from_int(best))
+            rem = BigInt._make(0, BigInt._sub_mag(rem.limbs, sub_amt.limbs))
+            if not (rem.limbs.len == 1 and rem.limbs.get(0) == 0): rem = BigInt._make(1, rem.limbs)
+            idx = idx - 1
+
+        mut res = _DivModMag()
+        res.q = quot
+        res.r = rem.limbs
+        return res
+
+    # Integer division, rounding toward zero (i.e. truncating division — same
+    # convention as Tauraro's native `int / int`, and as C's `/`). Examples:
+    #   7 / 2 = 3,   -7 / 2 = -3,   7 / -2 = -3,   -7 / -2 = 3
+    # (Not floor division: floor(-7/2) would be -4. Truncation-toward-zero is
+    # chosen for consistency with the native `int` operator, so BigInt divide
+    # "feels like" int divide.) Division by zero returns BigInt.zero() rather
+    # than aborting, since Tauraro has no exceptions in this module's scope —
+    # callers that need to detect it should check `other.is_zero()` first.
+    pub def div(self, other: BigInt) -> BigInt:
+        if other.sign == 0: return BigInt.zero()
+        if self.sign == 0: return BigInt.zero()
+        mut qr = BigInt._divmod_mag(self.limbs, other.limbs)
+        mut result_sign = self.sign * other.sign
+        return BigInt._make(result_sign, qr.q)
+
+    # Remainder, sign-of-dividend convention consistent with `.div`'s
+    # truncation-toward-zero (same as native `int %` / C's `%`):
+    #   7 % 2 = 1,   -7 % 2 = -1,   7 % -2 = 1,   -7 % -2 = -1
+    # Always satisfies: self == other.mul(self.div(other)).add(self.rem(other))
+    pub def rem(self, other: BigInt) -> BigInt:
+        if other.sign == 0: return BigInt.zero()
+        if self.sign == 0: return BigInt.zero()
+        mut qr = BigInt._divmod_mag(self.limbs, other.limbs)
+        return BigInt._make(self.sign, qr.r)
+
+    # Alias for `.rem` (both names are common; `mod_` avoids colliding with
+    # the `%` operator's dunder name and the `mod` keyword-ish convention
+    # used elsewhere in std.math).
+    pub def mod_(self, other: BigInt) -> BigInt:
+        return self.rem(other)
+
+    # ── Comparison ────────────────────────────────────────────────────────────
+
+    pub def cmp(self, other: BigInt) -> int:
+        if self.sign != other.sign:
+            if self.sign < other.sign: return -1
+            return 1
+        if self.sign == 0: return 0
+        mut m = BigInt._cmp_mag(self.limbs, other.limbs)
+        if self.sign < 0: return 0 - m    # both negative: larger magnitude is the smaller value
+        return m
+
+    pub def eq(self, other: BigInt) -> bool:
+        return self.cmp(other) == 0
+
+    pub def lt(self, other: BigInt) -> bool:
+        return self.cmp(other) < 0
+
+    pub def gt(self, other: BigInt) -> bool:
+        return self.cmp(other) > 0
+
+    pub def le(self, other: BigInt) -> bool:
+        return self.cmp(other) <= 0
+
+    pub def ge(self, other: BigInt) -> bool:
+        return self.cmp(other) >= 0
+
+    # ── Operator overloads (see docs/lang/21_operator_overloading.md) ───────
+
+    pub def __add__(self, other: BigInt) -> BigInt:
+        return self.add(other)
+
+    pub def __sub__(self, other: BigInt) -> BigInt:
+        return self.sub(other)
+
+    pub def __mul__(self, other: BigInt) -> BigInt:
+        return self.mul(other)
+
+    # NOTE: the compiler dispatches the `/` operator to `__truediv__`, not
+    # `__div__` as docs/lang/21_operator_overloading.md's table states (see
+    # src/codegen/c.tr's binop dunder-dispatch table around `elif op == "/":
+    # dunder = "__truediv__"`) — a pre-existing docs/implementation mismatch
+    # outside this module's scope to fix, so we define the name the compiler
+    # actually looks for.
+    pub def __truediv__(self, other: BigInt) -> BigInt:
+        return self.div(other)
+
+    pub def __mod__(self, other: BigInt) -> BigInt:
+        return self.rem(other)
+
+    pub def __neg__(self) -> BigInt:
+        return self.negate()
+
+    pub def __eq__(self, other: BigInt) -> bool:
+        return self.eq(other)
+
+    pub def __ne__(self, other: BigInt) -> bool:
+        return not self.eq(other)
+
+    pub def __lt__(self, other: BigInt) -> bool:
+        return self.lt(other)
+
+    pub def __le__(self, other: BigInt) -> bool:
+        return self.le(other)
+
+    pub def __gt__(self, other: BigInt) -> bool:
+        return self.gt(other)
+
+    pub def __ge__(self, other: BigInt) -> bool:
+        return self.ge(other)
+
+    pub def __str__(self) -> str:
+        return self.to_str()
+
+    # ── Powers ────────────────────────────────────────────────────────────────
+
+    # self^exp, exp a non-negative native int. Negative exp is documented as
+    # returning BigInt.zero() (a BigInt can't represent a fraction, so there
+    # is no sane non-zero result to return; this matches this module's
+    # general "don't abort, return a documented sentinel" policy for
+    # ill-defined input, same as div-by-zero above).
+    pub def pow(self, exp: int) -> BigInt:
+        if exp < 0: return BigInt.zero()
+        if exp == 0: return BigInt.from_int(1)
+        # Exponentiation by squaring — same algorithm as Math.pow_fast in
+        # std.math.int, adapted to BigInt multiplication.
+        mut result = BigInt.from_int(1)
+        mut base   = BigInt._make(self.sign, self.limbs.clone())
+        mut e = exp
+        while e > 0:
+            if (e - (e / 2) * 2) == 1: result = result.mul(base)
+            base = base.mul(base)
+            e = e / 2
+        return result
