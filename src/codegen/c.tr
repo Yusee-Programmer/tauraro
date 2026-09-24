@@ -5483,6 +5483,13 @@ pub class CGenerator:
                     mut th_aty = hir_expr_type(args.get(1)).name
                     if _is_int_type(th_aty) or th_aty == "bool" or th_aty == "char":
                         th_arg_s = "(void*)(uintptr_t)(" + self.gen_expr(args.get(1)) + ")"
+                    elif th_aty == "str":
+                        # TrStr is a 2-word struct, not a pointer-sized scalar -
+                        # a direct (void*)(TrStr) cast is a hard C error (same
+                        # issue _tr_str_box/_tr_str_unbox already exist for -
+                        # Option[T]/Result[T,E]'s generic void* payload slot hits
+                        # the identical problem). Box it the same way.
+                        th_arg_s = "_tr_str_box(" + self.gen_expr(args.get(1)) + ")"
                     if th_fn_nm != "":
                         return "_tr_threadobj_spawn(_tr_spawn_wrap_" + th_fn_nm + ", " + th_arg_s + ")"
                     return "_tr_threadobj_spawn((void*(*)(void*))(" + self.gen_expr(args.get(0)) + "), " + th_arg_s + ")"
@@ -5623,10 +5630,16 @@ pub class CGenerator:
         # String receivers parse; numeric receivers cast.
         if method == "to_float":
             if _is_str_type(t_n): return "_tr_str_to_float(" + self.strz(obj_s) + ")"
-            return "(double)(" + obj_s + ")"
+            # Fall through for user classes that define their own to_float(self) method
+            # so it hits normal class-method dispatch further below (same guard as to_str above).
+            if not (self.classes.contains(t_n) and t_n != "Vec" and t_n != "Map" and t_n != "Dict" and t_n != "List"):
+                return "(double)(" + obj_s + ")"
         if method == "to_int":
             if _is_str_type(t_n): return "_tr_str_to_int(" + self.strz(obj_s) + ")"
-            return "(long long)(" + obj_s + ")"
+            # Fall through for user classes that define their own to_int(self) method
+            # so it hits normal class-method dispatch further below (same guard as to_str above).
+            if not (self.classes.contains(t_n) and t_n != "Vec" and t_n != "Map" and t_n != "Dict" and t_n != "List"):
+                return "(long long)(" + obj_s + ")"
 
         # Float math methods - expose libc math as methods on float/f64 values.
         if _is_float_type(t_n):
@@ -7271,6 +7284,21 @@ pub class CGenerator:
                 return self.type_to_c(_wf.params.get(0).ty)
         return self.type_to_c(hir_expr_type(arg_expr))
 
+    # Same as _spawn_wrap_cast_ty, generalized to the Nth (0-based) worker
+    # param -- for a multi-arg spawn wrapper unpacking arg index `pi`. Used by
+    # every multi-arg spawn-wrapper emission site (Thread.spawn/ThreadPool.spawn/
+    # AsyncPool.spawn/task_group spawn) so a later Shared[T] arg (not just the
+    # first) casts back to the worker's declared param type instead of the arg
+    # expression's own type (a `shared` var's static type is its inner T; the
+    # worker's param is Shared[T] -> _TrSharedBox*, so the arg type alone is
+    # wrong -- same gap the single-arg helper above already closes for index 0).
+    pub def _spawn_wrap_cast_ty_n(self, fn_name: str, pi: int, arg_expr: Pointer[HirExpr]) -> str:
+        if self.functions.contains(fn_name):
+            mut _wfn = self.functions.get(fn_name)
+            if _wfn.params.len > pi:
+                return self.type_to_c(_wfn.params.get(pi).ty)
+        return self.type_to_c(hir_expr_type(arg_expr))
+
 
     pub def emit_spawn_wrapper_for_expr(self, e: Pointer[HirExpr]):
         if _is_invalid_ptr(e as usize): return
@@ -7312,6 +7340,15 @@ pub class CGenerator:
                         mut ma_atn = hir_expr_type(args.get(ma_ai)).name
                         if not _is_int_type(ma_atn) and ma_atn != "bool" and ma_atn != "char":
                             mut ma_cty = self.type_to_c(hir_expr_type(args.get(ma_ai)))
+                            # Cast to the WORKER's declared param type, not the arg
+                            # expression's: a `shared` var is typed as its inner T, but
+                            # the worker's param is Shared[T] -> _TrSharedBox*, so the
+                            # arg type alone is wrong (mirrors the single-arg branch's
+                            # fix above).
+                            if self.functions.contains(fn_name):
+                                mut _ma_wf = self.functions.get(fn_name)
+                                if _ma_wf.params.len > ma_ai:
+                                    ma_cty = self.type_to_c(_ma_wf.params.get(ma_ai).ty)
                             ma_call_s = ma_call_s + "(" + ma_cty + ")_ab[" + str(ma_ai + 1) + "]"
                         else:
                             ma_call_s = ma_call_s + "_ab[" + str(ma_ai + 1) + "]"
@@ -7433,7 +7470,12 @@ pub class CGenerator:
                             elif pool_args.len == 2:
                                 mut th_ps_aty = hir_expr_type(pool_args.get(1)).name
                                 mut th_ps_cast = "(long long)(uintptr_t)_vp"
-                                if not _is_int_type(th_ps_aty) and th_ps_aty != "bool" and th_ps_aty != "char":
+                                if th_ps_aty == "str":
+                                    # Mirror the caller side's _tr_str_box(...):
+                                    # unbox the same way Option[T]/Result[T,E]
+                                    # already do for their generic void* slot.
+                                    th_ps_cast = "_tr_str_unbox(_vp)"
+                                elif not _is_int_type(th_ps_aty) and th_ps_aty != "bool" and th_ps_aty != "char":
                                     mut th_ps_cty = self._spawn_wrap_cast_ty(th_ps_fn, pool_args.get(1))
                                     th_ps_cast = "(" + th_ps_cty + ")_vp"
                                 self.w("static void* _tr_spawn_wrap_" + th_ps_fn + "(void* _vp) { " + th_ps_fn + "(" + th_ps_cast + "); return NULL; }\n")
@@ -7448,7 +7490,7 @@ pub class CGenerator:
                                     if th_ps_ii > 0: th_ps_cs = th_ps_cs + ", "
                                     mut th_ps_atn = hir_expr_type(pool_args.get(th_ps_ii + 1)).name
                                     if not _is_int_type(th_ps_atn) and th_ps_atn != "bool" and th_ps_atn != "char":
-                                        mut th_ps_cty2 = self.type_to_c(hir_expr_type(pool_args.get(th_ps_ii + 1)))
+                                        mut th_ps_cty2 = self._spawn_wrap_cast_ty_n(th_ps_fn, th_ps_ii, pool_args.get(th_ps_ii + 1))
                                         th_ps_cs = th_ps_cs + "(" + th_ps_cty2 + ")_ab[" + str(th_ps_ii) + "]"
                                     else:
                                         th_ps_cs = th_ps_cs + "_ab[" + str(th_ps_ii) + "]"
@@ -7494,7 +7536,7 @@ pub class CGenerator:
                                         if sp_ii > 0: sp_cs = sp_cs + ", "
                                         mut sp_atn2 = hir_expr_type(pool_args.get(sp_ii + 1)).name
                                         if not _is_int_type(sp_atn2) and sp_atn2 != "bool" and sp_atn2 != "char":
-                                            mut sp_ct2 = self.type_to_c(hir_expr_type(pool_args.get(sp_ii + 1)))
+                                            mut sp_ct2 = self._spawn_wrap_cast_ty_n(sp_fn_nm, sp_ii, pool_args.get(sp_ii + 1))
                                             sp_cs = sp_cs + "(" + sp_ct2 + ")_ab[" + str(sp_ii + 1) + "]"
                                         else:
                                             sp_cs = sp_cs + "_ab[" + str(sp_ii + 1) + "]"
@@ -8184,6 +8226,48 @@ pub class CGenerator:
                                 mut _ai_lval = _ai_obj + ".data[(_tr_bounds_check(" + _ai_key + ", " + _ai_ty.array_size.to_str() + "), " + _ai_key + ")]"
                                 self.w(pad + self.flush_wraps(_ai_lval + " = " + self.gen_expr(v), true) + ";\n")
                                 return
+                    case HirExpr.ETuple(ta_items, _):
+                        # Tuple REASSIGNMENT into pre-existing locals/fields, e.g.
+                        # `(a, b) = fn()` where a/b are already-declared `mut` locals
+                        # (as opposed to `mut (a, b) = fn()`, a declaration, handled by
+                        # SMultiLet/gen_multi_let above). Without this case, gen_expr(t)
+                        # on an ETuple falls through to the generic fallback below and
+                        # builds a THROWAWAY TrTuple compound literal as the assignment
+                        # target -- a real C lvalue (gcc's compound-literal extension)
+                        # but a complete no-op with respect to a/b's actual storage.
+                        # Fix: unpack the RHS tuple into typed temps (same slot-decoding
+                        # as gen_multi_let -- str/float special-cased, everything else a
+                        # plain scalar slot copy, mirroring gen_multi_let's own coverage
+                        # exactly since that's the proven-correct baseline for the
+                        # declaration form), then store each temp into its real target's
+                        # lvalue with the same str retain/release used by the
+                        # single-target EIdent/EPropAccess reassignment paths just below.
+                        mut ta_tmp = "_tup" + self.next_temp()
+                        self.w(pad + "TrTuple " + ta_tmp + " = " + self.flush_wraps(self.gen_expr(v), false) + ";\n")
+                        mut ta_val_ty = hir_expr_type(v)
+                        mut ta_i = 0
+                        while ta_i < ta_items.len:
+                            mut ta_tgt = ta_items.get(ta_i)
+                            mut ta_elem_ty_n = ""
+                            if ta_val_ty.args.len > ta_i: ta_elem_ty_n = self.resolve_generic_prim(ta_val_ty.args.get(ta_i).read().name)
+                            mut ta_slot = ta_tmp + ".data[" + ta_i.to_str() + "]"
+                            mut ta_lval = self.gen_expr(ta_tgt)
+                            if _is_str_type(ta_elem_ty_n):
+                                mut ta_rhs = "_tr_str_retain(_tr_str_unbox((void*)(uintptr_t)" + ta_slot + "))"
+                                match ta_tgt.read():
+                                    case HirExpr.EIdent(ta_n, _, _):
+                                        if self.str_local_names.contains(ta_n):
+                                            self.w(pad + "_tr_str_release(" + ta_lval + ");\n")
+                                        else:
+                                            self.str_local_names.insert(ta_n, true)
+                                    case _: pass
+                                self.w(pad + ta_lval + " = " + ta_rhs + ";\n")
+                            elif _is_float_type(ta_elem_ty_n):
+                                self.w(pad + ta_lval + " = _tr_ptr_to_f64((void*)(uintptr_t)" + ta_slot + ");\n")
+                            else:
+                                self.w(pad + ta_lval + " = (long long)" + ta_slot + ";\n")
+                            ta_i = ta_i + 1
+                        return
                     case _: pass
                 # `x = f()?` reassigning an ALREADY-DECLARED plain variable
                 # (as opposed to `mut x = f()?`, an SLet, handled with its
