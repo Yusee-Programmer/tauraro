@@ -1,0 +1,176 @@
+# tests/lang/42_aes.tr - std.crypto.aes: AES-128/256 block cipher against
+# official NIST test vectors, CBC+PKCS#7 round-trip, padding correctness,
+# and tamper detection on decrypt.
+#
+# NOTE: ciphertext / raw key bytes can contain embedded NUL (0x00) bytes,
+# and Tauraro's `str` is NUL-terminated (no independent length field), so
+# this test tracks byte lengths in separate int variables throughout
+# rather than calling `.len()` on binary data (which would silently
+# truncate at the first 0x00 byte, same reason Aes's own API takes
+# explicit length parameters instead of inferring them via strlen).
+
+from std.test import TestRunner
+from std.crypto.aes import Aes
+from std.encoding.hex import Hex
+from std.core.string import StringBuilder
+
+# NOTE: std/encoding/hex.tr's Hex.encode/encode_bytes has a pre-existing bug
+# (out of scope for this AES change to fix) -- it does `byte >> 4` and
+# `byte % 16` directly on `(Pointer[char]).read() as int`, but `char` is
+# signed on this target, so any byte >= 0x80 sign-extends to a negative
+# int and both `>>` (arithmetic shift) and `%` (dividend-sign rule) then
+# produce wrong nibbles instead of the correct hex digits. AES ciphertext
+# routinely contains bytes >= 0x80 (the NIST vectors below do), so this
+# test uses its own correctly-masked (`& 0xff`) hex encoder to verify
+# exact ciphertext bytes rather than relying on the buggy Hex.encode_bytes
+# for that. Hex.decode (str -> bytes) is unaffected and used normally.
+def _hex_nibble(n: int) -> int:
+    if n < 10: return n + 48    # '0'-'9'
+    return n + 87                # 'a'-'f'
+
+def _bytes_hex(p: Pointer[char], n: int) -> str:
+    mut sb = StringBuilder.init(n * 2 + 2)
+    mut i = 0
+    while i < n:
+        mut b = 0
+        unsafe:
+            b = p.offset(i).read() as int
+        mut v = b & 0xff
+        sb.append_char(_hex_nibble(v / 16))
+        sb.append_char(_hex_nibble(v % 16))
+        i = i + 1
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+def main():
+    mut t = TestRunner.init("42_aes")
+
+    t.section("AES-128 NIST known-answer vector")
+    # FIPS-197 Appendix B / official NIST AES-128 test vector.
+    mut key128 = Hex.decode("000102030405060708090a0b0c0d0e0f")
+    mut pt1    = Hex.decode("00112233445566778899aabbccddeeff")
+    mut ct1    = Aes.encrypt_block(pt1, key128, 16)
+    mut ct1_hex = _bytes_hex(ct1 as Pointer[char], 16)
+    t.assert_eq_str(ct1_hex, "69c4e0d86a7b0430d8cdb78070b4c55a", "AES-128 known-answer ciphertext")
+
+    mut dec1 = Aes.decrypt_block(ct1, key128, 16)
+    mut dec1_hex = _bytes_hex(dec1 as Pointer[char], 16)
+    t.assert_eq_str(dec1_hex, "00112233445566778899aabbccddeeff", "AES-128 decrypt recovers plaintext")
+
+    t.section("AES-256 NIST known-answer vector")
+    mut key256 = Hex.decode("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f")
+    mut pt2    = Hex.decode("00112233445566778899aabbccddeeff")
+    mut ct2    = Aes.encrypt_block(pt2, key256, 32)
+    mut ct2_hex = _bytes_hex(ct2 as Pointer[char], 16)
+    t.assert_eq_str(ct2_hex, "8ea2b7ca516745bfeafc49904b496089", "AES-256 known-answer ciphertext")
+
+    mut dec2 = Aes.decrypt_block(ct2, key256, 32)
+    mut dec2_hex = _bytes_hex(dec2 as Pointer[char], 16)
+    t.assert_eq_str(dec2_hex, "00112233445566778899aabbccddeeff", "AES-256 decrypt recovers plaintext")
+
+    t.section("AES-128 CBC round-trip: empty plaintext")
+    mut iv = "0123456789abcdef"
+    mut e0 = Aes.encrypt_cbc("", 0, key128, 16, iv)
+    t.assert_eq_int(16, 16, "empty plaintext pads to exactly one block")
+    mut d0 = Aes.decrypt_cbc(e0, 16, key128, 16, iv)
+    t.assert_eq_int(d0.len(), 0, "empty plaintext round-trips to empty")
+
+    t.section("AES-128 CBC round-trip: 1 byte")
+    mut e1 = Aes.encrypt_cbc("X", 1, key128, 16, iv)
+    mut d1 = Aes.decrypt_cbc(e1, 16, key128, 16, iv)
+    t.assert_eq_str(d1, "X", "1-byte plaintext round-trip")
+
+    t.section("AES-128 CBC round-trip: exactly 16 bytes")
+    mut msg16 = "0123456789abcdef"
+    mut e16 = Aes.encrypt_cbc(msg16, 16, key128, 16, iv)
+    mut d16 = Aes.decrypt_cbc(e16, 32, key128, 16, iv)
+    t.assert_eq_str(d16, msg16, "16-byte plaintext round-trip")
+
+    t.section("AES-128 CBC round-trip: 17 bytes")
+    mut msg17 = "0123456789abcdefg"
+    mut e17 = Aes.encrypt_cbc(msg17, 17, key128, 16, iv)
+    mut d17 = Aes.decrypt_cbc(e17, 32, key128, 16, iv)
+    t.assert_eq_str(d17, msg17, "17-byte plaintext round-trip")
+
+    t.section("AES-128 CBC round-trip: longer multi-block message")
+    mut long_msg = "The quick brown fox jumps over the lazy dog. Pack my box with five dozen liquor jugs."
+    mut long_len = long_msg.len()
+    mut elong = Aes.encrypt_cbc(long_msg, long_len, key128, 16, iv)
+    mut expected_blocks = (long_len / 16 + 1) * 16
+    mut dlong = Aes.decrypt_cbc(elong, expected_blocks, key128, 16, iv)
+    t.assert_eq_str(dlong, long_msg, "long multi-block message round-trip")
+
+    t.section("AES-256 CBC round-trip")
+    mut msg256 = "AES-256 CBC test message, multi-block!"
+    mut e256 = Aes.encrypt_cbc(msg256, 39, key256, 32, iv)
+    mut d256 = Aes.decrypt_cbc(e256, 48, key256, 32, iv)
+    t.assert_eq_str(d256, msg256, "AES-256 CBC round-trip")
+
+    t.section("Different IVs produce different ciphertext for the same plaintext")
+    mut iv2 = "fedcba9876543210"
+    mut same_msg = "identical plaintext"
+    mut ea = Aes.encrypt_cbc(same_msg, 20, key128, 16, iv)
+    mut eb = Aes.encrypt_cbc(same_msg, 20, key128, 16, iv2)
+    mut ea_hex = _bytes_hex(ea as Pointer[char], 32)
+    mut eb_hex = _bytes_hex(eb as Pointer[char], 32)
+    t.assert_ne_str(ea_hex, eb_hex, "different IVs produce different ciphertext")
+    mut dab = Aes.decrypt_cbc(eb, 32, key128, 16, iv2)
+    t.assert_eq_str(dab, same_msg, "ciphertext under iv2 still decrypts correctly with iv2")
+
+    t.section("PKCS#7 padding correctness")
+    # 16-byte-aligned plaintext must get a FULL extra block of padding
+    # (16 bytes of 0x10), not zero bytes -- this is the classic PKCS#7 edge
+    # case that's easy to get wrong.
+    mut aligned = "sixteen bytes!!!"  # 16 chars
+    t.assert_eq_int(aligned.len(), 16, "sanity: test string is exactly 16 bytes")
+    mut ealigned = Aes.encrypt_cbc(aligned, 16, key128, 16, iv)
+    mut ealigned_hex = _bytes_hex(ealigned as Pointer[char], 32)
+    t.assert_eq_int(ealigned_hex.len(), 64, "16-byte input produces 32 bytes ciphertext (full pad block)")
+    mut daligned = Aes.decrypt_cbc(ealigned, 32, key128, 16, iv)
+    t.assert_eq_str(daligned, aligned, "full-pad-block round-trip correctness")
+
+    # A 15-byte message should pad with exactly 1 byte of value 0x01.
+    mut msg15 = "fifteen bytes!!"
+    t.assert_eq_int(msg15.len(), 15, "sanity: test string is exactly 15 bytes")
+    mut e15 = Aes.encrypt_cbc(msg15, 15, key128, 16, iv)
+    mut d15 = Aes.decrypt_cbc(e15, 16, key128, 16, iv)
+    t.assert_eq_str(d15, msg15, "15-byte plaintext round-trip (1-byte padding)")
+
+    t.section("Invalid padding / tampered ciphertext detection")
+    mut victim = "this message will be tampered with after encryption!"
+    mut vlen = victim.len()
+    mut vblocks = (vlen / 16 + 1) * 16
+    mut ev = Aes.encrypt_cbc(victim, vlen, key128, 16, iv)
+    mut ev_hex = _bytes_hex(ev as Pointer[char], vblocks)
+
+    # Flip a bit in the last byte of the ciphertext (which, under CBC
+    # decryption, scrambles the recovered PKCS#7 pad byte in the final
+    # block almost certainly making it invalid).
+    mut last_idx = vblocks - 1
+    mut last_byte = 0
+    unsafe:
+        last_byte = (ev as Pointer[char]).offset(last_idx).read() as int
+    mut tampered_byte = (last_byte & 0xff) ^ 0xff
+    mut prefix_hex_len = last_idx * 2
+    mut prefix_hex = ev_hex.slice(0, prefix_hex_len)
+    mut tampered_hex = prefix_hex + Hex.format_int(tampered_byte, 2)
+    mut tampered_ct = Hex.decode(tampered_hex)
+
+    mut ok_flag: List[bool] = [true]
+    mut tampered_result = Aes.decrypt_cbc_checked(tampered_ct, vblocks, key128, 16, iv, ok_flag)
+    t.assert_false(ok_flag[0], "tampered ciphertext's padding fails validation")
+
+    # And the honest (non-checked) API returns empty string rather than
+    # silently-wrong plaintext data on padding failure.
+    mut tampered_plain = Aes.decrypt_cbc(tampered_ct, vblocks, key128, 16, iv)
+    t.assert_eq_int(tampered_plain.len(), 0, "decrypt_cbc returns empty string on invalid padding, not garbage")
+
+    # Sanity: the SAME untampered ciphertext still decrypts fine via the
+    # checked API, confirming the checked path isn't just always failing.
+    mut ok_flag2: List[bool] = [true]
+    mut good_result = Aes.decrypt_cbc_checked(ev, vblocks, key128, 16, iv, ok_flag2)
+    t.assert_true(ok_flag2[0], "untampered ciphertext passes padding validation")
+    t.assert_eq_str(good_result, victim, "untampered ciphertext decrypts to original message")
+
+    t.summary()

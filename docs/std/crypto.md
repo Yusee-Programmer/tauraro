@@ -4,10 +4,15 @@
 from std.crypto.hash import Hash
 from std.crypto.hmac import Hmac
 from std.crypto.uuid import UUID, ULID, MonotonicUlid
+from std.crypto.aes import Aes
 ```
 
 > SHA-256, HMAC-SHA256, and MD5 are implemented in pure C — no external library required.
 > UUID v4 uses `/dev/urandom` on POSIX and `rand()` on Windows.
+> AES is implemented in pure Tauraro (same approach as SHA-256 — a standard
+> algorithm written directly in the language, compiled to native code, no
+> external library required) and verified against the official NIST/FIPS-197
+> known-answer test vectors.
 
 ---
 
@@ -117,4 +122,68 @@ mut gen = MonotonicUlid.init()
 mut u1 = gen.next()
 mut u2 = gen.next()
 # u1 < u2 always, even generated back-to-back in the same millisecond
+```
+
+---
+
+## AES — `std.crypto.aes`
+
+AES (Rijndael) symmetric block cipher, in pure Tauraro. Supports AES-128
+(10 rounds, 16-byte key) and AES-256 (14 rounds, 32-byte key), selected
+automatically from the key length passed in. CBC mode uses PKCS#7 padding.
+AES-192 is not implemented.
+
+Verified against the official NIST/FIPS-197 known-answer test vectors —
+see `tests/lang/42_aes.tr`.
+
+| Method | Signature | Returns | Description |
+|---|---|---|---|
+| `Aes.encrypt_block` | `(plaintext: str, key: str, klen: int) -> str` | `str` | Encrypt exactly one 16-byte block, no padding/chaining. `klen` is 16 or 32. Mostly useful for testing against known-answer vectors — most callers want `encrypt_cbc`. |
+| `Aes.decrypt_block` | `(ciphertext: str, key: str, klen: int) -> str` | `str` | Decrypt exactly one 16-byte block. |
+| `Aes.encrypt_cbc` | `(plaintext: str, plen: int, key: str, klen: int, iv: str) -> str` | `str` | Encrypt `plen` bytes of `plaintext` under CBC mode with PKCS#7 padding. `iv` must be exactly 16 bytes. Returns raw ciphertext bytes (may contain embedded NUL — track the length separately, don't rely on `strlen`/`.len()`). |
+| `Aes.decrypt_cbc` | `(ciphertext: str, clen: int, key: str, klen: int, iv: str) -> str` | `str` | Decrypt `clen` bytes of CBC+PKCS#7 ciphertext. Returns `""` if PKCS#7 padding validation fails (corrupted ciphertext, wrong key, wrong IV). |
+| `Aes.decrypt_cbc_checked` | `(ciphertext: str, clen: int, key: str, klen: int, iv: str, ok: List[bool]) -> str` | `str` | Same as `decrypt_cbc`, but also sets `ok[0]` to `true`/`false` so callers can distinguish a genuinely-empty plaintext from a padding failure. |
+
+`klen` (16 or 32) is always required explicitly rather than inferred from
+the key string's length, because key bytes are raw binary and may contain
+embedded NUL bytes; the same is true of `plen`/`clen` for plaintext and
+ciphertext.
+
+**IV requirement:** `encrypt_cbc` does **not** generate the IV for you —
+the caller must supply 16 fresh random bytes on every call with a given
+key (reusing an IV with the same key leaks information about plaintext
+relationships between messages). Use `std/math/random.tr` to generate
+one. This is deliberate: a "convenient" auto-generated default would
+hide IV-reuse bugs instead of preventing them.
+
+**Security note — CBC alone is not authenticated.** An attacker who can
+modify ciphertext in transit can flip bits that corrupt the decrypted
+plaintext in ways `Aes` will not reliably detect (only PKCS#7 padding
+corruption is caught, and only probabilistically — a lucky bit flip can
+still produce validly-padded garbage). If you need tamper detection,
+encrypt-then-MAC: compute an HMAC (see [`Hmac`](#stdcryptohmac--hmac))
+over the ciphertext + IV using a *separate* key, send it alongside the
+ciphertext, and verify it **before** decrypting.
+
+### Example
+
+```tauraro
+from std.crypto.aes import Aes
+from std.encoding.hex import Hex
+
+# AES-128 key (16 bytes) and a fresh, caller-supplied 16-byte IV.
+mut key = Hex.decode("000102030405060708090a0b0c0d0e0f")
+mut iv  = "0123456789abcdef"   # MUST be fresh random bytes per message in real use
+
+mut plaintext = "Attack at dawn!"
+mut ct = Aes.encrypt_cbc(plaintext, plaintext.len(), key, 16, iv)
+
+mut pt = Aes.decrypt_cbc(ct, 16, key, 16, iv)   # ct is exactly one 16-byte block here
+print(pt)
+# Attack at dawn!
+
+# Detecting tampering (CBC alone can't do this -- combine with Hmac):
+from std.crypto.hmac import Hmac
+mut mac = Hmac.sha256_str("separate-mac-key", ct)
+# ... send `ct` + `mac` together; verify `mac` before calling decrypt_cbc.
 ```

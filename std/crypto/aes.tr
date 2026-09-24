@@ -1,0 +1,549 @@
+# std.crypto.aes — AES (Rijndael) symmetric block cipher, CBC mode + PKCS#7.
+#
+# Pure Tauraro implementation (standard S-box/round tables as literal
+# constants, per FIPS-197) — compiles straight to native C, no runtime
+# dependency needed, following the same approach as std/crypto/hash.tr's
+# SHA-256.
+#
+# Supports AES-128 (10 rounds, 16-byte key) and AES-256 (14 rounds,
+# 32-byte key), selected automatically from the key length passed to
+# encrypt_cbc/decrypt_cbc. AES-192 is not implemented (rare in practice;
+# add if needed — same structure, Nk=6/Nr=12).
+#
+# SECURITY NOTE: CBC mode alone is NOT authenticated. An attacker who can
+# modify ciphertext in transit can flip bits that corrupt the decrypted
+# plaintext in predictable ways, and this module will NOT detect that
+# tampering (only PKCS#7 padding corruption is detected, and only
+# probabilistically). If you need tamper detection, encrypt-then-MAC:
+# compute an HMAC (see std/crypto/hmac.tr) over the ciphertext + IV using
+# a *separate* key, send it alongside, and verify it before decrypting.
+#
+# Usage:
+#   from std.crypto.aes import Aes
+#   from std.math.random import Random          # for a fresh IV — see below
+#
+#   mut key = Hex.decode("000102030405060708090a0b0c0d0e0f")   # 16 bytes -> AES-128
+#   mut iv  = "................"                                # 16 bytes, CALLER-supplied,
+#                                                                 # must be fresh & random per message
+#   mut ct  = Aes.encrypt_cbc("hello world", 11, key, iv)
+#   mut pt  = Aes.decrypt_cbc(ct, ct.len(), key, iv)
+#   # pt == "hello world"
+#
+# IV requirement: encrypt_cbc does NOT generate the IV for you — the
+# caller must supply 16 fresh random bytes per encryption (reusing an IV
+# with the same key leaks information about plaintext relationships).
+# Use std/math/random.tr to generate one; this module deliberately does
+# not do it silently, to avoid IV-reuse footguns hidden behind a
+# "convenient" default.
+
+from std.core.string import StringBuilder
+
+extern "C":
+    def _tr_strlen(s: str) -> int
+
+# ─── AES S-box / inverse S-box (FIPS-197, Figure 7 / Figure 14) ──────────────
+
+pub def _aes_sbox() -> List[int]:
+    return [
+        0x63,0x7c,0x77,0x7b,0xf2,0x6b,0x6f,0xc5,0x30,0x01,0x67,0x2b,0xfe,0xd7,0xab,0x76,
+        0xca,0x82,0xc9,0x7d,0xfa,0x59,0x47,0xf0,0xad,0xd4,0xa2,0xaf,0x9c,0xa4,0x72,0xc0,
+        0xb7,0xfd,0x93,0x26,0x36,0x3f,0xf7,0xcc,0x34,0xa5,0xe5,0xf1,0x71,0xd8,0x31,0x15,
+        0x04,0xc7,0x23,0xc3,0x18,0x96,0x05,0x9a,0x07,0x12,0x80,0xe2,0xeb,0x27,0xb2,0x75,
+        0x09,0x83,0x2c,0x1a,0x1b,0x6e,0x5a,0xa0,0x52,0x3b,0xd6,0xb3,0x29,0xe3,0x2f,0x84,
+        0x53,0xd1,0x00,0xed,0x20,0xfc,0xb1,0x5b,0x6a,0xcb,0xbe,0x39,0x4a,0x4c,0x58,0xcf,
+        0xd0,0xef,0xaa,0xfb,0x43,0x4d,0x33,0x85,0x45,0xf9,0x02,0x7f,0x50,0x3c,0x9f,0xa8,
+        0x51,0xa3,0x40,0x8f,0x92,0x9d,0x38,0xf5,0xbc,0xb6,0xda,0x21,0x10,0xff,0xf3,0xd2,
+        0xcd,0x0c,0x13,0xec,0x5f,0x97,0x44,0x17,0xc4,0xa7,0x7e,0x3d,0x64,0x5d,0x19,0x73,
+        0x60,0x81,0x4f,0xdc,0x22,0x2a,0x90,0x88,0x46,0xee,0xb8,0x14,0xde,0x5e,0x0b,0xdb,
+        0xe0,0x32,0x3a,0x0a,0x49,0x06,0x24,0x5c,0xc2,0xd3,0xac,0x62,0x91,0x95,0xe4,0x79,
+        0xe7,0xc8,0x37,0x6d,0x8d,0xd5,0x4e,0xa9,0x6c,0x56,0xf4,0xea,0x65,0x7a,0xae,0x08,
+        0xba,0x78,0x25,0x2e,0x1c,0xa6,0xb4,0xc6,0xe8,0xdd,0x74,0x1f,0x4b,0xbd,0x8b,0x8a,
+        0x70,0x3e,0xb5,0x66,0x48,0x03,0xf6,0x0e,0x61,0x35,0x57,0xb9,0x86,0xc1,0x1d,0x9e,
+        0xe1,0xf8,0x98,0x11,0x69,0xd9,0x8e,0x94,0x9b,0x1e,0x87,0xe9,0xce,0x55,0x28,0xdf,
+        0x8c,0xa1,0x89,0x0d,0xbf,0xe6,0x42,0x68,0x41,0x99,0x2d,0x0f,0xb0,0x54,0xbb,0x16,
+    ]
+
+pub def _aes_inv_sbox() -> List[int]:
+    return [
+        0x52,0x09,0x6a,0xd5,0x30,0x36,0xa5,0x38,0xbf,0x40,0xa3,0x9e,0x81,0xf3,0xd7,0xfb,
+        0x7c,0xe3,0x39,0x82,0x9b,0x2f,0xff,0x87,0x34,0x8e,0x43,0x44,0xc4,0xde,0xe9,0xcb,
+        0x54,0x7b,0x94,0x32,0xa6,0xc2,0x23,0x3d,0xee,0x4c,0x95,0x0b,0x42,0xfa,0xc3,0x4e,
+        0x08,0x2e,0xa1,0x66,0x28,0xd9,0x24,0xb2,0x76,0x5b,0xa2,0x49,0x6d,0x8b,0xd1,0x25,
+        0x72,0xf8,0xf6,0x64,0x86,0x68,0x98,0x16,0xd4,0xa4,0x5c,0xcc,0x5d,0x65,0xb6,0x92,
+        0x6c,0x70,0x48,0x50,0xfd,0xed,0xb9,0xda,0x5e,0x15,0x46,0x57,0xa7,0x8d,0x9d,0x84,
+        0x90,0xd8,0xab,0x00,0x8c,0xbc,0xd3,0x0a,0xf7,0xe4,0x58,0x05,0xb8,0xb3,0x45,0x06,
+        0xd0,0x2c,0x1e,0x8f,0xca,0x3f,0x0f,0x02,0xc1,0xaf,0xbd,0x03,0x01,0x13,0x8a,0x6b,
+        0x3a,0x91,0x11,0x41,0x4f,0x67,0xdc,0xea,0x97,0xf2,0xcf,0xce,0xf0,0xb4,0xe6,0x73,
+        0x96,0xac,0x74,0x22,0xe7,0xad,0x35,0x85,0xe2,0xf9,0x37,0xe8,0x1c,0x75,0xdf,0x6e,
+        0x47,0xf1,0x1a,0x71,0x1d,0x29,0xc5,0x89,0x6f,0xb7,0x62,0x0e,0xaa,0x18,0xbe,0x1b,
+        0xfc,0x56,0x3e,0x4b,0xc6,0xd2,0x79,0x20,0x9a,0xdb,0xc0,0xfe,0x78,0xcd,0x5a,0xf4,
+        0x1f,0xdd,0xa8,0x33,0x88,0x07,0xc7,0x31,0xb1,0x12,0x10,0x59,0x27,0x80,0xec,0x5f,
+        0x60,0x51,0x7f,0xa9,0x19,0xb5,0x4a,0x0d,0x2d,0xe5,0x7a,0x9f,0x93,0xc9,0x9c,0xef,
+        0xa0,0xe0,0x3b,0x4d,0xae,0x2a,0xf5,0xb0,0xc8,0xeb,0xbb,0x3c,0x83,0x53,0x99,0x61,
+        0x17,0x2b,0x04,0x7e,0xba,0x77,0xd6,0x26,0xe1,0x69,0x14,0x63,0x55,0x21,0x0c,0x7d,
+    ]
+
+# Round constants used in key expansion (Rcon[i] as the byte in word position 0).
+pub def _aes_rcon() -> List[int]:
+    return [0x01,0x02,0x04,0x08,0x10,0x20,0x40,0x80,0x1b,0x36,0x6c,0xd8,0xab,0x4d]
+
+# ─── GF(2^8) arithmetic for MixColumns ────────────────────────────────────────
+
+# Multiply two bytes in GF(2^8) with the AES reduction polynomial
+# x^8 + x^4 + x^3 + x + 1 (0x11b).
+pub def _gmul(a: int, b: int) -> int:
+    mut aa = a & 0xff
+    mut bb = b & 0xff
+    mut p = 0
+    mut i = 0
+    while i < 8:
+        if (bb & 1) != 0:
+            p = p ^ aa
+        mut hi_bit = aa & 0x80
+        aa = (aa << 1) & 0xff
+        if hi_bit != 0:
+            aa = aa ^ 0x1b
+        bb = bb >> 1
+        i = i + 1
+    return p & 0xff
+
+# ─── Key expansion ─────────────────────────────────────────────────────────
+
+# Expand a 16- or 32-byte key into the round-key schedule (a flat byte list
+# of length 16 * (Nr + 1)). `nk` = key length in 32-bit words (4 for
+# AES-128, 8 for AES-256); `nr` = number of rounds (10 or 14).
+pub def _key_expansion(key: List[int], nk: int, nr: int) -> List[int]:
+    mut sbox = _aes_sbox()
+    mut rcon = _aes_rcon()
+    mut total_words = 4 * (nr + 1)
+    # w[word][0..3] flattened as w[word*4 + byte]
+    mut w: List[int] = []
+    mut i = 0
+    while i < total_words * 4:
+        w.append(0)
+        i = i + 1
+
+    # First Nk words come directly from the key.
+    i = 0
+    while i < nk:
+        w[i * 4 + 0] = key[i * 4 + 0]
+        w[i * 4 + 1] = key[i * 4 + 1]
+        w[i * 4 + 2] = key[i * 4 + 2]
+        w[i * 4 + 3] = key[i * 4 + 3]
+        i = i + 1
+
+    i = nk
+    while i < total_words:
+        mut t0 = w[(i - 1) * 4 + 0]
+        mut t1 = w[(i - 1) * 4 + 1]
+        mut t2 = w[(i - 1) * 4 + 2]
+        mut t3 = w[(i - 1) * 4 + 3]
+
+        if i % nk == 0:
+            # RotWord
+            mut r0 = t1
+            mut r1 = t2
+            mut r2 = t3
+            mut r3 = t0
+            # SubWord
+            r0 = sbox[r0]
+            r1 = sbox[r1]
+            r2 = sbox[r2]
+            r3 = sbox[r3]
+            # Rcon
+            r0 = r0 ^ rcon[i / nk - 1]
+            t0 = r0
+            t1 = r1
+            t2 = r2
+            t3 = r3
+        else:
+            if nk > 6 and i % nk == 4:
+                # AES-256 extra SubWord (no RotWord/Rcon) at word position 4 mod Nk.
+                t0 = sbox[t0]
+                t1 = sbox[t1]
+                t2 = sbox[t2]
+                t3 = sbox[t3]
+
+        w[i * 4 + 0] = w[(i - nk) * 4 + 0] ^ t0
+        w[i * 4 + 1] = w[(i - nk) * 4 + 1] ^ t1
+        w[i * 4 + 2] = w[(i - nk) * 4 + 2] ^ t2
+        w[i * 4 + 3] = w[(i - nk) * 4 + 3] ^ t3
+        i = i + 1
+
+    return w
+
+# ─── Single-block encrypt / decrypt ───────────────────────────────────────
+
+# state is a 16-byte List[int] laid out column-major per FIPS-197
+# (state[r + 4*c]); round_keys is the flat schedule from _key_expansion.
+pub def _add_round_key(state: List[int], round_keys: List[int], round: int):
+    mut base = round * 16
+    mut i = 0
+    while i < 16:
+        state[i] = state[i] ^ round_keys[base + i]
+        i = i + 1
+
+pub def _sub_bytes(state: List[int], sbox: List[int]):
+    mut i = 0
+    while i < 16:
+        state[i] = sbox[state[i]]
+        i = i + 1
+
+pub def _inv_sub_bytes(state: List[int], inv_sbox: List[int]):
+    mut i = 0
+    while i < 16:
+        state[i] = inv_sbox[state[i]]
+        i = i + 1
+
+# ShiftRows: row r is shifted left by r positions. state[r + 4*c].
+pub def _shift_rows(state: List[int]):
+    # Row 1: shift left by 1
+    mut t = state[1]
+    state[1] = state[5]
+    state[5] = state[9]
+    state[9] = state[13]
+    state[13] = t
+    # Row 2: shift left by 2
+    mut t0 = state[2]
+    mut t1 = state[6]
+    state[2] = state[10]
+    state[6] = state[14]
+    state[10] = t0
+    state[14] = t1
+    # Row 3: shift left by 3 (= shift right by 1)
+    mut t3 = state[15]
+    state[15] = state[11]
+    state[11] = state[7]
+    state[7] = state[3]
+    state[3] = t3
+
+pub def _inv_shift_rows(state: List[int]):
+    # Row 1: shift right by 1
+    mut t = state[13]
+    state[13] = state[9]
+    state[9] = state[5]
+    state[5] = state[1]
+    state[1] = t
+    # Row 2: shift right by 2 (same as shift left by 2 — self-inverse)
+    mut t0 = state[2]
+    mut t1 = state[6]
+    state[2] = state[10]
+    state[6] = state[14]
+    state[10] = t0
+    state[14] = t1
+    # Row 3: shift right by 3 (= shift left by 1)
+    mut t3 = state[3]
+    state[3] = state[7]
+    state[7] = state[11]
+    state[11] = state[15]
+    state[15] = t3
+
+pub def _mix_columns(state: List[int]):
+    mut c = 0
+    while c < 4:
+        mut base = c * 4
+        mut a0 = state[base + 0]
+        mut a1 = state[base + 1]
+        mut a2 = state[base + 2]
+        mut a3 = state[base + 3]
+        state[base + 0] = _gmul(a0, 2) ^ _gmul(a1, 3) ^ a2 ^ a3
+        state[base + 1] = a0 ^ _gmul(a1, 2) ^ _gmul(a2, 3) ^ a3
+        state[base + 2] = a0 ^ a1 ^ _gmul(a2, 2) ^ _gmul(a3, 3)
+        state[base + 3] = _gmul(a0, 3) ^ a1 ^ a2 ^ _gmul(a3, 2)
+        c = c + 1
+
+pub def _inv_mix_columns(state: List[int]):
+    mut c = 0
+    while c < 4:
+        mut base = c * 4
+        mut a0 = state[base + 0]
+        mut a1 = state[base + 1]
+        mut a2 = state[base + 2]
+        mut a3 = state[base + 3]
+        state[base + 0] = _gmul(a0, 14) ^ _gmul(a1, 11) ^ _gmul(a2, 13) ^ _gmul(a3, 9)
+        state[base + 1] = _gmul(a0, 9) ^ _gmul(a1, 14) ^ _gmul(a2, 11) ^ _gmul(a3, 13)
+        state[base + 2] = _gmul(a0, 13) ^ _gmul(a1, 9) ^ _gmul(a2, 14) ^ _gmul(a3, 11)
+        state[base + 3] = _gmul(a0, 11) ^ _gmul(a1, 13) ^ _gmul(a2, 9) ^ _gmul(a3, 14)
+        c = c + 1
+
+# Encrypt exactly one 16-byte block. `round_keys` from _key_expansion, `nr`
+# = number of rounds (10 for AES-128, 14 for AES-256).
+pub def _encrypt_block(block: List[int], round_keys: List[int], nr: int) -> List[int]:
+    mut sbox = _aes_sbox()
+    mut state: List[int] = []
+    mut i = 0
+    while i < 16:
+        state.append(block[i])
+        i = i + 1
+
+    _add_round_key(state, round_keys, 0)
+
+    mut round = 1
+    while round < nr:
+        _sub_bytes(state, sbox)
+        _shift_rows(state)
+        _mix_columns(state)
+        _add_round_key(state, round_keys, round)
+        round = round + 1
+
+    _sub_bytes(state, sbox)
+    _shift_rows(state)
+    _add_round_key(state, round_keys, nr)
+
+    return state
+
+# Decrypt exactly one 16-byte block.
+pub def _decrypt_block(block: List[int], round_keys: List[int], nr: int) -> List[int]:
+    mut inv_sbox = _aes_inv_sbox()
+    mut state: List[int] = []
+    mut i = 0
+    while i < 16:
+        state.append(block[i])
+        i = i + 1
+
+    _add_round_key(state, round_keys, nr)
+
+    mut round = nr - 1
+    while round > 0:
+        _inv_shift_rows(state)
+        _inv_sub_bytes(state, inv_sbox)
+        _add_round_key(state, round_keys, round)
+        _inv_mix_columns(state)
+        round = round - 1
+
+    _inv_shift_rows(state)
+    _inv_sub_bytes(state, inv_sbox)
+    _add_round_key(state, round_keys, 0)
+
+    return state
+
+# ─── Public API ────────────────────────────────────────────────────────────
+
+pub class Aes:
+    _dummy: int
+
+extend Aes:
+    # Encrypt exactly one 16-byte block (raw bytes in, raw bytes out — no
+    # padding, no chaining). `key` must be `klen` bytes: 16 (AES-128) or
+    # 32 (AES-256). Mainly useful for testing against known-answer
+    # vectors; most callers want encrypt_cbc instead.
+    #
+    # `klen` is required (not inferred via strlen) because key material is
+    # raw binary and may legitimately contain embedded NUL bytes.
+    pub def encrypt_block(plaintext: str, key: str, klen: int) -> str:
+        mut key_bytes = Aes._raw_bytes(key, klen)
+        mut nk = 4
+        mut nr = 10
+        if klen == 32:
+            nk = 8
+            nr = 14
+        mut round_keys = _key_expansion(key_bytes, nk, nr)
+        mut block = Aes._raw_bytes(plaintext, 16)
+        mut out = _encrypt_block(block, round_keys, nr)
+        return Aes._bytes_to_str(out)
+
+    # Decrypt exactly one 16-byte block (raw bytes in, raw bytes out).
+    # See encrypt_block for why `klen` is required explicitly.
+    pub def decrypt_block(ciphertext: str, key: str, klen: int) -> str:
+        mut key_bytes = Aes._raw_bytes(key, klen)
+        mut nk = 4
+        mut nr = 10
+        if klen == 32:
+            nk = 8
+            nr = 14
+        mut round_keys = _key_expansion(key_bytes, nk, nr)
+        mut block = Aes._raw_bytes(ciphertext, 16)
+        mut out = _decrypt_block(block, round_keys, nr)
+        return Aes._bytes_to_str(out)
+
+    # Encrypt `plen` bytes of `plaintext` under CBC mode with PKCS#7
+    # padding. `key` must be exactly `klen` bytes: 16 (AES-128) or 32
+    # (AES-256); `iv` must be exactly 16 bytes and MUST be fresh random
+    # data for every call with a given key (never reuse an IV). Returns
+    # the raw ciphertext bytes as a str (may contain embedded NUL bytes —
+    # use the returned length, not strlen, when passing it on).
+    #
+    # `klen` is required explicitly (not inferred via strlen) because key
+    # bytes are raw binary and may legitimately contain embedded NULs;
+    # `iv` is always read as exactly 16 raw bytes for the same reason.
+    pub def encrypt_cbc(plaintext: str, plen: int, key: str, klen: int, iv: str) -> str:
+        mut key_bytes = Aes._raw_bytes(key, klen)
+        mut nk = 4
+        mut nr = 10
+        if klen == 32:
+            nk = 8
+            nr = 14
+        mut round_keys = _key_expansion(key_bytes, nk, nr)
+
+        mut iv_bytes = Aes._raw_bytes(iv, 16)
+        mut prev: List[int] = []
+        mut i = 0
+        while i < 16:
+            prev.append(iv_bytes[i])
+            i = i + 1
+
+        mut padded = Aes._pkcs7_pad(plaintext, plen)
+        mut total = len(padded)
+
+        mut sb = StringBuilder.init(total + 2)
+        mut off = 0
+        while off < total:
+            mut block: List[int] = []
+            mut j = 0
+            while j < 16:
+                block.append(padded[off + j] ^ prev[j])
+                j = j + 1
+            mut enc = _encrypt_block(block, round_keys, nr)
+            mut k = 0
+            while k < 16:
+                sb.append_char(enc[k])
+                k = k + 1
+            prev = enc
+            off = off + 16
+
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    # Decrypt `clen` bytes of CBC+PKCS#7 ciphertext. `key` must be exactly
+    # `klen` bytes (16 or 32). Returns the original plaintext. On invalid
+    # padding (corrupted ciphertext, wrong key, etc.) returns "" — callers
+    # that need to distinguish a genuinely-empty plaintext from a padding
+    # failure should use decrypt_cbc_checked below instead.
+    pub def decrypt_cbc(ciphertext: str, clen: int, key: str, klen: int, iv: str) -> str:
+        mut ok = [true]
+        return Aes._decrypt_cbc_impl(ciphertext, clen, key, klen, iv, ok)
+
+    # Same as decrypt_cbc, but also reports success/failure explicitly via
+    # an out-parameter-style single-element List[bool] (`ok[0]` is set to
+    # true on success, false if padding validation failed — e.g. tampered
+    # ciphertext). This is the recommended entry point whenever the caller
+    # cannot tell a genuinely-empty plaintext apart from a decrypt failure.
+    pub def decrypt_cbc_checked(ciphertext: str, clen: int, key: str, klen: int, iv: str, ok: List[bool]) -> str:
+        return Aes._decrypt_cbc_impl(ciphertext, clen, key, klen, iv, ok)
+
+    pub def _decrypt_cbc_impl(ciphertext: str, clen: int, key: str, klen: int, iv: str, ok: List[bool]) -> str:
+        if clen % 16 != 0 or clen == 0:
+            ok[0] = false
+            return ""
+
+        mut key_bytes = Aes._raw_bytes(key, klen)
+        mut nk = 4
+        mut nr = 10
+        if klen == 32:
+            nk = 8
+            nr = 14
+        mut round_keys = _key_expansion(key_bytes, nk, nr)
+
+        mut iv_bytes = Aes._raw_bytes(iv, 16)
+        mut prev: List[int] = []
+        mut i = 0
+        while i < 16:
+            prev.append(iv_bytes[i])
+            i = i + 1
+
+        mut ct_bytes = Aes._raw_bytes(ciphertext, clen)
+
+        mut sb = StringBuilder.init(clen + 2)
+        mut off = 0
+        while off < clen:
+            mut block: List[int] = []
+            mut j = 0
+            while j < 16:
+                block.append(ct_bytes[off + j])
+                j = j + 1
+            mut dec = _decrypt_block(block, round_keys, nr)
+            mut k = 0
+            while k < 16:
+                sb.append_char(dec[k] ^ prev[k])
+                k = k + 1
+            prev = block
+            off = off + 16
+
+        mut total = sb.len()
+        mut plain = sb.to_owned()
+        sb.free()
+
+        # Verify + strip PKCS#7 padding.
+        mut pad_len = Aes._raw_byte_at(plain, total - 1)
+        if pad_len < 1 or pad_len > 16 or pad_len > total:
+            ok[0] = false
+            return ""
+        mut i2 = total - pad_len
+        mut valid = true
+        while i2 < total:
+            if Aes._raw_byte_at(plain, i2) != pad_len:
+                valid = false
+                break
+            i2 = i2 + 1
+        if not valid:
+            ok[0] = false
+            return ""
+
+        ok[0] = true
+        return Aes._substr(plain, total - pad_len)
+
+    # ── internal helpers ──
+
+    # Read `n` raw bytes from `s` without relying on strlen (safe even when
+    # the buffer contains embedded NUL bytes, as ciphertext commonly does).
+    # `& 0xff` (not `% 256`) is required: `char` is signed on this target,
+    # so a byte like 0xff reads back as int -1, and Tauraro's `%` follows
+    # the sign of the dividend (like C) so `-1 % 256` is -1, not 255 --
+    # only a bitwise mask correctly reinterprets the two's-complement bit
+    # pattern as an unsigned byte value.
+    pub def _raw_bytes(s: str, n: int) -> List[int]:
+        mut p = s as Pointer[char]
+        mut out: List[int] = []
+        mut i = 0
+        while i < n:
+            out.append((p.offset(i).read() as int) & 0xff)
+            i = i + 1
+        return out
+
+    pub def _raw_byte_at(s: str, idx: int) -> int:
+        mut p = s as Pointer[char]
+        return (p.offset(idx).read() as int) & 0xff
+
+    # Copy out the first `n` raw bytes of `s` as a fresh str (handles
+    # embedded NULs; used to trim padding off decrypted plaintext).
+    pub def _substr(s: str, n: int) -> str:
+        mut p = s as Pointer[char]
+        mut sb = StringBuilder.init(n + 2)
+        mut i = 0
+        while i < n:
+            sb.append_char((p.offset(i).read() as int) & 0xff)
+            i = i + 1
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    pub def _bytes_to_str(bytes_: List[int]) -> str:
+        mut sb = StringBuilder.init(len(bytes_) + 2)
+        mut i = 0
+        while i < len(bytes_):
+            sb.append_char(bytes_[i])
+            i = i + 1
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    # PKCS#7-pad `plen` raw bytes of `s` up to a multiple of 16, returned
+    # as a List[int] of bytes (pad value == number of pad bytes added,
+    # 1..16 — an already-block-aligned input gets a full extra block of
+    # padding, per the standard, so padding is always unambiguous to
+    # strip on decrypt).
+    pub def _pkcs7_pad(s: str, plen: int) -> List[int]:
+        mut pad = 16 - (plen % 16)
+        mut total = plen + pad
+        mut p = s as Pointer[char]
+        mut out: List[int] = []
+        mut i = 0
+        while i < plen:
+            out.append((p.offset(i).read() as int) & 0xff)
+            i = i + 1
+        mut j = 0
+        while j < pad:
+            out.append(pad)
+            j = j + 1
+        return out
