@@ -12,6 +12,8 @@ from std.collections.tuple   import Pair, StrPair, Triple
 from std.collections.heap    import MinHeap, MaxHeap
 from std.collections.list    import LinkedList, ListNode
 from std.collections.graph   import Graph, GraphEdge
+from std.collections.lru     import LruCache
+from std.collections.btree   import BTreeMap
 ```
 
 ---
@@ -550,4 +552,126 @@ print(str(ll.pop_front()))  # 3  → removes head
 ll.clear()
 print(str(ll.is_empty()))   # true
 ```
+
+## LruCache[K, V]
+
+**When**: You need a fixed-capacity cache that automatically evicts the least-recently-used entry once it's full — memoizing an expensive lookup, capping an in-memory response cache, bounding a connection/resource pool by recency.
+**Why**: O(1) average `put`/`fetch`/`remove` — a hash table for key→slot lookup plus an intrusive doubly-linked list for O(1) recency tracking and eviction. Not a `List`-backed linear scan.
+**Backed by**: a builtin `List[LruNode[K, V]]` slab (recycled via a free-list) and a builtin `List[LruIndexEntry[K]]` open-addressing hash index.
+
+> **Naming note**: lookups are `fetch`/`fetch_or`, not `get`/`get_or`. A compiler bug mis-infers the return type of a method literally named `get`/`get_or`/`pop` on a generic class with 2+ type parameters (it returns the class's *first* type argument — here `K`, the key type — instead of the method's actual declared return type). Renaming the accessors sidesteps it; see the implementation comments in `std/collections/lru.tr` for the full analysis.
+
+### Methods
+
+| Method | Signature | Returns | Description |
+|---|---|---|---|
+| `init` | `(capacity: int) -> LruCache[K, V]` | `LruCache[K, V]` | Create an empty cache holding at most `capacity` entries (minimum 1). |
+| `has` | `(key: K) -> bool` | `bool` | `true` if `key` is currently present. Does not affect recency. |
+| `fetch` | `(key: K) -> V` | `V` | Look up `key`, refreshing its recency on a hit. Call `has(key)` first (or use `fetch_or`) — the return value on a miss is an arbitrary default, not a sentinel. |
+| `fetch_or` | `(key: K, default_val: V) -> V` | `V` | Look up `key`, returning `default_val` if absent. A hit still refreshes recency exactly like `fetch`. |
+| `put` | `(key: K, value: V)` | `void` | Insert or update `key` → `value`. An existing key is updated and moved to most-recently-used **without evicting anything**. A new key that would exceed capacity evicts the least-recently-used entry first. |
+| `remove` | `(key: K)` | `void` | Explicitly remove `key`. No-op if absent. Does not count as a "use" of any other entry. |
+| `clear` | `()` | `void` | Remove every entry. Keeps the allocated slab and hash table for reuse. |
+| `len` | `() -> int` | `int` | Current number of entries. |
+| `capacity` | `() -> int` | `int` | Maximum number of entries. |
+| `is_empty` | `() -> bool` | `bool` | |
+| `is_full` | `() -> bool` | `bool` | `true` when `len() >= capacity()`. |
+
+### Example
+
+```tauraro
+from std.collections.lru import LruCache
+
+mut cache = LruCache[str, int].init(2)
+cache.put("a", 1)
+cache.put("b", 2)              # cache is now full: {a, b}, MRU -> LRU: b, a
+
+print(str(cache.fetch("a")))   # 1  -- reading "a" makes it most-recently-used
+cache.put("c", 3)               # over capacity -> evicts LRU, which is now "b" (not "a")
+
+print(str(cache.has("b")))     # false -- evicted
+print(str(cache.has("a")))     # true  -- spared because it was just read
+print(str(cache.has("c")))     # true  -- newly inserted
+
+cache.put("a", 99)              # update an existing key -- no eviction
+print(str(cache.fetch("a")))   # 99
+
+print(str(cache.fetch_or("missing", -1)))  # -1  -- absent key, explicit default
+```
+
+## BTreeMap[K, V]
+
+**When**: You need keys kept in **sorted order** with efficient ordered iteration and range queries — a task queue by priority timestamp, a leaderboard, an interval index, anything where `Dict[K, V]`'s hash-based (unordered) iteration isn't good enough.
+**Why**: `Dict[K, V]` and `Set[T]` in this language are hash tables — fast lookup, but no ordering guarantee at all. `BTreeMap` fills that gap: `.keys()` / `.values()` always come back in ascending key order, and `.range(lo, hi)` answers "give me every key between these two bounds" in `O(log n + k)` instead of a full scan.
+
+**Implementation note (read this before assuming B-tree internals):** despite the name — chosen to match the familiar `BTreeMap` API from Rust's `std::collections`, Java's `TreeMap`, etc. — this is **not** a multi-way B-tree internally. It is a height-balanced **AVL binary search tree**: each node holds exactly one key/value pair plus a cached subtree height, and every `insert`/`remove` rebalances via rotations. This gives every user-facing guarantee a literal B-tree would (`O(log n)` insert/get/remove, `O(log n)` min/max, sorted-order iteration, `O(log n + k)` range queries) with a substantially simpler, easier-to-verify rebalancing path than true multi-key node splitting/merging. If you specifically need the on-disk or cache-line-optimized node-fanout properties of a literal B-tree, this module is not that — it's a sorted-map ADT with B-tree-shaped ergonomics.
+
+Key comparisons use plain `<` / `>` / `==`, so any key type supporting those operators works out of the box — verified here for both `int` and `str` keys.
+
+### Methods
+
+| Method | Signature | Returns | Description |
+|---|---|---|---|
+| `init` | `() -> BTreeMap[K, V]` | `BTreeMap[K, V]` | Create an empty sorted map. |
+| `insert` | `(key: K, val: V)` | `void` | Insert a new key, or overwrite the value if `key` already exists (count only grows on a genuinely new key). |
+| `set` | `(key: K, val: V)` | `void` | Alias for `insert` (matches the builtin `Dict`-style API). |
+| `get` | `(key: K) -> V` | `V` | Value for `key`. Returns the type's default (`0` / `""` / etc.) if absent. |
+| `has` | `(key: K) -> bool` | `bool` | `true` if `key` is present. |
+| `remove` | `(key: K)` | `void` | Delete `key` if present (no-op otherwise). Real structural deletion — handles the leaf, one-child, and two-child (in-order-successor splice) cases, then rebalances back up to the root. |
+| `len` | `() -> int` | `int` | Number of key/value pairs. |
+| `is_empty` | `() -> bool` | `bool` | |
+| `min` | `() -> K` | `K` | Smallest key. `O(log n)` — walks left-spine, not a scan. Undefined on an empty map. |
+| `max` | `() -> K` | `K` | Largest key. `O(log n)` — walks right-spine, not a scan. Undefined on an empty map. |
+| `keys` | `() -> Vec[K]` | `Vec[K]` | All keys, **ascending sorted order**, via an in-order traversal. |
+| `values` | `() -> Vec[V]` | `Vec[V]` | All values, ordered to align index-for-index with `keys()` (i.e. sorted by key, not by value). |
+| `range` | `(lo: K, hi: K) -> Vec[K]` | `Vec[K]` | Keys `k` with `lo <= k < hi` (half-open — `hi` is **exclusive**), ascending sorted order. Empty `Vec` if `lo >= hi` or nothing falls in range. |
+
+### Example
+
+```tauraro
+from std.collections.btree import BTreeMap
+
+mut m = BTreeMap[int, str].init()
+m.insert(5, "five")
+m.insert(1, "one")
+m.insert(8, "eight")
+m.insert(3, "three")
+
+mut v: str = m.get(5)        # explicit type annotation -- see note below
+print(v)                     # "five"
+print(str(m.has(99)))        # false
+
+# Ordered iteration — the entire point of this data structure:
+mut ks = m.keys()
+print(str(ks.get(0)))        # 1  (smallest first, regardless of insertion order)
+print(str(ks.get(3)))        # 8  (largest last)
+
+print(str(m.min()))          # 1
+print(str(m.max()))          # 8
+
+# Range query: all keys in [3, 8)
+mut r = m.range(3, 8)
+print(str(r.len))            # 2   -> [3, 5]
+
+m.remove(5)                  # real deletion, rebalances the tree
+print(str(m.len()))          # 3
+print(str(m.has(5)))         # false
+
+# str keys work identically (any type supporting <, >, == does):
+mut sm = BTreeMap[str, int].init()
+sm.insert("banana", 2)
+sm.insert("apple", 1)
+sm.insert("cherry", 3)
+mut sk = sm.keys()
+print(sk.get(0))              # "apple"  -- lexicographic order
+```
+
+> **Known compiler gotcha with `get()`.** Calling `.get()` on a `BTreeMap[K, V]`
+> where the call's result type is inferred (no explicit type annotation on the
+> receiving `mut` binding, or passed directly as a call argument) can resolve
+> to the wrong monomorphized type when `K` and `V` differ (a pre-existing
+> compiler inference gap around generic classes with two type parameters,
+> not specific to this module — see `bug2.txt`). Always give the `mut`
+> binding an explicit type, as in `mut v: str = m.get(5)` above, when working
+> with a `BTreeMap[K, V]` whose `K` and `V` are different types.
 

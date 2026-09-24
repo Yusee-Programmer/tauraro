@@ -7,6 +7,8 @@
 #   from std.collections.set      import Set
 #   from std.collections.heap     import MinHeap, MaxHeap
 #   from std.collections.graph    import Graph, GraphEdge
+#   from std.collections.lru      import LruCache
+#   from std.collections.btree    import BTreeMap
 
 from std.collections.vec     import Vec
 from std.collections.list    import LinkedList
@@ -21,3 +23,5 @@ from std.collections.heap    import MinHeap
 from std.collections.heap    import MaxHeap
 from std.collections.graph   import Graph
 from std.collections.graph   import GraphEdge
+from std.collections.lru     import LruCache
+from std.collections.btree   import BTreeMap

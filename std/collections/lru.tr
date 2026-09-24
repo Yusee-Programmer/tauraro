@@ -1,0 +1,410 @@
+# std.collections.lru — Fixed-capacity least-recently-used (LRU) cache.
+#
+# LruCache[K, V] combines:
+#   - an open-addressing linear-probe hash table (key -> slot index) for O(1)
+#     average membership/lookup, stored in a builtin `List[LruIndexEntry[K]]`
+#   - a pre-sized slab of LruNode[K, V] records, one per capacity slot,
+#     stored in a builtin `List[LruNode[K, V]]`
+#   - an intrusive doubly-linked list threaded through the slab via prev/next
+#     slot indices, ordered most-recently-used (head) to least-recently-used
+#     (tail)
+#
+# Every operation — fetch, put, remove — is O(1) average: a hash lookup plus
+# a constant number of linked-list pointer updates.  There is no linear scan
+# over the cache contents on the hot path.
+#
+# API note: lookups are named `fetch`/`fetch_or` rather than `get`/`get_or`
+# (see the "Public API" comment in the `extend` block below for why — a
+# confirmed compiler bug mis-infers the return type of any method literally
+# named `get`/`get_or`/`pop` on a 2+-type-param generic class).
+#
+# Implementation notes:
+#   - The compiler special-cases the class name `Map` (and `Dict`) as an
+#     alias for the builtin dict runtime, so a hand-rolled hash table here
+#     cannot be named/imported as `Map` — it would silently get swallowed by
+#     the builtin-dict codegen path instead of compiling as a normal generic
+#     class. It also cannot be named `Vec`/`List` for the same reason.
+#   - Storage for both the node slab and the hash buckets is the BUILTIN
+#     `List[T]` (not a hand-rolled raw-buffer array). `LruNode[K, V]` and
+#     `LruIndexEntry[K]` are ordinary (reference-type / ARC) classes once `K`
+#     or `V` is instantiated to `str` — in this compiler's object model, a
+#     generic class with a `str` field is ALWAYS a heap-allocated,
+#     refcounted object (a `T*` everywhere, never an inline/POD value), even
+#     though it has no explicit annotation saying so. A hand-rolled
+#     `_tr_checked_alloc(cap * sizeof(T)) `-based raw array of such a class
+#     (treating it as a flat/POD struct you can index with pointer
+#     arithmetic) is unsound: `Pointer[T]` on a reference-type class
+#     monomorphizes to a DOUBLE pointer (`T**`) in the generated C, because
+#     "a pointer to the class" already means `T*`, so `Pointer[T]` becomes
+#     "pointer to (pointer to the class)" — confirmed via minimal repro and
+#     inspection of the generated C (`_idx_bucket`'s declared return type
+#     `Pointer[LruIndexEntry[K]]` emitted as `LruIndexEntry_str**`, with
+#     pointer-arithmetic stride `sizeof(T*)` instead of `sizeof(T)` against a
+#     buffer sized for `sizeof(T)` — guaranteed corruption/segfault on the
+#     very first access). The builtin `List[T]` already knows how to store a
+#     generic reference-type class correctly (this is the same List[Class]
+#     path used throughout the language), so this module defers to it
+#     instead of re-deriving that logic.
+
+# ─── LruIndexEntry ──────────────────────────────────────────────────────────
+
+pub class LruIndexEntry[K]:
+    pub key:  K
+    pub slot: int
+    pub used: bool
+
+# ─── LruNode ────────────────────────────────────────────────────────────────
+#
+# One slab slot. `prev`/`next` are slot indices into the owning LruCache's
+# node slab (-1 = no neighbour). `used` marks whether the slot currently
+# holds a live entry (slots are recycled via a free list, never reallocated).
+
+pub class LruNode[K, V]:
+    pub key:  K
+    pub val:  V
+    pub prev: int
+    pub next: int
+    pub used: bool
+
+# ─── LruCache ───────────────────────────────────────────────────────────────
+
+pub class LruCache[K, V]:
+    pub nodes:        List[LruNode[K, V]]        # slab, pre-sized to capacity
+    pub free_stack:    List[int]                  # unused slot indices
+    pub head:          int                        # slot index of most-recently-used entry, -1 if empty
+    pub tail:          int                        # slot index of least-recently-used entry, -1 if empty
+    pub count:         int                        # number of live entries
+    pub cap:           int                        # maximum number of entries
+    pub idx_buckets:   List[LruIndexEntry[K]]     # key -> slot index (open addressing)
+    pub idx_count:     int
+    pub idx_capacity:  int
+
+extend LruCache[K, V]:
+    # Create an empty cache holding at most `capacity` entries (minimum 1).
+    pub def init(capacity: int) -> LruCache[K, V]:
+        mut real_cap = capacity
+        if real_cap < 1: real_cap = 1
+        mut c = LruCache[K, V]()
+        c.nodes      = []
+        c.free_stack = []
+        mut i = 0
+        while i < real_cap:
+            mut n = LruNode[K, V]()
+            n.prev = -1
+            n.next = -1
+            n.used = false
+            c.nodes.append(n)
+            c.free_stack.append(real_cap - 1 - i)   # push so slot 0 pops first
+            i = i + 1
+        c.head  = -1
+        c.tail  = -1
+        c.count = 0
+        c.cap   = real_cap
+
+        mut idx_cap = real_cap * 2
+        if idx_cap < 8: idx_cap = 8
+        mut p = 1
+        while p < idx_cap: p = p * 2
+        idx_cap = p
+        c.idx_buckets = []
+        mut bi = 0
+        while bi < idx_cap:
+            mut ie = LruIndexEntry[K]()
+            ie.slot = -1
+            ie.used = false
+            c.idx_buckets.append(ie)
+            bi = bi + 1
+        c.idx_count    = 0
+        c.idx_capacity = idx_cap
+        return c
+
+    # ── Internal slab / free-stack helpers ──────────────────────────────────
+
+    pub def _get_node(self, i: int) -> LruNode[K, V]:
+        return self.nodes[i]
+
+    pub def _set_node(self, i: int, n: LruNode[K, V]):
+        self.nodes[i] = n
+
+    pub def _push_free(self, slot: int):
+        self.free_stack.append(slot)
+
+    pub def _pop_free(self) -> int:
+        return self.free_stack.pop()
+
+    # ── Internal hash-index helpers (key -> slot) ───────────────────────────
+
+    # FNV-1a hash over the key's bytes. Works for str and int-family keys
+    # (the key types the builtin Dict/Map also support).
+    #
+    # NOTE on `sizeof(K) == 16` dispatch: a direct `key as Pointer[char]`
+    # cast on a *generic* class-method parameter (K bound to str) does not
+    # codegen correctly in the current compiler — the emitted C reinterprets
+    # the whole two-word TrStr struct as a raw pointer instead of first
+    # unwrapping its `.data` field (confirmed via minimal repro). Taking the
+    # address of the parameter first (`&key` -> `Pointer[K]`, itself a
+    # concrete non-generic-valued pointer) and reinterpreting *that pointer*
+    # sidesteps the broken cast entirely: for a str key (TrStr = {char* data;
+    # long* rc}, 16 bytes), the first 8-byte word at that address is exactly
+    # the `data` field, so `(&key as Pointer[Pointer[char]]).read()` recovers
+    # the C string pointer directly. For any other (fixed-size, non-str) key
+    # — the only other case std's Dict/Map key types cover — the raw bytes
+    # of the value itself are hashed, which is correct byte-identity hashing
+    # for scalar keys. Verified: equal-content strings built via different
+    # code paths (a literal vs. a runtime concatenation) hash identically.
+    pub def _idx_hash(self, key: K) -> int:
+        mut h: u64 = 14695981039346656037 as u64
+        if sizeof(K) == 16:
+            unsafe:
+                mut kp: Pointer[K] = &key
+                mut dp = (kp as Pointer[char]) as Pointer[Pointer[char]]
+                mut p = dp.read()
+                mut i = 0
+                while True:
+                    mut c = p.offset(i).read() as u64
+                    if c == 0 as u64: break
+                    h = (h ^ c) * 1099511628211 as u64
+                    i = i + 1
+        else:
+            unsafe:
+                mut kp2: Pointer[K] = &key
+                mut bp = (kp2 as Pointer[char]) as Pointer[char]
+                mut j = 0
+                while j < sizeof(K):
+                    mut c2 = bp.offset(j).read() as u64
+                    h = (h ^ c2) * 1099511628211 as u64
+                    j = j + 1
+        mut hm = (h as int) % self.idx_capacity
+        if hm < 0: hm = hm + self.idx_capacity
+        return hm
+
+    pub def _idx_set(self, key: K, slot: int):
+        if self.idx_count * 4 >= self.idx_capacity * 3:
+            self._idx_rehash()
+        mut i = self._idx_hash(key)
+        while True:
+            mut entry = self.idx_buckets[i]
+            if not entry.used:
+                mut e = LruIndexEntry[K]()
+                e.key  = key
+                e.slot = slot
+                e.used = true
+                self.idx_buckets[i] = e
+                self.idx_count = self.idx_count + 1
+                return
+            if entry.key == key:
+                entry.slot = slot
+                self.idx_buckets[i] = entry
+                return
+            i = (i + 1) % self.idx_capacity
+
+    pub def _idx_get(self, key: K) -> int:
+        mut i = self._idx_hash(key)
+        while True:
+            mut entry = self.idx_buckets[i]
+            if not entry.used: return -1
+            if entry.key == key: return entry.slot
+            i = (i + 1) % self.idx_capacity
+        return -1
+
+    pub def _idx_has(self, key: K) -> bool:
+        mut i = self._idx_hash(key)
+        while True:
+            mut entry = self.idx_buckets[i]
+            if not entry.used: return false
+            if entry.key == key: return true
+            i = (i + 1) % self.idx_capacity
+        return false
+
+    pub def _idx_remove(self, key: K):
+        mut i = self._idx_hash(key)
+        while True:
+            mut entry = self.idx_buckets[i]
+            if not entry.used: return
+            if entry.key == key:
+                entry.used = false
+                self.idx_buckets[i] = entry
+                self.idx_count = self.idx_count - 1
+                return
+            i = (i + 1) % self.idx_capacity
+
+    pub def _idx_clear(self):
+        mut i = 0
+        while i < self.idx_capacity:
+            mut ie = LruIndexEntry[K]()
+            ie.slot = -1
+            ie.used = false
+            self.idx_buckets[i] = ie
+            i = i + 1
+        self.idx_count = 0
+
+    pub def _idx_rehash(self):
+        mut old_bkt = self.idx_buckets
+        mut old_cap = self.idx_capacity
+        mut new_cap = old_cap * 2
+        mut new_bkt: List[LruIndexEntry[K]] = []
+        mut ni = 0
+        while ni < new_cap:
+            mut ie2 = LruIndexEntry[K]()
+            ie2.slot = -1
+            ie2.used = false
+            new_bkt.append(ie2)
+            ni = ni + 1
+        self.idx_buckets  = new_bkt
+        self.idx_capacity = new_cap
+        self.idx_count    = 0
+        mut i = 0
+        while i < old_cap:
+            mut entry = old_bkt[i]
+            if entry.used:
+                self._idx_set(entry.key, entry.slot)
+            i = i + 1
+
+    # ── Internal linked-list helpers ────────────────────────────────────────
+
+    # Detach slot i from the list (does not touch its prev/next fields).
+    pub def _unlink(self, i: int):
+        mut n = self._get_node(i)
+        if n.prev != -1:
+            mut p = self._get_node(n.prev)
+            p.next = n.next
+            self._set_node(n.prev, p)
+        else:
+            self.head = n.next
+        if n.next != -1:
+            mut nx = self._get_node(n.next)
+            nx.prev = n.prev
+            self._set_node(n.next, nx)
+        else:
+            self.tail = n.prev
+
+    # Insert slot i at the head (most-recently-used position).
+    pub def _push_front(self, i: int):
+        mut n = self._get_node(i)
+        n.prev = -1
+        n.next = self.head
+        self._set_node(i, n)
+        if self.head != -1:
+            mut h = self._get_node(self.head)
+            h.prev = i
+            self._set_node(self.head, h)
+        self.head = i
+        if self.tail == -1:
+            self.tail = i
+
+    # Move slot i to the head without changing its stored key/value.
+    pub def _touch(self, i: int):
+        if self.head == i: return
+        self._unlink(i)
+        self._push_front(i)
+
+    # ── Public API ───────────────────────────────────────────────────────────
+    #
+    # NOTE on naming: the lookup accessors below are named `fetch`/`fetch_or`
+    # rather than `get`/`get_or`. The compiler's sema layer has a built-in
+    # fast-path for any method literally named `get`, `pop`, or `get_or` on a
+    # generic class with type arguments (src/sema.tr, the EMethodCall return-
+    # type inference branch): when the class has more than one type
+    # parameter, it unconditionally returns the CLASS'S FIRST type argument
+    # as the call's result type instead of consulting the method's own
+    # declared return type. That fast path exists for the common single-
+    # param-generic case (`List[T].get(i) -> T`, `Vec[T].pop() -> T`) but
+    # mis-fires for any 2+-param generic class such as `LruCache[K, V]`,
+    # where a method named `get` inferring to `K` (the key type) instead of
+    # the declared `V` (the value type) breaks every call site that doesn't
+    # go through an explicitly-typed intermediate local (confirmed via
+    # minimal repro). Avoiding the reserved names sidesteps the bug entirely
+    # while keeping the same lookup/eviction/recency semantics the method
+    # names `get`/`get_or` would imply.
+
+    # true if key is present in the cache.
+    pub def has(self, key: K) -> bool:
+        return self._idx_has(key)
+
+    # Look up key, refreshing its recency on a hit.  Caller must check
+    # has(key) first (or use fetch_or) — the return value on a miss is an
+    # arbitrary default and must not be trusted as a sentinel.
+    pub def fetch(self, key: K) -> V:
+        if not self._idx_has(key):
+            mut dummy = LruNode[K, V]()
+            return dummy.val
+        mut i = self._idx_get(key)
+        self._touch(i)
+        return self._get_node(i).val
+
+    # Look up key, returning default_val if absent.  A hit still refreshes
+    # recency exactly like fetch().
+    pub def fetch_or(self, key: K, default_val: V) -> V:
+        if not self._idx_has(key): return default_val
+        mut i = self._idx_get(key)
+        self._touch(i)
+        return self._get_node(i).val
+
+    # Insert or update key -> value.
+    #
+    # - If key already exists: overwrite its value and move it to
+    #   most-recently-used, without evicting anything.
+    # - If key is new and the cache is at capacity: evict the
+    #   least-recently-used entry first, then insert.
+    pub def put(self, key: K, value: V):
+        if self._idx_has(key):
+            mut i = self._idx_get(key)
+            mut n = self._get_node(i)
+            n.val = value
+            self._set_node(i, n)
+            self._touch(i)
+            return
+
+        if self.count >= self.cap:
+            self._evict_lru()
+
+        mut slot = self._pop_free()
+        mut n2 = self._get_node(slot)
+        n2.key  = key
+        n2.val  = value
+        n2.used = true
+        self._set_node(slot, n2)
+        self._idx_set(key, slot)
+        self._push_front(slot)
+        self.count = self.count + 1
+
+    # Evict the current least-recently-used entry.  No-op if empty.
+    pub def _evict_lru(self):
+        if self.tail == -1: return
+        mut victim = self.tail
+        mut n = self._get_node(victim)
+        self._idx_remove(n.key)
+        self._unlink(victim)
+        n.used = false
+        self._set_node(victim, n)
+        self._push_free(victim)
+        self.count = self.count - 1
+
+    # Explicitly remove key.  No-op if absent.  Does not count as a "use".
+    pub def remove(self, key: K):
+        if not self._idx_has(key): return
+        mut i = self._idx_get(key)
+        self._idx_remove(key)
+        self._unlink(i)
+        mut n = self._get_node(i)
+        n.used = false
+        self._set_node(i, n)
+        self._push_free(i)
+        self.count = self.count - 1
+
+    # Remove every entry.  Keeps the allocated slab and hash table.
+    pub def clear(self):
+        while self.tail != -1:
+            self._evict_lru()
+
+    pub def len(self) -> int:
+        return self.count
+
+    pub def capacity(self) -> int:
+        return self.cap
+
+    pub def is_empty(self) -> bool:
+        return self.count == 0
+
+    pub def is_full(self) -> bool:
+        return self.count >= self.cap
