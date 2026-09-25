@@ -1,0 +1,300 @@
+# std.crypto.jwt — JSON Web Tokens (RFC 7519), HS256 variant only.
+#
+# HMAC-SHA256 signing only — no RSA/ECDSA ("RS256"/"ES256" etc.) or
+# "alg":"none" support. Asymmetric JWT algorithms are out of scope for
+# this module (no public-key crypto primitives exist yet in std.crypto);
+# HS256 is the common single-shared-secret case.
+#
+# Claims are `Dict[str, str]` (string-valued claims only) — the simplest
+# contract that covers the common case (sub, iss, exp-as-string, custom
+# string claims) without needing a full dynamic JSON-value type in the
+# public API. Numeric claims such as "exp"/"iat" (Unix timestamps) can be
+# stored as their string decimal form and parsed back with `int(...)` by
+# the caller.
+#
+# SECURITY — decode() ALWAYS verifies the signature before returning any
+# claims. This directly targets the classic JWT vulnerability class:
+# "alg:none" / signature-not-checked bugs, where a decoder that trusts
+# the token's own `alg` header (or skips verification entirely) lets an
+# attacker forge arbitrary claims. This module:
+#   - hardcodes verification to HS256 (does NOT read `alg` from the
+#     token and dispatch on it -- an attacker-controlled header field
+#     must never select the verification algorithm)
+#   - rejects any token whose header `alg` is not exactly "HS256"
+#   - uses a constant-time-ish comparison for the signature check (see
+#     ChaCha20._consteq in std/crypto/chacha20.tr for the same pattern
+#     applied to an AEAD tag -- same rationale: avoid a timing
+#     side-channel on a secret-dependent comparison)
+#   - never returns claims to the caller on any verification failure
+#
+# NOTE ON NOT USING std/encoding/base64.tr's Base64.encode_url FOR THE
+# SIGNATURE: the HMAC-SHA256 signature is 32 raw bytes and, like any raw
+# binary digest, routinely contains embedded 0x00 bytes (roughly a 1-in-8
+# chance per token in practice). `Base64.encode_url` takes only a `str`
+# with no explicit length and hashes/encodes via `_tr_strlen()`
+# internally, so it silently truncates at the first embedded NUL byte --
+# this would intermittently produce a JWT whose signature segment doesn't
+# actually cover the whole real signature (confirmed: a 32-byte digest
+# with a NUL at index 6 encodes to an 8-character, not 43-character,
+# base64url string). This module therefore base64url-encodes the
+# signature itself via a small length-explicit local helper
+# (`_b64url_encode_raw`); it still uses `Base64.encode_url`/`decode_url`
+# for the header/payload JSON segments, since JSON text is never NUL-
+# containing so strlen-based encoding is safe there.
+#
+# Usage:
+#   from std.crypto.jwt import Jwt
+#
+#   mut claims: Dict[str, str] = {}
+#   claims.set("sub", "user123")
+#   claims.set("role", "admin")
+#   mut token = Jwt.encode(claims, "shared-secret")
+#
+#   match Jwt.decode(token, "shared-secret"):
+#       case JwtResult.Ok(verified_claims):
+#           print(verified_claims.get("sub"))
+#       case JwtResult.Err(msg):
+#           print("rejected: " + msg)
+
+from std.encoding.base64 import Base64
+from std.encoding.json import Json, JsonWriter
+from std.crypto.hmac import Hmac
+from std.core.string import StringBuilder
+
+extern "C":
+    def _tr_strlen(s: str) -> int
+
+# RFC 7519 decode result: either the verified claims, or a rejection
+# reason. decode() NEVER returns Ok with unverified claims.
+pub enum JwtResult:
+    Ok(claims: Dict[str, str])
+    Err(message: str)
+
+pub class Jwt:
+    _dummy: int
+
+extend Jwt:
+    # Encode `claims` as a signed HS256 JWT using `secret` as the HMAC
+    # key (treated as a null-terminated string -- use a real random
+    # secret of at least 32 bytes for production use, not a short
+    # guessable string).
+    pub def encode(claims: Dict[str, str], secret: str) -> str:
+        mut header_json = "{\"alg\":\"HS256\",\"typ\":\"JWT\"}"
+        mut header_b64 = Base64.encode_url(header_json)
+
+        mut w = JsonWriter.init(128)
+        w.begin_object()
+        for k, v in claims.items():
+            w.field_str(k, v)
+        w.end_object()
+        mut payload_json = w.finish()
+        w.free()
+        mut payload_b64 = Base64.encode_url(payload_json)
+
+        mut signing_input = header_b64 + "." + payload_b64
+        mut slen = _tr_strlen(secret)
+        mut sig_hex = Hmac.sha256(secret, slen, signing_input)
+        mut sig_raw = Jwt._hex_to_raw(sig_hex)
+        # Length-explicit encode (32 bytes) -- NOT Base64.encode_url, which
+        # would silently truncate at an embedded NUL byte. See module header.
+        mut sig_b64 = Jwt._b64url_encode_raw(sig_raw, 32)
+
+        return signing_input + "." + sig_b64
+
+    # Decode + VERIFY a token. Returns JwtResult.Ok(claims) only if the
+    # signature is valid and the header declares alg="HS256"; otherwise
+    # JwtResult.Err(reason). Never returns claims that haven't been
+    # signature-checked.
+    pub def decode(token: str, secret: str) -> JwtResult:
+        if not Jwt._has_three_parts(token):
+            return JwtResult.Err("malformed token: expected header.payload.signature")
+        mut parts = Jwt._split3(token)
+        mut header_b64  = parts[0]
+        mut payload_b64 = parts[1]
+        mut sig_b64     = parts[2]
+
+        # ── Verify signature FIRST, before parsing/trusting anything in
+        #    the header or payload (in particular: never branch on the
+        #    header's own `alg` field before the signature is checked --
+        #    that's exactly the "alg" confusion vulnerability class).
+        mut signing_input = header_b64 + "." + payload_b64
+        mut slen = _tr_strlen(secret)
+        mut expected_sig_hex = Hmac.sha256(secret, slen, signing_input)
+        mut expected_sig_raw = Jwt._hex_to_raw(expected_sig_hex)
+
+        # Signature must decode to exactly 32 raw bytes (HMAC-SHA256 output
+        # size). Checking the base64url TEXT length up front (rather than
+        # scanning the decoded bytes for a NUL) is required for
+        # correctness: a genuine 32-byte HMAC digest may legitimately
+        # contain 0x00 bytes anywhere, including in a non-final position,
+        # so NUL-scanning the decoded bytes would misreport a short length
+        # and wrongly reject valid signatures.
+        if not Jwt._b64url_decodes_to_32_bytes(sig_b64):
+            return JwtResult.Err("invalid signature length")
+        mut actual_sig_raw = Base64.decode_url(sig_b64)
+        if not Jwt._consteq(expected_sig_raw, actual_sig_raw, 32):
+            return JwtResult.Err("signature verification failed")
+
+        # Only now is it safe to parse and trust the header/payload.
+        mut header_json = Base64.decode_url(header_b64)
+        mut hdoc = Json.parse(header_json)
+        mut halg = hdoc.root().obj_get("alg")
+        if not halg.exists() or not halg.is_str():
+            return JwtResult.Err("missing alg header")
+        if not halg.str_eq("HS256"):
+            return JwtResult.Err("unsupported alg (only HS256 is supported)")
+
+        mut payload_json = Base64.decode_url(payload_b64)
+        mut pdoc = Json.parse(payload_json)
+        mut proot = pdoc.root()
+        if not proot.is_object():
+            return JwtResult.Err("payload is not a JSON object")
+
+        # Walk the payload object's members directly via the doc's kid/
+        # sibling links (same traversal JsonDoc.write_at uses for objects)
+        # and coerce each value to its string form, since claims here are
+        # Dict[str, str] — see the module header on why string-valued
+        # claims are this module's contract.
+        mut claims: Dict[str, str] = {}
+        mut child = pdoc.kids.get(proot.idx)
+        while child != 0 - 1:
+            mut key = pdoc.strs.slice(pdoc.koffs.get(child), pdoc.koffs.get(child) + pdoc.klens.get(child))
+            if pdoc.tag_at(child) == 4:
+                claims.set(key, pdoc.str_at(child))
+            elif pdoc.tag_at(child) == 2:
+                claims.set(key, Jwt._int_to_str(pdoc.int_at(child)))
+            elif pdoc.tag_at(child) == 1:
+                if pdoc.bool_at(child): claims.set(key, "true")
+                else: claims.set(key, "false")
+            child = pdoc.sibs.get(child)
+
+        return JwtResult.Ok(claims)
+
+    pub def _int_to_str(n: int) -> str:
+        mut sb = StringBuilder.init(24)
+        sb.append_int(n)
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    # Split "a.b.c" into its 3 dot-separated parts. Returns ("","","")
+    # (caller must check _has_three_parts first) if not exactly 3 parts.
+    pub def _has_three_parts(token: str) -> bool:
+        mut p = token as Pointer[char]
+        mut n = _tr_strlen(token)
+        mut dots = 0
+        mut i = 0
+        while i < n:
+            if (p.offset(i).read() as int) == 46: dots = dots + 1   # '.'
+            i = i + 1
+        if dots != 2: return false
+        # also reject empty segments (".." or leading/trailing dot adjacency)
+        mut seglen = 0
+        mut segs_ok = true
+        mut j = 0
+        while j < n:
+            mut c = p.offset(j).read() as int
+            if c == 46:
+                if seglen == 0: segs_ok = false
+                seglen = 0
+            else:
+                seglen = seglen + 1
+            j = j + 1
+        if seglen == 0: segs_ok = false
+        return segs_ok
+
+    pub def _split3(token: str) -> (str, str, str):
+        mut p = token as Pointer[char]
+        mut n = _tr_strlen(token)
+        mut first_dot = 0 - 1
+        mut second_dot = 0 - 1
+        mut i = 0
+        while i < n:
+            if (p.offset(i).read() as int) == 46:
+                if first_dot < 0: first_dot = i
+                else: second_dot = i
+            i = i + 1
+        if first_dot < 0 or second_dot < 0:
+            return ("", "", "")
+        mut header  = token.slice(0, first_dot)
+        mut payload = token.slice(first_dot + 1, second_dot)
+        mut sig     = token.slice(second_dot + 1, n)
+        return (header, payload, sig)
+
+    pub def _hex_to_raw(hex_str: str) -> str:
+        mut p = hex_str as Pointer[char]
+        mut n = _tr_strlen(hex_str)
+        mut sb = StringBuilder.init(n / 2 + 2)
+        mut i = 0
+        while i + 1 < n:
+            mut hi = Jwt._hex_val(p.offset(i).read() as int)
+            mut lo = Jwt._hex_val(p.offset(i + 1).read() as int)
+            sb.append_char(((hi << 4) | lo) & 0xff)
+            i = i + 2
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    pub def _hex_val(c: int) -> int:
+        if c >= 48 and c <= 57: return c - 48
+        if c >= 97 and c <= 102: return c - 87
+        if c >= 65 and c <= 70: return c - 55
+        return 0
+
+    pub def _b64url_char_at(idx: int) -> int:
+        mut alpha = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+        return (alpha as Pointer[char]).offset(idx).read() as int
+
+    # Base64url-encode (RFC 4648 sec. 5: '-'/'_' alphabet, no padding)
+    # exactly `n` raw bytes of `s` -- length-explicit throughout, unlike
+    # std/encoding/base64.tr's Base64.encode_url (see module header note).
+    pub def _b64url_encode_raw(s: str, n: int) -> str:
+        mut p = s as Pointer[char]
+        mut sb = StringBuilder.init((n / 3) * 4 + 8)
+        mut i = 0
+        while i + 2 < n:
+            mut b0 = (p.offset(i).read() as int) & 255
+            mut b1 = (p.offset(i + 1).read() as int) & 255
+            mut b2 = (p.offset(i + 2).read() as int) & 255
+            sb.append_char(Jwt._b64url_char_at((b0 >> 2) & 63))
+            sb.append_char(Jwt._b64url_char_at(((b0 & 3) << 4) | ((b1 >> 4) & 15)))
+            sb.append_char(Jwt._b64url_char_at(((b1 & 15) << 2) | ((b2 >> 6) & 3)))
+            sb.append_char(Jwt._b64url_char_at(b2 & 63))
+            i = i + 3
+        mut rem = n - i
+        if rem == 1:
+            mut b0 = (p.offset(i).read() as int) & 255
+            sb.append_char(Jwt._b64url_char_at((b0 >> 2) & 63))
+            sb.append_char(Jwt._b64url_char_at((b0 & 3) << 4))
+        elif rem == 2:
+            mut b0 = (p.offset(i).read() as int) & 255
+            mut b1 = (p.offset(i + 1).read() as int) & 255
+            sb.append_char(Jwt._b64url_char_at((b0 >> 2) & 63))
+            sb.append_char(Jwt._b64url_char_at(((b0 & 3) << 4) | ((b1 >> 4) & 15)))
+            sb.append_char(Jwt._b64url_char_at((b1 & 15) << 2))
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    # Whether base64url text `s` (no padding, per RFC 7519/4648 sec. 5)
+    # decodes to exactly 32 raw bytes -- computed from the TEXT length
+    # alone (never by scanning decoded bytes for a NUL; see decode()'s
+    # comment on why that would be wrong for arbitrary binary output).
+    # 32 bytes of unpadded base64 is always exactly 43 characters
+    # (ceil(32*8/6) = 43, and 32*8 = 256 is not a multiple of 6 so there's
+    # no padding ambiguity to account for).
+    pub def _b64url_decodes_to_32_bytes(s: str) -> bool:
+        return _tr_strlen(s) == 43
+
+    # Constant-time-ish comparison (see module header note).
+    pub def _consteq(a: str, b: str, n: int) -> bool:
+        mut ap = a as Pointer[char]
+        mut bp = b as Pointer[char]
+        mut diff = 0
+        mut i = 0
+        while i < n:
+            mut ab = (ap.offset(i).read() as int) & 0xff
+            mut bb = (bp.offset(i).read() as int) & 0xff
+            diff = diff | (ab ^ bb)
+            i = i + 1
+        return diff == 0

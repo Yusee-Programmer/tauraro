@@ -1,0 +1,570 @@
+# std.crypto.chacha20 — ChaCha20-Poly1305 AEAD (RFC 8439).
+#
+# Pure Tauraro implementation of the ChaCha20 stream cipher + Poly1305 MAC,
+# combined per RFC 8439 into an authenticated-encryption-with-associated-
+# data (AEAD) construction — compiles straight to native C, no runtime
+# dependency needed, same approach as std/crypto/aes.tr.
+#
+# This is the module std/crypto/aes.tr's own docs point at: AES-CBC alone
+# is not authenticated, so tamper detection needs either encrypt-then-MAC
+# (aes.tr + hmac.tr) or a genuine AEAD primitive — ChaCha20-Poly1305 is
+# that primitive, in one call, verified against RFC 8439's own worked
+# test vectors (section 2.8.2 AEAD example, section 2.3.2 block function,
+# section 2.5.2 Poly1305) — see tests/lang/44_crypto2.tr.
+#
+# decrypt() authenticates BEFORE returning any plaintext: on tag mismatch
+# it returns Option.None, never partially-decrypted or unverified data.
+# This is the "alg:none"-style vuln class for AEAD — a decrypt path that
+# forgets to check the tag is worse than no encryption at all, since
+# callers trust it's been checked.
+#
+# NOTE ON 32-bit words: ChaCha20 operates on 32-bit words with wraparound
+# add and rotate. This module keeps the 16-word working state in
+# `List[int]` (not `List[u32]` — u32 doesn't hit the List[u64] bug
+# documented in bug2.txt / sha512.tr since it's a different scalar width,
+# but List[int] is already proven correct and simplest to reuse) with
+# explicit `& 0xffffffff` masking at 32-bit boundaries, same pattern as
+# std/crypto/aes.tr's byte-level `& 0xff` masking.
+#
+# Usage:
+#   from std.crypto.chacha20 import ChaCha20
+#
+#   mut key   = Hex.decode("...")   # 32 bytes
+#   mut nonce = Hex.decode("...")   # 12 bytes
+#   mut r = ChaCha20.encrypt(plaintext, plaintext.len(), key, nonce, aad, aad.len())
+#   # r is (ciphertext: str, tag: str) -- tag is always 16 raw bytes
+#
+#   match ChaCha20.decrypt(ciphertext, ciphertext.len(), key, nonce, aad, aad.len(), tag):
+#       case Option.Some(plaintext):
+#           ...  # tag verified -- plaintext is authentic
+#       case Option.None:
+#           ...  # tag mismatch -- REJECT, do not trust ciphertext/aad
+
+from std.core.string import StringBuilder
+
+extern "C":
+    def _tr_c_free(ptr: Pointer[char])
+
+pub def _cc_add32(a: int, b: int) -> int:
+    return (a + b) & 0xffffffff
+
+pub def _cc_rotl32(x: int, n: int) -> int:
+    mut xm = x & 0xffffffff
+    return ((xm << n) | (xm >> (32 - n))) & 0xffffffff
+
+# ─── ChaCha20 block function (RFC 8439 section 2.3) ────────────────────────
+
+pub def _cc_quarter_round(state: List[int], a: int, b: int, c: int, d: int):
+    state[a] = _cc_add32(state[a], state[b])
+    state[d] = _cc_rotl32(state[d] ^ state[a], 16)
+    state[c] = _cc_add32(state[c], state[d])
+    state[b] = _cc_rotl32(state[b] ^ state[c], 12)
+    state[a] = _cc_add32(state[a], state[b])
+    state[d] = _cc_rotl32(state[d] ^ state[a], 8)
+    state[c] = _cc_add32(state[c], state[d])
+    state[b] = _cc_rotl32(state[b] ^ state[c], 7)
+
+# Read a little-endian 32-bit word from `n_bytes` raw bytes at `data[off..]`.
+pub def _cc_read_le32(p: Pointer[char], off: int) -> int:
+    mut b0 = (p.offset(off + 0).read() as int) & 0xff
+    mut b1 = (p.offset(off + 1).read() as int) & 0xff
+    mut b2 = (p.offset(off + 2).read() as int) & 0xff
+    mut b3 = (p.offset(off + 3).read() as int) & 0xff
+    return b0 | (b1 << 8) | (b2 << 16) | (b3 << 24)
+
+pub def _cc_append_le32(sb: StringBuilder, w: int):
+    mut wm = w & 0xffffffff
+    sb.append_char(wm & 0xff)
+    sb.append_char((wm >> 8) & 0xff)
+    sb.append_char((wm >> 16) & 0xff)
+    sb.append_char((wm >> 24) & 0xff)
+
+# Build the initial 16-word ChaCha20 state: 4 constant words, 8 key words,
+# 1 counter word, 3 nonce words (RFC 8439 section 2.3).
+pub def _cc_init_state(key: str, nonce: str, counter: int) -> List[int]:
+    mut kp = key as Pointer[char]
+    mut np = nonce as Pointer[char]
+    mut s: List[int] = []
+    s.append(0x61707865)
+    s.append(0x3320646e)
+    s.append(0x79622d32)
+    s.append(0x6b206574)
+    mut i = 0
+    while i < 8:
+        s.append(_cc_read_le32(kp, i * 4))
+        i = i + 1
+    s.append(counter)
+    mut j = 0
+    while j < 3:
+        s.append(_cc_read_le32(np, j * 4))
+        j = j + 1
+    return s
+
+# Run the ChaCha20 block function for one 64-byte keystream block.
+# `key` must be 32 bytes, `nonce` 12 bytes.
+pub def _cc_block(key: str, nonce: str, counter: int) -> List[int]:
+    mut state = _cc_init_state(key, nonce, counter)
+    mut working: List[int] = []
+    mut i = 0
+    while i < 16:
+        working.append(state[i])
+        i = i + 1
+
+    mut round = 0
+    while round < 10:
+        # Column rounds
+        _cc_quarter_round(working, 0, 4, 8, 12)
+        _cc_quarter_round(working, 1, 5, 9, 13)
+        _cc_quarter_round(working, 2, 6, 10, 14)
+        _cc_quarter_round(working, 3, 7, 11, 15)
+        # Diagonal rounds
+        _cc_quarter_round(working, 0, 5, 10, 15)
+        _cc_quarter_round(working, 1, 6, 11, 12)
+        _cc_quarter_round(working, 2, 7, 8, 13)
+        _cc_quarter_round(working, 3, 4, 9, 14)
+        round = round + 1
+
+    mut out: List[int] = []
+    mut k = 0
+    while k < 16:
+        out.append(_cc_add32(working[k], state[k]))
+        k = k + 1
+    return out
+
+# XOR `data[0..dlen)` against the ChaCha20 keystream starting at block
+# counter `counter0`. Used identically for both encryption and decryption
+# (ChaCha20 is a stream cipher: XOR is its own inverse).
+pub def _cc_xor_stream(data: str, dlen: int, key: str, nonce: str, counter0: int) -> str:
+    mut p = data as Pointer[char]
+    mut sb = StringBuilder.init(dlen + 2)
+    mut block_idx = 0
+    mut off = 0
+    while off < dlen:
+        mut ks = _cc_block(key, nonce, counter0 + block_idx)
+        mut ksb = StringBuilder.init(66)
+        mut wi = 0
+        while wi < 16:
+            _cc_append_le32(ksb, ks[wi])
+            wi = wi + 1
+        mut ks_bytes = ksb.to_owned()
+        ksb.free()
+        mut ksp = ks_bytes as Pointer[char]
+
+        mut chunk = 64
+        if dlen - off < 64: chunk = dlen - off
+        mut i = 0
+        while i < chunk:
+            mut pb = (p.offset(off + i).read() as int) & 0xff
+            mut kb = (ksp.offset(i).read() as int) & 0xff
+            sb.append_char(pb ^ kb)
+            i = i + 1
+
+        unsafe: _tr_c_free(ks_bytes as Pointer[char])
+        off = off + 64
+        block_idx = block_idx + 1
+
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+# ─── Poly1305 (RFC 8439 section 2.5) ────────────────────────────────────────
+#
+# Implemented via schoolbook big-integer arithmetic over List[int] "byte
+# digit" arrays (base 256), reduced mod (2^130 - 5) after each multiply —
+# see Poly1305._mulmod below. This favors clarity/correctness-per-the-RFC
+# over speed; this language doesn't expose a 128-bit-wide multiply
+# primitive, so a bignum approach sidesteps needing one.
+
+pub class Poly1305:
+    _dummy: int
+
+extend Poly1305:
+    # Compute the 16-byte Poly1305 tag over `msg[0..mlen)` using a 32-byte
+    # one-time key (first 16 bytes = r, last 16 bytes = s, per RFC 8439).
+    # Implemented as straightforward 128-bit-ish arithmetic using a
+    # List[int] of eight 16-bit "digits" for the running accumulator, key
+    # r and s, multiplying and reducing mod 2^130-5 the direct way. This
+    # favors clarity/correctness-per-the-RFC over speed.
+    pub def compute(msg: str, mlen: int, key32: str) -> str:
+        mut kp = key32 as Pointer[char]
+        mut r_bytes: List[int] = []
+        mut i = 0
+        while i < 16:
+            r_bytes.append((kp.offset(i).read() as int) & 0xff)
+            i = i + 1
+        mut s_bytes: List[int] = []
+        i = 0
+        while i < 16:
+            s_bytes.append((kp.offset(16 + i).read() as int) & 0xff)
+            i = i + 1
+        mut r = Poly1305._clamp(r_bytes)
+
+        # Accumulator and r as arbitrary-size little-endian byte arrays,
+        # via schoolbook big-integer add/mul/mod over List[int] "digits"
+        # base 2^8, then reduced mod (2^130 - 5). mlen may be large, so
+        # process the message in 16-byte chunks, standard Poly1305 style.
+        mut acc: List[int] = Poly1305._zero(17)   # accumulator, base-256, 17 bytes (>= 130 bits)
+        mut rbig: List[int] = Poly1305._zero(17)
+        i = 0
+        while i < 16:
+            rbig[i] = r[i]
+            i = i + 1
+
+        mut p = msg as Pointer[char]
+        mut off = 0
+        while off < mlen:
+            mut chunk = 16
+            if mlen - off < 16: chunk = mlen - off
+            mut block: List[int] = Poly1305._zero(17)
+            mut j = 0
+            while j < chunk:
+                block[j] = (p.offset(off + j).read() as int) & 0xff
+                j = j + 1
+            block[chunk] = 1   # the "append 0x01" high byte per RFC 8439
+
+            # acc = acc + block
+            acc = Poly1305._add(acc, block)
+            # acc = (acc * r) mod (2^130 - 5)
+            acc = Poly1305._mulmod(acc, rbig)
+
+            off = off + 16
+
+        # acc += s (mod 2^128, per RFC — only low 16 bytes are used)
+        mut s_full: List[int] = Poly1305._zero(17)
+        i = 0
+        while i < 16:
+            s_full[i] = s_bytes[i]
+            i = i + 1
+        mut tag_full = Poly1305._add_mod128(acc, s_full)
+
+        mut sb = StringBuilder.init(18)
+        i = 0
+        while i < 16:
+            sb.append_char(tag_full[i])
+            i = i + 1
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    pub def _clamp(r_bytes: List[int]) -> List[int]:
+        mut r: List[int] = []
+        mut i = 0
+        while i < 16:
+            r.append(r_bytes[i])
+            i = i + 1
+        r[3]  = r[3]  & 15
+        r[7]  = r[7]  & 15
+        r[11] = r[11] & 15
+        r[15] = r[15] & 15
+        r[4]  = r[4]  & 252
+        r[8]  = r[8]  & 252
+        r[12] = r[12] & 252
+        return r
+
+    pub def _zero(n: int) -> List[int]:
+        mut z: List[int] = []
+        mut i = 0
+        while i < n:
+            z.append(0)
+            i = i + 1
+        return z
+
+    # Add two little-endian base-256 "digit" arrays of the same length,
+    # with carry propagation (no modulo reduction here).
+    pub def _add(a: List[int], b: List[int]) -> List[int]:
+        mut n = len(a)
+        mut out: List[int] = Poly1305._zero(n)
+        mut carry = 0
+        mut i = 0
+        while i < n:
+            mut sum_ = a[i] + b[i] + carry
+            out[i] = sum_ & 0xff
+            carry = sum_ >> 8
+            i = i + 1
+        return out
+
+    pub def _add_mod128(a: List[int], b: List[int]) -> List[int]:
+        mut out: List[int] = Poly1305._zero(len(a))
+        mut carry = 0
+        mut i = 0
+        while i < 16:
+            mut sum_ = a[i] + b[i] + carry
+            out[i] = sum_ & 0xff
+            carry = sum_ >> 8
+            i = i + 1
+        return out
+
+    # Schoolbook multiply two little-endian base-256 digit arrays (17
+    # bytes each, representing values < 2^136), then reduce mod
+    # (2^130 - 5), returning a 17-byte little-endian result.
+    pub def _mulmod(a: List[int], b: List[int]) -> List[int]:
+        mut n = len(a)
+        mut prod: List[int] = Poly1305._zero(n * 2)
+        mut i = 0
+        while i < n:
+            mut carry = 0
+            mut j = 0
+            while j < n:
+                mut idx = i + j
+                mut cur = prod[idx] + a[i] * b[j] + carry
+                prod[idx] = cur & 0xff
+                carry = cur >> 8
+                j = j + 1
+            mut k = i + n
+            while carry > 0:
+                mut cur2 = prod[k] + carry
+                prod[k] = cur2 & 0xff
+                carry = cur2 >> 8
+                k = k + 1
+            i = i + 1
+
+        # Reduce `prod` (up to 2*n bytes, value < 2^272) mod (2^130 - 5).
+        # 2^130 ≡ 5 (mod 2^130 - 5), so split prod into a low 130-bit part
+        # and a high part (everything from bit 130 up), and fold:
+        #   value = high * 2^130 + low  ≡  high * 5 + low  (mod 2^130-5)
+        # Repeat until the value fits in 130 bits (17 bytes), which
+        # converges in a small constant number of rounds since each fold
+        # shrinks the magnitude drastically.
+        mut cur: List[int] = prod
+        mut round = 0
+        while round < 6:
+            mut nlen = len(cur)
+            # low = cur mod 2^130 (first 16 bytes + low 2 bits of byte 16)
+            mut low: List[int] = Poly1305._zero(17)
+            mut li = 0
+            while li < 17 and li < nlen:
+                low[li] = cur[li]
+                li = li + 1
+            low[16] = low[16] & 3   # keep only bottom 2 bits (130 = 16*8+2)
+
+            # high = cur >> 130 (bit-shift the whole array right by 130 bits)
+            mut high: List[int] = Poly1305._zero(nlen)
+            mut shift_bytes = 16
+            mut shift_bits = 2
+            mut hi = 0
+            while hi < nlen:
+                mut src = hi + shift_bytes
+                mut lo_byte = 0
+                if src < nlen: lo_byte = cur[src]
+                mut hi_byte = 0
+                if src + 1 < nlen: hi_byte = cur[src + 1]
+                high[hi] = ((lo_byte >> shift_bits) | (hi_byte << (8 - shift_bits))) & 0xff
+                hi = hi + 1
+
+            # Check if high is all-zero -- if so, low is the final result.
+            mut high_nonzero = false
+            mut hz = 0
+            while hz < nlen:
+                if high[hz] != 0: high_nonzero = true
+                hz = hz + 1
+            if not high_nonzero:
+                cur = low
+                break
+
+            # cur = low + high*5
+            mut high5: List[int] = Poly1305._zero(nlen)
+            mut carry5 = 0
+            mut m = 0
+            while m < nlen:
+                mut v = high[m] * 5 + carry5
+                high5[m] = v & 0xff
+                carry5 = v >> 8
+                m = m + 1
+            cur = Poly1305._add(Poly1305._pad_to(low, nlen), high5)
+            round = round + 1
+
+        # Final conditional subtraction: if cur >= 2^130-5, subtract it once.
+        mut result: List[int] = Poly1305._zero(17)
+        mut ri = 0
+        while ri < 17 and ri < len(cur):
+            result[ri] = cur[ri]
+            ri = ri + 1
+        result = Poly1305._final_reduce(result)
+        return Poly1305._pad_to(result, n)
+
+    pub def _pad_to(a: List[int], n: int) -> List[int]:
+        if len(a) >= n: return a
+        mut out: List[int] = Poly1305._zero(n)
+        mut i = 0
+        while i < len(a):
+            out[i] = a[i]
+            i = i + 1
+        return out
+
+    # If the 130-bit value in `v` (17 bytes, top byte only 2 bits used) is
+    # >= 2^130 - 5, subtract 2^130 - 5 from it once (standard Poly1305
+    # final reduction, per RFC 8439's reference implementation).
+    pub def _final_reduce(v: List[int]) -> List[int]:
+        # p = 2^130 - 5: bytes 0..15 = 0xfb,0xff,...,0xff ; byte16 = 3
+        # (2^130-5 = ...fffffffb with the top 2 bits of byte 16 set to 3)
+        mut p: List[int] = Poly1305._zero(17)
+        p[0] = 0xfb
+        mut i = 1
+        while i < 16:
+            p[i] = 0xff
+            i = i + 1
+        p[16] = 3
+
+        # ge = (v >= p) ?
+        mut ge = true
+        mut j = 16
+        mut decided = false
+        while j >= 0:
+            if not decided:
+                if v[j] > p[j]:
+                    ge = true
+                    decided = true
+                elif v[j] < p[j]:
+                    ge = false
+                    decided = true
+            j = j - 1
+        if not decided: ge = true   # equal
+
+        if not ge: return v
+
+        mut out: List[int] = Poly1305._zero(17)
+        mut borrow = 0
+        mut k = 0
+        while k < 17:
+            mut diff = v[k] - p[k] - borrow
+            if diff < 0:
+                diff = diff + 256
+                borrow = 1
+            else:
+                borrow = 0
+            out[k] = diff
+            k = k + 1
+        return out
+
+# ─── AEAD_CHACHA20_POLY1305 (RFC 8439 section 2.8) ─────────────────────────
+
+pub def _cc_poly1305_key_gen(key: str, nonce: str) -> str:
+    mut block0 = _cc_block(key, nonce, 0)
+    mut sb = StringBuilder.init(34)
+    mut i = 0
+    while i < 8:
+        _cc_append_le32(sb, block0[i])
+        i = i + 1
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+# Build the Poly1305 MAC input per RFC 8439 section 2.8: AAD (padded to a
+# multiple of 16 bytes with zeros), ciphertext (padded the same way),
+# 8-byte little-endian AAD length, 8-byte little-endian ciphertext length.
+pub def _cc_build_mac_data(aad: str, aad_len: int, ct: str, ct_len: int) -> str:
+    mut aad_pad = 0
+    mut aad_rem = aad_len % 16
+    if aad_rem != 0: aad_pad = 16 - aad_rem
+    mut ct_pad = 0
+    mut ct_rem = ct_len % 16
+    if ct_rem != 0: ct_pad = 16 - ct_rem
+
+    mut total = aad_len + aad_pad + ct_len + ct_pad + 16
+    mut sb = StringBuilder.init(total + 2)
+
+    mut ap = aad as Pointer[char]
+    mut i = 0
+    while i < aad_len:
+        sb.append_char((ap.offset(i).read() as int) & 0xff)
+        i = i + 1
+    mut z1 = 0
+    while z1 < aad_pad:
+        sb.append_char(0)
+        z1 = z1 + 1
+
+    mut cp = ct as Pointer[char]
+    mut j = 0
+    while j < ct_len:
+        sb.append_char((cp.offset(j).read() as int) & 0xff)
+        j = j + 1
+    mut z2 = 0
+    while z2 < ct_pad:
+        sb.append_char(0)
+        z2 = z2 + 1
+
+    # 8-byte LE aad_len, 8-byte LE ct_len (both fit comfortably in the low
+    # 32 bits for any realistic input, so the high 4 bytes are always 0).
+    mut b = 0
+    while b < 4:
+        sb.append_char((aad_len >> (b * 8)) & 0xff)
+        b = b + 1
+    b = 0
+    while b < 4:
+        sb.append_char(0)
+        b = b + 1
+    b = 0
+    while b < 4:
+        sb.append_char((ct_len >> (b * 8)) & 0xff)
+        b = b + 1
+    b = 0
+    while b < 4:
+        sb.append_char(0)
+        b = b + 1
+
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+pub class ChaCha20:
+    _dummy: int
+
+extend ChaCha20:
+    # Encrypt `plen` bytes of `plaintext` under ChaCha20-Poly1305 AEAD.
+    # `key` must be exactly 32 bytes, `nonce` exactly 12 bytes, `aad` any
+    # length (may be "" / alen=0 for no associated data). Returns
+    # (ciphertext, tag) — ciphertext is `plen` raw bytes (may contain
+    # embedded NULs — track plen, don't rely on .len()/strlen on it),
+    # tag is always exactly 16 raw bytes.
+    pub def encrypt(plaintext: str, plen: int, key: str, nonce: str, aad: str, alen: int) -> (str, str):
+        mut ciphertext = _cc_xor_stream(plaintext, plen, key, nonce, 1)
+        mut otk = _cc_poly1305_key_gen(key, nonce)
+        mut mac_data = _cc_build_mac_data(aad, alen, ciphertext, plen)
+        mut mac_len = alen + ChaCha20._pad_len(alen) + plen + ChaCha20._pad_len(plen) + 16
+        mut tag = Poly1305.compute(mac_data, mac_len, otk)
+        unsafe: _tr_c_free(mac_data as Pointer[char])
+        unsafe: _tr_c_free(otk as Pointer[char])
+        return (ciphertext, tag)
+
+    pub def _pad_len(n: int) -> int:
+        mut rem = n % 16
+        if rem == 0: return 0
+        return 16 - rem
+
+    # Decrypt `clen` bytes of ChaCha20-Poly1305 ciphertext, verifying
+    # `tag` (16 bytes) BEFORE returning any plaintext. Returns
+    # Option.Some(plaintext) only if the tag matches; Option.None on any
+    # mismatch (tampered ciphertext, tampered aad, wrong key/nonce/tag) --
+    # callers must not trust unauthenticated data, so this never returns
+    # a "best effort" decrypt.
+    pub def decrypt(ciphertext: str, clen: int, key: str, nonce: str, aad: str, alen: int, tag: str) -> Option[str]:
+        mut otk = _cc_poly1305_key_gen(key, nonce)
+        mut mac_data = _cc_build_mac_data(aad, alen, ciphertext, clen)
+        mut mac_len = alen + ChaCha20._pad_len(alen) + clen + ChaCha20._pad_len(clen) + 16
+        mut expected_tag = Poly1305.compute(mac_data, mac_len, otk)
+        unsafe: _tr_c_free(mac_data as Pointer[char])
+        unsafe: _tr_c_free(otk as Pointer[char])
+
+        mut ok = ChaCha20._consteq(expected_tag, tag, 16)
+        if not ok:
+            return Option.None
+
+        mut plaintext = _cc_xor_stream(ciphertext, clen, key, nonce, 1)
+        return Option.Some(plaintext)
+
+    # Constant-time-ish comparison of two 16-byte raw buffers (accumulates
+    # XOR differences across the whole buffer rather than early-exiting on
+    # the first mismatch, avoiding the classic timing side-channel of a
+    # short-circuiting byte-by-byte `==` on secret/attacker-influenced
+    # data such as a MAC tag).
+    pub def _consteq(a: str, b: str, n: int) -> bool:
+        mut ap = a as Pointer[char]
+        mut bp = b as Pointer[char]
+        mut diff = 0
+        mut i = 0
+        while i < n:
+            mut ab = (ap.offset(i).read() as int) & 0xff
+            mut bb = (bp.offset(i).read() as int) & 0xff
+            diff = diff | (ab ^ bb)
+            i = i + 1
+        return diff == 0

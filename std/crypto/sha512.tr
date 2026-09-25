@@ -1,0 +1,337 @@
+# std.crypto.sha512 — SHA-512 and SHA-384 hashing (FIPS 180-4).
+#
+# Pure Tauraro implementation (standard round-constant tables as literal
+# data, per FIPS 180-4 section 4.2.3/5.3.4) — compiles straight to native
+# C, no runtime dependency needed, following the same approach as
+# std/crypto/aes.tr and std/crypto/hash.tr's SHA-256.
+#
+# SHA-384 is produced almost for free: it is SHA-512 with a different
+# initial hash value and the 512-bit digest truncated to 384 bits (the
+# compression function and message schedule are identical).
+#
+# Verified against the official NIST/FIPS-180-4 known-answer test vectors
+# (SHA-512("") and SHA-512("abc")) — see tests/lang/44_crypto2.tr.
+#
+# NOTE ON 64-bit words: SHA-512's word size is 64 bits, and this module
+# needs an *unsigned* 64-bit word (wraparound add, logical right shift) —
+# a bare `int` right-shift is arithmetic (sign-extends) on negative
+# operands, per docs/lang/03_operators.md, which would corrupt
+# SIGMA/sigma. `u64` gets this right for scalars (verified: wraparound
+# add, `<<`/`>>` both logical, casts round-trip bit-for-bit). However this
+# module deliberately avoids two real compiler bugs found while writing
+# it (see bug2.txt for full repros):
+#   (1) `List[u64]` monomorphizes to the generic boxed List_ptr instead
+#       of a value list, producing invalid C.
+#   (2) `[T; N] as Pointer[T]` (fixed-size-array-to-pointer cast) casts
+#       the array's wrapper struct instead of its backing `.data` field,
+#       also producing invalid C, for ANY element type (not just u64).
+# Workaround: the round-constant table is 80 tiny helper functions
+# (_sha512_k(i)), and the message schedule / working state live in plain
+# named `mut` locals plus a `List[int]` reinterpreted bit-for-bit as u64
+# via `as u64`/`as int` at each use (same masking-cast pattern
+# std/crypto/aes.tr already uses for byte-level List[int] work).
+#
+# Usage:
+#   from std.crypto.sha512 import Sha512
+#   mut digest = Sha512.sha512("abc")   # 128-char lowercase hex
+#   mut short  = Sha512.sha384("abc")   # 96-char lowercase hex
+
+from std.core.string import StringBuilder
+
+extern "C":
+    def _tr_strlen(s: str) -> int
+    def _tr_c_free(ptr: Pointer[char])
+
+# ─── Round constants (FIPS 180-4 section 4.2.3, first 64 bits of the
+#     fractional parts of the cube roots of the first 80 primes) ──────────
+# Indexed via a single dispatch function rather than a List[u64] (see the
+# module header note on the List[u64] compiler bug).
+
+pub def _sha512_k(i: int) -> u64:
+    if i == 0: return 0x428a2f98d728ae22 as u64
+    if i == 1: return 0x7137449123ef65cd as u64
+    if i == 2: return 0xb5c0fbcfec4d3b2f as u64
+    if i == 3: return 0xe9b5dba58189dbbc as u64
+    if i == 4: return 0x3956c25bf348b538 as u64
+    if i == 5: return 0x59f111f1b605d019 as u64
+    if i == 6: return 0x923f82a4af194f9b as u64
+    if i == 7: return 0xab1c5ed5da6d8118 as u64
+    if i == 8: return 0xd807aa98a3030242 as u64
+    if i == 9: return 0x12835b0145706fbe as u64
+    if i == 10: return 0x243185be4ee4b28c as u64
+    if i == 11: return 0x550c7dc3d5ffb4e2 as u64
+    if i == 12: return 0x72be5d74f27b896f as u64
+    if i == 13: return 0x80deb1fe3b1696b1 as u64
+    if i == 14: return 0x9bdc06a725c71235 as u64
+    if i == 15: return 0xc19bf174cf692694 as u64
+    if i == 16: return 0xe49b69c19ef14ad2 as u64
+    if i == 17: return 0xefbe4786384f25e3 as u64
+    if i == 18: return 0x0fc19dc68b8cd5b5 as u64
+    if i == 19: return 0x240ca1cc77ac9c65 as u64
+    if i == 20: return 0x2de92c6f592b0275 as u64
+    if i == 21: return 0x4a7484aa6ea6e483 as u64
+    if i == 22: return 0x5cb0a9dcbd41fbd4 as u64
+    if i == 23: return 0x76f988da831153b5 as u64
+    if i == 24: return 0x983e5152ee66dfab as u64
+    if i == 25: return 0xa831c66d2db43210 as u64
+    if i == 26: return 0xb00327c898fb213f as u64
+    if i == 27: return 0xbf597fc7beef0ee4 as u64
+    if i == 28: return 0xc6e00bf33da88fc2 as u64
+    if i == 29: return 0xd5a79147930aa725 as u64
+    if i == 30: return 0x06ca6351e003826f as u64
+    if i == 31: return 0x142929670a0e6e70 as u64
+    if i == 32: return 0x27b70a8546d22ffc as u64
+    if i == 33: return 0x2e1b21385c26c926 as u64
+    if i == 34: return 0x4d2c6dfc5ac42aed as u64
+    if i == 35: return 0x53380d139d95b3df as u64
+    if i == 36: return 0x650a73548baf63de as u64
+    if i == 37: return 0x766a0abb3c77b2a8 as u64
+    if i == 38: return 0x81c2c92e47edaee6 as u64
+    if i == 39: return 0x92722c851482353b as u64
+    if i == 40: return 0xa2bfe8a14cf10364 as u64
+    if i == 41: return 0xa81a664bbc423001 as u64
+    if i == 42: return 0xc24b8b70d0f89791 as u64
+    if i == 43: return 0xc76c51a30654be30 as u64
+    if i == 44: return 0xd192e819d6ef5218 as u64
+    if i == 45: return 0xd69906245565a910 as u64
+    if i == 46: return 0xf40e35855771202a as u64
+    if i == 47: return 0x106aa07032bbd1b8 as u64
+    if i == 48: return 0x19a4c116b8d2d0c8 as u64
+    if i == 49: return 0x1e376c085141ab53 as u64
+    if i == 50: return 0x2748774cdf8eeb99 as u64
+    if i == 51: return 0x34b0bcb5e19b48a8 as u64
+    if i == 52: return 0x391c0cb3c5c95a63 as u64
+    if i == 53: return 0x4ed8aa4ae3418acb as u64
+    if i == 54: return 0x5b9cca4f7763e373 as u64
+    if i == 55: return 0x682e6ff3d6b2b8a3 as u64
+    if i == 56: return 0x748f82ee5defb2fc as u64
+    if i == 57: return 0x78a5636f43172f60 as u64
+    if i == 58: return 0x84c87814a1f0ab72 as u64
+    if i == 59: return 0x8cc702081a6439ec as u64
+    if i == 60: return 0x90befffa23631e28 as u64
+    if i == 61: return 0xa4506cebde82bde9 as u64
+    if i == 62: return 0xbef9a3f7b2c67915 as u64
+    if i == 63: return 0xc67178f2e372532b as u64
+    if i == 64: return 0xca273eceea26619c as u64
+    if i == 65: return 0xd186b8c721c0c207 as u64
+    if i == 66: return 0xeada7dd6cde0eb1e as u64
+    if i == 67: return 0xf57d4f7fee6ed178 as u64
+    if i == 68: return 0x06f067aa72176fba as u64
+    if i == 69: return 0x0a637dc5a2c898a6 as u64
+    if i == 70: return 0x113f9804bef90dae as u64
+    if i == 71: return 0x1b710b35131c471b as u64
+    if i == 72: return 0x28db77f523047d84 as u64
+    if i == 73: return 0x32caab7b40c72493 as u64
+    if i == 74: return 0x3c9ebe0a15c9bebc as u64
+    if i == 75: return 0x431d67c49c100d4c as u64
+    if i == 76: return 0x4cc5d4becb3e42b6 as u64
+    if i == 77: return 0x597f299cfc657e2a as u64
+    if i == 78: return 0x5fcb6fab3ad6faec as u64
+    return 0x6c44198c4a475817 as u64   # i == 79
+
+# ─── 64-bit word ops ───────────────────────────────────────────────────────
+# (named _tr_sha512_rotr, not _rotr64 — MSVC/mingw's <winnt.h> already
+# declares an incompatible `_rotr64` intrinsic that collides at link/C
+# level if this module names its own helper that.)
+
+pub def _tr_sha512_rotr(x: u64, n: int) -> u64:
+    return (x >> n) | (x << (64 - n))
+
+# ─── Message-schedule storage ──────────────────────────────────────────────
+# 80 u64 words, held as a List[int] with bit-for-bit reinterpretation via
+# `as u64`/`as int` at each access (List[u64] hits the compiler bug noted
+# above; List[int] is proven to work).
+
+pub def _w_get(w: List[int], i: int) -> u64:
+    return w[i] as u64
+
+pub def _w_set(w: List[int], i: int, v: u64):
+    w[i] = v as int
+
+# ─── Core compression ──────────────────────────────────────────────────────
+
+pub class Sha512:
+    _dummy: int
+
+extend Sha512:
+    # SHA-512 digest of a null-terminated string. Returns 128-char lowercase hex.
+    pub def sha512(s: str) -> str:
+        return Sha512._digest(s, _tr_strlen(s), false)
+
+    # SHA-512 digest of exactly `len_` bytes of `data`. Returns 128-char lowercase hex.
+    pub def sha512_bytes(data: str, len_: int) -> str:
+        return Sha512._digest(data, len_, false)
+
+    # SHA-384 digest of a null-terminated string. Returns 96-char lowercase hex.
+    # SHA-384 is SHA-512 with a different IV and the output truncated to the
+    # first 384 bits (6 of the 8 64-bit words) — FIPS 180-4 section 5.3.4.
+    pub def sha384(s: str) -> str:
+        return Sha512._digest(s, _tr_strlen(s), true)
+
+    # SHA-384 digest of exactly `len_` bytes of `data`. Returns 96-char lowercase hex.
+    pub def sha384_bytes(data: str, len_: int) -> str:
+        return Sha512._digest(data, len_, true)
+
+    pub def _digest(data: str, mlen: int, is_384: bool) -> str:
+        mut h0: u64 = 0x6a09e667f3bcc908 as u64
+        mut h1: u64 = 0xbb67ae8584caa73b as u64
+        mut h2: u64 = 0x3c6ef372fe94f82b as u64
+        mut h3: u64 = 0xa54ff53a5f1d36f1 as u64
+        mut h4: u64 = 0x510e527fade682d1 as u64
+        mut h5: u64 = 0x9b05688c2b3e6c1f as u64
+        mut h6: u64 = 0x1f83d9abfb41bd6b as u64
+        mut h7: u64 = 0x5be0cd19137e2179 as u64
+
+        if is_384:
+            h0 = 0xcbbb9d5dc1059ed8 as u64
+            h1 = 0x629a292a367cd507 as u64
+            h2 = 0x9159015a3070dd17 as u64
+            h3 = 0x152fecd8f70e5939 as u64
+            h4 = 0x67332667ffc00b31 as u64
+            h5 = 0x8eb44a8768581511 as u64
+            h6 = 0xdb0c2e0d64f98fa7 as u64
+            h7 = 0x47b5481dbefa4fa4 as u64
+
+        # ── Padding: message || 0x80 || zero bytes || 128-bit big-endian
+        #    bit-length, padded to a multiple of 128 bytes. This module only
+        #    supports messages whose bit-length fits in 64 bits (mlen up to
+        #    2^61 - 1 bytes), so the high 64 bits of the length field are
+        #    always zero — matches every other pure-Tauraro hash in this
+        #    stdlib (SHA-256 in the C runtime has the same practical limit).
+        mut rem = (mlen + 1) % 128
+        mut pad_zeros = 0
+        if rem <= 112:
+            pad_zeros = 112 - rem
+        else:
+            pad_zeros = 128 - rem + 112
+        mut total = mlen + 1 + pad_zeros + 16
+
+        mut p = data as Pointer[char]
+        mut buf = StringBuilder.init(total + 2)
+        mut i = 0
+        while i < mlen:
+            buf.append_char((p.offset(i).read() as int) & 0xff)
+            i = i + 1
+        buf.append_char(0x80)
+        mut z = 0
+        while z < pad_zeros:
+            buf.append_char(0)
+            z = z + 1
+        # 128-bit big-endian bit-length field: high 64 bits are always zero
+        # (this module only supports messages up to 2^64-1 bits), then the
+        # low 64 bits of the actual bit length.
+        mut zi = 0
+        while zi < 8:
+            buf.append_char(0)
+            zi = zi + 1
+        mut bit_len: u64 = (mlen as u64) * (8 as u64)
+        mut bi = 7
+        while bi >= 0:
+            mut shift = bi * 8
+            buf.append_char(((bit_len >> shift) & (0xff as u64)) as int)
+            bi = bi - 1
+
+        mut padded = buf.to_owned()
+        buf.free()
+        mut pp = padded as Pointer[char]
+
+        mut w: List[int] = []
+        mut wi = 0
+        while wi < 80:
+            w.append(0)
+            wi = wi + 1
+
+        # ── Process each 128-byte block ──
+        mut off = 0
+        while off < total:
+            mut t = 0
+            while t < 16:
+                mut word: u64 = 0 as u64
+                mut bj = 0
+                while bj < 8:
+                    mut byte_val = (pp.offset(off + t * 8 + bj).read() as int) & 0xff
+                    word = (word << 8) | (byte_val as u64)
+                    bj = bj + 1
+                _w_set(w, t, word)
+                t = t + 1
+            while t < 80:
+                mut w15 = _w_get(w, t - 15)
+                mut w2  = _w_get(w, t - 2)
+                mut s0: u64 = _tr_sha512_rotr(w15, 1) ^ _tr_sha512_rotr(w15, 8) ^ (w15 >> 7)
+                mut s1: u64 = _tr_sha512_rotr(w2, 19) ^ _tr_sha512_rotr(w2, 61) ^ (w2 >> 6)
+                mut new_w: u64 = _w_get(w, t - 16) + s0 + _w_get(w, t - 7) + s1
+                _w_set(w, t, new_w)
+                t = t + 1
+
+            mut a = h0
+            mut b = h1
+            mut c = h2
+            mut d = h3
+            mut e = h4
+            mut f = h5
+            mut g = h6
+            mut hh = h7
+
+            mut round = 0
+            while round < 80:
+                mut bs1: u64 = _tr_sha512_rotr(e, 14) ^ _tr_sha512_rotr(e, 18) ^ _tr_sha512_rotr(e, 41)
+                mut ch: u64 = (e & f) ^ ((~e) & g)
+                mut temp1: u64 = hh + bs1 + ch + _sha512_k(round) + _w_get(w, round)
+                mut bs0: u64 = _tr_sha512_rotr(a, 28) ^ _tr_sha512_rotr(a, 34) ^ _tr_sha512_rotr(a, 39)
+                mut maj: u64 = (a & b) ^ (a & c) ^ (b & c)
+                mut temp2: u64 = bs0 + maj
+
+                hh = g
+                g = f
+                f = e
+                e = d + temp1
+                d = c
+                c = b
+                b = a
+                a = temp1 + temp2
+
+                round = round + 1
+
+            h0 = h0 + a
+            h1 = h1 + b
+            h2 = h2 + c
+            h3 = h3 + d
+            h4 = h4 + e
+            h5 = h5 + f
+            h6 = h6 + g
+            h7 = h7 + hh
+
+            off = off + 128
+
+        unsafe: _tr_c_free(padded as Pointer[char])
+
+        mut nwords = 8
+        if is_384: nwords = 6
+        return Sha512._words_to_hex(h0, h1, h2, h3, h4, h5, h6, h7, nwords)
+
+    pub def _hex_nibble(n: int) -> int:
+        if n < 10: return n + 48
+        return n + 87
+
+    pub def _append_word_hex(sb: StringBuilder, wrd: u64):
+        mut bi = 7
+        while bi >= 0:
+            mut shift = bi * 8
+            mut byte_val = ((wrd >> shift) & (0xff as u64)) as int
+            sb.append_char(Sha512._hex_nibble((byte_val >> 4) & 0xf))
+            sb.append_char(Sha512._hex_nibble(byte_val & 0xf))
+            bi = bi - 1
+
+    pub def _words_to_hex(h0: u64, h1: u64, h2: u64, h3: u64, h4: u64, h5: u64, h6: u64, h7: u64, nwords: int) -> str:
+        mut sb = StringBuilder.init(nwords * 16 + 2)
+        if nwords >= 1: Sha512._append_word_hex(sb, h0)
+        if nwords >= 2: Sha512._append_word_hex(sb, h1)
+        if nwords >= 3: Sha512._append_word_hex(sb, h2)
+        if nwords >= 4: Sha512._append_word_hex(sb, h3)
+        if nwords >= 5: Sha512._append_word_hex(sb, h4)
+        if nwords >= 6: Sha512._append_word_hex(sb, h5)
+        if nwords >= 7: Sha512._append_word_hex(sb, h6)
+        if nwords >= 8: Sha512._append_word_hex(sb, h7)
+        mut out = sb.to_owned()
+        sb.free()
+        return out

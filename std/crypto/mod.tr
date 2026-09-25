@@ -5,8 +5,16 @@
 #   from std.crypto.hmac import Hmac
 #   from std.crypto.uuid import UUID, ULID, MonotonicUlid
 #   from std.crypto.aes import Aes
+#   from std.crypto.sha512 import Sha512
+#   from std.crypto.chacha20 import ChaCha20, Poly1305
+#   from std.crypto.kdf import Kdf
+#   from std.crypto.jwt import Jwt, JwtResult
 
 from std.crypto.hash import Hash
 from std.crypto.hmac import Hmac
 from std.crypto.uuid import UUID, ULID, MonotonicUlid
 from std.crypto.aes import Aes
+from std.crypto.sha512 import Sha512
+from std.crypto.chacha20 import ChaCha20, Poly1305
+from std.crypto.kdf import Kdf
+from std.crypto.jwt import Jwt, JwtResult

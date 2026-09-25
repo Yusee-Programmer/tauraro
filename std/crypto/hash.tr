@@ -23,7 +23,10 @@ extend Hash:
     pub def sha256(s: str) -> str:
         return _tr_sha256_hex(s)
 
-    # SHA-256 digest of exactly `len` bytes of `data`. Returns 64-char lowercase hex.
+    # SHA-256 digest of exactly `len` bytes of `data`. Returns 32 RAW bytes
+    # (not hex — may contain embedded NULs; track the length explicitly,
+    # don't rely on .len()/strlen on the result). Use Hex.encode_bytes if
+    # you need a printable hex digest instead.
     pub def sha256_bytes(data: str, len_: int) -> str:
         return _tr_sha256_bytes_of(data, len_)
 
