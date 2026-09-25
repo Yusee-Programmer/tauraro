@@ -1,0 +1,650 @@
+# std.serialize.msgpack — real MessagePack (https://msgpack.org) codec.
+#
+# Unlike std.serialize.pickle (a from-scratch format optimized for
+# round-trip simplicity), this module is WIRE-COMPATIBLE with the real
+# MessagePack format described at
+# https://github.com/msgpack/msgpack/blob/master/spec.md — bytes produced
+# here can be decoded by any conforming MessagePack implementation in any
+# language, and bytes produced elsewhere can be decoded here.
+#
+# Same dynamic value model as pickle.tr: a tagged tree (`MPVal`) covering
+# None/bool/int/float/str plus nested arrays/maps — see pickle.tr's module
+# doc comment for the full discussion of why arbitrary user CLASSES aren't
+# generically serializable in Tauraro (no runtime reflection) and the
+# to_pval/from_pval-style hook convention to use instead (applies here
+# identically; just use `to_mpval`/`from_mpval` names to avoid confusion
+# with pickle's hooks if a type supports both formats).
+#
+# Implements (per the spec's format table): nil, bool (true/false),
+# positive/negative fixint, int8/16/32/64, uint8/16/32/64, float64 (float32
+# is decoded for interop but never emitted — Tauraro's `float` is a
+# double, so encoding always uses the lossless float64 form), fixstr/
+# str8/16/32, fixarray/array16/32, fixmap/map16/map32.
+#
+# NOT implemented (out of scope — no equivalent Tauraro value model here):
+# bin8/16/32 (raw byte arrays as distinct from str — everything textual
+# goes through str), ext types (application-defined extensions), and
+# timestamp. A `str` PVal can still carry arbitrary bytes (see
+# `MPVal.init_str_n`), it will just be tagged as MessagePack "str" on the
+# wire rather than "bin" — most decoders accept that for opaque data, but
+# strict UTF-8-validating decoders on the receiving end may reject non-UTF8
+# bytes tagged as str; if you need guaranteed bin8/16/32 semantics for
+# interop with a strict decoder, that's a documented gap, not silently
+# wrong data.
+#
+# Usage:
+#   from std.serialize.msgpack import MPVal, Msgpack
+#
+#   mut m = MPVal.init_map()
+#   m.map_set("id", MPVal.init_int(7))
+#   m.map_set("tags", MPVal.init_list())
+#   m.map_get("tags").list_push(MPVal.init_str("a"))
+#
+#   mut bytes_, blen = Msgpack.dumps_len(m)
+#   mut back = Msgpack.loads(bytes_, blen)
+#   print(back.map_get("id").get_int())   # 7
+
+from std.core.vec import Vec
+
+extern "C":
+    def _tr_c_malloc(size: int) -> Pointer[char]
+    def _tr_c_realloc(ptr: Pointer[char], size: int) -> Pointer[char]
+    def _tr_c_free(ptr: Pointer[char])
+    def _tr_c_memcpy(dst: Pointer[char], src: Pointer[char], n: int)
+    def _tr_str_wrap(s: Pointer[char]) -> str
+    def _tr_strlen(s: str) -> int
+
+# ─── MPVal tag constants ────────────────────────────────────────────────────
+
+pub def MP_NONE() -> int: return 0
+pub def MP_BOOL() -> int: return 1
+pub def MP_INT()  -> int: return 2
+pub def MP_FLOAT()-> int: return 3
+pub def MP_STR()  -> int: return 4
+pub def MP_LIST() -> int: return 5
+pub def MP_MAP()  -> int: return 6
+
+# ─── MPVal — tagged dynamic value tree (same shape as pickle.tr's PVal) ────
+
+pub class MPVal:
+    pub tag:   int
+    pub b_val: bool
+    pub i_val: int
+    pub f_val: float
+    pub s_val: str
+    pub s_len: int          # explicit byte length of s_val (embedded-NUL-safe)
+    pub items: Vec[MPVal]   # list elements, OR map values (parallel to keys)
+    pub keys:  Vec[str]     # map keys (parallel to items); empty for a list
+
+extend MPVal:
+    pub def _new() -> MPVal:
+        mut v = MPVal()
+        v.tag   = 0
+        v.b_val = false
+        v.i_val = 0
+        v.f_val = 0.0
+        v.s_val = ""
+        v.s_len = 0
+        v.items = Vec[MPVal].init(4)
+        v.keys  = Vec[str].init(4)
+        return v
+
+    pub def init_none() -> MPVal:
+        return MPVal._new()
+
+    pub def init_bool(b: bool) -> MPVal:
+        mut v = MPVal._new(); v.tag = 1; v.b_val = b
+        return v
+
+    pub def init_int(n: int) -> MPVal:
+        mut v = MPVal._new(); v.tag = 2; v.i_val = n
+        return v
+
+    pub def init_float(f: float) -> MPVal:
+        mut v = MPVal._new(); v.tag = 3; v.f_val = f
+        return v
+
+    # Ordinary (NUL-free) text — length derived via strlen for convenience.
+    pub def init_str(s: str) -> MPVal:
+        mut v = MPVal._new(); v.tag = 4; v.s_val = s; v.s_len = _tr_strlen(s)
+        return v
+
+    # Binary-safe string constructor: `n` is the true byte length, tracked
+    # explicitly so `s` may contain embedded NUL bytes.
+    pub def init_str_n(s: str, n: int) -> MPVal:
+        mut v = MPVal._new(); v.tag = 4; v.s_val = s; v.s_len = n
+        return v
+
+    pub def init_list() -> MPVal:
+        mut v = MPVal._new(); v.tag = 5
+        return v
+
+    pub def init_map() -> MPVal:
+        mut v = MPVal._new(); v.tag = 6
+        return v
+
+    pub def is_none(self)  -> bool: return self.tag == 0
+    pub def is_bool(self)  -> bool: return self.tag == 1
+    pub def is_int(self)   -> bool: return self.tag == 2
+    pub def is_float(self) -> bool: return self.tag == 3
+    pub def is_str(self)   -> bool: return self.tag == 4
+    pub def is_list(self)  -> bool: return self.tag == 5
+    pub def is_map(self)   -> bool: return self.tag == 6
+
+    pub def get_bool(self)  -> bool:  return self.b_val
+    pub def get_int(self)   -> int:   return self.i_val
+    pub def get_float(self) -> float: return self.f_val
+    pub def get_str(self)   -> str:   return self.s_val
+    pub def get_str_len(self) -> int: return self.s_len
+
+    # ── list ops ──
+    pub def list_push(self, v: MPVal):
+        self.items.push(v)
+
+    pub def list_len(self) -> int:
+        return self.items.len
+
+    pub def list_get(self, i: int) -> MPVal:
+        if i < 0 or i >= self.items.len: return MPVal.init_none()
+        return self.items.get(i)
+
+    # ── map ops ──
+    pub def map_set(self, key: str, v: MPVal):
+        mut i = 0
+        while i < self.keys.len:
+            if self.keys.get(i) == key:
+                self.items.set(i, v)
+                return
+            i = i + 1
+        self.keys.push(key)
+        self.items.push(v)
+
+    pub def map_get(self, key: str) -> MPVal:
+        mut i = 0
+        while i < self.keys.len:
+            if self.keys.get(i) == key:
+                return self.items.get(i)
+            i = i + 1
+        return MPVal.init_none()
+
+    pub def map_has(self, key: str) -> bool:
+        mut i = 0
+        while i < self.keys.len:
+            if self.keys.get(i) == key: return true
+            i = i + 1
+        return false
+
+    pub def map_len(self) -> int:
+        return self.keys.len
+
+    pub def map_key(self, i: int) -> str:
+        return self.keys.get(i)
+
+    pub def map_val(self, i: int) -> MPVal:
+        return self.items.get(i)
+
+# ─── Raw growable byte buffer (internal; explicit length, NUL-safe) ───────
+
+pub class _MBuf:
+    pub data: Pointer[char]
+    pub len:  int
+    pub cap:  int
+
+extend _MBuf:
+    pub def init(cap: int) -> _MBuf:
+        mut c = cap
+        if c < 16: c = 16
+        mut b = _MBuf()
+        b.data = _tr_c_malloc(c)
+        b.len  = 0
+        b.cap  = c
+        return b
+
+    def _ensure(self, extra: int):
+        if self.len + extra <= self.cap: return
+        mut nc = self.cap * 2 + extra
+        self.data = _tr_c_realloc(self.data, nc)
+        self.cap  = nc
+
+    pub def push_u8(self, v: int):
+        self._ensure(1)
+        unsafe:
+            self.data.offset(self.len).write((v & 0xFF) as char)
+        self.len = self.len + 1
+
+    # Big-endian (network order) fixed-width writers — MessagePack always
+    # uses big-endian for its multi-byte length/value fields.
+    pub def push_u16be(self, v: int):
+        self.push_u8((v >> 8) & 0xFF)
+        self.push_u8(v & 0xFF)
+
+    pub def push_u32be(self, v: int):
+        self.push_u8((v >> 24) & 0xFF)
+        self.push_u8((v >> 16) & 0xFF)
+        self.push_u8((v >> 8) & 0xFF)
+        self.push_u8(v & 0xFF)
+
+    pub def push_u64be(self, v: int):
+        mut i = 7
+        while i >= 0:
+            self.push_u8((v >> (i * 8)) & 0xFF)
+            i = i - 1
+
+    pub def push_bytes(self, s: str, n: int):
+        if n <= 0: return
+        self._ensure(n)
+        unsafe:
+            _tr_c_memcpy(self.data.offset(self.len), s as Pointer[char], n)
+        self.len = self.len + n
+
+    pub def to_str(self) -> str:
+        mut out = _tr_c_malloc(self.len + 1)
+        if self.len > 0:
+            unsafe: _tr_c_memcpy(out, self.data, self.len)
+        unsafe: out.offset(self.len).write('\0')
+        return _tr_str_wrap(out)
+
+    pub def free(self):
+        _tr_c_free(self.data)
+        self.data = 0 as Pointer[char]
+        self.len  = 0
+        self.cap  = 0
+
+# ─── bit-pun helpers (float64 <-> raw 8-byte pattern) ──────────────────────
+
+def _mp_float_to_bits(f: float) -> int:
+    mut tmp: float = f
+    mut p = (&tmp) as Pointer[int]
+    unsafe:
+        return p.read()
+
+def _mp_bits_to_float(bits: int) -> float:
+    mut tmp: int = bits
+    mut p = (&tmp) as Pointer[float]
+    unsafe:
+        return p.read()
+
+# ─── big-endian byte readers over a raw str buffer ─────────────────────────
+
+def _mp_rd_u8(data: str, off: int) -> int:
+    mut p = data as Pointer[char]
+    unsafe:
+        return p.offset(off).read() as int & 0xFF
+
+# Read as a SIGNED 8-bit value (for msgpack int8).
+def _mp_rd_i8(data: str, off: int) -> int:
+    mut u = _mp_rd_u8(data, off)
+    if u >= 128: return u - 256
+    return u
+
+def _mp_rd_u16be(data: str, off: int) -> int:
+    mut b0 = _mp_rd_u8(data, off)
+    mut b1 = _mp_rd_u8(data, off + 1)
+    return (b0 << 8) | b1
+
+def _mp_rd_i16(data: str, off: int) -> int:
+    mut u = _mp_rd_u16be(data, off)
+    if u >= 32768: return u - 65536
+    return u
+
+def _mp_rd_u32be(data: str, off: int) -> int:
+    mut b0 = _mp_rd_u8(data, off)
+    mut b1 = _mp_rd_u8(data, off + 1)
+    mut b2 = _mp_rd_u8(data, off + 2)
+    mut b3 = _mp_rd_u8(data, off + 3)
+    return (b0 << 24) | (b1 << 16) | (b2 << 8) | b3
+
+def _mp_rd_i32(data: str, off: int) -> int:
+    mut u = _mp_rd_u32be(data, off)
+    if u >= 2147483648: return u - 4294967296
+    return u
+
+def _mp_rd_u64be(data: str, off: int) -> int:
+    mut result: int = 0
+    mut i = 0
+    while i < 8:
+        result = (result << 8) | _mp_rd_u8(data, off + i)
+        i = i + 1
+    return result
+
+# _mp_rd_u64be already reproduces the correct 64-bit two's-complement bit
+# pattern when reinterpreted as a signed 64-bit int (int is 64-bit), so
+# int64/uint64 read the same way at this width.
+
+def _mp_rd_slice(data: str, off: int, n: int) -> str:
+    mut out = _tr_c_malloc(n + 1)
+    if n > 0:
+        unsafe:
+            _tr_c_memcpy(out, (data as Pointer[char]).offset(off), n)
+    unsafe: out.offset(n).write('\0')
+    return _tr_str_wrap(out)
+
+# ─── Encoder ────────────────────────────────────────────────────────────────
+
+def _mp_encode_str(s: str, n: int, buf: _MBuf):
+    if n <= 31:
+        buf.push_u8(0xA0 | n)          # fixstr
+    elif n <= 255:
+        buf.push_u8(0xD9)              # str8
+        buf.push_u8(n)
+    elif n <= 65535:
+        buf.push_u8(0xDA)              # str16
+        buf.push_u16be(n)
+    else:
+        buf.push_u8(0xDB)              # str32
+        buf.push_u32be(n)
+    buf.push_bytes(s, n)
+
+def _mp_encode_int(n: int, buf: _MBuf):
+    if n >= 0 and n <= 127:
+        buf.push_u8(n)                 # positive fixint
+    elif n < 0 and n >= 0 - 32:
+        buf.push_u8(0xE0 | (n + 32))   # negative fixint (5-bit, -32..-1)
+    elif n >= 0 - 128 and n <= 127:
+        buf.push_u8(0xD0)              # int8
+        buf.push_u8(n & 0xFF)
+    elif n >= 0 and n <= 255:
+        buf.push_u8(0xCC)              # uint8
+        buf.push_u8(n)
+    elif n >= 0 - 32768 and n <= 32767:
+        buf.push_u8(0xD1)              # int16
+        buf.push_u16be(n & 0xFFFF)
+    elif n >= 0 and n <= 65535:
+        buf.push_u8(0xCD)              # uint16
+        buf.push_u16be(n)
+    elif n >= 0 - 2147483648 and n <= 2147483647:
+        buf.push_u8(0xD2)              # int32
+        buf.push_u32be(n & 0xFFFFFFFF)
+    elif n >= 0 and n <= 4294967295:
+        buf.push_u8(0xCE)              # uint32
+        buf.push_u32be(n)
+    else:
+        buf.push_u8(0xD3)              # int64 (covers remaining negative
+        buf.push_u64be(n)              # range and positive > uint32 range;
+                                        # Tauraro int is a signed 64-bit
+                                        # value so true uint64-range positive
+                                        # values that overflow signed 64-bit
+                                        # cannot be represented here anyway)
+
+def _mp_encode_into(v: MPVal, buf: _MBuf):
+    if v.tag == 0:
+        buf.push_u8(0xC0)              # nil
+    elif v.tag == 1:
+        if v.b_val: buf.push_u8(0xC3)  # true
+        else:       buf.push_u8(0xC2)  # false
+    elif v.tag == 2:
+        _mp_encode_int(v.i_val, buf)
+    elif v.tag == 3:
+        buf.push_u8(0xCB)              # float64
+        buf.push_u64be(_mp_float_to_bits(v.f_val))
+    elif v.tag == 4:
+        _mp_encode_str(v.s_val, v.s_len, buf)
+    elif v.tag == 5:
+        mut n = v.items.len
+        if n <= 15:
+            buf.push_u8(0x90 | n)          # fixarray
+        elif n <= 65535:
+            buf.push_u8(0xDC)              # array16
+            buf.push_u16be(n)
+        else:
+            buf.push_u8(0xDD)              # array32
+            buf.push_u32be(n)
+        mut i = 0
+        while i < n:
+            _mp_encode_into(v.items.get(i), buf)
+            i = i + 1
+    elif v.tag == 6:
+        mut n = v.keys.len
+        if n <= 15:
+            buf.push_u8(0x80 | n)          # fixmap
+        elif n <= 65535:
+            buf.push_u8(0xDE)              # map16
+            buf.push_u16be(n)
+        else:
+            buf.push_u8(0xDF)              # map32
+            buf.push_u32be(n)
+        mut i = 0
+        while i < n:
+            mut k = v.keys.get(i)
+            _mp_encode_str(k, _tr_strlen(k), buf)
+            _mp_encode_into(v.items.get(i), buf)
+            i = i + 1
+    else:
+        buf.push_u8(0xC0)              # unknown tag -> nil (defensive)
+
+# ─── Decoder ────────────────────────────────────────────────────────────────
+# Offset threaded through a 1-element List[int] out-parameter, same
+# convention pickle.tr uses (and std/crypto/aes.tr's `ok: List[bool]`).
+
+def _mp_decode_at(data: str, off: List[int]) -> MPVal:
+    mut tag = _mp_rd_u8(data, off[0])
+    off[0] = off[0] + 1
+
+    if tag == 0xC0: return MPVal.init_none()
+    if tag == 0xC2: return MPVal.init_bool(false)
+    if tag == 0xC3: return MPVal.init_bool(true)
+
+    # positive fixint 0x00..0x7f
+    if tag <= 0x7F: return MPVal.init_int(tag)
+    # negative fixint 0xe0..0xff  ->  tag - 256 gives the signed value
+    if tag >= 0xE0: return MPVal.init_int(tag - 256)
+
+    if tag == 0xCC:   # uint8
+        mut n = _mp_rd_u8(data, off[0]); off[0] = off[0] + 1
+        return MPVal.init_int(n)
+    if tag == 0xCD:   # uint16
+        mut n = _mp_rd_u16be(data, off[0]); off[0] = off[0] + 2
+        return MPVal.init_int(n)
+    if tag == 0xCE:   # uint32
+        mut n = _mp_rd_u32be(data, off[0]); off[0] = off[0] + 4
+        return MPVal.init_int(n)
+    if tag == 0xCF:   # uint64 (read as raw 64-bit pattern; values above
+                      # signed-int64 max will read back negative — Tauraro
+                      # has no unsigned 64-bit type)
+        mut n = _mp_rd_u64be(data, off[0]); off[0] = off[0] + 8
+        return MPVal.init_int(n)
+    if tag == 0xD0:   # int8
+        mut n = _mp_rd_i8(data, off[0]); off[0] = off[0] + 1
+        return MPVal.init_int(n)
+    if tag == 0xD1:   # int16
+        mut n = _mp_rd_i16(data, off[0]); off[0] = off[0] + 2
+        return MPVal.init_int(n)
+    if tag == 0xD2:   # int32
+        mut n = _mp_rd_i32(data, off[0]); off[0] = off[0] + 4
+        return MPVal.init_int(n)
+    if tag == 0xD3:   # int64
+        mut n = _mp_rd_u64be(data, off[0]); off[0] = off[0] + 8
+        return MPVal.init_int(n)
+
+    if tag == 0xCA:   # float32 (decoded via bit-widening to double; accepted
+                      # for interop even though this module never emits it)
+        mut bits32 = _mp_rd_u32be(data, off[0]); off[0] = off[0] + 4
+        return MPVal.init_float(_mp_f32_bits_to_float(bits32))
+    if tag == 0xCB:   # float64
+        mut bits = _mp_rd_u64be(data, off[0]); off[0] = off[0] + 8
+        return MPVal.init_float(_mp_bits_to_float(bits))
+
+    # fixstr 0xa0..0xbf (length = low 5 bits)
+    if tag >= 0xA0 and tag <= 0xBF:
+        mut n = tag - 0xA0
+        mut s = _mp_rd_slice(data, off[0], n); off[0] = off[0] + n
+        return MPVal.init_str_n(s, n)
+    if tag == 0xD9:   # str8
+        mut n = _mp_rd_u8(data, off[0]); off[0] = off[0] + 1
+        mut s = _mp_rd_slice(data, off[0], n); off[0] = off[0] + n
+        return MPVal.init_str_n(s, n)
+    if tag == 0xDA:   # str16
+        mut n = _mp_rd_u16be(data, off[0]); off[0] = off[0] + 2
+        mut s = _mp_rd_slice(data, off[0], n); off[0] = off[0] + n
+        return MPVal.init_str_n(s, n)
+    if tag == 0xDB:   # str32
+        mut n = _mp_rd_u32be(data, off[0]); off[0] = off[0] + 4
+        mut s = _mp_rd_slice(data, off[0], n); off[0] = off[0] + n
+        return MPVal.init_str_n(s, n)
+
+    # fixarray 0x90..0x9f (length = low 4 bits)
+    if tag >= 0x90 and tag <= 0x9F:
+        return _mp_decode_array(data, off, tag - 0x90)
+    if tag == 0xDC:   # array16
+        mut n = _mp_rd_u16be(data, off[0]); off[0] = off[0] + 2
+        return _mp_decode_array(data, off, n)
+    if tag == 0xDD:   # array32
+        mut n = _mp_rd_u32be(data, off[0]); off[0] = off[0] + 4
+        return _mp_decode_array(data, off, n)
+
+    # fixmap 0x80..0x8f (length = low 4 bits)
+    if tag >= 0x80 and tag <= 0x8F:
+        return _mp_decode_map(data, off, tag - 0x80)
+    if tag == 0xDE:   # map16
+        mut n = _mp_rd_u16be(data, off[0]); off[0] = off[0] + 2
+        return _mp_decode_map(data, off, n)
+    if tag == 0xDF:   # map32
+        mut n = _mp_rd_u32be(data, off[0]); off[0] = off[0] + 4
+        return _mp_decode_map(data, off, n)
+
+    return MPVal.init_none()   # unrecognized/unsupported tag (bin*/ext*/
+                                # timestamp) -> None (defensive; documented
+                                # out-of-scope types, see module header)
+
+def _mp_decode_array(data: str, off: List[int], n: int) -> MPVal:
+    mut v = MPVal.init_list()
+    mut i = 0
+    while i < n:
+        v.list_push(_mp_decode_at(data, off))
+        i = i + 1
+    return v
+
+def _mp_decode_map(data: str, off: List[int], n: int) -> MPVal:
+    mut v = MPVal.init_map()
+    mut i = 0
+    while i < n:
+        mut key = _mp_decode_at(data, off)   # keys are always encoded as str by this module
+        mut val = _mp_decode_at(data, off)
+        v.map_set(key.get_str(), val)
+        i = i + 1
+    return v
+
+# float32 -> float64 widening via bit reinterpretation (IEEE-754 binary32 ->
+# binary64). Implemented from the raw bit fields since Tauraro has no
+# native 32-bit float type to bit-pun through directly.
+def _mp_f32_bits_to_float(bits32: int) -> float:
+    mut sign = (bits32 >> 31) & 1
+    mut exp  = (bits32 >> 23) & 0xFF
+    mut frac = bits32 & 0x7FFFFF
+    if exp == 0 and frac == 0:
+        if sign == 1: return 0.0 - 0.0
+        return 0.0
+    if exp == 255:
+        # Inf/NaN: not expected in practice for this codec's use cases;
+        # approximate with a large magnitude rather than crash.
+        if frac == 0:
+            if sign == 1: return 0.0 - 1.0e308 * 10.0
+            return 1.0e308 * 10.0
+        return 0.0 / 0.0
+    # Normalized: value = (-1)^sign * 1.frac * 2^(exp-127)
+    mut mantissa = 1.0 + (frac as float) / 8388608.0   # 2^23
+    mut e = exp - 127
+    mut result = mantissa
+    if e > 0:
+        mut i = 0
+        while i < e:
+            result = result * 2.0
+            i = i + 1
+    elif e < 0:
+        mut i = 0
+        while i < (0 - e):
+            result = result / 2.0
+            i = i + 1
+    if sign == 1: return 0.0 - result
+    return result
+
+# ─── Public API ─────────────────────────────────────────────────────────────
+
+pub class Msgpack:
+    _dummy: int
+
+extend Msgpack:
+    # Serialize an MPVal tree to real MessagePack bytes. `out_len[0]`
+    # receives the true byte length (result may contain embedded NULs) —
+    # same out-parameter convention as std/serialize/pickle.tr's `dumps`.
+    pub def dumps(v: MPVal, out_len: List[int]) -> str:
+        mut buf = _MBuf.init(64)
+        _mp_encode_into(v, buf)
+        out_len[0] = buf.len
+        mut out = buf.to_str()
+        buf.free()
+        return out
+
+    # Same as `dumps` but returns (bytes, length) as a tuple.
+    pub def dumps_len(v: MPVal) -> (str, int):
+        mut out_len = [0]
+        mut bytes_ = Msgpack.dumps(v, out_len)
+        return (bytes_, out_len[0])
+
+    # Deserialize `len_` bytes of MessagePack data into an MPVal tree.
+    # `len_` is required explicitly (never inferred via strlen).
+    pub def loads(data: str, len_: int) -> MPVal:
+        mut off = [0]
+        return _mp_decode_at(data, off)
+
+    # ── convenience one-shot helpers ──
+
+    pub def dump_int(n: int) -> (str, int):
+        return Msgpack.dumps_len(MPVal.init_int(n))
+
+    pub def dump_float(f: float) -> (str, int):
+        return Msgpack.dumps_len(MPVal.init_float(f))
+
+    pub def dump_bool(b: bool) -> (str, int):
+        return Msgpack.dumps_len(MPVal.init_bool(b))
+
+    pub def dump_str(s: str) -> (str, int):
+        return Msgpack.dumps_len(MPVal.init_str(s))
+
+    pub def dump_list_int(xs: List[int]) -> (str, int):
+        mut v = MPVal.init_list()
+        mut i = 0
+        while i < len(xs):
+            v.list_push(MPVal.init_int(xs[i]))
+            i = i + 1
+        return Msgpack.dumps_len(v)
+
+    pub def dump_list_str(xs: List[str]) -> (str, int):
+        mut v = MPVal.init_list()
+        mut i = 0
+        while i < len(xs):
+            v.list_push(MPVal.init_str(xs[i]))
+            i = i + 1
+        return Msgpack.dumps_len(v)
+
+    pub def dump_dict_str_str(d: Dict[str, str]) -> (str, int):
+        mut v = MPVal.init_map()
+        for key, val in d.items():
+            v.map_set(key, MPVal.init_str(val))
+        return Msgpack.dumps_len(v)
+
+    pub def dump_dict_str_int(d: Dict[str, int]) -> (str, int):
+        mut v = MPVal.init_map()
+        for key, val in d.items():
+            v.map_set(key, MPVal.init_int(val))
+        return Msgpack.dumps_len(v)
+
+    pub def load_list_int(data: str, len_: int) -> List[int]:
+        mut v = Msgpack.loads(data, len_)
+        mut out: List[int] = []
+        mut i = 0
+        while i < v.list_len():
+            mut e = v.list_get(i)
+            if e.is_int(): out.append(e.get_int())
+            i = i + 1
+        return out
+
+    pub def load_list_str(data: str, len_: int) -> List[str]:
+        mut v = Msgpack.loads(data, len_)
+        mut out: List[str] = []
+        mut i = 0
+        while i < v.list_len():
+            mut e = v.list_get(i)
+            if e.is_str(): out.append(e.get_str())
+            i = i + 1
+        return out

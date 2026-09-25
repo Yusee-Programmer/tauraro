@@ -1,0 +1,565 @@
+# std.serialize.pickle — Python-`pickle`-style value serialization.
+#
+# Serializes a value graph (scalars + nested List/Dict/Vec/Set) to a compact
+# binary byte string, and deserializes it back into a real, usable value.
+# Pure Tauraro, no runtime dependency beyond the usual memcpy/alloc externs.
+#
+# ─── Why this isn't Python's pickle ────────────────────────────────────────
+#
+# Python's `pickle` can serialize ARBITRARY objects because CPython gives it
+# runtime introspection (`__reduce__`, `__dict__`, `__class__`, etc.).
+# Tauraro is statically typed and compiled to C with no such runtime type
+# registry — there is no way for a library (without deep compiler changes:
+# see the "class pickling" note below) to ask an arbitrary `T` "what are
+# your field names and values?".
+#
+# So this module does NOT pickle arbitrary user classes directly. Instead it
+# provides:
+#
+#   1. `Pickle.dumps` / `Pickle.loads` over `PVal` — a tagged dynamic value
+#      (mirrors `std.encoding.toml`'s `TomlValue` / `std.encoding.json`'s
+#      `JsonDoc` node shape) covering: None, bool, int, float, str, and
+#      nested arrays/maps. This is the real, working, general-purpose part:
+#      genuinely useful for persisting e.g. a `Dict[str, List[int]]`
+#      config/cache to disk.
+#
+#   2. Convenience one-shot helpers for the common concrete container shapes
+#      you actually have in hand (`dump_list_int`, `dump_dict_str_str`,
+#      etc.) so callers don't need to hand-build a `PVal` tree for the
+#      common case.
+#
+#   3. A documented **class-pickling convention**: if your class can
+#      describe itself as a `PVal` (e.g. via a `to_pval(self) -> PVal`
+#      method you write) and rebuild itself from one (`from_pval(v: PVal) ->
+#      T` static method), you drive `Pickle.dumps(obj.to_pval())` /
+#      `T.from_pval(Pickle.loads(...))` yourself — pickle.tr does not (and
+#      cannot, generically) call these hooks for you, because Tauraro has no
+#      way to detect "does this arbitrary T have a to_pval method" at
+#      compile time without a concrete type. See the worked example at the
+#      bottom of this file's doc comment.
+#
+# Example (config round-trip through PVal):
+#
+#   from std.serialize.pickle import PVal, Pickle
+#
+#   mut cfg = PVal.init_map()
+#   cfg.map_set("name", PVal.init_str("tauraro"))
+#   cfg.map_set("retries", PVal.init_int(3))
+#   mut tags = PVal.init_list()
+#   tags.list_push(PVal.init_str("fast"))
+#   tags.list_push(PVal.init_str("safe"))
+#   cfg.map_set("tags", tags)
+#
+#   mut bytes_, blen = Pickle.dumps_len(cfg)
+#   mut back = Pickle.loads(bytes_, blen)
+#   print(back.map_get("retries").get_int())   # 3
+#
+# Example (class-pickling workaround via to_pval/from_pval hooks):
+#
+#   class Point:
+#       x: int
+#       y: int
+#
+#   extend Point:
+#       def to_pval(self) -> PVal:
+#           mut v = PVal.init_map()
+#           v.map_set("x", PVal.init_int(self.x))
+#           v.map_set("y", PVal.init_int(self.y))
+#           return v
+#
+#       def from_pval(v: PVal) -> Point:
+#           mut p = Point()
+#           p.x = v.map_get("x").get_int()
+#           p.y = v.map_get("y").get_int()
+#           return p
+#
+#   mut p = Point(); p.x = 3; p.y = 4
+#   mut raw, rlen = Pickle.dumps_len(p.to_pval())
+#   mut p2 = Point.from_pval(Pickle.loads(raw, rlen))
+#
+# ─── Binary format (own design, NOT wire-compatible with Python's pickle) ──
+#
+# Every value starts with a 1-byte tag:
+#
+#   0x00  None            (no payload)
+#   0x01  bool false       (no payload)
+#   0x02  bool true        (no payload)
+#   0x03  int             8 bytes, little-endian, two's complement
+#   0x04  float           8 bytes, little-endian, IEEE-754 double bit pattern
+#   0x05  str             4 bytes LE length N, then N raw bytes (embedded
+#                          NUL-safe: length is explicit, never NUL-terminated)
+#   0x06  list            4 bytes LE count N, then N values back-to-back
+#   0x07  map             4 bytes LE count N, then N (key: str-tagged value
+#                          bytes are NOT re-tagged — key is just a raw
+#                          length-prefixed string, no 0x05 tag byte — then
+#                          value) pairs back-to-back
+#
+# Top-level `dumps`/`loads` always operate on exactly one value (a `PVal`,
+# which itself may be an arbitrarily nested list/map).
+#
+# Integers are always encoded as full 8-byte (64-bit) values regardless of
+# magnitude — this format prioritizes simplicity and round-trip correctness
+# over wire size (use std.serialize.msgpack if you need compact/interop
+# wire format).
+
+from std.core.vec import Vec
+
+extern "C":
+    def _tr_c_malloc(size: int) -> Pointer[char]
+    def _tr_c_realloc(ptr: Pointer[char], size: int) -> Pointer[char]
+    def _tr_c_free(ptr: Pointer[char])
+    def _tr_c_memcpy(dst: Pointer[char], src: Pointer[char], n: int)
+    def _tr_str_wrap(s: Pointer[char]) -> str
+    def _tr_strlen(s: str) -> int
+
+# ─── PVal tag constants ─────────────────────────────────────────────────────
+
+pub def PVAL_NONE() -> int: return 0
+pub def PVAL_BOOL() -> int: return 1
+pub def PVAL_INT()  -> int: return 2
+pub def PVAL_FLOAT()-> int: return 3
+pub def PVAL_STR()  -> int: return 4
+pub def PVAL_LIST() -> int: return 5
+pub def PVAL_MAP()  -> int: return 6
+
+# ─── PVal — tagged dynamic value tree (mirrors TomlValue's shape) ──────────
+
+pub class PVal:
+    pub tag:   int
+    pub b_val: bool
+    pub i_val: int
+    pub f_val: float
+    pub s_val: str
+    pub s_len: int          # explicit byte length of s_val (embedded-NUL-safe;
+                             # NEVER re-derive this via strlen — see init_str_n)
+    pub items: Vec[PVal]   # list elements, OR map values (parallel to keys)
+    pub keys:  Vec[str]    # map keys (parallel to items); empty for a list
+
+extend PVal:
+    pub def _new() -> PVal:
+        mut v = PVal()
+        v.tag   = 0
+        v.b_val = false
+        v.i_val = 0
+        v.f_val = 0.0
+        v.s_val = ""
+        v.s_len = 0
+        v.items = Vec[PVal].init(4)
+        v.keys  = Vec[str].init(4)
+        return v
+
+    pub def init_none() -> PVal:
+        return PVal._new()
+
+    pub def init_bool(b: bool) -> PVal:
+        mut v = PVal._new(); v.tag = 1; v.b_val = b
+        return v
+
+    pub def init_int(n: int) -> PVal:
+        mut v = PVal._new(); v.tag = 2; v.i_val = n
+        return v
+
+    pub def init_float(f: float) -> PVal:
+        mut v = PVal._new(); v.tag = 3; v.f_val = f
+        return v
+
+    # Ordinary (NUL-free) text — length is derived via strlen for
+    # convenience. If your string may contain embedded NUL bytes, use
+    # `init_str_n` instead and pass the true byte length explicitly.
+    pub def init_str(s: str) -> PVal:
+        mut v = PVal._new(); v.tag = 4; v.s_val = s; v.s_len = _tr_strlen(s)
+        return v
+
+    # Binary-safe string constructor: `n` is the true byte length, tracked
+    # explicitly rather than recovered via strlen, so `s` may contain
+    # embedded NUL bytes and still round-trip correctly.
+    pub def init_str_n(s: str, n: int) -> PVal:
+        mut v = PVal._new(); v.tag = 4; v.s_val = s; v.s_len = n
+        return v
+
+    pub def init_list() -> PVal:
+        mut v = PVal._new(); v.tag = 5
+        return v
+
+    pub def init_map() -> PVal:
+        mut v = PVal._new(); v.tag = 6
+        return v
+
+    pub def is_none(self)  -> bool: return self.tag == 0
+    pub def is_bool(self)  -> bool: return self.tag == 1
+    pub def is_int(self)   -> bool: return self.tag == 2
+    pub def is_float(self) -> bool: return self.tag == 3
+    pub def is_str(self)   -> bool: return self.tag == 4
+    pub def is_list(self)  -> bool: return self.tag == 5
+    pub def is_map(self)   -> bool: return self.tag == 6
+
+    pub def get_bool(self)  -> bool:  return self.b_val
+    pub def get_int(self)   -> int:   return self.i_val
+    pub def get_float(self) -> float: return self.f_val
+    pub def get_str(self)   -> str:   return self.s_val
+    # True byte length of the string value — use this instead of strlen()
+    # when the string may contain embedded NUL bytes (e.g. one built via
+    # `init_str_n` or decoded from pickled bytes).
+    pub def get_str_len(self) -> int: return self.s_len
+
+    # ── list ops ──
+    pub def list_push(self, v: PVal):
+        self.items.push(v)
+
+    pub def list_len(self) -> int:
+        return self.items.len
+
+    pub def list_get(self, i: int) -> PVal:
+        if i < 0 or i >= self.items.len: return PVal.init_none()
+        return self.items.get(i)
+
+    # ── map ops ──
+    pub def map_set(self, key: str, v: PVal):
+        mut i = 0
+        while i < self.keys.len:
+            if self.keys.get(i) == key:
+                self.items.set(i, v)
+                return
+            i = i + 1
+        self.keys.push(key)
+        self.items.push(v)
+
+    pub def map_get(self, key: str) -> PVal:
+        mut i = 0
+        while i < self.keys.len:
+            if self.keys.get(i) == key:
+                return self.items.get(i)
+            i = i + 1
+        return PVal.init_none()
+
+    pub def map_has(self, key: str) -> bool:
+        mut i = 0
+        while i < self.keys.len:
+            if self.keys.get(i) == key: return true
+            i = i + 1
+        return false
+
+    pub def map_len(self) -> int:
+        return self.keys.len
+
+    pub def map_key(self, i: int) -> str:
+        return self.keys.get(i)
+
+    pub def map_val(self, i: int) -> PVal:
+        return self.items.get(i)
+
+# ─── Raw growable byte buffer (internal; explicit length, NUL-safe) ───────
+
+pub class _PBuf:
+    pub data: Pointer[char]
+    pub len:  int
+    pub cap:  int
+
+extend _PBuf:
+    pub def init(cap: int) -> _PBuf:
+        mut c = cap
+        if c < 16: c = 16
+        mut b = _PBuf()
+        b.data = _tr_c_malloc(c)
+        b.len  = 0
+        b.cap  = c
+        return b
+
+    def _ensure(self, extra: int):
+        if self.len + extra <= self.cap: return
+        mut nc = self.cap * 2 + extra
+        self.data = _tr_c_realloc(self.data, nc)
+        self.cap  = nc
+
+    pub def push_u8(self, v: int):
+        self._ensure(1)
+        unsafe:
+            self.data.offset(self.len).write((v & 0xFF) as char)
+        self.len = self.len + 1
+
+    # 4-byte little-endian.
+    pub def push_u32le(self, v: int):
+        self.push_u8(v & 0xFF)
+        self.push_u8((v >> 8) & 0xFF)
+        self.push_u8((v >> 16) & 0xFF)
+        self.push_u8((v >> 24) & 0xFF)
+
+    # 8-byte little-endian (raw 64-bit pattern; two's complement for ints,
+    # IEEE-754 bit pattern for floats via the caller pre-bit-punning).
+    pub def push_u64le(self, v: int):
+        mut i = 0
+        mut x = v
+        while i < 8:
+            self.push_u8(x & 0xFF)
+            x = x >> 8
+            i = i + 1
+
+    pub def push_bytes(self, s: str, n: int):
+        if n <= 0: return
+        self._ensure(n)
+        unsafe:
+            _tr_c_memcpy(self.data.offset(self.len), s as Pointer[char], n)
+        self.len = self.len + n
+
+    pub def to_str(self) -> str:
+        mut out = _tr_c_malloc(self.len + 1)
+        if self.len > 0:
+            unsafe: _tr_c_memcpy(out, self.data, self.len)
+        unsafe: out.offset(self.len).write('\0')
+        return _tr_str_wrap(out)
+
+    pub def free(self):
+        _tr_c_free(self.data)
+        self.data = 0 as Pointer[char]
+        self.len  = 0
+        self.cap  = 0
+
+# ─── bit-pun helpers (float64 <-> raw 8-byte pattern) ──────────────────────
+# `&x` takes a genuine address (real C `&`), so casting it to Pointer[char]
+# and reading/writing 8 bytes reinterprets the IEEE-754 bit pattern without
+# any numeric conversion — verified against known double bit patterns.
+
+pub def _pk_float_to_bits(f: float) -> int:
+    mut tmp: float = f
+    mut p = (&tmp) as Pointer[int]
+    unsafe:
+        return p.read()
+
+pub def _pk_bits_to_float(bits: int) -> float:
+    mut tmp: int = bits
+    mut p = (&tmp) as Pointer[float]
+    unsafe:
+        return p.read()
+
+# ─── little-endian byte readers over a raw str buffer ──────────────────────
+
+def _pk_rd_u8(data: str, off: int) -> int:
+    mut p = data as Pointer[char]
+    unsafe:
+        return p.offset(off).read() as int & 0xFF
+
+def _pk_rd_u32le(data: str, off: int) -> int:
+    mut p = data as Pointer[char]
+    unsafe:
+        mut b0 = p.offset(off).read() as int & 0xFF
+        mut b1 = p.offset(off + 1).read() as int & 0xFF
+        mut b2 = p.offset(off + 2).read() as int & 0xFF
+        mut b3 = p.offset(off + 3).read() as int & 0xFF
+        return b0 | (b1 << 8) | (b2 << 16) | (b3 << 24)
+
+def _pk_rd_u64le(data: str, off: int) -> int:
+    mut p = data as Pointer[char]
+    mut result: int = 0
+    mut i = 7
+    unsafe:
+        while i >= 0:
+            mut byte_ = p.offset(off + i).read() as int & 0xFF
+            result = (result << 8) | byte_
+            i = i - 1
+    return result
+
+def _pk_rd_slice(data: str, off: int, n: int) -> str:
+    mut out = _tr_c_malloc(n + 1)
+    if n > 0:
+        unsafe:
+            _tr_c_memcpy(out, (data as Pointer[char]).offset(off), n)
+    unsafe: out.offset(n).write('\0')
+    return _tr_str_wrap(out)
+
+# ─── Encoder ────────────────────────────────────────────────────────────────
+
+def _pk_encode_into(v: PVal, buf: _PBuf):
+    if v.tag == 0:
+        buf.push_u8(0x00)
+    elif v.tag == 1:
+        if v.b_val: buf.push_u8(0x02)
+        else:       buf.push_u8(0x01)
+    elif v.tag == 2:
+        buf.push_u8(0x03)
+        buf.push_u64le(v.i_val)
+    elif v.tag == 3:
+        buf.push_u8(0x04)
+        buf.push_u64le(_pk_float_to_bits(v.f_val))
+    elif v.tag == 4:
+        buf.push_u8(0x05)
+        buf.push_u32le(v.s_len)
+        buf.push_bytes(v.s_val, v.s_len)
+    elif v.tag == 5:
+        buf.push_u8(0x06)
+        buf.push_u32le(v.items.len)
+        mut i = 0
+        while i < v.items.len:
+            _pk_encode_into(v.items.get(i), buf)
+            i = i + 1
+    elif v.tag == 6:
+        buf.push_u8(0x07)
+        buf.push_u32le(v.keys.len)
+        mut i = 0
+        while i < v.keys.len:
+            mut k = v.keys.get(i)
+            mut kn = _tr_strlen(k)
+            buf.push_u32le(kn)
+            buf.push_bytes(k, kn)
+            _pk_encode_into(v.items.get(i), buf)
+            i = i + 1
+    else:
+        buf.push_u8(0x00)   # unknown tag -> None (defensive; should not happen)
+
+# ─── Decoder ────────────────────────────────────────────────────────────────
+# Returns (value, next_offset) conceptually; since Tauraro doesn't make ad-hoc
+# tuples of (PVal, int) convenient across recursive calls here, we thread the
+# offset through a 1-element List[int] out-parameter (same pattern used by
+# std/crypto/aes.tr's decrypt_cbc_checked `ok: List[bool]`).
+
+def _pk_decode_at(data: str, off: List[int]) -> PVal:
+    mut tag = _pk_rd_u8(data, off[0])
+    off[0] = off[0] + 1
+    if tag == 0x00:
+        return PVal.init_none()
+    if tag == 0x01:
+        return PVal.init_bool(false)
+    if tag == 0x02:
+        return PVal.init_bool(true)
+    if tag == 0x03:
+        mut n = _pk_rd_u64le(data, off[0])
+        off[0] = off[0] + 8
+        return PVal.init_int(n)
+    if tag == 0x04:
+        mut bits = _pk_rd_u64le(data, off[0])
+        off[0] = off[0] + 8
+        return PVal.init_float(_pk_bits_to_float(bits))
+    if tag == 0x05:
+        mut n = _pk_rd_u32le(data, off[0])
+        off[0] = off[0] + 4
+        mut s = _pk_rd_slice(data, off[0], n)
+        off[0] = off[0] + n
+        return PVal.init_str_n(s, n)
+    if tag == 0x06:
+        mut cnt = _pk_rd_u32le(data, off[0])
+        off[0] = off[0] + 4
+        mut v = PVal.init_list()
+        mut i = 0
+        while i < cnt:
+            v.list_push(_pk_decode_at(data, off))
+            i = i + 1
+        return v
+    if tag == 0x07:
+        mut cnt = _pk_rd_u32le(data, off[0])
+        off[0] = off[0] + 4
+        mut v = PVal.init_map()
+        mut i = 0
+        while i < cnt:
+            mut kn = _pk_rd_u32le(data, off[0])
+            off[0] = off[0] + 4
+            mut k = _pk_rd_slice(data, off[0], kn)
+            off[0] = off[0] + kn
+            mut val = _pk_decode_at(data, off)
+            v.map_set(k, val)
+            i = i + 1
+        return v
+    return PVal.init_none()   # corrupt/unknown tag -> None (defensive)
+
+# ─── Public API ─────────────────────────────────────────────────────────────
+
+pub class Pickle:
+    _dummy: int
+
+extend Pickle:
+    # Serialize a PVal tree to a compact binary byte string. The result MAY
+    # contain embedded NUL bytes, so the true byte length is written into
+    # `out_len[0]` (a 1-element out-parameter list, same convention as
+    # std/crypto/aes.tr's `decrypt_cbc_checked(..., ok: List[bool])`) —
+    # callers must use that length (never `len()`/strlen) when storing or
+    # passing on the result. See `dumps_len` below for a version that
+    # returns the length directly instead.
+    pub def dumps(v: PVal, out_len: List[int]) -> str:
+        mut buf = _PBuf.init(64)
+        _pk_encode_into(v, buf)
+        out_len[0] = buf.len
+        mut out = buf.to_str()
+        buf.free()
+        return out
+
+    # Same as `dumps`, but returns (bytes, length) as a tuple instead of
+    # using an out-parameter — whichever calling convention reads better at
+    # the call site.
+    pub def dumps_len(v: PVal) -> (str, int):
+        mut out_len = [0]
+        mut bytes_ = Pickle.dumps(v, out_len)
+        return (bytes_, out_len[0])
+
+    # Deserialize `len_` bytes of pickled data back into a PVal tree.
+    # `len_` is required explicitly (not inferred via strlen) since pickled
+    # bytes may legitimately contain embedded NULs (e.g. inside strings).
+    pub def loads(data: str, len_: int) -> PVal:
+        mut off = [0]
+        return _pk_decode_at(data, off)
+
+    # ── convenience one-shot helpers for common concrete shapes ──
+    # Each returns (bytes, length) since the encoded length is never known
+    # to the caller ahead of time and must not be recovered via strlen.
+
+    pub def dump_int(n: int) -> (str, int):
+        return Pickle.dumps_len(PVal.init_int(n))
+
+    pub def dump_float(f: float) -> (str, int):
+        return Pickle.dumps_len(PVal.init_float(f))
+
+    pub def dump_bool(b: bool) -> (str, int):
+        return Pickle.dumps_len(PVal.init_bool(b))
+
+    pub def dump_str(s: str) -> (str, int):
+        return Pickle.dumps_len(PVal.init_str(s))
+
+    pub def dump_list_int(xs: List[int]) -> (str, int):
+        mut v = PVal.init_list()
+        mut i = 0
+        while i < len(xs):
+            v.list_push(PVal.init_int(xs[i]))
+            i = i + 1
+        return Pickle.dumps_len(v)
+
+    pub def dump_list_str(xs: List[str]) -> (str, int):
+        mut v = PVal.init_list()
+        mut i = 0
+        while i < len(xs):
+            v.list_push(PVal.init_str(xs[i]))
+            i = i + 1
+        return Pickle.dumps_len(v)
+
+    pub def dump_dict_str_str(d: Dict[str, str]) -> (str, int):
+        mut v = PVal.init_map()
+        for key, val in d.items():
+            v.map_set(key, PVal.init_str(val))
+        return Pickle.dumps_len(v)
+
+    pub def dump_dict_str_int(d: Dict[str, int]) -> (str, int):
+        mut v = PVal.init_map()
+        for key, val in d.items():
+            v.map_set(key, PVal.init_int(val))
+        return Pickle.dumps_len(v)
+
+    # Load helpers: decode straight back to a plain List[int]/List[str]/
+    # Dict[str,V] instead of a PVal tree, for the mirror-image common case.
+    # Non-matching element tags are skipped defensively (never crash on a
+    # shape mismatch — caller can check the returned length against what
+    # they expect).
+    pub def load_list_int(data: str, len_: int) -> List[int]:
+        mut v = Pickle.loads(data, len_)
+        mut out: List[int] = []
+        mut i = 0
+        while i < v.list_len():
+            mut e = v.list_get(i)
+            if e.is_int(): out.append(e.get_int())
+            i = i + 1
+        return out
+
+    pub def load_list_str(data: str, len_: int) -> List[str]:
+        mut v = Pickle.loads(data, len_)
+        mut out: List[str] = []
+        mut i = 0
+        while i < v.list_len():
+            mut e = v.list_get(i)
+            if e.is_str(): out.append(e.get_str())
+            i = i + 1
+        return out

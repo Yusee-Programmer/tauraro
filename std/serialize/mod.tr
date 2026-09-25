@@ -1,0 +1,11 @@
+# std.serialize — Package index.
+#
+# Sub-modules can also be imported directly:
+#
+#   from std.serialize.pickle  import PVal, Pickle
+#   from std.serialize.msgpack import MPVal, Msgpack
+
+from std.serialize.pickle  import PVal
+from std.serialize.pickle  import Pickle
+from std.serialize.msgpack import MPVal
+from std.serialize.msgpack import Msgpack
