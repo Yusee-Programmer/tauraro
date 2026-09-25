@@ -72,6 +72,24 @@ __attribute__((hot)) void ByteBuf_cstr(ByteBuf* self, TrStr s) {
     ByteBuf_u8(self, 0LL);
 }
 
+__attribute__((hot)) void ByteBuf_cstr_len(ByteBuf* self, TrStr s, long long blen) {
+    /* pass */
+    /* unsafe block */
+    /* pass */
+    char* p = ((char*)(_tr_strz(s)));
+    /* pass */
+    long long i = 0LL;
+    /* pass */
+    while ((i < blen)) {
+        /* pass */
+        ByteBuf_u8(self, ((long long)((*(p + i)))));
+        /* pass */
+        i = (i + 1LL);
+    }
+    /* pass */
+    ByteBuf_u8(self, 0LL);
+}
+
 __attribute__((hot)) void ByteBuf_zeros(ByteBuf* self, long long n) {
     /* pass */
     long long i = 0LL;

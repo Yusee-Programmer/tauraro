@@ -1,0 +1,65 @@
+# Regression (bug2.txt BUG 1): _escape_str_for_c/_escape_fmt_for_c (src/codegen/c.tr)
+# used to scan a literal's bytes via "while True: if c == 0: break" instead of the
+# literal's real length -- so a string/byte/raw/pattern literal with an embedded \0
+# silently lost everything after the first zero byte AT COMPILE TIME (the tail bytes
+# were never even emitted into the generated C source, not just hidden from some
+# runtime view of the value).
+#
+# Fixed by threading the literal's true byte length (captured where the lexer's
+# StringBuilder still tracks it accurately) through Token -> Expr/Pattern -> HirExpr
+# -> the escape functions, which now scan exactly `blen` bytes and emit an embedded
+# NUL as the fixed-width octal escape `\000` (never a raw byte, and never a 1-2 digit
+# escape -- both would risk being re-interpreted by later `str` concatenation or by
+# C's own octal/hex escape grammar).
+#
+# SCOPE NOTE: this fixes literal-escaping DATA LOSS at compile time -- the full byte
+# content of a literal, including everything after an embedded \0, is now correctly
+# emitted and present in the compiled binary. It does NOT change the separate, deeper,
+# already-documented limitation that Tauraro's runtime `str` (TrStr) has no length
+# field: `.len()`, `==`, string concatenation, and printf-style formatting are all
+# still NUL-bounded at RUNTIME (they go through C's strlen/strcmp/sprintf, which are
+# themselves NUL-terminated). That gap needs a length field on TrStr itself, a much
+# larger change, and remains out of scope here. This test therefore verifies the byte
+# content directly via pointer-indexed reads, not via `.len()` or `==`.
+
+from std.test import TestRunner
+
+def main():
+    mut t = TestRunner.init("embedded_nul_in_string_literal")
+
+    t.section("plain string literal with an embedded \\0 preserves every byte, not just the prefix")
+    mut s = "ab\0cd"
+    mut p = s as Pointer[char]
+    unsafe:
+        t.assert_eq_int(p.offset(0).read() as int, 97, "byte 0 = 'a'")
+        t.assert_eq_int(p.offset(1).read() as int, 98, "byte 1 = 'b'")
+        t.assert_eq_int(p.offset(2).read() as int, 0, "byte 2 = the embedded NUL")
+        t.assert_eq_int(p.offset(3).read() as int, 99, "byte 3 = 'c' -- previously silently dropped by codegen")
+        t.assert_eq_int(p.offset(4).read() as int, 100, "byte 4 = 'd' -- previously silently dropped by codegen")
+        t.assert_eq_int(p.offset(5).read() as int, 0, "byte 5 = the real C-string terminator")
+
+    t.section("raw string literal with an embedded \\0 preserves every byte")
+    mut rs = r"pq\0rs"
+    # r"..." does NOT interpret escapes, so this is the 6 literal characters
+    # p,q,\,0,r,s -- not a real embedded NUL. Confirms raw strings are unaffected
+    # (their content has no NUL to lose in the first place) and that the length-
+    # threading plumbing didn't break the ordinary, already-working raw-string path.
+    mut rp = rs as Pointer[char]
+    unsafe:
+        t.assert_eq_int(rp.offset(2).read() as int, 92, "raw string keeps the literal backslash")
+        t.assert_eq_int(rp.offset(3).read() as int, 48, "raw string keeps the literal '0' character")
+        t.assert_eq_int(rp.offset(5).read() as int, 115, "raw string's last real character ('s') intact")
+
+    t.section("string literal with \\0 immediately followed by an octal digit doesn't corrupt that digit")
+    # Regression for the escape's own correctness: a naive 1-2 digit octal/hex escape
+    # for the NUL byte would risk C re-absorbing the FOLLOWING digit into the escape
+    # sequence. \000 is always exactly 3 digits, so this can't happen.
+    mut s2 = "x\05y"
+    mut p2 = s2 as Pointer[char]
+    unsafe:
+        t.assert_eq_int(p2.offset(0).read() as int, 120, "byte 0 = 'x'")
+        t.assert_eq_int(p2.offset(1).read() as int, 0, "byte 1 = the embedded NUL")
+        t.assert_eq_int(p2.offset(2).read() as int, 53, "byte 2 = '5' -- NOT absorbed into the NUL's escape sequence")
+        t.assert_eq_int(p2.offset(3).read() as int, 121, "byte 3 = 'y'")
+
+    t.summary()

@@ -442,7 +442,7 @@ extend Sema:
                 case Stmt.SExpr(e):
                     if e as usize != 0 as usize:
                         match e.read():
-                            case Expr.ELitStr(s): return s
+                            case Expr.ELitStr(s, _): return s
                             case _: pass
                     return ""
                 case _: return ""
@@ -1818,9 +1818,9 @@ extend Sema:
             # Leaf/literal variants - nothing to recurse into or mark.
             case HirExpr.ELitInt(_, _): pass
             case HirExpr.ELitFloat(_, _): pass
-            case HirExpr.ELitStr(_, _): pass
-            case HirExpr.ELitBytes(_, _): pass
-            case HirExpr.ERawStr(_, _): pass
+            case HirExpr.ELitStr(_, _, _): pass
+            case HirExpr.ELitBytes(_, _, _): pass
+            case HirExpr.ERawStr(_, _, _): pass
             case HirExpr.ELitChar(_, _): pass
             case HirExpr.ELitBool(_, _): pass
             case HirExpr.ELitNone(_): pass
@@ -2066,9 +2066,9 @@ extend Sema:
             # Leaf/literal variants - nothing to recurse into or mark.
             case HirExpr.ELitInt(_, _): pass
             case HirExpr.ELitFloat(_, _): pass
-            case HirExpr.ELitStr(_, _): pass
-            case HirExpr.ELitBytes(_, _): pass
-            case HirExpr.ERawStr(_, _): pass
+            case HirExpr.ELitStr(_, _, _): pass
+            case HirExpr.ELitBytes(_, _, _): pass
+            case HirExpr.ERawStr(_, _, _): pass
             case HirExpr.ELitChar(_, _): pass
             case HirExpr.ELitBool(_, _): pass
             case HirExpr.ELitNone(_): pass
@@ -2341,7 +2341,7 @@ extend Sema:
                                 match g_val_ptr.read():
                                     case Expr.ELitInt(_): g_ty = box_asttype(AstType.init("int"))
                                     case Expr.ELitFloat(_): g_ty = box_asttype(AstType.init("float"))
-                                    case Expr.ELitStr(_): g_ty = box_asttype(AstType.init("str"))
+                                    case Expr.ELitStr(_, _): g_ty = box_asttype(AstType.init("str"))
                                     case Expr.ELitBool(_): g_ty = box_asttype(AstType.init("bool"))
                                     case _: pass
                             if g_ty as usize != 0 as usize:
@@ -4943,9 +4943,9 @@ extend Sema:
         match e:
             case Expr.ELitInt(v): return box_hirexpr(HirExpr.ELitInt(v, AstType.init("int")))
             case Expr.ELitFloat(v): return box_hirexpr(HirExpr.ELitFloat(v, AstType.init("float")))
-            case Expr.ELitStr(v): return box_hirexpr(HirExpr.ELitStr(v, AstType.init("str")))
-            case Expr.ERawStr(v): return box_hirexpr(HirExpr.ERawStr(v, AstType.init("str")))
-            case Expr.ELitBytes(v): return box_hirexpr(HirExpr.ELitBytes(v, AstType.init("Bytes")))
+            case Expr.ELitStr(v, blen): return box_hirexpr(HirExpr.ELitStr(v, blen, AstType.init("str")))
+            case Expr.ERawStr(v, blen): return box_hirexpr(HirExpr.ERawStr(v, blen, AstType.init("str")))
+            case Expr.ELitBytes(v, blen): return box_hirexpr(HirExpr.ELitBytes(v, blen, AstType.init("Bytes")))
             case Expr.ELitBool(v): return box_hirexpr(HirExpr.ELitBool(v, AstType.init("bool")))
             case Expr.ELitChar(v): return box_hirexpr(HirExpr.ELitChar(v, AstType.init("char")))
             case Expr.ELitNone: return box_hirexpr(HirExpr.ELitNone(AstType.init("None")))
@@ -5005,7 +5005,7 @@ extend Sema:
                         if lname == "": lname = hir_expr_type(hleft).name
                         mut rname = rref
                         if rname == "": rname = hir_expr_type(hright).name
-                        return box_hirexpr(HirExpr.EBinOp(op, box_hirexpr(HirExpr.ELitStr(lname, AstType.init("str"))), box_hirexpr(HirExpr.ELitStr(rname, AstType.init("str"))), AstType.init("bool")))
+                        return box_hirexpr(HirExpr.EBinOp(op, box_hirexpr(HirExpr.ELitStr(lname, lname.len(), AstType.init("str"))), box_hirexpr(HirExpr.ELitStr(rname, rname.len(), AstType.init("str"))), AstType.init("bool")))
                 mut bin_ty = hir_expr_type(hleft)
                 if bin_ty.name == "void": bin_ty = hir_expr_type(hright)
                 if op == "==" or op == "!=" or op == "<" or op == ">" or op == "<=" or op == ">=" or op == "and" or op == "or" or op == "&&" or op == "||" or op == "in" or op == "not in":
@@ -5069,7 +5069,7 @@ extend Sema:
                             if ato_n == "inspect":
                                 if args.len < 1:
                                     self.error("inspect requires 1 argument: inspect(T)")
-                                    return box_hirexpr(HirExpr.ELitStr("", AstType.init("str")))
+                                    return box_hirexpr(HirExpr.ELitStr("", 0, AstType.init("str")))
                                 mut isp_target_n = ""
                                 match args.get(0).read():
                                     case Expr.EIdent(isp_tn): isp_target_n = isp_tn
@@ -5081,7 +5081,8 @@ extend Sema:
                                 if isp_target_n == "":
                                     mut isp_obj = self.lower_expr(args.get(0))
                                     isp_target_n = hir_expr_type(isp_obj).name
-                                return box_hirexpr(HirExpr.ELitStr(self.build_inspect_str(isp_target_n), AstType.init("str")))
+                                mut isp_str = self.build_inspect_str(isp_target_n)
+                                return box_hirexpr(HirExpr.ELitStr(isp_str, isp_str.len(), AstType.init("str")))
                         case _: pass
                 # iterate AST args - mark borrows and detect aliasing
                 mut p23_borrow_names = Vec[str].init(4)
@@ -6199,6 +6200,7 @@ extend Sema:
                     mut hp = HirFStringPart.init()
                     hp.is_expr  = p_ast.is_expr
                     hp.text     = p_ast.text
+                    hp.text_len = p_ast.text_len
                     hp.fmt_spec = p_ast.fmt_spec
                     hp.expr     = self.lower_expr(p_ast.expr)
                     hparts.push(hp)

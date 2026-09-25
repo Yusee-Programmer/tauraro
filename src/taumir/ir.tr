@@ -62,6 +62,17 @@ pub def box_linst(i: LInst) -> Pointer[LInst]:
         p.write(i)
         return p
 
+# Exact byte comparison bounded by an explicit length, for LModule.add_string's
+# dedup check -- see the comment there for why `str`'s built-in `==` isn't safe.
+def _ir_bytes_eq(a: str, b: str, n: int) -> bool:
+    mut pa = a as Pointer[char]
+    mut pb = b as Pointer[char]
+    mut i = 0
+    while i < n:
+        if pa.offset(i).read() != pb.offset(i).read(): return false
+        i = i + 1
+    return true
+
 pub class LBlock:
     pub id:    int
     pub insts: Vec[Pointer[LInst]]
@@ -337,6 +348,7 @@ pub class LModule:
     pub fn_names: Vec[str]      # user function names (defined in this module; call targets)
     pub fn_ret:   Vec[int]      # parallel to fn_names: return value-type tag (0/1/2/3/4)
     pub strings:  Vec[str]      # string literals -> .rodata (each NUL-terminated)
+    pub string_lens: Vec[int]   # parallel to `strings`: true byte length (embedded-NUL-safe; see add_string)
     pub globals:      Vec[str]              # module-level variable names (-> .bss slots)
     pub global_types: Vec[int]              # parallel to globals: value-type tag
     pub global_arr:   Vec[int]              # parallel to globals: fixed-array length N (`[T;N]`), else 0
@@ -373,6 +385,7 @@ extend LModule:
         m.fn_names = Vec[str].init(8)
         m.fn_ret   = Vec[int].init(8)
         m.strings  = Vec[str].init(4)
+        m.string_lens = Vec[int].init(4)
         m.globals      = Vec[str].init(4)
         m.global_types = Vec[int].init(4)
         m.global_arr   = Vec[int].init(4)
@@ -470,12 +483,20 @@ extend LModule:
         return 0
 
     # Intern a string literal, returning its index in the .rodata table.
-    pub def add_string(self, s: str) -> int:
+    # `blen` is the literal's true byte length (see HirExpr.ELitStr) -- the
+    # dedup check below must compare exactly that many bytes rather than use
+    # Tauraro's built-in `==` (which, like everything else on the NUL-
+    # terminated `str` type, would stop comparing at the first embedded \0
+    # and could wrongly dedupe two DIFFERENT literals that merely share the
+    # same prefix up to their first zero byte).
+    pub def add_string(self, s: str, blen: int) -> int:
         mut i = 0
         while i < self.strings.len:
-            if self.strings.get(i) == s: return i
+            if self.string_lens.get(i) == blen and _ir_bytes_eq(self.strings.get(i), s, blen):
+                return i
             i = i + 1
         self.strings.push(s)
+        self.string_lens.push(blen)
         return self.strings.len - 1
 
     pub def add_extern(self, name: str):

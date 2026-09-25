@@ -110,13 +110,15 @@ __attribute__((malloc,returns_nonnull,hot)) MatchArm* MatchArm_init(Pattern pat,
     return a;
 }
 
-__attribute__((hot)) FStringPart* FStringPart_init_text(TrStr s) {
+__attribute__((hot)) FStringPart* FStringPart_init_text(TrStr s, long long blen) {
     /* pass */
     FStringPart* p = ((FStringPart*)_tr_obj_alloc(sizeof(FStringPart)));
     /* pass */
     p->is_expr = false;
     /* pass */
     p->text = _tr_str_retain(s);
+    /* pass */
+    p->text_len = blen;
     /* pass */
     p->expr = (Expr*)(0LL);
     /* pass */
@@ -133,6 +135,8 @@ __attribute__((hot)) FStringPart* FStringPart_init_expr(Expr* e) {
     /* pass */
     p->text = _tr_str_lit("");
     /* pass */
+    p->text_len = 0LL;
+    /* pass */
     p->expr = e;
     /* pass */
     p->fmt_spec = _tr_str_lit("");
@@ -147,6 +151,8 @@ __attribute__((hot)) FStringPart* FStringPart_init_expr_fmt(Expr* e, TrStr spec)
     p->is_expr = true;
     /* pass */
     p->text = _tr_str_lit("");
+    /* pass */
+    p->text_len = 0LL;
     /* pass */
     p->expr = e;
     /* pass */

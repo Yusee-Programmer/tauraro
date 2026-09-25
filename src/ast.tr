@@ -81,7 +81,7 @@ pub enum Pattern:
     PWild
     PBind(name: str)
     PLitInt(val: int)
-    PLitStr(val: str)
+    PLitStr(val: str, blen: int)
     PLitBool(val: bool)
     PVariant(type_name: str, variant: str)
     PVariantBind(type_name: str, variant: str, field: str)
@@ -140,14 +140,16 @@ extend MatchArm:
 pub class FStringPart:
     pub is_expr:  bool
     pub text:     str
+    pub text_len: int    # true byte length of `text` (embedded-NUL-safe; see PLitStr)
     pub expr:     Pointer[Expr]
     pub fmt_spec: str    # e.g. ".2f", ">10", "05d" - empty means default
 
 extend FStringPart:
-    pub def init_text(s: str) -> FStringPart:
+    pub def init_text(s: str, blen: int) -> FStringPart:
         mut p = FStringPart()
         p.is_expr  = false
         p.text     = s
+        p.text_len = blen
         p.expr     = Pointer[Expr](0)
         p.fmt_spec = ""
         return p
@@ -156,6 +158,7 @@ extend FStringPart:
         mut p = FStringPart()
         p.is_expr  = true
         p.text     = ""
+        p.text_len = 0
         p.expr     = e
         p.fmt_spec = ""
         return p
@@ -164,6 +167,7 @@ extend FStringPart:
         mut p = FStringPart()
         p.is_expr  = true
         p.text     = ""
+        p.text_len = 0
         p.expr     = e
         p.fmt_spec = spec
         return p
@@ -173,11 +177,11 @@ extend FStringPart:
 pub enum Expr:
     ELitInt(val: int)
     ELitFloat(val: float)
-    ELitStr(val: str)
+    ELitStr(val: str, blen: int)
     ELitBool(val: bool)
     ELitChar(val: int)
-    ELitBytes(val: str)
-    ERawStr(val: str)
+    ELitBytes(val: str, blen: int)
+    ERawStr(val: str, blen: int)
     ELitNone
     EIdent(name: str)
     EBinOp(op: str, left: Pointer[Expr], right: Pointer[Expr])

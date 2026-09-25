@@ -1,5 +1,6 @@
 #include "tauraro_types.h"
 
+bool _ir_bytes_eq(TrStr a, TrStr b, long long n);
 
 __attribute__((malloc,returns_nonnull,hot)) LBlock* LBlock_init(long long id) {
     /* pass */
@@ -113,22 +114,22 @@ __attribute__((hot)) void LFunc_set_term(LFunc* self, LTerm t) {
     /* pass */
     LBlock* b = ((LBlock*)List_ptr_get(self->blocks, self->cur));
     /* pass */
-    __auto_type _t3165 = b->term;
-    if (_t3165.tag == LTerm_TUnset) {
+    __auto_type _t3164 = b->term;
+    if (_t3164.tag == LTerm_TUnset) {
         b->term = t;
     } else if (1) {
-        __auto_type _ = _t3165;
+        __auto_type _ = _t3164;
         /* pass */
     }
 }
 
 __attribute__((hot)) bool LFunc_cur_terminated(LFunc* self) {
     /* pass */
-    __auto_type _t3166 = ((LBlock*)List_ptr_get(self->blocks, self->cur))->term;
-    if (_t3166.tag == LTerm_TUnset) {
+    __auto_type _t3165 = ((LBlock*)List_ptr_get(self->blocks, self->cur))->term;
+    if (_t3165.tag == LTerm_TUnset) {
         return false;
     } else if (1) {
-        __auto_type _ = _t3166;
+        __auto_type _ = _t3165;
         return true;
     }
 }
@@ -428,6 +429,8 @@ __attribute__((malloc,returns_nonnull,hot)) LModule* LModule_init() {
     /* pass */
     m->strings = (void*)List_TrStr_new();
     /* pass */
+    m->string_lens = (void*)List_i64_new();
+    /* pass */
     m->globals = (void*)List_TrStr_new();
     /* pass */
     m->global_types = (void*)List_i64_new();
@@ -533,9 +536,9 @@ __attribute__((hot)) TrStr LModule_resolve_method_ov(LModule* self, TrStr cls, T
             return mangled;
         }
         /* pass */
-        TrStr _strtmp_t3167 = _tr_str_retain(((ClassLayout*)List_ptr_get(self->classes, ci))->base);
+        TrStr _strtmp_t3166 = _tr_str_retain(((ClassLayout*)List_ptr_get(self->classes, ci))->base);
         _tr_str_release(cur);
-        cur = _strtmp_t3167;
+        cur = _strtmp_t3166;
         /* pass */
         if (((((unsigned long long)(((char*)(_tr_strz(cur))))) == ((unsigned long long)(0LL))) || (strcmp(_tr_strz(cur), _tr_strz(_tr_str_lit(""))) == 0))) {
             /* pass */
@@ -646,13 +649,13 @@ __attribute__((hot)) long long LModule_fn_ret_tag(LModule* self, TrStr name) {
     return 0LL;
 }
 
-__attribute__((hot)) long long LModule_add_string(LModule* self, TrStr s) {
+__attribute__((hot)) long long LModule_add_string(LModule* self, TrStr s, long long blen) {
     /* pass */
     long long i = 0LL;
     /* pass */
     while ((i < self->strings->len)) {
         /* pass */
-        if ((strcmp(_tr_strz(List_TrStr_get(self->strings, i)), _tr_strz(s)) == 0)) {
+        if (({ TrStr _at_t3167 = (List_TrStr_get(self->strings, i)); __auto_type _wr = (((List_i64_get(self->string_lens, i) == blen) && _ir_bytes_eq(_at_t3167, s, blen))); _tr_str_release(_at_t3167); _wr; })) {
             /* pass */
             return i;
         }
@@ -661,6 +664,8 @@ __attribute__((hot)) long long LModule_add_string(LModule* self, TrStr s) {
     }
     /* pass */
     List_TrStr_append(self->strings, s);
+    /* pass */
+    List_i64_append(self->string_lens, blen);
     /* pass */
     return (self->strings->len - 1LL);
 }
@@ -1060,5 +1065,26 @@ __attribute__((hot)) LInst* box_linst(LInst i) {
     (*p = i);
     /* pass */
     return p;
+}
+
+__attribute__((hot)) bool _ir_bytes_eq(TrStr a, TrStr b, long long n) {
+    /* pass */
+    char* pa = ((char*)(_tr_strz(a)));
+    /* pass */
+    char* pb = ((char*)(_tr_strz(b)));
+    /* pass */
+    long long i = 0LL;
+    /* pass */
+    while ((i < n)) {
+        /* pass */
+        if (((*(pa + i)) != (*(pb + i)))) {
+            /* pass */
+            return false;
+        }
+        /* pass */
+        i = (i + 1LL);
+    }
+    /* pass */
+    return true;
 }
 

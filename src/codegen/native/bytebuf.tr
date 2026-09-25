@@ -54,6 +54,23 @@ extend ByteBuf:
                 i = i + 1
         self.u8(0)
 
+    # Like cstr but for a Tauraro STRING LITERAL's .rodata bytes, where `blen`
+    # is the literal's true byte length (see LModule.add_string) rather than
+    # the NUL-terminated scan cstr() uses -- needed so a literal with an
+    # embedded \0 (byte-strings exist specifically for this) isn't silently
+    # truncated when written into the object file. This is a raw binary
+    # write (not source-text generation), so unlike the C backend's escaping
+    # there's no ambiguity to dodge: every byte, including any embedded
+    # zero, is written exactly as-is, followed by one real terminating NUL.
+    pub def cstr_len(self, s: str, blen: int):
+        unsafe:
+            mut p = s as Pointer[char]
+            mut i = 0
+            while i < blen:
+                self.u8(p.offset(i).read() as int)
+                i = i + 1
+        self.u8(0)
+
     pub def zeros(self, n: int):
         mut i = 0
         while i < n:

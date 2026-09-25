@@ -160,6 +160,7 @@ bool _is_param(LFunc* lf, TrStr name);
 long long _norm_bool(LFunc* lf, long long v);
 long long _str_call0(LModule* m, LFunc* lf, TrStr sym, long long _tr_v_recv, long long restype);
 long long _heap_lit(LModule* m, LFunc* lf, TrStr s);
+long long _heap_lit_len(LModule* m, LFunc* lf, TrStr s, long long blen);
 long long _obj_to_str(LModule* m, LFunc* lf, HirExpr* objexpr, long long objreg);
 long long _obj_repr(LModule* m, LFunc* lf, HirExpr* objexpr, long long objreg);
 long long _reg_to_str(LModule* m, LFunc* lf, long long reg);
@@ -6275,7 +6276,7 @@ __auto_type wbody = _t3270.data.SWith.body;
             /* pass */
             long long w_es = LFunc_new_vreg(lf);
             /* pass */
-            LFunc_emit(lf, LInst_ctor_IStr(w_es, LModule_add_string(m, _tr_str_lit(""))));
+            LFunc_emit(lf, LInst_ctor_IStr(w_es, LModule_add_string(m, _tr_str_lit(""), 0LL)));
             /* pass */
             LFunc_set_vreg_type(lf, w_es, 1LL);
             /* pass */
@@ -6821,13 +6822,14 @@ __attribute__((hot)) long long _lit_pat_cond(LModule* m, LFunc* lf, Pattern pat,
         return db;
     } else if (_t3281.tag == Pattern_PLitStr) {
         __auto_type sv = _t3281.data.PLitStr.val;
+__auto_type sv_blen = _t3281.data.PLitStr.blen;
         /* pass */
         if ((st != 1LL)) {
             /* pass */
             return (-1LL);
         }
         /* pass */
-        long long idx = LModule_add_string(m, sv);
+        long long idx = LModule_add_string(m, sv, sv_blen);
         /* pass */
         long long lit = LFunc_new_vreg(lf);
         /* pass */
@@ -10402,7 +10404,12 @@ __attribute__((hot)) long long _str_call0(LModule* m, LFunc* lf, TrStr sym, long
 
 __attribute__((hot)) long long _heap_lit(LModule* m, LFunc* lf, TrStr s) {
     /* pass */
-    long long idx = LModule_add_string(m, s);
+    return _heap_lit_len(m, lf, s, _tr_strlen(_tr_strz(s)));
+}
+
+__attribute__((hot)) long long _heap_lit_len(LModule* m, LFunc* lf, TrStr s, long long blen) {
+    /* pass */
+    long long idx = LModule_add_string(m, s, blen);
     /* pass */
     long long ds = LFunc_new_vreg(lf);
     /* pass */
@@ -12050,8 +12057,9 @@ __attribute__((hot)) long long _lower_expr_impl(LModule* m, LFunc* lf, HirExpr* 
         return d;
     } else if (_t3354.tag == HirExpr_ELitStr) {
         __auto_type sv = _t3354.data.ELitStr.val;
+__auto_type sv_blen = _t3354.data.ELitStr.blen;
         /* pass */
-        long long idx = LModule_add_string(m, sv);
+        long long idx = LModule_add_string(m, sv, sv_blen);
         /* pass */
         long long ds = LFunc_new_vreg(lf);
         /* pass */
@@ -12246,8 +12254,9 @@ __auto_type geety = _t3354.data.EGeneratorExpr.ty;
         return nnull;
     } else if (_t3354.tag == HirExpr_ERawStr) {
         __auto_type rsv = _t3354.data.ERawStr.val;
+__auto_type rsv_blen = _t3354.data.ERawStr.blen;
         /* pass */
-        long long ridx = LModule_add_string(m, rsv);
+        long long ridx = LModule_add_string(m, rsv, rsv_blen);
         /* pass */
         long long rds = LFunc_new_vreg(lf);
         /* pass */
@@ -15506,7 +15515,7 @@ __auto_type dty = _t3354.data.EDict.ty;
                         return (-1LL);
                     }
                     /* pass */
-                    long long spidx = LModule_add_string(m, fp->fmt_spec);
+                    long long spidx = LModule_add_string(m, fp->fmt_spec, _tr_strlen(_tr_strz(fp->fmt_spec)));
                     /* pass */
                     long long specv = LFunc_new_vreg(lf);
                     /* pass */
@@ -15571,7 +15580,7 @@ __auto_type dty = _t3354.data.EDict.ty;
                 }
             } else {
                 /* pass */
-                pr = _heap_lit(m, lf, fp->text);
+                pr = _heap_lit_len(m, lf, fp->text, fp->text_len);
             }
             /* pass */
             LModule_add_extern(m, _tr_str_lit("_tr_rt_str_concat"));

@@ -2548,10 +2548,11 @@ __attribute__((hot)) Pattern Parser_parse_pattern(Parser* self) {
         return Pattern_ctor_PLitBool(false);
     } else if (_t106.tag == Token_StrLit) {
         __auto_type s = _t106.data.StrLit.val;
+__auto_type blen = _t106.data.StrLit.blen;
         /* pass */
         self->pos = (self->pos + 1LL);
         /* pass */
-        return Pattern_ctor_PLitStr(s);
+        return Pattern_ctor_PLitStr(s, blen);
     } else if (1) {
         __auto_type _ = _t106;
         /* pass */
@@ -3508,34 +3509,39 @@ __attribute__((hot)) Expr* Parser_parse_primary(Parser* self) {
         return box_expr(Expr_ctor_ELitFloat(v));
     } else if (_t135.tag == Token_StrLit) {
         __auto_type s = _t135.data.StrLit.val;
+__auto_type blen = _t135.data.StrLit.blen;
         /* pass */
         self->pos = (self->pos + 1LL);
         /* pass */
-        return box_expr(Expr_ctor_ELitStr(s));
+        return box_expr(Expr_ctor_ELitStr(s, blen));
     } else if (_t135.tag == Token_TripleStrLit) {
         __auto_type s = _t135.data.TripleStrLit.val;
+__auto_type blen = _t135.data.TripleStrLit.blen;
         /* pass */
         self->pos = (self->pos + 1LL);
         /* pass */
-        return box_expr(Expr_ctor_ELitStr(s));
+        return box_expr(Expr_ctor_ELitStr(s, blen));
     } else if (_t135.tag == Token_RawStrLit) {
         __auto_type s = _t135.data.RawStrLit.val;
+__auto_type blen = _t135.data.RawStrLit.blen;
         /* pass */
         self->pos = (self->pos + 1LL);
         /* pass */
-        return box_expr(Expr_ctor_ERawStr(s));
+        return box_expr(Expr_ctor_ERawStr(s, blen));
     } else if (_t135.tag == Token_ByteStrLit) {
         __auto_type s = _t135.data.ByteStrLit.val;
+__auto_type blen = _t135.data.ByteStrLit.blen;
         /* pass */
         self->pos = (self->pos + 1LL);
         /* pass */
-        return box_expr(Expr_ctor_ELitBytes(s));
+        return box_expr(Expr_ctor_ELitBytes(s, blen));
     } else if (_t135.tag == Token_FStrLit) {
         __auto_type s = _t135.data.FStrLit.val;
+__auto_type blen = _t135.data.FStrLit.blen;
         /* pass */
         self->pos = (self->pos + 1LL);
         /* pass */
-        return Parser_parse_fstring(self, s);
+        return Parser_parse_fstring(self, s, blen);
     } else if (_t135.tag == Token_CharLit) {
         __auto_type v = _t135.data.CharLit.val;
         /* pass */
@@ -4101,10 +4107,11 @@ __auto_type finally_b = _t142.data.STry.finally_b;
         return box_expr(Expr_ctor_EClosure(params, return_type, body, is_async));
     } else if (_t135.tag == Token_FStrLit) {
         __auto_type raw = _t135.data.FStrLit.val;
+__auto_type raw_blen = _t135.data.FStrLit.blen;
         /* pass */
         self->pos = (self->pos + 1LL);
         /* pass */
-        return Parser_parse_fstring(self, raw);
+        return Parser_parse_fstring(self, raw, raw_blen);
     } else if (1) {
         __auto_type _ = _t135;
         /* pass */
@@ -4245,7 +4252,7 @@ __auto_type finally_b = _t142.data.STry.finally_b;
     return box_expr(Expr_make_ELitNone());
 }
 
-__attribute__((hot)) Expr* Parser_parse_fstring(Parser* self, TrStr raw) {
+__attribute__((hot)) Expr* Parser_parse_fstring(Parser* self, TrStr raw, long long raw_blen) {
     /* pass */
     List_ptr* fl = (void*)List_ptr_new();
     /* pass */
@@ -4255,20 +4262,15 @@ __attribute__((hot)) Expr* Parser_parse_fstring(Parser* self, TrStr raw) {
     /* pass */
     StringBuilder* sb = StringBuilder_init(64LL);
     /* pass */
-    while (true) {
+    while ((i < raw_blen)) {
         /* pass */
         long long c = ((long long)((*(p + i))));
-        /* pass */
-        if ((c == 0LL)) {
-            /* pass */
-            break;
-        }
         /* pass */
         if ((c == 123LL)) {
             /* pass */
             if ((sb->buf->len > 0LL)) {
                 /* pass */
-                ({ TrStr _at_t172 = (StringObj_as_str(StringBuilder_to_string(sb))); List_ptr_append(fl, FStringPart_init_text(_at_t172)); _tr_str_release(_at_t172); });
+                ({ TrStr _at_t172 = (StringBuilder_to_owned(sb)); List_ptr_append(fl, FStringPart_init_text(_at_t172, sb->buf->len)); _tr_str_release(_at_t172); });
                 /* pass */
                 sb = StringBuilder_init(64LL);
             }
@@ -4279,14 +4281,9 @@ __attribute__((hot)) Expr* Parser_parse_fstring(Parser* self, TrStr raw) {
             /* pass */
             long long depth = 1LL;
             /* pass */
-            while ((depth > 0LL)) {
+            while (((depth > 0LL) && (i < raw_blen))) {
                 /* pass */
                 long long ec = ((long long)((*(p + i))));
-                /* pass */
-                if ((ec == 0LL)) {
-                    /* pass */
-                    break;
-                }
                 /* pass */
                 if ((ec == 123LL)) {
                     /* pass */
@@ -4351,6 +4348,39 @@ __attribute__((hot)) Expr* Parser_parse_fstring(Parser* self, TrStr raw) {
             _tr_str_release(expr_str);
             StringBuilder__tr_fn_free(expr_sb);
             _tr_obj_release(lexer, _trdrop_Lexer);
+        } else if (((c == 92LL) && ((i + 1LL) < raw_blen))) {
+            /* pass */
+            long long esc = ((long long)((*(p + (i + 1LL)))));
+            /* pass */
+            if ((esc == 110LL)) {
+                /* pass */
+                StringBuilder_append_char(sb, 10LL);
+            } else if ((esc == 116LL)) {
+                /* pass */
+                StringBuilder_append_char(sb, 9LL);
+            } else if ((esc == 114LL)) {
+                /* pass */
+                StringBuilder_append_char(sb, 13LL);
+            } else if ((esc == 92LL)) {
+                /* pass */
+                StringBuilder_append_char(sb, 92LL);
+            } else if ((esc == 39LL)) {
+                /* pass */
+                StringBuilder_append_char(sb, 39LL);
+            } else if ((esc == 34LL)) {
+                /* pass */
+                StringBuilder_append_char(sb, 34LL);
+            } else if ((esc == 48LL)) {
+                /* pass */
+                StringBuilder_append_char(sb, 0LL);
+            } else {
+                /* pass */
+                StringBuilder_append_char(sb, 92LL);
+                /* pass */
+                StringBuilder_append_char(sb, esc);
+            }
+            /* pass */
+            i = (i + 2LL);
         } else {
             /* pass */
             StringBuilder_append_char(sb, c);
@@ -4361,7 +4391,7 @@ __attribute__((hot)) Expr* Parser_parse_fstring(Parser* self, TrStr raw) {
     /* pass */
     if ((sb->buf->len > 0LL)) {
         /* pass */
-        ({ TrStr _at_t175 = (StringObj_as_str(StringBuilder_to_string(sb))); List_ptr_append(fl, FStringPart_init_text(_at_t175)); _tr_str_release(_at_t175); });
+        ({ TrStr _at_t175 = (StringBuilder_to_owned(sb)); List_ptr_append(fl, FStringPart_init_text(_at_t175, sb->buf->len)); _tr_str_release(_at_t175); });
     }
     /* pass */
     StringBuilder__tr_fn_free(sb);

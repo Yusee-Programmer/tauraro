@@ -270,8 +270,8 @@ extend MacroCtx:
     pub def eval_mexpr(self, eptr: Pointer[Expr]) -> Pointer[MacroVal]:
         if eptr as usize == 0 as usize: return box_mv(MacroVal.MNil)
         match eptr.read():
-            case Expr.ELitStr(s): return box_mv(MacroVal.MStr(s))
-            case Expr.ERawStr(s): return box_mv(MacroVal.MStr(s))
+            case Expr.ELitStr(s, _): return box_mv(MacroVal.MStr(s))
+            case Expr.ERawStr(s, _): return box_mv(MacroVal.MStr(s))
             case Expr.ELitInt(n): return box_mv(MacroVal.MInt(n))
             case Expr.ELitBool(b): return box_mv(MacroVal.MBool(b))
             case Expr.EIdent(name):
@@ -456,8 +456,8 @@ def kind_of(e: Pointer[Expr]) -> str:
     match e.read():
         case Expr.ELitInt(_): return "int"
         case Expr.ELitFloat(_): return "float"
-        case Expr.ELitStr(_): return "str"
-        case Expr.ERawStr(_): return "str"
+        case Expr.ELitStr(_, _): return "str"
+        case Expr.ERawStr(_, _): return "str"
         case Expr.ELitBool(_): return "bool"
         case Expr.ELitChar(_): return "char"
         case Expr.EIdent(_): return "ident"

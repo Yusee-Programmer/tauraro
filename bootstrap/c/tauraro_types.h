@@ -336,21 +336,26 @@ typedef struct Token {
         } FloatLit;
         struct {
             TrStr val;
+            long long blen;
         } StrLit;
         struct {
             TrStr val;
+            long long blen;
         } TripleStrLit;
         struct {
             TrStr val;
+            long long blen;
         } ByteStrLit;
         struct {
             TrStr val;
+            long long blen;
         } RawStrLit;
         struct {
             long long val;
         } CharLit;
         struct {
             TrStr val;
+            long long blen;
         } FStrLit;
         struct {
             bool val;
@@ -366,12 +371,12 @@ typedef struct Token {
 
 static inline __attribute__((always_inline)) Token Token_ctor_IntLit(long long val) { Token _r = {.tag=Token_IntLit}; _r.data.IntLit.val = val; return _r; }
 static inline __attribute__((always_inline)) Token Token_ctor_FloatLit(double val) { Token _r = {.tag=Token_FloatLit}; _r.data.FloatLit.val = val; return _r; }
-static inline __attribute__((always_inline)) Token Token_ctor_StrLit(TrStr val) { Token _r = {.tag=Token_StrLit}; _r.data.StrLit.val = _tr_str_retain(val); return _r; }
-static inline __attribute__((always_inline)) Token Token_ctor_TripleStrLit(TrStr val) { Token _r = {.tag=Token_TripleStrLit}; _r.data.TripleStrLit.val = _tr_str_retain(val); return _r; }
-static inline __attribute__((always_inline)) Token Token_ctor_ByteStrLit(TrStr val) { Token _r = {.tag=Token_ByteStrLit}; _r.data.ByteStrLit.val = _tr_str_retain(val); return _r; }
-static inline __attribute__((always_inline)) Token Token_ctor_RawStrLit(TrStr val) { Token _r = {.tag=Token_RawStrLit}; _r.data.RawStrLit.val = _tr_str_retain(val); return _r; }
+static inline __attribute__((always_inline)) Token Token_ctor_StrLit(TrStr val, long long blen) { Token _r = {.tag=Token_StrLit}; _r.data.StrLit.val = _tr_str_retain(val); _r.data.StrLit.blen = blen; return _r; }
+static inline __attribute__((always_inline)) Token Token_ctor_TripleStrLit(TrStr val, long long blen) { Token _r = {.tag=Token_TripleStrLit}; _r.data.TripleStrLit.val = _tr_str_retain(val); _r.data.TripleStrLit.blen = blen; return _r; }
+static inline __attribute__((always_inline)) Token Token_ctor_ByteStrLit(TrStr val, long long blen) { Token _r = {.tag=Token_ByteStrLit}; _r.data.ByteStrLit.val = _tr_str_retain(val); _r.data.ByteStrLit.blen = blen; return _r; }
+static inline __attribute__((always_inline)) Token Token_ctor_RawStrLit(TrStr val, long long blen) { Token _r = {.tag=Token_RawStrLit}; _r.data.RawStrLit.val = _tr_str_retain(val); _r.data.RawStrLit.blen = blen; return _r; }
 static inline __attribute__((always_inline)) Token Token_ctor_CharLit(long long val) { Token _r = {.tag=Token_CharLit}; _r.data.CharLit.val = val; return _r; }
-static inline __attribute__((always_inline)) Token Token_ctor_FStrLit(TrStr val) { Token _r = {.tag=Token_FStrLit}; _r.data.FStrLit.val = _tr_str_retain(val); return _r; }
+static inline __attribute__((always_inline)) Token Token_ctor_FStrLit(TrStr val, long long blen) { Token _r = {.tag=Token_FStrLit}; _r.data.FStrLit.val = _tr_str_retain(val); _r.data.FStrLit.blen = blen; return _r; }
 static inline __attribute__((always_inline)) Token Token_ctor_BoolLit(bool val) { Token _r = {.tag=Token_BoolLit}; _r.data.BoolLit.val = val; return _r; }
 static inline __attribute__((always_inline)) Token Token_ctor_Ident(TrStr name) { Token _r = {.tag=Token_Ident}; _r.data.Ident.name = _tr_str_retain(name); return _r; }
 #define Token_make_KwDef() ((Token){.tag=Token_KwDef})
@@ -543,6 +548,7 @@ typedef struct Pattern {
         } PLitInt;
         struct {
             TrStr val;
+            long long blen;
         } PLitStr;
         struct {
             bool val;
@@ -574,7 +580,7 @@ typedef struct Pattern {
 #define Pattern_make_PWild() ((Pattern){.tag=Pattern_PWild})
 static inline __attribute__((always_inline)) Pattern Pattern_ctor_PBind(TrStr name) { Pattern _r = {.tag=Pattern_PBind}; _r.data.PBind.name = _tr_str_retain(name); return _r; }
 static inline __attribute__((always_inline)) Pattern Pattern_ctor_PLitInt(long long val) { Pattern _r = {.tag=Pattern_PLitInt}; _r.data.PLitInt.val = val; return _r; }
-static inline __attribute__((always_inline)) Pattern Pattern_ctor_PLitStr(TrStr val) { Pattern _r = {.tag=Pattern_PLitStr}; _r.data.PLitStr.val = _tr_str_retain(val); return _r; }
+static inline __attribute__((always_inline)) Pattern Pattern_ctor_PLitStr(TrStr val, long long blen) { Pattern _r = {.tag=Pattern_PLitStr}; _r.data.PLitStr.val = _tr_str_retain(val); _r.data.PLitStr.blen = blen; return _r; }
 static inline __attribute__((always_inline)) Pattern Pattern_ctor_PLitBool(bool val) { Pattern _r = {.tag=Pattern_PLitBool}; _r.data.PLitBool.val = val; return _r; }
 static inline __attribute__((always_inline)) Pattern Pattern_ctor_PVariant(TrStr type_name, TrStr variant) { Pattern _r = {.tag=Pattern_PVariant}; _r.data.PVariant.type_name = _tr_str_retain(type_name); _r.data.PVariant.variant = _tr_str_retain(variant); return _r; }
 static inline __attribute__((always_inline)) Pattern Pattern_ctor_PVariantBind(TrStr type_name, TrStr variant, TrStr field) { Pattern _r = {.tag=Pattern_PVariantBind}; _r.data.PVariantBind.type_name = _tr_str_retain(type_name); _r.data.PVariantBind.variant = _tr_str_retain(variant); _r.data.PVariantBind.field = _tr_str_retain(field); return _r; }
@@ -648,6 +654,7 @@ typedef struct Expr {
         } ELitFloat;
         struct {
             TrStr val;
+            long long blen;
         } ELitStr;
         struct {
             bool val;
@@ -657,9 +664,11 @@ typedef struct Expr {
         } ELitChar;
         struct {
             TrStr val;
+            long long blen;
         } ELitBytes;
         struct {
             TrStr val;
+            long long blen;
         } ERawStr;
         struct {
             TrStr name;
@@ -792,11 +801,11 @@ typedef struct Expr {
 
 static inline __attribute__((always_inline)) Expr Expr_ctor_ELitInt(long long val) { Expr _r = {.tag=Expr_ELitInt}; _r.data.ELitInt.val = val; return _r; }
 static inline __attribute__((always_inline)) Expr Expr_ctor_ELitFloat(double val) { Expr _r = {.tag=Expr_ELitFloat}; _r.data.ELitFloat.val = val; return _r; }
-static inline __attribute__((always_inline)) Expr Expr_ctor_ELitStr(TrStr val) { Expr _r = {.tag=Expr_ELitStr}; _r.data.ELitStr.val = _tr_str_retain(val); return _r; }
+static inline __attribute__((always_inline)) Expr Expr_ctor_ELitStr(TrStr val, long long blen) { Expr _r = {.tag=Expr_ELitStr}; _r.data.ELitStr.val = _tr_str_retain(val); _r.data.ELitStr.blen = blen; return _r; }
 static inline __attribute__((always_inline)) Expr Expr_ctor_ELitBool(bool val) { Expr _r = {.tag=Expr_ELitBool}; _r.data.ELitBool.val = val; return _r; }
 static inline __attribute__((always_inline)) Expr Expr_ctor_ELitChar(long long val) { Expr _r = {.tag=Expr_ELitChar}; _r.data.ELitChar.val = val; return _r; }
-static inline __attribute__((always_inline)) Expr Expr_ctor_ELitBytes(TrStr val) { Expr _r = {.tag=Expr_ELitBytes}; _r.data.ELitBytes.val = _tr_str_retain(val); return _r; }
-static inline __attribute__((always_inline)) Expr Expr_ctor_ERawStr(TrStr val) { Expr _r = {.tag=Expr_ERawStr}; _r.data.ERawStr.val = _tr_str_retain(val); return _r; }
+static inline __attribute__((always_inline)) Expr Expr_ctor_ELitBytes(TrStr val, long long blen) { Expr _r = {.tag=Expr_ELitBytes}; _r.data.ELitBytes.val = _tr_str_retain(val); _r.data.ELitBytes.blen = blen; return _r; }
+static inline __attribute__((always_inline)) Expr Expr_ctor_ERawStr(TrStr val, long long blen) { Expr _r = {.tag=Expr_ERawStr}; _r.data.ERawStr.val = _tr_str_retain(val); _r.data.ERawStr.blen = blen; return _r; }
 #define Expr_make_ELitNone() ((Expr){.tag=Expr_ELitNone})
 static inline __attribute__((always_inline)) Expr Expr_ctor_EIdent(TrStr name) { Expr _r = {.tag=Expr_EIdent}; _r.data.EIdent.name = _tr_str_retain(name); return _r; }
 static inline __attribute__((always_inline)) Expr Expr_ctor_EBinOp(TrStr op, Expr* left, Expr* right) { Expr _r = {.tag=Expr_EBinOp}; _r.data.EBinOp.op = _tr_str_retain(op); _r.data.EBinOp.left = left; _r.data.EBinOp.right = right; return _r; }
@@ -1124,14 +1133,17 @@ typedef struct HirExpr {
         } ELitFloat;
         struct {
             TrStr val;
+            long long blen;
             AstType* ty;
         } ELitStr;
         struct {
             TrStr val;
+            long long blen;
             AstType* ty;
         } ELitBytes;
         struct {
             TrStr val;
+            long long blen;
             AstType* ty;
         } ERawStr;
         struct {
@@ -1304,9 +1316,9 @@ typedef struct HirExpr {
 
 static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_ELitInt(long long val, AstType* ty) { HirExpr _r = {.tag=HirExpr_ELitInt}; _r.data.ELitInt.val = val; _r.data.ELitInt.ty = ty; return _r; }
 static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_ELitFloat(double val, AstType* ty) { HirExpr _r = {.tag=HirExpr_ELitFloat}; _r.data.ELitFloat.val = val; _r.data.ELitFloat.ty = ty; return _r; }
-static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_ELitStr(TrStr val, AstType* ty) { HirExpr _r = {.tag=HirExpr_ELitStr}; _r.data.ELitStr.val = _tr_str_retain(val); _r.data.ELitStr.ty = ty; return _r; }
-static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_ELitBytes(TrStr val, AstType* ty) { HirExpr _r = {.tag=HirExpr_ELitBytes}; _r.data.ELitBytes.val = _tr_str_retain(val); _r.data.ELitBytes.ty = ty; return _r; }
-static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_ERawStr(TrStr val, AstType* ty) { HirExpr _r = {.tag=HirExpr_ERawStr}; _r.data.ERawStr.val = _tr_str_retain(val); _r.data.ERawStr.ty = ty; return _r; }
+static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_ELitStr(TrStr val, long long blen, AstType* ty) { HirExpr _r = {.tag=HirExpr_ELitStr}; _r.data.ELitStr.val = _tr_str_retain(val); _r.data.ELitStr.blen = blen; _r.data.ELitStr.ty = ty; return _r; }
+static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_ELitBytes(TrStr val, long long blen, AstType* ty) { HirExpr _r = {.tag=HirExpr_ELitBytes}; _r.data.ELitBytes.val = _tr_str_retain(val); _r.data.ELitBytes.blen = blen; _r.data.ELitBytes.ty = ty; return _r; }
+static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_ERawStr(TrStr val, long long blen, AstType* ty) { HirExpr _r = {.tag=HirExpr_ERawStr}; _r.data.ERawStr.val = _tr_str_retain(val); _r.data.ERawStr.blen = blen; _r.data.ERawStr.ty = ty; return _r; }
 static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_ELitChar(long long val, AstType* ty) { HirExpr _r = {.tag=HirExpr_ELitChar}; _r.data.ELitChar.val = val; _r.data.ELitChar.ty = ty; return _r; }
 static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_ELitBool(bool val, AstType* ty) { HirExpr _r = {.tag=HirExpr_ELitBool}; _r.data.ELitBool.val = val; _r.data.ELitBool.ty = ty; return _r; }
 static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_ELitNone(AstType* ty) { HirExpr _r = {.tag=HirExpr_ELitNone}; _r.data.ELitNone.ty = ty; return _r; }
@@ -1994,6 +2006,7 @@ typedef struct FStringPart {
     size_t __rc;
     bool is_expr;
     TrStr text;
+    long long text_len;
     Expr* expr;
     TrStr fmt_spec;
 } FStringPart;
@@ -2293,6 +2306,7 @@ typedef struct HirFStringPart {
     size_t __rc;
     bool is_expr;
     TrStr text;
+    long long text_len;
     HirExpr* expr;
     TrStr fmt_spec;
 } HirFStringPart;
@@ -3140,6 +3154,7 @@ typedef struct LModule {
     List_TrStr* fn_names;
     List_i64* fn_ret;
     List_TrStr* strings;
+    List_i64* string_lens;
     List_TrStr* globals;
     List_i64* global_types;
     List_i64* global_arr;
@@ -3167,6 +3182,7 @@ static void _trdrop_LModule(void* vp) {
     List_TrStr_free(self->fn_names);
     List_i64_free(self->fn_ret);
     List_TrStr_free(self->strings);
+    List_i64_free(self->string_lens);
     List_TrStr_free(self->globals);
     List_i64_free(self->global_types);
     List_i64_free(self->global_arr);
@@ -3557,7 +3573,7 @@ __attribute__((malloc,returns_nonnull,hot)) Decorator* Decorator_init(TrStr name
 __attribute__((malloc,returns_nonnull,hot)) Comprehension* Comprehension_init(TrStr target, Expr* iter);
 __attribute__((malloc,returns_nonnull,hot)) CatchClause* CatchClause_init(TrStr err_name, Block** body);
 __attribute__((malloc,returns_nonnull,hot)) MatchArm* MatchArm_init(Pattern pat, Block** body);
-__attribute__((hot)) FStringPart* FStringPart_init_text(TrStr s);
+__attribute__((hot)) FStringPart* FStringPart_init_text(TrStr s, long long blen);
 __attribute__((hot)) FStringPart* FStringPart_init_expr(Expr* e);
 __attribute__((hot)) FStringPart* FStringPart_init_expr_fmt(Expr* e, TrStr spec);
 __attribute__((hot)) ChanSelectArm* ChanSelectArm_init_recv(Expr* chan, TrStr var, Block* body);
@@ -3648,7 +3664,7 @@ __attribute__((hot)) void Parser_expect_rbracket(Parser* self, long long oln, lo
 __attribute__((hot)) void Parser_expect_rbrace(Parser* self, long long oln, long long ocol, TrStr what);
 __attribute__((hot)) List_ptr* Parser_parse_arg_list(Parser* self);
 __attribute__((hot)) Expr* Parser_parse_primary(Parser* self);
-__attribute__((hot)) Expr* Parser_parse_fstring(Parser* self, TrStr raw);
+__attribute__((hot)) Expr* Parser_parse_fstring(Parser* self, TrStr raw, long long raw_blen);
 __attribute__((hot)) Program* Parser_parse_program(Parser* self);
 __attribute__((hot)) Decl* Parser_parse_decl(Parser* self);
 __attribute__((hot)) Decl* Parser_parse_from_import(Parser* self);
@@ -4049,9 +4065,10 @@ __attribute__((hot)) TrStr _safe_c_varname(TrStr n);
 __attribute__((hot)) bool _is_c_keyword(TrStr n);
 __attribute__((hot)) bool _starts_with_tr(TrStr s);
 __attribute__((hot)) bool _is_primitive(TrStr n);
-__attribute__((hot)) TrStr _escape_str_for_c(TrStr s);
-__attribute__((hot)) TrStr _escape_fmt_for_c(TrStr s);
+__attribute__((hot)) TrStr _escape_str_for_c(TrStr s, long long blen);
+__attribute__((hot)) TrStr _escape_fmt_for_c(TrStr s, long long blen);
 __attribute__((hot)) LInst* box_linst(LInst i);
+__attribute__((hot)) bool _ir_bytes_eq(TrStr a, TrStr b, long long n);
 __attribute__((malloc,returns_nonnull,hot)) LBlock* LBlock_init(long long id);
 __attribute__((malloc,returns_nonnull,hot)) LFunc* LFunc_init(TrStr name);
 __attribute__((hot)) long long LFunc_fresh_id(LFunc* self);
@@ -4092,7 +4109,7 @@ __attribute__((hot)) long long LModule_global_index(LModule* self, TrStr name);
 __attribute__((hot)) bool LModule_is_global(LModule* self, TrStr name);
 __attribute__((hot)) long long LModule_global_type(LModule* self, TrStr name);
 __attribute__((hot)) long long LModule_fn_ret_tag(LModule* self, TrStr name);
-__attribute__((hot)) long long LModule_add_string(LModule* self, TrStr s);
+__attribute__((hot)) long long LModule_add_string(LModule* self, TrStr s, long long blen);
 __attribute__((hot)) void LModule_add_extern(LModule* self, TrStr name);
 __attribute__((hot)) bool LModule_is_user_fn(LModule* self, TrStr name);
 __attribute__((hot)) bool LModule_is_extern_fn(LModule* self, TrStr name);
@@ -4280,6 +4297,7 @@ __attribute__((hot)) bool _is_param(LFunc* lf, TrStr name);
 __attribute__((hot)) long long _norm_bool(LFunc* lf, long long v);
 __attribute__((hot)) long long _str_call0(LModule* m, LFunc* lf, TrStr sym, long long _tr_v_recv, long long restype);
 __attribute__((hot)) long long _heap_lit(LModule* m, LFunc* lf, TrStr s);
+__attribute__((hot)) long long _heap_lit_len(LModule* m, LFunc* lf, TrStr s, long long blen);
 __attribute__((hot)) long long _obj_to_str(LModule* m, LFunc* lf, HirExpr* objexpr, long long objreg);
 __attribute__((hot)) long long _obj_repr(LModule* m, LFunc* lf, HirExpr* objexpr, long long objreg);
 __attribute__((hot)) long long _reg_to_str(LModule* m, LFunc* lf, long long reg);
@@ -4308,8 +4326,7 @@ __attribute__((hot)) TrStr _ll_ty(long long tag);
 __attribute__((hot)) TrStr _ll_ty_name(TrStr n);
 __attribute__((hot)) long long _ll_hexdigit(long long n);
 __attribute__((hot)) TrStr _ll_hexpad16(long long v);
-__attribute__((hot)) long long _ll_str_bytelen(TrStr s);
-__attribute__((hot)) TrStr _ll_str_escape(TrStr s);
+__attribute__((hot)) TrStr _ll_str_escape(TrStr s, long long blen);
 __attribute__((malloc,returns_nonnull,hot)) LlvmEmitter* LlvmEmitter_init(LModule* m);
 __attribute__((hot)) void LlvmEmitter_w(LlvmEmitter* self, TrStr s);
 __attribute__((hot)) TrStr LlvmEmitter_newtmp(LlvmEmitter* self);
@@ -4341,6 +4358,7 @@ __attribute__((hot)) void ByteBuf_u16(ByteBuf* self, long long v);
 __attribute__((hot)) void ByteBuf_u32(ByteBuf* self, long long v);
 __attribute__((hot)) void ByteBuf_u64(ByteBuf* self, long long v);
 __attribute__((hot)) void ByteBuf_cstr(ByteBuf* self, TrStr s);
+__attribute__((hot)) void ByteBuf_cstr_len(ByteBuf* self, TrStr s, long long blen);
 __attribute__((hot)) void ByteBuf_zeros(ByteBuf* self, long long n);
 __attribute__((hot)) void ByteBuf_append_buf(ByteBuf* self, ByteBuf* o);
 __attribute__((hot)) void ByteBuf_patch_u32(ByteBuf* self, long long off, long long v);
@@ -4371,7 +4389,7 @@ __attribute__((hot)) EncodedFunc* encode_func(LFunc* lf);
 __attribute__((hot)) long long _index_of(List_TrStr* names, TrStr s);
 __attribute__((hot)) void _shdr(ByteBuf* out, long long name, long long ty, long long flags, long long addr, long long offset, long long size, long long link, long long info, long long align, long long entsize);
 __attribute__((hot)) long long _align8(long long n);
-__attribute__((hot)) bool write_elf_object(TrStr out_path, List_ptr* funcs, List_TrStr* externs, List_TrStr* strings, long long n_globals);
+__attribute__((hot)) bool write_elf_object(TrStr out_path, List_ptr* funcs, List_TrStr* externs, List_TrStr* strings, List_i64* string_lens, long long n_globals);
 __attribute__((hot)) bool emit_lir_object(LModule* m, TrStr out_path);
 __attribute__((malloc,returns_nonnull,hot)) NativeGenerator* NativeGenerator_init();
 __attribute__((hot)) bool NativeGenerator_emit_object(NativeGenerator* self, HirProgram* prog, TrStr out_path);

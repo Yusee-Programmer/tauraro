@@ -9,6 +9,8 @@ __attribute__((malloc,returns_nonnull,hot)) HirFStringPart* HirFStringPart_init(
     /* pass */
     p->text = _tr_str_lit("");
     /* pass */
+    p->text_len = 0LL;
+    /* pass */
     p->expr = (HirExpr*)(0LL);
     /* pass */
     p->fmt_spec = _tr_str_lit("");

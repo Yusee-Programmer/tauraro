@@ -129,26 +129,7 @@ __attribute__((hot)) TrStr _ll_hexpad16(long long v) {
     return StringObj_as_str(StringBuilder_to_string(sb));
 }
 
-__attribute__((hot)) long long _ll_str_bytelen(TrStr s) {
-    /* pass */
-    char* p = ((char*)(_tr_strz(s)));
-    /* pass */
-    long long i = 0LL;
-    /* pass */
-    while (true) {
-        /* pass */
-        if ((((long long)((*(p + i)))) == 0LL)) {
-            /* pass */
-            break;
-        }
-        /* pass */
-        i = (i + 1LL);
-    }
-    /* pass */
-    return i;
-}
-
-__attribute__((hot)) TrStr _ll_str_escape(TrStr s) {
+__attribute__((hot)) TrStr _ll_str_escape(TrStr s, long long blen) {
     /* pass */
     StringBuilder* sb = StringBuilder_init(64LL);
     /* pass */
@@ -156,14 +137,9 @@ __attribute__((hot)) TrStr _ll_str_escape(TrStr s) {
     /* pass */
     long long i = 0LL;
     /* pass */
-    while (true) {
+    while ((i < blen)) {
         /* pass */
         long long c = ((long long)((*(p + i))));
-        /* pass */
-        if ((c == 0LL)) {
-            /* pass */
-            break;
-        }
         /* pass */
         long long b = (c & 255LL);
         /* pass */

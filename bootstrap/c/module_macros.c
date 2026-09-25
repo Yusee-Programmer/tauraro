@@ -1458,10 +1458,8 @@ __attribute__((hot)) TrStr kind_of(Expr* e) {
         __auto_type _ = _t3669.data.ELitFloat.val;
         return _tr_str_lit("float");
     } else if (_t3669.tag == Expr_ELitStr) {
-        __auto_type _ = _t3669.data.ELitStr.val;
         return _tr_str_lit("str");
     } else if (_t3669.tag == Expr_ERawStr) {
-        __auto_type _ = _t3669.data.ERawStr.val;
         return _tr_str_lit("str");
     } else if (_t3669.tag == Expr_ELitBool) {
         __auto_type _ = _t3669.data.ELitBool.val;

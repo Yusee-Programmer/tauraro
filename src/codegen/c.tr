@@ -124,37 +124,48 @@ pub def _is_primitive(n: str) -> bool:
     if n == "bool" or n == "char" or n == "void" or n == "None": return true
     return false
 
-pub def _escape_str_for_c(s: str) -> str:
+# `blen` is the literal's TRUE byte length (see Token.StrLit / HirExpr.ELitStr):
+# scanning to an implicit NUL terminator instead silently drops the rest of
+# any literal with an embedded \0 byte (TrStr itself has no length field, so
+# there is no other way to recover this). A byte-0 is emitted as the FIXED-
+# WIDTH 3-digit octal escape `\000` rather than a raw byte: C's octal escapes
+# are capped at exactly 3 digits, so this can never be mis-absorbed by a
+# following octal-digit character the way a 1-2 digit form (`\0`) or the
+# unbounded-width `\x` hex form could be. It's also textual (no literal NUL
+# byte in the RESULT), which matters because that result still has to survive
+# further `str` concatenation on its way into the generated .c file, and Tau-
+# raro's own `str` type is just as NUL-terminated as the runtime's TrStr.
+pub def _escape_str_for_c(s: str, blen: int) -> str:
     mut sb = StringBuilder.init(64)
     mut p = s as Pointer[char]
     mut i = 0
-    while True:
+    while i < blen:
         mut c = p.offset(i).read() as int
-        if c == 0: break
         if c == 34: sb.append("\\\"")
         elif c == 92: sb.append("\\\\")
         elif c == 10: sb.append("\\n")
         elif c == 13: sb.append("\\r")
         elif c == 9: sb.append("\\t")
+        elif c == 0: sb.append("\\000")
         else: sb.append_char(c)
         i = i + 1
     return sb.to_string().as_str()
 
 # Like _escape_str_for_c but for f-string LITERAL text, which becomes part of a printf
 # format string: a bare '%' would be read as a conversion (and eat an argument).
-pub def _escape_fmt_for_c(s: str) -> str:
+pub def _escape_fmt_for_c(s: str, blen: int) -> str:
     mut sb = StringBuilder.init(64)
     mut p = s as Pointer[char]
     mut i = 0
-    while True:
+    while i < blen:
         mut c = p.offset(i).read() as int
-        if c == 0: break
         if c == 37: sb.append("%%")
         elif c == 34: sb.append("\\\"")
         elif c == 92: sb.append("\\\\")
         elif c == 10: sb.append("\\n")
         elif c == 13: sb.append("\\r")
         elif c == 9: sb.append("\\t")
+        elif c == 0: sb.append("\\000")
         else: sb.append_char(c)
         i = i + 1
     return sb.to_string().as_str()
@@ -1658,7 +1669,7 @@ pub class CGenerator:
                 case HirStmt.SReturn(rv):
                     if rv as usize != 0 as usize:
                         match rv.read():
-                            case HirExpr.ELitStr(attr_s, _):
+                            case HirExpr.ELitStr(attr_s, _, _):
                                 return "__attribute__((" + attr_s + ")) "
                             case _: pass
                 case _: pass
@@ -1668,7 +1679,7 @@ pub class CGenerator:
     pub def deco_first_str(self, d: Decorator) -> str:
         if d.args.len == 0: return ""
         match d.args.get(0).read():
-            case Expr.ELitStr(v): return v
+            case Expr.ELitStr(v, _): return v
             case _: return ""
 
     pub def deco_first_int(self, d: Decorator) -> int:
@@ -2413,9 +2424,9 @@ pub class CGenerator:
         match e:
             case HirExpr.ELitInt(v, _): return v.to_str() + "LL"
             case HirExpr.ELitFloat(v, _): return _tr_float_to_c_lit(v)
-            case HirExpr.ELitStr(v, _): return "_tr_str_lit(\"" + _escape_str_for_c(v) + "\")"
-            case HirExpr.ERawStr(v, _): return "_tr_str_lit(\"" + _escape_str_for_c(v) + "\")"
-            case HirExpr.ELitBytes(v, _): return "\"" + _escape_str_for_c(v) + "\""
+            case HirExpr.ELitStr(v, blen, _): return "_tr_str_lit(\"" + _escape_str_for_c(v, blen) + "\")"
+            case HirExpr.ERawStr(v, blen, _): return "_tr_str_lit(\"" + _escape_str_for_c(v, blen) + "\")"
+            case HirExpr.ELitBytes(v, blen, _): return "\"" + _escape_str_for_c(v, blen) + "\""
             case HirExpr.ELitChar(v, _):
                 if v == 0: return "'\\0'"
                 if v == 10: return "'\\n'"
@@ -2749,7 +2760,7 @@ pub class CGenerator:
                 case Pattern.PLitBool(v):
                     if v: cond = subj_t
                     else: cond = "!" + subj_t
-                case Pattern.PLitStr(v): cond = "_tr_str_eq(_tr_strz(" + subj_t + "), \"" + _escape_str_for_c(v) + "\")"
+                case Pattern.PLitStr(v, v_blen): cond = "_tr_str_eq(_tr_strz(" + subj_t + "), \"" + _escape_str_for_c(v, v_blen) + "\")"
                 case Pattern.PVariant(tn, vn):
                     mut pv_vn = vn
                     if tn == "Option" and (vn == "" or vn == "none"): pv_vn = "None"
@@ -2803,7 +2814,7 @@ pub class CGenerator:
                                 if tn == "Option" and (vn == "" or vn == "none"): or_vn = "None"
                                 pc = subj_t + ".tag == " + tn + "_" + or_vn
                             case Pattern.PLitInt(vi): pc = subj_t + " == " + vi.to_str() + "LL"
-                            case Pattern.PLitStr(vs): pc = "_tr_str_eq(_tr_strz(" + subj_t + "), \"" + _escape_str_for_c(vs) + "\")"
+                            case Pattern.PLitStr(vs, vs_blen): pc = "_tr_str_eq(_tr_strz(" + subj_t + "), \"" + _escape_str_for_c(vs, vs_blen) + "\")"
                             case Pattern.PLitBool(bv):
                                 if bv: pc = subj_t
                                 else: pc = "!" + subj_t
@@ -3913,7 +3924,7 @@ pub class CGenerator:
             return "((long long)(-1))"
         mut kname = ""
         match args.get(0).read():
-            case HirExpr.ELitStr(sv, _): kname = sv
+            case HirExpr.ELitStr(sv, _, _): kname = sv
             case _: pass
         if kname == "" or not self.functions.contains(kname):
             return "((long long)(-1)) /* kernel_launch: unknown @kernel */"
@@ -6688,7 +6699,7 @@ pub class CGenerator:
         while i < parts.len:
             mut part = parts.get(i)
             if not part.is_expr:
-                fmt = fmt + _escape_fmt_for_c(part.text)
+                fmt = fmt + _escape_fmt_for_c(part.text, part.text_len)
             else:
                 mut s = self.gen_expr(part.expr)
                 mut ty_n: str = hir_expr_type(part.expr).name
@@ -8759,7 +8770,7 @@ pub class CGenerator:
                         self.w(pad + self.cls_method_c_call(exit_ty_n, "__exit__", ctx_exit, "_tr_str_lit(\"\"), _tr_str_lit(\"\"), _tr_str_lit(\"\")") + ";\n")
                     rei = rei - 1
             case HirStmt.SAsm(code, outputs, inputs, clobbers):
-                mut asm_s = pad + "__asm__ volatile(\"" + _escape_str_for_c(code) + "\""
+                mut asm_s = pad + "__asm__ volatile(\"" + _escape_str_for_c(code, code.len()) + "\""
                 if outputs != "" or inputs != "" or clobbers != "":
                     asm_s = asm_s + " : " + outputs
                     if inputs != "" or clobbers != "":
@@ -9448,7 +9459,7 @@ pub class CGenerator:
                             gcond = subj
                         else:
                             gcond = "!" + subj
-                    case Pattern.PLitStr(v):   gcond = "_tr_str_eq(_tr_strz(" + subj + "), \"" + _escape_str_for_c(v) + "\")"
+                    case Pattern.PLitStr(v, v_blen):   gcond = "_tr_str_eq(_tr_strz(" + subj + "), \"" + _escape_str_for_c(v, v_blen) + "\")"
                     case Pattern.PVariant(tn, vn):
                         mut gpv = vn
                         if tn == "Option" and (vn == "" or vn == "none"): gpv = "None"
@@ -9517,7 +9528,7 @@ pub class CGenerator:
                 case Pattern.PLitBool(v):
                     if v: cond = subj
                     else: cond = "!" + subj
-                case Pattern.PLitStr(v): cond = "_tr_str_eq(_tr_strz(" + subj + "), \"" + _escape_str_for_c(v) + "\")"
+                case Pattern.PLitStr(v, v_blen): cond = "_tr_str_eq(_tr_strz(" + subj + "), \"" + _escape_str_for_c(v, v_blen) + "\")"
                 case Pattern.PVariant(tn, vn):
                     mut pv_vn = vn
                     if tn == "Option" and (vn == "" or vn == "none"): pv_vn = "None"
@@ -9574,7 +9585,7 @@ pub class CGenerator:
                                 if tn == "Option" and (vn == "" or vn == "none"): or_vn = "None"
                                 pc = subj + ".tag == " + tn + "_" + or_vn
                             case Pattern.PLitInt(vi): pc = subj + " == " + vi.to_str() + "LL"
-                            case Pattern.PLitStr(vs): pc = "_tr_str_eq(_tr_strz(" + subj + "), \"" + _escape_str_for_c(vs) + "\")"
+                            case Pattern.PLitStr(vs, vs_blen): pc = "_tr_str_eq(_tr_strz(" + subj + "), \"" + _escape_str_for_c(vs, vs_blen) + "\")"
                             case Pattern.PLitBool(bv):
                                 if bv: pc = subj
                                 else: pc = "!" + subj

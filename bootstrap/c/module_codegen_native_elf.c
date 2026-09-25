@@ -56,7 +56,7 @@ __attribute__((hot)) long long _align8(long long n) {
     return r;
 }
 
-__attribute__((hot)) bool write_elf_object(TrStr out_path, List_ptr* funcs, List_TrStr* externs, List_TrStr* strings, long long n_globals) {
+__attribute__((hot)) bool write_elf_object(TrStr out_path, List_ptr* funcs, List_TrStr* externs, List_TrStr* strings, List_i64* string_lens, long long n_globals) {
     /* pass */
     ByteBuf* text = ByteBuf_init();
     /* pass */
@@ -111,7 +111,7 @@ __attribute__((hot)) bool write_elf_object(TrStr out_path, List_ptr* funcs, List
         /* pass */
         List_i64_append(str_off, rodata->len);
         /* pass */
-        ({ TrStr _at_t3515 = (List_TrStr_get(strings, sxi)); ByteBuf_cstr(rodata, _at_t3515); _tr_str_release(_at_t3515); });
+        ({ TrStr _at_t3515 = (List_TrStr_get(strings, sxi)); ByteBuf_cstr_len(rodata, _at_t3515, List_i64_get(string_lens, sxi)); _tr_str_release(_at_t3515); });
         /* pass */
         sxi = (sxi + 1LL);
     }

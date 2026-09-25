@@ -2067,11 +2067,11 @@ def _stmt_expr_kind(e: Pointer[HirExpr]) -> str:
 def _expr_kind(e: Pointer[HirExpr]) -> str:
     match e.read():
         case HirExpr.ELitInt(_, _): return "int literal"
-        case HirExpr.ELitStr(_, _): return "str literal"
+        case HirExpr.ELitStr(_, _, _): return "str literal"
         case HirExpr.ELitBool(_, _): return "bool literal"
         case HirExpr.ELitChar(_, _): return "char literal"
         case HirExpr.ELitFloat(_, _): return "float literal"
-        case HirExpr.ERawStr(_, _): return "raw str literal"
+        case HirExpr.ERawStr(_, _, _): return "raw str literal"
         case HirExpr.EIdent(n, _, _): return "ident '" + _own(n) + "'"
         case HirExpr.ECall(callee, _, _): return "call " + _own(_ident_name(callee)) + "()"
         case HirExpr.EMethodCall(_, meth, _, _): return "method ." + _own(meth) + "()"
@@ -2676,7 +2676,7 @@ def _lower_stmt_impl(m: LModule, lf: LFunc, s: Pointer[HirStmt]) -> bool:
             mut w_ei = 0
             while w_ei < 3:
                 mut w_es = lf.new_vreg()
-                lf.emit(LInst.IStr(w_es, m.add_string("")))
+                lf.emit(LInst.IStr(w_es, m.add_string("", 0)))
                 lf.set_vreg_type(w_es, 1)
                 w_xa.push(w_es)
                 w_ei = w_ei + 1
@@ -2912,9 +2912,9 @@ def _lit_pat_cond(m: LModule, lf: LFunc, pat: Pattern, subj: int, st: int) -> in
             lf.emit(LInst.IBinOp(db, "==", subj, cvb))
             lf.set_vreg_type(db, 4)
             return db
-        case Pattern.PLitStr(sv):
+        case Pattern.PLitStr(sv, sv_blen):
             if st != 1: return -1
-            mut idx = m.add_string(sv)
+            mut idx = m.add_string(sv, sv_blen)
             mut lit = lf.new_vreg()
             lf.emit(LInst.IStr(lit, idx))       # raw .rodata char* — NOT wrapped, NOT fresh
             lf.set_vreg_type(lit, 1)
@@ -4358,8 +4358,17 @@ def _str_call0(m: LModule, lf: LFunc, sym: str, recv: int, restype: int) -> int:
     return d
 
 # Materialize a string literal as a fresh rc=1 heap string (same path as ELitStr).
+# `s.len()` is a safe fallback here: every caller except _heap_lit_len's own
+# forwarding passes a compiler-synthesized literal ("", "()", ", " etc.) that
+# is provably NUL-free.
 def _heap_lit(m: LModule, lf: LFunc, s: str) -> int:
-    mut idx = m.add_string(s)
+    return _heap_lit_len(m, lf, s, s.len())
+
+# Same as _heap_lit but with an explicit true byte length, for callers (e.g.
+# f-string LITERAL TEXT parts) that may carry an embedded \0 the plain
+# str.len() fallback above would silently truncate at.
+def _heap_lit_len(m: LModule, lf: LFunc, s: str, blen: int) -> int:
+    mut idx = m.add_string(s, blen)
     mut ds = lf.new_vreg()
     lf.emit(LInst.IStr(ds, idx))
     lf.set_vreg_type(ds, 1)
@@ -5056,8 +5065,8 @@ def _lower_expr_impl(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
             mut d = lf.new_vreg()
             lf.emit(LInst.IConst(d, v))
             return d
-        case HirExpr.ELitStr(sv, _):
-            mut idx = m.add_string(sv)
+        case HirExpr.ELitStr(sv, sv_blen, _):
+            mut idx = m.add_string(sv, sv_blen)
             mut ds = lf.new_vreg()
             lf.emit(LInst.IStr(ds, idx))
             lf.set_vreg_type(ds, 1)
@@ -5150,8 +5159,8 @@ def _lower_expr_impl(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
             lf.emit(LInst.IConst(nnull, 0))
             lf.set_vreg_type(nnull, 10)
             return nnull
-        case HirExpr.ERawStr(rsv, _):
-            mut ridx = m.add_string(rsv)             # raw string: literal value already unescaped
+        case HirExpr.ERawStr(rsv, rsv_blen, _):
+            mut ridx = m.add_string(rsv, rsv_blen)             # raw string: literal value already unescaped
             mut rds = lf.new_vreg()
             lf.emit(LInst.IStr(rds, ridx))
             lf.set_vreg_type(rds, 1)
@@ -6396,7 +6405,7 @@ def _lower_expr_impl(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                         # value through a runtime fmt helper (returns a fresh str).
                         mut spev = lower_expr(m, lf, fp.expr)
                         if spev < 0: return -1
-                        mut spidx = m.add_string(fp.fmt_spec)
+                        mut spidx = m.add_string(fp.fmt_spec, fp.fmt_spec.len())
                         mut specv = lf.new_vreg()
                         lf.emit(LInst.IStr(specv, spidx))
                         mut spvt = lf.vreg_type(spev)
@@ -6425,7 +6434,7 @@ def _lower_expr_impl(m: LModule, lf: LFunc, e: Pointer[HirExpr]) -> int:
                                 pr = _reg_to_str(m, lf, fev)
                             if pr < 0: return -1
                 else:
-                    pr = _heap_lit(m, lf, fp.text)
+                    pr = _heap_lit_len(m, lf, fp.text, fp.text_len)
                 m.add_extern("_tr_rt_str_concat")
                 mut fca = Vec[int].init(2)
                 fca.push(acc)

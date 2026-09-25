@@ -11,9 +11,9 @@ from ast import AstType, Decorator, Pattern, Ownership, GenericConstraint
 pub enum HirExpr:
     ELitInt(val: int, ty: AstType)
     ELitFloat(val: float, ty: AstType)
-    ELitStr(val: str, ty: AstType)
-    ELitBytes(val: str, ty: AstType)
-    ERawStr(val: str, ty: AstType)
+    ELitStr(val: str, blen: int, ty: AstType)
+    ELitBytes(val: str, blen: int, ty: AstType)
+    ERawStr(val: str, blen: int, ty: AstType)
     ELitChar(val: int, ty: AstType)
     ELitBool(val: bool, ty: AstType)
     ELitNone(ty: AstType)
@@ -70,6 +70,7 @@ pub class HirCatchClause:
 pub class HirFStringPart:
     pub is_expr:  bool
     pub text:     str
+    pub text_len: int    # true byte length of `text` (embedded-NUL-safe; see HirExpr.ELitStr)
     pub expr:     Pointer[HirExpr]
     pub fmt_spec: str    # e.g. ".2f", ">10", "05d"
 
@@ -78,6 +79,7 @@ extend HirFStringPart:
         mut p = HirFStringPart()
         p.is_expr  = false
         p.text     = ""
+        p.text_len = 0
         p.expr     = Pointer[HirExpr](0)
         p.fmt_spec = ""
         return p
@@ -269,9 +271,9 @@ pub def hir_expr_type(e: Pointer[HirExpr]) -> AstType:
     match e.read():
         case HirExpr.ELitInt(_, ty): return ty
         case HirExpr.ELitFloat(_, ty): return ty
-        case HirExpr.ELitStr(_, ty): return ty
-        case HirExpr.ELitBytes(_, ty): return ty
-        case HirExpr.ERawStr(_, ty): return ty
+        case HirExpr.ELitStr(_, _, ty): return ty
+        case HirExpr.ELitBytes(_, _, ty): return ty
+        case HirExpr.ERawStr(_, _, ty): return ty
         case HirExpr.ELitChar(_, ty): return ty
         case HirExpr.ELitBool(_, ty): return ty
         case HirExpr.ELitNone(ty): return ty

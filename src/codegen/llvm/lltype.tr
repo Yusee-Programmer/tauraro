@@ -52,24 +52,19 @@ pub def _ll_hexpad16(v: int) -> str:
         k = k - 1
     return sb.to_string().as_str()
 
-# Byte length of a C-style string (up to the first NUL).
-pub def _ll_str_bytelen(s: str) -> int:
-    mut p = s as Pointer[char]
-    mut i = 0
-    while True:
-        if p.offset(i).read() as int == 0: break
-        i = i + 1
-    return i
-
 # Escape a string into an LLVM `c"..."` body: printable ASCII passes through (except `"`
-# and `\`), everything else becomes `\XX`. The caller appends the `\00` terminator.
-pub def _ll_str_escape(s: str) -> str:
+# and `\`), everything else (including an embedded NUL byte -- `blen` is the literal's
+# TRUE byte length, see LModule.add_string, so this is no longer bounded by the first
+# zero byte) becomes `\XX`. LLVM's `\XX` escape is always EXACTLY 2 hex digits by its own
+# textual-IR grammar (unlike C's unbounded-width `\x`), so there's no absorption
+# ambiguity to dodge here the way the C backend's `_escape_str_for_c` has to. The caller
+# appends the `\00` terminator.
+pub def _ll_str_escape(s: str, blen: int) -> str:
     mut sb = StringBuilder.init(64)
     mut p = s as Pointer[char]
     mut i = 0
-    while True:
+    while i < blen:
         mut c = p.offset(i).read() as int
-        if c == 0: break
         mut b = c & 255
         if b >= 32 and b <= 126 and b != 34 and b != 92:
             sb.append_char(b)

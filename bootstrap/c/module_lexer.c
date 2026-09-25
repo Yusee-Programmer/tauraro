@@ -405,13 +405,13 @@ __attribute__((hot)) Token Lexer_read_triple_string(Lexer* self, long long quote
             /* pass */
             Lexer_advance(self);
             /* pass */
-            return ({ TrStr _at_t7 = (StringObj_as_str(StringBuilder_to_string(sb))); __auto_type _wr = (Token_ctor_TripleStrLit(_at_t7)); _tr_str_release(_at_t7); _wr; });
+            return ({ TrStr _at_t7 = (StringBuilder_to_owned(sb)); __auto_type _wr = (Token_ctor_TripleStrLit(_at_t7, sb->buf->len)); _tr_str_release(_at_t7); _wr; });
         }
         /* pass */
         StringBuilder_append_char(sb, Lexer_advance(self));
     }
     /* pass */
-    return ({ TrStr _at_t8 = (StringObj_as_str(StringBuilder_to_string(sb))); __auto_type _wr = (Token_ctor_TripleStrLit(_at_t8)); _tr_str_release(_at_t8); _wr; });
+    return ({ TrStr _at_t8 = (StringBuilder_to_owned(sb)); __auto_type _wr = (Token_ctor_TripleStrLit(_at_t8, sb->buf->len)); _tr_str_release(_at_t8); _wr; });
 }
 
 __attribute__((hot)) Token Lexer_read_string(Lexer* self, long long quote) {
@@ -466,7 +466,7 @@ __attribute__((hot)) Token Lexer_read_string(Lexer* self, long long quote) {
         Lexer_advance(self);
     }
     /* pass */
-    return ({ TrStr _at_t9 = (StringObj_as_str(StringBuilder_to_string(sb))); __auto_type _wr = (Token_ctor_StrLit(_at_t9)); _tr_str_release(_at_t9); _wr; });
+    return ({ TrStr _at_t9 = (StringBuilder_to_owned(sb)); __auto_type _wr = (Token_ctor_StrLit(_at_t9, sb->buf->len)); _tr_str_release(_at_t9); _wr; });
 }
 
 __attribute__((hot)) Token Lexer_read_char(Lexer* self) {
@@ -536,7 +536,7 @@ __attribute__((hot)) Token Lexer_read_fstring(Lexer* self) {
         Lexer_advance(self);
     }
     /* pass */
-    return ({ TrStr _at_t10 = (StringObj_as_str(StringBuilder_to_string(sb))); __auto_type _wr = (Token_ctor_FStrLit(_at_t10)); _tr_str_release(_at_t10); _wr; });
+    return ({ TrStr _at_t10 = (StringBuilder_to_owned(sb)); __auto_type _wr = (Token_ctor_FStrLit(_at_t10, sb->buf->len)); _tr_str_release(_at_t10); _wr; });
 }
 
 __attribute__((hot)) Token Lexer_read_triple_fstring(Lexer* self, long long quote) {
@@ -553,13 +553,13 @@ __attribute__((hot)) Token Lexer_read_triple_fstring(Lexer* self, long long quot
             /* pass */
             Lexer_advance(self);
             /* pass */
-            return ({ TrStr _at_t11 = (StringObj_as_str(StringBuilder_to_string(sb))); __auto_type _wr = (Token_ctor_FStrLit(_at_t11)); _tr_str_release(_at_t11); _wr; });
+            return ({ TrStr _at_t11 = (StringBuilder_to_owned(sb)); __auto_type _wr = (Token_ctor_FStrLit(_at_t11, sb->buf->len)); _tr_str_release(_at_t11); _wr; });
         }
         /* pass */
         StringBuilder_append_char(sb, Lexer_advance(self));
     }
     /* pass */
-    return ({ TrStr _at_t12 = (StringObj_as_str(StringBuilder_to_string(sb))); __auto_type _wr = (Token_ctor_FStrLit(_at_t12)); _tr_str_release(_at_t12); _wr; });
+    return ({ TrStr _at_t12 = (StringBuilder_to_owned(sb)); __auto_type _wr = (Token_ctor_FStrLit(_at_t12, sb->buf->len)); _tr_str_release(_at_t12); _wr; });
 }
 
 __attribute__((hot)) Token Lexer_read_raw_string(Lexer* self) {
@@ -580,7 +580,7 @@ __attribute__((hot)) Token Lexer_read_raw_string(Lexer* self) {
         Lexer_advance(self);
     }
     /* pass */
-    return ({ TrStr _at_t13 = (StringObj_as_str(StringBuilder_to_string(sb))); __auto_type _wr = (Token_ctor_RawStrLit(_at_t13)); _tr_str_release(_at_t13); _wr; });
+    return ({ TrStr _at_t13 = (StringBuilder_to_owned(sb)); __auto_type _wr = (Token_ctor_RawStrLit(_at_t13, sb->buf->len)); _tr_str_release(_at_t13); _wr; });
 }
 
 __attribute__((hot)) Token Lexer_read_byte_string(Lexer* self) {
@@ -637,7 +637,7 @@ __attribute__((hot)) Token Lexer_read_byte_string(Lexer* self) {
         Lexer_advance(self);
     }
     /* pass */
-    return ({ TrStr _at_t14 = (StringObj_as_str(StringBuilder_to_string(sb))); __auto_type _wr = (Token_ctor_ByteStrLit(_at_t14)); _tr_str_release(_at_t14); _wr; });
+    return ({ TrStr _at_t14 = (StringBuilder_to_owned(sb)); __auto_type _wr = (Token_ctor_ByteStrLit(_at_t14, sb->buf->len)); _tr_str_release(_at_t14); _wr; });
 }
 
 __attribute__((hot)) Token Lexer_read_ident(Lexer* self) {

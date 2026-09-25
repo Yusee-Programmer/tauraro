@@ -334,9 +334,9 @@ pub class Lexer:
         while not self.at_end():
             if self.peek() == quote and self.peek_at(1) == quote and self.peek_at(2) == quote:
                 self.advance(); self.advance(); self.advance()
-                return Token.TripleStrLit(sb.to_string().as_str())
+                return Token.TripleStrLit(sb.to_owned(), sb.len())
             sb.append_char(self.advance())
-        return Token.TripleStrLit(sb.to_string().as_str())
+        return Token.TripleStrLit(sb.to_owned(), sb.len())
 
     pub def read_string(self, quote: int) -> Token:
         self.advance()
@@ -365,7 +365,7 @@ pub class Lexer:
             else:
                 sb.append_char(c)
         if not self.at_end(): self.advance()
-        return Token.StrLit(sb.to_string().as_str())
+        return Token.StrLit(sb.to_owned(), sb.len())
 
     pub def read_char(self) -> Token:
         self.advance()
@@ -391,7 +391,7 @@ pub class Lexer:
             mut c = self.advance()
             sb.append_char(c)
         if not self.at_end(): self.advance()
-        return Token.FStrLit(sb.to_string().as_str())
+        return Token.FStrLit(sb.to_owned(), sb.len())
 
     # Triple-quoted f-string `f"""..."""`: a multi-line f-string. Called after the
     # `f` and the three opening quotes have been consumed. Content (with embedded
@@ -402,9 +402,9 @@ pub class Lexer:
         while not self.at_end():
             if self.peek() == quote and self.peek_at(1) == quote and self.peek_at(2) == quote:
                 self.advance(); self.advance(); self.advance()
-                return Token.FStrLit(sb.to_string().as_str())
+                return Token.FStrLit(sb.to_owned(), sb.len())
             sb.append_char(self.advance())
-        return Token.FStrLit(sb.to_string().as_str())
+        return Token.FStrLit(sb.to_owned(), sb.len())
 
     pub def read_raw_string(self) -> Token:
         self.advance(); mut quote = self.advance()
@@ -412,7 +412,7 @@ pub class Lexer:
         while not self.at_end() and self.peek() != quote:
             sb.append_char(self.advance())
         if not self.at_end(): self.advance()
-        return Token.RawStrLit(sb.to_string().as_str())
+        return Token.RawStrLit(sb.to_owned(), sb.len())
 
     pub def read_byte_string(self) -> Token:
         self.advance(); mut quote = self.advance()
@@ -441,7 +441,7 @@ pub class Lexer:
             else:
                 sb.append_char(c)
         if not self.at_end(): self.advance()
-        return Token.ByteStrLit(sb.to_string().as_str())
+        return Token.ByteStrLit(sb.to_owned(), sb.len())
 
     pub def read_ident(self) -> Token:
         mut sb = StringBuilder.init(64)

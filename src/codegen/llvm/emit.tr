@@ -215,7 +215,7 @@ extend LlvmEmitter:
                     self.store_vreg(dst, ind_ret, ir)
             case LInst.IAsm(code, cons):
                 # inline asm: `sideeffect` keeps it even with no outputs (never DCE'd).
-                self.w("  call void asm sideeffect \"" + _ll_str_escape(code) + "\", \"" + cons + "\"()\n")
+                self.w("  call void asm sideeffect \"" + _ll_str_escape(code, code.len()) + "\", \"" + cons + "\"()\n")
             case LInst.ILoad(dst, base, off, aclass):
                 # dst = *(base + off), loaded as dst's own type (i64/ptr/double); the base
                 # vreg is an address (ptr directly, or an i64 that we inttoptr).
@@ -448,8 +448,8 @@ extend LlvmEmitter:
         mut si = 0
         while si < self.m.strings.len:
             mut s = self.m.strings.get(si)
-            mut blen = _ll_str_bytelen(s) + 1
-            self.w("@.str." + si.to_str() + " = private unnamed_addr constant [" + blen.to_str() + " x i8] c\"" + _ll_str_escape(s) + "\\00\"\n")
+            mut blen = self.m.string_lens.get(si) + 1
+            self.w("@.str." + si.to_str() + " = private unnamed_addr constant [" + blen.to_str() + " x i8] c\"" + _ll_str_escape(s, self.m.string_lens.get(si)) + "\\00\"\n")
             si = si + 1
         # Module globals -> internal, zero-initialized (.bss equivalent).
         mut gi = 0
