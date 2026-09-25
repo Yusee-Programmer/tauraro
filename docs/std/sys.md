@@ -9,6 +9,7 @@ from std.sys.os       import OS
 from std.sys.platform import Platform
 from std.sys.datetime import DateTime, Date, Time, TimeDelta
 from std.sys.signal   import Signal
+from std.sys.dotenv   import Dotenv
 ```
 
 ---
@@ -413,3 +414,40 @@ while not Signal.shutdown_requested():
 
 print("Shutdown requested — cleaning up and exiting.")
 ```
+
+---
+
+## std.sys.dotenv — `.env` file loader
+
+**When**: You keep local configuration (API keys, database URLs, feature flags) in a `.env` file instead of hard-coding it or requiring every developer to export shell variables by hand.
+**Why**: `Dotenv` reuses `std.sys.env.Env` for the actual environment-variable-setting (no reimplementation) and separates pure parsing (`parse`, testable with no side effects) from the side-effecting `load`.
+
+Supported format: lines of `KEY=value`, `#`-prefixed comments, blank lines skipped, and optionally single- or double-quoted values (`KEY="value with spaces"`) to preserve embedded spaces. No variable interpolation and no multi-line values — an unquoted value may itself contain `=` (only the first `=` on a line splits key from value), e.g. `URL=http://x.com?a=1` parses with value `http://x.com?a=1`.
+
+| Method | Signature | Returns | Description |
+|---|---|---|---|
+| `Dotenv.parse` | `(content: str) -> Dict[str, str]` | `Dict[str, str]` | Pure parse of `.env`-format text into a dict. No environment variables are touched. |
+| `Dotenv.load` | `(path: str) -> int` | `int` | Read `path` from disk, parse it, and set every entry as a real process environment variable via `Env.set_var`. Returns the number of variables set, or `-1` if the file could not be read. |
+
+### Example
+
+```tauraro
+from std.sys.dotenv import Dotenv
+from std.sys.env     import Env
+
+# Pure parsing -- no side effects, easy to test:
+mut parsed = Dotenv.parse("NAME=Alice\n# a comment\nURL=http://x.com?a=1\nQUOTED=\"hello world\"\n")
+print(parsed["NAME"])     # "Alice"
+print(parsed["URL"])      # "http://x.com?a=1"
+print(parsed["QUOTED"])   # "hello world"  -- quotes stripped
+
+# Loading a real .env file into the process environment:
+mut n = Dotenv.load(".env")
+if n >= 0:
+    mut env = Env.init()
+    print("Loaded " + str(n) + " variables")
+    print(env.get_var("DATABASE_URL"))
+else:
+    print(".env file not found")
+```
+

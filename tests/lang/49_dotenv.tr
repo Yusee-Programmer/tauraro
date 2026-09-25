@@ -1,0 +1,109 @@
+# tests/lang/49_dotenv.tr - std.sys.dotenv: Dotenv `.env` file loader.
+#
+# Dotenv.parse() is exercised heavily since it's pure (no side effects) and
+# easy to check exactly: comments, blank lines, quoted values with embedded
+# spaces (both " and '), values containing '=' (e.g. URL=http://x.com?a=1),
+# whitespace trimming around keys/values, and an empty value. Dotenv.load()
+# is checked once, end-to-end, against a real temp file and the real process
+# environment via std.sys.env.Env.
+
+from std.test import TestRunner
+from std.sys.dotenv import Dotenv
+from std.sys.env import Env
+from std.io.file import File
+
+def main():
+    mut t = TestRunner.init("49_dotenv")
+
+    t.section("parse — basic KEY=value")
+    mut d1 = Dotenv.parse("NAME=Alice\nROLE=admin\n")
+    t.assert_eq_int(d1.len(), 2, "two entries parsed")
+    t.assert_eq_str(d1["NAME"], "Alice", "NAME value")
+    t.assert_eq_str(d1["ROLE"], "admin", "ROLE value")
+
+    t.section("parse — comments and blank lines skipped")
+    mut d2 = Dotenv.parse("# full-line comment\n\nNAME=Bob\n\n# another comment\nAGE=30\n\n")
+    t.assert_eq_int(d2.len(), 2, "comments/blanks don't produce entries")
+    t.assert_eq_str(d2["NAME"], "Bob", "NAME survives surrounding comments/blanks")
+    t.assert_eq_str(d2["AGE"], "30", "AGE survives surrounding comments/blanks")
+
+    t.section("parse — leading-whitespace comment line is still a comment")
+    mut d3 = Dotenv.parse("   # indented comment\nX=1\n")
+    t.assert_eq_int(d3.len(), 1, "indented comment produces no entry")
+    t.assert_eq_str(d3["X"], "1", "X still parsed")
+
+    t.section("parse — double-quoted value with embedded spaces")
+    mut d4 = Dotenv.parse("GREETING=\"hello there world\"\n")
+    t.assert_eq_str(d4["GREETING"], "hello there world", "double-quoted value keeps embedded spaces, quotes stripped")
+
+    t.section("parse — single-quoted value with embedded spaces")
+    mut d5 = Dotenv.parse("GREETING='hi   there'\n")
+    t.assert_eq_str(d5["GREETING"], "hi   there", "single-quoted value keeps embedded spaces, quotes stripped")
+
+    t.section("parse — unquoted value with embedded spaces (trimmed, not quoted)")
+    mut d6 = Dotenv.parse("PLAIN=  spaced out value  \n")
+    t.assert_eq_str(d6["PLAIN"], "spaced out value", "unquoted value trims only leading/trailing whitespace")
+
+    t.section("parse — value containing '=' (only first '=' splits)")
+    mut d7 = Dotenv.parse("URL=http://x.com?a=1&b=2\n")
+    t.assert_eq_str(d7["URL"], "http://x.com?a=1&b=2", "embedded '=' signs preserved in value")
+
+    mut d8 = Dotenv.parse("EQN=a=b=c\n")
+    t.assert_eq_str(d8["EQN"], "a=b=c", "multiple embedded '=' all preserved, only first splits key")
+
+    t.section("parse — key with surrounding whitespace before '='")
+    mut d9 = Dotenv.parse("  SPACED_KEY   =   value_here  \n")
+    t.assert_eq_str(d9["SPACED_KEY"], "value_here", "whitespace around key and value both trimmed")
+
+    t.section("parse — empty value")
+    mut d10 = Dotenv.parse("EMPTY=\n")
+    t.assert_eq_int(d10.len(), 1, "empty value still produces an entry")
+    t.assert_eq_str(d10["EMPTY"], "", "empty value parses as empty string")
+
+    t.section("parse — line with no '=' is skipped, not an error")
+    mut d11 = Dotenv.parse("not_a_valid_line\nOK=1\n")
+    t.assert_eq_int(d11.len(), 1, "malformed line skipped silently")
+    t.assert_eq_str(d11["OK"], "1", "well-formed line after malformed one still parses")
+
+    t.section("parse — combined realistic .env content")
+    mut content = "# Application configuration\n\nAPP_NAME=MyApp\nAPP_ENV=\"production\"\nDATABASE_URL=postgres://user:pass@localhost:5432/db?sslmode=require\n\n# feature flags\nFEATURE_X=true\nDESCRIPTION='A test app, with a comma'\n"
+    mut combined = Dotenv.parse(content)
+    t.assert_eq_int(combined.len(), 5, "5 entries in combined realistic content")
+    t.assert_eq_str(combined["APP_NAME"], "MyApp", "APP_NAME")
+    t.assert_eq_str(combined["APP_ENV"], "production", "APP_ENV -- quotes stripped")
+    t.assert_eq_str(combined["DATABASE_URL"], "postgres://user:pass@localhost:5432/db?sslmode=require", "DATABASE_URL -- embedded '=' and ':' preserved")
+    t.assert_eq_str(combined["FEATURE_X"], "true", "FEATURE_X")
+    t.assert_eq_str(combined["DESCRIPTION"], "A test app, with a comma", "DESCRIPTION -- single-quoted, embedded comma preserved")
+
+    t.section("load — end-to-end against a real file and the real process environment")
+    mut tmp_path = "tests_lang_49_dotenv_tmp.env"
+    mut f = File.init(tmp_path, "wb")
+    f.write("DOTENV_TEST_FOO=bar_value\nDOTENV_TEST_BAZ=\"qux with spaces\"\n")
+    f.close()
+
+    mut env = Env.init()
+    # NOTE: we don't assert has_var() is false here before load() -- a
+    # confirmed pre-existing runtime bug (documented in bug2.txt) makes
+    # _tr_getenv return a non-null "" sentinel instead of a real null
+    # pointer for a genuinely-unset variable, so Env.has_var() always
+    # returns true regardless of whether the variable was ever set. The
+    # value round-trip below (get_var returning exactly what load() wrote)
+    # is unaffected by that bug and is what actually proves load() works.
+    env.unset_var("DOTENV_TEST_FOO")
+    env.unset_var("DOTENV_TEST_BAZ")
+
+    mut n_set = Dotenv.load(tmp_path)
+    t.assert_eq_int(n_set, 2, "load() returns count of variables set")
+    t.assert_true(env.has_var("DOTENV_TEST_FOO"), "env var set after load()")
+    t.assert_eq_str(env.get_var("DOTENV_TEST_FOO"), "bar_value", "loaded env var value")
+    t.assert_eq_str(env.get_var("DOTENV_TEST_BAZ"), "qux with spaces", "loaded quoted env var value, quotes stripped")
+
+    # cleanup
+    env.unset_var("DOTENV_TEST_FOO")
+    env.unset_var("DOTENV_TEST_BAZ")
+
+    t.section("load — missing file returns -1")
+    mut missing_result = Dotenv.load("this_file_definitely_does_not_exist_49.env")
+    t.assert_eq_int(missing_result, -1, "load() on missing file returns -1")
+
+    t.summary()

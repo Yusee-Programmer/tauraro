@@ -1,0 +1,144 @@
+# std.collections.bloom — Bloom filter: a space-efficient probabilistic set
+# membership structure.
+#
+# A Bloom filter trades exactness for space: `might_contain(x)` NEVER false-
+# negatives an item that was actually `add`ed, but it CAN false-positive on
+# an item that was never added (report "might be present" for something
+# that isn't). The false-positive rate is tunable at construction time via
+# `expected_items` and `false_positive_rate` — the bit-array size `m` and
+# hash-function count `k` are derived from the standard formulas:
+#
+#     m = -(n * ln(p)) / (ln(2)^2)
+#     k = (m / n) * ln(2)
+#
+# where `n` = expected_items and `p` = false_positive_rate. There is no way
+# to remove an item once added (standard Bloom filter limitation — removing
+# would require clearing bits potentially shared by other members) and no
+# way to enumerate members (the structure only answers membership queries).
+#
+# Internally this uses DOUBLE HASHING (Kirsch-Mitzenmacher): two independent
+# base hashes h1, h2 are combined as `h1 + i*h2` for the k probe indices,
+# which is statistically equivalent to k truly-independent hash functions
+# for Bloom-filter purposes but only costs two actual hash computations per
+# operation. h1 is FNV-1a; h2 is FNV-1a with a different offset basis/prime
+# pairing (djb2-style multiply-and-add over the same bytes) — both are
+# simple non-cryptographic string hashes, which is all a Bloom filter needs.
+
+extern "C":
+    def _tr_checked_alloc(size: int) -> Pointer[char]
+    def _tr_c_free(ptr: Pointer[char])
+    def log(x: float) -> float
+
+pub class BloomFilter:
+    pub bits:       Pointer[char]   # one byte per bit (simple, not bit-packed)
+    pub m:           int             # number of bits (bit-array size)
+    pub k:           int             # number of hash probes per operation
+    pub n_expected:  int             # expected_items, kept for reference/debugging
+    pub count:       int             # number of add() calls made so far
+
+extend BloomFilter:
+    # Create a filter sized for `expected_items` entries at approximately
+    # `false_positive_rate` (e.g. 0.01 for 1%). Both parameters are clamped
+    # to sane minimums so degenerate input (0 items, rate <= 0) can't produce
+    # a zero-size or infinite-size table.
+    pub def init(expected_items: int, false_positive_rate: float) -> BloomFilter:
+        mut n = expected_items
+        if n < 1: n = 1
+        mut p = false_positive_rate
+        if p <= 0.0: p = 0.0001
+        if p >= 1.0: p = 0.9999
+
+        mut ln2 = 0.6931471805599453
+        mut m_f = (0.0 - (n as float) * log(p)) / (ln2 * ln2)
+        mut m = m_f as int
+        if m < 8: m = 8
+
+        mut k_f = (m as float / n as float) * ln2
+        mut k = k_f as int
+        if k < 1: k = 1
+        if k > 32: k = 32   # sane upper bound; diminishing/negative returns past this
+
+        mut f = BloomFilter()
+        f.bits = _tr_checked_alloc(m) as Pointer[char]
+        mut i = 0
+        while i < m:
+            unsafe: f.bits.offset(i).write(0 as char)
+            i = i + 1
+        f.m          = m
+        f.k          = k
+        f.n_expected = n
+        f.count      = 0
+        return f
+
+    # ── Internal: hashing ────────────────────────────────────────────────────
+
+    pub def _fnv1a(self, item: str) -> int:
+        mut p = item as Pointer[char]
+        mut h: u64 = 14695981039346656037 as u64
+        mut i = 0
+        while p.offset(i).read() as int != 0:
+            mut c = p.offset(i).read() as u64
+            h = (h ^ c) * 1099511628211 as u64
+            i = i + 1
+        mut r = h as int
+        if r < 0: r = 0 - r
+        return r
+
+    # djb2-style second hash (different mixing from FNV-1a -> independent
+    # enough for double-hashing purposes).
+    pub def _djb2(self, item: str) -> int:
+        mut p = item as Pointer[char]
+        mut h: u64 = 5381 as u64
+        mut i = 0
+        while p.offset(i).read() as int != 0:
+            mut c = p.offset(i).read() as u64
+            h = ((h * 33 as u64) + c)
+            i = i + 1
+        mut r = h as int
+        if r < 0: r = 0 - r
+        return r
+
+    # The i-th probe index (0 <= i < k) for item, via Kirsch-Mitzenmacher
+    # double hashing: probe_i = (h1 + i*h2) mod m.
+    pub def _probe(self, h1: int, h2: int, i: int) -> int:
+        mut idx = (h1 + i * h2) % self.m
+        if idx < 0: idx = idx + self.m
+        return idx
+
+    # ── Public API ───────────────────────────────────────────────────────────
+
+    pub def add(self, item: str):
+        mut h1 = self._fnv1a(item)
+        mut h2 = self._djb2(item)
+        mut i = 0
+        while i < self.k:
+            mut idx = self._probe(h1, h2, i)
+            unsafe: self.bits.offset(idx).write(1 as char)
+            i = i + 1
+        self.count = self.count + 1
+
+    # true = "possibly present" (may be a false positive).
+    # false = "definitely absent" (never a false negative).
+    pub def might_contain(self, item: str) -> bool:
+        mut h1 = self._fnv1a(item)
+        mut h2 = self._djb2(item)
+        mut i = 0
+        while i < self.k:
+            mut idx = self._probe(h1, h2, i)
+            if self.bits.offset(idx).read() as int == 0:
+                return false
+            i = i + 1
+        return true
+
+    # Number of items added so far (not the number of distinct items -- a
+    # Bloom filter cannot distinguish a repeat add from a new one).
+    pub def len(self) -> int:
+        return self.count
+
+    # Bit-array size (m) this filter was sized to.
+    pub def bit_size(self) -> int:
+        return self.m
+
+    # Number of hash probes (k) performed per add/might_contain.
+    pub def hash_count(self) -> int:
+        return self.k

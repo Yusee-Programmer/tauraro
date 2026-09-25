@@ -1,0 +1,253 @@
+# tests/lang/48_collections2.tr - std.collections.trie/bloom/unionfind:
+# Trie[V] prefix tree, BloomFilter probabilistic set, UnionFind disjoint-set.
+#
+# Trie: insert/get round-trip, prefix queries return exactly the right set,
+# removing a key doesn't disturb sibling keys sharing a prefix.
+# BloomFilter: zero false negatives across many added items, rough
+# false-positive-rate sanity check (not exact, just "not wildly off").
+# UnionFind: a sequence of unions produces the correct connected-components
+# partition (checked against a hand-worked example), path compression
+# doesn't break correctness under repeated queries.
+
+from std.test import TestRunner
+from std.collections.trie import Trie
+from std.collections.bloom import BloomFilter
+from std.collections.unionfind import UnionFind
+
+def main():
+    mut t = TestRunner.init("48_collections2")
+
+    # ══════════════════════════════════════════════════════════════════════
+    # Trie[V]
+    # ══════════════════════════════════════════════════════════════════════
+
+    t.section("Trie — basic insert/get/has round-trip")
+    mut tr = Trie[int].init()
+    t.assert_eq_int(tr.len(), 0, "starts empty")
+    t.assert_false(tr.has("anything"), "has() false on empty trie")
+    mut miss = tr.get("anything")
+    t.assert_true(miss.is_none(), "get() on empty trie returns None")
+
+    tr.insert("cat", 1)
+    tr.insert("car", 2)
+    tr.insert("card", 3)
+    tr.insert("dog", 4)
+    tr.insert("do", 5)
+    t.assert_eq_int(tr.len(), 5, "len after 5 inserts")
+
+    t.assert_true(tr.has("cat"), "has(cat)")
+    t.assert_true(tr.has("car"), "has(car)")
+    t.assert_true(tr.has("card"), "has(card)")
+    t.assert_true(tr.has("dog"), "has(dog)")
+    t.assert_true(tr.has("do"), "has(do)")
+    t.assert_false(tr.has("ca"), "has(ca) false -- not itself inserted, only a prefix")
+    t.assert_false(tr.has("doge"), "has(doge) false -- not inserted")
+
+    mut g1 = tr.get("cat")
+    t.assert_true(g1.is_some(), "get(cat) is_some")
+    t.assert_eq_int(g1.unwrap(), 1, "get(cat) value")
+    mut g2 = tr.get("card")
+    t.assert_eq_int(g2.unwrap(), 3, "get(card) value")
+    mut g3 = tr.get("missing")
+    t.assert_true(g3.is_none(), "get(missing) is_none")
+
+    t.section("Trie — overwrite existing key")
+    tr.insert("cat", 100)
+    t.assert_eq_int(tr.len(), 5, "len unchanged after overwriting existing key")
+    mut g4 = tr.get("cat")
+    t.assert_eq_int(g4.unwrap(), 100, "get(cat) reflects overwrite")
+
+    t.section("Trie — has_prefix")
+    t.assert_true(tr.has_prefix(""), "has_prefix('') true -- every trie has the empty prefix")
+    t.assert_true(tr.has_prefix("c"), "has_prefix(c)")
+    t.assert_true(tr.has_prefix("ca"), "has_prefix(ca)")
+    t.assert_true(tr.has_prefix("car"), "has_prefix(car) -- exact key is also a valid prefix")
+    t.assert_true(tr.has_prefix("d"), "has_prefix(d)")
+    t.assert_false(tr.has_prefix("cx"), "has_prefix(cx) false")
+    t.assert_false(tr.has_prefix("zzz"), "has_prefix(zzz) false")
+
+    t.section("Trie — starts_with (autocomplete) returns exactly the right set")
+    mut ca_matches = tr.starts_with("ca")
+    t.assert_eq_int(ca_matches.len(), 3, "starts_with(ca) count -- car, card, cat")
+    mut found_car  = false
+    mut found_card = false
+    mut found_cat  = false
+    mut i = 0
+    while i < ca_matches.len():
+        mut m = ca_matches.get(i)
+        if m == "car":  found_car  = true
+        if m == "card": found_card = true
+        if m == "cat":  found_cat  = true
+        i = i + 1
+    t.assert_true(found_car,  "starts_with(ca) includes 'car'")
+    t.assert_true(found_card, "starts_with(ca) includes 'card'")
+    t.assert_true(found_cat,  "starts_with(ca) includes 'cat'")
+
+    mut d_matches = tr.starts_with("do")
+    t.assert_eq_int(d_matches.len(), 2, "starts_with(do) count -- do, dog")
+
+    mut none_matches = tr.starts_with("zzz")
+    t.assert_eq_int(none_matches.len(), 0, "starts_with(zzz) empty -- no matches")
+
+    mut all_matches = tr.starts_with("")
+    t.assert_eq_int(all_matches.len(), 5, "starts_with('') returns every key")
+
+    t.section("Trie — remove doesn't disturb sibling keys sharing a prefix")
+    mut removed1 = tr.remove("car")
+    t.assert_true(removed1, "remove(car) returns true -- key existed")
+    t.assert_eq_int(tr.len(), 4, "len decremented after remove")
+    t.assert_false(tr.has("car"), "has(car) false after remove")
+    t.assert_true(tr.has("card"), "has(card) still true -- shares prefix with removed 'car'")
+    t.assert_true(tr.has("cat"), "has(cat) still true -- shares prefix with removed 'car'")
+    t.assert_true(tr.has_prefix("ca"), "has_prefix(ca) still true -- card/cat remain")
+
+    mut removed2 = tr.remove("nonexistent")
+    t.assert_false(removed2, "remove(nonexistent) returns false")
+    t.assert_eq_int(tr.len(), 4, "len unchanged after removing absent key")
+
+    mut removed3 = tr.remove("do")
+    t.assert_true(removed3, "remove(do) returns true")
+    t.assert_false(tr.has("do"), "has(do) false after remove")
+    t.assert_true(tr.has("dog"), "has(dog) still true -- 'do' was a prefix of 'dog', not a separate branch")
+    t.assert_eq_int(tr.len(), 3, "len after removing 'do'")
+
+    # Remove everything, confirm trie ends up genuinely empty.
+    tr.remove("card")
+    tr.remove("cat")
+    tr.remove("dog")
+    t.assert_eq_int(tr.len(), 0, "len 0 after removing every key")
+    t.assert_false(tr.has_prefix("c"), "has_prefix(c) false once trie is empty")
+    mut empty_matches = tr.starts_with("")
+    t.assert_eq_int(empty_matches.len(), 0, "starts_with('') empty once trie is empty")
+
+    t.section("Trie[str] -- value type other than int")
+    mut sv = Trie[str].init()
+    sv.insert("greeting", "hello")
+    sv.insert("farewell", "goodbye")
+    mut gv = sv.get("greeting")
+    t.assert_eq_str(gv.unwrap(), "hello", "Trie[str] get")
+
+    # ══════════════════════════════════════════════════════════════════════
+    # BloomFilter
+    # ══════════════════════════════════════════════════════════════════════
+
+    t.section("BloomFilter — sizing sanity")
+    mut bf = BloomFilter.init(1000, 0.01)
+    t.assert_gt_int(bf.bit_size(), 0, "bit_size positive")
+    t.assert_gt_int(bf.hash_count(), 0, "hash_count positive")
+    t.assert_eq_int(bf.len(), 0, "len starts at 0")
+
+    t.section("BloomFilter — zero false negatives across many items")
+    mut n_items = 800
+    mut j = 0
+    while j < n_items:
+        bf.add("member-" + str(j))
+        j = j + 1
+    t.assert_eq_int(bf.len(), n_items, "len tracks add() calls")
+
+    mut all_present = true
+    mut missing_count = 0
+    j = 0
+    while j < n_items:
+        if not bf.might_contain("member-" + str(j)):
+            all_present = false
+            missing_count = missing_count + 1
+        j = j + 1
+    t.assert_true(all_present, "every added item is always reported present (zero false negatives)")
+    t.assert_eq_int(missing_count, 0, "explicit count of false negatives is exactly 0")
+
+    t.section("BloomFilter — false-positive rate is in the right ballpark")
+    # Query a large disjoint set of items that were never added; count how
+    # many are (incorrectly) reported present. Configured for ~1% FP rate --
+    # just sanity-check the observed rate isn't wildly off (e.g. not >90%,
+    # which would indicate a broken/saturated filter), not an exact match.
+    mut probe_count = 5000
+    mut false_positives = 0
+    j = 0
+    while j < probe_count:
+        if bf.might_contain("never-added-" + str(j)):
+            false_positives = false_positives + 1
+        j = j + 1
+    # Loose bound: at a configured 1% target, seeing under 15% observed is a
+    # reasonable "not wildly off" sanity bar without being a flaky exact
+    # statistical assertion.
+    mut fp_ceiling = probe_count * 15 / 100
+    t.assert_lt_int(false_positives, fp_ceiling, "observed false-positive rate is in the right ballpark for target 1%")
+
+    t.section("BloomFilter — smaller filter still zero false negatives")
+    mut bf2 = BloomFilter.init(10, 0.1)
+    bf2.add("alpha")
+    bf2.add("beta")
+    bf2.add("gamma")
+    t.assert_true(bf2.might_contain("alpha"), "small filter: alpha present")
+    t.assert_true(bf2.might_contain("beta"), "small filter: beta present")
+    t.assert_true(bf2.might_contain("gamma"), "small filter: gamma present")
+
+    # ══════════════════════════════════════════════════════════════════════
+    # UnionFind
+    # ══════════════════════════════════════════════════════════════════════
+
+    t.section("UnionFind — starts as all singletons")
+    mut uf = UnionFind.init(10)
+    t.assert_eq_int(uf.component_count(), 10, "10 singleton components initially")
+    t.assert_eq_int(uf.size(), 10, "size() reports element count")
+    t.assert_false(uf.connected(0, 1), "0 and 1 not connected initially")
+
+    t.section("UnionFind — hand-worked union sequence")
+    # Build: {0,1,2}, {3,4}, {5,6,7,8}, {9} standalone
+    uf.union(0, 1)
+    uf.union(1, 2)
+    uf.union(3, 4)
+    uf.union(5, 6)
+    uf.union(6, 7)
+    uf.union(7, 8)
+    t.assert_eq_int(uf.component_count(), 4, "4 components: {0,1,2} {3,4} {5,6,7,8} {9}")
+
+    t.assert_true(uf.connected(0, 1), "0-1 connected")
+    t.assert_true(uf.connected(0, 2), "0-2 connected (transitively)")
+    t.assert_true(uf.connected(1, 2), "1-2 connected")
+    t.assert_true(uf.connected(3, 4), "3-4 connected")
+    t.assert_true(uf.connected(5, 8), "5-8 connected (transitively through 6,7)")
+    t.assert_true(uf.connected(6, 8), "6-8 connected")
+
+    t.assert_false(uf.connected(0, 3), "0-3 NOT connected -- different components")
+    t.assert_false(uf.connected(2, 4), "2-4 NOT connected")
+    t.assert_false(uf.connected(4, 5), "4-5 NOT connected")
+    t.assert_false(uf.connected(9, 0), "9 is standalone -- not connected to 0")
+    t.assert_false(uf.connected(9, 5), "9 is standalone -- not connected to 5")
+
+    t.section("UnionFind — merging components")
+    uf.union(2, 3)   # merges {0,1,2} and {3,4}
+    t.assert_true(uf.connected(0, 4), "0-4 connected after merging {0,1,2} and {3,4}")
+    t.assert_true(uf.connected(1, 3), "1-3 connected after merge")
+    t.assert_eq_int(uf.component_count(), 3, "3 components: {0,1,2,3,4} {5,6,7,8} {9}")
+
+    uf.union(4, 9)   # merges {0,1,2,3,4} and {9}
+    t.assert_true(uf.connected(0, 9), "0-9 connected after merging in the standalone 9")
+    t.assert_eq_int(uf.component_count(), 2, "2 components remain")
+
+    uf.union(0, 8)   # merges the last two components into one
+    t.assert_true(uf.connected(0, 5), "everything is now one component")
+    t.assert_true(uf.connected(9, 6), "everything is now one component (other pair)")
+    t.assert_eq_int(uf.component_count(), 1, "all 10 elements in a single component")
+
+    t.section("UnionFind — union on already-connected pair is a safe no-op")
+    mut before = uf.component_count()
+    uf.union(0, 5)   # already connected
+    t.assert_eq_int(uf.component_count(), before, "union on already-connected pair doesn't change component_count")
+
+    t.section("UnionFind — repeated find() after heavy path compression stays correct")
+    mut root0 = uf.find(0)
+    mut k = 0
+    while k < 50:
+        t.assert_eq_int(uf.find(k), root0, "find(" + str(k) + ") stable and matches root0 under repeated compressed queries")
+        k = k + 1
+
+    t.section("UnionFind — independent instance, disjoint from the one above")
+    mut uf2 = UnionFind.init(4)
+    uf2.union(0, 1)
+    t.assert_true(uf2.connected(0, 1), "uf2: 0-1 connected")
+    t.assert_false(uf2.connected(2, 3), "uf2: 2-3 not connected")
+    t.assert_eq_int(uf2.component_count(), 3, "uf2: 3 components -- {0,1} {2} {3}")
+
+    t.summary()

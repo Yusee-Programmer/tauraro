@@ -14,6 +14,9 @@ from std.collections.list    import LinkedList, ListNode
 from std.collections.graph   import Graph, GraphEdge
 from std.collections.lru     import LruCache
 from std.collections.btree   import BTreeMap
+from std.collections.trie      import Trie
+from std.collections.bloom     import BloomFilter
+from std.collections.unionfind import UnionFind
 ```
 
 ---
@@ -675,3 +678,137 @@ print(sk.get(0))              # "apple"  -- lexicographic order
 > binding an explicit type, as in `mut v: str = m.get(5)` above, when working
 > with a `BTreeMap[K, V]` whose `K` and `V` are different types.
 
+---
+
+## Trie[V]
+
+**When**: You need prefix-based lookups over string keys — autocomplete suggestions, spell-check dictionaries, IP-routing-style longest-prefix structures, or any "give me every key starting with X" query that a hash-based `Dict` can't answer without a full scan.
+**Why**: Node-based prefix tree with a 256-entry child-pointer table per node (indexed directly by byte value — no hashing, no per-edge string allocation). `insert`/`get`/`has_prefix`/`remove` are all `O(len(key))`; `starts_with` is `O(len(prefix) + number of matching keys)`.
+
+Keys are treated as raw byte sequences, so lookups walk one byte at a time — correct for ASCII keys, and for UTF-8 keys where only whole-key equality matters (not per-codepoint semantics).
+
+### Methods
+
+| Method | Signature | Returns | Description |
+|---|---|---|---|
+| `init` | `() -> Trie[V]` | `Trie[V]` | Create an empty trie. |
+| `insert` | `(key: str, value: V)` | `void` | Insert or overwrite the value for `key`. |
+| `get` | `(key: str) -> Option[V]` | `Option[V]` | `Some(value)` if `key` is present, `None` otherwise. |
+| `has` | `(key: str) -> bool` | `bool` | `true` if `key` itself was inserted (not just a prefix of some other key). |
+| `has_prefix` | `(prefix: str) -> bool` | `bool` | `true` if any stored key begins with `prefix` (including `prefix` being empty, or equal to a stored key). |
+| `starts_with` | `(prefix: str) -> Vec[str]` | `Vec[str]` | All stored keys beginning with `prefix`, ascending byte order. Empty `Vec` if none match. |
+| `remove` | `(key: str) -> bool` | `bool` | Remove `key` if present; returns `true` if a key was actually removed. Prunes now-empty nodes back up the path, but never a node still shared by another stored key — removing one key never disturbs sibling keys that share a prefix with it. |
+| `len` | `() -> int` | `int` | Number of distinct keys currently stored. |
+| `is_empty` | `() -> bool` | `bool` | |
+
+### Example
+
+```tauraro
+from std.collections.trie import Trie
+
+mut t = Trie[int].init()
+t.insert("cat", 1)
+t.insert("car", 2)
+t.insert("card", 3)
+t.insert("dog", 4)
+
+mut g = t.get("cat")
+print(str(g.is_some()))       # true
+print(str(g.unwrap()))        # 1
+
+print(str(t.has_prefix("ca")))  # true
+print(str(t.has_prefix("xz")))  # false
+
+mut matches = t.starts_with("ca")   # ["car", "card", "cat"]
+print(str(matches.len()))           # 3
+
+t.remove("car")
+print(str(t.has("car")))    # false -- removed
+print(str(t.has("card")))   # true  -- sibling key untouched
+print(str(t.has("cat")))    # true  -- sibling key untouched
+print(str(t.len()))         # 3
+```
+
+---
+
+## BloomFilter
+
+**When**: You need fast, memory-cheap "have I probably seen this before?" checks over a large or unbounded set of items where occasional false positives are acceptable but false negatives are not — deduplicating a huge stream, a first-pass filter before an expensive database lookup, cache-miss avoidance.
+**Why**: A Bloom filter trades exactness for space: it never false-negatives (if `might_contain` returns `false`, the item was definitely never added) but can false-positive (occasionally reports "might be present" for something never added). There is no way to remove an item once added, and no way to enumerate members — it only answers membership queries.
+
+`BloomFilter.init` computes the bit-array size `m` and hash-function count `k` from the standard formulas given `expected_items` (`n`) and `false_positive_rate` (`p`):
+
+```
+m = -(n * ln(p)) / (ln(2)^2)
+k = (m / n) * ln(2)
+```
+
+Internally it uses double hashing (Kirsch-Mitzenmacher): two independent base hashes (FNV-1a and a djb2-style hash) are combined as `h1 + i*h2` for the `k` probe indices, giving the statistical effect of `k` independent hash functions from only two real hash computations per operation.
+
+### Methods
+
+| Method | Signature | Returns | Description |
+|---|---|---|---|
+| `init` | `(expected_items: int, false_positive_rate: float) -> BloomFilter` | `BloomFilter` | Create a filter sized for `expected_items` entries at approximately `false_positive_rate` (e.g. `0.01` for 1%). |
+| `add` | `(item: str)` | `void` | Add an item. |
+| `might_contain` | `(item: str) -> bool` | `bool` | `true` = "possibly present" (may be a false positive). `false` = "definitely absent" — **never** a false negative for anything actually `add`ed. |
+| `len` | `() -> int` | `int` | Number of `add()` calls made so far (not distinct items — a Bloom filter can't tell a repeat add from a new one). |
+| `bit_size` | `() -> int` | `int` | The computed bit-array size `m`. |
+| `hash_count` | `() -> int` | `int` | The computed number of hash probes `k` performed per `add`/`might_contain`. |
+
+### Example
+
+```tauraro
+from std.collections.bloom import BloomFilter
+
+mut f = BloomFilter.init(1000, 0.01)   # ~1000 items, ~1% false-positive rate
+
+mut i = 0
+while i < 500:
+    f.add("item-" + str(i))
+    i = i + 1
+
+# Zero false negatives: every added item is always reported present.
+print(str(f.might_contain("item-42")))    # true
+
+# Never-added items are usually (but not guaranteed) reported absent.
+print(str(f.might_contain("never-added-xyz")))   # false, most of the time
+```
+
+---
+
+## UnionFind
+
+**When**: You need to track and merge groups of related elements and answer "are these two in the same group?" — Kruskal's minimum spanning tree, detecting cycles in an undirected graph, image-processing connected-component labeling, grouping friends/accounts by connectivity.
+**Why**: Union-by-rank plus full path compression gives amortized-near-`O(1)` (inverse-Ackermann) `find`/`union`/`connected` — far better than re-scanning group membership on every query.
+
+### Methods
+
+| Method | Signature | Returns | Description |
+|---|---|---|---|
+| `init` | `(n: int) -> UnionFind` | `UnionFind` | Create `n` singleton components (indices `0..n-1`, each its own component). |
+| `find` | `(x: int) -> int` | `int` | Representative (root) of `x`'s component. Compresses the path to the root as a side effect. |
+| `union` | `(a: int, b: int)` | `void` | Merge the components containing `a` and `b`. No-op if already the same component. |
+| `connected` | `(a: int, b: int) -> bool` | `bool` | `true` if `a` and `b` are currently in the same component. |
+| `component_count` | `() -> int` | `int` | Number of distinct connected components remaining. |
+| `size` | `() -> int` | `int` | Total number of elements this `UnionFind` was initialized with. |
+
+### Example
+
+```tauraro
+from std.collections.unionfind import UnionFind
+
+mut uf = UnionFind.init(10)
+print(str(uf.component_count()))   # 10 -- all singletons
+
+uf.union(0, 1)
+uf.union(1, 2)
+uf.union(3, 4)
+print(str(uf.connected(0, 2)))     # true  -- 0-1-2 merged
+print(str(uf.connected(0, 3)))     # false -- different component
+print(str(uf.component_count()))   # 7
+
+uf.union(2, 3)
+print(str(uf.connected(0, 4)))     # true -- {0,1,2} and {3,4} now joined
+print(str(uf.component_count()))   # 6
+```

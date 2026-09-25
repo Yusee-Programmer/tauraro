@@ -1,0 +1,208 @@
+# std.collections.trie — Prefix tree (trie) over str keys, generic over a
+# value type V.
+#
+# Node-based implementation: each TrieNode holds a fixed-size 256-entry
+# child-pointer table indexed directly by byte value (children-per-character,
+# the standard/expected trie shape) rather than a Dict[str, TrieNode] keyed
+# by single-char substrings — indexing by raw byte avoids allocating a str
+# per edge and gives O(1) child lookup with no hashing.
+#
+# Keys are treated as raw byte sequences (ASCII/UTF-8 code units), so lookups
+# walk one byte at a time; this is correct for ASCII keys and for UTF-8 keys
+# where only whole-key equality (not per-codepoint semantics) matters, which
+# is all this module promises.
+#
+# `insert`/`get`/`has_prefix`/`remove` are all O(len(key)); `starts_with` is
+# O(len(prefix) + number of matching keys).
+
+extern "C":
+    def _tr_checked_alloc(size: int) -> Pointer[char]
+    def _tr_c_free(ptr: Pointer[char])
+
+from std.core.vec import Vec
+
+# ─── Node ───────────────────────────────────────────────────────────────────
+#
+# `children` is a 256-slot table of raw node pointers (0 = no child for that
+# byte). `has_val`/`val` hold the payload when a key ends exactly at this
+# node. `child_count` tracks how many of the 256 slots are populated so
+# `remove` can decide whether a now-valueless node is safe to free (a shared
+# prefix with siblings must NOT be pruned).
+
+pub class TrieNode[V]:
+    pub children:    Pointer[Pointer[TrieNode[V]]]   # 256-slot table
+    pub has_val:     bool
+    pub val:         V
+    pub child_count: int
+
+# ─── Trie ───────────────────────────────────────────────────────────────────
+
+pub class Trie[V]:
+    pub root:  Pointer[TrieNode[V]]
+    pub count: int   # number of distinct keys currently stored
+
+extend Trie[V]:
+    pub def init() -> Trie[V]:
+        mut t = Trie[V]()
+        t.root  = Trie[V]._new_node()
+        t.count = 0
+        return t
+
+    # ── Internal: node helpers ──────────────────────────────────────────────
+
+    pub def _new_node() -> Pointer[TrieNode[V]]:
+        mut node = _tr_checked_alloc(sizeof(TrieNode[V])) as Pointer[TrieNode[V]]
+        mut nn = TrieNode[V]()
+        mut tbl = _tr_checked_alloc(256 * sizeof(Pointer[TrieNode[V]])) as Pointer[Pointer[TrieNode[V]]]
+        mut i = 0
+        while i < 256:
+            unsafe: tbl.offset(i).write(0 as Pointer[TrieNode[V]])
+            i = i + 1
+        nn.children    = tbl
+        nn.has_val     = false
+        nn.child_count = 0
+        unsafe: node.write(nn)
+        # SAFETY: node is a freshly allocated heap node owned by this trie.
+        unsafe: return node
+
+    pub def _byte_at(self, key: str, i: int) -> int:
+        mut kp = key as Pointer[char]
+        return kp.offset(i).read() as int
+
+    pub def _key_len(self, key: str) -> int:
+        mut kp = key as Pointer[char]
+        mut n  = 0
+        while kp.offset(n).read() as int != 0: n = n + 1
+        return n
+
+    # ── insert ───────────────────────────────────────────────────────────────
+
+    pub def insert(self, key: str, value: V):
+        mut klen = self._key_len(key)
+        mut cur  = self.root
+        mut i    = 0
+        while i < klen:
+            mut b = self._byte_at(key, i)
+            mut node = cur.read()
+            mut child = node.children.offset(b).read()
+            if child as int == 0:
+                child = Trie[V]._new_node()
+                unsafe: node.children.offset(b).write(child)
+                node.child_count = node.child_count + 1
+                unsafe: cur.write(node)
+            cur = child
+            i = i + 1
+        mut leaf = cur.read()
+        if not leaf.has_val:
+            self.count = self.count + 1
+        leaf.has_val = true
+        leaf.val     = value
+        unsafe: cur.write(leaf)
+
+    # ── get ──────────────────────────────────────────────────────────────────
+
+    # Walk to the node exactly matching key; returns a null pointer if the
+    # path doesn't exist.
+    pub def _find_node(self, key: str) -> Pointer[TrieNode[V]]:
+        mut klen = self._key_len(key)
+        mut cur  = self.root
+        mut i    = 0
+        while i < klen:
+            mut b = self._byte_at(key, i)
+            mut node = cur.read()
+            mut child = node.children.offset(b).read()
+            if child as int == 0:
+                return 0 as Pointer[TrieNode[V]]
+            cur = child
+            i = i + 1
+        # SAFETY: cur is a heap node reached by walking from the live root.
+        unsafe: return cur
+
+    pub def get(self, key: str) -> Option[V]:
+        mut n = self._find_node(key)
+        if n as int == 0: return Option.None()
+        mut node = n.read()
+        if not node.has_val: return Option.None()
+        return Option.Some(node.val)
+
+    pub def has(self, key: str) -> bool:
+        mut n = self._find_node(key)
+        if n as int == 0: return false
+        return n.read().has_val
+
+    # True when at least one stored key begins with prefix (including the
+    # empty prefix, and a key equal to prefix itself).
+    pub def has_prefix(self, prefix: str) -> bool:
+        return self._find_node(prefix) as int != 0
+
+    # ── starts_with (autocomplete) ──────────────────────────────────────────
+
+    pub def _collect(self, n: Pointer[TrieNode[V]], acc: str, out: Vec[str]):
+        mut node = n.read()
+        if node.has_val:
+            out.push(acc)
+        mut b = 0
+        while b < 256:
+            mut child = node.children.offset(b).read()
+            if child as int != 0:
+                mut nb: Pointer[char] = _tr_checked_alloc(2) as Pointer[char]
+                unsafe:
+                    nb.offset(0).write(b as char)
+                    nb.offset(1).write(0 as char)
+                mut nacc = acc + (nb as str)
+                self._collect(child, nacc, out)
+            b = b + 1
+
+    # All stored keys that begin with prefix, in ascending byte order.
+    # Empty Vec if no keys share that prefix.
+    pub def starts_with(self, prefix: str) -> Vec[str]:
+        mut out = Vec[str].init(8)
+        mut n = self._find_node(prefix)
+        if n as int == 0: return out
+        self._collect(n, prefix, out)
+        return out
+
+    # ── remove ───────────────────────────────────────────────────────────────
+
+    # Recursively descend to `key`; unmarks its value and prunes now-empty,
+    # valueless nodes back up the path (never prunes a node that still has
+    # children or a value, so sibling keys sharing a prefix are untouched).
+    # Returns true when the child at this level should be pruned by its
+    # parent (i.e. this node is now empty and valueless).
+    pub def _remove_at(self, n: Pointer[TrieNode[V]], key: str, i: int, klen: int) -> bool:
+        mut node = n.read()
+        if i == klen:
+            if not node.has_val: return false
+            node.has_val = false
+            unsafe: n.write(node)
+            self.count = self.count - 1
+            return node.child_count == 0
+        mut b = self._byte_at(key, i)
+        mut child = node.children.offset(b).read()
+        if child as int == 0: return false
+        mut should_prune = self._remove_at(child, key, i + 1, klen)
+        if should_prune:
+            mut child_node = child.read()
+            _tr_c_free(child_node.children as Pointer[char])
+            _tr_c_free(child as Pointer[char])
+            unsafe: node.children.offset(b).write(0 as Pointer[TrieNode[V]])
+            node.child_count = node.child_count - 1
+            unsafe: n.write(node)
+        return (not node.has_val) and node.child_count == 0
+
+    # Remove key if present. Returns true if a key was actually removed.
+    # Pruning stops at any node still shared by another stored key, so
+    # sibling keys are never affected.
+    pub def remove(self, key: str) -> bool:
+        mut before = self.count
+        mut klen = self._key_len(key)
+        self._remove_at(self.root, key, 0, klen)
+        return self.count != before
+
+    # ── size ─────────────────────────────────────────────────────────────────
+
+    pub def len(self) -> int:
+        return self.count
+
+    pub def is_empty(self) -> bool:
+        return self.count == 0
