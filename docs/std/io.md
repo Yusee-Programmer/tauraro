@@ -9,6 +9,7 @@ from std.io.console    import Console
 from std.io.poll       import IOPoll, IOEvent
 from std.io.event_loop import EventLoop
 from std.io.archive    import ZipWriter, ZipReader, Crc32
+from std.io.tar        import TarWriter, TarReader
 from std.sys.fs        import Fs
 ```
 
@@ -470,6 +471,69 @@ print(str(r.entry_count()))          # 3
 mut i = r.find_entry("readme.txt")
 if i >= 0:
     print(r.read_entry(i))            # "hello archive" (CRC32-verified)
+
+mut miss = r.find_entry("nope.txt")   # -1 — not present
+```
+
+---
+
+## Archive (tar) — `std.io.tar`
+
+**When**: You need to create or read real `.tar` files (USTAR / POSIX.1-1988 format) — bundling multiple files into one uncompressed archive, or unpacking one — without shelling out to a `tar` CLI tool.
+**Why**: A pure-Tauraro implementation of the USTAR format (fixed 512-byte header blocks + content padded to 512-byte boundaries + two all-zero terminating blocks), byte-correct enough that real `tar` can list and extract `TarWriter`'s output. The header checksum uses tar's own algorithm (sum of all header bytes with the checksum field itself treated as 8 ASCII spaces), computed exactly so real `tar` tools accept it.
+
+```tauraro
+from std.io.tar import TarWriter, TarReader
+
+mut w = TarWriter.init()
+w.add_entry("hello.txt", "hello world", 11)
+mut tar_bytes = w.finish()
+```
+
+### TarWriter class
+
+| Method | Signature | Returns | Description |
+|---|---|---|---|
+| `init` | `() -> TarWriter` | `TarWriter` | Create an empty archive builder. |
+| `add_entry` | `(self, name: str, content: str, len_: int)` | `void` | Add a regular-file entry: a 512-byte USTAR header (with a correct checksum) followed by `len_` bytes of content, zero-padded to the next 512-byte boundary. `name` is truncated to 99 bytes + NUL if longer (no long-name "prefix" extension). |
+| `finish` | `(self) -> str` | `str` | Write the two all-zero end-of-archive blocks and return the complete tar byte stream. |
+| `total_len` | `(self) -> int` | `int` | Exact byte length of the archive built so far — call **after** `finish()` for the final archive size. The returned bytes may contain embedded NULs (in file content), so this length (not `strlen`) is authoritative. |
+
+### TarReader class
+
+Parses all entry headers up front (cheap — no content copying); each entry's content is only materialized as a str when you call `read_entry`.
+
+| Method | Signature | Returns | Description |
+|---|---|---|---|
+| `open` | `(data: str, len_: int) -> TarReader` | `TarReader` | Parse a tar byte buffer into a flat list of entries. Check `.ok` for success (stays `true` unless a malformed non-"ustar"-magic header is encountered). |
+| `entry_count` | `(self) -> int` | `int` | Number of entries in the archive. |
+| `entry_name` | `(self, i: int) -> str` | `str` | Name of entry `i`, or `""` if out of range. |
+| `entry_size` | `(self, i: int) -> int` | `int` | Content size of entry `i`, or `-1` if out of range. |
+| `find_entry` | `(self, name: str) -> int` | `int` | Index of the entry named `name`, or `-1` if not present. |
+| `read_entry` | `(self, i: int) -> str` | `str` | Return entry `i`'s exact content bytes (length `entry_size(i)`). |
+
+Fields: `ok: bool` — `true` when parsing completed without hitting a malformed header.
+
+### Example
+
+```tauraro
+from std.io.tar import TarWriter, TarReader
+
+# Write a multi-entry archive
+mut w = TarWriter.init()
+w.add_entry("readme.txt", "hello archive", 13)
+w.add_entry("empty.txt", "", 0)                          # empty entries are fine
+w.add_entry("nested/dir/file.txt", "content in a nested path", 25)
+mut tar_bytes = w.finish()
+mut tar_len   = w.total_len()
+
+# Read it back
+mut r = TarReader.open(tar_bytes, tar_len)
+print(str(r.entry_count()))          # 3
+
+mut i = r.find_entry("readme.txt")
+if i >= 0:
+    print(r.read_entry(i))            # "hello archive"
 
 mut miss = r.find_entry("nope.txt")   # -1 — not present
 ```

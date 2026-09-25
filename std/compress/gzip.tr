@@ -1,0 +1,274 @@
+# std.compress.gzip — gzip container format (RFC 1952).
+#
+# A thin wrapper around the raw-DEFLATE runtime routines std.compress.zlib.Zlib
+# already wraps (_tr_deflate/_tr_inflate): this module only adds the gzip
+# member header and footer around that payload. It does NOT reimplement
+# DEFLATE, and it does NOT reimplement CRC32 — the footer checksum reuses
+# std.io.archive.Crc32 (IEEE 802.3 / PKZIP / gzip polynomial 0xEDB88320,
+# the same table-driven implementation ZipWriter/ZipReader use).
+#
+# Requires: compile with -DTAURARO_COMPRESS_ZLIB -lz for real compression
+# (same opt-in flag as std.compress.zlib). Without that flag, the runtime's
+# _tr_deflate/_tr_inflate are stub implementations that return NULL/empty —
+# Gzip.compress() detects that (via the out_len C int, never by touching a
+# possibly-NULL string) and falls back to a STORED-equivalent gzip member
+# (RFC 1952 does not have a "stored" method, but gzip's DEFLATE algorithm
+# byte 8 always claims CM=8; a zero-length deflate stream is not valid, so
+# the fallback here instead emits the deflate "stored block" encoding for
+# the raw bytes by hand — see _deflate_stored_blocks below) so Gzip.compress
+# never silently corrupts data even on a stub build.
+#
+# gzip member layout (RFC 1952 §2.3):
+#   HEADER (10 bytes):
+#     byte 0-1  ID1 ID2       0x1f 0x8b            (magic)
+#     byte 2    CM             8                    (deflate)
+#     byte 3    FLG            0x00                 (no FEXTRA/FNAME/FCOMMENT/FHCRC)
+#     byte 4-7  MTIME          0 (unknown/not set)
+#     byte 8    XFL            0x00
+#     byte 9    OS             0xFF                 (unknown)
+#   BODY: raw DEFLATE stream (no zlib wrapper, no adler32 — that's what
+#         makes gzip's payload byte-identical to std.compress.zlib.Zlib's
+#         .deflate()/.inflate() pair)
+#   FOOTER (8 bytes):
+#     CRC32 of the UNCOMPRESSED data, little-endian
+#     ISIZE = size of the uncompressed data mod 2^32, little-endian
+#
+# Usage:
+#   from std.compress.gzip import Gzip
+#   mut compressed = Gzip.compress("hello world", 11)
+#   mut original    = Gzip.decompress(compressed, Gzip.compressed_len(compressed), 4096)
+
+extern "C":
+    def _tr_deflate(input: str, ilen: int, out_len: Pointer[c_int]) -> str
+    def _tr_inflate(input: str, ilen: int, max_out: int) -> str
+    def _tr_c_malloc(size: int) -> Pointer[char]
+    def _tr_c_free(ptr: Pointer[char])
+
+from std.io.archive import ByteBuf, Crc32
+from std.string.str import Str
+
+# Holds the exact byte length of the most recent Gzip.compress() result
+# (gzip output always contains embedded NUL bytes — in the MTIME field at
+# minimum — so it is never safe to recover the length via strlen —
+# Gzip.compressed_len() reads this instead of scanning the string). Mirrors
+# std.io.archive's own module-level `_crc32_holder` pattern for stashing
+# small pieces of state alongside a static-method class.
+pub class GzipLenHolder:
+    pub len: int
+
+mut _gzip_len_holder = GzipLenHolder()
+
+pub class Gzip:
+    _dummy: int
+
+extend Gzip:
+    # Compress `input` (first `ilen` bytes) into a complete gzip member
+    # (header + DEFLATE payload + CRC32/ISIZE footer). Returns the gzip
+    # bytes as a str — call Gzip.compressed_len() immediately afterward
+    # (it returns the exact length of THIS result, not a strlen — gzip
+    # output contains embedded NUL bytes) to know how many bytes are valid.
+    pub def compress(input: str, ilen: int) -> str:
+        mut buf = ByteBuf.init(ilen + 32)
+
+        # ── Header (RFC 1952 §2.3.1) ────────────────────────────────────────
+        buf.push_u8(0x1f)          # ID1
+        buf.push_u8(0x8b)          # ID2
+        buf.push_u8(0x08)          # CM = deflate
+        buf.push_u8(0x00)          # FLG = no optional fields
+        buf.push_u32le(0)          # MTIME = 0 (unknown)
+        buf.push_u8(0x00)          # XFL
+        buf.push_u8(0xff)          # OS = unknown
+
+        # ── Body: raw DEFLATE of the payload ────────────────────────────────
+        if ilen > 0:
+            mut out_len_buf = _tr_c_malloc(8) as Pointer[c_int]
+            unsafe: out_len_buf.write(0 as c_int)
+            mut compressed = _tr_deflate(input, ilen, out_len_buf)
+            mut clen = 0
+            unsafe: clen = out_len_buf.read() as int
+            _tr_c_free(out_len_buf as Pointer[char])
+
+            if clen > 0:
+                buf.push_bytes(compressed, clen)
+            else:
+                # Stub runtime (no -DTAURARO_COMPRESS_ZLIB) or deflate
+                # failure: fall back to raw DEFLATE "stored block(s)"
+                # so the member is still a spec-valid, self-decompressing
+                # gzip stream instead of silently losing data.
+                _deflate_stored_blocks(buf, input, ilen)
+        else:
+            # Empty payload: a single empty stored final block.
+            _deflate_stored_blocks(buf, input, 0)
+
+        # ── Footer (RFC 1952 §2.3.1) ────────────────────────────────────────
+        mut crc = Crc32.compute(input, ilen)
+        buf.push_u32le(crc)
+        buf.push_u32le(ilen & 0xFFFFFFFF)   # ISIZE mod 2^32
+
+        mut result = buf.to_str()
+        _gzip_len_holder.len = buf.len
+        buf.free()
+        return result
+
+    # Decompress a gzip member back to its original bytes, up to `max_out`
+    # bytes of uncompressed data, verifying CRC32 + ISIZE against the
+    # footer. On any format/verification failure, prints a message and
+    # returns "".
+    pub def decompress(input: str, ilen: int, max_out: int) -> str:
+        if ilen < 18:
+            print("Gzip.decompress: input too short to be a gzip member")
+            return ""
+
+        mut p = input as Pointer[char]
+        mut id1 = 0
+        mut id2 = 0
+        mut cm  = 0
+        mut flg = 0
+        unsafe:
+            id1 = p.offset(0).read() as int & 0xFF
+            id2 = p.offset(1).read() as int & 0xFF
+            cm  = p.offset(2).read() as int & 0xFF
+            flg = p.offset(3).read() as int & 0xFF
+
+        if id1 != 0x1f or id2 != 0x8b:
+            print("Gzip.decompress: bad magic bytes (not a gzip stream)")
+            return ""
+        if cm != 0x08:
+            print("Gzip.decompress: unsupported compression method (only CM=8/deflate is supported)")
+            return ""
+
+        # Skip any optional fields per FLG (FEXTRA/FNAME/FCOMMENT/FHCRC).
+        mut off = 10
+        if flg & 0x04 != 0:   # FEXTRA
+            mut xlen = _rd_u16(input, off)
+            off = off + 2 + xlen
+        if flg & 0x08 != 0:   # FNAME
+            off = _skip_cstr(input, ilen, off)
+        if flg & 0x10 != 0:   # FCOMMENT
+            off = _skip_cstr(input, ilen, off)
+        if flg & 0x02 != 0:   # FHCRC
+            off = off + 2
+
+        mut footer_off = ilen - 8
+        if footer_off < off:
+            print("Gzip.decompress: truncated gzip member")
+            return ""
+
+        mut body_len = footer_off - off
+        mut body = _gz_slice(input, off, body_len)
+
+        mut plain = ""
+        if body_len > 0:
+            plain = _tr_inflate(body, body_len, max_out)
+        # else: empty compressed body -> empty output ("" already)
+
+        mut expect_crc   = _rd_u32(input, footer_off)
+        mut expect_isize = _rd_u32(input, footer_off + 4)
+
+        mut got_len = Str.len(plain)
+        mut got_crc = Crc32.compute(plain, got_len)
+
+        if (expect_isize & 0xFFFFFFFF) != (got_len & 0xFFFFFFFF):
+            print("Gzip.decompress: ISIZE mismatch (expected " + str(expect_isize) + ", got " + str(got_len) + ") — data is corrupted or truncated by max_out")
+            return ""
+        if got_crc != expect_crc:
+            print("Gzip.decompress: CRC32 mismatch (expected " + str(expect_crc) + ", got " + str(got_crc) + ") — data is corrupted")
+            return ""
+
+        return plain
+
+    # Exact byte length of the MOST RECENT Gzip.compress() result (not a
+    # strlen — gzip output always contains embedded NUL bytes, at minimum
+    # in the 4-byte MTIME header field, so strlen would silently truncate).
+    # Call this immediately after compress(); if you need to hold several
+    # compressed buffers at once, save off the length yourself instead of
+    # relying on this between compress() calls.
+    pub def compressed_len(s: str) -> int:
+        return _gzip_len_holder.len
+
+# ── DEFLATE "stored block" fallback (RFC 1951 §3.2.4) ──────────────────────
+#
+# Used only when the runtime's real DEFLATE (_tr_deflate) is unavailable
+# (stub build without -DTAURARO_COMPRESS_ZLIB). A stored block is always a
+# legal, if uncompressed, DEFLATE encoding: BFINAL/BTYPE bits, then LEN/NLEN
+# (16-bit each, byte-aligned), then the raw bytes verbatim. This keeps
+# Gzip.compress()'s OUTPUT always a valid, real-gunzip-decodable gzip
+# stream, and keeps Gzip.decompress() (which always goes through the real
+# _tr_inflate) able to round-trip it on any build where inflate works.
+def _deflate_stored_blocks(buf: ByteBuf, data: str, len_: int):
+    # DEFLATE stored blocks are limited to 65535 bytes each; split as needed.
+    mut max_block = 65535
+    mut remaining = len_
+    mut off = 0
+    if len_ == 0:
+        # One empty final stored block.
+        buf.push_u8(0x01)          # BFINAL=1, BTYPE=00 (stored), bit-packed in 1 byte here since we're byte-aligned already
+        buf.push_u16le(0)          # LEN = 0
+        buf.push_u16le(0xFFFF)     # NLEN = ~LEN
+        return
+
+    while remaining > 0:
+        mut chunk = remaining
+        if chunk > max_block: chunk = max_block
+        mut is_final = 0
+        if chunk == remaining: is_final = 1
+
+        buf.push_u8(is_final & 0x01)     # BFINAL bit0, BTYPE=00 in bits 1-2 (already 0)
+        buf.push_u16le(chunk)
+        buf.push_u16le((~chunk) & 0xFFFF)
+        buf.push_raw((data as Pointer[char]).offset(off), chunk)
+
+        off = off + chunk
+        remaining = remaining - chunk
+
+# ── Little-endian byte readers (mirrors std.io.archive's internal helpers) ──
+
+def _rd_u16(data: str, off: int) -> int:
+    mut p = data as Pointer[char]
+    mut b0 = 0
+    mut b1 = 0
+    unsafe:
+        b0 = p.offset(off).read() as int & 0xFF
+        b1 = p.offset(off + 1).read() as int & 0xFF
+    return b0 | (b1 << 8)
+
+def _rd_u32(data: str, off: int) -> int:
+    mut p = data as Pointer[char]
+    mut b0 = 0
+    mut b1 = 0
+    mut b2 = 0
+    mut b3 = 0
+    unsafe:
+        b0 = p.offset(off).read() as int & 0xFF
+        b1 = p.offset(off + 1).read() as int & 0xFF
+        b2 = p.offset(off + 2).read() as int & 0xFF
+        b3 = p.offset(off + 3).read() as int & 0xFF
+    return b0 | (b1 << 8) | (b2 << 16) | (b3 << 24)
+
+# Skip a NUL-terminated field (FNAME/FCOMMENT) starting at `off`; returns
+# the offset just past the terminating NUL.
+def _skip_cstr(data: str, len_: int, off: int) -> int:
+    mut p = data as Pointer[char]
+    mut i = off
+    unsafe:
+        while i < len_ and p.offset(i).read() as int != 0:
+            i = i + 1
+    return i + 1
+
+# Copy `n` raw bytes starting at `off` in `data` into a fresh,
+# explicitly-length-tracked str (never relies on strlen; safe for
+# embedded NULs).
+def _gz_slice(data: str, off: int, n: int) -> str:
+    mut out = _tr_c_malloc(n + 1)
+    if n > 0:
+        unsafe:
+            mut src = (data as Pointer[char]).offset(off)
+            mut i = 0
+            while i < n:
+                out.offset(i).write(src.offset(i).read())
+                i = i + 1
+    unsafe: out.offset(n).write('\0')
+    return _tr_str_wrap(out)
+
+extern "C":
+    def _tr_str_wrap(s: Pointer[char]) -> str

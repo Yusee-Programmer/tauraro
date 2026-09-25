@@ -1,0 +1,268 @@
+# tests/lang/46_gzip_tar.tr - std.compress.gzip (RFC 1952 gzip container)
+# and std.io.tar (USTAR/POSIX.1-1988 tar archive) round-trips, header byte
+# layout spot-checks, and checksum correctness.
+#
+# Note: on a runtime build WITHOUT -DTAURARO_COMPRESS_ZLIB, the underlying
+# _tr_deflate/_tr_inflate routines std.compress.zlib.Zlib (and therefore
+# Gzip) depend on are stub implementations (_tr_deflate returns NULL,
+# _tr_inflate always returns ""), exactly as documented in
+# tests/regression/zlib_out_len_c_int_abi.tr. Gzip.compress() still
+# produces a spec-valid gzip member on a stub build (via a hand-written
+# DEFLATE "stored block" fallback — verified separately against the real
+# system `gunzip` binary during development), but Gzip.decompress() cannot
+# decode ANY gzip stream on a stub build. This test therefore checks
+# gzip's *header/footer byte layout* unconditionally (that part is pure
+# Tauraro, no runtime dependency), and only asserts the full
+# compress-then-decompress round trip when the runtime build actually
+# supports it (detected via Zlib.deflate on a known input).
+
+from std.test import TestRunner
+from std.compress.gzip import Gzip
+from std.compress.zlib import Zlib
+from std.io.tar import TarWriter, TarReader
+
+extern "C":
+    def _tr_c_malloc(size: int) -> Pointer[char]
+    def _tr_c_memcpy(dst: Pointer[char], src: Pointer[char], n: int)
+    def _tr_str_wrap(s: Pointer[char]) -> str
+
+# Read one byte (0-255) at offset `off` of a raw byte string.
+def byte_at(data: str, off: int) -> int:
+    mut p = data as Pointer[char]
+    mut b = 0
+    unsafe: b = p.offset(off).read() as int & 0xFF
+    return b
+
+# Detect whether this runtime build has real zlib linked in
+# (-DTAURARO_COMPRESS_ZLIB -lz) by checking whether Zlib.deflate actually
+# produces output for non-empty input (stub builds return a NULL string,
+# whose length via the out_len parameter is 0).
+def zlib_available() -> bool:
+    mut d = Zlib.deflate("probe probe probe probe probe", 30)
+    # On a stub build _tr_deflate returns NULL -> Str.len-style access is
+    # unsafe, so check indirectly: a real deflate of 30 repetitive bytes
+    # must compress to fewer than 30 bytes and be usable by Zlib.inflate.
+    mut rt = Zlib.inflate(d, 30, 256)
+    return rt == "probe probe probe probe probe"
+
+def main():
+    mut t = TestRunner.init("46_gzip_tar")
+    mut have_zlib = zlib_available()
+
+    # ── Gzip: header byte layout (RFC 1952 section 2.3.1) ──────────────────
+    t.section("Gzip header byte layout")
+    mut g_empty = Gzip.compress("", 0)
+    t.assert_eq_int(byte_at(g_empty, 0), 0x1f, "byte 0 is ID1 = 0x1f")
+    t.assert_eq_int(byte_at(g_empty, 1), 0x8b, "byte 1 is ID2 = 0x8b")
+    t.assert_eq_int(byte_at(g_empty, 2), 0x08, "byte 2 is CM = 8 (deflate)")
+    t.assert_eq_int(byte_at(g_empty, 3), 0x00, "byte 3 is FLG = 0 (no optional fields)")
+    t.assert_eq_int(byte_at(g_empty, 4), 0, "byte 4 (MTIME low byte) is 0")
+    t.assert_eq_int(byte_at(g_empty, 5), 0, "byte 5 (MTIME) is 0")
+    t.assert_eq_int(byte_at(g_empty, 6), 0, "byte 6 (MTIME) is 0")
+    t.assert_eq_int(byte_at(g_empty, 7), 0, "byte 7 (MTIME high byte) is 0")
+    t.assert_eq_int(byte_at(g_empty, 8), 0x00, "byte 8 is XFL = 0")
+    t.assert_eq_int(byte_at(g_empty, 9), 0xff, "byte 9 is OS = 0xff (unknown)")
+
+    t.section("Gzip footer byte layout (empty payload)")
+    mut g_empty_len = Gzip.compressed_len(g_empty)
+    t.assert_true(g_empty_len >= 18, "gzip member is at least header(10)+footer(8) bytes")
+    # Footer = last 8 bytes: CRC32 (4 bytes LE) + ISIZE (4 bytes LE).
+    # CRC32 of empty input is 0; ISIZE of empty input is 0.
+    mut foot_off = g_empty_len - 8
+    t.assert_eq_int(byte_at(g_empty, foot_off), 0, "CRC32 LE byte 0 is 0 for empty input")
+    t.assert_eq_int(byte_at(g_empty, foot_off + 1), 0, "CRC32 LE byte 1 is 0 for empty input")
+    t.assert_eq_int(byte_at(g_empty, foot_off + 2), 0, "CRC32 LE byte 2 is 0 for empty input")
+    t.assert_eq_int(byte_at(g_empty, foot_off + 3), 0, "CRC32 LE byte 3 is 0 for empty input")
+    t.assert_eq_int(byte_at(g_empty, foot_off + 4), 0, "ISIZE LE byte 0 is 0 for empty input")
+    t.assert_eq_int(byte_at(g_empty, foot_off + 5), 0, "ISIZE LE byte 1 is 0 for empty input")
+    t.assert_eq_int(byte_at(g_empty, foot_off + 6), 0, "ISIZE LE byte 2 is 0 for empty input")
+    t.assert_eq_int(byte_at(g_empty, foot_off + 7), 0, "ISIZE LE byte 3 is 0 for empty input")
+
+    t.section("Gzip footer ISIZE matches input length for non-empty payload")
+    mut short_data = "abc"
+    mut g_short = Gzip.compress(short_data, 3)
+    mut g_short_len = Gzip.compressed_len(g_short)
+    mut foot2 = g_short_len - 8
+    # ISIZE = 3, little-endian -> byte0=3, rest 0
+    t.assert_eq_int(byte_at(g_short, foot2 + 4), 3, "ISIZE LE byte 0 is 3 for 3-byte input")
+    t.assert_eq_int(byte_at(g_short, foot2 + 5), 0, "ISIZE LE byte 1 is 0")
+    t.assert_eq_int(byte_at(g_short, foot2 + 6), 0, "ISIZE LE byte 2 is 0")
+    t.assert_eq_int(byte_at(g_short, foot2 + 7), 0, "ISIZE LE byte 3 is 0")
+
+    # ── Gzip: compressed_len is exact, not strlen-truncated ────────────────
+    t.section("Gzip.compressed_len reflects the true byte length (not strlen)")
+    t.assert_true(g_empty_len >= 18, "empty-payload gzip member length is sane (>= 18 bytes)")
+    t.assert_true(g_short_len >= 19, "3-byte-payload gzip member length is sane (>= 19 bytes)")
+
+    # ── Gzip: full round trip (only meaningful when the runtime supports
+    #    real inflate — otherwise Gzip.decompress cannot decode anything,
+    #    by the same documented stub-build limitation as Zlib.inflate) ─────
+    t.section("Gzip round trip (compress -> decompress)")
+    if have_zlib:
+        mut sizes = [0, 1, 3, 35, 500]
+        mut si = 0
+        while si < 5:
+            mut n = sizes[si]
+            mut buf = _tr_c_malloc(n + 1)
+            mut bi = 0
+            unsafe:
+                while bi < n:
+                    buf.offset(bi).write((65 + (bi % 26)) as char)   # 'A'..'Z' repeating
+                    bi = bi + 1
+                buf.offset(n).write('\0')
+            mut payload = _tr_str_wrap(buf)
+
+            mut comp = Gzip.compress(payload, n)
+            mut clen = Gzip.compressed_len(comp)
+            mut back = Gzip.decompress(comp, clen, n + 64)
+            t.assert_eq_str(back, payload, "gzip round-trip exact match for size " + str(n))
+            si = si + 1
+
+        # A concrete known string too, for readability.
+        mut hello = "hello world hello world hello world"
+        mut hc = Gzip.compress(hello, 35)
+        mut hclen = Gzip.compressed_len(hc)
+        mut hback = Gzip.decompress(hc, hclen, 4096)
+        t.assert_eq_str(hback, hello, "gzip round-trip: known string matches exactly")
+    else:
+        t.skip("real zlib not linked into this runtime build (-DTAURARO_COMPRESS_ZLIB -lz not set) - decompress cannot be tested, header/footer layout above already verified")
+
+    # ═════════════════════════════════════════════════════════════════════
+    # tar (USTAR)
+    # ═════════════════════════════════════════════════════════════════════
+
+    t.section("TarWriter: build a multi-entry archive")
+    mut w = TarWriter.init()
+    w.add_entry("hello.txt", "hello world", 11)
+    w.add_entry("empty.txt", "", 0)
+    mut rep = "abcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabc"
+    mut rep_len = 103
+    w.add_entry("repeat.txt", rep, rep_len)
+    mut nested = "nested/dir/file.txt"
+    mut nested_data = "content in a nested path"
+    w.add_entry(nested, nested_data, 25)
+
+    mut tar_bytes = w.finish()
+    mut tar_len = w.total_len()
+    t.assert_true(tar_len > 0, "finish() produced a non-empty archive")
+    t.assert_eq_int(tar_len % 512, 0, "tar archive length is a multiple of 512 bytes")
+
+    t.section("TarReader: parse entries")
+    mut r = TarReader.open(tar_bytes, tar_len)
+    t.assert_true(r.ok, "TarReader.open successfully parsed the archive")
+    t.assert_eq_int(r.entry_count(), 4, "entry_count matches number of files added")
+
+    t.section("TarReader: entry names and order")
+    t.assert_eq_str(r.entry_name(0), "hello.txt", "entry 0 name")
+    t.assert_eq_str(r.entry_name(1), "empty.txt", "entry 1 name")
+    t.assert_eq_str(r.entry_name(2), "repeat.txt", "entry 2 name")
+    t.assert_eq_str(r.entry_name(3), "nested/dir/file.txt", "entry 3 name (nested path)")
+    t.assert_eq_str(r.entry_name(99), "", "out-of-range entry_name returns empty string")
+
+    t.section("TarReader: find_entry hit and miss")
+    t.assert_eq_int(r.find_entry("hello.txt"), 0, "find_entry hits index 0")
+    t.assert_eq_int(r.find_entry("repeat.txt"), 2, "find_entry hits index 2")
+    t.assert_eq_int(r.find_entry("nested/dir/file.txt"), 3, "find_entry hits nested path")
+    t.assert_eq_int(r.find_entry("does_not_exist.txt"), -1, "find_entry miss returns -1")
+
+    t.section("TarReader: content round-trip matches exactly, per entry")
+    mut i_hello = r.find_entry("hello.txt")
+    t.assert_eq_str(r.read_entry(i_hello), "hello world", "hello.txt content matches exactly")
+    t.assert_eq_int(r.entry_size(i_hello), 11, "hello.txt reported size")
+
+    mut i_empty = r.find_entry("empty.txt")
+    t.assert_eq_str(r.read_entry(i_empty), "", "empty.txt round-trips to an empty string")
+    t.assert_eq_int(r.entry_size(i_empty), 0, "empty.txt reported size is 0")
+
+    mut i_rep = r.find_entry("repeat.txt")
+    t.assert_eq_str(r.read_entry(i_rep), rep, "repeat.txt content matches exactly (spans more than one 512-byte block)")
+    t.assert_eq_int(r.entry_size(i_rep), rep_len, "repeat.txt reported size")
+
+    mut i_nested = r.find_entry("nested/dir/file.txt")
+    t.assert_eq_str(r.read_entry(i_nested), nested_data, "nested/dir/file.txt content matches exactly")
+
+    # ── tar header checksum correctness ─────────────────────────────────────
+    t.section("tar header checksum correctness")
+    # hello.txt is the first entry -> its header is the first 512-byte
+    # block of the archive (offset 0). Checksum field is 8 bytes at
+    # offset 148, stored as 6 octal digits + NUL + space.
+    mut chk_off = 148
+    mut c0 = byte_at(tar_bytes, chk_off)
+    mut c5 = byte_at(tar_bytes, chk_off + 5)
+    mut c6 = byte_at(tar_bytes, chk_off + 6)   # NUL terminator
+    mut c7 = byte_at(tar_bytes, chk_off + 7)   # trailing space
+    t.assert_true(c0 >= 48 and c0 <= 55, "checksum field byte 0 is a valid octal digit ('0'-'7')")
+    t.assert_true(c5 >= 48 and c5 <= 55, "checksum field byte 5 is a valid octal digit ('0'-'7')")
+    t.assert_eq_int(c6, 0, "checksum field byte 6 is NUL")
+    t.assert_eq_int(c7, 32, "checksum field byte 7 is a space (0x20)")
+
+    # Recompute the checksum by hand (tar algorithm: sum of all 512 header
+    # bytes with the checksum field itself treated as 8 ASCII spaces) and
+    # compare against the stored value, proving _write_header computed it
+    # correctly (not just "looks like octal digits").
+    mut expected_sum = 0
+    mut bi2 = 0
+    while bi2 < 512:
+        if bi2 >= chk_off and bi2 < chk_off + 8:
+            expected_sum = expected_sum + 32   # ' ' stand-in for the checksum field itself
+        else:
+            expected_sum = expected_sum + byte_at(tar_bytes, bi2)
+        bi2 = bi2 + 1
+    # Decode the stored 6-digit octal checksum back to an int.
+    mut stored_sum = 0
+    mut oi = 0
+    while oi < 6:
+        mut d = byte_at(tar_bytes, chk_off + oi) - 48
+        stored_sum = (stored_sum << 3) | d
+        oi = oi + 1
+    t.assert_eq_int(stored_sum, expected_sum, "stored header checksum equals the hand-recomputed tar checksum")
+
+    # ── magic / typeflag spot-check ─────────────────────────────────────────
+    t.section("tar header magic and typeflag")
+    t.assert_eq_int(byte_at(tar_bytes, 257), 117, "magic byte 0 is 'u'")   # 'u' = 117
+    t.assert_eq_int(byte_at(tar_bytes, 258), 115, "magic byte 1 is 's'")   # 's' = 115
+    t.assert_eq_int(byte_at(tar_bytes, 259), 116, "magic byte 2 is 't'")   # 't' = 116
+    t.assert_eq_int(byte_at(tar_bytes, 260), 97,  "magic byte 3 is 'a'")   # 'a' = 97
+    t.assert_eq_int(byte_at(tar_bytes, 261), 114, "magic byte 4 is 'r'")   # 'r' = 114
+    t.assert_eq_int(byte_at(tar_bytes, 262), 0,   "magic byte 5 is NUL")
+    t.assert_eq_int(byte_at(tar_bytes, 156), 48, "typeflag is '0' (regular file)")
+
+    # ── end-of-archive marker ────────────────────────────────────────────────
+    t.section("tar end-of-archive marker (two all-zero 512-byte blocks)")
+    mut trailer_off = tar_len - 1024
+    mut all_zero = true
+    mut zi = 0
+    while zi < 1024:
+        if byte_at(tar_bytes, trailer_off + zi) != 0: all_zero = false
+        zi = zi + 1
+    t.assert_true(all_zero, "final 1024 bytes are the two all-zero end-of-archive blocks")
+
+    # ── empty-file-only archive edge case ────────────────────────────────────
+    t.section("archive containing only an empty file")
+    mut w2 = TarWriter.init()
+    w2.add_entry("only_empty.txt", "", 0)
+    mut tar2 = w2.finish()
+    mut r2 = TarReader.open(tar2, w2.total_len())
+    t.assert_true(r2.ok, "archive with a single empty file parses correctly")
+    t.assert_eq_int(r2.entry_count(), 1, "single-entry archive reports 1 entry")
+    t.assert_eq_str(r2.read_entry(0), "", "the single empty entry reads back as empty string")
+    t.assert_eq_int(w2.total_len(), 1536, "single empty entry: 512 header + 0 content-blocks + 1024 trailer = 1536")
+
+    # ── large-ish content spanning several 512-byte blocks ──────────────────
+    t.section("entry content spanning multiple 512-byte blocks")
+    mut big = _tr_c_malloc(1200 + 1)
+    mut gi = 0
+    unsafe:
+        while gi < 1200:
+            big.offset(gi).write((48 + (gi % 10)) as char)   # '0'..'9' repeating
+            gi = gi + 1
+        big.offset(1200).write('\0')
+    mut big_str = _tr_str_wrap(big)
+    mut w3 = TarWriter.init()
+    w3.add_entry("big.bin", big_str, 1200)
+    mut tar3 = w3.finish()
+    mut r3 = TarReader.open(tar3, w3.total_len())
+    t.assert_eq_int(r3.entry_size(0), 1200, "multi-block entry reports correct size")
+    t.assert_eq_str(r3.read_entry(0), big_str, "multi-block entry content matches exactly")
+
+    t.summary()

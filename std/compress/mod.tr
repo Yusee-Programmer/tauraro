@@ -2,5 +2,7 @@
 #
 # Sub-modules:
 #   from std.compress.zlib import Zlib
+#   from std.compress.gzip import Gzip
 
 from std.compress.zlib import Zlib
+from std.compress.gzip import Gzip

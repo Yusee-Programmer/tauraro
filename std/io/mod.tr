@@ -9,6 +9,7 @@
 #   from std.io.poll       import IOPoll, IOEvent
 #   from std.io.event_loop import EventLoop
 #   from std.io.archive    import ZipWriter, ZipReader, Crc32
+#   from std.io.tar        import TarWriter, TarReader
 
 from std.io.file       import File
 from std.io.console    import Console
@@ -22,3 +23,5 @@ from std.io.event_loop import EventLoop
 from std.io.archive    import ZipWriter
 from std.io.archive    import ZipReader
 from std.io.archive    import Crc32
+from std.io.tar        import TarWriter
+from std.io.tar        import TarReader

@@ -1,0 +1,350 @@
+# std.io.tar — Real USTAR (POSIX.1-1988) tar archive reading and writing.
+#
+# Pure Tauraro: fixed 512-byte header blocks (name, mode, uid/gid, size as
+# octal ASCII, mtime, checksum, typeflag, "ustar" magic, etc.) followed by
+# file content padded to a 512-byte boundary, terminated by two all-zero
+# 512-byte blocks — byte-exact per the USTAR spec, mirroring
+# std.io.archive's ZipWriter/ZipReader API shape and internal conventions
+# (ByteBuf for building, explicit-length str payloads throughout so
+# embedded NUL bytes in file content are always safe).
+#
+# Usage:
+#   from std.io.tar import TarWriter, TarReader
+#
+#   mut w = TarWriter.init()
+#   w.add_entry("hello.txt", "hello world", 11)
+#   mut tar_bytes = w.finish()
+#   write_file("out.tar", tar_bytes)         # std.io.file
+#
+#   mut r = TarReader.open(tar_bytes, w.total_len())
+#   mut i = r.find_entry("hello.txt")
+#   mut content = r.read_entry(i)
+#
+# Note on binary strings: tar bytes (headers + file content) may contain
+# embedded NUL bytes, so every length here is tracked explicitly — nothing
+# in this file relies on C strlen()/NUL-termination for archive payloads
+# (mirrors std.io.archive's own documented convention).
+
+extern "C":
+    def _tr_c_malloc(size: int) -> Pointer[char]
+    def _tr_c_memcpy(dst: Pointer[char], src: Pointer[char], n: int)
+    def _tr_str_wrap(s: Pointer[char]) -> str
+
+from std.core.vec import Vec
+from std.io.archive import ByteBuf
+
+# ── Constants ────────────────────────────────────────────────────────────────
+
+pub def BLOCK_SIZE() -> int: return 512
+
+pub def TYPEFLAG_REGULAR() -> int:  return 48   # '0'
+pub def TYPEFLAG_AREGULAR() -> int: return 0    # '\0' (pre-POSIX regular file, also accepted on read)
+pub def TYPEFLAG_DIR() -> int:      return 53   # '5'
+
+# ── Octal helpers ────────────────────────────────────────────────────────────
+
+# Write `value` as a zero-padded NUL-terminated octal ASCII field of exactly
+# `width` bytes (USTAR numeric fields, e.g. width=12 for size, width=8 for
+# mode/uid/gid) into `buf` starting at self.len.
+def _push_octal(buf: ByteBuf, value: int, width: int):
+    # width-1 octal digits + trailing NUL, per USTAR (e.g. 11 digits + '\0' for a 12-byte field).
+    mut digits = width - 1
+    mut tmp = _tr_c_malloc(digits + 1)
+    mut v = value
+    mut i = digits - 1
+    unsafe:
+        while i >= 0:
+            mut d = v & 7
+            tmp.offset(i).write((48 + d) as char)   # '0' + d
+            v = v >> 3
+            i = i - 1
+    mut j = 0
+    unsafe:
+        while j < digits:
+            buf.push_u8(tmp.offset(j).read() as int)
+            j = j + 1
+    buf.push_u8(0)   # trailing NUL terminates the octal field
+
+# Parse a NUL/space-terminated octal ASCII field of `width` bytes starting
+# at `off` in `data`.
+def _read_octal(data: str, off: int, width: int) -> int:
+    mut p = data as Pointer[char]
+    mut v = 0
+    mut i = 0
+    unsafe:
+        while i < width:
+            mut c = p.offset(off + i).read() as int
+            if c == 0 or c == 32:   # NUL or space terminates
+                i = width
+            else:
+                if c >= 48 and c <= 55:   # '0'..'7'
+                    v = (v << 3) | (c - 48)
+                i = i + 1
+    return v
+
+# Append `s` (its first `n` bytes, or fewer if a NUL is hit first — tar
+# name/magic fields are NUL-padded C strings) into a fixed `width`-byte
+# field, zero-padding the remainder.
+def _push_fixed_str(buf: ByteBuf, s: str, width: int):
+    mut p = s as Pointer[char]
+    mut i = 0
+    unsafe:
+        while i < width:
+            mut c = p.offset(i).read() as int
+            if c == 0: i = width
+            else:
+                buf.push_u8(c)
+                i = i + 1
+    # zero-pad remainder — recompute how many bytes were actually written
+    mut written = 0
+    unsafe:
+        while written < width and p.offset(written).read() as int != 0:
+            written = written + 1
+    mut pad = width - written
+    mut k = 0
+    while k < pad:
+        buf.push_u8(0)
+        k = k + 1
+
+# Read a NUL-terminated (or full-width) string field of `width` bytes
+# starting at `off` in `data`.
+def _read_fixed_str(data: str, off: int, width: int) -> str:
+    mut p = data as Pointer[char]
+    mut n = 0
+    unsafe:
+        while n < width and p.offset(off + n).read() as int != 0:
+            n = n + 1
+    mut out = _tr_c_malloc(n + 1)
+    if n > 0:
+        unsafe:
+            _tr_c_memcpy(out, (data as Pointer[char]).offset(off), n)
+    unsafe: out.offset(n).write('\0')
+    return _tr_str_wrap(out)
+
+def _tar_str_len(s: str) -> int:
+    mut p = s as Pointer[char]
+    mut n = 0
+    unsafe:
+        while p.offset(n).read() as int != 0: n = n + 1
+    return n
+
+def _tar_str_eq(a: str, b: str) -> bool:
+    mut pa = a as Pointer[char]
+    mut pb = b as Pointer[char]
+    mut i  = 0
+    unsafe:
+        while True:
+            mut ca = pa.offset(i).read() as int
+            mut cb = pb.offset(i).read() as int
+            if ca != cb: return false
+            if ca == 0: return true
+            i = i + 1
+    return true
+
+# Round `n` up to the next multiple of 512 (0 stays 0).
+def _round_up_512(n: int) -> int:
+    mut rem = n & 511
+    if rem == 0: return n
+    return n + (512 - rem)
+
+# ── TarWriter ───────────────────────────────────────────────────────────────
+
+pub class TarWriter:
+    pub body: ByteBuf
+
+extend TarWriter:
+    pub def init() -> TarWriter:
+        mut w = TarWriter()
+        w.body = ByteBuf.init(512)
+        return w
+
+    # Add one regular-file entry: a 512-byte USTAR header (with a correct
+    # checksum) followed by `len_` bytes of content, padded with zero bytes
+    # up to the next 512-byte boundary. `name` must be at most 100 bytes
+    # (the USTAR "name" field width; longer names are truncated to 99
+    # bytes + NUL, since the "prefix" long-name extension is not
+    # implemented here).
+    pub def add_entry(self, name: str, content: str, len_: int):
+        self._write_header(name, len_, TYPEFLAG_REGULAR())
+        if len_ > 0:
+            self.body.push_bytes(content, len_)
+            mut pad = _round_up_512(len_) - len_
+            mut i = 0
+            while i < pad:
+                self.body.push_u8(0)
+                i = i + 1
+
+    def _write_header(self, name: str, size: int, typeflag: int):
+        # Build the 512-byte header into a scratch buffer first so we can
+        # compute the checksum over the whole block (with the checksum
+        # field itself treated as 8 ASCII spaces, per the USTAR spec),
+        # then splice the real checksum in before appending to self.body.
+        mut hdr = ByteBuf.init(512)
+
+        _push_fixed_str(hdr, name, 100)          # name
+        _push_octal(hdr, 420, 8)                    # mode 0644 (rw-r--r--)
+        _push_octal(hdr, 0, 8)                     # uid
+        _push_octal(hdr, 0, 8)                     # gid
+        _push_octal(hdr, size, 12)                 # size
+        _push_octal(hdr, 0, 12)                     # mtime
+        # checksum field: 8 ASCII spaces for the initial sum computation
+        mut cs = 0
+        while cs < 8:
+            hdr.push_u8(32)   # ' '
+            cs = cs + 1
+        hdr.push_u8(typeflag)                       # typeflag
+        _push_fixed_str(hdr, "", 100)                # linkname (unused)
+        _push_fixed_str(hdr, "ustar", 6)             # magic ("ustar\0")
+        hdr.push_u8(48)                              # version[0] = '0'
+        hdr.push_u8(48)                              # version[1] = '0'
+        _push_fixed_str(hdr, "", 32)                  # uname
+        _push_fixed_str(hdr, "", 32)                  # gname
+        _push_octal(hdr, 0, 8)                        # devmajor
+        _push_octal(hdr, 0, 8)                        # devminor
+        _push_fixed_str(hdr, "", 155)                 # prefix
+
+        # Pad the header out to exactly 512 bytes.
+        while hdr.len < 512:
+            hdr.push_u8(0)
+
+        # Sum every byte of the 512-byte block (checksum field counted as
+        # spaces, which is exactly what we already wrote above).
+        mut sum = 0
+        mut i = 0
+        unsafe:
+            while i < 512:
+                sum = sum + (hdr.data.offset(i).read() as int & 0xFF)
+                i = i + 1
+
+        # Checksum field is a 6-digit zero-padded octal number, followed by
+        # a NUL and a space (USTAR §"chksum" — NOT the generic NUL-only
+        # octal-field terminator other fields use).
+        mut digits = 6
+        mut tmp = _tr_c_malloc(digits)
+        mut v = sum
+        mut k = digits - 1
+        unsafe:
+            while k >= 0:
+                mut d = v & 7
+                tmp.offset(k).write((48 + d) as char)
+                v = v >> 3
+                k = k - 1
+        unsafe:
+            mut j = 0
+            while j < digits:
+                hdr.data.offset(148 + j).write(tmp.offset(j).read())
+                j = j + 1
+            hdr.data.offset(154).write(0 as char)     # NUL
+            hdr.data.offset(155).write(32 as char)     # ' '
+
+        self.body.push_raw(hdr.data, 512)
+        hdr.free()
+
+    # Write the two all-zero 512-byte end-of-archive blocks and return the
+    # complete tar byte stream. The returned str's true length is
+    # self.total_len() (may contain embedded NULs in file content — do not
+    # use strlen on it).
+    pub def finish(self) -> str:
+        mut i = 0
+        while i < 1024:
+            self.body.push_u8(0)
+            i = i + 1
+        return self.body.to_str()
+
+    # True byte length of the archive built so far (call AFTER finish()
+    # for the final archive size — the returned bytes may contain embedded
+    # NULs, so strlen is not reliable).
+    pub def total_len(self) -> int:
+        return self.body.len
+
+# ── TarReader ───────────────────────────────────────────────────────────────
+
+pub class TarEntry:
+    pub name:      str
+    pub size:      int
+    pub typeflag:  int
+    pub data_off:  int   # byte offset of this entry's content within the archive
+
+pub class TarReader:
+    pub data:    str
+    pub len:     int
+    pub entries: Vec[TarEntry]
+    pub ok:      bool
+
+extend TarReader:
+    # Parse a tar byte buffer (`len_` explicit — never relies on strlen)
+    # into a flat list of entries. Stops at the first all-zero header
+    # block (end-of-archive marker) or when the buffer is exhausted.
+    pub def open(data: str, len_: int) -> TarReader:
+        mut r = TarReader()
+        r.data    = data
+        r.len     = len_
+        r.entries = Vec[TarEntry].init(4)
+        r.ok      = true
+
+        mut off = 0
+        while off + 512 <= len_:
+            if _is_zero_block(data, off):
+                off = len_ + 1   # stop: end-of-archive marker reached
+            else:
+                mut magic = _read_fixed_str(data, off + 257, 6)
+                if not _tar_str_eq(magic, "ustar"):
+                    r.ok = false
+                    off = len_ + 1   # stop: malformed
+                else:
+                    mut name     = _read_fixed_str(data, off, 100)
+                    mut size     = _read_octal(data, off + 124, 12)
+                    mut typeflag = 0
+                    mut p = data as Pointer[char]
+                    unsafe: typeflag = p.offset(off + 156).read() as int & 0xFF
+
+                    mut e = TarEntry()
+                    e.name      = name
+                    e.size      = size
+                    e.typeflag  = typeflag
+                    e.data_off  = off + 512
+                    r.entries.push(e)
+
+                    mut content_blocks = _round_up_512(size)
+                    off = off + 512 + content_blocks
+
+        return r
+
+    pub def entry_count(self) -> int:
+        return self.entries.len
+
+    pub def entry_name(self, i: int) -> str:
+        if i < 0 or i >= self.entries.len: return ""
+        return self.entries.get(i).name
+
+    pub def entry_size(self, i: int) -> int:
+        if i < 0 or i >= self.entries.len: return -1
+        return self.entries.get(i).size
+
+    # Index of the entry named `name`, or -1 if not present.
+    pub def find_entry(self, name: str) -> int:
+        mut i = 0
+        while i < self.entries.len:
+            if _tar_str_eq(self.entries.get(i).name, name): return i
+            i = i + 1
+        return -1
+
+    # Return entry `i`'s raw content bytes (exact length self.entries[i].size).
+    pub def read_entry(self, i: int) -> str:
+        if i < 0 or i >= self.entries.len: return ""
+        mut e = self.entries.get(i)
+        if e.size <= 0: return ""
+        mut out = _tr_c_malloc(e.size + 1)
+        unsafe:
+            _tr_c_memcpy(out, (self.data as Pointer[char]).offset(e.data_off), e.size)
+            out.offset(e.size).write('\0')
+        return _tr_str_wrap(out)
+
+def _is_zero_block(data: str, off: int) -> bool:
+    mut p = data as Pointer[char]
+    mut i = 0
+    unsafe:
+        while i < 512:
+            if p.offset(off + i).read() as int != 0: return false
+            i = i + 1
+    return true
