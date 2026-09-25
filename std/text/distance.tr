@@ -1,0 +1,74 @@
+# std.text.distance — Levenshtein edit distance and a normalized similarity
+# score derived from it.
+#
+#   from std.text.distance import Distance
+#
+#   print(str(Distance.levenshtein("kitten", "sitting")))  # 3
+#   print(str(Distance.similarity("kitten", "sitting")))   # ~0.571
+
+from std.core.vec import Vec
+from std.string.str import Str
+
+pub class Distance:
+    _dummy: int
+
+extend Distance:
+    # Classic O(n*m) dynamic-programming edit distance: the minimum number
+    # of single-character insertions, deletions, or substitutions needed to
+    # turn `a` into `b`.
+    pub def levenshtein(a: str, b: str) -> int:
+        mut n = Str.len(a)
+        mut m = Str.len(b)
+        if n == 0: return m
+        if m == 0: return n
+
+        # dp[i][j] = edit distance between a[0:i] and b[0:j], stored as a
+        # flat (n+1)*(m+1) row-major Vec[int].
+        mut width = m + 1
+        mut dp = Vec[int].init((n + 1) * width)
+        mut i = 0
+        while i <= n:
+            mut j = 0
+            while j <= m:
+                dp.push(0)
+                j = j + 1
+            i = i + 1
+
+        i = 0
+        while i <= n:
+            dp.set(i * width + 0, i)
+            i = i + 1
+        mut j = 0
+        while j <= m:
+            dp.set(0 * width + j, j)
+            j = j + 1
+
+        i = 1
+        while i <= n:
+            j = 1
+            while j <= m:
+                mut cost = 1
+                if Str.char_at(a, i - 1) == Str.char_at(b, j - 1): cost = 0
+                mut del_cost = dp.get((i - 1) * width + j) + 1
+                mut ins_cost = dp.get(i * width + (j - 1)) + 1
+                mut sub_cost = dp.get((i - 1) * width + (j - 1)) + cost
+                mut best = del_cost
+                if ins_cost < best: best = ins_cost
+                if sub_cost < best: best = sub_cost
+                dp.set(i * width + j, best)
+                j = j + 1
+            i = i + 1
+
+        return dp.get(n * width + m)
+
+    # Normalized similarity in [0.0, 1.0]: 1.0 means identical, 0.0 means
+    # completely dissimilar (edit distance equal to the longer string's
+    # length). Two empty strings are defined as identical (1.0).
+    pub def similarity(a: str, b: str) -> float:
+        mut n = Str.len(a)
+        mut m = Str.len(b)
+        if n == 0 and m == 0: return 1.0
+        mut max_len = n
+        if m > max_len: max_len = m
+        mut dist = Distance.levenshtein(a, b)
+        return 1.0 - (dist as float / max_len as float)

@@ -1,0 +1,100 @@
+# std.text.wrap — Word-wrap and indent utilities for CLI/terminal output.
+#
+#   from std.text.wrap import Wrap
+#
+#   mut lines = Wrap.wrap("the quick brown fox jumps over the lazy dog", 15)
+#   for l in lines: print(l)
+#
+#   print(Wrap.indent("a\nb\nc", "> "))   # "> a\n> b\n> c"
+
+from std.core.vec import Vec
+from std.string.str import Str
+from std.core.string import StringBuilder
+
+pub class Wrap:
+    _dummy: int
+
+extend Wrap:
+    # Greedy word-wrap: pack whitespace-separated words onto lines of at
+    # most `width` characters, breaking only on whitespace. A single word
+    # longer than `width` is placed alone on its own (overflowing) line
+    # rather than being split. Blank lines in the input (paragraph breaks)
+    # are preserved as empty lines in the output. A line that is exactly
+    # `width` characters long is NOT wrapped early.
+    pub def wrap(text: str, width: int) -> List[str]:
+        mut out: List[str] = []
+        mut w = width
+        if w < 1: w = 1
+
+        mut paragraphs = Str.lines(text)
+        mut pi = 0
+        while pi < paragraphs.len:
+            mut para = paragraphs.get(pi)
+            if Str.len(Str.trim(para)) == 0:
+                out.append("")
+            else:
+                Wrap._wrap_paragraph(para, w, out)
+            pi = pi + 1
+
+        # Str.lines() drops a trailing blank paragraph (e.g. text ending in
+        # "\n\n" or just being empty) — mirror that: an entirely-empty input
+        # yields a single empty line, matching wrap([]) intuition.
+        if len(out) == 0:
+            out.append("")
+        return out
+
+    # Wrap a single paragraph (no embedded newlines) and append its output
+    # lines to `out`.
+    pub def _wrap_paragraph(para: str, width: int, out: List[str]):
+        mut words = Str.words(para)
+        if words.len == 0:
+            out.append("")
+            return
+
+        mut sb = StringBuilder.init(width + 8)
+        mut cur_len = 0
+        mut has_content = false
+        mut wi = 0
+        while wi < words.len:
+            mut word = words.get(wi)
+            mut wl = Str.len(word)
+
+            if not has_content:
+                # First word on a fresh line always goes on it, even if it
+                # alone exceeds width (never split a word).
+                sb.append(word)
+                cur_len = wl
+                has_content = true
+            elif cur_len + 1 + wl <= width:
+                sb.append_char(32)
+                sb.append(word)
+                cur_len = cur_len + 1 + wl
+            else:
+                out.append(sb.to_owned())
+                sb.clear()
+                sb.append(word)
+                cur_len = wl
+                has_content = true
+            wi = wi + 1
+
+        if has_content:
+            out.append(sb.to_owned())
+        sb.free()
+
+    # Prefix every line of `text` with `prefix` (including a trailing blank
+    # line if `text` ends with a newline is treated the same as any other
+    # line boundary — see `Str.lines` semantics: a trailing "\n" does not
+    # produce a phantom empty final line).
+    pub def indent(text: str, prefix: str) -> str:
+        if Str.len(text) == 0: return ""
+        mut ls = Str.lines(text)
+        mut sb = StringBuilder.init(Str.len(text) + ls.len * Str.len(prefix) + 8)
+        mut i = 0
+        while i < ls.len:
+            if i > 0: sb.append_char(10)
+            sb.append(prefix)
+            sb.append(ls.get(i))
+            i = i + 1
+        mut out = sb.to_owned()
+        sb.free()
+        return out

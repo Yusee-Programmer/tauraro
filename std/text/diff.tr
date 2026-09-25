@@ -1,0 +1,288 @@
+# std.text.diff — Line-based diff via the classic Myers O(ND) shortest-edit-
+# script algorithm (the same algorithm behind `diff`/`git diff`).
+#
+# Input is two `List[str]` (line arrays) — use `Str.split(s, "\n")` from
+# `std.string.str` to turn raw text into lines before diffing, exactly like
+# the rest of `std.text` reuses `std.string` rather than reimplementing
+# string splitting.
+#
+#   from std.string.str import Str
+#   from std.text.diff import Diff, DiffOp
+#
+#   mut a = Str.split("one\ntwo\nthree", "\n")
+#   mut b = Str.split("one\nTWO\nthree", "\n")
+#   mut ops = Diff.diff(a, b)          # List[DiffOp] edit script
+#   print(Diff.unified_diff(a, b, 3))  # unified-diff text
+#
+# The edit script is a sequence of `DiffOp` values, one per output line:
+#   DiffOp.Equal(line)   — line present, unchanged, in both a and b
+#   DiffOp.Delete(line)  — line present only in a (removed)
+#   DiffOp.Insert(line)  — line present only in b (added)
+#
+# `Diff.diff` produces the minimal (shortest) edit script per the Myers
+# algorithm — not merely "a" diff that happens to round-trip a back into b.
+
+from std.core.vec import Vec
+from std.string.str import Str
+from std.string.fmt import Fmt
+from std.core.string import StringBuilder
+
+pub enum DiffOp:
+    Equal(line: str)
+    Insert(line: str)
+    Delete(line: str)
+
+pub class Diff:
+    _dummy: int
+
+extend Diff:
+    # ── Core Myers shortest-edit-script algorithm ───────────────────────────
+    #
+    # Classic O(ND) greedy algorithm (Myers, 1986). We trace forward "snakes"
+    # through the edit graph for increasing edit distance D, recording each
+    # step's V array (furthest-reaching x on each diagonal) so the edit
+    # script can be reconstructed by walking the trace backwards.
+
+    # Returns the minimal edit script transforming `a` into `b`.
+    pub def diff(a: List[str], b: List[str]) -> List[DiffOp]:
+        mut n = len(a)
+        mut m = len(b)
+        mut out: List[DiffOp] = []
+        if n == 0 and m == 0:
+            return out
+        mut max_d = n + m
+
+        # trace[d] = snapshot of the V array (offset by max_d so diagonal
+        # index k in [-max_d, max_d] maps to slot max_d + k) taken AFTER
+        # processing edit-distance d. Needed to walk the path back.
+        mut trace: Vec[Vec[int]] = Vec[Vec[int]].init(max_d + 2)
+        mut vsize = 2 * max_d + 1
+        mut v = Vec[int].init(vsize)
+        mut i = 0
+        while i < vsize:
+            v.push(0)
+            i = i + 1
+        v.set(max_d + 1, 0)   # V[1] = 0 (offset slot for diagonal k=1)
+
+        mut found_d = -1
+        mut d = 0
+        while d <= max_d and found_d < 0:
+            mut k = 0 - d
+            while k <= d and found_d < 0:
+                mut down = k == 0 - d
+                if not down and k != d:
+                    down = v.get(max_d + k - 1) < v.get(max_d + k + 1)
+                mut x = 0
+                if down:
+                    x = v.get(max_d + k + 1)
+                else:
+                    x = v.get(max_d + k - 1) + 1
+                mut y = x - k
+                while x < n and y < m and Str.eq(a[x], b[y]):
+                    x = x + 1
+                    y = y + 1
+                v.set(max_d + k, x)
+                if x >= n and y >= m:
+                    found_d = d
+                k = k + 2
+            # Snapshot this round's V before moving to d+1.
+            mut snap = Vec[int].init(vsize)
+            mut si = 0
+            while si < vsize:
+                snap.push(v.get(si))
+                si = si + 1
+            trace.push(snap)
+            d = d + 1
+
+        # Walk the recorded trace backwards from (n, m) to (0, 0), emitting
+        # one DiffOp per step, then reverse to get forward order.
+        mut rev: List[DiffOp] = []
+        mut x = n
+        mut y = m
+        mut dd = found_d
+        while dd >= 0:
+            mut prev_x = 0
+            mut prev_y = 0
+            mut down = false
+            if dd > 0:
+                mut vd = trace.get(dd)
+                mut k = x - y
+                down = k == 0 - dd
+                if not down and k != dd:
+                    down = vd.get(max_d + k - 1) < vd.get(max_d + k + 1)
+                mut prev_k = k - 1
+                if down: prev_k = k + 1
+                mut vprev = trace.get(dd - 1)
+                prev_x = vprev.get(max_d + prev_k)
+                prev_y = prev_x - prev_k
+
+            # Emit the diagonal (equal) part of this snake, back to front.
+            while x > prev_x and y > prev_y:
+                rev.append(DiffOp.Equal(a[x - 1]))
+                x = x - 1
+                y = y - 1
+
+            if dd > 0:
+                if down:
+                    rev.append(DiffOp.Insert(b[y - 1]))
+                    y = y - 1
+                else:
+                    rev.append(DiffOp.Delete(a[x - 1]))
+                    x = x - 1
+            dd = dd - 1
+
+        # Reverse `rev` into forward order.
+        mut ri = len(rev) - 1
+        while ri >= 0:
+            out.append(rev[ri])
+            ri = ri - 1
+        return out
+
+    # ── Unified diff rendering ───────────────────────────────────────────────
+
+    # Render the classic unified-diff text format (as produced by `diff -u` /
+    # `git diff`): `---`/`+++` file headers, `@@ -x,y +a,b @@` hunk headers,
+    # and ` `/`-`/`+` prefixed lines, with `context` lines of unchanged
+    # context around each change.
+    pub def unified_diff_named(a: List[str], b: List[str], name_a: str, name_b: str, context: int) -> str:
+        mut ops = Diff.diff(a, b)
+        mut nops = len(ops)
+        if nops == 0: return ""
+
+        # No changes at all -> canonical empty unified diff (no headers).
+        mut has_change = false
+        mut ci = 0
+        while ci < nops and not has_change:
+            if Diff._is_change(ops[ci]): has_change = true
+            ci = ci + 1
+        if not has_change: return ""
+
+        # Precompute, for each op index, the 0-based line number it
+        # consumes in `a` and/or `b` (so hunk headers can be computed
+        # without re-walking).
+        mut a_line: Vec[int] = Vec[int].init(nops + 1)
+        mut b_line: Vec[int] = Vec[int].init(nops + 1)
+        mut ai = 0
+        mut bi = 0
+        mut oi = 0
+        while oi < nops:
+            a_line.push(ai)
+            b_line.push(bi)
+            match ops[oi]:
+                case DiffOp.Equal(_):
+                    ai = ai + 1
+                    bi = bi + 1
+                case DiffOp.Delete(_):
+                    ai = ai + 1
+                case DiffOp.Insert(_):
+                    bi = bi + 1
+            oi = oi + 1
+
+        mut ctx = context
+        if ctx < 0: ctx = 0
+
+        mut sb = StringBuilder.init(256)
+        sb.append("--- ")
+        sb.append(name_a)
+        sb.append_char(10)
+        sb.append("+++ ")
+        sb.append(name_b)
+        sb.append_char(10)
+
+        # Group changes into hunks: a change and the next change are in the
+        # same hunk if fewer than `2*ctx` unchanged lines separate them
+        # (their context windows would otherwise overlap/touch).
+        mut i = 0
+        while i < nops:
+            if Diff._is_change(ops[i]):
+                mut hunk_last_change = i
+                mut j = i + 1
+                while j < nops:
+                    if Diff._is_change(ops[j]):
+                        hunk_last_change = j
+                        j = j + 1
+                    else:
+                        mut run_start = j
+                        while j < nops and not Diff._is_change(ops[j]):
+                            j = j + 1
+                        mut run_len = j - run_start
+                        if j < nops and run_len <= 2 * ctx:
+                            # This equal run is short enough to bridge two
+                            # change clusters into a single hunk; continue
+                            # scanning past it.
+                            pass
+                        else:
+                            break
+                mut lo = i - ctx
+                if lo < 0: lo = 0
+                mut hi = hunk_last_change + ctx
+                if hi >= nops: hi = nops - 1
+
+                Diff._emit_hunk(sb, ops, a_line, b_line, lo, hi)
+                i = hi + 1
+            else:
+                i = i + 1
+
+        return sb.to_owned()
+
+    # Convenience wrapper using generic "a"/"b" file labels — matches the
+    # requested `unified_diff(a, b, context) -> str` signature.
+    pub def unified_diff(a: List[str], b: List[str], context: int) -> str:
+        return Diff.unified_diff_named(a, b, "a", "b", context)
+
+    # ── Internal helpers ──────────────────────────────────────────────────────
+
+    pub def _is_change(op: DiffOp) -> bool:
+        match op:
+            case DiffOp.Equal(_): return false
+            case _: return true
+
+    # Emit one hunk (ops[lo..hi] inclusive) with a `@@ -x,y +a,b @@` header
+    # followed by its ` `/`-`/`+` prefixed lines.
+    pub def _emit_hunk(sb: StringBuilder, ops: List[DiffOp], a_line: Vec[int], b_line: Vec[int], lo: int, hi: int):
+        mut a_count = 0
+        mut b_count = 0
+        mut k = lo
+        while k <= hi:
+            match ops[k]:
+                case DiffOp.Equal(_):
+                    a_count = a_count + 1
+                    b_count = b_count + 1
+                case DiffOp.Delete(_):
+                    a_count = a_count + 1
+                case DiffOp.Insert(_):
+                    b_count = b_count + 1
+            k = k + 1
+
+        mut a_start = a_line.get(lo) + 1   # unified diff line numbers are 1-based
+        mut b_start = b_line.get(lo) + 1
+        if a_count == 0: a_start = a_line.get(lo)
+        if b_count == 0: b_start = b_line.get(lo)
+
+        sb.append("@@ -")
+        sb.append(Fmt.int_to_str(a_start))
+        sb.append_char(44)   # ','
+        sb.append(Fmt.int_to_str(a_count))
+        sb.append(" +")
+        sb.append(Fmt.int_to_str(b_start))
+        sb.append_char(44)
+        sb.append(Fmt.int_to_str(b_count))
+        sb.append(" @@")
+        sb.append_char(10)
+
+        mut i = lo
+        while i <= hi:
+            match ops[i]:
+                case DiffOp.Equal(line):
+                    sb.append_char(32)
+                    sb.append(line)
+                    sb.append_char(10)
+                case DiffOp.Delete(line):
+                    sb.append_char(45)   # '-'
+                    sb.append(line)
+                    sb.append_char(10)
+                case DiffOp.Insert(line):
+                    sb.append_char(43)   # '+'
+                    sb.append(line)
+                    sb.append_char(10)
+            i = i + 1
