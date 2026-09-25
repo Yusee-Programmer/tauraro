@@ -1,0 +1,257 @@
+# std.term.style — ANSI SGR (Select Graphic Rendition) text styling.
+#
+# Composes with std.cli (parse flags, then use std.term to render output) and
+# mirrors std.io.console.Console's existing color-code numbering (30-37 for
+# the eight standard foreground colors, 90-97 for their bright variants) so
+# the two modules never disagree about what "red" means as an SGR code —
+# std.io.console just applies the code directly (via a runtime C helper that
+# also works on legacy Windows consoles without VT100), while std.term builds
+# the raw ANSI escape *string* itself (`\x1b[<code>m ... \x1b[0m`), which is
+# what a CLI-tool author composing multi-attribute output (color + bold +
+# underline in one span) needs.
+#
+# Usage:
+#   from std.term.style import Term, Color
+#
+#   print(Term.color("error", Color.Red))
+#   print(Term.style("warning", Color.Yellow, true, false, false, false))
+#   print(Term.bold("important"))
+#
+#   mut s = Style.init().fg(Color.Green).bold().underline()
+#   print(s.apply("all good"))
+
+from std.core.string import StringBuilder
+from std.string.fmt import Fmt
+
+# ── Color enum ───────────────────────────────────────────────────────────────
+#
+# The 16 standard ANSI colors: 8 base + 8 bright.  `Default()` resets to the
+# terminal's own foreground/background rather than picking a color.
+
+pub enum Color:
+    Black
+    Red
+    Green
+    Yellow
+    Blue
+    Magenta
+    Cyan
+    White
+    BrightBlack
+    BrightRed
+    BrightGreen
+    BrightYellow
+    BrightBlue
+    BrightMagenta
+    BrightCyan
+    BrightWhite
+    Default
+
+extend Color:
+    # SGR foreground code (30-37 standard, 90-97 bright, 39 = default).
+    pub def fg_code(self) -> int:
+        match self:
+            case Color.Black:         return 30
+            case Color.Red:           return 31
+            case Color.Green:         return 32
+            case Color.Yellow:        return 33
+            case Color.Blue:          return 34
+            case Color.Magenta:       return 35
+            case Color.Cyan:          return 36
+            case Color.White:         return 37
+            case Color.BrightBlack:   return 90
+            case Color.BrightRed:     return 91
+            case Color.BrightGreen:   return 92
+            case Color.BrightYellow:  return 93
+            case Color.BrightBlue:    return 94
+            case Color.BrightMagenta: return 95
+            case Color.BrightCyan:    return 96
+            case Color.BrightWhite:   return 97
+            case Color.Default:       return 39
+            case _:                   return 39
+
+    # SGR background code (40-47 standard, 100-107 bright, 49 = default).
+    pub def bg_code(self) -> int:
+        match self:
+            case Color.Black:         return 40
+            case Color.Red:           return 41
+            case Color.Green:         return 42
+            case Color.Yellow:        return 43
+            case Color.Blue:          return 44
+            case Color.Magenta:       return 45
+            case Color.Cyan:          return 46
+            case Color.White:         return 47
+            case Color.BrightBlack:   return 100
+            case Color.BrightRed:     return 101
+            case Color.BrightGreen:   return 102
+            case Color.BrightYellow:  return 103
+            case Color.BrightBlue:    return 104
+            case Color.BrightMagenta: return 105
+            case Color.BrightCyan:    return 106
+            case Color.BrightWhite:   return 107
+            case Color.Default:       return 49
+            case _:                   return 49
+
+# ── Raw escape-sequence builders ─────────────────────────────────────────────
+
+pub def ESC() -> int: return 27   # 0x1b
+
+# Build "<ESC>[" + body + "m" — a single SGR escape sequence.
+pub def _sgr(body: str) -> str:
+    mut sb = StringBuilder.init(8 + body.len())
+    sb.append_char(ESC())
+    sb.append_char(91)   # '['
+    sb.append(body)
+    sb.append_char(109)  # 'm'
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+pub def _sgr_int(code: int) -> str:
+    return _sgr(Fmt.int_to_str(code))
+
+# ── Term — one-shot styling helpers ──────────────────────────────────────────
+
+pub class Term:
+    _dummy: int
+
+extend Term:
+    # The plain reset sequence: "\x1b[0m".
+    pub def RESET() -> str:
+        return _sgr_int(0)
+
+    # Wrap text in a foreground color escape + reset.
+    pub def color(text: str, c: Color) -> str:
+        return _sgr_int(c.fg_code()) + text + Term.RESET()
+
+    # Wrap text in a background color escape + reset.
+    pub def bg_color(text: str, c: Color) -> str:
+        return _sgr_int(c.bg_code()) + text + Term.RESET()
+
+    pub def bold(text: str) -> str:
+        return _sgr_int(1) + text + Term.RESET()
+
+    pub def dim(text: str) -> str:
+        return _sgr_int(2) + text + Term.RESET()
+
+    pub def italic(text: str) -> str:
+        return _sgr_int(3) + text + Term.RESET()
+
+    pub def underline(text: str) -> str:
+        return _sgr_int(4) + text + Term.RESET()
+
+    pub def reverse(text: str) -> str:
+        return _sgr_int(7) + text + Term.RESET()
+
+    # Combine a foreground color with any subset of attributes in a single
+    # escape sequence (fewer bytes than nesting Term.bold(Term.color(...))).
+    pub def style(text: str, c: Color, bold_: bool, dim_: bool, underline_: bool, reverse_: bool) -> str:
+        mut sb = StringBuilder.init(16)
+        sb.append_char(ESC())
+        sb.append_char(91)
+        sb.append(Fmt.int_to_str(c.fg_code()))
+        if bold_:       sb.append(";1")
+        if dim_:        sb.append(";2")
+        if underline_:  sb.append(";4")
+        if reverse_:    sb.append(";7")
+        sb.append_char(109)
+        mut prefix = sb.to_owned()
+        sb.free()
+        return prefix + text + Term.RESET()
+
+    # 256-color foreground: "\x1b[38;5;<n>m" ... "\x1b[0m"  (n in 0..255).
+    pub def color256(text: str, n: int) -> str:
+        return _sgr("38;5;" + Fmt.int_to_str(n)) + text + Term.RESET()
+
+    # 256-color background: "\x1b[48;5;<n>m" ... "\x1b[0m".
+    pub def bg_color256(text: str, n: int) -> str:
+        return _sgr("48;5;" + Fmt.int_to_str(n)) + text + Term.RESET()
+
+    # Truecolor (24-bit) foreground: "\x1b[38;2;<r>;<g>;<b>m" ... "\x1b[0m".
+    pub def rgb(text: str, r: int, g: int, b: int) -> str:
+        mut body = "38;2;" + Fmt.int_to_str(r) + ";" + Fmt.int_to_str(g) + ";" + Fmt.int_to_str(b)
+        return _sgr(body) + text + Term.RESET()
+
+    # Truecolor (24-bit) background: "\x1b[48;2;<r>;<g>;<b>m" ... "\x1b[0m".
+    pub def bg_rgb(text: str, r: int, g: int, b: int) -> str:
+        mut body = "48;2;" + Fmt.int_to_str(r) + ";" + Fmt.int_to_str(g) + ";" + Fmt.int_to_str(b)
+        return _sgr(body) + text + Term.RESET()
+
+# ── Style — a reusable builder for repeated styling of the same attributes ──
+#
+#   mut s = Style.init().fg(Color.Green).bold().underline()
+#   print(s.apply("all good"))
+#   print(s.apply("also good"))   # reapply without rebuilding attributes
+
+pub class Style:
+    pub fg_color: Color
+    pub bg_color: Color
+    pub has_bg:   bool
+    pub bold_:    bool
+    pub dim_:     bool
+    pub italic_:  bool
+    pub underline_: bool
+    pub reverse_: bool
+
+extend Style:
+    pub def init() -> Style:
+        mut s = Style()
+        s.fg_color   = Color.Default
+        s.bg_color   = Color.Default
+        s.has_bg     = false
+        s.bold_      = false
+        s.dim_       = false
+        s.italic_    = false
+        s.underline_ = false
+        s.reverse_   = false
+        return s
+
+    pub def fg(self, c: Color) -> Style:
+        self.fg_color = c
+        return self
+
+    pub def bg(self, c: Color) -> Style:
+        self.bg_color = c
+        self.has_bg   = true
+        return self
+
+    pub def bold(self) -> Style:
+        self.bold_ = true
+        return self
+
+    pub def dim(self) -> Style:
+        self.dim_ = true
+        return self
+
+    pub def italic(self) -> Style:
+        self.italic_ = true
+        return self
+
+    pub def underline(self) -> Style:
+        self.underline_ = true
+        return self
+
+    pub def reverse(self) -> Style:
+        self.reverse_ = true
+        return self
+
+    # Build the escape prefix ("\x1b[<...>m") for the accumulated attributes.
+    pub def prefix(self) -> str:
+        mut sb = StringBuilder.init(16)
+        sb.append_char(ESC())
+        sb.append_char(91)
+        sb.append(Fmt.int_to_str(self.fg_color.fg_code()))
+        if self.has_bg:    sb.append(";" + Fmt.int_to_str(self.bg_color.bg_code()))
+        if self.bold_:      sb.append(";1")
+        if self.dim_:       sb.append(";2")
+        if self.italic_:    sb.append(";3")
+        if self.underline_: sb.append(";4")
+        if self.reverse_:   sb.append(";7")
+        sb.append_char(109)
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    # Wrap text: prefix + text + reset.
+    pub def apply(self, text: str) -> str:
+        return self.prefix() + text + Term.RESET()

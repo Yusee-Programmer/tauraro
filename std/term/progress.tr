@@ -1,0 +1,155 @@
+# std.term.progress — A `[####------] 42%` progress bar and an indeterminate
+# spinner, redrawn in place via std.term.cursor's carriage-return + clear-line
+# and colored via std.term.style.
+#
+# Usage:
+#   from std.term.progress import ProgressBar
+#
+#   mut bar = ProgressBar.init(100)
+#   mut i = 0
+#   while i <= 100:
+#       bar.update(i)
+#       i = i + 10
+#   bar.finish()
+#
+#   from std.term.progress import Spinner
+#   mut sp = Spinner.init()
+#   while working:
+#       sp.tick()
+#   sp.stop()
+
+from std.core.string import StringBuilder
+from std.string.fmt import Fmt
+from std.string.str import Str
+from std.term.cursor import Cursor
+from std.io.console import Console
+
+pub def DEFAULT_BAR_WIDTH() -> int: return 30
+
+# ── Pure rendering (no I/O) — this is what tests assert against ─────────────
+#
+# Renders the bar's fixed-width core text, e.g. "[##########--------------] 33%"
+# for current=33, total=100, bar_width=20. Clamps current into [0, total] and
+# guards total<=0 (renders 0%) so a caller can't pass an out-of-range/zero
+# value and get a garbled or divide-by-zero result.
+
+pub def render_bar(current: int, total: int, bar_width: int) -> str:
+    mut c = current
+    mut t = total
+    mut invalid_total = t <= 0
+    if invalid_total: t = 1
+    if c < 0: c = 0
+    if c > t: c = t
+
+    mut pct = (c * 100) / t
+    mut filled = (c * bar_width) / t
+    if invalid_total:
+        pct    = 0
+        filled = 0
+    if filled > bar_width: filled = bar_width
+    if filled < 0: filled = 0
+
+    mut sb = StringBuilder.init(bar_width + 12)
+    sb.append_char(91)   # '['
+    sb.append(Str.repeat("#", filled))
+    sb.append(Str.repeat("-", bar_width - filled))
+    sb.append_char(93)   # ']'
+    sb.append_char(32)   # ' '
+    sb.append(Fmt.int_to_str(pct))
+    sb.append_char(37)   # '%'
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+# ── ProgressBar — stateful widget, redraws via \r + clear-line ──────────────
+
+pub class ProgressBar:
+    pub total:      int
+    pub current:    int
+    pub bar_width:  int
+    pub label:      str
+    pub finished:   bool
+
+extend ProgressBar:
+    pub def init(total: int) -> ProgressBar:
+        mut p = ProgressBar()
+        p.total     = total
+        p.current   = 0
+        p.bar_width = DEFAULT_BAR_WIDTH()
+        p.label     = ""
+        p.finished  = false
+        return p
+
+    pub def with_width(self, w: int) -> ProgressBar:
+        self.bar_width = w
+        return self
+
+    pub def with_label(self, label: str) -> ProgressBar:
+        self.label = label
+        return self
+
+    # Redraw the bar in place for the given current value.
+    pub def update(self, current: int):
+        self.current = current
+        mut line = render_bar(self.current, self.total, self.bar_width)
+        if not Str.eq(self.label, ""):
+            line = self.label + " " + line
+        Cursor.carriage_return()
+        Cursor.clear_line()
+        Console.print(line)
+
+    # Advance by `delta` (convenience over recomputing an absolute value).
+    pub def inc(self, delta: int):
+        self.update(self.current + delta)
+
+    # Snap to 100% and move to a fresh line so subsequent output doesn't
+    # overwrite the finished bar.
+    pub def finish(self):
+        self.update(self.total)
+        self.finished = true
+        print("")
+
+# ── Spinner — indeterminate progress ─────────────────────────────────────────
+
+pub def _spinner_frames() -> List[str]:
+    return ["|", "/", "-", "\\"]
+
+pub class Spinner:
+    pub frame_index: int
+    pub label:       str
+    pub stopped:     bool
+
+extend Spinner:
+    pub def init() -> Spinner:
+        mut s = Spinner()
+        s.frame_index = 0
+        s.label       = ""
+        s.stopped     = false
+        return s
+
+    pub def with_label(self, label: str) -> Spinner:
+        self.label = label
+        return self
+
+    # The frame that the NEXT tick() will draw (pure — usable in tests).
+    pub def current_frame(self) -> str:
+        mut frames = _spinner_frames()
+        return frames[self.frame_index]
+
+    # Advance to the next frame and redraw it in place.
+    pub def tick(self):
+        mut frames = _spinner_frames()
+        mut frame  = frames[self.frame_index]
+        mut line = frame
+        if not Str.eq(self.label, ""):
+            line = frame + " " + self.label
+        Cursor.carriage_return()
+        Cursor.clear_line()
+        Console.print(line)
+        self.frame_index = (self.frame_index + 1) % frames.len()
+
+    # Clear the spinner line and move to a fresh line.
+    pub def stop(self):
+        Cursor.carriage_return()
+        Cursor.clear_line()
+        self.stopped = true

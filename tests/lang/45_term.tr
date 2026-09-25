@@ -1,0 +1,173 @@
+# tests/lang/45_term.tr - std.term: ANSI styling (std.term.style), cursor
+# control (std.term.cursor), terminal size (std.term.size), and progress
+# widgets (std.term.progress).
+#
+# Terminal rendering is inherently visual, so this test focuses on what CAN
+# be verified without a human watching a terminal: the exact ANSI escape byte
+# sequences produced (checked character-by-character against the real ANSI
+# SGR/CSI codes), the fallback behavior of the size query when stdout isn't a
+# real terminal (this test runs under `--run`, output captured by the test
+# harness, so is_tty() is expected to be false here), and the exact rendered
+# text of the progress bar at fixed percentages.
+#
+# NOTE: Tauraro string literals do NOT support `\x` hex escapes (only
+# \n \r \t \\ \" \' \0 -- see docs/lang/06_strings.md's escape table), so the
+# expected ESC (0x1b) byte in every assertion below is built at runtime via
+# esc() (StringBuilder.append_char(27)), the same technique std.term.style
+# and std.term.cursor themselves use to emit it, rather than a literal
+# "\x1b" in this file (which would silently compare against the 4 literal
+# characters `\`, `x`, `1`, `b` instead of a real escape byte).
+
+from std.test import TestRunner
+from std.core.string import StringBuilder
+from std.term.style import Term, Color, Style, ESC
+from std.term.cursor import Cursor
+from std.term.size import Size, TermSize, DEFAULT_WIDTH, DEFAULT_HEIGHT
+from std.term.progress import ProgressBar, Spinner, render_bar, DEFAULT_BAR_WIDTH
+
+def esc() -> str:
+    mut sb = StringBuilder.init(4)
+    sb.append_char(27)
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+def main():
+    mut t = TestRunner.init("45_term")
+    mut e = esc()
+
+    # ── style.tr: exact ANSI SGR escape sequences ───────────────────────────
+    t.section("style.tr - ANSI SGR escape sequences")
+
+    t.assert_eq_int(ESC(), 27, "ESC() is the 0x1b escape byte")
+
+    # Term.color("hi", Color.Red) => ESC + "[31m" + "hi" + ESC + "[0m"
+    mut red = Term.color("hi", Color.Red)
+    t.assert_eq_str(red, e + "[31mhi" + e + "[0m", "Term.color Red wraps text in SGR 31 + reset")
+
+    mut green = Term.color("ok", Color.Green)
+    t.assert_eq_str(green, e + "[32mok" + e + "[0m", "Term.color Green uses SGR 32")
+
+    mut bblue = Term.color("x", Color.BrightBlue)
+    t.assert_eq_str(bblue, e + "[94mx" + e + "[0m", "Term.color BrightBlue uses SGR 94")
+
+    mut bg = Term.bg_color("x", Color.Blue)
+    t.assert_eq_str(bg, e + "[44mx" + e + "[0m", "Term.bg_color Blue uses SGR 44")
+
+    t.assert_eq_str(Term.RESET(), e + "[0m", "Term.RESET is exactly ESC[0m")
+    t.assert_eq_str(Term.bold("b"), e + "[1mb" + e + "[0m", "Term.bold uses SGR 1")
+    t.assert_eq_str(Term.dim("d"), e + "[2md" + e + "[0m", "Term.dim uses SGR 2")
+    t.assert_eq_str(Term.italic("i"), e + "[3mi" + e + "[0m", "Term.italic uses SGR 3")
+    t.assert_eq_str(Term.underline("u"), e + "[4mu" + e + "[0m", "Term.underline uses SGR 4")
+    t.assert_eq_str(Term.reverse("r"), e + "[7mr" + e + "[0m", "Term.reverse uses SGR 7")
+
+    # Combined style: color + bold + underline in one escape.
+    mut combo = Term.style("c", Color.Red, true, false, true, false)
+    t.assert_eq_str(combo, e + "[31;1;4mc" + e + "[0m", "Term.style combines fg + bold + underline in one SGR")
+
+    # 256-color / truecolor (stretch goal).
+    t.assert_eq_str(Term.color256("x", 202), e + "[38;5;202mx" + e + "[0m", "Term.color256 uses 38;5;<n>")
+    t.assert_eq_str(Term.bg_color256("x", 22), e + "[48;5;22mx" + e + "[0m", "Term.bg_color256 uses 48;5;<n>")
+    t.assert_eq_str(Term.rgb("x", 255, 128, 0), e + "[38;2;255;128;0mx" + e + "[0m", "Term.rgb uses truecolor 38;2;r;g;b")
+    t.assert_eq_str(Term.bg_rgb("x", 10, 20, 30), e + "[48;2;10;20;30mx" + e + "[0m", "Term.bg_rgb uses truecolor 48;2;r;g;b")
+
+    # Style builder.
+    mut s = Style.init().fg(Color.Green).bold().underline()
+    t.assert_eq_str(s.apply("go"), e + "[32;1;4mgo" + e + "[0m", "Style builder chains fg+bold+underline into one SGR")
+
+    mut s2 = Style.init().fg(Color.White).bg(Color.Red)
+    t.assert_eq_str(s2.prefix(), e + "[37;41m", "Style with fg+bg emits both SGR codes")
+
+    # ── cursor.tr: exact ANSI CSI escape sequences ──────────────────────────
+    t.section("cursor.tr - ANSI CSI escape sequences")
+
+    t.assert_eq_str(Cursor.build_up(3), e + "[3A", "cursor up N -> ESC[<n>A")
+    t.assert_eq_str(Cursor.build_down(2), e + "[2B", "cursor down N -> ESC[<n>B")
+    t.assert_eq_str(Cursor.build_right(5), e + "[5C", "cursor right N -> ESC[<n>C")
+    t.assert_eq_str(Cursor.build_left(1), e + "[1D", "cursor left N -> ESC[<n>D")
+    t.assert_eq_str(Cursor.build_move_to(10, 20), e + "[10;20H", "move_to(row,col) -> ESC[<row>;<col>H")
+    t.assert_eq_str(Cursor.build_move_to_col(7), e + "[7G", "move_to_col -> ESC[<col>G")
+    t.assert_eq_str(Cursor.build_hide(), e + "[?25l", "hide cursor -> ESC[?25l")
+    t.assert_eq_str(Cursor.build_show(), e + "[?25h", "show cursor -> ESC[?25h")
+    t.assert_eq_str(Cursor.build_save(), e + "[s", "save cursor -> ESC[s")
+    t.assert_eq_str(Cursor.build_restore(), e + "[u", "restore cursor -> ESC[u")
+    t.assert_eq_str(Cursor.build_clear_line_after(), e + "[0K", "clear line after -> ESC[0K")
+    t.assert_eq_str(Cursor.build_clear_line_before(), e + "[1K", "clear line before -> ESC[1K")
+    t.assert_eq_str(Cursor.build_clear_line(), e + "[2K", "clear entire line -> ESC[2K")
+    t.assert_eq_str(Cursor.build_clear_screen_after(), e + "[0J", "clear screen after -> ESC[0J")
+    t.assert_eq_str(Cursor.build_clear_screen_before(), e + "[1J", "clear screen before -> ESC[1J")
+    t.assert_eq_str(Cursor.build_clear_screen(), e + "[2J", "clear entire screen -> ESC[2J")
+    t.assert_eq_str(Cursor.build_carriage_return(), "\r", "carriage return is a bare CR")
+
+    # ── size.tr: fallback behavior when stdout isn't a real terminal ────────
+    t.section("size.tr - fallback when not a tty")
+
+    t.assert_eq_int(DEFAULT_WIDTH(), 80, "default fallback width is 80")
+    t.assert_eq_int(DEFAULT_HEIGHT(), 24, "default fallback height is 24")
+
+    mut sz = Size.get()
+    # This test runs under `tauraroc --run`, with stdout captured by the
+    # harness (not a real terminal), so is_tty() must be false here and the
+    # width/height must be exactly the documented 80x24 fallback -- this is
+    # precisely the "output redirected to a file/pipe" case the task asks to
+    # verify without a human watching a terminal.
+    t.assert_false(sz.is_tty, "is_tty() is false when stdout is redirected/piped (as under --run)")
+    t.assert_eq_int(sz.width, 80, "width falls back to 80 when not a tty")
+    t.assert_eq_int(sz.height, 24, "height falls back to 24 when not a tty")
+    t.assert_eq_int(Size.width(), 80, "Size.width() convenience matches Size.get().width")
+    t.assert_eq_int(Size.height(), 24, "Size.height() convenience matches Size.get().height")
+
+    # No crash calling is_tty() directly, either.
+    mut is_tty_direct = Size.is_tty()
+    t.assert_false(is_tty_direct, "Size.is_tty() directly also reports false under redirection")
+
+    # ── progress.tr: exact rendered bar text at fixed percentages ───────────
+    t.section("progress.tr - rendered bar text at fixed percentages")
+
+    t.assert_eq_int(DEFAULT_BAR_WIDTH(), 30, "default bar width is 30")
+
+    # 10-wide bar for easy manual verification of exact character counts.
+    t.assert_eq_str(render_bar(0, 100, 10), "[----------] 0%", "0% renders as all dashes")
+    t.assert_eq_str(render_bar(50, 100, 10), "[#####-----] 50%", "50% renders half-filled")
+    t.assert_eq_str(render_bar(100, 100, 10), "[##########] 100%", "100% renders as all hashes")
+
+    # Intermediate percentage + a different width.
+    t.assert_eq_str(render_bar(1, 4, 4), "[#---] 25%", "1/4 at width 4 renders one filled cell, 25%")
+    t.assert_eq_str(render_bar(3, 4, 4), "[###-] 75%", "3/4 at width 4 renders three filled cells, 75%")
+
+    # Edge cases: clamping.
+    t.assert_eq_str(render_bar(-5, 100, 10), "[----------] 0%", "negative current clamps to 0%")
+    t.assert_eq_str(render_bar(200, 100, 10), "[##########] 100%", "current > total clamps to 100%")
+    t.assert_eq_str(render_bar(5, 0, 10), "[----------] 0%", "total<=0 guarded, renders 0% not a crash")
+
+    # ProgressBar widget: current/total tracked correctly, finish() marks done.
+    mut bar = ProgressBar.init(100)
+    t.assert_eq_int(bar.total, 100, "ProgressBar.init stores total")
+    t.assert_eq_int(bar.current, 0, "ProgressBar.init starts at 0")
+    t.assert_false(bar.finished, "ProgressBar.init is not finished")
+    bar.update(42)
+    t.assert_eq_int(bar.current, 42, "ProgressBar.update stores current")
+    t.assert_eq_str(render_bar(bar.current, bar.total, bar.bar_width), render_bar(42, 100, DEFAULT_BAR_WIDTH()), "bar render matches render_bar with same args")
+    bar.inc(8)
+    t.assert_eq_int(bar.current, 50, "ProgressBar.inc adds delta to current")
+    bar.finish()
+    t.assert_eq_int(bar.current, 100, "ProgressBar.finish snaps current to total")
+    t.assert_true(bar.finished, "ProgressBar.finish sets finished=true")
+
+    # Spinner: frames cycle deterministically, current_frame() is pure.
+    mut sp = Spinner.init()
+    t.assert_eq_int(sp.frame_index, 0, "Spinner.init starts at frame 0")
+    t.assert_eq_str(sp.current_frame(), "|", "Spinner starts on the '|' frame")
+    sp.tick()
+    t.assert_eq_int(sp.frame_index, 1, "Spinner.tick advances frame_index")
+    t.assert_eq_str(sp.current_frame(), "/", "Spinner advances to '/' after one tick")
+    sp.tick()
+    sp.tick()
+    t.assert_eq_str(sp.current_frame(), "\\", "Spinner advances through - to \\ after three ticks")
+    sp.tick()
+    t.assert_eq_int(sp.frame_index, 0, "Spinner cycles back to frame 0 after 4 ticks")
+    t.assert_false(sp.stopped, "Spinner not stopped before stop()")
+    sp.stop()
+    t.assert_true(sp.stopped, "Spinner.stop() sets stopped=true")
+
+    t.summary()

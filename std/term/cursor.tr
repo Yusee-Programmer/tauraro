@@ -1,0 +1,94 @@
+# std.term.cursor — Cursor movement, visibility, and screen/line clearing via
+# standard ANSI CSI (Control Sequence Introducer) escape codes.
+#
+# Every method here does one of two things:
+#   - build_*  : returns the raw escape sequence as a str (for testing, or
+#                for composing into a larger buffer yourself)
+#   - the bare name (no build_ prefix): writes the sequence directly to
+#     stdout, e.g. Cursor.up(2) moves the cursor up 2 rows immediately.
+#
+# Composes with std.term.progress (redraws a line with cursor.clear_line() +
+# "\r") and std.cli (cli.tr parses args, cursor.tr/style.tr render output).
+
+from std.core.string import StringBuilder
+from std.string.fmt import Fmt
+from std.term.style import ESC
+from std.io.console import Console
+
+pub def _csi(body: str) -> str:
+    mut sb = StringBuilder.init(8 + body.len())
+    sb.append_char(ESC())
+    sb.append_char(91)   # '['
+    sb.append(body)
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+pub class Cursor:
+    _dummy: int
+
+extend Cursor:
+    # ── Sequence builders (pure — no I/O, used by tests) ────────────────────
+
+    pub def build_up(n: int) -> str:      return _csi(Fmt.int_to_str(n) + "A")
+    pub def build_down(n: int) -> str:    return _csi(Fmt.int_to_str(n) + "B")
+    pub def build_right(n: int) -> str:   return _csi(Fmt.int_to_str(n) + "C")
+    pub def build_left(n: int) -> str:    return _csi(Fmt.int_to_str(n) + "D")
+
+    # Move to absolute (row, col), both 1-based, e.g. (1,1) = top-left.
+    pub def build_move_to(row: int, col: int) -> str:
+        return _csi(Fmt.int_to_str(row) + ";" + Fmt.int_to_str(col) + "H")
+
+    # Move to column `col` (1-based) on the current row.
+    pub def build_move_to_col(col: int) -> str:
+        return _csi(Fmt.int_to_str(col) + "G")
+
+    pub def build_hide() -> str: return _csi("?25l")
+    pub def build_show() -> str: return _csi("?25h")
+
+    pub def build_save() -> str:    return _csi("s")
+    pub def build_restore() -> str: return _csi("u")
+
+    # Clear from cursor to end of line.
+    pub def build_clear_line_after() -> str:  return _csi("0K")
+    # Clear from cursor to start of line.
+    pub def build_clear_line_before() -> str: return _csi("1K")
+    # Clear the entire current line.
+    pub def build_clear_line() -> str:        return _csi("2K")
+
+    # Clear from cursor to end of screen.
+    pub def build_clear_screen_after() -> str:  return _csi("0J")
+    # Clear from cursor to start of screen.
+    pub def build_clear_screen_before() -> str: return _csi("1J")
+    # Clear the entire screen (does not move the cursor).
+    pub def build_clear_screen() -> str:        return _csi("2J")
+
+    # Carriage return: move to column 1 without clearing (for progress-bar
+    # redraw combined with clear_line()).
+    pub def build_carriage_return() -> str: return "\r"
+
+    # ── Direct-to-stdout actions ─────────────────────────────────────────────
+
+    pub def up(n: int):      Console.print(Cursor.build_up(n))
+    pub def down(n: int):    Console.print(Cursor.build_down(n))
+    pub def right(n: int):   Console.print(Cursor.build_right(n))
+    pub def left(n: int):    Console.print(Cursor.build_left(n))
+
+    pub def move_to(row: int, col: int): Console.print(Cursor.build_move_to(row, col))
+    pub def move_to_col(col: int):       Console.print(Cursor.build_move_to_col(col))
+
+    pub def hide(): Console.print(Cursor.build_hide())
+    pub def show(): Console.print(Cursor.build_show())
+
+    pub def save():    Console.print(Cursor.build_save())
+    pub def restore(): Console.print(Cursor.build_restore())
+
+    pub def clear_line_after():  Console.print(Cursor.build_clear_line_after())
+    pub def clear_line_before(): Console.print(Cursor.build_clear_line_before())
+    pub def clear_line():        Console.print(Cursor.build_clear_line())
+
+    pub def clear_screen_after():  Console.print(Cursor.build_clear_screen_after())
+    pub def clear_screen_before(): Console.print(Cursor.build_clear_screen_before())
+    pub def clear_screen():        Console.print(Cursor.build_clear_screen())
+
+    pub def carriage_return(): Console.print("\r")

@@ -1,0 +1,67 @@
+# term_demo.tr — std.term demo: colored/styled text, a progress bar
+# animating to completion, and a spinner ticking through a few frames.
+#
+# Run interactively (not piped) to see it animate:
+#   tauraroc --run examples/term_demo.tr
+
+from std.term.style import Term, Color, Style
+from std.term.cursor import Cursor
+from std.term.size import Size
+from std.term.progress import ProgressBar, Spinner
+from std.sys.process import Process
+
+def main():
+    print("=== std.term demo ===")
+    print("")
+
+    # ── Colored / styled text ────────────────────────────────────────────────
+    print(Term.color("this text is red", Color.Red))
+    print(Term.color("this text is green", Color.Green))
+    print(Term.color("this text is yellow", Color.Yellow))
+    print(Term.color("this text is bright blue", Color.BrightBlue))
+    print(Term.bold("this text is bold"))
+    print(Term.underline("this text is underlined"))
+    print(Term.italic("this text is italic"))
+    print(Term.reverse("this text is reverse-video"))
+    print(Term.style("bold red underlined", Color.Red, true, false, true, false))
+    print(Term.bg_color("black text, blue background", Color.Blue))
+
+    mut warn = Style.init().fg(Color.Yellow).bold()
+    mut err  = Style.init().fg(Color.Red).bold().underline()
+    mut ok   = Style.init().fg(Color.Green)
+    print(warn.apply("[WARN] disk usage above 80%"))
+    print(err.apply("[ERROR] connection refused"))
+    print(ok.apply("[OK] all systems nominal"))
+
+    print("")
+
+    # ── Terminal size ────────────────────────────────────────────────────────
+    mut sz = Size.get()
+    print(f"terminal: {sz.width}x{sz.height}  is_tty={sz.is_tty}")
+    print("")
+
+    # ── Progress bar animating to completion ─────────────────────────────────
+    print("Downloading package...")
+    mut bar = ProgressBar.init(100).with_width(40).with_label("progress:")
+    mut i = 0
+    while i <= 100:
+        bar.update(i)
+        Process.sleep_ms(15)
+        i = i + 5
+    bar.finish()
+    print(Term.color("download complete!", Color.Green))
+    print("")
+
+    # ── Spinner ticking through a few frames ─────────────────────────────────
+    print("Connecting...")
+    mut sp = Spinner.init().with_label("connecting to server")
+    mut j = 0
+    while j < 16:
+        sp.tick()
+        Process.sleep_ms(80)
+        j = j + 1
+    sp.stop()
+    print(Term.color("connected!", Color.Green))
+    print("")
+
+    print("=== demo complete ===")
