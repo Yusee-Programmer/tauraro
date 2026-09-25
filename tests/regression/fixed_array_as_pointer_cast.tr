@@ -1,0 +1,27 @@
+# Regression (bug2.txt BUG #2): `[T; N] as Pointer[T]` emitted invalid C --
+# it cast the fixed array's WRAPPER STRUCT (_TrArr_<sfx>_<N>) directly
+# instead of reaching into its `.data` field first, so gcc rejected it
+# ("cannot convert to a pointer type"). Fixed by special-casing the "Array"
+# source type in the ECast->Pointer[T] codegen path, mirroring the existing
+# List/Vec->Pointer[T] case right next to it.
+
+from std.test import TestRunner
+
+def main():
+    mut t = TestRunner.init("fixed_array_as_pointer_cast")
+
+    t.section("fixed-size array as Pointer[T]")
+    mut arr: [int; 4]
+    arr[0] = 7
+    arr[1] = 8
+    arr[2] = 9
+    arr[3] = 10
+    mut pp: Pointer[int] = arr as Pointer[int]
+    unsafe:
+        t.assert_eq_int(pp.offset(0).read(), 7, "element 0 readable through the cast pointer")
+        t.assert_eq_int(pp.offset(1).read(), 8, "element 1 readable through the cast pointer")
+        t.assert_eq_int(pp.offset(3).read(), 10, "element 3 readable through the cast pointer")
+        pp.offset(2).write(99)
+    t.assert_eq_int(arr[2], 99, "write through the cast pointer is visible in the original array")
+
+    t.summary()

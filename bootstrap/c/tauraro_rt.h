@@ -650,7 +650,15 @@ typedef struct {
 } TrStr;
 
 static inline TrStr _tr_str_lit_impl(const char* s) {
-    TrStr t; t.data = (char*)s; t.rc = NULL; return t;
+    /* A NULL input (e.g. _tr_getenv() on an unset variable) must not become
+     * a NULL-data TrStr: every string op (comparison, concat, .len()) reads
+     * through .data unconditionally, so a NULL .data is a guaranteed
+     * segfault the moment the caller so much as compares the result to ""
+     * (main.tr's own ANDROID_NDK_ROOT/TAURARO_PATH/PATH lookups do exactly
+     * this at startup, unconditionally, on every invocation). Degrade to
+     * the immortal empty string instead, same as every other "safe empty
+     * default" in this runtime. */
+    TrStr t; t.data = s ? (char*)s : ""; t.rc = NULL; return t;
 }
 static inline TrStr _tr_str_lit_passthrough(TrStr s) { return s; }
 /* `_tr_str_lit(x)`: wrap a borrowed `const char*` into a TrStr (rc=NULL).
@@ -856,9 +864,14 @@ _TR_XLINK size_t _tr_c_fread(void* ptr, size_t size, size_t nmemb, void* fp) { r
 _TR_XLINK size_t _tr_c_fwrite(const void* ptr, size_t size, size_t nmemb, void* fp) { return fwrite(ptr, size, nmemb, (FILE*)fp); }
 _TR_XLINK int _tr_c_fseek(void* fp, long offset, int whence) { return fseek((FILE*)fp, offset, whence); }
 _TR_XLINK long _tr_c_ftell(void* fp) { return ftell((FILE*)fp); }
-_TR_XLINK char* _tr_getenv(const char* name) { char* v = getenv(name); return v ? v : ""; }
+/* Preserve getenv()'s real NULL-vs-non-null signal (a "" fallback here made
+ * an unset var indistinguishable from a var set to the empty string, so
+ * Env.has_var() -- which only has p==NULL to test -- could never see
+ * "unset"). std/sys/env.tr's own get_var() already does the "" substitution
+ * on a null pointer; that's the right layer for it, not here. */
+_TR_XLINK char* _tr_getenv(const char* name) { return getenv(name); }
 #else
-_TR_XLINK char* _tr_getenv(const char* name) { (void)name; return (char*)""; }
+_TR_XLINK char* _tr_getenv(const char* name) { (void)name; return (char*)0; }
 #endif
 #ifdef _WIN32
 static inline int _tr_setenv(const char* name, const char* value) { return _putenv_s(name, value) == 0 ? 0 : -1; }
@@ -4959,6 +4972,34 @@ static inline int List_i32_get(List_i32* l, long long i) { _tr_bounds_check(i, l
 static inline void List_i32_set(List_i32* l, long long i, int v) { _tr_bounds_check(i, l->len); l->data[i] = v; }
 static inline void List_i32_free(List_i32* l) { if(l){ _tr_free(l->data); _tr_free(l); } }
 
+typedef struct { uint64_t* data; size_t len; size_t capacity; } List_u64;
+static inline List_u64* List_u64_new(void) { List_u64* l=(List_u64*)malloc(sizeof(List_u64)); l->data=(uint64_t*)malloc(sizeof(uint64_t)*8); l->len=0; l->capacity=8; return l; }
+static inline void List_u64_append(List_u64* l, uint64_t val) { if(l->len==l->capacity){ l->capacity*=2; l->data=(uint64_t*)realloc(l->data,sizeof(uint64_t)*l->capacity); } l->data[l->len++]=val; }
+static inline uint64_t List_u64_get(List_u64* l, long long i) { _tr_bounds_check(i, l->len); return l->data[i]; }
+static inline void List_u64_set(List_u64* l, long long i, uint64_t v) { _tr_bounds_check(i, l->len); l->data[i] = v; }
+static inline void List_u64_free(List_u64* l) { if(l){ _tr_free(l->data); _tr_free(l); } }
+
+typedef struct { uint16_t* data; size_t len; size_t capacity; } List_u16;
+static inline List_u16* List_u16_new(void) { List_u16* l=(List_u16*)malloc(sizeof(List_u16)); l->data=(uint16_t*)malloc(sizeof(uint16_t)*8); l->len=0; l->capacity=8; return l; }
+static inline void List_u16_append(List_u16* l, uint16_t val) { if(l->len==l->capacity){ l->capacity*=2; l->data=(uint16_t*)realloc(l->data,sizeof(uint16_t)*l->capacity); } l->data[l->len++]=val; }
+static inline uint16_t List_u16_get(List_u16* l, long long i) { _tr_bounds_check(i, l->len); return l->data[i]; }
+static inline void List_u16_set(List_u16* l, long long i, uint16_t v) { _tr_bounds_check(i, l->len); l->data[i] = v; }
+static inline void List_u16_free(List_u16* l) { if(l){ _tr_free(l->data); _tr_free(l); } }
+
+typedef struct { short* data; size_t len; size_t capacity; } List_i16;
+static inline List_i16* List_i16_new(void) { List_i16* l=(List_i16*)malloc(sizeof(List_i16)); l->data=(short*)malloc(sizeof(short)*8); l->len=0; l->capacity=8; return l; }
+static inline void List_i16_append(List_i16* l, short val) { if(l->len==l->capacity){ l->capacity*=2; l->data=(short*)realloc(l->data,sizeof(short)*l->capacity); } l->data[l->len++]=val; }
+static inline short List_i16_get(List_i16* l, long long i) { _tr_bounds_check(i, l->len); return l->data[i]; }
+static inline void List_i16_set(List_i16* l, long long i, short v) { _tr_bounds_check(i, l->len); l->data[i] = v; }
+static inline void List_i16_free(List_i16* l) { if(l){ _tr_free(l->data); _tr_free(l); } }
+
+typedef struct { float* data; size_t len; size_t capacity; } List_f32;
+static inline List_f32* List_f32_new(void) { List_f32* l=(List_f32*)malloc(sizeof(List_f32)); l->data=(float*)malloc(sizeof(float)*8); l->len=0; l->capacity=8; return l; }
+static inline void List_f32_append(List_f32* l, float val) { if(l->len==l->capacity){ l->capacity*=2; l->data=(float*)realloc(l->data,sizeof(float)*l->capacity); } l->data[l->len++]=val; }
+static inline float List_f32_get(List_f32* l, long long i) { _tr_bounds_check(i, l->len); return l->data[i]; }
+static inline void List_f32_set(List_f32* l, long long i, float v) { _tr_bounds_check(i, l->len); l->data[i] = v; }
+static inline void List_f32_free(List_f32* l) { if(l){ _tr_free(l->data); _tr_free(l); } }
+
 typedef struct { char* data; size_t len; size_t capacity; } List_char;
 static inline List_char* List_char_new(void) { List_char* l=(List_char*)malloc(sizeof(List_char)); l->data=(char*)malloc(sizeof(char)*8); l->len=0; l->capacity=8; return l; }
 static inline void List_char_append(List_char* l, char val) { if(l->len==l->capacity){ l->capacity*=2; l->data=(char*)realloc(l->data,sizeof(char)*l->capacity); } l->data[l->len++]=val; }
@@ -5102,6 +5143,10 @@ _TR_LIST_RESERVE(List_TrTuple)
 _TR_LIST_RESERVE(List_TrFnVal)
 _TR_LIST_RESERVE(List_u32)
 _TR_LIST_RESERVE(List_u8)
+_TR_LIST_RESERVE(List_u64)
+_TR_LIST_RESERVE(List_u16)
+_TR_LIST_RESERVE(List_i16)
+_TR_LIST_RESERVE(List_f32)
 /* ── Extended Vec/List operations: remove, swap, clear, is_empty, extend ──── */
 static inline void List_i64_remove(List_i64* l, long long i) { if(!l||(size_t)i>=l->len) return; for(size_t j=(size_t)i;j<l->len-1;j++) l->data[j]=l->data[j+1]; l->len--; }
 static inline void List_i64_swap(List_i64* l, long long a, long long b) { if(!l||(size_t)a>=l->len||(size_t)b>=l->len) return; long long t=l->data[a]; l->data[a]=l->data[b]; l->data[b]=t; }

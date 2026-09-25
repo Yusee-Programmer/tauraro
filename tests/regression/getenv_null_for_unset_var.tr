@@ -1,0 +1,27 @@
+# Regression (bug2.txt): _tr_getenv coalesced an unset env var's NULL into a
+# non-null "" pointer, so Env.has_var() (whose only signal is "was the
+# returned pointer null") could never observe "not set" -- it was always
+# true. Fixed in runtime/tauraro_rt.h: _tr_getenv now returns the real
+# getenv() result (NULL when unset); std/sys/env.tr's get_var() already does
+# the "" substitution on a null pointer, so that layer is unaffected.
+
+from std.test import TestRunner
+from std.sys.env import Env
+
+def main():
+    mut t = TestRunner.init("getenv_null_for_unset_var")
+    mut env = Env.init()
+
+    t.section("has_var / get_var correctly distinguish unset from set-to-empty")
+    env.unset_var("TAURARO_TEST_UNSET_XYZ123")
+    t.assert_false(env.has_var("TAURARO_TEST_UNSET_XYZ123"), "unset var: has_var() is false")
+    t.assert_eq_str(env.get_var("TAURARO_TEST_UNSET_XYZ123"), "", "unset var: get_var() still safely returns \"\"")
+
+    env.set_var("TAURARO_TEST_SET_XYZ123", "hello")
+    t.assert_true(env.has_var("TAURARO_TEST_SET_XYZ123"), "set var: has_var() is true")
+    t.assert_eq_str(env.get_var("TAURARO_TEST_SET_XYZ123"), "hello", "set var: get_var() returns the value")
+
+    env.unset_var("TAURARO_TEST_SET_XYZ123")
+    t.assert_false(env.has_var("TAURARO_TEST_SET_XYZ123"), "unset after set: has_var() is false again")
+
+    t.summary()

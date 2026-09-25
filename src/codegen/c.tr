@@ -802,7 +802,7 @@ pub class CGenerator:
         if actual_n == "def" or actual_n == "lambda":
             return "TrFnVal"
         mut sfx = self.type_suffix(actual_n)
-        if sfx == "i64" or sfx == "f64" or sfx == "str" or sfx == "bool" or sfx == "i8" or sfx == "i32" or sfx == "char" or sfx == "u8" or sfx == "u32":
+        if sfx == "i64" or sfx == "f64" or sfx == "str" or sfx == "bool" or sfx == "i8" or sfx == "i32" or sfx == "char" or sfx == "u8" or sfx == "u32" or sfx == "u64" or sfx == "u16" or sfx == "i16" or sfx == "f32":
             return sfx
         if self.enums.contains(actual_n) or self.value_types.contains(actual_n):
             # Enums and @value_type classes are stored BY VALUE inline in the list
@@ -2472,6 +2472,15 @@ pub class CGenerator:
                     mut cast_src_ty: str = hir_expr_type(expr).name
                     if cast_src_ty == "List" or cast_src_ty == "Vec":
                         return "((" + self.type_to_c(target_ty) + ")(" + self.gen_expr(expr) + "->data))"
+                    # Fixed-size array [T; N] -> Pointer[T]: a fixed array is
+                    # represented as a zero-cost VALUE-type wrapper struct
+                    # (_TrArr_<Tsfx>_<N> { T data[N]; }, see ensure_array_type),
+                    # not a raw C array or a pointer -- a C struct can't be
+                    # reinterpret-cast to a pointer type directly (gcc: "cannot
+                    # convert to a pointer type"). Reach into `.data` first,
+                    # same as the List/Vec case just above.
+                    if cast_src_ty == "Array":
+                        return "((" + self.type_to_c(target_ty) + ")(" + self.gen_expr(expr) + ".data))"
                     # def(...)->R / lambda -> Pointer[T]: TWO genuinely different call
                     # sites use this exact syntax for opposite purposes, confirmed by
                     # examples/ffi_callbacks.tr (both patterns in one file):
@@ -7043,7 +7052,15 @@ pub class CGenerator:
     pub def gen_multi_let(self, names: Vec[str], is_mut: bool, val: Pointer[HirExpr], indent: int):
         pad = _indent_str(indent)
         mut tmp = "_tup" + self.next_temp()
-        self.w(pad + "TrTuple " + tmp + " = " + self.gen_expr(val) + ";\n")
+        # A fresh heap-class value inline as a call argument in `val` hoists a
+        # pending decl+release into self.wrap_temp_decls/wrap_obj_names/
+        # wrap_obj_drops (see gen_args_casts) that must be flushed around THIS
+        # statement, exactly like every other statement kind does (return,
+        # plain assignment, single-target let, if-conditions, the sibling
+        # ETuple-reassignment case) -- otherwise the pending decl silently
+        # attaches to whatever statement comes next, declaring the temp one
+        # statement too late (a straight C compile error: used-before-declared).
+        self.w(pad + "TrTuple " + tmp + " = " + self.flush_wraps(self.gen_expr(val), false) + ";\n")
         mut val_ty = hir_expr_type(val)
         mut i = 0
         while i < names.len:
