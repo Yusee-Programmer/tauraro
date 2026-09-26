@@ -1,0 +1,121 @@
+# Regression: several src/codegen/c.tr call sites decide whether a value
+# needs ARC retain/release by checking `is_heap_class_tn(hir_expr_type(e)
+# .name)` directly -- but inside a monomorphized generic function/method,
+# a `T`-typed parameter or local's HIR type name is still the unresolved
+# generic placeholder ("T"), not the concrete class it was monomorphized
+# to. `is_heap_class_tn("T")` is always false (it's not a registered class
+# name), so every one of these sites silently skipped the retain for a
+# generic-bound heap-class value: Dict[K,V] value storage, List.append,
+# list-literal construction, Set.add, `-> ref` owned returns, and `mut x
+# = <heap-class generic>` local declarations. Each is exactly the
+# documented "freed at the source local's scope exit while the container
+# still points at it (UAF)" pattern their own comments warn about -- just
+# never actually triggered because nothing exercised them with a truly
+# generic (not yet monomorphized-away) heap-class parameter before.
+#
+# This test forces each of those specific paths with T bound to a real
+# heap class, and confirms the stored values are still valid (correct
+# field content, not garbage) after the source locals that created them
+# have gone out of scope -- the only way it would fail is a live
+# use-after-free actually corrupting the data.
+
+from std.test import TestRunner
+
+pub class Item:
+    pub tag: int
+    pub name: str
+
+extend Item:
+    pub def init(tag: int, name: str) -> Item:
+        mut it = Item()
+        it.tag = tag
+        it.name = name
+        return it
+
+# Generic free function: appends a T (heap-class-bound) into a List[T].
+# Exercises the List.append is_heap_class_tn dispatch under a still-generic
+# T, not a concretely-known class name.
+def store[T](lst: List[T], item: T):
+    lst.append(item)
+
+# Generic free function: inserts a T value into a Dict[str, T]. Exercises
+# the Dict value-argument is_heap_class_tn dispatch under generic T.
+def store_kv[T](d: Dict[str, T], key: str, item: T):
+    d.set(key, item)
+
+# Generic free function: builds a List[T] literal from a single T value.
+# Exercises the list-literal-construction is_heap_class_tn dispatch.
+def wrap_in_list[T](item: T) -> List[T]:
+    return [item]
+
+def main():
+    mut t = TestRunner.init("generic_heap_class_retain")
+
+    t.section("List[T].append with T bound to a heap class, source local goes out of scope")
+    mut items: List[Item] = []
+    mut i = 0
+    while i < 20:
+        # Item created in a scope that ends this same iteration -- if
+        # store()'s generic-T append path fails to retain, `items` ends up
+        # holding dangling pointers once this local is dropped.
+        mut it = Item.init(i, "item" + i.to_str())
+        store(items, it)
+        i = i + 1
+    # Force some heap churn (new allocations reusing freed memory would
+    # make a real UAF's corruption visible as wrong field values below).
+    mut churn: List[str] = []
+    mut j = 0
+    while j < 200:
+        churn.append("churn" + j.to_str())
+        j = j + 1
+    t.assert_eq_int(items.len, 20, "all 20 items stored")
+    mut all_correct = true
+    mut k = 0
+    while k < 20:
+        mut it2 = items.get(k)
+        if it2.tag != k or it2.name != "item" + k.to_str(): all_correct = false
+        k = k + 1
+    t.assert_true(all_correct, "every stored Item survives with correct tag/name (no UAF corruption)")
+
+    t.section("Dict[str, T] value storage with T bound to a heap class")
+    mut d: Dict[str, Item] = {}
+    mut m = 0
+    while m < 15:
+        mut it3 = Item.init(m * 10, "dictitem" + m.to_str())
+        store_kv(d, "k" + m.to_str(), it3)
+        m = m + 1
+    mut churn2: List[str] = []
+    mut n = 0
+    while n < 200:
+        churn2.append("churn2_" + n.to_str())
+        n = n + 1
+    mut dict_all_correct = true
+    mut p = 0
+    while p < 15:
+        mut got = d.get("k" + p.to_str())
+        if got.tag != p * 10 or got.name != "dictitem" + p.to_str(): dict_all_correct = false
+        p = p + 1
+    t.assert_true(dict_all_correct, "every Dict-stored Item survives with correct tag/name (no UAF corruption)")
+
+    t.section("list-literal construction ([item]) with T bound to a heap class")
+    mut wrapped_results: List[List[Item]] = []
+    mut q = 0
+    while q < 10:
+        mut it4 = Item.init(q + 100, "wrapped" + q.to_str())
+        wrapped_results.append(wrap_in_list(it4))
+        q = q + 1
+    mut churn3: List[str] = []
+    mut r = 0
+    while r < 200:
+        churn3.append("churn3_" + r.to_str())
+        r = r + 1
+    mut wrap_all_correct = true
+    mut s = 0
+    while s < 10:
+        mut wl = wrapped_results.get(s)
+        mut w0 = wl.get(0)
+        if w0.tag != s + 100 or w0.name != "wrapped" + s.to_str(): wrap_all_correct = false
+        s = s + 1
+    t.assert_true(wrap_all_correct, "every list-literal-wrapped Item survives with correct tag/name")
+
+    t.summary()

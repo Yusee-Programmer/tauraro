@@ -3461,7 +3461,7 @@ pub class CGenerator:
 
     pub def obj_retain_wrap(self, e: Pointer[HirExpr], s: str, is_return: bool) -> str:
         if _is_invalid_ptr(e as usize): return s
-        if not self.is_heap_class_tn(hir_expr_type(e).name): return s
+        if not self.is_heap_class_tn(self.resolve_generic_tyname(hir_expr_type(e).name)): return s
         match e.read():
             case HirExpr.EIdent(nm, _, _):
                 if is_return and self.class_local_names.contains(nm): return s
@@ -4961,7 +4961,7 @@ pub class CGenerator:
         # Heap-class value: the dict holds a reference. Retain an alias; move a
         # fresh ctor result (obj_retain_wrap decides). Without this the instance is
         # freed at the source local's scope exit while the dict points at it (UAF).
-        if self.is_heap_class_tn(hir_expr_type(e).name):
+        if self.is_heap_class_tn(self.resolve_generic_tyname(hir_expr_type(e).name)):
             mut _dvr = self.obj_retain_wrap(e, e_s, false)
             if self._obj_store_needs_retain(e): _dvr = "_tr_obj_retain(" + _dvr + ")"
             return _dvr
@@ -5051,7 +5051,7 @@ pub class CGenerator:
     # (borrows/live locals) and collection-element reads are NOT fresh.
     pub def _is_fresh_obj_expr(self, e: Pointer[HirExpr]) -> bool:
         if _is_invalid_ptr(e as usize): return false
-        if not self.is_heap_class_tn(hir_expr_type(e).name): return false
+        if not self.is_heap_class_tn(self.resolve_generic_tyname(hir_expr_type(e).name)): return false
         match e.read():
             case HirExpr.ECall(callee, _, ce_bty):
                 if ce_bty.is_borrow: return false
@@ -6311,7 +6311,7 @@ pub class CGenerator:
                 # Heap-class element: the list holds a reference. Retain an ALIAS
                 # (a local/field); MOVE a fresh ctor result (rc=1) — obj_retain_wrap
                 # picks correctly, so fresh temps aren't double-counted.
-                if args.len > 0 and self.is_heap_class_tn(hir_expr_type(args.get(0)).name):
+                if args.len > 0 and self.is_heap_class_tn(self.resolve_generic_tyname(hir_expr_type(args.get(0)).name)):
                     mut _ael = self.obj_retain_wrap(args.get(0), self.gen_expr(args.get(0)), false)
                     if self._obj_store_needs_retain(args.get(0)): _ael = "_tr_obj_retain(" + _ael + ")"
                     return "List_" + lsfx + "_append(" + obj_s + ", " + _ael + ")"
@@ -6460,7 +6460,7 @@ pub class CGenerator:
                     if args.len == 0: return sp + "_new(16)"
                     return sp + "_new(" + self.gen_args(args) + ")"
                 if method == "add" and args.len > 0:
-                    if self.is_heap_class_tn(hir_expr_type(args.get(0)).name):
+                    if self.is_heap_class_tn(self.resolve_generic_tyname(hir_expr_type(args.get(0)).name)):
                         return sp + "_add(" + obj_s + ", " + self.obj_retain_wrap(args.get(0), self.gen_expr(args.get(0)), false) + ")"
                     return sp + "_add(" + obj_s + ", " + self.gen_expr(args.get(0)) + ")"
                 if method == "contains" or method == "has": return sp + "_contains(" + obj_s + ", " + self.gen_expr(args.get(0)) + ")"
@@ -7175,7 +7175,7 @@ pub class CGenerator:
             mut item_s = self.gen_expr(items.get(i))
             # Heap-class element: the list co-owns it (retain alias / transfer fresh),
             # so element-release on the list's drop is balanced.
-            if self.is_heap_class_tn(hir_expr_type(items.get(i)).name):
+            if self.is_heap_class_tn(self.resolve_generic_tyname(hir_expr_type(items.get(i)).name)):
                 item_s = self.obj_retain_wrap(items.get(i), item_s, false)
                 if self._obj_store_needs_retain(items.get(i)): item_s = "_tr_obj_retain(" + item_s + ")"
             s = s + "List_" + lsfx + "_append(" + l + ", " + item_s + "); "
@@ -8005,7 +8005,7 @@ pub class CGenerator:
                             # Owned-return function returning a `-> ref` call result: the
                             # callee did NOT retain, so OWN it here (retain) before handing
                             # it back as an owned value the caller will free.
-                            if self.is_heap_class_tn(hir_expr_type(e).name):
+                            if self.is_heap_class_tn(self.resolve_generic_tyname(hir_expr_type(e).name)):
                                 self.w(pad + "return " + self.iface_wrap_return(e, "_tr_obj_retain(" + ret_s2 + ")") + ";\n")
                             elif _is_str_type(self.resolve_generic_prim(hir_expr_type(e).name)):
                                 self.w(pad + "return _tr_str_retain(" + ret_s2 + ");\n")
@@ -8285,7 +8285,7 @@ pub class CGenerator:
                                         init_s = "_tr_str_retain(" + init_s + ")"
                                         self.str_local_names.insert(n, true)
                                     case _: self.str_local_names.insert(n, true)
-                        elif self.is_heap_class_tn(hir_expr_type(v).name) and not self.interfaces.contains(ty.name):
+                        elif self.is_heap_class_tn(self.resolve_generic_tyname(hir_expr_type(v).name)) and not self.interfaces.contains(ty.name):
                             # Refcounted heap class. A proven borrow is a zero-cost
                             # alias (no retain/release, not tracked). Otherwise this
                             # local OWNS a reference: retain aliases (a fresh ctor /
@@ -8349,7 +8349,7 @@ pub class CGenerator:
                                         case _: pass
                                     self.w(pad + "TrStr " + _safe_c_varname(n) + " = " + _sa_rhs + ";\n")
                                     self.str_local_names.insert(n, true)
-                            elif self.is_heap_class_tn(hir_expr_type(v).name):
+                            elif self.is_heap_class_tn(self.resolve_generic_tyname(hir_expr_type(v).name)):
                                 # First assignment declares a heap-class local — same
                                 # retain/track as SLet (explicit T* since _tr_obj_retain
                                 # yields void*). Proven borrow → zero-cost alias.
@@ -8593,7 +8593,7 @@ pub class CGenerator:
                     # not to alias a live local (out of scope for a same-session patch).
                     self.w(pad + self.gen_expr(t) + " = " + _assign_rhs + ";\n")
                     return
-                elif self.is_heap_class_tn(hir_expr_type(t).name) and not self.has_method(hir_expr_type(t).name, "free"):
+                elif self.is_heap_class_tn(self.resolve_generic_tyname(hir_expr_type(t).name)) and not self.has_method(self.resolve_generic_tyname(hir_expr_type(t).name), "free"):
                     # `ref T` (borrow) field store: no co-ownership — plain store, no
                     # retain, no release-old (symmetric with the drop side, which skips
                     # borrow fields). This is the zero-cost borrowed-view case.
