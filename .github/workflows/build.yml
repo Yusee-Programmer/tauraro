@@ -214,6 +214,28 @@ jobs:
           rm -f _z.c _z.o
 
       # -------------------------------------------------------
+      # TEMP DIAGNOSTIC (macOS only): tests/lang/43_serialize.tr and
+      # 48_collections2.tr crash with ZERO output on macOS-arm64 (no test
+      # section prints at all, not even the first one) -- looks like a
+      # crash before/during early startup, not a normal assertion failure.
+      # Compile each to a standalone binary and run under lldb to capture
+      # a real backtrace. continue-on-error so it never blocks the real
+      # suite; remove this step once root-caused.
+      # -------------------------------------------------------
+      - name: DEBUG macOS silent-crash backtrace
+        if: runner.os == 'macOS'
+        shell: bash
+        continue-on-error: true
+        run: |
+          set -x
+          ./tauraroc tests/lang/43_serialize.tr -o /tmp/dbg43 || echo "COMPILE 43 FAILED rc=$?"
+          ./tauraroc tests/lang/48_collections2.tr -o /tmp/dbg48 || echo "COMPILE 48 FAILED rc=$?"
+          echo "===== 43_serialize lldb backtrace ====="
+          lldb --batch -o "run" -o "bt all" -o "quit" -- /tmp/dbg43 2>&1 || true
+          echo "===== 48_collections2 lldb backtrace ====="
+          lldb --batch -o "run" -o "bt all" -o "quit" -- /tmp/dbg48 2>&1 || true
+
+      # -------------------------------------------------------
       # Regression test suite: tests/lang/ and tests/regression/,
       # run via `tauraroc --run` against the freshly-built binary
       # on each platform. See scripts/run_tests.sh / run_tests.ps1.
