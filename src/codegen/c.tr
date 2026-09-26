@@ -2525,8 +2525,19 @@ pub class CGenerator:
                 # `as str`: TrStr is a struct, can't C-cast to it. If the source
                 # expr is already str-typed it's a no-op; otherwise it's a
                 # generic/void* result (e.g. Dict.get(k) as str) - unbox it.
+                # `resolve_generic_prim` is required here (not just
+                # `hir_expr_type(expr).name` directly): inside a monomorphized
+                # generic method body, a `key: K` parameter's HIR type name is
+                # still the generic placeholder "K", not the concrete "str" it
+                # was monomorphized to -- resolving through the active
+                # type_subst map is what lets `key as Pointer[char]` (K bound
+                # to str) correctly unwrap TrStr's `.data` below instead of
+                # falling through to an invalid `(char*)(a_struct_value)` C
+                # cast (confirmed via a minimal repro: gcc rejects it outright
+                # with "cannot convert to a pointer type"). A no-op for any
+                # name that isn't currently an active generic substitution.
                 if _is_str_type(target_ty.name):
-                    mut cast_src_full_n: str = hir_expr_type(expr).name
+                    mut cast_src_full_n: str = self.resolve_generic_prim(hir_expr_type(expr).name)
                     if _is_str_type(cast_src_full_n): return self.gen_expr(expr)
                     # Raw pointer (e.g. an FFI `const char*` return like `zlibVersion() as str`):
                     # wrap as a BORROWED TrStr (rc=NULL) so it is NEVER freed — safe by default for
@@ -2538,7 +2549,7 @@ pub class CGenerator:
                     return "_tr_str_unbox(" + self.gen_expr(expr) + ")"
                 # TrStr -> Pointer[char]/char*: extract the raw char* via strz
                 # (TrStr is a struct, can't C-cast it directly to a pointer).
-                if _is_str_type(hir_expr_type(expr).name):
+                if _is_str_type(self.resolve_generic_prim(hir_expr_type(expr).name)):
                     return "((" + self.type_to_c(target_ty) + ")(" + self.strz(self.gen_expr(expr)) + "))"
                 return "((" + self.type_to_c(target_ty) + ")(" + self.gen_expr(expr) + "))"
             case HirExpr.EFString(parts, _): return self.gen_fstring(parts)
