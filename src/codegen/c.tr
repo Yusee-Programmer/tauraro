@@ -3468,6 +3468,24 @@ pub class CGenerator:
                 return "_tr_obj_retain(" + s + ")"
             case HirExpr.EPropAccess(_, _, _):
                 return "_tr_obj_retain(" + s + ")"
+            # `(ptr as Pointer[T]).offset(i).read()` (raw pointer-array read) returned
+            # from an owned (non-`-> ref`) function: this is exactly Vec[T].get()'s own
+            # body for a heap-class T (std/core/vec.tr) -- a BORROW of the container's
+            # existing storage, not a freshly-constructed value, so the caller (who now
+            # treats the result as OWNED per get()'s ordinary `-> T` signature) needs a
+            # retain here or the container's own later drop/overwrite frees the object
+            # out from under the caller. Confirmed via a real use-after-free: pickle.tr's
+            # `walk = walk.list_get(0)` (25-deep nested-list round-trip) -- list_get's
+            # `return self.items.get(i)` handed back an unretained alias into `self`,
+            # then reassigning `walk` dropped the OLD `self` (freeing the very value just
+            # returned) before the new value was ever safely owned. Scoped to is_return
+            # (a plain expression-context `.read()`, e.g. inside a larger builder
+            # expression, is not a new independent owning binding the way a function's
+            # return value is) so this does not touch the unrelated, already-correct
+            # local-binding EIndex precedent just below.
+            case HirExpr.EMethodCall(_, rm, _, _):
+                if is_return and rm == "read": return "_tr_obj_retain(" + s + ")"
+                return s
             # NOTE: `coll[i]` (EIndex) is deliberately NOT retained here, matching the
             # EXISTING precedent for `coll.get(i)`/`.first()`/`.last()` (EMethodCall,
             # see _obj_expr_owns_ref/_obj_store_needs_retain below): a bare collection-

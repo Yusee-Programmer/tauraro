@@ -214,21 +214,6 @@ jobs:
           rm -f _z.c _z.o
 
       # -------------------------------------------------------
-      # TEMP DIAGNOSTIC (macOS only): 43_serialize.tr still crashes with
-      # zero output after fixing the pickle/msgpack u64-reader shift-UB.
-      # Get a symbolicated backtrace for whatever's next.
-      # -------------------------------------------------------
-      - name: DEBUG macOS silent-crash backtrace v3
-        if: runner.os == 'macOS'
-        shell: bash
-        continue-on-error: true
-        run: |
-          set -x
-          ./tauraroc tests/lang/43_serialize.tr -o /tmp/dbg43v3 --debug -O0 || echo "COMPILE FAILED rc=$?"
-          echo "===== 43_serialize lldb backtrace v3 ====="
-          lldb --batch -o "run" -o "bt" -o "quit" -- /tmp/dbg43v3 2>&1 || true
-
-      # -------------------------------------------------------
       # Regression test suite: tests/lang/ and tests/regression/,
       # run via `tauraroc --run` against the freshly-built binary
       # on each platform. See scripts/run_tests.sh / run_tests.ps1.
