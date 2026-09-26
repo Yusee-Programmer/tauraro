@@ -688,7 +688,7 @@ static inline TrStr _tr_str_lit_impl(const char* s) {
  * a literal like "ab\0cd" agree with the compiler's own (correct) view of
  * its length, rather than silently re-truncating at the first NUL the
  * moment the literal becomes a runtime TrStr value. */
-static inline TrStr _tr_str_lit_len(const char* s, size_t len) {
+_TR_XLINK TrStr _tr_str_lit_len(const char* s, size_t len) {
     TrStr t; t.data = s ? (char*)s : ""; t.len = s ? len : 0; t.rc = NULL; return t;
 }
 static inline TrStr _tr_str_lit_passthrough(TrStr s) { return s; }
@@ -759,7 +759,7 @@ static inline TrStr _tr_str_wrap_impl(char* owned_data) {
  * call. Using strlen() there (the plain _tr_str_wrap path) would silently
  * truncate any binary payload containing a 0x00 byte before its real end;
  * this preserves it. */
-static inline TrStr _tr_str_wrap_len(char* owned_data, size_t len) {
+_TR_XLINK TrStr _tr_str_wrap_len(char* owned_data, size_t len) {
     TrStr t;
     t.data = owned_data;
     t.len = owned_data ? len : 0;

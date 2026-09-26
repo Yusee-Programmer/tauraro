@@ -1250,7 +1250,7 @@ pub def compile_all_c_incremental(c_files: Vec[str], needs: Vec[bool], exe_path:
             if verbose: print("  [CC -c] " + cpath)
             mut crc = _tr_system(ccmd)
             if crc != 0:
-                print(c_red("error") + ": MARKERV5 compiling " + cpath + " failed (exit code " + str(crc) + ")")
+                print(c_red("error") + ": compiling " + cpath + " failed (exit code " + str(crc) + ")")
                 return crc
         else:
             compiled = compiled + 1
@@ -1362,7 +1362,7 @@ pub def compile_wasm_incremental(c_files: Vec[str], needs: Vec[bool], exe_path: 
             if verbose: print("  [CC -c wasm] " + cpath)
             mut crc = _tr_system(ccmd)
             if crc != 0:
-                print(c_red("error") + ": MARKERV5 compiling " + cpath + " failed (exit code " + str(crc) + ")")
+                print(c_red("error") + ": compiling " + cpath + " failed (exit code " + str(crc) + ")")
                 return crc
         else:
             reused = reused + 1

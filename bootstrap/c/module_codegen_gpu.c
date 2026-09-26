@@ -20,9 +20,9 @@ __attribute__((hot)) TrStr GpuGenerator_emit(GpuGenerator* self, HirProgram* pro
     /* pass */
     if (_tr_str_eqv((tgt), (_tr_str_lit_len("", 0LL)))) {
         /* pass */
-        TrStr _strtmp_t3505 = _tr_str_lit_len("spirv", 5LL);
+        TrStr _strtmp_t3527 = _tr_str_lit_len("spirv", 5LL);
         _tr_str_release(tgt);
-        tgt = _strtmp_t3505;
+        tgt = _strtmp_t3527;
     }
     /* pass */
     StringBuilder* sb = StringBuilder_init(2048LL);
@@ -101,7 +101,7 @@ __attribute__((hot)) TrStr GpuGenerator_emit(GpuGenerator* self, HirProgram* pro
         /* pass */
         e0->dev_fns = dev_fns;
         /* pass */
-        ({ TrStr _sbt_t3506 = (GpuEmitter_emit_device_fn(e0, ((HirFunction*)List_ptr_get(dev_fns, de)))); StringBuilder_append(sb, _sbt_t3506); _tr_str_release(_sbt_t3506); });
+        ({ TrStr _sbt_t3528 = (GpuEmitter_emit_device_fn(e0, ((HirFunction*)List_ptr_get(dev_fns, de)))); StringBuilder_append(sb, _sbt_t3528); _tr_str_release(_sbt_t3528); });
         /* pass */
         if ((!e0->ok)) {
             /* pass */
@@ -131,7 +131,7 @@ __attribute__((hot)) TrStr GpuGenerator_emit(GpuGenerator* self, HirProgram* pro
             /* pass */
             e->dev_fns = dev_fns;
             /* pass */
-            ({ TrStr _sbt_t3507 = (GpuEmitter_emit_kernel(e, f)); StringBuilder_append(sb, _sbt_t3507); _tr_str_release(_sbt_t3507); });
+            ({ TrStr _sbt_t3529 = (GpuEmitter_emit_kernel(e, f)); StringBuilder_append(sb, _sbt_t3529); _tr_str_release(_sbt_t3529); });
             /* pass */
             if ((!e->ok)) {
                 /* pass */
@@ -176,7 +176,7 @@ __attribute__((hot)) TrStr GpuGenerator_emit(GpuGenerator* self, HirProgram* pro
                     StringBuilder_append(sb, _tr_str_lit_len(", ", 2LL));
                 }
                 /* pass */
-                ({ TrStr _sbt_t3508 = (({ TrStr _cr = (_tr_str_wrap(_tr_int_to_str((long long)(ki)))); TrStr _cres = _tr_strx_concatv((_tr_str_lit_len("!", 1LL)), _cr); _tr_str_release(_cr); _cres; })); StringBuilder_append(sb, _sbt_t3508); _tr_str_release(_sbt_t3508); });
+                ({ TrStr _sbt_t3530 = (({ TrStr _cr = (_tr_str_wrap(_tr_int_to_str((long long)(ki)))); TrStr _cres = _tr_strx_concatv((_tr_str_lit_len("!", 1LL)), _cr); _tr_str_release(_cr); _cres; })); StringBuilder_append(sb, _sbt_t3530); _tr_str_release(_sbt_t3530); });
                 /* pass */
                 ki = (ki + 1LL);
             }
@@ -196,7 +196,7 @@ __attribute__((hot)) TrStr GpuGenerator_emit(GpuGenerator* self, HirProgram* pro
             /* pass */
             if (fn_is_kernel(f3)) {
                 /* pass */
-                ({ TrStr _sbt_t3509 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cr = (_tr_str_wrap(_tr_int_to_str((long long)(ki2)))); TrStr _cres = _tr_strx_concatv((_tr_str_lit_len("!", 1LL)), _cr); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concatv(_cl, (_tr_str_lit_len(" = !{ptr @", 10LL))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concatv(_cl, (f3->name)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concatv(_cl, (_tr_str_lit_len(", !\"kernel\", i32 1}\n", 20LL))); _tr_str_release(_cl); _cres; })); StringBuilder_append(sb, _sbt_t3509); _tr_str_release(_sbt_t3509); });
+                ({ TrStr _sbt_t3531 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cr = (_tr_str_wrap(_tr_int_to_str((long long)(ki2)))); TrStr _cres = _tr_strx_concatv((_tr_str_lit_len("!", 1LL)), _cr); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concatv(_cl, (_tr_str_lit_len(" = !{ptr @", 10LL))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concatv(_cl, (f3->name)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concatv(_cl, (_tr_str_lit_len(", !\"kernel\", i32 1}\n", 20LL))); _tr_str_release(_cl); _cres; })); StringBuilder_append(sb, _sbt_t3531); _tr_str_release(_sbt_t3531); });
                 /* pass */
                 ki2 = (ki2 + 1LL);
             }
