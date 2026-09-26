@@ -28,7 +28,7 @@ pub class StringObj:
 extend StringObj:
     pub def init(s: str) -> StringObj:
         mut obj = StringObj()
-        mut slen = _tr_strlen(s)
+        mut slen = s.len()
         obj.len = slen
         obj.capacity = slen + 8
         obj.data = _tr_checked_alloc(obj.capacity)
@@ -41,7 +41,7 @@ extend StringObj:
         return _tr_str_lit_len(self.data, self.len)
 
     pub def append(self, other: str):
-        mut slen = _tr_strlen(other)
+        mut slen = other.len()
         if slen <= 0: return
         if self.len + slen >= self.capacity:
             self.capacity = (self.len + slen) * 2 + 8

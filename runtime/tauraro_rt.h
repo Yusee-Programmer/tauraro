@@ -4701,6 +4701,309 @@ static inline char* _tr_str_zfill(const char* s, long long width) {
     r[width] = '\0'; return r;
 }
 
+/* ── Length-aware ("_v") TrStr variants of the utility string helpers above ──
+ * Every function above scans byte-by-byte until a NUL terminator (both to
+ * know where the input ends AND, for char*-returning ones, to size the
+ * output) -- correct only when the input has no embedded \0. These take
+ * whole TrStr value(s) and use `.len` instead of strlen, and are what
+ * src/codegen/c.tr's method dispatch emits instead. Kept as separate
+ * functions (never touching the plain ones above), for the same
+ * self-hosting-bootstrap reason as _tr_str_eqv/_tr_strx_concatv (see the
+ * comment on _tr_str_eqv): an already-compiled compiler binary's own
+ * codegen emits calls to the PLAIN names with the OLD calling convention. */
+static inline TrStr _tr_str_upperv(TrStr s) {
+    size_t n = s.data ? s.len : 0;
+    TrStr r = _tr_str_new(n);
+    for (size_t i = 0; i < n; i++) r.data[i] = (char)toupper((unsigned char)s.data[i]);
+    return r;
+}
+static inline TrStr _tr_str_lowerv(TrStr s) {
+    size_t n = s.data ? s.len : 0;
+    TrStr r = _tr_str_new(n);
+    for (size_t i = 0; i < n; i++) r.data[i] = (char)tolower((unsigned char)s.data[i]);
+    return r;
+}
+static inline TrStr _tr_str_capitalizev(TrStr s) {
+    size_t n = s.data ? s.len : 0;
+    TrStr r = _tr_str_new(n);
+    if (n > 0) { memcpy(r.data, s.data, n); r.data[0] = (char)toupper((unsigned char)r.data[0]); }
+    for (size_t i = 1; i < n; i++) r.data[i] = (char)tolower((unsigned char)r.data[i]);
+    return r;
+}
+static inline TrStr _tr_str_titlev(TrStr s) {
+    size_t n = s.data ? s.len : 0;
+    TrStr r = _tr_str_new(n);
+    if (n > 0) memcpy(r.data, s.data, n);
+    bool ws = true;
+    for (size_t i = 0; i < n; i++) {
+        if (r.data[i]==' '||r.data[i]=='\t'||r.data[i]=='\n') { ws = true; }
+        else if (ws) { r.data[i] = (char)toupper((unsigned char)r.data[i]); ws = false; }
+        else { r.data[i] = (char)tolower((unsigned char)r.data[i]); }
+    }
+    return r;
+}
+static inline TrStr _tr_str_reversev(TrStr s) {
+    size_t n = s.data ? s.len : 0;
+    TrStr r = _tr_str_new(n);
+    for (size_t i = 0; i < n; i++) r.data[i] = s.data[n-1-i];
+    return r;
+}
+static inline TrStr _tr_str_stripv(TrStr s) {
+    if (!s.data || s.len == 0) return _tr_str_new(0);
+    const char* p = s.data; size_t n = s.len;
+    size_t i = 0; while (i < n && isspace((unsigned char)p[i])) i++;
+    size_t j = n; while (j > i && isspace((unsigned char)p[j-1])) j--;
+    TrStr r = _tr_str_new(j - i);
+    if (j > i) memcpy(r.data, p + i, j - i);
+    return r;
+}
+static inline TrStr _tr_str_trim_leftv(TrStr s) {
+    if (!s.data || s.len == 0) return _tr_str_new(0);
+    const char* p = s.data; size_t n = s.len;
+    size_t i = 0; while (i < n && (p[i]==' '||p[i]=='\t'||p[i]=='\n'||p[i]=='\r')) i++;
+    TrStr r = _tr_str_new(n - i);
+    if (n > i) memcpy(r.data, p + i, n - i);
+    return r;
+}
+static inline TrStr _tr_str_trim_rightv(TrStr s) {
+    if (!s.data || s.len == 0) return _tr_str_new(0);
+    const char* p = s.data; size_t n = s.len;
+    while (n > 0 && (p[n-1]==' '||p[n-1]=='\t'||p[n-1]=='\n'||p[n-1]=='\r')) n--;
+    TrStr r = _tr_str_new(n);
+    if (n > 0) memcpy(r.data, p, n);
+    return r;
+}
+static inline TrStr _tr_str_repeatv(TrStr s, long long times) {
+    size_t slen = s.data ? s.len : 0;
+    if (slen == 0 || times <= 0) return _tr_str_new(0);
+    size_t total = (size_t)times * slen;
+    TrStr r = _tr_str_new(total);
+    for (long long i = 0; i < times; i++) memcpy(r.data + (size_t)i*slen, s.data, slen);
+    return r;
+}
+static inline TrStr _tr_str_pad_leftv(TrStr s, long long w) {
+    long long n = s.data ? (long long)s.len : 0;
+    if (n >= w) { TrStr r = _tr_str_new((size_t)n); if (n) memcpy(r.data, s.data, (size_t)n); return r; }
+    long long pad = w - n;
+    TrStr r = _tr_str_new((size_t)w);
+    for (long long i = 0; i < pad; i++) r.data[i] = ' ';
+    if (n) memcpy(r.data + pad, s.data, (size_t)n);
+    return r;
+}
+static inline TrStr _tr_str_pad_rightv(TrStr s, long long w) {
+    long long n = s.data ? (long long)s.len : 0;
+    if (n >= w) { TrStr r = _tr_str_new((size_t)n); if (n) memcpy(r.data, s.data, (size_t)n); return r; }
+    TrStr r = _tr_str_new((size_t)w);
+    if (n) memcpy(r.data, s.data, (size_t)n);
+    for (long long i = n; i < w; i++) r.data[i] = ' ';
+    return r;
+}
+static inline TrStr _tr_str_lpadv(TrStr s, long long width, TrStr pad) {
+    long long slen = s.data ? (long long)s.len : 0;
+    char padc = (pad.data && pad.len > 0) ? pad.data[0] : ' ';
+    if (slen >= width) { TrStr r = _tr_str_new((size_t)slen); if (slen) memcpy(r.data, s.data, (size_t)slen); return r; }
+    long long plen = width - slen;
+    TrStr r = _tr_str_new((size_t)(plen + slen));
+    for (long long i = 0; i < plen; i++) r.data[i] = padc;
+    if (slen) memcpy(r.data + plen, s.data, (size_t)slen);
+    return r;
+}
+static inline TrStr _tr_str_rpadv(TrStr s, long long width, TrStr pad) {
+    long long slen = s.data ? (long long)s.len : 0;
+    char padc = (pad.data && pad.len > 0) ? pad.data[0] : ' ';
+    if (slen >= width) { TrStr r = _tr_str_new((size_t)slen); if (slen) memcpy(r.data, s.data, (size_t)slen); return r; }
+    long long plen = width - slen;
+    TrStr r = _tr_str_new((size_t)(plen + slen));
+    if (slen) memcpy(r.data, s.data, (size_t)slen);
+    for (long long i = 0; i < plen; i++) r.data[slen+i] = padc;
+    return r;
+}
+static inline TrStr _tr_str_centerv(TrStr s, long long width) {
+    long long slen = s.data ? (long long)s.len : 0;
+    if (slen >= width) { TrStr r = _tr_str_new((size_t)slen); if (slen) memcpy(r.data, s.data, (size_t)slen); return r; }
+    long long total = width - slen, left = total/2, right = total - left;
+    TrStr r = _tr_str_new((size_t)width);
+    for (long long i = 0; i < left; i++) r.data[i] = ' ';
+    if (slen) memcpy(r.data + left, s.data, (size_t)slen);
+    for (long long i = 0; i < right; i++) r.data[left+slen+i] = ' ';
+    return r;
+}
+static inline TrStr _tr_str_zfillv(TrStr s, long long width) {
+    long long n = s.data ? (long long)s.len : 0;
+    if (n >= width) { TrStr r = _tr_str_new((size_t)n); if (n) memcpy(r.data, s.data, (size_t)n); return r; }
+    long long pad = width - n, si = 0, p = 0;
+    TrStr r = _tr_str_new((size_t)width);
+    if (n > 0 && (s.data[0]=='-' || s.data[0]=='+')) { r.data[p++] = s.data[0]; si = 1; }
+    for (long long i = 0; i < pad; i++) r.data[p++] = '0';
+    for (long long i = si; i < n; i++) r.data[p++] = s.data[i];
+    return r;
+}
+static inline TrStr _tr_str_slicev(TrStr s, long long start, long long end) {
+    long long len = s.data ? (long long)s.len : 0;
+    if (start < 0) start = 0;
+    if (end > len) end = len;
+    if (start >= end) return _tr_str_new(0);
+    long long sz = end - start;
+    TrStr r = _tr_str_new((size_t)sz);
+    memcpy(r.data, s.data + start, (size_t)sz);
+    return r;
+}
+static inline TrStr _tr_str_replacev(TrStr s, TrStr old_s, TrStr new_s) {
+    if (!s.data) return _tr_str_new(0);
+    size_t sl = s.len, ol = old_s.data ? old_s.len : 0, nl = new_s.data ? new_s.len : 0;
+    if (ol == 0) { TrStr r = _tr_str_new(sl); if (sl) memcpy(r.data, s.data, sl); return r; }
+    size_t cnt = 0;
+    for (size_t i = 0; i + ol <= sl; ) {
+        if (memcmp(s.data + i, old_s.data, ol) == 0) { cnt++; i += ol; } else { i++; }
+    }
+    /* cnt*ol <= sl always (matches counted above are non-overlapping within
+     * sl bytes), so this can never underflow before nl is added back. */
+    size_t total = (sl - cnt*ol) + cnt*nl;
+    TrStr r = _tr_str_new(total);
+    size_t di = 0, si = 0;
+    while (si < sl) {
+        if (si + ol <= sl && memcmp(s.data + si, old_s.data, ol) == 0) {
+            if (nl) memcpy(r.data + di, new_s.data, nl);
+            di += nl; si += ol;
+        } else {
+            r.data[di++] = s.data[si++];
+        }
+    }
+    return r;
+}
+static inline TrStr _tr_str_replace_firstv(TrStr s, TrStr old_s, TrStr new_s) {
+    if (!s.data) return _tr_str_new(0);
+    size_t sl = s.len, ol = old_s.data ? old_s.len : 0, nl = new_s.data ? new_s.len : 0;
+    if (ol == 0 || ol > sl) { TrStr r = _tr_str_new(sl); if (sl) memcpy(r.data, s.data, sl); return r; }
+    size_t pos = sl;
+    for (size_t i = 0; i + ol <= sl; i++) {
+        if (memcmp(s.data + i, old_s.data, ol) == 0) { pos = i; break; }
+    }
+    if (pos == sl) { TrStr r = _tr_str_new(sl); if (sl) memcpy(r.data, s.data, sl); return r; }
+    size_t total = sl - ol + nl;
+    TrStr r = _tr_str_new(total);
+    memcpy(r.data, s.data, pos);
+    if (nl) memcpy(r.data + pos, new_s.data, nl);
+    memcpy(r.data + pos + nl, s.data + pos + ol, sl - pos - ol);
+    return r;
+}
+static inline TrStr _tr_str_strip_prefixv(TrStr s, TrStr pre) {
+    size_t sl = s.data ? s.len : 0, pl = pre.data ? pre.len : 0;
+    if (pl <= sl && pl > 0 && memcmp(s.data, pre.data, pl) == 0) {
+        TrStr r = _tr_str_new(sl - pl);
+        if (sl - pl) memcpy(r.data, s.data + pl, sl - pl);
+        return r;
+    }
+    TrStr r = _tr_str_new(sl);
+    if (sl) memcpy(r.data, s.data, sl);
+    return r;
+}
+static inline TrStr _tr_str_strip_suffixv(TrStr s, TrStr suf) {
+    size_t sl = s.data ? s.len : 0, sufl = suf.data ? suf.len : 0;
+    if (sufl <= sl && sufl > 0 && memcmp(s.data + sl - sufl, suf.data, sufl) == 0) {
+        TrStr r = _tr_str_new(sl - sufl);
+        if (sl - sufl) memcpy(r.data, s.data, sl - sufl);
+        return r;
+    }
+    TrStr r = _tr_str_new(sl);
+    if (sl) memcpy(r.data, s.data, sl);
+    return r;
+}
+static inline TrStr _tr_str_remove_charv(TrStr s, TrStr ch) {
+    size_t sl = s.data ? s.len : 0;
+    if (!ch.data || ch.len == 0) { TrStr r = _tr_str_new(sl); if (sl) memcpy(r.data, s.data, sl); return r; }
+    char c = ch.data[0];
+    TrStr r = _tr_str_new(sl);
+    size_t j = 0;
+    for (size_t i = 0; i < sl; i++) if (s.data[i] != c) r.data[j++] = s.data[i];
+    r.len = j;
+    if (r.data) r.data[j] = '\0';
+    return r;
+}
+static inline bool _tr_str_containsv(TrStr s, TrStr sub) {
+    if (!s.data || !sub.data) return false;
+    if (sub.len == 0) return true;
+    if (sub.len > s.len) return false;
+    for (size_t i = 0; i + sub.len <= s.len; i++)
+        if (memcmp(s.data + i, sub.data, sub.len) == 0) return true;
+    return false;
+}
+static inline bool _tr_str_starts_withv(TrStr s, TrStr pre) {
+    if (!s.data || !pre.data) return false;
+    if (pre.len > s.len) return false;
+    return memcmp(s.data, pre.data, pre.len) == 0;
+}
+static inline bool _tr_str_ends_withv(TrStr s, TrStr suf) {
+    if (!s.data || !suf.data) return false;
+    if (suf.len > s.len) return false;
+    return memcmp(s.data + s.len - suf.len, suf.data, suf.len) == 0;
+}
+static inline long long _tr_str_index_ofv(TrStr s, TrStr sub) {
+    if (!s.data || !sub.data) return -1LL;
+    if (sub.len == 0) return 0LL;
+    if (sub.len > s.len) return -1LL;
+    for (size_t i = 0; i + sub.len <= s.len; i++)
+        if (memcmp(s.data + i, sub.data, sub.len) == 0) return (long long)i;
+    return -1LL;
+}
+static inline long long _tr_str_last_index_ofv(TrStr s, TrStr sub) {
+    if (!s.data || !sub.data || sub.len == 0) return -1LL;
+    if (sub.len > s.len) return -1LL;
+    long long last = -1LL;
+    for (size_t i = 0; i + sub.len <= s.len; i++)
+        if (memcmp(s.data + i, sub.data, sub.len) == 0) last = (long long)i;
+    return last;
+}
+static inline long long _tr_str_count_occv(TrStr s, TrStr sub) {
+    if (!s.data || !sub.data || sub.len == 0) return 0LL;
+    if (sub.len > s.len) return 0LL;
+    long long c = 0;
+    for (size_t i = 0; i + sub.len <= s.len; ) {
+        if (memcmp(s.data + i, sub.data, sub.len) == 0) { c++; i += sub.len; } else { i++; }
+    }
+    return c;
+}
+static inline long long _tr_str_char_at_codev(TrStr s, long long i) {
+    if (!s.data) return -1LL;
+    if (i < 0 || (size_t)i >= s.len) return -1LL;
+    return (long long)(unsigned char)s.data[i];
+}
+static inline bool _tr_str_contains_charv(TrStr s, long long c) {
+    if (!s.data) return false;
+    for (size_t i = 0; i < s.len; i++) if ((unsigned char)s.data[i] == (unsigned char)c) return true;
+    return false;
+}
+static inline bool _tr_str_is_digitv(TrStr s) {
+    if (!s.data || s.len == 0) return false;
+    for (size_t i = 0; i < s.len; i++) if (!isdigit((unsigned char)s.data[i])) return false;
+    return true;
+}
+static inline bool _tr_str_is_alphav(TrStr s) {
+    if (!s.data || s.len == 0) return false;
+    for (size_t i = 0; i < s.len; i++) if (!isalpha((unsigned char)s.data[i])) return false;
+    return true;
+}
+static inline bool _tr_str_is_alnumv(TrStr s) {
+    if (!s.data || s.len == 0) return false;
+    for (size_t i = 0; i < s.len; i++) if (!isalnum((unsigned char)s.data[i])) return false;
+    return true;
+}
+static inline bool _tr_str_is_spacev(TrStr s) {
+    if (!s.data || s.len == 0) return false;
+    for (size_t i = 0; i < s.len; i++) if (!isspace((unsigned char)s.data[i])) return false;
+    return true;
+}
+static inline bool _tr_str_is_upperv(TrStr s) {
+    if (!s.data || s.len == 0) return false;
+    for (size_t i = 0; i < s.len; i++) if (isalpha((unsigned char)s.data[i]) && !isupper((unsigned char)s.data[i])) return false;
+    return true;
+}
+static inline bool _tr_str_is_lowerv(TrStr s) {
+    if (!s.data || s.len == 0) return false;
+    for (size_t i = 0; i < s.len; i++) if (isalpha((unsigned char)s.data[i]) && !islower((unsigned char)s.data[i])) return false;
+    return true;
+}
+
 /* ── Char code → 1-char string ───────────────────────────────────────── */
 static inline char* _tr_char_to_str(long long code) {
     char* s = (char*)_tr_checked_alloc(2);
@@ -5559,6 +5862,70 @@ static inline List_TrStr* _tr_str_chars(const char* s) {
     return l;
 }
 static inline List_TrStr* _tr_str_words(const char* s) { return _tr_str_split(s, " "); }
+
+/* Length-aware ("_v") variants of split/lines/words/chars/format above.
+ * _tr_str_split's strtok is fundamentally NUL-based (both to find the
+ * input's end AND because strtok itself takes/mutates a NUL-terminated
+ * C string) so it can never be retrofitted -- this is a real rewrite: a
+ * manual scan bounded by s.len, treating each byte of `sep` as an
+ * individual delimiter character (matching strtok's own accepted-
+ * character-set semantics for its 2nd arg, and so preserving the existing
+ * "consecutive separators yield no empty tokens" behavior). Kept as a
+ * separate function name for the same self-hosting-bootstrap reason as
+ * every other _v function in this header. */
+static inline List_TrStr* _tr_str_splitv(TrStr s, TrStr sep) {
+    List_TrStr* l = List_TrStr_new();
+    if (!s.data || !sep.data || sep.len == 0) return l;
+    size_t sl = s.len, sepl = sep.len, i = 0;
+    while (i < sl) {
+        while (i < sl && memchr(sep.data, s.data[i], sepl)) i++;
+        if (i >= sl) break;
+        size_t start = i;
+        while (i < sl && !memchr(sep.data, s.data[i], sepl)) i++;
+        TrStr tok = _tr_str_new(i - start);
+        memcpy(tok.data, s.data + start, i - start);
+        List_TrStr_append_owned(l, tok);
+    }
+    return l;
+}
+static inline List_TrStr* _tr_str_linesv(TrStr s) { return _tr_str_splitv(s, _tr_str_lit("\n")); }
+static inline List_TrStr* _tr_str_wordsv(TrStr s) { return _tr_str_splitv(s, _tr_str_lit(" ")); }
+static inline List_TrStr* _tr_str_charsv(TrStr s) {
+    List_TrStr* l = List_TrStr_new();
+    if (!s.data) return l;
+    for (size_t i = 0; i < s.len; i++) {
+        TrStr c = _tr_str_new(1);
+        c.data[0] = s.data[i];
+        List_TrStr_append_owned(l, c);
+    }
+    return l;
+}
+/* s.format(...): only the FORMAT TEMPLATE itself is made length-aware here
+ * (an embedded NUL literally inside the "{}"-placeholder template text is
+ * now preserved). The already-stringified ARGS remain bare char* -- doing
+ * the same for them would mean redesigning _TR_AUTO_STR's whole array-of-
+ * char* calling convention, and in practice format() args are simple
+ * stringified scalars/strings that don't carry raw embedded-NUL payloads;
+ * documented as a known, narrow remaining gap, same spirit as the
+ * Dict[str,V]/Set[str]-keys boundary noted elsewhere in this file. */
+static inline TrStr _tr_str_formatv(TrStr fmt, const char* const* args, long long argc) {
+    const char* f = fmt.data ? fmt.data : "";
+    size_t flen = fmt.data ? fmt.len : 0;
+    size_t cap = flen;
+    for (long long i = 0; i < argc; i++) if (args[i]) cap += strlen(args[i]);
+    TrStr r = _tr_str_new(cap);
+    char* w = r.data; size_t pi = 0; long long ai = 0;
+    while (pi < flen) {
+        if (f[pi] == '{' && pi + 1 < flen && f[pi+1] == '}' && ai < argc) {
+            const char* a = args[ai++]; if (a) { size_t l = strlen(a); memcpy(w, a, l); w += l; }
+            pi += 2;
+        } else { *w++ = f[pi++]; }
+    }
+    r.len = (size_t)(w - r.data);
+    r.data[r.len] = '\0';
+    return r;
+}
+
 /* TrStr-elements join: build "sep"-joined string from a List_TrStr*.
  * Uses each element's own `.len` for the same embedded-NUL-safety reason
  * as _tr_strx_join_trstr above (these two are near-duplicates). */

@@ -3724,8 +3724,8 @@ pub class CGenerator:
         # String repetition: "ab" * 3  (or  3 * "ab"), Python-style.
         if op == "*" and (_is_str_type(lt_n) or _is_str_type(rt_n)):
             if _is_str_type(lt_n):
-                return "_tr_strx_repeat(" + self.strz(ls) + ", (long long)(" + rs + "))"
-            return "_tr_strx_repeat(" + self.strz(rs) + ", (long long)(" + ls + "))"
+                return "_tr_str_repeatv(" + self.strv(ls) + ", (long long)(" + rs + "))"
+            return "_tr_str_repeatv(" + self.strv(rs) + ", (long long)(" + ls + "))"
         if op == "and":
             mut lsa = ls
             mut rsa = rs
@@ -5378,49 +5378,50 @@ pub class CGenerator:
             if args.len > 1: str_arg1 = self.gen_expr(args.get(1))
             mut arg0v: str = self.strv(str_arg0)
             mut sa0: str = arg0v + ".data"
+            mut arg1v: str = self.strv(str_arg1)
             mut sa1: str = self.strz(str_arg1)
-            if method == "split":         return "_tr_str_split(" + os + ", " + sa0 + ")"
-            if method == "split_to_vec":  return "_tr_str_split(" + os + ", " + sa0 + ")"
-            if method == "trim" or method == "strip": return self.wrapstr("_tr_str_strip(" + os + ")")
-            if method == "trim_left":     return self.wrapstr("_tr_str_trim_left(" + os + ")")
-            if method == "trim_right":    return self.wrapstr("_tr_str_trim_right(" + os + ")")
-            if method == "to_upper":      return self.wrapstr("_tr_str_upper(" + os + ")")
-            if method == "to_lower":      return self.wrapstr("_tr_str_lower(" + os + ")")
-            if method == "capitalize":    return self.wrapstr("_tr_str_capitalize(" + os + ")")
-            if method == "title":         return self.wrapstr("_tr_str_title(" + os + ")")
-            if method == "reverse":       return self.wrapstr("_tr_str_reverse(" + os + ")")
-            if method == "repeat":        return self.wrapstr("_tr_str_repeat(" + os + ", " + str_arg0 + ")")
-            if method == "replace":       return self.wrapstr("_tr_str_replace(" + os + ", " + sa0 + ", " + sa1 + ")")
-            if method == "replace_first": return self.wrapstr("_tr_str_replace_first(" + os + ", " + sa0 + ", " + sa1 + ")")
-            if method == "slice":         return self.wrapstr("_tr_str_slice(" + os + ", " + str_arg0 + ", " + str_arg1 + ")")
-            if method == "strip_prefix":  return self.wrapstr("_tr_str_strip_prefix(" + os + ", " + sa0 + ")")
-            if method == "strip_suffix":  return self.wrapstr("_tr_str_strip_suffix(" + os + ", " + sa0 + ")")
-            if method == "remove_char":   return self.wrapstr("_tr_str_remove_char(" + os + ", " + sa0 + ")")
+            if method == "split":         return "_tr_str_splitv(" + ov + ", " + arg0v + ")"
+            if method == "split_to_vec":  return "_tr_str_splitv(" + ov + ", " + arg0v + ")"
+            if method == "trim" or method == "strip": return "_tr_str_stripv(" + ov + ")"
+            if method == "trim_left":     return "_tr_str_trim_leftv(" + ov + ")"
+            if method == "trim_right":    return "_tr_str_trim_rightv(" + ov + ")"
+            if method == "to_upper":      return "_tr_str_upperv(" + ov + ")"
+            if method == "to_lower":      return "_tr_str_lowerv(" + ov + ")"
+            if method == "capitalize":    return "_tr_str_capitalizev(" + ov + ")"
+            if method == "title":         return "_tr_str_titlev(" + ov + ")"
+            if method == "reverse":       return "_tr_str_reversev(" + ov + ")"
+            if method == "repeat":        return "_tr_str_repeatv(" + ov + ", (long long)(" + str_arg0 + "))"
+            if method == "replace":       return "_tr_str_replacev(" + ov + ", " + arg0v + ", " + arg1v + ")"
+            if method == "replace_first": return "_tr_str_replace_firstv(" + ov + ", " + arg0v + ", " + arg1v + ")"
+            if method == "slice":         return "_tr_str_slicev(" + ov + ", " + str_arg0 + ", " + str_arg1 + ")"
+            if method == "strip_prefix":  return "_tr_str_strip_prefixv(" + ov + ", " + arg0v + ")"
+            if method == "strip_suffix":  return "_tr_str_strip_suffixv(" + ov + ", " + arg0v + ")"
+            if method == "remove_char":   return "_tr_str_remove_charv(" + ov + ", " + arg0v + ")"
             if method == "join":          return "_tr_trstr_join((List_TrStr*)(void*)" + obj_s + ", " + sa0 + ")"
             if method == "len":           return "_tr_str_lenv(" + ov + ")"
-            if method == "index_of":      return "_tr_str_index_of(" + os + ", " + sa0 + ")"
-            if method == "last_index_of": return "_tr_str_last_index_of(" + os + ", " + sa0 + ")"
-            if method == "count":         return "_tr_str_count_occ(" + os + ", " + sa0 + ")"
-            if method == "char_at":       return "_tr_str_char_at_code(" + os + ", " + str_arg0 + ")"
-            if method == "starts_with":   return "_tr_str_starts_with(" + os + ", " + sa0 + ")"
-            if method == "ends_with":     return "_tr_str_ends_with(" + os + ", " + sa0 + ")"
-            if method == "contains":      return "_tr_str_contains(" + os + ", " + sa0 + ")"
-            if method == "contains_char": return "_tr_str_contains_char(" + os + ", (long long)(" + str_arg0 + "))"
+            if method == "index_of":      return "_tr_str_index_ofv(" + ov + ", " + arg0v + ")"
+            if method == "last_index_of": return "_tr_str_last_index_ofv(" + ov + ", " + arg0v + ")"
+            if method == "count":         return "_tr_str_count_occv(" + ov + ", " + arg0v + ")"
+            if method == "char_at":       return "_tr_str_char_at_codev(" + ov + ", " + str_arg0 + ")"
+            if method == "starts_with":   return "_tr_str_starts_withv(" + ov + ", " + arg0v + ")"
+            if method == "ends_with":     return "_tr_str_ends_withv(" + ov + ", " + arg0v + ")"
+            if method == "contains":      return "_tr_str_containsv(" + ov + ", " + arg0v + ")"
+            if method == "contains_char": return "_tr_str_contains_charv(" + ov + ", (long long)(" + str_arg0 + "))"
             if method == "eq":            return "_tr_str_eqv(" + ov + ", " + arg0v + ")"
-            if method == "is_digit":      return "_tr_str_is_digit(" + os + ")"
-            if method == "is_alpha":      return "_tr_str_is_alpha(" + os + ")"
-            if method == "is_alnum":      return "_tr_str_is_alnum(" + os + ")"
-            if method == "is_space":      return "_tr_str_is_space(" + os + ")"
-            if method == "is_upper":      return "_tr_str_is_upper(" + os + ")"
-            if method == "is_lower":      return "_tr_str_is_lower(" + os + ")"
+            if method == "is_digit":      return "_tr_str_is_digitv(" + ov + ")"
+            if method == "is_alpha":      return "_tr_str_is_alphav(" + ov + ")"
+            if method == "is_alnum":      return "_tr_str_is_alnumv(" + ov + ")"
+            if method == "is_space":      return "_tr_str_is_spacev(" + ov + ")"
+            if method == "is_upper":      return "_tr_str_is_upperv(" + ov + ")"
+            if method == "is_lower":      return "_tr_str_is_lowerv(" + ov + ")"
             if method == "parse_int":     return "_tr_str_to_int(" + os + ")"
             if method == "parse_float":   return "_tr_str_to_float(" + os + ")"
             if method == "parse_bool":    return "_tr_str_parse_bool(" + os + ")"
-            if method == "lines":         return "_tr_str_lines(" + os + ")"
-            if method == "words":         return "_tr_str_words(" + os + ")"
-            if method == "lpad":          return self.wrapstr("_tr_str_lpad(" + os + ", " + str_arg0 + ", " + sa1 + ")")
-            if method == "rpad":          return self.wrapstr("_tr_str_rpad(" + os + ", " + str_arg0 + ", " + sa1 + ")")
-            if method == "center":        return self.wrapstr("_tr_str_center(" + os + ", " + str_arg0 + ")")
+            if method == "lines":         return "_tr_str_linesv(" + ov + ")"
+            if method == "words":         return "_tr_str_wordsv(" + ov + ")"
+            if method == "lpad":          return "_tr_str_lpadv(" + ov + ", (long long)(" + str_arg0 + "), " + arg1v + ")"
+            if method == "rpad":          return "_tr_str_rpadv(" + ov + ", (long long)(" + str_arg0 + "), " + arg1v + ")"
+            if method == "center":        return "_tr_str_centerv(" + ov + ", (long long)(" + str_arg0 + "))"
 
         # Pointer method calls - intercept when:
         #   (a) receiver is explicitly Pointer[T], or
@@ -5875,11 +5876,11 @@ pub class CGenerator:
             if _is_str_type(t_n): return obj_s
             return "(char*)(" + obj_s + ")"
         if method == "starts_with" and args.len > 0 and _is_str_type(t_n):
-            return "_tr_str_starts_with(" + self.strz(obj_s) + ", " + self.strz(self.gen_expr(args.get(0))) + ")"
+            return "_tr_str_starts_withv(" + self.strv(obj_s) + ", " + self.strv(self.gen_expr(args.get(0))) + ")"
         if method == "ends_with" and args.len > 0 and _is_str_type(t_n):
-            return "_tr_str_ends_with(" + self.strz(obj_s) + ", " + self.strz(self.gen_expr(args.get(0))) + ")"
+            return "_tr_str_ends_withv(" + self.strv(obj_s) + ", " + self.strv(self.gen_expr(args.get(0))) + ")"
         if method == "contains" and args.len > 0 and _is_str_type(t_n):
-            return "_tr_str_contains(" + self.strz(obj_s) + ", " + self.strz(self.gen_expr(args.get(0))) + ")"
+            return "_tr_str_containsv(" + self.strv(obj_s) + ", " + self.strv(self.gen_expr(args.get(0))) + ")"
 
         # String method dispatch - must be before the generic TrStr_ fallback
         # NOTE on interim string semantics: scalar `str`
@@ -5897,15 +5898,15 @@ pub class CGenerator:
             mut ov: str = self.strv(obj_s)
             mut os: str = ov + ".data"
             if method == "is_empty": return "(_tr_str_lenv(" + ov + ") == 0)"
-            if method == "upper" or method == "to_upper": return self.wrapstr("_tr_str_upper(" + os + ")")
-            if method == "lower" or method == "to_lower": return self.wrapstr("_tr_str_lower(" + os + ")")
-            if method == "strip" or method == "trim": return self.wrapstr("_tr_str_strip(" + os + ")")
-            if method == "trim_left": return self.wrapstr("_tr_str_trim_left(" + os + ")")
-            if method == "trim_right": return self.wrapstr("_tr_str_trim_right(" + os + ")")
+            if method == "upper" or method == "to_upper": return "_tr_str_upperv(" + ov + ")"
+            if method == "lower" or method == "to_lower": return "_tr_str_lowerv(" + ov + ")"
+            if method == "strip" or method == "trim": return "_tr_str_stripv(" + ov + ")"
+            if method == "trim_left": return "_tr_str_trim_leftv(" + ov + ")"
+            if method == "trim_right": return "_tr_str_trim_rightv(" + ov + ")"
             if method == "zfill" and args.len > 0:
-                return self.wrapstr("_tr_str_zfill(" + os + ", (long long)(" + self.gen_expr(args.get(0)) + "))")
+                return "_tr_str_zfillv(" + ov + ", (long long)(" + self.gen_expr(args.get(0)) + "))"
             if method == "chars":
-                return "_tr_str_chars(" + os + ")"
+                return "_tr_str_charsv(" + ov + ")"
             if method == "format":
                 mut _fa = "(const char*[]){"
                 if args.len == 0:
@@ -5917,50 +5918,48 @@ pub class CGenerator:
                         _fa = _fa + self.gen_to_cstr(args.get(_fi))
                         _fi = _fi + 1
                 _fa = _fa + "}"
-                return self.wrapstr("_tr_str_format(" + os + ", " + _fa + ", " + args.len.to_str() + "LL)")
+                return "_tr_str_formatv(" + ov + ", " + _fa + ", " + args.len.to_str() + "LL)"
             if method == "pad_left" and args.len > 0:
-                return self.wrapstr("_tr_str_pad_left(" + os + ", (long long)(" + self.gen_expr(args.get(0)) + "))")
+                return "_tr_str_pad_leftv(" + ov + ", (long long)(" + self.gen_expr(args.get(0)) + "))"
             if method == "pad_right" and args.len > 0:
-                return self.wrapstr("_tr_str_pad_right(" + os + ", (long long)(" + self.gen_expr(args.get(0)) + "))")
+                return "_tr_str_pad_rightv(" + ov + ", (long long)(" + self.gen_expr(args.get(0)) + "))"
             if method == "replace" and args.len == 2:
-                return self.wrapstr("_tr_str_replace(" + os + ", " + self.strz(self.gen_expr(args.get(0))) + ", " + self.strz(self.gen_expr(args.get(1))) + ")")
+                return "_tr_str_replacev(" + ov + ", " + self.strv(self.gen_expr(args.get(0))) + ", " + self.strv(self.gen_expr(args.get(1))) + ")"
             if method == "split" and args.len > 0:
-                return "_tr_str_split(" + os + ", " + self.strz(self.gen_expr(args.get(0))) + ")"
+                return "_tr_str_splitv(" + ov + ", " + self.strv(self.gen_expr(args.get(0))) + ")"
             if method == "find" and args.len > 0:
-                mut tmp_find: str = self.next_temp()
-                return "({ char* " + tmp_find + " = strstr(" + os + ", " + self.strz(self.gen_expr(args.get(0))) + "); " + tmp_find + " ? (long long)(" + tmp_find + " - (" + os + ")) : -1LL; })"
+                return "_tr_str_index_ofv(" + ov + ", " + self.strv(self.gen_expr(args.get(0))) + ")"
             if method == "slice" and args.len == 2:
-                return self.wrapstr("_tr_str_slice(" + os + ", " + self.gen_expr(args.get(0)) + ", " + self.gen_expr(args.get(1)) + ")")
+                return "_tr_str_slicev(" + ov + ", " + self.gen_expr(args.get(0)) + ", " + self.gen_expr(args.get(1)) + ")"
             if method == "index_of" and args.len > 0:
-                return "_tr_str_index_of(" + os + ", " + self.strz(self.gen_expr(args.get(0))) + ")"
+                return "_tr_str_index_ofv(" + ov + ", " + self.strv(self.gen_expr(args.get(0))) + ")"
             if method == "last_index_of" and args.len > 0:
-                return "_tr_str_last_index_of(" + os + ", " + self.strz(self.gen_expr(args.get(0))) + ")"
+                return "_tr_str_last_index_ofv(" + ov + ", " + self.strv(self.gen_expr(args.get(0))) + ")"
             if method == "len" or method == "length":
                 return "_tr_str_lenv(" + ov + ")"
             if method == "starts_with" and args.len > 0:
-                return "_tr_str_starts_with(" + os + ", " + self.strz(self.gen_expr(args.get(0))) + ")"
+                return "_tr_str_starts_withv(" + ov + ", " + self.strv(self.gen_expr(args.get(0))) + ")"
             if method == "ends_with" and args.len > 0:
-                return "_tr_str_ends_with(" + os + ", " + self.strz(self.gen_expr(args.get(0))) + ")"
+                return "_tr_str_ends_withv(" + ov + ", " + self.strv(self.gen_expr(args.get(0))) + ")"
             if method == "contains" and args.len > 0:
-                return "_tr_str_contains(" + os + ", " + self.strz(self.gen_expr(args.get(0))) + ")"
+                return "_tr_str_containsv(" + ov + ", " + self.strv(self.gen_expr(args.get(0))) + ")"
             if method == "strip_prefix" and args.len > 0:
-                return self.wrapstr("_tr_str_strip_prefix(" + os + ", " + self.strz(self.gen_expr(args.get(0))) + ")")
+                return "_tr_str_strip_prefixv(" + ov + ", " + self.strv(self.gen_expr(args.get(0))) + ")"
             if method == "strip_suffix" and args.len > 0:
-                return self.wrapstr("_tr_str_strip_suffix(" + os + ", " + self.strz(self.gen_expr(args.get(0))) + ")")
+                return "_tr_str_strip_suffixv(" + ov + ", " + self.strv(self.gen_expr(args.get(0))) + ")"
             if method == "repeat" and args.len > 0:
-                return self.wrapstr("_tr_str_repeat(" + os + ", " + self.gen_expr(args.get(0)) + ")")
-            if method == "reverse": return self.wrapstr("_tr_str_reverse(" + os + ")")
+                return "_tr_str_repeatv(" + ov + ", (long long)(" + self.gen_expr(args.get(0)) + "))"
+            if method == "reverse": return "_tr_str_reversev(" + ov + ")"
             if method == "parse_int": return "_tr_str_to_int(" + os + ")"
             if method == "parse_float": return "_tr_str_to_float(" + os + ")"
             if method == "parse_bool": return "_tr_str_parse_bool(" + os + ")"
             if method == "char_at" and args.len > 0:
-                return "_tr_str_char_at_code(" + os + ", " + self.gen_expr(args.get(0)) + ")"
+                return "_tr_str_char_at_codev(" + ov + ", " + self.gen_expr(args.get(0)) + ")"
             # str.split_once(sep) -> (left, right) at first occurrence; right="" if not found
             if method == "split_once" and args.len > 0:
-                mut _so_sep = self.strz(self.gen_expr(args.get(0)))
-                mut _so_t = self.next_temp()
-                mut _so_p = self.next_temp()
-                return "({ char* " + _so_p + " = strstr(" + os + ", " + _so_sep + "); " + _so_p + " ? _tr_str_tuple2(_tr_str_wrap(_tr_str_slice(" + os + ", 0LL, (long long)(" + _so_p + " - (" + os + ")))), _tr_str_wrap(_tr_str_slice(" + _so_p + ", _tr_strlen(" + _so_sep + "), _tr_strlen(" + _so_p + ")))) : _tr_str_tuple2(_tr_str_lit(" + os + "), _tr_str_lit(\"\")); })"
+                mut _so_sepv = self.strv(self.gen_expr(args.get(0)))
+                mut _so_idx: str = self.next_temp()
+                return "({ TrStr _sos = (" + _so_sepv + "); long long " + _so_idx + " = _tr_str_index_ofv(" + ov + ", _sos); " + _so_idx + " >= 0 ? _tr_str_tuple2(_tr_str_slicev(" + ov + ", 0LL, " + _so_idx + "), _tr_str_slicev(" + ov + ", " + _so_idx + " + (long long)_sos.len, (long long)(" + ov + ").len)) : _tr_str_tuple2(_tr_str_retain(" + ov + "), _tr_str_new(0)); })"
 
         # When sema returns void/empty type, still dispatch known string methods on the object.
         # This handles chained calls like Process.shell_output(cmd).trim() where the intermediate

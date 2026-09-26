@@ -14,25 +14,25 @@ pub class Str:
 extend Str:
     # ── Measurement ──────────────────────────────────────────────────────────
 
+    # Delegates to the `str` instance method (c.tr dispatches `.len()` to the
+    # runtime's length-aware `_tr_str_lenv`, which reads TrStr's own `.len`
+    # field instead of NUL-scanning) so this is correct for a string with an
+    # embedded NUL byte, unlike a from-scratch pointer scan here would be.
     pub def len(s: str) -> int:
-        mut p = s as Pointer[char]
-        mut n = 0
-        while p.offset(n).read() as int != 0: n = n + 1
-        return n
+        return s.len()
 
     # ── Predicates ───────────────────────────────────────────────────────────
 
     pub def starts_with(s: str, prefix: str) -> bool:
+        mut pl = Str.len(prefix)
+        if pl > Str.len(s): return false
         mut sp = s as Pointer[char]
         mut pp = prefix as Pointer[char]
         mut i  = 0
-        while True:
-            mut pc = pp.offset(i).read() as int
-            if pc == 0: return true
-            mut sc = sp.offset(i).read() as int
-            if sc == 0 or sc != pc: return false
+        while i < pl:
+            if sp.offset(i).read() as int != pp.offset(i).read() as int: return false
             i = i + 1
-        return false
+        return true
 
     pub def ends_with(s: str, suffix: str) -> bool:
         mut sl = Str.len(s)
@@ -50,11 +50,10 @@ extend Str:
 
     pub def contains_char(s: str, c: int) -> bool:
         mut p = s as Pointer[char]
+        mut slen = Str.len(s)
         mut i = 0
-        while True:
-            mut ch = p.offset(i).read() as int
-            if ch == 0: return false
-            if ch == c: return true
+        while i < slen:
+            if p.offset(i).read() as int == c: return true
             i = i + 1
         return false
 
@@ -62,14 +61,13 @@ extend Str:
         return Str.index_of(s, sub) >= 0
 
     pub def eq(a: str, b: str) -> bool:
+        mut al = Str.len(a)
+        if al != Str.len(b): return false
         mut pa = a as Pointer[char]
         mut pb = b as Pointer[char]
         mut i  = 0
-        while True:
-            mut ca = pa.offset(i).read() as int
-            mut cb = pb.offset(i).read() as int
-            if ca != cb: return false
-            if ca == 0: return true
+        while i < al:
+            if pa.offset(i).read() as int != pb.offset(i).read() as int: return false
             i = i + 1
         return true
 
@@ -78,74 +76,74 @@ extend Str:
     # True when every character in s is a decimal digit.
     pub def is_digit(s: str) -> bool:
         mut p = s as Pointer[char]
+        mut slen = Str.len(s)
+        if slen == 0: return false
         mut i = 0
-        mut c = p.offset(i).read() as int
-        if c == 0: return false
-        while c != 0:
+        while i < slen:
+            mut c = p.offset(i).read() as int
             if c < 48 or c > 57: return false
             i = i + 1
-            c = p.offset(i).read() as int
         return true
 
     # True when every character in s is an ASCII letter.
     pub def is_alpha(s: str) -> bool:
         mut p = s as Pointer[char]
+        mut slen = Str.len(s)
+        if slen == 0: return false
         mut i = 0
-        mut c = p.offset(i).read() as int
-        if c == 0: return false
-        while c != 0:
+        while i < slen:
+            mut c = p.offset(i).read() as int
             if not ((c >= 65 and c <= 90) or (c >= 97 and c <= 122)): return false
             i = i + 1
-            c = p.offset(i).read() as int
         return true
 
     # True when every character is a letter or digit.
     pub def is_alnum(s: str) -> bool:
         mut p = s as Pointer[char]
+        mut slen = Str.len(s)
+        if slen == 0: return false
         mut i = 0
-        mut c = p.offset(i).read() as int
-        if c == 0: return false
-        while c != 0:
+        while i < slen:
+            mut c = p.offset(i).read() as int
             mut ok = (c >= 48 and c <= 57) or (c >= 65 and c <= 90) or (c >= 97 and c <= 122)
             if not ok: return false
             i = i + 1
-            c = p.offset(i).read() as int
         return true
 
     # True when s consists entirely of whitespace characters.
     pub def is_space(s: str) -> bool:
         mut p = s as Pointer[char]
+        mut slen = Str.len(s)
+        if slen == 0: return false
         mut i = 0
-        mut c = p.offset(i).read() as int
-        if c == 0: return false
-        while c != 0:
+        while i < slen:
+            mut c = p.offset(i).read() as int
             if c != 32 and c != 9 and c != 10 and c != 13: return false
             i = i + 1
-            c = p.offset(i).read() as int
         return true
 
     # True when s is all upper-case letters.
     pub def is_upper(s: str) -> bool:
         mut p = s as Pointer[char]
+        mut slen = Str.len(s)
+        if slen == 0: return false
         mut i = 0
-        mut c = p.offset(i).read() as int
-        if c == 0: return false
-        while c != 0:
+        while i < slen:
+            mut c = p.offset(i).read() as int
             if c >= 97 and c <= 122: return false
             i = i + 1
-            c = p.offset(i).read() as int
         return true
 
     # True when s is all lower-case letters.
     pub def is_lower(s: str) -> bool:
         mut p = s as Pointer[char]
+        mut slen = Str.len(s)
+        if slen == 0: return false
         mut i = 0
-        mut c = p.offset(i).read() as int
-        if c == 0: return false
-        while c != 0:
+        while i < slen:
+            mut c = p.offset(i).read() as int
             if c >= 65 and c <= 90: return false
             i = i + 1
-            c = p.offset(i).read() as int
         return true
 
     # ── Slicing & building ───────────────────────────────────────────────────
@@ -396,8 +394,12 @@ extend Str:
 
     # ── Split / join / replace ────────────────────────────────────────────────
 
+    # Delegates to the `str` instance method (c.tr dispatches `.split()` to
+    # the length-aware `_tr_str_splitv`), unlike the legacy `_tr_str_split`
+    # extern below (kept declared for ABI compatibility, no longer called
+    # here) which NUL-scans via strtok.
     pub def split(s: str, sep: str) -> List[str]:
-        return _tr_str_split(s, sep)
+        return s.split(sep)
 
     # Like split() but returns Vec[str] for use with std.iter and std.collections.
     pub def split_to_vec(s: str, sep: str) -> Vec[str]:
