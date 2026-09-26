@@ -214,23 +214,27 @@ jobs:
           rm -f _z.c _z.o
 
       # -------------------------------------------------------
-      # TEMP DIAGNOSTIC (macOS only): 43_serialize.tr crashes with zero output
-      # in the main suite (-O2, no ASan) but the SAME file compiled --debug -O0
-      # did NOT crash under lldb -- an opt-level-dependent Heisenbug (e.g. an
-      # uninitialized value that's zero at -O0, garbage at -O2). Try --debug
-      # WITHOUT forcing -O0 this time (defaults to -O2, matching the main
-      # suite's own optimization level) to get ASan coverage at the SAME
-      # opt level that actually crashes.
+      # TEMP DIAGNOSTIC (macOS only): a --debug build of 43_serialize.tr, run
+      # DIRECTLY (separate compile + execute), passes cleanly under ASan at
+      # the SAME opt level the main suite uses. Yet the main suite's OWN
+      # invocation (`tauraroc --run "$f"`, compile+run COMBINED, captured via
+      # `$(... 2>&1)`) shows zero output and a nonzero exit. Replicate THAT
+      # EXACT invocation here to see whether the bug is in `--run`'s own
+      # combined compile+execute path (not the target program's logic at
+      # all) rather than trying yet another lldb angle on a separate binary.
       # -------------------------------------------------------
-      - name: DEBUG macOS silent-crash backtrace v5
+      - name: DEBUG macOS --run reproduction v6
         if: runner.os == 'macOS'
         shell: bash
         continue-on-error: true
         run: |
           set -x
-          ./tauraroc tests/lang/43_serialize.tr -o /tmp/dbg43v5 --debug || echo "COMPILE FAILED rc=$?"
-          echo "===== 43_serialize lldb backtrace v5 (default opt level) ====="
-          lldb --batch -o "run" -o "bt" -o "quit" -- /tmp/dbg43v5 2>&1 || true
+          out=$(./tauraroc --run tests/lang/43_serialize.tr 2>&1)
+          status=$?
+          echo "===== --run exit status: $status ====="
+          echo "===== --run captured output (length: ${#out}) ====="
+          echo "$out"
+          echo "===== end captured output ====="
 
       # -------------------------------------------------------
       # Regression test suite: tests/lang/ and tests/regression/,
