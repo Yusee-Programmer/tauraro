@@ -137,24 +137,33 @@ extend LruCache[K, V]:
     # FNV-1a hash over the key's bytes. Works for str and int-family keys
     # (the key types the builtin Dict/Map also support).
     #
-    # NOTE on `sizeof(K) == 16` dispatch: a direct `key as Pointer[char]`
+    # NOTE on `sizeof(K) == 24` dispatch: a direct `key as Pointer[char]`
     # cast on a *generic* class-method parameter (K bound to str) does not
     # codegen correctly in the current compiler — the emitted C reinterprets
-    # the whole two-word TrStr struct as a raw pointer instead of first
-    # unwrapping its `.data` field (confirmed via minimal repro). Taking the
-    # address of the parameter first (`&key` -> `Pointer[K]`, itself a
-    # concrete non-generic-valued pointer) and reinterpreting *that pointer*
-    # sidesteps the broken cast entirely: for a str key (TrStr = {char* data;
-    # long* rc}, 16 bytes), the first 8-byte word at that address is exactly
-    # the `data` field, so `(&key as Pointer[Pointer[char]]).read()` recovers
-    # the C string pointer directly. For any other (fixed-size, non-str) key
-    # — the only other case std's Dict/Map key types cover — the raw bytes
-    # of the value itself are hashed, which is correct byte-identity hashing
-    # for scalar keys. Verified: equal-content strings built via different
-    # code paths (a literal vs. a runtime concatenation) hash identically.
+    # the whole TrStr struct as a raw pointer instead of first unwrapping its
+    # `.data` field (confirmed via minimal repro). Taking the address of the
+    # parameter first (`&key` -> `Pointer[K]`, itself a concrete
+    # non-generic-valued pointer) and reinterpreting *that pointer* sidesteps
+    # the broken cast entirely: for a str key (TrStr = {char* data; size_t
+    # len; long* rc}, 24 bytes), the first 8-byte word at that address is
+    # exactly the `data` field, so `(&key as Pointer[Pointer[char]]).read()`
+    # recovers the C string pointer directly. For any other (fixed-size,
+    # non-str) key — the only other case std's Dict/Map key types cover —
+    # the raw bytes of the value itself are hashed, which is correct
+    # byte-identity hashing for scalar keys. Verified: equal-content strings
+    # built via different code paths (a literal vs. a runtime concatenation)
+    # hash identically.
+    #
+    # CAUTION: this 24 must be kept in sync with sizeof(TrStr) in
+    # runtime/tauraro_rt.h (currently `{char* data; size_t len; long* rc;}`
+    # = 3 pointer-sized words on 64-bit). It was previously 16 (before TrStr
+    # gained its `len` field) -- that mismatch silently fell through to the
+    # `else` branch below, hashing str keys by their raw (heap-address-
+    # dependent, non-deterministic) struct bytes instead of by content. If
+    # TrStr's layout changes again, update this constant too.
     pub def _idx_hash(self, key: K) -> int:
         mut h: u64 = 14695981039346656037 as u64
-        if sizeof(K) == 16:
+        if sizeof(K) == 24:
             unsafe:
                 mut kp: Pointer[K] = &key
                 mut dp = (kp as Pointer[char]) as Pointer[Pointer[char]]
