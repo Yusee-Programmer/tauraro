@@ -2551,10 +2551,11 @@ pub class CGenerator:
                 # (TrStr is a struct, can't C-cast it directly to a pointer).
                 mut _dbg_srcn: str = hir_expr_type(expr).name
                 mut _dbg_resolved: str = self.resolve_generic_prim(_dbg_srcn)
-                if target_ty.name == "Pointer" and _dbg_srcn != "str":
-                    print("DBGCAST srcn=[" + _dbg_srcn + "] len=" + _dbg_srcn.len().to_str() + " resolved=[" + _dbg_resolved + "] subst_has_K=" + self.type_subst.contains("K").to_str() + " subst_K=" + (self.type_subst.get("K") if self.type_subst.contains("K") else "<none>") + " target=" + target_ty.name)
                 if _is_str_type(_dbg_resolved):
                     return "((" + self.type_to_c(target_ty) + ")(" + self.strz(self.gen_expr(expr)) + "))"
+                if target_ty.name == "Pointer" and _dbg_srcn != "str":
+                    mut _dbg_info: str = "/*DBG srcn=[" + _dbg_srcn + "] resolved=[" + _dbg_resolved + "] subst_has_K=" + self.type_subst.contains("K").to_str() + " subst_K=" + (self.type_subst.get("K") if self.type_subst.contains("K") else "<none>") + "*/"
+                    return _dbg_info + "((" + self.type_to_c(target_ty) + ")(" + self.gen_expr(expr) + "))"
                 return "((" + self.type_to_c(target_ty) + ")(" + self.gen_expr(expr) + "))"
             case HirExpr.EFString(parts, _): return self.gen_fstring(parts)
             case HirExpr.ETryExpr(expr, ok_ty):
