@@ -2549,13 +2549,8 @@ pub class CGenerator:
                     return "_tr_str_unbox(" + self.gen_expr(expr) + ")"
                 # TrStr -> Pointer[char]/char*: extract the raw char* via strz
                 # (TrStr is a struct, can't C-cast it directly to a pointer).
-                mut _dbg_srcn: str = hir_expr_type(expr).name
-                mut _dbg_resolved: str = self.resolve_generic_prim(_dbg_srcn)
-                if _is_str_type(_dbg_resolved):
+                if _is_str_type(self.resolve_generic_prim(hir_expr_type(expr).name)):
                     return "((" + self.type_to_c(target_ty) + ")(" + self.strz(self.gen_expr(expr)) + "))"
-                if target_ty.name == "Pointer" and _dbg_srcn != "str":
-                    mut _dbg_info: str = "/*DBG srcn=[" + _dbg_srcn + "] resolved=[" + _dbg_resolved + "] subst_has_K=" + self.type_subst.contains("K").to_str() + " subst_K=" + (self.type_subst.get("K") if self.type_subst.contains("K") else "<none>") + "*/"
-                    return _dbg_info + "((" + self.type_to_c(target_ty) + ")(" + self.gen_expr(expr) + "))"
                 return "((" + self.type_to_c(target_ty) + ")(" + self.gen_expr(expr) + "))"
             case HirExpr.EFString(parts, _): return self.gen_fstring(parts)
             case HirExpr.ETryExpr(expr, ok_ty):
