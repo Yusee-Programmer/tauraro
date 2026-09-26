@@ -58,6 +58,7 @@ extern "C":
     def _tr_str_wrap(s: Pointer[char]) -> str
     def _tr_str_wrap_len(s: Pointer[char], blen: int) -> str
     def _tr_time_ns() -> int
+    def _tr_next_seed_counter() -> int
 
 # ── _WsRng — splitmix64-style byte generator (see file header for why this
 # exists instead of std.math.random.Random) ─────────────────────────────────
@@ -470,7 +471,13 @@ pub def ws_accept_value(key: str) -> str:
 # Generate a fresh random 16-byte Sec-WebSocket-Key, base64-encoded (24 chars
 # incl. "==" padding), per RFC 6455 §4.1.
 pub def ws_generate_key() -> str:
-    mut rng = _WsRng.new(1)
+    # A hardcoded salt (e.g. plain `1`) relies entirely on _tr_time_ns() to
+    # separate two successive calls -- if they land on the same clock tick
+    # (observed on macOS-arm64 CI, two back-to-back calls a few instructions
+    # apart), they get an IDENTICAL seed and thus an identical "random" key.
+    # _tr_next_seed_counter() is guaranteed to differ on every call, clock
+    # resolution notwithstanding.
+    mut rng = _WsRng.new(_tr_next_seed_counter())
     mut raw = _tr_c_malloc(17)
     mut i = 0
     while i < 16:

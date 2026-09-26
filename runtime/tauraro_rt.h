@@ -3986,6 +3986,17 @@ _TR_XLINK void _tr_tcp_close(int fd) {
 }
 #endif
 
+/* ── Process-wide monotonic counter ───────────────────────────────────
+ * A plain atomically-incrementing counter, for callers that need a value
+ * GUARANTEED to differ on every call (unlike a clock read, which can
+ * legitimately return the same value for two calls close enough together
+ * -- e.g. std/net/websocket.tr's ws_generate_key seeding a PRNG, where two
+ * back-to-back calls landing on the same _tr_time_ns() tick produced
+ * identical "random" keys). Thread-safe, wraps silently (fine: it is a
+ * seed/salt input, not an identity). */
+static _Atomic(long long) _tr_g_seed_counter = 0;
+_TR_XLINK long long _tr_next_seed_counter(void) { return atomic_fetch_add(&_tr_g_seed_counter, 1); }
+
 /* ── Platform detection ──────────────────────────────────────────────── */
 _TR_XLINK bool _tr_is_windows(void) {
 #ifdef _WIN32
