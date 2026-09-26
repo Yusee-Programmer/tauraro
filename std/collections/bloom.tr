@@ -103,9 +103,14 @@ extend BloomFilter:
     # The i-th probe index (0 <= i < k) for item, via Kirsch-Mitzenmacher
     # double hashing: probe_i = (h1 + i*h2) mod m.
     pub def _probe(self, h1: int, h2: int, i: int) -> int:
-        mut idx = (h1 + i * h2) % self.m
-        if idx < 0: idx = idx + self.m
-        return idx
+        # h1/h2 range up to 2^63-1 (see _fnv1a/_djb2's sign-bit mask), so
+        # `i * h2` and `h1 + i*h2` both legitimately overflow signed int64
+        # (UB, trapped by UBSan/-ftrapv on macOS-arm64). Unsigned wraparound
+        # is well-defined and gives the same result mod 2^64, which the
+        # final `% self.m` (self.m always a small positive int) reduces to
+        # a value that fits safely back into a plain non-negative int.
+        mut idx: u64 = ((h1 as u64) + (i as u64) * (h2 as u64)) % (self.m as u64)
+        return idx as int
 
     # ── Public API ───────────────────────────────────────────────────────────
 

@@ -301,12 +301,16 @@ def _mp_rd_i32(data: str, off: int) -> int:
     return u
 
 def _mp_rd_u64be(data: str, off: int) -> int:
-    mut result: int = 0
+    # Accumulate in u64: once a high byte sets the sign bit, further
+    # left-shifting a SIGNED `int` accumulator is UB (UBSan: "invalid
+    # shift base"). See std/serialize/pickle.tr's _pk_rd_u64le for the
+    # identical bug, found the same way (macOS-arm64 UBSan trap).
+    mut result: u64 = 0 as u64
     mut i = 0
     while i < 8:
-        result = (result << 8) | _mp_rd_u8(data, off + i)
+        result = (result << (8 as u64)) | (_mp_rd_u8(data, off + i) as u64)
         i = i + 1
-    return result
+    return result as int
 
 # _mp_rd_u64be already reproduces the correct 64-bit two's-complement bit
 # pattern when reinterpreted as a signed 64-bit int (int is 64-bit), so

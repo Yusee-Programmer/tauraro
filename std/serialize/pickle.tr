@@ -350,14 +350,20 @@ def _pk_rd_u32le(data: str, off: int) -> int:
 
 def _pk_rd_u64le(data: str, off: int) -> int:
     mut p = data as Pointer[char]
-    mut result: int = 0
+    # Accumulate in u64: once a high byte sets the sign bit, further
+    # left-shifting a SIGNED `int` accumulator is UB (UBSan: "invalid
+    # shift base"), reproduced by the "beyond 64-bit range" round-trip
+    # test on macOS-arm64. Unsigned shifts wrap/shift bits only, no UB
+    # regardless of sign, then cast back to `int` for the raw bit pattern
+    # the caller wants (two's-complement, matches push_u64le's own encode).
+    mut result: u64 = 0 as u64
     mut i = 7
     unsafe:
         while i >= 0:
-            mut byte_ = p.offset(off + i).read() as int & 0xFF
-            result = (result << 8) | byte_
+            mut byte_: u64 = (p.offset(off + i).read() as int & 0xFF) as u64
+            result = (result << (8 as u64)) | byte_
             i = i - 1
-    return result
+    return result as int
 
 def _pk_rd_slice(data: str, off: int, n: int) -> str:
     mut out = _tr_c_malloc(n + 1)
