@@ -785,7 +785,7 @@ __attribute__((hot)) List_Token* Lexer_tokenize(Lexer* self) {
                             /* pass */
                             self->tok_col = ((self->pos - self->line_start) + 1LL);
                             /* pass */
-                            List_Token_append(tokens, Token_ctor_Error(_tr_str_lit("inconsistent indentation: this line does not line up with any enclosing block (check for mixed tabs and spaces, or an off-by-one indent)")));
+                            List_Token_append(tokens, Token_ctor_Error(_tr_str_lit_len("inconsistent indentation: this line does not line up with any enclosing block (check for mixed tabs and spaces, or an off-by-one indent)", 136LL)));
                             /* pass */
                             Lexer_push_loc(self);
                         }
@@ -1282,7 +1282,7 @@ __attribute__((hot)) List_Token* Lexer_tokenize(Lexer* self) {
             /* pass */
             Lexer_advance(self);
             /* pass */
-            List_Token_append(tokens, Token_ctor_Error(_tr_str_lit("?")));
+            List_Token_append(tokens, Token_ctor_Error(_tr_str_lit_len("?", 1LL)));
         }
         /* pass */
         Lexer_push_loc(self);
@@ -1310,337 +1310,337 @@ __attribute__((hot)) List_Token* Lexer_tokenize(Lexer* self) {
 
 __attribute__((hot)) Token keyword_to_token(TrStr s) {
     /* pass */
-    if ((strcmp(_tr_strz(s), _tr_strz(_tr_str_lit("def"))) == 0)) {
+    if (_tr_str_eqv((s), (_tr_str_lit_len("def", 3LL)))) {
         /* pass */
         return Token_make_KwDef();
     }
     /* pass */
-    if ((strcmp(_tr_strz(s), _tr_strz(_tr_str_lit("class"))) == 0)) {
+    if (_tr_str_eqv((s), (_tr_str_lit_len("class", 5LL)))) {
         /* pass */
         return Token_make_KwClass();
     }
     /* pass */
-    if ((strcmp(_tr_strz(s), _tr_strz(_tr_str_lit("enum"))) == 0)) {
+    if (_tr_str_eqv((s), (_tr_str_lit_len("enum", 4LL)))) {
         /* pass */
         return Token_make_KwEnum();
     }
     /* pass */
-    if ((strcmp(_tr_strz(s), _tr_strz(_tr_str_lit("interface"))) == 0)) {
+    if (_tr_str_eqv((s), (_tr_str_lit_len("interface", 9LL)))) {
         /* pass */
         return Token_make_KwInterface();
     }
     /* pass */
-    if ((strcmp(_tr_strz(s), _tr_strz(_tr_str_lit("extend"))) == 0)) {
+    if (_tr_str_eqv((s), (_tr_str_lit_len("extend", 6LL)))) {
         /* pass */
         return Token_make_KwExtend();
     }
     /* pass */
-    if ((strcmp(_tr_strz(s), _tr_strz(_tr_str_lit("struct"))) == 0)) {
+    if (_tr_str_eqv((s), (_tr_str_lit_len("struct", 6LL)))) {
         /* pass */
         return Token_make_KwStruct();
     }
     /* pass */
-    if ((strcmp(_tr_strz(s), _tr_strz(_tr_str_lit("if"))) == 0)) {
+    if (_tr_str_eqv((s), (_tr_str_lit_len("if", 2LL)))) {
         /* pass */
         return Token_make_KwIf();
     }
     /* pass */
-    if ((strcmp(_tr_strz(s), _tr_strz(_tr_str_lit("elif"))) == 0)) {
+    if (_tr_str_eqv((s), (_tr_str_lit_len("elif", 4LL)))) {
         /* pass */
         return Token_make_KwElif();
     }
     /* pass */
-    if ((strcmp(_tr_strz(s), _tr_strz(_tr_str_lit("else"))) == 0)) {
+    if (_tr_str_eqv((s), (_tr_str_lit_len("else", 4LL)))) {
         /* pass */
         return Token_make_KwElse();
     }
     /* pass */
-    if ((strcmp(_tr_strz(s), _tr_strz(_tr_str_lit("for"))) == 0)) {
+    if (_tr_str_eqv((s), (_tr_str_lit_len("for", 3LL)))) {
         /* pass */
         return Token_make_KwFor();
     }
     /* pass */
-    if ((strcmp(_tr_strz(s), _tr_strz(_tr_str_lit("while"))) == 0)) {
+    if (_tr_str_eqv((s), (_tr_str_lit_len("while", 5LL)))) {
         /* pass */
         return Token_make_KwWhile();
     }
     /* pass */
-    if ((strcmp(_tr_strz(s), _tr_strz(_tr_str_lit("loop"))) == 0)) {
+    if (_tr_str_eqv((s), (_tr_str_lit_len("loop", 4LL)))) {
         /* pass */
         return Token_make_KwLoop();
     }
     /* pass */
-    if ((strcmp(_tr_strz(s), _tr_strz(_tr_str_lit("return"))) == 0)) {
+    if (_tr_str_eqv((s), (_tr_str_lit_len("return", 6LL)))) {
         /* pass */
         return Token_make_KwReturn();
     }
     /* pass */
-    if ((strcmp(_tr_strz(s), _tr_strz(_tr_str_lit("break"))) == 0)) {
+    if (_tr_str_eqv((s), (_tr_str_lit_len("break", 5LL)))) {
         /* pass */
         return Token_make_KwBreak();
     }
     /* pass */
-    if ((strcmp(_tr_strz(s), _tr_strz(_tr_str_lit("continue"))) == 0)) {
+    if (_tr_str_eqv((s), (_tr_str_lit_len("continue", 8LL)))) {
         /* pass */
         return Token_make_KwContinue();
     }
     /* pass */
-    if ((strcmp(_tr_strz(s), _tr_strz(_tr_str_lit("pass"))) == 0)) {
+    if (_tr_str_eqv((s), (_tr_str_lit_len("pass", 4LL)))) {
         /* pass */
         return Token_make_KwPass();
     }
     /* pass */
-    if ((strcmp(_tr_strz(s), _tr_strz(_tr_str_lit("match"))) == 0)) {
+    if (_tr_str_eqv((s), (_tr_str_lit_len("match", 5LL)))) {
         /* pass */
         return Token_make_KwMatch();
     }
     /* pass */
-    if ((strcmp(_tr_strz(s), _tr_strz(_tr_str_lit("case"))) == 0)) {
+    if (_tr_str_eqv((s), (_tr_str_lit_len("case", 4LL)))) {
         /* pass */
         return Token_make_KwCase();
     }
     /* pass */
-    if ((strcmp(_tr_strz(s), _tr_strz(_tr_str_lit("try"))) == 0)) {
+    if (_tr_str_eqv((s), (_tr_str_lit_len("try", 3LL)))) {
         /* pass */
         return Token_make_KwTry();
     }
     /* pass */
-    if ((strcmp(_tr_strz(s), _tr_strz(_tr_str_lit("except"))) == 0)) {
+    if (_tr_str_eqv((s), (_tr_str_lit_len("except", 6LL)))) {
         /* pass */
         return Token_make_KwExcept();
     }
     /* pass */
-    if ((strcmp(_tr_strz(s), _tr_strz(_tr_str_lit("finally"))) == 0)) {
+    if (_tr_str_eqv((s), (_tr_str_lit_len("finally", 7LL)))) {
         /* pass */
         return Token_make_KwFinally();
     }
     /* pass */
-    if ((strcmp(_tr_strz(s), _tr_strz(_tr_str_lit("raise"))) == 0)) {
+    if (_tr_str_eqv((s), (_tr_str_lit_len("raise", 5LL)))) {
         /* pass */
         return Token_make_KwRaise();
     }
     /* pass */
-    if ((strcmp(_tr_strz(s), _tr_strz(_tr_str_lit("assert"))) == 0)) {
+    if (_tr_str_eqv((s), (_tr_str_lit_len("assert", 6LL)))) {
         /* pass */
         return Token_make_KwAssert();
     }
     /* pass */
-    if ((strcmp(_tr_strz(s), _tr_strz(_tr_str_lit("with"))) == 0)) {
+    if (_tr_str_eqv((s), (_tr_str_lit_len("with", 4LL)))) {
         /* pass */
         return Token_make_KwWith();
     }
     /* pass */
-    if ((strcmp(_tr_strz(s), _tr_strz(_tr_str_lit("defer"))) == 0)) {
+    if (_tr_str_eqv((s), (_tr_str_lit_len("defer", 5LL)))) {
         /* pass */
         return Token_make_KwDefer();
     }
     /* pass */
-    if ((strcmp(_tr_strz(s), _tr_strz(_tr_str_lit("asm"))) == 0)) {
+    if (_tr_str_eqv((s), (_tr_str_lit_len("asm", 3LL)))) {
         /* pass */
         return Token_make_KwAsm();
     }
     /* pass */
-    if (((strcmp(_tr_strz(s), _tr_strz(_tr_str_lit("taskgroup"))) == 0) || (strcmp(_tr_strz(s), _tr_strz(_tr_str_lit("task_group"))) == 0))) {
+    if ((_tr_str_eqv((s), (_tr_str_lit_len("taskgroup", 9LL))) || _tr_str_eqv((s), (_tr_str_lit_len("task_group", 10LL))))) {
         /* pass */
         return Token_make_KwTaskGroup();
     }
     /* pass */
-    if ((strcmp(_tr_strz(s), _tr_strz(_tr_str_lit("implements"))) == 0)) {
+    if (_tr_str_eqv((s), (_tr_str_lit_len("implements", 10LL)))) {
         /* pass */
         return Token_make_KwImplements();
     }
     /* pass */
-    if ((strcmp(_tr_strz(s), _tr_strz(_tr_str_lit("import"))) == 0)) {
+    if (_tr_str_eqv((s), (_tr_str_lit_len("import", 6LL)))) {
         /* pass */
         return Token_make_KwImport();
     }
     /* pass */
-    if ((strcmp(_tr_strz(s), _tr_strz(_tr_str_lit("from"))) == 0)) {
+    if (_tr_str_eqv((s), (_tr_str_lit_len("from", 4LL)))) {
         /* pass */
         return Token_make_KwFrom();
     }
     /* pass */
-    if ((strcmp(_tr_strz(s), _tr_strz(_tr_str_lit("as"))) == 0)) {
+    if (_tr_str_eqv((s), (_tr_str_lit_len("as", 2LL)))) {
         /* pass */
         return Token_make_KwAs();
     }
     /* pass */
-    if ((strcmp(_tr_strz(s), _tr_strz(_tr_str_lit("in"))) == 0)) {
+    if (_tr_str_eqv((s), (_tr_str_lit_len("in", 2LL)))) {
         /* pass */
         return Token_make_KwIn();
     }
     /* pass */
-    if ((strcmp(_tr_strz(s), _tr_strz(_tr_str_lit("mut"))) == 0)) {
+    if (_tr_str_eqv((s), (_tr_str_lit_len("mut", 3LL)))) {
         /* pass */
         return Token_make_KwMut();
     }
     /* pass */
-    if ((strcmp(_tr_strz(s), _tr_strz(_tr_str_lit("shared"))) == 0)) {
+    if (_tr_str_eqv((s), (_tr_str_lit_len("shared", 6LL)))) {
         /* pass */
         return Token_make_KwShared();
     }
     /* pass */
-    if ((strcmp(_tr_strz(s), _tr_strz(_tr_str_lit("extern"))) == 0)) {
+    if (_tr_str_eqv((s), (_tr_str_lit_len("extern", 6LL)))) {
         /* pass */
         return Token_make_KwExtern();
     }
     /* pass */
-    if ((strcmp(_tr_strz(s), _tr_strz(_tr_str_lit("unsafe"))) == 0)) {
+    if (_tr_str_eqv((s), (_tr_str_lit_len("unsafe", 6LL)))) {
         /* pass */
         return Token_make_KwUnsafe();
     }
     /* pass */
-    if ((strcmp(_tr_strz(s), _tr_strz(_tr_str_lit("spawn"))) == 0)) {
+    if (_tr_str_eqv((s), (_tr_str_lit_len("spawn", 5LL)))) {
         /* pass */
         return Token_make_KwSpawn();
     }
     /* pass */
-    if ((strcmp(_tr_strz(s), _tr_strz(_tr_str_lit("throws"))) == 0)) {
+    if (_tr_str_eqv((s), (_tr_str_lit_len("throws", 6LL)))) {
         /* pass */
         return Token_make_KwThrows();
     }
     /* pass */
-    if ((strcmp(_tr_strz(s), _tr_strz(_tr_str_lit("extends"))) == 0)) {
+    if (_tr_str_eqv((s), (_tr_str_lit_len("extends", 7LL)))) {
         /* pass */
         return Token_make_KwExtends();
     }
     /* pass */
-    if ((strcmp(_tr_strz(s), _tr_strz(_tr_str_lit("async"))) == 0)) {
+    if (_tr_str_eqv((s), (_tr_str_lit_len("async", 5LL)))) {
         /* pass */
         return Token_make_KwAsync();
     }
     /* pass */
-    if ((strcmp(_tr_strz(s), _tr_strz(_tr_str_lit("await"))) == 0)) {
+    if (_tr_str_eqv((s), (_tr_str_lit_len("await", 5LL)))) {
         /* pass */
         return Token_make_KwAwait();
     }
     /* pass */
-    if ((strcmp(_tr_strz(s), _tr_strz(_tr_str_lit("yield"))) == 0)) {
+    if (_tr_str_eqv((s), (_tr_str_lit_len("yield", 5LL)))) {
         /* pass */
         return Token_make_KwYield();
     }
     /* pass */
-    if ((strcmp(_tr_strz(s), _tr_strz(_tr_str_lit("pub"))) == 0)) {
+    if (_tr_str_eqv((s), (_tr_str_lit_len("pub", 3LL)))) {
         /* pass */
         return Token_make_KwPub();
     }
     /* pass */
-    if ((strcmp(_tr_strz(s), _tr_strz(_tr_str_lit("static"))) == 0)) {
+    if (_tr_str_eqv((s), (_tr_str_lit_len("static", 6LL)))) {
         /* pass */
         return Token_make_KwStatic();
     }
     /* pass */
-    if ((strcmp(_tr_strz(s), _tr_strz(_tr_str_lit("const"))) == 0)) {
+    if (_tr_str_eqv((s), (_tr_str_lit_len("const", 5LL)))) {
         /* pass */
         return Token_make_KwConst();
     }
     /* pass */
-    if ((strcmp(_tr_strz(s), _tr_strz(_tr_str_lit("actor"))) == 0)) {
+    if (_tr_str_eqv((s), (_tr_str_lit_len("actor", 5LL)))) {
         /* pass */
         return Token_make_KwActor();
     }
     /* pass */
-    if ((strcmp(_tr_strz(s), _tr_strz(_tr_str_lit("super"))) == 0)) {
+    if (_tr_str_eqv((s), (_tr_str_lit_len("super", 5LL)))) {
         /* pass */
         return Token_make_KwSuper();
     }
     /* pass */
-    if ((strcmp(_tr_strz(s), _tr_strz(_tr_str_lit("export"))) == 0)) {
+    if (_tr_str_eqv((s), (_tr_str_lit_len("export", 6LL)))) {
         /* pass */
         return Token_make_KwExport();
     }
     /* pass */
-    if ((strcmp(_tr_strz(s), _tr_strz(_tr_str_lit("lambda"))) == 0)) {
+    if (_tr_str_eqv((s), (_tr_str_lit_len("lambda", 6LL)))) {
         /* pass */
         return Token_make_KwLambda();
     }
     /* pass */
-    if ((strcmp(_tr_strz(s), _tr_strz(_tr_str_lit("decorator"))) == 0)) {
+    if (_tr_str_eqv((s), (_tr_str_lit_len("decorator", 9LL)))) {
         /* pass */
         return Token_make_KwDecorator();
     }
     /* pass */
-    if ((strcmp(_tr_strz(s), _tr_strz(_tr_str_lit("macro"))) == 0)) {
+    if (_tr_str_eqv((s), (_tr_str_lit_len("macro", 5LL)))) {
         /* pass */
         return Token_make_KwMacro();
     }
     /* pass */
-    if ((strcmp(_tr_strz(s), _tr_strz(_tr_str_lit("do"))) == 0)) {
+    if (_tr_str_eqv((s), (_tr_str_lit_len("do", 2LL)))) {
         /* pass */
         return Token_make_KwDo();
     }
     /* pass */
-    if ((strcmp(_tr_strz(s), _tr_strz(_tr_str_lit("sizeof"))) == 0)) {
+    if (_tr_str_eqv((s), (_tr_str_lit_len("sizeof", 6LL)))) {
         /* pass */
         return Token_make_KwSizeOf();
     }
     /* pass */
-    if ((strcmp(_tr_strz(s), _tr_strz(_tr_str_lit("is"))) == 0)) {
+    if (_tr_str_eqv((s), (_tr_str_lit_len("is", 2LL)))) {
         /* pass */
         return Token_make_KwIs();
     }
     /* pass */
-    if (((strcmp(_tr_strz(s), _tr_strz(_tr_str_lit("true"))) == 0) || (strcmp(_tr_strz(s), _tr_strz(_tr_str_lit("True"))) == 0))) {
+    if ((_tr_str_eqv((s), (_tr_str_lit_len("true", 4LL))) || _tr_str_eqv((s), (_tr_str_lit_len("True", 4LL))))) {
         /* pass */
         return Token_make_KwTrue();
     }
     /* pass */
-    if (((strcmp(_tr_strz(s), _tr_strz(_tr_str_lit("false"))) == 0) || (strcmp(_tr_strz(s), _tr_strz(_tr_str_lit("False"))) == 0))) {
+    if ((_tr_str_eqv((s), (_tr_str_lit_len("false", 5LL))) || _tr_str_eqv((s), (_tr_str_lit_len("False", 5LL))))) {
         /* pass */
         return Token_make_KwFalse();
     }
     /* pass */
-    if (((strcmp(_tr_strz(s), _tr_strz(_tr_str_lit("none"))) == 0) || (strcmp(_tr_strz(s), _tr_strz(_tr_str_lit("None"))) == 0))) {
+    if ((_tr_str_eqv((s), (_tr_str_lit_len("none", 4LL))) || _tr_str_eqv((s), (_tr_str_lit_len("None", 4LL))))) {
         /* pass */
         return Token_make_KwNone();
     }
     /* pass */
-    if ((strcmp(_tr_strz(s), _tr_strz(_tr_str_lit("and"))) == 0)) {
+    if (_tr_str_eqv((s), (_tr_str_lit_len("and", 3LL)))) {
         /* pass */
         return Token_make_KwAnd();
     }
     /* pass */
-    if ((strcmp(_tr_strz(s), _tr_strz(_tr_str_lit("or"))) == 0)) {
+    if (_tr_str_eqv((s), (_tr_str_lit_len("or", 2LL)))) {
         /* pass */
         return Token_make_KwOr();
     }
     /* pass */
-    if ((strcmp(_tr_strz(s), _tr_strz(_tr_str_lit("not"))) == 0)) {
+    if (_tr_str_eqv((s), (_tr_str_lit_len("not", 3LL)))) {
         /* pass */
         return Token_make_KwNot();
     }
     /* pass */
-    if (((strcmp(_tr_strz(s), _tr_strz(_tr_str_lit("int"))) == 0) || (strcmp(_tr_strz(s), _tr_strz(_tr_str_lit("i64"))) == 0))) {
+    if ((_tr_str_eqv((s), (_tr_str_lit_len("int", 3LL))) || _tr_str_eqv((s), (_tr_str_lit_len("i64", 3LL))))) {
         /* pass */
         return Token_make_KwInt();
     }
     /* pass */
-    if (((strcmp(_tr_strz(s), _tr_strz(_tr_str_lit("float"))) == 0) || (strcmp(_tr_strz(s), _tr_strz(_tr_str_lit("f64"))) == 0))) {
+    if ((_tr_str_eqv((s), (_tr_str_lit_len("float", 5LL))) || _tr_str_eqv((s), (_tr_str_lit_len("f64", 3LL))))) {
         /* pass */
         return Token_make_KwFloat();
     }
     /* pass */
-    if ((strcmp(_tr_strz(s), _tr_strz(_tr_str_lit("bool"))) == 0)) {
+    if (_tr_str_eqv((s), (_tr_str_lit_len("bool", 4LL)))) {
         /* pass */
         return Token_make_KwBool();
     }
     /* pass */
-    if ((strcmp(_tr_strz(s), _tr_strz(_tr_str_lit("char"))) == 0)) {
+    if (_tr_str_eqv((s), (_tr_str_lit_len("char", 4LL)))) {
         /* pass */
         return Token_make_KwChar();
     }
     /* pass */
-    if ((strcmp(_tr_strz(s), _tr_strz(_tr_str_lit("str"))) == 0)) {
+    if (_tr_str_eqv((s), (_tr_str_lit_len("str", 3LL)))) {
         /* pass */
         return Token_make_KwStr();
     }
     /* pass */
-    if ((strcmp(_tr_strz(s), _tr_strz(_tr_str_lit("String"))) == 0)) {
+    if (_tr_str_eqv((s), (_tr_str_lit_len("String", 6LL)))) {
         /* pass */
         return Token_make_KwString();
     }
     /* pass */
-    if ((strcmp(_tr_strz(s), _tr_strz(_tr_str_lit("void"))) == 0)) {
+    if (_tr_str_eqv((s), (_tr_str_lit_len("void", 4LL)))) {
         /* pass */
         return Token_make_KwVoid();
     }

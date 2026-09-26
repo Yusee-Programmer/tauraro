@@ -139,7 +139,7 @@ __attribute__((hot)) void ByteBuf_align_to(ByteBuf* self, long long align) {
 
 __attribute__((hot)) bool ByteBuf_write_file(ByteBuf* self, TrStr path) {
     /* pass */
-    char* fp = _tr_c_fopen(_tr_strz(path), _tr_strz(_tr_str_lit("wb")));
+    char* fp = _tr_c_fopen(_tr_strz(path), _tr_strz(_tr_str_lit_len("wb", 2LL)));
     /* pass */
     if ((((long long)(fp)) == 0LL)) {
         /* pass */

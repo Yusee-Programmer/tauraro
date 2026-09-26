@@ -53,18 +53,18 @@ def main():
     w.add_file("hello.txt", hello, 11)                       # small -> likely STORED (no gain)
 
     mut stored_data = "raw bytes, forced STORED"
-    w.add_file_stored("raw.bin", stored_data, 25)             # explicit STORED
+    w.add_file_stored("raw.bin", stored_data, 24)             # explicit STORED
 
     mut empty_data = ""
     w.add_file("empty.txt", empty_data, 0)                    # empty file
 
     mut rep = "abcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabc"
-    mut rep_len = 103
+    mut rep_len = 99
     w.add_file("repeat.txt", rep, rep_len)                    # compressible -> DEFLATE if enabled
 
     mut nested = "nested/dir/file.txt"
     mut nested_data = "content in a nested path"
-    w.add_file(nested, nested_data, 25)
+    w.add_file(nested, nested_data, 24)
 
     mut zip_bytes = w.finish()
     mut zip_len = w.total_len()
@@ -98,7 +98,7 @@ def main():
 
     mut i_raw = r.find_entry("raw.bin")
     t.assert_eq_str(r.read_entry(i_raw), stored_data, "raw.bin (STORED) content matches exactly")
-    t.assert_eq_int(r.entry_size(i_raw), 25, "raw.bin reported uncompressed size")
+    t.assert_eq_int(r.entry_size(i_raw), 24, "raw.bin reported uncompressed size")
 
     mut i_empty = r.find_entry("empty.txt")
     t.assert_eq_str(r.read_entry(i_empty), "", "empty.txt round-trips to an empty string")
@@ -121,7 +121,7 @@ def main():
     # match the uncompressed content (checked implicitly by read_entry above,
     # verified explicitly here too).
     t.assert_eq_int(rep_entry.crc32, Crc32.compute(rep, rep_len), "repeat.txt stored CRC32 equals CRC32 of the original uncompressed data")
-    t.assert_eq_int(raw_entry.crc32, Crc32.compute(stored_data, 25), "raw.bin stored CRC32 equals CRC32 of the original uncompressed data")
+    t.assert_eq_int(raw_entry.crc32, Crc32.compute(stored_data, 24), "raw.bin stored CRC32 equals CRC32 of the original uncompressed data")
 
     # ── Corruption detection ─────────────────────────────────────────────────
     t.section("CRC32 mismatch detection on a corrupted entry")

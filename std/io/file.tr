@@ -11,6 +11,7 @@ extern "C":
     def _tr_c_ftell(fp: Pointer[char]) -> int
     def _tr_c_malloc(size: int) -> Pointer[char]
     def _tr_str_wrap(s: Pointer[char]) -> str
+    def _tr_str_wrap_len(s: Pointer[char], blen: int) -> str
     def _tr_dir_exists(path: str) -> bool
 
 pub class File:
@@ -43,7 +44,7 @@ extend File:
         _tr_c_fread(buf, 1, size, self._fp)
         unsafe:
             buf.offset(size).write('\0')
-        self.content = _tr_str_wrap(buf)
+        self.content = _tr_str_wrap_len(buf, size)
         return self.content
 
     # Read all lines split on "\n".
@@ -122,7 +123,7 @@ extend File:
         unsafe:
             buf.offset(size).write('\0')
         _tr_c_fclose(fp)
-        return _tr_str_wrap(buf)
+        return _tr_str_wrap_len(buf, size)
 
     # Read all lines of a file directly.
     pub def lines(path: str) -> Vec[str]:

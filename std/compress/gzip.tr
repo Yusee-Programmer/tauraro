@@ -268,7 +268,8 @@ def _gz_slice(data: str, off: int, n: int) -> str:
                 out.offset(i).write(src.offset(i).read())
                 i = i + 1
     unsafe: out.offset(n).write('\0')
-    return _tr_str_wrap(out)
+    return _tr_str_wrap_len(out, n)
 
 extern "C":
     def _tr_str_wrap(s: Pointer[char]) -> str
+    def _tr_str_wrap_len(s: Pointer[char], blen: int) -> str

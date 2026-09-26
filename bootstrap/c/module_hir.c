@@ -7,13 +7,13 @@ __attribute__((malloc,returns_nonnull,hot)) HirFStringPart* HirFStringPart_init(
     /* pass */
     p->is_expr = false;
     /* pass */
-    p->text = _tr_str_lit("");
+    p->text = _tr_str_lit_len("", 0LL);
     /* pass */
     p->text_len = 0LL;
     /* pass */
     p->expr = (HirExpr*)(0LL);
     /* pass */
-    p->fmt_spec = _tr_str_lit("");
+    p->fmt_spec = _tr_str_lit_len("", 0LL);
     /* pass */
     return p;
 }
@@ -98,7 +98,7 @@ __attribute__((hot)) AstType* hir_expr_type(HirExpr* e) {
     /* pass */
     if ((((unsigned long long)(e)) == ((unsigned long long)(0LL)))) {
         /* pass */
-        return AstType_init(_tr_str_lit("void"));
+        return AstType_init(_tr_str_lit_len("void", 4LL));
     }
     /* pass */
     __auto_type _t250 = (*e);
@@ -144,7 +144,7 @@ __attribute__((hot)) AstType* hir_expr_type(HirExpr* e) {
     } else if (_t250.tag == HirExpr_EPropAccess) {
         __auto_type ty = _t250.data.EPropAccess.ty;
         /* pass */
-        if (((strcmp(_tr_strz(ty->name), _tr_strz(_tr_str_lit("Bits"))) == 0) && (ty->args->len > 0LL))) {
+        if ((_tr_str_eqv((ty->name), (_tr_str_lit_len("Bits", 4LL))) && (ty->args->len > 0LL))) {
             /* pass */
             return (*((AstType**)List_ptr_get(ty->args, 0LL)));
         }
@@ -166,7 +166,7 @@ __attribute__((hot)) AstType* hir_expr_type(HirExpr* e) {
         __auto_type _cl_ps = _t250.data.EClosure.params;
 __auto_type _cl_ret = _t250.data.EClosure.ret_ty;
         /* pass */
-        AstType* _clt = AstType_init(_tr_str_lit("def"));
+        AstType* _clt = AstType_init(_tr_str_lit_len("def", 3LL));
         /* pass */
         long long _cli = 0LL;
         /* pass */
@@ -258,7 +258,7 @@ __auto_type _cl_ret = _t250.data.EClosure.ret_ty;
         /* pass */
     }
     /* pass */
-    return AstType_init(_tr_str_lit("void"));
+    return AstType_init(_tr_str_lit_len("void", 4LL));
 }
 
 __attribute__((hot)) long long _tr_str_len(TrStr s) {

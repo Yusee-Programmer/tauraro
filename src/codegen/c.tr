@@ -2424,8 +2424,8 @@ pub class CGenerator:
         match e:
             case HirExpr.ELitInt(v, _): return v.to_str() + "LL"
             case HirExpr.ELitFloat(v, _): return _tr_float_to_c_lit(v)
-            case HirExpr.ELitStr(v, blen, _): return "_tr_str_lit(\"" + _escape_str_for_c(v, blen) + "\")"
-            case HirExpr.ERawStr(v, blen, _): return "_tr_str_lit(\"" + _escape_str_for_c(v, blen) + "\")"
+            case HirExpr.ELitStr(v, blen, _): return "_tr_str_lit_len(\"" + _escape_str_for_c(v, blen) + "\", " + blen.to_str() + "LL)"
+            case HirExpr.ERawStr(v, blen, _): return "_tr_str_lit_len(\"" + _escape_str_for_c(v, blen) + "\", " + blen.to_str() + "LL)"
             case HirExpr.ELitBytes(v, blen, _): return "\"" + _escape_str_for_c(v, blen) + "\""
             case HirExpr.ELitChar(v, _):
                 if v == 0: return "'\\0'"
@@ -2760,7 +2760,7 @@ pub class CGenerator:
                 case Pattern.PLitBool(v):
                     if v: cond = subj_t
                     else: cond = "!" + subj_t
-                case Pattern.PLitStr(v, v_blen): cond = "_tr_str_eq(_tr_strz(" + subj_t + "), \"" + _escape_str_for_c(v, v_blen) + "\")"
+                case Pattern.PLitStr(v, v_blen): cond = "_tr_str_eqv(" + subj_t + ", _tr_str_lit_len(\"" + _escape_str_for_c(v, v_blen) + "\", " + v_blen.to_str() + "LL))"
                 case Pattern.PVariant(tn, vn):
                     mut pv_vn = vn
                     if tn == "Option" and (vn == "" or vn == "none"): pv_vn = "None"
@@ -2814,7 +2814,7 @@ pub class CGenerator:
                                 if tn == "Option" and (vn == "" or vn == "none"): or_vn = "None"
                                 pc = subj_t + ".tag == " + tn + "_" + or_vn
                             case Pattern.PLitInt(vi): pc = subj_t + " == " + vi.to_str() + "LL"
-                            case Pattern.PLitStr(vs, vs_blen): pc = "_tr_str_eq(_tr_strz(" + subj_t + "), \"" + _escape_str_for_c(vs, vs_blen) + "\")"
+                            case Pattern.PLitStr(vs, vs_blen): pc = "_tr_str_eqv(" + subj_t + ", _tr_str_lit_len(\"" + _escape_str_for_c(vs, vs_blen) + "\", " + vs_blen.to_str() + "LL))"
                             case Pattern.PLitBool(bv):
                                 if bv: pc = subj_t
                                 else: pc = "!" + subj_t
@@ -3056,6 +3056,20 @@ pub class CGenerator:
             self.wrap_temp_names.push(tmp)
             return tmp + ".data"
         return "_tr_strz(" + e + ")"
+
+    # Like strz(), but yields the WHOLE TrStr (not just `.data`) — for call
+    # sites that need `.len` too (length-aware comparison, etc.), not just a
+    # raw C string. Uses the identical hoist-a-named-temp-for-a-fresh-
+    # `_tr_str_wrap(...)` protocol as strz(), so the SAME flush_wraps()
+    # release call (which already releases the whole named temp, not just
+    # its `.data`) handles cleanup correctly either way.
+    pub def strv(self, e: str) -> str:
+        if e.starts_with("_tr_str_wrap(") and e.ends_with(")"):
+            mut tmp = "_wt" + self.next_temp()
+            self.wrap_temp_decls.push("TrStr " + tmp + " = (" + e + ")")
+            self.wrap_temp_names.push(tmp)
+            return tmp
+        return "(" + e + ")"
 
     # If any `_tr_str_wrap(...)` temporaries were hoisted by `strz()` while
     # generating `expr_s` (a complete top-level expression/condition/value),
@@ -3701,12 +3715,12 @@ pub class CGenerator:
             mut l_owned = (ls.starts_with("_tr_str_wrap(") and ls.ends_with(")")) or self._is_fresh_str_expr(l)
             mut r_owned = (rs.starts_with("_tr_str_wrap(") and rs.ends_with(")")) or self._is_fresh_str_expr(r)
             if l_owned and r_owned:
-                return "({ TrStr _cl = (" + ls + "); TrStr _cr = (" + rs + "); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; })"
+                return "({ TrStr _cl = (" + ls + "); TrStr _cr = (" + rs + "); TrStr _cres = _tr_strx_concatv(_cl, _cr); _tr_str_release(_cl); _tr_str_release(_cr); _cres; })"
             elif l_owned:
-                return "({ TrStr _cl = (" + ls + "); TrStr _cres = _tr_strx_concat(_cl.data, " + self.strz(rs) + "); _tr_str_release(_cl); _cres; })"
+                return "({ TrStr _cl = (" + ls + "); TrStr _cres = _tr_strx_concatv(_cl, (" + rs + ")); _tr_str_release(_cl); _cres; })"
             elif r_owned:
-                return "({ TrStr _cr = (" + rs + "); TrStr _cres = _tr_strx_concat(" + self.strz(ls) + ", _cr.data); _tr_str_release(_cr); _cres; })"
-            return "_tr_strx_concat(" + self.strz(ls) + ", " + self.strz(rs) + ")"
+                return "({ TrStr _cr = (" + rs + "); TrStr _cres = _tr_strx_concatv((" + ls + "), _cr); _tr_str_release(_cr); _cres; })"
+            return "_tr_strx_concatv((" + ls + "), (" + rs + "))"
         # String repetition: "ab" * 3  (or  3 * "ab"), Python-style.
         if op == "*" and (_is_str_type(lt_n) or _is_str_type(rt_n)):
             if _is_str_type(lt_n):
@@ -3773,8 +3787,8 @@ pub class CGenerator:
         if op == "**": return "((long long)pow((double)(" + ls + "), (double)(" + rs + ")))"
         if op == "//": return "((long long)(" + ls + ") / (long long)(" + rs + "))"
         if (_is_str_type(lt_n) or _is_str_type(rt_n)) and (op == "==" or op == "!="):
-            if op == "==": return "(strcmp(" + self.strz(ls) + ", " + self.strz(rs) + ") == 0)"
-            return "(strcmp(" + self.strz(ls) + ", " + self.strz(rs) + ") != 0)"
+            if op == "==": return "_tr_str_eqv(" + self.strv(ls) + ", " + self.strv(rs) + ")"
+            return "(!_tr_str_eqv(" + self.strv(ls) + ", " + self.strv(rs) + "))"
         if (_is_str_type(lt_n) or _is_str_type(rt_n)) and (op == "<" or op == ">" or op == "<=" or op == ">="):
             return "(strcmp(" + self.strz(ls) + ", " + self.strz(rs) + ") " + op + " 0)"
         if self.enums.contains(lt_n) and (op == "==" or op == "!="):
@@ -3816,7 +3830,7 @@ pub class CGenerator:
         if t_n == "Array" and (p == "len" or p == "length"):
             return "((long long)" + hir_expr_type(o).array_size.to_str() + ")"   # compile-time N
         if _is_str_type(t_n) and (p == "len" or p == "length"):
-            return "((long long)_tr_strlen(" + self.strz(obj_s) + "))"
+            return "((long long)_tr_str_lenv(" + self.strv(obj_s) + "))"
         if t_n == "StringBuilder" and (p == "len" or p == "length"):
             return "(" + obj_s + "->buf->len)"
         if t_n == "Result":
@@ -4074,7 +4088,7 @@ pub class CGenerator:
             if args.len > 0:
                 mut arg0 = args.get(0)
                 mut arg0_ty_n: str = hir_expr_type(arg0).name
-                if _is_str_type(arg0_ty_n): return "_tr_strlen(" + self.strz(self.gen_expr(arg0)) + ")"
+                if _is_str_type(arg0_ty_n): return "_tr_str_lenv(" + self.strv(self.gen_expr(arg0)) + ")"
                 if self.has_method(arg0_ty_n, "__len__"):
                     return self.cls_method_c_call(arg0_ty_n, "__len__", self.gen_expr(arg0), "")
                 return self.gen_expr(arg0) + "->len"
@@ -5350,12 +5364,20 @@ pub class CGenerator:
         # str primitive method dispatch - "hello".trim() -> _tr_str_strip("hello")
         # See note above _is_str_type(t_n) block re: TrStr interim semantics.
         if t_n == "str":
-            mut os: str = self.strz(obj_s)
+            # `ov`/`arg0v` hoist a fresh `_tr_str_wrap(...)` receiver/arg into
+            # a named temp exactly once (see the identical comment on the
+            # `_is_str_type(t_n)` block above); `os`/`sa0` derive their
+            # `.data` view from those temps rather than a separate strz()
+            # call, which would hoist (and evaluate, and allocate) a second
+            # time.
+            mut ov: str = self.strv(obj_s)
+            mut os: str = ov + ".data"
             mut str_arg0 = ""
             if args.len > 0: str_arg0 = self.gen_expr(args.get(0))
             mut str_arg1 = ""
             if args.len > 1: str_arg1 = self.gen_expr(args.get(1))
-            mut sa0: str = self.strz(str_arg0)
+            mut arg0v: str = self.strv(str_arg0)
+            mut sa0: str = arg0v + ".data"
             mut sa1: str = self.strz(str_arg1)
             if method == "split":         return "_tr_str_split(" + os + ", " + sa0 + ")"
             if method == "split_to_vec":  return "_tr_str_split(" + os + ", " + sa0 + ")"
@@ -5375,7 +5397,7 @@ pub class CGenerator:
             if method == "strip_suffix":  return self.wrapstr("_tr_str_strip_suffix(" + os + ", " + sa0 + ")")
             if method == "remove_char":   return self.wrapstr("_tr_str_remove_char(" + os + ", " + sa0 + ")")
             if method == "join":          return "_tr_trstr_join((List_TrStr*)(void*)" + obj_s + ", " + sa0 + ")"
-            if method == "len":           return "_tr_strlen(" + os + ")"
+            if method == "len":           return "_tr_str_lenv(" + ov + ")"
             if method == "index_of":      return "_tr_str_index_of(" + os + ", " + sa0 + ")"
             if method == "last_index_of": return "_tr_str_last_index_of(" + os + ", " + sa0 + ")"
             if method == "count":         return "_tr_str_count_occ(" + os + ", " + sa0 + ")"
@@ -5384,7 +5406,7 @@ pub class CGenerator:
             if method == "ends_with":     return "_tr_str_ends_with(" + os + ", " + sa0 + ")"
             if method == "contains":      return "_tr_str_contains(" + os + ", " + sa0 + ")"
             if method == "contains_char": return "_tr_str_contains_char(" + os + ", (long long)(" + str_arg0 + "))"
-            if method == "eq":            return "_tr_str_eq(" + os + ", " + sa0 + ")"
+            if method == "eq":            return "_tr_str_eqv(" + ov + ", " + arg0v + ")"
             if method == "is_digit":      return "_tr_str_is_digit(" + os + ")"
             if method == "is_alpha":      return "_tr_str_is_alpha(" + os + ")"
             if method == "is_alnum":      return "_tr_str_is_alnum(" + os + ")"
@@ -5867,8 +5889,14 @@ pub class CGenerator:
         # legacy container/helper is wrapped via _tr_str_wrap() (fresh
         # heap result, rc=1) so it participates in refcounting going forward.
         if _is_str_type(t_n):
-            mut os: str = self.strz(obj_s)
-            if method == "is_empty": return "(_tr_strlen(" + os + ") == 0)"
+            # `ov` hoists a fresh `_tr_str_wrap(...)` receiver (e.g. a chained
+            # `x.trim().is_empty()`) into a named temp exactly once; `os`
+            # derives its `.data` view from THAT temp rather than calling
+            # strz()/strv() separately, which would hoist (and so evaluate,
+            # and so allocate) the same fresh value a second time.
+            mut ov: str = self.strv(obj_s)
+            mut os: str = ov + ".data"
+            if method == "is_empty": return "(_tr_str_lenv(" + ov + ") == 0)"
             if method == "upper" or method == "to_upper": return self.wrapstr("_tr_str_upper(" + os + ")")
             if method == "lower" or method == "to_lower": return self.wrapstr("_tr_str_lower(" + os + ")")
             if method == "strip" or method == "trim": return self.wrapstr("_tr_str_strip(" + os + ")")
@@ -5908,7 +5936,7 @@ pub class CGenerator:
             if method == "last_index_of" and args.len > 0:
                 return "_tr_str_last_index_of(" + os + ", " + self.strz(self.gen_expr(args.get(0))) + ")"
             if method == "len" or method == "length":
-                return "_tr_strlen(" + os + ")"
+                return "_tr_str_lenv(" + ov + ")"
             if method == "starts_with" and args.len > 0:
                 return "_tr_str_starts_with(" + os + ", " + self.strz(self.gen_expr(args.get(0))) + ")"
             if method == "ends_with" and args.len > 0:
@@ -6047,7 +6075,7 @@ pub class CGenerator:
 
         # len/length - only shortcut for non-user-class types
         if (method == "len" or method == "__len__" or method == "length") and not (self.classes.contains(t_n) and t_n != "Vec" and t_n != "Map" and t_n != "Dict" and t_n != "List") and not self.enums.contains(t_n):
-            if _is_str_type(t_n): return "_tr_strlen(" + self.strz(obj_s) + ")"
+            if _is_str_type(t_n): return "_tr_str_lenv(" + self.strv(obj_s) + ")"
             return "((long long)" + obj_s + "->len)"
 
         # __getitem__ dunder: sema lowers bag[i] -> EMethodCall(bag, "get_index", [i], void)
@@ -6819,7 +6847,7 @@ pub class CGenerator:
                     else:
                         fargs = fargs + ", (char*)(" + s + ")"
             i = i + 1
-        return "_tr_str_wrap(({ int _fz = snprintf(NULL,0,\"" + fmt + "\"" + fargs + "); char* _fr=(char*)_tr_checked_alloc(_fz+1); snprintf(_fr,_fz+1,\"" + fmt + "\"" + fargs + "); _fr; }))"
+        return "({ int _fz = snprintf(NULL,0,\"" + fmt + "\"" + fargs + "); char* _fr=(char*)_tr_checked_alloc(_fz+1); snprintf(_fr,_fz+1,\"" + fmt + "\"" + fargs + "); _tr_str_wrap_len(_fr, (size_t)_fz); })"
 
     pub def gen_tuple(self, items: Vec[Pointer[HirExpr]]) -> str:
         if items.len == 0: return "((TrTuple){.data={0}})"
@@ -9459,7 +9487,7 @@ pub class CGenerator:
                             gcond = subj
                         else:
                             gcond = "!" + subj
-                    case Pattern.PLitStr(v, v_blen):   gcond = "_tr_str_eq(_tr_strz(" + subj + "), \"" + _escape_str_for_c(v, v_blen) + "\")"
+                    case Pattern.PLitStr(v, v_blen):   gcond = "_tr_str_eqv(" + subj + ", _tr_str_lit_len(\"" + _escape_str_for_c(v, v_blen) + "\", " + v_blen.to_str() + "LL))"
                     case Pattern.PVariant(tn, vn):
                         mut gpv = vn
                         if tn == "Option" and (vn == "" or vn == "none"): gpv = "None"
@@ -9528,7 +9556,7 @@ pub class CGenerator:
                 case Pattern.PLitBool(v):
                     if v: cond = subj
                     else: cond = "!" + subj
-                case Pattern.PLitStr(v, v_blen): cond = "_tr_str_eq(_tr_strz(" + subj + "), \"" + _escape_str_for_c(v, v_blen) + "\")"
+                case Pattern.PLitStr(v, v_blen): cond = "_tr_str_eqv(" + subj + ", _tr_str_lit_len(\"" + _escape_str_for_c(v, v_blen) + "\", " + v_blen.to_str() + "LL))"
                 case Pattern.PVariant(tn, vn):
                     mut pv_vn = vn
                     if tn == "Option" and (vn == "" or vn == "none"): pv_vn = "None"
@@ -9585,7 +9613,7 @@ pub class CGenerator:
                                 if tn == "Option" and (vn == "" or vn == "none"): or_vn = "None"
                                 pc = subj + ".tag == " + tn + "_" + or_vn
                             case Pattern.PLitInt(vi): pc = subj + " == " + vi.to_str() + "LL"
-                            case Pattern.PLitStr(vs, vs_blen): pc = "_tr_str_eq(_tr_strz(" + subj + "), \"" + _escape_str_for_c(vs, vs_blen) + "\")"
+                            case Pattern.PLitStr(vs, vs_blen): pc = "_tr_str_eqv(" + subj + ", _tr_str_lit_len(\"" + _escape_str_for_c(vs, vs_blen) + "\", " + vs_blen.to_str() + "LL))"
                             case Pattern.PLitBool(bv):
                                 if bv: pc = subj
                                 else: pc = "!" + subj

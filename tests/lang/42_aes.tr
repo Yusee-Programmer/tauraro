@@ -103,15 +103,15 @@ def main():
 
     t.section("AES-256 CBC round-trip")
     mut msg256 = "AES-256 CBC test message, multi-block!"
-    mut e256 = Aes.encrypt_cbc(msg256, 39, key256, 32, iv)
+    mut e256 = Aes.encrypt_cbc(msg256, 38, key256, 32, iv)
     mut d256 = Aes.decrypt_cbc(e256, 48, key256, 32, iv)
     t.assert_eq_str(d256, msg256, "AES-256 CBC round-trip")
 
     t.section("Different IVs produce different ciphertext for the same plaintext")
     mut iv2 = "fedcba9876543210"
     mut same_msg = "identical plaintext"
-    mut ea = Aes.encrypt_cbc(same_msg, 20, key128, 16, iv)
-    mut eb = Aes.encrypt_cbc(same_msg, 20, key128, 16, iv2)
+    mut ea = Aes.encrypt_cbc(same_msg, 19, key128, 16, iv)
+    mut eb = Aes.encrypt_cbc(same_msg, 19, key128, 16, iv2)
     mut ea_hex = _bytes_hex(ea as Pointer[char], 32)
     mut eb_hex = _bytes_hex(eb as Pointer[char], 32)
     t.assert_ne_str(ea_hex, eb_hex, "different IVs produce different ciphertext")

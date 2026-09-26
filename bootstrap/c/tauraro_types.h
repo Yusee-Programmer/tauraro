@@ -4626,6 +4626,7 @@ __attribute__((hot)) TrStr CGenerator_obj_to_str_expr(CGenerator* self, TrStr mo
 __attribute__((hot)) TrStr CGenerator_ensure_elem_fmt_fn(CGenerator* self, AstType* ty);
 __attribute__((hot)) TrStr CGenerator_gen_collection_to_str(CGenerator* self, TrStr s, AstType* ty);
 __attribute__((hot)) TrStr CGenerator_strz(CGenerator* self, TrStr e);
+__attribute__((hot)) TrStr CGenerator_strv(CGenerator* self, TrStr e);
 __attribute__((hot)) TrStr CGenerator_flush_wraps(CGenerator* self, TrStr expr_s, bool is_void);
 __attribute__((hot)) TrStr CGenerator_wrapstr(CGenerator* self, TrStr e);
 __attribute__((hot)) void CGenerator_set_proven_borrows(CGenerator* self, List_TrStr* pb);

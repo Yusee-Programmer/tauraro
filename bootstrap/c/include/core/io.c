@@ -5,11 +5,11 @@ __attribute__((hot)) TrStr read_file(TrStr path) {
     /* pass */
     /* unsafe block */
     /* pass */
-    char* fp = _tr_c_fopen(_tr_strz(path), _tr_strz(_tr_str_lit("rb")));
+    char* fp = _tr_c_fopen(_tr_strz(path), _tr_strz(_tr_str_lit_len("rb", 2LL)));
     /* pass */
     if ((((unsigned long long)(fp)) == ((unsigned long long)(0LL)))) {
         /* pass */
-        return _tr_str_lit("");
+        return _tr_str_lit_len("", 0LL);
     }
     /* pass */
     _tr_c_fseek(fp, 0LL, 2LL);
@@ -26,14 +26,14 @@ __attribute__((hot)) TrStr read_file(TrStr path) {
     /* pass */
     _tr_c_fclose(fp);
     /* pass */
-    return _tr_str_wrap(_tr_str_wrap(buffer));
+    return _tr_str_wrap(_tr_str_wrap_len(buffer, size));
 }
 
 __attribute__((hot)) bool file_exists(TrStr path) {
     /* pass */
     /* unsafe block */
     /* pass */
-    char* fp = _tr_c_fopen(_tr_strz(path), _tr_strz(_tr_str_lit("rb")));
+    char* fp = _tr_c_fopen(_tr_strz(path), _tr_strz(_tr_str_lit_len("rb", 2LL)));
     /* pass */
     if ((((unsigned long long)(fp)) != ((unsigned long long)(0LL)))) {
         /* pass */
@@ -49,7 +49,7 @@ __attribute__((hot)) bool write_file(TrStr path, TrStr content) {
     /* pass */
     /* unsafe block */
     /* pass */
-    char* fp = _tr_c_fopen(_tr_strz(path), _tr_strz(_tr_str_lit("wb")));
+    char* fp = _tr_c_fopen(_tr_strz(path), _tr_strz(_tr_str_lit_len("wb", 2LL)));
     /* pass */
     if ((((unsigned long long)(fp)) == ((unsigned long long)(0LL)))) {
         /* pass */
@@ -76,7 +76,7 @@ __attribute__((hot)) bool append_file(TrStr path, TrStr content) {
     /* pass */
     /* unsafe block */
     /* pass */
-    char* fp = _tr_c_fopen(_tr_strz(path), _tr_strz(_tr_str_lit("ab")));
+    char* fp = _tr_c_fopen(_tr_strz(path), _tr_strz(_tr_str_lit_len("ab", 2LL)));
     /* pass */
     if ((((unsigned long long)(fp)) == ((unsigned long long)(0LL)))) {
         /* pass */

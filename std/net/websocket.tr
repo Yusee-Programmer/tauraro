@@ -56,6 +56,7 @@ extern "C":
     def _tr_free(p: Pointer[char])
     def _tr_c_free(p: Pointer[char])
     def _tr_str_wrap(s: Pointer[char]) -> str
+    def _tr_str_wrap_len(s: Pointer[char], blen: int) -> str
     def _tr_time_ns() -> int
 
 # ── _WsRng — splitmix64-style byte generator (see file header for why this
@@ -136,9 +137,9 @@ extend WsMessage:
         return m
 
     # Copy `len_` raw bytes into a freshly heap-allocated NUL-terminated str
-    # (safe even if `len_` is 0; not safe to call on payloads containing an
-    # embedded NUL if the caller then uses C-string-length functions on it —
-    # use .data/.len directly for binary payloads).
+    # (safe even if `len_` is 0, and safe for a payload with an embedded NUL
+    # byte too: _tr_str_wrap_len records the real length directly rather
+    # than re-deriving one via strlen()).
     def _bytes_to_str(data: Pointer[char], len_: int) -> str:
         mut buf = _tr_c_malloc(len_ + 1)
         mut i = 0
@@ -146,7 +147,7 @@ extend WsMessage:
             unsafe: buf.offset(i).write(data.offset(i).read())
             i = i + 1
         unsafe: buf.offset(len_).write('\0')
-        return _tr_str_wrap(buf)
+        return _tr_str_wrap_len(buf, len_)
 
     pub def is_text(self)   -> bool: return self.kind == WS_OP_TEXT()
     pub def is_binary(self) -> bool: return self.kind == WS_OP_BINARY()
@@ -469,7 +470,7 @@ pub def ws_generate_key() -> str:
         _put_byte(raw, i, rng.next_byte())
         i = i + 1
     unsafe: raw.offset(16).write('\0')
-    mut raw_s = _tr_str_wrap(raw)
+    mut raw_s = _tr_str_wrap_len(raw, 16)
     mut encoded = Base64.encode(raw_s)
     unsafe: _tr_c_free(raw_s as Pointer[char])
     return encoded

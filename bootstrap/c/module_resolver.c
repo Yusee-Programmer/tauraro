@@ -17,26 +17,26 @@ __attribute__((malloc,returns_nonnull,hot)) ModuleResolver* ModuleResolver_init(
     /* pass */
     r->all_decl_modules = (void*)List_TrStr_new();
     /* pass */
-    r->current_mod = _tr_str_lit("");
+    r->current_mod = _tr_str_lit_len("", 0LL);
     /* pass */
     r->parse_errors = 0LL;
     /* pass */
-    List_TrStr_append(r->search_paths, _tr_str_lit("."));
+    List_TrStr_append(r->search_paths, _tr_str_lit_len(".", 1LL));
     /* pass */
-    List_TrStr_append(r->search_paths, _tr_str_lit("tauraro"));
+    List_TrStr_append(r->search_paths, _tr_str_lit_len("tauraro", 7LL));
     /* pass */
-    List_TrStr_append(r->search_paths, _tr_str_lit(".."));
+    List_TrStr_append(r->search_paths, _tr_str_lit_len("..", 2LL));
     /* pass */
-    List_TrStr_append(r->search_paths, _tr_str_lit("../.."));
+    List_TrStr_append(r->search_paths, _tr_str_lit_len("../..", 5LL));
     /* pass */
-    List_TrStr_append(r->search_paths, _tr_str_lit("std"));
+    List_TrStr_append(r->search_paths, _tr_str_lit_len("std", 3LL));
     /* pass */
     return r;
 }
 
 __attribute__((hot)) void ModuleResolver_add_search_path(ModuleResolver* self, TrStr p) {
     /* pass */
-    if ((strcmp(_tr_strz(p), _tr_strz(_tr_str_lit(""))) == 0)) {
+    if (_tr_str_eqv((p), (_tr_str_lit_len("", 0LL)))) {
         /* pass */
         return;
     }
@@ -45,7 +45,7 @@ __attribute__((hot)) void ModuleResolver_add_search_path(ModuleResolver* self, T
     /* pass */
     while ((i < self->search_paths->len)) {
         /* pass */
-        if ((strcmp(_tr_strz(List_TrStr_get(self->search_paths, i)), _tr_strz(p)) == 0)) {
+        if (_tr_str_eqv((List_TrStr_get(self->search_paths, i)), (p))) {
             /* pass */
             return;
         }
@@ -85,10 +85,10 @@ __attribute__((hot)) TrStr ModuleResolver_dir_of_path(ModuleResolver* self, TrSt
     /* pass */
     if ((last < 0LL)) {
         /* pass */
-        return _tr_str_lit("");
+        return _tr_str_lit_len("", 0LL);
     }
     /* pass */
-    return _tr_str_wrap(_tr_str_slice(_tr_strz(path), 0LL, last));
+    return _tr_str_wrap(_tr_str_slice((path).data, 0LL, last));
 }
 
 __attribute__((hot)) TrStr ModuleResolver_base_of_path(ModuleResolver* self, TrStr path) {
@@ -118,7 +118,7 @@ __attribute__((hot)) TrStr ModuleResolver_base_of_path(ModuleResolver* self, TrS
         i = (i + 1LL);
     }
     /* pass */
-    return _tr_str_wrap(_tr_str_slice(_tr_strz(path), (last + 1LL), n));
+    return _tr_str_wrap(_tr_str_slice((path).data, (last + 1LL), n));
 }
 
 __attribute__((hot)) Program* ModuleResolver_resolve_main(ModuleResolver* self, TrStr main_path) {
@@ -143,11 +143,11 @@ __attribute__((hot)) Program* ModuleResolver_resolve_main(ModuleResolver* self, 
     /* pass */
     if ((dir_end > 0LL)) {
         /* pass */
-        TrStr dir_str = _tr_str_lit("");
+        TrStr dir_str = _tr_str_lit_len("", 0LL);
         /* pass */
         /* unsafe block */
         /* pass */
-        TrStr _strtmp_t235 = _tr_str_wrap(_tr_str_slice(_tr_strz(main_path), 0LL, dir_end));
+        TrStr _strtmp_t235 = _tr_str_wrap(_tr_str_slice((main_path).data, 0LL, dir_end));
         _tr_str_release(dir_str);
         dir_str = _strtmp_t235;
         /* pass */
@@ -171,13 +171,13 @@ __attribute__((hot)) Program* ModuleResolver_resolve_main(ModuleResolver* self, 
             pj = (pj + 1LL);
         }
         /* pass */
-        TrStr parent_dir = _tr_str_lit(".");
+        TrStr parent_dir = _tr_str_lit_len(".", 1LL);
         /* pass */
         if ((par_end > 0LL)) {
             /* pass */
             /* unsafe block */
             /* pass */
-            TrStr _strtmp_t236 = _tr_str_wrap(_tr_str_slice(_tr_strz(dir_str), 0LL, par_end));
+            TrStr _strtmp_t236 = _tr_str_wrap(_tr_str_slice((dir_str).data, 0LL, par_end));
             _tr_str_release(parent_dir);
             parent_dir = _strtmp_t236;
             /* pass */
@@ -203,11 +203,11 @@ __attribute__((hot)) Program* ModuleResolver_resolve_main(ModuleResolver* self, 
             /* pass */
             if ((gp_end > 0LL)) {
                 /* pass */
-                TrStr gp_dir = _tr_str_lit("");
+                TrStr gp_dir = _tr_str_lit_len("", 0LL);
                 /* pass */
                 /* unsafe block */
                 /* pass */
-                TrStr _strtmp_t237 = _tr_str_wrap(_tr_str_slice(_tr_strz(parent_dir), 0LL, gp_end));
+                TrStr _strtmp_t237 = _tr_str_wrap(_tr_str_slice((parent_dir).data, 0LL, gp_end));
                 _tr_str_release(gp_dir);
                 gp_dir = _strtmp_t237;
                 /* pass */
@@ -222,11 +222,11 @@ __attribute__((hot)) Program* ModuleResolver_resolve_main(ModuleResolver* self, 
             /* pass */
             TrStr vname = _tr_str_wrap(_tr_readdir(vh));
             /* pass */
-            while ((strcmp(_tr_strz(vname), _tr_strz(_tr_str_lit(""))) != 0)) {
+            while ((!_tr_str_eqv((vname), (_tr_str_lit_len("", 0LL))))) {
                 /* pass */
-                if (((strcmp(_tr_strz(vname), _tr_strz(_tr_str_lit("."))) != 0) && (strcmp(_tr_strz(vname), _tr_strz(_tr_str_lit(".."))) != 0))) {
+                if (((!_tr_str_eqv((vname), (_tr_str_lit_len(".", 1LL)))) && (!_tr_str_eqv((vname), (_tr_str_lit_len("..", 2LL)))))) {
                     /* pass */
-                    TrStr vpkg_src = ({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(parent_dir), _tr_strz(_tr_str_lit("/")))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(vname)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("/src"))); _tr_str_release(_cl); _cres; });
+                    TrStr vpkg_src = ({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concatv((parent_dir), (_tr_str_lit_len("/", 1LL)))); TrStr _cres = _tr_strx_concatv(_cl, (vname)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concatv(_cl, (_tr_str_lit_len("/src", 4LL))); _tr_str_release(_cl); _cres; });
                     /* pass */
                     if (_tr_dir_exists(_tr_strz(vpkg_src))) {
                         /* pass */
@@ -271,7 +271,7 @@ __attribute__((hot)) void ModuleResolver_resolve_file(ModuleResolver* self, TrSt
     /* pass */
     TrStr source = read_file(path);
     /* pass */
-    if ((strcmp(_tr_strz(source), _tr_strz(_tr_str_lit(""))) == 0)) {
+    if (_tr_str_eqv((source), (_tr_str_lit_len("", 0LL)))) {
         /* pass */
         char* p_ptr = ((char*)(_tr_strz(path)));
         /* pass */
@@ -300,12 +300,12 @@ __attribute__((hot)) void ModuleResolver_resolve_file(ModuleResolver* self, TrSt
         /* pass */
         if ((!has_tr)) {
             /* pass */
-            TrStr _strtmp_t240 = ({ TrStr _at_t239 = (_tr_strx_concat(_tr_strz(path), _tr_strz(_tr_str_lit(".tr")))); __auto_type _wr = (read_file(_at_t239)); _tr_str_release(_at_t239); _wr; });
+            TrStr _strtmp_t240 = ({ TrStr _at_t239 = (_tr_strx_concatv((path), (_tr_str_lit_len(".tr", 3LL)))); __auto_type _wr = (read_file(_at_t239)); _tr_str_release(_at_t239); _wr; });
             _tr_str_release(source);
             source = _strtmp_t240;
         }
         /* pass */
-        if ((strcmp(_tr_strz(source), _tr_strz(_tr_str_lit(""))) == 0)) {
+        if (_tr_str_eqv((source), (_tr_str_lit_len("", 0LL)))) {
             /* pass */
             _tr_str_release(source);
             return;
@@ -370,12 +370,12 @@ __auto_type items = _t241.data.DFromImport.items;
 
 __attribute__((hot)) bool ModuleResolver__path_is_lib(ModuleResolver* self, TrStr path) {
     /* pass */
-    return (((ModuleResolver__contains(self, path, _tr_str_lit("std/")) || ModuleResolver__contains(self, path, _tr_str_lit("std\\"))) || ModuleResolver__contains(self, path, _tr_str_lit("core/"))) || ModuleResolver__contains(self, path, _tr_str_lit("core\\")));
+    return (((ModuleResolver__contains(self, path, _tr_str_lit_len("std/", 4LL)) || ModuleResolver__contains(self, path, _tr_str_lit_len("std\\", 4LL))) || ModuleResolver__contains(self, path, _tr_str_lit_len("core/", 5LL))) || ModuleResolver__contains(self, path, _tr_str_lit_len("core\\", 5LL)));
 }
 
 __attribute__((hot)) bool ModuleResolver__source_is_trusted(ModuleResolver* self, TrStr source) {
     /* pass */
-    long long n = _tr_strlen(_tr_strz(source));
+    long long n = _tr_str_lenv((source));
     /* pass */
     long long lim = 400LL;
     /* pass */
@@ -389,14 +389,14 @@ __attribute__((hot)) bool ModuleResolver__source_is_trusted(ModuleResolver* self
         return false;
     }
     /* pass */
-    return ({ TrStr _at_t242 = (_tr_str_wrap(_tr_str_slice(_tr_strz(source), 0LL, lim))); __auto_type _wr = (ModuleResolver__contains(self, _at_t242, _tr_str_lit("@trusted"))); _tr_str_release(_at_t242); _wr; });
+    return ({ TrStr _at_t242 = (_tr_str_wrap(_tr_str_slice((source).data, 0LL, lim))); __auto_type _wr = (ModuleResolver__contains(self, _at_t242, _tr_str_lit_len("@trusted", 8LL))); _tr_str_release(_at_t242); _wr; });
 }
 
 __attribute__((hot)) bool ModuleResolver__contains(ModuleResolver* self, TrStr hay, TrStr needle) {
     /* pass */
-    long long hl = _tr_strlen(_tr_strz(hay));
+    long long hl = _tr_str_lenv((hay));
     /* pass */
-    long long nl = _tr_strlen(_tr_strz(needle));
+    long long nl = _tr_str_lenv((needle));
     /* pass */
     if (((nl == 0LL) || (nl > hl))) {
         /* pass */
@@ -407,7 +407,7 @@ __attribute__((hot)) bool ModuleResolver__contains(ModuleResolver* self, TrStr h
     /* pass */
     while (((i + nl) <= hl)) {
         /* pass */
-        if (({ TrStr _wt_t243 = (_tr_str_wrap(_tr_str_slice(_tr_strz(hay), i, (i + nl)))); __auto_type _wr = ((strcmp(_wt_t243.data, _tr_strz(needle)) == 0)); _tr_str_release(_wt_t243); _wr; })) {
+        if (({ TrStr _wt_t243 = (_tr_str_wrap(_tr_str_slice((hay).data, i, (i + nl)))); __auto_type _wr = (_tr_str_eqv(_wt_t243, (needle))); _tr_str_release(_wt_t243); _wr; })) {
             /* pass */
             return true;
         }
@@ -480,7 +480,7 @@ __attribute__((hot)) void ModuleResolver_resolve_module_path(ModuleResolver* sel
         n = (n + 1LL);
     }
     /* pass */
-    TrStr dir_path = _tr_str_wrap(_tr_str_slice(_tr_strz(mod_path), 0LL, n));
+    TrStr dir_path = _tr_str_wrap(_tr_str_slice((mod_path).data, 0LL, n));
     /* pass */
     char* bp = ((char*)(_tr_strz(dir_path)));
     /* pass */
@@ -508,13 +508,13 @@ __attribute__((hot)) void ModuleResolver_resolve_module_path(ModuleResolver* sel
         /* pass */
         TrStr base = List_TrStr_get(self->search_paths, sidx);
         /* pass */
-        TrStr pkg_path = ({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(base), _tr_strz(_tr_str_lit("/")))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(dir_path)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("/mod.tr"))); _tr_str_release(_cl); _cres; });
+        TrStr pkg_path = ({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concatv((base), (_tr_str_lit_len("/", 1LL)))); TrStr _cres = _tr_strx_concatv(_cl, (dir_path)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concatv(_cl, (_tr_str_lit_len("/mod.tr", 7LL))); _tr_str_release(_cl); _cres; });
         /* pass */
         if (file_exists(pkg_path)) {
             /* pass */
-            ({ TrStr _at_t245 = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(base), _tr_strz(_tr_str_lit("/")))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(dir_path)); _tr_str_release(_cl); _cres; })); ModuleResolver_add_search_path(self, _at_t245); _tr_str_release(_at_t245); });
+            ({ TrStr _at_t245 = (({ TrStr _cl = (_tr_strx_concatv((base), (_tr_str_lit_len("/", 1LL)))); TrStr _cres = _tr_strx_concatv(_cl, (dir_path)); _tr_str_release(_cl); _cres; })); ModuleResolver_add_search_path(self, _at_t245); _tr_str_release(_at_t245); });
             /* pass */
-            ({ TrStr _at_t246 = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(base), _tr_strz(_tr_str_lit("/")))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(dir_path)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("/src"))); _tr_str_release(_cl); _cres; })); ModuleResolver_add_search_path(self, _at_t246); _tr_str_release(_at_t246); });
+            ({ TrStr _at_t246 = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concatv((base), (_tr_str_lit_len("/", 1LL)))); TrStr _cres = _tr_strx_concatv(_cl, (dir_path)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concatv(_cl, (_tr_str_lit_len("/src", 4LL))); _tr_str_release(_cl); _cres; })); ModuleResolver_add_search_path(self, _at_t246); _tr_str_release(_at_t246); });
             /* pass */
             bool already = _tr_dict_contains(self->visited, _tr_strz(pkg_path));
             /* pass */
@@ -536,7 +536,7 @@ __attribute__((hot)) void ModuleResolver_resolve_module_path(ModuleResolver* sel
             return;
         }
         /* pass */
-        TrStr flat_path = ({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(base), _tr_strz(_tr_str_lit("/")))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(dir_path)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(".tr"))); _tr_str_release(_cl); _cres; });
+        TrStr flat_path = ({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concatv((base), (_tr_str_lit_len("/", 1LL)))); TrStr _cres = _tr_strx_concatv(_cl, (dir_path)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concatv(_cl, (_tr_str_lit_len(".tr", 3LL))); _tr_str_release(_cl); _cres; });
         /* pass */
         if (file_exists(flat_path)) {
             /* pass */
@@ -561,11 +561,11 @@ __attribute__((hot)) void ModuleResolver_resolve_module_path(ModuleResolver* sel
             return;
         }
         /* pass */
-        TrStr pkg_src_path = ({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(base), _tr_strz(_tr_str_lit("/")))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(dir_path)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("/src/"))); _tr_str_release(_cl); _cres; })); TrStr _cr = (ModuleResolver_base_of_path(self, dir_path)); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(".tr"))); _tr_str_release(_cl); _cres; });
+        TrStr pkg_src_path = ({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concatv((base), (_tr_str_lit_len("/", 1LL)))); TrStr _cres = _tr_strx_concatv(_cl, (dir_path)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concatv(_cl, (_tr_str_lit_len("/src/", 5LL))); _tr_str_release(_cl); _cres; })); TrStr _cr = (ModuleResolver_base_of_path(self, dir_path)); TrStr _cres = _tr_strx_concatv(_cl, _cr); _tr_str_release(_cl); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concatv(_cl, (_tr_str_lit_len(".tr", 3LL))); _tr_str_release(_cl); _cres; });
         /* pass */
         if (file_exists(pkg_src_path)) {
             /* pass */
-            ({ TrStr _at_t247 = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(base), _tr_strz(_tr_str_lit("/")))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(dir_path)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("/src"))); _tr_str_release(_cl); _cres; })); ModuleResolver_add_search_path(self, _at_t247); _tr_str_release(_at_t247); });
+            ({ TrStr _at_t247 = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concatv((base), (_tr_str_lit_len("/", 1LL)))); TrStr _cres = _tr_strx_concatv(_cl, (dir_path)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concatv(_cl, (_tr_str_lit_len("/src", 4LL))); _tr_str_release(_cl); _cres; })); ModuleResolver_add_search_path(self, _at_t247); _tr_str_release(_at_t247); });
             /* pass */
             bool already3 = _tr_dict_contains(self->visited, _tr_strz(pkg_src_path));
             /* pass */

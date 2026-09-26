@@ -10,7 +10,7 @@ __attribute__((hot)) long long _index_of(List_TrStr* names, TrStr s) {
     /* pass */
     while ((i < names->len)) {
         /* pass */
-        if ((strcmp(_tr_strz(List_TrStr_get(names, i)), _tr_strz(s)) == 0)) {
+        if (_tr_str_eqv((List_TrStr_get(names, i)), (s))) {
             /* pass */
             return i;
         }
@@ -111,7 +111,7 @@ __attribute__((hot)) bool write_elf_object(TrStr out_path, List_ptr* funcs, List
         /* pass */
         List_i64_append(str_off, rodata->len);
         /* pass */
-        ({ TrStr _at_t3515 = (List_TrStr_get(strings, sxi)); ByteBuf_cstr_len(rodata, _at_t3515, List_i64_get(string_lens, sxi)); _tr_str_release(_at_t3515); });
+        ({ TrStr _at_t3516 = (List_TrStr_get(strings, sxi)); ByteBuf_cstr_len(rodata, _at_t3516, List_i64_get(string_lens, sxi)); _tr_str_release(_at_t3516); });
         /* pass */
         sxi = (sxi + 1LL);
     }
@@ -256,31 +256,31 @@ __attribute__((hot)) bool write_elf_object(TrStr out_path, List_ptr* funcs, List
     /* pass */
     long long n_text = shstr->len;
     /* pass */
-    ByteBuf_cstr(shstr, _tr_str_lit(".text"));
+    ByteBuf_cstr(shstr, _tr_str_lit_len(".text", 5LL));
     /* pass */
     long long n_rodata = shstr->len;
     /* pass */
-    ByteBuf_cstr(shstr, _tr_str_lit(".rodata"));
+    ByteBuf_cstr(shstr, _tr_str_lit_len(".rodata", 7LL));
     /* pass */
     long long n_bss = shstr->len;
     /* pass */
-    ByteBuf_cstr(shstr, _tr_str_lit(".bss"));
+    ByteBuf_cstr(shstr, _tr_str_lit_len(".bss", 4LL));
     /* pass */
     long long n_rela = shstr->len;
     /* pass */
-    ByteBuf_cstr(shstr, _tr_str_lit(".rela.text"));
+    ByteBuf_cstr(shstr, _tr_str_lit_len(".rela.text", 10LL));
     /* pass */
     long long n_symtab = shstr->len;
     /* pass */
-    ByteBuf_cstr(shstr, _tr_str_lit(".symtab"));
+    ByteBuf_cstr(shstr, _tr_str_lit_len(".symtab", 7LL));
     /* pass */
     long long n_strtab = shstr->len;
     /* pass */
-    ByteBuf_cstr(shstr, _tr_str_lit(".strtab"));
+    ByteBuf_cstr(shstr, _tr_str_lit_len(".strtab", 7LL));
     /* pass */
     long long n_shstr = shstr->len;
     /* pass */
-    ByteBuf_cstr(shstr, _tr_str_lit(".shstrtab"));
+    ByteBuf_cstr(shstr, _tr_str_lit_len(".shstrtab", 9LL));
     /* pass */
     long long text_off = 64LL;
     /* pass */

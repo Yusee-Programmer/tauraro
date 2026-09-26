@@ -136,11 +136,11 @@ def main():
     w.add_entry("hello.txt", "hello world", 11)
     w.add_entry("empty.txt", "", 0)
     mut rep = "abcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabc"
-    mut rep_len = 103
+    mut rep_len = 99
     w.add_entry("repeat.txt", rep, rep_len)
     mut nested = "nested/dir/file.txt"
     mut nested_data = "content in a nested path"
-    w.add_entry(nested, nested_data, 25)
+    w.add_entry(nested, nested_data, 24)
 
     mut tar_bytes = w.finish()
     mut tar_len = w.total_len()

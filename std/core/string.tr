@@ -12,6 +12,13 @@ extern "C":
     def _tr_c_memcpy(dst: Pointer[char], src: Pointer[char], n: int)
     def _tr_strlen(s: str) -> int
     def _tr_str_lit(s: Pointer[char]) -> str
+    # Length-aware variants (take an explicit byte count instead of
+    # re-deriving one via strlen()) -- for THIS file's own bridge points
+    # into `str`, where an exact length is already known locally (self.len
+    # below), so the embedded-NUL truncation the plain forms above are
+    # still subject to doesn't need to happen here.
+    def _tr_str_lit_len(s: Pointer[char], blen: int) -> str
+    def _tr_str_wrap_len(s: Pointer[char], blen: int) -> str
 
 pub class StringObj:
     pub data: Pointer[char]
@@ -31,7 +38,7 @@ extend StringObj:
         return obj
 
     pub def as_str(self) -> str:
-        return _tr_str_lit(self.data)
+        return _tr_str_lit_len(self.data, self.len)
 
     pub def append(self, other: str):
         mut slen = _tr_strlen(other)
@@ -115,7 +122,7 @@ extend StringBuilder:
         mut sz = self.buf.len + 1
         mut out = _tr_checked_alloc(sz)
         _tr_c_memcpy(out, self.buf.data, sz)
-        return _tr_str_wrap(out)
+        return _tr_str_wrap_len(out, self.buf.len)
 
     pub def as_str(self) -> str:
         return self.buf.as_str()

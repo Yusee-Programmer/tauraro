@@ -9,7 +9,7 @@ __attribute__((malloc,returns_nonnull,hot)) AstType* AstType_init(TrStr name) {
     /* pass */
     t->args = (void*)List_ptr_new();
     /* pass */
-    t->from_param = _tr_str_lit("");
+    t->from_param = _tr_str_lit_len("", 0LL);
     /* pass */
     t->from_regions = (void*)List_TrStr_new();
     /* pass */
@@ -34,7 +34,7 @@ __attribute__((hot)) AstType* AstType_init_generic(TrStr name, AstType** arg) {
     /* pass */
     List_ptr_append(t->args, arg);
     /* pass */
-    t->from_param = _tr_str_lit("");
+    t->from_param = _tr_str_lit_len("", 0LL);
     /* pass */
     t->from_regions = (void*)List_TrStr_new();
     /* pass */
@@ -122,7 +122,7 @@ __attribute__((hot)) FStringPart* FStringPart_init_text(TrStr s, long long blen)
     /* pass */
     p->expr = (Expr*)(0LL);
     /* pass */
-    p->fmt_spec = _tr_str_lit("");
+    p->fmt_spec = _tr_str_lit_len("", 0LL);
     /* pass */
     return p;
 }
@@ -133,13 +133,13 @@ __attribute__((hot)) FStringPart* FStringPart_init_expr(Expr* e) {
     /* pass */
     p->is_expr = true;
     /* pass */
-    p->text = _tr_str_lit("");
+    p->text = _tr_str_lit_len("", 0LL);
     /* pass */
     p->text_len = 0LL;
     /* pass */
     p->expr = e;
     /* pass */
-    p->fmt_spec = _tr_str_lit("");
+    p->fmt_spec = _tr_str_lit_len("", 0LL);
     /* pass */
     return p;
 }
@@ -150,7 +150,7 @@ __attribute__((hot)) FStringPart* FStringPart_init_expr_fmt(Expr* e, TrStr spec)
     /* pass */
     p->is_expr = true;
     /* pass */
-    p->text = _tr_str_lit("");
+    p->text = _tr_str_lit_len("", 0LL);
     /* pass */
     p->text_len = 0LL;
     /* pass */
@@ -190,7 +190,7 @@ __attribute__((hot)) ChanSelectArm* ChanSelectArm_init_send(Expr* chan, Expr* va
     /* pass */
     a->val_expr = val;
     /* pass */
-    a->var_name = _tr_str_lit("");
+    a->var_name = _tr_str_lit_len("", 0LL);
     /* pass */
     a->timeout_ms = (Expr*)(0LL);
     /* pass */
@@ -209,7 +209,7 @@ __attribute__((hot)) ChanSelectArm* ChanSelectArm_init_timeout(Expr* ms, Block* 
     /* pass */
     a->val_expr = (Expr*)(0LL);
     /* pass */
-    a->var_name = _tr_str_lit("");
+    a->var_name = _tr_str_lit_len("", 0LL);
     /* pass */
     a->timeout_ms = ms;
     /* pass */
@@ -228,7 +228,7 @@ __attribute__((hot)) ChanSelectArm* ChanSelectArm_init_default(Block* body) {
     /* pass */
     a->val_expr = (Expr*)(0LL);
     /* pass */
-    a->var_name = _tr_str_lit("");
+    a->var_name = _tr_str_lit_len("", 0LL);
     /* pass */
     a->timeout_ms = (Expr*)(0LL);
     /* pass */
@@ -373,7 +373,7 @@ __attribute__((malloc,returns_nonnull,hot)) ClassDef* ClassDef_init(TrStr name) 
     /* pass */
     c->line = 0LL;
     /* pass */
-    c->docstring = _tr_str_lit("");
+    c->docstring = _tr_str_lit_len("", 0LL);
     /* pass */
     c->region_params = (void*)List_TrStr_new();
     /* pass */
@@ -443,7 +443,7 @@ __attribute__((malloc,returns_nonnull,hot)) ImportItem* ImportItem_init(TrStr na
     /* pass */
     it->name = _tr_str_retain(name);
     /* pass */
-    it->alias = _tr_str_lit("");
+    it->alias = _tr_str_lit_len("", 0LL);
     /* pass */
     return it;
 }

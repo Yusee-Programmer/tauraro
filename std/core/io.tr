@@ -13,6 +13,7 @@ extern "C":
     def _tr_c_malloc(size: int) -> Pointer[char]
     def _tr_c_free(ptr: Pointer[char])
     def _tr_str_wrap(s: Pointer[char]) -> str
+    def _tr_str_wrap_len(s: Pointer[char], blen: int) -> str
 
 pub def read_file(path: str) -> str:
     unsafe:
@@ -26,7 +27,7 @@ pub def read_file(path: str) -> str:
         _tr_c_fread(buffer as Pointer[void], 1, size, fp)
         buffer.offset(size).write('\0')
         _tr_c_fclose(fp)
-        return _tr_str_wrap(buffer)
+        return _tr_str_wrap_len(buffer, size)
 
 pub def file_exists(path: str) -> bool:
     unsafe:

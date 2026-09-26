@@ -29,6 +29,7 @@ extern "C":
     def _tr_c_malloc(size: int) -> Pointer[char]
     def _tr_c_memcpy(dst: Pointer[char], src: Pointer[char], n: int)
     def _tr_str_wrap(s: Pointer[char]) -> str
+    def _tr_str_wrap_len(s: Pointer[char], blen: int) -> str
 
 from std.core.vec import Vec
 from std.io.archive import ByteBuf
@@ -119,7 +120,7 @@ def _read_fixed_str(data: str, off: int, width: int) -> str:
         unsafe:
             _tr_c_memcpy(out, (data as Pointer[char]).offset(off), n)
     unsafe: out.offset(n).write('\0')
-    return _tr_str_wrap(out)
+    return _tr_str_wrap_len(out, n)
 
 def _tar_str_len(s: str) -> int:
     mut p = s as Pointer[char]
@@ -338,7 +339,7 @@ extend TarReader:
         unsafe:
             _tr_c_memcpy(out, (self.data as Pointer[char]).offset(e.data_off), e.size)
             out.offset(e.size).write('\0')
-        return _tr_str_wrap(out)
+        return _tr_str_wrap_len(out, e.size)
 
 def _is_zero_block(data: str, off: int) -> bool:
     mut p = data as Pointer[char]

@@ -110,6 +110,7 @@ extern "C":
     def _tr_c_free(ptr: Pointer[char])
     def _tr_c_memcpy(dst: Pointer[char], src: Pointer[char], n: int)
     def _tr_str_wrap(s: Pointer[char]) -> str
+    def _tr_str_wrap_len(s: Pointer[char], blen: int) -> str
     def _tr_strlen(s: str) -> int
 
 # ─── PVal tag constants ─────────────────────────────────────────────────────
@@ -306,7 +307,7 @@ extend _PBuf:
         if self.len > 0:
             unsafe: _tr_c_memcpy(out, self.data, self.len)
         unsafe: out.offset(self.len).write('\0')
-        return _tr_str_wrap(out)
+        return _tr_str_wrap_len(out, self.len)
 
     pub def free(self):
         _tr_c_free(self.data)
@@ -364,7 +365,7 @@ def _pk_rd_slice(data: str, off: int, n: int) -> str:
         unsafe:
             _tr_c_memcpy(out, (data as Pointer[char]).offset(off), n)
     unsafe: out.offset(n).write('\0')
-    return _tr_str_wrap(out)
+    return _tr_str_wrap_len(out, n)
 
 # ─── Encoder ────────────────────────────────────────────────────────────────
 

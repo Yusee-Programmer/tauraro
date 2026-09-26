@@ -641,11 +641,31 @@ static inline char* _tr_str_dup_owned(const char* s) {
     return r;
 }
 /* ── Refcounted string (TrStr): fat-pointer str representation ──
- * `data` points at the NUL-terminated bytes. `rc` points at a heap
- * refcount, or is NULL for literal/immortal strings — in that case
- * retain/release are no-ops, so string literals never need freeing. */
+ * `data` points at the bytes, always followed by a real NUL terminator
+ * (kept for C-interop convenience/`_tr_strz`) but `len` — not that
+ * terminator — is the authoritative byte count, so a string with an
+ * embedded \0 byte is no longer indistinguishable from one that ends
+ * there. `rc` points at a heap refcount, or is NULL for literal/immortal
+ * strings — in that case retain/release are no-ops, so string literals
+ * never need freeing.
+ *
+ * `len` is trustworthy for every TrStr constructed via this header's own
+ * constructors (`_tr_str_lit`, `_tr_str_wrap`, `_tr_str_new` and anything
+ * built on them). It is NOT yet threaded through every string-producing
+ * operation in this file: the ~20 char*-returning "utility" helpers
+ * (_tr_str_upper/lower/trim/slice/repeat/etc., tauraro_rt.h ~4307-4529)
+ * still compute their OWN output via NUL-terminated C loops internally,
+ * so if their INPUT already contains an embedded NUL, their output is
+ * still silently truncated at that byte before `_tr_str_wrap` ever gets a
+ * chance to record a length for it — `len` in that case faithfully
+ * describes the (already-truncated) output, not the original untruncated
+ * intent. Fixing those ~20 helpers individually to be length-aware is a
+ * separate, larger follow-up; not done here. Similarly, Dict/Set/TrMap
+ * (_dict_hash and friends) remain entirely char*+NUL-keyed — a str key
+ * with an embedded NUL still collides/misses exactly as before. */
 typedef struct {
     char* data;
+    size_t len;
     long* rc;
 } TrStr;
 
@@ -658,7 +678,18 @@ static inline TrStr _tr_str_lit_impl(const char* s) {
      * this at startup, unconditionally, on every invocation). Degrade to
      * the immortal empty string instead, same as every other "safe empty
      * default" in this runtime. */
-    TrStr t; t.data = s ? (char*)s : ""; t.rc = NULL; return t;
+    TrStr t; t.data = s ? (char*)s : ""; t.len = strlen(t.data); t.rc = NULL; return t;
+}
+/* Like _tr_str_lit_impl but for a caller that already knows the TRUE byte
+ * length independent of NUL-termination -- codegen for a Tauraro string
+ * literal always does (the compiler tracks a literal's real length even
+ * with an embedded \0 byte; see src/codegen/c.tr's `blen` threading). Using
+ * this instead of the strlen-based path is what makes `.len()`/`==`/etc. on
+ * a literal like "ab\0cd" agree with the compiler's own (correct) view of
+ * its length, rather than silently re-truncating at the first NUL the
+ * moment the literal becomes a runtime TrStr value. */
+static inline TrStr _tr_str_lit_len(const char* s, size_t len) {
+    TrStr t; t.data = s ? (char*)s : ""; t.len = s ? len : 0; t.rc = NULL; return t;
 }
 static inline TrStr _tr_str_lit_passthrough(TrStr s) { return s; }
 /* `_tr_str_lit(x)`: wrap a borrowed `const char*` into a TrStr (rc=NULL).
@@ -685,6 +716,7 @@ static inline TrStr _tr_str_new(size_t len) {
     TrStr t;
     t.data = (char*)_tr_checked_alloc(len + 1);
     t.data[len] = '\0';
+    t.len = len;
     t.rc = (long*)_tr_checked_alloc(sizeof(long));
     *t.rc = 1;
     _TR_MEMCOUNT_STR_INC();
@@ -714,6 +746,23 @@ static inline void _tr_str_release(TrStr s) {
 static inline TrStr _tr_str_wrap_impl(char* owned_data) {
     TrStr t;
     t.data = owned_data;
+    t.len = owned_data ? strlen(owned_data) : 0;
+    t.rc = (long*)_tr_checked_alloc(sizeof(long));
+    *t.rc = 1;
+    _TR_MEMCOUNT_STR_INC();
+    return t;
+}
+/* Like _tr_str_wrap_impl but for a caller that already knows the exact
+ * byte count independent of NUL-termination -- e.g. a socket/file read,
+ * a decompression/deserialization result, or an f-string's snprintf'd
+ * size, all of which compute a real byte count locally right before this
+ * call. Using strlen() there (the plain _tr_str_wrap path) would silently
+ * truncate any binary payload containing a 0x00 byte before its real end;
+ * this preserves it. */
+static inline TrStr _tr_str_wrap_len(char* owned_data, size_t len) {
+    TrStr t;
+    t.data = owned_data;
+    t.len = owned_data ? len : 0;
     t.rc = (long*)_tr_checked_alloc(sizeof(long));
     *t.rc = 1;
     _TR_MEMCOUNT_STR_INC();
@@ -4304,6 +4353,24 @@ static inline TrStr _tr_strx_concat(const char* a, const char* b) {
     memcpy(r.data, a, la); memcpy(r.data+la, b, lb);
     return r;
 }
+/* TrStr-taking variant: uses `.len` directly instead of strlen(), so `+`
+ * concatenation is correct for an operand with an embedded NUL byte. Kept
+ * SEPARATE from `_tr_strx_concat` rather than changing that function's
+ * signature: `_tr_strx_concat` is the compiled-in call EVERY existing
+ * compiler binary's own `+`-operator codegen already emits, so changing
+ * its signature would break every such binary's ability to compile
+ * anything that concatenates strings -- including using an old binary to
+ * self-host a NEW one (the new codegen text only exists once compilation
+ * already succeeds, which needs the OLD binary to succeed first). Adding a
+ * new function name sidesteps that bootstrapping chicken-and-egg problem,
+ * same reasoning as `_tr_str_eqv`/`_tr_str_lenv` above. */
+static inline TrStr _tr_strx_concatv(TrStr a, TrStr b) {
+    size_t la = a.data ? a.len : 0, lb = b.data ? b.len : 0;
+    TrStr r = _tr_str_new(la+lb);
+    if (la) memcpy(r.data, a.data, la);
+    if (lb) memcpy(r.data+la, b.data, lb);
+    return r;
+}
 static char* _tr_str_upper(const char* s) {
     if (!s) return _tr_empty_heap_str();
     char* r=(char*)TAURARO_ALLOC(strlen(s)+1);
@@ -4431,12 +4498,38 @@ static inline char* _tr__trstr_s(TrStr x)            { return x.data; }
 static long long _tr_str_to_int(const char* s) { return s ? strtoll(s,NULL,10) : 0LL; }
 static double    _tr_str_to_float(const char* s){ return s ? strtod(s,NULL) : 0.0; }
 _TR_XLINK long long _tr_strlen(char* s)     { return s ? (long long)strlen(s) : 0LL; }
+/* TrStr-taking variant of the above, for str METHOD dispatch (`s.len()`)
+ * specifically: reads `.len` directly instead of re-scanning `.data` for a
+ * NUL terminator, so it's correct for a string with an embedded NUL byte.
+ * Kept separate from `_tr_strlen` for the same reason `_tr_str_eqv` is kept
+ * separate from `_tr_str_eq`: `_tr_strlen` is a widely-relied-upon extern
+ * with an established `str`-param-means-narrowed-`char*` calling
+ * convention (~20 std/ files declare `def _tr_strlen(s: str) -> int` and
+ * call it directly) that changing its signature would break. */
+_TR_XLINK long long _tr_str_lenv(TrStr s)   { return s.data ? (long long)s.len : 0LL; }
 
 /* ── String equality ─────────────────────────────────────────────────── */
 _TR_XLINK bool _tr_str_eq(const char* a, const char* b) {
     if (!a && !b) return true;
     if (!a || !b) return false;
     return strcmp(a, b) == 0;
+}
+/* TrStr-taking, length-bounded variant: compares `.len` first (cheap
+ * short-circuit AND the thing that makes this correct for a string with an
+ * embedded NUL byte, unlike `_tr_str_eq`/strcmp which stop at the first one
+ * in either operand). Kept as a SEPARATE function rather than changing
+ * `_tr_str_eq`'s own signature: unresolved (no declared Tauraro signature)
+ * extern calls to `_tr_str_eq` -- e.g. src/main.tr's own `_tr_str_eq(cc,
+ * "cc")` -- get their `str` arguments auto-narrowed to `_tr_strz(...)`
+ * (plain `char*`) by codegen's generic call path, so changing the existing
+ * function's parameter types would silently break that call site's C
+ * output. This one is only ever emitted by codegen sites that pass a whole
+ * TrStr on purpose. */
+_TR_XLINK bool _tr_str_eqv(TrStr a, TrStr b) {
+    if (!a.data && !b.data) return true;
+    if (!a.data || !b.data) return false;
+    if (a.len != b.len) return false;
+    return memcmp(a.data, b.data, a.len) == 0;
 }
 
 /* ── String slice (alias for _tr_str_substring) ─────────────────────── */
@@ -5415,18 +5508,21 @@ static inline TrStr _tr_strx_join(List_str* parts, const char* sep) {
     return out;
 }
 
-/* List_TrStr-backed join, for List[str].join() under the TrStr migration (#54). */
+/* List_TrStr-backed join, for List[str].join() under the TrStr migration (#54).
+ * Uses each element's own `.len` (not strlen(.data)) so a joined element
+ * with an embedded NUL byte contributes its full content, not just the
+ * prefix before that byte. */
 static inline TrStr _tr_strx_join_trstr(List_TrStr* parts, const char* sep) {
     if (!parts || parts->len == 0) return _tr_str_new(0);
     size_t total = 0, seplen = sep ? strlen(sep) : 0;
     for (size_t i = 0; i < parts->len; i++) {
-        if (parts->data[i].data) total += strlen(parts->data[i].data);
+        if (parts->data[i].data) total += parts->data[i].len;
         if (i + 1 < parts->len) total += seplen;
     }
     TrStr out = _tr_str_new(total);
     char* dst = out.data;
     for (size_t i = 0; i < parts->len; i++) {
-        if (parts->data[i].data) { size_t l = strlen(parts->data[i].data); memcpy(dst, parts->data[i].data, l); dst += l; }
+        if (parts->data[i].data) { size_t l = parts->data[i].len; memcpy(dst, parts->data[i].data, l); dst += l; }
         if (i + 1 < parts->len && seplen) { memcpy(dst, sep, seplen); dst += seplen; }
     }
     return out;
@@ -5463,18 +5559,20 @@ static inline List_TrStr* _tr_str_chars(const char* s) {
     return l;
 }
 static inline List_TrStr* _tr_str_words(const char* s) { return _tr_str_split(s, " "); }
-/* TrStr-elements join: build "sep"-joined string from a List_TrStr*. */
+/* TrStr-elements join: build "sep"-joined string from a List_TrStr*.
+ * Uses each element's own `.len` for the same embedded-NUL-safety reason
+ * as _tr_strx_join_trstr above (these two are near-duplicates). */
 static inline TrStr _tr_trstr_join(List_TrStr* parts, const char* sep) {
     if (!parts || parts->len == 0) return _tr_str_new(0);
     size_t total = 0, seplen = sep ? strlen(sep) : 0;
     for (size_t i = 0; i < parts->len; i++) {
-        if (parts->data[i].data) total += strlen(parts->data[i].data);
+        if (parts->data[i].data) total += parts->data[i].len;
         if (i + 1 < parts->len) total += seplen;
     }
     TrStr out = _tr_str_new(total);
     char* dst = out.data;
     for (size_t i = 0; i < parts->len; i++) {
-        if (parts->data[i].data) { size_t l = strlen(parts->data[i].data); memcpy(dst, parts->data[i].data, l); dst += l; }
+        if (parts->data[i].data) { size_t l = parts->data[i].len; memcpy(dst, parts->data[i].data, l); dst += l; }
         if (i + 1 < parts->len && seplen) { memcpy(dst, sep, seplen); dst += seplen; }
     }
     return out;
