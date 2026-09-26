@@ -24,9 +24,9 @@ __attribute__((malloc,returns_nonnull,hot)) HirMatchArm* HirMatchArm_init(Patter
     /* pass */
     a->pat = pat;
     /* pass */
-    HirBlock* _cltmp_t249 = _tr_obj_retain(body);
+    HirBlock* _cltmp_t248 = _tr_obj_retain(body);
     _tr_obj_release(a->body, _trdrop_HirBlock);
-    a->body = _cltmp_t249;
+    a->body = _cltmp_t248;
     /* pass */
     a->guard = (HirExpr*)(0LL);
     /* pass */
@@ -101,48 +101,48 @@ __attribute__((hot)) AstType* hir_expr_type(HirExpr* e) {
         return AstType_init(_tr_str_lit_len("void", 4LL));
     }
     /* pass */
-    __auto_type _t250 = (*e);
-    if (_t250.tag == HirExpr_ELitInt) {
-        __auto_type ty = _t250.data.ELitInt.ty;
+    __auto_type _t249 = (*e);
+    if (_t249.tag == HirExpr_ELitInt) {
+        __auto_type ty = _t249.data.ELitInt.ty;
         return ty;
-    } else if (_t250.tag == HirExpr_ELitFloat) {
-        __auto_type ty = _t250.data.ELitFloat.ty;
+    } else if (_t249.tag == HirExpr_ELitFloat) {
+        __auto_type ty = _t249.data.ELitFloat.ty;
         return ty;
-    } else if (_t250.tag == HirExpr_ELitStr) {
-        __auto_type ty = _t250.data.ELitStr.ty;
+    } else if (_t249.tag == HirExpr_ELitStr) {
+        __auto_type ty = _t249.data.ELitStr.ty;
         return ty;
-    } else if (_t250.tag == HirExpr_ELitBytes) {
-        __auto_type ty = _t250.data.ELitBytes.ty;
+    } else if (_t249.tag == HirExpr_ELitBytes) {
+        __auto_type ty = _t249.data.ELitBytes.ty;
         return ty;
-    } else if (_t250.tag == HirExpr_ERawStr) {
-        __auto_type ty = _t250.data.ERawStr.ty;
+    } else if (_t249.tag == HirExpr_ERawStr) {
+        __auto_type ty = _t249.data.ERawStr.ty;
         return ty;
-    } else if (_t250.tag == HirExpr_ELitChar) {
-        __auto_type ty = _t250.data.ELitChar.ty;
+    } else if (_t249.tag == HirExpr_ELitChar) {
+        __auto_type ty = _t249.data.ELitChar.ty;
         return ty;
-    } else if (_t250.tag == HirExpr_ELitBool) {
-        __auto_type ty = _t250.data.ELitBool.ty;
+    } else if (_t249.tag == HirExpr_ELitBool) {
+        __auto_type ty = _t249.data.ELitBool.ty;
         return ty;
-    } else if (_t250.tag == HirExpr_ELitNone) {
-        __auto_type ty = _t250.data.ELitNone.ty;
+    } else if (_t249.tag == HirExpr_ELitNone) {
+        __auto_type ty = _t249.data.ELitNone.ty;
         return ty;
-    } else if (_t250.tag == HirExpr_EIdent) {
-        __auto_type ty = _t250.data.EIdent.ty;
+    } else if (_t249.tag == HirExpr_EIdent) {
+        __auto_type ty = _t249.data.EIdent.ty;
         return ty;
-    } else if (_t250.tag == HirExpr_EBinOp) {
-        __auto_type ty = _t250.data.EBinOp.ty;
+    } else if (_t249.tag == HirExpr_EBinOp) {
+        __auto_type ty = _t249.data.EBinOp.ty;
         return ty;
-    } else if (_t250.tag == HirExpr_EUnaryOp) {
-        __auto_type ty = _t250.data.EUnaryOp.ty;
+    } else if (_t249.tag == HirExpr_EUnaryOp) {
+        __auto_type ty = _t249.data.EUnaryOp.ty;
         return ty;
-    } else if (_t250.tag == HirExpr_ECall) {
-        __auto_type ty = _t250.data.ECall.ty;
+    } else if (_t249.tag == HirExpr_ECall) {
+        __auto_type ty = _t249.data.ECall.ty;
         return ty;
-    } else if (_t250.tag == HirExpr_EMethodCall) {
-        __auto_type ty = _t250.data.EMethodCall.ty;
+    } else if (_t249.tag == HirExpr_EMethodCall) {
+        __auto_type ty = _t249.data.EMethodCall.ty;
         return ty;
-    } else if (_t250.tag == HirExpr_EPropAccess) {
-        __auto_type ty = _t250.data.EPropAccess.ty;
+    } else if (_t249.tag == HirExpr_EPropAccess) {
+        __auto_type ty = _t249.data.EPropAccess.ty;
         /* pass */
         if ((_tr_str_eqv((ty->name), (_tr_str_lit_len("Bits", 4LL))) && (ty->args->len > 0LL))) {
             /* pass */
@@ -150,21 +150,21 @@ __attribute__((hot)) AstType* hir_expr_type(HirExpr* e) {
         }
         /* pass */
         return ty;
-    } else if (_t250.tag == HirExpr_EIndex) {
-        __auto_type ty = _t250.data.EIndex.ty;
+    } else if (_t249.tag == HirExpr_EIndex) {
+        __auto_type ty = _t249.data.EIndex.ty;
         return ty;
-    } else if (_t250.tag == HirExpr_ECast) {
-        __auto_type ty = _t250.data.ECast.target_ty;
+    } else if (_t249.tag == HirExpr_ECast) {
+        __auto_type ty = _t249.data.ECast.target_ty;
         return ty;
-    } else if (_t250.tag == HirExpr_EFString) {
-        __auto_type ty = _t250.data.EFString.ty;
+    } else if (_t249.tag == HirExpr_EFString) {
+        __auto_type ty = _t249.data.EFString.ty;
         return ty;
-    } else if (_t250.tag == HirExpr_ETryExpr) {
-        __auto_type ty = _t250.data.ETryExpr.ty;
+    } else if (_t249.tag == HirExpr_ETryExpr) {
+        __auto_type ty = _t249.data.ETryExpr.ty;
         return ty;
-    } else if (_t250.tag == HirExpr_EClosure) {
-        __auto_type _cl_ps = _t250.data.EClosure.params;
-__auto_type _cl_ret = _t250.data.EClosure.ret_ty;
+    } else if (_t249.tag == HirExpr_EClosure) {
+        __auto_type _cl_ps = _t249.data.EClosure.params;
+__auto_type _cl_ret = _t249.data.EClosure.ret_ty;
         /* pass */
         AstType* _clt = AstType_init(_tr_str_lit_len("def", 3LL));
         /* pass */
@@ -192,68 +192,68 @@ __auto_type _cl_ret = _t250.data.EClosure.ret_ty;
         List_ptr_append(_clt->args, _clrp);
         /* pass */
         return _clt;
-    } else if (_t250.tag == HirExpr_ESuperMethodCall) {
-        __auto_type ty = _t250.data.ESuperMethodCall.ty;
+    } else if (_t249.tag == HirExpr_ESuperMethodCall) {
+        __auto_type ty = _t249.data.ESuperMethodCall.ty;
         return ty;
-    } else if (_t250.tag == HirExpr_ESuperPropAccess) {
-        __auto_type ty = _t250.data.ESuperPropAccess.ty;
+    } else if (_t249.tag == HirExpr_ESuperPropAccess) {
+        __auto_type ty = _t249.data.ESuperPropAccess.ty;
         return ty;
-    } else if (_t250.tag == HirExpr_EList) {
-        __auto_type ty = _t250.data.EList.ty;
+    } else if (_t249.tag == HirExpr_EList) {
+        __auto_type ty = _t249.data.EList.ty;
         return ty;
-    } else if (_t250.tag == HirExpr_ESet) {
-        __auto_type ty = _t250.data.ESet.ty;
+    } else if (_t249.tag == HirExpr_ESet) {
+        __auto_type ty = _t249.data.ESet.ty;
         return ty;
-    } else if (_t250.tag == HirExpr_EDict) {
-        __auto_type ty = _t250.data.EDict.ty;
+    } else if (_t249.tag == HirExpr_EDict) {
+        __auto_type ty = _t249.data.EDict.ty;
         return ty;
-    } else if (_t250.tag == HirExpr_ETuple) {
-        __auto_type ty = _t250.data.ETuple.ty;
+    } else if (_t249.tag == HirExpr_ETuple) {
+        __auto_type ty = _t249.data.ETuple.ty;
         return ty;
-    } else if (_t250.tag == HirExpr_EListComp) {
-        __auto_type ty = _t250.data.EListComp.ty;
+    } else if (_t249.tag == HirExpr_EListComp) {
+        __auto_type ty = _t249.data.EListComp.ty;
         return ty;
-    } else if (_t250.tag == HirExpr_EGeneratorExpr) {
-        __auto_type ty = _t250.data.EGeneratorExpr.ty;
+    } else if (_t249.tag == HirExpr_EGeneratorExpr) {
+        __auto_type ty = _t249.data.EGeneratorExpr.ty;
         return ty;
-    } else if (_t250.tag == HirExpr_ESlice) {
-        __auto_type ty = _t250.data.ESlice.ty;
+    } else if (_t249.tag == HirExpr_ESlice) {
+        __auto_type ty = _t249.data.ESlice.ty;
         return ty;
-    } else if (_t250.tag == HirExpr_EAwait) {
-        __auto_type ty = _t250.data.EAwait.ty;
+    } else if (_t249.tag == HirExpr_EAwait) {
+        __auto_type ty = _t249.data.EAwait.ty;
         return ty;
-    } else if (_t250.tag == HirExpr_EAwaitTimeout) {
-        __auto_type ty = _t250.data.EAwaitTimeout.ty;
+    } else if (_t249.tag == HirExpr_EAwaitTimeout) {
+        __auto_type ty = _t249.data.EAwaitTimeout.ty;
         return ty;
-    } else if (_t250.tag == HirExpr_EYield) {
-        __auto_type ty = _t250.data.EYield.ty;
+    } else if (_t249.tag == HirExpr_EYield) {
+        __auto_type ty = _t249.data.EYield.ty;
         return ty;
-    } else if (_t250.tag == HirExpr_ETry) {
-        __auto_type ty = _t250.data.ETry.ty;
+    } else if (_t249.tag == HirExpr_ETry) {
+        __auto_type ty = _t249.data.ETry.ty;
         return ty;
-    } else if (_t250.tag == HirExpr_ERange) {
-        __auto_type ty = _t250.data.ERange.ty;
+    } else if (_t249.tag == HirExpr_ERange) {
+        __auto_type ty = _t249.data.ERange.ty;
         return ty;
-    } else if (_t250.tag == HirExpr_ESizeOf) {
-        __auto_type ty = _t250.data.ESizeOf.ty;
+    } else if (_t249.tag == HirExpr_ESizeOf) {
+        __auto_type ty = _t249.data.ESizeOf.ty;
         return ty;
-    } else if (_t250.tag == HirExpr_EIfElse) {
-        __auto_type ty = _t250.data.EIfElse.ty;
+    } else if (_t249.tag == HirExpr_EIfElse) {
+        __auto_type ty = _t249.data.EIfElse.ty;
         return ty;
-    } else if (_t250.tag == HirExpr_EDo) {
-        __auto_type ty = _t250.data.EDo.ty;
+    } else if (_t249.tag == HirExpr_EDo) {
+        __auto_type ty = _t249.data.EDo.ty;
         return ty;
-    } else if (_t250.tag == HirExpr_EMatchExpr) {
-        __auto_type ty = _t250.data.EMatchExpr.ty;
+    } else if (_t249.tag == HirExpr_EMatchExpr) {
+        __auto_type ty = _t249.data.EMatchExpr.ty;
         return ty;
-    } else if (_t250.tag == HirExpr_ELoop) {
-        __auto_type ty = _t250.data.ELoop.ty;
+    } else if (_t249.tag == HirExpr_ELoop) {
+        __auto_type ty = _t249.data.ELoop.ty;
         return ty;
-    } else if (_t250.tag == HirExpr_EWhileExpr) {
-        __auto_type ty = _t250.data.EWhileExpr.ty;
+    } else if (_t249.tag == HirExpr_EWhileExpr) {
+        __auto_type ty = _t249.data.EWhileExpr.ty;
         return ty;
     } else if (1) {
-        __auto_type _ = _t250;
+        __auto_type _ = _t249;
         /* pass */
         /* pass */
     }

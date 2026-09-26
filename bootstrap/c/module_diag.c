@@ -108,16 +108,16 @@ __attribute__((hot)) TrStr repeat_char(TrStr ch, long long n) {
 
 __attribute__((hot)) TrStr first_quoted(TrStr msg) {
     /* pass */
-    long long a = _tr_str_index_of((msg).data, (_tr_str_lit_len("'", 1LL)).data);
+    long long a = _tr_str_index_ofv((msg), (_tr_str_lit_len("'", 1LL)));
     /* pass */
     if ((a < 0LL)) {
         /* pass */
         return _tr_str_lit_len("", 0LL);
     }
     /* pass */
-    TrStr rest = _tr_str_wrap(_tr_str_slice((msg).data, (a + 1LL), _tr_str_lenv((msg))));
+    TrStr rest = _tr_str_slicev((msg), (a + 1LL), _tr_str_lenv((msg)));
     /* pass */
-    long long b = _tr_str_index_of((rest).data, (_tr_str_lit_len("'", 1LL)).data);
+    long long b = _tr_str_index_ofv((rest), (_tr_str_lit_len("'", 1LL)));
     /* pass */
     if ((b < 0LL)) {
         /* pass */
@@ -125,7 +125,7 @@ __attribute__((hot)) TrStr first_quoted(TrStr msg) {
         return _tr_str_lit_len("", 0LL);
     }
     /* pass */
-    return _tr_str_wrap(_tr_str_slice((rest).data, 0LL, b));
+    return _tr_str_slicev((rest), 0LL, b);
 }
 
 __attribute__((hot)) long long col_of(TrStr line, TrStr needle) {
@@ -135,7 +135,7 @@ __attribute__((hot)) long long col_of(TrStr line, TrStr needle) {
         return 0LL;
     }
     /* pass */
-    long long idx = _tr_str_index_of((line).data, (needle).data);
+    long long idx = _tr_str_index_ofv((line), (needle));
     /* pass */
     if ((idx < 0LL)) {
         /* pass */
@@ -147,25 +147,25 @@ __attribute__((hot)) long long col_of(TrStr line, TrStr needle) {
 
 __attribute__((hot)) TrStr loc_file(TrStr head) {
     /* pass */
-    long long last = _tr_str_last_index_of((head).data, (_tr_str_lit_len(":", 1LL)).data);
+    long long last = _tr_str_last_index_ofv((head), (_tr_str_lit_len(":", 1LL)));
     /* pass */
     if ((last < 0LL)) {
         /* pass */
         return _tr_str_lit_len("", 0LL);
     }
     /* pass */
-    return _tr_str_wrap(_tr_str_slice((head).data, 0LL, last));
+    return _tr_str_slicev((head), 0LL, last);
 }
 
 __attribute__((hot)) long long loc_line(TrStr head) {
     /* pass */
-    long long last = _tr_str_last_index_of((head).data, (_tr_str_lit_len(":", 1LL)).data);
+    long long last = _tr_str_last_index_ofv((head), (_tr_str_lit_len(":", 1LL)));
     /* pass */
     TrStr numstr = _tr_str_retain(head);
     /* pass */
     if ((last >= 0LL)) {
         /* pass */
-        TrStr _strtmp_t21 = _tr_str_wrap(_tr_str_slice((head).data, (last + 1LL), _tr_str_lenv((head))));
+        TrStr _strtmp_t21 = _tr_str_slicev((head), (last + 1LL), _tr_str_lenv((head)));
         _tr_str_release(numstr);
         numstr = _strtmp_t21;
     }

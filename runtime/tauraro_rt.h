@@ -5977,9 +5977,19 @@ static int _tr_test_report(void) {
 }
 
 #ifndef TAURARO_NO_RT_HELPERS
-/* When std library is compiled in, it provides its own StringBuilder and
-   file I/O — suppress the lightweight rt.h fallback implementations. */
-#ifndef TAURARO_STD_LIB
+/* When std library is compiled in, it provides its own StringBuilder and/or
+ * file I/O — suppress the lightweight rt.h fallback implementations. These
+ * are two INDEPENDENT toggles (not one combined `TAURARO_STD_LIB`): a
+ * program can have its own `read_file`/`write_file` (e.g. from std.core.io)
+ * without ever importing std.core.string's `StringBuilder` class (this is
+ * exactly what happens self-hosting the compiler itself — src/codegen/c.tr's
+ * own StringBuilder-typed fields rely on THIS fallback, never importing
+ * std.core.string, while other parts of the same unity build DO define
+ * write_file). A single combined macro suppressed the StringBuilder fallback
+ * even when no program-provided StringBuilder class existed to replace it,
+ * leaving `StringBuilder` an undefined type wherever a class field
+ * referenced it -- a real, confirmed self-hosting break.
+ */
 /* ── StringBuilder (suppressed when std.core.string provides its own) ───── */
 #ifndef TAURARO_RT_NO_STRINGBUILDER
 /* OOP layout — matches std.core.string.StringBuilder: buf is StringObj* so that
@@ -5995,7 +6005,11 @@ static inline StringObj* StringObj_init(char* s) {
     obj->data[slen] = '\0';
     return obj;
 }
-static inline char* StringObj_as_str(StringObj* obj) { return obj->data; }
+/* -> TrStr (not char*): matches std.core.string.StringObj.as_str()'s `-> str`
+ * return type, which the codegen calling this fallback already assumes. A
+ * borrow (not a wrap) of obj->data, exactly like the real class's own
+ * `_tr_str_lit_len(self.data, self.len)`. */
+static inline TrStr StringObj_as_str(StringObj* obj) { return _tr_str_lit_len(obj->data, (size_t)obj->len); }
 typedef struct core_string_StringBuilder { StringObj* buf; } core_string_StringBuilder;
 typedef core_string_StringBuilder StringBuilder;
 
@@ -6008,14 +6022,18 @@ static inline StringBuilder* StringBuilder_init(long long cap) {
     sb->buf->data[0] = '\0';
     return sb;
 }
-static inline void StringBuilder_append(StringBuilder* sb, char* s) {
-    long long slen = (long long)strlen(s);
+/* TrStr param (not char*): matches std.core.string.StringBuilder.append()'s
+ * `(self, s: str)`, which the codegen calling this fallback already
+ * assumes -- and length-aware (s.len, not strlen) for the same embedded-
+ * NUL-safety reason as this session's std.core.string.StringObj.append fix. */
+static inline void StringBuilder_append(StringBuilder* sb, TrStr s) {
+    long long slen = s.data ? (long long)s.len : 0;
     if (slen <= 0) return;
     if (sb->buf->len + slen >= sb->buf->capacity) {
         sb->buf->capacity = (sb->buf->len + slen) * 2 + 8;
         sb->buf->data = (char*)TAURARO_REALLOC(sb->buf->data, (size_t)sb->buf->capacity);
     }
-    memcpy(sb->buf->data + sb->buf->len, s, (size_t)slen);
+    memcpy(sb->buf->data + sb->buf->len, s.data, (size_t)slen);
     sb->buf->len += slen;
     sb->buf->data[sb->buf->len] = '\0';
 }
@@ -6030,20 +6048,25 @@ static inline void StringBuilder_append_char(StringBuilder* sb, long long c) {
 static inline StringObj* StringBuilder_to_string(StringBuilder* sb) {
     return StringObj_init(sb->buf->data);
 }
-static inline char* StringBuilder_to_owned(StringBuilder* sb) {
+/* -> TrStr (not char*): matches std.core.string.StringBuilder.to_owned()'s
+ * `-> str` return type, which the codegen calling this fallback already
+ * assumes (e.g. Token_ctor_StrLit(StringBuilder_to_owned(sb), ...) expects
+ * a TrStr argument directly). Fresh, owned copy via _tr_str_wrap_len, same
+ * shape as the real class's own to_owned(). */
+static inline TrStr StringBuilder_to_owned(StringBuilder* sb) {
     long long sz = sb->buf->len + 1;
     char* out = (char*)_tr_checked_alloc(sz);
     memcpy(out, sb->buf->data, sz);
-    return out;
+    return _tr_str_wrap_len(out, (size_t)sb->buf->len);
 }
-static inline char* StringBuilder_as_str(StringBuilder* sb) { return sb->buf->data; }
+static inline TrStr StringBuilder_as_str(StringBuilder* sb) { return StringObj_as_str(sb->buf); }
 static inline void StringBuilder_append_int(StringBuilder* sb, long long n) {
-    char tmp[32]; snprintf(tmp, sizeof(tmp), "%lld", n);
-    StringBuilder_append(sb, tmp);
+    char tmp[32]; int tl = snprintf(tmp, sizeof(tmp), "%lld", n);
+    StringBuilder_append(sb, _tr_str_lit_len(tmp, (size_t)tl));
 }
 static inline void StringBuilder_append_float(StringBuilder* sb, double f) {
-    char tmp[32]; snprintf(tmp, sizeof(tmp), "%g", f);
-    StringBuilder_append(sb, tmp);
+    char tmp[32]; int tl = snprintf(tmp, sizeof(tmp), "%g", f);
+    StringBuilder_append(sb, _tr_str_lit_len(tmp, (size_t)tl));
 }
 static inline long long StringBuilder_length(StringBuilder* sb) { return sb->buf->len; }
 static inline void StringBuilder_clear(StringBuilder* sb) {
@@ -6055,48 +6078,56 @@ static inline void StringBuilder_free(StringBuilder* sb) {
 #endif /* TAURARO_RT_NO_STRINGBUILDER */
 
 /* ── File I/O helpers ──────── std-tier only (FILE/fopen) ────────────── */
+/* Suppressed independently of StringBuilder above (see the combined-macro
+ * note at the top of this section) when the program provides its own
+ * read_file/write_file (e.g. from std.core.io). */
+#ifndef TAURARO_RT_NO_FILEIO
 #ifndef TAURARO_BARE
-static inline char* read_file(char* path) {
-    /* Owned `-> str` (success path allocs `buf`); error paths must also be heap. */
-    if (!path || !*path) return _tr_empty_heap_str();
-    FILE* f = fopen(path, "rb");
-    if (!f) return _tr_empty_heap_str();
+/* TrStr param/return (not char*): matches std.core.io/std.io.file's own
+ * `read_file(path: str) -> str` etc, which the codegen calling this
+ * fallback already assumes (this fallback was written before TrStr existed
+ * and was never actually exercised until TAURARO_NO_RT_HELPERS stopped
+ * being passed unconditionally on every compile -- see the note above). */
+static inline TrStr read_file(TrStr path) {
+    const char* p = path.data;
+    if (!p || !*p) return _tr_str_new(0);
+    FILE* f = fopen(p, "rb");
+    if (!f) return _tr_str_new(0);
     fseek(f, 0, SEEK_END); long sz = ftell(f); rewind(f);
-    if (sz < 0) { fclose(f); return _tr_empty_heap_str(); }
+    if (sz < 0) { fclose(f); return _tr_str_new(0); }
     char* buf = (char*)_tr_checked_alloc((size_t)sz + 1);
     size_t rd = fread(buf, 1, (size_t)sz, f); fclose(f);
-    buf[rd] = '\0';
-    return buf;
+    return _tr_str_wrap_len(buf, rd);
 }
-static inline bool write_file(char* path, char* content) {
-    if (!path || !content) return false;
-    FILE* f = fopen(path, "wb");
+static inline bool write_file(TrStr path, TrStr content) {
+    if (!path.data || !content.data) return false;
+    FILE* f = fopen(path.data, "wb");
     if (!f) return false;
-    fwrite(content, 1, strlen(content), f);
+    fwrite(content.data, 1, content.len, f);
     fclose(f);
     return true;
 }
-static inline bool append_file(char* path, char* content) {
-    if (!path || !content) return false;
-    FILE* f = fopen(path, "ab");
+static inline bool append_file(TrStr path, TrStr content) {
+    if (!path.data || !content.data) return false;
+    FILE* f = fopen(path.data, "ab");
     if (!f) return false;
-    fwrite(content, 1, strlen(content), f);
+    fwrite(content.data, 1, content.len, f);
     fclose(f);
     return true;
 }
-static inline bool file_exists(char* path) {
-    if (!path || !*path) return false;
-    FILE* f = fopen(path, "rb");
+static inline bool file_exists(TrStr path) {
+    if (!path.data || !*path.data) return false;
+    FILE* f = fopen(path.data, "rb");
     if (!f) return false;
     fclose(f); return true;
 }
 #else
-static inline char* read_file(char* path) { (void)path; return _tr_empty_heap_str(); }
-static inline bool write_file(char* path, char* content) { (void)path; (void)content; return false; }
-static inline bool append_file(char* path, char* content) { (void)path; (void)content; return false; }
-static inline bool file_exists(char* path) { (void)path; return false; }
+static inline TrStr read_file(TrStr path) { (void)path; return _tr_str_new(0); }
+static inline bool write_file(TrStr path, TrStr content) { (void)path; (void)content; return false; }
+static inline bool append_file(TrStr path, TrStr content) { (void)path; (void)content; return false; }
+static inline bool file_exists(TrStr path) { (void)path; return false; }
 #endif
-#endif /* TAURARO_STD_LIB */
+#endif /* TAURARO_RT_NO_FILEIO */
 #endif /* TAURARO_NO_RT_HELPERS */
 
 static inline char* _tr_c_strdup(char* s) {

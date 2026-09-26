@@ -9,7 +9,7 @@
 #
 # @trusted: systems tool — uses the C-string tokenizer pattern from the compiler's own lexer.
 
-from core.io import read_file, write_file, file_exists
+from std.core.io import read_file, write_file, file_exists
 from core.string import StringBuilder
 
 # ── C tokenizer ────────────────────────────────────────────────────────────────

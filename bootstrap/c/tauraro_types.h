@@ -1,7 +1,14 @@
 #pragma once
-#define TAURARO_STD_LIB
 #define TAURARO_RT_NO_STRINGBUILDER
+#define TAURARO_RT_NO_FILEIO
 #include "tauraro_rt.h"
+
+#ifndef TAURARO_RT_NO_STRINGBUILDER
+typedef struct core_string_StringObj core_string_StringObj;
+typedef core_string_StringObj StringObj;
+typedef struct core_string_StringBuilder core_string_StringBuilder;
+typedef core_string_StringBuilder StringBuilder;
+#endif
 
 typedef struct StringObj StringObj;
 typedef struct StringBuilder StringBuilder;

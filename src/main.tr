@@ -2,7 +2,7 @@
 # compiler/src/main.tr - CLI driver, module resolver, and linker invocation.
 # Implements the full Tauraro compiler command-line interface.
 
-from core.io import read_file, write_file, file_exists
+from std.core.io import read_file, write_file, file_exists
 from core.vec import Vec
 from core.map import Map
 from core.string import StringObj, StringBuilder
@@ -1115,7 +1115,7 @@ pub def compile_all_c(c_files: Vec[str], exe_path: str, inc_dir: str,
     mut overflow_flag = ""
     if opt_level != "3" and opt_level != "s":
         overflow_flag = " -ftrapv"
-    mut cmd = cc + " -O" + opt_level + overflow_flag + static_flag + native_flags + cross_flags + warn_flags + " -DTAURARO_NO_RT_HELPERS \"-I" + inc_dir + "\" -o \"" + exe_path + "\""
+    mut cmd = cc + " -O" + opt_level + overflow_flag + static_flag + native_flags + cross_flags + warn_flags + " \"-I" + inc_dir + "\" -o \"" + exe_path + "\""
     mut i = 0
     while i < c_files.len:
         cmd = cmd + " \"" + c_files.get(i) + "\""
@@ -1235,7 +1235,7 @@ pub def compile_all_c_incremental(c_files: Vec[str], needs: Vec[bool], exe_path:
     mut lto_flag = ""
     if use_lto: lto_flag = " -flto"
     # Flags common to both per-module `-c` compiles and the final link.
-    mut common = " -O" + opt_level + overflow_flag + static_flag + native_flags + cross_flags + warn_flags + dbg + pic + lto_flag + " -DTAURARO_NO_RT_HELPERS \"-I" + inc_dir + "\""
+    mut common = " -O" + opt_level + overflow_flag + static_flag + native_flags + cross_flags + warn_flags + dbg + pic + lto_flag + " \"-I" + inc_dir + "\""
 
     # -- 1. Compile each changed module to its .o ------------------------------
     mut o_files = Vec[str].init(c_files.len)
@@ -1347,7 +1347,7 @@ pub def compile_wasm_incremental(c_files: Vec[str], needs: Vec[bool], exe_path: 
     # "function import requires a callable" for __ubsan_handle_type_mismatch_v1
     # and __multi3, imports a simpler probe program never pulled in.
     mut wasm_flags = " -nostdlib --no-standard-libraries -fno-sanitize=undefined -DTAURARO_WASM=1 -DTAURARO_NO_OS=1"
-    mut common = " -O" + opt_level + wasm_flags + warn_flags + " -DTAURARO_NO_RT_HELPERS \"-I" + inc_dir + "\""
+    mut common = " -O" + opt_level + wasm_flags + warn_flags + " \"-I" + inc_dir + "\""
 
     # -- 1. Compile each changed module to its .o (cache reused across builds) --
     mut o_files = Vec[str].init(c_files.len)
@@ -1410,7 +1410,7 @@ pub def compile_c_to_exe(c_path: str, exe_path: str, opt_level: str, verbose: bo
     mut warn_flags = " -fno-strict-aliasing -Wno-string-compare -Wno-comment -Wno-attributes -Wno-unused-value"
     if is_clang_compiler(cc):
         warn_flags = warn_flags + " -Wno-unknown-attributes -Wno-parentheses-equality"
-    mut cmd = cc + " " + opt_flag + warn_flags + " -DTAURARO_NO_RT_HELPERS \"-I" + out_dir + "\" -o \"" + exe_path + "\" \"" + c_path + "\" -lm"
+    mut cmd = cc + " " + opt_flag + warn_flags + " \"-I" + out_dir + "\" -o \"" + exe_path + "\" \"" + c_path + "\" -lm"
     if verbose: print("  [CC] " + cmd)
     return _tr_system(cmd)
 

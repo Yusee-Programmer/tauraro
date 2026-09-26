@@ -88,7 +88,7 @@ __attribute__((hot)) TrStr ModuleResolver_dir_of_path(ModuleResolver* self, TrSt
         return _tr_str_lit_len("", 0LL);
     }
     /* pass */
-    return _tr_str_wrap(_tr_str_slice((path).data, 0LL, last));
+    return _tr_str_slicev((path), 0LL, last);
 }
 
 __attribute__((hot)) TrStr ModuleResolver_base_of_path(ModuleResolver* self, TrStr path) {
@@ -118,7 +118,7 @@ __attribute__((hot)) TrStr ModuleResolver_base_of_path(ModuleResolver* self, TrS
         i = (i + 1LL);
     }
     /* pass */
-    return _tr_str_wrap(_tr_str_slice((path).data, (last + 1LL), n));
+    return _tr_str_slicev((path), (last + 1LL), n);
 }
 
 __attribute__((hot)) Program* ModuleResolver_resolve_main(ModuleResolver* self, TrStr main_path) {
@@ -147,7 +147,7 @@ __attribute__((hot)) Program* ModuleResolver_resolve_main(ModuleResolver* self, 
         /* pass */
         /* unsafe block */
         /* pass */
-        TrStr _strtmp_t235 = _tr_str_wrap(_tr_str_slice((main_path).data, 0LL, dir_end));
+        TrStr _strtmp_t235 = _tr_str_slicev((main_path), 0LL, dir_end);
         _tr_str_release(dir_str);
         dir_str = _strtmp_t235;
         /* pass */
@@ -177,7 +177,7 @@ __attribute__((hot)) Program* ModuleResolver_resolve_main(ModuleResolver* self, 
             /* pass */
             /* unsafe block */
             /* pass */
-            TrStr _strtmp_t236 = _tr_str_wrap(_tr_str_slice((dir_str).data, 0LL, par_end));
+            TrStr _strtmp_t236 = _tr_str_slicev((dir_str), 0LL, par_end);
             _tr_str_release(parent_dir);
             parent_dir = _strtmp_t236;
             /* pass */
@@ -207,7 +207,7 @@ __attribute__((hot)) Program* ModuleResolver_resolve_main(ModuleResolver* self, 
                 /* pass */
                 /* unsafe block */
                 /* pass */
-                TrStr _strtmp_t237 = _tr_str_wrap(_tr_str_slice((parent_dir).data, 0LL, gp_end));
+                TrStr _strtmp_t237 = _tr_str_slicev((parent_dir), 0LL, gp_end);
                 _tr_str_release(gp_dir);
                 gp_dir = _strtmp_t237;
                 /* pass */
@@ -389,7 +389,7 @@ __attribute__((hot)) bool ModuleResolver__source_is_trusted(ModuleResolver* self
         return false;
     }
     /* pass */
-    return ({ TrStr _at_t242 = (_tr_str_wrap(_tr_str_slice((source).data, 0LL, lim))); __auto_type _wr = (ModuleResolver__contains(self, _at_t242, _tr_str_lit_len("@trusted", 8LL))); _tr_str_release(_at_t242); _wr; });
+    return ({ TrStr _at_t242 = (_tr_str_slicev((source), 0LL, lim)); __auto_type _wr = (ModuleResolver__contains(self, _at_t242, _tr_str_lit_len("@trusted", 8LL))); _tr_str_release(_at_t242); _wr; });
 }
 
 __attribute__((hot)) bool ModuleResolver__contains(ModuleResolver* self, TrStr hay, TrStr needle) {
@@ -407,7 +407,7 @@ __attribute__((hot)) bool ModuleResolver__contains(ModuleResolver* self, TrStr h
     /* pass */
     while (((i + nl) <= hl)) {
         /* pass */
-        if (({ TrStr _wt_t243 = (_tr_str_wrap(_tr_str_slice((hay).data, i, (i + nl)))); __auto_type _wr = (_tr_str_eqv(_wt_t243, (needle))); _tr_str_release(_wt_t243); _wr; })) {
+        if (_tr_str_eqv((_tr_str_slicev((hay), i, (i + nl))), (needle))) {
             /* pass */
             return true;
         }
@@ -425,18 +425,18 @@ __attribute__((hot)) void ModuleResolver__mark_decl_lib(ModuleResolver* self, De
         return;
     }
     /* pass */
-    __auto_type _t244 = (*dp);
-    if (_t244.tag == Decl_DFunction) {
-        __auto_type f = _t244.data.DFunction.func;
+    __auto_type _t243 = (*dp);
+    if (_t243.tag == Decl_DFunction) {
+        __auto_type f = _t243.data.DFunction.func;
         f->is_lib = true;
-    } else if (_t244.tag == Decl_DClass) {
-        __auto_type c = _t244.data.DClass.cls;
+    } else if (_t243.tag == Decl_DClass) {
+        __auto_type c = _t243.data.DClass.cls;
         ModuleResolver__mark_methods_lib(self, c);
-    } else if (_t244.tag == Decl_DActor) {
-        __auto_type c = _t244.data.DActor.cls;
+    } else if (_t243.tag == Decl_DActor) {
+        __auto_type c = _t243.data.DActor.cls;
         ModuleResolver__mark_methods_lib(self, c);
-    } else if (_t244.tag == Decl_DExtend) {
-        __auto_type ms = _t244.data.DExtend.methods;
+    } else if (_t243.tag == Decl_DExtend) {
+        __auto_type ms = _t243.data.DExtend.methods;
         /* pass */
         long long i = 0LL;
         /* pass */
@@ -447,7 +447,7 @@ __attribute__((hot)) void ModuleResolver__mark_decl_lib(ModuleResolver* self, De
             i = (i + 1LL);
         }
     } else if (1) {
-        __auto_type _ = _t244;
+        __auto_type _ = _t243;
         /* pass */
     }
 }
@@ -480,7 +480,7 @@ __attribute__((hot)) void ModuleResolver_resolve_module_path(ModuleResolver* sel
         n = (n + 1LL);
     }
     /* pass */
-    TrStr dir_path = _tr_str_wrap(_tr_str_slice((mod_path).data, 0LL, n));
+    TrStr dir_path = _tr_str_slicev((mod_path), 0LL, n);
     /* pass */
     char* bp = ((char*)(_tr_strz(dir_path)));
     /* pass */
@@ -512,9 +512,9 @@ __attribute__((hot)) void ModuleResolver_resolve_module_path(ModuleResolver* sel
         /* pass */
         if (file_exists(pkg_path)) {
             /* pass */
-            ({ TrStr _at_t245 = (({ TrStr _cl = (_tr_strx_concatv((base), (_tr_str_lit_len("/", 1LL)))); TrStr _cres = _tr_strx_concatv(_cl, (dir_path)); _tr_str_release(_cl); _cres; })); ModuleResolver_add_search_path(self, _at_t245); _tr_str_release(_at_t245); });
+            ({ TrStr _at_t244 = (({ TrStr _cl = (_tr_strx_concatv((base), (_tr_str_lit_len("/", 1LL)))); TrStr _cres = _tr_strx_concatv(_cl, (dir_path)); _tr_str_release(_cl); _cres; })); ModuleResolver_add_search_path(self, _at_t244); _tr_str_release(_at_t244); });
             /* pass */
-            ({ TrStr _at_t246 = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concatv((base), (_tr_str_lit_len("/", 1LL)))); TrStr _cres = _tr_strx_concatv(_cl, (dir_path)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concatv(_cl, (_tr_str_lit_len("/src", 4LL))); _tr_str_release(_cl); _cres; })); ModuleResolver_add_search_path(self, _at_t246); _tr_str_release(_at_t246); });
+            ({ TrStr _at_t245 = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concatv((base), (_tr_str_lit_len("/", 1LL)))); TrStr _cres = _tr_strx_concatv(_cl, (dir_path)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concatv(_cl, (_tr_str_lit_len("/src", 4LL))); _tr_str_release(_cl); _cres; })); ModuleResolver_add_search_path(self, _at_t245); _tr_str_release(_at_t245); });
             /* pass */
             bool already = _tr_dict_contains(self->visited, _tr_strz(pkg_path));
             /* pass */
@@ -565,7 +565,7 @@ __attribute__((hot)) void ModuleResolver_resolve_module_path(ModuleResolver* sel
         /* pass */
         if (file_exists(pkg_src_path)) {
             /* pass */
-            ({ TrStr _at_t247 = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concatv((base), (_tr_str_lit_len("/", 1LL)))); TrStr _cres = _tr_strx_concatv(_cl, (dir_path)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concatv(_cl, (_tr_str_lit_len("/src", 4LL))); _tr_str_release(_cl); _cres; })); ModuleResolver_add_search_path(self, _at_t247); _tr_str_release(_at_t247); });
+            ({ TrStr _at_t246 = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concatv((base), (_tr_str_lit_len("/", 1LL)))); TrStr _cres = _tr_strx_concatv(_cl, (dir_path)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concatv(_cl, (_tr_str_lit_len("/src", 4LL))); _tr_str_release(_cl); _cres; })); ModuleResolver_add_search_path(self, _at_t246); _tr_str_release(_at_t246); });
             /* pass */
             bool already3 = _tr_dict_contains(self->visited, _tr_strz(pkg_src_path));
             /* pass */
@@ -603,43 +603,43 @@ __attribute__((hot)) void ModuleResolver_resolve_module_path(ModuleResolver* sel
 
 __attribute__((hot)) bool decl_is_pub(Decl d) {
     /* pass */
-    __auto_type _t248 = d;
-    if (_t248.tag == Decl_DFunction) {
-        __auto_type f = _t248.data.DFunction.func;
+    __auto_type _t247 = d;
+    if (_t247.tag == Decl_DFunction) {
+        __auto_type f = _t247.data.DFunction.func;
         /* pass */
         return f->is_public;
-    } else if (_t248.tag == Decl_DClass) {
-        __auto_type c = _t248.data.DClass.cls;
+    } else if (_t247.tag == Decl_DClass) {
+        __auto_type c = _t247.data.DClass.cls;
         /* pass */
         return c->is_public;
-    } else if (_t248.tag == Decl_DEnum) {
-        __auto_type e = _t248.data.DEnum.enm;
+    } else if (_t247.tag == Decl_DEnum) {
+        __auto_type e = _t247.data.DEnum.enm;
         /* pass */
         return e->is_public;
-    } else if (_t248.tag == Decl_DInterface) {
-        __auto_type i = _t248.data.DInterface.iface;
+    } else if (_t247.tag == Decl_DInterface) {
+        __auto_type i = _t247.data.DInterface.iface;
         /* pass */
         return i->is_public;
-    } else if (_t248.tag == Decl_DActor) {
-        __auto_type c = _t248.data.DActor.cls;
+    } else if (_t247.tag == Decl_DActor) {
+        __auto_type c = _t247.data.DActor.cls;
         /* pass */
         return c->is_public;
-    } else if (_t248.tag == Decl_DExtern) {
-        __auto_type abi = _t248.data.DExtern.abi;
-__auto_type funcs = _t248.data.DExtern.functions;
+    } else if (_t247.tag == Decl_DExtern) {
+        __auto_type abi = _t247.data.DExtern.abi;
+__auto_type funcs = _t247.data.DExtern.functions;
         /* pass */
         return true;
-    } else if (_t248.tag == Decl_DExtend) {
-        __auto_type target = _t248.data.DExtend.target;
-__auto_type methods = _t248.data.DExtend.methods;
+    } else if (_t247.tag == Decl_DExtend) {
+        __auto_type target = _t247.data.DExtend.target;
+__auto_type methods = _t247.data.DExtend.methods;
         /* pass */
         return true;
-    } else if (_t248.tag == Decl_DDecoratorDef) {
-        __auto_type f = _t248.data.DDecoratorDef.func;
+    } else if (_t247.tag == Decl_DDecoratorDef) {
+        __auto_type f = _t247.data.DDecoratorDef.func;
         /* pass */
         return f->is_public;
     } else if (1) {
-        __auto_type _ = _t248;
+        __auto_type _ = _t247;
         /* pass */
         return false;
     }

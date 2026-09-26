@@ -5,7 +5,7 @@ __attribute__((malloc,returns_nonnull,hot)) StringObj* StringObj_init(TrStr s) {
     /* pass */
     StringObj* obj = ((StringObj*)_tr_obj_alloc(sizeof(StringObj)));
     /* pass */
-    long long slen = _tr_strlen(_tr_strz(s));
+    long long slen = _tr_str_lenv((s));
     /* pass */
     obj->len = slen;
     /* pass */
@@ -32,7 +32,7 @@ __attribute__((hot)) TrStr StringObj_as_str(StringObj* self) {
 
 __attribute__((hot)) void StringObj_append(StringObj* self, TrStr other) {
     /* pass */
-    long long slen = _tr_strlen(_tr_strz(other));
+    long long slen = _tr_str_lenv((other));
     /* pass */
     if ((slen <= 0LL)) {
         /* pass */

@@ -4311,15 +4311,15 @@ __attribute__((hot)) Expr* Parser_parse_fstring(Parser* self, TrStr raw, long lo
             /* pass */
             if ((colon_pos >= 0LL)) {
                 /* pass */
-                TrStr _fs = _tr_str_wrap(_tr_str_slice((expr_str).data, (colon_pos + 1LL), _tr_str_lenv((expr_str))));
+                TrStr _fs = _tr_str_slicev((expr_str), (colon_pos + 1LL), _tr_str_lenv((expr_str)));
                 /* pass */
-                TrStr _strtmp_t173 = _tr_str_wrap(_tr_str_strip((_fs).data));
+                TrStr _strtmp_t173 = _tr_str_stripv((_fs));
                 _tr_str_release(fmt_spec);
                 fmt_spec = _strtmp_t173;
                 /* pass */
-                TrStr _es = _tr_str_wrap(_tr_str_slice((expr_str).data, 0LL, colon_pos));
+                TrStr _es = _tr_str_slicev((expr_str), 0LL, colon_pos);
                 /* pass */
-                TrStr _strtmp_t174 = _tr_str_wrap(_tr_str_strip((_es).data));
+                TrStr _strtmp_t174 = _tr_str_stripv((_es));
                 _tr_str_release(expr_str);
                 expr_str = _strtmp_t174;
                 _tr_str_release(_fs);
@@ -6298,7 +6298,7 @@ __attribute__((hot)) long long _find_fmt_colon(TrStr s) {
     /* pass */
     while ((i < n)) {
         /* pass */
-        long long c = _tr_str_char_at_code((s).data, i);
+        long long c = _tr_str_char_at_codev((s), i);
         /* pass */
         if ((((c == 40LL) || (c == 91LL)) || (c == 123LL))) {
             /* pass */

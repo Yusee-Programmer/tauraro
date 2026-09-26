@@ -54,8 +54,13 @@ jobs:
               macOS)   CC=cc;  LIBS="-lm"; CFLAGS="" ;;
               *)       CC=gcc; LIBS="-lm -lpthread -lrt"; CFLAGS="-std=gnu11 -D_GNU_SOURCE -D_XOPEN_SOURCE=700" ;;
             esac
+            # include/*.c is globbed recursively (not just include/core/*.c):
+            # a std-lib module resolved via an explicit `std.` prefix (e.g.
+            # std.core.io) lands at include/std/core/*.c, a sibling of the
+            # unprefixed include/core/*.c path -- both must be compiled in.
+            INCLUDE_C_FILES=$(find bootstrap/c/include -name '*.c')
             "$CC" -O2 -w -Ibootstrap/c $CFLAGS \
-               bootstrap/c/main.c bootstrap/c/module_*.c bootstrap/c/include/core/*.c \
+               bootstrap/c/main.c bootstrap/c/module_*.c $INCLUDE_C_FILES \
                -o "$DEST/tauraroc${{ matrix.ext }}" $LIBS
             echo "==> stage0 built: $DEST/tauraroc${{ matrix.ext }}"
             READY=true

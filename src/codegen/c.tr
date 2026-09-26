@@ -10437,35 +10437,74 @@ pub class CGenerator:
         mut out = StringBuilder.init(65536)
         out.append("#pragma once\n")
         # Suppress rt.h helper fallbacks (StringBuilder, file I/O) when the std library
-        # provides its own canonical implementations.  Detect by checking if "StringBuilder"
-        # class or "read_file" / "write_file" functions appear in the compiled program.
-        mut has_std_lib = false
+        # provides its own canonical implementations. These are two INDEPENDENT
+        # conditions, checked and gated separately -- a program can have its own
+        # `read_file`/`write_file` (e.g. from std.core.io) WITHOUT ever importing
+        # std.core.string's `StringBuilder` class (this is exactly what happens
+        # self-hosting the compiler itself: src/codegen/c.tr's own `StringBuilder`-
+        # typed fields rely on the runtime's builtin fallback, never importing
+        # std.core.string, while OTHER parts of the unity build do use write_file).
+        # Bundling both under one flag suppressed rt.h's fallback StringBuilder
+        # typedef even when no program-provided StringBuilder class existed to
+        # replace it, leaving `StringBuilder` an undefined type wherever a class
+        # field referenced it -- a real, confirmed self-hosting break.
+        mut has_std_string_builder = false
         mut sbi = 0
         while sbi < prog.classes.len:
             mut sbc = prog.classes.get(sbi)
             if not _is_invalid_ptr(sbc as usize):
                 if sbc.name == "StringBuilder":
-                    has_std_lib = true
+                    has_std_string_builder = true
                     break
             sbi = sbi + 1
-        if not has_std_lib:
-            mut fi2 = 0
-            while fi2 < prog.functions.len:
-                mut fc = prog.functions.get(fi2)
-                if not _is_invalid_ptr(fc as usize):
-                    if fc.name == "read_file" or fc.name == "write_file":
-                        has_std_lib = true
-                        break
-                fi2 = fi2 + 1
-        if has_std_lib:
-            out.append("#define TAURARO_STD_LIB\n")
+        # A genuine program-provided read_file/write_file has a real,
+        # non-extern Tauraro body (std.core.io / std.io.file) that will
+        # itself be emitted as a real C function -- suppress the runtime's
+        # own fallback in that case to avoid a same-translation-unit
+        # redefinition. (An earlier version of this check, based on bare
+        # name matching alone, was fooled by the compiler's OWN unity build
+        # importing "core.io" with no `std.` prefix -- fixed at the source by
+        # using the explicit `std.core.io` path everywhere in src/, so this
+        # ambiguity no longer needs to be resolved here.)
+        mut has_std_file_io = false
+        mut fi2 = 0
+        while fi2 < prog.functions.len:
+            mut fc = prog.functions.get(fi2)
+            if not _is_invalid_ptr(fc as usize):
+                if (fc.name == "read_file" or fc.name == "write_file") and not fc.is_extern:
+                    has_std_file_io = true
+                    break
+            fi2 = fi2 + 1
+        if has_std_string_builder:
             out.append("#define TAURARO_RT_NO_STRINGBUILDER\n")
+        if has_std_file_io:
+            out.append("#define TAURARO_RT_NO_FILEIO\n")
         if self.tier_define != "": out.append("#define " + self.tier_define + "\n")
         # Hook wiring (@allocator/@output) goes in the SHARED header so every module
         # TU — not just main.c — sees TAURARO_ALLOC/... before the runtime include
         # (else a std module like std.hal.mmio hits the TAURARO_KERNEL #error).
         out.append(self.emit_tier_hooks(prog))
         out.append("#include \"tauraro_rt.h\"\n\n")
+
+        # `generate_module_compat` ALSO emits a StringBuilder/StringObj fallback
+        # typedef gated by the same TAURARO_RT_NO_STRINGBUILDER macro (for
+        # include/core/*.c's module-qualified names), but its output is
+        # appended AFTER this whole header -- i.e. after any class struct body
+        # here that has a `StringBuilder*` field. When the compiled program
+        # doesn't itself define a `StringBuilder` class (so the forward-decl
+        # loop below never provides one either) but DOES trip `has_std_file_io`
+        # (e.g. self-hosting the compiler: c.tr's own StringBuilder-typed
+        # fields rely on the runtime fallback, while unrelated std.core.io
+        # functions like write_file get pulled into the same unity build),
+        # `StringBuilder` was an unknown type in every struct that references
+        # it. Emit the identical fallback here too, early enough to matter — a
+        # harmless duplicate (identical) typedef under C11 when both fire.
+        out.append("#ifndef TAURARO_RT_NO_STRINGBUILDER\n")
+        out.append("typedef struct core_string_StringObj core_string_StringObj;\n")
+        out.append("typedef core_string_StringObj StringObj;\n")
+        out.append("typedef struct core_string_StringBuilder core_string_StringBuilder;\n")
+        out.append("typedef core_string_StringBuilder StringBuilder;\n")
+        out.append("#endif\n\n")
 
         # -- Forward declarations ----------------------------------------------
         mut i = 0

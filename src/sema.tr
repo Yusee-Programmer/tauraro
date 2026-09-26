@@ -4,7 +4,7 @@
 from core.vec import Vec
 from core.map import Map
 from core.alloc import alloc, dealloc
-from core.io import _tr_exit, write_file, append_file
+from std.core.io import _tr_exit, write_file, append_file
 from ast import Program, Decl, Expr, Stmt, AstType, Block, MatchArm, Pattern, FunctionDef, ClassDef, EnumDef, InterfaceDef, Param, Decorator, FStringPart, Ownership, CatchClause, Comprehension, ChanSelectArm, GenericConstraint
 from hir import HirProgram, HirFunction, HirClass, HirEnum, HirInterface, HirStmt, HirExpr, HirBlock, HirParam, HirField, HirVariant, HirFStringPart, HirComprehension, HirCatchClause, HirMatchArm, box_hirexpr, box_hirstmt, hir_expr_type, HirChanSelectArm
 from mir import mir_if_drop_plan, DropSite, mir_proven_borrows, mir_borrow_conflicts, mir_shared_ref_param_violations
@@ -4142,7 +4142,20 @@ extend Sema:
                 # SAssign is guarded by branch snapshots (Fix 1) so sibling else-branches correctly
                 # roll back and re-check - no false positives across if/else chains.
                 # Skip for generic type parameters (unknown type = possibly Copy; conservative).
-                if val as usize != 0 as usize:
+                # [M-1 false-positive fix] Only a plain local-to-local reassignment
+                # (`x = y`) is an ownership move. Storing the RHS into a FIELD/property
+                # (`self.cur = lf`, an EPropAccess target) is aliasing into a longer-
+                # lived slot, not consuming the local `lf` -- `lf` remains perfectly
+                # valid to keep using afterward (the field and the local now just both
+                # reference the same heap object, ordinary refcounted-pointer sharing).
+                # Without this gate, any `self.field = local_var` anywhere falsely
+                # marked `local_var` moved for the rest of that function.
+                mut sa_target_is_plain_ident = false
+                if target as usize != 0 as usize:
+                    match target.read():
+                        case Expr.EIdent(_): sa_target_is_plain_ident = true
+                        case _: pass
+                if sa_target_is_plain_ident and val as usize != 0 as usize:
                     match val.read():
                         case Expr.EIdent(sa_src):
                             mut sa_sym = self.resolve(sa_src)
