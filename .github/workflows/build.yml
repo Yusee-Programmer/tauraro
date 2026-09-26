@@ -214,6 +214,22 @@ jobs:
           rm -f _z.c _z.o
 
       # -------------------------------------------------------
+      # TEMP DIAGNOSTIC (macOS only): 43_serialize.tr STILL crashes after
+      # fixing the list_get() UAF -- likely a DIFFERENT bug now (msgpack's
+      # analogous MPVal.list_get, or something later in the file). Get a
+      # fresh symbolicated backtrace to find out where.
+      # -------------------------------------------------------
+      - name: DEBUG macOS silent-crash backtrace v4
+        if: runner.os == 'macOS'
+        shell: bash
+        continue-on-error: true
+        run: |
+          set -x
+          ./tauraroc tests/lang/43_serialize.tr -o /tmp/dbg43v4 --debug -O0 || echo "COMPILE FAILED rc=$?"
+          echo "===== 43_serialize lldb backtrace v4 ====="
+          lldb --batch -o "run" -o "bt" -o "quit" -- /tmp/dbg43v4 2>&1 || true
+
+      # -------------------------------------------------------
       # Regression test suite: tests/lang/ and tests/regression/,
       # run via `tauraroc --run` against the freshly-built binary
       # on each platform. See scripts/run_tests.sh / run_tests.ps1.
