@@ -59,7 +59,16 @@ jobs:
             # std.core.io) lands at include/std/core/*.c, a sibling of the
             # unprefixed include/core/*.c path -- both must be compiled in.
             INCLUDE_C_FILES=$(find bootstrap/c/include -name '*.c')
-            "$CC" -O2 -w -Ibootstrap/c $CFLAGS \
+            # -fno-strict-aliasing: bootstrap/c/ is generated C that reinterprets
+            # pointers between HIR/tagged-union representations (same reason
+            # src/main.tr always adds this flag when tauraroc compiles ITS OWN
+            # target programs -- see the identical comment there). Without it,
+            # -O2 is a legal license for gcc to miscompile this stage0 seed via
+            # strict-aliasing-based optimization; this manifested as a real,
+            # platform-dependent bug (stage0 built fine and stage1 compiled fine,
+            # but stage1's runtime behavior for generic type resolution was
+            # silently wrong on Linux/macOS while happening to work on Windows).
+            "$CC" -O2 -w -fno-strict-aliasing -Ibootstrap/c $CFLAGS \
                bootstrap/c/main.c bootstrap/c/module_*.c $INCLUDE_C_FILES \
                -o "$DEST/tauraroc${{ matrix.ext }}" $LIBS
             echo "==> stage0 built: $DEST/tauraroc${{ matrix.ext }}"
