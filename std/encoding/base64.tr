@@ -34,7 +34,13 @@ extend Base64:
     # Encode a byte string to standard Base64.
     pub def encode(s: str) -> str:
         mut p = s as Pointer[char]
-        mut n = _tr_strlen(s)
+        # `s` is arbitrary binary (that's the point of base64), so it may
+        # contain embedded NUL bytes -- use the real length field, not
+        # NUL-scanning _tr_strlen (which silently truncated at the first
+        # 0x00, observed as flaky `Base64.encode` output length whenever
+        # random binary input happened to contain a zero byte, e.g.
+        # ws_generate_key's random 16-byte key).
+        mut n = s.len()
         mut sb = StringBuilder.init((n / 3) * 4 + 8)
         mut i = 0
         while i + 2 < n:

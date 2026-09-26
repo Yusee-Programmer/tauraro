@@ -3460,9 +3460,39 @@ static void _tr_co_reclaim_stack(_TrCoro* c) {
 }
 #endif
 
+#if !defined(_WIN32)
+#include <poll.h>
+#endif
+
+/* Block for real, via a plain single-fd poll/WSAPoll wait (no timeout).
+ * Used by _tr_co_await_fd below when there is no coroutine scheduler on
+ * this OS thread (e.g. a thread spawned via Thread.spawn/task_group, not
+ * the coroutine reactor) -- without this, "await readability" silently
+ * returned immediately, turning every recv_into/send_raw wait into a tight
+ * busy-spin re-calling the non-blocking syscall. Found while investigating
+ * a flaky WebSocket close-handshake test (root cause there turned out to
+ * be a separate RFC 6455 protocol bug, see std/net/websocket.tr's close());
+ * this busy-spin is a real, independent correctness/efficiency gap in its
+ * own right -- a plain OS thread using these blocking-style APIs should
+ * actually block, not spin a CPU core waiting for data that isn't there
+ * yet. */
+static void _tr_co_block_on_fd(int fd, unsigned int events) {
+#if defined(_WIN32)
+    WSAPOLLFD pfd; pfd.fd = (SOCKET)fd; pfd.events = 0; pfd.revents = 0;
+    if (events & TAURARO_POLLIN)  pfd.events |= POLLRDNORM;
+    if (events & TAURARO_POLLOUT) pfd.events |= POLLWRNORM;
+    WSAPoll(&pfd, 1, -1);
+#else
+    struct pollfd pfd; pfd.fd = fd; pfd.events = 0; pfd.revents = 0;
+    if (events & TAURARO_POLLIN)  pfd.events |= POLLIN;
+    if (events & TAURARO_POLLOUT) pfd.events |= POLLOUT;
+    poll(&pfd, 1, -1);
+#endif
+}
+
 static int _tr_co_await_fd(int fd, unsigned int events) {
     _TrCoro* c = _tr_g.current;
-    if (!c) return 1;
+    if (!c) { _tr_co_block_on_fd(fd, events); return 1; }
     if (!_tr_g.reactor) _tr_g.reactor = _tr_iopoll_create();
     c->io_fd = fd;
     c->state = _TRC_SUSP;

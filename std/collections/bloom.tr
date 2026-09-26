@@ -80,9 +80,13 @@ extend BloomFilter:
             mut c = p.offset(i).read() as u64
             h = (h ^ c) * 1099511628211 as u64
             i = i + 1
-        mut r = h as int
-        if r < 0: r = 0 - r
-        return r
+        # Clear the sign bit rather than negating: negating a value whose
+        # bit pattern happens to equal int.MIN overflows (UB, trapped by
+        # -ftrapv -- observed as a real, rare EXC_BAD_ACCESS-adjacent crash
+        # on macOS-arm64/clang, where -ftrapv actually catches it, unlike
+        # gcc's incomplete -ftrapv implementation which silently let the
+        # same UB through elsewhere). Masking is also branch-free.
+        return (h as int) & 9223372036854775807
 
     # djb2-style second hash (different mixing from FNV-1a -> independent
     # enough for double-hashing purposes).
@@ -94,9 +98,7 @@ extend BloomFilter:
             mut c = p.offset(i).read() as u64
             h = ((h * 33 as u64) + c)
             i = i + 1
-        mut r = h as int
-        if r < 0: r = 0 - r
-        return r
+        return (h as int) & 9223372036854775807
 
     # The i-th probe index (0 <= i < k) for item, via Kirsch-Mitzenmacher
     # double hashing: probe_i = (h1 + i*h2) mod m.
