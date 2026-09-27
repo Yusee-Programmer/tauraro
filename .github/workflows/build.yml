@@ -219,19 +219,22 @@ jobs:
       # on each platform. See scripts/run_tests.sh / run_tests.ps1.
       # -------------------------------------------------------
       # -------------------------------------------------------
-      # TEMP DIAGNOSTIC (macOS only): tests/lang/43_serialize.tr only fails
-      # as the 26th file in run_tests.sh's sequential loop over tests/lang +
-      # tests/regression. v7 (separate compile + lldb run, no --run) passed
-      # cleanly -- same mistake as the earlier v6: a separate compile+execute
-      # is NOT the same code path as `tauraroc --run`'s COMBINED compile+
-      # execute-in-one-process. Replicate run_tests.sh's exact invocation
-      # style (`out=$(./tauraroc --run "$f" 2>&1); status=$?`) for every
-      # preceding file AND for #43 itself, with core dumps enabled, then
-      # analyze any resulting core file with lldb post-mortem (attaching
-      # live doesn't work here since the crash is inside a child process
-      # `--run` execs, not the lldb-launched process itself).
+      # TEMP DIAGNOSTIC (macOS only): v6/v7/v8 all tried to hand-replicate
+      # run_tests.sh's invocation (varying combined-vs-separate compile+run,
+      # accumulated build/ state, exact $(...) capture style) and ALL passed
+      # cleanly -- yet the real "Run regression test suite" step a few lines
+      # below keeps failing on tests/lang/43_serialize.tr. Likeliest
+      # explanation left: this is a genuinely low-probability, timing/heap-
+      # layout-sensitive crash (consistent with a residual UAF: ASan/isolated
+      # runs changing allocator behavior enough to avoid it), and 4 separate
+      # one-shot repro attempts just didn't roll the right dice. Stop trying
+      # to hand-replicate the invocation; instead run the REAL, unmodified
+      # run_tests.sh itself, in a fresh-build/ retry loop (up to 5x), with
+      # core dumps enabled, and analyze whatever core appears the moment it
+      # actually fails -- guaranteed to be the exact failing code path, no
+      # invocation-shape guesswork.
       # -------------------------------------------------------
-      - name: DEBUG macOS accumulated-state crash repro v8
+      - name: DEBUG macOS run_tests.sh retry-loop crash repro v9
         if: runner.os == 'macOS'
         shell: bash
         continue-on-error: true
@@ -240,21 +243,15 @@ jobs:
           ulimit -c unlimited
           mkdir -p /tmp/cores
           sudo sysctl -w kern.corefile=/tmp/cores/core.%P 2>&1 || true
-          for f in $(find tests/lang -name '*.tr' | sort); do
-            base=$(basename "$f")
-            if [ "$base" = "43_serialize.tr" ]; then break; fi
-            out=$(./tauraroc --run "$f" 2>&1)
-            status=$?
-            if [ $status -ne 0 ]; then
-              echo "===== UNEXPECTED early failure on $f (status=$status) ====="
-              echo "$out"
+          for i in 1 2 3 4 5; do
+            echo "===== attempt $i ====="
+            rm -rf build
+            if ! bash scripts/run_tests.sh; then
+              echo "===== attempt $i FAILED ====="
+              break
             fi
+            echo "===== attempt $i passed ====="
           done
-          out=$(./tauraroc --run tests/lang/43_serialize.tr 2>&1)
-          status=$?
-          echo "===== 43_serialize --run exit: $status, output length: ${#out} ====="
-          echo "$out"
-          echo "===== end output ====="
           ls -la /tmp/cores/ 2>&1 || true
           CORE=$(ls -t /tmp/cores/core.* 2>/dev/null | head -1)
           if [ -n "$CORE" ]; then
