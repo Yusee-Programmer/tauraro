@@ -5,7 +5,7 @@ __attribute__((malloc,returns_nonnull,hot)) StringObj* StringObj_init(TrStr s) {
     /* pass */
     StringObj* obj = ((StringObj*)_tr_obj_alloc(sizeof(StringObj)));
     /* pass */
-    long long slen = _tr_strlen(_tr_strz(s));
+    long long slen = _tr_str_lenv((s));
     /* pass */
     obj->len = slen;
     /* pass */
@@ -27,12 +27,12 @@ __attribute__((malloc,returns_nonnull,hot)) StringObj* StringObj_init(TrStr s) {
 
 __attribute__((hot)) TrStr StringObj_as_str(StringObj* self) {
     /* pass */
-    return _tr_str_wrap(_tr_str_lit(self->data));
+    return _tr_str_wrap(_tr_str_lit_len(self->data, self->len));
 }
 
 __attribute__((hot)) void StringObj_append(StringObj* self, TrStr other) {
     /* pass */
-    long long slen = _tr_strlen(_tr_strz(other));
+    long long slen = _tr_str_lenv((other));
     /* pass */
     if ((slen <= 0LL)) {
         /* pass */
@@ -201,7 +201,7 @@ __attribute__((hot)) TrStr StringBuilder_to_owned(StringBuilder* self) {
     /* pass */
     _tr_c_memcpy(out, self->buf->data, sz);
     /* pass */
-    return _tr_str_wrap(_tr_str_wrap(out));
+    return _tr_str_wrap(_tr_str_wrap_len(out, self->buf->len));
 }
 
 __attribute__((hot)) TrStr StringBuilder_as_str(StringBuilder* self) {

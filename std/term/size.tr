@@ -1,0 +1,89 @@
+# std.term.size — Query the terminal's width/height (columns x rows), with a
+# sane fallback when stdout isn't a real terminal (redirected to a file/pipe)
+# or the query otherwise fails.
+#
+# TTY detection reuses the C runtime's own _tr_stdout_supports_ansi() (already
+# used by the runtime for color auto-detection): on POSIX it's isatty(stdout),
+# on Windows it's a real-console check via GetConsoleMode that also
+# best-effort enables VT100 processing. Its return type (int64_t) maps
+# exactly onto Tauraro's `int`, so this binds via a plain extern "C" with no
+# prototype conflict, and — because it's one function whose OWN C definition
+# already branches on _WIN32 internally — it is safe to call unconditionally
+# from a single .tr file that gets compiled into one binary per platform
+# (unlike calling POSIX ioctl()/Win32 GetConsoleScreenBufferInfo directly;
+# see the KNOWN GAP note below for why those don't work from .tr code today).
+#
+# Actual column/row measurement: falls back to the COLUMNS/LINES environment
+# variables (set by most terminal emulators, shells, and CI runners), then to
+# the 80x24 default, both checked only when is_tty() is true — so redirected/
+# piped output always gets the documented fallback rather than a stale value.
+#
+# KNOWN GAP (see bug2.txt, section "std.term.size — extern \"C\" cannot call
+# ioctl(TIOCGWINSZ)/GetConsoleScreenBufferInfo directly"): Tauraro has no
+# conditional-compilation directive, so a `.tr` file that references a
+# POSIX-only symbol (ioctl) fails to LINK on Windows even inside an
+# `if Platform.is_posix():` branch that never runs there (the whole program
+# is one C translation unit); and the natural Windows replacement,
+# GetConsoleScreenBufferInfo, fails to even COMPILE via extern "C" because
+# <windows.h> (already included by the runtime) predeclares it and Tauraro's
+# codegen always emits a competing prototype for every extern "C" decl,
+# which conflicts unless the signature happens to textually match (as
+# GetStdHandle's does, which is why is_tty() below can still use it). A true
+# ioctl/GetConsoleScreenBufferInfo-based exact-size query needs a small
+# platform-split C runtime wrapper (like _tr_console_color already is) —
+# out of scope for this package since bootstrap/c/ is off-limits here.
+
+from std.string.str import Str
+from std.sys.env import Env
+
+extern "C":
+    # Cross-platform (branches on _WIN32 internally in the C runtime): 1 when
+    # stdout is a real terminal, 0 when redirected/piped or unsupported.
+    def _tr_stdout_supports_ansi() -> int
+
+pub def DEFAULT_WIDTH()  -> int: return 80
+pub def DEFAULT_HEIGHT() -> int: return 24
+
+pub class TermSize:
+    pub width:  int
+    pub height: int
+    pub is_tty: bool
+
+pub class Size:
+    _dummy: int
+
+extend Size:
+    # True when stdout looks like a real interactive terminal (not a file or
+    # pipe redirect).
+    pub def is_tty() -> bool:
+        return _tr_stdout_supports_ansi() != 0
+
+    # Query the terminal size.  Falls back to 80x24 (with is_tty=false) when
+    # stdout isn't a real terminal or the platform query fails.
+    pub def get() -> TermSize:
+        mut result = TermSize()
+        result.width  = DEFAULT_WIDTH()
+        result.height = DEFAULT_HEIGHT()
+        result.is_tty = Size.is_tty()
+
+        if not result.is_tty:
+            return result
+
+        # See KNOWN GAP above: no ioctl/GetConsoleScreenBufferInfo query yet,
+        # so use COLUMNS/LINES when a shell/terminal/CI sets them.
+        mut env = Env.init()
+        mut cols_s = env.get_var("COLUMNS")
+        mut rows_s = env.get_var("LINES")
+        if not Str.eq(cols_s, ""):
+            mut c = Str.parse_int(cols_s)
+            if c > 0: result.width = c
+        if not Str.eq(rows_s, ""):
+            mut r = Str.parse_int(rows_s)
+            if r > 0: result.height = r
+        return result
+
+    pub def width() -> int:
+        return Size.get().width
+
+    pub def height() -> int:
+        return Size.get().height

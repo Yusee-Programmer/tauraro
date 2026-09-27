@@ -34,13 +34,25 @@ extend Base64:
     # Encode a byte string to standard Base64.
     pub def encode(s: str) -> str:
         mut p = s as Pointer[char]
-        mut n = _tr_strlen(s)
+        # `s` is arbitrary binary (that's the point of base64), so it may
+        # contain embedded NUL bytes -- use the real length field, not
+        # NUL-scanning _tr_strlen (which silently truncated at the first
+        # 0x00, observed as flaky `Base64.encode` output length whenever
+        # random binary input happened to contain a zero byte, e.g.
+        # ws_generate_key's random 16-byte key).
+        mut n = s.len()
         mut sb = StringBuilder.init((n / 3) * 4 + 8)
         mut i = 0
         while i + 2 < n:
-            mut b0 = p.offset(i).read() as int
-            mut b1 = p.offset(i + 1).read() as int
-            mut b2 = p.offset(i + 2).read() as int
+            # Mask each byte to unsigned 0-255: `char` is signed on this
+            # platform, so bytes >= 0x80 (routine in binary data such as a
+            # SHA-1 digest) would otherwise read back negative, and `%`/`>>`
+            # on a negative int are C-style (can stay negative), driving
+            # _b64_char_at() to index the alphabet string out of bounds and
+            # silently corrupting the output (observed: truncates to "").
+            mut b0 = (p.offset(i).read() as int) & 255
+            mut b1 = (p.offset(i + 1).read() as int) & 255
+            mut b2 = (p.offset(i + 2).read() as int) & 255
             sb.append_char(_b64_char_at((b0 >> 2) % 64))
             sb.append_char(_b64_char_at(((b0 % 4) << 4) | ((b1 >> 4) % 16)))
             sb.append_char(_b64_char_at(((b1 % 16) << 2) | ((b2 >> 6) % 4)))
@@ -48,14 +60,14 @@ extend Base64:
             i = i + 3
         mut rem = n - i
         if rem == 1:
-            mut b0 = p.offset(i).read() as int
+            mut b0 = (p.offset(i).read() as int) & 255
             sb.append_char(_b64_char_at((b0 >> 2) % 64))
             sb.append_char(_b64_char_at((b0 % 4) << 4))
             sb.append_char(61)   # '='
             sb.append_char(61)   # '='
         elif rem == 2:
-            mut b0 = p.offset(i).read() as int
-            mut b1 = p.offset(i + 1).read() as int
+            mut b0 = (p.offset(i).read() as int) & 255
+            mut b1 = (p.offset(i + 1).read() as int) & 255
             sb.append_char(_b64_char_at((b0 >> 2) % 64))
             sb.append_char(_b64_char_at(((b0 % 4) << 4) | ((b1 >> 4) % 16)))
             sb.append_char(_b64_char_at((b1 % 16) << 2))

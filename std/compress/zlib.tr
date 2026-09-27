@@ -9,10 +9,12 @@
 #   mut original   = Zlib.decompress(compressed, Zlib.compressed_len(compressed), 4096)
 
 extern "C":
-    def _tr_zlib_compress(input: str, ilen: int, out_len: Pointer[int]) -> str
+    def _tr_zlib_compress(input: str, ilen: int, out_len: Pointer[c_int]) -> str
     def _tr_zlib_decompress(input: str, ilen: int, max_out: int) -> str
-    def _tr_deflate(input: str, ilen: int, out_len: Pointer[int]) -> str
+    def _tr_deflate(input: str, ilen: int, out_len: Pointer[c_int]) -> str
     def _tr_inflate(input: str, ilen: int, max_out: int) -> str
+    def _tr_c_malloc(size: int) -> Pointer[char]
+    def _tr_c_free(ptr: Pointer[char])
 
 from std.string.str import Str
 
@@ -24,9 +26,11 @@ extend Zlib:
     # Returns the compressed bytes as a str (may contain null bytes).
     # Use Zlib.compressed_len() to get the result length.
     pub def compress(input: str, ilen: int) -> str:
-        mut dummy_len = 0
-        mut dummy_ptr = dummy_len as Pointer[int]
-        return _tr_zlib_compress(input, ilen, dummy_ptr)
+        mut out_len_buf = _tr_c_malloc(8) as Pointer[c_int]
+        unsafe: out_len_buf.write(0 as c_int)
+        mut result = _tr_zlib_compress(input, ilen, out_len_buf)
+        _tr_c_free(out_len_buf as Pointer[char])
+        return result
 
     # Decompress a zlib-wrapped stream back to at most `max_out` bytes.
     pub def decompress(input: str, ilen: int, max_out: int) -> str:
@@ -34,9 +38,11 @@ extend Zlib:
 
     # Raw deflate (no zlib header). Useful for gzip member data.
     pub def deflate(input: str, ilen: int) -> str:
-        mut dummy_len = 0
-        mut dummy_ptr = dummy_len as Pointer[int]
-        return _tr_deflate(input, ilen, dummy_ptr)
+        mut out_len_buf = _tr_c_malloc(8) as Pointer[c_int]
+        unsafe: out_len_buf.write(0 as c_int)
+        mut result = _tr_deflate(input, ilen, out_len_buf)
+        _tr_c_free(out_len_buf as Pointer[char])
+        return result
 
     # Raw inflate. Matches deflate output.
     pub def inflate(input: str, ilen: int, max_out: int) -> str:

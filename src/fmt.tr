@@ -225,7 +225,7 @@ extend Formatter:
         match e.read():
             case Expr.ELitInt(v): return v.to_str()
             case Expr.ELitFloat(v): return v.to_str()
-            case Expr.ELitStr(v):
+            case Expr.ELitStr(v, _):
                 # Inside an f-string interpolation, use single quotes so an
                 # embedded string literal doesn't clash with the f-string's
                 # double-quote delimiter (e.g. f"{d.get('key')}").
@@ -236,8 +236,8 @@ extend Formatter:
                 if b: return "True"
                 return "False"
             case Expr.ELitChar(v): return "'" + self.escape_char(v) + "'"
-            case Expr.ELitBytes(v): return "b\"" + self.escape_str(v) + "\""
-            case Expr.ERawStr(v): return "r\"" + v + "\""
+            case Expr.ELitBytes(v, _): return "b\"" + self.escape_str(v) + "\""
+            case Expr.ERawStr(v, _): return "r\"" + v + "\""
             case Expr.ELitNone: return "None"
             case Expr.EIdent(nm): return nm
             case Expr.EBinOp(op, l, r):
@@ -600,7 +600,7 @@ extend Formatter:
             case Pattern.PWild: return "_"
             case Pattern.PBind(n): return n
             case Pattern.PLitInt(v): return v.to_str()
-            case Pattern.PLitStr(v): return "\"" + self.escape_str(v) + "\""
+            case Pattern.PLitStr(v, _): return "\"" + self.escape_str(v) + "\""
             case Pattern.PLitBool(b):
                 if b: return "True"
                 return "False"

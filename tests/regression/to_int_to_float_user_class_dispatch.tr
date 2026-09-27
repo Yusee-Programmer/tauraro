@@ -1,0 +1,44 @@
+# tests/regression/to_int_to_float_user_class_dispatch.tr
+# Regression: gen_method_call special-cased "to_int"/"to_float" purely by method
+# name, BEFORE checking whether the receiver is a user-defined class that itself
+# defines a method with that name. Any user class defining its own `to_int(self)`
+# or `to_float(self)` got silently miscompiled: instead of calling the class's
+# method, the compiler emitted a raw pointer-to-integer/float cast of the object
+# pointer itself (a garbage-looking large number), with no compile error or
+# warning. `to_str`/`to_string` already had the correct class-dispatch guard;
+# `to_int`/`to_float` did not. Fixed in src/codegen/c.tr, gen_method_call (the
+# "Primitive conversion methods" section), mirroring the existing to_str guard.
+
+from std.test import TestRunner
+
+pub class Foo:
+    v: int
+
+extend Foo:
+    pub def init(v: int) -> Foo:
+        mut f = Foo()
+        f.v = v
+        return f
+    pub def to_int(self) -> int:
+        return self.v * 2
+    pub def to_float(self) -> float:
+        return (self.v.to_float()) + 0.5
+
+def main():
+    mut t = TestRunner.init("to_int_to_float_user_class_dispatch")
+
+    t.section("user class .to_int()/.to_float() dispatch to the class's own method")
+    mut f = Foo.init(21)
+    mut r = f.to_int()
+    t.assert_eq_int(r, 42, "Foo.to_int() calls the user method, not a pointer cast")
+
+    mut fl = f.to_float()
+    t.assert_true(fl > 21.4 and fl < 21.6, "Foo.to_float() calls the user method, not a pointer cast")
+
+    t.section("primitive to_int()/to_float() still work")
+    mut n: int = 7
+    t.assert_eq_float(n.to_float(), 7.0, 0.0001, "int.to_float() still works")
+    mut d: float = 9.9
+    t.assert_eq_int(d.to_int(), 9, "float.to_int() still works")
+
+    t.summary()

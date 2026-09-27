@@ -1,0 +1,214 @@
+# std.crypto.kdf — Password-based key derivation (PBKDF2-HMAC-SHA256).
+#
+# RFC 2898 / PKCS#5 v2.1's PBKDF2 is, at its core, HMAC iterated and
+# XORed — this module implements PBKDF2's own iteration/XOR logic, built
+# on a length-explicit HMAC-SHA256 constructed from std.crypto.hash's
+# existing `Hash.sha256_bytes` (see the note below on why this module
+# does NOT reuse std/crypto/hmac.tr's `Hmac` class directly).
+#
+# Verified against well-known PBKDF2-HMAC-SHA256 known-answer test
+# vectors (password="password"/salt="salt" at c=1/c=2/c=4096, and the
+# longer multi-block RFC-6070-style password="passwordPASSWORDpassword"
+# vector) — see tests/lang/44_crypto2.tr.
+#
+# NOTE ON NOT REUSING std/crypto/hmac.tr's Hmac CLASS: PBKDF2's inner
+# loop repeatedly HMACs the *previous HMAC output* (raw bytes, which
+# routinely contain embedded 0x00 bytes) and salt||INT_32_BE(block_index)
+# (which ALSO contains embedded 0x00 bytes whenever block_index < 256,
+# i.e. essentially always in practice). `Hmac.sha256`'s underlying
+# extern (`_tr_hmac_sha256` in the C runtime) hashes its `msg` argument
+# via `strlen()`, not an explicit length -- so it silently truncates at
+# the first embedded NUL byte, which would silently corrupt PBKDF2's
+# output on almost every call. (This mirrors a bug std/crypto/uuid.tr's
+# comments already flag for naive string concatenation of raw byte data
+# -- same root cause, different call site.) This module works around it
+# by building its own length-safe HMAC-SHA256 from `Hash.sha256_bytes`
+# (which DOES take an explicit length, per std/crypto/hash.tr), rather
+# than modifying std/crypto/hmac.tr's public API/behavior.
+#
+# SECURITY NOTE — iteration count: PBKDF2 with a low iteration count is
+# NOT safe for password storage — modern GPUs can compute millions of
+# PBKDF2-SHA256 guesses per second at low iteration counts, making
+# offline brute-force of a stolen hash database practical. Current OWASP
+# guidance recommends **at least 600,000 iterations** for
+# PBKDF2-HMAC-SHA256 when hashing passwords (aim for roughly 200ms of
+# compute time on typical server hardware; raise the count over time as
+# hardware gets faster — this is a moving target, not a fixed constant).
+# If you don't have a specific reason to use PBKDF2 (e.g. FIPS
+# compliance), a memory-hard KDF such as Argon2 or scrypt is generally a
+# stronger choice for NEW password-storage designs, since PBKDF2 has no
+# memory-hardness and is comparatively cheap to accelerate on GPU/ASIC.
+#
+# Usage:
+#   from std.crypto.kdf import Kdf
+#
+#   mut salt = "16-byte-random-salt-here-please"   # MUST be random per user, >= 16 bytes
+#   mut key  = Kdf.pbkdf2("correct horse battery staple", salt.len(), salt, 600000, 32)
+#   # key is 32 raw bytes (may contain embedded NULs -- track the length,
+#   # don't rely on .len()/strlen on it; use Hex.encode_bytes(key as
+#   # Pointer[char], 32) to get a printable digest for storage/comparison)
+
+from std.crypto.hash import Hash
+from std.core.string import StringBuilder
+
+extern "C":
+    def _tr_strlen(s: str) -> int
+
+pub class Kdf:
+    _dummy: int
+
+extend Kdf:
+    # Derive `dklen` bytes of key material from `password` + `salt` using
+    # PBKDF2-HMAC-SHA256 (RFC 2898 section 5.2). `slen` is the salt length
+    # in bytes (salt may contain embedded NULs, so this is explicit rather
+    # than inferred via strlen — same convention as std/crypto/aes.tr's
+    # `klen`/`plen`/`clen`). `iterations` must be a positive iteration
+    # count -- see the module header's security note on choosing one.
+    # Returns `dklen` raw bytes as a str (may contain embedded NULs).
+    pub def pbkdf2(password: str, slen: int, salt: str, iterations: int, dklen: int) -> str:
+        mut plen = _tr_strlen(password)
+        mut hlen = 32   # SHA-256 output size in bytes
+        mut nblocks = dklen / hlen
+        if dklen % hlen != 0: nblocks = nblocks + 1
+
+        mut sb = StringBuilder.init(dklen + hlen + 2)
+        mut block_idx = 1
+        while block_idx <= nblocks:
+            mut block = Kdf._f(password, plen, salt, slen, iterations, block_idx)
+            mut i = 0
+            mut take = hlen
+            if sb.len() + hlen > dklen: take = dklen - sb.len()
+            while i < take:
+                sb.append_char(Kdf._raw_byte_at(block, i))
+                i = i + 1
+            block_idx = block_idx + 1
+
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    # Convenience overload: salt is a null-terminated string (no embedded
+    # NULs). Same defaults otherwise.
+    pub def pbkdf2_str(password: str, salt: str, iterations: int, dklen: int) -> str:
+        return Kdf.pbkdf2(password, _tr_strlen(salt), salt, iterations, dklen)
+
+    # PBKDF2's F(password, salt, iterations, block_idx) function (RFC 2898
+    # section 5.2): U1 = HMAC(password, salt || INT_32_BE(block_idx));
+    # Ui = HMAC(password, U(i-1)); result = U1 XOR U2 XOR ... XOR Uc.
+    # Returns 32 raw bytes (one SHA-256 block) as a str.
+    pub def _f(password: str, plen: int, salt: str, slen: int, iterations: int, block_idx: int) -> str:
+        mut salt_block = Kdf._salt_with_index(salt, slen, block_idx)
+        mut u = Kdf._hmac_sha256_raw(password, plen, salt_block, slen + 4)
+        mut result: List[int] = []
+        mut i = 0
+        while i < 32:
+            result.append(Kdf._raw_byte_at(u, i))
+            i = i + 1
+
+        mut iter_ = 1
+        while iter_ < iterations:
+            mut next_u = Kdf._hmac_sha256_raw(password, plen, u, 32)
+            mut j = 0
+            while j < 32:
+                result[j] = result[j] ^ Kdf._raw_byte_at(next_u, j)
+                j = j + 1
+            u = next_u
+            iter_ = iter_ + 1
+
+        mut sb = StringBuilder.init(34)
+        mut k = 0
+        while k < 32:
+            sb.append_char(result[k])
+            k = k + 1
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    # Length-explicit HMAC-SHA256, built on Hash.sha256_bytes (which takes
+    # an explicit length -- see the module header note on why this exists
+    # instead of reusing std/crypto/hmac.tr's Hmac class). `key`/`msg`
+    # bytes routinely contain embedded NULs in PBKDF2's inner loop, so
+    # every length here is explicit throughout; nothing relies on
+    # strlen()/`.len()` on raw byte data. Returns 32 raw bytes as a str.
+    pub def _hmac_sha256_raw(key: str, klen: int, msg: str, mlen: int) -> str:
+        mut block_size = 64
+        mut kp = key as Pointer[char]
+        mut k: List[int] = []
+        mut i = 0
+        if klen > block_size:
+            mut kbytes = Hash.sha256_bytes(key, klen)
+            i = 0
+            while i < 32:
+                k.append(Kdf._raw_byte_at(kbytes, i))
+                i = i + 1
+            while i < block_size:
+                k.append(0)
+                i = i + 1
+        else:
+            i = 0
+            while i < klen:
+                k.append(Kdf._raw_byte_at_ptr(kp, i))
+                i = i + 1
+            while i < block_size:
+                k.append(0)
+                i = i + 1
+
+        mut ipad: List[int] = []
+        mut opad: List[int] = []
+        i = 0
+        while i < block_size:
+            ipad.append(k[i] ^ 0x36)
+            opad.append(k[i] ^ 0x5c)
+            i = i + 1
+
+        # inner = SHA256(ipad || msg)
+        mut inner_sb = StringBuilder.init(block_size + mlen + 2)
+        i = 0
+        while i < block_size:
+            inner_sb.append_char(ipad[i])
+            i = i + 1
+        mut mp = msg as Pointer[char]
+        i = 0
+        while i < mlen:
+            inner_sb.append_char(Kdf._raw_byte_at_ptr(mp, i))
+            i = i + 1
+        mut inner_msg = inner_sb.to_owned()
+        inner_sb.free()
+        mut inner_digest = Hash.sha256_bytes(inner_msg, block_size + mlen)
+
+        # outer = SHA256(opad || inner)
+        mut outer_sb = StringBuilder.init(block_size + 34)
+        i = 0
+        while i < block_size:
+            outer_sb.append_char(opad[i])
+            i = i + 1
+        i = 0
+        while i < 32:
+            outer_sb.append_char(Kdf._raw_byte_at(inner_digest, i))
+            i = i + 1
+        mut outer_msg = outer_sb.to_owned()
+        outer_sb.free()
+        return Hash.sha256_bytes(outer_msg, block_size + 32)
+
+    # salt || INT_32_BE(block_idx), as raw bytes.
+    pub def _salt_with_index(salt: str, slen: int, block_idx: int) -> str:
+        mut sp = salt as Pointer[char]
+        mut sb = StringBuilder.init(slen + 6)
+        mut i = 0
+        while i < slen:
+            sb.append_char(Kdf._raw_byte_at_ptr(sp, i))
+            i = i + 1
+        sb.append_char((block_idx >> 24) & 0xff)
+        sb.append_char((block_idx >> 16) & 0xff)
+        sb.append_char((block_idx >> 8) & 0xff)
+        sb.append_char(block_idx & 0xff)
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    pub def _raw_byte_at(s: str, idx: int) -> int:
+        mut p = s as Pointer[char]
+        return (p.offset(idx).read() as int) & 0xff
+
+    pub def _raw_byte_at_ptr(p: Pointer[char], idx: int) -> int:
+        return (p.offset(idx).read() as int) & 0xff

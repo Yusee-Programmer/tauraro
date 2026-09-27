@@ -1,0 +1,377 @@
+# std.encoding.ini — INI file parser and serializer (common practical dialect).
+#
+# Supports: `[section]` headers (values before any header land in an implicit
+# "" default section), `key = value` and `key: value` separators, `;` and `#`
+# comments (full-line and inline — never stripped out of a quoted value),
+# quoted values (`"..."` / `'...'`, quotes stripped on parse), and whitespace
+# trimming around keys/values/section names. Blank lines are ignored.
+#
+# INI has no native type system — every value is a plain `str`; callers
+# decide how to interpret it (int/bool/etc).
+#
+#   from std.encoding.ini import IniDoc, Ini
+#   mut doc = Ini.parse("[server]\nport = 8080\nname = \"Tauraro\"\n")
+#   print(doc.get("server", "port"))   # "8080"
+#   print(Ini.stringify(doc))          # round-trips to canonical INI text
+
+from std.core.vec import Vec
+from std.core.string import StringBuilder
+
+extern "C":
+    def _tr_strlen(s: str) -> int
+
+# A single "section" of key -> value pairs, in insertion order.
+pub class IniSection:
+    pub name: str
+    pub keys: Vec[str]
+    pub vals: Vec[str]
+
+extend IniSection:
+    pub def init(name: str) -> IniSection:
+        mut s = IniSection()
+        s.name = name
+        s.keys = Vec[str].init(4)
+        s.vals = Vec[str].init(4)
+        return s
+
+    pub def has(self, key: str) -> bool:
+        mut i = 0
+        while i < self.keys.len:
+            if self.keys.get(i) == key: return true
+            i = i + 1
+        return false
+
+    pub def get(self, key: str) -> str:
+        mut i = 0
+        while i < self.keys.len:
+            if self.keys.get(i) == key: return self.vals.get(i)
+            i = i + 1
+        return ""
+
+    pub def set(self, key: str, value: str):
+        mut i = 0
+        while i < self.keys.len:
+            if self.keys.get(i) == key:
+                self.vals.set(i, value)
+                return
+            i = i + 1
+        self.keys.push(key)
+        self.vals.push(value)
+
+# The parsed document: an ordered list of sections (the implicit default
+# section, name == "", is always present at index 0).
+pub class IniDoc:
+    pub sections: Vec[IniSection]
+
+extend IniDoc:
+    pub def init() -> IniDoc:
+        mut d = IniDoc()
+        d.sections = Vec[IniSection].init(4)
+        d.sections.push(IniSection.init(""))
+        return d
+
+    pub def find_section(self, name: str) -> IniSection:
+        mut i = 0
+        while i < self.sections.len:
+            mut s = self.sections.get(i)
+            if s.name == name: return s
+            i = i + 1
+        return IniSection.init("")   # sentinel: not found, empty, name ""
+
+    pub def has_section(self, name: str) -> bool:
+        mut i = 0
+        while i < self.sections.len:
+            if self.sections.get(i).name == name: return true
+            i = i + 1
+        return false
+
+    # Get-or-create the named section.
+    pub def section(self, name: str) -> IniSection:
+        mut i = 0
+        while i < self.sections.len:
+            mut s = self.sections.get(i)
+            if s.name == name: return s
+            i = i + 1
+        mut ns = IniSection.init(name)
+        self.sections.push(ns)
+        return ns
+
+    pub def has(self, section: str, key: str) -> bool:
+        if not self.has_section(section): return false
+        return self.find_section(section).has(key)
+
+    pub def get(self, section: str, key: str) -> str:
+        return self.find_section(section).get(key)
+
+    pub def set(self, section: str, key: str, value: str):
+        self.section(section).set(key, value)
+
+    pub def section_names(self) -> Vec[str]:
+        mut out = Vec[str].init(self.sections.len)
+        mut i = 0
+        while i < self.sections.len:
+            out.push(self.sections.get(i).name)
+            i = i + 1
+        return out
+
+    pub def keys(self, section: str) -> Vec[str]:
+        mut out = Vec[str].init(4)
+        if not self.has_section(section): return out
+        mut s = self.find_section(section)
+        mut i = 0
+        while i < s.keys.len:
+            out.push(s.keys.get(i))
+            i = i + 1
+        return out
+
+# ─── Parser ─────────────────────────────────────────────────────────────────
+
+pub class IniParser:
+    pub src: str
+    pub pos: int
+    pub len: int
+
+extend IniParser:
+    pub def init(src: str) -> IniParser:
+        mut p = IniParser()
+        p.src = src
+        p.pos = 0
+        p.len = _tr_strlen(src)
+        return p
+
+    pub def cur(self) -> int:
+        if self.pos >= self.len: return 0
+        return (self.src as Pointer[char]).offset(self.pos).read() as int
+
+    pub def advance(self):
+        self.pos = self.pos + 1
+
+    pub def is_space(self, c: int) -> bool:
+        return c == 32 or c == 9 or c == 13
+
+    # Skip spaces/tabs/CR only (not newlines).
+    pub def skip_inline_ws(self):
+        while self.pos < self.len and self.is_space(self.cur()):
+            self.advance()
+
+    # Skip blank lines and full-line comments (';' or '#' as first
+    # non-whitespace char on the line).
+    pub def skip_blank_and_comment_lines(self):
+        while self.pos < self.len:
+            mut save = self.pos
+            self.skip_inline_ws()
+            mut c = self.cur()
+            if c == 10:
+                self.advance()
+            elif c == 59 or c == 35:   # ';' or '#'
+                while self.pos < self.len and self.cur() != 10:
+                    self.advance()
+            else:
+                self.pos = save
+                break
+
+    # Read raw text up to (not including) end-of-line, without interpreting
+    # quotes/comments.
+    pub def read_line(self) -> str:
+        mut start = self.pos
+        while self.pos < self.len and self.cur() != 10:
+            self.advance()
+        mut out = ""
+        unsafe:
+            out = self.src.slice(start, self.pos)
+        return out
+
+    pub def parse(self) -> IniDoc:
+        mut doc = IniDoc.init()
+        mut cur_section = ""
+        while self.pos < self.len:
+            self.skip_blank_and_comment_lines()
+            if self.pos >= self.len: break
+            mut c = self.cur()
+            if c == 91:   # '[' section header
+                cur_section = self.parse_section_header()
+                doc.section(cur_section)
+            else:
+                mut line = self.read_line()
+                if self.pos < self.len: self.advance()   # consume '\n'
+                self.parse_kv_line(doc, cur_section, line)
+        return doc
+
+    pub def parse_section_header(self) -> str:
+        self.advance()   # '['
+        mut sb = StringBuilder.init(16)
+        while self.pos < self.len and self.cur() != 93 and self.cur() != 10:
+            sb.append_char(self.cur())
+            self.advance()
+        if self.pos < self.len and self.cur() == 93: self.advance()   # ']'
+        # consume rest of the line (allows trailing comments after ']')
+        while self.pos < self.len and self.cur() != 10:
+            self.advance()
+        if self.pos < self.len: self.advance()   # '\n'
+        mut raw = sb.to_owned()
+        sb.free()
+        return _ini_trim(raw)
+
+    # Parse a "key = value" or "key: value" line (already stripped of its
+    # trailing newline) and, if valid, set it on `doc`/`section`.
+    pub def parse_kv_line(self, doc: IniDoc, section: str, line: str):
+        mut n = _tr_strlen(line)
+        if n == 0: return
+        mut p = line as Pointer[char]
+        # Find the first unquoted '=' or ':'.
+        mut i = 0
+        mut sep = -1
+        mut in_quote = 0   # 0 = not in quote, else holds the quote char
+        while i < n:
+            mut c = p.offset(i).read() as int
+            if in_quote != 0:
+                if c == in_quote: in_quote = 0
+            else:
+                if c == 34 or c == 39:
+                    in_quote = c
+                elif c == 61 or c == 58:   # '=' or ':'
+                    sep = i
+                    break
+            i = i + 1
+        if sep < 0: return   # not a key/value line (stray text) — ignore
+        mut key = ""
+        unsafe:
+            key = line.slice(0, sep)
+        key = _ini_trim(key)
+        if key.len() == 0: return
+        mut rest = ""
+        unsafe:
+            rest = line.slice(sep + 1, n)
+        mut value = _ini_parse_value(rest)
+        doc.set(section, key, value)
+
+# Trim leading/trailing spaces, tabs, and CR from a string.
+pub def _ini_trim(s: str) -> str:
+    mut n = _tr_strlen(s)
+    if n == 0: return s
+    mut p = s as Pointer[char]
+    mut start = 0
+    while start < n:
+        mut c = p.offset(start).read() as int
+        if c == 32 or c == 9 or c == 13: start = start + 1
+        else: break
+    mut end = n
+    while end > start:
+        mut c = p.offset(end - 1).read() as int
+        if c == 32 or c == 9 or c == 13: end = end - 1
+        else: break
+    if start == 0 and end == n: return s
+    mut out = ""
+    unsafe:
+        out = s.slice(start, end)
+    return out
+
+# Parse the value portion of a "key = <rest>" line: trims whitespace, strips
+# a matching pair of quotes (if the value is fully quoted), and otherwise
+# strips an inline ';' or '#' comment (only outside quotes).
+pub def _ini_parse_value(rest: str) -> str:
+    mut trimmed = _ini_trim(rest)
+    mut n = _tr_strlen(trimmed)
+    if n == 0: return ""
+    mut p = trimmed as Pointer[char]
+    mut first = p.offset(0).read() as int
+    if (first == 34 or first == 39) and n >= 2:
+        # Fully-quoted value: find the matching closing quote, take
+        # everything between as the literal value (ignore anything after —
+        # typically a trailing inline comment).
+        mut close = -1
+        mut i = 1
+        while i < n:
+            mut c = p.offset(i).read() as int
+            if c == first:
+                close = i
+                break
+            i = i + 1
+        if close > 0:
+            mut out = ""
+            unsafe:
+                out = trimmed.slice(1, close)
+            return out
+        # Unterminated quote — fall through and treat literally (trimmed).
+        return trimmed
+    # Unquoted: strip an inline comment (';' or '#') and trim again.
+    mut i = 0
+    mut cut = n
+    while i < n:
+        mut c = p.offset(i).read() as int
+        if c == 59 or c == 35:
+            cut = i
+            break
+        i = i + 1
+    mut val = ""
+    unsafe:
+        val = trimmed.slice(0, cut)
+    return _ini_trim(val)
+
+# ─── Serializer ─────────────────────────────────────────────────────────────
+
+# True if `s` needs quoting to round-trip safely: leading/trailing
+# whitespace, or contains a comment character / newline.
+pub def _ini_needs_quote(s: str) -> bool:
+    mut n = _tr_strlen(s)
+    if n == 0: return false
+    mut p = s as Pointer[char]
+    mut first = p.offset(0).read() as int
+    mut last = p.offset(n - 1).read() as int
+    if first == 32 or first == 9: return true
+    if last == 32 or last == 9: return true
+    mut i = 0
+    while i < n:
+        mut c = p.offset(i).read() as int
+        if c == 59 or c == 35 or c == 10 or c == 13: return true
+        i = i + 1
+    return false
+
+pub def _ini_write_value(s: str, sb: StringBuilder):
+    if _ini_needs_quote(s):
+        sb.append("\"")
+        mut n = _tr_strlen(s)
+        mut p = s as Pointer[char]
+        mut i = 0
+        while i < n:
+            mut c = p.offset(i).read() as int
+            if c == 34: sb.append("\\\"")
+            else: sb.append_char(c)
+            i = i + 1
+        sb.append("\"")
+    else:
+        sb.append(s)
+
+# ─── Public API ─────────────────────────────────────────────────────────────
+
+pub class Ini:
+    _dummy: int
+
+extend Ini:
+    pub def parse(src: str) -> IniDoc:
+        mut p = IniParser.init(src)
+        return p.parse()
+
+    pub def stringify(doc: IniDoc) -> str:
+        mut sb = StringBuilder.init(256)
+        mut si = 0
+        while si < doc.sections.len:
+            mut s = doc.sections.get(si)
+            if s.name.len() > 0:
+                if si > 0: sb.append("\n")
+                sb.append("[")
+                sb.append(s.name)
+                sb.append("]\n")
+            mut ki = 0
+            while ki < s.keys.len:
+                sb.append(s.keys.get(ki))
+                sb.append(" = ")
+                _ini_write_value(s.vals.get(ki), sb)
+                sb.append("\n")
+                ki = ki + 1
+            si = si + 1
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    pub def doc() -> IniDoc: return IniDoc.init()

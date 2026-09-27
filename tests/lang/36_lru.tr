@@ -1,0 +1,214 @@
+# tests/lang/36_lru.tr - std.collections.lru: LruCache[K, V] fixed-capacity
+# least-recently-used cache. Covers basic put/fetch, strict capacity
+# enforcement + correct eviction victim, fetch-refreshes-recency (proving
+# real LRU order tracking, not FIFO), put-on-existing-key (update without
+# evict), remove(), clear(), len()/capacity(), and a longer hand-traced
+# interleaved sequence.
+#
+# Lookups are named fetch()/fetch_or() rather than get()/get_or() -- see the
+# "Public API" note in std/collections/lru.tr for why (a confirmed compiler
+# bug mis-infers the return type of a method literally named get/get_or/pop
+# on a 2+-type-param generic class).
+
+from std.test import TestRunner
+from std.collections.lru import LruCache
+
+def main():
+    mut t = TestRunner.init("36_lru")
+
+    # ── basic put/fetch ────────────────────────────────────────────────────────
+    t.section("basic put/fetch")
+    mut c = LruCache[str, int].init(3)
+    t.assert_eq_int(c.len(), 0, "starts empty")
+    t.assert_eq_int(c.capacity(), 3, "capacity reported")
+    t.assert_true(c.is_empty(), "is_empty true initially")
+    t.assert_false(c.has("a"), "has() false before insert")
+
+    c.put("a", 1)
+    t.assert_true(c.has("a"), "has() true after put")
+    t.assert_eq_int(c.fetch("a"), 1, "fetch returns stored value")
+    t.assert_eq_int(c.len(), 1, "len is 1 after one put")
+    t.assert_false(c.is_empty(), "not empty after put")
+
+    c.put("b", 2)
+    c.put("c", 3)
+    t.assert_eq_int(c.len(), 3, "len is 3 after three puts (== capacity)")
+    t.assert_true(c.is_full(), "is_full true at capacity")
+    t.assert_eq_int(c.fetch("b"), 2, "fetch b")
+    t.assert_eq_int(c.fetch("c"), 3, "fetch c")
+
+    # ── capacity eviction: correct victim ───────────────────────────────────
+    # Cache order after the puts above (MRU -> LRU): c, b, a
+    # (each put moves the new key to MRU). Insert "d" -> over capacity ->
+    # evict LRU, which is "a" (never touched since its initial put).
+    t.section("capacity eviction picks the correct victim")
+    c.put("d", 4)
+    t.assert_eq_int(c.len(), 3, "len stays capped at capacity after eviction")
+    t.assert_false(c.has("a"), "a (LRU) was evicted")
+    t.assert_true(c.has("b"), "b survives")
+    t.assert_true(c.has("c"), "c survives")
+    t.assert_true(c.has("d"), "d (new) present")
+
+    # ── fetch() refreshes recency — distinguishes real LRU from FIFO ─────────
+    # Order after previous section (MRU -> LRU): d, c, b
+    # If eviction were plain insertion-order FIFO, the next eviction would
+    # always remove the oldest-inserted survivor regardless of fetch() calls.
+    # A real LRU must instead spare whatever was most recently *read*.
+    t.section("fetch() refreshes recency (real LRU, not FIFO)")
+    t.assert_eq_int(c.fetch("b"), 2, "read b -- b becomes MRU")
+    # Order now (MRU -> LRU): b, d, c
+    c.put("e", 5)   # over capacity -> evict LRU = "c" (NOT "b", despite b being older by insertion)
+    t.assert_false(c.has("c"), "c (now LRU) was evicted, not b")
+    t.assert_true(c.has("b"), "b spared -- fetch() moved it off the eviction path")
+    t.assert_true(c.has("d"), "d survives")
+    t.assert_true(c.has("e"), "e (new) present")
+    t.assert_eq_int(c.len(), 3, "len still capped at 3")
+
+    # Order now (MRU -> LRU): e, b, d
+    # A FIFO-only (insertion-order) implementation would have evicted "d" only
+    # by coincidence here since d is also the oldest inserted survivor -- so
+    # drive one more round trip to fully separate the two policies.
+    t.assert_eq_int(c.fetch("d"), 4, "read d -- d becomes MRU")
+    # Order now (MRU -> LRU): d, e, b
+    c.put("f", 6)   # evict LRU = "b" (the least-recently GET/PUT, oldest touch)
+    t.assert_false(c.has("b"), "b (now LRU after being untouched) was evicted")
+    t.assert_true(c.has("d"), "d spared by the earlier fetch()")
+    t.assert_true(c.has("e"), "e spared (was touched more recently than b)")
+    t.assert_true(c.has("f"), "f (new) present")
+
+    # ── put() on existing key updates value + recency, no eviction ─────────
+    t.section("put() on existing key updates without evicting")
+    mut c2 = LruCache[str, int].init(2)
+    c2.put("x", 10)
+    c2.put("y", 20)
+    t.assert_eq_int(c2.len(), 2, "full at capacity 2")
+    c2.put("x", 999)     # update existing key -- must NOT evict "y"
+    t.assert_eq_int(c2.len(), 2, "len unchanged after updating an existing key")
+    t.assert_true(c2.has("y"), "y NOT evicted by updating x")
+    t.assert_eq_int(c2.fetch("x"), 999, "x value updated")
+    # x is now MRU (from the put), y is LRU -- next new key evicts y.
+    c2.put("z", 30)
+    t.assert_false(c2.has("y"), "y (LRU after x's update) evicted on next insert")
+    t.assert_true(c2.has("x"), "x survives (was refreshed by the update put)")
+    t.assert_true(c2.has("z"), "z (new) present")
+
+    # ── remove() ─────────────────────────────────────────────────────────────
+    t.section("remove()")
+    mut c3 = LruCache[str, int].init(3)
+    c3.put("p", 1)
+    c3.put("q", 2)
+    c3.put("r", 3)
+    c3.remove("q")
+    t.assert_false(c3.has("q"), "q removed")
+    t.assert_eq_int(c3.len(), 2, "len decremented after remove")
+    c3.remove("q")   # no-op, already absent
+    t.assert_eq_int(c3.len(), 2, "removing an absent key is a no-op")
+    # Removed slot must be reusable without breaking capacity accounting.
+    # State after remove("q") (MRU -> LRU): r, p  (2 entries, 1 free slot).
+    c3.put("s", 4)    # new key, still under capacity -> {r, p, s} MRU->LRU: s, r, p
+    t.assert_eq_int(c3.len(), 3, "cache usable up to capacity again after remove+reinsert")
+    t.assert_true(c3.has("p"), "p still present (not yet evicted)")
+    t.assert_true(c3.has("r"), "r still present")
+    t.assert_true(c3.has("s"), "s present")
+    # Now AT capacity again (3/3). One more new key must evict the real LRU,
+    # which is "p" (untouched since its initial put, now the oldest touch).
+    c3.put("u", 5)    # over capacity -> evict LRU = "p" -> {r, s, u}
+    t.assert_eq_int(c3.len(), 3, "len stays capped after the next eviction")
+    t.assert_false(c3.has("p"), "p (LRU survivor of the remove) evicted on next insert")
+    t.assert_true(c3.has("r"), "r still present")
+    t.assert_true(c3.has("s"), "s still present")
+    t.assert_true(c3.has("u"), "u (new) present")
+
+    # ── clear() ──────────────────────────────────────────────────────────────
+    t.section("clear()")
+    c3.clear()
+    t.assert_eq_int(c3.len(), 0, "len is 0 after clear")
+    t.assert_true(c3.is_empty(), "is_empty true after clear")
+    t.assert_false(c3.has("p"), "p gone after clear")
+    t.assert_false(c3.has("s"), "s gone after clear")
+    # Cache must be fully reusable after clear (slab/free-list intact).
+    c3.put("m", 100)
+    c3.put("n", 200)
+    c3.put("o", 300)
+    t.assert_eq_int(c3.len(), 3, "cache refills to capacity after clear")
+    c3.put("extra", 400)   # over capacity -> evicts LRU = "m"
+    t.assert_false(c3.has("m"), "eviction still works correctly post-clear")
+    t.assert_true(c3.has("extra"), "new entry present post-clear")
+
+    # ── len()/capacity() never exceed bound across churn ────────────────────
+    t.section("len()/capacity() bound is never violated")
+    mut c4 = LruCache[int, int].init(4)
+    mut i = 0
+    while i < 50:
+        c4.put(i, i * 10)
+        t.assert_true(c4.len() <= 4, "len never exceeds capacity during churn")
+        i = i + 1
+    t.assert_eq_int(c4.len(), 4, "settles at exactly capacity after heavy churn")
+    t.assert_eq_int(c4.capacity(), 4, "capacity field unchanged by churn")
+    # Only the last 4 inserted keys (46,47,48,49) should remain.
+    t.assert_true(c4.has(46), "46 survives (within last 4 inserted)")
+    t.assert_true(c4.has(47), "47 survives")
+    t.assert_true(c4.has(48), "48 survives")
+    t.assert_true(c4.has(49), "49 survives")
+    t.assert_false(c4.has(45), "45 evicted (outside last 4)")
+    t.assert_false(c4.has(0), "0 long evicted")
+
+    # ── longer interleaved sequence, hand-traced expected state ────────────
+    t.section("interleaved fetch/put sequence (hand-traced)")
+    mut c5 = LruCache[str, int].init(3)
+    # 1. put A=1        -> {A}          MRU->LRU: A
+    c5.put("A", 1)
+    # 2. put B=2        -> {A,B}        MRU->LRU: B,A
+    c5.put("B", 2)
+    # 3. put C=3        -> {A,B,C} full MRU->LRU: C,B,A
+    c5.put("C", 3)
+    t.assert_eq_int(c5.len(), 3, "step3: full at 3")
+    # 4. get A -> 1     -> touches A    MRU->LRU: A,C,B
+    t.assert_eq_int(c5.fetch("A"), 1, "step4: fetch A")
+    # 5. put D=4        -> over cap, evict LRU=B -> {A,C,D} MRU->LRU: D,A,C
+    c5.put("D", 4)
+    t.assert_false(c5.has("B"), "step5: B evicted (was LRU)")
+    t.assert_true(c5.has("A"), "step5: A present")
+    t.assert_true(c5.has("C"), "step5: C present")
+    t.assert_true(c5.has("D"), "step5: D present")
+    # 6. get C -> 3     -> touches C    MRU->LRU: C,D,A
+    t.assert_eq_int(c5.fetch("C"), 3, "step6: fetch C")
+    # 7. put A=99       -> existing key update, touches A, no evict
+    #                      MRU->LRU: A,C,D
+    c5.put("A", 99)
+    t.assert_eq_int(c5.len(), 3, "step7: still 3 entries, no eviction on update")
+    t.assert_eq_int(c5.fetch("A"), 99, "step7: A value updated to 99")
+    # (that get also re-touches A, order stays A,C,D at head)
+    # 8. put E=5        -> over cap, evict LRU=D -> {A,C,E} MRU->LRU: E,A,C
+    c5.put("E", 5)
+    t.assert_false(c5.has("D"), "step8: D evicted (was LRU)")
+    t.assert_true(c5.has("A"), "step8: A present")
+    t.assert_true(c5.has("C"), "step8: C present")
+    t.assert_true(c5.has("E"), "step8: E present")
+    # 9. remove C       -> explicit removal -> {A,E} MRU->LRU: E,A
+    c5.remove("C")
+    t.assert_false(c5.has("C"), "step9: C explicitly removed")
+    t.assert_eq_int(c5.len(), 2, "step9: len is 2 after explicit remove")
+    # 10. put F=6, put G=7 -> {A,E,F,G} would be 4 > cap 3
+    #     put F=6  -> {A,E,F}         MRU->LRU: F,E,A
+    c5.put("F", 6)
+    t.assert_eq_int(c5.len(), 3, "step10a: len 3 after refilling freed slot")
+    #     put G=7  -> over cap, evict LRU=A -> {E,F,G} MRU->LRU: G,F,E
+    c5.put("G", 7)
+    t.assert_false(c5.has("A"), "step10b: A evicted (was LRU after remove(C) freed a slot)")
+    t.assert_true(c5.has("E"), "step10b: E present")
+    t.assert_true(c5.has("F"), "step10b: F present")
+    t.assert_true(c5.has("G"), "step10b: G present")
+    t.assert_eq_int(c5.len(), 3, "step10b: len capped at 3")
+    t.assert_eq_int(c5.fetch("E"), 5, "final: E value correct")
+    t.assert_eq_int(c5.fetch("F"), 6, "final: F value correct")
+    t.assert_eq_int(c5.fetch("G"), 7, "final: G value correct")
+
+    # ── get_or() ─────────────────────────────────────────────────────────────
+    t.section("fetch_or()")
+    mut c6 = LruCache[str, int].init(2)
+    c6.put("k", 42)
+    t.assert_eq_int(c6.fetch_or("k", -1), 42, "fetch_or hit returns stored value")
+    t.assert_eq_int(c6.fetch_or("missing", -1), -1, "fetch_or miss returns default")
+
+    t.summary()

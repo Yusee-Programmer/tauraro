@@ -1,0 +1,257 @@
+# tests/lang/44_crypto2.tr - std.crypto additions: SHA-512/384, ChaCha20-
+# Poly1305 AEAD, PBKDF2-HMAC-SHA256, and JWT (HS256), all verified against
+# official/well-known known-answer test vectors (NIST/FIPS-180-4 for
+# SHA-512, RFC 8439 sections 2.3.2/2.5.2/2.8.2 for ChaCha20-Poly1305, and
+# well-known PBKDF2-HMAC-SHA256 cross-implementation vectors for PBKDF2).
+#
+# NOTE: like tests/lang/42_aes.tr, raw ciphertext/digest/key bytes here can
+# contain embedded NUL (0x00) bytes, so this test tracks byte lengths in
+# separate int variables throughout and uses its own masked (`& 0xff`) hex
+# encoder rather than std/encoding/hex.tr's Hex.encode_bytes (which has a
+# pre-existing signed-char bug on bytes >= 0x80, documented in 42_aes.tr).
+
+from std.test import TestRunner
+from std.crypto.sha512 import Sha512
+from std.crypto.chacha20 import ChaCha20, Poly1305
+from std.crypto.kdf import Kdf
+from std.crypto.jwt import Jwt, JwtResult
+from std.encoding.hex import Hex
+from std.core.string import StringBuilder
+
+def _hex_nibble(n: int) -> int:
+    if n < 10: return n + 48    # '0'-'9'
+    return n + 87                # 'a'-'f'
+
+def _bytes_hex(p: Pointer[char], n: int) -> str:
+    mut sb = StringBuilder.init(n * 2 + 2)
+    mut i = 0
+    while i < n:
+        mut b = 0
+        unsafe:
+            b = p.offset(i).read() as int
+        mut v = b & 0xff
+        sb.append_char(_hex_nibble(v / 16))
+        sb.append_char(_hex_nibble(v % 16))
+        i = i + 1
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+def main():
+    mut t = TestRunner.init("44_crypto2")
+
+    # ── SHA-512 / SHA-384 known-answer vectors (NIST/FIPS-180-4) ──────────
+    t.section("SHA-512 known-answer vectors")
+    t.assert_eq_str(
+        Sha512.sha512(""),
+        "cf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce47d0d13c5d85f2b0ff8318d2877eec2f63b931bd47417a81a538327af927da3e",
+        "SHA-512('')")
+    t.assert_eq_str(
+        Sha512.sha512("abc"),
+        "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f",
+        "SHA-512('abc')")
+    t.assert_eq_str(
+        Sha512.sha512("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"),
+        "204a8fc6dda82f0a0ced7beb8e08a41657c16ef468b228a8279be331a703c33596fd15c13b1b07f9aa1d3bea57789ca031ad85c7a71dd70354ec631238ca3445",
+        "SHA-512 multi-block vector")
+
+    t.section("SHA-384 known-answer vectors")
+    t.assert_eq_str(
+        Sha512.sha384(""),
+        "38b060a751ac96384cd9327eb1b1e36a21fdb71114be07434c0cc7bf63f6e1da274edebfe76f65fbd51ad2f14898b95b",
+        "SHA-384('')")
+    t.assert_eq_str(
+        Sha512.sha384("abc"),
+        "cb00753f45a35e8bb5a03d699ac65007272c32ab0eded1631a8b605a43ff5bed8086072ba1e7cc2358baeca134c825a7",
+        "SHA-384('abc')")
+
+    t.section("SHA-512 long multi-block message")
+    mut long_msg = "The quick brown fox jumps over the lazy dog. Pack my box with five dozen liquor jugs. The quick brown fox jumps over the lazy dog. Pack my box with five dozen liquor jugs. The quick brown fox jumps over the lazy dog. Pack my box with five dozen liquor jugs. "
+    t.assert_eq_str(
+        Sha512.sha512_bytes(long_msg, 258),
+        "c6d10a86eb90db8a516de188b755b5d0d5a298317d4ad4e070b5b8f2093619460af4c07c070b29d6695e0df24bf8d69c153ef704efc77540d44742e77e9799d5",
+        "SHA-512 258-byte multi-block message")
+
+    # ── ChaCha20 block function (RFC 8439 section 2.3.2) ────────────────
+    t.section("ChaCha20-Poly1305: RFC 8439 section 2.8.2 full AEAD vector")
+    mut plaintext = Hex.decode("4c616469657320616e642047656e746c656d656e206f662074686520636c617373206f66202739393a204966204920636f756c64206f6666657220796f75206f6e6c79206f6e652074697020666f7220746865206675747572652c2073756e73637265656e20776f756c642062652069742e")
+    mut aad = Hex.decode("50515253c0c1c2c3c4c5c6c7")
+    mut key = Hex.decode("808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f")
+    mut nonce = Hex.decode("070000004041424344454647")
+    mut plen = plaintext.len()
+    mut alen = aad.len()
+
+    mut enc_result = ChaCha20.encrypt(plaintext, plen, key, nonce, aad, alen)
+    mut ct = enc_result[0]
+    mut tag = enc_result[1]
+
+    t.assert_eq_str(
+        _bytes_hex(ct as Pointer[char], plen),
+        "d31a8d34648e60db7b86afbc53ef7ec2a4aded51296e08fea9e2b5a736ee62d63dbea45e8ca9671282fafb69da92728b1a71de0a9e060b2905d6a5b67ecd3b3692ddbd7f2d778b8c9803aee328091b58fab324e4fad675945585808b4831d7bc3ff4def08e4b7a9de576d26586cec64b6116",
+        "RFC 8439 AEAD ciphertext matches")
+    t.assert_eq_str(
+        _bytes_hex(tag as Pointer[char], 16),
+        "1ae10b594f09e26a7e902ecbd0600691",
+        "RFC 8439 AEAD tag matches")
+
+    t.section("ChaCha20-Poly1305: decrypt round-trip via the RFC vector")
+    match ChaCha20.decrypt(ct, plen, key, nonce, aad, alen, tag):
+        case Option.Some(recovered):
+            t.assert_eq_str(recovered, plaintext, "decrypt recovers exact RFC plaintext")
+        case Option.None:
+            t.fail("RFC vector ciphertext should decrypt+verify successfully")
+
+    t.section("ChaCha20-Poly1305: standalone Poly1305 vector (RFC 8439 2.5.2)")
+    mut poly_key = Hex.decode("85d6be7857556d337f4452fe42d506a80103808afb0db2fd4abff6af4149f51b")
+    mut poly_msg = "Cryptographic Forum Research Group"
+    mut poly_tag = Poly1305.compute(poly_msg, poly_msg.len(), poly_key)
+    t.assert_eq_str(_bytes_hex(poly_tag as Pointer[char], 16), "a8061dc1305136c6c22b8baf0c0127a9", "RFC 8439 Poly1305-only vector")
+
+    t.section("ChaCha20-Poly1305: generic round-trip + tamper rejection")
+    mut msg2 = "Hello, ChaCha20-Poly1305! This is a longer test message spanning multiple 64-byte blocks to exercise the counter increment logic thoroughly."
+    mut aad2 = "header-data"
+    mut key2 = Hex.decode("808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f")
+    mut nonce2 = Hex.decode("070000004041424344454647")
+    mut plen2 = msg2.len()
+    mut alen2 = aad2.len()
+
+    mut r2 = ChaCha20.encrypt(msg2, plen2, key2, nonce2, aad2, alen2)
+    mut ct2 = r2[0]
+    mut tag2 = r2[1]
+
+    match ChaCha20.decrypt(ct2, plen2, key2, nonce2, aad2, alen2, tag2):
+        case Option.Some(recovered2):
+            t.assert_eq_str(recovered2, msg2, "generic multi-block round-trip")
+        case Option.None:
+            t.fail("generic round-trip should succeed")
+
+    # Tamper with the ciphertext -> must be rejected, not silently decrypted.
+    mut cp2 = ct2 as Pointer[char]
+    mut orig_byte = 0
+    unsafe:
+        orig_byte = cp2.offset(0).read() as int
+        cp2.offset(0).write((orig_byte ^ 0xff) as char)
+    match ChaCha20.decrypt(ct2, plen2, key2, nonce2, aad2, alen2, tag2):
+        case Option.Some(recovered3):
+            t.fail("tampered ciphertext must not decrypt successfully")
+        case Option.None:
+            t.assert_true(true, "tampered ciphertext correctly rejected")
+    unsafe:
+        cp2.offset(0).write(orig_byte as char)   # restore for the next check
+
+    # Tamper with the AAD -> must also be rejected.
+    mut bad_aad2 = "header-dat!"
+    match ChaCha20.decrypt(ct2, plen2, key2, nonce2, bad_aad2, alen2, tag2):
+        case Option.Some(recovered4):
+            t.fail("tampered aad must not decrypt successfully")
+        case Option.None:
+            t.assert_true(true, "tampered aad correctly rejected")
+
+    # Wrong tag -> must also be rejected.
+    mut wrong_tag = Hex.decode("00000000000000000000000000000000")
+    match ChaCha20.decrypt(ct2, plen2, key2, nonce2, aad2, alen2, wrong_tag):
+        case Option.Some(recovered5):
+            t.fail("wrong tag must not decrypt successfully")
+        case Option.None:
+            t.assert_true(true, "wrong tag correctly rejected")
+
+    # ── PBKDF2-HMAC-SHA256 known-answer vectors ─────────────────────────
+    t.section("PBKDF2-HMAC-SHA256 known-answer vectors")
+    t.assert_eq_str(
+        _bytes_hex(Kdf.pbkdf2_str("password", "salt", 1, 32) as Pointer[char], 32),
+        "120fb6cffcf8b32c43e7225256c4f837a86548c92ccc35480805987cb70be17b",
+        "PBKDF2-HMAC-SHA256 c=1")
+    t.assert_eq_str(
+        _bytes_hex(Kdf.pbkdf2_str("password", "salt", 2, 32) as Pointer[char], 32),
+        "ae4d0c95af6b46d32d0adff928f06dd02a303f8ef3c251dfd6e2d85a95474c43",
+        "PBKDF2-HMAC-SHA256 c=2")
+    t.assert_eq_str(
+        _bytes_hex(Kdf.pbkdf2_str("password", "salt", 4096, 32) as Pointer[char], 32),
+        "c5e478d59288c841aa530db6845c4c8d962893a001ce4e11a4963873aa98134a",
+        "PBKDF2-HMAC-SHA256 c=4096")
+
+    t.section("PBKDF2-HMAC-SHA256 multi-block output (dklen > hash size)")
+    mut dk4 = Kdf.pbkdf2_str("passwordPASSWORDpassword", "saltSALTsaltSALTsaltSALTsaltSALTsalt", 4096, 40)
+    t.assert_eq_str(
+        _bytes_hex(dk4 as Pointer[char], 40),
+        "348c89dbcbd32b2f32d814b8116e84cf2b17347ebc1800181c4e2a1fb8dd53e1c635518c7dac47e9",
+        "PBKDF2-HMAC-SHA256 40-byte (multi-block) output")
+
+    t.section("PBKDF2: different salts produce different output")
+    mut dk_a = Kdf.pbkdf2_str("same-password", "salt-one", 1000, 32)
+    mut dk_b = Kdf.pbkdf2_str("same-password", "salt-two", 1000, 32)
+    t.assert_ne_str(
+        _bytes_hex(dk_a as Pointer[char], 32),
+        _bytes_hex(dk_b as Pointer[char], 32),
+        "different salts -> different derived keys")
+
+    # ── JWT (HS256) round-trip + tamper/rejection ───────────────────────
+    t.section("JWT: encode/decode round-trip")
+    mut claims: Dict[str, str] = {}
+    claims.set("sub", "user123")
+    claims.set("role", "admin")
+    mut token = Jwt.encode(claims, "test-secret-key-for-jwt-hs256")
+
+    match Jwt.decode(token, "test-secret-key-for-jwt-hs256"):
+        case JwtResult.Ok(verified):
+            t.assert_eq_str(verified.get("sub"), "user123", "JWT round-trip: sub claim")
+            t.assert_eq_str(verified.get("role"), "admin", "JWT round-trip: role claim")
+        case JwtResult.Err(msg):
+            t.fail("valid JWT should decode successfully: " + msg)
+
+    t.section("JWT: wrong secret is rejected")
+    match Jwt.decode(token, "wrong-secret-entirely"):
+        case JwtResult.Ok(verified2):
+            t.fail("JWT with wrong secret must not verify")
+        case JwtResult.Err(msg2):
+            t.assert_true(true, "wrong secret correctly rejected")
+
+    t.section("JWT: malformed token is rejected")
+    match Jwt.decode("not-a-valid-jwt", "test-secret-key-for-jwt-hs256"):
+        case JwtResult.Ok(verified3):
+            t.fail("malformed token must not verify")
+        case JwtResult.Err(msg3):
+            t.assert_true(true, "malformed token correctly rejected")
+
+    t.section("JWT: tampered payload is rejected")
+    mut n = token.len()
+    mut tp = token as Pointer[char]
+    mut dots_seen = 0
+    mut second_dot = 0 - 1
+    mut i = 0
+    unsafe:
+        while i < n:
+            if (tp.offset(i).read() as int) == 46:
+                dots_seen = dots_seen + 1
+                if dots_seen == 2: second_dot = i
+            i = i + 1
+    mut flip_pos = second_dot - 1
+    mut orig_char = 0
+    unsafe:
+        orig_char = tp.offset(flip_pos).read() as int
+    mut new_char = 65
+    if orig_char == 65: new_char = 66
+
+    mut before = token.slice(0, flip_pos)
+    mut rest = token.slice(flip_pos + 1, n)
+    mut tsb = StringBuilder.init(n + 2)
+    tsb.append(before)
+    tsb.append_char(new_char)
+    tsb.append(rest)
+    mut tampered_token = tsb.to_owned()
+    tsb.free()
+
+    match Jwt.decode(tampered_token, "test-secret-key-for-jwt-hs256"):
+        case JwtResult.Ok(verified4):
+            t.fail("tampered JWT payload must not verify")
+        case JwtResult.Err(msg4):
+            t.assert_true(true, "tampered payload correctly rejected")
+
+    t.section("JWT: original token still verifies after building the tampered copy")
+    match Jwt.decode(token, "test-secret-key-for-jwt-hs256"):
+        case JwtResult.Ok(verified5):
+            t.assert_eq_str(verified5.get("sub"), "user123", "original token unaffected by tamper test")
+        case JwtResult.Err(msg5):
+            t.fail("original token should still verify: " + msg5)
+
+    t.summary()

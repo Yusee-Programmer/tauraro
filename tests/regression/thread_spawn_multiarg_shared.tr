@@ -1,0 +1,37 @@
+# tests/regression/thread_spawn_multiarg_shared.tr
+# Regression: Thread.spawn(fn, arg1, arg2, ...) with 2+ args where a later arg
+# is Shared[T] failed to compile. emit_spawn_wrapper_for_expr's single-arg case
+# correctly casts the unpacked worker arg back to the WORKER's declared param
+# type (a `shared` var's static type is its inner T, but the worker's param is
+# Shared[T] -> _TrSharedBox*, so using the arg expression's own type is wrong).
+# The multi-arg case never got the equivalent fix and instead cast using the
+# ARGUMENT EXPRESSION's type, producing `(Flags*)_ab[1]` instead of
+# `(_TrSharedBox*)_ab[1]` -- a hard "incompatible pointer type" compile error.
+# Fixed in src/codegen/c.tr, emit_spawn_wrapper_for_expr's multi-arg branch, to
+# look up the worker function's declared param type the same way the
+# single-arg branch already did.
+
+from std.test import TestRunner
+
+pub class Flags implements Sendable:
+    pub done: Atomic[int]
+
+extend Flags:
+    pub def init() -> Flags:
+        mut f = Flags()
+        f.done = Atomic.new(0)
+        return f
+
+def worker(port: int, flags: Shared[Flags]):
+    flags.done.store(port)
+
+def main():
+    mut t = TestRunner.init("thread_spawn_multiarg_shared")
+
+    t.section("Thread.spawn with 2+ args, a later one Shared[T]")
+    shared flags = Flags.init()
+    mut th = Thread.spawn(worker, 1234, flags)
+    th.join()
+    t.assert_eq_int(flags.done.load(), 1234, "worker wrote through the Shared[Flags] arg")
+
+    t.summary()

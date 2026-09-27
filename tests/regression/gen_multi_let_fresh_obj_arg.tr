@@ -1,0 +1,52 @@
+# Regression (bug2.txt BUG 2): `mut a, b = f(g(...))` where g(...) constructs
+# a fresh heap-class value inline as an argument used to emit a C temp
+# (`_aot_tN`) whose declaration was attached to the FOLLOWING statement
+# instead of the statement that uses it -- a straight C compile error
+# ("'_aot_tN' undeclared"). Root cause: gen_multi_let (src/codegen/c.tr) was
+# the one statement kind that never routed its RHS through flush_wraps,
+# unlike every sibling statement kind (return, plain assignment, single-
+# target let, if-conditions, the ETuple-reassignment case it was supposed
+# to mirror).
+
+from std.test import TestRunner
+
+pub class Widget:
+    pub v: int
+
+extend Widget:
+    pub def init_int(n: int) -> Widget:
+        mut b = Widget()
+        b.v = n
+        return b
+
+pub class Util:
+    _dummy: int
+
+extend Util:
+    pub def dumps(b: Widget, out_len: List[int]) -> str:
+        out_len[0] = b.v
+        return "hi"
+
+    pub def dumps_len(b: Widget) -> (str, int):
+        mut out_len = [0]
+        mut bytes_ = Util.dumps(b, out_len)
+        return (bytes_, out_len[0])
+
+def main():
+    mut t = TestRunner.init("gen_multi_let_fresh_obj_arg")
+
+    t.section("tuple-destructuring let with a fresh heap-class ctor call inline as an argument")
+    mut b0, n0 = Util.dumps_len(Widget.init_int(42))
+    t.assert_eq_int(n0, 42, "int slot from the tuple is correct")
+    t.assert_eq_str(b0, "hi", "str slot from the tuple is correct")
+
+    t.section("repeated in a loop (matches the original bug's every-occurrence manifestation)")
+    mut i = 0
+    mut all_ok = true
+    while i < 10:
+        mut bi, ni = Util.dumps_len(Widget.init_int(i))
+        if ni != i or bi != "hi": all_ok = false
+        i = i + 1
+    t.assert_true(all_ok, "10 repeated calls all see correct data")
+
+    t.summary()

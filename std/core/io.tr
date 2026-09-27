@@ -13,6 +13,7 @@ extern "C":
     def _tr_c_malloc(size: int) -> Pointer[char]
     def _tr_c_free(ptr: Pointer[char])
     def _tr_str_wrap(s: Pointer[char]) -> str
+    def _tr_str_wrap_len(s: Pointer[char], blen: int) -> str
 
 pub def read_file(path: str) -> str:
     unsafe:
@@ -26,7 +27,7 @@ pub def read_file(path: str) -> str:
         _tr_c_fread(buffer as Pointer[void], 1, size, fp)
         buffer.offset(size).write('\0')
         _tr_c_fclose(fp)
-        return _tr_str_wrap(buffer)
+        return _tr_str_wrap_len(buffer, size)
 
 pub def file_exists(path: str) -> bool:
     unsafe:
@@ -41,10 +42,22 @@ pub def write_file(path: str, content: str) -> bool:
         mut fp = _tr_c_fopen(path, "wb")
         if fp as usize == 0 as usize:
             return False
-        mut length = 0
-        mut p = content as Pointer[char]
-        while p.offset(length).read() as int != 0:
-            length = length + 1
+        # NUL-safe: use the string's OWN tracked length (content.len()), not a
+        # manual scan for the first zero byte. A manual scan silently
+        # truncates whenever `content` contains an embedded NUL -- exactly the
+        # kind of content a generated-C-source string can contain (a compiled
+        # Tauraro string literal test case, binary test vectors, etc.). This
+        # previously caused tauraroc's OWN incremental-build cache to write a
+        # truncated module/main.c to disk; the NEXT compile's content-diff
+        # check (`read_file(path) == freshly_generated_text`) then compared a
+        # SHORTER on-disk string against the full in-memory one and (having
+        # been NUL-safe itself already) correctly saw a mismatch... but the
+        # write() that was ABOUT to fix it on THIS pass hit the exact same
+        # truncating bug again, so the file could never actually catch up --
+        # observed as a stale, mismatched object file silently linked into the
+        # next unrelated test's binary (undefined-reference crashes on macOS
+        # CI, tests/lang/43_serialize.tr's flaky failure).
+        mut length = content.len()
         _tr_c_fwrite(content as Pointer[void], 1, length, fp)
         _tr_c_fclose(fp)
         return True
@@ -54,10 +67,8 @@ pub def append_file(path: str, content: str) -> bool:
         mut fp = _tr_c_fopen(path, "ab")
         if fp as usize == 0 as usize:
             return False
-        mut length = 0
-        mut p = content as Pointer[char]
-        while p.offset(length).read() as int != 0:
-            length = length + 1
+        # NUL-safe length -- see write_file's comment above.
+        mut length = content.len()
         _tr_c_fwrite(content as Pointer[void], 1, length, fp)
         _tr_c_fclose(fp)
         return True

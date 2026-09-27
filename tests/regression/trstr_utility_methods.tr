@@ -1,0 +1,112 @@
+# Regression: the ~20 "utility" string methods (upper/lower/trim/slice/
+# repeat/replace/pad/split/etc.) are now length-aware at runtime, closing
+# the gap explicitly left open by tests/regression/trstr_len_field.tr
+# ("does NOT test the ~20 utility string methods... a documented, separate,
+# larger follow-up -- not silently claimed fixed here"). This is that
+# follow-up: every method here is exercised with a string containing an
+# embedded \0 byte, verifying the byte survives (or is correctly accounted
+# for) instead of silently truncating the operation at the first \0.
+#
+# SCOPE NOTE: parse_int/parse_float/parse_bool and .format()'s ARGS (as
+# opposed to its template) are NOT covered here -- both remain a documented,
+# narrow, low-value gap (see the comments next to _tr_str_formatv and the
+# parse_* dispatch in src/codegen/c.tr), same spirit as the Dict[str,V]/
+# Set[str]-keys boundary noted in trstr_len_field.tr.
+
+from std.test import TestRunner
+from std.string.str import Str
+
+def main():
+    mut t = TestRunner.init("trstr_utility_methods")
+
+    t.section("case conversion preserves an embedded \\0 (NUL itself is untouched)")
+    mut mixed = "aB\0Cd"
+    t.assert_eq_int(mixed.to_upper().len(), 5, "to_upper() keeps all 5 bytes")
+    t.assert_true(mixed.to_upper() == "AB\0CD", "to_upper() content correct across the NUL")
+    t.assert_true(mixed.to_lower() == "ab\0cd", "to_lower() content correct across the NUL")
+    t.assert_true(mixed.capitalize() == "Ab\0cd", "capitalize() only affects position 0")
+    t.assert_true(mixed.reverse() == "dC\0Ba", "reverse() keeps the NUL in its mirrored position")
+
+    t.section("trim / strip preserve an embedded \\0 in the middle")
+    mut padded = "  ab\0cd  "
+    mut trimmed = padded.trim()
+    t.assert_eq_int(trimmed.len(), 5, "trim() drops only the real leading/trailing spaces")
+    t.assert_true(trimmed == "ab\0cd", "trim() content correct")
+
+    t.section("slice() across the embedded \\0 boundary")
+    mut s5 = "ab\0cd"
+    t.assert_true(s5.slice(0, 5) == s5, "full-range slice reproduces all 5 bytes")
+    mut mid = s5.slice(1, 4)
+    t.assert_eq_int(mid.len(), 3, "slice(1,4) is 3 bytes")
+    t.assert_true(mid == "b\0c", "slice() crossing the NUL keeps it")
+
+    t.section("repeat() duplicates the embedded \\0 correctly")
+    mut rep = "a\0b".repeat(2)
+    t.assert_eq_int(rep.len(), 6, "\"a\\0b\" (3 bytes) * 2 = 6 bytes, not 2 (which strlen-based repeat would give)")
+    t.assert_true(rep == "a\0ba\0b", "repeat() content correct")
+    mut rep_op = "a\0b" * 2
+    t.assert_eq_int(rep_op.len(), 6, "the `*` operator form agrees with .repeat()")
+
+    t.section("replace() / replace_first() around an embedded \\0")
+    mut r1 = "ab\0cd".replace("cd", "EF")
+    t.assert_true(r1 == "ab\0EF", "replace() past the NUL boundary")
+    mut r2 = "ab\0cdcd".replace_first("cd", "Z")
+    t.assert_true(r2 == "ab\0Zcd", "replace_first() only replaces the first match, after the NUL")
+
+    t.section("pad / lpad / rpad / center preserve an embedded \\0 payload")
+    mut pl = "a\0b".pad_left(5)
+    t.assert_eq_int(pl.len(), 5, "pad_left() total width is 5")
+    t.assert_true(pl == "  a\0b", "pad_left() pads before the (NUL-containing) content")
+    mut pr = "a\0b".pad_right(5)
+    t.assert_true(pr == "a\0b  ", "pad_right() pads after")
+    mut lp = Str.lpad("a\0b", 5, 42)   # '*' = 42
+    t.assert_true(lp == "**a\0b", "Str.lpad() with a custom pad char, NUL payload intact")
+    mut ctr = "a\0b".center(5)
+    t.assert_eq_int(ctr.len(), 5, "center() total width is 5")
+
+    t.section("split() keeps an embedded \\0 inside a token")
+    mut parts = "a\0b,c".split(",")
+    t.assert_eq_int(parts.len, 2, "two comma-separated tokens")
+    t.assert_eq_int(parts.get(0).len(), 3, "first token 'a\\0b' is 3 bytes, not 1")
+    t.assert_true(parts.get(0) == "a\0b", "first token content correct")
+    t.assert_true(parts.get(1) == "c", "second token content correct")
+
+    t.section("chars() splits on every byte, including an embedded \\0 as its own element")
+    mut cs = "a\0b".chars()
+    t.assert_eq_int(cs.len, 3, "3 single-byte elements, not 1")
+    t.assert_true(cs.get(0) == "a", "element 0")
+    t.assert_true(cs.get(1) == "\0", "element 1 is the lone NUL byte")
+    t.assert_true(cs.get(2) == "b", "element 2")
+
+    t.section("search / predicate methods see past an embedded \\0")
+    t.assert_true("ab\0cd".contains("cd"), "contains() finds a substring after the NUL")
+    t.assert_true("ab\0cd".contains("\0"), "contains() can search FOR the NUL byte itself")
+    t.assert_eq_int("ab\0cd".index_of("cd"), 3, "index_of() position is correct past the NUL")
+    t.assert_eq_int("ab\0cdcd".last_index_of("cd"), 5, "last_index_of() finds the later match")
+    t.assert_eq_int("ab\0cdcd".count("cd"), 2, "count() counts both occurrences")
+    t.assert_true("ab\0cd".starts_with("ab\0c"), "starts_with() can match a prefix containing the NUL")
+    t.assert_true("ab\0cd".ends_with("\0cd"), "ends_with() can match a suffix containing the NUL")
+    t.assert_false("12\03".is_digit(), "is_digit() correctly rejects a NUL byte as non-digit (old strlen-bound version would stop at '12' and wrongly say true)")
+
+    t.section("strip_prefix / strip_suffix / remove_char around an embedded \\0")
+    t.assert_true("\0abc".strip_prefix("\0") == "abc", "strip_prefix() can strip a leading NUL")
+    t.assert_true("abc\0".strip_suffix("\0") == "abc", "strip_suffix() can strip a trailing NUL")
+    mut rc = "a\0b\0c".remove_char("\0")
+    t.assert_eq_int(rc.len(), 3, "remove_char(\"\\0\") strips every embedded NUL byte")
+    t.assert_true(rc == "abc", "remove_char() content correct")
+
+    t.section("split_once() around an embedded \\0")
+    mut sov = "a\0b/tail".split_once("/")
+    t.assert_true(sov.get(0) == "a\0b", "split_once() head keeps the NUL")
+    t.assert_true(sov.get(1) == "tail", "split_once() tail correct")
+
+    t.section("Str static-method class (std.string.str) agrees, via std.core.string's StringObj/StringBuilder fix")
+    t.assert_eq_int(Str.len("ab\0cd"), 5, "Str.len() sees all 5 bytes")
+    t.assert_true(Str.eq("ab\0cd", "ab\0cd"), "Str.eq() true for identical embedded-NUL content")
+    t.assert_false(Str.eq("ab\0cd", "ab\0ce"), "Str.eq() false when they differ after the NUL")
+    t.assert_true(Str.to_upper("ab\0cd") == "AB\0CD", "Str.to_upper() preserves the NUL")
+    t.assert_true(Str.slice("ab\0cd", 1, 4) == "b\0c", "Str.slice() crosses the NUL correctly")
+    t.assert_true(Str.repeat("a\0b", 2) == "a\0ba\0b", "Str.repeat() duplicates the NUL-containing content")
+    t.assert_false(Str.is_digit("12\03"), "Str.is_digit() also correctly rejects a NUL byte")
+
+    t.summary()

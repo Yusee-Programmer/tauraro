@@ -641,16 +641,55 @@ static inline char* _tr_str_dup_owned(const char* s) {
     return r;
 }
 /* ── Refcounted string (TrStr): fat-pointer str representation ──
- * `data` points at the NUL-terminated bytes. `rc` points at a heap
- * refcount, or is NULL for literal/immortal strings — in that case
- * retain/release are no-ops, so string literals never need freeing. */
+ * `data` points at the bytes, always followed by a real NUL terminator
+ * (kept for C-interop convenience/`_tr_strz`) but `len` — not that
+ * terminator — is the authoritative byte count, so a string with an
+ * embedded \0 byte is no longer indistinguishable from one that ends
+ * there. `rc` points at a heap refcount, or is NULL for literal/immortal
+ * strings — in that case retain/release are no-ops, so string literals
+ * never need freeing.
+ *
+ * `len` is trustworthy for every TrStr constructed via this header's own
+ * constructors (`_tr_str_lit`, `_tr_str_wrap`, `_tr_str_new` and anything
+ * built on them). It is NOT yet threaded through every string-producing
+ * operation in this file: the ~20 char*-returning "utility" helpers
+ * (_tr_str_upper/lower/trim/slice/repeat/etc., tauraro_rt.h ~4307-4529)
+ * still compute their OWN output via NUL-terminated C loops internally,
+ * so if their INPUT already contains an embedded NUL, their output is
+ * still silently truncated at that byte before `_tr_str_wrap` ever gets a
+ * chance to record a length for it — `len` in that case faithfully
+ * describes the (already-truncated) output, not the original untruncated
+ * intent. Fixing those ~20 helpers individually to be length-aware is a
+ * separate, larger follow-up; not done here. Similarly, Dict/Set/TrMap
+ * (_dict_hash and friends) remain entirely char*+NUL-keyed — a str key
+ * with an embedded NUL still collides/misses exactly as before. */
 typedef struct {
     char* data;
+    size_t len;
     long* rc;
 } TrStr;
 
 static inline TrStr _tr_str_lit_impl(const char* s) {
-    TrStr t; t.data = (char*)s; t.rc = NULL; return t;
+    /* A NULL input (e.g. _tr_getenv() on an unset variable) must not become
+     * a NULL-data TrStr: every string op (comparison, concat, .len()) reads
+     * through .data unconditionally, so a NULL .data is a guaranteed
+     * segfault the moment the caller so much as compares the result to ""
+     * (main.tr's own ANDROID_NDK_ROOT/TAURARO_PATH/PATH lookups do exactly
+     * this at startup, unconditionally, on every invocation). Degrade to
+     * the immortal empty string instead, same as every other "safe empty
+     * default" in this runtime. */
+    TrStr t; t.data = s ? (char*)s : ""; t.len = strlen(t.data); t.rc = NULL; return t;
+}
+/* Like _tr_str_lit_impl but for a caller that already knows the TRUE byte
+ * length independent of NUL-termination -- codegen for a Tauraro string
+ * literal always does (the compiler tracks a literal's real length even
+ * with an embedded \0 byte; see src/codegen/c.tr's `blen` threading). Using
+ * this instead of the strlen-based path is what makes `.len()`/`==`/etc. on
+ * a literal like "ab\0cd" agree with the compiler's own (correct) view of
+ * its length, rather than silently re-truncating at the first NUL the
+ * moment the literal becomes a runtime TrStr value. */
+_TR_XLINK TrStr _tr_str_lit_len(const char* s, size_t len) {
+    TrStr t; t.data = s ? (char*)s : ""; t.len = s ? len : 0; t.rc = NULL; return t;
 }
 static inline TrStr _tr_str_lit_passthrough(TrStr s) { return s; }
 /* `_tr_str_lit(x)`: wrap a borrowed `const char*` into a TrStr (rc=NULL).
@@ -677,6 +716,7 @@ static inline TrStr _tr_str_new(size_t len) {
     TrStr t;
     t.data = (char*)_tr_checked_alloc(len + 1);
     t.data[len] = '\0';
+    t.len = len;
     t.rc = (long*)_tr_checked_alloc(sizeof(long));
     *t.rc = 1;
     _TR_MEMCOUNT_STR_INC();
@@ -706,6 +746,23 @@ static inline void _tr_str_release(TrStr s) {
 static inline TrStr _tr_str_wrap_impl(char* owned_data) {
     TrStr t;
     t.data = owned_data;
+    t.len = owned_data ? strlen(owned_data) : 0;
+    t.rc = (long*)_tr_checked_alloc(sizeof(long));
+    *t.rc = 1;
+    _TR_MEMCOUNT_STR_INC();
+    return t;
+}
+/* Like _tr_str_wrap_impl but for a caller that already knows the exact
+ * byte count independent of NUL-termination -- e.g. a socket/file read,
+ * a decompression/deserialization result, or an f-string's snprintf'd
+ * size, all of which compute a real byte count locally right before this
+ * call. Using strlen() there (the plain _tr_str_wrap path) would silently
+ * truncate any binary payload containing a 0x00 byte before its real end;
+ * this preserves it. */
+_TR_XLINK TrStr _tr_str_wrap_len(char* owned_data, size_t len) {
+    TrStr t;
+    t.data = owned_data;
+    t.len = owned_data ? len : 0;
     t.rc = (long*)_tr_checked_alloc(sizeof(long));
     *t.rc = 1;
     _TR_MEMCOUNT_STR_INC();
@@ -856,9 +913,14 @@ _TR_XLINK size_t _tr_c_fread(void* ptr, size_t size, size_t nmemb, void* fp) { r
 _TR_XLINK size_t _tr_c_fwrite(const void* ptr, size_t size, size_t nmemb, void* fp) { return fwrite(ptr, size, nmemb, (FILE*)fp); }
 _TR_XLINK int _tr_c_fseek(void* fp, long offset, int whence) { return fseek((FILE*)fp, offset, whence); }
 _TR_XLINK long _tr_c_ftell(void* fp) { return ftell((FILE*)fp); }
-_TR_XLINK char* _tr_getenv(const char* name) { char* v = getenv(name); return v ? v : ""; }
+/* Preserve getenv()'s real NULL-vs-non-null signal (a "" fallback here made
+ * an unset var indistinguishable from a var set to the empty string, so
+ * Env.has_var() -- which only has p==NULL to test -- could never see
+ * "unset"). std/sys/env.tr's own get_var() already does the "" substitution
+ * on a null pointer; that's the right layer for it, not here. */
+_TR_XLINK char* _tr_getenv(const char* name) { return getenv(name); }
 #else
-_TR_XLINK char* _tr_getenv(const char* name) { (void)name; return (char*)""; }
+_TR_XLINK char* _tr_getenv(const char* name) { (void)name; return (char*)0; }
 #endif
 #ifdef _WIN32
 static inline int _tr_setenv(const char* name, const char* value) { return _putenv_s(name, value) == 0 ? 0 : -1; }
@@ -3398,9 +3460,39 @@ static void _tr_co_reclaim_stack(_TrCoro* c) {
 }
 #endif
 
+#if !defined(_WIN32)
+#include <poll.h>
+#endif
+
+/* Block for real, via a plain single-fd poll/WSAPoll wait (no timeout).
+ * Used by _tr_co_await_fd below when there is no coroutine scheduler on
+ * this OS thread (e.g. a thread spawned via Thread.spawn/task_group, not
+ * the coroutine reactor) -- without this, "await readability" silently
+ * returned immediately, turning every recv_into/send_raw wait into a tight
+ * busy-spin re-calling the non-blocking syscall. Found while investigating
+ * a flaky WebSocket close-handshake test (root cause there turned out to
+ * be a separate RFC 6455 protocol bug, see std/net/websocket.tr's close());
+ * this busy-spin is a real, independent correctness/efficiency gap in its
+ * own right -- a plain OS thread using these blocking-style APIs should
+ * actually block, not spin a CPU core waiting for data that isn't there
+ * yet. */
+static void _tr_co_block_on_fd(int fd, unsigned int events) {
+#if defined(_WIN32)
+    WSAPOLLFD pfd; pfd.fd = (SOCKET)fd; pfd.events = 0; pfd.revents = 0;
+    if (events & TAURARO_POLLIN)  pfd.events |= POLLRDNORM;
+    if (events & TAURARO_POLLOUT) pfd.events |= POLLWRNORM;
+    WSAPoll(&pfd, 1, -1);
+#else
+    struct pollfd pfd; pfd.fd = fd; pfd.events = 0; pfd.revents = 0;
+    if (events & TAURARO_POLLIN)  pfd.events |= POLLIN;
+    if (events & TAURARO_POLLOUT) pfd.events |= POLLOUT;
+    poll(&pfd, 1, -1);
+#endif
+}
+
 static int _tr_co_await_fd(int fd, unsigned int events) {
     _TrCoro* c = _tr_g.current;
-    if (!c) return 1;
+    if (!c) { _tr_co_block_on_fd(fd, events); return 1; }
     if (!_tr_g.reactor) _tr_g.reactor = _tr_iopoll_create();
     c->io_fd = fd;
     c->state = _TRC_SUSP;
@@ -3894,9 +3986,35 @@ _TR_XLINK void _tr_tcp_close(int fd) {
 }
 #endif
 
+/* ── Process-wide monotonic counter ───────────────────────────────────
+ * A plain atomically-incrementing counter, for callers that need a value
+ * GUARANTEED to differ on every call (unlike a clock read, which can
+ * legitimately return the same value for two calls close enough together
+ * -- e.g. std/net/websocket.tr's ws_generate_key seeding a PRNG, where two
+ * back-to-back calls landing on the same _tr_time_ns() tick produced
+ * identical "random" keys). Thread-safe, wraps silently (fine: it is a
+ * seed/salt input, not an identity). */
+static _Atomic(long long) _tr_g_seed_counter = 0;
+_TR_XLINK long long _tr_next_seed_counter(void) { return atomic_fetch_add(&_tr_g_seed_counter, 1); }
+
 /* ── Platform detection ──────────────────────────────────────────────── */
 _TR_XLINK bool _tr_is_windows(void) {
 #ifdef _WIN32
+    return true;
+#else
+    return false;
+#endif
+}
+
+/* True on macOS/arm64 (Apple Silicon). Used to work around a confirmed
+ * Apple clang -O2 miscompile on very large generated C functions (a
+ * ~18KB-of-machine-code single `main()`, e.g. a 92-assertion self-hosted
+ * test file): the identical source compiles and runs correctly at -O1/-O0,
+ * only -O2 corrupts a heap-class field read partway through the function.
+ * Not reproduced on Linux/Windows or with gcc -- narrowly scoped to this
+ * exact toolchain/arch pair so it doesn't mask real -O2 bugs elsewhere. */
+_TR_XLINK bool _tr_is_macos_arm64(void) {
+#if defined(__APPLE__) && defined(__aarch64__)
     return true;
 #else
     return false;
@@ -4291,6 +4409,24 @@ static inline TrStr _tr_strx_concat(const char* a, const char* b) {
     memcpy(r.data, a, la); memcpy(r.data+la, b, lb);
     return r;
 }
+/* TrStr-taking variant: uses `.len` directly instead of strlen(), so `+`
+ * concatenation is correct for an operand with an embedded NUL byte. Kept
+ * SEPARATE from `_tr_strx_concat` rather than changing that function's
+ * signature: `_tr_strx_concat` is the compiled-in call EVERY existing
+ * compiler binary's own `+`-operator codegen already emits, so changing
+ * its signature would break every such binary's ability to compile
+ * anything that concatenates strings -- including using an old binary to
+ * self-host a NEW one (the new codegen text only exists once compilation
+ * already succeeds, which needs the OLD binary to succeed first). Adding a
+ * new function name sidesteps that bootstrapping chicken-and-egg problem,
+ * same reasoning as `_tr_str_eqv`/`_tr_str_lenv` above. */
+static inline TrStr _tr_strx_concatv(TrStr a, TrStr b) {
+    size_t la = a.data ? a.len : 0, lb = b.data ? b.len : 0;
+    TrStr r = _tr_str_new(la+lb);
+    if (la) memcpy(r.data, a.data, la);
+    if (lb) memcpy(r.data+la, b.data, lb);
+    return r;
+}
 static char* _tr_str_upper(const char* s) {
     if (!s) return _tr_empty_heap_str();
     char* r=(char*)TAURARO_ALLOC(strlen(s)+1);
@@ -4418,12 +4554,38 @@ static inline char* _tr__trstr_s(TrStr x)            { return x.data; }
 static long long _tr_str_to_int(const char* s) { return s ? strtoll(s,NULL,10) : 0LL; }
 static double    _tr_str_to_float(const char* s){ return s ? strtod(s,NULL) : 0.0; }
 _TR_XLINK long long _tr_strlen(char* s)     { return s ? (long long)strlen(s) : 0LL; }
+/* TrStr-taking variant of the above, for str METHOD dispatch (`s.len()`)
+ * specifically: reads `.len` directly instead of re-scanning `.data` for a
+ * NUL terminator, so it's correct for a string with an embedded NUL byte.
+ * Kept separate from `_tr_strlen` for the same reason `_tr_str_eqv` is kept
+ * separate from `_tr_str_eq`: `_tr_strlen` is a widely-relied-upon extern
+ * with an established `str`-param-means-narrowed-`char*` calling
+ * convention (~20 std/ files declare `def _tr_strlen(s: str) -> int` and
+ * call it directly) that changing its signature would break. */
+_TR_XLINK long long _tr_str_lenv(TrStr s)   { return s.data ? (long long)s.len : 0LL; }
 
 /* ── String equality ─────────────────────────────────────────────────── */
 _TR_XLINK bool _tr_str_eq(const char* a, const char* b) {
     if (!a && !b) return true;
     if (!a || !b) return false;
     return strcmp(a, b) == 0;
+}
+/* TrStr-taking, length-bounded variant: compares `.len` first (cheap
+ * short-circuit AND the thing that makes this correct for a string with an
+ * embedded NUL byte, unlike `_tr_str_eq`/strcmp which stop at the first one
+ * in either operand). Kept as a SEPARATE function rather than changing
+ * `_tr_str_eq`'s own signature: unresolved (no declared Tauraro signature)
+ * extern calls to `_tr_str_eq` -- e.g. src/main.tr's own `_tr_str_eq(cc,
+ * "cc")` -- get their `str` arguments auto-narrowed to `_tr_strz(...)`
+ * (plain `char*`) by codegen's generic call path, so changing the existing
+ * function's parameter types would silently break that call site's C
+ * output. This one is only ever emitted by codegen sites that pass a whole
+ * TrStr on purpose. */
+_TR_XLINK bool _tr_str_eqv(TrStr a, TrStr b) {
+    if (!a.data && !b.data) return true;
+    if (!a.data || !b.data) return false;
+    if (a.len != b.len) return false;
+    return memcmp(a.data, b.data, a.len) == 0;
 }
 
 /* ── String slice (alias for _tr_str_substring) ─────────────────────── */
@@ -4593,6 +4755,309 @@ static inline char* _tr_str_zfill(const char* s, long long width) {
     for (long long i = 0; i < pad; i++) r[p++] = '0';
     for (long long i = si; i < n; i++) r[p++] = s[i];
     r[width] = '\0'; return r;
+}
+
+/* ── Length-aware ("_v") TrStr variants of the utility string helpers above ──
+ * Every function above scans byte-by-byte until a NUL terminator (both to
+ * know where the input ends AND, for char*-returning ones, to size the
+ * output) -- correct only when the input has no embedded \0. These take
+ * whole TrStr value(s) and use `.len` instead of strlen, and are what
+ * src/codegen/c.tr's method dispatch emits instead. Kept as separate
+ * functions (never touching the plain ones above), for the same
+ * self-hosting-bootstrap reason as _tr_str_eqv/_tr_strx_concatv (see the
+ * comment on _tr_str_eqv): an already-compiled compiler binary's own
+ * codegen emits calls to the PLAIN names with the OLD calling convention. */
+static inline TrStr _tr_str_upperv(TrStr s) {
+    size_t n = s.data ? s.len : 0;
+    TrStr r = _tr_str_new(n);
+    for (size_t i = 0; i < n; i++) r.data[i] = (char)toupper((unsigned char)s.data[i]);
+    return r;
+}
+static inline TrStr _tr_str_lowerv(TrStr s) {
+    size_t n = s.data ? s.len : 0;
+    TrStr r = _tr_str_new(n);
+    for (size_t i = 0; i < n; i++) r.data[i] = (char)tolower((unsigned char)s.data[i]);
+    return r;
+}
+static inline TrStr _tr_str_capitalizev(TrStr s) {
+    size_t n = s.data ? s.len : 0;
+    TrStr r = _tr_str_new(n);
+    if (n > 0) { memcpy(r.data, s.data, n); r.data[0] = (char)toupper((unsigned char)r.data[0]); }
+    for (size_t i = 1; i < n; i++) r.data[i] = (char)tolower((unsigned char)r.data[i]);
+    return r;
+}
+static inline TrStr _tr_str_titlev(TrStr s) {
+    size_t n = s.data ? s.len : 0;
+    TrStr r = _tr_str_new(n);
+    if (n > 0) memcpy(r.data, s.data, n);
+    bool ws = true;
+    for (size_t i = 0; i < n; i++) {
+        if (r.data[i]==' '||r.data[i]=='\t'||r.data[i]=='\n') { ws = true; }
+        else if (ws) { r.data[i] = (char)toupper((unsigned char)r.data[i]); ws = false; }
+        else { r.data[i] = (char)tolower((unsigned char)r.data[i]); }
+    }
+    return r;
+}
+static inline TrStr _tr_str_reversev(TrStr s) {
+    size_t n = s.data ? s.len : 0;
+    TrStr r = _tr_str_new(n);
+    for (size_t i = 0; i < n; i++) r.data[i] = s.data[n-1-i];
+    return r;
+}
+static inline TrStr _tr_str_stripv(TrStr s) {
+    if (!s.data || s.len == 0) return _tr_str_new(0);
+    const char* p = s.data; size_t n = s.len;
+    size_t i = 0; while (i < n && isspace((unsigned char)p[i])) i++;
+    size_t j = n; while (j > i && isspace((unsigned char)p[j-1])) j--;
+    TrStr r = _tr_str_new(j - i);
+    if (j > i) memcpy(r.data, p + i, j - i);
+    return r;
+}
+static inline TrStr _tr_str_trim_leftv(TrStr s) {
+    if (!s.data || s.len == 0) return _tr_str_new(0);
+    const char* p = s.data; size_t n = s.len;
+    size_t i = 0; while (i < n && (p[i]==' '||p[i]=='\t'||p[i]=='\n'||p[i]=='\r')) i++;
+    TrStr r = _tr_str_new(n - i);
+    if (n > i) memcpy(r.data, p + i, n - i);
+    return r;
+}
+static inline TrStr _tr_str_trim_rightv(TrStr s) {
+    if (!s.data || s.len == 0) return _tr_str_new(0);
+    const char* p = s.data; size_t n = s.len;
+    while (n > 0 && (p[n-1]==' '||p[n-1]=='\t'||p[n-1]=='\n'||p[n-1]=='\r')) n--;
+    TrStr r = _tr_str_new(n);
+    if (n > 0) memcpy(r.data, p, n);
+    return r;
+}
+static inline TrStr _tr_str_repeatv(TrStr s, long long times) {
+    size_t slen = s.data ? s.len : 0;
+    if (slen == 0 || times <= 0) return _tr_str_new(0);
+    size_t total = (size_t)times * slen;
+    TrStr r = _tr_str_new(total);
+    for (long long i = 0; i < times; i++) memcpy(r.data + (size_t)i*slen, s.data, slen);
+    return r;
+}
+static inline TrStr _tr_str_pad_leftv(TrStr s, long long w) {
+    long long n = s.data ? (long long)s.len : 0;
+    if (n >= w) { TrStr r = _tr_str_new((size_t)n); if (n) memcpy(r.data, s.data, (size_t)n); return r; }
+    long long pad = w - n;
+    TrStr r = _tr_str_new((size_t)w);
+    for (long long i = 0; i < pad; i++) r.data[i] = ' ';
+    if (n) memcpy(r.data + pad, s.data, (size_t)n);
+    return r;
+}
+static inline TrStr _tr_str_pad_rightv(TrStr s, long long w) {
+    long long n = s.data ? (long long)s.len : 0;
+    if (n >= w) { TrStr r = _tr_str_new((size_t)n); if (n) memcpy(r.data, s.data, (size_t)n); return r; }
+    TrStr r = _tr_str_new((size_t)w);
+    if (n) memcpy(r.data, s.data, (size_t)n);
+    for (long long i = n; i < w; i++) r.data[i] = ' ';
+    return r;
+}
+static inline TrStr _tr_str_lpadv(TrStr s, long long width, TrStr pad) {
+    long long slen = s.data ? (long long)s.len : 0;
+    char padc = (pad.data && pad.len > 0) ? pad.data[0] : ' ';
+    if (slen >= width) { TrStr r = _tr_str_new((size_t)slen); if (slen) memcpy(r.data, s.data, (size_t)slen); return r; }
+    long long plen = width - slen;
+    TrStr r = _tr_str_new((size_t)(plen + slen));
+    for (long long i = 0; i < plen; i++) r.data[i] = padc;
+    if (slen) memcpy(r.data + plen, s.data, (size_t)slen);
+    return r;
+}
+static inline TrStr _tr_str_rpadv(TrStr s, long long width, TrStr pad) {
+    long long slen = s.data ? (long long)s.len : 0;
+    char padc = (pad.data && pad.len > 0) ? pad.data[0] : ' ';
+    if (slen >= width) { TrStr r = _tr_str_new((size_t)slen); if (slen) memcpy(r.data, s.data, (size_t)slen); return r; }
+    long long plen = width - slen;
+    TrStr r = _tr_str_new((size_t)(plen + slen));
+    if (slen) memcpy(r.data, s.data, (size_t)slen);
+    for (long long i = 0; i < plen; i++) r.data[slen+i] = padc;
+    return r;
+}
+static inline TrStr _tr_str_centerv(TrStr s, long long width) {
+    long long slen = s.data ? (long long)s.len : 0;
+    if (slen >= width) { TrStr r = _tr_str_new((size_t)slen); if (slen) memcpy(r.data, s.data, (size_t)slen); return r; }
+    long long total = width - slen, left = total/2, right = total - left;
+    TrStr r = _tr_str_new((size_t)width);
+    for (long long i = 0; i < left; i++) r.data[i] = ' ';
+    if (slen) memcpy(r.data + left, s.data, (size_t)slen);
+    for (long long i = 0; i < right; i++) r.data[left+slen+i] = ' ';
+    return r;
+}
+static inline TrStr _tr_str_zfillv(TrStr s, long long width) {
+    long long n = s.data ? (long long)s.len : 0;
+    if (n >= width) { TrStr r = _tr_str_new((size_t)n); if (n) memcpy(r.data, s.data, (size_t)n); return r; }
+    long long pad = width - n, si = 0, p = 0;
+    TrStr r = _tr_str_new((size_t)width);
+    if (n > 0 && (s.data[0]=='-' || s.data[0]=='+')) { r.data[p++] = s.data[0]; si = 1; }
+    for (long long i = 0; i < pad; i++) r.data[p++] = '0';
+    for (long long i = si; i < n; i++) r.data[p++] = s.data[i];
+    return r;
+}
+static inline TrStr _tr_str_slicev(TrStr s, long long start, long long end) {
+    long long len = s.data ? (long long)s.len : 0;
+    if (start < 0) start = 0;
+    if (end > len) end = len;
+    if (start >= end) return _tr_str_new(0);
+    long long sz = end - start;
+    TrStr r = _tr_str_new((size_t)sz);
+    memcpy(r.data, s.data + start, (size_t)sz);
+    return r;
+}
+static inline TrStr _tr_str_replacev(TrStr s, TrStr old_s, TrStr new_s) {
+    if (!s.data) return _tr_str_new(0);
+    size_t sl = s.len, ol = old_s.data ? old_s.len : 0, nl = new_s.data ? new_s.len : 0;
+    if (ol == 0) { TrStr r = _tr_str_new(sl); if (sl) memcpy(r.data, s.data, sl); return r; }
+    size_t cnt = 0;
+    for (size_t i = 0; i + ol <= sl; ) {
+        if (memcmp(s.data + i, old_s.data, ol) == 0) { cnt++; i += ol; } else { i++; }
+    }
+    /* cnt*ol <= sl always (matches counted above are non-overlapping within
+     * sl bytes), so this can never underflow before nl is added back. */
+    size_t total = (sl - cnt*ol) + cnt*nl;
+    TrStr r = _tr_str_new(total);
+    size_t di = 0, si = 0;
+    while (si < sl) {
+        if (si + ol <= sl && memcmp(s.data + si, old_s.data, ol) == 0) {
+            if (nl) memcpy(r.data + di, new_s.data, nl);
+            di += nl; si += ol;
+        } else {
+            r.data[di++] = s.data[si++];
+        }
+    }
+    return r;
+}
+static inline TrStr _tr_str_replace_firstv(TrStr s, TrStr old_s, TrStr new_s) {
+    if (!s.data) return _tr_str_new(0);
+    size_t sl = s.len, ol = old_s.data ? old_s.len : 0, nl = new_s.data ? new_s.len : 0;
+    if (ol == 0 || ol > sl) { TrStr r = _tr_str_new(sl); if (sl) memcpy(r.data, s.data, sl); return r; }
+    size_t pos = sl;
+    for (size_t i = 0; i + ol <= sl; i++) {
+        if (memcmp(s.data + i, old_s.data, ol) == 0) { pos = i; break; }
+    }
+    if (pos == sl) { TrStr r = _tr_str_new(sl); if (sl) memcpy(r.data, s.data, sl); return r; }
+    size_t total = sl - ol + nl;
+    TrStr r = _tr_str_new(total);
+    memcpy(r.data, s.data, pos);
+    if (nl) memcpy(r.data + pos, new_s.data, nl);
+    memcpy(r.data + pos + nl, s.data + pos + ol, sl - pos - ol);
+    return r;
+}
+static inline TrStr _tr_str_strip_prefixv(TrStr s, TrStr pre) {
+    size_t sl = s.data ? s.len : 0, pl = pre.data ? pre.len : 0;
+    if (pl <= sl && pl > 0 && memcmp(s.data, pre.data, pl) == 0) {
+        TrStr r = _tr_str_new(sl - pl);
+        if (sl - pl) memcpy(r.data, s.data + pl, sl - pl);
+        return r;
+    }
+    TrStr r = _tr_str_new(sl);
+    if (sl) memcpy(r.data, s.data, sl);
+    return r;
+}
+static inline TrStr _tr_str_strip_suffixv(TrStr s, TrStr suf) {
+    size_t sl = s.data ? s.len : 0, sufl = suf.data ? suf.len : 0;
+    if (sufl <= sl && sufl > 0 && memcmp(s.data + sl - sufl, suf.data, sufl) == 0) {
+        TrStr r = _tr_str_new(sl - sufl);
+        if (sl - sufl) memcpy(r.data, s.data, sl - sufl);
+        return r;
+    }
+    TrStr r = _tr_str_new(sl);
+    if (sl) memcpy(r.data, s.data, sl);
+    return r;
+}
+static inline TrStr _tr_str_remove_charv(TrStr s, TrStr ch) {
+    size_t sl = s.data ? s.len : 0;
+    if (!ch.data || ch.len == 0) { TrStr r = _tr_str_new(sl); if (sl) memcpy(r.data, s.data, sl); return r; }
+    char c = ch.data[0];
+    TrStr r = _tr_str_new(sl);
+    size_t j = 0;
+    for (size_t i = 0; i < sl; i++) if (s.data[i] != c) r.data[j++] = s.data[i];
+    r.len = j;
+    if (r.data) r.data[j] = '\0';
+    return r;
+}
+static inline bool _tr_str_containsv(TrStr s, TrStr sub) {
+    if (!s.data || !sub.data) return false;
+    if (sub.len == 0) return true;
+    if (sub.len > s.len) return false;
+    for (size_t i = 0; i + sub.len <= s.len; i++)
+        if (memcmp(s.data + i, sub.data, sub.len) == 0) return true;
+    return false;
+}
+static inline bool _tr_str_starts_withv(TrStr s, TrStr pre) {
+    if (!s.data || !pre.data) return false;
+    if (pre.len > s.len) return false;
+    return memcmp(s.data, pre.data, pre.len) == 0;
+}
+static inline bool _tr_str_ends_withv(TrStr s, TrStr suf) {
+    if (!s.data || !suf.data) return false;
+    if (suf.len > s.len) return false;
+    return memcmp(s.data + s.len - suf.len, suf.data, suf.len) == 0;
+}
+static inline long long _tr_str_index_ofv(TrStr s, TrStr sub) {
+    if (!s.data || !sub.data) return -1LL;
+    if (sub.len == 0) return 0LL;
+    if (sub.len > s.len) return -1LL;
+    for (size_t i = 0; i + sub.len <= s.len; i++)
+        if (memcmp(s.data + i, sub.data, sub.len) == 0) return (long long)i;
+    return -1LL;
+}
+static inline long long _tr_str_last_index_ofv(TrStr s, TrStr sub) {
+    if (!s.data || !sub.data || sub.len == 0) return -1LL;
+    if (sub.len > s.len) return -1LL;
+    long long last = -1LL;
+    for (size_t i = 0; i + sub.len <= s.len; i++)
+        if (memcmp(s.data + i, sub.data, sub.len) == 0) last = (long long)i;
+    return last;
+}
+static inline long long _tr_str_count_occv(TrStr s, TrStr sub) {
+    if (!s.data || !sub.data || sub.len == 0) return 0LL;
+    if (sub.len > s.len) return 0LL;
+    long long c = 0;
+    for (size_t i = 0; i + sub.len <= s.len; ) {
+        if (memcmp(s.data + i, sub.data, sub.len) == 0) { c++; i += sub.len; } else { i++; }
+    }
+    return c;
+}
+static inline long long _tr_str_char_at_codev(TrStr s, long long i) {
+    if (!s.data) return -1LL;
+    if (i < 0 || (size_t)i >= s.len) return -1LL;
+    return (long long)(unsigned char)s.data[i];
+}
+static inline bool _tr_str_contains_charv(TrStr s, long long c) {
+    if (!s.data) return false;
+    for (size_t i = 0; i < s.len; i++) if ((unsigned char)s.data[i] == (unsigned char)c) return true;
+    return false;
+}
+static inline bool _tr_str_is_digitv(TrStr s) {
+    if (!s.data || s.len == 0) return false;
+    for (size_t i = 0; i < s.len; i++) if (!isdigit((unsigned char)s.data[i])) return false;
+    return true;
+}
+static inline bool _tr_str_is_alphav(TrStr s) {
+    if (!s.data || s.len == 0) return false;
+    for (size_t i = 0; i < s.len; i++) if (!isalpha((unsigned char)s.data[i])) return false;
+    return true;
+}
+static inline bool _tr_str_is_alnumv(TrStr s) {
+    if (!s.data || s.len == 0) return false;
+    for (size_t i = 0; i < s.len; i++) if (!isalnum((unsigned char)s.data[i])) return false;
+    return true;
+}
+static inline bool _tr_str_is_spacev(TrStr s) {
+    if (!s.data || s.len == 0) return false;
+    for (size_t i = 0; i < s.len; i++) if (!isspace((unsigned char)s.data[i])) return false;
+    return true;
+}
+static inline bool _tr_str_is_upperv(TrStr s) {
+    if (!s.data || s.len == 0) return false;
+    for (size_t i = 0; i < s.len; i++) if (isalpha((unsigned char)s.data[i]) && !isupper((unsigned char)s.data[i])) return false;
+    return true;
+}
+static inline bool _tr_str_is_lowerv(TrStr s) {
+    if (!s.data || s.len == 0) return false;
+    for (size_t i = 0; i < s.len; i++) if (isalpha((unsigned char)s.data[i]) && !islower((unsigned char)s.data[i])) return false;
+    return true;
 }
 
 /* ── Char code → 1-char string ───────────────────────────────────────── */
@@ -4959,6 +5424,34 @@ static inline int List_i32_get(List_i32* l, long long i) { _tr_bounds_check(i, l
 static inline void List_i32_set(List_i32* l, long long i, int v) { _tr_bounds_check(i, l->len); l->data[i] = v; }
 static inline void List_i32_free(List_i32* l) { if(l){ _tr_free(l->data); _tr_free(l); } }
 
+typedef struct { uint64_t* data; size_t len; size_t capacity; } List_u64;
+static inline List_u64* List_u64_new(void) { List_u64* l=(List_u64*)malloc(sizeof(List_u64)); l->data=(uint64_t*)malloc(sizeof(uint64_t)*8); l->len=0; l->capacity=8; return l; }
+static inline void List_u64_append(List_u64* l, uint64_t val) { if(l->len==l->capacity){ l->capacity*=2; l->data=(uint64_t*)realloc(l->data,sizeof(uint64_t)*l->capacity); } l->data[l->len++]=val; }
+static inline uint64_t List_u64_get(List_u64* l, long long i) { _tr_bounds_check(i, l->len); return l->data[i]; }
+static inline void List_u64_set(List_u64* l, long long i, uint64_t v) { _tr_bounds_check(i, l->len); l->data[i] = v; }
+static inline void List_u64_free(List_u64* l) { if(l){ _tr_free(l->data); _tr_free(l); } }
+
+typedef struct { uint16_t* data; size_t len; size_t capacity; } List_u16;
+static inline List_u16* List_u16_new(void) { List_u16* l=(List_u16*)malloc(sizeof(List_u16)); l->data=(uint16_t*)malloc(sizeof(uint16_t)*8); l->len=0; l->capacity=8; return l; }
+static inline void List_u16_append(List_u16* l, uint16_t val) { if(l->len==l->capacity){ l->capacity*=2; l->data=(uint16_t*)realloc(l->data,sizeof(uint16_t)*l->capacity); } l->data[l->len++]=val; }
+static inline uint16_t List_u16_get(List_u16* l, long long i) { _tr_bounds_check(i, l->len); return l->data[i]; }
+static inline void List_u16_set(List_u16* l, long long i, uint16_t v) { _tr_bounds_check(i, l->len); l->data[i] = v; }
+static inline void List_u16_free(List_u16* l) { if(l){ _tr_free(l->data); _tr_free(l); } }
+
+typedef struct { short* data; size_t len; size_t capacity; } List_i16;
+static inline List_i16* List_i16_new(void) { List_i16* l=(List_i16*)malloc(sizeof(List_i16)); l->data=(short*)malloc(sizeof(short)*8); l->len=0; l->capacity=8; return l; }
+static inline void List_i16_append(List_i16* l, short val) { if(l->len==l->capacity){ l->capacity*=2; l->data=(short*)realloc(l->data,sizeof(short)*l->capacity); } l->data[l->len++]=val; }
+static inline short List_i16_get(List_i16* l, long long i) { _tr_bounds_check(i, l->len); return l->data[i]; }
+static inline void List_i16_set(List_i16* l, long long i, short v) { _tr_bounds_check(i, l->len); l->data[i] = v; }
+static inline void List_i16_free(List_i16* l) { if(l){ _tr_free(l->data); _tr_free(l); } }
+
+typedef struct { float* data; size_t len; size_t capacity; } List_f32;
+static inline List_f32* List_f32_new(void) { List_f32* l=(List_f32*)malloc(sizeof(List_f32)); l->data=(float*)malloc(sizeof(float)*8); l->len=0; l->capacity=8; return l; }
+static inline void List_f32_append(List_f32* l, float val) { if(l->len==l->capacity){ l->capacity*=2; l->data=(float*)realloc(l->data,sizeof(float)*l->capacity); } l->data[l->len++]=val; }
+static inline float List_f32_get(List_f32* l, long long i) { _tr_bounds_check(i, l->len); return l->data[i]; }
+static inline void List_f32_set(List_f32* l, long long i, float v) { _tr_bounds_check(i, l->len); l->data[i] = v; }
+static inline void List_f32_free(List_f32* l) { if(l){ _tr_free(l->data); _tr_free(l); } }
+
 typedef struct { char* data; size_t len; size_t capacity; } List_char;
 static inline List_char* List_char_new(void) { List_char* l=(List_char*)malloc(sizeof(List_char)); l->data=(char*)malloc(sizeof(char)*8); l->len=0; l->capacity=8; return l; }
 static inline void List_char_append(List_char* l, char val) { if(l->len==l->capacity){ l->capacity*=2; l->data=(char*)realloc(l->data,sizeof(char)*l->capacity); } l->data[l->len++]=val; }
@@ -5102,6 +5595,10 @@ _TR_LIST_RESERVE(List_TrTuple)
 _TR_LIST_RESERVE(List_TrFnVal)
 _TR_LIST_RESERVE(List_u32)
 _TR_LIST_RESERVE(List_u8)
+_TR_LIST_RESERVE(List_u64)
+_TR_LIST_RESERVE(List_u16)
+_TR_LIST_RESERVE(List_i16)
+_TR_LIST_RESERVE(List_f32)
 /* ── Extended Vec/List operations: remove, swap, clear, is_empty, extend ──── */
 static inline void List_i64_remove(List_i64* l, long long i) { if(!l||(size_t)i>=l->len) return; for(size_t j=(size_t)i;j<l->len-1;j++) l->data[j]=l->data[j+1]; l->len--; }
 static inline void List_i64_swap(List_i64* l, long long a, long long b) { if(!l||(size_t)a>=l->len||(size_t)b>=l->len) return; long long t=l->data[a]; l->data[a]=l->data[b]; l->data[b]=t; }
@@ -5370,18 +5867,21 @@ static inline TrStr _tr_strx_join(List_str* parts, const char* sep) {
     return out;
 }
 
-/* List_TrStr-backed join, for List[str].join() under the TrStr migration (#54). */
+/* List_TrStr-backed join, for List[str].join() under the TrStr migration (#54).
+ * Uses each element's own `.len` (not strlen(.data)) so a joined element
+ * with an embedded NUL byte contributes its full content, not just the
+ * prefix before that byte. */
 static inline TrStr _tr_strx_join_trstr(List_TrStr* parts, const char* sep) {
     if (!parts || parts->len == 0) return _tr_str_new(0);
     size_t total = 0, seplen = sep ? strlen(sep) : 0;
     for (size_t i = 0; i < parts->len; i++) {
-        if (parts->data[i].data) total += strlen(parts->data[i].data);
+        if (parts->data[i].data) total += parts->data[i].len;
         if (i + 1 < parts->len) total += seplen;
     }
     TrStr out = _tr_str_new(total);
     char* dst = out.data;
     for (size_t i = 0; i < parts->len; i++) {
-        if (parts->data[i].data) { size_t l = strlen(parts->data[i].data); memcpy(dst, parts->data[i].data, l); dst += l; }
+        if (parts->data[i].data) { size_t l = parts->data[i].len; memcpy(dst, parts->data[i].data, l); dst += l; }
         if (i + 1 < parts->len && seplen) { memcpy(dst, sep, seplen); dst += seplen; }
     }
     return out;
@@ -5418,18 +5918,84 @@ static inline List_TrStr* _tr_str_chars(const char* s) {
     return l;
 }
 static inline List_TrStr* _tr_str_words(const char* s) { return _tr_str_split(s, " "); }
-/* TrStr-elements join: build "sep"-joined string from a List_TrStr*. */
+
+/* Length-aware ("_v") variants of split/lines/words/chars/format above.
+ * _tr_str_split's strtok is fundamentally NUL-based (both to find the
+ * input's end AND because strtok itself takes/mutates a NUL-terminated
+ * C string) so it can never be retrofitted -- this is a real rewrite: a
+ * manual scan bounded by s.len, treating each byte of `sep` as an
+ * individual delimiter character (matching strtok's own accepted-
+ * character-set semantics for its 2nd arg, and so preserving the existing
+ * "consecutive separators yield no empty tokens" behavior). Kept as a
+ * separate function name for the same self-hosting-bootstrap reason as
+ * every other _v function in this header. */
+static inline List_TrStr* _tr_str_splitv(TrStr s, TrStr sep) {
+    List_TrStr* l = List_TrStr_new();
+    if (!s.data || !sep.data || sep.len == 0) return l;
+    size_t sl = s.len, sepl = sep.len, i = 0;
+    while (i < sl) {
+        while (i < sl && memchr(sep.data, s.data[i], sepl)) i++;
+        if (i >= sl) break;
+        size_t start = i;
+        while (i < sl && !memchr(sep.data, s.data[i], sepl)) i++;
+        TrStr tok = _tr_str_new(i - start);
+        memcpy(tok.data, s.data + start, i - start);
+        List_TrStr_append_owned(l, tok);
+    }
+    return l;
+}
+static inline List_TrStr* _tr_str_linesv(TrStr s) { return _tr_str_splitv(s, _tr_str_lit("\n")); }
+static inline List_TrStr* _tr_str_wordsv(TrStr s) { return _tr_str_splitv(s, _tr_str_lit(" ")); }
+static inline List_TrStr* _tr_str_charsv(TrStr s) {
+    List_TrStr* l = List_TrStr_new();
+    if (!s.data) return l;
+    for (size_t i = 0; i < s.len; i++) {
+        TrStr c = _tr_str_new(1);
+        c.data[0] = s.data[i];
+        List_TrStr_append_owned(l, c);
+    }
+    return l;
+}
+/* s.format(...): only the FORMAT TEMPLATE itself is made length-aware here
+ * (an embedded NUL literally inside the "{}"-placeholder template text is
+ * now preserved). The already-stringified ARGS remain bare char* -- doing
+ * the same for them would mean redesigning _TR_AUTO_STR's whole array-of-
+ * char* calling convention, and in practice format() args are simple
+ * stringified scalars/strings that don't carry raw embedded-NUL payloads;
+ * documented as a known, narrow remaining gap, same spirit as the
+ * Dict[str,V]/Set[str]-keys boundary noted elsewhere in this file. */
+static inline TrStr _tr_str_formatv(TrStr fmt, const char* const* args, long long argc) {
+    const char* f = fmt.data ? fmt.data : "";
+    size_t flen = fmt.data ? fmt.len : 0;
+    size_t cap = flen;
+    for (long long i = 0; i < argc; i++) if (args[i]) cap += strlen(args[i]);
+    TrStr r = _tr_str_new(cap);
+    char* w = r.data; size_t pi = 0; long long ai = 0;
+    while (pi < flen) {
+        if (f[pi] == '{' && pi + 1 < flen && f[pi+1] == '}' && ai < argc) {
+            const char* a = args[ai++]; if (a) { size_t l = strlen(a); memcpy(w, a, l); w += l; }
+            pi += 2;
+        } else { *w++ = f[pi++]; }
+    }
+    r.len = (size_t)(w - r.data);
+    r.data[r.len] = '\0';
+    return r;
+}
+
+/* TrStr-elements join: build "sep"-joined string from a List_TrStr*.
+ * Uses each element's own `.len` for the same embedded-NUL-safety reason
+ * as _tr_strx_join_trstr above (these two are near-duplicates). */
 static inline TrStr _tr_trstr_join(List_TrStr* parts, const char* sep) {
     if (!parts || parts->len == 0) return _tr_str_new(0);
     size_t total = 0, seplen = sep ? strlen(sep) : 0;
     for (size_t i = 0; i < parts->len; i++) {
-        if (parts->data[i].data) total += strlen(parts->data[i].data);
+        if (parts->data[i].data) total += parts->data[i].len;
         if (i + 1 < parts->len) total += seplen;
     }
     TrStr out = _tr_str_new(total);
     char* dst = out.data;
     for (size_t i = 0; i < parts->len; i++) {
-        if (parts->data[i].data) { size_t l = strlen(parts->data[i].data); memcpy(dst, parts->data[i].data, l); dst += l; }
+        if (parts->data[i].data) { size_t l = parts->data[i].len; memcpy(dst, parts->data[i].data, l); dst += l; }
         if (i + 1 < parts->len && seplen) { memcpy(dst, sep, seplen); dst += seplen; }
     }
     return out;
@@ -5467,9 +6033,19 @@ static int _tr_test_report(void) {
 }
 
 #ifndef TAURARO_NO_RT_HELPERS
-/* When std library is compiled in, it provides its own StringBuilder and
-   file I/O — suppress the lightweight rt.h fallback implementations. */
-#ifndef TAURARO_STD_LIB
+/* When std library is compiled in, it provides its own StringBuilder and/or
+ * file I/O — suppress the lightweight rt.h fallback implementations. These
+ * are two INDEPENDENT toggles (not one combined `TAURARO_STD_LIB`): a
+ * program can have its own `read_file`/`write_file` (e.g. from std.core.io)
+ * without ever importing std.core.string's `StringBuilder` class (this is
+ * exactly what happens self-hosting the compiler itself — src/codegen/c.tr's
+ * own StringBuilder-typed fields rely on THIS fallback, never importing
+ * std.core.string, while other parts of the same unity build DO define
+ * write_file). A single combined macro suppressed the StringBuilder fallback
+ * even when no program-provided StringBuilder class existed to replace it,
+ * leaving `StringBuilder` an undefined type wherever a class field
+ * referenced it -- a real, confirmed self-hosting break.
+ */
 /* ── StringBuilder (suppressed when std.core.string provides its own) ───── */
 #ifndef TAURARO_RT_NO_STRINGBUILDER
 /* OOP layout — matches std.core.string.StringBuilder: buf is StringObj* so that
@@ -5485,7 +6061,11 @@ static inline StringObj* StringObj_init(char* s) {
     obj->data[slen] = '\0';
     return obj;
 }
-static inline char* StringObj_as_str(StringObj* obj) { return obj->data; }
+/* -> TrStr (not char*): matches std.core.string.StringObj.as_str()'s `-> str`
+ * return type, which the codegen calling this fallback already assumes. A
+ * borrow (not a wrap) of obj->data, exactly like the real class's own
+ * `_tr_str_lit_len(self.data, self.len)`. */
+static inline TrStr StringObj_as_str(StringObj* obj) { return _tr_str_lit_len(obj->data, (size_t)obj->len); }
 typedef struct core_string_StringBuilder { StringObj* buf; } core_string_StringBuilder;
 typedef core_string_StringBuilder StringBuilder;
 
@@ -5498,14 +6078,18 @@ static inline StringBuilder* StringBuilder_init(long long cap) {
     sb->buf->data[0] = '\0';
     return sb;
 }
-static inline void StringBuilder_append(StringBuilder* sb, char* s) {
-    long long slen = (long long)strlen(s);
+/* TrStr param (not char*): matches std.core.string.StringBuilder.append()'s
+ * `(self, s: str)`, which the codegen calling this fallback already
+ * assumes -- and length-aware (s.len, not strlen) for the same embedded-
+ * NUL-safety reason as this session's std.core.string.StringObj.append fix. */
+static inline void StringBuilder_append(StringBuilder* sb, TrStr s) {
+    long long slen = s.data ? (long long)s.len : 0;
     if (slen <= 0) return;
     if (sb->buf->len + slen >= sb->buf->capacity) {
         sb->buf->capacity = (sb->buf->len + slen) * 2 + 8;
         sb->buf->data = (char*)TAURARO_REALLOC(sb->buf->data, (size_t)sb->buf->capacity);
     }
-    memcpy(sb->buf->data + sb->buf->len, s, (size_t)slen);
+    memcpy(sb->buf->data + sb->buf->len, s.data, (size_t)slen);
     sb->buf->len += slen;
     sb->buf->data[sb->buf->len] = '\0';
 }
@@ -5520,20 +6104,25 @@ static inline void StringBuilder_append_char(StringBuilder* sb, long long c) {
 static inline StringObj* StringBuilder_to_string(StringBuilder* sb) {
     return StringObj_init(sb->buf->data);
 }
-static inline char* StringBuilder_to_owned(StringBuilder* sb) {
+/* -> TrStr (not char*): matches std.core.string.StringBuilder.to_owned()'s
+ * `-> str` return type, which the codegen calling this fallback already
+ * assumes (e.g. Token_ctor_StrLit(StringBuilder_to_owned(sb), ...) expects
+ * a TrStr argument directly). Fresh, owned copy via _tr_str_wrap_len, same
+ * shape as the real class's own to_owned(). */
+static inline TrStr StringBuilder_to_owned(StringBuilder* sb) {
     long long sz = sb->buf->len + 1;
     char* out = (char*)_tr_checked_alloc(sz);
     memcpy(out, sb->buf->data, sz);
-    return out;
+    return _tr_str_wrap_len(out, (size_t)sb->buf->len);
 }
-static inline char* StringBuilder_as_str(StringBuilder* sb) { return sb->buf->data; }
+static inline TrStr StringBuilder_as_str(StringBuilder* sb) { return StringObj_as_str(sb->buf); }
 static inline void StringBuilder_append_int(StringBuilder* sb, long long n) {
-    char tmp[32]; snprintf(tmp, sizeof(tmp), "%lld", n);
-    StringBuilder_append(sb, tmp);
+    char tmp[32]; int tl = snprintf(tmp, sizeof(tmp), "%lld", n);
+    StringBuilder_append(sb, _tr_str_lit_len(tmp, (size_t)tl));
 }
 static inline void StringBuilder_append_float(StringBuilder* sb, double f) {
-    char tmp[32]; snprintf(tmp, sizeof(tmp), "%g", f);
-    StringBuilder_append(sb, tmp);
+    char tmp[32]; int tl = snprintf(tmp, sizeof(tmp), "%g", f);
+    StringBuilder_append(sb, _tr_str_lit_len(tmp, (size_t)tl));
 }
 static inline long long StringBuilder_length(StringBuilder* sb) { return sb->buf->len; }
 static inline void StringBuilder_clear(StringBuilder* sb) {
@@ -5545,48 +6134,56 @@ static inline void StringBuilder_free(StringBuilder* sb) {
 #endif /* TAURARO_RT_NO_STRINGBUILDER */
 
 /* ── File I/O helpers ──────── std-tier only (FILE/fopen) ────────────── */
+/* Suppressed independently of StringBuilder above (see the combined-macro
+ * note at the top of this section) when the program provides its own
+ * read_file/write_file (e.g. from std.core.io). */
+#ifndef TAURARO_RT_NO_FILEIO
 #ifndef TAURARO_BARE
-static inline char* read_file(char* path) {
-    /* Owned `-> str` (success path allocs `buf`); error paths must also be heap. */
-    if (!path || !*path) return _tr_empty_heap_str();
-    FILE* f = fopen(path, "rb");
-    if (!f) return _tr_empty_heap_str();
+/* TrStr param/return (not char*): matches std.core.io/std.io.file's own
+ * `read_file(path: str) -> str` etc, which the codegen calling this
+ * fallback already assumes (this fallback was written before TrStr existed
+ * and was never actually exercised until TAURARO_NO_RT_HELPERS stopped
+ * being passed unconditionally on every compile -- see the note above). */
+static inline TrStr read_file(TrStr path) {
+    const char* p = path.data;
+    if (!p || !*p) return _tr_str_new(0);
+    FILE* f = fopen(p, "rb");
+    if (!f) return _tr_str_new(0);
     fseek(f, 0, SEEK_END); long sz = ftell(f); rewind(f);
-    if (sz < 0) { fclose(f); return _tr_empty_heap_str(); }
+    if (sz < 0) { fclose(f); return _tr_str_new(0); }
     char* buf = (char*)_tr_checked_alloc((size_t)sz + 1);
     size_t rd = fread(buf, 1, (size_t)sz, f); fclose(f);
-    buf[rd] = '\0';
-    return buf;
+    return _tr_str_wrap_len(buf, rd);
 }
-static inline bool write_file(char* path, char* content) {
-    if (!path || !content) return false;
-    FILE* f = fopen(path, "wb");
+static inline bool write_file(TrStr path, TrStr content) {
+    if (!path.data || !content.data) return false;
+    FILE* f = fopen(path.data, "wb");
     if (!f) return false;
-    fwrite(content, 1, strlen(content), f);
+    fwrite(content.data, 1, content.len, f);
     fclose(f);
     return true;
 }
-static inline bool append_file(char* path, char* content) {
-    if (!path || !content) return false;
-    FILE* f = fopen(path, "ab");
+static inline bool append_file(TrStr path, TrStr content) {
+    if (!path.data || !content.data) return false;
+    FILE* f = fopen(path.data, "ab");
     if (!f) return false;
-    fwrite(content, 1, strlen(content), f);
+    fwrite(content.data, 1, content.len, f);
     fclose(f);
     return true;
 }
-static inline bool file_exists(char* path) {
-    if (!path || !*path) return false;
-    FILE* f = fopen(path, "rb");
+static inline bool file_exists(TrStr path) {
+    if (!path.data || !*path.data) return false;
+    FILE* f = fopen(path.data, "rb");
     if (!f) return false;
     fclose(f); return true;
 }
 #else
-static inline char* read_file(char* path) { (void)path; return _tr_empty_heap_str(); }
-static inline bool write_file(char* path, char* content) { (void)path; (void)content; return false; }
-static inline bool append_file(char* path, char* content) { (void)path; (void)content; return false; }
-static inline bool file_exists(char* path) { (void)path; return false; }
+static inline TrStr read_file(TrStr path) { (void)path; return _tr_str_new(0); }
+static inline bool write_file(TrStr path, TrStr content) { (void)path; (void)content; return false; }
+static inline bool append_file(TrStr path, TrStr content) { (void)path; (void)content; return false; }
+static inline bool file_exists(TrStr path) { (void)path; return false; }
 #endif
-#endif /* TAURARO_STD_LIB */
+#endif /* TAURARO_RT_NO_FILEIO */
 #endif /* TAURARO_NO_RT_HELPERS */
 
 static inline char* _tr_c_strdup(char* s) {

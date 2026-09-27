@@ -1,0 +1,71 @@
+# Regression: TrStr (runtime/tauraro_rt.h) now carries a real `len` field
+# instead of being purely NUL-terminated, so `.len()`, `==`, and `+` on a
+# str containing an embedded \0 byte are correct at RUNTIME, not just
+# correctly preserved at compile time (see tests/regression/
+# embedded_nul_in_string_literal.tr, which only checked the compiled
+# BINARY had the right bytes via pointer reads -- this test checks the
+# high-level operations built on top of them).
+#
+# SCOPE NOTE: this covers the operations that were made length-aware this
+# round -- .len()/length, ==/!=, +. It deliberately does NOT test the ~20
+# "utility" string methods (upper/lower/trim/slice/repeat/split/etc.),
+# Dict[str,V]/Set[str] keys, or ordering comparisons (<, >, <=, >=): all of
+# those remain NUL-bounded (strlen/strcmp-based internally), a documented,
+# separate, larger follow-up -- not silently claimed fixed here.
+
+from std.test import TestRunner
+
+def main():
+    mut t = TestRunner.init("trstr_len_field")
+
+    t.section(".len() / .length() on a literal with an embedded \\0")
+    mut s = "ab\0cd"
+    t.assert_eq_int(s.len(), 5, "s.len() sees all 5 bytes, not just 'ab' (2)")
+    t.assert_eq_int(s.length(), 5, "s.length() agrees")
+    t.assert_eq_int(len(s), 5, "len(s) builtin agrees")
+
+    t.section(".is_empty() on a string that STARTS with an embedded \\0")
+    mut lead_nul = "\0abc"
+    t.assert_false(lead_nul.is_empty(), "4 real bytes, even though the first one is NUL")
+    t.assert_eq_int(lead_nul.len(), 4, "and len() sees all 4")
+
+    t.section("== / != on strings with an embedded \\0")
+    mut a = "ab\0cd"
+    mut b = "ab\0cd"
+    mut c = "ab\0ce"
+    mut short_prefix = "ab"
+    t.assert_true(a == b, "two separately-constructed literals with identical embedded-NUL content are ==")
+    t.assert_true(a != c, "differing only after the embedded NUL are correctly !=, not falsely ==")
+    t.assert_true(a != short_prefix, "not falsely == to just its pre-NUL prefix")
+    t.assert_false(a == c, "== correctly false too (both directions)")
+
+    t.section(".eq() method on strings with an embedded \\0")
+    t.assert_true(a.eq(b), ".eq() agrees with ==")
+    t.assert_false(a.eq(c), ".eq() agrees with !=")
+
+    t.section("match pattern with an embedded \\0 literal")
+    mut matched = false
+    match a:
+        case "ab\0cd": matched = true
+        case _: pass
+    t.assert_true(matched, "pattern with embedded NUL matches the identical subject")
+
+    t.section("+ concatenation preserves an embedded \\0 from either operand")
+    mut left = "x\0y"
+    mut right = "z"
+    mut cat1 = left + right
+    t.assert_eq_int(cat1.len(), 4, "left(3, embedded NUL) + right(1) = 4")
+    mut cat2 = right + left
+    t.assert_eq_int(cat2.len(), 4, "right(1) + left(3, embedded NUL) = 4, same total either order")
+    mut cat3 = left + left
+    t.assert_eq_int(cat3.len(), 6, "both operands with embedded NULs: 3 + 3 = 6")
+
+    t.section("+ concatenation byte content is correct across the embedded \\0 boundary")
+    mut p = cat1 as Pointer[char]
+    unsafe:
+        t.assert_eq_int(p.offset(0).read() as int, 120, "byte 0 = 'x'")
+        t.assert_eq_int(p.offset(1).read() as int, 0, "byte 1 = embedded NUL")
+        t.assert_eq_int(p.offset(2).read() as int, 121, "byte 2 = 'y'")
+        t.assert_eq_int(p.offset(3).read() as int, 122, "byte 3 = 'z' -- the right operand, correctly appended AFTER the NUL")
+
+    t.summary()

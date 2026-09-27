@@ -7,7 +7,7 @@ __attribute__((malloc,returns_nonnull,hot)) LlvmGenerator* LlvmGenerator_init() 
     /* pass */
     g->ok = true;
     /* pass */
-    g->fail_note = _tr_str_lit("");
+    g->fail_note = _tr_str_lit_len("", 0LL);
     /* pass */
     return g;
 }
@@ -28,7 +28,7 @@ __attribute__((hot)) TrStr LlvmGenerator_generate_nh(LlvmGenerator* self, HirPro
         self->fail_note = _tr_str_retain(m->fail_note);
         /* pass */
         _tr_obj_release(m, _trdrop_LModule);
-        return _tr_str_lit("");
+        return _tr_str_lit_len("", 0LL);
     }
     /* pass */
     self->ok = true;

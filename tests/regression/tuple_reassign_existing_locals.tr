@@ -1,0 +1,43 @@
+# tests/regression/tuple_reassign_existing_locals.tr
+# Regression: `(a, b) = fn()` reassigning PRE-EXISTING mut locals (not a `mut
+# (a, b) = fn()` declaration) was a silent no-op. gen_expr on the ETuple target
+# built a THROWAWAY TrTuple compound literal (a valid C lvalue via gcc's
+# compound-literal extension) and assigned the RHS into that discarded temp,
+# leaving a and b completely untouched -- no compile error, no warning, just a
+# no-op at runtime. Fixed in src/codegen/c.tr's HirStmt.SAssign case: an
+# HirExpr.ETuple target now unpacks the RHS tuple into each real target's own
+# lvalue (mirroring gen_multi_let's declaration-form unpacking).
+
+from std.test import TestRunner
+
+def two_strs() -> (str, str):
+    mut line = "HELLO"
+    return (line, "REST")
+
+def two_ints() -> (int, int):
+    return (10, 20)
+
+def main():
+    mut t = TestRunner.init("tuple_reassign_existing_locals")
+
+    t.section("tuple reassignment into pre-existing str locals")
+    mut a = "before"
+    mut b = "before"
+    (a, b) = two_strs()
+    t.assert_eq_str(a, "HELLO", "a reassigned from tuple slot 0")
+    t.assert_eq_str(b, "REST", "b reassigned from tuple slot 1")
+
+    t.section("tuple reassignment into pre-existing int locals")
+    mut x = 0
+    mut y = 0
+    (x, y) = two_ints()
+    t.assert_eq_int(x, 10, "x reassigned from tuple slot 0")
+    t.assert_eq_int(y, 20, "y reassigned from tuple slot 1")
+
+    t.section("reassignment can happen more than once (no leak/double-free)")
+    (a, b) = two_strs()
+    t.assert_eq_str(a, "HELLO", "second reassignment still correct")
+    (x, y) = two_ints()
+    t.assert_eq_int(y, 20, "second int reassignment still correct")
+
+    t.summary()

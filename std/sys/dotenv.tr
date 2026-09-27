@@ -1,0 +1,79 @@
+# std.sys.dotenv — `.env` file loader.
+#
+# Format (the common de-facto ".env" convention shared by dotenv
+# implementations in most languages):
+#   KEY=value
+#   KEY="value with spaces"      # double-quoted values keep embedded spaces
+#   KEY='value with spaces'      # single-quoted values work the same way
+#   # a full-line or leading-whitespace comment
+#   (blank lines are skipped)
+# No interpolation (`$OTHER_VAR` inside a value is treated as a literal
+# string, not expanded) and no multi-line values — deliberately simple.
+#
+# `Dotenv.parse` does the pure parsing (no side effects, easy to unit test).
+# `Dotenv.load` parses a file from disk and applies each entry as a real
+# process environment variable via `std.sys.env.Env.set_var` (reused, not
+# reimplemented).
+
+from std.sys.env import Env
+from std.string.str import Str
+from std.io.file import File
+
+pub class Dotenv:
+    _dummy: int
+
+extend Dotenv:
+    # Parse .env-format text into a Dict[str, str]. Pure -- no environment
+    # variables are touched. Comments (lines whose first non-whitespace
+    # character is '#'), blank lines, and stray whitespace around keys/
+    # values are all handled; a value may be unquoted, single-quoted, or
+    # double-quoted, and an unquoted value may itself contain '=' (only the
+    # first '=' on the line splits key from value).
+    pub def parse(content: str) -> Dict[str, str]:
+        mut out: Dict[str, str] = {}
+        mut raw_lines = Str.lines(content)
+        mut i = 0
+        while i < raw_lines.len():
+            mut line = Str.trim(raw_lines.get(i))
+            i = i + 1
+            if Str.len(line) == 0: continue
+            if Str.starts_with(line, "#"): continue
+
+            mut eq = Str.index_of(line, "=")
+            if eq < 0: continue   # not a KEY=value line -- skip silently
+
+            mut key = Str.trim(Str.slice(line, 0, eq))
+            if Str.len(key) == 0: continue
+
+            mut raw_val = Str.trim(Str.slice(line, eq + 1, Str.len(line)))
+            mut val = Dotenv._unquote(raw_val)
+            out[key] = val
+        return out
+
+    # Strip a single matching pair of surrounding quotes (double or single),
+    # if present. An unquoted value is returned unchanged.
+    pub def _unquote(v: str) -> str:
+        mut vlen = Str.len(v)
+        if vlen < 2: return v
+        mut first = Str.slice(v, 0, 1)
+        mut last  = Str.slice(v, vlen - 1, vlen)
+        if (first == "\"" and last == "\"") or (first == "'" and last == "'"):
+            return Str.slice(v, 1, vlen - 1)
+        return v
+
+    # Read path as .env-format text and set every parsed KEY=value pair as
+    # a real process environment variable (via Env.set_var). Returns the
+    # number of variables set, or -1 if the file could not be read.
+    pub def load(path: str) -> int:
+        mut probe = File.init(path, "rb")
+        if not probe.exists(): return -1
+        mut content = File.read_text(path)
+        mut parsed = Dotenv.parse(content)
+        mut env = Env.init()
+        mut keys = parsed.keys()
+        mut i = 0
+        while i < keys.len():
+            mut k = keys.get(i)
+            env.set_var(k, parsed[k])
+            i = i + 1
+        return keys.len()

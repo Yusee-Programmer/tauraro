@@ -43,7 +43,7 @@ def _align8(n: int) -> int:
     while (r % 8) != 0: r = r + 1
     return r
 
-pub def write_elf_object(out_path: str, funcs: Vec[EncodedFunc], externs: Vec[str], strings: Vec[str], n_globals: int) -> bool:
+pub def write_elf_object(out_path: str, funcs: Vec[EncodedFunc], externs: Vec[str], strings: Vec[str], string_lens: Vec[int], n_globals: int) -> bool:
     # -- .text: concatenate function code; resolve relocations to text offsets ---------
     mut text = ByteBuf.init()
     mut trelocs = Vec[TextReloc].init(4)
@@ -72,7 +72,7 @@ pub def write_elf_object(out_path: str, funcs: Vec[EncodedFunc], externs: Vec[st
     mut sxi = 0
     while sxi < strings.len:
         str_off.push(rodata.len)
-        rodata.cstr(strings.get(sxi))
+        rodata.cstr_len(strings.get(sxi), string_lens.get(sxi))
         sxi = sxi + 1
 
     # -- symbols: [null] [.rodata sec sym] [.bss sec sym] then funcs+externs (GLOBAL) --

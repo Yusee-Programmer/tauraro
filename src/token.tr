@@ -7,12 +7,16 @@ pub enum Token:
     # Literals
     IntLit(val: int)
     FloatLit(val: float)
-    StrLit(val: str)
-    TripleStrLit(val: str)   # """...""" multi-line string
-    ByteStrLit(val: str)
-    RawStrLit(val: str)
+    # `blen` is the literal's TRUE byte length, captured at the lexer where a
+    # StringBuilder still tracks it accurately -- `val: str` alone can't carry
+    # this (TrStr is NUL-terminated at the runtime level, so any embedded \0
+    # byte in the literal is otherwise unrecoverable downstream).
+    StrLit(val: str, blen: int)
+    TripleStrLit(val: str, blen: int)   # """...""" multi-line string
+    ByteStrLit(val: str, blen: int)
+    RawStrLit(val: str, blen: int)
     CharLit(val: int)     # char stored as codepoint
-    FStrLit(val: str)     # f-string (raw text; interpolation handled by parser)
+    FStrLit(val: str, blen: int)     # f-string (raw text; interpolation handled by parser)
     BoolLit(val: bool)
 
     # Identifier / name
@@ -276,12 +280,12 @@ extend Token:
             case Token.Ident(name): return name
             case Token.IntLit(val): return f"IntLit({val})"
             case Token.FloatLit(val): return f"FloatLit({val})"
-            case Token.StrLit(val): return f"StrLit({val})"
-            case Token.TripleStrLit(val): return f"TripleStrLit({val})"
-            case Token.ByteStrLit(val): return f"ByteStrLit({val})"
-            case Token.RawStrLit(val): return f"RawStrLit({val})"
+            case Token.StrLit(val, _): return f"StrLit({val})"
+            case Token.TripleStrLit(val, _): return f"TripleStrLit({val})"
+            case Token.ByteStrLit(val, _): return f"ByteStrLit({val})"
+            case Token.RawStrLit(val, _): return f"RawStrLit({val})"
             case Token.CharLit(val): return f"CharLit({val})"
-            case Token.FStrLit(val): return f"FStrLit({val})"
+            case Token.FStrLit(val, _): return f"FStrLit({val})"
             case Token.BoolLit(val): return f"BoolLit({val})"
             case Token.KwDef:    return "def"
             case Token.KwClass:  return "class"

@@ -1,0 +1,69 @@
+# Regression: `key as Pointer[char]` (and other `as Pointer[T]`/`as str`
+# casts) on a *generic* class-method parameter bound to `str` at a specific
+# monomorphization used to miscompile: the emitted C reinterpreted the
+# whole TrStr struct as a raw pointer (`(char*)(key)`, a hard gcc error --
+# "cannot convert to a pointer type") instead of first unwrapping `.data`.
+# Root cause: src/codegen/c.tr's ECast handling checked
+# `hir_expr_type(expr).name` directly, which is still the unresolved
+# generic placeholder ("K") inside a monomorphized body, instead of
+# resolving it through the active type_subst substitution map first (the
+# same resolution gen_method_call already did for method dispatch, just
+# missing here for casts). Found while auditing std/collections/lru.tr's
+# `_idx_hash`, which had worked around this exact bug via a fragile
+# `(&key as Pointer[Pointer[char]]).read()` indirection instead of the
+# direct, intended cast.
+
+from std.test import TestRunner
+
+pub class Box[K]:
+    pub v: K
+
+extend Box[K]:
+    # Directly casts a generic parameter (bound to str at the call site
+    # below) to Pointer[char] -- this must extract TrStr's `.data`, not
+    # reinterpret the 24-byte struct itself as a pointer.
+    pub def first_byte(self, key: K) -> int:
+        unsafe:
+            mut p = key as Pointer[char]
+            return p.offset(0).read() as int
+
+    # Same generic parameter cast the other direction: str -> Pointer[char]
+    # via an explicit local, exercising the identical ECast path with a
+    # different receiver shape.
+    pub def all_bytes_sum(self, key: K, n: int) -> int:
+        unsafe:
+            mut p = key as Pointer[char]
+            mut total = 0
+            mut i = 0
+            while i < n:
+                total = total + (p.offset(i).read() as int)
+                i = i + 1
+            return total
+
+    # Cast-only, no dereference: proves the OTHER branch of the fix's
+    # `_is_str_type(resolve_generic_prim(...))` check (K resolves to a
+    # non-str concrete type) still emits valid, compilable C -- unlike
+    # first_byte/all_bytes_sum, this is safe to call for K=int (an int
+    # reinterpreted as a pointer address is never actually dereferenced).
+    pub def cast_compiles(self, key: K) -> bool:
+        unsafe:
+            mut p = key as Pointer[char]
+            return (p as usize) == (p as usize)
+
+def main():
+    mut t = TestRunner.init("generic_param_cast_to_pointer")
+
+    t.section("generic K=str parameter cast directly to Pointer[char]")
+    mut b = Box[str]()
+    b.v = "hello"
+    t.assert_eq_int(b.first_byte("A"), 65, "first byte of \"A\" is 65 ('A')")
+    t.assert_eq_int(b.first_byte("hello"), 104, "first byte of \"hello\" is 104 ('h')")
+    t.assert_eq_int(b.all_bytes_sum("abc", 3), 97 + 98 + 99, "sum of 'a'+'b'+'c' bytes")
+
+    t.section("generic K=int parameter (non-str) still compiles fine")
+    mut bi = Box[int]()
+    bi.v = 42
+    t.assert_true(bi.cast_compiles(7), "non-str generic `as Pointer[char]` still compiles and runs")
+    t.assert_eq_int(bi.v, 42, "non-str generic instantiation unaffected")
+
+    t.summary()

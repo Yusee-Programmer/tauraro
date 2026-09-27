@@ -1,0 +1,54 @@
+# tests/regression/generic_freefn_dual_mono_decl.tr
+# Regression (bug2.txt "BUG E"): a generic method on a generic class calling a
+# generic FREE FUNCTION, monomorphized for 2+ different concrete type args in
+# the same compiled program, produced a garbled/concatenated C declaration.
+#
+# Root cause: src/codegen/c.tr's `ensure_mono` (the class-method monomorphizer)
+# wrote each monomorphized METHOD's body directly into the SHARED
+# `self.fn_mono_body` StringBuilder while it was only PARTIALLY written. If
+# that method's body called a generic free function needing its own
+# monomorphization (via `ensure_mono_func_n`, which runs RE-ENTRANTLY mid-call
+# and appends its own complete definition into that same shared builder), the
+# nested free function's whole prototype+body landed SPLICED into the middle
+# of the enclosing method's still-open `{ ... }` -- e.g.:
+#     static long long Box_str_hash_of(Box_str* self) {
+#     static long long _hash_bytes__MONO_str(TrStr key) {
+#         return 42LL;
+#     }
+#         return _hash_bytes__MONO_str(self->v);
+#     }
+# gcc rejected this as "invalid storage class for function ..." (a nested
+# function definition is not valid C). `ensure_mono_func_n` ITSELF already had
+# the correct fix (an isolated per-function body builder, appended to
+# fn_mono_body only once complete) for the free-function-calls-free-function
+# case; `ensure_mono`'s class-METHOD body loop was the one place that still
+# wrote directly into the shared buffer. Fixed by giving `ensure_mono`'s
+# method-body loop the same isolated-builder-then-append treatment.
+
+from std.test import TestRunner
+
+pub def _hash_bytes[K](key: K) -> int:
+    return 42
+
+pub class Box[K]:
+    pub v: K
+
+extend Box[K]:
+    pub def init(v: K) -> Box[K]:
+        mut b = Box[K]()
+        b.v = v
+        return b
+
+    pub def hash_of(self) -> int:
+        return _hash_bytes[K](self.v)
+
+def main():
+    mut t = TestRunner.init("generic_freefn_dual_mono_decl")
+
+    t.section("generic method calling a generic free fn, monomorphized for 2 different K in one program")
+    mut bs = Box[str].init("hi")
+    mut bi = Box[int].init(7)
+    t.assert_eq_int(bs.hash_of(), 42, "Box[str].hash_of() compiles and runs (str monomorphization)")
+    t.assert_eq_int(bi.hash_of(), 42, "Box[int].hash_of() compiles and runs (int monomorphization, same program)")
+
+    t.summary()

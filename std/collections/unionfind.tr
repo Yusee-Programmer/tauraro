@@ -1,0 +1,78 @@
+# std.collections.unionfind — Disjoint-set / union-find over integer
+# indices 0..n-1.
+#
+# Classic union-by-rank + path-compression implementation: `find` flattens
+# the path to the root every time it's called (full path compression, not
+# just halving), and `union` always attaches the shallower tree under the
+# deeper one's root (tracked via a per-root `rank` upper bound on subtree
+# height) so no single tree can grow tall enough to make `find` expensive.
+# Together these give amortized-near-O(1) (inverse-Ackermann) `find`/`union`/
+# `connected`.
+
+from std.core.vec import Vec
+
+pub class UnionFind:
+    pub parent: Vec[int]
+    pub rank:   Vec[int]
+    pub count:  int   # current number of distinct connected components
+
+extend UnionFind:
+    # Create n singleton components, each index its own parent.
+    pub def init(n: int) -> UnionFind:
+        mut real_n = n
+        if real_n < 0: real_n = 0
+        mut uf = UnionFind()
+        uf.parent = Vec[int].init(real_n + 1)
+        uf.rank   = Vec[int].init(real_n + 1)
+        mut i = 0
+        while i < real_n:
+            uf.parent.push(i)
+            uf.rank.push(0)
+            i = i + 1
+        uf.count = real_n
+        return uf
+
+    # Find the representative (root) of x's component, compressing the path
+    # to the root along the way so future finds through these same nodes are
+    # O(1).
+    pub def find(self, x: int) -> int:
+        mut root = x
+        while self.parent.get(root) != root:
+            root = self.parent.get(root)
+        # Second pass: point every node on the path directly at root.
+        mut cur = x
+        while self.parent.get(cur) != root:
+            mut next_ = self.parent.get(cur)
+            self.parent.set(cur, root)
+            cur = next_
+        return root
+
+    # Merge the components containing a and b (no-op if already the same
+    # component). Attaches the lower-rank root under the higher-rank root;
+    # ties bump the winning root's rank by one.
+    pub def union(self, a: int, b: int):
+        mut ra = self.find(a)
+        mut rb = self.find(b)
+        if ra == rb: return
+        mut rank_a = self.rank.get(ra)
+        mut rank_b = self.rank.get(rb)
+        if rank_a < rank_b:
+            self.parent.set(ra, rb)
+        elif rank_a > rank_b:
+            self.parent.set(rb, ra)
+        else:
+            self.parent.set(rb, ra)
+            self.rank.set(ra, rank_a + 1)
+        self.count = self.count - 1
+
+    # true when a and b are currently in the same component.
+    pub def connected(self, a: int, b: int) -> bool:
+        return self.find(a) == self.find(b)
+
+    # Number of distinct connected components remaining.
+    pub def component_count(self) -> int:
+        return self.count
+
+    # Total number of elements this UnionFind was initialized with.
+    pub def size(self) -> int:
+        return self.parent.len()

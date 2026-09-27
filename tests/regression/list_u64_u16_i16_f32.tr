@@ -1,0 +1,41 @@
+# Regression (bug2.txt): List[u64] (and u16/i16/f32) monomorphized to the
+# generic boxed List_ptr instead of a dedicated typed list, producing invalid
+# C ("passing argument 2 of 'List_ptr_append' makes pointer from integer").
+# Root cause: list_elem_suffix's allow-list (src/codegen/c.tr) was missing
+# these four scalar suffixes even though type_suffix() already recognized
+# them; the runtime also had no List_u64/List_u16/List_i16/List_f32 type at
+# all. Both gaps are fixed together (runtime/tauraro_rt.h + c.tr dispatch).
+
+from std.test import TestRunner
+
+def main():
+    mut t = TestRunner.init("list_u64_u16_i16_f32")
+
+    t.section("List[u64]")
+    mut h: u64 = 5 as u64
+    mut uarr: List[u64] = [h, h]
+    t.assert_eq_int(uarr[0] as int, 5, "List[u64] literal element readable")
+    uarr.append(9223372036854775807 as u64)
+    t.assert_eq_int(uarr.len(), 3, "List[u64] append grows len")
+    t.assert_eq_int((uarr[2] as int) > 0, true, "large u64 value round-trips (no truncation)")
+    uarr[0] = 100 as u64
+    t.assert_eq_int(uarr[0] as int, 100, "List[u64] set() works")
+
+    t.section("List[u16]")
+    mut u16arr: List[u16] = [1 as u16, 2 as u16, 3 as u16]
+    t.assert_eq_int(u16arr.len(), 3, "List[u16] literal builds")
+    t.assert_eq_int(u16arr[1] as int, 2, "List[u16] index works")
+
+    t.section("List[i16]")
+    mut i16arr: List[i16] = [-5 as i16, 10 as i16]
+    t.assert_eq_int(i16arr[0] as int, -5, "List[i16] preserves sign")
+    i16arr.append(7 as i16)
+    t.assert_eq_int(i16arr.len(), 3, "List[i16] append works")
+
+    t.section("List[f32]")
+    mut f32arr: List[f32] = [1.5 as f32, 2.5 as f32]
+    t.assert_eq_float(f32arr[0] as float, 1.5, 0.0001, "List[f32] index works")
+    f32arr.append(3.5 as f32)
+    t.assert_eq_int(f32arr.len(), 3, "List[f32] append works")
+
+    t.summary()

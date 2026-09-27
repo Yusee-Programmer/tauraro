@@ -1,0 +1,137 @@
+# tests/lang/33_csv.tr - std.encoding.csv parse/stringify round-trip.
+# Uses the SAFE ARC-node API (CsvDoc is an ARC class; no raw pointers, so no
+# `.read()` / `unsafe:` needed — memory-safe by default).
+
+from std.test import TestRunner
+from std.core.vec import Vec
+from std.encoding.csv import CsvDoc, Csv
+
+def main():
+    mut t = TestRunner.init("33_csv")
+
+    t.section("basic parse")
+    mut d1 = Csv.parse("a,b,c\n1,2,3\n")
+    t.assert_eq_int(d1.row_count(), 2, "two rows")
+    t.assert_eq_int(d1.col_count(0), 3, "three columns in row 0")
+    t.assert_eq_str(d1.field(0, 0), "a", "row0 col0")
+    t.assert_eq_str(d1.field(0, 2), "c", "row0 col2")
+    t.assert_eq_str(d1.field(1, 1), "2", "row1 col1")
+
+    t.section("no trailing newline at EOF")
+    mut d2 = Csv.parse("x,y\n1,2")
+    t.assert_eq_int(d2.row_count(), 2, "two rows without trailing newline")
+    t.assert_eq_str(d2.field(1, 0), "1", "last row col0")
+    t.assert_eq_str(d2.field(1, 1), "2", "last row col1 (no trailing newline)")
+
+    t.section("quoted fields")
+    mut d3 = Csv.parse("\"a,b\",c\n\"d\",\"e,f\"\n")
+    t.assert_eq_int(d3.col_count(0), 2, "quoted field keeps embedded comma as ONE field")
+    t.assert_eq_str(d3.field(0, 0), "a,b", "quoted field with comma")
+    t.assert_eq_str(d3.field(0, 1), "c", "plain field after quoted field")
+    t.assert_eq_str(d3.field(1, 0), "d", "simple quoted field")
+    t.assert_eq_str(d3.field(1, 1), "e,f", "second quoted field with comma")
+
+    t.section("escaped quotes inside quoted field")
+    mut d4 = Csv.parse("\"say \"\"hi\"\"\",done\n")
+    t.assert_eq_str(d4.field(0, 0), "say \"hi\"", "doubled-quote escape unescapes to a single quote")
+    t.assert_eq_str(d4.field(0, 1), "done", "field after escaped-quote field")
+
+    t.section("embedded newline in quoted field")
+    mut d5 = Csv.parse("\"line1\nline2\",b\nx,y\n")
+    t.assert_eq_int(d5.row_count(), 2, "embedded newline does not split the row")
+    t.assert_eq_str(d5.field(0, 0), "line1\nline2", "embedded newline preserved verbatim")
+    t.assert_eq_str(d5.field(0, 1), "b", "field after multi-line quoted field")
+    t.assert_eq_str(d5.field(1, 0), "x", "next row parses normally")
+
+    t.section("CRLF vs LF line endings")
+    mut d6 = Csv.parse("a,b\r\nc,d\r\n")
+    t.assert_eq_int(d6.row_count(), 2, "CRLF: two rows")
+    t.assert_eq_str(d6.field(0, 1), "b", "CRLF row0 col1")
+    t.assert_eq_str(d6.field(1, 0), "c", "CRLF row1 col0")
+    mut d7 = Csv.parse("a,b\nc,d\n")
+    t.assert_eq_int(d7.row_count(), 2, "LF: two rows")
+    t.assert_eq_str(d7.field(1, 1), "d", "LF row1 col1")
+    mut d8 = Csv.parse("a,b\r\nc,d\n")
+    t.assert_eq_int(d8.row_count(), 2, "mixed CRLF/LF: two rows")
+    t.assert_eq_str(d8.field(0, 0), "a", "mixed line endings row0 col0")
+    t.assert_eq_str(d8.field(1, 1), "d", "mixed line endings row1 col1")
+
+    t.section("custom delimiter (semicolon)")
+    mut d9 = Csv.parse_with_delimiter("a;b;c\n1;2;3\n", 59)
+    t.assert_eq_int(d9.col_count(0), 3, "semicolon-delimited: three columns")
+    t.assert_eq_str(d9.field(0, 1), "b", "semicolon row0 col1")
+    t.assert_eq_str(d9.field(1, 2), "3", "semicolon row1 col2")
+
+    t.section("custom delimiter (tab)")
+    mut d10 = Csv.parse_with_delimiter("x\ty\tz\n7\t8\t9\n", 9)
+    t.assert_eq_int(d10.col_count(0), 3, "tab-delimited: three columns")
+    t.assert_eq_str(d10.field(1, 0), "7", "tab row1 col0")
+    t.assert_eq_str(d10.field(1, 2), "9", "tab row1 col2")
+
+    t.section("header-based access")
+    mut d11 = Csv.parse_with_header("name,age,city\nAda,36,London\nGrace,85,NYC\n")
+    t.assert_true(d11.has_header, "has_header flag set")
+    t.assert_eq_int(d11.data_row_count(), 2, "2 data rows (header excluded)")
+    t.assert_eq_str(d11.field_by_name(0, "name"), "Ada", "field_by_name row0 name")
+    t.assert_eq_int(d11.col_index("age"), 1, "col_index for 'age'")
+    t.assert_eq_str(d11.field_by_name(0, "age"), "36", "field_by_name row0 age")
+    t.assert_eq_str(d11.field_by_name(1, "city"), "NYC", "field_by_name row1 city")
+    t.assert_eq_str(d11.field_by_name(1, "name"), "Grace", "field_by_name row1 name")
+    t.assert_eq_int(d11.col_index("nope"), -1, "col_index miss returns -1")
+    t.assert_eq_str(d11.field_by_name(0, "nope"), "", "field_by_name miss returns empty string")
+
+    t.section("round-trip: stringify -> parse (simple)")
+    mut rows1 = Vec[Vec[str]].init(4)
+    mut r1a = Vec[str].init(2); r1a.push("name"); r1a.push("age")
+    mut r1b = Vec[str].init(2); r1b.push("Ada"); r1b.push("36")
+    rows1.push(r1a)
+    rows1.push(r1b)
+    mut out1: str = Csv.stringify(rows1)
+    mut back1 = Csv.parse(out1)
+    t.assert_eq_int(back1.row_count(), 2, "round-trip row count")
+    t.assert_eq_str(back1.field(0, 0), "name", "round-trip header field")
+    t.assert_eq_str(back1.field(1, 1), "36", "round-trip data field")
+
+    t.section("round-trip: fields needing quoting (comma, quote, newline)")
+    mut rows2 = Vec[Vec[str]].init(4)
+    mut r2a = Vec[str].init(3)
+    r2a.push("has,comma")
+    r2a.push("has\"quote")
+    r2a.push("has\nnewline")
+    rows2.push(r2a)
+    mut out2: str = Csv.stringify(rows2)
+    mut back2 = Csv.parse(out2)
+    t.assert_eq_int(back2.row_count(), 1, "round-trip special-char: one row")
+    t.assert_eq_int(back2.col_count(0), 3, "round-trip special-char: three fields")
+    t.assert_eq_str(back2.field(0, 0), "has,comma", "round-trip comma field")
+    t.assert_eq_str(back2.field(0, 1), "has\"quote", "round-trip quote field")
+    t.assert_eq_str(back2.field(0, 2), "has\nnewline", "round-trip newline field")
+
+    t.section("stringify minimal quoting (plain fields stay unquoted)")
+    mut rows3 = Vec[Vec[str]].init(2)
+    mut r3a = Vec[str].init(2); r3a.push("plain"); r3a.push("also_plain")
+    rows3.push(r3a)
+    mut out3: str = Csv.stringify(rows3)
+    t.assert_eq_str(out3, "plain,also_plain\r\n", "no quotes emitted when not needed; plain fields joined by delimiter")
+
+    t.section("edge case: empty field")
+    mut d12 = Csv.parse("a,,c\n")
+    t.assert_eq_int(d12.col_count(0), 3, "empty middle field still counts as a column")
+    t.assert_eq_str(d12.field(0, 1), "", "middle field is empty string")
+
+    t.section("edge case: trailing comma (trailing empty field)")
+    mut d13 = Csv.parse("a,b,\n")
+    t.assert_eq_int(d13.col_count(0), 3, "trailing comma yields a trailing empty field")
+    t.assert_eq_str(d13.field(0, 2), "", "trailing field is empty string")
+
+    t.section("edge case: empty file")
+    mut d14 = Csv.parse("")
+    t.assert_eq_int(d14.row_count(), 0, "empty source yields zero rows")
+
+    t.section("edge case: single empty line")
+    mut d15 = Csv.parse("\n")
+    t.assert_eq_int(d15.row_count(), 1, "a single blank line yields one row")
+    t.assert_eq_int(d15.col_count(0), 1, "that row has one (empty) field")
+    t.assert_eq_str(d15.field(0, 0), "", "the one field is empty")
+
+    t.summary()

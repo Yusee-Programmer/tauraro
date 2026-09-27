@@ -1,0 +1,131 @@
+# tests/lang/34_xml.tr - std.encoding.xml parse/stringify round-trip.
+# Uses the SAFE ARC-node API (XmlElement is an ARC class; no raw pointers, so
+# no `.read()` / `unsafe:` needed at the call site — memory-safe by default).
+
+from std.test import TestRunner
+from std.encoding.xml import XmlElement, Xml
+
+def main():
+    mut t = TestRunner.init("34_xml")
+
+    t.section("basic element + text content")
+    mut root = Xml.parse("<greeting>Hello, world!</greeting>")
+    t.assert_eq_str(root.tag_name(), "greeting", "root tag name")
+    t.assert_eq_str(root.text(), "Hello, world!", "root text content")
+    t.assert_eq_int(root.child_count(), 0, "no children")
+
+    t.section("nested elements")
+    mut d2 = Xml.parse("<config><server><host>localhost</host><port>8080</port></server></config>")
+    t.assert_eq_str(d2.tag_name(), "config", "outer tag")
+    mut server = d2.find_child("server")
+    t.assert_false(server.is_none(), "server child found")
+    t.assert_eq_str(server.tag_name(), "server", "server tag")
+    t.assert_eq_int(server.child_count(), 2, "server has 2 children")
+    mut host = server.find_child("host")
+    t.assert_eq_str(host.text(), "localhost", "host text")
+    mut port = server.find_child("port")
+    t.assert_eq_str(port.text(), "8080", "port text")
+
+    t.section("attributes: double-quoted")
+    mut d3 = Xml.parse("<user id=\"42\" name=\"Ada\">bio</user>")
+    t.assert_true(d3.has_attr("id"), "has id attr")
+    t.assert_eq_str(d3.attr("id"), "42", "id attr value")
+    t.assert_eq_str(d3.attr("name"), "Ada", "name attr value")
+    t.assert_false(d3.has_attr("missing"), "missing attr absent")
+    t.assert_eq_int(d3.attr_count(), 2, "attr count")
+
+    t.section("attributes: single-quoted")
+    mut d4 = Xml.parse("<item sku='ABC-123' qty='5'/>")
+    t.assert_eq_str(d4.attr("sku"), "ABC-123", "single-quoted attr")
+    t.assert_eq_str(d4.attr("qty"), "5", "single-quoted attr 2")
+
+    t.section("self-closing tags")
+    mut d5 = Xml.parse("<root><br/><hr /><leaf value=\"x\"/></root>")
+    t.assert_eq_int(d5.child_count(), 3, "3 self-closing children")
+    t.assert_eq_str(d5.child_at(0).tag_name(), "br", "self-close tag 0")
+    t.assert_eq_str(d5.child_at(1).tag_name(), "hr", "self-close tag 1 (with space before />)")
+    t.assert_eq_str(d5.child_at(2).attr("value"), "x", "self-close tag with attr")
+    t.assert_eq_int(d5.child_at(0).child_count(), 0, "self-closing has no children")
+
+    t.section("entity unescaping in text content")
+    mut d6 = Xml.parse("<msg>1 &lt; 2 &amp;&amp; 3 &gt; 2 &apos;quoted&apos; &quot;also&quot;</msg>")
+    t.assert_eq_str(d6.text(), "1 < 2 && 3 > 2 'quoted' \"also\"", "5 entities unescaped in text")
+
+    t.section("entity unescaping in attribute values")
+    mut d7 = Xml.parse("<tag note=\"a &lt; b &amp; c &gt; d\"/>")
+    t.assert_eq_str(d7.attr("note"), "a < b & c > d", "entities unescaped in attr value")
+
+    t.section("entity escaping on output (round trip through stringify)")
+    mut d8 = Xml.parse("<x/>")
+    d8.set_text("<tag> & \"quote\" 'apos'")
+    mut out8 = Xml.stringify(d8)
+    t.assert_contains(out8, "&lt;tag&gt;", "text < and > escaped on output")
+    t.assert_contains(out8, "&amp;", "text & escaped on output")
+    mut reparsed8 = Xml.parse(out8)
+    t.assert_eq_str(reparsed8.text(), "<tag> & \"quote\" 'apos'", "text round-trips through escape/unescape")
+
+    t.section("comments are skipped")
+    mut d9 = Xml.parse("<root><!-- a comment --><a>1</a><!-- another --><b>2</b></root>")
+    t.assert_eq_int(d9.child_count(), 2, "comments did not become children")
+    t.assert_eq_str(d9.child_at(0).text(), "1", "element after leading comment")
+    t.assert_eq_str(d9.child_at(1).text(), "2", "element after inline comment")
+
+    t.section("comment-only content collapses to no text")
+    mut d10 = Xml.parse("<root><!-- just a comment --></root>")
+    t.assert_eq_str(d10.text(), "", "no text when only a comment present")
+    t.assert_eq_int(d10.child_count(), 0, "no children when only a comment present")
+
+    t.section("XML declaration is skipped")
+    mut d11 = Xml.parse("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<root><a>1</a></root>")
+    t.assert_eq_str(d11.tag_name(), "root", "declaration skipped, root parsed")
+    t.assert_eq_str(d11.find_child("a").text(), "1", "content after declaration parsed")
+
+    t.section("find_child / find_all")
+    mut d12 = Xml.parse("<library><book id=\"1\">A</book><book id=\"2\">B</book><book id=\"3\">C</book><author>Someone</author></library>")
+    mut first_book = d12.find_child("book")
+    t.assert_eq_str(first_book.attr("id"), "1", "find_child returns first match")
+    mut all_books = d12.find_all("book")
+    t.assert_eq_int(all_books.len, 3, "find_all finds all matching direct children")
+    t.assert_eq_str(all_books.get(0).text(), "A", "find_all elem 0 text")
+    t.assert_eq_str(all_books.get(1).text(), "B", "find_all elem 1 text")
+    t.assert_eq_str(all_books.get(2).text(), "C", "find_all elem 2 text")
+    mut missing = d12.find_child("nonexistent")
+    t.assert_true(missing.is_none(), "find_child miss returns none-sentinel")
+    mut none_all = d12.find_all("nonexistent")
+    t.assert_eq_int(none_all.len, 0, "find_all miss returns empty vec")
+
+    t.section("round-trip: parse -> stringify -> parse (equivalent tree)")
+    mut original = "<config><name>Tauraro</name><server host=\"localhost\" port=\"9090\"><tls enabled=\"false\"/></server><tags><tag>x</tag><tag>y</tag></tags></config>"
+    mut parsed1 = Xml.parse(original)
+    mut text1 = Xml.stringify(parsed1)
+    mut parsed2 = Xml.parse(text1)
+    t.assert_eq_str(parsed2.tag_name(), "config", "round-trip root tag")
+    t.assert_eq_str(parsed2.find_child("name").text(), "Tauraro", "round-trip text leaf")
+    mut rserver = parsed2.find_child("server")
+    t.assert_eq_str(rserver.attr("host"), "localhost", "round-trip attr host")
+    t.assert_eq_str(rserver.attr("port"), "9090", "round-trip attr port")
+    mut rtls = rserver.find_child("tls")
+    t.assert_eq_str(rtls.attr("enabled"), "false", "round-trip nested self-closing attr")
+    mut rtags = parsed2.find_child("tags").find_all("tag")
+    t.assert_eq_int(rtags.len, 2, "round-trip repeated children count")
+    t.assert_eq_str(rtags.get(0).text(), "x", "round-trip repeated child 0")
+    t.assert_eq_str(rtags.get(1).text(), "y", "round-trip repeated child 1")
+
+    t.section("whitespace between tags does not create phantom children")
+    mut d13 = Xml.parse("<root>\n  <a>1</a>\n  <b>2</b>\n</root>")
+    t.assert_eq_int(d13.child_count(), 2, "only real elements counted as children")
+
+    t.section("programmatic construction + stringify")
+    mut built = Xml.element("note")
+    built.set_attr("id", "1")
+    mut body = Xml.element("body")
+    body.set_text("Meet at 5")
+    built.add_child(body)
+    mut built_str = Xml.stringify(built)
+    t.assert_contains(built_str, "<note id=\"1\">", "constructed element attr serialized")
+    t.assert_contains(built_str, "<body>Meet at 5</body>", "constructed child serialized")
+    mut reparsed_built = Xml.parse(built_str)
+    t.assert_eq_str(reparsed_built.attr("id"), "1", "constructed tree round-trips: attr")
+    t.assert_eq_str(reparsed_built.find_child("body").text(), "Meet at 5", "constructed tree round-trips: text")
+
+    t.summary()

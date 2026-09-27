@@ -72,6 +72,24 @@ __attribute__((hot)) void ByteBuf_cstr(ByteBuf* self, TrStr s) {
     ByteBuf_u8(self, 0LL);
 }
 
+__attribute__((hot)) void ByteBuf_cstr_len(ByteBuf* self, TrStr s, long long blen) {
+    /* pass */
+    /* unsafe block */
+    /* pass */
+    char* p = ((char*)(_tr_strz(s)));
+    /* pass */
+    long long i = 0LL;
+    /* pass */
+    while ((i < blen)) {
+        /* pass */
+        ByteBuf_u8(self, ((long long)((*(p + i)))));
+        /* pass */
+        i = (i + 1LL);
+    }
+    /* pass */
+    ByteBuf_u8(self, 0LL);
+}
+
 __attribute__((hot)) void ByteBuf_zeros(ByteBuf* self, long long n) {
     /* pass */
     long long i = 0LL;
@@ -121,7 +139,7 @@ __attribute__((hot)) void ByteBuf_align_to(ByteBuf* self, long long align) {
 
 __attribute__((hot)) bool ByteBuf_write_file(ByteBuf* self, TrStr path) {
     /* pass */
-    char* fp = _tr_c_fopen(_tr_strz(path), _tr_strz(_tr_str_lit("wb")));
+    char* fp = _tr_c_fopen(_tr_strz(path), _tr_strz(_tr_str_lit_len("wb", 2LL)));
     /* pass */
     if ((((long long)(fp)) == 0LL)) {
         /* pass */

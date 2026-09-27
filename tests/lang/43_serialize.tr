@@ -1,0 +1,410 @@
+# tests/lang/43_serialize.tr - std.serialize.pickle + std.serialize.msgpack:
+# round-trip of scalars, nested List/Dict, empty containers, a deep/large
+# structure, and (for msgpack) byte-level spot checks against the real
+# MessagePack wire format.
+#
+# NOTE on `mut a, b = f(SomeCtor.init_x(...))`: pickle.tr/msgpack.tr's
+# `dumps_len` convenience call is meant to be used as
+# `mut bytes_, blen = Pickle.dumps_len(v)`. A pre-existing compiler bug
+# (see bug2.txt, "BUG 2") makes tuple-destructuring `mut a, b = expr`
+# statements emit invalid C whenever `expr`'s call arguments contain a
+# freshly-constructed ARC-class value INLINE (e.g.
+# `Pickle.dumps_len(PVal.init_int(3))` directly) -- the hoisted ARC-release
+# temp for the constructor call gets declared one statement too late. This
+# test avoids that pattern throughout by always binding a PVal/MPVal to a
+# `mut` local FIRST, then passing that local into `dumps_len` -- which is
+# also good, idiomatic style independent of the bug.
+#
+# NOTE on embedded NUL bytes: pickled/msgpack'd binary data may legitimately
+# contain embedded NUL (0x00) bytes, and Tauraro's `str` has no independent
+# length field, so this test tracks lengths in separate int variables
+# throughout (never `.len()`/strlen on binary data). Also, per a separate
+# pre-existing compiler bug (bug2.txt, "BUG 1"), a `"...\0..."` SOURCE
+# LITERAL containing `\0` is truncated at compile time -- so the
+# embedded-NUL test payload below is built at RUNTIME via malloc + raw
+# byte writes, never via a `\0` string literal.
+
+from std.test import TestRunner
+from std.serialize.pickle import PVal, Pickle
+from std.serialize.msgpack import MPVal, Msgpack
+
+extern "C":
+    def _tr_c_malloc(size: int) -> Pointer[char]
+    def _tr_str_wrap(s: Pointer[char]) -> str
+
+def byte_at(s: str, i: int) -> int:
+    mut p = s as Pointer[char]
+    unsafe:
+        return p.offset(i).read() as int & 0xFF
+
+def main():
+    mut t = TestRunner.init("43_serialize")
+
+    # ═══════════════════════════ std.serialize.pickle ═══════════════════════
+
+    t.section("pickle: scalar round-trips")
+    mut pi_v = PVal.init_int(42)
+    mut pi_b, pi_n = Pickle.dumps_len(pi_v)
+    mut pi_back = Pickle.loads(pi_b, pi_n)
+    t.assert_true(pi_back.is_int(), "pickled int decodes as int")
+    t.assert_eq_int(pi_back.get_int(), 42, "pickled int round-trips")
+
+    mut pneg_v = PVal.init_int(0 - 987654321)
+    mut pneg_b, pneg_n = Pickle.dumps_len(pneg_v)
+    mut pneg_back = Pickle.loads(pneg_b, pneg_n)
+    t.assert_eq_int(pneg_back.get_int(), 0 - 987654321, "pickled negative int round-trips")
+
+    mut pf_v = PVal.init_float(3.14159265358979)
+    mut pf_b, pf_n = Pickle.dumps_len(pf_v)
+    mut pf_back = Pickle.loads(pf_b, pf_n)
+    t.assert_true(pf_back.is_float(), "pickled float decodes as float")
+    t.assert_eq_float(pf_back.get_float(), 3.14159265358979, 0.0000001, "pickled float round-trips exactly (bit-punned)")
+
+    mut pbt_v = PVal.init_bool(true)
+    mut pbt_b, pbt_n = Pickle.dumps_len(pbt_v)
+    mut pbt_back = Pickle.loads(pbt_b, pbt_n)
+    t.assert_eq_bool(pbt_back.get_bool(), true, "pickled bool true round-trips")
+
+    mut pbf_v = PVal.init_bool(false)
+    mut pbf_b, pbf_n = Pickle.dumps_len(pbf_v)
+    mut pbf_back = Pickle.loads(pbf_b, pbf_n)
+    t.assert_eq_bool(pbf_back.get_bool(), false, "pickled bool false round-trips")
+
+    mut pn_v = PVal.init_none()
+    mut pn_b, pn_n = Pickle.dumps_len(pn_v)
+    mut pn_back = Pickle.loads(pn_b, pn_n)
+    t.assert_true(pn_back.is_none(), "pickled None round-trips")
+    t.assert_eq_int(pn_n, 1, "pickled None is exactly 1 byte (tag only)")
+
+    mut ps_v = PVal.init_str("hello, tauraro!")
+    mut ps_b, ps_n = Pickle.dumps_len(ps_v)
+    mut ps_back = Pickle.loads(ps_b, ps_n)
+    t.assert_true(ps_back.is_str(), "pickled str decodes as str")
+    t.assert_eq_str(ps_back.get_str(), "hello, tauraro!", "pickled str round-trips")
+
+    t.section("pickle: nested List/Dict (via PVal)")
+    mut cfg = PVal.init_map()
+    cfg.map_set("name", PVal.init_str("tauraro"))
+    cfg.map_set("version", PVal.init_int(1))
+    mut tags = PVal.init_list()
+    tags.list_push(PVal.init_str("fast"))
+    tags.list_push(PVal.init_str("safe"))
+    tags.list_push(PVal.init_str("compiled"))
+    cfg.map_set("tags", tags)
+    mut nested_map = PVal.init_map()
+    nested_map.map_set("retries", PVal.init_int(3))
+    nested_map.map_set("timeout", PVal.init_float(2.5))
+    cfg.map_set("opts", nested_map)
+
+    mut cfg_b, cfg_n = Pickle.dumps_len(cfg)
+    mut cfg_back = Pickle.loads(cfg_b, cfg_n)
+    t.assert_eq_str(cfg_back.map_get("name").get_str(), "tauraro", "nested map: top-level str field")
+    t.assert_eq_int(cfg_back.map_get("version").get_int(), 1, "nested map: top-level int field")
+    mut cfg_tags = cfg_back.map_get("tags")
+    t.assert_eq_int(cfg_tags.list_len(), 3, "nested map: list field length")
+    t.assert_eq_str(cfg_tags.list_get(0).get_str(), "fast", "nested map: list field element 0")
+    t.assert_eq_str(cfg_tags.list_get(2).get_str(), "compiled", "nested map: list field element 2")
+    mut cfg_opts = cfg_back.map_get("opts")
+    t.assert_eq_int(cfg_opts.map_get("retries").get_int(), 3, "nested map: sub-map int field")
+    t.assert_eq_float(cfg_opts.map_get("timeout").get_float(), 2.5, 0.0001, "nested map: sub-map float field")
+
+    t.section("pickle: List[int]/List[str] convenience helpers")
+    mut xs: List[int] = [10, 20, 30, 40, 50]
+    mut xs_b, xs_n = Pickle.dump_list_int(xs)
+    mut xs_back = Pickle.load_list_int(xs_b, xs_n)
+    t.assert_eq_int(len(xs_back), 5, "dump_list_int/load_list_int: length")
+    t.assert_eq_int(xs_back[0], 10, "dump_list_int/load_list_int: first element")
+    t.assert_eq_int(xs_back[4], 50, "dump_list_int/load_list_int: last element")
+
+    mut ss: List[str] = ["alpha", "beta", "gamma"]
+    mut ss_b, ss_n = Pickle.dump_list_str(ss)
+    mut ss_back = Pickle.load_list_str(ss_b, ss_n)
+    t.assert_eq_int(len(ss_back), 3, "dump_list_str/load_list_str: length")
+    t.assert_eq_str(ss_back[1], "beta", "dump_list_str/load_list_str: element 1")
+
+    t.section("pickle: Dict[str,str] / Dict[str,int] convenience helpers")
+    mut d1: Dict[str, str] = {}
+    d1.set("host", "localhost")
+    d1.set("proto", "https")
+    mut d1_b, d1_n = Pickle.dump_dict_str_str(d1)
+    mut d1_back = Pickle.loads(d1_b, d1_n)
+    t.assert_eq_int(d1_back.map_len(), 2, "dump_dict_str_str: entry count")
+    t.assert_eq_str(d1_back.map_get("host").get_str(), "localhost", "dump_dict_str_str: value lookup")
+
+    mut d2: Dict[str, int] = {}
+    d2.set("alice", 95)
+    d2.set("bob", 82)
+    mut d2_b, d2_n = Pickle.dump_dict_str_int(d2)
+    mut d2_back = Pickle.loads(d2_b, d2_n)
+    t.assert_eq_int(d2_back.map_get("alice").get_int(), 95, "dump_dict_str_int: value lookup alice")
+    t.assert_eq_int(d2_back.map_get("bob").get_int(), 82, "dump_dict_str_int: value lookup bob")
+
+    t.section("pickle: empty containers")
+    mut pel_v = PVal.init_list()
+    mut pel_b, pel_n = Pickle.dumps_len(pel_v)
+    mut pel_back = Pickle.loads(pel_b, pel_n)
+    t.assert_true(pel_back.is_list(), "empty list round-trips as list")
+    t.assert_eq_int(pel_back.list_len(), 0, "empty list has zero length")
+
+    mut pem_v = PVal.init_map()
+    mut pem_b, pem_n = Pickle.dumps_len(pem_v)
+    mut pem_back = Pickle.loads(pem_b, pem_n)
+    t.assert_true(pem_back.is_map(), "empty map round-trips as map")
+    t.assert_eq_int(pem_back.map_len(), 0, "empty map has zero length")
+
+    t.section("pickle: deep/large structure")
+    mut big = PVal.init_list()
+    mut i = 0
+    while i < 200:
+        mut row = PVal.init_map()
+        row.map_set("i", PVal.init_int(i))
+        row.map_set("sq", PVal.init_int(i * i))
+        mut row_tags = PVal.init_list()
+        row_tags.list_push(PVal.init_int(i))
+        row_tags.list_push(PVal.init_int(0 - i))
+        row.map_set("pair", row_tags)
+        big.list_push(row)
+        i = i + 1
+    mut big_b, big_n = Pickle.dumps_len(big)
+    mut big_back = Pickle.loads(big_b, big_n)
+    t.assert_eq_int(big_back.list_len(), 200, "large structure: 200 elements round-trip")
+    t.assert_eq_int(big_back.list_get(150).map_get("sq").get_int(), 150 * 150, "large structure: deep field at index 150")
+    t.assert_eq_int(big_back.list_get(199).map_get("pair").list_get(1).get_int(), 0 - 199, "large structure: doubly-nested field at last index")
+
+    # deeply nested (list of list of list ... ) rather than wide
+    mut deep = PVal.init_int(999)
+    mut d = 0
+    while d < 25:
+        mut wrapper = PVal.init_list()
+        wrapper.list_push(deep)
+        deep = wrapper
+        d = d + 1
+    mut deep_b, deep_n = Pickle.dumps_len(deep)
+    mut deep_back = Pickle.loads(deep_b, deep_n)
+    mut walk = deep_back
+    mut wd = 0
+    while wd < 25:
+        walk = walk.list_get(0)
+        wd = wd + 1
+    t.assert_eq_int(walk.get_int(), 999, "25-deep nested list round-trips to the innermost int")
+
+    t.section("pickle: embedded-NUL string (binary-safe)")
+    mut nbuf = _tr_c_malloc(6)
+    unsafe:
+        nbuf.offset(0).write('a')
+        nbuf.offset(1).write('b')
+        nbuf.offset(2).write(0 as char)
+        nbuf.offset(3).write('c')
+        nbuf.offset(4).write('d')
+        nbuf.offset(5).write(0 as char)
+    mut nul_str = _tr_str_wrap(nbuf)
+    mut pnul_v = PVal.init_str_n(nul_str, 5)
+    mut pnul_b, pnul_n = Pickle.dumps_len(pnul_v)
+    t.assert_eq_int(pnul_n, 10, "embedded-NUL str: encoded size (1 tag + 4 len + 5 data)")
+    mut pnul_back = Pickle.loads(pnul_b, pnul_n)
+    t.assert_eq_int(pnul_back.get_str_len(), 5, "embedded-NUL str: decoded length is 5, not strlen's 2")
+    mut nulp = pnul_back.get_str() as Pointer[char]
+    unsafe:
+        t.assert_eq_int(nulp.offset(0).read() as int, 97, "embedded-NUL str: byte 0 = 'a'")
+        t.assert_eq_int(nulp.offset(1).read() as int, 98, "embedded-NUL str: byte 1 = 'b'")
+        t.assert_eq_int(nulp.offset(2).read() as int, 0,  "embedded-NUL str: byte 2 = 0x00 (preserved)")
+        t.assert_eq_int(nulp.offset(3).read() as int, 99, "embedded-NUL str: byte 3 = 'c'")
+        t.assert_eq_int(nulp.offset(4).read() as int, 100, "embedded-NUL str: byte 4 = 'd'")
+
+    # ═══════════════════════════ std.serialize.msgpack ═══════════════════════
+
+    t.section("msgpack: scalar round-trips")
+    mut mi_v = MPVal.init_int(42)
+    mut mi_b, mi_n = Msgpack.dumps_len(mi_v)
+    mut mi_back = Msgpack.loads(mi_b, mi_n)
+    t.assert_true(mi_back.is_int(), "msgpack int decodes as int")
+    t.assert_eq_int(mi_back.get_int(), 42, "msgpack int round-trips")
+
+    mut mneg_v = MPVal.init_int(0 - 123456789)
+    mut mneg_b, mneg_n = Msgpack.dumps_len(mneg_v)
+    mut mneg_back = Msgpack.loads(mneg_b, mneg_n)
+    t.assert_eq_int(mneg_back.get_int(), 0 - 123456789, "msgpack negative int round-trips")
+
+    mut mbig_v = MPVal.init_int(9223372036854775800)
+    mut mbig_b, mbig_n = Msgpack.dumps_len(mbig_v)
+    mut mbig_back = Msgpack.loads(mbig_b, mbig_n)
+    t.assert_eq_int(mbig_back.get_int(), 9223372036854775800, "msgpack large int64 round-trips")
+
+    mut mf_v = MPVal.init_float(2.71828182845905)
+    mut mf_b, mf_n = Msgpack.dumps_len(mf_v)
+    mut mf_back = Msgpack.loads(mf_b, mf_n)
+    t.assert_eq_float(mf_back.get_float(), 2.71828182845905, 0.0000001, "msgpack float64 round-trips")
+
+    mut mbt_v = MPVal.init_bool(true)
+    mut mbt_b, mbt_n = Msgpack.dumps_len(mbt_v)
+    mut mbt_back = Msgpack.loads(mbt_b, mbt_n)
+    t.assert_eq_bool(mbt_back.get_bool(), true, "msgpack bool true round-trips")
+
+    mut mn_v = MPVal.init_none()
+    mut mn_b, mn_n = Msgpack.dumps_len(mn_v)
+    mut mn_back = Msgpack.loads(mn_b, mn_n)
+    t.assert_true(mn_back.is_none(), "msgpack nil round-trips")
+
+    mut ms_v = MPVal.init_str("tauraro is fast")
+    mut ms_b, ms_n = Msgpack.dumps_len(ms_v)
+    mut ms_back = Msgpack.loads(ms_b, ms_n)
+    t.assert_eq_str(ms_back.get_str(), "tauraro is fast", "msgpack str round-trips")
+
+    t.section("msgpack: byte-level spot checks against the real wire format")
+    # positive fixint 0 -> single byte 0x00
+    mut sc0_v = MPVal.init_int(0)
+    mut sc0_b, sc0_n = Msgpack.dumps_len(sc0_v)
+    t.assert_eq_int(sc0_n, 1, "spot check: fixint 0 is 1 byte")
+    t.assert_eq_int(byte_at(sc0_b, 0), 0x00, "spot check: fixint 0 == 0x00")
+
+    # nil -> 0xc0
+    mut scn_v = MPVal.init_none()
+    mut scn_b, scn_n = Msgpack.dumps_len(scn_v)
+    t.assert_eq_int(byte_at(scn_b, 0), 0xC0, "spot check: nil == 0xc0")
+
+    # true -> 0xc3, false -> 0xc2
+    mut sct_v = MPVal.init_bool(true)
+    mut sct_b, sct_n = Msgpack.dumps_len(sct_v)
+    t.assert_eq_int(byte_at(sct_b, 0), 0xC3, "spot check: true == 0xc3")
+    mut scf_v = MPVal.init_bool(false)
+    mut scf_b, scf_n = Msgpack.dumps_len(scf_v)
+    t.assert_eq_int(byte_at(scf_b, 0), 0xC2, "spot check: false == 0xc2")
+
+    # fixstr "hi" -> 0xa2 'h' 'i'  (per the MessagePack spec's fixstr format:
+    # 0xa0 | length in the low 5 bits, length=2 -> 0xa2)
+    mut scs_v = MPVal.init_str("hi")
+    mut scs_b, scs_n = Msgpack.dumps_len(scs_v)
+    t.assert_eq_int(scs_n, 3, "spot check: fixstr \"hi\" is 3 bytes total")
+    t.assert_eq_int(byte_at(scs_b, 0), 0xA2, "spot check: fixstr \"hi\" tag == 0xa2")
+    t.assert_eq_int(byte_at(scs_b, 1), 104, "spot check: fixstr \"hi\" byte 1 == 'h'")
+    t.assert_eq_int(byte_at(scs_b, 2), 105, "spot check: fixstr \"hi\" byte 2 == 'i'")
+
+    # empty fixarray -> 0x90 ; empty fixmap -> 0x80
+    mut sca_v = MPVal.init_list()
+    mut sca_b, sca_n = Msgpack.dumps_len(sca_v)
+    t.assert_eq_int(sca_n, 1, "spot check: empty fixarray is 1 byte")
+    t.assert_eq_int(byte_at(sca_b, 0), 0x90, "spot check: empty array == 0x90")
+    mut scm_v = MPVal.init_map()
+    mut scm_b, scm_n = Msgpack.dumps_len(scm_v)
+    t.assert_eq_int(byte_at(scm_b, 0), 0x80, "spot check: empty map == 0x80")
+
+    # negative fixint -1 -> 0xff (5-bit negative fixint range is -32..-1)
+    mut scng_v = MPVal.init_int(0 - 1)
+    mut scng_b, scng_n = Msgpack.dumps_len(scng_v)
+    t.assert_eq_int(byte_at(scng_b, 0), 0xFF, "spot check: -1 == 0xff (negative fixint)")
+
+    # uint8 200 -> 0xcc 0xc8 (200 is outside fixint range 0..127, fits uint8)
+    mut scu_v = MPVal.init_int(200)
+    mut scu_b, scu_n = Msgpack.dumps_len(scu_v)
+    t.assert_eq_int(scu_n, 2, "spot check: uint8(200) is 2 bytes")
+    t.assert_eq_int(byte_at(scu_b, 0), 0xCC, "spot check: uint8(200) tag == 0xcc")
+    t.assert_eq_int(byte_at(scu_b, 1), 200, "spot check: uint8(200) payload == 200")
+
+    t.section("msgpack: nested List/Dict (via MPVal)")
+    mut mm = MPVal.init_map()
+    mm.map_set("name", MPVal.init_str("tauraro"))
+    mm.map_set("count", MPVal.init_int(7))
+    mut mtags = MPVal.init_list()
+    mtags.list_push(MPVal.init_str("a"))
+    mtags.list_push(MPVal.init_str("b"))
+    mtags.list_push(MPVal.init_int(0 - 5))
+    mm.map_set("tags", mtags)
+
+    mut mm_b, mm_n = Msgpack.dumps_len(mm)
+    mut mm_back = Msgpack.loads(mm_b, mm_n)
+    t.assert_eq_str(mm_back.map_get("name").get_str(), "tauraro", "msgpack nested map: str field")
+    t.assert_eq_int(mm_back.map_get("count").get_int(), 7, "msgpack nested map: int field")
+    mut mm_tags = mm_back.map_get("tags")
+    t.assert_eq_int(mm_tags.list_len(), 3, "msgpack nested map: list field length")
+    t.assert_eq_str(mm_tags.list_get(0).get_str(), "a", "msgpack nested map: list element 0")
+    t.assert_eq_int(mm_tags.list_get(2).get_int(), 0 - 5, "msgpack nested map: list element 2")
+
+    t.section("msgpack: List[int]/List[str] convenience helpers")
+    mut mxs: List[int] = [1, 4, 9, 16, 25]
+    mut mxs_b, mxs_n = Msgpack.dump_list_int(mxs)
+    mut mxs_back = Msgpack.load_list_int(mxs_b, mxs_n)
+    t.assert_eq_int(len(mxs_back), 5, "msgpack dump_list_int/load_list_int: length")
+    t.assert_eq_int(mxs_back[3], 16, "msgpack dump_list_int/load_list_int: element 3")
+
+    mut mss: List[str] = ["x", "y", "z"]
+    mut mss_b, mss_n = Msgpack.dump_list_str(mss)
+    mut mss_back = Msgpack.load_list_str(mss_b, mss_n)
+    t.assert_eq_int(len(mss_back), 3, "msgpack dump_list_str/load_list_str: length")
+    t.assert_eq_str(mss_back[2], "z", "msgpack dump_list_str/load_list_str: element 2")
+
+    t.section("msgpack: Dict[str,str] / Dict[str,int] convenience helpers")
+    mut md1: Dict[str, str] = {}
+    md1.set("env", "prod")
+    mut md1_b, md1_n = Msgpack.dump_dict_str_str(md1)
+    mut md1_back = Msgpack.loads(md1_b, md1_n)
+    t.assert_eq_str(md1_back.map_get("env").get_str(), "prod", "msgpack dump_dict_str_str: value lookup")
+
+    mut md2: Dict[str, int] = {}
+    md2.set("x", 1)
+    md2.set("y", 2)
+    mut md2_b, md2_n = Msgpack.dump_dict_str_int(md2)
+    mut md2_back = Msgpack.loads(md2_b, md2_n)
+    t.assert_eq_int(md2_back.map_get("x").get_int(), 1, "msgpack dump_dict_str_int: value lookup x")
+    t.assert_eq_int(md2_back.map_get("y").get_int(), 2, "msgpack dump_dict_str_int: value lookup y")
+
+    t.section("msgpack: empty containers")
+    mut mel_v = MPVal.init_list()
+    mut mel_b, mel_n = Msgpack.dumps_len(mel_v)
+    mut mel_back = Msgpack.loads(mel_b, mel_n)
+    t.assert_true(mel_back.is_list(), "msgpack empty list round-trips as list")
+    t.assert_eq_int(mel_back.list_len(), 0, "msgpack empty list has zero length")
+
+    mut mem_v = MPVal.init_map()
+    mut mem_b, mem_n = Msgpack.dumps_len(mem_v)
+    mut mem_back = Msgpack.loads(mem_b, mem_n)
+    t.assert_true(mem_back.is_map(), "msgpack empty map round-trips as map")
+    t.assert_eq_int(mem_back.map_len(), 0, "msgpack empty map has zero length")
+
+    t.section("msgpack: deep/large structure (forces array16/map16 boundary)")
+    mut mxbig: List[int] = []
+    mut mi2 = 0
+    while mi2 < 500:
+        mxbig.append(mi2 * 2)
+        mi2 = mi2 + 1
+    mut mxbig_b, mxbig_n = Msgpack.dump_list_int(mxbig)
+    mut mxbig_back = Msgpack.load_list_int(mxbig_b, mxbig_n)
+    t.assert_eq_int(len(mxbig_back), 500, "large msgpack array: 500 elements round-trip (array16 tag)")
+    t.assert_eq_int(mxbig_back[499], 998, "large msgpack array: last element correct")
+    # array16 tag is 0xdc for a 500-element array (> 15, <= 65535)
+    t.assert_eq_int(byte_at(mxbig_b, 0), 0xDC, "large msgpack array: uses array16 tag 0xdc")
+
+    mut mbig2 = MPVal.init_list()
+    mut d2i = 0
+    while d2i < 40:
+        mut mrow = MPVal.init_map()
+        mrow.map_set("i", MPVal.init_int(d2i))
+        mrow.map_set("label", MPVal.init_str("row"))
+        mbig2.list_push(mrow)
+        d2i = d2i + 1
+    mut mbig2_b, mbig2_n = Msgpack.dumps_len(mbig2)
+    mut mbig2_back = Msgpack.loads(mbig2_b, mbig2_n)
+    t.assert_eq_int(mbig2_back.list_len(), 40, "large msgpack nested structure: 40 rows round-trip")
+    t.assert_eq_int(mbig2_back.list_get(39).map_get("i").get_int(), 39, "large msgpack nested structure: last row's field")
+    t.assert_eq_str(mbig2_back.list_get(20).map_get("label").get_str(), "row", "large msgpack nested structure: mid row's str field")
+
+    t.section("msgpack: embedded-NUL string (binary-safe)")
+    mut mnbuf = _tr_c_malloc(6)
+    unsafe:
+        mnbuf.offset(0).write('x')
+        mnbuf.offset(1).write('y')
+        mnbuf.offset(2).write(0 as char)
+        mnbuf.offset(3).write('z')
+        mnbuf.offset(4).write('w')
+        mnbuf.offset(5).write(0 as char)
+    mut mnul_str = _tr_str_wrap(mnbuf)
+    mut mnul_v = MPVal.init_str_n(mnul_str, 5)
+    mut mnul_b, mnul_n = Msgpack.dumps_len(mnul_v)
+    mut mnul_back = Msgpack.loads(mnul_b, mnul_n)
+    t.assert_eq_int(mnul_back.get_str_len(), 5, "msgpack embedded-NUL str: decoded length is 5")
+    mut mnulp = mnul_back.get_str() as Pointer[char]
+    unsafe:
+        t.assert_eq_int(mnulp.offset(0).read() as int, 120, "msgpack embedded-NUL str: byte 0 = 'x'")
+        t.assert_eq_int(mnulp.offset(2).read() as int, 0,   "msgpack embedded-NUL str: byte 2 = 0x00 (preserved)")
+        t.assert_eq_int(mnulp.offset(4).read() as int, 119, "msgpack embedded-NUL str: byte 4 = 'w'")
+
+    t.summary()

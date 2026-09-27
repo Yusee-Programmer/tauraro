@@ -13,7 +13,7 @@
 # `pub` declarations are added to the merged list; the root file always
 # contributes all of its declarations.
 
-from core.io import read_file, file_exists
+from std.core.io import read_file, file_exists
 from core.vec import Vec
 from core.map import Map
 from core.string import StringObj, StringBuilder

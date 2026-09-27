@@ -1003,7 +1003,7 @@ extend Parser:
         mut reading = true
         while reading:
             match self.peek():
-                case Token.StrLit(s):
+                case Token.StrLit(s, _):
                     self.pos = self.pos + 1
                     parts.push(s)
                     match self.peek():
@@ -1446,9 +1446,9 @@ extend Parser:
             case Token.KwFalse:
                 self.pos = self.pos + 1
                 return Pattern.PLitBool(False)
-            case Token.StrLit(s):
+            case Token.StrLit(s, blen):
                 self.pos = self.pos + 1
-                return Pattern.PLitStr(s)
+                return Pattern.PLitStr(s, blen)
             case _:
                 pass
         return Pattern.PWild
@@ -1954,21 +1954,21 @@ extend Parser:
             case Token.FloatLit(v):
                 self.pos = self.pos + 1
                 return box_expr(Expr.ELitFloat(v))
-            case Token.StrLit(s):
+            case Token.StrLit(s, blen):
                 self.pos = self.pos + 1
-                return box_expr(Expr.ELitStr(s))
-            case Token.TripleStrLit(s):
+                return box_expr(Expr.ELitStr(s, blen))
+            case Token.TripleStrLit(s, blen):
                 self.pos = self.pos + 1
-                return box_expr(Expr.ELitStr(s))
-            case Token.RawStrLit(s):
+                return box_expr(Expr.ELitStr(s, blen))
+            case Token.RawStrLit(s, blen):
                 self.pos = self.pos + 1
-                return box_expr(Expr.ERawStr(s))
-            case Token.ByteStrLit(s):
+                return box_expr(Expr.ERawStr(s, blen))
+            case Token.ByteStrLit(s, blen):
                 self.pos = self.pos + 1
-                return box_expr(Expr.ELitBytes(s))
-            case Token.FStrLit(s):
+                return box_expr(Expr.ELitBytes(s, blen))
+            case Token.FStrLit(s, blen):
                 self.pos = self.pos + 1
-                return self.parse_fstring(s)
+                return self.parse_fstring(s, blen)
             case Token.CharLit(v):
                 self.pos = self.pos + 1
                 return box_expr(Expr.ELitChar(v))
@@ -2244,9 +2244,9 @@ extend Parser:
                         pass
                 mut body = self.parse_block()
                 return box_expr(Expr.EClosure(params, return_type, body, is_async))
-            case Token.FStrLit(raw):
+            case Token.FStrLit(raw, raw_blen):
                 self.pos = self.pos + 1
-                return self.parse_fstring(raw)
+                return self.parse_fstring(raw, raw_blen)
             case _:
                 pass
         if not self.at_end():
@@ -2297,33 +2297,50 @@ extend Parser:
             self.pos = self.pos + 1
         return box_expr(Expr.ELitNone)
 
-    pub def parse_fstring(self, raw: str) -> Pointer[Expr]:
+    # `raw_blen` is the f-string's true byte length (see Token.FStrLit) -- the
+    # outer text-splitting scan below is bounded by it so an embedded \0 in a
+    # LITERAL TEXT segment (e.g. f"a\0b{x}c") survives instead of silently
+    # truncating the rest of the f-string. The nested `{expr}` scan still
+    # stops at the first NUL it encounters while hunting for the matching
+    # '}': a literal NUL can only appear there inside a further-nested string
+    # literal (e.g. f"{'\0'}"), which would need Lexer.init itself to become
+    # length-aware -- a much larger change left out of scope here.
+    #
+    # Backslash escapes (\n \t \r \\ \' \" \0) are interpreted ONLY in the
+    # literal TEXT portions below (the `else` branch), matching read_string's
+    # escape set exactly, like Python f-strings. They are deliberately NOT
+    # interpreted inside `{expr}` (the branch above, which copies raw bytes
+    # unmodified for the nested Lexer/Parser to re-tokenize as ordinary
+    # source): pre-interpreting a backslash there would corrupt an escape
+    # meant for a string literal written INSIDE the interpolated expression,
+    # e.g. f"{x + '\n'}" -- that \n belongs to the nested '...' literal, and
+    # must reach the nested lexer as the two raw characters `\` `n`, not as
+    # an already-substituted real newline byte.
+    pub def parse_fstring(self, raw: str, raw_blen: int) -> Pointer[Expr]:
         mut fl = Vec[FStringPart].init(4)
         mut p = raw as Pointer[char]
         mut i = 0
         mut sb = StringBuilder.init(64)
-        
-        while True:
+
+        while i < raw_blen:
             mut c = p.offset(i).read() as int
-            if c == 0: break
-            
+
             if c == 123: # '{'
                 # Push previous text part
                 if sb.len() > 0:
-                    fl.push(FStringPart.init_text(sb.to_string().as_str()))
+                    fl.push(FStringPart.init_text(sb.to_owned(), sb.len()))
                     sb = StringBuilder.init(64)
-                
+
                 i = i + 1
                 mut expr_sb = StringBuilder.init(64)
                 mut depth = 1
-                while depth > 0:
+                while depth > 0 and i < raw_blen:
                     mut ec = p.offset(i).read() as int
-                    if ec == 0: break
                     if ec == 123: depth = depth + 1
                     if ec == 125: depth = depth - 1
                     if depth > 0: expr_sb.append_char(ec)
                     i = i + 1
-                
+
                 # Parse the expression inside {}.
                 # Detect optional format spec: {expr:spec}  e.g. {x:.2f} {n:>10}
                 mut expr_str  = expr_sb.to_string().as_str()
@@ -2343,13 +2360,28 @@ extend Parser:
                         fl.push(FStringPart.init_expr_fmt(e, fmt_spec))
                     else:
                         fl.push(FStringPart.init_expr(e))
+            elif c == 92 and i + 1 < raw_blen: # '\' escape in literal text
+                mut esc = p.offset(i + 1).read() as int
+                if esc == 110:      sb.append_char(10)     # \n
+                elif esc == 116:    sb.append_char(9)      # \t
+                elif esc == 114:    sb.append_char(13)     # \r
+                elif esc == 92:     sb.append_char(92)     # \\
+                elif esc == 39:     sb.append_char(39)     # \'
+                elif esc == 34:     sb.append_char(34)     # \"
+                elif esc == 48:     sb.append_char(0)      # \0
+                else:
+                    # Unrecognized escape: keep the backslash literally,
+                    # same policy as read_string (see its own comment).
+                    sb.append_char(92)
+                    sb.append_char(esc)
+                i = i + 2
             else:
                 sb.append_char(c)
                 i = i + 1
-        
+
         if sb.len() > 0:
-            fl.push(FStringPart.init_text(sb.to_string().as_str()))
-            
+            fl.push(FStringPart.init_text(sb.to_owned(), sb.len()))
+
         return box_expr(Expr.EFString(fl))
 
     pub def parse_program(self) -> Program:
@@ -2849,7 +2881,7 @@ extend Parser:
             # docstring (captured for `inspect`), not an executable statement.
             if c.docstring == "":
                 match self.peek():
-                    case Token.TripleStrLit(_ds):
+                    case Token.TripleStrLit(_ds, _):
                         c.docstring = _ds
                         self.pos = self.pos + 1
                         self.skip_newlines()
@@ -3214,7 +3246,7 @@ extend Parser:
         self.pos = self.pos + 1
         mut abi = "C"
         match self.peek():
-            case Token.StrLit(s):
+            case Token.StrLit(s, _):
                 self.pos = self.pos + 1
                 abi = s
             case _:

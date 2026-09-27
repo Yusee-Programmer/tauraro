@@ -8,6 +8,8 @@
 #   from std.net.url         import Url
 #   from std.net.udp         import UdpSocket
 #   from std.net.dns         import Dns
+#   from std.net.smtp        import SmtpClient, SmtpResponse
+#   from std.net.websocket   import WebSocketClient, WebSocketServer, WsConn, WsMessage
 
 from std.net.tcp         import TcpStream
 from std.net.tcp         import TcpListener
@@ -23,3 +25,9 @@ from std.net.http_server import HttpParser
 from std.net.url         import Url
 from std.net.udp         import UdpSocket
 from std.net.dns         import Dns
+from std.net.smtp        import SmtpClient
+from std.net.smtp        import SmtpResponse
+from std.net.websocket   import WebSocketClient
+from std.net.websocket   import WebSocketServer
+from std.net.websocket   import WsConn
+from std.net.websocket   import WsMessage

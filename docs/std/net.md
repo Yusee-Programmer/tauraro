@@ -325,6 +325,102 @@ if r.is_ok():
 
 ---
 
+## SMTP — `std.net.smtp`
+
+**When**: You need to send outbound email — transactional notifications, alerts, password resets — from a Tauraro program, against a real SMTP server.
+**Why**: A pure-Tauraro RFC 5321 client built entirely on `TcpStream` (plaintext) and the same OpenSSL TLS primitive `HttpsClient` uses (implicit TLS) — no new runtime C code. Handles multi-line reply parsing, RFC 5321 dot-stuffing, and `AUTH LOGIN`/`AUTH PLAIN` correctly (the parts most hand-rolled SMTP clients get subtly wrong).
+
+```tauraro
+from std.net.smtp import SmtpClient, SmtpResponse
+```
+
+### SmtpResponse
+
+A parsed (possibly multi-line) SMTP reply.
+
+| Field / Method | Type | Description |
+|---|---|---|
+| `code` | `int` | The 3-digit SMTP reply code (e.g. `250`, `550`). |
+| `text` | `str` | Full reply text — all lines of a multi-line reply joined with `\n`, with the code and separator stripped from each. |
+| `ok` | `bool` | `true` when `code` is 2xx or 3xx. |
+| `is_error` | `() -> bool` | `true` when `code` is 4xx/5xx (or unparsed/`0`). |
+
+### SmtpClient
+
+| Method | Signature | Returns | Description |
+|---|---|---|---|
+| `SmtpClient.connect` | `(host: str, port: int) -> SmtpClient` | `SmtpClient` | Open a plaintext TCP connection and read the server's greeting. Check `.connected`. |
+| `SmtpClient.connect_tls` | `(host: str, port: int) -> SmtpClient` | `SmtpClient` | Open an **implicit TLS** connection (e.g. port 465) and read the greeting. Uses the same OpenSSL primitive as `HttpsClient`; requires `-DTAURARO_TLS_OPENSSL -lssl -lcrypto` (see the `std.net.https` note above) — without it, connection fails and `.connected` is `false`. |
+| `ehlo` | `(client_host: str) -> SmtpResponse` | `SmtpResponse` | Send `EHLO`, correctly parsing a multi-line capability reply (`250-...` continuations, final line `250 ...`). Falls back to `HELO` automatically if the server rejects `EHLO`. Records capabilities for `supports_starttls`/`supports_auth`. |
+| `helo` | `(client_host: str) -> SmtpResponse` | `SmtpResponse` | Send plain `HELO` (no capability negotiation). |
+| `supports_starttls` | `() -> bool` | `bool` | `true` if the last `ehlo()` capability list advertised `STARTTLS`. |
+| `supports_auth` | `() -> bool` | `bool` | `true` if the last `ehlo()` capability list advertised `AUTH`. |
+| `starttls` | `() -> SmtpResponse` | `SmtpResponse` | Send `STARTTLS` and read the server's response. **Does not upgrade the connection to TLS** — see Limitations below. |
+| `auth_login` | `(username: str, password: str) -> SmtpResponse` | `SmtpResponse` | `AUTH LOGIN`: two round-trips, base64-encoded username then password. Returns the final (3rd) response. |
+| `auth_plain` | `(username: str, password: str) -> SmtpResponse` | `SmtpResponse` | `AUTH PLAIN`: single command, base64 of `"\0username\0password"`. |
+| `mail_from` | `(addr: str) -> SmtpResponse` | `SmtpResponse` | Send `MAIL FROM:<addr>`. |
+| `rcpt_to` | `(addr: str) -> SmtpResponse` | `SmtpResponse` | Send `RCPT TO:<addr>`. Call once per recipient. |
+| `data` | `(body: str) -> SmtpResponse` | `SmtpResponse` | Send `DATA`, then `body` (CRLF-translated and dot-stuffed per RFC 5321 — a body line starting with `.` is sent as `..`), then the terminating `.` line. Returns the server's final response. |
+| `send_mail` | `(from_addr: str, to: List[str], subject: str, body: str) -> SmtpResponse` | `SmtpResponse` | Convenience wrapper: `mail_from` + `rcpt_to` for each address in `to` + builds a `From`/`To`/`Subject`/`Date` message and calls `data`. Stops at the first error response. |
+| `rset` | `() -> SmtpResponse` | `SmtpResponse` | Send `RSET` (abort the current mail transaction). |
+| `noop` | `() -> SmtpResponse` | `SmtpResponse` | Send `NOOP`. |
+| `quit` | `() -> SmtpResponse` | `SmtpResponse` | Send `QUIT` and close the connection. |
+| `close` | `()` | `void` | Close the connection without sending `QUIT`. |
+| `is_connected` | `() -> bool` | `bool` | `true` while the connection is open. |
+
+Fields: `host: str`, `port: int`, `connected: bool`, `use_tls: bool`, `last_code: int` (most recent reply code), `last_text: str` (most recent reply text).
+
+Every method that sends a command returns an `SmtpResponse` — check `.ok` / `.is_error()` (or compare `.code` directly) to detect 4xx/5xx failures; nothing is silently swallowed.
+
+### Example — plaintext SMTP with STARTTLS negotiation attempt + AUTH LOGIN
+
+```tauraro
+from std.net.smtp import SmtpClient
+
+mut client = SmtpClient.connect("smtp.example.com", 587)
+if not client.connected:
+    print("connect failed")
+else:
+    client.ehlo("myhost")
+    if client.supports_auth():
+        mut auth_r = client.auth_login("user@example.com", "password")
+        if auth_r.is_error():
+            print("auth failed: " + str(auth_r.code) + " " + auth_r.text)
+
+    mut r = client.send_mail(
+        "from@example.com",
+        ["to1@example.com", "to2@example.com"],
+        "Subject line",
+        "Hello,\nThis is the body.\n.This line starts with a dot and is dot-stuffed automatically.\n"
+    )
+    if r.is_error():
+        print("send failed: " + str(r.code) + " " + r.text)
+    else:
+        print("sent: " + str(r.code))
+
+    client.quit()
+```
+
+### Example — implicit TLS (port 465)
+
+```tauraro
+from std.net.smtp import SmtpClient
+
+mut client = SmtpClient.connect_tls("smtp.example.com", 465)
+if client.connected:
+    client.ehlo("myhost")
+    client.auth_login("user@example.com", "password")
+    client.send_mail("from@example.com", ["to@example.com"], "Hi", "Body text")
+    client.quit()
+```
+
+### Limitations (v1)
+
+- **`STARTTLS` does not upgrade the connection in place.** `starttls()` sends the command and reads the server's response (useful if you just need to satisfy a server that demands the handshake before `AUTH`), but the socket stays plaintext afterwards — the runtime's TLS primitive (the same one `HttpsClient` uses) only knows how to open a *fresh* TLS connection given a hostname; there is no client-side "wrap an already-connected fd in TLS" function (only a server-side equivalent exists, for TLS-terminating servers). For a real confidentiality guarantee, use `connect_tls()` (implicit TLS, typically port 465) instead — that path is fully functional TLS from the first byte.
+- **No MIME / multipart / attachment support.** `send_mail`/`data` send a single `text/plain` body (headers + blank line + body text). Building a `multipart/mixed` message with attachments is left to the caller (construct the full body string yourself, including boundaries, and pass it to `data()` directly) or a future module.
+
+---
+
 ## std.net.http_server — HTTP Server
 
 **When**: Building a web API, microservice, or web framework.
@@ -486,4 +582,101 @@ else:
             conn.send_status(404)
 
         conn.close()
+```
+
+## WebSocket — `std.net.websocket`
+
+**When**: You need a full-duplex, message-oriented channel over a single long-lived TCP connection — chat, live dashboards, game state sync, push notifications.
+**Why**: RFC 6455 WebSocket (handshake + binary framing), client and server, built entirely in Tauraro on top of `TcpStream`/`TcpListener` — no new runtime C code. The handshake's `Sec-WebSocket-Accept` composes three existing stdlib primitives (`Hash.sha1` + `Hex.decode` + `Base64.encode`); masking/close/ping-pong are implemented directly against the RFC 6455 frame format.
+
+```tauraro
+from std.net.websocket import WebSocketClient, WebSocketServer, WsConn, WsMessage
+```
+
+### Coverage
+
+Implemented: opening handshake (client and server side, with `Sec-WebSocket-Accept` verification), text frames (opcode `0x1`), binary frames (opcode `0x2`), correct masking in both directions (client→server frames are masked with a fresh random key per RFC 6455 §5.3; server→client frames are sent unmasked), Ping/Pong (`recv()` auto-answers an incoming Ping with a Pong), and a clean close handshake (`close()` sends a Close frame and waits for the peer's Close reply before closing the TCP connection).
+
+**Not covered (v1 scope):**
+- `wss://` (TLS) — only plain `ws://` is supported. `std.net.https`'s OpenSSL wrapping is a separate opt-in build (`-DTAURARO_TLS_OPENSSL`) and isn't wired into this module; layering it in is future work, not a quick win.
+- Extensions (`permessage-deflate` and other `Sec-WebSocket-Extensions` negotiation).
+- Subprotocol negotiation (`Sec-WebSocket-Protocol`).
+- Fragmented messages: `recv()`/`recv_raw()` return each physical frame as received and do **not** reassemble a `FIN=0` continuation sequence into one logical message. This module's own `send_text`/`send_binary` always send a single unfragmented (`FIN=1`) frame, so round-tripping against another Tauraro `WsConn` is unaffected; a peer that deliberately fragments a message needs the caller to reassemble continuation frames itself.
+
+### WsMessage
+
+A tagged, fully-decoded received frame.
+
+| Field / Method | Type / Signature | Description |
+|---|---|---|
+| `kind` | `int` | One of `WS_OP_TEXT()`, `WS_OP_BINARY()`, `WS_OP_CLOSE()`, `WS_OP_PING()`, `WS_OP_PONG()` (or `-1` on error — see `ok`). |
+| `text` | `str` | Decoded text for a TEXT message (and the optional close-reason string for a CLOSE message); `""` for BINARY/PING/PONG. |
+| `data` | `Pointer[char]` | Raw payload bytes (populated for every kind) — use this for binary payloads that may contain embedded `0x00` bytes. |
+| `len` | `int` | Payload length in bytes. |
+| `ok` | `bool` | `false` on a connection error or abrupt peer close — check this before using the message. |
+| `is_text()` / `is_binary()` / `is_close()` / `is_ping()` / `is_pong()` | `() -> bool` | Opcode-kind checks. |
+| `free()` | `()` | Release the message's raw payload buffer. Call once you're done with a message returned by `recv()`/`recv_raw()`. |
+
+### WsConn
+
+The live connection after a successful handshake — used identically by both client and server.
+
+| Method | Signature | Returns | Description |
+|---|---|---|---|
+| `send_text` | `(msg: str) -> bool` | `bool` | Send a complete (unfragmented) text frame. |
+| `send_binary` | `(data: str, len_: int) -> bool` | `bool` | Send a complete binary frame of exactly `len_` bytes. |
+| `send_ping` | `(msg: str) -> bool` | `bool` | Send a Ping frame, optionally carrying a small payload. |
+| `send_pong` | `(msg: str) -> bool` | `bool` | Send an unsolicited Pong frame (incoming Pings are answered automatically by `recv()`). |
+| `recv` | `() -> WsMessage` | `WsMessage` | Block for the next message. Auto-answers a Ping with a Pong and keeps waiting, so callers only ever see TEXT/BINARY/CLOSE from this method. |
+| `recv_raw` | `() -> WsMessage` | `WsMessage` | Block for the next physical frame with no special handling — callers see PING/CLOSE themselves and must respond if desired. |
+| `close` | `() -> bool` | `bool` | Perform the clean close handshake (send Close, wait for the peer's Close reply, then close the TCP connection). Safe to call more than once. Returns `true` only if the peer's Close reply was actually received. |
+| `is_connected` | `() -> bool` | `bool` | `true` while the handshake succeeded and the underlying TCP connection is still open. |
+
+Fields: `stream: TcpStream`, `is_client: bool`, `ok: bool` (handshake/connection succeeded), `closed: bool`, `err: str` (set on handshake/protocol failure).
+
+### WebSocketClient
+
+| Method | Signature | Returns | Description |
+|---|---|---|---|
+| `WebSocketClient.connect` | `(url: str) -> WsConn` | `WsConn` | Parse a `ws://host:port/path` URL, open a TCP connection, perform the client-side opening handshake (send a fresh random `Sec-WebSocket-Key`, verify the server's `Sec-WebSocket-Accept` matches). Check `.ok`; `.err` holds a message on failure (`"connect failed"`, `"server did not return HTTP 101 Switching Protocols"`, `"Sec-WebSocket-Accept mismatch"`, etc.). |
+
+### WebSocketServer
+
+| Method | Signature | Returns | Description |
+|---|---|---|---|
+| `WebSocketServer.accept_upgrade` | `(stream: TcpStream) -> WsConn` | `WsConn` | Given an already-`accept()`-ed `TcpStream` from a `TcpListener`, read the raw HTTP Upgrade request, verify it, and complete the server-side handshake (compute and send the correct `Sec-WebSocket-Accept`). Check `.ok`. |
+
+### Example — echo server + client
+
+```tauraro
+from std.net.tcp        import TcpListener
+from std.net.websocket  import WebSocketClient, WebSocketServer
+
+# Server: accept one WebSocket connection and echo text messages back.
+mut srv = TcpListener.listen("127.0.0.1", 9001)
+if srv.listening:
+    mut raw  = srv.accept()             # blocks until a client connects
+    mut conn = WebSocketServer.accept_upgrade(raw)
+    if conn.ok:
+        mut msg = conn.recv()
+        if msg.is_text():
+            conn.send_text("echo: " + msg.text)
+        msg.free()
+        conn.close()                    # clean close handshake
+    srv.close()
+```
+
+```tauraro
+from std.net.websocket import WebSocketClient
+
+# Client: connect, send a message, print the reply, close cleanly.
+mut conn = WebSocketClient.connect("ws://127.0.0.1:9001/")
+if conn.ok:
+    conn.send_text("hello")
+    mut msg = conn.recv()
+    print(msg.text)                     # "echo: hello"
+    msg.free()
+    conn.close()
+else:
+    print("handshake failed: " + conn.err)
 ```

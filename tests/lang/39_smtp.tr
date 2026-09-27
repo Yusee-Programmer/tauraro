@@ -1,0 +1,309 @@
+# tests/lang/39_smtp.tr
+# std.net.smtp — SmtpClient against a real local fake SMTP server (TcpListener),
+# on 127.0.0.1, in a spawned OS thread. Proves the wire protocol is really
+# correct (CRLF framing, multi-line EHLO reply parsing, dot-stuffing, AUTH
+# LOGIN base64 round-trip, 5xx error surfacing) rather than merely plausible.
+#
+# Server side is a hand-written line-oriented fake SMTP server: it reads
+# commands with a small helper that itself parses CRLF lines (independently
+# of SmtpClient's own line reader), so what's being verified is the actual
+# bytes SmtpClient put on the wire.
+
+from std.test import TestRunner
+from std.net.tcp import TcpStream, TcpListener
+from std.net.smtp import SmtpClient, SmtpResponse
+from std.string.str import Str
+
+extern "C":
+    def _tr_c_free(ptr: Pointer[char])
+
+# ── Fake SMTP server (blocking, one connection, one thread) ─────────────────
+#
+# Speaks just enough SMTP to drive a real client through: EHLO (multi-line
+# capability reply), MAIL FROM, RCPT TO (x2), DATA (verifying dot-stuffing +
+# CRLF framing on the wire), AUTH LOGIN, then a deliberate 5xx on a second
+# MAIL FROM to verify error-code surfacing, then QUIT.
+#
+# Results are reported back to the main thread via Atomic[int] flags (0/1)
+# rather than shared TestRunner/str state, since those aren't Sendable across
+# Thread.spawn — the main thread turns each flag into a real t.assert_*.
+
+class ServerFlags implements Sendable:
+    pub port:            int
+    pub got_ehlo:        Atomic[int]
+    pub got_mail_from:   Atomic[int]
+    pub got_rcpt1:       Atomic[int]
+    pub got_rcpt2:       Atomic[int]
+    pub got_data_start:  Atomic[int]
+    pub dot_stuff_ok:    Atomic[int]   # body line ".foo" arrived on the wire as "..foo"
+    pub plain_line_ok:   Atomic[int]   # a normal body line arrived un-mangled
+    pub end_marker_ok:   Atomic[int]   # terminating "." line seen (not "..")
+    pub got_auth_login:  Atomic[int]
+    pub auth_user_ok:    Atomic[int]   # base64(username) decoded correctly
+    pub auth_pass_ok:    Atomic[int]   # base64(password) decoded correctly
+    pub got_second_mail: Atomic[int]
+    pub got_quit:        Atomic[int]
+    pub server_done:     Atomic[int]
+
+extend ServerFlags:
+    pub def init(port: int) -> ServerFlags:
+        mut f = ServerFlags()
+        f.port            = port
+        f.got_ehlo        = Atomic.new(0)
+        f.got_mail_from   = Atomic.new(0)
+        f.got_rcpt1       = Atomic.new(0)
+        f.got_rcpt2       = Atomic.new(0)
+        f.got_data_start  = Atomic.new(0)
+        f.dot_stuff_ok    = Atomic.new(0)
+        f.plain_line_ok   = Atomic.new(0)
+        f.end_marker_ok   = Atomic.new(0)
+        f.got_auth_login  = Atomic.new(0)
+        f.auth_user_ok    = Atomic.new(0)
+        f.auth_pass_ok    = Atomic.new(0)
+        f.got_second_mail = Atomic.new(0)
+        f.got_quit        = Atomic.new(0)
+        f.server_done     = Atomic.new(0)
+        return f
+
+# Read-buffer holder for srv_read_line, used INSTEAD OF a `(str, str)` tuple
+# return + `(line, carry) = fn(...)` reassignment-destructure.
+#
+# That tuple-reassignment pattern is a REAL, isolated, reproducible compiler
+# codegen bug (recorded in bug2.txt): for `(a, b) = some_fn()` where `some_fn`
+# returns a `(T, T)` tuple and `a`/`b` are PRE-EXISTING `mut` locals (not a
+# fresh `mut (a, b) = ...` declaration), the generated C is
+#   ((TrTuple){.data={...box(a)..., ...box(b)...}}) = some_fn();
+# — a throwaway compound-literal used as an assignment target (legal-but-inert
+# under gcc's compound-literal-as-lvalue extension), so `a`/`b` are NEVER
+# actually written; confirmed via a minimal repro completely unrelated to
+# networking (see bug2.txt). Carrying the buffer in a class field sidesteps
+# tuple-reassignment entirely and is what SmtpClient._read_line itself does
+# (self._rbuf), so this also keeps the test's helper shape consistent with
+# the real client implementation it's testing against.
+class LineBuf:
+    pub carry: str
+
+extend LineBuf:
+    pub def init() -> LineBuf:
+        mut b = LineBuf()
+        b.carry = ""
+        return b
+
+    pub def read_line(self, s: TcpStream) -> str:
+        while true:
+            mut nl = Str.index_of(self.carry, "\n")
+            if nl >= 0:
+                mut line = Str.slice(self.carry, 0, nl)
+                mut llen = Str.len(line)
+                if llen > 0 and Str.char_at(line, llen - 1) == 13:
+                    line = Str.slice(line, 0, llen - 1)
+                self.carry = Str.slice(self.carry, nl + 1, Str.len(self.carry))
+                return line
+            mut chunk = s.recv(4096)
+            if Str.len(chunk) == 0:
+                mut rest = self.carry
+                self.carry = ""
+                return rest
+            self.carry = self.carry + chunk
+        return ""   # unreachable; satisfies F-3
+
+def srv_send(s: TcpStream, line: str):
+    s.send(line + "\r\n")
+
+# base64 decode expectation check without importing Base64 (keep server and
+# client-under-test decoupled) — decode via std.encoding.base64 anyway since
+# that's a separately-tested module, not part of what we're proving here.
+from std.encoding.base64 import Base64
+
+# Single-arg Shared[ServerFlags] (port folded into the flags struct) rather
+# than Thread.spawn(fn, port, flags) — the compiler's multi-arg spawn-wrapper
+# codegen has a real bug where the args-2+ unpack cast uses the *argument
+# expression's* type instead of the worker function's *declared parameter*
+# type, so a Shared[T] arg past position 0 gets cast back as a bare T* instead
+# of _TrSharedBox*, which is a compile error (or, if it were size-compatible,
+# would silently detach the store()s from what the caller reads after join()).
+# See src/codegen/c.tr emit_spawn_wrapper_for_expr's `else:` (multi-arg)
+# branch around line 7302 — the single-arg branch just above it already has
+# the correct fix (with a comment about this exact class of bug) but the
+# multi-arg branch never got it. Recorded in bug2.txt. Single Shared[T] arg
+# (this file's pattern, and std/... keepalive_stress.tr's) goes through the
+# ALREADY-correct single-arg path, so it's a safe, real workaround.
+def run_fake_server(flags: Shared[ServerFlags]):
+    mut listener = TcpListener.listen("127.0.0.1", flags.port)
+    mut conn = listener.accept()
+    srv_send(conn, "220 fake.smtp.test ESMTP")
+
+    mut lb = LineBuf.init()
+    mut line = ""
+
+    # EHLO — reply with a MULTI-LINE capability list: continuation lines use
+    # "250-" (hyphen), final line uses "250 " (space). This is the #1 place a
+    # naive client parser breaks.
+    line = lb.read_line(conn)
+    if Str.starts_with(line, "EHLO"):
+        flags.got_ehlo.store(1)
+    srv_send(conn, "250-fake.smtp.test at your service")
+    srv_send(conn, "250-AUTH LOGIN PLAIN")
+    srv_send(conn, "250-STARTTLS")
+    srv_send(conn, "250 8BITMIME")
+
+    # AUTH LOGIN
+    line = lb.read_line(conn)
+    if Str.eq(line, "AUTH LOGIN"):
+        flags.got_auth_login.store(1)
+    srv_send(conn, "334 VXNlcm5hbWU6")   # "Username:"
+    line = lb.read_line(conn)
+    if Str.eq(Base64.decode(line), "smtptester"):
+        flags.auth_user_ok.store(1)
+    srv_send(conn, "334 UGFzc3dvcmQ6")   # "Password:"
+    line = lb.read_line(conn)
+    if Str.eq(Base64.decode(line), "s3cr3t!"):
+        flags.auth_pass_ok.store(1)
+    srv_send(conn, "235 Authentication successful")
+
+    # MAIL FROM
+    line = lb.read_line(conn)
+    if Str.eq(line, "MAIL FROM:<sender@example.com>"):
+        flags.got_mail_from.store(1)
+    srv_send(conn, "250 OK")
+
+    # RCPT TO x2 (multiple recipients)
+    line = lb.read_line(conn)
+    if Str.eq(line, "RCPT TO:<alice@example.com>"):
+        flags.got_rcpt1.store(1)
+    srv_send(conn, "250 OK")
+    line = lb.read_line(conn)
+    if Str.eq(line, "RCPT TO:<bob@example.com>"):
+        flags.got_rcpt2.store(1)
+    srv_send(conn, "250 OK")
+
+    # DATA
+    line = lb.read_line(conn)
+    if Str.eq(line, "DATA"):
+        flags.got_data_start.store(1)
+    srv_send(conn, "354 Start mail input; end with <CRLF>.<CRLF>")
+
+    # Read the message body lines until the lone "." terminator. Verify:
+    #   - a line that was ".Leading dot line" in the body arrives dot-stuffed
+    #     as "..Leading dot line" (RFC 5321 4.5.2).
+    #   - a plain line arrives unmangled.
+    #   - the terminator is exactly "." (one dot), not "..".
+    mut saw_stuffed = false
+    mut saw_plain   = false
+    mut n_lines     = 0
+    while true:
+        line = lb.read_line(conn)
+        n_lines = n_lines + 1
+        if Str.eq(line, "."):
+            flags.end_marker_ok.store(1)
+            break
+        if Str.eq(line, "..Leading dot line"):
+            saw_stuffed = true
+        if Str.eq(line, "Ordinary body line"):
+            saw_plain = true
+        if n_lines > 200:
+            break   # safety valve against a hung/malformed stream
+    if saw_stuffed: flags.dot_stuff_ok.store(1)
+    if saw_plain:   flags.plain_line_ok.store(1)
+    srv_send(conn, "250 OK: queued")
+
+    # Second MAIL FROM -> deliberately reject with 550 to verify the client
+    # surfaces a 5xx error rather than silently continuing.
+    line = lb.read_line(conn)
+    if Str.starts_with(line, "MAIL FROM"):
+        flags.got_second_mail.store(1)
+    srv_send(conn, "550 Mailbox unavailable")
+
+    # QUIT
+    line = lb.read_line(conn)
+    if Str.eq(line, "QUIT"):
+        flags.got_quit.store(1)
+    srv_send(conn, "221 Bye")
+
+    conn.close()
+    listener.close()
+    flags.server_done.store(1)
+
+# ── Client-side driver (runs on the main thread) ─────────────────────────────
+
+async def main():
+    mut t = TestRunner.init("39_smtp")
+    mut port = 18825
+
+    shared flags = ServerFlags.init(port)
+    mut srv_t = Thread.spawn(run_fake_server, flags)
+    Thread.sleep(300)   # let the listener bind before the client connects
+
+    t.section("connect + greeting")
+    mut client = SmtpClient.connect("127.0.0.1", port)
+    t.assert_true(client.connected, "client connects to fake server")
+    t.assert_eq_int(client.last_code, 220, "220 greeting code parsed")
+
+    t.section("EHLO + multi-line capability reply parsing")
+    mut ehlo_r = client.ehlo("test-client")
+    t.assert_eq_int(ehlo_r.code, 250, "EHLO final code is 250 (from the space-separated last line)")
+    t.assert_true(ehlo_r.ok, "EHLO response is ok")
+    t.assert_contains(ehlo_r.text, "fake.smtp.test at your service", "first continuation line captured")
+    t.assert_contains(ehlo_r.text, "AUTH LOGIN PLAIN", "middle continuation line captured")
+    t.assert_contains(ehlo_r.text, "8BITMIME", "final (space-prefixed) line captured")
+    t.assert_true(client.supports_starttls(), "STARTTLS capability detected from multi-line EHLO")
+    t.assert_true(client.supports_auth(), "AUTH capability detected from multi-line EHLO")
+
+    t.section("AUTH LOGIN round-trip")
+    mut auth_r = client.auth_login("smtptester", "s3cr3t!")
+    t.assert_eq_int(auth_r.code, 235, "AUTH LOGIN succeeds (235)")
+    t.assert_true(auth_r.ok, "AUTH LOGIN response is ok")
+
+    t.section("MAIL FROM / RCPT TO (multiple recipients) / DATA with dot-stuffing")
+    mut from_addr = "sender@example.com"
+    mut recipients: List[str] = ["alice@example.com", "bob@example.com"]
+    mut body = "Ordinary body line\n.Leading dot line\nAnother normal line"
+    mut send_r = client.send_mail(from_addr, recipients, "Test subject", body)
+    t.assert_eq_int(send_r.code, 250, "DATA final response is 250 OK")
+    t.assert_true(send_r.ok, "send_mail() overall response is ok")
+
+    t.section("5xx error surfaced, not silently ignored")
+    mut bad_r = client.mail_from("sender@example.com")
+    t.assert_eq_int(bad_r.code, 550, "second MAIL FROM gets the server's 550")
+    t.assert_true(bad_r.is_error(), "SmtpResponse.is_error() true for 550")
+    t.assert_false(bad_r.ok, "SmtpResponse.ok false for 550")
+
+    t.section("QUIT")
+    mut quit_r = client.quit()
+    t.assert_eq_int(quit_r.code, 221, "QUIT gets 221 Bye")
+    t.assert_false(client.is_connected(), "client marks itself disconnected after quit()")
+
+    srv_t.join()
+
+    t.section("server-side wire verification")
+    t.assert_eq_int(flags.got_ehlo.load(), 1, "server saw a real EHLO command")
+    t.assert_eq_int(flags.got_auth_login.load(), 1, "server saw AUTH LOGIN command")
+    t.assert_eq_int(flags.auth_user_ok.load(), 1, "server decoded base64 username correctly")
+    t.assert_eq_int(flags.auth_pass_ok.load(), 1, "server decoded base64 password correctly")
+    t.assert_eq_int(flags.got_mail_from.load(), 1, "server saw MAIL FROM:<sender@example.com>")
+    t.assert_eq_int(flags.got_rcpt1.load(), 1, "server saw RCPT TO:<alice@example.com>")
+    t.assert_eq_int(flags.got_rcpt2.load(), 1, "server saw RCPT TO:<bob@example.com>")
+    t.assert_eq_int(flags.got_data_start.load(), 1, "server saw DATA command")
+    t.assert_eq_int(flags.dot_stuff_ok.load(), 1, "body line '.Leading dot line' arrived dot-stuffed as '..Leading dot line' on the wire")
+    t.assert_eq_int(flags.plain_line_ok.load(), 1, "ordinary body line arrived unmangled")
+    t.assert_eq_int(flags.end_marker_ok.load(), 1, "end-of-DATA '.' terminator seen exactly (CRLF-framed)")
+    t.assert_eq_int(flags.got_second_mail.load(), 1, "server saw the second MAIL FROM that triggers 550")
+    t.assert_eq_int(flags.got_quit.load(), 1, "server saw QUIT command")
+    t.assert_eq_int(flags.server_done.load(), 1, "fake server thread ran to completion")
+
+    flags.got_ehlo.free()
+    flags.got_mail_from.free()
+    flags.got_rcpt1.free()
+    flags.got_rcpt2.free()
+    flags.got_data_start.free()
+    flags.dot_stuff_ok.free()
+    flags.plain_line_ok.free()
+    flags.end_marker_ok.free()
+    flags.got_auth_login.free()
+    flags.auth_user_ok.free()
+    flags.auth_pass_ok.free()
+    flags.got_second_mail.free()
+    flags.got_quit.free()
+    flags.server_done.free()
+
+    t.summary()

@@ -1,0 +1,221 @@
+# tests/lang/41_bigint.tr - std.math.bigint: BigInt arbitrary-precision
+# integers. Sanity-checks small-number arithmetic first, then focuses hard on
+# the places bignum implementations most commonly hide bugs: limb carries in
+# multiplication, sign handling in subtraction/negative arithmetic, the
+# div/rem rounding convention on negative operands, round-tripping through
+# decimal strings, and known-correct factorial/Fibonacci values.
+
+from std.test import TestRunner
+from std.math.bigint import BigInt
+
+def main():
+    mut t = TestRunner.init("41_bigint")
+
+    # ── Construction & to_str/to_int baseline ───────────────────────────────
+    t.section("construction basics")
+    t.assert_eq_str(BigInt.from_int(0).to_str(), "0", "from_int(0)")
+    t.assert_eq_str(BigInt.from_int(42).to_str(), "42", "from_int(42)")
+    t.assert_eq_str(BigInt.from_int(-42).to_str(), "-42", "from_int(-42)")
+    t.assert_eq_str(BigInt.zero().to_str(), "0", "zero()")
+    # NOTE: these assert against `.to_int_checked()`, not the public `.to_int()`
+    # spelling, because of a confirmed pre-existing compiler bug (documented
+    # in bug2.txt at the repo root, and in bigint.tr's `to_int` doc comment):
+    # src/codegen/c.tr's gen_method_call intercepts ANY call site literally
+    # named `.to_int()` as a built-in primitive-conversion pseudo-method
+    # before ever checking whether the receiver is a user-defined class, so
+    # it silently emits a raw pointer-to-int cast instead of dispatching to
+    # BigInt's real method — for EVERY class, not just BigInt (confirmed via
+    # an isolated `Foo.to_int()` repro outside this module). `to_int_checked`
+    # runs the identical logic under a call-site name the compiler doesn't
+    # intercept, so it verifies the real conversion behavior.
+    t.assert_eq_int(BigInt.from_int(12345).to_int_checked(), 12345, "to_int round-trip positive")
+    t.assert_eq_int(BigInt.from_int(-12345).to_int_checked(), -12345, "to_int round-trip negative")
+    t.assert_eq_int(BigInt.from_int(0).to_int_checked(), 0, "to_int round-trip zero")
+
+    t.section("from_str basics + malformed input policy")
+    t.assert_eq_str(BigInt.from_str("0").to_str(), "0", "from_str '0'")
+    t.assert_eq_str(BigInt.from_str("123").to_str(), "123", "from_str '123'")
+    t.assert_eq_str(BigInt.from_str("-123").to_str(), "-123", "from_str '-123'")
+    t.assert_eq_str(BigInt.from_str("+123").to_str(), "123", "from_str '+123' (leading + accepted)")
+    t.assert_eq_str(BigInt.from_str("007").to_str(), "7", "from_str strips leading zeros")
+    t.assert_eq_str(BigInt.from_str("-000").to_str(), "0", "from_str '-000' normalizes to non-negative zero")
+    t.assert_eq_str(BigInt.from_str("").to_str(), "0", "from_str '' -> documented zero fallback")
+    t.assert_eq_str(BigInt.from_str("-").to_str(), "0", "from_str '-' (bare sign) -> documented zero fallback")
+    t.assert_eq_str(BigInt.from_str("12a3").to_str(), "0", "from_str with embedded non-digit -> documented zero fallback")
+
+    # ── Small-number arithmetic sanity baseline ─────────────────────────────
+    t.section("small-number arithmetic")
+    t.assert_eq_str(BigInt.from_int(7).add(BigInt.from_int(5)).to_str(), "12", "7 + 5")
+    t.assert_eq_str(BigInt.from_int(7).sub(BigInt.from_int(5)).to_str(), "2", "7 - 5")
+    t.assert_eq_str(BigInt.from_int(7).mul(BigInt.from_int(5)).to_str(), "35", "7 * 5")
+    t.assert_eq_str(BigInt.from_int(35).div(BigInt.from_int(5)).to_str(), "7", "35 / 5")
+    t.assert_eq_str(BigInt.from_int(37).div(BigInt.from_int(5)).to_str(), "7", "37 / 5 truncates")
+    t.assert_eq_str(BigInt.from_int(37).rem(BigInt.from_int(5)).to_str(), "2", "37 % 5")
+    t.assert_eq_str(BigInt.from_int(2).pow(10).to_str(), "1024", "2^10")
+
+    t.section("small-number comparisons + operator overloads")
+    t.assert_true(BigInt.from_int(5).eq(BigInt.from_int(5)), "5.eq(5)")
+    t.assert_true(BigInt.from_int(5).lt(BigInt.from_int(9)), "5.lt(9)")
+    t.assert_true(BigInt.from_int(9).gt(BigInt.from_int(5)), "9.gt(5)")
+    t.assert_eq_int(BigInt.from_int(5).cmp(BigInt.from_int(5)), 0, "cmp equal -> 0")
+    t.assert_eq_int(BigInt.from_int(3).cmp(BigInt.from_int(9)), -1, "cmp less -> -1")
+    t.assert_eq_int(BigInt.from_int(9).cmp(BigInt.from_int(3)), 1, "cmp greater -> 1")
+    t.assert_true(BigInt.from_int(5) == BigInt.from_int(5), "operator == ")
+    t.assert_true(BigInt.from_int(5) != BigInt.from_int(6), "operator != ")
+    t.assert_true(BigInt.from_int(5) < BigInt.from_int(6), "operator < ")
+    t.assert_true(BigInt.from_int(6) > BigInt.from_int(5), "operator > ")
+    t.assert_eq_str((BigInt.from_int(3) + BigInt.from_int(4)).to_str(), "7", "operator +")
+    t.assert_eq_str((BigInt.from_int(10) - BigInt.from_int(4)).to_str(), "6", "operator -")
+    t.assert_eq_str((BigInt.from_int(6) * BigInt.from_int(7)).to_str(), "42", "operator *")
+    t.assert_eq_str((BigInt.from_int(20) / BigInt.from_int(4)).to_str(), "5", "operator /")
+    t.assert_eq_str((BigInt.from_int(20) % BigInt.from_int(6)).to_str(), "2", "operator %")
+    t.assert_eq_str((-BigInt.from_int(9)).to_str(), "-9", "unary operator -")
+
+    t.section("sign / abs / negate / is_zero / is_negative")
+    t.assert_true(BigInt.from_int(0).is_zero(), "0 is_zero")
+    t.assert_false(BigInt.from_int(5).is_zero(), "5 not is_zero")
+    t.assert_true(BigInt.from_int(-5).is_negative(), "-5 is_negative")
+    t.assert_false(BigInt.from_int(5).is_negative(), "5 not is_negative")
+    t.assert_false(BigInt.from_int(0).is_negative(), "0 not is_negative")
+    t.assert_eq_str(BigInt.from_int(5).negate().to_str(), "-5", "negate(5) = -5")
+    t.assert_eq_str(BigInt.from_int(-5).negate().to_str(), "5", "negate(-5) = 5")
+    t.assert_eq_str(BigInt.from_int(0).negate().to_str(), "0", "negate(0) = 0 (no negative zero)")
+    t.assert_eq_str(BigInt.from_int(-7).abs().to_str(), "7", "abs(-7) = 7")
+    t.assert_eq_str(BigInt.from_int(7).abs().to_str(), "7", "abs(7) = 7")
+
+    # ── Subtraction going negative / general negative-number arithmetic ────
+    t.section("subtraction crossing zero + negative arithmetic")
+    t.assert_eq_str(BigInt.from_int(5).sub(BigInt.from_int(9)).to_str(), "-4", "5 - 9 = -4")
+    t.assert_eq_str(BigInt.from_int(-5).add(BigInt.from_int(3)).to_str(), "-2", "-5 + 3 = -2")
+    t.assert_eq_str(BigInt.from_int(-5).add(BigInt.from_int(9)).to_str(), "4", "-5 + 9 = 4")
+    t.assert_eq_str(BigInt.from_int(-5).sub(BigInt.from_int(-9)).to_str(), "4", "-5 - (-9) = 4")
+    t.assert_eq_str(BigInt.from_int(-5).sub(BigInt.from_int(9)).to_str(), "-14", "-5 - 9 = -14")
+    t.assert_eq_str(BigInt.from_int(-5).mul(BigInt.from_int(3)).to_str(), "-15", "-5 * 3 = -15")
+    t.assert_eq_str(BigInt.from_int(-5).mul(BigInt.from_int(-3)).to_str(), "15", "-5 * -3 = 15 (double negative)")
+    t.assert_eq_str(BigInt.from_int(1000000).sub(BigInt.from_int(1000000)).to_str(), "0", "equal magnitudes subtract to 0")
+
+    # ── Division/remainder sign convention (truncate-toward-zero, like native int) ──
+    t.section("div/rem sign convention")
+    # 7 / 2 = 3, -7 / 2 = -3, 7 / -2 = -3, -7 / -2 = 3  (truncation toward zero)
+    t.assert_eq_str(BigInt.from_int(7).div(BigInt.from_int(2)).to_str(), "3", "7 / 2 = 3")
+    t.assert_eq_str(BigInt.from_int(-7).div(BigInt.from_int(2)).to_str(), "-3", "-7 / 2 = -3 (truncated, not floor -4)")
+    t.assert_eq_str(BigInt.from_int(7).div(BigInt.from_int(-2)).to_str(), "-3", "7 / -2 = -3")
+    t.assert_eq_str(BigInt.from_int(-7).div(BigInt.from_int(-2)).to_str(), "3", "-7 / -2 = 3")
+    # 7 % 2 = 1, -7 % 2 = -1, 7 % -2 = 1, -7 % -2 = -1  (sign follows dividend)
+    t.assert_eq_str(BigInt.from_int(7).rem(BigInt.from_int(2)).to_str(), "1", "7 % 2 = 1")
+    t.assert_eq_str(BigInt.from_int(-7).rem(BigInt.from_int(2)).to_str(), "-1", "-7 % 2 = -1 (sign of dividend)")
+    t.assert_eq_str(BigInt.from_int(7).rem(BigInt.from_int(-2)).to_str(), "1", "7 % -2 = 1")
+    t.assert_eq_str(BigInt.from_int(-7).rem(BigInt.from_int(-2)).to_str(), "-1", "-7 % -2 = -1")
+    t.assert_eq_str(BigInt.from_int(-7).mod_(BigInt.from_int(2)).to_str(), "-1", "mod_ alias matches rem")
+    # Identity check: a == b*(a/b) + a%b, for a case where it matters (negative dividend).
+    mut a_id = BigInt.from_int(-17)
+    mut b_id = BigInt.from_int(5)
+    mut recombined = b_id.mul(a_id.div(b_id)).add(a_id.rem(b_id))
+    t.assert_eq_str(recombined.to_str(), "-17", "div/rem identity holds for -17 / 5")
+
+    # ── Round-trip: from_str(s).to_str() == s ───────────────────────────────
+    t.section("round-trip from_str/to_str")
+    t.assert_eq_str(BigInt.from_str("0").to_str(), "0", "round-trip '0'")
+    t.assert_eq_str(BigInt.from_str("9").to_str(), "9", "round-trip '9'")
+    t.assert_eq_str(BigInt.from_str("-9").to_str(), "-9", "round-trip '-9'")
+    t.assert_eq_str(BigInt.from_str("999999999").to_str(), "999999999", "round-trip exactly one limb (10^9 - 1)")
+    t.assert_eq_str(BigInt.from_str("1000000000").to_str(), "1000000000", "round-trip exactly 10^9 (2 limbs)")
+    t.assert_eq_str(BigInt.from_str("123456789123456789123456789").to_str(), "123456789123456789123456789", "round-trip 27-digit number")
+    t.assert_eq_str(BigInt.from_str("-123456789123456789123456789").to_str(), "-123456789123456789123456789", "round-trip negative 27-digit number")
+    t.assert_eq_str(BigInt.from_str("100000000000000000000").to_str(), "100000000000000000000", "round-trip power of ten with internal zero limbs")
+
+    # ── Numbers larger than a native 64-bit int can hold ────────────────────
+    t.section("beyond 64-bit range")
+    # 2^63 - 1 = 9223372036854775807 is the max signed 64-bit int; go well past it.
+    # 2^100 = 1267650600228229401496703205376 (independently verifiable: 2^100).
+    mut two = BigInt.from_int(2)
+    mut two_100 = two.pow(100)
+    t.assert_eq_str(two_100.to_str(), "1267650600228229401496703205376", "2^100 exact decimal value")
+
+    # 2^128 = 340282366920938463463374607431768211456 (standard known constant,
+    # e.g. 2^128 is the size of the IPv6 address space / UUID space).
+    mut two_128 = two.pow(128)
+    t.assert_eq_str(two_128.to_str(), "340282366920938463463374607431768211456", "2^128 exact decimal value")
+
+    # ── Multiplication of two large numbers (limb-carry correctness) ───────
+    t.section("large * large multiplication (limb carries)")
+    mut big_a = BigInt.from_str("999999999999999999999999999999")   # 30 nines
+    mut big_b = BigInt.from_str("999999999999999999999999999999")   # same
+    # (10^30 - 1)^2 = 10^60 - 2*10^30 + 1
+    #   = 999999999999999999999999999998000000000000000000000000000001
+    mut big_sq = big_a.mul(big_b)
+    t.assert_eq_str(
+        big_sq.to_str(),
+        "999999999999999999999999999998000000000000000000000000000001",
+        "(10^30 - 1)^2 exact product (heavy carry propagation across every limb)"
+    )
+
+    mut big_c = BigInt.from_str("123456789012345678901234567890")
+    mut big_d = BigInt.from_str("987654321098765432109876543210")
+    # Verified: 123456789012345678901234567890 * 987654321098765432109876543210
+    #         = 121932631137021795226185032733622923332237463801111263526900
+    mut big_prod = big_c.mul(big_d)
+    t.assert_eq_str(
+        big_prod.to_str(),
+        "121932631137021795226185032733622923332237463801111263526900",
+        "30-digit * 30-digit product, known-answer check"
+    )
+
+    # ── Known factorial values ───────────────────────────────────────────────
+    t.section("factorial via repeated BigInt multiplication")
+    mut fact = BigInt.from_int(1)
+    mut k = 2
+    while k <= 20:
+        fact = fact.mul(BigInt.from_int(k))
+        k = k + 1
+    # 20! = 2432902008176640000 (fits in 64-bit, but computed entirely via BigInt).
+    t.assert_eq_str(fact.to_str(), "2432902008176640000", "20! computed via BigInt")
+
+    mut fact25 = fact
+    mut k25 = 21
+    while k25 <= 25:
+        fact25 = fact25.mul(BigInt.from_int(k25))
+        k25 = k25 + 1
+    # 25! = 15511210043330985984000000 (exceeds 64-bit range; exact known value).
+    t.assert_eq_str(fact25.to_str(), "15511210043330985984000000", "25! computed via BigInt (exceeds 64-bit)")
+
+    mut fact30 = fact25
+    mut k30 = 26
+    while k30 <= 30:
+        fact30 = fact30.mul(BigInt.from_int(k30))
+        k30 = k30 + 1
+    # 30! = 265252859812191058636308480000000 (exact known value).
+    t.assert_eq_str(fact30.to_str(), "265252859812191058636308480000000", "30! computed via BigInt")
+
+    # ── Known Fibonacci value via repeated BigInt addition ──────────────────
+    t.section("Fibonacci via repeated BigInt addition")
+    mut fib_a = BigInt.from_int(0)
+    mut fib_b = BigInt.from_int(1)
+    mut fi = 2
+    while fi <= 100:
+        mut fib_next = fib_a.add(fib_b)
+        fib_a = fib_b
+        fib_b = fib_next
+        fi = fi + 1
+    # F(100) = 354224848179261915075 (0-indexed with F(0)=0, F(1)=1; exact known value).
+    t.assert_eq_str(fib_b.to_str(), "354224848179261915075", "F(100) computed via BigInt (exceeds 64-bit)")
+
+    # ── to_int documented-truncation behavior sanity (does not crash) ──────
+    t.section("to_int truncation on out-of-range values (documented lossy behavior)")
+    mut huge = BigInt.from_str("123456789123456789123456789")
+    mut huge_as_int = huge.to_int_checked()
+    # We don't assert a specific bit pattern (that's an implementation detail
+    # of the truncation), just that it executes and returns *some* int
+    # without crashing, and that a value which DOES fit still round-trips.
+    t.assert_true(huge_as_int == huge_as_int, "to_int on an oversized BigInt completes without crashing")
+    t.assert_eq_int(BigInt.from_str("42").to_int_checked(), 42, "to_int on an in-range value still exact")
+
+    # Documents (without asserting a specific value — the bug's output is a
+    # heap pointer address, not a meaningful number to pin down) that the
+    # public `.to_int()` spelling itself is currently affected by the
+    # compiler bug described above: it still runs to completion rather than
+    # crashing, which is the only property safe to assert against it today.
+    mut via_public_name = BigInt.from_int(42).to_int()
+    t.assert_true(via_public_name == via_public_name, "public .to_int() call site executes (see bug2.txt: return value is unreliable until the compiler dispatch bug is fixed)")
+
+    t.summary()

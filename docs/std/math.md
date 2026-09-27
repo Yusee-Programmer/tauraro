@@ -1,4 +1,4 @@
-# std.math — Integer, Float, Bitwise, Random, and Statistics
+# std.math — Integer, Float, Bitwise, Random, Statistics, and BigInt
 
 ```tauraro
 from std.math.int    import Math          # integer math (static methods)
@@ -6,6 +6,7 @@ from std.math.float  import FloatMath     # floating-point math (static methods)
 from std.math.bits   import Bits          # bitwise operations (static methods)
 from std.math.random import Random        # pseudo-random number generation
 from std.math.stats  import Stats         # descriptive statistics (static methods)
+from std.math.bigint import BigInt        # arbitrary-precision integers
 ```
 
 ---
@@ -321,4 +322,74 @@ print(str(Stats.min(data)))        # 2
 print(str(Stats.max(data)))        # 9
 print(str(Stats.data_range(data))) # 7
 print(str(Stats.percentile(data, 75)))  # 7.0 (nearest-rank)
+```
+
+---
+
+## BigInt — `std.math.bigint`
+
+**When**: Numbers that exceed a native 64-bit `int` — large factorials, combinatorics, cryptography-adjacent arithmetic, exact decimal computation.
+**Why**: `BigInt` is a sign-magnitude arbitrary-precision integer, stored as base-10^9 "limbs" in a `Vec[int]` (least-significant limb first). Base 10^9 is chosen so a limb×limb product plus carry never overflows a 64-bit `int` (max product ≈ 9.99×10^17, safely under ~9.22×10^18), while keeping decimal string conversion trivial — each limb is exactly 9 decimal digits, zero-padded. All arithmetic is pure Tauraro compiled straight to C, so there is no interpreter overhead.
+
+### Construction
+
+| Method | Signature | Returns | Description |
+|---|---|---|---|
+| `BigInt.zero` | `() -> BigInt` | `BigInt` | The value `0`. |
+| `BigInt.from_int` | `(n: int) -> BigInt` | `BigInt` | Construct from a native `int`. |
+| `BigInt.from_str` | `(s: str) -> BigInt` | `BigInt` | Parse a decimal string, with an optional leading `-`/`+`. Malformed input (empty, bare sign, or a non-digit character) returns `BigInt.zero()` rather than aborting — pre-validate the string yourself if you need strict error detection. |
+
+### Conversion
+
+| Method | Signature | Returns | Description |
+|---|---|---|---|
+| `.to_str` | `(self) -> str` | `str` | Decimal string, correct sign, no leading zeros (`0` itself is `"0"`). |
+| `.to_int` | `(self) -> int` | `int` | Convert back to a native `int`. When the value doesn't fit in 64 bits this is a **documented lossy truncation** (only the low-order limbs are combined, then re-signed) — not a saturating clamp. Use `.to_str()`, or check the magnitude yourself, whenever you must detect overflow. **Known issue:** a pre-existing compiler bug (see `bug2.txt` at the repo root) intercepts any call site literally named `.to_int()` before user-class dispatch, for every class, not just `BigInt`. Until that's fixed, call `.to_int_checked()` — identical behavior, unaffected call-site name. |
+| `.to_int_checked` | `(self) -> int` | `int` | Same conversion as `.to_int`, exposed under a name the compiler bug above doesn't intercept. Prefer this today; switch back to `.to_int` once the compiler fix lands. |
+
+### Arithmetic
+
+| Method | Operator | Signature | Returns | Description |
+|---|---|---|---|---|
+| `.add` | `+` | `(self, other: BigInt) -> BigInt` | `BigInt` | Addition. |
+| `.sub` | `-` | `(self, other: BigInt) -> BigInt` | `BigInt` | Subtraction (may go negative). |
+| `.mul` | `*` | `(self, other: BigInt) -> BigInt` | `BigInt` | Multiplication. |
+| `.div` | `/` | `(self, other: BigInt) -> BigInt` | `BigInt` | Integer division, **rounding toward zero** (same convention as native `int / int`): `-7 / 2 == -3`, not the floor value `-4`. Division by zero returns `BigInt.zero()` rather than aborting. |
+| `.rem` | `%` | `(self, other: BigInt) -> BigInt` | `BigInt` | Remainder, sign follows the dividend (same convention as native `int % int`): `-7 % 2 == -1`. Always satisfies `self == other * (self / other) + self % other`. |
+| `.mod_` | — | `(self, other: BigInt) -> BigInt` | `BigInt` | Alias for `.rem`. |
+| `.pow` | — | `(self, exp: int) -> BigInt` | `BigInt` | `self^exp` via exponentiation by squaring. `exp` must be non-negative; a negative `exp` returns `BigInt.zero()` (documented — a `BigInt` can't hold a fraction). |
+| `.negate` / `-x` | `-` (unary) | `(self) -> BigInt` | `BigInt` | Negation. |
+| `.abs` | — | `(self) -> BigInt` | `BigInt` | Absolute value. |
+
+### Comparison
+
+| Method | Operator | Signature | Returns | Description |
+|---|---|---|---|---|
+| `.cmp` | — | `(self, other: BigInt) -> int` | `int` | `-1`, `0`, or `1`. |
+| `.eq` | `==` | `(self, other: BigInt) -> bool` | `bool` | Equality. |
+| `.lt` / `.le` / `.gt` / `.ge` | `<` `<=` `>` `>=` | `(self, other: BigInt) -> bool` | `bool` | Ordering. |
+| `.is_zero` | — | `(self) -> bool` | `bool` | `true` if the value is `0`. |
+| `.is_negative` | — | `(self) -> bool` | `bool` | `true` if the value is `< 0`. |
+
+`BigInt` overloads `+ - * / % == != < <= > >=` and unary `-` (see [Operator Overloading](../lang/21_operator_overloading.md)), so it reads like native arithmetic.
+
+### Example
+
+```tauraro
+from std.math.bigint import BigInt
+
+# 30! exceeds a 64-bit int by a wide margin — BigInt computes it exactly.
+mut fact = BigInt.from_int(1)
+mut k = 2
+while k <= 30:
+    fact = fact * BigInt.from_int(k)
+    k = k + 1
+print(fact.to_str())    # 265252859812191058636308480000000
+
+mut a = BigInt.from_str("123456789123456789123456789")
+mut b = BigInt.from_int(2)
+print((a * b).to_str())    # 246913578246913578246913578
+
+mut neg = BigInt.from_int(-7).div(BigInt.from_int(2))
+print(neg.to_str())        # -3 (rounds toward zero, not floor -4)
 ```

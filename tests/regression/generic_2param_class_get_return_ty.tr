@@ -1,0 +1,52 @@
+# tests/regression/generic_2param_class_get_return_ty.tr
+# Regression: a user-defined generic class with 2+ type params (K, V) and a
+# method literally named get/get_or/pop had its call-site return type
+# mis-inferred. src/sema.tr's EMethodCall return-type branch for
+# get/get_or/pop checked `elif hobj_ty.args.len > 0: ret_ty =
+# hobj_ty.args.get(0)` (a catch-all meant for List[T]-shaped single-param
+# containers, mirroring List[T].get() -> T) BEFORE the branch that looks up
+# the method's real declared return type on a registered class -- so for any
+# class with >= 1 type arg, the catch-all always fired first and returned the
+# class's FIRST type argument (K), regardless of what get()/get_or()/pop()
+# actually returns (V). This broke both unannotated bindings (`mut v =
+# obj.get(k)`) and nested call-argument usage (`print(str(obj.get(k)))`,
+# which has no intermediate typed local to paper over the bad inference).
+# Fixed in src/sema.tr: the class-method lookup (with generic substitution via
+# the existing _subst_ret_generics helper) now runs BEFORE the generic
+# first-type-arg catch-all, so it only applies when no matching user method
+# is found on the class.
+
+from std.test import TestRunner
+
+pub class Box[K, V]:
+    pub k: K
+    pub v: V
+
+extend Box[K, V]:
+    pub def init(k: K, v: V) -> Box[K, V]:
+        mut b = Box[K, V]()
+        b.k = k
+        b.v = v
+        return b
+    pub def get(self, key: K) -> V:
+        return self.v
+    pub def get_or(self, key: K, default_v: V) -> V:
+        return self.v
+
+def main():
+    mut t = TestRunner.init("generic_2param_class_get_return_ty")
+
+    t.section("K=str, V=int: get() infers V (int), not K (str)")
+    mut m1 = Box[str, int].init("a", 99)
+    mut got1 = m1.get("a")
+    t.assert_eq_int(got1, 99, "unannotated binding infers int, not str")
+
+    t.section("K=int, V=str: get() result usable directly as a nested call arg")
+    mut m2 = Box[int, str].init(5, "five")
+    t.assert_eq_str(m2.get(5), "five", "get() passed directly as a call arg infers str, not int")
+
+    t.section("get_or() also infers V correctly")
+    mut got3 = m1.get_or("missing", 7)
+    t.assert_eq_int(got3, 99, "get_or() infers int (V), not str (K)")
+
+    t.summary()

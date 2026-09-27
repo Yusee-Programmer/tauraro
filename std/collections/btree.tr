@@ -1,0 +1,307 @@
+# std.collections.btree — Sorted map / sorted set with ordered iteration and
+# range queries.
+#
+# IMPLEMENTATION NOTE: despite the module name (kept for the Rust-`BTreeMap`-
+# style API it mirrors), this is NOT a multi-way B-tree internally. It is a
+# height-balanced AVL binary search tree: each node holds exactly one key/
+# value pair plus a cached subtree height, rebalanced via rotations after
+# every insert/remove. This gives every user-facing guarantee a real B-tree
+# would (O(log n) insert/get/remove, O(log n) min/max, sorted-order iteration
+# via keys()/values(), O(log n + k) range queries) with a much simpler,
+# easier-to-verify rebalance path than multi-key node splitting/merging. If
+# you need the on-disk / cache-line-optimized node-fanout properties of a
+# *literal* B-tree, this module is not that — it is a sorted-map ADT with
+# B-tree-shaped ergonomics.
+#
+# Keys are ordered with plain `<` / `>` / `==`, so any key type that supports
+# those operators works — `int` and `str` both do out of the box.
+
+extern "C":
+    def _tr_checked_alloc(size: int) -> Pointer[char]
+    def _tr_c_free(ptr: Pointer[char])
+
+from std.core.vec import Vec
+
+# ─── Node ───────────────────────────────────────────────────────────────────
+
+pub class BTreeNode[K, V]:
+    pub key:    K
+    pub val:    V
+    pub height: int
+    pub left:   Pointer[BTreeNode[K, V]]
+    pub right:  Pointer[BTreeNode[K, V]]
+
+# ─── BTreeMap ───────────────────────────────────────────────────────────────
+
+pub class BTreeMap[K, V]:
+    pub root:  Pointer[BTreeNode[K, V]]
+    pub count: int
+
+extend BTreeMap[K, V]:
+    pub def init() -> BTreeMap[K, V]:
+        mut m = BTreeMap[K, V]()
+        m.root  = 0 as Pointer[BTreeNode[K, V]]
+        m.count = 0
+        return m
+
+    # ── Internal: node helpers ──────────────────────────────────────────────
+
+    pub def _height(self, n: Pointer[BTreeNode[K, V]]) -> int:
+        if n as int == 0: return 0
+        return n.read().height
+
+    pub def _fix_height(self, n: Pointer[BTreeNode[K, V]]):
+        mut node = n.read()
+        mut lh = self._height(node.left)
+        mut rh = self._height(node.right)
+        mut mx = lh
+        if rh > mx: mx = rh
+        node.height = mx + 1
+        unsafe: n.write(node)
+
+    pub def _balance_factor(self, n: Pointer[BTreeNode[K, V]]) -> int:
+        if n as int == 0: return 0
+        mut node = n.read()
+        return self._height(node.left) - self._height(node.right)
+
+    # Right rotation around n; returns the new subtree root.
+    pub def _rotate_right(self, n: Pointer[BTreeNode[K, V]]) -> Pointer[BTreeNode[K, V]]:
+        mut node = n.read()
+        mut l    = node.left
+        mut lnode = l.read()
+        node.left = lnode.right
+        unsafe: n.write(node)
+        lnode.right = n
+        unsafe: l.write(lnode)
+        self._fix_height(n)
+        self._fix_height(l)
+        # SAFETY: l is a heap node reached via a live root/child chain rooted
+        # in self.root; it does not outlive the tree it belongs to.
+        unsafe: return l
+
+    # Left rotation around n; returns the new subtree root.
+    pub def _rotate_left(self, n: Pointer[BTreeNode[K, V]]) -> Pointer[BTreeNode[K, V]]:
+        mut node = n.read()
+        mut r    = node.right
+        mut rnode = r.read()
+        node.right = rnode.left
+        unsafe: n.write(node)
+        rnode.left = n
+        unsafe: r.write(rnode)
+        self._fix_height(n)
+        self._fix_height(r)
+        # SAFETY: r is a heap node reached via a live root/child chain rooted
+        # in self.root; it does not outlive the tree it belongs to.
+        unsafe: return r
+
+    # Re-balance the subtree rooted at n (n's children are already balanced);
+    # returns the (possibly new) subtree root.
+    pub def _rebalance(self, n: Pointer[BTreeNode[K, V]]) -> Pointer[BTreeNode[K, V]]:
+        self._fix_height(n)
+        mut bf = self._balance_factor(n)
+        if bf > 1:
+            mut node = n.read()
+            if self._balance_factor(node.left) < 0:
+                node.left = self._rotate_left(node.left)
+                unsafe: n.write(node)
+            # SAFETY: return value is a heap node from the live tree.
+            unsafe: return self._rotate_right(n)
+        if bf < -1:
+            mut node = n.read()
+            if self._balance_factor(node.right) > 0:
+                node.right = self._rotate_right(node.right)
+                unsafe: n.write(node)
+            # SAFETY: return value is a heap node from the live tree.
+            unsafe: return self._rotate_left(n)
+        # SAFETY: n is the (possibly rewritten) heap node passed in by the caller.
+        unsafe: return n
+
+    # ── insert ───────────────────────────────────────────────────────────────
+
+    pub def _insert_node(self, n: Pointer[BTreeNode[K, V]], key: K, val: V) -> Pointer[BTreeNode[K, V]]:
+        if n as int == 0:
+            mut node = _tr_checked_alloc(sizeof(BTreeNode[K, V])) as Pointer[BTreeNode[K, V]]
+            mut nn = BTreeNode[K, V]()
+            nn.key    = key
+            nn.val    = val
+            nn.height = 1
+            nn.left   = 0 as Pointer[BTreeNode[K, V]]
+            nn.right  = 0 as Pointer[BTreeNode[K, V]]
+            unsafe: node.write(nn)
+            self.count = self.count + 1
+            # SAFETY: node is a freshly allocated heap node owned by this tree.
+            unsafe: return node
+        mut node = n.read()
+        if key < node.key:
+            node.left = self._insert_node(node.left, key, val)
+            unsafe: n.write(node)
+        elif key > node.key:
+            node.right = self._insert_node(node.right, key, val)
+            unsafe: n.write(node)
+        else:
+            # Key already present: update value in place, no rebalance needed.
+            node.val = val
+            unsafe: n.write(node)
+            # SAFETY: n is the heap node passed in by the caller.
+            unsafe: return n
+        # SAFETY: return value is a heap node from the live tree.
+        unsafe: return self._rebalance(n)
+
+    # Insert or update the value for key.
+    pub def insert(self, key: K, val: V):
+        self.root = self._insert_node(self.root, key, val)
+
+    # Alias for insert (matches the builtin Dict-style API).
+    pub def set(self, key: K, val: V):
+        self.insert(key, val)
+
+    # ── get / has ────────────────────────────────────────────────────────────
+
+    pub def _find(self, n: Pointer[BTreeNode[K, V]], key: K) -> Pointer[BTreeNode[K, V]]:
+        mut cur = n
+        while cur as int != 0:
+            mut node = cur.read()
+            # SAFETY: cur is a heap node reached by walking from the live tree root.
+            if key == node.key: unsafe: return cur
+            if key < node.key:
+                cur = node.left
+            else:
+                cur = node.right
+        return 0 as Pointer[BTreeNode[K, V]]
+
+    pub def get(self, key: K) -> V:
+        mut found = self._find(self.root, key)
+        if found as int == 0:
+            mut dummy = BTreeNode[K, V]()
+            return dummy.val
+        return found.read().val
+
+    pub def has(self, key: K) -> bool:
+        return self._find(self.root, key) as int != 0
+
+    # ── remove ───────────────────────────────────────────────────────────────
+
+    # Return the node holding the minimum key in the subtree rooted at n.
+    pub def _min_node(self, n: Pointer[BTreeNode[K, V]]) -> Pointer[BTreeNode[K, V]]:
+        mut cur = n
+        while cur.read().left as int != 0:
+            cur = cur.read().left
+        # SAFETY: cur is a heap node reached by walking from the live tree root.
+        unsafe: return cur
+
+    pub def _remove_node(self, n: Pointer[BTreeNode[K, V]], key: K) -> Pointer[BTreeNode[K, V]]:
+        if n as int == 0:
+            # SAFETY: n is null here (the base case) — returning it is trivially sound.
+            unsafe: return n
+        mut node = n.read()
+        if key < node.key:
+            node.left = self._remove_node(node.left, key)
+            unsafe: n.write(node)
+        elif key > node.key:
+            node.right = self._remove_node(node.right, key)
+            unsafe: n.write(node)
+        else:
+            # Found the node to remove.
+            if node.left as int == 0 or node.right as int == 0:
+                mut child = node.left
+                if child as int == 0: child = node.right
+                if child as int == 0:
+                    # No children: just free this leaf.
+                    _tr_c_free(n as Pointer[char])
+                    self.count = self.count - 1
+                    return 0 as Pointer[BTreeNode[K, V]]
+                else:
+                    # One child: splice it in, free this node.
+                    _tr_c_free(n as Pointer[char])
+                    self.count = self.count - 1
+                    # SAFETY: child is a heap node still owned by this tree —
+                    # freeing n above does not touch it.
+                    unsafe: return child
+            else:
+                # Two children: replace with the in-order successor (min of
+                # right subtree), then delete that successor from the right
+                # subtree.
+                mut succ = self._min_node(node.right)
+                mut succ_key = succ.read().key
+                mut succ_val = succ.read().val
+                node.right = self._remove_node(node.right, succ_key)
+                node.key = succ_key
+                node.val = succ_val
+                unsafe: n.write(node)
+        # SAFETY: return value is a heap node from the live tree.
+        unsafe: return self._rebalance(n)
+
+    # Remove key if present. No-op if absent.
+    pub def remove(self, key: K):
+        self.root = self._remove_node(self.root, key)
+
+    # ── size ─────────────────────────────────────────────────────────────────
+
+    pub def len(self) -> int:
+        return self.count
+
+    pub def is_empty(self) -> bool:
+        return self.count == 0
+
+    # ── min / max — O(log n), follows the tree shape rather than scanning ────
+
+    pub def min(self) -> K:
+        mut n = self._min_node(self.root)
+        return n.read().key
+
+    pub def max(self) -> K:
+        mut cur = self.root
+        while cur.read().right as int != 0:
+            cur = cur.read().right
+        return cur.read().key
+
+    # ── ordered iteration ───────────────────────────────────────────────────
+
+    pub def _inorder_keys(self, n: Pointer[BTreeNode[K, V]], out: Vec[K]):
+        if n as int == 0: return
+        mut node = n.read()
+        self._inorder_keys(node.left, out)
+        out.push(node.key)
+        self._inorder_keys(node.right, out)
+
+    pub def _inorder_values(self, n: Pointer[BTreeNode[K, V]], out: Vec[V]):
+        if n as int == 0: return
+        mut node = n.read()
+        self._inorder_values(node.left, out)
+        out.push(node.val)
+        self._inorder_values(node.right, out)
+
+    # All keys in ascending sorted order.
+    pub def keys(self) -> Vec[K]:
+        mut out = Vec[K].init(self.count + 1)
+        self._inorder_keys(self.root, out)
+        return out
+
+    # All values, ordered to match keys() (i.e. sorted by key, not by value).
+    pub def values(self) -> Vec[V]:
+        mut out = Vec[V].init(self.count + 1)
+        self._inorder_values(self.root, out)
+        return out
+
+    # ── range query ─────────────────────────────────────────────────────────
+    # Keys k with lo <= k < hi, in ascending order. Empty Vec if lo >= hi or
+    # no keys fall in range.
+
+    pub def _range_keys(self, n: Pointer[BTreeNode[K, V]], lo: K, hi: K, out: Vec[K]):
+        if n as int == 0: return
+        mut node = n.read()
+        # Only descend left if there could be in-range keys there.
+        if lo < node.key:
+            self._range_keys(node.left, lo, hi, out)
+        if node.key >= lo and node.key < hi:
+            out.push(node.key)
+        # Only descend right if there could be in-range keys there.
+        if node.key < hi:
+            self._range_keys(node.right, lo, hi, out)
+
+    # Keys in [lo, hi) in ascending order.
+    pub def range(self, lo: K, hi: K) -> Vec[K]:
+        mut out = Vec[K].init(8)
+        if lo >= hi: return out
+        self._range_keys(self.root, lo, hi, out)
+        return out

@@ -1,0 +1,354 @@
+# tests/lang/37_btree.tr - std.collections.btree: BTreeMap[K,V] sorted map.
+#
+# BTreeMap here is an AVL-balanced BST under a BTreeMap-shaped API (see the
+# module's header comment for why) -- these tests exercise insert/get/has,
+# update-in-place, real deletion (leaf, one-child, two-child / successor
+# cases) across enough orderings to hit rotation code on both sides, sorted
+# iteration from random/sorted/reverse-sorted insertion orders, range
+# queries, min/max, both int and str keys, and a larger randomized stress
+# sequence checked against a hand-tracked expected sorted key list.
+
+from std.test import TestRunner
+from std.collections.btree import BTreeMap
+from std.core.vec import Vec
+
+def main():
+    mut t = TestRunner.init("37_btree")
+
+    # ── basic insert / get / has ────────────────────────────────────────────
+    t.section("insert / get / has")
+    mut m = BTreeMap[int, str].init()
+    t.assert_eq_int(m.len(), 0, "starts empty")
+    t.assert_false(m.has(5), "has() false on empty map")
+
+    m.insert(5, "five")
+    m.insert(3, "three")
+    m.insert(8, "eight")
+    t.assert_eq_int(m.len(), 3, "len after 3 inserts")
+    t.assert_true(m.has(5), "has(5) true")
+    t.assert_true(m.has(3), "has(3) true")
+    t.assert_true(m.has(8), "has(8) true")
+    t.assert_false(m.has(99), "has(99) false — absent key")
+    t.assert_eq_str(m.get(5), "five", "get(5)")
+    t.assert_eq_str(m.get(3), "three", "get(3)")
+    t.assert_eq_str(m.get(8), "eight", "get(8)")
+
+    # ── update existing key: value changes, count does not ─────────────────
+    t.section("update existing key")
+    m.insert(5, "FIVE-updated")
+    t.assert_eq_int(m.len(), 3, "len unchanged after updating existing key")
+    t.assert_eq_str(m.get(5), "FIVE-updated", "get(5) reflects update")
+    m.set(3, "THREE-updated")
+    t.assert_eq_int(m.len(), 3, "len unchanged after set() on existing key")
+    t.assert_eq_str(m.get(3), "THREE-updated", "set() alias updates value")
+
+    # ── min / max ────────────────────────────────────────────────────────────
+    t.section("min / max")
+    t.assert_eq_int(m.min(), 3, "min of {3,5,8}")
+    t.assert_eq_int(m.max(), 8, "max of {3,5,8}")
+    m.insert(1, "one")
+    m.insert(10, "ten")
+    t.assert_eq_int(m.min(), 1, "min after inserting smaller key")
+    t.assert_eq_int(m.max(), 10, "max after inserting larger key")
+
+    # ── sorted iteration: random insertion order ────────────────────────────
+    t.section("sorted iteration — random insertion order")
+    mut r = BTreeMap[int, int].init()
+    mut rand_keys = Vec[int].init(10)
+    rand_keys.push(47); rand_keys.push(3); rand_keys.push(91); rand_keys.push(15)
+    rand_keys.push(62); rand_keys.push(8); rand_keys.push(100); rand_keys.push(1)
+    rand_keys.push(33); rand_keys.push(77)
+    mut i = 0
+    while i < rand_keys.len:
+        r.insert(rand_keys.get(i), rand_keys.get(i) * 10)
+        i = i + 1
+    mut rk = r.keys()
+    t.assert_eq_int(rk.len, 10, "keys() length matches insert count (random order)")
+    mut expect_sorted = Vec[int].init(10)
+    expect_sorted.push(1); expect_sorted.push(3); expect_sorted.push(8); expect_sorted.push(15)
+    expect_sorted.push(33); expect_sorted.push(47); expect_sorted.push(62); expect_sorted.push(77)
+    expect_sorted.push(91); expect_sorted.push(100)
+    mut all_sorted = true
+    i = 0
+    while i < rk.len:
+        if rk.get(i) != expect_sorted.get(i): all_sorted = false
+        i = i + 1
+    t.assert_true(all_sorted, "keys() sorted ascending after random insertion order")
+
+    mut rv = r.values()
+    t.assert_eq_int(rv.get(0), 10, "values() aligned to sorted keys: value for min key 1")
+    t.assert_eq_int(rv.get(9), 1000, "values() aligned to sorted keys: value for max key 100")
+
+    # entries() is not part of this module's API (see header comment for why:
+    # Vec[GenericClass[K,V]]-by-value read-back is a separate, pre-existing
+    # compiler monomorphization gap) -- keys()/values() together already give
+    # full ordered (key, value) iteration, index-aligned, verified above.
+
+    # ── sorted iteration: already-sorted insertion order ────────────────────
+    t.section("sorted iteration — already-sorted insertion order (right-leaning stress)")
+    mut asc = BTreeMap[int, int].init()
+    i = 1
+    while i <= 15:
+        asc.insert(i, i)
+        i = i + 1
+    t.assert_eq_int(asc.len(), 15, "len after 15 ascending inserts")
+    mut asc_keys = asc.keys()
+    mut asc_ok = true
+    i = 0
+    while i < asc_keys.len:
+        if asc_keys.get(i) != i + 1: asc_ok = false
+        i = i + 1
+    t.assert_true(asc_ok, "sorted iteration correct after strictly-ascending insertion (forces left-rotations)")
+    t.assert_eq_int(asc.min(), 1, "min after ascending inserts")
+    t.assert_eq_int(asc.max(), 15, "max after ascending inserts")
+
+    # ── sorted iteration: reverse-sorted insertion order ────────────────────
+    t.section("sorted iteration — reverse-sorted insertion order (left-leaning stress)")
+    mut desc = BTreeMap[int, int].init()
+    i = 15
+    while i >= 1:
+        desc.insert(i, i)
+        i = i - 1
+    t.assert_eq_int(desc.len(), 15, "len after 15 descending inserts")
+    mut desc_keys = desc.keys()
+    mut desc_ok = true
+    i = 0
+    while i < desc_keys.len:
+        if desc_keys.get(i) != i + 1: desc_ok = false
+        i = i + 1
+    t.assert_true(desc_ok, "sorted iteration correct after strictly-descending insertion (forces right-rotations)")
+
+    # ── range queries ────────────────────────────────────────────────────────
+    t.section("range queries")
+    # asc map has keys 1..15
+    mut rng = asc.range(5, 10)
+    t.assert_eq_int(rng.len, 5, "range(5,10) on 1..15 returns 5 keys [5,6,7,8,9]")
+    mut rng_ok = true
+    if rng.len == 5:
+        if rng.get(0) != 5: rng_ok = false
+        if rng.get(1) != 6: rng_ok = false
+        if rng.get(2) != 7: rng_ok = false
+        if rng.get(3) != 8: rng_ok = false
+        if rng.get(4) != 9: rng_ok = false
+    else:
+        rng_ok = false
+    t.assert_true(rng_ok, "range(5,10) contents are exactly [5,6,7,8,9], sorted")
+
+    mut rng_full = asc.range(1, 16)
+    t.assert_eq_int(rng_full.len, 15, "range covering the whole key space returns all 15 keys")
+
+    mut rng_empty = asc.range(100, 200)
+    t.assert_eq_int(rng_empty.len, 0, "range entirely above max returns empty")
+
+    mut rng_empty2 = asc.range(-50, -10)
+    t.assert_eq_int(rng_empty2.len, 0, "range entirely below min returns empty")
+
+    mut rng_inverted = asc.range(10, 5)
+    t.assert_eq_int(rng_inverted.len, 0, "range with lo >= hi returns empty (documented convention)")
+
+    mut rng_single = asc.range(7, 8)
+    t.assert_eq_int(rng_single.len, 1, "range(7,8) is the half-open singleton [7]")
+    t.assert_eq_int(rng_single.get(0), 7, "range(7,8) contains exactly key 7")
+
+    mut rng_excl_hi = asc.range(13, 15)
+    t.assert_eq_int(rng_excl_hi.len, 2, "range hi bound is exclusive: range(13,15) excludes 15")
+
+    # ── removal: leaf case ───────────────────────────────────────────────────
+    t.section("remove — leaf node")
+    mut lm = BTreeMap[int, int].init()
+    lm.insert(10, 10); lm.insert(5, 5); lm.insert(15, 15)
+    # 5 and 15 are leaves under root 10.
+    lm.remove(5)
+    t.assert_eq_int(lm.len(), 2, "len after removing a leaf")
+    t.assert_false(lm.has(5), "removed leaf key is gone")
+    t.assert_true(lm.has(10), "sibling key 10 still present")
+    t.assert_true(lm.has(15), "sibling key 15 still present")
+
+    # ── removal: node with one child ─────────────────────────────────────────
+    t.section("remove — node with one child")
+    mut om = BTreeMap[int, int].init()
+    om.insert(10, 10); om.insert(5, 5); om.insert(15, 15); om.insert(4, 4)
+    # node 5 has a single left child (4); remove it and confirm 4 gets spliced up.
+    om.remove(5)
+    t.assert_eq_int(om.len(), 3, "len after removing one-child node")
+    t.assert_false(om.has(5), "removed key gone")
+    t.assert_true(om.has(4), "former child of removed node still reachable")
+    mut om_keys = om.keys()
+    t.assert_eq_int(om_keys.len, 3, "3 keys remain")
+    t.assert_eq_int(om_keys.get(0), 4, "sorted order preserved: 4 first")
+    t.assert_eq_int(om_keys.get(1), 10, "sorted order preserved: 10 second")
+    t.assert_eq_int(om_keys.get(2), 15, "sorted order preserved: 15 third")
+
+    # ── removal: node with two children (successor splice) ──────────────────
+    t.section("remove — node with two children (successor replacement)")
+    mut tm = BTreeMap[int, int].init()
+    mut two_child_keys = Vec[int].init(7)
+    two_child_keys.push(50); two_child_keys.push(30); two_child_keys.push(70)
+    two_child_keys.push(20); two_child_keys.push(40); two_child_keys.push(60); two_child_keys.push(80)
+    i = 0
+    while i < two_child_keys.len:
+        tm.insert(two_child_keys.get(i), two_child_keys.get(i))
+        i = i + 1
+    # Root (50) has two children — removing it forces the successor-splice path.
+    tm.remove(50)
+    t.assert_eq_int(tm.len(), 6, "len after removing a two-child node")
+    t.assert_false(tm.has(50), "removed root key gone")
+    mut tm_keys = tm.keys()
+    mut tm_expect = Vec[int].init(6)
+    tm_expect.push(20); tm_expect.push(30); tm_expect.push(40); tm_expect.push(60)
+    tm_expect.push(70); tm_expect.push(80)
+    mut tm_ok = true
+    i = 0
+    while i < tm_keys.len:
+        if tm_keys.get(i) != tm_expect.get(i): tm_ok = false
+        i = i + 1
+    t.assert_true(tm_ok, "sorted order fully correct after two-children removal + successor splice")
+
+    # ── removal: drain a tree completely in mixed order, exercising many
+    #    rebalancing shapes ────────────────────────────────────────────────
+    t.section("remove — full drain in mixed order")
+    mut dm = BTreeMap[int, int].init()
+    mut drain_keys = Vec[int].init(11)
+    drain_keys.push(20); drain_keys.push(10); drain_keys.push(30); drain_keys.push(5)
+    drain_keys.push(15); drain_keys.push(25); drain_keys.push(35); drain_keys.push(1)
+    drain_keys.push(12); drain_keys.push(18); drain_keys.push(40)
+    i = 0
+    while i < drain_keys.len:
+        dm.insert(drain_keys.get(i), drain_keys.get(i))
+        i = i + 1
+    t.assert_eq_int(dm.len(), 11, "drain map has 11 keys before removal")
+    # Remove in a different order than insertion, mixing leaf/mid/root removals.
+    mut remove_order = Vec[int].init(11)
+    remove_order.push(1); remove_order.push(40); remove_order.push(20); remove_order.push(12)
+    remove_order.push(30); remove_order.push(5); remove_order.push(35); remove_order.push(10)
+    remove_order.push(25); remove_order.push(15); remove_order.push(18)
+    i = 0
+    while i < remove_order.len:
+        dm.remove(remove_order.get(i))
+        i = i + 1
+    t.assert_eq_int(dm.len(), 0, "all 11 keys removed, map is empty")
+    t.assert_false(dm.has(20), "root key gone after full drain")
+    mut dm_keys = dm.keys()
+    t.assert_eq_int(dm_keys.len, 0, "keys() empty after full drain")
+
+    # Re-insert after full drain to confirm the tree still works post-empty.
+    dm.insert(99, 99)
+    t.assert_eq_int(dm.len(), 1, "map usable again after being fully drained")
+    t.assert_eq_int(dm.min(), 99, "min correct on single-element map after drain")
+    t.assert_eq_int(dm.max(), 99, "max correct on single-element map after drain")
+
+    # ── str keys ─────────────────────────────────────────────────────────────
+    t.section("str keys")
+    mut sm = BTreeMap[str, int].init()
+    sm.insert("banana", 2)
+    sm.insert("apple", 1)
+    sm.insert("cherry", 3)
+    sm.insert("date", 4)
+    t.assert_eq_int(sm.len(), 4, "str-keyed map len")
+    t.assert_true(sm.has("apple"), "has() works for str keys")
+    mut sm_cherry: int = sm.get("cherry")
+    t.assert_eq_int(sm_cherry, 3, "get() works for str keys")
+    t.assert_eq_str(sm.min(), "apple", "min() lexicographic on str keys")
+    t.assert_eq_str(sm.max(), "date", "max() lexicographic on str keys")
+    mut sm_keys = sm.keys()
+    t.assert_eq_int(sm_keys.len, 4, "str keys() length")
+    t.assert_eq_str(sm_keys.get(0), "apple", "str keys sorted: apple first")
+    t.assert_eq_str(sm_keys.get(1), "banana", "str keys sorted: banana second")
+    t.assert_eq_str(sm_keys.get(2), "cherry", "str keys sorted: cherry third")
+    t.assert_eq_str(sm_keys.get(3), "date", "str keys sorted: date fourth")
+    sm.remove("banana")
+    t.assert_eq_int(sm.len(), 3, "str-keyed remove decrements len")
+    t.assert_false(sm.has("banana"), "str-keyed remove actually removes")
+    mut sm_range = sm.range("apple", "cherry")
+    t.assert_eq_int(sm_range.len, 1, "str range [apple, cherry) — only apple qualifies (banana removed)")
+    t.assert_eq_str(sm_range.get(0), "apple", "str range content correct")
+
+    # ── larger randomized-order stress: track expected sorted order by hand ─
+    t.section("stress — 50+ interleaved insert/remove ops vs. hand-tracked model")
+    mut sut = BTreeMap[int, int].init()
+    # Simple parallel "model": a plain Vec we keep manually sorted+deduped,
+    # mirroring exactly what the BTreeMap should contain after each op.
+    mut model = Vec[int].init(64)
+
+    def model_insert(vec: Vec[int], key: int) -> Vec[int]:
+        mut idx = 0
+        mut found = false
+        mut i = 0
+        while i < vec.len:
+            if vec.get(i) == key:
+                found = true
+            i = i + 1
+        if not found:
+            vec.push(key)
+            vec.sort()
+        return vec
+
+    def model_remove(vec: Vec[int], key: int) -> Vec[int]:
+        mut idx = vec.index_of(key)
+        if idx >= 0:
+            vec.remove(idx)
+        return vec
+
+    # 30 inserts across a spread of keys (some duplicates to test update path).
+    mut insert_seq = Vec[int].init(30)
+    insert_seq.push(50); insert_seq.push(25); insert_seq.push(75); insert_seq.push(10)
+    insert_seq.push(60); insert_seq.push(90); insert_seq.push(5); insert_seq.push(15)
+    insert_seq.push(55); insert_seq.push(65); insert_seq.push(80); insert_seq.push(95)
+    insert_seq.push(2); insert_seq.push(8); insert_seq.push(12); insert_seq.push(20)
+    insert_seq.push(50); insert_seq.push(30); insert_seq.push(45); insert_seq.push(70)
+    insert_seq.push(85); insert_seq.push(1); insert_seq.push(99); insert_seq.push(33)
+    insert_seq.push(37); insert_seq.push(41); insert_seq.push(63); insert_seq.push(68)
+    insert_seq.push(72); insert_seq.push(3)
+    i = 0
+    while i < insert_seq.len:
+        mut k = insert_seq.get(i)
+        sut.insert(k, k * 2)
+        model = model_insert(model, k)
+        i = i + 1
+
+    t.assert_eq_int(sut.len(), model.len, "after 30 inserts (with dup 50): sut count matches model count")
+
+    # 15 removals, interleaved with a few more inserts, in yet another order.
+    mut remove_seq = Vec[int].init(15)
+    remove_seq.push(25); remove_seq.push(90); remove_seq.push(1); remove_seq.push(45)
+    remove_seq.push(63); remove_seq.push(99); remove_seq.push(5); remove_seq.push(30)
+    remove_seq.push(72); remove_seq.push(8); remove_seq.push(50); remove_seq.push(15)
+    remove_seq.push(37); remove_seq.push(20); remove_seq.push(68)
+    i = 0
+    while i < remove_seq.len:
+        mut k = remove_seq.get(i)
+        sut.remove(k)
+        model = model_remove(model, k)
+        i = i + 1
+
+    # A few more post-removal inserts to finish past 50 total operations.
+    mut more_inserts = Vec[int].init(6)
+    more_inserts.push(100); more_inserts.push(0); more_inserts.push(48); more_inserts.push(52)
+    more_inserts.push(11); more_inserts.push(77)
+    i = 0
+    while i < more_inserts.len:
+        mut k = more_inserts.get(i)
+        sut.insert(k, k * 2)
+        model = model_insert(model, k)
+        i = i + 1
+
+    t.assert_eq_int(sut.len(), model.len, "final count matches hand-tracked model after 51 total ops")
+
+    mut sut_keys = sut.keys()
+    t.assert_eq_int(sut_keys.len, model.len, "final sorted key-list length matches model")
+    mut stress_ok = true
+    i = 0
+    while i < sut_keys.len:
+        if sut_keys.get(i) != model.get(i): stress_ok = false
+        i = i + 1
+    t.assert_true(stress_ok, "final sorted key order exactly matches hand-tracked model after 51 interleaved ops")
+
+    # Spot-check a few values and membership post-stress.
+    t.assert_true(sut.has(100), "stress: key inserted last round is present")
+    t.assert_false(sut.has(25), "stress: key removed mid-sequence is absent")
+    t.assert_false(sut.has(90), "stress: another removed key is absent")
+    t.assert_eq_int(sut.get(100), 200, "stress: value for surviving key correct")
+    t.assert_eq_int(sut.min(), model.get(0), "stress: min() matches model's smallest key")
+    t.assert_eq_int(sut.max(), model.get(model.len - 1), "stress: max() matches model's largest key")
+
+    t.summary()
