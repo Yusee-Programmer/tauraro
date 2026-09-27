@@ -4537,6 +4537,7 @@ __attribute__((hot)) long long compile_all_c_incremental(List_TrStr* c_files, Li
 __attribute__((hot)) long long compile_wasm_incremental(List_TrStr* c_files, List_bool* needs, TrStr exe_path, TrStr inc_dir, TrStr opt_level, bool verbose, long long memory_mb);
 __attribute__((hot)) long long compile_c_to_exe(TrStr c_path, TrStr exe_path, TrStr opt_level, bool verbose);
 __attribute__((hot)) void _print_diag(TrStr level, TrStr msg);
+__attribute__((hot)) void delete_file(TrStr path);
 __attribute__((hot)) void cleanup_build(TrStr build_dir, List_TrStr* all_c_files);
 __attribute__((hot)) void run_fmt(TrStr path0, bool write_in_place);
 
@@ -4655,6 +4656,7 @@ __attribute__((hot)) TrStr CGenerator_obj_retain_wrap(CGenerator* self, HirExpr*
 __attribute__((hot)) bool CGenerator__fn_owned_lookup(CGenerator* self, TrStr key);
 __attribute__((hot)) void CGenerator__reg_fn_owned(CGenerator* self, TrStr key, bool v);
 __attribute__((hot)) bool CGenerator__obj_expr_owns_ref(CGenerator* self, HirExpr* e);
+__attribute__((hot)) bool CGenerator__is_user_borrow_wrapper_call(CGenerator* self, HirExpr* e);
 __attribute__((hot)) bool CGenerator__store_target_is_borrow_field(CGenerator* self, HirExpr* t);
 __attribute__((hot)) bool CGenerator__obj_store_needs_retain(CGenerator* self, HirExpr* e);
 __attribute__((hot)) TrStr CGenerator_obj_drop_fn(CGenerator* self, TrStr tn);

@@ -1924,7 +1924,7 @@ __attribute__((hot)) DropSite* site_for(List_ptr* out, HirBlock* hb) {
         /* pass */
         if ((((unsigned long long)(((DropSite*)List_ptr_get(out, i))->hir_block)) == ((unsigned long long)(hb)))) {
             /* pass */
-            return ((DropSite*)List_ptr_get(out, i));
+            return _tr_obj_retain(((DropSite*)List_ptr_get(out, i)));
         }
         /* pass */
         i = (i + 1LL);
