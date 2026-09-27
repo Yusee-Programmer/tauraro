@@ -1789,10 +1789,10 @@ pub def main(args: Vec[str]):
     # the same source compiles and runs correctly at -O1. Only override
     # the DEFAULT (the user's own explicit -O2 still wins) -- this is a
     # narrow, documented workaround, not a silent behavior change.
-    print("DEBUG: opt_level_explicit=" + str(opt_level_explicit) + " opt_level=" + opt_level + " is_macos_arm64=" + str(_tr_is_macos_arm64()))
+    append_file("/tmp/opt_level_debug.txt", input_path + ": explicit=" + str(opt_level_explicit) + " before=" + opt_level + " is_macos_arm64=" + str(_tr_is_macos_arm64()) + "\n")
     if not opt_level_explicit and opt_level == "2" and _tr_is_macos_arm64():
         opt_level = "1"
-    print("DEBUG: opt_level AFTER override=" + opt_level)
+    append_file("/tmp/opt_level_debug.txt", input_path + ": after=" + opt_level + "\n")
 
     if input_path == "":
         print(c_red("error") + ": no input file specified")

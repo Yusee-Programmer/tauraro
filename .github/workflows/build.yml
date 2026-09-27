@@ -228,6 +228,17 @@ jobs:
           LDFLAGS: "-lm -lpthread -lrt"
         run: bash scripts/run_tests.sh
 
+      - name: DEBUG macOS opt_level file dump v21
+        if: runner.os == 'macOS' && always()
+        shell: bash
+        continue-on-error: true
+        run: |
+          echo "===== /tmp/opt_level_debug.txt (grep 43_serialize) ====="
+          grep "43_serialize" /tmp/opt_level_debug.txt || echo "NO 43_serialize ENTRIES FOUND"
+          echo "===== total line count ====="
+          wc -l /tmp/opt_level_debug.txt || echo "FILE DOES NOT EXIST"
+          rm -f /tmp/opt_level_debug.txt
+
       - name: Run regression test suite (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
