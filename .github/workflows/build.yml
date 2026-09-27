@@ -234,24 +234,50 @@ jobs:
       # actually fails -- guaranteed to be the exact failing code path, no
       # invocation-shape guesswork.
       # -------------------------------------------------------
-      - name: DEBUG macOS source+disasm check v12
+      - name: DEBUG macOS source+disasm check v13
         if: runner.os == 'macOS'
         shell: bash
         continue-on-error: true
         run: |
           set -x
+          # ISOLATED case: fresh build/, emit+compile pickle.c standalone.
           rm -rf build
           ./tauraroc tests/lang/43_serialize.tr --emit c
-          echo "===== generated C for PVal_list_get ====="
-          grep -n -A 8 "^PVal\* PVal_list_get" build/include/std/serialize/pickle.c || echo "FUNCTION NOT FOUND"
-          echo "===== compiling pickle.c standalone with cc -O2 (matching run_tests.sh's own flags) ====="
+          echo "===== ISOLATED: generated C for PVal_list_get ====="
+          grep -n -A 8 "PVal_list_get" build/include/std/serialize/pickle.c | head -12
           CC_BIN=$(command -v gcc || command -v cc)
-          echo "using CC_BIN=$CC_BIN"
           "$CC_BIN" --version
-          "$CC_BIN" -O2 -ftrapv -fno-strict-aliasing -Wno-string-compare -Wno-comment -Wno-attributes -Wno-unused-value -Wno-unknown-attributes -Wno-parentheses-equality "-Ibuild/" -c "build/include/std/serialize/pickle.c" -o /tmp/pickle_check.o
-          echo "===== objdump of PVal_list_get ====="
-          objdump -d --macho /tmp/pickle_check.o 2>&1 | grep -A 15 "PVal_list_get:" || otool -tV /tmp/pickle_check.o 2>&1 | grep -A 15 "PVal_list_get:"
-          rm -rf build
+          "$CC_BIN" -O2 -ftrapv -fno-strict-aliasing -Wno-string-compare -Wno-comment -Wno-attributes -Wno-unused-value -Wno-unknown-attributes -Wno-parentheses-equality "-Ibuild/" -c "build/include/std/serialize/pickle.c" -o /tmp/pickle_isolated.o
+          echo "===== ISOLATED: objdump of PVal_list_get ====="
+          objdump -d --macho /tmp/pickle_isolated.o 2>&1 | grep -A 15 "PVal_list_get:" || otool -tV /tmp/pickle_isolated.o 2>&1 | grep -A 15 "PVal_list_get:"
+
+          # ACCUMULATED-STATE case: run the 25 preceding tests/lang files first
+          # (SAME shared build/ dir, not wiped), THEN re-emit+recompile pickle.c
+          # to see if accumulated state changes the generated source or its
+          # compiled object differently from the isolated case above.
+          for f in $(find tests/lang -name '*.tr' | sort); do
+            base=$(basename "$f")
+            if [ "$base" = "43_serialize.tr" ]; then break; fi
+            ./tauraroc --run "$f" > /dev/null 2>&1
+          done
+          ./tauraroc tests/lang/43_serialize.tr --emit c
+          echo "===== ACCUMULATED: generated C for PVal_list_get ====="
+          grep -n -A 8 "PVal_list_get" build/include/std/serialize/pickle.c | head -12
+          "$CC_BIN" -O2 -ftrapv -fno-strict-aliasing -Wno-string-compare -Wno-comment -Wno-attributes -Wno-unused-value -Wno-unknown-attributes -Wno-parentheses-equality "-Ibuild/" -c "build/include/std/serialize/pickle.c" -o /tmp/pickle_accum.o
+          echo "===== ACCUMULATED: objdump of PVal_list_get ====="
+          objdump -d --macho /tmp/pickle_accum.o 2>&1 | grep -A 15 "PVal_list_get:" || otool -tV /tmp/pickle_accum.o 2>&1 | grep -A 15 "PVal_list_get:"
+
+          echo "===== diff: isolated pickle.c vs accumulated pickle.c ====="
+          echo "(saved isolated copy before accumulated re-emit overwrote it? re-checking via content hash instead)"
+          md5 /tmp/pickle_isolated.o /tmp/pickle_accum.o 2>&1 || md5sum /tmp/pickle_isolated.o /tmp/pickle_accum.o 2>&1
+
+          # ACTUAL BINARY case: build 43_serialize the REAL way (tauraroc --run,
+          # combined compile+execute) with the SAME accumulated build/ state,
+          # then find and objdump the resulting 43_serialize binary itself.
+          ./tauraroc tests/lang/43_serialize.tr -o /tmp/43_serialize_check
+          echo "===== ACTUAL BINARY: objdump of PVal_list_get ====="
+          objdump -d --macho /tmp/43_serialize_check 2>&1 | grep -A 15 "PVal_list_get:" || otool -tV /tmp/43_serialize_check 2>&1 | grep -A 15 "PVal_list_get:"
+          rm -rf build /tmp/pickle_isolated.o /tmp/pickle_accum.o /tmp/43_serialize_check
 
       - name: DEBUG macOS run_tests.sh retry-loop crash repro v9
         if: runner.os == 'macOS'
