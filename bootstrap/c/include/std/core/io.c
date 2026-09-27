@@ -56,14 +56,7 @@ __attribute__((hot)) bool write_file(TrStr path, TrStr content) {
         return false;
     }
     /* pass */
-    long long length = 0LL;
-    /* pass */
-    char* p = ((char*)(_tr_strz(content)));
-    /* pass */
-    while ((((long long)((*(p + length)))) != 0LL)) {
-        /* pass */
-        length = (length + 1LL);
-    }
+    long long length = _tr_str_lenv((content));
     /* pass */
     _tr_c_fwrite(((void*)(_tr_strz(content))), 1LL, length, fp);
     /* pass */
@@ -83,14 +76,7 @@ __attribute__((hot)) bool append_file(TrStr path, TrStr content) {
         return false;
     }
     /* pass */
-    long long length = 0LL;
-    /* pass */
-    char* p = ((char*)(_tr_strz(content)));
-    /* pass */
-    while ((((long long)((*(p + length)))) != 0LL)) {
-        /* pass */
-        length = (length + 1LL);
-    }
+    long long length = _tr_str_lenv((content));
     /* pass */
     _tr_c_fwrite(((void*)(_tr_strz(content))), 1LL, length, fp);
     /* pass */
