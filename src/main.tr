@@ -1246,12 +1246,35 @@ pub def compile_all_c_incremental(c_files: Vec[str], needs: Vec[bool], exe_path:
         mut opath = obj_path_for(cpath)
         o_files.push(opath)
         if needs.get(i) or not file_exists(opath):
+            # Delete the old object first: some compiler/linker toolchains write
+            # the new object via an atomic temp-file-then-rename (observed with
+            # clang/lld on Windows, where the rename can silently lose a race
+            # against another process briefly holding the destination path open,
+            # e.g. antivirus scanning or a just-exited prior build's handle).
+            # If that rename is ever skipped, the STALE object from a previous,
+            # unrelated compilation must not still be sitting at `opath` for the
+            # link step to pick up unnoticed -- with nothing there, a lost race
+            # becomes an immediate, loud "object file missing" error instead of
+            # a silent wrong-binary link.
             mut ccmd = cc + common + " -c \"" + cpath + "\" -o \"" + opath + "\""
             if verbose: print("  [CC -c] " + cpath)
-            mut crc = _tr_system(ccmd)
-            if crc != 0:
-                print(c_red("error") + ": compiling " + cpath + " failed (exit code " + str(crc) + ")")
-                return crc
+            mut attempt = 0
+            mut crc = 0
+            while true:
+                delete_file(opath)
+                crc = _tr_system(ccmd)
+                if crc != 0:
+                    print(c_red("error") + ": compiling " + cpath + " failed (exit code " + str(crc) + ")")
+                    return crc
+                if file_exists(opath): break
+                # Lost the race described above: the compiler exited 0 but the
+                # object never landed at `opath`. Retry once (the other process
+                # holding the path is almost always gone a moment later) before
+                # treating it as a hard failure.
+                attempt = attempt + 1
+                if attempt > 1:
+                    print(c_red("error") + ": compiling " + cpath + " reported success but " + opath + " was not written (lost atomic-rename race?)")
+                    return 1
         else:
             compiled = compiled + 1
         i = i + 1
@@ -1476,6 +1499,18 @@ pub def _print_diag(level: str, msg: str):
     if fix_part.len() > 0:
         print("  " + c_green("= help") + ": " + fix_part)
 
+
+# Removes a single file, ignoring "doesn't exist" (best-effort). Used before
+# recompiling a .o so a compiler that reports success (exit 0) without actually
+# writing the new object -- e.g. an atomic-write temp-file-then-rename step that
+# silently loses the race with another process holding the old file open -- can
+# no longer leave the STALE prior-build object sitting there to be linked in
+# unnoticed. See compile_all_c_incremental's post-compile file_exists check.
+pub def delete_file(path: str):
+    if _tr_is_windows():
+        _tr_system("del /Q \"" + path_to_native(path) + "\" 2>nul >nul")
+    else:
+        _tr_system("rm -f \"" + path + "\"")
 
 # Called when -o is given: removes all intermediate files from build_dir,
 # leaving the directory empty so rmdir can remove it.
