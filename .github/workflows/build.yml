@@ -234,6 +234,25 @@ jobs:
       # actually fails -- guaranteed to be the exact failing code path, no
       # invocation-shape guesswork.
       # -------------------------------------------------------
+      - name: DEBUG macOS source+disasm check v12
+        if: runner.os == 'macOS'
+        shell: bash
+        continue-on-error: true
+        run: |
+          set -x
+          rm -rf build
+          ./tauraroc tests/lang/43_serialize.tr --emit c
+          echo "===== generated C for PVal_list_get ====="
+          grep -n -A 8 "^PVal\* PVal_list_get" build/include/std/serialize/pickle.c || echo "FUNCTION NOT FOUND"
+          echo "===== compiling pickle.c standalone with cc -O2 (matching run_tests.sh's own flags) ====="
+          CC_BIN=$(command -v gcc || command -v cc)
+          echo "using CC_BIN=$CC_BIN"
+          "$CC_BIN" --version
+          "$CC_BIN" -O2 -ftrapv -fno-strict-aliasing -Wno-string-compare -Wno-comment -Wno-attributes -Wno-unused-value -Wno-unknown-attributes -Wno-parentheses-equality "-Ibuild/" -c "build/include/std/serialize/pickle.c" -o /tmp/pickle_check.o
+          echo "===== objdump of PVal_list_get ====="
+          objdump -d --macho /tmp/pickle_check.o 2>&1 | grep -A 15 "PVal_list_get:" || otool -tV /tmp/pickle_check.o 2>&1 | grep -A 15 "PVal_list_get:"
+          rm -rf build
+
       - name: DEBUG macOS run_tests.sh retry-loop crash repro v9
         if: runner.os == 'macOS'
         shell: bash
