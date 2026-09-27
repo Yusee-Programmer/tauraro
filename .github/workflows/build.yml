@@ -273,10 +273,16 @@ jobs:
 
           # ACTUAL BINARY case: build 43_serialize the REAL way (tauraroc --run,
           # combined compile+execute) with the SAME accumulated build/ state,
-          # then find and objdump the resulting 43_serialize binary itself.
+          # then disassemble the resulting 43_serialize binary itself via lldb
+          # (objdump/otool found no symbol match against the linked executable
+          # -- likely a tool/format quirk, not informative -- lldb's `target
+          # create` + `disassemble --name` worked reliably on the CI core dumps
+          # in earlier diagnostics, so reuse that here on a non-crashed binary).
           ./tauraroc tests/lang/43_serialize.tr -o /tmp/43_serialize_check
-          echo "===== ACTUAL BINARY: objdump of PVal_list_get ====="
-          objdump -d --macho /tmp/43_serialize_check 2>&1 | grep -A 15 "PVal_list_get:" || otool -tV /tmp/43_serialize_check 2>&1 | grep -A 15 "PVal_list_get:"
+          echo "===== ACTUAL BINARY: lldb disassemble of PVal_list_get ====="
+          lldb --batch -o "target create /tmp/43_serialize_check" -o "disassemble --name PVal_list_get" -o "quit" 2>&1
+          echo "===== ACTUAL BINARY: does --run actually crash right now? ====="
+          /tmp/43_serialize_check; echo "exit=$?"
           rm -rf build /tmp/pickle_isolated.o /tmp/pickle_accum.o /tmp/43_serialize_check
 
       - name: DEBUG macOS run_tests.sh retry-loop crash repro v9
