@@ -224,41 +224,30 @@ jobs:
       # repro with debug prints at each step to see exactly where it goes
       # wrong (decode-time vs. walk-time).
       # -------------------------------------------------------
-      - name: DEBUG macOS isolated deep-decode repro v19
+      - name: DEBUG macOS opt-level isolation v20
         if: runner.os == 'macOS'
         shell: bash
         continue-on-error: true
         run: |
           set -x
+          # v19 proved the identical decode+walk pattern works perfectly in
+          # ISOLATION (a small standalone script) -- 25/25 iterations correct.
+          # The crash only happens compiled as part of the FULL, huge
+          # 43_serialize.tr (92 tests inlined into one ~18KB main()). This
+          # smells like a genuine clang/ARM64 register-allocation or stack-
+          # frame-size-triggered miscompile, not a logic bug. Test whether a
+          # lower optimization level avoids it (isolating opt-level from
+          # ASan, unlike the earlier --debug -O0 diagnostic which conflated
+          # both).
+          for OPT in -O1 -O0; do
+            echo "===== trying $OPT ====="
+            rm -rf build
+            out=$(./tauraroc $OPT --run tests/lang/43_serialize.tr 2>&1)
+            status=$?
+            echo "===== $OPT exit=$status, output length=${#out} ====="
+            echo "$out" | tail -20
+          done
           rm -rf build
-          cat > /tmp/deep_repro.tr <<'TREOF'
-          from std.serialize.pickle import PVal, Pickle
-
-          mut deep = PVal.init_int(999)
-          mut d = 0
-          while d < 25:
-              mut wrapper = PVal.init_list()
-              wrapper.list_push(deep)
-              deep = wrapper
-              d = d + 1
-
-          mut deep_b, deep_n = Pickle.dumps_len(deep)
-          print("encoded length: " + str(deep_n))
-          mut deep_back = Pickle.loads(deep_b, deep_n)
-          print("deep_back.is_list() = " + str(deep_back.is_list()))
-          print("deep_back.is_none() = " + str(deep_back.is_none()))
-          print("deep_back.list_len() = " + str(deep_back.list_len()))
-
-          mut walk = deep_back
-          mut wd = 0
-          while wd < 25:
-              print("iter " + str(wd) + ": is_list=" + str(walk.is_list()) + " is_int=" + str(walk.is_int()) + " list_len=" + str(walk.list_len()))
-              walk = walk.list_get(0)
-              wd = wd + 1
-          print("final walk.get_int() = " + str(walk.get_int()))
-          TREOF
-          ./tauraroc --run /tmp/deep_repro.tr; echo "exit=$?"
-          rm -rf build /tmp/deep_repro.tr
 
       - name: DEBUG macOS fresh crash repro v15
         if: runner.os == 'macOS'
