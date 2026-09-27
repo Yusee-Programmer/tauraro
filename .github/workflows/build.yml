@@ -260,10 +260,9 @@ jobs:
               -o "bt" \
               -o "frame select 0" \
               -o "register read" \
-              -o "disassemble --pc --count 20" \
-              -o "frame select 1" \
-              -o "register read" \
-              -o "frame variable" \
+              -o "disassemble --name PVal_list_get" \
+              -o "disassemble --name PVal_map_get" \
+              -o "memory read --size 8 --count 16 --format x \$x0" \
               -o "quit" \
               -c "$CORE" 2>&1
           else
