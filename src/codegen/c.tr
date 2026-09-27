@@ -3570,6 +3570,27 @@ pub class CGenerator:
                 return self._fn_owned_lookup(rt + "." + m)
             case _: return false
 
+    # True for an EMethodCall that is NOT proven owned (_obj_expr_owns_ref) and
+    # not an explicit `-> ref` borrow-call (_expr_is_borrow_call), yet STILL got
+    # its return value retained once -- because it's a real, compiled .tr
+    # function body whose own `return <borrow-yielding-expr>` statement went
+    # through obj_retain_wrap's is_return path (e.g. PVal.list_get's `return
+    # self.items.get(i)`). Excludes a DIRECT call to a builtin collection
+    # accessor (`coll.get(i)`/.first()/.last()) -- those never compile a
+    # `return` statement of their own (no Tauraro function body to inject a
+    # retain into), so nothing retained their result; treating them as owned
+    # here would release a reference nobody added, an over-release confirmed
+    # via a real regression (09_yaml/10_cli/32_prof/35_ini/40_archive all broke
+    # before this exclusion was added).
+    pub def _is_user_borrow_wrapper_call(self, e: Pointer[HirExpr]) -> bool:
+        if _is_invalid_ptr(e as usize): return false
+        match e.read():
+            case HirExpr.EMethodCall(recv, m, _, _):
+                mut rt = hir_expr_type(recv).name
+                if (rt == "Vec" or rt == "List" or rt == "Dict" or rt == "Map" or rt == "Set") and (m == "get" or m == "first" or m == "last"): return false
+                return true
+            case _: return false
+
     # When a heap-class value is STORED into a class FIELD (which now co-owns it and
     # releases it in _trdrop_T), does the store need an extra retain to establish
     # ownership? A fresh construction / owned-classified call TRANSFERS its rc=1 (no
@@ -8332,6 +8353,27 @@ pub class CGenerator:
                                 if self._expr_is_borrow_call(v):
                                     init_s = "_tr_obj_retain(" + init_s + ")"
                                     _owns = true
+                                elif not _owns and self._is_user_borrow_wrapper_call(v):
+                                    # Not an explicit `-> ref` borrow-call, and not proven owned
+                                    # by inference either -- e.g. `cfg_back.map_get("tags")`, a
+                                    # USER-DEFINED wrapper whose OWN body does `return self.items.
+                                    # get(i)` (a Vec/List/Dict/Map/Set accessor). obj_retain_wrap's
+                                    # is_return path ALREADY retained that return once, universally,
+                                    # regardless of how the caller uses it -- so the value bound
+                                    # here already carries a +1. Take ownership (track for scope-
+                                    # exit release) WITHOUT an extra retain here (that would
+                                    # double-retain = a permanent per-call leak); leaving `_owns`
+                                    # false instead would under-count the reverse way (never
+                                    # releasing the retain the callee already added = the same
+                                    # leak, just unowned instead of double-owned). Scoped to
+                                    # _is_user_borrow_wrapper_call (excludes a DIRECT `coll.get(i)`/
+                                    # .first()/.last() call, which never goes through obj_retain_
+                                    # wrap's is_return injection at all -- it's not a compiled .tr
+                                    # function body -- so marking THOSE owned would release a ref
+                                    # nobody retained, an over-release regression confirmed via the
+                                    # local suite: 09_yaml/10_cli/32_prof/35_ini/40_archive all
+                                    # broke when this fix wasn't narrowed to user wrappers only).
+                                    _owns = true
                                 if _owns:
                                     self.class_local_names.insert(n, true)
                         init_s = self.flush_wraps(init_s, false)
@@ -8390,6 +8432,14 @@ pub class CGenerator:
                                     mut _sa_owns = self._obj_expr_owns_ref(v)
                                     if self._expr_is_borrow_call(v):
                                         _sa_rhs = "_tr_obj_retain(" + _sa_rhs + ")"
+                                        _sa_owns = true
+                                    elif not _sa_owns and self._is_user_borrow_wrapper_call(v):
+                                        # Same fix as the SLet path above (see its comment for
+                                        # the full rationale + the over-release regression this
+                                        # is scoped to avoid): a user wrapper like PVal.map_get
+                                        # already got its return retained once by obj_retain_
+                                        # wrap's is_return path — take ownership here (track for
+                                        # release) without an extra retain.
                                         _sa_owns = true
                                     self.w(pad + _sa_cty + " " + _safe_c_varname(n) + " = " + _sa_rhs + ";\n")
                                     if _sa_owns:
