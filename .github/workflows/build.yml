@@ -254,7 +254,7 @@ jobs:
             echo "===== full lldb output size: $(wc -l < /tmp/lldb_full.txt) lines ====="
             echo "===== 250 lines BEFORE the crash return point (<+6824>:) ====="
             grep -n "<+6824>:" /tmp/lldb_full.txt || true
-            LINE=$(grep -n "<+6824>:" /tmp/lldb_full.txt | head -1 | cut -d: -f1)
+            LINE=$(grep -n "<+6824>:" /tmp/lldb_full.txt | tail -1 | cut -d: -f1)
             if [ -n "$LINE" ]; then
               START=$((LINE > 250 ? LINE - 250 : 1))
               sed -n "${START},${LINE}p" /tmp/lldb_full.txt
