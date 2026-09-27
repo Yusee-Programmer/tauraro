@@ -214,12 +214,52 @@ jobs:
           rm -f _z.c _z.o
 
       # -------------------------------------------------------
-      # TEMP DIAGNOSTIC (macOS only): the write_file NUL-truncation fix
-      # (commit 0e42abc) did NOT resolve tests/lang/43_serialize.tr's crash --
-      # need ONE more fresh core dump against THIS exact commit to confirm
-      # whether it's still the same PVal_list_get NULL-self crash (same byte
-      # offset) or something new/different now.
+      # TEMP DIAGNOSTIC (macOS only): full disassembly tracing (v15-v18)
+      # conclusively identified the crash as the VERY FIRST call in the
+      # loop `while wd < 25: walk = walk.list_get(0)` -- i.e. `walk`
+      # (= deep_back, straight off `Pickle.loads(...)`) ALREADY has a NULL
+      # `items` field before the loop even runs once. This points at
+      # Pickle.loads/_pk_decode_at itself for a 25-level-deep nested
+      # structure, not an ARC/retain bug in the loop. Minimal isolated
+      # repro with debug prints at each step to see exactly where it goes
+      # wrong (decode-time vs. walk-time).
       # -------------------------------------------------------
+      - name: DEBUG macOS isolated deep-decode repro v19
+        if: runner.os == 'macOS'
+        shell: bash
+        continue-on-error: true
+        run: |
+          set -x
+          rm -rf build
+          cat > /tmp/deep_repro.tr <<'TREOF'
+          from std.serialize.pickle import PVal, Pickle
+
+          mut deep = PVal.init_int(999)
+          mut d = 0
+          while d < 25:
+              mut wrapper = PVal.init_list()
+              wrapper.list_push(deep)
+              deep = wrapper
+              d = d + 1
+
+          mut deep_b, deep_n = Pickle.dumps_len(deep)
+          print("encoded length: " + str(deep_n))
+          mut deep_back = Pickle.loads(deep_b, deep_n)
+          print("deep_back.is_list() = " + str(deep_back.is_list()))
+          print("deep_back.is_none() = " + str(deep_back.is_none()))
+          print("deep_back.list_len() = " + str(deep_back.list_len()))
+
+          mut walk = deep_back
+          mut wd = 0
+          while wd < 25:
+              print("iter " + str(wd) + ": is_list=" + str(walk.is_list()) + " is_int=" + str(walk.is_int()) + " list_len=" + str(walk.list_len()))
+              walk = walk.list_get(0)
+              wd = wd + 1
+          print("final walk.get_int() = " + str(walk.get_int()))
+          TREOF
+          ./tauraroc --run /tmp/deep_repro.tr; echo "exit=$?"
+          rm -rf build /tmp/deep_repro.tr
+
       - name: DEBUG macOS fresh crash repro v15
         if: runner.os == 'macOS'
         shell: bash
