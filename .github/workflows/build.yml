@@ -226,22 +226,24 @@ jobs:
           CC: "gcc"
           CFLAGS: "-O2 -std=gnu11 -D_GNU_SOURCE -D_XOPEN_SOURCE=700"
           LDFLAGS: "-lm -lpthread -lrt"
+          # BOOTSTRAP_BIN is set (via $GITHUB_ENV, persisting for the rest of
+          # this job) by the earlier "Prepare bootstrap binary" step, so it
+          # can bootstrap stage0 -> tauraroc in the Build step above. Without
+          # this override, run_tests.sh's own `${BOOTSTRAP_BIN:-./tauraroc}`
+          # fallback picks up that STALE env var here too and silently tests
+          # the OLD bootstrap/c/ seed binary instead of the tauraroc JUST
+          # built from this commit's own src/ -- found via an extensive
+          # macOS-only CI investigation where every source-level fix kept
+          # failing to change observed behavior at all, because none of them
+          # were ever actually being tested.
+          BOOTSTRAP_BIN: ""
         run: bash scripts/run_tests.sh
-
-      - name: DEBUG macOS opt_level file dump v21
-        if: runner.os == 'macOS' && always()
-        shell: bash
-        continue-on-error: true
-        run: |
-          echo "===== /tmp/opt_level_debug.txt (grep 43_serialize) ====="
-          grep "43_serialize" /tmp/opt_level_debug.txt || echo "NO 43_serialize ENTRIES FOUND"
-          echo "===== total line count ====="
-          wc -l /tmp/opt_level_debug.txt || echo "FILE DOES NOT EXIST"
-          rm -f /tmp/opt_level_debug.txt
 
       - name: Run regression test suite (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
+        env:
+          BOOTSTRAP_BIN: ""   # see the identical comment on the Linux/macOS step above
         run: ./scripts/run_tests.ps1
 
       # -------------------------------------------------------
