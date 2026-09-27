@@ -256,7 +256,16 @@ jobs:
           CORE=$(ls -t /tmp/cores/core.* 2>/dev/null | head -1)
           if [ -n "$CORE" ]; then
             echo "===== found core file: $CORE ====="
-            lldb --batch -o "bt" -o "quit" -c "$CORE" 2>&1
+            lldb --batch \
+              -o "bt" \
+              -o "frame select 0" \
+              -o "register read" \
+              -o "disassemble --pc --count 20" \
+              -o "frame select 1" \
+              -o "register read" \
+              -o "frame variable" \
+              -o "quit" \
+              -c "$CORE" 2>&1
           else
             echo "===== no core file found ====="
           fi
