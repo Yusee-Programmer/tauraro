@@ -252,11 +252,16 @@ jobs:
               -o "quit" \
               -c "$CORE" > /tmp/lldb_full.txt 2>&1
             echo "===== full lldb output size: $(wc -l < /tmp/lldb_full.txt) lines ====="
-            echo "===== 200 lines BEFORE the crash return point (main+6824) ====="
-            grep -n "main+6824>:" /tmp/lldb_full.txt
-            LINE=$(grep -n "main+6824>:" /tmp/lldb_full.txt | head -1 | cut -d: -f1)
-            START=$((LINE > 200 ? LINE - 200 : 1))
-            sed -n "${START},${LINE}p" /tmp/lldb_full.txt
+            echo "===== 250 lines BEFORE the crash return point (<+6824>:) ====="
+            grep -n "<+6824>:" /tmp/lldb_full.txt || true
+            LINE=$(grep -n "<+6824>:" /tmp/lldb_full.txt | head -1 | cut -d: -f1)
+            if [ -n "$LINE" ]; then
+              START=$((LINE > 250 ? LINE - 250 : 1))
+              sed -n "${START},${LINE}p" /tmp/lldb_full.txt
+            else
+              echo "PATTERN NOT FOUND -- dumping full lldb output instead"
+              cat /tmp/lldb_full.txt
+            fi
           else
             echo "===== no core file found ====="
           fi
