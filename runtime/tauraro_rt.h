@@ -4006,6 +4006,21 @@ _TR_XLINK bool _tr_is_windows(void) {
 #endif
 }
 
+/* True on macOS/arm64 (Apple Silicon). Used to work around a confirmed
+ * Apple clang -O2 miscompile on very large generated C functions (a
+ * ~18KB-of-machine-code single `main()`, e.g. a 92-assertion self-hosted
+ * test file): the identical source compiles and runs correctly at -O1/-O0,
+ * only -O2 corrupts a heap-class field read partway through the function.
+ * Not reproduced on Linux/Windows or with gcc -- narrowly scoped to this
+ * exact toolchain/arch pair so it doesn't mask real -O2 bugs elsewhere. */
+_TR_XLINK bool _tr_is_macos_arm64(void) {
+#if defined(__APPLE__) && defined(__aarch64__)
+    return true;
+#else
+    return false;
+#endif
+}
+
 /* ── Directory operations (cross-platform) ──────────────────────────── */
 #if defined(TAURARO_BARE) && !defined(__wasi__)
 /* Bare targets with no filesystem */
