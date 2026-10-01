@@ -1,0 +1,139 @@
+# tests/lang/53_io_watch.tr - std.io.watch: cross-platform filesystem watcher.
+#
+# Exercises real OS behavior (not just object construction): creates a real
+# temp directory under the test's own CWD, watches it, then programmatically
+# creates/modifies/deletes a file inside it, polling after each operation
+# and asserting the expected FileEvent kinds were observed. Also exercises
+# debouncing: several rapid-fire writes within a debounce window must
+# coalesce into exactly one delivered MODIFIED event.
+#
+# Every wait loop has a hard upper bound (a handful of short poll() calls,
+# a few seconds total) so a bug here can never hang the test suite.
+
+from std.test import TestRunner
+from std.io.watch import Watcher, FileEvent
+from std.io.dir import Dir
+from std.io.file import File
+from std.sys.fs import Fs
+from std.string.str import Str
+
+# Poll up to max_polls times (poll_ms each) until at least one event with
+# the given kind for the given path-substring shows up, or the budget runs
+# out. Returns true iff a matching event was seen. Collects ALL events seen
+# across all polls into `collected` (by-ref via return isn't available for
+# Vec[FileEvent] growth here, so this helper just reports found/not-found;
+# callers that need the raw events poll directly).
+def wait_for_kind(w: Watcher, path_substr: str, kind: int, max_polls: int, poll_ms: int) -> bool:
+    mut i = 0
+    while i < max_polls:
+        mut evs = w.poll(poll_ms)
+        mut j = 0
+        while j < evs.len:
+            mut ev = evs.get(j)
+            if ev.kind == kind and contains_sub(ev.path, path_substr):
+                return true
+            j = j + 1
+        i = i + 1
+    return false
+
+def contains_sub(s: str, sub: str) -> bool:
+    return Str.contains(s, sub)
+
+def main():
+    mut t = TestRunner.init("53_io_watch")
+
+    mut tmp_dir = "tests_lang_53_watch_tmp"
+    # Clean up any stale directory from a previous aborted run.
+    mut stale = Dir.init(tmp_dir)
+    if stale.exists():
+        mut leftover = stale.list()
+        mut li = 0
+        while li < leftover.len:
+            File.write_text(tmp_dir + "/" + leftover.get(li), "")
+            li = li + 1
+
+    t.section("Watcher.watch — registers a real directory")
+    mut d = Dir.init(tmp_dir)
+    t.assert_true(d.make(), "temp watch directory created")
+
+    mut w = Watcher.new()
+    t.assert_true(w.watch(tmp_dir, false, 0), "watch() succeeds on an existing directory")
+    t.assert_false(w.watch("this_path_does_not_exist_53_watch", false, 0), "watch() fails gracefully on a missing path")
+
+    t.section("Watcher.poll — create event")
+    mut file_path = tmp_dir + "/hello.txt"
+    File.write_text(file_path, "v1")
+    mut saw_create = wait_for_kind(w, "hello.txt", FileEvent.CREATED(), 10, 200)
+    t.assert_true(saw_create, "CREATED event observed after File.write_text on a new file (budget: 10 x 200ms = 2s)")
+
+    t.section("Watcher.poll — modify event")
+    File.append_text(file_path, " more data")
+    mut saw_modify = wait_for_kind(w, "hello.txt", FileEvent.MODIFIED(), 10, 200)
+    t.assert_true(saw_modify, "MODIFIED event observed after File.append_text (budget: 10 x 200ms = 2s)")
+
+    t.section("Watcher.poll — delete event")
+    mut deleted_ok = Fs.delete(file_path)
+    t.assert_true(deleted_ok, "file actually removed from disk")
+    mut saw_delete = wait_for_kind(w, "hello.txt", FileEvent.DELETED(), 10, 200)
+    t.assert_true(saw_delete, "DELETED event observed after removing the file (budget: 10 x 200ms = 2s)")
+
+    t.section("Watcher.poll — timeout returns empty, never hangs")
+    mut empty_evs = w.poll(100)
+    t.assert_eq_int(empty_evs.len, 0, "poll() on a quiet directory returns an empty list within its timeout")
+
+    t.section("Watcher.unwatch — stops delivering events for that path")
+    t.assert_true(w.unwatch(tmp_dir), "unwatch() succeeds for a registered path")
+    File.write_text(file_path, "after unwatch")
+    mut saw_after_unwatch = wait_for_kind(w, "hello.txt", FileEvent.CREATED(), 5, 100)
+    t.assert_false(saw_after_unwatch, "no events delivered for a path after unwatch()")
+    Fs.delete(file_path)
+
+    t.section("Watcher.watch with debounce_ms — rapid-fire writes coalesce to one event")
+    mut d2 = Dir.init(tmp_dir)
+    mut w2 = Watcher.new()
+    t.assert_true(w2.watch(tmp_dir, false, 400), "watch() with debounce_ms=400 succeeds")
+
+    mut deb_path = tmp_dir + "/deb.txt"
+    File.write_text(deb_path, "0")
+    # Drain the initial CREATED event (and maybe an immediate debounce-window
+    # modify) before starting the rapid-fire burst, so it doesn't get counted
+    # as one of the coalesced writes below.
+    mut k = 0
+    while k < 6:
+        w2.poll(150)
+        k = k + 1
+
+    # 5 rapid writes, well within the 400ms debounce window (each poll below
+    # is short so the burst completes before any flush).
+    mut b = 0
+    while b < 5:
+        File.append_text(deb_path, "x")
+        b = b + 1
+    # Short, tight polls during the burst window: should see 0 events yet.
+    mut during_evs = w2.poll(50)
+    mut during_count = during_evs.len
+
+    # Now wait past the debounce window for the coalesced flush.
+    mut flush_count = 0
+    mut p = 0
+    while p < 8:
+        mut fevs = w2.poll(150)
+        mut fi = 0
+        while fi < fevs.len:
+            mut fev = fevs.get(fi)
+            if contains_sub(fev.path, "deb.txt"):
+                flush_count = flush_count + 1
+            fi = fi + 1
+        p = p + 1
+
+    t.assert_eq_int(during_count, 0, "no event delivered yet while still inside the debounce window")
+    t.assert_eq_int(flush_count, 1, "5 rapid-fire writes inside the debounce window coalesce into exactly 1 delivered event")
+
+    t.section("cleanup")
+    w.destroy()
+    w2.destroy()
+    Fs.delete(deb_path)
+    t.assert_true(d2.remove(), "temp watch directory removed")
+
+    t.summary()
+
