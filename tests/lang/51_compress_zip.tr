@@ -1,0 +1,190 @@
+# tests/lang/51_compress_zip.tr - std.compress.zip: real on-disk ZIP archive
+# round-trip via Zip.create()/ZipWriter.add_file()/finalize() and
+# Zip.open()/ZipReader.list()/extract(), covering Stored and Deflate
+# methods, an embedded-NUL binary entry (byte-exact round-trip, not
+# strlen-truncated), CRC-32 correctness, corruption detection, and
+# Zip.verify().
+
+from std.test import TestRunner
+from std.compress.zip import Zip, ZipMethod
+from std.io.archive import Crc32
+from std.io.file import File, file_exists
+
+extern "C":
+    def _tr_c_malloc(size: int) -> Pointer[char]
+    def _tr_c_memcpy(dst: Pointer[char], src: Pointer[char], n: int)
+    def _tr_str_wrap_len(s: Pointer[char], blen: int) -> str
+    def _tr_c_fopen(path: str, mode: str) -> Pointer[char]
+    def _tr_c_fclose(fp: Pointer[char]) -> int
+    def _tr_c_fwrite(buf: Pointer[char], size: int, nmemb: int, fp: Pointer[char]) -> int
+
+# Binary-safe whole-file write (explicit length; never strlen) — used only
+# by this test to write a deliberately-corrupted copy of the archive back
+# to disk for the Zip.verify() corruption-detection case below.
+def write_binary_file(path: str, data: str, len_: int):
+    mut fp = _tr_c_fopen(path, "wb")
+    unsafe:
+        _tr_c_fwrite(data as Pointer[char], 1, len_, fp)
+    _tr_c_fclose(fp)
+
+# Build a fresh str of `n` bytes, all equal to `byte_val`, with an explicit
+# tracked length (no NUL dependency either way).
+def make_bytes(n: int, byte_val: int) -> str:
+    mut buf = _tr_c_malloc(n + 1)
+    mut i = 0
+    unsafe:
+        while i < n:
+            buf.offset(i).write((byte_val & 0xFF) as char)
+            i = i + 1
+        buf.offset(n).write('\0')
+    return _tr_str_wrap_len(buf, n)
+
+def main():
+    mut t = TestRunner.init("51_compress_zip")
+    mut zip_path = "test_51_tmp.zip"
+
+    # ── Build an archive with 3+ entries, mixed Stored/Deflate, one with an
+    #    embedded NUL byte ───────────────────────────────────────────────────
+    t.section("ZipWriter: create archive with mixed Stored/Deflate + binary entry")
+
+    mut w = Zip.create(zip_path)
+
+    mut small = "hello world"
+    w.add_file("hello.txt", small, 11, ZipMethod.Stored)
+
+    mut rep = "abcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabc"
+    mut rep_len = 99
+    w.add_file("repeat.txt", rep, rep_len, ZipMethod.Deflate)
+
+    # Embedded-NUL binary payload: "AB\0CD\0\0EF" (9 bytes, two NULs inside).
+    mut nul_buf = _tr_c_malloc(9)
+    unsafe:
+        nul_buf.offset(0).write('A')
+        nul_buf.offset(1).write('B')
+        nul_buf.offset(2).write('\0')
+        nul_buf.offset(3).write('C')
+        nul_buf.offset(4).write('D')
+        nul_buf.offset(5).write('\0')
+        nul_buf.offset(6).write('\0')
+        nul_buf.offset(7).write('E')
+        nul_buf.offset(8).write('F')
+    mut nul_data = _tr_str_wrap_len(nul_buf, 9)
+    mut nul_len = 9
+    w.add_file("binary.dat", nul_data, nul_len, ZipMethod.Stored)
+
+    # A larger, compressible, Deflate-requested entry to exercise the
+    # DEFLATE path with a non-trivial size.
+    mut big = make_bytes(2000, 65)   # 2000 bytes of 'A'
+    mut big_len = 2000
+    w.add_file("big.bin", big, big_len, ZipMethod.Deflate)
+
+    # A fifth entry, empty, Stored.
+    w.add_file("empty.txt", "", 0, ZipMethod.Stored)
+
+    mut ok_finalize = w.finalize()
+    t.assert_true(ok_finalize, "finalize() reports success")
+    t.assert_true(file_exists(zip_path), "archive file exists on disk after finalize()")
+
+    # ── Read it back ─────────────────────────────────────────────────────────
+    t.section("ZipReader: list() reports all entries")
+    mut r = Zip.open(zip_path)
+    t.assert_true(r.ok, "Zip.open() successfully parsed the archive")
+
+    mut entries = r.list()
+    t.assert_eq_int(len(entries), 5, "list() reports 5 entries")
+
+    t.assert_eq_str(entries[0].name, "hello.txt", "entry 0 name")
+    t.assert_eq_str(entries[1].name, "repeat.txt", "entry 1 name")
+    t.assert_eq_str(entries[2].name, "binary.dat", "entry 2 name")
+    t.assert_eq_str(entries[3].name, "big.bin", "entry 3 name")
+    t.assert_eq_str(entries[4].name, "empty.txt", "entry 4 name")
+
+    t.assert_eq_int(entries[0].usize, 11, "hello.txt reported uncompressed size")
+    t.assert_eq_int(entries[2].usize, 9, "binary.dat reported uncompressed size (includes embedded NULs)")
+    t.assert_eq_int(entries[3].usize, 2000, "big.bin reported uncompressed size")
+    t.assert_eq_int(entries[4].usize, 0, "empty.txt reported uncompressed size")
+
+    t.section("ZipReader: CRC-32 values recorded in the archive are correct")
+    t.assert_eq_int(entries[0].crc32, Crc32.compute(small, 11), "hello.txt CRC32 matches recomputed CRC32")
+    t.assert_eq_int(entries[1].crc32, Crc32.compute(rep, rep_len), "repeat.txt CRC32 matches recomputed CRC32")
+    t.assert_eq_int(entries[2].crc32, Crc32.compute(nul_data, nul_len), "binary.dat CRC32 matches recomputed CRC32 (embedded-NUL safe)")
+    t.assert_eq_int(entries[3].crc32, Crc32.compute(big, big_len), "big.bin CRC32 matches recomputed CRC32")
+
+    # ── extract(): byte-exact round-trip, CRC-verified ──────────────────────
+    t.section("ZipReader.extract(): content matches exactly, per entry")
+
+    mut hello_out, hello_len = r.extract("hello.txt")
+    t.assert_eq_str(hello_out, small, "hello.txt content matches exactly")
+    t.assert_eq_int(hello_len, 11, "hello.txt extracted length matches")
+
+    mut rep_out, rep_out_len = r.extract("repeat.txt")
+    t.assert_eq_str(rep_out, rep, "repeat.txt (Deflate) content matches exactly")
+    t.assert_eq_int(rep_out_len, rep_len, "repeat.txt extracted length matches")
+
+    mut nul_out, nul_out_len = r.extract("binary.dat")
+    t.assert_eq_int(nul_out_len, 9, "binary.dat extracted length is 9 (not truncated at the first embedded NUL)")
+    t.assert_eq_str(nul_out, nul_data, "binary.dat content matches exactly, including embedded NUL bytes")
+    # Explicit byte-by-byte check of the embedded NULs themselves.
+    mut nulp = nul_out as Pointer[char]
+    unsafe:
+        t.assert_eq_int(nulp.offset(0).read() as int, 65, "binary.dat byte 0 == 'A'")
+        t.assert_eq_int(nulp.offset(1).read() as int, 66, "binary.dat byte 1 == 'B'")
+        t.assert_eq_int(nulp.offset(2).read() as int, 0, "binary.dat byte 2 == embedded NUL")
+        t.assert_eq_int(nulp.offset(3).read() as int, 67, "binary.dat byte 3 == 'C'")
+        t.assert_eq_int(nulp.offset(4).read() as int, 68, "binary.dat byte 4 == 'D'")
+        t.assert_eq_int(nulp.offset(5).read() as int, 0, "binary.dat byte 5 == embedded NUL")
+        t.assert_eq_int(nulp.offset(6).read() as int, 0, "binary.dat byte 6 == embedded NUL")
+        t.assert_eq_int(nulp.offset(7).read() as int, 69, "binary.dat byte 7 == 'E'")
+        t.assert_eq_int(nulp.offset(8).read() as int, 70, "binary.dat byte 8 == 'F'")
+
+    mut big_out, big_out_len = r.extract("big.bin")
+    t.assert_eq_str(big_out, big, "big.bin (Deflate, 2000 bytes) content matches exactly")
+    t.assert_eq_int(big_out_len, 2000, "big.bin extracted length matches")
+
+    mut empty_out, empty_out_len = r.extract("empty.txt")
+    t.assert_eq_str(empty_out, "", "empty.txt extracts to an empty string")
+    t.assert_eq_int(empty_out_len, 0, "empty.txt extracted length is 0")
+
+    mut missing_out, missing_len = r.extract("does_not_exist.bin")
+    t.assert_eq_str(missing_out, "", "extracting a missing entry returns an empty string")
+    t.assert_eq_int(missing_len, -1, "extracting a missing entry returns length -1 (clear error signal)")
+
+    # ── Zip.verify(): whole-archive CRC sweep ───────────────────────────────
+    t.section("Zip.verify(): intact archive reports no bad entries")
+    mut bad = Zip.verify(zip_path)
+    t.assert_eq_int(len(bad), 0, "verify() finds zero corrupted entries in an intact archive")
+
+    t.section("Zip.verify(): detects a corrupted entry")
+    # Corrupt one byte inside the archive file on disk (flip a byte well
+    # past the local + central directory headers of hello.txt, inside its
+    # STORED payload — local header 30 bytes + 9-byte name = 39, so byte 39
+    # is the first payload byte of entry 0, which sits at file offset 0).
+    mut raw = File.read_text(zip_path)
+    # read_text uses strlen so is not reliable for arbitrary ZIP bytes in
+    # general, but this archive's very first bytes (local header + payload
+    # of hello.txt, a plain ASCII STORED entry) are NUL-free, so it is safe
+    # to locate and flip byte 39 specifically for this corruption test.
+    mut raw_size = File.file_size(zip_path)
+    mut cbuf = _tr_c_malloc(raw_size)
+    unsafe:
+        _tr_c_memcpy(cbuf, raw as Pointer[char], raw_size)
+        mut orig = cbuf.offset(39).read() as int
+        cbuf.offset(39).write(((orig + 1) & 0xFF) as char)
+    mut corrupted = _tr_str_wrap_len(cbuf, raw_size)
+
+    mut corrupt_path = "test_51_tmp_corrupt.zip"
+    write_binary_file(corrupt_path, corrupted, raw_size)
+
+    mut bad2 = Zip.verify(corrupt_path)
+    t.assert_true(len(bad2) >= 1, "verify() reports at least one bad entry in a corrupted archive")
+    if len(bad2) >= 1:
+        t.assert_eq_str(bad2[0], "hello.txt", "verify() names the corrupted entry (hello.txt)")
+
+    t.section("Zip.open(): nonexistent file")
+    mut r_missing = Zip.open("this_file_does_not_exist_51.zip")
+    t.assert_false(r_missing.ok, "opening a nonexistent archive path reports ok == false")
+    mut m_out, m_len = r_missing.extract("anything.txt")
+    t.assert_eq_str(m_out, "", "extract() on an unopened archive returns empty string")
+    t.assert_eq_int(m_len, -1, "extract() on an unopened archive returns length -1")
+
+    t.summary()

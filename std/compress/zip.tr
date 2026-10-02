@@ -1,0 +1,261 @@
+# std.compress.zip — real ZIP archive read/write, as actual files on disk.
+#
+# This is a thin, file-oriented layer over std.io.archive's existing
+# in-memory ZIP container implementation: Crc32 (IEEE 802.3 / PKZIP
+# polynomial 0xEDB88320) and the byte-exact local-file-header / central-
+# directory / end-of-central-directory writer (ByteBuf, the add_file*/
+# finish/open/read_entry logic) are reused as-is — this module does NOT
+# reimplement the ZIP container format or CRC32 from scratch, it only adds
+# Zip.create()/Zip.open() path-based convenience on top, plus an explicit
+# ZipMethod enum and a list()/extract() reader API.
+#
+# NOTE ON NAMING: Tauraro is a unity build (see docs/lang/24_bindgen.md,
+# "Importing a binding") — every `pub` name across every imported module
+# lands in ONE flat, unqualified global namespace, and there is no
+# `import x as y` / qualified-access escape hatch for TYPE names. Since
+# std.io.archive already defines classes literally named `ZipWriter` and
+# `ZipReader` (its own in-memory API), THIS module's path-based classes
+# below are intentionally named `ZipFileWriter`/`ZipFileReader` internally
+# to avoid colliding with those — but `Zip.create()`/`Zip.open()` are the
+# documented, task-facing entry points, so the exact class name rarely
+# matters to callers. (`ZipEntry`/`ZipMethod` are unique to this module and
+# keep their natural names.) `std.compress.mod` re-exports ZipFileWriter/
+# ZipFileReader alongside Zip/ZipEntry/ZipMethod.
+#
+# Compression goes through the same runtime routines std.compress.zlib.Zlib
+# wraps (_tr_deflate/_tr_inflate, via std.io.archive's ZipWriter.add_file())
+# for ZipMethod.Deflate, or no compression at all for ZipMethod.Stored. No
+# new C runtime primitive is introduced here.
+#
+# Usage:
+#   from std.compress.zip import Zip, ZipMethod
+#
+#   mut w = Zip.create("out.zip")
+#   w.add_file("hello.txt", "hello world", 11, ZipMethod.Stored)
+#   w.add_file("data.bin", some_bytes, some_len, ZipMethod.Deflate)
+#   w.finalize()
+#
+#   mut r = Zip.open("out.zip")
+#   for e in r.list():
+#       print(e.name + " " + str(e.usize) + " -> " + str(e.csize))
+#   mut content, clen = r.extract("hello.txt")   # CRC32-verified
+#
+# Note on binary strings: ZIP bytes (headers + compressed data) and the
+# files written/read from disk may contain embedded NUL bytes, so every
+# length here is tracked explicitly — nothing in this file relies on C
+# strlen()/NUL-termination for archive payloads or for the on-disk file
+# itself. File I/O goes through the raw _tr_c_fopen/_tr_c_fread/_tr_c_fwrite
+# externs (the same ones std.io.file.File uses internally) rather than
+# std.io.file.File's own write()/read_text() convenience wrappers, because
+# those wrappers compute the write length via strlen — not length-safe for
+# a binary ZIP blob.
+
+extern "C":
+    def _tr_c_fopen(path: str, mode: str) -> Pointer[char]
+    def _tr_c_fclose(fp: Pointer[char]) -> int
+    def _tr_c_fread(buf: Pointer[char], size: int, nmemb: int, fp: Pointer[char]) -> int
+    def _tr_c_fwrite(buf: Pointer[char], size: int, nmemb: int, fp: Pointer[char]) -> int
+    def _tr_c_fseek(fp: Pointer[char], offset: int, whence: int) -> int
+    def _tr_c_ftell(fp: Pointer[char]) -> int
+    def _tr_c_malloc(size: int) -> Pointer[char]
+    def _tr_str_wrap_len(s: Pointer[char], blen: int) -> str
+
+from std.io.archive import ZipWriter, ZipReader, Crc32
+from std.io.archive import METHOD_STORED, METHOD_DEFLATE
+
+# Compression method for one entry written via ZipFileWriter.add_file().
+pub enum ZipMethod:
+    Stored
+    Deflate
+
+# One entry's metadata as reported by ZipFileReader.list().
+pub class ZipEntry:
+    pub name:   str
+    pub method: int   # METHOD_STORED() or METHOD_DEFLATE() (raw ZIP method id)
+    pub crc32:  int
+    pub csize:  int   # compressed size on disk
+    pub usize:  int   # uncompressed size
+
+# ── ZipFileWriter: builds an archive in memory, then writes it to `path` ───
+
+pub class ZipFileWriter:
+    pub path: str
+    pub w:    ZipWriter   # std.io.archive's in-memory writer, reused as-is
+
+extend ZipFileWriter:
+    pub def init(path: str) -> ZipFileWriter:
+        mut fw = ZipFileWriter()
+        fw.path = path
+        fw.w    = ZipWriter.init()
+        return fw
+
+    # Add one entry. `data` is used as a raw byte buffer of exactly
+    # `data_len` bytes (embedded NULs are fine — never relies on strlen).
+    # method selects Stored (no compression) or Deflate (via
+    # std.compress.zlib's runtime DEFLATE primitive, falling back to Stored
+    # automatically if the runtime build lacks real zlib support — the
+    # written archive is always valid and round-trips either way).
+    pub def add_file(self, name: str, data: str, data_len: int, method: ZipMethod):
+        match method:
+            case ZipMethod.Stored:
+                self.w.add_file_stored(name, data, data_len)
+            case ZipMethod.Deflate:
+                self.w.add_file(name, data, data_len)
+            case _:
+                self.w.add_file_stored(name, data, data_len)
+
+    # Write the central directory + end-of-central-directory record and
+    # flush the complete archive to self.path. Returns true on success.
+    pub def finalize(self) -> bool:
+        mut bytes_ = self.w.finish()
+        mut blen   = self.w.total_len()
+        return _write_binary_file(self.path, bytes_, blen)
+
+# ── ZipFileReader: reads an archive from `path` ─────────────────────────────
+
+pub class ZipFileReader:
+    pub path: str
+    pub ok:   bool   # false if the file couldn't be read or isn't a valid ZIP
+    pub r:    ZipReader   # std.io.archive's in-memory reader, reused as-is
+
+extend ZipFileReader:
+    pub def init(path: str) -> ZipFileReader:
+        mut fr = ZipFileReader()
+        fr.path = path
+        fr.ok   = false
+
+        mut len_box = [0]
+        mut bytes_ = _read_binary_file(path, len_box)
+        if len_box[0] < 0:
+            return fr   # file could not be opened
+
+        fr.r  = ZipReader.open(bytes_, len_box[0])
+        fr.ok = fr.r.ok
+        return fr
+
+    # All entries in the archive, in the order they were written.
+    pub def list(self) -> List[ZipEntry]:
+        mut out: List[ZipEntry] = []
+        if not self.ok: return out
+        mut i = 0
+        while i < self.r.entry_count():
+            mut rec = self.r.entries.get(i)
+            mut e = ZipEntry()
+            e.name   = rec.name
+            e.method = rec.method
+            e.crc32  = rec.crc32
+            e.csize  = rec.csize
+            e.usize  = rec.usize
+            out.append(e)
+            i = i + 1
+        return out
+
+    # Decompress entry `name` and verify its CRC32 against the central
+    # directory's stored value. Returns (bytes, length) — the length is
+    # the true, explicit byte count (never recovered via strlen, since
+    # extracted content may contain embedded NULs). On any failure (entry
+    # not found, local-header mismatch, or CRC32 verification failure) this
+    # prints a clear diagnostic and returns ("", -1) rather than silently
+    # handing back truncated or corrupted bytes.
+    pub def extract(self, name: str) -> (str, int):
+        if not self.ok:
+            print("ZipFileReader.extract: archive was not opened successfully")
+            return ("", -1)
+
+        mut idx = self.r.find_entry(name)
+        if idx < 0:
+            print("ZipFileReader.extract: no entry named '" + name + "' in " + self.path)
+            return ("", -1)
+
+        mut rec = self.r.entries.get(idx)
+        mut content = self.r.read_entry(idx)
+
+        # std.io.archive's read_entry() already CRC32-verifies and returns
+        # "" on mismatch — but "" is also a legitimate result for a
+        # genuinely empty entry, so re-check explicitly here to distinguish
+        # "mismatch" from "really empty" and report a hard, unambiguous error.
+        if rec.usize > 0:
+            mut got_crc = Crc32.compute(content, rec.usize)
+            if got_crc != rec.crc32:
+                print("ZipFileReader.extract: CRC32 mismatch for '" + name + "' in " + self.path + " (expected " + str(rec.crc32) + ", got " + str(got_crc) + ") — archive is corrupted")
+                return ("", -1)
+            return (content, rec.usize)
+
+        return ("", 0)
+
+# ── Zip: path-based entry points ───────────────────────────────────────────
+
+pub class Zip:
+    _dummy: int
+
+extend Zip:
+    pub def create(path: str) -> ZipFileWriter:
+        return ZipFileWriter.init(path)
+
+    pub def open(path: str) -> ZipFileReader:
+        return ZipFileReader.init(path)
+
+    # Open `path` and CRC32-verify every entry without materializing the
+    # whole archive's extracted contents at once in the caller's hands —
+    # each entry is decompressed, checked, and dropped before moving to the
+    # next. Returns the names of any entries that fail verification (empty
+    # list means the archive is fully intact). If the archive itself can't
+    # be opened/parsed, returns a single-element list naming that failure.
+    pub def verify(path: str) -> List[str]:
+        mut bad: List[str] = []
+        mut fr = ZipFileReader.init(path)
+        if not fr.ok:
+            bad.append("<archive could not be opened or parsed: " + path + ">")
+            return bad
+
+        mut i = 0
+        while i < fr.r.entry_count():
+            mut rec = fr.r.entries.get(i)
+            mut content = fr.r.read_entry(i)
+            if rec.usize > 0:
+                mut got_crc = Crc32.compute(content, rec.usize)
+                if got_crc != rec.crc32:
+                    bad.append(rec.name)
+            i = i + 1
+        return bad
+
+# ── Binary-safe whole-file read/write (explicit length, never strlen) ──────
+
+# Write exactly `len_` bytes of `data` to `path`, overwriting any existing
+# file. Returns true on success.
+def _write_binary_file(path: str, data: str, len_: int) -> bool:
+    mut fp = _tr_c_fopen(path, "wb")
+    if fp as int == 0: return false
+    if len_ > 0:
+        unsafe:
+            _tr_c_fwrite(data as Pointer[char], 1, len_, fp)
+    _tr_c_fclose(fp)
+    return true
+
+# Read the whole file at `path` into a fresh, explicitly-length-tracked str.
+# Writes the true byte length into out_len[0], or -1 if the file could not
+# be opened (out_len must be a 1-element List[int] out-param, mirroring
+# std.serialize.pickle's own List[int]-out-param convention).
+def _read_binary_file(path: str, out_len: List[int]) -> str:
+    mut fp = _tr_c_fopen(path, "rb")
+    if fp as int == 0:
+        out_len[0] = -1
+        return ""
+
+    _tr_c_fseek(fp, 0, 2)
+    mut size = _tr_c_ftell(fp)
+    _tr_c_fseek(fp, 0, 0)
+
+    if size <= 0:
+        _tr_c_fclose(fp)
+        out_len[0] = 0
+        return ""
+
+    mut buf = _tr_c_malloc(size + 1)
+    unsafe:
+        _tr_c_fread(buf, 1, size, fp)
+        buf.offset(size).write('\0')
+    _tr_c_fclose(fp)
+
+    out_len[0] = size
+    return _tr_str_wrap_len(buf, size)
