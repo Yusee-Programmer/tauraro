@@ -1,0 +1,267 @@
+# std.test.fuzz — Property-based / fuzz testing, built on std.math.random.Random
+# (no PRNG reimplementation here -- see std/math/random.tr).
+#
+# Usage:
+#   from std.test.fuzz import Fuzzer, FuzzResult
+#
+#   def prop_add_commutes(x: int) -> bool:
+#       return x + 1 == 1 + x
+#
+#   def main():
+#       mut gen = Fuzzer.ints(-1000, 1000)
+#       mut res = gen.check(prop_add_commutes, 500, 0)   # seed=0 -> auto-seed
+#       if not res.ok:
+#           print(f"counterexample: {res.counterexample_str}, seed={res.seed}")
+#
+# CRITICAL REPRODUCIBILITY GUARANTEE: every check() run is seeded, either
+# explicitly (pass a non-zero seed) or auto-generated from the clock (pass 0,
+# the actual seed used is reported back on FuzzResult.seed). Re-running
+# check() with that SAME seed against the SAME property function reproduces
+# the exact same sequence of generated inputs and lands on the exact same
+# counterexample if one exists -- see tests/lang/56_test_extensions.tr for an
+# explicit test of this property. This only holds if the property function
+# itself is pure (deterministic, no hidden state/IO) -- same as any fuzzer.
+
+from std.math.random import Random
+from std.core.vec import Vec
+
+extern "C":
+    def _tr_timestamp() -> int
+    def _tr_int_to_str(n: int) -> str
+
+# Outcome of a Fuzzer.check() run over int inputs.
+pub class FuzzResult:
+    pub ok:                 bool    # true: property held for every input tried
+    pub iterations_run:     int
+    pub seed:               int     # the ACTUAL seed used -- reuse this to reproduce
+    pub counterexample:     int     # valid only when ok == false
+    pub counterexample_str: str     # human-readable rendering of the counterexample
+
+extend FuzzResult:
+    pub def report(self) -> str:
+        if self.ok:
+            return f"property held for all {_tr_int_to_str(self.iterations_run)} inputs (seed={_tr_int_to_str(self.seed)})"
+        return f"counterexample found after {_tr_int_to_str(self.iterations_run)} inputs: {self.counterexample_str} (seed={_tr_int_to_str(self.seed)})"
+
+# Generates random ints in [min, max] and drives Fuzzer.check over them.
+pub class Fuzzer:
+    pub lo: int
+    pub hi: int
+
+extend Fuzzer:
+    # Build an int generator over the inclusive range [min, max].
+    pub def ints(min: int, max: int) -> Fuzzer:
+        mut f = Fuzzer()
+        f.lo = min
+        f.hi = max
+        if f.hi < f.lo: f.hi = f.lo
+        return f
+
+    # Generate one random int in [lo, hi]. Exposed so this generator can be
+    # composed into a ListFuzzer[int] via .as_gen() + ListFuzzer.lists().
+    pub def gen_one(self, rng: Random) -> int:
+        return rng.randint(self.lo, self.hi)
+
+    # Run `property_fn` against `iterations` random ints in [lo, hi].
+    # `seed`: pass a specific non-zero seed to reproduce a prior run exactly,
+    # or 0 to auto-generate one from the clock (reported back on the result
+    # so the caller can log/reuse it).
+    pub def check(self, property_fn: def(int) -> bool, iterations: int, seed: int) -> FuzzResult:
+        mut actual_seed = seed
+        if actual_seed == 0:
+            actual_seed = _tr_timestamp()
+            if actual_seed == 0: actual_seed = 1   # Random.new(0) re-seeds to 12345 anyway; keep it explicit
+        mut rng = Random.new(actual_seed)
+
+        mut iters = iterations
+        if iters < 1: iters = 1
+
+        mut result = FuzzResult()
+        result.ok             = true
+        result.seed            = actual_seed
+        result.counterexample = 0
+        result.counterexample_str = ""
+
+        mut i = 0
+        while i < iters:
+            mut input = self.gen_one(rng)
+            if not property_fn(input):
+                result.ok             = false
+                result.iterations_run = i + 1
+                result.counterexample = input
+                result.counterexample_str = _tr_int_to_str(input)
+                return result
+            i = i + 1
+
+        result.iterations_run = iters
+        return result
+
+    # This generator as a plain `def(Random) -> int` closure value, for
+    # composing into ListFuzzer[int] via ListFuzzer.lists().
+    pub def as_gen(self) -> def(Random) -> int:
+        mut self_ref = self
+        return def (rng: Random) -> int:
+            return self_ref.gen_one(rng)
+
+# ── String generation ─────────────────────────────────────────────────────────
+#
+# Strings are generated from a deliberately "nasty" mix to catch off-by-one
+# and edge-case bugs: empty strings, single characters, ASCII letters/digits,
+# whitespace, and punctuation/symbol characters. They deliberately do NOT
+# include embedded NUL bytes: Tauraro's `str` is still NUL-bounded through
+# most of the runtime string-op surface (see MEMORY: TrStr gained a real len
+# field so .len()/==/+ are NUL-safe, but e.g. C-string interop / Pointer[char]
+# walks like TestRunner.assert_contains above are not) -- generating NULs here
+# would produce "failures" that are really just fuzz-harness artifacts, not
+# real property violations in the code under test.
+
+pub class StrFuzzer:
+    pub max_len: int
+
+extend StrFuzzer:
+    pub def strings(max_len: int) -> StrFuzzer:
+        mut f = StrFuzzer()
+        f.max_len = max_len
+        if f.max_len < 0: f.max_len = 0
+        return f
+
+    # Generate one random string of length in [0, max_len].
+    # Weighted so empty and very short strings show up often (cheap, common
+    # edge cases), not just "typical" medium-length strings.
+    pub def gen_one(self, rng: Random) -> str:
+        mut roll = rng.randint(0, 9)
+        mut len_ = 0
+        if roll == 0:
+            len_ = 0                               # empty, ~10% of the time
+        elif roll <= 2:
+            len_ = rng.randint(1, 2)               # very short, ~20%
+        else:
+            len_ = rng.randint(0, self.max_len)    # full range otherwise
+
+        mut buf = ""
+        mut i = 0
+        while i < len_:
+            buf = buf + self._rand_char(rng)
+            i = i + 1
+        return buf
+
+    # One random "interesting" character: letters, digits, whitespace, and
+    # ASCII punctuation/symbols -- but never NUL (see module header).
+    pub def _rand_char(self, rng: Random) -> str:
+        mut class_ = rng.randint(0, 3)
+        mut code = 65
+        if class_ == 0:
+            code = rng.randint(65, 90)      # A-Z
+        elif class_ == 1:
+            code = rng.randint(97, 122)     # a-z
+        elif class_ == 2:
+            code = rng.randint(48, 57)      # 0-9
+        else:
+            # punctuation/symbols/space, skipping NUL and other C0 controls
+            code = rng.randint(33, 47)
+        return chr(code).to_str()
+
+    pub def check(self, property_fn: def(str) -> bool, iterations: int, seed: int) -> FuzzResult:
+        mut actual_seed = seed
+        if actual_seed == 0:
+            actual_seed = _tr_timestamp()
+            if actual_seed == 0: actual_seed = 1
+        mut rng = Random.new(actual_seed)
+
+        mut iters = iterations
+        if iters < 1: iters = 1
+
+        mut result = FuzzResult()
+        result.ok             = true
+        result.seed            = actual_seed
+        result.counterexample = 0
+        result.counterexample_str = ""
+
+        mut i = 0
+        while i < iters:
+            mut input = self.gen_one(rng)
+            if not property_fn(input):
+                result.ok             = false
+                result.iterations_run = i + 1
+                result.counterexample_str = input
+                return result
+            i = i + 1
+
+        result.iterations_run = iters
+        return result
+
+    # This generator as a plain `def(Random) -> str` closure value, for
+    # composing into ListFuzzer[str] via ListFuzzer.lists().
+    pub def as_gen(self) -> def(Random) -> str:
+        mut self_ref = self
+        return def (rng: Random) -> str:
+            return self_ref.gen_one(rng)
+
+# ── Composing generators: random lists of generated values ───────────────────
+#
+# A "generator" here is just a plain closure `def(Random) -> T` -- Fuzzer.ints
+# and StrFuzzer.strings both expose `.as_gen()` to hand you one. ListFuzzer[T]
+# wraps such a generator and produces `Vec[T]` inputs (length in [0, max_len],
+# weighted toward small lists -- empty and 1-element lists are common, cheap
+# edge cases) for Fuzzer.lists()-style property checks.
+pub class ListFuzzer[T]:
+    pub elem_gen: def(Random) -> T
+    pub max_len:  int
+
+extend ListFuzzer[T]:
+    # Build a list generator from an element generator closure (see
+    # Fuzzer.ints(...).as_gen() / StrFuzzer.strings(...).as_gen()).
+    pub def lists(generator: def(Random) -> T, max_len: int) -> ListFuzzer[T]:
+        mut f = ListFuzzer[T]()
+        f.elem_gen = generator
+        f.max_len  = max_len
+        if f.max_len < 0: f.max_len = 0
+        return f
+
+    # Generate one random Vec[T], length in [0, max_len] (weighted small).
+    pub def gen_one(self, rng: Random) -> Vec[T]:
+        mut roll = rng.randint(0, 9)
+        mut len_ = 0
+        if roll == 0:
+            len_ = 0
+        elif roll <= 2:
+            len_ = 1
+        else:
+            len_ = rng.randint(0, self.max_len)
+
+        mut out = Vec[T].init(len_ + 1)
+        mut i = 0
+        while i < len_:
+            out.push(self.elem_gen(rng))
+            i = i + 1
+        return out
+
+    # Run `property_fn` against `iterations` random Vec[T] inputs.
+    pub def check(self, property_fn: def(Vec[T]) -> bool, iterations: int, seed: int) -> FuzzResult:
+        mut actual_seed = seed
+        if actual_seed == 0:
+            actual_seed = _tr_timestamp()
+            if actual_seed == 0: actual_seed = 1
+        mut rng = Random.new(actual_seed)
+
+        mut iters = iterations
+        if iters < 1: iters = 1
+
+        mut result = FuzzResult()
+        result.ok             = true
+        result.seed            = actual_seed
+        result.counterexample = 0
+        result.counterexample_str = ""
+
+        mut i = 0
+        while i < iters:
+            mut input = self.gen_one(rng)
+            if not property_fn(input):
+                result.ok             = false
+                result.iterations_run = i + 1
+                result.counterexample_str = f"<list of {_tr_int_to_str(input.len)} elements>"
+                return result
+            i = i + 1
+
+        result.iterations_run = iters
+        return result

@@ -1,0 +1,144 @@
+# std.test.bench — Micro-benchmark harness built on a nanosecond-resolution
+# monotonic timer (_tr_perf_counter_ns, runtime/tauraro_rt.h).
+#
+# std.sys.time.Clock is only millisecond-resolution (QueryPerformanceCounter /
+# CLOCK_MONOTONIC scaled to ms), which is far too coarse for timing fast
+# operations — a sub-millisecond op would read back as 0ms. Bench uses its
+# own nanosecond timer instead.
+#
+# Usage:
+#   from std.test.bench import Bench
+#
+#   def main():
+#       mut r1 = Bench.run("tight loop", my_fn, 100000)
+#       print(r1.report())
+#
+#       mut r2 = Bench.auto("tight loop (auto)", my_fn, 200)   # ~200ms budget
+#       print(r2.report())
+#
+#       print(Bench.compare(r1, r2))
+
+extern "C":
+    def _tr_perf_counter_ns() -> int
+    def _tr_int_to_str(n: int) -> str
+    def _tr_float_to_str(n: float) -> str
+
+# Result of a single benchmark run.  All duration fields are in nanoseconds.
+pub class BenchResult:
+    pub name:       str
+    pub iterations: int
+    pub total_ns:   int
+    pub mean_ns:    int
+    pub min_ns:     int
+    pub max_ns:     int
+
+extend BenchResult:
+    # Operations per second implied by the mean per-iteration time.
+    pub def ops_per_sec(self) -> float:
+        if self.mean_ns <= 0: return 0.0
+        return 1000000000.0 / (self.mean_ns as float)
+
+    # One-line human-readable summary.
+    pub def report(self) -> str:
+        mut ops = self.ops_per_sec()
+        return f"{self.name}: {_tr_int_to_str(self.iterations)} iters, " +
+               f"mean={_tr_int_to_str(self.mean_ns)}ns min={_tr_int_to_str(self.min_ns)}ns " +
+               f"max={_tr_int_to_str(self.max_ns)}ns ({_tr_float_to_str(ops)} ops/sec)"
+
+pub class Bench:
+    pub _unused: int
+
+extend Bench:
+    # Run `fn` exactly `iterations` times back-to-back, timing each call
+    # individually so min/max are meaningful (not just a total/N average).
+    pub def run(name: str, fn: def() -> void, iterations: int) -> BenchResult:
+        mut iters = iterations
+        if iters < 1: iters = 1
+        mut total: int = 0
+        mut min_ns: int = -1
+        mut max_ns: int = 0
+        mut i = 0
+        while i < iters:
+            mut t0 = _tr_perf_counter_ns()
+            fn()
+            mut t1 = _tr_perf_counter_ns()
+            mut dt = t1 - t0
+            if dt < 0: dt = 0   # timer must be monotonic, but guard anyway
+            total = total + dt
+            if min_ns < 0 or dt < min_ns: min_ns = dt
+            if dt > max_ns: max_ns = dt
+            i = i + 1
+        if min_ns < 0: min_ns = 0
+        mut result = BenchResult()
+        result.name       = name
+        result.iterations = iters
+        result.total_ns   = total
+        result.mean_ns     = total / iters
+        result.min_ns      = min_ns
+        result.max_ns      = max_ns
+        return result
+
+    # Run `fn` repeatedly for approximately `target_ms` wall-clock milliseconds,
+    # auto-calibrating the iteration count (similar in spirit to Go's testing.B)
+    # instead of requiring the caller to guess a good iteration count up front.
+    #
+    # Strategy: start with a small calibration batch, measure its wall time,
+    # then extrapolate how many iterations are needed to fill target_ms, and
+    # finally run a real (timed-per-call) pass with that iteration count via
+    # Bench.run so min/max are still meaningful.
+    pub def auto(name: str, fn: def() -> void, target_ms: int) -> BenchResult:
+        mut budget_ns = target_ms * 1000000
+        if budget_ns < 1000000: budget_ns = 1000000   # floor: 1ms
+
+        # ── Calibration pass: find an iteration count that takes a
+        # measurable (non-zero) amount of wall time. ──
+        mut calib_iters = 1
+        mut calib_ns    = 0
+        while calib_ns < 1000000 and calib_iters < 1000000000:   # grow until >=1ms or absurd
+            mut t0 = _tr_perf_counter_ns()
+            mut i = 0
+            while i < calib_iters:
+                fn()
+                i = i + 1
+            mut t1 = _tr_perf_counter_ns()
+            calib_ns = t1 - t0
+            if calib_ns < 1000000:
+                calib_iters = calib_iters * 4
+
+        # ── Extrapolate iteration count to fill the requested budget. ──
+        mut per_iter_ns = calib_ns / calib_iters
+        if per_iter_ns < 1: per_iter_ns = 1
+        mut target_iters = budget_ns / per_iter_ns
+        if target_iters < 1: target_iters = 1
+
+        return Bench.run(name, fn, target_iters)
+
+    # Compare a candidate benchmark result against a baseline and report
+    # whether the difference is a statistically meaningful speedup/slowdown
+    # or within normal measurement noise. `margin_pct` is the noise
+    # threshold (e.g. 10 means +/-10% is considered noise); pass 0 to use
+    # the default of 10%.
+    pub def compare(baseline: BenchResult, candidate: BenchResult, margin_pct: int) -> str:
+        mut margin = margin_pct
+        if margin <= 0: margin = 10
+
+        if baseline.mean_ns <= 0:
+            return f"{candidate.name} vs {baseline.name}: baseline mean is 0, cannot compare"
+
+        mut delta = candidate.mean_ns - baseline.mean_ns
+        mut pct_x100 = (delta * 10000) / baseline.mean_ns   # percent * 100, integer math
+        mut pct = (pct_x100 as float) / 100.0
+        mut abs_pct_x100 = pct_x100
+        if abs_pct_x100 < 0: abs_pct_x100 = 0 - abs_pct_x100
+
+        mut verdict = "within noise (no significant change)"
+        if abs_pct_x100 > margin * 100:
+            if delta > 0:
+                verdict = "SLOWER"
+            else:
+                verdict = "FASTER"
+
+        mut sign = "+"
+        if pct < 0.0: sign = ""
+        return f"{candidate.name} vs {baseline.name}: {sign}{_tr_float_to_str(pct)}% " +
+               f"(baseline mean={_tr_int_to_str(baseline.mean_ns)}ns, candidate mean={_tr_int_to_str(candidate.mean_ns)}ns) — {verdict}"

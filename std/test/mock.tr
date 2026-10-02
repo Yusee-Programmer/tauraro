@@ -1,0 +1,132 @@
+# std.test.mock — Call-recording / stub helper for unit tests.
+#
+# Tauraro is statically typed with no Python-style dynamic monkey-patching or
+# reflection: there is no way to reach into an *existing* function or object
+# and silently replace its behavior at runtime. What IS possible — and all
+# this module does — is "inject a mock VALUE": you build a `Mock[A, R]`
+# instance (a plain heap object, recording calls like any other object) and
+# pass IT directly anywhere your code already accepts a value with a `.call(arg)`
+# method, OR drive it manually in a test and assert on what was recorded (see
+# std/async/task.tr and tests/closure_clang.tr for how this codebase threads
+# callables-as-values around generally). Your production code has to be
+# written to accept a callable/mock-shaped value in the first place; Mock
+# cannot intercept a call to some unrelated, already-compiled function by name.
+#
+# Mock[A, R] models a single-argument callable `def(A) -> R`. For multi-
+# argument call sites, pick an A that bundles what you need (a small class,
+# or a tuple type) — see tests/lang/56_test_extensions.tr for a worked
+# example.
+#
+# NOT PROVIDED: a `.as_fn()` that wraps a Mock in a bare `def(A) -> R` closure
+# value (so it could be passed where a *plain callable*, not a Mock, is
+# expected). This was attempted and deliberately removed: any closure that
+# captures a local (`self`) and is then RETURNED from the function that
+# created it crashes on invocation (access violation) — a real, general,
+# pre-existing compiler bug confirmed independently of Mock (minimal repro:
+# a plain `Holder` class with a `make_getter(self) -> def()->int` method that
+# captures `self_ref = self` and returns a closure over it; calling the
+# returned closure after the method returns segfaults). Root cause: closure
+# captures always lower to a pointer into the DEFINING function's stack frame
+# (`&self_ref` in codegen/c.tr's gen_closure, both the stack- and heap-env
+# forms), which is sound for closures that stay within their defining scope
+# (the existing, working pattern — see tests/closure_clang.tr) but is a
+# dangling pointer for closures that escape by being returned. Fixing this
+# generally is a nontrivial codegen change (captured-by-value heap semantics
+# for escaping closures) out of scope for this task; flagged here rather than
+# shipping a feature that crashes. Pass the Mock instance itself instead.
+#
+# Usage:
+#   from std.test.mock import Mock
+#
+#   mut m = Mock[int, int].init()
+#   m.returns(42)                 # canned return value
+#   print(m.call(7))              # 42 -- recorded: call_count=1, args=[7]
+#   print(m.call(9))              # 42 -- recorded: call_count=2, args=[7, 9]
+#   t.assert_eq_int(m.call_count, 2, "called twice")
+#   t.assert_true(m.assert_called_with(9), "last call used 9")
+#
+#   # Or substitute a closure for more complex behavior:
+#   mut doubler = Mock[int, int].init()
+#   doubler.with_impl(def (x: int) -> int: return x * 2)
+#   print(doubler.call(21))       # 42
+
+from std.core.vec import Vec
+
+pub class Mock[A, R]:
+    pub call_count:   int
+    pub calls:        Vec[A]
+    pub has_return:   bool
+    pub return_value: R
+    pub has_impl:      bool
+    pub impl:          def(A) -> R
+
+extend Mock[A, R]:
+    pub def init() -> Mock[A, R]:
+        mut m = Mock[A, R]()
+        m.call_count   = 0
+        m.calls        = Vec[A].init(4)
+        m.has_return   = false
+        m.has_impl     = false
+        return m
+
+    # ── Configuration ─────────────────────────────────────────────────────────
+
+    # Configure a canned return value used by every subsequent call() that
+    # doesn't have a replacement closure installed via with_impl().
+    pub def returns(self, value: R):
+        self.return_value = value
+        self.has_return   = true
+
+    # Install a replacement closure: call() will invoke this instead of
+    # returning the canned value, for arbitrarily complex mock behavior
+    # (varying return per call, raising via throws, side effects, etc).
+    pub def with_impl(self, fn: def(A) -> R):
+        self.impl     = fn
+        self.has_impl = true
+
+    # Forget all recorded calls (keeps the configured return/impl).
+    pub def reset_calls(self):
+        self.call_count = 0
+        self.calls      = Vec[A].init(4)
+
+    # ── Invocation ───────────────────────────────────────────────────────────
+
+    # Record this call's argument, then return either the configured
+    # closure's result or the canned return value.
+    pub def call(self, arg: A) -> R:
+        self.calls.push(arg)
+        self.call_count = self.call_count + 1
+        if self.has_impl:
+            return self.impl(arg)
+        return self.return_value
+
+    # ── Assertions / introspection ────────────────────────────────────────────
+
+    pub def was_called(self) -> bool:
+        return self.call_count > 0
+
+    pub def was_called_times(self, n: int) -> bool:
+        return self.call_count == n
+
+    # True iff the most recent call's argument equals `arg`.
+    pub def assert_called_with(self, arg: A) -> bool:
+        if self.calls.len == 0: return false
+        return self.calls.get(self.calls.len - 1) == arg
+
+    # True iff ANY recorded call used this exact argument.
+    pub def was_called_with_any(self, arg: A) -> bool:
+        mut i = 0
+        while i < self.calls.len:
+            if self.calls.get(i) == arg: return true
+            i = i + 1
+        return false
+
+    # The argument from the most recent call. Caller must check
+    # was_called() first (returns a zero-initialized A if never called,
+    # which for class types is an empty/uninit instance -- don't rely on it).
+    pub def last_call_args(self) -> A:
+        return self.calls.get(self.calls.len - 1)
+
+    # The argument from the Nth call (0-indexed).
+    pub def nth_call_args(self, n: int) -> A:
+        return self.calls.get(n)
