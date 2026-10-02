@@ -1,0 +1,513 @@
+# std.math.linalg — Vector/Matrix linear algebra.
+#
+# `Vector` is a dynamically-sized, f64-element column vector backed by a
+# Vec[float] (see std/core/vec.tr — same raw-buffer-plus-len/capacity idiom
+# used by every other dynamic collection in std). `Matrix` is a row-major
+# rows*cols grid of f64 elements, also backed by a flat Vec[float] (element
+# (r, c) lives at index r*cols + c) rather than a Vec of row-Vecs — this
+# keeps every element one pointer-arithmetic hop away instead of two, and
+# avoids a jagged-array shape that the dimension-checked API below never
+# actually needs.
+#
+# Error-handling policy (matches this module's two genuinely different kinds
+# of "can't do that"):
+#   - Dimension MISMATCHES (adding a 2x3 to a 3x2, `cross()` on a non-3D
+#     vector, indexing out of range, multiplying incompatible shapes) are
+#     programmer errors — the shapes are known statically at the call site,
+#     so there is no reasonable caller that would want a silent wrong answer
+#     back. These call `_tr_panic` (same runtime trap every other
+#     out-of-bounds/invariant violation in this codebase uses) rather than
+#     returning a sentinel.
+#   - A SINGULAR matrix passed to `.inverse()` is a legitimate runtime
+#     outcome that depends on the *data*, not just the shape — any NxN
+#     matrix is a valid inverse() call site, some data just has no inverse.
+#     That's the "no valid result" case std/collections/trie.tr's `.get()`
+#     signals with `Option[V]`, so `.inverse()` returns `Option[Matrix]`:
+#     `Option.None()` for a singular (or near-singular, within a small
+#     pivot-magnitude tolerance) matrix, `Option.Some(inv)` otherwise.
+
+from std.core.vec import Vec
+from std.math.float import FloatMath
+from std.gpu.buffer import Buffer
+
+# Gaussian-elimination pivot values with |pivot| at or below this are treated
+# as zero (singular). Using an exact 0.0 compare is not safe for floating
+# point — accumulated rounding error from prior elimination steps can leave
+# a "should be zero" pivot as e.g. 1e-17 instead of exactly 0.0.
+const _EPS = 0.0000000001
+
+extern "C":
+    def _tr_panic(msg: str)
+
+# ── Vector ───────────────────────────────────────────────────────────────────
+
+pub class Vector:
+    pub data: Vec[float]
+
+extend Vector:
+    # ── Construction ──────────────────────────────────────────────────────────
+
+    # `size` zero-initialized elements.
+    pub def init(size: int) -> Vector:
+        mut d = Vec[float].init(size)
+        mut i = 0
+        while i < size:
+            d.push(0.0)
+            i = i + 1
+        mut v = Vector()
+        v.data = d
+        return v
+
+    pub def from_list(xs: List[float]) -> Vector:
+        mut n = xs.len()
+        mut d = Vec[float].init(n)
+        mut i = 0
+        while i < n:
+            d.push(xs[i])
+            i = i + 1
+        mut v = Vector()
+        v.data = d
+        return v
+
+    # ── Access ────────────────────────────────────────────────────────────────
+
+    pub def len(self) -> int:
+        return self.data.len
+
+    pub def get(self, i: int) -> float:
+        if i < 0 or i >= self.data.len:
+            _tr_panic("Vector.get: index out of range")
+        return self.data.get(i)
+
+    pub def set(self, i: int, val: float):
+        if i < 0 or i >= self.data.len:
+            _tr_panic("Vector.set: index out of range")
+        self.data.set(i, val)
+
+    pub def clone(self) -> Vector:
+        mut v = Vector()
+        v.data = self.data.clone()
+        return v
+
+    # ── Elementwise arithmetic ────────────────────────────────────────────────
+
+    pub def add(self, other: Vector) -> Vector:
+        if self.data.len != other.data.len:
+            _tr_panic("Vector.add: dimension mismatch")
+        mut out = Vector.init(self.data.len)
+        mut i = 0
+        while i < self.data.len:
+            out.data.set(i, self.data.get(i) + other.data.get(i))
+            i = i + 1
+        return out
+
+    pub def sub(self, other: Vector) -> Vector:
+        if self.data.len != other.data.len:
+            _tr_panic("Vector.sub: dimension mismatch")
+        mut out = Vector.init(self.data.len)
+        mut i = 0
+        while i < self.data.len:
+            out.data.set(i, self.data.get(i) - other.data.get(i))
+            i = i + 1
+        return out
+
+    pub def scale(self, k: float) -> Vector:
+        mut out = Vector.init(self.data.len)
+        mut i = 0
+        while i < self.data.len:
+            out.data.set(i, self.data.get(i) * k)
+            i = i + 1
+        return out
+
+    # ── Products / norms ──────────────────────────────────────────────────────
+
+    pub def dot(self, other: Vector) -> float:
+        if self.data.len != other.data.len:
+            _tr_panic("Vector.dot: dimension mismatch")
+        mut acc = 0.0
+        mut i = 0
+        while i < self.data.len:
+            acc = acc + self.data.get(i) * other.data.get(i)
+            i = i + 1
+        return acc
+
+    # Euclidean (L2) norm.
+    pub def norm(self) -> float:
+        return FloatMath.sqrt(self.dot(self))
+
+    # Unit-length vector in the same direction. Panics on a zero vector
+    # (there is no direction to normalize to — a silently-returned zero
+    # vector back would hide a bug at the call site, same reasoning as the
+    # dimension-mismatch panics above).
+    pub def normalize(self) -> Vector:
+        mut n = self.norm()
+        if n <= _EPS:
+            _tr_panic("Vector.normalize: zero-length vector")
+        return self.scale(1.0 / n)
+
+    # 3D cross product. Only defined for 3-element vectors — asserts
+    # (panics) clearly on any other dimension rather than silently computing
+    # a wrong-shape answer.
+    pub def cross(self, other: Vector) -> Vector:
+        if self.data.len != 3 or other.data.len != 3:
+            _tr_panic("Vector.cross: both operands must be 3-dimensional")
+        mut ax = self.data.get(0)
+        mut ay = self.data.get(1)
+        mut az = self.data.get(2)
+        mut bx = other.data.get(0)
+        mut by = other.data.get(1)
+        mut bz = other.data.get(2)
+        mut out = Vector.init(3)
+        out.data.set(0, ay * bz - az * by)
+        out.data.set(1, az * bx - ax * bz)
+        out.data.set(2, ax * by - ay * bx)
+        return out
+
+    # ── Misc ──────────────────────────────────────────────────────────────────
+
+    pub def __str__(self) -> str:
+        mut out = "["
+        mut i = 0
+        while i < self.data.len:
+            if i > 0: out = out + ", "
+            out = out + str(self.data.get(i))
+            i = i + 1
+        return out + "]"
+
+# ── Matrix ───────────────────────────────────────────────────────────────────
+
+pub class Matrix:
+    pub data: Vec[float]   # row-major: element (r, c) at data[r*cols + c]
+    pub nrows: int
+    pub ncols: int
+
+extend Matrix:
+    # ── Construction ──────────────────────────────────────────────────────────
+
+    pub def init(rows: int, cols: int) -> Matrix:
+        mut n = rows * cols
+        mut d = Vec[float].init(n)
+        mut i = 0
+        while i < n:
+            d.push(0.0)
+            i = i + 1
+        mut m = Matrix()
+        m.data  = d
+        m.nrows = rows
+        m.ncols = cols
+        return m
+
+    pub def identity(n: int) -> Matrix:
+        mut m = Matrix.init(n, n)
+        mut i = 0
+        while i < n:
+            m.set(i, i, 1.0)
+            i = i + 1
+        return m
+
+    # Build from a (possibly ragged) List of row-Lists. Every row must have
+    # the same length — a ragged input is a malformed-literal programmer
+    # error, so it panics rather than silently padding/truncating.
+    pub def from_rows(rows_in: List[List[float]]) -> Matrix:
+        mut nr = rows_in.len()
+        if nr == 0:
+            _tr_panic("Matrix.from_rows: no rows")
+        mut row0: List[float] = rows_in[0]
+        mut nc = row0.len()
+        mut m = Matrix.init(nr, nc)
+        mut r = 0
+        while r < nr:
+            mut row: List[float] = rows_in[r]
+            if row.len() != nc:
+                _tr_panic("Matrix.from_rows: ragged rows (inconsistent column count)")
+            mut c = 0
+            while c < nc:
+                m.set(r, c, row[c])
+                c = c + 1
+            r = r + 1
+        return m
+
+    # ── Access ────────────────────────────────────────────────────────────────
+
+    pub def rows(self) -> int:
+        return self.nrows
+
+    pub def cols(self) -> int:
+        return self.ncols
+
+    def _idx(self, r: int, c: int) -> int:
+        if r < 0 or r >= self.nrows or c < 0 or c >= self.ncols:
+            _tr_panic("Matrix: index out of range")
+        return r * self.ncols + c
+
+    pub def get(self, r: int, c: int) -> float:
+        return self.data.get(self._idx(r, c))
+
+    pub def set(self, r: int, c: int, val: float):
+        self.data.set(self._idx(r, c), val)
+
+    pub def clone(self) -> Matrix:
+        mut m = Matrix()
+        m.data  = self.data.clone()
+        m.nrows = self.nrows
+        m.ncols = self.ncols
+        return m
+
+    # ── Elementwise arithmetic ────────────────────────────────────────────────
+
+    pub def add(self, other: Matrix) -> Matrix:
+        if self.nrows != other.nrows or self.ncols != other.ncols:
+            _tr_panic("Matrix.add: dimension mismatch")
+        mut out = Matrix.init(self.nrows, self.ncols)
+        mut i = 0
+        while i < self.data.len:
+            out.data.set(i, self.data.get(i) + other.data.get(i))
+            i = i + 1
+        return out
+
+    pub def sub(self, other: Matrix) -> Matrix:
+        if self.nrows != other.nrows or self.ncols != other.ncols:
+            _tr_panic("Matrix.sub: dimension mismatch")
+        mut out = Matrix.init(self.nrows, self.ncols)
+        mut i = 0
+        while i < self.data.len:
+            out.data.set(i, self.data.get(i) - other.data.get(i))
+            i = i + 1
+        return out
+
+    # ── Products ──────────────────────────────────────────────────────────────
+
+    # Matrix-matrix product: (self.nrows x self.ncols) * (other.nrows x
+    # other.ncols) -> (self.nrows x other.ncols). Requires self.ncols ==
+    # other.nrows.
+    pub def mul(self, other: Matrix) -> Matrix:
+        if self.ncols != other.nrows:
+            _tr_panic("Matrix.mul: inner dimensions must match")
+        mut out = Matrix.init(self.nrows, other.ncols)
+        mut i = 0
+        while i < self.nrows:
+            mut k = 0
+            while k < self.ncols:
+                mut aik = self.get(i, k)
+                if aik != 0.0:
+                    mut j = 0
+                    while j < other.ncols:
+                        out.set(i, j, out.get(i, j) + aik * other.get(k, j))
+                        j = j + 1
+                k = k + 1
+            i = i + 1
+        return out
+
+    # Matrix-vector product: (self.nrows x self.ncols) * (self.ncols) ->
+    # (self.nrows). Requires self.ncols == v.len().
+    pub def mul_vec(self, v: Vector) -> Vector:
+        if self.ncols != v.len():
+            _tr_panic("Matrix.mul_vec: dimension mismatch")
+        mut out = Vector.init(self.nrows)
+        mut i = 0
+        while i < self.nrows:
+            mut acc = 0.0
+            mut j = 0
+            while j < self.ncols:
+                acc = acc + self.get(i, j) * v.get(j)
+                j = j + 1
+            out.set(i, acc)
+            i = i + 1
+        return out
+
+    pub def transpose(self) -> Matrix:
+        mut out = Matrix.init(self.ncols, self.nrows)
+        mut i = 0
+        while i < self.nrows:
+            mut j = 0
+            while j < self.ncols:
+                out.set(j, i, self.get(i, j))
+                j = j + 1
+            i = i + 1
+        return out
+
+    # Sum of the main diagonal. Requires a square matrix.
+    pub def trace(self) -> float:
+        if self.nrows != self.ncols:
+            _tr_panic("Matrix.trace: matrix must be square")
+        mut acc = 0.0
+        mut i = 0
+        while i < self.nrows:
+            acc = acc + self.get(i, i)
+            i = i + 1
+        return acc
+
+    # ── Determinant ───────────────────────────────────────────────────────────
+
+    # Closed-form for 1x1/2x2/3x3 (cheap and exact for the common small
+    # cases), general NxN via Gaussian elimination with partial pivoting
+    # (tracks the row-swap parity sign, product of the resulting upper-
+    # triangular diagonal gives the determinant). Requires a square matrix.
+    pub def determinant(self) -> float:
+        if self.nrows != self.ncols:
+            _tr_panic("Matrix.determinant: matrix must be square")
+        mut n = self.nrows
+        if n == 1:
+            return self.get(0, 0)
+        if n == 2:
+            return self.get(0, 0) * self.get(1, 1) - self.get(0, 1) * self.get(1, 0)
+        if n == 3:
+            mut a = self.get(0, 0)
+            mut b = self.get(0, 1)
+            mut c = self.get(0, 2)
+            mut d = self.get(1, 0)
+            mut e = self.get(1, 1)
+            mut f = self.get(1, 2)
+            mut g = self.get(2, 0)
+            mut h = self.get(2, 1)
+            mut ii = self.get(2, 2)
+            return a * (e * ii - f * h) - b * (d * ii - f * g) + c * (d * h - e * g)
+        return self._determinant_general()
+
+    # General NxN determinant via Gaussian elimination with partial
+    # pivoting. Operates on a scratch copy so `self` is never mutated.
+    def _determinant_general(self) -> float:
+        mut n = self.nrows
+        mut work = self.clone()
+        mut sign = 1.0
+        mut k = 0
+        while k < n:
+            # Partial pivot: find the row at/below k with the largest
+            # |value| in column k, to keep the elimination numerically
+            # stable (and to correctly detect a singular matrix instead of
+            # dividing by a tiny near-zero pivot).
+            mut piv_row = k
+            mut piv_val = work.get(k, k)
+            if piv_val < 0.0: piv_val = 0.0 - piv_val
+            mut r = k + 1
+            while r < n:
+                mut cur = work.get(r, k)
+                if cur < 0.0: cur = 0.0 - cur
+                if cur > piv_val:
+                    piv_val = cur
+                    piv_row = r
+                r = r + 1
+
+            if piv_val <= _EPS:
+                return 0.0    # singular: determinant is exactly zero
+
+            if piv_row != k:
+                mut c = 0
+                while c < n:
+                    mut tmp = work.get(k, c)
+                    work.set(k, c, work.get(piv_row, c))
+                    work.set(piv_row, c, tmp)
+                    c = c + 1
+                sign = 0.0 - sign
+
+            mut pivot = work.get(k, k)
+            mut i = k + 1
+            while i < n:
+                mut factor = work.get(i, k) / pivot
+                if factor != 0.0:
+                    mut c2 = k
+                    while c2 < n:
+                        work.set(i, c2, work.get(i, c2) - factor * work.get(k, c2))
+                        c2 = c2 + 1
+                i = i + 1
+            k = k + 1
+
+        mut det = sign
+        mut d = 0
+        while d < n:
+            det = det * work.get(d, d)
+            d = d + 1
+        return det
+
+    # ── Inverse ───────────────────────────────────────────────────────────────
+
+    # Gauss-Jordan elimination on [self | I] with partial pivoting.
+    # Returns Option.None() if the matrix is singular (or non-square)
+    # rather than crashing or returning a garbage matrix — the caller must
+    # explicitly unwrap/handle the "no inverse exists" case.
+    pub def inverse(self) -> Option[Matrix]:
+        if self.nrows != self.ncols:
+            return Option.None()
+        mut n = self.nrows
+
+        mut left  = self.clone()
+        mut right = Matrix.identity(n)
+
+        mut k = 0
+        while k < n:
+            mut piv_row = k
+            mut piv_val = left.get(k, k)
+            if piv_val < 0.0: piv_val = 0.0 - piv_val
+            mut r = k + 1
+            while r < n:
+                mut cur = left.get(r, k)
+                if cur < 0.0: cur = 0.0 - cur
+                if cur > piv_val:
+                    piv_val = cur
+                    piv_row = r
+                r = r + 1
+
+            if piv_val <= _EPS:
+                return Option.None()    # singular
+
+            if piv_row != k:
+                mut c = 0
+                while c < n:
+                    mut tmpl = left.get(k, c)
+                    left.set(k, c, left.get(piv_row, c))
+                    left.set(piv_row, c, tmpl)
+                    mut tmpr = right.get(k, c)
+                    right.set(k, c, right.get(piv_row, c))
+                    right.set(piv_row, c, tmpr)
+                    c = c + 1
+
+            mut pivot = left.get(k, k)
+            mut c3 = 0
+            while c3 < n:
+                left.set(k, c3, left.get(k, c3) / pivot)
+                right.set(k, c3, right.get(k, c3) / pivot)
+                c3 = c3 + 1
+
+            mut i = 0
+            while i < n:
+                if i != k:
+                    mut factor = left.get(i, k)
+                    if factor != 0.0:
+                        mut c4 = 0
+                        while c4 < n:
+                            left.set(i, c4, left.get(i, c4) - factor * left.get(k, c4))
+                            right.set(i, c4, right.get(i, c4) - factor * right.get(k, c4))
+                            c4 = c4 + 1
+                i = i + 1
+            k = k + 1
+
+        return Option.Some(right)
+
+    # ── GPU bridge ────────────────────────────────────────────────────────────
+
+    # Upload this matrix's row-major f64 data into a fresh device
+    # Buffer[float] (see std/gpu/buffer.tr). One call bridges a host-side
+    # linear-algebra value straight into native GPU compute memory — no
+    # mainstream stdlib linalg type ships this. Layout is row-major, length
+    # nrows*ncols; a kernel operating on it needs to know (nrows, ncols)
+    # itself (not encoded in the raw buffer), same as any other flat
+    # device array.
+    pub def to_gpu_buffer(self) -> Buffer[float]:
+        return Buffer[float].from_vec(self.data)
+
+    # ── Misc ──────────────────────────────────────────────────────────────────
+
+    pub def __str__(self) -> str:
+        mut out = ""
+        mut r = 0
+        while r < self.nrows:
+            if r > 0: out = out + "\n"
+            out = out + "["
+            mut c = 0
+            while c < self.ncols:
+                if c > 0: out = out + ", "
+                out = out + str(self.get(r, c))
+                c = c + 1
+            out = out + "]"
+            r = r + 1
+        return out
