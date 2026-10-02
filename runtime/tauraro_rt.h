@@ -6481,6 +6481,69 @@ static inline void _tr_console_reset(void)     { printf("\033[0m"); fflush(stdou
 static inline void _tr_console_clear(void)     { printf("\033[2J\033[H"); fflush(stdout); }
 #endif
 
+/* ── Timezone support (std.sys.datetime / std.sys.tz) ────────────────────────
+ * Floor scope: fixed UTC offsets (arithmetic only, no OS dependency) plus the
+ * SYSTEM's current local timezone (offset/DST/abbreviation). No IANA tzdata —
+ * no named-zone historical DST rule tables. Three primitives:
+ *   _tr_tz_utc_offset_seconds() -> seconds EAST of UTC for the local zone, NOW
+ *   _tr_tz_is_dst()             -> 1 if DST is currently in effect, else 0
+ *   _tr_tz_name()               -> best-effort zone abbreviation/name
+ * Windows has no `tm_gmtoff`/`tm_zone` (those are a glibc/BSD extension, not
+ * provided by UCRT/MSVCRT — confirmed: MinGW gcc rejects them), so Windows
+ * uses the native GetTimeZoneInformation() API instead; POSIX uses
+ * localtime_r()'s tm_gmtoff/tm_zone directly. Both branches are gated on
+ * _TR_HAS_TIME like the rest of the datetime helpers above; the bare/no-RTC
+ * fallback reports a fixed UTC+0 with no DST, matching _tr_timestamp's own
+ * "no wall clock" degradation. */
+#if defined(_WIN32) && defined(_TR_HAS_TIME)
+static inline long long _tr_tz_utc_offset_seconds(void) {
+    TIME_ZONE_INFORMATION tzi;
+    DWORD rc = GetTimeZoneInformation(&tzi);
+    LONG bias = tzi.Bias;
+    if (rc == TIME_ZONE_ID_DAYLIGHT) bias += tzi.DaylightBias;
+    else if (rc == TIME_ZONE_ID_STANDARD) bias += tzi.StandardBias;
+    /* Bias is minutes WEST of UTC; we want seconds EAST. */
+    return (long long)(0 - bias) * 60LL;
+}
+static inline bool _tr_tz_is_dst(void) {
+    TIME_ZONE_INFORMATION tzi;
+    return GetTimeZoneInformation(&tzi) == TIME_ZONE_ID_DAYLIGHT;
+}
+static inline char* _tr_tz_name(void) {
+    TIME_ZONE_INFORMATION tzi;
+    DWORD rc = GetTimeZoneInformation(&tzi);
+    const WCHAR* wname = (rc == TIME_ZONE_ID_DAYLIGHT) ? tzi.DaylightName : tzi.StandardName;
+    int need = WideCharToMultiByte(CP_UTF8, 0, wname, -1, NULL, 0, NULL, NULL);
+    if (need <= 0) return _tr_str_dup_owned("");
+    char* buf = (char*)_tr_c_malloc((size_t)need);
+    WideCharToMultiByte(CP_UTF8, 0, wname, -1, buf, need, NULL, NULL);
+    return buf;
+}
+#elif defined(_TR_HAS_TIME)
+static inline long long _tr_tz_utc_offset_seconds(void) {
+    time_t t = time(NULL);
+    struct tm m;
+    localtime_r(&t, &m);
+    return (long long)m.tm_gmtoff;
+}
+static inline bool _tr_tz_is_dst(void) {
+    time_t t = time(NULL);
+    struct tm m;
+    localtime_r(&t, &m);
+    return m.tm_isdst > 0;
+}
+static inline char* _tr_tz_name(void) {
+    time_t t = time(NULL);
+    struct tm m;
+    localtime_r(&t, &m);
+    return _tr_str_dup_owned(m.tm_zone ? m.tm_zone : "");
+}
+#else  /* no <time.h> (bare toolchain): no RTC/timezone database -- UTC+0, no DST */
+static inline long long _tr_tz_utc_offset_seconds(void) { return 0LL; }
+static inline bool      _tr_tz_is_dst(void)              { return false; }
+static inline char*     _tr_tz_name(void)                { return _tr_str_dup_owned("UTC"); }
+#endif
+
 /* ══════════════════════════════════════════════════════════════════════════
  * Non-blocking socket API
  *
