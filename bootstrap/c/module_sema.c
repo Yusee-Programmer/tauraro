@@ -2164,7 +2164,6 @@ __attribute__((hot)) void Sema__cycle_dfs(Sema* self, TrStr cur, TrStr start, Tr
         i = (i + 1LL);
         _tr_str_release(nxt);
     }
-    List_TrStr_free(edges);
 }
 
 __attribute__((hot)) void Sema_check_ownership_cycles(Sema* self, Program* prog) {
@@ -11041,7 +11040,31 @@ __auto_type args = _t575.data.EMethodCall.args;
             Sema_error(self, _tr_str_lit_len("[P-1] '.write()' on a Pointer mutates raw memory and must be inside an 'unsafe:' block.\n      FIX: Wrap this call in 'unsafe:', e.g.\n          unsafe:\n              ... .write(...) ...", 184LL));
         }
         /* pass */
-        if (((_tr_str_eqv((method), (_tr_str_lit_len("init", 4LL))) || _tr_str_eqv((method), (_tr_str_lit_len("new", 3LL)))) || _tr_str_eqv((method), (_tr_str_lit_len("auto", 4LL))))) {
+        bool _auto_is_self_factory = true;
+        /* pass */
+        if ((_tr_str_eqv((method), (_tr_str_lit_len("auto", 4LL))) && _tr_dict_contains(self->classes, _tr_strz(hobj_ty->name)))) {
+            /* pass */
+            ClassDef* _af_cls = ((ClassDef*)(uintptr_t)_tr_dict_get(self->classes, _tr_strz(hobj_ty->name)));
+            /* pass */
+            long long _af_i = 0LL;
+            /* pass */
+            while ((_af_i < _af_cls->methods->len)) {
+                /* pass */
+                FunctionDef* _af_m = ((FunctionDef*)List_ptr_get(_af_cls->methods, _af_i));
+                /* pass */
+                if ((_tr_str_eqv((_af_m->name), (_tr_str_lit_len("auto", 4LL))) && (((unsigned long long)(_af_m->ret_ty)) != ((unsigned long long)(0LL))))) {
+                    /* pass */
+                    if ((!_tr_str_eqv(((*_af_m->ret_ty)->name), (hobj_ty->name)))) {
+                        /* pass */
+                        _auto_is_self_factory = false;
+                    }
+                }
+                /* pass */
+                _af_i = (_af_i + 1LL);
+            }
+        }
+        /* pass */
+        if (((_tr_str_eqv((method), (_tr_str_lit_len("init", 4LL))) || _tr_str_eqv((method), (_tr_str_lit_len("new", 3LL)))) || (_tr_str_eqv((method), (_tr_str_lit_len("auto", 4LL))) && _auto_is_self_factory))) {
             /* pass */
             if ((_tr_str_eqv((hobj_ty->name), (_tr_str_lit_len("void", 4LL))) || _tr_str_eqv((hobj_ty->name), (_tr_str_lit_len("", 0LL))))) {
                 /* pass */

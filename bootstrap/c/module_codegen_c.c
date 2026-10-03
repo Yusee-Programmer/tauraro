@@ -6321,16 +6321,25 @@ __attribute__((hot)) bool CGenerator__coll_init_is_borrow(CGenerator* self, HirE
         __auto_type _tr_v_recv = _t1579.data.EMethodCall.obj;
 __auto_type m = _t1579.data.EMethodCall.method;
         /* pass */
-        if ((_tr_str_eqv((m), (_tr_str_lit_len("get", 3LL))) || _tr_str_eqv((m), (_tr_str_lit_len("get_or", 6LL))))) {
+        if (_is_invalid_ptr(((unsigned long long)(_tr_v_recv)))) {
             /* pass */
-            if (_is_invalid_ptr(((unsigned long long)(_tr_v_recv)))) {
-                /* pass */
-                return false;
-            }
-            /* pass */
-            return CGenerator__is_coll_type_name(self, hir_expr_type(_tr_v_recv)->name);
+            return false;
         }
         /* pass */
+        TrStr rtn = _tr_str_retain(hir_expr_type(_tr_v_recv)->name);
+        /* pass */
+        if ((_tr_str_eqv((m), (_tr_str_lit_len("get", 3LL))) || _tr_str_eqv((m), (_tr_str_lit_len("get_or", 6LL))))) {
+            /* pass */
+            return CGenerator__is_coll_type_name(self, rtn);
+        }
+        /* pass */
+        if (((((!_tr_str_eqv((m), (_tr_str_lit_len("init", 4LL)))) && (!_tr_str_eqv((m), (_tr_str_lit_len("new", 3LL))))) && _tr_dict_contains(self->classes, _tr_strz(rtn))) && (!CGenerator__is_coll_type_name(self, rtn)))) {
+            /* pass */
+            _tr_str_release(rtn);
+            return true;
+        }
+        /* pass */
+        _tr_str_release(rtn);
         return false;
     } else if (_t1579.tag == HirExpr_EIndex) {
         __auto_type _tr_v_recv = _t1579.data.EIndex.obj;
