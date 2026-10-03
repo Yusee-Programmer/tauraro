@@ -1,0 +1,131 @@
+# tests/lang/62_ratelimit.tr
+# std.async.ratelimit — TokenBucket and SlidingWindow, generic HTTP-independent
+# rate limiting primitives. Exercises both algorithms over short, bounded
+# wall-clock windows so the suite can never hang on a limiter bug.
+
+from std.test import TestRunner
+from std.async.ratelimit import TokenBucket, SlidingWindow
+from std.async.thread import Thread
+from std.sys.time import Clock
+
+async def test_token_bucket_burst(t: TestRunner):
+    t.section("TokenBucket: burst up to capacity succeeds, then empties out")
+    mut tb = TokenBucket.init(5, 1.0)   # capacity 5, refill 1/sec (slow)
+    mut i = 0
+    mut all_ok = true
+    while i < 5:
+        if not tb.try_acquire(1): all_ok = false
+        i = i + 1
+    t.assert_true(all_ok, "5 immediate try_acquire(1) calls all succeed (full burst)")
+    mut next_ok = tb.try_acquire(1)
+    t.assert_false(next_ok, "6th immediate try_acquire(1) fails: bucket is empty")
+
+async def test_token_bucket_refill(t: TestRunner):
+    t.section("TokenBucket: waiting lets refill accumulate, then try_acquire succeeds again")
+    mut tb = TokenBucket.init(2, 20.0)   # capacity 2, refill 20/sec -> 1 token every 50ms
+    t.assert_true(tb.try_acquire(1), "spend 1st token")
+    t.assert_true(tb.try_acquire(1), "spend 2nd token")
+    t.assert_false(tb.try_acquire(1), "bucket is empty immediately after spending both")
+    # Wait long enough for at least 1 token to refill (50ms/token @ 20/sec).
+    Thread.sleep(150)
+    t.assert_true(tb.try_acquire(1), "after waiting for refill, try_acquire(1) succeeds again")
+
+async def test_token_bucket_available(t: TestRunner):
+    t.section("TokenBucket.available(): lazily computed count, not a ticking thread")
+    mut tb = TokenBucket.init(10, 100.0)   # fast refill: 100/sec
+    t.assert_eq_int(tb.available(), 10, "fresh bucket starts at full capacity")
+    tb.try_acquire(4)
+    mut after = tb.available()
+    t.assert_true(after <= 6, "available() drops after spending 4 tokens")
+    Thread.sleep(100)
+    mut refilled = tb.available()
+    t.assert_true(refilled > after, "available() rises again after waiting (lazy refill math)")
+    t.assert_true(refilled <= 10, "available() never exceeds capacity")
+
+async def test_token_bucket_acquire_blocking(t: TestRunner):
+    t.section("TokenBucket.acquire_blocking(): blocks until tokens are available, then succeeds")
+    mut tb = TokenBucket.init(1, 20.0)   # capacity 1, refill 20/sec -> 1 token every 50ms
+    t.assert_true(tb.try_acquire(1), "drain the single starting token")
+    mut start = Clock.now_ms()
+    mut got = tb.acquire_blocking(1, 2000)
+    mut elapsed = Clock.now_ms() - start
+    t.assert_true(got, "acquire_blocking eventually succeeds once refill accumulates")
+    t.assert_true(elapsed >= 20, "acquire_blocking actually waited (did not return instantly)")
+    t.assert_true(elapsed < 2000, "acquire_blocking succeeded well before the 2000ms timeout")
+
+async def test_token_bucket_acquire_blocking_timeout(t: TestRunner):
+    t.section("TokenBucket.acquire_blocking(): times out if tokens never arrive in time")
+    mut tb = TokenBucket.init(1, 0.001)   # capacity 1, essentially-zero refill rate
+    t.assert_true(tb.try_acquire(1), "drain the single starting token")
+    mut got = tb.acquire_blocking(1, 80)
+    t.assert_false(got, "acquire_blocking returns false when the timeout elapses with no tokens")
+
+async def test_sliding_window_basic(t: TestRunner):
+    t.section("SlidingWindow: N requests within the window succeed, the (N+1)th fails")
+    mut sw = SlidingWindow.init(3, 500)   # max 3 requests / 500ms window
+    t.assert_true(sw.try_acquire(), "1st request within window succeeds")
+    t.assert_true(sw.try_acquire(), "2nd request within window succeeds")
+    t.assert_true(sw.try_acquire(), "3rd request within window succeeds")
+    t.assert_false(sw.try_acquire(), "4th request within the same window fails")
+    t.assert_eq_int(sw.count(), 3, "count() reflects 3 accepted requests still inside the window")
+
+async def test_sliding_window_refill_after_wait(t: TestRunner):
+    t.section("SlidingWindow: waiting past the window lets requests succeed again")
+    mut sw = SlidingWindow.init(2, 150)   # max 2 requests / 150ms window
+    t.assert_true(sw.try_acquire(), "1st request succeeds")
+    t.assert_true(sw.try_acquire(), "2nd request succeeds")
+    t.assert_false(sw.try_acquire(), "3rd request fails: window is full")
+    Thread.sleep(200)   # well past the 150ms window
+    t.assert_true(sw.try_acquire(), "after waiting past the window, a new request succeeds")
+    t.assert_eq_int(sw.count(), 1, "old timestamps were pruned; only the fresh request remains")
+
+async def test_sliding_window_acquire_blocking(t: TestRunner):
+    t.section("SlidingWindow.acquire_blocking(): blocks until window room frees up")
+    mut sw = SlidingWindow.init(1, 100)   # max 1 request / 100ms window
+    t.assert_true(sw.try_acquire(), "fill the only slot")
+    mut start = Clock.now_ms()
+    mut got = sw.acquire_blocking(1000)
+    mut elapsed = Clock.now_ms() - start
+    t.assert_true(got, "acquire_blocking eventually succeeds once the window rolls forward")
+    t.assert_true(elapsed >= 50, "acquire_blocking actually waited for the window to free up")
+    t.assert_true(elapsed < 1000, "acquire_blocking succeeded well before the 1000ms timeout")
+
+async def test_sliding_window_true_sliding_not_fixed(t: TestRunner):
+    t.section("SlidingWindow: TRUE sliding window, not a fixed-window reset at a boundary tick")
+    # A naive FIXED-window counter resets its count to 0 the instant a
+    # window-sized interval elapses, regardless of WHEN inside that
+    # interval requests actually happened -- which allows 2x the limit to
+    # pass in a short burst straddling the boundary (e.g. with max=2 and
+    # window=100ms: 2 requests at t=99ms, window "resets" at t=100ms, 2 more
+    # requests squeeze in at t=101ms -- 4 requests in 2ms, way over the
+    # limit). A TRUE sliding window prunes by actual elapsed time from NOW,
+    # so it never permits that.
+    mut sw = SlidingWindow.init(2, 100)   # max 2 requests / rolling 100ms
+    t.assert_true(sw.try_acquire(), "request #1 accepted")
+    t.assert_true(sw.try_acquire(), "request #2 accepted")
+    t.assert_false(sw.try_acquire(), "request #3 rejected: 2 already counted in the last 100ms")
+    # Sleep past where a FIXED window would have reset (slightly more than
+    # the window size), then immediately try again: a true sliding window
+    # must have pruned both old timestamps (they are now > 100ms old) and
+    # allow exactly a fresh burst of 2 -- not unlimited, and not still stuck
+    # at "full" due to some bookkeeping tied to a reset boundary rather than
+    # actual elapsed time.
+    Thread.sleep(120)
+    t.assert_true(sw.try_acquire(), "after the old timestamps age out, request #3 (fresh) is accepted")
+    t.assert_true(sw.try_acquire(), "a second fresh request also fits (only 1 old timestamp had expired so far)")
+    t.assert_eq_int(sw.count(), 2, "exactly 2 live timestamps remain in the rolling window, not 3+ and not reset-to-0 awkwardly")
+
+async def main():
+    mut t = TestRunner.init("62_ratelimit")
+
+    await test_token_bucket_burst(t)
+    await test_token_bucket_refill(t)
+    await test_token_bucket_available(t)
+    await test_token_bucket_acquire_blocking(t)
+    await test_token_bucket_acquire_blocking_timeout(t)
+    await test_sliding_window_basic(t)
+    await test_sliding_window_refill_after_wait(t)
+    await test_sliding_window_acquire_blocking(t)
+    await test_sliding_window_true_sliding_not_fixed(t)
+
+    t.summary()
