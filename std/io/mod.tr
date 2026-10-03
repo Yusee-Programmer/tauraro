@@ -10,6 +10,7 @@
 #   from std.io.event_loop import EventLoop
 #   from std.io.archive    import ZipWriter, ZipReader, Crc32
 #   from std.io.tar        import TarWriter, TarReader
+#   from std.io.watch      import Watcher, FileEvent
 
 from std.io.file       import File
 from std.io.console    import Console
@@ -25,3 +26,5 @@ from std.io.archive    import ZipReader
 from std.io.archive    import Crc32
 from std.io.tar        import TarWriter
 from std.io.tar        import TarReader
+from std.io.watch      import Watcher
+from std.io.watch      import FileEvent

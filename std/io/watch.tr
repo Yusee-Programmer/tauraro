@@ -1,0 +1,139 @@
+# std.io.watch — Watcher: cross-platform file-system change notification.
+#
+# Wraps the _TrWatch C runtime abstraction in a clean Tauraro interface.
+#
+# Supported platforms:
+#   Linux      : inotify (inotify_add_watch + read() loop over inotify_event)
+#   Windows    : ReadDirectoryChangesW (one overlapped read per watched root,
+#                drained/re-armed from poll())
+#   macOS/BSD  : kqueue EVFILT_VNODE on an open fd per watched path/subdir.
+#                This is the lighter-weight alternative to full FSEvents: it
+#                only sees changes to paths we have open, so a watched
+#                directory's *own* NOTE_WRITE is used to diff a cached
+#                directory listing and synthesize per-child CREATED/DELETED
+#                events, rather than getting free per-child events the way
+#                inotify/FSEvents do. Good enough for edit/save/create/
+#                delete detection; FSEvents would be the natural upgrade for
+#                very large recursive trees.
+#   BARE/kernel: no-op stub — watch() "succeeds", poll() always returns [].
+#
+# Usage:
+#   let w = Watcher.new()
+#   w.watch("./src", true)                 # recursive, no debounce
+#   w.watch("./config.json", false, 300)   # debounce rapid saves (300ms)
+#   let events = w.poll(1000)              # wait up to 1s
+#   for ev in events:
+#       if ev.kind == FileEvent.CREATED:  print(f"created: {ev.path}")
+#       if ev.kind == FileEvent.MODIFIED: print(f"modified: {ev.path}")
+#   w.unwatch("./src")
+#   w.destroy()
+#
+# Debouncing: editors that save "atomically" (write a temp file, then
+# rename over the original) can fire several raw OS events for what is,
+# logically, one save. Passing debounce_ms > 0 to watch() coalesces
+# repeated raw events for the *same changed path* within that window into
+# a single delivered event (using the most recent event kind seen). Each
+# watched path debounces independently of others under the same root.
+#
+# Possible extension (not implemented here): on Linux, inotify file
+# descriptors can themselves be registered with epoll (and therefore with
+# the _TrIOPoll-backed EventLoop in std.io.event_loop), so a Watcher could
+# in principle be driven by the same reactor used for socket I/O instead of
+# via its own blocking poll(). Left as a follow-up since a working
+# standalone Watcher is the more valuable first step.
+
+from std.core.vec import Vec
+
+extern "C":
+    def _tr_watch_create_h()  -> Pointer[char]
+    def _tr_watch_destroy_h(p: Pointer[char])
+    def _tr_watch_add_h(p: Pointer[char], path: str, recursive: int, debounce_ms: int) -> int
+    def _tr_watch_remove_h(p: Pointer[char], path: str) -> int
+    def _tr_watch_poll_raw(p: Pointer[char], timeout_ms: int, out_paths: Pointer[char], out_kinds: Pointer[char], maxev: int) -> int
+    def _tr_c_malloc(size: int) -> Pointer[char]
+    def _tr_free(p: Pointer[char])
+    def _tr_str_wrap_len(s: Pointer[char], blen: int) -> str
+
+# ─── FileEvent ───────────────────────────────────────────────────────────────
+#
+# NOT @value_type: `path: str` is an owned heap field (see std/log/field.tr
+# for the same reasoning) — a value type is never dropped/released, so an
+# owned str field on one would leak on every event. A regular ARC class is
+# the correct shape here.
+
+pub class FileEvent:
+    pub path: str
+    pub kind: int
+
+extend FileEvent:
+    # Event kind constants (match runtime/tauraro_rt.h's TAURARO_FS_* defines)
+    pub def CREATED()  -> int: return 1
+    pub def MODIFIED() -> int: return 2
+    pub def DELETED()  -> int: return 3
+    pub def RENAMED()  -> int: return 4
+
+# ─── Watcher ─────────────────────────────────────────────────────────────────
+
+pub class Watcher:
+    pub handle: Pointer[char]
+
+extend Watcher:
+    pub def new() -> Watcher:
+        mut w = Watcher()
+        w.handle = _tr_watch_create_h()
+        return w
+
+    # Register path (file or directory) for change notifications.
+    # recursive: watch subdirectories too (directories only; ignored for files).
+    # debounce_ms: coalesce repeat events for the same changed path within
+    #   this window into one delivered event (0 = deliver every raw event).
+    # Returns false on failure (e.g. path doesn't exist) rather than throwing.
+    pub def watch(self, path: str, recursive: bool, debounce_ms: int) -> bool:
+        mut rec = 0
+        if recursive: rec = 1
+        return _tr_watch_add_h(self.handle, path, rec, debounce_ms) == 0
+
+    # Convenience overload-equivalent: watch with no debouncing.
+    pub def watch_simple(self, path: str, recursive: bool) -> bool:
+        return self.watch(path, recursive, 0)
+
+    # Stop watching a previously-registered path.
+    pub def unwatch(self, path: str) -> bool:
+        return _tr_watch_remove_h(self.handle, path) == 0
+
+    # Block up to timeout_ms milliseconds for filesystem change events.
+    # Pass timeout_ms = -1 to block indefinitely (until at least one event).
+    # Returns a Vec[FileEvent] (may be empty on timeout — never hangs forever
+    # when timeout_ms >= 0).
+    pub def poll(self, timeout_ms: int) -> Vec[FileEvent]:
+        mut path_slot = 4096
+        mut max_evs   = 64
+        mut paths_buf = _tr_c_malloc(path_slot * max_evs)
+        mut kinds_buf = _tr_c_malloc(4 * max_evs)
+        mut n = _tr_watch_poll_raw(self.handle, timeout_ms, paths_buf, kinds_buf, max_evs)
+        mut result = Vec[FileEvent].init(n)
+        mut i = 0
+        while i < n:
+            mut ev = FileEvent()
+            unsafe:
+                mut path_ptr = paths_buf.offset(i * path_slot)
+                mut plen = 0
+                while path_ptr.offset(plen).read() as int != 0: plen = plen + 1
+                mut owned = _tr_c_malloc(plen + 1)
+                mut j = 0
+                while j < plen:
+                    owned.offset(j).write(path_ptr.offset(j).read())
+                    j = j + 1
+                owned.offset(plen).write('\0')
+                ev.path = _tr_str_wrap_len(owned, plen)
+                mut kind_ptr = (kinds_buf.offset(i * 4)) as Pointer[i32]
+                ev.kind = kind_ptr.read() as int
+            result.push(ev)
+            i = i + 1
+        _tr_free(paths_buf)
+        _tr_free(kinds_buf)
+        return result
+
+    pub def destroy(self):
+        _tr_watch_destroy_h(self.handle)
+        self.handle = 0 as Pointer[char]

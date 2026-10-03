@@ -2947,6 +2947,888 @@ _TR_XLINK int   _tr_iopoll_mod_h(char* p, long long fd, long long ev, long long 
 _TR_XLINK int   _tr_iopoll_del_h(char* p, long long fd)
     { return _tr_iopoll_del((_TrIOPoll*)p,(int)fd); }
 
+/* ══════════════════════════════════════════════════════════════════════════
+ * _TrWatch — File-system change notification
+ *
+ * Unified API over platform-specific notification mechanisms:
+ *   Linux:       inotify (inotify_init1/inotify_add_watch + read() loop)
+ *   Windows:     ReadDirectoryChangesW (synchronous, one blocking read per
+ *                watched root, serviced from _tr_watch_poll)
+ *   macOS/BSD:   kqueue EVFILT_VNODE on an open fd per watched path. This is
+ *                the *simpler* of the two standard macOS options (the other
+ *                being full FSEvents). Tradeoff: EVFILT_VNODE only reports
+ *                changes to paths/fds we explicitly opened and are holding
+ *                open, so a plain "watch this directory and tell me about
+ *                new files inside it" needs us to notice NOTE_WRITE on the
+ *                directory fd and re-scan it (done below) rather than
+ *                getting per-child-file events for free the way inotify or
+ *                FSEvents would. For a first cross-platform cut this is the
+ *                pragmatic choice: it reuses the same kqueue machinery as
+ *                _TrIOPoll, needs no CoreFoundation run-loop, and is "good
+ *                enough" for edit/save/create/delete detection on watched
+ *                directories. FSEvents (recursive, coalesced, no open-fd-
+ *                per-watch limit) would be the natural upgrade if/when deep
+ *                recursive trees on macOS need to scale past a few hundred
+ *                directories.
+ *   BARE/kernel: safe no-op stub — watch() "succeeds", poll() always empty.
+ *
+ * Tauraro-level API lives in std/io/watch.tr (Watcher, FileEvent). This
+ * section only provides the raw OS primitives + the (platform-independent)
+ * debounce coalescing, which sits above all three backends.
+ *
+ * Event kinds (mirrors std/io/watch.tr's FileEvent.CREATED/etc.):
+ * ══════════════════════════════════════════════════════════════════════════ */
+
+#define TAURARO_FS_CREATED   1
+#define TAURARO_FS_MODIFIED  2
+#define TAURARO_FS_DELETED   3
+#define TAURARO_FS_RENAMED   4
+
+/* Max bytes (incl. NUL) for a path copied into a pending-event slot. Paths
+ * longer than this are truncated -- matches the 4096 convention used for
+ * paths elsewhere in this file (e.g. _tr_opendir's pat[4096]). */
+#define _TR_WATCH_PATH_CAP 4096
+
+/* One coalesced, ready-to-deliver event sitting in the pending queue. */
+typedef struct {
+    char path[_TR_WATCH_PATH_CAP];
+    int  kind;
+} _TrWatchPendingEvent;
+
+/* One watched root (a file or directory the caller registered). */
+typedef struct {
+    char path[_TR_WATCH_PATH_CAP];
+    int  recursive;
+    int  debounce_ms;
+#if defined(_WIN32) && !defined(TAURARO_BARE) && !defined(TAURARO_KERNEL)
+    HANDLE dir_handle;
+    OVERLAPPED ov;
+    unsigned char buf[16384];
+    int read_pending;
+#elif defined(__linux__) && !defined(TAURARO_BARE) && !defined(TAURARO_KERNEL)
+    int wd; /* inotify watch descriptor for this root */
+#elif (defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)) \
+      && !defined(TAURARO_BARE) && !defined(TAURARO_KERNEL)
+    int fd; /* open() fd on the watched path, used with EVFILT_VNODE */
+    /* Directory snapshot (sorted-free list of child names) used to diff
+     * on NOTE_WRITE and synthesize per-child CREATED/DELETED events,
+     * since EVFILT_VNODE on a directory fd only tells us "something in
+     * here changed", not what. NULL/0 when watching a plain file. */
+    char** children;
+    int    n_children;
+#endif
+} _TrWatchEntry;
+
+/* One in-flight debounce record, keyed by exact changed-file path (NOT the
+ * watched root) -- so two different files changing under the same watched
+ * directory debounce independently instead of clobbering each other. */
+typedef struct {
+    char path[_TR_WATCH_PATH_CAP];
+    long long last_raw_ms;
+    int       last_raw_kind;
+    int       debounce_ms;
+    int       active; /* 1 while waiting for its window to elapse */
+} _TrWatchDebounceRec;
+
+typedef struct {
+    _TrWatchEntry* entries;
+    int n_entries;
+    int cap_entries;
+
+    _TrWatchPendingEvent* pending;
+    int n_pending;
+    int cap_pending;
+
+    _TrWatchDebounceRec* debounce;
+    int n_debounce;
+    int cap_debounce;
+
+#if defined(__linux__) && !defined(TAURARO_BARE) && !defined(TAURARO_KERNEL)
+    int inotify_fd;
+#elif (defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)) \
+      && !defined(TAURARO_BARE) && !defined(TAURARO_KERNEL)
+    int kqfd;
+#endif
+} _TrWatch;
+
+/* ── Shared helpers: pending-event queue + debounce coalescing ─────────── *
+ * Platform-independent so all three real backends can push raw OS events
+ * through the same debounce logic instead of re-implementing it 3x. */
+
+static void _tr_watch_pending_push(_TrWatch* w, const char* path, int kind) {
+    if (!w) return;
+    if (w->n_pending >= w->cap_pending) {
+        int ncap = w->cap_pending > 0 ? w->cap_pending * 2 : 16;
+        _TrWatchPendingEvent* np = (_TrWatchPendingEvent*)TAURARO_REALLOC(
+            w->pending, (size_t)ncap * sizeof(_TrWatchPendingEvent));
+        if (!np) return;
+        w->pending = np;
+        w->cap_pending = ncap;
+    }
+    _TrWatchPendingEvent* e = &w->pending[w->n_pending++];
+    size_t n = strlen(path);
+    if (n >= _TR_WATCH_PATH_CAP) n = _TR_WATCH_PATH_CAP - 1;
+    memcpy(e->path, path, n);
+    e->path[n] = '\0';
+    e->kind = kind;
+}
+
+/* Find (or NULL) the watch entry whose root path is a prefix of `path`,
+ * i.e. the registration responsible for a raw event under that path. Used
+ * to look up per-path debounce_ms/state. Longest-prefix match so a nested
+ * watch (if ever registered) wins over an outer one. */
+static _TrWatchEntry* _tr_watch_find_owner(_TrWatch* w, const char* path) {
+    _TrWatchEntry* best = NULL;
+    size_t best_len = 0;
+    for (int i = 0; i < w->n_entries; i++) {
+        _TrWatchEntry* e = &w->entries[i];
+        size_t elen = strlen(e->path);
+        if (strncmp(e->path, path, elen) == 0 && elen >= best_len) {
+            best = e;
+            best_len = elen;
+        }
+    }
+    return best;
+}
+
+static _TrWatchDebounceRec* _tr_watch_debounce_find_or_alloc(_TrWatch* w, const char* path) {
+    for (int i = 0; i < w->n_debounce; i++) {
+        if (strcmp(w->debounce[i].path, path) == 0) return &w->debounce[i];
+    }
+    /* Reuse a slot that's no longer active before growing. */
+    for (int i = 0; i < w->n_debounce; i++) {
+        if (!w->debounce[i].active) {
+            _TrWatchDebounceRec* r = &w->debounce[i];
+            size_t n = strlen(path);
+            if (n >= _TR_WATCH_PATH_CAP) n = _TR_WATCH_PATH_CAP - 1;
+            memcpy(r->path, path, n); r->path[n] = '\0';
+            return r;
+        }
+    }
+    if (w->n_debounce >= w->cap_debounce) {
+        int ncap = w->cap_debounce > 0 ? w->cap_debounce * 2 : 16;
+        _TrWatchDebounceRec* nd = (_TrWatchDebounceRec*)TAURARO_REALLOC(
+            w->debounce, (size_t)ncap * sizeof(_TrWatchDebounceRec));
+        if (!nd) return NULL;
+        w->debounce = nd;
+        w->cap_debounce = ncap;
+    }
+    _TrWatchDebounceRec* r = &w->debounce[w->n_debounce++];
+    memset(r, 0, sizeof(*r));
+    size_t n = strlen(path);
+    if (n >= _TR_WATCH_PATH_CAP) n = _TR_WATCH_PATH_CAP - 1;
+    memcpy(r->path, path, n); r->path[n] = '\0';
+    return r;
+}
+
+/* Route one raw OS event through debounce coalescing: with debounce_ms<=0
+ * it is delivered immediately; otherwise repeat events for the exact same
+ * changed path within the window just update last_raw_kind/last_raw_ms on
+ * that path's own debounce record and get flushed later by
+ * _tr_watch_flush_debounced (called from poll before it returns). Distinct
+ * paths under the same watched root debounce independently. */
+static void _tr_watch_raw_event(_TrWatch* w, const char* path, int kind) {
+    _TrWatchEntry* owner = _tr_watch_find_owner(w, path);
+    int debounce_ms = owner ? owner->debounce_ms : 0;
+    if (debounce_ms <= 0) {
+        _tr_watch_pending_push(w, path, kind);
+        return;
+    }
+    _TrWatchDebounceRec* r = _tr_watch_debounce_find_or_alloc(w, path);
+    if (!r) { _tr_watch_pending_push(w, path, kind); return; }
+    r->last_raw_ms = _tr_time_ms();
+    r->last_raw_kind = kind;
+    r->debounce_ms = debounce_ms;
+    r->active = 1;
+}
+
+/* Called at the end of every poll(): flush any debounced paths whose
+ * window has elapsed since the last raw event touched them. */
+static void _tr_watch_flush_debounced(_TrWatch* w) {
+    long long now = _tr_time_ms();
+    for (int i = 0; i < w->n_debounce; i++) {
+        _TrWatchDebounceRec* r = &w->debounce[i];
+        if (r->active && (now - r->last_raw_ms) >= r->debounce_ms) {
+            _tr_watch_pending_push(w, r->path, r->last_raw_kind);
+            r->active = 0;
+        }
+    }
+}
+
+/* Earliest deadline (ms, absolute _tr_time_ms() timebase) among active
+ * debounce records, or -1 if none are pending. Lets poll() wake up exactly
+ * when a debounce window elapses instead of only on its coarse 50ms slice,
+ * so debounce_ms shorter than that slice still fires promptly. */
+static long long _tr_watch_next_debounce_deadline(_TrWatch* w) {
+    long long best = -1;
+    for (int i = 0; i < w->n_debounce; i++) {
+        _TrWatchDebounceRec* r = &w->debounce[i];
+        if (!r->active) continue;
+        long long d = r->last_raw_ms + r->debounce_ms;
+        if (best < 0 || d < best) best = d;
+    }
+    return best;
+}
+
+static _TrWatchEntry* _tr_watch_entry_alloc(_TrWatch* w) {
+    if (w->n_entries >= w->cap_entries) {
+        int ncap = w->cap_entries > 0 ? w->cap_entries * 2 : 8;
+        _TrWatchEntry* ne = (_TrWatchEntry*)TAURARO_REALLOC(
+            w->entries, (size_t)ncap * sizeof(_TrWatchEntry));
+        if (!ne) return NULL;
+        w->entries = ne;
+        w->cap_entries = ncap;
+    }
+    _TrWatchEntry* e = &w->entries[w->n_entries++];
+    memset(e, 0, sizeof(*e));
+    return e;
+}
+
+static int _tr_watch_entry_find_idx(_TrWatch* w, const char* path) {
+    for (int i = 0; i < w->n_entries; i++) {
+        if (strcmp(w->entries[i].path, path) == 0) return i;
+    }
+    return -1;
+}
+
+#if defined(TAURARO_BARE) || defined(TAURARO_KERNEL)
+/* ── BARE/Kernel: no-op stub (no filesystem notifications available) ───── */
+_TR_XLINK _TrWatch* _tr_watch_create(void) {
+    return (_TrWatch*)TAURARO_CALLOC(1, sizeof(_TrWatch));
+}
+_TR_XLINK void _tr_watch_destroy(_TrWatch* w) {
+    if (!w) return;
+    if (w->entries) TAURARO_FREE(w->entries);
+    if (w->pending) TAURARO_FREE(w->pending);
+    if (w->debounce) TAURARO_FREE(w->debounce);
+    TAURARO_FREE(w);
+}
+_TR_XLINK int _tr_watch_add(_TrWatch* w, const char* path, int recursive, int debounce_ms) {
+    if (!w || !path) return -1;
+    _TrWatchEntry* e = _tr_watch_entry_alloc(w);
+    if (!e) return -1;
+    size_t n = strlen(path);
+    if (n >= _TR_WATCH_PATH_CAP) n = _TR_WATCH_PATH_CAP - 1;
+    memcpy(e->path, path, n); e->path[n] = '\0';
+    e->recursive = recursive;
+    e->debounce_ms = debounce_ms;
+    return 0; /* "succeeds" -- but will never produce events */
+}
+_TR_XLINK int _tr_watch_remove(_TrWatch* w, const char* path) {
+    if (!w || !path) return -1;
+    int idx = _tr_watch_entry_find_idx(w, path);
+    if (idx < 0) return -1;
+    w->entries[idx] = w->entries[w->n_entries - 1];
+    w->n_entries--;
+    return 0;
+}
+_TR_XLINK int _tr_watch_poll(_TrWatch* w, int timeout_ms, char* out_paths, int* out_kinds, int maxev) {
+    (void)w; (void)out_paths; (void)out_kinds; (void)maxev;
+    if (timeout_ms > 0) {
+#if defined(_WIN32)
+        Sleep((DWORD)timeout_ms);
+#endif
+    }
+    return 0;
+}
+
+#elif defined(_WIN32)
+/* ── Windows: ReadDirectoryChangesW-backed _TrWatch ─────────────────────
+ * Synchronous (overlapped-but-polled) variant: each watched root gets its
+ * own directory HANDLE opened with FILE_FLAG_BACKUP_SEMANTICS so it can be
+ * a directory, plus an OVERLAPPED struct. poll() issues/keeps alive one
+ * ReadDirectoryChangesW call per root and uses GetOverlappedResultEx with
+ * the caller's timeout to wait for *any* of them (polled round-robin with
+ * a short per-root slice, which is simple and correct for the small watch
+ * counts this API targets -- a fully async IOCP-integrated version is a
+ * natural follow-up, noted in std/io/watch.tr's module doc). */
+_TR_XLINK _TrWatch* _tr_watch_create(void) {
+    return (_TrWatch*)TAURARO_CALLOC(1, sizeof(_TrWatch));
+}
+static void _tr_watch_close_entry(_TrWatchEntry* e) {
+    if (e->dir_handle && e->dir_handle != INVALID_HANDLE_VALUE) {
+        CancelIo(e->dir_handle);
+        CloseHandle(e->dir_handle);
+    }
+    if (e->ov.hEvent) CloseHandle(e->ov.hEvent);
+    memset(&e->ov, 0, sizeof(e->ov));
+    e->dir_handle = NULL;
+    e->read_pending = 0;
+}
+_TR_XLINK void _tr_watch_destroy(_TrWatch* w) {
+    if (!w) return;
+    for (int i = 0; i < w->n_entries; i++) _tr_watch_close_entry(&w->entries[i]);
+    if (w->entries) TAURARO_FREE(w->entries);
+    if (w->pending) TAURARO_FREE(w->pending);
+    if (w->debounce) TAURARO_FREE(w->debounce);
+    TAURARO_FREE(w);
+}
+static int _tr_watch_issue_read(_TrWatchEntry* e) {
+    DWORD bytes = 0;
+    DWORD filter = FILE_NOTIFY_CHANGE_FILE_NAME | FILE_NOTIFY_CHANGE_DIR_NAME |
+                   FILE_NOTIFY_CHANGE_LAST_WRITE | FILE_NOTIFY_CHANGE_SIZE |
+                   FILE_NOTIFY_CHANGE_CREATION;
+    memset(&e->ov, 0, sizeof(e->ov));
+    if (!e->ov.hEvent) e->ov.hEvent = CreateEventA(NULL, TRUE, FALSE, NULL);
+    ResetEvent(e->ov.hEvent);
+    BOOL ok = ReadDirectoryChangesW(
+        e->dir_handle, e->buf, (DWORD)sizeof(e->buf), e->recursive ? TRUE : FALSE,
+        filter, &bytes, &e->ov, NULL);
+    e->read_pending = ok ? 1 : 0;
+    return ok ? 0 : -1;
+}
+_TR_XLINK int _tr_watch_add(_TrWatch* w, const char* path, int recursive, int debounce_ms) {
+    if (!w || !path) return -1;
+    _TrWatchEntry* e = _tr_watch_entry_alloc(w);
+    if (!e) return -1;
+    size_t n = strlen(path);
+    if (n >= _TR_WATCH_PATH_CAP) n = _TR_WATCH_PATH_CAP - 1;
+    memcpy(e->path, path, n); e->path[n] = '\0';
+    e->recursive = recursive;
+    e->debounce_ms = debounce_ms;
+    e->dir_handle = CreateFileA(path, FILE_LIST_DIRECTORY,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL,
+        OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OVERLAPPED, NULL);
+    if (e->dir_handle == INVALID_HANDLE_VALUE) {
+        w->n_entries--;
+        return -1;
+    }
+    if (_tr_watch_issue_read(e) != 0) {
+        _tr_watch_close_entry(e);
+        w->n_entries--;
+        return -1;
+    }
+    return 0;
+}
+_TR_XLINK int _tr_watch_remove(_TrWatch* w, const char* path) {
+    if (!w || !path) return -1;
+    int idx = _tr_watch_entry_find_idx(w, path);
+    if (idx < 0) return -1;
+    _tr_watch_close_entry(&w->entries[idx]);
+    w->entries[idx] = w->entries[w->n_entries - 1];
+    w->n_entries--;
+    return 0;
+}
+static void _tr_watch_drain_entry(_TrWatch* w, _TrWatchEntry* e) {
+    DWORD bytes = 0;
+    if (!GetOverlappedResult(e->dir_handle, &e->ov, &bytes, FALSE)) {
+        return; /* not ready / nothing to drain */
+    }
+    e->read_pending = 0;
+    if (bytes > 0) {
+        unsigned char* p = e->buf;
+        for (;;) {
+            FILE_NOTIFY_INFORMATION* fni = (FILE_NOTIFY_INFORMATION*)p;
+            char name_utf8[_TR_WATCH_PATH_CAP];
+            int wlen = (int)(fni->FileNameLength / sizeof(WCHAR));
+            int clen = WideCharToMultiByte(CP_UTF8, 0, fni->FileName, wlen,
+                name_utf8, (int)sizeof(name_utf8) - 1, NULL, NULL);
+            if (clen < 0) clen = 0;
+            name_utf8[clen] = '\0';
+            char full[_TR_WATCH_PATH_CAP];
+            _snprintf(full, sizeof(full), "%s\\%s", e->path, name_utf8);
+            full[sizeof(full) - 1] = '\0';
+            int kind = TAURARO_FS_MODIFIED;
+            switch (fni->Action) {
+                case FILE_ACTION_ADDED:            kind = TAURARO_FS_CREATED;  break;
+                case FILE_ACTION_REMOVED:          kind = TAURARO_FS_DELETED;  break;
+                case FILE_ACTION_MODIFIED:         kind = TAURARO_FS_MODIFIED; break;
+                case FILE_ACTION_RENAMED_OLD_NAME:  kind = TAURARO_FS_RENAMED;  break;
+                case FILE_ACTION_RENAMED_NEW_NAME:  kind = TAURARO_FS_RENAMED;  break;
+                default: kind = TAURARO_FS_MODIFIED; break;
+            }
+            _tr_watch_raw_event(w, full, kind);
+            if (fni->NextEntryOffset == 0) break;
+            p += fni->NextEntryOffset;
+        }
+    }
+    /* Re-arm for the next batch of changes on this root. */
+    _tr_watch_issue_read(e);
+}
+_TR_XLINK int _tr_watch_poll(_TrWatch* w, int timeout_ms, char* out_paths, int* out_kinds, int maxev) {
+    if (!w) return 0;
+    long long deadline = timeout_ms < 0 ? -1 : (_tr_time_ms() + timeout_ms);
+    for (;;) {
+        for (int i = 0; i < w->n_entries; i++) {
+            if (w->entries[i].read_pending) _tr_watch_drain_entry(w, &w->entries[i]);
+        }
+        _tr_watch_flush_debounced(w);
+        if (w->n_pending > 0) break;
+        if (w->n_entries == 0) { Sleep(timeout_ms > 0 ? (DWORD)timeout_ms : 0); break; }
+        long long now = _tr_time_ms();
+        if (deadline >= 0 && now >= deadline) break;
+        long long max_slice = 50;
+        long long dd = _tr_watch_next_debounce_deadline(w);
+        if (dd >= 0 && (dd - now) < max_slice) max_slice = dd - now;
+        DWORD slice = deadline < 0 ? (DWORD)max_slice : (DWORD)(deadline - now < max_slice ? deadline - now : max_slice);
+        Sleep(slice > 0 ? slice : 1);
+        if (deadline < 0) continue;
+    }
+    int n = w->n_pending;
+    if (n > maxev) n = maxev;
+    for (int i = 0; i < n; i++) {
+        char* slot = out_paths + (size_t)i * _TR_WATCH_PATH_CAP;
+        size_t l = strlen(w->pending[i].path);
+        if (l >= _TR_WATCH_PATH_CAP) l = _TR_WATCH_PATH_CAP - 1;
+        memcpy(slot, w->pending[i].path, l);
+        slot[l] = '\0';
+        out_kinds[i] = w->pending[i].kind;
+    }
+    /* Shift any leftover (maxev-truncated) events to the front. */
+    int leftover = w->n_pending - n;
+    if (leftover > 0) memmove(&w->pending[0], &w->pending[n], (size_t)leftover * sizeof(_TrWatchPendingEvent));
+    w->n_pending = leftover;
+    return n;
+}
+
+#elif defined(__linux__)
+/* ── Linux: inotify-backed _TrWatch ─────────────────────────────────────
+ * One inotify instance shared by all watched roots; each root gets its own
+ * watch descriptor (wd) via inotify_add_watch. "recursive" is emulated by
+ * additionally watching every existing subdirectory at add() time (inotify
+ * itself is never recursive) -- newly-created subdirectories after that
+ * are picked up lazily the next time poll() sees an IN_CREATE|IN_ISDIR
+ * event under a recursive root and inotify_add_watch's it on the fly. */
+#include <sys/inotify.h>
+#include <poll.h>
+
+static int _tr_watch_add_wd_for(_TrWatch* w, _TrWatchEntry* owner, const char* dirpath);
+
+static void _tr_watch_scan_subdirs(_TrWatch* w, _TrWatchEntry* owner, const char* dirpath) {
+    DIR* d = opendir(dirpath);
+    if (!d) return;
+    struct dirent* ent;
+    while ((ent = readdir(d)) != NULL) {
+        if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) continue;
+        char child[_TR_WATCH_PATH_CAP];
+        snprintf(child, sizeof(child), "%s/%s", dirpath, ent->d_name);
+        struct stat st;
+        if (stat(child, &st) == 0 && S_ISDIR(st.st_mode)) {
+            _tr_watch_add_wd_for(w, owner, child);
+            _tr_watch_scan_subdirs(w, owner, child);
+        }
+    }
+    closedir(d);
+}
+
+/* We need a wd -> owning directory-path lookup to reconstruct full paths
+ * from inotify's (wd, name) events, since inotify only reports the watched
+ * directory's wd + the changed child's bare name, not a full path. Rather
+ * than a second data structure, each watched subdirectory (root or lazily-
+ * discovered nested dir) is recorded as its own synthetic entry in
+ * entries[] (recursive = -1 sentinel marks "internal subdir watch, not a
+ * user-visible root") and we linear-scan entries[] by wd on each event --
+ * see _tr_watch_entry_by_wd below. Fine for the modest watch counts this
+ * API targets. */
+
+static int _tr_watch_add_wd_for(_TrWatch* w, _TrWatchEntry* owner, const char* dirpath) {
+    uint32_t mask = IN_CREATE | IN_DELETE | IN_MODIFY | IN_MOVED_FROM | IN_MOVED_TO |
+                    IN_CLOSE_WRITE | IN_ATTRIB;
+    int wd = inotify_add_watch(w->inotify_fd, dirpath, mask);
+    if (wd < 0) return -1;
+    /* Record the (wd -> dir, owner) mapping as a synthetic extra entry in
+     * entries[] marked with wd>=0 and recursive=-1 (sentinel: "subwatch",
+     * not a user-visible root) so lookups during poll can reuse the same
+     * array without a second data structure. */
+    _TrWatchEntry* sub = _tr_watch_entry_alloc(w);
+    if (!sub) { inotify_rm_watch(w->inotify_fd, wd); return -1; }
+    size_t n = strlen(dirpath);
+    if (n >= _TR_WATCH_PATH_CAP) n = _TR_WATCH_PATH_CAP - 1;
+    memcpy(sub->path, dirpath, n); sub->path[n] = '\0';
+    sub->recursive = -1; /* sentinel: internal subdir watch, not a user root */
+    sub->debounce_ms = owner->debounce_ms;
+    sub->wd = wd;
+    return 0;
+}
+
+_TR_XLINK _TrWatch* _tr_watch_create(void) {
+    _TrWatch* w = (_TrWatch*)TAURARO_CALLOC(1, sizeof(_TrWatch));
+    if (!w) return NULL;
+    w->inotify_fd = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
+    if (w->inotify_fd < 0) { TAURARO_FREE(w); return NULL; }
+    return w;
+}
+_TR_XLINK void _tr_watch_destroy(_TrWatch* w) {
+    if (!w) return;
+    if (w->inotify_fd >= 0) close(w->inotify_fd);
+    if (w->entries) TAURARO_FREE(w->entries);
+    if (w->pending) TAURARO_FREE(w->pending);
+    if (w->debounce) TAURARO_FREE(w->debounce);
+    TAURARO_FREE(w);
+}
+_TR_XLINK int _tr_watch_add(_TrWatch* w, const char* path, int recursive, int debounce_ms) {
+    if (!w || !path) return -1;
+    struct stat st;
+    if (stat(path, &st) != 0) return -1;
+    _TrWatchEntry* e = _tr_watch_entry_alloc(w);
+    if (!e) return -1;
+    size_t n = strlen(path);
+    if (n >= _TR_WATCH_PATH_CAP) n = _TR_WATCH_PATH_CAP - 1;
+    memcpy(e->path, path, n); e->path[n] = '\0';
+    e->recursive = recursive;
+    e->debounce_ms = debounce_ms;
+    uint32_t mask = IN_CREATE | IN_DELETE | IN_MODIFY | IN_MOVED_FROM | IN_MOVED_TO |
+                    IN_CLOSE_WRITE | IN_ATTRIB;
+    int wd = inotify_add_watch(w->inotify_fd, path, mask);
+    if (wd < 0) { w->n_entries--; return -1; }
+    e->wd = wd;
+    if (recursive && S_ISDIR(st.st_mode)) {
+        /* Re-fetch `e` after possible realloc inside the recursive scan. */
+        int eidx = w->n_entries - 1;
+        _tr_watch_scan_subdirs(w, &w->entries[eidx], path);
+    }
+    return 0;
+}
+_TR_XLINK int _tr_watch_remove(_TrWatch* w, const char* path) {
+    if (!w || !path) return -1;
+    int idx = _tr_watch_entry_find_idx(w, path);
+    if (idx < 0 || w->entries[idx].recursive < 0) return -1; /* don't let callers remove internal subwatches */
+    size_t plen = strlen(path);
+    /* Remove the root's own wd, plus any internal subdir wds nested under it. */
+    for (int i = w->n_entries - 1; i >= 0; i--) {
+        _TrWatchEntry* e2 = &w->entries[i];
+        int is_self = (i == idx);
+        int is_sub_of = (e2->recursive < 0 && strncmp(e2->path, path, plen) == 0 &&
+                          (e2->path[plen] == '/' || e2->path[plen] == '\0'));
+        if (is_self || is_sub_of) {
+            if (e2->wd >= 0) inotify_rm_watch(w->inotify_fd, e2->wd);
+            w->entries[i] = w->entries[w->n_entries - 1];
+            w->n_entries--;
+            if (idx == w->n_entries) idx = i; /* keep idx valid if it was the moved slot */
+        }
+    }
+    return 0;
+}
+/* Find the directory path owning watch descriptor `wd` (root or subdir). */
+static _TrWatchEntry* _tr_watch_entry_by_wd(_TrWatch* w, int wd) {
+    for (int i = 0; i < w->n_entries; i++) {
+        if (w->entries[i].wd == wd) return &w->entries[i];
+    }
+    return NULL;
+}
+_TR_XLINK int _tr_watch_poll(_TrWatch* w, int timeout_ms, char* out_paths, int* out_kinds, int maxev) {
+    if (!w) return 0;
+    long long deadline = timeout_ms < 0 ? -1 : (_tr_time_ms() + timeout_ms);
+    char buf[16384] __attribute__((aligned(__alignof__(struct inotify_event))));
+    for (;;) {
+        struct pollfd pfd; pfd.fd = w->inotify_fd; pfd.events = POLLIN; pfd.revents = 0;
+        long long now = _tr_time_ms();
+        long long max_slice = 50;
+        long long dd = _tr_watch_next_debounce_deadline(w);
+        if (dd >= 0 && (dd - now) < max_slice) max_slice = dd - now;
+        if (max_slice < 0) max_slice = 0;
+        int wait_ms;
+        if (deadline < 0) wait_ms = w->n_entries > 0 ? (int)max_slice : -1;
+        else {
+            long long rem = deadline - now;
+            if (rem < 0) rem = 0;
+            wait_ms = (int)(rem < max_slice ? rem : max_slice);
+        }
+        int pr = poll(&pfd, 1, wait_ms);
+        if (pr > 0 && (pfd.revents & POLLIN)) {
+            ssize_t len = read(w->inotify_fd, buf, sizeof(buf));
+            ssize_t off = 0;
+            while (off < len) {
+                struct inotify_event* ev = (struct inotify_event*)(buf + off);
+                _TrWatchEntry* dirent_owner = _tr_watch_entry_by_wd(w, ev->wd);
+                if (dirent_owner) {
+                    char full[_TR_WATCH_PATH_CAP];
+                    if (ev->len > 0) snprintf(full, sizeof(full), "%s/%s", dirent_owner->path, ev->name);
+                    else { size_t n = strlen(dirent_owner->path); if (n >= sizeof(full)) n = sizeof(full)-1; memcpy(full, dirent_owner->path, n); full[n] = '\0'; }
+                    int kind = TAURARO_FS_MODIFIED;
+                    if (ev->mask & IN_CREATE)      kind = TAURARO_FS_CREATED;
+                    else if (ev->mask & IN_DELETE) kind = TAURARO_FS_DELETED;
+                    else if (ev->mask & (IN_MOVED_FROM)) kind = TAURARO_FS_DELETED;
+                    else if (ev->mask & (IN_MOVED_TO))   kind = TAURARO_FS_CREATED;
+                    else if (ev->mask & (IN_MODIFY | IN_CLOSE_WRITE | IN_ATTRIB)) kind = TAURARO_FS_MODIFIED;
+                    /* Lazily start watching newly-created subdirectories of
+                     * a recursive root so future nested changes are seen. */
+                    if ((ev->mask & (IN_CREATE | IN_ISDIR)) == (IN_CREATE | IN_ISDIR) &&
+                        dirent_owner->recursive != 0) {
+                        struct stat st;
+                        if (stat(full, &st) == 0 && S_ISDIR(st.st_mode)) {
+                            _tr_watch_add_wd_for(w, dirent_owner, full);
+                        }
+                    }
+                    _tr_watch_raw_event(w, full, kind);
+                }
+                off += (ssize_t)(sizeof(struct inotify_event) + ev->len);
+            }
+        }
+        _tr_watch_flush_debounced(w);
+        if (w->n_pending > 0) break;
+        if (deadline >= 0 && _tr_time_ms() >= deadline) break;
+        if (deadline < 0 && w->n_entries == 0) break;
+    }
+    int n = w->n_pending;
+    if (n > maxev) n = maxev;
+    for (int i = 0; i < n; i++) {
+        char* slot = out_paths + (size_t)i * _TR_WATCH_PATH_CAP;
+        size_t l = strlen(w->pending[i].path);
+        if (l >= _TR_WATCH_PATH_CAP) l = _TR_WATCH_PATH_CAP - 1;
+        memcpy(slot, w->pending[i].path, l);
+        slot[l] = '\0';
+        out_kinds[i] = w->pending[i].kind;
+    }
+    int leftover = w->n_pending - n;
+    if (leftover > 0) memmove(&w->pending[0], &w->pending[n], (size_t)leftover * sizeof(_TrWatchPendingEvent));
+    w->n_pending = leftover;
+    return n;
+}
+
+#elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
+/* ── macOS/BSD: kqueue EVFILT_VNODE-backed _TrWatch ──────────────────────
+ * Simpler alternative to full FSEvents (see module-doc tradeoff note
+ * above): one open fd per watched path/root, EVFILT_VNODE with NOTE_WRITE
+ * (content/directory-listing changed), NOTE_DELETE, NOTE_RENAME, NOTE_EXTEND.
+ * For a watched *directory* we keep a snapshot of its child names and diff
+ * on NOTE_WRITE to synthesize CREATED/DELETED for individual children
+ * (EVFILT_VNODE itself only says "this directory's contents changed", not
+ * which child). Recursive watches additionally open an fd on every
+ * subdirectory found at add()-time; subdirectories created later are
+ * picked up lazily the next time a NOTE_WRITE diff reveals a new directory
+ * child under a recursive root. */
+#include <sys/event.h>
+
+static int _tr_watch_open_fd_for(_TrWatch* w, _TrWatchEntry* owner, const char* path, int is_root);
+
+static char** _tr_watch_snapshot_dir(const char* dirpath, int* out_n) {
+    DIR* d = opendir(dirpath);
+    if (!d) { *out_n = 0; return NULL; }
+    int cap = 16, n = 0;
+    char** names = (char**)TAURARO_CALLOC((size_t)cap, sizeof(char*));
+    struct dirent* ent;
+    while ((ent = readdir(d)) != NULL) {
+        if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) continue;
+        if (n >= cap) { cap *= 2; names = (char**)TAURARO_REALLOC(names, (size_t)cap * sizeof(char*)); }
+        names[n++] = strdup(ent->d_name);
+    }
+    closedir(d);
+    *out_n = n;
+    return names;
+}
+static void _tr_watch_free_snapshot(char** names, int n) {
+    if (!names) return;
+    for (int i = 0; i < n; i++) free(names[i]);
+    TAURARO_FREE(names);
+}
+static int _tr_watch_snapshot_contains(char** names, int n, const char* name) {
+    for (int i = 0; i < n; i++) if (strcmp(names[i], name) == 0) return 1;
+    return 0;
+}
+
+_TR_XLINK _TrWatch* _tr_watch_create(void) {
+    _TrWatch* w = (_TrWatch*)TAURARO_CALLOC(1, sizeof(_TrWatch));
+    if (!w) return NULL;
+    w->kqfd = kqueue();
+    if (w->kqfd < 0) { TAURARO_FREE(w); return NULL; }
+    return w;
+}
+_TR_XLINK void _tr_watch_destroy(_TrWatch* w) {
+    if (!w) return;
+    for (int i = 0; i < w->n_entries; i++) {
+        if (w->entries[i].fd >= 0) close(w->entries[i].fd);
+        _tr_watch_free_snapshot(w->entries[i].children, w->entries[i].n_children);
+    }
+    if (w->kqfd >= 0) close(w->kqfd);
+    if (w->entries) TAURARO_FREE(w->entries);
+    if (w->pending) TAURARO_FREE(w->pending);
+    if (w->debounce) TAURARO_FREE(w->debounce);
+    TAURARO_FREE(w);
+}
+static int _tr_watch_open_fd_for(_TrWatch* w, _TrWatchEntry* owner, const char* path, int is_root) {
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) return -1;
+    _TrWatchEntry* sub;
+    if (is_root) {
+        sub = owner;
+    } else {
+        sub = _tr_watch_entry_alloc(w);
+        if (!sub) { close(fd); return -1; }
+        size_t n = strlen(path);
+        if (n >= _TR_WATCH_PATH_CAP) n = _TR_WATCH_PATH_CAP - 1;
+        memcpy(sub->path, path, n); sub->path[n] = '\0';
+        sub->recursive = -1; /* internal subdir watch */
+        sub->debounce_ms = owner->debounce_ms;
+    }
+    sub->fd = fd;
+    struct kevent kev;
+    EV_SET(&kev, (uintptr_t)fd, EVFILT_VNODE, EV_ADD | EV_CLEAR,
+           NOTE_WRITE | NOTE_DELETE | NOTE_RENAME | NOTE_EXTEND | NOTE_ATTRIB, 0, sub);
+    if (kevent(w->kqfd, &kev, 1, NULL, 0, NULL) != 0) {
+        close(fd);
+        sub->fd = -1;
+        return -1;
+    }
+    struct stat st;
+    if (fstat(fd, &st) == 0 && S_ISDIR(st.st_mode)) {
+        sub->children = _tr_watch_snapshot_dir(path, &sub->n_children);
+    }
+    return 0;
+}
+_TR_XLINK int _tr_watch_add(_TrWatch* w, const char* path, int recursive, int debounce_ms) {
+    if (!w || !path) return -1;
+    struct stat st;
+    if (stat(path, &st) != 0) return -1;
+    _TrWatchEntry* e = _tr_watch_entry_alloc(w);
+    if (!e) return -1;
+    size_t n = strlen(path);
+    if (n >= _TR_WATCH_PATH_CAP) n = _TR_WATCH_PATH_CAP - 1;
+    memcpy(e->path, path, n); e->path[n] = '\0';
+    e->recursive = recursive;
+    e->debounce_ms = debounce_ms;
+    e->fd = -1;
+    if (_tr_watch_open_fd_for(w, e, path, 1) != 0) {
+        w->n_entries--;
+        return -1;
+    }
+    if (recursive && S_ISDIR(st.st_mode)) {
+        int eidx = w->n_entries - 1;
+        _TrWatchEntry* root = &w->entries[eidx];
+        for (int i = 0; i < root->n_children; i++) {
+            char child[_TR_WATCH_PATH_CAP];
+            snprintf(child, sizeof(child), "%s/%s", path, root->children[i]);
+            struct stat cst;
+            if (stat(child, &cst) == 0 && S_ISDIR(cst.st_mode)) {
+                _tr_watch_open_fd_for(w, root, child, 0);
+            }
+        }
+    }
+    return 0;
+}
+_TR_XLINK int _tr_watch_remove(_TrWatch* w, const char* path) {
+    if (!w || !path) return -1;
+    int idx = _tr_watch_entry_find_idx(w, path);
+    if (idx < 0 || w->entries[idx].recursive < 0) return -1;
+    size_t plen = strlen(path);
+    for (int i = w->n_entries - 1; i >= 0; i--) {
+        _TrWatchEntry* e2 = &w->entries[i];
+        int is_self = (i == idx);
+        int is_sub_of = (e2->recursive < 0 && strncmp(e2->path, path, plen) == 0 &&
+                          (e2->path[plen] == '/' || e2->path[plen] == '\0'));
+        if (is_self || is_sub_of) {
+            if (e2->fd >= 0) close(e2->fd);
+            _tr_watch_free_snapshot(e2->children, e2->n_children);
+            w->entries[i] = w->entries[w->n_entries - 1];
+            w->n_entries--;
+        }
+    }
+    return 0;
+}
+_TR_XLINK int _tr_watch_poll(_TrWatch* w, int timeout_ms, char* out_paths, int* out_kinds, int maxev) {
+    if (!w) return 0;
+    long long deadline = timeout_ms < 0 ? -1 : (_tr_time_ms() + timeout_ms);
+    for (;;) {
+        struct kevent evs[64];
+        long long now = _tr_time_ms();
+        long long max_slice = 50;
+        long long dd = _tr_watch_next_debounce_deadline(w);
+        if (dd >= 0 && (dd - now) < max_slice) max_slice = dd - now;
+        if (max_slice < 0) max_slice = 0;
+        int wait_ms;
+        if (deadline < 0) wait_ms = w->n_entries > 0 ? (int)max_slice : -1;
+        else { long long rem = deadline - now; if (rem < 0) rem = 0; wait_ms = (int)(rem < max_slice ? rem : max_slice); }
+        struct timespec ts, *tsp;
+        if (wait_ms < 0) tsp = NULL;
+        else { ts.tv_sec = wait_ms / 1000; ts.tv_nsec = (wait_ms % 1000) * 1000000L; tsp = &ts; }
+        int n = kevent(w->kqfd, NULL, 0, evs, 64, tsp);
+        for (int i = 0; i < n; i++) {
+            _TrWatchEntry* e = (_TrWatchEntry*)evs[i].udata;
+            if (!e) continue;
+            if (evs[i].fflags & (NOTE_DELETE | NOTE_RENAME)) {
+                _tr_watch_raw_event(w, e->path, evs[i].fflags & NOTE_RENAME ? TAURARO_FS_RENAMED : TAURARO_FS_DELETED);
+                continue;
+            }
+            if (evs[i].fflags & (NOTE_WRITE | NOTE_EXTEND | NOTE_ATTRIB)) {
+                if (e->children || e->n_children > 0) {
+                    /* Directory: diff snapshot to find created/deleted children. */
+                    int new_n = 0;
+                    char** new_names = _tr_watch_snapshot_dir(e->path, &new_n);
+                    for (int c = 0; c < new_n; c++) {
+                        if (!_tr_watch_snapshot_contains(e->children, e->n_children, new_names[c])) {
+                            char full[_TR_WATCH_PATH_CAP];
+                            snprintf(full, sizeof(full), "%s/%s", e->path, new_names[c]);
+                            _tr_watch_raw_event(w, full, TAURARO_FS_CREATED);
+                            struct stat cst;
+                            if (e->recursive != 0 && stat(full, &cst) == 0 && S_ISDIR(cst.st_mode)) {
+                                _tr_watch_open_fd_for(w, e, full, 0);
+                            }
+                        }
+                    }
+                    for (int c = 0; c < e->n_children; c++) {
+                        if (!_tr_watch_snapshot_contains(new_names, new_n, e->children[c])) {
+                            char full[_TR_WATCH_PATH_CAP];
+                            snprintf(full, sizeof(full), "%s/%s", e->path, e->children[c]);
+                            _tr_watch_raw_event(w, full, TAURARO_FS_DELETED);
+                        }
+                    }
+                    _tr_watch_free_snapshot(e->children, e->n_children);
+                    e->children = new_names;
+                    e->n_children = new_n;
+                } else {
+                    _tr_watch_raw_event(w, e->path, TAURARO_FS_MODIFIED);
+                }
+            }
+        }
+        _tr_watch_flush_debounced(w);
+        if (w->n_pending > 0) break;
+        if (deadline >= 0 && _tr_time_ms() >= deadline) break;
+        if (deadline < 0 && w->n_entries == 0) break;
+    }
+    int n = w->n_pending;
+    if (n > maxev) n = maxev;
+    for (int i = 0; i < n; i++) {
+        char* slot = out_paths + (size_t)i * _TR_WATCH_PATH_CAP;
+        size_t l = strlen(w->pending[i].path);
+        if (l >= _TR_WATCH_PATH_CAP) l = _TR_WATCH_PATH_CAP - 1;
+        memcpy(slot, w->pending[i].path, l);
+        slot[l] = '\0';
+        out_kinds[i] = w->pending[i].kind;
+    }
+    int leftover = w->n_pending - n;
+    if (leftover > 0) memmove(&w->pending[0], &w->pending[n], (size_t)leftover * sizeof(_TrWatchPendingEvent));
+    w->n_pending = leftover;
+    return n;
+}
+
+#else
+/* ── Fallback: no filesystem watch support on unknown platform ─────────── */
+_TR_XLINK _TrWatch* _tr_watch_create(void) { return (_TrWatch*)TAURARO_CALLOC(1, sizeof(_TrWatch)); }
+_TR_XLINK void _tr_watch_destroy(_TrWatch* w) {
+    if (!w) return;
+    if (w->entries) TAURARO_FREE(w->entries);
+    if (w->pending) TAURARO_FREE(w->pending);
+    if (w->debounce) TAURARO_FREE(w->debounce);
+    TAURARO_FREE(w);
+}
+_TR_XLINK int _tr_watch_add(_TrWatch* w, const char* path, int recursive, int debounce_ms)
+    { (void)w;(void)path;(void)recursive;(void)debounce_ms; return -1; }
+_TR_XLINK int _tr_watch_remove(_TrWatch* w, const char* path) { (void)w;(void)path; return -1; }
+_TR_XLINK int _tr_watch_poll(_TrWatch* w, int timeout_ms, char* out_paths, int* out_kinds, int maxev)
+    { (void)w;(void)timeout_ms;(void)out_paths;(void)out_kinds;(void)maxev; return 0; }
+#endif /* _TrWatch platform backends */
+
+/* _tr_watch_poll_raw: Tauraro-callable version. out_buf must be caller-
+ * allocated with at least maxev * _TR_WATCH_PATH_CAP bytes (one fixed-size
+ * path slot per event, NUL-terminated); out_kinds_buf must hold at least
+ * maxev ints (4 bytes each, kind code TAURARO_FS_*). Returns the number of
+ * events written (0 on timeout -- never blocks longer than timeout_ms). */
+_TR_XLINK int _tr_watch_poll_raw(char* w_raw, int timeout_ms, char* out_buf, char* out_kinds_buf, int maxev) {
+    _TrWatch* w = (_TrWatch*)w_raw;
+    if (!w) return 0;
+    if (maxev > 256) maxev = 256;
+    int* kinds = (int*)out_kinds_buf;
+    return _tr_watch_poll(w, timeout_ms, out_buf, kinds, maxev);
+}
+
+/* Watch char*-typed _h wrappers for Tauraro Pointer[char] interop */
+_TR_XLINK char* _tr_watch_create_h(void) { return (char*)_tr_watch_create(); }
+_TR_XLINK void  _tr_watch_destroy_h(char* w) { _tr_watch_destroy((_TrWatch*)w); }
+_TR_XLINK int   _tr_watch_add_h(char* w, const char* path, int recursive, int debounce_ms)
+    { return _tr_watch_add((_TrWatch*)w, path, recursive, debounce_ms); }
+_TR_XLINK int   _tr_watch_remove_h(char* w, const char* path)
+    { return _tr_watch_remove((_TrWatch*)w, path); }
+
 /* =========================================================================
  * Green-thread scheduler - stackful coroutines + non-blocking reactor.
  *
