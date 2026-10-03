@@ -3,6 +3,12 @@
 # Sub-modules:
 #   from std.compress.zlib import Zlib
 #   from std.compress.gzip import Gzip
+#   from std.compress.zip  import Zip, ZipFileWriter, ZipFileReader, ZipEntry, ZipMethod
 
 from std.compress.zlib import Zlib
 from std.compress.gzip import Gzip
+from std.compress.zip  import Zip
+from std.compress.zip  import ZipFileWriter
+from std.compress.zip  import ZipFileReader
+from std.compress.zip  import ZipEntry
+from std.compress.zip  import ZipMethod
