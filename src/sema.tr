@@ -5531,14 +5531,29 @@ extend Sema:
                 # they cannot by themselves corrupt memory.
                 if hobj_ty.name == "Pointer" and method == "write" and not self.in_unsafe:
                     self.error("[P-1] '.write()' on a Pointer mutates raw memory and must be inside an 'unsafe:' block.\n      FIX: Wrap this call in 'unsafe:', e.g.\n          unsafe:\n              ... .write(...) ...")
-                if method == "init" or method == "new" or method == "auto":
+                # `auto` defaults to a Self-returning factory (ThreadPool.auto(),
+                # AsyncPool.auto() - sized to core count) UNLESS the receiving
+                # class declares its OWN `auto` method with an explicit, different
+                # return type (e.g. `Bench.auto(name, fn, target_ms) -> BenchResult`,
+                # std/test/bench.tr) - in that case defer to the normal declared-
+                # method-signature lookup further below (`elif
+                # self.classes.contains(hobj_ty.name)`) instead of overriding it.
+                # Without this guard EVERY class's `.auto(...)` static method was
+                # force-typed as returning the class itself, regardless of its
+                # real signature - confirmed via Bench.auto(...) -> BenchResult
+                # mis-inferring as `Bench`, causing a spurious "no method
+                # 'ops_per_sec' on type 'Bench'" at the call site.
+                mut _auto_is_self_factory = true
+                if method == "auto" and self.classes.contains(hobj_ty.name):
+                    mut _af_cls = self.classes.get(hobj_ty.name)
+                    mut _af_i = 0
+                    while _af_i < _af_cls.methods.len:
+                        mut _af_m = _af_cls.methods.get(_af_i)
+                        if _af_m.name == "auto" and _af_m.ret_ty as usize != 0 as usize:
+                            if _af_m.ret_ty.read().name != hobj_ty.name: _auto_is_self_factory = false
+                        _af_i = _af_i + 1
+                if method == "init" or method == "new" or (method == "auto" and _auto_is_self_factory):
                     # Preserve generic args so Vec[T].init(n) keeps the T info.
-                    # `auto` included alongside `init`/`new`: a zero-arg factory
-                    # convenience constructor (`ThreadPool.auto()`/`AsyncPool.auto()`,
-                    # sized to core count) - genuinely missing before (confirmed:
-                    # `ThreadPool.auto()` mis-typed even in the unmodified
-                    # compiler, a real pre-existing bug, not something this
-                    # AsyncPool work introduced), same fix as `init`/`new`.
                     if hobj_ty.name == "void" or hobj_ty.name == "":
                         # Built-in types used as static receivers (e.g. Atomic.new, Thread.new)
                         # resolve to void; recover type from the receiver identifier name.

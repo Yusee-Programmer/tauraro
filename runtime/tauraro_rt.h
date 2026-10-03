@@ -2577,6 +2577,39 @@ _TR_XLINK long long _tr_time_ms(void) {
 #endif
 }
 
+/* ══════════════════════════════════════════════════════════════════════════
+ * _tr_perf_counter_ns — nanosecond-resolution MONOTONIC timer (std.test.bench)
+ *
+ * _tr_time_ms() above is millisecond-resolution, too coarse for micro-
+ * benchmarking fast operations (sub-millisecond ops would read as 0ms).
+ * This returns nanoseconds since an arbitrary, unspecified epoch — it is
+ * NOT wall-clock time and must only be used for measuring elapsed intervals
+ * (subtract two readings), never compared across processes/machines.
+ * Monotonic: never goes backwards, immune to system clock adjustments.
+ *   Windows: QueryPerformanceCounter + QueryPerformanceFrequency, scaled to ns.
+ *   POSIX:   clock_gettime(CLOCK_MONOTONIC, ...), scaled to ns.
+ * ══════════════════════════════════════════════════════════════════════════ */
+_TR_XLINK long long _tr_perf_counter_ns(void) {
+#if defined(TAURARO_BARE) && !defined(__wasi__)
+    return 0LL;
+#elif defined(_WIN32)
+    LARGE_INTEGER freq, count;
+    QueryPerformanceFrequency(&freq);
+    QueryPerformanceCounter(&count);
+    /* Reorder to divide last and minimize precision loss; freq is Hz (ticks/sec).
+     * count.QuadPart * 1e9 can overflow a 64-bit int at very large tick counts,
+     * but freq is typically in the low MHz-GHz range, so split whole/frac parts
+     * to stay well within range for any realistic uptime. */
+    long long whole = (count.QuadPart / freq.QuadPart) * 1000000000LL;
+    long long frac  = (count.QuadPart % freq.QuadPart) * 1000000000LL / freq.QuadPart;
+    return whole + frac;
+#else
+    struct timespec _ts;
+    clock_gettime(CLOCK_MONOTONIC, &_ts);
+    return (long long)_ts.tv_sec * 1000000000LL + (long long)_ts.tv_nsec;
+#endif
+}
+
 /* Enable ANSI/VT100 colour codes on Windows Terminal; no-op elsewhere. */
 static inline void _tr_enable_vt100(void) {
 #ifdef _WIN32

@@ -7,14 +7,21 @@ extern "C":
 from std.core.vec import Vec
 
 pub class Random:
-    pub _state: int
+    # Stored unsigned: the LCG's multiply/add step is DESIGNED to overflow
+    # (that's how the period is achieved) and must silently wrap, which
+    # unsigned arithmetic does. A signed `int` here would hit Tauraro's
+    # `-ftrapv` overflow trap (abort()) on literally the first advance for
+    # most seeds -- see tests/lang/56_test_extensions.tr's Fuzzer.check,
+    # which is what originally surfaced this (the module had never been
+    # exercised by the test suite before).
+    pub _state: u64
 
 extend Random:
     # Create a Random with the given seed.
     pub def new(seed: int) -> Random:
         mut r = Random()
-        r._state = seed
-        if r._state == 0: r._state = 12345
+        r._state = seed as u64
+        if r._state == 0 as u64: r._state = 12345 as u64
         return r
 
     # Create a Random seeded from the current clock (non-deterministic).
@@ -25,10 +32,12 @@ extend Random:
 
     # Advance the LCG and return the next non-negative value.
     pub def next_int(self) -> int:
-        self._state = self._state * 6364136223846793 + 1442695040888963407
-        mut v = self._state
-        if v < 0: v = 0 - v
-        return v
+        self._state = (self._state * (6364136223846793 as u64)) + (1442695040888963407 as u64)
+        # Mask off the sign bit so the u64->int reinterpretation is always
+        # non-negative -- avoids a second overflow trap on `0 - LLONG_MIN`
+        # that a naive "negate if negative" would hit.
+        mut v = self._state & (9223372036854775807 as u64)
+        return v as int
 
     # Return a pseudo-random float in [0.0, 1.0).
     pub def next_float(self) -> float:
