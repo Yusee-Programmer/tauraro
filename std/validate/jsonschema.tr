@@ -1,0 +1,156 @@
+# std.validate.jsonschema — Export a `Schema` as a standard JSON Schema
+# document (https://json-schema.org/ draft-07-compatible subset).
+#
+# The same Schema definition used for runtime `.validate()` doubles as
+# machine-readable API documentation: `{"type": "object", "properties": {...},
+# "required": [...]}` etc. Only the rule types this module supports are
+# covered (type/properties/required/minimum/maximum/minLength/maxLength/
+# minItems/maxItems/pattern/enum/items) — `.custom()` rules have no JSON
+# Schema equivalent and are intentionally omitted (there is no standard way
+# to serialize arbitrary caller code).
+
+from std.core.string import StringBuilder
+from std.validate.schema import Schema, Rule, KIND_ANY, KIND_STRING, KIND_NUMBER, KIND_BOOL, KIND_OBJECT, KIND_ARRAY, RULE_REQUIRED, RULE_MIN, RULE_MAX, RULE_PATTERN, RULE_ONE_OF, RULE_CUSTOM
+
+extern "C":
+    def _tr_float_to_str(n: float) -> str
+
+def _kind_type_name(kind: int) -> str:
+    if kind == KIND_STRING(): return "string"
+    if kind == KIND_NUMBER(): return "number"
+    if kind == KIND_BOOL():   return "boolean"
+    if kind == KIND_OBJECT(): return "object"
+    if kind == KIND_ARRAY():  return "array"
+    return ""
+
+def _json_escape_into(s: str, sb: StringBuilder):
+    mut p = s as Pointer[char]
+    mut i = 0
+    mut n = s.len()
+    while i < n:
+        mut c = p.offset(i).read() as int
+        if c == 34:   sb.append("\\\"")
+        elif c == 92: sb.append("\\\\")
+        elif c == 10: sb.append("\\n")
+        elif c == 13: sb.append("\\r")
+        elif c == 9:  sb.append("\\t")
+        else: sb.append_char(c)
+        i = i + 1
+
+def _jstr(s: str, sb: StringBuilder):
+    sb.append_char(34)
+    _json_escape_into(s, sb)
+    sb.append_char(34)
+
+# Does this schema (any of its own rules) declare a .required() rule?
+# Field-level "required" in JSON Schema lives on the PARENT object's
+# "required" array, not on the child schema itself, so the parent's
+# `_write_object` consults this per field.
+def _has_required_rule(s: Schema) -> bool:
+    mut i = 0
+    while i < s.rules.len:
+        if s.rules.get(i).kind == RULE_REQUIRED(): return true
+        i = i + 1
+    return false
+
+def _write_schema(s: Schema, sb: StringBuilder):
+    sb.append_char(123)   # {
+    mut first = true
+
+    mut tname = _kind_type_name(s.kind)
+    if tname != "":
+        if not first: sb.append_char(44)
+        first = false
+        sb.append("\"type\":")
+        _jstr(tname, sb)
+
+    # Numeric / length / count bounds and pattern / enum, gathered from rules.
+    mut i = 0
+    while i < s.rules.len:
+        mut r = s.rules.get(i)
+        if r.kind == RULE_MIN():
+            if not first: sb.append_char(44)
+            first = false
+            if s.kind == KIND_STRING():
+                sb.append("\"minLength\":")
+            elif s.kind == KIND_ARRAY():
+                sb.append("\"minItems\":")
+            else:
+                sb.append("\"minimum\":")
+            sb.append(_tr_float_to_str(r.num))
+        elif r.kind == RULE_MAX():
+            if not first: sb.append_char(44)
+            first = false
+            if s.kind == KIND_STRING():
+                sb.append("\"maxLength\":")
+            elif s.kind == KIND_ARRAY():
+                sb.append("\"maxItems\":")
+            else:
+                sb.append("\"maximum\":")
+            sb.append(_tr_float_to_str(r.num))
+        elif r.kind == RULE_PATTERN():
+            if not first: sb.append_char(44)
+            first = false
+            sb.append("\"pattern\":")
+            _jstr(r.pattern, sb)
+        elif r.kind == RULE_ONE_OF():
+            if not first: sb.append_char(44)
+            first = false
+            sb.append("\"enum\":[")
+            mut j = 0
+            while j < r.allowed.len:
+                if j > 0: sb.append_char(44)
+                _jstr(r.allowed.get(j), sb)
+                j = j + 1
+            sb.append_char(93)
+        i = i + 1
+
+    # Object composition: properties + required.
+    if s.field_names.len > 0:
+        if not first: sb.append_char(44)
+        first = false
+        sb.append("\"properties\":{")
+        mut k = 0
+        while k < s.field_names.len:
+            if k > 0: sb.append_char(44)
+            _jstr(s.field_names.get(k), sb)
+            sb.append_char(58)
+            _write_schema(s.field_schemas.get(k), sb)
+            k = k + 1
+        sb.append_char(125)
+
+        mut reqd = List[str].init(4)
+        mut m = 0
+        while m < s.field_names.len:
+            if _has_required_rule(s.field_schemas.get(m)):
+                reqd.push(s.field_names.get(m))
+            m = m + 1
+        if reqd.len > 0:
+            sb.append_char(44)
+            sb.append("\"required\":[")
+            mut n2 = 0
+            while n2 < reqd.len:
+                if n2 > 0: sb.append_char(44)
+                _jstr(reqd.get(n2), sb)
+                n2 = n2 + 1
+            sb.append_char(93)
+
+    # Array composition: items.
+    if s.has_items:
+        if not first: sb.append_char(44)
+        first = false
+        sb.append("\"items\":")
+        _write_schema(s.item_schema, sb)
+
+    sb.append_char(125)   # }
+
+# Serialize `s` as a standard JSON Schema document (draft-07-compatible
+# subset: type/properties/required/minimum/maximum/minLength/maxLength/
+# minItems/maxItems/pattern/enum/items). `.custom()` rules are omitted --
+# there is no standard JSON Schema representation for arbitrary code.
+pub def to_json_schema(s: Schema) -> str:
+    mut sb = StringBuilder.init(128)
+    _write_schema(s, sb)
+    mut out = sb.to_owned()
+    sb.free()
+    return out
