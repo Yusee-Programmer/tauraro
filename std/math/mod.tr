@@ -7,6 +7,7 @@
 #   from std.math.random import Random
 #   from std.math.stats  import Stats
 #   from std.math.bigint import BigInt
+#   from std.math.linalg import Vector, Matrix
 
 from std.math.int    import Math
 from std.math.float  import FloatMath
@@ -14,3 +15,4 @@ from std.math.bits   import Bits
 from std.math.random import Random
 from std.math.stats  import Stats
 from std.math.bigint import BigInt
+from std.math.linalg import Vector, Matrix
