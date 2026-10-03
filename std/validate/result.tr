@@ -1,0 +1,68 @@
+# std.validate.result — Validation outcome types.
+#
+# A `Schema.validate(...)` run never fails fast: every rule in the whole
+# (possibly nested) structure is checked, and every violation is collected
+# into a `ValidationResult` before returning. Each `ValidationError` carries
+# the dotted field PATH it occurred at (e.g. "address.zip", not just "zip"),
+# a human-readable message, and a machine-readable rule code
+# (e.g. "required", "min", "pattern") so a caller can branch on the failure
+# kind without parsing the message text.
+
+pub class ValidationError:
+    pub path:    str   # dotted field path, e.g. "user.address.zip" ("" = root value)
+    pub rule:    str   # machine-readable rule code: "required"/"min"/"max"/"pattern"/"one_of"/"type"/"custom"
+    pub message: str   # human-readable description
+
+extend ValidationError:
+    pub def init(path: str, rule: str, message: str) -> ValidationError:
+        mut e = ValidationError()
+        e.path    = path
+        e.rule    = rule
+        e.message = message
+        return e
+
+    # Render as "<path>: <message>" ("<message>" alone when path is "").
+    pub def to_str(self) -> str:
+        if self.path == "":
+            return self.message
+        return self.path + ": " + self.message
+
+pub class ValidationResult:
+    pub errs: List[ValidationError]
+
+extend ValidationResult:
+    pub def init() -> ValidationResult:
+        mut r = ValidationResult()
+        r.errs = List[ValidationError].init(4)
+        return r
+
+    pub def _add(self, path: str, rule: str, message: str):
+        self.errs.push(ValidationError.init(path, rule, message))
+
+    # True when zero violations were collected.
+    pub def is_valid(self) -> bool:
+        return self.errs.len == 0
+
+    pub def errors(self) -> List[ValidationError]:
+        return self.errs
+
+    pub def error_count(self) -> int:
+        return self.errs.len
+
+    # Merge another result's errors into this one (used when composing nested
+    # object/list validation into the parent result).
+    pub def merge(self, other: ValidationResult):
+        mut i = 0
+        while i < other.errs.len:
+            self.errs.push(other.errs.get(i))
+            i = i + 1
+
+    # Render every error, one per line, as "<path>: <message>".
+    pub def to_str(self) -> str:
+        mut out = ""
+        mut i = 0
+        while i < self.errs.len:
+            if i > 0: out = out + "\n"
+            out = out + self.errs.get(i).to_str()
+            i = i + 1
+        return out

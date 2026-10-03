@@ -1,0 +1,32 @@
+# std.validate — Package index.
+#
+# Schema/data validation over `std.encoding.json` values (`JsonRef`), the
+# generic "Map[str, V]-shaped data" Tauraro already has. Collects ALL
+# violations across a (possibly nested) structure in one pass -- never
+# fails fast -- with each error carrying a dotted field path
+# ("user.address.zip"), a human message, and a machine-readable rule code.
+#
+# Sub-modules:
+#   from std.validate.schema import Schema, Rule
+#   from std.validate.result import ValidationError, ValidationResult
+#   from std.validate.jsonschema import to_json_schema
+#
+# Quick start:
+#   from std.encoding.json import Json
+#   from std.validate import Schema
+#
+#   mut doc = Json.parse(body)
+#   mut s = Schema.object()
+#   s.field("name", Schema.string().required())
+#   s.field("age",  Schema.number().min(0.0).max(150.0))
+#   mut result = s.validate(doc.root())
+#   if not result.is_valid():
+#       mut errs = result.errors()
+#       mut i = 0
+#       while i < errs.len:
+#           print(errs.get(i).to_str())
+#           i = i + 1
+
+from std.validate.result import ValidationError, ValidationResult
+from std.validate.schema import Schema, Rule, KIND_ANY, KIND_STRING, KIND_NUMBER, KIND_BOOL, KIND_OBJECT, KIND_ARRAY
+from std.validate.jsonschema import to_json_schema

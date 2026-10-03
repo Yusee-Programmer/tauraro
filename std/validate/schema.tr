@@ -1,0 +1,397 @@
+# std.validate.schema — Schema builder + validation engine.
+#
+# Works directly over `JsonRef`/`JsonDoc` from `std.encoding.json` — the
+# natural generic "Map[str, V]-shaped data" source in Tauraro, since JSON
+# documents already give a uniform tagged view over objects/arrays/scalars
+# with no need for a separate dynamic-value type.
+#
+#   from std.encoding.json import Json
+#   from std.validate import Schema
+#
+#   mut doc = Json.parse(body)
+#   mut s = Schema.object()
+#   s.field("name", Schema.string().required())
+#   s.field("age",  Schema.number().min(0.0).max(150.0))
+#   mut result = s.validate(doc.root())
+#   if not result.is_valid():
+#       mut i = 0
+#       while i < result.errors().len:
+#           print(result.errors().get(i).to_str())
+#           i = i + 1
+#
+# RULE SEMANTICS:
+#   .required()  — field must be present in the parent object and its value
+#                  must not be JSON null (for a top-level/non-object schema,
+#                  the value itself must not be null).
+#   .min(n)/.max(n) — DUAL MEANING, resolved by the value's own JSON type at
+#                  validation time (not by which schema constructor you used):
+#                    * number (int/float) value  -> inclusive numeric range
+#                    * string value              -> inclusive length range (chars)
+#                    * array value               -> inclusive element-count range
+#                  Applying .min()/.max() to a bool/object/null value is a
+#                  "type" violation (there is no length/range meaning there).
+#   .pattern(re) — string value must match the POSIX ERE pattern (via
+#                  std.regex); applying it to a non-string value is a "type"
+#                  violation.
+#   .one_of([...]) — value's rendered form must equal one of the allowed
+#                  strings (works across string/int/float/bool values; see
+#                  `_value_render`).
+#   .custom(fn)  — escape hatch: fn receives the JsonRef value and the
+#                  field's dotted path, returns "" for OK or a non-empty
+#                  human-readable error message to fail.
+#
+# COMPOSITION: `.field(name, sub_schema)` nests another Schema for an object
+# field (applies recursively, path-prefixed e.g. "address.zip"). `.items(sub)`
+# applies a Schema to every element of an array field/value.
+
+from std.encoding.json import JsonDoc, JsonRef, JSON_NULL, JSON_BOOL, JSON_INT, JSON_FLOAT, JSON_STR, JSON_ARRAY, JSON_OBJ
+from std.validate.result import ValidationError, ValidationResult
+from std.regex import Regex
+
+extern "C":
+    def _tr_int_to_str(n: int) -> str
+    def _tr_float_to_str(n: float) -> str
+
+# Target "kind" a Schema was built for — purely documentary/for to_json_schema;
+# actual validation always dispatches on the JSON value's own runtime tag, so
+# a mis-tagged schema (e.g. Schema.string() applied to a JSON number) reports
+# a clear "type" violation instead of silently doing the wrong check.
+pub def KIND_ANY()    -> int: return 0
+pub def KIND_STRING() -> int: return 1
+pub def KIND_NUMBER() -> int: return 2
+pub def KIND_BOOL()   -> int: return 3
+pub def KIND_OBJECT() -> int: return 4
+pub def KIND_ARRAY()  -> int: return 5
+
+# A single rule attached to a Schema. Tagged-union style (mirrors this
+# codebase's YamlValue/TomlValue convention): `kind` selects which fields
+# are meaningful.
+pub def RULE_REQUIRED() -> int: return 0
+pub def RULE_MIN()      -> int: return 1
+pub def RULE_MAX()      -> int: return 2
+pub def RULE_PATTERN()  -> int: return 3
+pub def RULE_ONE_OF()   -> int: return 4
+pub def RULE_CUSTOM()   -> int: return 5
+
+pub class Rule:
+    pub kind:      int
+    pub num:       float            # MIN/MAX threshold
+    pub pattern:   str               # PATTERN regex source
+    pub allowed:   List[str]         # ONE_OF rendered allowed values
+    pub custom_fn: def(JsonRef, str) -> str
+    pub has_custom: bool
+
+extend Rule:
+    pub def required() -> Rule:
+        mut r = Rule()
+        r.kind = RULE_REQUIRED()
+        r.num = 0.0
+        r.pattern = ""
+        r.allowed = List[str].init(1)
+        r.has_custom = false
+        return r
+
+    pub def min_rule(n: float) -> Rule:
+        mut r = Rule()
+        r.kind = RULE_MIN()
+        r.num = n
+        r.pattern = ""
+        r.allowed = List[str].init(1)
+        r.has_custom = false
+        return r
+
+    pub def max_rule(n: float) -> Rule:
+        mut r = Rule()
+        r.kind = RULE_MAX()
+        r.num = n
+        r.pattern = ""
+        r.allowed = List[str].init(1)
+        r.has_custom = false
+        return r
+
+    pub def pattern_rule(p: str) -> Rule:
+        mut r = Rule()
+        r.kind = RULE_PATTERN()
+        r.num = 0.0
+        r.pattern = p
+        r.allowed = List[str].init(1)
+        r.has_custom = false
+        return r
+
+    pub def one_of_rule(values: List[str]) -> Rule:
+        mut r = Rule()
+        r.kind = RULE_ONE_OF()
+        r.num = 0.0
+        r.pattern = ""
+        r.allowed = values
+        r.has_custom = false
+        return r
+
+    pub def custom_rule(fn: def(JsonRef, str) -> str) -> Rule:
+        mut r = Rule()
+        r.kind = RULE_CUSTOM()
+        r.num = 0.0
+        r.pattern = ""
+        r.allowed = List[str].init(1)
+        r.custom_fn = fn
+        r.has_custom = true
+        return r
+
+# Render a JSON scalar value as a comparison string (used by one_of; also
+# handy for error messages). Objects/arrays/null render to a fixed label.
+pub def _value_render(v: JsonRef) -> str:
+    if v.is_str():   return v.get_str()
+    if v.is_int():   return _tr_int_to_str(v.get_int())
+    if v.is_float(): return _tr_float_to_str(v.get_float())
+    if v.is_bool():
+        if v.get_bool(): return "true"
+        return "false"
+    if v.is_null():  return "null"
+    if v.is_array(): return "<array>"
+    return "<object>"
+
+# Build an "absent" JsonRef sharing the same doc (idx=-1: `.exists()` is
+# false and `.tag_at()` falls back to its null-ish default) — used so a
+# missing object field can still recurse into a sub-schema's own
+# `.required()`/nested checks instead of skipping them outright.
+def _missing_ref(like: JsonRef) -> JsonRef:
+    mut r = JsonRef()
+    r.doc = like.doc
+    r.idx = 0 - 1
+    return r
+
+def _type_name(v: JsonRef) -> str:
+    if v.is_str():    return "string"
+    if v.is_int():    return "number"
+    if v.is_float():  return "number"
+    if v.is_bool():   return "bool"
+    if v.is_null():   return "null"
+    if v.is_array():  return "array"
+    if v.is_object(): return "object"
+    return "unknown"
+
+# ─── Schema ─────────────────────────────────────────────────────────────────
+#
+# A Schema validates ONE value (scalar, object, or array). Object schemas
+# accumulate named fields via `.field(name, sub_schema)`; array schemas wrap
+# a single element-schema via `.items(sub_schema)`. Rules (.required/.min/
+# .max/.pattern/.one_of/.custom) attach to whichever Schema they're called
+# on — including object/array schemas themselves, e.g. `.required()` on an
+# object-valued field, or `.min()`/`.max()` on an array field for element-count
+# bounds.
+pub class Schema:
+    pub kind:        int
+    pub rules:       List[Rule]
+    pub field_names:  List[str]      # object composition: parallel to field_schemas
+    pub field_schemas: List[Schema]
+    pub has_items:    bool            # array composition
+    pub item_schema:  Schema
+
+extend Schema:
+    def _new(kind: int) -> Schema:
+        mut s = Schema()
+        s.kind = kind
+        s.rules = List[Rule].init(4)
+        s.field_names = List[str].init(4)
+        s.field_schemas = List[Schema].init(4)
+        s.has_items = false
+        return s
+
+    # ── Constructors (kind documents intent; see KIND_* / dual-meaning note above) ──
+    pub def any() -> Schema:     return Schema._new(KIND_ANY())
+    pub def string() -> Schema:  return Schema._new(KIND_STRING())
+    pub def number() -> Schema:  return Schema._new(KIND_NUMBER())
+    pub def boolean() -> Schema: return Schema._new(KIND_BOOL())
+    pub def object() -> Schema:  return Schema._new(KIND_OBJECT())
+    pub def array() -> Schema:   return Schema._new(KIND_ARRAY())
+
+    # ── Chainable rule attachment (each returns self) ───────────────────────
+
+    pub def required(self) -> Schema:
+        self.rules.push(Rule.required())
+        return self
+
+    # Numeric range (value is a number) OR length/count range (value is a
+    # string or array) — see module docstring for the exact dual meaning.
+    pub def min(self, n: float) -> Schema:
+        self.rules.push(Rule.min_rule(n))
+        return self
+
+    pub def max(self, n: float) -> Schema:
+        self.rules.push(Rule.max_rule(n))
+        return self
+
+    pub def pattern(self, regex: str) -> Schema:
+        self.rules.push(Rule.pattern_rule(regex))
+        return self
+
+    pub def one_of(self, values: List[str]) -> Schema:
+        self.rules.push(Rule.one_of_rule(values))
+        return self
+
+    # Escape hatch: fn(value, field_path) -> "" (ok) or an error message.
+    pub def custom(self, fn: def(JsonRef, str) -> str) -> Schema:
+        self.rules.push(Rule.custom_rule(fn))
+        return self
+
+    # ── Composition ──────────────────────────────────────────────────────────
+
+    # Attach/overwrite a named field's sub-schema (object schemas only, but
+    # callable regardless of `kind` — it simply has no effect unless the
+    # value being validated turns out to be a JSON object).
+    pub def field(self, name: str, sub: Schema) -> Schema:
+        mut i = 0
+        while i < self.field_names.len:
+            if self.field_names.get(i) == name:
+                self.field_schemas.set(i, sub)
+                return self
+            i = i + 1
+        self.field_names.push(name)
+        self.field_schemas.push(sub)
+        return self
+
+    # Apply `sub` to every element of an array value.
+    pub def items(self, sub: Schema) -> Schema:
+        self.item_schema = sub
+        self.has_items = true
+        return self
+
+    # ── Validation ───────────────────────────────────────────────────────────
+
+    # Validate `value`, collecting every violation (never fails fast).
+    pub def validate(self, value: JsonRef) -> ValidationResult:
+        mut result = ValidationResult.init()
+        self._check(value, "", result)
+        return result
+
+    def _path_join(parent: str, name: str) -> str:
+        if parent == "": return name
+        return parent + "." + name
+
+    def _check(self, value: JsonRef, path: str, result: ValidationResult):
+        # 1. Rules that apply regardless of presence/type.
+        mut i = 0
+        while i < self.rules.len:
+            self._check_rule(self.rules.get(i), value, path, result)
+            i = i + 1
+
+        # 2. Object-field composition.
+        if self.field_names.len > 0:
+            if (not value.exists()) or value.is_null():
+                # Absent/null object: field-level .required() rules (if any)
+                # on sub-schemas still fire so the caller sees every missing
+                # field, not just a single top-level complaint.
+                mut j = 0
+                while j < self.field_names.len:
+                    mut sub = self.field_schemas.get(j)
+                    mut fpath = Schema._path_join(path, self.field_names.get(j))
+                    sub._check(_missing_ref(value), fpath, result)
+                    j = j + 1
+            elif value.is_object():
+                mut j2 = 0
+                while j2 < self.field_names.len:
+                    mut name = self.field_names.get(j2)
+                    mut sub2 = self.field_schemas.get(j2)
+                    mut child = value.obj_get(name)
+                    mut fpath2 = Schema._path_join(path, name)
+                    sub2._check(child, fpath2, result)
+                    j2 = j2 + 1
+            else:
+                result._add(path, "type", f"expected object, got {_type_name(value)}")
+
+        # 3. Array-item composition.
+        if self.has_items:
+            if value.exists() and value.is_array():
+                mut n = value.array_len()
+                mut k = 0
+                while k < n:
+                    mut elem = value.array_get(k)
+                    mut epath = path + "[" + _tr_int_to_str(k) + "]"
+                    self.item_schema._check(elem, epath, result)
+                    k = k + 1
+            elif value.exists() and not value.is_null():
+                result._add(path, "type", f"expected array, got {_type_name(value)}")
+
+    def _check_rule(self, rule: Rule, value: JsonRef, path: str, result: ValidationResult):
+        mut present = value.exists() and not value.is_null()
+
+        if rule.kind == RULE_REQUIRED():
+            if not present:
+                result._add(path, "required", "field is required")
+            return
+
+        # Every other rule is a no-op on an absent/null value (required()
+        # already reports that separately — avoids double-reporting).
+        if not present: return
+
+        if rule.kind == RULE_MIN():
+            self._check_min(rule, value, path, result)
+        elif rule.kind == RULE_MAX():
+            self._check_max(rule, value, path, result)
+        elif rule.kind == RULE_PATTERN():
+            self._check_pattern(rule, value, path, result)
+        elif rule.kind == RULE_ONE_OF():
+            self._check_one_of(rule, value, path, result)
+        elif rule.kind == RULE_CUSTOM():
+            if rule.has_custom:
+                mut msg = rule.custom_fn(value, path)
+                if msg != "":
+                    result._add(path, "custom", msg)
+
+    def _check_min(self, rule: Rule, value: JsonRef, path: str, result: ValidationResult):
+        if value.is_int() or value.is_float():
+            mut n = value.as_float()
+            if n < rule.num:
+                result._add(path, "min", f"must be >= {_tr_float_to_str(rule.num)}, got {_tr_float_to_str(n)}")
+        elif value.is_str():
+            mut l = value.get_str().len()
+            if (l as float) < rule.num:
+                result._add(path, "min", f"length must be >= {_tr_float_to_str(rule.num)}, got {_tr_int_to_str(l)}")
+        elif value.is_array():
+            mut c = value.array_len()
+            if (c as float) < rule.num:
+                result._add(path, "min", f"element count must be >= {_tr_float_to_str(rule.num)}, got {_tr_int_to_str(c)}")
+        else:
+            result._add(path, "type", f".min() does not apply to {_type_name(value)}")
+
+    def _check_max(self, rule: Rule, value: JsonRef, path: str, result: ValidationResult):
+        if value.is_int() or value.is_float():
+            mut n = value.as_float()
+            if n > rule.num:
+                result._add(path, "max", f"must be <= {_tr_float_to_str(rule.num)}, got {_tr_float_to_str(n)}")
+        elif value.is_str():
+            mut l = value.get_str().len()
+            if (l as float) > rule.num:
+                result._add(path, "max", f"length must be <= {_tr_float_to_str(rule.num)}, got {_tr_int_to_str(l)}")
+        elif value.is_array():
+            mut c = value.array_len()
+            if (c as float) > rule.num:
+                result._add(path, "max", f"element count must be <= {_tr_float_to_str(rule.num)}, got {_tr_int_to_str(c)}")
+        else:
+            result._add(path, "type", f".max() does not apply to {_type_name(value)}")
+
+    def _check_pattern(self, rule: Rule, value: JsonRef, path: str, result: ValidationResult):
+        if not value.is_str():
+            result._add(path, "type", f".pattern() does not apply to {_type_name(value)}")
+            return
+        mut re = Regex.compile(rule.pattern)
+        mut ok = re.match(value.get_str())
+        re.free()
+        if not ok:
+            result._add(path, "pattern", f'value "{value.get_str()}" does not match pattern "{rule.pattern}"')
+
+    def _check_one_of(self, rule: Rule, value: JsonRef, path: str, result: ValidationResult):
+        mut rendered = _value_render(value)
+        mut i = 0
+        mut found = false
+        while i < rule.allowed.len:
+            if rule.allowed.get(i) == rendered: found = true
+            i = i + 1
+        if not found:
+            mut opts = ""
+            mut j = 0
+            while j < rule.allowed.len:
+                if j > 0: opts = opts + ", "
+                opts = opts + rule.allowed.get(j)
+                j = j + 1
+            result._add(path, "one_of", f'value "{rendered}" is not one of [{opts}]')

@@ -3207,9 +3207,23 @@ pub class CGenerator:
         if _is_invalid_ptr(v as usize): return false
         match v.read():
             case HirExpr.EMethodCall(recv, m, _, _):
+                if _is_invalid_ptr(recv as usize): return false
+                mut rtn = hir_expr_type(recv).name
                 if m == "get" or m == "get_or":
-                    if _is_invalid_ptr(recv as usize): return false
-                    return self._is_coll_type_name(hir_expr_type(recv).name)
+                    return self._is_coll_type_name(rtn)
+                # A method call on a USER CLASS instance (not a builtin
+                # collection, and not itself a fresh-constructor call like
+                # `.init()`/`.new()`) is conservatively a borrow: the codegen
+                # has no way to prove the method returns a freshly-allocated
+                # collection rather than handing back a field the receiver
+                # still owns (e.g. `def items(self) -> List[T]: return
+                # self.xs`). Treating it as fresh double-frees the shared
+                # buffer once via the receiver's own drop and again via this
+                # local's auto-drop (0xC0000374 on Windows) — see
+                # std/validate/result.tr's ValidationResult.errors() for a
+                # real-world repro (`mut errs = result.errors()`).
+                if m != "init" and m != "new" and self.classes.contains(rtn) and not self._is_coll_type_name(rtn):
+                    return true
                 return false
             case HirExpr.EIndex(recv, _, _):
                 if _is_invalid_ptr(recv as usize): return false
