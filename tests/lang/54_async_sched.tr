@@ -1,0 +1,210 @@
+# tests/lang/54_async_sched.tr
+# std.async.sched — Scheduler: recurring intervals, one-shot delays, cron
+# expressions, cancel(), and overlap protection, all driven via the REAL
+# background dispatch thread (Scheduler.run()/.stop()) over a short, bounded
+# wall-clock window so the suite can never hang on a scheduler bug.
+
+from std.test import TestRunner
+from std.async.sched import Scheduler
+from std.async.thread import Thread, Atomic
+from std.sys.time import Clock
+
+# ── Shared counters the scheduled closures mutate (captured by reference) ──
+
+async def test_every(t: TestRunner):
+    t.section("every(): fires repeatedly on a fixed interval")
+    mut sched = Scheduler.init()
+    mut count: Atomic[int] = Atomic.new(0)
+    mut tick = def () -> void:
+        count.add(1)
+    sched.every(20, tick, false)
+    sched.run()
+    # Bounded wait: 300ms at a 20ms interval should yield roughly 15 fires.
+    # Assert a generous but meaningful range so normal scheduling jitter on
+    # a loaded CI box can't flake this, while a real bug (0 fires, or wildly
+    # too many from a busy-loop) still fails loudly.
+    Thread.sleep(300)
+    sched.stop()
+    mut n = count.load()
+    t.assert_true(n >= 5, "every(20ms) fired at least 5 times in 300ms")
+    t.assert_true(n <= 40, "every(20ms) did not runaway-fire (<=40 in 300ms)")
+
+async def test_after(t: TestRunner):
+    t.section("after(): fires exactly once, after the delay")
+    mut sched = Scheduler.init()
+    mut count: Atomic[int] = Atomic.new(0)
+    mut once = def () -> void:
+        count.add(1)
+    sched.after(30, once)
+    sched.run()
+    # Check BEFORE the delay elapses: must not have fired yet.
+    Thread.sleep(10)
+    mut early = count.load()
+    # Check well after the delay elapses, then keep waiting to confirm it
+    # never fires a second time.
+    Thread.sleep(200)
+    mut late = count.load()
+    sched.stop()
+    t.assert_eq_int(early, 0, "after(30ms) has not fired yet at +10ms")
+    t.assert_eq_int(late, 1, "after(30ms) fired exactly once by +210ms")
+
+async def test_cancel(t: TestRunner):
+    t.section("cancel(): stops future firings of that handle only")
+    mut sched = Scheduler.init()
+    mut count_a: Atomic[int] = Atomic.new(0)
+    mut count_b: Atomic[int] = Atomic.new(0)
+    mut tick_a = def () -> void:
+        count_a.add(1)
+    mut tick_b = def () -> void:
+        count_b.add(1)
+    mut ha = sched.every(15, tick_a, false)
+    mut _hb = sched.every(15, tick_b, false)
+    sched.run()
+    Thread.sleep(100)
+    mut ok = sched.cancel(ha)
+    mut a_at_cancel = count_a.load()
+    # Let both jobs have plenty more opportunities to fire.
+    Thread.sleep(150)
+    sched.stop()
+    mut a_final = count_a.load()
+    mut b_final = count_b.load()
+    t.assert_true(ok, "cancel() returns true for a live handle")
+    t.assert_eq_int(a_final, a_at_cancel, "cancelled job A did not fire again after cancel()")
+    t.assert_true(b_final > a_at_cancel, "uncancelled job B kept firing after A was cancelled")
+    mut ok2 = sched.cancel(ha)
+    t.assert_false(ok2, "cancel() on an already-cancelled handle returns false")
+    mut ok3 = sched.cancel(999999)
+    t.assert_false(ok3, "cancel() on an unknown handle returns false")
+
+async def test_skip_if_running(t: TestRunner):
+    t.section("overlap protection: skip_if_running prevents concurrent re-entry")
+    mut sched = Scheduler.init()
+    mut concurrent: Atomic[int] = Atomic.new(0)   # current in-flight count
+    mut max_concurrent: Atomic[int] = Atomic.new(0)
+    mut starts: Atomic[int] = Atomic.new(0)
+    mut slow_task = def () -> void:
+        starts.add(1)
+        mut now_in_flight = concurrent.add(1) + 1
+        # Track the high-water mark of concurrent invocations.
+        mut prev_max = max_concurrent.load()
+        while now_in_flight > prev_max:
+            if max_concurrent.cas(prev_max, now_in_flight): break
+            prev_max = max_concurrent.load()
+        Thread.sleep(60)   # slower than the 15ms tick interval on purpose
+        concurrent.sub(1)
+    sched.every(15, slow_task, true)   # skip_if_running = true
+    sched.run()
+    Thread.sleep(250)
+    sched.stop()
+    # Let the last in-flight invocation (if any) finish before reading.
+    Thread.sleep(80)
+    mut mx = max_concurrent.load()
+    mut total_starts = starts.load()
+    t.assert_eq_int(mx, 1, "skip_if_running never let two invocations overlap")
+    t.assert_true(total_starts >= 2, "slow job still started more than once over the window")
+
+async def test_job_count(t: TestRunner):
+    t.section("job_count() reflects registered jobs")
+    mut sched = Scheduler.init()
+    t.assert_eq_int(sched.job_count(), 0, "fresh scheduler has 0 jobs")
+    mut noop = def () -> void: pass
+    mut h1 = sched.every(1000, noop, false)
+    mut _h2 = sched.after(1000, noop)
+    t.assert_eq_int(sched.job_count(), 2, "job_count reflects both registered jobs")
+    sched.cancel(h1)
+    t.assert_eq_int(sched.job_count(), 2, "cancel() does not remove from the count (lazy prune)")
+
+# ── Cron expression parsing + real firing ──────────────────────────────────
+
+async def test_cron_valid_shapes(t: TestRunner):
+    t.section("cron(): valid expression shapes are accepted")
+    mut sched = Scheduler.init()
+    mut noop = def () -> void: pass
+
+    # "*" everywhere.
+    mut r1 = sched.cron("* * * * *", noop)
+    t.assert_true(r1.is_ok, "'* * * * *' (all wildcards) parses")
+
+    # "*/N" step field.
+    mut r2 = sched.cron("*/5 * * * *", noop)
+    t.assert_true(r2.is_ok, "'*/5 * * * *' (step) parses")
+
+    # Exact values + a range + a weekday range, like the spec's "9am weekdays".
+    mut r3 = sched.cron("0 9 * * 1-5", noop)
+    t.assert_true(r3.is_ok, "'0 9 * * 1-5' (exact + range) parses")
+
+    # Comma list combined with a range.
+    mut r4 = sched.cron("0,30 8-10 1,15 * *", noop)
+    t.assert_true(r4.is_ok, "'0,30 8-10 1,15 * *' (comma list + range) parses")
+
+async def test_cron_invalid_shapes_rejected(t: TestRunner):
+    t.section("cron(): malformed expressions are rejected loudly, not silently")
+    mut sched = Scheduler.init()
+    mut noop = def () -> void: pass
+
+    mut bad_fields = sched.cron("* * * *", noop)   # only 4 fields
+    t.assert_true(bad_fields.is_err, "wrong field count (4, not 5) is rejected")
+
+    mut bad_text = sched.cron("foo * * * *", noop)   # garbage minute field
+    t.assert_true(bad_text.is_err, "non-numeric garbage field is rejected")
+
+    mut bad_range = sched.cron("99 * * * *", noop)   # minute out of 0-59
+    t.assert_true(bad_range.is_err, "out-of-range value (minute=99) is rejected")
+
+    mut bad_step = sched.cron("*/0 * * * *", noop)   # step of 0 is nonsensical
+    t.assert_true(bad_step.is_err, "step of 0 is rejected")
+
+    mut bad_order = sched.cron("10-5 * * * *", noop)   # inverted range
+    t.assert_true(bad_order.is_err, "inverted range (hi < lo) is rejected")
+
+    mut bad_empty = sched.cron("", noop)
+    t.assert_true(bad_empty.is_err, "empty expression is rejected")
+
+async def test_cron_fires(t: TestRunner):
+    t.section("cron(): a '* * * * *' job actually fires via tick()")
+    # A real 5-field cron is minute-granularity, far too coarse to observe
+    # firing over a bounded wall-clock test window via the background
+    # dispatch thread. Drive tick() directly (the same function the
+    # dispatch thread calls every SCHED_TICK_MS) so this exercises the
+    # REAL cron-matching code path deterministically and fast.
+    mut sched = Scheduler.init()
+    mut count: Atomic[int] = Atomic.new(0)
+    mut tick = def () -> void:
+        count.add(1)
+    mut reg = sched.cron("* * * * *", tick)
+    t.assert_true(reg.is_ok, "'* * * * *' registers successfully")
+    sched.tick()
+    t.assert_eq_int(count.load(), 1, "'* * * * *' matches the current minute and fires once")
+    # A second tick() within the SAME minute must NOT fire again
+    # (cron_last_min guards against re-firing inside one minute).
+    sched.tick()
+    t.assert_eq_int(count.load(), 1, "a second tick() in the same minute does not re-fire")
+
+async def test_cron_never_matches(t: TestRunner):
+    t.section("cron(): an expression that cannot match the current moment never fires")
+    mut sched = Scheduler.init()
+    mut count: Atomic[int] = Atomic.new(0)
+    mut tick = def () -> void:
+        count.add(1)
+    # Month 2 (February) AND day-of-month 31 can never occur simultaneously
+    # on the real calendar -- guaranteed never to fire, any day this test runs.
+    mut reg = sched.cron("0 0 31 2 *", tick)
+    t.assert_true(reg.is_ok, "'0 0 31 2 *' registers successfully (valid syntax, impossible date)")
+    sched.tick()
+    sched.tick()
+    t.assert_eq_int(count.load(), 0, "an impossible calendar combination never fires")
+
+async def main():
+    mut t = TestRunner.init("54_async_sched")
+
+    await test_every(t)
+    await test_after(t)
+    await test_cancel(t)
+    await test_skip_if_running(t)
+    await test_job_count(t)
+    await test_cron_valid_shapes(t)
+    await test_cron_invalid_shapes_rejected(t)
+    await test_cron_fires(t)
+    await test_cron_never_matches(t)
+
+    t.summary()
