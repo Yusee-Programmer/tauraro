@@ -6560,6 +6560,16 @@ static inline bool List_bool_is_empty(List_bool* l) { return !l||l->len==0; }
 static inline void List_bool_extend(List_bool* l, List_bool* o) { if(!l||!o) return; for(size_t i=0;i<o->len;i++) List_bool_append(l,o->data[i]); }
 static inline bool List_bool_contains(List_bool* l, _Bool v) { if(!l) return false; for(size_t i=0;i<l->len;i++) if(l->data[i]==v) return true; return false; }
 static inline long long List_bool_pop(List_bool* l) { if(!l||l->len==0) return 0; l->len--; return l->data[l->len]; }
+/* List_TrFnVal: extended ops (remove/swap/clear/is_empty/extend), added
+ * alongside new/append/get/pop/set/free above for std.async.events'
+ * Emitter[T] (Vec[def(T)->void] listener storage) -- mirrors every other
+ * List_<sfx> family's "extended ops" block exactly; no existing function
+ * signature touched. */
+static inline void List_TrFnVal_remove(List_TrFnVal* l, long long i) { if(!l||(size_t)i>=l->len) return; for(size_t j=(size_t)i;j<l->len-1;j++) l->data[j]=l->data[j+1]; l->len--; }
+static inline void List_TrFnVal_swap(List_TrFnVal* l, long long a, long long b) { if(!l||(size_t)a>=l->len||(size_t)b>=l->len) return; TrFnVal t=l->data[a]; l->data[a]=l->data[b]; l->data[b]=t; }
+static inline void List_TrFnVal_clear(List_TrFnVal* l) { if(l) l->len=0; }
+static inline bool List_TrFnVal_is_empty(List_TrFnVal* l) { return !l||l->len==0; }
+static inline void List_TrFnVal_extend(List_TrFnVal* l, List_TrFnVal* o) { if(!l||!o) return; for(size_t i=0;i<o->len;i++) List_TrFnVal_append(l,o->data[i]); }
 static inline void List_i8_remove(List_i8* l, long long i) { if(!l||(size_t)i>=l->len) return; for(size_t j=(size_t)i;j<l->len-1;j++) l->data[j]=l->data[j+1]; l->len--; }
 static inline void List_i8_swap(List_i8* l, long long a, long long b) { if(!l||(size_t)a>=l->len||(size_t)b>=l->len) return; int8_t t=l->data[a]; l->data[a]=l->data[b]; l->data[b]=t; }
 static inline void List_i8_clear(List_i8* l) { if(l) l->len=0; }
@@ -9045,6 +9055,8 @@ static List_f64* _tr_list_clone_f64(List_f64* l){ List_f64* r=List_f64_new(); if
 static List_ptr* _tr_list_clone_ptr(List_ptr* l){ List_ptr* r=List_ptr_new(); if(l) for(int64_t i=0;i<(int64_t)l->len;i++) List_ptr_append(r,l->data[i]); return r; }
 static List_str* _tr_list_clone_str(List_str* l){ List_str* r=List_str_new(); if(l) for(int64_t i=0;i<(int64_t)l->len;i++) List_str_append(r,l->data[i]); return r; }
 static List_TrStr* _tr_list_clone_TrStr(List_TrStr* l){ List_TrStr* r=List_TrStr_new(); if(l) for(int64_t i=0;i<(int64_t)l->len;i++) List_TrStr_append(r,l->data[i]); return r; }
+static List_bool* _tr_list_clone_bool(List_bool* l){ List_bool* r=List_bool_new(); if(l) for(int64_t i=0;i<(int64_t)l->len;i++) List_bool_append(r,l->data[i]); return r; }
+static List_TrFnVal* _tr_list_clone_TrFnVal(List_TrFnVal* l){ List_TrFnVal* r=List_TrFnVal_new(); if(l) for(int64_t i=0;i<(int64_t)l->len;i++) List_TrFnVal_append(r,l->data[i]); return r; }
 typedef int64_t (*_tr_pred_fn)(void*);
 static int64_t _tr_list_any_ptr(List_ptr* l, _tr_pred_fn p) { if(!l) return 0LL; for(int64_t i=0;i<(int64_t)l->len;i++) if(p(l->data[i])) return 1LL; return 0LL; }
 static int64_t _tr_list_all_ptr(List_ptr* l, _tr_pred_fn p) { if(!l) return 1LL; for(int64_t i=0;i<(int64_t)l->len;i++) if(!p(l->data[i])) return 0LL; return 1LL; }

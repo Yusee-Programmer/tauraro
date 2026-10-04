@@ -1,0 +1,181 @@
+# std.async.events — Emitter[T]: a typed pub-sub / EventEmitter primitive.
+#
+# A Channel[T] (std.async.channel) is point-to-point: one sent value is
+# consumed by exactly one receiver. Emitter[T] is the complementary
+# broadcast / 1-to-many primitive: "when X happens, tell every interested
+# listener" — the classic Node.js `EventEmitter` / Python `pyee` pattern,
+# but with a COMPILE-TIME-CHECKED payload type `T` instead of Node's
+# stringly-typed, untyped-`any` events.
+#
+# Usage:
+#   mut ev: Emitter[int] = Emitter[int].new()
+#   mut h1 = ev.on(def (n: int) -> void: print(f"got {n}"))
+#   mut h2 = ev.once(def (n: int) -> void: print(f"first only: {n}"))
+#   ev.emit(42)              # calls every listener, in subscription order
+#   ev.off(h1)                # h1 no longer called on future emit()s
+#   ev.listener_count()      # -> number of currently-subscribed listeners
+#
+# ── Design scope ────────────────────────────────────────────────────────
+#
+# Emitter[T] is intentionally SINGLE-THREADED (no Mutex[T] field, does not
+# implement Sendable/UnsafeSendable). This is a deliberate v1 scope choice,
+# not an oversight: storing a `Mutex[T]` as a class field and accessing it
+# via `self.<field>.get()/.set()` bound to a local INSIDE a method body is
+# a confirmed compiler ARC bug (over-releases the guarded payload on the
+# second such call — see std/async/sched.tr's module-header comment for
+# the full writeup and the free-function workaround). A plain, lock-free
+# `Vec`-backed listener list avoids that entire bug class and is simpler;
+# multi-threaded broadcast can be layered on top later (e.g. a thread
+# posts into a Channel[T] that a single dispatcher thread drains into an
+# Emitter[T].emit() call) without needing this type itself to be shared
+# across threads.
+#
+# ── emit() ordering / re-entrancy semantics (read before relying on it) ──
+#
+# emit(value) calls every CURRENTLY-SUBSCRIBED handler, in subscription
+# order. It snapshots the listener list (ids + handlers + once-flags) at
+# the START of the call, before invoking anything. This matters because a
+# handler is free to call `.on()` / `.off()` / `.once()` on the same
+# emitter while it is itself being called from inside emit() — the most
+# common real case being a "fire once" handler that unsubscribes itself
+# (which is exactly what `.once()` does internally).
+#
+# Because of the snapshot:
+#   - A handler that calls `.off()` on ITSELF or another listener during
+#     this emit() pass does not change who gets called during THIS pass —
+#     every listener that was subscribed at the moment emit() started
+#     still gets called exactly once, including the one that just
+#     unsubscribed. The removal only takes effect for the NEXT emit().
+#   - A handler that calls `.on()` to add a new listener during this pass
+#     does NOT get that new listener called during the current pass
+#     either (it wasn't in the snapshot) — only on subsequent emit()s.
+# This is the standard, expected behavior for this pattern (matches
+# Node.js's own `EventEmitter.emit` snapshot semantics): a single emit()
+# call always has a well-defined, fixed set of recipients decided up
+# front, so self-unsubscription during a callback can never skip or
+# double-call another listener in the SAME pass.
+
+from std.core.vec import Vec
+
+pub class Emitter[T]:
+    pub ids:        Vec[int]            # listener id at index i
+    pub handlers:   Vec[def(T) -> void] # handler at index i
+    pub once_flags: Vec[bool]           # true if handler at index i auto-removes after firing
+    pub next_id:    int                  # next listener id to hand out
+
+extend Emitter[T]:
+    pub def new() -> Emitter[T]:
+        mut e = Emitter[T]()
+        e.ids        = Vec[int].init(4)
+        e.handlers   = Vec[def(T) -> void].init(4)
+        e.once_flags = Vec[bool].init(4)
+        e.next_id    = 1
+        return e
+
+    # Subscribe `handler`. Returns a listener id usable with `.off()`.
+    pub def on(self, handler: def(T) -> void) -> int:
+        mut id = self.next_id
+        self.next_id = id + 1
+        self.ids.push(id)
+        self.handlers.push(handler)
+        self.once_flags.push(false)
+        return id
+
+    # Subscribe `handler` for exactly one firing; it is automatically
+    # removed right after it runs (removal happens as part of the SAME
+    # emit() pass that fired it, so `.listener_count()` reflects the
+    # removal immediately after `.emit()` returns — not lazily later).
+    pub def once(self, handler: def(T) -> void) -> int:
+        mut id = self.next_id
+        self.next_id = id + 1
+        self.ids.push(id)
+        self.handlers.push(handler)
+        self.once_flags.push(true)
+        return id
+
+    # Unsubscribe by handle. Returns true if `handle` was an active
+    # listener (false if it was already removed or never existed).
+    pub def off(self, handle: int) -> bool:
+        mut i = 0
+        while i < self.ids.len:
+            if self.ids.get(i) == handle:
+                self.ids.remove(i)
+                self.handlers.remove(i)
+                self.once_flags.remove(i)
+                return true
+            i = i + 1
+        return false
+
+    # Synchronously call every currently-subscribed handler, in
+    # subscription order, passing `value` to each. See the module-header
+    # comment for the exact re-entrancy/snapshot semantics.
+    pub def emit(self, value: T):
+        # Snapshot the listener list up front so that `.on()`/`.off()`
+        # calls made BY a handler during this loop never affect which
+        # handlers get called (or how many times) in this same pass.
+        mut snap_ids   = self.ids.clone()
+        mut snap_hs    = self.handlers.clone()
+        mut snap_once  = self.once_flags.clone()
+
+        mut i = 0
+        while i < snap_ids.len:
+            mut id = snap_ids.get(i)
+            mut h  = snap_hs.get(i)
+            mut is_once = snap_once.get(i)
+            h(value)
+            if is_once:
+                self.off(id)
+            i = i + 1
+
+    # Number of currently-subscribed listeners.
+    pub def listener_count(self) -> int:
+        return self.ids.len
+
+    # Remove every listener. After this, listener_count() == 0 and
+    # emit() calls nothing until new listeners are added.
+    pub def clear(self):
+        self.ids.clear()
+        self.handlers.clear()
+        self.once_flags.clear()
+
+    # ── Bonus: filtered subscription ─────────────────────────────────────
+    #
+    # Subscribe `handler` but only have it actually invoked for values
+    # matching `predicate` — i.e. `ev.filter(pred).on(handler)` is
+    # equivalent to `ev.on(def (v: T) -> void: if pred(v): handler(v))`
+    # without hand-rolling that `if` in every handler. Returns the same
+    # kind of listener id, usable with `.off()` like any other listener
+    # (the id refers to the WRAPPER registered on this emitter).
+    pub def filter(self, predicate: def(T) -> bool) -> FilteredEmitter[T]:
+        mut fe = FilteredEmitter[T]()
+        fe.emitter   = self
+        fe.predicate = predicate
+        return fe
+
+# Returned by `Emitter[T].filter(...)`; exposes `.on()` with the same
+# signature as Emitter[T] itself, so `ev.filter(pred).on(handler)` reads
+# identically to a plain subscription. The returned id refers to the
+# wrapper closure registered on the underlying emitter and can be passed
+# to the underlying `Emitter[T].off()` like any other listener id.
+#
+# NOTE: `.once()` is deliberately NOT exposed here. "Fire once" for a
+# filtered subscription is ambiguous between "unsubscribe after the first
+# emit() call" (regardless of whether the predicate matched) and
+# "unsubscribe after the first call where the predicate matched" — and
+# the latter (the genuinely useful one) can't be built by having the
+# wrapper closure itself call the underlying `.once()`, since the
+# underlying emitter has no way to know the wrapper decided to skip this
+# particular value. Left out of v1 rather than shipping it with a
+# surprising semantic; compose manually if needed (track a `done` flag in
+# the handler closure and call `.off()` from inside it).
+pub class FilteredEmitter[T]:
+    pub emitter:   Emitter[T]
+    pub predicate: def(T) -> bool
+
+extend FilteredEmitter[T]:
+    pub def on(self, handler: def(T) -> void) -> int:
+        mut pred = self.predicate
+        mut inner = handler
+        mut wrapped = def (v: T) -> void:
+            if pred(v): inner(v)
+        return self.emitter.on(wrapped)
