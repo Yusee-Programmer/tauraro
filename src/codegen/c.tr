@@ -7190,6 +7190,24 @@ pub class CGenerator:
                 # reinterpret the bits — an arithmetic (double) cast of the raw
                 # integer produced garbage like 4.6e+18.
                 self.w(pad + "double " + vname + " = _tr_ptr_to_f64((void*)(uintptr_t)" + tmp + ".data[" + i.to_str() + "]);\n")
+            elif self.is_heap_class_tn(elem_ty_n):
+                # Heap-class slot: gen_tuple's packer (the ETuple literal path, used
+                # by every `return (a, b)`) stores the pointer with NO extra retain —
+                # ownership is transferred INTO the tuple slot, not duplicated (see
+                # gen_tuple's own `else` branch: `(long long)(uintptr_t)(tup_es)`,
+                # same as the plain-scalar case, deliberately no _tr_obj_retain).
+                # So unpacking here must take ownership directly (one matching cast
+                # back to the class pointer type, no retain) and register the local
+                # for scope-exit auto-drop via class_local_names — otherwise this
+                # was previously falling into the `else` plain-`long long` branch
+                # below, which both mistyped the C variable (caused a real
+                # 'invalid type argument of ->' / '_tr_obj_retain expects void*'
+                # compile error for ANY tuple with a class-typed element — e.g.
+                # `-> (MdNode, int)` from a block-level Markdown parser helper)
+                # and never released the node (a leak).
+                mut _cty = self.type_to_c(val_ty.args.get(i).read())
+                self.w(pad + _cty + " " + vname + " = (" + _cty + ")(uintptr_t)" + tmp + ".data[" + i.to_str() + "];\n")
+                self.class_local_names.insert(names.get(i), true)
             else:
                 self.w(pad + "long long " + vname + " = " + tmp + ".data[" + i.to_str() + "];\n")
             self.decl_vars.insert(names.get(i), true)

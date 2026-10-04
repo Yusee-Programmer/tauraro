@@ -1,0 +1,15 @@
+# std.text — Package index.
+#
+# Sub-modules can also be imported directly:
+#
+#   from std.text.diff     import Diff, DiffOp
+#   from std.text.distance import Distance
+#   from std.text.wrap     import Wrap
+#   from std.text.markdown import Markdown, MdNode
+
+from std.text.diff     import Diff
+from std.text.diff     import DiffOp
+from std.text.distance import Distance
+from std.text.wrap     import Wrap
+from std.text.markdown import Markdown
+from std.text.markdown import MdNode

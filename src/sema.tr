@@ -5345,6 +5345,33 @@ extend Sema:
                                         ret_ty = AstType.init(type_name)
                                     elif self.classes.contains(type_name):
                                         ret_ty = AstType.init(type_name)
+                                # Static call Type.method(args): EPropAccess, not EMethodCall.
+                                # Without this, `-> (MdNode, int)` stays void and gen_multi_let
+                                # unpacks the tuple as long long (then _tr_obj_retain fails).
+                                elif self.classes.contains(type_name):
+                                    mut _scdef = self.classes.get(type_name)
+                                    mut _smi = 0
+                                    mut _sfound = false
+                                    while _smi < _scdef.methods.len and not _sfound:
+                                        mut _smdef = _scdef.methods.get(_smi)
+                                        if _smdef.name == variant:
+                                            mut _nself = _smdef.params.len
+                                            if _smdef.params.len > 0 and _smdef.params.get(0).name == "self":
+                                                _nself = _smdef.params.len - 1
+                                            if _nself == hl.len:
+                                                if _smdef.ret_ty as usize != 0 as usize:
+                                                    ret_ty = _smdef.ret_ty.read()
+                                                _sfound = true
+                                        _smi = _smi + 1
+                                    if not _sfound:
+                                        _smi = 0
+                                        while _smi < _scdef.methods.len and not _sfound:
+                                            mut _smdef2 = _scdef.methods.get(_smi)
+                                            if _smdef2.name == variant:
+                                                if _smdef2.ret_ty as usize != 0 as usize:
+                                                    ret_ty = _smdef2.ret_ty.read()
+                                                _sfound = true
+                                            _smi = _smi + 1
                             case Expr.EIndex(base2, idx2):
                                 if variant == "init" or variant == "new":
                                     match base2.read():
