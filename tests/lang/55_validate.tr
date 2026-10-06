@@ -6,6 +6,7 @@ from std.test import TestRunner
 from std.encoding.json import Json, JsonRef
 from std.validate import Schema, ValidationResult
 from std.validate.jsonschema import to_json_schema
+from std.regex import Regex
 
 # Custom rule: email-ish local@domain check used via .custom() below.
 def not_blank(v: JsonRef, path: str) -> str:
@@ -38,8 +39,15 @@ def main():
     mut good = Json.parse("{\"name\": \"Ada\", \"age\": 30, \"email\": \"ada@example.com\", \"role\": \"admin\", \"address\": {\"zip\": \"12345\", \"city\": \"London\"}}")
     mut s1 = build_user_schema()
     mut r1 = s1.validate(good.root())
-    t.assert_true(r1.is_valid(), "valid user has no errors")
-    t.assert_eq_int(r1.error_count(), 0, "zero error count")
+    # .pattern() goes through std.regex, which is a never-matching stub when
+    # the toolchain has no <regex.h> (seen on GitHub's windows-latest MinGW
+    # image; see tests/lang/30_regex.tr). Then the zip and email patterns
+    # reject valid input, so only assert a clean pass when regex is real.
+    if Regex.available():
+        t.assert_true(r1.is_valid(), "valid user has no errors")
+        t.assert_eq_int(r1.error_count(), 0, "zero error count")
+    else:
+        t.skip("valid-input check needs std.regex (<regex.h>), not available on this toolchain")
 
     t.section("multiple violations all collected at once (not fail-fast)")
     # Broken on purpose: age out of range, bad email, bad role, blank name,
