@@ -17,17 +17,26 @@ async def test_every(t: TestRunner):
     mut count: Atomic[int] = Atomic.new(0)
     mut tick = def () -> void:
         count.add(1)
+    mut t0 = Clock.now_ms()
     sched.every(20, tick, false)
     sched.run()
-    # Bounded wait: 300ms at a 20ms interval should yield roughly 15 fires.
-    # Assert a generous but meaningful range so normal scheduling jitter on
-    # a loaded CI box can't flake this, while a real bug (0 fires, or wildly
-    # too many from a busy-loop) still fails loudly.
+    # Observe for at least 300ms (~15 fires at 20ms), but if the box is slow
+    # to get the dispatch thread going (seen on GitHub's macOS arm64 VMs,
+    # where this first-in-file timing window intermittently saw < 5 fires),
+    # keep waiting until 5 fires have happened, up to a hard 3s cap -- so a
+    # loaded runner can't flake this, while "never fires" still fails.
     Thread.sleep(300)
+    while count.load() < 5 and Clock.now_ms() - t0 < 3000:
+        Thread.sleep(10)
     sched.stop()
+    mut elapsed = Clock.now_ms() - t0
     mut n = count.load()
-    t.assert_true(n >= 5, "every(20ms) fired at least 5 times in 300ms")
-    t.assert_true(n <= 40, "every(20ms) did not runaway-fire (<=40 in 300ms)")
+    t.assert_true(n >= 5, "every(20ms) fired at least 5 times (>=300ms window, 3s cap)")
+    # Upper bound scales with the real elapsed time: deadlines advance by the
+    # interval on a monotonic clock and late ticks are not replayed, so at
+    # most elapsed/20 fires are possible (+2 slack). Catches a runaway or
+    # busy-loop dispatcher regardless of how long the window ended up.
+    t.assert_true(n <= elapsed / 20 + 2, "every(20ms) did not fire faster than its interval")
 
 async def test_after(t: TestRunner):
     t.section("after(): fires exactly once, after the delay")

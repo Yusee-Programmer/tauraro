@@ -3043,6 +3043,11 @@ typedef struct {
 #elif (defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)) \
       && !defined(TAURARO_BARE) && !defined(TAURARO_KERNEL)
     int fd; /* open() fd on the watched path, used with EVFILT_VNODE */
+    /* Stable id passed as the kevent udata. NOT a pointer into `entries`:
+     * that array is realloc'd as watches are added and swap-compacted as
+     * they are removed, so a stored _TrWatchEntry* would dangle. */
+    int wid;
+    int is_dir;
     /* Directory snapshot (sorted-free list of child names) used to diff
      * on NOTE_WRITE and synthesize per-child CREATED/DELETED events,
      * since EVFILT_VNODE on a directory fd only tells us "something in
@@ -3081,6 +3086,7 @@ typedef struct {
 #elif (defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)) \
       && !defined(TAURARO_BARE) && !defined(TAURARO_KERNEL)
     int kqfd;
+    int next_wid;
 #endif
 } _TrWatch;
 
@@ -3615,23 +3621,57 @@ _TR_XLINK int _tr_watch_poll(_TrWatch* w, int timeout_ms, char* out_paths, int* 
 #elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
 /* ── macOS/BSD: kqueue EVFILT_VNODE-backed _TrWatch ──────────────────────
  * Simpler alternative to full FSEvents (see module-doc tradeoff note
- * above): one open fd per watched path/root, EVFILT_VNODE with NOTE_WRITE
- * (content/directory-listing changed), NOTE_DELETE, NOTE_RENAME, NOTE_EXTEND.
- * For a watched *directory* we keep a snapshot of its child names and diff
- * on NOTE_WRITE to synthesize CREATED/DELETED for individual children
- * (EVFILT_VNODE itself only says "this directory's contents changed", not
- * which child). Recursive watches additionally open an fd on every
- * subdirectory found at add()-time; subdirectories created later are
- * picked up lazily the next time a NOTE_WRITE diff reveals a new directory
- * child under a recursive root. */
+ * above): one open fd per watched vnode, EVFILT_VNODE with NOTE_WRITE
+ * (content/directory-listing changed), NOTE_DELETE, NOTE_RENAME,
+ * NOTE_EXTEND, NOTE_ATTRIB.
+ *
+ * kqueue semantics this backend has to work around:
+ *   - EVFILT_VNODE on a *directory* fd fires NOTE_WRITE only when the
+ *     directory's own entry list changes (a child is created, unlinked or
+ *     renamed). It does NOT fire when an existing file inside it is
+ *     written/appended. So, to match inotify's per-child IN_MODIFY, every
+ *     regular file directly inside a watched directory gets its OWN fd +
+ *     EVFILT_VNODE registration (internal entry kind _TR_WATCH_CHILDFILE),
+ *     attached at add() time and whenever a directory diff reveals a new
+ *     file. Its NOTE_WRITE/NOTE_EXTEND/NOTE_ATTRIB is reported as MODIFIED
+ *     on the child's path.
+ *   - Which child changed is not reported for a directory NOTE_WRITE, so we
+ *     keep a snapshot of child names and diff on NOTE_WRITE to synthesize
+ *     CREATED/DELETED for individual children.
+ *   - Recursive roots additionally get an internal _TR_WATCH_SUBDIR entry
+ *     (and per-file children) for every subdirectory, at add() time and
+ *     lazily when a diff reveals a new subdirectory.
+ *
+ * Internal entries share the `entries` array with user roots and are told
+ * apart by .recursive: >= 0 for a caller-registered root (0/1 = recursive
+ * flag), < 0 for an auto-added internal entry. kevent udata carries the
+ * entry's stable .wid (see _TrWatchEntry), never an entry pointer: the
+ * entries array is realloc'd on growth and swap-compacted on removal.
+ * Any helper that may append entries can move the array, so code below
+ * holds indices / copied paths across such calls, never _TrWatchEntry*. */
 #include <sys/event.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <dirent.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <stdint.h>
 
-static int _tr_watch_open_fd_for(_TrWatch* w, _TrWatchEntry* owner, const char* path, int is_root);
+#define _TR_WATCH_SUBDIR     (-1)  /* auto-added subdir of a recursive root  */
+#define _TR_WATCH_CHILDFILE  (-2)  /* auto-added regular file in a watched dir */
+
+/* O_EVTONLY (Apple): open only for event notification -- does not count as
+ * a "real" open, so watching never blocks unmounting the volume. */
+#if defined(O_EVTONLY)
+#  define _TR_WATCH_OFLAGS_BASE O_EVTONLY
+#else
+#  define _TR_WATCH_OFLAGS_BASE O_RDONLY
+#endif
+#if defined(O_CLOEXEC)
+#  define _TR_WATCH_OFLAGS (_TR_WATCH_OFLAGS_BASE | O_CLOEXEC)
+#else
+#  define _TR_WATCH_OFLAGS _TR_WATCH_OFLAGS_BASE
+#endif
 
 static char** _tr_watch_snapshot_dir(const char* dirpath, int* out_n) {
     DIR* d = opendir(dirpath);
@@ -3657,6 +3697,41 @@ static int _tr_watch_snapshot_contains(char** names, int n, const char* name) {
     for (int i = 0; i < n; i++) if (strcmp(names[i], name) == 0) return 1;
     return 0;
 }
+static void _tr_watch_copy_path(char* dst, const char* src) {
+    size_t n = strlen(src);
+    if (n >= _TR_WATCH_PATH_CAP) n = _TR_WATCH_PATH_CAP - 1;
+    memcpy(dst, src, n); dst[n] = '\0';
+}
+static int _tr_watch_idx_by_wid(_TrWatch* w, int wid) {
+    for (int i = 0; i < w->n_entries; i++)
+        if (w->entries[i].fd >= 0 && w->entries[i].wid == wid) return i;
+    return -1;
+}
+/* Deregister + close + swap-remove entry `idx`. On a native kqueue close()
+ * alone drops the knote; the explicit EV_DELETE is for kqueue emulations
+ * (e.g. libkqueue) where a closed fd's knote can otherwise linger. */
+static void _tr_watch_drop_idx(_TrWatch* w, int idx) {
+    _TrWatchEntry* e = &w->entries[idx];
+    if (e->fd >= 0) {
+        struct kevent kev;
+        EV_SET(&kev, (uintptr_t)e->fd, EVFILT_VNODE, EV_DELETE, 0, 0, NULL);
+        (void)kevent(w->kqfd, &kev, 1, NULL, 0, NULL);
+        close(e->fd);
+    }
+    _tr_watch_free_snapshot(e->children, e->n_children);
+    w->entries[idx] = w->entries[w->n_entries - 1];
+    w->n_entries--;
+}
+/* Drop every INTERNAL entry at `p` or below `p/` (never a user root). */
+static void _tr_watch_drop_tree(_TrWatch* w, const char* p) {
+    size_t pl = strlen(p);
+    for (int i = w->n_entries - 1; i >= 0; i--) {
+        _TrWatchEntry* e = &w->entries[i];
+        if (e->recursive < 0 && strncmp(e->path, p, pl) == 0 &&
+            (e->path[pl] == '\0' || e->path[pl] == '/'))
+            _tr_watch_drop_idx(w, i);
+    }
+}
 
 _TR_XLINK _TrWatch* _tr_watch_create(void) {
     _TrWatch* w = (_TrWatch*)TAURARO_CALLOC(1, sizeof(_TrWatch));
@@ -3677,85 +3752,140 @@ _TR_XLINK void _tr_watch_destroy(_TrWatch* w) {
     if (w->debounce) TAURARO_FREE(w->debounce);
     TAURARO_FREE(w);
 }
-static int _tr_watch_open_fd_for(_TrWatch* w, _TrWatchEntry* owner, const char* path, int is_root) {
-    int fd = open(path, O_RDONLY);
+
+/* Open `path` and register EVFILT_VNODE for it. slot >= 0: use that
+ * already-allocated entry (a user root being added). slot < 0: append a new
+ * internal entry of `kind` (_TR_WATCH_SUBDIR / _TR_WATCH_CHILDFILE) that
+ * inherits `debounce_ms`. Returns the entry index, or -1 on failure.
+ * May realloc w->entries -- callers must not hold _TrWatchEntry* across it. */
+static int _tr_watch_open_fd_for(_TrWatch* w, int slot, const char* path, int kind, int debounce_ms) {
+    int fd = open(path, _TR_WATCH_OFLAGS);
     if (fd < 0) return -1;
-    _TrWatchEntry* sub;
-    if (is_root) {
-        sub = owner;
-    } else {
-        sub = _tr_watch_entry_alloc(w);
-        if (!sub) { close(fd); return -1; }
-        size_t n = strlen(path);
-        if (n >= _TR_WATCH_PATH_CAP) n = _TR_WATCH_PATH_CAP - 1;
-        memcpy(sub->path, path, n); sub->path[n] = '\0';
-        sub->recursive = -1; /* internal subdir watch */
-        sub->debounce_ms = owner->debounce_ms;
+    struct stat st;
+    if (fstat(fd, &st) != 0) { close(fd); return -1; }
+    int idx = slot;
+    if (idx < 0) {
+        if (!_tr_watch_entry_alloc(w)) { close(fd); return -1; }
+        idx = w->n_entries - 1;
+        _tr_watch_copy_path(w->entries[idx].path, path);
+        w->entries[idx].recursive = kind;
+        w->entries[idx].debounce_ms = debounce_ms;
     }
-    sub->fd = fd;
+    _TrWatchEntry* e = &w->entries[idx];
+    e->fd = fd;
+    e->wid = ++w->next_wid;
+    e->is_dir = S_ISDIR(st.st_mode) ? 1 : 0;
     struct kevent kev;
     EV_SET(&kev, (uintptr_t)fd, EVFILT_VNODE, EV_ADD | EV_CLEAR,
-           NOTE_WRITE | NOTE_DELETE | NOTE_RENAME | NOTE_EXTEND | NOTE_ATTRIB, 0, sub);
+           NOTE_WRITE | NOTE_DELETE | NOTE_RENAME | NOTE_EXTEND | NOTE_ATTRIB, 0,
+           (void*)(intptr_t)e->wid);
     if (kevent(w->kqfd, &kev, 1, NULL, 0, NULL) != 0) {
         close(fd);
-        sub->fd = -1;
+        e->fd = -1;
+        if (slot < 0) w->n_entries--; /* drop the internal entry we just appended */
         return -1;
     }
-    struct stat st;
-    if (fstat(fd, &st) == 0 && S_ISDIR(st.st_mode)) {
-        sub->children = _tr_watch_snapshot_dir(path, &sub->n_children);
-    }
-    return 0;
+    if (e->is_dir) e->children = _tr_watch_snapshot_dir(path, &e->n_children);
+    return idx;
 }
+
+static void _tr_watch_attach_children(_TrWatch* w, int didx);
+
+/* Start watching child `name` of directory entry `didx`: a regular file gets
+ * its own _TR_WATCH_CHILDFILE fd (so writes to it are seen -- see the
+ * section comment); a subdirectory is descended into only under a recursive
+ * root (root .recursive == 1, or an internal _TR_WATCH_SUBDIR). lstat, not
+ * stat: symlinks are not followed (no loops, and inotify does not report
+ * writes through a symlink in a watched dir either). */
+static void _tr_watch_attach_child(_TrWatch* w, int didx, const char* name) {
+    char full[_TR_WATCH_PATH_CAP];
+    snprintf(full, sizeof(full), "%s/%s", w->entries[didx].path, name);
+    int dir_kind = w->entries[didx].recursive;
+    int deb = w->entries[didx].debounce_ms;
+    if (_tr_watch_entry_find_idx(w, full) >= 0) return; /* already watched */
+    struct stat st;
+    if (lstat(full, &st) != 0) return;
+    if (S_ISREG(st.st_mode)) {
+        _tr_watch_open_fd_for(w, -1, full, _TR_WATCH_CHILDFILE, deb);
+    } else if (S_ISDIR(st.st_mode) && dir_kind != 0) {
+        int sidx = _tr_watch_open_fd_for(w, -1, full, _TR_WATCH_SUBDIR, deb);
+        if (sidx >= 0) _tr_watch_attach_children(w, sidx);
+    }
+}
+/* Attach every child currently in directory entry `didx`'s snapshot. Only
+ * appends to `entries`, so didx itself stays valid throughout. */
+static void _tr_watch_attach_children(_TrWatch* w, int didx) {
+    int n = w->entries[didx].n_children;
+    for (int i = 0; i < n; i++) {
+        char name[_TR_WATCH_PATH_CAP];
+        _tr_watch_copy_path(name, w->entries[didx].children[i]);
+        _tr_watch_attach_child(w, didx, name);
+    }
+}
+
 _TR_XLINK int _tr_watch_add(_TrWatch* w, const char* path, int recursive, int debounce_ms) {
     if (!w || !path) return -1;
     struct stat st;
     if (stat(path, &st) != 0) return -1;
-    _TrWatchEntry* e = _tr_watch_entry_alloc(w);
-    if (!e) return -1;
-    size_t n = strlen(path);
-    if (n >= _TR_WATCH_PATH_CAP) n = _TR_WATCH_PATH_CAP - 1;
-    memcpy(e->path, path, n); e->path[n] = '\0';
-    e->recursive = recursive;
-    e->debounce_ms = debounce_ms;
-    e->fd = -1;
-    if (_tr_watch_open_fd_for(w, e, path, 1) != 0) {
+    if (!_tr_watch_entry_alloc(w)) return -1;
+    int idx = w->n_entries - 1;
+    _tr_watch_copy_path(w->entries[idx].path, path);
+    w->entries[idx].recursive = recursive ? 1 : 0; /* < 0 is reserved for internal entries */
+    w->entries[idx].debounce_ms = debounce_ms;
+    w->entries[idx].fd = -1;
+    if (_tr_watch_open_fd_for(w, idx, path, 0, debounce_ms) < 0) {
         w->n_entries--;
         return -1;
     }
-    if (recursive && S_ISDIR(st.st_mode)) {
-        int eidx = w->n_entries - 1;
-        _TrWatchEntry* root = &w->entries[eidx];
-        for (int i = 0; i < root->n_children; i++) {
-            char child[_TR_WATCH_PATH_CAP];
-            snprintf(child, sizeof(child), "%s/%s", path, root->children[i]);
-            struct stat cst;
-            if (stat(child, &cst) == 0 && S_ISDIR(cst.st_mode)) {
-                _tr_watch_open_fd_for(w, root, child, 0);
-            }
-        }
-    }
+    if (w->entries[idx].is_dir) _tr_watch_attach_children(w, idx);
     return 0;
 }
 _TR_XLINK int _tr_watch_remove(_TrWatch* w, const char* path) {
     if (!w || !path) return -1;
-    int idx = _tr_watch_entry_find_idx(w, path);
-    if (idx < 0 || w->entries[idx].recursive < 0) return -1;
-    size_t plen = strlen(path);
-    for (int i = w->n_entries - 1; i >= 0; i--) {
-        _TrWatchEntry* e2 = &w->entries[i];
-        int is_self = (i == idx);
-        int is_sub_of = (e2->recursive < 0 && strncmp(e2->path, path, plen) == 0 &&
-                          (e2->path[plen] == '/' || e2->path[plen] == '\0'));
-        if (is_self || is_sub_of) {
-            if (e2->fd >= 0) close(e2->fd);
-            _tr_watch_free_snapshot(e2->children, e2->n_children);
-            w->entries[i] = w->entries[w->n_entries - 1];
-            w->n_entries--;
-        }
+    int idx = -1;
+    for (int i = 0; i < w->n_entries; i++) {
+        if (w->entries[i].recursive >= 0 && strcmp(w->entries[i].path, path) == 0) { idx = i; break; }
     }
+    if (idx < 0) return -1;
+    char p[_TR_WATCH_PATH_CAP];
+    _tr_watch_copy_path(p, path);
+    _tr_watch_drop_idx(w, idx);
+    _tr_watch_drop_tree(w, p); /* its subdir + per-file internal entries */
     return 0;
 }
+
+/* Directory entry `di` got NOTE_WRITE: diff its child list against the
+ * snapshot, report CREATED/DELETED per child, attach watches to new
+ * children and drop watches of vanished ones. */
+static void _tr_watch_rescan_dir(_TrWatch* w, int di) {
+    char dpath[_TR_WATCH_PATH_CAP];
+    _tr_watch_copy_path(dpath, w->entries[di].path);
+    int new_n = 0;
+    char** new_names = _tr_watch_snapshot_dir(dpath, &new_n);
+    char** old_names = w->entries[di].children;
+    int old_n = w->entries[di].n_children;
+    /* Install the new snapshot first: the attach/drop calls below may move
+     * entries (realloc / swap-remove) but never drop entry di itself (only
+     * entries strictly below dpath/), and new_names stays owned by it. */
+    w->entries[di].children = new_names;
+    w->entries[di].n_children = new_n;
+    char full[_TR_WATCH_PATH_CAP];
+    for (int c = 0; c < new_n; c++) {
+        if (_tr_watch_snapshot_contains(old_names, old_n, new_names[c])) continue;
+        snprintf(full, sizeof(full), "%s/%s", dpath, new_names[c]);
+        _tr_watch_raw_event(w, full, TAURARO_FS_CREATED);
+        int cur = _tr_watch_entry_find_idx(w, dpath); /* re-find: may have moved */
+        if (cur >= 0) _tr_watch_attach_child(w, cur, new_names[c]);
+    }
+    for (int c = 0; c < old_n; c++) {
+        if (_tr_watch_snapshot_contains(new_names, new_n, old_names[c])) continue;
+        snprintf(full, sizeof(full), "%s/%s", dpath, old_names[c]);
+        _tr_watch_raw_event(w, full, TAURARO_FS_DELETED);
+        _tr_watch_drop_tree(w, full);
+    }
+    _tr_watch_free_snapshot(old_names, old_n);
+}
+
 _TR_XLINK int _tr_watch_poll(_TrWatch* w, int timeout_ms, char* out_paths, int* out_kinds, int maxev) {
     if (!w) return 0;
     long long deadline = timeout_ms < 0 ? -1 : (_tr_time_ms() + timeout_ms);
@@ -3774,41 +3904,41 @@ _TR_XLINK int _tr_watch_poll(_TrWatch* w, int timeout_ms, char* out_paths, int* 
         else { ts.tv_sec = wait_ms / 1000; ts.tv_nsec = (wait_ms % 1000) * 1000000L; tsp = &ts; }
         int n = kevent(w->kqfd, NULL, 0, evs, 64, tsp);
         for (int i = 0; i < n; i++) {
-            _TrWatchEntry* e = (_TrWatchEntry*)evs[i].udata;
-            if (!e) continue;
-            if (evs[i].fflags & (NOTE_DELETE | NOTE_RENAME)) {
-                _tr_watch_raw_event(w, e->path, evs[i].fflags & NOTE_RENAME ? TAURARO_FS_RENAMED : TAURARO_FS_DELETED);
+            /* Look up by stable id; an entry dropped earlier in this same
+             * batch (e.g. a file whose parent diff already saw it vanish)
+             * simply isn't found. */
+            int ei = _tr_watch_idx_by_wid(w, (int)(intptr_t)evs[i].udata);
+            if (ei < 0) continue;
+            unsigned int ff = (unsigned int)evs[i].fflags;
+            char epath[_TR_WATCH_PATH_CAP];
+            _tr_watch_copy_path(epath, w->entries[ei].path);
+            if (w->entries[ei].recursive == _TR_WATCH_CHILDFILE) {
+                if (ff & (NOTE_DELETE | NOTE_RENAME)) {
+                    /* This inode was unlinked / renamed away. The parent
+                     * directory's own NOTE_WRITE diff reports DELETED (and
+                     * CREATED for a rename target), so only re-arm here: if
+                     * the NAME still exists it was atomically replaced
+                     * (write-temp-then-rename-over save) -- report that as
+                     * MODIFIED and watch the new inode instead. */
+                    int deb = w->entries[ei].debounce_ms;
+                    _tr_watch_drop_idx(w, ei);
+                    struct stat cst;
+                    if (lstat(epath, &cst) == 0 && S_ISREG(cst.st_mode)) {
+                        _tr_watch_raw_event(w, epath, TAURARO_FS_MODIFIED);
+                        _tr_watch_open_fd_for(w, -1, epath, _TR_WATCH_CHILDFILE, deb);
+                    }
+                } else if (ff & (NOTE_WRITE | NOTE_EXTEND | NOTE_ATTRIB)) {
+                    _tr_watch_raw_event(w, epath, TAURARO_FS_MODIFIED);
+                }
                 continue;
             }
-            if (evs[i].fflags & (NOTE_WRITE | NOTE_EXTEND | NOTE_ATTRIB)) {
-                if (e->children || e->n_children > 0) {
-                    /* Directory: diff snapshot to find created/deleted children. */
-                    int new_n = 0;
-                    char** new_names = _tr_watch_snapshot_dir(e->path, &new_n);
-                    for (int c = 0; c < new_n; c++) {
-                        if (!_tr_watch_snapshot_contains(e->children, e->n_children, new_names[c])) {
-                            char full[_TR_WATCH_PATH_CAP];
-                            snprintf(full, sizeof(full), "%s/%s", e->path, new_names[c]);
-                            _tr_watch_raw_event(w, full, TAURARO_FS_CREATED);
-                            struct stat cst;
-                            if (e->recursive != 0 && stat(full, &cst) == 0 && S_ISDIR(cst.st_mode)) {
-                                _tr_watch_open_fd_for(w, e, full, 0);
-                            }
-                        }
-                    }
-                    for (int c = 0; c < e->n_children; c++) {
-                        if (!_tr_watch_snapshot_contains(new_names, new_n, e->children[c])) {
-                            char full[_TR_WATCH_PATH_CAP];
-                            snprintf(full, sizeof(full), "%s/%s", e->path, e->children[c]);
-                            _tr_watch_raw_event(w, full, TAURARO_FS_DELETED);
-                        }
-                    }
-                    _tr_watch_free_snapshot(e->children, e->n_children);
-                    e->children = new_names;
-                    e->n_children = new_n;
-                } else {
-                    _tr_watch_raw_event(w, e->path, TAURARO_FS_MODIFIED);
-                }
+            if (ff & (NOTE_DELETE | NOTE_RENAME)) {
+                _tr_watch_raw_event(w, epath, (ff & NOTE_RENAME) ? TAURARO_FS_RENAMED : TAURARO_FS_DELETED);
+                continue;
+            }
+            if (ff & (NOTE_WRITE | NOTE_EXTEND | NOTE_ATTRIB)) {
+                if (w->entries[ei].is_dir) _tr_watch_rescan_dir(w, ei);
+                else _tr_watch_raw_event(w, epath, TAURARO_FS_MODIFIED);
             }
         }
         _tr_watch_flush_debounced(w);
