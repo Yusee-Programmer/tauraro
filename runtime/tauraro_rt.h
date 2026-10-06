@@ -3424,6 +3424,9 @@ _TR_XLINK int _tr_watch_poll(_TrWatch* w, int timeout_ms, char* out_paths, int* 
  * event under a recursive root and inotify_add_watch's it on the fly. */
 #include <sys/inotify.h>
 #include <poll.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <dirent.h>
 
 static int _tr_watch_add_wd_for(_TrWatch* w, _TrWatchEntry* owner, const char* dirpath);
 
@@ -3622,6 +3625,11 @@ _TR_XLINK int _tr_watch_poll(_TrWatch* w, int timeout_ms, char* out_paths, int* 
  * picked up lazily the next time a NOTE_WRITE diff reveals a new directory
  * child under a recursive root. */
 #include <sys/event.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <dirent.h>
+#include <fcntl.h>
+#include <unistd.h>
 
 static int _tr_watch_open_fd_for(_TrWatch* w, _TrWatchEntry* owner, const char* path, int is_root);
 
