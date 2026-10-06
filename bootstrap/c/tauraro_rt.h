@@ -7442,7 +7442,12 @@ static inline char* _tr_tz_name(void) {
     WideCharToMultiByte(CP_UTF8, 0, wname, -1, buf, need, NULL, NULL);
     return buf;
 }
-#elif defined(_TR_HAS_TIME)
+#elif defined(_TR_HAS_TIME) && !defined(TAURARO_BARE) && \
+      (defined(__linux__) || defined(__APPLE__) || defined(__ANDROID__) || \
+       defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__) || defined(__DragonFly__))
+/* tm_gmtoff/tm_zone exist on glibc, musl, bionic, Apple and the BSDs, but NOT in
+ * newlib (arm-none-eabi bare-metal) or other minimal libcs that still ship
+ * <time.h> -- those take the UTC+0 fallback below. */
 static inline long long _tr_tz_utc_offset_seconds(void) {
     time_t t = time(NULL);
     struct tm m;
@@ -7461,7 +7466,7 @@ static inline char* _tr_tz_name(void) {
     localtime_r(&t, &m);
     return _tr_str_dup_owned(m.tm_zone ? m.tm_zone : "");
 }
-#else  /* no <time.h> (bare toolchain): no RTC/timezone database -- UTC+0, no DST */
+#else  /* no <time.h>, or a libc without tm_gmtoff (bare toolchain): UTC+0, no DST */
 static inline long long _tr_tz_utc_offset_seconds(void) { return 0LL; }
 static inline bool      _tr_tz_is_dst(void)              { return false; }
 static inline char*     _tr_tz_name(void)                { return _tr_str_dup_owned("UTC"); }

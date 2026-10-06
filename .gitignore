@@ -1,3 +1,12 @@
+# Kept FIRST so the more specific rules below (build/, *.c, ...) still win.
+# Extensionless executables that `tauraroc file.tr` drops in the repo root on
+# Linux/macOS (e.g. ./55_validate). Ignore every root-level FILE without an
+# extension, then re-include directories, dotted files and the licenses.
+/*
+!/*/
+!/*.*
+!/LICENSE-*
+
 # Compiled binaries and debug info
 *.exe
 *.pdb
@@ -54,3 +63,20 @@ __pycache__/
 
 # Bare-metal MCU platform SOURCE (startup/allocator/UART) — source, not artifacts.
 !tests/freestanding/mcu/*.c
+
+# --- Local scratch work and native build artifacts (never source) ---
+scratch/
+scratch_*/
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.so.*
+*.dylib
+*.dll
+*.elf
+*.wasm
+*.ilk
+*.exp
+*.dSYM/

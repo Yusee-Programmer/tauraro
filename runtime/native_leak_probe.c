@@ -5,6 +5,7 @@
  * intentionally never dropped). */
 #include <stdio.h>
 #include <stdlib.h>
+#include <unistd.h>  /* _exit */
 
 extern long long _tr_rt_str_live_count(void);
 
