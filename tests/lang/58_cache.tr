@@ -1,0 +1,141 @@
+# tests/lang/58_cache.tr
+# std.collections.cache — Cache[K, V] TTL + LRU core, get_or_compute
+# memoization, and StaleCache (stale-while-revalidate).
+
+from std.test import TestRunner
+from std.collections.cache import Cache, StaleCache
+from std.async.thread import Thread, Atomic
+
+def main():
+    mut t = TestRunner.init("58_cache")
+
+    t.section("put / get / has — hit, miss, overwrite")
+    mut c: Cache[int, int] = Cache[int, int].init(4)
+    t.assert_true(c.is_empty(), "fresh cache is empty")
+    t.assert_eq_int(c.capacity(), 4, "capacity is the init argument")
+    c.put(1, 10, 60000)
+    c.put(2, 20, 60000)
+    t.assert_true(c.has(1), "inserted key is present")
+    t.assert_true(not c.has(9), "absent key is a miss")
+    mut got1 = -1
+    match c.get(1):
+        case Option.Some(v):
+            got1 = v
+        case Option.None:
+            got1 = -1
+    t.assert_eq_int(got1, 10, "get returns the stored value")
+    c.put(1, 11, 60000)
+    mut got1b = -1
+    match c.get(1):
+        case Option.Some(v):
+            got1b = v
+        case Option.None:
+            got1b = -1
+    t.assert_eq_int(got1b, 11, "put overwrites an existing key")
+    t.assert_eq_int(c.len(), 2, "overwrite does not grow len")
+
+    t.section("TTL expiry via a real wall-clock sleep")
+    mut strc: Cache[str, str] = Cache[str, str].init(4)
+    strc.put("short", "lived", 30)
+    t.assert_true(strc.has("short"), "fresh str-keyed entry is present")
+    Thread.sleep(120)
+    t.assert_true(not strc.has("short"), "entry is gone after its TTL elapses")
+    mut got_short = "present"
+    match strc.get("short"):
+        case Option.Some(v):
+            got_short = v
+        case Option.None:
+            got_short = "expired"
+    t.assert_eq_str(got_short, "expired", "get() reports None once the TTL has elapsed")
+
+    t.section("ttl_ms <= 0 is immediately a miss")
+    c.put(3, 30, 0)
+    t.assert_true(not c.has(3), "non-positive ttl is not a live hit")
+    mut got3 = 0
+    match c.get(3):
+        case Option.Some(v):
+            got3 = v
+        case Option.None:
+            got3 = -1
+    t.assert_eq_int(got3, -1, "expired entry is Option.None")
+
+    t.section("LRU eviction at capacity")
+    mut lru: Cache[int, int] = Cache[int, int].init(2)
+    lru.put(1, 1, 60000)
+    lru.put(2, 2, 60000)
+    lru.put(3, 3, 60000)
+    t.assert_eq_int(lru.len(), 2, "len stays at capacity")
+    t.assert_true(not lru.has(1), "least-recently-used key was evicted")
+    t.assert_true(lru.has(2), "newer key survived")
+    t.assert_true(lru.has(3), "just-inserted key survived")
+    mut _touch = lru.get(2)
+    lru.put(4, 4, 60000)
+    t.assert_true(lru.has(2), "a get refreshes recency so 2 is not the victim")
+    t.assert_true(not lru.has(3), "untouched key 3 was evicted next")
+
+    t.section("invalidate / clear")
+    lru.invalidate(2)
+    t.assert_true(not lru.has(2), "invalidate removes the key")
+    lru.clear()
+    t.assert_true(lru.is_empty(), "clear drops every entry")
+
+    t.section("get_or_compute calls fn once, then serves the cache")
+    mut memo: Cache[int, int] = Cache[int, int].init(4)
+    mut calls = 0
+    mut compute_once = def () -> int:
+        calls = calls + 1
+        return 70
+    mut compute_again = def () -> int:
+        calls = calls + 1
+        return 99
+    mut first = memo.get_or_compute(7, 60000, compute_once)
+    mut second = memo.get_or_compute(7, 60000, compute_again)
+    t.assert_eq_int(first, 70, "cold get_or_compute returns the computed value")
+    t.assert_eq_int(second, 70, "warm get_or_compute does not replace the value")
+    t.assert_eq_int(calls, 1, "compute fn ran only on the miss")
+
+    t.section("StaleCache cold miss then fresh hit, no background refresh")
+    mut sc: StaleCache[int, int] = StaleCache[int, int].init(4)
+    mut scalls = 0
+    mut scompute = def () -> int:
+        scalls = scalls + 1
+        return 5
+    mut scompute2 = def () -> int:
+        scalls = scalls + 1
+        return 8
+    mut a = sc.get_or_compute_swr(1, 60000, 60000, scompute)
+    mut b = sc.get_or_compute_swr(1, 60000, 60000, scompute2)
+    t.assert_eq_int(a, 5, "stale-cache miss computes synchronously")
+    t.assert_eq_int(b, 5, "fresh hit returns the cached value")
+    t.assert_eq_int(scalls, 1, "fresh hit does not recompute")
+    t.assert_eq_int(sc.len(), 1, "stale cache len counts the entry")
+    sc.invalidate(1)
+    t.assert_eq_int(sc.len(), 0, "invalidate removes it")
+
+    t.section("StaleCache stale-while-revalidate: old value now, fresh value after a real background refresh")
+    mut swr: StaleCache[int, int] = StaleCache[int, int].init(4)
+    mut swr_calls: Atomic[int] = Atomic.new(0)
+    mut swr_fn = def () -> int:
+        mut n = swr_calls.add(1) + 1
+        return n * 100
+    # Cold miss: computed synchronously -> 100 (1st call).
+    mut v1 = swr.get_or_compute_swr(42, 40, 2000, swr_fn)
+    t.assert_eq_int(v1, 100, "cold miss computes synchronously")
+    t.assert_eq_int(swr_calls.load(), 1, "exactly one call so far")
+    # Still fresh: no recompute.
+    mut v2 = swr.get_or_compute_swr(42, 40, 2000, swr_fn)
+    t.assert_eq_int(v2, 100, "fresh hit returns the cached value")
+    t.assert_eq_int(swr_calls.load(), 1, "fresh hit does not call fn again")
+    # Let the entry go stale (past ttl_ms=40) but stay within stale_ms=2000.
+    Thread.sleep(80)
+    mut v3 = swr.get_or_compute_swr(42, 40, 2000, swr_fn)
+    t.assert_eq_int(v3, 100, "stale-but-usable hit returns the OLD value immediately")
+    # The stale hit above should have kicked off exactly one background
+    # refresh (2nd call to swr_fn). Give it a bounded window to finish.
+    Thread.sleep(200)
+    t.assert_eq_int(swr_calls.load(), 2, "exactly one background refresh ran for the stale hit")
+    mut v4 = swr.get_or_compute_swr(42, 40, 2000, swr_fn)
+    t.assert_eq_int(v4, 200, "a later read sees the background-refreshed value")
+    t.assert_eq_int(swr_calls.load(), 2, "reading the refreshed value does not call fn again")
+
+    t.summary()
