@@ -10,6 +10,7 @@
 #   from std.async import Thread, Atomic, ThreadLocal, Sendable
 #   from std.async import AsyncPool, AsyncTask
 #   from std.async import Scheduler
+#   from std.async import Emitter, FilteredEmitter
 #
 # Or per-module:
 #   from std.async.task       import Task, Future
@@ -26,6 +27,7 @@
 #   from std.async.send       import Sendable
 #   from std.async.pool       import AsyncPool, AsyncTask
 #   from std.async.sched      import Scheduler
+#   from std.async.events     import Emitter, FilteredEmitter
 
 from std.async.task       import Task, Future
 from std.async.channel    import Channel
@@ -42,3 +44,4 @@ from std.async.send       import Sendable
 from std.async.coro       import Coro
 from std.async.pool       import AsyncPool, AsyncTask
 from std.async.sched      import Scheduler
+from std.async.events     import Emitter, FilteredEmitter
