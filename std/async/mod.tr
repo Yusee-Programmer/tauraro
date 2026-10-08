@@ -11,6 +11,7 @@
 #   from std.async import AsyncPool, AsyncTask
 #   from std.async import Scheduler
 #   from std.async import Emitter, FilteredEmitter
+#   from std.async import TokenBucket, SlidingWindow
 #
 # Or per-module:
 #   from std.async.task       import Task, Future
@@ -28,6 +29,7 @@
 #   from std.async.pool       import AsyncPool, AsyncTask
 #   from std.async.sched      import Scheduler
 #   from std.async.events     import Emitter, FilteredEmitter
+#   from std.async.ratelimit  import TokenBucket, SlidingWindow
 
 from std.async.task       import Task, Future
 from std.async.channel    import Channel
@@ -45,3 +47,4 @@ from std.async.coro       import Coro
 from std.async.pool       import AsyncPool, AsyncTask
 from std.async.sched      import Scheduler
 from std.async.events     import Emitter, FilteredEmitter
+from std.async.ratelimit  import TokenBucket, SlidingWindow
