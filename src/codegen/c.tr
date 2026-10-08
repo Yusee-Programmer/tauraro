@@ -1009,7 +1009,245 @@ pub class CGenerator:
                         self.class_local_mono.insert(name, self.mono_cprefix(rt))
                 case _: pass
 
+
+    # A class applied to its OWN generic parameter names (Cache[K, V] while K/V
+    # are not in type_subst) is not a real monomorphization. Emitting it produces
+    # Cache_K_V with fields typed `K*` / `V*`, which is not C. Callers inside a
+    # real mono body have those names in type_subst and still monomorphize.
+    pub def _args_bare_unsubst(self, cls: HirClass, type_args: Vec[Pointer[AstType]]) -> bool:
+        if cls.generics.len == 0 or type_args.len == 0: return false
+        mut i = 0
+        while i < type_args.len and i < cls.generics.len:
+            mut an = type_args.get(i).read().name
+            if an == cls.generics.get(i) and not self.type_subst.contains(an):
+                return true
+            i = i + 1
+        return false
+
+    # Walk a type for Cache[K, V]-shaped args whose parameter name is not substituted.
+    pub def _ty_has_bare_class_generic(self, ty: AstType) -> bool:
+        if ty as usize == 0 as usize: return false
+        if ty.name == "": return false
+        if self.classes.contains(ty.name) and ty.name != "Vec" and ty.name != "Map" and ty.name != "Dict" and ty.name != "List" and ty.args.len > 0:
+            mut cls = self.classes.get(ty.name)
+            if cls.generics.len > 0:
+                mut i = 0
+                while i < ty.args.len and i < cls.generics.len:
+                    mut arg = ty.args.get(i).read()
+                    mut an = arg.name
+                    if an == cls.generics.get(i) and not self.type_subst.contains(an):
+                        return true
+                    if self._ty_has_bare_class_generic(arg): return true
+                    i = i + 1
+                return false
+        mut ai = 0
+        while ai < ty.args.len:
+            if self._ty_has_bare_class_generic(ty.args.get(ai).read()): return true
+            ai = ai + 1
+        return false
+
+    # Free helpers like _stale_box_get_status are not declared [K, V] but their
+    # signatures mention Cache[K, V] / RefreshJob[K, V]. Emitting them once, with
+    # K and V unsubstituted, is the Cache_K_V / Sendable_obj / void* mismatch.
+    pub def _fn_has_bare_class_generic(self, f: HirFunction) -> bool:
+        mut i = 0
+        if f.params as usize != 0 as usize:
+            while i < f.params.len:
+                if self._ty_has_bare_class_generic(f.params.get(i).ty): return true
+                i = i + 1
+        if f.ret_ty as usize != 0 as usize:
+            if self._ty_has_bare_class_generic(f.ret_ty): return true
+        return false
+
+    # Same walk, but the open parameter IS in the active substitution (we are
+    # inside StaleCache_i64_i64 / Cache_i64_i64). acc is "|K|V|" in visit order.
+    pub def _collect_open_names(self, ty: AstType, acc: str) -> str:
+        if ty as usize == 0 as usize: return acc
+        if ty.name == "": return acc
+        if self.classes.contains(ty.name) and ty.name != "Vec" and ty.name != "Map" and ty.name != "Dict" and ty.name != "List" and ty.args.len > 0:
+            mut cls = self.classes.get(ty.name)
+            if cls.generics.len > 0:
+                mut i = 0
+                mut out = acc
+                while i < ty.args.len and i < cls.generics.len:
+                    mut arg = ty.args.get(i).read()
+                    mut an = arg.name
+                    if an == cls.generics.get(i) and self.type_subst.contains(an):
+                        mut needle = "|" + an + "|"
+                        if not out.contains(needle):
+                            out = out + an + "|"
+                    else:
+                        out = self._collect_open_names(arg, out)
+                    i = i + 1
+                return out
+        mut ai = 0
+        mut out2 = acc
+        while ai < ty.args.len:
+            out2 = self._collect_open_names(ty.args.get(ai).read(), out2)
+            ai = ai + 1
+        return out2
+
+    pub def _open_acc(self, f: HirFunction) -> str:
+        mut acc = "|"
+        mut i = 0
+        if f.params as usize != 0 as usize:
+            while i < f.params.len:
+                acc = self._collect_open_names(f.params.get(i).ty, acc)
+                i = i + 1
+        if f.ret_ty as usize != 0 as usize:
+            acc = self._collect_open_names(f.ret_ty, acc)
+        return acc
+
+    pub def _fn_open_covered(self, f: HirFunction) -> bool:
+        return self._open_acc(f) != "|"
+
+    pub def _c_ty_sfx(self, cty: str) -> str:
+        if cty == "long long": return "i64"
+        if cty == "double": return "f64"
+        if cty == "float": return "f32"
+        if cty == "bool": return "bool"
+        if cty == "char": return "char"
+        if cty == "int": return "i32"
+        if cty == "short": return "i16"
+        if cty == "signed char": return "i8"
+        if cty == "unsigned long long": return "u64"
+        if cty == "unsigned int": return "u32"
+        if cty == "unsigned short": return "u16"
+        if cty == "unsigned char": return "u8"
+        if cty == "TrStr" or cty == "char*": return "str"
+        if cty.ends_with("*") and cty.len() > 1: return cty.slice(0, cty.len() - 1)
+        return cty
+
+    # Monomorphize a free function that is NOT declared generic but whose
+    # signature uses a generic class applied to its own parameter names, using
+    # the ACTIVE type_subst (the enclosing class mono). Emits fname__MONO_<sfx>.
+    pub def ensure_open_mono_func(self, fname: str) -> str:
+        if not self.functions.contains(fname): return ""
+        mut f = self.functions.get(fname)
+        if not self._fn_open_covered(f): return ""
+        mut acc = self._open_acc(f)
+        mut joined = ""
+        mut i = 1
+        mut cur = ""
+        while i < acc.len():
+            mut ch = acc.slice(i, i + 1)
+            if ch == "|":
+                if cur != "":
+                    if not self.type_subst.contains(cur): return ""
+                    if joined != "": joined = joined + "_"
+                    joined = joined + self._c_ty_sfx(self.type_subst.get(cur))
+                    cur = ""
+            else:
+                cur = cur + ch
+            i = i + 1
+        if joined == "": return ""
+        mut mono_fname = fname + "__MONO_" + joined
+        mut mono_key = "openfunc_" + mono_fname
+        if self.mono_done.contains(mono_key): return mono_fname
+        self.mono_done.insert(mono_key, true)
+        mut old_subst = self.type_subst
+        self.type_subst = Map[str, str].init(4)
+        i = 1
+        cur = ""
+        while i < acc.len():
+            mut ch2 = acc.slice(i, i + 1)
+            if ch2 == "|":
+                if cur != "" and old_subst.contains(cur):
+                    self.type_subst.insert(cur, old_subst.get(cur))
+                    cur = ""
+            else:
+                cur = cur + ch2
+            i = i + 1
+        mut old_buf = self.buf
+        mut old_sbuf = self.struct_buf
+        mut old_pbuf = self.proto_buf
+        mut ret_s = self.type_to_c(f.ret_ty)
+        if f.throws_ty.name != "": ret_s = "Result"
+        mut sig = "static __attribute__((hot)) " + ret_s + " " + mono_fname + "("
+        mut first = true
+        mut pi = 0
+        while pi < f.params.len:
+            mut p = f.params.get(pi)
+            if p.name != "self":
+                if not first: sig = sig + ", "
+                sig = sig + self.type_to_c(p.ty) + " " + _safe_c_varname(p.name)
+                first = false
+            pi = pi + 1
+        sig = sig + ")"
+        self.buf = self.mono_buf
+        self.struct_buf = self.mono_buf
+        self.proto_buf = self.mono_buf
+        self.w(sig + ";\n")
+        self.mono_buf = self.buf
+        mut mono_body_sb = StringBuilder.init(1024)
+        self.buf = mono_body_sb
+        self.struct_buf = mono_body_sb
+        self.proto_buf = mono_body_sb
+        mut old_class = self.cur_class
+        mut old_func = self.cur_func
+        mut old_throws = self.cur_throws_ty
+        mut old_decl_vars = self.decl_vars
+        mut old_str_local_names = self.str_local_names
+        mut old_coll_local_sfx = self.coll_local_sfx
+        mut old_coll_local_idict = self.coll_local_idict
+        mut old_coll_local_strval = self.coll_local_strval
+        mut old_coll_local_vtcoll = self.coll_local_vtcoll
+        mut old_self_is_ptr = self.cur_self_is_ptr
+        self.cur_class = ""
+        self.cur_func = mono_fname
+        self.cur_throws_ty = f.throws_ty.name
+        self.decl_vars = Map[str, bool].init(64)
+        self.str_local_names = Map[str, bool].init(16)
+        self.coll_local_sfx = Map[str, str].init(16)
+        self.coll_local_idict = Map[str, bool].init(16)
+        self.coll_local_strval = Map[str, bool].init(16)
+        self.coll_local_vtcoll = Map[str, str].init(16)
+        self.seed_params(f)
+        self.cur_self_is_ptr = false
+        self.w(sig + " {\n")
+        self.gen_func_body(f.body, 1)
+        self.w("}\n\n")
+        self.cur_class = old_class
+        self.cur_func = old_func
+        self.cur_throws_ty = old_throws
+        self.decl_vars = old_decl_vars
+        self.str_local_names = old_str_local_names
+        self.coll_local_sfx = old_coll_local_sfx
+        self.coll_local_idict = old_coll_local_idict
+        self.coll_local_strval = old_coll_local_strval
+        self.coll_local_vtcoll = old_coll_local_vtcoll
+        self.cur_self_is_ptr = old_self_is_ptr
+        self.fn_mono_body.append(mono_body_sb.to_string().as_str())
+        self.buf = old_buf
+        self.struct_buf = old_sbuf
+        self.proto_buf = old_pbuf
+        self.type_subst = old_subst
+        return mono_fname
+
+    # Thread.spawn of an open helper must wrap the MONOMORPHIZED function, and the
+    # wrapper must not be spliced into the enclosing method body (buf is isolated).
+    pub def _emit_open_spawn_wrapper(self, mono_name: str, orig_name: str):
+        if self.spawn_wrappers.contains(mono_name): return
+        self.spawn_wrappers.insert(mono_name, true)
+        mut cty = "void*"
+        if self.functions.contains(orig_name):
+            mut wf = self.functions.get(orig_name)
+            if wf.params.len > 0:
+                cty = self.type_to_c(wf.params.get(0).ty)
+        mut ob = self.buf
+        mut osb = self.struct_buf
+        mut opb = self.proto_buf
+        self.buf = self.fn_mono_body
+        self.struct_buf = self.fn_mono_body
+        self.proto_buf = self.fn_mono_body
+        self.w("static void* _tr_spawn_wrap_" + mono_name + "(void* _vp) { " + mono_name + "((" + cty + ")_vp); return NULL; }\n")
+        self.fn_mono_body = self.buf
+        self.buf = ob
+        self.struct_buf = osb
+        self.proto_buf = opb
+
     pub def ensure_mono(self, cls: HirClass, type_args: Vec[Pointer[AstType]]):
+        if self._args_bare_unsubst(cls, type_args): return
         mut sfx = self.type_args_suffix(type_args)
         mut mono_key = cls.name + "_" + sfx
         if self.mono_done.contains(mono_key): return
@@ -1204,8 +1442,19 @@ pub class CGenerator:
                             mono_iface_name = iface_base + "_" + sfx
                         # Emit vtable struct + obj typedef once per monomorphized interface name
                         mut vtbl_done_key = "iface_obj_" + mono_iface_name
+                        # Separate flag: generate_types_header's own forward-decl
+                        # loop ALSO sets vtbl_done_key (always, for every non-generic
+                        # interface, as its own anti-double-emission guard) -- that
+                        # flag means "the _obj typedef exists", not "a REAL vtable
+                        # BODY with method pointers has been emitted". gen_interface_
+                        # vtable needs to know the latter specifically, so it can
+                        # still emit the real body for interfaces no generic class
+                        # implements, instead of treating "header fwd-decl ran" as
+                        # "body already emitted" and skipping every interface's body.
+                        mut vtbl_full_key = "iface_vtable_full_" + mono_iface_name
                         if not self.emitted_fns.contains(vtbl_done_key):
                             self.emitted_fns.insert(vtbl_done_key, true)
+                            self.emitted_fns.insert(vtbl_full_key, true)
                             self.w("typedef struct _" + mono_iface_name + "_vtable {\n")
                             mut vmi = 0
                             while vmi < m_iface.methods.len:
@@ -2336,6 +2585,22 @@ pub class CGenerator:
 
     pub def gen_interface_vtable(self, iface: HirInterface):
         if iface.generics.len > 0: return  # monomorphized versions generated in ensure_mono
+        # GUARD (bug fix): a generic class implementing this interface (e.g.
+        # `class Job[V] implements Sendable`) already emits the FULL vtable
+        # struct body in ensure_mono. That path's own skip-check uses
+        # "iface_obj_<name>" -- but generate_types_header's forward-decl loop
+        # ALSO sets that exact key for EVERY non-generic interface, always,
+        # whether or not any generic class implements it (it only emits a
+        # bare forward-decl + the `_obj` typedef there, never the real
+        # method-pointer body). So "iface_obj_<name>" means "the _obj typedef
+        # exists", NOT "the real body has been emitted" -- checking it here
+        # to decide whether to skip the body would skip it for EVERY
+        # interface, not just ones a generic class already gave a real body.
+        # Use a dedicated flag that is only set when a real body has actually
+        # been written (by ensure_mono's generic-class path, or by this
+        # function itself just below).
+        if self.emitted_fns.contains("iface_vtable_full_" + iface.name): return
+        self.emitted_fns.insert("iface_vtable_full_" + iface.name, true)
         self.ws("typedef struct _" + iface.name + "_vtable {\n")
         mut i = 0
         while i < iface.methods.len:
@@ -4589,7 +4854,13 @@ pub class CGenerator:
                             if _is_int_type(th2_aty) or th2_aty == "bool" or th2_aty == "char":
                                 th2_arg_s = "(void*)(uintptr_t)(" + self.gen_expr(args.get(1)) + ")"
                             if th2_fn_nm != "":
-                                return "_tr_threadobj_spawn(_tr_spawn_wrap_" + th2_fn_nm + ", " + th2_arg_s + ")"
+                                mut th2_use = th2_fn_nm
+                                if self.functions.contains(th2_fn_nm) and self._fn_open_covered(self.functions.get(th2_fn_nm)):
+                                    mut _thn = self.ensure_open_mono_func(th2_fn_nm)
+                                    if _thn != "":
+                                        th2_use = _thn
+                                        self._emit_open_spawn_wrapper(th2_use, th2_fn_nm)
+                                return "_tr_threadobj_spawn(_tr_spawn_wrap_" + th2_use + ", " + th2_arg_s + ")"
                             return "_tr_threadobj_spawn((void*(*)(void*))(" + self.gen_expr(args.get(0)) + "), " + th2_arg_s + ")"
                         elif args.len == 1:
                             mut th2_fn_nm2 = ""
@@ -4674,6 +4945,12 @@ pub class CGenerator:
                         _tjoined = _tjoined + _targs_m.get(_tji)
                         _tji = _tji + 1
                     return callee_s + "__MONO_" + _tjoined + "(" + self.gen_args(args) + ")"
+            # Not declared generic, but the signature uses Cache[K,V] / RefreshJob[K,V]
+            # and the enclosing mono has substituted K and V. Emit a specialized copy.
+            if fn_def.class_name == "" and fn_def.generics.len == 0 and self._fn_open_covered(fn_def):
+                mut _omn = self.ensure_open_mono_func(orig_callee_name)
+                if _omn != "":
+                    return _omn + "(" + self.gen_args(args) + ")"
             mut any_wrapped = false
             mut ai = 0
             while ai < args.len:
@@ -5716,7 +5993,13 @@ pub class CGenerator:
                         # the identical problem). Box it the same way.
                         th_arg_s = "_tr_str_box(" + self.gen_expr(args.get(1)) + ")"
                     if th_fn_nm != "":
-                        return "_tr_threadobj_spawn(_tr_spawn_wrap_" + th_fn_nm + ", " + th_arg_s + ")"
+                        mut th_use = th_fn_nm
+                        if self.functions.contains(th_fn_nm) and self._fn_open_covered(self.functions.get(th_fn_nm)):
+                            mut _thn_m = self.ensure_open_mono_func(th_fn_nm)
+                            if _thn_m != "":
+                                th_use = _thn_m
+                                self._emit_open_spawn_wrapper(th_use, th_fn_nm)
+                        return "_tr_threadobj_spawn(_tr_spawn_wrap_" + th_use + ", " + th_arg_s + ")"
                     return "_tr_threadobj_spawn((void*(*)(void*))(" + self.gen_expr(args.get(0)) + "), " + th_arg_s + ")"
                 elif args.len == 1:
                     mut th_fn_nm2 = ""
@@ -7572,6 +7855,11 @@ pub class CGenerator:
                     case HirExpr.EIdent(n, _, _): fn_name = n
                     case _: return
                 if fn_name == "": return
+                # Open helpers (RefreshJob[K, V] etc.) are specialized at the spawn
+                # site inside the class mono. A prescanned wrapper would call the
+                # unspecialized function, which is no longer emitted.
+                if self.functions.contains(fn_name) and self._fn_has_bare_class_generic(self.functions.get(fn_name)):
+                    return
                 if self.spawn_wrappers.contains(fn_name): return
                 self.spawn_wrappers.insert(fn_name, true)
                 if args.len == 0:
@@ -7697,7 +7985,10 @@ pub class CGenerator:
                                 match aa_args.get(0).read():
                                     case HirExpr.EIdent(tspn2, _, _): th2_fn_nm = tspn2
                                     case _: pass
-                                if th2_fn_nm != "" and not self.spawn_wrappers.contains(th2_fn_nm):
+                                mut _th2_bare_fn = false
+                                if th2_fn_nm != "" and self.functions.contains(th2_fn_nm) and self._fn_has_bare_class_generic(self.functions.get(th2_fn_nm)):
+                                    _th2_bare_fn = true
+                                if th2_fn_nm != "" and not _th2_bare_fn and not self.spawn_wrappers.contains(th2_fn_nm):
                                     self.spawn_wrappers.insert(th2_fn_nm, true)
                                     if aa_args.len == 1:
                                         self.w("static void* _tr_spawn_wrap_" + th2_fn_nm + "(void* _vp) { (void)_vp; " + th2_fn_nm + "(); return NULL; }\n")
@@ -7726,7 +8017,10 @@ pub class CGenerator:
                         match pool_args.get(0).read():
                             case HirExpr.EIdent(tpfn, _, _): th_ps_fn = tpfn
                             case _: pass
-                        if th_ps_fn != "" and not self.spawn_wrappers.contains(th_ps_fn):
+                        mut _th_ps_bare = false
+                        if th_ps_fn != "" and self.functions.contains(th_ps_fn) and self._fn_has_bare_class_generic(self.functions.get(th_ps_fn)):
+                            _th_ps_bare = true
+                        if th_ps_fn != "" and not _th_ps_bare and not self.spawn_wrappers.contains(th_ps_fn):
                             self.spawn_wrappers.insert(th_ps_fn, true)
                             if pool_args.len == 1:
                                 self.w("static void* _tr_spawn_wrap_" + th_ps_fn + "(void* _vp) { (void)_vp; " + th_ps_fn + "(); return NULL; }\n")
@@ -10254,7 +10548,7 @@ pub class CGenerator:
                     skip4 = true   # class/enum methods handled in per-class loops or mono_buf
                 # A generic free function is emitted only as monomorphized copies
                 # (fname__MONO_T) into mono_buf — never as an erased void* template.
-                if f.generics.len > 0:
+                if f.generics.len > 0 or self._fn_has_bare_class_generic(f):
                     skip4 = true
                 if not skip4:
                     if not self.emitted_fns.contains("p_" + f.name):
@@ -10635,9 +10929,34 @@ pub class CGenerator:
             mut iface2 = prog.interfaces.get(i)
             if not _is_invalid_ptr(iface2 as usize):
                 if iface2.generics.len == 0:
-                    out.append("typedef struct _" + iface2.name + "_vtable " + iface2.name + "_vtable;\n")
-                    out.append("typedef struct { " + iface2.name + "_vtable* vtable; void* data; } " + iface2.name + "_obj;\n")
-                    self.emitted_fns.insert("iface_obj_" + iface2.name, true)
+                    # GUARD (bug fix): a generic class implementing this
+                    # interface (e.g. `class Job[V] implements Sendable,
+                    # UnsafeSendable`) already emits BOTH the vtable struct
+                    # body and this exact `_obj` typedef earlier, during
+                    # generic-class monomorphization (see the
+                    # "iface_obj_<name>" guard around line 1206-1208), for
+                    # every non-generic marker interface it implements.
+                    # This loop used to write the forward-decl + `_obj`
+                    # typedef UNCONDITIONALLY and only set the guard flag
+                    # AFTER writing (a no-op check, since nothing re-reads
+                    # it later in this same loop) -- so for any interface
+                    # a generic class implements, the `_obj` typedef (and,
+                    # via gen_interface_vtable's own emission further
+                    # below, the vtable struct body) was emitted TWICE,
+                    # a real C "conflicting types" redefinition error.
+                    # Confirmed via a minimal repro: a bare
+                    # `class Job[V] implements Sendable, UnsafeSendable:`
+                    # with no other code fails to compile at all (always
+                    # did -- the generic-mono emission path predates this
+                    # session). Concrete (non-generic) classes implementing
+                    # the same interfaces (e.g. std.async.sched.Scheduler)
+                    # never triggered this because they don't go through
+                    # the generic-mono emission path at all.
+                    mut iface2_key = "iface_obj_" + iface2.name
+                    if not self.emitted_fns.contains(iface2_key):
+                        out.append("typedef struct _" + iface2.name + "_vtable " + iface2.name + "_vtable;\n")
+                        out.append("typedef struct { " + iface2.name + "_vtable* vtable; void* data; } " + iface2.name + "_obj;\n")
+                        self.emitted_fns.insert(iface2_key, true)
             i = i + 1
         self.emit_list_fwd_decls(prog)          # writes to self.buf
         out.append(self.buf.to_string().as_str())
@@ -10733,7 +11052,7 @@ pub class CGenerator:
                             if not self.emitted_fns.contains(ep_key):
                                 self.emitted_fns.insert(ep_key, true)
                                 out.append(self.get_proto_attrs(f4) + self.gen_func_sig(f4, f4.class_name) + ";\n")
-                    elif f4.generics.len == 0:
+                    elif f4.generics.len == 0 and not self._fn_has_bare_class_generic(f4):
                         if not self.emitted_fns.contains("p_" + f4.name):
                             self.emitted_fns.insert("p_" + f4.name, true)
                             out.append(self.get_proto_attrs(f4) + self.gen_func_sig(f4, f4.class_name) + ";\n")
@@ -10787,7 +11106,7 @@ pub class CGenerator:
                             if not self.emitted_fns.contains(ep_key2):
                                 self.emitted_fns.insert(ep_key2, true)
                                 out.append(self.get_proto_attrs(f4) + self.gen_func_sig(f4, f4.class_name) + ";\n")
-                    elif f4.generics.len == 0:
+                    elif f4.generics.len == 0 and not self._fn_has_bare_class_generic(f4):
                         if not self.emitted_fns.contains("p_" + f4.name):
                             self.emitted_fns.insert("p_" + f4.name, true)
                             out.append(self.get_proto_attrs(f4) + self.gen_func_sig(f4, f4.class_name) + ";\n")
@@ -11021,7 +11340,7 @@ pub class CGenerator:
             # `def(engine: Engine[C, RS])` parameter as if "C"/"RS" were
             # real class names, "unknown type name 'Engine_C_RS'").
             # Confirmed directly with a minimal, tauorm-unrelated repro.
-            if fwd_f.name != "main" and not fwd_f.is_extern and not fwd_f.is_public and fwd_f.generics.len == 0:
+            if fwd_f.name != "main" and not fwd_f.is_extern and not fwd_f.is_public and fwd_f.generics.len == 0 and not self._fn_has_bare_class_generic(fwd_f):
                 mut in_this_mod = false
                 if fwd_f.class_name == "" and fn_set.contains(fwd_f.name):
                     in_this_mod = true
@@ -11103,7 +11422,7 @@ pub class CGenerator:
             mut f = prog.functions.get(i)
             if f.name != "main" and not f.is_extern:
                 mut in_mod = false
-                if f.class_name == "" and fn_set.contains(f.name) and f.generics.len == 0:
+                if f.class_name == "" and fn_set.contains(f.name) and f.generics.len == 0 and not self._fn_has_bare_class_generic(f):
                     in_mod = true
                 elif f.class_name != "" and class_set.contains(f.class_name):
                     # Skip generic class extend methods - only monomorphized instances are emitted.
@@ -11301,7 +11620,7 @@ pub class CGenerator:
                 if not _is_invalid_ptr(f as usize):
                     if f.name != "main" and not f.is_extern:
                         mut in_mod = false
-                        if f.class_name == "" and fn_set.contains(f.name) and f.generics.len == 0:
+                        if f.class_name == "" and fn_set.contains(f.name) and f.generics.len == 0 and not self._fn_has_bare_class_generic(f):
                             in_mod = true
                         elif f.class_name != "" and class_set.contains(f.class_name):
                             # Skip generic class extend methods - only monomorphized instances are emitted.
