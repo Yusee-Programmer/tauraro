@@ -1,0 +1,31 @@
+# std.i18n — Locale-aware formatting + simple translation lookup.
+#
+# Key differentiator vs. most i18n libraries (ICU-based ones especially):
+# there is NO separate "locale-aware" wrapper type. Formatting functions take
+# Tauraro's own existing value types DIRECTLY — a plain `int`/`float` for
+# numbers, the real `DateTime` from std.sys.datetime for dates/times — plus a
+# locale tag string, and return a `str`. You never convert your values into
+# some other type first.
+#
+# Scope: a practical, non-ICU subset — a handful of concretely-verified
+# locales/currencies/plural-rules rather than a half-covered attempt at full
+# CLDR coverage. See each sub-module's header comment for exactly which
+# locales/currencies it supports and why.
+#
+# Sub-modules:
+#   from std.i18n.numbers   import NumberFmt    — thousands/decimal separators,
+#                                                  currency formatting
+#   from std.i18n.dates     import DateFmt      — locale date/time patterns,
+#                                                  month/weekday names
+#   from std.i18n.plurals   import Plural       — English + French cardinal
+#                                                  plural rules
+#   from std.i18n.translate import Translator   — flat key->string lookup per
+#                                                  locale, with fallback
+#
+# Quick import:
+#   from std.i18n import NumberFmt, DateFmt, Plural, Translator
+
+from std.i18n.numbers   import NumberFmt
+from std.i18n.dates     import DateFmt
+from std.i18n.plurals   import Plural
+from std.i18n.translate import Translator
