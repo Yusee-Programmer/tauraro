@@ -1,0 +1,876 @@
+# std.image.png — PNG decode/encode (truecolor RGB/RGBA, 8-bit, non-interlaced).
+#
+# Pure Tauraro chunk parsing + PNG filter reversal, layered on top of two
+# EXISTING pieces rather than reimplementing them:
+#   - std.compress.zlib.Zlib — wraps the runtime's _tr_deflate/_tr_inflate
+#     for the IDAT payload's zlib-wrapped DEFLATE stream.
+#   - std.io.archive.Crc32 — the same IEEE 802.3/PKZIP/PNG polynomial
+#     (0xEDB88320) table-driven CRC32 ZipWriter/ZipReader already use, for
+#     verifying/emitting each chunk's trailing CRC.
+#
+# Supported: color type 2 (truecolor RGB) and 6 (truecolor+alpha RGBA),
+# 8 bits/channel, non-interlaced (interlace method 0). This covers the
+# overwhelming majority of PNGs produced by real tools. Also decodes
+# color type 0 (grayscale, 8-bit) since it's a trivial filter-only case.
+# Palette (type 3) and <8-bit-depth images are not supported by this
+# first cut — decode_png() reports failure (width == -1) rather than
+# guessing. encode_png() always emits color type 6 (RGBA), 8-bit depth.
+#
+# File layout:
+#   SIGNATURE (8 bytes): 0x89 0x50 0x4E 0x47 0x0D 0x0A 0x1A 0x0A
+#   CHUNKS: each is [length:u32be][type:4 ASCII bytes][data:length bytes][crc32:u32be]
+#     crc32 is computed over the type+data bytes (NOT length), using the
+#     same polynomial as ZIP/gzip.
+#   Chunks used here: IHDR (first), IDAT (one or more, concatenated before
+#   inflating), IEND (last, empty). PLTE/tRNS/ancillary chunks are skipped.
+#
+#   IHDR (13 bytes): width:u32be, height:u32be, bit_depth:u8, color_type:u8,
+#   compression:u8 (must be 0), filter_method:u8 (must be 0),
+#   interlace:u8 (must be 0 — supported here).
+#
+# PNG filtering (applied per-scanline, BEFORE zlib compression, reversed
+# AFTER inflating): each scanline is prefixed with one filter-type byte,
+# then the filtered bytes for that row. Filters operate byte-wise across
+# the whole row (stride = bytes per pixel), referencing the raw
+# (unfiltered) byte immediately to the left (`a`), directly above (`b`),
+# and above-left (`c`):
+#   0 None:    recon(x)    = filt(x)
+#   1 Sub:     recon(x)    = filt(x) + recon(a)
+#   2 Up:      recon(x)    = filt(x) + recon(b)
+#   3 Average: recon(x)    = filt(x) + floor((recon(a) + recon(b)) / 2)
+#   4 Paeth:   recon(x)    = filt(x) + paeth_predictor(recon(a), recon(b), recon(c))
+# all additions mod 256. paeth_predictor picks whichever of a, b, c is
+# closest to p = a + b - c (ties broken a, then b, then c).
+#
+# Note on binary strings: `str` here is always used as a raw byte buffer
+# with an explicit length — never via C strlen — since PNG bytes (and
+# especially the compressed IDAT stream) routinely contain embedded NULs.
+
+extern "C":
+    def _tr_c_malloc(size: int) -> Pointer[char]
+    def _tr_c_free(ptr: Pointer[char])
+    def _tr_str_wrap_len(s: Pointer[char], blen: int) -> str
+
+from std.image.mod import Image
+from std.core.vec import Vec
+from std.io.archive import ByteBuf, Crc32
+from std.compress.zlib import Zlib
+
+def _rd_u32be(data: str, off: int) -> int:
+    mut p = data as Pointer[char]
+    mut b0 = 0
+    mut b1 = 0
+    mut b2 = 0
+    mut b3 = 0
+    unsafe:
+        b0 = p.offset(off).read()     as int & 0xFF
+        b1 = p.offset(off + 1).read() as int & 0xFF
+        b2 = p.offset(off + 2).read() as int & 0xFF
+        b3 = p.offset(off + 3).read() as int & 0xFF
+    return (b0 << 24) | (b1 << 16) | (b2 << 8) | b3
+
+def _bad_image() -> Image:
+    mut bad = Image()
+    bad.width  = -1
+    bad.height = -1
+    bad.pixels = Vec[u8].init(1)
+    return bad
+
+# Copy `n` raw bytes starting at `off` in `data` into a fresh, explicitly-
+# length-tracked str (safe for embedded NULs — never uses strlen).
+def _raw_slice(data: str, off: int, n: int) -> str:
+    mut out = _tr_c_malloc(n + 1)
+    mut p = data as Pointer[char]
+    if n > 0:
+        unsafe:
+            mut i = 0
+            while i < n:
+                out.offset(i).write(p.offset(off + i).read())
+                i = i + 1
+    unsafe: out.offset(n).write('\0')
+    return _tr_str_wrap_len(out, n)
+
+def _paeth_predictor(a: int, b: int, c: int) -> int:
+    mut p  = a + b - c
+    mut pa = p - a
+    if pa < 0: pa = 0 - pa
+    mut pb = p - b
+    if pb < 0: pb = 0 - pb
+    mut pc = p - c
+    if pc < 0: pc = 0 - pc
+    if pa <= pb and pa <= pc: return a
+    if pb <= pc: return b
+    return c
+
+# Decode `len_` bytes of PNG data into a canonical RGBA8 Image. Returns an
+# Image with width == -1 on malformed input or an unsupported variant
+# (palette, <8-bit depth, interlaced, or non-zero compression/filter
+# method).
+pub def decode_png(data: str, len_: int) -> Image:
+    if len_ < 8 + 25:   # signature + minimal IHDR chunk
+        return _bad_image()
+
+    mut p = data as Pointer[char]
+    mut sig_ok = true
+    mut sig: List[int] = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]
+    mut si = 0
+    unsafe:
+        while si < 8:
+            if (p.offset(si).read() as int & 0xFF) != sig[si]:
+                sig_ok = false
+            si = si + 1
+    if not sig_ok:
+        return _bad_image()
+
+    mut width        = 0
+    mut height       = 0
+    mut bit_depth    = 0
+    mut color_type   = 0
+    mut have_ihdr    = false
+    mut idat_parts: List[str] = []
+    mut idat_lens:  List[int] = []
+    mut idat_total  = 0
+    mut saw_iend    = false
+
+    mut off = 8
+    while off + 8 <= len_ and not saw_iend:
+        mut clen = _rd_u32be(data, off)
+        if clen < 0 or off + 12 + clen > len_:
+            return _bad_image()   # truncated/corrupt chunk length
+
+        mut t0 = 0
+        mut t1 = 0
+        mut t2 = 0
+        mut t3 = 0
+        unsafe:
+            t0 = p.offset(off + 4).read() as int & 0xFF
+            t1 = p.offset(off + 5).read() as int & 0xFF
+            t2 = p.offset(off + 6).read() as int & 0xFF
+            t3 = p.offset(off + 7).read() as int & 0xFF
+
+        mut data_off = off + 8
+        mut crc_off  = data_off + clen
+
+        # Verify CRC32 over type+data (4 + clen bytes starting at off+4).
+        mut chunk_for_crc = _raw_slice(data, off + 4, 4 + clen)
+        mut got_crc = Crc32.compute(chunk_for_crc, 4 + clen)
+        mut expect_crc = _rd_u32be(data, crc_off)
+        if got_crc != expect_crc:
+            print("decode_png: CRC32 mismatch on chunk at offset " + str(off) + " — data is corrupted")
+            return _bad_image()
+
+        if t0 == 0x49 and t1 == 0x48 and t2 == 0x44 and t3 == 0x52:   # "IHDR"
+            if clen != 13:
+                return _bad_image()
+            width      = _rd_u32be(data, data_off)
+            height     = _rd_u32be(data, data_off + 4)
+            unsafe:
+                bit_depth  = p.offset(data_off + 8).read()  as int & 0xFF
+                color_type = p.offset(data_off + 9).read()  as int & 0xFF
+                mut compression_m = p.offset(data_off + 10).read() as int & 0xFF
+                mut filter_m      = p.offset(data_off + 11).read() as int & 0xFF
+                mut interlace_m   = p.offset(data_off + 12).read() as int & 0xFF
+                if compression_m != 0 or filter_m != 0 or interlace_m != 0:
+                    return _bad_image()
+            if width <= 0 or height <= 0:
+                return _bad_image()
+            if bit_depth != 8:
+                return _bad_image()
+            if color_type != 2 and color_type != 6 and color_type != 0:
+                return _bad_image()   # palette/others not supported
+            have_ihdr = true
+        elif t0 == 0x49 and t1 == 0x44 and t2 == 0x41 and t3 == 0x54:   # "IDAT"
+            if not have_ihdr:
+                return _bad_image()
+            idat_parts.append(_raw_slice(data, data_off, clen))
+            idat_lens.append(clen)
+            idat_total = idat_total + clen
+        elif t0 == 0x49 and t1 == 0x45 and t2 == 0x4E and t3 == 0x44:   # "IEND"
+            saw_iend = true
+        # else: PLTE/tRNS/ancillary chunks — skipped (not needed for
+        # truecolor/grayscale decoding).
+
+        off = crc_off + 4
+
+    if not have_ihdr or idat_total == 0:
+        return _bad_image()
+
+    # Concatenate all IDAT parts into one zlib stream.
+    mut idat_buf = ByteBuf.init(idat_total + 1)
+    mut ii = 0
+    while ii < len(idat_parts):
+        idat_buf.push_bytes(idat_parts[ii], idat_lens[ii])
+        ii = ii + 1
+    mut idat_all = idat_buf.to_str()
+    idat_buf.free()
+
+    mut channels = 4
+    if color_type == 2: channels = 3
+    elif color_type == 0: channels = 1
+    mut bpp = channels   # 8-bit depth, so bytes/pixel == channels
+    mut row_bytes = width * bpp
+
+    # Inflate the zlib-wrapped IDAT stream via a real DEFLATE decoder (see
+    # _zlib_inflate / _deflate_inflate below — stored, fixed-Huffman, AND
+    # dynamic-Huffman blocks are all supported), so this reads PNGs
+    # produced by any real encoder (libpng, browsers, Python's zlib,
+    # etc.), not only ones written by this module's own encode_png().
+    mut raw, raw_len_got = _zlib_inflate(idat_all, idat_total)
+    if raw_len_got < 0:
+        print("decode_png: zlib inflate of IDAT stream failed (unsupported DEFLATE block type or corrupt stream)")
+        return _bad_image()
+
+    mut img = Image.init(width, height)
+
+    # Reconstruct each scanline, unfiltering in place against the PREVIOUS
+    # reconstructed row (prev defaults to all-zero for row 0, per spec).
+    mut prev_row: List[int] = []
+    mut cur_row: List[int] = []
+    mut zi = 0
+    while zi < row_bytes:
+        prev_row.append(0)
+        cur_row.append(0)
+        zi = zi + 1
+
+    mut rp = raw as Pointer[char]
+    mut row = 0
+    mut src_off = 0
+    while row < height:
+        mut filter_type = 0
+        unsafe:
+            filter_type = rp.offset(src_off).read() as int & 0xFF
+        src_off = src_off + 1
+
+        mut x = 0
+        while x < row_bytes:
+            mut filt_byte = 0
+            unsafe:
+                filt_byte = rp.offset(src_off + x).read() as int & 0xFF
+
+            mut a = 0   # left
+            if x >= bpp: a = cur_row[x - bpp]
+            mut b = prev_row[x]           # up
+            mut c = 0                      # up-left
+            if x >= bpp: c = prev_row[x - bpp]
+
+            mut recon = 0
+            if filter_type == 0:
+                recon = filt_byte
+            elif filter_type == 1:
+                recon = (filt_byte + a) & 0xFF
+            elif filter_type == 2:
+                recon = (filt_byte + b) & 0xFF
+            elif filter_type == 3:
+                recon = (filt_byte + (a + b) / 2) & 0xFF
+            elif filter_type == 4:
+                recon = (filt_byte + _paeth_predictor(a, b, c)) & 0xFF
+            else:
+                return _bad_image()   # unknown filter type
+
+            cur_row[x] = recon
+            x = x + 1
+
+        # Scatter cur_row into the Image as RGBA.
+        mut col = 0
+        while col < width:
+            mut base = col * bpp
+            if channels == 4:
+                img.set_pixel(col, row, cur_row[base], cur_row[base + 1], cur_row[base + 2], cur_row[base + 3])
+            elif channels == 3:
+                img.set_pixel(col, row, cur_row[base], cur_row[base + 1], cur_row[base + 2], 255)
+            else:   # grayscale
+                mut v = cur_row[base]
+                img.set_pixel(col, row, v, v, v, 255)
+            col = col + 1
+
+        # cur_row becomes prev_row for the next scanline (copied element-
+        # wise rather than swapped/moved, since List[int] is a heap-owned
+        # value here and the compiler's move checker would otherwise
+        # reject reusing `cur_row`/`prev_row` by name afterward).
+        mut ci = 0
+        while ci < row_bytes:
+            prev_row[ci] = cur_row[ci]
+            ci = ci + 1
+
+        src_off = src_off + row_bytes
+        row = row + 1
+
+    return img
+
+# Encode `img` as a PNG (color type 6 = truecolor+alpha, 8-bit depth,
+# filter type 0/None per scanline for simplicity — still a fully valid,
+# spec-conformant PNG; just not maximally compressed). Returns (bytes,
+# length) directly since PNG output can contain embedded NUL bytes.
+pub def encode_png(img: Image) -> (str, int):
+    mut width  = img.width
+    mut height = img.height
+    mut row_bytes = width * 4
+
+    # Build the unfiltered scanline stream: one filter-type byte (0) per
+    # row followed by that row's raw RGBA bytes.
+    mut raw = ByteBuf.init((row_bytes + 1) * height)
+    mut row = 0
+    while row < height:
+        raw.push_u8(0)   # filter type: None
+        mut col = 0
+        while col < width:
+            mut r, g, b, a = img.get_pixel(col, row)
+            raw.push_u8(r)
+            raw.push_u8(g)
+            raw.push_u8(b)
+            raw.push_u8(a)
+            col = col + 1
+        row = row + 1
+
+    mut raw_bytes = raw.to_str()
+    mut raw_len = raw.len
+    raw.free()
+
+    # Wrap the unfiltered scanline stream in a real zlib container (RFC
+    # 1950: 2-byte header + DEFLATE data + 4-byte big-endian Adler-32 of
+    # the UNCOMPRESSED bytes), as PNG's IDAT chunk requires. The DEFLATE
+    # payload itself is written as spec-valid "stored" blocks (RFC 1951
+    # §3.2.4, verbatim bytes, no entropy coding) rather than going through
+    # the runtime's _tr_deflate/_tr_zlib_compress — those are opt-in stubs
+    # (-DTAURARO_COMPRESS_ZLIB -lz) that tauraroc's own build pipeline
+    # never defines for ordinary compiled programs, so relying on them
+    # would silently produce an empty/corrupt IDAT on every normal build.
+    # Stored blocks are larger than real DEFLATE but are 100% spec-valid
+    # DEFLATE/zlib and decode correctly both here and in any real PNG
+    # viewer (libpng, browsers, etc.) — this mirrors the exact fallback
+    # std.compress.gzip.Gzip already uses for the same underlying reason.
+    mut compressed_buf = ByteBuf.init(raw_len + raw_len / 1000 + 16)
+    _zlib_wrap_stored(compressed_buf, raw_bytes, raw_len)
+    mut compressed = compressed_buf.to_str()
+    mut compressed_len = compressed_buf.len
+    compressed_buf.free()
+
+    mut out = ByteBuf.init(8 + 25 + compressed_len + 32)
+
+    # Signature
+    out.push_u8(0x89)
+    out.push_u8(0x50)
+    out.push_u8(0x4E)
+    out.push_u8(0x47)
+    out.push_u8(0x0D)
+    out.push_u8(0x0A)
+    out.push_u8(0x1A)
+    out.push_u8(0x0A)
+
+    # IHDR (always exactly 13 bytes — width/height bytes legitimately can
+    # be 0x00, so the length must be passed explicitly, never via strlen).
+    _write_chunk_raw(out, "IHDR", _ihdr_body(width, height), 13)
+
+    # IDAT (single chunk holding the whole zlib stream)
+    _write_chunk_raw(out, "IDAT", compressed, compressed_len)
+
+    # IEND (always empty)
+    _write_chunk_raw(out, "IEND", "", 0)
+
+    mut out_len = out.len
+    mut result = out.to_str()
+    out.free()
+    return (result, out_len)
+
+# ── Hand-rolled zlib container (RFC 1950) over DEFLATE "stored" blocks ─────
+#
+# Used for BOTH encode and decode, independent of the runtime's opt-in
+# _tr_deflate/_tr_inflate/_tr_zlib_* primitives (stubs unless built with
+# -DTAURARO_COMPRESS_ZLIB -lz, which tauraroc's own build pipeline never
+# sets for ordinary compiled programs) — see the longer comment at the
+# encode_png() call site above.
+
+# Adler-32 checksum (RFC 1950 §9), the trailer zlib streams require.
+def _adler32(data: str, len_: int) -> int:
+    mut p = data as Pointer[char]
+    mut a: int = 1
+    mut b: int = 0
+    mut i = 0
+    unsafe:
+        while i < len_:
+            mut byte = p.offset(i).read() as int & 0xFF
+            a = (a + byte) % 65521
+            b = (b + a) % 65521
+            i = i + 1
+    return ((b << 16) | a) & 0xFFFFFFFF
+
+# Append a complete zlib stream (2-byte header + DEFLATE "stored" blocks +
+# 4-byte big-endian Adler-32 trailer) wrapping `len_` bytes of `data` into
+# `out`. Stored blocks are capped at 65535 bytes each per RFC 1951 §3.2.4.
+def _zlib_wrap_stored(out: ByteBuf, data: str, len_: int):
+    out.push_u8(0x78)   # CMF: deflate, 32K window
+    out.push_u8(0x01)   # FLG: fastest/no-dict, valid check bits for 0x78
+
+    mut max_block = 65535
+    mut remaining = len_
+    mut off = 0
+    if len_ == 0:
+        out.push_u8(0x01)      # BFINAL=1, BTYPE=00 (stored)
+        out.push_u16le(0)
+        out.push_u16le(0xFFFF)
+    else:
+        while remaining > 0:
+            mut chunk = remaining
+            if chunk > max_block: chunk = max_block
+            mut is_final = 0
+            if chunk == remaining: is_final = 1
+
+            out.push_u8(is_final & 0x01)
+            out.push_u16le(chunk)
+            out.push_u16le((~chunk) & 0xFFFF)
+            out.push_raw((data as Pointer[char]).offset(off), chunk)
+
+            off = off + chunk
+            remaining = remaining - chunk
+
+    mut checksum = _adler32(data, len_)
+    out.push_u8((checksum >> 24) & 0xFF)
+    out.push_u8((checksum >> 16) & 0xFF)
+    out.push_u8((checksum >> 8) & 0xFF)
+    out.push_u8(checksum & 0xFF)
+
+# ── Full DEFLATE inflate (RFC 1951): stored + fixed + dynamic Huffman ──────
+#
+# A real inflate implementation (not just the stored-block special case),
+# so decode_png() can read PNGs produced by ANY real encoder (libpng,
+# browsers, Python's zlib, etc.), not only ones written by this module's
+# own encode_png(). Canonical-Huffman decoding is done bit-by-bit (no
+# lookup-table acceleration) — simplicity over speed, which is fine for
+# the image sizes this module targets.
+
+# LSB-first bit reader over a raw byte buffer.
+pub class _BitReader:
+    pub p:        Pointer[char]
+    pub byte_pos: int
+    pub bit_pos:  int    # 0..7, next bit to read within p[byte_pos]
+    pub end:      int    # exclusive byte-offset limit
+
+extend _BitReader:
+    pub def init(p: Pointer[char], start: int, end: int) -> _BitReader:
+        mut r = _BitReader()
+        r.p        = p
+        r.byte_pos = start
+        r.bit_pos  = 0
+        r.end      = end
+        return r
+
+    # Read `n` bits (n <= 24), LSB-first, returning them as an int with
+    # the first-read bit in the lowest position (DEFLATE's convention for
+    # literal multi-bit values like block type / stored-block length).
+    pub def read_bits(self, n: int) -> int:
+        mut result = 0
+        mut i = 0
+        while i < n:
+            result = result | (self.read_bit() << i)
+            i = i + 1
+        return result
+
+    pub def read_bit(self) -> int:
+        if self.byte_pos >= self.end: return 0   # past end: treat as zero-pad
+        mut byte_val = 0
+        unsafe:
+            byte_val = self.p.offset(self.byte_pos).read() as int & 0xFF
+        mut bit = (byte_val >> self.bit_pos) & 0x01
+        self.bit_pos = self.bit_pos + 1
+        if self.bit_pos == 8:
+            self.bit_pos = 0
+            self.byte_pos = self.byte_pos + 1
+        return bit
+
+    # Discard any partial byte, moving to the next whole byte boundary
+    # (used before a stored block's LEN/NLEN fields).
+    pub def align_byte(self):
+        if self.bit_pos != 0:
+            self.bit_pos = 0
+            self.byte_pos = self.byte_pos + 1
+
+# Canonical Huffman decode table: for each symbol, its code length; codes
+# are assigned per RFC 1951 §3.2.2. Decoding here walks bit-by-bit,
+# building up a candidate code and comparing against the canonical code
+# for each length — simple and correct, if not the fastest approach.
+pub class _Huffman:
+    pub lengths:   List[int]   # code length per symbol (0 = unused)
+    pub n_symbols: int
+    pub max_len:   int
+    # first_code[L] = first canonical code of length L; counts[L] = how
+    # many symbols have length L. symbols_by_code[L] lists the symbols of
+    # length L in code order (ascending code value).
+    pub counts:         List[int]
+    pub first_code:     List[int]
+    pub symbols_sorted:  List[int]   # all symbols, grouped by length ascending, code-ascending within a length
+    pub first_index:     List[int]   # index into symbols_sorted where length L's symbols start
+
+extend _Huffman:
+    pub def build(lengths: List[int]) -> _Huffman:
+        mut h = _Huffman()
+        h.lengths   = lengths
+        h.n_symbols = len(lengths)
+
+        mut max_len = 0
+        mut i = 0
+        while i < h.n_symbols:
+            if lengths[i] > max_len: max_len = lengths[i]
+            i = i + 1
+        h.max_len = max_len
+
+        mut counts: List[int] = []
+        mut li = 0
+        while li <= max_len:
+            counts.append(0)
+            li = li + 1
+        i = 0
+        while i < h.n_symbols:
+            if lengths[i] > 0:
+                counts[lengths[i]] = counts[lengths[i]] + 1
+            i = i + 1
+        h.counts = counts
+
+        mut first_code: List[int] = []
+        mut first_index: List[int] = []
+        li = 0
+        while li <= max_len:
+            first_code.append(0)
+            first_index.append(0)
+            li = li + 1
+        mut code = 0
+        mut index = 0
+        li = 1
+        while li <= max_len:
+            code = (code + counts[li - 1]) << 1
+            first_code[li] = code
+            first_index[li] = index
+            index = index + counts[li]
+            li = li + 1
+        h.first_code = first_code
+
+        # symbols_sorted: for each length, the symbols with that length in
+        # ascending symbol-index order (which, for DEFLATE's canonical
+        # assignment, is also ascending code order).
+        mut symbols_sorted: List[int] = []
+        mut total = 0
+        li = 0
+        while li <= max_len:
+            total = total + counts[li]
+            li = li + 1
+        mut si = 0
+        while si < total:
+            symbols_sorted.append(0)
+            si = si + 1
+        mut next_index: List[int] = []
+        li = 0
+        while li <= max_len:
+            next_index.append(first_index[li])
+            li = li + 1
+        i = 0
+        while i < h.n_symbols:
+            if lengths[i] > 0:
+                symbols_sorted[next_index[lengths[i]]] = i
+                next_index[lengths[i]] = next_index[lengths[i]] + 1
+            i = i + 1
+        h.symbols_sorted = symbols_sorted
+        h.first_index    = first_index
+        return h
+
+    # Decode one symbol from the bit stream, or -1 on an invalid code.
+    pub def decode(self, br: _BitReader) -> int:
+        mut code = 0
+        mut len_ = 0
+        while len_ < self.max_len:
+            code = (code << 1) | br.read_bit()
+            len_ = len_ + 1
+            if len_ <= self.max_len and self.counts[len_] > 0:
+                mut rel = code - self.first_code[len_]
+                if rel >= 0 and rel < self.counts[len_]:
+                    return self.symbols_sorted[self.first_index[len_] + rel]
+        return -1
+
+def _fixed_lit_lengths() -> List[int]:
+    mut lengths: List[int] = []
+    mut i = 0
+    while i < 288:
+        if i < 144: lengths.append(8)
+        elif i < 256: lengths.append(9)
+        elif i < 280: lengths.append(7)
+        else: lengths.append(8)
+        i = i + 1
+    return lengths
+
+def _fixed_dist_lengths() -> List[int]:
+    mut lengths: List[int] = []
+    mut i = 0
+    while i < 30:
+        lengths.append(5)
+        i = i + 1
+    return lengths
+
+# Length/distance extra-bits + base tables (RFC 1951 §3.2.5).
+def _length_base(sym: int) -> int:
+    mut bases: List[int] = [3,4,5,6,7,8,9,10,11,13,15,17,19,23,27,31,35,43,51,59,67,83,99,115,131,163,195,227,258]
+    return bases[sym - 257]
+
+def _length_extra_bits(sym: int) -> int:
+    mut bits: List[int] = [0,0,0,0,0,0,0,0,1,1,1,1,2,2,2,2,3,3,3,3,4,4,4,4,5,5,5,5,0]
+    return bits[sym - 257]
+
+def _dist_base(sym: int) -> int:
+    mut bases: List[int] = [1,2,3,4,5,7,9,13,17,25,33,49,65,97,129,193,257,385,513,769,1025,1537,2049,3073,4097,6145,8193,12289,16385,24577]
+    return bases[sym]
+
+def _dist_extra_bits(sym: int) -> int:
+    mut bits: List[int] = [0,0,0,0,1,1,2,2,3,3,4,4,5,5,6,6,7,7,8,8,9,9,10,10,11,11,12,12,13,13]
+    return bits[sym]
+
+# Inflate one full DEFLATE stream (sequence of blocks) starting at bit 0
+# of byte `start`, up to `end` (exclusive). Returns (bytes, length), or
+# ("", -1) on any malformed/unsupported block.
+def _deflate_inflate(p: Pointer[char], start: int, end: int) -> (str, int):
+    mut br = _BitReader.init(p, start, end)
+    mut out = ByteBuf.init((end - start) * 3 + 64)
+
+    # One free after the loop. Calling ByteBuf.free() and then returning
+    # from inside this while (several error paths) is a confirmed compiler
+    # bug: the free is lowered as if it runs on every iteration. Error
+    # paths set `failed` and fall out so free runs exactly once.
+    mut done = false
+    mut failed = false
+    while not done and not failed:
+        mut bfinal = br.read_bit()
+        mut btype  = br.read_bits(2)
+
+        if btype == 0:
+            # Stored block: byte-align, then LEN(2) NLEN(2) raw bytes.
+            br.align_byte()
+            if br.byte_pos + 4 > end:
+                failed = true
+            else:
+                mut l0 = 0
+                mut l1 = 0
+                unsafe:
+                    l0 = br.p.offset(br.byte_pos).read()     as int & 0xFF
+                    l1 = br.p.offset(br.byte_pos + 1).read() as int & 0xFF
+                mut blen = l0 | (l1 << 8)
+                br.byte_pos = br.byte_pos + 4
+                if br.byte_pos + blen > end:
+                    failed = true
+                else:
+                    out.push_raw(br.p.offset(br.byte_pos), blen)
+                    br.byte_pos = br.byte_pos + blen
+        elif btype == 1 or btype == 2:
+            mut lit_huff = _Huffman.build([0])
+            mut dist_huff = _Huffman.build([0])
+            mut tables_ok = true
+            if btype == 1:
+                lit_huff  = _Huffman.build(_fixed_lit_lengths())
+                dist_huff = _Huffman.build(_fixed_dist_lengths())
+            else:
+                mut tables = _read_dynamic_tables(br)
+                if not tables.ok:
+                    tables_ok = false
+                    failed = true
+                else:
+                    lit_huff  = tables.lit
+                    dist_huff = tables.dist
+
+            if tables_ok:
+                mut block_done = false
+                while not block_done and not failed:
+                    mut sym = lit_huff.decode(br)
+                    if sym < 0:
+                        failed = true
+                    elif sym < 256:
+                        out.push_u8(sym)
+                    elif sym == 256:
+                        block_done = true
+                    else:
+                        mut length = _length_base(sym) + br.read_bits(_length_extra_bits(sym))
+                        mut dsym = dist_huff.decode(br)
+                        if dsym < 0:
+                            failed = true
+                        else:
+                            mut dist = _dist_base(dsym) + br.read_bits(_dist_extra_bits(dsym))
+                            if dist > out.len:
+                                failed = true   # back-reference before start of output
+                            else:
+                                mut copy_from = out.len - dist
+                                mut ci = 0
+                                while ci < length:
+                                    unsafe:
+                                        out.push_u8(out.data.offset(copy_from + ci).read() as int & 0xFF)
+                                    ci = ci + 1
+        else:
+            failed = true   # btype == 3 is reserved/invalid
+
+        if (not failed) and bfinal == 1:
+            done = true
+
+    if failed:
+        out.free()
+        return ("", -1)
+
+    mut result = out.to_str()
+    mut result_len = out.len
+    out.free()
+    return (result, result_len)
+
+# Read a dynamic Huffman block's header (RFC 1951 3.2.7).
+# Returned as a class, not a (bool, _Huffman, _Huffman) tuple: codegen
+# currently stores every tuple slot as a C long long, so a class pointer
+# in a tuple becomes an integer and _tr_obj_retain fails to compile.
+pub class _DynTables:
+    pub ok: bool
+    pub lit: _Huffman
+    pub dist: _Huffman
+
+def _dyn_fail() -> _DynTables:
+    mut d = _DynTables()
+    d.ok = false
+    d.lit = _Huffman.build([0])
+    d.dist = _Huffman.build([0])
+    return d
+
+def _read_dynamic_tables(br: _BitReader) -> _DynTables:
+    mut hlit  = br.read_bits(5) + 257
+    mut hdist = br.read_bits(5) + 1
+    mut hclen = br.read_bits(4) + 4
+
+    mut order: List[int] = [16,17,18,0,8,7,9,6,10,5,11,4,12,3,13,2,14,1,15]
+
+    mut cl_lengths: List[int] = []
+    mut i = 0
+    while i < 19:
+        cl_lengths.append(0)
+        i = i + 1
+    i = 0
+    while i < hclen:
+        cl_lengths[order[i]] = br.read_bits(3)
+        i = i + 1
+    mut cl_huff = _Huffman.build(cl_lengths)
+
+    mut all_lengths: List[int] = []
+    mut total = hlit + hdist
+    while len(all_lengths) < total:
+        mut sym = cl_huff.decode(br)
+        if sym < 0:
+            return _dyn_fail()
+        if sym < 16:
+            all_lengths.append(sym)
+        elif sym == 16:
+            if len(all_lengths) == 0:
+                return _dyn_fail()
+            mut prev = all_lengths[len(all_lengths) - 1]
+            mut rep = br.read_bits(2) + 3
+            mut ri = 0
+            while ri < rep:
+                all_lengths.append(prev)
+                ri = ri + 1
+        elif sym == 17:
+            mut rep = br.read_bits(3) + 3
+            mut ri = 0
+            while ri < rep:
+                all_lengths.append(0)
+                ri = ri + 1
+        else:   # sym == 18
+            mut rep = br.read_bits(7) + 11
+            mut ri = 0
+            while ri < rep:
+                all_lengths.append(0)
+                ri = ri + 1
+
+    mut lit_lengths: List[int] = []
+    i = 0
+    while i < hlit:
+        lit_lengths.append(all_lengths[i])
+        i = i + 1
+    mut dist_lengths: List[int] = []
+    i = 0
+    while i < hdist:
+        dist_lengths.append(all_lengths[hlit + i])
+        i = i + 1
+
+    mut d = _DynTables()
+    d.ok = true
+    d.lit = _Huffman.build(lit_lengths)
+    d.dist = _Huffman.build(dist_lengths)
+    return d
+
+# Inflate a full zlib stream (RFC 1950: 2-byte header + DEFLATE data +
+# 4-byte big-endian Adler-32 trailer of the uncompressed bytes). Returns
+# (bytes, length), or ("", -1) on a malformed header, unsupported/corrupt
+# DEFLATE stream, or Adler-32 mismatch.
+def _zlib_inflate(data: str, len_: int) -> (str, int):
+    if len_ < 6:
+        return ("", -1)
+
+    mut p = data as Pointer[char]
+    mut cmf = 0
+    mut flg = 0
+    unsafe:
+        cmf = p.offset(0).read() as int & 0xFF
+        flg = p.offset(1).read() as int & 0xFF
+    if (cmf & 0x0F) != 8:
+        return ("", -1)   # not DEFLATE
+    if ((cmf * 256 + flg) % 31) != 0:
+        return ("", -1)   # bad zlib header check bits
+    if (flg & 0x20) != 0:
+        return ("", -1)   # FDICT set: preset dictionary not supported
+
+    mut body_end = len_ - 4
+
+    mut result, result_len = _deflate_inflate(p, 2, body_end)
+    if result_len < 0:
+        return ("", -1)
+
+    mut expect_adler = 0
+    unsafe:
+        mut a0 = p.offset(len_ - 4).read() as int & 0xFF
+        mut a1 = p.offset(len_ - 3).read() as int & 0xFF
+        mut a2 = p.offset(len_ - 2).read() as int & 0xFF
+        mut a3 = p.offset(len_ - 1).read() as int & 0xFF
+        expect_adler = (a0 << 24) | (a1 << 16) | (a2 << 8) | a3
+    mut got_adler = _adler32(result, result_len)
+    if got_adler != expect_adler:
+        return ("", -1)
+
+    return (result, result_len)
+
+def _ihdr_body(width: int, height: int) -> str:
+    mut b = ByteBuf.init(13)
+    b.push_u8((width >> 24) & 0xFF)
+    b.push_u8((width >> 16) & 0xFF)
+    b.push_u8((width >> 8) & 0xFF)
+    b.push_u8(width & 0xFF)
+    b.push_u8((height >> 24) & 0xFF)
+    b.push_u8((height >> 16) & 0xFF)
+    b.push_u8((height >> 8) & 0xFF)
+    b.push_u8(height & 0xFF)
+    b.push_u8(8)    # bit depth
+    b.push_u8(6)    # color type: truecolor + alpha
+    b.push_u8(0)    # compression method
+    b.push_u8(0)    # filter method
+    b.push_u8(0)    # interlace method
+    mut s = b.to_str()
+    b.free()
+    return s
+
+# Write a complete chunk (length + type + data + crc32). `blen` is always
+# passed explicitly (never recovered via strlen) since chunk bodies like
+# IHDR legitimately contain embedded zero bytes.
+def _write_chunk_raw(out: ByteBuf, type_: str, body: str, blen: int):
+    out.push_u8((blen >> 24) & 0xFF)
+    out.push_u8((blen >> 16) & 0xFF)
+    out.push_u8((blen >> 8) & 0xFF)
+    out.push_u8(blen & 0xFF)
+
+    mut type_crc_buf = ByteBuf.init(4 + blen)
+    type_crc_buf.push_bytes(type_, 4)
+    type_crc_buf.push_bytes(body, blen)
+    mut type_crc_str = type_crc_buf.to_str()
+    mut crc = Crc32.compute(type_crc_str, 4 + blen)
+    type_crc_buf.free()
+
+    out.push_bytes(type_, 4)
+    out.push_bytes(body, blen)
+    out.push_u8((crc >> 24) & 0xFF)
+    out.push_u8((crc >> 16) & 0xFF)
+    out.push_u8((crc >> 8) & 0xFF)
+    out.push_u8(crc & 0xFF)
