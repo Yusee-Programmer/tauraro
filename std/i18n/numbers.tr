@@ -1,0 +1,150 @@
+# std.i18n.numbers — locale-aware number & currency formatting.
+#
+# Operates DIRECTLY on Tauraro's existing `int`/`float` scalar types — there is
+# no separate "locale-aware number" wrapper you must convert into first. You
+# pass a plain float or int plus a locale tag, and get back a `str`.
+#
+# Supported locales (grouping/decimal separator conventions):
+#   "en-US", "en-GB"  — thousands="," decimal="."   e.g. 1,234.56
+#   "de-DE"           — thousands="." decimal=","   e.g. 1.234,56
+#   "fr-FR"           — thousands=" " (non-breaking space in real French
+#                        typography; a plain ASCII space is used here since
+#                        Tauraro source/terminals are not guaranteed to round
+#                        -trip U+00A0 cleanly) decimal=","  e.g. 1 234,56
+#   Any other/unrecognized locale tag falls back to the "en-US" convention.
+#
+# Supported currencies (format_currency): USD, EUR, GBP, JPY, NGN. Each has a
+# symbol and a before/after-the-number placement rule (e.g. "$1,234.56" vs
+# "1.234,56 €"). An unrecognized currency code falls back to printing the code
+# itself as a prefix (e.g. "XYZ 12.00").
+#
+# Scope note: this is a practical, non-ICU implementation — it covers the
+# separator/grouping and currency-symbol-placement rules for a handful of
+# locales/currencies, not a full CLDR data set.
+
+from std.core.string import StringBuilder
+from std.string.str import Str
+from std.string.fmt import Fmt
+
+pub class NumberFmt:
+    _dummy: int
+
+extend NumberFmt:
+    # ── Locale separator lookup ──────────────────────────────────────────────
+
+    # Thousands-group separator for a locale tag.
+    def _group_sep(locale: str) -> str:
+        if locale == "de-DE": return "."
+        if locale == "fr-FR": return " "
+        return ","   # en-US, en-GB, and unrecognized locales
+
+    # Decimal-point separator for a locale tag.
+    def _decimal_sep(locale: str) -> str:
+        if locale == "de-DE": return ","
+        if locale == "fr-FR": return ","
+        return "."   # en-US, en-GB, and unrecognized locales
+
+    # Insert the locale's group separator every 3 digits (from the right) into
+    # a plain ASCII digit string (no sign, no decimal point).
+    def _group_digits(digits: str, sep: str) -> str:
+        mut n = Str.len(digits)
+        if n <= 3: return digits
+        mut sb = StringBuilder.init(n + n / 3 + 1)
+        # Number of digits in the first (possibly short) group.
+        mut first_len = n - (n / 3) * 3
+        if first_len == 0: first_len = 3
+        sb.append(Str.slice(digits, 0, first_len))
+        mut i = first_len
+        while i < n:
+            sb.append(sep)
+            sb.append(Str.slice(digits, i, i + 3))
+            i = i + 3
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    # ── Public formatting API ────────────────────────────────────────────────
+
+    # Format a float with locale-appropriate thousands separators and decimal
+    # point, to the given number of decimal places.
+    pub def format_number(n: float, locale: str, decimals: int) -> str:
+        mut raw = Fmt.float_to_str(n, decimals)   # e.g. "-1234.56" or "1234"
+        mut neg = false
+        mut body = raw
+        if Str.len(body) > 0 and Str.slice(body, 0, 1) == "-":
+            neg = true
+            body = Str.slice(body, 1, Str.len(body))
+
+        mut int_part = body
+        mut frac_part = ""
+        mut dot = Str.index_of(body, ".")
+        if dot >= 0:
+            int_part = Str.slice(body, 0, dot)
+            frac_part = Str.slice(body, dot + 1, Str.len(body))
+
+        mut grouped = NumberFmt._group_digits(int_part, NumberFmt._group_sep(locale))
+
+        mut sb = StringBuilder.init(Str.len(grouped) + Str.len(frac_part) + 4)
+        if neg: sb.append("-")
+        sb.append(grouped)
+        if decimals > 0:
+            sb.append(NumberFmt._decimal_sep(locale))
+            sb.append(frac_part)
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    # Format a plain integer with locale-appropriate thousands separators (no
+    # decimal point/fraction).
+    pub def format_int(n: int, locale: str) -> str:
+        mut neg = n < 0
+        mut magnitude = n
+        if neg: magnitude = 0 - magnitude
+        mut digits = Fmt.int_to_str(magnitude)
+        mut grouped = NumberFmt._group_digits(digits, NumberFmt._group_sep(locale))
+        if neg: return "-" + grouped
+        return grouped
+
+    # ── Currency ──────────────────────────────────────────────────────────────
+
+    # Currency symbol for a currency code ("USD" -> "$"). Unrecognized codes
+    # return the code itself as a fallback "symbol".
+    def _currency_symbol(code: str) -> str:
+        if code == "USD": return "$"
+        if code == "EUR": return "€"
+        if code == "GBP": return "£"
+        if code == "JPY": return "¥"
+        if code == "NGN": return "₦"
+        return code
+
+    # True when the currency's symbol conventionally comes BEFORE the number
+    # (e.g. "$1,234.56"). False means AFTER, with a separating space
+    # (e.g. "1.234,56 €").
+    def _symbol_before(code: str) -> bool:
+        if code == "USD": return true
+        if code == "GBP": return true
+        if code == "JPY": return true
+        if code == "NGN": return true
+        if code == "EUR": return false
+        return true   # unrecognized codes: default to prefix placement
+
+    # JPY has no minor (decimal) unit in ordinary usage; every other currency
+    # here uses 2 decimal places.
+    def _decimals_for(code: str) -> int:
+        if code == "JPY": return 0
+        return 2
+
+    # Format n as a currency string for the given locale + ISO 4217-style
+    # currency code. Number grouping/decimal separators follow `locale`;
+    # symbol glyph and before/after placement follow `currency_code`. An
+    # unrecognized currency code falls back to printing the code as a plain
+    # prefix (e.g. "XYZ 12.00").
+    pub def format_currency(n: float, locale: str, currency_code: str) -> str:
+        mut decimals = NumberFmt._decimals_for(currency_code)
+        mut number_str = NumberFmt.format_number(n, locale, decimals)
+        mut symbol = NumberFmt._currency_symbol(currency_code)
+
+        if NumberFmt._symbol_before(currency_code):
+            return symbol + number_str
+        else:
+            return number_str + " " + symbol
