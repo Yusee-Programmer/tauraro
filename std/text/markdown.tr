@@ -1,0 +1,807 @@
+# std.text.markdown — CommonMark-subset Markdown parser + multi-target
+# renderer (HTML and ANSI terminal text).
+#
+# Parses Markdown source into an intermediate node tree (`MdNode`) first,
+# rather than going straight text-to-text, so the SAME parse can be
+# rendered to multiple targets:
+#
+#   from std.text.markdown import Markdown
+#
+#   mut nodes = Markdown.parse("# Title\n\nSome **bold** text.\n")
+#   print(Markdown.to_html(nodes))   # "<h1>Title</h1>\n<p>Some <strong>bold</strong> text.</p>\n"
+#   print(Markdown.to_ansi(nodes))   # same content, ANSI-styled for a terminal
+#
+# ANSI rendering reuses `std.term.style` (Term/Style) for all escape-code
+# generation — this module never hand-rolls an escape sequence itself.
+#
+# ── Syntax coverage (practical CommonMark subset, not full spec compliance) ──
+#   - Headings: `#` through `######`
+#   - Paragraphs (blank-line separated)
+#   - Bold (`**x**` / `__x__`), italic (`*x*` / `_x_`), inline code (`` `x` ``)
+#   - Fenced code blocks (``` ``` ```) with an optional language tag (stored,
+#     not syntax-highlighted — that's out of scope)
+#   - Links `[text](url)` and images `![alt](url)`
+#   - Unordered lists (`-` / `*`) and ordered lists (`1.` / `2.` / ...), with
+#     basic nesting via leading indentation
+#   - Blockquotes (`>`)
+#   - Horizontal rules (`---` / `***` / `___`, alone on a line)
+#   - Hard line breaks: a line ending in two-or-more trailing spaces, or a
+#     trailing backslash, before a newline (CommonMark's two conventions)
+#
+# Deliberately OUT of scope (see task write-up): tables, footnotes, nested
+# emphasis edge cases, reference-style links, raw inline HTML passthrough,
+# syntax highlighting of fenced code. HTML output escapes all text content
+# by default (`<`, `>`, `&`, `"` are never passed through raw), matching
+# the "escape unless explicitly asked not to" convention documented on
+# `templa`'s auto-escaping `{{ }}`.
+
+from std.core.vec import Vec
+from std.string.str import Str
+from std.string.fmt import Fmt
+from std.core.string import StringBuilder
+from std.term.style import Term, Color, Style
+
+# ─── Node kinds ──────────────────────────────────────────────────────────────
+#
+# One flat `kind: int` tag per node, mirroring the TomlValue/JsonDoc tagged-
+# node convention already used elsewhere in std/ (see std.encoding.toml).
+# Block kinds hold other nodes as `children`; inline kinds are leaves (except
+# Emphasis/Strong/Link, which hold their own inline children for nesting).
+
+pub def MD_HEADING()     -> int: return 1    # text=none, level=1..6, children=inline
+pub def MD_PARAGRAPH()   -> int: return 2    # children=inline
+pub def MD_CODE_BLOCK()  -> int: return 3    # text=raw code, lang=fence tag
+pub def MD_BLOCKQUOTE()  -> int: return 4    # children=block nodes
+pub def MD_LIST()        -> int: return 5    # ordered=bool, children=MD_LIST_ITEM
+pub def MD_LIST_ITEM()   -> int: return 6    # children=block nodes (usually one paragraph)
+pub def MD_HR()          -> int: return 7    # leaf
+pub def MD_BLANK()       -> int: return 8    # leaf (used only internally during parse)
+
+pub def MD_TEXT()        -> int: return 20   # text=literal text (escaped on HTML render)
+pub def MD_STRONG()      -> int: return 21   # children=inline (bold)
+pub def MD_EMPHASIS()    -> int: return 22   # children=inline (italic)
+pub def MD_CODE_SPAN()   -> int: return 23   # text=literal code (escaped, never parsed for emphasis)
+pub def MD_LINK()        -> int: return 24   # url=href, children=inline (link text)
+pub def MD_IMAGE()       -> int: return 25   # url=src, text=alt
+pub def MD_LINEBREAK()   -> int: return 26   # leaf (hard break)
+
+# ─── MdNode — the parse-tree node ───────────────────────────────────────────
+
+pub class MdNode:
+    pub kind:     int
+    pub text:     str
+    pub lang:     str
+    pub url:      str
+    pub level:    int
+    pub ordered:  bool
+    pub start_n:  int           # ordered-list starting number
+    pub children: List[MdNode]
+
+extend MdNode:
+    pub def _new(kind: int) -> MdNode:
+        mut n = MdNode()
+        n.kind     = kind
+        n.text     = ""
+        n.lang     = ""
+        n.url      = ""
+        n.level    = 0
+        n.ordered  = false
+        n.start_n  = 1
+        n.children = []
+        return n
+
+    pub def leaf(kind: int, text: str) -> MdNode:
+        mut n = MdNode._new(kind)
+        n.text = text
+        return n
+
+# ─── HTML escaping ───────────────────────────────────────────────────────────
+#
+# No existing html_escape helper was found in core std (std.encoding.xml has
+# `_xml_escape_text`/`_xml_escape_attr`, but both are module-private). This
+# mirrors their exact entity set (`&lt; &gt; &amp;` for text, plus `&quot;`
+# for attribute/URL contexts) so Markdown's HTML output matches the same
+# escaping convention the rest of std/ already uses.
+
+pub def html_escape(s: str) -> str:
+    mut sb = StringBuilder.init(Str.len(s) + 8)
+    mut p  = s as Pointer[char]
+    mut n  = Str.len(s)
+    mut i  = 0
+    while i < n:
+        mut c = p.offset(i).read() as int
+        if c == 60: sb.append("&lt;")          # <
+        elif c == 62: sb.append("&gt;")        # >
+        elif c == 38: sb.append("&amp;")       # &
+        else: sb.append_char(c)
+        i = i + 1
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+# Escape for use inside an HTML attribute value (adds &quot; on top of the
+# text-escape set) — used for link/image URLs.
+pub def html_escape_attr(s: str) -> str:
+    mut sb = StringBuilder.init(Str.len(s) + 8)
+    mut p  = s as Pointer[char]
+    mut n  = Str.len(s)
+    mut i  = 0
+    while i < n:
+        mut c = p.offset(i).read() as int
+        if c == 60: sb.append("&lt;")
+        elif c == 62: sb.append("&gt;")
+        elif c == 38: sb.append("&amp;")
+        elif c == 34: sb.append("&quot;")
+        else: sb.append_char(c)
+        i = i + 1
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+# ─── Markdown — parse + render entry points ─────────────────────────────────
+
+pub class Markdown:
+    _dummy: int
+
+extend Markdown:
+    # ── Parsing ──────────────────────────────────────────────────────────
+
+    pub def parse(src: str) -> List[MdNode]:
+        mut lines = Str.lines(src)
+        mut out: List[MdNode] = []
+        mut i = 0
+        mut n = lines.len
+        while i < n:
+            mut line = lines.get(i)
+            if Str.len(Str.trim(line)) == 0:
+                i = i + 1
+                continue
+            elif Markdown._is_hr(line):
+                out.append(MdNode._new(MD_HR()))
+                i = i + 1
+            elif Markdown._heading_level(line) > 0:
+                out.append(Markdown._parse_heading(line))
+                i = i + 1
+            elif Str.starts_with(Str.trim_left(line), "```"):
+                mut fence_node, fence_next = Markdown._parse_fence(lines, i)
+                out.append(fence_node)
+                i = fence_next
+            elif Str.starts_with(Str.trim_left(line), ">"):
+                mut bq_node, bq_next = Markdown._parse_blockquote(lines, i)
+                out.append(bq_node)
+                i = bq_next
+            elif Markdown._is_list_item(line):
+                mut list_node, list_next = Markdown._parse_list(lines, i, Markdown._indent_of(line))
+                out.append(list_node)
+                i = list_next
+            else:
+                mut para_node, para_next = Markdown._parse_paragraph(lines, i)
+                out.append(para_node)
+                i = para_next
+        return out
+
+    # ── Block-level helpers ─────────────────────────────────────────────────
+
+    pub def _indent_of(line: str) -> int:
+        mut p = line as Pointer[char]
+        mut n = Str.len(line)
+        mut i = 0
+        while i < n and p.offset(i).read() as int == 32:
+            i = i + 1
+        return i
+
+    pub def _is_hr(line: str) -> bool:
+        mut t = Str.trim(line)
+        if Str.len(t) < 3: return false
+        mut c0 = Str.char_at(t, 0)
+        if c0 != 45 and c0 != 42 and c0 != 95: return false   # - * _
+        mut i = 0
+        mut cnt = 0
+        mut tn = Str.len(t)
+        while i < tn:
+            mut c = Str.char_at(t, i)
+            if c == c0: cnt = cnt + 1
+            elif c == 32:
+                # spaces allowed between marker chars ("- - -")
+                0
+            else:
+                return false
+            i = i + 1
+        return cnt >= 3
+
+    pub def _heading_level(line: str) -> int:
+        mut t = Str.trim_left(line)
+        mut n = Str.len(t)
+        mut i = 0
+        while i < n and i < 6 and Str.char_at(t, i) == 35:   # '#'
+            i = i + 1
+        if i == 0: return 0
+        if i >= n: return i
+        mut next_c = Str.char_at(t, i)
+        if next_c != 32: return 0   # "#word" is not a heading
+        return i
+
+    pub def _parse_heading(line: str) -> MdNode:
+        mut lvl = Markdown._heading_level(line)
+        mut t = Str.trim_left(line)
+        mut rest = Str.trim(Str.slice(t, lvl, Str.len(t)))
+        mut n = MdNode._new(MD_HEADING())
+        n.level = lvl
+        n.children = Markdown._parse_inline(rest)
+        return n
+
+    # Parse a fenced code block starting at line `start` (the opening ``` line).
+    # Returns (node, next_line_index).
+    pub def _parse_fence(lines: Vec[str], start: int) -> (MdNode, int):
+        mut open_line = Str.trim_left(lines.get(start))
+        mut lang = Str.trim(Str.slice(open_line, 3, Str.len(open_line)))
+        mut sb = StringBuilder.init(64)
+        mut i = start + 1
+        mut n = lines.len
+        mut first = true
+        while i < n:
+            mut line = lines.get(i)
+            if Str.starts_with(Str.trim_left(line), "```"):
+                i = i + 1
+                break
+            if not first: sb.append_char(10)
+            sb.append(line)
+            first = false
+            i = i + 1
+        mut node = MdNode._new(MD_CODE_BLOCK())
+        node.lang = lang
+        node.text = sb.to_owned()
+        sb.free()
+        return (node, i)
+
+    # Parse a blockquote: consecutive lines starting with '>' (after optional
+    # leading spaces). The '>' (and one following space, if present) is
+    # stripped from each line; the remainder is recursively block-parsed.
+    pub def _parse_blockquote(lines: Vec[str], start: int) -> (MdNode, int):
+        mut sb = StringBuilder.init(64)
+        mut i = start
+        mut n = lines.len
+        mut first = true
+        while i < n:
+            mut line = lines.get(i)
+            mut t = Str.trim_left(line)
+            if not Str.starts_with(t, ">"): break
+            mut rest = Str.slice(t, 1, Str.len(t))
+            if Str.len(rest) > 0 and Str.char_at(rest, 0) == 32:
+                rest = Str.slice(rest, 1, Str.len(rest))
+            if not first: sb.append_char(10)
+            sb.append(rest)
+            first = false
+            i = i + 1
+        mut node = MdNode._new(MD_BLOCKQUOTE())
+        node.children = Markdown.parse(sb.to_owned())
+        sb.free()
+        return (node, i)
+
+    pub def _is_list_item(line: str) -> bool:
+        mut t = Str.trim_left(line)
+        if Str.len(t) == 0: return false
+        mut c0 = Str.char_at(t, 0)
+        if (c0 == 45 or c0 == 42) and Str.len(t) > 1 and Str.char_at(t, 1) == 32:
+            return true
+        # ordered: one-or-more digits, then '.', then a space
+        mut i = 0
+        mut n = Str.len(t)
+        while i < n and Str.is_digit(Str.slice(t, i, i + 1)):
+            i = i + 1
+        if i > 0 and i < n and Str.char_at(t, i) == 46:    # '.'
+            if i + 1 < n and Str.char_at(t, i + 1) == 32: return true
+        return false
+
+    pub def _list_ordered(line: str) -> bool:
+        mut t = Str.trim_left(line)
+        mut c0 = Str.char_at(t, 0)
+        return not (c0 == 45 or c0 == 42)
+
+    pub def _list_start_n(line: str) -> int:
+        mut t = Str.trim_left(line)
+        mut n = Str.len(t)
+        mut i = 0
+        while i < n and Str.is_digit(Str.slice(t, i, i + 1)):
+            i = i + 1
+        if i == 0: return 1
+        return Str.parse_int(Str.slice(t, 0, i))
+
+    # Strip the marker ("- ", "* ", "1. ", "12. ") from a list-item line,
+    # returning just the item's inline content (first line only).
+    pub def _list_item_content(line: str) -> str:
+        mut t = Str.trim_left(line)
+        mut n = Str.len(t)
+        mut c0 = Str.char_at(t, 0)
+        if c0 == 45 or c0 == 42:
+            return Str.trim_left(Str.slice(t, 1, n))
+        mut i = 0
+        while i < n and Str.is_digit(Str.slice(t, i, i + 1)):
+            i = i + 1
+        i = i + 1   # skip '.'
+        return Str.trim_left(Str.slice(t, i, n))
+
+    # Parse a (possibly nested) list starting at `start`, where every item's
+    # marker is indented at exactly `base_indent`. A following item line
+    # indented MORE than base_indent is treated as a nested sub-list inside
+    # the previous item; a line indented less, or not a list item/blank,
+    # ends the list.
+    pub def _parse_list(lines: Vec[str], start: int, base_indent: int) -> (MdNode, int):
+        mut first_line = lines.get(start)
+        mut node = MdNode._new(MD_LIST())
+        node.ordered = Markdown._list_ordered(first_line)
+        node.start_n = Markdown._list_start_n(first_line)
+        mut i = start
+        mut n = lines.len
+        while i < n:
+            mut line = lines.get(i)
+            if Str.len(Str.trim(line)) == 0:
+                i = i + 1
+                continue
+            mut ind = Markdown._indent_of(line)
+            if ind < base_indent or not Markdown._is_list_item(line):
+                break
+            if ind > base_indent:
+                # Shouldn't normally happen (nested lists are consumed by the
+                # owning item below) but guard against infinite loop.
+                break
+            mut content = Markdown._list_item_content(line)
+            mut item = MdNode._new(MD_LIST_ITEM())
+            mut para = MdNode._new(MD_PARAGRAPH())
+            para.children = Markdown._parse_inline(content)
+            item.children.append(para)
+            i = i + 1
+
+            # Look ahead for a more-indented nested list belonging to this item.
+            if i < n:
+                mut nxt = lines.get(i)
+                if Str.len(Str.trim(nxt)) > 0 and Markdown._is_list_item(nxt):
+                    mut nxt_ind = Markdown._indent_of(nxt)
+                    if nxt_ind > base_indent:
+                        mut sub_node, sub_next = Markdown._parse_list(lines, i, nxt_ind)
+                        item.children.append(sub_node)
+                        i = sub_next
+            node.children.append(item)
+        return (node, i)
+
+    # Parse a paragraph: consecutive non-blank lines that don't start a more
+    # specific block, joined with a single space (soft-wrap), except a line
+    # ending in a hard-break marker keeps its MD_LINEBREAK boundary.
+    pub def _parse_paragraph(lines: Vec[str], start: int) -> (MdNode, int):
+        mut sb = StringBuilder.init(64)
+        mut i = start
+        mut n = lines.len
+        mut first = true
+        while i < n:
+            mut line = lines.get(i)
+            if Str.len(Str.trim(line)) == 0: break
+            if Markdown._is_hr(line) or Markdown._heading_level(line) > 0: break
+            if Str.starts_with(Str.trim_left(line), "```"): break
+            if Str.starts_with(Str.trim_left(line), ">"): break
+            if Markdown._is_list_item(line): break
+            if not first: sb.append_char(10)
+            sb.append(line)
+            first = false
+            i = i + 1
+        mut node = MdNode._new(MD_PARAGRAPH())
+        node.children = Markdown._parse_inline(sb.to_owned())
+        sb.free()
+        return (node, i)
+
+    # ── Inline-level parsing ─────────────────────────────────────────────────
+    #
+    # Scans raw text for: hard breaks ("  \n" / "\\\n" -- represented here as
+    # the literal two-trailing-spaces / trailing-backslash BEFORE an embedded
+    # "\n" since paragraph text is joined with "\n" between source lines),
+    # inline code spans, bold, italic, images, and links. Falls back to plain
+    # MD_TEXT runs for everything else.
+
+    pub def _parse_inline(text: str) -> List[MdNode]:
+        mut out: List[MdNode] = []
+        mut sb = StringBuilder.init(32)
+        mut p = text as Pointer[char]
+        mut n = Str.len(text)
+        mut i = 0
+
+        while i < n:
+            mut c = p.offset(i).read() as int
+
+            if c == 10:
+                # Newline boundary: check preceding two chars already flushed
+                # into sb for a hard-break marker ("  " or "\").
+                mut cur = sb.to_owned()
+                mut cur_len = Str.len(cur)
+                mut hard = false
+                if cur_len >= 2 and Str.char_at(cur, cur_len - 1) == 32 and Str.char_at(cur, cur_len - 2) == 32:
+                    cur = Str.trim_right(cur)
+                    hard = true
+                elif cur_len >= 1 and Str.char_at(cur, cur_len - 1) == 92:
+                    cur = Str.slice(cur, 0, cur_len - 1)
+                    hard = true
+                if Str.len(cur) > 0:
+                    out.append(MdNode.leaf(MD_TEXT(), cur))
+                sb.clear()
+                if hard:
+                    out.append(MdNode._new(MD_LINEBREAK()))
+                else:
+                    out.append(MdNode.leaf(MD_TEXT(), " "))
+                i = i + 1
+                continue
+
+            elif c == 96:   # ` inline code span
+                mut close = Markdown._find_char(text, i + 1, 96)
+                if close > i:
+                    Markdown._flush_text(sb, out)
+                    mut code_s = Str.slice(text, i + 1, close)
+                    out.append(MdNode.leaf(MD_CODE_SPAN(), code_s))
+                    i = close + 1
+                    continue
+                else:
+                    sb.append_char(c); i = i + 1; continue
+
+            elif c == 33 and i + 1 < n and (p.offset(i + 1).read() as int) == 91:
+                # ![alt](url)
+                mut img = Markdown._try_link_like(text, i + 1, true)
+                if img.ok:
+                    Markdown._flush_text(sb, out)
+                    out.append(img.node)
+                    i = img.next_i
+                    continue
+                else:
+                    sb.append_char(c); i = i + 1; continue
+
+            elif c == 91:   # [text](url)
+                mut lnk = Markdown._try_link_like(text, i, false)
+                if lnk.ok:
+                    Markdown._flush_text(sb, out)
+                    out.append(lnk.node)
+                    i = lnk.next_i
+                    continue
+                else:
+                    sb.append_char(c); i = i + 1; continue
+
+            elif c == 42 or c == 95:   # * or _ : bold/italic
+                mut run = Markdown._marker_run(text, i, c)
+                if run == 2:
+                    mut close2 = Markdown._find_run(text, i + 2, c, 2)
+                    if close2 > i:
+                        Markdown._flush_text(sb, out)
+                        mut inner = Str.slice(text, i + 2, close2)
+                        mut strong = MdNode._new(MD_STRONG())
+                        strong.children = Markdown._parse_inline(inner)
+                        out.append(strong)
+                        i = close2 + 2
+                        continue
+                    else:
+                        sb.append_char(c); i = i + 1; continue
+                elif run == 1:
+                    mut close1 = Markdown._find_run(text, i + 1, c, 1)
+                    if close1 > i:
+                        Markdown._flush_text(sb, out)
+                        mut inner1 = Str.slice(text, i + 1, close1)
+                        mut em = MdNode._new(MD_EMPHASIS())
+                        em.children = Markdown._parse_inline(inner1)
+                        out.append(em)
+                        i = close1 + 1
+                        continue
+                    else:
+                        sb.append_char(c); i = i + 1; continue
+                else:
+                    sb.append_char(c); i = i + 1; continue
+            else:
+                sb.append_char(c); i = i + 1; continue
+
+        Markdown._flush_text(sb, out)
+        sb.free()
+        return out
+
+    # Flush any pending text in `sb` into `out` as an MD_TEXT leaf, then
+    # clear `sb` (NOT free it — the caller keeps using/owns the builder;
+    # only the final flush in `_parse_inline` frees it).
+    pub def _flush_text(sb: StringBuilder, out: List[MdNode]):
+        mut s = sb.to_owned()
+        if Str.len(s) > 0:
+            out.append(MdNode.leaf(MD_TEXT(), s))
+        sb.clear()
+
+    # Count how many of the same marker char (`*` or `_`) appear starting at
+    # position i (returns 1 or 2; caps at 2 since "***" is treated as bold
+    # eating the first two chars, 3rd handled as leftover literal/italic).
+    pub def _marker_run(text: str, i: int, c: int) -> int:
+        mut n = Str.len(text)
+        if i + 1 < n and Str.char_at(text, i + 1) == c: return 2
+        return 1
+
+    # Find the index of a run of `count` consecutive `c` chars starting at or
+    # after `from_i`; returns -1 if not found. Used to find the closing
+    # */** or _/__ marker.
+    pub def _find_run(text: str, from_i: int, c: int, count: int) -> int:
+        mut n = Str.len(text)
+        mut i = from_i
+        while i <= n - count:
+            mut j = 0
+            mut all = true
+            while j < count:
+                if Str.char_at(text, i + j) != c: all = false
+                j = j + 1
+            if all:
+                # Must not be immediately preceded by whitespace making it an
+                # empty-emphasis edge case is out of scope; accept first match.
+                return i
+            i = i + 1
+        return 0 - 1
+
+    pub def _find_char(text: str, from_i: int, c: int) -> int:
+        mut n = Str.len(text)
+        mut i = from_i
+        while i < n:
+            if Str.char_at(text, i) == c: return i
+            i = i + 1
+        return 0 - 1
+
+    # Try to parse a `[text](url)` (or, if is_image, the part after the `!`
+    # i.e. starting at the `[`) starting exactly at index `start` (which must
+    # point at '['). Returns {ok, node, next_i}.
+    pub def _try_link_like(text: str, start: int, is_image: bool) -> LinkParseResult:
+        mut n = Str.len(text)
+        mut close_b = Markdown._find_char(text, start + 1, 93)   # ]
+        mut res = LinkParseResult._fail()
+        if close_b < 0: return res
+        if close_b + 1 >= n or Str.char_at(text, close_b + 1) != 40: return res   # (
+        mut close_p = Markdown._find_char(text, close_b + 2, 41)   # )
+        if close_p < 0: return res
+        mut label = Str.slice(text, start + 1, close_b)
+        mut url = Str.slice(text, close_b + 2, close_p)
+        if is_image:
+            mut img = MdNode._new(MD_IMAGE())
+            img.url = url
+            img.text = label
+            res.ok = true
+            res.node = img
+            res.next_i = close_p + 1
+            return res
+        else:
+            mut lnk = MdNode._new(MD_LINK())
+            lnk.url = url
+            lnk.children = Markdown._parse_inline(label)
+            res.ok = true
+            res.node = lnk
+            res.next_i = close_p + 1
+            return res
+
+    # ── HTML rendering ───────────────────────────────────────────────────────
+
+    pub def to_html(nodes: List[MdNode]) -> str:
+        mut sb = StringBuilder.init(256)
+        mut i = 0
+        while i < len(nodes):
+            Markdown._html_block(nodes[i], sb)
+            i = i + 1
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    pub def _html_block(node: MdNode, sb: StringBuilder):
+        mut k = node.kind
+        if k == MD_HEADING():
+            mut tag = "h" + Fmt.int_to_str(node.level)
+            sb.append("<"); sb.append(tag); sb.append(">")
+            Markdown._html_inline_list(node.children, sb)
+            sb.append("</"); sb.append(tag); sb.append(">\n")
+        elif k == MD_PARAGRAPH():
+            sb.append("<p>")
+            Markdown._html_inline_list(node.children, sb)
+            sb.append("</p>\n")
+        elif k == MD_CODE_BLOCK():
+            sb.append("<pre><code")
+            if Str.len(node.lang) > 0:
+                sb.append(" class=\"language-")
+                sb.append(html_escape_attr(node.lang))
+                sb.append("\"")
+            sb.append(">")
+            sb.append(html_escape(node.text))
+            sb.append("</code></pre>\n")
+        elif k == MD_BLOCKQUOTE():
+            sb.append("<blockquote>\n")
+            mut i = 0
+            while i < len(node.children):
+                Markdown._html_block(node.children[i], sb)
+                i = i + 1
+            sb.append("</blockquote>\n")
+        elif k == MD_LIST():
+            mut tag = "ul"
+            if node.ordered: tag = "ol"
+            sb.append("<"); sb.append(tag)
+            if node.ordered and node.start_n != 1:
+                sb.append(" start=\""); sb.append(Fmt.int_to_str(node.start_n)); sb.append("\"")
+            sb.append(">\n")
+            mut i = 0
+            while i < len(node.children):
+                sb.append("<li>")
+                Markdown._html_list_item_body(node.children[i], sb)
+                sb.append("</li>\n")
+                i = i + 1
+            sb.append("</"); sb.append(tag); sb.append(">\n")
+        elif k == MD_HR():
+            sb.append("<hr />\n")
+        else:
+            0
+
+    # A list item's children are block nodes (usually one paragraph, maybe
+    # a nested MD_LIST). Render the first paragraph inline (no <p> wrapper,
+    # matching CommonMark's "tight list" convention) and any nested list
+    # as a nested <ul>/<ol>.
+    pub def _html_list_item_body(item: MdNode, sb: StringBuilder):
+        mut i = 0
+        while i < len(item.children):
+            mut child = item.children[i]
+            if child.kind == MD_PARAGRAPH():
+                Markdown._html_inline_list(child.children, sb)
+            else:
+                Markdown._html_block(child, sb)
+            i = i + 1
+
+    pub def _html_inline_list(nodes: List[MdNode], sb: StringBuilder):
+        mut i = 0
+        while i < len(nodes):
+            Markdown._html_inline(nodes[i], sb)
+            i = i + 1
+
+    pub def _html_inline(node: MdNode, sb: StringBuilder):
+        mut k = node.kind
+        if k == MD_TEXT():
+            sb.append(html_escape(node.text))
+        elif k == MD_STRONG():
+            sb.append("<strong>")
+            Markdown._html_inline_list(node.children, sb)
+            sb.append("</strong>")
+        elif k == MD_EMPHASIS():
+            sb.append("<em>")
+            Markdown._html_inline_list(node.children, sb)
+            sb.append("</em>")
+        elif k == MD_CODE_SPAN():
+            sb.append("<code>")
+            sb.append(html_escape(node.text))
+            sb.append("</code>")
+        elif k == MD_LINK():
+            sb.append("<a href=\"")
+            sb.append(html_escape_attr(node.url))
+            sb.append("\">")
+            Markdown._html_inline_list(node.children, sb)
+            sb.append("</a>")
+        elif k == MD_IMAGE():
+            sb.append("<img src=\"")
+            sb.append(html_escape_attr(node.url))
+            sb.append("\" alt=\"")
+            sb.append(html_escape_attr(node.text))
+            sb.append("\" />")
+        elif k == MD_LINEBREAK():
+            sb.append("<br />\n")
+        else:
+            0
+
+    # ── ANSI terminal rendering ──────────────────────────────────────────────
+    #
+    # All escape-code generation is delegated to std.term.style's Term/Style
+    # helpers — this module only decides WHICH style applies to which node.
+
+    pub def to_ansi(nodes: List[MdNode]) -> str:
+        mut sb = StringBuilder.init(256)
+        mut i = 0
+        while i < len(nodes):
+            Markdown._ansi_block(nodes[i], sb, 0)
+            i = i + 1
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    pub def _ansi_block(node: MdNode, sb: StringBuilder, depth: int):
+        mut k = node.kind
+        if k == MD_HEADING():
+            mut heading_text = Markdown._ansi_inline_str(node.children)
+            sb.append(Term.bold(Term.color(heading_text, Color.Cyan)))
+            sb.append_char(10)
+            sb.append_char(10)
+        elif k == MD_PARAGRAPH():
+            sb.append(Markdown._ansi_inline_str(node.children))
+            sb.append_char(10)
+            sb.append_char(10)
+        elif k == MD_CODE_BLOCK():
+            mut ls = Str.lines(node.text)
+            mut i = 0
+            while i < ls.len:
+                sb.append(Term.color(ls.get(i), Color.Green))
+                sb.append_char(10)
+                i = i + 1
+            sb.append_char(10)
+        elif k == MD_BLOCKQUOTE():
+            mut i = 0
+            while i < len(node.children):
+                mut inner = StringBuilder.init(64)
+                Markdown._ansi_block(node.children[i], inner, depth)
+                mut inner_s = Str.trim_right(inner.to_owned())
+                inner.free()
+                sb.append(Term.dim("> " + inner_s))
+                sb.append_char(10)
+                i = i + 1
+            sb.append_char(10)
+        elif k == MD_LIST():
+            mut i = 0
+            mut n_val = node.start_n
+            while i < len(node.children):
+                mut item = node.children[i]
+                mut prefix = "  " + Str.repeat("  ", depth)
+                if node.ordered:
+                    prefix = prefix + Fmt.int_to_str(n_val) + ". "
+                else:
+                    prefix = prefix + "- "
+                mut j = 0
+                while j < len(item.children):
+                    mut child = item.children[j]
+                    if child.kind == MD_PARAGRAPH():
+                        sb.append(prefix)
+                        sb.append(Markdown._ansi_inline_str(child.children))
+                        sb.append_char(10)
+                    else:
+                        Markdown._ansi_block(child, sb, depth + 1)
+                    j = j + 1
+                n_val = n_val + 1
+                i = i + 1
+            sb.append_char(10)
+        elif k == MD_HR():
+            sb.append(Term.dim(Str.repeat("-", 40)))
+            sb.append_char(10)
+            sb.append_char(10)
+        else:
+            0
+
+    pub def _ansi_inline_str(nodes: List[MdNode]) -> str:
+        mut sb = StringBuilder.init(64)
+        mut i = 0
+        while i < len(nodes):
+            Markdown._ansi_inline(nodes[i], sb)
+            i = i + 1
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    pub def _ansi_inline(node: MdNode, sb: StringBuilder):
+        mut k = node.kind
+        if k == MD_TEXT():
+            sb.append(node.text)
+        elif k == MD_STRONG():
+            sb.append(Term.bold(Markdown._ansi_inline_str(node.children)))
+        elif k == MD_EMPHASIS():
+            sb.append(Term.italic(Markdown._ansi_inline_str(node.children)))
+        elif k == MD_CODE_SPAN():
+            sb.append(Term.color(node.text, Color.Green))
+        elif k == MD_LINK():
+            mut label = Markdown._ansi_inline_str(node.children)
+            sb.append(Term.underline(Term.color(label, Color.Blue)))
+            sb.append(" (")
+            sb.append(node.url)
+            sb.append(")")
+        elif k == MD_IMAGE():
+            sb.append(Term.color("[image: " + node.text + "]", Color.Magenta))
+            sb.append(" (")
+            sb.append(node.url)
+            sb.append(")")
+        elif k == MD_LINEBREAK():
+            sb.append_char(10)
+        else:
+            0
+
+# Small result struct for the `[text](url)` / `![alt](url)` scanner — avoids
+# a 3-way tuple-of-(bool, MdNode, int) at every call site.
+pub class LinkParseResult:
+    pub ok:     bool
+    pub node:   MdNode
+    pub next_i: int
+
+extend LinkParseResult:
+    pub def _fail() -> LinkParseResult:
+        mut r = LinkParseResult()
+        r.ok     = false
+        r.node   = MdNode._new(MD_TEXT())
+        r.next_i = 0
+        return r
