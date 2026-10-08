@@ -1,0 +1,43 @@
+# tests/lang/57_net_https.tr - std.net.https: real TLS/HTTPS over the live
+# internet, with ZERO build flags.
+#
+# This is the whole point of std.net.https: _tr_tls_connect/_tr_tls_send/
+# _tr_tls_recv/_tr_tls_close now load the system's OpenSSL (libssl/libcrypto)
+# at RUNTIME via dlopen/LoadLibrary -- no -DTAURARO_TLS_OPENSSL, no
+# -lssl/-lcrypto, no OpenSSL dev headers at build time. A mock/stub test
+# would defeat that purpose, so this test makes a REAL TLS connection to a
+# real, stable, well-known HTTPS endpoint (example.com -- IANA-reserved
+# specifically for this kind of documentation/testing use, so its response
+# shape is unlikely to ever change) and checks the actual response that
+# comes back over the wire.
+#
+# If the sandbox this runs in has no outbound internet access, _tr_tls_connect
+# itself will fail at the TCP layer (getaddrinfo/connect), which surfaces here
+# as status == 0 with body "tls connect failed" -- NOT a crash. That failure
+# mode is reported explicitly rather than silently skipped, so a real run
+# with real connectivity is distinguishable from a sandboxed one.
+
+from std.test import TestRunner
+from std.net.https import HttpsClient
+
+def main():
+    mut t = TestRunner.init("57_net_https")
+
+    t.section("HttpsClient.get — real TLS handshake + HTTP response over example.com:443")
+    mut c = HttpsClient.init("example.com", 443)
+    c.set_timeout(15000)
+    mut r = c.get("/")
+
+    if r.status == 0:
+        print("NOTE: TLS connect failed (status=0) -- likely no outbound network access in this sandbox.")
+        print("body: " + r.body)
+    else:
+        print("status: " + r.status.to_string())
+        print("body length: " + r.body.len().to_string())
+
+    t.assert_ne_int(r.status, 0, "got a real status code back (0 means TLS connect/handshake failed -- see NOTE above if this fails)")
+    t.assert_true(r.is_ok(), "example.com/ returns a 2xx status")
+    t.assert_true(r.body.len() > 0, "response body is non-empty")
+    t.assert_contains(r.body, "Example Domain", "response body contains the well-known example.com marker text")
+
+    t.summary()

@@ -8441,9 +8441,34 @@ static inline char* _tr_md5_bytes_hex(char* s, int ilen) {
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
- * TLS/HTTPS — OpenSSL (opt-in: -DTAURARO_TLS_OPENSSL -lssl -lcrypto).
+ * TLS/HTTPS — OpenSSL loaded at RUNTIME via dlopen/LoadLibrary.
+ *
+ * ZERO build/link dependency on OpenSSL. No <openssl/ssl.h>, no -lssl/-lcrypto.
+ * libssl's C ABI is stable across the 1.1.x/3.x line for the handful of
+ * functions we need, so we redeclare the minimal subset ourselves (opaque
+ * `void*` for SSL_CTX/SSL, matching std.gpu's CUDA/OpenCL dlopen pattern
+ * above) and load the system's OpenSSL shared library on first use.
+ *
+ * If no OpenSSL library can be found/loaded, every call degrades gracefully
+ * to the same "failed" result the old hard stub returned (NULL / -1 / "") —
+ * never a crash — so a program that never touches HTTPS pays nothing, and
+ * one that does gets a clean failure instead of a link error when OpenSSL
+ * truly isn't installed.
+ *
+ * Opt-out: define TAURARO_TLS_OPENSSL_STATIC (+ link -lssl -lcrypto) to use
+ * a conventional compile-time-linked OpenSSL instead (e.g. static builds).
  * ═══════════════════════════════════════════════════════════════════════════ */
-#ifdef TAURARO_TLS_OPENSSL
+#if defined(TAURARO_BARE) || defined(TAURARO_WASM)
+/* No networking on bare/WASM targets -- same stub behavior as "not found". */
+_TR_XLINK char* _tr_tls_connect(char* h, int p) { (void)h;(void)p; return NULL; }
+_TR_XLINK int _tr_tls_send(char* h, char* d)  { (void)h;(void)d; return -1; }
+_TR_XLINK char* _tr_tls_recv(char* h, int c)    { (void)h;(void)c; return _tr_strdup(""); }
+_TR_XLINK void _tr_tls_close(char* h)          { (void)h; }
+_TR_XLINK char* _tr_tls_server_new(char* c, char* k) { (void)c;(void)k; return NULL; }
+_TR_XLINK char* _tr_tls_accept(char* x, int fd) { (void)x;(void)fd; return NULL; }
+_TR_XLINK void _tr_tls_server_free(char* x) { (void)x; }
+
+#elif defined(TAURARO_TLS_OPENSSL_STATIC)
 #  include <openssl/ssl.h>
 #  include <openssl/err.h>
 typedef struct { SSL_CTX* ctx; SSL* ssl; int fd; } _TrTLSConn;
@@ -8455,6 +8480,7 @@ typedef struct { SSL_CTX* ctx; SSL* ssl; int fd; } _TrTLSConn;
 _TR_XLINK char* _tr_tls_connect(char* host, int port) {
     static _Atomic int _tr_ssl_once = 0;
     if (atomic_fetch_add(&_tr_ssl_once,1)==0){SSL_library_init();SSL_load_error_strings();OpenSSL_add_all_algorithms();}
+    _tr_net_init(); /* WSAStartup on Windows -- socket()/connect() are unreliable without it */
     struct addrinfo hints={0},*res=NULL;
     hints.ai_family=AF_UNSPEC;hints.ai_socktype=SOCK_STREAM;
     char pbuf[16]; snprintf(pbuf,sizeof(pbuf),"%d",port);
@@ -8506,15 +8532,221 @@ _TR_XLINK char* _tr_tls_accept(char* ctxh, int fd) {
     return (char*)c;
 }
 _TR_XLINK void _tr_tls_server_free(char* ctxh) { if(ctxh) SSL_CTX_free((SSL_CTX*)ctxh); }
+
+#else /* ── default: runtime dlopen, no OpenSSL headers/libs required ───────── */
+
+#if defined(_WIN32)
+  /* windows.h already included above */
+  typedef HMODULE _TrTlsDl;
+  static _TrTlsDl _tr_tls_dlopen(const char* n){ return LoadLibraryA(n); }
+  static void* _tr_tls_dlsym(_TrTlsDl h, const char* s){ return (void*)(intptr_t)GetProcAddress(h, s); }
+#  define _TR_SOCK_CLOSE(fd) closesocket(fd)
 #else
-_TR_XLINK char* _tr_tls_connect(char* h, int p) { (void)h;(void)p; return NULL; }
-_TR_XLINK int _tr_tls_send(char* h, char* d)  { (void)h;(void)d; return -1; }
-_TR_XLINK char* _tr_tls_recv(char* h, int c)    { (void)h;(void)c; return _tr_strdup(""); }
-_TR_XLINK void _tr_tls_close(char* h)          { (void)h; }
-_TR_XLINK char* _tr_tls_server_new(char* c, char* k) { (void)c;(void)k; return NULL; }
-_TR_XLINK char* _tr_tls_accept(char* x, int fd) { (void)x;(void)fd; return NULL; }
-_TR_XLINK void _tr_tls_server_free(char* x) { (void)x; }
+  #include <dlfcn.h>
+  typedef void* _TrTlsDl;
+  static _TrTlsDl _tr_tls_dlopen(const char* n){ return dlopen(n, RTLD_NOW | RTLD_LOCAL); }
+  static void* _tr_tls_dlsym(_TrTlsDl h, const char* s){ return dlsym(h, s); }
+#  define _TR_SOCK_CLOSE(fd) close(fd)
 #endif
+
+/* ── Minimal OpenSSL C ABI (redeclared; loaded at runtime) ─────────────────
+ * SSL_CTX/SSL are always heap objects OpenSSL itself allocates and we only
+ * ever hand pointers it gave us back into other OpenSSL calls, so opaque
+ * void* is sufficient -- we never need their real struct layout. */
+typedef void SSL_CTX;
+typedef void SSL;
+typedef const void* _TrSslMethod;
+
+typedef int        (*_pSSL_library_init)(void);
+typedef void       (*_pSSL_load_error_strings)(void);
+typedef void       (*_pOpenSSL_add_all_algorithms)(void);
+typedef SSL_CTX*   (*_pSSL_CTX_new)(_TrSslMethod);
+typedef _TrSslMethod (*_pTLS_client_method)(void);
+typedef _TrSslMethod (*_pTLS_server_method)(void);
+typedef SSL*       (*_pSSL_new)(SSL_CTX*);
+typedef int        (*_pSSL_set_fd)(SSL*, int);
+typedef long       (*_pSSL_ctrl)(SSL*, int, long, void*);
+typedef int        (*_pSSL_connect)(SSL*);
+typedef int        (*_pSSL_accept)(SSL*);
+typedef int        (*_pSSL_read)(SSL*, void*, int);
+typedef int        (*_pSSL_write)(SSL*, const void*, int);
+typedef void       (*_pSSL_free)(SSL*);
+typedef void       (*_pSSL_CTX_free)(SSL_CTX*);
+typedef int        (*_pSSL_shutdown)(SSL*);
+typedef int        (*_pSSL_CTX_use_certificate_chain_file)(SSL_CTX*, const char*);
+typedef int        (*_pSSL_CTX_use_PrivateKey_file)(SSL_CTX*, const char*, int);
+
+/* SSL_set_tlsext_host_name is a macro around SSL_ctrl in real openssl/ssl.h:
+ *   #define SSL_set_tlsext_host_name(s,name) \
+ *       SSL_ctrl(s, SSL_CTRL_SET_TLSEXT_HOSTNAME, TLSEXT_NAMETYPE_host_name, (void*)name)
+ * Constants below are stable OpenSSL ABI values (unchanged since 0.9.8). */
+#define _TR_SSL_CTRL_SET_TLSEXT_HOSTNAME 55
+#define _TR_TLSEXT_NAMETYPE_host_name    0
+#define _TR_SSL_FILETYPE_PEM             1
+
+typedef struct {
+    int inited, ok;
+    _TrTlsDl lib_ssl, lib_crypto;
+    _pSSL_CTX_new SSL_CTX_new_;
+    _pTLS_client_method TLS_client_method_;
+    _pTLS_server_method TLS_server_method_;
+    _pSSL_new SSL_new_;
+    _pSSL_set_fd SSL_set_fd_;
+    _pSSL_ctrl SSL_ctrl_;
+    _pSSL_connect SSL_connect_;
+    _pSSL_accept SSL_accept_;
+    _pSSL_read SSL_read_;
+    _pSSL_write SSL_write_;
+    _pSSL_free SSL_free_;
+    _pSSL_CTX_free SSL_CTX_free_;
+    _pSSL_shutdown SSL_shutdown_;
+    _pSSL_CTX_use_certificate_chain_file SSL_CTX_use_certificate_chain_file_;
+    _pSSL_CTX_use_PrivateKey_file SSL_CTX_use_PrivateKey_file_;
+} _TrTlsState;
+#ifdef _TR_MAIN
+_TrTlsState _tr_tls = {0};
+#else
+extern _TrTlsState _tr_tls;
+#endif
+
+typedef struct { SSL_CTX* ctx; SSL* ssl; int fd; } _TrTLSConn;
+
+/* Try to dlopen `names[]` in order, returning the first handle that loads. */
+static _TrTlsDl _tr_tls_dlopen_any(const char* const* names) {
+    for (int i = 0; names[i]; i++) {
+        _TrTlsDl h = _tr_tls_dlopen(names[i]);
+        if (h) return h;
+    }
+    return (_TrTlsDl)0;
+}
+
+static int _tr_tls_ensure_loaded(void) {
+    if (_tr_tls.inited) return _tr_tls.ok;
+    _tr_tls.inited = 1;
+#if defined(_WIN32)
+    static const char* ssl_names[]    = { "libssl-3-x64.dll", "libssl-3.dll", "libssl-1_1-x64.dll", "libssl-1_1.dll", 0 };
+    static const char* crypto_names[] = { "libcrypto-3-x64.dll", "libcrypto-3.dll", "libcrypto-1_1-x64.dll", "libcrypto-1_1.dll", 0 };
+#elif defined(__APPLE__)
+    static const char* ssl_names[]    = { "libssl.3.dylib", "libssl.dylib", 0 };
+    static const char* crypto_names[] = { "libcrypto.3.dylib", "libcrypto.dylib", 0 };
+#else
+    static const char* ssl_names[]    = { "libssl.so.3", "libssl.so", 0 };
+    static const char* crypto_names[] = { "libcrypto.so.3", "libcrypto.so", 0 };
+#endif
+    _tr_tls.lib_ssl = _tr_tls_dlopen_any(ssl_names);
+    if (!_tr_tls.lib_ssl) return 0;
+    /* Some of the functions we need (e.g. SSL_CTX_new in very old OpenSSL)
+     * can live in libcrypto; load it too and fall back to it on lookup. */
+    _tr_tls.lib_crypto = _tr_tls_dlopen_any(crypto_names);
+
+#define _TR_TLS_SYM(fld, ty, name) \
+    do { \
+        void* p = _tr_tls_dlsym(_tr_tls.lib_ssl, name); \
+        if (!p && _tr_tls.lib_crypto) p = _tr_tls_dlsym(_tr_tls.lib_crypto, name); \
+        _tr_tls.fld = (ty)p; \
+    } while (0)
+
+    /* SSL_library_init/SSL_load_error_strings/OpenSSL_add_all_algorithms are
+     * no-ops (handled internally by OPENSSL_init_ssl) on OpenSSL >= 1.1.0,
+     * and may legitimately be absent -- don't require them. */
+    _pSSL_library_init init_fn =
+        (_pSSL_library_init)_tr_tls_dlsym(_tr_tls.lib_ssl, "SSL_library_init");
+    _pSSL_load_error_strings les_fn =
+        (_pSSL_load_error_strings)_tr_tls_dlsym(_tr_tls.lib_ssl, "SSL_load_error_strings");
+    _pOpenSSL_add_all_algorithms aaa_fn =
+        (_pOpenSSL_add_all_algorithms)_tr_tls_dlsym(_tr_tls.lib_ssl, "OpenSSL_add_all_algorithms");
+    if (init_fn) init_fn();
+    if (les_fn) les_fn();
+    if (aaa_fn) aaa_fn();
+
+    _TR_TLS_SYM(SSL_CTX_new_, _pSSL_CTX_new, "SSL_CTX_new");
+    _TR_TLS_SYM(TLS_client_method_, _pTLS_client_method, "TLS_client_method");
+    _TR_TLS_SYM(TLS_server_method_, _pTLS_server_method, "TLS_server_method");
+    _TR_TLS_SYM(SSL_new_, _pSSL_new, "SSL_new");
+    _TR_TLS_SYM(SSL_set_fd_, _pSSL_set_fd, "SSL_set_fd");
+    _TR_TLS_SYM(SSL_ctrl_, _pSSL_ctrl, "SSL_ctrl");
+    _TR_TLS_SYM(SSL_connect_, _pSSL_connect, "SSL_connect");
+    _TR_TLS_SYM(SSL_accept_, _pSSL_accept, "SSL_accept");
+    _TR_TLS_SYM(SSL_read_, _pSSL_read, "SSL_read");
+    _TR_TLS_SYM(SSL_write_, _pSSL_write, "SSL_write");
+    _TR_TLS_SYM(SSL_free_, _pSSL_free, "SSL_free");
+    _TR_TLS_SYM(SSL_CTX_free_, _pSSL_CTX_free, "SSL_CTX_free");
+    _TR_TLS_SYM(SSL_shutdown_, _pSSL_shutdown, "SSL_shutdown");
+    _TR_TLS_SYM(SSL_CTX_use_certificate_chain_file_, _pSSL_CTX_use_certificate_chain_file, "SSL_CTX_use_certificate_chain_file");
+    _TR_TLS_SYM(SSL_CTX_use_PrivateKey_file_, _pSSL_CTX_use_PrivateKey_file, "SSL_CTX_use_PrivateKey_file");
+#undef _TR_TLS_SYM
+
+    if (!_tr_tls.SSL_CTX_new_ || !_tr_tls.TLS_client_method_ || !_tr_tls.SSL_new_ ||
+        !_tr_tls.SSL_set_fd_ || !_tr_tls.SSL_connect_ || !_tr_tls.SSL_read_ ||
+        !_tr_tls.SSL_write_ || !_tr_tls.SSL_free_ || !_tr_tls.SSL_CTX_free_) {
+        return 0; /* essential client symbols missing -- treat as "not found" */
+    }
+    _tr_tls.ok = 1;
+    return 1;
+}
+
+_TR_XLINK char* _tr_tls_connect(char* host, int port) {
+    if (!_tr_tls_ensure_loaded()) return NULL;
+    _tr_net_init(); /* WSAStartup on Windows -- socket()/connect() are unreliable without it */
+    struct addrinfo hints={0},*res=NULL;
+    hints.ai_family=AF_UNSPEC;hints.ai_socktype=SOCK_STREAM;
+    char pbuf[16]; snprintf(pbuf,sizeof(pbuf),"%d",port);
+    if(getaddrinfo(host,pbuf,&hints,&res)!=0) return NULL;
+    int fd=(int)socket(res->ai_family,res->ai_socktype,res->ai_protocol);
+    if(fd<0){freeaddrinfo(res);return NULL;}
+    if(connect(fd,res->ai_addr,(int)res->ai_addrlen)!=0){freeaddrinfo(res);_TR_SOCK_CLOSE(fd);return NULL;}
+    freeaddrinfo(res);
+    SSL_CTX* ctx=_tr_tls.SSL_CTX_new_(_tr_tls.TLS_client_method_());
+    if(!ctx){_TR_SOCK_CLOSE(fd);return NULL;}
+    SSL* ssl=_tr_tls.SSL_new_(ctx);
+    _tr_tls.SSL_set_fd_(ssl,fd);
+    _tr_tls.SSL_ctrl_(ssl, _TR_SSL_CTRL_SET_TLSEXT_HOSTNAME, _TR_TLSEXT_NAMETYPE_host_name, (void*)host);
+    if(_tr_tls.SSL_connect_(ssl)!=1){_tr_tls.SSL_free_(ssl);_tr_tls.SSL_CTX_free_(ctx);_TR_SOCK_CLOSE(fd);return NULL;}
+    _TrTLSConn* c=(_TrTLSConn*)TAURARO_ALLOC(sizeof(_TrTLSConn));
+    if(!c){_tr_tls.SSL_free_(ssl);_tr_tls.SSL_CTX_free_(ctx);_TR_SOCK_CLOSE(fd);return NULL;}
+    c->ctx=ctx;c->ssl=ssl;c->fd=fd; return (char*)c;
+}
+_TR_XLINK int _tr_tls_send(char* h, char* d) {
+    if(!h||!d||!_tr_tls.ok) return -1;
+    return _tr_tls.SSL_write_(((_TrTLSConn*)h)->ssl,d,(int)strlen(d));
+}
+_TR_XLINK char* _tr_tls_recv(char* h, int cap) {
+    if(!h||cap<=0||!_tr_tls.ok) return _tr_strdup("");
+    char* buf=(char*)TAURARO_ALLOC((size_t)cap+1); if(!buf) return _tr_strdup("");
+    int n=_tr_tls.SSL_read_(((_TrTLSConn*)h)->ssl,buf,cap);
+    if(n<=0){TAURARO_FREE(buf);return _tr_strdup("");}
+    buf[n]='\0'; return buf;
+}
+_TR_XLINK void _tr_tls_close(char* h) {
+    if(!h) return; _TrTLSConn* c=(_TrTLSConn*)h;
+    if(_tr_tls.ok){_tr_tls.SSL_shutdown_(c->ssl);_tr_tls.SSL_free_(c->ssl);_tr_tls.SSL_CTX_free_(c->ctx);}
+    _TR_SOCK_CLOSE(c->fd);TAURARO_FREE(c);
+}
+/* ── Server side: one SSL_CTX (cert+key), one _TrTLSConn per accepted fd ──
+ * SSL_accept/read/write are blocking, so server TLS is for the thread-per-
+ * connection model (listen_tls), where blocking a worker thread is fine. */
+_TR_XLINK char* _tr_tls_server_new(char* cert, char* key) {
+    if (!_tr_tls_ensure_loaded()) return NULL;
+    if (!_tr_tls.TLS_server_method_ || !_tr_tls.SSL_CTX_use_certificate_chain_file_ || !_tr_tls.SSL_CTX_use_PrivateKey_file_) return NULL;
+    SSL_CTX* ctx=_tr_tls.SSL_CTX_new_(_tr_tls.TLS_server_method_());
+    if(!ctx) return NULL;
+    if(_tr_tls.SSL_CTX_use_certificate_chain_file_(ctx,cert)<=0){_tr_tls.SSL_CTX_free_(ctx);return NULL;}
+    if(_tr_tls.SSL_CTX_use_PrivateKey_file_(ctx,key,_TR_SSL_FILETYPE_PEM)<=0){_tr_tls.SSL_CTX_free_(ctx);return NULL;}
+    return (char*)ctx;
+}
+_TR_XLINK char* _tr_tls_accept(char* ctxh, int fd) {
+    if(!ctxh||!_tr_tls.ok) return NULL;
+    SSL* ssl=_tr_tls.SSL_new_((SSL_CTX*)ctxh); if(!ssl) return NULL;
+    _tr_tls.SSL_set_fd_(ssl,fd);
+    if(_tr_tls.SSL_accept_(ssl)!=1){_tr_tls.SSL_free_(ssl);return NULL;}
+    _TrTLSConn* c=(_TrTLSConn*)TAURARO_ALLOC(sizeof(_TrTLSConn));
+    if(!c){_tr_tls.SSL_free_(ssl);return NULL;}
+    c->ctx=NULL; c->ssl=ssl; c->fd=fd;   /* ctx is shared/server-owned, not freed per-conn */
+    return (char*)c;
+}
+_TR_XLINK void _tr_tls_server_free(char* ctxh) { if(ctxh && _tr_tls.ok) _tr_tls.SSL_CTX_free_((SSL_CTX*)ctxh); }
+
+#endif /* TLS backend selection */
 
 /* ═══════════════════════════════════════════════════════════════════════════
  * COMPRESS — zlib (opt-in: -DTAURARO_COMPRESS_ZLIB -lz).

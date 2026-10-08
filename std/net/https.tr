@@ -1,7 +1,13 @@
 # std.net.https — TLS/HTTPS client built on OpenSSL.
 #
-# Requires: compile with -DTAURARO_TLS_OPENSSL -lssl -lcrypto
-# Without that flag all methods return safe stub responses (status=0).
+# Works out of the box: the runtime loads the system's OpenSSL shared
+# library (libssl/libcrypto) via dlopen/LoadLibrary at first use -- no
+# -DTAURARO_TLS_OPENSSL, no -lssl/-lcrypto, no OpenSSL dev headers needed
+# to build. If no OpenSSL library is found on the host at runtime, methods
+# degrade to a safe stub response (status=0) instead of crashing.
+#
+# (Opt-out: build the runtime with -DTAURARO_TLS_OPENSSL_STATIC -lssl
+# -lcrypto for a conventional compile-time-linked OpenSSL instead.)
 #
 # Usage:
 #   from std.net.https import HttpsClient

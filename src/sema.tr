@@ -5646,6 +5646,22 @@ extend Sema:
                         ret_ty = hobj_ty.args.get(0).read()
                     elif (hobj_ty.name == "Map" or hobj_ty.name == "Dict") and hobj_ty.args.len > 1:
                         ret_ty = hobj_ty.args.get(1).read()
+                    # The 1-arg sugar `Map[V]`/`Dict[V]` (implicit str key, built-in
+                    # Dict-backed) must resolve ITS value type here, same as
+                    # .values() does below. Without this explicit branch, `Map`/`Dict`
+                    # would fall into the "user-defined generic class" branch right
+                    # below (std/core/map.tr registers its OWN `Map[K, V]` class
+                    # under the exact same name "Map") and try to positionally
+                    # substitute V against a 1-element concrete-arg list sized for
+                    # the 2-generic (K, V) declaration -- _subst_ret_generics then
+                    # silently fails (concrete.len < generics.len for the 2nd
+                    # generic) and returns the raw, un-substituted "V" placeholder,
+                    # which codegen then emits VERBATIM as a C type name
+                    # ("(V*)(uintptr_t)...") -- a real, confirmed compiler bug
+                    # (found via std.net.https/http's `HttpClientResponse.header()`,
+                    # the first real exerciser of Map[str]-typed `.get()`).
+                    elif (hobj_ty.name == "Map" or hobj_ty.name == "Dict") and hobj_ty.args.len > 0:
+                        ret_ty = hobj_ty.args.get(0).read()
                     elif self.classes.contains(hobj_ty.name):
                         # A user-defined generic class (e.g. BTreeMap[K, V], Box[K, V])
                         # with its OWN get/get_or/pop method: consult the method's real
