@@ -114,22 +114,22 @@ __attribute__((hot)) void LFunc_set_term(LFunc* self, LTerm t) {
     /* pass */
     LBlock* b = ((LBlock*)List_ptr_get(self->blocks, self->cur));
     /* pass */
-    __auto_type _t3075 = b->term;
-    if (_t3075.tag == LTerm_TUnset) {
+    __auto_type _t3103 = b->term;
+    if (_t3103.tag == LTerm_TUnset) {
         b->term = t;
     } else if (1) {
-        __auto_type _ = _t3075;
+        __auto_type _ = _t3103;
         /* pass */
     }
 }
 
 __attribute__((hot)) bool LFunc_cur_terminated(LFunc* self) {
     /* pass */
-    __auto_type _t3076 = ((LBlock*)List_ptr_get(self->blocks, self->cur))->term;
-    if (_t3076.tag == LTerm_TUnset) {
+    __auto_type _t3104 = ((LBlock*)List_ptr_get(self->blocks, self->cur))->term;
+    if (_t3104.tag == LTerm_TUnset) {
         return false;
     } else if (1) {
-        __auto_type _ = _t3076;
+        __auto_type _ = _t3104;
         return true;
     }
 }
@@ -536,9 +536,9 @@ __attribute__((hot)) TrStr LModule_resolve_method_ov(LModule* self, TrStr cls, T
             return mangled;
         }
         /* pass */
-        TrStr _strtmp_t3077 = _tr_str_retain(((ClassLayout*)List_ptr_get(self->classes, ci))->base);
+        TrStr _strtmp_t3105 = _tr_str_retain(((ClassLayout*)List_ptr_get(self->classes, ci))->base);
         _tr_str_release(cur);
-        cur = _strtmp_t3077;
+        cur = _strtmp_t3105;
         /* pass */
         if (((((unsigned long long)(((char*)(_tr_strz(cur))))) == ((unsigned long long)(0LL))) || _tr_str_eqv((cur), (_tr_str_lit_len("", 0LL))))) {
             /* pass */
@@ -655,7 +655,7 @@ __attribute__((hot)) long long LModule_add_string(LModule* self, TrStr s, long l
     /* pass */
     while ((i < self->strings->len)) {
         /* pass */
-        if (({ TrStr _at_t3078 = (List_TrStr_get(self->strings, i)); __auto_type _wr = (((List_i64_get(self->string_lens, i) == blen) && _ir_bytes_eq(_at_t3078, s, blen))); _tr_str_release(_at_t3078); _wr; })) {
+        if (({ TrStr _at_t3106 = (List_TrStr_get(self->strings, i)); __auto_type _wr = (((List_i64_get(self->string_lens, i) == blen) && _ir_bytes_eq(_at_t3106, s, blen))); _tr_str_release(_at_t3106); _wr; })) {
             /* pass */
             return i;
         }
@@ -919,9 +919,9 @@ __attribute__((hot)) TrStr LModule_resolve_method(LModule* self, TrStr cls, TrSt
             return mangled;
         }
         /* pass */
-        TrStr _strtmp_t3079 = _tr_str_retain(((ClassLayout*)List_ptr_get(self->classes, ci))->base);
+        TrStr _strtmp_t3107 = _tr_str_retain(((ClassLayout*)List_ptr_get(self->classes, ci))->base);
         _tr_str_release(cur);
-        cur = _strtmp_t3079;
+        cur = _strtmp_t3107;
         /* pass */
         if (((((unsigned long long)(((char*)(_tr_strz(cur))))) == ((unsigned long long)(0LL))) || _tr_str_eqv((cur), (_tr_str_lit_len("", 0LL))))) {
             /* pass */

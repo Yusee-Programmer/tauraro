@@ -10665,6 +10665,62 @@ __auto_type variant = _t601.data.EPropAccess.prop;
                         /* pass */
                         ret_ty = AstType_init(type_name);
                     }
+                } else if (_tr_dict_contains(self->classes, _tr_strz(type_name))) {
+                    /* pass */
+                    ClassDef* _scdef = ((ClassDef*)(uintptr_t)_tr_dict_get(self->classes, _tr_strz(type_name)));
+                    /* pass */
+                    long long _smi = 0LL;
+                    /* pass */
+                    bool _sfound = false;
+                    /* pass */
+                    while (((_smi < _scdef->methods->len) && (!_sfound))) {
+                        /* pass */
+                        FunctionDef* _smdef = ((FunctionDef*)List_ptr_get(_scdef->methods, _smi));
+                        /* pass */
+                        if (_tr_str_eqv((_smdef->name), (variant))) {
+                            /* pass */
+                            long long _nself = _smdef->params->len;
+                            /* pass */
+                            if (((_smdef->params->len > 0LL) && _tr_str_eqv((((Param*)List_ptr_get(_smdef->params, 0LL))->name), (_tr_str_lit_len("self", 4LL))))) {
+                                /* pass */
+                                _nself = (_smdef->params->len - 1LL);
+                            }
+                            /* pass */
+                            if ((_nself == hl->len)) {
+                                /* pass */
+                                if ((((unsigned long long)(_smdef->ret_ty)) != ((unsigned long long)(0LL)))) {
+                                    /* pass */
+                                    ret_ty = (*_smdef->ret_ty);
+                                }
+                                /* pass */
+                                _sfound = true;
+                            }
+                        }
+                        /* pass */
+                        _smi = (_smi + 1LL);
+                    }
+                    /* pass */
+                    if ((!_sfound)) {
+                        /* pass */
+                        _smi = 0LL;
+                        /* pass */
+                        while (((_smi < _scdef->methods->len) && (!_sfound))) {
+                            /* pass */
+                            FunctionDef* _smdef2 = ((FunctionDef*)List_ptr_get(_scdef->methods, _smi));
+                            /* pass */
+                            if (_tr_str_eqv((_smdef2->name), (variant))) {
+                                /* pass */
+                                if ((((unsigned long long)(_smdef2->ret_ty)) != ((unsigned long long)(0LL)))) {
+                                    /* pass */
+                                    ret_ty = (*_smdef2->ret_ty);
+                                }
+                                /* pass */
+                                _sfound = true;
+                            }
+                            /* pass */
+                            _smi = (_smi + 1LL);
+                        }
+                    }
                 }
             } else if (_t615.tag == Expr_EIndex) {
                 __auto_type base2 = _t615.data.EIndex.obj;
@@ -11210,6 +11266,9 @@ __auto_type idx_arg = _t636.data.EIndex._tr_v_index;
             } else if (((_tr_str_eqv((hobj_ty->name), (_tr_str_lit_len("Map", 3LL))) || _tr_str_eqv((hobj_ty->name), (_tr_str_lit_len("Dict", 4LL)))) && (hobj_ty->args->len > 1LL))) {
                 /* pass */
                 ret_ty = (*((AstType**)List_ptr_get(hobj_ty->args, 1LL)));
+            } else if (((_tr_str_eqv((hobj_ty->name), (_tr_str_lit_len("Map", 3LL))) || _tr_str_eqv((hobj_ty->name), (_tr_str_lit_len("Dict", 4LL)))) && (hobj_ty->args->len > 0LL))) {
+                /* pass */
+                ret_ty = (*((AstType**)List_ptr_get(hobj_ty->args, 0LL)));
             } else if (_tr_dict_contains(self->classes, _tr_strz(hobj_ty->name))) {
                 /* pass */
                 ClassDef* _gcls = ((ClassDef*)(uintptr_t)_tr_dict_get(self->classes, _tr_strz(hobj_ty->name)));
