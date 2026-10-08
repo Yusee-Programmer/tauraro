@@ -1,0 +1,215 @@
+# std.image.bmp — Windows BMP (uncompressed) decode/encode.
+#
+# Supports the common uncompressed variants: 24-bit (BGR, no alpha) and
+# 32-bit (BGRA, with alpha) BITMAPINFOHEADER (40-byte DIB header) images,
+# both bottom-up (the default, positive height) and top-down (negative
+# height) row order. Compressed BMPs (RLE4/RLE8/BITFIELDS with odd masks,
+# JPEG/PNG-in-BMP) are not supported — decode_bmp() reports failure
+# (width/height == -1) rather than guessing.
+#
+# File layout (little-endian throughout):
+#   BITMAPFILEHEADER (14 bytes):
+#     bytes 0-1   "BM" magic
+#     bytes 2-5   file size (u32)
+#     bytes 6-9   reserved (ignored)
+#     bytes 10-13 pixel data offset (u32)
+#   BITMAPINFOHEADER (40 bytes):
+#     bytes 14-17 header size (== 40 for this variant)
+#     bytes 18-21 width (i32)
+#     bytes 22-25 height (i32; negative == top-down row order)
+#     bytes 26-27 planes (== 1)
+#     bytes 28-29 bits per pixel (24 or 32 supported)
+#     bytes 30-33 compression (== 0 / BI_RGB supported; BITFIELDS(3) with
+#                 the canonical BGRA mask is accepted too)
+#     bytes 34-37 image size (may be 0, recomputed if so)
+#     bytes 38-41 x pixels/meter (ignored)
+#     bytes 42-45 y pixels/meter (ignored)
+#     bytes 46-49 colors used (ignored)
+#     bytes 50-53 colors important (ignored)
+#   PIXEL DATA: rows padded to a 4-byte boundary, BGR or BGRA per pixel,
+#               bottom-to-top unless height is negative.
+#
+# Note on binary strings: `str` here is always used as a raw byte buffer
+# with an explicit length — never via C strlen — since BMP bytes routinely
+# contain embedded NUL bytes (e.g. an all-black pixel).
+
+extern "C":
+    def _tr_c_malloc(size: int) -> Pointer[char]
+    def _tr_c_free(ptr: Pointer[char])
+    def _tr_str_wrap_len(s: Pointer[char], blen: int) -> str
+
+from std.image.mod import Image
+from std.core.vec import Vec
+from std.io.archive import ByteBuf
+
+def _rd_u16(data: str, off: int) -> int:
+    mut p = data as Pointer[char]
+    mut b0 = 0
+    mut b1 = 0
+    unsafe:
+        b0 = p.offset(off).read() as int & 0xFF
+        b1 = p.offset(off + 1).read() as int & 0xFF
+    return b0 | (b1 << 8)
+
+def _rd_u32(data: str, off: int) -> int:
+    mut p = data as Pointer[char]
+    mut b0 = 0
+    mut b1 = 0
+    mut b2 = 0
+    mut b3 = 0
+    unsafe:
+        b0 = p.offset(off).read() as int & 0xFF
+        b1 = p.offset(off + 1).read() as int & 0xFF
+        b2 = p.offset(off + 2).read() as int & 0xFF
+        b3 = p.offset(off + 3).read() as int & 0xFF
+    return b0 | (b1 << 8) | (b2 << 16) | (b3 << 24)
+
+# Reads a 32-bit little-endian field as a SIGNED value (needed for BMP's
+# height field, which may be negative to request top-down row order).
+def _rd_i32(data: str, off: int) -> int:
+    mut v = _rd_u32(data, off)
+    if v & 0x80000000 != 0:
+        return v - 0x100000000
+    return v
+
+def _bad_image() -> Image:
+    mut bad = Image()
+    bad.width  = -1
+    bad.height = -1
+    bad.pixels = Vec[u8].init(1)
+    return bad
+
+# Decode `len_` bytes of BMP data (24-bit BGR or 32-bit BGRA, uncompressed)
+# into a canonical RGBA8 Image. Returns an Image with width == -1 on any
+# unsupported variant or malformed input.
+pub def decode_bmp(data: str, len_: int) -> Image:
+    if len_ < 54:
+        return _bad_image()
+
+    mut p = data as Pointer[char]
+    mut m0 = 0
+    mut m1 = 0
+    unsafe:
+        m0 = p.offset(0).read() as int & 0xFF
+        m1 = p.offset(1).read() as int & 0xFF
+    if m0 != 0x42 or m1 != 0x4D:   # "BM"
+        return _bad_image()
+
+    mut pixel_offset = _rd_u32(data, 10)
+    mut dib_size      = _rd_u32(data, 14)
+    if dib_size < 40:
+        return _bad_image()   # OS/2 1.x (12-byte) headers etc. not supported
+
+    mut width       = _rd_i32(data, 18)
+    mut raw_height   = _rd_i32(data, 22)
+    mut bpp          = _rd_u16(data, 28)
+    mut compression  = _rd_u32(data, 30)
+
+    if width <= 0:
+        return _bad_image()
+    if bpp != 24 and bpp != 32:
+        return _bad_image()
+    if compression != 0 and compression != 3:   # BI_RGB or BI_BITFIELDS
+        return _bad_image()
+
+    mut top_down = false
+    mut height = raw_height
+    if raw_height < 0:
+        top_down = true
+        height = 0 - raw_height
+    if height <= 0:
+        return _bad_image()
+
+    mut bytes_per_px = bpp / 8
+    mut row_bytes_raw = width * bytes_per_px
+    mut row_padded = (row_bytes_raw + 3) & (~3)
+
+    if pixel_offset + row_padded * height > len_:
+        return _bad_image()
+
+    mut img = Image.init(width, height)
+
+    mut row = 0
+    while row < height:
+        # BMP's default (bottom-up) stores the LAST image row FIRST in the
+        # pixel data; top-down stores them in natural order.
+        mut dst_row = row
+        if not top_down:
+            dst_row = height - 1 - row
+
+        mut src_off = pixel_offset + row * row_padded
+        mut col = 0
+        while col < width:
+            mut px_off = src_off + col * bytes_per_px
+            mut b = 0
+            mut g = 0
+            mut r = 0
+            mut a = 255
+            unsafe:
+                b = p.offset(px_off).read()     as int & 0xFF
+                g = p.offset(px_off + 1).read() as int & 0xFF
+                r = p.offset(px_off + 2).read() as int & 0xFF
+                if bytes_per_px == 4:
+                    a = p.offset(px_off + 3).read() as int & 0xFF
+            img.set_pixel(col, dst_row, r, g, b, a)
+            col = col + 1
+        row = row + 1
+
+    return img
+
+# Encode `img` as a 32-bit BGRA uncompressed BMP (top-down row order, no
+# row padding needed since width*4 is always a multiple of 4). Returns the
+# BMP bytes; call bmp_encoded_len() style length tracking via the returned
+# ByteBuf-free str — the caller must use Str-independent length since BMP
+# output can contain embedded NUL bytes (e.g. black pixels). This function
+# returns (bytes, length) directly to avoid any external length-tracking
+# footgun.
+pub def encode_bmp(img: Image) -> (str, int):
+    mut width  = img.width
+    mut height = img.height
+    mut row_bytes = width * 4   # always a multiple of 4, so no padding needed
+    mut pixel_data_size = row_bytes * height
+    mut file_size = 54 + pixel_data_size
+
+    mut buf = ByteBuf.init(file_size)
+
+    # BITMAPFILEHEADER (14 bytes)
+    buf.push_u8(0x42)             # 'B'
+    buf.push_u8(0x4D)             # 'M'
+    buf.push_u32le(file_size)
+    buf.push_u16le(0)             # reserved1
+    buf.push_u16le(0)             # reserved2
+    buf.push_u32le(54)            # pixel data offset
+
+    # BITMAPINFOHEADER (40 bytes)
+    buf.push_u32le(40)            # header size
+    buf.push_u32le(width)
+    # Negative height requests top-down row order directly, avoiding any
+    # row-flip bookkeeping below.
+    buf.push_u32le((0 - height) & 0xFFFFFFFF)
+    buf.push_u16le(1)             # planes
+    buf.push_u16le(32)            # bits per pixel
+    buf.push_u32le(0)             # compression = BI_RGB
+    buf.push_u32le(pixel_data_size)
+    buf.push_u32le(0)             # x px/m
+    buf.push_u32le(0)             # y px/m
+    buf.push_u32le(0)             # colors used
+    buf.push_u32le(0)             # colors important
+
+    # Pixel data: top-down (matches the negative height above), BGRA.
+    mut row = 0
+    while row < height:
+        mut col = 0
+        while col < width:
+            mut r, g, b, a = img.get_pixel(col, row)
+            buf.push_u8(b)
+            buf.push_u8(g)
+            buf.push_u8(r)
+            buf.push_u8(a)
+            col = col + 1
+        row = row + 1
+
+    mut out_len = buf.len
+    mut result = buf.to_str()
+    buf.free()
+    return (result, out_len)

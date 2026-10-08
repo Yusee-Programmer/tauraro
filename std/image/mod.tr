@@ -1,0 +1,112 @@
+# std.image — Raster image decode/encode: BMP, QOI, PNG.
+#
+# One shared in-memory representation (Image, RGBA8 — 4 bytes/pixel,
+# row-major, top-to-bottom, no padding) that every codec below decodes
+# INTO and encodes FROM, so converting between formats is just
+# `decode_bmp(bytes, len).encode_png()`.
+#
+# Sub-modules:
+#   from std.image.bmp import decode_bmp, encode_bmp
+#   from std.image.qoi import decode_qoi, encode_qoi
+#   from std.image.png import decode_png, encode_png
+#
+# Or just:
+#   from std.image import Image, decode, decode_bmp, encode_bmp,
+#                          decode_qoi, encode_qoi, decode_png, encode_png
+#
+# `decode()` sniffs the magic bytes of a buffer and dispatches to the
+# right codec automatically.
+#
+# Note on binary strings: every codec in this family treats `str` as a raw
+# byte buffer with an explicit, separately-tracked length (`ilen`/`len_`
+# parameters) — never via C strlen — since image file bytes routinely
+# contain embedded NUL bytes. This mirrors the convention already used by
+# std.compress/std.io.archive.
+
+from std.core.vec import Vec
+
+# Canonical in-memory image: RGBA8, row-major, top row first, 4 bytes/pixel,
+# no row padding (pixels.len == width * height * 4 always).
+pub class Image:
+    pub width:  int
+    pub height: int
+    pub pixels: Vec[u8]   # length == width * height * 4, byte order R,G,B,A
+
+extend Image:
+    # A new image of `w` x `h` pixels, all initialized to (0,0,0,0).
+    pub def init(w: int, h: int) -> Image:
+        mut img = Image()
+        img.width  = w
+        img.height = h
+        img.pixels = Vec[u8].init(w * h * 4)
+        mut n = w * h * 4
+        mut i = 0
+        while i < n:
+            img.pixels.push(0 as u8)
+            i = i + 1
+        return img
+
+    # Read the RGBA pixel at (x, y) as four ints in [0, 255].
+    pub def get_pixel(self, x: int, y: int) -> (int, int, int, int):
+        mut off = (y * self.width + x) * 4
+        mut r = self.pixels.get(off)     as int & 0xFF
+        mut g = self.pixels.get(off + 1) as int & 0xFF
+        mut b = self.pixels.get(off + 2) as int & 0xFF
+        mut a = self.pixels.get(off + 3) as int & 0xFF
+        return (r, g, b, a)
+
+    # Write the RGBA pixel at (x, y). Each component is masked to a byte.
+    pub def set_pixel(self, x: int, y: int, r: int, g: int, b: int, a: int):
+        mut off = (y * self.width + x) * 4
+        self.pixels.set(off,     (r & 0xFF) as u8)
+        self.pixels.set(off + 1, (g & 0xFF) as u8)
+        self.pixels.set(off + 2, (b & 0xFF) as u8)
+        self.pixels.set(off + 3, (a & 0xFF) as u8)
+
+    pub def free(self):
+        self.pixels.free()
+
+from std.image.bmp import decode_bmp, encode_bmp
+from std.image.qoi import decode_qoi, encode_qoi
+from std.image.png import decode_png, encode_png
+
+# Sniff the magic bytes of `data` (first `len_` bytes) and dispatch to the
+# matching decoder. Returns an Image with width == -1 on an unrecognized
+# or too-short buffer (callers should check `.width < 0` for failure, same
+# convention each per-format decoder already uses on malformed input).
+pub def decode(data: str, len_: int) -> Image:
+    if len_ >= 2:
+        mut p = data as Pointer[char]
+        mut b0 = 0
+        mut b1 = 0
+        unsafe:
+            b0 = p.offset(0).read() as int & 0xFF
+            b1 = p.offset(1).read() as int & 0xFF
+        if b0 == 0x42 and b1 == 0x4D:   # "BM"
+            return decode_bmp(data, len_)
+        if len_ >= 4:
+            mut b2 = 0
+            mut b3 = 0
+            unsafe:
+                b2 = p.offset(2).read() as int & 0xFF
+                b3 = p.offset(3).read() as int & 0xFF
+            if b0 == 0x71 and b1 == 0x6F and b2 == 0x69 and b3 == 0x66:   # "qoif"
+                return decode_qoi(data, len_)
+            if len_ >= 8:
+                mut b4 = 0
+                mut b5 = 0
+                mut b6 = 0
+                mut b7 = 0
+                unsafe:
+                    b4 = p.offset(4).read() as int & 0xFF
+                    b5 = p.offset(5).read() as int & 0xFF
+                    b6 = p.offset(6).read() as int & 0xFF
+                    b7 = p.offset(7).read() as int & 0xFF
+                if b0 == 0x89 and b1 == 0x50 and b2 == 0x4E and b3 == 0x47 and b4 == 0x0D and b5 == 0x0A and b6 == 0x1A and b7 == 0x0A:
+                    return decode_png(data, len_)
+
+    mut bad = Image()
+    bad.width  = -1
+    bad.height = -1
+    bad.pixels = Vec[u8].init(1)
+    return bad
