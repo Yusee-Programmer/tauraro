@@ -535,12 +535,31 @@ def _stale_refresh_worker(job: RefreshJob[K, V]) -> void:
 pub class StaleCache[K, V] implements Sendable, UnsafeSendable:
     pub box:         Mutex[Cache[K, V]]
     pub refreshing:  Atomic[int]   # 0/1 in-flight guard: at most one background refresh at a time
+    # Keeps the most recent background-refresh RefreshJob[K, V] alive for as
+    # long as `self` lives. Thread.spawn(fn, job) hands the spawned thread
+    # the SAME job reference the caller holds, with no extra retain of its
+    # own (confirmed in codegen: the argument is a raw pointer cast, nothing
+    # more) -- so once the calling scope's own `job` local is auto-dropped
+    # at the end of its block (a normal, CORRECT drop: the local itself is
+    # genuinely done being used there), rc can reach 0 and free the job
+    # WHILE the detached background thread is still reading its fields. A
+    # real, timing-dependent use-after-free race -- reproduces under CI's
+    # scheduler but not reliably on every box, which is exactly what a race
+    # looks like. Storing `job` into this field BEFORE spawning gives it a
+    # second counted reference (RefreshJob is a plain heap class, so a
+    # field store retains it like any other), so it survives independent of
+    # the local's own scope-exit drop. `refreshing`'s CAS already guarantees
+    # at most one job in flight at a time, so overwriting this field on the
+    # NEXT refresh never races the previous job (its own worker thread has
+    # already finished and cleared `refreshing` by then).
+    pub _inflight_job: RefreshJob[K, V]
 
 extend StaleCache[K, V]:
     pub def init(capacity: int) -> StaleCache[K, V]:
         mut s = StaleCache[K, V]()
-        s.box        = Mutex.init(Cache[K, V].init(capacity))
-        s.refreshing = Atomic.new(0)
+        s.box          = Mutex.init(Cache[K, V].init(capacity))
+        s.refreshing   = Atomic.new(0)
+        s._inflight_job = RefreshJob[K, V]()
         return s
 
     # Stale-while-revalidate memoization. See the module-header comment
@@ -563,6 +582,10 @@ extend StaleCache[K, V]:
                 job.ttl_ms       = ttl_ms
                 job.fn           = fn
                 job.refreshing  = self.refreshing
+                # Keep `job` referenced via `self` (see field comment above)
+                # BEFORE spawning, so the detached thread's use of it can
+                # never race the local `job`'s own scope-exit drop below.
+                self._inflight_job = job
                 mut t: Thread = Thread.spawn(_stale_refresh_worker, job)
                 t.detach()
             return old_val
