@@ -4585,6 +4585,15 @@ __attribute__((hot)) TrStr CGenerator_synth_class_suffix(CGenerator* self, HirCl
 __attribute__((hot)) TrStr CGenerator_ensure_array_type(CGenerator* self, AstType* ty);
 __attribute__((hot)) TrStr CGenerator_mono_cprefix(CGenerator* self, AstType* t);
 __attribute__((hot)) void CGenerator_capture_local_mono(CGenerator* self, TrStr name, AstType* ty, HirExpr* v);
+__attribute__((hot)) bool CGenerator__args_bare_unsubst(CGenerator* self, HirClass* cls, List_ptr* type_args);
+__attribute__((hot)) bool CGenerator__ty_has_bare_class_generic(CGenerator* self, AstType* ty);
+__attribute__((hot)) bool CGenerator__fn_has_bare_class_generic(CGenerator* self, HirFunction* f);
+__attribute__((hot)) TrStr CGenerator__collect_open_names(CGenerator* self, AstType* ty, TrStr acc);
+__attribute__((hot)) TrStr CGenerator__open_acc(CGenerator* self, HirFunction* f);
+__attribute__((hot)) bool CGenerator__fn_open_covered(CGenerator* self, HirFunction* f);
+__attribute__((hot)) TrStr CGenerator__c_ty_sfx(CGenerator* self, TrStr cty);
+__attribute__((hot)) TrStr CGenerator_ensure_open_mono_func(CGenerator* self, TrStr fname);
+__attribute__((hot)) void CGenerator__emit_open_spawn_wrapper(CGenerator* self, TrStr mono_name, TrStr orig_name);
 __attribute__((hot)) void CGenerator_ensure_mono(CGenerator* self, HirClass* cls, List_ptr* type_args);
 __attribute__((hot)) TrStr CGenerator_infer_generic_targ(CGenerator* self, TrStr fname, List_ptr* args);
 __attribute__((hot)) List_TrStr* CGenerator_infer_generic_targs_multi(CGenerator* self, TrStr fname, List_ptr* args);

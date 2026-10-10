@@ -17,6 +17,7 @@ building libraries with `taupkg`)
 | [`std.crypto`](crypto.md) | Cryptography: SHA-256, SHA-512/384, HMAC-SHA256, SHA-1, MD5, UUID v3/v4/v5, ULID (incl. monotonic), AES-128/256 (CBC+PKCS#7), ChaCha20-Poly1305 AEAD, PBKDF2-HMAC-SHA256 key derivation, JWT (HS256) |
 | [`std.encoding`](encoding.md) | Data encoding: JSON, CSV, TOML, INI, YAML, XML, Base64, Hex |
 | [`std.gpu`](gpu.md) | GPU compute: CUDA/OpenCL/CPU device API (`Device`/`Buffer[T]`/`Module`/`Kernel`), Tauraro `@kernel` → PTX/SPIR-V, and OpenMP CPU dispatch (`Gpu.parallel`) |
+| [`std.image`](image.md) | Raster image decode/encode: BMP (24/32-bit), QOI, PNG (truecolor/grayscale, full DEFLATE inflate + stored-block deflate), shared `Image` (RGBA8) type, format-sniffing `decode()` |
 | [`std.io`](io.md) | File I/O, directory operations, path manipulation, console, buffered I/O, ZIP archive read/write (`ZipWriter`/`ZipReader`), tar archive read/write (`TarWriter`/`TarReader`) |
 | [`std.iter`](iter.md) | Range construction, int/float vector transforms, folds, prefix sums, normalization |
 | [`std.log`](log.md) | Leveled structured logging: text/JSON formats, stdout/file sinks, per-target filtering (`Logger`/`Fields`) |

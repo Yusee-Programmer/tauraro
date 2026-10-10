@@ -1,0 +1,251 @@
+# std.async.ratelimit — generic, HTTP-independent rate limiting primitives.
+#
+# Two classic algorithms, pick whichever fits:
+#
+#   TokenBucket   — a bucket holding up to `capacity` tokens, refilled
+#                   continuously at `refill_per_sec` tokens/second. Each
+#                   `try_acquire(n)` call spends `n` tokens if available.
+#                   Allows short bursts up to the full capacity, then
+#                   throttles to the steady refill rate.
+#
+#   SlidingWindow — allows at most `max_requests` within any trailing
+#                   `window_ms` window, tracked via the actual timestamps
+#                   of past accepted requests (not a naive fixed-window
+#                   counter that resets on a clock boundary, which lets
+#                   2x the limit through across a boundary straddle).
+#
+# Neither type knows anything about HTTP, requests, or watax — they are
+# pure scheduling/counting primitives usable for outbound API throttling,
+# background-job gating, or limiting access to any shared resource.
+#
+# THREAD-SAFETY: both types are plain reference-counted wrapper classes,
+# `implements Sendable, UnsafeSendable`, exactly like std.async.sched's
+# `Scheduler` — their mutable state (token count / timestamp list) is
+# guarded internally by a `Mutex[T]` field. Multiple threads/tasks may
+# share one `TokenBucket` / `SlidingWindow` instance and call its methods
+# concurrently.
+#
+# Lazy refill: TokenBucket does NOT run a background ticking thread to
+# accumulate tokens. Instead, every `try_acquire`/`available` call computes
+# "how many tokens would have accumulated since the last check" from
+# elapsed wall-clock time (std.sys.time.Clock.now_ms()), adds them (capped
+# at `capacity`), and records the new "last refill" timestamp. This is
+# simpler and cheaper than a dedicated thread per bucket, at the cost of
+# only updating the count when someone actually asks.
+#
+# ─── A real, previously-discovered compiler ARC bug — the workaround ──────
+#
+# See std.async.sched's module-header comment ("JobsBox mutex-access
+# helpers") for the full writeup. Summary: binding `self.<MutexField>.get()`
+# to a local inside a METHOD on `self`, using it, then `.set(...)`-ing it
+# back and letting the local go out of scope, over-releases the guarded
+# heap payload on the SECOND call to that method (100% reproducible, zero
+# concurrency required — a compiler bug in local-variable drop insertion
+# for `self.field.get()`-bound locals specifically).
+#
+# Workaround applied throughout this module: every mutex-touching operation
+# is a plain MODULE-LEVEL (free) function taking the `Mutex[T]` as an
+# explicit parameter (`_bucket_*(mbox: Mutex[BucketState], ...)` /
+# `_window_*(mbox: Mutex[WindowState], ...)`), never a method reaching
+# through `self.box.get()/.set()` directly. Each `TokenBucket`/
+# `SlidingWindow` method is just a one-line forwarder to its free-function
+# counterpart.
+#
+# Usage:
+#   from std.async.ratelimit import TokenBucket, SlidingWindow
+#
+#   mut tb = TokenBucket.init(10, 2.0)       # capacity 10, refill 2/sec
+#   if tb.try_acquire(1): ...                # non-blocking
+#   tb.acquire_blocking(1, 5000)             # block up to 5s for 1 token
+#   mut avail = tb.available()               # current token count (floor'd)
+#
+#   mut sw = SlidingWindow.init(100, 60000)  # 100 requests / rolling 60s
+#   if sw.try_acquire(): ...
+
+from std.async.send import Sendable, UnsafeSendable
+from std.async.mutex import Mutex
+from std.async.thread import Thread
+from std.core.vec import Vec
+from std.sys.time import Clock
+
+# How often acquire_blocking() polls while waiting, in milliseconds. Small
+# enough that a caller unblocks promptly once tokens/window-room free up;
+# large enough not to busy-spin a core.
+pub def RATELIMIT_POLL_MS() -> int: return 5
+
+# ─── TokenBucket ────────────────────────────────────────────────────────────
+
+# Internal mutable state, boxed so it fits inside a single Mutex[T] slot
+# (a Mutex[T] payload is one pointer-sized word; a reference to a heap
+# class satisfies that directly, same convention as std.async.sched.JobsBox).
+pub class BucketState:
+    pub tokens:         float   # current token count (fractional, floored on read)
+    pub last_refill_ms: int     # wall-clock time of the last refill computation
+
+extend BucketState:
+    pub def init(capacity: int) -> BucketState:
+        mut b = BucketState()
+        b.tokens         = capacity as float
+        b.last_refill_ms = Clock.now_ms()
+        return b
+
+# Apply lazy refill math in place: given elapsed time since last_refill_ms,
+# add `elapsed_sec * refill_per_sec` tokens, capped at `capacity`. Mutates
+# `b` and advances `last_refill_ms` to `now`.
+def _bucket_refill(b: BucketState, capacity: int, refill_per_sec: float, now: int):
+    mut elapsed_ms = now - b.last_refill_ms
+    if elapsed_ms <= 0:
+        b.last_refill_ms = now
+        return
+    mut elapsed_sec = (elapsed_ms as float) / 1000.0
+    mut added = elapsed_sec * refill_per_sec
+    mut cap_f = capacity as float
+    mut new_tokens = b.tokens + added
+    if new_tokens > cap_f: new_tokens = cap_f
+    b.tokens = new_tokens
+    b.last_refill_ms = now
+
+# Try to spend `n` tokens right now. Returns true (and deducts `n`) iff
+# at least `n` tokens are available after applying lazy refill.
+def _bucket_try_acquire(mbox: Mutex[BucketState], capacity: int, refill_per_sec: float, n: int) -> bool:
+    mut b = mbox.get()
+    _bucket_refill(b, capacity, refill_per_sec, Clock.now_ms())
+    mut ok = false
+    if b.tokens >= (n as float):
+        b.tokens = b.tokens - (n as float)
+        ok = true
+    mbox.set(b)
+    return ok
+
+# Current available token count (floored to an int), after applying lazy
+# refill — does not spend anything.
+def _bucket_available(mbox: Mutex[BucketState], capacity: int, refill_per_sec: float) -> int:
+    mut b = mbox.get()
+    _bucket_refill(b, capacity, refill_per_sec, Clock.now_ms())
+    mut avail = b.tokens as int
+    mbox.set(b)
+    return avail
+
+pub class TokenBucket implements Sendable, UnsafeSendable:
+    pub box:            Mutex[BucketState]
+    pub capacity:        int
+    pub refill_per_sec:  float
+
+extend TokenBucket:
+    # `capacity`: max tokens the bucket can hold (also the starting count,
+    # so a fresh bucket allows an immediate burst up to `capacity`).
+    # `refill_per_sec`: steady-state tokens added back per second.
+    pub def init(capacity: int, refill_per_sec: float) -> TokenBucket:
+        mut tb = TokenBucket()
+        tb.box            = Mutex.init(BucketState.init(capacity))
+        tb.capacity        = capacity
+        tb.refill_per_sec  = refill_per_sec
+        return tb
+
+    # Non-blocking: spend `n` tokens if available right now, else return
+    # false without waiting or side effects.
+    pub def try_acquire(self, n: int) -> bool:
+        return _bucket_try_acquire(self.box, self.capacity, self.refill_per_sec, n)
+
+    # Block (sleeping in small increments) until `n` tokens are available
+    # or `timeout_ms` has elapsed. Returns true if it acquired the tokens,
+    # false if it timed out first. Polling in small increments (rather than
+    # one long sleep) means `try_acquire` calls from OTHER callers sharing
+    # this same bucket are never starved by a single blocked waiter.
+    pub def acquire_blocking(self, n: int, timeout_ms: int) -> bool:
+        mut deadline = Clock.now_ms() + timeout_ms
+        while true:
+            if _bucket_try_acquire(self.box, self.capacity, self.refill_per_sec, n):
+                return true
+            if Clock.now_ms() >= deadline:
+                return false
+            Thread.sleep(RATELIMIT_POLL_MS())
+        return false
+
+    # Current token count (floored to an int), computed lazily — does not
+    # spend anything.
+    pub def available(self) -> int:
+        return _bucket_available(self.box, self.capacity, self.refill_per_sec)
+
+# ─── SlidingWindow ──────────────────────────────────────────────────────────
+
+# Internal mutable state: the actual timestamps (ms since epoch-ish,
+# whatever Clock.now_ms() returns) of requests accepted so far that may
+# still be inside the trailing window. Expired entries are pruned from the
+# front on every call, so the Vec never grows unbounded.
+pub class WindowState:
+    pub timestamps: Vec[int]
+
+extend WindowState:
+    pub def init() -> WindowState:
+        mut w = WindowState()
+        w.timestamps = Vec[int].init(16)
+        return w
+
+# Drop every timestamp older than `now - window_ms` from the front of the
+# list (timestamps are appended in increasing order, so expired entries are
+# always a prefix).
+def _window_prune(w: WindowState, window_ms: int, now: int):
+    mut cutoff = now - window_ms
+    while w.timestamps.len > 0 and w.timestamps.get(0) <= cutoff:
+        w.timestamps.remove(0)
+
+# Try to record one more request now. Returns true (and records `now`) iff
+# fewer than `max_requests` timestamps remain within the trailing
+# `window_ms` window after pruning expired ones.
+def _window_try_acquire(mbox: Mutex[WindowState], max_requests: int, window_ms: int) -> bool:
+    mut w = mbox.get()
+    mut now = Clock.now_ms()
+    _window_prune(w, window_ms, now)
+    mut ok = false
+    if w.timestamps.len < max_requests:
+        w.timestamps.push(now)
+        ok = true
+    mbox.set(w)
+    return ok
+
+# Number of requests currently counted inside the trailing window (after
+# pruning expired ones) — does not record anything.
+def _window_count(mbox: Mutex[WindowState], window_ms: int) -> int:
+    mut w = mbox.get()
+    mut now = Clock.now_ms()
+    _window_prune(w, window_ms, now)
+    mut n = w.timestamps.len
+    mbox.set(w)
+    return n
+
+pub class SlidingWindow implements Sendable, UnsafeSendable:
+    pub box:           Mutex[WindowState]
+    pub max_requests:  int
+    pub window_ms:      int
+
+extend SlidingWindow:
+    # Allow at most `max_requests` within any trailing `window_ms` window.
+    pub def init(max_requests: int, window_ms: int) -> SlidingWindow:
+        mut sw = SlidingWindow()
+        sw.box          = Mutex.init(WindowState.init())
+        sw.max_requests = max_requests
+        sw.window_ms    = window_ms
+        return sw
+
+    # Non-blocking: record one request now if the window has room, else
+    # return false without side effects.
+    pub def try_acquire(self) -> bool:
+        return _window_try_acquire(self.box, self.max_requests, self.window_ms)
+
+    # Block (sleeping in small increments) until the window has room or
+    # `timeout_ms` has elapsed. Returns true if a slot was acquired, false
+    # on timeout.
+    pub def acquire_blocking(self, timeout_ms: int) -> bool:
+        mut deadline = Clock.now_ms() + timeout_ms
+        while true:
+            if _window_try_acquire(self.box, self.max_requests, self.window_ms):
+                return true
+            if Clock.now_ms() >= deadline:
+                return false
+            Thread.sleep(RATELIMIT_POLL_MS())
+        return false
+
+    # Number of requests currently counted inside the trailing window.
+    pub def count(self) -> int:
+        return _window_count(self.box, self.window_ms)

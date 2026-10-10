@@ -1,0 +1,66 @@
+# std.i18n.plurals — locale-aware pluralization.
+#
+# Operates directly on a plain `int` count plus two caller-supplied strings
+# (singular/plural forms) — no wrapper type.
+#
+# Supported locales and their actual plural rule (CLDR "cardinal" category,
+# simplified to the two categories these words distinguish — "one" vs
+# "other"):
+#   "en"  (English)  — rule: count == 1 -> singular ("one"); every other
+#                        count, INCLUDING 0, -> plural ("other").
+#                        e.g. 0 items, 1 item, 2 items.
+#   "fr"  (French)   — rule: count == 0 OR count == 1 -> singular ("one");
+#                        every other count -> plural ("other").
+#                        e.g. 0 article, 1 article, 2 articles.
+#                        This is the genuine difference from English: French
+#                        treats zero as singular, English does not.
+# Any other/unrecognized locale tag falls back to the English rule.
+#
+# Scope note: this covers the "one"/"other" boundary only (the two forms the
+# `plural()` signature below actually has room for). Locales with more plural
+# categories than two (e.g. Arabic's six, Polish's four) are out of scope —
+# accurately modeling those needs more than a singular/plural string pair.
+
+from std.string.fmt import Fmt
+
+pub class Plural:
+    _dummy: int
+
+extend Plural:
+    # True when `count` should use the SINGULAR form under French's cardinal
+    # plural rule (0 and 1 are both singular; everything else is plural).
+    def _is_singular_fr(count: int) -> bool:
+        return count == 0 or count == 1
+
+    # True when `count` should use the SINGULAR form under English's cardinal
+    # plural rule (only 1 is singular; 0 and everything else is plural).
+    def _is_singular_en(count: int) -> bool:
+        return count == 1
+
+    # Pick singular or plural for `count` according to `locale`'s cardinal
+    # plural rule, and return "<count> <form>" (e.g. "1 item", "2 items",
+    # "0 articles" in English vs "0 article" in French).
+    pub def plural(count: int, singular: str, plural_form: str, locale: str) -> str:
+        mut use_singular = false
+        if locale == "fr":
+            use_singular = Plural._is_singular_fr(count)
+        else:
+            use_singular = Plural._is_singular_en(count)
+
+        mut form = plural_form
+        if use_singular: form = singular
+
+        return Fmt.int_to_str(count) + " " + form
+
+    # Like plural(), but returns only the chosen word form (no count prefix)
+    # — useful when the caller wants to place the number elsewhere in a
+    # sentence.
+    pub def form(count: int, singular: str, plural_form: str, locale: str) -> str:
+        mut use_singular = false
+        if locale == "fr":
+            use_singular = Plural._is_singular_fr(count)
+        else:
+            use_singular = Plural._is_singular_en(count)
+
+        if use_singular: return singular
+        return plural_form

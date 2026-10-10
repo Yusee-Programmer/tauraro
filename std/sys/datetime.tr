@@ -15,6 +15,12 @@ extern "C":
     def _tr_tm_yearday(ts: int) -> int
     def _tr_tm_make(year: int, month: int, day: int, hour: int, mi: int, sec: int) -> int
     def _tr_strftime(ts: int, fmt: str) -> str
+    # Timezone support: the SYSTEM's current local-zone offset/DST/abbreviation.
+    # Fixed-offset zones (TimeZone.fixed/.utc) are pure arithmetic and never
+    # call these. See runtime/tauraro_rt.h's "Timezone support" section.
+    def _tr_tz_utc_offset_seconds() -> int
+    def _tr_tz_is_dst() -> bool
+    def _tr_tz_name() -> str
 
 # ─── TimeDelta ────────────────────────────────────────────────────────────────
 
@@ -72,6 +78,89 @@ extend TimeDelta:
         return out
 
 
+# ─── TimeZone ─────────────────────────────────────────────────────────────────
+#
+# Scope: fixed UTC offsets (arithmetic only, works everywhere incl. bare-metal)
+# plus the host system's current local timezone (offset/DST/abbreviation, via
+# new runtime primitives — see runtime/tauraro_rt.h's "Timezone support"
+# section). This is NOT a full IANA tzdata implementation: there is no table
+# of named zones ("America/New_York") and no historical DST rule engine. For
+# a fixed offset there is no DST to compute; for the system zone, "now"'s
+# offset/DST state is read live from the OS each time .local() is called
+# (mirrors what the OS itself currently believes, same caveat as C's
+# localtime()).
+
+@value_type
+pub class TimeZone:
+    pub offset_seconds: int   # seconds EAST of UTC (negative = west)
+    pub is_dst:          bool
+    pub name:            str  # best-effort abbreviation, e.g. "UTC", "+05:30", "PST"
+
+extend TimeZone:
+    # The UTC timezone: zero offset, never DST.
+    pub def utc() -> TimeZone:
+        mut tz = TimeZone()
+        tz.offset_seconds = 0
+        tz.is_dst = false
+        tz.name = "UTC"
+        return tz
+
+    # An arbitrary fixed UTC offset with no DST. Pure arithmetic — no OS call,
+    # works identically on every target including bare-metal/freestanding.
+    # `offset_minutes` lets you express odd offsets like UTC+5:30 or UTC-9:45;
+    # pass 0 for whole-hour zones.
+    pub def fixed(offset_hours: int, offset_minutes: int) -> TimeZone:
+        mut tz = TimeZone()
+        mut total_min = offset_hours * 60 + offset_minutes
+        tz.offset_seconds = total_min * 60
+        tz.is_dst = false
+        tz.name = TimeZone._format_offset(tz.offset_seconds)
+        return tz
+
+    # The system's current local timezone: UTC offset, whether DST is
+    # currently in effect, and a best-effort zone abbreviation/name — all read
+    # live from the OS (new _tr_tz_* runtime primitives). On a bare/no-RTC
+    # target this degrades to a fixed UTC+0 zone, matching how _tr_timestamp
+    # itself degrades (see runtime/tauraro_rt.h).
+    pub def local() -> TimeZone:
+        mut tz = TimeZone()
+        tz.offset_seconds = _tr_tz_utc_offset_seconds()
+        tz.is_dst = _tr_tz_is_dst()
+        mut nm = _tr_tz_name()
+        if nm.len() == 0:
+            nm = TimeZone._format_offset(tz.offset_seconds)
+        tz.name = nm
+        return tz
+
+    # Format a seconds-east-of-UTC offset as "+HH:MM" / "-HH:MM".
+    def _format_offset(offset_seconds: int) -> str:
+        mut secs = offset_seconds
+        mut sign = "+"
+        if secs < 0:
+            sign = "-"
+            secs = 0 - secs
+        mut h = secs / 3600
+        mut mi = (secs - h * 3600) / 60
+        mut sb = StringBuilder.init(6)
+        sb.append(sign)
+        sb.append(Fmt.zero_pad(h, 2))
+        sb.append(":")
+        sb.append(Fmt.zero_pad(mi, 2))
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    # This zone's UTC offset as a TimeDelta (positive = east of UTC).
+    pub def utc_offset(self) -> TimeDelta:
+        return TimeDelta.from_seconds(self.offset_seconds)
+
+    pub def eq(self, other: TimeZone) -> bool:
+        return self.offset_seconds == other.offset_seconds
+
+    pub def to_string(self) -> str:
+        return self.name
+
+
 # ─── DateTime ─────────────────────────────────────────────────────────────────
 
 @value_type
@@ -82,10 +171,14 @@ pub class DateTime:
     pub hour:   int
     pub minute: int
     pub second: int
+    pub tz:     TimeZone
     pub _ts:    int
 
 extend DateTime:
-    # Construct a DateTime with explicit components.
+    # Construct a DateTime with explicit components, in the system's local
+    # timezone (matches the historical behavior of this constructor, which
+    # builds _ts via the system's mktime()). Use `.in_zone(...)` to construct
+    # explicit components against a specific TimeZone instead.
     pub def init(year: int, month: int, day: int, hour: int, minute: int, second: int) -> DateTime:
         mut dt = DateTime()
         dt.year   = year
@@ -94,18 +187,50 @@ extend DateTime:
         dt.hour   = hour
         dt.minute = minute
         dt.second = second
+        dt.tz     = TimeZone.local()
         dt._ts    = _tr_tm_make(year, month, day, hour, minute, second)
         return dt
 
-    # Current local date and time.
+    # Current local date and time (wall-clock fields in the system's local
+    # timezone, tagged with that zone).
     pub def now() -> DateTime:
         mut ts = _tr_timestamp()
         return DateTime._from_ts(ts)
 
-    # Build a DateTime from a Unix timestamp.
+    # Current date and time in UTC.
+    pub def utc_now() -> DateTime:
+        return DateTime._from_ts_in_zone(_tr_timestamp(), TimeZone.utc())
+
+    # Build a DateTime from a Unix timestamp, rendered in the system's local
+    # timezone (matches historical behavior: wall-clock fields via localtime).
     pub def from_timestamp(ts: int) -> DateTime:
         return DateTime._from_ts(ts)
 
+    # Build a DateTime from a Unix timestamp, rendered in UTC (tz defaults to
+    # UTC — avoids the silent-local-time footgun other constructors carry for
+    # historical-compatibility reasons).
+    pub def from_timestamp_utc(ts: int) -> DateTime:
+        return DateTime._from_ts_in_zone(ts, TimeZone.utc())
+
+    # Build a DateTime from explicit wall-clock components interpreted as
+    # already being in the given TimeZone (no OS call — pure arithmetic).
+    pub def in_zone(year: int, month: int, day: int, hour: int, minute: int, second: int, tz: TimeZone) -> DateTime:
+        mut dt = DateTime()
+        dt.year   = year
+        dt.month  = month
+        dt.day    = day
+        dt.hour   = hour
+        dt.minute = minute
+        dt.second = second
+        dt.tz     = tz
+        mut days = DateTime._days_from_civil(year, month, day)
+        mut secs_in_day = hour * 3600 + minute * 60 + second
+        dt._ts = days * 86400 + secs_in_day - tz.offset_seconds
+        return dt
+
+    # System-local rendering (unchanged historical behavior: uses the OS's
+    # own localtime() so it stays correct across any local DST transitions
+    # the OS itself knows about).
     def _from_ts(ts: int) -> DateTime:
         mut dt = DateTime()
         dt._ts    = ts
@@ -115,11 +240,76 @@ extend DateTime:
         dt.hour   = _tr_tm_hour(ts)
         dt.minute = _tr_tm_min(ts)
         dt.second = _tr_tm_sec(ts)
+        dt.tz     = TimeZone.local()
         return dt
 
-    # Unix timestamp (seconds since 1970-01-01 00:00:00 UTC).
+    # Render a Unix timestamp's wall-clock fields in an arbitrary TimeZone via
+    # pure arithmetic (no OS call — works for any fixed-offset zone, and for
+    # TimeZone.local() too since by this point its offset has already been
+    # read from the OS once).
+    def _from_ts_in_zone(ts: int, tz: TimeZone) -> DateTime:
+        mut dt = DateTime()
+        dt._ts = ts
+        dt.tz  = tz
+        mut local_secs = ts + tz.offset_seconds
+        mut days = local_secs / 86400
+        mut rem  = local_secs - days * 86400
+        if rem < 0:
+            rem = rem + 86400
+            days = days - 1
+        dt.hour   = rem / 3600
+        dt.minute = (rem - dt.hour * 3600) / 60
+        dt.second = rem - dt.hour * 3600 - dt.minute * 60
+        # civil_from_days: inverse of _days_from_civil (Howard Hinnant's
+        # well-known constant-time algorithm — proleptic Gregorian, no tables).
+        mut z = days + 719468
+        mut era = z
+        if z < 0: era = z - 146096
+        era = era / 146097
+        mut doe = z - era * 146097                                  # [0, 146096]
+        mut yoe = (doe - doe/1460 + doe/36524 - doe/146096) / 365    # [0, 399]
+        mut y = yoe + era * 400
+        mut doy = doe - (365 * yoe + yoe / 4 - yoe / 100)            # [0, 365]
+        mut mp = (5 * doy + 2) / 153                                  # [0, 11] (0=Mar .. 11=Feb)
+        dt.day = doy - (153 * mp + 2) / 5 + 1                        # [1, 31]
+        if mp < 10:
+            dt.month = mp + 3
+        else:
+            dt.month = mp - 9
+            y = y + 1
+        dt.year = y
+        return dt
+
+    # Days since the Unix epoch (1970-01-01) for a given proleptic-Gregorian
+    # civil date. Howard Hinnant's well-known constant-time algorithm — valid
+    # for all years representable in a 64-bit `int`, no lookup tables.
+    def _days_from_civil(year: int, month: int, day: int) -> int:
+        mut y = year
+        if month <= 2: y = y - 1
+        mut era = y
+        if y < 0: era = y - 399
+        era = era / 400
+        mut yoe = y - era * 400                                    # [0, 399]
+        mut m_adj = month - 3
+        if month <= 2: m_adj = month + 9                            # Mar=0 .. Feb=11
+        mut doy = (153 * m_adj + 2) / 5 + day - 1                   # [0, 365]
+        mut doe = yoe * 365 + yoe / 4 - yoe / 100 + doy              # [0, 146096]
+        return era * 146097 + doe - 719468
+
+    # Unix timestamp (seconds since 1970-01-01 00:00:00 UTC) — invariant
+    # across timezone: the same instant regardless of which zone its
+    # wall-clock fields are expressed in.
     pub def timestamp(self) -> int:
         return self._ts
+
+    # Convert to the same instant rendered in a different TimeZone (wall-clock
+    # fields change; the underlying instant/timestamp does not).
+    pub def to_zone(self, tz: TimeZone) -> DateTime:
+        return DateTime._from_ts_in_zone(self._ts, tz)
+
+    # This DateTime's associated timezone's UTC offset.
+    pub def utc_offset(self) -> TimeDelta:
+        return self.tz.utc_offset()
 
     # 0=Monday … 6=Sunday (same convention as Python).
     pub def weekday(self) -> int:
@@ -180,13 +370,13 @@ extend DateTime:
         if (y - (y / 4) * 4) == 0: return true
         return false
 
-    # Return a new DateTime offset by the given TimeDelta.
+    # Return a new DateTime offset by the given TimeDelta (keeps self's zone).
     pub def add(self, delta: TimeDelta) -> DateTime:
-        return DateTime._from_ts(self._ts + delta.total_seconds())
+        return DateTime._from_ts_in_zone(self._ts + delta.total_seconds(), self.tz)
 
-    # Return a new DateTime moved back by the given TimeDelta.
+    # Return a new DateTime moved back by the given TimeDelta (keeps self's zone).
     pub def sub(self, delta: TimeDelta) -> DateTime:
-        return DateTime._from_ts(self._ts - delta.total_seconds())
+        return DateTime._from_ts_in_zone(self._ts - delta.total_seconds(), self.tz)
 
     # Difference between two DateTimes as a TimeDelta.
     pub def diff(self, other: DateTime) -> TimeDelta:
@@ -246,6 +436,54 @@ extend DateTime:
         sb.append(Fmt.zero_pad(self.minute, 2))
         sb.append(":")
         sb.append(Fmt.zero_pad(self.second, 2))
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    # Human-friendly relative-time string compared against the current real
+    # moment, e.g. "3 hours ago", "in 2 days", "just now". Falls back to
+    # `to_string()` beyond 30 days in either direction (relative phrasing
+    # stops being useful at that range). Timezone-independent: compares
+    # absolute instants (self._ts vs "now"), not wall-clock fields.
+    pub def format_relative(self) -> str:
+        mut now = _tr_timestamp()
+        mut delta = self._ts - now           # positive = future, negative = past
+        mut future = delta >= 0
+        mut mag = delta
+        if not future: mag = 0 - delta
+
+        if mag < 60:
+            return "just now"
+
+        if mag < 3600:
+            mut n = mag / 60
+            return DateTime._relative_phrase(n, "minute", future)
+
+        if mag < 86400:
+            mut n = mag / 3600
+            return DateTime._relative_phrase(n, "hour", future)
+
+        if mag < 2592000:                     # 30 days
+            mut n = mag / 86400
+            return DateTime._relative_phrase(n, "day", future)
+
+        return self.to_string()
+
+    # "N unit(s) ago" / "in N unit(s)", with correct singular/plural.
+    def _relative_phrase(n: int, unit: str, future: bool) -> str:
+        mut sb = StringBuilder.init(24)
+        if future:
+            sb.append("in ")
+            sb.append(Fmt.int_to_str(n))
+            sb.append(" ")
+            sb.append(unit)
+            if n != 1: sb.append("s")
+        else:
+            sb.append(Fmt.int_to_str(n))
+            sb.append(" ")
+            sb.append(unit)
+            if n != 1: sb.append("s")
+            sb.append(" ago")
         mut out = sb.to_owned()
         sb.free()
         return out

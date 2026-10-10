@@ -1,0 +1,517 @@
+# std.async.sched — Scheduler: recurring intervals, one-shot delays, and
+# standard 5-field cron expressions, orchestrated on top of the existing
+# async primitives.
+#
+# This module does NOT reimplement timing or threading:
+#   - `Thread.spawn` (std.async.thread) runs the dispatch loop on its own
+#     OS thread, the same convention std.io.event_loop's "run until stop()"
+#     pattern follows.
+#   - Interval math (next-fire computation) and the actual tick loop are
+#     plain wall-clock polling against std.sys.time.Clock.now_ms(), checked
+#     every SCHED_TICK_MS (10ms) — fine-grained enough for sub-second test
+#     intervals without busy-spinning a whole CPU core.
+#   - Cron field evaluation reads wall-clock minute/hour/day/month/weekday
+#     from std.sys.datetime.DateTime.now() (already wraps the C runtime's
+#     localtime()-backed tm fields) — no bespoke date math here either.
+#
+# Usage:
+#   from std.async.sched import Scheduler
+#
+#   mut sched = Scheduler.init()
+#   mut h1 = sched.every(1000, tick_fn)             # every 1s
+#   mut h2 = sched.after(5000, once_fn)              # once, after 5s
+#   mut h3 = sched.cron("*/5 * * * *", sweep_fn)?    # every 5 minutes
+#   sched.run()             # starts the dispatch thread
+#   ...
+#   sched.cancel(h1)        # stop future firings of h1
+#   sched.stop()            # stop the dispatcher and join its thread
+#
+# Overlap protection (bonus): `.every(ms, task, true)` marks the job
+# `skip_if_running` — if the previous invocation hasn't returned yet when
+# the next tick is due, that tick is silently skipped (not queued), so a
+# slow job never piles up overlapping invocations of itself. Other jobs on
+# the scheduler are unaffected (each job tracks its OWN in-flight flag).
+#
+# THREAD-SAFETY NOTE: `Scheduler` follows the same pattern as
+# std.async.channel.Channel / std.async.waitgroup.WaitGroup — a plain
+# reference-counted wrapper class, `implements Sendable, UnsafeSendable`,
+# whose mutable state (the job list, the running flag) is guarded
+# internally by Mutex[int]/Atomic[int]. As with those types, the caller
+# must keep its `Scheduler` variable alive for as long as the dispatch
+# thread may still be running (i.e. call `.stop()` before letting it go
+# out of scope) — the dispatch thread holds a raw, unretained reference.
+
+from std.async.send import Sendable, UnsafeSendable
+from std.async.thread import Thread, Atomic
+from std.async.mutex import Mutex
+from std.core.vec import Vec
+from std.sys.time import Clock
+from std.sys.datetime import DateTime
+
+# How often the dispatch loop wakes up to check for due jobs. Small enough
+# that interval/delay tests using tens-of-milliseconds granularity observe
+# accurate fire counts; large enough not to busy-spin a core.
+pub def SCHED_TICK_MS() -> int: return 10
+
+# Job kinds.
+pub def KIND_EVERY() -> int: return 0
+pub def KIND_AFTER() -> int: return 1
+pub def KIND_CRON()  -> int: return 2
+
+# A single cron field's parsed match set: either "match everything" (star),
+# or an explicit sorted-ish list of acceptable values (numbers, expanded
+# from ranges/steps/comma-lists at registration time — matching is then a
+# flat linear scan, and a malformed field was already rejected up front).
+pub class CronField:
+    pub is_star: bool
+    pub values:  Vec[int]
+
+extend CronField:
+    pub def new_star() -> CronField:
+        mut f = CronField()
+        f.is_star = true
+        f.values  = Vec[int].init(1)
+        return f
+
+    pub def new_values() -> CronField:
+        mut f = CronField()
+        f.is_star = false
+        f.values  = Vec[int].init(8)
+        return f
+
+    pub def matches(self, v: int) -> bool:
+        if self.is_star: return true
+        mut i = 0
+        while i < self.values.len:
+            if self.values.get(i) == v: return true
+            i = i + 1
+        return false
+
+# One scheduled job.
+pub class Job:
+    pub id:              int
+    pub kind:             int
+    pub cancelled:        bool
+    pub interval_ms:      int     # KIND_EVERY
+    pub next_run_ms:      int     # KIND_EVERY / KIND_AFTER: Clock.now_ms() deadline
+    pub fired:            bool    # KIND_AFTER: already fired once
+    pub task:              def() -> void
+    pub skip_if_running:  bool
+    pub running:           Atomic[int]   # 0/1 in-flight guard (overlap protection)
+    # KIND_CRON fields
+    pub cron_min:   CronField
+    pub cron_hour:  CronField
+    pub cron_dom:   CronField
+    pub cron_month: CronField
+    pub cron_dow:   CronField
+    pub cron_last_min: int   # minute-of-epoch last fired on, -1 = never
+                              # (prevents re-firing twice inside the same minute)
+
+extend Job:
+    pub def free(self):
+        self.running.free()
+
+# ─── Cron field parsing ─────────────────────────────────────────────────────
+#
+# Standard 5-field cron: minute hour day-of-month month day-of-week.
+# Each field supports:
+#   *          any value
+#   N          exact value
+#   N,M,...    a comma list of exact values
+#   N-M        an inclusive range
+#   */S        every S'th value in the field's full range (step)
+#   N-M/S      every S'th value within the inclusive range N..M
+# Comma-separated combinations of the above (e.g. "1-5,10,*/15") are
+# supported: the field is split on ',' and each piece parsed independently,
+# unioning their matched values.
+#
+# Anything else (garbage text, out-of-range numbers, empty fields, wrong
+# field count) is a hard parse error raised at registration time — a
+# malformed expression never silently becomes a no-op or a wrong-but-valid
+# schedule.
+
+def _cf_is_digit(c: char) -> bool:
+    mut code = ord(c)
+    return code >= 48 and code <= 57   # '0'..'9'
+
+def _cf_parse_uint(s: str) throws str -> int:
+    if len(s) == 0:
+        raise("cron: expected a number, got empty field")
+    mut i = 0
+    while i < len(s):
+        if not _cf_is_digit(s[i + 0]):
+            raise(f"cron: '{s}' is not a valid number")
+        i += 1
+    return s.parse_int()
+
+# Parse one comma-piece ("*", "N", "N-M", "*/S", "N-M/S") into the
+# [lo, hi, step] it denotes, expanding against (field_lo, field_hi) for the
+# bare "*/S" case. Appends every matching value into `out` (dedup not
+# required — CronField.matches is a plain linear scan).
+def _cf_parse_piece(piece: str, field_lo: int, field_hi: int, out: Vec[int]) throws str:
+    if len(piece) == 0:
+        raise("cron: empty field component")
+
+    mut base = piece
+    mut step = 1
+    mut has_step = false
+    if piece.contains("/"):
+        mut sparts: List[str] = piece.split("/")
+        if len(sparts) != 2:
+            raise(f"cron: malformed step expression '{piece}'")
+        base = sparts[0 + 0]
+        step = _cf_parse_uint(sparts[1 + 0])?
+        has_step = true
+        if step <= 0:
+            raise(f"cron: step must be positive in '{piece}'")
+
+    mut lo = field_lo
+    mut hi = field_hi
+    if base == "*":
+        if not has_step:
+            # Bare "*" piece (no step): every value in range.
+            step = 1
+    elif base.contains("-"):
+        mut rparts: List[str] = base.split("-")
+        if len(rparts) != 2:
+            raise(f"cron: malformed range '{base}'")
+        lo = _cf_parse_uint(rparts[0 + 0])?
+        hi = _cf_parse_uint(rparts[1 + 0])?
+        if lo < field_lo or hi > field_hi or lo > hi:
+            raise(f"cron: range '{base}' out of bounds [{field_lo}..{field_hi}]")
+    else:
+        mut v = _cf_parse_uint(base)?
+        if v < field_lo or v > field_hi:
+            raise(f"cron: value {v} out of bounds [{field_lo}..{field_hi}]")
+        lo = v
+        hi = v
+        if not has_step:
+            step = 1
+
+    mut cur = lo
+    while cur <= hi:
+        out.push(cur)
+        cur = cur + step
+
+# Parse one full cron field (possibly a comma list of pieces) over
+# [field_lo, field_hi]. Returns a CronField; "*" alone is recorded as the
+# fast-path is_star so matches() short-circuits without a scan.
+def _cf_parse_field(field: str, field_lo: int, field_hi: int) throws str -> CronField:
+    if len(field) == 0:
+        raise("cron: empty field")
+    if field == "*":
+        return CronField.new_star()
+
+    mut cf = CronField.new_values()
+    mut pieces: List[str] = field.split(",")
+    mut i = 0
+    while i < len(pieces):
+        _cf_parse_piece(pieces[i + 0], field_lo, field_hi, cf.values)?
+        i += 1
+    if cf.values.len == 0:
+        raise(f"cron: field '{field}' matched no values")
+    return cf
+
+# Parse a full 5-field cron expression ("min hour dom month dow").
+# Fields are whitespace-separated; exactly 5 are required.
+def parse_cron(expr: str) throws str -> Job:
+    mut trimmed = expr.trim()
+    mut raw_parts: List[str] = trimmed.split(" ")
+    # Collapse accidental multi-spaces (split on " " can yield empty pieces).
+    mut parts: List[str] = []
+    mut pi = 0
+    while pi < len(raw_parts):
+        if len(raw_parts[pi + 0]) > 0:
+            parts.append(raw_parts[pi + 0])
+        pi += 1
+
+    if len(parts) != 5:
+        raise(f"cron: expected 5 fields (minute hour day-of-month month day-of-week), got {len(parts)} in '{expr}'")
+
+    # NOTE: each parsed field is bound to a local temp before being stored
+    # into the Job field, not assigned directly (`j.cron_min = f(...)?`) --
+    # direct field-assignment from a call-expression RHS (`throws`-call
+    # with `?`, same shape as the Thread.spawn(...) field-assignment issue
+    # noted in Scheduler.run() below) was observed to mis-codegen a pointer
+    # type here (`CronField**` vs `CronField*`). Binding through `mut`
+    # locals first is a confirmed-working pattern throughout this file.
+    mut cf_min: CronField   = _cf_parse_field(parts[0 + 0], 0, 59)?
+    mut cf_hour: CronField  = _cf_parse_field(parts[1 + 0], 0, 23)?
+    mut cf_dom: CronField   = _cf_parse_field(parts[2 + 0], 1, 31)?
+    mut cf_month: CronField = _cf_parse_field(parts[3 + 0], 1, 12)?
+    # day-of-week: 0-7 where both 0 and 7 mean Sunday (standard cron).
+    mut cf_dow: CronField   = _cf_parse_field(parts[4 + 0], 0, 7)?
+
+    mut j = Job()
+    j.kind          = KIND_CRON()
+    j.cron_min      = cf_min
+    j.cron_hour     = cf_hour
+    j.cron_dom      = cf_dom
+    j.cron_month    = cf_month
+    j.cron_dow      = cf_dow
+    j.cron_last_min = -1
+    return j
+
+# True if `dt` (current wall-clock moment) matches every field of the job's
+# cron spec. day-of-week uses DateTime.isoweekday() (0=Sunday..6=Saturday,
+# C tm_wday convention) and additionally accepts 7 as Sunday.
+def _cron_matches(j: Job, dt: DateTime) -> bool:
+    if not j.cron_min.matches(dt.minute): return false
+    if not j.cron_hour.matches(dt.hour): return false
+    if not j.cron_dom.matches(dt.day): return false
+    if not j.cron_month.matches(dt.month): return false
+    mut dow = dt.isoweekday()
+    if j.cron_dow.matches(dow): return true
+    if dow == 0 and j.cron_dow.matches(7): return true
+    return false
+
+# ─── JobsBox ─────────────────────────────────────────────────────────────────
+#
+# Scheduler's mutable job table, boxed behind a single heap class so it can
+# live INSIDE a Mutex[JobsBox] slot. Mutex[T]'s box stores its payload as one
+# pointer-sized word (see std.async.mutex) -- a raw Vec[Job] (a 3-word
+# data/len/capacity struct) does not fit there directly, but a *reference* to
+# a heap class does. Wrapping jobs/next_id in JobsBox and locking the whole
+# box is also simpler than a separate lock + separately-mutated Vec: every
+# access to the job table necessarily goes through Mutex.get()/.set(), so
+# there is no way to touch `jobs` without holding the lock.
+pub class JobsBox:
+    pub jobs:    Vec[Job]
+    pub next_id: int
+
+extend JobsBox:
+    pub def init() -> JobsBox:
+        mut b = JobsBox()
+        b.jobs    = Vec[Job].init(8)
+        b.next_id = 1
+        return b
+
+# ─── JobsBox mutex-access helpers ──────────────────────────────────────────
+#
+# These are plain module-level functions taking the `Mutex[JobsBox]` as an
+# explicit PARAMETER, rather than methods on `Scheduler` that reach through
+# `self.box.get()/.set()` directly. This is NOT a style preference: a
+# `self.<MutexField>.get()` call, bound to a local that is used, handed back
+# via `.set(...)`, and then goes out of scope at the end of a METHOD body,
+# leaks an extra release on the guarded payload on each call beyond the
+# first — confirmed via an isolated repro (identical logic as a bare local
+# `Mutex[T]` or as a value passed into a plain function never leaks; the
+# SAME get/mutate/set sequence written as `self.box.get()` inside a
+# `Scheduler` method corrupts the heap on the second such call, every time).
+# Tracked as a pre-existing compiler gap (ARC auto-drop over-releasing a
+# `self.field.get()`-bound local), worked around here by routing all
+# `JobsBox` access through these free functions instead — out of scope for
+# this module to fix in the compiler itself.
+
+# Allocate the next id, append `j`, and return its assigned id.
+def _jobsbox_push(mbox: Mutex[JobsBox], j: Job) -> int:
+    mut b = mbox.get()
+    mut id = b.next_id
+    b.next_id = id + 1
+    j.id = id
+    b.jobs.push(j)
+    mbox.set(b)
+    return id
+
+# Current job count (a point-in-time snapshot; see tick()'s own re-check).
+def _jobsbox_count(mbox: Mutex[JobsBox]) -> int:
+    mut b = mbox.get()
+    mut n = b.jobs.len
+    mbox.set(b)
+    return n
+
+# The job at index `i`, or a cancelled dummy if `i` is now out of range
+# (the table may have been concurrently truncated — tick() treats a
+# cancelled job as "skip and continue", never a crash).
+def _jobsbox_get_at(mbox: Mutex[JobsBox], i: int) -> Job:
+    mut b = mbox.get()
+    mut out = Job()
+    if i < b.jobs.len:
+        out = b.jobs.get(i)
+    else:
+        out.cancelled = true
+        out.kind = -1
+    mbox.set(b)
+    return out
+
+# Check-and-cancel for a single job, called with the Vec element passed
+# DIRECTLY as an argument (never bound to a reassigned loop-local) — see the
+# module-header note: a loop-local repeatedly rebound to a borrow-returning
+# accessor's result (`mut j = b.jobs.get(i)`, each iteration implicitly
+# dropping the previous `j`) over-releases the SAME underlying Job on the
+# second such call, even with zero concurrency involved. Passing the
+# accessor's result straight into a parameter sidesteps it, exactly like
+# the `self.box.get()` fix above.
+def _job_try_cancel(j: Job, handle: int) -> bool:
+    if j.id == handle and not j.cancelled:
+        j.cancelled = true
+        return true
+    return false
+
+def _jobsbox_cancel(mbox: Mutex[JobsBox], handle: int) -> bool:
+    mut b = mbox.get()
+    mut found = false
+    mut i = 0
+    while i < b.jobs.len:
+        if _job_try_cancel(b.jobs.get(i), handle):
+            found = true
+        i = i + 1
+    mbox.set(b)
+    return found
+
+# ─── Scheduler ───────────────────────────────────────────────────────────────
+
+pub class Scheduler implements Sendable, UnsafeSendable:
+    pub box:        Mutex[JobsBox]  # guards the job table AND next_id together
+    pub running:    Atomic[int]     # 1 while the dispatch loop should keep going
+    pub started:    Atomic[int]     # 1 once run() has spawned the dispatch thread
+    pub thread:     Thread
+
+extend Scheduler:
+    pub def init() -> Scheduler:
+        mut s = Scheduler()
+        s.box     = Mutex.init(JobsBox.init())
+        s.running = Atomic.new(0)
+        s.started = Atomic.new(0)
+        return s
+
+    # Run `task` repeatedly every `interval_ms`. `skip_if_running` (default
+    # false) enables overlap protection: if the previous invocation of THIS
+    # handle hasn't finished when the next tick comes due, that tick is
+    # skipped rather than queued or run concurrently.
+    pub def every(self, interval_ms: int, task: def() -> void, skip_if_running: bool) -> int:
+        mut j = Job()
+        j.kind            = KIND_EVERY()
+        j.cancelled       = false
+        j.interval_ms     = interval_ms
+        j.next_run_ms     = Clock.now_ms() + interval_ms
+        j.fired           = false
+        j.task            = task
+        j.skip_if_running = skip_if_running
+        j.running         = Atomic.new(0)
+        j.cron_last_min   = -1
+        return _jobsbox_push(self.box, j)
+
+    # Run `task` once, `delay_ms` from now.
+    pub def after(self, delay_ms: int, task: def() -> void) -> int:
+        mut j = Job()
+        j.kind            = KIND_AFTER()
+        j.cancelled       = false
+        j.interval_ms     = 0
+        j.next_run_ms     = Clock.now_ms() + delay_ms
+        j.fired           = false
+        j.task            = task
+        j.skip_if_running = false
+        j.running         = Atomic.new(0)
+        j.cron_last_min   = -1
+        return _jobsbox_push(self.box, j)
+
+    # Run `task` on the standard 5-field cron schedule `expr`. Raises a
+    # clear error (never silently misinterprets) if `expr` is not a valid
+    # 5-field cron expression.
+    pub def cron(self, expr: str, task: def() -> void) throws str -> int:
+        mut j = parse_cron(expr)?
+        j.cancelled       = false
+        j.task            = task
+        j.skip_if_running = false
+        j.running         = Atomic.new(0)
+        return _jobsbox_push(self.box, j)
+
+    # Cancel a job by handle. Returns true if it was found (and not already
+    # cancelled); false otherwise. Safe to call while the dispatcher runs.
+    pub def cancel(self, handle: int) -> bool:
+        return _jobsbox_cancel(self.box, handle)
+
+    # Number of jobs still registered (cancelled jobs are pruned lazily by
+    # the dispatch loop, so this may briefly include just-cancelled ones).
+    pub def job_count(self) -> int:
+        return _jobsbox_count(self.box)
+
+    # One dispatch pass: fire any due, non-cancelled job. Called in a tight
+    # loop by the background dispatch thread (see run()), but also callable
+    # directly/synchronously (e.g. from a test driving the loop manually
+    # without a second thread).
+    pub def tick(self):
+        mut now = Clock.now_ms()
+        mut dt_checked = false
+        mut dt = DateTime.now()
+        mut n = _jobsbox_count(self.box)
+
+        mut i = 0
+        while i < n:
+            mut j = _jobsbox_get_at(self.box, i)
+
+            if j.cancelled:
+                i = i + 1
+                continue
+
+            if j.kind == KIND_EVERY():
+                if now >= j.next_run_ms:
+                    # Schedule the NEXT tick first so a slow task doesn't
+                    # skew the cadence measured from "now" rather than from
+                    # the original deadline.
+                    j.next_run_ms = j.next_run_ms + j.interval_ms
+                    if j.next_run_ms <= now:
+                        j.next_run_ms = now + j.interval_ms
+                    self._fire(j)
+            elif j.kind == KIND_AFTER():
+                if not j.fired and now >= j.next_run_ms:
+                    j.fired = true
+                    j.cancelled = true   # one-shot: never fires again
+                    self._fire(j)
+            elif j.kind == KIND_CRON():
+                if not dt_checked:
+                    dt = DateTime.now()
+                    dt_checked = true
+                mut cur_min = dt.year * 100000000 + dt.month * 1000000 + dt.day * 10000 + dt.hour * 100 + dt.minute
+                if cur_min != j.cron_last_min and _cron_matches(j, dt):
+                    j.cron_last_min = cur_min
+                    self._fire(j)
+            i = i + 1
+
+    # Invoke a job's task, honouring overlap protection.
+    def _fire(self, j: Job):
+        if j.skip_if_running:
+            if not j.running.cas(0, 1):
+                return   # previous invocation still in flight: skip this tick
+            j.task()
+            j.running.store(0)
+        else:
+            j.task()
+
+    # Start the dispatch loop on a background OS thread. Idempotent: a
+    # second call while already running is a no-op.
+    pub def run(self):
+        if not self.started.cas(0, 1):
+            return
+        self.running.store(1)
+        # NOTE: assigned via a local temp, not `self.thread = Thread.spawn(...)`
+        # directly -- a direct field-assignment target currently makes the
+        # compiler's spawn-wrapper prescan miss this call (confirmed via an
+        # isolated repro: identical RHS assigned to a `mut t: Thread` local
+        # first works; assigned straight to `self.thread` does not emit the
+        # required `_tr_spawn_wrap_*` function, an undeclared-identifier
+        # compile error). Tracked as a pre-existing compiler gap, worked
+        # around here rather than fixed (out of scope for this module).
+        mut t: Thread = Thread.spawn(_sched_dispatch_loop, self)
+        self.thread = t
+
+    # Signal the dispatch thread to stop and join it. Blocks until the
+    # thread has actually exited. Safe to call even if run() was never
+    # called (no-op in that case).
+    pub def stop(self):
+        if self.started.load() == 0: return
+        self.running.store(0)
+        self.thread.join()
+
+    # True while the dispatch thread is actively running.
+    pub def is_running(self) -> bool:
+        return self.running.load() != 0
+
+# Top-level worker entry point for Thread.spawn — polls Scheduler.tick()
+# every SCHED_TICK_MS until .stop() flips `running` to 0. Mirrors the
+# "poll loop with a running flag" shape of std.io.event_loop.EventLoop.run.
+def _sched_dispatch_loop(s: Scheduler) -> void:
+    while s.running.load() != 0:
+        s.tick()
+        Thread.sleep(SCHED_TICK_MS())

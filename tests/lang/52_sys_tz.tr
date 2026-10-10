@@ -1,0 +1,120 @@
+# tests/lang/52_sys_tz.tr - std.sys.datetime: TimeZone + DateTime timezone
+# awareness (TimeZone.utc/.fixed/.local, DateTime.to_zone/.utc_offset,
+# DateTime.format_relative).
+#
+# Scope note: this is fixed-UTC-offset + system-local timezone support, NOT a
+# full IANA tzdata implementation -- there is no table of named zones (e.g.
+# "America/New_York") and no historical DST rule engine. TimeZone.local()
+# reads the live system offset/DST/abbreviation from the OS.
+
+from std.test import TestRunner
+from std.sys.datetime import TimeZone, TimeDelta, DateTime
+
+def main():
+    mut t = TestRunner.init("52_sys_tz")
+
+    t.section("TimeZone.utc — zero offset, no DST")
+    mut utc = TimeZone.utc()
+    t.assert_eq_int(utc.offset_seconds, 0, "UTC offset is 0 seconds")
+    t.assert_false(utc.is_dst, "UTC never observes DST")
+    t.assert_eq_str(utc.name, "UTC", "UTC zone name")
+    t.assert_eq_int(utc.utc_offset().total_seconds(), 0, "UTC.utc_offset() is zero TimeDelta")
+
+    t.section("TimeZone.fixed — whole-hour offset")
+    mut plus5 = TimeZone.fixed(5, 0)
+    t.assert_eq_int(plus5.offset_seconds, 18000, "UTC+5:00 is 18000 seconds east")
+    t.assert_eq_str(plus5.name, "+05:00", "formatted name for +5:00")
+
+    mut minus8 = TimeZone.fixed(-8, 0)
+    t.assert_eq_int(minus8.offset_seconds, -28800, "UTC-8:00 is -28800 seconds")
+    t.assert_eq_str(minus8.name, "-08:00", "formatted name for -8:00")
+
+    t.section("TimeZone.fixed — odd (non-whole-hour) offset, catches minute-handling bugs")
+    mut ist = TimeZone.fixed(5, 30)
+    t.assert_eq_int(ist.offset_seconds, 19800, "UTC+5:30 is 19800 seconds (5*3600+30*60)")
+    t.assert_eq_str(ist.name, "+05:30", "formatted name for +5:30")
+
+    mut odd_neg = TimeZone.fixed(-9, -45)
+    t.assert_eq_int(odd_neg.offset_seconds, -35100, "UTC-9:45 is -35100 seconds")
+    t.assert_eq_str(odd_neg.name, "-09:45", "formatted name for -9:45")
+
+    t.section("TimeZone.local — plausible system offset, never crashes")
+    mut local = TimeZone.local()
+    # Real-world UTC offsets range from -12:00 to +14:00; give generous slack
+    # (-14h..+14h) since we don't know what machine runs this test.
+    t.assert_in_range(local.offset_seconds, 0 - 14 * 3600, 14 * 3600, "system local offset is in a sane range")
+    t.assert_true(local.name.len() > 0, "local zone has a non-empty name/abbreviation")
+
+    t.section("DateTime.utc_now / to_zone — UTC arithmetic")
+    mut now_utc = DateTime.utc_now()
+    t.assert_eq_int(now_utc.tz.offset_seconds, 0, "utc_now() is tagged UTC")
+    t.assert_eq_int(now_utc.utc_offset().total_seconds(), 0, "utc_now().utc_offset() is zero")
+
+    t.section("DateTime.in_zone — fixed offset, exact wall-clock construction")
+    mut dt_ist = DateTime.in_zone(2026, 6, 15, 18, 30, 0, ist)
+    t.assert_eq_int(dt_ist.year, 2026, "in_zone year")
+    t.assert_eq_int(dt_ist.month, 6, "in_zone month")
+    t.assert_eq_int(dt_ist.day, 15, "in_zone day")
+    t.assert_eq_int(dt_ist.hour, 18, "in_zone hour")
+    t.assert_eq_int(dt_ist.minute, 30, "in_zone minute")
+    # 2026-06-15 18:30:00 +05:30 == 2026-06-15 13:00:00 UTC.
+    mut dt_ist_as_utc = dt_ist.to_zone(utc)
+    t.assert_eq_int(dt_ist_as_utc.year, 2026, "converted-to-UTC year unchanged")
+    t.assert_eq_int(dt_ist_as_utc.month, 6, "converted-to-UTC month unchanged")
+    t.assert_eq_int(dt_ist_as_utc.day, 15, "converted-to-UTC day unchanged (no day rollover here)")
+    t.assert_eq_int(dt_ist_as_utc.hour, 13, "converted-to-UTC hour: 18:30 +05:30 == 13:00 UTC")
+    t.assert_eq_int(dt_ist_as_utc.minute, 0, "converted-to-UTC minute: the :30 is absorbed by the :30 offset")
+
+    t.section("DateTime.to_zone — day-boundary rollover")
+    mut late_utc = DateTime.in_zone(2026, 1, 1, 23, 0, 0, utc)
+    mut late_plus5 = late_utc.to_zone(plus5)
+    t.assert_eq_int(late_plus5.day, 2, "2026-01-01 23:00 UTC + 5h rolls over to Jan 2 local")
+    t.assert_eq_int(late_plus5.hour, 4, "rolled-over hour is 04:00")
+    t.assert_eq_int(late_plus5.month, 1, "month unchanged by the rollover")
+    t.assert_eq_int(late_plus5.year, 2026, "year unchanged by the rollover")
+
+    t.section("DateTime.to_zone — round trip UTC -> fixed offset -> UTC returns to the original instant")
+    mut original = DateTime.in_zone(2026, 3, 10, 7, 45, 22, utc)
+    mut via_odd_zone = original.to_zone(odd_neg)
+    mut back_to_utc = via_odd_zone.to_zone(utc)
+    t.assert_eq_int(back_to_utc.timestamp(), original.timestamp(), "round trip preserves the underlying instant")
+    t.assert_eq_int(back_to_utc.year, original.year, "round trip year matches")
+    t.assert_eq_int(back_to_utc.month, original.month, "round trip month matches")
+    t.assert_eq_int(back_to_utc.day, original.day, "round trip day matches")
+    t.assert_eq_int(back_to_utc.hour, original.hour, "round trip hour matches")
+    t.assert_eq_int(back_to_utc.minute, original.minute, "round trip minute matches")
+    t.assert_eq_int(back_to_utc.second, original.second, "round trip second matches")
+
+    t.section("DateTime.to_zone — timestamp is invariant across zone changes")
+    mut a = DateTime.in_zone(2026, 7, 4, 12, 0, 0, utc)
+    mut b = a.to_zone(ist)
+    mut c = a.to_zone(minus8)
+    t.assert_eq_int(a.timestamp(), b.timestamp(), "same instant: UTC vs IST view")
+    t.assert_eq_int(a.timestamp(), c.timestamp(), "same instant: UTC vs UTC-8 view")
+
+    t.section("DateTime.format_relative — thresholds")
+    mut now = DateTime.utc_now()
+    t.assert_eq_str(now.format_relative(), "just now", "within a few seconds of now")
+
+    mut five_min_ago = now.sub(TimeDelta.from_minutes(5))
+    t.assert_eq_str(five_min_ago.format_relative(), "5 minutes ago", "5 minutes in the past")
+
+    mut in_ten_min = now.add(TimeDelta.from_minutes(10))
+    t.assert_eq_str(in_ten_min.format_relative(), "in 10 minutes", "10 minutes in the future")
+
+    mut one_min_ago = now.sub(TimeDelta.from_minutes(1))
+    t.assert_eq_str(one_min_ago.format_relative(), "1 minute ago", "singular minute, past")
+
+    mut three_hours_ago = now.sub(TimeDelta.from_hours(3))
+    t.assert_eq_str(three_hours_ago.format_relative(), "3 hours ago", "3 hours in the past")
+
+    mut in_two_days = now.add(TimeDelta.from_days(2))
+    t.assert_eq_str(in_two_days.format_relative(), "in 2 days", "2 days in the future")
+
+    mut one_day_ago = now.sub(TimeDelta.from_days(1))
+    t.assert_eq_str(one_day_ago.format_relative(), "1 day ago", "singular day, past")
+
+    mut far_future = now.add(TimeDelta.from_days(45))
+    t.assert_eq_str(far_future.format_relative(), far_future.to_string(), "beyond 30 days falls back to to_string()")
+
+    t.summary()

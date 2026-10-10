@@ -1,0 +1,269 @@
+# tests/lang/50_math_linalg.tr - std.math.linalg: Vector/Matrix linear
+# algebra. Covers every public method with known-answer assertions:
+# orthogonal-vector dot product, cross product of basis vectors, Euclidean
+# norm/normalize, matrix-matrix and matrix-vector products, transpose,
+# trace, closed-form determinant (1x1/2x2/3x3) vs. the general NxN
+# Gaussian-elimination path, associativity of matrix multiplication spot-
+# checked numerically, inverse(A)*A ~= identity within tolerance, and the
+# singular-matrix inverse case (must come back as Option.None, not crash
+# or return garbage).
+
+from std.test import TestRunner
+from std.math.linalg import Vector, Matrix
+
+def main():
+    mut t = TestRunner.init("50_math_linalg")
+
+    # ── Vector construction / access ────────────────────────────────────────
+    t.section("Vector construction / access")
+    mut v0 = Vector.init(3)
+    t.assert_eq_int(v0.len(), 3, "init(3) has len 3")
+    t.assert_eq_float(v0.get(0), 0.0, 0.0000001, "init(3) zero-filled [0]")
+    t.assert_eq_float(v0.get(2), 0.0, 0.0000001, "init(3) zero-filled [2]")
+
+    mut xs: List[float] = [1.0, 2.0, 3.0]
+    mut va = Vector.from_list(xs)
+    t.assert_eq_int(va.len(), 3, "from_list len")
+    t.assert_eq_float(va.get(0), 1.0, 0.0000001, "from_list [0]")
+    t.assert_eq_float(va.get(1), 2.0, 0.0000001, "from_list [1]")
+    t.assert_eq_float(va.get(2), 3.0, 0.0000001, "from_list [2]")
+
+    va.set(1, 9.5)
+    t.assert_eq_float(va.get(1), 9.5, 0.0000001, "set/get round-trip")
+    va.set(1, 2.0)   # restore for later checks
+
+    # ── Vector arithmetic ────────────────────────────────────────────────────
+    t.section("Vector add/sub/scale")
+    mut a: List[float] = [1.0, 2.0, 3.0]
+    mut b: List[float] = [4.0, 5.0, 6.0]
+    mut vA = Vector.from_list(a)
+    mut vB = Vector.from_list(b)
+
+    mut vsum = vA.add(vB)
+    t.assert_eq_float(vsum.get(0), 5.0, 0.0000001, "add [0]")
+    t.assert_eq_float(vsum.get(1), 7.0, 0.0000001, "add [1]")
+    t.assert_eq_float(vsum.get(2), 9.0, 0.0000001, "add [2]")
+
+    mut vdiff = vB.sub(vA)
+    t.assert_eq_float(vdiff.get(0), 3.0, 0.0000001, "sub [0]")
+    t.assert_eq_float(vdiff.get(1), 3.0, 0.0000001, "sub [1]")
+    t.assert_eq_float(vdiff.get(2), 3.0, 0.0000001, "sub [2]")
+
+    mut vscaled = vA.scale(2.0)
+    t.assert_eq_float(vscaled.get(0), 2.0, 0.0000001, "scale [0]")
+    t.assert_eq_float(vscaled.get(1), 4.0, 0.0000001, "scale [1]")
+    t.assert_eq_float(vscaled.get(2), 6.0, 0.0000001, "scale [2]")
+
+    t.section("Vector dot / norm / normalize")
+    mut ex: List[float] = [1.0, 0.0, 0.0]
+    mut ey: List[float] = [0.0, 1.0, 0.0]
+    mut vex = Vector.from_list(ex)
+    mut vey = Vector.from_list(ey)
+    t.assert_eq_float(vex.dot(vey), 0.0, 0.0000001, "orthogonal unit vectors dot = 0")
+
+    mut c34: List[float] = [3.0, 4.0]
+    mut v34 = Vector.from_list(c34)
+    t.assert_eq_float(v34.norm(), 5.0, 0.0000001, "3-4-5 triangle norm = 5")
+    t.assert_eq_float(v34.dot(v34), 25.0, 0.0000001, "self dot = norm^2 = 25")
+
+    mut vnorm = v34.normalize()
+    t.assert_eq_float(vnorm.norm(), 1.0, 0.0000001, "normalize -> unit length")
+    t.assert_eq_float(vnorm.get(0), 0.6, 0.0000001, "normalize [0] = 3/5")
+    t.assert_eq_float(vnorm.get(1), 0.8, 0.0000001, "normalize [1] = 4/5")
+
+    t.section("Vector cross (3D)")
+    mut vcross = vex.cross(vey)   # x_hat x y_hat = z_hat
+    t.assert_eq_float(vcross.get(0), 0.0, 0.0000001, "cross x_hat,y_hat -> z_hat [0]")
+    t.assert_eq_float(vcross.get(1), 0.0, 0.0000001, "cross x_hat,y_hat -> z_hat [1]")
+    t.assert_eq_float(vcross.get(2), 1.0, 0.0000001, "cross x_hat,y_hat -> z_hat [2]")
+
+    mut gen: List[float] = [2.0, 3.0, 4.0]
+    mut gen2: List[float] = [5.0, 6.0, 7.0]
+    mut vg1 = Vector.from_list(gen)
+    mut vg2 = Vector.from_list(gen2)
+    mut vcross2 = vg1.cross(vg2)
+    # (2,3,4) x (5,6,7) = (3*7-4*6, 4*5-2*7, 2*6-3*5) = (21-24, 20-14, 12-15) = (-3, 6, -3)
+    t.assert_eq_float(vcross2.get(0), -3.0, 0.0000001, "cross general [0]")
+    t.assert_eq_float(vcross2.get(1), 6.0, 0.0000001, "cross general [1]")
+    t.assert_eq_float(vcross2.get(2), -3.0, 0.0000001, "cross general [2]")
+
+    # ── Matrix construction / access ────────────────────────────────────────
+    t.section("Matrix construction / access")
+    mut m0 = Matrix.init(2, 3)
+    t.assert_eq_int(m0.rows(), 2, "init rows")
+    t.assert_eq_int(m0.cols(), 3, "init cols")
+    t.assert_eq_float(m0.get(0, 0), 0.0, 0.0000001, "init zero-filled")
+
+    mut id3 = Matrix.identity(3)
+    t.assert_eq_float(id3.get(0, 0), 1.0, 0.0000001, "identity diag [0,0]")
+    t.assert_eq_float(id3.get(1, 1), 1.0, 0.0000001, "identity diag [1,1]")
+    t.assert_eq_float(id3.get(2, 2), 1.0, 0.0000001, "identity diag [2,2]")
+    t.assert_eq_float(id3.get(0, 1), 0.0, 0.0000001, "identity off-diag [0,1]")
+
+    mut r0: List[float] = [1.0, 2.0]
+    mut r1: List[float] = [3.0, 4.0]
+    mut rows2: List[List[float]] = [r0, r1]
+    mut mA = Matrix.from_rows(rows2)
+    t.assert_eq_int(mA.rows(), 2, "from_rows rows")
+    t.assert_eq_int(mA.cols(), 2, "from_rows cols")
+    t.assert_eq_float(mA.get(0, 0), 1.0, 0.0000001, "from_rows [0,0]")
+    t.assert_eq_float(mA.get(0, 1), 2.0, 0.0000001, "from_rows [0,1]")
+    t.assert_eq_float(mA.get(1, 0), 3.0, 0.0000001, "from_rows [1,0]")
+    t.assert_eq_float(mA.get(1, 1), 4.0, 0.0000001, "from_rows [1,1]")
+
+    mA.set(0, 0, 9.0)
+    t.assert_eq_float(mA.get(0, 0), 9.0, 0.0000001, "set/get round-trip")
+    mA.set(0, 0, 1.0)   # restore
+
+    # ── Matrix add/sub ───────────────────────────────────────────────────────
+    t.section("Matrix add/sub")
+    mut s0: List[float] = [5.0, 6.0]
+    mut s1: List[float] = [7.0, 8.0]
+    mut rowsB: List[List[float]] = [s0, s1]
+    mut mB = Matrix.from_rows(rowsB)
+
+    mut madd = mA.add(mB)
+    t.assert_eq_float(madd.get(0, 0), 6.0, 0.0000001, "matrix add [0,0]")
+    t.assert_eq_float(madd.get(0, 1), 8.0, 0.0000001, "matrix add [0,1]")
+    t.assert_eq_float(madd.get(1, 0), 10.0, 0.0000001, "matrix add [1,0]")
+    t.assert_eq_float(madd.get(1, 1), 12.0, 0.0000001, "matrix add [1,1]")
+
+    mut msub = mB.sub(mA)
+    t.assert_eq_float(msub.get(0, 0), 4.0, 0.0000001, "matrix sub [0,0]")
+    t.assert_eq_float(msub.get(1, 1), 4.0, 0.0000001, "matrix sub [1,1]")
+
+    # ── Matrix products ──────────────────────────────────────────────────────
+    t.section("Matrix mul (matrix-matrix) / mul_vec")
+    # A = [[1,2],[3,4]], B = [[5,6],[7,8]]
+    # A*B = [[1*5+2*7, 1*6+2*8],[3*5+4*7, 3*6+4*8]] = [[19,22],[43,50]]
+    mut mmul = mA.mul(mB)
+    t.assert_eq_float(mmul.get(0, 0), 19.0, 0.0000001, "A*B [0,0]")
+    t.assert_eq_float(mmul.get(0, 1), 22.0, 0.0000001, "A*B [0,1]")
+    t.assert_eq_float(mmul.get(1, 0), 43.0, 0.0000001, "A*B [1,0]")
+    t.assert_eq_float(mmul.get(1, 1), 50.0, 0.0000001, "A*B [1,1]")
+
+    # identity is the multiplicative identity
+    mut mAid = mA.mul(Matrix.identity(2))
+    t.assert_eq_float(mAid.get(0, 0), mA.get(0, 0), 0.0000001, "A*I == A [0,0]")
+    t.assert_eq_float(mAid.get(1, 1), mA.get(1, 1), 0.0000001, "A*I == A [1,1]")
+
+    mut vxs: List[float] = [1.0, 1.0]
+    mut vmv = mA.mul_vec(Vector.from_list(vxs))
+    # [[1,2],[3,4]] * [1,1] = [3, 7]
+    t.assert_eq_float(vmv.get(0), 3.0, 0.0000001, "mul_vec [0]")
+    t.assert_eq_float(vmv.get(1), 7.0, 0.0000001, "mul_vec [1]")
+
+    t.section("Matrix mul associativity (A*B)*C == A*(B*C)")
+    mut c0: List[float] = [2.0, 0.0]
+    mut c1: List[float] = [1.0, 3.0]
+    mut rowsC: List[List[float]] = [c0, c1]
+    mut mC = Matrix.from_rows(rowsC)
+    mut left  = mA.mul(mB).mul(mC)
+    mut right = mA.mul(mB.mul(mC))
+    t.assert_eq_float(left.get(0, 0), right.get(0, 0), 0.000001, "assoc [0,0]")
+    t.assert_eq_float(left.get(0, 1), right.get(0, 1), 0.000001, "assoc [0,1]")
+    t.assert_eq_float(left.get(1, 0), right.get(1, 0), 0.000001, "assoc [1,0]")
+    t.assert_eq_float(left.get(1, 1), right.get(1, 1), 0.000001, "assoc [1,1]")
+
+    # ── Transpose / trace ────────────────────────────────────────────────────
+    t.section("Matrix transpose / trace")
+    mut mAt = mA.transpose()
+    t.assert_eq_int(mAt.rows(), mA.cols(), "transpose swaps dims (rows)")
+    t.assert_eq_int(mAt.cols(), mA.rows(), "transpose swaps dims (cols)")
+    t.assert_eq_float(mAt.get(0, 1), mA.get(1, 0), 0.0000001, "transpose [0,1] == orig [1,0]")
+    t.assert_eq_float(mAt.get(1, 0), mA.get(0, 1), 0.0000001, "transpose [1,0] == orig [0,1]")
+
+    t.assert_eq_float(mA.trace(), 5.0, 0.0000001, "trace([[1,2],[3,4]]) = 1+4 = 5")
+    t.assert_eq_float(Matrix.identity(4).trace(), 4.0, 0.0000001, "trace(I4) = 4")
+
+    # ── Determinant ──────────────────────────────────────────────────────────
+    t.section("Matrix determinant (1x1/2x2/3x3/NxN)")
+    mut m1: List[float] = [7.0]
+    mut rows1x1: List[List[float]] = [m1]
+    t.assert_eq_float(Matrix.from_rows(rows1x1).determinant(), 7.0, 0.0000001, "det 1x1")
+
+    t.assert_eq_float(mA.determinant(), -2.0, 0.0000001, "det([[1,2],[3,4]]) = 1*4-2*3 = -2")
+    t.assert_eq_float(Matrix.identity(2).determinant(), 1.0, 0.0000001, "det(I2) = 1")
+    t.assert_eq_float(Matrix.identity(3).determinant(), 1.0, 0.0000001, "det(I3) = 1")
+
+    mut d0: List[float] = [1.0, 2.0, 3.0]
+    mut d1: List[float] = [0.0, 1.0, 4.0]
+    mut d2: List[float] = [5.0, 6.0, 0.0]
+    mut rows3: List[List[float]] = [d0, d1, d2]
+    mut m3x3 = Matrix.from_rows(rows3)
+    # det = 1*(1*0-4*6) - 2*(0*0-4*5) + 3*(0*6-1*5) = 1*(-24) -2*(-20) + 3*(-5)
+    #     = -24 + 40 - 15 = 1
+    t.assert_eq_float(m3x3.determinant(), 1.0, 0.0000001, "det 3x3 known answer = 1")
+
+    t.assert_eq_float(Matrix.identity(5).determinant(), 1.0, 0.0000001, "det(I5) NxN path = 1")
+
+    mut e0: List[float] = [2.0, 0.0, 0.0, 0.0]
+    mut e1: List[float] = [0.0, 3.0, 0.0, 0.0]
+    mut e2: List[float] = [0.0, 0.0, 4.0, 0.0]
+    mut e3: List[float] = [0.0, 0.0, 0.0, 5.0]
+    mut rowsDiag: List[List[float]] = [e0, e1, e2, e3]
+    mut mDiag = Matrix.from_rows(rowsDiag)
+    t.assert_eq_float(mDiag.determinant(), 120.0, 0.0000001, "det(diag(2,3,4,5)) NxN path = 120")
+
+    # Singular (rank-deficient) 3x3: row2 = 2*row1 -> determinant must be 0.
+    mut f0: List[float] = [1.0, 2.0, 3.0]
+    mut f1: List[float] = [2.0, 4.0, 6.0]
+    mut f2: List[float] = [7.0, 8.0, 9.0]
+    mut rowsSing: List[List[float]] = [f0, f1, f2]
+    mut mSing = Matrix.from_rows(rowsSing)
+    t.assert_eq_float(mSing.determinant(), 0.0, 0.000001, "det of singular matrix = 0")
+
+    # ── Inverse ───────────────────────────────────────────────────────────────
+    t.section("Matrix inverse")
+    mut optInv = mA.inverse()
+    t.assert_true(optInv.is_some(), "inverse of non-singular 2x2 returns Some")
+    mut mInv = optInv.unwrap()
+    mut shouldBeI = mA.mul(mInv)
+    t.assert_eq_float(shouldBeI.get(0, 0), 1.0, 0.000001, "A * inverse(A) ~= I [0,0]")
+    t.assert_eq_float(shouldBeI.get(0, 1), 0.0, 0.000001, "A * inverse(A) ~= I [0,1]")
+    t.assert_eq_float(shouldBeI.get(1, 0), 0.0, 0.000001, "A * inverse(A) ~= I [1,0]")
+    t.assert_eq_float(shouldBeI.get(1, 1), 1.0, 0.000001, "A * inverse(A) ~= I [1,1]")
+
+    mut inverseIdThenMul = mInv.mul(mA)
+    t.assert_eq_float(inverseIdThenMul.get(0, 0), 1.0, 0.000001, "inverse(A) * A ~= I [0,0]")
+    t.assert_eq_float(inverseIdThenMul.get(1, 1), 1.0, 0.000001, "inverse(A) * A ~= I [1,1]")
+
+    mut optInv3 = m3x3.inverse()
+    t.assert_true(optInv3.is_some(), "inverse of non-singular 3x3 returns Some")
+    mut mInv3 = optInv3.unwrap()
+    mut check3 = m3x3.mul(mInv3)
+    t.assert_eq_float(check3.get(0, 0), 1.0, 0.00001, "3x3 A*inv(A) ~= I [0,0]")
+    t.assert_eq_float(check3.get(1, 1), 1.0, 0.00001, "3x3 A*inv(A) ~= I [1,1]")
+    t.assert_eq_float(check3.get(2, 2), 1.0, 0.00001, "3x3 A*inv(A) ~= I [2,2]")
+    t.assert_eq_float(check3.get(0, 1), 0.0, 0.00001, "3x3 A*inv(A) ~= I [0,1]")
+    t.assert_eq_float(check3.get(1, 0), 0.0, 0.00001, "3x3 A*inv(A) ~= I [1,0]")
+
+    # Singular matrix: must come back as None, not crash and not a garbage matrix.
+    mut optSing = mSing.inverse()
+    t.assert_true(optSing.is_none(), "inverse of singular matrix returns None")
+
+    # Non-square matrix: also must come back as None.
+    mut mRect = Matrix.init(2, 3)
+    t.assert_true(mRect.inverse().is_none(), "inverse of non-square matrix returns None")
+
+    # Identity is its own inverse.
+    mut optInvId = Matrix.identity(3).inverse()
+    t.assert_true(optInvId.is_some(), "inverse(I3) returns Some")
+    mut invId = optInvId.unwrap()
+    t.assert_eq_float(invId.get(0, 0), 1.0, 0.0000001, "inverse(I3) == I3 [0,0]")
+    t.assert_eq_float(invId.get(1, 1), 1.0, 0.0000001, "inverse(I3) == I3 [1,1]")
+    t.assert_eq_float(invId.get(0, 1), 0.0, 0.0000001, "inverse(I3) == I3 [0,1]")
+
+    # ── GPU bridge (bonus) ───────────────────────────────────────────────────
+    t.section("Matrix.to_gpu_buffer (CPU-fallback-backed device buffer)")
+    mut gbuf = mA.to_gpu_buffer()
+    t.assert_true(gbuf.is_valid(), "to_gpu_buffer produces a valid handle")
+    t.assert_eq_int(gbuf.len, mA.rows() * mA.cols(), "to_gpu_buffer len == rows*cols")
+    mut back = gbuf.download()
+    t.assert_eq_float(back.get(0), mA.get(0, 0), 0.0000001, "round-trip [0,0] via GPU buffer")
+    t.assert_eq_float(back.get(1), mA.get(0, 1), 0.0000001, "round-trip [0,1] via GPU buffer")
+    t.assert_eq_float(back.get(2), mA.get(1, 0), 0.0000001, "round-trip [1,0] via GPU buffer")
+    t.assert_eq_float(back.get(3), mA.get(1, 1), 0.0000001, "round-trip [1,1] via GPU buffer")
+    gbuf.free()
+
+    t.summary()

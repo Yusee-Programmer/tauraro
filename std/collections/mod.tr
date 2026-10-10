@@ -8,6 +8,7 @@
 #   from std.collections.heap       import MinHeap, MaxHeap
 #   from std.collections.graph      import Graph, GraphEdge
 #   from std.collections.lru        import LruCache
+#   from std.collections.cache      import Cache, StaleCache
 #   from std.collections.btree      import BTreeMap
 #   from std.collections.trie       import Trie
 #   from std.collections.bloom      import BloomFilter
@@ -27,6 +28,8 @@ from std.collections.heap      import MaxHeap
 from std.collections.graph     import Graph
 from std.collections.graph     import GraphEdge
 from std.collections.lru       import LruCache
+from std.collections.cache     import Cache
+from std.collections.cache     import StaleCache
 from std.collections.btree     import BTreeMap
 from std.collections.trie      import Trie
 from std.collections.bloom     import BloomFilter

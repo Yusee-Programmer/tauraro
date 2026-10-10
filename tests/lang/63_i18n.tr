@@ -1,0 +1,127 @@
+# tests/lang/63_i18n.tr - std.i18n: locale-aware number/currency/date
+# formatting, pluralization, and the bonus Translator lookup.
+#
+# Key thing being exercised throughout: every formatting function here takes
+# Tauraro's OWN existing value types directly (plain float/int, the real
+# DateTime from std.sys.datetime) -- there is no separate "locale value"
+# wrapper type to convert into first.
+
+from std.test import TestRunner
+from std.i18n import NumberFmt, DateFmt, Plural, Translator
+from std.sys.datetime import DateTime, TimeZone
+
+def main():
+    mut t = TestRunner.init("63_i18n")
+
+    # ── Number formatting across locales ─────────────────────────────────────
+    t.section("NumberFmt.format_number — separator conventions differ by locale")
+    t.assert_eq_str(NumberFmt.format_number(1234.56, "en-US", 2), "1,234.56", "en-US: comma thousands, dot decimal")
+    t.assert_eq_str(NumberFmt.format_number(1234.56, "de-DE", 2), "1.234,56", "de-DE: dot thousands, comma decimal")
+    t.assert_eq_str(NumberFmt.format_number(1234.56, "fr-FR", 2), "1 234,56", "fr-FR: space thousands, comma decimal")
+
+    t.section("NumberFmt.format_number — negative values, no decimals, large grouping")
+    t.assert_eq_str(NumberFmt.format_number(0.0 - 1234.56, "en-US", 2), "-1,234.56", "negative sign stays outermost")
+    t.assert_eq_str(NumberFmt.format_number(1234.0, "en-US", 0), "1,234", "zero decimals: no decimal point at all")
+    t.assert_eq_str(NumberFmt.format_number(1234567.89, "en-US", 2), "1,234,567.89", "multi-group thousands separators")
+
+    t.section("NumberFmt.format_int — plain integer grouping")
+    t.assert_eq_str(NumberFmt.format_int(1234567, "en-US"), "1,234,567", "en-US integer grouping")
+    t.assert_eq_str(NumberFmt.format_int(1234567, "de-DE"), "1.234.567", "de-DE integer grouping")
+    t.assert_eq_str(NumberFmt.format_int(0 - 42, "en-US"), "-42", "negative small integer, no grouping needed")
+    t.assert_eq_str(NumberFmt.format_int(42, "en-US"), "42", "small integer unchanged (< 1000)")
+
+    t.section("NumberFmt — unrecognized locale falls back to en-US convention")
+    t.assert_eq_str(NumberFmt.format_number(1234.5, "xx-XX", 1), "1,234.5", "unknown locale tag falls back cleanly")
+
+    # ── Currency formatting ───────────────────────────────────────────────────
+    t.section("NumberFmt.format_currency — at least 2 currencies, symbol placement + decimals")
+    t.assert_eq_str(NumberFmt.format_currency(1234.5, "en-US", "USD"), "$1,234.50", "USD: symbol prefix, 2 decimals")
+    t.assert_eq_str(NumberFmt.format_currency(1234.5, "de-DE", "EUR"), "1.234,50 €", "EUR: symbol suffix with space, de-DE separators")
+    t.assert_eq_str(NumberFmt.format_currency(1234.0, "en-GB", "GBP"), "£1,234.00", "GBP: symbol prefix")
+    t.assert_eq_str(NumberFmt.format_currency(1234.0, "en-US", "JPY"), "¥1,234", "JPY: no decimal places at all")
+    t.assert_eq_str(NumberFmt.format_currency(5000.0, "en-US", "NGN"), "₦5,000.00", "NGN: African-market currency, symbol prefix")
+
+    t.section("NumberFmt.format_currency — unrecognized currency code falls back to code-as-prefix")
+    t.assert_eq_str(NumberFmt.format_currency(12.0, "en-US", "XYZ"), "XYZ12.00", "unknown currency code prefixes itself")
+
+    # ── Date/time formatting ──────────────────────────────────────────────────
+    # Fixed, deterministic DateTime: 2026-01-15 09:05:03, constructed directly
+    # in UTC via in_zone so the test never depends on "today" or the machine's
+    # local timezone.
+    mut utc = TimeZone.utc()
+    mut dt = DateTime.in_zone(2026, 1, 15, 9, 5, 3, utc)
+
+    t.section("DateFmt.format_date — numeric pattern differs by locale")
+    t.assert_eq_str(DateFmt.format_date(dt, "en-US"), "01/15/2026", "en-US: MM/DD/YYYY")
+    t.assert_eq_str(DateFmt.format_date(dt, "en-GB"), "15/01/2026", "en-GB: DD/MM/YYYY")
+    t.assert_eq_str(DateFmt.format_date(dt, "iso"),   "2026-01-15", "iso: YYYY-MM-DD")
+    t.assert_eq_str(DateFmt.format_date(dt, "fr-FR"), "15/01/2026", "fr-FR: DD/MM/YYYY (same numeric pattern as en-GB)")
+
+    t.section("DateFmt.format_date — unrecognized locale falls back to DD/MM/YYYY")
+    t.assert_eq_str(DateFmt.format_date(dt, "xx-XX"), "15/01/2026", "unknown locale falls back to DD/MM/YYYY")
+
+    t.section("DateFmt.format_time / format_datetime")
+    t.assert_eq_str(DateFmt.format_time(dt, "en-US"), "09:05:03", "24-hour HH:MM:SS")
+    t.assert_eq_str(DateFmt.format_datetime(dt, "iso"), "2026-01-15 09:05:03", "date + time combined")
+
+    t.section("DateFmt.month_name / weekday_name — English, French, Spanish")
+    t.assert_eq_str(DateFmt.month_name(1, "en-US"), "January", "English month name")
+    t.assert_eq_str(DateFmt.month_name(1, "fr-FR"), "janvier", "French month name")
+    t.assert_eq_str(DateFmt.month_name(1, "es-ES"), "enero", "Spanish month name")
+    t.assert_eq_str(DateFmt.month_name(12, "fr-FR"), "décembre", "French month name with accent")
+
+    # 2026-01-15 is a Thursday (weekday()==3 under DateTime's 0=Monday
+    # convention).
+    t.assert_eq_int(dt.weekday(), 3, "sanity check: 2026-01-15 is a Thursday")
+    t.assert_eq_str(DateFmt.weekday_name(3, "en-US"), "Thursday", "English weekday name")
+    t.assert_eq_str(DateFmt.weekday_name(3, "fr-FR"), "jeudi", "French weekday name")
+    t.assert_eq_str(DateFmt.weekday_name(3, "es-ES"), "jueves", "Spanish weekday name")
+
+    t.section("DateFmt.format_long — full localized long-form date")
+    t.assert_eq_str(DateFmt.format_long(dt, "en-US"), "Thursday, January 15, 2026", "English long form")
+    t.assert_eq_str(DateFmt.format_long(dt, "fr-FR"), "jeudi 15 janvier 2026", "French long form")
+    t.assert_eq_str(DateFmt.format_long(dt, "es-ES"), "jueves 15 de enero de 2026", "Spanish long form")
+
+    # ── Pluralization ─────────────────────────────────────────────────────────
+    t.section("Plural.plural — English: only count==1 is singular")
+    t.assert_eq_str(Plural.plural(1, "item", "items", "en"), "1 item", "English singular at 1")
+    t.assert_eq_str(Plural.plural(2, "item", "items", "en"), "2 items", "English plural at 2")
+    t.assert_eq_str(Plural.plural(0, "item", "items", "en"), "0 items", "English: 0 is PLURAL, not singular")
+
+    t.section("Plural.plural — French: count==0 OR count==1 is singular (the real rule difference)")
+    t.assert_eq_str(Plural.plural(1, "article", "articles", "fr"), "1 article", "French singular at 1 (same as English)")
+    t.assert_eq_str(Plural.plural(0, "article", "articles", "fr"), "0 article", "French: 0 is SINGULAR -- differs from English here")
+    t.assert_eq_str(Plural.plural(2, "article", "articles", "fr"), "2 articles", "French plural at 2")
+
+    t.section("Plural.form — word-only variant (no count prefix)")
+    t.assert_eq_str(Plural.form(0, "article", "articles", "fr"), "article", "French form() at 0 returns singular word only")
+    t.assert_eq_str(Plural.form(0, "item", "items", "en"), "items", "English form() at 0 returns plural word only")
+
+    t.section("Plural — unrecognized locale falls back to English rule")
+    t.assert_eq_str(Plural.plural(0, "item", "items", "xx"), "0 items", "unknown locale falls back to English pluralization")
+
+    # ── Translator (bonus): flat key -> string lookup with fallback ──────────
+    t.section("Translator — direct set() + lookup per locale")
+    mut tr = Translator.init("en")
+    tr.set("en", "greeting", "Hello")
+    tr.set("fr", "greeting", "Bonjour")
+    t.assert_eq_str(tr.t("greeting", "en"), "Hello", "English greeting")
+    t.assert_eq_str(tr.t("greeting", "fr"), "Bonjour", "French greeting")
+
+    t.section("Translator — fallback to default_locale when key missing in requested locale")
+    tr.set("en", "farewell", "Goodbye")
+    # "farewell" was never set for "fr" -- should fall back to "en" (default_locale).
+    t.assert_eq_str(tr.t("farewell", "fr"), "Goodbye", "missing fr key falls back to default locale (en)")
+
+    t.section("Translator — missing from both locale and default returns the bare key")
+    t.assert_eq_str(tr.t("nonexistent_key", "fr"), "nonexistent_key", "totally missing key returns itself, visibly")
+
+    t.section("Translator — load_str() reuses the dotenv KEY=value parser")
+    mut es_tr = Translator.init("en")
+    es_tr.set("en", "greeting", "Hello")
+    es_tr.load_str("es", "greeting=Hola\nfarewell=Adios\n# a comment\n")
+    t.assert_eq_str(es_tr.t("greeting", "es"), "Hola", "Spanish greeting loaded from KEY=value text")
+    t.assert_eq_str(es_tr.t("farewell", "es"), "Adios", "Spanish farewell loaded from KEY=value text")
+    t.assert_eq_str(es_tr.t("greeting", "en"), "Hello", "English table untouched by loading Spanish")
+
+    t.summary()

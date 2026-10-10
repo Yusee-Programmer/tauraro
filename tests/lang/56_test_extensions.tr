@@ -1,0 +1,210 @@
+# tests/lang/56_test_extensions.tr - std.test.bench / std.test.mock /
+# std.test.fuzz: the three new std.test extensions (benchmarking,
+# call-recording mock values, property-based fuzz testing).
+#
+# Bench: benchmark a trivial tight loop and sanity-check the reported
+# numbers are believable (positive ops/sec, min <= mean <= max).
+# Mock: configure a canned return + a replacement closure, call it a few
+# times with different arguments, check call_count/assert_called_with,
+# including a negative case that must correctly report false.
+# Fuzz: a property true for ALL generated inputs must report ok with no
+# counterexample across many iterations; a property false for SOME inputs
+# must find a counterexample -- and critically, re-running with the exact
+# same reported seed against the same property must reproduce the IDENTICAL
+# counterexample both times (this is the most important check in this file).
+
+from std.test import TestRunner
+from std.test.bench import Bench, BenchResult
+from std.test.mock import Mock
+from std.test.fuzz import Fuzzer, StrFuzzer, FuzzResult
+from std.math.random import Random
+
+def tight_loop() -> void:
+    mut total = 0
+    mut i = 0
+    while i < 100:
+        total = total + i * 2 - 1
+        i = i + 1
+
+def add_one(x: int) -> int:
+    return x + 1
+
+def main():
+    mut t = TestRunner.init("56_test_extensions")
+
+    # ══════════════════════════════════════════════════════════════════════
+    # std.test.bench
+    # ══════════════════════════════════════════════════════════════════════
+
+    t.section("Bench.run — tight loop, believable numbers")
+    mut r1 = Bench.run("tight_loop", tight_loop, 2000)
+    t.assert_eq_int(r1.iterations, 2000, "ran the requested iteration count")
+    t.assert_true(r1.min_ns >= 0, "min_ns is non-negative")
+    t.assert_true(r1.min_ns <= r1.mean_ns, "min <= mean")
+    t.assert_true(r1.mean_ns <= r1.max_ns, "mean <= max")
+    t.assert_true(r1.total_ns > 0, "total_ns is positive (timer actually measured something)")
+    mut ops = r1.ops_per_sec()
+    t.assert_true(ops > 0.0, "ops/sec is positive")
+    # Sanity ceiling: a loop with real work in it cannot run at > 1 billion
+    # ops/sec (that would mean each call took under 1ns, i.e. a timer bug).
+    t.assert_true(ops < 1000000000.0, "ops/sec is not absurdly huge (timer sanity)")
+
+    t.section("Bench.auto — auto-calibrated iteration count")
+    mut r2 = Bench.auto("tight_loop (auto)", tight_loop, 50)   # ~50ms budget
+    t.assert_true(r2.iterations > 0, "auto-calibration picked a positive iteration count")
+    t.assert_true(r2.min_ns <= r2.mean_ns, "auto: min <= mean")
+    t.assert_true(r2.mean_ns <= r2.max_ns, "auto: mean <= max")
+    t.assert_true(r2.ops_per_sec() > 0.0, "auto: ops/sec is positive")
+
+    t.section("Bench.compare")
+    mut cmp_same = Bench.compare(r1, r1, 10)
+    t.assert_contains(cmp_same, "within noise", "comparing a result against itself is within noise")
+
+    # Build a synthetic "slower" result directly (bypassing real timing
+    # jitter) so the slowdown classification is deterministic and testable.
+    mut slow = BenchResult()
+    slow.name       = "synthetic_slow"
+    slow.iterations = r1.iterations
+    slow.total_ns   = r1.total_ns
+    slow.mean_ns    = r1.mean_ns * 2       # 100% slower -- well outside any noise margin
+    slow.min_ns     = r1.min_ns * 2
+    slow.max_ns     = r1.max_ns * 2
+    mut cmp_slow = Bench.compare(r1, slow, 10)
+    t.assert_contains(cmp_slow, "SLOWER", "a 2x-mean candidate is flagged SLOWER, not just reported numerically")
+
+    mut fast = BenchResult()
+    fast.name       = "synthetic_fast"
+    fast.iterations = r1.iterations
+    fast.total_ns   = r1.total_ns
+    mut halved = r1.mean_ns / 2
+    if halved < 1: halved = 1
+    fast.mean_ns = halved
+    fast.min_ns  = halved
+    fast.max_ns  = halved
+    mut cmp_fast = Bench.compare(r1, fast, 10)
+    t.assert_contains(cmp_fast, "FASTER", "a half-mean candidate is flagged FASTER")
+
+    # ══════════════════════════════════════════════════════════════════════
+    # std.test.mock
+    # ══════════════════════════════════════════════════════════════════════
+
+    t.section("Mock — canned return value + call recording")
+    mut m = Mock[int, int].init()
+    m.returns(42)
+    t.assert_false(m.was_called(), "not called yet")
+    t.assert_eq_int(m.call(7), 42, "call() returns the canned value")
+    t.assert_eq_int(m.call(9), 42, "call() returns the canned value again")
+    t.assert_eq_int(m.call(100), 42, "call() returns the canned value a third time")
+    t.assert_eq_int(m.call_count, 3, "call_count accumulates across calls")
+    t.assert_true(m.was_called(), "was_called() true after calls")
+    t.assert_true(m.was_called_times(3), "was_called_times(3) matches")
+    t.assert_false(m.was_called_times(2), "was_called_times(2) correctly false")
+
+    t.section("Mock — assert_called_with positive and negative cases")
+    t.assert_true(m.assert_called_with(100), "last call's argument was 100")
+    t.assert_false(m.assert_called_with(9), "assert_called_with(9) is false -- 9 was NOT the last call")
+    t.assert_false(m.assert_called_with(999), "assert_called_with(999) is false -- never called with 999")
+    t.assert_true(m.was_called_with_any(7), "was_called_with_any(7) true -- 7 WAS an earlier call")
+    t.assert_false(m.was_called_with_any(12345), "was_called_with_any(12345) false -- never called with it")
+    t.assert_eq_int(m.last_call_args(), 100, "last_call_args() reports the most recent argument")
+    t.assert_eq_int(m.nth_call_args(0), 7, "nth_call_args(0) reports the first call's argument")
+    t.assert_eq_int(m.nth_call_args(1), 9, "nth_call_args(1) reports the second call's argument")
+
+    t.section("Mock — replacement closure (with_impl)")
+    mut doubler = Mock[int, int].init()
+    doubler.with_impl(add_one)
+    t.assert_eq_int(doubler.call(21), 22, "with_impl forwards to the replacement closure")
+    t.assert_eq_int(doubler.call(41), 42, "with_impl forwards again")
+    t.assert_eq_int(doubler.call_count, 2, "with_impl calls are still recorded")
+    t.assert_true(doubler.assert_called_with(41), "with_impl: assert_called_with sees the real argument")
+
+    t.section("Mock — used directly as an injected value (no as_fn() -- see mock.tr header)")
+    mut m2 = Mock[int, int].init()
+    m2.returns(5)
+    t.assert_eq_int(m2.call(1), 5, "calling the mock directly returns the canned value")
+    t.assert_eq_int(m2.call_count, 1, "the call is recorded on the mock")
+
+    t.section("Mock — reset_calls")
+    m2.reset_calls()
+    t.assert_eq_int(m2.call_count, 0, "reset_calls zeroes call_count")
+    t.assert_false(m2.was_called(), "reset_calls clears was_called()")
+
+    # ══════════════════════════════════════════════════════════════════════
+    # std.test.fuzz
+    # ══════════════════════════════════════════════════════════════════════
+
+    t.section("Fuzzer.check — property true for ALL generated inputs")
+    mut always_true_gen = Fuzzer.ints(-500, 500)
+    mut res_true = always_true_gen.check(prop_always_commutes, 500, 0)
+    t.assert_true(res_true.ok, "property holding for every input is reported ok=true")
+    t.assert_eq_int(res_true.iterations_run, 500, "ran all requested iterations when no counterexample exists")
+    t.assert_ne_int(res_true.seed, 0, "auto-generated seed is reported back (non-zero)")
+
+    t.section("Fuzzer.check — property false for SOME inputs finds a counterexample")
+    mut wide_gen = Fuzzer.ints(0, 5000000)
+    mut res_false = wide_gen.check(prop_under_a_million, 2000, 0)
+    t.assert_false(res_false.ok, "property false for some inputs is reported ok=false")
+    t.assert_true(res_false.counterexample >= 1000000, "the reported counterexample actually violates the property")
+    t.assert_true(res_false.iterations_run <= 2000, "stopped at (or before) the first failing input, not all 2000")
+    mut found_seed = res_false.seed
+
+    t.section("Fuzzer.check — REPRODUCIBILITY: same seed -> identical counterexample")
+    # This is the most important assertion in this file: re-running check()
+    # with the exact seed reported above, against the same property, must
+    # land on the EXACT SAME failing input and after the EXACT SAME number
+    # of iterations. A fuzzer whose failures aren't reproducible is close
+    # to useless for debugging.
+    mut res_replay = wide_gen.check(prop_under_a_million, 2000, found_seed)
+    t.assert_false(res_replay.ok, "replay with the same seed still finds a counterexample")
+    t.assert_eq_int(res_replay.seed, found_seed, "replay reports the same seed back")
+    t.assert_eq_int(res_replay.counterexample, res_false.counterexample, "REPRODUCIBILITY: identical counterexample value")
+    t.assert_eq_int(res_replay.iterations_run, res_false.iterations_run, "REPRODUCIBILITY: identical iteration count to failure")
+
+    # Run it a THIRD time for good measure -- not just "twice is a fluke".
+    mut res_replay2 = wide_gen.check(prop_under_a_million, 2000, found_seed)
+    t.assert_eq_int(res_replay2.counterexample, res_false.counterexample, "REPRODUCIBILITY (3rd run): identical counterexample value")
+    t.assert_eq_int(res_replay2.iterations_run, res_false.iterations_run, "REPRODUCIBILITY (3rd run): identical iteration count")
+
+    t.section("Fuzzer.check — explicit seed determinism (not just auto-seed replay)")
+    # Two completely independent check() calls using the SAME explicit seed
+    # (not reusing a previously-reported one) must also land identically --
+    # confirms determinism isn't an artifact of some global/hidden state.
+    mut gen_a = Fuzzer.ints(0, 5000000)
+    mut gen_b = Fuzzer.ints(0, 5000000)
+    mut res_a = gen_a.check(prop_under_a_million, 2000, 777777)
+    mut res_b = gen_b.check(prop_under_a_million, 2000, 777777)
+    t.assert_eq_int(res_a.counterexample, res_b.counterexample, "same explicit seed -> same counterexample across independent Fuzzer instances")
+    t.assert_eq_int(res_a.iterations_run, res_b.iterations_run, "same explicit seed -> same iteration count across independent Fuzzer instances")
+
+    t.section("StrFuzzer.strings — generates a realistic mix, including empty strings")
+    mut sgen = StrFuzzer.strings(12)
+    mut sres = sgen.check(prop_string_len_in_range, 300, 0)
+    t.assert_true(sres.ok, "every generated string satisfies its own stated length bound")
+
+    # Directly confirm the generator actually produces an empty string at
+    # least once across a reasonable sample (not just "the property held").
+    mut probe_rng = Random.new(424242)
+    mut saw_empty = false
+    mut i_probe = 0
+    while i_probe < 200 and not saw_empty:
+        mut s = sgen.gen_one(probe_rng)
+        if s.len() == 0: saw_empty = true
+        i_probe = i_probe + 1
+    t.assert_true(saw_empty, "StrFuzzer.strings generates empty strings within a reasonable sample")
+
+    t.summary()
+
+# Property used for the "always true" fuzz check: a + 1 == 1 + a holds for
+# every int (well within range to avoid overflow at the bounds tested).
+def prop_always_commutes(x: int) -> bool:
+    return x + 1 == 1 + x
+
+# Property that is deliberately false for inputs >= 1,000,000 -- used to
+# exercise counterexample-finding over a wide range [0, 5,000,000].
+def prop_under_a_million(x: int) -> bool:
+    return x < 1000000
+
+# Property checked against StrFuzzer-generated strings: every generated
+# string must be no longer than the generator's own max_len (12 here).
+def prop_string_len_in_range(s: str) -> bool:
+    return s.len() <= 12

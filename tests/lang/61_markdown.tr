@@ -1,0 +1,194 @@
+# tests/lang/61_markdown.tr - std.text.markdown: CommonMark-subset parser +
+# dual-target renderer (HTML and ANSI terminal text), both built from the
+# SAME parsed node tree (std.text.markdown.Markdown.parse).
+#
+# NOTE: Tauraro string literals do NOT support `\x` hex escapes (see
+# tests/lang/45_term.tr's note), so the ESC (0x1b) byte used to build expected
+# ANSI strings is produced at runtime via esc() (StringBuilder.append_char(27)),
+# the same technique std.term.style itself uses.
+
+from std.test import TestRunner
+from std.core.string import StringBuilder
+from std.string.str import Str
+from std.term.style import Term, Color
+from std.text.markdown import Markdown, MdNode
+
+def esc() -> str:
+    mut sb = StringBuilder.init(4)
+    sb.append_char(27)
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+def main():
+    mut t = TestRunner.init("61_markdown")
+    mut e = esc()
+
+    # ── Headings ─────────────────────────────────────────────────────────
+    t.section("headings: # through ######")
+    mut h1 = Markdown.parse("# Title")
+    t.assert_eq_str(Markdown.to_html(h1), "<h1>Title</h1>\n", "h1 HTML")
+    t.assert_eq_str(Markdown.to_ansi(h1), Term.bold(Term.color("Title", Color.Cyan)) + "\n\n", "h1 ANSI")
+
+    mut h3 = Markdown.parse("### Sub heading")
+    t.assert_eq_str(Markdown.to_html(h3), "<h3>Sub heading</h3>\n", "h3 HTML")
+
+    mut h6 = Markdown.parse("###### deepest")
+    t.assert_eq_str(Markdown.to_html(h6), "<h6>deepest</h6>\n", "h6 HTML")
+
+    # 7 '#' characters is not a valid ATX heading (max level 6) -> treated as
+    # a paragraph starting with a literal '#'.
+    mut h7 = Markdown.parse("####### not a heading")
+    t.assert_eq_str(Markdown.to_html(h7), "<p>####### not a heading</p>\n", "7 hashes is not a heading, becomes a paragraph")
+
+    # ── Paragraphs ───────────────────────────────────────────────────────
+    t.section("paragraphs: blank-line separated")
+    mut paras = Markdown.parse("first paragraph\n\nsecond paragraph")
+    t.assert_eq_int(len(paras), 2, "two blank-line-separated paragraphs -> 2 block nodes")
+    t.assert_eq_str(Markdown.to_html(paras), "<p>first paragraph</p>\n<p>second paragraph</p>\n", "two paragraphs HTML")
+
+    mut wrapped_para = Markdown.parse("line one\nline two still same paragraph")
+    t.assert_eq_int(len(wrapped_para), 1, "soft-wrapped lines (no blank line between) stay one paragraph")
+    t.assert_eq_str(Markdown.to_html(wrapped_para), "<p>line one line two still same paragraph</p>\n", "soft-wrap joins with a space in HTML")
+
+    # ── Bold / italic / inline code ──────────────────────────────────────
+    t.section("inline: bold, italic, inline code")
+    mut bold1 = Markdown.parse("this is **bold** text")
+    t.assert_eq_str(Markdown.to_html(bold1), "<p>this is <strong>bold</strong> text</p>\n", "** bold HTML")
+    t.assert_eq_str(Markdown.to_ansi(bold1), "this is " + Term.bold("bold") + " text\n\n", "** bold ANSI")
+
+    mut bold2 = Markdown.parse("this is __also bold__ text")
+    t.assert_eq_str(Markdown.to_html(bold2), "<p>this is <strong>also bold</strong> text</p>\n", "__ bold HTML")
+
+    mut ital1 = Markdown.parse("this is *italic* text")
+    t.assert_eq_str(Markdown.to_html(ital1), "<p>this is <em>italic</em> text</p>\n", "* italic HTML")
+    t.assert_eq_str(Markdown.to_ansi(ital1), "this is " + Term.italic("italic") + " text\n\n", "* italic ANSI")
+
+    mut ital2 = Markdown.parse("this is _also italic_ text")
+    t.assert_eq_str(Markdown.to_html(ital2), "<p>this is <em>also italic</em> text</p>\n", "_ italic HTML")
+
+    mut code1 = Markdown.parse("call `foo(x)` here")
+    t.assert_eq_str(Markdown.to_html(code1), "<p>call <code>foo(x)</code> here</p>\n", "inline code HTML")
+    t.assert_eq_str(Markdown.to_ansi(code1), "call " + Term.color("foo(x)", Color.Green) + " here\n\n", "inline code ANSI")
+
+    mut combo = Markdown.parse("**bold** and *italic* and `code`")
+    t.assert_eq_str(Markdown.to_html(combo), "<p><strong>bold</strong> and <em>italic</em> and <code>code</code></p>\n", "combined inline styles HTML")
+
+    # ── Fenced code blocks ───────────────────────────────────────────────
+    t.section("fenced code blocks with language tag")
+    mut fence = Markdown.parse("```python\nprint(1)\nprint(2)\n```")
+    t.assert_eq_str(Markdown.to_html(fence), "<pre><code class=\"language-python\">print(1)\nprint(2)</code></pre>\n", "fenced code block with lang HTML")
+    mut ansi_fence = Markdown.to_ansi(fence)
+    t.assert_contains(ansi_fence, Term.color("print(1)", Color.Green), "fenced code block line 1 colored in ANSI")
+    t.assert_contains(ansi_fence, Term.color("print(2)", Color.Green), "fenced code block line 2 colored in ANSI")
+
+    mut fence_nolang = Markdown.parse("```\nplain\n```")
+    t.assert_eq_str(Markdown.to_html(fence_nolang), "<pre><code>plain</code></pre>\n", "fenced code block without lang HTML (no class attr)")
+
+    # ── Links and images ─────────────────────────────────────────────────
+    t.section("links and images")
+    mut link = Markdown.parse("see [the docs](https://example.com/docs) for more")
+    t.assert_eq_str(Markdown.to_html(link), "<p>see <a href=\"https://example.com/docs\">the docs</a> for more</p>\n", "link HTML")
+    mut ansi_link = Markdown.to_ansi(link)
+    t.assert_contains(ansi_link, "https://example.com/docs", "ANSI link render includes the URL")
+    t.assert_contains(ansi_link, Term.underline(Term.color("the docs", Color.Blue)), "ANSI link render styles the link text")
+
+    mut image = Markdown.parse("![a cat](cat.png)")
+    t.assert_eq_str(Markdown.to_html(image), "<p><img src=\"cat.png\" alt=\"a cat\" /></p>\n", "image HTML")
+    mut ansi_image = Markdown.to_ansi(image)
+    t.assert_contains(ansi_image, "cat.png", "ANSI image render includes the URL")
+    t.assert_contains(ansi_image, "a cat", "ANSI image render includes the alt text")
+
+    # ── Unordered and ordered lists ──────────────────────────────────────
+    t.section("lists: unordered and ordered, with basic nesting")
+    mut ul = Markdown.parse("- one\n- two\n- three")
+    t.assert_eq_str(Markdown.to_html(ul), "<ul>\n<li>one</li>\n<li>two</li>\n<li>three</li>\n</ul>\n", "unordered list (-) HTML")
+
+    mut ul_star = Markdown.parse("* alpha\n* beta")
+    t.assert_eq_str(Markdown.to_html(ul_star), "<ul>\n<li>alpha</li>\n<li>beta</li>\n</ul>\n", "unordered list (*) HTML")
+
+    mut ol = Markdown.parse("1. first\n2. second\n3. third")
+    t.assert_eq_str(Markdown.to_html(ol), "<ol>\n<li>first</li>\n<li>second</li>\n<li>third</li>\n</ol>\n", "ordered list HTML")
+
+    mut ol_start = Markdown.parse("5. five\n6. six")
+    t.assert_eq_str(Markdown.to_html(ol_start), "<ol start=\"5\">\n<li>five</li>\n<li>six</li>\n</ol>\n", "ordered list with non-1 start renders start= attr")
+
+    mut nested = Markdown.parse("- outer one\n  - inner a\n  - inner b\n- outer two")
+    mut nested_html = Markdown.to_html(nested)
+    t.assert_contains(nested_html, "<li>outer one<ul>\n<li>inner a</li>\n<li>inner b</li>\n</ul>\n</li>", "nested sub-list renders as a nested <ul> inside the parent <li>")
+    t.assert_contains(nested_html, "<li>outer two</li>", "outer list continues after the nested sub-list")
+
+    mut ul_ansi = Markdown.to_ansi(ul)
+    t.assert_contains(ul_ansi, "- one", "ANSI unordered list item uses a '-' prefix")
+    mut ol_ansi = Markdown.to_ansi(ol)
+    t.assert_contains(ol_ansi, "1. first", "ANSI ordered list item uses a numbered prefix")
+    t.assert_contains(ol_ansi, "3. third", "ANSI ordered list numbering increments per item")
+
+    # ── Blockquotes ──────────────────────────────────────────────────────
+    t.section("blockquotes")
+    mut bq = Markdown.parse("> quoted line one\n> quoted line two")
+    t.assert_eq_str(Markdown.to_html(bq), "<blockquote>\n<p>quoted line one quoted line two</p>\n</blockquote>\n", "blockquote HTML")
+    mut bq_ansi = Markdown.to_ansi(bq)
+    t.assert_contains(bq_ansi, "> quoted line one quoted line two", "ANSI blockquote prefixes with '> '")
+
+    # ── Horizontal rules ─────────────────────────────────────────────────
+    t.section("horizontal rules")
+    mut hr1 = Markdown.parse("before\n\n---\n\nafter")
+    t.assert_eq_int(len(hr1), 3, "hr splits surrounding paragraphs into 3 blocks")
+    t.assert_eq_str(Markdown.to_html(hr1), "<p>before</p>\n<hr />\n<p>after</p>\n", "--- renders as <hr /> HTML")
+
+    mut hr2 = Markdown.parse("***")
+    t.assert_eq_str(Markdown.to_html(hr2), "<hr />\n", "*** also renders as <hr />")
+
+    mut hr3 = Markdown.parse("___")
+    t.assert_eq_str(Markdown.to_html(hr3), "<hr />\n", "___ also renders as <hr />")
+
+    # ── Hard line breaks ─────────────────────────────────────────────────
+    t.section("hard line breaks: trailing two spaces, or trailing backslash")
+    mut br_spaces = Markdown.parse("line one  \nline two")
+    t.assert_eq_str(Markdown.to_html(br_spaces), "<p>line one<br />\nline two</p>\n", "two trailing spaces -> hard break in HTML")
+
+    mut br_backslash = Markdown.parse("line one\\\nline two")
+    t.assert_eq_str(Markdown.to_html(br_backslash), "<p>line one<br />\nline two</p>\n", "trailing backslash -> hard break in HTML")
+
+    mut br_ansi = Markdown.to_ansi(br_spaces)
+    t.assert_contains(br_ansi, "line one\nline two", "ANSI hard break renders as a real newline")
+
+    # ── HTML escaping (security: raw markup in source must not pass through) ─
+    t.section("HTML escaping: literal <, >, & are escaped, never passed through raw")
+    mut danger = Markdown.parse("Use the <script> tag & a > sign carefully")
+    mut danger_html = Markdown.to_html(danger)
+    t.assert_eq_str(danger_html, "<p>Use the &lt;script&gt; tag &amp; a &gt; sign carefully</p>\n", "literal <script>/&/> escaped in paragraph text")
+    t.assert_false(Str.contains(danger_html, "<script>"), "escaped output contains no raw, unescaped <script> tag")
+
+    mut danger_heading = Markdown.parse("# <b>bold heading</b> & more")
+    t.assert_eq_str(Markdown.to_html(danger_heading), "<h1>&lt;b&gt;bold heading&lt;/b&gt; &amp; more</h1>\n", "literal markup in a heading is escaped, not rendered as real HTML")
+
+    mut danger_code = Markdown.parse("`<img src=x onerror=alert(1)>`")
+    t.assert_eq_str(Markdown.to_html(danger_code), "<p><code>&lt;img src=x onerror=alert(1)&gt;</code></p>\n", "literal markup inside inline code is escaped too")
+
+    # ── Realistic README-sized input exercising several features together ──
+    t.section("realistic README-sized input (headings, paragraph, list, code, link, hr)")
+    mut readme = "# Project Title\n\nA **small** library for *doing things*. See the [docs](https://example.com) for more.\n\n## Features\n\n- fast\n- simple\n- `zero` dependencies\n\n```sh\ninstall-thing\nrun-thing\n```\n\n---\n\n> Note: still in beta.\n"
+    mut readme_nodes = Markdown.parse(readme)
+    mut readme_html = Markdown.to_html(readme_nodes)
+    t.assert_contains(readme_html, "<h1>Project Title</h1>", "README: h1 title present")
+    t.assert_contains(readme_html, "<h2>Features</h2>", "README: h2 section present")
+    t.assert_contains(readme_html, "<strong>small</strong>", "README: bold rendered")
+    t.assert_contains(readme_html, "<em>doing things</em>", "README: italic rendered")
+    t.assert_contains(readme_html, "<a href=\"https://example.com\">docs</a>", "README: link rendered")
+    t.assert_contains(readme_html, "<li>fast</li>", "README: list item rendered")
+    t.assert_contains(readme_html, "<code>zero</code>", "README: inline code in list item rendered")
+    t.assert_contains(readme_html, "<pre><code class=\"language-sh\">install-thing\nrun-thing</code></pre>", "README: fenced shell code block rendered")
+    t.assert_contains(readme_html, "<hr />", "README: horizontal rule rendered")
+    t.assert_contains(readme_html, "<blockquote>\n<p>Note: still in beta.</p>\n</blockquote>", "README: blockquote rendered")
+
+    mut readme_ansi = Markdown.to_ansi(readme_nodes)
+    t.assert_contains(readme_ansi, Term.bold(Term.color("Project Title", Color.Cyan)), "README ANSI: h1 title styled")
+    t.assert_contains(readme_ansi, Term.bold("small"), "README ANSI: bold styled")
+    t.assert_contains(readme_ansi, Term.italic("doing things"), "README ANSI: italic styled")
+    t.assert_contains(readme_ansi, "- fast", "README ANSI: list item rendered with dash prefix")
+    t.assert_contains(readme_ansi, Term.color("install-thing", Color.Green), "README ANSI: fenced code block line colored")
+    t.assert_contains(readme_ansi, "> Note: still in beta.", "README ANSI: blockquote prefixed")
+
+    t.summary()

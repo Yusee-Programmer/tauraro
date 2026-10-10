@@ -2577,6 +2577,39 @@ _TR_XLINK long long _tr_time_ms(void) {
 #endif
 }
 
+/* ══════════════════════════════════════════════════════════════════════════
+ * _tr_perf_counter_ns — nanosecond-resolution MONOTONIC timer (std.test.bench)
+ *
+ * _tr_time_ms() above is millisecond-resolution, too coarse for micro-
+ * benchmarking fast operations (sub-millisecond ops would read as 0ms).
+ * This returns nanoseconds since an arbitrary, unspecified epoch — it is
+ * NOT wall-clock time and must only be used for measuring elapsed intervals
+ * (subtract two readings), never compared across processes/machines.
+ * Monotonic: never goes backwards, immune to system clock adjustments.
+ *   Windows: QueryPerformanceCounter + QueryPerformanceFrequency, scaled to ns.
+ *   POSIX:   clock_gettime(CLOCK_MONOTONIC, ...), scaled to ns.
+ * ══════════════════════════════════════════════════════════════════════════ */
+_TR_XLINK long long _tr_perf_counter_ns(void) {
+#if defined(TAURARO_BARE) && !defined(__wasi__)
+    return 0LL;
+#elif defined(_WIN32)
+    LARGE_INTEGER freq, count;
+    QueryPerformanceFrequency(&freq);
+    QueryPerformanceCounter(&count);
+    /* Reorder to divide last and minimize precision loss; freq is Hz (ticks/sec).
+     * count.QuadPart * 1e9 can overflow a 64-bit int at very large tick counts,
+     * but freq is typically in the low MHz-GHz range, so split whole/frac parts
+     * to stay well within range for any realistic uptime. */
+    long long whole = (count.QuadPart / freq.QuadPart) * 1000000000LL;
+    long long frac  = (count.QuadPart % freq.QuadPart) * 1000000000LL / freq.QuadPart;
+    return whole + frac;
+#else
+    struct timespec _ts;
+    clock_gettime(CLOCK_MONOTONIC, &_ts);
+    return (long long)_ts.tv_sec * 1000000000LL + (long long)_ts.tv_nsec;
+#endif
+}
+
 /* Enable ANSI/VT100 colour codes on Windows Terminal; no-op elsewhere. */
 static inline void _tr_enable_vt100(void) {
 #ifdef _WIN32
@@ -2946,6 +2979,1026 @@ _TR_XLINK int   _tr_iopoll_mod_h(char* p, long long fd, long long ev, long long 
     { return _tr_iopoll_mod((_TrIOPoll*)p,(int)fd,(uint32_t)ev,(void*)(uintptr_t)(unsigned long long)ud); }
 _TR_XLINK int   _tr_iopoll_del_h(char* p, long long fd)
     { return _tr_iopoll_del((_TrIOPoll*)p,(int)fd); }
+
+/* ══════════════════════════════════════════════════════════════════════════
+ * _TrWatch — File-system change notification
+ *
+ * Unified API over platform-specific notification mechanisms:
+ *   Linux:       inotify (inotify_init1/inotify_add_watch + read() loop)
+ *   Windows:     ReadDirectoryChangesW (synchronous, one blocking read per
+ *                watched root, serviced from _tr_watch_poll)
+ *   macOS/BSD:   kqueue EVFILT_VNODE on an open fd per watched path. This is
+ *                the *simpler* of the two standard macOS options (the other
+ *                being full FSEvents). Tradeoff: EVFILT_VNODE only reports
+ *                changes to paths/fds we explicitly opened and are holding
+ *                open, so a plain "watch this directory and tell me about
+ *                new files inside it" needs us to notice NOTE_WRITE on the
+ *                directory fd and re-scan it (done below) rather than
+ *                getting per-child-file events for free the way inotify or
+ *                FSEvents would. For a first cross-platform cut this is the
+ *                pragmatic choice: it reuses the same kqueue machinery as
+ *                _TrIOPoll, needs no CoreFoundation run-loop, and is "good
+ *                enough" for edit/save/create/delete detection on watched
+ *                directories. FSEvents (recursive, coalesced, no open-fd-
+ *                per-watch limit) would be the natural upgrade if/when deep
+ *                recursive trees on macOS need to scale past a few hundred
+ *                directories.
+ *   BARE/kernel: safe no-op stub — watch() "succeeds", poll() always empty.
+ *
+ * Tauraro-level API lives in std/io/watch.tr (Watcher, FileEvent). This
+ * section only provides the raw OS primitives + the (platform-independent)
+ * debounce coalescing, which sits above all three backends.
+ *
+ * Event kinds (mirrors std/io/watch.tr's FileEvent.CREATED/etc.):
+ * ══════════════════════════════════════════════════════════════════════════ */
+
+#define TAURARO_FS_CREATED   1
+#define TAURARO_FS_MODIFIED  2
+#define TAURARO_FS_DELETED   3
+#define TAURARO_FS_RENAMED   4
+
+/* Max bytes (incl. NUL) for a path copied into a pending-event slot. Paths
+ * longer than this are truncated -- matches the 4096 convention used for
+ * paths elsewhere in this file (e.g. _tr_opendir's pat[4096]). */
+#define _TR_WATCH_PATH_CAP 4096
+
+/* One coalesced, ready-to-deliver event sitting in the pending queue. */
+typedef struct {
+    char path[_TR_WATCH_PATH_CAP];
+    int  kind;
+} _TrWatchPendingEvent;
+
+/* One watched root (a file or directory the caller registered). */
+typedef struct {
+    char path[_TR_WATCH_PATH_CAP];
+    int  recursive;
+    int  debounce_ms;
+#if defined(_WIN32) && !defined(TAURARO_BARE) && !defined(TAURARO_KERNEL)
+    HANDLE dir_handle;
+    OVERLAPPED ov;
+    unsigned char buf[16384];
+    int read_pending;
+#elif defined(__linux__) && !defined(TAURARO_BARE) && !defined(TAURARO_KERNEL)
+    int wd; /* inotify watch descriptor for this root */
+#elif (defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)) \
+      && !defined(TAURARO_BARE) && !defined(TAURARO_KERNEL)
+    int fd; /* open() fd on the watched path, used with EVFILT_VNODE */
+    /* Stable id passed as the kevent udata. NOT a pointer into `entries`:
+     * that array is realloc'd as watches are added and swap-compacted as
+     * they are removed, so a stored _TrWatchEntry* would dangle. */
+    int wid;
+    int is_dir;
+    /* Directory snapshot (sorted-free list of child names) used to diff
+     * on NOTE_WRITE and synthesize per-child CREATED/DELETED events,
+     * since EVFILT_VNODE on a directory fd only tells us "something in
+     * here changed", not what. NULL/0 when watching a plain file. */
+    char** children;
+    int    n_children;
+#endif
+} _TrWatchEntry;
+
+/* One in-flight debounce record, keyed by exact changed-file path (NOT the
+ * watched root) -- so two different files changing under the same watched
+ * directory debounce independently instead of clobbering each other. */
+typedef struct {
+    char path[_TR_WATCH_PATH_CAP];
+    long long last_raw_ms;
+    int       last_raw_kind;
+    int       debounce_ms;
+    int       active; /* 1 while waiting for its window to elapse */
+} _TrWatchDebounceRec;
+
+typedef struct {
+    _TrWatchEntry* entries;
+    int n_entries;
+    int cap_entries;
+
+    _TrWatchPendingEvent* pending;
+    int n_pending;
+    int cap_pending;
+
+    _TrWatchDebounceRec* debounce;
+    int n_debounce;
+    int cap_debounce;
+
+#if defined(__linux__) && !defined(TAURARO_BARE) && !defined(TAURARO_KERNEL)
+    int inotify_fd;
+#elif (defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)) \
+      && !defined(TAURARO_BARE) && !defined(TAURARO_KERNEL)
+    int kqfd;
+    int next_wid;
+#endif
+} _TrWatch;
+
+/* ── Shared helpers: pending-event queue + debounce coalescing ─────────── *
+ * Platform-independent so all three real backends can push raw OS events
+ * through the same debounce logic instead of re-implementing it 3x. */
+
+static void _tr_watch_pending_push(_TrWatch* w, const char* path, int kind) {
+    if (!w) return;
+    if (w->n_pending >= w->cap_pending) {
+        int ncap = w->cap_pending > 0 ? w->cap_pending * 2 : 16;
+        _TrWatchPendingEvent* np = (_TrWatchPendingEvent*)TAURARO_REALLOC(
+            w->pending, (size_t)ncap * sizeof(_TrWatchPendingEvent));
+        if (!np) return;
+        w->pending = np;
+        w->cap_pending = ncap;
+    }
+    _TrWatchPendingEvent* e = &w->pending[w->n_pending++];
+    size_t n = strlen(path);
+    if (n >= _TR_WATCH_PATH_CAP) n = _TR_WATCH_PATH_CAP - 1;
+    memcpy(e->path, path, n);
+    e->path[n] = '\0';
+    e->kind = kind;
+}
+
+/* Find (or NULL) the watch entry whose root path is a prefix of `path`,
+ * i.e. the registration responsible for a raw event under that path. Used
+ * to look up per-path debounce_ms/state. Longest-prefix match so a nested
+ * watch (if ever registered) wins over an outer one. */
+static _TrWatchEntry* _tr_watch_find_owner(_TrWatch* w, const char* path) {
+    _TrWatchEntry* best = NULL;
+    size_t best_len = 0;
+    for (int i = 0; i < w->n_entries; i++) {
+        _TrWatchEntry* e = &w->entries[i];
+        size_t elen = strlen(e->path);
+        if (strncmp(e->path, path, elen) == 0 && elen >= best_len) {
+            best = e;
+            best_len = elen;
+        }
+    }
+    return best;
+}
+
+static _TrWatchDebounceRec* _tr_watch_debounce_find_or_alloc(_TrWatch* w, const char* path) {
+    for (int i = 0; i < w->n_debounce; i++) {
+        if (strcmp(w->debounce[i].path, path) == 0) return &w->debounce[i];
+    }
+    /* Reuse a slot that's no longer active before growing. */
+    for (int i = 0; i < w->n_debounce; i++) {
+        if (!w->debounce[i].active) {
+            _TrWatchDebounceRec* r = &w->debounce[i];
+            size_t n = strlen(path);
+            if (n >= _TR_WATCH_PATH_CAP) n = _TR_WATCH_PATH_CAP - 1;
+            memcpy(r->path, path, n); r->path[n] = '\0';
+            return r;
+        }
+    }
+    if (w->n_debounce >= w->cap_debounce) {
+        int ncap = w->cap_debounce > 0 ? w->cap_debounce * 2 : 16;
+        _TrWatchDebounceRec* nd = (_TrWatchDebounceRec*)TAURARO_REALLOC(
+            w->debounce, (size_t)ncap * sizeof(_TrWatchDebounceRec));
+        if (!nd) return NULL;
+        w->debounce = nd;
+        w->cap_debounce = ncap;
+    }
+    _TrWatchDebounceRec* r = &w->debounce[w->n_debounce++];
+    memset(r, 0, sizeof(*r));
+    size_t n = strlen(path);
+    if (n >= _TR_WATCH_PATH_CAP) n = _TR_WATCH_PATH_CAP - 1;
+    memcpy(r->path, path, n); r->path[n] = '\0';
+    return r;
+}
+
+/* Route one raw OS event through debounce coalescing: with debounce_ms<=0
+ * it is delivered immediately; otherwise repeat events for the exact same
+ * changed path within the window just update last_raw_kind/last_raw_ms on
+ * that path's own debounce record and get flushed later by
+ * _tr_watch_flush_debounced (called from poll before it returns). Distinct
+ * paths under the same watched root debounce independently. */
+static void _tr_watch_raw_event(_TrWatch* w, const char* path, int kind) {
+    _TrWatchEntry* owner = _tr_watch_find_owner(w, path);
+    int debounce_ms = owner ? owner->debounce_ms : 0;
+    if (debounce_ms <= 0) {
+        _tr_watch_pending_push(w, path, kind);
+        return;
+    }
+    _TrWatchDebounceRec* r = _tr_watch_debounce_find_or_alloc(w, path);
+    if (!r) { _tr_watch_pending_push(w, path, kind); return; }
+    r->last_raw_ms = _tr_time_ms();
+    r->last_raw_kind = kind;
+    r->debounce_ms = debounce_ms;
+    r->active = 1;
+}
+
+/* Called at the end of every poll(): flush any debounced paths whose
+ * window has elapsed since the last raw event touched them. */
+static void _tr_watch_flush_debounced(_TrWatch* w) {
+    long long now = _tr_time_ms();
+    for (int i = 0; i < w->n_debounce; i++) {
+        _TrWatchDebounceRec* r = &w->debounce[i];
+        if (r->active && (now - r->last_raw_ms) >= r->debounce_ms) {
+            _tr_watch_pending_push(w, r->path, r->last_raw_kind);
+            r->active = 0;
+        }
+    }
+}
+
+/* Earliest deadline (ms, absolute _tr_time_ms() timebase) among active
+ * debounce records, or -1 if none are pending. Lets poll() wake up exactly
+ * when a debounce window elapses instead of only on its coarse 50ms slice,
+ * so debounce_ms shorter than that slice still fires promptly. */
+static long long _tr_watch_next_debounce_deadline(_TrWatch* w) {
+    long long best = -1;
+    for (int i = 0; i < w->n_debounce; i++) {
+        _TrWatchDebounceRec* r = &w->debounce[i];
+        if (!r->active) continue;
+        long long d = r->last_raw_ms + r->debounce_ms;
+        if (best < 0 || d < best) best = d;
+    }
+    return best;
+}
+
+static _TrWatchEntry* _tr_watch_entry_alloc(_TrWatch* w) {
+    if (w->n_entries >= w->cap_entries) {
+        int ncap = w->cap_entries > 0 ? w->cap_entries * 2 : 8;
+        _TrWatchEntry* ne = (_TrWatchEntry*)TAURARO_REALLOC(
+            w->entries, (size_t)ncap * sizeof(_TrWatchEntry));
+        if (!ne) return NULL;
+        w->entries = ne;
+        w->cap_entries = ncap;
+    }
+    _TrWatchEntry* e = &w->entries[w->n_entries++];
+    memset(e, 0, sizeof(*e));
+    return e;
+}
+
+static int _tr_watch_entry_find_idx(_TrWatch* w, const char* path) {
+    for (int i = 0; i < w->n_entries; i++) {
+        if (strcmp(w->entries[i].path, path) == 0) return i;
+    }
+    return -1;
+}
+
+#if defined(TAURARO_BARE) || defined(TAURARO_KERNEL)
+/* ── BARE/Kernel: no-op stub (no filesystem notifications available) ───── */
+_TR_XLINK _TrWatch* _tr_watch_create(void) {
+    return (_TrWatch*)TAURARO_CALLOC(1, sizeof(_TrWatch));
+}
+_TR_XLINK void _tr_watch_destroy(_TrWatch* w) {
+    if (!w) return;
+    if (w->entries) TAURARO_FREE(w->entries);
+    if (w->pending) TAURARO_FREE(w->pending);
+    if (w->debounce) TAURARO_FREE(w->debounce);
+    TAURARO_FREE(w);
+}
+_TR_XLINK int _tr_watch_add(_TrWatch* w, const char* path, int recursive, int debounce_ms) {
+    if (!w || !path) return -1;
+    _TrWatchEntry* e = _tr_watch_entry_alloc(w);
+    if (!e) return -1;
+    size_t n = strlen(path);
+    if (n >= _TR_WATCH_PATH_CAP) n = _TR_WATCH_PATH_CAP - 1;
+    memcpy(e->path, path, n); e->path[n] = '\0';
+    e->recursive = recursive;
+    e->debounce_ms = debounce_ms;
+    return 0; /* "succeeds" -- but will never produce events */
+}
+_TR_XLINK int _tr_watch_remove(_TrWatch* w, const char* path) {
+    if (!w || !path) return -1;
+    int idx = _tr_watch_entry_find_idx(w, path);
+    if (idx < 0) return -1;
+    w->entries[idx] = w->entries[w->n_entries - 1];
+    w->n_entries--;
+    return 0;
+}
+_TR_XLINK int _tr_watch_poll(_TrWatch* w, int timeout_ms, char* out_paths, int* out_kinds, int maxev) {
+    (void)w; (void)out_paths; (void)out_kinds; (void)maxev;
+    if (timeout_ms > 0) {
+#if defined(_WIN32)
+        Sleep((DWORD)timeout_ms);
+#endif
+    }
+    return 0;
+}
+
+#elif defined(_WIN32)
+/* ── Windows: ReadDirectoryChangesW-backed _TrWatch ─────────────────────
+ * Synchronous (overlapped-but-polled) variant: each watched root gets its
+ * own directory HANDLE opened with FILE_FLAG_BACKUP_SEMANTICS so it can be
+ * a directory, plus an OVERLAPPED struct. poll() issues/keeps alive one
+ * ReadDirectoryChangesW call per root and uses GetOverlappedResultEx with
+ * the caller's timeout to wait for *any* of them (polled round-robin with
+ * a short per-root slice, which is simple and correct for the small watch
+ * counts this API targets -- a fully async IOCP-integrated version is a
+ * natural follow-up, noted in std/io/watch.tr's module doc). */
+_TR_XLINK _TrWatch* _tr_watch_create(void) {
+    return (_TrWatch*)TAURARO_CALLOC(1, sizeof(_TrWatch));
+}
+static void _tr_watch_close_entry(_TrWatchEntry* e) {
+    if (e->dir_handle && e->dir_handle != INVALID_HANDLE_VALUE) {
+        CancelIo(e->dir_handle);
+        CloseHandle(e->dir_handle);
+    }
+    if (e->ov.hEvent) CloseHandle(e->ov.hEvent);
+    memset(&e->ov, 0, sizeof(e->ov));
+    e->dir_handle = NULL;
+    e->read_pending = 0;
+}
+_TR_XLINK void _tr_watch_destroy(_TrWatch* w) {
+    if (!w) return;
+    for (int i = 0; i < w->n_entries; i++) _tr_watch_close_entry(&w->entries[i]);
+    if (w->entries) TAURARO_FREE(w->entries);
+    if (w->pending) TAURARO_FREE(w->pending);
+    if (w->debounce) TAURARO_FREE(w->debounce);
+    TAURARO_FREE(w);
+}
+static int _tr_watch_issue_read(_TrWatchEntry* e) {
+    DWORD bytes = 0;
+    DWORD filter = FILE_NOTIFY_CHANGE_FILE_NAME | FILE_NOTIFY_CHANGE_DIR_NAME |
+                   FILE_NOTIFY_CHANGE_LAST_WRITE | FILE_NOTIFY_CHANGE_SIZE |
+                   FILE_NOTIFY_CHANGE_CREATION;
+    memset(&e->ov, 0, sizeof(e->ov));
+    if (!e->ov.hEvent) e->ov.hEvent = CreateEventA(NULL, TRUE, FALSE, NULL);
+    ResetEvent(e->ov.hEvent);
+    BOOL ok = ReadDirectoryChangesW(
+        e->dir_handle, e->buf, (DWORD)sizeof(e->buf), e->recursive ? TRUE : FALSE,
+        filter, &bytes, &e->ov, NULL);
+    e->read_pending = ok ? 1 : 0;
+    return ok ? 0 : -1;
+}
+_TR_XLINK int _tr_watch_add(_TrWatch* w, const char* path, int recursive, int debounce_ms) {
+    if (!w || !path) return -1;
+    _TrWatchEntry* e = _tr_watch_entry_alloc(w);
+    if (!e) return -1;
+    size_t n = strlen(path);
+    if (n >= _TR_WATCH_PATH_CAP) n = _TR_WATCH_PATH_CAP - 1;
+    memcpy(e->path, path, n); e->path[n] = '\0';
+    e->recursive = recursive;
+    e->debounce_ms = debounce_ms;
+    e->dir_handle = CreateFileA(path, FILE_LIST_DIRECTORY,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL,
+        OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OVERLAPPED, NULL);
+    if (e->dir_handle == INVALID_HANDLE_VALUE) {
+        w->n_entries--;
+        return -1;
+    }
+    if (_tr_watch_issue_read(e) != 0) {
+        _tr_watch_close_entry(e);
+        w->n_entries--;
+        return -1;
+    }
+    return 0;
+}
+_TR_XLINK int _tr_watch_remove(_TrWatch* w, const char* path) {
+    if (!w || !path) return -1;
+    int idx = _tr_watch_entry_find_idx(w, path);
+    if (idx < 0) return -1;
+    _tr_watch_close_entry(&w->entries[idx]);
+    w->entries[idx] = w->entries[w->n_entries - 1];
+    w->n_entries--;
+    return 0;
+}
+static void _tr_watch_drain_entry(_TrWatch* w, _TrWatchEntry* e) {
+    DWORD bytes = 0;
+    if (!GetOverlappedResult(e->dir_handle, &e->ov, &bytes, FALSE)) {
+        return; /* not ready / nothing to drain */
+    }
+    e->read_pending = 0;
+    if (bytes > 0) {
+        unsigned char* p = e->buf;
+        for (;;) {
+            FILE_NOTIFY_INFORMATION* fni = (FILE_NOTIFY_INFORMATION*)p;
+            char name_utf8[_TR_WATCH_PATH_CAP];
+            int wlen = (int)(fni->FileNameLength / sizeof(WCHAR));
+            int clen = WideCharToMultiByte(CP_UTF8, 0, fni->FileName, wlen,
+                name_utf8, (int)sizeof(name_utf8) - 1, NULL, NULL);
+            if (clen < 0) clen = 0;
+            name_utf8[clen] = '\0';
+            char full[_TR_WATCH_PATH_CAP];
+            _snprintf(full, sizeof(full), "%s\\%s", e->path, name_utf8);
+            full[sizeof(full) - 1] = '\0';
+            int kind = TAURARO_FS_MODIFIED;
+            switch (fni->Action) {
+                case FILE_ACTION_ADDED:            kind = TAURARO_FS_CREATED;  break;
+                case FILE_ACTION_REMOVED:          kind = TAURARO_FS_DELETED;  break;
+                case FILE_ACTION_MODIFIED:         kind = TAURARO_FS_MODIFIED; break;
+                case FILE_ACTION_RENAMED_OLD_NAME:  kind = TAURARO_FS_RENAMED;  break;
+                case FILE_ACTION_RENAMED_NEW_NAME:  kind = TAURARO_FS_RENAMED;  break;
+                default: kind = TAURARO_FS_MODIFIED; break;
+            }
+            _tr_watch_raw_event(w, full, kind);
+            if (fni->NextEntryOffset == 0) break;
+            p += fni->NextEntryOffset;
+        }
+    }
+    /* Re-arm for the next batch of changes on this root. */
+    _tr_watch_issue_read(e);
+}
+_TR_XLINK int _tr_watch_poll(_TrWatch* w, int timeout_ms, char* out_paths, int* out_kinds, int maxev) {
+    if (!w) return 0;
+    long long deadline = timeout_ms < 0 ? -1 : (_tr_time_ms() + timeout_ms);
+    for (;;) {
+        for (int i = 0; i < w->n_entries; i++) {
+            if (w->entries[i].read_pending) _tr_watch_drain_entry(w, &w->entries[i]);
+        }
+        _tr_watch_flush_debounced(w);
+        if (w->n_pending > 0) break;
+        if (w->n_entries == 0) { Sleep(timeout_ms > 0 ? (DWORD)timeout_ms : 0); break; }
+        long long now = _tr_time_ms();
+        if (deadline >= 0 && now >= deadline) break;
+        long long max_slice = 50;
+        long long dd = _tr_watch_next_debounce_deadline(w);
+        if (dd >= 0 && (dd - now) < max_slice) max_slice = dd - now;
+        DWORD slice = deadline < 0 ? (DWORD)max_slice : (DWORD)(deadline - now < max_slice ? deadline - now : max_slice);
+        Sleep(slice > 0 ? slice : 1);
+        if (deadline < 0) continue;
+    }
+    int n = w->n_pending;
+    if (n > maxev) n = maxev;
+    for (int i = 0; i < n; i++) {
+        char* slot = out_paths + (size_t)i * _TR_WATCH_PATH_CAP;
+        size_t l = strlen(w->pending[i].path);
+        if (l >= _TR_WATCH_PATH_CAP) l = _TR_WATCH_PATH_CAP - 1;
+        memcpy(slot, w->pending[i].path, l);
+        slot[l] = '\0';
+        out_kinds[i] = w->pending[i].kind;
+    }
+    /* Shift any leftover (maxev-truncated) events to the front. */
+    int leftover = w->n_pending - n;
+    if (leftover > 0) memmove(&w->pending[0], &w->pending[n], (size_t)leftover * sizeof(_TrWatchPendingEvent));
+    w->n_pending = leftover;
+    return n;
+}
+
+#elif defined(__linux__)
+/* ── Linux: inotify-backed _TrWatch ─────────────────────────────────────
+ * One inotify instance shared by all watched roots; each root gets its own
+ * watch descriptor (wd) via inotify_add_watch. "recursive" is emulated by
+ * additionally watching every existing subdirectory at add() time (inotify
+ * itself is never recursive) -- newly-created subdirectories after that
+ * are picked up lazily the next time poll() sees an IN_CREATE|IN_ISDIR
+ * event under a recursive root and inotify_add_watch's it on the fly. */
+#include <sys/inotify.h>
+#include <poll.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <dirent.h>
+
+static int _tr_watch_add_wd_for(_TrWatch* w, _TrWatchEntry* owner, const char* dirpath);
+
+static void _tr_watch_scan_subdirs(_TrWatch* w, _TrWatchEntry* owner, const char* dirpath) {
+    DIR* d = opendir(dirpath);
+    if (!d) return;
+    struct dirent* ent;
+    while ((ent = readdir(d)) != NULL) {
+        if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) continue;
+        char child[_TR_WATCH_PATH_CAP];
+        snprintf(child, sizeof(child), "%s/%s", dirpath, ent->d_name);
+        struct stat st;
+        if (stat(child, &st) == 0 && S_ISDIR(st.st_mode)) {
+            _tr_watch_add_wd_for(w, owner, child);
+            _tr_watch_scan_subdirs(w, owner, child);
+        }
+    }
+    closedir(d);
+}
+
+/* We need a wd -> owning directory-path lookup to reconstruct full paths
+ * from inotify's (wd, name) events, since inotify only reports the watched
+ * directory's wd + the changed child's bare name, not a full path. Rather
+ * than a second data structure, each watched subdirectory (root or lazily-
+ * discovered nested dir) is recorded as its own synthetic entry in
+ * entries[] (recursive = -1 sentinel marks "internal subdir watch, not a
+ * user-visible root") and we linear-scan entries[] by wd on each event --
+ * see _tr_watch_entry_by_wd below. Fine for the modest watch counts this
+ * API targets. */
+
+static int _tr_watch_add_wd_for(_TrWatch* w, _TrWatchEntry* owner, const char* dirpath) {
+    uint32_t mask = IN_CREATE | IN_DELETE | IN_MODIFY | IN_MOVED_FROM | IN_MOVED_TO |
+                    IN_CLOSE_WRITE | IN_ATTRIB;
+    int wd = inotify_add_watch(w->inotify_fd, dirpath, mask);
+    if (wd < 0) return -1;
+    /* Record the (wd -> dir, owner) mapping as a synthetic extra entry in
+     * entries[] marked with wd>=0 and recursive=-1 (sentinel: "subwatch",
+     * not a user-visible root) so lookups during poll can reuse the same
+     * array without a second data structure. */
+    _TrWatchEntry* sub = _tr_watch_entry_alloc(w);
+    if (!sub) { inotify_rm_watch(w->inotify_fd, wd); return -1; }
+    size_t n = strlen(dirpath);
+    if (n >= _TR_WATCH_PATH_CAP) n = _TR_WATCH_PATH_CAP - 1;
+    memcpy(sub->path, dirpath, n); sub->path[n] = '\0';
+    sub->recursive = -1; /* sentinel: internal subdir watch, not a user root */
+    sub->debounce_ms = owner->debounce_ms;
+    sub->wd = wd;
+    return 0;
+}
+
+_TR_XLINK _TrWatch* _tr_watch_create(void) {
+    _TrWatch* w = (_TrWatch*)TAURARO_CALLOC(1, sizeof(_TrWatch));
+    if (!w) return NULL;
+    w->inotify_fd = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
+    if (w->inotify_fd < 0) { TAURARO_FREE(w); return NULL; }
+    return w;
+}
+_TR_XLINK void _tr_watch_destroy(_TrWatch* w) {
+    if (!w) return;
+    if (w->inotify_fd >= 0) close(w->inotify_fd);
+    if (w->entries) TAURARO_FREE(w->entries);
+    if (w->pending) TAURARO_FREE(w->pending);
+    if (w->debounce) TAURARO_FREE(w->debounce);
+    TAURARO_FREE(w);
+}
+_TR_XLINK int _tr_watch_add(_TrWatch* w, const char* path, int recursive, int debounce_ms) {
+    if (!w || !path) return -1;
+    struct stat st;
+    if (stat(path, &st) != 0) return -1;
+    _TrWatchEntry* e = _tr_watch_entry_alloc(w);
+    if (!e) return -1;
+    size_t n = strlen(path);
+    if (n >= _TR_WATCH_PATH_CAP) n = _TR_WATCH_PATH_CAP - 1;
+    memcpy(e->path, path, n); e->path[n] = '\0';
+    e->recursive = recursive;
+    e->debounce_ms = debounce_ms;
+    uint32_t mask = IN_CREATE | IN_DELETE | IN_MODIFY | IN_MOVED_FROM | IN_MOVED_TO |
+                    IN_CLOSE_WRITE | IN_ATTRIB;
+    int wd = inotify_add_watch(w->inotify_fd, path, mask);
+    if (wd < 0) { w->n_entries--; return -1; }
+    e->wd = wd;
+    if (recursive && S_ISDIR(st.st_mode)) {
+        /* Re-fetch `e` after possible realloc inside the recursive scan. */
+        int eidx = w->n_entries - 1;
+        _tr_watch_scan_subdirs(w, &w->entries[eidx], path);
+    }
+    return 0;
+}
+_TR_XLINK int _tr_watch_remove(_TrWatch* w, const char* path) {
+    if (!w || !path) return -1;
+    int idx = _tr_watch_entry_find_idx(w, path);
+    if (idx < 0 || w->entries[idx].recursive < 0) return -1; /* don't let callers remove internal subwatches */
+    size_t plen = strlen(path);
+    /* Remove the root's own wd, plus any internal subdir wds nested under it. */
+    for (int i = w->n_entries - 1; i >= 0; i--) {
+        _TrWatchEntry* e2 = &w->entries[i];
+        int is_self = (i == idx);
+        int is_sub_of = (e2->recursive < 0 && strncmp(e2->path, path, plen) == 0 &&
+                          (e2->path[plen] == '/' || e2->path[plen] == '\0'));
+        if (is_self || is_sub_of) {
+            if (e2->wd >= 0) inotify_rm_watch(w->inotify_fd, e2->wd);
+            w->entries[i] = w->entries[w->n_entries - 1];
+            w->n_entries--;
+            if (idx == w->n_entries) idx = i; /* keep idx valid if it was the moved slot */
+        }
+    }
+    return 0;
+}
+/* Find the directory path owning watch descriptor `wd` (root or subdir). */
+static _TrWatchEntry* _tr_watch_entry_by_wd(_TrWatch* w, int wd) {
+    for (int i = 0; i < w->n_entries; i++) {
+        if (w->entries[i].wd == wd) return &w->entries[i];
+    }
+    return NULL;
+}
+_TR_XLINK int _tr_watch_poll(_TrWatch* w, int timeout_ms, char* out_paths, int* out_kinds, int maxev) {
+    if (!w) return 0;
+    long long deadline = timeout_ms < 0 ? -1 : (_tr_time_ms() + timeout_ms);
+    char buf[16384] __attribute__((aligned(__alignof__(struct inotify_event))));
+    for (;;) {
+        struct pollfd pfd; pfd.fd = w->inotify_fd; pfd.events = POLLIN; pfd.revents = 0;
+        long long now = _tr_time_ms();
+        long long max_slice = 50;
+        long long dd = _tr_watch_next_debounce_deadline(w);
+        if (dd >= 0 && (dd - now) < max_slice) max_slice = dd - now;
+        if (max_slice < 0) max_slice = 0;
+        int wait_ms;
+        if (deadline < 0) wait_ms = w->n_entries > 0 ? (int)max_slice : -1;
+        else {
+            long long rem = deadline - now;
+            if (rem < 0) rem = 0;
+            wait_ms = (int)(rem < max_slice ? rem : max_slice);
+        }
+        int pr = poll(&pfd, 1, wait_ms);
+        if (pr > 0 && (pfd.revents & POLLIN)) {
+            ssize_t len = read(w->inotify_fd, buf, sizeof(buf));
+            ssize_t off = 0;
+            while (off < len) {
+                struct inotify_event* ev = (struct inotify_event*)(buf + off);
+                _TrWatchEntry* dirent_owner = _tr_watch_entry_by_wd(w, ev->wd);
+                if (dirent_owner) {
+                    char full[_TR_WATCH_PATH_CAP];
+                    if (ev->len > 0) snprintf(full, sizeof(full), "%s/%s", dirent_owner->path, ev->name);
+                    else { size_t n = strlen(dirent_owner->path); if (n >= sizeof(full)) n = sizeof(full)-1; memcpy(full, dirent_owner->path, n); full[n] = '\0'; }
+                    int kind = TAURARO_FS_MODIFIED;
+                    if (ev->mask & IN_CREATE)      kind = TAURARO_FS_CREATED;
+                    else if (ev->mask & IN_DELETE) kind = TAURARO_FS_DELETED;
+                    else if (ev->mask & (IN_MOVED_FROM)) kind = TAURARO_FS_DELETED;
+                    else if (ev->mask & (IN_MOVED_TO))   kind = TAURARO_FS_CREATED;
+                    else if (ev->mask & (IN_MODIFY | IN_CLOSE_WRITE | IN_ATTRIB)) kind = TAURARO_FS_MODIFIED;
+                    /* Lazily start watching newly-created subdirectories of
+                     * a recursive root so future nested changes are seen. */
+                    if ((ev->mask & (IN_CREATE | IN_ISDIR)) == (IN_CREATE | IN_ISDIR) &&
+                        dirent_owner->recursive != 0) {
+                        struct stat st;
+                        if (stat(full, &st) == 0 && S_ISDIR(st.st_mode)) {
+                            _tr_watch_add_wd_for(w, dirent_owner, full);
+                        }
+                    }
+                    _tr_watch_raw_event(w, full, kind);
+                }
+                off += (ssize_t)(sizeof(struct inotify_event) + ev->len);
+            }
+        }
+        _tr_watch_flush_debounced(w);
+        if (w->n_pending > 0) break;
+        if (deadline >= 0 && _tr_time_ms() >= deadline) break;
+        if (deadline < 0 && w->n_entries == 0) break;
+    }
+    int n = w->n_pending;
+    if (n > maxev) n = maxev;
+    for (int i = 0; i < n; i++) {
+        char* slot = out_paths + (size_t)i * _TR_WATCH_PATH_CAP;
+        size_t l = strlen(w->pending[i].path);
+        if (l >= _TR_WATCH_PATH_CAP) l = _TR_WATCH_PATH_CAP - 1;
+        memcpy(slot, w->pending[i].path, l);
+        slot[l] = '\0';
+        out_kinds[i] = w->pending[i].kind;
+    }
+    int leftover = w->n_pending - n;
+    if (leftover > 0) memmove(&w->pending[0], &w->pending[n], (size_t)leftover * sizeof(_TrWatchPendingEvent));
+    w->n_pending = leftover;
+    return n;
+}
+
+#elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
+/* ── macOS/BSD: kqueue EVFILT_VNODE-backed _TrWatch ──────────────────────
+ * Simpler alternative to full FSEvents (see module-doc tradeoff note
+ * above): one open fd per watched vnode, EVFILT_VNODE with NOTE_WRITE
+ * (content/directory-listing changed), NOTE_DELETE, NOTE_RENAME,
+ * NOTE_EXTEND, NOTE_ATTRIB.
+ *
+ * kqueue semantics this backend has to work around:
+ *   - EVFILT_VNODE on a *directory* fd fires NOTE_WRITE only when the
+ *     directory's own entry list changes (a child is created, unlinked or
+ *     renamed). It does NOT fire when an existing file inside it is
+ *     written/appended. So, to match inotify's per-child IN_MODIFY, every
+ *     regular file directly inside a watched directory gets its OWN fd +
+ *     EVFILT_VNODE registration (internal entry kind _TR_WATCH_CHILDFILE),
+ *     attached at add() time and whenever a directory diff reveals a new
+ *     file. Its NOTE_WRITE/NOTE_EXTEND/NOTE_ATTRIB is reported as MODIFIED
+ *     on the child's path.
+ *   - Which child changed is not reported for a directory NOTE_WRITE, so we
+ *     keep a snapshot of child names and diff on NOTE_WRITE to synthesize
+ *     CREATED/DELETED for individual children.
+ *   - Recursive roots additionally get an internal _TR_WATCH_SUBDIR entry
+ *     (and per-file children) for every subdirectory, at add() time and
+ *     lazily when a diff reveals a new subdirectory.
+ *
+ * Internal entries share the `entries` array with user roots and are told
+ * apart by .recursive: >= 0 for a caller-registered root (0/1 = recursive
+ * flag), < 0 for an auto-added internal entry. kevent udata carries the
+ * entry's stable .wid (see _TrWatchEntry), never an entry pointer: the
+ * entries array is realloc'd on growth and swap-compacted on removal.
+ * Any helper that may append entries can move the array, so code below
+ * holds indices / copied paths across such calls, never _TrWatchEntry*. */
+#include <sys/event.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <dirent.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <stdint.h>
+
+#define _TR_WATCH_SUBDIR     (-1)  /* auto-added subdir of a recursive root  */
+#define _TR_WATCH_CHILDFILE  (-2)  /* auto-added regular file in a watched dir */
+
+/* O_EVTONLY (Apple): open only for event notification -- does not count as
+ * a "real" open, so watching never blocks unmounting the volume. */
+#if defined(O_EVTONLY)
+#  define _TR_WATCH_OFLAGS_BASE O_EVTONLY
+#else
+#  define _TR_WATCH_OFLAGS_BASE O_RDONLY
+#endif
+#if defined(O_CLOEXEC)
+#  define _TR_WATCH_OFLAGS (_TR_WATCH_OFLAGS_BASE | O_CLOEXEC)
+#else
+#  define _TR_WATCH_OFLAGS _TR_WATCH_OFLAGS_BASE
+#endif
+
+static char** _tr_watch_snapshot_dir(const char* dirpath, int* out_n) {
+    DIR* d = opendir(dirpath);
+    if (!d) { *out_n = 0; return NULL; }
+    int cap = 16, n = 0;
+    char** names = (char**)TAURARO_CALLOC((size_t)cap, sizeof(char*));
+    struct dirent* ent;
+    while ((ent = readdir(d)) != NULL) {
+        if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) continue;
+        if (n >= cap) { cap *= 2; names = (char**)TAURARO_REALLOC(names, (size_t)cap * sizeof(char*)); }
+        names[n++] = strdup(ent->d_name);
+    }
+    closedir(d);
+    *out_n = n;
+    return names;
+}
+static void _tr_watch_free_snapshot(char** names, int n) {
+    if (!names) return;
+    for (int i = 0; i < n; i++) free(names[i]);
+    TAURARO_FREE(names);
+}
+static int _tr_watch_snapshot_contains(char** names, int n, const char* name) {
+    for (int i = 0; i < n; i++) if (strcmp(names[i], name) == 0) return 1;
+    return 0;
+}
+static void _tr_watch_copy_path(char* dst, const char* src) {
+    size_t n = strlen(src);
+    if (n >= _TR_WATCH_PATH_CAP) n = _TR_WATCH_PATH_CAP - 1;
+    memcpy(dst, src, n); dst[n] = '\0';
+}
+static int _tr_watch_idx_by_wid(_TrWatch* w, int wid) {
+    for (int i = 0; i < w->n_entries; i++)
+        if (w->entries[i].fd >= 0 && w->entries[i].wid == wid) return i;
+    return -1;
+}
+/* Deregister + close + swap-remove entry `idx`. On a native kqueue close()
+ * alone drops the knote; the explicit EV_DELETE is for kqueue emulations
+ * (e.g. libkqueue) where a closed fd's knote can otherwise linger. */
+static void _tr_watch_drop_idx(_TrWatch* w, int idx) {
+    _TrWatchEntry* e = &w->entries[idx];
+    if (e->fd >= 0) {
+        struct kevent kev;
+        EV_SET(&kev, (uintptr_t)e->fd, EVFILT_VNODE, EV_DELETE, 0, 0, NULL);
+        (void)kevent(w->kqfd, &kev, 1, NULL, 0, NULL);
+        close(e->fd);
+    }
+    _tr_watch_free_snapshot(e->children, e->n_children);
+    w->entries[idx] = w->entries[w->n_entries - 1];
+    w->n_entries--;
+}
+/* Drop every INTERNAL entry at `p` or below `p/` (never a user root). */
+static void _tr_watch_drop_tree(_TrWatch* w, const char* p) {
+    size_t pl = strlen(p);
+    for (int i = w->n_entries - 1; i >= 0; i--) {
+        _TrWatchEntry* e = &w->entries[i];
+        if (e->recursive < 0 && strncmp(e->path, p, pl) == 0 &&
+            (e->path[pl] == '\0' || e->path[pl] == '/'))
+            _tr_watch_drop_idx(w, i);
+    }
+}
+
+_TR_XLINK _TrWatch* _tr_watch_create(void) {
+    _TrWatch* w = (_TrWatch*)TAURARO_CALLOC(1, sizeof(_TrWatch));
+    if (!w) return NULL;
+    w->kqfd = kqueue();
+    if (w->kqfd < 0) { TAURARO_FREE(w); return NULL; }
+    return w;
+}
+_TR_XLINK void _tr_watch_destroy(_TrWatch* w) {
+    if (!w) return;
+    for (int i = 0; i < w->n_entries; i++) {
+        if (w->entries[i].fd >= 0) close(w->entries[i].fd);
+        _tr_watch_free_snapshot(w->entries[i].children, w->entries[i].n_children);
+    }
+    if (w->kqfd >= 0) close(w->kqfd);
+    if (w->entries) TAURARO_FREE(w->entries);
+    if (w->pending) TAURARO_FREE(w->pending);
+    if (w->debounce) TAURARO_FREE(w->debounce);
+    TAURARO_FREE(w);
+}
+
+/* Open `path` and register EVFILT_VNODE for it. slot >= 0: use that
+ * already-allocated entry (a user root being added). slot < 0: append a new
+ * internal entry of `kind` (_TR_WATCH_SUBDIR / _TR_WATCH_CHILDFILE) that
+ * inherits `debounce_ms`. Returns the entry index, or -1 on failure.
+ * May realloc w->entries -- callers must not hold _TrWatchEntry* across it. */
+static int _tr_watch_open_fd_for(_TrWatch* w, int slot, const char* path, int kind, int debounce_ms) {
+    int fd = open(path, _TR_WATCH_OFLAGS);
+    if (fd < 0) return -1;
+    struct stat st;
+    if (fstat(fd, &st) != 0) { close(fd); return -1; }
+    int idx = slot;
+    if (idx < 0) {
+        if (!_tr_watch_entry_alloc(w)) { close(fd); return -1; }
+        idx = w->n_entries - 1;
+        _tr_watch_copy_path(w->entries[idx].path, path);
+        w->entries[idx].recursive = kind;
+        w->entries[idx].debounce_ms = debounce_ms;
+    }
+    _TrWatchEntry* e = &w->entries[idx];
+    e->fd = fd;
+    e->wid = ++w->next_wid;
+    e->is_dir = S_ISDIR(st.st_mode) ? 1 : 0;
+    struct kevent kev;
+    EV_SET(&kev, (uintptr_t)fd, EVFILT_VNODE, EV_ADD | EV_CLEAR,
+           NOTE_WRITE | NOTE_DELETE | NOTE_RENAME | NOTE_EXTEND | NOTE_ATTRIB, 0,
+           (void*)(intptr_t)e->wid);
+    if (kevent(w->kqfd, &kev, 1, NULL, 0, NULL) != 0) {
+        close(fd);
+        e->fd = -1;
+        if (slot < 0) w->n_entries--; /* drop the internal entry we just appended */
+        return -1;
+    }
+    if (e->is_dir) e->children = _tr_watch_snapshot_dir(path, &e->n_children);
+    return idx;
+}
+
+static void _tr_watch_attach_children(_TrWatch* w, int didx);
+
+/* Start watching child `name` of directory entry `didx`: a regular file gets
+ * its own _TR_WATCH_CHILDFILE fd (so writes to it are seen -- see the
+ * section comment); a subdirectory is descended into only under a recursive
+ * root (root .recursive == 1, or an internal _TR_WATCH_SUBDIR). lstat, not
+ * stat: symlinks are not followed (no loops, and inotify does not report
+ * writes through a symlink in a watched dir either). */
+static void _tr_watch_attach_child(_TrWatch* w, int didx, const char* name) {
+    char full[_TR_WATCH_PATH_CAP];
+    snprintf(full, sizeof(full), "%s/%s", w->entries[didx].path, name);
+    int dir_kind = w->entries[didx].recursive;
+    int deb = w->entries[didx].debounce_ms;
+    if (_tr_watch_entry_find_idx(w, full) >= 0) return; /* already watched */
+    struct stat st;
+    if (lstat(full, &st) != 0) return;
+    if (S_ISREG(st.st_mode)) {
+        _tr_watch_open_fd_for(w, -1, full, _TR_WATCH_CHILDFILE, deb);
+    } else if (S_ISDIR(st.st_mode) && dir_kind != 0) {
+        int sidx = _tr_watch_open_fd_for(w, -1, full, _TR_WATCH_SUBDIR, deb);
+        if (sidx >= 0) _tr_watch_attach_children(w, sidx);
+    }
+}
+/* Attach every child currently in directory entry `didx`'s snapshot. Only
+ * appends to `entries`, so didx itself stays valid throughout. */
+static void _tr_watch_attach_children(_TrWatch* w, int didx) {
+    int n = w->entries[didx].n_children;
+    for (int i = 0; i < n; i++) {
+        char name[_TR_WATCH_PATH_CAP];
+        _tr_watch_copy_path(name, w->entries[didx].children[i]);
+        _tr_watch_attach_child(w, didx, name);
+    }
+}
+
+_TR_XLINK int _tr_watch_add(_TrWatch* w, const char* path, int recursive, int debounce_ms) {
+    if (!w || !path) return -1;
+    struct stat st;
+    if (stat(path, &st) != 0) return -1;
+    if (!_tr_watch_entry_alloc(w)) return -1;
+    int idx = w->n_entries - 1;
+    _tr_watch_copy_path(w->entries[idx].path, path);
+    w->entries[idx].recursive = recursive ? 1 : 0; /* < 0 is reserved for internal entries */
+    w->entries[idx].debounce_ms = debounce_ms;
+    w->entries[idx].fd = -1;
+    if (_tr_watch_open_fd_for(w, idx, path, 0, debounce_ms) < 0) {
+        w->n_entries--;
+        return -1;
+    }
+    if (w->entries[idx].is_dir) _tr_watch_attach_children(w, idx);
+    return 0;
+}
+_TR_XLINK int _tr_watch_remove(_TrWatch* w, const char* path) {
+    if (!w || !path) return -1;
+    int idx = -1;
+    for (int i = 0; i < w->n_entries; i++) {
+        if (w->entries[i].recursive >= 0 && strcmp(w->entries[i].path, path) == 0) { idx = i; break; }
+    }
+    if (idx < 0) return -1;
+    char p[_TR_WATCH_PATH_CAP];
+    _tr_watch_copy_path(p, path);
+    _tr_watch_drop_idx(w, idx);
+    _tr_watch_drop_tree(w, p); /* its subdir + per-file internal entries */
+    return 0;
+}
+
+/* Directory entry `di` got NOTE_WRITE: diff its child list against the
+ * snapshot, report CREATED/DELETED per child, attach watches to new
+ * children and drop watches of vanished ones. */
+static void _tr_watch_rescan_dir(_TrWatch* w, int di) {
+    char dpath[_TR_WATCH_PATH_CAP];
+    _tr_watch_copy_path(dpath, w->entries[di].path);
+    int new_n = 0;
+    char** new_names = _tr_watch_snapshot_dir(dpath, &new_n);
+    char** old_names = w->entries[di].children;
+    int old_n = w->entries[di].n_children;
+    /* Install the new snapshot first: the attach/drop calls below may move
+     * entries (realloc / swap-remove) but never drop entry di itself (only
+     * entries strictly below dpath/), and new_names stays owned by it. */
+    w->entries[di].children = new_names;
+    w->entries[di].n_children = new_n;
+    char full[_TR_WATCH_PATH_CAP];
+    for (int c = 0; c < new_n; c++) {
+        if (_tr_watch_snapshot_contains(old_names, old_n, new_names[c])) continue;
+        snprintf(full, sizeof(full), "%s/%s", dpath, new_names[c]);
+        _tr_watch_raw_event(w, full, TAURARO_FS_CREATED);
+        int cur = _tr_watch_entry_find_idx(w, dpath); /* re-find: may have moved */
+        if (cur >= 0) _tr_watch_attach_child(w, cur, new_names[c]);
+    }
+    for (int c = 0; c < old_n; c++) {
+        if (_tr_watch_snapshot_contains(new_names, new_n, old_names[c])) continue;
+        snprintf(full, sizeof(full), "%s/%s", dpath, old_names[c]);
+        _tr_watch_raw_event(w, full, TAURARO_FS_DELETED);
+        _tr_watch_drop_tree(w, full);
+    }
+    _tr_watch_free_snapshot(old_names, old_n);
+}
+
+_TR_XLINK int _tr_watch_poll(_TrWatch* w, int timeout_ms, char* out_paths, int* out_kinds, int maxev) {
+    if (!w) return 0;
+    long long deadline = timeout_ms < 0 ? -1 : (_tr_time_ms() + timeout_ms);
+    for (;;) {
+        struct kevent evs[64];
+        long long now = _tr_time_ms();
+        long long max_slice = 50;
+        long long dd = _tr_watch_next_debounce_deadline(w);
+        if (dd >= 0 && (dd - now) < max_slice) max_slice = dd - now;
+        if (max_slice < 0) max_slice = 0;
+        int wait_ms;
+        if (deadline < 0) wait_ms = w->n_entries > 0 ? (int)max_slice : -1;
+        else { long long rem = deadline - now; if (rem < 0) rem = 0; wait_ms = (int)(rem < max_slice ? rem : max_slice); }
+        struct timespec ts, *tsp;
+        if (wait_ms < 0) tsp = NULL;
+        else { ts.tv_sec = wait_ms / 1000; ts.tv_nsec = (wait_ms % 1000) * 1000000L; tsp = &ts; }
+        int n = kevent(w->kqfd, NULL, 0, evs, 64, tsp);
+        for (int i = 0; i < n; i++) {
+            /* Look up by stable id; an entry dropped earlier in this same
+             * batch (e.g. a file whose parent diff already saw it vanish)
+             * simply isn't found. */
+            int ei = _tr_watch_idx_by_wid(w, (int)(intptr_t)evs[i].udata);
+            if (ei < 0) continue;
+            unsigned int ff = (unsigned int)evs[i].fflags;
+            char epath[_TR_WATCH_PATH_CAP];
+            _tr_watch_copy_path(epath, w->entries[ei].path);
+            if (w->entries[ei].recursive == _TR_WATCH_CHILDFILE) {
+                if (ff & (NOTE_DELETE | NOTE_RENAME)) {
+                    /* This inode was unlinked / renamed away. The parent
+                     * directory's own NOTE_WRITE diff reports DELETED (and
+                     * CREATED for a rename target), so only re-arm here: if
+                     * the NAME still exists it was atomically replaced
+                     * (write-temp-then-rename-over save) -- report that as
+                     * MODIFIED and watch the new inode instead. */
+                    int deb = w->entries[ei].debounce_ms;
+                    _tr_watch_drop_idx(w, ei);
+                    struct stat cst;
+                    if (lstat(epath, &cst) == 0 && S_ISREG(cst.st_mode)) {
+                        _tr_watch_raw_event(w, epath, TAURARO_FS_MODIFIED);
+                        _tr_watch_open_fd_for(w, -1, epath, _TR_WATCH_CHILDFILE, deb);
+                    }
+                } else if (ff & (NOTE_WRITE | NOTE_EXTEND | NOTE_ATTRIB)) {
+                    _tr_watch_raw_event(w, epath, TAURARO_FS_MODIFIED);
+                }
+                continue;
+            }
+            if (ff & (NOTE_DELETE | NOTE_RENAME)) {
+                _tr_watch_raw_event(w, epath, (ff & NOTE_RENAME) ? TAURARO_FS_RENAMED : TAURARO_FS_DELETED);
+                continue;
+            }
+            if (ff & (NOTE_WRITE | NOTE_EXTEND | NOTE_ATTRIB)) {
+                if (w->entries[ei].is_dir) _tr_watch_rescan_dir(w, ei);
+                else _tr_watch_raw_event(w, epath, TAURARO_FS_MODIFIED);
+            }
+        }
+        _tr_watch_flush_debounced(w);
+        if (w->n_pending > 0) break;
+        if (deadline >= 0 && _tr_time_ms() >= deadline) break;
+        if (deadline < 0 && w->n_entries == 0) break;
+    }
+    int n = w->n_pending;
+    if (n > maxev) n = maxev;
+    for (int i = 0; i < n; i++) {
+        char* slot = out_paths + (size_t)i * _TR_WATCH_PATH_CAP;
+        size_t l = strlen(w->pending[i].path);
+        if (l >= _TR_WATCH_PATH_CAP) l = _TR_WATCH_PATH_CAP - 1;
+        memcpy(slot, w->pending[i].path, l);
+        slot[l] = '\0';
+        out_kinds[i] = w->pending[i].kind;
+    }
+    int leftover = w->n_pending - n;
+    if (leftover > 0) memmove(&w->pending[0], &w->pending[n], (size_t)leftover * sizeof(_TrWatchPendingEvent));
+    w->n_pending = leftover;
+    return n;
+}
+
+#else
+/* ── Fallback: no filesystem watch support on unknown platform ─────────── */
+_TR_XLINK _TrWatch* _tr_watch_create(void) { return (_TrWatch*)TAURARO_CALLOC(1, sizeof(_TrWatch)); }
+_TR_XLINK void _tr_watch_destroy(_TrWatch* w) {
+    if (!w) return;
+    if (w->entries) TAURARO_FREE(w->entries);
+    if (w->pending) TAURARO_FREE(w->pending);
+    if (w->debounce) TAURARO_FREE(w->debounce);
+    TAURARO_FREE(w);
+}
+_TR_XLINK int _tr_watch_add(_TrWatch* w, const char* path, int recursive, int debounce_ms)
+    { (void)w;(void)path;(void)recursive;(void)debounce_ms; return -1; }
+_TR_XLINK int _tr_watch_remove(_TrWatch* w, const char* path) { (void)w;(void)path; return -1; }
+_TR_XLINK int _tr_watch_poll(_TrWatch* w, int timeout_ms, char* out_paths, int* out_kinds, int maxev)
+    { (void)w;(void)timeout_ms;(void)out_paths;(void)out_kinds;(void)maxev; return 0; }
+#endif /* _TrWatch platform backends */
+
+/* _tr_watch_poll_raw: Tauraro-callable version. out_buf must be caller-
+ * allocated with at least maxev * _TR_WATCH_PATH_CAP bytes (one fixed-size
+ * path slot per event, NUL-terminated); out_kinds_buf must hold at least
+ * maxev ints (4 bytes each, kind code TAURARO_FS_*). Returns the number of
+ * events written (0 on timeout -- never blocks longer than timeout_ms). */
+_TR_XLINK int _tr_watch_poll_raw(char* w_raw, int timeout_ms, char* out_buf, char* out_kinds_buf, int maxev) {
+    _TrWatch* w = (_TrWatch*)w_raw;
+    if (!w) return 0;
+    if (maxev > 256) maxev = 256;
+    int* kinds = (int*)out_kinds_buf;
+    return _tr_watch_poll(w, timeout_ms, out_buf, kinds, maxev);
+}
+
+/* Watch char*-typed _h wrappers for Tauraro Pointer[char] interop */
+_TR_XLINK char* _tr_watch_create_h(void) { return (char*)_tr_watch_create(); }
+_TR_XLINK void  _tr_watch_destroy_h(char* w) { _tr_watch_destroy((_TrWatch*)w); }
+_TR_XLINK int   _tr_watch_add_h(char* w, const char* path, int recursive, int debounce_ms)
+    { return _tr_watch_add((_TrWatch*)w, path, recursive, debounce_ms); }
+_TR_XLINK int   _tr_watch_remove_h(char* w, const char* path)
+    { return _tr_watch_remove((_TrWatch*)w, path); }
 
 /* =========================================================================
  * Green-thread scheduler - stackful coroutines + non-blocking reactor.
@@ -5645,6 +6698,16 @@ static inline bool List_bool_is_empty(List_bool* l) { return !l||l->len==0; }
 static inline void List_bool_extend(List_bool* l, List_bool* o) { if(!l||!o) return; for(size_t i=0;i<o->len;i++) List_bool_append(l,o->data[i]); }
 static inline bool List_bool_contains(List_bool* l, _Bool v) { if(!l) return false; for(size_t i=0;i<l->len;i++) if(l->data[i]==v) return true; return false; }
 static inline long long List_bool_pop(List_bool* l) { if(!l||l->len==0) return 0; l->len--; return l->data[l->len]; }
+/* List_TrFnVal: extended ops (remove/swap/clear/is_empty/extend), added
+ * alongside new/append/get/pop/set/free above for std.async.events'
+ * Emitter[T] (Vec[def(T)->void] listener storage) -- mirrors every other
+ * List_<sfx> family's "extended ops" block exactly; no existing function
+ * signature touched. */
+static inline void List_TrFnVal_remove(List_TrFnVal* l, long long i) { if(!l||(size_t)i>=l->len) return; for(size_t j=(size_t)i;j<l->len-1;j++) l->data[j]=l->data[j+1]; l->len--; }
+static inline void List_TrFnVal_swap(List_TrFnVal* l, long long a, long long b) { if(!l||(size_t)a>=l->len||(size_t)b>=l->len) return; TrFnVal t=l->data[a]; l->data[a]=l->data[b]; l->data[b]=t; }
+static inline void List_TrFnVal_clear(List_TrFnVal* l) { if(l) l->len=0; }
+static inline bool List_TrFnVal_is_empty(List_TrFnVal* l) { return !l||l->len==0; }
+static inline void List_TrFnVal_extend(List_TrFnVal* l, List_TrFnVal* o) { if(!l||!o) return; for(size_t i=0;i<o->len;i++) List_TrFnVal_append(l,o->data[i]); }
 static inline void List_i8_remove(List_i8* l, long long i) { if(!l||(size_t)i>=l->len) return; for(size_t j=(size_t)i;j<l->len-1;j++) l->data[j]=l->data[j+1]; l->len--; }
 static inline void List_i8_swap(List_i8* l, long long a, long long b) { if(!l||(size_t)a>=l->len||(size_t)b>=l->len) return; int8_t t=l->data[a]; l->data[a]=l->data[b]; l->data[b]=t; }
 static inline void List_i8_clear(List_i8* l) { if(l) l->len=0; }
@@ -6479,6 +7542,74 @@ static inline char* _tr_dns_reverse(const char* ip) {
 static inline void _tr_console_color(int code) { printf("\033[%dm",code); fflush(stdout); }
 static inline void _tr_console_reset(void)     { printf("\033[0m"); fflush(stdout); }
 static inline void _tr_console_clear(void)     { printf("\033[2J\033[H"); fflush(stdout); }
+#endif
+
+/* ── Timezone support (std.sys.datetime / std.sys.tz) ────────────────────────
+ * Floor scope: fixed UTC offsets (arithmetic only, no OS dependency) plus the
+ * SYSTEM's current local timezone (offset/DST/abbreviation). No IANA tzdata —
+ * no named-zone historical DST rule tables. Three primitives:
+ *   _tr_tz_utc_offset_seconds() -> seconds EAST of UTC for the local zone, NOW
+ *   _tr_tz_is_dst()             -> 1 if DST is currently in effect, else 0
+ *   _tr_tz_name()               -> best-effort zone abbreviation/name
+ * Windows has no `tm_gmtoff`/`tm_zone` (those are a glibc/BSD extension, not
+ * provided by UCRT/MSVCRT — confirmed: MinGW gcc rejects them), so Windows
+ * uses the native GetTimeZoneInformation() API instead; POSIX uses
+ * localtime_r()'s tm_gmtoff/tm_zone directly. Both branches are gated on
+ * _TR_HAS_TIME like the rest of the datetime helpers above; the bare/no-RTC
+ * fallback reports a fixed UTC+0 with no DST, matching _tr_timestamp's own
+ * "no wall clock" degradation. */
+#if defined(_WIN32) && defined(_TR_HAS_TIME)
+static inline long long _tr_tz_utc_offset_seconds(void) {
+    TIME_ZONE_INFORMATION tzi;
+    DWORD rc = GetTimeZoneInformation(&tzi);
+    LONG bias = tzi.Bias;
+    if (rc == TIME_ZONE_ID_DAYLIGHT) bias += tzi.DaylightBias;
+    else if (rc == TIME_ZONE_ID_STANDARD) bias += tzi.StandardBias;
+    /* Bias is minutes WEST of UTC; we want seconds EAST. */
+    return (long long)(0 - bias) * 60LL;
+}
+static inline bool _tr_tz_is_dst(void) {
+    TIME_ZONE_INFORMATION tzi;
+    return GetTimeZoneInformation(&tzi) == TIME_ZONE_ID_DAYLIGHT;
+}
+static inline char* _tr_tz_name(void) {
+    TIME_ZONE_INFORMATION tzi;
+    DWORD rc = GetTimeZoneInformation(&tzi);
+    const WCHAR* wname = (rc == TIME_ZONE_ID_DAYLIGHT) ? tzi.DaylightName : tzi.StandardName;
+    int need = WideCharToMultiByte(CP_UTF8, 0, wname, -1, NULL, 0, NULL, NULL);
+    if (need <= 0) return _tr_str_dup_owned("");
+    char* buf = (char*)_tr_c_malloc((size_t)need);
+    WideCharToMultiByte(CP_UTF8, 0, wname, -1, buf, need, NULL, NULL);
+    return buf;
+}
+#elif defined(_TR_HAS_TIME) && !defined(TAURARO_BARE) && \
+      (defined(__linux__) || defined(__APPLE__) || defined(__ANDROID__) || \
+       defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__) || defined(__DragonFly__))
+/* tm_gmtoff/tm_zone exist on glibc, musl, bionic, Apple and the BSDs, but NOT in
+ * newlib (arm-none-eabi bare-metal) or other minimal libcs that still ship
+ * <time.h> -- those take the UTC+0 fallback below. */
+static inline long long _tr_tz_utc_offset_seconds(void) {
+    time_t t = time(NULL);
+    struct tm m;
+    localtime_r(&t, &m);
+    return (long long)m.tm_gmtoff;
+}
+static inline bool _tr_tz_is_dst(void) {
+    time_t t = time(NULL);
+    struct tm m;
+    localtime_r(&t, &m);
+    return m.tm_isdst > 0;
+}
+static inline char* _tr_tz_name(void) {
+    time_t t = time(NULL);
+    struct tm m;
+    localtime_r(&t, &m);
+    return _tr_str_dup_owned(m.tm_zone ? m.tm_zone : "");
+}
+#else  /* no <time.h>, or a libc without tm_gmtoff (bare toolchain): UTC+0, no DST */
+static inline long long _tr_tz_utc_offset_seconds(void) { return 0LL; }
+static inline bool      _tr_tz_is_dst(void)              { return false; }
+static inline char*     _tr_tz_name(void)                { return _tr_str_dup_owned("UTC"); }
 #endif
 
 /* ══════════════════════════════════════════════════════════════════════════
@@ -7463,9 +8594,34 @@ static inline char* _tr_md5_bytes_hex(char* s, int ilen) {
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
- * TLS/HTTPS — OpenSSL (opt-in: -DTAURARO_TLS_OPENSSL -lssl -lcrypto).
+ * TLS/HTTPS — OpenSSL loaded at RUNTIME via dlopen/LoadLibrary.
+ *
+ * ZERO build/link dependency on OpenSSL. No <openssl/ssl.h>, no -lssl/-lcrypto.
+ * libssl's C ABI is stable across the 1.1.x/3.x line for the handful of
+ * functions we need, so we redeclare the minimal subset ourselves (opaque
+ * `void*` for SSL_CTX/SSL, matching std.gpu's CUDA/OpenCL dlopen pattern
+ * above) and load the system's OpenSSL shared library on first use.
+ *
+ * If no OpenSSL library can be found/loaded, every call degrades gracefully
+ * to the same "failed" result the old hard stub returned (NULL / -1 / "") —
+ * never a crash — so a program that never touches HTTPS pays nothing, and
+ * one that does gets a clean failure instead of a link error when OpenSSL
+ * truly isn't installed.
+ *
+ * Opt-out: define TAURARO_TLS_OPENSSL_STATIC (+ link -lssl -lcrypto) to use
+ * a conventional compile-time-linked OpenSSL instead (e.g. static builds).
  * ═══════════════════════════════════════════════════════════════════════════ */
-#ifdef TAURARO_TLS_OPENSSL
+#if defined(TAURARO_BARE) || defined(TAURARO_WASM)
+/* No networking on bare/WASM targets -- same stub behavior as "not found". */
+_TR_XLINK char* _tr_tls_connect(char* h, int p) { (void)h;(void)p; return NULL; }
+_TR_XLINK int _tr_tls_send(char* h, char* d)  { (void)h;(void)d; return -1; }
+_TR_XLINK char* _tr_tls_recv(char* h, int c)    { (void)h;(void)c; return _tr_strdup(""); }
+_TR_XLINK void _tr_tls_close(char* h)          { (void)h; }
+_TR_XLINK char* _tr_tls_server_new(char* c, char* k) { (void)c;(void)k; return NULL; }
+_TR_XLINK char* _tr_tls_accept(char* x, int fd) { (void)x;(void)fd; return NULL; }
+_TR_XLINK void _tr_tls_server_free(char* x) { (void)x; }
+
+#elif defined(TAURARO_TLS_OPENSSL_STATIC)
 #  include <openssl/ssl.h>
 #  include <openssl/err.h>
 typedef struct { SSL_CTX* ctx; SSL* ssl; int fd; } _TrTLSConn;
@@ -7477,6 +8633,7 @@ typedef struct { SSL_CTX* ctx; SSL* ssl; int fd; } _TrTLSConn;
 _TR_XLINK char* _tr_tls_connect(char* host, int port) {
     static _Atomic int _tr_ssl_once = 0;
     if (atomic_fetch_add(&_tr_ssl_once,1)==0){SSL_library_init();SSL_load_error_strings();OpenSSL_add_all_algorithms();}
+    _tr_net_init(); /* WSAStartup on Windows -- socket()/connect() are unreliable without it */
     struct addrinfo hints={0},*res=NULL;
     hints.ai_family=AF_UNSPEC;hints.ai_socktype=SOCK_STREAM;
     char pbuf[16]; snprintf(pbuf,sizeof(pbuf),"%d",port);
@@ -7528,15 +8685,244 @@ _TR_XLINK char* _tr_tls_accept(char* ctxh, int fd) {
     return (char*)c;
 }
 _TR_XLINK void _tr_tls_server_free(char* ctxh) { if(ctxh) SSL_CTX_free((SSL_CTX*)ctxh); }
+
+#else /* ── default: runtime dlopen, no OpenSSL headers/libs required ───────── */
+
+#if defined(_WIN32)
+  /* windows.h already included above */
+  typedef HMODULE _TrTlsDl;
+  static _TrTlsDl _tr_tls_dlopen(const char* n){ return LoadLibraryA(n); }
+  static void* _tr_tls_dlsym(_TrTlsDl h, const char* s){ return (void*)(intptr_t)GetProcAddress(h, s); }
+#  define _TR_SOCK_CLOSE(fd) closesocket(fd)
 #else
-_TR_XLINK char* _tr_tls_connect(char* h, int p) { (void)h;(void)p; return NULL; }
-_TR_XLINK int _tr_tls_send(char* h, char* d)  { (void)h;(void)d; return -1; }
-_TR_XLINK char* _tr_tls_recv(char* h, int c)    { (void)h;(void)c; return _tr_strdup(""); }
-_TR_XLINK void _tr_tls_close(char* h)          { (void)h; }
-_TR_XLINK char* _tr_tls_server_new(char* c, char* k) { (void)c;(void)k; return NULL; }
-_TR_XLINK char* _tr_tls_accept(char* x, int fd) { (void)x;(void)fd; return NULL; }
-_TR_XLINK void _tr_tls_server_free(char* x) { (void)x; }
+  #include <dlfcn.h>
+  typedef void* _TrTlsDl;
+  static _TrTlsDl _tr_tls_dlopen(const char* n){ return dlopen(n, RTLD_NOW | RTLD_LOCAL); }
+  static void* _tr_tls_dlsym(_TrTlsDl h, const char* s){ return dlsym(h, s); }
+#  define _TR_SOCK_CLOSE(fd) close(fd)
 #endif
+
+/* ── Minimal OpenSSL C ABI (redeclared; loaded at runtime) ─────────────────
+ * SSL_CTX/SSL are always heap objects OpenSSL itself allocates and we only
+ * ever hand pointers it gave us back into other OpenSSL calls, so opaque
+ * void* is sufficient -- we never need their real struct layout. */
+typedef void SSL_CTX;
+typedef void SSL;
+typedef const void* _TrSslMethod;
+
+typedef int        (*_pSSL_library_init)(void);
+typedef void       (*_pSSL_load_error_strings)(void);
+typedef void       (*_pOpenSSL_add_all_algorithms)(void);
+typedef SSL_CTX*   (*_pSSL_CTX_new)(_TrSslMethod);
+typedef _TrSslMethod (*_pTLS_client_method)(void);
+typedef _TrSslMethod (*_pTLS_server_method)(void);
+typedef SSL*       (*_pSSL_new)(SSL_CTX*);
+typedef int        (*_pSSL_set_fd)(SSL*, int);
+typedef long       (*_pSSL_ctrl)(SSL*, int, long, void*);
+typedef int        (*_pSSL_connect)(SSL*);
+typedef int        (*_pSSL_accept)(SSL*);
+typedef int        (*_pSSL_read)(SSL*, void*, int);
+typedef int        (*_pSSL_write)(SSL*, const void*, int);
+typedef void       (*_pSSL_free)(SSL*);
+typedef void       (*_pSSL_CTX_free)(SSL_CTX*);
+typedef int        (*_pSSL_shutdown)(SSL*);
+typedef int        (*_pSSL_CTX_use_certificate_chain_file)(SSL_CTX*, const char*);
+typedef int        (*_pSSL_CTX_use_PrivateKey_file)(SSL_CTX*, const char*, int);
+
+/* SSL_set_tlsext_host_name is a macro around SSL_ctrl in real openssl/ssl.h:
+ *   #define SSL_set_tlsext_host_name(s,name) \
+ *       SSL_ctrl(s, SSL_CTRL_SET_TLSEXT_HOSTNAME, TLSEXT_NAMETYPE_host_name, (void*)name)
+ * Constants below are stable OpenSSL ABI values (unchanged since 0.9.8). */
+#define _TR_SSL_CTRL_SET_TLSEXT_HOSTNAME 55
+#define _TR_TLSEXT_NAMETYPE_host_name    0
+#define _TR_SSL_FILETYPE_PEM             1
+
+typedef struct {
+    int inited, ok;
+    _TrTlsDl lib_ssl, lib_crypto;
+    _pSSL_CTX_new SSL_CTX_new_;
+    _pTLS_client_method TLS_client_method_;
+    _pTLS_server_method TLS_server_method_;
+    _pSSL_new SSL_new_;
+    _pSSL_set_fd SSL_set_fd_;
+    _pSSL_ctrl SSL_ctrl_;
+    _pSSL_connect SSL_connect_;
+    _pSSL_accept SSL_accept_;
+    _pSSL_read SSL_read_;
+    _pSSL_write SSL_write_;
+    _pSSL_free SSL_free_;
+    _pSSL_CTX_free SSL_CTX_free_;
+    _pSSL_shutdown SSL_shutdown_;
+    _pSSL_CTX_use_certificate_chain_file SSL_CTX_use_certificate_chain_file_;
+    _pSSL_CTX_use_PrivateKey_file SSL_CTX_use_PrivateKey_file_;
+} _TrTlsState;
+#ifdef _TR_MAIN
+_TrTlsState _tr_tls = {0};
+#else
+extern _TrTlsState _tr_tls;
+#endif
+
+typedef struct { SSL_CTX* ctx; SSL* ssl; int fd; } _TrTLSConn;
+
+/* Try to dlopen `names[]` in order, returning the first handle that loads. */
+static _TrTlsDl _tr_tls_dlopen_any(const char* const* names) {
+    for (int i = 0; names[i]; i++) {
+        _TrTlsDl h = _tr_tls_dlopen(names[i]);
+        if (h) return h;
+    }
+    return (_TrTlsDl)0;
+}
+
+static int _tr_tls_ensure_loaded(void) {
+    if (_tr_tls.inited) return _tr_tls.ok;
+    _tr_tls.inited = 1;
+#if defined(_WIN32)
+    static const char* ssl_names[]    = { "libssl-3-x64.dll", "libssl-3.dll", "libssl-1_1-x64.dll", "libssl-1_1.dll", 0 };
+    static const char* crypto_names[] = { "libcrypto-3-x64.dll", "libcrypto-3.dll", "libcrypto-1_1-x64.dll", "libcrypto-1_1.dll", 0 };
+#elif defined(__APPLE__)
+    /* A bare "libssl.dylib"/"libcrypto.dylib" dlopen() on macOS resolves via
+     * dyld's default search path, which finds Apple's OWN /usr/lib/libssl.
+     * dylib / libcrypto.dylib FIRST -- a deprecated, severely restricted
+     * compatibility shim (Apple dropped real OpenSSL from the base system
+     * well over a decade ago; the shim exists only for legacy binary compat
+     * and is missing most modern API surface). Loading it triggers dyld's
+     * own "is loading libcrypto in an unsafe way" warning and then a crash
+     * partway through real TLS use (ABI/symbol mismatch, not a real OpenSSL).
+     * openssl@3 is keg-only in Homebrew (not symlinked into /opt/homebrew/
+     * lib), so try its real, stable `opt` path FIRST on both Apple Silicon
+     * and Intel, then MacPorts, before ever falling back to the bare names
+     * (which only helps if SIP is disabled and a real OpenSSL happens to be
+     * first on the default path -- rare, but a harmless last resort). */
+    static const char* ssl_names[]    = {
+        "/opt/homebrew/opt/openssl@3/lib/libssl.3.dylib",
+        "/usr/local/opt/openssl@3/lib/libssl.3.dylib",
+        "/opt/local/lib/libssl.3.dylib",
+        "libssl.3.dylib", "libssl.dylib", 0
+    };
+    static const char* crypto_names[] = {
+        "/opt/homebrew/opt/openssl@3/lib/libcrypto.3.dylib",
+        "/usr/local/opt/openssl@3/lib/libcrypto.3.dylib",
+        "/opt/local/lib/libcrypto.3.dylib",
+        "libcrypto.3.dylib", "libcrypto.dylib", 0
+    };
+#else
+    static const char* ssl_names[]    = { "libssl.so.3", "libssl.so", 0 };
+    static const char* crypto_names[] = { "libcrypto.so.3", "libcrypto.so", 0 };
+#endif
+    _tr_tls.lib_ssl = _tr_tls_dlopen_any(ssl_names);
+    if (!_tr_tls.lib_ssl) return 0;
+    /* Some of the functions we need (e.g. SSL_CTX_new in very old OpenSSL)
+     * can live in libcrypto; load it too and fall back to it on lookup. */
+    _tr_tls.lib_crypto = _tr_tls_dlopen_any(crypto_names);
+
+#define _TR_TLS_SYM(fld, ty, name) \
+    do { \
+        void* p = _tr_tls_dlsym(_tr_tls.lib_ssl, name); \
+        if (!p && _tr_tls.lib_crypto) p = _tr_tls_dlsym(_tr_tls.lib_crypto, name); \
+        _tr_tls.fld = (ty)p; \
+    } while (0)
+
+    /* SSL_library_init/SSL_load_error_strings/OpenSSL_add_all_algorithms are
+     * no-ops (handled internally by OPENSSL_init_ssl) on OpenSSL >= 1.1.0,
+     * and may legitimately be absent -- don't require them. */
+    _pSSL_library_init init_fn =
+        (_pSSL_library_init)_tr_tls_dlsym(_tr_tls.lib_ssl, "SSL_library_init");
+    _pSSL_load_error_strings les_fn =
+        (_pSSL_load_error_strings)_tr_tls_dlsym(_tr_tls.lib_ssl, "SSL_load_error_strings");
+    _pOpenSSL_add_all_algorithms aaa_fn =
+        (_pOpenSSL_add_all_algorithms)_tr_tls_dlsym(_tr_tls.lib_ssl, "OpenSSL_add_all_algorithms");
+    if (init_fn) init_fn();
+    if (les_fn) les_fn();
+    if (aaa_fn) aaa_fn();
+
+    _TR_TLS_SYM(SSL_CTX_new_, _pSSL_CTX_new, "SSL_CTX_new");
+    _TR_TLS_SYM(TLS_client_method_, _pTLS_client_method, "TLS_client_method");
+    _TR_TLS_SYM(TLS_server_method_, _pTLS_server_method, "TLS_server_method");
+    _TR_TLS_SYM(SSL_new_, _pSSL_new, "SSL_new");
+    _TR_TLS_SYM(SSL_set_fd_, _pSSL_set_fd, "SSL_set_fd");
+    _TR_TLS_SYM(SSL_ctrl_, _pSSL_ctrl, "SSL_ctrl");
+    _TR_TLS_SYM(SSL_connect_, _pSSL_connect, "SSL_connect");
+    _TR_TLS_SYM(SSL_accept_, _pSSL_accept, "SSL_accept");
+    _TR_TLS_SYM(SSL_read_, _pSSL_read, "SSL_read");
+    _TR_TLS_SYM(SSL_write_, _pSSL_write, "SSL_write");
+    _TR_TLS_SYM(SSL_free_, _pSSL_free, "SSL_free");
+    _TR_TLS_SYM(SSL_CTX_free_, _pSSL_CTX_free, "SSL_CTX_free");
+    _TR_TLS_SYM(SSL_shutdown_, _pSSL_shutdown, "SSL_shutdown");
+    _TR_TLS_SYM(SSL_CTX_use_certificate_chain_file_, _pSSL_CTX_use_certificate_chain_file, "SSL_CTX_use_certificate_chain_file");
+    _TR_TLS_SYM(SSL_CTX_use_PrivateKey_file_, _pSSL_CTX_use_PrivateKey_file, "SSL_CTX_use_PrivateKey_file");
+#undef _TR_TLS_SYM
+
+    if (!_tr_tls.SSL_CTX_new_ || !_tr_tls.TLS_client_method_ || !_tr_tls.SSL_new_ ||
+        !_tr_tls.SSL_set_fd_ || !_tr_tls.SSL_connect_ || !_tr_tls.SSL_read_ ||
+        !_tr_tls.SSL_write_ || !_tr_tls.SSL_free_ || !_tr_tls.SSL_CTX_free_) {
+        return 0; /* essential client symbols missing -- treat as "not found" */
+    }
+    _tr_tls.ok = 1;
+    return 1;
+}
+
+_TR_XLINK char* _tr_tls_connect(char* host, int port) {
+    if (!_tr_tls_ensure_loaded()) return NULL;
+    _tr_net_init(); /* WSAStartup on Windows -- socket()/connect() are unreliable without it */
+    struct addrinfo hints={0},*res=NULL;
+    hints.ai_family=AF_UNSPEC;hints.ai_socktype=SOCK_STREAM;
+    char pbuf[16]; snprintf(pbuf,sizeof(pbuf),"%d",port);
+    if(getaddrinfo(host,pbuf,&hints,&res)!=0) return NULL;
+    int fd=(int)socket(res->ai_family,res->ai_socktype,res->ai_protocol);
+    if(fd<0){freeaddrinfo(res);return NULL;}
+    if(connect(fd,res->ai_addr,(int)res->ai_addrlen)!=0){freeaddrinfo(res);_TR_SOCK_CLOSE(fd);return NULL;}
+    freeaddrinfo(res);
+    SSL_CTX* ctx=_tr_tls.SSL_CTX_new_(_tr_tls.TLS_client_method_());
+    if(!ctx){_TR_SOCK_CLOSE(fd);return NULL;}
+    SSL* ssl=_tr_tls.SSL_new_(ctx);
+    _tr_tls.SSL_set_fd_(ssl,fd);
+    _tr_tls.SSL_ctrl_(ssl, _TR_SSL_CTRL_SET_TLSEXT_HOSTNAME, _TR_TLSEXT_NAMETYPE_host_name, (void*)host);
+    if(_tr_tls.SSL_connect_(ssl)!=1){_tr_tls.SSL_free_(ssl);_tr_tls.SSL_CTX_free_(ctx);_TR_SOCK_CLOSE(fd);return NULL;}
+    _TrTLSConn* c=(_TrTLSConn*)TAURARO_ALLOC(sizeof(_TrTLSConn));
+    if(!c){_tr_tls.SSL_free_(ssl);_tr_tls.SSL_CTX_free_(ctx);_TR_SOCK_CLOSE(fd);return NULL;}
+    c->ctx=ctx;c->ssl=ssl;c->fd=fd; return (char*)c;
+}
+_TR_XLINK int _tr_tls_send(char* h, char* d) {
+    if(!h||!d||!_tr_tls.ok) return -1;
+    return _tr_tls.SSL_write_(((_TrTLSConn*)h)->ssl,d,(int)strlen(d));
+}
+_TR_XLINK char* _tr_tls_recv(char* h, int cap) {
+    if(!h||cap<=0||!_tr_tls.ok) return _tr_strdup("");
+    char* buf=(char*)TAURARO_ALLOC((size_t)cap+1); if(!buf) return _tr_strdup("");
+    int n=_tr_tls.SSL_read_(((_TrTLSConn*)h)->ssl,buf,cap);
+    if(n<=0){TAURARO_FREE(buf);return _tr_strdup("");}
+    buf[n]='\0'; return buf;
+}
+_TR_XLINK void _tr_tls_close(char* h) {
+    if(!h) return; _TrTLSConn* c=(_TrTLSConn*)h;
+    if(_tr_tls.ok){_tr_tls.SSL_shutdown_(c->ssl);_tr_tls.SSL_free_(c->ssl);_tr_tls.SSL_CTX_free_(c->ctx);}
+    _TR_SOCK_CLOSE(c->fd);TAURARO_FREE(c);
+}
+/* ── Server side: one SSL_CTX (cert+key), one _TrTLSConn per accepted fd ──
+ * SSL_accept/read/write are blocking, so server TLS is for the thread-per-
+ * connection model (listen_tls), where blocking a worker thread is fine. */
+_TR_XLINK char* _tr_tls_server_new(char* cert, char* key) {
+    if (!_tr_tls_ensure_loaded()) return NULL;
+    if (!_tr_tls.TLS_server_method_ || !_tr_tls.SSL_CTX_use_certificate_chain_file_ || !_tr_tls.SSL_CTX_use_PrivateKey_file_) return NULL;
+    SSL_CTX* ctx=_tr_tls.SSL_CTX_new_(_tr_tls.TLS_server_method_());
+    if(!ctx) return NULL;
+    if(_tr_tls.SSL_CTX_use_certificate_chain_file_(ctx,cert)<=0){_tr_tls.SSL_CTX_free_(ctx);return NULL;}
+    if(_tr_tls.SSL_CTX_use_PrivateKey_file_(ctx,key,_TR_SSL_FILETYPE_PEM)<=0){_tr_tls.SSL_CTX_free_(ctx);return NULL;}
+    return (char*)ctx;
+}
+_TR_XLINK char* _tr_tls_accept(char* ctxh, int fd) {
+    if(!ctxh||!_tr_tls.ok) return NULL;
+    SSL* ssl=_tr_tls.SSL_new_((SSL_CTX*)ctxh); if(!ssl) return NULL;
+    _tr_tls.SSL_set_fd_(ssl,fd);
+    if(_tr_tls.SSL_accept_(ssl)!=1){_tr_tls.SSL_free_(ssl);return NULL;}
+    _TrTLSConn* c=(_TrTLSConn*)TAURARO_ALLOC(sizeof(_TrTLSConn));
+    if(!c){_tr_tls.SSL_free_(ssl);return NULL;}
+    c->ctx=NULL; c->ssl=ssl; c->fd=fd;   /* ctx is shared/server-owned, not freed per-conn */
+    return (char*)c;
+}
+_TR_XLINK void _tr_tls_server_free(char* ctxh) { if(ctxh && _tr_tls.ok) _tr_tls.SSL_CTX_free_((SSL_CTX*)ctxh); }
+
+#endif /* TLS backend selection */
 
 /* ═══════════════════════════════════════════════════════════════════════════
  * COMPRESS — zlib (opt-in: -DTAURARO_COMPRESS_ZLIB -lz).
@@ -8067,6 +9453,8 @@ static List_f64* _tr_list_clone_f64(List_f64* l){ List_f64* r=List_f64_new(); if
 static List_ptr* _tr_list_clone_ptr(List_ptr* l){ List_ptr* r=List_ptr_new(); if(l) for(int64_t i=0;i<(int64_t)l->len;i++) List_ptr_append(r,l->data[i]); return r; }
 static List_str* _tr_list_clone_str(List_str* l){ List_str* r=List_str_new(); if(l) for(int64_t i=0;i<(int64_t)l->len;i++) List_str_append(r,l->data[i]); return r; }
 static List_TrStr* _tr_list_clone_TrStr(List_TrStr* l){ List_TrStr* r=List_TrStr_new(); if(l) for(int64_t i=0;i<(int64_t)l->len;i++) List_TrStr_append(r,l->data[i]); return r; }
+static List_bool* _tr_list_clone_bool(List_bool* l){ List_bool* r=List_bool_new(); if(l) for(int64_t i=0;i<(int64_t)l->len;i++) List_bool_append(r,l->data[i]); return r; }
+static List_TrFnVal* _tr_list_clone_TrFnVal(List_TrFnVal* l){ List_TrFnVal* r=List_TrFnVal_new(); if(l) for(int64_t i=0;i<(int64_t)l->len;i++) List_TrFnVal_append(r,l->data[i]); return r; }
 typedef int64_t (*_tr_pred_fn)(void*);
 static int64_t _tr_list_any_ptr(List_ptr* l, _tr_pred_fn p) { if(!l) return 0LL; for(int64_t i=0;i<(int64_t)l->len;i++) if(p(l->data[i])) return 1LL; return 0LL; }
 static int64_t _tr_list_all_ptr(List_ptr* l, _tr_pred_fn p) { if(!l) return 1LL; for(int64_t i=0;i<(int64_t)l->len;i++) if(!p(l->data[i])) return 0LL; return 1LL; }

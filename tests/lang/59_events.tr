@@ -1,0 +1,172 @@
+# tests/lang/59_events.tr
+# std.async.events — Emitter[T]: typed pub-sub / EventEmitter primitive.
+#
+# Covers: on/emit (multiple listeners, order, payload), off (unsubscribed
+# listener not called), once (fires exactly once then auto-removes),
+# self-unsubscription-during-emit snapshot semantics, listener_count, and
+# the bonus `.filter()` combinator.
+
+from std.test import TestRunner
+from std.async.events import Emitter, FilteredEmitter
+from std.core.vec import Vec
+
+def main():
+    mut t = TestRunner.init("59_events")
+
+    # ══════════════════════════════════════════════════════════════════════
+    t.section("on() / emit() — multiple listeners, all called, correct payload/order")
+    mut ev1: Emitter[int] = Emitter[int].new()
+    mut order: Vec[int] = Vec[int].init(4)
+    mut sum_a = 0
+    mut sum_b = 0
+    mut listener1 = def (n: int) -> void:
+        order.push(1)
+        sum_a = sum_a + n
+    mut listener2 = def (n: int) -> void:
+        order.push(2)
+        sum_b = sum_b + n * 10
+    ev1.on(listener1)
+    ev1.on(listener2)
+    ev1.emit(5)
+    t.assert_eq_int(sum_a, 5, "first listener received the payload")
+    t.assert_eq_int(sum_b, 50, "second listener received the same payload")
+    t.assert_eq_int(order.len, 2, "both listeners were called exactly once")
+    t.assert_eq_int(order.get(0), 1, "listeners called in subscription order (1st)")
+    t.assert_eq_int(order.get(1), 2, "listeners called in subscription order (2nd)")
+
+    ev1.emit(3)
+    t.assert_eq_int(sum_a, 8, "second emit() accumulates on listener 1")
+    t.assert_eq_int(sum_b, 80, "second emit() accumulates on listener 2")
+
+    # ══════════════════════════════════════════════════════════════════════
+    t.section("off() — unsubscribed listener is NOT called")
+    mut ev2: Emitter[int] = Emitter[int].new()
+    mut calls_x = 0
+    mut calls_y = 0
+    mut hx = ev2.on(def (n: int) -> void: calls_x = calls_x + 1)
+    mut hy = ev2.on(def (n: int) -> void: calls_y = calls_y + 1)
+    ev2.emit(1)
+    t.assert_eq_int(calls_x, 1, "x called before off()")
+    t.assert_eq_int(calls_y, 1, "y called before off()")
+
+    mut removed = ev2.off(hx)
+    t.assert_true(removed, "off() reports true for an active listener")
+    ev2.emit(1)
+    t.assert_eq_int(calls_x, 1, "x NOT called again after off()")
+    t.assert_eq_int(calls_y, 2, "y still called after x was removed")
+
+    mut removed_again = ev2.off(hx)
+    t.assert_false(removed_again, "off() on an already-removed handle returns false")
+
+    mut removed_bogus = ev2.off(999999)
+    t.assert_false(removed_bogus, "off() on a never-existed handle returns false")
+
+    # ══════════════════════════════════════════════════════════════════════
+    t.section("once() — fires exactly once then auto-removes")
+    mut ev3: Emitter[int] = Emitter[int].new()
+    mut once_calls = 0
+    mut last_val = 0
+    mut once_listener = def (n: int) -> void:
+        once_calls = once_calls + 1
+        last_val = n
+    ev3.once(once_listener)
+    t.assert_eq_int(ev3.listener_count(), 1, "once() registers a listener")
+    ev3.emit(7)
+    t.assert_eq_int(once_calls, 1, "once() handler fired on first emit()")
+    t.assert_eq_int(last_val, 7, "once() handler received the payload")
+    t.assert_eq_int(ev3.listener_count(), 0, "once() auto-removed itself after firing")
+
+    ev3.emit(8)
+    t.assert_eq_int(once_calls, 1, "once() handler NOT fired on second emit()")
+
+    # once() mixed with a regular persistent listener.
+    mut ev4: Emitter[int] = Emitter[int].new()
+    mut persistent_calls = 0
+    mut once2_calls = 0
+    ev4.on(def (n: int) -> void: persistent_calls = persistent_calls + 1)
+    ev4.once(def (n: int) -> void: once2_calls = once2_calls + 1)
+    ev4.emit(1)
+    ev4.emit(2)
+    ev4.emit(3)
+    t.assert_eq_int(persistent_calls, 3, "persistent listener fires on every emit()")
+    t.assert_eq_int(once2_calls, 1, "once() listener fires only on the first emit()")
+    t.assert_eq_int(ev4.listener_count(), 1, "only the persistent listener remains")
+
+    # ══════════════════════════════════════════════════════════════════════
+    t.section("self-unsubscription during emit() — snapshot semantics")
+    # Documented behavior (see std/async/events.tr header comment): emit()
+    # snapshots the listener list up front, so a handler that calls .off()
+    # on itself (or another listener) mid-pass does not affect who gets
+    # called during THIS pass -- only future emit() calls observe it.
+    mut ev5: Emitter[int] = Emitter[int].new()
+    mut self_unsub_calls = 0
+    mut other_calls = 0
+    mut self_handle = 0
+    mut self_unsub_listener = def (n: int) -> void:
+        self_unsub_calls = self_unsub_calls + 1
+        ev5.off(self_handle)
+    self_handle = ev5.on(self_unsub_listener)
+    ev5.on(def (n: int) -> void: other_calls = other_calls + 1)
+
+    ev5.emit(1)
+    t.assert_eq_int(self_unsub_calls, 1, "self-unsubscribing handler still fires on the pass it unsubscribes in")
+    t.assert_eq_int(other_calls, 1, "the other listener is unaffected during that same pass")
+    t.assert_eq_int(ev5.listener_count(), 1, "self-unsubscribing handler is gone after the pass")
+
+    ev5.emit(2)
+    t.assert_eq_int(self_unsub_calls, 1, "self-unsubscribed handler does NOT fire on the next emit()")
+    t.assert_eq_int(other_calls, 2, "the other listener keeps firing on subsequent emits")
+
+    # A handler that calls .on() mid-pass: the newly-added listener must
+    # NOT be invoked during the same pass (it wasn't in the snapshot).
+    mut ev6: Emitter[int] = Emitter[int].new()
+    mut adder_calls = 0
+    mut late_calls = 0
+    mut late_listener = def (m: int) -> void: late_calls = late_calls + 1
+    mut adder_listener = def (n: int) -> void:
+        adder_calls = adder_calls + 1
+        ev6.on(late_listener)
+    ev6.on(adder_listener)
+    ev6.emit(1)
+    t.assert_eq_int(adder_calls, 1, "adder listener fired")
+    t.assert_eq_int(late_calls, 0, "listener added mid-pass is NOT called during that same pass")
+    t.assert_eq_int(ev6.listener_count(), 2, "the newly-added listener is registered for next time")
+
+    ev6.emit(2)
+    t.assert_eq_int(adder_calls, 2, "adder fires again on next emit()")
+    t.assert_eq_int(late_calls, 1, "the listener added last time fires on this subsequent emit()")
+
+    # ══════════════════════════════════════════════════════════════════════
+    t.section("listener_count()")
+    mut ev7: Emitter[int] = Emitter[int].new()
+    t.assert_eq_int(ev7.listener_count(), 0, "a fresh emitter has zero listeners")
+    mut dummy_count = 0
+    mut h1 = ev7.on(def (n: int) -> void: dummy_count = dummy_count + n)
+    mut h2 = ev7.on(def (n: int) -> void: dummy_count = dummy_count + n)
+    mut h3 = ev7.on(def (n: int) -> void: dummy_count = dummy_count + n)
+    t.assert_eq_int(ev7.listener_count(), 3, "three listeners registered")
+    ev7.off(h2)
+    t.assert_eq_int(ev7.listener_count(), 2, "listener_count() reflects off()")
+    ev7.clear()
+    t.assert_eq_int(ev7.listener_count(), 0, "clear() removes all listeners")
+
+    # ══════════════════════════════════════════════════════════════════════
+    t.section("bonus: filter() combinator — only matching values invoke the handler")
+    mut ev8: Emitter[int] = Emitter[int].new()
+    mut evens: Vec[int] = Vec[int].init(4)
+    mut is_even = def (n: int) -> bool: return n % 2 == 0
+    mut collect_even = def (n: int) -> void: evens.push(n)
+    ev8.filter(is_even).on(collect_even)
+    mut i = 1
+    while i <= 6:
+        ev8.emit(i)
+        i = i + 1
+    t.assert_eq_int(evens.len, 3, "filter() let through exactly the even values")
+    t.assert_eq_int(evens.get(0), 2, "first even value")
+    t.assert_eq_int(evens.get(1), 4, "second even value")
+    t.assert_eq_int(evens.get(2), 6, "third even value")
+
+    # filter()'d listener id is a real listener id on the underlying emitter.
+    t.assert_eq_int(ev8.listener_count(), 1, "filter().on() registers exactly one real listener")
+
+    t.summary()

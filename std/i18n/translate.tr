@@ -1,0 +1,82 @@
+# std.i18n.translate — simple flat key -> translated-string lookup.
+#
+# File format: reuses std.sys.dotenv's existing `KEY=value` parser
+# (Dotenv.parse) rather than inventing a new translation-file format — a
+# translation file is just:
+#   greeting=Hello
+#   farewell=Goodbye
+#   # comments and quoted values work exactly like a .env file
+#
+# `Translator` holds one Dict[str, str] of messages PER LOCALE plus a default
+# ("fallback") locale. `t(key, locale)` looks the key up in that locale's
+# table; if the key is missing there, it falls back to the default locale's
+# table; if it's missing from both, the key itself is returned (so a missing
+# translation is visibly obvious rather than silently blank).
+
+from std.sys.dotenv import Dotenv
+
+pub class Translator:
+    pub default_locale: str
+    _locales: List[str]
+    _tables:  List[Dict[str, str]]
+
+extend Translator:
+    # Create an empty Translator. `default_locale` is used as the fallback
+    # whenever a lookup misses in the requested locale.
+    pub def init(default_locale: str) -> Translator:
+        mut tr = Translator()
+        tr.default_locale = default_locale
+        tr._locales = []
+        tr._tables  = []
+        return tr
+
+    # Index of `locale` in _locales, or -1 if not yet registered.
+    def _find_locale(self, locale: str) -> int:
+        mut i = 0
+        while i < self._locales.len():
+            if self._locales.get(i) == locale: return i
+            i = i + 1
+        return -1
+
+    # Load a locale's messages from `KEY=value`-format text (dotenv syntax;
+    # see Dotenv.parse). Replaces that locale's table if one already exists.
+    pub def load_str(self, locale: str, content: str):
+        mut table = Dotenv.parse(content)
+        mut idx = self._find_locale(locale)
+        if idx >= 0:
+            self._tables[idx] = table
+        else:
+            self._locales.push(locale)
+            self._tables.push(table)
+
+    # Register a single key -> translated-value pair for `locale` directly
+    # (no file/parsing involved) — handy for small translation sets or tests.
+    pub def set(self, locale: str, key: str, value: str):
+        mut idx = self._find_locale(locale)
+        if idx < 0:
+            self._locales.push(locale)
+            self._tables.push({})
+            idx = self._locales.len() - 1
+        mut table = self._tables.get(idx)
+        table[key] = value
+        self._tables[idx] = table
+
+    # Look up `key` in `locale`'s table. Falls back to `default_locale`'s
+    # table if missing there, and finally to the bare key itself if it is
+    # missing from both (so an un-translated string is obviously visible
+    # instead of silently disappearing).
+    pub def t(self, key: str, locale: str) -> str:
+        mut idx = self._find_locale(locale)
+        if idx >= 0:
+            mut table = self._tables.get(idx)
+            if table.contains(key):
+                return table[key]
+
+        if locale != self.default_locale:
+            mut didx = self._find_locale(self.default_locale)
+            if didx >= 0:
+                mut dtable = self._tables.get(didx)
+                if dtable.contains(key):
+                    return dtable[key]
+
+        return key

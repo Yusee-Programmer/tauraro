@@ -560,7 +560,6 @@ __attribute__((hot)) void Bindgen_emit_func(Bindgen* self, TrStr ret_words, long
             /* pass */
             Bindgen_adv(self);
         }
-        List_TrStr_free(tw);
         _tr_str_release(pbase);
         _tr_str_release(pname);
     }
@@ -748,7 +747,6 @@ __attribute__((hot)) void Bindgen_emit_struct(Bindgen* self, TrStr name, bool is
                         /* pass */
                         Bindgen_adv(self);
                     }
-                    List_TrStr_free(ntw);
                     _tr_str_release(nbase);
                 }
                 /* pass */
@@ -965,7 +963,6 @@ __attribute__((hot)) void Bindgen_emit_struct(Bindgen* self, TrStr name, bool is
             /* pass */
             Bindgen_adv(self);
         }
-        List_TrStr_free(tw);
         _tr_str_release(fbase);
     }
     /* pass */
@@ -1277,7 +1274,6 @@ __attribute__((hot)) void Bindgen_parse_decl(Bindgen* self) {
         /* pass */
         _tr_str_release(lead);
         _tr_str_release(agg);
-        List_TrStr_free(tw);
         _tr_str_release(abase);
         _tr_str_release(aname);
         return;
@@ -1385,7 +1381,6 @@ __attribute__((hot)) void Bindgen_parse_decl(Bindgen* self) {
             }
             /* pass */
             _tr_str_release(lead);
-            List_TrStr_free(rw);
             _tr_str_release(rbase);
             _tr_str_release(fname);
             return;
@@ -1394,7 +1389,6 @@ __attribute__((hot)) void Bindgen_parse_decl(Bindgen* self) {
         Bindgen_emit_func(self, rbase, rstars, fname);
         /* pass */
         _tr_str_release(lead);
-        List_TrStr_free(rw);
         _tr_str_release(rbase);
         _tr_str_release(fname);
         return;
@@ -1468,7 +1462,6 @@ __attribute__((hot)) void Bindgen_parse_decl(Bindgen* self) {
                     }
                     /* pass */
                     _tr_str_release(lead);
-                    List_TrStr_free(rw);
                     _tr_str_release(rbase);
                     _tr_str_release(fname);
                     _tr_str_release(pdname);
@@ -1478,7 +1471,6 @@ __attribute__((hot)) void Bindgen_parse_decl(Bindgen* self) {
                 Bindgen_emit_func(self, rbase, rstars, pdname);
                 /* pass */
                 _tr_str_release(lead);
-                List_TrStr_free(rw);
                 _tr_str_release(rbase);
                 _tr_str_release(fname);
                 _tr_str_release(pdname);
@@ -1491,7 +1483,6 @@ __attribute__((hot)) void Bindgen_parse_decl(Bindgen* self) {
     /* pass */
     Bindgen_skip_to_semi(self);
     _tr_str_release(lead);
-    List_TrStr_free(rw);
     _tr_str_release(rbase);
     _tr_str_release(fname);
 }

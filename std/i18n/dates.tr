@@ -1,0 +1,192 @@
+# std.i18n.dates — locale-aware date/time formatting.
+#
+# Operates DIRECTLY on the existing `DateTime` type from std.sys.datetime (see
+# that module for the type itself — this module does no date-math of its own,
+# it only reads DateTime's already-computed year/month/day/hour/minute/second/
+# weekday() fields and renders them). There is no separate "locale date"
+# wrapper type to convert into first.
+#
+# Supported locales:
+#   "en-US"  — numeric pattern MM/DD/YYYY,  names in English
+#   "en-GB"  — numeric pattern DD/MM/YYYY,  names in English
+#   "iso"    — numeric pattern YYYY-MM-DD   (locale-neutral ISO 8601),
+#              names in English
+#   "fr-FR"  — numeric pattern DD/MM/YYYY,  names in French
+#   "es-ES"  — numeric pattern DD/MM/YYYY,  names in Spanish
+# Any other/unrecognized locale tag falls back to the "iso" pattern (safest,
+# unambiguous default) with English names.
+#
+# Scope note: deliberately covers 5 locale tags with verified-accurate names
+# rather than guessing at many more. Extend the _month_names_* / _weekday_
+# names_* tables below to add another locale.
+
+from std.core.string import StringBuilder
+from std.string.fmt import Fmt
+from std.sys.datetime import DateTime
+
+pub class DateFmt:
+    _dummy: int
+
+extend DateFmt:
+    # ── Month names ───────────────────────────────────────────────────────────
+
+    def _month_name_en(month: int) -> str:
+        if month == 1:  return "January"
+        if month == 2:  return "February"
+        if month == 3:  return "March"
+        if month == 4:  return "April"
+        if month == 5:  return "May"
+        if month == 6:  return "June"
+        if month == 7:  return "July"
+        if month == 8:  return "August"
+        if month == 9:  return "September"
+        if month == 10: return "October"
+        if month == 11: return "November"
+        return "December"
+
+    def _month_name_fr(month: int) -> str:
+        if month == 1:  return "janvier"
+        if month == 2:  return "février"
+        if month == 3:  return "mars"
+        if month == 4:  return "avril"
+        if month == 5:  return "mai"
+        if month == 6:  return "juin"
+        if month == 7:  return "juillet"
+        if month == 8:  return "août"
+        if month == 9:  return "septembre"
+        if month == 10: return "octobre"
+        if month == 11: return "novembre"
+        return "décembre"
+
+    def _month_name_es(month: int) -> str:
+        if month == 1:  return "enero"
+        if month == 2:  return "febrero"
+        if month == 3:  return "marzo"
+        if month == 4:  return "abril"
+        if month == 5:  return "mayo"
+        if month == 6:  return "junio"
+        if month == 7:  return "julio"
+        if month == 8:  return "agosto"
+        if month == 9:  return "septiembre"
+        if month == 10: return "octubre"
+        if month == 11: return "noviembre"
+        return "diciembre"
+
+    # Full month name (1-12) in the given locale's language.
+    pub def month_name(month: int, locale: str) -> str:
+        if locale == "fr-FR": return DateFmt._month_name_fr(month)
+        if locale == "es-ES": return DateFmt._month_name_es(month)
+        return DateFmt._month_name_en(month)
+
+    # ── Weekday names ─────────────────────────────────────────────────────────
+    # Convention: 0=Monday .. 6=Sunday (matches DateTime.weekday()).
+
+    def _weekday_name_en(w: int) -> str:
+        if w == 0: return "Monday"
+        if w == 1: return "Tuesday"
+        if w == 2: return "Wednesday"
+        if w == 3: return "Thursday"
+        if w == 4: return "Friday"
+        if w == 5: return "Saturday"
+        return "Sunday"
+
+    def _weekday_name_fr(w: int) -> str:
+        if w == 0: return "lundi"
+        if w == 1: return "mardi"
+        if w == 2: return "mercredi"
+        if w == 3: return "jeudi"
+        if w == 4: return "vendredi"
+        if w == 5: return "samedi"
+        return "dimanche"
+
+    def _weekday_name_es(w: int) -> str:
+        if w == 0: return "lunes"
+        if w == 1: return "martes"
+        if w == 2: return "miércoles"
+        if w == 3: return "jueves"
+        if w == 4: return "viernes"
+        if w == 5: return "sábado"
+        return "domingo"
+
+    # Full weekday name for DateTime.weekday()'s 0=Monday..6=Sunday convention,
+    # in the given locale's language.
+    pub def weekday_name(weekday: int, locale: str) -> str:
+        if locale == "fr-FR": return DateFmt._weekday_name_fr(weekday)
+        if locale == "es-ES": return DateFmt._weekday_name_es(weekday)
+        return DateFmt._weekday_name_en(weekday)
+
+    # ── Numeric date pattern ──────────────────────────────────────────────────
+
+    # Render dt's date using the locale's conventional numeric pattern:
+    #   en-US          -> MM/DD/YYYY
+    #   en-GB/fr-FR/
+    #   es-ES/other    -> DD/MM/YYYY
+    #   iso            -> YYYY-MM-DD
+    pub def format_date(dt: DateTime, locale: str) -> str:
+        if locale == "iso":
+            mut sb = StringBuilder.init(11)
+            sb.append(Fmt.zero_pad(dt.year, 4))
+            sb.append("-")
+            sb.append(Fmt.zero_pad(dt.month, 2))
+            sb.append("-")
+            sb.append(Fmt.zero_pad(dt.day, 2))
+            mut out = sb.to_owned()
+            sb.free()
+            return out
+
+        if locale == "en-US":
+            mut sb = StringBuilder.init(11)
+            sb.append(Fmt.zero_pad(dt.month, 2))
+            sb.append("/")
+            sb.append(Fmt.zero_pad(dt.day, 2))
+            sb.append("/")
+            sb.append(Fmt.zero_pad(dt.year, 4))
+            mut out = sb.to_owned()
+            sb.free()
+            return out
+
+        # en-GB, fr-FR, es-ES, and any other/unrecognized locale: DD/MM/YYYY.
+        mut sb = StringBuilder.init(11)
+        sb.append(Fmt.zero_pad(dt.day, 2))
+        sb.append("/")
+        sb.append(Fmt.zero_pad(dt.month, 2))
+        sb.append("/")
+        sb.append(Fmt.zero_pad(dt.year, 4))
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    # Render dt's time-of-day as "HH:MM:SS" (24-hour clock — used identically
+    # across all locales currently supported; no 12-hour/AM-PM locales yet).
+    pub def format_time(dt: DateTime, locale: str) -> str:
+        mut sb = StringBuilder.init(9)
+        sb.append(Fmt.zero_pad(dt.hour, 2))
+        sb.append(":")
+        sb.append(Fmt.zero_pad(dt.minute, 2))
+        sb.append(":")
+        sb.append(Fmt.zero_pad(dt.second, 2))
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    # Render dt as "<date> <time>" using the locale's date pattern.
+    pub def format_datetime(dt: DateTime, locale: str) -> str:
+        return DateFmt.format_date(dt, locale) + " " + DateFmt.format_time(dt, locale)
+
+    # Render dt as a long-form localized string, e.g.:
+    #   en-US -> "Monday, January 15, 2026"
+    #   fr-FR -> "lundi 15 janvier 2026"
+    #   es-ES -> "lunes 15 de enero de 2026"
+    pub def format_long(dt: DateTime, locale: str) -> str:
+        mut wd = DateFmt.weekday_name(dt.weekday(), locale)
+        mut mo = DateFmt.month_name(dt.month, locale)
+        mut day_str = Fmt.int_to_str(dt.day)
+        mut year_str = Fmt.int_to_str(dt.year)
+
+        if locale == "fr-FR":
+            return wd + " " + day_str + " " + mo + " " + year_str
+        if locale == "es-ES":
+            return wd + " " + day_str + " de " + mo + " de " + year_str
+
+        # en-US, en-GB, iso, and any other/unrecognized locale.
+        return wd + ", " + mo + " " + day_str + ", " + year_str

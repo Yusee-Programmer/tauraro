@@ -11,6 +11,17 @@
 #       t.assert_true(3 > 2, "ordering")
 #       t.assert_contains("hello world", "world", "substring")
 #       t.summary()
+#
+# This package also re-exports three standalone extensions, each independently
+# documented in its own file (see std/test/bench.tr, std/test/mock.tr,
+# std/test/fuzz.tr for full usage/scope notes):
+#   - Bench, BenchResult   (std.test.bench)  — micro-benchmarking
+#   - Mock                 (std.test.mock)   — call-recording/stub values
+#   - Fuzzer, StrFuzzer, ListFuzzer, FuzzResult  (std.test.fuzz) — property-based testing
+
+from std.test.bench import Bench, BenchResult
+from std.test.mock import Mock
+from std.test.fuzz import Fuzzer, StrFuzzer, ListFuzzer, FuzzResult
 
 extern "C":
     def _tr_int_to_str(n: int) -> str

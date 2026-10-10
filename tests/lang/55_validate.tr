@@ -1,0 +1,138 @@
+# tests/lang/50_validate.tr - std.validate: Schema builder + ValidationResult
+# collecting ALL violations (never fails fast), dotted field paths for nested
+# objects, and the bonus to_json_schema() export.
+
+from std.test import TestRunner
+from std.encoding.json import Json, JsonRef
+from std.validate import Schema, ValidationResult
+from std.validate.jsonschema import to_json_schema
+from std.regex import Regex
+
+# Custom rule: email-ish local@domain check used via .custom() below.
+def not_blank(v: JsonRef, path: str) -> str:
+    if v.is_str() and v.get_str() == "":
+        return "must not be blank"
+    return ""
+
+def build_user_schema() -> Schema:
+    mut addr = Schema.object()
+    addr.field("zip", Schema.string().required().pattern("^[0-9]{5}$"))
+    addr.field("city", Schema.string().required())
+
+    mut roles = List[str].init(3)
+    roles.push("admin")
+    roles.push("member")
+    roles.push("guest")
+
+    mut s = Schema.object()
+    s.field("name", Schema.string().required().custom(not_blank))
+    s.field("age", Schema.number().required().min(0.0).max(150.0))
+    s.field("email", Schema.string().required().pattern("^[a-zA-Z0-9_.]+@[a-zA-Z0-9.]+$"))
+    s.field("role", Schema.string().required().one_of(roles))
+    s.field("address", addr)
+    return s
+
+def main():
+    mut t = TestRunner.init("55_validate")
+
+    t.section("fully valid input passes with zero errors")
+    mut good = Json.parse("{\"name\": \"Ada\", \"age\": 30, \"email\": \"ada@example.com\", \"role\": \"admin\", \"address\": {\"zip\": \"12345\", \"city\": \"London\"}}")
+    mut s1 = build_user_schema()
+    mut r1 = s1.validate(good.root())
+    # .pattern() goes through std.regex, which is a never-matching stub when
+    # the toolchain has no <regex.h> (seen on GitHub's windows-latest MinGW
+    # image; see tests/lang/30_regex.tr). Then the zip and email patterns
+    # reject valid input, so only assert a clean pass when regex is real.
+    if Regex.available():
+        t.assert_true(r1.is_valid(), "valid user has no errors")
+        t.assert_eq_int(r1.error_count(), 0, "zero error count")
+    else:
+        t.skip("valid-input check needs std.regex (<regex.h>), not available on this toolchain")
+
+    t.section("multiple violations all collected at once (not fail-fast)")
+    # Broken on purpose: age out of range, bad email, bad role, blank name,
+    # AND a nested address.zip that fails its pattern -- five distinct rules
+    # across two nesting levels, all in one document.
+    mut bad = Json.parse("{\"name\": \"\", \"age\": 999, \"email\": \"not-an-email\", \"role\": \"superuser\", \"address\": {\"zip\": \"abc\", \"city\": \"Paris\"}}")
+    mut s2 = build_user_schema()
+    mut r2 = s2.validate(bad.root())
+    t.assert_false(r2.is_valid(), "broken user is invalid")
+    t.assert_ge_int(r2.error_count(), 5, "at least 5 violations collected together")
+
+    mut errs = r2.errors()
+    mut saw_name = false
+    mut saw_age = false
+    mut saw_email = false
+    mut saw_role = false
+    mut saw_zip = false
+    mut i = 0
+    while i < errs.len:
+        mut e = errs.get(i)
+        if e.path == "name": saw_name = true
+        if e.path == "age": saw_age = true
+        if e.path == "email": saw_email = true
+        if e.path == "role": saw_role = true
+        if e.path == "address.zip": saw_zip = true
+        i = i + 1
+    t.assert_true(saw_name, "name violation present")
+    t.assert_true(saw_age, "age violation present")
+    t.assert_true(saw_email, "email violation present")
+    t.assert_true(saw_role, "role violation present")
+    t.assert_true(saw_zip, "nested address.zip violation present")
+
+    t.section("nested-object field paths correctly prefixed")
+    # address.city is fine but address.zip is broken -- the prefix must be
+    # "address.zip", not a bare "zip".
+    mut i2 = 0
+    mut found_prefixed = false
+    mut found_bare_zip = false
+    while i2 < errs.len:
+        mut e2 = errs.get(i2)
+        if e2.path == "address.zip": found_prefixed = true
+        if e2.path == "zip": found_bare_zip = true
+        i2 = i2 + 1
+    t.assert_true(found_prefixed, "nested error path is address.zip")
+    t.assert_false(found_bare_zip, "nested error path is NOT bare zip")
+
+    t.section("required field entirely missing from the object")
+    mut missing = Json.parse("{\"name\": \"Bob\", \"age\": 40, \"email\": \"bob@example.com\", \"role\": \"member\"}")
+    mut s3 = build_user_schema()
+    mut r3 = s3.validate(missing.root())
+    t.assert_false(r3.is_valid(), "missing address is invalid")
+    mut found_addr_zip_required = false
+    mut errs3 = r3.errors()
+    mut i3 = 0
+    while i3 < errs3.len:
+        mut e3 = errs3.get(i3)
+        if e3.path == "address.zip" and e3.rule == "required": found_addr_zip_required = true
+        i3 = i3 + 1
+    t.assert_true(found_addr_zip_required, "missing nested object still reports its required sub-fields")
+
+    t.section("list/array element validation (.items)")
+    mut tagsSchema = Schema.array()
+    tagsSchema.items(Schema.string().min(2.0).max(10.0))
+    mut tagsDoc = Json.parse("[\"ok\", \"a\", \"waytoolongtagname\"]")
+    mut r4 = tagsSchema.validate(tagsDoc.root())
+    t.assert_false(r4.is_valid(), "array with bad elements is invalid")
+    t.assert_eq_int(r4.error_count(), 2, "exactly 2 element violations (index 1 too short, index 2 too long)")
+    mut errs4 = r4.errors()
+    t.assert_eq_str(errs4.get(0).path, "[1]", "first bad element path is [1]")
+    t.assert_eq_str(errs4.get(1).path, "[2]", "second bad element path is [2]")
+
+    t.section("rule-name/code is machine readable")
+    mut e0 = errs.get(0)
+    t.assert_true(e0.rule == "required" or e0.rule == "min" or e0.rule == "max" or e0.rule == "pattern" or e0.rule == "one_of" or e0.rule == "custom" or e0.rule == "type", "rule code is one of the known machine-readable kinds")
+
+    t.section("to_json_schema() bonus export")
+    mut js = to_json_schema(s1)
+    t.assert_contains(js, "\"type\":\"object\"", "root type is object")
+    t.assert_contains(js, "\"properties\":{", "has properties block")
+    t.assert_contains(js, "\"name\":{\"type\":\"string\"}", "name field is typed string")
+    t.assert_contains(js, "\"required\":[", "has a required array")
+    t.assert_contains(js, "\"minimum\":0", "age min renders as minimum")
+    t.assert_contains(js, "\"maximum\":150", "age max renders as maximum")
+    t.assert_contains(js, "\"pattern\":", "email pattern renders as pattern")
+    t.assert_contains(js, "\"enum\":[", "role one_of renders as enum")
+    t.assert_contains(js, "\"address\":{", "nested object schema is inlined")
+
+    t.summary()

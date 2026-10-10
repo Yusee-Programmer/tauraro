@@ -5345,6 +5345,33 @@ extend Sema:
                                         ret_ty = AstType.init(type_name)
                                     elif self.classes.contains(type_name):
                                         ret_ty = AstType.init(type_name)
+                                # Static call Type.method(args): EPropAccess, not EMethodCall.
+                                # Without this, `-> (MdNode, int)` stays void and gen_multi_let
+                                # unpacks the tuple as long long (then _tr_obj_retain fails).
+                                elif self.classes.contains(type_name):
+                                    mut _scdef = self.classes.get(type_name)
+                                    mut _smi = 0
+                                    mut _sfound = false
+                                    while _smi < _scdef.methods.len and not _sfound:
+                                        mut _smdef = _scdef.methods.get(_smi)
+                                        if _smdef.name == variant:
+                                            mut _nself = _smdef.params.len
+                                            if _smdef.params.len > 0 and _smdef.params.get(0).name == "self":
+                                                _nself = _smdef.params.len - 1
+                                            if _nself == hl.len:
+                                                if _smdef.ret_ty as usize != 0 as usize:
+                                                    ret_ty = _smdef.ret_ty.read()
+                                                _sfound = true
+                                        _smi = _smi + 1
+                                    if not _sfound:
+                                        _smi = 0
+                                        while _smi < _scdef.methods.len and not _sfound:
+                                            mut _smdef2 = _scdef.methods.get(_smi)
+                                            if _smdef2.name == variant:
+                                                if _smdef2.ret_ty as usize != 0 as usize:
+                                                    ret_ty = _smdef2.ret_ty.read()
+                                                _sfound = true
+                                            _smi = _smi + 1
                             case Expr.EIndex(base2, idx2):
                                 if variant == "init" or variant == "new":
                                     match base2.read():
@@ -5531,14 +5558,29 @@ extend Sema:
                 # they cannot by themselves corrupt memory.
                 if hobj_ty.name == "Pointer" and method == "write" and not self.in_unsafe:
                     self.error("[P-1] '.write()' on a Pointer mutates raw memory and must be inside an 'unsafe:' block.\n      FIX: Wrap this call in 'unsafe:', e.g.\n          unsafe:\n              ... .write(...) ...")
-                if method == "init" or method == "new" or method == "auto":
+                # `auto` defaults to a Self-returning factory (ThreadPool.auto(),
+                # AsyncPool.auto() - sized to core count) UNLESS the receiving
+                # class declares its OWN `auto` method with an explicit, different
+                # return type (e.g. `Bench.auto(name, fn, target_ms) -> BenchResult`,
+                # std/test/bench.tr) - in that case defer to the normal declared-
+                # method-signature lookup further below (`elif
+                # self.classes.contains(hobj_ty.name)`) instead of overriding it.
+                # Without this guard EVERY class's `.auto(...)` static method was
+                # force-typed as returning the class itself, regardless of its
+                # real signature - confirmed via Bench.auto(...) -> BenchResult
+                # mis-inferring as `Bench`, causing a spurious "no method
+                # 'ops_per_sec' on type 'Bench'" at the call site.
+                mut _auto_is_self_factory = true
+                if method == "auto" and self.classes.contains(hobj_ty.name):
+                    mut _af_cls = self.classes.get(hobj_ty.name)
+                    mut _af_i = 0
+                    while _af_i < _af_cls.methods.len:
+                        mut _af_m = _af_cls.methods.get(_af_i)
+                        if _af_m.name == "auto" and _af_m.ret_ty as usize != 0 as usize:
+                            if _af_m.ret_ty.read().name != hobj_ty.name: _auto_is_self_factory = false
+                        _af_i = _af_i + 1
+                if method == "init" or method == "new" or (method == "auto" and _auto_is_self_factory):
                     # Preserve generic args so Vec[T].init(n) keeps the T info.
-                    # `auto` included alongside `init`/`new`: a zero-arg factory
-                    # convenience constructor (`ThreadPool.auto()`/`AsyncPool.auto()`,
-                    # sized to core count) - genuinely missing before (confirmed:
-                    # `ThreadPool.auto()` mis-typed even in the unmodified
-                    # compiler, a real pre-existing bug, not something this
-                    # AsyncPool work introduced), same fix as `init`/`new`.
                     if hobj_ty.name == "void" or hobj_ty.name == "":
                         # Built-in types used as static receivers (e.g. Atomic.new, Thread.new)
                         # resolve to void; recover type from the receiver identifier name.
@@ -5631,6 +5673,22 @@ extend Sema:
                         ret_ty = hobj_ty.args.get(0).read()
                     elif (hobj_ty.name == "Map" or hobj_ty.name == "Dict") and hobj_ty.args.len > 1:
                         ret_ty = hobj_ty.args.get(1).read()
+                    # The 1-arg sugar `Map[V]`/`Dict[V]` (implicit str key, built-in
+                    # Dict-backed) must resolve ITS value type here, same as
+                    # .values() does below. Without this explicit branch, `Map`/`Dict`
+                    # would fall into the "user-defined generic class" branch right
+                    # below (std/core/map.tr registers its OWN `Map[K, V]` class
+                    # under the exact same name "Map") and try to positionally
+                    # substitute V against a 1-element concrete-arg list sized for
+                    # the 2-generic (K, V) declaration -- _subst_ret_generics then
+                    # silently fails (concrete.len < generics.len for the 2nd
+                    # generic) and returns the raw, un-substituted "V" placeholder,
+                    # which codegen then emits VERBATIM as a C type name
+                    # ("(V*)(uintptr_t)...") -- a real, confirmed compiler bug
+                    # (found via std.net.https/http's `HttpClientResponse.header()`,
+                    # the first real exerciser of Map[str]-typed `.get()`).
+                    elif (hobj_ty.name == "Map" or hobj_ty.name == "Dict") and hobj_ty.args.len > 0:
+                        ret_ty = hobj_ty.args.get(0).read()
                     elif self.classes.contains(hobj_ty.name):
                         # A user-defined generic class (e.g. BTreeMap[K, V], Box[K, V])
                         # with its OWN get/get_or/pop method: consult the method's real

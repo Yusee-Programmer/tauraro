@@ -1,0 +1,609 @@
+# std.collections.cache — Fixed-capacity cache with BOTH per-entry TTL
+# (time-based) expiry AND LRU (size-based) eviction in one structure.
+#
+# Most hand-rolled "cache this for N seconds" utilities only do one of the
+# two things real services need:
+#   - a TTL map (entries vanish after their lifetime, but can grow without
+#     bound while live)
+#   - an LRU cache (bounded size, but entries never expire on their own)
+# Cache[K, V] does both at once, so callers don't have to compose two
+# separate libraries (and get the composition wrong) just to say "cache
+# this for 30 seconds, and don't let the whole thing grow past 1000
+# entries".
+#
+# Internal shape deliberately mirrors std.collections.lru.LruCache (read
+# that file first): an open-addressing hash table (key -> slot index) over
+# a pre-sized node slab, threaded with an intrusive MRU/LRU doubly-linked
+# list via prev/next slot indices. TTL is layered on top as one extra field
+# per slab slot (`expires_at_ms`, an absolute deadline) — a lookup is a
+# membership check plus one extra `now >= expires_at_ms` comparison, still
+# O(1) average, no background sweep thread required for correctness (an
+# expired-but-not-yet-evicted slot simply reports as a miss on access; it is
+# only physically reclaimed when the LRU pressure evicts it, or a caller
+# calls get_or_compute on that same key, or clear()/invalidate() runs).
+#
+# Time source: std.sys.time.Clock.now_ms() (the same monotonic millisecond
+# clock std.async.sched.Scheduler already uses) — no bespoke clock access.
+#
+# NOTE on naming: lookup is named `get` here (NOT `fetch` like LruCache).
+# LruCache avoids `get`/`get_or`/`pop` because of a confirmed compiler bug:
+# sema's EMethodCall return-type fast path mis-infers the result of any
+# method literally named `get`/`get_or`/`pop` on a generic class with 2+
+# type parameters as the class's FIRST type argument (K here) instead of
+# consulting the method's declared return type. Cache[K, V] is ALSO a
+# 2-type-param generic class, so it would hit the exact same bug for a
+# method named plain `get` -- EXCEPT this module's `get` returns
+# `Option[V]`, a concrete (non-generic-parameter) type, which sidesteps the
+# fast path entirely (the bug only fires when the inferred/declared type
+# IS one of the class's own type parameters). `get_or_compute`/
+# `get_or_compute_swr` are even further from the trigger shape (their
+# return type is `V`, but the mis-inferred fast-path only applies to bare
+# `get`/`get_or`/`pop` method names, and `get_or_compute*` is not literally
+# equal to `get_or`). Confirmed safe by this reasoning; if a future call
+# site to `.get(` ever misbehaves the same way LruCache.fetch's write-up
+# describes, rename to `fetch`/`fetch_or_compute` following that file's
+# precedent.
+#
+# THREAD-SAFETY / SWR NOTE: the core cache (get/put/get_or_compute/
+# invalidate/clear/len) is a plain single-threaded structure, exactly like
+# LruCache — no internal locking. The bonus `get_or_compute_swr` stale-
+# while-revalidate mode spawns a background refresh thread that mutates the
+# SAME underlying cache concurrently with the calling thread, so that one
+# path (and ONLY that path) guards its access via `Mutex[CacheBox[K, V]]`.
+# See the "StaleCache" section below for why that forces a second,
+# wrapper-level class rather than adding a lock to every Cache[K, V]
+# operation unconditionally (most callers never touch SWR and shouldn't pay
+# for a lock they don't use).
+
+from std.sys.time import Clock
+from std.async.mutex import Mutex
+from std.async.thread import Thread, Atomic
+from std.async.send import Sendable, UnsafeSendable
+
+# ─── CacheIndexEntry ────────────────────────────────────────────────────────
+
+pub class CacheIndexEntry[K]:
+    pub key:  K
+    pub slot: int
+    pub used: bool
+
+# ─── CacheNode ──────────────────────────────────────────────────────────────
+#
+# One slab slot. `prev`/`next` are slot indices into the owning Cache's node
+# slab (-1 = no neighbour), ordered most-recently-used (head) to least-
+# recently-used (tail) exactly like LruCache. `expires_at_ms` is this
+# entry's own absolute TTL deadline (per-entry, not a single cache-wide
+# TTL) -- set from `Clock.now_ms() + ttl_ms` at put()/refresh time.
+
+pub class CacheNode[K, V]:
+    pub key:           K
+    pub val:            V
+    pub prev:           int
+    pub next:           int
+    pub used:           bool
+    pub expires_at_ms:  int
+
+# ─── Cache ──────────────────────────────────────────────────────────────────
+
+pub class Cache[K, V]:
+    pub nodes:        List[CacheNode[K, V]]       # slab, pre-sized to capacity
+    pub free_stack:    List[int]                  # unused slot indices
+    pub head:          int                        # slot index of most-recently-used entry, -1 if empty
+    pub tail:          int                        # slot index of least-recently-used entry, -1 if empty
+    pub count:         int                        # number of live entries
+    pub cap:           int                        # maximum number of entries
+    pub idx_buckets:   List[CacheIndexEntry[K]]   # key -> slot index (open addressing)
+    pub idx_count:     int
+    pub idx_capacity:  int
+
+extend Cache[K, V]:
+    # Create an empty cache holding at most `capacity` entries (minimum 1).
+    pub def init(capacity: int) -> Cache[K, V]:
+        mut real_cap = capacity
+        if real_cap < 1: real_cap = 1
+        mut c = Cache[K, V]()
+        c.nodes      = []
+        c.free_stack = []
+        mut i = 0
+        while i < real_cap:
+            mut n = CacheNode[K, V]()
+            n.prev = -1
+            n.next = -1
+            n.used = false
+            n.expires_at_ms = 0
+            c.nodes.append(n)
+            c.free_stack.append(real_cap - 1 - i)   # push so slot 0 pops first
+            i = i + 1
+        c.head  = -1
+        c.tail  = -1
+        c.count = 0
+        c.cap   = real_cap
+
+        mut idx_cap = real_cap * 2
+        if idx_cap < 8: idx_cap = 8
+        mut p = 1
+        while p < idx_cap: p = p * 2
+        idx_cap = p
+        c.idx_buckets = []
+        mut bi = 0
+        while bi < idx_cap:
+            mut ie = CacheIndexEntry[K]()
+            ie.slot = -1
+            ie.used = false
+            c.idx_buckets.append(ie)
+            bi = bi + 1
+        c.idx_count    = 0
+        c.idx_capacity = idx_cap
+        return c
+
+    # ── Internal slab / free-stack helpers ──────────────────────────────────
+
+    pub def _get_node(self, i: int) -> CacheNode[K, V]:
+        return self.nodes[i]
+
+    pub def _set_node(self, i: int, n: CacheNode[K, V]):
+        self.nodes[i] = n
+
+    pub def _push_free(self, slot: int):
+        self.free_stack.append(slot)
+
+    pub def _pop_free(self) -> int:
+        return self.free_stack.pop()
+
+    # ── Internal hash-index helpers (key -> slot) ───────────────────────────
+    #
+    # Identical FNV-1a-over-bytes scheme as LruCache._idx_hash -- see that
+    # file's comment for the full rationale on the `sizeof(K) == 24` str
+    # heuristic and why it must track sizeof(TrStr) in runtime/tauraro_rt.h.
+
+    pub def _idx_hash(self, key: K) -> int:
+        mut h: u64 = 14695981039346656037 as u64
+        if sizeof(K) == 24:
+            unsafe:
+                mut p = key as Pointer[char]
+                mut i = 0
+                while True:
+                    mut c = p.offset(i).read() as u64
+                    if c == 0 as u64: break
+                    h = (h ^ c) * 1099511628211 as u64
+                    i = i + 1
+        else:
+            unsafe:
+                mut kp2: Pointer[K] = &key
+                mut bp = (kp2 as Pointer[char]) as Pointer[char]
+                mut j = 0
+                while j < sizeof(K):
+                    mut c2 = bp.offset(j).read() as u64
+                    h = (h ^ c2) * 1099511628211 as u64
+                    j = j + 1
+        mut hm = (h as int) % self.idx_capacity
+        if hm < 0: hm = hm + self.idx_capacity
+        return hm
+
+    pub def _idx_set(self, key: K, slot: int):
+        if self.idx_count * 4 >= self.idx_capacity * 3:
+            self._idx_rehash()
+        mut i = self._idx_hash(key)
+        while True:
+            mut entry = self.idx_buckets[i]
+            if not entry.used:
+                mut e = CacheIndexEntry[K]()
+                e.key  = key
+                e.slot = slot
+                e.used = true
+                self.idx_buckets[i] = e
+                self.idx_count = self.idx_count + 1
+                return
+            if entry.key == key:
+                entry.slot = slot
+                self.idx_buckets[i] = entry
+                return
+            i = (i + 1) % self.idx_capacity
+
+    pub def _idx_get(self, key: K) -> int:
+        mut i = self._idx_hash(key)
+        while True:
+            mut entry = self.idx_buckets[i]
+            if not entry.used: return -1
+            if entry.key == key: return entry.slot
+            i = (i + 1) % self.idx_capacity
+        return -1
+
+    pub def _idx_has(self, key: K) -> bool:
+        mut i = self._idx_hash(key)
+        while True:
+            mut entry = self.idx_buckets[i]
+            if not entry.used: return false
+            if entry.key == key: return true
+            i = (i + 1) % self.idx_capacity
+        return false
+
+    pub def _idx_remove(self, key: K):
+        mut i = self._idx_hash(key)
+        while True:
+            mut entry = self.idx_buckets[i]
+            if not entry.used: return
+            if entry.key == key:
+                entry.used = false
+                self.idx_buckets[i] = entry
+                self.idx_count = self.idx_count - 1
+                return
+            i = (i + 1) % self.idx_capacity
+
+    pub def _idx_rehash(self):
+        mut old_bkt = self.idx_buckets
+        mut old_cap = self.idx_capacity
+        mut new_cap = old_cap * 2
+        mut new_bkt: List[CacheIndexEntry[K]] = []
+        mut ni = 0
+        while ni < new_cap:
+            mut ie2 = CacheIndexEntry[K]()
+            ie2.slot = -1
+            ie2.used = false
+            new_bkt.append(ie2)
+            ni = ni + 1
+        self.idx_buckets  = new_bkt
+        self.idx_capacity = new_cap
+        self.idx_count    = 0
+        mut i = 0
+        while i < old_cap:
+            mut entry = old_bkt[i]
+            if entry.used:
+                self._idx_set(entry.key, entry.slot)
+            i = i + 1
+
+    # ── Internal linked-list helpers ────────────────────────────────────────
+
+    # Detach slot i from the list (does not touch its prev/next fields).
+    pub def _unlink(self, i: int):
+        mut n = self._get_node(i)
+        if n.prev != -1:
+            mut p = self._get_node(n.prev)
+            p.next = n.next
+            self._set_node(n.prev, p)
+        else:
+            self.head = n.next
+        if n.next != -1:
+            mut nx = self._get_node(n.next)
+            nx.prev = n.prev
+            self._set_node(n.next, nx)
+        else:
+            self.tail = n.prev
+
+    # Insert slot i at the head (most-recently-used position).
+    pub def _push_front(self, i: int):
+        mut n = self._get_node(i)
+        n.prev = -1
+        n.next = self.head
+        self._set_node(i, n)
+        if self.head != -1:
+            mut h = self._get_node(self.head)
+            h.prev = i
+            self._set_node(self.head, h)
+        self.head = i
+        if self.tail == -1:
+            self.tail = i
+
+    # Move slot i to the head without changing its stored key/value/expiry.
+    pub def _touch(self, i: int):
+        if self.head == i: return
+        self._unlink(i)
+        self._push_front(i)
+
+    # ── Public API ───────────────────────────────────────────────────────────
+
+    # true if key is present AND not expired. A present-but-expired entry
+    # reports false here (same "is it usable right now" semantics as get()),
+    # but is not physically removed by this call (it is a read-only check).
+    pub def has(self, key: K) -> bool:
+        if not self._idx_has(key): return false
+        mut i = self._idx_get(key)
+        mut n = self._get_node(i)
+        return Clock.now_ms() < n.expires_at_ms
+
+    # Look up key. Returns Option.None() if the key is absent OR its TTL
+    # has elapsed (`now >= expires_at_ms`) -- an expired entry is treated
+    # exactly like a miss, never returned as if it were still fresh. A hit
+    # refreshes recency (moves the entry to most-recently-used).
+    pub def get(self, key: K) -> Option[V]:
+        if not self._idx_has(key): return Option.None()
+        mut i = self._idx_get(key)
+        mut n = self._get_node(i)
+        if Clock.now_ms() >= n.expires_at_ms:
+            return Option.None()
+        self._touch(i)
+        return Option.Some(n.val)
+
+    # Insert or update key -> value with a per-entry TTL in milliseconds
+    # (callers can mix short-lived and long-lived entries in the same
+    # cache). `ttl_ms <= 0` means "already expired" (immediately a miss on
+    # the next get(), but still occupies a slot until evicted/overwritten --
+    # matches put()'s usual "insert now, decide later" contract).
+    #
+    # - If key already exists: overwrite its value and expiry, and move it
+    #   to most-recently-used, without evicting anything.
+    # - If key is new and the cache is at capacity: evict the
+    #   least-recently-used entry first, then insert.
+    pub def put(self, key: K, value: V, ttl_ms: int):
+        mut deadline = Clock.now_ms() + ttl_ms
+        if self._idx_has(key):
+            mut i = self._idx_get(key)
+            mut n = self._get_node(i)
+            n.val = value
+            n.expires_at_ms = deadline
+            self._set_node(i, n)
+            self._touch(i)
+            return
+
+        if self.count >= self.cap:
+            self._evict_lru()
+
+        mut slot = self._pop_free()
+        mut n2 = self._get_node(slot)
+        n2.key  = key
+        n2.val  = value
+        n2.used = true
+        n2.expires_at_ms = deadline
+        self._set_node(slot, n2)
+        self._idx_set(key, slot)
+        self._push_front(slot)
+        self.count = self.count + 1
+
+    # The memoization one-liner: if `key` is present and not expired,
+    # return its cached value (refreshing recency, exactly like get()) --
+    # `fn` is NOT called on a hit. Otherwise call `fn()` exactly once,
+    # store the result under `key` with the given `ttl_ms`, and return it.
+    pub def get_or_compute(self, key: K, ttl_ms: int, fn: def() -> V) -> V:
+        match self.get(key):
+            case Option.Some(existing):
+                return existing
+            case Option.None:
+                pass
+        mut computed = fn()
+        self.put(key, computed, ttl_ms)
+        return computed
+
+    # Evict the current least-recently-used entry. No-op if empty.
+    pub def _evict_lru(self):
+        if self.tail == -1: return
+        mut victim = self.tail
+        mut n = self._get_node(victim)
+        self._idx_remove(n.key)
+        self._unlink(victim)
+        n.used = false
+        self._set_node(victim, n)
+        self._push_free(victim)
+        self.count = self.count - 1
+
+    # Explicitly remove key. No-op if absent (expired-but-present entries
+    # ARE removed -- this is an unconditional delete, not a "was it live"
+    # check). Does not count as a "use".
+    pub def invalidate(self, key: K):
+        if not self._idx_has(key): return
+        mut i = self._idx_get(key)
+        self._idx_remove(key)
+        self._unlink(i)
+        mut n = self._get_node(i)
+        n.used = false
+        self._set_node(i, n)
+        self._push_free(i)
+        self.count = self.count - 1
+
+    # Remove every entry. Keeps the allocated slab and hash table.
+    pub def clear(self):
+        while self.tail != -1:
+            self._evict_lru()
+
+    pub def len(self) -> int:
+        return self.count
+
+    pub def capacity(self) -> int:
+        return self.cap
+
+    pub def is_empty(self) -> bool:
+        return self.count == 0
+
+    pub def is_full(self) -> bool:
+        return self.count >= self.cap
+
+    # ── stale-while-revalidate support ───────────────────────────────────────
+    #
+    # Internal lookup that distinguishes THREE states instead of get()'s two
+    # (present-and-fresh vs. everything-else): fresh, stale-but-still-within-
+    # `stale_ms` of its expiry, or truly gone (absent, or expired past the
+    # stale window too). `status` out-params the classification via the
+    # return int (0 = fresh, 1 = stale-usable, 2 = unusable) since Tauraro
+    # has no tuple-return sugar as light as this call site wants; `out_val`
+    # is only meaningful when the return is 0 or 1.
+    #
+    # A stale-but-usable hit still refreshes recency (it IS still being
+    # served to a caller) but does NOT touch expires_at_ms -- that is the
+    # background refresh's job once it completes.
+    pub def _peek_swr(self, key: K, stale_ms: int) -> int:
+        if not self._idx_has(key): return 2
+        mut i = self._idx_get(key)
+        mut n = self._get_node(i)
+        mut now = Clock.now_ms()
+        if now < n.expires_at_ms:
+            self._touch(i)
+            return 0
+        if now < n.expires_at_ms + stale_ms:
+            self._touch(i)
+            return 1
+        return 2
+
+    pub def _peek_val(self, key: K) -> V:
+        mut i = self._idx_get(key)
+        return self._get_node(i).val
+
+# ─── StaleCache (stale-while-revalidate wrapper) ───────────────────────────
+#
+# StaleCache[K, V] wraps a plain Cache[K, V] behind a Mutex so it can be
+# safely mutated from a background refresh thread while the calling thread
+# keeps reading it. This is a SEPARATE class from Cache[K, V] rather than
+# extra fields bolted onto Cache itself, because:
+#   - most callers never touch SWR and should not pay for a Mutex lock (and
+#     the thread-safety obligations that come with one, e.g. UnsafeSendable)
+#     on every plain get()/put() they make;
+#   - it mirrors std.async.sched.Scheduler's own shape exactly (a thin
+#     Sendable/UnsafeSendable wrapper class whose mutable state lives behind
+#     Mutex[T]/Atomic[T]), which is the established precedent in this
+#     codebase for "a data structure some background thread also touches".
+#
+# get_or_compute_swr(key, ttl_ms, stale_ms, fn):
+#   - fresh hit:         return the cached value immediately. No refresh.
+#   - stale-but-usable
+#     (expired, but still within `stale_ms` of its expiry):
+#                         return the OLD value immediately, AND kick off a
+#                         background Thread to call fn() and re-store the
+#                         fresh result under the same key/ttl for next time.
+#                         At most one background refresh per key runs at a
+#                         time (guarded by `refreshing`); a stale hit that
+#                         arrives while a refresh is already in flight just
+#                         returns the old value again without spawning a
+#                         second redundant refresh.
+#   - miss (absent, or expired past the stale window too):
+#                         call fn() SYNCHRONOUSLY (there is nothing valid to
+#                         serve immediately), store the result, and return
+#                         it -- exactly like get_or_compute's cold-miss path.
+#
+# THREAD-SAFETY NOTE (see this module's header + std.async.sched's own
+# write-up for the full story): every access to the guarded Cache[K, V]
+# goes through the free functions below, which take the `Mutex[Cache[K,V]]`
+# as an explicit PARAMETER. None of them are written as a `self`-method
+# that binds `self.box.get()`'s result to a local, mutates it, and lets
+# that local fall out of scope at the end of the method body -- that exact
+# shape was confirmed (in std.async.sched, same session) to over-release
+# the guarded payload starting on the SECOND call to such a method. Stick
+# to this free-function-with-explicit-Mutex-parameter shape for any new
+# StaleCache operation added later.
+
+def _stale_box_get_status(mbox: Mutex[Cache[K, V]], key: K, stale_ms: int) -> int:
+    mut c = mbox.get()
+    mut status = c._peek_swr(key, stale_ms)
+    mbox.set(c)
+    return status
+
+def _stale_box_get_val(mbox: Mutex[Cache[K, V]], key: K) -> V:
+    mut c = mbox.get()
+    mut v = c._peek_val(key)
+    mbox.set(c)
+    return v
+
+def _stale_box_put(mbox: Mutex[Cache[K, V]], key: K, value: V, ttl_ms: int):
+    mut c = mbox.get()
+    c.put(key, value, ttl_ms)
+    mbox.set(c)
+
+def _stale_box_invalidate(mbox: Mutex[Cache[K, V]], key: K):
+    mut c = mbox.get()
+    c.invalidate(key)
+    mbox.set(c)
+
+def _stale_box_clear(mbox: Mutex[Cache[K, V]]):
+    mut c = mbox.get()
+    c.clear()
+    mbox.set(c)
+
+def _stale_box_len(mbox: Mutex[Cache[K, V]]) -> int:
+    mut c = mbox.get()
+    mut n = c.len()
+    mbox.set(c)
+    return n
+
+# Boxed background-refresh job: everything _stale_refresh_worker needs,
+# passed as ONE Sendable argument to Thread.spawn (the language's spawn
+# check requires the argument type itself to be Sendable; a bare closure
+# capturing `self`/mutable locals is not, so the job's state is funnelled
+# through this tiny marker class instead, mirroring Job/JobsBox in
+# std.async.sched).
+pub class RefreshJob[K, V] implements Sendable, UnsafeSendable:
+    pub box:        Mutex[Cache[K, V]]
+    pub key:         K
+    pub ttl_ms:       int
+    pub fn:           def() -> V
+    pub refreshing:  Atomic[int]   # the SAME Atomic the StaleCache slot owns
+
+# Top-level worker entry point for Thread.spawn: compute the fresh value
+# and store it, then clear the in-flight guard. Runs once per background
+# refresh; never loops.
+def _stale_refresh_worker(job: RefreshJob[K, V]) -> void:
+    mut fresh = job.fn()
+    _stale_box_put(job.box, job.key, fresh, job.ttl_ms)
+    job.refreshing.store(0)
+
+pub class StaleCache[K, V] implements Sendable, UnsafeSendable:
+    pub box:         Mutex[Cache[K, V]]
+    pub refreshing:  Atomic[int]   # 0/1 in-flight guard: at most one background refresh at a time
+    # Keeps the most recent background-refresh RefreshJob[K, V] alive for as
+    # long as `self` lives. Thread.spawn(fn, job) hands the spawned thread
+    # the SAME job reference the caller holds, with no extra retain of its
+    # own (confirmed in codegen: the argument is a raw pointer cast, nothing
+    # more) -- so once the calling scope's own `job` local is auto-dropped
+    # at the end of its block (a normal, CORRECT drop: the local itself is
+    # genuinely done being used there), rc can reach 0 and free the job
+    # WHILE the detached background thread is still reading its fields. A
+    # real, timing-dependent use-after-free race -- reproduces under CI's
+    # scheduler but not reliably on every box, which is exactly what a race
+    # looks like. Storing `job` into this field BEFORE spawning gives it a
+    # second counted reference (RefreshJob is a plain heap class, so a
+    # field store retains it like any other), so it survives independent of
+    # the local's own scope-exit drop. `refreshing`'s CAS already guarantees
+    # at most one job in flight at a time, so overwriting this field on the
+    # NEXT refresh never races the previous job (its own worker thread has
+    # already finished and cleared `refreshing` by then).
+    pub _inflight_job: RefreshJob[K, V]
+
+extend StaleCache[K, V]:
+    pub def init(capacity: int) -> StaleCache[K, V]:
+        mut s = StaleCache[K, V]()
+        s.box          = Mutex.init(Cache[K, V].init(capacity))
+        s.refreshing   = Atomic.new(0)
+        s._inflight_job = RefreshJob[K, V]()
+        return s
+
+    # Stale-while-revalidate memoization. See the module-header comment
+    # above for the full fresh/stale/miss contract.
+    pub def get_or_compute_swr(self, key: K, ttl_ms: int, stale_ms: int, fn: def() -> V) -> V:
+        mut status = _stale_box_get_status(self.box, key, stale_ms)
+
+        if status == 0:
+            # Fresh hit: just return it, no refresh needed.
+            return _stale_box_get_val(self.box, key)
+
+        if status == 1:
+            # Stale-but-usable: return the old value NOW, and kick off at
+            # most one background refresh for this key.
+            mut old_val = _stale_box_get_val(self.box, key)
+            if self.refreshing.cas(0, 1):
+                mut job = RefreshJob[K, V]()
+                job.box        = self.box
+                job.key         = key
+                job.ttl_ms       = ttl_ms
+                job.fn           = fn
+                job.refreshing  = self.refreshing
+                # Keep `job` referenced via `self` (see field comment above)
+                # BEFORE spawning, so the detached thread's use of it can
+                # never race the local `job`'s own scope-exit drop below.
+                self._inflight_job = job
+                mut t: Thread = Thread.spawn(_stale_refresh_worker, job)
+                t.detach()
+            return old_val
+
+        # Miss (absent, or expired past the stale window too): nothing
+        # valid to serve immediately -- compute synchronously, same as
+        # Cache.get_or_compute's cold-miss path.
+        mut computed = fn()
+        _stale_box_put(self.box, key, computed, ttl_ms)
+        return computed
+
+    # Explicitly remove key from the underlying cache.
+    pub def invalidate(self, key: K):
+        _stale_box_invalidate(self.box, key)
+
+    # Remove every entry from the underlying cache.
+    pub def clear(self):
+        _stale_box_clear(self.box)
+
+    pub def len(self) -> int:
+        return _stale_box_len(self.box)

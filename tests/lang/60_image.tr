@@ -1,0 +1,280 @@
+# tests/lang/60_image.tr - std.image: BMP/QOI/PNG decode+encode round-trip.
+#
+# For each format: build a small synthetic Image with known pixel values,
+# encode it, decode the result back, and assert every pixel matches
+# exactly. QOI gets two extra cases to exercise its RLE path (a run of
+# identical pixels) and its diff/literal paths (varied pixels, including
+# a big jump that forces the raw QOI_OP_RGBA literal). PNG also gets a
+# fixture test against a real externally-known-good 2x2 PNG — built by
+# an independent Python+zlib reference script (NOT this codebase), byte
+# values hardcoded here — to validate the decoder against ground truth
+# rather than only round-tripping through itself.
+
+from std.test import TestRunner
+from std.image import Image, decode, decode_bmp, encode_bmp, decode_qoi, encode_qoi, decode_png, encode_png
+
+extern "C":
+    def _tr_c_malloc(size: int) -> Pointer[char]
+    def _tr_str_wrap_len(s: Pointer[char], blen: int) -> str
+
+# Build a str from a List[int] of byte values (0-255), with an explicit
+# tracked length (safe for embedded NULs/zero bytes).
+def bytes_from_list(vals: List[int]) -> (str, int):
+    mut n = len(vals)
+    mut buf = _tr_c_malloc(n + 1)
+    mut i = 0
+    unsafe:
+        while i < n:
+            buf.offset(i).write((vals[i] & 0xFF) as char)
+            i = i + 1
+        buf.offset(n).write('\0')
+    return (_tr_str_wrap_len(buf, n), n)
+
+# A small 4x4 test pattern: deterministic, varied RGBA values (not just a
+# solid color) so byte-order/offset bugs in any codec would show up.
+def make_test_pattern(w: int, h: int) -> Image:
+    mut img = Image.init(w, h)
+    mut y = 0
+    while y < h:
+        mut x = 0
+        while x < w:
+            mut r = (x * 17 + y * 31) & 0xFF
+            mut g = (x * 53 + 7) & 0xFF
+            mut b = (y * 61 + 3) & 0xFF
+            mut a = (200 + x + y) & 0xFF
+            img.set_pixel(x, y, r, g, b, a)
+            x = x + 1
+        y = y + 1
+    return img
+
+def images_equal(a: Image, b: Image) -> bool:
+    if a.width != b.width or a.height != b.height: return false
+    mut y = 0
+    while y < a.height:
+        mut x = 0
+        while x < a.width:
+            mut ar, ag, ab, aa = a.get_pixel(x, y)
+            mut br, bg, bb, ba = b.get_pixel(x, y)
+            if ar != br or ag != bg or ab != bb or aa != ba:
+                return false
+            x = x + 1
+        y = y + 1
+    return true
+
+def main():
+    mut t = TestRunner.init("60_image")
+
+    # ══════════════════════════════════════════════════════════════════════
+    # Image class basics
+    # ══════════════════════════════════════════════════════════════════════
+    t.section("Image.init / get_pixel / set_pixel")
+    mut img0 = Image.init(3, 2)
+    t.assert_eq_int(img0.width, 3, "width")
+    t.assert_eq_int(img0.height, 2, "height")
+    t.assert_eq_int(img0.pixels.len, 3 * 2 * 4, "pixel buffer length == w*h*4")
+
+    img0.set_pixel(1, 1, 10, 20, 30, 40)
+    mut r0, g0, b0, a0 = img0.get_pixel(1, 1)
+    t.assert_eq_int(r0, 10, "set/get pixel r")
+    t.assert_eq_int(g0, 20, "set/get pixel g")
+    t.assert_eq_int(b0, 30, "set/get pixel b")
+    t.assert_eq_int(a0, 40, "set/get pixel a")
+
+    mut zr, zg, zb, za = img0.get_pixel(0, 0)
+    t.assert_eq_int(zr, 0, "untouched pixel defaults to 0 (r)")
+    t.assert_eq_int(za, 0, "untouched pixel defaults to 0 (a)")
+
+    # ══════════════════════════════════════════════════════════════════════
+    # BMP round-trip (32-bit BGRA)
+    # ══════════════════════════════════════════════════════════════════════
+    t.section("BMP: encode -> decode round-trip, 4x4 test pattern")
+    mut bmp_src = make_test_pattern(4, 4)
+    mut bmp_bytes, bmp_len = encode_bmp(bmp_src)
+    t.assert_true(bmp_len > 0, "encode_bmp produced non-empty output")
+
+    mut bmp_decoded = decode_bmp(bmp_bytes, bmp_len)
+    t.assert_eq_int(bmp_decoded.width, 4, "BMP round-trip width")
+    t.assert_eq_int(bmp_decoded.height, 4, "BMP round-trip height")
+    t.assert_true(images_equal(bmp_src, bmp_decoded), "BMP round-trip: every pixel matches exactly")
+
+    t.section("BMP: 1x1 and 8x8 sizes, and a fully-opaque/fully-transparent corner")
+    mut bmp_src2 = make_test_pattern(8, 8)
+    bmp_src2.set_pixel(0, 0, 255, 255, 255, 255)
+    bmp_src2.set_pixel(7, 7, 0, 0, 0, 0)
+    mut bmp_bytes2, bmp_len2 = encode_bmp(bmp_src2)
+    mut bmp_decoded2 = decode_bmp(bmp_bytes2, bmp_len2)
+    t.assert_true(images_equal(bmp_src2, bmp_decoded2), "BMP 8x8 round-trip matches exactly")
+
+    mut bmp_src3 = Image.init(1, 1)
+    bmp_src3.set_pixel(0, 0, 123, 45, 67, 89)
+    mut bmp_bytes3, bmp_len3 = encode_bmp(bmp_src3)
+    mut bmp_decoded3 = decode_bmp(bmp_bytes3, bmp_len3)
+    t.assert_true(images_equal(bmp_src3, bmp_decoded3), "BMP 1x1 round-trip matches exactly")
+
+    t.section("BMP: malformed input is rejected")
+    mut bad_bmp = decode_bmp("not a bmp file", 14)
+    t.assert_eq_int(bad_bmp.width, -1, "decode_bmp on garbage reports width == -1")
+
+    # ══════════════════════════════════════════════════════════════════════
+    # QOI round-trip
+    # ══════════════════════════════════════════════════════════════════════
+    t.section("QOI: run of repeated identical pixels (exercises QOI_OP_RUN)")
+    mut qoi_run_img = Image.init(10, 1)
+    mut qi = 0
+    while qi < 10:
+        qoi_run_img.set_pixel(qi, 0, 200, 100, 50, 255)
+        qi = qi + 1
+    mut qoi_run_bytes, qoi_run_len = encode_qoi(qoi_run_img)
+    t.assert_true(qoi_run_len > 0, "encode_qoi (run) produced non-empty output")
+    # A 10-pixel run of the exact same color should collapse to a tiny
+    # encoding: 14-byte header + 1 RGBA literal (5 bytes) + 1 run chunk
+    # (1 byte) + 8-byte end marker == 28 bytes, well under naive 10*5.
+    t.assert_true(qoi_run_len < 40, "QOI run encoding is small (RLE actually engaged)")
+
+    mut qoi_run_decoded = decode_qoi(qoi_run_bytes, qoi_run_len)
+    t.assert_eq_int(qoi_run_decoded.width, 10, "QOI run round-trip width")
+    t.assert_true(images_equal(qoi_run_img, qoi_run_decoded), "QOI run round-trip: every pixel matches exactly")
+
+    t.section("QOI: varied pixels (exercises diff/luma/literal paths)")
+    mut qoi_varied = make_test_pattern(6, 6)
+    # Force some large alpha jumps too, so QOI_OP_DIFF (alpha-invariant)
+    # can't be used and QOI_OP_RGBA literals get exercised.
+    qoi_varied.set_pixel(0, 0, 1, 2, 3, 255)
+    qoi_varied.set_pixel(1, 0, 250, 10, 200, 10)
+    qoi_varied.set_pixel(2, 0, 5, 250, 5, 255)
+    mut qoi_v_bytes, qoi_v_len = encode_qoi(qoi_varied)
+    t.assert_true(qoi_v_len > 0, "encode_qoi (varied) produced non-empty output")
+
+    mut qoi_v_decoded = decode_qoi(qoi_v_bytes, qoi_v_len)
+    t.assert_eq_int(qoi_v_decoded.width, 6, "QOI varied round-trip width")
+    t.assert_eq_int(qoi_v_decoded.height, 6, "QOI varied round-trip height")
+    t.assert_true(images_equal(qoi_varied, qoi_v_decoded), "QOI varied round-trip: every pixel matches exactly")
+
+    t.section("QOI: single pixel and larger 16x16 pattern")
+    mut qoi_1 = Image.init(1, 1)
+    qoi_1.set_pixel(0, 0, 7, 8, 9, 10)
+    mut qoi_1_bytes, qoi_1_len = encode_qoi(qoi_1)
+    mut qoi_1_decoded = decode_qoi(qoi_1_bytes, qoi_1_len)
+    t.assert_true(images_equal(qoi_1, qoi_1_decoded), "QOI 1x1 round-trip matches exactly")
+
+    mut qoi_16 = make_test_pattern(16, 16)
+    mut qoi_16_bytes, qoi_16_len = encode_qoi(qoi_16)
+    mut qoi_16_decoded = decode_qoi(qoi_16_bytes, qoi_16_len)
+    t.assert_true(images_equal(qoi_16, qoi_16_decoded), "QOI 16x16 round-trip matches exactly")
+
+    t.section("QOI: malformed input is rejected")
+    mut bad_qoi = decode_qoi("nope", 4)
+    t.assert_eq_int(bad_qoi.width, -1, "decode_qoi on garbage reports width == -1")
+
+    # ══════════════════════════════════════════════════════════════════════
+    # PNG round-trip
+    # ══════════════════════════════════════════════════════════════════════
+    t.section("PNG: encode -> decode round-trip, 4x4 test pattern")
+    mut png_src = make_test_pattern(4, 4)
+    mut png_bytes, png_len = encode_png(png_src)
+    t.assert_true(png_len > 0, "encode_png produced non-empty output")
+
+    mut png_decoded = decode_png(png_bytes, png_len)
+    t.assert_eq_int(png_decoded.width, 4, "PNG round-trip width")
+    t.assert_eq_int(png_decoded.height, 4, "PNG round-trip height")
+    t.assert_true(images_equal(png_src, png_decoded), "PNG round-trip: every pixel matches exactly")
+
+    t.section("PNG: 8x8 and 1x1 sizes")
+    mut png_src2 = make_test_pattern(8, 8)
+    mut png_bytes2, png_len2 = encode_png(png_src2)
+    mut png_decoded2 = decode_png(png_bytes2, png_len2)
+    t.assert_true(images_equal(png_src2, png_decoded2), "PNG 8x8 round-trip matches exactly")
+
+    mut png_src3 = Image.init(1, 1)
+    png_src3.set_pixel(0, 0, 11, 22, 33, 44)
+    mut png_bytes3, png_len3 = encode_png(png_src3)
+    mut png_decoded3 = decode_png(png_bytes3, png_len3)
+    t.assert_true(images_equal(png_src3, png_decoded3), "PNG 1x1 round-trip matches exactly")
+
+    t.section("PNG: externally-known-good 2x2 fixture (built by an independent Python+zlib reference script, not this codebase)")
+    # 2x2 RGBA8 PNG, color type 6, filter None per row, single IDAT chunk,
+    # CRC32-correct. Pixels (row-major, top-to-bottom):
+    #   (255,0,0,255) (0,255,0,255)
+    #   (0,0,255,255) (255,255,0,128)
+    mut fixture_vals: List[int] = [
+        137,80,78,71,13,10,26,10,0,0,0,13,73,72,68,82,0,0,0,2,0,0,0,2,8,6,0,0,0,114,182,13,36,0,0,0,20,73,68,65,84,120,218,99,248,207,192,240,31,12,129,52,16,48,52,0,0,71,75,8,121,195,37,135,235,0,0,0,0,73,69,78,68,174,66,96,130
+    ]
+    mut fixture_bytes, fixture_len = bytes_from_list(fixture_vals)
+    t.assert_eq_int(fixture_len, 77, "fixture PNG is exactly 77 bytes")
+
+    mut fixture_decoded = decode_png(fixture_bytes, fixture_len)
+    t.assert_eq_int(fixture_decoded.width, 2, "fixture PNG width")
+    t.assert_eq_int(fixture_decoded.height, 2, "fixture PNG height")
+
+    mut p00r, p00g, p00b, p00a = fixture_decoded.get_pixel(0, 0)
+    t.assert_eq_int(p00r, 255, "fixture pixel (0,0) r")
+    t.assert_eq_int(p00g, 0,   "fixture pixel (0,0) g")
+    t.assert_eq_int(p00b, 0,   "fixture pixel (0,0) b")
+    t.assert_eq_int(p00a, 255, "fixture pixel (0,0) a")
+
+    mut p10r, p10g, p10b, p10a = fixture_decoded.get_pixel(1, 0)
+    t.assert_eq_int(p10r, 0,   "fixture pixel (1,0) r")
+    t.assert_eq_int(p10g, 255, "fixture pixel (1,0) g")
+    t.assert_eq_int(p10b, 0,   "fixture pixel (1,0) b")
+    t.assert_eq_int(p10a, 255, "fixture pixel (1,0) a")
+
+    mut p01r, p01g, p01b, p01a = fixture_decoded.get_pixel(0, 1)
+    t.assert_eq_int(p01r, 0,   "fixture pixel (0,1) r")
+    t.assert_eq_int(p01g, 0,   "fixture pixel (0,1) g")
+    t.assert_eq_int(p01b, 255, "fixture pixel (0,1) b")
+    t.assert_eq_int(p01a, 255, "fixture pixel (0,1) a")
+
+    mut p11r, p11g, p11b, p11a = fixture_decoded.get_pixel(1, 1)
+    t.assert_eq_int(p11r, 255, "fixture pixel (1,1) r")
+    t.assert_eq_int(p11g, 255, "fixture pixel (1,1) g")
+    t.assert_eq_int(p11b, 0,   "fixture pixel (1,1) b")
+    t.assert_eq_int(p11a, 128, "fixture pixel (1,1) a")
+
+    # Re-encode the fixture's decoded image and decode it again, to also
+    # confirm our OWN encoder/decoder agree on content ground-truthed by
+    # the external fixture.
+    mut refixture_bytes, refixture_len = encode_png(fixture_decoded)
+    mut refixture_decoded = decode_png(refixture_bytes, refixture_len)
+    t.assert_true(images_equal(fixture_decoded, refixture_decoded), "re-encoding the fixture-decoded image round-trips exactly")
+
+    t.section("PNG: malformed input is rejected")
+    mut bad_png = decode_png("definitely not a png", 21)
+    t.assert_eq_int(bad_png.width, -1, "decode_png on garbage reports width == -1")
+
+    mut corrupt_vals: List[int] = [
+        137,80,78,71,13,10,26,10,0,0,0,13,73,72,68,82,0,0,0,2,0,0,0,2,8,6,0,0,0,114,182,13,36,0,0,0,20,73,68,65,84,120,218,99,248,207,192,240,31,12,129,52,16,48,52,0,0,71,75,8,121,195,37,135,235,0,0,0,0,73,69,78,68,174,66,96,131
+    ]
+    mut corrupt_bytes, corrupt_len = bytes_from_list(corrupt_vals)
+    mut corrupt_decoded = decode_png(corrupt_bytes, corrupt_len)
+    t.assert_eq_int(corrupt_decoded.width, -1, "decode_png rejects a CRC32-corrupted chunk (last byte flipped)")
+
+    # ══════════════════════════════════════════════════════════════════════
+    # Cross-format conversion + format-sniffing decode()
+    # ══════════════════════════════════════════════════════════════════════
+    t.section("decode(): format sniffing dispatches to the right codec")
+    mut sniff_src = make_test_pattern(3, 3)
+
+    mut as_bmp, as_bmp_len = encode_bmp(sniff_src)
+    mut sniffed_bmp = decode(as_bmp, as_bmp_len)
+    t.assert_true(images_equal(sniff_src, sniffed_bmp), "decode() auto-detects BMP and matches exactly")
+
+    mut as_qoi, as_qoi_len = encode_qoi(sniff_src)
+    mut sniffed_qoi = decode(as_qoi, as_qoi_len)
+    t.assert_true(images_equal(sniff_src, sniffed_qoi), "decode() auto-detects QOI and matches exactly")
+
+    mut as_png, as_png_len = encode_png(sniff_src)
+    mut sniffed_png = decode(as_png, as_png_len)
+    t.assert_true(images_equal(sniff_src, sniffed_png), "decode() auto-detects PNG and matches exactly")
+
+    mut sniffed_bad = decode("xx", 2)
+    t.assert_eq_int(sniffed_bad.width, -1, "decode() on unrecognized bytes reports width == -1")
+
+    t.section("Cross-format conversion: decode_bmp(bytes).encode_png() round-trips through decode_png()")
+    mut conv_src = make_test_pattern(5, 5)
+    mut conv_bmp_bytes, conv_bmp_len = encode_bmp(conv_src)
+    mut conv_from_bmp = decode_bmp(conv_bmp_bytes, conv_bmp_len)
+    mut conv_png_bytes, conv_png_len = encode_png(conv_from_bmp)
+    mut conv_final = decode_png(conv_png_bytes, conv_png_len)
+    t.assert_true(images_equal(conv_src, conv_final), "BMP -> PNG conversion preserves every pixel exactly")
+
+    t.summary()
