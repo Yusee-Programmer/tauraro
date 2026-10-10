@@ -131,8 +131,21 @@ def main():
     mut v3 = swr.get_or_compute_swr(42, 40, 2000, swr_fn)
     t.assert_eq_int(v3, 100, "stale-but-usable hit returns the OLD value immediately")
     # The stale hit above should have kicked off exactly one background
-    # refresh (2nd call to swr_fn). Give it a bounded window to finish.
-    Thread.sleep(200)
+    # refresh (2nd call to swr_fn). A flat sleep here only proves swr_fn()
+    # itself returned (swr_calls increments inside it) -- the worker thread
+    # still has `_stale_box_put(...)` + `refreshing.store(0)` left to do
+    # AFTER that. If main() returns (process exits) while the detached
+    # worker is still mid-write to the mutex-guarded cache, the OS forcibly
+    # kills that thread mid-operation, which can corrupt the heap it was
+    # writing to -- a real, intermittent crash, not a logic bug. Poll
+    # `refreshing` (the worker's own LAST action) instead of guessing a
+    # fixed delay, so this function never proceeds (and never returns)
+    # until the background work is provably, fully done.
+    mut waited_ms = 0
+    while swr.refreshing.load() != 0 and waited_ms < 2000:
+        Thread.sleep(10)
+        waited_ms = waited_ms + 10
+    t.assert_eq_int(swr.refreshing.load(), 0, "background refresh fully completed within the timeout")
     t.assert_eq_int(swr_calls.load(), 2, "exactly one background refresh ran for the stale hit")
     mut v4 = swr.get_or_compute_swr(42, 40, 2000, swr_fn)
     t.assert_eq_int(v4, 200, "a later read sees the background-refreshed value")
