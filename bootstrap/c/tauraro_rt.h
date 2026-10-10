@@ -8780,8 +8780,31 @@ static int _tr_tls_ensure_loaded(void) {
     static const char* ssl_names[]    = { "libssl-3-x64.dll", "libssl-3.dll", "libssl-1_1-x64.dll", "libssl-1_1.dll", 0 };
     static const char* crypto_names[] = { "libcrypto-3-x64.dll", "libcrypto-3.dll", "libcrypto-1_1-x64.dll", "libcrypto-1_1.dll", 0 };
 #elif defined(__APPLE__)
-    static const char* ssl_names[]    = { "libssl.3.dylib", "libssl.dylib", 0 };
-    static const char* crypto_names[] = { "libcrypto.3.dylib", "libcrypto.dylib", 0 };
+    /* A bare "libssl.dylib"/"libcrypto.dylib" dlopen() on macOS resolves via
+     * dyld's default search path, which finds Apple's OWN /usr/lib/libssl.
+     * dylib / libcrypto.dylib FIRST -- a deprecated, severely restricted
+     * compatibility shim (Apple dropped real OpenSSL from the base system
+     * well over a decade ago; the shim exists only for legacy binary compat
+     * and is missing most modern API surface). Loading it triggers dyld's
+     * own "is loading libcrypto in an unsafe way" warning and then a crash
+     * partway through real TLS use (ABI/symbol mismatch, not a real OpenSSL).
+     * openssl@3 is keg-only in Homebrew (not symlinked into /opt/homebrew/
+     * lib), so try its real, stable `opt` path FIRST on both Apple Silicon
+     * and Intel, then MacPorts, before ever falling back to the bare names
+     * (which only helps if SIP is disabled and a real OpenSSL happens to be
+     * first on the default path -- rare, but a harmless last resort). */
+    static const char* ssl_names[]    = {
+        "/opt/homebrew/opt/openssl@3/lib/libssl.3.dylib",
+        "/usr/local/opt/openssl@3/lib/libssl.3.dylib",
+        "/opt/local/lib/libssl.3.dylib",
+        "libssl.3.dylib", "libssl.dylib", 0
+    };
+    static const char* crypto_names[] = {
+        "/opt/homebrew/opt/openssl@3/lib/libcrypto.3.dylib",
+        "/usr/local/opt/openssl@3/lib/libcrypto.3.dylib",
+        "/opt/local/lib/libcrypto.3.dylib",
+        "libcrypto.3.dylib", "libcrypto.dylib", 0
+    };
 #else
     static const char* ssl_names[]    = { "libssl.so.3", "libssl.so", 0 };
     static const char* crypto_names[] = { "libcrypto.so.3", "libcrypto.so", 0 };
