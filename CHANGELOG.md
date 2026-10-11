@@ -16,6 +16,18 @@ spec, automated regression suite + CI, incremental compilation, and a batch of
 codegen-safety / diagnostics / stdlib / tooling improvements). Entries will be
 added here as each phase lands.
 
+### Compiler limitations closed
+- **`[F-4]`** a `throws` function value where a plain `def(...) -> R` is expected (or the
+  reverse) is a compile error with a fix hint; no hidden wrapper is generated.
+- **Closure return types are inferred.** `lambda x: x * 2.5`, `lambda: "s"`, class results and
+  `def (...):` closures without `-> R` take the type of the returned expression (owned results are
+  released by the caller). A bare `lambda` slot is still called as `int`: other results are `[F-5]`.
+- **`[T-2]`** now checks generic `implements Sendable` classes too (own type parameters accepted).
+- A collection local re-pointed at an alias (`v = h.items`) is never auto-freed (was a
+  use-after-free / double free); a `str` local made by a bare first assignment is released at
+  scope exit; a statement-level `if` right after a closure literal parses.
+- `from` stays a reserved word (it starts import statements and lifetime clauses).
+
 ### Added
 - **`std.async.retry`** — `RetryPolicy` (max attempts, fixed/exponential backoff
   with cap, optional jitter, retry-on predicate, overall deadline, per-attempt
