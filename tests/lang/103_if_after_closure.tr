@@ -1,0 +1,20 @@
+# tests/lang/103_if_after_closure.tr - a statement-level `if` directly after a closure literal's
+# block body is a new statement, not a ternary `closure if cond else ...` (the block's Dedent
+# swallowed the newline, so the parser tried to read `if c(1) != 101:` as a conditional
+# expression and failed with "unexpected ':' in expression").
+
+from std.test import TestRunner
+
+def main():
+    mut t = TestRunner.init("103_if_after_closure")
+    mut hits = 0
+    c = def (v: int) -> int:
+        return v + 100
+    if c(1) != 101: hits = hits + 100
+    d = def (v: int) -> int:
+        return v * 2
+    if d(2) == 4: hits = hits + 1
+    if d(3) == 6:
+        hits = hits + 10
+    t.assert_eq_int(hits, 11, "one-line and block ifs right after closures")
+    t.summary()

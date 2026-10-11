@@ -1640,6 +1640,12 @@ extend Parser:
         mut left = self.parse_or_expr()
         if self.peek() == Token.Newline:
             return left
+        # A closure literal's block body ends with a Dedent that swallows the newline, so the
+        # NEXT statement's `if` would otherwise read as `closure if cond else ...`.
+        match left.read():
+            case Expr.EClosure(_, _, _, _):
+                return left
+            case _: pass
         if self.peek() == Token.KwIf:
             self.pos = self.pos + 1
             mut cond = self.parse_or_expr()
