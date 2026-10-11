@@ -1,0 +1,193 @@
+# std.image.buf — small raw-memory helpers shared by the std.image / std.audio
+# codecs (jpeg, gif, transform, mp3, ...).
+#
+# The codecs need fast fixed-size integer/byte arrays that are NOT subject to
+# the growth bookkeeping of Vec/List and that can be freed deterministically
+# from a class `free()`. These classes wrap one malloc'd block each:
+#
+#   IntBuf   — i32 elements        (tables, Huffman state, small planes)
+#   WideBuf  — i64 elements        (also used to stash raw pointers as ints)
+#   ShortBuf — i16 elements        (JPEG coefficient planes)
+#   ByteArr  — u8 elements         (sample planes, scratch rows)
+#   FloatBuf — f64 elements        (audio / filter kernels)
+#
+# All of them are zero-initialised, never bounds-checked (callers index with
+# validated values), and expose get/set/free. `new_image` / `bad_image` build
+# the std.image.Image canonical RGBA8 buffers without the per-byte push loop of
+# Image.init.
+
+extern "C":
+    def _tr_c_malloc(size: int) -> Pointer[char]
+    def _tr_c_free(ptr: Pointer[char])
+    def _tr_c_memset(ptr: Pointer[char], val: int, n: int) -> Pointer[char]
+
+from std.core.vec import Vec
+from std.image.mod import Image
+
+def _zalloc(bytes_: int) -> Pointer[char]:
+    mut n = bytes_
+    if n < 8: n = 8
+    mut p = _tr_c_malloc(n)
+    _tr_c_memset(p, 0, n)
+    return p
+
+pub class IntBuf:
+    pub p: Pointer[i32]
+    pub n: int
+
+extend IntBuf:
+    pub def init(n: int) -> IntBuf:
+        mut b = IntBuf()
+        b.p = _zalloc(n * 4) as Pointer[i32]
+        b.n = n
+        return b
+
+    pub def get(self, i: int) -> int:
+        unsafe:
+            return self.p.offset(i).read() as int
+
+    pub def set(self, i: int, v: int):
+        unsafe:
+            self.p.offset(i).write(v as i32)
+
+    pub def fill(self, v: int):
+        mut i = 0
+        while i < self.n:
+            self.set(i, v)
+            i = i + 1
+
+    pub def free(self):
+        _tr_c_free(self.p as Pointer[char])
+        self.n = 0
+
+pub class WideBuf:
+    pub p: Pointer[i64]
+    pub n: int
+
+extend WideBuf:
+    pub def init(n: int) -> WideBuf:
+        mut b = WideBuf()
+        b.p = _zalloc(n * 8) as Pointer[i64]
+        b.n = n
+        return b
+
+    pub def get(self, i: int) -> int:
+        unsafe:
+            return self.p.offset(i).read() as int
+
+    pub def set(self, i: int, v: int):
+        unsafe:
+            self.p.offset(i).write(v as i64)
+
+    pub def free(self):
+        _tr_c_free(self.p as Pointer[char])
+        self.n = 0
+
+pub class ShortBuf:
+    pub p: Pointer[i16]
+    pub n: int
+
+extend ShortBuf:
+    pub def init(n: int) -> ShortBuf:
+        mut b = ShortBuf()
+        b.p = _zalloc(n * 2) as Pointer[i16]
+        b.n = n
+        return b
+
+    pub def get(self, i: int) -> int:
+        unsafe:
+            return self.p.offset(i).read() as int
+
+    pub def set(self, i: int, v: int):
+        unsafe:
+            self.p.offset(i).write(v as i16)
+
+    pub def free(self):
+        _tr_c_free(self.p as Pointer[char])
+        self.n = 0
+
+pub class ByteArr:
+    pub p: Pointer[char]
+    pub n: int
+
+extend ByteArr:
+    pub def init(n: int) -> ByteArr:
+        mut b = ByteArr()
+        b.p = _zalloc(n)
+        b.n = n
+        return b
+
+    pub def get(self, i: int) -> int:
+        unsafe:
+            return self.p.offset(i).read() as int & 0xFF
+
+    pub def set(self, i: int, v: int):
+        unsafe:
+            self.p.offset(i).write((v & 0xFF) as char)
+
+    pub def free(self):
+        _tr_c_free(self.p)
+        self.n = 0
+
+pub class FloatBuf:
+    pub p: Pointer[f64]
+    pub n: int
+
+extend FloatBuf:
+    pub def init(n: int) -> FloatBuf:
+        mut b = FloatBuf()
+        b.p = _zalloc(n * 8) as Pointer[f64]
+        b.n = n
+        return b
+
+    pub def get(self, i: int) -> float:
+        unsafe:
+            return self.p.offset(i).read() as float
+
+    pub def set(self, i: int, v: float):
+        unsafe:
+            self.p.offset(i).write(v as f64)
+
+    pub def free(self):
+        _tr_c_free(self.p as Pointer[char])
+        self.n = 0
+
+# A w x h Image whose pixels are all (0,0,0,0), allocated in one block.
+pub def new_image(w: int, h: int) -> Image:
+    mut img = Image()
+    img.width  = w
+    img.height = h
+    mut n = w * h * 4
+    img.pixels = Vec[u8].init(n)
+    img.pixels.reserve(n)
+    _tr_c_memset(img.pixels.data as Pointer[char], 0, n)
+    img.pixels.len = n
+    return img
+
+# The decode-failure sentinel (width == -1), same as every std.image codec.
+pub def bad_image() -> Image:
+    mut bad = Image()
+    bad.width  = -1
+    bad.height = -1
+    bad.pixels = Vec[u8].init(1)
+    return bad
+
+# Fast RGBA store into img.pixels at pixel index `pi` (= y * width + x).
+pub def put_rgba(img: Image, pi: int, r: int, g: int, b: int, a: int):
+    mut p = img.pixels.data as Pointer[char]
+    unsafe:
+        p.offset(pi * 4).write(r as char)
+        p.offset(pi * 4 + 1).write(g as char)
+        p.offset(pi * 4 + 2).write(b as char)
+        p.offset(pi * 4 + 3).write(a as char)
+
+# Fast channel read: channel c (0=R,1=G,2=B,3=A) of pixel index `pi`.
+pub def get_ch(img: Image, pi: int, c: int) -> int:
+    mut p = img.pixels.data as Pointer[char]
+    unsafe:
+        return p.offset(pi * 4 + c).read() as int & 0xFF
+
+pub def clamp255(v: int) -> int:
+    if v < 0: return 0
+    if v > 255: return 255
+    return v

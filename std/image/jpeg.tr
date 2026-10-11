@@ -1,0 +1,1504 @@
+# std.image.jpeg — JPEG (JFIF / Adobe) decode and baseline encode.
+#
+# Pure Tauraro, no libjpeg. Decoder:
+#   * SOF0 baseline, SOF1 extended-sequential (8-bit) and SOF2 PROGRESSIVE
+#     (spectral selection + successive approximation, all four scan types)
+#   * 8-bit precision, 1 (grayscale), 3 (YCbCr / RGB) or 4 (CMYK / YCCK) components
+#   * any component sampling factors: 4:4:4, 4:2:2, 4:2:0, 4:4:0, 4:1:1, ...
+#     (libjpeg-style "fancy" triangle upsampling for the 2:1 cases, replication
+#     otherwise)
+#   * restart intervals (DRI / RSTn), multiple scans, non-interleaved scans,
+#     Adobe APP14 transform flag, JFIF
+#   * integer IDCT = the accurate "islow" algorithm of the IJG library, so for
+#     ordinary files the output is bit-identical to libjpeg(-turbo)'s default
+#   * arithmetic coding (SOF9+), lossless (SOF3), hierarchical and 12-bit
+#     precision are NOT supported: decode_jpeg reports failure (width == -1).
+#
+# Encoder (encode_jpeg / encode_jpeg_ex): baseline sequential, Annex-K standard
+# Huffman tables, IJG quality scaling (1..100), 4:4:4 / 4:2:2 / 4:2:0 chroma
+# subsampling or grayscale. Alpha is composited over white (JPEG has no alpha).
+#
+# Binary buffers are `str` + explicit length throughout (see std.image).
+#
+#   from std.image.jpeg import decode_jpeg, encode_jpeg, jpeg_info
+#   mut img = decode_jpeg(bytes, n)          # img.width < 0 on failure
+#   mut out, olen = encode_jpeg(img, 85)
+
+from std.image.mod import Image
+from std.image.buf import IntBuf, ShortBuf, ByteArr, new_image, bad_image, put_rgba, get_ch, clamp255
+from std.compress.common import rd8, CBuf, ptr_add
+from std.image.buf import FloatBuf
+
+extern "C":
+    def cos(x: float) -> float
+
+# ── tables ────────────────────────────────────────────────────────────────
+
+def _ib(vals: List[int]) -> IntBuf:
+    mut b = IntBuf.init(len(vals) + 16)
+    mut i = 0
+    while i < len(vals):
+        b.set(i, vals[i])
+        i = i + 1
+    return b
+
+# zigzag index k -> natural (row-major) index; 16 extra entries (=63) so a
+# corrupt stream can never index past the table.
+def _zigzag() -> IntBuf:
+    mut v = [0, 1, 8, 16, 9, 2, 3, 10, 17, 24, 32, 25, 18, 11, 4, 5, 12, 19, 26, 33, 40, 48, 41, 34, 27, 20, 13, 6, 7, 14, 21, 28, 35, 42, 49, 56, 57, 50, 43, 36, 29, 22, 15, 23, 30, 37, 44, 51, 58, 59, 52, 45, 38, 31, 39, 46, 53, 60, 61, 54, 47, 55, 62, 63]
+    mut b = _ib(v)
+    mut i = 64
+    while i < 80:
+        b.set(i, 63)
+        i = i + 1
+    return b
+
+# Huffman table block layout inside one IntBuf (stride HST per table):
+#   [0,512)    9-bit lookahead: (len << 8) | symbol, 0 = needs the slow path
+#   [512,530)  maxcode[len]   (-1 when no codes of that length)
+#   [530,548)  valoff[len]    (index into vals = code + valoff[len])
+#   [548,804)  vals
+def _hst() -> int:
+    return 832
+
+# ── decoder state ──────────────────────────────────────────────────────────
+
+# per-component field offsets inside `cp` (stride 16)
+const F_ID = 0
+const F_H = 1
+const F_V = 2
+const F_TQ = 3
+const F_BW = 4      # padded width in blocks (mcux * h)
+const F_BH = 5      # padded height in blocks (mcuy * v)
+const F_CW = 6      # real width in blocks (non-interleaved scans)
+const F_CH = 7
+const F_DW = 8      # real downsampled width in samples
+const F_DH = 9
+const F_PRED = 10   # DC predictor
+const F_TD = 11
+const F_TA = 12
+const F_COEF = 13   # base offset into coef (in shorts)
+const F_PLANE = 14  # base offset into planes (in bytes)
+
+pub class JpegInfo:
+    pub width:       int
+    pub height:      int
+    pub components:  int
+    pub progressive: bool
+    pub adobe:       int    # Adobe APP14 transform flag, -1 if absent
+    pub ok:          bool
+
+class JpegDec:
+    pub p:    Pointer[char]
+    pub len:  int
+    pub pos:  int
+    pub width: int
+    pub height: int
+    pub ncomp: int
+    pub prog:  int
+    pub hmax: int
+    pub vmax: int
+    pub mcux: int
+    pub mcuy: int
+    pub ri:   int          # restart interval (MCUs)
+    pub adobe: int
+    pub jfif:  int
+    pub have_frame: int
+    pub err:  int
+    pub trunc: int
+    pub bitbuf: int
+    pub bitcnt: int
+    pub marker: int
+    pub eobrun: int
+    pub cp:   IntBuf       # 4 components * 16 fields
+    pub qt:   IntBuf       # 4 tables * 64 (natural order)
+    pub qset: IntBuf
+    pub hf:   IntBuf       # 8 huffman tables (0-3 DC, 4-7 AC)
+    pub hset: IntBuf
+    pub zz:   IntBuf
+    pub sc:   IntBuf       # components of the current scan
+    pub ws:   IntBuf       # IDCT workspace
+    pub cf:   ShortBuf     # all components' coefficients
+    pub pl:   ByteArr      # all components' decoded sample planes
+
+extend JpegDec:
+    pub def init(p: Pointer[char], n: int) -> JpegDec:
+        mut d = JpegDec()
+        d.p = p
+        d.len = n
+        d.pos = 0
+        d.width = 0
+        d.height = 0
+        d.ncomp = 0
+        d.prog = 0
+        d.hmax = 1
+        d.vmax = 1
+        d.mcux = 0
+        d.mcuy = 0
+        d.ri = 0
+        d.adobe = -1
+        d.jfif = 0
+        d.have_frame = 0
+        d.err = 0
+        d.trunc = 0
+        d.bitbuf = 0
+        d.bitcnt = 0
+        d.marker = 0
+        d.eobrun = 0
+        d.cp = IntBuf.init(64)
+        d.qt = IntBuf.init(256)
+        d.qset = IntBuf.init(4)
+        d.hf = IntBuf.init(8 * 832)
+        d.hset = IntBuf.init(8)
+        d.zz = _zigzag()
+        d.sc = IntBuf.init(4)
+        d.ws = IntBuf.init(64)
+        d.cf = ShortBuf.init(1)
+        d.pl = ByteArr.init(1)
+        return d
+
+    pub def free(self):
+        self.cp.free()
+        self.qt.free()
+        self.qset.free()
+        self.hf.free()
+        self.hset.free()
+        self.zz.free()
+        self.sc.free()
+        self.ws.free()
+        self.cf.free()
+        self.pl.free()
+
+    def u16(self, i: int) -> int:
+        return (rd8(self.p, i) << 8) | rd8(self.p, i + 1)
+
+    def cg(self, ci: int, f: int) -> int:
+        return self.cp.get(ci * 16 + f)
+
+    def cs(self, ci: int, f: int, v: int):
+        self.cp.set(ci * 16 + f, v)
+
+    # ── bit reader ─────────────────────────────────────────────────────────
+
+    def fill(self):
+        while self.bitcnt <= 24:
+            mut b = 0
+            if self.marker == 0:
+                if self.pos < self.len:
+                    b = rd8(self.p, self.pos)
+                    if b == 0xFF:
+                        mut n2 = 0
+                        if self.pos + 1 < self.len:
+                            n2 = rd8(self.p, self.pos + 1)
+                        else:
+                            n2 = 0xD9
+                        if n2 == 0:
+                            self.pos = self.pos + 2
+                        elif n2 == 0xFF:
+                            self.pos = self.pos + 1
+                            continue
+                        else:
+                            self.marker = n2
+                            b = 0
+                    else:
+                        self.pos = self.pos + 1
+                else:
+                    self.trunc = 1
+            self.bitbuf = (self.bitbuf << 8) | b
+            self.bitcnt = self.bitcnt + 8
+
+    def bits(self, n: int) -> int:
+        if n == 0:
+            return 0
+        if self.bitcnt < n:
+            self.fill()
+        self.bitcnt = self.bitcnt - n
+        mut v = (self.bitbuf >> self.bitcnt) & ((1 << n) - 1)
+        self.bitbuf = self.bitbuf & ((1 << self.bitcnt) - 1)
+        return v
+
+    def huff(self, t: int) -> int:
+        if self.bitcnt < 16:
+            self.fill()
+        mut base = t * 832
+        mut pk = (self.bitbuf >> (self.bitcnt - 9)) & 511
+        mut lk = self.hf.get(base + pk)
+        if lk != 0:
+            self.bitcnt = self.bitcnt - (lk >> 8)
+            self.bitbuf = self.bitbuf & ((1 << self.bitcnt) - 1)
+            return lk & 255
+        mut l = 10
+        while l <= 16:
+            mut code = (self.bitbuf >> (self.bitcnt - l)) & ((1 << l) - 1)
+            mut mc = self.hf.get(base + 512 + l)
+            if code <= mc:
+                self.bitcnt = self.bitcnt - l
+                self.bitbuf = self.bitbuf & ((1 << self.bitcnt) - 1)
+                return self.hf.get(base + 548 + code + self.hf.get(base + 530 + l))
+            l = l + 1
+        self.err = 1
+        return 0
+
+    # ── marker segments ────────────────────────────────────────────────────
+
+    def parse_dqt(self, pos: int, end: int) -> bool:
+        mut q = pos
+        while q < end:
+            mut pq = rd8(self.p, q) >> 4
+            mut tq = rd8(self.p, q) & 15
+            q = q + 1
+            if tq > 3 or pq > 1:
+                return false
+            mut k = 0
+            while k < 64:
+                mut v = 0
+                if pq == 0:
+                    if q + 1 > end: return false
+                    v = rd8(self.p, q)
+                    q = q + 1
+                else:
+                    if q + 2 > end: return false
+                    v = self.u16(q)
+                    q = q + 2
+                self.qt.set(tq * 64 + self.zz.get(k), v)
+                k = k + 1
+            self.qset.set(tq, 1)
+        return true
+
+    def parse_dht(self, pos: int, end: int) -> bool:
+        mut q = pos
+        while q < end:
+            if q + 17 > end: return false
+            mut tc = rd8(self.p, q) >> 4
+            mut th = rd8(self.p, q) & 15
+            if tc > 1 or th > 3: return false
+            mut t = tc * 4 + th
+            mut base = t * 832
+            q = q + 1
+            mut total = 0
+            mut i = 0
+            while i < 16:
+                total = total + rd8(self.p, q + i)
+                i = i + 1
+            if total > 256 or q + 16 + total > end: return false
+            # clear lookahead
+            i = 0
+            while i < 512:
+                self.hf.set(base + i, 0)
+                i = i + 1
+            mut vbase = q + 16
+            i = 0
+            while i < total:
+                self.hf.set(base + 548 + i, rd8(self.p, vbase + i))
+                i = i + 1
+            mut code = 0
+            mut k = 0
+            mut l = 1
+            while l <= 16:
+                mut cnt = rd8(self.p, q + l - 1)
+                self.hf.set(base + 530 + l, k - code)
+                mut j = 0
+                while j < cnt:
+                    if code >= (1 << l): return false
+                    if l <= 9:
+                        mut sym = self.hf.get(base + 548 + k)
+                        mut lo = code << (9 - l)
+                        mut hi = lo + (1 << (9 - l))
+                        mut e = lo
+                        while e < hi:
+                            self.hf.set(base + e, (l << 8) | sym)
+                            e = e + 1
+                    code = code + 1
+                    k = k + 1
+                    j = j + 1
+                if cnt > 0:
+                    self.hf.set(base + 512 + l, code - 1)
+                else:
+                    self.hf.set(base + 512 + l, -1)
+                code = code << 1
+                l = l + 1
+            self.hf.set(base + 512, -1)
+            self.hset.set(t, 1)
+            q = vbase + total
+        return true
+
+    def parse_sof(self, pos: int, end: int, progressive: int) -> bool:
+        if self.have_frame != 0: return false
+        if end - pos < 6: return false
+        if rd8(self.p, pos) != 8: return false          # precision
+        self.height = self.u16(pos + 1)
+        self.width = self.u16(pos + 3)
+        mut nc = rd8(self.p, pos + 5)
+        if self.width <= 0 or self.height <= 0: return false
+        if nc != 1 and nc != 3 and nc != 4: return false
+        if end - pos < 6 + nc * 3: return false
+        if self.width * self.height > 67108864: return false
+        self.ncomp = nc
+        self.prog = progressive
+        mut hm = 1
+        mut vm = 1
+        mut i = 0
+        while i < nc:
+            mut q = pos + 6 + i * 3
+            mut h = rd8(self.p, q + 1) >> 4
+            mut v = rd8(self.p, q + 1) & 15
+            if h < 1 or h > 4 or v < 1 or v > 4: return false
+            self.cs(i, F_ID, rd8(self.p, q))
+            self.cs(i, F_H, h)
+            self.cs(i, F_V, v)
+            mut tq = rd8(self.p, q + 2)
+            if tq > 3: return false
+            self.cs(i, F_TQ, tq)
+            if h > hm: hm = h
+            if v > vm: vm = v
+            i = i + 1
+        self.hmax = hm
+        self.vmax = vm
+        self.mcux = (self.width + 8 * hm - 1) / (8 * hm)
+        self.mcuy = (self.height + 8 * vm - 1) / (8 * vm)
+        mut coef_total = 0
+        mut plane_total = 0
+        i = 0
+        while i < nc:
+            mut h = self.cg(i, F_H)
+            mut v = self.cg(i, F_V)
+            mut bw = self.mcux * h
+            mut bh = self.mcuy * v
+            mut dw = (self.width * h + hm - 1) / hm
+            mut dh = (self.height * v + vm - 1) / vm
+            self.cs(i, F_BW, bw)
+            self.cs(i, F_BH, bh)
+            self.cs(i, F_DW, dw)
+            self.cs(i, F_DH, dh)
+            self.cs(i, F_CW, (dw + 7) / 8)
+            self.cs(i, F_CH, (dh + 7) / 8)
+            self.cs(i, F_COEF, coef_total)
+            self.cs(i, F_PLANE, plane_total)
+            coef_total = coef_total + bw * bh * 64
+            plane_total = plane_total + bw * bh * 64
+            i = i + 1
+        self.cf.free()
+        self.pl.free()
+        self.cf = ShortBuf.init(coef_total)
+        self.pl = ByteArr.init(plane_total)
+        self.have_frame = 1
+        return true
+
+    # ── block decoders ─────────────────────────────────────────────────────
+
+    def ext(self, v: int, n: int) -> int:
+        if n == 0:
+            return 0
+        if v < (1 << (n - 1)):
+            return v - (1 << n) + 1
+        return v
+
+    def blk_seq(self, ci: int, off: int):
+        mut t = self.huff(self.cg(ci, F_TD))
+        if t > 15:
+            self.err = 1
+            return
+        mut diff = 0
+        if t > 0:
+            diff = self.ext(self.bits(t), t)
+        mut pred = self.cg(ci, F_PRED) + diff
+        self.cs(ci, F_PRED, pred)
+        self.cf.set(off, pred)
+        mut ta = self.cg(ci, F_TA) + 4
+        mut k = 1
+        while k < 64:
+            mut rs = self.huff(ta)
+            mut r = rs >> 4
+            mut s = rs & 15
+            if s == 0:
+                if r == 15:
+                    k = k + 16
+                    continue
+                break
+            k = k + r
+            if k > 63:
+                break
+            self.cf.set(off + self.zz.get(k), self.ext(self.bits(s), s))
+            k = k + 1
+
+    def blk_dc_first(self, ci: int, off: int, al: int):
+        mut t = self.huff(self.cg(ci, F_TD))
+        if t > 15:
+            self.err = 1
+            return
+        mut diff = 0
+        if t > 0:
+            diff = self.ext(self.bits(t), t)
+        mut pred = self.cg(ci, F_PRED) + diff
+        self.cs(ci, F_PRED, pred)
+        self.cf.set(off, pred << al)
+
+    def blk_dc_refine(self, off: int, al: int):
+        if self.bits(1) != 0:
+            self.cf.set(off, self.cf.get(off) | (1 << al))
+
+    def blk_ac_first(self, ci: int, off: int, ss: int, se: int, al: int):
+        if self.eobrun > 0:
+            self.eobrun = self.eobrun - 1
+            return
+        mut ta = self.cg(ci, F_TA) + 4
+        mut k = ss
+        while k <= se:
+            mut rs = self.huff(ta)
+            mut r = rs >> 4
+            mut s = rs & 15
+            if s == 0:
+                if r < 15:
+                    self.eobrun = (1 << r) - 1
+                    if r > 0:
+                        self.eobrun = self.eobrun + self.bits(r)
+                    break
+                k = k + 16
+                continue
+            k = k + r
+            if k > 63:
+                break
+            self.cf.set(off + self.zz.get(k), self.ext(self.bits(s), s) << al)
+            k = k + 1
+
+    def blk_ac_refine(self, ci: int, off: int, ss: int, se: int, al: int):
+        mut p1 = 1 << al
+        mut m1 = 0 - p1
+        mut k = ss
+        if self.eobrun == 0:
+            mut ta = self.cg(ci, F_TA) + 4
+            while k <= se:
+                mut rs = self.huff(ta)
+                mut r = rs >> 4
+                mut s = rs & 15
+                mut newnz = 0
+                if s != 0:
+                    if self.bits(1) != 0:
+                        newnz = p1
+                    else:
+                        newnz = m1
+                else:
+                    if r != 15:
+                        self.eobrun = 1 << r
+                        if r > 0:
+                            self.eobrun = self.eobrun + self.bits(r)
+                        break
+                while k <= se:
+                    mut zi = off + self.zz.get(k)
+                    mut cv = self.cf.get(zi)
+                    if cv != 0:
+                        if self.bits(1) != 0:
+                            if (cv & p1) == 0:
+                                if cv >= 0:
+                                    self.cf.set(zi, cv + p1)
+                                else:
+                                    self.cf.set(zi, cv + m1)
+                    else:
+                        r = r - 1
+                        if r < 0:
+                            break
+                    k = k + 1
+                if s != 0 and k <= 63:
+                    self.cf.set(off + self.zz.get(k), newnz)
+                k = k + 1
+        if self.eobrun > 0:
+            while k <= se:
+                mut zi = off + self.zz.get(k)
+                mut cv = self.cf.get(zi)
+                if cv != 0:
+                    if self.bits(1) != 0:
+                        if (cv & p1) == 0:
+                            if cv >= 0:
+                                self.cf.set(zi, cv + p1)
+                            else:
+                                self.cf.set(zi, cv + m1)
+                k = k + 1
+            self.eobrun = self.eobrun - 1
+
+    def one_block(self, ci: int, bx: int, by: int, ss: int, se: int, ah: int, al: int):
+        mut off = self.cg(ci, F_COEF) + (by * self.cg(ci, F_BW) + bx) * 64
+        if self.prog == 0:
+            self.blk_seq(ci, off)
+        elif ss == 0:
+            if ah == 0:
+                self.blk_dc_first(ci, off, al)
+            else:
+                self.blk_dc_refine(off, al)
+        elif ah == 0:
+            self.blk_ac_first(ci, off, ss, se, al)
+        else:
+            self.blk_ac_refine(ci, off, ss, se, al)
+
+    def reset_scan_state(self, ns: int):
+        mut i = 0
+        while i < ns:
+            self.cs(self.sc.get(i), F_PRED, 0)
+            i = i + 1
+        self.eobrun = 0
+        self.bitbuf = 0
+        self.bitcnt = 0
+
+    # Consume the RSTn marker that must follow a restart interval.
+    def restart(self, ns: int) -> bool:
+        self.bitbuf = 0
+        self.bitcnt = 0
+        if self.marker == 0:
+            while self.pos + 1 < self.len:
+                if rd8(self.p, self.pos) == 0xFF:
+                    mut nx = rd8(self.p, self.pos + 1)
+                    if nx != 0 and nx != 0xFF:
+                        self.marker = nx
+                        break
+                self.pos = self.pos + 1
+        if self.marker >= 0xD0 and self.marker <= 0xD7:
+            self.pos = self.pos + 2
+            self.marker = 0
+            mut i = 0
+            while i < ns:
+                self.cs(self.sc.get(i), F_PRED, 0)
+                i = i + 1
+            self.eobrun = 0
+            return true
+        return false
+
+    def run_scan(self, ns: int, ss: int, se: int, ah: int, al: int):
+        self.reset_scan_state(ns)
+        self.marker = 0
+        mut n = 0
+        if ns == 1:
+            mut ci = self.sc.get(0)
+            mut wb = self.cg(ci, F_CW)
+            mut hb = self.cg(ci, F_CH)
+            mut by = 0
+            while by < hb:
+                mut bx = 0
+                while bx < wb:
+                    if self.ri > 0 and n > 0 and n % self.ri == 0:
+                        if not self.restart(ns):
+                            return
+                    self.one_block(ci, bx, by, ss, se, ah, al)
+                    if self.err != 0:
+                        return
+                    n = n + 1
+                    bx = bx + 1
+                by = by + 1
+        else:
+            mut my = 0
+            while my < self.mcuy:
+                mut mx = 0
+                while mx < self.mcux:
+                    if self.ri > 0 and n > 0 and n % self.ri == 0:
+                        if not self.restart(ns):
+                            return
+                    mut s = 0
+                    while s < ns:
+                        mut ci = self.sc.get(s)
+                        mut ch = self.cg(ci, F_H)
+                        mut cv = self.cg(ci, F_V)
+                        mut v = 0
+                        while v < cv:
+                            mut h = 0
+                            while h < ch:
+                                self.one_block(ci, mx * ch + h, my * cv + v, ss, se, ah, al)
+                                h = h + 1
+                            v = v + 1
+                        s = s + 1
+                    if self.err != 0:
+                        return
+                    n = n + 1
+                    mx = mx + 1
+                my = my + 1
+
+    def parse_sos(self, pos: int, end: int) -> bool:
+        if self.have_frame == 0: return false
+        mut ns = rd8(self.p, pos)
+        if ns < 1 or ns > 4 or ns > self.ncomp: return false
+        if end - pos < 1 + ns * 2 + 3: return false
+        mut i = 0
+        while i < ns:
+            mut cid = rd8(self.p, pos + 1 + i * 2)
+            mut tt = rd8(self.p, pos + 2 + i * 2)
+            mut found = -1
+            mut j = 0
+            while j < self.ncomp:
+                if self.cg(j, F_ID) == cid:
+                    found = j
+                j = j + 1
+            if found < 0: return false
+            self.sc.set(i, found)
+            self.cs(found, F_TD, tt >> 4)
+            self.cs(found, F_TA, tt & 15)
+            if (tt >> 4) > 3 or (tt & 15) > 3: return false
+            i = i + 1
+        mut ss = rd8(self.p, pos + 1 + ns * 2)
+        mut se = rd8(self.p, pos + 2 + ns * 2)
+        mut ahl = rd8(self.p, pos + 3 + ns * 2)
+        mut ah = ahl >> 4
+        mut al = ahl & 15
+        if self.prog == 0:
+            ss = 0
+            se = 63
+            ah = 0
+            al = 0
+        else:
+            if ss > se or se > 63: return false
+            if ss == 0 and se != 0: return false
+            if ss > 0 and ns != 1: return false
+            if al > 13: return false
+        # required tables must exist
+        i = 0
+        while i < ns:
+            mut ci = self.sc.get(i)
+            if self.prog == 0 or ss == 0:
+                if ah == 0 and self.hset.get(self.cg(ci, F_TD)) == 0: return false
+            if self.prog == 0 or ss > 0:
+                if self.hset.get(4 + self.cg(ci, F_TA)) == 0: return false
+            i = i + 1
+        self.pos = end
+        self.run_scan(ns, ss, se, ah, al)
+        return self.err == 0
+
+    # Scan forward to the next marker byte position (pos of the 0xFF).
+    def seek_marker(self) -> bool:
+        if self.marker != 0:
+            return true
+        while self.pos + 1 < self.len:
+            if rd8(self.p, self.pos) == 0xFF:
+                mut nx = rd8(self.p, self.pos + 1)
+                if nx != 0 and nx != 0xFF and not (nx >= 0xD0 and nx <= 0xD7):
+                    return true
+            self.pos = self.pos + 1
+        return false
+
+    # Walk the marker stream. `stop_at_sof`: info mode, return after SOF.
+    def parse(self, stop_at_sof: bool) -> bool:
+        if self.len < 4: return false
+        if rd8(self.p, 0) != 0xFF or rd8(self.p, 1) != 0xD8: return false
+        self.pos = 2
+        mut scans = 0
+        while true:
+            if not self.seek_marker():
+                break
+            self.marker = 0
+            mut m = rd8(self.p, self.pos + 1)
+            self.pos = self.pos + 2
+            if m == 0xD9: break
+            if m == 0xD8 or m == 0x01 or (m >= 0xD0 and m <= 0xD7):
+                continue
+            if self.pos + 2 > self.len: return false
+            mut seg = self.u16(self.pos)
+            if seg < 2 or self.pos + seg > self.len:
+                # tolerate a truncated final segment only if a frame+scan exist
+                return scans > 0
+            mut body = self.pos + 2
+            mut end = self.pos + seg
+            if m == 0xC0 or m == 0xC1 or m == 0xC2:
+                mut pg = 0
+                if m == 0xC2: pg = 1
+                if not self.parse_sof(body, end, pg): return false
+                if stop_at_sof: return true
+            elif m == 0xC3 or (m >= 0xC5 and m <= 0xC7) or (m >= 0xC9 and m <= 0xCB) or (m >= 0xCD and m <= 0xCF):
+                return false
+            elif m == 0xC4:
+                if not self.parse_dht(body, end): return false
+            elif m == 0xDB:
+                if not self.parse_dqt(body, end): return false
+            elif m == 0xDD:
+                if end - body < 2: return false
+                self.ri = self.u16(body)
+            elif m == 0xE0:
+                if end - body >= 5 and rd8(self.p, body) == 0x4A and rd8(self.p, body + 1) == 0x46 and rd8(self.p, body + 2) == 0x49 and rd8(self.p, body + 3) == 0x46:
+                    self.jfif = 1
+            elif m == 0xEE:
+                if end - body >= 12 and rd8(self.p, body) == 0x41 and rd8(self.p, body + 1) == 0x64 and rd8(self.p, body + 2) == 0x6F and rd8(self.p, body + 3) == 0x62 and rd8(self.p, body + 4) == 0x65:
+                    self.adobe = rd8(self.p, body + 11)
+            elif m == 0xDA:
+                if stop_at_sof: return self.have_frame != 0
+                if not self.parse_sos(body, end): return false
+                scans = scans + 1
+                continue
+            self.pos = end
+        return self.have_frame != 0 and scans > 0
+
+    # ── IDCT (IJG "islow") ─────────────────────────────────────────────────
+
+    def idct_block(self, coff: int, qoff: int, poff: int, stride: int):
+        mut c = 0
+        while c < 8:
+            mut z0 = self.cf.get(coff + c)
+            mut z1 = self.cf.get(coff + 8 + c)
+            mut z2 = self.cf.get(coff + 16 + c)
+            mut z3 = self.cf.get(coff + 24 + c)
+            mut z4 = self.cf.get(coff + 32 + c)
+            mut z5 = self.cf.get(coff + 40 + c)
+            mut z6 = self.cf.get(coff + 48 + c)
+            mut z7 = self.cf.get(coff + 56 + c)
+            if z1 == 0 and z2 == 0 and z3 == 0 and z4 == 0 and z5 == 0 and z6 == 0 and z7 == 0:
+                mut dc = (z0 * self.qt.get(qoff + c)) << 2
+                mut r = 0
+                while r < 8:
+                    self.ws.set(r * 8 + c, dc)
+                    r = r + 1
+            else:
+                mut a2 = z2 * self.qt.get(qoff + 16 + c)
+                mut a3 = z6 * self.qt.get(qoff + 48 + c)
+                mut t1 = (a2 + a3) * 4433
+                mut tmp2 = t1 + a3 * (-15137)
+                mut tmp3 = t1 + a2 * 6270
+                mut b2 = z0 * self.qt.get(qoff + c)
+                mut b3 = z4 * self.qt.get(qoff + 32 + c)
+                mut tmp0 = (b2 + b3) << 13
+                mut tmp1 = (b2 - b3) << 13
+                mut tmp10 = tmp0 + tmp3
+                mut tmp13 = tmp0 - tmp3
+                mut tmp11 = tmp1 + tmp2
+                mut tmp12 = tmp1 - tmp2
+                tmp0 = z7 * self.qt.get(qoff + 56 + c)
+                tmp1 = z5 * self.qt.get(qoff + 40 + c)
+                tmp2 = z3 * self.qt.get(qoff + 24 + c)
+                tmp3 = z1 * self.qt.get(qoff + 8 + c)
+                mut y1 = tmp0 + tmp3
+                mut y2 = tmp1 + tmp2
+                mut y3 = tmp0 + tmp2
+                mut y4 = tmp1 + tmp3
+                mut y5 = (y3 + y4) * 9633
+                tmp0 = tmp0 * 2446
+                tmp1 = tmp1 * 16819
+                tmp2 = tmp2 * 25172
+                tmp3 = tmp3 * 12299
+                y1 = y1 * (-7373)
+                y2 = y2 * (-20995)
+                y3 = y3 * (-16069)
+                y4 = y4 * (-3196)
+                y3 = y3 + y5
+                y4 = y4 + y5
+                tmp0 = tmp0 + y1 + y3
+                tmp1 = tmp1 + y2 + y4
+                tmp2 = tmp2 + y2 + y3
+                tmp3 = tmp3 + y1 + y4
+                self.ws.set(c, (tmp10 + tmp3 + 1024) >> 11)
+                self.ws.set(56 + c, (tmp10 - tmp3 + 1024) >> 11)
+                self.ws.set(8 + c, (tmp11 + tmp2 + 1024) >> 11)
+                self.ws.set(48 + c, (tmp11 - tmp2 + 1024) >> 11)
+                self.ws.set(16 + c, (tmp12 + tmp1 + 1024) >> 11)
+                self.ws.set(40 + c, (tmp12 - tmp1 + 1024) >> 11)
+                self.ws.set(24 + c, (tmp13 + tmp0 + 1024) >> 11)
+                self.ws.set(32 + c, (tmp13 - tmp0 + 1024) >> 11)
+            c = c + 1
+        mut r = 0
+        while r < 8:
+            mut w = r * 8
+            mut z2 = self.ws.get(w + 2)
+            mut z3 = self.ws.get(w + 6)
+            mut t1 = (z2 + z3) * 4433
+            mut tmp2 = t1 + z3 * (-15137)
+            mut tmp3 = t1 + z2 * 6270
+            mut tmp0 = (self.ws.get(w) + self.ws.get(w + 4)) << 13
+            mut tmp1 = (self.ws.get(w) - self.ws.get(w + 4)) << 13
+            mut tmp10 = tmp0 + tmp3
+            mut tmp13 = tmp0 - tmp3
+            mut tmp11 = tmp1 + tmp2
+            mut tmp12 = tmp1 - tmp2
+            tmp0 = self.ws.get(w + 7)
+            tmp1 = self.ws.get(w + 5)
+            tmp2 = self.ws.get(w + 3)
+            tmp3 = self.ws.get(w + 1)
+            mut y1 = tmp0 + tmp3
+            mut y2 = tmp1 + tmp2
+            mut y3 = tmp0 + tmp2
+            mut y4 = tmp1 + tmp3
+            mut y5 = (y3 + y4) * 9633
+            tmp0 = tmp0 * 2446
+            tmp1 = tmp1 * 16819
+            tmp2 = tmp2 * 25172
+            tmp3 = tmp3 * 12299
+            y1 = y1 * (-7373)
+            y2 = y2 * (-20995)
+            y3 = y3 * (-16069)
+            y4 = y4 * (-3196)
+            y3 = y3 + y5
+            y4 = y4 + y5
+            tmp0 = tmp0 + y1 + y3
+            tmp1 = tmp1 + y2 + y4
+            tmp2 = tmp2 + y2 + y3
+            tmp3 = tmp3 + y1 + y4
+            mut o = poff + r * stride
+            self.pl.set(o, clamp255(((tmp10 + tmp3 + 131072) >> 18) + 128))
+            self.pl.set(o + 7, clamp255(((tmp10 - tmp3 + 131072) >> 18) + 128))
+            self.pl.set(o + 1, clamp255(((tmp11 + tmp2 + 131072) >> 18) + 128))
+            self.pl.set(o + 6, clamp255(((tmp11 - tmp2 + 131072) >> 18) + 128))
+            self.pl.set(o + 2, clamp255(((tmp12 + tmp1 + 131072) >> 18) + 128))
+            self.pl.set(o + 5, clamp255(((tmp12 - tmp1 + 131072) >> 18) + 128))
+            self.pl.set(o + 3, clamp255(((tmp13 + tmp0 + 131072) >> 18) + 128))
+            self.pl.set(o + 4, clamp255(((tmp13 - tmp0 + 131072) >> 18) + 128))
+            r = r + 1
+
+    def idct_all(self):
+        mut ci = 0
+        while ci < self.ncomp:
+            mut bw = self.cg(ci, F_BW)
+            mut bh = self.cg(ci, F_BH)
+            mut qoff = self.cg(ci, F_TQ) * 64
+            mut cbase = self.cg(ci, F_COEF)
+            mut pbase = self.cg(ci, F_PLANE)
+            mut by = 0
+            while by < bh:
+                mut bx = 0
+                while bx < bw:
+                    self.idct_block(cbase + (by * bw + bx) * 64, qoff, pbase + by * 8 * bw * 8 + bx * 8, bw * 8)
+                    bx = bx + 1
+                by = by + 1
+            ci = ci + 1
+
+    # ── upsampling ─────────────────────────────────────────────────────────
+
+    # Full-resolution (width x height) copy of component `ci`'s samples.
+    def upsample(self, ci: int) -> ByteArr:
+        mut W = self.width
+        mut H = self.height
+        mut out = ByteArr.init(W * H)
+        mut h = self.cg(ci, F_H)
+        mut v = self.cg(ci, F_V)
+        mut dw = self.cg(ci, F_DW)
+        mut dh = self.cg(ci, F_DH)
+        mut stride = self.cg(ci, F_BW) * 8
+        mut pb = self.cg(ci, F_PLANE)
+        mut hs = 0
+        mut vs = 0
+        if self.hmax % h == 0:
+            hs = self.hmax / h
+        if self.vmax % v == 0:
+            vs = self.vmax / v
+        if hs == 1 and vs == 1:
+            mut y = 0
+            while y < H:
+                mut x = 0
+                while x < W:
+                    out.set(y * W + x, self.pl.get(pb + y * stride + x))
+                    x = x + 1
+                y = y + 1
+        elif hs == 2 and vs == 1 and dw > 2:
+            mut y = 0
+            while y < H:
+                mut ro = pb + y * stride
+                mut x = 0
+                while x < W:
+                    mut i = x >> 1
+                    mut cur = self.pl.get(ro + i)
+                    mut val = 0
+                    if (x & 1) == 0:
+                        if i == 0:
+                            val = cur
+                        else:
+                            val = (cur * 3 + self.pl.get(ro + i - 1) + 1) >> 2
+                    else:
+                        if i == dw - 1:
+                            val = cur
+                        else:
+                            val = (cur * 3 + self.pl.get(ro + i + 1) + 2) >> 2
+                    out.set(y * W + x, val)
+                    x = x + 1
+                y = y + 1
+        elif hs == 2 and vs == 2 and dw > 2:
+            mut y = 0
+            while y < H:
+                mut r0 = y >> 1
+                mut r1 = r0 - 1
+                if (y & 1) == 1:
+                    r1 = r0 + 1
+                if r1 < 0: r1 = 0
+                if r1 > dh - 1: r1 = dh - 1
+                mut o0 = pb + r0 * stride
+                mut o1 = pb + r1 * stride
+                mut x = 0
+                while x < W:
+                    mut i = x >> 1
+                    mut ths = self.pl.get(o0 + i) * 3 + self.pl.get(o1 + i)
+                    mut val = 0
+                    if (x & 1) == 0:
+                        if i == 0:
+                            val = (ths * 4 + 8) >> 4
+                        else:
+                            mut lst = self.pl.get(o0 + i - 1) * 3 + self.pl.get(o1 + i - 1)
+                            val = (ths * 3 + lst + 8) >> 4
+                    else:
+                        if i == dw - 1:
+                            val = (ths * 4 + 7) >> 4
+                        else:
+                            mut nxt = self.pl.get(o0 + i + 1) * 3 + self.pl.get(o1 + i + 1)
+                            val = (ths * 3 + nxt + 7) >> 4
+                    out.set(y * W + x, val)
+                    x = x + 1
+                y = y + 1
+        elif hs == 1 and vs == 2:
+            mut y = 0
+            while y < H:
+                mut r0 = y >> 1
+                mut r1 = r0 - 1
+                mut bias = 1
+                if (y & 1) == 1:
+                    r1 = r0 + 1
+                    bias = 2
+                if r1 < 0: r1 = 0
+                if r1 > dh - 1: r1 = dh - 1
+                mut x = 0
+                while x < W:
+                    mut a = self.pl.get(pb + r0 * stride + x)
+                    mut b = self.pl.get(pb + r1 * stride + x)
+                    out.set(y * W + x, (a * 3 + b + bias) >> 2)
+                    x = x + 1
+                y = y + 1
+        else:
+            mut y = 0
+            while y < H:
+                mut sy = y * v / self.vmax
+                if sy > dh - 1: sy = dh - 1
+                mut x = 0
+                while x < W:
+                    mut sx = x * h / self.hmax
+                    if sx > dw - 1: sx = dw - 1
+                    out.set(y * W + x, self.pl.get(pb + sy * stride + sx))
+                    x = x + 1
+                y = y + 1
+        return out
+
+    # ── output ─────────────────────────────────────────────────────────────
+
+    def to_image(self) -> Image:
+        self.idct_all()
+        mut W = self.width
+        mut H = self.height
+        mut img = new_image(W, H)
+        mut n = W * H
+        if self.ncomp == 1:
+            mut y0 = self.upsample(0)
+            mut i = 0
+            while i < n:
+                mut v = y0.get(i)
+                put_rgba(img, i, v, v, v, 255)
+                i = i + 1
+            return img
+        if self.ncomp == 3:
+            mut c0 = self.upsample(0)
+            mut c1 = self.upsample(1)
+            mut c2 = self.upsample(2)
+            mut ycc = true
+            if self.jfif != 0:
+                ycc = true
+            elif self.adobe >= 0:
+                ycc = self.adobe != 0
+            elif self.cg(0, F_ID) == 82 and self.cg(1, F_ID) == 71 and self.cg(2, F_ID) == 66:
+                ycc = false
+            mut i = 0
+            while i < n:
+                if ycc:
+                    mut yy = c0.get(i)
+                    mut cb = c1.get(i) - 128
+                    mut cr = c2.get(i) - 128
+                    mut r = yy + ((91881 * cr + 32768) >> 16)
+                    mut g = yy + ((-22554 * cb - 46802 * cr + 32768) >> 16)
+                    mut b = yy + ((116130 * cb + 32768) >> 16)
+                    put_rgba(img, i, clamp255(r), clamp255(g), clamp255(b), 255)
+                else:
+                    put_rgba(img, i, c0.get(i), c1.get(i), c2.get(i), 255)
+                i = i + 1
+            return img
+        # 4 components: CMYK or YCCK
+        mut c0 = self.upsample(0)
+        mut c1 = self.upsample(1)
+        mut c2 = self.upsample(2)
+        mut c3 = self.upsample(3)
+        mut ycck = self.adobe == 2
+        mut i = 0
+        while i < n:
+            mut a = c0.get(i)
+            mut b = c1.get(i)
+            mut c = c2.get(i)
+            mut k = c3.get(i)
+            if ycck:
+                mut cb = b - 128
+                mut cr = c - 128
+                mut r = a + ((91881 * cr + 32768) >> 16)
+                mut g = a + ((-22554 * cb - 46802 * cr + 32768) >> 16)
+                mut bl = a + ((116130 * cb + 32768) >> 16)
+                a = 255 - clamp255(r)
+                b = 255 - clamp255(g)
+                c = 255 - clamp255(bl)
+            if self.adobe >= 0:
+                # Adobe stores inverted CMYK: 255 = no ink
+                put_rgba(img, i, (a * k + 127) / 255, (b * k + 127) / 255, (c * k + 127) / 255, 255)
+            else:
+                put_rgba(img, i, ((255 - a) * (255 - k) + 127) / 255, ((255 - b) * (255 - k) + 127) / 255, ((255 - c) * (255 - k) + 127) / 255, 255)
+            i = i + 1
+        return img
+
+# Header-only inspection: dimensions, component count, progressive flag.
+pub def jpeg_info(data: str, len_: int) -> JpegInfo:
+    mut inf = JpegInfo()
+    inf.ok = false
+    inf.width = -1
+    inf.height = -1
+    inf.components = 0
+    inf.progressive = false
+    inf.adobe = -1
+    mut d = JpegDec.init(data as Pointer[char], len_)
+    if d.parse(true):
+        inf.ok = true
+        inf.width = d.width
+        inf.height = d.height
+        inf.components = d.ncomp
+        inf.progressive = d.prog != 0
+        inf.adobe = d.adobe
+    return inf
+
+# Decode `len_` bytes of JPEG into an RGBA8 Image (alpha = 255). Returns an
+# Image with width == -1 on malformed or unsupported input. A file that is
+# truncated after at least one complete scan header decodes as far as it goes
+# (the remainder is mid-grey), like most viewers.
+pub def decode_jpeg(data: str, len_: int) -> Image:
+    mut d = JpegDec.init(data as Pointer[char], len_)
+    if not d.parse(false):
+        return bad_image()
+    return d.to_image()
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Encoder
+# ═══════════════════════════════════════════════════════════════════════════
+
+# Annex K standard Huffman tables: code-length counts (1..16) and symbols.
+def _std_bits(t: int) -> List[int]:
+    if t == 0:
+        return [0, 1, 5, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0]
+    if t == 1:
+        return [0, 3, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0]
+    if t == 2:
+        return [0, 2, 1, 3, 3, 2, 4, 3, 5, 5, 4, 4, 0, 0, 1, 125]
+    return [0, 2, 1, 2, 4, 4, 3, 4, 7, 5, 4, 4, 0, 1, 2, 119]
+
+def _std_vals(t: int) -> List[int]:
+    if t == 0 or t == 1:
+        return [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+    if t == 2:
+        return [1, 2, 3, 0, 4, 17, 5, 18, 33, 49, 65, 6, 19, 81, 97, 7, 34, 113, 20, 50, 129, 145, 161, 8, 35, 66, 177, 193, 21, 82, 209, 240, 36, 51, 98, 114, 130, 9, 10, 22, 23, 24, 25, 26, 37, 38, 39, 40, 41, 42, 52, 53, 54, 55, 56, 57, 58, 67, 68, 69, 70, 71, 72, 73, 74, 83, 84, 85, 86, 87, 88, 89, 90, 99, 100, 101, 102, 103, 104, 105, 106, 115, 116, 117, 118, 119, 120, 121, 122, 131, 132, 133, 134, 135, 136, 137, 138, 146, 147, 148, 149, 150, 151, 152, 153, 154, 162, 163, 164, 165, 166, 167, 168, 169, 170, 178, 179, 180, 181, 182, 183, 184, 185, 186, 194, 195, 196, 197, 198, 199, 200, 201, 202, 210, 211, 212, 213, 214, 215, 216, 217, 218, 225, 226, 227, 228, 229, 230, 231, 232, 233, 234, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250]
+    return [0, 1, 2, 3, 17, 4, 5, 33, 49, 6, 18, 65, 81, 7, 97, 113, 19, 34, 50, 129, 8, 20, 66, 145, 161, 177, 193, 9, 35, 51, 82, 240, 21, 98, 114, 209, 10, 22, 36, 52, 225, 37, 241, 23, 24, 25, 26, 38, 39, 40, 41, 42, 53, 54, 55, 56, 57, 58, 67, 68, 69, 70, 71, 72, 73, 74, 83, 84, 85, 86, 87, 88, 89, 90, 99, 100, 101, 102, 103, 104, 105, 106, 115, 116, 117, 118, 119, 120, 121, 122, 130, 131, 132, 133, 134, 135, 136, 137, 138, 146, 147, 148, 149, 150, 151, 152, 153, 154, 162, 163, 164, 165, 166, 167, 168, 169, 170, 178, 179, 180, 181, 182, 183, 184, 185, 186, 194, 195, 196, 197, 198, 199, 200, 201, 202, 210, 211, 212, 213, 214, 215, 216, 217, 218, 226, 227, 228, 229, 230, 231, 232, 233, 234, 242, 243, 244, 245, 246, 247, 248, 249, 250]
+
+# Annex K example quantisation tables (natural row-major order).
+def _base_q(chroma: bool) -> List[int]:
+    if not chroma:
+        return [16, 11, 10, 16, 24, 40, 51, 61, 12, 12, 14, 19, 26, 58, 60, 55, 14, 13, 16, 24, 40, 57, 69, 56, 14, 17, 22, 29, 51, 87, 80, 62, 18, 22, 37, 56, 68, 109, 103, 77, 24, 35, 55, 64, 81, 104, 113, 92, 49, 64, 78, 87, 103, 121, 120, 101, 72, 92, 95, 98, 112, 100, 103, 99]
+    return [17, 18, 24, 47, 99, 99, 99, 99, 18, 21, 26, 66, 99, 99, 99, 99, 24, 26, 56, 99, 99, 99, 99, 99, 47, 66, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99]
+
+class JpegEnc:
+    pub out:    CBuf
+    pub acc:    int
+    pub nbits:  int
+    pub zz:     IntBuf
+    pub qn:     IntBuf      # quant, natural order: [0,64) luma, [64,128) chroma
+    pub code:   IntBuf      # [t*256 + sym] code
+    pub size:   IntBuf      # [t*256 + sym] code length
+    pub cosm:   FloatBuf    # 8x8 DCT basis
+    pub tmp:    FloatBuf
+    pub blk:    IntBuf      # quantised coefficients, zigzag order
+    pub pred:   IntBuf
+
+extend JpegEnc:
+    pub def init(quality: int) -> JpegEnc:
+        mut e = JpegEnc()
+        e.out = CBuf.init(4096)
+        e.acc = 0
+        e.nbits = 0
+        e.zz = _zigzag()
+        e.qn = IntBuf.init(128)
+        e.code = IntBuf.init(1024)
+        e.size = IntBuf.init(1024)
+        e.cosm = FloatBuf.init(64)
+        e.tmp = FloatBuf.init(64)
+        e.blk = IntBuf.init(64)
+        e.pred = IntBuf.init(4)
+        mut q = quality
+        if q < 1: q = 1
+        if q > 100: q = 100
+        mut scale = 0
+        if q < 50:
+            scale = 5000 / q
+        else:
+            scale = 200 - q * 2
+        mut tc = 0
+        while tc < 2:
+            mut base = _base_q(tc == 1)
+            mut i = 0
+            while i < 64:
+                mut v = (base[i] * scale + 50) / 100
+                if v < 1: v = 1
+                if v > 255: v = 255
+                e.qn.set(tc * 64 + i, v)
+                i = i + 1
+            tc = tc + 1
+        mut t = 0
+        while t < 4:
+            mut bits = _std_bits(t)
+            mut vals = _std_vals(t)
+            mut cd = 0
+            mut k = 0
+            mut l = 1
+            while l <= 16:
+                mut j = 0
+                while j < bits[l - 1]:
+                    e.code.set(t * 256 + vals[k], cd)
+                    e.size.set(t * 256 + vals[k], l)
+                    cd = cd + 1
+                    k = k + 1
+                    j = j + 1
+                cd = cd << 1
+                l = l + 1
+            t = t + 1
+        mut u = 0
+        while u < 8:
+            mut cu = 0.5
+            if u == 0:
+                cu = 0.35355339059327373
+            mut x = 0
+            while x < 8:
+                e.cosm.set(u * 8 + x, cu * cos((2.0 * (x as float) + 1.0) * (u as float) * 3.141592653589793 / 16.0))
+                x = x + 1
+            u = u + 1
+        return e
+
+    pub def free(self):
+        self.out.free()
+        self.zz.free()
+        self.qn.free()
+        self.code.free()
+        self.size.free()
+        self.cosm.free()
+        self.tmp.free()
+        self.blk.free()
+        self.pred.free()
+
+    def put16(self, v: int):
+        self.out.push_u8((v >> 8) & 255)
+        self.out.push_u8(v & 255)
+
+    def put_bits(self, c: int, n: int):
+        if n == 0:
+            return
+        self.acc = (self.acc << n) | (c & ((1 << n) - 1))
+        self.nbits = self.nbits + n
+        while self.nbits >= 8:
+            mut b = (self.acc >> (self.nbits - 8)) & 255
+            self.out.push_u8(b)
+            if b == 255:
+                self.out.push_u8(0)
+            self.nbits = self.nbits - 8
+        self.acc = self.acc & ((1 << self.nbits) - 1)
+
+    def flush_bits(self):
+        if self.nbits > 0:
+            self.put_bits(127, 8 - self.nbits)
+        self.acc = 0
+        self.nbits = 0
+
+    # Forward DCT + quantisation of the 8x8 block of `plane` at byte offset
+    # `off` (row stride `stride`); result in self.blk in zigzag order.
+    def fdct_quant(self, plane: ByteArr, off: int, stride: int, qoff: int):
+        # rows: tmp[y][u] = sum_x f[y][x] * cos[u][x]
+        mut y = 0
+        while y < 8:
+            mut u = 0
+            while u < 8:
+                mut s = 0.0
+                mut x = 0
+                while x < 8:
+                    s = s + ((plane.get(off + y * stride + x) - 128) as float) * self.cosm.get(u * 8 + x)
+                    x = x + 1
+                self.tmp.set(y * 8 + u, s)
+                u = u + 1
+            y = y + 1
+        mut v = 0
+        while v < 8:
+            mut u = 0
+            while u < 8:
+                mut s = 0.0
+                mut yy = 0
+                while yy < 8:
+                    s = s + self.tmp.get(yy * 8 + u) * self.cosm.get(v * 8 + yy)
+                    yy = yy + 1
+                mut q = self.qn.get(qoff + v * 8 + u) as float
+                mut r = s / q
+                mut qi = 0
+                if r >= 0.0:
+                    qi = (r + 0.5) as int
+                else:
+                    qi = 0 - ((0.5 - r) as int)
+                # place in zigzag order
+                mut k = 0
+                while k < 64:
+                    if self.zz.get(k) == v * 8 + u:
+                        self.blk.set(k, qi)
+                        break
+                    k = k + 1
+                u = u + 1
+            v = v + 1
+
+    def nbits_of(self, v: int) -> int:
+        mut a = v
+        if a < 0: a = 0 - a
+        mut n = 0
+        while a > 0:
+            n = n + 1
+            a = a >> 1
+        return n
+
+    def emit_block(self, comp: int, dct: int, act: int):
+        mut diff = self.blk.get(0) - self.pred.get(comp)
+        self.pred.set(comp, self.blk.get(0))
+        mut n = self.nbits_of(diff)
+        self.put_bits(self.code.get(dct * 256 + n), self.size.get(dct * 256 + n))
+        if n > 0:
+            if diff < 0:
+                self.put_bits(diff - 1, n)
+            else:
+                self.put_bits(diff, n)
+        mut run = 0
+        mut k = 1
+        while k < 64:
+            mut c = self.blk.get(k)
+            if c == 0:
+                run = run + 1
+            else:
+                while run > 15:
+                    self.put_bits(self.code.get(act * 256 + 240), self.size.get(act * 256 + 240))
+                    run = run - 16
+                mut s = self.nbits_of(c)
+                mut sym = (run << 4) | s
+                self.put_bits(self.code.get(act * 256 + sym), self.size.get(act * 256 + sym))
+                if c < 0:
+                    self.put_bits(c - 1, s)
+                else:
+                    self.put_bits(c, s)
+                run = 0
+            k = k + 1
+        if run > 0:
+            self.put_bits(self.code.get(act * 256), self.size.get(act * 256))
+
+# Encode `img` as a baseline JPEG.
+#   quality      1..100 (IJG scaling; 75 ~ libjpeg default, 90+ near-lossless)
+#   subsampling  0 = 4:4:4, 1 = 4:2:2 (horizontal), 2 = 4:2:0
+#   gray         true -> single-component grayscale file
+#   restart      restart interval in MCUs (0 = none)
+# Alpha is composited over white. Returns (bytes, length).
+pub def encode_jpeg_ex(img: Image, quality: int, subsampling: int, gray: bool, restart: int) -> (str, int):
+    mut W = img.width
+    mut H = img.height
+    mut hm = 1
+    mut vm = 1
+    if not gray:
+        if subsampling == 1:
+            hm = 2
+        elif subsampling == 2:
+            hm = 2
+            vm = 2
+    mut mw = 8 * hm
+    mut mh = 8 * vm
+    mut PW = ((W + mw - 1) / mw) * mw
+    mut PH = ((H + mh - 1) / mh) * mh
+    mut e = JpegEnc.init(quality)
+    mut ncomp = 3
+    if gray:
+        ncomp = 1
+    # full-resolution padded planes
+    mut py = ByteArr.init(PW * PH)
+    mut pcb = ByteArr.init(PW * PH)
+    mut pcr = ByteArr.init(PW * PH)
+    mut y = 0
+    while y < PH:
+        mut sy = y
+        if sy > H - 1: sy = H - 1
+        mut x = 0
+        while x < PW:
+            mut sx = x
+            if sx > W - 1: sx = W - 1
+            mut pi = sy * W + sx
+            mut a = get_ch(img, pi, 3)
+            mut r = (get_ch(img, pi, 0) * a + 255 * (255 - a) + 127) / 255
+            mut g = (get_ch(img, pi, 1) * a + 255 * (255 - a) + 127) / 255
+            mut b = (get_ch(img, pi, 2) * a + 255 * (255 - a) + 127) / 255
+            mut yy = 0.299 * (r as float) + 0.587 * (g as float) + 0.114 * (b as float)
+            mut cb = 128.0 - 0.168736 * (r as float) - 0.331264 * (g as float) + 0.5 * (b as float)
+            mut cr = 128.0 + 0.5 * (r as float) - 0.418688 * (g as float) - 0.081312 * (b as float)
+            py.set(y * PW + x, clamp255((yy + 0.5) as int))
+            pcb.set(y * PW + x, clamp255((cb + 0.5) as int))
+            pcr.set(y * PW + x, clamp255((cr + 0.5) as int))
+            x = x + 1
+        y = y + 1
+    # chroma downsampling (box average) into planes of (PW/hm) x (PH/vm)
+    mut CW = PW / hm
+    mut CH = PH / vm
+    mut sb = ByteArr.init(CW * CH)
+    mut sr = ByteArr.init(CW * CH)
+    if not gray:
+        y = 0
+        while y < CH:
+            mut x = 0
+            while x < CW:
+                mut tb = 0
+                mut tr = 0
+                mut vy = 0
+                while vy < vm:
+                    mut vx = 0
+                    while vx < hm:
+                        tb = tb + pcb.get((y * vm + vy) * PW + x * hm + vx)
+                        tr = tr + pcr.get((y * vm + vy) * PW + x * hm + vx)
+                        vx = vx + 1
+                    vy = vy + 1
+                mut cnt = hm * vm
+                sb.set(y * CW + x, (tb + cnt / 2) / cnt)
+                sr.set(y * CW + x, (tr + cnt / 2) / cnt)
+                x = x + 1
+            y = y + 1
+
+    # ── headers ──
+    e.out.push_u8(255)
+    e.out.push_u8(216)
+    # JFIF APP0
+    e.out.push_u8(255)
+    e.out.push_u8(224)
+    e.put16(16)
+    e.out.push_u8(74)
+    e.out.push_u8(70)
+    e.out.push_u8(73)
+    e.out.push_u8(70)
+    e.out.push_u8(0)
+    e.put16(0x0101)
+    e.out.push_u8(0)
+    e.put16(1)
+    e.put16(1)
+    e.out.push_u8(0)
+    e.out.push_u8(0)
+    # DQT
+    mut nq = 1
+    if not gray:
+        nq = 2
+    mut t = 0
+    while t < nq:
+        e.out.push_u8(255)
+        e.out.push_u8(219)
+        e.put16(67)
+        e.out.push_u8(t)
+        mut k = 0
+        while k < 64:
+            e.out.push_u8(e.qn.get(t * 64 + e.zz.get(k)))
+            k = k + 1
+        t = t + 1
+    # SOF0
+    e.out.push_u8(255)
+    e.out.push_u8(192)
+    e.put16(8 + ncomp * 3)
+    e.out.push_u8(8)
+    e.put16(H)
+    e.put16(W)
+    e.out.push_u8(ncomp)
+    e.out.push_u8(1)
+    e.out.push_u8((hm << 4) | vm)
+    e.out.push_u8(0)
+    if not gray:
+        e.out.push_u8(2)
+        e.out.push_u8(17)
+        e.out.push_u8(1)
+        e.out.push_u8(3)
+        e.out.push_u8(17)
+        e.out.push_u8(1)
+    # DHT: tables 0 (DC lum), 2 (AC lum) [, 1 (DC chroma), 3 (AC chroma)]
+    mut order = [0, 2, 1, 3]
+    mut nt = 2
+    if not gray:
+        nt = 4
+    t = 0
+    while t < nt:
+        mut tid = order[t]
+        mut bits = _std_bits(tid)
+        mut vals = _std_vals(tid)
+        e.out.push_u8(255)
+        e.out.push_u8(196)
+        e.put16(19 + len(vals))
+        mut tcth = 0
+        if tid == 2:
+            tcth = 0x10
+        elif tid == 1:
+            tcth = 0x01
+        elif tid == 3:
+            tcth = 0x11
+        e.out.push_u8(tcth)
+        mut i = 0
+        while i < 16:
+            e.out.push_u8(bits[i])
+            i = i + 1
+        i = 0
+        while i < len(vals):
+            e.out.push_u8(vals[i])
+            i = i + 1
+        t = t + 1
+    if restart > 0:
+        e.out.push_u8(255)
+        e.out.push_u8(221)
+        e.put16(4)
+        e.put16(restart)
+    # SOS
+    e.out.push_u8(255)
+    e.out.push_u8(218)
+    e.put16(6 + ncomp * 2)
+    e.out.push_u8(ncomp)
+    e.out.push_u8(1)
+    e.out.push_u8(0x00)
+    if not gray:
+        e.out.push_u8(2)
+        e.out.push_u8(0x11)
+        e.out.push_u8(3)
+        e.out.push_u8(0x11)
+    e.out.push_u8(0)
+    e.out.push_u8(63)
+    e.out.push_u8(0)
+
+    # ── entropy-coded data ──
+    mut mcux = PW / mw
+    mut mcuy = PH / mh
+    mut n = 0
+    mut rstn = 0
+    mut my = 0
+    while my < mcuy:
+        mut mx = 0
+        while mx < mcux:
+            if restart > 0 and n > 0 and n % restart == 0:
+                e.flush_bits()
+                e.out.push_u8(255)
+                e.out.push_u8(208 + (rstn & 7))
+                rstn = rstn + 1
+                e.pred.set(0, 0)
+                e.pred.set(1, 0)
+                e.pred.set(2, 0)
+            mut vy = 0
+            while vy < vm:
+                mut vx = 0
+                while vx < hm:
+                    e.fdct_quant(py, ((my * vm + vy) * 8) * PW + (mx * hm + vx) * 8, PW, 0)
+                    e.emit_block(0, 0, 2)
+                    vx = vx + 1
+                vy = vy + 1
+            if not gray:
+                e.fdct_quant(sb, (my * 8) * CW + mx * 8, CW, 64)
+                e.emit_block(1, 1, 3)
+                e.fdct_quant(sr, (my * 8) * CW + mx * 8, CW, 64)
+                e.emit_block(2, 1, 3)
+            n = n + 1
+            mx = mx + 1
+        my = my + 1
+    e.flush_bits()
+    e.out.push_u8(255)
+    e.out.push_u8(217)
+    mut olen = e.out.len
+    mut result = e.out.to_str()
+    return (result, olen)
+
+# Baseline JPEG, 4:2:0 chroma subsampling. See encode_jpeg_ex for options.
+pub def encode_jpeg(img: Image, quality: int) -> (str, int):
+    return encode_jpeg_ex(img, quality, 2, false, 0)

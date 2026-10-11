@@ -42,6 +42,10 @@ added here as each phase lands.
 - **`std.crypto.bytes`** — `CryptoBytes`: constant-time `ct_eq`, volatile
   `secure_zero` (new runtime helper `_tr_c_secure_zero`), OS `random`, binary-safe
   slice/concat (`tests/lang/114_crypto_bytes.tr`).
+- **`std.image.jpeg`** — pure-Tauraro JPEG: baseline + progressive decode (Huffman, IJG islow IDCT,
+  YCbCr/grayscale/CMYK/YCCK, any chroma subsampling, restart markers; bit-identical to libjpeg on the
+  tested files) and baseline encode with quality / subsampling / grayscale / restart options;
+  `jpeg_info`, `decode()` sniffing. Shared `std.image.buf` raw buffers. `tests/lang/160_jpeg.tr`.
 - **`std.async.retry`** — `RetryPolicy` (max attempts, fixed/exponential backoff
   with cap, optional jitter, retry-on predicate, overall deadline, per-attempt
   timeout), `call_with_timeout` / `call_bool_with_timeout`, and a thread-safe
