@@ -1,0 +1,86 @@
+# tests/lang/80_vec_set_arc.tr - Vec[Class].set(i, v) must retain the new
+# element and release the one it overwrites (bug log #1).
+#
+# Before the fix `set` stored the raw pointer without retaining: the fresh
+# value's temp was released at end of statement, leaving the Vec holding a
+# freed object (heap-use-after-free; here observable because the churn below
+# reuses the freed block and overwrites its fields).
+
+from std.test import TestRunner
+from std.core.vec import Vec
+from std.serialize.msgpack import MPVal
+
+class Obj:
+    pub n: int
+    pub tag: str
+
+extend Obj:
+    pub def make(n: int) -> Obj:
+        mut o = Obj()
+        o.n = n
+        o.tag = "obj-" + n.to_str()
+        return o
+
+def churn(rounds: int) -> int:
+    # allocate/free many same-sized objects so freed blocks get recycled
+    mut sum = 0
+    mut i = 0
+    while i < rounds:
+        mut junk = Obj.make(900000 + i)
+        sum = sum + junk.n
+        i = i + 1
+    return sum
+
+def main():
+    mut t = TestRunner.init("80_vec_set_arc")
+
+    t.section("set() with a fresh value keeps the value alive")
+    mut v: Vec[Obj] = Vec[Obj].init(4)
+    v.push(Obj.make(1))
+    v.push(Obj.make(2))
+    v.set(0, Obj.make(10))
+    churn(200)
+    t.assert_eq_int(v.get(0).n, 10, "slot 0 holds the fresh object after churn")
+    t.assert_eq_str(v.get(0).tag, "obj-10", "slot 0 string field intact after churn")
+    t.assert_eq_int(v.get(1).n, 2, "slot 1 untouched")
+
+    t.section("set() with an alias co-owns the value")
+    mut a = Obj.make(20)
+    v.set(1, a)
+    a.n = 21
+    t.assert_eq_int(v.get(1).n, 21, "vec element aliases the same object")
+    a = Obj.make(30)
+    churn(200)
+    t.assert_eq_int(v.get(1).n, 21, "element survives the local being rebound")
+    t.assert_eq_str(v.get(1).tag, "obj-20", "element string field intact")
+
+    t.section("set() repeatedly overwriting the same slot")
+    mut i = 0
+    while i < 100:
+        v.set(0, Obj.make(100 + i))
+        i = i + 1
+    churn(200)
+    t.assert_eq_int(v.get(0).n, 199, "last write wins")
+    t.assert_eq_str(v.get(0).tag, "obj-199", "last write string intact")
+
+    t.section("set(i, v.get(i)) self-assignment is safe")
+    v.set(0, v.get(0))
+    churn(50)
+    t.assert_eq_int(v.get(0).n, 199, "self-assign keeps the element")
+
+    t.section("MPVal.map_set overwriting an existing key (same latent bug)")
+    mut m = MPVal.init_map()
+    m.map_set("k", MPVal.init_int(1))
+    m.map_set("k", MPVal.init_int(2))
+    m.map_set("other", MPVal.init_str("x"))
+    t.assert_eq_int(m.map_get("k").get_int(), 2, "map_set overwrote key")
+    t.assert_eq_int(m.map_len(), 2, "no duplicate key")
+    mut j = 0
+    while j < 50:
+        m.map_set("k", MPVal.init_int(j))
+        j = j + 1
+    churn(100)
+    t.assert_eq_int(m.map_get("k").get_int(), 49, "final value of k")
+    t.assert_eq_str(m.map_get("other").get_str(), "x", "other key untouched")
+
+    t.summary()
