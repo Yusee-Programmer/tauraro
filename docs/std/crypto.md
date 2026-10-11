@@ -544,13 +544,13 @@ from std.crypto.rsa import Rsa, RsaPublicKey, RsaPrivateKey
 from std.crypto.pkutil import Bytes
 
 # (inside a `throws str` function)
-mut pub = Rsa.public_from_pem(pem_text)?               # SPKI or PKCS#1 public
+mut pk = Rsa.public_from_pem(pem_text)?               # SPKI or PKCS#1 public
 mut priv = Rsa.private_from_pem(key_text)?             # PKCS#1 or PKCS#8
 mut sig = Rsa.sign_pkcs1(priv, "sha256", Bytes.from_str("hello"))?
-mut ok = Rsa.verify_pkcs1(pub, "sha256", Bytes.from_str("hello"), sig)    # bool
+mut ok = Rsa.verify_pkcs1(pk, "sha256", Bytes.from_str("hello"), sig)    # bool
 mut pss = Rsa.sign_pss(priv, "sha256", msg, 32)?       # random 32-byte salt
-mut ok2 = Rsa.verify_pss(pub, "sha256", msg, pss, 32)  # salt_len < 0: accept any
-mut ct = Rsa.oaep_encrypt(pub, "sha256", secret, label)?
+mut ok2 = Rsa.verify_pss(pk, "sha256", msg, pss, 32)  # salt_len < 0: accept any
+mut ct = Rsa.oaep_encrypt(pk, "sha256", secret, label)?
 mut pt = Rsa.oaep_decrypt(priv, "sha256", ct, label)?
 ```
 
@@ -617,3 +617,40 @@ Verified against the RFC 4226 Appendix D vectors and the RFC 6238 Appendix B vec
 SHA-1, SHA-256 and SHA-512 (`tests/lang/115_hmac_otp.tr`). Verification does not store used
 codes or rate-limit; both are the caller's job.
 
+
+### ECDSA and ECDH — `std.crypto.ecdsa`
+
+NIST **P-256** and **P-384** (`Ecdsa.p256()`, `Ecdsa.p384()`): ECDSA with **RFC 6979 deterministic nonces**,
+and ECDH. Verified against the RFC 6979 appendix vectors, Python `cryptography` (deterministic
+ECDSA), OpenSSL-made signatures and `openssl pkeyutl -derive`; our signatures pass `openssl dgst -verify`.
+
+```tauraro
+from std.crypto.ecdsa import Ecdsa, EcPublicKey, EcPrivateKey
+from std.crypto.pkutil import Bytes
+
+# (inside a `throws str` function)
+mut priv = Ecdsa.generate(Ecdsa.p256())                  # or private_from_pem / private_from_scalar
+mut sig = Ecdsa.sign(priv, "sha256", Bytes.from_str("hi"))?        # DER SEQUENCE{r, s}
+mut ok = Ecdsa.verify(priv.public_key(), "sha256", Bytes.from_str("hi"), sig)
+mut raw = Ecdsa.sign_raw(priv, "sha256", msg)?                     # r||s (JWS ES256 form)
+mut pt = priv.public_key().to_point(true)                          # 33-byte compressed SEC1 point
+mut pk = Ecdsa.public_from_pem(spki_text)?                         # validates the point is on the curve
+mut shared = Ecdsa.ecdh(priv, peer_public_key)?                    # x coordinate, 32 bytes
+```
+
+| API | Notes |
+|---|---|
+| `Ecdsa.generate(curve)`, `private_from_scalar(curve, d_bytes)` | random / explicit private key |
+| `private_from_pem/der`, `public_from_pem/der`, `public_from_point(curve, bytes)` | SEC1 `EC PRIVATE KEY`, PKCS#8, SPKI, `04||X||Y` and compressed `02/03||X` points; every point is validated |
+| `private_to_pem/der` (SEC1), `public_to_pem/der` (SPKI), `pk.to_point(compressed)` | byte-identical to OpenSSL's encodings |
+| `sign`, `sign_raw`, `sign_digest`, `sign_digest_sig` | hash names `sha1/sha256/sha384/sha512`; the same hash seeds the RFC 6979 nonce |
+| `verify`, `verify_raw`, `verify_digest`, `verify_rs` | return `bool`, never raise |
+| `sig_to_der(r, s)`, `sig_from_der(der)` | encoding conversion (`EcSignature{r, s}`) |
+| `ecdh(priv, pk)` | raw shared secret — feed it to a KDF (`Kdf` / hash) before use |
+| `sign_with_k` | explicit nonce, for test vectors only; never use a nonce twice |
+
+**Limitations (honest):** scalar multiplication is plain left-to-right double-and-add on variable-time
+bignum code — **not constant-time**; do not use it where an attacker can time private-key operations
+(signing, ECDH with a long-lived key). Deterministic nonces remove the bad-RNG failure mode, not side
+channels. Only P-256 and P-384 (prime field, `a = -3`, cofactor 1); no P-521, secp256k1 or Ed448.
+About 10 ms per P-256 scalar multiplication (a verify costs two).

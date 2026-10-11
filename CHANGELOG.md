@@ -33,6 +33,10 @@ added here as each phase lands.
   constant-time verification, Base32 secret helpers and `otpauth://` URIs; plus the
   binary-safe `Hmac.compute` / `verify` (SHA-1/256/384/512) it is built on
   (`tests/lang/115_hmac_otp.tr`, RFC vectors).
+- **`std.crypto.ecdsa`** — ECDSA and ECDH on NIST P-256 / P-384: RFC 6979 deterministic nonces, DER and
+  raw `r||s` signatures, SEC1/PKCS#8/SPKI keys (compressed and uncompressed points, on-curve validation),
+  key generation. RFC 6979 vectors, OpenSSL signatures/ECDH secrets and Python `cryptography`'s deterministic
+  ECDSA all agree (`tests/lang/122_ecdsa.tr`). Not constant-time (documented).
 - **`std.net.hpack`** — HPACK (RFC 7541): `HpackEncoder` / `HpackDecoder` / `HpackHeaders`,
   static + dynamic tables, Huffman coding, never-indexed headers, strict error-reporting decoder.
   All RFC 7541 Appendix C examples verified in both directions (`tests/lang/130_hpack.tr`).

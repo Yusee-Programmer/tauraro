@@ -1,0 +1,624 @@
+# std.crypto.ecdsa — ECDSA and ECDH on NIST P-256 and P-384 (FIPS 186-4,
+# SEC 1, RFC 6979, RFC 5480, RFC 5915).
+#
+# Pure Tauraro on std.crypto.bn (Montgomery field arithmetic) with Jacobian
+# coordinates (a = -3 doubling formulas). Interoperates with OpenSSL:
+# tests/lang/122_ecdsa.tr verifies OpenSSL-made signatures, derives the same
+# ECDH secrets as `openssl pkeyutl -derive`, matches RFC 6979 deterministic
+# signatures (also cross-checked against Python `cryptography`'s
+# deterministic ECDSA), and our signatures were verified with
+# `openssl dgst -verify`.
+#
+# CURVES      Ecdsa.p256()  Ecdsa.p384()  Ecdsa.curve_by_oid("1.2.840.10045.3.1.7")?
+#             (secp256r1 / prime256v1, secp384r1). P-521 is not implemented.
+#
+# KEYS        Ecdsa.generate(curve)                       random private key
+#             Ecdsa.private_from_scalar(curve, d_bytes)   d as big-endian bytes
+#             Ecdsa.private_from_pem/der(...)             SEC1 "EC PRIVATE KEY" or PKCS#8 "PRIVATE KEY"
+#             Ecdsa.public_from_pem/der(...)              SPKI "PUBLIC KEY"
+#             Ecdsa.public_from_point(curve, bytes)       SEC1 point: 04||X||Y or compressed 02/03||X
+#             priv.public_key(); pk.to_point(compressed); Ecdsa.public_to_der/pem;
+#             Ecdsa.private_to_der/pem (SEC1, includes the public key)
+#             Every public point is validated (on the curve, coordinates < p).
+#
+# SIGNATURES  Ecdsa.sign(priv, alg, msg)            -> DER SEQUENCE{r, s}
+#             Ecdsa.sign_raw(priv, alg, msg)        -> r||s (fixed width, as in JWS ES256/ES384)
+#             Ecdsa.sign_digest(priv, alg, digest)  prehashed
+#             Ecdsa.verify(pk, alg, msg, sig_der) / verify_raw / verify_digest -> bool (never raise)
+#             Nonces are DETERMINISTIC (RFC 6979 HMAC-DRBG with the message hash `alg`),
+#             so a broken random source can never leak the key; signing the same message twice
+#             gives the same signature. `Ecdsa.sign_with_k` exists for test vectors only.
+#             Ecdsa.sig_to_der(r, s) / Ecdsa.sig_from_der(der)? convert encodings.
+#
+# ECDH        Ecdsa.ecdh(priv, pk)? -> shared secret (x coordinate, 32 / 48 bytes, big-endian).
+#             Run it through a KDF (HKDF / PBKDF2 / hash) before using it as a key.
+#
+# LIMITATIONS (honest): scalar multiplication is a plain left-to-right
+# double-and-add on variable-time bignum code: it is NOT constant-time and must not be
+# used where an attacker can measure timing or cache behaviour of private-key
+# operations (signing, ECDH with a long-lived key). The deterministic nonce
+# removes the bad-RNG failure mode but not side channels. Verification and
+# public-key operations handle only public data. Only prime-field NIST curves with
+# a = -3 and cofactor 1 are supported; compressed-point decoding needs p = 3 (mod 4)
+# (true for both).  Typical speed: ~10-20 ms per P-256 scalar multiplication.
+#
+# Usage:
+#   from std.crypto.ecdsa import Ecdsa, EcCurve, EcPublicKey, EcPrivateKey
+#   from std.crypto.pkutil import Bytes
+#   mut priv = Ecdsa.generate(Ecdsa.p256())
+#   mut sig = Ecdsa.sign(priv, "sha256", Bytes.from_str("hello"))?
+#   print(Ecdsa.verify(priv.public_key(), "sha256", Bytes.from_str("hello"), sig))
+
+from std.core.vec import Vec
+from std.crypto.pkutil import Bytes, PkHash
+from std.crypto.bn import bn_from_bytes, bn_to_bytes, bn_from_hex, bn_bit_len, bn_byte_len, bn_cmp, bn_add, bn_sub, bn_mul, bn_mod, bn_shr, bn_shl, bn_from_int, bn_is_zero, bn_is_odd, bn_get_bit, bn_eq, bn_clone, Mont
+from std.encoding.asn1 import Der, DerNode, DerReader, Oid
+from std.encoding.pem import Pem, PemBlock
+
+pub class EcCurve:
+    pub name:   str
+    pub oid:    str
+    pub p:      Vec[int]
+    pub n:      Vec[int]
+    pub b:      Vec[int]
+    pub gx:     Vec[int]
+    pub gy:     Vec[int]
+    pub nbytes: int          # size of a field element / scalar in bytes
+    pub bits:   int          # bit length of the group order
+    pub fp:     Mont         # Montgomery context for the field prime
+    pub bm:     Vec[int]     # b in Montgomery form
+    pub pm2:    Vec[int]     # p - 2 (Fermat inversion exponent)
+    pub psq:    Vec[int]     # (p + 1) / 4 (square-root exponent, p = 3 mod 4)
+
+# Jacobian point, coordinates in Montgomery form (k limbs each).
+pub class JPoint:
+    pub x:   Vec[int]
+    pub y:   Vec[int]
+    pub z:   Vec[int]
+    pub inf: bool
+
+# Affine point with plain (non-Montgomery) big-number coordinates.
+pub class AffPoint:
+    pub x:   Vec[int]
+    pub y:   Vec[int]
+    pub inf: bool
+
+pub class EcPublicKey:
+    pub curve: EcCurve
+    pub x:     Vec[int]      # affine coordinates (plain bn)
+    pub y:     Vec[int]
+
+pub class EcPrivateKey:
+    pub curve: EcCurve
+    pub d:     Vec[int]      # secret scalar in [1, n-1]
+    pub pubk:  EcPublicKey
+
+pub class EcSignature:
+    pub r: Vec[int]
+    pub s: Vec[int]
+
+pub class Ecdsa:
+    _dummy: int
+
+# ── field / group arithmetic ────────────────────────────────────────────────
+
+extend EcCurve:
+    def fmul(self, a: Vec[int], b: Vec[int]) -> Vec[int]:
+        return self.fp.mul(a, b)
+
+    def fsqr(self, a: Vec[int]) -> Vec[int]:
+        return self.fp.mul(a, a)
+
+    def fadd(self, a: Vec[int], b: Vec[int]) -> Vec[int]:
+        return self.fp.add(a, b)
+
+    def fsub(self, a: Vec[int], b: Vec[int]) -> Vec[int]:
+        return self.fp.sub(a, b)
+
+    def f_is_zero(self, a: Vec[int]) -> bool:
+        mut i = 0
+        while i < a.len:
+            if a.get(i) != 0: return false
+            i = i + 1
+        return true
+
+    def f_eq(self, a: Vec[int], b: Vec[int]) -> bool:
+        mut i = 0
+        while i < a.len:
+            if a.get(i) != b.get(i): return false
+            i = i + 1
+        return true
+
+    def infinity(self) -> JPoint:
+        mut q = JPoint()
+        q.x = Bytes.clone(self.fp.one)
+        q.y = Bytes.clone(self.fp.one)
+        q.z = Bytes.zeros(self.fp.k)
+        q.inf = true
+        return q
+
+    def copy_point(self, a: JPoint) -> JPoint:
+        mut q = JPoint()
+        q.x = Bytes.clone(a.x)
+        q.y = Bytes.clone(a.y)
+        q.z = Bytes.clone(a.z)
+        q.inf = a.inf
+        return q
+
+    # affine plain coordinates -> Jacobian (Z = 1)
+    pub def from_affine(self, x: Vec[int], y: Vec[int]) -> JPoint:
+        mut q = JPoint()
+        q.x = self.fp.to_mont(x)
+        q.y = self.fp.to_mont(y)
+        q.z = Bytes.clone(self.fp.one)
+        q.inf = false
+        return q
+
+    pub def generator(self) -> JPoint:
+        return self.from_affine(self.gx, self.gy)
+
+    # y^2 == x^3 - 3x + b  (plain coordinates, already reduced mod p)
+    pub def on_curve(self, x: Vec[int], y: Vec[int]) -> bool:
+        if bn_cmp(x, self.p) >= 0 or bn_cmp(y, self.p) >= 0: return false
+        mut xm = self.fp.to_mont(x)
+        mut ym = self.fp.to_mont(y)
+        mut lhs = self.fsqr(ym)
+        mut x2 = self.fsqr(xm)
+        mut x3 = self.fmul(x2, xm)
+        mut three_x = self.fadd(xm, self.fadd(xm, xm))
+        mut rhs = self.fadd(self.fsub(x3, three_x), self.bm)
+        return self.f_eq(lhs, rhs)
+
+    # Point doubling (dbl-2001-b, a = -3).
+    pub def dbl(self, a: JPoint) -> JPoint:
+        if a.inf or self.f_is_zero(a.y): return self.infinity()
+        mut delta = self.fsqr(a.z)
+        mut gamma = self.fsqr(a.y)
+        mut beta = self.fmul(a.x, gamma)
+        mut t = self.fmul(self.fsub(a.x, delta), self.fadd(a.x, delta))
+        mut alpha = self.fadd(t, self.fadd(t, t))
+        mut beta4 = self.fadd(beta, beta)
+        beta4 = self.fadd(beta4, beta4)
+        mut beta8 = self.fadd(beta4, beta4)
+        mut q = JPoint()
+        q.x = self.fsub(self.fsqr(alpha), beta8)
+        q.z = self.fsub(self.fsub(self.fsqr(self.fadd(a.y, a.z)), gamma), delta)
+        mut g2 = self.fsqr(gamma)
+        mut g4 = self.fadd(g2, g2)
+        g4 = self.fadd(g4, g4)
+        mut g8 = self.fadd(g4, g4)
+        q.y = self.fsub(self.fmul(alpha, self.fsub(beta4, q.x)), g8)
+        q.inf = false
+        return q
+
+    # General point addition (add-2007-bl), handling P = Q and P = -Q.
+    pub def add(self, a: JPoint, b: JPoint) -> JPoint:
+        if a.inf: return self.copy_point(b)
+        if b.inf: return self.copy_point(a)
+        mut z1z1 = self.fsqr(a.z)
+        mut z2z2 = self.fsqr(b.z)
+        mut u1 = self.fmul(a.x, z2z2)
+        mut u2 = self.fmul(b.x, z1z1)
+        mut s1 = self.fmul(self.fmul(a.y, b.z), z2z2)
+        mut s2 = self.fmul(self.fmul(b.y, a.z), z1z1)
+        mut h = self.fsub(u2, u1)
+        mut r0 = self.fsub(s2, s1)
+        if self.f_is_zero(h):
+            if self.f_is_zero(r0): return self.dbl(a)
+            return self.infinity()
+        mut h2 = self.fadd(h, h)
+        mut i = self.fsqr(h2)
+        mut j = self.fmul(h, i)
+        mut r = self.fadd(r0, r0)
+        mut v = self.fmul(u1, i)
+        mut q = JPoint()
+        q.x = self.fsub(self.fsub(self.fsqr(r), j), self.fadd(v, v))
+        mut s1j = self.fmul(s1, j)
+        q.y = self.fsub(self.fmul(r, self.fsub(v, q.x)), self.fadd(s1j, s1j))
+        mut zz = self.fsub(self.fsub(self.fsqr(self.fadd(a.z, b.z)), z1z1), z2z2)
+        q.z = self.fmul(zz, h)
+        q.inf = false
+        return q
+
+    # k * P, k a plain bn. Left-to-right double-and-add (NOT constant time).
+    pub def mul(self, k: Vec[int], pt: JPoint) -> JPoint:
+        mut acc = self.infinity()
+        mut i = bn_bit_len(k) - 1
+        while i >= 0:
+            acc = self.dbl(acc)
+            if bn_get_bit(k, i) == 1:
+                acc = self.add(acc, pt)
+            i = i - 1
+        return acc
+
+    pub def to_affine(self, a: JPoint) -> AffPoint:
+        mut r = AffPoint()
+        if a.inf:
+            r.x = Bytes.zeros(0)
+            r.y = Bytes.zeros(0)
+            r.inf = true
+            return r
+        mut zinv = self.fp.pow(a.z, self.pm2)
+        mut zinv2 = self.fsqr(zinv)
+        mut zinv3 = self.fmul(zinv2, zinv)
+        r.x = self.fp.from_mont(self.fmul(a.x, zinv2))
+        r.y = self.fp.from_mont(self.fmul(a.y, zinv3))
+        r.inf = false
+        return r
+
+    # y for a given x with the requested parity; raises if x is not on the curve.
+    pub def lift_x(self, x: Vec[int], odd: bool) throws str -> Vec[int]:
+        if bn_cmp(x, self.p) >= 0: raise("ecdsa: x coordinate out of range")
+        mut xm = self.fp.to_mont(x)
+        mut x3 = self.fmul(self.fsqr(xm), xm)
+        mut three_x = self.fadd(xm, self.fadd(xm, xm))
+        mut rhs = self.fadd(self.fsub(x3, three_x), self.bm)
+        mut ym = self.fp.pow(rhs, self.psq)
+        if not self.f_eq(self.fsqr(ym), rhs): raise("ecdsa: point is not on the curve")
+        mut y = self.fp.from_mont(ym)
+        if bn_is_odd(y) != odd: y = bn_sub(self.p, y)
+        return y
+
+def _ec_make_curve(name: str, oid: str, p: str, n: str, b: str, gx: str, gy: str, nbytes: int) -> EcCurve:
+    mut c = EcCurve()
+    c.name = name
+    c.oid = oid
+    c.p = bn_from_hex(p)
+    c.n = bn_from_hex(n)
+    c.b = bn_from_hex(b)
+    c.gx = bn_from_hex(gx)
+    c.gy = bn_from_hex(gy)
+    c.nbytes = nbytes
+    c.bits = bn_bit_len(c.n)
+    c.fp = Mont.init(c.p)
+    c.bm = c.fp.to_mont(c.b)
+    c.pm2 = bn_sub(c.p, bn_from_int(2))
+    c.psq = bn_shr(bn_add(c.p, bn_from_int(1)), 2)
+    return c
+
+# ── RFC 6979 HMAC-DRBG nonce generator ──────────────────────────────────────
+
+pub class Drbg6979:
+    pub alg:    str
+    pub k:      Vec[int]
+    pub v:      Vec[int]
+    pub n:      Vec[int]
+    pub qlen:   int
+    pub first:  bool
+
+def _ec_bits2int(data: Vec[int], qlen: int) -> Vec[int]:
+    mut x = bn_from_bytes(data)
+    mut blen = data.len * 8
+    if blen > qlen: x = bn_shr(x, blen - qlen)
+    return x
+
+extend Drbg6979:
+    pub def init(alg: str, n: Vec[int], d: Vec[int], digest: Vec[int]) -> Drbg6979:
+        mut g = Drbg6979()
+        g.alg = alg
+        g.n = n
+        g.qlen = bn_bit_len(n)
+        g.first = true
+        mut hlen = PkHash.out_len(alg)
+        mut rlen = (g.qlen + 7) / 8
+        g.v = Vec[int].init(hlen + 1)
+        g.k = Bytes.zeros(hlen)
+        mut i = 0
+        while i < hlen:
+            g.v.push(1)
+            i = i + 1
+        mut xo = bn_to_bytes(d, rlen)
+        mut ho = bn_to_bytes(bn_mod(_ec_bits2int(digest, g.qlen), n), rlen)
+        mut seed = Bytes.clone(g.v)
+        seed.push(0)
+        Bytes.append(seed, xo)
+        Bytes.append(seed, ho)
+        g.k = PkHash.hmac(alg, g.k, seed)
+        g.v = PkHash.hmac(alg, g.k, g.v)
+        mut seed2 = Bytes.clone(g.v)
+        seed2.push(1)
+        Bytes.append(seed2, xo)
+        Bytes.append(seed2, ho)
+        g.k = PkHash.hmac(alg, g.k, seed2)
+        g.v = PkHash.hmac(alg, g.k, g.v)
+        return g
+
+    # Next candidate k in [1, n-1].
+    pub def next_k(self) -> Vec[int]:
+        if not self.first:
+            mut s = Bytes.clone(self.v)
+            s.push(0)
+            self.k = PkHash.hmac(self.alg, self.k, s)
+            self.v = PkHash.hmac(self.alg, self.k, self.v)
+        self.first = false
+        while true:
+            mut t = Vec[int].init(80)
+            while t.len * 8 < self.qlen:
+                self.v = PkHash.hmac(self.alg, self.k, self.v)
+                Bytes.append(t, self.v)
+            mut cand = _ec_bits2int(t, self.qlen)
+            if not bn_is_zero(cand) and bn_cmp(cand, self.n) < 0: return cand
+            mut s2 = Bytes.clone(self.v)
+            s2.push(0)
+            self.k = PkHash.hmac(self.alg, self.k, s2)
+            self.v = PkHash.hmac(self.alg, self.k, self.v)
+        return cand0_()
+
+def cand0_() -> Vec[int]:
+    return Vec[int].init(4)
+
+# ── keys, signatures, ECDH ──────────────────────────────────────────────────
+
+extend EcPublicKey:
+    # SEC 1 point encoding: 04||X||Y, or 02/03||X when `compressed`.
+    pub def to_point(self, compressed: bool) -> Vec[int]:
+        mut nb = self.curve.nbytes
+        mut out = Vec[int].init(2 * nb + 2)
+        if compressed:
+            if bn_is_odd(self.y): out.push(3)
+            else: out.push(2)
+            Bytes.append(out, bn_to_bytes(self.x, nb))
+        else:
+            out.push(4)
+            Bytes.append(out, bn_to_bytes(self.x, nb))
+            Bytes.append(out, bn_to_bytes(self.y, nb))
+        return out
+
+extend EcPrivateKey:
+    pub def public_key(self) -> EcPublicKey:
+        return self.pubk
+
+extend Ecdsa:
+    pub def p256() -> EcCurve:
+        return _ec_make_curve("P-256", "1.2.840.10045.3.1.7", "ffffffff00000001000000000000000000000000ffffffffffffffffffffffff", "ffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551", "5ac635d8aa3a93e7b3ebbd55769886bc651d06b0cc53b0f63bce3c3e27d2604b", "6b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c296", "4fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f5", 32)
+
+    pub def p384() -> EcCurve:
+        return _ec_make_curve("P-384", "1.3.132.0.34", "fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffeffffffff0000000000000000ffffffff", "ffffffffffffffffffffffffffffffffffffffffffffffffc7634d81f4372ddf581a0db248b0a77aecec196accc52973", "b3312fa7e23ee7e4988e056be3f82d19181d9c6efe8141120314088f5013875ac656398d8a2ed19d2a85c8edd3ec2aef", "aa87ca22be8b05378eb1c71ef320ad746e1d3b628ba79b9859f741e082542a385502f25dbf55296c3a545e3872760ab7", "3617de4a96262c6f5d9e98bf9292dc29f8f41dbd289a147ce9da3113b5f0b8c00a60b1ce1d7e819d7a431d7c90ea0e5f", 48)
+
+    pub def curve_by_oid(oid: str) throws str -> EcCurve:
+        if oid == "1.2.840.10045.3.1.7": return Ecdsa.p256()
+        if oid == "1.3.132.0.34": return Ecdsa.p384()
+        raise(f"ecdsa: unsupported curve {Oid.name(oid)}")
+
+    # ── public keys ──
+
+    pub def make_public(curve: EcCurve, x: Vec[int], y: Vec[int]) throws str -> EcPublicKey:
+        if not curve.on_curve(x, y): raise("ecdsa: public point is not on the curve")
+        mut k = EcPublicKey()
+        k.curve = curve
+        k.x = Bytes.clone(x)
+        k.y = Bytes.clone(y)
+        return k
+
+    pub def public_from_point(curve: EcCurve, pt: Vec[int]) throws str -> EcPublicKey:
+        mut nb = curve.nbytes
+        if pt.len == 0: raise("ecdsa: empty point")
+        mut fmt = pt.get(0)
+        if fmt == 4:
+            if pt.len != 2 * nb + 1: raise("ecdsa: bad uncompressed point length")
+            mut x = bn_from_bytes(Bytes.slice(pt, 1, nb))
+            mut y = bn_from_bytes(Bytes.slice(pt, 1 + nb, nb))
+            return Ecdsa.make_public(curve, x, y)?
+        if fmt == 2 or fmt == 3:
+            if pt.len != nb + 1: raise("ecdsa: bad compressed point length")
+            mut x = bn_from_bytes(Bytes.slice(pt, 1, nb))
+            mut y = curve.lift_x(x, fmt == 3)?
+            return Ecdsa.make_public(curve, x, y)?
+        raise("ecdsa: unsupported point format (only uncompressed / compressed)")
+
+    pub def private_from_scalar(curve: EcCurve, d_bytes: Vec[int]) throws str -> EcPrivateKey:
+        mut d = bn_from_bytes(d_bytes)
+        if bn_is_zero(d) or bn_cmp(d, curve.n) >= 0: raise("ecdsa: private scalar out of range")
+        mut k = EcPrivateKey()
+        k.curve = curve
+        k.d = d
+        mut q = curve.to_affine(curve.mul(d, curve.generator()))
+        k.pubk = Ecdsa.make_public(curve, q.x, q.y)?
+        return k
+
+    # Fresh random private key (OS CSPRNG, rejection sampling).
+    pub def generate(curve: EcCurve) -> EcPrivateKey:
+        while true:
+            mut d = bn_from_bytes(Bytes.random(curve.nbytes))
+            if bn_is_zero(d) or bn_cmp(d, curve.n) >= 0: continue
+            mut r: Result[EcPrivateKey, str] = Ecdsa.private_from_scalar(curve, bn_to_bytes(d, curve.nbytes))
+            if not r.is_err: return r.ok
+        return Ecdsa.generate(curve)
+
+    # SubjectPublicKeyInfo DER.
+    pub def public_from_der(der: Vec[int]) throws str -> EcPublicKey:
+        mut top = Der.parse(der)?
+        if top.tag != 48: raise("ecdsa: SPKI is not a SEQUENCE")
+        mut r = top.reader()
+        mut alg = r.next()?
+        mut bits = r.next()?
+        if r.more(): raise("ecdsa: trailing data in SPKI")
+        mut ar = alg.reader()
+        mut o1 = ar.next()?
+        if not o1.is_oid(Oid.EC_PUBLIC_KEY()): raise("ecdsa: SPKI algorithm is not id-ecPublicKey")
+        mut curve_oid = ar.next()?
+        if curve_oid.tag != 6: raise("ecdsa: only named curves are supported")
+        mut curve = Ecdsa.curve_by_oid(curve_oid.as_oid()?)?
+        mut pt = bits.as_bit_string()?
+        if bits.bit_unused() != 0: raise("ecdsa: unexpected unused bits in SPKI key")
+        return Ecdsa.public_from_point(curve, pt)?
+
+    pub def public_from_pem(text: str) throws str -> EcPublicKey:
+        mut b = Pem.decode_label(text, "PUBLIC KEY")?
+        return Ecdsa.public_from_der(b.data)?
+
+    pub def public_to_der(k: EcPublicKey) -> Vec[int]:
+        mut alg = Bytes.concat(Der.oid(Oid.EC_PUBLIC_KEY()), Der.oid(k.curve.oid))
+        mut body = Bytes.concat(Der.sequence(alg), Der.bit_string(k.to_point(false), 0))
+        return Der.sequence(body)
+
+    pub def public_to_pem(k: EcPublicKey) -> str:
+        return Pem.encode("PUBLIC KEY", Ecdsa.public_to_der(k))
+
+    # ── private keys ──
+
+    # ECPrivateKey (SEC1 / RFC 5915); `curve_hint` is the curve from PKCS#8 parameters
+    # (or an empty-oid curve when unknown).
+    def _private_from_sec1(node: DerNode, hint_oid: str) throws str -> EcPrivateKey:
+        mut r = node.reader()
+        mut ver = r.next()?.as_int()?
+        if ver != 1: raise("ecdsa: unsupported ECPrivateKey version")
+        mut dbytes = r.next()?.as_octets()?
+        mut oid = hint_oid
+        while r.more():
+            mut f = r.next()?
+            if f.is_context(0):
+                mut o = f.child(0)?
+                oid = o.as_oid()?
+        if oid == "": raise("ecdsa: private key has no curve parameters")
+        mut curve = Ecdsa.curve_by_oid(oid)?
+        if dbytes.len != curve.nbytes: raise("ecdsa: private scalar has the wrong length")
+        return Ecdsa.private_from_scalar(curve, dbytes)?
+
+    # SEC1 ECPrivateKey or PKCS#8 PrivateKeyInfo DER.
+    pub def private_from_der(der: Vec[int]) throws str -> EcPrivateKey:
+        mut top = Der.parse(der)?
+        if top.tag != 48: raise("ecdsa: private key is not a SEQUENCE")
+        mut r = top.reader()
+        mut ver = r.next()?
+        if ver.tag != 2: raise("ecdsa: bad private key version")
+        if r.peek_tag() == 4:
+            return Ecdsa._private_from_sec1(top, "")?
+        if r.peek_tag() != 48: raise("ecdsa: unrecognized private key structure")
+        mut alg = r.next()?
+        mut ar = alg.reader()
+        mut o1 = ar.next()?
+        if not o1.is_oid(Oid.EC_PUBLIC_KEY()): raise("ecdsa: PKCS#8 algorithm is not id-ecPublicKey")
+        mut hint = ""
+        if ar.more():
+            mut p2 = ar.next()?
+            if p2.tag == 6: hint = p2.as_oid()?
+        mut inner = Der.parse(r.next()?.as_octets()?)?
+        return Ecdsa._private_from_sec1(inner, hint)?
+
+    pub def private_from_pem(text: str) throws str -> EcPrivateKey:
+        mut blocks = Pem.decode_all(text)
+        mut i = 0
+        while i < blocks.len:
+            mut lb = blocks.get(i).label
+            if lb == "EC PRIVATE KEY" or lb == "PRIVATE KEY":
+                return Ecdsa.private_from_der(blocks.get(i).data)?
+            i = i + 1
+        raise("ecdsa: no EC PRIVATE KEY / PRIVATE KEY block (encrypted keys are not supported)")
+
+    # SEC1 ECPrivateKey DER (with curve parameters and public key).
+    pub def private_to_der(k: EcPrivateKey) -> Vec[int]:
+        mut c = Der.integer_int(1)
+        Bytes.append(c, Der.octet_string(bn_to_bytes(k.d, k.curve.nbytes)))
+        Bytes.append(c, Der.explicit(0, Der.oid(k.curve.oid)))
+        Bytes.append(c, Der.explicit(1, Der.bit_string(k.pubk.to_point(false), 0)))
+        return Der.sequence(c)
+
+    pub def private_to_pem(k: EcPrivateKey) -> str:
+        return Pem.encode("EC PRIVATE KEY", Ecdsa.private_to_der(k))
+
+    # ── signature encodings ──
+
+    pub def sig_to_der(r: Vec[int], s: Vec[int]) -> Vec[int]:
+        return Der.sequence(Bytes.concat(Der.integer_bn(r), Der.integer_bn(s)))
+
+    pub def sig_from_der(der: Vec[int]) throws str -> EcSignature:
+        mut top = Der.parse(der)?
+        if top.tag != 48: raise("ecdsa: signature is not a SEQUENCE")
+        mut rd = top.reader()
+        mut sg = EcSignature()
+        sg.r = rd.next()?.as_bn()?
+        sg.s = rd.next()?.as_bn()?
+        if rd.more(): raise("ecdsa: trailing data in signature")
+        return sg
+
+    # ── signing ──
+
+    # Core: sign with an explicit nonce k (use sign_digest for normal signing).
+    # Returns an empty-r signature if k yields r = 0 or s = 0 (caller retries).
+    pub def sign_with_k(priv: EcPrivateKey, digest: Vec[int], k: Vec[int]) -> EcSignature:
+        mut c = priv.curve
+        mut sg = EcSignature()
+        sg.r = Bytes.zeros(0)
+        sg.s = Bytes.zeros(0)
+        mut kg = c.to_affine(c.mul(k, c.generator()))
+        if kg.inf: return sg
+        mut r = bn_mod(kg.x, c.n)
+        if bn_is_zero(r): return sg
+        mut e = bn_mod(_ec_bits2int(digest, c.bits), c.n)
+        mut mn = Mont.init(c.n)
+        mut kinv = mn.inv_prime(k)
+        mut s = bn_mod(bn_mul(kinv, bn_mod(bn_add(e, bn_mul(r, priv.d)), c.n)), c.n)
+        if bn_is_zero(s): return sg
+        sg.r = r
+        sg.s = s
+        return sg
+
+    pub def sign_digest_sig(priv: EcPrivateKey, alg: str, digest: Vec[int]) throws str -> EcSignature:
+        if not PkHash.supported(alg): raise(f"ecdsa: unsupported hash '{alg}'")
+        mut g = Drbg6979.init(alg, priv.curve.n, priv.d, digest)
+        mut tries = 0
+        while tries < 64:
+            mut sg = Ecdsa.sign_with_k(priv, digest, g.next_k())
+            if not bn_is_zero(sg.r): return sg
+            tries = tries + 1
+        raise("ecdsa: could not produce a signature")
+
+    # `digest` must be the hash `alg` of the message (the same alg seeds RFC 6979).
+    pub def sign_digest(priv: EcPrivateKey, alg: str, digest: Vec[int]) throws str -> Vec[int]:
+        mut sg = Ecdsa.sign_digest_sig(priv, alg, digest)?
+        return Ecdsa.sig_to_der(sg.r, sg.s)
+
+    pub def sign(priv: EcPrivateKey, alg: str, msg: Vec[int]) throws str -> Vec[int]:
+        if not PkHash.supported(alg): raise(f"ecdsa: unsupported hash '{alg}'")
+        return Ecdsa.sign_digest(priv, alg, PkHash.digest(alg, msg))?
+
+    # r||s, each exactly `nbytes` (JWS ES256 / ES384 format).
+    pub def sign_raw(priv: EcPrivateKey, alg: str, msg: Vec[int]) throws str -> Vec[int]:
+        if not PkHash.supported(alg): raise(f"ecdsa: unsupported hash '{alg}'")
+        mut sg = Ecdsa.sign_digest_sig(priv, alg, PkHash.digest(alg, msg))?
+        mut nb = priv.curve.nbytes
+        return Bytes.concat(bn_to_bytes(sg.r, nb), bn_to_bytes(sg.s, nb))
+
+    # ── verification ──
+
+    pub def verify_rs(pk: EcPublicKey, digest: Vec[int], r: Vec[int], s: Vec[int]) -> bool:
+        mut c = pk.curve
+        if bn_is_zero(r) or bn_is_zero(s): return false
+        if bn_cmp(r, c.n) >= 0 or bn_cmp(s, c.n) >= 0: return false
+        mut mn = Mont.init(c.n)
+        mut w = mn.inv_prime(s)
+        mut e = bn_mod(_ec_bits2int(digest, c.bits), c.n)
+        mut u1 = bn_mod(bn_mul(e, w), c.n)
+        mut u2 = bn_mod(bn_mul(r, w), c.n)
+        mut p1 = c.mul(u1, c.generator())
+        mut p2 = c.mul(u2, c.from_affine(pk.x, pk.y))
+        mut sum = c.to_affine(c.add(p1, p2))
+        if sum.inf: return false
+        return bn_eq(bn_mod(sum.x, c.n), r)
+
+    pub def verify_digest(pk: EcPublicKey, digest: Vec[int], sig_der: Vec[int]) -> bool:
+        mut rr: Result[EcSignature, str] = Ecdsa.sig_from_der(sig_der)
+        if rr.is_err: return false
+        return Ecdsa.verify_rs(pk, digest, rr.ok.r, rr.ok.s)
+
+    pub def verify(pk: EcPublicKey, alg: str, msg: Vec[int], sig_der: Vec[int]) -> bool:
+        if not PkHash.supported(alg): return false
+        return Ecdsa.verify_digest(pk, PkHash.digest(alg, msg), sig_der)
+
+    pub def verify_raw(pk: EcPublicKey, alg: str, msg: Vec[int], rs: Vec[int]) -> bool:
+        if not PkHash.supported(alg): return false
+        mut nb = pk.curve.nbytes
+        if rs.len != 2 * nb: return false
+        return Ecdsa.verify_rs(pk, PkHash.digest(alg, msg), bn_from_bytes(Bytes.slice(rs, 0, nb)), bn_from_bytes(Bytes.slice(rs, nb, nb)))
+
+    # ── ECDH ──
+
+    # x coordinate of d * Q, big-endian, `nbytes` long.
+    pub def ecdh(priv: EcPrivateKey, pk: EcPublicKey) throws str -> Vec[int]:
+        if priv.curve.name != pk.curve.name: raise("ecdsa: ECDH keys are on different curves")
+        mut c = priv.curve
+        if not c.on_curve(pk.x, pk.y): raise("ecdsa: public point is not on the curve")
+        mut s = c.to_affine(c.mul(priv.d, c.from_affine(pk.x, pk.y)))
+        if s.inf: raise("ecdsa: ECDH produced the point at infinity")
+        return bn_to_bytes(s.x, c.nbytes)
