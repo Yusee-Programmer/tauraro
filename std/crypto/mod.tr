@@ -12,6 +12,7 @@
 #   from std.crypto.bytes import CryptoBytes        # ct_eq, secure_zero, random, binary helpers
 #   from std.crypto.sha3 import Sha3, Sha3Hasher    # SHA-3 / SHAKE / Keccak
 #   from std.crypto.blake2 import Blake2b, Blake2s, Blake2bHasher, Blake2sHasher
+#   from std.crypto.blake3 import Blake3, Blake3Hasher
 #   from std.crypto.x25519 import X25519, X25519Keys
 #   from std.crypto.pkutil import Bytes, PkHash
 #   from std.crypto.bn import Mont, bn_modexp          (unsigned bignums, see docs)
@@ -38,3 +39,4 @@ from std.crypto.rsa import Rsa, RsaPublicKey, RsaPrivateKey
 from std.crypto.otp import Hotp, Totp, Otp
 from std.crypto.ecdsa import Ecdsa, EcCurve, EcPublicKey, EcPrivateKey
 from std.crypto.argon2 import Argon2, Argon2Params
+from std.crypto.blake3 import Blake3, Blake3Hasher

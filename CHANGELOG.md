@@ -29,6 +29,8 @@ added here as each phase lands.
 - `from` stays a reserved word (it starts import statements and lifetime clauses).
 
 ### Added
+- **`std.crypto.blake3`** — BLAKE3 (hash, keyed hash, derive_key, extendable output, incremental
+  hasher) with the full chunk tree; official vectors + a spec-derived model (`tests/lang/112_blake3.tr`).
 - **`std.crypto.argon2`** — Argon2d / Argon2i / Argon2id (RFC 9106) on top of BLAKE2b:
   configurable time/memory/parallelism, optional secret and associated data, PHC-string
   `hash_password` / `verify` / `needs_rehash`; RFC 9106 vectors plus OpenSSL cross-checks

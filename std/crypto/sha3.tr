@@ -59,9 +59,19 @@ def kc_st(p: Pointer[u64], i: int, v: u64):
     unsafe:
         p.offset(i).write(v)
 
+# value i of a table stored as letters ('A' + value)
+def kc_tab(tbl: str, i: int) -> int:
+    mut p = tbl as Pointer[char]
+    unsafe:
+        return (p.offset(i).read() as int) - 65
+
 # Keccak-f[1600] on 25 little-endian 64-bit lanes at `a` (lane index x + 5*y).
-# `bc` is 5 lanes of scratch.
+# `bc` is 5 lanes of scratch. Rotation offsets and the pi lane walk are the standard
+# 24-entry tables (as in FIPS 202 section 3.2.2-3.2.3); the iota round constants come from
+# the spec's degree-8 LFSR.
 pub def keccak_f1600(a: Pointer[u64], bc: Pointer[u64]):
+    mut rotc = "BDGKPV]enxCO\jyIZlSh~Um"
+    mut piln = "KHLRSDFQIVYEPXTNMCUOWJGB"
     mut lfsr = 1
     mut round = 0
     while round < 24:
@@ -72,49 +82,48 @@ pub def keccak_f1600(a: Pointer[u64], bc: Pointer[u64]):
             x = x + 1
         x = 0
         while x < 5:
-            mut t: u64 = kc_ld(bc, (x + 4) % 5) ^ kc_rotl(kc_ld(bc, (x + 1) % 5), 1)
-            mut y = 0
+            mut left = x + 4
+            if left >= 5: left = left - 5
+            mut right = x + 1
+            if right >= 5: right = 0
+            mut t: u64 = kc_ld(bc, left) ^ kc_rotl(kc_ld(bc, right), 1)
+            mut y = x
             while y < 25:
-                kc_st(a, x + y, kc_ld(a, x + y) ^ t)
+                kc_st(a, y, kc_ld(a, y) ^ t)
                 y = y + 5
             x = x + 1
-        # rho + pi (walk the 24 non-zero lanes along (x,y) -> (y, 2x+3y))
-        mut cx = 1
-        mut cy = 0
+        # rho + pi
         mut cur: u64 = kc_ld(a, 1)
         mut ti = 0
         while ti < 24:
-            mut r = (((ti + 1) * (ti + 2)) / 2) % 64
-            mut nx = cy
-            mut ny = (2 * cx + 3 * cy) % 5
-            cx = nx
-            cy = ny
-            mut idx = cx + 5 * cy
-            mut nxt: u64 = kc_ld(a, idx)
-            kc_st(a, idx, kc_rotl(cur, r))
+            mut j = kc_tab(piln, ti)
+            mut nxt: u64 = kc_ld(a, j)
+            kc_st(a, j, kc_rotl(cur, kc_tab(rotc, ti)))
             cur = nxt
             ti = ti + 1
         # chi
         mut yy = 0
         while yy < 25:
-            mut xx = 0
-            while xx < 5:
-                kc_st(bc, xx, kc_ld(a, yy + xx))
-                xx = xx + 1
-            xx = 0
-            while xx < 5:
-                kc_st(a, yy + xx, kc_ld(bc, xx) ^ ((~kc_ld(bc, (xx + 1) % 5)) & kc_ld(bc, (xx + 2) % 5)))
-                xx = xx + 1
+            mut b0: u64 = kc_ld(a, yy)
+            mut b1: u64 = kc_ld(a, yy + 1)
+            mut b2: u64 = kc_ld(a, yy + 2)
+            mut b3: u64 = kc_ld(a, yy + 3)
+            mut b4: u64 = kc_ld(a, yy + 4)
+            kc_st(a, yy, b0 ^ ((~b1) & b2))
+            kc_st(a, yy + 1, b1 ^ ((~b2) & b3))
+            kc_st(a, yy + 2, b2 ^ ((~b3) & b4))
+            kc_st(a, yy + 3, b3 ^ ((~b4) & b0))
+            kc_st(a, yy + 4, b4 ^ ((~b0) & b1))
             yy = yy + 5
-        # iota: round constant from the spec's degree-8 LFSR (x^8+x^6+x^5+x^4+1)
+        # iota
         mut rc: u64 = 0
-        mut j = 0
-        while j < 7:
+        mut jj = 0
+        while jj < 7:
             if (lfsr & 1) == 1:
-                rc = rc | ((1 as u64) << ((1 << j) - 1))
+                rc = rc | ((1 as u64) << ((1 << jj) - 1))
             lfsr = lfsr << 1
             if (lfsr & 0x100) != 0: lfsr = lfsr ^ 0x171
-            j = j + 1
+            jj = jj + 1
         kc_st(a, 0, kc_ld(a, 0) ^ rc)
         round = round + 1
 
@@ -173,15 +182,30 @@ extend Sha3Hasher:
         mut p = data as Pointer[char]
         mut i = 0
         while i < n:
-            mut b = 0
-            unsafe:
-                b = (p.offset(i).read() as int) & 255
-            self.xor_byte(self.pos, b)
-            self.pos = self.pos + 1
+            if (self.pos & 7) == 0 and n - i >= 8 and self.rate - self.pos >= 8:
+                # whole aligned lane: assemble 8 little-endian bytes and XOR once
+                mut w: u64 = 0
+                mut k = 7
+                while k >= 0:
+                    mut b8 = 0
+                    unsafe:
+                        b8 = (p.offset(i + k).read() as int) & 255
+                    w = (w << 8) | (b8 as u64)
+                    k = k - 1
+                mut lane = self.pos >> 3
+                kc_st(self.st, lane, kc_ld(self.st, lane) ^ w)
+                self.pos = self.pos + 8
+                i = i + 8
+            else:
+                mut b = 0
+                unsafe:
+                    b = (p.offset(i).read() as int) & 255
+                self.xor_byte(self.pos, b)
+                self.pos = self.pos + 1
+                i = i + 1
             if self.pos == self.rate:
                 keccak_f1600(self.st, self.bc)
                 self.pos = 0
-            i = i + 1
 
     pub def update(self, data: str):
         self.update_bytes(data, data.len())

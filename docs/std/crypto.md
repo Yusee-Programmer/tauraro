@@ -693,3 +693,33 @@ Verified against the three RFC 9106 section 5 vectors and ~25 further cases gene
 empty inputs), plus the reference-implementation example hash (`tests/lang/116_argon2.tr`).
 bcrypt is not provided (use Argon2id; it is the stronger, modern choice).
 
+---
+
+## std.crypto.blake3 — BLAKE3
+
+```tauraro
+from std.crypto.blake3 import Blake3, Blake3Hasher
+```
+
+| Method | Signature | Description |
+|---|---|---|
+| `Blake3.hash` / `hash_hex` | `(data: str, n: int) -> str` | Default mode with `n` output bytes (32 standard). BLAKE3 is an XOF: the first 32 bytes of a 64-byte output equal the 32-byte hash. |
+| `Blake3.keyed_hash` / `keyed_hash_hex` | `(key: str, data: str, n: int) -> str` | MAC / PRF mode; `key` must be exactly 32 bytes (otherwise `""`). |
+| `Blake3.derive_key` / `derive_key_hex` | `(context: str, material: str, n: int) -> str` | KDF mode; `context` should be a hard-coded, globally unique, application-specific string. |
+| `Blake3Hasher.new()` / `new_keyed(key)` / `new_derive_key(context)` | `-> Blake3Hasher` | Incremental hasher: `update(data)`, `update_bytes(data, n)`, `finalize(n)` / `finalize_hex(n)` (repeatable, non-consuming), `is_ok()`, `free()`. |
+
+```tauraro
+print(Blake3.hash_hex("abc", 32))
+mut session_key = Blake3.derive_key("myapp 2026-10-11 session key", shared_secret, 32)
+```
+
+The full tree mode (1024-byte chunks, chaining-value stack, parent nodes) is implemented as
+in the reference implementation, sequentially (no SIMD / threads): about 50 MB/s. Verified
+against the official vectors reproducible offline (empty, 1, 3, 1023, 1024, 1025 bytes, keyed
+and derive_key at length 0) and a spec-derived Python model for 1..102400-byte inputs, keyed,
+derive_key and long outputs (`tests/lang/112_blake3.tr`). The official `test_vectors.json`
+file was not available offline, so its remaining entries were not run.
+
+Rough speeds of the pure-Tauraro hashes on one x86-64 core: BLAKE2b ~100 MB/s, BLAKE3 ~50 MB/s,
+SHA-3-256 ~20 MB/s.
+
