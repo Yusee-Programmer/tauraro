@@ -16,6 +16,13 @@ spec, automated regression suite + CI, incremental compilation, and a batch of
 codegen-safety / diagnostics / stdlib / tooling improvements). Entries will be
 added here as each phase lands.
 
+### Added
+- **`std.async.retry`** — `RetryPolicy` (max attempts, fixed/exponential backoff
+  with cap, optional jitter, retry-on predicate, overall deadline, per-attempt
+  timeout), `call_with_timeout` / `call_bool_with_timeout`, and a thread-safe
+  `CircuitBreaker` (closed/open/half-open, failure threshold, reset timeout).
+  Documented in `docs/std/async.md`, tested by `tests/lang/70_retry.tr`.
+
 ## [0.0.9]
 
 **Correctness and reliability hardening across concurrency, generics, and the
