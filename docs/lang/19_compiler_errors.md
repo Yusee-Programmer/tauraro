@@ -32,6 +32,7 @@ category, with its cause, a triggering example, and the fix.
 | [N-1] | Name | Reserved/keyword name used as a declaration |
 | [F-3] | Function | Missing `return` on a code path |
 | [F-4] | Function | A `throws` function value was passed where a plain `def(...) -> R` is expected, or the reverse |
+| [F-5] | Function | A closure/function that returns a non-`int` value was passed to a bare `lambda`-typed slot (which is called as returning `int`) |
 | [E-1] | Existence | (1) Non-exhaustive `match`; (2) explicit `main()` call; (3) no such method on type |
 | [E-2] | Existence | Nested declaration used outside `main()` |
 | [S-1] | Shared | `Shared[Self]` field creates a reference cycle |
@@ -468,6 +469,24 @@ implicitly, so the compiler rejects the mix in both directions instead of genera
 
 **Checked at:** arguments of calls to declared functions and methods (non-generic) and annotated
 `let` initializers.
+
+### [F-5] Non-`int` Result Passed to a `lambda` Slot
+
+**Message:** `argument 1 of 'apply()' is a `lambda` slot, which is called as returning `int`, but the function/closure passed returns 'float'. ...`
+
+```python
+def apply(f: lambda, x: int) -> int:
+    return f(x)
+
+apply(lambda x: x + 1.5, 1)    # F-5: the closure returns float
+```
+
+A closure with no `-> R` takes the type of the expression it returns (`lambda x: x * 2.5` returns
+`float`, `lambda: "hi"` returns `str`). The bare type `lambda` carries no result type, so a call
+through it is always typed `int`; passing a closure with another result type would be called through
+the wrong C type, so it is rejected instead.
+
+**FIX:** give the parameter a full function type, `f: def(int) -> float`.
 
 > `[F-1]` and `[F-2]` are reserved for future function-call checks
 > (argument-count and parameter-shadowing) — see "Reserved / Not Yet

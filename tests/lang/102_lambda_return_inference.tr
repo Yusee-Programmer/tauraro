@@ -1,0 +1,59 @@
+# tests/lang/102_lambda_return_inference.tr - a closure with no `-> R` takes the type of the
+# expression it returns (lambda one-liners and `def (...):` closures): int, float, str, bool
+# and class results (bug log: "lambda always returns int" limitation).
+
+from std.test import TestRunner
+
+class Point:
+    pub x: int
+    pub y: int
+
+extend Point:
+    pub def init(x: int, y: int) -> Point:
+        mut p = Point()
+        p.x = x
+        p.y = y
+        return p
+
+def apply_int(f: def(int) -> int, v: int) -> int:
+    return f(v)
+
+def apply_str(f: def(int) -> str, v: int) -> str:
+    return f(v)
+
+def main():
+    mut t = TestRunner.init("102_lambda_return_inference")
+
+    t.section("result types")
+    dbl = lambda x: x * 2
+    five = lambda: 5
+    fl = lambda: 2.5
+    half = lambda x: x * 0.5
+    greet = lambda: "hi" + "!"
+    big = lambda x: x > 3
+    mk = lambda x: Point.init(x, x + 1)
+    t.assert_eq_int(dbl(4), 8, "int")
+    t.assert_eq_int(five(), 5, "lambda: 5")
+    t.assert_eq_float(fl(), 2.5, 0.000001, "float literal")
+    t.assert_eq_float(half(3), 1.5, 0.000001, "float expr")
+    t.assert_eq_str(greet(), "hi!", "str")
+    t.assert_true(big(5), "bool true")
+    t.assert_false(big(1), "bool false")
+    p = mk(7)
+    t.assert_eq_int(p.x + p.y, 15, "class result")
+
+    t.section("passed where a typed function value is expected")
+    t.assert_eq_int(apply_int(dbl, 21), 42, "def(int) -> int slot")
+    lab = lambda n: "n=" + n.to_str()
+    t.assert_eq_str(apply_str(lab, 3), "n=3", "def(int) -> str slot")
+
+    t.section("def closure without an arrow")
+    k = def (x: int):
+        return "k" + x.to_str()
+    t.assert_eq_str(k(3), "k3", "def (x): infers str")
+    f2 = def (x: int):
+        if x > 0:
+            return x * 1.5
+        return 0.0
+    t.assert_eq_float(f2(2), 3.0, 0.000001, "inferred from a nested return")
+    t.summary()

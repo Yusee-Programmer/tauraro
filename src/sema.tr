@@ -3384,6 +3384,14 @@ extend Sema:
     pub def check_fn_value_throws(self, expected_p: Pointer[AstType], actual: AstType, what: str):
         if expected_p as usize == 0 as usize: return
         mut expected = expected_p.read()
+        # [F-5] a `lambda`-typed slot is called as returning `int` (its type carries no
+        # signature), so a closure/function returning anything else would be called through the
+        # wrong C type and yield garbage.
+        if expected.name == "lambda" and actual.name == "def" and actual.args.len > 0:
+            mut lam_ret = actual.args.get(actual.args.len - 1).read()
+            if lam_ret.name != "int" and lam_ret.name != "void" and lam_ret.name != "" and lam_ret.name != "None":
+                self.error("[F-5] " + what + " is a `lambda` slot, which is called as returning `int`, but the function/closure passed returns '" + lam_ret.name + "'.\n      FIX: give the parameter a full function type (`def(...) -> " + lam_ret.name + "`) so the result type is known.")
+                return
         mut ek = self.fn_value_throws_kind(expected)
         mut ak = self.fn_value_throws_kind(actual)
         if ek < 0 or ak < 0 or ek == ak: return
@@ -3405,6 +3413,37 @@ extend Sema:
             if aidx < hargs.len:
                 self.check_fn_value_throws(fd.params.get(pi).ty, hir_expr_type(hargs.get(aidx)), "argument " + (aidx + 1).to_str() + " of '" + fname + "()'")
             pi = pi + 1
+
+    # Type of the first value-carrying `return` in a closure body ("" when it returns nothing).
+    pub def closure_return_type(self, block: HirBlock) -> AstType:
+        mut nothing = AstType.init("")
+        if _is_invalid_ptr(block as usize): return nothing
+        if _is_invalid_ptr(block.stmts as usize): return nothing
+        mut i = 0
+        while i < block.stmts.len:
+            mut st = block.stmts.get(i)
+            if not _is_invalid_ptr(st as usize):
+                match st.read():
+                    case HirStmt.SReturn(v):
+                        if not _is_invalid_ptr(v as usize): return hir_expr_type(v)
+                    case HirStmt.SIf(_, t, e):
+                        mut tt = self.closure_return_type(t)
+                        if tt.name != "": return tt
+                        if not _is_invalid_ptr(e as usize):
+                            mut et = self.closure_return_type(e)
+                            if et.name != "": return et
+                    case HirStmt.SWhile(_, wb):
+                        mut wt = self.closure_return_type(wb)
+                        if wt.name != "": return wt
+                    case HirStmt.SFor(_, _, fb):
+                        mut ft = self.closure_return_type(fb)
+                        if ft.name != "": return ft
+                    case HirStmt.SUnsafe(ub):
+                        mut ut = self.closure_return_type(ub)
+                        if ut.name != "": return ut
+                    case _: pass
+            i = i + 1
+        return nothing
 
     pub def check_call_bounds(self, fname: str, hargs: Vec[Pointer[HirExpr]]):
         if not self.fn_defs.contains(fname): return
@@ -4463,6 +4502,19 @@ extend Sema:
                         case _: pass
                 return box_hirstmt(HirStmt.SLet(name, ownership, is_mut, is_const, is_shared, ty, hval))
             case Stmt.SAssign(target, val):
+                # `name = <closure literal>` (first assignment, no `mut`) declares an immutable
+                # local exactly like `let`: route it through the SLet path so the closure gets
+                # the stack env / escape analysis / ownership handling instead of an always-
+                # heap, never-freed env.
+                if target as usize != 0 as usize and val as usize != 0 as usize:
+                    match target.read():
+                        case Expr.EIdent(cl_decl_name):
+                            if self.resolve(cl_decl_name).name == "":
+                                match val.read():
+                                    case Expr.EClosure(_, _, _, _):
+                                        return self.lower_stmt(box_astestmt(Stmt.SLet(cl_decl_name, Ownership.Own, false, false, false, Pointer[AstType](0), val)))
+                                    case _: pass
+                        case _: pass
                 self.in_assign_target = true
                 if target as usize != 0 as usize:
                     match target.read():
@@ -6782,6 +6834,13 @@ extend Sema:
                                     if not self.classes.get(ccp.ty.name).is_class: ccp.by_val = false
                                 clo_caps.push(ccp)
                     cri = cri + 1
+                # No `-> R` written (a `lambda x: expr` one-liner, or `def (...):` without an arrow):
+                # the return type is the type of the expression it returns (static typing, no
+                # annotation burden). Closures that return nothing stay `void`.
+                if ret_ty as usize == 0 as usize:
+                    mut inf_ty = self.closure_return_type(clo_body)
+                    if inf_ty.name != "" and inf_ty.name != "void" and inf_ty.name != "None":
+                        r_ty = inf_ty
                 mut hexpr = HirExpr.EClosure(hparams, r_ty, clo_body, is_async, clo_caps)
                 self.exit_scope()
                 return box_hirexpr(hexpr)
@@ -7196,6 +7255,12 @@ pub def throws_result_type(ret: AstType, err: Pointer[AstType]) -> AstType:
     rt.args.push(err)
     rt.is_throws = true
     return rt
+
+pub def box_astestmt(t: Stmt) -> Pointer[Stmt]:
+    unsafe:
+        mut p = alloc[Stmt](1)
+        p.write(t)
+        return p
 
 pub def box_asttype(t: AstType) -> Pointer[AstType]:
     unsafe:

@@ -2360,6 +2360,45 @@ pub class CGenerator:
                 return false
             case _: return false
 
+    # ---- ownership of closure-call results ---------------------------------------------
+    # Collect every `return <expr>` of a closure body (not descending into nested closures).
+    pub def hir_collect_returns(self, block: HirBlock, out: Vec[Pointer[HirExpr]]):
+        if _is_invalid_ptr(block as usize): return
+        if _is_invalid_ptr(block.stmts as usize): return
+        mut i = 0
+        while i < block.stmts.len:
+            mut st = block.stmts.get(i)
+            if not _is_invalid_ptr(st as usize):
+                match st.read():
+                    case HirStmt.SReturn(v):
+                        if not _is_invalid_ptr(v as usize): out.push(v)
+                    case HirStmt.SIf(_, t, e):
+                        self.hir_collect_returns(t, out)
+                        if not _is_invalid_ptr(e as usize): self.hir_collect_returns(e, out)
+                    case HirStmt.SWhile(_, wb): self.hir_collect_returns(wb, out)
+                    case HirStmt.SFor(_, _, fb): self.hir_collect_returns(fb, out)
+                    case HirStmt.SUnsafe(ub): self.hir_collect_returns(ub, out)
+                    case HirStmt.SMatch(_, arms):
+                        mut ai = 0
+                        while ai < arms.len:
+                            self.hir_collect_returns(arms.get(ai).body, out)
+                            ai = ai + 1
+                    case _: pass
+            i = i + 1
+
+    # True when every return path of the closure yields an OWNED reference (same rule as the
+    # whole-program return-ownership inference for named functions: constructions, factories,
+    # retained idents/field reads, calls to owned functions). Conservative: false when unsure.
+    pub def closure_returns_owned(self, body: HirBlock) -> bool:
+        mut rets = Vec[Pointer[HirExpr]].init(4)
+        self.hir_collect_returns(body, rets)
+        if rets.len == 0: return false
+        mut i = 0
+        while i < rets.len:
+            if not self._obj_expr_owns_ref(rets.get(i)): return false
+            i = i + 1
+        return true
+
     pub def class_free_frees_self(self, cn: str) -> bool:
         if self.free_self_cache.contains(cn): return self.free_self_cache.get(cn)
         mut r = false
@@ -3948,6 +3987,10 @@ pub class CGenerator:
     # (`-> ref` borrow calls are handled separately via _expr_is_borrow_call.)
     # Look up a fn/method key in the return-ownership map (missing → BORROWED).
     pub def _fn_owned_lookup(self, key: str) -> bool:
+        # A closure bound to an immutable local (`mk = lambda x: Cell.init(x)`): its return
+        # ownership was derived from its body at the binding, scoped to the enclosing function.
+        mut scoped = self.cur_func + "|" + key
+        if self.fn_owned.contains(scoped): return self.fn_owned.get(scoped)
         if self.fn_owned.contains(key): return self.fn_owned.get(key)
         return false
 
@@ -8599,7 +8642,7 @@ pub class CGenerator:
                             # result (self, a field) so the caller owns a counted ref;
                             # a returned local transfers (no retain — excluded from drops).
                             self.w(pad + "return " + self.iface_wrap_return(e, self.obj_retain_wrap(e, self.str_retain_wrap(e, ret_s2, true), true)) + ";\n")
-            case HirStmt.SLet(n, _, _, is_const, is_shared, ty, v):
+            case HirStmt.SLet(n, _, sl_is_mut, is_const, is_shared, ty, v):
                 # Record a generic-class local's mono C prefix up front (before any
                 # branch), so an SAutoDrop free/drop names the concrete instance. The
                 # helper self-guards (only records when it finds concrete class args).
@@ -8710,6 +8753,11 @@ pub class CGenerator:
                     match v.read():
                         case HirExpr.EClosure(cl_params, cl_ret_ty, cl_body, _, cl_caps):
                             mut _cdrop = self.gen_closure(cl_params, cl_ret_ty, cl_body, cl_caps)
+                            # Return ownership of calls through this (immutable) closure local, so
+                            # a heap-class result is owned/dropped by the caller (no leak, and no
+                            # extra retain).
+                            if not sl_is_mut and self.is_heap_class_tn(self.resolve_generic_tyname(cl_ret_ty.name)):
+                                self.fn_owned.insert(self.cur_func + "|" + n, self.closure_returns_owned(cl_body))
                             # A closure local that is passed / stored / returned may outlive
                             # this frame: give it the heap env (with by-value copies of its
                             # immutable captures) instead of a stack env (stack-use-after-scope).

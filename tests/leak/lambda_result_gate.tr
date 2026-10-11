@@ -1,0 +1,37 @@
+# Leak gate: closures whose result type is INFERRED (str / heap class) must hand ownership to
+# the caller like any other returning function: no leak, no double free. Run by
+# scripts/leak_check.sh.
+extern "C":
+    def _tr_mem_live() -> int
+
+class Cell:
+    pub v: int
+    pub tag: str
+
+extend Cell:
+    pub def init(v: int, tag: str) -> Cell:
+        mut c = Cell()
+        c.v = v
+        c.tag = tag
+        return c
+
+def workload() -> int:
+    mk = lambda x: Cell.init(x, "c" + x.to_str())
+    sg = lambda x: "s" + x.to_str()
+    c = mk(3)
+    s = sg(4)
+    return c.v + s.len()
+
+def main():
+    workload()
+    mut before = _tr_mem_live()
+    mut r = 0
+    mut total = 0
+    while r < 100:
+        total = total + workload()
+        r = r + 1
+    mut leaked = _tr_mem_live() - before
+    if total == 500 and leaked <= 0:
+        print("LEAK-GATE PASS")
+    else:
+        print("LEAK-GATE FAIL leaked=" + leaked.to_str() + " total=" + total.to_str())

@@ -396,6 +396,15 @@ print(double(5))     # 10
 print(add(3, 4))     # 7
 ```
 
+A closure without `-> R` takes the type of the expression it returns: `lambda x: x * 2` is
+`int`, `lambda: 2.5` is `float`, `lambda n: "n=" + n.to_str()` is `str`, `lambda: a > b` is
+`bool`, and a class constructor call yields that class (an owned value: the caller releases it
+like any other local). The same applies to `def (params):` closures with no `-> R`. Annotate
+the result (`def (x: int) -> float:`) when it must differ from what the body returns.
+To call a closure whose result is not `int`, bind it to a local (its type is known there) or take
+it as a `def(int) -> R` parameter; a bare `lambda` parameter is called as returning `int`, so the
+compiler rejects other results with `[F-5]`.
+
 **Capturing outer variables:**
 ```python
 def main():
