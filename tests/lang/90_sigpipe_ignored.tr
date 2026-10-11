@@ -13,6 +13,7 @@ extern "C":
     def _tr_tcp_accept(server_fd: int) -> int
     def _tr_c_malloc(size: int) -> Pointer[char]
     def _tr_free(p: Pointer[char])
+    def _tr_sleep_ms(ms: int)
 
 def main():
     mut t = TestRunner.init("90_sigpipe_ignored")
@@ -31,11 +32,14 @@ def main():
     t.assert_eq_int(n, 0, "recv sees EOF from the closed peer")
     _tr_free(buf)
 
+    # The RST that makes a send fail can arrive a moment after the FIN (macOS delivers it
+    # asynchronously), so keep sending, with a short pause, until one fails.
     mut saw_error = false
     mut i = 0
-    while i < 20:
+    while i < 200 and not saw_error:
         mut r = _tr_tcp_send(cli, "ping", 4)
         if r < 0: saw_error = true
+        else: _tr_sleep_ms(10)
         i = i + 1
     t.assert_true(saw_error, "send to a closed peer returns an error and the process survives")
 
