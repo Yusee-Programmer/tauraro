@@ -1,0 +1,34 @@
+# tests/lang/85_float_literal_exact.tr - float literals must be the correctly
+# rounded double (bug log #4). The lexer used to build them with per-digit
+# `frac += d / divisor` and a `*= 10.0` loop for the exponent, which compounds
+# rounding error: 1.0e+300 came out as 1.0000000000000002e+300 (one ulp off).
+# Reference values come from the C library's correctly-rounded strtod.
+
+from std.test import TestRunner
+
+extern "C":
+    def _tr_str_to_float(s: str) -> float
+
+def main():
+    mut t = TestRunner.init("85_float_literal_exact")
+
+    t.section("literals equal strtod of their own text (exact ==, no epsilon)")
+    t.assert_true(1.0e+300 == _tr_str_to_float("1.0e+300"), "1.0e+300")
+    t.assert_true(1e300 == _tr_str_to_float("1e300"), "1e300 (integer mantissa)")
+    t.assert_true(1.0e-300 == _tr_str_to_float("1.0e-300"), "1.0e-300")
+    t.assert_true(0.1 == _tr_str_to_float("0.1"), "0.1")
+    t.assert_true(0.3 == _tr_str_to_float("0.3"), "0.3")
+    t.assert_true(3.14159265358979 == _tr_str_to_float("3.14159265358979"), "pi to 15 digits")
+    t.assert_true(123456789.123456789 == _tr_str_to_float("123456789.123456789"), "9.9 digits")
+    t.assert_true(1.7976931348623157e308 == _tr_str_to_float("1.7976931348623157e308"), "DBL_MAX")
+    t.assert_true(2.2250738585072014e-308 == _tr_str_to_float("2.2250738585072014e-308"), "DBL_MIN")
+    t.assert_true(1e22 == _tr_str_to_float("1e22"), "1e22")
+    t.assert_true(1.5e3 == 1500.0, "1.5e3")
+    t.assert_true(2.5e-3 == _tr_str_to_float("2.5e-3"), "2.5e-3")
+    t.assert_true(1_000.5 == _tr_str_to_float("1000.5"), "underscore separator")
+
+    t.section("well-known identities")
+    t.assert_true(0.1 + 0.2 != 0.3, "0.1 + 0.2 is not 0.3 in binary floating point")
+    t.assert_true(1e300 * 1e-300 == 1.0, "1e300 * 1e-300 == 1.0")
+
+    t.summary()

@@ -1,0 +1,18 @@
+# tests/lang/94_sha256_bytes_len.tr - Hash.sha256_bytes returns exactly 32 raw bytes
+# whose length is tracked (bug log #27: the C helper's buffer has no terminator and
+# the strlen-based wrap read past it; found by ASan, see scripts/asan_check.sh).
+
+from std.test import TestRunner
+from std.crypto.hash import Hash
+from std.encoding.hex import Hex
+from std.string.str import Str
+
+def main():
+    mut t = TestRunner.init("94_sha256_bytes_len")
+    mut raw = Hash.sha256_bytes("abc", 3)
+    t.assert_eq_int(Str.len(raw), 32, "raw digest is 32 bytes long")
+    t.assert_eq_str(Hex.encode(raw), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", "hex of the raw digest matches the known SHA-256 of 'abc'")
+    t.assert_eq_str(Hash.sha256("abc"), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", "Hash.sha256 agrees")
+    mut empty = Hash.sha256_bytes("", 0)
+    t.assert_eq_str(Hex.encode(empty), "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", "empty input")
+    t.summary()

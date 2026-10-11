@@ -100,9 +100,40 @@ extend HttpClient:
     # Build the common headers section of a request.
     def _build_headers(self) -> str:
         mut sb = StringBuilder.init(256)
-        sb.append("Host: ")
-        sb.append(self.host)
-        sb.append("\r\nConnection: close\r\n")
+        if not self._headers.contains("Host"):
+            sb.append("Host: ")
+            sb.append(self.host)
+            sb.append("\r\n")
+        sb.append("Connection: close\r\n")
+        # Headers registered with set_header() (bug log #12: they were never sent).
+        mut ks = self._headers.keys()
+        mut ki = 0
+        while ki < ks.len:
+            mut hk = ks.get(ki)
+            if hk != "Connection":
+                sb.append(hk)
+                sb.append(": ")
+                sb.append(self._headers.get(hk))
+                sb.append("\r\n")
+            ki = ki + 1
+        ks.free()
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    # Read the whole response: requests are HTTP/1.0 + `Connection: close`, so the
+    # server ends the body by closing the socket. One recv() only returns what has
+    # arrived so far (bug log #12: large responses were truncated at 64 KiB / the
+    # first TCP segment burst), so keep receiving until EOF.
+    def _read_all(self, stream: TcpStream) -> str:
+        mut sb = StringBuilder.init(65536)
+        while true:
+            mut chunk = stream.recv(65536)
+            if Str.len(chunk) == 0:
+                unsafe: _tr_c_free(chunk as Pointer[char])
+                break
+            sb.append(chunk)
+            unsafe: _tr_c_free(chunk as Pointer[char])
         mut out = sb.to_owned()
         sb.free()
         return out
@@ -177,7 +208,7 @@ extend HttpClient:
         sb.free()
         stream.send(wire)
         unsafe: _tr_c_free(wire as Pointer[char])
-        mut raw = stream.recv(65536)
+        mut raw = self._read_all(stream)
         stream.close()
         return self._parse_response(raw)
 
@@ -206,7 +237,7 @@ extend HttpClient:
         sb.free()
         stream.send(wire)
         unsafe: _tr_c_free(wire as Pointer[char])
-        mut raw = stream.recv(65536)
+        mut raw = self._read_all(stream)
         stream.close()
         return self._parse_response(raw)
 
@@ -235,7 +266,7 @@ extend HttpClient:
         sb.free()
         stream.send(wire)
         unsafe: _tr_c_free(wire as Pointer[char])
-        mut raw = stream.recv(65536)
+        mut raw = self._read_all(stream)
         stream.close()
         return self._parse_response(raw)
 
@@ -264,7 +295,7 @@ extend HttpClient:
         sb.free()
         stream.send(wire)
         unsafe: _tr_c_free(wire as Pointer[char])
-        mut raw = stream.recv(65536)
+        mut raw = self._read_all(stream)
         stream.close()
         return self._parse_response(raw)
 
@@ -293,7 +324,7 @@ extend HttpClient:
         sb.free()
         stream.send(wire)
         unsafe: _tr_c_free(wire as Pointer[char])
-        mut raw = stream.recv(65536)
+        mut raw = self._read_all(stream)
         stream.close()
         return self._parse_response(raw)
 
@@ -314,7 +345,7 @@ extend HttpClient:
         sb.free()
         stream.send(wire)
         unsafe: _tr_c_free(wire as Pointer[char])
-        mut raw = stream.recv(65536)
+        mut raw = self._read_all(stream)
         stream.close()
         return self._parse_response(raw)
 
@@ -335,6 +366,6 @@ extend HttpClient:
         sb.free()
         stream.send(wire)
         unsafe: _tr_c_free(wire as Pointer[char])
-        mut raw = stream.recv(65536)
+        mut raw = self._read_all(stream)
         stream.close()
         return self._parse_response(raw)

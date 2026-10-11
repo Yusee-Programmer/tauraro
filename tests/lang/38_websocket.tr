@@ -65,7 +65,7 @@ def server_thread(port: int, r_bind: Atomic[int], r_handshake: Atomic[int],
             if got != i + 10: all_match = false
             i = i + 1
         if all_match: r_binary.add(1)
-    conn.send_binary(bmsg.data as str, bmsg.len)
+    conn.send_binary_ptr(bmsg.data, bmsg.len)
     bmsg.free()
 
     # Clean close, server-initiated.
@@ -104,7 +104,7 @@ def client_thread(port: int, r_connect: Atomic[int], r_accept_hdr: Atomic[int],
     while i < 5:
         unsafe: buf.offset(i).write((i + 10) as char)
         i = i + 1
-    conn.send_binary(buf as str, 5)
+    conn.send_binary_ptr(buf, 5)
     mut echo = conn.recv()
     if echo.ok and echo.is_binary() and echo.len == 5:
         mut all_match = true

@@ -1,0 +1,87 @@
+# tests/lang/92_return_break_values.tr - values stay correct now that `return
+# local.field` and `break`/`continue` release heap-class locals on their path
+# (bug log #14, #15). The leak side is covered by tests/leak/*_gate.tr; this file
+# also runs under the normal (non-memcount) build, so a premature release would
+# show up as garbage values / a crash here.
+
+from std.test import TestRunner
+
+class Thing:
+    pub v: int
+    pub name: str
+
+extend Thing:
+    pub def init(v: int, name: str) -> Thing:
+        mut t = Thing()
+        t.v = v
+        t.name = name
+        return t
+
+def mk(v: int) -> Thing:
+    return Thing.init(v, "thing")
+
+def plain() -> int:
+    mut t = mk(7)
+    return t.v
+
+def arith() -> int:
+    mut a = mk(2)
+    mut b = mk(3)
+    return a.v * 10 + b.v
+
+def nested(x: int) -> int:
+    mut t = mk(x)
+    if x > 5:
+        mut u = mk(x + 1)
+        return t.v + u.v
+    if x > 2:
+        return t.v
+    return 0
+
+def with_break() -> int:
+    mut n = 0
+    while true:
+        mut b = mk(1)
+        n = n + b.v
+        if n >= 3: break
+    return n
+
+def with_continue() -> int:
+    mut n = 0
+    mut i = 0
+    while i < 6:
+        mut b = mk(i)
+        i = i + 1
+        if b.v % 2 == 0: continue
+        n = n + b.v
+    return n
+
+def nested_loops() -> int:
+    mut n = 0
+    mut i = 0
+    while i < 3:
+        mut outer = mk(i)
+        mut j = 0
+        while true:
+            mut inner = mk(j)
+            j = j + 1
+            if inner.v >= 2: break
+            n = n + inner.v
+        i = i + 1
+        if outer.v == 1: continue
+        n = n + outer.v
+    return n
+
+def main():
+    mut t = TestRunner.init("92_return_break_values")
+    t.section("return local.field")
+    t.assert_eq_int(plain(), 7, "return t.v")
+    t.assert_eq_int(arith(), 23, "return a.v * 10 + b.v")
+    t.assert_eq_int(nested(9), 19, "nested return reads two locals")
+    t.assert_eq_int(nested(3), 3, "nested early return")
+    t.assert_eq_int(nested(1), 0, "fall to final return")
+    t.section("break / continue in while")
+    t.assert_eq_int(with_break(), 3, "break with a heap local in the body")
+    t.assert_eq_int(with_continue(), 9, "continue with a heap local in the body")
+    t.assert_eq_int(nested_loops(), 5, "nested while loops with break/continue")
+    t.summary()

@@ -1,0 +1,40 @@
+# Leak gate: Vec[Class].set(i, v) releases the element it overwrites and the
+# list co-owns the stored value (bug log #1). Run by scripts/leak_check.sh.
+from std.core.vec import Vec
+
+extern "C":
+    def _tr_mem_live() -> int
+
+class Cell:
+    pub n: int
+
+extend Cell:
+    pub def init(n: int) -> Cell:
+        mut c = Cell()
+        c.n = n
+        return c
+
+def workload():
+    mut v: Vec[Cell] = Vec[Cell].init(4)
+    v.push(Cell.init(1))
+    v.push(Cell.init(2))
+    mut i = 0
+    while i < 50:
+        v.set(i % 2, Cell.init(i))
+        i = i + 1
+    mut a = Cell.init(7)
+    v.set(0, a)
+    v.set(1, v.get(0))
+
+def main():
+    workload()
+    mut before = _tr_mem_live()
+    mut r = 0
+    while r < 100:
+        workload()
+        r = r + 1
+    mut leaked = _tr_mem_live() - before
+    if leaked <= 0:
+        print("LEAK-GATE PASS")
+    else:
+        print("LEAK-GATE FAIL leaked=" + leaked.to_str())

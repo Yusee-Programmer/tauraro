@@ -1,0 +1,27 @@
+# tests/lang/87_hex_binary.tr - Hex.encode / encode_upper / encode_bytes on binary
+# data (bug log #6): they used strlen (truncating at the first 0x00) and did not
+# mask bytes >= 0x80 (signed `char` -> negative nibble -> garbage output).
+
+from std.test import TestRunner
+from std.encoding.hex import Hex
+
+def main():
+    mut t = TestRunner.init("87_hex_binary")
+
+    t.section("high-bit bytes")
+    mut hi = Hex.decode("80ff7f00")
+    t.assert_eq_str(Hex.encode_bytes(hi as Pointer[char], 4), "80ff7f00", "encode_bytes keeps 0x80/0xff and the trailing NUL byte")
+    mut hi2 = Hex.decode("ff80")
+    t.assert_eq_str(Hex.encode(hi2), "ff80", "encode of 0xff 0x80")
+    t.assert_eq_str(Hex.encode_upper(hi2), "FF80", "encode_upper of 0xff 0x80")
+
+    t.section("text still works")
+    t.assert_eq_str(Hex.encode("Hello"), "48656c6c6f", "ASCII")
+    t.assert_eq_str(Hex.encode_upper("Hi"), "4869", "ASCII upper")
+    t.assert_eq_str(Hex.encode(""), "", "empty")
+
+    t.section("round trip over every byte value (without NUL; decode result is C-string based)")
+    mut all = Hex.decode("0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff")
+    t.assert_eq_str(Hex.encode(all), "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff", "all non-NUL byte values survive encode(decode(x))")
+
+    t.summary()

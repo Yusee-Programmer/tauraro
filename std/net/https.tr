@@ -51,9 +51,23 @@ extend HttpsClient:
 
     def _build_headers(self) -> str:
         mut sb = StringBuilder.init(256)
-        sb.append("Host: ")
-        sb.append(self.host)
-        sb.append("\r\nConnection: close\r\n")
+        if not self._headers.contains("Host"):
+            sb.append("Host: ")
+            sb.append(self.host)
+            sb.append("\r\n")
+        sb.append("Connection: close\r\n")
+        # Headers registered with set_header() (bug log #12: they were never sent).
+        mut ks = self._headers.keys()
+        mut ki = 0
+        while ki < ks.len:
+            mut hk = ks.get(ki)
+            if hk != "Connection":
+                sb.append(hk)
+                sb.append(": ")
+                sb.append(self._headers.get(hk))
+                sb.append("\r\n")
+            ki = ki + 1
+        ks.free()
         mut out = sb.to_owned()
         sb.free()
         return out

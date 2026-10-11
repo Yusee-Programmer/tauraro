@@ -104,6 +104,12 @@ async def test_skip_if_running(t: TestRunner):
     sched.every(15, slow_task, true)   # skip_if_running = true
     sched.run()
     Thread.sleep(250)
+    # On a loaded CI runner the scheduler thread can start late; wait (bounded) until the
+    # slow job has really started twice before stopping, instead of trusting a fixed window.
+    mut waited = 0
+    while starts.load() < 2 and waited < 3000:
+        Thread.sleep(20)
+        waited = waited + 20
     sched.stop()
     # Let the last in-flight invocation (if any) finish before reading.
     Thread.sleep(80)

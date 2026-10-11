@@ -752,6 +752,19 @@ pub def strip_trailing_sep_inline(s: str) -> str:
     if last == 47 or last == 92: return s.slice(0, n - 1)
     return s
 
+# Walk UP from the compiler binary's own directory looking for `runtime/<name>`
+# (bug log #22). A compiler copied/moved somewhere inside (or below) a checkout --
+# e.g. scratch/ci/stage0 -- finds the repo's runtime/ without depending on the CWD.
+# Returns the path, or "" when no ancestor (up to 6 levels) has it.
+pub def find_runtime_file_above_binary(name: str) -> str:
+    mut dir = _tr_exe_dir() + "/"
+    mut i = 0
+    while i < 6 and dir != "" and dir != "/":
+        if file_exists(dir + "runtime/" + name): return dir + "runtime/" + name
+        dir = dir_of_path(strip_trailing_sep_inline(dir))
+        i = i + 1
+    return ""
+
 # Locate runtime/native_abi.c for the LLVM/native link step (same search order as the
 # runtime header: repo layout, beside the binary, beside the input, CWD). Returns "".
 pub def find_native_abi_c(input_path: str) -> str:
@@ -767,7 +780,7 @@ pub def find_native_abi_c(input_path: str) -> str:
         mut gp = dir_of_path(strip_trailing_sep_inline(parent))
         if file_exists(gp + "runtime/native_abi.c"): return gp + "runtime/native_abi.c"
     if file_exists("runtime/native_abi.c"): return "runtime/native_abi.c"
-    return ""
+    return find_runtime_file_above_binary("native_abi.c")
 
 pub def read_runtime_header(bin_path: str, input_path: str) -> str:
     # 1. Canonical repo location relative to CWD.
@@ -796,6 +809,10 @@ pub def read_runtime_header(bin_path: str, input_path: str) -> str:
         if file_exists(gp + "tauraro_rt.h"): return read_file(gp + "tauraro_rt.h")
     # 4. Last resort relative to CWD.
     if file_exists("runtime/tauraro_rt.h"): return read_file("runtime/tauraro_rt.h")
+    # 5. Walk up from the compiler binary (a stage0/dev build living inside a checkout
+    #    but invoked from an unrelated CWD).
+    mut up = find_runtime_file_above_binary("tauraro_rt.h")
+    if up != "": return read_file(up)
     return ""
 
 pub def ensure_runtime_header(out_dir: str, bin_path: str, input_path: str):

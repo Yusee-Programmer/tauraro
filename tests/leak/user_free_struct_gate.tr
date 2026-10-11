@@ -1,0 +1,60 @@
+# Leak gate: a class with a user-defined `free()` must not leak its struct allocation
+# (bug log #16). The compiler runs the user's free() and then releases the object, both on
+# scope-exit auto-drop and on an explicit `x.free()`; a free() that already frees `self`
+# is detected and not released twice. Run by scripts/leak_check.sh.
+extern "C":
+    def _tr_mem_live() -> int
+    def _tr_c_free(p: Pointer[char])
+
+pub class Counter:
+    pub n: int
+    pub label: str
+
+extend Counter:
+    pub def free(self):
+        self.n = 0
+
+pub class SelfFree:
+    pub n: int
+
+extend SelfFree:
+    pub def free(self):
+        unsafe: _tr_c_free(self as Pointer[char])
+
+def scope_exit() -> int:
+    mut c = Counter()
+    c.n = 3
+    c.label = "a" + "b"
+    mut v = c.n
+    return v
+
+def explicit_free() -> int:
+    mut c = Counter()
+    c.n = 4
+    mut v = c.n
+    c.free()
+    return v
+
+def self_freeing() -> int:
+    mut s = SelfFree()
+    s.n = 5
+    mut v = s.n
+    s.free()
+    return v
+
+def workload() -> int:
+    return scope_exit() + explicit_free() + self_freeing()
+
+def main():
+    workload()
+    mut before = _tr_mem_live()
+    mut r = 0
+    mut total = 0
+    while r < 100:
+        total = total + workload()
+        r = r + 1
+    mut leaked = _tr_mem_live() - before
+    if total == 1200 and leaked <= 0:
+        print("LEAK-GATE PASS")
+    else:
+        print("LEAK-GATE FAIL leaked=" + leaked.to_str() + " total=" + total.to_str())

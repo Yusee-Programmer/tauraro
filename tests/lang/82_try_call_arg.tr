@@ -1,0 +1,59 @@
+# tests/lang/82_try_call_arg.tr - `?` used inside a larger expression: as a call
+# argument or operand (bug log #3, e.g. `print(r.read_string()?)`).
+#
+# It was mis-typed (a `TrStr*` where a `TrStr` was needed -> C compile error) and
+# never checked the Result tag, so an Err was read as an Ok payload.
+
+from std.test import TestRunner
+
+def parse_num(s: str) throws str -> int:
+    if len(s) == 0:
+        raise("empty")
+    return int(s)
+
+def get_name(ok: bool) throws str -> str:
+    if not ok:
+        raise("no name")
+    return "alice"
+
+def total(a: str, b: str) throws str -> int:
+    return parse_num(a)? + parse_num(b)?
+
+def name_len(ok: bool) throws str -> int:
+    mut n = len(get_name(ok)?)
+    return n
+
+def greet(ok: bool) throws str -> int:
+    print(get_name(ok)?)
+    return 1
+
+def concat_name(ok: bool) throws str -> str:
+    mut s = "hi " + get_name(ok)?
+    return s
+
+def main():
+    mut t = TestRunner.init("82_try_call_arg")
+
+    t.section("? as an operand / call argument")
+    mut s1: Result[int, str] = total("20", "22")
+    t.assert_true(s1.is_ok, "total ok")
+    t.assert_eq_int(s1.ok, 42, "total value")
+    mut s2: Result[int, str] = total("20", "")
+    t.assert_true(s2.is_err, "operand Err propagates")
+    t.assert_eq_str(s2.err, "empty", "operand Err payload")
+    mut n1: Result[int, str] = name_len(true)
+    t.assert_eq_int(n1.ok, 5, "len(f()?) value")
+    mut n2: Result[int, str] = name_len(false)
+    t.assert_true(n2.is_err, "len(f()?) Err propagates")
+
+    t.section("print(f()?) and string concat with ?")
+    mut g1: Result[int, str] = greet(true)
+    t.assert_true(g1.is_ok, "print(f()?) compiles and runs")
+    mut g2: Result[int, str] = greet(false)
+    t.assert_true(g2.is_err, "print(f()?) propagates Err")
+    mut c1: Result[str, str] = concat_name(true)
+    t.assert_eq_str(c1.ok, "hi alice", "concat with f()?")
+    mut c2: Result[str, str] = concat_name(false)
+    t.assert_true(c2.is_err, "concat with failing f()? propagates")
+
+    t.summary()

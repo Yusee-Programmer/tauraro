@@ -1,0 +1,80 @@
+# tests/lang/91_http_client_headers_body.tr (bug log #12)
+# std.net.http HttpClient against a real local fake server in a spawned thread:
+#   1. headers registered with set_header() must actually be sent on the wire;
+#   2. a response far larger than one recv() (300 KB, written in several delayed
+#      chunks) must be read in full, not truncated at the first read.
+
+from std.test import TestRunner
+from std.net.tcp import TcpStream, TcpListener
+from std.net.http import HttpClient
+from std.string.str import Str
+
+class SrvFlags implements Sendable:
+    pub port:       int
+    pub got_key:    Atomic[int]
+    pub got_host:   Atomic[int]
+    pub got_agent:  Atomic[int]
+    pub server_done: Atomic[int]
+
+extend SrvFlags:
+    pub def init(port: int) -> SrvFlags:
+        mut f = SrvFlags()
+        f.port        = port
+        f.got_key     = Atomic.new(0)
+        f.got_host    = Atomic.new(0)
+        f.got_agent   = Atomic.new(0)
+        f.server_done = Atomic.new(0)
+        return f
+
+def run_server(flags: Shared[SrvFlags]):
+    mut listener = TcpListener.listen("127.0.0.1", flags.port)
+    mut conn = listener.accept()
+    mut req = ""
+    while Str.index_of(req, "\r\n\r\n") < 0:
+        mut chunk = conn.recv(4096)
+        if Str.len(chunk) == 0: break
+        req = req + chunk
+    if Str.contains(req, "X-Api-Key: secret-123\r\n"): flags.got_key.store(1)
+    if Str.contains(req, "Host: localhost\r\n"): flags.got_host.store(1)
+    if Str.contains(req, "User-Agent: tau-test\r\n"): flags.got_agent.store(1)
+
+    conn.send("HTTP/1.0 200 OK\r\nContent-Type: text/plain\r\n\r\n")
+    mut piece = "b" * 50000
+    mut i = 0
+    while i < 6:
+        conn.send(piece)
+        Thread.sleep(30)
+        i = i + 1
+    conn.close()
+    listener.close()
+    flags.server_done.store(1)
+
+async def main():
+    mut t = TestRunner.init("91_http_client_headers_body")
+    mut port = 18827
+
+    shared flags = SrvFlags.init(port)
+    mut srv_t = Thread.spawn(run_server, flags)
+    Thread.sleep(300)
+
+    mut c = HttpClient.init("localhost", port)
+    c.set_header("X-Api-Key", "secret-123")
+    c.set_header("User-Agent", "tau-test")
+    mut resp = c.get("/big")
+    srv_t.join()
+
+    t.section("set_header() headers reach the server")
+    t.assert_eq_int(flags.got_key.load(), 1, "X-Api-Key sent")
+    t.assert_eq_int(flags.got_agent.load(), 1, "User-Agent sent")
+    t.assert_eq_int(flags.got_host.load(), 1, "Host still sent exactly once")
+
+    t.section("full response body is read")
+    t.assert_eq_int(resp.status, 200, "status 200")
+    t.assert_eq_int(Str.len(resp.body), 300000, "all 300000 body bytes received")
+    t.assert_eq_int(flags.server_done.load(), 1, "server finished")
+
+    flags.got_key.free()
+    flags.got_host.free()
+    flags.got_agent.free()
+    flags.server_done.free()
+    t.summary()

@@ -80,3 +80,7 @@ scratch_*/
 *.ilk
 *.exp
 *.dSYM/
+
+# stray outputs written to the CWD by tests/lang/49_dotenv.tr and 51_compress_zip.tr
+/test_*_tmp*.zip
+/tests_lang_*_tmp.env

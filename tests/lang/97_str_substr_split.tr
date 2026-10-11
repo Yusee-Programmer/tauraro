@@ -1,0 +1,36 @@
+# tests/lang/97_str_substr_split.tr - Str.substr and the empties-preserving split
+# (bug log #8). `s.split()` / Str.split keep their documented behaviour: the separator
+# is a set of delimiter characters and empty pieces are dropped.
+
+from std.test import TestRunner
+from std.string.str import Str
+
+def main():
+    mut t = TestRunner.init("97_str_substr_split")
+
+    t.section("Str.substr")
+    t.assert_eq_str(Str.substr("hello world", 6, 5), "world", "offset + length")
+    t.assert_eq_str(Str.substr("hello", 1, 100), "ello", "count past the end clamps")
+    t.assert_eq_str(Str.substr("hello", 0, 0), "", "zero count")
+    t.assert_eq_str(Str.substr("hello", 9, 2), "", "start past the end")
+    t.assert_eq_str(Str.substr("hello", 0 - 2, 4), "he", "negative start eats into the count")
+    t.assert_eq_str(Str.substr("hello", 2, 0 - 1), "", "negative count")
+
+    t.section("split keeps its behaviour (drops empties)")
+    mut p = "a,,b,".split(",")
+    t.assert_eq_int(p.len, 2, "split drops empty pieces")
+    mut q = Str.split("x;y,z", ";,")
+    t.assert_eq_int(q.len, 3, "split separator is a character set")
+
+    t.section("Str.split_keep_empty")
+    mut k = Str.split_keep_empty("a,,b,", ",")
+    t.assert_eq_int(k.len, 4, "occurrences + 1 pieces")
+    t.assert_eq_str(k.get(0), "a", "piece 0")
+    t.assert_eq_str(k.get(1), "", "piece 1 is empty")
+    t.assert_eq_str(k.get(2), "b", "piece 2")
+    t.assert_eq_str(k.get(3), "", "trailing empty piece")
+    mut k2 = Str.split_keep_empty("a::b", "::")
+    t.assert_eq_int(k2.len, 2, "multi-character separator is matched whole")
+    mut k3 = Str.split_keep_empty("", ",")
+    t.assert_eq_int(k3.len, 1, "empty input gives one empty piece")
+    t.summary()

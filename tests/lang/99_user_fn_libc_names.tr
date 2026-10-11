@@ -1,0 +1,57 @@
+# tests/lang/99_user_fn_libc_names.tr - user functions named like libc/POSIX symbols
+# (bug log #19: `def brk()` => "conflicting types for 'brk'" from <unistd.h>).
+# They are emitted as `_tr_fn_<name>` in C; every way of reaching them must agree.
+
+from std.test import TestRunner
+from std.core.vec import Vec
+
+def brk() -> int:
+    return 5
+
+def index(a: int) -> int:
+    return a + 1
+
+def send(a: int, b: int) -> int:
+    return a * b
+
+def div(a: int, b: int) -> int:
+    if b == 0: return 0 - 1
+    return a / b
+
+def link(n: int) -> int:
+    if n <= 0: return 0
+    return n + link(n - 1)          # recursion through the renamed symbol
+
+def pipe(x: int) -> int:
+    return x + 100
+
+def getline(s: str) -> str:
+    return s + "!"
+
+def apply(f: def(int) -> int, v: int) -> int:
+    return f(v)
+
+def ident[T](x: T) -> T:
+    return x
+
+def select(a: int) -> int:
+    return a * 2
+
+def main():
+    mut t = TestRunner.init("99_user_fn_libc_names")
+    t.assert_eq_int(brk(), 5, "brk")
+    t.assert_eq_int(index(1), 2, "index")
+    t.assert_eq_int(send(6, 7), 42, "send")
+    t.assert_eq_int(div(9, 3), 3, "div")
+    t.assert_eq_int(link(4), 10, "recursive call")
+    t.assert_eq_str(getline("hi"), "hi!", "str-returning function")
+    t.assert_eq_int(apply(pipe, 1), 101, "as a function value")
+    t.assert_eq_int(ident(select(4)), 8, "from a generic function")
+    mut calls = Vec[def(int) -> int].init(2)
+    calls.push(index)
+    calls.push(select)
+    t.assert_eq_int(calls.get(0)(10) + calls.get(1)(10), 31, "stored in a Vec of function values")
+    c = def (v: int) -> int:
+        return index(v) + brk()
+    t.assert_eq_int(c(1), 7, "called from a closure")
+    t.summary()

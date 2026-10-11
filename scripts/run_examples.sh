@@ -66,6 +66,17 @@ for src in "${FILES[@]}"; do
 
     rm -rf build; mkdir -p build
     exe="build/${name}${EXE_EXT}"
+    if [ "$name" = "ffi_callbacks" ]; then
+        # It declares `extern "C" run_events` with no C implementation, so it can never LINK.
+        # (tauraroc used to exit 0 on a failed link, which hid this; it now reports the failure.)
+        # Still catch drift: it must emit C and that C must compile to an object.
+        if "$TAURAROC" "$src" --emit c -o "build/${name}" >.ex_buildlog 2>&1 \
+           && "${CC:-cc}" -c build/main.c -Ibuild -w -o "build/${name}.o" >>.ex_buildlog 2>&1; then
+            echo "BUILT $name (no-run, compile-only)"; norun=$((norun+1)); continue
+        fi
+        echo "FAIL  $name (build)"; sed -n '1,4p' .ex_buildlog 2>/dev/null | sed 's/^/        /'
+        fail=$((fail+1)); continue
+    fi
     if ! "$TAURAROC" "$src" -o "$exe" >.ex_buildlog 2>&1; then
         echo "FAIL  $name (build)"; sed -n '1,4p' .ex_buildlog 2>/dev/null | sed 's/^/        /'
         fail=$((fail+1)); continue

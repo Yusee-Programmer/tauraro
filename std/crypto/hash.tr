@@ -10,7 +10,8 @@
 
 extern "C":
     def _tr_sha256_hex(input: str) -> str
-    def _tr_sha256_bytes_of(input: str, ilen: int) -> str
+    def _tr_sha256_bytes_of(input: str, ilen: int) -> Pointer[char]
+    def _tr_str_wrap_len(s: Pointer[char], blen: int) -> str
     def _tr_md5_hex(s: str) -> str
     def _tr_sha1_hex(s: str) -> str
     def _tr_sha1_bytes_hex(input: str, ilen: int) -> str
@@ -28,7 +29,9 @@ extend Hash:
     # don't rely on .len()/strlen on the result). Use Hex.encode_bytes if
     # you need a printable hex digest instead.
     pub def sha256_bytes(data: str, len_: int) -> str:
-        return _tr_sha256_bytes_of(data, len_)
+        # The C helper returns exactly 32 raw bytes with NO terminator: wrap them with
+        # their real length (the strlen-based wrap read past the buffer; bug log #27).
+        return _tr_str_wrap_len(_tr_sha256_bytes_of(data, len_), 32)
 
     # MD5 digest of a null-terminated string. Returns 32-char lowercase hex.
     # Note: MD5 is cryptographically broken — use SHA-256 for security-sensitive work.

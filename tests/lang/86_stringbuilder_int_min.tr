@@ -1,0 +1,42 @@
+# tests/lang/86_stringbuilder_int_min.tr - StringBuilder.append_int(INT64_MIN)
+# (bug log #5). It negated the value first (`x = 0 - x`), which overflows for
+# INT64_MIN and aborts under -ftrapv in __negvdi2.
+
+from std.test import TestRunner
+from std.core.string import StringBuilder
+
+def render(n: int) -> str:
+    mut sb = StringBuilder.init(32)
+    sb.append_int(n)
+    mut s = sb.to_owned()
+    sb.free()
+    return s
+
+def main():
+    mut t = TestRunner.init("86_stringbuilder_int_min")
+    mut int_min = -9223372036854775807 - 1
+
+    t.section("append_int edge values")
+    t.assert_eq_str(render(int_min), "-9223372036854775808", "INT64_MIN")
+    t.assert_eq_str(render(9223372036854775807), "9223372036854775807", "INT64_MAX")
+    t.assert_eq_str(render(int_min + 1), "-9223372036854775807", "INT64_MIN + 1")
+    t.assert_eq_str(render(0), "0", "zero")
+    t.assert_eq_str(render(-1), "-1", "-1")
+    t.assert_eq_str(render(-10), "-10", "-10")
+    t.assert_eq_str(render(-100), "-100", "-100")
+    t.assert_eq_str(render(7), "7", "7")
+    t.assert_eq_str(render(1234567890), "1234567890", "ordinary positive")
+    t.assert_eq_str(render(-1234567890), "-1234567890", "ordinary negative")
+
+    t.section("several appends in one builder")
+    mut sb = StringBuilder.init(64)
+    sb.append_int(int_min)
+    sb.append(",")
+    sb.append_int(-5)
+    sb.append(",")
+    sb.append_int(42)
+    mut out = sb.to_owned()
+    sb.free()
+    t.assert_eq_str(out, "-9223372036854775808,-5,42", "mixed sequence")
+
+    t.summary()

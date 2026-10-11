@@ -1,0 +1,53 @@
+# tests/lang/96_zlib_binary_len.tr - Zlib/Gzip results are length-exact (bug log #24).
+# compressed_len() used to be strlen-based, so any result containing 0x00 reported a
+# truncated length, and decompress() of a payload with NULs could not be sized.
+# Real compression needs `-DTAURARO_COMPRESS_ZLIB -lz` (see scripts/zlib_check.sh);
+# a stub runtime returns "" and the compression assertions are skipped.
+
+from std.test import TestRunner
+from std.compress.zlib import Zlib
+from std.compress.gzip import Gzip
+from std.io.archive import ByteBuf, Crc32
+
+def main():
+    mut t = TestRunner.init("96_zlib_binary_len")
+
+    # 3000 bytes that include many 0x00 bytes: 0,1,0,2,0,3 ...
+    mut src = ByteBuf.init(4096)
+    mut i = 0
+    while i < 3000:
+        if i % 2 == 0:
+            src.push_u8(0)
+        else:
+            src.push_u8((i / 2) % 256)
+        i = i + 1
+    mut data = src.to_str()
+    t.assert_eq_int(data.len(), 3000, "source buffer length is exact (contains NULs)")
+
+    mut probe = Zlib.deflate("probe probe probe probe probe", 30)
+    if probe.len() == 0:
+        print("  (runtime built without -DTAURARO_COMPRESS_ZLIB: compression assertions skipped)")
+        t.summary()
+        return
+
+    mut z = Zlib.compress(data, 3000)
+    t.assert_true(Zlib.compressed_len(z) > 8, "zlib stream has a real length")
+    t.assert_eq_int(Zlib.compressed_len(z), z.len(), "compressed_len == tracked length")
+    mut back = Zlib.decompress(z, Zlib.compressed_len(z), 8192)
+    t.assert_eq_int(back.len(), 3000, "decompress returns all 3000 bytes (NULs included)")
+    t.assert_eq_int(Crc32.compute(back, 3000), Crc32.compute(data, 3000), "zlib round trip is byte-exact")
+
+    mut d = Zlib.deflate(data, 3000)
+    mut inf = Zlib.inflate(d, d.len(), 8192)
+    t.assert_eq_int(inf.len(), 3000, "inflate returns all bytes")
+    t.assert_eq_int(Crc32.compute(inf, 3000), Crc32.compute(data, 3000), "deflate round trip is byte-exact")
+
+    mut g = Gzip.compress(data, 3000)
+    mut g2 = Gzip.compress("short", 5)
+    t.assert_eq_int(Gzip.compressed_len(g), g.len(), "gzip length is per-result, not a last-call global")
+    t.assert_true(Gzip.compressed_len(g) != Gzip.compressed_len(g2), "two live gzip results keep their own lengths")
+    mut gback = Gzip.decompress(g, Gzip.compressed_len(g), 8192)
+    t.assert_eq_int(gback.len(), 3000, "gunzip of a NUL-containing payload returns every byte")
+    t.assert_eq_int(Crc32.compute(gback, 3000), Crc32.compute(data, 3000), "gzip round trip is byte-exact")
+
+    t.summary()
