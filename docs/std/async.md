@@ -109,8 +109,8 @@ from std.async.thread import Atomic
 | `Atomic.new(v)` | Create atomic initialized to `v` |
 | `a.load()` | Read current value |
 | `a.store(v)` | Write value |
-| `a.add(v)` | Add `v`, returns new value |
-| `a.sub(v)` | Subtract `v`, returns new value |
+| `a.add(v)` | Atomic fetch-and-add: adds `v`, returns the PREVIOUS value |
+| `a.sub(v)` | Atomic fetch-and-sub: subtracts `v`, returns the PREVIOUS value |
 | `a.swap(v)` | Exchange — stores `v`, returns old value |
 | `a.cas(expected, desired)` | Compare-and-swap — returns `true` if swap happened |
 | `a.increment()` | Shorthand for `a.add(1)` |
