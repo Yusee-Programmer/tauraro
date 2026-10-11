@@ -13,7 +13,7 @@ building libraries with `taupkg`)
 | [`std.async`](async.md) | Concurrency: channels, tasks, mutexes, semaphores, barriers, StructuredGroup, IOPoll, EventLoop |
 | [`std.cli`](cli.md) | clap-style CLI parsing: flags, typed options, positionals, subcommands, auto-generated `--help` (`Cli`/`CliArgs`) |
 | [`std.collections`](collections.md) | Data structures: Stack, Queue, Deque, Set (with algebra), Counter, Pair/Triple, MinHeap/MaxHeap, LinkedList, Graph, LruCache, BTreeMap (sorted map/range queries), Trie (prefix tree), BloomFilter, UnionFind (disjoint-set) |
-| [`std.compress`](compress.md) | Compression: zlib compress/decompress, raw deflate/inflate (`-lz` required), gzip container format |
+| [`std.compress`](compress.md) | Compression: zlib compress/decompress, raw deflate/inflate (`-lz` required), gzip container format, zip; pure-Tauraro **LZ4** (block+frame), **Zstandard** (decoder + encoder), xxHash32/64, and a unified `Compress` by-name API |
 | [`std.crypto`](crypto.md) | Cryptography: SHA-256, SHA-512/384, HMAC-SHA256, SHA-1, MD5, UUID v3/v4/v5, ULID (incl. monotonic), AES-128/256 (CBC+PKCS#7), ChaCha20-Poly1305 AEAD, PBKDF2-HMAC-SHA256 key derivation, JWT (HS256) |
 | [`std.encoding`](encoding.md) | Data encoding: JSON, CSV, TOML, INI, YAML, XML, Base64, Hex |
 | [`std.gpu`](gpu.md) | GPU compute: CUDA/OpenCL/CPU device API (`Device`/`Buffer[T]`/`Module`/`Kernel`), Tauraro `@kernel` → PTX/SPIR-V, and OpenMP CPU dispatch (`Gpu.parallel`) |
