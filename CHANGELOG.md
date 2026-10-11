@@ -16,6 +16,25 @@ spec, automated regression suite + CI, incremental compilation, and a batch of
 codegen-safety / diagnostics / stdlib / tooling improvements). Entries will be
 added here as each phase lands.
 
+### Added
+- **`std.encoding.base32`** — RFC 4648 Base32 (standard and base32hex
+  alphabets, optional `=` padding) plus the Crockford alphabet shared with
+  `std.crypto.uuid`. Strict, error-reporting (`throws str`) decoder:
+  rejects bad characters, bad padding/length and non-canonical trailing bits.
+- **`std.encoding.cbor`** — RFC 8949 CBOR codec (`CBVal` tree + `Cbor.dumps` /
+  `loads`): full integer range, byte/text strings, arrays, maps with any key,
+  tags, simple values, half/single/double floats (shortest-exact encoding),
+  indefinite-length decode, strict bounds/nesting-checked decoder, and
+  diagnostic-notation output. Tested against the RFC 8949 Appendix A vectors.
+- **`std.encoding.protobuf`** — Protocol Buffers wire-format `ProtoWriter` /
+  `ProtoReader` (varint, ZigZag, fixed32/64, length-delimited, packed fields,
+  groups, unknown-field skipping and pass-through); no `.proto` compiler.
+- **`std.sys.cron`** — 5-field cron expression parser (ranges, steps, lists,
+  month/weekday names, `@hourly`/`@daily`/`@weekly`/`@monthly`/`@yearly`) with
+  `next_after` / `prev_before` / `matches` / `next_n` in UTC (and fixed-offset
+  variants). Standard day-of-month/day-of-week OR semantics.
+- Tests `tests/lang/72_base32_cbor.tr` and `tests/lang/73_protobuf_cron.tr`.
+
 ## [0.0.9]
 
 **Correctness and reliability hardening across concurrency, generics, and the

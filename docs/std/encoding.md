@@ -1,6 +1,6 @@
 # std.encoding
 
-Data encoding and decoding: JSON, CSV, TOML, INI, YAML, XML, Base64, and hexadecimal.
+Data encoding and decoding: JSON, CSV, TOML, INI, YAML, XML, Base64, Base32, hexadecimal, CBOR, and the Protocol Buffers wire format.
 
 ## Import
 
@@ -17,6 +17,9 @@ from std.encoding.yaml   import YamlValue, Yaml
 from std.encoding.xml    import XmlElement, Xml
 from std.encoding.base64 import Base64
 from std.encoding.hex    import Hex
+from std.encoding.base32 import Base32
+from std.encoding.cbor   import CBVal, Cbor
+from std.encoding.protobuf import Proto, ProtoWriter, ProtoReader
 ```
 
 ---
@@ -491,6 +494,145 @@ def main():
 
     print(Hex.format_int(255, 4))   # → "00ff"
     print(Hex.format_int(65535, 8)) # → "0000ffff"
+```
+
+---
+
+## Base32 — `std.encoding.base32`
+
+RFC 4648 Base32 with three alphabets: standard (`A-Z2-7`, §6), extended-hex
+"base32hex" (`0-9A-V`, §7), and Crockford (the same alphabet `std.crypto.uuid`
+uses for ULIDs — shared, not duplicated). Input is treated as binary: lengths
+come from the real byte length, so embedded `0x00` bytes round-trip. Decoding is
+strict and reports problems through `throws str` (use `?`, or bind the call to a
+`Result[str, str]`).
+
+| Method | Description |
+|--------|-------------|
+| `Base32.encode(s)` / `encode_nopad(s)` | Standard alphabet, with / without `=` padding |
+| `Base32.encode_hex(s)` / `encode_hex_nopad(s)` | base32hex alphabet |
+| `Base32.encode_crockford(s)` | Crockford alphabet (never padded) |
+| `Base32.encode_opts(s, hex: bool, pad: bool)` | Explicit alphabet / padding choice |
+| `Base32.decode(s) throws str -> str` | Standard alphabet; padding optional but, if present, exact; case-insensitive |
+| `Base32.decode_padded(s)` | Like `decode`, but padding is required |
+| `Base32.decode_hex(s)` / `decode_hex_padded(s)` | base32hex |
+| `Base32.decode_crockford(s)` | Crockford; `I`/`L` → `1`, `O` → `0`, `-` ignored |
+| `Base32.decode_opts(s, hex: bool, require_pad: bool)` | Explicit form |
+| `Base32.is_valid(s)` / `is_valid_hex(s)` | `bool` — does it decode? |
+
+Decode errors: character outside the alphabet, `=` in the middle, impossible length
+(1/3/6 data characters mod 8), wrong amount of padding, non-zero trailing bits.
+
+```tauraro
+from std.encoding.base32 import Base32
+
+Base32.encode("foobar")          # "MZXW6YTBOI======"
+Base32.encode_nopad("foobar")    # "MZXW6YTBOI"
+Base32.encode_hex("foobar")      # "CPNMUOJ1E8======"
+mut r: Result[str, str] = Base32.decode("MZXW6YTBOI======")
+if r.is_ok:
+    print(r.ok)                  # foobar
+```
+
+---
+
+## CBOR — `std.encoding.cbor`
+
+A wire-compatible [RFC 8949](https://www.rfc-editor.org/rfc/rfc8949) encoder/decoder,
+shaped like `std.serialize.msgpack`: a dynamic value tree `CBVal` plus the static
+codec class `Cbor`. Integers (full −2⁶⁴…2⁶⁴−1), byte/text strings, arrays, maps with
+**any** key type, tags, `false`/`true`/`null`/`undefined`/simple values, and
+half/single/double floats are supported. Encoding is *preferred serialization*
+(shortest heads, definite lengths, floats in the shortest exact width); decoding also
+accepts indefinite-length strings/arrays/maps. The decoder is strict (`throws str`):
+truncation, reserved additional-info values, bad simple values, stray breaks,
+oversized lengths (checked before allocating), nesting > 512 and, for `loads`,
+trailing bytes are all errors. Text strings are not UTF-8-validated.
+
+Integers outside Tauraro's signed 64-bit `int` become *big* values
+(`is_bigint()`, raw argument in `big_arg()`); they re-encode exactly.
+
+**`CBVal` constructors:** `init_int(n)`, `init_u64_raw(bits)`, `init_nint_raw(bits)`,
+`init_bytes(s)`, `init_text(s)`, `init_array()`, `init_map()`, `init_tag(num, v)`,
+`init_bool(b)`, `init_null()`, `init_undefined()`, `init_float(f)`,
+`init_float_w(f, 16|32|64)`, `init_simple(n)`.
+**Queries:** `is_int/is_bigint/is_bytes/is_text/is_array/is_map/is_tag/is_bool/is_null/is_undefined/is_float/is_simple`,
+`get_int/get_bool/get_float/get_text/get_bytes/get_simple`, `tag_number()`, `tag_content()`,
+`array_push/array_len/array_get`, `map_set(text_key, v)`, `map_put(key: CBVal, v)`,
+`map_get(text_key)`, `map_get_int(n)`, `map_has`, `map_len/map_key/map_val`,
+`eq(other)` (deep), `to_diag()` (RFC 8949 §8 diagnostic notation).
+
+**`Cbor` static API:**
+
+| Method | Description |
+|--------|-------------|
+| `Cbor.dumps(v, out_len: List[int]) -> str` | Encode; `out_len[0]` receives the true byte length |
+| `Cbor.dumps_len(v) -> (str, int)` | Encode, returning `(bytes, length)` |
+| `Cbor.loads(data, len) throws str -> CBVal` | Decode exactly one item spanning `len` bytes |
+| `Cbor.loads_str(data) throws str -> CBVal` | `loads` using `data.len()` |
+| `Cbor.loads_prefix(data, len, consumed: List[int]) throws str -> CBVal` | Decode the first item; `consumed[0]` = bytes used (walk a CBOR sequence) |
+| `Cbor.dump_int/dump_float/dump_bool/dump_text/dump_bytes/dump_list_int/dump_list_text/dump_dict_str_str/dump_dict_str_int` | One-shot helpers |
+| `Cbor.load_list_int/load_list_text` | One-shot decoders |
+
+```tauraro
+from std.encoding.cbor import CBVal, Cbor
+
+mut m = CBVal.init_map()
+m.map_set("id", CBVal.init_int(7))
+mut tags = CBVal.init_array()
+tags.array_push(CBVal.init_text("a"))
+m.map_set("tags", tags)
+
+mut bytes_, blen = Cbor.dumps_len(m)        # a2 62 69 64 07 64 74 61 67 73 81 61 61
+mut back = Cbor.loads(bytes_, blen)         # Result[CBVal, str]
+print(back.ok.to_diag())                    # {"id": 7, "tags": ["a"]}
+```
+
+---
+
+## Protocol Buffers wire format — `std.encoding.protobuf`
+
+A low-level reader/writer for the protobuf binary encoding — varints, ZigZag,
+fixed32/fixed64, length-delimited fields, field keys and unknown-field skipping.
+There is **no** `.proto` compiler; you read/write fields by number.
+
+`ProtoWriter` (call `.free()` when done): `write_int32/int64/uint32/uint64/sint32/sint64/bool/enum`,
+`write_fixed32/sfixed32/fixed64/sfixed64/float/double`, `write_bytes/string`,
+`write_message(field, sub_writer)`, `write_packed_varints/sint/fixed32/fixed64/float/double`,
+`write_tag`, `write_raw`, primitives `put_varint/put_fixed32/put_fixed64`, and
+`to_str()`, `len()`, `clear()`, `free()`.
+
+`ProtoReader.init(data)` (or `init_range(data, start, end)`): `next_field() throws str -> bool`
+sets `field` / `wire`; then read the value with `read_int32/int64/uint32/uint64/sint32/sint64/bool/enum`,
+`read_fixed32/sfixed32/fixed64/sfixed64/float/double`, `read_bytes`, `read_string` (UTF-8 validated),
+`read_message()` (sub-reader), `read_packed_*`; or `skip()` to ignore it. `field_raw()` returns the
+current field's raw bytes so unknown fields can be copied through with `write_raw`.
+Malformed input (truncation, >10-byte varints, field number 0, wire types 6/7, lengths past the
+end, unmatched end-group) raises a `throws str` error.
+
+`Proto` helpers: `zigzag(n)`, `unzigzag(v)`, `varint_size(v)`, `make_tag(field, wire)`, `tag_field`, `tag_wire`.
+uint64/fixed64 values ≥ 2⁶³ read back as the same 64-bit pattern (negative `int`).
+
+```tauraro
+from std.encoding.protobuf import ProtoWriter, ProtoReader
+
+mut w = ProtoWriter.init()
+w.write_int64(1, 150)             # 08 96 01
+w.write_string(2, "testing")      # 12 07 74 65 73 74 69 6e 67
+mut wire = w.to_str()
+w.free()
+
+mut r = ProtoReader.init(wire)
+# (inside a `throws str` function, so `?` can propagate read errors)
+while r.next_field()?:
+    if r.field == 1:
+        mut n = r.read_int64()?       # 150
+        print(n)
+    elif r.field == 2:
+        mut name = r.read_string()?   # "testing"
+        print(name)
+    else:
+        r.skip()?                     # unknown field
 ```
 
 ---
