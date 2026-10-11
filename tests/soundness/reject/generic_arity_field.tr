@@ -1,0 +1,12 @@
+# EXPECT: [G-2]
+# Wrong arity on a class field annotation.
+
+class Pair[A, B]:
+    pub first: A
+    pub second: B
+
+class Holder:
+    pub p: Pair[str]
+
+def main():
+    print("unreachable")

@@ -2355,6 +2355,11 @@ extend Sema:
             self.register_decl(prog.decls.get(i))
             i = i + 1
 
+        # [G-2] wrong number of generic type arguments on a user generic class/enum
+        # (`Pair[int]` for `Pair[A, B]`): previously accepted and only surfaced as a
+        # baffling "'B' undeclared" error in the generated C.
+        self.check_type_arities(prog)
+
         # [S-2] (--strict): the leak-freedom GUARANTEE. Reject strong-ownership CYCLES
         # among refcounted classes (the one thing plain ARC cannot reclaim). Combined
         # with [U-1] (no raw allocation outside `unsafe:`), a program that compiles
@@ -3262,6 +3267,75 @@ extend Sema:
                 gpi = gpi + 1
             ci = ci + 1
 
+    # [G-2] Validate the number of type arguments written on a (recursively nested)
+    # type annotation against the declaration: a generic class/enum must be given exactly
+    # as many arguments as it has type parameters. A bare
+    # use with NO arguments (`Vec`) is left alone (inferred). `where_` names the owner.
+    pub def _check_ty_arity(self, tp: Pointer[AstType], where_: str, line: int):
+        if _is_invalid_ptr(tp as usize): return
+        mut t = tp.read()
+        if _is_invalid_ptr(t.args as usize): return
+        if t.args.len == 0: return
+        mut expected = -1
+        # The builtin collection names accept a documented SHORTHAND with fewer args
+        # (`Map[V]` = str-keyed map of V, used throughout std.collections), and the
+        # codegen disambiguates them from the real std.core `Map[K, V]` class by arity,
+        # so they are exempt. Only user generic classes / enums are checked.
+        if t.name == "Map" or t.name == "Dict" or t.name == "Vec" or t.name == "List" or t.name == "Set":
+            expected = -1
+        elif self.classes.contains(t.name):
+            expected = self.classes.get(t.name).generics.len
+        elif self.enums.contains(t.name):
+            expected = self.enums.get(t.name).generics.len
+        if expected > 0 and t.args.len != expected:
+            mut saved_line = self.current_line
+            if line > 0: self.current_line = line
+            self.error("[G-2] wrong number of type arguments for '" + t.name + "': expected " + expected.to_str() + ", found " + t.args.len.to_str() + " (in " + where_ + ").\n      FIX: write '" + t.name + "' with exactly " + expected.to_str() + " type argument(s).")
+            self.current_line = saved_line
+        mut ai = 0
+        while ai < t.args.len:
+            self._check_ty_arity(t.args.get(ai), where_, line)
+            ai = ai + 1
+
+    pub def _check_fn_arities(self, f: FunctionDef, owner: str):
+        mut fn_where = owner + f.name
+        mut pi = 0
+        while pi < f.params.len:
+            self._check_ty_arity(f.params.get(pi).ty, fn_where, f.line)
+            pi = pi + 1
+        self._check_ty_arity(f.ret_ty, fn_where, f.line)
+
+    pub def check_type_arities(self, prog: Program):
+        mut di = 0
+        while di < prog.decls.len:
+            match prog.decls.get(di).read():
+                case Decl.DFunction(f):
+                    self._check_fn_arities(f, "")
+                case Decl.DClass(c):
+                    mut cfi = 0
+                    while cfi < c.fields.len:
+                        self._check_ty_arity(c.fields.get(cfi).ty, "field " + c.name + "." + c.fields.get(cfi).name, c.line)
+                        cfi = cfi + 1
+                    mut cmi = 0
+                    while cmi < c.methods.len:
+                        self._check_fn_arities(c.methods.get(cmi), c.name + ".")
+                        cmi = cmi + 1
+                case Decl.DExtend(target, methods):
+                    mut emi = 0
+                    while emi < methods.len:
+                        self._check_fn_arities(methods.get(emi), target + ".")
+                        emi = emi + 1
+                case Decl.DEnum(e):
+                    mut vi = 0
+                    while vi < e.variants.len:
+                        mut vfi = 0
+                        while vfi < e.variants.get(vi).fields.len:
+                            self._check_ty_arity(e.variants.get(vi).fields.get(vfi).ty, "enum " + e.name + "." + e.variants.get(vi).name, e.line)
+                            vfi = vfi + 1
+                        vi = vi + 1
+                case _: pass
+            di = di + 1
+
     pub def register_decl(self, d: Pointer[Decl]):
         match d.read():
             case Decl.DFunction(f):
@@ -3966,7 +4040,9 @@ extend Sema:
                                 self.error("[M-7] Cannot assign 'none' to '" + name + "' which has type '" + m7_ty_name + "'. Only Option[T] can hold 'none'. FIX: Use 'Option[" + m7_ty_name + "]' as the type, or give '" + name + "' a real initial value.")
                         case _: pass
                 mut ty = AstType.init("void")
-                if ty_ptr as usize != 0 as usize: ty = ty_ptr.read()
+                if ty_ptr as usize != 0 as usize:
+                    ty = ty_ptr.read()
+                    self._check_ty_arity(ty_ptr, "'" + name + "' declaration", 0)
                 mut hval = self.lower_expr(val_ptr)
                 if ty.name != "void" and ty.name != "None": hval = self._patch_empty_dict_hint(hval, ty)
                 if ty.name == "void" or ty.name == "None": ty = hir_expr_type(hval)

@@ -1,0 +1,10 @@
+# EXPECT: [G-2]
+# Wrong arity on a local annotation of a user generic class is rejected too.
+
+class Pair[A, B]:
+    pub first: A
+    pub second: B
+
+def main():
+    mut p: Pair[int, int, int] = Pair[int, int]()
+    print("unreachable")
