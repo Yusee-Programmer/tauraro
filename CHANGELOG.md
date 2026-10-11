@@ -37,6 +37,9 @@ added here as each phase lands.
   raw `r||s` signatures, SEC1/PKCS#8/SPKI keys (compressed and uncompressed points, on-curve validation),
   key generation. RFC 6979 vectors, OpenSSL signatures/ECDH secrets and Python `cryptography`'s deterministic
   ECDSA all agree (`tests/lang/122_ecdsa.tr`). Not constant-time (documented).
+- **`std.net.http2`** — HTTP/2 (RFC 9113): frame codec, stream state machine, flow control, sans-IO `H2Conn`,
+  h2c prior-knowledge `H2Client` and minimal `H2Server`. Verified over loopback and with `curl --http2-prior-knowledge`
+  (`tests/lang/131_http2_codec.tr`, `132_http2_loopback.tr`). No TLS/ALPN (runtime TLS lacks ALPN).
 - **`std.net.hpack`** — HPACK (RFC 7541): `HpackEncoder` / `HpackDecoder` / `HpackHeaders`,
   static + dynamic tables, Huffman coding, never-indexed headers, strict error-reporting decoder.
   All RFC 7541 Appendix C examples verified in both directions (`tests/lang/130_hpack.tr`).

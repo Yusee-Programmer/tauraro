@@ -797,3 +797,45 @@ Huffman mode via `set_huffman(HUFF_OFF() | HUFF_AUTO() | HUFF_ALWAYS())`.
 All of RFC 7541 Appendix C is reproduced byte for byte (`tests/lang/130_hpack.tr`).
 Header values are binary-safe (NUL and bytes ≥ 0x80 survive).
 
+---
+
+## HTTP/2 — `std.net.http2`
+
+```tauraro
+from std.net.http2 import H2Client, H2Server, H2Request, H2Response
+from std.net.hpack import HpackHeaders
+
+# client: cleartext HTTP/2 with prior knowledge (RFC 9113 section 3.3, "h2c")
+mut c = H2Client.connect("127.0.0.1", 8080)
+if c.ok:
+    mut r = c.get("/hello")                       # H2Response: status, headers, body, trailers
+    if r.is_ok(): print(r.status.to_string() + " " + r.body)
+    mut hs = HpackHeaders.init()
+    hs.add("x-trace", "abc")
+    mut r2 = c.request("POST", "/echo", hs, "payload")
+    mut sid = c.start("GET", "/slow", hs, "")     # several streams in flight ...
+    mut r3 = c.wait(sid)                          # ... collect them in any order
+    c.close()
+
+# server: one connection at a time; the connection multiplexes any number of streams
+def handle(req: H2Request, resp: H2Response):
+    resp.status = 200
+    resp.body = "hi " + req.path
+mut s = H2Server.listen("127.0.0.1", 8080)
+s.serve_once(handle, 1000)                        # waits <= 1 s for a client, serves it
+```
+
+Layers: `h2_frame()` / `H2FrameReader` (9-byte frame header codec), `H2Conn` (sans-IO
+connection state machine: feed bytes with `receive()`, collect output with `take_output()`),
+and the blocking `H2Client` / `H2Server` wrappers over `std.net.tcp` with bounded waits.
+Implemented: connection preface, SETTINGS (+ACK), HEADERS/CONTINUATION (split to the peer's
+MAX_FRAME_SIZE), DATA (padding), PING, GOAWAY, RST_STREAM, WINDOW_UPDATE with connection and
+stream flow control in both directions, stream states, trailers, 1xx skipping, header validation
+(lower-case names, pseudo-header rules, no connection-specific headers), concurrent-stream limits,
+and HPACK via `std.net.hpack`. PRIORITY frames are parsed and ignored; PUSH_PROMISE is refused.
+Bodies are binary-safe.
+
+Limits: **TLS + ALPN (`h2` over https) is not available** (the runtime TLS has no ALPN), so only h2c with
+prior knowledge works; `H2Server` serves one connection at a time; IPv4 only; no server push or
+priorities. Tested in-process (`tests/lang/131_http2_codec.tr`, `132_http2_loopback.tr`) and against
+`curl --http2-prior-knowledge` (opt-in: `TAURARO_H2_CURL=1`).

@@ -1,0 +1,322 @@
+# tests/lang/132_http2_loopback.tr
+# std.net.http2 over real loopback sockets: H2Client <-> H2Server in one process
+# (the server runs on its own thread). Every wait is bounded (client idle timeouts,
+# server accept polling with a stop flag and a hard cap). The port is searched in
+# a small range. Optional interop with the system curl (nghttp2) runs only when
+# TAURARO_H2_CURL=1 is set in the environment.
+
+from std.test import TestRunner
+from std.core.string import StringBuilder
+from std.sys.time import Clock
+from std.sys.env import Env
+from std.sys.process import Process
+from std.net.tcp import TcpStream, TcpListener
+from std.net.hpack import HpackHeaders
+from std.net.http2 import H2Client, H2Server, H2Request, H2Response, H2FrameReader
+
+class SrvState implements Sendable:
+    pub base_port: int
+    pub port:      Atomic[int]     # 0 until bound, -1 if no port could be bound
+    pub stop:      Atomic[int]
+    pub conns:     Atomic[int]
+    pub reqs:      Atomic[int]
+
+extend SrvState:
+    pub def init(base_port: int) -> SrvState:
+        mut s = SrvState()
+        s.base_port = base_port
+        s.port      = Atomic.new(0)
+        s.stop      = Atomic.new(0)
+        s.conns     = Atomic.new(0)
+        s.reqs      = Atomic.new(0)
+        return s
+
+# Deterministic binary payload (contains NULs and high bytes).
+def payload(n: int, seed: int) -> str:
+    mut sb = StringBuilder.init(n + 8)
+    mut x = seed
+    mut i = 0
+    while i < n:
+        x = (x * 1103515245 + 12345) & 0x7FFFFFFF
+        sb.append_char((x >> 8) & 255)
+        i = i + 1
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+def same(a: str, b: str) -> bool:
+    if a.len() != b.len(): return false
+    mut pa = a as Pointer[char]
+    mut pb = b as Pointer[char]
+    mut i = 0
+    while i < a.len():
+        unsafe:
+            if pa.offset(i).read() as int != pb.offset(i).read() as int: return false
+        i = i + 1
+    return true
+
+def route(req: H2Request, resp: H2Response):
+    mut p = req.path
+    if p == "/hello":
+        resp.status = 200
+        resp.headers.add("content-type", "text/plain")
+        resp.body = "hello h2"
+    elif p == "/echo":
+        resp.status = 200
+        resp.headers.add("content-type", req.header("content-type"))
+        resp.headers.add("x-method", req.method)
+        resp.headers.add("x-echo-len", req.body.len().to_string())
+        resp.body = req.body
+    elif p == "/headers":
+        mut sb = StringBuilder.init(256)
+        mut i = 0
+        while i < req.headers.len():
+            sb.append(req.headers.name_at(i))
+            sb.append("=")
+            sb.append(req.headers.value_at(i))
+            sb.append(";")
+            i = i + 1
+        resp.body = sb.to_owned()
+        sb.free()
+        resp.headers.add("x-authority", req.authority)
+        resp.headers.add("x-scheme", req.scheme)
+    elif p == "/big":
+        resp.body = payload(700000, 9)
+    elif p == "/binary":
+        resp.body = payload(100000, 21)
+        resp.headers.add("content-type", "application/octet-stream")
+    elif p == "/trailers":
+        resp.body = "t"
+        resp.trailers.add("x-sum", "42")
+    elif p == "/empty":
+        resp.status = 204
+    elif p.starts_with("/status/"):
+        resp.status = p.slice(8, p.len()).parse_int()
+        resp.body = "status page"
+    else:
+        resp.status = 404
+        resp.body = "not found: " + p
+
+def srv_run(st: Shared[SrvState]):
+    mut srv = H2Server.listen("127.0.0.1", st.base_port)
+    mut tries = 0
+    while not srv.ok and tries < 30:
+        tries = tries + 1
+        srv = H2Server.listen("127.0.0.1", st.base_port + tries)
+    if not srv.ok:
+        st.port.store(-1)
+        return
+    srv.idle_ms = 3000
+    st.port.store(srv.port)
+    mut cap = Clock.now_ms() + 60000
+    while st.stop.load() == 0 and Clock.now_ms() < cap:
+        if srv.serve_once(route, 50):
+            st.conns.add(1)
+    st.reqs.store(srv.requests)
+    srv.close()
+
+def main():
+    mut t = TestRunner.init("132_http2_loopback")
+    shared st = SrvState.init(19830)
+    mut srv_t = Thread.spawn(srv_run, st)
+    mut waited = 0
+    while st.port.load() == 0 and waited < 3000:
+        Clock.sleep_ms(10)
+        waited = waited + 10
+    mut port = st.port.load()
+    t.assert_gt_int(port, 0, "h2 server bound a loopback port")
+    if port <= 0:
+        st.stop.store(1)
+        srv_t.join()
+        t.summary()
+        return
+
+    t.section("basic requests")
+    mut c = H2Client.connect("127.0.0.1", port)
+    t.assert_true(c.ok, "h2c prior-knowledge connect")
+    c.timeout_ms = 8000
+    mut r1 = c.get("/hello")
+    t.assert_true(r1.is_ok(), "GET /hello ok")
+    t.assert_eq_int(r1.status, 200, "status 200")
+    t.assert_eq_str(r1.body, "hello h2", "body")
+    t.assert_eq_str(r1.header("content-type"), "text/plain", "response header")
+    mut r2 = c.get("/nope")
+    t.assert_eq_int(r2.status, 404, "404 for unknown path")
+    t.assert_eq_str(r2.body, "not found: /nope", "404 body")
+    mut r3 = c.get("/status/503")
+    t.assert_eq_int(r3.status, 503, "arbitrary status")
+    mut r4 = c.get("/empty")
+    t.assert_eq_int(r4.status, 204, "204")
+    t.assert_eq_int(r4.body.len(), 0, "no body")
+    mut r5 = c.get("/trailers")
+    t.assert_eq_str(r5.body, "t", "body before trailers")
+    t.assert_eq_str(r5.trailers.get("x-sum"), "42", "trailer received")
+
+    t.section("headers")
+    mut hh = HpackHeaders.init()
+    hh.add("X-Custom", "Value One")
+    hh.add("Accept", "text/html")
+    hh.add("Cookie", "a=1")
+    hh.add("Cookie", "b=2")
+    hh.add_sensitive("Authorization", "Bearer sekret")
+    mut rh = c.request("GET", "/headers", hh, "")
+    t.assert_eq_int(rh.status, 200, "headers request ok")
+    t.assert_eq_str(rh.body, "x-custom=Value One;accept=text/html;cookie=a=1;cookie=b=2;authorization=Bearer sekret;", "request headers arrive lower-cased, in order, repeats kept")
+    t.assert_eq_str(rh.header("x-authority"), "127.0.0.1:" + port.to_string(), ":authority set from the connection")
+    t.assert_eq_str(rh.header("x-scheme"), "http", ":scheme")
+
+    t.section("bodies, binary safety, flow control")
+    mut up = payload(1048576, 5)
+    mut re1 = c.post("/echo", "application/octet-stream", up)
+    t.assert_true(re1.is_ok(), "1 MiB echo ok")
+    t.assert_eq_int(re1.body.len(), 1048576, "echo length")
+    t.assert_true(same(re1.body, up), "1 MiB binary body round-trips intact")
+    t.assert_eq_str(re1.header("x-echo-len"), "1048576", "server saw the whole body")
+    t.assert_eq_str(re1.header("x-method"), "POST", "method passed through")
+    mut rb = c.get("/big")
+    t.assert_eq_int(rb.body.len(), 700000, "700000-byte response")
+    t.assert_true(same(rb.body, payload(700000, 9)), "large download intact")
+    mut rbin = c.get("/binary")
+    t.assert_true(same(rbin.body, payload(100000, 21)), "binary download intact")
+    mut rz = c.post("/echo", "text/plain", "")
+    t.assert_eq_int(rz.status, 200, "POST with empty body")
+    t.assert_eq_int(rz.body.len(), 0, "empty echo")
+
+    t.section("multiplexing")
+    mut hs0 = HpackHeaders.init()
+    mut ids: List[int] = []
+    ids.append(c.start("GET", "/hello", hs0, ""))
+    ids.append(c.start("POST", "/echo", hs0, payload(30000, 1)))
+    ids.append(c.start("GET", "/status/418", hs0, ""))
+    ids.append(c.start("POST", "/echo", hs0, payload(300000, 2)))
+    ids.append(c.start("GET", "/trailers", hs0, ""))
+    ids.append(c.start("GET", "/binary", hs0, ""))
+    mut distinct = true
+    mut k = 0
+    while k < len(ids):
+        if ids[k] <= 0: distinct = false
+        if k > 0 and ids[k] <= ids[k - 1]: distinct = false
+        k = k + 1
+    t.assert_true(distinct, "six streams with increasing odd ids")
+    mut m5 = c.wait(ids[5])
+    mut m4 = c.wait(ids[4])
+    mut m3 = c.wait(ids[3])
+    mut m2 = c.wait(ids[2])
+    mut m1 = c.wait(ids[1])
+    mut m0 = c.wait(ids[0])
+    t.assert_true(same(m5.body, payload(100000, 21)), "stream 6 (binary) intact when awaited first")
+    t.assert_eq_str(m4.trailers.get("x-sum"), "42", "stream 5 trailers")
+    t.assert_true(same(m3.body, payload(300000, 2)), "stream 4 echo of 300000 bytes intact")
+    t.assert_eq_int(m2.status, 418, "stream 3 status")
+    t.assert_true(same(m1.body, payload(30000, 1)), "stream 2 echo intact")
+    t.assert_eq_str(m0.body, "hello h2", "stream 1 body")
+
+    t.section("many sequential requests on one connection")
+    mut seq_ok = true
+    mut n = 0
+    while n < 300:
+        mut rr = c.get("/status/" + (200 + n % 50).to_string())
+        if rr.status != 200 + n % 50: seq_ok = false
+        n = n + 1
+    t.assert_true(seq_ok, "300 sequential requests (HPACK tables and stream ids stay in step)")
+    t.assert_gt_int(c.conn.next_stream, 600, "stream ids advanced past 600")
+
+    t.section("ping, cancel")
+    t.assert_true(c.ping(), "PING acknowledged")
+    mut cid = c.start("GET", "/big", hs0, "")
+    c.cancel(cid)
+    mut rcx = c.get("/hello")
+    t.assert_eq_str(rcx.body, "hello h2", "connection still healthy after cancelling a stream")
+    c.close()
+    t.assert_false(c.ok, "closed client is not ok")
+
+    t.section("second connection after a graceful close")
+    mut c2 = H2Client.connect("127.0.0.1", port)
+    t.assert_true(c2.ok, "reconnect")
+    mut q = c2.get("/hello")
+    t.assert_eq_str(q.body, "hello h2", "served on a fresh connection")
+    c2.close()
+    t.assert_true(st.conns.load() >= 1, "server counted connections")
+
+    t.section("failure modes")
+    mut dead = H2Client.connect("127.0.0.1", 1)
+    t.assert_false(dead.ok, "connect to a closed port fails")
+    t.assert_true(dead.err.len() > 0, "with an error message")
+    mut rdead = dead.get("/")
+    t.assert_false(rdead.is_ok(), "requests on a dead client fail cleanly")
+    # a peer that never speaks: connection succeeds (kernel backlog) but the response times out
+    mut mute = TcpListener.listen("127.0.0.1", port + 40)
+    if mute.is_listening():
+        mut cm = H2Client.connect("127.0.0.1", port + 40)
+        t.assert_true(cm.ok, "connected to a silent server")
+        cm.timeout_ms = 300
+        mut t0 = Clock.now_ms()
+        mut rm = cm.get("/")
+        t.assert_false(rm.is_ok(), "silent server -> error")
+        t.assert_true(rm.error.starts_with("timeout"), "reported as a timeout: " + rm.error)
+        t.assert_true(Clock.now_ms() - t0 < 5000, "gave up promptly")
+        cm.close()
+        mute.close()
+    else:
+        t.skip("silent-server port busy")
+    # speaking HTTP/1.1 to the h2 server gets GOAWAY(PROTOCOL_ERROR)
+    mut raw = TcpStream.connect("127.0.0.1", port)
+    t.assert_true(raw.is_connected(), "raw client connected")
+    raw.send("GET / HTTP/1.1\r\nHost: x\r\n\r\n")
+    raw.set_nonblocking()
+    mut rd = H2FrameReader.init(16384)
+    mut saw_goaway = false
+    mut goaway_code = -1
+    mut until = Clock.now_ms() + 4000
+    mut done = false
+    while not done and Clock.now_ms() < until:
+        mut chunk = raw.recv_nb(4096)
+        if raw.would_block():
+            Clock.sleep_ms(2)
+            continue
+        if chunk.len() == 0:
+            done = true
+        else:
+            rd.feed(chunk)
+            mut more = true
+            while more:
+                mut fr: Result[bool, str] = rd.next()
+                if fr.is_err or not fr.ok:
+                    more = false
+                elif rd.ftype == 7:
+                    saw_goaway = true
+                    mut pl = rd.payload
+                    unsafe:
+                        mut pp = pl as Pointer[char]
+                        goaway_code = (pp.offset(7).read() as int) & 255
+    raw.close()
+    t.assert_true(saw_goaway, "server answered the HTTP/1.1 text with GOAWAY")
+    t.assert_eq_int(goaway_code, 1, "error code PROTOCOL_ERROR")
+
+    # healthy again afterwards
+    mut c3 = H2Client.connect("127.0.0.1", port)
+    mut q3 = c3.get("/hello")
+    t.assert_eq_str(q3.body, "hello h2", "server still serves after a bad client")
+    c3.close()
+
+    t.section("interop with curl (opt-in: TAURARO_H2_CURL=1)")
+    mut env = Env.init()
+    if env.get_var("TAURARO_H2_CURL") == "1":
+        mut url = "http://127.0.0.1:" + port.to_string()
+        mut out1 = Process.shell_output("curl -s --max-time 10 --http2-prior-knowledge -w ' [%{http_code} %{http_version}]' " + url + "/hello")
+        t.assert_eq_str(out1, "hello h2 [200 2]", "curl --http2-prior-knowledge GET")
+        mut out2 = Process.shell_output("curl -s --max-time 10 --http2-prior-knowledge -d 'abc=def&x=1' -w ' [%{http_code}]' " + url + "/echo")
+        t.assert_eq_str(out2, "abc=def&x=1 [200]", "curl POST body echoed (curl sends HPACK-Huffman headers)")
+        mut out3 = Process.shell_output("curl -s --max-time 10 --http2-prior-knowledge -H 'X-Foo: bar' -H 'Accept: */*' " + url + "/headers")
+        t.assert_true(out3.contains("x-foo=bar;"), "curl custom header arrives")
+        mut out4 = Process.shell_output("curl -s --max-time 20 --http2-prior-knowledge " + url + "/big | wc -c")
+        t.assert_eq_str(out4.trim(), "700000", "curl downloads 700000 bytes (flow control against nghttp2)")
+        mut out5 = Process.shell_output("curl -s --max-time 10 --http2-prior-knowledge -o /dev/null -w '%{http_code}' " + url + "/nope")
+        t.assert_eq_str(out5, "404", "curl sees the 404")
+    else:
+        t.skip("curl interop not requested")
+
+    st.stop.store(1)
+    srv_t.join()
+    t.assert_true(st.reqs.load() > 300, "server handled all requests")
+    t.summary()
