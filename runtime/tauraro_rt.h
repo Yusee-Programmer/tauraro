@@ -7292,7 +7292,16 @@ static inline void _tr_init_console(void) {
     SetConsoleCP(65001);
 }
 #else
-static inline void _tr_init_console(void) {}
+#if !defined(TAURARO_BARE) && !defined(__wasi__)
+#include <signal.h>
+#endif
+/* POSIX: a write()/send() to a peer-closed socket or pipe must surface as an error
+ * return (EPIPE), not kill the whole process with SIGPIPE (bug log #13). */
+static inline void _tr_init_console(void) {
+#if !defined(TAURARO_BARE) && !defined(__wasi__) && defined(SIGPIPE)
+    signal(SIGPIPE, SIG_IGN);
+#endif
+}
 #endif
 
 
