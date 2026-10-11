@@ -1,0 +1,13 @@
+# EXPECT: [F-4]
+# ...and a `throws` function cannot be passed where a plain function type is expected.
+
+def risky(v: int) throws str -> int:
+    if v > 2:
+        raise("too big")
+    return v
+
+def run(op: def(int) -> int, v: int) -> int:
+    return op(v)
+
+def main():
+    print(run(risky, 1))

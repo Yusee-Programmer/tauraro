@@ -1,0 +1,15 @@
+# EXPECT: [F-4]
+# A plain function cannot be passed where a `throws` function type is expected: the C return
+# types differ (bare value vs Result), so the compiler rejects it instead of miscompiling.
+
+def plain(v: int) -> int:
+    return v + 1
+
+def run(op: def(int) throws str -> int, v: int) -> int:
+    r = op(v)
+    if r.is_err:
+        return -1
+    return r.ok
+
+def main():
+    print(run(plain, 1))

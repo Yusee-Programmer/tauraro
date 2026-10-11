@@ -1,0 +1,7 @@
+# EXPECT: [F-4]
+# Same rule for a closure literal and for an annotated local.
+
+def main():
+    mut f: def(int) throws str -> int = def (v: int) -> int:
+        return v
+    print("unreachable")

@@ -1,0 +1,55 @@
+# EXPECT: pass
+# Compatible function-value passing: throws -> throws and plain -> plain (named functions,
+# closure literals, locals, static-style references and method arguments) all compile and run.
+
+def checked(v: int) throws str -> int:
+    if v > 2:
+        raise("too big")
+    return v + 1
+
+def plain(v: int) -> int:
+    return v * 2
+
+def run_throws(op: def(int) throws str -> int, v: int) -> int:
+    r = op(v)
+    if r.is_err:
+        return -1
+    return r.ok
+
+def run_plain(op: def(int) -> int, v: int) -> int:
+    return op(v)
+
+class Runner:
+    pub n: int
+
+extend Runner:
+    pub def go(self, op: def(int) throws str -> int) -> int:
+        r = op(self.n)
+        if r.is_err:
+            return -1
+        return r.ok
+
+from std.core.io import _tr_exit
+
+def want(got: int, exp: int, code: int):
+    if got != exp:
+        print("FAIL " + code.to_str())
+        _tr_exit(code)
+
+def main():
+    want(run_throws(checked, 1), 2, 1)
+    want(run_throws(checked, 9), -1, 2)
+    want(run_plain(plain, 4), 8, 3)
+    c = def (v: int) throws str -> int:
+        return v + 100
+    want(run_throws(c, 1), 101, 4)
+    p = def (v: int) -> int:
+        return v - 1
+    want(run_plain(p, 5), 4, 5)
+    mut held: def(int) throws str -> int = checked
+    want(run_throws(held, 2), 3, 6)
+    mut rn = Runner()
+    rn.n = 2
+    want(rn.go(checked), 3, 7)
+    want(rn.go(c), 102, 8)
+    print("ok")

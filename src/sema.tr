@@ -3371,6 +3371,41 @@ extend Sema:
     # [G-1] Enforce generic bounds at a call site: for each `T: Iface` constraint on
     # the callee, infer T's concrete type from an argument whose parameter is declared
     # as T, and require it to satisfy every bound interface.
+    # ---- [F-4] function-value `throws` agreement ---------------------------------------
+    # A `throws` function returns the uniform C `Result`; a plain one returns its bare value.
+    # The two are different function-pointer types, so a `def(...) throws E -> R` slot only
+    # accepts `throws` functions/closures and a `def(...) -> R` slot only plain ones.
+    # 1 = a `throws` function value, 0 = a plain function value, -1 = not a function value.
+    pub def fn_value_throws_kind(self, ty: AstType) -> int:
+        if ty.name != "def" or ty.args.len == 0: return 0 - 1
+        if ty.args.get(ty.args.len - 1).read().is_throws: return 1
+        return 0
+
+    pub def check_fn_value_throws(self, expected_p: Pointer[AstType], actual: AstType, what: str):
+        if expected_p as usize == 0 as usize: return
+        mut expected = expected_p.read()
+        mut ek = self.fn_value_throws_kind(expected)
+        mut ak = self.fn_value_throws_kind(actual)
+        if ek < 0 or ak < 0 or ek == ak: return
+        if ek == 1:
+            self.error("[F-4] " + what + " expects a `throws` function value (`def(...) throws E -> R`) but a plain function/closure was passed. The two have different return types (a throws function returns a Result), so they cannot be exchanged.\n      FIX: declare the argument `throws` too (`def (...) throws E -> R:` / `def f(...) throws E -> R`), or change the parameter type to a plain `def(...) -> R`.")
+        else:
+            self.error("[F-4] " + what + " expects a plain function value (`def(...) -> R`) but a `throws` function/closure was passed. The two have different return types (a throws function returns a Result), so they cannot be exchanged.\n      FIX: handle the error inside a plain wrapper (`def (...) -> R:` that checks `.is_err`), or change the parameter type to `def(...) throws E -> R`.")
+
+    # Check every argument of a call to the declared function `fname` against its `def(...)` params.
+    pub def check_call_fn_args(self, fname: str, hargs: Vec[Pointer[HirExpr]]):
+        if not self.fn_defs.contains(fname): return
+        mut fd = self.fn_defs.get(fname)
+        if fd.generics.len > 0: return
+        mut sk = 0
+        if fd.params.len > 0 and fd.params.get(0).name == "self": sk = 1
+        mut pi = sk
+        while pi < fd.params.len:
+            mut aidx = pi - sk
+            if aidx < hargs.len:
+                self.check_fn_value_throws(fd.params.get(pi).ty, hir_expr_type(hargs.get(aidx)), "argument " + (aidx + 1).to_str() + " of '" + fname + "()'")
+            pi = pi + 1
+
     pub def check_call_bounds(self, fname: str, hargs: Vec[Pointer[HirExpr]]):
         if not self.fn_defs.contains(fname): return
         mut fd = self.fn_defs.get(fname)
@@ -3548,7 +3583,12 @@ extend Sema:
                 while _pi < f.params.len:
                     _fnty.args.push(f.params.get(_pi).ty)
                     _pi = _pi + 1
-                _fnty.args.push(_f_ret)
+                # A `throws` function used as a value has the call-site type Result[R, E]
+                # (flagged is_throws), matching `def(...) throws E -> R` ([F-4]).
+                if f.throws_ty as usize != 0 as usize and f.throws_ty.read().name != "":
+                    _fnty.args.push(box_asttype(throws_result_type(_f_ret.read(), f.throws_ty)))
+                else:
+                    _fnty.args.push(_f_ret)
                 self.fn_sigs.insert(f.name, _fnty)
                 self.fn_defs.insert(f.name, f)
                 # #14: trailing variadic param `def f(args...)` / `def f(args: T...)`
@@ -4266,6 +4306,8 @@ extend Sema:
                     self._check_ty_arity(ty_ptr, "'" + name + "' declaration", 0)
                 mut hval = self.lower_expr(val_ptr)
                 if ty.name != "void" and ty.name != "None": hval = self._patch_empty_dict_hint(hval, ty)
+                if ty_ptr as usize != 0 as usize and val_ptr as usize != 0 as usize:
+                    self.check_fn_value_throws(ty_ptr, hir_expr_type(hval), "the initializer of '" + name + "'")
                 if ty.name == "void" or ty.name == "None": ty = hir_expr_type(hval)
                 # plain-identifier RHS of non-primitive type = ownership move
                 # Skip for shared lets (shared = clone via refcount, not a move)
@@ -5503,6 +5545,7 @@ extend Sema:
                     case Expr.EIdent(n):
                         # [G-1] generic bounds: verify the inferred type args satisfy them.
                         self.check_call_bounds(n, hl)
+                        self.check_call_fn_args(n, hl)
                         if n == "main":
                             self.error("[E-1] Explicit call to 'main()' is forbidden. The compiler automatically invokes main() as the program entry point. Remove the 'main()' call from your source.")
                             return box_hirexpr(HirExpr.ECall(hcallee, hl, ret_ty))
@@ -6311,6 +6354,14 @@ extend Sema:
                                 if _mpc == hl.len:
                                     ret_ty = _mdef.ret_ty.read()
                                     _mdef_throws_ty = _mdef.throws_ty
+                                    if _cls.generics.len == 0 and _mdef.generics.len == 0:
+                                        mut _fa_sk = 0
+                                        if _mdef.params.len > 0 and _mdef.params.get(0).name == "self": _fa_sk = 1
+                                        mut _fa_i = _fa_sk
+                                        while _fa_i < _mdef.params.len:
+                                            if _fa_i - _fa_sk < hl.len:
+                                                self.check_fn_value_throws(_mdef.params.get(_fa_i).ty, hir_expr_type(hl.get(_fa_i - _fa_sk)), "argument " + (_fa_i - _fa_sk + 1).to_str() + " of '" + hobj_ty.name + "." + method + "()'")
+                                            _fa_i = _fa_i + 1
                                 elif ret_ty.name == "void":
                                     ret_ty = _mdef.ret_ty.read()  # fallback: first match
                                     _mdef_throws_ty = _mdef.throws_ty
@@ -6385,7 +6436,10 @@ extend Sema:
                                     _pmv_fnty.args.push(_pmv_m.params.get(_pmv_pi).ty)
                                     _pmv_pi = _pmv_pi + 1
                                 if _pmv_m.ret_ty as usize != 0 as usize:
-                                    _pmv_fnty.args.push(_pmv_m.ret_ty)
+                                    if _pmv_m.throws_ty as usize != 0 as usize and _pmv_m.throws_ty.read().name != "":
+                                        _pmv_fnty.args.push(box_asttype(throws_result_type(_pmv_m.ret_ty.read(), _pmv_m.throws_ty)))
+                                    else:
+                                        _pmv_fnty.args.push(_pmv_m.ret_ty)
                                 else:
                                     _pmv_fnty.args.push(box_asttype(AstType.init("void")))
                                 return box_hirexpr(HirExpr.EIdent(_pmv_cn + "_" + prop, _pmv_fnty, false))
@@ -7133,6 +7187,15 @@ extend Sema:
         # Gap 4: 'ref T' and 'mut ref T' params are borrow annotations, not owning values
         if name == "ref" or name == "mut_ref": return true
         return false
+
+# Call-site type of a `throws E -> R` function VALUE: Result[R, E], flagged is_throws
+# (same shape the parser builds for `def(...) throws E -> R`).
+pub def throws_result_type(ret: AstType, err: Pointer[AstType]) -> AstType:
+    mut rt = AstType.init("Result")
+    rt.args.push(box_asttype(ret))
+    rt.args.push(err)
+    rt.is_throws = true
+    return rt
 
 pub def box_asttype(t: AstType) -> Pointer[AstType]:
     unsafe:
