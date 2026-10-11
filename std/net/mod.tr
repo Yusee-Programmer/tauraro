@@ -10,6 +10,9 @@
 #   from std.net.dns         import Dns
 #   from std.net.smtp        import SmtpClient, SmtpResponse
 #   from std.net.websocket   import WebSocketClient, WebSocketServer, WsConn, WsMessage
+#   from std.net.cookie      import CookieJar, Cookie
+#   from std.net.multipart   import FormBuilder, MultipartBuilder
+#   from std.net.client      import HttpSession, ClientRequest, HttpReply, HeaderList
 
 from std.net.tcp         import TcpStream
 from std.net.tcp         import TcpListener
@@ -31,3 +34,11 @@ from std.net.websocket   import WebSocketClient
 from std.net.websocket   import WebSocketServer
 from std.net.websocket   import WsConn
 from std.net.websocket   import WsMessage
+from std.net.cookie      import CookieJar
+from std.net.cookie      import Cookie
+from std.net.multipart   import FormBuilder
+from std.net.multipart   import MultipartBuilder
+from std.net.client      import HttpSession
+from std.net.client      import ClientRequest
+from std.net.client      import HttpReply
+from std.net.client      import HeaderList

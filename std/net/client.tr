@@ -1,0 +1,1166 @@
+# std.net.client -- HttpSession: an HTTP/1.1 client with redirects, cookies,
+# default headers, timeouts, form/multipart bodies and streaming downloads.
+#
+#   from std.net.client import HttpSession
+#   from std.net.multipart import FormBuilder, MultipartBuilder
+#
+#   mut s = HttpSession.init()
+#   s.enable_cookies()                       # remember Set-Cookie across requests/redirects
+#   s.set_header("Accept", "application/json")
+#   s.set_timeout(5000)                      # ms without data before giving up
+#   mut r = s.get("http://127.0.0.1:8080/login")
+#   if r.is_ok(): print(r.body)
+#   r.header("content-type")  r.set_cookies()  r.url  r.redirects  r.history
+#
+#   mut f = FormBuilder.init()
+#   f.add("user", "ann")
+#   s.post_form("http://host/api", f)
+#
+#   s.download_to_file("http://host/big.bin", "out.bin")   # streamed, chunked-aware
+#   s.stream_get("http://host/feed", on_chunk)             # on_chunk: def(str) -> bool
+#
+# Why "HttpSession" and not "HttpClient": std.net.http.HttpClient (one fixed
+# host:port, HTTP/1.0, a single recv) already exists and is kept unchanged for
+# compatibility. HttpSession is URL-based, so it can follow redirects across
+# hosts and keep cookies.
+#
+# Behaviour
+#   * HTTP/1.1, one connection per request ("Connection: close"), so the end of
+#     a body is framed by Content-Length, chunked encoding, or EOF. The whole
+#     response is read in a loop (the old client did one recv()).
+#   * Redirects: 301/302/303/307/308 with a Location header are followed up to
+#     max_redirects (default 10; 0 disables). 303 -> GET (body dropped, HEAD
+#     stays HEAD); 301/302 turn POST into GET (browser behaviour; switch off with
+#     set_rewrite_post_on_301_302(false) to keep the method); 307/308 keep method
+#     and body. Authorization / Proxy-Authorization and any explicit Cookie
+#     header are dropped when a hop leaves the original host, changes port, or
+#     downgrades https -> http. Cookies from the jar are re-evaluated per hop.
+#     Too many hops -> reply.error = "too many redirects".
+#   * Timeouts: set_timeout(ms) = longest wait for more data (idle timeout, also
+#     bounds the wait for the response header); set_total_timeout(ms) = wall
+#     clock limit for the whole call including redirects (0 = none).
+#   * Streaming: download_to_file writes to "<path>.part" while receiving and
+#     renames it on success (a failed/aborted download never leaves a partial
+#     file at `path`); the body is only written for 2xx responses, otherwise it
+#     is returned in reply.body. stream_get hands each chunk to a callback.
+#
+# Limitations (honest list)
+#   * TCP connect is blocking with no connect timeout (the OS limit applies);
+#     timeouts only cover waiting for response bytes.
+#   * https:// goes through the runtime's _tr_tls_* layer (dlopen'd OpenSSL),
+#     which encrypts but DOES NOT VERIFY server certificates or host names.
+#     So https is refused unless you opt in with set_allow_unverified_tls(true).
+#     It also cannot honour read timeouts (blocking SSL_read). Not exercised by
+#     the offline test-suite (no network access there).
+#   * No compression: requests send "Accept-Encoding: identity".
+#   * No keep-alive / connection reuse, no proxies, no Expect: 100-continue,
+#     no userinfo ("user:pw@host") or IPv6-literal URLs, IPv4 only (the
+#     runtime resolver is AF_INET).
+#   * In-memory bodies are Tauraro `str` (NUL-terminated): a body containing NUL
+#     bytes is cut at the first NUL. download_to_file is binary-safe (bytes go
+#     to disk from raw buffers); callbacks receive `str` chunks, so they are
+#     only NUL-safe for text.
+#   * Request bodies are `str` too (same NUL limit).
+
+from std.core.vec import Vec
+from std.core.string import StringBuilder
+from std.string.str import Str
+from std.string.fmt import Fmt
+from std.sys.time import Clock
+from std.sys.fs import Fs
+from std.encoding.base64 import Base64
+from std.net.tcp import TcpStream
+from std.net.url import Url
+from std.net.cookie import CookieJar
+from std.net.multipart import FormBuilder
+from std.net.multipart import MultipartBuilder
+
+extern "C":
+    def _tr_c_malloc(size: int) -> Pointer[char]
+    def _tr_c_realloc(ptr: Pointer[char], size: int) -> Pointer[char]
+    def _tr_c_free(ptr: Pointer[char])
+    def _tr_c_memcpy(dst: Pointer[char], src: Pointer[char], n: int)
+    def _tr_c_memmove(dst: Pointer[char], src: Pointer[char], n: int)
+    def _tr_str_wrap_len(s: Pointer[char], blen: int) -> str
+    def _tr_tcp_recv_nb(fd: int, buf: Pointer[char], cap: int) -> int
+    def _tr_c_fopen(path: str, mode: str) -> Pointer[char]
+    def _tr_c_fclose(fp: Pointer[char]) -> int
+    def _tr_c_fwrite(buf: Pointer[char], size: int, nmemb: int, fp: Pointer[char]) -> int
+    def _tr_tls_connect(host: str, port: int) -> Pointer[char]
+    def _tr_tls_send(handle: Pointer[char], data: str) -> int
+    def _tr_tls_recv(handle: Pointer[char], cap: int) -> str
+    def _tr_tls_close(handle: Pointer[char])
+
+# ---------------------------------------------------------------------------
+# Small helpers
+# ---------------------------------------------------------------------------
+
+def _hdr_eq(a: str, b: str) -> bool:
+    mut la = Str.to_lower(a)
+    mut lb = Str.to_lower(b)
+    return Str.eq(la, lb)
+
+# Remove CR/LF so a value can never inject extra header lines.
+def _clean_hdr(s: str) -> str:
+    mut n = Str.len(s)
+    mut bad = false
+    mut i = 0
+    while i < n:
+        mut c = Str.char_at(s, i)
+        if c == 13 or c == 10: bad = true
+        i = i + 1
+    if not bad: return s
+    mut sb = StringBuilder.init(n + 1)
+    mut j = 0
+    while j < n:
+        mut c2 = Str.char_at(s, j)
+        if c2 != 13 and c2 != 10: sb.append_char(c2)
+        j = j + 1
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+def _noop_chunk(chunk: str) -> bool:
+    return true
+
+# ---------------------------------------------------------------------------
+# HeaderList: ordered, case-insensitive, repeatable HTTP headers
+# ---------------------------------------------------------------------------
+
+pub class HeaderList:
+    pub names:  Vec[str]
+    pub values: Vec[str]
+
+extend HeaderList:
+    pub def init() -> HeaderList:
+        mut h = HeaderList()
+        h.names  = Vec[str].init(8)
+        h.values = Vec[str].init(8)
+        return h
+
+    pub def len(self) -> int:
+        return self.names.len
+
+    pub def name_at(self, i: int) -> str:
+        return self.names.get(i)
+
+    pub def value_at(self, i: int) -> str:
+        return self.values.get(i)
+
+    # Append (repeats allowed, e.g. Set-Cookie).
+    pub def add(self, name: str, value: str):
+        self.names.push(name)
+        self.values.push(value)
+
+    pub def index_of(self, name: str) -> int:
+        mut i = 0
+        while i < self.names.len:
+            mut nm = self.names.get(i)
+            if _hdr_eq(nm, name): return i
+            i = i + 1
+        return -1
+
+    pub def has(self, name: str) -> bool:
+        return self.index_of(name) >= 0
+
+    # First value for `name`, or "".
+    pub def get(self, name: str) -> str:
+        mut idx = self.index_of(name)
+        if idx < 0: return ""
+        return self.values.get(idx)
+
+    # Every value for `name`, in arrival order.
+    pub def get_all(self, name: str) -> Vec[str]:
+        mut out = Vec[str].init(4)
+        mut i = 0
+        while i < self.names.len:
+            mut nm = self.names.get(i)
+            if _hdr_eq(nm, name):
+                mut vv = self.values.get(i)
+                out.push(vv)
+            i = i + 1
+        return out
+
+    # Delete every header called `name`.
+    pub def remove(self, name: str):
+        mut i = self.names.len - 1
+        while i >= 0:
+            mut nm = self.names.get(i)
+            if _hdr_eq(nm, name):
+                self.names.remove(i)
+                self.values.remove(i)
+            i = i - 1
+
+    # Replace all headers called `name` with a single one.
+    pub def set(self, name: str, value: str):
+        self.remove(name)
+        self.add(name, value)
+
+    pub def copy(self) -> HeaderList:
+        mut c = HeaderList.init()
+        mut i = 0
+        while i < self.names.len:
+            mut cn = self.names.get(i)
+            mut cv = self.values.get(i)
+            c.add(cn, cv)
+            i = i + 1
+        return c
+
+# ---------------------------------------------------------------------------
+# ClientRequest / HttpReply
+# ---------------------------------------------------------------------------
+
+pub class ClientRequest:
+    pub method:       str
+    pub url:          str
+    pub body:         str
+    pub content_type: str
+    pub headers:      HeaderList
+    pub timeout_ms:   int     # -1 = use the session's timeout
+    pub follow:       int     # -1 = session default, 0 = never, 1 = follow
+
+extend ClientRequest:
+    pub def init(method: str, url: str) -> ClientRequest:
+        mut r = ClientRequest()
+        r.method       = Str.to_upper(method)
+        r.url          = url
+        r.body         = ""
+        r.content_type = ""
+        r.headers      = HeaderList.init()
+        r.timeout_ms   = -1
+        r.follow       = -1
+        return r
+
+    pub def header(self, name: str, value: str) -> ClientRequest:
+        self.headers.set(name, value)
+        return self
+
+    pub def with_body(self, body: str, content_type: str) -> ClientRequest:
+        self.body         = body
+        self.content_type = content_type
+        return self
+
+    pub def with_timeout(self, ms: int) -> ClientRequest:
+        self.timeout_ms = ms
+        return self
+
+    pub def with_follow(self, follow: bool) -> ClientRequest:
+        if follow: self.follow = 1
+        else:      self.follow = 0
+        return self
+
+pub class HttpReply:
+    pub status:    int
+    pub reason:    str
+    pub body:      str
+    pub url:       str          # final URL (after redirects)
+    pub error:     str          # "" when the exchange completed; else why it did not
+    pub timed_out: bool
+    pub redirects: int          # redirects followed
+    pub bytes:     int          # body bytes received (also for streamed/downloaded bodies)
+    pub chunked:   bool         # body used Transfer-Encoding: chunked
+    pub saved_to:  str          # path written by download_to_file ("" otherwise)
+    pub headers:   HeaderList
+    pub history:   Vec[str]     # every URL requested, in order (last == url)
+
+extend HttpReply:
+    pub def init() -> HttpReply:
+        mut r = HttpReply()
+        r.status    = 0
+        r.reason    = ""
+        r.body      = ""
+        r.url       = ""
+        r.error     = ""
+        r.timed_out = false
+        r.redirects = 0
+        r.bytes     = 0
+        r.chunked   = false
+        r.saved_to  = ""
+        r.headers   = HeaderList.init()
+        r.history   = Vec[str].init(4)
+        return r
+
+    pub def is_ok(self) -> bool:
+        return self.error == "" and self.status >= 200 and self.status < 300
+
+    pub def is_redirect(self) -> bool:
+        return self.status >= 300 and self.status < 400
+
+    pub def is_error(self) -> bool:
+        return self.error != "" or self.status >= 400
+
+    # First header value (case-insensitive name) or "".
+    pub def header(self, name: str) -> str:
+        return self.headers.get(name)
+
+    pub def header_all(self, name: str) -> Vec[str]:
+        return self.headers.get_all(name)
+
+    pub def has_header(self, name: str) -> bool:
+        return self.headers.has(name)
+
+    # Every Set-Cookie header value (a plain header map would keep only one).
+    pub def set_cookies(self) -> Vec[str]:
+        return self.headers.get_all("Set-Cookie")
+
+    pub def content_type(self) -> str:
+        return self.headers.get("Content-Type")
+
+    pub def location(self) -> str:
+        return self.headers.get("Location")
+
+    # Declared Content-Length, or -1 when absent/invalid.
+    pub def content_length(self) -> int:
+        mut v = self.headers.get("Content-Length")
+        if Str.len(v) == 0: return -1
+        return _hdr_parse_len(v)
+
+def _hdr_parse_len(v_in: str) -> int:
+    mut v = Str.trim(v_in)
+    mut n = Str.len(v)
+    if n == 0 or n > 15: return -1
+    mut i = 0
+    while i < n:
+        mut c = Str.char_at(v, i)
+        if c < 48 or c > 57: return -1
+        i = i + 1
+    return Str.parse_int(v)
+
+# ---------------------------------------------------------------------------
+# Raw growable byte buffer + body sink + chunked decoder
+# ---------------------------------------------------------------------------
+
+pub class NetBuf:
+    pub data: Pointer[char]
+    pub len:  int
+    pub cap:  int
+
+extend NetBuf:
+    pub def init(cap_in: int) -> NetBuf:
+        mut c = cap_in
+        if c < 64: c = 64
+        mut b = NetBuf()
+        b.data = _tr_c_malloc(c + 1)
+        b.len  = 0
+        b.cap  = c
+        return b
+
+    pub def push(self, p: Pointer[char], n: int):
+        if n <= 0: return
+        if self.len + n > self.cap:
+            mut nc = self.cap * 2 + n
+            self.data = _tr_c_realloc(self.data, nc + 1)
+            self.cap  = nc
+        unsafe:
+            _tr_c_memcpy(self.data.offset(self.len), p, n)
+        self.len = self.len + n
+
+    # Drop the first `n` bytes.
+    pub def consume(self, n: int):
+        if n <= 0: return
+        if n >= self.len:
+            self.len = 0
+            return
+        unsafe:
+            _tr_c_memmove(self.data, self.data.offset(n), self.len - n)
+        self.len = self.len - n
+
+    # Index of "\r\n\r\n" at or after `from`, or -1.
+    pub def find_head_end(self, from_in: int) -> int:
+        mut i = from_in
+        if i < 0: i = 0
+        mut last = self.len - 4
+        while i <= last:
+            mut a = 0
+            mut b = 0
+            mut c = 0
+            mut d = 0
+            unsafe:
+                a = self.data.offset(i).read() as int
+                b = self.data.offset(i + 1).read() as int
+                c = self.data.offset(i + 2).read() as int
+                d = self.data.offset(i + 3).read() as int
+            if a == 13 and b == 10 and c == 13 and d == 10: return i
+            i = i + 1
+        return -1
+
+    # Copy bytes [0, n) into a fresh str (length-aware, NUL-terminated).
+    pub def head_str(self, n: int) -> str:
+        mut out = _tr_c_malloc(n + 1)
+        if n > 0:
+            unsafe: _tr_c_memcpy(out, self.data, n)
+        unsafe: out.offset(n).write('\0')
+        return _tr_str_wrap_len(out, n)
+
+    pub def to_str(self) -> str:
+        return self.head_str(self.len)
+
+    pub def release(self):
+        _tr_c_free(self.data)
+        self.data = 0 as Pointer[char]
+        self.len  = 0
+        self.cap  = 0
+
+# Where received body bytes go.
+#   kind 0 = memory (reply.body), 1 = file, 2 = callback, 3 = discard
+pub class BodySink:
+    pub kind:       int
+    pub mem:        NetBuf
+    pub fp:         Pointer[char]
+    pub cb:         def(str) -> bool
+    pub total:      int
+    pub limit:      int       # max bytes for the memory sink (0 = unlimited)
+    pub aborted:    bool      # callback returned false
+    pub over_limit: bool
+    pub write_err:  bool
+
+extend BodySink:
+    pub def init(limit: int) -> BodySink:
+        mut s = BodySink()
+        s.kind       = 0
+        s.mem        = NetBuf.init(1024)
+        s.fp         = 0 as Pointer[char]
+        s.cb         = _noop_chunk
+        s.total      = 0
+        s.limit      = limit
+        s.aborted    = false
+        s.over_limit = false
+        s.write_err  = false
+        return s
+
+    # Accept `n` bytes. Returns false when the transfer must stop.
+    pub def write(self, p: Pointer[char], n: int) -> bool:
+        if n <= 0: return true
+        self.total = self.total + n
+        if self.kind == 3: return true
+        if self.kind == 0:
+            if self.limit > 0 and self.mem.len + n > self.limit:
+                self.over_limit = true
+                return false
+            self.mem.push(p, n)
+            return true
+        if self.kind == 1:
+            mut w = 0
+            unsafe: w = _tr_c_fwrite(p, 1, n, self.fp)
+            if w != n:
+                self.write_err = true
+                return false
+            return true
+        # kind 2: callback gets a str copy of the chunk
+        mut copy = _tr_c_malloc(n + 1)
+        unsafe:
+            _tr_c_memcpy(copy, p, n)
+            copy.offset(n).write('\0')
+        mut chunk = _tr_str_wrap_len(copy, n)
+        mut keep_going = self.cb(chunk)
+        if not keep_going:
+            self.aborted = true
+            return false
+        return true
+
+    pub def release(self):
+        self.mem.release()
+
+# Incremental Transfer-Encoding: chunked decoder (RFC 7230 4.1).
+#   state: 0 size line, 1 skip chunk extension, 2 data, 3 expect CR/LF after
+#   data, 4 expect LF, 5 trailers, 7 done, 8 malformed
+pub class ChunkDecoder:
+    pub state:      int
+    pub remaining:  int
+    pub size_val:   int
+    pub size_digits: int
+    pub line_len:   int
+
+extend ChunkDecoder:
+    pub def init() -> ChunkDecoder:
+        mut d = ChunkDecoder()
+        d.state       = 0
+        d.remaining   = 0
+        d.size_val    = 0
+        d.size_digits = 0
+        d.line_len    = 0
+        return d
+
+    pub def is_done(self) -> bool:
+        return self.state == 7
+
+    pub def is_bad(self) -> bool:
+        return self.state == 8
+
+    # End of a chunk-size line: switch to data (or trailers for the 0 chunk).
+    def _end_size_line(self):
+        if self.size_digits == 0:
+            self.state = 8
+            return
+        if self.size_val == 0:
+            self.state    = 5
+            self.line_len = 0
+        else:
+            self.remaining = self.size_val
+            self.state     = 2
+        self.size_val    = 0
+        self.size_digits = 0
+
+    # Feed raw body bytes; decoded payload goes to `sink`. Returns false on a
+    # malformed stream or when the sink asked to stop.
+    pub def feed(self, p: Pointer[char], n: int, sink: BodySink) -> bool:
+        mut i = 0
+        while i < n:
+            if self.state == 7: return true
+            if self.state == 8: return false
+            if self.state == 2:
+                mut take = n - i
+                if take > self.remaining: take = self.remaining
+                mut ok = false
+                unsafe: ok = sink.write(p.offset(i), take)
+                if not ok: return false
+                i = i + take
+                self.remaining = self.remaining - take
+                if self.remaining == 0: self.state = 3
+                continue
+            mut c = 0
+            unsafe: c = p.offset(i).read() as int
+            i = i + 1
+            if self.state == 0:
+                mut hv = -1
+                if c >= 48 and c <= 57:    hv = c - 48
+                elif c >= 97 and c <= 102: hv = c - 87
+                elif c >= 65 and c <= 70:  hv = c - 55
+                if hv >= 0:
+                    self.size_val    = self.size_val * 16 + hv
+                    self.size_digits = self.size_digits + 1
+                    if self.size_digits > 15:
+                        self.state = 8
+                        return false
+                elif c == 59:
+                    self.state = 1
+                elif c == 10:
+                    self._end_size_line()
+                elif c == 13 or c == 32 or c == 9:
+                    pass
+                else:
+                    self.state = 8
+                    return false
+            elif self.state == 1:
+                if c == 10: self._end_size_line()
+            elif self.state == 3:
+                if c == 13: self.state = 4
+                elif c == 10: self.state = 0
+                else:
+                    self.state = 8
+                    return false
+            elif self.state == 4:
+                if c == 10: self.state = 0
+                else:
+                    self.state = 8
+                    return false
+            elif self.state == 5:
+                if c == 13:
+                    pass
+                elif c == 10:
+                    if self.line_len == 0: self.state = 7
+                    else: self.line_len = 0
+                else:
+                    self.line_len = self.line_len + 1
+        return true
+
+# ---------------------------------------------------------------------------
+# One TCP / TLS connection
+# ---------------------------------------------------------------------------
+
+pub class ClientConn:
+    pub tcp:    TcpStream
+    pub tls:    Pointer[char]
+    pub is_tls: bool
+    pub open:   bool
+    pub nb:     bool
+
+extend ClientConn:
+    pub def connect(host: str, port: int, use_tls: bool) -> ClientConn:
+        mut c = ClientConn()
+        c.is_tls = use_tls
+        c.open   = false
+        c.nb     = false
+        c.tls    = 0 as Pointer[char]
+        if use_tls:
+            c.tls = _tr_tls_connect(host, port)
+            c.open = (c.tls as usize) != 0
+            return c
+        c.tcp  = TcpStream.connect(host, port)
+        c.open = c.tcp.is_connected()
+        return c
+
+    # Send the whole string (blocking). False on failure.
+    pub def send_all(self, data: str) -> bool:
+        mut total = Str.len(data)
+        if total == 0: return true
+        if self.is_tls:
+            return _tr_tls_send(self.tls, data) > 0
+        mut sent = self.tcp.send(data)
+        while sent >= 0 and sent < total:
+            mut rest = Str.slice(data, sent, total)
+            mut r = self.tcp.send(rest)
+            if r <= 0: return false
+            sent = sent + r
+        return sent >= total
+
+    # Read up to `cap` bytes into buf. Returns n > 0, 0 on EOF, -1 on error,
+    # -3 on timeout (deadline is an absolute Clock.now_ms() value; 0 = none).
+    pub def read_raw(self, buf: Pointer[char], cap: int, deadline: int) -> int:
+        if not self.open: return 0
+        if self.is_tls:
+            mut s = _tr_tls_recv(self.tls, cap)
+            mut n = Str.len(s)
+            if n <= 0: return 0
+            unsafe: _tr_c_memcpy(buf, s as Pointer[char], n)
+            return n
+        if not self.nb:
+            self.tcp.set_nonblocking()
+            self.nb = true
+        while true:
+            mut n2 = _tr_tcp_recv_nb(self.tcp.fd, buf, cap)
+            if n2 == -2:
+                if deadline > 0 and Clock.now_ms() >= deadline: return -3
+                Clock.sleep_ms(1)
+            elif n2 < 0:
+                return -1
+            else:
+                return n2
+        return -1   # unreachable; satisfies F-3
+
+    pub def close(self):
+        if self.is_tls:
+            if (self.tls as usize) != 0:
+                _tr_tls_close(self.tls)
+                self.tls = 0 as Pointer[char]
+        else:
+            self.tcp.close()
+        self.open = false
+
+# ---------------------------------------------------------------------------
+# HttpSession
+# ---------------------------------------------------------------------------
+
+pub class HttpSession:
+    pub timeout_ms:       int
+    pub total_timeout_ms: int
+    pub follow_redirects: bool
+    pub max_redirects:    int
+    pub rewrite_post_on_301_302: bool
+    pub user_agent:       str
+    pub headers:          HeaderList
+    pub jar:              CookieJar
+    pub use_cookies:      bool
+    pub allow_unverified_tls: bool
+    pub max_body_bytes:   int      # cap for in-memory bodies (0 = unlimited)
+
+extend HttpSession:
+    pub def init() -> HttpSession:
+        mut s = HttpSession()
+        s.timeout_ms       = 30000
+        s.total_timeout_ms = 0
+        s.follow_redirects = true
+        s.max_redirects    = 10
+        s.rewrite_post_on_301_302 = true
+        s.user_agent       = "tauraro-http/1.0"
+        s.headers          = HeaderList.init()
+        s.jar              = CookieJar.init()
+        s.use_cookies      = false
+        s.allow_unverified_tls = false
+        s.max_body_bytes   = 67108864
+        return s
+
+    # -- configuration --
+
+    # Default header sent with every request (a per-request header of the same
+    # name replaces it).
+    pub def set_header(self, name: str, value: str):
+        self.headers.set(name, value)
+
+    pub def remove_header(self, name: str):
+        self.headers.remove(name)
+
+    pub def set_user_agent(self, ua: str):
+        self.user_agent = ua
+
+    pub def set_basic_auth(self, user: str, password: str):
+        mut cred = user + ":" + password
+        mut enc  = Base64.encode(cred)
+        mut val  = "Basic " + enc
+        self.headers.set("Authorization", val)
+
+    pub def set_bearer(self, token: str):
+        mut val = "Bearer " + token
+        self.headers.set("Authorization", val)
+
+    pub def set_timeout(self, ms: int):
+        self.timeout_ms = ms
+
+    pub def set_total_timeout(self, ms: int):
+        self.total_timeout_ms = ms
+
+    pub def set_follow_redirects(self, follow: bool):
+        self.follow_redirects = follow
+
+    pub def set_max_redirects(self, n: int):
+        self.max_redirects = n
+
+    pub def set_rewrite_post_on_301_302(self, v: bool):
+        self.rewrite_post_on_301_302 = v
+
+    pub def set_max_body_bytes(self, n: int):
+        self.max_body_bytes = n
+
+    pub def set_allow_unverified_tls(self, v: bool):
+        self.allow_unverified_tls = v
+
+    # Turn the cookie jar on (a fresh one unless you set your own first).
+    pub def enable_cookies(self):
+        self.use_cookies = true
+
+    pub def disable_cookies(self):
+        self.use_cookies = false
+
+    pub def set_cookie_jar(self, jar: CookieJar):
+        self.jar = jar
+        self.use_cookies = true
+
+    pub def cookie_jar(self) -> CookieJar:
+        return self.jar
+
+    # -- convenience verbs --
+
+    pub def request(self, method: str, url: str, body: str, content_type: str) -> HttpReply:
+        mut req = ClientRequest.init(method, url)
+        req.body         = body
+        req.content_type = content_type
+        return self.send(req)
+
+    pub def get(self, url: str) -> HttpReply:
+        mut req = ClientRequest.init("GET", url)
+        return self.send(req)
+
+    pub def head(self, url: str) -> HttpReply:
+        mut req = ClientRequest.init("HEAD", url)
+        return self.send(req)
+
+    pub def delete(self, url: str) -> HttpReply:
+        mut req = ClientRequest.init("DELETE", url)
+        return self.send(req)
+
+    pub def post(self, url: str, body: str, content_type: str) -> HttpReply:
+        return self.request("POST", url, body, content_type)
+
+    pub def put(self, url: str, body: str, content_type: str) -> HttpReply:
+        return self.request("PUT", url, body, content_type)
+
+    pub def patch(self, url: str, body: str, content_type: str) -> HttpReply:
+        return self.request("PATCH", url, body, content_type)
+
+    pub def post_json(self, url: str, json: str) -> HttpReply:
+        return self.request("POST", url, json, "application/json")
+
+    pub def post_form(self, url: str, form: FormBuilder) -> HttpReply:
+        mut body = form.build()
+        mut ct   = form.content_type()
+        return self.request("POST", url, body, ct)
+
+    pub def post_multipart(self, url: str, mp: MultipartBuilder) -> HttpReply:
+        mut body = mp.build()
+        mut ct   = mp.content_type()
+        return self.request("POST", url, body, ct)
+
+    # -- full-control entry points --
+
+    # Run a request, buffering the body in memory (reply.body).
+    pub def send(self, req: ClientRequest) -> HttpReply:
+        return self._run(req, 0, "", _noop_chunk)
+
+    # Stream a GET body to `path` (see the module notes: ".part" file, renamed
+    # on success, only for 2xx). reply.saved_to == path and reply.bytes on success.
+    pub def download_to_file(self, url: str, path: str) -> HttpReply:
+        mut req = ClientRequest.init("GET", url)
+        return self._run(req, 1, path, _noop_chunk)
+
+    pub def send_to_file(self, req: ClientRequest, path: str) -> HttpReply:
+        return self._run(req, 1, path, _noop_chunk)
+
+    # Stream a GET body to `on_chunk` as it arrives (2xx only; return false from
+    # the callback to abort -> reply.error == "aborted by callback").
+    pub def stream_get(self, url: str, on_chunk: def(str) -> bool) -> HttpReply:
+        mut req = ClientRequest.init("GET", url)
+        return self._run(req, 2, "", on_chunk)
+
+    pub def send_streaming(self, req: ClientRequest, on_chunk: def(str) -> bool) -> HttpReply:
+        return self._run(req, 2, "", on_chunk)
+
+    # -- internals --
+
+    def _fail(self, url: str, msg: str, hist: Vec[str], hops: int) -> HttpReply:
+        mut r = HttpReply.init()
+        r.error     = msg
+        r.url       = url
+        r.history   = hist
+        r.redirects = hops
+        return r
+
+    # Build the request text for one hop.
+    def _build_request(self, method: str, url: Url, req_headers: HeaderList, body: str, ctype: str, strip_auth: bool) -> str:
+        mut target = url.request_target()
+        mut hosth  = url.host_header()
+        mut sb = StringBuilder.init(512)
+        sb.append(method)
+        sb.append(" ")
+        sb.append(target)
+        sb.append(" HTTP/1.1\r\nHost: ")
+        sb.append(hosth)
+        sb.append("\r\nConnection: close\r\nAccept-Encoding: identity\r\n")
+        # Effective headers: session defaults overridden by per-request ones.
+        mut eff = self.headers.copy()
+        mut i = 0
+        while i < req_headers.len():
+            mut rn = req_headers.name_at(i)
+            mut rv = req_headers.value_at(i)
+            eff.set(rn, rv)
+            i = i + 1
+        if not eff.has("User-Agent") and Str.len(self.user_agent) > 0:
+            eff.set("User-Agent", self.user_agent)
+        if not eff.has("Accept"): eff.set("Accept", "*/*")
+        if strip_auth:
+            eff.remove("Authorization")
+            eff.remove("Proxy-Authorization")
+            eff.remove("Cookie")
+        # Cookies: explicit header first, then the jar's.
+        if self.use_cookies:
+            mut jar_hdr = self.jar.header_for(url.host, url.path, url.is_https())
+            if Str.len(jar_hdr) > 0:
+                mut mine = eff.get("Cookie")
+                if Str.len(mine) > 0:
+                    mut joined = mine + "; " + jar_hdr
+                    eff.set("Cookie", joined)
+                else:
+                    eff.set("Cookie", jar_hdr)
+        # Body framing headers are ours to set.
+        eff.remove("Content-Length")
+        eff.remove("Host")
+        eff.remove("Connection")
+        eff.remove("Transfer-Encoding")
+        mut blen = Str.len(body)
+        mut has_body = blen > 0 or Str.eq(method, "POST") or Str.eq(method, "PUT") or Str.eq(method, "PATCH")
+        if has_body:
+            if Str.len(ctype) > 0: eff.set("Content-Type", ctype)
+            elif not eff.has("Content-Type") and blen > 0: eff.set("Content-Type", "application/octet-stream")
+        else:
+            eff.remove("Content-Type")
+        mut k = 0
+        while k < eff.len():
+            mut hn_raw = eff.name_at(k)
+            mut hv_raw = eff.value_at(k)
+            mut hn = _clean_hdr(hn_raw)
+            mut hv = _clean_hdr(hv_raw)
+            sb.append(hn)
+            sb.append(": ")
+            sb.append(hv)
+            sb.append("\r\n")
+            k = k + 1
+        if has_body:
+            sb.append("Content-Length: ")
+            mut ls = Fmt.int_to_str(blen)
+            sb.append(ls)
+            sb.append("\r\n")
+        sb.append("\r\n")
+        if blen > 0: sb.append(body)
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    # Parse "HTTP/1.1 200 OK" + header lines into reply. Returns false if the
+    # status line is malformed.
+    def _parse_head(self, head: str, reply: HttpReply) -> bool:
+        mut lines = Str.split_to_vec(head, "\n")
+        if lines.len == 0: return false
+        mut first_raw = lines.get(0)
+        mut first = Str.trim(first_raw)
+        if not Str.starts_with(first, "HTTP/"): return false
+        mut sp1 = Str.index_of(first, " ")
+        if sp1 < 0: return false
+        mut rest = Str.slice(first, sp1 + 1, Str.len(first))
+        mut sp2  = Str.index_of(rest, " ")
+        mut code_txt = rest
+        mut reason   = ""
+        if sp2 >= 0:
+            code_txt = Str.slice(rest, 0, sp2)
+            reason   = Str.slice(rest, sp2 + 1, Str.len(rest))
+        if Str.len(code_txt) != 3: return false
+        mut code = _hdr_parse_len(code_txt)
+        if code < 100: return false
+        reply.status = code
+        reply.reason = reason
+        mut i = 1
+        while i < lines.len:
+            mut line_raw = lines.get(i)
+            mut line = Str.trim(line_raw)
+            i = i + 1
+            if Str.len(line) == 0: continue
+            mut colon = Str.index_of(line, ":")
+            if colon <= 0: continue
+            mut hname_raw  = Str.slice(line, 0, colon)
+            mut hvalue_raw = Str.slice(line, colon + 1, Str.len(line))
+            mut hname  = Str.trim(hname_raw)
+            mut hvalue = Str.trim(hvalue_raw)
+            reply.headers.add(hname, hvalue)
+        return true
+
+    # True for statuses the redirect logic acts on.
+    def _is_redirect_status(self, code: int) -> bool:
+        return code == 301 or code == 302 or code == 303 or code == 307 or code == 308
+
+    # One request/response over a fresh connection. `mode`: 0 memory, 1 file,
+    # 2 callback. `will_follow` says whether a redirect response should be
+    # consumed silently (its body is discarded, not streamed).
+    def _exchange(self, method: str, url: Url, req_headers: HeaderList, body: str, ctype: str, strip_auth: bool, mode: int, final_path: str, cb: def(str) -> bool, will_follow: bool, idle_ms: int, total_deadline: int) -> HttpReply:
+        mut reply = HttpReply.init()
+        reply.url = url.to_string()
+        mut use_tls = url.is_https()
+        if use_tls and not self.allow_unverified_tls:
+            reply.error = "https refused: std TLS does not verify certificates (call set_allow_unverified_tls(true) to opt in)"
+            return reply
+        mut wire = self._build_request(method, url, req_headers, body, ctype, strip_auth)
+        mut conn = ClientConn.connect(url.host, url.port, use_tls)
+        if not conn.open:
+            reply.error = "connection failed to " + url.host + ":" + Fmt.int_to_str(url.port)
+            return reply
+        if not conn.send_all(wire):
+            conn.close()
+            reply.error = "send failed"
+            return reply
+
+        mut rbuf = _tr_c_malloc(16385)
+        mut hb   = NetBuf.init(4096)
+        mut sink = BodySink.init(self.max_body_bytes)
+        mut dec  = ChunkDecoder.init()
+        mut part_path = final_path + ".part"
+        mut deadline  = 0
+        mut got_head  = false
+        mut is_head_req = Str.eq(method, "HEAD")
+        mut mode_len = 0          # 0 none, 1 content-length, 2 chunked, 3 until EOF
+        mut remaining = 0
+        mut body_done = false
+        mut failed = ""
+        mut scan_from = 0
+
+        # -- Phase 1: read until a final (non-1xx) response head is complete --
+        while not got_head and failed == "":
+            deadline = 0
+            if idle_ms > 0: deadline = Clock.now_ms() + idle_ms
+            if total_deadline > 0 and (deadline == 0 or total_deadline < deadline): deadline = total_deadline
+            mut hend = hb.find_head_end(scan_from)
+            if hend < 0:
+                mut n = conn.read_raw(rbuf, 16384, deadline)
+                if n == -3:
+                    failed = "timeout waiting for response"
+                    reply.timed_out = true
+                elif n < 0:
+                    failed = "read error"
+                elif n == 0:
+                    if hb.len == 0: failed = "connection closed before response"
+                    else: failed = "connection closed inside response header"
+                else:
+                    scan_from = hb.len - 3
+                    if scan_from < 0: scan_from = 0
+                    hb.push(rbuf, n)
+                    if hb.len > 65536 and hb.find_head_end(0) < 0: failed = "response header too large"
+            else:
+                mut head_text = hb.head_str(hend)
+                hb.consume(hend + 4)
+                scan_from = 0
+                mut tmp = HttpReply.init()
+                if not self._parse_head(head_text, tmp):
+                    failed = "malformed response status line"
+                elif tmp.status >= 100 and tmp.status < 200 and tmp.status != 101:
+                    pass
+                else:
+                    reply.status  = tmp.status
+                    reply.reason  = tmp.reason
+                    reply.headers = tmp.headers
+                    got_head = true
+
+        if failed == "":
+            # -- Decide framing and the sink --
+            mut code = reply.status
+            mut te_raw  = reply.headers.get("Transfer-Encoding")
+            mut cl_raw  = reply.headers.get("Content-Length")
+            mut te   = Str.to_lower(te_raw)
+            mut clen = _hdr_parse_len(cl_raw)
+            if is_head_req or code == 204 or code == 304 or code == 101:
+                mode_len = 0
+                body_done = true
+            elif Str.contains(te, "chunked"):
+                mode_len = 2
+                reply.chunked = true
+            elif clen >= 0:
+                mode_len = 1
+                remaining = clen
+                if clen == 0: body_done = true
+            else:
+                mode_len = 3
+            mut consumed_redirect = will_follow and self._is_redirect_status(code) and reply.headers.has("Location")
+            sink.kind = 0
+            if consumed_redirect:
+                sink.kind = 3
+            elif code >= 200 and code < 300 and mode == 1:
+                sink.fp = _tr_c_fopen(part_path, "wb")
+                if (sink.fp as usize) == 0:
+                    failed = "cannot open " + part_path + " for writing"
+                else:
+                    sink.kind = 1
+            elif code >= 200 and code < 300 and mode == 2:
+                sink.kind = 2
+                sink.cb   = cb
+            if sink.kind != 0:
+                sink.limit = 0
+        if failed == "":
+            # Body bytes that arrived together with the head.
+            if mode_len == 1 and hb.len > 0:
+                mut take = hb.len
+                if take > remaining: take = remaining
+                if not sink.write(hb.data, take): failed = "body sink stopped"
+                remaining = remaining - take
+                if remaining == 0: body_done = true
+            elif mode_len == 2 and hb.len > 0:
+                if not dec.feed(hb.data, hb.len, sink): failed = "malformed chunked body"
+                if dec.is_done(): body_done = true
+            elif mode_len == 3 and hb.len > 0:
+                if not sink.write(hb.data, hb.len): failed = "body sink stopped"
+            hb.len = 0
+
+        # -- Phase 2: remaining body --
+        mut hit_eof = false
+        while failed == "" and not body_done and not hit_eof:
+            deadline = 0
+            if idle_ms > 0: deadline = Clock.now_ms() + idle_ms
+            if total_deadline > 0 and (deadline == 0 or total_deadline < deadline): deadline = total_deadline
+            mut n2 = conn.read_raw(rbuf, 16384, deadline)
+            if n2 == -3:
+                failed = "timeout reading body"
+                reply.timed_out = true
+            elif n2 < 0:
+                failed = "read error"
+            elif n2 == 0:
+                hit_eof = true
+            elif mode_len == 1:
+                mut take2 = n2
+                if take2 > remaining: take2 = remaining
+                if not sink.write(rbuf, take2): failed = "body sink stopped"
+                remaining = remaining - take2
+                if remaining == 0: body_done = true
+            elif mode_len == 2:
+                if not dec.feed(rbuf, n2, sink): failed = "malformed chunked body"
+                if dec.is_done(): body_done = true
+            else:
+                if not sink.write(rbuf, n2): failed = "body sink stopped"
+        conn.close()
+
+        if failed == "" and hit_eof:
+            if mode_len == 1: failed = "incomplete body: connection closed with " + Fmt.int_to_str(remaining) + " bytes missing"
+            elif mode_len == 2: failed = "incomplete chunked body"
+
+        # Translate sink-level reasons into a precise error text.
+        if sink.aborted: failed = "aborted by callback"
+        elif sink.over_limit: failed = "response body exceeds max_body_bytes"
+        elif sink.write_err: failed = "write error while saving body"
+
+        # -- Finish file output --
+        if sink.kind == 1:
+            _tr_c_fclose(sink.fp)
+            if failed == "":
+                Fs.delete(final_path)
+                if Fs.rename(part_path, final_path):
+                    reply.saved_to = final_path
+                else:
+                    failed = "cannot move " + part_path + " to " + final_path
+            else:
+                Fs.delete(part_path)
+        reply.bytes = sink.total
+        if sink.kind == 0: reply.body = sink.mem.to_str()
+        sink.release()
+        hb.release()
+        _tr_c_free(rbuf)
+        reply.error = failed
+        return reply
+
+    # Redirect + cookie loop around _exchange.
+    def _run(self, req: ClientRequest, mode: int, final_path: str, cb: def(str) -> bool) -> HttpReply:
+        mut hist = Vec[str].init(4)
+        mut start = Url.parse(req.url)
+        if not start.is_valid() or (not Str.eq(start.scheme, "http") and not Str.eq(start.scheme, "https")):
+            return self._fail(req.url, "invalid or unsupported URL: " + req.url, hist, 0)
+        mut idle = self.timeout_ms
+        if req.timeout_ms >= 0: idle = req.timeout_ms
+        mut total_deadline = 0
+        if self.total_timeout_ms > 0: total_deadline = Clock.now_ms() + self.total_timeout_ms
+        mut follow = self.follow_redirects
+        if req.follow == 0: follow = false
+        elif req.follow == 1: follow = true
+        if self.max_redirects <= 0: follow = false
+
+        mut method = Str.to_upper(req.method)
+        # The current URL is carried as a string and re-parsed per hop: a Url
+        # local has a free() method, so the compiler would auto-drop one that
+        # was moved between blocks and leave `cur` dangling.
+        mut cur_str = start.to_string()
+        mut start_host  = start.host
+        mut start_port  = start.port
+        mut start_https = start.is_https()
+        mut body   = req.body
+        mut ctype  = req.content_type
+        mut hdrs   = req.headers.copy()
+        mut hops   = 0
+        hist.push(cur_str)
+        mut final_reply = HttpReply.init()
+        mut finished = false
+        while not finished:
+            mut cur = Url.parse(cur_str)
+            mut strip = false
+            if not _hdr_eq(cur.host, start_host): strip = true
+            if cur.port != start_port: strip = true
+            if start_https and not cur.is_https(): strip = true
+            mut rep = self._exchange(method, cur, hdrs, body, ctype, strip, mode, final_path, cb, follow, idle, total_deadline)
+            if self.use_cookies and rep.error == "":
+                mut cookie_vals = rep.set_cookies()
+                if cookie_vals.len > 0: self.jar.store_response(cur, cookie_vals)
+            rep.history   = hist
+            rep.redirects = hops
+            final_reply   = rep
+            if rep.error != "" or not follow or not self._is_redirect_status(rep.status) or not rep.headers.has("Location"):
+                finished = true
+            else:
+                if hops >= self.max_redirects:
+                    final_reply.error = "too many redirects (" + Fmt.int_to_str(self.max_redirects) + ")"
+                    finished = true
+                else:
+                    mut loc = rep.headers.get("Location")
+                    mut resolved = cur.resolve(loc)
+                    mut next_str = resolved.to_string()
+                    mut next_parsed = Url.parse(next_str)
+                    mut next_scheme = next_parsed.scheme
+                    if Str.len(next_str) < 8 or (not Str.eq(next_scheme, "http") and not Str.eq(next_scheme, "https")):
+                        final_reply.error = "redirect to unsupported URL: " + loc
+                        finished = true
+                    else:
+                        mut st = rep.status
+                        if st == 303:
+                            if not Str.eq(method, "HEAD"): method = "GET"
+                            body = ""
+                            ctype = ""
+                        elif (st == 301 or st == 302) and self.rewrite_post_on_301_302 and Str.eq(method, "POST"):
+                            method = "GET"
+                            body = ""
+                            ctype = ""
+                        if Str.len(body) == 0: ctype = ""
+                        cur_str = next_str
+                        hops = hops + 1
+                        hist.push(cur_str)
+        final_reply.url = cur_str
+        final_reply.redirects = hops
+        return final_reply

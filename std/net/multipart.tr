@@ -1,0 +1,234 @@
+# std.net.multipart -- request-body builders for HTTP clients.
+#
+#   from std.net.multipart import FormBuilder, MultipartBuilder
+#
+#   mut f = FormBuilder.init()
+#   f.add("q", "hello world")
+#   f.add("lang", "en&fr")
+#   f.build()              # "q=hello%20world&lang=en%26fr"   (application/x-www-form-urlencoded)
+#   f.content_type()       # "application/x-www-form-urlencoded"
+#
+#   mut m = MultipartBuilder.init()
+#   m.add_field("title", "Report")
+#   m.add_file_data("doc", "a.txt", "text/plain", "file contents")
+#   m.add_file("logo", "assets/logo.svg")          # read from disk (text-safe)
+#   m.build()              # the full multipart/form-data body
+#   m.content_type()       # "multipart/form-data; boundary=..."
+#
+# Pass either builder straight to HttpSession.post_form / post_multipart
+# (std.net.client), or use build() + content_type() with any client.
+#
+# This is the CLIENT side of what watax's `req.multipart()` parses on the
+# server.
+#
+# Limitations: bodies are Tauraro `str` (NUL-terminated), so file data that
+# contains NUL bytes is truncated at the first NUL -- the same limitation as the
+# rest of the HTTP layer. Text, JSON, CSV, SVG, source files etc. are fine.
+# Spaces in urlencoded values are encoded as %20 (not '+'), which every
+# form decoder accepts.
+
+from std.core.vec import Vec
+from std.core.string import StringBuilder
+from std.string.str import Str
+from std.string.fmt import Fmt
+from std.io.file import File
+from std.sys.time import Clock
+from std.net.url import Url
+
+extern "C":
+    # Process-wide atomic counter: two builders created in the same millisecond
+    # still get different boundaries.
+    def _tr_next_seed_counter() -> int
+
+# ---------------------------------------------------------------------------
+# application/x-www-form-urlencoded
+# ---------------------------------------------------------------------------
+
+pub class FormBuilder:
+    pub _names:  Vec[str]
+    pub _values: Vec[str]
+
+extend FormBuilder:
+    pub def init() -> FormBuilder:
+        mut f = FormBuilder()
+        f._names  = Vec[str].init(8)
+        f._values = Vec[str].init(8)
+        return f
+
+    # Append a field (repeat a name to send several values).
+    pub def add(self, name: str, value: str):
+        self._names.push(name)
+        self._values.push(value)
+
+    pub def len(self) -> int:
+        return self._names.len
+
+    # Replace all existing values of `name` with one value.
+    pub def set(self, name: str, value: str):
+        mut i = self._names.len - 1
+        while i >= 0:
+            if Str.eq(self._names.get(i), name):
+                self._names.remove(i)
+                self._values.remove(i)
+            i = i - 1
+        self.add(name, value)
+
+    pub def content_type(self) -> str:
+        return "application/x-www-form-urlencoded"
+
+    # "a=1&b=two%20words" (names and values percent-encoded).
+    pub def build(self) -> str:
+        mut sb = StringBuilder.init(128)
+        mut i = 0
+        while i < self._names.len:
+            if i > 0: sb.append("&")
+            mut en_raw = self._names.get(i)
+            mut ev_raw = self._values.get(i)
+            mut en = Url.encode_component(en_raw)
+            mut ev = Url.encode_component(ev_raw)
+            sb.append(en)
+            sb.append("=")
+            sb.append(ev)
+            i = i + 1
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+# ---------------------------------------------------------------------------
+# multipart/form-data
+# ---------------------------------------------------------------------------
+
+# Make a header parameter value safe inside double quotes: '"' -> %22,
+# CR/LF removed (prevents header injection through a filename).
+def _mp_quote(s: str) -> str:
+    mut n  = Str.len(s)
+    mut sb = StringBuilder.init(n + 8)
+    mut i  = 0
+    while i < n:
+        mut c = Str.char_at(s, i)
+        if c == 34:
+            sb.append("%22")
+        elif c == 13 or c == 10:
+            sb.append("")
+        else:
+            sb.append_char(c)
+        i = i + 1
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+pub class MultipartBuilder:
+    pub boundary:  str
+    pub _names:    Vec[str]    # field name
+    pub _files:    Vec[str]    # filename ("" for plain fields)
+    pub _ctypes:   Vec[str]    # part Content-Type ("" = omit)
+    pub _datas:    Vec[str]
+
+extend MultipartBuilder:
+    pub def init() -> MultipartBuilder:
+        mut m = MultipartBuilder()
+        mut seq = _tr_next_seed_counter()
+        mut t   = Clock.now_ms()
+        m.boundary = "----TauraroFormBoundary" + Fmt.int_to_hex(t) + "x" + Fmt.int_to_hex(seq)
+        m._names  = Vec[str].init(8)
+        m._files  = Vec[str].init(8)
+        m._ctypes = Vec[str].init(8)
+        m._datas  = Vec[str].init(8)
+        return m
+
+    # Use a caller-chosen boundary token (must not occur in any part's data).
+    pub def with_boundary(self, boundary: str) -> MultipartBuilder:
+        self.boundary = boundary
+        return self
+
+    # A plain text field.
+    pub def add_field(self, name: str, value: str):
+        self._names.push(name)
+        self._files.push("")
+        self._ctypes.push("")
+        self._datas.push(value)
+
+    # An in-memory file part.
+    pub def add_file_data(self, name: str, filename: str, content_type: str, data: str):
+        self._names.push(name)
+        self._files.push(filename)
+        mut ct = content_type
+        if Str.len(ct) == 0: ct = "application/octet-stream"
+        self._ctypes.push(ct)
+        self._datas.push(data)
+
+    # A file part read from disk (the sent filename is the path's last
+    # component). Returns false when the file cannot be read; text-safe only.
+    pub def add_file(self, name: str, path: str) -> bool:
+        if not File.file_exists(path): return false
+        mut data = File.read_text(path)
+        mut fname = path
+        mut ls = Str.last_index_of(path, "/")
+        if ls >= 0: fname = Str.slice(path, ls + 1, Str.len(path))
+        mut lb = Str.last_index_of(fname, "\\")
+        if lb >= 0: fname = Str.slice(fname, lb + 1, Str.len(fname))
+        mut ct = MultipartBuilder.guess_content_type(fname)
+        self.add_file_data(name, fname, ct, data)
+        return true
+
+    pub def len(self) -> int:
+        return self._names.len
+
+    pub def content_type(self) -> str:
+        return "multipart/form-data; boundary=" + self.boundary
+
+    # A small extension -> MIME map for the common web/text types.
+    pub def guess_content_type(filename: str) -> str:
+        mut f = Str.to_lower(filename)
+        if Str.ends_with(f, ".txt"):  return "text/plain"
+        if Str.ends_with(f, ".html") or Str.ends_with(f, ".htm"): return "text/html"
+        if Str.ends_with(f, ".css"):  return "text/css"
+        if Str.ends_with(f, ".csv"):  return "text/csv"
+        if Str.ends_with(f, ".json"): return "application/json"
+        if Str.ends_with(f, ".xml"):  return "application/xml"
+        if Str.ends_with(f, ".js"):   return "text/javascript"
+        if Str.ends_with(f, ".md"):   return "text/markdown"
+        if Str.ends_with(f, ".svg"):  return "image/svg+xml"
+        if Str.ends_with(f, ".png"):  return "image/png"
+        if Str.ends_with(f, ".jpg") or Str.ends_with(f, ".jpeg"): return "image/jpeg"
+        if Str.ends_with(f, ".gif"):  return "image/gif"
+        if Str.ends_with(f, ".pdf"):  return "application/pdf"
+        if Str.ends_with(f, ".zip"):  return "application/zip"
+        return "application/octet-stream"
+
+    # The complete body: for each part "--boundary CRLF headers CRLF CRLF data CRLF",
+    # then "--boundary--" CRLF.
+    pub def build(self) -> str:
+        mut sb = StringBuilder.init(256)
+        mut i = 0
+        while i < self._names.len:
+            sb.append("--")
+            sb.append(self.boundary)
+            sb.append("\r\nContent-Disposition: form-data; name=\"")
+            mut nm_raw = self._names.get(i)
+            mut nm_q = _mp_quote(nm_raw)
+            sb.append(nm_q)
+            sb.append("\"")
+            mut fname = self._files.get(i)
+            if Str.len(fname) > 0:
+                sb.append("; filename=\"")
+                mut fn_q = _mp_quote(fname)
+                sb.append(fn_q)
+                sb.append("\"")
+            sb.append("\r\n")
+            mut ct = self._ctypes.get(i)
+            if Str.len(ct) > 0:
+                sb.append("Content-Type: ")
+                sb.append(ct)
+                sb.append("\r\n")
+            sb.append("\r\n")
+            mut dat = self._datas.get(i)
+            sb.append(dat)
+            sb.append("\r\n")
+            i = i + 1
+        sb.append("--")
+        sb.append(self.boundary)
+        sb.append("--\r\n")
+        mut out = sb.to_owned()
+        sb.free()
+        return out

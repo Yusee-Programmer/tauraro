@@ -22,6 +22,25 @@ added here as each phase lands.
   timeout), `call_with_timeout` / `call_bool_with_timeout`, and a thread-safe
   `CircuitBreaker` (closed/open/half-open, failure threshold, reset timeout).
   Documented in `docs/std/async.md`, tested by `tests/lang/70_retry.tr`.
+- **`std.net.client` / `std.net.cookie` / `std.net.multipart`: an HTTP client
+  toolkit.** `HttpSession` is a URL-based HTTP/1.1 client that reads whole
+  responses (Content-Length, chunked, or until close), follows
+  301/302/303/307/308 redirects (limit, method rewriting, `Authorization`
+  dropped when leaving the host), keeps default headers, enforces idle/total
+  timeouts, and streams bodies to a file (`download_to_file`) or a callback
+  (`stream_get`). `CookieJar` implements RFC 6265 `Set-Cookie` parsing and
+  `Cookie` header generation; `FormBuilder` / `MultipartBuilder` build
+  urlencoded and `multipart/form-data` bodies. `Url` gained `resolve`,
+  `request_target`, `host_header`, `origin` and `remove_dot_segments`, and now
+  parses `http://host?query`. Tested over loopback in `tests/lang/71_http_client.tr`.
+  `https://` stays opt-in (`set_allow_unverified_tls`) because the runtime TLS
+  layer does not verify certificates.
+
+### Fixed
+- `std.net.http` / `std.net.https` declared `Map[str]` (one type argument) for
+  the response/header maps, which fails to compile
+  (`'V' undeclared` in `HttpClientResponse_header`) as soon as the module is
+  imported; they now use `Map[str, str]`.
 
 ## [0.0.9]
 
