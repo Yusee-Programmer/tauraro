@@ -284,6 +284,14 @@ extend WsConn:
         mut p = data as Pointer[char]
         return self._send_frame(WS_OP_BINARY(), p, len_)
 
+    # Send exactly `len_` raw bytes starting at `data` as one Binary frame. Unlike
+    # send_binary(), no `Pointer[char] as str` conversion is involved (that conversion
+    # runs strlen, which reads past a buffer that is not NUL-terminated and truncates
+    # at an embedded 0x00): use this for arbitrary binary payloads.
+    pub def send_binary_ptr(self, data: Pointer[char], len_: int) -> bool:
+        if self.closed: return false
+        return self._send_frame(WS_OP_BINARY(), data, len_)
+
     # Send a Ping frame (optionally carrying a small payload).
     pub def send_ping(self, msg: str) -> bool:
         if self.closed: return false
