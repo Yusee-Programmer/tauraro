@@ -1,8 +1,19 @@
-# std.crypto.hmac — HMAC-SHA256 message authentication codes.
+# std.crypto.hmac — HMAC message authentication codes.
 #
 # Usage:
 #   from std.crypto.hmac import Hmac
-#   mut tag = Hmac.sha256("secret-key", 10, "message")
+#   mut tag = Hmac.sha256("secret-key", 10, "message")      # hex; message hashed via strlen
+#
+#   # Binary-safe HMAC over SHA-1 / SHA-256 / SHA-384 / SHA-512 (RFC 2104):
+#   # key and message are `str`s whose true length (`.len()`) is used, so embedded
+#   # NULs are fine (OTP counters, PBKDF-style chaining). Returns RAW bytes.
+#   mut raw = Hmac.compute("sha256", key, msg)
+#   if Hmac.verify("sha256", key, msg, tag): ...             # constant-time compare
+
+from std.crypto.hash import Hash
+from std.crypto.sha512 import Sha512
+from std.crypto.bytes import CryptoBytes
+from std.encoding.hex import Hex
 
 extern "C":
     def _tr_hmac_sha256(key: str, klen: int, msg: str) -> str
@@ -22,3 +33,56 @@ extend Hmac:
         mut kp  = key as Pointer[char]
         while kp.offset(i).read() as int != 0: i = i + 1
         return _tr_hmac_sha256(key, i, msg)
+
+    # Raw hash of `data` (true length) for "sha1" / "sha256" / "sha384" / "sha512";
+    # "" for an unknown algorithm.
+    pub def hash_raw(alg: str, data: str) -> str:
+        mut n = data.len()
+        if alg == "sha256": return Hash.sha256_bytes(data, n)
+        if alg == "sha1": return Hex.decode(Hash.sha1_bytes(data, n))
+        if alg == "sha512": return Hex.decode(Sha512.sha512_bytes(data, n))
+        if alg == "sha384": return Hex.decode(Sha512.sha384_bytes(data, n))
+        return ""
+
+    # Hash block size in bytes (64 for SHA-1/256, 128 for SHA-384/512); 0 if unknown.
+    pub def block_size(alg: str) -> int:
+        if alg == "sha1" or alg == "sha256": return 64
+        if alg == "sha384" or alg == "sha512": return 128
+        return 0
+
+    # Output size in bytes (20 / 32 / 48 / 64); 0 if unknown.
+    pub def digest_size(alg: str) -> int:
+        if alg == "sha1": return 20
+        if alg == "sha256": return 32
+        if alg == "sha384": return 48
+        if alg == "sha512": return 64
+        return 0
+
+    # Binary-safe HMAC (RFC 2104) with `alg` in {"sha1","sha256","sha384","sha512"}.
+    # Returns the raw tag, or "" for an unknown algorithm. Keys longer than the block
+    # size are hashed first, as the RFC says.
+    pub def compute(alg: str, key: str, msg: str) -> str:
+        mut bs = Hmac.block_size(alg)
+        if bs == 0: return ""
+        mut k = key
+        if key.len() > bs: k = Hmac.hash_raw(alg, key)
+        mut ipad: Pointer[char] = CryptoBytes.zeroed(bs)
+        mut opad: Pointer[char] = CryptoBytes.zeroed(bs)
+        mut i = 0
+        while i < bs:
+            mut kb = 0
+            if i < k.len(): kb = CryptoBytes.at(k, i)
+            CryptoBytes.put(ipad, i, kb ^ 0x36)
+            CryptoBytes.put(opad, i, kb ^ 0x5c)
+            i = i + 1
+        mut inner = Hmac.hash_raw(alg, CryptoBytes.concat(CryptoBytes.wrap(ipad, bs), msg))
+        return Hmac.hash_raw(alg, CryptoBytes.concat(CryptoBytes.wrap(opad, bs), inner))
+
+    pub def compute_hex(alg: str, key: str, msg: str) -> str:
+        return Hex.encode(Hmac.compute(alg, key, msg))
+
+    # Constant-time check that `tag` is the HMAC of `msg` under `key`.
+    pub def verify(alg: str, key: str, msg: str, tag: str) -> bool:
+        mut want = Hmac.compute(alg, key, msg)
+        if want.len() == 0: return false
+        return CryptoBytes.ct_eq(want, tag)

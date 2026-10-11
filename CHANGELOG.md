@@ -29,6 +29,10 @@ added here as each phase lands.
 - `from` stays a reserved word (it starts import statements and lifetime clauses).
 
 ### Added
+- **`std.crypto.otp`** — HOTP (RFC 4226) / TOTP (RFC 6238) with SHA-1/256/512, windowed
+  constant-time verification, Base32 secret helpers and `otpauth://` URIs; plus the
+  binary-safe `Hmac.compute` / `verify` (SHA-1/256/384/512) it is built on
+  (`tests/lang/115_hmac_otp.tr`, RFC vectors).
 - **`std.net.hpack`** — HPACK (RFC 7541): `HpackEncoder` / `HpackDecoder` / `HpackHeaders`,
   static + dynamic tables, Huffman coding, never-indexed headers, strict error-reporting decoder.
   All RFC 7541 Appendix C examples verified in both directions (`tests/lang/130_hpack.tr`).

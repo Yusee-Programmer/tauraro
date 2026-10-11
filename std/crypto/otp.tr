@@ -1,0 +1,253 @@
+# std.crypto.otp — HOTP (RFC 4226) and TOTP (RFC 6238) one-time passwords.
+#
+# Built on the binary-safe `Hmac.compute` (SHA-1 / SHA-256 / SHA-512) and
+# `std.encoding.base32` for the secrets authenticator apps exchange.
+#
+#   Hotp.generate(secret, counter, digits, alg)        counter-based code
+#   Totp.generate(secret, unix_time, period, digits, alg)
+#   Totp.now(secret_b32)                               code for the current time (SHA-1, 6 digits, 30 s)
+#   Totp.verify(...)                                   constant-time check within a +/- step window
+#   Otp.generate_secret_b32(20)                        fresh random secret, Base32 (no padding)
+#   Otp.decode_secret(b32)                             Base32 -> raw secret bytes ("" if invalid)
+#   Otp.provisioning_uri(...)                          otpauth:// URI for QR codes
+#
+# `secret` is the RAW key (bytes); use `Otp.decode_secret` for the Base32 text form.
+# `alg` is "sha1" (the default of every authenticator app), "sha256" or "sha512".
+# `digits` is 6..10 (6 and 8 are standard). Codes are zero-padded strings.
+#
+# Verified against the RFC 4226 Appendix D HOTP vectors (counters 0-9, plus the
+# intermediate HMAC value) and the RFC 6238 Appendix B TOTP vectors for SHA-1 /
+# SHA-256 / SHA-512 — see tests/lang/115_hmac_otp.tr.
+#
+# Usage:
+#   from std.crypto.otp import Hotp, Totp, Otp
+#   mut secret_b32 = Otp.generate_secret_b32(20)         # store this, show it as a QR code
+#   mut code = Totp.now(secret_b32)                      # "492039"
+#   if Totp.verify_b32(secret_b32, user_input, Totp.unix_now(), 1): ...
+#
+# SECURITY NOTES
+#   * Compare codes only with the verify helpers (constant-time).
+#   * TOTP verification does not remember used codes: to stop replay inside the same
+#     30 s window the caller must store the last accepted time step (verify returns
+#     the matched step, or -1) and reject steps <= that value.
+#   * Rate-limit attempts (a 6-digit code is only 10^6 values).
+#   * Secrets should be >= 16 bytes (RFC 4226 requires >= 16, recommends 20).
+
+from std.crypto.hmac import Hmac
+from std.crypto.bytes import CryptoBytes
+from std.encoding.base32 import Base32
+from std.core.string import StringBuilder
+
+extern "C":
+    def _tr_epoch_ms() -> int
+
+def otp_pow10(n: int) -> int:
+    mut r = 1
+    mut i = 0
+    while i < n:
+        r = r * 10
+        i = i + 1
+    return r
+
+# zero-padded decimal of `v` with exactly `digits` digits
+def otp_pad(v: int, digits: int) -> str:
+    mut sb = StringBuilder.init(digits + 2)
+    mut i = digits - 1
+    while i >= 0:
+        mut d = (v / otp_pow10(i)) % 10
+        sb.append_char(48 + d)
+        i = i - 1
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+# 8-byte big-endian counter
+def otp_counter_bytes(counter: int) -> str:
+    mut p: Pointer[char] = CryptoBytes.zeroed(8)
+    mut i = 0
+    while i < 8:
+        CryptoBytes.put(p, 7 - i, (counter >> (8 * i)) & 255)
+        i = i + 1
+    return CryptoBytes.wrap(p, 8)
+
+def otp_valid_alg(alg: str) -> bool:
+    return alg == "sha1" or alg == "sha256" or alg == "sha512"
+
+pub class Hotp:
+    _dummy: int
+
+pub class Totp:
+    _dummy: int
+
+pub class Otp:
+    _dummy: int
+
+extend Hotp:
+    # RFC 4226 HMAC-based one-time password. Returns "" for invalid parameters
+    # (counter < 0, digits outside 6..10, unknown alg, empty secret).
+    pub def generate(secret: str, counter: int, digits: int, alg: str) -> str:
+        if counter < 0 or digits < 6 or digits > 10 or secret.len() == 0: return ""
+        if not otp_valid_alg(alg): return ""
+        mut mac = Hmac.compute(alg, secret, otp_counter_bytes(counter))
+        mut n = mac.len()
+        # dynamic truncation (RFC 4226 section 5.3)
+        mut off = CryptoBytes.at(mac, n - 1) & 15
+        mut bin_code = ((CryptoBytes.at(mac, off) & 127) << 24) | (CryptoBytes.at(mac, off + 1) << 16) | (CryptoBytes.at(mac, off + 2) << 8) | CryptoBytes.at(mac, off + 3)
+        return otp_pad(bin_code % otp_pow10(digits), digits)
+
+    # Standard 6-digit SHA-1 HOTP.
+    pub def generate6(secret: str, counter: int) -> str:
+        return Hotp.generate(secret, counter, 6, "sha1")
+
+    # Constant-time check of `code` against counters counter .. counter+look_ahead.
+    # Returns the matching counter, or -1. The caller should store matched+1 as the
+    # next expected counter.
+    pub def verify(secret: str, code: str, counter: int, look_ahead: int, digits: int, alg: str) -> int:
+        mut found = -1
+        mut i = 0
+        while i <= look_ahead:
+            mut want = Hotp.generate(secret, counter + i, digits, alg)
+            if want.len() != 0 and CryptoBytes.ct_eq(want, code) and found < 0:
+                found = counter + i
+            i = i + 1
+        return found
+
+extend Totp:
+    # Current Unix time in seconds.
+    pub def unix_now() -> int:
+        return _tr_epoch_ms() / 1000
+
+    # The time step number T = floor(unix_time / period).
+    pub def step(unix_time: int, period: int) -> int:
+        if period <= 0: return -1
+        return unix_time / period
+
+    # RFC 6238 code for `unix_time` (seconds since the epoch). `period` is the step in
+    # seconds (30 standard). "" for invalid parameters.
+    pub def generate(secret: str, unix_time: int, period: int, digits: int, alg: str) -> str:
+        if period <= 0 or unix_time < 0: return ""
+        return Hotp.generate(secret, unix_time / period, digits, alg)
+
+    # Code for the current time with the common defaults: SHA-1, 6 digits, 30 s,
+    # secret given as Base32 text. "" if the secret is not valid Base32.
+    pub def now(secret_b32: str) -> str:
+        mut secret = Otp.decode_secret(secret_b32)
+        if secret.len() == 0: return ""
+        return Totp.generate(secret, Totp.unix_now(), 30, 6, "sha1")
+
+    pub def generate_b32(secret_b32: str, unix_time: int, period: int, digits: int, alg: str) -> str:
+        mut secret = Otp.decode_secret(secret_b32)
+        if secret.len() == 0: return ""
+        return Totp.generate(secret, unix_time, period, digits, alg)
+
+    # Verify `code` for `unix_time`, accepting steps within +/- `window` of the current
+    # one (window 1 tolerates 30 s of clock drift each way). Constant-time per
+    # candidate. Returns the matching time step (so the caller can reject replays of an
+    # already-used step), or -1 when nothing matches.
+    pub def verify(secret: str, code: str, unix_time: int, window: int, period: int, digits: int, alg: str) -> int:
+        if period <= 0 or unix_time < 0 or window < 0: return -1
+        mut base = unix_time / period
+        mut found = -1
+        mut d = -window
+        while d <= window:
+            mut st = base + d
+            if st >= 0:
+                mut want = Hotp.generate(secret, st, digits, alg)
+                if want.len() != 0 and CryptoBytes.ct_eq(want, code) and found < 0:
+                    found = st
+            d = d + 1
+        return found
+
+    # verify() with a Base32 secret and the standard SHA-1 / 6 digits / 30 s parameters.
+    pub def verify_b32(secret_b32: str, code: str, unix_time: int, window: int) -> int:
+        mut secret = Otp.decode_secret(secret_b32)
+        if secret.len() == 0: return -1
+        return Totp.verify(secret, code, unix_time, window, 30, 6, "sha1")
+
+extend Otp:
+    # Base32 text (any case, optional spaces/dashes and padding, as authenticator apps
+    # print them) -> raw secret bytes. "" if invalid.
+    pub def decode_secret(secret_b32: str) -> str:
+        mut sb = StringBuilder.init(secret_b32.len() + 2)
+        mut p = secret_b32 as Pointer[char]
+        mut i = 0
+        while i < secret_b32.len():
+            mut c = CryptoBytes.get(p, i)
+            if c >= 97 and c <= 122: c = c - 32          # to upper case
+            if c != 32 and c != 45 and c != 61:          # skip ' ', '-', '='
+                sb.append_char(c)
+            i = i + 1
+        mut cleaned = sb.to_owned()
+        sb.free()
+        mut r: Result[str, str] = Base32.decode(cleaned)
+        if r.is_err: return ""
+        return r.ok
+
+    # Raw Base32 (no padding, upper case) encoding of a secret.
+    pub def encode_secret(secret: str) -> str:
+        return Base32.encode_nopad(secret)
+
+    # `nbytes` random secret bytes (20 = 160 bits recommended by RFC 4226).
+    pub def generate_secret(nbytes: int) -> str:
+        return CryptoBytes.random(nbytes)
+
+    pub def generate_secret_b32(nbytes: int) -> str:
+        return Base32.encode_nopad(CryptoBytes.random(nbytes))
+
+    # otpauth:// provisioning URI (Key URI Format) for QR codes. `kind` is "totp" or
+    # "hotp". `counter` is only used for hotp; `period` only for totp. Returns "" if
+    # kind or alg is unknown. `alg` is "sha1" / "sha256" / "sha512".
+    pub def provisioning_uri(kind: str, issuer: str, account: str, secret_b32: str, alg: str, digits: int, period: int, counter: int) -> str:
+        if kind != "totp" and kind != "hotp": return ""
+        if not otp_valid_alg(alg): return ""
+        mut sb = StringBuilder.init(256)
+        sb.append("otpauth://")
+        sb.append(kind)
+        sb.append("/")
+        if issuer.len() > 0:
+            sb.append(otp_pct(issuer))
+            sb.append(":")
+        sb.append(otp_pct(account))
+        sb.append("?secret=")
+        sb.append(secret_b32)
+        if issuer.len() > 0:
+            sb.append("&issuer=")
+            sb.append(otp_pct(issuer))
+        sb.append("&algorithm=")
+        if alg == "sha1": sb.append("SHA1")
+        if alg == "sha256": sb.append("SHA256")
+        if alg == "sha512": sb.append("SHA512")
+        sb.append("&digits=")
+        sb.append_int(digits)
+        if kind == "totp":
+            sb.append("&period=")
+            sb.append_int(period)
+        else:
+            sb.append("&counter=")
+            sb.append_int(counter)
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+# RFC 3986 percent-encoding of everything except unreserved characters
+def otp_pct(s: str) -> str:
+    mut sb = StringBuilder.init(s.len() * 3 + 2)
+    mut p = s as Pointer[char]
+    mut i = 0
+    while i < s.len():
+        mut c = CryptoBytes.get(p, i)
+        mut keep = (c >= 48 and c <= 57) or (c >= 65 and c <= 90) or (c >= 97 and c <= 122) or c == 45 or c == 46 or c == 95 or c == 126
+        if keep:
+            sb.append_char(c)
+        else:
+            sb.append_char(37)
+            mut hi = c >> 4
+            mut lo = c & 15
+            if hi < 10: sb.append_char(48 + hi)
+            else: sb.append_char(55 + hi)
+            if lo < 10: sb.append_char(48 + lo)
+            else: sb.append_char(55 + lo)
+        i = i + 1
+    mut out = sb.to_owned()
+    sb.free()
+    return out

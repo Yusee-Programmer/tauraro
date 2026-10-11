@@ -569,3 +569,51 @@ key generation are deliberately not provided.
 **private-key operations are not hardened against local timing/cache attackers**; CRT results are
 re-checked with the public key. Public-key verification handles only public data. SHA-1 is accepted for
 legacy interop only.
+---
+
+## std.crypto.hmac — binary-safe HMAC (SHA-1 / 256 / 384 / 512)
+
+`Hmac.sha256` / `sha256_str` (above) hash the message with `strlen`, so a message
+containing a NUL byte is truncated. `Hmac.compute` takes the true length of its
+`str` arguments and so is safe for counters, nonces and other binary data:
+
+| Method | Signature | Description |
+|---|---|---|
+| `Hmac.compute` | `(alg: str, key: str, msg: str) -> str` | RFC 2104 HMAC; `alg` is `"sha1"`, `"sha256"`, `"sha384"` or `"sha512"`. Returns the RAW tag, or `""` for an unknown algorithm. Keys longer than the block size are hashed first. |
+| `Hmac.compute_hex` | same | Lowercase hex tag. |
+| `Hmac.verify` | `(alg, key, msg, tag) -> bool` | Constant-time tag check (`CryptoBytes.ct_eq`). |
+| `Hmac.hash_raw` / `block_size` / `digest_size` | | Helpers. |
+
+Verified against the RFC 2202 / 4231 cases and Python `hmac` (`tests/lang/115_hmac_otp.tr`).
+
+---
+
+## std.crypto.otp — HOTP and TOTP one-time passwords
+
+```tauraro
+from std.crypto.otp import Hotp, Totp, Otp
+```
+
+| Method | Signature | Description |
+|---|---|---|
+| `Hotp.generate` | `(secret: str, counter: int, digits: int, alg: str) -> str` | RFC 4226 code, zero-padded; `digits` 6..10, `alg` `"sha1"`/`"sha256"`/`"sha512"`; `""` on invalid parameters. |
+| `Hotp.verify` | `(secret, code, counter, look_ahead, digits, alg) -> int` | Constant-time check over a counter window; returns the matching counter or `-1`. |
+| `Totp.generate` | `(secret, unix_time, period, digits, alg) -> str` | RFC 6238 code. |
+| `Totp.now` | `(secret_b32: str) -> str` | Code for the current time (SHA-1, 6 digits, 30 s) — what authenticator apps show. |
+| `Totp.verify` / `verify_b32` | `(secret, code, unix_time, window, period, digits, alg) -> int` | Accepts steps within +/- `window`; returns the matched time step or `-1`. |
+| `Otp.decode_secret` / `encode_secret` | `(b32) -> str` / `(raw) -> str` | Base32 secrets (via `std.encoding.base32`); decoding tolerates lower case, spaces, dashes and padding. |
+| `Otp.generate_secret_b32` / `generate_secret` | `(nbytes: int) -> str` | Fresh random secret from the OS CSPRNG (20 bytes recommended). |
+| `Otp.provisioning_uri` | `(kind, issuer, account, secret_b32, alg, digits, period, counter) -> str` | `otpauth://` Key URI for QR codes. |
+
+```tauraro
+mut secret = Otp.generate_secret_b32(20)          # store; show as QR via provisioning_uri
+mut code = Totp.now(secret)                       # "492039"
+mut step = Totp.verify_b32(secret, user_code, Totp.unix_now(), 1)
+if step > last_used_step:                         # reject replays of the same step yourself
+    last_used_step = step
+```
+
+Verified against the RFC 4226 Appendix D vectors and the RFC 6238 Appendix B vectors for
+SHA-1, SHA-256 and SHA-512 (`tests/lang/115_hmac_otp.tr`). Verification does not store used
+codes or rate-limit; both are the caller's job.
+
