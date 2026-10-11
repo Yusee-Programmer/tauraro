@@ -238,6 +238,7 @@ pub class CGenerator:
     pub last_clo_estruct: str            # last gen_closure: inline env struct type
     pub last_clo_ptypes:  str            # last gen_closure: param type list (after env)
     pub last_clo_ret:     str            # last gen_closure: C return type
+    pub free_self_cache: Map[str, bool]   # class -> its user free() releases `self` itself (see class_free_frees_self)
     pub libc_names_cache: Map[str, bool]  # user free-function name -> collides with a libc symbol (memo)
     pub closure_heap_env: bool            # last gen_closure: the closure local escapes -> heap env
     pub last_clo_init:    str            # last gen_closure: positional env initializer
@@ -325,6 +326,7 @@ pub class CGenerator:
         g.last_clo_init = ""
         g.closure_heap_env = false
         g.libc_names_cache = Map[str, bool].init(64)
+        g.free_self_cache = Map[str, bool].init(16)
         g.decorator_defs  = Map[str, HirFunction].init(16)
         g.overloaded_sigs = Map[str, bool].init(32)
         g.type_alias_map  = Map[str, str].init(16)
@@ -2295,6 +2297,91 @@ pub class CGenerator:
                 return self.vt_method_mutates_self(cls.methods.get(i))
             i = i + 1
         return false
+
+    # ---- user free(): does the body release `self` itself? (bug log #16) -------------
+    # A class with a user `free()` is not ARC-managed: the compiler runs its free() at scope
+    # exit / on `x.free()`. The struct allocation used to leak unless free() freed `self`
+    # itself (`_tr_c_free(self as Pointer[char])`). The compiler now ALSO releases the struct
+    # after free() -- except when free() already does, which would double free.
+    pub def hir_expr_is_self(self, e: Pointer[HirExpr]) -> bool:
+        if _is_invalid_ptr(e as usize): return false
+        match e.read():
+            case HirExpr.EIdent(n, _, _): return n == "self"
+            case HirExpr.ECast(inner, _): return self.hir_expr_is_self(inner)
+            case _: return false
+
+    pub def hir_expr_frees_self(self, e: Pointer[HirExpr]) -> bool:
+        if _is_invalid_ptr(e as usize): return false
+        match e.read():
+            case HirExpr.ECall(callee, args, _):
+                match callee.read():
+                    case HirExpr.EIdent(cn, _, _):
+                        if (cn == "_tr_c_free" or cn == "_tr_free" or cn == "dealloc" or cn == "free" or cn == "core_alloc_dealloc") and args.len > 0:
+                            return self.hir_expr_is_self(args.get(0))
+                    case _: pass
+                return false
+            case _: return false
+
+    pub def hir_block_frees_self(self, block: HirBlock) -> bool:
+        if _is_invalid_ptr(block as usize): return false
+        if _is_invalid_ptr(block.stmts as usize): return false
+        mut i = 0
+        while i < block.stmts.len:
+            if self.hir_stmt_frees_self(block.stmts.get(i)): return true
+            i = i + 1
+        return false
+
+    pub def hir_stmt_frees_self(self, s: Pointer[HirStmt]) -> bool:
+        if _is_invalid_ptr(s as usize): return false
+        match s.read():
+            case HirStmt.SExpr(e): return self.hir_expr_frees_self(e)
+            case HirStmt.SIf(_, t, e):
+                if self.hir_block_frees_self(t): return true
+                if not _is_invalid_ptr(e as usize): return self.hir_block_frees_self(e)
+                return false
+            case HirStmt.SWhile(_, body): return self.hir_block_frees_self(body)
+            case HirStmt.SFor(_, _, body): return self.hir_block_frees_self(body)
+            case HirStmt.SUnsafe(body): return self.hir_block_frees_self(body)
+            case HirStmt.SWith(_, _, body): return self.hir_block_frees_self(body)
+            case HirStmt.SMatch(_, arms):
+                mut ai = 0
+                while ai < arms.len:
+                    if self.hir_block_frees_self(arms.get(ai).body): return true
+                    ai = ai + 1
+                return false
+            case HirStmt.STry(tb, catches, fin):
+                if self.hir_block_frees_self(tb): return true
+                if not _is_invalid_ptr(fin as usize):
+                    if self.hir_block_frees_self(fin): return true
+                mut ci = 0
+                while ci < catches.len:
+                    if self.hir_block_frees_self(catches.get(ci).read().body): return true
+                    ci = ci + 1
+                return false
+            case _: return false
+
+    pub def class_free_frees_self(self, cn: str) -> bool:
+        if self.free_self_cache.contains(cn): return self.free_self_cache.get(cn)
+        mut r = false
+        if self.classes.contains(cn):
+            mut fc = self.classes.get(cn)
+            mut fi = 0
+            while fi < fc.methods.len:
+                mut fm = fc.methods.get(fi)
+                if fm.name == "free":
+                    if self.hir_block_frees_self(fm.body): r = true
+                fi = fi + 1
+        self.free_self_cache.insert(cn, r)
+        return r
+
+    # True when the compiler must release the struct allocation after calling `cn`'s user free().
+    pub def user_free_releases_struct(self, cn: str) -> bool:
+        if not self.classes.contains(cn): return false
+        if self.value_types.contains(cn): return false
+        if self.enums.contains(cn): return false
+        if self.classes.get(cn).generics.len > 0: return false
+        if not self.has_method(cn, "free"): return false
+        return not self.class_free_frees_self(cn)
 
     pub def hir_block_mutates_self(self, block: HirBlock) -> bool:
         if _is_invalid_ptr(block as usize): return false
@@ -6649,7 +6736,12 @@ pub class CGenerator:
             # compile error ("passing 'X*' to parameter of incompatible type
             # 'Y_obj'") instead of the implicit upcast every other call form gets.
             if args.len > 0: s = s + ", " + self.gen_iface_wrapped_args(_mc_params, args)
-            return s + ")"
+            mut mc_out = s + ")"
+            if method == "free" and args.len == 0 and self.user_free_releases_struct(class_name):
+                # explicit `x.free()` on a user-free() class: run it, then release the struct
+                # too (bug log #16). Single return point on purpose.
+                mc_out = "({ " + class_name + "* _fo = " + obj_s + "; " + dispatch_name + "(_fo); _tr_obj_release(_fo, NULL); })"
+            return mc_out
 
         if self.enums.contains(class_name):
             mut _evdef = self.enums.get(class_name)
@@ -9571,6 +9663,10 @@ pub class CGenerator:
                         while _ad_ti < _ad_tmps.len:
                             self.w(pad + "_tr_str_release(" + _ad_tmps.get(_ad_ti) + ");\n")
                             _ad_ti = _ad_ti + 1
+                        # The struct allocation itself: released here unless free() already
+                        # frees `self` (bug log #16).
+                        if self.user_free_releases_struct(adc):
+                            self.w(pad + "_tr_obj_release(" + _adn_safe + ", NULL);\n")
             case _: pass
 
     pub def gen_for_loop(self, var: str, iter: Pointer[HirExpr], body: HirBlock, indent: int):
