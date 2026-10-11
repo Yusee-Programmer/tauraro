@@ -1,0 +1,78 @@
+# tests/lang/104_alias_assign_no_free.tr - a collection local that is re-pointed at memory it
+# does not own (`v = h.items`, `v = other`, `v = coll.get(i)`) must never be auto-freed, on ANY
+# exit path (fall-through, early `return`, `break`). The drop decision at an early exit used to
+# be taken from the flags known so far, and even the final one ignored the re-assignment, so the
+# owner's collection was freed under it (use-after-free; ASan: scripts/asan_check.sh).
+# Run under ASan this test reports nothing; before the fix every function below freed h.items.
+
+from std.core.vec import Vec
+from std.test import TestRunner
+
+class Holder:
+    pub items: Vec[int]
+
+extend Holder:
+    pub def init() -> Holder:
+        mut h = Holder()
+        h.items = Vec[int].init(4)
+        h.items.push(10)
+        h.items.push(20)
+        return h
+
+def early(h: Holder, flag: bool) -> int:
+    mut v: Vec[int] = Vec[int].init(0)
+    v = h.items
+    if flag:
+        return 1
+    return v.len
+
+def fallthrough(h: Holder) -> int:
+    mut v: Vec[int] = Vec[int].init(0)
+    v = h.items
+    n = v.len
+    return n
+
+def loop_carried(h: Holder, stop: int) -> int:
+    # the early `return` is lexically BEFORE the alias assignment, but runs on a later
+    # iteration, when `v` already aliases h.items
+    mut v: Vec[int] = Vec[int].init(0)
+    mut i = 0
+    while i < 3:
+        if i == stop:
+            return v.len + 100
+        v = h.items
+        i = i + 1
+    return v.len
+
+def broke(h: Holder) -> int:
+    mut v: Vec[int] = Vec[int].init(0)
+    mut i = 0
+    while i < 5:
+        v = h.items
+        if i == 2:
+            break
+        i = i + 1
+    return v.len
+
+def owned_still_freed() -> int:
+    # an ordinary owned collection local keeps its auto-drop
+    mut v: Vec[int] = Vec[int].init(0)
+    v.push(1)
+    v.push(2)
+    v.push(3)
+    return v.len
+
+def main():
+    mut t = TestRunner.init("104_alias_assign_no_free")
+    h = Holder.init()
+    t.assert_eq_int(early(h, true), 1, "early return")
+    t.assert_eq_int(early(h, false), 2, "early, fall through")
+    t.assert_eq_int(fallthrough(h), 2, "fall-through")
+    t.assert_eq_int(loop_carried(h, 1), 102, "loop-carried alias, early return")
+    t.assert_eq_int(loop_carried(h, 7), 2, "loop-carried alias, no early return")
+    t.assert_eq_int(broke(h), 2, "break")
+    t.assert_eq_int(owned_still_freed(), 3, "owned local")
+    h.items.push(30)
+    t.assert_eq_int(h.items.len, 3, "owner's collection is intact")
+    t.assert_eq_int(h.items.get(2), 30, "owner's collection is still writable")
+    t.summary()

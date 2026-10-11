@@ -148,7 +148,71 @@ def _stmt_mutates_self(s: Pointer[Stmt]) -> bool:
         case Stmt.SDefer(inner): return _stmt_mutates_self(inner)
         case _: return false
 
+# ---- alias-assignment pre-scan (bug log: early-exit/alias double free) -------------------
+# `v = h.items` / `v = other` / `v = coll.get(i)` re-points a local collection at memory it does
+# NOT own. The local's drop decision is taken at each exit (return/break/continue) from the flags
+# known SO FAR, so a later (or loop-carried) alias assignment used to leave an earlier early exit
+# freeing the alias (use-after-free / double free of the owner's collection). Pre-scanning the
+# whole function body makes the decision flow-insensitive: such a local is never auto-dropped.
+def _rhs_is_alias(e: Pointer[Expr]) -> bool:
+    if e as usize == 0 as usize: return false
+    match e.read():
+        case Expr.EIdent(_): return true
+        case Expr.EPropAccess(_, _): return true
+        case Expr.EIndex(_, _): return true
+        case Expr.EMethodCall(_, m, _): return m == "get" or m == "first" or m == "last"
+        case _: return false
+
+def _block_alias_assigns(b: Block, out: Map[str, bool]):
+    mut i = 0
+    while i < b.stmts.len:
+        _stmt_alias_assigns(b.stmts.get(i), out)
+        i = i + 1
+
+def _pblock_alias_assigns(pb: Pointer[Block], out: Map[str, bool]):
+    if pb as usize == 0 as usize: return
+    _block_alias_assigns(pb.read(), out)
+
+def _stmt_alias_assigns(s: Pointer[Stmt], out: Map[str, bool]):
+    if s as usize == 0 as usize: return
+    match s.read():
+        case Stmt.SAssign(tgt, val):
+            if tgt as usize != 0 as usize:
+                match tgt.read():
+                    case Expr.EIdent(tn):
+                        if _rhs_is_alias(val): out.insert(tn, true)
+                    case _: pass
+        case Stmt.SIf(_, then_b, elifs, else_b):
+            _block_alias_assigns(then_b, out)
+            mut i = 0
+            while i < elifs.len:
+                _pblock_alias_assigns(elifs.get(i).body, out)
+                i = i + 1
+            _block_alias_assigns(else_b, out)
+        case Stmt.SWhile(_, body, _): _block_alias_assigns(body, out)
+        case Stmt.SFor(_, _, body, _, _): _block_alias_assigns(body, out)
+        case Stmt.SForUnpack(_, _, body): _block_alias_assigns(body, out)
+        case Stmt.SUnsafe(body): _block_alias_assigns(body, out)
+        case Stmt.SWith(_, _, body): _block_alias_assigns(body, out)
+        case Stmt.STaskGroup(body): _block_alias_assigns(body, out)
+        case Stmt.SGpuBlock(body): _block_alias_assigns(body, out)
+        case Stmt.SMatch(_, arms):
+            mut i = 0
+            while i < arms.len:
+                _pblock_alias_assigns(arms.get(i).body, out)
+                i = i + 1
+        case Stmt.STry(try_body, catches, finally_b):
+            _block_alias_assigns(try_body, out)
+            mut i = 0
+            while i < catches.len:
+                _pblock_alias_assigns(catches.get(i).read().body, out)
+                i = i + 1
+            _block_alias_assigns(finally_b, out)
+        case Stmt.SDefer(inner): _stmt_alias_assigns(inner, out)
+        case _: pass
+
 pub class Sema:
+    pub alias_assigned:     Map[str, bool]  # locals of the function being lowered that are ever re-pointed at an alias (see _block_alias_assigns)
     pub globals:            Map[str, Symbol]
     pub scopes:             Vec[Scope]
     pub errors:             Vec[str]
@@ -292,6 +356,7 @@ extend Sema:
         s.in_assign_target_plain = false
         s.in_recv_pos       = false
         s.container_borrows = Map[str, str].init(16)
+        s.alias_assigned = Map[str, bool].init(8)
         s.capturing_moves   = false
         s.branch_moved_buf  = Vec[str].init(0)
         s.capturing_inits   = false
@@ -1388,6 +1453,7 @@ extend Sema:
         # Dict_free (#54, pre-existing gap, not made worse here).
         if tn == "List" or tn == "Vec" or tn == "Dict" or tn == "Map" or tn == "Set":
             if sym.coll_escaped: return false
+            if self.alias_assigned.contains(sym.name): return false
             if sym.is_moved or sym.is_maybe_moved or sym.is_freed: return false
             if sym.active_borrows > 0: return false
             if not sym.is_init or sym.is_maybe_init: return false
@@ -3856,7 +3922,11 @@ extend Sema:
         # outlives engine: collect cross-fn ref-borrow edges while lowering the body.
         self.cur_func_borrowers = Vec[str].init(2)
         self.cur_func_sources   = Vec[str].init(2)
+        mut saved_alias_assigned = self.alias_assigned
+        self.alias_assigned = Map[str, bool].init(8)
+        _block_alias_assigns(f.body, self.alias_assigned)
         hf.body = self.lower_block(f.body)
+        self.alias_assigned = saved_alias_assigned
         hf.borrow_borrowers = self.cur_func_borrowers
         hf.borrow_sources   = self.cur_func_sources
         # Outlives engine result: which ref-borrow locals are PROVEN-safe to elide.

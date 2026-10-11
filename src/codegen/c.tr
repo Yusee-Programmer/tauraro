@@ -6782,7 +6782,11 @@ pub class CGenerator:
             mut mc_out = s + ")"
             if method == "free" and args.len == 0 and self.user_free_releases_struct(class_name):
                 # explicit `x.free()` on a user-free() class: run it, then release the struct
-                # too (bug log #16). Single return point on purpose.
+                # too (bug log #16). Single return point on purpose: the seed compiler in
+                # bootstrap/c (stage0) still double-frees a collection local that was re-pointed at a
+                # field alias when an early `return` follows it (fixed in sema's alias pre-scan,
+                # tests/lang/104_alias_assign_no_free.tr); fold this into early returns once the
+                # seed is regenerated.
                 mc_out = "({ " + class_name + "* _fo = " + obj_s + "; " + dispatch_name + "(_fo); _tr_obj_release(_fo, NULL); })"
             return mc_out
 
