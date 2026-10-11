@@ -72,6 +72,9 @@ added here as each phase lands.
 - **`std.crypto.bytes`** — `CryptoBytes`: constant-time `ct_eq`, volatile
   `secure_zero` (new runtime helper `_tr_c_secure_zero`), OS `random`, binary-safe
   slice/concat (`tests/lang/114_crypto_bytes.tr`).
+- **`std.audio`** — shared `AudioBuffer` (interleaved f32) with sinc/linear resampling, remix, mix, gain/normalize/fades;
+  **`std.audio.wav`**: PCM 8/16/24/32, float 32/64, A-law/µ-law, WAVE_FORMAT_EXTENSIBLE, LIST/INFO tags, byte-identical
+  to Python's `wave` writer. `tests/lang/163_wav.tr`.
 - **`std.image.transform`** — resize (nearest/bilinear/bicubic/lanczos, Pillow-compatible), crop, flips, 90°/arbitrary rotation,
   convolution (box/gaussian blur, sharpen, Laplacian/Sobel edges, emboss, custom kernels), colour adjustments, alpha
   compositing; `decode()` now sniffs GIF. `tests/lang/162_transform.tr`.

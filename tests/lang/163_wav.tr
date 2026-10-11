@@ -1,0 +1,329 @@
+# tests/lang/163_wav.tr - std.audio.wav and std.audio (AudioBuffer, resample, mix).
+#
+# Decoder fixtures are built byte-by-byte with Python's struct (+ the stdlib
+# `wave` module for the reference writer output): 8/16/24/32-bit PCM, float
+# 32/64, WAVE_FORMAT_EXTENSIBLE, A-law/mu-law (G.711 reference vectors), chunk
+# order variations, LIST/INFO tags, a streamed (size 0xFFFFFFFF) data chunk.
+# Encoder output is compared byte-for-byte with Python's `wave` module.
+
+from std.test import TestRunner
+from std.audio import *
+from std.audio.wav import decode_wav, encode_wav, encode_wav_ex, WavTags, WavFile
+from std.compress.common import rd8
+
+extern "C":
+    def _tr_c_malloc(size: int) -> Pointer[char]
+    def _tr_str_wrap_len(s: Pointer[char], blen: int) -> str
+    def sin(x: float) -> float
+    def fabs(x: float) -> float
+
+def nib(c: int) -> int:
+    if c >= 97: return c - 87
+    if c >= 65: return c - 55
+    return c - 48
+
+def unhex(h: str) -> str:
+    mut n = h.len() / 2
+    mut hp = h as Pointer[char]
+    mut buf = _tr_c_malloc(n + 1)
+    mut i = 0
+    while i < n:
+        mut b = nib(rd8(hp, 2 * i)) * 16 + nib(rd8(hp, 2 * i + 1))
+        unsafe:
+            buf.offset(i).write(b as char)
+        i = i + 1
+    unsafe:
+        buf.offset(n).write('\0')
+    return _tr_str_wrap_len(buf, n)
+
+def hexs(s: str, n: int) -> str:
+    mut buf = _tr_c_malloc(n * 2 + 1)
+    mut p = s as Pointer[char]
+    mut i = 0
+    while i < n:
+        mut b = rd8(p, i)
+        mut hi = b / 16
+        mut lo = b % 16
+        mut ch1 = 48 + hi
+        if hi > 9:
+            ch1 = 87 + hi
+        mut ch2 = 48 + lo
+        if lo > 9:
+            ch2 = 87 + lo
+        unsafe:
+            buf.offset(2 * i).write(ch1 as char)
+            buf.offset(2 * i + 1).write(ch2 as char)
+        i = i + 1
+    unsafe:
+        buf.offset(n * 2).write('\0')
+    return _tr_str_wrap_len(buf, n * 2)
+
+def near(a: float, b: float, tol: float) -> bool:
+    return fabs(a - b) <= tol
+
+def check(t: TestRunner, name: str, hex_: str, ch: int, rate: int, exp: List[float]):
+    mut b = unhex(hex_)
+    mut w = decode_wav(b, b.len())
+    t.assert_true(w.ok, name + ": decodes")
+    t.assert_eq_int(w.buf.channels, ch, name + ": channels")
+    t.assert_eq_int(w.buf.rate, rate, name + ": rate")
+    t.assert_eq_int(w.buf.frames * ch, len(exp), name + ": sample count")
+    mut bad = 0
+    mut i = 0
+    while i < len(exp) and i < w.buf.frames * ch:
+        mut got = w.buf.get(i / ch, i % ch)
+        if not near(got, exp[i], 0.0000001):
+            bad = bad + 1
+        i = i + 1
+    t.assert_eq_int(bad, 0, name + ": every sample exact")
+    w.free()
+
+def check_tags(t: TestRunner, name: str, hex_: str, title: str):
+    mut b = unhex(hex_)
+    mut w = decode_wav(b, b.len())
+    t.assert_true(w.ok, name + ": decodes")
+    t.assert_eq_int(w.tag_count(), 3, name + ": 3 tags")
+    t.assert_true(w.tag("INAM") == title, name + ": INAM")
+    t.assert_true(w.tag("IART") == "Me", name + ": IART")
+    t.assert_true(w.tag("ICMT") == "odd", name + ": ICMT (trailing NULs stripped)")
+    t.assert_true(w.tag("ISFT") == "", name + ": missing tag is empty")
+    w.free()
+
+def sine(rate: int, hz: float, secs_x1000: int, ch: int) -> AudioBuffer:
+    mut n = rate * secs_x1000 / 1000
+    mut b = AudioBuffer.init(rate, ch, n)
+    mut i = 0
+    while i < n:
+        mut v = 0.5 * sin(6.283185307179586 * hz * (i as float) / (rate as float))
+        mut c = 0
+        while c < ch:
+            b.set(i, c, v)
+            c = c + 1
+        i = i + 1
+    return b
+
+def main():
+    mut t = TestRunner.init("163_wav")
+    t.section("decode fixtures")
+    check(t, "pcm16_mono", "524946463400000057415645666d74201000000001000100401f0000803e000002001000646174611000000000000100ffffff7f0080e80318fc3930", 1, 8000, [0.0, 3.0517578125e-05, -3.0517578125e-05, 0.999969482421875, -1.0, 0.030517578125, -0.030517578125, 0.376739501953125])
+    check(t, "pcm8_mono", "524946462c00000057415645666d74201000000001000100112b0000112b000001000800646174610800000000017f80ff40c864", 1, 11025, [-1.0, -0.9921875, -0.0078125, 0.0, 0.9921875, -0.5, 0.5625, -0.21875])
+    check(t, "pcm24_mono", "524946463c00000057415645666d7420100000000100010044ac0000cc040200030018006461746118000000000000010000ffffffffff7f00008040e2010f04f6000040", 1, 44100, [0.0, 1.1920928955078125e-07, -1.1920928955078125e-07, 0.9999998807907104, -1.0, 0.01471710205078125, -0.07800114154815674, 0.5])
+    check(t, "pcm32_stereo", "524946464400000057415645666d7420100000000100020080bb000000dc05000800200064617461200000000000000000000040000000c07fffff7f0000008000000001000000ff00003930", 2, 48000, [0.0, 0.5, -0.5, 0.9999999399296939, -1.0, 0.0078125, -0.0078125, 0.376739501953125])
+    check(t, "float32_stereo", "524946464400000057415645666d742010000000030002002256000010b10200080020006461746120000000000000000000003f000000bf0000803f000080bf0000803e0000003e000040bf", 2, 22050, [0.0, 0.5, -0.5, 1.0, -1.0, 0.25, 0.125, -0.75])
+    check(t, "float64_mono", "524946466400000057415645666d74201000000003000100803e000000f401000800400064617461400000000000000000000000000000000000e03f000000000000e0bf000000000000f03f000000000000f0bf333333333333d33f333333333333d3bf000000000000503f", 1, 16000, [0.0, 0.5, -0.5, 1.0, -1.0, 0.30000001192092896, -0.30000001192092896, 0.0009765625])
+    check(t, "ext16_3ch", "524946464800000057415645666d742028000000feff0300007d000000ee02000600100016001000070000000100000000001000800000aa00389b71646174610c00000064009cffc8002c01d4fe9001", 3, 32000, [0.0030517578125, -0.0030517578125, 0.006103515625, 0.0091552734375, -0.0091552734375, 0.01220703125])
+    check(t, "mulaw", "524946462800000057415645666d74201000000007000100401f0000401f0000010008006461746104000000ff00807f", 1, 8000, [0.0, -0.9803466796875, 0.9803466796875, 0.0])
+    check(t, "alaw", "524946462800000057415645666d74201000000006000100401f0000401f0000010008006461746104000000d555aa2a", 1, 8000, [0.000244140625, -0.000244140625, 0.984375, -0.984375])
+    check_tags(t, "list_before_data", "524946467a00000057415645666d74201000000001000100401f0000803e0000020010006661637404000000040000004c4953542e000000494e464f494e414d080000005469746c6520580049415254030000004d65000049434d54050000006f6464000000646174610800000000000100ffffff7f6a756e6b0300000061626300", "Title X")
+    check(t, "list_before_data", "524946467a00000057415645666d74201000000001000100401f0000803e0000020010006661637404000000040000004c4953542e000000494e464f494e414d080000005469746c6520580049415254030000004d65000049434d54050000006f6464000000646174610800000000000100ffffff7f6a756e6b0300000061626300", 1, 8000, [0.0, 3.0517578125e-05, -3.0517578125e-05, 0.999969482421875])
+    check_tags(t, "list_after_data", "524946466200000057415645666d74201000000001000100401f0000803e000002001000646174610800000000000100ffffff7f4c4953542e000000494e464f494e414d080000005469746c6520580049415254030000004d65000049434d54050000006f6464000000", "Title X")
+    check(t, "list_after_data", "524946466200000057415645666d74201000000001000100401f0000803e000002001000646174610800000000000100ffffff7f4c4953542e000000494e464f494e414d080000005469746c6520580049415254030000004d65000049434d54050000006f6464000000", 1, 8000, [0.0, 3.0517578125e-05, -3.0517578125e-05, 0.999969482421875])
+    check(t, "streamed_size", "524946463000000057415645666d74201000000001000100401f0000803e00000200100064617461ffffffff00000100ffffff7f0080e803", 1, 8000, [0.0, 3.0517578125e-05, -3.0517578125e-05, 0.999969482421875, -1.0, 0.030517578125])
+    check(t, "partial_last_frame", "524946462e00000057415645666d74201000000001000200401f0000007d000004001000646174610a00000001000200030004000500", 2, 8000, [3.0517578125e-05, 6.103515625e-05, 9.1552734375e-05, 0.0001220703125])
+
+    t.section("decode: bad input")
+    mut g = decode_wav("hello world, not riff", 21)
+    t.assert_true(not g.ok, "garbage rejected")
+    t.assert_eq_int(g.buf.rate, -1, "invalid buffer sentinel")
+    mut e1 = decode_wav("RIFF", 4)
+    t.assert_true(not e1.ok, "truncated header rejected")
+    mut nofmt = unhex("524946460e0000005741564564617461020000000000")
+    t.assert_true(not decode_wav(nofmt, nofmt.len()).ok, "no fmt chunk")
+    mut nodata = unhex("524946461c00000057415645666d74201000000001000100401f0000803e000002001000")
+    t.assert_true(not decode_wav(nodata, nodata.len()).ok, "no data chunk")
+    mut adpcm = unhex("524946462800000057415645666d74201000000002000100401f0000401f000001000400646174610400000000000000")
+    t.assert_true(not decode_wav(adpcm, adpcm.len()).ok, "ADPCM (format 2) unsupported")
+    t.assert_true(decode_wav(adpcm, adpcm.len()).error.len() > 0, "error message set")
+
+    t.section("encode: byte-exact against Python's wave module")
+    mut a = AudioBuffer.init(44100, 2, 4)
+    a.set(0, 0, 0.0)
+    a.set(0, 1, 3.0517578125e-05)
+    a.set(1, 0, -3.0517578125e-05)
+    a.set(1, 1, 6.103515625e-05)
+    a.set(2, 0, 0.999969482421875)
+    a.set(2, 1, -1.0)
+    a.set(3, 0, 0.03765869140625)
+    a.set(3, 1, -0.131866455078125)
+    mut ea, la = encode_wav(a, 16, false)
+    t.assert_true(hexs(ea, la) == "524946463400000057415645666d7420100000000100020044ac000010b1020004001000646174611000000000000100ffff0200ff7f0080d2041fef", "16-bit stereo identical to wave")
+    mut b24 = AudioBuffer.init(8000, 1, 6)
+    b24.set(0, 0, 0.0)
+    b24.set(1, 0, 1.1920928955078125e-07)
+    b24.set(2, 0, -1.1920928955078125e-07)
+    b24.set(3, 0, 0.9999998807907104)
+    b24.set(4, 0, -1.0)
+    b24.set(5, 0, 0.011920928955078125)
+    mut e24, l24 = encode_wav(b24, 24, false)
+    t.assert_true(hexs(e24, l24) == "524946463600000057415645666d74201000000001000100401f0000c05d0000030018006461746112000000000000010000ffffffffff7f000080a08601", "24-bit mono identical to wave")
+    mut b8 = AudioBuffer.init(8000, 1, 6)
+    b8.set(0, 0, -1.0)
+    b8.set(1, 0, 0.9921875)
+    b8.set(2, 0, 0.0)
+    b8.set(3, 0, -0.0078125)
+    b8.set(4, 0, 0.0078125)
+    b8.set(5, 0, -0.9921875)
+    mut e8, l8 = encode_wav(b8, 8, false)
+    t.assert_true(hexs(e8, l8) == "524946462a00000057415645666d74201000000001000100401f0000401f000001000800646174610600000000ff807f8101", "8-bit mono identical to wave")
+
+    t.section("encode: round trips")
+    mut s = sine(22050, 440.0, 50, 2)
+    mut r16, n16 = encode_wav(s, 16, false)
+    t.assert_eq_int(n16, 44 + s.frames * 4, "16-bit size = header + data")
+    mut d16 = decode_wav(r16, n16)
+    t.assert_true(d16.ok, "16-bit decodes")
+    t.assert_eq_int(d16.bits, 16, "bits reported")
+    t.assert_eq_int(d16.format, 1, "format PCM")
+    mut worst = 0.0
+    mut i = 0
+    while i < s.frames:
+        mut dd = fabs(d16.buf.get(i, 0) - s.get(i, 0))
+        if dd > worst:
+            worst = dd
+        i = i + 1
+    t.assert_true(worst <= 1.0 / 65536.0 + 0.0000001, "16-bit error <= half an LSB")
+    mut f32e, f32n = encode_wav(s, 32, true)
+    mut f32d = decode_wav(f32e, f32n)
+    t.assert_eq_int(f32d.format, 3, "float format")
+    t.assert_true(near(f32d.buf.get(100, 1), s.get(100, 1), 0.0000001), "float32 exact")
+    mut f64e, f64n = encode_wav(s, 64, true)
+    mut f64d = decode_wav(f64e, f64n)
+    t.assert_eq_int(f64d.bits, 64, "float64 bits")
+    t.assert_true(near(f64d.buf.get(100, 1), s.get(100, 1), 0.0000001), "float64 round trip")
+    mut p24, n24 = encode_wav(s, 24, false)
+    t.assert_true(near(decode_wav(p24, n24).buf.get(77, 0), s.get(77, 0), 0.0000001), "24-bit round trip")
+    mut p32, n32 = encode_wav(s, 32, false)
+    t.assert_true(near(decode_wav(p32, n32).buf.get(77, 0), s.get(77, 0), 0.000001), "32-bit round trip")
+    mut p8, n8 = encode_wav(s, 8, false)
+    t.assert_true(near(decode_wav(p8, n8).buf.get(77, 0), s.get(77, 0), 0.0079), "8-bit round trip within one step")
+    mut loud = AudioBuffer.init(8000, 1, 2)
+    loud.set(0, 0, 3.0)
+    loud.set(1, 0, -3.0)
+    mut el, ll = encode_wav(loud, 16, false)
+    mut dl = decode_wav(el, ll)
+    t.assert_true(near(dl.buf.get(0, 0), 32767.0 / 32768.0, 0.0000001), "clamps positive overload")
+    t.assert_true(near(dl.buf.get(1, 0), -1.0, 0.0000001), "clamps negative overload")
+    mut x5 = AudioBuffer.init(8000, 5, 3)
+    x5.set(2, 4, 0.25)
+    mut e5, l5 = encode_wav(x5, 16, false)
+    mut d5 = decode_wav(e5, l5)
+    t.assert_eq_int(d5.buf.channels, 5, "5 channels via WAVE_FORMAT_EXTENSIBLE")
+    t.assert_true(near(d5.buf.get(2, 4), 0.25, 0.0001), "5-channel sample")
+    t.assert_eq_int(rd8(e5 as Pointer[char], 20), 0xFE, "extensible format tag written")
+    mut bad_bits, bl = encode_wav(s, 12, false)
+    t.assert_eq_int(bl, 0, "unsupported depth refused")
+    mut bad_f, bfl = encode_wav(s, 16, true)
+    t.assert_eq_int(bfl, 0, "16-bit float refused")
+    mut tg = WavTags.init()
+    tg.add("INAM", "My Song")
+    tg.add("IART", "Someone")
+    tg.add("ICMT", "x")
+    mut et, lt = encode_wav_ex(s, 16, false, tg)
+    mut dt = decode_wav(et, lt)
+    t.assert_true(dt.ok, "tagged file decodes")
+    t.assert_eq_int(dt.tag_count(), 3, "3 tags written and read")
+    t.assert_true(dt.tag("INAM") == "My Song", "INAM round trip")
+    t.assert_true(dt.tag("IART") == "Someone", "IART round trip")
+    t.assert_true(dt.tag("ICMT") == "x", "odd-length tag (padding)")
+    t.assert_eq_int(dt.buf.frames, s.frames, "audio intact after LIST chunk")
+    t.assert_eq_int(lt & 1, 0, "file length is even")
+
+    t.section("AudioBuffer helpers")
+    mut m = AudioBuffer.init(1000, 2, 4)
+    m.set(1, 0, 0.5)
+    m.set(1, 1, -0.25)
+    mut mono = to_mono(m)
+    t.assert_eq_int(mono.channels, 1, "to_mono channels")
+    t.assert_true(near(mono.get(1, 0), 0.125, 0.000001), "to_mono averages")
+    mut st = to_stereo(mono)
+    t.assert_true(near(st.get(1, 1), 0.125, 0.000001), "to_stereo duplicates")
+    mut sl = slice(m, 1, 2)
+    t.assert_eq_int(sl.frames, 2, "slice length")
+    t.assert_true(near(sl.get(0, 0), 0.5, 0.000001), "slice content")
+    mut sl2 = slice(m, 3, 100)
+    t.assert_eq_int(sl2.frames, 1, "slice clamps")
+    mut cc = concat(m, m.duplicate())
+    t.assert_eq_int(cc.frames, 8, "concat length")
+    t.assert_true(near(cc.get(5, 0), 0.5, 0.000001), "concat content")
+    t.assert_true(not concat(m, mono).valid(), "concat of different layouts is invalid")
+    mut g2 = m.duplicate()
+    gain(g2, 2.0)
+    t.assert_true(near(g2.get(1, 0), 1.0, 0.000001), "gain")
+    t.assert_true(near(m.get(1, 0), 0.5, 0.000001), "duplicate is independent")
+    t.assert_true(near(peak(g2), 1.0, 0.000001), "peak")
+    normalize(g2, 0.5)
+    t.assert_true(near(peak(g2), 0.5, 0.000001), "normalize")
+    g2.set(0, 0, 3.0)
+    clip(g2)
+    t.assert_true(near(g2.get(0, 0), 1.0, 0.000001), "clip")
+    mut ramp = AudioBuffer.init(1000, 1, 5)
+    mut ri = 0
+    while ri < 5:
+        ramp.set(ri, 0, 1.0)
+        ri = ri + 1
+    fade_in(ramp, 4)
+    t.assert_true(near(ramp.get(0, 0), 0.0, 0.000001) and near(ramp.get(2, 0), 0.5, 0.000001), "fade_in")
+    fade_out(ramp, 2)
+    t.assert_true(near(ramp.get(4, 0), 0.0, 0.000001), "fade_out")
+    reverse(ramp)
+    t.assert_true(near(ramp.get(0, 0), 0.0, 0.000001) and near(ramp.get(4, 0), 0.0, 0.000001) and near(ramp.get(2, 0), 0.5, 0.000001), "reverse")
+    t.assert_true(near(rms(sine(8000, 100.0, 1000, 1)), 0.35355339, 0.001), "rms of a 0.5 sine")
+    mut mx = mix(m, m.duplicate(), 0.5, 0.25)
+    t.assert_true(near(mx.get(1, 0), 0.375, 0.000001), "mix gains")
+    mut short = AudioBuffer.init(1000, 2, 2)
+    short.set(0, 0, 0.1)
+    mut mx2 = mix(m, short, 1.0, 1.0)
+    t.assert_eq_int(mx2.frames, 4, "mix length is the longer input")
+    t.assert_true(near(mx2.get(0, 0), 0.1, 0.000001), "mix adds")
+    t.assert_true(not mix_into(m, mono, 0, 1.0), "mix_into refuses mismatched layouts")
+    t.assert_eq_int(AudioBuffer.invalid().rate, -1, "invalid sentinel")
+    t.assert_true(near(AudioBuffer.init(8000, 2, 4000).seconds(), 0.5, 0.000001), "seconds")
+
+    t.section("resample")
+    mut tone = sine(8000, 440.0, 250, 1)
+    mut up = resample(tone, 16000, 1)
+    t.assert_eq_int(up.frames, 4000, "8k->16k frame count")
+    mut errs = 0.0
+    mut k = 40
+    while k < up.frames - 40:
+        mut ex = 0.5 * sin(6.283185307179586 * 440.0 * (k as float) / 16000.0)
+        mut df = fabs(up.get(k, 0) - ex)
+        if df > errs:
+            errs = df
+        k = k + 1
+    t.assert_true(errs < 0.01, "sinc upsample matches the analytic sine (max err " + errs.to_str() + ")")
+    mut upl = resample(tone, 16000, 0)
+    mut errl = 0.0
+    k = 40
+    while k < upl.frames - 40:
+        mut ex2 = 0.5 * sin(6.283185307179586 * 440.0 * (k as float) / 16000.0)
+        mut d2 = fabs(upl.get(k, 0) - ex2)
+        if d2 > errl:
+            errl = d2
+        k = k + 1
+    t.assert_true(errl < 0.05, "linear upsample is close (max err " + errl.to_str() + ")")
+    t.assert_true(errs < errl, "sinc is more accurate than linear")
+    mut dn = resample(sine(16000, 440.0, 250, 1), 8000, 1)
+    t.assert_eq_int(dn.frames, 2000, "16k->8k frame count")
+    mut errd = 0.0
+    k = 30
+    while k < dn.frames - 30:
+        mut ex3 = 0.5 * sin(6.283185307179586 * 440.0 * (k as float) / 8000.0)
+        mut d3 = fabs(dn.get(k, 0) - ex3)
+        if d3 > errd:
+            errd = d3
+        k = k + 1
+    t.assert_true(errd < 0.01, "sinc downsample matches (max err " + errd.to_str() + ")")
+    mut alias = sine(16000, 7000.0, 200, 1)
+    mut al = resample(alias, 8000, 1)
+    t.assert_true(rms(al) < 0.02, "7 kHz tone is filtered out when downsampling to 8 kHz")
+    mut same = resample(tone, 8000, 1)
+    t.assert_eq_int(same.frames, tone.frames, "same rate copies")
+    t.assert_true(not resample(tone, 0, 1).valid(), "bad rate rejected")
+    mut cd = resample(sine(44100, 1000.0, 100, 2), 48000, 1)
+    t.assert_eq_int(cd.frames, 4800, "44.1k->48k")
+    t.assert_eq_int(cd.channels, 2, "channels kept")
+    mut mixr = mix(sine(8000, 300.0, 100, 1), sine(16000, 300.0, 100, 1), 0.5, 0.5)
+    t.assert_eq_int(mixr.rate, 8000, "mix converts the second input to the first's rate")
+    t.assert_true(rms(mixr) > 0.2, "mixed signal has energy")
+    t.summary()
