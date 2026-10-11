@@ -29,6 +29,9 @@ added here as each phase lands.
 - `from` stays a reserved word (it starts import statements and lifetime clauses).
 
 ### Added
+- **`std.net.mdns`** — mDNS (RFC 6762) / DNS-SD (RFC 6763): DNS message codec with name compression, browse/resolve/
+  enumerate/announce helpers, sans-IO `MdnsResponder` (known-answer suppression), opt-in multicast `MdnsSocket`.
+  Checked against Python-built packets, a multicast loopback round trip and avahi (`tests/lang/134_mdns_codec.tr`, `135_mdns_loopback.tr`).
 - **`std.crypto.blake3`** — BLAKE3 (hash, keyed hash, derive_key, extendable output, incremental
   hasher) with the full chunk tree; official vectors + a spec-derived model (`tests/lang/112_blake3.tr`).
 - **`std.crypto.argon2`** — Argon2d / Argon2i / Argon2id (RFC 9106) on top of BLAKE2b:

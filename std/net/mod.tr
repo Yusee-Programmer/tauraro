@@ -16,6 +16,7 @@
 #   from std.net.hpack       import HpackEncoder, HpackDecoder, HpackHeaders, Huffman
 #   from std.net.http2       import H2Client, H2Server, H2Request, H2Response, H2Conn
 #   from std.net.ntp         import NtpClient, NtpResult, NtpPacket
+#   from std.net.mdns        import MdnsMessage, MdnsRecord, MdnsSocket, MdnsResponder, DnsSdService
 
 from std.net.tcp         import TcpStream
 from std.net.tcp         import TcpListener
@@ -58,3 +59,8 @@ from std.net.http2       import H2Conn
 from std.net.ntp         import NtpClient
 from std.net.ntp         import NtpResult
 from std.net.ntp         import NtpPacket
+from std.net.mdns        import MdnsMessage
+from std.net.mdns        import MdnsRecord
+from std.net.mdns        import MdnsSocket
+from std.net.mdns        import MdnsResponder
+from std.net.mdns        import DnsSdService

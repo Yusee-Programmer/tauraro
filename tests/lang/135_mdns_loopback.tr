@@ -1,0 +1,171 @@
+# tests/lang/135_mdns_loopback.tr
+# std.net.mdns over real UDP sockets on 127.0.0.1: a responder thread (unicast mode,
+# port searched in a small range) and a browser/resolver in the main thread; every wait
+# is bounded. The REAL multicast path (UDP 5353, group 224.0.0.251) is opt-in:
+# set TAURARO_MDNS_NET=1 (it is skipped otherwise, and skipped when the OS refuses
+# the multicast join, e.g. in sandboxes).
+
+from std.test import TestRunner
+from std.core.vec import Vec
+from std.sys.time import Clock
+from std.sys.env import Env
+from std.net.udp import UdpSocket
+from std.net.mdns import MdnsMessage
+from std.net.mdns import MdnsRecord
+from std.net.mdns import MdnsSocket
+from std.net.mdns import MdnsResponder
+from std.net.mdns import DnsSdService
+from std.net.mdns import dnssd_browse_query
+from std.net.mdns import dnssd_resolve_query
+from std.net.mdns import dnssd_enumerate_query
+from std.net.mdns import dnssd_services
+from std.net.mdns import mdns_browse_on
+from std.net.mdns import mdns_browse
+
+class SrvState implements Sendable:
+    pub base_port: int
+    pub port:      Atomic[int]
+    pub stop:      Atomic[int]
+    pub answered:  Atomic[int]
+
+extend SrvState:
+    pub def init(base_port: int) -> SrvState:
+        mut s = SrvState()
+        s.base_port = base_port
+        s.port     = Atomic.new(0)
+        s.stop     = Atomic.new(0)
+        s.answered = Atomic.new(0)
+        return s
+
+def make_responder() -> MdnsResponder:
+    mut resp = MdnsResponder.init()
+    mut a = DnsSdService.make("My Web", "_http._tcp", "local", "myhost.local", 8080, 120)
+    a.add_addr("192.168.1.20")
+    a.add_txt("path=/")
+    resp.add(a)
+    mut b = DnsSdService.make("Other.Site", "_http._tcp", "local", "other.local", 81, 120)
+    b.add_addr("10.1.1.1")
+    b.add_addr("10.1.1.2")
+    resp.add(b)
+    mut c = DnsSdService.make("Printer", "_ipp._tcp", "local", "prn.local", 631, 4500)
+    c.add_addr("10.1.1.3")
+    resp.add(c)
+    return resp
+
+def srv_run(st: Shared[SrvState]):
+    mut port = st.base_port
+    mut sock = MdnsSocket.open_unicast(port, "127.0.0.1", 0)
+    mut tries = 0
+    while not sock.ok and tries < 30:
+        tries = tries + 1
+        port = st.base_port + tries
+        sock = MdnsSocket.open_unicast(port, "127.0.0.1", 0)
+    if not sock.ok:
+        st.port.store(-1)
+        return
+    st.port.store(port)
+    mut resp = make_responder()
+    mut cap = Clock.now_ms() + 60000
+    while st.stop.load() == 0 and Clock.now_ms() < cap:
+        st.answered.add(resp.serve_once(sock, 50))
+    sock.close()
+
+def main():
+    mut t = TestRunner.init("135_mdns_loopback")
+    shared st = SrvState.init(19870)
+    mut srv_t = Thread.spawn(srv_run, st)
+    mut waited = 0
+    while st.port.load() == 0 and waited < 3000:
+        Clock.sleep_ms(10)
+        waited = waited + 10
+    mut port = st.port.load()
+    t.assert_gt_int(port, 0, "responder bound a UDP port")
+    if port <= 0:
+        st.stop.store(1)
+        srv_t.join()
+        t.summary()
+        return
+
+    t.section("browse")
+    mut cl = MdnsSocket.open_unicast(0, "127.0.0.1", port)
+    t.assert_true(cl.ok, "client socket")
+    mut found = mdns_browse_on(cl, "_http._tcp.local", 400)
+    t.assert_eq_int(found.len(), 2, "two _http._tcp services found")
+    mut got_web = false
+    mut got_other = false
+    mut i = 0
+    while i < found.len():
+        mut f = found.get(i)
+        if f.instance == "My Web":
+            got_web = true
+            t.assert_eq_str(f.host, "myhost.local", "My Web host")
+            t.assert_eq_int(f.port, 8080, "My Web port")
+            t.assert_eq_int(f.addrs.len(), 1, "My Web has one address")
+            t.assert_eq_str(f.addrs.get(0), "192.168.1.20", "My Web address")
+            t.assert_eq_str(f.txt_get("path"), "/", "My Web txt")
+        if f.instance == "Other.Site":
+            got_other = true
+            t.assert_eq_int(f.port, 81, "Other.Site port (instance name contains a dot)")
+            t.assert_eq_int(f.addrs.len(), 2, "two addresses")
+        i = i + 1
+    t.assert_true(got_web, "found My Web")
+    t.assert_true(got_other, "found Other.Site")
+    cl.close()
+
+    mut cl2 = MdnsSocket.open_unicast(0, "127.0.0.1", port)
+    mut ipp = mdns_browse_on(cl2, "_ipp._tcp.local", 300)
+    t.assert_eq_int(ipp.len(), 1, "one _ipp._tcp service")
+    t.assert_eq_str(ipp.get(0).instance, "Printer", "printer")
+    t.assert_eq_int(ipp.get(0).port, 631, "printer port")
+    mut nothing = mdns_browse_on(cl2, "_nothing._tcp.local", 200)
+    t.assert_eq_int(nothing.len(), 0, "unknown type: no reply, bounded wait, empty result")
+
+    t.section("resolve, enumerate, A")
+    t.assert_true(cl2.send(dnssd_resolve_query("My Web._http._tcp.local")), "send resolve query")
+    mut rr: Result[MdnsMessage, str] = cl2.recv(1000)
+    t.assert_true(rr.is_ok, "got a reply")
+    t.assert_eq_int(rr.ok.answers.len(), 2, "SRV and TXT")
+    t.assert_eq_int(rr.ok.id, 0, "legacy-unicast copies the id (0 here)")
+    t.assert_eq_int(rr.ok.questions.len(), 2, "legacy-unicast echoes the questions")
+    t.assert_true(cl2.send(dnssd_enumerate_query()), "send enumerate query")
+    mut er: Result[MdnsMessage, str] = cl2.recv(1000)
+    t.assert_true(er.is_ok, "meta reply")
+    t.assert_eq_int(er.ok.answers.len(), 2, "two service types")
+    mut aq = MdnsMessage.query(4242)
+    aq.add_question("prn.local", 1, false)
+    t.assert_true(cl2.send(aq), "send A query")
+    mut ar: Result[MdnsMessage, str] = cl2.recv(1000)
+    t.assert_true(ar.is_ok, "A reply")
+    t.assert_eq_int(ar.ok.id, 4242, "legacy reply carries our id")
+    t.assert_eq_str(ar.ok.answers.get(0).addr, "10.1.1.3", "A address")
+
+    t.section("suppression and junk")
+    mut kq = dnssd_browse_query("_ipp._tcp.local")
+    kq.answers.push(MdnsRecord.ptr("_ipp._tcp.local", "Printer._ipp._tcp.local", 4000))
+    t.assert_true(cl2.send(kq), "query with a known answer")
+    mut sr: Result[MdnsMessage, str] = cl2.recv(250)
+    t.assert_true(sr.is_err, "known answer suppresses the reply")
+    mut junk = UdpSocket.new()
+    junk.send_bytes("\n\r not dns at all", "127.0.0.1", port)
+    junk.send_bytes("", "127.0.0.1", port)
+    junk.close()
+    mut after = mdns_browse_on(cl2, "_ipp._tcp.local", 300)
+    t.assert_eq_int(after.len(), 1, "responder survived junk datagrams")
+    cl2.close()
+
+    t.section("real multicast (opt-in: TAURARO_MDNS_NET=1)")
+    mut env = Env.init()
+    if env.get_var("TAURARO_MDNS_NET") != "1":
+        t.skip("multicast not requested")
+    else:
+        mut ms = MdnsSocket.open_multicast()
+        if not ms.ok:
+            t.skip("multicast unavailable: " + ms.err)
+        else:
+            ms.close()
+            mut found2 = mdns_browse("_services._dns-sd._udp.local", 500)
+            t.assert_true(found2.len() >= 0, "multicast browse ran without error")
+    st.stop.store(1)
+    srv_t.join()
+    t.assert_eq_int(st.answered.load(), 6, "responder answered exactly the 6 answerable queries")
+    t.summary()

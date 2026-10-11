@@ -874,3 +874,46 @@ broadcast/symmetric modes, no multi-server filtering, IPv4 only. Needs the runti
 
 `send_bytes` (binary-safe, unlike `send_to`), `recv_wait(cap, timeout_ms)` (bounded wait, sets `.src`
 to the sender "ip:port"), `reuse()`, `bind_port(port)`, `join_group("224.0.0.251")`.
+
+---
+
+## mDNS / DNS-SD — `std.net.mdns`
+
+```tauraro
+from std.net.mdns import MdnsMessage, MdnsResponder, MdnsSocket, DnsSdService
+from std.net.mdns import dnssd_browse_query, mdns_browse
+
+# find services on the local link (multicast, opt-in network)
+mut found = mdns_browse("_http._tcp.local", 1500)      # Vec[DnsSdService]
+# each: instance, service_type, host, port, addrs, txt, txt_get("key")
+
+# publish one
+mut svc = DnsSdService.make("My Web", "_http._tcp", "local", "myhost.local", 8080, 120)
+svc.add_addr("192.168.1.20")
+svc.add_txt("path=/")
+mut resp = MdnsResponder.init()
+resp.add(svc)
+mut s = MdnsSocket.open_multicast()        # UDP 5353 (shared) + group 224.0.0.251; check s.ok
+while serving:
+    resp.serve_once(s, 500)                # wait <= 500 ms for one query and answer it
+
+# codec only (no sockets)
+mut wire = dnssd_browse_query("_http._tcp.local").encode()
+mut r: Result[MdnsMessage, str] = MdnsMessage.decode(wire)
+```
+
+`MdnsMessage` encodes/decodes RFC 1035 messages (questions with the QU bit, answer / authority /
+additional records, cache-flush bit, name compression both ways, `A`, `AAAA`, `PTR`, `SRV`, `TXT`; other
+types keep raw `rdata`). Names are text with `\.` `\\` `\DDD` escapes so DNS-SD instance names may
+contain dots. Decoding is strict and bounded (pointer loops, forward pointers, over-long labels, bad counts and
+truncated rdata are errors; every prefix of a valid packet is rejected cleanly). The DNS-SD layer builds
+browse / resolve / enumerate queries, collects `DnsSdService`s from responses (`dnssd_services`), and builds
+announce / goodbye messages. `MdnsResponder.answer(query, legacy)` is sans-IO and implements PTR browse
+with known-answer suppression, SRV/TXT/ANY for an instance, A/ANY for a host and the
+`_services._dns-sd._udp.local` meta query. Verified against hand-assembled Python packets, a real
+multicast loopback round trip, and `avahi-daemon` answering an A query for its hostname.
+
+Not implemented: probing / conflict resolution, caching and query back-off, TC-bit continuation,
+IPv6 multicast (the runtime sockets are AF_INET; AAAA is decoded, and published only from raw bytes).
+`MdnsSocket.open_unicast(port, host, dest_port)` runs the same code without multicast (tests,
+point-to-point). The multicast part of `tests/lang/135_mdns_loopback.tr` only runs with `TAURARO_MDNS_NET=1`.

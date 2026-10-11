@@ -1,0 +1,1183 @@
+# std.net.mdns -- multicast DNS (RFC 6762) and DNS-based Service Discovery (RFC 6763):
+# a DNS message codec, a DNS-SD browse/resolve/announce layer, a sans-IO responder and
+# an opt-in UDP socket wrapper.
+#
+#   from std.net.mdns import MdnsMessage, MdnsRecord, MdnsSocket, MdnsResponder, DnsSdService
+#   from std.net.mdns import dnssd_browse_query, mdns_browse
+#
+#   # --- codec (no network) -------------------------------------------------
+#   mut q = dnssd_browse_query("_http._tcp.local")          # PTR question, id 0
+#   mut wire = q.encode()                                    # binary str, use .len()
+#   mut r: Result[MdnsMessage, str] = MdnsMessage.decode(wire)
+#
+#   # --- find services on the LAN (touches the network: opt-in) ---------------
+#   mut found = mdns_browse("_http._tcp.local", 1500)        # Vec[DnsSdService]
+#   for each service: instance, host, port, addrs (IPv4), txt
+#
+#   # --- publish a service ----------------------------------------------------
+#   mut svc = DnsSdService.make("My Web", "_http._tcp", "local", "myhost.local", 8080, 120)
+#   svc.add_addr("192.168.1.20")
+#   svc.add_txt("path=/")
+#   mut resp = MdnsResponder.init()
+#   resp.add(svc)
+#   mut s = MdnsSocket.open_multicast()                      # port 5353 + 224.0.0.251
+#   while running: resp.serve_once(s, 500)
+#
+# What is implemented
+#   * RFC 1035 message format: header, questions (with the mDNS "unicast response" QU
+#     bit), answer/authority/additional records, name compression on both encode
+#     (owner names and PTR targets) and decode (pointer loops, forward/out-of-range
+#     pointers, over-long labels/names are errors). The cache-flush bit of records.
+#   * Record types A, AAAA (decoded to text), PTR, SRV, TXT; every other type is
+#     carried as raw `rdata`. Names are text with `\.` / `\\` / `\DDD` escapes so an
+#     instance label may contain dots (RFC 6763 section 4.3); bytes >= 0x80 and spaces
+#     are kept as is (UTF-8 safe).
+#   * DNS-SD: browse (PTR), resolve (SRV + TXT + A), service-type enumeration
+#     (`_services._dns-sd._udp.local`), announcement and goodbye (TTL 0) messages,
+#     known-answer suppression in the responder (RFC 6762 section 7.1).
+#   * Decoding is strict and bounded: every read is length-checked, record counts are
+#     validated against the packet size, decoding every prefix of a valid packet fails
+#     cleanly (never crashes).
+#
+# NOT implemented (honest list)
+#   * No probing / conflict resolution / name-collision renaming (RFC 6762 section 8-9),
+#     no cache, no continuous querying with exponential back-off, no TC-bit
+#     known-answer continuation, no legacy-unicast TTL clamping.
+#   * IPv4 multicast only (224.0.0.251): the runtime sockets are AF_INET, so no
+#     ff02::fb and no AAAA publishing from text (AAAA is decoded; build one with
+#     MdnsRecord.aaaa(name, 16-byte rdata, ttl)). The default interface is used.
+#   * The network part is opt-in: nothing opens a socket unless you call
+#     MdnsSocket.open_*, mdns_browse or MdnsResponder.serve_once. Binding port 5353
+#     needs address reuse (SO_REUSEADDR/REUSEPORT) to coexist with avahi/mDNSResponder;
+#     sandboxes without multicast simply report `ok = false`.
+
+from std.core.vec import Vec
+from std.core.string import StringBuilder
+from std.net.udp import UdpSocket
+from std.net.wire import wire_u8
+from std.net.wire import wire_u16
+from std.net.wire import wire_u32
+from std.net.wire import wire_slice
+from std.net.wire import wire_put_u16
+from std.net.wire import wire_put_u32
+from std.string.str import Str
+
+extern "C":
+    def _tr_time_ms() -> int
+
+pub def MDNS_GROUP() -> str: return "224.0.0.251"
+pub def MDNS_PORT() -> int: return 5353
+
+pub def DNS_TYPE_A() -> int: return 1
+pub def DNS_TYPE_PTR() -> int: return 12
+pub def DNS_TYPE_TXT() -> int: return 16
+pub def DNS_TYPE_AAAA() -> int: return 28
+pub def DNS_TYPE_SRV() -> int: return 33
+pub def DNS_TYPE_NSEC() -> int: return 47
+pub def DNS_TYPE_ANY() -> int: return 255
+pub def DNS_CLASS_IN() -> int: return 1
+
+# Query-type name for diagnostics ("A", "PTR", ..., "TYPE99").
+pub def dns_type_name(t: int) -> str:
+    if t == 1: return "A"
+    if t == 12: return "PTR"
+    if t == 16: return "TXT"
+    if t == 28: return "AAAA"
+    if t == 33: return "SRV"
+    if t == 47: return "NSEC"
+    if t == 255: return "ANY"
+    return "TYPE" + t.to_string()
+
+# ---------------------------------------------------------------------------
+# Names
+# ---------------------------------------------------------------------------
+
+def _lower_byte(c: int) -> int:
+    if c >= 65 and c <= 90: return c + 32
+    return c
+
+# ASCII lower-case copy (binary safe).
+pub def dns_lower(s: str) -> str:
+    mut sb = StringBuilder.init(s.len() + 4)
+    mut i = 0
+    while i < s.len():
+        sb.append_char(_lower_byte(wire_u8(s, i)))
+        i = i + 1
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+# Case-insensitive name comparison; a trailing dot is ignored.
+pub def dns_name_eq(a: str, b: str) -> bool:
+    mut la = a.len()
+    mut lb = b.len()
+    if la > 0 and wire_u8(a, la - 1) == 46 and not (la > 1 and wire_u8(a, la - 2) == 92): la = la - 1
+    if lb > 0 and wire_u8(b, lb - 1) == 46 and not (lb > 1 and wire_u8(b, lb - 2) == 92): lb = lb - 1
+    if la != lb: return false
+    mut i = 0
+    while i < la:
+        if _lower_byte(wire_u8(a, i)) != _lower_byte(wire_u8(b, i)): return false
+        i = i + 1
+    return true
+
+# Escape one raw label for use inside a name string: `.` -> `\.`, `\` -> `\\`,
+# control bytes -> `\DDD`.
+pub def dns_escape_label(label: str) -> str:
+    mut sb = StringBuilder.init(label.len() + 8)
+    mut i = 0
+    while i < label.len():
+        mut c = wire_u8(label, i)
+        if c == 46 or c == 92:
+            sb.append_char(92)
+            sb.append_char(c)
+        elif c < 32 or c == 127:
+            sb.append_char(92)
+            sb.append_char(48 + c / 100)
+            sb.append_char(48 + (c / 10) % 10)
+            sb.append_char(48 + c % 10)
+        else:
+            sb.append_char(c)
+        i = i + 1
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+class _Labels:
+    ok:    bool
+    items: Vec[str]
+
+# Split a name string into raw labels, resolving escapes. ok=false for empty
+# labels, labels > 63 bytes or names > 253 bytes. "" and "." are the root (no labels).
+def _split_name(name: str) -> _Labels:
+    mut res = _Labels()
+    res.ok = true
+    res.items = Vec[str].init(8)
+    mut n = name.len()
+    if n == 0 or (n == 1 and wire_u8(name, 0) == 46): return res
+    mut cur = StringBuilder.init(64)
+    mut total = 0
+    mut i = 0
+    mut have = false
+    while i < n:
+        mut c = wire_u8(name, i)
+        if c == 92:
+            if i + 1 >= n:
+                res.ok = false
+                break
+            mut d = wire_u8(name, i + 1)
+            if d >= 48 and d <= 57 and i + 3 < n:
+                mut d2 = wire_u8(name, i + 2)
+                mut d3 = wire_u8(name, i + 3)
+                if d2 >= 48 and d2 <= 57 and d3 >= 48 and d3 <= 57:
+                    mut v = (d - 48) * 100 + (d2 - 48) * 10 + (d3 - 48)
+                    if v > 255:
+                        res.ok = false
+                        break
+                    cur.append_char(v)
+                    have = true
+                    i = i + 4
+                    continue
+            cur.append_char(d)
+            have = true
+            i = i + 2
+            continue
+        if c == 46:
+            if cur.len() == 0 or cur.len() > 63:
+                res.ok = false
+                break
+            mut lab = cur.to_owned()
+            total = total + lab.len() + 1
+            res.items.push(lab)
+            cur.clear()
+            have = false
+            i = i + 1
+            continue
+        cur.append_char(c)
+        have = true
+        i = i + 1
+    if res.ok and cur.len() > 0:
+        if cur.len() > 63:
+            res.ok = false
+        else:
+            mut lab2 = cur.to_owned()
+            total = total + lab2.len() + 1
+            res.items.push(lab2)
+    elif res.ok and have:
+        res.ok = false
+    if total > 253: res.ok = false
+    cur.free()
+    return res
+
+# Wire form of a name WITHOUT compression ("" if the name is invalid).
+pub def dns_encode_name(name: str) -> str:
+    mut ls = _split_name(name)
+    if not ls.ok: return ""
+    mut sb = StringBuilder.init(name.len() + 8)
+    mut i = 0
+    while i < ls.items.len():
+        mut lab = ls.items.get(i)
+        sb.append_char(lab.len())
+        sb.append(lab)
+        i = i + 1
+    sb.append_char(0)
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+class _NameRes:
+    name: str
+    next: int
+
+# Read a (possibly compressed) name at `off`. `next` is the offset just after the
+# name's bytes in the record (after the first pointer, if any).
+def _read_name(data: str, off: int) throws str -> _NameRes:
+    mut sb = StringBuilder.init(64)
+    mut pos = off
+    mut next = -1
+    mut jumps = 0
+    mut total = 0
+    mut n = data.len()
+    mut first = true
+    while true:
+        if pos >= n:
+            sb.free()
+            raise("DNS name runs past the end of the packet")
+        mut ln = wire_u8(data, pos)
+        if ln == 0:
+            pos = pos + 1
+            break
+        if (ln & 0xC0) == 0xC0:
+            if pos + 1 >= n:
+                sb.free()
+                raise("truncated compression pointer")
+            mut target = ((ln & 0x3F) << 8) | wire_u8(data, pos + 1)
+            if next < 0: next = pos + 2
+            jumps = jumps + 1
+            if jumps > 32 or target >= n or target >= pos:
+                sb.free()
+                raise("bad DNS compression pointer")
+            pos = target
+            continue
+        if (ln & 0xC0) != 0:
+            sb.free()
+            raise("unsupported DNS label type")
+        if pos + 1 + ln > n:
+            sb.free()
+            raise("DNS label runs past the end of the packet")
+        total = total + ln + 1
+        if total > 254:
+            sb.free()
+            raise("DNS name too long")
+        if not first: sb.append_char(46)
+        first = false
+        mut lab = wire_slice(data, pos + 1, ln)
+        sb.append(dns_escape_label(lab))
+        pos = pos + 1 + ln
+    if next < 0: next = pos
+    mut r = _NameRes()
+    r.name = sb.to_owned()
+    r.next = next
+    sb.free()
+    return r
+
+# Compression table used while encoding one message.
+class _NameTable:
+    keys: Vec[str]
+    offs: Vec[int]
+
+def _suffix_key(labels: Vec[str], start: int) -> str:
+    mut sb = StringBuilder.init(64)
+    mut i = start
+    while i < labels.len():
+        mut lab = labels.get(i)
+        sb.append(lab.len().to_string())
+        sb.append_char(58)
+        sb.append(dns_lower(lab))
+        sb.append_char(59)
+        i = i + 1
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+# Append `name` (compressing against earlier names) to sb. False if the name is invalid.
+def _put_name(sb: StringBuilder, name: str, tab: _NameTable, compress: bool, register: bool) -> bool:
+    mut ls = _split_name(name)
+    if not ls.ok: return false
+    mut i = 0
+    while i < ls.items.len():
+        if compress:
+            mut key = _suffix_key(ls.items, i)
+            mut j = 0
+            while j < tab.keys.len():
+                if tab.keys.get(j) == key:
+                    wire_put_u16(sb, 0xC000 | tab.offs.get(j))
+                    return true
+                j = j + 1
+        if register:
+            mut key2 = _suffix_key(ls.items, i)
+            if sb.len() < 0x3FFF:
+                tab.keys.push(key2)
+                tab.offs.push(sb.len())
+        mut lab = ls.items.get(i)
+        sb.append_char(lab.len())
+        sb.append(lab)
+        i = i + 1
+    sb.append_char(0)
+    return true
+
+# ---------------------------------------------------------------------------
+# IP text helpers
+# ---------------------------------------------------------------------------
+
+# "192.0.2.1" -> 4 raw bytes, "" if malformed.
+pub def ipv4_to_bytes(s: str) -> str:
+    mut sb = StringBuilder.init(8)
+    mut v = 0
+    mut digits = 0
+    mut parts = 0
+    mut bad = false
+    mut i = 0
+    while i <= s.len() and not bad:
+        mut c = 46
+        if i < s.len(): c = wire_u8(s, i)
+        if c >= 48 and c <= 57:
+            v = v * 10 + (c - 48)
+            digits = digits + 1
+            if v > 255 or digits > 3: bad = true
+        elif c == 46:
+            if digits == 0:
+                bad = true
+            else:
+                sb.append_char(v)
+                parts = parts + 1
+                v = 0
+                digits = 0
+        else:
+            bad = true
+        i = i + 1
+    mut out = ""
+    if parts == 4 and not bad: out = sb.to_owned()
+    sb.free()
+    return out
+
+# 4 raw bytes -> "a.b.c.d".
+pub def ipv4_to_text(b: str) -> str:
+    if b.len() != 4: return ""
+    return wire_u8(b, 0).to_string() + "." + wire_u8(b, 1).to_string() + "." + wire_u8(b, 2).to_string() + "." + wire_u8(b, 3).to_string()
+
+def _hex_group(v: int) -> str:
+    if v == 0: return "0"
+    mut sb = StringBuilder.init(8)
+    mut started = false
+    mut shift = 12
+    while shift >= 0:
+        mut d = (v >> shift) & 15
+        if d != 0 or started:
+            started = true
+            if d < 10: sb.append_char(48 + d)
+            else: sb.append_char(87 + d)
+        shift = shift - 4
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+# 16 raw bytes -> RFC 5952 text (longest zero run of >= 2 groups becomes "::").
+pub def ipv6_to_text(b: str) -> str:
+    if b.len() != 16: return ""
+    mut best = -1
+    mut best_len = 0
+    mut i = 0
+    while i < 8:
+        if wire_u16(b, i * 2) == 0:
+            mut j = i
+            while j < 8 and wire_u16(b, j * 2) == 0: j = j + 1
+            if j - i > best_len:
+                best = i
+                best_len = j - i
+            i = j
+        else:
+            i = i + 1
+    if best_len < 2: best = -1
+    mut sb = StringBuilder.init(48)
+    mut k = 0
+    while k < 8:
+        if k == best:
+            sb.append("::")
+            k = k + best_len
+            continue
+        if k > 0 and not (best >= 0 and k == best + best_len): sb.append_char(58)
+        sb.append(_hex_group(wire_u16(b, k * 2)))
+        k = k + 1
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+# ---------------------------------------------------------------------------
+# Records and messages
+# ---------------------------------------------------------------------------
+
+pub class MdnsQuestion:
+    pub name:    str
+    pub qtype:   int
+    pub qclass:  int
+    pub unicast: bool     # QU bit: the querier asks for a unicast response
+
+pub class MdnsRecord:
+    pub name:        str
+    pub rtype:       int
+    pub rclass:      int
+    pub cache_flush: bool     # top bit of the class: "this replaces older records"
+    pub ttl:         int
+    pub rdata:       str      # raw rdata exactly as sent (compressed names inside PTR are re-encoded on send)
+    pub target:      str      # PTR target / SRV target host
+    pub priority:    int      # SRV
+    pub weight:      int      # SRV
+    pub port:        int      # SRV
+    pub addr:        str      # A: dotted quad, AAAA: textual IPv6
+    pub txt:         Vec[str] # TXT strings ("key=value" or "key")
+
+extend MdnsRecord:
+    pub def blank(name: str, rtype: int, ttl: int) -> MdnsRecord:
+        mut r = MdnsRecord()
+        r.name = name
+        r.rtype = rtype
+        r.rclass = 1
+        r.cache_flush = false
+        r.ttl = ttl
+        r.rdata = ""
+        r.target = ""
+        r.priority = 0
+        r.weight = 0
+        r.port = 0
+        r.addr = ""
+        r.txt = Vec[str].init(4)
+        return r
+
+    pub def a(name: str, ip: str, ttl: int) -> MdnsRecord:
+        mut r = MdnsRecord.blank(name, 1, ttl)
+        r.addr = ip
+        r.rdata = ipv4_to_bytes(ip)
+        return r
+
+    # AAAA from the 16 raw address bytes.
+    pub def aaaa(name: str, raw16: str, ttl: int) -> MdnsRecord:
+        mut r = MdnsRecord.blank(name, 28, ttl)
+        r.rdata = raw16
+        r.addr = ipv6_to_text(raw16)
+        return r
+
+    pub def ptr(name: str, target: str, ttl: int) -> MdnsRecord:
+        mut r = MdnsRecord.blank(name, 12, ttl)
+        r.target = target
+        return r
+
+    pub def srv(name: str, priority: int, weight: int, port: int, target: str, ttl: int) -> MdnsRecord:
+        mut r = MdnsRecord.blank(name, 33, ttl)
+        r.priority = priority
+        r.weight = weight
+        r.port = port
+        r.target = target
+        return r
+
+    pub def text(name: str, items: Vec[str], ttl: int) -> MdnsRecord:
+        mut r = MdnsRecord.blank(name, 16, ttl)
+        mut i = 0
+        while i < items.len():
+            r.txt.push(items.get(i))
+            i = i + 1
+        return r
+
+    # Value of a TXT "key=value" entry (case-insensitive key); "" if absent or valueless.
+    pub def txt_get(self, key: str) -> str:
+        mut lk = dns_lower(key)
+        mut i = 0
+        while i < self.txt.len():
+            mut e = self.txt.get(i)
+            mut eq = Str.index_of(e, "=")
+            if eq >= 0 and dns_lower(e.slice(0, eq)) == lk: return e.slice(eq + 1, e.len())
+            i = i + 1
+        return ""
+
+    pub def txt_has(self, key: str) -> bool:
+        mut lk = dns_lower(key)
+        mut i = 0
+        while i < self.txt.len():
+            mut e = self.txt.get(i)
+            mut eq = Str.index_of(e, "=")
+            if eq < 0:
+                if dns_lower(e) == lk: return true
+            elif dns_lower(e.slice(0, eq)) == lk:
+                return true
+            i = i + 1
+        return false
+
+pub class MdnsMessage:
+    pub id:         int
+    pub flags:      int
+    pub questions:  Vec[MdnsQuestion]
+    pub answers:    Vec[MdnsRecord]
+    pub authority:  Vec[MdnsRecord]
+    pub additional: Vec[MdnsRecord]
+
+def _put_record(sb: StringBuilder, r: MdnsRecord, tab: _NameTable) -> bool:
+    if not _put_name(sb, r.name, tab, true, true): return false
+    wire_put_u16(sb, r.rtype)
+    mut cls = r.rclass & 0x7FFF
+    if r.cache_flush: cls = cls | 0x8000
+    wire_put_u16(sb, cls)
+    wire_put_u32(sb, r.ttl)
+    mut lenpos = sb.len()
+    wire_put_u16(sb, 0)
+    mut start = sb.len()
+    if r.rtype == 12:
+        if not _put_name(sb, r.target, tab, true, true): return false
+    elif r.rtype == 33:
+        wire_put_u16(sb, r.priority)
+        wire_put_u16(sb, r.weight)
+        wire_put_u16(sb, r.port)
+        # RFC 2782: do not compress the SRV target itself, but later names may point into it.
+        if not _put_name(sb, r.target, tab, false, true): return false
+    elif r.rtype == 16:
+        if r.txt.len() == 0:
+            sb.append_char(0)
+        mut i = 0
+        while i < r.txt.len():
+            mut e = r.txt.get(i)
+            if e.len() > 255: return false
+            sb.append_char(e.len())
+            sb.append(e)
+            i = i + 1
+    else:
+        sb.append(r.rdata)
+    mut rdlen = sb.len() - start
+    if rdlen > 65535: return false
+    unsafe:
+        sb.buf.data.offset(lenpos).write((rdlen >> 8) as char)
+        sb.buf.data.offset(lenpos + 1).write((rdlen & 255) as char)
+    return true
+
+extend MdnsMessage:
+    pub def blank(id: int, flags: int) -> MdnsMessage:
+        mut m = MdnsMessage()
+        m.id = id
+        m.flags = flags
+        m.questions = Vec[MdnsQuestion].init(2)
+        m.answers = Vec[MdnsRecord].init(4)
+        m.authority = Vec[MdnsRecord].init(1)
+        m.additional = Vec[MdnsRecord].init(4)
+        return m
+
+    # A query message (QR=0).
+    pub def query(id: int) -> MdnsMessage:
+        return MdnsMessage.blank(id, 0)
+
+    # A response message: QR=1, AA=1 (0x8400) as mDNS responders send.
+    pub def response(id: int) -> MdnsMessage:
+        return MdnsMessage.blank(id, 0x8400)
+
+    pub def is_response(self) -> bool:
+        return (self.flags & 0x8000) != 0
+
+    pub def add_question(self, name: str, qtype: int, unicast: bool):
+        mut q = MdnsQuestion()
+        q.name = name
+        q.qtype = qtype
+        q.qclass = 1
+        q.unicast = unicast
+        self.questions.push(q)
+
+    pub def add_answer(self, r: MdnsRecord):
+        self.answers.push(r)
+
+    pub def add_additional(self, r: MdnsRecord):
+        self.additional.push(r)
+
+    # Serialise (names compressed). Returns "" if a name/label/rdata is invalid.
+    pub def encode(self) -> str:
+        mut sb = StringBuilder.init(512)
+        mut tab = _NameTable()
+        tab.keys = Vec[str].init(16)
+        tab.offs = Vec[int].init(16)
+        wire_put_u16(sb, self.id)
+        wire_put_u16(sb, self.flags)
+        wire_put_u16(sb, self.questions.len())
+        wire_put_u16(sb, self.answers.len())
+        wire_put_u16(sb, self.authority.len())
+        wire_put_u16(sb, self.additional.len())
+        mut ok = true
+        mut i = 0
+        while i < self.questions.len() and ok:
+            mut q = self.questions.get(i)
+            ok = _put_name(sb, q.name, tab, true, true)
+            wire_put_u16(sb, q.qtype)
+            mut cls = q.qclass & 0x7FFF
+            if q.unicast: cls = cls | 0x8000
+            wire_put_u16(sb, cls)
+            i = i + 1
+        i = 0
+        while i < self.answers.len() and ok:
+            ok = _put_record(sb, self.answers.get(i), tab)
+            i = i + 1
+        i = 0
+        while i < self.authority.len() and ok:
+            ok = _put_record(sb, self.authority.get(i), tab)
+            i = i + 1
+        i = 0
+        while i < self.additional.len() and ok:
+            ok = _put_record(sb, self.additional.get(i), tab)
+            i = i + 1
+        mut out = ""
+        if ok: out = sb.to_owned()
+        sb.free()
+        return out
+
+    # Parse a datagram. Errors (`Err(msg)`): truncated data, bad names/pointers,
+    # record counts that cannot fit in the packet, malformed rdata.
+    pub def decode(data: str) throws str -> MdnsMessage:
+        mut n = data.len()
+        if n < 12: raise("DNS message shorter than the 12-byte header")
+        mut m = MdnsMessage.blank(wire_u16(data, 0), wire_u16(data, 2))
+        mut qd = wire_u16(data, 4)
+        mut an = wire_u16(data, 6)
+        mut ns = wire_u16(data, 8)
+        mut ar = wire_u16(data, 10)
+        # Every question needs >= 5 bytes and every record >= 11 bytes.
+        if qd * 5 + (an + ns + ar) * 11 > n - 12: raise("DNS record counts exceed the packet size")
+        mut pos = 12
+        mut i = 0
+        while i < qd:
+            mut nr = _read_name(data, pos)?
+            pos = nr.next
+            if pos + 4 > n: raise("truncated DNS question")
+            mut q = MdnsQuestion()
+            q.name = nr.name
+            q.qtype = wire_u16(data, pos)
+            mut cls = wire_u16(data, pos + 2)
+            q.qclass = cls & 0x7FFF
+            q.unicast = (cls & 0x8000) != 0
+            m.questions.push(q)
+            pos = pos + 4
+            i = i + 1
+        pos = MdnsMessage._records(data, pos, an, m.answers)?
+        pos = MdnsMessage._records(data, pos, ns, m.authority)?
+        pos = MdnsMessage._records(data, pos, ar, m.additional)?
+        return m
+
+    def _records(data: str, start: int, count: int, out: Vec[MdnsRecord]) throws str -> int:
+        mut n = data.len()
+        mut pos = start
+        mut i = 0
+        while i < count:
+            mut nr = _read_name(data, pos)?
+            pos = nr.next
+            if pos + 10 > n: raise("truncated DNS record header")
+            mut r = MdnsRecord.blank(nr.name, wire_u16(data, pos), wire_u32(data, pos + 4))
+            mut cls = wire_u16(data, pos + 2)
+            r.rclass = cls & 0x7FFF
+            r.cache_flush = (cls & 0x8000) != 0
+            mut rdlen = wire_u16(data, pos + 8)
+            pos = pos + 10
+            if pos + rdlen > n: raise("DNS rdata runs past the end of the packet")
+            mut rend = pos + rdlen
+            r.rdata = wire_slice(data, pos, rdlen)
+            if r.rtype == 1:
+                if rdlen != 4: raise("A record rdata must be 4 bytes")
+                r.addr = ipv4_to_text(r.rdata)
+            elif r.rtype == 28:
+                if rdlen != 16: raise("AAAA record rdata must be 16 bytes")
+                r.addr = ipv6_to_text(r.rdata)
+            elif r.rtype == 12:
+                mut tn = _read_name(data, pos)?
+                if tn.next > rend: raise("PTR target runs past its rdata")
+                r.target = tn.name
+            elif r.rtype == 33:
+                if rdlen < 7: raise("SRV rdata too short")
+                r.priority = wire_u16(data, pos)
+                r.weight = wire_u16(data, pos + 2)
+                r.port = wire_u16(data, pos + 4)
+                mut sn = _read_name(data, pos + 6)?
+                if sn.next > rend: raise("SRV target runs past its rdata")
+                r.target = sn.name
+            elif r.rtype == 16:
+                mut p = pos
+                while p < rend:
+                    mut tl = wire_u8(data, p)
+                    if p + 1 + tl > rend: raise("TXT string runs past its rdata")
+                    if tl > 0: r.txt.push(wire_slice(data, p + 1, tl))
+                    p = p + 1 + tl
+            out.push(r)
+            pos = rend
+            i = i + 1
+        return pos
+
+# ---------------------------------------------------------------------------
+# DNS-SD
+# ---------------------------------------------------------------------------
+
+# The meta-query name that enumerates every advertised service type.
+pub def dnssd_meta_name() -> str: return "_services._dns-sd._udp.local"
+
+pub class DnsSdService:
+    pub instance:     str          # e.g. "My Web" (unescaped, may contain dots)
+    pub service_type: str          # e.g. "_http._tcp"
+    pub domain:       str          # "local"
+    pub host:         str          # SRV target, e.g. "myhost.local"
+    pub port:         int
+    pub priority:     int
+    pub weight:       int
+    pub ttl:          int
+    pub addrs:        Vec[str]     # IPv4 (and IPv6) address text
+    pub txt:          Vec[str]
+
+extend DnsSdService:
+    pub def make(instance: str, service_type: str, domain: str, host: str, port: int, ttl: int) -> DnsSdService:
+        mut s = DnsSdService()
+        s.instance = instance
+        s.service_type = service_type
+        s.domain = domain
+        s.host = host
+        s.port = port
+        s.priority = 0
+        s.weight = 0
+        s.ttl = ttl
+        s.addrs = Vec[str].init(2)
+        s.txt = Vec[str].init(4)
+        return s
+
+    pub def add_addr(self, ip: str):
+        self.addrs.push(ip)
+
+    pub def add_txt(self, entry: str):
+        self.txt.push(entry)
+
+    # "_http._tcp.local"
+    pub def type_name(self) -> str:
+        return self.service_type + "." + self.domain
+
+    # "My Web._http._tcp.local" with the instance label escaped.
+    pub def instance_name(self) -> str:
+        return dns_escape_label(self.instance) + "." + self.service_type + "." + self.domain
+
+    pub def txt_get(self, key: str) -> str:
+        mut lk = dns_lower(key)
+        mut i = 0
+        while i < self.txt.len():
+            mut e = self.txt.get(i)
+            mut eq = Str.index_of(e, "=")
+            if eq >= 0 and dns_lower(e.slice(0, eq)) == lk: return e.slice(eq + 1, e.len())
+            i = i + 1
+        return ""
+
+# A browse query for a service type ("_http._tcp.local").
+pub def dnssd_browse_query(type_name: str) -> MdnsMessage:
+    mut m = MdnsMessage.query(0)
+    m.add_question(type_name, 12, false)
+    return m
+
+# A resolve query for one instance ("My Web._http._tcp.local"): SRV + TXT.
+pub def dnssd_resolve_query(instance_name: str) -> MdnsMessage:
+    mut m = MdnsMessage.query(0)
+    m.add_question(instance_name, 33, false)
+    m.add_question(instance_name, 16, false)
+    return m
+
+# Enumerate service types: PTR query for _services._dns-sd._udp.local.
+pub def dnssd_enumerate_query() -> MdnsMessage:
+    return dnssd_browse_query(dnssd_meta_name())
+
+# Split "My Web._http._tcp.local" into instance / type / domain. The instance label
+# is unescaped. `ok` is false when the name does not contain "_x._tcp|udp" labels.
+class _InstName:
+    ok:       bool
+    instance: str
+    stype:    str
+    domain:   str
+
+def _split_instance(fq: str) -> _InstName:
+    mut r = _InstName()
+    r.ok = false
+    r.instance = ""
+    r.stype = ""
+    r.domain = ""
+    mut ls = _split_name(fq)
+    if not ls.ok: return r
+    mut i = 1
+    while i + 1 < ls.items.len():
+        mut p = ls.items.get(i + 1)
+        if ls.items.get(i).len() > 1 and wire_u8(ls.items.get(i), 0) == 95 and (p == "_tcp" or p == "_udp"):
+            r.ok = true
+            r.instance = ls.items.get(0)
+            mut j = 1
+            while j < i:
+                r.instance = r.instance + "." + ls.items.get(j)
+                j = j + 1
+            r.stype = ls.items.get(i) + "." + p
+            mut sb = StringBuilder.init(32)
+            mut k = i + 2
+            while k < ls.items.len():
+                if k > i + 2: sb.append_char(46)
+                sb.append(dns_escape_label(ls.items.get(k)))
+                k = k + 1
+            r.domain = sb.to_owned()
+            sb.free()
+            return r
+        i = i + 1
+    return r
+
+def _find_record(recs: Vec[MdnsRecord], name: str, rtype: int) -> MdnsRecord:
+    mut i = 0
+    while i < recs.len():
+        mut r = recs.get(i)
+        if r.rtype == rtype and dns_name_eq(r.name, name): return r
+        i = i + 1
+    return MdnsRecord.blank("", 0, 0)
+
+# Collect the services described by a response message for `type_name`
+# ("_http._tcp.local"): PTR in answers/additional -> SRV + TXT + A/AAAA in any
+# section. Instances whose SRV is missing are returned with host "" and port 0.
+pub def dnssd_services(msgs: Vec[MdnsMessage], type_name: str) -> Vec[DnsSdService]:
+    mut out = Vec[DnsSdService].init(4)
+    # Flatten every record of every message into one pool.
+    mut pool = Vec[MdnsRecord].init(16)
+    mut mi = 0
+    while mi < msgs.len():
+        mut m = msgs.get(mi)
+        mut k = 0
+        while k < m.answers.len():
+            pool.push(m.answers.get(k))
+            k = k + 1
+        k = 0
+        while k < m.authority.len():
+            pool.push(m.authority.get(k))
+            k = k + 1
+        k = 0
+        while k < m.additional.len():
+            pool.push(m.additional.get(k))
+            k = k + 1
+        mi = mi + 1
+    mut i = 0
+    while i < pool.len():
+        mut p = pool.get(i)
+        if p.rtype == 12 and dns_name_eq(p.name, type_name):
+            mut parts = _split_instance(p.target)
+            mut known = false
+            mut q = 0
+            while q < out.len():
+                if dns_name_eq(out.get(q).instance_name(), p.target): known = true
+                q = q + 1
+            if parts.ok and not known:
+                out.push(DnsSdService.make(parts.instance, parts.stype, parts.domain, "", 0, p.ttl))
+        i = i + 1
+    mut si = 0
+    while si < out.len():
+        mut svc = out.get(si)
+        mut iname = svc.instance_name()
+        mut x = 0
+        while x < pool.len():
+            mut r = pool.get(x)
+            if r.rtype == 33 and dns_name_eq(r.name, iname):
+                svc.host = r.target
+                svc.port = r.port
+                svc.priority = r.priority
+                svc.weight = r.weight
+            elif r.rtype == 16 and dns_name_eq(r.name, iname) and svc.txt.len() == 0:
+                mut t = 0
+                while t < r.txt.len():
+                    svc.txt.push(r.txt.get(t))
+                    t = t + 1
+            x = x + 1
+        if svc.host.len() > 0:
+            mut y = 0
+            while y < pool.len():
+                mut ar = pool.get(y)
+                if (ar.rtype == 1 or ar.rtype == 28) and dns_name_eq(ar.name, svc.host):
+                    mut dup = false
+                    mut d = 0
+                    while d < svc.addrs.len():
+                        if svc.addrs.get(d) == ar.addr: dup = true
+                        d = d + 1
+                    if not dup: svc.addrs.push(ar.addr)
+                y = y + 1
+        si = si + 1
+    return out
+
+# Records announcing (ttl = service ttl) or withdrawing (goodbye = true, TTL 0) a
+# service: PTR in the answers; SRV, TXT and A records in the additional section.
+pub def dnssd_announce(svc: DnsSdService, goodbye: bool) -> MdnsMessage:
+    mut m = MdnsMessage.response(0)
+    mut ttl = svc.ttl
+    if goodbye: ttl = 0
+    m.add_answer(MdnsRecord.ptr(svc.type_name(), svc.instance_name(), ttl))
+    mut srv = MdnsRecord.srv(svc.instance_name(), svc.priority, svc.weight, svc.port, svc.host, ttl)
+    srv.cache_flush = true
+    m.add_additional(srv)
+    mut txt = MdnsRecord.text(svc.instance_name(), svc.txt, ttl)
+    txt.cache_flush = true
+    m.add_additional(txt)
+    mut i = 0
+    while i < svc.addrs.len():
+        if ipv4_to_bytes(svc.addrs.get(i)).len() == 4:
+            mut a = MdnsRecord.a(svc.host, svc.addrs.get(i), ttl)
+            a.cache_flush = true
+            m.add_additional(a)
+        i = i + 1
+    return m
+
+# ---------------------------------------------------------------------------
+# Responder (sans-IO)
+# ---------------------------------------------------------------------------
+
+pub class MdnsResponder:
+    pub services: Vec[DnsSdService]
+
+extend MdnsResponder:
+    pub def init() -> MdnsResponder:
+        mut r = MdnsResponder()
+        r.services = Vec[DnsSdService].init(4)
+        return r
+
+    pub def add(self, svc: DnsSdService):
+        self.services.push(svc)
+
+    # Build the response to `q`, or an empty response (no answers) if nothing
+    # matches. Implements: PTR browse (with known-answer suppression), SRV/TXT/ANY for
+    # an instance, A/ANY for a host, and the `_services._dns-sd._udp.local` meta query.
+    # `legacy` copies the query id and echoes the questions (RFC 6762 section 6.7, for
+    # queriers that are not on port 5353); otherwise id is 0.
+    pub def answer(self, q: MdnsMessage, legacy: bool) -> MdnsMessage:
+        mut resp = MdnsMessage.response(0)
+        if legacy:
+            resp.id = q.id
+            mut c = 0
+            while c < q.questions.len():
+                resp.questions.push(q.questions.get(c))
+                c = c + 1
+        if q.is_response(): return resp
+        mut seen = Vec[str].init(8)
+        mut qi = 0
+        while qi < q.questions.len():
+            mut qs = q.questions.get(qi)
+            mut t = qs.qtype
+            if dns_name_eq(qs.name, dnssd_meta_name()) and (t == 12 or t == 255):
+                mut si0 = 0
+                while si0 < self.services.len():
+                    mut s0 = self.services.get(si0)
+                    mut key0 = "meta:" + dns_lower(s0.type_name())
+                    if not self._has(seen, key0):
+                        seen.push(key0)
+                        resp.add_answer(MdnsRecord.ptr(dnssd_meta_name(), s0.type_name(), s0.ttl))
+                    si0 = si0 + 1
+            mut si = 0
+            while si < self.services.len():
+                mut s = self.services.get(si)
+                if dns_name_eq(qs.name, s.type_name()) and (t == 12 or t == 255):
+                    if not self._suppressed(q, s):
+                        mut key = "ptr:" + dns_lower(s.instance_name())
+                        if not self._has(seen, key):
+                            seen.push(key)
+                            resp.add_answer(MdnsRecord.ptr(s.type_name(), s.instance_name(), s.ttl))
+                            self._extras(resp, s, seen)
+                elif dns_name_eq(qs.name, s.instance_name()) and (t == 33 or t == 16 or t == 255):
+                    if t == 33 or t == 255:
+                        mut ks = "srv:" + dns_lower(s.instance_name())
+                        if not self._has(seen, ks):
+                            seen.push(ks)
+                            mut sr = MdnsRecord.srv(s.instance_name(), s.priority, s.weight, s.port, s.host, s.ttl)
+                            sr.cache_flush = true
+                            resp.add_answer(sr)
+                    if t == 16 or t == 255:
+                        mut kt = "txt:" + dns_lower(s.instance_name())
+                        if not self._has(seen, kt):
+                            seen.push(kt)
+                            mut tx = MdnsRecord.text(s.instance_name(), s.txt, s.ttl)
+                            tx.cache_flush = true
+                            resp.add_answer(tx)
+                    self._addr_additional(resp, s, seen)
+                elif dns_name_eq(qs.name, s.host) and (t == 1 or t == 255):
+                    mut ai = 0
+                    while ai < s.addrs.len():
+                        mut ka = "a:" + dns_lower(s.host) + ":" + s.addrs.get(ai)
+                        if ipv4_to_bytes(s.addrs.get(ai)).len() == 4 and not self._has(seen, ka):
+                            seen.push(ka)
+                            mut ar = MdnsRecord.a(s.host, s.addrs.get(ai), s.ttl)
+                            ar.cache_flush = true
+                            resp.add_answer(ar)
+                        ai = ai + 1
+                si = si + 1
+            qi = qi + 1
+        return resp
+
+    def _has(self, seen: Vec[str], key: str) -> bool:
+        mut i = 0
+        while i < seen.len():
+            if seen.get(i) == key: return true
+            i = i + 1
+        return false
+
+    # Known-answer suppression: the querier already holds this PTR with >= half its TTL left.
+    def _suppressed(self, q: MdnsMessage, s: DnsSdService) -> bool:
+        mut i = 0
+        while i < q.answers.len():
+            mut ka = q.answers.get(i)
+            if ka.rtype == 12 and dns_name_eq(ka.name, s.type_name()) and dns_name_eq(ka.target, s.instance_name()) and ka.ttl * 2 >= s.ttl:
+                return true
+            i = i + 1
+        return false
+
+    def _extras(self, resp: MdnsMessage, s: DnsSdService, seen: Vec[str]):
+        mut ks = "srv:" + dns_lower(s.instance_name())
+        if not self._has(seen, ks):
+            seen.push(ks)
+            mut sr = MdnsRecord.srv(s.instance_name(), s.priority, s.weight, s.port, s.host, s.ttl)
+            sr.cache_flush = true
+            resp.add_additional(sr)
+        mut kt = "txt:" + dns_lower(s.instance_name())
+        if not self._has(seen, kt):
+            seen.push(kt)
+            mut tx = MdnsRecord.text(s.instance_name(), s.txt, s.ttl)
+            tx.cache_flush = true
+            resp.add_additional(tx)
+        self._addr_additional(resp, s, seen)
+
+    def _addr_additional(self, resp: MdnsMessage, s: DnsSdService, seen: Vec[str]):
+        mut ai = 0
+        while ai < s.addrs.len():
+            mut ka = "a:" + dns_lower(s.host) + ":" + s.addrs.get(ai)
+            if ipv4_to_bytes(s.addrs.get(ai)).len() == 4 and not self._has(seen, ka):
+                seen.push(ka)
+                mut ar = MdnsRecord.a(s.host, s.addrs.get(ai), s.ttl)
+                ar.cache_flush = true
+                resp.add_additional(ar)
+            ai = ai + 1
+
+    # Wait up to wait_ms for one query on `sock`, answer it. Returns 1 if a reply was
+    # sent, 0 otherwise (timeout, undecodable datagram, nothing to say).
+    pub def serve_once(self, sock: MdnsSocket, wait_ms: int) -> int:
+        if not sock.ok: return 0
+        mut data = sock.sock.recv_wait(9000, wait_ms)
+        if data.len() == 0: return 0
+        mut src = sock.sock.src
+        mut r: Result[MdnsMessage, str] = MdnsMessage.decode(data)
+        if r.is_err: return 0
+        mut q = r.ok
+        mut at = Str.index_of(src, ":")
+        if at < 0: return 0
+        mut host = src.slice(0, at)
+        mut sport = src.slice(at + 1, src.len()).parse_int()
+        mut legacy = sport != 5353
+        mut resp = self.answer(q, legacy)
+        if resp.answers.len() == 0: return 0
+        mut wire = resp.encode()
+        if wire.len() == 0: return 0
+        mut want_unicast = legacy
+        if q.questions.len() > 0 and q.questions.get(0).unicast: want_unicast = true
+        if want_unicast:
+            sock.sock.send_bytes(wire, host, sport)
+        elif sock.multicast:
+            sock.sock.send_bytes(wire, MDNS_GROUP(), MDNS_PORT())
+        else:
+            sock.sock.send_bytes(wire, host, sport)
+        return 1
+
+# ---------------------------------------------------------------------------
+# Socket (opt-in network)
+# ---------------------------------------------------------------------------
+
+pub class MdnsSocket:
+    pub sock:      UdpSocket
+    pub ok:        bool
+    pub err:       str
+    pub multicast: bool
+    pub dest_host: str     # where send() goes (multicast group by default)
+    pub dest_port: int
+
+extend MdnsSocket:
+    # Real mDNS: bind UDP 5353 with address reuse, join 224.0.0.251. Check `.ok`
+    # (false in sandboxes without multicast or when the port cannot be shared).
+    pub def open_multicast() -> MdnsSocket:
+        mut m = MdnsSocket()
+        m.multicast = true
+        m.dest_host = MDNS_GROUP()
+        m.dest_port = MDNS_PORT()
+        m.err = ""
+        m.sock = UdpSocket.new()
+        m.ok = m.sock.open
+        if not m.ok:
+            m.err = "cannot create a UDP socket"
+            return m
+        m.sock.reuse()
+        if not m.sock.bind_port(MDNS_PORT()):
+            m.ok = false
+            m.err = "cannot bind UDP port 5353"
+            return m
+        if not m.sock.join_group(MDNS_GROUP()):
+            m.ok = false
+            m.err = "cannot join multicast group 224.0.0.251"
+        return m
+
+    # Plain unicast UDP on `port` (0 = send-only/ephemeral client): the same codec
+    # without multicast, for tests, point-to-point setups and legacy unicast queries.
+    # `dest_host:dest_port` is where send() goes.
+    pub def open_unicast(port: int, dest_host: str, dest_port: int) -> MdnsSocket:
+        mut m = MdnsSocket()
+        m.multicast = false
+        m.dest_host = dest_host
+        m.dest_port = dest_port
+        m.err = ""
+        m.sock = UdpSocket.new()
+        m.ok = m.sock.open
+        if not m.ok:
+            m.err = "cannot create a UDP socket"
+            return m
+        if port > 0 and not m.sock.bind_port(port):
+            m.ok = false
+            m.err = "cannot bind UDP port " + port.to_string()
+        return m
+
+    # Send a message to dest_host:dest_port. False on encode/send failure.
+    pub def send(self, msg: MdnsMessage) -> bool:
+        return self.send_to(msg, self.dest_host, self.dest_port)
+
+    pub def send_to(self, msg: MdnsMessage, host: str, port: int) -> bool:
+        if not self.ok: return false
+        mut wire = msg.encode()
+        if wire.len() == 0: return false
+        return self.sock.send_bytes(wire, host, port) == wire.len()
+
+    # Wait up to timeout_ms for one datagram and decode it. Err("timeout") when
+    # nothing arrives; `sock.src` has the sender after a datagram.
+    pub def recv(self, timeout_ms: int) throws str -> MdnsMessage:
+        if not self.ok: raise("socket not open")
+        mut data = self.sock.recv_wait(9000, timeout_ms)
+        if data.len() == 0: raise("timeout")
+        return MdnsMessage.decode(data)?
+
+    pub def close(self):
+        self.sock.close()
+        self.ok = false
+
+# Browse for a service type on the local link (multicast): send a PTR query, collect
+# responses for `wait_ms` milliseconds, return the services found. Opens its own
+# socket; returns an empty list if multicast is unavailable.
+pub def mdns_browse(type_name: str, wait_ms: int) -> Vec[DnsSdService]:
+    mut s = MdnsSocket.open_multicast()
+    if not s.ok: return Vec[DnsSdService].init(1)
+    mut res = mdns_browse_on(s, type_name, wait_ms)
+    s.close()
+    return res
+
+# Same, on an existing socket (multicast, or unicast pointed at a responder).
+pub def mdns_browse_on(s: MdnsSocket, type_name: str, wait_ms: int) -> Vec[DnsSdService]:
+    mut msgs = Vec[MdnsMessage].init(4)
+    if not s.send(dnssd_browse_query(type_name)): return Vec[DnsSdService].init(1)
+    mut deadline = _tr_time_ms() + wait_ms
+    while true:
+        mut left = deadline - _tr_time_ms()
+        if left <= 0: break
+        mut r: Result[MdnsMessage, str] = s.recv(left)
+        if r.is_err:
+            if r.err == "timeout": break
+            continue
+        mut m = r.ok
+        if m.is_response(): msgs.push(m)
+    return dnssd_services(msgs, type_name)
