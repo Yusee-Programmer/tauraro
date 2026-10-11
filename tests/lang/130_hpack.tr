@@ -1,0 +1,430 @@
+# tests/lang/130_hpack.tr
+# std.net.hpack: HPACK (RFC 7541). Every example of Appendix C is checked in
+# both directions (decode, and encode where the RFC's encoder policy applies),
+# plus Huffman round trips, error handling and table-size behaviour.
+
+from std.test import TestRunner
+from std.core.string import StringBuilder
+from std.net.hpack import HpackEncoder, HpackDecoder, HpackHeaders, HpackTable, Huffman, hpack_put_int, HUFF_OFF, HUFF_AUTO, HUFF_ALWAYS
+
+def hexv(c: int) -> int:
+    if c >= 97: return c - 87
+    if c >= 65: return c - 55
+    return c - 48
+
+# Hex text -> binary str (real length).
+def unhex(h: str) -> str:
+    mut sb = StringBuilder.init(h.len() / 2 + 2)
+    mut p = h as Pointer[char]
+    mut i = 0
+    while i + 1 < h.len():
+        mut hi = 0
+        mut lo = 0
+        unsafe:
+            hi = hexv(p.offset(i).read() as int)
+            lo = hexv(p.offset(i + 1).read() as int)
+        sb.append_char(hi * 16 + lo)
+        i = i + 2
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+def tohex(s: str) -> str:
+    mut sb = StringBuilder.init(s.len() * 2 + 2)
+    mut p = s as Pointer[char]
+    mut i = 0
+    while i < s.len():
+        mut b = 0
+        unsafe:
+            b = (p.offset(i).read() as int) & 255
+        mut hi = b >> 4
+        mut lo = b & 15
+        if hi < 10: sb.append_char(48 + hi)
+        else: sb.append_char(87 + hi)
+        if lo < 10: sb.append_char(48 + lo)
+        else: sb.append_char(87 + lo)
+        i = i + 1
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+# "name: value" lines
+def show(h: HpackHeaders) -> str:
+    mut sb = StringBuilder.init(128)
+    mut i = 0
+    while i < h.len():
+        sb.append(h.name_at(i))
+        sb.append(": ")
+        sb.append(h.value_at(i))
+        sb.append("\n")
+        i = i + 1
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+def dec_ok(d: HpackDecoder, hex: str) -> HpackHeaders:
+    mut r: Result[HpackHeaders, str] = d.decode(unhex(hex))
+    if r.is_err:
+        print("    decode error: " + r.err)
+        return HpackHeaders.init()
+    return r.ok
+
+def dec_fails(t: TestRunner, hex: str, allowed: int, msg: str):
+    mut d = HpackDecoder.init(allowed)
+    mut r: Result[HpackHeaders, str] = d.decode(unhex(hex))
+    t.assert_true(r.is_err, msg)
+
+def req(a: HpackHeaders, m: str, scheme: str, path: str, auth: str):
+    a.add(":method", m)
+    a.add(":scheme", scheme)
+    a.add(":path", path)
+    a.add(":authority", auth)
+
+def main():
+    mut t = TestRunner.init("130_hpack")
+
+    t.section("Huffman")
+    t.assert_eq_str(tohex(Huffman.encode("www.example.com")), "f1e3c2e5f23a6ba0ab90f4ff", "huffman www.example.com")
+    t.assert_eq_str(tohex(Huffman.encode("no-cache")), "a8eb10649cbf", "huffman no-cache")
+    t.assert_eq_str(tohex(Huffman.encode("custom-key")), "25a849e95ba97d7f", "huffman custom-key")
+    t.assert_eq_str(tohex(Huffman.encode("custom-value")), "25a849e95bb8e8b4bf", "huffman custom-value")
+    t.assert_eq_str(tohex(Huffman.encode("")), "", "huffman empty")
+    t.assert_eq_int(Huffman.encoded_len("www.example.com"), 12, "encoded_len")
+    mut hd: Result[str, str] = Huffman.decode(unhex("f1e3c2e5f23a6ba0ab90f4ff"))
+    t.assert_true(hd.is_ok, "decode ok")
+    t.assert_eq_str(hd.ok, "www.example.com", "huffman decode www.example.com")
+    # every byte value round-trips (includes NUL and 0x80..0xFF)
+    mut allb = StringBuilder.init(300)
+    mut bi = 0
+    while bi < 256:
+        allb.append_char(bi)
+        bi = bi + 1
+    mut allstr = allb.to_owned()
+    allb.free()
+    mut enc_all = Huffman.encode(allstr)
+    mut dec_all: Result[str, str] = Huffman.decode(enc_all)
+    t.assert_true(dec_all.is_ok, "all 256 byte values decode")
+    t.assert_eq_int(dec_all.ok.len(), 256, "decoded length 256")
+    t.assert_eq_str(tohex(dec_all.ok), tohex(allstr), "all 256 byte values round trip")
+    mut one: Result[str, str] = Huffman.decode(Huffman.encode("0"))
+    t.assert_eq_str(one.ok, "0", "single '0'")
+    mut bad1: Result[str, str] = Huffman.decode(unhex("ffffffff"))
+    t.assert_true(bad1.is_err, "EOS inside data rejected")
+    mut bad2: Result[str, str] = Huffman.decode(unhex("ff"))
+    t.assert_true(bad2.is_err, "padding longer than 7 bits rejected")
+    mut bad3: Result[str, str] = Huffman.decode(unhex("18"))
+    t.assert_true(bad3.is_err, "padding that is not all ones rejected")
+    mut good1: Result[str, str] = Huffman.decode(unhex("1f"))
+    t.assert_true(good1.is_ok, "'a' + 111 padding ok")
+    t.assert_eq_str(good1.ok, "a", "decoded 'a'")
+
+    t.section("C.1 integers")
+    mut isb = StringBuilder.init(16)
+    hpack_put_int(isb, 0, 5, 10)
+    t.assert_eq_str(tohex(isb.as_str()), "0a", "10 with a 5-bit prefix")
+    isb.clear()
+    hpack_put_int(isb, 0, 5, 1337)
+    t.assert_eq_str(tohex(isb.as_str()), "1f9a0a", "1337 with a 5-bit prefix")
+    isb.clear()
+    hpack_put_int(isb, 0, 8, 42)
+    t.assert_eq_str(tohex(isb.as_str()), "2a", "42 with an 8-bit prefix")
+    isb.clear()
+    hpack_put_int(isb, 128, 7, 127)
+    t.assert_eq_str(tohex(isb.as_str()), "ff00", "127 with a 7-bit prefix needs a continuation byte")
+    isb.free()
+    mut di = HpackDecoder.init(4096)
+    mut dr = dec_ok(di, "3f9a0a")
+    t.assert_eq_int(di.table.max_size, 1337, "size update 1337 decoded via 5-bit prefix integer")
+    t.assert_eq_int(dr.len(), 0, "size update alone yields no headers")
+
+    t.section("C.2 header field representations")
+    mut d21 = HpackDecoder.init(4096)
+    mut h21 = dec_ok(d21, "400a637573746f6d2d6b65790d637573746f6d2d686561646572")
+    t.assert_eq_str(show(h21), "custom-key: custom-header\n", "C.2.1 literal with indexing")
+    t.assert_eq_int(d21.table.size, 55, "C.2.1 table size")
+    t.assert_eq_int(d21.table.count(), 1, "C.2.1 table entries")
+    mut d22 = HpackDecoder.init(4096)
+    mut h22 = dec_ok(d22, "040c2f73616d706c652f70617468")
+    t.assert_eq_str(show(h22), ":path: /sample/path\n", "C.2.2 literal without indexing")
+    t.assert_eq_int(d22.table.size, 0, "C.2.2 table untouched")
+    t.assert_eq_int(h22.flag_at(0), 2, "C.2.2 flagged do-not-index")
+    mut d23 = HpackDecoder.init(4096)
+    mut h23 = dec_ok(d23, "100870617373776f726406736563726574")
+    t.assert_eq_str(show(h23), "password: secret\n", "C.2.3 never indexed")
+    t.assert_eq_int(h23.flag_at(0), 1, "C.2.3 flagged never-indexed")
+    t.assert_eq_int(d23.table.size, 0, "C.2.3 table untouched")
+    mut d24 = HpackDecoder.init(4096)
+    mut h24 = dec_ok(d24, "82")
+    t.assert_eq_str(show(h24), ":method: GET\n", "C.2.4 indexed field")
+    mut e2 = HpackEncoder.init(4096)
+    e2.set_huffman(HUFF_OFF())
+    mut o21 = HpackHeaders.init()
+    o21.add("custom-key", "custom-header")
+    t.assert_eq_str(tohex(e2.encode(o21)), "400a637573746f6d2d6b65790d637573746f6d2d686561646572", "encode C.2.1")
+    mut e2b = HpackEncoder.init(4096)
+    e2b.set_huffman(HUFF_OFF())
+    mut o22 = HpackHeaders.init()
+    o22.add_no_index(":path", "/sample/path")
+    t.assert_eq_str(tohex(e2b.encode(o22)), "040c2f73616d706c652f70617468", "encode C.2.2")
+    mut e2c = HpackEncoder.init(4096)
+    e2c.set_huffman(HUFF_OFF())
+    mut o23 = HpackHeaders.init()
+    o23.add_sensitive("password", "secret")
+    t.assert_eq_str(tohex(e2c.encode(o23)), "100870617373776f726406736563726574", "encode C.2.3")
+    t.assert_eq_int(e2c.table.size, 0, "sensitive header not indexed")
+    mut o24 = HpackHeaders.init()
+    o24.add(":method", "GET")
+    t.assert_eq_str(tohex(e2c.encode(o24)), "82", "encode C.2.4")
+
+    t.section("C.3 requests without Huffman")
+    mut dq3 = HpackDecoder.init(4096)
+    mut eq3 = HpackEncoder.init(4096)
+    eq3.set_huffman(HUFF_OFF())
+    mut r13 = HpackHeaders.init()
+    req(r13, "GET", "http", "/", "www.example.com")
+    mut r23 = HpackHeaders.init()
+    req(r23, "GET", "http", "/", "www.example.com")
+    r23.add("cache-control", "no-cache")
+    mut r33 = HpackHeaders.init()
+    req(r33, "GET", "https", "/index.html", "www.example.com")
+    r33.add("custom-key", "custom-value")
+    mut q13 = dec_ok(dq3, "828684410f7777772e6578616d706c652e636f6d")
+    t.assert_eq_str(show(q13), show(r13), "3.1 first request decodes")
+    t.assert_eq_int(dq3.table.size, 57, "3.1 table size")
+    t.assert_eq_str(tohex(eq3.encode(r13)), "828684410f7777772e6578616d706c652e636f6d", "3.1 encodes identically")
+    t.assert_eq_int(eq3.table.size, 57, "3.1 encoder table size")
+    mut q23 = dec_ok(dq3, "828684be58086e6f2d6361636865")
+    t.assert_eq_str(show(q23), show(r23), "3.2 second request decodes")
+    t.assert_eq_int(dq3.table.size, 110, "3.2 table size")
+    t.assert_eq_str(tohex(eq3.encode(r23)), "828684be58086e6f2d6361636865", "3.2 encodes identically")
+    mut q33 = dec_ok(dq3, "828785bf400a637573746f6d2d6b65790c637573746f6d2d76616c7565")
+    t.assert_eq_str(show(q33), show(r33), "3.3 third request decodes")
+    t.assert_eq_int(dq3.table.size, 164, "3.3 table size")
+    t.assert_eq_int(dq3.table.count(), 3, "3.3 three dynamic entries")
+    t.assert_eq_str(tohex(eq3.encode(r33)), "828785bf400a637573746f6d2d6b65790c637573746f6d2d76616c7565", "3.3 encodes identically")
+    t.assert_eq_int(eq3.table.size, 164, "3.3 encoder table size")
+    t.assert_eq_str(dq3.table.name_for(62), "custom-key", "3 dynamic index 62 is the newest entry")
+    t.assert_eq_str(dq3.table.value_for(64), "www.example.com", "3 dynamic index 64 is the oldest entry")
+
+    t.section("C.4 requests with Huffman")
+    mut dq4 = HpackDecoder.init(4096)
+    mut eq4 = HpackEncoder.init(4096)
+    eq4.set_huffman(HUFF_AUTO())
+    mut r14 = HpackHeaders.init()
+    req(r14, "GET", "http", "/", "www.example.com")
+    mut r24 = HpackHeaders.init()
+    req(r24, "GET", "http", "/", "www.example.com")
+    r24.add("cache-control", "no-cache")
+    mut r34 = HpackHeaders.init()
+    req(r34, "GET", "https", "/index.html", "www.example.com")
+    r34.add("custom-key", "custom-value")
+    mut q14 = dec_ok(dq4, "828684418cf1e3c2e5f23a6ba0ab90f4ff")
+    t.assert_eq_str(show(q14), show(r14), "4.1 first request decodes")
+    t.assert_eq_int(dq4.table.size, 57, "4.1 table size")
+    t.assert_eq_str(tohex(eq4.encode(r14)), "828684418cf1e3c2e5f23a6ba0ab90f4ff", "4.1 encodes identically")
+    t.assert_eq_int(eq4.table.size, 57, "4.1 encoder table size")
+    mut q24 = dec_ok(dq4, "828684be5886a8eb10649cbf")
+    t.assert_eq_str(show(q24), show(r24), "4.2 second request decodes")
+    t.assert_eq_int(dq4.table.size, 110, "4.2 table size")
+    t.assert_eq_str(tohex(eq4.encode(r24)), "828684be5886a8eb10649cbf", "4.2 encodes identically")
+    mut q34 = dec_ok(dq4, "828785bf408825a849e95ba97d7f8925a849e95bb8e8b4bf")
+    t.assert_eq_str(show(q34), show(r34), "4.3 third request decodes")
+    t.assert_eq_int(dq4.table.size, 164, "4.3 table size")
+    t.assert_eq_int(dq4.table.count(), 3, "4.3 three dynamic entries")
+    t.assert_eq_str(tohex(eq4.encode(r34)), "828785bf408825a849e95ba97d7f8925a849e95bb8e8b4bf", "4.3 encodes identically")
+    t.assert_eq_int(eq4.table.size, 164, "4.3 encoder table size")
+    t.assert_eq_str(dq4.table.name_for(62), "custom-key", "4 dynamic index 62 is the newest entry")
+    t.assert_eq_str(dq4.table.value_for(64), "www.example.com", "4 dynamic index 64 is the oldest entry")
+
+    t.section("C.5 responses without Huffman")
+    mut dp5 = HpackDecoder.init(256)
+    mut ep5 = HpackEncoder.init(256)
+    ep5.set_huffman(HUFF_OFF())
+    mut p15 = HpackHeaders.init()
+    p15.add(":status", "302")
+    p15.add("cache-control", "private")
+    p15.add("date", "Mon, 21 Oct 2013 20:13:21 GMT")
+    p15.add("location", "https://www.example.com")
+    mut p25 = HpackHeaders.init()
+    p25.add(":status", "307")
+    p25.add("cache-control", "private")
+    p25.add("date", "Mon, 21 Oct 2013 20:13:21 GMT")
+    p25.add("location", "https://www.example.com")
+    mut p35 = HpackHeaders.init()
+    p35.add(":status", "200")
+    p35.add("cache-control", "private")
+    p35.add("date", "Mon, 21 Oct 2013 20:13:22 GMT")
+    p35.add("location", "https://www.example.com")
+    p35.add("content-encoding", "gzip")
+    p35.add("set-cookie", "foo=ASDJKHQKBZXOQWEOPIUAXQWEOIU; max-age=3600; version=1")
+    mut s15 = dec_ok(dp5, "4803333032580770726976617465611d4d6f6e2c203231204f637420323031332032303a31333a323120474d546e1768747470733a2f2f7777772e6578616d706c652e636f6d")
+    t.assert_eq_str(show(s15), show(p15), "C.5.1 decodes")
+    t.assert_eq_int(dp5.table.size, 222, "C.5.1 table size")
+    t.assert_eq_int(dp5.table.count(), 4, "C.5.1 entries")
+    t.assert_eq_str(tohex(ep5.encode(p15)), "4803333032580770726976617465611d4d6f6e2c203231204f637420323031332032303a31333a323120474d546e1768747470733a2f2f7777772e6578616d706c652e636f6d", "C.5.1 encodes identically")
+    mut s25 = dec_ok(dp5, "4803333037c1c0bf")
+    t.assert_eq_str(show(s25), show(p25), "C.5.2 decodes")
+    t.assert_eq_int(dp5.table.size, 222, "C.5.2 table size (one evicted, one added)")
+    t.assert_eq_str(tohex(ep5.encode(p25)), "4803333037c1c0bf", "C.5.2 encodes identically")
+    mut s35 = dec_ok(dp5, "88c1611d4d6f6e2c203231204f637420323031332032303a31333a323220474d54c05a04677a69707738666f6f3d4153444a4b48514b425a584f5157454f50495541585157454f49553b206d61782d6167653d333630303b2076657273696f6e3d31")
+    t.assert_eq_str(show(s35), show(p35), "C.5.3 decodes")
+    t.assert_eq_int(dp5.table.size, 215, "C.5.3 table size")
+    t.assert_eq_int(dp5.table.count(), 3, "C.5.3 entries")
+    t.assert_eq_str(tohex(ep5.encode(p35)), "88c1611d4d6f6e2c203231204f637420323031332032303a31333a323220474d54c05a04677a69707738666f6f3d4153444a4b48514b425a584f5157454f50495541585157454f49553b206d61782d6167653d333630303b2076657273696f6e3d31", "C.5.3 encodes identically")
+    t.assert_eq_int(ep5.table.size, 215, "C.5.3 encoder table size")
+
+    t.section("C.6 responses with Huffman")
+    mut dp6 = HpackDecoder.init(256)
+    mut ep6 = HpackEncoder.init(256)
+    ep6.set_huffman(HUFF_ALWAYS())
+    mut p16 = HpackHeaders.init()
+    p16.add(":status", "302")
+    p16.add("cache-control", "private")
+    p16.add("date", "Mon, 21 Oct 2013 20:13:21 GMT")
+    p16.add("location", "https://www.example.com")
+    mut p26 = HpackHeaders.init()
+    p26.add(":status", "307")
+    p26.add("cache-control", "private")
+    p26.add("date", "Mon, 21 Oct 2013 20:13:21 GMT")
+    p26.add("location", "https://www.example.com")
+    mut p36 = HpackHeaders.init()
+    p36.add(":status", "200")
+    p36.add("cache-control", "private")
+    p36.add("date", "Mon, 21 Oct 2013 20:13:22 GMT")
+    p36.add("location", "https://www.example.com")
+    p36.add("content-encoding", "gzip")
+    p36.add("set-cookie", "foo=ASDJKHQKBZXOQWEOPIUAXQWEOIU; max-age=3600; version=1")
+    mut s16 = dec_ok(dp6, "488264025885aec3771a4b6196d07abe941054d444a8200595040b8166e082a62d1bff6e919d29ad171863c78f0b97c8e9ae82ae43d3")
+    t.assert_eq_str(show(s16), show(p16), "C.6.1 decodes")
+    t.assert_eq_int(dp6.table.size, 222, "C.6.1 table size")
+    t.assert_eq_int(dp6.table.count(), 4, "C.6.1 entries")
+    t.assert_eq_str(tohex(ep6.encode(p16)), "488264025885aec3771a4b6196d07abe941054d444a8200595040b8166e082a62d1bff6e919d29ad171863c78f0b97c8e9ae82ae43d3", "C.6.1 encodes identically")
+    mut s26 = dec_ok(dp6, "4883640effc1c0bf")
+    t.assert_eq_str(show(s26), show(p26), "C.6.2 decodes")
+    t.assert_eq_int(dp6.table.size, 222, "C.6.2 table size (one evicted, one added)")
+    t.assert_eq_str(tohex(ep6.encode(p26)), "4883640effc1c0bf", "C.6.2 encodes identically")
+    mut s36 = dec_ok(dp6, "88c16196d07abe941054d444a8200595040b8166e084a62d1bffc05a839bd9ab77ad94e7821dd7f2e6c7b335dfdfcd5b3960d5af27087f3672c1ab270fb5291f9587316065c003ed4ee5b1063d5007")
+    t.assert_eq_str(show(s36), show(p36), "C.6.3 decodes")
+    t.assert_eq_int(dp6.table.size, 215, "C.6.3 table size")
+    t.assert_eq_int(dp6.table.count(), 3, "C.6.3 entries")
+    t.assert_eq_str(tohex(ep6.encode(p36)), "88c16196d07abe941054d444a8200595040b8166e084a62d1bffc05a839bd9ab77ad94e7821dd7f2e6c7b335dfdfcd5b3960d5af27087f3672c1ab270fb5291f9587316065c003ed4ee5b1063d5007", "C.6.3 encodes identically")
+    t.assert_eq_int(ep6.table.size, 215, "C.6.3 encoder table size")
+
+    t.section("errors")
+    dec_fails(t, "80", 4096, "index 0 rejected")
+    dec_fails(t, "be", 4096, "index beyond the tables rejected")
+    dec_fails(t, "4003", 4096, "truncated literal rejected")
+    dec_fails(t, "400a6375", 4096, "string running past the block rejected")
+    dec_fails(t, "ff", 4096, "truncated integer rejected")
+    dec_fails(t, "ffffffffffffffff", 4096, "overlong integer rejected")
+    dec_fails(t, "ffffffff7f", 4096, "integer above 2^31 rejected")
+    dec_fails(t, "3fe21f", 4096, "table size update above the allowed maximum rejected")
+    dec_fails(t, "8220", 4096, "table size update after a header field rejected")
+    dec_fails(t, "000081ff", 4096, "literal with an invalid Huffman string rejected")
+    dec_fails(t, "00ff0a", 4096, "literal with a bad length rejected")
+    mut dl = HpackDecoder.init(4096)
+    dl.max_list_size = 130
+    mut rl: Result[HpackHeaders, str] = dl.decode(unhex("828684"))
+    t.assert_true(rl.is_ok, "small list fits")
+    mut dl2 = HpackDecoder.init(4096)
+    dl2.max_list_size = 100
+    mut rl2: Result[HpackHeaders, str] = dl2.decode(unhex("828684"))
+    t.assert_true(rl2.is_err, "header list above max_list_size rejected")
+    mut ds = HpackDecoder.init(4096)
+    ds.max_string = 5
+    mut rs: Result[HpackHeaders, str] = ds.decode(unhex("000361626306616263646566"))
+    t.assert_true(rs.is_err, "string above max_string rejected")
+    mut dok = HpackDecoder.init(4096)
+    mut rok: Result[HpackHeaders, str] = dok.decode(unhex(""))
+    t.assert_true(rok.is_ok, "an empty block is a valid empty list")
+    t.assert_eq_int(rok.ok.len(), 0, "empty block has no headers")
+
+    t.section("round trips, table size updates")
+    mut er = HpackEncoder.init(4096)
+    mut dd = HpackDecoder.init(4096)
+    mut ok_all = true
+    mut round = 0
+    while round < 40:
+        mut hs = HpackHeaders.init()
+        hs.add(":method", "GET")
+        hs.add(":path", "/item/" + (round % 7).to_string())
+        hs.add("x-round", round.to_string())
+        hs.add("x-big", "value-" + (round % 3).to_string() + "-" + (round * 12345).to_string())
+        hs.add_sensitive("authorization", "tok" + round.to_string())
+        hs.add_no_index("x-trace", "t" + (round % 2).to_string())
+        hs.add("cookie", "a=1")
+        hs.add("cookie", "b=2")
+        mut blk = er.encode(hs)
+        mut rr: Result[HpackHeaders, str] = dd.decode(blk)
+        if rr.is_err:
+            ok_all = false
+            print("    round " + round.to_string() + ": " + rr.err)
+        else:
+            if show(rr.ok) != show(hs): ok_all = false
+            if rr.ok.flag_at(4) != 1: ok_all = false
+            if rr.ok.flag_at(5) != 2: ok_all = false
+        round = round + 1
+    t.assert_true(ok_all, "40 successive blocks round trip with shared tables")
+    t.assert_eq_int(er.table.size, dd.table.size, "encoder and decoder tables stay in step")
+    t.assert_eq_int(er.table.count(), dd.table.count(), "same entry count")
+    t.assert_eq_int(er.table.find_name("authorization"), 23, "authorization is found only as the static name (index 23)")
+    t.assert_eq_int(er.table.find_pair("authorization", "tok0"), 0, "authorization value was never indexed")
+    # two size changes between blocks emit the smaller one first
+    er.set_max_table_size(0)
+    er.set_max_table_size(512)
+    mut hs2 = HpackHeaders.init()
+    hs2.add("x-after", "resize")
+    mut blk2 = er.encode(hs2)
+    t.assert_eq_str(tohex(blk2.slice(0, 1)), "20", "first update is the smaller one (size 0)")
+    mut rr2: Result[HpackHeaders, str] = dd.decode(blk2)
+    t.assert_true(rr2.is_ok, "block with two size updates decodes")
+    t.assert_eq_int(dd.table.max_size, 512, "decoder follows the final size")
+    t.assert_eq_int(dd.table.count(), 1, "table was emptied by the update to 0, then one entry added")
+    # an entry that cannot fit is sent without indexing
+    mut et = HpackEncoder.init(64)
+    mut dt = HpackDecoder.init(64)
+    mut hs3 = HpackHeaders.init()
+    hs3.add("x-huge", "0123456789012345678901234567890123456789")
+    mut rr3: Result[HpackHeaders, str] = dt.decode(et.encode(hs3))
+    t.assert_true(rr3.is_ok, "oversize entry decodes")
+    t.assert_eq_int(et.table.count(), 0, "oversize entry is not indexed by the encoder")
+    t.assert_eq_int(dt.table.count(), 0, "decoder table empty")
+    # table eviction accounting
+    mut tb = HpackTable.init(100)
+    tb.add("aaaa", "bbbb")
+    tb.add("cccc", "dddd")
+    tb.add("eeee", "ffff")
+    t.assert_eq_int(tb.count(), 2, "third 40-octet entry evicts the oldest")
+    t.assert_eq_int(tb.size, 80, "size accounting is len+len+32")
+    t.assert_eq_str(tb.name_for(62), "eeee", "newest entry is index 62")
+    t.assert_eq_int(tb.find_pair("cccc", "dddd"), 63, "find_pair on dynamic entry")
+    t.assert_eq_int(tb.find_name(":method"), 2, "static name lookup (:method = 2)")
+    tb.set_max_size(40)
+    t.assert_eq_int(tb.count(), 1, "shrinking evicts")
+
+    # binary-safe values: NUL and high bytes survive with and without Huffman
+    mut bin = StringBuilder.init(16)
+    bin.append_char(65)
+    bin.append_char(0)
+    bin.append_char(200)
+    bin.append_char(255)
+    mut binv = bin.to_owned()
+    bin.free()
+    t.assert_eq_str(tohex(binv), "4100c8ff", "binary fixture")
+    mut modes = 0
+    mut bin_ok = true
+    while modes < 3:
+        mut eb = HpackEncoder.init(4096)
+        eb.set_huffman(modes)
+        mut db = HpackDecoder.init(4096)
+        mut hb = HpackHeaders.init()
+        hb.add("x-bin", binv)
+        mut rb: Result[HpackHeaders, str] = db.decode(eb.encode(hb))
+        if rb.is_err:
+            bin_ok = false
+        elif tohex(rb.ok.value_at(0)) != tohex(binv):
+            bin_ok = false
+        modes = modes + 1
+    t.assert_true(bin_ok, "binary header value round trips in all Huffman modes")
+
+    t.summary()

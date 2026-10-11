@@ -763,3 +763,37 @@ if conn.ok:
 else:
     print("handshake failed: " + conn.err)
 ```
+
+---
+
+## HPACK — `std.net.hpack`
+
+```tauraro
+from std.net.hpack import HpackEncoder, HpackDecoder, HpackHeaders, Huffman
+
+mut enc = HpackEncoder.init(4096)            # dynamic table limit (SETTINGS_HEADER_TABLE_SIZE)
+mut hs  = HpackHeaders.init()
+hs.add(":method", "GET")
+hs.add(":path", "/")
+hs.add_sensitive("authorization", "secret")  # literal, never indexed (RFC 7541 6.2.3)
+mut block = enc.encode(hs)                   # binary str, use block.len()
+
+mut dec = HpackDecoder.init(4096)
+mut r: Result[HpackHeaders, str] = dec.decode(block)
+if r.is_ok: print(r.ok.get(":path"))
+```
+
+RFC 7541 header compression: static table (61 entries), dynamic table with
+eviction, prefix integers, Huffman strings (`Huffman.encode/decode/encoded_len`),
+and the four literal/indexed representations. Decoding is strict (index 0,
+out-of-range indexes, truncated or overlong integers, EOS or bad padding in a
+Huffman string, size updates above the allowed maximum or after the first
+field, `max_string` / `max_list_size` limits all return `Err`). Encoder
+policy: indexed field on a table hit, else literal with incremental indexing;
+`add_sensitive` → never indexed, `add_no_index` → without indexing, entries
+larger than the table are sent without indexing. `set_max_table_size(n)`
+queues a size-update instruction (smallest value first if changed twice).
+Huffman mode via `set_huffman(HUFF_OFF() | HUFF_AUTO() | HUFF_ALWAYS())`.
+All of RFC 7541 Appendix C is reproduced byte for byte (`tests/lang/130_hpack.tr`).
+Header values are binary-safe (NUL and bytes ≥ 0x80 survive).
+
