@@ -311,19 +311,31 @@ extend DateTime:
     pub def utc_offset(self) -> TimeDelta:
         return self.tz.utc_offset()
 
+    # C-convention weekday 0=Sunday … 6=Saturday, computed from THIS DateTime's own
+    # wall-clock fields (year/month/day in its timezone). The previous version asked
+    # the OS (`_tr_tm_weekday(ts)` = localtime) which is wrong whenever the machine's
+    # zone differs from the DateTime's own (e.g. a UTC DateTime on a UTC+1 box near
+    # midnight).
+    def _c_weekday(self) -> int:
+        mut days = DateTime._days_from_civil(self.year, self.month, self.day)
+        # 1970-01-01 (day 0) was a Thursday (C weekday 4).
+        mut w = (days + 4) % 7
+        if w < 0: w = w + 7
+        return w
+
     # 0=Monday … 6=Sunday (same convention as Python).
     pub def weekday(self) -> int:
-        mut w = _tr_tm_weekday(self._ts)
+        mut w = self._c_weekday()
         if w == 0: return 6
         return w - 1
 
     # 0=Sunday … 6=Saturday (C convention).
     pub def isoweekday(self) -> int:
-        return _tr_tm_weekday(self._ts)
+        return self._c_weekday()
 
-    # Day of year 1–366.
+    # Day of year 1–366, from this DateTime's own wall-clock fields.
     pub def yearday(self) -> int:
-        return _tr_tm_yearday(self._ts)
+        return DateTime._days_from_civil(self.year, self.month, self.day) - DateTime._days_from_civil(self.year, 1, 1) + 1
 
     # Name of the weekday.
     pub def weekday_name(self) -> str:
