@@ -175,7 +175,11 @@ extend ZipFileReader:
         # genuinely empty entry, so re-check explicitly here to distinguish
         # "mismatch" from "really empty" and report a hard, unambiguous error.
         if rec.usize > 0:
-            mut got_crc = Crc32.compute(content, rec.usize)
+            # read_entry() hands back "" (length 0) on a failed CRC/inflate; running the
+            # CRC over rec.usize bytes of that string read past its buffer (ASan, #27).
+            mut got_crc = 0 - 1
+            if content.len() == rec.usize:
+                got_crc = Crc32.compute(content, rec.usize)
             if got_crc != rec.crc32:
                 print("ZipFileReader.extract: CRC32 mismatch for '" + name + "' in " + self.path + " (expected " + str(rec.crc32) + ", got " + str(got_crc) + ") — archive is corrupted")
                 return ("", -1)
@@ -213,7 +217,9 @@ extend Zip:
             mut rec = fr.r.entries.get(i)
             mut content = fr.r.read_entry(i)
             if rec.usize > 0:
-                mut got_crc = Crc32.compute(content, rec.usize)
+                mut got_crc = 0 - 1
+                if content.len() == rec.usize:
+                    got_crc = Crc32.compute(content, rec.usize)
                 if got_crc != rec.crc32:
                     bad.append(rec.name)
             i = i + 1
