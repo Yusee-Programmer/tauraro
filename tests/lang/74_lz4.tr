@@ -1,0 +1,223 @@
+# tests/lang/74_lz4.tr - std.compress.lz4 (+ std.compress.xxhash): LZ4 block and
+# frame formats in pure Tauraro, validated against vectors produced by the
+# reference liblz4 (LZ4_compress_default / LZ4_compress_HC / LZ4F_compressFrame
+# with linked+independent blocks, block + content checksums), round-trips of
+# our own encoder, and malformed-input rejection.
+
+from std.test import TestRunner
+from std.compress.lz4 import Lz4
+from std.compress.xxhash import Xxh32, Xxh64
+from std.compress.common import CBuf, CResult, rd8
+from std.string.str import Str
+
+extern "C":
+    def _tr_c_malloc(size: int) -> Pointer[char]
+    def _tr_str_wrap_len(s: Pointer[char], blen: int) -> str
+
+def nib(c: int) -> int:
+    if c >= 97: return c - 87
+    if c >= 65: return c - 55
+    return c - 48
+
+# hex text -> binary str (explicit length = Str.len(h) / 2; NUL-safe)
+def unhex(h: str) -> str:
+    mut n = Str.len(h) / 2
+    mut hp = h as Pointer[char]
+    mut buf = _tr_c_malloc(n + 1)
+    mut i = 0
+    while i < n:
+        mut b = nib(rd8(hp, 2 * i)) * 16 + nib(rd8(hp, 2 * i + 1))
+        unsafe:
+            buf.offset(i).write(b as char)
+        i = i + 1
+    unsafe:
+        buf.offset(n).write('\0')
+    return _tr_str_wrap_len(buf, n)
+
+# Deterministic compressible pattern (matches tests' reference vectors).
+def pat(n: int) -> str:
+    mut buf = _tr_c_malloc(n + 1)
+    mut i = 0
+    while i < n:
+        mut b = 0x41
+        if (i / 5000) % 2 == 0:
+            b = ((i % 97) * 3) & 0xFF
+        unsafe:
+            buf.offset(i).write(b as char)
+        i = i + 1
+    unsafe:
+        buf.offset(n).write('\0')
+    return _tr_str_wrap_len(buf, n)
+
+# Deterministic pseudo-random (incompressible) bytes.
+def lcg(n: int, seed: int) -> str:
+    mut buf = _tr_c_malloc(n + 1)
+    mut x = seed
+    mut i = 0
+    while i < n:
+        x = (x * 1103515245 + 12345) & 0x7fffffff
+        unsafe:
+            buf.offset(i).write(((x >> 16) & 0xFF) as char)
+        i = i + 1
+    unsafe:
+        buf.offset(n).write('\0')
+    return _tr_str_wrap_len(buf, n)
+
+def same(a: str, an: int, b: str, bn: int) -> bool:
+    if an != bn: return false
+    mut ap = a as Pointer[char]
+    mut bp = b as Pointer[char]
+    mut i = 0
+    while i < an:
+        if rd8(ap, i) != rd8(bp, i): return false
+        i = i + 1
+    return true
+
+# copy of `s` with byte `idx` replaced by `val`
+def patched(s: str, n: int, idx: int, val: int) -> str:
+    mut buf = _tr_c_malloc(n + 1)
+    mut sp = s as Pointer[char]
+    mut i = 0
+    while i < n:
+        mut b = rd8(sp, i)
+        if i == idx: b = val
+        unsafe:
+            buf.offset(i).write(b as char)
+        i = i + 1
+    unsafe:
+        buf.offset(n).write('\0')
+    return _tr_str_wrap_len(buf, n)
+
+def roundtrip_block(t: TestRunner, name: str, data: str, n: int):
+    mut c = Lz4.compress_block(data, n)
+    mut d = Lz4.decompress_block(c.to_str(), c.len(), n)
+    t.assert_true(c.ok and d.ok, "block " + name + ": ok")
+    t.assert_true(same(d.to_str(), d.len(), data, n), "block " + name + ": round-trips (" + str(n) + " -> " + str(c.len()) + " -> " + str(d.len()) + ")")
+    c.free()
+    d.free()
+
+def roundtrip_frame(t: TestRunner, name: str, data: str, n: int, chk: bool):
+    mut c = Lz4.compress_frame(data, n, chk)
+    mut d = Lz4.decompress_frame(c.to_str(), c.len(), n + 16)
+    t.assert_true(c.ok and d.ok, "frame " + name + ": ok " + d.err)
+    t.assert_true(same(d.to_str(), d.len(), data, n), "frame " + name + ": round-trips (" + str(n) + " -> " + str(c.len()) + ")")
+    c.free()
+    d.free()
+
+def main():
+    mut t = TestRunner.init("74_lz4")
+    mut txt = "Tauraro compresses compresses compresses compresses data data data data data!"
+    mut tn = 77
+
+    t.section("xxHash32 / xxHash64 known answers")
+    t.assert_eq_int(Xxh32.hash("", 0, 0), 0x02CC5D05, "xxh32('')")
+    t.assert_eq_int(Xxh32.hash("abc", 3, 0), 0x32D153FF, "xxh32('abc')")
+    t.assert_eq_int(Xxh32.hash("Nobody inspects the spammish repetition", 39, 0), 0xE2293B2F, "xxh32(long, 16+ path)")
+    t.assert_eq_int(Xxh32.hash("abc", 3, 1), Xxh32.hash("abc", 3, 1), "xxh32 seeded is deterministic")
+    t.assert_ne_int(Xxh32.hash("abc", 3, 1), Xxh32.hash("abc", 3, 0), "xxh32 seed changes the hash")
+    t.assert_eq_int(Xxh64.hash("", 0, 0), -1205034819632174695, "xxh64('') = EF46DB3751D8E999")
+    t.assert_eq_int(Xxh64.hash("abc", 3, 0), 4952883123889572249, "xxh64('abc') = 44BC2CF5AD770999")
+    t.assert_eq_int(Xxh64.hash("Nobody inspects the spammish repetition", 39, 0), -302119147016844303, "xxh64(long, 32+ path)")
+    t.assert_eq_int(Xxh64.low32("Nobody inspects the spammish repetition", 39, 0), 2318896113, "xxh64 low32 (zstd checksum)")
+
+    t.section("LZ4 block: decode reference liblz4 output")
+    mut bf = unhex("ff035461757261726f20636f6d707265737365730b000f4c646174610500506461746121")
+    mut r1 = Lz4.decompress_block(bf, 36, 4096)
+    t.assert_true(r1.ok, "liblz4 fast block decodes")
+    t.assert_true(same(r1.to_str(), r1.len(), txt, tn), "liblz4 fast block content")
+    mut bh = unhex("ff035461757261726f20636f6d707265737365730b000f4c646174610500506461746121")
+    mut r2 = Lz4.decompress_block(bh, 36, 4096)
+    t.assert_true(r2.ok and same(r2.to_str(), r2.len(), txt, tn), "liblz4 HC block content")
+
+    t.section("LZ4 block: our encoder matches reference behaviour")
+    mut mine = Lz4.compress_block(txt, tn)
+    t.assert_true(mine.len() < tn, "compresses repetitive text (" + str(mine.len()) + " < 77)")
+    roundtrip_block(t, "text", txt, tn)
+    roundtrip_block(t, "empty", "", 0)
+    roundtrip_block(t, "1 byte", "a", 1)
+    roundtrip_block(t, "12 bytes (below min match size)", "abcabcabcabc", 12)
+    roundtrip_block(t, "13 bytes", "aaaaaaaaaaaaa", 13)
+    roundtrip_block(t, "31 bytes run", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", 31)
+    mut p20 = pat(20000)
+    roundtrip_block(t, "pattern 20000", p20, 20000)
+    mut rnd = lcg(5000, 99)
+    roundtrip_block(t, "random 5000", rnd, 5000)
+    mut big = pat(150000)
+    roundtrip_block(t, "pattern 150000 (long matches, >64K offsets unused)", big, 150000)
+
+    t.section("LZ4 block: malformed input is rejected")
+    mut bad1 = Lz4.decompress_block(unhex("f0"), 1, 100)
+    t.assert_false(bad1.ok, "truncated literal length")
+    mut bad2 = Lz4.decompress_block(unhex("2161"), 2, 100)
+    t.assert_false(bad2.ok, "literals past end")
+    mut bad3 = Lz4.decompress_block(unhex("11610000"), 4, 100)
+    t.assert_false(bad3.ok, "zero offset")
+    mut bad4 = Lz4.decompress_block(unhex("1161ff00"), 4, 100)
+    t.assert_false(bad4.ok, "offset before start of data")
+    mut bad5 = Lz4.decompress_block(bf, 36, 10)
+    t.assert_false(bad5.ok, "output limit enforced (max_out too small)")
+    mut bad6 = Lz4.decompress_block(unhex("1f61010004"), 5, 100)
+    t.assert_false(bad6.ok, "missing last literals / truncated match length")
+
+    t.section("LZ4 frame: decode reference liblz4 frames")
+    mut ftxt = unhex("04224d186c404d00000000000000fa24000000ff035461757261726f20636f6d707265737365730b000f4c646174610500506461746121000000009f786d8e")
+    mut f1 = Lz4.decompress_frame(ftxt, 63, 4096)
+    t.assert_true(f1.ok and same(f1.to_str(), f1.len(), txt, tn), "frame (content checksum) decodes: " + f1.err)
+    mut pdata = pat(150000)
+    mut fl = unhex("04224d187c40f0490200000000000fbf010000ff52000306090c0f1215181b1e2124272a2d303336393c3f4245484b4e5154575a5d606366696c6f7275787b7e8184878a8d909396999c9fa2a5a8abaeb1b4b7babdc0c3c6c9cccfd2d5d8dbdee1e4e7eaedf0f3f6f9fcff0205080b0e1114171a1d206100ffffffffffffffffffffffffffffffffffffff271f410100ffffffffffffffffffffffffffffffffffffff870f0727ffffffffffffffffffffffffffffffffffffff7f055a3a0f0f27ffffffffffffffffffffffffffffffffffffff871f410e4effffffffffffffffffffffffffffffffffffff760507270561610f1027ffffffffffffffffffffffffffffffffffffff880f1575ffffffffffffffffffffffffffffffffffffff6d0e07270568880f1027ffffffffffffffffffffffffffffffffffffff880f1c9cffffffffffffffffffffffffffffffffffffff640f072708056faf0f1027ffffffffffffffffffffffffffffffffffffff880f23c3ffffffffffffffffffffffffffffffffffffff5b0f0727110576d60f1027ffffffffffffffffffffffffffffffffffffff880f2aeaffffffffffffffffffffffffffffffffffffff520f07271a057dfd0f1027ffff025041414141414c2684c3cf0100001f410100ffffffffffffffffffffffffffffffffff6dff52bdc0c3c6c9cccfd2d5d8dbdee1e4e7eaedf0f3f6f9fcff0205080b0e1114171a1d20000306090c0f1215181b1e2124272a2d303336393c3f4245484b4e5154575a5d606366696c6f7275787b7e8184878a8d909396999c9fa2a5a8abaeb1b4b7ba6100ffffffffffffffffffffffffffffffffffffff270ff724ffffffffffffffffffffffffffffffffff6d0f0200ffff080f0727ffffffffffffffffffffffffffffffffffffff7f055a3a0fa115ffff080f0200ffffffffffffffffffffffffffffffffff6d0f0e4effffffffffffffffffffffffffffffffffffff760507270561610ff724ffffffffffffffffffffffffffffffffff6d0f0200ffff080f1575ffffffffffffffffffffffffffffffffffffff6d0e07270568880fa115ffff080f0200ffffffffffffffffffffffffffffffffff6d0f1c9cffffffffffffffffffffffffffffffffffffff640f072708056faf0ff724ffffffffffffffffffffffffffffffffff6d0f0200ffff080f23c3ffffffffffffffffffffffffffffffffffffff5b0f0727110576d60fa115ffff080f0200ffffffffffffffffffffffffffffffffff6d0f2aeaffffffff1c503c3f4245482133c393c4000000ff524b4e5154575a5d606366696c6f7275787b7e8184878a8d909396999c9fa2a5a8abaeb1b4b7babdc0c3c6c9cccfd2d5d8dbdee1e4e7eaedf0f3f6f9fcff0205080b0e1114171a1d20000306090c0f1215181b1e2124272a2d303336393c3f4245486100fffffffffffffffffffffffffffff21f410100ffffffffffffffffffffffffffffffffffffff870fdc22ffffffffffffffffffffffffffffff500f0432ffffffff250f0f27ffffffffffffffffffffffffffffffffffffff83504141414141c850783000000000d7a29259")
+    mut f2 = Lz4.decompress_frame(fl, 1153, 1 << 20)
+    t.assert_true(f2.ok, "linked blocks + block checksums + content checksum: " + f2.err)
+    t.assert_true(same(f2.to_str(), f2.len(), pdata, 150000), "linked-block frame content (150000 bytes, 3 blocks)")
+    mut fi = unhex("04224d184040c0bf010000ff52000306090c0f1215181b1e2124272a2d303336393c3f4245484b4e5154575a5d606366696c6f7275787b7e8184878a8d909396999c9fa2a5a8abaeb1b4b7babdc0c3c6c9cccfd2d5d8dbdee1e4e7eaedf0f3f6f9fcff0205080b0e1114171a1d206100ffffffffffffffffffffffffffffffffffffff271f410100ffffffffffffffffffffffffffffffffffffff870f0727ffffffffffffffffffffffffffffffffffffff7f055a3a0f0f27ffffffffffffffffffffffffffffffffffffff871f410e4effffffffffffffffffffffffffffffffffffff760507270561610f1027ffffffffffffffffffffffffffffffffffffff880f1575ffffffffffffffffffffffffffffffffffffff6d0e07270568880f1027ffffffffffffffffffffffffffffffffffffff880f1c9cffffffffffffffffffffffffffffffffffffff640f072708056faf0f1027ffffffffffffffffffffffffffffffffffffff880f23c3ffffffffffffffffffffffffffffffffffffff5b0f0727110576d60f1027ffffffffffffffffffffffffffffffffffffff880f2aeaffffffffffffffffffffffffffffffffffffff520f07271a057dfd0f1027ffff02504141414141b20100000f0100ffffffffffffffffffffffffffffffffff6e0dc98805c26105bb3a05b4138f1e2124272a2d303384c3ffffffffffffffffffffffffffffffffffffff540ff724ffffffffffffffffffffffffffffffffff6d0f0200ffff0804d0af0f0727ffffffffffffffffffffffffffffffffffffff779f393c3f4245484b4e51a115ffff080f0200ffffffffffffffffffffffffffffffffff6d0f0e4effffffffffffffffffffffffffffffffffffff760507279f54575a5d606366696cf724ffffffffffffffffffffffffffffffffff6d0f0200ffff0804d0af0f1575ffffffffffffffffffffffffffffffffffffff650e07279f6f7275787b7e818487a115ffff080f0200ffffffffffffffffffffffffffffffffff6d0f1c9cffffffffffffffffffffffffffffffffffffff640f0727089f8a8d909396999c9fa2f724ffffffffffffffffffffffffffffffffff6d0f0200ffff080f23c3ffffffffffffffffffffffffffffffffffffff5b0f0727119fa5a8abaeb1b4b7babda115ffff080f0200ffffffffffffffffffffffffffffffffff6d04d0af05c98805c26105bb3a05b4130f8beaffffffef503c3f424548720000000f2b04ffffffffffffffffffffffffffffff540ff724ffffffffffffffffffffffffffffffffff6d0f0200ffff0804d0af0f0727ffffffffffffffffffffffffffffffffffffff779fdbdee1e4e7eaedf0f3a115ffff080f0200ffffffffffffffffffffffffffffffffff6850414141414100000000")
+    mut f3 = Lz4.decompress_frame(fi, 1018, 1 << 20)
+    t.assert_true(f3.ok and same(f3.to_str(), f3.len(), pdata, 150000), "independent blocks, no checksum, no content size: " + f3.err)
+    mut frnd = unhex("04224d187c402c01000000000000fa2c010080dc0465aa1fad1d5adae5ac1b1e5f1370796cfd10ff19af601d04acb41d022b4678733af2df5faeb70859d1ee3910cb4895b5cc892911ff06b6622edf3cf935fd4b9428ca097c44b3025e965fb3ea6dacd42d816e69afe0e6874c9c04e7d2365d2c60c9eaf479f686a0eb9326e46212d50dcbb377156a6a3a68ba8edb7408469ef3ceb30af8d0dd68bbf85ffa24f2d2fc1887fb5c87bab43832a59b1b3d107cf778d67fe26df81191297e9395cb12c557ce5af1d41618d719bc045b7e9965f1a29471c42aac6aa938c475c7ad3238021f053b2c991afceb15decf68bae07cbcd61e971b9a0b9dbe9763d392fcafdfa28c97234562ebdd076570ff58896acff7caee3f1ce9e40a68e5de938d389c7dbdd75b09d4e7e233443f4a8cc4a190d6b8b8dc615fd18e28be590eaa501b92fe15d90000000092fe15d9")
+    mut f4 = Lz4.decompress_frame(frnd, 331, 4096)
+    t.assert_true(f4.ok and same(f4.to_str(), f4.len(), lcg(300, 12345), 300), "stored (uncompressed) block in frame: " + f4.err)
+
+    t.section("LZ4 frame: our encoder")
+    roundtrip_frame(t, "text + checksum", txt, tn, true)
+    roundtrip_frame(t, "text no checksum", txt, tn, false)
+    roundtrip_frame(t, "empty", "", 0, true)
+    roundtrip_frame(t, "pattern 150000 (3 blocks)", pdata, 150000, true)
+    roundtrip_frame(t, "random 5000 (stored block)", rnd, 5000, true)
+    mut ef = Lz4.compress_frame(txt, tn, true)
+    mut ep = ef.data.data
+    t.assert_eq_int(rd8(ep, 0), 0x04, "frame magic byte 0")
+    t.assert_eq_int(rd8(ep, 3), 0x18, "frame magic byte 3")
+    t.assert_eq_int(rd8(ep, 4), 0x6C, "FLG = v01|indep|csize|cchk")
+    t.assert_eq_int(rd8(ep, 5), 0x40, "BD = 64KiB")
+
+    t.section("LZ4 frame: damaged / unsupported input is rejected")
+    mut flen = ef.len()
+    mut fs = ef.to_str()
+    mut g1 = Lz4.decompress_frame(patched(fs, flen, 0, 0x00), flen, 4096)
+    t.assert_false(g1.ok, "bad magic")
+    mut g2 = Lz4.decompress_frame(patched(fs, flen, 7, rd8(fs as Pointer[char], 7) ^ 0x10), flen, 4096)
+    t.assert_false(g2.ok, "corrupted header (HC mismatch / content size)")
+    mut g3 = Lz4.decompress_frame(patched(fs, flen, flen - 1, rd8(fs as Pointer[char], flen - 1) ^ 0xFF), flen, 4096)
+    t.assert_false(g3.ok, "content checksum mismatch")
+    mut g4 = Lz4.decompress_frame(fs, flen - 3, 4096)
+    t.assert_false(g4.ok, "truncated content checksum")
+    mut g5 = Lz4.decompress_frame(fs, 10, 4096)
+    t.assert_false(g5.ok, "truncated header")
+    mut g6 = Lz4.decompress_frame(fs, flen, 20)
+    t.assert_false(g6.ok, "frame exceeds max_out")
+    mut g7 = Lz4.decompress_frame(patched(fl, 1153, 700, rd8(fl as Pointer[char], 700) ^ 0x01), 1153, 1 << 20)
+    t.assert_false(g7.ok, "bit flip inside a checksummed block is detected")
+    mut g8 = Lz4.decompress_frame("", 0, 100)
+    t.assert_false(g8.ok, "empty input")
+
+    t.section("LZ4 frame: concatenated + skippable frames")
+    mut two = Lz4.compress_frame("hello ", 6, true)
+    mut thr = Lz4.compress_frame("world", 5, false)
+    mut jb = CBuf.init(64)
+    jb.push_raw(two.data.data, two.len())
+    jb.push_u32le(0x184D2A53)
+    jb.push_u32le(3)
+    jb.push_str("xyz", 3)
+    jb.push_raw(thr.data.data, thr.len())
+    mut cat = Lz4.decompress_frame(jb.to_str(), jb.len, 100)
+    t.assert_true(cat.ok and same(cat.to_str(), cat.len(), "hello world", 11), "two frames, one skippable frame between: " + cat.err)
+
+    t.summary()

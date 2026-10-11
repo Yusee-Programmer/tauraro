@@ -166,6 +166,19 @@ extend Str:
         sb.free()
         return out
 
+    # `count` bytes starting at `start` (the (offset, length) counterpart of slice(s,
+    # start, end)). Clamps to the string: a negative start counts from 0, a count that
+    # runs past the end stops at the end, a non-positive count gives "".
+    pub def substr(s: str, start: int, count: int) -> str:
+        if count <= 0: return ""
+        mut b = start
+        mut n = count
+        if b < 0:
+            n = n + b
+            b = 0
+        if n <= 0: return ""
+        return Str.slice(s, b, b + n)
+
     pub def repeat(s: str, n: int) -> str:
         if n <= 0: return ""
         mut sb = StringBuilder.init(Str.len(s) * n + 1)
@@ -430,6 +443,14 @@ extend Str:
                 i = i + 1
         out.push(Str.slice(s, start, sl))
         return out
+
+    # Split on every occurrence of the WHOLE separator `sep`, KEEPING empty pieces:
+    # "a,,b,".split_keep_empty(",") -> ["a", "", "b", ""] (4 pieces, always
+    # occurrences + 1). Str.split()/`s.split()` treat `sep` as a set of delimiter
+    # characters and drop empty pieces; their behaviour is unchanged. An empty `sep`
+    # yields one piece per byte, like split_to_vec.
+    pub def split_keep_empty(s: str, sep: str) -> Vec[str]:
+        return Str.split_to_vec(s, sep)
 
     pub def join(parts: List[str], sep: str) -> str:
         return _tr_strx_join_trstr(parts, sep)

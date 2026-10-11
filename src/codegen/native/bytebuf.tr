@@ -1,9 +1,9 @@
 # @trusted: compiler systems module — audited raw-pointer core.
 # src/codegen/native/bytebuf.tr — a little-endian byte buffer for emitting machine code
-# and object files, with a binary file writer. Fixed 64 KB capacity (not yet resizable —
-# a very large module would need a grow path).
+# and object files, with a binary file writer. Starts at 64 KB and doubles on demand, so
+# a large module is never silently truncated.
 
-from core.alloc import alloc
+from core.alloc import alloc, raw_realloc, raw_zero
 
 extern "C":
     def _tr_c_fopen(path: str, mode: str) -> Pointer[char]
@@ -24,11 +24,20 @@ extend ByteBuf:
             b.len  = 0
             return b
 
+    # Double the capacity (new tail zero-filled, like the initial calloc).
+    def grow(self):
+        unsafe:
+            mut ncap = self.cap * 2
+            self.data = raw_realloc(self.data as Pointer[char], ncap) as Pointer[u8]
+            raw_zero(self.data.offset(self.cap) as Pointer[char], ncap - self.cap)
+            self.cap = ncap
+
     pub def u8(self, v: int):
         unsafe:
-            if self.len < self.cap:
-                self.data.offset(self.len).write((v & 255) as u8)
-                self.len = self.len + 1
+            if self.len >= self.cap:
+                self.grow()
+            self.data.offset(self.len).write((v & 255) as u8)
+            self.len = self.len + 1
 
     pub def u16(self, v: int):
         self.u8(v & 255)

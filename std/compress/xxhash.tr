@@ -1,0 +1,143 @@
+# std.compress.xxhash — xxHash32 and xxHash64 (pure Tauraro).
+#
+# The LZ4 frame format checksums with XXH32 (header byte, optional per-block
+# checksum, content checksum) and the Zstandard frame format's optional
+# content checksum is the low 32 bits of XXH64, so both live here, shared by
+# std.compress.lz4 and std.compress.zstd. Usable on their own as fast
+# non-cryptographic hashes.
+#
+# Usage:
+#   from std.compress.xxhash import Xxh32, Xxh64
+#   mut h  = Xxh32.hash("abc", 3, 0)      # 0x32D153FF
+#   mut h2 = Xxh64.hash("abc", 3, 0)      # u64 value as int (bit pattern)
+#
+# `data`/`len` follow the std.compress convention: `data` is a str used as a
+# raw byte buffer with an explicit length (embedded NULs are fine).
+# Xxh64.hash returns the 64-bit hash as an `int` carrying the bit pattern
+# (so values >= 2^63 print negative); use Xxh64.low32() for the unsigned
+# low 32 bits (what zstd stores).
+
+from std.compress.common import rd8, rd32le, rd64le, mul32
+
+def _xxh_rotl32(x: int, r: int) -> int:
+    return ((x << r) | (x >> (32 - r))) & 0xFFFFFFFF
+
+pub class Xxh32:
+    _dummy: int
+
+extend Xxh32:
+    # XXH32 over `len_` bytes starting at `p` (a raw byte pointer).
+    pub def hash_ptr(p: Pointer[char], len_: int, seed: int) -> int:
+        mut P1 = 2654435761
+        mut P2 = 2246822519
+        mut P3 = 3266489917
+        mut P4 = 668265263
+        mut P5 = 374761393
+        mut sd = seed & 0xFFFFFFFF
+        mut i = 0
+        mut h = 0
+        if len_ >= 16:
+            mut v1 = (sd + P1 + P2) & 0xFFFFFFFF
+            mut v2 = (sd + P2) & 0xFFFFFFFF
+            mut v3 = sd
+            mut v4 = (sd - P1) & 0xFFFFFFFF
+            while i + 16 <= len_:
+                v1 = mul32(_xxh_rotl32((v1 + mul32(rd32le(p, i), P2)) & 0xFFFFFFFF, 13), P1)
+                v2 = mul32(_xxh_rotl32((v2 + mul32(rd32le(p, i + 4), P2)) & 0xFFFFFFFF, 13), P1)
+                v3 = mul32(_xxh_rotl32((v3 + mul32(rd32le(p, i + 8), P2)) & 0xFFFFFFFF, 13), P1)
+                v4 = mul32(_xxh_rotl32((v4 + mul32(rd32le(p, i + 12), P2)) & 0xFFFFFFFF, 13), P1)
+                i = i + 16
+            h = (_xxh_rotl32(v1, 1) + _xxh_rotl32(v2, 7) + _xxh_rotl32(v3, 12) + _xxh_rotl32(v4, 18)) & 0xFFFFFFFF
+        else:
+            h = (sd + P5) & 0xFFFFFFFF
+        h = (h + len_) & 0xFFFFFFFF
+        while i + 4 <= len_:
+            h = mul32(_xxh_rotl32((h + mul32(rd32le(p, i), P3)) & 0xFFFFFFFF, 17), P4)
+            i = i + 4
+        while i < len_:
+            h = mul32(_xxh_rotl32((h + mul32(rd8(p, i), P5)) & 0xFFFFFFFF, 11), P1)
+            i = i + 1
+        h = h ^ (h >> 15)
+        h = mul32(h, P2)
+        h = h ^ (h >> 13)
+        h = mul32(h, P3)
+        h = h ^ (h >> 16)
+        return h & 0xFFFFFFFF
+
+    # XXH32 of the first `len_` bytes of `data` (explicit length).
+    pub def hash(data: str, len_: int, seed: int) -> int:
+        return Xxh32.hash_ptr(data as Pointer[char], len_, seed)
+
+def _xxh_rotl64(x: u64, r: int) -> u64:
+    return (x << r) | (x >> (64 - r))
+
+def _xx64_round(acc: u64, inp: u64) -> u64:
+    mut a: u64 = acc + inp * (0xC2B2AE3D27D4EB4F as u64)
+    a = _xxh_rotl64(a, 31)
+    return a * (0x9E3779B185EBCA87 as u64)
+
+def _xx64_merge(acc: u64, val: u64) -> u64:
+    mut v: u64 = _xx64_round(0 as u64, val)
+    mut a: u64 = acc ^ v
+    return a * (0x9E3779B185EBCA87 as u64) + (0x85EBCA77C2B2AE63 as u64)
+
+pub class Xxh64:
+    _dummy: int
+
+extend Xxh64:
+    # XXH64 over `len_` bytes starting at `p`. Returns the 64-bit hash as an
+    # int carrying the same bit pattern.
+    pub def hash_ptr(p: Pointer[char], len_: int, seed: int) -> int:
+        mut P1: u64 = 0x9E3779B185EBCA87 as u64
+        mut P2: u64 = 0xC2B2AE3D27D4EB4F as u64
+        mut P3: u64 = 0x165667B19E3779F9 as u64
+        mut P4: u64 = 0x85EBCA77C2B2AE63 as u64
+        mut P5: u64 = 0x27D4EB2F165667C5 as u64
+        mut sd: u64 = seed as u64
+        mut i = 0
+        mut h: u64 = 0 as u64
+        if len_ >= 32:
+            mut v1: u64 = sd + P1 + P2
+            mut v2: u64 = sd + P2
+            mut v3: u64 = sd
+            mut v4: u64 = sd - P1
+            while i + 32 <= len_:
+                v1 = _xx64_round(v1, rd64le(p, i) as u64)
+                v2 = _xx64_round(v2, rd64le(p, i + 8) as u64)
+                v3 = _xx64_round(v3, rd64le(p, i + 16) as u64)
+                v4 = _xx64_round(v4, rd64le(p, i + 24) as u64)
+                i = i + 32
+            h = _xxh_rotl64(v1, 1) + _xxh_rotl64(v2, 7) + _xxh_rotl64(v3, 12) + _xxh_rotl64(v4, 18)
+            h = _xx64_merge(h, v1)
+            h = _xx64_merge(h, v2)
+            h = _xx64_merge(h, v3)
+            h = _xx64_merge(h, v4)
+        else:
+            h = sd + P5
+        h = h + (len_ as u64)
+        while i + 8 <= len_:
+            mut k1: u64 = _xx64_round(0 as u64, rd64le(p, i) as u64)
+            h = h ^ k1
+            h = _xxh_rotl64(h, 27) * P1 + P4
+            i = i + 8
+        if i + 4 <= len_:
+            h = h ^ ((rd32le(p, i) as u64) * P1)
+            h = _xxh_rotl64(h, 23) * P2 + P3
+            i = i + 4
+        while i < len_:
+            h = h ^ ((rd8(p, i) as u64) * P5)
+            h = _xxh_rotl64(h, 11) * P1
+            i = i + 1
+        h = h ^ (h >> 33)
+        h = h * P2
+        h = h ^ (h >> 29)
+        h = h * P3
+        h = h ^ (h >> 32)
+        return h as int
+
+    pub def hash(data: str, len_: int, seed: int) -> int:
+        return Xxh64.hash_ptr(data as Pointer[char], len_, seed)
+
+    # Low 32 bits of XXH64 (what a Zstandard frame's content checksum holds).
+    pub def low32(data: str, len_: int, seed: int) -> int:
+        return Xxh64.hash_ptr(data as Pointer[char], len_, seed) & 0xFFFFFFFF

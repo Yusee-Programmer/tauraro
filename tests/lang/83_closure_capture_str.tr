@@ -1,0 +1,63 @@
+# tests/lang/83_closure_capture_str.tr - a closure that RE-ASSIGNS a captured
+# `str` local (bug log #10). The generated C used the bare local name inside the
+# outlined closure body ('got' undeclared) instead of `(*(__env->p_got))`; int
+# captures worked because they take a different assignment path.
+
+from std.test import TestRunner
+
+class Counter:
+    pub n: int
+
+def apply(f: def(str) -> void, s: str):
+    f(s)
+
+def main():
+    mut t = TestRunner.init("83_closure_capture_str")
+
+    t.section("closure appends to a captured str")
+    mut got = ""
+    mut f = def (c: str) -> void:
+        got = got + c
+    f("a")
+    f("b")
+    f("c")
+    t.assert_eq_str(got, "abc", "captured str accumulated across calls")
+
+    t.section("closure overwrites a captured str")
+    mut last = "none"
+    mut g = def (c: str) -> void:
+        last = c
+    g("x")
+    t.assert_eq_str(last, "x", "first overwrite")
+    g("yy")
+    t.assert_eq_str(last, "yy", "second overwrite")
+
+    t.section("closure passed as an argument")
+    mut acc = ""
+    apply(def (c: str) -> void:
+        acc = acc + c + ";", "p")
+    apply(def (c: str) -> void:
+        acc = acc + c + ";", "q")
+    t.assert_eq_str(acc, "p;q;", "str mutated through inline closures")
+
+    t.section("captured int still works and mixes with str")
+    mut n = 0
+    mut s = ""
+    mut h = def (c: str) -> void:
+        n = n + 1
+        s = s + c
+    h("1")
+    h("2")
+    t.assert_eq_int(n, 2, "int capture")
+    t.assert_eq_str(s, "12", "str capture")
+
+    t.section("captured class local reassigned")
+    mut ctr = Counter()
+    ctr.n = 1
+    mut k = def (c: str) -> void:
+        ctr = Counter()
+        ctr.n = 42
+    k("z")
+    t.assert_eq_int(ctr.n, 42, "class local reassigned inside closure is visible outside")
+
+    t.summary()

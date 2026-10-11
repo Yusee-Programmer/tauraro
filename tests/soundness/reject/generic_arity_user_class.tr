@@ -1,0 +1,13 @@
+# EXPECT: [G-2]
+# A user generic class must be given exactly as many type arguments as it has
+# type parameters.
+
+class Pair[A, B]:
+    pub first: A
+    pub second: B
+
+def show(p: Pair[int]) -> int:
+    return 0
+
+def main():
+    print("unreachable")

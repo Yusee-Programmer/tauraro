@@ -6126,7 +6126,21 @@ static inline char* _tr_char_to_str_alloc(long long code) { return _tr_char_to_s
 #ifdef TAURARO_BARE
 _TR_XLINK int _tr_system(const char* cmd) { (void)cmd; return -1; }
 #else
+#if (defined(__unix__) || defined(__APPLE__)) && !defined(__wasi__)
+#include <sys/wait.h>
+/* POSIX system() returns the raw wait status (exit code << 8, or the signal number);
+ * decode it so callers -- notably `tauraroc --run` -- see the child's real exit code
+ * (128+sig when killed by a signal) instead of a value that wraps to 0 in exit(). */
+_TR_XLINK int _tr_system(const char* cmd) {
+    int st = system(cmd);
+    if (st == -1) return -1;
+    if (WIFEXITED(st)) return WEXITSTATUS(st);
+    if (WIFSIGNALED(st)) return 128 + WTERMSIG(st);
+    return st;
+}
+#else
 _TR_XLINK int _tr_system(const char* cmd) { return system(cmd); }
+#endif
 #endif
 
 /* ── Panic / error ───────────────────────────────────────────────────── */
@@ -7278,7 +7292,16 @@ static inline void _tr_init_console(void) {
     SetConsoleCP(65001);
 }
 #else
-static inline void _tr_init_console(void) {}
+#if !defined(TAURARO_BARE) && !defined(__wasi__)
+#include <signal.h>
+#endif
+/* POSIX: a write()/send() to a peer-closed socket or pipe must surface as an error
+ * return (EPIPE), not kill the whole process with SIGPIPE (bug log #13). */
+static inline void _tr_init_console(void) {
+#if !defined(TAURARO_BARE) && !defined(__wasi__) && defined(SIGPIPE)
+    signal(SIGPIPE, SIG_IGN);
+#endif
+}
 #endif
 
 
@@ -8959,12 +8982,37 @@ static inline char* _tr_inflate(char* input, int ilen, int max_out) {
     s.next_in=(Bytef*)input;s.avail_in=(uInt)ilen;s.next_out=(Bytef*)out;s.avail_out=(uInt)max_out;
     inflate(&s,Z_FINISH);int n=(int)s.total_out;inflateEnd(&s);out[n]='\0';return out;
 }
+/* Length-exact variants (bug log #24): same as _tr_zlib_decompress/_tr_inflate but also
+ * report the number of decompressed bytes in *out_len, so a binary result containing 0x00
+ * can be wrapped with its real length (the plain forms can only be measured with strlen). */
+static inline char* _tr_zlib_decompress_n(char* input, int ilen, int max_out, int* out_len) {
+    if(out_len)*out_len=0;
+    if(!input||ilen<=0||max_out<0) return _tr_strdup("");
+    char* out=(char*)TAURARO_ALLOC((size_t)max_out+1);if(!out) return _tr_strdup("");
+    uLong dlen=(uLong)max_out;
+    if(uncompress((Bytef*)out,&dlen,(const Bytef*)input,(uLong)ilen)!=Z_OK){TAURARO_FREE(out);return _tr_strdup("");}
+    out[dlen]='\0'; if(out_len)*out_len=(int)dlen; return out;
+}
+static inline char* _tr_inflate_n(char* input, int ilen, int max_out, int* out_len) {
+    if(out_len)*out_len=0;
+    if(!input||ilen<=0||max_out<0) return _tr_strdup("");
+    z_stream s={0};inflateInit2(&s,-15);
+    char* out=(char*)TAURARO_ALLOC((size_t)max_out+1);if(!out){inflateEnd(&s);return _tr_strdup("");}
+    s.next_in=(Bytef*)input;s.avail_in=(uInt)ilen;s.next_out=(Bytef*)out;s.avail_out=(uInt)max_out;
+    inflate(&s,Z_FINISH);int n=(int)s.total_out;inflateEnd(&s);out[n]='\0';if(out_len)*out_len=n;return out;
+}
 #else
 static inline char* _tr_zlib_compress(char* i, int il, int* n) { (void)i;(void)il;if(n)*n=0;return NULL; }
 static inline char* _tr_zlib_decompress(char* i, int il, int m) { (void)i;(void)il;(void)m;return _tr_strdup(""); }
 static inline char* _tr_deflate(char* i, int il, int* n) { (void)i;(void)il;if(n)*n=0;return NULL; }
 static inline char* _tr_inflate(char* i, int il, int m) { (void)i;(void)il;(void)m;return _tr_strdup(""); }
+static inline char* _tr_zlib_decompress_n(char* i, int il, int m, int* n) { (void)i;(void)il;(void)m;if(n)*n=0;return _tr_strdup(""); }
+static inline char* _tr_inflate_n(char* i, int il, int m, int* n) { (void)i;(void)il;(void)m;if(n)*n=0;return _tr_strdup(""); }
 #endif
+/* Pointer-returning alias of _tr_deflate: std.io.archive declares `_tr_deflate` as returning
+ * `str` while std.compress.{zlib,gzip} need the raw buffer + exact length (bug log #24), and
+ * one extern name can only have one declared type per program. */
+static inline char* _tr_deflate_raw(char* input, int ilen, int* out_len) { return _tr_deflate(input, ilen, out_len); }
 
 /* ═══════════════════════════════════════════════════════════════════════════
  * UNICODE / UTF-8 — pure C, no external dependencies.

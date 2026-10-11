@@ -31,6 +31,8 @@ category, with its cause, a triggering example, and the fix.
 | [T-7] | Concurrency | A plain reference-counted class crosses a thread boundary — its refcount is non-atomic (`!Send`, exactly like Rust's `Rc`). Checked **transitively** (through `Mutex`/`Vec`/fields). Use `Shared[T]` (atomic `Arc`) instead |
 | [N-1] | Name | Reserved/keyword name used as a declaration |
 | [F-3] | Function | Missing `return` on a code path |
+| [F-4] | Function | A `throws` function value was passed where a plain `def(...) -> R` is expected, or the reverse |
+| [F-5] | Function | A closure/function that returns a non-`int` value was passed to a bare `lambda`-typed slot (which is called as returning `int`) |
 | [E-1] | Existence | (1) Non-exhaustive `match`; (2) explicit `main()` call; (3) no such method on type |
 | [E-2] | Existence | Nested declaration used outside `main()` |
 | [S-1] | Shared | `Shared[Self]` field creates a reference cycle |
@@ -259,6 +261,11 @@ class Counter implements Sendable:
 **FIX:** Wrap the field in `Mutex[T]`/`RwLock[T]`/`Atomic[T]`, or remove
 `implements Sendable` if the class is only used on one thread.
 
+Generic classes are checked too. A field whose type is one of the class's own type parameters
+(`pub value: T`) is accepted at the definition, because `T` is only known per instantiation;
+every other field must be `Sendable`. `implements Sendable, UnsafeSendable` skips the field check
+entirely (the author vouches for the class, e.g. for a `def() -> V` field).
+
 ---
 
 ### [T-3] Primitive Field in a Sendable Class (warning)
@@ -444,6 +451,47 @@ return.
 
 **Not checked for:** `void` functions, `init`/constructor functions, interface
 method signatures (no body), `extern "C"` declarations (no body).
+
+### [F-4] `throws` Mismatch in Function Values
+
+**Message:** `argument 1 of 'run()' expects a `throws` function value (`def(...) throws E -> R`) but a plain function/closure was passed. ...`
+
+```python
+def plain(v: int) -> int:
+    return v + 1
+
+def run(op: def(int) throws str -> int, v: int) -> int: ...
+
+run(plain, 1)    # F-4: plain function where a `throws` function type is expected
+```
+
+A `throws` function returns a `Result`; a plain function returns its bare value. They are different
+function types (and different C function-pointer types), and Tauraro never converts between types
+implicitly, so the compiler rejects the mix in both directions instead of generating a hidden wrapper.
+
+**FIX:** make the argument `throws` too, handle the error inside a plain wrapper
+(`def (v: int) -> int:` that checks `.is_err`), or change the parameter type.
+
+**Checked at:** arguments of calls to declared functions and methods (non-generic) and annotated
+`let` initializers.
+
+### [F-5] Non-`int` Result Passed to a `lambda` Slot
+
+**Message:** `argument 1 of 'apply()' is a `lambda` slot, which is called as returning `int`, but the function/closure passed returns 'float'. ...`
+
+```python
+def apply(f: lambda, x: int) -> int:
+    return f(x)
+
+apply(lambda x: x + 1.5, 1)    # F-5: the closure returns float
+```
+
+A closure with no `-> R` takes the type of the expression it returns (`lambda x: x * 2.5` returns
+`float`, `lambda: "hi"` returns `str`). The bare type `lambda` carries no result type, so a call
+through it is always typed `int`; passing a closure with another result type would be called through
+the wrong C type, so it is rejected instead.
+
+**FIX:** give the parameter a full function type, `f: def(int) -> float`.
 
 > `[F-1]` and `[F-2]` are reserved for future function-call checks
 > (argument-count and parameter-shadowing) — see "Reserved / Not Yet

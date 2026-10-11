@@ -1,0 +1,65 @@
+# tests/lang/100_user_free_release.tr - a user-defined free() runs exactly once and the
+# object is released afterwards (bug log #16); a free() that frees `self` itself is not
+# released twice. Checked for leaks by tests/leak/user_free_struct_gate.tr and for
+# use-after-free / double free by scripts/asan_check.sh.
+
+from std.test import TestRunner
+
+extern "C":
+    def _tr_c_free(p: Pointer[char])
+
+mut free_calls = 0
+mut selffree_calls = 0
+
+pub class Res:
+    pub id: int
+    pub name: str
+
+extend Res:
+    pub def init(id: int, name: str) -> Res:
+        mut r = Res()
+        r.id = id
+        r.name = name
+        return r
+
+    pub def free(self):
+        free_calls = free_calls + 1
+
+pub class SelfFreeing:
+    pub id: int
+
+extend SelfFreeing:
+    pub def free(self):
+        selffree_calls = selffree_calls + 1
+        unsafe: _tr_c_free(self as Pointer[char])
+
+def scoped():
+    r = Res.init(1, "a" + "b")
+    mut x = r.id
+    if x > 100:
+        return
+
+def explicit():
+    mut r = Res.init(2, "c" + "d")
+    r.free()
+
+def selffree():
+    mut s = SelfFreeing()
+    s.id = 7
+    s.free()
+
+def main():
+    mut t = TestRunner.init("100_user_free_release")
+    scoped()
+    t.assert_eq_int(free_calls, 1, "scope exit runs free() once")
+    explicit()
+    t.assert_eq_int(free_calls, 2, "explicit free() runs once and scope exit does not repeat it")
+    mut i = 0
+    while i < 50:
+        scoped()
+        explicit()
+        selffree()
+        i = i + 1
+    t.assert_eq_int(free_calls, 102, "free() count over a loop")
+    t.assert_eq_int(selffree_calls, 50, "self-freeing free() is called once per object")
+    t.summary()

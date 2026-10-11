@@ -1,0 +1,37 @@
+# tests/lang/89_int_shift_wrap.tr - `int << n` must not be signed-overflow UB
+# (bug log #23). `int` is a signed 64-bit C long long, and `x << 32` with
+# x >= 2^31 (or `255 << 56`) was emitted as a plain signed shift. It is now
+# emitted on the unsigned representation and cast back (two's-complement wrap).
+
+from std.test import TestRunner
+
+def shl(x: int, n: int) -> int:
+    return x << n
+
+def main():
+    mut t = TestRunner.init("89_int_shift_wrap")
+    mut a = 3813090385
+
+    t.section("shifts that leave the signed range")
+    t.assert_eq_int(shl(a, 32), -2069645573442502656, "3813090385 << 32 wraps")
+    t.assert_eq_int(shl(255, 56), -72057594037927936, "255 << 56 sets the sign bit")
+    t.assert_eq_int(shl(1, 63), -9223372036854775807 - 1, "1 << 63 == INT64_MIN")
+    t.assert_eq_int(shl(-1, 63), -9223372036854775807 - 1, "-1 << 63")
+    t.assert_eq_int(shl(-1, 1), -2, "-1 << 1")
+    t.assert_eq_int(shl(-5, 2), -20, "negative operand")
+
+    t.section("ordinary shifts are unchanged")
+    t.assert_eq_int(shl(1, 0), 1, "1 << 0")
+    t.assert_eq_int(shl(1, 10), 1024, "1 << 10")
+    t.assert_eq_int(shl(12345, 8), 3160320, "12345 << 8")
+    t.assert_eq_int(shl(1, 62), 4611686018427387904, "1 << 62")
+
+    t.section("compound shift assignment")
+    mut b = 255
+    b <<= 56
+    t.assert_eq_int(b, -72057594037927936, "255 <<= 56")
+    mut c = 3
+    c <<= 4
+    t.assert_eq_int(c, 48, "3 <<= 4")
+
+    t.summary()

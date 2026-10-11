@@ -1,0 +1,197 @@
+# std.compress.common — shared byte-buffer + result types for the pure-Tauraro
+# codecs (std.compress.lz4, std.compress.zstd, std.compress.xxhash).
+#
+# Binary data in Tauraro travels as a `str` used as a raw byte buffer with an
+# EXPLICIT length (never strlen — compressed data routinely contains NULs).
+# The pure-Tauraro codecs return a `CResult`, which carries
+#
+#     ok    — true on success
+#     err   — human-readable reason when ok == false ("" on success)
+#     data  — a `CBuf` (byte-exact output + explicit `len`)
+#
+# so a caller never has to guess the output length and never depends on hidden
+# module-level state. Call `res.free()` when done (it frees the CBuf), or
+# `res.to_str()` for a freshly allocated `str` copy of the bytes (use
+# `res.len()` for its length).
+#
+# Everything here is plain portable Tauraro on top of the C runtime's
+# malloc/realloc/memcpy primitives: no external C library, no platform code.
+
+extern "C":
+    def _tr_c_malloc(size: int) -> Pointer[char]
+    def _tr_c_realloc(ptr: Pointer[char], size: int) -> Pointer[char]
+    def _tr_c_free(ptr: Pointer[char])
+    def _tr_c_memcpy(dst: Pointer[char], src: Pointer[char], n: int)
+    def _tr_str_wrap_len(s: Pointer[char], blen: int) -> str
+
+# ── raw byte access helpers ───────────────────────────────────────────────
+
+# Unsigned byte `i` of `p`.
+pub def rd8(p: Pointer[char], i: int) -> int:
+    unsafe:
+        return p.offset(i).read() as int & 0xFF
+
+pub def wr8(p: Pointer[char], i: int, v: int):
+    unsafe:
+        p.offset(i).write((v & 0xFF) as char)
+
+pub def rd16le(p: Pointer[char], i: int) -> int:
+    return rd8(p, i) | (rd8(p, i + 1) << 8)
+
+pub def rd32le(p: Pointer[char], i: int) -> int:
+    return rd8(p, i) | (rd8(p, i + 1) << 8) | (rd8(p, i + 2) << 16) | (rd8(p, i + 3) << 24)
+
+# 64-bit little-endian read; the result carries the bit pattern (values >= 2^63
+# come back negative). Computed in u64 so no signed shift overflows.
+pub def rd64le(p: Pointer[char], i: int) -> int:
+    mut lo: u64 = rd32le(p, i) as u64
+    mut hi: u64 = rd32le(p, i + 4) as u64
+    return (lo | (hi << 32)) as int
+
+# `p` advanced by `n` bytes.
+pub def ptr_add(p: Pointer[char], n: int) -> Pointer[char]:
+    unsafe:
+        return p.offset(n)
+
+# 32-bit modular multiply that never overflows a signed 64-bit int
+# (a, b must both be in [0, 2^32)).
+pub def mul32(a: int, b: int) -> int:
+    mut lo = a * (b & 0xFFFF)
+    mut hi = (a * (b >> 16)) & 0xFFFF
+    return (lo + (hi << 16)) & 0xFFFFFFFF
+
+# ── CBuf: growable byte buffer with explicit length ──────────────────────
+
+pub class CBuf:
+    pub data: Pointer[char]
+    pub len:  int
+    pub cap:  int
+
+extend CBuf:
+    pub def init(cap: int) -> CBuf:
+        mut c = cap
+        if c < 64: c = 64
+        mut b = CBuf()
+        b.data = _tr_c_malloc(c)
+        b.len  = 0
+        b.cap  = c
+        return b
+
+    # Make room for `extra` more bytes. NOTE: may move `data` — never hold a
+    # pointer into the buffer across a call that can grow it.
+    pub def reserve(self, extra: int):
+        if self.len + extra <= self.cap: return
+        mut nc = self.cap * 2
+        if nc < self.len + extra: nc = self.len + extra
+        self.data = _tr_c_realloc(self.data, nc)
+        self.cap  = nc
+
+    pub def push_u8(self, v: int):
+        if self.len >= self.cap:
+            self.reserve(1)
+        unsafe:
+            self.data.offset(self.len).write((v & 0xFF) as char)
+        self.len = self.len + 1
+
+    pub def push_u16le(self, v: int):
+        self.push_u8(v & 0xFF)
+        self.push_u8((v >> 8) & 0xFF)
+
+    pub def push_u32le(self, v: int):
+        self.push_u8(v & 0xFF)
+        self.push_u8((v >> 8) & 0xFF)
+        self.push_u8((v >> 16) & 0xFF)
+        self.push_u8((v >> 24) & 0xFF)
+
+    pub def push_u64le(self, v: int):
+        self.push_u32le(v & 0xFFFFFFFF)
+        self.push_u32le((v >> 32) & 0xFFFFFFFF)
+
+    # Append `n` bytes copied from `src` (which must NOT point into this buffer).
+    pub def push_raw(self, src: Pointer[char], n: int):
+        if n <= 0: return
+        self.reserve(n)
+        unsafe:
+            _tr_c_memcpy(self.data.offset(self.len), src, n)
+        self.len = self.len + n
+
+    pub def push_str(self, s: str, n: int):
+        self.push_raw(s as Pointer[char], n)
+
+    pub def push_fill(self, v: int, n: int):
+        if n <= 0: return
+        self.reserve(n)
+        mut i = 0
+        while i < n:
+            unsafe:
+                self.data.offset(self.len + i).write((v & 0xFF) as char)
+            i = i + 1
+        self.len = self.len + n
+
+    # LZ-style back-reference copy: append `n` bytes starting `dist` bytes
+    # behind the current end (overlap allowed, e.g. dist=1 repeats one byte).
+    # Caller must have validated 1 <= dist <= self.len.
+    pub def copy_back(self, dist: int, n: int):
+        if n <= 0: return
+        self.reserve(n)
+        if dist >= n:
+            unsafe:
+                _tr_c_memcpy(self.data.offset(self.len), self.data.offset(self.len - dist), n)
+            self.len = self.len + n
+            return
+        mut i = 0
+        while i < n:
+            unsafe:
+                self.data.offset(self.len + i).write(self.data.offset(self.len + i - dist).read())
+            i = i + 1
+        self.len = self.len + n
+
+    # Byte-exact `str` copy of the contents (NUL-terminated for C friendliness;
+    # the true length is `self.len`).
+    pub def to_str(self) -> str:
+        mut out = _tr_c_malloc(self.len + 1)
+        if self.len > 0:
+            unsafe: _tr_c_memcpy(out, self.data, self.len)
+        unsafe: out.offset(self.len).write('\0')
+        return _tr_str_wrap_len(out, self.len)
+
+    pub def free(self):
+        _tr_c_free(self.data)
+        self.data = 0 as Pointer[char]
+        self.len  = 0
+        self.cap  = 0
+
+# ── CResult ──────────────────────────────────────────────────────────────
+
+pub class CResult:
+    pub ok:   bool
+    pub err:  str
+    pub data: CBuf
+
+extend CResult:
+    pub def success(buf: CBuf) -> CResult:
+        mut r = CResult()
+        r.ok   = true
+        r.err  = ""
+        r.data = buf
+        return r
+
+    # Failure result: `data` is an empty (but valid, freeable) buffer.
+    pub def failure(msg: str, buf: CBuf) -> CResult:
+        buf.len = 0
+        mut r = CResult()
+        r.ok   = false
+        r.err  = msg
+        r.data = buf
+        return r
+
+    # Number of output bytes (0 on failure).
+    pub def len(self) -> int:
+        return self.data.len
+
+    pub def to_str(self) -> str:
+        return self.data.to_str()
+
+    # Release the output buffer. The CResult must not be used afterwards.
+    pub def free(self):
+        self.data.free()

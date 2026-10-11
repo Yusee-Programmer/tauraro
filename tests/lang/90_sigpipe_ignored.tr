@@ -1,0 +1,48 @@
+# tests/lang/90_sigpipe_ignored.tr - writing to a peer-closed socket must return an
+# error, not kill the process with SIGPIPE (bug log #13). If the runtime does not
+# ignore SIGPIPE, this test dies silently mid-run (non-zero exit, no summary).
+
+from std.test import TestRunner
+
+extern "C":
+    def _tr_tcp_connect(host: str, port: int) -> int
+    def _tr_tcp_send(fd: int, data: str, len: int) -> int
+    def _tr_tcp_recv(fd: int, buf: Pointer[char], cap: int) -> int
+    def _tr_tcp_close(fd: int)
+    def _tr_tcp_listen(host: str, port: int, backlog: int) -> int
+    def _tr_tcp_accept(server_fd: int) -> int
+    def _tr_c_malloc(size: int) -> Pointer[char]
+    def _tr_free(p: Pointer[char])
+    def _tr_sleep_ms(ms: int)
+
+def main():
+    mut t = TestRunner.init("90_sigpipe_ignored")
+    mut srv = _tr_tcp_listen("127.0.0.1", 38473, 4)
+    t.assert_true(srv >= 0, "listen on loopback")
+    mut cli = _tr_tcp_connect("127.0.0.1", 38473)
+    t.assert_true(cli >= 0, "connect")
+    mut acc = _tr_tcp_accept(srv)
+    t.assert_true(acc >= 0, "accept")
+    _tr_tcp_close(acc)
+
+    # Wait for the FIN so the peer is known-closed, then keep writing: the second
+    # and later sends hit EPIPE (and would raise SIGPIPE without the runtime guard).
+    mut buf = _tr_c_malloc(16)
+    mut n = _tr_tcp_recv(cli, buf, 16)
+    t.assert_eq_int(n, 0, "recv sees EOF from the closed peer")
+    _tr_free(buf)
+
+    # The RST that makes a send fail can arrive a moment after the FIN (macOS delivers it
+    # asynchronously), so keep sending, with a short pause, until one fails.
+    mut saw_error = false
+    mut i = 0
+    while i < 200 and not saw_error:
+        mut r = _tr_tcp_send(cli, "ping", 4)
+        if r < 0: saw_error = true
+        else: _tr_sleep_ms(10)
+        i = i + 1
+    t.assert_true(saw_error, "send to a closed peer returns an error and the process survives")
+
+    _tr_tcp_close(cli)
+    _tr_tcp_close(srv)
+    t.summary()

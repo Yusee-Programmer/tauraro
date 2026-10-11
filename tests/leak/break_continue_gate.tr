@@ -1,0 +1,70 @@
+# Leak gate: `break` / `continue` inside a `while` must release the heap-class locals
+# declared in the loop body (bug log #15). Run by scripts/leak_check.sh.
+extern "C":
+    def _tr_mem_live() -> int
+
+class Thing:
+    pub v: int
+    pub name: str
+
+extend Thing:
+    pub def init(v: int, name: str) -> Thing:
+        mut t = Thing()
+        t.v = v
+        t.name = name
+        return t
+
+def mk(v: int) -> Thing:
+    return Thing.init(v, "t")
+
+def with_break() -> int:
+    mut n = 0
+    while true:
+        mut b = mk(1)
+        n = n + b.v
+        if n >= 3: break
+    return n
+
+def with_continue() -> int:
+    mut n = 0
+    mut i = 0
+    while i < 6:
+        mut b = mk(i)
+        i = i + 1
+        if b.v % 2 == 0: continue
+        n = n + b.v
+    return n
+
+def nested() -> int:
+    mut n = 0
+    mut i = 0
+    while i < 3:
+        mut outer = mk(i)
+        mut j = 0
+        while true:
+            mut inner = mk(j)
+            j = j + 1
+            if inner.v >= 2: break
+            n = n + inner.v
+        i = i + 1
+        if outer.v == 1: continue
+        n = n + outer.v
+    return n
+
+def workload():
+    with_break()
+    with_continue()
+    nested()
+
+def main():
+    workload()
+    mut before = _tr_mem_live()
+    mut r = 0
+    while r < 100:
+        workload()
+        r = r + 1
+    mut leaked = _tr_mem_live() - before
+    if leaked <= 0:
+        print("LEAK-GATE PASS")
+    else:
+        print("LEAK-GATE FAIL leaked=" + leaked.to_str())

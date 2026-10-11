@@ -164,6 +164,13 @@ All parameter types must be annotated. Omitting a type is a parse error (generic
 emitted as a distinct diagnostic code; see [19 — Compiler
 Errors](19_compiler_errors.md#reserved--not-yet-implemented)).
 
+> **Reserved words as parameter names.** Keywords such as `from`, `match` or `in`
+> cannot be used as parameter (or variable) names — the parser reports "expected a
+> parameter name, found a reserved keyword". `from` in particular stays reserved
+> because it starts statements (`from std.x import Y`, also inside function bodies)
+> and appears in declarations (`def view(...) -> T from owner`), so treating it as an
+> identifier would be ambiguous. Pick another name (`src`, `start`, `origin`).
+
 **Return values:**
 
 ```python
@@ -388,6 +395,15 @@ mut add    = lambda x, y: x + y
 print(double(5))     # 10
 print(add(3, 4))     # 7
 ```
+
+A closure without `-> R` takes the type of the expression it returns: `lambda x: x * 2` is
+`int`, `lambda: 2.5` is `float`, `lambda n: "n=" + n.to_str()` is `str`, `lambda: a > b` is
+`bool`, and a class constructor call yields that class (an owned value: the caller releases it
+like any other local). The same applies to `def (params):` closures with no `-> R`. Annotate
+the result (`def (x: int) -> float:`) when it must differ from what the body returns.
+To call a closure whose result is not `int`, bind it to a local (its type is known there) or take
+it as a `def(int) -> R` parameter; a bare `lambda` parameter is called as returning `int`, so the
+compiler rejects other results with `[F-5]`.
 
 **Capturing outer variables:**
 ```python
@@ -637,6 +653,25 @@ def main() -> void:
     else:
         print(f"digit: {result.value}")
 ```
+
+**Function values and closures can `throw` too.** Put `throws E` between the parameter list and
+the `->` in a function-value type or a closure literal; a call through such a value yields a
+`Result[R, E]` exactly like a call to a `throws` function, and `?` / `raise` work inside the closure:
+
+```python
+def run(op: def(int) throws str -> int, v: int) -> int:
+    r = op(v)
+    if r.is_err:
+        return -1
+    return r.ok
+
+mut bump = def (v: int) throws str -> int:
+    mut x = parse_digit(str_of(v))?
+    return x + 100
+```
+
+A `throws` function value must be given a `throws` function or closure (and vice versa): the two have
+different C return types and the compiler does not convert between them.
 
 **Compiler rule [T-4]:** The result of a `throws` call must be handled — either with `?`, with an `if result.is_err` check, or explicitly discarded. Silently ignoring it is a compile error.
 

@@ -1,0 +1,464 @@
+# std.sys.cron — parse standard 5-field cron expressions and compute the
+# next / previous fire time.
+#
+# A pure, allocation-light calculator: it has no timers or threads (for
+# actually RUNNING jobs on a schedule see std.async.sched.Scheduler.cron,
+# which accepts the same expression language). All calendar arithmetic is
+# done on Unix timestamps in UTC (std.sys.datetime.DateTime's pure-arithmetic
+# `from_timestamp_utc` is used to split a timestamp into fields — no OS
+# localtime, so results are identical on every machine and time zone). A
+# fixed UTC offset can be applied with the `*_offset` variants to evaluate a
+# schedule in another zone's wall-clock time (no DST rules: use the offset
+# in force at the moment of interest).
+#
+# Expression: "minute hour day-of-month month day-of-week"
+#   field          values
+#   minute         0-59
+#   hour           0-23
+#   day-of-month   1-31
+#   month          1-12 or jan..dec
+#   day-of-week    0-7 (0 and 7 are Sunday) or sun..sat
+# Each field is a comma list of items; an item is
+#   *        every value               ?   same as * (dom/dow only)
+#   N        one value                 N-M an inclusive range
+#   */S      every S'th value of the field's whole range
+#   N-M/S    every S'th value inside N..M
+#   N/S      every S'th value from N to the field maximum
+# Names are case-insensitive 3-letter abbreviations ("Mon-Fri", "JAN,jul").
+# Macros: @yearly/@annually, @monthly, @weekly, @daily/@midnight, @hourly.
+# (@reboot and a 6th "seconds" field are not supported.)
+#
+# Day matching follows Vixie/cronie semantics: when BOTH day-of-month and
+# day-of-week are restricted (neither starts with '*' or '?'), a day matches
+# if EITHER does ("0 0 13 * fri" = every 13th AND every Friday); if either
+# is '*' the other one alone decides. NOTE: std.async.sched's older
+# `parse_cron` ANDs the two fields; this module is the standard behaviour.
+#
+# Fire times always fall on whole minutes (seconds = 0), so a result is
+# always a multiple of 60 — which is why "no fire time" is reported as -1
+# (never a valid result). A schedule can be unsatisfiable ("0 0 31 2 *");
+# the search gives up after 12 years of calendar and returns -1.
+#
+# Usage:
+#   from std.sys.cron import Cron, CronSchedule
+#
+#   mut s = Cron.parse("*/15 9-17 * * mon-fri")?     # throws str on bad input
+#   mut nxt = s.next_after(1760162850)                # strictly after ts
+#   mut prv = s.prev_before(1760162850)               # strictly before ts
+#   mut upcoming = s.next_n(1760162850, 5)            # List[int]
+#   mut ok = s.matches(1760162400)                    # is that minute a fire time?
+#
+#   mut t = Cron.next("@daily", 1760162850)?          # one-shot convenience
+
+from std.sys.datetime import DateTime
+from std.core.string import StringBuilder
+
+# ─── small helpers ──────────────────────────────────────────────────────────
+
+# Floor division / modulo (Tauraro's `/` and `%` truncate toward zero).
+def _cr_fdiv(a: int, b: int) -> int:
+    mut q = a / b
+    if (a % b) != 0 and a < 0: q = q - 1
+    return q
+
+def _cr_is_leap(y: int) -> bool:
+    if y % 400 == 0: return true
+    if y % 100 == 0: return false
+    return y % 4 == 0
+
+def _cr_dim(y: int, m: int) -> int:
+    if m == 2:
+        if _cr_is_leap(y): return 29
+        return 28
+    if m == 4 or m == 6 or m == 9 or m == 11: return 30
+    return 31
+
+def _cr_bit(mask: int, n: int) -> bool:
+    return ((mask >> n) & 1) == 1
+
+# Mask with bits lo..hi set.
+def _cr_full(lo: int, hi: int) -> int:
+    mut m = 0
+    mut i = lo
+    while i <= hi:
+        m = m | (1 << i)
+        i = i + 1
+    return m
+
+def _cr_byte(s: str, i: int) -> int:
+    mut p = s as Pointer[char]
+    unsafe:
+        return (p.offset(i).read() as int) & 0xFF
+
+def _cr_lower(c: int) -> int:
+    if c >= 65 and c <= 90: return c + 32
+    return c
+
+# ─── parsing ────────────────────────────────────────────────────────────────
+
+# Split on spaces/tabs, dropping empty pieces.
+def _cr_tokens(expr: str) -> List[str]:
+    mut out: List[str] = []
+    mut n = expr.len()
+    mut i = 0
+    while i < n:
+        while i < n and (_cr_byte(expr, i) == 32 or _cr_byte(expr, i) == 9 or _cr_byte(expr, i) == 10 or _cr_byte(expr, i) == 13):
+            i = i + 1
+        mut j = i
+        while j < n and not (_cr_byte(expr, j) == 32 or _cr_byte(expr, j) == 9 or _cr_byte(expr, j) == 10 or _cr_byte(expr, j) == 13):
+            j = j + 1
+        if j > i:
+            mut sb = StringBuilder.init(j - i + 1)
+            mut k = i
+            while k < j:
+                sb.append_char(_cr_byte(expr, k))
+                k = k + 1
+            out.append(sb.to_owned())
+            sb.free()
+        i = j
+    return out
+
+# Split on a single separator byte, KEEPING empty pieces ("1,,2" -> 3 pieces;
+# the stdlib `split` drops them, which would hide malformed expressions).
+def _cr_split(s: str, sep: int) -> List[str]:
+    mut out: List[str] = []
+    mut n = s.len()
+    mut sb = StringBuilder.init(n + 1)
+    mut i = 0
+    while i < n:
+        mut c = _cr_byte(s, i)
+        if c == sep:
+            out.append(sb.to_owned())
+            sb.clear()
+        else:
+            sb.append_char(c)
+        i = i + 1
+    out.append(sb.to_owned())
+    sb.free()
+    return out
+
+# Name -> number: kind 1 = month (jan=1..dec=12), kind 2 = weekday (sun=0..sat=6).
+# Returns -1 when `tok` is not a known 3-letter name.
+def _cr_name(tok: str, kind: int) -> int:
+    if tok.len() != 3: return -1
+    mut a = _cr_lower(_cr_byte(tok, 0))
+    mut b = _cr_lower(_cr_byte(tok, 1))
+    mut c = _cr_lower(_cr_byte(tok, 2))
+    mut code = a * 65536 + b * 256 + c
+    if kind == 1:
+        if code == 0x6A616E: return 1     # jan
+        if code == 0x666562: return 2     # feb
+        if code == 0x6D6172: return 3     # mar
+        if code == 0x617072: return 4     # apr
+        if code == 0x6D6179: return 5     # may
+        if code == 0x6A756E: return 6     # jun
+        if code == 0x6A756C: return 7     # jul
+        if code == 0x617567: return 8     # aug
+        if code == 0x736570: return 9     # sep
+        if code == 0x6F6374: return 10    # oct
+        if code == 0x6E6F76: return 11    # nov
+        if code == 0x646563: return 12    # dec
+    elif kind == 2:
+        if code == 0x73756E: return 0     # sun
+        if code == 0x6D6F6E: return 1     # mon
+        if code == 0x747565: return 2     # tue
+        if code == 0x776564: return 3     # wed
+        if code == 0x746875: return 4     # thu
+        if code == 0x667269: return 5     # fri
+        if code == 0x736174: return 6     # sat
+    return -1
+
+# One value: decimal number, or (for months/weekdays) a name.
+def _cr_value(tok: str, kind: int, what: str) throws str -> int:
+    mut n = tok.len()
+    if n == 0:
+        raise(f"cron: empty value in {what} field")
+    mut all_digits = true
+    mut i = 0
+    while i < n:
+        mut c = _cr_byte(tok, i)
+        if c < 48 or c > 57: all_digits = false
+        i = i + 1
+    if all_digits:
+        if n > 4:
+            raise(f"cron: number '{tok}' too large in {what} field")
+        return tok.parse_int()
+    if kind != 0:
+        mut v = _cr_name(tok, kind)
+        if v >= 0: return v
+    raise(f"cron: '{tok}' is not a valid {what} value")
+
+# Parse one comma-separated field into a bitmask over [lo, hi].
+def _cr_field(field: str, lo: int, hi: int, kind: int, what: str) throws str -> int:
+    if field.len() == 0:
+        raise(f"cron: empty {what} field")
+    mut mask = 0
+    mut items: List[str] = _cr_split(field, 44)
+    mut k = 0
+    while k < len(items):
+        mut piece = items[k + 0]
+        if piece.len() == 0:
+            raise(f"cron: empty item in {what} field '{field}'")
+        mut base = piece
+        mut step = 1
+        mut has_step = false
+        if piece.contains("/"):
+            mut sp: List[str] = _cr_split(piece, 47)
+            if len(sp) != 2:
+                raise(f"cron: malformed step in {what} field '{piece}'")
+            base = sp[0 + 0]
+            step = _cr_value(sp[1 + 0], 0, what)?
+            has_step = true
+            if step <= 0:
+                raise(f"cron: step must be positive in {what} field '{piece}'")
+        mut a = lo
+        mut b = hi
+        if base == "*" or base == "?":
+            a = lo
+            b = hi
+        elif base.contains("-"):
+            mut rp: List[str] = _cr_split(base, 45)
+            if len(rp) != 2:
+                raise(f"cron: malformed range in {what} field '{base}'")
+            a = _cr_value(rp[0 + 0], kind, what)?
+            b = _cr_value(rp[1 + 0], kind, what)?
+            if a < lo or b > hi or a > b:
+                raise(f"cron: range '{base}' out of bounds [{lo}..{hi}] in {what} field")
+        else:
+            mut v = _cr_value(base, kind, what)?
+            if v < lo or v > hi:
+                raise(f"cron: value {v} out of bounds [{lo}..{hi}] in {what} field")
+            a = v
+            if has_step:
+                b = hi          # "N/S" = from N to the field maximum
+            else:
+                b = v
+        mut cur = a
+        while cur <= b:
+            mask = mask | (1 << cur)
+            cur = cur + step
+        k = k + 1
+    return mask
+
+def _cr_is_star(field: str) -> bool:
+    if field.len() == 0: return false
+    mut c = _cr_byte(field, 0)
+    return c == 42 or c == 63          # '*' or '?'
+
+# ─── CronSchedule ───────────────────────────────────────────────────────────
+
+pub class CronSchedule:
+    pub expr:     str
+    pub minutes:  int    # bit n set  <=>  minute n fires (0..59)
+    pub hours:    int    # bits 0..23
+    pub doms:     int    # bits 1..31
+    pub months:   int    # bits 1..12
+    pub dows:     int    # bits 0..6 (Sunday = 0; an input 7 is folded into 0)
+    pub dom_star: bool   # day-of-month field started with '*' / '?'
+    pub dow_star: bool   # day-of-week field started with '*' / '?'
+
+extend CronSchedule:
+    # Does a calendar day (month/day-of-month/weekday) satisfy the schedule's
+    # day rules? (Vixie semantics, see the module header.)
+    def _day_ok(self, d: int, wd: int) -> bool:
+        mut dm = _cr_bit(self.doms, d)
+        mut wm = _cr_bit(self.dows, wd)
+        if self.dom_star or self.dow_star:
+            return dm and wm
+        return dm or wm
+
+    # First fire time STRICTLY AFTER `ts` (Unix seconds, UTC), or -1 if there
+    # is none within 12 years.
+    pub def next_after(self, ts: int) -> int:
+        return self.next_after_offset(ts, 0)
+
+    # Same, evaluating the schedule in wall-clock time `utc_offset` seconds
+    # EAST of UTC (e.g. 3600 for UTC+1). The result is still a UTC timestamp.
+    pub def next_after_offset(self, ts: int, utc_offset: int) -> int:
+        mut start = _cr_fdiv(ts + utc_offset, 60) * 60 + 60
+        mut dt = DateTime.from_timestamp_utc(start)
+        mut y = dt.year
+        mut mo = dt.month
+        mut d = dt.day
+        mut h = dt.hour
+        mut mi = dt.minute
+        mut dn = _cr_fdiv(start, 86400)
+        mut first = true
+        mut y_cap = y + 12
+        while y <= y_cap:
+            if not _cr_bit(self.months, mo):
+                # jump to the 1st of the next month
+                dn = dn + (_cr_dim(y, mo) - d + 1)
+                d = 1
+                mo = mo + 1
+                if mo > 12:
+                    mo = 1
+                    y = y + 1
+                first = false
+                continue
+            mut wd = (((dn % 7) + 7) + 4) % 7
+            if self._day_ok(d, wd):
+                mut hh = 0
+                if first: hh = h
+                while hh <= 23:
+                    if _cr_bit(self.hours, hh):
+                        mut mm = 0
+                        if first and hh == h: mm = mi
+                        while mm <= 59:
+                            if _cr_bit(self.minutes, mm):
+                                return dn * 86400 + hh * 3600 + mm * 60 - utc_offset
+                            mm = mm + 1
+                    hh = hh + 1
+            # next day
+            first = false
+            dn = dn + 1
+            d = d + 1
+            if d > _cr_dim(y, mo):
+                d = 1
+                mo = mo + 1
+                if mo > 12:
+                    mo = 1
+                    y = y + 1
+        return -1
+
+    # Last fire time STRICTLY BEFORE `ts`, or -1 if none within 12 years back.
+    pub def prev_before(self, ts: int) -> int:
+        return self.prev_before_offset(ts, 0)
+
+    pub def prev_before_offset(self, ts: int, utc_offset: int) -> int:
+        mut start = _cr_fdiv(ts + utc_offset - 1, 60) * 60
+        mut dt = DateTime.from_timestamp_utc(start)
+        mut y = dt.year
+        mut mo = dt.month
+        mut d = dt.day
+        mut h = dt.hour
+        mut mi = dt.minute
+        mut dn = _cr_fdiv(start, 86400)
+        mut first = true
+        mut y_cap = y - 12
+        while y >= y_cap:
+            if not _cr_bit(self.months, mo):
+                # jump to the last day of the previous month
+                dn = dn - d
+                mo = mo - 1
+                if mo < 1:
+                    mo = 12
+                    y = y - 1
+                d = _cr_dim(y, mo)
+                first = false
+                continue
+            mut wd = (((dn % 7) + 7) + 4) % 7
+            if self._day_ok(d, wd):
+                mut hh = 23
+                if first: hh = h
+                while hh >= 0:
+                    if _cr_bit(self.hours, hh):
+                        mut mm = 59
+                        if first and hh == h: mm = mi
+                        while mm >= 0:
+                            if _cr_bit(self.minutes, mm):
+                                return dn * 86400 + hh * 3600 + mm * 60 - utc_offset
+                            mm = mm - 1
+                    hh = hh - 1
+            # previous day
+            first = false
+            dn = dn - 1
+            d = d - 1
+            if d < 1:
+                mo = mo - 1
+                if mo < 1:
+                    mo = 12
+                    y = y - 1
+                d = _cr_dim(y, mo)
+        return -1
+
+    # Is the minute containing `ts` a fire time?
+    pub def matches(self, ts: int) -> bool:
+        return self.matches_offset(ts, 0)
+
+    pub def matches_offset(self, ts: int, utc_offset: int) -> bool:
+        mut m = _cr_fdiv(ts, 60) * 60
+        return self.next_after_offset(m - 1, utc_offset) == m
+
+    # The next `n` fire times after `ts` (fewer if the schedule runs out).
+    pub def next_n(self, ts: int, n: int) -> List[int]:
+        mut out: List[int] = []
+        mut cur = ts
+        mut i = 0
+        while i < n:
+            mut t = self.next_after(cur)
+            if t == -1: break
+            out.append(t)
+            cur = t
+            i = i + 1
+        return out
+
+    # DateTime (UTC) forms of next_after / prev_before. When there is no fire
+    # time they return the DateTime for timestamp -1 (1969-12-31 23:59:59) —
+    # use the int APIs (which return -1) when you must detect that case.
+    pub def next_datetime(self, dt: DateTime) -> DateTime:
+        return DateTime.from_timestamp_utc(self.next_after(dt.timestamp()))
+
+    pub def prev_datetime(self, dt: DateTime) -> DateTime:
+        return DateTime.from_timestamp_utc(self.prev_before(dt.timestamp()))
+
+    # The original expression text.
+    pub def to_string(self) -> str:
+        return self.expr
+
+# ─── Cron — static entry points ─────────────────────────────────────────────
+
+pub class Cron:
+    _dummy: int
+
+extend Cron:
+    # Parse a 5-field expression or a @macro. Errors (raise "cron: ...").
+    pub def parse(expr: str) throws str -> CronSchedule:
+        mut parts = _cr_tokens(expr)
+        if len(parts) == 1 and _cr_byte(parts[0 + 0], 0) == 64:      # '@'
+            mut name = parts[0 + 0]
+            mut body = ""
+            if name == "@yearly" or name == "@annually": body = "0 0 1 1 *"
+            elif name == "@monthly": body = "0 0 1 * *"
+            elif name == "@weekly": body = "0 0 * * 0"
+            elif name == "@daily" or name == "@midnight": body = "0 0 * * *"
+            elif name == "@hourly": body = "0 * * * *"
+            else:
+                raise(f"cron: unsupported macro '{name}'")
+            parts = _cr_tokens(body)
+        if len(parts) != 5:
+            raise(f"cron: expected 5 fields (minute hour day-of-month month day-of-week), got {len(parts)} in '{expr}'")
+        # Each parsed field is bound to a local before being stored: a direct
+        # `s.minutes = f(...)?` field assignment silently skips the `?` error
+        # propagation (compiler bug, same family as the Job-field note in
+        # std.async.sched.parse_cron).
+        mut f_min: int = _cr_field(parts[0 + 0], 0, 59, 0, "minute")?
+        mut f_hour: int = _cr_field(parts[1 + 0], 0, 23, 0, "hour")?
+        mut f_dom: int = _cr_field(parts[2 + 0], 1, 31, 0, "day-of-month")?
+        mut f_mon: int = _cr_field(parts[3 + 0], 1, 12, 1, "month")?
+        mut f_dow: int = _cr_field(parts[4 + 0], 0, 7, 2, "day-of-week")?
+        if _cr_bit(f_dow, 7):
+            f_dow = (f_dow & 127) | 1          # 7 == Sunday
+        mut s = CronSchedule()
+        s.expr = expr
+        s.minutes = f_min
+        s.hours = f_hour
+        s.doms = f_dom
+        s.months = f_mon
+        s.dows = f_dow
+        s.dom_star = _cr_is_star(parts[2 + 0])
+        s.dow_star = _cr_is_star(parts[4 + 0])
+        return s
+
+    pub def is_valid(expr: str) -> bool:
+        mut r: Result[CronSchedule, str] = Cron.parse(expr)
+        return r.is_ok
+
+    # One-shot helpers (parse + search). -1 = no fire time in range.
+    pub def next(expr: str, after_ts: int) throws str -> int:
+        mut s = Cron.parse(expr)?
+        return s.next_after(after_ts)
+
+    pub def prev(expr: str, before_ts: int) throws str -> int:
+        mut s = Cron.parse(expr)?
+        return s.prev_before(before_ts)

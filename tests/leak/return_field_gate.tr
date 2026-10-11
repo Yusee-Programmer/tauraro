@@ -1,0 +1,57 @@
+# Leak gate: `return local.field` (a primitive-valued expression reading a heap-class
+# local) must still release that local on the return path (bug log #14).
+# Run by scripts/leak_check.sh.
+extern "C":
+    def _tr_mem_live() -> int
+
+class Thing:
+    pub v: int
+    pub name: str
+
+extend Thing:
+    pub def init(v: int, name: str) -> Thing:
+        mut t = Thing()
+        t.v = v
+        t.name = name
+        return t
+
+def mk(v: int) -> Thing:
+    return Thing.init(v, "t")
+
+def plain() -> int:
+    mut t = mk(1)
+    return t.v
+
+def arith() -> int:
+    mut a = mk(2)
+    mut b = mk(3)
+    return a.v * 10 + b.v
+
+def nested(x: int) -> int:
+    mut t = mk(x)
+    if x > 5:
+        mut u = mk(x + 1)
+        return t.v + u.v
+    if x > 2:
+        return t.v
+    return 0
+
+def workload():
+    plain()
+    arith()
+    nested(1)
+    nested(3)
+    nested(9)
+
+def main():
+    workload()
+    mut before = _tr_mem_live()
+    mut r = 0
+    while r < 100:
+        workload()
+        r = r + 1
+    mut leaked = _tr_mem_live() - before
+    if leaked <= 0:
+        print("LEAK-GATE PASS")
+    else:
+        print("LEAK-GATE FAIL leaked=" + leaked.to_str())

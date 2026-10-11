@@ -1,0 +1,16 @@
+# tests/lang/93_atomic_add_previous.tr - Atomic.add / Atomic.sub are fetch-and-op:
+# they return the PREVIOUS value (bug log #20 was a docs mismatch; the docs now say
+# so, and this pins the behaviour they describe).
+
+from std.test import TestRunner
+
+def main():
+    mut t = TestRunner.init("93_atomic_add_previous")
+    mut a = Atomic.new(5)
+    t.assert_eq_int(a.add(3), 5, "add returns the previous value")
+    t.assert_eq_int(a.load(), 8, "add applied")
+    t.assert_eq_int(a.sub(2), 8, "sub returns the previous value")
+    t.assert_eq_int(a.load(), 6, "sub applied")
+    t.assert_eq_int(a.swap(1), 6, "swap returns the old value")
+    a.free()
+    t.summary()

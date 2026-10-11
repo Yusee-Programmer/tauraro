@@ -1,0 +1,10 @@
+# EXPECT: [F-5]
+# A `lambda`-typed parameter is called as returning int; a closure returning float would be
+# called through the wrong C type (garbage), so it is rejected with a pointer to `def(...) -> R`.
+
+def apply(f: lambda, x: int) -> int:
+    return f(x)
+
+def main():
+    s = lambda x: x + 1.5
+    print(apply(s, 1))

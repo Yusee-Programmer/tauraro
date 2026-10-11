@@ -1,0 +1,682 @@
+# tests/lang/71_http_client.tr
+# std.net.cookie / std.net.multipart / std.net.client (HttpSession) + the
+# Url.resolve helpers added to std.net.url.
+#
+# Everything real happens over http:// on the loopback interface, against a
+# small scripted server written in this file (raw TcpListener, one thread),
+# so no external network access is needed and every wait is bounded:
+#   * the server thread polls a non-blocking accept and exits on a stop flag
+#     or after a hard 40 s cap;
+#   * each server-side request read gives up after 4 s;
+#   * the client has idle timeouts (and the timeout test uses 300 ms against a
+#     server that never answers).
+# The port is searched in a small range so a busy port does not fail the test.
+# https:// is NOT exercised (the std TLS layer needs OpenSSL + real peers).
+#
+# Why a raw server instead of std.net.http_server.HttpServer: the cases below
+# need byte-exact control (duplicate Set-Cookie headers, chunk boundaries split
+# across TCP segments, truncated/EOF-framed bodies, an interim 100 response).
+
+from std.test import TestRunner
+from std.net.tcp import TcpStream, TcpListener
+from std.net.url import Url
+from std.net.cookie import CookieJar, Cookie, http_date_parse, cookie_domain_match, cookie_path_match, cookie_default_path
+from std.net.multipart import FormBuilder, MultipartBuilder
+from std.net.client import HttpSession, ClientRequest, HttpReply, HeaderList, ChunkDecoder, BodySink
+from std.string.str import Str
+from std.sys.time import Clock
+from std.sys.fs import Fs
+from std.io.file import File
+
+# ── Scripted loopback server ────────────────────────────────────────────────
+
+class SrvState implements Sendable:
+    pub base_port: int
+    pub port:      Atomic[int]     # 0 until bound, -1 if no port could be bound
+    pub stop:      Atomic[int]
+    pub served:    Atomic[int]
+
+extend SrvState:
+    pub def init(base_port: int) -> SrvState:
+        mut s = SrvState()
+        s.base_port = base_port
+        s.port      = Atomic.new(0)
+        s.stop      = Atomic.new(0)
+        s.served    = Atomic.new(0)
+        return s
+
+def srv_send(s: TcpStream, data: str):
+    mut total = Str.len(data)
+    mut sent  = 0
+    mut guard = Clock.now_ms() + 5000
+    while sent < total and Clock.now_ms() < guard:
+        mut rest = data
+        if sent > 0: rest = Str.slice(data, sent, total)
+        mut r = s.send_nb(rest)
+        if r == -2:
+            Clock.sleep_ms(1)
+        elif r <= 0:
+            return
+        else:
+            sent = sent + r
+
+def srv_read_request(s: TcpStream) -> str:
+    mut acc  = ""
+    mut need = -1
+    mut deadline = Clock.now_ms() + 4000
+    while Clock.now_ms() < deadline:
+        mut chunk = s.recv_nb(8192)
+        if s.would_block():
+            Clock.sleep_ms(1)
+            continue
+        if Str.len(chunk) == 0: break
+        acc = acc + chunk
+        mut he = Str.index_of(acc, "\r\n\r\n")
+        if he >= 0:
+            if need < 0:
+                need = he + 4
+                mut ci = Str.index_of(acc, "Content-Length: ")
+                if ci >= 0:
+                    mut tail = Str.slice(acc, ci + 16, Str.len(acc))
+                    mut eol  = Str.index_of(tail, "\r\n")
+                    mut num  = Str.slice(tail, 0, eol)
+                    need = need + Str.parse_int(num)
+            if Str.len(acc) >= need: break
+    return acc
+
+# A full response with Content-Length (body omitted for HEAD).
+def srv_reply(s: TcpStream, method: str, status_line: str, extra: str, body: str):
+    mut head = "HTTP/1.1 " + status_line + "\r\nContent-Length: " + Str.len(body).to_string() + "\r\nConnection: close\r\n" + extra + "\r\n"
+    if Str.eq(method, "HEAD"):
+        srv_send(s, head)
+    else:
+        srv_send(s, head + body)
+
+def srv_handle(s: TcpStream, st: Shared[SrvState]):
+    s.set_nonblocking()
+    mut req = srv_read_request(s)
+    if Str.len(req) == 0: return
+    mut sp1 = Str.index_of(req, " ")
+    if sp1 < 0: return
+    mut method = Str.slice(req, 0, sp1)
+    mut after  = Str.slice(req, sp1 + 1, Str.len(req))
+    mut sp2    = Str.index_of(after, " ")
+    mut target = Str.slice(after, 0, sp2)
+    mut path   = target
+    mut q      = Str.index_of(target, "?")
+    if q >= 0: path = Str.slice(target, 0, q)
+    mut port_txt = st.port.load().to_string()
+    st.served.add(1)
+
+    if Str.eq(path, "/ok"):
+        srv_reply(s, method, "200 OK", "Content-Type: text/plain\r\n", "hello world")
+    elif Str.eq(path, "/echo"):
+        srv_reply(s, method, "200 OK", "Content-Type: text/plain\r\n", req)
+    elif Str.starts_with(path, "/status/"):
+        mut code = Str.slice(path, 8, Str.len(path))
+        srv_reply(s, method, code + " Status", "", "status " + code)
+    elif Str.eq(path, "/r301"):
+        srv_reply(s, method, "301 Moved Permanently", "Location: /echo\r\n", "moved")
+    elif Str.eq(path, "/r302"):
+        srv_reply(s, method, "302 Found", "Location: /echo\r\n", "found")
+    elif Str.eq(path, "/r303"):
+        srv_reply(s, method, "303 See Other", "Location: /echo\r\n", "see other")
+    elif Str.eq(path, "/r307"):
+        srv_reply(s, method, "307 Temporary Redirect", "Location: /echo\r\n", "temp")
+    elif Str.eq(path, "/r308"):
+        srv_reply(s, method, "308 Permanent Redirect", "Location: /echo\r\n", "perm")
+    elif Str.eq(path, "/rel1"):
+        srv_reply(s, method, "302 Found", "Location: echo\r\n", "")
+    elif Str.eq(path, "/dir/start"):
+        srv_reply(s, method, "302 Found", "Location: ../echo?via=rel\r\n", "")
+    elif Str.eq(path, "/loop"):
+        srv_reply(s, method, "302 Found", "Location: /loop\r\n", "")
+    elif Str.eq(path, "/nolocation"):
+        srv_reply(s, method, "302 Found", "", "no location here")
+    elif Str.starts_with(path, "/chain/"):
+        mut n = Str.parse_int(Str.slice(path, 7, Str.len(path)))
+        if n <= 0:
+            srv_reply(s, method, "200 OK", "", "chain end")
+        else:
+            mut nxt = "/chain/" + (n - 1).to_string()
+            srv_reply(s, method, "302 Found", "Location: " + nxt + "\r\n", "")
+    elif Str.eq(path, "/cross"):
+        srv_reply(s, method, "302 Found", "Location: http://localhost:" + port_txt + "/echo\r\n", "")
+    elif Str.eq(path, "/setcookie"):
+        srv_reply(s, method, "200 OK", "Set-Cookie: sid=abc123; Path=/; HttpOnly\r\nSet-Cookie: theme=dark; Path=/; Max-Age=3600\r\n", "cookies set")
+    elif Str.eq(path, "/login_redirect"):
+        srv_reply(s, method, "302 Found", "Set-Cookie: sess=xyz; Path=/\r\nLocation: /echo\r\n", "")
+    elif Str.eq(path, "/expire"):
+        srv_reply(s, method, "200 OK", "Set-Cookie: sid=gone; Path=/; Max-Age=0\r\n", "expired")
+    elif Str.eq(path, "/sub/setc"):
+        srv_reply(s, method, "200 OK", "Set-Cookie: scoped=1; Path=/sub\r\n", "scoped")
+    elif Str.eq(path, "/slow"):
+        # Never answer: wait (bounded) until the client gives up and closes.
+        mut until = Clock.now_ms() + 4000
+        while Clock.now_ms() < until:
+            mut junk = s.recv_nb(64)
+            if s.would_block():
+                Clock.sleep_ms(2)
+                continue
+            break
+    elif Str.eq(path, "/chunked"):
+        srv_send(s, "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\n")
+        Clock.sleep_ms(20)
+        srv_send(s, "5\r\nHello\r\n")
+        Clock.sleep_ms(20)
+        srv_send(s, "7;ext=1\r\n, chunk\r\n")
+        Clock.sleep_ms(20)
+        # A chunk split across TCP segments, with an upper-case hex size.
+        srv_send(s, "A\r\n01234")
+        Clock.sleep_ms(20)
+        srv_send(s, "56789\r\n")
+        Clock.sleep_ms(20)
+        srv_send(s, "0\r\nX-Trailer: yes\r\n\r\n")
+    elif Str.eq(path, "/burst"):
+        srv_send(s, "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n3\r\nabc\r\n3\r\ndef\r\n3\r\nghi\r\n0\r\n\r\n")
+    elif Str.eq(path, "/big"):
+        # 10 x 32768 bytes with Content-Length, sent in pieces.
+        mut piece = Str.repeat("abcdefghijklmnopqrstuvwxyz012345", 1024)
+        srv_send(s, "HTTP/1.1 200 OK\r\nContent-Length: 327680\r\nContent-Type: application/octet-stream\r\nConnection: close\r\n\r\n")
+        mut pi = 0
+        while pi < 10:
+            srv_send(s, piece)
+            Clock.sleep_ms(5)
+            pi = pi + 1
+    elif Str.eq(path, "/chunkedbig"):
+        mut piece2 = Str.repeat("0123456789ABCDEF", 1024)
+        srv_send(s, "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n")
+        mut pj = 0
+        while pj < 8:
+            srv_send(s, "4000\r\n" + piece2 + "\r\n")
+            Clock.sleep_ms(5)
+            pj = pj + 1
+        srv_send(s, "0\r\n\r\n")
+    elif Str.eq(path, "/nolen"):
+        # No Content-Length, no chunking: the body ends when the server closes.
+        srv_send(s, "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\nuntil-eof-body")
+    elif Str.eq(path, "/trunc"):
+        srv_send(s, "HTTP/1.1 200 OK\r\nContent-Length: 100\r\nConnection: close\r\n\r\n0123456789")
+    elif Str.eq(path, "/interim"):
+        srv_send(s, "HTTP/1.1 100 Continue\r\n\r\n")
+        Clock.sleep_ms(20)
+        srv_send(s, "HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\nreal")
+    else:
+        srv_reply(s, method, "404 Not Found", "", "not found: " + path)
+
+def srv_run(st: Shared[SrvState]):
+    mut listener = TcpListener.listen("127.0.0.1", st.base_port)
+    mut tries = 0
+    while not listener.is_listening() and tries < 30:
+        tries = tries + 1
+        listener = TcpListener.listen("127.0.0.1", st.base_port + tries)
+    if not listener.is_listening():
+        st.port.store(-1)
+        return
+    listener.set_nonblocking()
+    st.port.store(listener.port)
+    mut cap = Clock.now_ms() + 40000
+    while st.stop.load() == 0 and Clock.now_ms() < cap:
+        mut c = listener.accept_nb()
+        if c.fd < 0:
+            Clock.sleep_ms(2)
+            continue
+        srv_handle(c, st)
+        c.close()
+    listener.close()
+
+class ChunkAcc:
+    pub text: str
+    pub n:    int
+
+extend ChunkAcc:
+    pub def init() -> ChunkAcc:
+        mut a = ChunkAcc()
+        a.text = ""
+        a.n    = 0
+        return a
+
+# ── Test ─────────────────────────────────────────────────────────────────────
+
+def main():
+    mut t = TestRunner.init("71_http_client")
+
+    # ================= Url helpers (no sockets) ===============================
+    t.section("Url.resolve / request_target / host_header")
+    mut base = Url.parse("http://a.com/b/c/d?q=1")
+    t.assert_eq_str(base.resolve("g").to_string(), "http://a.com/b/c/g", "relative path merges with base dir")
+    t.assert_eq_str(base.resolve("./g/").to_string(), "http://a.com/b/c/g/", "./ segment and trailing slash")
+    t.assert_eq_str(base.resolve("../g").to_string(), "http://a.com/b/g", "../ goes up one level")
+    t.assert_eq_str(base.resolve("../../../g").to_string(), "http://a.com/g", "too many ../ clamp at the root")
+    t.assert_eq_str(base.resolve("/x/y?z=1#f").to_string(), "http://a.com/x/y?z=1#f", "absolute-path reference keeps query+fragment")
+    t.assert_eq_str(base.resolve("?y").to_string(), "http://a.com/b/c/d?y", "query-only reference")
+    t.assert_eq_str(base.resolve("//other.org/p").to_string(), "http://other.org/p", "scheme-relative reference")
+    t.assert_eq_str(base.resolve("https://z.net:81/p").to_string(), "https://z.net:81/p", "absolute reference replaces everything")
+    t.assert_eq_str(base.resolve("g").request_target(), "/b/c/g", "request_target without query")
+    t.assert_eq_str(base.request_target(), "/b/c/d?q=1", "request_target with query")
+    mut hp = Url.parse("http://h.com:8080#frag")
+    t.assert_eq_str(hp.host, "h.com", "authority ends at '#' when there is no path")
+    t.assert_eq_str(hp.host_header(), "h.com:8080", "host_header includes a non-default port")
+    mut hq = Url.parse("http://h.com?x=1")
+    t.assert_eq_str(hq.query, "x=1", "authority ends at '?' when there is no path")
+    t.assert_eq_str(Url.parse("http://h.com/p").host_header(), "h.com", "host_header omits the default port")
+
+    # ================= Form / multipart builders ==============================
+    t.section("FormBuilder (application/x-www-form-urlencoded)")
+    mut fb = FormBuilder.init()
+    fb.add("q", "hello world")
+    fb.add("lang", "en&fr=x")
+    fb.add("q2", "")
+    t.assert_eq_str(fb.build(), "q=hello%20world&lang=en%26fr%3Dx&q2=", "names/values are percent-encoded")
+    t.assert_eq_str(fb.content_type(), "application/x-www-form-urlencoded", "form content type")
+    fb.set("q", "z")
+    t.assert_eq_str(fb.build(), "lang=en%26fr%3Dx&q2=&q=z", "set() replaces existing values")
+
+    t.section("MultipartBuilder (multipart/form-data)")
+    mut mb = MultipartBuilder.init()
+    mb.with_boundary("XBOUND")
+    mb.add_field("title", "Report")
+    mb.add_file_data("doc", "a\"b.txt", "text/plain", "line1\nline2")
+    mut mbody = mb.build()
+    t.assert_eq_str(mb.content_type(), "multipart/form-data; boundary=XBOUND", "content type carries the boundary")
+    t.assert_contains(mbody, "--XBOUND\r\nContent-Disposition: form-data; name=\"title\"\r\n\r\nReport\r\n", "text field part")
+    t.assert_contains(mbody, "name=\"doc\"; filename=\"a%22b.txt\"\r\nContent-Type: text/plain\r\n\r\nline1\nline2\r\n", "file part (quote in filename escaped)")
+    t.assert_true(Str.ends_with(mbody, "--XBOUND--\r\n"), "closing delimiter")
+    mut mb2 = MultipartBuilder.init()
+    t.assert_ne_str(mb2.boundary, MultipartBuilder.init().boundary, "auto boundaries are unique per builder")
+    t.assert_eq_str(MultipartBuilder.guess_content_type("x.JSON"), "application/json", "guess_content_type is case-insensitive")
+
+    # ================= Cookies (deterministic clock) ==========================
+    t.section("http_date_parse")
+    t.assert_eq_int(http_date_parse("Wed, 21 Oct 2015 07:28:00 GMT"), 1445412480, "RFC 1123 date")
+    t.assert_eq_int(http_date_parse("Wednesday, 21-Oct-15 07:28:00 GMT"), 1445412480, "RFC 850 date (2-digit year)")
+    t.assert_eq_int(http_date_parse("Wed Oct 21 07:28:00 2015"), 1445412480, "asctime date")
+    t.assert_eq_int(http_date_parse("Thu, 01 Jan 1970 00:00:00 GMT"), 0, "the epoch")
+    t.assert_eq_int(http_date_parse("not a date"), -1, "garbage -> -1")
+
+    t.section("Cookie matching helpers")
+    t.assert_true(cookie_domain_match("www.example.com", "example.com"), "subdomain matches domain cookie")
+    t.assert_true(cookie_domain_match("example.com", "example.com"), "exact host matches")
+    t.assert_false(cookie_domain_match("badexample.com", "example.com"), "suffix without dot boundary does not match")
+    t.assert_false(cookie_domain_match("10.1.2.3", "2.3"), "IP hosts never suffix-match")
+    t.assert_true(cookie_path_match("/a/b", "/a"), "/a covers /a/b")
+    t.assert_true(cookie_path_match("/a", "/a"), "exact path")
+    t.assert_false(cookie_path_match("/ab", "/a"), "/a does not cover /ab")
+    t.assert_true(cookie_path_match("/anything", "/"), "/ covers everything")
+    t.assert_eq_str(cookie_default_path("/a/b/c"), "/a/b", "default-path = directory")
+    t.assert_eq_str(cookie_default_path("/a"), "/", "default-path of a top-level file is /")
+
+    t.section("CookieJar: Set-Cookie parsing + Cookie header generation")
+    mut jar = CookieJar.init()
+    t.assert_true(jar.store_set_cookie_at("sid=abc; Path=/; HttpOnly; Max-Age=3600", "example.com", "/login", 1000), "host-only cookie stored")
+    t.assert_true(jar.store_set_cookie_at("theme=dark; Domain=.example.com; Path=/a; Secure; SameSite=Lax", "www.example.com", "/", 1000), "domain cookie stored")
+    t.assert_false(jar.store_set_cookie_at("bad=1; Domain=other.org", "example.com", "/", 1000), "foreign Domain rejected")
+    t.assert_false(jar.store_set_cookie_at("com=1; Domain=com", "example.com", "/", 1000), "dotless Domain rejected")
+    t.assert_false(jar.store_set_cookie_at("novalue", "example.com", "/", 1000), "header without '=' rejected")
+    t.assert_eq_int(jar.len(), 2, "two cookies stored")
+    t.assert_eq_str(jar.header_for_at("example.com", "/a/b", false, 1001), "sid=abc", "Secure cookie withheld over http")
+    t.assert_eq_str(jar.header_for_at("example.com", "/a/b", true, 1001), "theme=dark; sid=abc", "longer path first, Secure sent over https")
+    t.assert_eq_str(jar.header_for_at("sub.example.com", "/a/b", true, 1001), "theme=dark", "domain cookie reaches subdomains; host-only does not")
+    t.assert_eq_str(jar.header_for_at("example.com", "/x", false, 1001), "sid=abc", "path scoping")
+    t.assert_eq_str(jar.header_for_at("other.org", "/", true, 1001), "", "unrelated host gets nothing")
+    t.assert_eq_str(jar.header_for_at("example.com", "/x", false, 5000), "", "Max-Age expiry (sid expired at 4600)")
+    mut tc = jar.find("theme", "example.com", "/a")
+    t.assert_true(tc.valid, "find() returns the stored cookie")
+    t.assert_eq_str(tc.same_site, "Lax", "SameSite stored")
+    t.assert_true(tc.secure, "Secure flag stored")
+    t.assert_false(tc.host_only, "Domain attribute makes it a domain cookie")
+    mut sc = jar.find("sid", "example.com", "/")
+    t.assert_true(sc.http_only, "HttpOnly flag stored")
+    t.assert_true(jar.store_set_cookie_at("sid=new; Path=/", "example.com", "/", 2000), "overwrite same name+domain+path")
+    t.assert_eq_int(jar.len(), 2, "overwrite does not add a duplicate")
+    t.assert_eq_str(jar.header_for_at("example.com", "/", false, 2001), "sid=new", "overwritten value used")
+    t.assert_true(jar.store_set_cookie_at("sid=; Path=/; Max-Age=0", "example.com", "/", 2002), "Max-Age=0 accepted")
+    t.assert_eq_int(jar.len(), 1, "Max-Age=0 deletes the stored cookie")
+    t.assert_true(jar.store_set_cookie_at("old=1; Expires=Wed, 21 Oct 2015 07:28:00 GMT", "example.com", "/", 1800000000), "past Expires accepted (no-op)")
+    t.assert_eq_int(jar.len(), 1, "a past Expires never gets stored")
+    t.assert_true(jar.store_set_cookie_at("exp=1; Expires=Wed, 21 Oct 2099 07:28:00 GMT; Max-Age=10", "example.com", "/", 3000), "Expires + Max-Age")
+    t.assert_eq_int(jar.find("exp", "example.com", "/").expires, 3010, "Max-Age wins over Expires")
+    t.assert_eq_int(jar.purge_expired_at(4000), 1, "purge_expired removes dead cookies")
+    t.assert_eq_str(jar.header_for_url("https://example.com/a/z"), "theme=dark", "header_for_url on an https URL string")
+    t.assert_eq_str(jar.header_for_url("http://example.com/a/z"), "", "header_for_url on an http URL: Secure cookie withheld")
+    jar.clear()
+    t.assert_eq_int(jar.len(), 0, "clear()")
+
+    # ================= HeaderList / ChunkDecoder ==============================
+    t.section("HeaderList")
+    mut hl = HeaderList.init()
+    hl.add("Set-Cookie", "a=1")
+    hl.add("set-cookie", "b=2")
+    hl.add("X-One", "1")
+    t.assert_eq_str(hl.get("SET-COOKIE"), "a=1", "get() is case-insensitive, first value")
+    t.assert_eq_int(hl.get_all("Set-Cookie").len, 2, "get_all keeps repeated headers")
+    hl.set("x-one", "uno")
+    t.assert_eq_str(hl.get("X-One"), "uno", "set() replaces")
+    hl.remove("set-cookie")
+    t.assert_false(hl.has("Set-Cookie"), "remove() drops every occurrence")
+
+    t.section("ChunkDecoder (byte-at-a-time feed)")
+    mut wire = "5\r\nhel"
+    wire = wire + "lo\r\n6;ext=1\r\n wor"
+    wire = wire + "ld\r\nA\r\n0123456789\r\n0\r\nX-T: y\r\n\r\n"
+    mut dec = ChunkDecoder.init()
+    mut sink = BodySink.init(0)
+    mut wp = wire as Pointer[char]
+    mut wn = Str.len(wire)
+    mut wi = 0
+    mut feed_ok = true
+    while wi < wn:
+        unsafe:
+            if not dec.feed(wp.offset(wi), 1, sink): feed_ok = false
+        wi = wi + 1
+    t.assert_true(feed_ok, "decoder accepts the stream")
+    t.assert_true(dec.is_done(), "decoder reaches the terminal state after trailers")
+    t.assert_eq_str(sink.mem.to_str(), "hello world0123456789", "decoded payload (extension + trailer skipped)")
+    mut dec2 = ChunkDecoder.init()
+    mut sink2 = BodySink.init(0)
+    mut bad = "zz\r\n"
+    t.assert_false(dec2.feed(bad as Pointer[char], 4, sink2), "non-hex chunk size is rejected")
+    t.assert_true(dec2.is_bad(), "decoder is in the error state")
+
+    # ================= Live loopback tests ====================================
+    shared st = SrvState.init(19810)
+    mut srv_t = Thread.spawn(srv_run, st)
+    mut waited = 0
+    while st.port.load() == 0 and waited < 3000:
+        Clock.sleep_ms(10)
+        waited = waited + 10
+    mut port = st.port.load()
+    t.assert_gt_int(port, 0, "scripted server bound a loopback port")
+    if port <= 0:
+        st.stop.store(1)
+        srv_t.join()
+        t.summary()
+        return
+    mut root = "http://127.0.0.1:" + port.to_string()
+    mut s = HttpSession.init()
+    s.set_timeout(5000)
+    s.set_total_timeout(60000)
+
+    t.section("plain GET / HEAD / status codes")
+    mut r = s.get(root + "/ok")
+    t.assert_eq_str(r.error, "", "no transport error")
+    t.assert_eq_int(r.status, 200, "status 200")
+    t.assert_eq_str(r.body, "hello world", "body read fully")
+    t.assert_eq_str(r.header("content-type"), "text/plain", "header lookup is case-insensitive")
+    t.assert_eq_int(r.content_length(), 11, "content_length()")
+    t.assert_true(r.is_ok(), "is_ok")
+    t.assert_eq_int(r.redirects, 0, "no redirects")
+    mut rh = s.head(root + "/ok")
+    t.assert_eq_int(rh.status, 200, "HEAD status")
+    t.assert_eq_str(rh.body, "", "HEAD has no body (and the client does not wait for one)")
+    t.assert_eq_int(rh.content_length(), 11, "HEAD keeps Content-Length header")
+    mut r404 = s.get(root + "/nope")
+    t.assert_eq_int(r404.status, 404, "404 returned, not an error")
+    t.assert_true(r404.is_error(), "is_error on 404")
+    t.assert_contains(r404.body, "not found: /nope", "404 body")
+    mut r503 = s.get(root + "/status/503")
+    t.assert_eq_int(r503.status, 503, "5xx passes through")
+
+    t.section("request headers: defaults, per-request override, auth")
+    s.set_header("X-Default", "d1")
+    s.set_header("X-Over", "session")
+    s.set_user_agent("tau-test/1")
+    mut req = ClientRequest.init("GET", root + "/echo")
+    req.header("X-Over", "request")
+    mut re = s.send(req)
+    t.assert_contains(re.body, "GET /echo HTTP/1.1\r\n", "request line is HTTP/1.1")
+    t.assert_contains(re.body, "Host: 127.0.0.1:" + port.to_string() + "\r\n", "Host header carries the port")
+    t.assert_contains(re.body, "X-Default: d1\r\n", "session default header sent")
+    t.assert_contains(re.body, "X-Over: request\r\n", "per-request header overrides the session default")
+    t.assert_false(Str.contains(re.body, "X-Over: session"), "overridden default is not sent")
+    t.assert_contains(re.body, "User-Agent: tau-test/1\r\n", "user agent")
+    t.assert_contains(re.body, "Connection: close\r\n", "Connection: close")
+    s.set_basic_auth("ann", "s3cret")
+    mut rb = s.get(root + "/echo")
+    t.assert_contains(rb.body, "Authorization: Basic YW5uOnMzY3JldA==\r\n", "basic auth header")
+    s.remove_header("Authorization")
+    mut inj = ClientRequest.init("GET", root + "/echo")
+    inj.header("X-Evil", "a\r\nInjected: yes")
+    mut ri = s.send(inj)
+    t.assert_false(Str.contains(ri.body, "\r\nInjected: yes"), "CR/LF in a header value cannot inject a header")
+
+    t.section("POST / form / multipart / json bodies")
+    mut rp = s.post(root + "/echo", "a=1&b=2", "application/x-www-form-urlencoded")
+    t.assert_contains(rp.body, "POST /echo HTTP/1.1", "POST")
+    t.assert_contains(rp.body, "Content-Length: 7\r\n", "Content-Length computed")
+    t.assert_contains(rp.body, "Content-Type: application/x-www-form-urlencoded\r\n", "content type")
+    t.assert_true(Str.ends_with(rp.body, "\r\n\r\na=1&b=2"), "body arrives intact")
+    mut ff = FormBuilder.init()
+    ff.add("name", "Ann Lee")
+    ff.add("tag", "a&b")
+    mut rf = s.post_form(root + "/echo", ff)
+    t.assert_true(Str.ends_with(rf.body, "\r\n\r\nname=Ann%20Lee&tag=a%26b"), "post_form encodes the fields")
+    mut mp = MultipartBuilder.init()
+    mp.add_field("title", "Report")
+    mp.add_file_data("doc", "n.txt", "text/plain", "multi\nline")
+    mut rm = s.post_multipart(root + "/echo", mp)
+    t.assert_contains(rm.body, "Content-Type: multipart/form-data; boundary=" + mp.boundary + "\r\n", "multipart content type + boundary")
+    t.assert_contains(rm.body, "filename=\"n.txt\"\r\nContent-Type: text/plain\r\n\r\nmulti\nline\r\n", "file part on the wire")
+    mut rj = s.post_json(root + "/echo", "{\"k\":1}")
+    t.assert_contains(rj.body, "Content-Type: application/json\r\n", "json content type")
+    t.assert_true(Str.ends_with(rj.body, "{\"k\":1}"), "json body")
+    mut rput = s.put(root + "/echo", "x", "text/plain")
+    t.assert_contains(rput.body, "PUT /echo HTTP/1.1", "PUT")
+    mut rdel = s.delete(root + "/echo")
+    t.assert_contains(rdel.body, "DELETE /echo HTTP/1.1", "DELETE")
+    t.assert_false(Str.contains(rdel.body, "Content-Length"), "DELETE without a body sends no Content-Length")
+
+    t.section("redirects: status handling and method rewriting")
+    mut a301 = s.post(root + "/r301", "payload", "text/plain")
+    t.assert_eq_int(a301.status, 200, "301 followed")
+    t.assert_eq_int(a301.redirects, 1, "one hop counted")
+    t.assert_contains(a301.body, "GET /echo HTTP/1.1", "301: POST rewritten to GET")
+    t.assert_false(Str.contains(a301.body, "payload"), "301: body dropped")
+    t.assert_eq_str(a301.url, root + "/echo", "final URL recorded")
+    t.assert_eq_int(a301.history.len, 2, "history has both URLs")
+    mut a302 = s.post(root + "/r302", "payload", "text/plain")
+    t.assert_contains(a302.body, "GET /echo HTTP/1.1", "302: POST rewritten to GET")
+    mut a303 = s.put(root + "/r303", "payload", "text/plain")
+    t.assert_contains(a303.body, "GET /echo HTTP/1.1", "303: PUT becomes GET")
+    t.assert_false(Str.contains(a303.body, "payload"), "303: body dropped")
+    mut a307 = s.post(root + "/r307", "payload", "text/plain")
+    t.assert_contains(a307.body, "POST /echo HTTP/1.1", "307: method preserved")
+    t.assert_true(Str.ends_with(a307.body, "\r\n\r\npayload"), "307: body re-sent")
+    mut a308 = s.put(root + "/r308", "payload", "text/plain")
+    t.assert_contains(a308.body, "PUT /echo HTTP/1.1", "308: method preserved")
+    t.assert_true(Str.ends_with(a308.body, "\r\n\r\npayload"), "308: body re-sent")
+    mut a302h = s.head(root + "/r303")
+    t.assert_eq_int(a302h.status, 200, "HEAD stays HEAD across a 303")
+    s.set_rewrite_post_on_301_302(false)
+    mut a301s = s.post(root + "/r301", "payload", "text/plain")
+    t.assert_contains(a301s.body, "POST /echo HTTP/1.1", "strict mode keeps POST on 301")
+    s.set_rewrite_post_on_301_302(true)
+    mut rel1 = s.get(root + "/rel1")
+    t.assert_eq_str(rel1.url, root + "/echo", "relative Location resolved")
+    mut rel2 = s.get(root + "/dir/start")
+    t.assert_eq_str(rel2.url, root + "/echo?via=rel", "../ Location with a query resolved")
+    t.assert_contains(rel2.body, "GET /echo?via=rel HTTP/1.1", "query survives the redirect")
+    mut chain = s.get(root + "/chain/4")
+    t.assert_eq_str(chain.body, "chain end", "multi-hop chain followed")
+    t.assert_eq_int(chain.redirects, 4, "four hops")
+    mut lp = s.get(root + "/loop")
+    t.assert_true(Str.starts_with(lp.error, "too many redirects"), "redirect loop stops at the limit")
+    t.assert_eq_int(lp.redirects, 10, "default limit is 10 hops")
+    s.set_max_redirects(2)
+    mut lim = s.get(root + "/chain/4")
+    t.assert_true(Str.starts_with(lim.error, "too many redirects"), "custom max_redirects honoured")
+    t.assert_eq_int(lim.redirects, 2, "stopped after 2 hops")
+    s.set_max_redirects(10)
+    s.set_follow_redirects(false)
+    mut nof = s.get(root + "/r301")
+    t.assert_eq_int(nof.status, 301, "follow disabled: 301 returned as-is")
+    t.assert_eq_str(nof.location(), "/echo", "Location header available")
+    t.assert_true(nof.is_redirect(), "is_redirect")
+    s.set_follow_redirects(true)
+    mut one = ClientRequest.init("GET", root + "/r302")
+    one.with_follow(false)
+    t.assert_eq_int(s.send(one).status, 302, "per-request follow=false")
+    mut nl = s.get(root + "/nolocation")
+    t.assert_eq_int(nl.status, 302, "redirect without Location is returned, not followed")
+
+    t.section("redirects: Authorization dropped when leaving the host")
+    s.set_bearer("tok-123")
+    s.set_header("Cookie", "manual=1")
+    mut same = s.get(root + "/r302")
+    t.assert_contains(same.body, "Authorization: Bearer tok-123\r\n", "same-host redirect keeps Authorization")
+    t.assert_contains(same.body, "Cookie: manual=1\r\n", "same-host redirect keeps an explicit Cookie header")
+    mut cross = s.get(root + "/cross")
+    if cross.status == 0:
+        print("NOTE: 'localhost' did not resolve here; cross-host redirect check skipped (" + cross.error + ")")
+    else:
+        t.assert_eq_int(cross.status, 200, "cross-host redirect followed")
+        t.assert_contains(cross.url, "://localhost:", "landed on the other host name")
+        t.assert_false(Str.contains(cross.body, "Authorization:"), "Authorization stripped on a cross-host hop")
+        t.assert_false(Str.contains(cross.body, "Cookie: manual"), "explicit Cookie header stripped on a cross-host hop")
+        t.assert_contains(cross.body, "X-Default: d1\r\n", "ordinary default headers still sent")
+        t.assert_contains(cross.body, "Host: localhost:" + port.to_string() + "\r\n", "Host updated for the new target")
+    s.remove_header("Authorization")
+    s.remove_header("Cookie")
+
+    t.section("cookie jar integration")
+    mut s2 = HttpSession.init()
+    s2.set_timeout(5000)
+    s2.enable_cookies()
+    mut c1 = s2.get(root + "/setcookie")
+    t.assert_eq_int(c1.set_cookies().len, 2, "both Set-Cookie headers kept on the reply")
+    t.assert_eq_int(s2.cookie_jar().len(), 2, "both cookies stored in the jar")
+    mut c2 = s2.get(root + "/echo")
+    t.assert_contains(c2.body, "Cookie: sid=abc123; theme=dark\r\n", "jar cookies sent on the next request")
+    mut c3 = s2.get(root + "/login_redirect")
+    t.assert_contains(c3.body, "sess=xyz", "cookie set by a redirect response is sent on the next hop")
+    mut c4 = s2.get(root + "/expire")
+    t.assert_eq_int(s2.cookie_jar().len(), 2, "Max-Age=0 removed sid (sess + theme remain)")
+    mut c5 = s2.get(root + "/echo")
+    t.assert_false(Str.contains(c5.body, "sid="), "deleted cookie not sent")
+    mut c6 = s2.get(root + "/sub/setc")
+    mut c7 = s2.get(root + "/echo")
+    t.assert_false(Str.contains(c7.body, "scoped=1"), "Path=/sub cookie not sent to /echo")
+    mut s3 = HttpSession.init()
+    mut c8 = s3.get(root + "/setcookie")
+    mut c9 = s3.get(root + "/echo")
+    t.assert_false(Str.contains(c9.body, "Cookie:"), "cookies are opt-in: a session without a jar sends none")
+    mut ejar = CookieJar.init()
+    ejar.set("pre", "set", "127.0.0.1", "/")
+    mut s4 = HttpSession.init()
+    s4.set_cookie_jar(ejar)
+    mut c10 = s4.get(root + "/echo")
+    t.assert_contains(c10.body, "Cookie: pre=set\r\n", "a pre-populated jar is used")
+
+    t.section("response framing: chunked / EOF / truncated / interim")
+    mut ch = s.get(root + "/chunked")
+    t.assert_eq_str(ch.error, "", "chunked: no error")
+    t.assert_eq_str(ch.body, "Hello, chunk0123456789", "chunked body reassembled across segments")
+    t.assert_true(ch.chunked, "reply.chunked set")
+    t.assert_eq_int(ch.bytes, 22, "byte count")
+    mut eof = s.get(root + "/nolen")
+    t.assert_eq_str(eof.body, "until-eof-body", "body framed by connection close")
+    mut tr = s.get(root + "/trunc")
+    t.assert_true(Str.starts_with(tr.error, "incomplete body"), "short body reported as incomplete")
+    t.assert_eq_int(tr.status, 200, "status kept for a truncated body")
+    mut itm = s.get(root + "/interim")
+    t.assert_eq_int(itm.status, 200, "1xx interim response skipped")
+    t.assert_eq_str(itm.body, "real", "body after an interim response")
+    mut bg = s.get(root + "/big")
+    t.assert_eq_str(bg.error, "", "large body: no error")
+    t.assert_eq_int(bg.bytes, 327680, "all 327680 bytes of a multi-recv body read")
+    t.assert_eq_int(Str.len(bg.body), 327680, "body length")
+    t.assert_true(Str.starts_with(bg.body, "abcdefghijklmnopqrstuvwxyz012345abc"), "body start")
+    s.set_max_body_bytes(5)
+    mut lm = s.get(root + "/ok")
+    t.assert_true(Str.contains(lm.error, "max_body_bytes"), "in-memory cap enforced")
+    s.set_max_body_bytes(67108864)
+
+    t.section("streaming: callback and download_to_file")
+    # (Accumulate through a class field: a closure that re-assigns a captured
+    # `str` local does not compile -- see the compiler note in the final report.)
+    mut acc = ChunkAcc.init()
+    mut on_chunk = def (c: str) -> bool:
+        acc.text = acc.text + c
+        acc.n = acc.n + 1
+        return true
+    mut sr = s.stream_get(root + "/chunked", on_chunk)
+    t.assert_eq_str(sr.error, "", "stream_get: no error")
+    t.assert_eq_str(acc.text, "Hello, chunk0123456789", "callback received the decoded body")
+    t.assert_gt_int(acc.n, 1, "body delivered incrementally (more than one callback)")
+    t.assert_eq_str(sr.body, "", "streamed body is not also buffered")
+    mut seen = 0
+    mut stop_first = def (c: str) -> bool:
+        seen = seen + 1
+        return false
+    mut ab = s.stream_get(root + "/burst", stop_first)
+    t.assert_eq_str(ab.error, "aborted by callback", "callback returning false aborts")
+    t.assert_eq_int(seen, 1, "callback not invoked again after aborting")
+    mut cb404 = s.stream_get(root + "/nope", on_chunk)
+    t.assert_eq_int(cb404.status, 404, "callback streaming ignores non-2xx bodies")
+    t.assert_contains(cb404.body, "not found", "non-2xx body returned in reply.body instead")
+
+    mut dl_path = "71_http_client_dl.tmp"
+    Fs.delete(dl_path)
+    Fs.delete(dl_path + ".part")
+    mut dl = s.download_to_file(root + "/big", dl_path)
+    t.assert_eq_str(dl.error, "", "download: no error")
+    t.assert_eq_str(dl.saved_to, dl_path, "saved_to set")
+    t.assert_eq_int(dl.bytes, 327680, "download byte count")
+    t.assert_eq_int(File.file_size(dl_path), 327680, "file on disk has the full size")
+    t.assert_false(File.file_exists(dl_path + ".part"), ".part file renamed away")
+    mut dl_txt = File.read_text(dl_path)
+    t.assert_true(Str.starts_with(dl_txt, "abcdefghijklmnopqrstuvwxyz012345"), "file content start")
+    Fs.delete(dl_path)
+    mut dlc = s.download_to_file(root + "/chunkedbig", dl_path)
+    t.assert_eq_str(dlc.error, "", "chunked download: no error")
+    t.assert_eq_int(File.file_size(dl_path), 131072, "chunked download: 8 x 16384 bytes decoded to disk")
+    t.assert_true(dlc.chunked, "chunked flag")
+    Fs.delete(dl_path)
+    mut dlr = s.download_to_file(root + "/r302", dl_path)
+    t.assert_eq_str(dlr.error, "", "download follows redirects")
+    t.assert_true(Str.starts_with(File.read_text(dl_path), "GET /echo HTTP/1.1"), "redirect body not written, final body is")
+    Fs.delete(dl_path)
+    mut dl404 = s.download_to_file(root + "/nope", dl_path)
+    t.assert_eq_int(dl404.status, 404, "download of a 404")
+    t.assert_false(File.file_exists(dl_path), "no file written for a non-2xx response")
+    t.assert_false(File.file_exists(dl_path + ".part"), "no stray .part file")
+    mut dlt = s.download_to_file(root + "/trunc", dl_path)
+    t.assert_true(Str.starts_with(dlt.error, "incomplete body"), "truncated download reports an error")
+    t.assert_false(File.file_exists(dl_path), "failed download leaves no destination file")
+    t.assert_false(File.file_exists(dl_path + ".part"), "failed download cleans up the .part file")
+
+    t.section("timeouts, errors and bad input")
+    mut t0 = Clock.now_ms()
+    mut slow_req = ClientRequest.init("GET", root + "/slow")
+    slow_req.with_timeout(300)
+    mut sl = s.send(slow_req)
+    mut spent = Clock.now_ms() - t0
+    t.assert_true(sl.timed_out, "idle timeout flagged")
+    t.assert_true(Str.contains(sl.error, "timeout"), "timeout error text")
+    t.assert_eq_int(sl.status, 0, "no status on timeout")
+    t.assert_in_range(spent, 250, 3500, "timeout fired in a sane window (tolerant)")
+    mut s5 = HttpSession.init()
+    s5.set_total_timeout(300)
+    mut t1 = Clock.now_ms()
+    mut sl2 = s5.get(root + "/slow")
+    t.assert_true(sl2.timed_out, "total timeout flagged")
+    t.assert_in_range(Clock.now_ms() - t1, 250, 3500, "total timeout window (tolerant)")
+    mut badurl = s.get("not a url")
+    t.assert_true(Str.contains(badurl.error, "invalid"), "invalid URL rejected")
+    mut ftp = s.get("ftp://127.0.0.1/x")
+    t.assert_true(Str.contains(ftp.error, "unsupported"), "non-http scheme rejected")
+    mut tls = s.get("https://127.0.0.1:" + port.to_string() + "/ok")
+    t.assert_true(Str.contains(tls.error, "https refused"), "https refused unless unverified TLS is opted into")
+    mut refused = s.get("http://127.0.0.1:1/x")
+    t.assert_true(Str.starts_with(refused.error, "connection failed"), "connection refused surfaces as an error")
+    t.assert_true(refused.is_error(), "is_error on transport failure")
+
+    st.stop.store(1)
+    srv_t.join()
+    t.assert_gt_int(st.served.load(), 50, "server handled the whole script")
+    st.port.free()
+    st.stop.free()
+    st.served.free()
+
+    Fs.delete(dl_path)
+    t.summary()

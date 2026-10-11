@@ -1,0 +1,52 @@
+# tests/lang/84_free_class_move.tr - a class with a user `free()` whose fields
+# are all str/int (so it looked like a trivially-copyable value) must still be
+# MOVE-tracked (bug log #11). Previously `b = a` / `cur = next` left both names
+# marked as owners and sema auto-dropped each at scope exit -> double free of
+# the same struct (and a dangling `cur` after the loop-body local was dropped).
+
+from std.test import TestRunner
+from std.net.url import Url
+
+extern "C":
+    def _tr_c_free(p: Pointer[char])
+
+class Handle:
+    pub name: str
+    pub id: int
+
+extend Handle:
+    pub def make(n: str, id: int) -> Handle:
+        mut h = Handle()
+        h.name = n
+        h.id = id
+        return h
+
+    pub def free(self):
+        unsafe: _tr_c_free(self as Pointer[char])
+
+def main():
+    mut t = TestRunner.init("84_free_class_move")
+
+    t.section("let-binding move")
+    mut a = Handle.make("a", 1)
+    mut b = a
+    t.assert_eq_int(b.id, 1, "b owns the handle")
+
+    t.section("reassignment between blocks (the Url pattern)")
+    mut cur = Url.parse("http://a.com/x")
+    mut i = 0
+    while i < 3:
+        mut next = Url.parse("http://b" + i.to_str() + ".com/y")
+        cur = next
+        i = i + 1
+    t.assert_eq_str(cur.host, "b2.com", "cur holds the last parsed url after the loop")
+
+    t.section("assignment from a conditional-block local")
+    mut keep = Handle.make("k", 7)
+    if true:
+        mut other = Handle.make("o", 9)
+        keep = other
+    t.assert_eq_int(keep.id, 9, "keep holds the block-local handle after the block")
+
+    t.assert_true(true, "reached the end without a double free")
+    t.summary()

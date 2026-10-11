@@ -1,0 +1,515 @@
+# std.net.cookie -- client-side HTTP cookies (RFC 6265).
+#
+#   from std.net.cookie import CookieJar, Cookie
+#
+#   mut jar = CookieJar.init()
+#   jar.store_set_cookie("sid=abc; Path=/; HttpOnly; Max-Age=3600", "example.com", "/login")
+#   mut hdr = jar.header_for("example.com", "/account", false)   # "sid=abc"
+#   mut same = jar.header_for_url("http://example.com/account")  # same, from a URL string
+#
+# What is implemented
+#   * Set-Cookie parsing: Domain, Path, Expires (RFC 1123 / RFC 850 / asctime
+#     dates, tolerant tokenizer per RFC 6265 5.1.1), Max-Age (wins over
+#     Expires), Secure, HttpOnly, SameSite (Strict/Lax/None, stored only).
+#   * Storage rules: host-only cookies when no Domain is given, domain cookies
+#     must domain-match the request host, a default Path is derived from the
+#     request path, Max-Age<=0 / past Expires deletes the stored cookie.
+#   * Matching: domain-match (host-only = exact), path-match with segment
+#     boundaries, Secure cookies are only sent when `secure` is true, expired
+#     cookies are skipped. The Cookie header lists longer paths first, then
+#     older cookies first (RFC 6265 5.4).
+#
+# Limitations (honest list)
+#   * No public-suffix list: a `Domain=com`-style attribute is rejected only by
+#     the "must contain a dot" heuristic (and `localhost` / IP hosts only ever
+#     get host-only cookies).
+#   * SameSite is parsed and stored but not enforced: the client has no notion
+#     of a cross-site initiator, so every request counts as top-level.
+#   * Secure cookies set over plain http:// are accepted (older behaviour) but
+#     are still only sent over https://.
+#   * Cookie names/values are plain str (NUL-terminated); no size caps.
+#   * Time is whole seconds since the Unix epoch.
+
+from std.core.vec import Vec
+from std.core.string import StringBuilder
+from std.string.str import Str
+from std.sys.time import Clock
+from std.net.url import Url
+
+# ---------------------------------------------------------------------------
+# Date parsing
+# ---------------------------------------------------------------------------
+
+# Days since 1970-01-01 for a proleptic Gregorian civil date (Howard Hinnant).
+pub def cookie_days_from_civil(y_in: int, m: int, d: int) -> int:
+    mut y = y_in
+    if m <= 2: y = y - 1
+    mut era = 0
+    if y >= 0: era = y / 400
+    else:      era = (y - 399) / 400
+    mut yoe = y - era * 400
+    mut mp  = m - 3
+    if m <= 2: mp = m + 9
+    mut doy = (153 * mp + 2) / 5 + d - 1
+    mut doe = yoe * 365 + yoe / 4 - yoe / 100 + doy
+    return era * 146097 + doe - 719468
+
+def _cookie_month_num(tok: str) -> int:
+    if Str.len(tok) < 3: return 0
+    mut head3 = Str.slice(tok, 0, 3)
+    mut t = Str.to_lower(head3)
+    if Str.eq(t, "jan"): return 1
+    if Str.eq(t, "feb"): return 2
+    if Str.eq(t, "mar"): return 3
+    if Str.eq(t, "apr"): return 4
+    if Str.eq(t, "may"): return 5
+    if Str.eq(t, "jun"): return 6
+    if Str.eq(t, "jul"): return 7
+    if Str.eq(t, "aug"): return 8
+    if Str.eq(t, "sep"): return 9
+    if Str.eq(t, "oct"): return 10
+    if Str.eq(t, "nov"): return 11
+    if Str.eq(t, "dec"): return 12
+    return 0
+
+def _cookie_all_digits(s: str) -> bool:
+    mut n = Str.len(s)
+    if n == 0: return false
+    mut i = 0
+    while i < n:
+        mut c = Str.char_at(s, i)
+        if c < 48 or c > 57: return false
+        i = i + 1
+    return true
+
+# Parse an HTTP date ("Wed, 21 Oct 2015 07:28:00 GMT", "Wednesday, 21-Oct-15
+# 07:28:00 GMT", "Wed Oct 21 07:28:00 2015") into Unix seconds. Returns -1 when
+# the text is not a recognisable date. Always interpreted as UTC.
+pub def http_date_parse(text: str) -> int:
+    # Normalise: every char that is not alphanumeric or ':' becomes a space.
+    mut n  = Str.len(text)
+    mut sb = StringBuilder.init(n + 1)
+    mut i  = 0
+    while i < n:
+        mut c = Str.char_at(text, i)
+        mut keep = (c >= 48 and c <= 58) or (c >= 65 and c <= 90) or (c >= 97 and c <= 122)
+        if keep: sb.append_char(c)
+        else:    sb.append_char(32)
+        i = i + 1
+    mut norm = sb.to_owned()
+    sb.free()
+    mut toks = Str.split_to_vec(norm, " ")
+    mut hh = -1
+    mut mm = -1
+    mut ss = -1
+    mut day = -1
+    mut mon = 0
+    mut year = -1
+    mut k = 0
+    while k < toks.len:
+        mut tok = toks.get(k)
+        k = k + 1
+        mut tl = Str.len(tok)
+        if tl == 0: continue
+        if hh < 0 and Str.contains_char(tok, 58):
+            mut parts = Str.split_to_vec(tok, ":")
+            if parts.len == 3:
+                mut p0 = parts.get(0)
+                mut p1 = parts.get(1)
+                mut p2 = parts.get(2)
+                if _cookie_all_digits(p0) and _cookie_all_digits(p1) and _cookie_all_digits(p2):
+                    hh = Str.parse_int(p0)
+                    mm = Str.parse_int(p1)
+                    ss = Str.parse_int(p2)
+            continue
+        if _cookie_all_digits(tok):
+            if day < 0 and tl <= 2:
+                day = Str.parse_int(tok)
+                continue
+            if year < 0 and tl >= 2 and tl <= 4:
+                year = Str.parse_int(tok)
+                continue
+            continue
+        if mon == 0:
+            mon = _cookie_month_num(tok)
+    if hh < 0 or day < 1 or day > 31 or mon == 0 or year < 0: return -1
+    if year >= 70 and year <= 99: year = year + 1900
+    elif year >= 0 and year <= 69: year = year + 2000
+    if year < 1601 or hh > 23 or mm > 59 or ss > 59: return -1
+    return cookie_days_from_civil(year, mon, day) * 86400 + hh * 3600 + mm * 60 + ss
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _cookie_is_ip(host: str) -> bool:
+    mut n = Str.len(host)
+    if n == 0: return false
+    if Str.contains_char(host, 58): return true      # IPv6 literal
+    mut i = 0
+    mut dots = 0
+    while i < n:
+        mut c = Str.char_at(host, i)
+        if c == 46: dots = dots + 1
+        elif c < 48 or c > 57: return false
+        i = i + 1
+    return dots == 3
+
+# RFC 6265 5.1.3: host == domain, or host ends with "." + domain and host is a name.
+pub def cookie_domain_match(host_in: str, domain_in: str) -> bool:
+    mut host   = Str.to_lower(host_in)
+    mut domain = Str.to_lower(domain_in)
+    if Str.eq(host, domain): return true
+    if _cookie_is_ip(host): return false
+    mut suffix = "." + domain
+    return Str.ends_with(host, suffix)
+
+# RFC 6265 5.1.4: cookie path is a prefix of the request path on a '/' boundary.
+pub def cookie_path_match(req_path_in: str, cookie_path: str) -> bool:
+    mut req_path = req_path_in
+    if Str.len(req_path) == 0: req_path = "/"
+    if Str.eq(req_path, cookie_path): return true
+    if Str.starts_with(req_path, cookie_path):
+        if Str.ends_with(cookie_path, "/"): return true
+        if Str.char_at(req_path, Str.len(cookie_path)) == 47: return true
+    return false
+
+# RFC 6265 5.1.4 default-path: directory of the request path.
+pub def cookie_default_path(req_path: str) -> str:
+    if Str.len(req_path) == 0 or Str.char_at(req_path, 0) != 47: return "/"
+    mut ls = Str.last_index_of(req_path, "/")
+    if ls <= 0: return "/"
+    return Str.slice(req_path, 0, ls)
+
+# ---------------------------------------------------------------------------
+# Cookie
+# ---------------------------------------------------------------------------
+
+pub class Cookie:
+    pub name:      str
+    pub value:     str
+    pub domain:    str     # lowercase, no leading dot
+    pub path:      str
+    pub expires:   int     # Unix seconds; -1 = session cookie
+    pub secure:    bool
+    pub http_only: bool
+    pub same_site: str     # "", "Strict", "Lax" or "None" (stored, not enforced)
+    pub host_only: bool    # true when no Domain attribute: exact host match only
+    pub valid:     bool    # false when a Set-Cookie header was rejected
+    pub created:   int     # insertion sequence/time used for ordering
+
+extend Cookie:
+    pub def init(name: str, value: str) -> Cookie:
+        mut c = Cookie()
+        c.name      = name
+        c.value     = value
+        c.domain    = ""
+        c.path      = "/"
+        c.expires   = -1
+        c.secure    = false
+        c.http_only = false
+        c.same_site = ""
+        c.host_only = true
+        c.valid     = true
+        c.created   = 0
+        return c
+
+    pub def is_expired(self, now: int) -> bool:
+        if self.expires < 0: return false
+        return self.expires <= now
+
+    pub def is_session(self) -> bool:
+        return self.expires < 0
+
+    # Parse one Set-Cookie header value received from `req_host` for a request to
+    # `req_path`. `now` is the current Unix time (for Max-Age). On rejection the
+    # returned cookie has valid == false.
+    pub def parse(header: str, req_host: str, req_path: str, now: int) -> Cookie:
+        mut bad = Cookie.init("", "")
+        bad.valid = false
+        mut parts = Str.split_to_vec(header, ";")
+        if parts.len == 0: return bad
+        mut first_part = parts.get(0)
+        mut nv  = Str.trim(first_part)
+        mut eq  = Str.index_of(nv, "=")
+        if eq < 0: return bad
+        mut cname_raw  = Str.slice(nv, 0, eq)
+        mut cvalue_raw = Str.slice(nv, eq + 1, Str.len(nv))
+        mut cname  = Str.trim(cname_raw)
+        mut cvalue = Str.trim(cvalue_raw)
+        if Str.len(cname) == 0: return bad
+        mut c = Cookie.init(cname, cvalue)
+        mut host = Str.to_lower(req_host)
+        c.domain = host
+        c.path   = cookie_default_path(req_path)
+        mut have_max_age = false
+        mut max_age_exp  = -1
+        mut expires_exp  = -1
+        mut domain_attr  = ""
+        mut i = 1
+        while i < parts.len:
+            mut av_raw = parts.get(i)
+            mut av   = Str.trim(av_raw)
+            i = i + 1
+            if Str.len(av) == 0: continue
+            mut aeq  = Str.index_of(av, "=")
+            mut aname = av
+            mut aval  = ""
+            if aeq >= 0:
+                mut an_raw = Str.slice(av, 0, aeq)
+                mut av_raw2 = Str.slice(av, aeq + 1, Str.len(av))
+                aname = Str.trim(an_raw)
+                aval  = Str.trim(av_raw2)
+            mut lname = Str.to_lower(aname)
+            if Str.eq(lname, "domain"):
+                mut d = Str.to_lower(aval)
+                if Str.starts_with(d, "."): d = Str.slice(d, 1, Str.len(d))
+                domain_attr = d
+            elif Str.eq(lname, "path"):
+                if Str.len(aval) > 0 and Str.char_at(aval, 0) == 47: c.path = aval
+                else: c.path = cookie_default_path(req_path)
+            elif Str.eq(lname, "expires"):
+                expires_exp = http_date_parse(aval)
+            elif Str.eq(lname, "max-age"):
+                mut first = 0
+                if Str.len(aval) > 0: first = Str.char_at(aval, 0)
+                mut numtxt = aval
+                mut neg = false
+                if first == 45:
+                    neg = true
+                    numtxt = Str.slice(aval, 1, Str.len(aval))
+                if _cookie_all_digits(numtxt):
+                    mut secs = Str.parse_int(numtxt)
+                    if neg or secs <= 0: max_age_exp = 0
+                    else: max_age_exp = now + secs
+                    have_max_age = true
+            elif Str.eq(lname, "secure"):
+                c.secure = true
+            elif Str.eq(lname, "httponly"):
+                c.http_only = true
+            elif Str.eq(lname, "samesite"):
+                mut ls = Str.to_lower(aval)
+                if Str.eq(ls, "strict"): c.same_site = "Strict"
+                elif Str.eq(ls, "lax"):  c.same_site = "Lax"
+                elif Str.eq(ls, "none"): c.same_site = "None"
+        if Str.len(domain_attr) > 0:
+            # The Domain attribute must cover the request host, and (heuristic
+            # stand-in for the public-suffix list) must contain a dot.
+            if not cookie_domain_match(host, domain_attr): return bad
+            if not Str.eq(host, domain_attr):
+                if _cookie_is_ip(host): return bad
+                if not Str.contains_char(domain_attr, 46): return bad
+            c.domain    = domain_attr
+            c.host_only = false
+        if have_max_age: c.expires = max_age_exp
+        elif expires_exp >= 0: c.expires = expires_exp
+        elif expires_exp == -1: c.expires = -1
+        c.created = now
+        return c
+
+    # "name=value" (the form used in a Cookie request header).
+    pub def pair(self) -> str:
+        return self.name + "=" + self.value
+
+    # True when this cookie applies to a request for (host, path, secure).
+    pub def matches(self, host: str, path: str, secure: bool, now: int) -> bool:
+        if self.is_expired(now): return false
+        if self.secure and not secure: return false
+        if self.host_only:
+            mut lhost = Str.to_lower(host)
+            if not Str.eq(lhost, self.domain): return false
+        else:
+            if not cookie_domain_match(host, self.domain): return false
+        return cookie_path_match(path, self.path)
+
+# ---------------------------------------------------------------------------
+# CookieJar
+# ---------------------------------------------------------------------------
+
+pub class CookieJar:
+    pub _items: Vec[Cookie]
+    pub _seq:   int
+
+extend CookieJar:
+    pub def init() -> CookieJar:
+        mut j = CookieJar()
+        j._items = Vec[Cookie].init(8)
+        j._seq   = 0
+        return j
+
+    pub def len(self) -> int:
+        return self._items.len
+
+    pub def clear(self):
+        mut fresh = Vec[Cookie].init(8)
+        self._items = fresh
+
+    # Index of the cookie with the same identity (name, domain, path), or -1.
+    def _find(self, name: str, domain: str, path: str) -> int:
+        mut i = 0
+        while i < self._items.len:
+            mut c = self._items.get(i)
+            if Str.eq(c.name, name) and Str.eq(c.domain, domain) and Str.eq(c.path, path): return i
+            i = i + 1
+        return -1
+
+    # Insert or replace a parsed cookie. An already-expired cookie deletes the
+    # stored one instead (this is how servers delete cookies).
+    pub def add_at(self, c: Cookie, now: int):
+        mut idx = self._find(c.name, c.domain, c.path)
+        if c.is_expired(now):
+            if idx >= 0: self._items.remove(idx)
+            return
+        self._seq = self._seq + 1
+        if idx >= 0:
+            # Overwrite in place (keeps the original creation order). Not
+            # Vec.set(): it stores the object without retaining it, so the
+            # caller's reference drop would leave the jar with a dangling
+            # pointer.
+            mut old = self._items.get(idx)
+            old.value     = c.value
+            old.expires   = c.expires
+            old.secure    = c.secure
+            old.http_only = c.http_only
+            old.same_site = c.same_site
+            old.host_only = c.host_only
+        else:
+            c.created = self._seq
+            self._items.push(c)
+
+    pub def add(self, c: Cookie):
+        self.add_at(c, Clock.timestamp())
+
+    # Parse + store one Set-Cookie header value. Returns false if it was rejected.
+    pub def store_set_cookie_at(self, header: str, host: str, path: str, now: int) -> bool:
+        mut c = Cookie.parse(header, host, path, now)
+        if not c.valid: return false
+        self.add_at(c, now)
+        return true
+
+    pub def store_set_cookie(self, header: str, host: str, path: str) -> bool:
+        return self.store_set_cookie_at(header, host, path, Clock.timestamp())
+
+    # Store every Set-Cookie header value (as collected from a response) for the
+    # request URL. Returns how many were accepted.
+    pub def store_response_at(self, req_url: Url, set_cookie_values: Vec[str], now: int) -> int:
+        mut accepted = 0
+        mut i = 0
+        while i < set_cookie_values.len:
+            mut one = set_cookie_values.get(i)
+            if self.store_set_cookie_at(one, req_url.host, req_url.path, now):
+                accepted = accepted + 1
+            i = i + 1
+        return accepted
+
+    pub def store_response(self, req_url: Url, set_cookie_values: Vec[str]) -> int:
+        return self.store_response_at(req_url, set_cookie_values, Clock.timestamp())
+
+    # Manually add a session cookie for `domain` (matches that host and its
+    # subdomains) at `path`.
+    pub def set(self, name: str, value: str, domain: str, path: str):
+        mut c = Cookie.init(name, value)
+        mut ldom2 = Str.to_lower(domain)
+        c.domain    = ldom2
+        c.path      = path
+        c.host_only = false
+        self.add_at(c, Clock.timestamp())
+
+    # Cookie request-header value for (host, path); "" when nothing matches.
+    pub def header_for_at(self, host: str, path: str, secure: bool, now: int) -> str:
+        mut sel = Vec[int].init(8)
+        mut i = 0
+        while i < self._items.len:
+            mut c = self._items.get(i)
+            if c.matches(host, path, secure, now): sel.push(i)
+            i = i + 1
+        if sel.len == 0: return ""
+        # Insertion sort: longer path first, then older (smaller created) first.
+        mut a = 1
+        while a < sel.len:
+            mut cur = sel.get(a)
+            mut b = a - 1
+            while b >= 0:
+                mut x = self._items.get(sel.get(b))
+                mut y = self._items.get(cur)
+                mut y_first = false
+                mut xl = Str.len(x.path)
+                mut yl = Str.len(y.path)
+                if yl > xl: y_first = true
+                elif yl == xl and y.created < x.created: y_first = true
+                if not y_first: break
+                sel.set(b + 1, sel.get(b))
+                b = b - 1
+            sel.set(b + 1, cur)
+            a = a + 1
+        mut sb = StringBuilder.init(64)
+        mut k = 0
+        while k < sel.len:
+            if k > 0: sb.append("; ")
+            mut c2 = self._items.get(sel.get(k))
+            sb.append(c2.name)
+            sb.append("=")
+            sb.append(c2.value)
+            k = k + 1
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    pub def header_for(self, host: str, path: str, secure: bool) -> str:
+        return self.header_for_at(host, path, secure, Clock.timestamp())
+
+    # Same as header_for, taking a full URL string.
+    pub def header_for_url(self, url: str) -> str:
+        mut u = Url.parse(url)
+        return self.header_for(u.host, u.path, u.is_https())
+
+    # Value of the first live cookie called `name` that matches (host, path), or "".
+    pub def get(self, name: str, host: str, path: str) -> str:
+        mut now = Clock.timestamp()
+        mut i = 0
+        while i < self._items.len:
+            mut c = self._items.get(i)
+            if Str.eq(c.name, name) and c.matches(host, path, true, now): return c.value
+            i = i + 1
+        return ""
+
+    pub def has(self, name: str, host: str, path: str) -> bool:
+        mut now = Clock.timestamp()
+        mut i = 0
+        while i < self._items.len:
+            mut c = self._items.get(i)
+            if Str.eq(c.name, name) and c.matches(host, path, true, now): return true
+            i = i + 1
+        return false
+
+    # The stored cookie object (valid == false when absent).
+    pub def find(self, name: str, domain: str, path: str) -> Cookie:
+        mut ldom = Str.to_lower(domain)
+        mut idx = self._find(name, ldom, path)
+        if idx < 0:
+            mut absent = Cookie.init("", "")
+            absent.valid = false
+            return absent
+        return self._items.get(idx)
+
+    pub def remove(self, name: str, domain: str, path: str) -> bool:
+        mut ldom = Str.to_lower(domain)
+        mut idx = self._find(name, ldom, path)
+        if idx < 0: return false
+        self._items.remove(idx)
+        return true
+
+    # Drop expired cookies; returns how many were removed.
+    pub def purge_expired_at(self, now: int) -> int:
+        mut removed = 0
+        mut i = self._items.len - 1
+        while i >= 0:
+            mut c = self._items.get(i)
+            if c.is_expired(now):
+                self._items.remove(i)
+                removed = removed + 1
+            i = i - 1
+        return removed
+
+    pub def purge_expired(self) -> int:
+        return self.purge_expired_at(Clock.timestamp())

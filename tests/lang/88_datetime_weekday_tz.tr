@@ -1,0 +1,35 @@
+# tests/lang/88_datetime_weekday_tz.tr - DateTime.weekday()/isoweekday()/yearday()
+# must come from the DateTime's own wall-clock fields, not the OS's local zone
+# (bug log #7). Checked under several machine TZ settings (set via setenv):
+# 1700000000 = Tue 2023-11-14 22:13:20 UTC, which is already WEDNESDAY in Tokyo
+# and Kiritimati but still Tuesday in Los Angeles.
+
+from std.test import TestRunner
+from std.sys.datetime import DateTime
+
+extern "C":
+    def _tr_setenv(name: str, value: str) -> int
+
+def check(t: TestRunner, zone: str):
+    _tr_setenv("TZ", zone)    # localtime() re-reads TZ on each call
+    mut d = DateTime.from_timestamp_utc(1700000000)
+    t.assert_eq_int(d.day, 14, "[" + zone + "] UTC day-of-month")
+    t.assert_eq_int(d.weekday(), 1, "[" + zone + "] weekday() Tuesday (Mon=0)")
+    t.assert_eq_int(d.isoweekday(), 2, "[" + zone + "] isoweekday() Tuesday (Sun=0)")
+    t.assert_eq_int(d.yearday(), 318, "[" + zone + "] yearday()")
+    t.assert_eq_str(d.weekday_name(), "Tuesday", "[" + zone + "] weekday_name()")
+    # Epoch day and a leap-day
+    mut e = DateTime.from_timestamp_utc(0)
+    t.assert_eq_int(e.isoweekday(), 4, "[" + zone + "] 1970-01-01 is Thursday")
+    mut ld = DateTime.from_timestamp_utc(1709164800)   # 2024-02-29 00:00:00 UTC
+    t.assert_eq_int(ld.yearday(), 60, "[" + zone + "] 2024-02-29 is day 60")
+    t.assert_eq_int(ld.isoweekday(), 4, "[" + zone + "] 2024-02-29 is Thursday")
+
+def main():
+    mut t = TestRunner.init("88_datetime_weekday_tz")
+    t.section("UTC DateTime fields are independent of the machine timezone")
+    check(t, "UTC")
+    check(t, "Asia/Tokyo")
+    check(t, "Pacific/Kiritimati")
+    check(t, "America/Los_Angeles")
+    t.summary()

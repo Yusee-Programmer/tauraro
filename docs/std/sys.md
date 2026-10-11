@@ -10,6 +10,7 @@ from std.sys.platform import Platform
 from std.sys.datetime import DateTime, Date, Time, TimeDelta
 from std.sys.signal   import Signal
 from std.sys.dotenv   import Dotenv
+from std.sys.cron     import Cron, CronSchedule
 ```
 
 ---
@@ -451,3 +452,37 @@ else:
     print(".env file not found")
 ```
 
+---
+
+## std.sys.cron — Cron expressions: next / previous fire time
+
+**When**: You need to know *when* a cron schedule fires (next run, last run, "does this minute match?") without running anything.
+**Why**: A pure, deterministic calculator on Unix timestamps in UTC — no timers, threads or OS localtime. `std.async.sched.Scheduler.cron` runs jobs; `Cron` just does the calendar math.
+
+Five fields — `minute hour day-of-month month day-of-week` — each a comma list of `*`, `?` (dom/dow), `N`, `N-M`, `*/S`, `N-M/S`, `N/S`. Months accept `jan..dec`, weekdays `sun..sat` (case-insensitive 3-letter names); day-of-week `0` and `7` are both Sunday. Macros: `@yearly`/`@annually`, `@monthly`, `@weekly`, `@daily`/`@midnight`, `@hourly`. (`@reboot` and a seconds field are not supported.)
+
+When **both** day-of-month and day-of-week are restricted, a day matches if *either* does (Vixie/cronie semantics: `0 0 13 * fri` = every 13th and every Friday); if either field starts with `*`/`?`, both must match. (The older `std.async.sched` parser ANDs them.)
+
+| Call | Returns | Description |
+|---|---|---|
+| `Cron.parse(expr) throws str` | `CronSchedule` | Parse; errors are `"cron: ..."` messages |
+| `Cron.is_valid(expr)` | `bool` | Does it parse? |
+| `Cron.next(expr, ts) throws str` / `Cron.prev(expr, ts) throws str` | `int` | One-shot parse + search |
+| `sched.next_after(ts)` | `int` | First fire time **strictly after** `ts` (Unix seconds, UTC) |
+| `sched.prev_before(ts)` | `int` | Last fire time **strictly before** `ts` |
+| `sched.next_after_offset(ts, utc_offset)` / `prev_before_offset` / `matches_offset` | `int` / `int` / `bool` | Evaluate in wall-clock time `utc_offset` seconds east of UTC (fixed offset, no DST rules); result is still a UTC timestamp |
+| `sched.matches(ts)` | `bool` | Is the minute containing `ts` a fire time? |
+| `sched.next_n(ts, n)` | `List[int]` | The next `n` fire times |
+| `sched.next_datetime(dt)` / `prev_datetime(dt)` | `DateTime` | UTC `DateTime` forms |
+
+Fire times are whole minutes, so results are multiples of 60. **`-1` means "no fire time"** (an unsatisfiable schedule such as `0 0 31 2 *`; the search covers 12 years).
+
+```tauraro
+from std.sys.cron import Cron, CronSchedule
+from std.sys.datetime import DateTime, TimeZone
+
+mut s = Cron.parse("*/15 9-17 * * mon-fri")?
+mut now = DateTime.in_zone(2026, 10, 11, 6, 7, 30, TimeZone.utc()).timestamp()   # a Sunday
+print(DateTime.from_timestamp_utc(s.next_after(now)).to_string())     # 2026-10-12 09:00:00
+print(DateTime.from_timestamp_utc(s.prev_before(now)).to_string())    # 2026-10-09 17:45:00
+```

@@ -1,0 +1,91 @@
+# tests/lang/81_try_field_assign.tr - `obj.field = f()?` / `list[i] = f()?` (bug log #2).
+#
+# The `?` was only propagated for a bare-identifier target, so for a field or
+# index target an Err silently stored its payload and the function carried on
+# as if nothing had happened (e.g. an int field received the Result pointer).
+
+from std.test import TestRunner
+
+def parse_num(s: str) throws str -> int:
+    if len(s) == 0:
+        raise("empty")
+    return int(s)
+
+def get_name(ok: bool) throws str -> str:
+    if not ok:
+        raise("no name")
+    return "alice"
+
+def get_ratio(ok: bool) throws str -> float:
+    if not ok:
+        raise("no ratio")
+    return 2.5
+
+class Tag:
+    pub id: int
+
+class Rec:
+    pub minutes: int
+    pub name: str
+    pub ratio: float
+    pub tag: Tag
+    pub ok: bool
+
+def get_tag(ok: bool) throws str -> Tag:
+    if not ok:
+        raise("no tag")
+    mut t = Tag()
+    t.id = 77
+    return t
+
+def fill(r: Rec, s: str, name_ok: bool) throws str -> int:
+    r.minutes = parse_num(s)?
+    r.name = get_name(name_ok)?
+    r.ratio = get_ratio(name_ok)?
+    r.tag = get_tag(name_ok)?
+    return 1
+
+def fill_list(xs: List[int], s: str) throws str -> int:
+    xs[1] = parse_num(s)?
+    return 1
+
+def main():
+    mut t = TestRunner.init("81_try_field_assign")
+
+    t.section("obj.field = f()? : Ok path stores each field type")
+    mut r = Rec()
+    r.minutes = 5
+    r.name = "old"
+    r.ratio = 1.0
+    mut res: Result[int, str] = fill(r, "42", true)
+    t.assert_true(res.is_ok, "fill ok -> is_ok")
+    t.assert_eq_int(r.minutes, 42, "int field stored")
+    t.assert_eq_str(r.name, "alice", "str field stored")
+    t.assert_true(r.ratio > 2.4 and r.ratio < 2.6, "float field stored")
+    t.assert_eq_int(r.tag.id, 77, "class field stored")
+
+    t.section("obj.field = f()? : Err propagates, field left untouched")
+    mut r2 = Rec()
+    r2.minutes = 5
+    mut res2: Result[int, str] = fill(r2, "", true)
+    t.assert_true(res2.is_err, "int field Err -> function returns Err")
+    t.assert_eq_str(res2.err, "empty", "Err payload preserved")
+    t.assert_eq_int(r2.minutes, 5, "int field not overwritten")
+    mut r3 = Rec()
+    r3.name = "keep"
+    mut res3: Result[int, str] = fill(r3, "7", false)
+    t.assert_true(res3.is_err, "str field Err -> function returns Err")
+    t.assert_eq_str(res3.err, "no name", "str Err payload preserved")
+    t.assert_eq_int(r3.minutes, 7, "earlier field assignment already happened")
+    t.assert_eq_str(r3.name, "keep", "str field not overwritten")
+
+    t.section("list[i] = f()?")
+    mut xs: List[int] = [1, 2, 3]
+    mut lr: Result[int, str] = fill_list(xs, "9")
+    t.assert_true(lr.is_ok, "ok")
+    t.assert_eq_int(xs[1], 9, "element stored")
+    mut lr2: Result[int, str] = fill_list(xs, "")
+    t.assert_true(lr2.is_err, "Err propagates")
+    t.assert_eq_int(xs[1], 9, "element not overwritten")
+
+    t.summary()

@@ -47,6 +47,7 @@ All methods are **static** — called as `Str.method(...)` or `Fmt.method(...)`.
 | Method | Signature | Returns | Description |
 |---|---|---|---|
 | `Str.slice` | `(s: str, start: int, end: int) -> str` | `str` | Byte slice `[start, end)`. Clamps to valid range. |
+| `Str.substr` | `(s: str, start: int, count: int) -> str` | `str` | `count` bytes starting at `start` (offset + length form of `slice`). Clamps to valid range. |
 | `Str.repeat` | `(s: str, n: int) -> str` | `str` | Concatenate `s` with itself `n` times. |
 | `Str.reverse` | `(s: str) -> str` | `str` | Reverse the byte sequence. |
 
@@ -93,8 +94,9 @@ All methods are **static** — called as `Str.method(...)` or `Fmt.method(...)`.
 
 | Method | Signature | Returns | Description |
 |---|---|---|---|
-| `Str.split` | `(s: str, sep: str) -> List[str]` | `List[str]` | Split on every occurrence of `sep`. Returns a C-backed `List[str]`. |
-| `Str.split_to_vec` | `(s: str, sep: str) -> Vec[str]` | `Vec[str]` | Same split logic, but returns `Vec[str]` — compatible with `FloatTransform`, `Regex.split`, etc. |
+| `Str.split` | `(s: str, sep: str) -> List[str]` | `List[str]` | Split on the delimiter **characters** in `sep` (each byte of `sep` is a delimiter) and **drop empty pieces**: `Str.split("a,,b,", ",")` is `["a", "b"]`. Returns a C-backed `List[str]`. Use `Str.split_keep_empty` when empty fields matter (CSV-style data). |
+| `Str.split_to_vec` | `(s: str, sep: str) -> Vec[str]` | `Vec[str]` | Splits on every occurrence of the whole separator `sep` and **keeps empty pieces** (`"a,,b,"` -> 4 pieces); returns `Vec[str]` — compatible with `FloatTransform`, `Regex.split`, etc. |
+| `Str.split_keep_empty` | `(s: str, sep: str) -> Vec[str]` | `Vec[str]` | Explicitly-named empties-preserving split (same behaviour as `split_to_vec`). |
 | `Str.join` | `(parts: List[str], sep: str) -> str` | `str` | Join `parts` with `sep` between each adjacent pair. |
 | `Str.replace` | `(s: str, old: str, new_: str) -> str` | `str` | Replace **all** occurrences of `old` with `new_`. |
 | `Str.replace_first` | `(s: str, old: str, new_: str) -> str` | `str` | Replace only the **first** occurrence. |

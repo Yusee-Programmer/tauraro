@@ -6,6 +6,9 @@ from token import Token
 from core.vec import Vec
 from core.string import StringBuilder
 
+extern "C":
+    def _tr_str_to_float(s: str) -> float
+
 # --- Keyword table helper -------------------------------------------------------
 
 pub def keyword_to_token(s: str) -> Token:
@@ -227,6 +230,27 @@ pub class Lexer:
             while not self.at_end() and not char_is_newline(self.peek()):
                 self.advance()
 
+    # Consume `e[+-]digits` of a float literal (the exponent marker is at peek()).
+    pub def skip_float_exponent(self):
+        self.advance()
+        if self.peek() == 45 or self.peek() == 43:
+            self.advance()
+        while char_is_digit(self.peek()):
+            self.advance()
+
+    # Convert the literal text src[start..pos) (minus `_` separators) to a float with the
+    # C library's correctly-rounded strtod. The previous digit-by-digit accumulation
+    # (frac += d / divisor; x *= 10.0 per exponent step) compounded rounding error, so e.g.
+    # 1.0e+300 came out one ulp off and 0.1-style fractions were not the nearest double.
+    pub def float_from_text(self, start: int) -> float:
+        mut sb = StringBuilder.init(32)
+        mut i = start
+        while i < self.pos:
+            mut c = self.src.offset(i).read() as int
+            if c != 95: sb.append_char(c)
+            i = i + 1
+        return _tr_str_to_float(sb.to_string().as_str())
+
     pub def read_int(self) -> Token:
         # Hexadecimal: 0x / 0X
         if self.peek() == 48 and (self.peek_at(1) == 120 or self.peek_at(1) == 88):
@@ -265,6 +289,7 @@ pub class Lexer:
         else:
             # Decimal integer (with optional _ separators)
             # Use u64 accumulator to safely handle large literals like FNV-1a constants.
+            mut lit_start = self.pos
             mut val: u64 = 0 as u64
             while char_is_digit(self.peek()) or self.peek() == 95:
                 mut c = self.advance()
@@ -273,59 +298,16 @@ pub class Lexer:
             # Float with decimal point
             if self.peek() == 46 and char_is_digit(self.peek_at(1)):
                 self.advance()
-                mut frac = 0.0
-                mut divisor = 10.0
                 while char_is_digit(self.peek()) or self.peek() == 95:
-                    mut c = self.advance()
-                    if c != 95:
-                        frac = frac + (c - 48).to_float() / divisor
-                        divisor = divisor * 10.0
-                # Scientific notation after decimal: 1.5e3
-                mut result = (val as int).to_float() + frac
-                if self.peek() == 101 or self.peek() == 69:
                     self.advance()
-                    mut exp_neg = False
-                    if self.peek() == 45:
-                        self.advance()
-                        exp_neg = True
-                    elif self.peek() == 43:
-                        self.advance()
-                    mut exp = 0
-                    while char_is_digit(self.peek()):
-                        exp = exp * 10 + (self.advance() - 48)
-                    mut ei = 0
-                    if exp_neg:
-                        while ei < exp:
-                            result = result / 10.0
-                            ei = ei + 1
-                    else:
-                        while ei < exp:
-                            result = result * 10.0
-                            ei = ei + 1
-                return Token.FloatLit(result)
+                # Scientific notation after decimal: 1.5e3
+                if self.peek() == 101 or self.peek() == 69:
+                    self.skip_float_exponent()
+                return Token.FloatLit(self.float_from_text(lit_start))
             # Scientific notation for integer: 1e10
             if self.peek() == 101 or self.peek() == 69:
-                self.advance()
-                mut exp_neg = False
-                if self.peek() == 45:
-                    self.advance()
-                    exp_neg = True
-                elif self.peek() == 43:
-                    self.advance()
-                mut exp = 0
-                while char_is_digit(self.peek()):
-                    exp = exp * 10 + (self.advance() - 48)
-                mut result = (val as int).to_float()
-                mut ei = 0
-                if exp_neg:
-                    while ei < exp:
-                        result = result / 10.0
-                        ei = ei + 1
-                else:
-                    while ei < exp:
-                        result = result * 10.0
-                        ei = ei + 1
-                return Token.FloatLit(result)
+                self.skip_float_exponent()
+                return Token.FloatLit(self.float_from_text(lit_start))
             return Token.IntLit(val as int)
 
     pub def read_triple_string(self, quote: int) -> Token:
