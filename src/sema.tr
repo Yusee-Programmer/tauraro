@@ -4000,7 +4000,33 @@ extend Sema:
                         mut ret_from = 0
                         if self.fn_scope_base.len > 0:
                             ret_from = self.fn_scope_base.get(self.fn_scope_base.len - 1)
-                        self.append_drops_from_excl_multi(hb, ret_from, ret_excl)
+                        # A PRIMITIVE-valued return expression (`return b.v`, `return a + b.n`)
+                        # can never alias a local's heap memory, so evaluate it into a
+                        # temp FIRST, drop every owned local (including the ones the
+                        # expression read), then return the temp. Without this such
+                        # locals leaked on this path (bug log #14).
+                        mut ret_pre_done = false
+                        if ret_excl.len > 0:
+                            match _hs.read():
+                                case HirStmt.SReturn(prim_ret):
+                                    if prim_ret as usize != 0 as usize:
+                                        mut prim_ty = hir_expr_type(prim_ret)
+                                        if self.is_primitive_name(prim_ty.name) and prim_ty.name != "void" and prim_ty.name != "None" and prim_ty.name != "lambda":
+                                            mut pre_drops = HirBlock.init()
+                                            self.append_drops_from_excl_multi(pre_drops, ret_from, Vec[str].init(1))
+                                            if pre_drops.stmts.len > 0:
+                                                self.do_temp_ctr = self.do_temp_ctr + 1
+                                                mut rt_name = "_trret" + self.do_temp_ctr.to_str()
+                                                hb.push(box_hirstmt(HirStmt.SLet(rt_name, Ownership.Own, false, false, false, prim_ty, prim_ret)))
+                                                mut pdi = 0
+                                                while pdi < pre_drops.stmts.len:
+                                                    hb.push(pre_drops.stmts.get(pdi))
+                                                    pdi = pdi + 1
+                                                _hs = box_hirstmt(HirStmt.SReturn(box_hirexpr(HirExpr.EIdent(rt_name, prim_ty, false))))
+                                                ret_pre_done = true
+                                case _: pass
+                        if not ret_pre_done:
+                            self.append_drops_from_excl_multi(hb, ret_from, ret_excl)
                     case Stmt.SBreak(_):
                         if self.loop_scope_base.len > 0:
                             self.append_drops_from(hb, self.loop_scope_base.get(self.loop_scope_base.len - 1))
