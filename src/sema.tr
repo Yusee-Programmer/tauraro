@@ -2162,6 +2162,19 @@ extend Sema:
                 hb.push(box_hirstmt(HirStmt.SAutoDrop(nm, sym.ty.read().name)))
             ki = ki + 1
 
+    # Early-exit (`return`-with-reads, `break`, `continue`) drops are decided from the
+    # ownership flags known at that point in the body, which can be incomplete (a later
+    # statement may reveal the local is an alias of a container/callee-owned value, e.g.
+    # `j = jobs.get_at(i)` then `self.fire(j)`). Only release locals whose release is
+    # rc-balanced and so safe even then: `str` and plain (non-`free()`, non-collection)
+    # heap classes. User-`free()` classes, collections, locks ... keep their old behaviour.
+    pub def _early_exit_drop_ok(self, tn: str) -> bool:
+        if tn == "str": return true
+        if not self.classes.contains(tn): return false
+        if tn == "Vec" or tn == "Map" or tn == "List" or tn == "Dict" or tn == "Set" or tn == "Box" or tn == "Mutex" or tn == "RwLock" or tn == "Atomic" or tn == "Shared" or tn == "Weak" or tn == "Option" or tn == "Result" or tn == "Chan" or tn == "StringBuilder" or tn == "StringObj": return false
+        if self.class_has_free(tn): return false
+        return true
+
     # `break`/`continue` inside a `while`: the loop body SHARES the enclosing scope, so
     # append_drops_from (which drains whole scopes) never sees the heap locals declared
     # in the body, and they leaked on that path (bug log #15; only the fall-through end
@@ -2186,7 +2199,7 @@ extend Sema:
                     while pos < self.block_stack.len:
                         if self.block_stack.get(pos) == sym.decl_block_id: inside = true
                         pos = pos + 1
-                    if inside and self.is_droppable_sym(sym):
+                    if inside and self.is_droppable_sym(sym) and self._early_exit_drop_ok(sym.ty.read().name):
                         hb.push(box_hirstmt(HirStmt.SAutoDrop(nm, sym.ty.read().name)))
             ki = ki + 1
 
@@ -4049,8 +4062,29 @@ extend Sema:
                                     if prim_ret as usize != 0 as usize:
                                         mut prim_ty = hir_expr_type(prim_ret)
                                         if self.is_primitive_name(prim_ty.name) and prim_ty.name != "void" and prim_ty.name != "None" and prim_ty.name != "lambda":
+                                            mut all_drops = HirBlock.init()
+                                            self.append_drops_from_excl_multi(all_drops, ret_from, Vec[str].init(1))
+                                            # Drops that were NOT excluded before behave exactly as they
+                                            # did; a newly un-excluded local is only released when it is
+                                            # an rc-balanced owner (see _early_exit_drop_ok) -- anything
+                                            # that may be an alias of a container/callee-owned value
+                                            # keeps leaking on this path rather than risk a double free.
                                             mut pre_drops = HirBlock.init()
-                                            self.append_drops_from_excl_multi(pre_drops, ret_from, Vec[str].init(1))
+                                            mut adi = 0
+                                            while adi < all_drops.stmts.len:
+                                                mut ad = all_drops.stmts.get(adi)
+                                                mut keep_d = true
+                                                match ad.read():
+                                                    case HirStmt.SAutoDrop(adn, adt):
+                                                        mut was_excl = false
+                                                        mut aei = 0
+                                                        while aei < ret_excl.len:
+                                                            if ret_excl.get(aei) == adn: was_excl = true
+                                                            aei = aei + 1
+                                                        if was_excl and not self._early_exit_drop_ok(adt): keep_d = false
+                                                    case _: pass
+                                                if keep_d: pre_drops.push(ad)
+                                                adi = adi + 1
                                             if pre_drops.stmts.len > 0:
                                                 self.do_temp_ctr = self.do_temp_ctr + 1
                                                 mut rt_name = "_trret" + self.do_temp_ctr.to_str()
@@ -4276,6 +4310,21 @@ extend Sema:
                                 case Expr.EIdent(pc_isrc): pc_cont_nm = pc_isrc
                                 case _: pass
                         case _: pass
+                    # `x = self.items.get(i)` / `obj.table.get(k)`: the container is a FIELD
+                    # (not a bare local), but the element is just as much owned by it. A
+                    # collection (or user-`free()` class) element borrowed that way must not
+                    # be auto-dropped either -- Dict/List/Map/Set elements are NOT returned
+                    # retained, so releasing the alias frees the container's own element
+                    # (use-after-free on the next access; std/i18n Translator._tables).
+                    if pc_cont_nm == "" and (pc_meth == "get" or pc_meth == "first" or pc_meth == "last"):
+                        match hval.read():
+                            case HirExpr.EMethodCall(pc_ho, _, _, _):
+                                mut pc_hn = hir_expr_type(pc_ho).name
+                                if pc_hn == "Vec" or pc_hn == "List" or pc_hn == "Dict" or pc_hn == "Map" or pc_hn == "Set":
+                                    mut pc_fe = hir_expr_type(hval).name
+                                    if pc_fe == "Vec" or pc_fe == "List" or pc_fe == "Dict" or pc_fe == "Map" or pc_fe == "Set" or self.class_has_free(pc_fe):
+                                        self.set_borrows_region(name, "@borrowed")
+                            case _: pass
                     if pc_cont_nm != "" and (pc_meth == "get" or pc_meth == "first" or pc_meth == "last"):
                         mut pc_cont_sym = self.resolve(pc_cont_nm)
                         mut pc_cont_ty = pc_cont_sym.ty.read()
