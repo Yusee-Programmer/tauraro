@@ -58,6 +58,30 @@ added here as each phase lands.
   `next_after` / `prev_before` / `matches` / `next_n` in UTC (and fixed-offset
   variants). Standard day-of-month/day-of-week OR semantics.
 - Tests `tests/lang/72_base32_cbor.tr` and `tests/lang/73_protobuf_cron.tr`.
+- **`std.compress.lz4`** — pure-Tauraro LZ4 (no external library, all
+  platforms): raw block format (`Lz4.compress_block/decompress_block`) and the
+  frame format (`Lz4.compress_frame/decompress_frame`: independent 64 KiB
+  blocks, content size, optional XXH32 content checksum; decoder also handles
+  linked blocks, block checksums, concatenated and skippable frames). Verified
+  both directions against the reference liblz4 (block, HC and `LZ4F_*` frames
+  with every block-size / linked / checksum combination) and under
+  ASan/UBSan. Test: `tests/lang/74_lz4.tr`.
+- **`std.compress.zstd`** — pure-Tauraro Zstandard (RFC 8878). Complete
+  decoder (Raw/RLE/compressed blocks, Huffman 1- and 4-stream literals incl.
+  treeless reuse, FSE-compressed/RLE/repeat/predefined sequence tables, repeat
+  offsets, XXH64 content checksum, concatenated + skippable frames; dictionaries
+  are reported as unsupported) and a simple valid encoder (RLE / Raw blocks, or
+  greedy-LZ77 sequences with the predefined FSE tables and raw literals).
+  Cross-checked against `zstd` 1.5.7 at levels 1..22 (incl. `--ultra`), `--fast`, `--long`,
+  small windows, no-checksum and streaming frames; encoder output verified with
+  `zstd -d`. Test: `tests/lang/75_zstd.tr`.
+- **`std.compress.xxhash`** (`Xxh32`, `Xxh64`) and **`std.compress.common`**
+  (`CBuf` growable byte buffer, `CResult{ok, err, data}` explicit-length
+  result) shared by the codecs.
+- **`std.compress.Compress`** — algorithm-by-name API
+  (`Compress.compress/decompress/compress_with/algorithms/supports`) over
+  `"lz4"`, `"lz4-block"`, `"zstd"`; existing `Zlib`/`Gzip`/`Zip` exports are
+  unchanged.
 
 ## [0.0.9]
 
