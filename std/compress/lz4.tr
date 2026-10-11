@@ -1,0 +1,328 @@
+# std.compress.lz4 — LZ4 block + frame format, pure Tauraro.
+#
+# Implements the LZ4 block format
+#   (https://github.com/lz4/lz4/blob/dev/doc/lz4_Block_format.md)
+# and the LZ4 frame format
+#   (https://github.com/lz4/lz4/blob/dev/doc/lz4_Frame_format.md)
+# with no external library: portable on every platform CI covers. Checksums
+# use XXH32 (std.compress.xxhash).
+#
+# Binary data convention (same as std.compress.zlib/gzip/zip): inputs are a
+# `str` used as a raw byte buffer plus an EXPLICIT byte length. Outputs are a
+# `CResult` (std.compress.common): `res.ok`, `res.err`, `res.len()`,
+# `res.to_str()`, `res.data` (a CBuf with `.data`/`.len`), `res.free()`.
+#
+# Usage:
+#   from std.compress.lz4 import Lz4
+#
+#   # Frame format (what the `lz4` CLI reads/writes; self-describing)
+#   mut c = Lz4.compress_frame(data, dlen, true)          # true = content checksum
+#   mut d = Lz4.decompress_frame(c.to_str(), c.len(), 1 << 26)
+#   if d.ok: print(d.to_str())
+#   c.free()
+#   d.free()
+#
+#   # Raw block format (caller must remember the original size)
+#   mut b = Lz4.compress_block(data, dlen)
+#   mut o = Lz4.decompress_block(b.to_str(), b.len(), dlen)
+#
+# Encoder: greedy, single-probe hash-table matcher (the "LZ4 fast" strategy):
+# output is a spec-conformant stream any LZ4 decoder accepts, ratio comparable
+# to `lz4 -1`. The frame encoder writes independent 64 KiB blocks, content
+# size, and (optionally) the content checksum; incompressible blocks are
+# stored uncompressed. Decoder: validates every offset/length against the
+# input and a caller-supplied `max_out` limit (decompression-bomb guard), checks
+# the header checksum, optional block checksums and content checksum, decodes
+# concatenated frames and skips skippable frames. Dictionaries (DictID) are
+# not supported (reported as an error).
+
+from std.compress.common import CBuf, CResult, rd8, rd16le, rd32le, ptr_add, mul32
+from std.compress.xxhash import Xxh32
+
+# ── block format ───────────────────────────────────────────────────────────
+
+def _lz4_hash(seq: int) -> int:
+    return mul32(seq, 2654435761) >> 18          # 14-bit table index
+
+# Emit a length-extension run (value already has the nibble's 15 removed).
+def _lz4_push_len(out: CBuf, rem: int):
+    mut r = rem
+    while r >= 255:
+        out.push_u8(255)
+        r = r - 255
+    out.push_u8(r)
+
+# One sequence: `lit_len` literals from s[anchor..], then (unless `offset` is
+# 0, meaning "last sequence: literals only") a match of `ml` bytes (>= 4) at
+# distance `offset`.
+def _lz4_emit(out: CBuf, s: Pointer[char], anchor: int, lit_len: int, offset: int, ml: int):
+    mut tl = lit_len
+    if tl > 15: tl = 15
+    mut tm = 0
+    if offset != 0:
+        tm = ml - 4
+        if tm > 15: tm = 15
+    out.push_u8((tl << 4) | tm)
+    if lit_len >= 15:
+        _lz4_push_len(out, lit_len - 15)
+    out.push_raw(ptr_add(s, anchor), lit_len)
+    if offset != 0:
+        out.push_u16le(offset)
+        if ml - 4 >= 15:
+            _lz4_push_len(out, ml - 4 - 15)
+
+# Compress n bytes at `s` as ONE raw LZ4 block appended to `out`.
+# `table` is a caller-provided scratch List[int] of 16384 entries (reset here).
+def _lz4_compress_into(out: CBuf, s: Pointer[char], n: int, table: List[int]):
+    mut anchor = 0
+    if n >= 13:
+        mut hi = 0
+        while hi < 16384:
+            table[hi] = 0
+            hi = hi + 1
+        mut mflimit = n - 12          # a match may start only before this
+        mut matchlimit = n - 5        # a match may extend only up to this
+        table[_lz4_hash(rd32le(s, 0))] = 1
+        mut ip = 1
+        while ip < mflimit:
+            mut seq = rd32le(s, ip)
+            mut h = _lz4_hash(seq)
+            mut ref = table[h] - 1
+            table[h] = ip + 1
+            if ref >= 0 and ip - ref <= 65535 and rd32le(s, ref) == seq:
+                mut mp = ip
+                mut rp = ref
+                # extend backwards over still-unemitted literals
+                while mp > anchor and rp > 0 and rd8(s, mp - 1) == rd8(s, rp - 1):
+                    mp = mp - 1
+                    rp = rp - 1
+                mut ml = 4 + (ip - mp)
+                while mp + ml < matchlimit and rd8(s, rp + ml) == rd8(s, mp + ml):
+                    ml = ml + 1
+                _lz4_emit(out, s, anchor, mp - anchor, mp - rp, ml)
+                ip = mp + ml
+                anchor = ip
+                if ip - 2 >= 0 and ip - 2 + 4 <= n:
+                    table[_lz4_hash(rd32le(s, ip - 2))] = ip - 1
+            else:
+                ip = ip + 1
+    _lz4_emit(out, s, anchor, n - anchor, 0, 0)
+
+# Decode one raw block (src[0..sn)) appending to `out`. `hist` is the index
+# in `out` before which back-references must NOT reach. `limit` is the max
+# total size `out` may reach. Returns "" on success or an error message.
+def _lz4_decompress_into(out: CBuf, src: Pointer[char], sn: int, hist: int, limit: int) -> str:
+    mut ip = 0
+    if sn == 0:
+        return "lz4: empty block"
+    while true:
+        if ip >= sn: return "lz4: block ends after a match (missing final literals)"
+        mut token = rd8(src, ip)
+        ip = ip + 1
+        mut lit = token >> 4
+        if lit == 15:
+            while true:
+                if ip >= sn: return "lz4: truncated literal length"
+                mut b = rd8(src, ip)
+                ip = ip + 1
+                lit = lit + b
+                if lit > (1 << 40): return "lz4: literal length overflow"
+                if b != 255: break
+        if lit > sn - ip: return "lz4: literals run past end of input"
+        if out.len + lit > limit: return "lz4: output exceeds limit"
+        out.push_raw(ptr_add(src, ip), lit)
+        ip = ip + lit
+        if ip == sn:
+            return ""                 # last sequence has literals only
+        if ip + 2 > sn: return "lz4: truncated match offset"
+        mut offset = rd16le(src, ip)
+        ip = ip + 2
+        if offset == 0: return "lz4: zero match offset"
+        if offset > out.len - hist: return "lz4: match offset before start of data"
+        mut ml = token & 15
+        if ml == 15:
+            while true:
+                if ip >= sn: return "lz4: truncated match length"
+                mut b2 = rd8(src, ip)
+                ip = ip + 1
+                ml = ml + b2
+                if ml > (1 << 40): return "lz4: match length overflow"
+                if b2 != 255: break
+        ml = ml + 4
+        if out.len + ml > limit: return "lz4: output exceeds limit"
+        out.copy_back(offset, ml)
+    return ""
+
+# ── frame format ───────────────────────────────────────────────────────────
+
+pub class Lz4:
+    _dummy: int
+
+extend Lz4:
+    # Worst-case size of Lz4.compress_block output for `n` input bytes.
+    pub def max_compressed_size(n: int) -> int:
+        return n + n / 255 + 16
+
+    # Compress `n` bytes of `data` into one raw LZ4 block.
+    pub def compress_block(data: str, n: int) -> CResult:
+        mut out = CBuf.init(Lz4.max_compressed_size(n))
+        mut table: List[int] = []
+        mut i = 0
+        while i < 16384:
+            table.append(0)
+            i = i + 1
+        _lz4_compress_into(out, data as Pointer[char], n, table)
+        return CResult.success(out)
+
+    # Decompress a raw LZ4 block. `max_out` bounds the output (pass the known
+    # original size); the call fails if the block would expand beyond it.
+    pub def decompress_block(data: str, n: int, max_out: int) -> CResult:
+        mut out = CBuf.init(64)
+        mut msg = _lz4_decompress_into(out, data as Pointer[char], n, 0, max_out)
+        if msg != "":
+            return CResult.failure(msg, out)
+        return CResult.success(out)
+
+    # Compress into a complete LZ4 frame: independent 64 KiB blocks, content
+    # size recorded, XXH32 content checksum when `checksum` is true.
+    pub def compress_frame(data: str, n: int, checksum: bool) -> CResult:
+        mut s = data as Pointer[char]
+        mut out = CBuf.init(Lz4.max_compressed_size(n) + 32)
+        out.push_u32le(0x184D2204)
+        mut flg = 0x40 | 0x20 | 0x08                  # v01, indep blocks, content size
+        if checksum: flg = flg | 0x04
+        mut desc = CBuf.init(16)
+        desc.push_u8(flg)
+        desc.push_u8(0x40)                            # BD: 64 KiB max block
+        desc.push_u64le(n)
+        out.push_raw(desc.data, desc.len)
+        out.push_u8((Xxh32.hash_ptr(desc.data, desc.len, 0) >> 8) & 0xFF)
+        desc.free()
+
+        mut table: List[int] = []
+        mut ti = 0
+        while ti < 16384:
+            table.append(0)
+            ti = ti + 1
+        mut tmp = CBuf.init(65536 + 1024)
+        mut pos = 0
+        while pos < n:
+            mut bl = n - pos
+            if bl > 65536: bl = 65536
+            tmp.len = 0
+            _lz4_compress_into(tmp, ptr_add(s, pos), bl, table)
+            if tmp.len < bl:
+                out.push_u32le(tmp.len)
+                out.push_raw(tmp.data, tmp.len)
+            else:
+                out.push_u32le(bl | 0x80000000)
+                out.push_raw(ptr_add(s, pos), bl)
+            pos = pos + bl
+        tmp.free()
+        out.push_u32le(0)                             # EndMark
+        if checksum:
+            out.push_u32le(Xxh32.hash_ptr(s, n, 0))
+        return CResult.success(out)
+
+    # Decompress one or more concatenated LZ4 frames (skippable frames are
+    # ignored). Verifies header/block/content checksums when present.
+    # `max_out` bounds the total output.
+    pub def decompress_frame(data: str, n: int, max_out: int) -> CResult:
+        mut src = data as Pointer[char]
+        mut out = CBuf.init(256)
+        mut pos = 0
+        mut frames = 0
+        while pos < n:
+            if pos + 4 > n:
+                return CResult.failure("lz4: truncated frame magic", out)
+            mut magic = rd32le(src, pos)
+            if magic >= 0x184D2A50 and magic <= 0x184D2A5F:
+                if pos + 8 > n:
+                    return CResult.failure("lz4: truncated skippable frame", out)
+                mut skip = rd32le(src, pos + 4)
+                if pos + 8 + skip > n:
+                    return CResult.failure("lz4: truncated skippable frame", out)
+                pos = pos + 8 + skip
+                continue
+            if magic != 0x184D2204:
+                return CResult.failure("lz4: bad frame magic", out)
+            pos = pos + 4
+            if pos + 3 > n:
+                return CResult.failure("lz4: truncated frame header", out)
+            mut flg = rd8(src, pos)
+            mut bd = rd8(src, pos + 1)
+            if (flg >> 6) != 1:
+                return CResult.failure("lz4: unsupported frame version", out)
+            if (flg & 0x02) != 0 or (bd & 0x8F) != 0:
+                return CResult.failure("lz4: reserved header bits set", out)
+            mut indep = (flg >> 5) & 1
+            mut has_bchk = (flg >> 4) & 1
+            mut has_csize = (flg >> 3) & 1
+            mut has_cchk = (flg >> 2) & 1
+            mut has_dict = flg & 1
+            mut bsid = (bd >> 4) & 7
+            if bsid < 4:
+                return CResult.failure("lz4: invalid block size id", out)
+            mut bmax = 65536
+            if bsid == 5: bmax = 262144
+            if bsid == 6: bmax = 1048576
+            if bsid == 7: bmax = 4194304
+            mut dlen = 2
+            if has_csize == 1: dlen = dlen + 8
+            if has_dict == 1: dlen = dlen + 4
+            if pos + dlen + 1 > n:
+                return CResult.failure("lz4: truncated frame header", out)
+            mut hc = rd8(src, pos + dlen)
+            if ((Xxh32.hash_ptr(ptr_add(src, pos), dlen, 0) >> 8) & 0xFF) != hc:
+                return CResult.failure("lz4: frame header checksum mismatch", out)
+            if has_dict == 1:
+                return CResult.failure("lz4: dictionaries are not supported", out)
+            mut csize = -1
+            if has_csize == 1:
+                csize = rd32le(src, pos + 2) | (rd32le(src, pos + 6) << 32)
+            pos = pos + dlen + 1
+            mut fstart = out.len
+            while true:
+                if pos + 4 > n:
+                    return CResult.failure("lz4: truncated block header", out)
+                mut bs = rd32le(src, pos)
+                pos = pos + 4
+                if bs == 0: break
+                mut raw = (bs & 0x80000000) != 0
+                mut bsz = bs & 0x7FFFFFFF
+                if bsz > bmax:
+                    return CResult.failure("lz4: block larger than declared maximum", out)
+                if pos + bsz > n:
+                    return CResult.failure("lz4: truncated block", out)
+                if has_bchk == 1:
+                    if pos + bsz + 4 > n:
+                        return CResult.failure("lz4: truncated block checksum", out)
+                    if Xxh32.hash_ptr(ptr_add(src, pos), bsz, 0) != rd32le(src, pos + bsz):
+                        return CResult.failure("lz4: block checksum mismatch", out)
+                mut bstart = out.len
+                if raw:
+                    if out.len + bsz > max_out:
+                        return CResult.failure("lz4: output exceeds limit", out)
+                    out.push_raw(ptr_add(src, pos), bsz)
+                else:
+                    mut hist = fstart
+                    if indep == 1: hist = bstart
+                    mut lim = max_out
+                    if bstart + bmax < lim: lim = bstart + bmax
+                    mut msg = _lz4_decompress_into(out, ptr_add(src, pos), bsz, hist, lim)
+                    if msg != "":
+                        return CResult.failure(msg, out)
+                pos = pos + bsz
+                if has_bchk == 1: pos = pos + 4
+            if csize >= 0 and out.len - fstart != csize:
+                return CResult.failure("lz4: content size mismatch", out)
+            if has_cchk == 1:
+                if pos + 4 > n:
+                    return CResult.failure("lz4: truncated content checksum", out)
+                if Xxh32.hash_ptr(ptr_add(out.data, fstart), out.len - fstart, 0) != rd32le(src, pos):
+                    return CResult.failure("lz4: content checksum mismatch", out)
+                pos = pos + 4
+            frames = frames + 1
+        if frames == 0:
+            return CResult.failure("lz4: no frame found", out)
+        return CResult.success(out)
