@@ -22,7 +22,7 @@ building libraries with `taupkg`)
 | [`std.iter`](iter.md) | Range construction, int/float vector transforms, folds, prefix sums, normalization |
 | [`std.log`](log.md) | Leveled structured logging: text/JSON formats, stdout/file sinks, per-target filtering (`Logger`/`Fields`) |
 | [`std.math`](math.md) | Integer math, floating-point math, bitwise operations, statistics, random, arbitrary-precision integers (`BigInt`) |
-| [`std.net`](net.md) | TCP, UDP, DNS, URL, HTTP client (7 verbs), HTTPS client (OpenSSL), HTTP server + router, WebSocket (RFC 6455 client+server), SMTP client |
+| [`std.net`](net.md) | TCP, UDP, DNS, URL, HTTP client (7 verbs), URL-based `HttpSession` (redirects, cookie jar, form/multipart bodies, streaming downloads), HTTPS client (OpenSSL), HTTP server + router, WebSocket (RFC 6455 client+server), SMTP client |
 | [`std.prof`](prof.md) | Profiling: statistical CPU sampling (`CpuProfiler`), process memory stats (`MemProf`), metrics (`Counter`/`Gauge`/`Histogram`/`Registry`); also `tauraroc --prof` |
 | [`std.regex`](regex.md) | POSIX extended regex: match, find, replace, split, count, capture groups (numbered + named), `Match`/`Captures`, backreference replace |
 | [`std.serialize`](serialize.md) | Value serialization: `Pickle` (own compact binary format for scalars + nested List/Dict/Vec/Set), `Msgpack` (real, wire-compatible MessagePack codec) |
