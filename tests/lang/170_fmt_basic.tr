@@ -1,0 +1,101 @@
+# tests/lang/170_fmt_basic.tr
+# `tauraroc fmt` — layout rules, observed through the real compiler binary:
+# spacing, indentation, blank lines, comment placement, string/char preservation,
+# method chains, bracket continuation, idempotency. Skips (without failing) when
+# the compiler binary is not in the working directory.
+
+from std.test import TestRunner
+from std.core.io import read_file, write_file, file_exists
+from std.sys.process import Process
+from std.sys.platform import Platform
+from std.sys.fs import Fs
+
+def tc_bin() -> str:
+    if Platform.is_windows():
+        return ".\\tauraroc.exe"
+    return "./tauraroc"
+
+def tc_present() -> bool:
+    if Platform.is_windows():
+        return file_exists("tauraroc.exe")
+    return file_exists("tauraroc")
+
+def strip_cr(s: str) -> str:
+    return s.replace("\r", "")
+
+# Format `src` through a temp file; returns the formatter's stdout.
+def fmt_of(src: str, flags: str) -> str:
+    write_file("_t170_in.tr", src)
+    mut out = Process.shell_output(tc_bin() + " fmt " + flags + " _t170_in.tr")
+    return strip_cr(out)
+
+def main():
+    mut t = TestRunner.init("170_fmt_basic")
+    if not tc_present():
+        t.skip("tauraroc binary not found in the working directory")
+        t.summary()
+        return
+
+    t.section("spacing around operators, commas, colons, calls")
+    t.assert_eq_str(fmt_of("def f(a:int,b:int)->int:\n    return a+b*2\n", ""),
+                    "def f(a: int, b: int) -> int:\n    return a + b * 2\n", "signature + arithmetic")
+    t.assert_eq_str(fmt_of("def g():\n    x=foo( 1,2 ,3 )\n    y = bar [0]\n", ""),
+                    "def g():\n    x = foo(1, 2, 3)\n    y = bar[0]\n", "call and index spacing")
+    t.assert_eq_str(fmt_of("def g():\n    x=-1\n    y=a-1\n    z=a - -b\n    w=f(-x, *rest)\n", ""),
+                    "def g():\n    x = -1\n    y = a - 1\n    z = a - -b\n    w = f(-x, *rest)\n", "unary vs binary minus/star")
+    t.assert_eq_str(fmt_of("def g():\n    d={\"a\":1,\"b\":2}\n", ""),
+                    "def g():\n    d = {\"a\": 1, \"b\": 2}\n", "dict literal colons")
+    t.assert_eq_str(fmt_of("def g():\n    if x==1 and not(y):\n        pass\n", ""),
+                    "def g():\n    if x == 1 and not (y):\n        pass\n", "keyword before paren")
+    t.assert_eq_str(fmt_of("def g():\n    s=Foo.init( ).get ( 1 )\n", ""),
+                    "def g():\n    s = Foo.init().get(1)\n", "dots and empty parens")
+    t.assert_eq_str(fmt_of("def g():\n    x=Map[str,int]()\n", ""),
+                    "def g():\n    x = Map[str, int]()\n", "generic type arguments")
+
+    t.section("indentation, tabs and blank lines")
+    t.assert_eq_str(fmt_of("def f():\n  a=1\n  if a:\n     b=2\n", ""),
+                    "def f():\n    a = 1\n    if a:\n        b = 2\n", "2/5-space indents become 4-space levels")
+    t.assert_eq_str(fmt_of("def f():\n\ta=1\n\tif a:\n\t\tb=2\n", ""),
+                    "def f():\n    a = 1\n    if a:\n        b = 2\n", "tabs become 4-space levels")
+    t.assert_eq_str(fmt_of("x=1\n\n\n\n\ny=2\n", ""), "x = 1\n\n\ny = 2\n", "top-level blank runs capped at two")
+    t.assert_eq_str(fmt_of("def f():\n    a=1\n\n\n\n    b=2\n", ""),
+                    "def f():\n    a = 1\n\n    b = 2\n", "nested blank runs capped at one")
+    t.assert_eq_str(fmt_of("x=1   \ny=2\n\n\n", ""), "x = 1\ny = 2\n", "trailing whitespace and blank lines at EOF")
+    t.assert_eq_str(fmt_of("x=1", ""), "x = 1\n", "final newline added")
+    t.assert_eq_str(fmt_of("def a():\n    pass\ndef b():\n    pass\n", ""),
+                    "def a():\n    pass\n\ndef b():\n    pass\n", "blank line inserted between bodied defs")
+    t.assert_eq_str(fmt_of("class A:\n    pub x: int\nextend A:\n    pub def f(self):\n        pass\n    pub def g(self):\n        pass\n", ""),
+                    "class A:\n    pub x: int\n\nextend A:\n    pub def f(self):\n        pass\n\n    pub def g(self):\n        pass\n",
+                    "blank lines before extend and methods")
+
+    t.section("comments")
+    t.assert_eq_str(fmt_of("def f():\n    a=1 # one\n    b=2    #   two\n", ""),
+                    "def f():\n    a = 1  # one\n    b = 2  #   two\n", "trailing comments get two spaces, text untouched")
+    t.assert_eq_str(fmt_of("def f():\n        # leading\n    a=1\n", ""),
+                    "def f():\n    # leading\n    a = 1\n", "comment re-indented to the following statement")
+    t.assert_eq_str(fmt_of("def f():\n    if a:\n        b=1\n        # end of block\n    # after block\n    c=2\n", ""),
+                    "def f():\n    if a:\n        b = 1\n        # end of block\n    # after block\n    c = 2\n", "comments at block ends keep their level")
+    t.assert_eq_str(fmt_of("# header\n#\n#   indented text\nx=1\n", ""),
+                    "# header\n#\n#   indented text\nx = 1\n", "comment text byte-identical")
+
+    t.section("literals are never modified")
+    t.assert_eq_str(fmt_of("x=\"a  b   c\"\ny='z'\nz=f\"{a+b}  {c}\"\n", ""),
+                    "x = \"a  b   c\"\ny = 'z'\nz = f\"{a+b}  {c}\"\n", "string, char and f-string contents")
+    t.assert_eq_str(fmt_of("x=\"\"\"line1\n   line2\n\"\"\"\ny=1\n", ""),
+                    "x = \"\"\"line1\n   line2\n\"\"\"\ny = 1\n", "triple-quoted string spanning lines")
+    t.assert_eq_str(fmt_of("x=0xFF+1_000+1.5e-3\n", ""), "x = 0xFF + 1_000 + 1.5e-3\n", "numeric literals")
+
+    t.section("method chains and bracket continuation")
+    t.assert_eq_str(fmt_of("def f():\n    z=Foo.init()\n      .a(1)\n          .b(2)\n", ""),
+                    "def f():\n    z = Foo.init()\n        .a(1)\n        .b(2)\n", "leading-dot chain continuation")
+    t.assert_eq_str(fmt_of("def f():\n    y=[1,\n  2,   # two\n  3]\n", ""),
+                    "def f():\n    y = [1,\n        2,  # two\n        3]\n", "continuation lines re-indented, comment kept")
+
+    t.section("idempotency")
+    mut once = fmt_of("def f(a:int,b:int)->int:\n    x=a+b # c\n    return(x)\n", "")
+    write_file("_t170_in.tr", once)
+    mut twice = strip_cr(Process.shell_output(tc_bin() + " fmt _t170_in.tr"))
+    t.assert_eq_str(twice, once, "formatting the output again changes nothing")
+    Fs.delete("_t170_in.tr")
+
+    t.summary()

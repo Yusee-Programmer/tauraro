@@ -13,6 +13,7 @@ from diag import c_red, c_yellow, c_green, c_cyan, c_dim, c_bold, spaces, repeat
 from sema import Sema
 from ast import Decl
 from fmt import Formatter
+from tokfmt import tf_main
 from bindgen import run_bindgen, run_bindgen_cpp
 from codegen.c import CGenerator
 from codegen.cpp_export import CppExporter
@@ -73,7 +74,7 @@ pub def print_version():
 
 pub def print_usage():
     print("Usage: tauraroc <file.tr> [options]")
-    print("       tauraroc fmt [-w] <file.tr>   Format source (stdout, or -w in place)")
+    print("       tauraroc fmt [-w|--check] [--width N] [--sort-imports] <file.tr|dir>...   Format source (see `tauraroc fmt -h`)")
     print("       tauraroc lint <file.tr>       Analyze and report warnings/errors")
     print("       tauraroc bindgen <hdr.h>      Generate FFI bindings from a C header (-o out.tr)")
     print("       tauraroc bindgen <hdr.hpp> -h cpp  Bind a C++ header (auto C++->C shim via libclang)")
@@ -1669,6 +1670,15 @@ pub def main(args: Vec[str]):
             run_bindgen(bg_header, bg_out, bg_cc, bg_extra, bg_pkglibs, bg_macros)
         _tr_exit(0)
     if subcmd == "fmt":
+        # Default: the token-based, verified, idempotent formatter (tokfmt.tr).
+        # `--ast` keeps the legacy AST printer (run_fmt below) for a single file.
+        mut legacy_ast = false
+        mut ak = 2
+        while ak < args.len:
+            if args.get(ak) == "--ast": legacy_ast = true
+            ak = ak + 1
+        if not legacy_ast:
+            _tr_exit(tf_main(args))
         mut write_in_place = false
         mut fpath = ""
         mut fk = 2

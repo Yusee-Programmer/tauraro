@@ -23,6 +23,7 @@ Documentation](../std/README.md) instead.
 | 08 | [Runtime Tiers & Freestanding](08_runtime_tiers_and_freestanding.md) | `TAURARO_KERNEL`/`NO_LIBC`/`NO_THREADS`/`NO_NET` tiers, bare-metal builds |
 | 09 | [GPU Kernel Backend](09_gpu_backend.md) | `@kernel` → LLVM IR → PTX/SPIR-V (`src/codegen/gpu`), the host→GPU deltas, runtime loading, validation |
 | 10 | [Wrapping C/C++ Libraries](10_wrapping_c_cpp_libraries.md) | Zero-manual-link packages around an existing C/C++ library — vendoring the source vs. binding a system-installed library via `pkg-config`, then distributing either with `taupkg` |
+| 11 | [Developer Tools](11_developer_tools.md) | `tauraroc fmt` (formatter), `tauraroc doc` (API docs), `tauraroc cov` (coverage) |
 
 ---
 

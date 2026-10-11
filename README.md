@@ -114,7 +114,7 @@ tauraroc --run hello.tr
 
 ```
 tauraroc <file.tr> [options]
-tauraroc fmt [-w] <file.tr>     Format source (stdout, or -w in place)
+tauraroc fmt [-w|--check] <file|dir>...   Format source (stdout, -w in place, --check for CI)
 tauraroc lint <file.tr>         Analyze and report warnings/errors
 
   --version              Print compiler version and exit

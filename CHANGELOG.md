@@ -100,6 +100,18 @@ added here as each phase lands.
 - **`std.text.shlex`: shell-style word splitting.** `Shlex.split`/`parse`/`split_comments`, `quote`/`join`
   (POSIX) and `split_windows`/`quote_windows`/`join_windows` (Windows command-line rules). Tested by
   `tests/lang/148_shlex.tr`.
+- **`tauraroc fmt` rewritten: an idempotent, comment-preserving, self-verifying formatter.**
+  Token/layout based (new `src/srclex.tr` lexeme layer + `src/tokfmt.tr`) instead of printing
+  the AST: 4-space indentation, canonical spacing, blank-line normalisation, comment placement,
+  optional line wrapping at brackets (`--width`, default 100) and optional `--sort-imports`.
+  New `--check` (exit 1 when a file would change), `-w` for files and directories, `-` for
+  stdin/stdout. Every file is proved before it is written: the output must re-lex to the identical
+  real-lexer token stream, parse, and be a fixed point, otherwise the file is left untouched.
+  `scripts/fmt_guarantee.sh` formats a copy of `std/`, `tests/`, `examples/` and `src/` and checks
+  the fixed point plus byte-identical generated C for every test program. The previous AST printer
+  stays available as `tauraroc fmt --ast`. `scripts/check_fmt.sh` is a CI-ready `--check` wrapper
+  (not enabled in the workflow). Tests: `tests/lang/170_fmt_basic.tr`, `171_fmt_modes.tr`,
+  `172_fmt_corpus.tr`. See `docs/dev/11_developer_tools.md`.
 - **`std.async.retry`** — `RetryPolicy` (max attempts, fixed/exponential backoff
   with cap, optional jitter, retry-on predicate, overall deadline, per-attempt
   timeout), `call_with_timeout` / `call_bool_with_timeout`, and a thread-safe
