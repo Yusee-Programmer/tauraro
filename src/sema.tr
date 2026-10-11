@@ -212,6 +212,7 @@ def _stmt_alias_assigns(s: Pointer[Stmt], out: Map[str, bool]):
         case _: pass
 
 pub class Sema:
+    pub sendable_tparams:   Vec[str]        # type parameters of the generic class whose Sendable fields are being checked (treated as Sendable)
     pub alias_assigned:     Map[str, bool]  # locals of the function being lowered that are ever re-pointed at an alias (see _block_alias_assigns)
     pub globals:            Map[str, Symbol]
     pub scopes:             Vec[Scope]
@@ -357,6 +358,7 @@ extend Sema:
         s.in_recv_pos       = false
         s.container_borrows = Map[str, str].init(16)
         s.alias_assigned = Map[str, bool].init(8)
+        s.sendable_tparams = Vec[str].init(0)
         s.capturing_moves   = false
         s.branch_moved_buf  = Vec[str].init(0)
         s.capturing_inits   = false
@@ -663,6 +665,10 @@ extend Sema:
     # -- Thread-safety / Sendable checks --------------------------------------
 
     pub def is_sendable_type(self, ty_name: str) -> bool:
+        mut tpi = 0
+        while tpi < self.sendable_tparams.len:
+            if self.sendable_tparams.get(tpi) == ty_name: return true
+            tpi = tpi + 1
         if ty_name == "int" or ty_name == "float" or ty_name == "bool" or ty_name == "char" or ty_name == "str": return true
         if ty_name == "void" or ty_name == "" or ty_name == "auto" or ty_name == "usize" or ty_name == "isize": return true
         if ty_name == "Atomic" or ty_name == "Mutex" or ty_name == "RwLock": return true
@@ -4033,9 +4039,12 @@ extend Sema:
         while _ifc_i < c.iface_names.len:
             mut _ifc_nm = c.iface_names.get(_ifc_i)
             if _ifc_nm == "Sendable":
-                # Validate all fields are Sendable; pass generics (T fields allowed)
-                if c.generics.len == 0:
-                    self.check_class_sendable_fields(c)
+                # Validate all fields are Sendable. A generic class is checked too (it used to
+                # be skipped entirely): fields whose type is one of the class's own type
+                # parameters are accepted here, since T is only known per instantiation.
+                self.sendable_tparams = c.generics
+                self.check_class_sendable_fields(c)
+                self.sendable_tparams = Vec[str].init(0)
             elif _ifc_nm == "UnsafeSendable":
                 # Marker (Tauraro's `unsafe impl Send/Sync`): the author asserts this
                 # class is thread-safe. No compiler field check — the assertion is the

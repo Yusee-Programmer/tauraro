@@ -261,6 +261,11 @@ class Counter implements Sendable:
 **FIX:** Wrap the field in `Mutex[T]`/`RwLock[T]`/`Atomic[T]`, or remove
 `implements Sendable` if the class is only used on one thread.
 
+Generic classes are checked too. A field whose type is one of the class's own type parameters
+(`pub value: T`) is accepted at the definition, because `T` is only known per instantiation;
+every other field must be `Sendable`. `implements Sendable, UnsafeSendable` skips the field check
+entirely (the author vouches for the class, e.g. for a `def() -> V` field).
+
 ---
 
 ### [T-3] Primitive Field in a Sendable Class (warning)

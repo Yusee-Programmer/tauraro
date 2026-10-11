@@ -1,0 +1,13 @@
+# EXPECT: pass
+# A generic `implements Sendable` class whose fields are Sendable, or are one of its own type
+# parameters (T is only known per instantiation), is accepted; `UnsafeSendable` still opts out.
+class Slot[T] implements Sendable:
+    pub value: T
+    pub label: str
+    pub other: Shared[T]
+
+class Job[V] implements Sendable, UnsafeSendable:
+    pub run: def() -> V
+
+def main():
+    print(1)

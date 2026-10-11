@@ -1,0 +1,11 @@
+# EXPECT: [T-2]
+# `implements Sendable` is checked on generic classes too: a non-Sendable field (here a raw
+# Vec) is rejected even though the class has a type parameter. (It used to be skipped.)
+from std.core.vec import Vec
+
+class Slot[T] implements Sendable:
+    pub value: T
+    pub history: Vec[int]
+
+def main():
+    print(1)
