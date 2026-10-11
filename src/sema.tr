@@ -208,6 +208,8 @@ pub class Sema:
     pub variadic_fns:    Map[str, str]   # fn name -> index of trailing variadic param (= fixed-arg count, as string)
     pub variadic_elem_ty: Map[str, Pointer[AstType]] # fn name -> element type of the variadic List[T] param
     pub fn_defs:         Map[str, FunctionDef]  # top-level fn name -> full definition, for inspect(T)
+    pub loop_blk_floor: Vec[int]   # auto-drop: parallel to loop_scope_base; for an SWhile (whose body shares the enclosing scope) the block_stack depth just before its body block opened, else -1
+    pub loop_blk_scope: Vec[int]   # auto-drop: parallel to loop_scope_base; for an SWhile the index of the scope its body locals live in, else -1
     pub loop_scope_base: Vec[int]  # auto-drop: scope-stack depth marking the start of each enclosing loop's scopes
     pub fn_scope_base: Vec[int]    # auto-drop: scope-stack depth marking the start of each enclosing CLOSURE's scopes — a `return` inside a closure must only drop the closure's own locals, NOT the enclosing function's (else they double-free: released when the closure runs AND at the real function exit)
     pub block_depth: int  # auto-drop: nested-C-block depth (if/while bodies sharing a Scope); 0 = directly in the owning scope's top-level block
@@ -314,6 +316,8 @@ extend Sema:
         s.variadic_elem_ty       = Map[str, Pointer[AstType]].init(8)
         s.fn_defs                = Map[str, FunctionDef].init(32)
         s.loop_scope_base        = Vec[int].init(8)
+        s.loop_blk_floor         = Vec[int].init(8)
+        s.loop_blk_scope         = Vec[int].init(8)
         s.fn_scope_base          = Vec[int].init(8)
         s.block_depth            = 0
         s.block_depth_stack      = Vec[int].init(8)
@@ -2151,6 +2155,34 @@ extend Sema:
             mut sym = scope.variables.get(nm)
             if sym.decl_block_id == block_id and self.is_droppable_sym(sym):
                 hb.push(box_hirstmt(HirStmt.SAutoDrop(nm, sym.ty.read().name)))
+            ki = ki + 1
+
+    # `break`/`continue` inside a `while`: the loop body SHARES the enclosing scope, so
+    # append_drops_from (which drains whole scopes) never sees the heap locals declared
+    # in the body, and they leaked on that path (bug log #15; only the fall-through end
+    # of the body released them). Drop every droppable local of the loop's scope whose
+    # declaring block is one of the loop's own still-open blocks (the body block or a
+    # nested if/while block). No-op when the innermost loop is not an SWhile.
+    pub def append_while_exit_drops(self, hb: HirBlock):
+        mut top = self.loop_blk_floor.len - 1
+        if top < 0: return
+        mut floor = self.loop_blk_floor.get(top)
+        mut si = self.loop_blk_scope.get(top)
+        if floor < 0 or si < 0 or si >= self.scopes.len: return
+        mut scope = self.scopes.get(si)
+        mut ki = 0
+        while ki < scope.decl_order.len:
+            mut nm = scope.decl_order.get(ki)
+            if scope.variables.contains(nm):
+                mut sym = scope.variables.get(nm)
+                if (sym.ty as usize) != 0 as usize and sym.decl_block_id != 0:
+                    mut pos = floor
+                    mut inside = false
+                    while pos < self.block_stack.len:
+                        if self.block_stack.get(pos) == sym.decl_block_id: inside = true
+                        pos = pos + 1
+                    if inside and self.is_droppable_sym(sym):
+                        hb.push(box_hirstmt(HirStmt.SAutoDrop(nm, sym.ty.read().name)))
             ki = ki + 1
 
     # Append end-of-scope drops for the current top scope to `hb`, unless its
@@ -4030,9 +4062,11 @@ extend Sema:
                     case Stmt.SBreak(_):
                         if self.loop_scope_base.len > 0:
                             self.append_drops_from(hb, self.loop_scope_base.get(self.loop_scope_base.len - 1))
+                            self.append_while_exit_drops(hb)
                     case Stmt.SContinue:
                         if self.loop_scope_base.len > 0:
                             self.append_drops_from(hb, self.loop_scope_base.get(self.loop_scope_base.len - 1))
+                            self.append_while_exit_drops(hb)
                     case _: pass
             hb.push(_hs)
             i = i + 1
@@ -4509,6 +4543,8 @@ extend Sema:
                 # so push a base equal to the current depth: break/continue inside
                 # the loop drain nothing extra (no per-iteration scope to drain).
                 self.loop_scope_base.push(self.scopes.len)
+                self.loop_blk_floor.push(self.block_stack.len)
+                self.loop_blk_scope.push(self.scopes.len - 1)
                 self.block_depth = self.block_depth + 1
                 self.open_block()
                 mut sw_block_id = self.block_stack.get(self.block_stack.len - 1)
@@ -4517,6 +4553,8 @@ extend Sema:
                 self.block_depth = self.block_depth - 1
                 self.close_block()
                 self.loop_scope_base.pop()
+                self.loop_blk_floor.pop()
+                self.loop_blk_scope.pop()
                 mut sw_loop_moved = self.branch_moved_buf
                 mut sw_loop_inited = self.branch_init_buf
                 self.capturing_moves = sw_outer_cap_m
@@ -4566,8 +4604,12 @@ extend Sema:
                 self.branch_moved_buf = Vec[str].init(4)
                 self.branch_init_buf = Vec[str].init(4)
                 self.loop_scope_base.push(self.scopes.len - 1)
+                self.loop_blk_floor.push(-1)
+                self.loop_blk_scope.push(-1)
                 mut sf_body = self.lower_block(body)
                 self.loop_scope_base.pop()
+                self.loop_blk_floor.pop()
+                self.loop_blk_scope.pop()
                 mut sf_loop_moved = self.branch_moved_buf
                 mut sf_loop_inited = self.branch_init_buf
                 self.capturing_moves = sf_outer_cap_m
@@ -6600,8 +6642,12 @@ extend Sema:
                 # `loop:` expression — infinite loop; value comes from `break v`.
                 self.enter_scope()
                 self.loop_scope_base.push(self.scopes.len - 1)
+                self.loop_blk_floor.push(-1)
+                self.loop_blk_scope.push(-1)
                 mut h_loop_body = self.lower_block(loop_body)
                 self.loop_scope_base.pop()
+                self.loop_blk_floor.pop()
+                self.loop_blk_scope.pop()
                 self.finalize_scope_drops(h_loop_body)
                 self.exit_scope()
                 mut loop_ty = self.infer_break_type(h_loop_body)
@@ -6612,8 +6658,12 @@ extend Sema:
                 mut h_we_cond = self.lower_expr(we_cond)
                 self.enter_scope()
                 self.loop_scope_base.push(self.scopes.len - 1)
+                self.loop_blk_floor.push(-1)
+                self.loop_blk_scope.push(-1)
                 mut h_we_body = self.lower_block(we_body)
                 self.loop_scope_base.pop()
+                self.loop_blk_floor.pop()
+                self.loop_blk_scope.pop()
                 self.finalize_scope_drops(h_we_body)
                 self.exit_scope()
                 # The else block yields a do-style value on normal exit.
