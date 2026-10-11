@@ -1,0 +1,202 @@
+# tests/lang/140_mmap.tr
+# std.sys.mmap — file-backed read-only / read-write / private maps, ranges,
+# anonymous shared memory (also across fork on POSIX), flush, atomics, bounds
+# checks, error reporting, and unmap-at-scope-exit ownership.
+
+from std.test import TestRunner
+from std.sys.mmap import MemMap
+from std.sys.env import Env
+from std.sys.fs import Fs
+from std.sys.process import Process
+from std.sys.platform import Platform
+from std.io.file import File
+
+extern "C":
+    def _tr_sys_fork() -> int
+    def _tr_sys_waitpid(pid: int, ms: int) -> int
+    def _tr_sys_exit_now(code: int)
+
+def tmp_path(name: str) -> str:
+    mut e = Env.init()
+    mut d = e.get_var("TMPDIR")
+    if d == "": d = e.get_var("TEMP")
+    if d == "": d = e.get_var("TMP")
+    if d == "": d = "/tmp"
+    return d + "/tau_mmap_" + f"{Process.get_pid()}" + "_" + name
+
+# Opens a map, writes through it, and lets scope exit unmap it.
+def write_and_drop(path: str):
+    mut m = MemMap.open_readwrite(path)
+    m.write_str(0, "ZZ")
+
+def main():
+    mut t = TestRunner.init("140_mmap")
+    if not MemMap.supported():
+        t.skip("mmap not supported on this platform")
+        t.summary()
+        return
+
+    t.section("create + write + flush + reopen read-only")
+    mut p1 = tmp_path("a.bin")
+    mut c = MemMap.create(p1, 8192)
+    t.assert_true(c.is_open(), "create(8192) opens")
+    t.assert_eq_int(c.len(), 8192, "created map length")
+    t.assert_true(c.is_writable(), "created map is writable")
+    t.assert_true(c.set_u32(0, 0xCAFEBABE), "set_u32 in range")
+    t.assert_true(c.set_u8(4, 255), "set_u8")
+    t.assert_true(c.set_u16(6, 65535), "set_u16")
+    t.assert_true(c.set_i64(8, -123456789012), "set_i64 negative")
+    t.assert_true(c.set_f64(16, 3.5), "set_f64")
+    t.assert_true(c.write_str(32, "hello mmap"), "write_str")
+    t.assert_true(c.write_str(100, "bin\0ary"), "write_str with embedded NUL")
+    t.assert_true(c.fill(200, 16, 170), "fill")
+    t.assert_true(c.flush(), "flush")
+    t.assert_true(c.flush_async(), "flush_async")
+    t.assert_true(c.flush_range(0, 4096, true), "flush_range")
+    c.close()
+    t.assert_false(c.is_open(), "closed after close()")
+    c.close()
+    t.assert_eq_int(Fs.size(p1), 8192, "file has the created size")
+
+    mut r = MemMap.open_read(p1)
+    t.assert_true(r.is_open(), "open_read")
+    t.assert_false(r.is_writable(), "open_read is not writable")
+    t.assert_eq_int(r.len(), 8192, "read map length = file size")
+    t.assert_eq_int(r.get_u32(0), 3405691582, "u32 read back (little endian)")
+    t.assert_eq_int(r.get_u8(0), 190, "byte 0 of CAFEBABE is 0xBE")
+    t.assert_eq_int(r.get_u8(4), 255, "u8 read back")
+    t.assert_eq_int(r.get_i8(4), -1, "i8 sign extension")
+    t.assert_eq_int(r.get_u16(6), 65535, "u16 read back")
+    t.assert_eq_int(r.get_i16(6), -1, "i16 sign extension")
+    t.assert_eq_int(r.get_i32(0), -889275714, "i32 sign extension")
+    t.assert_eq_int(r.get_i64(8), -123456789012, "i64 read back")
+    t.assert_eq_float(r.get_f64(16), 3.5, 0.0, "f64 read back")
+    t.assert_eq_str(r.read_str(32, 10), "hello mmap", "read_str")
+    mut bs = r.read_str(100, 7)
+    t.assert_eq_int(bs.len(), 7, "binary read_str keeps its real length")
+    t.assert_eq_int(r.get_u8(103), 0, "embedded NUL preserved")
+    t.assert_eq_int(r.get_u8(207), 170, "fill byte")
+    t.assert_false(r.set_u8(0, 1), "write to a read-only map is refused")
+    t.assert_false(r.write_str(0, "x"), "write_str to read-only map refused")
+    t.assert_eq_int(r.get_u8(0), 190, "read-only data unchanged")
+
+    t.section("bounds checking")
+    t.assert_eq_int(r.get_u32(8190), 0, "read straddling the end returns 0")
+    t.assert_eq_int(r.get_u8(8192), 0, "read at len returns 0")
+    t.assert_eq_int(r.get_u8(-1), 0, "negative offset returns 0")
+    t.assert_eq_str(r.read_str(8190, 10), "", "read_str past end returns empty")
+    t.assert_true(r.in_range(8191, 1), "in_range last byte")
+    t.assert_false(r.in_range(8191, 2), "in_range one past")
+    t.assert_false(r.in_range(0, -1), "in_range negative length")
+    mut w = MemMap.open_readwrite(p1)
+    t.assert_true(w.is_open(), "open_readwrite")
+    t.assert_false(w.set_u32(8190, 1), "write straddling the end refused")
+    t.assert_false(w.write_str(8190, "abcdef"), "write_str past end refused")
+    t.assert_false(w.fill(8000, 500, 1), "fill past end refused")
+    t.assert_true(w.set_u8(8191, 7), "write at the last byte ok")
+    t.assert_eq_int(w.get_u8(8191), 7, "last byte read back")
+
+    t.section("shared read-write maps see each other; private does not write back")
+    t.assert_true(w.write_str(0, "AAAA"), "rw write")
+    t.assert_eq_str(r.read_str(0, 4), "AAAA", "read-only mapping sees the rw store (shared)")
+    mut pv = MemMap.open_private(p1)
+    t.assert_true(pv.is_open(), "open_private")
+    t.assert_true(pv.is_writable(), "private map accepts stores")
+    t.assert_true(pv.write_str(0, "PPPP"), "private store")
+    t.assert_eq_str(pv.read_str(0, 4), "PPPP", "private mapping sees its own store")
+    t.assert_eq_str(w.read_str(0, 4), "AAAA", "shared mapping does not see the private store")
+    pv.close()
+    w.close()
+    r.close()
+    mut raw = File.read_text(p1)
+    t.assert_eq_str(Str_slice4(raw), "AAAA", "file on disk holds the shared store, not the private one")
+
+    t.section("ranges (offset need not be page aligned)")
+    mut p2 = tmp_path("b.txt")
+    File.write_text(p2, "0123456789abcdefghijklmnopqrstuvwxyz")
+    mut rg = MemMap.open_range(p2, 0, 10, 8)
+    t.assert_true(rg.is_open(), "open_range unaligned offset")
+    t.assert_eq_int(rg.len(), 8, "range length")
+    t.assert_eq_str(rg.read_str(0, 8), "abcdefgh", "range content starts at the offset")
+    rg.close()
+    mut tail = MemMap.open_range(p2, 0, 30, 0)
+    t.assert_eq_int(tail.len(), 6, "length 0 maps to the end of the file")
+    t.assert_eq_str(tail.read_str(0, 6), "uvwxyz", "tail content")
+    tail.close()
+    mut off_end = MemMap.open_range(p2, 0, 36, 0)
+    t.assert_false(off_end.is_open(), "offset at end of file cannot be mapped")
+    mut over = MemMap.open_range(p2, 0, 0, 100)
+    t.assert_false(over.is_open(), "read-only window past EOF rejected")
+    over.close()
+    mut grow = MemMap.open_range(p2, 1, 0, 64)
+    t.assert_true(grow.is_open(), "read-write window past EOF grows the file")
+    t.assert_eq_int(grow.len(), 64, "grown map length")
+    grow.close()
+    t.assert_eq_int(Fs.size(p2), 64, "file was extended to 64 bytes")
+
+    t.section("errors are reported, not thrown")
+    mut missing = MemMap.open_read(tmp_path("does_not_exist"))
+    t.assert_false(missing.is_open(), "missing file fails")
+    t.assert_true(missing.error.len() > 0, "error text is set")
+    t.assert_true(missing.code != 0, "error code is set")
+    t.assert_eq_int(missing.len(), 0, "failed map has length 0")
+    t.assert_eq_int(missing.get_u8(0), 0, "reads on a failed map are 0")
+    t.assert_false(missing.set_u8(0, 1), "writes on a failed map are refused")
+    t.assert_false(missing.flush(), "flush on a failed map is false")
+    missing.close()
+    mut p3 = tmp_path("empty.bin")
+    File.write_text(p3, "")
+    mut em = MemMap.open_read(p3)
+    t.assert_false(em.is_open(), "empty file cannot be mapped")
+    mut bad_create = MemMap.create(p3, 0)
+    t.assert_false(bad_create.is_open(), "create with size 0 rejected")
+    mut bad_anon = MemMap.anonymous(0)
+    t.assert_false(bad_anon.is_open(), "anonymous(0) rejected")
+
+    t.section("unmap at scope exit (ownership)")
+    write_and_drop(p1)
+    mut after = MemMap.open_read(p1)
+    t.assert_eq_str(after.read_str(0, 2), "ZZ", "store from a dropped map reached the file")
+    after.close()
+
+    t.section("anonymous memory + atomics")
+    mut an = MemMap.anonymous(4096)
+    t.assert_true(an.is_open(), "anonymous(4096)")
+    t.assert_eq_int(an.get_i64(0), 0, "anonymous memory is zero filled")
+    t.assert_true(an.atomic_ok(0), "offset 0 is atomic-capable")
+    t.assert_false(an.atomic_ok(3), "unaligned offset is not")
+    t.assert_true(an.atomic_store(0, 40), "atomic_store")
+    t.assert_eq_int(an.atomic_add(0, 2), 40, "atomic_add returns the previous value")
+    t.assert_eq_int(an.atomic_load(0), 42, "atomic_load after add")
+    t.assert_true(an.atomic_cas(0, 42, 100), "cas with the right expectation swaps")
+    t.assert_false(an.atomic_cas(0, 42, 7), "cas with a stale expectation fails")
+    t.assert_eq_int(an.atomic_load(0), 100, "value after cas")
+    t.assert_true(an.flush(), "flush on anonymous memory is a no-op success")
+
+    if Platform.is_posix() and not Platform.is_wasm():
+        t.section("anonymous maps are shared with a forked child")
+        an.set_i64(64, 1)
+        mut pid = _tr_sys_fork()
+        if pid == 0:
+            an.set_i64(64, 777)
+            an.atomic_add(0, 11)
+            an.write_str(128, "from child")
+            _tr_sys_exit_now(0)
+        t.assert_true(pid > 0, "fork")
+        mut code = _tr_sys_waitpid(pid, 10000)
+        t.assert_eq_int(code, 0, "child exited cleanly")
+        t.assert_eq_int(an.get_i64(64), 777, "parent sees the child's store")
+        t.assert_eq_int(an.atomic_load(0), 111, "atomic add from the child is visible")
+        t.assert_eq_str(an.read_str(128, 10), "from child", "string written by the child")
+    else:
+        t.skip("fork-shared anonymous memory (needs POSIX fork)")
+
+    an.close()
+    Fs.delete(p1)
+    Fs.delete(p2)
+    Fs.delete(p3)
+    t.summary()
+
+# first four bytes of s
+def Str_slice4(s: str) -> str:
+    return s.slice(0, 4)

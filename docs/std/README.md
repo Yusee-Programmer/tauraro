@@ -27,7 +27,7 @@ building libraries with `taupkg`)
 | [`std.regex`](regex.md) | POSIX extended regex: match, find, replace, split, count, capture groups (numbered + named), `Match`/`Captures`, backreference replace |
 | [`std.serialize`](serialize.md) | Value serialization: `Pickle` (own compact binary format for scalars + nested List/Dict/Vec/Set), `Msgpack` (real, wire-compatible MessagePack codec) |
 | [`std.string`](string.md) | String utilities (Str), formatting (Fmt), parsing, line/word splitting, `split_to_vec` |
-| [`std.sys`](sys.md) | Environment variables, file system, process control, timing, OS info, platform detection, graceful-shutdown signal handling, `.env` file loading (`Dotenv`), cron-expression parsing and next/previous fire times (`Cron`) |
+| [`std.sys`](sys.md) | Environment variables, file system, process control, timing, OS info, platform detection, graceful-shutdown signal handling, `.env` file loading (`Dotenv`), cron-expression parsing and next/previous fire times (`Cron`), memory-mapped files (`MemMap`), named shared memory + cross-process lock (`Shm`) |
 | [`std.term`](term.md) | Terminal UI: ANSI SGR styling/colors (`Term`/`Style`/`Color`), cursor control, terminal size query, progress bar and spinner |
 | [`std.test`](test.md) | Lightweight unit-testing framework |
 | [`std.text`](text.md) | Text processing: Myers line diff + unified_diff rendering, Levenshtein edit distance/similarity, word-wrap/indent |

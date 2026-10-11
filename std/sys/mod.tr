@@ -11,6 +11,8 @@
 #   from std.sys.signal   import Signal
 #   from std.sys.dotenv   import Dotenv
 #   from std.sys.cron     import Cron, CronSchedule
+#   from std.sys.mmap     import MemMap
+#   from std.sys.shm      import Shm
 
 from std.sys.process  import Process
 from std.sys.time     import Clock
@@ -26,3 +28,5 @@ from std.sys.signal   import Signal
 from std.sys.dotenv   import Dotenv
 from std.sys.cron     import Cron
 from std.sys.cron     import CronSchedule
+from std.sys.mmap     import MemMap
+from std.sys.shm      import Shm

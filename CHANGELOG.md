@@ -57,6 +57,13 @@ added here as each phase lands.
   PKCS#1/PKCS#8/SPKI key parsing and PEM export). Verified against OpenSSL in both directions.
   Documented in `docs/std/encoding.md` and `docs/std/crypto.md`, tested by `tests/lang/120_asn1_pem.tr`
   and `tests/lang/121_rsa.tr`.
+- **`std.sys.mmap` / `std.sys.shm`: memory-mapped files and named shared memory.** `MemMap` (read-only,
+  read-write and private/copy-on-write file maps, windows, anonymous shared memory, typed little-endian
+  access, atomics, flush, unmap at scope exit) and `Shm` (named regions with a size header, atomics and a
+  cross-process lock with dead-owner recovery) over `mmap`/`shm_open` (POSIX) and
+  `CreateFileMapping`/`MapViewOfFile` (Windows); bare/WASI report unsupported. New `_tr_mmap_*`,
+  `_tr_shm_*`, `_tr_mem_*`, `_tr_sys_*` runtime helpers. Tested by `tests/lang/140_mmap.tr`,
+  `141_shm.tr`.
 - **`std.async.retry`** — `RetryPolicy` (max attempts, fixed/exponential backoff
   with cap, optional jitter, retry-on predicate, overall deadline, per-attempt
   timeout), `call_with_timeout` / `call_bool_with_timeout`, and a thread-safe

@@ -11,6 +11,8 @@ from std.sys.datetime import DateTime, Date, Time, TimeDelta
 from std.sys.signal   import Signal
 from std.sys.dotenv   import Dotenv
 from std.sys.cron     import Cron, CronSchedule
+from std.sys.mmap     import MemMap
+from std.sys.shm      import Shm
 ```
 
 ---
@@ -486,3 +488,86 @@ mut now = DateTime.in_zone(2026, 10, 11, 6, 7, 30, TimeZone.utc()).timestamp()  
 print(DateTime.from_timestamp_utc(s.next_after(now)).to_string())     # 2026-10-12 09:00:00
 print(DateTime.from_timestamp_utc(s.prev_before(now)).to_string())    # 2026-10-09 17:45:00
 ```
+
+---
+
+## std.sys.mmap — Memory-mapped files and anonymous shared memory
+
+**When**: You want to treat a file as a byte array (large read-mostly data, binary formats, an index you patch in place), or you need zero-filled memory that a forked child can share.
+**Why**: `MemMap` wraps `mmap`/`msync`/`munmap` (POSIX) and `CreateFileMapping`/`MapViewOfFile`/`FlushViewOfFile` (Windows). The mapping is **owned**: it is unmapped (and its file handle closed) when the `MemMap` goes out of scope, by the user-defined `free()`; `close()` does it early and is idempotent.
+
+Constructors always return a `MemMap`; check `is_open()`. On failure `error` holds the OS message and `code` the `errno` / `GetLastError()`.
+
+| Constructor | Description |
+|---|---|
+| `MemMap.open_read(path)` | read-only shared mapping of the whole file |
+| `MemMap.open_readwrite(path)` | read-write; stores reach the file |
+| `MemMap.open_private(path)` | copy-on-write: stores stay in this mapping, never written back |
+| `MemMap.open_range(path, mode, offset, length)` | map a window (`mode` 0 read, 1 read-write, 2 private; `length <= 0` = to EOF). `offset` need not be page-aligned. Read-write with `offset+length` past EOF **grows the file** |
+| `MemMap.create(path, size)` | create/truncate a file of `size` bytes and map it read-write |
+| `MemMap.anonymous(size)` | zero-filled memory not backed by a file (`MAP_SHARED|MAP_ANONYMOUS`, so a `fork()`ed child shares it) |
+| `MemMap.supported()` / `MemMap.page_size()` | capability probe / mapping granularity |
+
+| Instance method | Description |
+|---|---|
+| `len()`, `is_open()`, `is_writable()`, `in_range(off, n)` | state and bounds |
+| `get_u8/i8/u16/i16/u32/i32/i64(off)`, `get_f64(off)` | little-endian fixed-width reads (`i64` values ≥ 2^63 read back negative) |
+| `set_u8/u16/u32/i64(off, v)`, `set_f64(off, v)` | writes; `false` if read-only or out of range |
+| `read_str(off, n)` / `write_str(off, s)` | binary-safe byte strings (`s.len()` is the real length, NULs included) |
+| `fill(off, n, byte)` | memset |
+| `atomic_load/atomic_store/atomic_add/atomic_cas(off, ...)` | 64-bit atomics on 8-byte-aligned offsets (`atomic_add` returns the **previous** value; `atomic_cas` returns `bool`) — valid across processes on shared maps |
+| `flush()` / `flush_async()` / `flush_range(off, n, wait)` | `msync` / `FlushViewOfFile` (+ `FlushFileBuffers` for `flush()`); a no-op `true` for anonymous memory |
+| `close()` | unmap now |
+
+Out-of-range reads return `0` / `""` and out-of-range or read-only writes return `false`: nothing outside the mapping is ever touched.
+
+```tauraro
+from std.sys.mmap import MemMap
+
+mut m = MemMap.create("table.bin", 4096)
+if m.is_open():
+    m.set_u32(0, 0xCAFE)
+    m.write_str(16, "hello")
+    m.flush()
+    print(m.read_str(16, 5))     # hello
+# unmapped here
+```
+
+**Limitations**: a file truncated by another process while mapped faults on access (inherent to `mmap`); empty files cannot be mapped; bare-metal, kernel and WASI builds have no virtual memory — `supported()` is `false` and every constructor fails with `not supported on this platform`. The Windows backend is compile-checked with MinGW (zig) but is not exercised by a Windows run in the module author's environment — the Windows CI leg runs `tests/lang/140_mmap.tr`.
+
+---
+
+## std.sys.shm — Named shared memory and a cross-process lock
+
+**When**: Two or more processes (or a process and its children) must share a block of memory and coordinate access.
+**Why**: `Shm` wraps `shm_open` + `mmap` (POSIX) or a named pagefile-backed file mapping (`Local\tauraro_shm_<name>`, Windows). Each region is `size` user bytes behind a hidden 64-byte header (magic, size, lock word), so `len()` is the user size everywhere and `Shm.open(name)` needs no size.
+
+| Call | Description |
+|---|---|
+| `Shm.create(name, size)` | new zeroed region; **fails if the name exists** |
+| `Shm.open(name)` | attach to an existing region |
+| `Shm.create_or_open(name, size)` | create, or attach (the size must match an existing region) |
+| `Shm.unlink(name)` | POSIX: remove the name (live maps keep working). Windows: no-op `true` (the object dies with its last handle) |
+| `Shm.supported()`, `Shm.valid_name(name)` | probes (names: 1–30 chars of `[A-Za-z0-9._-]`; 30 because macOS caps shm names at 31 with the `/`) |
+| `get_*/set_*/read_str/write_str/fill/atomic_*` | same typed, bounds-checked access as `MemMap`, offsets start at 0 of the user area |
+| `lock(timeout_ms)` | `0` acquired, `1` acquired after **recovering a dead owner's lock**, `-1` timeout (`< 0` waits forever, `0` tries once), `-2` not open |
+| `try_lock()`, `unlock()`, `holds_lock()` | non-blocking acquire; release (`false` if the calling thread is not the owner) |
+| `close()` | unmap this view; releases the lock first if this object still holds it. Also runs at scope exit |
+
+The lock is a coarse mutex in the header: the owner id is `(pid << 32 | thread id)`, so it works between processes **and** threads, polls (spin then 1 ms sleeps) rather than using a futex, and is re-entrant for the same thread. If the owning *process* died, the next `lock()` takes it over and returns `1` so you know the protected data may be half-written. A dead *thread* in a live process, and PID reuse, cannot be detected.
+
+```tauraro
+from std.sys.shm import Shm
+
+mut a = Shm.create("jobs", 4096)
+a.set_i64(0, 0)
+# ... in any process:
+mut b = Shm.open("jobs")
+if b.lock(1000) >= 0:
+    b.set_i64(0, b.get_i64(0) + 1)
+    b.unlock()
+Shm.unlink("jobs")
+```
+
+Android (bionic has no `shm_open`), bare-metal and WASI report `not supported on this platform`. Tested by `tests/lang/141_shm.tr`, including `fork()`-based contention, stale-owner recovery and a locked 3-process counter.
+

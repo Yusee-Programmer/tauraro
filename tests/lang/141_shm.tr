@@ -1,0 +1,175 @@
+# tests/lang/141_shm.tr
+# std.sys.shm — named shared memory: create/open/unlink semantics, typed access,
+# atomics, and the cross-process lock (contention, stale-owner recovery, a
+# fork-based mutual-exclusion counter). The fork parts self-skip off POSIX.
+
+from std.test import TestRunner
+from std.sys.shm import Shm
+from std.sys.process import Process
+from std.sys.platform import Platform
+
+extern "C":
+    def _tr_sys_fork() -> int
+    def _tr_sys_waitpid(pid: int, ms: int) -> int
+    def _tr_sys_exit_now(code: int)
+
+def uniq(tag: str) -> str:
+    return "tau" + f"{Process.get_pid()}" + tag
+
+# Attach, take the lock and drop the Shm at scope exit WITHOUT unlocking by hand:
+# free() must release a lock the object still holds.
+def lock_and_forget(name: str):
+    mut s = Shm.open(name)
+    s.lock(1000)
+
+def main():
+    mut t = TestRunner.init("141_shm")
+    if not Shm.supported():
+        t.skip("named shared memory not supported on this platform")
+        t.summary()
+        return
+
+    t.section("names")
+    t.assert_true(Shm.valid_name("good_name-1.x"), "valid name")
+    t.assert_false(Shm.valid_name(""), "empty name invalid")
+    t.assert_false(Shm.valid_name("has/slash"), "slash invalid")
+    t.assert_false(Shm.valid_name("has space"), "space invalid")
+    t.assert_false(Shm.valid_name("0123456789012345678901234567890"), "31 chars invalid")
+    t.assert_true(Shm.valid_name("012345678901234567890123456789"), "30 chars valid")
+    mut bad = Shm.create("bad/name", 64)
+    t.assert_false(bad.is_open(), "create with an invalid name fails")
+    t.assert_true(bad.error.len() > 0, "failure has an error message")
+
+    t.section("create / open / exclusive create")
+    mut name = uniq("a")
+    Shm.unlink(name)
+    mut miss = Shm.open(name)
+    t.assert_false(miss.is_open(), "open of a missing region fails")
+    mut a = Shm.create(name, 256)
+    t.assert_true(a.is_open(), "create")
+    t.assert_true(a.created_here(), "creator flag")
+    t.assert_eq_int(a.len(), 256, "user size is 256 (header hidden)")
+    t.assert_eq_int(a.get_i64(0), 0, "fresh region is zeroed")
+    mut dup = Shm.create(name, 256)
+    t.assert_false(dup.is_open(), "exclusive create of an existing name fails")
+    mut b = Shm.open(name)
+    t.assert_true(b.is_open(), "open existing")
+    t.assert_false(b.created_here(), "opener is not the creator")
+    t.assert_eq_int(b.len(), 256, "size comes from the header")
+    mut co = Shm.create_or_open(name, 256)
+    t.assert_true(co.is_open(), "create_or_open attaches to an existing region")
+    t.assert_false(co.created_here(), "create_or_open did not create")
+    mut wrong = Shm.create_or_open(name, 512)
+    t.assert_false(wrong.is_open(), "create_or_open with a mismatching size fails")
+    co.close()
+
+    t.section("two views of one region")
+    t.assert_true(a.set_u32(0, 0xDEADBEEF), "set_u32 via creator")
+    t.assert_eq_int(b.get_u32(0), 3735928559, "opener sees it")
+    t.assert_true(b.write_str(16, "shared text"), "write_str via opener")
+    t.assert_eq_str(a.read_str(16, 11), "shared text", "creator reads it")
+    t.assert_true(a.set_f64(40, 2.25), "set_f64")
+    t.assert_eq_float(b.get_f64(40), 2.25, 0.0, "f64 across views")
+    t.assert_true(a.fill(64, 8, 255), "fill")
+    t.assert_eq_int(b.get_u8(71), 255, "fill visible")
+    t.assert_false(a.set_u8(256, 1), "write past the user size refused")
+    t.assert_false(a.set_u32(254, 1), "straddling write refused")
+    t.assert_eq_int(b.get_u8(256), 0, "read past the end returns 0")
+    t.assert_true(a.atomic_store(128, 5), "atomic_store")
+    t.assert_eq_int(b.atomic_add(128, 3), 5, "atomic_add returns the previous value")
+    t.assert_eq_int(a.atomic_load(128), 8, "atomic_load sees the add")
+    t.assert_true(b.atomic_cas(128, 8, 20), "cas succeeds")
+    t.assert_false(a.atomic_cas(128, 8, 99), "stale cas fails")
+    t.assert_eq_int(a.atomic_load(128), 20, "value after cas")
+
+    t.section("lock basics (single process)")
+    t.assert_eq_int(a.lock(100), 0, "lock acquired")
+    t.assert_true(a.holds_lock(), "holds_lock")
+    t.assert_eq_int(b.lock(0), 0, "same thread re-acquires through another view (re-entrant)")
+    t.assert_true(b.unlock(), "unlock")
+    t.assert_false(a.unlock(), "second unlock reports not owner")
+    t.assert_true(a.try_lock(), "try_lock on a free lock")
+    t.assert_true(a.unlock(), "unlock again")
+    lock_and_forget(name)
+    t.assert_true(a.try_lock(), "a lock dropped with its Shm is released at scope exit")
+    a.unlock()
+
+    if Platform.is_posix() and not Platform.is_wasm():
+        t.section("lock contention between processes")
+        t.assert_eq_int(a.lock(100), 0, "parent takes the lock")
+        mut pid = _tr_sys_fork()
+        if pid == 0:
+            mut c = Shm.open(name)
+            mut r = c.lock(50)
+            if r == -1: _tr_sys_exit_now(0)
+            _tr_sys_exit_now(1)
+        t.assert_true(pid > 0, "fork")
+        t.assert_eq_int(_tr_sys_waitpid(pid, 10000), 0, "child timed out on a lock the parent holds")
+        t.assert_true(a.unlock(), "parent releases")
+
+        t.section("stale owner recovery")
+        mut pid2 = _tr_sys_fork()
+        if pid2 == 0:
+            mut c2 = Shm.open(name)
+            c2.lock(1000)
+            _tr_sys_exit_now(0)   # dies holding the lock (no unlock, no free)
+        t.assert_true(pid2 > 0, "fork")
+        t.assert_eq_int(_tr_sys_waitpid(pid2, 10000), 0, "child exited holding the lock")
+        t.assert_eq_int(a.lock(2000), 1, "lock of a dead owner is recovered (returns 1)")
+        a.unlock()
+        t.assert_eq_int(a.lock(100), 0, "afterwards it is a normal lock again")
+        a.unlock()
+
+        t.section("mutual exclusion across processes")
+        t.assert_true(a.set_i64(200, 0), "reset shared counter")
+        mut pids = Vec[int].init(4)
+        mut k = 0
+        while k < 3:
+            mut cp = _tr_sys_fork()
+            if cp == 0:
+                mut w = Shm.open(name)
+                mut n = 0
+                while n < 150:
+                    if w.lock(5000) < 0: _tr_sys_exit_now(2)
+                    # deliberately non-atomic read-modify-write protected only by the lock
+                    mut cur = w.get_i64(200)
+                    w.set_i64(200, cur + 1)
+                    w.unlock()
+                    n = n + 1
+                _tr_sys_exit_now(0)
+            pids.push(cp)
+            k = k + 1
+        mut all_ok = true
+        mut j = 0
+        while j < pids.len:
+            if _tr_sys_waitpid(pids.get(j), 30000) != 0: all_ok = false
+            j = j + 1
+        t.assert_true(all_ok, "all workers finished cleanly")
+        t.assert_eq_int(a.get_i64(200), 450, "no lost updates: 3 x 150 locked increments")
+
+        t.section("data written by a child outlives it")
+        mut pid3 = _tr_sys_fork()
+        if pid3 == 0:
+            mut c3 = Shm.open(name)
+            c3.write_str(224, "child wrote this!!")
+            c3.close()
+            _tr_sys_exit_now(0)
+        t.assert_eq_int(_tr_sys_waitpid(pid3, 10000), 0, "writer child ok")
+        t.assert_eq_str(a.read_str(224, 18), "child wrote this!!", "parent reads the child's bytes")
+    else:
+        t.skip("cross-process lock tests need POSIX fork")
+
+    t.section("close / unlink")
+    b.close()
+    t.assert_false(b.is_open(), "closed")
+    t.assert_eq_int(b.get_u8(0), 0, "reads on a closed region return 0")
+    t.assert_false(b.set_u8(0, 1), "writes on a closed region refused")
+    t.assert_eq_int(b.lock(0), -2, "lock on a closed region reports -2")
+    a.close()
+    t.assert_true(Shm.unlink(name), "unlink")
+    mut gone = Shm.open(name)
+    if Platform.is_windows():
+        t.skip("unlink is a no-op on Windows (object dies with its last handle)")
+    else:
+        t.assert_false(gone.is_open(), "region is gone after unlink + close")
+    t.summary()
