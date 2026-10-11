@@ -1,0 +1,367 @@
+# std.io.ipc — local inter-process communication with message framing.
+#
+#   from std.io.ipc import IpcServer, IpcChannel, Ipc
+#
+#   # server process
+#   mut srv = IpcServer.listen(Ipc.default_address("myapp"))
+#   if not srv.is_open(): print(srv.error)
+#   mut conn = srv.accept(5000)            # IpcChannel; check conn.is_open()
+#   mut m = conn.recv(5000)                # IpcMessage
+#   if m.ok(): conn.send("echo: " + m.data)
+#
+#   # client process
+#   mut c = IpcChannel.connect(Ipc.default_address("myapp"), 2000)   # retries until up
+#   c.send("hello")
+#   mut reply = c.recv(2000)
+#
+#   # connected pair inside one process / across fork()  (POSIX)
+#   mut a = IpcChannel.pair()
+#   mut b = a.take_peer()
+#
+# Transports (the address string is platform specific — Ipc.default_address()
+# builds a sensible one):
+#   POSIX    Unix domain stream sockets. The address is a FILESYSTEM PATH
+#            (<= ~104 bytes); the socket file is removed by IpcServer.close().
+#   Windows  Named pipes `\\.\pipe\<name>` (a bare name gets the prefix). The
+#            Windows backend is compile-checked with MinGW but has not been
+#            exercised on a real Windows host by the module author; the tests
+#            self-skip there. Socket pairs and `listen_replace` are not available.
+#
+# listen_replace() decides whether a socket file is stale by connecting to it and
+# disconnecting at once. If the address was live, that probe shows up at the real
+# server as an accepted connection whose first recv() reports IPC_CLOSED: servers
+# that care should simply ignore a connection that closes without sending.
+#   bare-metal / WASI: unsupported — every constructor fails with
+#            "not supported on this platform".
+#
+# Framing: each message is a 4-byte big-endian length followed by the payload
+# (binary-safe: embedded NULs are fine). A frame larger than `max_msg` (default
+# 16 MiB, set via set_max_message) is refused on both send() and recv() — a hostile
+# peer cannot make the receiver allocate more than that. A recv() that times
+# out keeps any partially received frame for the next call.
+#
+# recv() returns an IpcMessage whose `status` is IPC_OK, IPC_TIMEOUT, IPC_CLOSED
+# (peer closed cleanly between messages), IPC_ERROR (I/O error, peer died
+# mid-frame, protocol violation) or IPC_TOO_BIG. A channel is NOT thread-safe: use
+# one channel per thread (or your own lock).
+
+extern "C":
+    def _tr_ipc_listen(addr: str, backlog: int, replace: int) -> Pointer[char]
+    def _tr_ipc_accept(srv: Pointer[char], timeout_ms: int) -> int
+    def _tr_ipc_connect(addr: str, timeout_ms: int) -> int
+    def _tr_ipc_server_close(srv: Pointer[char]) -> int
+    def _tr_ipc_socketpair(out2: Pointer[char]) -> int
+    def _tr_msgch_new(h: int, max_msg: int) -> Pointer[char]
+    def _tr_msgch_send(c: Pointer[char], data: Pointer[char], n: int) -> int
+    def _tr_msgch_recv(c: Pointer[char], timeout_ms: int) -> int
+    def _tr_msgch_data(c: Pointer[char]) -> Pointer[char]
+    def _tr_msgch_data_len(c: Pointer[char]) -> int
+    def _tr_msgch_consume(c: Pointer[char])
+    def _tr_msgch_set_max(c: Pointer[char], n: int)
+    def _tr_msgch_close(c: Pointer[char]) -> int
+    def _tr_io_close(h: int) -> int
+    def _tr_sys_errno() -> int
+    def _tr_sys_errstr(code: int) -> str
+    def _tr_sys_feature(id: int) -> int
+    def _tr_c_malloc(size: int) -> Pointer[char]
+    def _tr_free(p: Pointer[char])
+    def _tr_c_memcpy(dst: Pointer[char], src: Pointer[char], n: int)
+    def _tr_str_wrap_len(s: Pointer[char], blen: int) -> str
+    def _tr_getenv(name: str) -> Pointer[char]
+    def _tr_is_windows() -> bool
+
+pub def IPC_OK()      -> int: return 0
+pub def IPC_TIMEOUT() -> int: return 1
+pub def IPC_CLOSED()  -> int: return 2
+pub def IPC_ERROR()   -> int: return 3
+pub def IPC_TOO_BIG() -> int: return 4
+
+pub def IPC_DEFAULT_MAX() -> int: return 16777216
+
+# ── IpcMessage ──────────────────────────────────────────────────────────────
+
+pub class IpcMessage:
+    pub status: int
+    pub data:   str
+    pub error:  str
+
+extend IpcMessage:
+    pub def make(status: int, data: str, error: str) -> IpcMessage:
+        mut m = IpcMessage()
+        m.status = status
+        m.data = data
+        m.error = error
+        return m
+
+    pub def ok(self) -> bool:
+        return self.status == 0
+
+    pub def is_timeout(self) -> bool:
+        return self.status == 1
+
+    pub def is_closed(self) -> bool:
+        return self.status == 2
+
+# ── IpcChannel ──────────────────────────────────────────────────────────────
+
+pub class IpcChannel:
+    pub mc:       Pointer[char]   # framing object; owns the OS handle
+    pub handle:   int             # raw OS handle/fd (for IOPoll); -1 when closed
+    pub peer_h:   int             # unclaimed other end of pair() (see take_peer)
+    pub opened:   bool
+    pub max_msg:  int
+    pub status:   int             # outcome of the last connect/accept/send/recv
+    pub code:     int
+    pub error:    str
+
+extend IpcChannel:
+    pub def _blank() -> IpcChannel:
+        mut c = IpcChannel()
+        c.mc = 0 as Pointer[char]
+        c.handle = -1
+        c.peer_h = -1
+        c.opened = false
+        c.max_msg = 16777216
+        c.status = 0
+        c.code = 0
+        c.error = ""
+        return c
+
+    pub def _failed(status: int, code: int) -> IpcChannel:
+        mut c = IpcChannel._blank()
+        c.status = status
+        c.code = code
+        c.error = _tr_sys_errstr(code)
+        return c
+
+    # Wrap an already connected OS handle (takes ownership of it).
+    pub def from_handle(h: int) -> IpcChannel:
+        mut c = IpcChannel._blank()
+        c.mc = _tr_msgch_new(h, 16777216)
+        if (c.mc as int) == 0:
+            _tr_io_close(h)
+            c.status = 3
+            c.error = "out of memory"
+            return c
+        c.handle = h
+        c.opened = true
+        return c
+
+    pub def supported() -> bool:
+        return _tr_sys_feature(5) == 1 or _tr_sys_feature(6) == 1
+
+    # Connect to a listening server, retrying while it is not up yet, for at most
+    # timeout_ms (< 0 retries forever, 0 tries once).
+    pub def connect(addr: str, timeout_ms: int) -> IpcChannel:
+        mut h = _tr_ipc_connect(addr, timeout_ms)
+        if h < 0:
+            mut code = _tr_sys_errno()
+            return IpcChannel._failed(3, code)
+        return IpcChannel.from_handle(h)
+
+    # A connected pair of channels (POSIX socketpair). `a.take_peer()` returns the
+    # other end; hand it to a thread or to the child after fork().
+    pub def pair() -> IpcChannel:
+        mut buf = _tr_c_malloc(16)
+        mut rc = _tr_ipc_socketpair(buf)
+        if rc != 0:
+            mut code = _tr_sys_errno()
+            _tr_free(buf)
+            return IpcChannel._failed(3, code)
+        mut a = 0
+        mut b = 0
+        unsafe:
+            mut ip = buf as Pointer[int]
+            a = ip.offset(0).read()
+            b = ip.offset(1).read()
+        _tr_free(buf)
+        mut c = IpcChannel.from_handle(a)
+        c.peer_h = b
+        return c
+
+    pub def take_peer(self) -> IpcChannel:
+        if self.peer_h < 0:
+            mut f = IpcChannel._blank()
+            f.status = 3
+            f.error = "no peer end available"
+            return f
+        mut h = self.peer_h
+        self.peer_h = -1
+        return IpcChannel.from_handle(h)
+
+    pub def is_open(self) -> bool:
+        return self.opened
+
+    # Largest accepted/sent payload in bytes (default 16 MiB).
+    pub def set_max_message(self, n: int):
+        if n <= 0: return
+        self.max_msg = n
+        if self.opened:
+            _tr_msgch_set_max(self.mc, n)
+
+    # Send one message. False on error or if it exceeds the size limit (`status`
+    # says IPC_TOO_BIG or IPC_ERROR).
+    pub def send(self, msg: str) -> bool:
+        if not self.opened:
+            self.status = 3
+            self.error = "channel is closed"
+            return false
+        mut n = msg.len()
+        if n > self.max_msg:
+            self.status = 4
+            self.error = "message larger than the channel limit"
+            return false
+        mut rc = _tr_msgch_send(self.mc, msg as Pointer[char], n)
+        if rc == 0:
+            self.status = 0
+            return true
+        if rc == -4:
+            self.status = 4
+            self.error = "message too large"
+            return false
+        self.status = 3
+        self.code = _tr_sys_errno()
+        self.error = _tr_sys_errstr(self.code)
+        return false
+
+    # Receive one whole message, waiting at most timeout_ms (< 0 forever).
+    pub def recv(self, timeout_ms: int) -> IpcMessage:
+        if not self.opened:
+            self.status = 3
+            return IpcMessage.make(3, "", "channel is closed")
+        mut r = _tr_msgch_recv(self.mc, timeout_ms)
+        if r == 1:
+            mut n = _tr_msgch_data_len(self.mc)
+            mut buf = _tr_c_malloc(n + 1)
+            unsafe:
+                if n > 0: _tr_c_memcpy(buf, _tr_msgch_data(self.mc), n)
+                buf.offset(n).write('\0')
+            mut data = ""
+            if n > 0:
+                data = _tr_str_wrap_len(buf, n)
+            else:
+                _tr_free(buf)
+            _tr_msgch_consume(self.mc)
+            self.status = 0
+            return IpcMessage.make(0, data, "")
+        if r == 0:
+            self.status = 1
+            return IpcMessage.make(1, "", "timed out")
+        if r == -1:
+            self.status = 2
+            return IpcMessage.make(2, "", "peer closed the connection")
+        if r == -3:
+            self.status = 3
+            return IpcMessage.make(3, "", "peer closed the connection in the middle of a message")
+        if r == -4:
+            self.status = 4
+            return IpcMessage.make(4, "", "incoming message larger than the channel limit")
+        self.status = 3
+        self.code = _tr_sys_errno()
+        self.error = _tr_sys_errstr(self.code)
+        return IpcMessage.make(3, "", self.error)
+
+    pub def close(self):
+        if self.opened:
+            _tr_msgch_close(self.mc)
+            self.mc = 0 as Pointer[char]
+            self.opened = false
+            self.handle = -1
+        if self.peer_h >= 0:
+            _tr_io_close(self.peer_h)
+            self.peer_h = -1
+
+    pub def free(self):
+        self.close()
+
+# ── IpcServer ───────────────────────────────────────────────────────────────
+
+pub class IpcServer:
+    pub handle: Pointer[char]
+    pub addr:   str
+    pub opened: bool
+    pub code:   int
+    pub error:  str
+
+extend IpcServer:
+    pub def _make(addr: str, replace: int) -> IpcServer:
+        mut s = IpcServer()
+        s.addr = addr
+        s.code = 0
+        s.error = ""
+        s.opened = false
+        s.handle = _tr_ipc_listen(addr, 16, replace)
+        if (s.handle as int) == 0:
+            s.code = _tr_sys_errno()
+            s.error = _tr_sys_errstr(s.code)
+            return s
+        s.opened = true
+        return s
+
+    # Start listening. Fails if the address is already in use (POSIX: the socket
+    # file exists). Check is_open().
+    pub def listen(addr: str) -> IpcServer:
+        return IpcServer._make(addr, 0)
+
+    # Like listen(), but first removes a STALE socket file (one nothing is listening
+    # on) left behind by a crashed server. Refuses to steal a live server's address.
+    pub def listen_replace(addr: str) -> IpcServer:
+        return IpcServer._make(addr, 1)
+
+    pub def is_open(self) -> bool:
+        return self.opened
+
+    # Wait up to timeout_ms (< 0 forever) for a client. On success the returned
+    # channel is open; on timeout it is closed with status IPC_TIMEOUT.
+    pub def accept(self, timeout_ms: int) -> IpcChannel:
+        if not self.opened:
+            mut f = IpcChannel._blank()
+            f.status = 3
+            f.error = "server is closed"
+            return f
+        mut h = _tr_ipc_accept(self.handle, timeout_ms)
+        if h == -2:
+            mut t = IpcChannel._blank()
+            t.status = 1
+            t.error = "timed out"
+            return t
+        if h < 0:
+            return IpcChannel._failed(3, _tr_sys_errno())
+        return IpcChannel.from_handle(h)
+
+    # Stop listening (POSIX: also unlinks the socket file). Existing channels stay valid.
+    pub def close(self):
+        if self.opened:
+            _tr_ipc_server_close(self.handle)
+            self.opened = false
+            self.handle = 0 as Pointer[char]
+
+    pub def free(self):
+        self.close()
+
+# ── Ipc helpers ─────────────────────────────────────────────────────────────
+
+pub class Ipc:
+    _dummy: int
+
+extend Ipc:
+    pub def supported() -> bool:
+        return IpcChannel.supported()
+
+    # A conventional per-user address for application `app`:
+    #   POSIX   $XDG_RUNTIME_DIR/<app>.sock, else $TMPDIR/<app>.sock, else /tmp/<app>.sock
+    #   Windows \\.\pipe\<app>
+    pub def default_address(app: str) -> str:
+        if _tr_is_windows():
+            return "\\\\.\\pipe\\" + app
+        mut d = Ipc._env("XDG_RUNTIME_DIR")
+        if d == "": d = Ipc._env("TMPDIR")
+        if d == "": d = "/tmp"
+        if d.len() > 1 and d.slice(d.len() - 1, d.len()) == "/":
+            d = d.slice(0, d.len() - 1)
+        return d + "/" + app + ".sock"
+
+    pub def _env(name: str) -> str:
+        mut p = _tr_getenv(name)
+        if (p as int) == 0: return ""
+        return p as str

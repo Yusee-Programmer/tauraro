@@ -18,7 +18,7 @@ building libraries with `taupkg`)
 | [`std.encoding`](encoding.md) | Data encoding: JSON, CSV, TOML, INI, YAML, XML, Base64, Base32, Hex, CBOR, Protocol Buffers wire format, ASN.1 DER, PEM |
 | [`std.gpu`](gpu.md) | GPU compute: CUDA/OpenCL/CPU device API (`Device`/`Buffer[T]`/`Module`/`Kernel`), Tauraro `@kernel` → PTX/SPIR-V, and OpenMP CPU dispatch (`Gpu.parallel`) |
 | [`std.image`](image.md) | Raster image decode/encode: BMP (24/32-bit), QOI, PNG (truecolor/grayscale, full DEFLATE inflate + stored-block deflate), **JPEG** (baseline + progressive decode, baseline encode), shared `Image` (RGBA8) type, format-sniffing `decode()` |
-| [`std.io`](io.md) | File I/O, directory operations, path manipulation, console, buffered I/O, ZIP archive read/write (`ZipWriter`/`ZipReader`), tar archive read/write (`TarWriter`/`TarReader`) |
+| [`std.io`](io.md) | File I/O, pipes and FIFOs (`Pipe`, `Fifo`), message-framed local IPC (`IpcServer`/`IpcChannel`), directory operations, path manipulation, console, buffered I/O, ZIP archive read/write (`ZipWriter`/`ZipReader`), tar archive read/write (`TarWriter`/`TarReader`) |
 | [`std.iter`](iter.md) | Range construction, int/float vector transforms, folds, prefix sums, normalization |
 | [`std.log`](log.md) | Leveled structured logging: text/JSON formats, stdout/file sinks, per-target filtering (`Logger`/`Fields`) |
 | [`std.math`](math.md) | Integer math, floating-point math, bitwise operations, statistics, random, arbitrary-precision integers (`BigInt`) |

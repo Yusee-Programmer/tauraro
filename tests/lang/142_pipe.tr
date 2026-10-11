@@ -1,0 +1,186 @@
+# tests/lang/142_pipe.tr
+# std.io.pipe — anonymous pipes (round trip, binary data, timeouts, EOF, broken
+# pipe, ownership hand-off, fork ping-pong and bulk transfer) and POSIX FIFOs.
+
+from std.test import TestRunner
+from std.io.pipe import Pipe, PipeEnd, Fifo
+from std.sys.env import Env
+from std.sys.process import Process
+from std.sys.platform import Platform
+
+extern "C":
+    def _tr_sys_fork() -> int
+    def _tr_sys_waitpid(pid: int, ms: int) -> int
+    def _tr_sys_exit_now(code: int)
+
+def tmp_path(name: str) -> str:
+    mut e = Env.init()
+    mut d = e.get_var("TMPDIR")
+    if d == "": d = e.get_var("TEMP")
+    if d == "": d = e.get_var("TMP")
+    if d == "": d = "/tmp"
+    return d + "/tau_pipe_" + f"{Process.get_pid()}" + "_" + name
+
+# Build a Pipe, move both ends out, and let the Pipe be dropped.
+def make_ends() -> PipeEnd:
+    mut p = Pipe.create()
+    mut w = p.take_writer()
+    w.write_all("survived")
+    w.close()
+    return p.take_reader()
+
+def main():
+    mut t = TestRunner.init("142_pipe")
+    if not Pipe.supported():
+        t.skip("pipes not supported on this platform")
+        t.summary()
+        return
+
+    t.section("anonymous pipe round trip")
+    mut p = Pipe.create()
+    t.assert_true(p.ok, "create")
+    t.assert_true(p.read_h >= 0 and p.write_h >= 0, "both handles valid")
+    t.assert_eq_int(p.write("ping"), 4, "write returns the byte count")
+    t.assert_eq_str(p.read_timeout(64, 2000), "ping", "read back")
+    t.assert_eq_int(p.status, 0, "status ok")
+    t.assert_true(p.write_all("hello world"), "write_all")
+    t.assert_eq_str(p.read_timeout(5, 2000), "hello", "partial read honours max")
+    t.assert_eq_str(p.read_timeout(64, 2000), " world", "the rest")
+    t.assert_eq_str(p.read_timeout(64, 40), "", "empty pipe times out")
+    t.assert_eq_int(p.status, 2, "timeout status")
+    t.assert_true(p.write_all("a\0b\0c"), "binary write with NULs")
+    mut bin = p.read_timeout(64, 2000)
+    t.assert_eq_int(bin.len(), 5, "binary read keeps its length")
+    t.assert_eq_str(bin.slice(4, 5), "c", "bytes after NULs intact")
+    p.close_write()
+    t.assert_eq_str(p.read_timeout(64, 2000), "", "closed writer -> EOF")
+    t.assert_eq_int(p.status, 1, "EOF status")
+    p.close_read()
+    t.assert_eq_int(p.write("x"), -1, "write on a closed write end fails")
+
+    t.section("PipeEnd API + ownership hand-off")
+    mut q = Pipe.create()
+    mut r = q.take_reader()
+    mut w = q.take_writer()
+    t.assert_eq_int(q.read_h, -1, "Pipe gave up the read end")
+    t.assert_eq_int(q.write_h, -1, "Pipe gave up the write end")
+    t.assert_true(r.is_open() and w.is_open(), "ends are open")
+    t.assert_true(w.write_all("0123456789"), "write via PipeEnd")
+    t.assert_eq_int(r.wait_readable(1000), 1, "wait_readable sees data")
+    t.assert_eq_str(r.read_exact(4, 1000), "0123", "read_exact")
+    t.assert_eq_str(r.read_exact(6, 1000), "456789", "read_exact rest")
+    t.assert_eq_int(r.wait_readable(30), 0, "wait_readable times out when drained")
+    w.write_all("tail")
+    w.close()
+    t.assert_false(w.is_open(), "closed end reports closed")
+    t.assert_eq_str(r.read_all(1000, 1000), "tail", "read_all drains to EOF")
+    t.assert_eq_int(r.status, 1, "read_all stops at EOF")
+    t.assert_eq_str(r.read_exact(4, 30), "", "read_exact at EOF returns nothing")
+    r.close()
+    mut q2 = Pipe.create()
+    mut r2 = q2.take_reader()
+    mut w2 = q2.take_writer()
+    w2.write_all("ab\0cd")
+    w2.write_all("\0\0ef")
+    w2.close()
+    mut bin_all = r2.read_all(100, 1000)
+    t.assert_eq_int(bin_all.len(), 9, "read_all keeps NUL bytes across chunks")
+    t.assert_eq_str(bin_all.slice(7, 9), "ef", "bytes after the NULs arrive")
+    r2.close()
+    mut dropped = make_ends()
+    t.assert_true(dropped.is_open(), "an end taken from a dropped Pipe is still open")
+    t.assert_eq_str(dropped.read_all(100, 1000), "survived", "data written before the drop is readable")
+    dropped.close()
+
+    t.section("broken pipe is an error, not a crash")
+    mut bp = Pipe.create()
+    mut bw = bp.take_writer()
+    bp.free()
+    mut wrote = bw.write("into the void")
+    t.assert_eq_int(wrote, -1, "write with no reader fails")
+    t.assert_eq_int(bw.status, 3, "error status set")
+    t.assert_true(bw.error.len() > 0, "error text set")
+    bw.close()
+
+    if Platform.is_posix() and not Platform.is_wasm():
+        t.section("fork: ping-pong over two pipes")
+        mut up = Pipe.create()
+        mut down = Pipe.create()
+        mut pid = _tr_sys_fork()
+        if pid == 0:
+            up.close_read()
+            down.close_write()
+            mut got = down.read_timeout(64, 5000)
+            up.write_all("echo:" + got)
+            _tr_sys_exit_now(0)
+        t.assert_true(pid > 0, "fork")
+        down.close_read()
+        up.close_write()
+        down.write_all("marco")
+        t.assert_eq_str(up.read_timeout(64, 5000), "echo:marco", "child echoed over the pipe")
+        t.assert_eq_int(_tr_sys_waitpid(pid, 10000), 0, "child exited cleanly")
+        t.assert_eq_str(up.read_timeout(64, 2000), "", "EOF once the child is gone")
+        t.assert_eq_int(up.status, 1, "EOF status")
+
+        t.section("fork: bulk transfer larger than the pipe buffer")
+        mut bulk = Pipe.create()
+        mut chunk = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        mut pid2 = _tr_sys_fork()
+        if pid2 == 0:
+            bulk.close_read()
+            mut i = 0
+            while i < 8192:        # 8192 * 64 bytes = 512 KiB
+                if not bulk.write_all(chunk): _tr_sys_exit_now(3)
+                i = i + 1
+            bulk.close_write()
+            _tr_sys_exit_now(0)
+        bulk.close_write()
+        mut rd = bulk.take_reader()
+        mut total = 0
+        mut done = false
+        while not done:
+            mut part = rd.read_timeout(65536, 10000)
+            if part.len() == 0:
+                done = true
+            else:
+                total = total + part.len()
+        t.assert_eq_int(total, 524288, "all 512 KiB arrived")
+        t.assert_eq_int(rd.status, 1, "stream ended with EOF, not a timeout")
+        t.assert_eq_int(_tr_sys_waitpid(pid2, 10000), 0, "writer child ok")
+        rd.close()
+    else:
+        t.skip("fork tests need POSIX")
+
+    if Fifo.supported():
+        t.section("FIFO")
+        mut fp = tmp_path("q.fifo")
+        Fifo.remove(fp)
+        t.assert_true(Fifo.create(fp), "mkfifo")
+        t.assert_false(Fifo.create(fp), "mkfifo on an existing path fails")
+        mut nowriter = Fifo.open_write(fp, 80)
+        t.assert_false(nowriter.is_open(), "open_write with no reader times out")
+        t.assert_true(nowriter.error.len() > 0, "open_write failure has a message")
+        mut frd = Fifo.open_read(fp)
+        t.assert_true(frd.is_open(), "open_read does not block")
+        mut fwr = Fifo.open_write(fp, 1000)
+        t.assert_true(fwr.is_open(), "open_write succeeds once a reader exists")
+        t.assert_eq_str(frd.read_timeout(16, 40), "", "no data yet -> timeout")
+        t.assert_eq_int(frd.status, 2, "timeout status on an idle FIFO")
+        t.assert_true(fwr.write_all("via fifo"), "write")
+        t.assert_eq_str(frd.read_timeout(64, 2000), "via fifo", "read")
+        fwr.write_all("last words")
+        fwr.close()
+        t.assert_eq_str(frd.read_all(1000, 2000), "last words", "drain until the writer hangs up")
+        t.assert_eq_int(frd.status, 1, "EOF after the writer closed")
+        frd.close()
+        t.assert_true(Fifo.remove(fp), "remove")
+        t.assert_false(Fifo.remove(fp), "second remove fails")
+        mut missing = Fifo.open_read(fp)
+        t.assert_false(missing.is_open(), "open_read of a missing FIFO fails")
+        mut rd_after = missing.read_timeout(8, 10)
+        t.assert_eq_str(rd_after, "", "reads on a failed end return empty")
+        t.assert_eq_int(missing.status, 3, "and report an error")
+    else:
+        t.skip("FIFOs are POSIX only")
+
+    t.summary()

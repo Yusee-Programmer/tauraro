@@ -84,6 +84,10 @@ added here as each phase lands.
   injected by the compiler) and generational `Slab[T]` handle pool. Documented in
   `docs/std/collections.md`, tested by `tests/lang/150_bitset_ringbuffer.tr` ..
   `154_arena_slab.tr` (model-checked, ASan-clean).
+- **`std.io.pipe` / `std.io.ipc`: pipes and message-framed IPC.** Anonymous pipes (`Pipe`, `PipeEnd`),
+  POSIX FIFOs (`Fifo`), and `IpcServer`/`IpcChannel` length-prefixed message channels over Unix domain
+  sockets (Windows named pipes compile-checked), with timeouts, size limits and stale-socket recovery.
+  Tested by `tests/lang/142_pipe.tr`, `143_ipc.tr`.
 - **`std.async.retry`** — `RetryPolicy` (max attempts, fixed/exponential backoff
   with cap, optional jitter, retry-on predicate, overall deadline, per-attempt
   timeout), `call_with_timeout` / `call_bool_with_timeout`, and a thread-safe

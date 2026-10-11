@@ -1,0 +1,340 @@
+# std.io.pipe — anonymous pipes and POSIX named pipes (FIFOs).
+#
+#   from std.io.pipe import Pipe, PipeEnd, Fifo
+#
+#   mut p = Pipe.create()
+#   if not p.ok: print(p.error)
+#   p.write("ping")                      # write end
+#   print(p.read_timeout(64, 1000))      # read end -> "ping" (waits at most 1s)
+#   # p closes both ends at scope exit (the user-defined free())
+#
+#   # hand each end to its owner (the usual pattern around fork() or threads):
+#   mut r = p.take_reader()              # PipeEnd; Pipe no longer owns that end
+#   mut w = p.take_writer()
+#
+#   # named pipes (POSIX only — Windows named pipes live in std.io.ipc)
+#   Fifo.create("/tmp/jobs.fifo")
+#   mut rd = Fifo.open_read("/tmp/jobs.fifo")           # never blocks
+#   mut wr = Fifo.open_write("/tmp/jobs.fifo", 1000)    # waits up to 1s for a reader
+#   wr.write_all("hello")
+#   print(rd.read_timeout(64, 1000))
+#   Fifo.remove("/tmp/jobs.fifo")
+#
+# A PipeEnd owns one OS handle (POSIX file descriptor / Windows pipe HANDLE),
+# closed by close() or at scope exit. `handle` is public so it can be given to
+# std.io.poll.IOPoll. After every read the `status` field says what happened:
+# PIPE_OK, PIPE_EOF (all writers closed and the data drained), PIPE_TIMEOUT or
+# PIPE_ERROR (`error`/`code` set).
+#
+# Reads and writes are binary-safe: data is a `str` whose real length (`s.len()`)
+# is used, so embedded NUL bytes survive. A write to a pipe whose reader is gone
+# fails (the runtime ignores SIGPIPE), it does not kill the process.
+#
+# FIFO note: a FIFO's read end is opened without waiting for a writer, and a read
+# on it reports EOF while NO writer is connected. Always use read_timeout() /
+# wait_readable() on a FIFO read end (they wait for data or a hang-up first).
+#
+# Platforms: anonymous pipes everywhere with OS support (POSIX pipe(), Windows
+# CreatePipe); FIFOs POSIX only (Fifo.supported() is false on Windows); bare-metal,
+# kernel and WASI builds report unsupported. Pipe handles are not inherited by
+# spawned programs (close-on-exec / non-inheritable) — they are for in-process,
+# thread and fork() use.
+
+from std.core.string import StringBuilder
+
+extern "C":
+    def _tr_pipe_create(out2: Pointer[char]) -> int
+    def _tr_io_read(h: int, buf: Pointer[char], n: int) -> int
+    def _tr_io_write(h: int, buf: Pointer[char], n: int) -> int
+    def _tr_io_wait(h: int, timeout_ms: int, for_write: int) -> int
+    def _tr_io_close(h: int) -> int
+    def _tr_fifo_create(path: str, mode: int) -> int
+    def _tr_fifo_open(path: str, for_write: int, timeout_ms: int) -> int
+    def _tr_fifo_remove(path: str) -> int
+    def _tr_sys_errno() -> int
+    def _tr_sys_errstr(code: int) -> str
+    def _tr_sys_feature(id: int) -> int
+    def _tr_c_malloc(size: int) -> Pointer[char]
+    def _tr_free(p: Pointer[char])
+    def _tr_str_wrap_len(s: Pointer[char], blen: int) -> str
+
+pub def PIPE_OK()      -> int: return 0
+pub def PIPE_EOF()     -> int: return 1
+pub def PIPE_TIMEOUT() -> int: return 2
+pub def PIPE_ERROR()   -> int: return 3
+
+# ── PipeEnd ─────────────────────────────────────────────────────────────────
+
+pub class PipeEnd:
+    pub handle: int      # -1 once closed
+    pub status: int      # outcome of the last read/wait (PIPE_*)
+    pub code:   int
+    pub error:  str
+
+extend PipeEnd:
+    pub def from_handle(h: int) -> PipeEnd:
+        mut e = PipeEnd()
+        e.handle = h
+        e.status = 0
+        e.code = 0
+        e.error = ""
+        return e
+
+    pub def _failed(code: int) -> PipeEnd:
+        mut e = PipeEnd.from_handle(-1)
+        e.status = 3
+        e.code = code
+        e.error = _tr_sys_errstr(code)
+        return e
+
+    pub def is_open(self) -> bool:
+        return self.handle >= 0
+
+    pub def _set_error(self):
+        self.status = 3
+        self.code = _tr_sys_errno()
+        self.error = _tr_sys_errstr(self.code)
+
+    # Wait until the end is readable (data, or EOF/hang-up) or `timeout_ms` passes
+    # (< 0 waits forever). 1 ready, 0 timeout, -1 error.
+    pub def wait_readable(self, timeout_ms: int) -> int:
+        if self.handle < 0: return -1
+        mut r = _tr_io_wait(self.handle, timeout_ms, 0)
+        if r < 0: self._set_error()
+        return r
+
+    # Read up to max bytes, blocking until at least one byte, EOF or error.
+    # Returns "" on EOF/error — look at `status`.
+    pub def read(self, max: int) -> str:
+        return self.read_timeout(max, -1)
+
+    # Like read() but gives up after timeout_ms (status = PIPE_TIMEOUT, returns "").
+    pub def read_timeout(self, max: int, timeout_ms: int) -> str:
+        if self.handle < 0 or max <= 0:
+            self.status = 3
+            self.error = "pipe end is closed"
+            return ""
+        if timeout_ms >= 0:
+            mut w = _tr_io_wait(self.handle, timeout_ms, 0)
+            if w == 0:
+                self.status = 2
+                return ""
+            if w < 0:
+                self._set_error()
+                return ""
+        mut buf = _tr_c_malloc(max + 1)
+        mut n = _tr_io_read(self.handle, buf, max)
+        if n > 0:
+            unsafe:
+                buf.offset(n).write('\0')
+            self.status = 0
+            return _tr_str_wrap_len(buf, n)
+        _tr_free(buf)
+        if n == 0:
+            self.status = 1
+        else:
+            self._set_error()
+        return ""
+
+    # Read exactly n bytes (fewer only on EOF, timeout or error — check `status`,
+    # the returned length tells how many arrived). timeout_ms bounds EACH wait.
+    pub def read_exact(self, n: int, timeout_ms: int) -> str:
+        # StringBuilder, not `str + str`: concatenation stops at a NUL byte
+        mut sb = StringBuilder.init(n + 1)
+        mut got = 0
+        self.status = 0
+        while got < n:
+            mut part = self.read_timeout(n - got, timeout_ms)
+            if part.len() == 0: break
+            sb.append(part)
+            got = got + part.len()
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    # Read until EOF, at most max_total bytes, each wait bounded by timeout_ms.
+    # status says why it stopped (PIPE_EOF normally).
+    pub def read_all(self, max_total: int, timeout_ms: int) -> str:
+        mut sb = StringBuilder.init(4096)
+        mut got = 0
+        self.status = 0
+        while got < max_total:
+            mut part = self.read_timeout(4096, timeout_ms)
+            if part.len() == 0: break
+            sb.append(part)
+            got = got + part.len()
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    # One write attempt: bytes written, or -1 on error (reader gone, ...).
+    pub def write(self, data: str) -> int:
+        if self.handle < 0:
+            self.status = 3
+            self.error = "pipe end is closed"
+            return -1
+        mut n = data.len()
+        if n == 0: return 0
+        mut w = _tr_io_write(self.handle, data as Pointer[char], n)
+        if w < 0: self._set_error()
+        return w
+
+    # Write every byte (loops over short writes). False on error.
+    pub def write_all(self, data: str) -> bool:
+        mut n = data.len()
+        mut off = 0
+        while off < n:
+            mut rest = data
+            if off > 0: rest = data.slice(off, n)
+            mut w = self.write(rest)
+            if w <= 0: return false
+            off = off + w
+        return true
+
+    pub def close(self):
+        if self.handle >= 0:
+            _tr_io_close(self.handle)
+            self.handle = -1
+
+    pub def free(self):
+        self.close()
+
+# ── Pipe (anonymous pair) ───────────────────────────────────────────────────
+
+pub class Pipe:
+    pub read_h:  int
+    pub write_h: int
+    pub ok:      bool
+    pub code:    int
+    pub error:   str
+    pub status:  int
+
+extend Pipe:
+    pub def supported() -> bool:
+        return _tr_sys_feature(3) == 1
+
+    pub def create() -> Pipe:
+        mut p = Pipe()
+        p.read_h = -1
+        p.write_h = -1
+        p.ok = false
+        p.code = 0
+        p.error = ""
+        p.status = 0
+        mut buf = _tr_c_malloc(16)
+        mut rc = _tr_pipe_create(buf)
+        if rc != 0:
+            p.code = _tr_sys_errno()
+            p.error = _tr_sys_errstr(p.code)
+            _tr_free(buf)
+            return p
+        unsafe:
+            mut ip = buf as Pointer[int]
+            p.read_h = ip.offset(0).read()
+            p.write_h = ip.offset(1).read()
+        _tr_free(buf)
+        p.ok = true
+        return p
+
+    # Move ownership of the read end out (this Pipe will no longer close it).
+    pub def take_reader(self) -> PipeEnd:
+        mut e = PipeEnd.from_handle(self.read_h)
+        self.read_h = -1
+        return e
+
+    pub def take_writer(self) -> PipeEnd:
+        mut e = PipeEnd.from_handle(self.write_h)
+        self.write_h = -1
+        return e
+
+    pub def close_read(self):
+        if self.read_h >= 0:
+            _tr_io_close(self.read_h)
+            self.read_h = -1
+
+    pub def close_write(self):
+        if self.write_h >= 0:
+            _tr_io_close(self.write_h)
+            self.write_h = -1
+
+    # Convenience over the ends this Pipe still owns.
+    pub def write(self, data: str) -> int:
+        if self.write_h < 0: return -1
+        mut n = data.len()
+        if n == 0: return 0
+        return _tr_io_write(self.write_h, data as Pointer[char], n)
+
+    pub def write_all(self, data: str) -> bool:
+        mut n = data.len()
+        mut off = 0
+        while off < n:
+            mut rest = data
+            if off > 0: rest = data.slice(off, n)
+            mut w = self.write(rest)
+            if w <= 0: return false
+            off = off + w
+        return true
+
+    pub def read_timeout(self, max: int, timeout_ms: int) -> str:
+        if self.read_h < 0 or max <= 0:
+            self.status = 3
+            return ""
+        if timeout_ms >= 0:
+            mut w = _tr_io_wait(self.read_h, timeout_ms, 0)
+            if w == 0:
+                self.status = 2
+                return ""
+            if w < 0:
+                self.status = 3
+                return ""
+        mut buf = _tr_c_malloc(max + 1)
+        mut n = _tr_io_read(self.read_h, buf, max)
+        if n > 0:
+            unsafe:
+                buf.offset(n).write('\0')
+            self.status = 0
+            return _tr_str_wrap_len(buf, n)
+        _tr_free(buf)
+        if n == 0: self.status = 1
+        else: self.status = 3
+        return ""
+
+    pub def read(self, max: int) -> str:
+        return self.read_timeout(max, -1)
+
+    pub def free(self):
+        self.close_read()
+        self.close_write()
+
+# ── Fifo (POSIX named pipes) ────────────────────────────────────────────────
+
+pub class Fifo:
+    pub path: str
+
+extend Fifo:
+    pub def supported() -> bool:
+        return _tr_sys_feature(4) == 1
+
+    # mkfifo(path, 0600). False if it exists or on error (use Fifo.last_error()).
+    pub def create(path: str) -> bool:
+        return _tr_fifo_create(path, 384) == 0
+
+    pub def last_error() -> str:
+        return _tr_sys_errstr(_tr_sys_errno())
+
+    # Remove the FIFO's directory entry.
+    pub def remove(path: str) -> bool:
+        return _tr_fifo_remove(path) == 0
+
+    # Open the read end. Never blocks; reads report EOF until a writer connects, so
+    # use read_timeout()/wait_readable() (see the module header).
+    pub def open_read(path: str) -> PipeEnd:
+        mut h = _tr_fifo_open(path, 0, 0)
+        if h < 0: return PipeEnd._failed(_tr_sys_errno())
+        return PipeEnd.from_handle(h)
+
+    # Open the write end, retrying until a reader exists or timeout_ms (< 0 forever).
+    pub def open_write(path: str, timeout_ms: int) -> PipeEnd:
+        mut h = _tr_fifo_open(path, 1, timeout_ms)
+        if h < 0: return PipeEnd._failed(_tr_sys_errno())
+        return PipeEnd.from_handle(h)

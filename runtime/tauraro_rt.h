@@ -10385,7 +10385,7 @@ _TR_XLINK long long _tr_shm_unlink(const char* n) { (void)n; return _TR_S1_ENOSU
 _TR_XLINK long long _tr_shm_created(char* h) { (void)h; return 0; }
 _TR_XLINK long long _tr_shm_lock(char* h, long long ms) { (void)h; (void)ms; return -2; }
 _TR_XLINK long long _tr_shm_unlock(char* h) { (void)h; return -1; }
-_TR_XLINK long long _tr_pipe_create(long long* out2) { (void)out2; return _TR_S1_ENOSUP; }
+_TR_XLINK long long _tr_pipe_create(char* out2) { (void)out2; return _TR_S1_ENOSUP; }
 _TR_XLINK long long _tr_io_read(long long h, char* b, long long n) { (void)h; (void)b; (void)n; return -1; }
 _TR_XLINK long long _tr_io_write(long long h, const char* b, long long n) { (void)h; (void)b; (void)n; return -1; }
 _TR_XLINK long long _tr_io_wait(long long h, long long ms, long long w) { (void)h; (void)ms; (void)w; return -1; }
@@ -10397,7 +10397,7 @@ _TR_XLINK char* _tr_ipc_listen(const char* a, long long b, long long r) { (void)
 _TR_XLINK long long _tr_ipc_accept(char* s, long long ms) { (void)s; (void)ms; return -1; }
 _TR_XLINK long long _tr_ipc_connect(const char* a, long long ms) { (void)a; (void)ms; return -1; }
 _TR_XLINK long long _tr_ipc_server_close(char* s) { (void)s; return 0; }
-_TR_XLINK long long _tr_ipc_socketpair(long long* out2) { (void)out2; return _TR_S1_ENOSUP; }
+_TR_XLINK long long _tr_ipc_socketpair(char* out2) { (void)out2; return _TR_S1_ENOSUP; }
 _TR_XLINK char* _tr_msgch_new(long long h, long long mx) { (void)h; (void)mx; return NULL; }
 _TR_XLINK long long _tr_msgch_send(char* c, const char* d, long long n) { (void)c; (void)d; (void)n; return -1; }
 _TR_XLINK long long _tr_msgch_recv(char* c, long long ms) { (void)c; (void)ms; return -2; }
@@ -10405,6 +10405,7 @@ _TR_XLINK char* _tr_msgch_data(char* c) { (void)c; return NULL; }
 _TR_XLINK long long _tr_msgch_data_len(char* c) { (void)c; return 0; }
 _TR_XLINK void _tr_msgch_consume(char* c) { (void)c; }
 _TR_XLINK long long _tr_msgch_close(char* c) { (void)c; return 0; }
+_TR_XLINK void _tr_msgch_set_max(char* c, long long n) { (void)c; (void)n; }
 _TR_XLINK char* _tr_dl_open(const char* p, long long f) { (void)p; (void)f; return NULL; }
 _TR_XLINK char* _tr_dl_sym(char* h, const char* n) { (void)h; (void)n; return NULL; }
 _TR_XLINK long long _tr_dl_close(char* h) { (void)h; return -1; }
@@ -11022,7 +11023,8 @@ _TR_XLINK long long _tr_io_close(long long h) {
 }
 
 /* Anonymous pipe: out2[0] = read end, out2[1] = write end. */
-_TR_XLINK long long _tr_pipe_create(long long* out2) {
+_TR_XLINK long long _tr_pipe_create(char* out_raw) {
+    long long* out2 = (long long*)out_raw;
 #ifdef _WIN32
     HANDLE r = NULL, w = NULL;
     if (!CreatePipe(&r, &w, NULL, 65536)) { _tr_s1_seterr_os(); return -1; }
@@ -11064,6 +11066,7 @@ _TR_XLINK long long _tr_fifo_open(const char* path, long long for_write, long lo
     if (!for_write) {
         int fd = open(path, O_RDONLY | O_NONBLOCK);
         if (fd < 0) { _tr_s1_seterr_os(); return -1; }
+        int fl0 = fcntl(fd, F_GETFL); if (fl0 >= 0) fcntl(fd, F_SETFL, fl0 & ~O_NONBLOCK);
         fcntl(fd, F_SETFD, FD_CLOEXEC);
         return fd;
     }
@@ -11228,7 +11231,8 @@ _TR_XLINK long long _tr_ipc_server_close(char* sv) {
     return 0;
 }
 /* Connected pair of stream endpoints (POSIX only): out2[0], out2[1]. */
-_TR_XLINK long long _tr_ipc_socketpair(long long* out2) {
+_TR_XLINK long long _tr_ipc_socketpair(char* out_raw) {
+    long long* out2 = (long long*)out_raw;
 #ifdef _WIN32
     (void)out2; return _tr_s1_fail(_TR_S1_ENOSUP);
 #else
@@ -11310,6 +11314,7 @@ _TR_XLINK long long _tr_msgch_recv(char* ch, long long timeout_ms) {
         c->len += (size_t)r;
     }
 }
+_TR_XLINK void _tr_msgch_set_max(char* ch, long long n) { _TrMsgCh* c = (_TrMsgCh*)ch; if (c && n > 0) c->max_msg = n; }
 _TR_XLINK char* _tr_msgch_data(char* ch) { _TrMsgCh* c = (_TrMsgCh*)ch; return c ? (char*)c->buf + 4 : NULL; }
 _TR_XLINK long long _tr_msgch_data_len(char* ch) {
     _TrMsgCh* c = (_TrMsgCh*)ch;
