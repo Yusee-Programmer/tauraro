@@ -195,6 +195,41 @@ encoder were verified by decoding with this decoder and with Pillow/libgif.
 
 ---
 
+## std.image.transform — resize, crop, rotate, filters, compositing
+
+```tauraro
+from std.image.transform import resize_image, crop, flip_h, rotate90, rotate, gaussian_blur,
+                                sharpen, grayscale, composite, FILTER_LANCZOS
+```
+
+Pure Tauraro, operating on the shared RGBA8 `Image`. Functions return a **new**
+owned image (the argument is untouched) except the in-place drawing helpers
+(`composite`, `composite_ex`, `paste`, `fill_rect`). Invalid sizes give an `Image`
+with `width == -1`. (`resize_image` is not called `resize` because the compiler
+treats a function named `resize` as the realloc intrinsic — bug M1-3.)
+
+| Group | Functions |
+|---|---|
+| Resize | `resize_image(img, w, h, filter)` with `FILTER_NEAREST` / `FILTER_BILINEAR` / `FILTER_BICUBIC` / `FILTER_LANCZOS`; `resize_nearest/bilinear/bicubic/lanczos`; `resize_fit(img, max_w, max_h, filter, shrink_only)` |
+| Geometry | `crop(img, x, y, w, h)` (out-of-range area transparent), `flip_h`, `flip_v`, `rotate90(img, quarter_turns)` (clockwise), `rotate180`, `transpose`, `rotate(img, degrees, expand, smooth)`, `copy_image` |
+| Convolution | `Kernel.init(n)` + `set/get`, `divisor`, `offset`; `convolve(img, kernel)`; `box_blur(img, radius)`, `gaussian_blur(img, sigma)`, `sharpen(img, amount)`, `edge_detect(img)` (Laplacian), `sobel(img)`, `emboss(img)` |
+| Colour | `grayscale`, `invert`, `brightness(img, add)`, `contrast(img, factor)`, `gamma(img, g)`, `saturation(img, factor)`, `threshold(img, t)`, `sepia`, `with_opacity(img, 0..1)` |
+| Compositing | `composite(dst, src, x, y)` (Porter-Duff *over*, straight alpha, clipped), `composite_ex(..., opacity 0..255)`, `paste` (no blend), `fill_rect`, `flatten(img, r, g, b)` |
+
+**Accuracy.** Resizing uses Pillow's separable algorithm (the filter support
+grows with the down-scale factor, so shrinking is anti-aliased). Compared with
+Pillow on opaque images nearest, bicubic and lanczos are byte-identical and
+bilinear is within 1 level; images with alpha are resampled premultiplied and
+agree within a few levels. `rotate` matches Pillow's canvas size for `expand`
+and its pixels for nearest sampling (a handful of exact-tie pixels may differ).
+Convolutions clamp at the borders (Pillow leaves a 1-pixel border unfiltered);
+alpha passes through unchanged. `gaussian_blur` is a true Gaussian (Pillow
+approximates one with box blurs), `contrast` pivots at 128 (Pillow pivots at the
+mean luma). Everything is per-pixel integer/float code with no SIMD: a 1000x1000
+Lanczos resize takes a few hundred ms.
+
+---
+
 ## decode() — format sniffing
 
 ```tauraro
@@ -202,7 +237,7 @@ pub def decode(data: str, len_: int) -> Image
 ```
 
 Inspects the magic bytes of `data` (`"BM"` for BMP, `"qoif"` for QOI, the
-8-byte PNG signature for PNG, `FF D8 FF` for JPEG) and dispatches to the matching decoder.
+8-byte PNG signature for PNG, `FF D8 FF` for JPEG, `"GIF8"` for GIF — first frame) and dispatches to the matching decoder.
 Returns an `Image` with `width == -1` for unrecognized or too-short input.
 
 ---

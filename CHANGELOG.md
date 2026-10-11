@@ -62,6 +62,9 @@ added here as each phase lands.
 - **`std.crypto.bytes`** — `CryptoBytes`: constant-time `ct_eq`, volatile
   `secure_zero` (new runtime helper `_tr_c_secure_zero`), OS `random`, binary-safe
   slice/concat (`tests/lang/114_crypto_bytes.tr`).
+- **`std.image.transform`** — resize (nearest/bilinear/bicubic/lanczos, Pillow-compatible), crop, flips, 90°/arbitrary rotation,
+  convolution (box/gaussian blur, sharpen, Laplacian/Sobel edges, emboss, custom kernels), colour adjustments, alpha
+  compositing; `decode()` now sniffs GIF. `tests/lang/162_transform.tr`.
 - **`std.image.gif`** — pure-Tauraro GIF87a/89a: LZW decode (interlace, local palettes, transparency, disposal 0-3,
   Netscape loop) with every frame composited like a viewer (pixel-identical to Pillow), `decode_gif`/`decode_gif_anim`;
   encoder with exact/median-cut palettes, dithering, `GifWriter` animations (delays, loop, optimise-to-changed-rect).
