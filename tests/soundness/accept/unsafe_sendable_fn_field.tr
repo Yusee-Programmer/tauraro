@@ -1,0 +1,16 @@
+# EXPECT: pass
+# `implements Sendable, UnsafeSendable` is the author's `unsafe impl Send`: it opts the
+# class out of the [T-2] field walk entirely, so a function-typed field (not a raw
+# Pointer) is accepted too (bug log #17).
+class Job implements Sendable, UnsafeSendable:
+    pub op: def() -> bool
+    pub name: str
+
+def yes() -> bool:
+    return true
+
+def main():
+    mut j = Job()
+    j.op = yes
+    j.name = "job"
+    print(j.op())

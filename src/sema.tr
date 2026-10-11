@@ -742,6 +742,11 @@ extend Sema:
         while ui < c.iface_names.len:
             if c.iface_names.get(ui) == "UnsafeSendable": has_unsafe = true
             ui = ui + 1
+        # The assertion is the whole point of `unsafe impl Send`: when present the author
+        # vouches for every field (raw Pointer handles, `def()` function-typed fields,
+        # opaque FFI state ...), so skip the field walk entirely (bug log #17: it used to
+        # exempt only raw Pointer fields and still rejected e.g. `pub op: def() -> bool`).
+        if has_unsafe: return
         mut cfi = 0
         while cfi < c.fields.len:
             mut fd = c.fields.get(cfi)
