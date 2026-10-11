@@ -1,0 +1,38 @@
+# Leak gate: a USER class named `Box` shadows the builtin Box[T] (bug log #26): its
+# owned locals must be auto-dropped like any other heap class. Run by scripts/leak_check.sh.
+extern "C":
+    def _tr_mem_live() -> int
+
+class Box:
+    pub v: int
+    pub label: str
+
+extend Box:
+    pub def init(v: int, label: str) -> Box:
+        mut b = Box()
+        b.v = v
+        b.label = label
+        return b
+
+def mk(v: int) -> Box:
+    mut b = Box()
+    b.v = v
+    return b
+
+def workload() -> int:
+    mut a = mk(1)
+    mut v = a.v
+    return v
+
+def main():
+    workload()
+    mut before = _tr_mem_live()
+    mut r = 0
+    while r < 100:
+        workload()
+        r = r + 1
+    mut leaked = _tr_mem_live() - before
+    if leaked <= 0:
+        print("LEAK-GATE PASS")
+    else:
+        print("LEAK-GATE FAIL leaked=" + leaked.to_str())

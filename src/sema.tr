@@ -1124,7 +1124,7 @@ extend Sema:
     pub def _is_rc_class(self, n: str) -> bool:
         if not self.classes.contains(n): return false
         if not self.classes.get(n).is_class: return false
-        if n == "Vec" or n == "Map" or n == "List" or n == "Dict" or n == "Set" or n == "Box" or n == "Mutex" or n == "RwLock" or n == "Atomic" or n == "Shared" or n == "Weak" or n == "Option" or n == "Result" or n == "Chan" or n == "StringBuilder" or n == "StringObj": return false
+        if n == "Vec" or n == "Map" or n == "List" or n == "Dict" or n == "Set" or ((n == "Box") and not self.classes.contains("Box")) or n == "Mutex" or n == "RwLock" or n == "Atomic" or n == "Shared" or n == "Weak" or n == "Option" or n == "Result" or n == "Chan" or n == "StringBuilder" or n == "StringObj": return false
         if self.ptr_aliased.contains(n): return false
         return true
 
@@ -1139,7 +1139,7 @@ extend Sema:
         if depth > 24: return false
         mut n = ft.name
         if n == "Shared" or n == "Weak" or n == "Pointer": return false
-        if n == "Mutex" or n == "RwLock" or n == "Box" or n == "Vec" or n == "List" or n == "Set" or n == "Chan" or n == "Option":
+        if n == "Mutex" or n == "RwLock" or ((n == "Box") and not self.classes.contains("Box")) or n == "Vec" or n == "List" or n == "Set" or n == "Chan" or n == "Option":
             if ft.args.len > 0: return self._ty_reaches_plain_rc(ft.args.get(0).read(), depth + 1)
             return false
         if n == "Dict" or n == "Map":
@@ -1195,7 +1195,7 @@ extend Sema:
             mut inner = n
             if (n == "Shared" or n == "Weak") and at.args.len > 0: inner = at.args.get(0).read().name
             reaches = self._sendable_reaches_plain_rc(inner, 0)
-        elif (n == "Mutex" or n == "RwLock" or n == "Box" or n == "Vec" or n == "List" or n == "Set" or n == "Option" or n == "Chan") and at.args.len > 0:
+        elif (n == "Mutex" or n == "RwLock" or ((n == "Box") and not self.classes.contains("Box")) or n == "Vec" or n == "List" or n == "Set" or n == "Option" or n == "Chan") and at.args.len > 0:
             reaches = self._ty_reaches_plain_rc(at.args.get(0).read(), 0)
         elif (n == "Dict" or n == "Map") and at.args.len > 1:
             reaches = self._ty_reaches_plain_rc(at.args.get(1).read(), 0)
@@ -2171,7 +2171,7 @@ extend Sema:
     pub def _early_exit_drop_ok(self, tn: str) -> bool:
         if tn == "str": return true
         if not self.classes.contains(tn): return false
-        if tn == "Vec" or tn == "Map" or tn == "List" or tn == "Dict" or tn == "Set" or tn == "Box" or tn == "Mutex" or tn == "RwLock" or tn == "Atomic" or tn == "Shared" or tn == "Weak" or tn == "Option" or tn == "Result" or tn == "Chan" or tn == "StringBuilder" or tn == "StringObj": return false
+        if tn == "Vec" or tn == "Map" or tn == "List" or tn == "Dict" or tn == "Set" or ((tn == "Box") and not self.classes.contains("Box")) or tn == "Mutex" or tn == "RwLock" or tn == "Atomic" or tn == "Shared" or tn == "Weak" or tn == "Option" or tn == "Result" or tn == "Chan" or tn == "StringBuilder" or tn == "StringObj": return false
         if self.class_has_free(tn): return false
         return true
 
@@ -3125,7 +3125,7 @@ extend Sema:
         if f.ret_ty as usize == 0 as usize: return false
         mut rn = f.ret_ty.name
         if not self.classes.contains(rn): return false
-        if rn == "Vec" or rn == "Map" or rn == "List" or rn == "Dict" or rn == "Set" or rn == "Box" or rn == "Mutex" or rn == "RwLock" or rn == "Atomic" or rn == "Shared" or rn == "Option" or rn == "Result" or rn == "Chan" or rn == "StringBuilder" or rn == "StringObj": return false
+        if rn == "Vec" or rn == "Map" or rn == "List" or rn == "Dict" or rn == "Set" or ((rn == "Box") and not self.classes.contains("Box")) or rn == "Mutex" or rn == "RwLock" or rn == "Atomic" or rn == "Shared" or rn == "Option" or rn == "Result" or rn == "Chan" or rn == "StringBuilder" or rn == "StringObj": return false
         # value types are copied by value, not refcounted
         mut cinfo = self.classes.get(rn)
         if not cinfo.is_class: return false
@@ -7018,7 +7018,7 @@ extend Sema:
         if self.classes.contains(name): return true
         if self.enums.contains(name): return true
         if self.interfaces as usize != 0 as usize and self.interfaces.contains(name): return true
-        if name == "Vec" or name == "List" or name == "Map" or name == "Dict" or name == "Set" or name == "Box" or name == "Tuple" or name == "tuple" or name == "Pointer": return true
+        if name == "Vec" or name == "List" or name == "Map" or name == "Dict" or name == "Set" or ((name == "Box") and not self.classes.contains("Box")) or name == "Tuple" or name == "tuple" or name == "Pointer": return true
         if name == "Mutex" or name == "RwLock" or name == "Atomic" or name == "Shared" or name == "Weak" or name == "Option" or name == "Result" or name == "Chan" or name == "Channel": return true
         if name == "Thread" or name == "ThreadPool" or name == "ThreadLocal" or name == "Coro": return true
         if name == "AsyncPool" or name == "AsyncTask": return true
