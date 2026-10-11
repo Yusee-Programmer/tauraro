@@ -1,0 +1,347 @@
+# std.collections.skiplist — SkipList[K, V]: ordered map with range queries.
+#
+# A probabilistic skip list (p = 1/2, at most 16 levels).  Expected O(log n)
+# insert / fetch / remove / floor / ceiling, and ordered range scans in
+# O(log n + k).  Keys are ordered with plain `<` and `==` (int and str work
+# out of the box, like BTreeMap).
+#
+# Determinism: the level of each new node comes from a small xorshift64
+# generator owned by the list.  `SkipList[K, V].init(seed)` therefore gives a
+# fully reproducible shape (same seed + same operations = same structure and
+# same iteration order, which is always ascending key order regardless).  A
+# zero seed is replaced by a fixed non-zero constant.
+#
+# Storage is index-based, no raw pointers: nodes live in parallel Vecs (keys,
+# values, forward links) and are addressed by an int "cursor".  Removed nodes
+# go on a free list and are reused by later inserts.  A removed node's key and
+# value slots keep their (reference-counted) contents until reused or until the
+# list is dropped — Vec.set retains the new element and releases the old one,
+# so nothing leaks and nothing dangles.  The compiler frees the list and all
+# the Vecs at scope exit.
+#
+# Method naming: lookup is `fetch` (not `get`) following LruCache — a
+# 2-type-parameter generic class is the shape that trips the `get` return-type
+# fast path in sema (see std/collections/lru.tr).
+#
+# Cursors: cursor_first() / cursor_seek(key) / cursor_next(c) walk the list in
+# order; they return -1 at the end.  key_at(c)/value_at(c) read a cursor.
+# A cursor is invalidated by remove() of that same key (never by other
+# operations: nodes never move).
+#
+# The level limit 16 is written as a literal throughout because a module-level
+# `const` is not visible inside generic-class methods (compiler bug D1-2).
+#
+# free(): a generic class only gets compiler-injected scope-exit drops when it
+# declares `free(self)`, so SkipList does.  It releases the index Vecs; heap
+# payloads (str / class keys and values) and the small struct itself are still
+# leaked by the current compiler for generic classes (bug D1-4), same as
+# BTreeMap / LruCache.  int/float/bool payloads leak only that struct.
+#
+# Not thread-safe.
+
+from std.core.vec import Vec
+
+
+pub class SkipList[K, V]:
+    pub keys:   Vec[K]
+    pub vals:   Vec[V]
+    pub fwd:    Vec[int]      # node*16 + level -> next node, -1 = end
+    pub head:   Vec[int]      # 16 entries: first node per level
+    pub upd:    Vec[int]      # scratch predecessor array (16 entries)
+    pub free_l: Vec[int]      # recycled node indices
+    pub level:  int           # levels currently in use (>= 1)
+    pub count:  int
+    pub rng:    int
+
+extend SkipList[K, V]:
+    pub def init(seed: int) -> SkipList[K, V]:
+        mut s = SkipList[K, V]()
+        s.keys = Vec[K].init(8)
+        s.vals = Vec[V].init(8)
+        s.fwd = Vec[int].init(8 * 16)
+        s.head = Vec[int].init(16)
+        s.upd = Vec[int].init(16)
+        s.free_l = Vec[int].init(8)
+        mut i = 0
+        while i < 16:
+            s.head.push(-1)
+            s.upd.push(-1)
+            i = i + 1
+        s.level = 1
+        s.count = 0
+        s.rng = seed
+        if seed == 0: s.rng = 0x2545F4914F6CDD1D
+        return s
+
+    pub def len(self) -> int:
+        return self.count
+
+    pub def is_empty(self) -> bool:
+        return self.count == 0
+
+    # Next xorshift64 value (non-negative).
+    def _rand(self) -> int:
+        mut x: u64 = self.rng as u64
+        x = x ^ (x << 13)
+        x = x ^ (x >> 7)
+        x = x ^ (x << 17)
+        self.rng = x as int
+        return (x >> 1) as int
+
+    def _random_level(self) -> int:
+        mut r = self._rand()
+        mut lvl = 1
+        while lvl < 16 and (r & 1) == 1:
+            lvl = lvl + 1
+            r = r >> 1
+        return lvl
+
+    # Successor of node `cur` at level l (cur == -1 means the head sentinel).
+    def _next(self, cur: int, l: int) -> int:
+        if cur < 0: return self.head.get(l)
+        return self.fwd.get(cur * 16 + l)
+
+    def _set_next(self, cur: int, l: int, nx: int):
+        if cur < 0:
+            self.head.set(l, nx)
+        else:
+            self.fwd.set(cur * 16 + l, nx)
+
+    # Fill self.upd[l] with the last node at level l whose key < k.
+    # Returns the level-0 successor (first node with key >= k, or -1).
+    def _find_pred(self, k: K) -> int:
+        mut cur = -1
+        mut l = 16 - 1
+        while l >= 0:
+            if l < self.level:
+                while True:
+                    mut nx = self._next(cur, l)
+                    if nx >= 0 and self.keys.get(nx) < k:
+                        cur = nx
+                    else:
+                        break
+            self.upd.set(l, cur)
+            l = l - 1
+        return self._next(cur, 0)
+
+    def _new_node(self, k: K, v: V) -> int:
+        if self.free_l.len > 0:
+            mut idx = self.free_l.pop()
+            self.keys.set(idx, k)
+            self.vals.set(idx, v)
+            return idx
+        mut idx2 = self.keys.len
+        self.keys.push(k)
+        self.vals.push(v)
+        mut z = 0
+        while z < 16:
+            self.fwd.push(-1)
+            z = z + 1
+        return idx2
+
+    # Insert or update.  Returns true if the key was new.
+    pub def insert(self, k: K, v: V) -> bool:
+        mut cand = self._find_pred(k)
+        if cand >= 0 and self.keys.get(cand) == k:
+            self.vals.set(cand, v)
+            return false
+        mut lvl = self._random_level()
+        if lvl > self.level: self.level = lvl
+        mut node = self._new_node(k, v)
+        mut l = 0
+        while l < lvl:
+            mut p = self.upd.get(l)
+            self.fwd.set(node * 16 + l, self._next(p, l))
+            self._set_next(p, l, node)
+            l = l + 1
+        self.count = self.count + 1
+        return true
+
+    # Alias for insert (ignores the new/update flag).
+    pub def put(self, k: K, v: V):
+        self.insert(k, v)
+
+    # Cursor of the node with exactly key k, or -1.
+    pub def find(self, k: K) -> int:
+        mut cand = self._find_pred(k)
+        if cand >= 0 and self.keys.get(cand) == k: return cand
+        return -1
+
+    pub def has(self, k: K) -> bool:
+        return self.find(k) >= 0
+
+    pub def fetch(self, k: K) -> Option[V]:
+        mut c = self.find(k)
+        if c < 0: return Option.None()
+        return Option.Some(self.vals.get(c))
+
+    pub def fetch_or(self, k: K, dflt: V) -> V:
+        mut c = self.find(k)
+        if c < 0: return dflt
+        return self.vals.get(c)
+
+    # Remove key k.  Returns true if it was present.
+    pub def remove(self, k: K) -> bool:
+        mut cand = self._find_pred(k)
+        if cand < 0: return false
+        if not (self.keys.get(cand) == k): return false
+        mut l = 0
+        while l < self.level:
+            mut p = self.upd.get(l)
+            if self._next(p, l) == cand:
+                self._set_next(p, l, self.fwd.get(cand * 16 + l))
+            l = l + 1
+        self.free_l.push(cand)
+        self.count = self.count - 1
+        while self.level > 1 and self.head.get(self.level - 1) < 0:
+            self.level = self.level - 1
+        return true
+
+    pub def clear(self):
+        mut i = 0
+        while i < 16:
+            self.head.set(i, -1)
+            i = i + 1
+        self.free_l.clear()
+        mut n = 0
+        while n < self.keys.len:
+            self.free_l.push(self.keys.len - 1 - n)
+            n = n + 1
+        self.level = 1
+        self.count = 0
+
+    # ── cursors / ordered access ────────────────────────────────────────────
+
+    pub def cursor_first(self) -> int:
+        return self.head.get(0)
+
+    # Least node with key >= k, or -1.
+    pub def cursor_seek(self, k: K) -> int:
+        return self._find_pred(k)
+
+    pub def cursor_next(self, c: int) -> int:
+        if c < 0: return -1
+        return self.fwd.get(c * 16)
+
+    pub def key_at(self, c: int) -> K:
+        return self.keys.get(c)
+
+    pub def value_at(self, c: int) -> V:
+        return self.vals.get(c)
+
+    # Overwrite the value stored at a valid cursor.
+    pub def set_value_at(self, c: int, v: V):
+        self.vals.set(c, v)
+
+    # Cursor of the greatest key <= k, or -1 (floor).
+    pub def cursor_floor(self, k: K) -> int:
+        mut cand = self._find_pred(k)
+        if cand >= 0 and self.keys.get(cand) == k: return cand
+        return self.upd.get(0)
+
+    pub def cursor_last(self) -> int:
+        mut cur = -1
+        mut l = self.level - 1
+        while l >= 0:
+            while True:
+                mut nx = self._next(cur, l)
+                if nx >= 0:
+                    cur = nx
+                else:
+                    break
+            l = l - 1
+        return cur
+
+    pub def first_key(self) -> Option[K]:
+        mut c = self.cursor_first()
+        if c < 0: return Option.None()
+        return Option.Some(self.keys.get(c))
+
+    pub def last_key(self) -> Option[K]:
+        mut c = self.cursor_last()
+        if c < 0: return Option.None()
+        return Option.Some(self.keys.get(c))
+
+    # Greatest key <= k.
+    pub def floor_key(self, k: K) -> Option[K]:
+        mut c = self.cursor_floor(k)
+        if c < 0: return Option.None()
+        return Option.Some(self.keys.get(c))
+
+    # Least key >= k.
+    pub def ceil_key(self, k: K) -> Option[K]:
+        mut c = self.cursor_seek(k)
+        if c < 0: return Option.None()
+        return Option.Some(self.keys.get(c))
+
+    # All keys, ascending.
+    pub def keys_vec(self) -> Vec[K]:
+        mut out = Vec[K].init(self.count + 1)
+        mut c = self.cursor_first()
+        while c >= 0:
+            out.push(self.keys.get(c))
+            c = self.cursor_next(c)
+        return out
+
+    # All values in ascending key order.
+    pub def values_vec(self) -> Vec[V]:
+        mut out = Vec[V].init(self.count + 1)
+        mut c = self.cursor_first()
+        while c >= 0:
+            out.push(self.vals.get(c))
+            c = self.cursor_next(c)
+        return out
+
+    # Keys in the half-open range [lo, hi), ascending.
+    pub def range_keys(self, lo: K, hi: K) -> Vec[K]:
+        mut out = Vec[K].init(8)
+        mut c = self.cursor_seek(lo)
+        while c >= 0 and self.keys.get(c) < hi:
+            out.push(self.keys.get(c))
+            c = self.cursor_next(c)
+        return out
+
+    # Values for the keys in [lo, hi), ascending.
+    pub def range_values(self, lo: K, hi: K) -> Vec[V]:
+        mut out = Vec[V].init(8)
+        mut c = self.cursor_seek(lo)
+        while c >= 0 and self.keys.get(c) < hi:
+            out.push(self.vals.get(c))
+            c = self.cursor_next(c)
+        return out
+
+    # Number of keys in [lo, hi).
+    pub def range_count(self, lo: K, hi: K) -> int:
+        mut n = 0
+        mut c = self.cursor_seek(lo)
+        while c >= 0 and self.keys.get(c) < hi:
+            n = n + 1
+            c = self.cursor_next(c)
+        return n
+
+    # Remove every key in [lo, hi).  Returns how many were removed.
+    pub def remove_range(self, lo: K, hi: K) -> int:
+        mut doomed = self.range_keys(lo, hi)
+        mut i = 0
+        while i < doomed.len:
+            self.remove(doomed.get(i))
+            i = i + 1
+        return doomed.len
+
+    # Smallest key's value removed and returned; requires non-empty.
+    pub def pop_first_key(self) -> Option[K]:
+        mut c = self.cursor_first()
+        if c < 0: return Option.None()
+        mut k = self.keys.get(c)
+        self.remove(k)
+        return Option.Some(k)
+
+    # Release all storage.  Declaring free() is what makes the compiler drop a
+    # generic-class local automatically at scope exit (see the header note).
+    pub def free(self):
+        self.keys.free()
+        self.vals.free()
+        self.fwd.free()
+        self.head.free()
+        self.upd.free()
+        self.free_l.free()

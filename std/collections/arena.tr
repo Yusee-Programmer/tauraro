@@ -1,0 +1,222 @@
+# std.collections.arena — Arena: a bump allocator for many small, same-lifetime
+# allocations, freed all at once.
+#
+#   mut a = Arena.init(64 * 1024)          # block size hint
+#   mut xs = a.alloc_ints(1000)            # Pointer[int], zero-filled
+#   mut p  = a.alloc_raw(24, 8)                # raw bytes: size, alignment
+#   mut cp = a.checkpoint()                # remember the current high-water mark
+#   ...allocate scratch...
+#   a.rollback(cp)                         # release everything after cp (O(blocks))
+#   a.reset()                              # release everything, keep the memory
+#   # scope exit -> the compiler injects a.free(): every block goes back to libc
+#
+# HOW FREES ARE INJECTED.  Arena is an ordinary owned class with a user-defined
+# `free(self)`.  Like every owned value, the compiler drops it at each scope exit
+# (normal path, early return, break/continue) and runs that `free()` exactly once
+# — you never call it yourself.  An explicit `a.free()` is also accepted: it runs
+# once, the scope-exit drop does not repeat it (tests/lang/100_user_free_release),
+# and the compiler's use-after-free check [M-6] rejects any later use of `a`.
+# `free()` walks the block list and returns each block to the allocator, so the
+# lifetime of every pointer handed out by `alloc_*` is the lifetime of the Arena
+# variable that produced it.  Arena itself holds only ints (no Vec fields), so
+# there is exactly one thing to release and nothing to double-free.
+#
+# WHAT IT CAN HOLD.  Raw, zero-initialised bytes: ints, floats, bools, bytes, and
+# structs of those via Pointer[T] for scalar T (`alloc_ints`, `alloc_floats`,
+# or `alloc_raw(size, align)` cast to the type you need).  It does NOT run constructors, destructors or reference-count
+# updates, so do not store class instances / str / Vec values in it — use
+# Slab[T] (std.collections.slab) for those, which keeps ARC correct.
+#
+# SAFETY.  A pointer into an Arena becomes dangling when the Arena is dropped,
+# reset, or rolled back past it.  Tauraro does not track that for raw pointers
+# (they are `unsafe`), so keep arena pointers inside the scope that owns the Arena.
+#
+# Layout: blocks are libc allocations with a 24-byte header
+# [next block | capacity | bytes used when left].  Requests larger than the block
+# size get a dedicated block.  Alignment is 1..64 (power of two); the default for
+# the typed helpers is the element size.  alloc_raw() returns zeroed memory.
+# Not thread-safe.
+
+extern "C":
+    def _tr_checked_alloc(size: int) -> Pointer[char]
+    def _tr_c_free(ptr: Pointer[char])
+    def _tr_c_memset(ptr: Pointer[char], val: int, n: int)
+    def _tr_c_memcpy(dst: Pointer[char], src: Pointer[char], n: int)
+
+pub class Arena:
+    pub first:      int     # address of the first block (0 = none yet)
+    pub cur:        int     # address of the current block
+    pub cur_idx:    int     # index of the current block in the chain
+    pub off:        int     # bytes consumed in the current block
+    pub block_size: int
+    pub nblocks:    int
+    pub total_cap:  int     # sum of block capacities
+
+def _ar_rd(addr: int, byte_off: int) -> int:
+    unsafe: return ((addr + byte_off) as Pointer[int]).read()
+
+def _ar_wr(addr: int, byte_off: int, v: int):
+    unsafe: ((addr + byte_off) as Pointer[int]).write(v)
+
+extend Arena:
+    pub def init(block_size: int) -> Arena:
+        mut a = Arena()
+        a.first = 0
+        a.cur = 0
+        a.cur_idx = 0
+        a.off = 0
+        a.block_size = block_size
+        if a.block_size < 256: a.block_size = 256
+        a.nblocks = 0
+        a.total_cap = 0
+        return a
+
+    # Allocate a fresh block with `cap` data bytes; returns its address.
+    def _new_block(self, cap: int) -> int:
+        mut p = _tr_checked_alloc(cap + 24 + 64)
+        mut addr = p as int
+        _ar_wr(addr, 0, 0)
+        _ar_wr(addr, 8, cap)
+        _ar_wr(addr, 16, 0)
+        self.nblocks = self.nblocks + 1
+        self.total_cap = self.total_cap + cap
+        return addr
+
+    # Advance to a block that has room for `need` bytes (incl. worst-case padding).
+    def _advance(self, need: int):
+        if self.cur == 0:
+            mut cap = self.block_size
+            if need > cap: cap = need
+            mut b = self._new_block(cap)
+            self.first = b
+            self.cur = b
+            self.cur_idx = 0
+            self.off = 0
+            return
+        _ar_wr(self.cur, 16, self.off)
+        mut nxt = _ar_rd(self.cur, 0)
+        if nxt != 0 and _ar_rd(nxt, 8) >= need:
+            self.cur = nxt
+            self.cur_idx = self.cur_idx + 1
+            self.off = 0
+            return
+        mut cap2 = self.block_size
+        if need > cap2: cap2 = need
+        mut nb = self._new_block(cap2)
+        _ar_wr(nb, 0, nxt)               # keep any remaining (smaller) blocks chained after it
+        _ar_wr(self.cur, 0, nb)
+        self.cur = nb
+        self.cur_idx = self.cur_idx + 1
+        self.off = 0
+
+    # `size` zeroed bytes aligned to `align` (1..64, power of two).
+    pub def alloc_raw(self, size: int, align: int) -> Pointer[char]:
+        mut al = align
+        if al < 1: al = 1
+        if al > 64: al = 64
+        mut n = size
+        if n < 0: n = 0
+        if self.cur == 0 or self._fits(n, al) == false:
+            self._advance(n + al)
+            if self._fits(n, al) == false:
+                self._advance(n + al)
+        mut base = self.cur + 24
+        mut a = base + self.off
+        mut pad = (al - (a & (al - 1))) & (al - 1)
+        mut start = a + pad
+        self.off = self.off + pad + n
+        mut p = start as Pointer[char]
+        if n > 0: _tr_c_memset(p, 0, n)
+        # SAFETY: p points into a block owned by this Arena; it is valid until the
+        # Arena is dropped / reset / rolled back past it (documented in the header).
+        unsafe: return p
+
+    def _fits(self, n: int, al: int) -> bool:
+        mut a = self.cur + 24 + self.off
+        mut pad = (al - (a & (al - 1))) & (al - 1)
+        return self.off + pad + n <= _ar_rd(self.cur, 8)
+
+    pub def alloc_ints(self, n: int) -> Pointer[int]:
+        mut p: Pointer[char] = self.alloc_raw(n * 8, 8)
+        unsafe: return p as Pointer[int]
+
+    pub def alloc_floats(self, n: int) -> Pointer[float]:
+        mut p: Pointer[char] = self.alloc_raw(n * 8, 8)
+        unsafe: return p as Pointer[float]
+
+    # Copy the bytes of s (plus a NUL terminator) into the arena.
+    pub def dup_bytes(self, s: str) -> Pointer[char]:
+        mut n = s.len()
+        mut p: Pointer[char] = self.alloc_raw(n + 1, 1)
+        if n > 0: _tr_c_memcpy(p, s as Pointer[char], n)
+        unsafe: return p
+
+    # Store one int and return its address.
+    pub def new_int(self, v: int) -> Pointer[int]:
+        mut p: Pointer[int] = self.alloc_ints(1)
+        unsafe: p.write(v)
+        unsafe: return p
+
+    # Opaque mark of the current allocation point (for rollback).
+    pub def checkpoint(self) -> int:
+        if self.cur == 0: return 0
+        return self.cur_idx * 1099511627776 + self.off + 1
+
+    # Release everything allocated after `cp` (from checkpoint()).  Memory stays
+    # reserved for reuse.  A stale checkpoint (older than a reset) rolls back to
+    # the start.
+    pub def rollback(self, cp: int):
+        if self.first == 0: return
+        if cp <= 0:
+            self.reset()
+            return
+        mut want_idx = (cp - 1) / 1099511627776
+        mut want_off = (cp - 1) - want_idx * 1099511627776
+        mut b = self.first
+        mut i = 0
+        while i < want_idx and _ar_rd(b, 0) != 0:
+            b = _ar_rd(b, 0)
+            i = i + 1
+        self.cur = b
+        self.cur_idx = i
+        self.off = want_off
+        if self.off > _ar_rd(b, 8): self.off = _ar_rd(b, 8)
+
+    # Forget every allocation; blocks are kept for reuse.
+    pub def reset(self):
+        self.cur = self.first
+        self.cur_idx = 0
+        self.off = 0
+
+    # Bytes handed out so far (including alignment padding).
+    pub def used(self) -> int:
+        if self.first == 0: return 0
+        mut total = 0
+        mut b = self.first
+        mut i = 0
+        while i < self.cur_idx:
+            total = total + _ar_rd(b, 16)
+            b = _ar_rd(b, 0)
+            i = i + 1
+        return total + self.off
+
+    # Bytes reserved from the system allocator (block capacities).
+    pub def capacity(self) -> int:
+        return self.total_cap
+
+    pub def block_count(self) -> int:
+        return self.nblocks
+
+    # Return every block to the allocator.  Called automatically at scope exit.
+    pub def free(self):
+        mut b = self.first
+        while b != 0:
+            mut nxt = _ar_rd(b, 0)
+            _tr_c_free(b as Pointer[char])
+            b = nxt
+        self.first = 0
+        self.cur = 0
+        self.cur_idx = 0
+        self.off = 0
+        self.nblocks = 0
+        self.total_cap = 0

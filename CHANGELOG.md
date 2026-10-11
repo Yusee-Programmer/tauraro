@@ -75,6 +75,15 @@ added here as each phase lands.
   `CreateFileMapping`/`MapViewOfFile` (Windows); bare/WASI report unsupported. New `_tr_mmap_*`,
   `_tr_shm_*`, `_tr_mem_*`, `_tr_sys_*` runtime helpers. Tested by `tests/lang/140_mmap.tr`,
   `141_shm.tr`.
+- **`std.collections` data structures: `Bitset`, `RingBuffer[T]`, `SkipList[K, V]`,
+  `Rope`, `IntervalTree[T]`, `Arena`, `Slab[T]`.** Fixed/growable bitset with set
+  algebra, rank/select and iteration; fixed-capacity ring buffer with overwrite or
+  refuse policy; seedable deterministic skip-list ordered map with range/floor/ceiling
+  queries; chunked treap rope with `O(log n)` insert/delete/slice; augmented-treap
+  interval tree with stabbing/overlap queries; bump `Arena` (its scope-exit free is
+  injected by the compiler) and generational `Slab[T]` handle pool. Documented in
+  `docs/std/collections.md`, tested by `tests/lang/150_bitset_ringbuffer.tr` ..
+  `154_arena_slab.tr` (model-checked, ASan-clean).
 - **`std.async.retry`** — `RetryPolicy` (max attempts, fixed/exponential backoff
   with cap, optional jitter, retry-on predicate, overall deadline, per-attempt
   timeout), `call_with_timeout` / `call_bool_with_timeout`, and a thread-safe

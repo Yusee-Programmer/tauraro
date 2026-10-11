@@ -1,0 +1,324 @@
+# std.collections.intervaltree — IntervalTree[T]: dynamic set of closed integer
+# intervals [lo, hi], each carrying a payload of type T, with stabbing and
+# overlap queries.
+#
+# Implementation: an augmented treap (randomised balanced BST).  Nodes are
+# ordered by (lo, insertion sequence); every node caches the maximum `hi` in
+# its subtree, which lets queries skip whole subtrees that end before the query
+# starts.  Priorities come from a seedable xorshift64 generator, so tree shape
+# is reproducible (`IntervalTree[T].with_seed`).
+#
+#   insert(lo, hi, v) -> id    O(log n)   (id is a stable handle)
+#   remove(id) -> bool         O(log n)
+#   stab(p)                    O(log n + k)   intervals containing p
+#   overlap(a, b)              O(log n + k)   intervals sharing a point with [a, b]
+#   any_overlap / count_overlap / stab_count
+#
+# Intervals are CLOSED and inclusive on both ends; insert(5, 5, v) is the single
+# point 5, and [1,3] overlaps [3,9].  If you work with half-open [a, b) ranges,
+# insert (a, b - 1).  Passing lo > hi swaps the endpoints.  Query results are
+# vectors of ids in ascending (lo, insertion order); use lo_of / hi_of /
+# value_of to read them, or the *_values helpers.
+#
+# Ownership: payloads live in a Vec[T] (Vec.set retains the new element and
+# releases the old one).  A removed interval's payload stays alive in its slot
+# until that slot is reused by a later insert or the tree is dropped.
+#
+# Dropping: a generic class only gets a compiler-injected scope-exit drop when
+# it declares `free(self)`, so IntervalTree does; it releases the storage Vecs.  Heap
+# payloads (str / class values) and the small struct itself are still leaked by
+# the current compiler for generic classes (bug D1-4, same as BTreeMap and
+# LruCache); int / float / bool payloads leak only that struct.
+#
+# Not thread-safe.
+
+from std.core.vec import Vec
+
+pub class IntervalTree[T]:
+    pub los:    Vec[int]
+    pub his:    Vec[int]
+    pub vals:   Vec[T]
+    pub lft:    Vec[int]
+    pub rgt:    Vec[int]
+    pub pri:    Vec[int]
+    pub maxhi:  Vec[int]
+    pub seq:    Vec[int]       # insertion sequence; -1 = slot is free
+    pub free_l: Vec[int]
+    pub root:   int
+    pub count:  int
+    pub next_seq: int
+    pub rng:    int
+    pub sl:     int
+    pub sr:     int
+
+extend IntervalTree[T]:
+    pub def with_seed(seed: int) -> IntervalTree[T]:
+        mut t = IntervalTree[T]()
+        t.los = Vec[int].init(8)
+        t.his = Vec[int].init(8)
+        t.vals = Vec[T].init(8)
+        t.lft = Vec[int].init(8)
+        t.rgt = Vec[int].init(8)
+        t.pri = Vec[int].init(8)
+        t.maxhi = Vec[int].init(8)
+        t.seq = Vec[int].init(8)
+        t.free_l = Vec[int].init(8)
+        t.root = -1
+        t.count = 0
+        t.next_seq = 0
+        t.rng = seed
+        if seed == 0: t.rng = 0x2545F4914F6CDD1D
+        t.sl = -1
+        t.sr = -1
+        return t
+
+    pub def init() -> IntervalTree[T]:
+        return IntervalTree[T].with_seed(1442695040888963407)
+
+    pub def len(self) -> int:
+        return self.count
+
+    pub def is_empty(self) -> bool:
+        return self.count == 0
+
+    def _rand(self) -> int:
+        mut x: u64 = self.rng as u64
+        x = x ^ (x << 13)
+        x = x ^ (x >> 7)
+        x = x ^ (x << 17)
+        self.rng = x as int
+        return (x >> 1) as int
+
+    def _mh(self, t: int) -> int:
+        if t < 0: return -9223372036854775807
+        return self.maxhi.get(t)
+
+    def _upd(self, t: int):
+        mut m = self.his.get(t)
+        mut a = self._mh(self.lft.get(t))
+        mut b = self._mh(self.rgt.get(t))
+        if a > m: m = a
+        if b > m: m = b
+        self.maxhi.set(t, m)
+
+    # Is node a ordered strictly before key (lo, sq)?
+    def _before(self, a: int, lo: int, sq: int) -> bool:
+        mut al = self.los.get(a)
+        if al != lo: return al < lo
+        return self.seq.get(a) < sq
+
+    # Split subtree t: nodes ordered before (lo, sq) go to self.sl, rest to self.sr.
+    def _split(self, t: int, lo: int, sq: int):
+        if t < 0:
+            self.sl = -1
+            self.sr = -1
+            return
+        if self._before(t, lo, sq):
+            self._split(self.rgt.get(t), lo, sq)
+            self.rgt.set(t, self.sl)
+            self._upd(t)
+            self.sl = t
+        else:
+            self._split(self.lft.get(t), lo, sq)
+            self.lft.set(t, self.sr)
+            self._upd(t)
+            self.sr = t
+
+    def _merge(self, a: int, b: int) -> int:
+        if a < 0: return b
+        if b < 0: return a
+        if self.pri.get(a) > self.pri.get(b):
+            self.rgt.set(a, self._merge(self.rgt.get(a), b))
+            self._upd(a)
+            return a
+        self.lft.set(b, self._merge(a, self.lft.get(b)))
+        self._upd(b)
+        return b
+
+    # Add [lo, hi] with payload v.  Returns the interval's id.
+    pub def insert(self, lo: int, hi: int, v: T) -> int:
+        mut a = lo
+        mut b = hi
+        if a > b:
+            a = hi
+            b = lo
+        mut sq = self.next_seq
+        self.next_seq = self.next_seq + 1
+        mut id = 0
+        if self.free_l.len > 0:
+            id = self.free_l.pop()
+            self.los.set(id, a)
+            self.his.set(id, b)
+            self.vals.set(id, v)
+            self.lft.set(id, -1)
+            self.rgt.set(id, -1)
+            self.pri.set(id, self._rand())
+            self.maxhi.set(id, b)
+            self.seq.set(id, sq)
+        else:
+            id = self.los.len
+            self.los.push(a)
+            self.his.push(b)
+            self.vals.push(v)
+            self.lft.push(-1)
+            self.rgt.push(-1)
+            self.pri.push(self._rand())
+            self.maxhi.push(b)
+            self.seq.push(sq)
+        self._split(self.root, a, sq)
+        mut l = self.sl
+        mut r = self.sr
+        self.root = self._merge(self._merge(l, id), r)
+        self.count = self.count + 1
+        return id
+
+    # Is id a live interval?
+    pub def contains(self, id: int) -> bool:
+        if id < 0 or id >= self.seq.len: return false
+        return self.seq.get(id) >= 0
+
+    def _erase(self, t: int, lo: int, sq: int) -> int:
+        if t < 0: return -1
+        if self.los.get(t) == lo and self.seq.get(t) == sq:
+            mut m = self._merge(self.lft.get(t), self.rgt.get(t))
+            return m
+        if self._before(t, lo, sq):
+            self.rgt.set(t, self._erase(self.rgt.get(t), lo, sq))
+        else:
+            self.lft.set(t, self._erase(self.lft.get(t), lo, sq))
+        self._upd(t)
+        return t
+
+    # Remove the interval with this id.  Returns false if it is not live.
+    pub def remove(self, id: int) -> bool:
+        if not self.contains(id): return false
+        self.root = self._erase(self.root, self.los.get(id), self.seq.get(id))
+        self.seq.set(id, -1)
+        self.free_l.push(id)
+        self.count = self.count - 1
+        return true
+
+    pub def clear(self):
+        mut i = 0
+        while i < self.seq.len:
+            if self.seq.get(i) >= 0:
+                self.seq.set(i, -1)
+                self.free_l.push(i)
+            i = i + 1
+        self.root = -1
+        self.count = 0
+
+    pub def lo_of(self, id: int) -> int:
+        return self.los.get(id)
+
+    pub def hi_of(self, id: int) -> int:
+        return self.his.get(id)
+
+    pub def value_of(self, id: int) -> T:
+        return self.vals.get(id)
+
+    pub def set_value_of(self, id: int, v: T):
+        self.vals.set(id, v)
+
+    # Visit intervals sharing a point with [qlo, qhi]; mode 0 collect ids,
+    # mode 1 count only, mode 2 stop at the first hit.  Returns hits so far.
+    def _walk(self, t: int, qlo: int, qhi: int, out: Vec[int], mode: int, hits: int) -> int:
+        if t < 0: return hits
+        if self.maxhi.get(t) < qlo: return hits
+        mut h = self._walk(self.lft.get(t), qlo, qhi, out, mode, hits)
+        if mode == 2 and h > 0: return h
+        if self.los.get(t) > qhi: return h
+        if self.his.get(t) >= qlo:
+            h = h + 1
+            if mode == 0: out.push(t)
+            if mode == 2: return h
+        return self._walk(self.rgt.get(t), qlo, qhi, out, mode, h)
+
+    # Ids of every interval containing point p.
+    pub def stab(self, p: int) -> Vec[int]:
+        return self.overlap(p, p)
+
+    # Ids of every interval sharing at least one point with [lo, hi].
+    pub def overlap(self, lo: int, hi: int) -> Vec[int]:
+        mut a = lo
+        mut b = hi
+        if a > b:
+            a = hi
+            b = lo
+        mut out = Vec[int].init(8)
+        self._walk(self.root, a, b, out, 0, 0)
+        return out
+
+    pub def stab_count(self, p: int) -> int:
+        return self.overlap_count(p, p)
+
+    pub def overlap_count(self, lo: int, hi: int) -> int:
+        mut a = lo
+        mut b = hi
+        if a > b:
+            a = hi
+            b = lo
+        mut dummy = Vec[int].init(4)
+        return self._walk(self.root, a, b, dummy, 1, 0)
+
+    pub def any_overlap(self, lo: int, hi: int) -> bool:
+        mut a = lo
+        mut b = hi
+        if a > b:
+            a = hi
+            b = lo
+        mut dummy = Vec[int].init(4)
+        return self._walk(self.root, a, b, dummy, 2, 0) > 0
+
+    # Payloads of the intervals containing p, in the same order as stab(p).
+    pub def stab_values(self, p: int) -> Vec[T]:
+        mut ids = self.stab(p)
+        mut out = Vec[T].init(ids.len + 1)
+        mut i = 0
+        while i < ids.len:
+            out.push(self.vals.get(ids.get(i)))
+            i = i + 1
+        return out
+
+    pub def overlap_values(self, lo: int, hi: int) -> Vec[T]:
+        mut ids = self.overlap(lo, hi)
+        mut out = Vec[T].init(ids.len + 1)
+        mut i = 0
+        while i < ids.len:
+            out.push(self.vals.get(ids.get(i)))
+            i = i + 1
+        return out
+
+    # All live interval ids in ascending (lo, insertion) order.
+    pub def ids(self) -> Vec[int]:
+        mut out = Vec[int].init(self.count + 1)
+        self._inorder(self.root, out)
+        return out
+
+    def _inorder(self, t: int, out: Vec[int]):
+        if t < 0: return
+        self._inorder(self.lft.get(t), out)
+        out.push(t)
+        self._inorder(self.rgt.get(t), out)
+
+    # Smallest lo / largest hi over all intervals; the tree must be non-empty.
+    pub def span_lo(self) -> int:
+        mut t = self.root
+        while self.lft.get(t) >= 0:
+            t = self.lft.get(t)
+        return self.los.get(t)
+
+    pub def span_hi(self) -> int:
+        return self.maxhi.get(self.root)
+
+    # Release all storage (also runs automatically at scope exit, see header).
+    pub def free(self):
+        self.los.free()
+        self.his.free()
+        self.vals.free()
+        self.lft.free()
+        self.rgt.free()
+        self.pri.free()
+        self.maxhi.free()
+        self.seq.free()
+        self.free_l.free()

@@ -1,0 +1,142 @@
+# std.collections.slab — Slab[T]: stable-handle object pool.
+#
+# A Slab stores values of any type T (int, str, classes ...) in dense slots and
+# hands back an int HANDLE per value.  Handles stay valid while the value lives,
+# are O(1) to resolve, and are GENERATIONAL: removing a value bumps its slot's
+# generation, so a stale handle never resolves to the value that later reuses the
+# slot (contains(h) is false, try_get(h) is None, remove(h) is a no-op).
+#
+#   mut s = Slab[Node].init()
+#   h = s.insert(node)        # O(1), reuses freed slots first
+#   s.get(h)                  # value (h must be live; see contains / try_get)
+#   s.set(h, other)           # overwrite in place
+#   s.remove(h)               # O(1); the slot goes on the free list
+#
+# A handle is generation * 2^32 + slot, so it is always > 0 and -1 is a safe
+# "no handle" sentinel.  Up to 2^32 slots and (practically) unlimited reuse.
+#
+# Ownership model: storage is a Vec[T], so element retain/release is exactly
+# Vec's (Vec.set retains the new value and releases the overwritten one).
+# `insert` takes ownership of the value passed in; `get` returns a normal
+# borrowed-or-copied value like Vec.get.  A removed slot keeps its old
+# (reference-counted) value alive until the slot is reused or the Slab is
+# dropped — there is no dummy value of an arbitrary T to overwrite it with.
+# For classes that is only visible if teardown has side effects.  Use Arena
+# (std.collections.arena) for raw POD scratch memory instead.
+#
+# Dropping: a generic class only gets a compiler-injected scope-exit drop when
+# it declares `free(self)`, so Slab does; it releases the storage Vecs.  Heap
+# payloads (str / class values) and the small struct itself are still leaked by
+# the current compiler for generic classes (bug D1-4, same as BTreeMap and
+# LruCache); int / float / bool payloads leak only that struct.
+#
+# Iteration: handles() returns the live handles in slot order.  Not thread-safe.
+
+from std.core.vec import Vec
+
+pub class Slab[T]:
+    pub items: Vec[T]
+    pub gens:  Vec[int]      # generation per slot (starts at 1)
+    pub live:  Vec[bool]
+    pub free_l: Vec[int]
+    pub count: int
+
+extend Slab[T]:
+    pub def init() -> Slab[T]:
+        mut s = Slab[T]()
+        s.items = Vec[T].init(8)
+        s.gens = Vec[int].init(8)
+        s.live = Vec[bool].init(8)
+        s.free_l = Vec[int].init(8)
+        s.count = 0
+        return s
+
+    pub def len(self) -> int:
+        return self.count
+
+    pub def is_empty(self) -> bool:
+        return self.count == 0
+
+    # Number of slots ever allocated (live + free).
+    pub def slots(self) -> int:
+        return self.items.len
+
+    def _slot(self, h: int) -> int:
+        if h <= 0: return -1
+        mut idx = h - (h / 4294967296) * 4294967296
+        if idx >= self.items.len: return -1
+        if not self.live.get(idx): return -1
+        if self.gens.get(idx) != h / 4294967296: return -1
+        return idx
+
+    pub def insert(self, v: T) -> int:
+        mut idx = 0
+        if self.free_l.len > 0:
+            idx = self.free_l.pop()
+            self.items.set(idx, v)
+            self.live.set(idx, true)
+        else:
+            idx = self.items.len
+            self.items.push(v)
+            self.gens.push(1)
+            self.live.push(true)
+        self.count = self.count + 1
+        return self.gens.get(idx) * 4294967296 + idx
+
+    # Is h a live handle?
+    pub def contains(self, h: int) -> bool:
+        return self._slot(h) >= 0
+
+    # The value for a live handle.  Calling this with a stale handle is a
+    # programming error (use contains / try_get when unsure).
+    pub def get(self, h: int) -> T:
+        return self.items.get(self._slot(h))
+
+    pub def try_get(self, h: int) -> Option[T]:
+        mut i = self._slot(h)
+        if i < 0: return Option.None()
+        return Option.Some(self.items.get(i))
+
+    # Overwrite the value for a live handle.  Returns false for a stale handle.
+    pub def set(self, h: int, v: T) -> bool:
+        mut i = self._slot(h)
+        if i < 0: return false
+        self.items.set(i, v)
+        return true
+
+    # Remove a live value.  Returns false for a stale handle.
+    pub def remove(self, h: int) -> bool:
+        mut i = self._slot(h)
+        if i < 0: return false
+        self.live.set(i, false)
+        self.gens.set(i, self.gens.get(i) + 1)
+        self.free_l.push(i)
+        self.count = self.count - 1
+        return true
+
+    # Handles of every live value, in slot order.
+    pub def handles(self) -> Vec[int]:
+        mut out = Vec[int].init(self.count + 1)
+        mut i = 0
+        while i < self.items.len:
+            if self.live.get(i): out.push(self.gens.get(i) * 4294967296 + i)
+            i = i + 1
+        return out
+
+    # Remove everything; every outstanding handle becomes stale.
+    pub def clear(self):
+        self.free_l.clear()
+        mut i = self.items.len - 1
+        while i >= 0:
+            if self.live.get(i): self.gens.set(i, self.gens.get(i) + 1)
+            self.live.set(i, false)
+            self.free_l.push(i)
+            i = i - 1
+        self.count = 0
+
+    # Release all storage (also runs automatically at scope exit, see header).
+    pub def free(self):
+        self.items.free()
+        self.gens.free()
+        self.live.free()
+        self.free_l.free()
