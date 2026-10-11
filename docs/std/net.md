@@ -917,3 +917,33 @@ Not implemented: probing / conflict resolution, caching and query back-off, TC-b
 IPv6 multicast (the runtime sockets are AF_INET; AAAA is decoded, and published only from raw bytes).
 `MdnsSocket.open_unicast(port, host, dest_port)` runs the same code without multicast (tests,
 point-to-point). The multicast part of `tests/lang/135_mdns_loopback.tr` only runs with `TAURARO_MDNS_NET=1`.
+
+---
+
+## POP3 — `std.net.pop3`
+
+```tauraro
+from std.net.pop3 import Pop3Client
+
+mut c = Pop3Client.connect("mail.example.com", 110)       # or Pop3Client.connect_tls(host, 995)
+if c.ok:
+    c.set_timeout(5000)
+    mut r: Result[bool, str] = c.login("user", "secret")      # USER/PASS (c.apop(...) for APOP)
+    if r.is_ok:
+        c.stat()                                              # c.count, c.octets
+        mut m: Result[str, str] = c.retr(1)                   # whole message, CRLF lines, binary safe
+        mut h: Result[str, str] = c.top(1, 0)                 # headers only
+        c.dele(1)
+    c.quit()                                                  # commits the DELE
+```
+
+Every command except `connect` / `quit` is `throws str`; the `Err` text is the server's `-ERR` line or a
+transport problem (`"timeout"`, `"connection closed by the server"`). Also `list()`, `list_one(n)`,
+`uidl()`, `rset()`, `noop()`, `capa()`. Multi-line replies are dot-unstuffed and capped by `max_bytes`
+(default 64 MiB). `std.net.mailio` provides the shared bounded-wait transport (`MailConn`) and RFC 5322
+header helpers: `mail_header(msg, "Subject")` (case-insensitive, unfolds), `mail_header_block`,
+`mail_body_part`.
+
+Limits: no STLS (the runtime cannot upgrade a connected socket); implicit TLS (995) does not verify
+certificates and cannot send NUL bytes; no SASL; IPv4 only. Tested against a scripted in-process
+server (`tests/lang/136_pop3.tr`: dot-stuffing, binary and 150 KB messages, APOP, truncation, silence).

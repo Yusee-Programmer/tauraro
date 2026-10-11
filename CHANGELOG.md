@@ -29,6 +29,8 @@ added here as each phase lands.
 - `from` stays a reserved word (it starts import statements and lifetime clauses).
 
 ### Added
+- **`std.net.pop3`** — POP3 client (USER/PASS, APOP, STAT, LIST, UIDL, RETR, TOP, DELE, RSET, CAPA; dot-unstuffing,
+  binary safe) on the new bounded-wait `std.net.mailio` transport + RFC 5322 header helpers (`tests/lang/136_pop3.tr`).
 - **`std.net.mdns`** — mDNS (RFC 6762) / DNS-SD (RFC 6763): DNS message codec with name compression, browse/resolve/
   enumerate/announce helpers, sans-IO `MdnsResponder` (known-answer suppression), opt-in multicast `MdnsSocket`.
   Checked against Python-built packets, a multicast loopback round trip and avahi (`tests/lang/134_mdns_codec.tr`, `135_mdns_loopback.tr`).

@@ -103,3 +103,12 @@ pub def wire_unhex(h: str) -> str:
     if hi < 0: out = sb.to_owned()
     sb.free()
     return out
+
+# Copy n bytes at raw pointer p into a new binary-safe str.
+pub def wire_slice_ptr(p: Pointer[char], n: int) -> str:
+    mut out = _tr_c_malloc(n + 1)
+    if n > 0:
+        unsafe:
+            _tr_c_memcpy(out, p, n)
+    unsafe: out.offset(n).write('\0')
+    return _tr_str_wrap_len(out, n)

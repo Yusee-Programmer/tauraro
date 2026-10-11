@@ -17,6 +17,8 @@
 #   from std.net.http2       import H2Client, H2Server, H2Request, H2Response, H2Conn
 #   from std.net.ntp         import NtpClient, NtpResult, NtpPacket
 #   from std.net.mdns        import MdnsMessage, MdnsRecord, MdnsSocket, MdnsResponder, DnsSdService
+#   from std.net.pop3        import Pop3Client, Pop3Entry
+#   from std.net.mailio      import MailConn
 
 from std.net.tcp         import TcpStream
 from std.net.tcp         import TcpListener
@@ -64,3 +66,6 @@ from std.net.mdns        import MdnsRecord
 from std.net.mdns        import MdnsSocket
 from std.net.mdns        import MdnsResponder
 from std.net.mdns        import DnsSdService
+from std.net.pop3        import Pop3Client
+from std.net.pop3        import Pop3Entry
+from std.net.mailio      import MailConn
