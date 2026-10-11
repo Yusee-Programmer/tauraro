@@ -9,6 +9,7 @@ from core.alloc import alloc
 from core.io import write_file
 from hir import HirProgram, HirFunction, HirClass, HirEnum, HirInterface, HirStmt, HirExpr, HirBlock, HirParam, HirField, HirVariant, HirFStringPart, HirComprehension, HirCatchClause, HirMatchArm, HirChanSelectArm, _tr_str_len, hir_expr_type
 from ast import AstType, Decorator, Pattern, Ownership, Decl
+from codegen.libc_names import libc_fn_names
 
 extern "C":
     def _tr_float_to_c_lit(n: float) -> str
@@ -237,6 +238,7 @@ pub class CGenerator:
     pub last_clo_estruct: str            # last gen_closure: inline env struct type
     pub last_clo_ptypes:  str            # last gen_closure: param type list (after env)
     pub last_clo_ret:     str            # last gen_closure: C return type
+    pub libc_names_cache: Map[str, bool]  # user free-function name -> collides with a libc symbol (memo)
     pub closure_heap_env: bool            # last gen_closure: the closure local escapes -> heap env
     pub last_clo_init:    str            # last gen_closure: positional env initializer
     pub decorator_defs:   Map[str, HirFunction]  # user-defined decorator registry
@@ -322,6 +324,7 @@ pub class CGenerator:
         g.last_clo_ret = ""
         g.last_clo_init = ""
         g.closure_heap_env = false
+        g.libc_names_cache = Map[str, bool].init(64)
         g.decorator_defs  = Map[str, HirFunction].init(16)
         g.overloaded_sigs = Map[str, bool].init(32)
         g.type_alias_map  = Map[str, str].init(16)
@@ -2340,6 +2343,25 @@ pub class CGenerator:
                 return false
             case _: return false
 
+    # C symbol for a user FREE function called `n` (bug log #19). C keywords were always
+    # escaped with `_tr_fn_`; names that the libc/POSIX headers already declare (brk,
+    # index, send, div, ...) get the same escape instead of failing with "conflicting
+    # types". `extern "C"` and `@export` functions keep their exact name (FFI / ABI).
+    pub def fn_cname(self, n: str) -> str:
+        if self.functions.contains(n):
+            mut ff = self.functions.get(n)
+            if ff.is_extern or ff.is_export or ff.class_name != "": return n
+        if _is_c_keyword(n): return "_tr_fn_" + n
+        if n.starts_with("_tr_"): return n
+        if not self.functions.contains(n): return n
+        if self.libc_names_cache.contains(n):
+            if self.libc_names_cache.get(n): return "_tr_fn_" + n
+            return n
+        mut hit = libc_fn_names().contains(" " + n + " ")
+        self.libc_names_cache.insert(n, hit)
+        if hit: return "_tr_fn_" + n
+        return n
+
     pub def gen_func_sig(self, f: HirFunction, class_name: str) -> str:
         mut old_f = self.cur_func
         self.cur_func = f.name
@@ -2349,7 +2371,12 @@ pub class CGenerator:
         mut fname = f.name
         if fname == "main": fname = "_tr_main"
         # Escape C reserved keywords used as function names
-        if _is_c_keyword(fname): fname = "_tr_fn_" + fname
+        if class_name == "" and self.emit_fn_name == "":
+            if f.is_extern or f.is_export:
+                if _is_c_keyword(fname): fname = "_tr_fn_" + fname
+            else:
+                fname = self.fn_cname(fname)
+        elif _is_c_keyword(fname): fname = "_tr_fn_" + fname
         if class_name != "":
             mut base_sig_key = class_name + "_" + fname
             if self.overloaded_sigs.contains(base_sig_key):
@@ -2715,7 +2742,7 @@ pub class CGenerator:
                 # A top-level function used as a value (not a call target) is a
                 # zero-cost TrFnVal: its address as .fn, NULL .env (bare function,
                 # not a closure -- see gen_call's dispatch on .env).
-                if self.functions.contains(n) and not self.decl_vars.contains(n): return "((TrFnVal){(void*)" + n + ", NULL})"
+                if self.functions.contains(n) and not self.decl_vars.contains(n): return "((TrFnVal){(void*)" + self.fn_cname(n) + ", NULL})"
                 # A STATIC CLASS METHOD referenced as a bare value (`Foo.make`, no
                 # call) lowers in sema to an EIdent naming the qualified C function
                 # ("Foo_make") with a `def(...)->R` HIR type -- but it isn't in
@@ -4451,7 +4478,9 @@ pub class CGenerator:
         mut orig_callee_name = base_callee
 
         # Mangle C reserved keywords used as call targets
-        if _is_c_keyword(base_callee): base_callee = "_tr_fn_" + base_callee
+        if self.functions.contains(base_callee) and self.functions.get(base_callee).class_name == "" and not self.functions.get(base_callee).is_extern:
+            base_callee = self.fn_cname(base_callee)
+        elif _is_c_keyword(base_callee): base_callee = "_tr_fn_" + base_callee
 
         # Direct call to a known top-level function: use the plain name, not the
         # "(void*)name" value form that gen_expr emits for function references.
@@ -7340,7 +7369,7 @@ pub class CGenerator:
             else:
                 self.w("    " + c_arg_ty + " _arg" + ci.to_str() + " = (" + c_arg_ty + ")(uintptr_t)_a[" + ci.to_str() + "];\n")
             ci = ci + 1
-        mut call_s = fn_name + "("
+        mut call_s = self.fn_cname(fn_name) + "("
         mut ai = 0
         while ai < nargs:
             if ai > 0: call_s = call_s + ", "
@@ -7957,7 +7986,7 @@ pub class CGenerator:
                 if self.spawn_wrappers.contains(fn_name): return
                 self.spawn_wrappers.insert(fn_name, true)
                 if args.len == 0:
-                    self.w("static void* _tr_spawn_wrap_" + fn_name + "(void* _vp) { (void)_vp; " + fn_name + "(); return NULL; }\n")
+                    self.w("static void* _tr_spawn_wrap_" + fn_name + "(void* _vp) { (void)_vp; " + self.fn_cname(fn_name) + "(); return NULL; }\n")
                 elif args.len == 1:
                     mut arg_ty_n = hir_expr_type(args.get(0)).name
                     mut cast_back = "(long long)(uintptr_t)_vp"
@@ -7971,7 +8000,7 @@ pub class CGenerator:
                             if _wf.params.len > 0:
                                 c_arg_ty = self.type_to_c(_wf.params.get(0).ty)
                         cast_back = "(" + c_arg_ty + ")_vp"
-                    self.w("static void* _tr_spawn_wrap_" + fn_name + "(void* _vp) { " + fn_name + "(" + cast_back + "); return NULL; }\n")
+                    self.w("static void* _tr_spawn_wrap_" + fn_name + "(void* _vp) { " + self.fn_cname(fn_name) + "(" + cast_back + "); return NULL; }\n")
                 else:
                     # multi-arg: wrapper receives heap long long[N+1] where [0]=return slot, [1..N]=args
                     mut ma_nargs = args.len
@@ -7999,9 +8028,9 @@ pub class CGenerator:
                             ma_call_s = ma_call_s + "_ab[" + str(ma_ai + 1) + "]"
                         ma_ai = ma_ai + 1
                     if ew_is_void:
-                        self.w("    " + fn_name + "(" + ma_call_s + ");\n")
+                        self.w("    " + self.fn_cname(fn_name) + "(" + ma_call_s + ");\n")
                     else:
-                        self.w("    _ab[0] = (long long)" + fn_name + "(" + ma_call_s + ");\n")
+                        self.w("    _ab[0] = (long long)" + self.fn_cname(fn_name) + "(" + ma_call_s + ");\n")
                     self.w("    free(_ab); return NULL;\n")
                     self.w("}\n")
             case _: pass
@@ -8085,14 +8114,14 @@ pub class CGenerator:
                                 if th2_fn_nm != "" and not _th2_bare_fn and not self.spawn_wrappers.contains(th2_fn_nm):
                                     self.spawn_wrappers.insert(th2_fn_nm, true)
                                     if aa_args.len == 1:
-                                        self.w("static void* _tr_spawn_wrap_" + th2_fn_nm + "(void* _vp) { (void)_vp; " + th2_fn_nm + "(); return NULL; }\n")
+                                        self.w("static void* _tr_spawn_wrap_" + th2_fn_nm + "(void* _vp) { (void)_vp; " + self.fn_cname(th2_fn_nm) + "(); return NULL; }\n")
                                     else:
                                         mut th2_sp_aty = hir_expr_type(aa_args.get(1)).name
                                         mut th2_sp_cast = "(long long)(uintptr_t)_vp"
                                         if not _is_int_type(th2_sp_aty) and th2_sp_aty != "bool" and th2_sp_aty != "char":
                                             mut th2_sp_cty = self._spawn_wrap_cast_ty(th2_fn_nm, aa_args.get(1))
                                             th2_sp_cast = "(" + th2_sp_cty + ")_vp"
-                                        self.w("static void* _tr_spawn_wrap_" + th2_fn_nm + "(void* _vp) { " + th2_fn_nm + "(" + th2_sp_cast + "); return NULL; }\n")
+                                        self.w("static void* _tr_spawn_wrap_" + th2_fn_nm + "(void* _vp) { " + self.fn_cname(th2_fn_nm) + "(" + th2_sp_cast + "); return NULL; }\n")
                     case _: pass
                 if aa_fn_n == "await_all":
                     mut aa_pi = 0
@@ -8117,7 +8146,7 @@ pub class CGenerator:
                         if th_ps_fn != "" and not _th_ps_bare and not self.spawn_wrappers.contains(th_ps_fn):
                             self.spawn_wrappers.insert(th_ps_fn, true)
                             if pool_args.len == 1:
-                                self.w("static void* _tr_spawn_wrap_" + th_ps_fn + "(void* _vp) { (void)_vp; " + th_ps_fn + "(); return NULL; }\n")
+                                self.w("static void* _tr_spawn_wrap_" + th_ps_fn + "(void* _vp) { (void)_vp; " + self.fn_cname(th_ps_fn) + "(); return NULL; }\n")
                             elif pool_args.len == 2:
                                 mut th_ps_aty = hir_expr_type(pool_args.get(1)).name
                                 mut th_ps_cast = "(long long)(uintptr_t)_vp"
@@ -8129,7 +8158,7 @@ pub class CGenerator:
                                 elif not _is_int_type(th_ps_aty) and th_ps_aty != "bool" and th_ps_aty != "char":
                                     mut th_ps_cty = self._spawn_wrap_cast_ty(th_ps_fn, pool_args.get(1))
                                     th_ps_cast = "(" + th_ps_cty + ")_vp"
-                                self.w("static void* _tr_spawn_wrap_" + th_ps_fn + "(void* _vp) { " + th_ps_fn + "(" + th_ps_cast + "); return NULL; }\n")
+                                self.w("static void* _tr_spawn_wrap_" + th_ps_fn + "(void* _vp) { " + self.fn_cname(th_ps_fn) + "(" + th_ps_cast + "); return NULL; }\n")
                             else:
                                 # multi-arg: wrapper receives heap long long[N] where [0..N-1] = fn args
                                 mut th_ps_nfnargs = pool_args.len - 1
@@ -8165,14 +8194,14 @@ pub class CGenerator:
                             if not self.spawn_wrappers.contains(sp_fn_nm):
                                 self.spawn_wrappers.insert(sp_fn_nm, true)
                                 if pool_args.len == 1:
-                                    self.w("static void* _tr_spawn_wrap_" + sp_fn_nm + "(void* _vp) { (void)_vp; " + sp_fn_nm + "(); return NULL; }\n")
+                                    self.w("static void* _tr_spawn_wrap_" + sp_fn_nm + "(void* _vp) { (void)_vp; " + self.fn_cname(sp_fn_nm) + "(); return NULL; }\n")
                                 elif pool_args.len == 2:
                                     mut sp_aty = hir_expr_type(pool_args.get(1)).name
                                     mut sp_cast = "(long long)(uintptr_t)_vp"
                                     if not _is_int_type(sp_aty) and sp_aty != "bool" and sp_aty != "char":
                                         mut sp_cty = self._spawn_wrap_cast_ty(sp_fn_nm, pool_args.get(1))
                                         sp_cast = "(" + sp_cty + ")_vp"
-                                    self.w("static void* _tr_spawn_wrap_" + sp_fn_nm + "(void* _vp) { " + sp_fn_nm + "(" + sp_cast + "); return NULL; }\n")
+                                    self.w("static void* _tr_spawn_wrap_" + sp_fn_nm + "(void* _vp) { " + self.fn_cname(sp_fn_nm) + "(" + sp_cast + "); return NULL; }\n")
                                 else:
                                     mut sp_na = pool_args.len - 1
                                     mut sp_is_void = true
