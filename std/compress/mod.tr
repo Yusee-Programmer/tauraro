@@ -1,9 +1,32 @@
 # std.compress — Compression utilities.
 #
 # Sub-modules:
-#   from std.compress.zlib import Zlib
-#   from std.compress.gzip import Gzip
+#   from std.compress.zlib import Zlib          # zlib/deflate   (needs -DTAURARO_COMPRESS_ZLIB -lz)
+#   from std.compress.gzip import Gzip          # gzip container (needs -DTAURARO_COMPRESS_ZLIB -lz)
 #   from std.compress.zip  import Zip, ZipFileWriter, ZipFileReader, ZipEntry, ZipMethod
+#   from std.compress.lz4  import Lz4           # LZ4 block + frame, pure Tauraro
+#   from std.compress.zstd import Zstd          # Zstandard frame codec, pure Tauraro
+#   from std.compress.xxhash import Xxh32, Xxh64
+#   from std.compress.common import CBuf, CResult
+#
+# Unified, algorithm-by-name API for the pure-Tauraro codecs (no external
+# library, identical on every platform):
+#
+#   from std.compress import Compress
+#   mut c = Compress.compress("zstd", data, dlen)               # CResult
+#   mut d = Compress.decompress("zstd", c.to_str(), c.len(), 1 << 26)
+#   if d.ok: print(d.to_str())
+#   c.free()
+#   d.free()
+#
+#   algorithms: "lz4" (= "lz4-frame"), "lz4-block", "zstd"
+#   Compress.algorithms() -> List[str]       Compress.supports(name) -> bool
+#   Compress.compress_with(name, data, n, checksum)  — choose the checksum option
+#   (lz4 frame: XXH32 content checksum, zstd: XXH64-derived checksum; the
+#   "lz4-block" format has no checksum, the option is ignored for it).
+#
+# Note "lz4-block" is the bare block format: the caller must remember the
+# original size and pass it (or an upper bound) as `max_out` when decompressing.
 
 from std.compress.zlib import Zlib
 from std.compress.gzip import Gzip
@@ -12,3 +35,45 @@ from std.compress.zip  import ZipFileWriter
 from std.compress.zip  import ZipFileReader
 from std.compress.zip  import ZipEntry
 from std.compress.zip  import ZipMethod
+from std.compress.lz4  import Lz4
+from std.compress.zstd import Zstd
+from std.compress.xxhash import Xxh32
+from std.compress.xxhash import Xxh64
+from std.compress.common import CBuf
+from std.compress.common import CResult
+
+pub class Compress:
+    _dummy: int
+
+extend Compress:
+    # Names accepted by compress()/decompress().
+    pub def algorithms() -> List[str]:
+        mut a: List[str] = ["lz4", "lz4-frame", "lz4-block", "zstd"]
+        return a
+
+    pub def supports(name: str) -> bool:
+        return name == "lz4" or name == "lz4-frame" or name == "lz4-block" or name == "zstd"
+
+    # Compress `n` bytes of `data` with the named algorithm (checksum on where
+    # the format has one).
+    pub def compress(name: str, data: str, n: int) -> CResult:
+        return Compress.compress_with(name, data, n, true)
+
+    pub def compress_with(name: str, data: str, n: int, checksum: bool) -> CResult:
+        if name == "lz4" or name == "lz4-frame":
+            return Lz4.compress_frame(data, n, checksum)
+        if name == "lz4-block":
+            return Lz4.compress_block(data, n)
+        if name == "zstd":
+            return Zstd.compress(data, n, checksum)
+        return CResult.failure("compress: unknown algorithm '" + name + "'", CBuf.init(16))
+
+    # Decompress `n` bytes of `data`; the output is bounded by `max_out`.
+    pub def decompress(name: str, data: str, n: int, max_out: int) -> CResult:
+        if name == "lz4" or name == "lz4-frame":
+            return Lz4.decompress_frame(data, n, max_out)
+        if name == "lz4-block":
+            return Lz4.decompress_block(data, n, max_out)
+        if name == "zstd":
+            return Zstd.decompress(data, n, max_out)
+        return CResult.failure("compress: unknown algorithm '" + name + "'", CBuf.init(16))

@@ -1,0 +1,660 @@
+# std.async.retry — retry with backoff, call-with-timeout, and a circuit
+# breaker. Pure scheduling/resilience primitives: nothing here knows about
+# HTTP, sockets or any particular I/O type, so they wrap any fallible call
+# (outbound API request, database connect, file lock, ...).
+#
+#   RetryPolicy    — max attempts, fixed/exponential backoff with a cap,
+#                    optional jitter, an optional retry-on predicate, an
+#                    optional overall deadline and per-attempt timeout.
+#   call_with_timeout / call_bool_with_timeout
+#                  — run a callable on its own OS thread and wait for it for
+#                    at most `timeout_ms`.
+#   CircuitBreaker — closed / open / half-open state machine with a failure
+#                    threshold and a reset timeout, safe to share across
+#                    threads.
+#
+# ─── Calling convention ────────────────────────────────────────────────────
+#
+# Tauraro callables (`def() -> R`) cannot themselves be `throws`, so an
+# operation reports failure through its return value:
+#
+#   def() -> bool    "bool ops":  true  = success, false = failure
+#   def() -> int     "code ops":  0     = success, any other value is a
+#                                 caller-defined failure code (e.g. an HTTP
+#                                 status, an errno, an enum ordinal).
+#
+# The retry-on predicate `def(int) -> bool` receives the failure code of the
+# attempt that just failed and decides whether another attempt is worthwhile
+# (return false for permanent errors such as "401 Unauthorized"). Bool ops
+# always fail with code 1. An attempt that exceeded `attempt_timeout_ms` fails
+# with code RETRY_TIMEOUT_CODE() (-1). Results can be handed back to the
+# caller by capturing a `mut` variable in a closure, or by wrapping an
+# existing `throws` function in a tiny adapter:
+#
+#   def fetch_ok() -> bool:
+#       mut r = fetch()           # a `throws str -> T` function
+#       return not r.is_err
+#
+# ─── Usage ─────────────────────────────────────────────────────────────────
+#
+#   from std.async.retry import RetryPolicy, CircuitBreaker
+#   from std.async.retry import call_with_timeout, CB_OPEN
+#
+#   mut p = RetryPolicy.exponential(5, 100, 2000)   # 5 tries, 100ms,200ms,...<=2s
+#   p.set_jitter(50)                                # each delay in [50%,100%]
+#   p.set_retry_on(is_transient)                    # def(int) -> bool
+#   mut res = p.run_code(do_request)                # def() -> int
+#   if not res.ok: print(f"gave up after {res.attempts} attempts")
+#
+#   mut cb = CircuitBreaker.init(3, 5000)           # open after 3 failures, 5s
+#   mut outcome = cb.call(do_request_bool)          # CALL_OK / _FAILED / _REJECTED
+#   mut guarded = p.run_guarded(cb, do_request_bool)  # retry + breaker together
+#
+# ─── Thread-safety and lifetime notes ──────────────────────────────────────
+#
+# * `CircuitBreaker` is a reference-counted wrapper class, `implements
+#   Sendable, UnsafeSendable`, exactly like std.async.ratelimit's
+#   TokenBucket: all mutable state lives in `Atomic[int]` cells and every
+#   state transition is serialised by an internal Mutex[int] used as a plain
+#   lock. One breaker may be shared by any number of threads.
+#   Call `.close()` once nobody uses it any more (the Atomics and the
+#   lock are manual resources, same as in `Scheduler`; the object itself is
+#   reclaimed by the usual scope-exit drop).
+# * `RetryPolicy` is a plain value-like configuration object. `run*` only
+#   reads it, so a fully configured policy may be used from several threads
+#   at once as long as nobody calls a `set_*` method concurrently.
+# * Timeouts do NOT cancel anything. `call_with_timeout` runs the callable on
+#   a detached OS thread and merely stops *waiting*; a timed-out callable
+#   keeps running to completion in the background (there is no safe way to
+#   kill a thread). Consequently a callable that may time out must only touch
+#   state that outlives the call (Atomics, Mutex-guarded data, heap objects
+#   it owns) — a closure capturing the caller's stack locals by reference
+#   would write into a dead frame. For the same reason the small private
+#   record shared with the abandoned thread is intentionally leaked on a
+#   timeout (a few dozen bytes per timed-out call), never freed under it.
+# * Backoff sleeping blocks the calling thread (Thread.sleep), the same way
+#   `TokenBucket.acquire_blocking` does.
+
+from std.async.send import Sendable, UnsafeSendable
+from std.async.mutex import Mutex
+from std.async.thread import Thread, Atomic
+from std.math.random import Random
+from std.sys.time import Clock
+
+# ─── Constants ──────────────────────────────────────────────────────────────
+
+# Backoff strategies.
+pub def BACKOFF_FIXED()       -> int: return 0
+pub def BACKOFF_EXPONENTIAL() -> int: return 1
+
+# Failure code recorded for an attempt that exceeded its timeout.
+pub def RETRY_TIMEOUT_CODE() -> int: return -1
+
+# Why a retry loop stopped without succeeding (RetryResult.reason).
+pub def RETRY_REASON_NONE()          -> int: return 0   # succeeded
+pub def RETRY_REASON_EXHAUSTED()     -> int: return 1   # used all max_attempts
+pub def RETRY_REASON_NOT_RETRYABLE() -> int: return 2   # retry-on predicate said no
+pub def RETRY_REASON_DEADLINE()      -> int: return 3   # overall deadline would be exceeded
+pub def RETRY_REASON_BREAKER_OPEN()  -> int: return 4   # circuit breaker rejected the call
+
+# Circuit breaker states.
+pub def CB_CLOSED()    -> int: return 0
+pub def CB_OPEN()      -> int: return 1
+pub def CB_HALF_OPEN() -> int: return 2
+
+# CircuitBreaker.call / call_code outcomes.
+pub def CALL_OK()       -> int: return 0
+pub def CALL_FAILED()   -> int: return 1
+pub def CALL_REJECTED() -> int: return 2
+
+# Largest delay the exponential growth loop will ever compute when the caller
+# passed no cap (guards against signed-overflow traps): ~12 days in ms.
+def _MAX_UNCAPPED_MS() -> int: return 1000000000
+
+# ─── Operation wrapper ──────────────────────────────────────────────────────
+#
+# `_Ops` carries EITHER a bool op or a code op, so the retry loop, the
+# timeout machinery and the breaker share a single code path. It is a plain
+# class (function-pointer fields are not `Sendable`), so a timed-out call
+# hands it to its worker thread inside a `Mutex[_Ops]` slot wrapped in `_Call`,
+# the shared record whose remaining fields are all Atomics.
+
+pub class _Ops:
+    pub kind:    int                # 0 = bool op, 1 = code op
+    pub bool_op: def() -> bool
+    pub code_op: def() -> int
+
+extend _Ops:
+    pub def from_bool(op: def() -> bool) -> _Ops:
+        mut o = _Ops()
+        o.kind    = 0
+        o.bool_op = op
+        return o
+
+    pub def from_code(op: def() -> int) -> _Ops:
+        mut o = _Ops()
+        o.kind    = 1
+        o.code_op = op
+        return o
+
+    # Run the wrapped op synchronously; returns its failure code (0 = ok).
+    pub def invoke(self) -> int:
+        if self.kind == 0:
+            if self.bool_op():
+                return 0
+            return 1
+        return self.code_op()
+
+    pub def copy(self) -> _Ops:
+        mut o = _Ops()
+        o.kind    = self.kind
+        o.bool_op = self.bool_op
+        o.code_op = self.code_op
+        return o
+
+pub class _Call implements Sendable, UnsafeSendable:
+    pub ops:       Mutex[_Ops]
+    pub done:      Atomic[int]        # 1 once the worker finished
+    pub code:      Atomic[int]        # worker's result code
+    pub keepalive: _Call              # self-reference, set only when abandoned
+
+extend _Call:
+    pub def wrap(o: _Ops) -> _Call:
+        mut c = _Call()
+        c.ops  = Mutex.init(o.copy())
+        c.done = Atomic.new(0)
+        c.code = Atomic.new(0)
+        return c
+
+    pub def release(self):
+        self.done.free()
+        self.code.free()
+
+# Worker thread body. The op runs while holding the (otherwise private)
+# `ops` lock; nobody else ever takes it.
+def _call_worker(c: _Call) -> void:
+    mut o = c.ops.get()
+    mut r = o.invoke()
+    c.ops.set(o)
+    c.code.store(r)
+    c.done.store(1)    # last touch of `c` by the worker
+
+# ─── Timeout ────────────────────────────────────────────────────────────────
+
+# How often a timeout wait re-checks the worker's completion flag.
+pub def RETRY_POLL_MS() -> int: return 2
+
+pub class TimeoutResult:
+    pub completed: bool   # false => the deadline passed first
+    pub code:      int    # the op's code when completed (0 = ok); RETRY_TIMEOUT_CODE() otherwise
+
+def _run_with_timeout(c: _Call, timeout_ms: int) -> TimeoutResult:
+    mut res = TimeoutResult()
+    res.completed = false
+    res.code      = RETRY_TIMEOUT_CODE()
+    mut deadline = Clock.now_ms() + timeout_ms
+    mut t: Thread = Thread.spawn(_call_worker, c)
+    while true:
+        if c.done.load() != 0:
+            t.join()
+            res.completed = true
+            res.code      = c.code.load()
+            c.release()
+            return res
+        if Clock.now_ms() >= deadline:
+            break
+        Thread.sleep(RETRY_POLL_MS())
+    # Last look: the worker may have finished in the very last poll gap.
+    if c.done.load() != 0:
+        t.join()
+        res.completed = true
+        res.code      = c.code.load()
+        c.release()
+        return res
+    # Timed out. The detached worker still holds a raw pointer to `c`, so the
+    # record must outlive this scope: make it reference itself (a deliberate,
+    # tiny leak) before our local reference is dropped.
+    c.keepalive = c
+    t.detach()
+    return res
+
+# Run `op` (a code op: 0 = success) on its own thread and wait at most
+# `timeout_ms` for it. See the module header for what a timeout does (and does
+# not) do to the callable.
+pub def call_with_timeout(op: def() -> int, timeout_ms: int) -> TimeoutResult:
+    return _run_with_timeout(_Call.wrap(_Ops.from_code(op)), timeout_ms)
+
+# Same as call_with_timeout for a bool op (true = success -> code 0,
+# false -> code 1).
+pub def call_bool_with_timeout(op: def() -> bool, timeout_ms: int) -> TimeoutResult:
+    return _run_with_timeout(_Call.wrap(_Ops.from_bool(op)), timeout_ms)
+
+# ─── Small helpers ──────────────────────────────────────────────────────────
+
+# Atomic read-modify-write helpers that do not depend on whether add()
+# returns the previous or the new value.
+def _atomic_inc(a: Atomic[int]) -> int:
+    while true:
+        mut cur = a.load()
+        if a.cas(cur, cur + 1):
+            return cur + 1
+    return 0
+
+# The breaker's lock is a Mutex[int] used purely as a mutual-exclusion
+# primitive: get() acquires it, set() releases it. Free functions (not
+# methods reaching through `self.<field>.get()`) per the convention and
+# compiler-ARC-bug workaround documented in std.async.ratelimit.
+def _lock_acquire(m: Mutex[int]) -> int:
+    return m.get()
+
+def _lock_release(m: Mutex[int], v: int):
+    m.set(v)
+
+# ─── RetryResult ────────────────────────────────────────────────────────────
+
+pub class RetryResult:
+    pub ok:          bool   # the op eventually succeeded
+    pub attempts:    int    # how many times the op was invoked
+    pub last_code:   int    # failure code of the final failed attempt (0 if ok)
+    pub slept_ms:    int    # total time spent in backoff sleeps
+    pub reason:      int    # RETRY_REASON_* (RETRY_REASON_NONE when ok)
+    pub timeouts:    int    # attempts that hit attempt_timeout_ms
+
+# ─── CircuitBreaker ─────────────────────────────────────────────────────────
+#
+#            failures >= failure_threshold
+#   CLOSED ───────────────────────────────────► OPEN
+#     ▲                                           │ reset_timeout_ms elapsed:
+#     │ success_threshold consecutive             │ next allow() moves it to
+#     │ probe successes                           ▼
+#     └──────────────────────────────────── HALF-OPEN ──(any probe failure)──► OPEN
+#
+#   CLOSED     calls flow; consecutive failures are counted (a success resets
+#              the count).
+#   OPEN       calls are rejected immediately, no work is attempted.
+#   HALF-OPEN  after `reset_timeout_ms` a limited number of probe calls
+#              (`half_open_max_calls`) are let through. `success_threshold`
+#              successes close the breaker; a single failure re-opens it.
+#
+# `state()` is a lock-free read that reports the *effective* state: an OPEN
+# breaker whose reset timeout has already elapsed reads as HALF-OPEN even
+# before the first probe arrives to physically make the transition.
+
+pub class CircuitBreaker implements Sendable, UnsafeSendable:
+    pub lock:               Mutex[int]
+    pub state_cell:         Atomic[int]   # CB_CLOSED / CB_OPEN / CB_HALF_OPEN (physical)
+    pub failures:           Atomic[int]   # consecutive failures while CLOSED
+    pub opened_at:          Atomic[int]   # Clock.now_ms() when it last opened
+    pub probes:             Atomic[int]   # probe calls admitted in this HALF-OPEN spell
+    pub half_ok:            Atomic[int]   # probe successes in this HALF-OPEN spell
+    pub rejected_cell:      Atomic[int]   # total calls rejected (statistics)
+    pub trips_cell:         Atomic[int]   # total times the breaker opened (statistics)
+    pub failure_threshold:  int
+    pub reset_timeout_ms:   int
+    pub half_open_max_calls: int
+    pub success_threshold:  int
+
+# Transition to OPEN; caller holds the lock.
+def _cb_trip(cb: CircuitBreaker):
+    cb.opened_at.store(Clock.now_ms())
+    cb.state_cell.store(CB_OPEN())
+    cb.failures.store(0)
+    cb.probes.store(0)
+    cb.half_ok.store(0)
+    _atomic_inc(cb.trips_cell)
+
+def _cb_allow(cb: CircuitBreaker) -> bool:
+    mut tok = _lock_acquire(cb.lock)
+    mut ok = false
+    mut st = cb.state_cell.load()
+    if st == CB_OPEN():
+        if Clock.now_ms() - cb.opened_at.load() >= cb.reset_timeout_ms:
+            cb.state_cell.store(CB_HALF_OPEN())
+            cb.probes.store(0)
+            cb.half_ok.store(0)
+            st = CB_HALF_OPEN()
+    if st == CB_CLOSED():
+        ok = true
+    elif st == CB_HALF_OPEN():
+        if cb.probes.load() < cb.half_open_max_calls:
+            _atomic_inc(cb.probes)
+            ok = true
+    if not ok:
+        _atomic_inc(cb.rejected_cell)
+    _lock_release(cb.lock, tok)
+    return ok
+
+def _cb_success(cb: CircuitBreaker):
+    mut tok = _lock_acquire(cb.lock)
+    mut st = cb.state_cell.load()
+    if st == CB_CLOSED():
+        cb.failures.store(0)
+    elif st == CB_HALF_OPEN():
+        mut n = _atomic_inc(cb.half_ok)
+        if n >= cb.success_threshold:
+            cb.state_cell.store(CB_CLOSED())
+            cb.failures.store(0)
+            cb.probes.store(0)
+            cb.half_ok.store(0)
+    _lock_release(cb.lock, tok)
+
+def _cb_failure(cb: CircuitBreaker):
+    mut tok = _lock_acquire(cb.lock)
+    mut st = cb.state_cell.load()
+    if st == CB_CLOSED():
+        mut n = _atomic_inc(cb.failures)
+        if n >= cb.failure_threshold:
+            _cb_trip(cb)
+    elif st == CB_HALF_OPEN():
+        _cb_trip(cb)
+    # A failure reported while OPEN (a straggler from before the trip) is
+    # ignored: it must not extend the open period.
+    _lock_release(cb.lock, tok)
+
+def _cb_reset(cb: CircuitBreaker):
+    mut tok = _lock_acquire(cb.lock)
+    cb.state_cell.store(CB_CLOSED())
+    cb.failures.store(0)
+    cb.probes.store(0)
+    cb.half_ok.store(0)
+    _lock_release(cb.lock, tok)
+
+def _cb_state(cb: CircuitBreaker) -> int:
+    mut st = cb.state_cell.load()
+    if st == CB_OPEN():
+        if Clock.now_ms() - cb.opened_at.load() >= cb.reset_timeout_ms:
+            return CB_HALF_OPEN()
+    return st
+
+# Guarded invocation shared by call() and call_code().
+def _cb_call(cb: CircuitBreaker, o: _Ops) -> int:
+    if not _cb_allow(cb):
+        return CALL_REJECTED()
+    mut code = o.invoke()
+    if code == 0:
+        _cb_success(cb)
+        return CALL_OK()
+    _cb_failure(cb)
+    return CALL_FAILED()
+
+extend CircuitBreaker:
+    # Open after `failure_threshold` consecutive failures; stay open for
+    # `reset_timeout_ms`, then admit one probe call (see set_half_open).
+    pub def init(failure_threshold: int, reset_timeout_ms: int) -> CircuitBreaker:
+        mut cb = CircuitBreaker()
+        cb.lock                = Mutex.init(0)
+        cb.state_cell          = Atomic.new(CB_CLOSED())
+        cb.failures            = Atomic.new(0)
+        cb.opened_at           = Atomic.new(0)
+        cb.probes              = Atomic.new(0)
+        cb.half_ok             = Atomic.new(0)
+        cb.rejected_cell       = Atomic.new(0)
+        cb.trips_cell          = Atomic.new(0)
+        cb.failure_threshold   = failure_threshold
+        if cb.failure_threshold < 1: cb.failure_threshold = 1
+        cb.reset_timeout_ms    = reset_timeout_ms
+        cb.half_open_max_calls = 1
+        cb.success_threshold   = 1
+        return cb
+
+    # Configure HALF-OPEN: admit up to `max_calls` concurrent/sequential
+    # probe calls per spell and require `successes` successful probes to
+    # close. Call before sharing the breaker with other threads.
+    pub def set_half_open(self, max_calls: int, successes: int):
+        self.half_open_max_calls = max_calls
+        if self.half_open_max_calls < 1: self.half_open_max_calls = 1
+        self.success_threshold = successes
+        if self.success_threshold < 1: self.success_threshold = 1
+        if self.success_threshold > self.half_open_max_calls:
+            self.success_threshold = self.half_open_max_calls
+
+    # Effective state: CB_CLOSED / CB_OPEN / CB_HALF_OPEN. Lock-free.
+    pub def state(self) -> int:
+        return _cb_state(self)
+
+    pub def is_closed(self) -> bool:
+        return _cb_state(self) == CB_CLOSED()
+
+    pub def is_open(self) -> bool:
+        return _cb_state(self) == CB_OPEN()
+
+    pub def is_half_open(self) -> bool:
+        return _cb_state(self) == CB_HALF_OPEN()
+
+    # "closed" / "open" / "half-open"
+    pub def state_name(self) -> str:
+        mut s = _cb_state(self)
+        if s == CB_CLOSED(): return "closed"
+        if s == CB_OPEN(): return "open"
+        return "half-open"
+
+    # Ask permission for ONE call. true = go ahead (and you MUST report the
+    # outcome with record_success()/record_failure()); false = rejected.
+    # Use this + record_* when call()/call_code() do not fit your control flow.
+    pub def allow(self) -> bool:
+        return _cb_allow(self)
+
+    pub def record_success(self):
+        _cb_success(self)
+
+    pub def record_failure(self):
+        _cb_failure(self)
+
+    # Run a bool op under the breaker. Returns CALL_OK, CALL_FAILED (the op
+    # ran and failed) or CALL_REJECTED (the breaker was open: op NOT run).
+    pub def call(self, op: def() -> bool) -> int:
+        return _cb_call(self, _Ops.from_bool(op))
+
+    # Same for a code op (0 = success, anything else = failure).
+    pub def call_code(self, op: def() -> int) -> int:
+        return _cb_call(self, _Ops.from_code(op))
+
+    # Force the breaker back to CLOSED with zeroed counters (operator override).
+    pub def reset(self):
+        _cb_reset(self)
+
+    # Consecutive failures currently counted toward the threshold.
+    pub def failure_count(self) -> int:
+        return self.failures.load()
+
+    # Statistics: calls rejected so far / times the breaker has opened.
+    pub def rejected_count(self) -> int:
+        return self.rejected_cell.load()
+
+    pub def trip_count(self) -> int:
+        return self.trips_cell.load()
+
+    # Release the breaker's Atomics and lock. Do not use the breaker afterwards.
+    # (Named close(), not free(): a user-defined `free` method replaces the
+    # compiler's own object release, which would then leak the struct itself.)
+    pub def close(self):
+        self.lock.free()
+        self.state_cell.free()
+        self.failures.free()
+        self.opened_at.free()
+        self.probes.free()
+        self.half_ok.free()
+        self.rejected_cell.free()
+        self.trips_cell.free()
+
+# Placeholder handed to _retry_loop when no breaker is in play (never touched).
+mut _no_breaker = CircuitBreaker()
+
+# ─── RetryPolicy ────────────────────────────────────────────────────────────
+
+pub class RetryPolicy:
+    pub max_attempts:       int    # total tries including the first (>= 1)
+    pub backoff:            int    # BACKOFF_FIXED / BACKOFF_EXPONENTIAL
+    pub base_ms:            int    # delay before the 2nd attempt
+    pub cap_ms:             int    # maximum delay (0 = no cap)
+    pub multiplier:         int    # exponential growth factor (default 2)
+    pub jitter_pct:         int    # 0..100: delay drawn from [d*(100-pct)/100, d]
+    pub deadline_ms:        int    # overall budget incl. sleeps (0 = none)
+    pub attempt_timeout_ms: int    # per-attempt timeout (0 = none)
+    pub retry_on:           def(int) -> bool
+    pub has_retry_on:       bool
+
+extend RetryPolicy:
+    # `max_attempts` tries, always waiting `delay_ms` between them.
+    pub def fixed(max_attempts: int, delay_ms: int) -> RetryPolicy:
+        mut p = RetryPolicy()
+        p.max_attempts       = max_attempts
+        if p.max_attempts < 1: p.max_attempts = 1
+        p.backoff            = BACKOFF_FIXED()
+        p.base_ms            = delay_ms
+        if p.base_ms < 0: p.base_ms = 0
+        p.cap_ms             = 0
+        p.multiplier         = 2
+        p.jitter_pct         = 0
+        p.deadline_ms        = 0
+        p.attempt_timeout_ms = 0
+        p.has_retry_on       = false
+        return p
+
+    # `max_attempts` tries; the delay starts at `base_ms` and is multiplied
+    # (x2 by default) after every failure, never exceeding `cap_ms`
+    # (cap_ms <= 0 means "uncapped" up to a ~11 day safety ceiling).
+    pub def exponential(max_attempts: int, base_ms: int, cap_ms: int) -> RetryPolicy:
+        mut p = RetryPolicy.fixed(max_attempts, base_ms)
+        p.backoff = BACKOFF_EXPONENTIAL()
+        p.cap_ms  = cap_ms
+        if p.cap_ms < 0: p.cap_ms = 0
+        return p
+
+    # Randomise each delay downward by up to `pct` percent (0 = off,
+    # 100 = "full jitter", delay uniform in [0, d]). Spreads out clients that
+    # all failed at the same instant so they do not retry in lock-step.
+    pub def set_jitter(self, pct: int):
+        self.jitter_pct = pct
+        if self.jitter_pct < 0: self.jitter_pct = 0
+        if self.jitter_pct > 100: self.jitter_pct = 100
+
+    pub def set_multiplier(self, m: int):
+        self.multiplier = m
+        if self.multiplier < 1: self.multiplier = 1
+        if self.multiplier > 1000000: self.multiplier = 1000000
+
+    # Only retry while `pred(failure_code)` returns true.
+    pub def set_retry_on(self, pred: def(int) -> bool):
+        self.retry_on     = pred
+        self.has_retry_on = true
+
+    # Stop retrying once `ms` milliseconds (attempts + sleeps) would be
+    # exceeded; a sleep that would cross the deadline is skipped.
+    pub def set_deadline(self, ms: int):
+        self.deadline_ms = ms
+        if self.deadline_ms < 0: self.deadline_ms = 0
+
+    # Run every attempt through call_with_timeout. An attempt that times out
+    # counts as a failure with code RETRY_TIMEOUT_CODE(). See the module
+    # header for the caveats on abandoned attempts.
+    pub def set_attempt_timeout(self, ms: int):
+        self.attempt_timeout_ms = ms
+        if self.attempt_timeout_ms < 0: self.attempt_timeout_ms = 0
+
+    # Deterministic (jitter-free) delay in ms to wait after failed attempt
+    # number `attempt` (1-based) before attempt number `attempt + 1`.
+    pub def backoff_ms(self, attempt: int) -> int:
+        if self.base_ms <= 0: return 0
+        mut d = self.base_ms
+        mut limit = self.cap_ms
+        if limit <= 0: limit = _MAX_UNCAPPED_MS()
+        if self.backoff == BACKOFF_EXPONENTIAL():
+            mut i = 1
+            while i < attempt:
+                if d >= limit: break
+                d = d * self.multiplier
+                i = i + 1
+        if d > limit: d = limit
+        return d
+
+    # backoff_ms() with this policy's jitter applied, drawing from `rng`.
+    pub def jittered_ms(self, attempt: int, rng: Random) -> int:
+        mut d = self.backoff_ms(attempt)
+        if self.jitter_pct <= 0 or d <= 0: return d
+        mut lo = d - (d * self.jitter_pct) / 100
+        return rng.randint(lo, d)
+
+    # Run a bool op (true = success) until it succeeds or the policy gives up.
+    pub def run(self, op: def() -> bool) -> RetryResult:
+        return _retry_loop(self, _Ops.from_bool(op), _no_breaker, false)
+
+    # Run a code op (0 = success; non-zero is passed to the retry-on predicate).
+    pub def run_code(self, op: def() -> int) -> RetryResult:
+        return _retry_loop(self, _Ops.from_code(op), _no_breaker, false)
+
+    # run() with every attempt gated by (and reported to) `cb`. Once the
+    # breaker opens the loop stops at once with RETRY_REASON_BREAKER_OPEN
+    # instead of sleeping through further backoff.
+    pub def run_guarded(self, cb: CircuitBreaker, op: def() -> bool) -> RetryResult:
+        return _retry_loop(self, _Ops.from_bool(op), cb, true)
+
+    pub def run_code_guarded(self, cb: CircuitBreaker, op: def() -> int) -> RetryResult:
+        return _retry_loop(self, _Ops.from_code(op), cb, true)
+
+# One attempt: honours attempt_timeout_ms. Returns the op's failure code, or
+# RETRY_TIMEOUT_CODE() if it did not finish in time (so an op must not itself
+# use -1 as a failure code when per-attempt timeouts are in play).
+def _attempt(o: _Ops, timeout_ms: int) -> int:
+    if timeout_ms > 0:
+        # (Read the field into a local before returning: `return tr.code`
+        # directly leaks `tr` -- compiler ARC gap.)
+        mut tr = _run_with_timeout(_Call.wrap(o), timeout_ms)
+        mut code = tr.code
+        return code
+    return o.invoke()
+
+def _retry_loop(p: RetryPolicy, o: _Ops, cb: CircuitBreaker, use_cb: bool) -> RetryResult:
+    mut res = RetryResult()
+    res.ok        = false
+    res.attempts  = 0
+    res.last_code = 0
+    res.slept_ms  = 0
+    res.reason    = RETRY_REASON_EXHAUSTED()
+    res.timeouts  = 0
+    mut start = Clock.now_ms()
+    mut rng = Random.new(start * 31 + 7919)
+    mut max = p.max_attempts
+    if max < 1: max = 1
+    mut attempt = 0
+    while true:
+        if use_cb:
+            if not cb.allow():
+                res.reason = RETRY_REASON_BREAKER_OPEN()
+                break
+        attempt = attempt + 1
+        res.attempts = attempt
+        # NOTE: no heap-class local lives across the `break`s below, and
+        # _attempt() returns a plain int: a heap-class local declared in a
+        # loop body is not released on a `break` path (compiler ARC gap), so
+        # this loop is written to keep such locals out of it.
+        mut code = _attempt(o, p.attempt_timeout_ms)
+        if code == 0:
+            if use_cb: cb.record_success()
+            res.ok        = true
+            res.last_code = 0
+            res.reason    = RETRY_REASON_NONE()
+            break
+        if code == RETRY_TIMEOUT_CODE(): res.timeouts = res.timeouts + 1
+        if use_cb: cb.record_failure()
+        res.last_code = code
+        if p.has_retry_on:
+            if not p.retry_on(code):
+                res.reason = RETRY_REASON_NOT_RETRYABLE()
+                break
+        if attempt >= max:
+            res.reason = RETRY_REASON_EXHAUSTED()
+            break
+        if use_cb:
+            if cb.is_open():
+                res.reason = RETRY_REASON_BREAKER_OPEN()
+                break
+        mut delay = p.jittered_ms(attempt, rng)
+        if p.deadline_ms > 0:
+            if (Clock.now_ms() - start) + delay >= p.deadline_ms:
+                res.reason = RETRY_REASON_DEADLINE()
+                break
+        if delay > 0:
+            Thread.sleep(delay)
+            res.slept_ms = res.slept_ms + delay
+    return res

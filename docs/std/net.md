@@ -6,6 +6,9 @@ from std.net.udp  import UdpSocket
 from std.net.dns  import Dns
 from std.net.url  import Url
 from std.net.http import HttpClient, HttpClientResponse, HttpHeader
+from std.net.client    import HttpSession, ClientRequest, HttpReply, HeaderList
+from std.net.cookie    import CookieJar, Cookie
+from std.net.multipart import FormBuilder, MultipartBuilder
 ```
 
 > **Platform note** — All socket classes require `-lws2_32` on Windows (Winsock).  
@@ -232,7 +235,7 @@ A simple `name`/`value` pair.
 |---|---|---|
 | `status` | `int` | HTTP status code (e.g. `200`, `404`). |
 | `body` | `str` | Response body text. |
-| `headers` | `Map[str]` | Parsed response headers (name → value). |
+| `headers` | `Map[str, str]` | Parsed response headers (name → value; a repeated header keeps only the last value — use `HttpReply` below if you need all of them, e.g. `Set-Cookie`). |
 | `HttpClientResponse.init` | `(status: int, body: str) -> HttpClientResponse` | Construct a response directly (status + body; empty headers map). |
 | `is_ok` | `() -> bool` | `true` for 2xx status codes. |
 | `is_redirect` | `() -> bool` | `true` for 3xx status codes. |
@@ -322,6 +325,86 @@ mut r = c.get("/users/octocat")
 if r.is_ok():
     print(r.body)
 ```
+
+---
+
+## HTTP client toolkit — `std.net.client`, `std.net.cookie`, `std.net.multipart`
+
+**When**: You need more than one fixed `host:port` GET — following redirects (even across hosts), keeping cookies between requests, sending form / multipart bodies, or streaming a large response to disk instead of holding it in memory.
+**Why**: `HttpClient` above is bound to one host and does a single `recv()`. `HttpSession` is URL-based HTTP/1.1: it reads the whole response (Content-Length, chunked, or until close), follows redirects, and plugs into a `CookieJar`. It is a separate class (not a rewrite of `HttpClient`) so existing code keeps working.
+
+```tauraro
+from std.net.client    import HttpSession, ClientRequest
+from std.net.multipart import FormBuilder, MultipartBuilder
+```
+
+### HttpSession
+
+| Method | Signature | Description |
+|---|---|---|
+| `HttpSession.init` | `() -> HttpSession` | Defaults: idle timeout 30 s, follow up to 10 redirects, cookies off, UA `tauraro-http/1.0`, in-memory body cap 64 MiB. |
+| `set_header` / `remove_header` | `(name, value)` / `(name)` | Default header sent on every request (a per-request header of the same name replaces it). |
+| `set_basic_auth` / `set_bearer` / `set_user_agent` | `(user, pass)` / `(token)` / `(ua)` | Convenience for `Authorization` / `User-Agent`. |
+| `set_timeout` | `(ms: int)` | Idle timeout: longest wait for more bytes (header or body). |
+| `set_total_timeout` | `(ms: int)` | Wall-clock limit for the whole call, redirects included (`0` = none). |
+| `set_follow_redirects` / `set_max_redirects` | `(bool)` / `(n)` | Redirect policy. `n <= 0` disables following. |
+| `set_rewrite_post_on_301_302` | `(bool)` | `true` (default): `POST` becomes `GET` on 301/302 like browsers; `false`: keep the method. |
+| `enable_cookies` / `disable_cookies` / `set_cookie_jar` / `cookie_jar` | | Cookie handling (off by default). |
+| `set_max_body_bytes` | `(n)` | Cap for in-memory bodies (`0` = unlimited). |
+| `set_allow_unverified_tls` | `(bool)` | Required before any `https://` URL is attempted (see limitations). |
+| `get` / `head` / `delete` | `(url) -> HttpReply` | |
+| `post` / `put` / `patch` | `(url, body, content_type) -> HttpReply` | |
+| `post_json` | `(url, json) -> HttpReply` | |
+| `post_form` | `(url, form: FormBuilder) -> HttpReply` | `application/x-www-form-urlencoded`. |
+| `post_multipart` | `(url, mp: MultipartBuilder) -> HttpReply` | `multipart/form-data`. |
+| `request` / `send` | `(method, url, body, ctype)` / `(req: ClientRequest)` | Full control; `ClientRequest` has `header()`, `with_body()`, `with_timeout()`, `with_follow()`. |
+| `download_to_file` / `send_to_file` | `(url, path)` / `(req, path)` | Stream the body to disk (see below). |
+| `stream_get` / `send_streaming` | `(url, on_chunk)` / `(req, on_chunk)` | Deliver the body to `on_chunk: def(str) -> bool` as it arrives; return `false` to abort. |
+
+**Redirects.** 301/302/303/307/308 with a `Location` header are followed. 303 → `GET` (HEAD stays HEAD, body dropped); 301/302 turn `POST` into `GET` (configurable); 307/308 keep method and body. Relative `Location` values are resolved with `Url.resolve`. `Authorization`, `Proxy-Authorization` and an explicit `Cookie` header are dropped when a hop changes host, changes port, or downgrades https→http; jar cookies are re-evaluated for every hop. A loop or a long chain ends with `reply.error = "too many redirects (N)"`.
+
+**Streaming.** `download_to_file` writes to `<path>.part` and renames it on success, so a failed download never leaves a partial `path`. The body is written only for 2xx responses (otherwise it is returned in `reply.body`, so you can read the error page). Writes come straight from raw receive buffers, so binary files are intact. `stream_get` hands decoded (de-chunked) text to the callback.
+
+### HttpReply
+
+`status`, `reason`, `body`, `url` (final URL), `error` (`""` when the exchange completed; otherwise e.g. `"timeout waiting for response"`, `"connection failed to host:port"`, `"too many redirects (10)"`, `"incomplete body: ..."`), `timed_out`, `redirects`, `bytes`, `chunked`, `saved_to`, `history` (every URL requested). Methods: `is_ok()` (no error and 2xx), `is_redirect()`, `is_error()`, `header(name)` (case-insensitive, first value), `header_all(name)`, `has_header`, `set_cookies()` (all `Set-Cookie` values), `content_type()`, `location()`, `content_length()`. A 4xx/5xx status is *not* a transport error: `error` stays `""`.
+
+### CookieJar (`std.net.cookie`)
+
+```tauraro
+from std.net.cookie import CookieJar
+
+mut jar = CookieJar.init()
+jar.store_set_cookie("sid=abc; Path=/; HttpOnly; Max-Age=3600", "example.com", "/login")
+print(jar.header_for("example.com", "/account", false))            # "sid=abc"
+print(jar.header_for_url("https://example.com/account"))           # same, from a URL string
+```
+
+Parses `Domain`, `Path`, `Expires` (RFC 1123 / RFC 850 / asctime), `Max-Age` (wins over `Expires`), `Secure`, `HttpOnly`, `SameSite`. Host-only vs domain cookies, default-path, domain/path matching with proper boundaries, `Secure` only over https, expiry, `Max-Age=0` deletion, and RFC 6265 ordering (longer path first, then older) of the generated `Cookie` header. Also: `set(name, value, domain, path)`, `get`, `has`, `find`, `remove`, `purge_expired`, `clear`, `len`, and `*_at(..., now)` variants taking an explicit Unix time for deterministic tests. `http_date_parse(text) -> int` is exported too.
+
+### FormBuilder / MultipartBuilder (`std.net.multipart`)
+
+```tauraro
+mut f = FormBuilder.init()
+f.add("q", "hello world")            # build() -> "q=hello%20world"
+
+mut m = MultipartBuilder.init()
+m.add_field("title", "Report")
+m.add_file_data("doc", "a.txt", "text/plain", "contents")
+m.add_file("logo", "assets/logo.svg")      # from disk; Content-Type guessed from the extension
+mut r = HttpSession.init().post_multipart("http://127.0.0.1:8080/upload", m)
+```
+
+`build()` returns the body and `content_type()` the header value (`multipart/form-data; boundary=...`); `with_boundary()` pins the boundary. Field/file names are quoted-escaped (`"` → `%22`, CR/LF removed). The server-side counterpart is watax's `req.multipart()`.
+
+### Limitations
+
+- `https://` is refused unless you call `set_allow_unverified_tls(true)`: the runtime's `_tr_tls_*` layer (also behind `HttpsClient`) encrypts but **does not verify server certificates or host names**, and its reads are blocking (no idle timeout). It was not exercised by the offline test-suite.
+- TCP connect is blocking with no connect timeout; IPv4 only; no proxies, no keep-alive/connection reuse, no `Expect: 100-continue`, no `user:pass@host` or IPv6-literal URLs.
+- No compression (`Accept-Encoding: identity` is sent).
+- In-memory bodies and callback chunks are `str` (NUL-terminated): a body with embedded NUL bytes is cut at the first NUL. Request bodies have the same limit. `download_to_file` is NUL-safe.
+- No public-suffix list for cookies (a dot-less `Domain` is rejected as a heuristic); `SameSite` is stored but not enforced; `Secure` cookies set over plain http are accepted but only sent over https.
+- A closure passed as `on_chunk` cannot re-assign a captured `str` local (compiler limitation); accumulate into a class field instead.
 
 ---
 

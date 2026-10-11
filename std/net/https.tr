@@ -31,7 +31,7 @@ pub class HttpsClient:
     pub host:     str
     pub port:     int
     pub timeout:  int
-    pub _headers: Map[str]
+    pub _headers: Map[str, str]
 
 extend HttpsClient:
     pub def init(host: str, port: int) -> HttpsClient:
@@ -39,7 +39,7 @@ extend HttpsClient:
         c.host      = host
         c.port      = port
         c.timeout   = 10000
-        c._headers  = Map[str].init(16)
+        c._headers  = Map[str, str].init(16)
         return c
 
     # Add a header sent with every subsequent request.

@@ -16,6 +16,73 @@ spec, automated regression suite + CI, incremental compilation, and a batch of
 codegen-safety / diagnostics / stdlib / tooling improvements). Entries will be
 added here as each phase lands.
 
+### Added
+- **`std.async.retry`** — `RetryPolicy` (max attempts, fixed/exponential backoff
+  with cap, optional jitter, retry-on predicate, overall deadline, per-attempt
+  timeout), `call_with_timeout` / `call_bool_with_timeout`, and a thread-safe
+  `CircuitBreaker` (closed/open/half-open, failure threshold, reset timeout).
+  Documented in `docs/std/async.md`, tested by `tests/lang/70_retry.tr`.
+- **`std.net.client` / `std.net.cookie` / `std.net.multipart`: an HTTP client
+  toolkit.** `HttpSession` is a URL-based HTTP/1.1 client that reads whole
+  responses (Content-Length, chunked, or until close), follows
+  301/302/303/307/308 redirects (limit, method rewriting, `Authorization`
+  dropped when leaving the host), keeps default headers, enforces idle/total
+  timeouts, and streams bodies to a file (`download_to_file`) or a callback
+  (`stream_get`). `CookieJar` implements RFC 6265 `Set-Cookie` parsing and
+  `Cookie` header generation; `FormBuilder` / `MultipartBuilder` build
+  urlencoded and `multipart/form-data` bodies. `Url` gained `resolve`,
+  `request_target`, `host_header`, `origin` and `remove_dot_segments`, and now
+  parses `http://host?query`. Tested over loopback in `tests/lang/71_http_client.tr`.
+  `https://` stays opt-in (`set_allow_unverified_tls`) because the runtime TLS
+  layer does not verify certificates.
+
+### Fixed
+- `std.net.http` / `std.net.https` declared `Map[str]` (one type argument) for
+  the response/header maps, which fails to compile
+  (`'V' undeclared` in `HttpClientResponse_header`) as soon as the module is
+  imported; they now use `Map[str, str]`.
+- **`std.encoding.base32`** — RFC 4648 Base32 (standard and base32hex
+  alphabets, optional `=` padding) plus the Crockford alphabet shared with
+  `std.crypto.uuid`. Strict, error-reporting (`throws str`) decoder:
+  rejects bad characters, bad padding/length and non-canonical trailing bits.
+- **`std.encoding.cbor`** — RFC 8949 CBOR codec (`CBVal` tree + `Cbor.dumps` /
+  `loads`): full integer range, byte/text strings, arrays, maps with any key,
+  tags, simple values, half/single/double floats (shortest-exact encoding),
+  indefinite-length decode, strict bounds/nesting-checked decoder, and
+  diagnostic-notation output. Tested against the RFC 8949 Appendix A vectors.
+- **`std.encoding.protobuf`** — Protocol Buffers wire-format `ProtoWriter` /
+  `ProtoReader` (varint, ZigZag, fixed32/64, length-delimited, packed fields,
+  groups, unknown-field skipping and pass-through); no `.proto` compiler.
+- **`std.sys.cron`** — 5-field cron expression parser (ranges, steps, lists,
+  month/weekday names, `@hourly`/`@daily`/`@weekly`/`@monthly`/`@yearly`) with
+  `next_after` / `prev_before` / `matches` / `next_n` in UTC (and fixed-offset
+  variants). Standard day-of-month/day-of-week OR semantics.
+- Tests `tests/lang/72_base32_cbor.tr` and `tests/lang/73_protobuf_cron.tr`.
+- **`std.compress.lz4`** — pure-Tauraro LZ4 (no external library, all
+  platforms): raw block format (`Lz4.compress_block/decompress_block`) and the
+  frame format (`Lz4.compress_frame/decompress_frame`: independent 64 KiB
+  blocks, content size, optional XXH32 content checksum; decoder also handles
+  linked blocks, block checksums, concatenated and skippable frames). Verified
+  both directions against the reference liblz4 (block, HC and `LZ4F_*` frames
+  with every block-size / linked / checksum combination) and under
+  ASan/UBSan. Test: `tests/lang/74_lz4.tr`.
+- **`std.compress.zstd`** — pure-Tauraro Zstandard (RFC 8878). Complete
+  decoder (Raw/RLE/compressed blocks, Huffman 1- and 4-stream literals incl.
+  treeless reuse, FSE-compressed/RLE/repeat/predefined sequence tables, repeat
+  offsets, XXH64 content checksum, concatenated + skippable frames; dictionaries
+  are reported as unsupported) and a simple valid encoder (RLE / Raw blocks, or
+  greedy-LZ77 sequences with the predefined FSE tables and raw literals).
+  Cross-checked against `zstd` 1.5.7 at levels 1..22 (incl. `--ultra`), `--fast`, `--long`,
+  small windows, no-checksum and streaming frames; encoder output verified with
+  `zstd -d`. Test: `tests/lang/75_zstd.tr`.
+- **`std.compress.xxhash`** (`Xxh32`, `Xxh64`) and **`std.compress.common`**
+  (`CBuf` growable byte buffer, `CResult{ok, err, data}` explicit-length
+  result) shared by the codecs.
+- **`std.compress.Compress`** — algorithm-by-name API
+  (`Compress.compress/decompress/compress_with/algorithms/supports`) over
+  `"lz4"`, `"lz4-block"`, `"zstd"`; existing `Zlib`/`Gzip`/`Zip` exports are
+  unchanged.
+
 ## [0.0.9]
 
 **Correctness and reliability hardening across concurrency, generics, and the

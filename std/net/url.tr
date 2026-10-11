@@ -1,6 +1,7 @@
 # std.net.url — URL parsing and building.
 
 from std.core.string import StringBuilder
+from std.core.vec import Vec
 from std.string.str import Str
 from std.string.fmt import Fmt
 
@@ -59,7 +60,17 @@ extend Url:
         mut slash_pos = Str.index_of(rest, "/")
         mut authority = rest
         mut after_auth = "/"
-        if slash_pos >= 0:
+        # "http://host?x=1" / "http://host#frag": no '/' before the query or
+        # fragment, so the authority ends at the first '?' or '#'.
+        mut cut_q = Str.index_of(rest, "?")
+        mut cut_h = Str.index_of(rest, "#")
+        mut cut   = cut_q
+        if cut < 0 or (cut_h >= 0 and cut_h < cut): cut = cut_h
+        if cut >= 0 and (slash_pos < 0 or cut < slash_pos):
+            authority  = Str.slice(rest, 0, cut)
+            mut tail   = Str.slice(rest, cut, rlen)
+            after_auth = "/" + tail
+        elif slash_pos >= 0:
             authority  = Str.slice(rest, 0, slash_pos)
             after_auth = Str.slice(rest, slash_pos, rlen)
         unsafe: _tr_c_free(rest as Pointer[char])
@@ -198,4 +209,119 @@ extend Url:
                 i = i + 1
         mut out = sb.to_owned()
         sb.free()
+        return out
+
+    # ── Client helpers (redirects, request lines) ─────────────────────────────
+
+    # The request-target for an HTTP request line: path plus "?query" if any.
+    pub def request_target(self) -> str:
+        mut p = self.path
+        if Str.len(p) == 0: p = "/"
+        if Str.len(self.query) > 0:
+            return p + "?" + self.query
+        return p
+
+    # The value for a Host header: host, plus ":port" when it is not the
+    # scheme's default port.
+    pub def host_header(self) -> str:
+        mut def_port = Url._default_port_for(self.scheme)
+        if self.port != 0 and self.port != def_port:
+            return self.host + ":" + Fmt.int_to_str(self.port)
+        return self.host
+
+    # Lowercased "scheme://host:port" identity, used to compare origins.
+    pub def origin(self) -> str:
+        mut h = Str.to_lower(self.host)
+        mut sc = Str.to_lower(self.scheme)
+        return sc + "://" + h + ":" + Fmt.int_to_str(self.port)
+
+    # Collapse "." and ".." segments of an absolute path (RFC 3986 5.2.4).
+    pub def remove_dot_segments(path: str) -> str:
+        if Str.len(path) == 0: return "/"
+        mut segs = Str.split_to_vec(path, "/")
+        mut out  = Vec[str].init(8)
+        mut n    = segs.len
+        mut i    = 0
+        while i < n:
+            mut seg = segs.get(i)
+            mut last = i == n - 1
+            if i == 0 and Str.len(seg) == 0:
+                i = i + 1
+                continue
+            if Str.eq(seg, "."):
+                if last: out.push("")
+            elif Str.eq(seg, ".."):
+                if out.len > 0: out.pop()
+                if last: out.push("")
+            else:
+                out.push(seg)
+            i = i + 1
+        mut sb = StringBuilder.init(Str.len(path) + 2)
+        mut j  = 0
+        while j < out.len:
+            sb.append("/")
+            mut part = out.get(j)
+            sb.append(part)
+            j = j + 1
+        if out.len == 0: sb.append("/")
+        mut res = sb.to_owned()
+        sb.free()
+        return res
+
+    # Resolve a (possibly relative) reference such as a Location header against
+    # this URL (RFC 3986 section 5.2, without userinfo/IPv6 handling):
+    #   "http://x/y"  absolute      "//h/p"  scheme-relative
+    #   "/p?q"        absolute-path "p/q"    relative path (merged, dots removed)
+    #   "?q"          same path, new query    "#f"  same URL, new fragment
+    pub def resolve(self, rel: str) -> Url:
+        mut rlen = Str.len(rel)
+        mut out  = Url.init(self.host, self.port, self.path)
+        out.scheme   = self.scheme
+        out.query    = self.query
+        out.fragment = ""
+        if rlen == 0: return out
+        # Absolute URL: a scheme (letters only) followed by "://".
+        mut sep = Str.index_of(rel, "://")
+        if sep > 0:
+            mut pre_ok = true
+            mut k = 0
+            while k < sep:
+                mut ch = Str.char_at(rel, k)
+                mut is_l = (ch >= 65 and ch <= 90) or (ch >= 97 and ch <= 122)
+                if not is_l: pre_ok = false
+                k = k + 1
+            if pre_ok: return Url.parse(rel)
+        if rlen >= 2 and Str.char_at(rel, 0) == 47 and Str.char_at(rel, 1) == 47:
+            mut abs_text = self.scheme + ":" + rel
+            return Url.parse(abs_text)
+        # Split the reference into path / query / fragment.
+        mut body = rel
+        mut frag = ""
+        mut hpos = Str.index_of(body, "#")
+        if hpos >= 0:
+            frag = Str.slice(body, hpos + 1, Str.len(body))
+            body = Str.slice(body, 0, hpos)
+        mut qry     = ""
+        mut has_q   = false
+        mut qpos    = Str.index_of(body, "?")
+        if qpos >= 0:
+            qry   = Str.slice(body, qpos + 1, Str.len(body))
+            body  = Str.slice(body, 0, qpos)
+            has_q = true
+        out.fragment = frag
+        if Str.len(body) == 0:
+            # "?q" / "#f" only: keep the base path.
+            if has_q: out.query = qry
+            return out
+        out.query = qry
+        if Str.char_at(body, 0) == 47:
+            out.path = Url.remove_dot_segments(body)
+            return out
+        mut base_path = self.path
+        if Str.len(base_path) == 0: base_path = "/"
+        mut ls = Str.last_index_of(base_path, "/")
+        mut dir = "/"
+        if ls >= 0: dir = Str.slice(base_path, 0, ls + 1)
+        mut merged = dir + body
+        out.path = Url.remove_dot_segments(merged)
         return out

@@ -1,0 +1,564 @@
+# tests/lang/70_retry.tr
+# std.async.retry — RetryPolicy (fixed/exponential backoff, cap, jitter,
+# retry-on predicate, deadline, per-attempt timeout), call_with_timeout and
+# CircuitBreaker (closed/open/half-open, thread-safety).
+#
+# CI-robustness rules followed here: every wait is bounded (polls with a hard
+# deadline, never an unbounded join on something that could hang), blocked
+# worker threads are released through an explicit "gate" Atomic instead of
+# racing a short sleep against a short timeout, and no assertion depends on a
+# wall-clock window being tighter than a few seconds. The only elapsed-time
+# assertions are lower bounds ("it really slept at least X") or generous
+# upper bounds.
+
+from std.test import TestRunner
+from std.async.retry import RetryPolicy, CircuitBreaker, RetryResult, TimeoutResult
+from std.async.retry import call_with_timeout, call_bool_with_timeout
+from std.async.retry import BACKOFF_FIXED, BACKOFF_EXPONENTIAL, RETRY_TIMEOUT_CODE
+from std.async.retry import RETRY_REASON_NONE, RETRY_REASON_EXHAUSTED, RETRY_REASON_NOT_RETRYABLE
+from std.async.retry import RETRY_REASON_DEADLINE, RETRY_REASON_BREAKER_OPEN
+from std.async.retry import CB_CLOSED, CB_OPEN, CB_HALF_OPEN
+from std.async.retry import CALL_OK, CALL_FAILED, CALL_REJECTED
+from std.async.thread import Thread, Atomic
+from std.math.random import Random
+from std.sys.time import Clock
+
+# ─── Shared state for plain-function ops (ops take no arguments) ────────────
+
+mut g_calls: Atomic[int] = Atomic.new(0)       # how many times an op ran
+mut g_gate: Atomic[int] = Atomic.new(0)        # 1 = blocked ops may finish
+mut g_finished: Atomic[int] = Atomic.new(0)    # blocked ops that ran to completion
+
+# Poll `a` until it is >= want, giving up after limit_ms. Returns the final value.
+def wait_ge(a: Atomic[int], want: int, limit_ms: int) -> int:
+    mut deadline = Clock.now_ms() + limit_ms
+    while a.load() < want:
+        if Clock.now_ms() >= deadline: break
+        Thread.sleep(2)
+    return a.load()
+
+def always_fail() -> bool:
+    g_calls.add(1)
+    return false
+
+def always_ok() -> bool:
+    g_calls.add(1)
+    return true
+
+# Fails (code 503) on calls 1 and 2, then 404 on call 3, success after.
+def codes_503_503_404() -> int:
+    g_calls.add(1)
+    mut n = g_calls.load()
+    if n <= 2: return 503
+    if n == 3: return 404
+    return 0
+
+def is_server_error(code: int) -> bool:
+    return code >= 500
+
+# Blocks (bounded, ~10s max) until the gate opens, then finishes OK. Used for
+# "this call must time out" without racing sleep() against the timeout.
+def blocked_until_gate() -> int:
+    mut deadline = Clock.now_ms() + 10000
+    while g_gate.load() == 0:
+        if Clock.now_ms() >= deadline: break
+        Thread.sleep(2)
+    g_finished.add(1)
+    return 0
+
+# First invocation blocks on the gate; every later invocation succeeds at once.
+def block_first_then_ok() -> int:
+    g_calls.add(1)
+    if g_calls.load() == 1:
+        mut deadline = Clock.now_ms() + 10000
+        while g_gate.load() == 0:
+            if Clock.now_ms() >= deadline: break
+            Thread.sleep(2)
+        g_finished.add(1)
+    return 0
+
+def quick_code_fail() -> int:
+    return 7
+
+def quick_ok() -> int:
+    return 0
+
+def sleepy_ok() -> bool:
+    Thread.sleep(20)
+    return true
+
+# ─── Backoff math ───────────────────────────────────────────────────────────
+
+async def test_backoff_fixed(t: TestRunner):
+    t.section("RetryPolicy.fixed: constant delay, independent of the attempt number")
+    mut p = RetryPolicy.fixed(5, 25)
+    t.assert_eq_int(p.max_attempts, 5, "max_attempts stored")
+    t.assert_eq_int(p.backoff, BACKOFF_FIXED(), "strategy is fixed")
+    t.assert_eq_int(p.backoff_ms(1), 25, "delay after attempt 1")
+    t.assert_eq_int(p.backoff_ms(2), 25, "delay after attempt 2")
+    t.assert_eq_int(p.backoff_ms(50), 25, "delay after attempt 50")
+    mut z = RetryPolicy.fixed(0, -5)
+    t.assert_eq_int(z.max_attempts, 1, "max_attempts clamped to >= 1")
+    t.assert_eq_int(z.backoff_ms(1), 0, "negative delay clamped to 0")
+
+async def test_backoff_exponential(t: TestRunner):
+    t.section("RetryPolicy.exponential: base * 2^(n-1), clamped at the cap")
+    mut p = RetryPolicy.exponential(10, 100, 1000)
+    t.assert_eq_int(p.backoff, BACKOFF_EXPONENTIAL(), "strategy is exponential")
+    t.assert_eq_int(p.backoff_ms(1), 100, "attempt 1 -> base")
+    t.assert_eq_int(p.backoff_ms(2), 200, "attempt 2 -> 2x")
+    t.assert_eq_int(p.backoff_ms(3), 400, "attempt 3 -> 4x")
+    t.assert_eq_int(p.backoff_ms(4), 800, "attempt 4 -> 8x")
+    t.assert_eq_int(p.backoff_ms(5), 1000, "attempt 5 -> 1600 clamped to the 1000 cap")
+    t.assert_eq_int(p.backoff_ms(40), 1000, "late attempts stay at the cap")
+    t.assert_eq_int(p.backoff_ms(100000), 1000, "absurd attempt numbers neither overflow nor loop long")
+
+    mut m = RetryPolicy.exponential(10, 10, 100000)
+    m.set_multiplier(3)
+    t.assert_eq_int(m.backoff_ms(1), 10, "x3: attempt 1")
+    t.assert_eq_int(m.backoff_ms(2), 30, "x3: attempt 2")
+    t.assert_eq_int(m.backoff_ms(3), 90, "x3: attempt 3")
+    t.assert_eq_int(m.backoff_ms(4), 270, "x3: attempt 4")
+
+    mut u = RetryPolicy.exponential(10, 1000, 0)
+    t.assert_true(u.backoff_ms(30) > 1000, "cap 0 means uncapped growth")
+    t.assert_true(u.backoff_ms(1000000) > 0, "uncapped growth is bounded by a safety ceiling (no overflow trap)")
+
+    mut f = RetryPolicy.fixed(3, 500)
+    f.cap_ms = 200
+    t.assert_eq_int(f.backoff_ms(1), 200, "cap also applies to a fixed delay")
+
+async def test_jitter(t: TestRunner):
+    t.section("RetryPolicy jitter: delays stay inside [d*(100-pct)/100, d] and actually vary")
+    mut rng = Random.new(12345)
+    mut p = RetryPolicy.fixed(5, 1000)
+    t.assert_eq_int(p.jittered_ms(1, rng), 1000, "no jitter configured -> exact delay")
+
+    p.set_jitter(50)
+    mut i = 0
+    mut in_range = true
+    mut min_seen = 1000000
+    mut max_seen = 0
+    while i < 300:
+        mut d = p.jittered_ms(1, rng)
+        if d < 500 or d > 1000: in_range = false
+        if d < min_seen: min_seen = d
+        if d > max_seen: max_seen = d
+        i = i + 1
+    t.assert_true(in_range, "300 draws at jitter 50% all within [500, 1000]")
+    t.assert_true(max_seen > min_seen, "jittered delays are not all identical")
+
+    p.set_jitter(100)
+    i = 0
+    in_range = true
+    while i < 300:
+        mut d2 = p.jittered_ms(1, rng)
+        if d2 < 0 or d2 > 1000: in_range = false
+        i = i + 1
+    t.assert_true(in_range, "full jitter (100%) stays within [0, 1000]")
+
+    p.set_jitter(900)
+    t.assert_eq_int(p.jitter_pct, 100, "jitter percentage clamped to 100")
+    p.set_jitter(-4)
+    t.assert_eq_int(p.jitter_pct, 0, "jitter percentage clamped to 0")
+
+    mut e = RetryPolicy.exponential(6, 100, 400)
+    e.set_jitter(25)
+    i = 0
+    in_range = true
+    while i < 100:
+        mut d3 = e.jittered_ms(3, rng)    # base delay 400 -> [300, 400]
+        if d3 < 300 or d3 > 400: in_range = false
+        i = i + 1
+    t.assert_true(in_range, "jitter composes with exponential backoff + cap")
+
+# ─── Retry loop ─────────────────────────────────────────────────────────────
+
+async def test_retry_succeeds_eventually(t: TestRunner):
+    t.section("RetryPolicy.run: retries a bool op until it succeeds (closure op)")
+    mut hits = 0
+    mut op = def () -> bool:
+        hits = hits + 1
+        return hits >= 3
+    mut p = RetryPolicy.fixed(5, 5)
+    mut r = p.run(op)
+    t.assert_true(r.ok, "succeeded")
+    t.assert_eq_int(r.attempts, 3, "took exactly 3 attempts")
+    t.assert_eq_int(hits, 3, "the op ran exactly 3 times")
+    t.assert_eq_int(r.reason, RETRY_REASON_NONE(), "reason NONE on success")
+    t.assert_eq_int(r.last_code, 0, "last_code 0 on success")
+    t.assert_eq_int(r.slept_ms, 10, "slept 2 x 5ms of backoff between the 3 attempts")
+
+async def test_retry_first_try(t: TestRunner):
+    t.section("RetryPolicy.run: success on the first try never sleeps")
+    g_calls.store(0)
+    mut p = RetryPolicy.fixed(5, 1000)
+    mut r = p.run(always_ok)
+    t.assert_true(r.ok, "ok")
+    t.assert_eq_int(r.attempts, 1, "one attempt")
+    t.assert_eq_int(r.slept_ms, 0, "no backoff sleep")
+    t.assert_eq_int(g_calls.load(), 1, "op ran once")
+
+async def test_retry_exhausted(t: TestRunner):
+    t.section("RetryPolicy.run: gives up after max_attempts with reason EXHAUSTED")
+    g_calls.store(0)
+    mut p = RetryPolicy.exponential(4, 2, 8)    # delays 2, 4, 8 between 4 attempts
+    mut start = Clock.now_ms()
+    mut r = p.run(always_fail)
+    mut elapsed = Clock.now_ms() - start
+    t.assert_false(r.ok, "not ok")
+    t.assert_eq_int(r.attempts, 4, "used all 4 attempts")
+    t.assert_eq_int(g_calls.load(), 4, "op ran 4 times")
+    t.assert_eq_int(r.reason, RETRY_REASON_EXHAUSTED(), "reason EXHAUSTED")
+    t.assert_eq_int(r.last_code, 1, "bool-op failures carry code 1")
+    t.assert_eq_int(r.slept_ms, 14, "slept 2 + 4 + 8 ms (no sleep after the final attempt)")
+    t.assert_true(elapsed >= 14, "wall clock really includes the backoff sleeps")
+
+async def test_retry_single_attempt(t: TestRunner):
+    t.section("RetryPolicy: max_attempts = 1 means no retry at all")
+    g_calls.store(0)
+    mut p = RetryPolicy.fixed(1, 1000)
+    mut r = p.run(always_fail)
+    t.assert_eq_int(r.attempts, 1, "exactly one attempt")
+    t.assert_eq_int(r.slept_ms, 0, "no sleep")
+    t.assert_eq_int(r.reason, RETRY_REASON_EXHAUSTED(), "EXHAUSTED")
+
+async def test_retry_on_predicate(t: TestRunner):
+    t.section("RetryPolicy.set_retry_on: permanent errors stop the loop immediately")
+    g_calls.store(0)
+    mut p = RetryPolicy.fixed(10, 1)
+    p.set_retry_on(is_server_error)
+    mut r = p.run_code(codes_503_503_404)
+    t.assert_false(r.ok, "not ok")
+    t.assert_eq_int(r.attempts, 3, "stopped on the 3rd attempt (404 is not retryable)")
+    t.assert_eq_int(r.last_code, 404, "last_code is the permanent failure code")
+    t.assert_eq_int(r.reason, RETRY_REASON_NOT_RETRYABLE(), "reason NOT_RETRYABLE")
+
+    g_calls.store(0)
+    mut q = RetryPolicy.fixed(10, 1)    # no predicate: everything is retried
+    mut r2 = q.run_code(codes_503_503_404)
+    t.assert_true(r2.ok, "without a predicate the 404 is retried and the 4th call succeeds")
+    t.assert_eq_int(r2.attempts, 4, "4 attempts")
+
+async def test_retry_code_op_plain(t: TestRunner):
+    t.section("RetryPolicy.run_code: code ops, failure code surfaces in the result")
+    mut p = RetryPolicy.fixed(3, 1)
+    mut r = p.run_code(quick_code_fail)
+    t.assert_false(r.ok, "not ok")
+    t.assert_eq_int(r.last_code, 7, "last_code is the op's own code")
+    t.assert_eq_int(r.attempts, 3, "3 attempts")
+    mut r2 = p.run_code(quick_ok)
+    t.assert_true(r2.ok, "quick_ok succeeds")
+    t.assert_eq_int(r2.attempts, 1, "first try")
+
+async def test_retry_deadline(t: TestRunner):
+    t.section("RetryPolicy.set_deadline: stops instead of sleeping past the budget")
+    g_calls.store(0)
+    mut p = RetryPolicy.fixed(1000, 60)
+    p.set_deadline(150)
+    mut start = Clock.now_ms()
+    mut r = p.run(always_fail)
+    mut elapsed = Clock.now_ms() - start
+    t.assert_eq_int(r.reason, RETRY_REASON_DEADLINE(), "reason DEADLINE")
+    t.assert_true(r.attempts >= 1, "at least one attempt happened")
+    t.assert_true(r.attempts <= 3, "far fewer than max_attempts (60ms sleeps vs a 150ms budget)")
+    t.assert_true(r.slept_ms < 150, "never slept past the budget")
+    t.assert_true(elapsed < 10000, "returned promptly (generous bound)")
+
+    # A delay that alone exceeds the budget: no sleep at all.
+    g_calls.store(0)
+    mut big = RetryPolicy.fixed(5, 100000)
+    big.set_deadline(50)
+    mut r2 = big.run(always_fail)
+    t.assert_eq_int(r2.attempts, 1, "1 attempt, then refused the 100s sleep")
+    t.assert_eq_int(r2.slept_ms, 0, "did not sleep")
+    t.assert_eq_int(r2.reason, RETRY_REASON_DEADLINE(), "reason DEADLINE")
+
+# ─── Timeouts ───────────────────────────────────────────────────────────────
+
+async def test_call_with_timeout_completes(t: TestRunner):
+    t.section("call_with_timeout: a call that finishes in time reports its code")
+    mut r = call_with_timeout(quick_code_fail, 5000)
+    t.assert_true(r.completed, "completed within the (generous) deadline")
+    t.assert_eq_int(r.code, 7, "the op's code is returned")
+    mut r2 = call_with_timeout(quick_ok, 5000)
+    t.assert_true(r2.completed, "completed")
+    t.assert_eq_int(r2.code, 0, "code 0")
+    mut r3 = call_bool_with_timeout(sleepy_ok, 5000)
+    t.assert_true(r3.completed, "a bool op that sleeps 20ms completed")
+    t.assert_eq_int(r3.code, 0, "true -> code 0")
+    mut r4 = call_bool_with_timeout(always_fail, 5000)
+    t.assert_true(r4.completed, "failing bool op completed")
+    t.assert_eq_int(r4.code, 1, "false -> code 1")
+
+async def test_call_with_timeout_times_out(t: TestRunner):
+    t.section("call_with_timeout: a stuck call times out; the worker is abandoned, not killed")
+    g_gate.store(0)
+    g_finished.store(0)
+    mut start = Clock.now_ms()
+    mut r = call_with_timeout(blocked_until_gate, 60)
+    mut elapsed = Clock.now_ms() - start
+    t.assert_false(r.completed, "timed out (op is blocked on the gate)")
+    t.assert_eq_int(r.code, RETRY_TIMEOUT_CODE(), "code is RETRY_TIMEOUT_CODE")
+    t.assert_true(elapsed >= 50, "really waited about the timeout")
+    t.assert_true(elapsed < 8000, "but returned long before the 10s gate cap")
+    t.assert_eq_int(g_finished.load(), 0, "the abandoned op is still running")
+    g_gate.store(1)    # release the abandoned worker
+    mut fin = wait_ge(g_finished, 1, 8000)
+    t.assert_eq_int(fin, 1, "the abandoned op ran to completion in the background")
+    Thread.sleep(20)   # let the worker thread fully unwind before we move on
+
+async def test_retry_attempt_timeout(t: TestRunner):
+    t.section("RetryPolicy.set_attempt_timeout: a hung attempt counts as a failure and is retried")
+    g_gate.store(0)
+    g_finished.store(0)
+    g_calls.store(0)
+    mut p = RetryPolicy.fixed(3, 1)
+    p.set_attempt_timeout(300)
+    mut r = p.run_code(block_first_then_ok)
+    t.assert_true(r.ok, "second attempt succeeded")
+    t.assert_eq_int(r.attempts, 2, "2 attempts")
+    t.assert_eq_int(r.timeouts, 1, "1 attempt timed out")
+    g_gate.store(1)
+    mut fin = wait_ge(g_finished, 1, 8000)
+    t.assert_eq_int(fin, 1, "the hung first attempt finished once released")
+    Thread.sleep(20)
+
+    # All attempts time out -> failure with the timeout code.
+    g_gate.store(0)
+    g_finished.store(0)
+    mut q = RetryPolicy.fixed(2, 1)
+    q.set_attempt_timeout(40)
+    mut r2 = q.run_code(blocked_until_gate)
+    t.assert_false(r2.ok, "never succeeded")
+    t.assert_eq_int(r2.attempts, 2, "2 attempts")
+    t.assert_eq_int(r2.timeouts, 2, "both timed out")
+    t.assert_eq_int(r2.last_code, RETRY_TIMEOUT_CODE(), "last_code is the timeout code")
+    g_gate.store(1)
+    mut fin2 = wait_ge(g_finished, 2, 8000)
+    t.assert_eq_int(fin2, 2, "both abandoned attempts finished once released")
+    Thread.sleep(20)
+
+# ─── Circuit breaker ────────────────────────────────────────────────────────
+
+async def test_breaker_closed_counting(t: TestRunner):
+    t.section("CircuitBreaker: stays closed below the threshold; a success resets the count")
+    mut cb = CircuitBreaker.init(3, 600000)
+    t.assert_eq_int(cb.state(), CB_CLOSED(), "starts closed")
+    t.assert_true(cb.is_closed(), "is_closed")
+    t.assert_eq_str(cb.state_name(), "closed", "state_name")
+    t.assert_true(cb.allow(), "allow() while closed")
+    cb.record_failure()
+    cb.record_failure()
+    t.assert_eq_int(cb.failure_count(), 2, "2 consecutive failures counted")
+    t.assert_true(cb.is_closed(), "still closed at 2 of 3")
+    cb.record_success()
+    t.assert_eq_int(cb.failure_count(), 0, "a success resets the consecutive-failure count")
+    cb.record_failure()
+    cb.record_failure()
+    t.assert_true(cb.is_closed(), "2 more failures after the reset: still closed")
+    cb.close()
+
+async def test_breaker_opens_and_rejects(t: TestRunner):
+    t.section("CircuitBreaker: opens at the threshold and rejects without running the op")
+    g_calls.store(0)
+    mut cb = CircuitBreaker.init(3, 600000)   # 10 minute reset: stays open for the whole test
+    t.assert_eq_int(cb.call(always_fail), CALL_FAILED(), "failure #1 reported as CALL_FAILED")
+    t.assert_eq_int(cb.call(always_fail), CALL_FAILED(), "failure #2")
+    t.assert_true(cb.is_closed(), "closed after 2")
+    t.assert_eq_int(cb.call(always_fail), CALL_FAILED(), "failure #3 (trips the breaker)")
+    t.assert_true(cb.is_open(), "open after 3 consecutive failures")
+    t.assert_eq_str(cb.state_name(), "open", "state_name open")
+    t.assert_eq_int(cb.trip_count(), 1, "tripped once")
+    mut before = g_calls.load()
+    t.assert_eq_int(cb.call(always_ok), CALL_REJECTED(), "open breaker rejects")
+    t.assert_eq_int(cb.call_code(quick_ok), CALL_REJECTED(), "open breaker rejects code ops too")
+    t.assert_eq_int(g_calls.load(), before, "rejected calls never ran the op")
+    t.assert_eq_int(cb.rejected_count(), 2, "2 rejections counted")
+    t.assert_false(cb.allow(), "allow() is false while open")
+
+    cb.reset()
+    t.assert_true(cb.is_closed(), "reset() forces it closed")
+    t.assert_eq_int(cb.call(always_ok), CALL_OK(), "calls flow again after reset")
+    cb.close()
+
+async def test_breaker_half_open_cycle(t: TestRunner):
+    t.section("CircuitBreaker: open -> half-open after the reset timeout -> closed on a good probe")
+    mut cb = CircuitBreaker.init(2, 150)
+    cb.record_failure()
+    cb.record_failure()
+    t.assert_eq_int(cb.trip_count(), 1, "tripped open")
+    # Wait (bounded) for the reset timeout to elapse: state() reports HALF-OPEN.
+    mut deadline = Clock.now_ms() + 8000
+    while not cb.is_half_open():
+        if Clock.now_ms() >= deadline: break
+        Thread.sleep(5)
+    t.assert_true(cb.is_half_open(), "reads as half-open once the reset timeout elapsed")
+    t.assert_eq_str(cb.state_name(), "half-open", "state_name half-open")
+
+    # First caller after the timeout is the (single) probe; a second is rejected.
+    t.assert_true(cb.allow(), "first call after the timeout is admitted as the probe")
+    t.assert_false(cb.allow(), "a second concurrent probe is rejected (half_open_max_calls = 1)")
+    cb.record_success()
+    t.assert_true(cb.is_closed(), "successful probe closes the breaker")
+    t.assert_eq_int(cb.failure_count(), 0, "failure count cleared")
+    t.assert_true(cb.allow(), "traffic flows again")
+
+    # A failed probe re-opens it.
+    cb.record_failure()
+    cb.record_failure()
+    t.assert_eq_int(cb.trip_count(), 2, "tripped a second time")
+    deadline = Clock.now_ms() + 8000
+    while not cb.is_half_open():
+        if Clock.now_ms() >= deadline: break
+        Thread.sleep(5)
+    t.assert_true(cb.is_half_open(), "half-open again")
+    t.assert_true(cb.allow(), "probe admitted")
+    cb.record_failure()
+    t.assert_eq_int(cb.trip_count(), 3, "a failed probe re-opens the breaker immediately")
+    cb.close()
+
+async def test_breaker_half_open_multi(t: TestRunner):
+    t.section("CircuitBreaker.set_half_open: several probes, several successes required")
+    mut cb = CircuitBreaker.init(1, 100)
+    cb.set_half_open(2, 2)
+    cb.record_failure()
+    mut deadline = Clock.now_ms() + 8000
+    while not cb.is_half_open():
+        if Clock.now_ms() >= deadline: break
+        Thread.sleep(5)
+    t.assert_true(cb.is_half_open(), "half-open")
+    t.assert_true(cb.allow(), "probe 1 admitted")
+    t.assert_true(cb.allow(), "probe 2 admitted")
+    t.assert_false(cb.allow(), "probe 3 rejected (max 2)")
+    cb.record_success()
+    t.assert_true(cb.is_half_open(), "1 of 2 required successes: still half-open")
+    cb.record_success()
+    t.assert_true(cb.is_closed(), "2 successes close the breaker")
+    cb.close()
+
+async def test_breaker_call_wrapper_recovery(t: TestRunner):
+    t.section("CircuitBreaker.call: full recovery through the call wrapper alone")
+    mut cb = CircuitBreaker.init(1, 100)
+    t.assert_eq_int(cb.call(always_fail), CALL_FAILED(), "trip with one failure")
+    mut outcome = CALL_REJECTED()
+    mut deadline = Clock.now_ms() + 8000
+    while outcome == CALL_REJECTED():
+        outcome = cb.call(always_ok)
+        if outcome == CALL_REJECTED():
+            if Clock.now_ms() >= deadline: break
+            Thread.sleep(5)
+    t.assert_eq_int(outcome, CALL_OK(), "after the reset timeout a call is admitted and succeeds")
+    t.assert_true(cb.is_closed(), "and that success closed the breaker")
+    cb.close()
+
+def hammer_failures(cb: CircuitBreaker) -> void:
+    mut i = 0
+    while i < 500:
+        cb.record_failure()
+        i = i + 1
+
+def hammer_allow_success(cb: CircuitBreaker) -> void:
+    mut i = 0
+    while i < 500:
+        if cb.allow():
+            cb.record_success()
+        i = i + 1
+
+async def test_breaker_concurrent(t: TestRunner):
+    t.section("CircuitBreaker: shared by several threads without lost updates")
+    # (a) 4 threads x 500 failures with an unreachable threshold: exact count.
+    mut a = CircuitBreaker.init(1000000, 600000)
+    mut t1: Thread = Thread.spawn(hammer_failures, a)
+    mut t2: Thread = Thread.spawn(hammer_failures, a)
+    mut t3: Thread = Thread.spawn(hammer_failures, a)
+    mut t4: Thread = Thread.spawn(hammer_failures, a)
+    t1.join()
+    t2.join()
+    t3.join()
+    t4.join()
+    t.assert_eq_int(a.failure_count(), 2000, "2000 concurrent failures all counted (no lost updates)")
+    t.assert_true(a.is_closed(), "still closed (threshold 1,000,000)")
+    a.close()
+
+    # (b) threshold 10, 4 threads x 500 failures: trips exactly once and stays open.
+    mut b = CircuitBreaker.init(10, 600000)
+    mut u1: Thread = Thread.spawn(hammer_failures, b)
+    mut u2: Thread = Thread.spawn(hammer_failures, b)
+    mut u3: Thread = Thread.spawn(hammer_failures, b)
+    mut u4: Thread = Thread.spawn(hammer_failures, b)
+    u1.join()
+    u2.join()
+    u3.join()
+    u4.join()
+    t.assert_true(b.is_open(), "open")
+    t.assert_eq_int(b.trip_count(), 1, "tripped exactly once despite racing failures")
+    b.close()
+
+    # (c) concurrent allow/success on a closed breaker: nothing rejected, nothing tripped.
+    mut c = CircuitBreaker.init(5, 600000)
+    mut v1: Thread = Thread.spawn(hammer_allow_success, c)
+    mut v2: Thread = Thread.spawn(hammer_allow_success, c)
+    mut v3: Thread = Thread.spawn(hammer_allow_success, c)
+    v1.join()
+    v2.join()
+    v3.join()
+    t.assert_true(c.is_closed(), "closed")
+    t.assert_eq_int(c.rejected_count(), 0, "no rejections")
+    t.assert_eq_int(c.trip_count(), 0, "no trips")
+    c.close()
+
+# ─── Retry + breaker together ───────────────────────────────────────────────
+
+async def test_retry_guarded(t: TestRunner):
+    t.section("RetryPolicy.run_guarded: the breaker cuts a retry loop short")
+    g_calls.store(0)
+    mut cb = CircuitBreaker.init(2, 600000)
+    mut p = RetryPolicy.fixed(10, 1)
+    mut r = p.run_guarded(cb, always_fail)
+    t.assert_false(r.ok, "not ok")
+    t.assert_eq_int(r.attempts, 2, "stopped after the 2nd failure opened the breaker")
+    t.assert_eq_int(g_calls.load(), 2, "op ran twice")
+    t.assert_eq_int(r.reason, RETRY_REASON_BREAKER_OPEN(), "reason BREAKER_OPEN")
+    t.assert_true(cb.is_open(), "breaker is open")
+
+    mut r2 = p.run_guarded(cb, always_fail)
+    t.assert_eq_int(r2.attempts, 0, "an already-open breaker admits no attempt")
+    t.assert_eq_int(r2.reason, RETRY_REASON_BREAKER_OPEN(), "reason BREAKER_OPEN")
+    t.assert_eq_int(g_calls.load(), 2, "op did not run again")
+
+    cb.reset()
+    g_calls.store(0)
+    mut r3 = p.run_guarded(cb, always_ok)
+    t.assert_true(r3.ok, "after reset() the guarded run succeeds")
+    t.assert_eq_int(r3.attempts, 1, "first try")
+    mut r4 = p.run_code_guarded(cb, quick_code_fail)
+    t.assert_false(r4.ok, "code op failing under the breaker")
+    t.assert_eq_int(r4.last_code, 7, "its failure code surfaces")
+    cb.close()
+
+async def main():
+    mut t = TestRunner.init("70_retry")
+
+    await test_backoff_fixed(t)
+    await test_backoff_exponential(t)
+    await test_jitter(t)
+    await test_retry_succeeds_eventually(t)
+    await test_retry_first_try(t)
+    await test_retry_exhausted(t)
+    await test_retry_single_attempt(t)
+    await test_retry_on_predicate(t)
+    await test_retry_code_op_plain(t)
+    await test_retry_deadline(t)
+    await test_call_with_timeout_completes(t)
+    await test_call_with_timeout_times_out(t)
+    await test_retry_attempt_timeout(t)
+    await test_breaker_closed_counting(t)
+    await test_breaker_opens_and_rejects(t)
+    await test_breaker_half_open_cycle(t)
+    await test_breaker_half_open_multi(t)
+    await test_breaker_call_wrapper_recovery(t)
+    await test_breaker_concurrent(t)
+    await test_retry_guarded(t)
+
+    t.summary()

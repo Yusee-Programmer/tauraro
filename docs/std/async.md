@@ -14,6 +14,7 @@ from std.async.send    import Sendable
 from std.async import Thread, Atomic, ThreadLocal, Mutex, RWLock, Sendable
 from std.async import Task, Future, Channel, TaskGroup, StructuredGroup
 from std.async import Semaphore, WaitGroup, Barrier, Once, Timer, Ticker
+from std.async import RetryPolicy, CircuitBreaker, call_with_timeout   # std.async.retry
 ```
 
 ---
@@ -437,4 +438,72 @@ mut tk = Ticker.new(100, tk_ch)  # ticks every 100ms
 mut tick = tk_ch.recv()
 tk.stop()                       # also closes tk_ch
 tk_ch.free()
+```
+
+---
+
+## Retry, Timeout and CircuitBreaker (`std.async.retry`)
+
+**When**: You call something that can fail transiently — a network request, a database connect, a lock — and want bounded retries with backoff, a hard time limit, or a "stop hammering a service that is down" switch.
+**Why**: HTTP-independent building blocks (like `TokenBucket`/`SlidingWindow`) that wrap any callable.
+
+```python
+from std.async.retry import RetryPolicy, CircuitBreaker, call_with_timeout
+```
+
+**Calling convention.** Callables cannot be `throws`, so an operation reports failure through its return value: a *bool op* `def() -> bool` (`true` = success) or a *code op* `def() -> int` (`0` = success, anything else is a caller-defined failure code such as an HTTP status). Closures that capture `mut` locals work as ops.
+
+### RetryPolicy
+
+| Method | Description |
+|--------|-------------|
+| `RetryPolicy.fixed(max_attempts, delay_ms)` | Constant delay between attempts |
+| `RetryPolicy.exponential(max_attempts, base_ms, cap_ms)` | `base`, `2*base`, `4*base`, ... clamped at `cap_ms` (`0` = uncapped) |
+| `p.set_multiplier(m)` | Growth factor for exponential backoff (default 2) |
+| `p.set_jitter(pct)` | Each delay is drawn uniformly from `[d*(100-pct)/100, d]` (`100` = full jitter) |
+| `p.set_retry_on(pred)` | `pred: def(int) -> bool` gets the failure code; return `false` to stop on permanent errors |
+| `p.set_deadline(ms)` | Overall budget (attempts + sleeps); a sleep that would cross it is skipped |
+| `p.set_attempt_timeout(ms)` | Run every attempt through `call_with_timeout`; a timeout counts as a failure with code `RETRY_TIMEOUT_CODE()` (-1) |
+| `p.backoff_ms(attempt)` / `p.jittered_ms(attempt, rng)` | The delay after failed attempt `attempt` (1-based), without / with jitter |
+| `p.run(op)` / `p.run_code(op)` | Run a bool / code op; returns a `RetryResult` |
+| `p.run_guarded(cb, op)` / `p.run_code_guarded(cb, op)` | Same, every attempt gated by and reported to a `CircuitBreaker` |
+
+`RetryResult` fields: `ok`, `attempts`, `last_code`, `slept_ms`, `timeouts`, and `reason` (`RETRY_REASON_NONE / EXHAUSTED / NOT_RETRYABLE / DEADLINE / BREAKER_OPEN`).
+
+```python
+def is_transient(code: int) -> bool:
+    return code >= 500
+
+mut p = RetryPolicy.exponential(5, 100, 2000)   # 100, 200, 400, 800 ms between 5 tries
+p.set_jitter(50)
+p.set_retry_on(is_transient)
+mut res = p.run_code(do_request)
+if not res.ok:
+    print(f"gave up after {res.attempts} attempts (last code {res.last_code})")
+```
+
+### call_with_timeout
+
+`call_with_timeout(op, timeout_ms)` (code op) and `call_bool_with_timeout(op, timeout_ms)` (bool op) run the op on its own thread and return a `TimeoutResult { completed, code }`. **A timeout does not cancel the op** — it only stops waiting; the op keeps running on a detached thread. A timed-out op must therefore only touch state that outlives the call (Atomics, `Mutex` data, heap objects it owns), not the caller's stack locals, and a small internal record is deliberately leaked per timed-out call.
+
+### CircuitBreaker
+
+States: **closed** (calls flow, consecutive failures counted) → **open** after `failure_threshold` failures (calls rejected without running) → **half-open** after `reset_timeout_ms` (a limited number of probe calls) → **closed** again on enough probe successes, or straight back to **open** on a probe failure. All state is in Atomics behind an internal lock, so one breaker can be shared by any number of threads.
+
+| Method | Description |
+|--------|-------------|
+| `CircuitBreaker.init(failure_threshold, reset_timeout_ms)` | New breaker, starts closed |
+| `cb.set_half_open(max_calls, successes)` | Probes admitted per half-open spell / successes needed to close (default 1 / 1) |
+| `cb.call(op)` / `cb.call_code(op)` | Returns `CALL_OK`, `CALL_FAILED` or `CALL_REJECTED` (op not run) |
+| `cb.allow()` + `cb.record_success()` / `cb.record_failure()` | Manual form of `call` for control flow that does not fit a callable |
+| `cb.state()` / `is_closed()` / `is_open()` / `is_half_open()` / `state_name()` | Lock-free state query (`CB_CLOSED / CB_OPEN / CB_HALF_OPEN`); an open breaker whose timeout elapsed reads as half-open |
+| `cb.failure_count()` / `rejected_count()` / `trip_count()` | Statistics |
+| `cb.reset()` | Force closed |
+| `cb.close()` | Release the Atomics/lock when done |
+
+```python
+mut cb = CircuitBreaker.init(3, 5000)      # open after 3 failures, probe after 5 s
+mut outcome = cb.call(ping_service)
+if outcome == CALL_REJECTED():
+    print("service is down, skipping")
 ```

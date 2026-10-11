@@ -12,6 +12,8 @@
 #   from std.async import Scheduler
 #   from std.async import Emitter, FilteredEmitter
 #   from std.async import TokenBucket, SlidingWindow
+#   from std.async import RetryPolicy, RetryResult, CircuitBreaker, TimeoutResult
+#   from std.async import call_with_timeout, call_bool_with_timeout
 #
 # Or per-module:
 #   from std.async.task       import Task, Future
@@ -30,6 +32,7 @@
 #   from std.async.sched      import Scheduler
 #   from std.async.events     import Emitter, FilteredEmitter
 #   from std.async.ratelimit  import TokenBucket, SlidingWindow
+#   from std.async.retry      import RetryPolicy, CircuitBreaker, call_with_timeout
 
 from std.async.task       import Task, Future
 from std.async.channel    import Channel
@@ -48,3 +51,5 @@ from std.async.pool       import AsyncPool, AsyncTask
 from std.async.sched      import Scheduler
 from std.async.events     import Emitter, FilteredEmitter
 from std.async.ratelimit  import TokenBucket, SlidingWindow
+from std.async.retry      import RetryPolicy, RetryResult, CircuitBreaker, TimeoutResult
+from std.async.retry      import call_with_timeout, call_bool_with_timeout
