@@ -1,0 +1,388 @@
+# tests/lang/121_rsa.tr
+# std.crypto.rsa: key parsing (PKCS#1 / PKCS#8 / SPKI / PKCS#1-public, PEM+DER),
+# PKCS#1 v1.5 + RSASSA-PSS sign/verify, RSAES-OAEP. Fixtures were generated with
+# the system `openssl` CLI (signatures/ciphertexts made by OpenSSL are verified /
+# decrypted here; our deterministic outputs are compared with OpenSSL's and with an
+# independent Python RFC 8017 implementation; our PSS signatures were verified with
+# `openssl dgst -verify`).
+
+from std.test import TestRunner
+from std.crypto.rsa import Rsa, RsaPublicKey, RsaPrivateKey
+from std.crypto.pkutil import Bytes, PkHash
+from std.crypto.bn import bn_to_hex
+from std.core.vec import Vec
+from std.encoding.pem import Pem
+
+def hx(s: str) -> Vec[int]:
+    return Bytes.from_hex(s)
+
+def msg() -> Vec[int]:
+    return hx("5461757261726f205253412074657374206d657373616765200001ff202862696e6172792d7361666529")
+
+def flip(v: Vec[int], i: int) -> Vec[int]:
+    mut c = Bytes.clone(v)
+    c.set(i, c.get(i) ^ 1)
+    return c
+
+def KEY2048_PKCS8() -> str:
+    return """
+-----BEGIN PRIVATE KEY-----
+MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQDZlL+9zr48p+UU
+hRJdNZ0uR3tgcaFdB5Jgup0av3ircgKUTxge/r63ebC6UkSwLRT7T9kNi43YzLcn
+labuSRvBFoQDHoTzK2YVBOlgu6kbHitUZfDQOxtk7krvyAKCEKIesBbdFb5OzSrD
+4QZU1ZH3Fa4Fa3HJl61dVA4OfwsuHKygIqq7gpUnvfL33lgbpQ+WmCuvmdEbwJnF
+A3BX4/LVKhMli1lIFDC8B9D8M68ZRAIL1iPt11uOe2m4ynehTLsnhO6IgCzCHNh8
+JDKfmz7yfRqVvdwCYmDugHwdwBb90ZAKOuAlvKVCBQ7AjaE2E5YN8qguOxKEpWST
+embTloFFAgMBAAECggEADo9vZrf0xRcF3ndVQPA7N4NIagN7T+rCIepQZHTXEhS2
+wCQBh47L8SKZ8ANcs17LnlG77bXJZUO10gFSwsluVl/iWlnAKIxemsjRsUvS8jdK
+S63oDUHsqwwYma6MdGsWiO/cZ9PHq3r8AfsHXcVOV6GXcVISXZzig3ICNXgiUGXd
+N7v4dgkuD34JpUeo0RF0LVWtUvmFvcfJeBCC4pkB04qUzje9/SGKM4ljDIhK04Ra
+hVe6P7vDPfFcPII5dgLaabmpHhvafu1t5u+DTzzpD471HABSkA+y3FyopeQzjcXa
+IUJ1oLsAM25SLryD3P0nzd8hrVq2GgT+EVeWESLfYQKBgQD2vDKf+qJ65rtT5hzP
+UueqjI1EldZ+fpeib6Y+HTc7ilurGDzv4vAL5RAhFRqdRM7p90KVetFFYJgykJis
+Qlj/+7Ym9xH0nJEZMdEf+ZC/ENbCNTxfLTCrCa4VZVHEKbFXu7Ri0ojF1QfXmzmd
+rCalXtMSAynHLYcJXvLxGvutOQKBgQDhwEzhheHeF3GUE68VSCtkXt2WS5UqxF/m
+KUtbVg6yoR1YEd3C3gSkfqfC297fDrO+kzCtv6pdwq50yTdDgZFZgCGoUEoDSz01
+PSCu+7fdxkquhFcnjGOaiIZhgz5Q2HDvQebtNoZWPvEsp6vFMAMdOGYHa5+tAyec
+5J5gS5vAbQKBgDr9sgjnzrMduUoM6XR0OOlg42GzhW4G7FAs641MROlaYiJdECy2
+kHf3k0yllBBn5CSyNlww2hoBR0JHqgj9b/P8BYf5aHSYfmSMsZg4ffAAoagbPEzx
+LAKotNNuvwbshPcZ7L334jWSgmZ9OWBGSZMeQc67rOBvNSr7ZZBZyDSZAoGBANVv
+xMBsnlImhCHmQmCyrSPmdUZGC7A1nh2z6SVfxeGpZl7/9VTqKCWGAgK/coYeFl8W
+Nq3vSpn/GIYeP/u5Ir0l4ayKzI80sZgGRUJrhzlM4wsA4I3ps7pFXhgPx/kTyiLL
+ghPAu14LgGYh2MtES41y5zQY0wz2sJsro3mTwpw5AoGAEa82yde/TWAu0EoglEAp
+c12NGIKezWhCPi6jrUzgMCNKUKLUzfiHLuiMprSBj6v/l1nvEBtWm5upeMs9RP1U
+4AG1zGszr9G8OKZLwI9/bZ3zsAUuoD56A7Gev3ZmguXcaC7NupuC9JLi81mHTOPB
+gWhxXvCJpM5mgE2SnncQ2Es=
+-----END PRIVATE KEY-----
+"""
+
+def KEY2048_PKCS1() -> str:
+    return """
+-----BEGIN RSA PRIVATE KEY-----
+MIIEowIBAAKCAQEA2ZS/vc6+PKflFIUSXTWdLkd7YHGhXQeSYLqdGr94q3IClE8Y
+Hv6+t3mwulJEsC0U+0/ZDYuN2My3J5Wm7kkbwRaEAx6E8ytmFQTpYLupGx4rVGXw
+0DsbZO5K78gCghCiHrAW3RW+Ts0qw+EGVNWR9xWuBWtxyZetXVQODn8LLhysoCKq
+u4KVJ73y995YG6UPlpgrr5nRG8CZxQNwV+Py1SoTJYtZSBQwvAfQ/DOvGUQCC9Yj
+7ddbjntpuMp3oUy7J4TuiIAswhzYfCQyn5s+8n0alb3cAmJg7oB8HcAW/dGQCjrg
+JbylQgUOwI2hNhOWDfKoLjsShKVkk3pm05aBRQIDAQABAoIBAA6Pb2a39MUXBd53
+VUDwOzeDSGoDe0/qwiHqUGR01xIUtsAkAYeOy/EimfADXLNey55Ru+21yWVDtdIB
+UsLJblZf4lpZwCiMXprI0bFL0vI3Skut6A1B7KsMGJmujHRrFojv3GfTx6t6/AH7
+B13FTlehl3FSEl2c4oNyAjV4IlBl3Te7+HYJLg9+CaVHqNERdC1VrVL5hb3HyXgQ
+guKZAdOKlM43vf0hijOJYwyIStOEWoVXuj+7wz3xXDyCOXYC2mm5qR4b2n7tbebv
+g0886Q+O9RwAUpAPstxcqKXkM43F2iFCdaC7ADNuUi68g9z9J83fIa1athoE/hFX
+lhEi32ECgYEA9rwyn/qieua7U+Ycz1LnqoyNRJXWfn6Xom+mPh03O4pbqxg87+Lw
+C+UQIRUanUTO6fdClXrRRWCYMpCYrEJY//u2JvcR9JyRGTHRH/mQvxDWwjU8Xy0w
+qwmuFWVRxCmxV7u0YtKIxdUH15s5nawmpV7TEgMpxy2HCV7y8Rr7rTkCgYEA4cBM
+4YXh3hdxlBOvFUgrZF7dlkuVKsRf5ilLW1YOsqEdWBHdwt4EpH6nwtve3w6zvpMw
+rb+qXcKudMk3Q4GRWYAhqFBKA0s9NT0grvu33cZKroRXJ4xjmoiGYYM+UNhw70Hm
+7TaGVj7xLKerxTADHThmB2ufrQMnnOSeYEubwG0CgYA6/bII586zHblKDOl0dDjp
+YONhs4VuBuxQLOuNTETpWmIiXRAstpB395NMpZQQZ+QksjZcMNoaAUdCR6oI/W/z
+/AWH+Wh0mH5kjLGYOH3wAKGoGzxM8SwCqLTTbr8G7IT3Gey99+I1koJmfTlgRkmT
+HkHOu6zgbzUq+2WQWcg0mQKBgQDVb8TAbJ5SJoQh5kJgsq0j5nVGRguwNZ4ds+kl
+X8XhqWZe//VU6iglhgICv3KGHhZfFjat70qZ/xiGHj/7uSK9JeGsisyPNLGYBkVC
+a4c5TOMLAOCN6bO6RV4YD8f5E8oiy4ITwLteC4BmIdjLREuNcuc0GNMM9rCbK6N5
+k8KcOQKBgBGvNsnXv01gLtBKIJRAKXNdjRiCns1oQj4uo61M4DAjSlCi1M34hy7o
+jKa0gY+r/5dZ7xAbVpubqXjLPUT9VOABtcxrM6/RvDimS8CPf22d87AFLqA+egOx
+nr92ZoLl3GguzbqbgvSS4vNZh0zjwYFocV7wiaTOZoBNkp53ENhL
+-----END RSA PRIVATE KEY-----
+"""
+
+def PUB2048_SPKI() -> str:
+    return """
+-----BEGIN PUBLIC KEY-----
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA2ZS/vc6+PKflFIUSXTWd
+Lkd7YHGhXQeSYLqdGr94q3IClE8YHv6+t3mwulJEsC0U+0/ZDYuN2My3J5Wm7kkb
+wRaEAx6E8ytmFQTpYLupGx4rVGXw0DsbZO5K78gCghCiHrAW3RW+Ts0qw+EGVNWR
+9xWuBWtxyZetXVQODn8LLhysoCKqu4KVJ73y995YG6UPlpgrr5nRG8CZxQNwV+Py
+1SoTJYtZSBQwvAfQ/DOvGUQCC9Yj7ddbjntpuMp3oUy7J4TuiIAswhzYfCQyn5s+
+8n0alb3cAmJg7oB8HcAW/dGQCjrgJbylQgUOwI2hNhOWDfKoLjsShKVkk3pm05aB
+RQIDAQAB
+-----END PUBLIC KEY-----
+"""
+
+def PUB2048_PKCS1() -> str:
+    return """
+-----BEGIN RSA PUBLIC KEY-----
+MIIBCgKCAQEA2ZS/vc6+PKflFIUSXTWdLkd7YHGhXQeSYLqdGr94q3IClE8YHv6+
+t3mwulJEsC0U+0/ZDYuN2My3J5Wm7kkbwRaEAx6E8ytmFQTpYLupGx4rVGXw0Dsb
+ZO5K78gCghCiHrAW3RW+Ts0qw+EGVNWR9xWuBWtxyZetXVQODn8LLhysoCKqu4KV
+J73y995YG6UPlpgrr5nRG8CZxQNwV+Py1SoTJYtZSBQwvAfQ/DOvGUQCC9Yj7ddb
+jntpuMp3oUy7J4TuiIAswhzYfCQyn5s+8n0alb3cAmJg7oB8HcAW/dGQCjrgJbyl
+QgUOwI2hNhOWDfKoLjsShKVkk3pm05aBRQIDAQAB
+-----END RSA PUBLIC KEY-----
+"""
+
+def KEY1024() -> str:
+    return """
+-----BEGIN PRIVATE KEY-----
+MIICdwIBADANBgkqhkiG9w0BAQEFAASCAmEwggJdAgEAAoGBALVwiBBRE9yT65B1
+/fCe23VxvxVPY6eAUzUfITEWTPaBVs5bKGBLc9FSFWZXTZg7e56YJd8Y2T6b2YNF
+cxbLpdia4U/Q0UFCijZYtGZSfo2Cf0pgWLh5O3K2U95eWieTlM3JYiPB7IY+t0mK
+sRDy1tRboa7RbIrNHbfvExu0Nt69AgMBAAECgYBDF4uYzQJVLHWNA7SVR4jLUvZf
+wO2OwMsD97DkX+Sxun4I7HhvszbujjXPlDTjOAusR4Kpjpy2pBa4jfPS2BdI9AFx
+z4v3SQ5r+2Bqr0WpyF+m9k7FFcXE+2X//Ro6GgCV/tpX2AdvIX88loHNaHLJQnFW
++fbj8AmN+6EGQbCywQJBANulDbfd6IBMFmcVxnG4YBuGgv5SDwLPhXUvWJlsVyye
+d9RNVlWz+VDQjQDGZJXxbIO7srYpoTXgNPyKqc2N4qUCQQDTeJ72eR3CqxaxMrn+
+pP8MZ6QZxfn5IJ73H4r/R8hfExGomMGmn99AsgtDDSzV6Vah+Z5EJOmk9RDOE+L3
+jUg5AkAX76bNEMvTn3cZiM/1eKhQl5oS6RJltgPPP3eiUKI3ZJWed0cfU9upqPCU
+0woHJSY0PPI+086TtnlPxDS5B+tZAkEAjM/Z0bcuWOzBrHZhoS1O43yzqbHJVNki
+4NzxGjE7PAufi4tED2aPKy4jD5/bRgkc9bgYabnGll/Us9RMIpjCCQJBAItr338W
+2547MZa7du6PSmV9rZ0Yjpr3dQnFG88cqbJUlguLmT8YfnZY+YkaDGOE3M4bSKA5
+aLsd0MC7g6o27ng=
+-----END PRIVATE KEY-----
+"""
+
+def KEY1025() -> str:
+    return """
+-----BEGIN PRIVATE KEY-----
+MIICdwIBADANBgkqhkiG9w0BAQEFAASCAmEwggJdAgEAAoGBAXmWQ4YqRj4dGTHH
+yt3ZQB2dOoP51B2pDr/BQbUy8ZpNubpl2R8uvKIBuTMGFTQjxfgpqlAwYXyMr7Cw
+bAxc7/2TvkV4Hk+ul4ZH2LHer7SeO4PvA2zGpO+Ao7IEw203FDAlYeRF6HHpV+fm
+s7JXz+MceHY/4LqYK4GSwH92IwJ9AgMBAAECgYBHkBAqLHb1rMQqqCgt1dAODM+b
+Vc069eCivTj747Tgvtx1lHoLK+t6dQMpxXxdTm5l81ehLRo85dkijr1btn2RQ5OG
+vWzHElB2fWqxc8lEiTnYheE9QtPCp25WQznlJ7u5Wi/GkIAi/rN18pTGNb3aULcq
+8ZE/QMY17pT+TOerjQJBAYvBasQgGx7LY7S7ui2F841fiZHoLuQU5HwoNF5CYnFt
+7d8hspmE1LWSI6i9i6ijyGYcPd+MRMaxea3JBAZERhsCQQD0P1YjkPXyI3b55IoT
+qlB2O7fBytvce3GHa2aI4kX+NNwHXcEYL9n8N+8cSkQQWS2Ejk9nRYrHSSD183x4
+N8NHAkBuaSvMQ9jNIplSlv0+Lhzg2EKdPlW2tE16hgz2LzcfxjeTBOe7BOADOB5S
+uW75QZhrRH3OnGejt2fnICnLRcj5AkEAkGPM8XOl4cJTeIFBm0SJEoxVImxhM2OK
+hurYD73scM4g8P3cxAat0Cvk4A2LVTrS7NUQXdW/p/Y0VRHfGFamywJBAR7zzqvZ
+3hfcAFHWrXB6PuCyeNuo6NI+6v+3pAlQOFjkolhgEfuStCzpup/xZ3AEVzLwaZBj
+IoYsuT2qKWR/LXE=
+-----END PRIVATE KEY-----
+"""
+
+def PUB1024() -> str:
+    return """
+-----BEGIN PUBLIC KEY-----
+MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQC1cIgQURPck+uQdf3wntt1cb8V
+T2OngFM1HyExFkz2gVbOWyhgS3PRUhVmV02YO3uemCXfGNk+m9mDRXMWy6XYmuFP
+0NFBQoo2WLRmUn6Ngn9KYFi4eTtytlPeXlonk5TNyWIjweyGPrdJirEQ8tbUW6Gu
+0WyKzR237xMbtDbevQIDAQAB
+-----END PUBLIC KEY-----
+"""
+
+def PUB1025() -> str:
+    return """
+-----BEGIN PUBLIC KEY-----
+MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQF5lkOGKkY+HRkxx8rd2UAdnTqD
++dQdqQ6/wUG1MvGaTbm6ZdkfLryiAbkzBhU0I8X4KapQMGF8jK+wsGwMXO/9k75F
+eB5PrpeGR9ix3q+0njuD7wNsxqTvgKOyBMNtNxQwJWHkRehx6Vfn5rOyV8/jHHh2
+P+C6mCuBksB/diMCfQIDAQAB
+-----END PUBLIC KEY-----
+"""
+
+def sig(name: str) -> Vec[int]:
+    if name == "p1_sha1": return hx("23e6e11851fe82fc8ad96940abf03a4db0268e8ab62c8ad93fe56775adc7b48cdf56b7621cf427dbfc4a8f80d2dadd88023ba88061bb59d7f442c369b84572b8f2fff57af9a396d6797b8ae34dd8399e9be00722705afd47dd90c629a17aadc573f0cdccc4c6e201dde667c497dff8a9f4687a90b01cffcea0e06e930133da559fe2ecd1981a810b520dc38f388772cec56c4fddf1f59eb55aff989eefd832ebca886ee2566b49beb2d6073d25e2ae1e090da8dfa540a823972a70cefa39e5f48821dea5ac0970661fcdb2613f83dbef84ff9e0615874e6123138ad4b7b29e059d0d1983a10965617769df858f17e24ecb117029d718c89fb525bc11df0c2552")
+    if name == "p1_sha256": return hx("556b4a9625605b7a8e981427665dbaf01aa994fcf11d0264db9a0ee0820cdbd56cd5d8b82243dd30a9374a0cb1f866445bcf812133a8c06fad22256587921b6f176f056c31a109e09390e8aaea888662a073461d9f922a3cc767b61988d484e3a5b83e958223a3c3d83eb180e7921ed1e7798afc47a0a31cbe18331b976db3fb2579abdae3dd9fbd74709199e83091d73c12dec8c7c8c43823f0ae8cbf52457137df58608dcd9a0332ec20ee0e66882179e33506b866e40ded70c85a495a2934cfcc5c7922fdfd6ad87bb68cbd640c826898486a83ddbd30b3e35914e6b477fc8668bd9a300e38e84e20c2f4c7a1317160a55f3c552e5f822ccfae3c0f12a7df")
+    if name == "p1_sha384": return hx("c5f36b664ea1f73e03c09970736a2831f5214c0e3cea2ccd790e9cd8a53f79092d34f2c3d94f3c965610f968086ed0942068544a420027f5df4dcadf290c668c207f643073a93631a8ab3a43e17bab1e6876a0967fac0358725f6e4444b714c7fe5ed7082c8a0111a7d0807cecc5d157001fc6c9756c6e78777ca1f8b0b87d81a435958482fbd89c361a2fb0be3457f4a3782394be1b3be1b6a887152abda632f27097d39a88ee77623025df6a18dc599854afae50628bcdf682631bd074e32ce0cb20eb4af259ee5ccc25f625cfa1b42938d6cae16ef8abf4b7e2f9fc44e760d3d954a5688d37574c412cd456fe08ddc80d58f7fe59e13a2140fe4988584887")
+    if name == "p1_sha512": return hx("a52c7d02273378df79f32c853aa8b9490d77a37171b074eb9bac7633cd2775b7a537b9c6c09a9674cdcf86df2cfd3e1ad496bd8470c93fb52dc3552403a9af9c09c0f2dcd522ebb0797392e469fd69d4849b699834240a5c6667837c0c95c749882599dae8b9c16dd3365e5cb3787f152132be9c9b0e8637f7c339728db1a66fbc6698fe3a99d8f9556b978c1b8dfad40b852fa738deb5211ace2a407a1cd2f101cf04dca34d822f9215ff2d998f0b95bc31571fe88dd81a200edca533bfa118884b167e9a38bd96cb8081961229ec7b7929d7b755d549429710d13de759675909beb462b7fddefeba398bf29c56f3cb0e065d3b2719034191610151c2a276f2")
+    if name == "pss256_32": return hx("d3c4b7f175ba0eed757a2242f4c210c44cb75c7279e66fd16530af1ce0af0b93828fd55a1f417e73cd87e742c697b865a33f391691e06c869188df9d0c7734ff779de80d37a7fd370cfdf6862e3d27ba3054674a175d4a66169096cd5802ee92186bba4e91d2aa38512429d0fa009688ab8309a8382e21b917c1989d9696ac94190112f27c491d1ffe043654cef395c62ce2882faebb7a0f44ec2a4ddd68658038f0bd0a401a7655096e9506ea720df4f5edf6e126e804b7965ef4c0c227b757f9c4acb8f2dce6b32295101b1820dfa155e2b2796be335f5b538f7a94473450461f8d4847563f1f67bb0b882db9d202a24a6bf51c278bec80739398b1ee7a901")
+    if name == "pss256_0": return hx("0a816967be7c0b3e1db8ad317925caaf7ad3b0ff283b0b39c89b42b4aef65d300fddbc3713b02b238c827cf4126f3032051f3278cab8f489c028e8c5108f621932ff0491e65cae3c576c05fa3259d322f9e82b6020734ca3c9979813241eff526c5a9e9aafd1bc59a84e0cfe433640e5681805e76885f84f3eb95cddcb8bd355d2e02bb2938c05da7a76c40bca041cfe00286e2d47b4dc984f2507a0aef38259863ea7cefd7ce9c1a2387448ce7f0007cf71342581da0bfa4c01030260a47429f51d5eb172afff4a3ef07cf558e609d3f2c56039f80a45c16b654485e84e7a21207035b04d75bba02bb75efb2c58a92f0f8d67d915591de97cd36595945bbf92")
+    if name == "pss384_max": return hx("482b851d07c73403790cc87d4c1ccd7395c6f4b875c3f330a881fe3f0bf9250309fc9a7a0487ce641e24eb2b8c03b01d7987cbfa3cb8fcf72fa6bdeffadc8db5501fc74c89aa92c3d0c03251c751cc5f988cec74921e864c39c12d7ae5f28a4844f6e284d6020af0f225e52488e32f8ce214b8312d0faabd9a78beb383cdcfa095114396ce204dde17072bc8f13cbe242f5c0b1d03b9297c88507a36066b8c58332e6293f6da2c373b468e0277afd2d7fd7139b1722d30eee5291e79ed13aa6ca0ff40bba8d6011edc45e7bd05c1b92e34e1ff00a74331a2fa060534f41fc497f94c01c34190b66e42b6be5f0f6ad4964a5f5d8b671f2297ae82d6ed2c8331cc")
+    if name == "pss512_64": return hx("9f71e03acaf7cc88c97760b1328bb1e61c7ebac778128957e639b0be4fa027fa6ba94e3d1cc283f518f89df961ab428ec95943c09ffe08239da6b052cfe49b228f508b780a7c90274ea5c0cda3e61b312677d9e2f677241807e6c180a4bc1feff5f525a722d21c80288e528ed47929a7f74dcc4f23fb3ff49d39ef7523420a4e478593dc69c7632bdde30cd6f1c720d627dc3a1cec1740c2ee2b529d85d5a06af8b6ef51bcdafa64ab1536f6fc39f6916295de8742497ca858e4a6c64c42340bb47774dc5f28bc8887db46b6226bd6f7f9aabec454df9456a48fd6d053ad5e11ecf3f8a4d6381724088cf137e3c0043c4613ee33cef5317ea6c28a3b47a6ed7a")
+    if name == "k1024_p1": return hx("66ddc0ccd5260564b878d9ea955ff9d90eecd4430ffb6d06188c38a34825945e1291208d723db3033a2889a7071a07ae061747c1849f71470b4f5892e4ea097f8579059570f1a3f8b84840c2a343bcab380ebf0eb19739472d7ddda9df6e0ea22b406ee1db83915045f513fb665b517e98b23171e4a246752194bbaa4379f305")
+    if name == "k1024_pss": return hx("4a130c8e53b393ee04af74dde6ac9ecdeb5b2cc9787ab2438d9f481ca73fb0de39f1e26fd1f88cd76f81cb8783a560b7b0536af6c7244a21eb73a9530276b1b55fdd932201f0a760b9e3aaa821343e65d186dbfc693306dd3343a2bdb0e22cdcd1f4a727f34348a73f950096dcbde11c82bff3cdba8e427e588e836d1d6b2a37")
+    if name == "k1025_p1": return hx("010fb4223707ce11aa0aab3bfc713c5d683e6880530ad0f21c2ff2f78464f6517267567298b057783274a3dc9ea147bfecdf7b2cc7202ce489b43e9604889226934abef7fcba9b391bea982ca6a519b1fa719626e987b71d0fa1421baa77c4f54473b822707bece2041bb1ce35d89748fde9b68120fb15e14bbb993687b58060a9")
+    if name == "k1025_pss": return hx("01277663c9e94c57fbbd738a2be4e51b78bc5d747e967c674b2d1f1b6b2860a5ab554d56271ca6d49e1828261660c62cfebec6dc427b71d7059735d0db3965f2831a7a86e85f735fc4e7200ad47494b0d34eb31d25d21ad94abb266558ffed2314d738a3b7f28b8cb59e298afcd756f914f350e882002718278ae7c39e57a46700")
+    if name == "k1025_pss_max": return hx("00c9818e37ef83bd2878a3c2c721c6677363eb176bf15eac14ddeb8a896b5e11714fa0bfa7c5ff87d05c2c97c03bd13d5796abb9780bc3722473d83fbda448f1d1b5c2fb6d7977f412692c8e20c1845af9dc750172d891a38502256abeac4962f4db61204da1864e9687eecc3dc90f96922e8c680938bdbccc012f5fe15e925f0d")
+    return hx("")
+
+def salt32() -> Vec[int]:
+    return hx("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f")
+
+def pss_expected() -> Vec[int]:
+    return hx("958908f5bc4b113cac8bb9be90e1d94893cda783a98d9bc1d029155d13082e9f1e20a7cefb403616c07d904909e0a0a3ce446c0069f19174fa94f12faa4273346da2c94be8eabe10115a47afff5f396c5510c2f3cca2edbc1195f5a04870c72d86361b827ac0909d6b42479ab9418fddb3e31c76113c2d4a244bdee155f021db9713a3c1157a28faa0c5bc5356aeb7acfbe7944badbacd3be7dbe4848a3f074d86c1e4c73680fa0ae957d4efdc5c6bdd736b5c2594c70c7c0ce913ad70432d3e29fb097be482e61c836ffcad4c05d7acd4c6acff6fe8a0adaddd5d91cd06a2e217851d7ef93120715e1b83438dd74dafb16aec7778395b3971284a4d17633c77")
+
+def pss1025_expected() -> Vec[int]:
+    return hx("009828435655bcf13b4f41447cf09099ba4d9636ffd2203d8db62a96a2bd085c8187df147a756d458fba7e926643c0effae388e310b7d36b511bd8ed07b35cc691d4badb40ff63ef096deb5d6917a07ca6fa99f191a3da01d8494fd449a3c0e81563ae248f85d1ea59d49f68dfc718aa184c930b853c09d1d385a8701d964a81df")
+
+def oaep_msg() -> Vec[int]:
+    return hx("6f616570207365637265742000ff")
+
+def oaep_label() -> Vec[int]:
+    return hx("7461757261726f2d6c6162656c")
+
+def oaep_openssl_sha1() -> Vec[int]:
+    return hx("690e37cd799129e87491d8e0ae94e4a55d5d8924090c9e61bb1408cc60e8c7f0bda1508b12272de1e29eed9e0cae8ca35a35f5824aac615ed85801079a208d92b83dbdc026cb99d05871c141fb41b4b8500783c1c842680276cbdbd648b11d678b1f1ec6b59d282d5438c81bd6130d20d597a853fb2d62d526a8f43d207ac195babf9b0d4ce5f7a296fa2d1f0e3c6f426b5c5a102cc851a34a00ceb97e00e25f19003cdd5c1af8eb6c1c43fa7497402837b7e7294be07215c164cb3be3c3b68f3c8572824e785d74c27af14d7d5bfc8d0d31b0622385c562008b5d5ecab656669b129d794ce50999b1bc6ce3417eadb404ffda01f60d75af36a8e1aa1c04acad")
+
+def oaep_openssl_sha256() -> Vec[int]:
+    return hx("be37c75c1de903f0c3c1dc56147362b3b72c5788e84b4585100143f196bbf24527083d2d50dac77c44b3ce78d55a6dc3c867042e850e1afa8eef9a577115d70d3e71c6662fa49453198514b3d17d2ca254f01d9b02318cbae879e5ce9a3b6cea831af3fb322efaddea0606e1ea4459480dca605b0a754392e88dc5f96680759cef009302b11b4c23254563640eaf581a2942ac31e3b4b631fe55e31411fb705e4f6ea1d944ed7e8dd8ebcf6c3848777d37548c064cba6f81a6f1c21ee814625ba3c0b3fbc5589e70a7afbac5c1796c713e8fed5e823a79d00eccc3ba7372bf7ba3c96a9607b2857da62bc292c5cdf004756683b0ae9156509651aa1427475b3a")
+
+def oaep_seed20() -> Vec[int]:
+    return hx("6465666768696a6b6c6d6e6f7071727374757677")
+
+def oaep_seed32() -> Vec[int]:
+    return hx("32333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f5051")
+
+def oaep_expected_sha1() -> Vec[int]:
+    return hx("d1af604fe2aeec754f10ea6b865f99d0968d57b8a7b5b8bbc9286b000a63f933d34dbdc08ae2056387aad48cdb18157b50577e9c703a50481b8f6256f7857748bb4a3ff9c8f55243ae0a71050a329b828b07b473e14afe855d416f22a40c378cbd36477b669b2c0e759740a8a8da2f89b17547075af8401e6bf92da1d8d1ddd587b1ba3f19d1978492e4a240b21507d2683c0aa1543b633af02249bf99753314d698faa6226cb2ffa44b5492e6155259bb1a46b0b2caa52b37f637d656ac783c296ade0e482fb323ca1ba4d65a8bab2d6523e87c9cf8b66dbfeed645da2f74a309f841c270ed7adfccadaa790d7ae95e77e15103cea2aad4d4aee818b7384a05")
+
+def oaep_expected_sha256() -> Vec[int]:
+    return hx("3be9194861b3442e4c7f353ff0938c4934889ecff69378a223f63d77aa4518bc9f730c3cba651346f45c96988fdb24d65ba792827034f94d11586693cf4bc17416fcc3fcc959f7e90398b18569ca6e1488bec5321936303f4c55e9bc7fa2f78b51563f84da67e6f13efae4b99be664531aaf5c4611482cb3e87b922913f4bcee9f83a4ac67621e4da722d7724f6cde495befd3a6c236f6624444d421517439ffa79f38ee52b2363fe1b754200444fa07ebff1678f1c8bd25407af5185853111997ca1de8f199e4120e0129d5274a92c72cfa8d6c0801384f8bb2370e8e7e19a4a2d60e2dbd2e407fbbbcf91ba4f2503ada42e509eb972e854f534211e658de01")
+
+def mod2048_hex() -> str:
+    return "d994bfbdcebe3ca7e51485125d359d2e477b6071a15d079260ba9d1abf78ab7202944f181efebeb779b0ba5244b02d14fb4fd90d8b8dd8ccb72795a6ee491bc11684031e84f32b661504e960bba91b1e2b5465f0d03b1b64ee4aefc8028210a21eb016dd15be4ecd2ac3e10654d591f715ae056b71c997ad5d540e0e7f0b2e1caca022aabb829527bdf2f7de581ba50f96982baf99d11bc099c5037057e3f2d52a13258b59481430bc07d0fc33af1944020bd623edd75b8e7b69b8ca77a14cbb2784ee88802cc21cd87c24329f9b3ef27d1a95bddc026260ee807c1dc016fdd1900a3ae025bca542050ec08da13613960df2a82e3b1284a564937a66d3968145"
+
+def mod1025_hex() -> str:
+    return "01799643862a463e1d1931c7caddd9401d9d3a83f9d41da90ebfc141b532f19a4db9ba65d91f2ebca201b93306153423c5f829aa5030617c8cafb0b06c0c5ceffd93be45781e4fae978647d8b1deafb49e3b83ef036cc6a4ef80a3b204c36d3714302561e445e871e957e7e6b3b257cfe31c78763fe0ba982b8192c07f7623027d"
+
+def keys_test(t: TestRunner) throws str -> int:
+    t.section("rsa: key parsing")
+    mut k8 = Rsa.private_from_pem(KEY2048_PKCS8())?
+    mut k1 = Rsa.private_from_pem(KEY2048_PKCS1())?
+    mut pu = Rsa.public_from_pem(PUB2048_SPKI())?
+    mut pu1 = Rsa.public_from_pem(PUB2048_PKCS1())?
+    t.assert_eq_int(k8.bits, 2048, "PKCS#8 bits")
+    t.assert_eq_int(k8.nbytes, 256, "PKCS#8 bytes")
+    t.assert_true(k8.has_crt, "PKCS#8 has CRT params")
+    t.assert_eq_str(bn_to_hex(k8.n), mod2048_hex(), "PKCS#8 modulus")
+    t.assert_eq_str(bn_to_hex(k1.n), mod2048_hex(), "PKCS#1 modulus")
+    t.assert_eq_str(bn_to_hex(pu.n), mod2048_hex(), "SPKI modulus")
+    t.assert_eq_str(bn_to_hex(pu1.n), mod2048_hex(), "PKCS#1 public modulus")
+    t.assert_eq_str(bn_to_hex(pu.e), "010001", "exponent 65537")
+    t.assert_eq_str(bn_to_hex(k8.public_key().n), mod2048_hex(), "public_key() modulus")
+    t.assert_eq_str(bn_to_hex(k8.d), bn_to_hex(k1.d), "same d from both formats")
+    # serialization round-trips are byte-identical to OpenSSL's output
+    t.assert_eq_str(Rsa.private_to_pem(k1), KEY2048_PKCS1().strip() + "\n", "PKCS#1 private re-encodes identically")
+    t.assert_eq_str(Rsa.public_to_pem(pu), PUB2048_SPKI().strip() + "\n", "SPKI re-encodes identically")
+    mut k25 = Rsa.private_from_pem(KEY1025())?
+    t.assert_eq_int(k25.bits, 1025, "1025-bit key")
+    t.assert_eq_str(bn_to_hex(k25.n), mod1025_hex(), "1025-bit modulus")
+    # DER entry points
+    mut der = Pem.decode(PUB2048_SPKI())?
+    mut pud = Rsa.public_from_der(der.data)?
+    t.assert_eq_int(pud.bits, 2048, "public_from_der")
+    # bad inputs
+    mut r1: Result[RsaPublicKey, str] = Rsa.public_from_pem("not a pem")
+    t.assert_true(r1.is_err, "garbage public pem rejected")
+    mut r2: Result[RsaPrivateKey, str] = Rsa.private_from_pem(PUB2048_SPKI())
+    t.assert_true(r2.is_err, "public pem is not a private key")
+    mut r3: Result[RsaPublicKey, str] = Rsa.public_from_der(Bytes.slice(der.data, 0, 100))
+    t.assert_true(r3.is_err, "truncated SPKI rejected")
+    mut r4: Result[RsaPublicKey, str] = Rsa.public_from_der(hx("3003020101"))
+    t.assert_true(r4.is_err, "tiny structure rejected")
+    return 0
+
+def pkcs1_test(t: TestRunner) throws str -> int:
+    t.section("rsa: PKCS#1 v1.5 signatures")
+    mut k = Rsa.private_from_pem(KEY2048_PKCS8())?
+    mut pu = Rsa.public_from_pem(PUB2048_SPKI())?
+    mut algs = ["sha1", "sha256", "sha384", "sha512"]
+    mut i = 0
+    while i < 4:
+        mut a = algs[i]
+        mut s = sig("p1_" + a)
+        t.assert_true(Rsa.verify_pkcs1(pu, a, msg(), s), f"verify OpenSSL {a} signature")
+        t.assert_false(Rsa.verify_pkcs1(pu, a, flip(msg(), 3), s), f"{a}: modified message rejected")
+        t.assert_false(Rsa.verify_pkcs1(pu, a, msg(), flip(s, 100)), f"{a}: modified signature rejected")
+        t.assert_false(Rsa.verify_pkcs1(pu, a, msg(), Bytes.slice(s, 0, 255)), f"{a}: short signature rejected")
+        mut mine = Rsa.sign_pkcs1(k, a, msg())?
+        t.assert_eq_str(Bytes.to_hex(mine), Bytes.to_hex(s), f"{a}: our deterministic signature equals OpenSSL's")
+        t.assert_true(Rsa.verify_pkcs1(pu, a, msg(), mine), f"{a}: verify own signature")
+        i = i + 1
+    t.assert_false(Rsa.verify_pkcs1(pu, "sha256", msg(), sig("p1_sha384")), "hash mismatch rejected")
+    t.assert_false(Rsa.verify_pkcs1(pu, "md5", msg(), sig("p1_sha256")), "unsupported hash is false")
+    # signature >= n
+    mut big = Bytes.zeros(256)
+    mut j = 0
+    while j < 256:
+        big.set(j, 255)
+        j = j + 1
+    t.assert_false(Rsa.verify_pkcs1(pu, "sha256", msg(), big), "signature >= modulus rejected")
+    t.assert_false(Rsa.verify_pkcs1(pu, "sha256", msg(), Bytes.zeros(256)), "zero signature rejected")
+    # pre-hashed variant
+    mut d = PkHash.digest("sha256", msg())
+    t.assert_true(Rsa.verify_pkcs1_digest(pu, "sha256", d, sig("p1_sha256")), "verify_pkcs1_digest")
+    # odd-sized keys
+    mut p1024 = Rsa.public_from_pem(PUB1024())?
+    mut p1025 = Rsa.public_from_pem(PUB1025())?
+    t.assert_true(Rsa.verify_pkcs1(p1024, "sha256", msg(), sig("k1024_p1")), "1024-bit key verifies")
+    t.assert_true(Rsa.verify_pkcs1(p1025, "sha256", msg(), sig("k1025_p1")), "1025-bit key verifies")
+    mut k1025 = Rsa.private_from_pem(KEY1025())?
+    t.assert_eq_str(Bytes.to_hex(Rsa.sign_pkcs1(k1025, "sha256", msg())?), Bytes.to_hex(sig("k1025_p1")), "1025-bit deterministic signature equals OpenSSL's")
+    # key too small for the hash
+    mut k1024 = Rsa.private_from_pem(KEY1024())?
+    mut rr: Result[Vec[int], str] = Rsa.sign_pkcs1(k1024, "sha512", msg())
+    t.assert_false(rr.is_err, "1024-bit key can sign sha512 PKCS#1 (needs 83 bytes of 128)")
+    return 0
+
+def pss_test(t: TestRunner) throws str -> int:
+    t.section("rsa: RSASSA-PSS")
+    mut k = Rsa.private_from_pem(KEY2048_PKCS8())?
+    mut pu = Rsa.public_from_pem(PUB2048_SPKI())?
+    t.assert_true(Rsa.verify_pss(pu, "sha256", msg(), sig("pss256_32"), 32), "OpenSSL sha256/salt32, exact salt")
+    t.assert_true(Rsa.verify_pss(pu, "sha256", msg(), sig("pss256_32"), -1), "OpenSSL sha256/salt32, any salt")
+    t.assert_false(Rsa.verify_pss(pu, "sha256", msg(), sig("pss256_32"), 20), "wrong expected salt length rejected")
+    t.assert_true(Rsa.verify_pss(pu, "sha256", msg(), sig("pss256_0"), 0), "OpenSSL sha256/salt0")
+    t.assert_true(Rsa.verify_pss(pu, "sha384", msg(), sig("pss384_max"), -1), "OpenSSL sha384/max salt")
+    t.assert_true(Rsa.verify_pss(pu, "sha512", msg(), sig("pss512_64"), 64), "OpenSSL sha512/salt64")
+    t.assert_false(Rsa.verify_pss(pu, "sha256", flip(msg(), 0), sig("pss256_32"), 32), "modified message rejected")
+    t.assert_false(Rsa.verify_pss(pu, "sha256", msg(), flip(sig("pss256_32"), 7), 32), "modified signature rejected")
+    t.assert_false(Rsa.verify_pss(pu, "sha384", msg(), sig("pss256_32"), -1), "wrong hash rejected")
+    t.assert_false(Rsa.verify_pss(pu, "sha256", msg(), sig("p1_sha256"), -1), "PKCS#1 signature is not a PSS signature")
+    t.assert_false(Rsa.verify_pkcs1(pu, "sha256", msg(), sig("pss256_32")), "PSS signature is not a PKCS#1 signature")
+    # signing
+    mut mine = Rsa.sign_pss_with_salt(k, "sha256", msg(), salt32())?
+    t.assert_eq_str(Bytes.to_hex(mine), Bytes.to_hex(pss_expected()), "sign_pss_with_salt equals the independent Python implementation")
+    t.assert_true(Rsa.verify_pss(pu, "sha256", msg(), mine, 32), "verify own PSS signature")
+    mut rnd = Rsa.sign_pss(k, "sha384", msg(), 48)?
+    t.assert_true(Rsa.verify_pss(pu, "sha384", msg(), rnd, 48), "random-salt signature verifies")
+    mut rnd2 = Rsa.sign_pss(k, "sha384", msg(), 48)?
+    t.assert_false(Bytes.eq(rnd, rnd2), "two random-salt signatures differ")
+    # key sizes whose emBits is a multiple of 8 (1025) / not (1024)
+    mut p1024 = Rsa.public_from_pem(PUB1024())?
+    mut p1025 = Rsa.public_from_pem(PUB1025())?
+    t.assert_true(Rsa.verify_pss(p1024, "sha256", msg(), sig("k1024_pss"), 32), "1024-bit PSS verifies")
+    t.assert_true(Rsa.verify_pss(p1025, "sha256", msg(), sig("k1025_pss"), 32), "1025-bit PSS verifies")
+    t.assert_true(Rsa.verify_pss(p1025, "sha256", msg(), sig("k1025_pss_max"), -1), "1025-bit PSS max salt verifies")
+    mut k1025 = Rsa.private_from_pem(KEY1025())?
+    mut m25 = Rsa.sign_pss_with_salt(k1025, "sha256", msg(), salt32())?
+    t.assert_eq_str(Bytes.to_hex(m25), Bytes.to_hex(pss1025_expected()), "1025-bit sign_pss_with_salt equals Python")
+    t.assert_true(Rsa.verify_pss(p1025, "sha256", msg(), m25, 32), "1025-bit own PSS verifies")
+    # salt too long for key
+    mut k1024 = Rsa.private_from_pem(KEY1024())?
+    mut rr: Result[Vec[int], str] = Rsa.sign_pss(k1024, "sha512", msg(), 64)
+    t.assert_true(rr.is_err, "1024-bit key cannot do sha512 with a 64-byte salt")
+    return 0
+
+def oaep_test(t: TestRunner) throws str -> int:
+    t.section("rsa: RSAES-OAEP")
+    mut k = Rsa.private_from_pem(KEY2048_PKCS8())?
+    mut pu = k.public_key()
+    mut empty = Bytes.zeros(0)
+    t.assert_eq_str(Bytes.to_hex(Rsa.oaep_decrypt(k, "sha1", oaep_openssl_sha1(), empty)?), Bytes.to_hex(oaep_msg()), "decrypt OpenSSL OAEP-SHA1")
+    t.assert_eq_str(Bytes.to_hex(Rsa.oaep_decrypt(k, "sha256", oaep_openssl_sha256(), oaep_label())?), Bytes.to_hex(oaep_msg()), "decrypt OpenSSL OAEP-SHA256 with label")
+    mut bad1: Result[Vec[int], str] = Rsa.oaep_decrypt(k, "sha256", oaep_openssl_sha256(), empty)
+    t.assert_true(bad1.is_err, "wrong label rejected")
+    mut bad2: Result[Vec[int], str] = Rsa.oaep_decrypt(k, "sha256", oaep_openssl_sha1(), empty)
+    t.assert_true(bad2.is_err, "wrong hash rejected")
+    mut bad3: Result[Vec[int], str] = Rsa.oaep_decrypt(k, "sha1", flip(oaep_openssl_sha1(), 50), empty)
+    t.assert_true(bad3.is_err, "corrupted ciphertext rejected")
+    mut bad4: Result[Vec[int], str] = Rsa.oaep_decrypt(k, "sha1", Bytes.slice(oaep_openssl_sha1(), 0, 255), empty)
+    t.assert_true(bad4.is_err, "short ciphertext rejected")
+    mut e1 = Rsa.oaep_encrypt_with_seed(pu, "sha1", oaep_msg(), empty, oaep_seed20())?
+    t.assert_eq_str(Bytes.to_hex(e1), Bytes.to_hex(oaep_expected_sha1()), "OAEP-SHA1 with fixed seed equals Python")
+    mut e2 = Rsa.oaep_encrypt_with_seed(pu, "sha256", oaep_msg(), oaep_label(), oaep_seed32())?
+    t.assert_eq_str(Bytes.to_hex(e2), Bytes.to_hex(oaep_expected_sha256()), "OAEP-SHA256+label with fixed seed equals Python")
+    mut rt = Rsa.oaep_encrypt(pu, "sha256", oaep_msg(), empty)?
+    t.assert_eq_str(Bytes.to_hex(Rsa.oaep_decrypt(k, "sha256", rt, empty)?), Bytes.to_hex(oaep_msg()), "random-seed round trip")
+    mut nothing = Bytes.zeros(0)
+    mut rt0 = Rsa.oaep_encrypt(pu, "sha256", nothing, empty)?
+    t.assert_eq_int(Rsa.oaep_decrypt(k, "sha256", rt0, empty)?.len, 0, "empty message round trip")
+    t.assert_eq_int(Rsa.oaep_max_message(pu, "sha256"), 190, "max OAEP message for 2048/sha256")
+    mut big = Bytes.zeros(191)
+    mut rb: Result[Vec[int], str] = Rsa.oaep_encrypt(pu, "sha256", big, empty)
+    t.assert_true(rb.is_err, "message too long rejected")
+    return 0
+
+def run(name: str, t: TestRunner, r: Result[int, str]):
+    if r.is_err: t.fail(f"{name}: {r.err}")
+
+def main():
+    mut t = TestRunner.init("121_rsa")
+    run("keys", t, keys_test(t))
+    run("pkcs1", t, pkcs1_test(t))
+    run("pss", t, pss_test(t))
+    run("oaep", t, oaep_test(t))
+    t.summary()

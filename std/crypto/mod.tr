@@ -13,6 +13,9 @@
 #   from std.crypto.sha3 import Sha3, Sha3Hasher    # SHA-3 / SHAKE / Keccak
 #   from std.crypto.blake2 import Blake2b, Blake2s, Blake2bHasher, Blake2sHasher
 #   from std.crypto.x25519 import X25519, X25519Keys
+#   from std.crypto.pkutil import Bytes, PkHash
+#   from std.crypto.bn import Mont, bn_modexp          (unsigned bignums, see docs)
+#   from std.crypto.rsa import Rsa, RsaPublicKey, RsaPrivateKey
 
 from std.crypto.hash import Hash
 from std.crypto.hmac import Hmac
@@ -26,3 +29,6 @@ from std.crypto.bytes import CryptoBytes
 from std.crypto.sha3 import Sha3, Sha3Hasher
 from std.crypto.blake2 import Blake2b, Blake2s, Blake2bHasher, Blake2sHasher
 from std.crypto.x25519 import X25519, X25519Keys
+from std.crypto.pkutil import Bytes, PkHash
+from std.crypto.bn import Mont
+from std.crypto.rsa import Rsa, RsaPublicKey, RsaPrivateKey

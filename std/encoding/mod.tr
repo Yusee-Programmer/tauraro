@@ -12,6 +12,8 @@
 #   from std.encoding.base32 import Base32
 #   from std.encoding.cbor   import CBVal, Cbor
 #   from std.encoding.protobuf import Proto, ProtoWriter, ProtoReader
+#   from std.encoding.asn1   import Der, DerNode, DerReader, Oid
+#   from std.encoding.pem    import Pem, PemBlock
 
 from std.encoding.json   import JsonDoc
 from std.encoding.json   import JsonRef
@@ -38,3 +40,9 @@ from std.encoding.cbor   import Cbor
 from std.encoding.protobuf import Proto
 from std.encoding.protobuf import ProtoWriter
 from std.encoding.protobuf import ProtoReader
+from std.encoding.asn1   import Der
+from std.encoding.asn1   import DerNode
+from std.encoding.asn1   import DerReader
+from std.encoding.asn1   import Oid
+from std.encoding.pem    import Pem
+from std.encoding.pem    import PemBlock

@@ -46,6 +46,13 @@ added here as each phase lands.
   YCbCr/grayscale/CMYK/YCCK, any chroma subsampling, restart markers; bit-identical to libjpeg on the
   tested files) and baseline encode with quality / subsampling / grayscale / restart options;
   `jpeg_info`, `decode()` sniffing. Shared `std.image.buf` raw buffers. `tests/lang/160_jpeg.tr`.
+- **`std.encoding.asn1` / `std.encoding.pem` / `std.crypto.bn` / `std.crypto.pkutil` / `std.crypto.rsa`**
+  — ASN.1 DER encoder/decoder (OIDs, times, strict lengths) and PEM armor (bundles, CRLF); a binary
+  big-number + Montgomery library (28-bit limbs; a 2048-bit modexp in ~1 s, where `std.math.bigint` takes
+  minutes); byte-buffer/digest/HMAC helpers; and RSA (PKCS#1 v1.5 + RSASSA-PSS sign/verify, RSAES-OAEP,
+  PKCS#1/PKCS#8/SPKI key parsing and PEM export). Verified against OpenSSL in both directions.
+  Documented in `docs/std/encoding.md` and `docs/std/crypto.md`, tested by `tests/lang/120_asn1_pem.tr`
+  and `tests/lang/121_rsa.tr`.
 - **`std.async.retry`** — `RetryPolicy` (max attempts, fixed/exponential backoff
   with cap, optional jitter, retry-on predicate, overall deadline, per-attempt
   timeout), `call_with_timeout` / `call_bool_with_timeout`, and a thread-safe

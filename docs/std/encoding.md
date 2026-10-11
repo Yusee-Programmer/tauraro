@@ -635,6 +635,67 @@ while r.next_field()?:
         r.skip()?                     # unknown field
 ```
 
+## ASN.1 DER — `std.encoding.asn1`
+
+DER encoder/decoder for the structures behind X.509, PKCS#1/#8, SPKI and SEC1.
+Everything operates on **byte buffers** (`Vec[int]`, values 0..255 — `Bytes` in
+`std.crypto.pkutil` converts to/from binary `str` and hex), so embedded zero bytes are fine.
+
+```tauraro
+from std.encoding.asn1 import Der, DerNode, DerReader, Oid
+from std.crypto.pkutil import Bytes
+
+# (inside a `throws str` function)
+mut seq = Der.parse(der_bytes)?          # one TLV spanning the whole buffer
+mut r = seq.reader()                      # iterate the children
+mut version = r.next()?.as_int()?
+mut oid = r.next()?.as_oid()?             # "1.2.840.113549.1.1.11"
+print(Oid.name(oid))                      # "sha256WithRSAEncryption"
+
+# build: contents are already-encoded children, concatenated
+mut body = Bytes.concat(Der.integer_int(2), Der.oid("2.5.4.3"))
+mut tlv = Der.sequence(body)              # 30 08 02 01 02 06 03 55 04 03
+```
+
+| Decode | |
+|---|---|
+| `Der.parse(buf)` / `Der.parse_at(buf, off)` | one TLV (`DerNode{tag, content, raw}`); `raw` is the exact TLV (signatures cover it) |
+| `node.reader()` → `DerReader` | `more()`, `next()`, `peek_tag()`, `remaining()` |
+| `node.child(i)`, `child_count()` | indexed access to children |
+| `as_int`, `as_bn`, `as_bool`, `as_oid`, `as_octets`, `as_bit_string`, `as_text`, `as_time` | typed getters; `as_time` returns Unix seconds, `as_bn` an unsigned `std.crypto.bn` magnitude |
+| `is_oid(dotted)`, `is_context(n)`, `bit_is_set(i)` | helpers (bit 0 = MSB, the KeyUsage numbering) |
+
+| Encode | |
+|---|---|
+| `Der.tlv(tag, content)`, `sequence`, `set_of`, `explicit(n, c)`, `implicit(n, constructed, c)` | structure |
+| `integer_int`, `integer_bn`, `boolean`, `null`, `octet_string`, `bit_string(content, unused)`, `oid("1.2.3")`, `utf8`, `printable`, `ia5`, `generalized_time(unix)` | primitives |
+| `Der.unix_from_civil(y, m, d)`, `Der.format_time(unix)` | calendar helpers (proleptic Gregorian) |
+
+`Oid.name(dotted)` names the common OIDs; `Oid.SHA256()`, `Oid.RSA_ENCRYPTION()`, … return the ones the crypto modules use.
+
+Strictness: definite lengths only, minimal length encoding, single-byte tags (number < 31), lengths
+checked against the remaining input before copying, non-minimal INTEGERs rejected by `as_int`/`as_bn`.
+Not supported: BER indefinite lengths, high-tag-number form, REAL/EXTERNAL; string types are not
+charset-validated. Failures `raise` a `str`.
+
+---
+
+## PEM — `std.encoding.pem`
+
+RFC 7468 armor. Handles bundles (many blocks), CRLF, and text before/between blocks.
+
+```tauraro
+from std.encoding.pem import Pem, PemBlock
+
+mut text = Pem.encode("CERTIFICATE", der_bytes)      # 64-column lines
+mut blk = Pem.decode(text)?                          # first block: blk.label, blk.data
+mut all = Pem.decode_all(bundle_text)                # Vec[PemBlock]
+mut key = Pem.decode_label(text, "PRIVATE KEY")?
+```
+
+`Pem.b64_encode(bytes) -> str` / `Pem.b64_decode(bytes) throws str` are the underlying (strict) base64 codecs.
+Legacy *encrypted* PEM (`Proc-Type:` headers) is rejected / skipped.
+
 ---
 
 *See `TAURARO_MASTER_SPECIFICATION.md` for the full language specification.*

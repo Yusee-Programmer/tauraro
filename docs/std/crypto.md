@@ -520,3 +520,52 @@ table indices), 16 x 16-bit limbs. Verified against RFC 7748 section 5.2 (vector
 (`tests/lang/113_x25519.tr`). A scalar multiplication takes about 2 ms; constant-time
 behaviour depends on the C compiler and has not been formally audited.
 
+## Public-key toolkit (RSA, ECDSA, X.509)
+
+These modules are pure Tauraro and **interoperate with OpenSSL**: the tests verify
+signatures and decrypt ciphertexts produced by the `openssl` CLI, and our signatures
+were checked with `openssl dgst -verify` / `openssl pkeyutl`. They share three helpers:
+
+| Module | Purpose |
+|---|---|
+| `std.crypto.pkutil` | `Bytes` (byte buffers = `Vec[int]` 0..255: `from_str/to_str/from_hex/to_hex/slice/concat/eq/eq_ct/random`), `PkHash` (`digest(alg, data)`, `hmac(alg, key, msg)` for `"sha1"/"sha256"/"sha384"/"sha512"`, raw output) |
+| `std.crypto.bn` | unsigned big numbers (28-bit limbs, `Vec[int]`): `bn_from_hex/bn_to_hex/bn_from_bytes/bn_to_bytes`, `bn_add/sub/mul/divmod/shl/shr/cmp`, `Mont` (Montgomery context: `mul`, `pow`, `inv_prime`, modular `add/sub`), `bn_modexp` |
+| `std.encoding.asn1`, `std.encoding.pem` | DER and PEM (see `encoding.md`) |
+
+Why not `std.math.bigint`? It is a decimal (base 10^9) type whose division is a per-limb
+binary search: one 2048-bit modular exponentiation takes minutes there. `std.crypto.bn` does
+a full 2048-bit `modexp` (2048-bit exponent) in roughly a second *including* a cold compile,
+and an RSA-2048 signature (CRT) in well under that.
+
+### RSA — `std.crypto.rsa`
+
+```tauraro
+from std.crypto.rsa import Rsa, RsaPublicKey, RsaPrivateKey
+from std.crypto.pkutil import Bytes
+
+# (inside a `throws str` function)
+mut pub = Rsa.public_from_pem(pem_text)?               # SPKI or PKCS#1 public
+mut priv = Rsa.private_from_pem(key_text)?             # PKCS#1 or PKCS#8
+mut sig = Rsa.sign_pkcs1(priv, "sha256", Bytes.from_str("hello"))?
+mut ok = Rsa.verify_pkcs1(pub, "sha256", Bytes.from_str("hello"), sig)    # bool
+mut pss = Rsa.sign_pss(priv, "sha256", msg, 32)?       # random 32-byte salt
+mut ok2 = Rsa.verify_pss(pub, "sha256", msg, pss, 32)  # salt_len < 0: accept any
+mut ct = Rsa.oaep_encrypt(pub, "sha256", secret, label)?
+mut pt = Rsa.oaep_decrypt(priv, "sha256", ct, label)?
+```
+
+| API | Notes |
+|---|---|
+| `Rsa.public_from_pem/der`, `private_from_pem/der` | auto-detect SPKI vs PKCS#1, PKCS#8 vs PKCS#1; keys must be >= 512 bits; encrypted PEM unsupported |
+| `Rsa.public_to_der/pem` (SPKI), `private_to_der/pem` (PKCS#1) | byte-identical to OpenSSL's output |
+| `sign_pkcs1`, `verify_pkcs1`, `sign_pkcs1_digest`, `verify_pkcs1_digest` | EMSA-PKCS1-v1_5; verification compares the whole encoded message (no lenient parsing) |
+| `sign_pss`, `sign_pss_with_salt`, `verify_pss` | RSASSA-PSS, MGF1 with the message hash |
+| `oaep_encrypt`, `oaep_encrypt_with_seed`, `oaep_decrypt`, `oaep_max_message` | RSAES-OAEP (SHA-1/256/384/512 + label); decrypt failures all say `rsa: decryption error` |
+
+`verify_*` never raise: any malformed input is simply `false`. PKCS#1 v1.5 *encryption* and
+key generation are deliberately not provided.
+
+**Limitations (honest):** the arithmetic is variable-time and there is no RSA blinding, so
+**private-key operations are not hardened against local timing/cache attackers**; CRT results are
+re-checked with the public key. Public-key verification handles only public data. SHA-1 is accepted for
+legacy interop only.
