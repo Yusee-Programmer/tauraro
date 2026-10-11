@@ -1,0 +1,38 @@
+# tests/lang/98_global_forward_ref.tr - a function may use a module-level global that is
+# declared textually AFTER it, whatever the initializer is (bug log #21: only plain
+# literals worked; `mut h = Holder()` / `mut n = make()` gave "[N-3] name ... not defined").
+
+from std.test import TestRunner
+
+pub class Holder:
+    pub v: int
+
+def make() -> int:
+    return 7
+
+def bump_holder() -> int:
+    late_holder.v = late_holder.v + 1
+    return late_holder.v
+
+def read_call_global() -> int:
+    return late_call + 1
+
+def read_list_global() -> int:
+    return late_list.len
+
+def read_literal_global() -> int:
+    return late_lit * 2
+
+mut late_holder = Holder()
+mut late_call = make()
+mut late_list = [10, 20, 30]
+mut late_lit = 21
+
+def main():
+    mut t = TestRunner.init("98_global_forward_ref")
+    t.assert_eq_int(bump_holder(), 1, "class-valued global used before its declaration")
+    t.assert_eq_int(bump_holder(), 2, "and keeps its state")
+    t.assert_eq_int(read_call_global(), 8, "call-initialized global")
+    t.assert_eq_int(read_list_global(), 3, "list-initialized global")
+    t.assert_eq_int(read_literal_global(), 42, "literal-initialized global")
+    t.summary()

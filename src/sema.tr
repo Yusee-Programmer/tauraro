@@ -2538,6 +2538,24 @@ extend Sema:
                     case _: pass
                 i = i + 1
 
+        # Module-level globals whose type is NOT a plain literal (`mut h = Holder()`,
+        # `mut n = make()`, `mut t = [1, 2]`) cannot be pre-registered by NAME+TYPE above:
+        # the type only exists after the initializer is lowered. Lower exactly those
+        # initializers FIRST (in file order, once; the result is reused below) so a
+        # function textually before the global can use it (bug log #21).
+        mut pre_global_hir = Map[int, Pointer[HirStmt]].init(4)
+        mut pgi = 0
+        while pgi < prog.decls.len:
+            match prog.decls.get(pgi).read():
+                case Decl.DTopLevelStmt(pgs):
+                    match pgs.read():
+                        case Stmt.SLet(pg_name, _, _, _, _, _, pg_val):
+                            if pg_val as usize != 0 as usize and not self.globals.contains(pg_name):
+                                pre_global_hir.insert(pgi, self.lower_stmt(pgs))
+                        case _: pass
+                case _: pass
+            pgi = pgi + 1
+
         i = 0
         while i < prog.decls.len:
             mut d = prog.decls.get(i)
@@ -2564,7 +2582,10 @@ extend Sema:
                     self.current_class_name = ""
                     self.current_region_params = Vec[str].init(0)
                 case Decl.DTopLevelStmt(s):
-                    hp.top_level_stmts.push(self.lower_stmt(s))
+                    if pre_global_hir.contains(i):
+                        hp.top_level_stmts.push(pre_global_hir.get(i))
+                    else:
+                        hp.top_level_stmts.push(self.lower_stmt(s))
                 case Decl.DExtern(_, functions):
                     mut ei = 0
                     while ei < functions.len:
