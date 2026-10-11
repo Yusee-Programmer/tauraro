@@ -164,6 +164,13 @@ All parameter types must be annotated. Omitting a type is a parse error (generic
 emitted as a distinct diagnostic code; see [19 — Compiler
 Errors](19_compiler_errors.md#reserved--not-yet-implemented)).
 
+> **Reserved words as parameter names.** Keywords such as `from`, `match` or `in`
+> cannot be used as parameter (or variable) names — the parser reports "expected a
+> parameter name, found a reserved keyword". `from` in particular stays reserved
+> because it starts statements (`from std.x import Y`, also inside function bodies)
+> and appears in declarations (`def view(...) -> T from owner`), so treating it as an
+> identifier would be ambiguous. Pick another name (`src`, `start`, `origin`).
+
 **Return values:**
 
 ```python
