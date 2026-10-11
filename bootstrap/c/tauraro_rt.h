@@ -902,6 +902,12 @@ _TR_XLINK void* _tr_c_memcpy(void* dst, void* src, size_t n) {
     return memcpy(dst, src, n); }
 _TR_XLINK void* _tr_c_memset(void* ptr, int val, size_t n) { return memset(ptr, val, n); }
 _TR_XLINK void* _tr_c_memmove(void* dst, void* src, size_t n) { return memmove(dst, src, n); }
+/* Wipe `n` bytes at `ptr` in a way the optimiser may not elide (volatile stores): used by
+ * std.crypto to scrub key material / secrets before the buffer is freed. */
+_TR_XLINK void _tr_c_secure_zero(void* ptr, size_t n) {
+    volatile unsigned char* vp = (volatile unsigned char*)ptr;
+    while (n--) *vp++ = 0;
+}
 /* File I/O + env: std-tier only (need <stdio.h>'s FILE / getenv). Gated so a
  * freestanding (TAURARO_BARE) build parses past here — leaving these ungated was
  * the 'FILE undeclared' early-header-failure that made everything after look

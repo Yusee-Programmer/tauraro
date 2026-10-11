@@ -395,3 +395,128 @@ match Jwt.decode(token, "wrong-secret"):
     case JwtResult.Err(msg):
         print("rejected: " + msg)    # rejected: signature verification failed
 ```
+
+---
+
+## std.crypto.bytes — CryptoBytes (constant-time compare, secure wipe, binary helpers)
+
+```tauraro
+from std.crypto.bytes import CryptoBytes
+```
+
+Binary values in `std.crypto` (digests, keys, MACs) are `str`s used as raw byte
+buffers; the `str` header carries the true length, so embedded NULs are fine.
+Print them with `Hex.encode`, build them with `Hex.decode`.
+
+| Method | Signature | Description |
+|---|---|---|
+| `CryptoBytes.ct_eq` | `(a: str, b: str) -> bool` | Constant-time equality (no early exit, no data-dependent branch; time depends only on the lengths). Different lengths return `false` immediately. Use it for MAC / token / password-hash comparison instead of `==`. |
+| `CryptoBytes.ct_eq_n` | `(a: Pointer[char], b: Pointer[char], n: int) -> bool` | Same, for the first `n` bytes of two raw buffers. |
+| `CryptoBytes.ct_eq_int` | `(x: int, y: int) -> int` | Branch-free `1` if the low 32 bits are equal else `0`. |
+| `CryptoBytes.secure_zero` | `(p: Pointer[char], n: int)` | Wipe `n` bytes with volatile stores (a C runtime helper, `_tr_c_secure_zero`), so the compiler cannot drop it as a dead store. |
+| `CryptoBytes.random` | `(n: int) -> str` | `n` bytes from the OS CSPRNG (`BCryptGenRandom` / `/dev/urandom`). |
+| `CryptoBytes.at` | `(s: str, i: int) -> int` | Unsigned byte `i` (0..255). |
+| `CryptoBytes.zeroed` / `wrap` / `release` | `(n) -> Pointer[char]` / `(p, n) -> str` / `(p)` | Allocate a zeroed `n`-byte buffer, turn it into a binary-safe `str` (ownership moves), or free it. `get`/`put` read/write a byte. |
+| `CryptoBytes.slice` / `concat` | `(s, start, n) -> str` / `(a, b) -> str` | Byte-exact slice / concatenation. |
+
+**Honest limits.** `ct_eq` is the standard accumulate-the-XOR idiom compiled by an
+optimising C compiler: it holds on mainstream compilers but there is no
+language-level guarantee. `secure_zero` wipes a buffer you own; `str` values are
+reference-counted and may be copied by the runtime, so a secret that lived in a
+`str` cannot be guaranteed erased. The std.crypto hashers and ciphers that keep
+state in an explicit buffer wipe it in `free()`.
+
+---
+
+## std.crypto.sha3 — SHA-3, SHAKE, Keccak
+
+```tauraro
+from std.crypto.sha3 import Sha3, Sha3Hasher
+```
+
+FIPS 202 SHA3-224/256/384/512, the SHAKE128/256 extendable-output functions and the
+original-padding Keccak-256/512 (as used by Ethereum), in pure Tauraro (the
+Keccak-f[1600] permutation is computed from its definition, no big tables).
+
+| Method | Signature | Returns |
+|---|---|---|
+| `Sha3.sha3_224` / `sha3_256` / `sha3_384` / `sha3_512` | `(data: str) -> str` | raw digest (28/32/48/64 bytes) |
+| `Sha3.sha3_256_hex` (etc.) | `(data: str) -> str` | lowercase hex |
+| `Sha3.shake128` / `shake256` | `(data: str, outlen: int) -> str` | `outlen` raw XOF bytes (`_hex` variants too) |
+| `Sha3.keccak256` / `keccak512` | `(data: str) -> str` | raw digest with the pre-standard 0x01 padding |
+| `Sha3Hasher.sha3_256()` (etc., `shake128()`, `shake256()`, `keccak256()`) | `() -> Sha3Hasher` | incremental hasher |
+| `h.update(data)` / `h.update_bytes(data, n)` | | absorb |
+| `h.digest()` / `h.digest_hex()` | `-> str` | fixed-length digest (finishes the hash) |
+| `h.squeeze(n)` | `(n: int) -> str` | next `n` output bytes; call repeatedly for XOF streaming |
+| `h.free()` | | wipe and release the sponge state |
+
+```tauraro
+print(Sha3.sha3_256_hex("abc"))
+# 3a985da74fe225b2045c172d6bd390bd855f086e3e9d525b46bfe24511431532
+mut x = Sha3Hasher.shake256()
+x.update("seed")
+mut block1 = x.squeeze(32)
+mut block2 = x.squeeze(32)      # continues the stream
+x.free()
+```
+
+Verified against the NIST FIPS 202 examples (empty, "abc", 448/896-bit messages, one million
+`a`), Keccak-256/512 known answers, and Python `hashlib` for lengths straddling every rate
+boundary (`tests/lang/110_sha3.tr`).
+
+---
+
+## std.crypto.blake2 — BLAKE2b and BLAKE2s (RFC 7693)
+
+```tauraro
+from std.crypto.blake2 import Blake2b, Blake2s, Blake2bHasher, Blake2sHasher
+```
+
+| Method | Signature | Description |
+|---|---|---|
+| `Blake2b.hash` / `hash_hex` | `(data: str, outlen: int) -> str` | BLAKE2b with `outlen` 1..64 bytes (raw / hex). Returns `""` for an invalid `outlen`. |
+| `Blake2b.keyed` / `keyed_hex` | `(data: str, key: str, outlen: int) -> str` | Keyed (MAC) mode, key up to 64 bytes. |
+| `Blake2b.hash_params` | `(data, outlen, key, salt, person) -> str` | Full parameter block; `salt`/`person` are `""` or exactly 16 bytes. |
+| `Blake2s.*` | same, `outlen` 1..32, key up to 32, salt/person `""` or 8 bytes | BLAKE2s. |
+| `Blake2bHasher.init(outlen, key)` / `init_full(...)` | `-> Blake2bHasher` | Incremental: `update(data)`, `update_bytes(data, n)`, `finalize()` / `finalize_hex()` (once), `is_ok()`, `free()`. `Blake2sHasher` is the same. |
+
+```tauraro
+print(Blake2b.hash_hex("abc", 64))
+mut tag = Blake2b.keyed("message", "secret key", 32)   # 32-byte MAC
+```
+
+Sequential mode only (no tree hashing, no XOF mode). Verified against the RFC 7693
+vectors, the official BLAKE2 keyed known-answer vectors and Python `hashlib`
+(`tests/lang/111_blake2.tr`).
+
+---
+
+## std.crypto.x25519 — X25519 key exchange (RFC 7748)
+
+```tauraro
+from std.crypto.x25519 import X25519, X25519Keys
+```
+
+| Method | Signature | Description |
+|---|---|---|
+| `X25519.gen_private` | `() -> str` | 32 random bytes from the OS CSPRNG. |
+| `X25519.public_key` | `(private_key: str) -> str` | `X25519(private, 9)`. |
+| `X25519.shared_secret` | `(private_key: str, peer_public: str) -> str` | DH shared secret; returns `""` for wrong-size input **or an all-zero result** (low-order peer point). |
+| `X25519.scalarmult` | `(scalar: str, point: str) -> str` | The raw RFC 7748 function (never rejects a result). |
+| `X25519.keypair` | `() -> X25519Keys` | Fresh `private_key` / `public_key`. |
+| `X25519.clamp`, `base_point`, `*_hex` helpers | | Utilities; hex in / hex out variants. |
+
+```tauraro
+mut a = X25519.keypair()
+mut b = X25519.keypair()
+mut s1 = X25519.shared_secret(a.private_key, b.public_key)
+mut s2 = X25519.shared_secret(b.private_key, a.public_key)   # == s1
+# derive the session key with a KDF (e.g. Blake2b.hash(s1 + both public keys, 32)); never use s1 directly
+```
+
+Montgomery ladder with a branch-free conditional swap (no secret-dependent branches or
+table indices), 16 x 16-bit limbs. Verified against RFC 7748 section 5.2 (vectors and the
+1/1000-iteration chain), section 6.1 and OpenSSL via Python `cryptography`
+(`tests/lang/113_x25519.tr`). A scalar multiplication takes about 2 ms; constant-time
+behaviour depends on the C compiler and has not been formally audited.
+

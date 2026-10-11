@@ -32,6 +32,16 @@ added here as each phase lands.
 - **`std.net.hpack`** — HPACK (RFC 7541): `HpackEncoder` / `HpackDecoder` / `HpackHeaders`,
   static + dynamic tables, Huffman coding, never-indexed headers, strict error-reporting decoder.
   All RFC 7541 Appendix C examples verified in both directions (`tests/lang/130_hpack.tr`).
+- **`std.crypto.sha3`** — SHA3-224/256/384/512, SHAKE128/256 (incremental `squeeze`)
+  and Keccak-256/512, pure Tauraro; NIST FIPS 202 vectors + `hashlib`
+  cross-check (`tests/lang/110_sha3.tr`).
+- **`std.crypto.blake2`** — BLAKE2b / BLAKE2s (RFC 7693): variable digest size,
+  keyed mode, salt/personalization, incremental API (`tests/lang/111_blake2.tr`).
+- **`std.crypto.x25519`** — X25519 Diffie-Hellman (RFC 7748) with keygen helpers and
+  low-order-point rejection (`tests/lang/113_x25519.tr`).
+- **`std.crypto.bytes`** — `CryptoBytes`: constant-time `ct_eq`, volatile
+  `secure_zero` (new runtime helper `_tr_c_secure_zero`), OS `random`, binary-safe
+  slice/concat (`tests/lang/114_crypto_bytes.tr`).
 - **`std.async.retry`** — `RetryPolicy` (max attempts, fixed/exponential backoff
   with cap, optional jitter, retry-on predicate, overall deadline, per-attempt
   timeout), `call_with_timeout` / `call_bool_with_timeout`, and a thread-safe
