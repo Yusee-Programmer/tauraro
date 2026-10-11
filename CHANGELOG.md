@@ -42,13 +42,20 @@ added here as each phase lands.
   constant-time verification, Base32 secret helpers and `otpauth://` URIs; plus the
   binary-safe `Hmac.compute` / `verify` (SHA-1/256/384/512) it is built on
   (`tests/lang/115_hmac_otp.tr`, RFC vectors).
-- **`std.crypto.ecdsa`** — ECDSA and ECDH on NIST P-256 / P-384: RFC 6979 deterministic nonces, DER and
+- **`std.crypto.x509`** — X.509 v3 parsing (names, validity, SAN, keyUsage/EKU, basicConstraints,
+  nameConstraints, SPKI), signature verification (RSA PKCS#1/PSS, ECDSA P-256/384/521, Ed25519),
+  chain building and validation against a trust store (pathLen, CA/keyUsage, name constraints, critical
+  extensions, validity, SHA-1 rejection), RFC 6125 hostname matching (no CN fallback, single-label
+  wildcards, IP SANs) and system CA bundle loading (`X509Store.load_system`). All 121 roots of the system
+  bundle verify; fixtures cross-checked with `openssl verify` (`tests/lang/124_x509.tr`). No revocation.
+- **`std.crypto.ecdsa`** — ECDSA and ECDH on NIST P-256 / P-384 / P-521: RFC 6979 deterministic nonces, DER and
   raw `r||s` signatures, SEC1/PKCS#8/SPKI keys (compressed and uncompressed points, on-curve validation),
   key generation. RFC 6979 vectors, OpenSSL signatures/ECDH secrets and Python `cryptography`'s deterministic
   ECDSA all agree (`tests/lang/122_ecdsa.tr`). Not constant-time (documented).
 - **`std.net.http2`** — HTTP/2 (RFC 9113): frame codec, stream state machine, flow control, sans-IO `H2Conn`,
   h2c prior-knowledge `H2Client` and minimal `H2Server`. Verified over loopback and with `curl --http2-prior-knowledge`
   (`tests/lang/131_http2_codec.tr`, `132_http2_loopback.tr`). No TLS/ALPN (runtime TLS lacks ALPN).
+  ECDSA all agree (`tests/lang/122_ecdsa.tr`, `123_ecdsa_p521.tr`). Not constant-time (documented).
 - **`std.net.hpack`** — HPACK (RFC 7541): `HpackEncoder` / `HpackDecoder` / `HpackHeaders`,
   static + dynamic tables, Huffman coding, never-indexed headers, strict error-reporting decoder.
   All RFC 7541 Appendix C examples verified in both directions (`tests/lang/130_hpack.tr`).

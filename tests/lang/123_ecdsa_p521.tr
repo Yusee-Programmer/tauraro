@@ -1,0 +1,104 @@
+# 123_ecdsa_p521: ECDSA / ECDH on NIST P-521 (secp521r1).
+# Fixtures made with `openssl ecparam -name secp521r1`; the deterministic vector is
+# RFC 6979 A.2.7 (also cross-checked against Python cryptography).
+from std.test import TestRunner
+from std.core.vec import Vec
+from std.crypto.pkutil import Bytes, PkHash
+from std.crypto.bn import bn_to_hex
+from std.crypto.ecdsa import Ecdsa
+
+def hx(s: str) -> Vec[int]:
+    return Bytes.from_hex(s)
+
+def a_sec1() -> str:
+    return """
+-----BEGIN EC PRIVATE KEY-----
+MIHcAgEBBEIBSL4PdOqXrxWkNF4YJUjsEvoL6hCW0dvzzyh8A7Gk40xWGABybFK6
+DuwW0pzyue5IFwSsWj8YEXsAGH93mFGbFLGgBwYFK4EEACOhgYkDgYYABAEp4qHb
+MLWgph24J5afUs05PvoOxLU9YqpkvBV+VrhINm+5Gm6Qf326BrSTvftYXqOCzu0Z
+n98PVBY8WiCHrNbmKgESJi2WJ/Qm9gs33skaulUDBoUyJxRTLWGRblXnXwYUXO3E
+NZIOgIPCplqJjypo3YLXlYQvUlOmIFqc1p7GeJAtDQ==
+-----END EC PRIVATE KEY-----
+"""
+
+def a_p8() -> str:
+    return """
+-----BEGIN PRIVATE KEY-----
+MIHuAgEAMBAGByqGSM49AgEGBSuBBAAjBIHWMIHTAgEBBEIBSL4PdOqXrxWkNF4Y
+JUjsEvoL6hCW0dvzzyh8A7Gk40xWGABybFK6DuwW0pzyue5IFwSsWj8YEXsAGH93
+mFGbFLGhgYkDgYYABAEp4qHbMLWgph24J5afUs05PvoOxLU9YqpkvBV+VrhINm+5
+Gm6Qf326BrSTvftYXqOCzu0Zn98PVBY8WiCHrNbmKgESJi2WJ/Qm9gs33skaulUD
+BoUyJxRTLWGRblXnXwYUXO3ENZIOgIPCplqJjypo3YLXlYQvUlOmIFqc1p7GeJAt
+DQ==
+-----END PRIVATE KEY-----
+"""
+
+def a_pub() -> str:
+    return """
+-----BEGIN PUBLIC KEY-----
+MIGbMBAGByqGSM49AgEGBSuBBAAjA4GGAAQBKeKh2zC1oKYduCeWn1LNOT76DsS1
+PWKqZLwVfla4SDZvuRpukH99uga0k737WF6jgs7tGZ/fD1QWPFogh6zW5ioBEiYt
+lif0JvYLN97JGrpVAwaFMicUUy1hkW5V518GFFztxDWSDoCDwqZaiY8qaN2C15WE
+L1JTpiBanNaexniQLQ0=
+-----END PUBLIC KEY-----
+"""
+
+def b_pub() -> str:
+    return """
+-----BEGIN PUBLIC KEY-----
+MIGbMBAGByqGSM49AgEGBSuBBAAjA4GGAAQBwLREJ9Nuh6Fizk9GcNBWdwD+PJvH
+tsDXT0BBaU44SfBcTLLl8fKyRnF72vIIAPn0oCc5S+z6HabctAbh1kDJfTYAZu+B
+pKzUpqZSvjMGzEFb7sHsd8uQW6/GlmFcSCgXWtL5qSIWrHvtHiP44VcWulpV5Lw4
+kmVZHhr+HjTEGIwcokc=
+-----END PUBLIC KEY-----
+"""
+
+def ossl_sig() -> str:
+    return "30818802420158fa426ba1b2223ce698521fec45663ef89c205795faca2c8be61db04564bb11323f4d7650275010af530b265bfc915c53394bc92860c1e887b809cf70eb53f979024201c0e8a4907ed7488378264fef1c0f1328129a2bc37356b5610222ba73e41e6e0c621c56f74a2edfd7f68bc087014ca83ab15d382386e8f2f57840c3cdafe945e690"
+
+def ecdh_hex() -> str:
+    return "00eeab407cd1d9665058d0cbe34ebb287a5219b0b65fe2012fbb21840d6194d40b1a9848eaadd62f84e528bfd7f7bb2b6c6b6222dbdcd0653ca9ec9b8af39c87e2fd"
+
+def go(t: TestRunner) throws str -> int:
+    t.section("p521: RFC 6979 deterministic signature")
+    mut k = Ecdsa.private_from_scalar(Ecdsa.p521(), hx("00fad06daa62ba3b25d2fb40133da757205de67f5bb0018fee8c86e1b68c7e75caa896eb32f1f47c70855836a6d16fcc1466f6d8fbec67db89ec0c08b0e996b83538"))?
+    mut m = Bytes.from_str("sample")
+    mut sg = Ecdsa.sign_digest_sig(k, "sha256", PkHash.digest("sha256", m))?
+    t.assert_eq_str(bn_to_hex(sg.r), "01511bb4d675114fe266fc4372b87682baecc01d3cc62cf2303c92b3526012659d16876e25c7c1e57648f23b73564d67f61c6f14d527d54972810421e7d87589e1a7", "RFC 6979 P-521 r")
+    t.assert_eq_str(bn_to_hex(sg.s), "4a171143a83163d6df460aaf61522695f207a58b95c0644d87e52aa1a347916e4f7a72930b1bc06dbe22ce3f58264afd23704cbb63b29b931f7de6c9d949a7ecfc", "RFC 6979 P-521 s")
+    t.assert_true(Ecdsa.verify(k.public_key(), "sha256", m, Ecdsa.sig_to_der(sg.r, sg.s)), "verify RFC vector")
+    t.section("p521: keys and OpenSSL interop")
+    mut ka = Ecdsa.private_from_pem(a_sec1())?
+    mut kp8 = Ecdsa.private_from_pem(a_p8())?
+    mut pa = Ecdsa.public_from_pem(a_pub())?
+    t.assert_eq_str(ka.curve.name, "P-521", "curve name")
+    t.assert_eq_int(ka.curve.bits, 521, "curve bits")
+    t.assert_eq_str(Bytes.to_hex(ka.public_key().to_point(false)), Bytes.to_hex(pa.to_point(false)), "SEC1 private key -> same public point as SPKI")
+    t.assert_eq_str(Bytes.to_hex(kp8.public_key().to_point(false)), Bytes.to_hex(pa.to_point(false)), "PKCS#8 private key -> same public point")
+    t.assert_eq_int(pa.to_point(false).len, 133, "uncompressed point is 133 bytes")
+    t.assert_eq_int(pa.to_point(true).len, 67, "compressed point is 67 bytes")
+    mut pc = Ecdsa.public_from_point(Ecdsa.p521(), pa.to_point(true))?
+    t.assert_eq_str(Bytes.to_hex(pc.to_point(false)), Bytes.to_hex(pa.to_point(false)), "compressed point decompresses")
+    mut msg = Bytes.from_str("hello p521")
+    t.assert_true(Ecdsa.verify(pa, "sha512", msg, hx(ossl_sig())), "OpenSSL P-521 sha512 signature verifies")
+    t.assert_false(Ecdsa.verify(pa, "sha512", Bytes.from_str("hello p522"), hx(ossl_sig())), "modified message")
+    t.assert_false(Ecdsa.verify(pa, "sha256", msg, hx(ossl_sig())), "wrong hash")
+    mut sig2 = Ecdsa.sign(ka, "sha512", msg)?
+    t.assert_true(Ecdsa.verify(pa, "sha512", msg, sig2), "own signature verifies")
+    t.assert_eq_str(Bytes.to_hex(sig2), Bytes.to_hex(Ecdsa.sign(ka, "sha512", msg)?), "signatures are deterministic")
+    mut raw = Ecdsa.sign_raw(ka, "sha384", msg)?
+    t.assert_eq_int(raw.len, 132, "raw r||s is 132 bytes")
+    t.assert_true(Ecdsa.verify_raw(pa, "sha384", msg, raw), "raw signature verifies")
+    t.section("p521: ECDH")
+    mut kb = Ecdsa.public_from_pem(b_pub())?
+    t.assert_eq_str(Bytes.to_hex(Ecdsa.ecdh(ka, kb)?), ecdh_hex(), "shared secret equals `openssl pkeyutl -derive`")
+    mut g = Ecdsa.generate(Ecdsa.p521())
+    mut g2 = Ecdsa.generate(Ecdsa.p521())
+    t.assert_eq_str(Bytes.to_hex(Ecdsa.ecdh(g, g2.public_key())?), Bytes.to_hex(Ecdsa.ecdh(g2, g.public_key())?), "generated keys agree")
+    return 0
+
+def main():
+    mut t = TestRunner.init("123_ecdsa_p521")
+    mut r: Result[int, str] = go(t)
+    if r.is_err: t.fail(r.err)
+    t.summary()

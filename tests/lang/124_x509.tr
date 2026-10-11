@@ -1,0 +1,704 @@
+# 124_x509: X.509 parsing, signature verification, chain validation and hostname matching.
+# Certificates were generated with Python `cryptography` (RSA-2048, P-256/P-384, Ed25519,
+# PKCS#1 v1.5 + PSS) and cross-checked with `openssl verify`. Evaluation time is fixed at
+# 2026-01-01T00:00:00Z so the tests do not depend on the clock.
+from std.test import TestRunner
+from std.core.vec import Vec
+from std.crypto.pkutil import Bytes
+from std.crypto.x509 import X509, X509Cert, X509Store, X509Options, ChainResult
+from std.encoding.pem import Pem
+
+def NOW() -> int:
+    return 1767225600
+
+def c_rsa_root() -> str:
+    return """
+-----BEGIN CERTIFICATE-----
+MIIDOzCCAiOgAwIBAgICA+kwDQYJKoZIhvcNAQELBQAwLTEVMBMGA1UECgwMVGF1
+cmFybyBUZXN0MRQwEgYDVQQDDAtSU0EgUm9vdCBDQTAgFw0yMDAxMDEwMDAwMDBa
+GA8yMDYwMDEwMTAwMDAwMFowLTEVMBMGA1UECgwMVGF1cmFybyBUZXN0MRQwEgYD
+VQQDDAtSU0EgUm9vdCBDQTCCASIwDQYJKoZIhvcNAQEBBQADggEPADCCAQoCggEB
+ALKCzBd1h31uFRUNt8I2OLbtHeJMh6/MNR5bIW8ZgjfZ+OQodujCJfyXcNdNyXfo
+aKjkBF9aNa/tBCP9/W92HCKMNWm4BaWGqVK0ivHjdqnnJODy2TTYtqTnbP1iQDCH
+TCjuq8N1jVKv2zYCLUYFkHjbzgsmpmgbizV9sJSO/DoBaqLasCHDQe1m47ye/HZm
+j5nvvoMEgqAn4lAM2lSM3g6Ap+B810w9GcZLAqLGwGdOM7T0FADa/5pN7FgxzmSy
+4X0UHMMjChK81GDGPfwXgISCkMtKDcxWY3GQlVzAHq3p7Z4V+kh2G6evarnG4xCf
+Czf8+nhBfSmMco/YbdnfafUCAwEAAaNjMGEwDwYDVR0TAQH/BAUwAwEB/zAOBgNV
+HQ8BAf8EBAMCAQYwHQYDVR0OBBYEFFaGrfftK8PsA9MFi+ZaAgYbkZreMB8GA1Ud
+IwQYMBaAFFaGrfftK8PsA9MFi+ZaAgYbkZreMA0GCSqGSIb3DQEBCwUAA4IBAQCs
+jO9cN50vMeCLYGAS4fletyCSrdyGkVsXDsuu0/uBAREzfyIB+WPJcSdlXN0ah8sL
+wuiWmGSoEeuflcdgAOI3tWlGV+q06BWBhLuavRtfC5fVHo00GEb/GRhMWVO7TCxH
+K9WnXG7z9/jjj14WwASioV2/TTAfDbHhZi8oH9F8cJalXEmZdFcSeNcGLAQxLe35
+8Ks2tfdlSMPL5UBkID4FL3f++vUlx8JyG39zIhUvGZMk99vpCVQjaXPlgzRp7q4s
+BZdsts5STrxb3LppTO4XX36z4XIWZJfi44dgyg76yj41S67I5UVrUUUqmSxt9m4G
+5bGMOGWDuQt+HRDP/HpC
+-----END CERTIFICATE-----
+"""
+
+def c_rsa_inter() -> str:
+    return """
+-----BEGIN CERTIFICATE-----
+MIIDRjCCAi6gAwIBAgICA+owDQYJKoZIhvcNAQELBQAwLTEVMBMGA1UECgwMVGF1
+cmFybyBUZXN0MRQwEgYDVQQDDAtSU0EgUm9vdCBDQTAgFw0yMDAxMDEwMDAwMDBa
+GA8yMDYwMDEwMTAwMDAwMFowNTEVMBMGA1UECgwMVGF1cmFybyBUZXN0MRwwGgYD
+VQQDDBNSU0EgSW50ZXJtZWRpYXRlIENBMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8A
+MIIBCgKCAQEAydkR9ZD6go47zRH0WLTAqs4V09gK8gPDVY+XgXpl+1xUid4D7ZHb
+iH6OOci2VjCYKacpUQLKSroCVQHT4dItNuNLr/p6ih9+aSXcilN8J/ak3n+HGnrC
+uw4izywXL6J08dJgMXRvB/PB2E069gGGfUBxYxkRn3uvzEDRejFbQTR9OUmbErqE
+v4FYlWnhII/WVHtqrHcBSGLE8NuSzuR7b8pD8c6Nx8cu4jpPdkTRqYKRFiWt/gIQ
+i3gIATcZnMtLGdaON04hkGMLcDVMrF1V+93kI0toDc1it2hVHW9KQ5XtjowztewP
+3g0ozls5DxYEnM5ckiIkibBZwG7fLlATfwIDAQABo2YwZDASBgNVHRMBAf8ECDAG
+AQH/AgEAMA4GA1UdDwEB/wQEAwIBBjAdBgNVHQ4EFgQU7OcM0RUydqWiJsmPDdmC
+TdeoMdUwHwYDVR0jBBgwFoAUVoat9+0rw+wD0wWL5loCBhuRmt4wDQYJKoZIhvcN
+AQELBQADggEBAAvBJFFqfe4LjGwIOWCxJMwvn3yvGm5tb+TsXp7qaVGuM1UJoQEz
+vFzpOJh3oSLtSE1t3Dvtwrm9t/+1wpT57y9KAqHYKEAc5y6yCJ9cREYhLRWu//uh
+1iL5hAnMnguNoZKNnEYQRCJDKuDIdwiMRo4MZ1IhO6lDhhPPCcAI5grQlr99+lUY
+Ok73zZlIgn23JroGWRC42qNDeNZehR0Lp4OCaBFNcQ21QRjh0iPTDESH9lOg/42w
+iddjcQ2Zc6FpSP7AGp40hnnqJSM0KBOgUSPeBkAxXu/9M0wxXRXqfaTzwChGaLPl
+L/5vl0LQfIfsBrJ74qjGcgNfKwGj/HE3BOk=
+-----END CERTIFICATE-----
+"""
+
+def c_rsa_leaf() -> str:
+    return """
+-----BEGIN CERTIFICATE-----
+MIIDujCCAqKgAwIBAgICA+swDQYJKoZIhvcNAQELBQAwNTEVMBMGA1UECgwMVGF1
+cmFybyBUZXN0MRwwGgYDVQQDDBNSU0EgSW50ZXJtZWRpYXRlIENBMCAXDTIwMDEw
+MTAwMDAwMFoYDzIwNjAwMTAxMDAwMDAwWjAyMRUwEwYDVQQKDAxUYXVyYXJvIFRl
+c3QxGTAXBgNVBAMMEHd3dy5leGFtcGxlLnRlc3QwggEiMA0GCSqGSIb3DQEBAQUA
+A4IBDwAwggEKAoIBAQC6d6XUqnWIOEh6tWm4BwPo4111OUdp91tuT1C+H0+pAcOM
+LzcMlpzWDiCoEJaLgB8H7qv1NYuhNSB/DcASpwr1Kjmt5faxoyjVWkEomgJOl30A
+FBbcyj76w3cOtPaxe3YqqlEPM0WRjWBeODVHskIUe/hda9ChKL+LpXXIKcmsbGmB
+/sjEGW+dTwpyMA6AUDJY72eXp+bgcNCpFOdTtPGn94VIkQrf3okCgBSDgEGcUOCZ
+N8IVat0ubyRYp7+B1F2ksuk3IiN8WKxgtS8nl6kkIU0Ea03/qKwlnCIJwWKnIAaZ
+hR0m8hJGWlagt38uotymtVATXEk7XLJby6eNQl8VAgMBAAGjgdQwgdEwDAYDVR0T
+AQH/BAIwADAOBgNVHQ8BAf8EBAMCB4AwHQYDVR0OBBYEFCgVAAkwyIGKMyhjVzql
+I7m281KYMB8GA1UdIwQYMBaAFOznDNEVMnaloibJjw3Zgk3XqDHVMFwGA1UdEQRV
+MFOCEHd3dy5leGFtcGxlLnRlc3SCEyoud2lsZC5leGFtcGxlLnRlc3SCEk1peGVk
+LkV4YW1wbGUuVEVTVIcECgECA4cQIAENuAAAAAAAAAAAAAAAATATBgNVHSUEDDAK
+BggrBgEFBQcDATANBgkqhkiG9w0BAQsFAAOCAQEAkWEgT+zmT93QFa99kp4Ien7X
+sdnz0ZQjLzqPBFN21VDhfwapfTLNU1OA5s9C6mKwTOyE4rr7BlvSzYuR5ISvrMhG
+NndFKacCBFreEwfcZqWuXsjBy0YvrDGSXAhrv7EemcXANRgvdVJKVpiyN/sGG+wR
+XtWWP6jfKYBYvGPoHSeG+toFHFlNgzWkP9fYQrqAP1E0sr/IxWIFsDIMP+twFBYM
+CIVt5yfcPTQmMRgAR0kjKYlfXhQNYMXmgNcj4vimqMbahPINx0S+Jyg0I/jOUuFD
+B9hLejM8BD2XlANRQmhJjnfLdlrm/DrA38rGYReVMhHONlTGp9FsHcDrI2VsAw==
+-----END CERTIFICATE-----
+"""
+
+def c_rsa_leaf_sha384() -> str:
+    return """
+-----BEGIN CERTIFICATE-----
+MIIDfzCCAmegAwIBAgICA+wwDQYJKoZIhvcNAQEMBQAwNTEVMBMGA1UECgwMVGF1
+cmFybyBUZXN0MRwwGgYDVQQDDBNSU0EgSW50ZXJtZWRpYXRlIENBMCAXDTIwMDEw
+MTAwMDAwMFoYDzIwNjAwMTAxMDAwMDAwWjA1MRUwEwYDVQQKDAxUYXVyYXJvIFRl
+c3QxHDAaBgNVBAMME3NoYTM4NC5leGFtcGxlLnRlc3QwggEiMA0GCSqGSIb3DQEB
+AQUAA4IBDwAwggEKAoIBAQC6d6XUqnWIOEh6tWm4BwPo4111OUdp91tuT1C+H0+p
+AcOMLzcMlpzWDiCoEJaLgB8H7qv1NYuhNSB/DcASpwr1Kjmt5faxoyjVWkEomgJO
+l30AFBbcyj76w3cOtPaxe3YqqlEPM0WRjWBeODVHskIUe/hda9ChKL+LpXXIKcms
+bGmB/sjEGW+dTwpyMA6AUDJY72eXp+bgcNCpFOdTtPGn94VIkQrf3okCgBSDgEGc
+UOCZN8IVat0ubyRYp7+B1F2ksuk3IiN8WKxgtS8nl6kkIU0Ea03/qKwlnCIJwWKn
+IAaZhR0m8hJGWlagt38uotymtVATXEk7XLJby6eNQl8VAgMBAAGjgZYwgZMwDAYD
+VR0TAQH/BAIwADAOBgNVHQ8BAf8EBAMCB4AwHQYDVR0OBBYEFCgVAAkwyIGKMyhj
+VzqlI7m281KYMB8GA1UdIwQYMBaAFOznDNEVMnaloibJjw3Zgk3XqDHVMB4GA1Ud
+EQQXMBWCE3NoYTM4NC5leGFtcGxlLnRlc3QwEwYDVR0lBAwwCgYIKwYBBQUHAwEw
+DQYJKoZIhvcNAQEMBQADggEBAI1mx/EIjfcVi3bn6LzzsMXeB+nXHkvKniC/Kik2
+iNKyNmYK6EGZbp6PV98ZGalQWzGwUYiGjh3G+8GTZsGtsXh8pBnCWaFgfs9XFW3S
+K/cBvY98QoKQqqiczpJEqLkDDuMqbUmoayXhJhwbh4i5JYeoMQnjwm714xqJnwc0
+5UQnMOu6HvEWw+Z0o3qIUCZ//T+ziNlE4+y6KwtTgafYdOaYGenUny5uRNAYkHAW
+SWDWY128T/WMV/qRtV8r3uuia9VB44VwjAds4A5zGyEKmg6fdOP4e7Q1iXdXWsFx
+rPwewLvUBdpvTa8++OTfwCMCVpKyYwr8w85Vl5kCtxKcSCI=
+-----END CERTIFICATE-----
+"""
+
+def c_rsa_leaf_pss() -> str:
+    return """
+-----BEGIN CERTIFICATE-----
+MIID2TCCAo2gAwIBAgICA+0wQQYJKoZIhvcNAQEKMDSgDzANBglghkgBZQMEAgEF
+AKEcMBoGCSqGSIb3DQEBCDANBglghkgBZQMEAgEFAKIDAgEgMC0xFTATBgNVBAoM
+DFRhdXJhcm8gVGVzdDEUMBIGA1UEAwwLUlNBIFJvb3QgQ0EwIBcNMjAwMTAxMDAw
+MDAwWhgPMjA2MDAxMDEwMDAwMDBaMDIxFTATBgNVBAoMDFRhdXJhcm8gVGVzdDEZ
+MBcGA1UEAwwQcHNzLmV4YW1wbGUudGVzdDCCASIwDQYJKoZIhvcNAQEBBQADggEP
+ADCCAQoCggEBALp3pdSqdYg4SHq1abgHA+jjXXU5R2n3W25PUL4fT6kBw4wvNwyW
+nNYOIKgQlouAHwfuq/U1i6E1IH8NwBKnCvUqOa3l9rGjKNVaQSiaAk6XfQAUFtzK
+PvrDdw609rF7diqqUQ8zRZGNYF44NUeyQhR7+F1r0KEov4uldcgpyaxsaYH+yMQZ
+b51PCnIwDoBQMljvZ5en5uBw0KkU51O08af3hUiRCt/eiQKAFIOAQZxQ4Jk3whVq
+3S5vJFinv4HUXaSy6TciI3xYrGC1LyeXqSQhTQRrTf+orCWcIgnBYqcgBpmFHSby
+EkZaVqC3fy6i3Ka1UBNcSTtcslvLp41CXxUCAwEAAaOBkzCBkDAMBgNVHRMBAf8E
+AjAAMA4GA1UdDwEB/wQEAwIHgDAdBgNVHQ4EFgQUKBUACTDIgYozKGNXOqUjubbz
+UpgwHwYDVR0jBBgwFoAUVoat9+0rw+wD0wWL5loCBhuRmt4wGwYDVR0RBBQwEoIQ
+cHNzLmV4YW1wbGUudGVzdDATBgNVHSUEDDAKBggrBgEFBQcDATBBBgkqhkiG9w0B
+AQowNKAPMA0GCWCGSAFlAwQCAQUAoRwwGgYJKoZIhvcNAQEIMA0GCWCGSAFlAwQC
+AQUAogMCASADggEBAJJwIaYpwBpfTpdy1ti1sfzRO//eMlH4qVbWVg4Hl0I4XPHQ
+cLMHRKXpImDc1IjDITT/dsxhCghBOOdSImPXfPRx4FL3fhHI6rvkyVJPotoo1GU6
+AyMz8hfIL4hU+dWmeeO+AIcD2DHilNYt3BhRj/weAsl1ZjNfXxHOUuEcHbrkx7ax
+/ejo7jeT1kw/UBRtGryQKd8L6z6DVxY8pdJ/MWkHPxob5yXpwk/vcJ0BObFKVoBF
+iVXEV37Wer/CNcxnDRdRyPSNKWfuoWnF/d7QtwRWrMogqZjklouGoXW1vamjr6eW
+1yaRkD+EhdAA5pOCy0Cqdrg0EPoO+38UCPj6uZ0=
+-----END CERTIFICATE-----
+"""
+
+def c_rsa_leaf_client() -> str:
+    return """
+-----BEGIN CERTIFICATE-----
+MIIDfzCCAmegAwIBAgICA+4wDQYJKoZIhvcNAQELBQAwNTEVMBMGA1UECgwMVGF1
+cmFybyBUZXN0MRwwGgYDVQQDDBNSU0EgSW50ZXJtZWRpYXRlIENBMCAXDTIwMDEw
+MTAwMDAwMFoYDzIwNjAwMTAxMDAwMDAwWjA1MRUwEwYDVQQKDAxUYXVyYXJvIFRl
+c3QxHDAaBgNVBAMME2NsaWVudC5leGFtcGxlLnRlc3QwggEiMA0GCSqGSIb3DQEB
+AQUAA4IBDwAwggEKAoIBAQC6d6XUqnWIOEh6tWm4BwPo4111OUdp91tuT1C+H0+p
+AcOMLzcMlpzWDiCoEJaLgB8H7qv1NYuhNSB/DcASpwr1Kjmt5faxoyjVWkEomgJO
+l30AFBbcyj76w3cOtPaxe3YqqlEPM0WRjWBeODVHskIUe/hda9ChKL+LpXXIKcms
+bGmB/sjEGW+dTwpyMA6AUDJY72eXp+bgcNCpFOdTtPGn94VIkQrf3okCgBSDgEGc
+UOCZN8IVat0ubyRYp7+B1F2ksuk3IiN8WKxgtS8nl6kkIU0Ea03/qKwlnCIJwWKn
+IAaZhR0m8hJGWlagt38uotymtVATXEk7XLJby6eNQl8VAgMBAAGjgZYwgZMwDAYD
+VR0TAQH/BAIwADAOBgNVHQ8BAf8EBAMCB4AwHQYDVR0OBBYEFCgVAAkwyIGKMyhj
+VzqlI7m281KYMB8GA1UdIwQYMBaAFOznDNEVMnaloibJjw3Zgk3XqDHVMB4GA1Ud
+EQQXMBWCE2NsaWVudC5leGFtcGxlLnRlc3QwEwYDVR0lBAwwCgYIKwYBBQUHAwIw
+DQYJKoZIhvcNAQELBQADggEBABs8LE7VUF8aYMxHdse60PhhZXIJdDAWuYWkwaa+
+br9cktwB01o6QuXCVKYWqgMHc6AMWN4a232gI0OrFmXDyJKppP41y5HgVSRbGhYl
+1mKXolXQsaXReg9dZC4os6q2ZwDKmxrh/bSSEdWGBmfkcWUQ0dDZ2Z526irxlPmW
+kA5O9r//HhpxXJolVofBU6oFYzCsSXuKDdDMPXrA4zCVPuyOPrWQ9pD0iKGMlI3z
+M7mYr5+sidSuqpszpghDB+e/GukrHyokpRxzTfXr9LiDDx+5+mruqI0+bZztXtxe
+8ZBEVvsTHnQihXG5TNkCzvgdoLgMYAnYLDdIq3KyVcvIhek=
+-----END CERTIFICATE-----
+"""
+
+def c_ec_root() -> str:
+    return """
+-----BEGIN CERTIFICATE-----
+MIIBrjCCAVOgAwIBAgICA+8wCgYIKoZIzj0EAwIwLDEVMBMGA1UECgwMVGF1cmFy
+byBUZXN0MRMwEQYDVQQDDApFQyBSb290IENBMCAXDTIwMDEwMTAwMDAwMFoYDzIw
+NjAwMTAxMDAwMDAwWjAsMRUwEwYDVQQKDAxUYXVyYXJvIFRlc3QxEzARBgNVBAMM
+CkVDIFJvb3QgQ0EwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAARONSOi2ff1kIUg
+RrwPm8PiIl7DEDAOfUxPe+DDMt9UptfUd56xhshdi+nKULNQJ+rG6IOsCEezOTu4
+kmAQFifpo2MwYTAPBgNVHRMBAf8EBTADAQH/MA4GA1UdDwEB/wQEAwIBBjAdBgNV
+HQ4EFgQUmPP1OEqD2FRSuSpSRCYz0v3enbgwHwYDVR0jBBgwFoAUmPP1OEqD2FRS
+uSpSRCYz0v3enbgwCgYIKoZIzj0EAwIDSQAwRgIhANoicT73LUpVCm+1xmt/G12A
+cxbiRu6hAliAv3KmDpd6AiEAnLbtierY2Df5ejgKx7r3E2GxUv9lVjzQQxtvPWHh
+CEs=
+-----END CERTIFICATE-----
+"""
+
+def c_ec_inter() -> str:
+    return """
+-----BEGIN CERTIFICATE-----
+MIIB1TCCAXugAwIBAgICA/AwCgYIKoZIzj0EAwIwLDEVMBMGA1UECgwMVGF1cmFy
+byBUZXN0MRMwEQYDVQQDDApFQyBSb290IENBMCAXDTIwMDEwMTAwMDAwMFoYDzIw
+NjAwMTAxMDAwMDAwWjA0MRUwEwYDVQQKDAxUYXVyYXJvIFRlc3QxGzAZBgNVBAMM
+EkVDIEludGVybWVkaWF0ZSBDQTB2MBAGByqGSM49AgEGBSuBBAAiA2IABOUaADyG
+U70LMlaGOQHe/jPdofd04dyNdCW6WOMWjFJtf2rAVvq2byJRtSIXjWTUlZLPLjmV
+H1ipfiFjSwaTMiOnGgkZQYDRfdwpqeScbFHgXFf9I2P43bt6xNcgncQJCqNmMGQw
+EgYDVR0TAQH/BAgwBgEB/wIBADAOBgNVHQ8BAf8EBAMCAQYwHQYDVR0OBBYEFDmS
+kF0oz/Pvfb7jb1AOJ6eqYN5gMB8GA1UdIwQYMBaAFJjz9ThKg9hUUrkqUkQmM9L9
+3p24MAoGCCqGSM49BAMCA0gAMEUCIQCuZN3VQVz9HtP7a6ttxbJXZR8HNIyYwp/N
+2ELchesZ7gIgXGZz0Cfe7kdrGpGPBYb2qiXRt4UHCcydVk4mErEhhnM=
+-----END CERTIFICATE-----
+"""
+
+def c_ec_leaf() -> str:
+    return """
+-----BEGIN CERTIFICATE-----
+MIICCjCCAZCgAwIBAgICA/EwCgYIKoZIzj0EAwMwNDEVMBMGA1UECgwMVGF1cmFy
+byBUZXN0MRswGQYDVQQDDBJFQyBJbnRlcm1lZGlhdGUgQ0EwIBcNMjAwMTAxMDAw
+MDAwWhgPMjA2MDAxMDEwMDAwMDBaMDExFTATBgNVBAoMDFRhdXJhcm8gVGVzdDEY
+MBYGA1UEAwwPZWMuZXhhbXBsZS50ZXN0MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcD
+QgAEcoBCW67/ffHvidfditjx999wxsqWV9Bhk+SKLJAuQVgd0VDP86uWZRAjg9e6
+jsaFfgqF1buooNZx6pMjEge2R6OBkjCBjzAMBgNVHRMBAf8EAjAAMA4GA1UdDwEB
+/wQEAwIHgDAdBgNVHQ4EFgQUJwLBimGXC70z6qX9zM4j/47vxjEwHwYDVR0jBBgw
+FoAUOZKQXSjP8+99vuNvUA4np6pg3mAwGgYDVR0RBBMwEYIPZWMuZXhhbXBsZS50
+ZXN0MBMGA1UdJQQMMAoGCCsGAQUFBwMBMAoGCCqGSM49BAMDA2gAMGUCMFIoGZ1/
+Zxcx81qQuRh6P8T/CPYgsVO26fuj5gnCurBMCheov5R//xZL9rk0kXcT8QIxAMHW
+4J3D7TkMPGa2ZO0qVmLktDfCpzqxtyqS8FHG5TALy3xVMraCDJycnFbus4IWsw==
+-----END CERTIFICATE-----
+"""
+
+def c_ec_expired() -> str:
+    return """
+-----BEGIN CERTIFICATE-----
+MIIB4zCCAYigAwIBAgICA/IwCgYIKoZIzj0EAwIwLDEVMBMGA1UECgwMVGF1cmFy
+byBUZXN0MRMwEQYDVQQDDApFQyBSb290IENBMB4XDTIwMDEwMTAwMDAwMFoXDTIx
+MDEwMTAwMDAwMFowMjEVMBMGA1UECgwMVGF1cmFybyBUZXN0MRkwFwYDVQQDDBBv
+bGQuZXhhbXBsZS50ZXN0MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEcoBCW67/
+ffHvidfditjx999wxsqWV9Bhk+SKLJAuQVgd0VDP86uWZRAjg9e6jsaFfgqF1buo
+oNZx6pMjEge2R6OBkzCBkDAMBgNVHRMBAf8EAjAAMA4GA1UdDwEB/wQEAwIHgDAd
+BgNVHQ4EFgQUJwLBimGXC70z6qX9zM4j/47vxjEwHwYDVR0jBBgwFoAUmPP1OEqD
+2FRSuSpSRCYz0v3enbgwGwYDVR0RBBQwEoIQb2xkLmV4YW1wbGUudGVzdDATBgNV
+HSUEDDAKBggrBgEFBQcDATAKBggqhkjOPQQDAgNJADBGAiEAgo3kBUj8EbcGFIVP
+QUIaWzTFBqFTJxkAofg36CihPW8CIQCdlduYUPTFNbZtW3Nbr3hiid4MFKyg9sXu
+yc8eePleWQ==
+-----END CERTIFICATE-----
+"""
+
+def c_ec_future() -> str:
+    return """
+-----BEGIN CERTIFICATE-----
+MIIB7TCCAZKgAwIBAgICA/MwCgYIKoZIzj0EAwIwLDEVMBMGA1UECgwMVGF1cmFy
+byBUZXN0MRMwEQYDVQQDDApFQyBSb290IENBMCIYDzIwNTAwMTAxMDAwMDAwWhgP
+MjA1MTAxMDEwMDAwMDBaMDUxFTATBgNVBAoMDFRhdXJhcm8gVGVzdDEcMBoGA1UE
+AwwTZnV0dXJlLmV4YW1wbGUudGVzdDBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IA
+BHKAQluu/33x74nX3YrY8fffcMbKllfQYZPkiiyQLkFYHdFQz/OrlmUQI4PXuo7G
+hX4KhdW7qKDWceqTIxIHtkejgZYwgZMwDAYDVR0TAQH/BAIwADAOBgNVHQ8BAf8E
+BAMCB4AwHQYDVR0OBBYEFCcCwYphlwu9M+ql/czOI/+O78YxMB8GA1UdIwQYMBaA
+FJjz9ThKg9hUUrkqUkQmM9L93p24MB4GA1UdEQQXMBWCE2Z1dHVyZS5leGFtcGxl
+LnRlc3QwEwYDVR0lBAwwCgYIKwYBBQUHAwEwCgYIKoZIzj0EAwIDSQAwRgIhAKGW
+N7Odso7uF/J4X72Hk71sS4Rk3XX0/essh1z+bO9/AiEA9TJAfVs0UFAnn6r0iCB5
+5ThswZ1B4gIfOMKa3MivGxs=
+-----END CERTIFICATE-----
+"""
+
+def c_ec_unknown_crit() -> str:
+    return """
+-----BEGIN CERTIFICATE-----
+MIIB+TCCAaCgAwIBAgICA/QwCgYIKoZIzj0EAwIwLDEVMBMGA1UECgwMVGF1cmFy
+byBUZXN0MRMwEQYDVQQDDApFQyBSb290IENBMCAXDTIwMDEwMTAwMDAwMFoYDzIw
+NjAwMTAxMDAwMDAwWjAzMRUwEwYDVQQKDAxUYXVyYXJvIFRlc3QxGjAYBgNVBAMM
+EWNyaXQuZXhhbXBsZS50ZXN0MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEcoBC
+W67/ffHvidfditjx999wxsqWV9Bhk+SKLJAuQVgd0VDP86uWZRAjg9e6jsaFfgqF
+1buooNZx6pMjEge2R6OBqDCBpTAMBgNVHRMBAf8EAjAAMA4GA1UdDwEB/wQEAwIH
+gDAdBgNVHQ4EFgQUJwLBimGXC70z6qX9zM4j/47vxjEwHwYDVR0jBBgwFoAUmPP1
+OEqD2FRSuSpSRCYz0v3enbgwHAYDVR0RBBUwE4IRY3JpdC5leGFtcGxlLnRlc3Qw
+EwYDVR0lBAwwCgYIKwYBBQUHAwEwEgYJKwYBBAGGjR8BAQH/BAIFADAKBggqhkjO
+PQQDAgNHADBEAiBmvNuDGmAX4rDcJgvJPRP4tHQilrcTAi6M+x3uob6zGQIgMq69
+qBoZQxV5/6SOzd9wthfmqdikqd/8seP8cQAn2qg=
+-----END CERTIFICATE-----
+"""
+
+def c_pl_a() -> str:
+    return """
+-----BEGIN CERTIFICATE-----
+MIIBrzCCAVWgAwIBAgICA/UwCgYIKoZIzj0EAwIwLDEVMBMGA1UECgwMVGF1cmFy
+byBUZXN0MRMwEQYDVQQDDApFQyBSb290IENBMCAXDTIwMDEwMTAwMDAwMFoYDzIw
+NjAwMTAxMDAwMDAwWjArMRUwEwYDVQQKDAxUYXVyYXJvIFRlc3QxEjAQBgNVBAMM
+CVBhdGggQSBDQTBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABOjKZTPoS6nkeBLi
+HrQ1u2OtarlFnSdyXeuixyECtmwQt3cJPpaixBQBZe7p9oGlCl3FDD/XYG2npLZz
+6eGWjY2jZjBkMBIGA1UdEwEB/wQIMAYBAf8CAQAwDgYDVR0PAQH/BAQDAgEGMB0G
+A1UdDgQWBBT/LIb4U7lWKpqrUsZxvnIrbpmenjAfBgNVHSMEGDAWgBSY8/U4SoPY
+VFK5KlJEJjPS/d6duDAKBggqhkjOPQQDAgNIADBFAiEA9ZW+z0j86pY9AukarHXF
+Xu2jRnB1wfQxjDDGLZ/g2MACIGPRMnuNcovXAto2Ls296hYRAtaMfMPlSSl1YByp
+CxgI
+-----END CERTIFICATE-----
+"""
+
+def c_pl_b() -> str:
+    return """
+-----BEGIN CERTIFICATE-----
+MIIBqzCCAVGgAwIBAgICA/YwCgYIKoZIzj0EAwIwKzEVMBMGA1UECgwMVGF1cmFy
+byBUZXN0MRIwEAYDVQQDDAlQYXRoIEEgQ0EwIBcNMjAwMTAxMDAwMDAwWhgPMjA2
+MDAxMDEwMDAwMDBaMCsxFTATBgNVBAoMDFRhdXJhcm8gVGVzdDESMBAGA1UEAwwJ
+UGF0aCBCIENBMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEyQlvoPFqg/L5Ll50
+ifHxYYCWjzVfbOD6gEesvplo9msgo9XxxfIqhKl61ZyMD8snnHWCXaJA4vqJCVJT
+AnJP96NjMGEwDwYDVR0TAQH/BAUwAwEB/zAOBgNVHQ8BAf8EBAMCAQYwHQYDVR0O
+BBYEFNprHyKRg5K9NbLuJV72sQgfmVYtMB8GA1UdIwQYMBaAFP8shvhTuVYqmqtS
+xnG+citumZ6eMAoGCCqGSM49BAMCA0gAMEUCIQC/4cPGcMzg4CEKhWqfO0BAqE5C
+R+NRpRR2Qorlni78FQIgafRjI2v/smQ/2kF9n0kuubdQ9RAnG7HfaXFNgAhwXP8=
+-----END CERTIFICATE-----
+"""
+
+def c_pl_leaf() -> str:
+    return """
+-----BEGIN CERTIFICATE-----
+MIIB5DCCAYugAwIBAgICA/cwCgYIKoZIzj0EAwIwKzEVMBMGA1UECgwMVGF1cmFy
+byBUZXN0MRIwEAYDVQQDDAlQYXRoIEIgQ0EwIBcNMjAwMTAxMDAwMDAwWhgPMjA2
+MDAxMDEwMDAwMDBaMDMxFTATBgNVBAoMDFRhdXJhcm8gVGVzdDEaMBgGA1UEAwwR
+ZGVlcC5leGFtcGxlLnRlc3QwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAARygEJb
+rv998e+J192K2PH333DGypZX0GGT5IoskC5BWB3RUM/zq5ZlECOD17qOxoV+CoXV
+u6ig1nHqkyMSB7ZHo4GUMIGRMAwGA1UdEwEB/wQCMAAwDgYDVR0PAQH/BAQDAgeA
+MB0GA1UdDgQWBBQnAsGKYZcLvTPqpf3MziP/ju/GMTAfBgNVHSMEGDAWgBTaax8i
+kYOSvTWy7iVe9rEIH5lWLTAcBgNVHREEFTATghFkZWVwLmV4YW1wbGUudGVzdDAT
+BgNVHSUEDDAKBggrBgEFBQcDATAKBggqhkjOPQQDAgNHADBEAiBedQghdYZ+CoMM
++yuIlk9GelRRQ13AFEFQ5HFPWVQZBwIgG2fk8v9dG11lscY0OXQPIapijlp9MxWy
+6TXtAPRRogc=
+-----END CERTIFICATE-----
+"""
+
+def c_nca_inter() -> str:
+    return """
+-----BEGIN CERTIFICATE-----
+MIIBqTCCAU6gAwIBAgICA/gwCgYIKoZIzj0EAwIwLDEVMBMGA1UECgwMVGF1cmFy
+byBUZXN0MRMwEQYDVQQDDApFQyBSb290IENBMCAXDTIwMDEwMTAwMDAwMFoYDzIw
+NjAwMTAxMDAwMDAwWjAqMRUwEwYDVQQKDAxUYXVyYXJvIFRlc3QxETAPBgNVBAMM
+CE5vdCBBIENBMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEkESCZK945OoZq+Q5
+DW4p2MrIxFHHvfa6Yi7yfgE7sjHvg6DHaGmCqEXQHVNin8Yd+WbBCDSy/WWZPLgz
++w4VkaNgMF4wDAYDVR0TAQH/BAIwADAOBgNVHQ8BAf8EBAMCB4AwHQYDVR0OBBYE
+FCpYW5tVwCwA7roHO3KPKUJaRKBkMB8GA1UdIwQYMBaAFJjz9ThKg9hUUrkqUkQm
+M9L93p24MAoGCCqGSM49BAMCA0kAMEYCIQDG0KOQXbINLGmI1x1RDlUhRLUZCrop
+1Hzx8xuFW9+LOgIhAPO7pCvpIRvMxUV8B5eL3eBzX+k9Oj3kEDWKsCnUO096
+-----END CERTIFICATE-----
+"""
+
+def c_nca_leaf() -> str:
+    return """
+-----BEGIN CERTIFICATE-----
+MIIB6TCCAZCgAwIBAgICA/kwCgYIKoZIzj0EAwIwKjEVMBMGA1UECgwMVGF1cmFy
+byBUZXN0MREwDwYDVQQDDAhOb3QgQSBDQTAgFw0yMDAxMDEwMDAwMDBaGA8yMDYw
+MDEwMTAwMDAwMFowNjEVMBMGA1UECgwMVGF1cmFybyBUZXN0MR0wGwYDVQQDDBR2
+aWFsZWFmLmV4YW1wbGUudGVzdDBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABHKA
+Qluu/33x74nX3YrY8fffcMbKllfQYZPkiiyQLkFYHdFQz/OrlmUQI4PXuo7GhX4K
+hdW7qKDWceqTIxIHtkejgZcwgZQwDAYDVR0TAQH/BAIwADAOBgNVHQ8BAf8EBAMC
+B4AwHQYDVR0OBBYEFCcCwYphlwu9M+ql/czOI/+O78YxMB8GA1UdIwQYMBaAFCpY
+W5tVwCwA7roHO3KPKUJaRKBkMB8GA1UdEQQYMBaCFHZpYWxlYWYuZXhhbXBsZS50
+ZXN0MBMGA1UdJQQMMAoGCCsGAQUFBwMBMAoGCCqGSM49BAMCA0cAMEQCIC2dk80L
+KGi1+x+bRB9arwqsLWGpgs7UmuYlvpe94Tv3AiBrRKF4AoN0McTQdCl8BerNj7MI
+3tXiRinCTE22xkz1PA==
+-----END CERTIFICATE-----
+"""
+
+def c_nc_ca() -> str:
+    return """
+-----BEGIN CERTIFICATE-----
+MIIB5zCCAYygAwIBAgICA/owCgYIKoZIzj0EAwIwLDEVMBMGA1UECgwMVGF1cmFy
+byBUZXN0MRMwEQYDVQQDDApFQyBSb290IENBMCAXDTIwMDEwMTAwMDAwMFoYDzIw
+NjAwMTAxMDAwMDAwWjAwMRUwEwYDVQQKDAxUYXVyYXJvIFRlc3QxFzAVBgNVBAMM
+DkNvbnN0cmFpbmVkIENBMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEsJP3T9c5
+P+2fLxhDRHsPBxFJ1cxiitOKxXJgvKMns6CAb8lxtxeXVHQkgwSIjyA4m9e/nvtT
+wYXmnCJ+maa2T6OBlzCBlDAPBgNVHRMBAf8EBTADAQH/MA4GA1UdDwEB/wQEAwIB
+BjAdBgNVHQ4EFgQUv93K938hivj2nL31WFNU2YM7vPowHwYDVR0jBBgwFoAUmPP1
+OEqD2FRSuSpSRCYz0v3enbgwMQYDVR0eAQH/BCcwJaANMAuCCWNvcnAudGVzdKEU
+MBKCEHNlY3JldC5jb3JwLnRlc3QwCgYIKoZIzj0EAwIDSQAwRgIhAO8Wpo8gybya
+f9XQdJjmv86VIz5cgVquACD2weqEeBunAiEA7/jKs49KEsiLIkUh8Xxg32puBh0A
+ZmguqDd9rGHD8jk=
+-----END CERTIFICATE-----
+"""
+
+def c_nc_ok() -> str:
+    return """
+-----BEGIN CERTIFICATE-----
+MIIB3zCCAYSgAwIBAgICA/swCgYIKoZIzj0EAwIwMDEVMBMGA1UECgwMVGF1cmFy
+byBUZXN0MRcwFQYDVQQDDA5Db25zdHJhaW5lZCBDQTAgFw0yMDAxMDEwMDAwMDBa
+GA8yMDYwMDEwMTAwMDAwMFowLTEVMBMGA1UECgwMVGF1cmFybyBUZXN0MRQwEgYD
+VQQDDAthLmNvcnAudGVzdDBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABHKAQluu
+/33x74nX3YrY8fffcMbKllfQYZPkiiyQLkFYHdFQz/OrlmUQI4PXuo7GhX4KhdW7
+qKDWceqTIxIHtkejgY4wgYswDAYDVR0TAQH/BAIwADAOBgNVHQ8BAf8EBAMCB4Aw
+HQYDVR0OBBYEFCcCwYphlwu9M+ql/czOI/+O78YxMB8GA1UdIwQYMBaAFL/dyvd/
+IYr49py99VhTVNmDO7z6MBYGA1UdEQQPMA2CC2EuY29ycC50ZXN0MBMGA1UdJQQM
+MAoGCCsGAQUFBwMBMAoGCCqGSM49BAMCA0kAMEYCIQDUgb6mZhuftC03vp0qyT9v
+XtFbZ6cbvH+U3+ZpJSrUuwIhAOe3r1dYGZXPtZQVCfJpQW0C3ezkkBu9vGFGXu7g
+qirw
+-----END CERTIFICATE-----
+"""
+
+def c_nc_bad_outside() -> str:
+    return """
+-----BEGIN CERTIFICATE-----
+MIIB2TCCAYCgAwIBAgICA/wwCgYIKoZIzj0EAwIwMDEVMBMGA1UECgwMVGF1cmFy
+byBUZXN0MRcwFQYDVQQDDA5Db25zdHJhaW5lZCBDQTAgFw0yMDAxMDEwMDAwMDBa
+GA8yMDYwMDEwMTAwMDAwMFowKzEVMBMGA1UECgwMVGF1cmFybyBUZXN0MRIwEAYD
+VQQDDAlldmlsLnRlc3QwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAARygEJbrv99
+8e+J192K2PH333DGypZX0GGT5IoskC5BWB3RUM/zq5ZlECOD17qOxoV+CoXVu6ig
+1nHqkyMSB7ZHo4GMMIGJMAwGA1UdEwEB/wQCMAAwDgYDVR0PAQH/BAQDAgeAMB0G
+A1UdDgQWBBQnAsGKYZcLvTPqpf3MziP/ju/GMTAfBgNVHSMEGDAWgBS/3cr3fyGK
++PacvfVYU1TZgzu8+jAUBgNVHREEDTALgglldmlsLnRlc3QwEwYDVR0lBAwwCgYI
+KwYBBQUHAwEwCgYIKoZIzj0EAwIDRwAwRAIgEahrQ4783sHTu4Dhv9CHyEQwbGbT
+XK/dMvJlSSYXr8UCIANZnPPqHyb36O9MIL4JiXsuVRZVu9CKAPaZl5h7Mada
+-----END CERTIFICATE-----
+"""
+
+def c_nc_bad_excluded() -> str:
+    return """
+-----BEGIN CERTIFICATE-----
+MIIB7DCCAZKgAwIBAgICA/0wCgYIKoZIzj0EAwIwMDEVMBMGA1UECgwMVGF1cmFy
+byBUZXN0MRcwFQYDVQQDDA5Db25zdHJhaW5lZCBDQTAgFw0yMDAxMDEwMDAwMDBa
+GA8yMDYwMDEwMTAwMDAwMFowNDEVMBMGA1UECgwMVGF1cmFybyBUZXN0MRswGQYD
+VQQDDBJ4LnNlY3JldC5jb3JwLnRlc3QwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNC
+AARygEJbrv998e+J192K2PH333DGypZX0GGT5IoskC5BWB3RUM/zq5ZlECOD17qO
+xoV+CoXVu6ig1nHqkyMSB7ZHo4GVMIGSMAwGA1UdEwEB/wQCMAAwDgYDVR0PAQH/
+BAQDAgeAMB0GA1UdDgQWBBQnAsGKYZcLvTPqpf3MziP/ju/GMTAfBgNVHSMEGDAW
+gBS/3cr3fyGK+PacvfVYU1TZgzu8+jAdBgNVHREEFjAUghJ4LnNlY3JldC5jb3Jw
+LnRlc3QwEwYDVR0lBAwwCgYIKwYBBQUHAwEwCgYIKoZIzj0EAwIDSAAwRQIhALnP
++jg125vo78Om3NoD6ZseGQi8HyP3oWMoMlaVpE2hAiB3wwrgUM4Y4GbuEaxsWOLa
+icn+U8DAB+V1Fb2sjLia6Q==
+-----END CERTIFICATE-----
+"""
+
+def c_ed_root() -> str:
+    return """
+-----BEGIN CERTIFICATE-----
+MIIBdzCCASmgAwIBAgICA/4wBQYDK2VwMDExFTATBgNVBAoMDFRhdXJhcm8gVGVz
+dDEYMBYGA1UEAwwPRWQyNTUxOSBSb290IENBMCAXDTIwMDEwMTAwMDAwMFoYDzIw
+NjAwMTAxMDAwMDAwWjAxMRUwEwYDVQQKDAxUYXVyYXJvIFRlc3QxGDAWBgNVBAMM
+D0VkMjU1MTkgUm9vdCBDQTAqMAUGAytlcAMhAKBirwVPeOIrQgUUVwNtzv9J1AtG
+/jGrwKj7Rf9zVG+Go2MwYTAPBgNVHRMBAf8EBTADAQH/MA4GA1UdDwEB/wQEAwIB
+BjAdBgNVHQ4EFgQUHkv20pr13BAmuwM04JOF6i0kJggwHwYDVR0jBBgwFoAUHkv2
+0pr13BAmuwM04JOF6i0kJggwBQYDK2VwA0EA+8Ag79FKq1jGHMeTLtznzOmEJbPz
+stzTHFJ9mu8Afdc2GslWdRcEmypSoAEXZpTehGuSNZq/51y5lX2+qMj+Cw==
+-----END CERTIFICATE-----
+"""
+
+def c_ed_leaf() -> str:
+    return """
+-----BEGIN CERTIFICATE-----
+MIIBpzCCAVmgAwIBAgICA/8wBQYDK2VwMDExFTATBgNVBAoMDFRhdXJhcm8gVGVz
+dDEYMBYGA1UEAwwPRWQyNTUxOSBSb290IENBMCAXDTIwMDEwMTAwMDAwMFoYDzIw
+NjAwMTAxMDAwMDAwWjAxMRUwEwYDVQQKDAxUYXVyYXJvIFRlc3QxGDAWBgNVBAMM
+D2VkLmV4YW1wbGUudGVzdDAqMAUGAytlcAMhACd11t023lj5tZttbpVkfN7ow0AQ
+4ggxW9hHsyeDytuwo4GSMIGPMAwGA1UdEwEB/wQCMAAwDgYDVR0PAQH/BAQDAgeA
+MB0GA1UdDgQWBBSkF4dZMrImf8zwZG6M7bZ1lgIFCzAfBgNVHSMEGDAWgBQeS/bS
+mvXcECa7AzTgk4XqLSQmCDAaBgNVHREEEzARgg9lZC5leGFtcGxlLnRlc3QwEwYD
+VR0lBAwwCgYIKwYBBQUHAwEwBQYDK2VwA0EAFks+7WZ+X0UpJdOYMo8FthOprRb7
+t3HeDQYcgYeii2J7mqlxBcdtONwbtEUkrMADKsJfp+MXbyojagQ4x1KJDQ==
+-----END CERTIFICATE-----
+"""
+
+def c_self() -> str:
+    return """
+-----BEGIN CERTIFICATE-----
+MIIB9DCCAZugAwIBAgICBAAwCgYIKoZIzj0EAwIwNzEVMBMGA1UECgwMVGF1cmFy
+byBUZXN0MR4wHAYDVQQDDBVVbnRydXN0ZWQgU2VsZiBTaWduZWQwIBcNMjAwMTAx
+MDAwMDAwWhgPMjA2MDAxMDEwMDAwMDBaMDcxFTATBgNVBAoMDFRhdXJhcm8gVGVz
+dDEeMBwGA1UEAwwVVW50cnVzdGVkIFNlbGYgU2lnbmVkMFkwEwYHKoZIzj0CAQYI
+KoZIzj0DAQcDQgAEtSCRMnRz34oesj2gmAt42mWV0V7S9lkgnvHJfdCrUpXBt3+r
+HK4AfJKXIRzvHDZbwSa1MBFJWXGqhwqR49ryVqOBlDCBkTAMBgNVHRMBAf8EAjAA
+MA4GA1UdDwEB/wQEAwIHgDAdBgNVHQ4EFgQUBJ+4PZhULaGjevQmVXoLOEV4f7Ew
+HwYDVR0jBBgwFoAUBJ+4PZhULaGjevQmVXoLOEV4f7EwHAYDVR0RBBUwE4IRc2Vs
+Zi5leGFtcGxlLnRlc3QwEwYDVR0lBAwwCgYIKwYBBQUHAwEwCgYIKoZIzj0EAwID
+RwAwRAIgG1V11VooRd5ruS35M3RFX5n6skhYxiZpRh6X8efYCdICIDVh+og/gDUk
+k83l/2uGOlSfeP/ib2nt6UbyXp+96ziT
+-----END CERTIFICATE-----
+"""
+
+def cat2(a: str, b: str) -> str:
+    return a + "\n" + b + "\n"
+
+def vc(leaf: str, inters: str, roots: str, host: str) throws str -> ChainResult:
+    mut st = X509Store.init()
+    st.add_pem(roots)
+    mut l = X509.parse_pem(leaf)?
+    return X509.verify_chain(l, X509.parse_pem_all(inters), st, host, NOW(), X509.default_options())
+
+def expect_ok(t: TestRunner, what: str, r: ChainResult):
+    if not r.ok: t.fail(f"{what}: expected success, got error: {r.error}")
+    else: t.assert_true(true, what)
+
+def expect_fail(t: TestRunner, what: str, r: ChainResult, frag: str):
+    if r.ok: t.fail(f"{what}: expected failure containing '{frag}', but the chain verified")
+    else: t.assert_true(r.error.find(frag) >= 0, f"{what} (error: {r.error})")
+
+def parse_test(t: TestRunner) throws str -> int:
+    t.section("x509: parse RSA leaf")
+    mut l = X509.parse_pem(c_rsa_leaf())?
+    t.assert_eq_int(l.version, 3, "version 3")
+    t.assert_eq_str(Bytes.to_hex(l.serial), "03eb", "serial")
+    t.assert_eq_str(l.subject.text, "O=Tauraro Test, CN=www.example.test", "subject text")
+    t.assert_eq_str(l.subject.cn, "www.example.test", "subject CN")
+    t.assert_eq_str(l.issuer.text, "O=Tauraro Test, CN=RSA Intermediate CA", "issuer text")
+    t.assert_eq_int(l.not_before, 1577836800, "notBefore 2020-01-01")
+    t.assert_eq_int(l.not_after, 2840140800, "notAfter 2060-01-01")
+    t.assert_eq_str(l.sig_alg_oid, "1.2.840.113549.1.1.11", "sha256WithRSAEncryption")
+    t.assert_eq_str(l.key_alg, "rsa", "key alg")
+    t.assert_true(l.has_san, "has SAN")
+    t.assert_eq_int(l.san_dns.len(), 3, "3 DNS SANs")
+    t.assert_eq_int(l.san_ips.len(), 2, "2 IP SANs")
+    t.assert_eq_str(l.san_ips[0], "0a010203", "IPv4 SAN bytes")
+    t.assert_eq_str(l.san_ips[1], "20010db8000000000000000000000001", "IPv6 SAN bytes")
+    t.assert_true(l.has_bc and not l.bc_ca, "basicConstraints CA:FALSE")
+    t.assert_false(l.is_ca(), "not a CA")
+    t.assert_true(l.has_ku and l.key_usage_has(0), "keyUsage digitalSignature")
+    t.assert_false(l.key_usage_has(5), "keyUsage no keyCertSign")
+    t.assert_false(l.can_sign_certs(), "cannot sign certs")
+    t.assert_true(l.has_eku and l.eku.len() == 1 and l.eku[0] == "1.3.6.1.5.5.7.3.1", "EKU serverAuth")
+    t.assert_eq_str(l.fingerprint_sha256(), "e5836d177ab8ac5d481788a7478ca4acbaa5df1283bd4331d51e0700238295e8", "fingerprint matches openssl")
+    t.assert_true(l.is_valid_at(NOW()), "valid at NOW")
+    t.assert_false(l.is_valid_at(1500000000), "not valid in 2017")
+    t.assert_false(l.is_valid_at(2840140801), "not valid after notAfter")
+    t.assert_eq_int(l.public_key_rsa()?.bits, 2048, "RSA 2048 SPKI")
+    t.assert_true(l.describe().find("www.example.test") >= 0, "describe mentions subject")
+    t.section("x509: parse CA certificates")
+    mut r = X509.parse_pem(c_rsa_root())?
+    t.assert_true(r.is_ca() and r.bc_pathlen == -1, "root is a CA, no path length limit")
+    t.assert_true(r.can_sign_certs() and r.key_usage_has(5), "root keyCertSign")
+    t.assert_true(r.is_self_issued() and r.is_self_signed(), "root self-signed")
+    mut i = X509.parse_pem(c_rsa_inter())?
+    t.assert_true(i.is_ca() and i.bc_pathlen == 0, "intermediate pathlen 0")
+    t.assert_false(i.is_self_issued(), "intermediate is not self-issued")
+    t.assert_eq_str(Bytes.to_hex(l.aki), Bytes.to_hex(i.ski), "leaf AKI == intermediate SKI")
+    t.section("x509: parse EC / Ed25519")
+    mut e = X509.parse_pem(c_ec_leaf())?
+    t.assert_eq_str(e.key_alg, "ec", "EC leaf key")
+    t.assert_eq_str(e.key_curve_oid, "1.2.840.10045.3.1.7", "P-256 leaf key")
+    t.assert_eq_str(e.sig_alg_oid, "1.2.840.10045.4.3.3", "ecdsa-with-SHA384")
+    mut ei = X509.parse_pem(c_ec_inter())?
+    t.assert_eq_str(ei.key_curve_oid, "1.3.132.0.34", "P-384 intermediate key")
+    t.assert_eq_str(ei.fingerprint_sha256(), "17ab44f0378a3ea6d47041d525f9150af337bee218c866b4369dd4e388 82d41d".replace(" ", ""), "EC intermediate fingerprint")
+    t.assert_eq_str(e.public_key_ec()?.curve.name, "P-256", "public_key_ec")
+    mut ed = X509.parse_pem(c_ed_root())?
+    t.assert_eq_str(ed.key_alg, "ed25519", "Ed25519 key")
+    t.assert_true(ed.is_self_signed(), "Ed25519 root self-signed")
+    t.section("x509: PEM bundles and errors")
+    mut bundle = "junk before\n" + c_rsa_root() + "\nmore junk\n" + c_rsa_inter() + "\n" + c_ec_root() + "\n"
+    t.assert_eq_int(X509.parse_pem_all(bundle).len, 3, "bundle with surrounding text has 3 certs")
+    mut st = X509Store.init()
+    t.assert_eq_int(st.add_pem(bundle), 3, "store.add_pem returns count")
+    t.assert_eq_int(st.len(), 3, "store size")
+    t.assert_true(st.contains(r), "store contains root")
+    t.assert_false(st.contains(l), "store does not contain leaf")
+    mut bad = X509.parse_pem("not a pem")
+    t.assert_true(bad.is_err, "garbage PEM rejected")
+    mut blk = Pem.decode(c_rsa_leaf())?
+    mut trunc = X509.parse_der(Bytes.slice(blk.data, 0, 200))
+    t.assert_true(trunc.is_err, "truncated DER rejected")
+    mut notseq = X509.parse_der(Bytes.from_hex("0201050000"))
+    t.assert_true(notseq.is_err, "non-SEQUENCE rejected")
+    return 0
+
+def sig_test(t: TestRunner) throws str -> int:
+    t.section("x509: signature checks")
+    mut root = X509.parse_pem(c_rsa_root())?
+    mut inter = X509.parse_pem(c_rsa_inter())?
+    mut leaf = X509.parse_pem(c_rsa_leaf())?
+    t.assert_true(leaf.verify_signed_by(inter), "leaf signed by intermediate (RSA sha256)")
+    t.assert_false(leaf.verify_signed_by(root), "leaf not signed by root")
+    t.assert_true(inter.verify_signed_by(root), "intermediate signed by root")
+    t.assert_true(X509.parse_pem(c_rsa_leaf_sha384())?.verify_signed_by(inter), "RSA sha384")
+    t.assert_true(X509.parse_pem(c_rsa_leaf_pss())?.verify_signed_by(root), "RSASSA-PSS")
+    t.assert_false(X509.parse_pem(c_rsa_leaf_pss())?.verify_signed_by(inter), "PSS under wrong issuer")
+    mut eroot = X509.parse_pem(c_ec_root())?
+    mut einter = X509.parse_pem(c_ec_inter())?
+    t.assert_true(einter.verify_signed_by(eroot), "P-384 intermediate signed by P-256 root (ecdsa sha256)")
+    t.assert_true(X509.parse_pem(c_ec_leaf())?.verify_signed_by(einter), "P-256 leaf signed by P-384 intermediate (ecdsa sha384)")
+    t.assert_false(X509.parse_pem(c_ec_leaf())?.verify_signed_by(eroot), "EC leaf not signed by root")
+    t.assert_false(leaf.verify_signed_by(einter), "RSA signature checked against an EC key fails")
+    mut edr = X509.parse_pem(c_ed_root())?
+    t.assert_true(X509.parse_pem(c_ed_leaf())?.verify_signed_by(edr), "Ed25519 signature")
+    t.assert_false(X509.parse_pem(c_ed_leaf())?.verify_signed_by(eroot), "Ed25519 cert under EC key")
+    # flip one bit inside the TBS (the subject common name) and check the signature breaks
+    mut blk = Pem.decode(c_rsa_leaf())?
+    mut der = Bytes.clone(blk.data)
+    mut pos = 0
+    mut found = -1
+    while pos + 4 < der.len:
+        if der.get(pos) == 119 and der.get(pos + 1) == 119 and der.get(pos + 2) == 119 and der.get(pos + 3) == 46:
+            found = pos
+            break
+        pos = pos + 1
+    t.assert_true(found > 0, "found 'www.' inside the DER")
+    der.set(found, 118)
+    mut tam = X509.parse_der(der)?
+    t.assert_eq_str(tam.subject.cn, "vww.example.test", "tampered subject parses")
+    t.assert_false(tam.verify_signed_by(inter), "tampered certificate fails signature")
+    return 0
+
+def chain_test(t: TestRunner) throws str -> int:
+    mut rsa_roots = c_rsa_root()
+    mut ec_roots = c_ec_root()
+    t.section("x509: RSA chain validation")
+    mut r = vc(c_rsa_leaf(), c_rsa_inter(), rsa_roots, "www.example.test")?
+    expect_ok(t, "leaf -> intermediate -> root", r)
+    t.assert_eq_int(r.depth, 3, "depth 3")
+    t.assert_true(r.anchor.find("RSA Root CA") >= 0, "anchor is the RSA root")
+    expect_fail(t, "missing intermediate", vc(c_rsa_leaf(), "", rsa_roots, "www.example.test")?, "unable to find")
+    expect_fail(t, "wrong host", vc(c_rsa_leaf(), c_rsa_inter(), rsa_roots, "other.example.test")?, "not valid for")
+    expect_ok(t, "no host check when host is empty", vc(c_rsa_leaf(), c_rsa_inter(), rsa_roots, "")?)
+    expect_ok(t, "wildcard host", vc(c_rsa_leaf(), c_rsa_inter(), rsa_roots, "a.wild.example.test")?)
+    expect_ok(t, "IPv4 literal host", vc(c_rsa_leaf(), c_rsa_inter(), rsa_roots, "10.1.2.3")?)
+    expect_ok(t, "IPv6 literal host", vc(c_rsa_leaf(), c_rsa_inter(), rsa_roots, "2001:db8::1")?)
+    expect_ok(t, "sha384 leaf", vc(c_rsa_leaf_sha384(), c_rsa_inter(), rsa_roots, "sha384.example.test")?)
+    mut rp = vc(c_rsa_leaf_pss(), "", rsa_roots, "pss.example.test")?
+    expect_ok(t, "RSASSA-PSS leaf straight under the root", rp)
+    t.assert_eq_int(rp.depth, 2, "depth 2")
+    expect_fail(t, "untrusted root", vc(c_rsa_leaf(), c_rsa_inter(), ec_roots, "www.example.test")?, "")
+    expect_fail(t, "root of a different key type", vc(c_rsa_leaf(), c_rsa_inter(), c_ed_root(), "www.example.test")?, "")
+    mut partial = vc(c_rsa_leaf(), "", c_rsa_inter(), "www.example.test")?
+    expect_ok(t, "an intermediate in the store acts as trust anchor", partial)
+    expect_fail(t, "serverAuth required", vc(c_rsa_leaf_client(), c_rsa_inter(), rsa_roots, "client.example.test")?, "server authentication")
+    mut st = X509Store.init()
+    st.add_pem(rsa_roots)
+    mut copts = X509.default_options()
+    copts.purpose = "client"
+    mut cl = X509.parse_pem(c_rsa_leaf_client())?
+    expect_ok(t, "clientAuth leaf under purpose=client", X509.verify_chain(cl, X509.parse_pem_all(c_rsa_inter()), st, "client.example.test", NOW(), copts))
+    t.section("x509: EC / Ed25519 chains")
+    expect_ok(t, "P-256 leaf -> P-384 intermediate -> P-256 root", vc(c_ec_leaf(), c_ec_inter(), ec_roots, "ec.example.test")?)
+    expect_ok(t, "Ed25519 leaf -> Ed25519 root", vc(c_ed_leaf(), "", c_ed_root(), "ed.example.test")?)
+    t.section("x509: validity")
+    expect_fail(t, "expired leaf", vc(c_ec_expired(), "", ec_roots, "old.example.test")?, "expired")
+    expect_fail(t, "not yet valid leaf", vc(c_ec_future(), "", ec_roots, "future.example.test")?, "not yet valid")
+    mut st2 = X509Store.init()
+    st2.add_pem(ec_roots)
+    mut nt = X509.default_options()
+    nt.check_time = false
+    mut old = X509.parse_pem(c_ec_expired())?
+    expect_ok(t, "expired leaf with check_time=false", X509.verify_chain(old, Vec[X509Cert].init(1), st2, "old.example.test", NOW(), nt))
+    mut late = X509.verify_chain(X509.parse_pem(c_ec_leaf())?, X509.parse_pem_all(c_ec_inter()), st2, "ec.example.test", 2900000000, X509.default_options())
+    expect_fail(t, "everything expired in 2061", late, "expired")
+    t.section("x509: CA constraints")
+    expect_fail(t, "pathLenConstraint exceeded", vc(c_pl_leaf(), cat2(c_pl_b(), c_pl_a()), ec_roots, "deep.example.test")?, "path")
+    expect_fail(t, "issuer that is not a CA", vc(c_nca_leaf(), c_nca_inter(), ec_roots, "vialeaf.example.test")?, "CA")
+    expect_fail(t, "unknown critical extension", vc(c_ec_unknown_crit(), "", ec_roots, "crit.example.test")?, "critical")
+    expect_fail(t, "self-signed, not in the store", vc(c_self(), "", ec_roots, "self.example.test")?, "not trusted")
+    expect_ok(t, "self-signed certificate pinned in the store", vc(c_self(), "", c_self(), "self.example.test")?)
+    t.section("x509: name constraints")
+    expect_ok(t, "name inside permitted subtree", vc(c_nc_ok(), c_nc_ca(), ec_roots, "a.corp.test")?)
+    expect_fail(t, "name outside permitted subtree", vc(c_nc_bad_outside(), c_nc_ca(), ec_roots, "evil.test")?, "constraint")
+    expect_fail(t, "name inside excluded subtree", vc(c_nc_bad_excluded(), c_nc_ca(), ec_roots, "x.secret.corp.test")?, "constraint")
+    t.section("x509: verify_server_chain (current time)")
+    mut ch = Vec[X509Cert].init(2)
+    ch.push(X509.parse_pem(c_rsa_leaf())?)
+    ch.push(X509.parse_pem(c_rsa_inter())?)
+    mut st3 = X509Store.init()
+    st3.add_pem(rsa_roots)
+    t.assert_true(X509.verify_server_chain(ch, st3, "www.example.test").ok, "server chain verifies now")
+    t.assert_false(X509.verify_server_chain(ch, st3, "nope.example.test").ok, "server chain wrong host")
+    t.assert_false(X509.verify_server_chain(Vec[X509Cert].init(1), st3, "x").ok, "empty chain")
+    return 0
+
+def host_test(t: TestRunner) throws str -> int:
+    t.section("x509: hostname matching (RFC 6125)")
+    mut l = X509.parse_pem(c_rsa_leaf())?
+    t.assert_true(l.matches_hostname("www.example.test"), "exact")
+    t.assert_true(l.matches_hostname("WWW.Example.TEST"), "case-insensitive host")
+    t.assert_true(l.matches_hostname("mixed.example.test"), "case-insensitive SAN")
+    t.assert_true(l.matches_hostname("a.wild.example.test"), "wildcard label")
+    t.assert_false(l.matches_hostname("wild.example.test"), "wildcard needs a label")
+    t.assert_false(l.matches_hostname("a.b.wild.example.test"), "wildcard covers one label only")
+    t.assert_false(l.matches_hostname("example.test"), "parent domain")
+    t.assert_false(l.matches_hostname(""), "empty host")
+    t.assert_true(l.matches_hostname("10.1.2.3"), "IPv4 SAN")
+    t.assert_false(l.matches_hostname("10.1.2.4"), "other IPv4")
+    t.assert_true(l.matches_hostname("2001:db8::1"), "IPv6 SAN")
+    t.assert_false(l.matches_hostname("2001:db8::2"), "other IPv6")
+    t.section("x509: DNS pattern rules")
+    t.assert_true(X509.match_dns("example.com", "example.com"), "literal")
+    t.assert_true(X509.match_dns("example.com", "EXAMPLE.com."), "trailing dot on host")
+    t.assert_true(X509.match_dns("*.example.com", "foo.example.com"), "*.example.com")
+    t.assert_false(X509.match_dns("*.example.com", "example.com"), "no empty label")
+    t.assert_false(X509.match_dns("*.example.com", "a.b.example.com"), "one label only")
+    t.assert_false(X509.match_dns("*.com", "example.com"), "no wildcard over a TLD")
+    t.assert_false(X509.match_dns("*", "example"), "bare *")
+    t.assert_false(X509.match_dns("f*.example.com", "foo.example.com"), "partial-label wildcard rejected")
+    t.assert_false(X509.match_dns("foo.*.example.com", "foo.bar.example.com"), "wildcard not leftmost")
+    t.assert_false(X509.match_dns("*.*.example.com", "a.b.example.com"), "two wildcards")
+    t.assert_false(X509.match_dns("*.example.com", ".example.com"), "empty leftmost label")
+    t.assert_false(X509.match_dns("*.example.com", "foo.example.org"), "different domain")
+    t.assert_false(X509.match_dns("", "example.com"), "empty pattern")
+    return 0
+
+def system_test(t: TestRunner) throws str -> int:
+    t.section("x509: system CA bundle")
+    mut st = X509Store.init()
+    mut n = st.load_system()
+    t.assert_eq_int(st.len(), n, "load_system returns the number of roots added")
+    if n > 0:
+        mut i = 0
+        mut ok = 0
+        mut checked = 0
+        while i < st.roots.len and checked < 6:
+            mut c = st.roots.get(i)
+            if c.key_alg == "rsa" or c.key_alg == "ec":
+                checked = checked + 1
+                if c.is_self_signed(): ok = ok + 1
+            i = i + 1
+        t.assert_eq_int(ok, checked, f"first {checked} system roots are valid self-signed certificates")
+    else:
+        t.assert_true(true, "no system bundle on this machine (skipped)")
+    return 0
+
+def run(name: str, t: TestRunner, r: Result[int, str]):
+    if r.is_err: t.fail(f"{name}: {r.err}")
+
+def main():
+    mut t = TestRunner.init("124_x509")
+    run("parse", t, parse_test(t))
+    run("sig", t, sig_test(t))
+    run("chain", t, chain_test(t))
+    run("host", t, host_test(t))
+    run("system", t, system_test(t))
+    t.summary()

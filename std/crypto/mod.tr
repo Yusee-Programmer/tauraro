@@ -20,6 +20,7 @@
 #   from std.crypto.otp import Hotp, Totp, Otp      # HOTP / TOTP one-time passwords
 #   from std.crypto.ecdsa import Ecdsa, EcCurve, EcPublicKey, EcPrivateKey
 #   from std.crypto.argon2 import Argon2, Argon2Params   # Argon2d/i/id password hashing
+#   from std.crypto.x509 import X509, X509Cert, X509Store, X509Options, ChainResult
 
 from std.crypto.hash import Hash
 from std.crypto.hmac import Hmac
@@ -40,3 +41,4 @@ from std.crypto.otp import Hotp, Totp, Otp
 from std.crypto.ecdsa import Ecdsa, EcCurve, EcPublicKey, EcPrivateKey
 from std.crypto.argon2 import Argon2, Argon2Params
 from std.crypto.blake3 import Blake3, Blake3Hasher
+from std.crypto.x509 import X509, X509Cert, X509Store, X509Options, ChainResult

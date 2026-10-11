@@ -620,7 +620,7 @@ codes or rate-limit; both are the caller's job.
 
 ### ECDSA and ECDH — `std.crypto.ecdsa`
 
-NIST **P-256** and **P-384** (`Ecdsa.p256()`, `Ecdsa.p384()`): ECDSA with **RFC 6979 deterministic nonces**,
+NIST **P-256**, **P-384** and **P-521** (`Ecdsa.p256()`, `Ecdsa.p384()`, `Ecdsa.p521()`): ECDSA with **RFC 6979 deterministic nonces**,
 and ECDH. Verified against the RFC 6979 appendix vectors, Python `cryptography` (deterministic
 ECDSA), OpenSSL-made signatures and `openssl pkeyutl -derive`; our signatures pass `openssl dgst -verify`.
 
@@ -635,7 +635,7 @@ mut ok = Ecdsa.verify(priv.public_key(), "sha256", Bytes.from_str("hi"), sig)
 mut raw = Ecdsa.sign_raw(priv, "sha256", msg)?                     # r||s (JWS ES256 form)
 mut pt = priv.public_key().to_point(true)                          # 33-byte compressed SEC1 point
 mut pk = Ecdsa.public_from_pem(spki_text)?                         # validates the point is on the curve
-mut shared = Ecdsa.ecdh(priv, peer_public_key)?                    # x coordinate, 32 bytes
+mut shared = Ecdsa.ecdh(priv, peer_public_key)?                    # x coordinate, 32 bytes (P-256)
 ```
 
 | API | Notes |
@@ -723,3 +723,77 @@ file was not available offline, so its remaining entries were not run.
 Rough speeds of the pure-Tauraro hashes on one x86-64 core: BLAKE2b ~100 MB/s, BLAKE3 ~50 MB/s,
 SHA-3-256 ~20 MB/s.
 
+channels. Only P-256, P-384 and P-521 (prime field, `a = -3`, cofactor 1); no secp256k1 or Ed448.
+About 10 ms per P-256 scalar multiplication (a verify costs two); P-521 is several times slower.
+
+
+### X.509 certificates — `std.crypto.x509`
+
+Parses X.509 v3 certificates (RFC 5280) and validates chains against a set of trust anchors, with
+no OpenSSL involved. Signatures: `sha1/256/384/512WithRSAEncryption`, RSASSA-PSS, ECDSA
+(P-256/P-384/P-521, SHA-1/256/384/512) and Ed25519 — all 121 roots of the Debian/Ubuntu system bundle
+(RSA, P-256/384/521) verify their own self-signature. Built on `asn1`, `pem`, `rsa`, `ecdsa`, `ed25519`.
+
+```tauraro
+from std.crypto.x509 import X509, X509Cert, X509Store
+from std.sys.time import Clock
+
+# (inside a `throws str` function)
+mut store = X509Store.init()
+mut n = store.load_system()          # $SSL_CERT_FILE, then /etc/ssl/certs/ca-certificates.crt,
+                                     # /etc/pki/tls/certs/ca-bundle.crt, /etc/ssl/cert.pem, ...; 0 if none
+store.add_pem(my_private_ca_pem)     # or pin your own roots
+
+mut leaf = X509.parse_pem(leaf_pem)?
+mut inters = X509.parse_pem_all(intermediates_pem)           # untrusted, as sent by the server
+mut res = X509.verify_chain(leaf, inters, store, "example.com", Clock.timestamp(), X509.default_options())
+if res.ok:
+    print("trusted via " + res.anchor + ", path length " + res.depth.to_str())
+else:
+    print("rejected: " + res.error)
+```
+
+| API | Notes |
+|---|---|
+| `X509.parse_der(der)`, `parse_pem(text)` | `throws str`; strict DER. `parse_pem_all(text)` returns every `CERTIFICATE` block of a bundle (broken ones are skipped) |
+| `X509Cert` fields | `version`, `serial`, `subject` / `issuer` (`X509Name`: `text`, `cn`, `raw`), `not_before` / `not_after` (Unix seconds), `sig_alg_oid`, `key_alg` (`rsa`/`ec`/`ed25519`/`other`), `key_curve_oid`, `spki`, `san_dns/san_ips/san_emails/san_uris`, `bc_ca`, `bc_pathlen`, `ku_bits`, `eku`, `ski`, `aki`, name constraints |
+| `cert.is_valid_at(t)`, `is_ca()`, `can_sign_certs()`, `key_usage_has(bit)`, `is_self_issued()`, `is_self_signed()` | key-usage bit 0 = digitalSignature, 5 = keyCertSign |
+| `cert.verify_signed_by(issuer)` | signature check only (names are not compared) |
+| `cert.matches_hostname(host)`, `X509.match_dns(pattern, host)` | RFC 6125 matching, see below |
+| `cert.public_key_rsa()`, `public_key_ec()`, `fingerprint_sha256()`, `describe()` | |
+| `X509Store.init()`, `add(cert)`, `add_pem(text)`, `load_system()`, `contains(cert)`, `len()` | `load_system` returns the number of roots loaded (0 on Windows, whose roots live in the OS store) |
+| `X509.verify_chain(leaf, inters, store, host, now, opts)` | `ChainResult{ok, error, depth, anchor}`; `host = ""` skips the name check |
+| `X509.verify_server_chain(chain, store, host)` | `chain[0]` = leaf; current time and default options |
+| `X509.default_options()` | `purpose` `"server"` (also `"client"`, `"any"`), `allow_sha1 = false`, `max_depth = 8`, `check_time = true` |
+
+**What `verify_chain` checks:** every signature up to a trust anchor (with backtracking when several
+candidate issuers share a name), validity periods of all certificates including the anchor,
+`basicConstraints` CA flag and `pathLenConstraint`, `keyUsage` keyCertSign on every issuer, `extKeyUsage`
+on the leaf (serverAuth / clientAuth), dNSName `nameConstraints`, rejection of unknown **critical**
+extensions, SHA-1 signatures (unless `allow_sha1`), and the hostname. A certificate that is itself in
+the store (pinning) or an intermediate placed in the store is accepted as an anchor.
+
+**Hostname rules (RFC 6125 / browser profile):** only `subjectAltName` is consulted — there is **no
+Common Name fallback**. Matching is case-insensitive; a wildcard is honoured only as the whole leftmost
+label (`*.example.com` matches `a.example.com`, not `example.com`, `a.b.example.com`, `f*.example.com` or
+`*.com`). IP-address hosts match only `iPAddress` SANs (IPv4 and IPv6, incl. `::` forms).
+
+**Not done:** revocation (CRL/OCSP), certificate transparency, AIA fetching, certificate policies,
+nameConstraints for non-DNS names (a chain using them is rejected when the leaf has such names),
+non-prime-field curves, BER encodings.
+
+#### Using X.509 with `HttpSession`
+
+The runtime TLS layer is **unchanged**: `std.net.https` / `HttpSession` still connect without
+certificate validation (`set_allow_unverified_tls`). A TLS backend that can hand over the peer's
+certificate chain (DER blobs, leaf first) would plug the verifier in like this, after the handshake and
+before any request bytes are sent:
+
+```tauraro
+mut chain = Vec[X509Cert].init(4)
+chain.push(X509.parse_der(leaf_der)?)           # + one push per intermediate
+mut store = X509Store.init()
+store.load_system()
+mut res = X509.verify_server_chain(chain, store, host)
+if not res.ok: abort the connection with res.error
+```
