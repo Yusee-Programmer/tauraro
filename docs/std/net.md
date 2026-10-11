@@ -839,3 +839,38 @@ Limits: **TLS + ALPN (`h2` over https) is not available** (the runtime TLS has n
 prior knowledge works; `H2Server` serves one connection at a time; IPv4 only; no server push or
 priorities. Tested in-process (`tests/lang/131_http2_codec.tr`, `132_http2_loopback.tr`) and against
 `curl --http2-prior-knowledge` (opt-in: `TAURARO_H2_CURL=1`).
+
+---
+
+## SNTP — `std.net.ntp`
+
+```tauraro
+from std.net.ntp import NtpClient
+
+mut c = NtpClient.new("pool.ntp.org", 123)
+c.timeout_ms = 3000
+mut r = c.query()
+if r.ok:
+    print("offset " + r.offset_ms().to_string() + " ms, delay " + r.delay_ms().to_string() + " ms")
+    print("stratum " + r.stratum.to_string() + ", ref " + r.ref_id)
+else:
+    print("ntp failed: " + r.err)      # r.kod holds a Kiss-o'-Death code such as "RATE"
+```
+
+`NtpPacket` encodes/decodes the 48-byte RFC 5905 packet (leap indicator, version, mode,
+stratum, poll, precision, root delay/dispersion, reference id and the four 32.32
+timestamps). `ntp_offset` / `ntp_delay` implement `((t2-t1)+(t3-t4))/2` and `(t4-t1)-(t3-t2)`;
+`ntp_ts_to_unix_ns` converts timestamps (RFC 4330 era rule). The client ignores datagrams
+whose originate timestamp does not echo its request, wrong mode, stratum 16+, unsynchronised
+servers (LI=3) and datagrams from other addresses, and keeps waiting until `timeout_ms`.
+`ntp_server_reply` builds a server reply (useful for tests and local tools).
+
+It measures, it never sets the system clock. No NTS / symmetric-key authentication, no
+broadcast/symmetric modes, no multi-server filtering, IPv4 only. Needs the runtime helper
+`_tr_wall_ns()` (wall clock in nanoseconds; 100 ns resolution on Windows). Tests:
+`tests/lang/133_ntp.tr` (codec cross-checked with Python `struct`, fake UDP server on loopback).
+
+### `std.net.udp` additions
+
+`send_bytes` (binary-safe, unlike `send_to`), `recv_wait(cap, timeout_ms)` (bounded wait, sets `.src`
+to the sender "ip:port"), `reuse()`, `bind_port(port)`, `join_group("224.0.0.251")`.

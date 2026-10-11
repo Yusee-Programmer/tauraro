@@ -4955,6 +4955,9 @@ _TR_XLINK int _tr_udp_bind(int fd, int p)                                      {
 _TR_XLINK int _tr_udp_send_to(int fd, const char* d, int l, const char* h, int p) { (void)fd;(void)d;(void)l;(void)h;(void)p; return -1; }
 _TR_XLINK int _tr_udp_recv_from(int fd, char* b, int c, char* src)            { (void)fd;(void)b;(void)c;(void)src; return -1; }
 _TR_XLINK void _tr_udp_close(int fd)                                           { (void)fd; }
+_TR_XLINK int _tr_udp_reuse(int fd)                                            { (void)fd; return -1; }
+_TR_XLINK int _tr_udp_mcast_join(int fd, const char* g)                        { (void)fd;(void)g; return -1; }
+_TR_XLINK long long _tr_wall_ns(void)                                          { return 0LL; }
 static inline char* _tr_dns_resolve(const char* host)                              { (void)host; return (char*)""; }
 static inline char* _tr_dns_reverse(const char* ip)                                { (void)ip;  return (char*)""; }
 #elif defined(_WIN32)
@@ -7441,6 +7444,23 @@ _TR_XLINK int  _tr_udp_recv_from(int fd,char* buf,int cap,char* src) {
     return n;
 }
 _TR_XLINK void _tr_udp_close(int fd) { closesocket((SOCKET)fd); }
+/* UDP helpers for std.net.mdns / std.net.ntp: address reuse, IPv4 multicast
+   (TTL 255, loopback on, join `g` on the default interface), wall clock in ns. */
+_TR_XLINK int _tr_udp_reuse(int fd) {
+    int one=1; return setsockopt((SOCKET)fd,SOL_SOCKET,SO_REUSEADDR,(const char*)&one,sizeof(one))==0?0:-1;
+}
+_TR_XLINK int _tr_udp_mcast_join(int fd,const char* g) {
+    struct ip_mreq m; int ttl=255, lp=1; memset(&m,0,sizeof(m));
+    m.imr_multiaddr.s_addr=inet_addr(g); m.imr_interface.s_addr=INADDR_ANY;
+    setsockopt((SOCKET)fd,IPPROTO_IP,IP_MULTICAST_TTL,(const char*)&ttl,sizeof(ttl));
+    setsockopt((SOCKET)fd,IPPROTO_IP,IP_MULTICAST_LOOP,(const char*)&lp,sizeof(lp));
+    return setsockopt((SOCKET)fd,IPPROTO_IP,IP_ADD_MEMBERSHIP,(const char*)&m,sizeof(m))==0?0:-1;
+}
+_TR_XLINK long long _tr_wall_ns(void) {
+    FILETIME ft; ULARGE_INTEGER u; GetSystemTimeAsFileTime(&ft);
+    u.LowPart=ft.dwLowDateTime; u.HighPart=ft.dwHighDateTime;
+    return ((long long)u.QuadPart-116444736000000000LL)*100LL;
+}
 static inline char* _tr_dns_resolve(const char* host) {
     _tr_net_init();
     struct addrinfo hints={0},*res=NULL; hints.ai_family=AF_INET;
@@ -7555,6 +7575,26 @@ _TR_XLINK int  _tr_udp_recv_from(int fd,char* buf,int cap,char* src) {
     return n;
 }
 _TR_XLINK void _tr_udp_close(int fd) { close(fd); }
+/* UDP helpers for std.net.mdns / std.net.ntp: address reuse, IPv4 multicast
+   (TTL 255, loopback on, join `g` on the default interface), wall clock in ns. */
+_TR_XLINK int _tr_udp_reuse(int fd) {
+    int one=1; int rc=setsockopt(fd,SOL_SOCKET,SO_REUSEADDR,&one,sizeof(one));
+#ifdef SO_REUSEPORT
+    setsockopt(fd,SOL_SOCKET,SO_REUSEPORT,&one,sizeof(one));
+#endif
+    return rc==0?0:-1;
+}
+_TR_XLINK int _tr_udp_mcast_join(int fd,const char* g) {
+    struct ip_mreq m; unsigned char ttl=255, lp=1; memset(&m,0,sizeof(m));
+    m.imr_multiaddr.s_addr=inet_addr(g); m.imr_interface.s_addr=htonl(INADDR_ANY);
+    setsockopt(fd,IPPROTO_IP,IP_MULTICAST_TTL,&ttl,sizeof(ttl));
+    setsockopt(fd,IPPROTO_IP,IP_MULTICAST_LOOP,&lp,sizeof(lp));
+    return setsockopt(fd,IPPROTO_IP,IP_ADD_MEMBERSHIP,&m,sizeof(m))==0?0:-1;
+}
+_TR_XLINK long long _tr_wall_ns(void) {
+    struct timespec ts; clock_gettime(CLOCK_REALTIME,&ts);
+    return (long long)ts.tv_sec*1000000000LL+(long long)ts.tv_nsec;
+}
 static inline char* _tr_dns_resolve(const char* host) {
     struct addrinfo hints={0},*res=NULL; hints.ai_family=AF_INET;
     if(getaddrinfo(host,NULL,&hints,&res)!=0) return _tr_empty_heap_str();

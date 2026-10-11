@@ -35,6 +35,9 @@ added here as each phase lands.
   configurable time/memory/parallelism, optional secret and associated data, PHC-string
   `hash_password` / `verify` / `needs_rehash`; RFC 9106 vectors plus OpenSSL cross-checks
   (`tests/lang/116_argon2.tr`).
+- **`std.net.ntp`** — SNTP client + RFC 5905 packet codec (offset/delay, kiss-o'-death, spoof checks); `std.net.udp` gains
+  binary-safe `send_bytes`, bounded `recv_wait`, `reuse`, `join_group`; new runtime helpers `_tr_udp_reuse`, `_tr_udp_mcast_join`,
+  `_tr_wall_ns`; `std.net.wire` byte helpers (`tests/lang/133_ntp.tr`).
 - **`std.crypto.otp`** — HOTP (RFC 4226) / TOTP (RFC 6238) with SHA-1/256/512, windowed
   constant-time verification, Base32 secret helpers and `otpauth://` URIs; plus the
   binary-safe `Hmac.compute` / `verify` (SHA-1/256/384/512) it is built on

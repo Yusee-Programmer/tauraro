@@ -1,0 +1,395 @@
+# std.net.ntp -- SNTP client (RFC 4330 / RFC 5905 packet format) and packet codec.
+#
+#   from std.net.ntp import NtpClient, NtpResult
+#
+#   mut c = NtpClient.new("pool.ntp.org", 123)
+#   c.timeout_ms = 3000
+#   mut r = c.query()
+#   if r.ok:
+#       print("offset " + r.offset_ms().to_string() + " ms, delay " + r.delay_ms().to_string() + " ms")
+#       print("server stratum " + r.stratum.to_string() + " ref " + r.ref_id)
+#   else:
+#       print("ntp failed: " + r.err)
+#
+# What it does
+#   * Builds the 48-byte client request (mode 3) and parses/validates the reply
+#     (mode 4): leap indicator, version, stratum, poll, precision, root delay and
+#     dispersion, reference id and the four 64-bit (32.32) timestamps.
+#   * Computes the clock offset and round-trip delay from the usual four
+#     timestamps:  offset = ((t2 - t1) + (t3 - t4)) / 2,  delay = (t4 - t1) - (t3 - t2).
+#   * Basic RFC 4330 section 5 sanity checks: reply must be mode 4 (server),
+#     originate timestamp must echo our transmit timestamp (so a spoofed or stale
+#     datagram is ignored while we keep waiting until the deadline), transmit
+#     timestamp non-zero, leap indicator != 3 (unsynchronised), stratum 1..15.
+#     Stratum 0 is a Kiss-o'-Death packet: the 4-char code (RATE, DENY, ...) is
+#     returned in `kod`.
+#   * `ntp_server_reply` builds a server reply for a request (used by the tests'
+#     fake server; handy for local tools).
+#
+# NOT done (honest list)
+#   * It only SETS nothing: it measures the offset, it never steps the system clock.
+#   * No NTP authentication (symmetric key MAC / NTS), no broadcast/symmetric modes,
+#     no multi-server selection or clock filter -- it is SNTP (one request, one
+#     reply). IPv4 only (the runtime sockets are AF_INET); host names go through
+#     the runtime resolver, which blocks.
+#   * Local time comes from the wall clock (_tr_wall_ns, nanosecond resolution where
+#     the OS provides it, 100 ns on Windows). Timestamps use the era rule of
+#     RFC 4330 section 3 (top bit clear => 2036..2104).
+#   * The client transmit timestamp has its low 8 fraction bits randomised (about 60 ps).
+
+from std.core.string import StringBuilder
+from std.net.udp import UdpSocket
+from std.net.dns import Dns
+from std.net.wire import wire_u8
+from std.net.wire import wire_u32
+from std.net.wire import wire_slice
+from std.net.wire import wire_put_u32
+
+extern "C":
+    def _tr_wall_ns() -> int
+    def _tr_time_ns() -> int
+    def _tr_time_ms() -> int
+
+# Seconds between the NTP epoch (1900-01-01) and the Unix epoch (1970-01-01).
+pub def NTP_UNIX_OFFSET() -> int: return 2208988800
+
+pub def NTP_MODE_CLIENT() -> int: return 3
+pub def NTP_MODE_SERVER() -> int: return 4
+
+# 32.32 timestamp -> Unix nanoseconds (era rule: sec with the top bit clear is era 1).
+pub def ntp_ts_to_unix_ns(sec: int, frac: int) -> int:
+    mut s = sec & 0xFFFFFFFF
+    if s < 2147483648: s = s + 4294967296
+    return (s - 2208988800) * 1000000000 + ((frac * 1000000000) >> 32)
+
+# Unix nanoseconds -> seconds half of the 32.32 timestamp (mod 2^32).
+pub def ntp_unix_ns_to_sec(ns: int) -> int:
+    return (ns / 1000000000 + 2208988800) & 0xFFFFFFFF
+
+# Unix nanoseconds -> fraction half of the 32.32 timestamp.
+pub def ntp_unix_ns_to_frac(ns: int) -> int:
+    mut rem = ns - (ns / 1000000000) * 1000000000
+    return (rem << 32) / 1000000000
+
+# offset = ((t2 - t1) + (t3 - t4)) / 2   (all in the same unit, e.g. Unix ns)
+pub def ntp_offset(t1: int, t2: int, t3: int, t4: int) -> int:
+    return ((t2 - t1) + (t3 - t4)) / 2
+
+# delay = (t4 - t1) - (t3 - t2)
+pub def ntp_delay(t1: int, t2: int, t3: int, t4: int) -> int:
+    return (t4 - t1) - (t3 - t2)
+
+# ---------------------------------------------------------------------------
+# Packet
+# ---------------------------------------------------------------------------
+
+pub class NtpPacket:
+    pub li:         int    # leap indicator 0..3 (3 = clock unsynchronised)
+    pub vn:         int    # version 1..4
+    pub mode:       int    # 3 client, 4 server, ...
+    pub stratum:    int    # 0 = kiss-o'-death/unspecified, 1 = primary, 2..15
+    pub poll:       int    # log2 seconds (signed)
+    pub precision:  int    # log2 seconds (signed)
+    pub root_delay: int    # raw 16.16 fixed point
+    pub root_disp:  int    # raw 16.16 fixed point
+    pub ref_id:     str    # raw 4 bytes
+    pub ref_sec:    int
+    pub ref_frac:   int
+    pub orig_sec:   int
+    pub orig_frac:  int
+    pub recv_sec:   int
+    pub recv_frac:  int
+    pub xmit_sec:   int
+    pub xmit_frac:  int
+
+extend NtpPacket:
+    # All-zero packet (version 4, mode 3 = client).
+    pub def new() -> NtpPacket:
+        mut p = NtpPacket()
+        p.li = 0
+        p.vn = 4
+        p.mode = 3
+        p.stratum = 0
+        p.poll = 0
+        p.precision = 0
+        p.root_delay = 0
+        p.root_disp = 0
+        p.ref_id = "    "
+        p.ref_sec = 0
+        p.ref_frac = 0
+        p.orig_sec = 0
+        p.orig_frac = 0
+        p.recv_sec = 0
+        p.recv_frac = 0
+        p.xmit_sec = 0
+        p.xmit_frac = 0
+        return p
+
+    # Client request carrying `xmit` as its transmit timestamp.
+    pub def request(xmit_sec: int, xmit_frac: int, vn: int) -> NtpPacket:
+        mut p = NtpPacket.new()
+        p.vn = vn
+        p.mode = 3
+        p.xmit_sec = xmit_sec
+        p.xmit_frac = xmit_frac
+        return p
+
+    # Serialise to the 48-byte wire format.
+    pub def encode(self) -> str:
+        mut sb = StringBuilder.init(64)
+        sb.append_char(((self.li & 3) << 6) | ((self.vn & 7) << 3) | (self.mode & 7))
+        sb.append_char(self.stratum & 0xFF)
+        sb.append_char(self.poll & 0xFF)
+        sb.append_char(self.precision & 0xFF)
+        wire_put_u32(sb, self.root_delay)
+        wire_put_u32(sb, self.root_disp)
+        mut i = 0
+        while i < 4:
+            if i < self.ref_id.len():
+                sb.append_char(wire_u8(self.ref_id, i))
+            else:
+                sb.append_char(0)
+            i = i + 1
+        wire_put_u32(sb, self.ref_sec)
+        wire_put_u32(sb, self.ref_frac)
+        wire_put_u32(sb, self.orig_sec)
+        wire_put_u32(sb, self.orig_frac)
+        wire_put_u32(sb, self.recv_sec)
+        wire_put_u32(sb, self.recv_frac)
+        wire_put_u32(sb, self.xmit_sec)
+        wire_put_u32(sb, self.xmit_frac)
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    # Parse a datagram (>= 48 bytes; trailing extension fields / MAC are ignored).
+    pub def decode(data: str) throws str -> NtpPacket:
+        if data.len() < 48:
+            raise("NTP packet too short (" + data.len().to_string() + " bytes, need 48)")
+        mut p = NtpPacket.new()
+        mut b0 = wire_u8(data, 0)
+        p.li = b0 >> 6
+        p.vn = (b0 >> 3) & 7
+        p.mode = b0 & 7
+        p.stratum = wire_u8(data, 1)
+        p.poll = wire_u8(data, 2)
+        if p.poll >= 128: p.poll = p.poll - 256
+        p.precision = wire_u8(data, 3)
+        if p.precision >= 128: p.precision = p.precision - 256
+        p.root_delay = wire_u32(data, 4)
+        p.root_disp = wire_u32(data, 8)
+        p.ref_id = wire_slice(data, 12, 4)
+        p.ref_sec = wire_u32(data, 16)
+        p.ref_frac = wire_u32(data, 20)
+        p.orig_sec = wire_u32(data, 24)
+        p.orig_frac = wire_u32(data, 28)
+        p.recv_sec = wire_u32(data, 32)
+        p.recv_frac = wire_u32(data, 36)
+        p.xmit_sec = wire_u32(data, 40)
+        p.xmit_frac = wire_u32(data, 44)
+        return p
+
+    # Reference identifier as text: ASCII for stratum 0/1 ("GPS", "RATE"), dotted
+    # IPv4 for stratum >= 2 (the upstream server's address, IPv4 only).
+    pub def ref_id_text(self) -> str:
+        if self.ref_id.len() < 4: return ""
+        if self.stratum >= 2:
+            return wire_u8(self.ref_id, 0).to_string() + "." + wire_u8(self.ref_id, 1).to_string() + "." + wire_u8(self.ref_id, 2).to_string() + "." + wire_u8(self.ref_id, 3).to_string()
+        mut sb = StringBuilder.init(8)
+        mut i = 0
+        while i < 4:
+            mut c = wire_u8(self.ref_id, i)
+            if c == 0: break
+            sb.append_char(c)
+            i = i + 1
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    # Root delay / dispersion in nanoseconds (16.16 fixed point seconds).
+    pub def root_delay_ns(self) -> int:
+        return (self.root_delay * 1000000000) >> 16
+
+    pub def root_dispersion_ns(self) -> int:
+        return (self.root_disp * 1000000000) >> 16
+
+    pub def xmit_unix_ns(self) -> int:
+        return ntp_ts_to_unix_ns(self.xmit_sec, self.xmit_frac)
+
+    pub def recv_unix_ns(self) -> int:
+        return ntp_ts_to_unix_ns(self.recv_sec, self.recv_frac)
+
+# Build a server (mode 4) reply to `req_bytes`: echoes the client's transmit
+# timestamp as the originate timestamp and stamps receive/transmit from the given
+# Unix nanosecond clock readings. Returns "" if the request is not a valid client
+# packet. `ref_id` is up to 4 bytes (e.g. "LOCL").
+pub def ntp_server_reply(req_bytes: str, recv_ns: int, xmit_ns: int, stratum: int, ref_id: str) -> str:
+    mut r: Result[NtpPacket, str] = NtpPacket.decode(req_bytes)
+    if r.is_err: return ""
+    mut q = r.ok
+    if q.mode != 3 and q.mode != 1: return ""
+    mut p = NtpPacket.new()
+    p.li = 0
+    p.vn = q.vn
+    if p.vn < 1 or p.vn > 4: p.vn = 4
+    p.mode = 4
+    p.stratum = stratum
+    p.poll = q.poll
+    p.precision = -20
+    p.ref_id = ref_id
+    p.ref_sec = ntp_unix_ns_to_sec(recv_ns)
+    p.ref_frac = ntp_unix_ns_to_frac(recv_ns)
+    p.orig_sec = q.xmit_sec
+    p.orig_frac = q.xmit_frac
+    p.recv_sec = ntp_unix_ns_to_sec(recv_ns)
+    p.recv_frac = ntp_unix_ns_to_frac(recv_ns)
+    p.xmit_sec = ntp_unix_ns_to_sec(xmit_ns)
+    p.xmit_frac = ntp_unix_ns_to_frac(xmit_ns)
+    return p.encode()
+
+# Check a decoded reply against the request we sent. Returns "" when acceptable,
+# else the reason. Kiss-o'-death packets are reported by the caller (stratum 0).
+pub def ntp_check_reply(req_xmit_sec: int, req_xmit_frac: int, p: NtpPacket) -> str:
+    if p.mode != 4: return "unexpected mode " + p.mode.to_string() + " (want 4, server)"
+    if p.vn < 1 or p.vn > 4: return "unsupported version " + p.vn.to_string()
+    if p.orig_sec != req_xmit_sec or p.orig_frac != req_xmit_frac:
+        return "originate timestamp does not match the request"
+    if p.stratum == 0: return ""
+    if p.stratum > 15: return "invalid stratum " + p.stratum.to_string()
+    if p.li == 3: return "server clock is unsynchronised (leap indicator 3)"
+    if p.xmit_sec == 0 and p.xmit_frac == 0: return "server transmit timestamp is zero"
+    return ""
+
+# ---------------------------------------------------------------------------
+# Client
+# ---------------------------------------------------------------------------
+
+pub class NtpResult:
+    pub ok:             bool
+    pub err:            str
+    pub offset_ns:      int    # server clock minus local clock (positive: local is behind)
+    pub delay_ns:       int    # network round-trip delay
+    pub stratum:        int
+    pub leap:           int
+    pub version:        int
+    pub ref_id:         str    # see NtpPacket.ref_id_text
+    pub kod:            str    # Kiss-o'-Death code when the server sent stratum 0, else ""
+    pub server_unix_ns:  int   # the server's transmit time (t3)
+    pub root_delay_ns:  int
+    pub root_disp_ns:   int
+    pub t1:             int    # originate (local send)
+    pub t2:             int    # server receive
+    pub t3:             int    # server transmit
+    pub t4:             int    # local receive
+
+extend NtpResult:
+    pub def failed(msg: str) -> NtpResult:
+        mut r = NtpResult()
+        r.ok = false
+        r.err = msg
+        r.offset_ns = 0
+        r.delay_ns = 0
+        r.stratum = 0
+        r.leap = 0
+        r.version = 0
+        r.ref_id = ""
+        r.kod = ""
+        r.server_unix_ns = 0
+        r.root_delay_ns = 0
+        r.root_disp_ns = 0
+        r.t1 = 0
+        r.t2 = 0
+        r.t3 = 0
+        r.t4 = 0
+        return r
+
+    pub def is_ok(self) -> bool:
+        return self.ok
+
+    # Offset / delay in whole milliseconds (truncated toward zero).
+    pub def offset_ms(self) -> int:
+        return self.offset_ns / 1000000
+
+    pub def delay_ms(self) -> int:
+        return self.delay_ns / 1000000
+
+    # Local Unix time corrected by the measured offset, in nanoseconds.
+    pub def corrected_now_ns(self) -> int:
+        return _tr_wall_ns() + self.offset_ns
+
+pub class NtpClient:
+    pub host:       str
+    pub port:       int
+    pub timeout_ms: int    # total wait for a valid reply (default 5000)
+    pub version:    int    # 3 or 4 (default 4)
+
+extend NtpClient:
+    pub def new(host: str, port: int) -> NtpClient:
+        mut c = NtpClient()
+        c.host = host
+        c.port = port
+        c.timeout_ms = 5000
+        c.version = 4
+        return c
+
+    # Send one request and wait (bounded by timeout_ms) for a valid reply.
+    # Invalid/stale/foreign datagrams are ignored while waiting.
+    pub def query(self) -> NtpResult:
+        mut ip = self.host
+        if not Dns.is_ipv4(ip):
+            ip = Dns.resolve(self.host)
+            if ip.len() == 0: return NtpResult.failed("cannot resolve " + self.host)
+        mut sock = UdpSocket.new()
+        if not sock.open: return NtpResult.failed("cannot open a UDP socket")
+        mut t1 = _tr_wall_ns()
+        if t1 <= 0:
+            sock.close()
+            return NtpResult.failed("no wall clock on this platform")
+        mut xsec = ntp_unix_ns_to_sec(t1)
+        mut xfrac = (ntp_unix_ns_to_frac(t1) & 0xFFFFFF00) | ((_tr_time_ns() >> 3) & 0xFF)
+        # t1 as the server will see it (after rounding to 32.32).
+        t1 = ntp_ts_to_unix_ns(xsec, xfrac)
+        mut req = NtpPacket.request(xsec, xfrac, self.version)
+        mut wire = req.encode()
+        if sock.send_bytes(wire, ip, self.port) != 48:
+            sock.close()
+            return NtpResult.failed("send to " + ip + ":" + self.port.to_string() + " failed")
+        mut deadline = _tr_time_ms() + self.timeout_ms
+        mut want_src = ip + ":" + self.port.to_string()
+        while true:
+            mut left = deadline - _tr_time_ms()
+            if left <= 0: break
+            mut data = sock.recv_wait(512, left)
+            if data.len() == 0: break
+            mut t4 = _tr_wall_ns()
+            if sock.src != want_src: continue
+            mut dr: Result[NtpPacket, str] = NtpPacket.decode(data)
+            if dr.is_err: continue
+            mut p = dr.ok
+            mut why = ntp_check_reply(xsec, xfrac, p)
+            if why.len() > 0: continue
+            if p.stratum == 0:
+                mut k = NtpResult.failed("kiss-o'-death: " + p.ref_id_text())
+                k.kod = p.ref_id_text()
+                k.version = p.vn
+                sock.close()
+                return k
+            mut res = NtpResult.failed("")
+            res.ok = true
+            res.t1 = t1
+            res.t2 = p.recv_unix_ns()
+            res.t3 = p.xmit_unix_ns()
+            res.t4 = t4
+            res.offset_ns = ntp_offset(res.t1, res.t2, res.t3, res.t4)
+            res.delay_ns = ntp_delay(res.t1, res.t2, res.t3, res.t4)
+            res.stratum = p.stratum
+            res.leap = p.li
+            res.version = p.vn
+            res.ref_id = p.ref_id_text()
+            res.server_unix_ns = res.t3
+            res.root_delay_ns = p.root_delay_ns()
+            res.root_disp_ns = p.root_dispersion_ns()
+            sock.close()
+            return res
+        sock.close()
+        return NtpResult.failed("timeout waiting for an NTP reply from " + want_src)

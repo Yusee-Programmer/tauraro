@@ -15,6 +15,7 @@
 #   from std.net.client      import HttpSession, ClientRequest, HttpReply, HeaderList
 #   from std.net.hpack       import HpackEncoder, HpackDecoder, HpackHeaders, Huffman
 #   from std.net.http2       import H2Client, H2Server, H2Request, H2Response, H2Conn
+#   from std.net.ntp         import NtpClient, NtpResult, NtpPacket
 
 from std.net.tcp         import TcpStream
 from std.net.tcp         import TcpListener
@@ -54,3 +55,6 @@ from std.net.http2       import H2Server
 from std.net.http2       import H2Request
 from std.net.http2       import H2Response
 from std.net.http2       import H2Conn
+from std.net.ntp         import NtpClient
+from std.net.ntp         import NtpResult
+from std.net.ntp         import NtpPacket
