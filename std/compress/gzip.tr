@@ -39,20 +39,18 @@
 #   mut original    = Gzip.decompress(compressed, Gzip.compressed_len(compressed), 4096)
 
 extern "C":
-    def _tr_deflate(input: str, ilen: int, out_len: Pointer[c_int]) -> str
-    def _tr_inflate(input: str, ilen: int, max_out: int) -> str
+    def _tr_deflate_raw(input: str, ilen: int, out_len: Pointer[c_int]) -> Pointer[char]
+    def _tr_inflate_n(input: str, ilen: int, max_out: int, out_len: Pointer[c_int]) -> Pointer[char]
+    def _tr_str_wrap_len(s: Pointer[char], blen: int) -> str
     def _tr_c_malloc(size: int) -> Pointer[char]
     def _tr_c_free(ptr: Pointer[char])
 
 from std.io.archive import ByteBuf, Crc32
 from std.string.str import Str
 
-# Holds the exact byte length of the most recent Gzip.compress() result
-# (gzip output always contains embedded NUL bytes — in the MTIME field at
-# minimum — so it is never safe to recover the length via strlen —
-# Gzip.compressed_len() reads this instead of scanning the string). Mirrors
-# std.io.archive's own module-level `_crc32_holder` pattern for stashing
-# small pieces of state alongside a static-method class.
+# Legacy: Gzip.compressed_len() used to read a module-global "last length" from this holder
+# (not thread-safe, stale across calls). Results are length-tracked now (bug log #24); the
+# holder is only kept so existing imports of GzipLenHolder keep compiling.
 pub class GzipLenHolder:
     pub len: int
 
@@ -64,7 +62,7 @@ pub class Gzip:
 extend Gzip:
     # Compress `input` (first `ilen` bytes) into a complete gzip member
     # (header + DEFLATE payload + CRC32/ISIZE footer). Returns the gzip
-    # bytes as a str — call Gzip.compressed_len() immediately afterward
+    # bytes as a length-tracked str — call Gzip.compressed_len()
     # (it returns the exact length of THIS result, not a strlen — gzip
     # output contains embedded NUL bytes) to know how many bytes are valid.
     pub def compress(input: str, ilen: int) -> str:
@@ -83,13 +81,14 @@ extend Gzip:
         if ilen > 0:
             mut out_len_buf = _tr_c_malloc(8) as Pointer[c_int]
             unsafe: out_len_buf.write(0 as c_int)
-            mut compressed = _tr_deflate(input, ilen, out_len_buf)
+            mut compressed = _tr_deflate_raw(input, ilen, out_len_buf)
             mut clen = 0
             unsafe: clen = out_len_buf.read() as int
             _tr_c_free(out_len_buf as Pointer[char])
 
             if clen > 0:
-                buf.push_bytes(compressed, clen)
+                mut cstr = _tr_str_wrap_len(compressed, clen)
+                buf.push_bytes(cstr, clen)
             else:
                 # Stub runtime (no -DTAURARO_COMPRESS_ZLIB) or deflate
                 # failure: fall back to raw DEFLATE "stored block(s)"
@@ -106,7 +105,6 @@ extend Gzip:
         buf.push_u32le(ilen & 0xFFFFFFFF)   # ISIZE mod 2^32
 
         mut result = buf.to_str()
-        _gzip_len_holder.len = buf.len
         buf.free()
         return result
 
@@ -159,13 +157,21 @@ extend Gzip:
 
         mut plain = ""
         if body_len > 0:
-            plain = _tr_inflate(body, body_len, max_out)
+            # length-exact inflate: the payload may contain 0x00 bytes
+            mut pl_len_buf = _tr_c_malloc(8) as Pointer[c_int]
+            unsafe: pl_len_buf.write(0 as c_int)
+            mut pl_raw = _tr_inflate_n(body, body_len, max_out, pl_len_buf)
+            mut pl_n = 0
+            unsafe: pl_n = pl_len_buf.read() as int
+            _tr_c_free(pl_len_buf as Pointer[char])
+            if pl_raw as int != 0:
+                plain = _tr_str_wrap_len(pl_raw, pl_n)
         # else: empty compressed body -> empty output ("" already)
 
         mut expect_crc   = _rd_u32(input, footer_off)
         mut expect_isize = _rd_u32(input, footer_off + 4)
 
-        mut got_len = Str.len(plain)
+        mut got_len = plain.len()
         mut got_crc = Crc32.compute(plain, got_len)
 
         if (expect_isize & 0xFFFFFFFF) != (got_len & 0xFFFFFFFF):
@@ -184,7 +190,9 @@ extend Gzip:
     # compressed buffers at once, save off the length yourself instead of
     # relying on this between compress() calls.
     pub def compressed_len(s: str) -> int:
-        return _gzip_len_holder.len
+        # Gzip.compress() returns a length-tracked str, so its own length is exact (the
+        # old module-global "last length" holder was not thread-safe and went stale).
+        return s.len()
 
 # ── DEFLATE "stored block" fallback (RFC 1951 §3.2.4) ──────────────────────
 #

@@ -18,10 +18,10 @@ from std.compress.gzip import Gzip
 | `Zlib.decompress` | `(input: str, ilen: int, max_out: int) -> str` | `str` | Decompress a zlib stream, up to `max_out` bytes. |
 | `Zlib.deflate` | `(input: str, ilen: int) -> str` | `str` | Raw DEFLATE (no zlib wrapper). |
 | `Zlib.inflate` | `(input: str, ilen: int, max_out: int) -> str` | `str` | Decompress raw DEFLATE output. |
-| `Zlib.compressed_len` | `(s: str) -> int` | `int` | Byte length of a result string (via `strlen`). For binary blobs track length manually. |
+| `Zlib.compressed_len` | `(s: str) -> int` | `int` | Exact byte length of a `compress`/`deflate`/`decompress`/`inflate` result. These results are length-tracked strings, so embedded `0x00` bytes are preserved and `compressed_len` (equivalently `s.len()`) is exact. |
 
 > **Binary blobs** — compressed output may contain null bytes.
-> Use the `ilen` / `max_out` parameters to bound reads; do not rely on null termination.
+> Results are length-tracked (`.len()` / `compressed_len()` are exact). Use the `ilen` / `max_out` parameters to bound reads; do not rely on null termination of foreign buffers.
 
 ---
 
@@ -55,7 +55,7 @@ A thin RFC 1952 container wrapper around the same raw-DEFLATE runtime routines `
 |---|---|---|---|
 | `Gzip.compress` | `(input: str, ilen: int) -> str` | `str` | Compress `ilen` bytes into a complete gzip member (header + DEFLATE + CRC32/ISIZE footer). |
 | `Gzip.decompress` | `(input: str, ilen: int, max_out: int) -> str` | `str` | Decompress a gzip member, up to `max_out` bytes. Verifies CRC32 and ISIZE; returns `""` with an error message on mismatch or malformed input. |
-| `Gzip.compressed_len` | `(s: str) -> int` | `int` | Exact byte length of the **most recent** `Gzip.compress()` result. Not a `strlen` — gzip output always contains embedded NUL bytes (at minimum in the MTIME field), so call this immediately after `compress()`. |
+| `Gzip.compressed_len` | `(s: str) -> int` | `int` | Exact byte length of a `Gzip.compress()` result. Not a `strlen` — gzip output always contains embedded NUL bytes (at minimum in the MTIME field); the result string carries its own length, so this is per-result (no "last call" global) and thread-safe. |
 
 > **No -DTAURARO_COMPRESS_ZLIB build?** `Gzip.compress` still produces a spec-valid gzip member (via a hand-written DEFLATE "stored block" fallback, RFC 1951 §3.2.4) that real `gunzip` can decompress — but `Gzip.decompress` cannot decode ANY gzip data on that build, since it depends on the same opt-in `_tr_inflate` runtime routine as `Zlib.inflate`.
 
