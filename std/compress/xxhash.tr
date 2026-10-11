@@ -19,7 +19,7 @@
 
 from std.compress.common import rd8, rd32le, rd64le, mul32
 
-def _rotl32(x: int, r: int) -> int:
+def _xxh_rotl32(x: int, r: int) -> int:
     return ((x << r) | (x >> (32 - r))) & 0xFFFFFFFF
 
 pub class Xxh32:
@@ -42,20 +42,20 @@ extend Xxh32:
             mut v3 = sd
             mut v4 = (sd - P1) & 0xFFFFFFFF
             while i + 16 <= len_:
-                v1 = mul32(_rotl32((v1 + mul32(rd32le(p, i), P2)) & 0xFFFFFFFF, 13), P1)
-                v2 = mul32(_rotl32((v2 + mul32(rd32le(p, i + 4), P2)) & 0xFFFFFFFF, 13), P1)
-                v3 = mul32(_rotl32((v3 + mul32(rd32le(p, i + 8), P2)) & 0xFFFFFFFF, 13), P1)
-                v4 = mul32(_rotl32((v4 + mul32(rd32le(p, i + 12), P2)) & 0xFFFFFFFF, 13), P1)
+                v1 = mul32(_xxh_rotl32((v1 + mul32(rd32le(p, i), P2)) & 0xFFFFFFFF, 13), P1)
+                v2 = mul32(_xxh_rotl32((v2 + mul32(rd32le(p, i + 4), P2)) & 0xFFFFFFFF, 13), P1)
+                v3 = mul32(_xxh_rotl32((v3 + mul32(rd32le(p, i + 8), P2)) & 0xFFFFFFFF, 13), P1)
+                v4 = mul32(_xxh_rotl32((v4 + mul32(rd32le(p, i + 12), P2)) & 0xFFFFFFFF, 13), P1)
                 i = i + 16
-            h = (_rotl32(v1, 1) + _rotl32(v2, 7) + _rotl32(v3, 12) + _rotl32(v4, 18)) & 0xFFFFFFFF
+            h = (_xxh_rotl32(v1, 1) + _xxh_rotl32(v2, 7) + _xxh_rotl32(v3, 12) + _xxh_rotl32(v4, 18)) & 0xFFFFFFFF
         else:
             h = (sd + P5) & 0xFFFFFFFF
         h = (h + len_) & 0xFFFFFFFF
         while i + 4 <= len_:
-            h = mul32(_rotl32((h + mul32(rd32le(p, i), P3)) & 0xFFFFFFFF, 17), P4)
+            h = mul32(_xxh_rotl32((h + mul32(rd32le(p, i), P3)) & 0xFFFFFFFF, 17), P4)
             i = i + 4
         while i < len_:
-            h = mul32(_rotl32((h + mul32(rd8(p, i), P5)) & 0xFFFFFFFF, 11), P1)
+            h = mul32(_xxh_rotl32((h + mul32(rd8(p, i), P5)) & 0xFFFFFFFF, 11), P1)
             i = i + 1
         h = h ^ (h >> 15)
         h = mul32(h, P2)
@@ -68,12 +68,12 @@ extend Xxh32:
     pub def hash(data: str, len_: int, seed: int) -> int:
         return Xxh32.hash_ptr(data as Pointer[char], len_, seed)
 
-def _rotl64(x: u64, r: int) -> u64:
+def _xxh_rotl64(x: u64, r: int) -> u64:
     return (x << r) | (x >> (64 - r))
 
 def _xx64_round(acc: u64, inp: u64) -> u64:
     mut a: u64 = acc + inp * (0xC2B2AE3D27D4EB4F as u64)
-    a = _rotl64(a, 31)
+    a = _xxh_rotl64(a, 31)
     return a * (0x9E3779B185EBCA87 as u64)
 
 def _xx64_merge(acc: u64, val: u64) -> u64:
@@ -107,7 +107,7 @@ extend Xxh64:
                 v3 = _xx64_round(v3, rd64le(p, i + 16) as u64)
                 v4 = _xx64_round(v4, rd64le(p, i + 24) as u64)
                 i = i + 32
-            h = _rotl64(v1, 1) + _rotl64(v2, 7) + _rotl64(v3, 12) + _rotl64(v4, 18)
+            h = _xxh_rotl64(v1, 1) + _xxh_rotl64(v2, 7) + _xxh_rotl64(v3, 12) + _xxh_rotl64(v4, 18)
             h = _xx64_merge(h, v1)
             h = _xx64_merge(h, v2)
             h = _xx64_merge(h, v3)
@@ -118,15 +118,15 @@ extend Xxh64:
         while i + 8 <= len_:
             mut k1: u64 = _xx64_round(0 as u64, rd64le(p, i) as u64)
             h = h ^ k1
-            h = _rotl64(h, 27) * P1 + P4
+            h = _xxh_rotl64(h, 27) * P1 + P4
             i = i + 8
         if i + 4 <= len_:
             h = h ^ ((rd32le(p, i) as u64) * P1)
-            h = _rotl64(h, 23) * P2 + P3
+            h = _xxh_rotl64(h, 23) * P2 + P3
             i = i + 4
         while i < len_:
             h = h ^ ((rd8(p, i) as u64) * P5)
-            h = _rotl64(h, 11) * P1
+            h = _xxh_rotl64(h, 11) * P1
             i = i + 1
         h = h ^ (h >> 33)
         h = h * P2
