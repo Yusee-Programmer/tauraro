@@ -178,6 +178,7 @@ pub class Sema:
     pub closure_caps:     Vec[HirParam] # captures accumulated for the current innermost closure
     pub closure_cap_set:  Map[str, bool] # dedup set for capture names
     pub in_assign_target: bool          # suppress is_init check on assignment LHS
+    pub in_assign_target_plain: bool    # the assignment LHS being lowered IS a bare identifier (`x = ...`): a re-initialising write, so moved/freed state of x is not a use
     pub in_recv_pos: bool               # [N-3] lowering a method/prop/index receiver — skip undefined-name check (module receivers like `OS`/`math` resolve to no symbol)
     pub container_borrows: Map[str, str] # container_var -> borrowing_var
     pub capturing_moves: bool           # Fix 1: branch snapshot - are we tracking move deltas?
@@ -215,6 +216,7 @@ pub class Sema:
     pub block_stack: Vec[int]    # auto-drop: ids of currently-open if/while bodies, innermost last
     pub block_stack_base: Vec[int] # auto-drop: block_stack.len at each enter_scope, restored on exit_scope
     pub do_temp_ctr: int           # `do:` block-expression: monotonic counter for synthetic result-capture temps
+    pub pc_alias_consumes: bool    # apply_borrow_drops: while true, `x = y` / `mut x = y` (a bare-ident alias/move of the tracked local `y`) counts as CONSUMING y (set only for user-`free()` classes, whose owner must be unique)
 
 extend Sema:
     pub def build_ast_type(self, e: Pointer[Expr]) -> Pointer[AstType]:
@@ -282,6 +284,7 @@ extend Sema:
         s.closure_caps      = Vec[HirParam].init(0)
         s.closure_cap_set   = Map[str, bool].init(0)
         s.in_assign_target  = false
+        s.in_assign_target_plain = false
         s.in_recv_pos       = false
         s.container_borrows = Map[str, str].init(16)
         s.capturing_moves   = false
@@ -318,6 +321,7 @@ extend Sema:
         s.block_stack            = Vec[int].init(8)
         s.block_stack_base       = Vec[int].init(8)
         s.do_temp_ctr            = 0
+        s.pc_alias_consumes      = false
 
         # -- Built-in functions -------------------------------------------------
         s.globals.insert("print",    Symbol.init("print",    SymbolKind.SFunction, box_asttype(AstType.init("void"))))
@@ -926,6 +930,39 @@ extend Sema:
             sym.is_maybe_moved = true
             self.globals.insert(name, sym)
 
+    # Re-initialising assignment (`x = new_value`): a variable that was moved-from (or
+    # freed) holds a brand-new value again, so it is no longer moved/freed and later
+    # uses are valid -- the Rust-style "move out, then re-assign" rotation
+    # (`a = b; b = next`). Without this, `a = b` marks `b` moved and the very next
+    # `b = next` left it flagged, so the following read of `b` was [M-1]/[M-5].
+    pub def revive_moved(self, name: str):
+        mut rv_found = false
+        mut rv_i = self.scopes.len - 1
+        while rv_i >= 0 and not rv_found:
+            if self.scopes.get(rv_i).variables.contains(name):
+                mut rv_sym = self.scopes.get(rv_i).variables.get(name)
+                rv_sym.is_moved = false
+                rv_sym.is_maybe_moved = false
+                rv_sym.is_freed = false
+                self.scopes.get(rv_i).variables.insert(name, rv_sym)
+                rv_found = true
+            rv_i = rv_i - 1
+        if (not rv_found) and self.globals.contains(name):
+            mut rv_g = self.globals.get(name)
+            rv_g.is_moved = false
+            rv_g.is_maybe_moved = false
+            rv_g.is_freed = false
+            self.globals.insert(name, rv_g)
+        # Drop it from the current branch's moved-set so the branch-merge logic doesn't
+        # resurrect a stale "maybe moved" for a name that was re-assigned in the branch.
+        if rv_found and self.capturing_moves and (self.branch_moved_buf as usize) != 0:
+            mut rv_nb = Vec[str].init(4)
+            mut rv_k = 0
+            while rv_k < self.branch_moved_buf.len:
+                if self.branch_moved_buf.get(rv_k) != name: rv_nb.push(self.branch_moved_buf.get(rv_k))
+                rv_k = rv_k + 1
+            self.branch_moved_buf = rv_nb
+
     # Fix 4: reverse of mark_init - used to roll back per-branch init state
     pub def unmark_init(self, name: str):
         mut mi_i = self.scopes.len - 1
@@ -972,6 +1009,18 @@ extend Sema:
         while i < decs.len:
             if decs.get(i).name == "copy": return true
             i = i + 1
+        return false
+
+    # True if the user class `name` defines `free()` or `dispose()` -- it OWNS a resource
+    # and has a destructor, so exactly one local may own (and auto-drop) a given instance.
+    pub def class_has_free(self, name: str) -> bool:
+        if not self.classes.contains(name): return false
+        mut hf_cls = self.classes.get(name)
+        mut hf_i = 0
+        while hf_i < hf_cls.methods.len:
+            mut hf_n = hf_cls.methods.get(hf_i).name
+            if hf_n == "free" or hf_n == "dispose": return true
+            hf_i = hf_i + 1
         return false
 
     pub def is_copy_class(self, name: str) -> bool:
@@ -2729,7 +2778,13 @@ extend Sema:
                     mut cn = _ty.name
                     if self._is_owned_droppable_class(cn) and self._is_fresh_owned_producer(val, cn):
                         if not self._block_has_drop_or_reassign(b, nm):
-                            if not self._param_consumed_in_block(nm, b):
+                            # A user-`free()` class has exactly ONE owner: handing the local to
+                            # another variable (`mut b = a`, `cur = next`) moves it, so the
+                            # source must not also be freed here (was a double free).
+                            self.pc_alias_consumes = self.class_method_exists(cn, "free")
+                            mut _bd_consumed = self._param_consumed_in_block(nm, b)
+                            self.pc_alias_consumes = false
+                            if not _bd_consumed:
                                 add_names.push(nm)
                                 add_cls.push(cn)
                 case _: pass
@@ -2935,8 +2990,11 @@ extend Sema:
             case HirStmt.SSpawn(e): return self._pc_refs(e, pname)           # crosses a thread -> consumed
             case HirStmt.SAssign(tgt, val):
                 if self._pc_is_store_target(tgt) and self._pc_refs(val, pname): return true   # store into field/index
+                if self.pc_alias_consumes and self._pc_is_ident(val, pname): return true      # `other = pname`: ownership moves to `other`
                 return self._param_consumed_in_expr(pname, val)
-            case HirStmt.SLet(_, _, _, _, _, _, val): return self._param_consumed_in_expr(pname, val)
+            case HirStmt.SLet(_, _, _, _, _, _, val):
+                if self.pc_alias_consumes and self._pc_is_ident(val, pname): return true      # `mut other = pname`: ownership moves to `other`
+                return self._param_consumed_in_expr(pname, val)
             case HirStmt.SMultiLet(_, _, val): return self._param_consumed_in_expr(pname, val)
             case HirStmt.SExpr(e): return self._param_consumed_in_expr(pname, e)
             case HirStmt.SIf(_, tb, eb): return self._param_consumed_in_block(pname, tb) or self._param_consumed_in_block(pname, eb)
@@ -4060,6 +4118,13 @@ extend Sema:
                                 self.check_not_moved(m1_src, m1_ty.name)
                                 self.check_no_active_borrows(m1_src, m1_ty.name)
                                 self.mark_moved(m1_src)
+                            elif self.class_has_free(m1_ty.name) and m1_sym.name != "" and not m1_sym.is_shared:
+                                # A destructor class whose fields all look copy-like (e.g. Url:
+                                # str + int) is classed Copy, which exempts it from move CHECKS
+                                # (aliasing stays legal) -- but it still has ONE owner for
+                                # auto-drop purposes: record the hand-off so the source is not
+                                # freed again at scope exit (was a double free of the same struct).
+                                self.mark_moved(m1_src)
                         case _: pass
                 self.declare(name, SymbolKind.SVariable, box_asttype(ty), is_mut)
                 # A `shared` local: record is_shared on the symbol so the Shared[T]
@@ -4172,8 +4237,13 @@ extend Sema:
                 return box_hirstmt(HirStmt.SLet(name, ownership, is_mut, is_const, is_shared, ty, hval))
             case Stmt.SAssign(target, val):
                 self.in_assign_target = true
+                if target as usize != 0 as usize:
+                    match target.read():
+                        case Expr.EIdent(_): self.in_assign_target_plain = true
+                        case _: pass
                 mut htgt = self.lower_expr(target)
                 self.in_assign_target = false
+                self.in_assign_target_plain = false
                 mut hv = self.lower_expr(val)
                 hv = self._patch_empty_dict_hint(hv, hir_expr_type(htgt))
                 # [L-5] (--strict): storing freshly-built (owned) data into a `ref`
@@ -4240,11 +4310,15 @@ extend Sema:
                             if sa_is_known and not self.is_primitive(sa_ty) and not self.is_copy_class(sa_ty.name) and sa_sym.name != "" and not sa_sym.is_shared:
                                 self.check_no_active_borrows(sa_src, sa_ty.name)
                                 self.mark_moved(sa_src)
+                            elif sa_is_known and self.class_has_free(sa_ty.name) and sa_sym.name != "" and not sa_sym.is_shared:
+                                self.mark_moved(sa_src)   # see the SLet case: single owner for auto-drop
                         case _: pass
                 # mark assignment target as initialised after any assignment
                 if target as usize != 0 as usize:
                     match target.read():
-                        case Expr.EIdent(pd_tgt): self.mark_init(pd_tgt)
+                        case Expr.EIdent(pd_tgt):
+                            self.mark_init(pd_tgt)
+                            self.revive_moved(pd_tgt)
                         case _: pass
                 # clear container borrow when the borrowing variable is reassigned
                 if target as usize != 0 as usize:
@@ -5055,10 +5129,10 @@ extend Sema:
                 if sym.is_freed and sym.name != "":
                     self.error("[M-6] '" + name + "' was freed by 'dealloc()' and can no longer be used.\n      FIX: Remove all uses of '" + name + "' after 'dealloc()', or restructure so the pointer is freed only when no longer needed.")
                 # use-after-definite-move (hard error)
-                elif sym.is_moved and not self.is_primitive(ty) and not self.is_copy_class(ty.name) and sym.name != "" and not sym.is_shared:
+                elif sym.is_moved and not self.in_assign_target_plain and not self.is_primitive(ty) and not self.is_copy_class(ty.name) and sym.name != "" and not sym.is_shared:
                     self.error("[M-1] '" + name + "' was moved and cannot be used again.\n      FIX: Use the variable that now owns it, or call .clone() to copy before moving.")
                 # Fix 1: use-after-maybe-move - hard error (moved in some branch = definitely unsafe to use)
-                elif sym.is_maybe_moved and not self.is_primitive(ty) and not self.is_copy_class(ty.name) and sym.name != "" and not sym.is_shared:
+                elif sym.is_maybe_moved and not self.in_assign_target_plain and not self.is_primitive(ty) and not self.is_copy_class(ty.name) and sym.name != "" and not sym.is_shared:
                     self.error("[M-5] '" + name + "' may have been moved on some code paths, making this use unsafe.\n      FIX: Ensure '" + name + "' is not moved before this point on any branch, or restructure so the use is inside the branch where it's still valid.")
                 # use-before-definite-init (hard error)
                 if not sym.is_init and not sym.is_maybe_init and sym.name != "" and sym.kind == SymbolKind.SVariable and not self.in_assign_target:
