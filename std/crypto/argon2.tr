@@ -1,0 +1,625 @@
+# std.crypto.argon2 — Argon2d / Argon2i / Argon2id password hashing (RFC 9106),
+# pure Tauraro, built on std.crypto.blake2 (BLAKE2b).
+#
+# Argon2 is the memory-hard password-hashing / KDF function that won the Password
+# Hashing Competition; Argon2id is the recommended variant for password storage.
+# `std.crypto.kdf` only has PBKDF2, which is not memory-hard.
+#
+# Parameters (RFC 9106 section 3.1):
+#   t  time cost       number of passes over memory                  (>= 1)
+#   m  memory cost     KiB of memory (rounded down to a multiple of 4*p; >= 8*p)
+#   p  parallelism     number of lanes (>= 1). This implementation computes the lanes
+#                      one after another (single thread) — the result is identical to a
+#                      parallel run; `p` only changes the output, not the speed.
+#   taglen             output bytes (>= 4)
+#   salt               >= 8 bytes (16 random bytes recommended)
+#   secret, ad         optional "pepper" / associated data ("" if unused)
+#
+# Verified against the RFC 9106 section 5 test vectors for all three variants (the
+# exact t=3, m=32, p=4 case with secret and associated data) and cross-checked with
+# OpenSSL (`openssl kdf ARGON2ID/ARGON2I/ARGON2D`, the Python `cryptography` library)
+# over several parameter sets — see tests/lang/116_argon2.tr.
+#
+# Usage:
+#   from std.crypto.argon2 import Argon2
+#
+#   # Store this string in your user table (random salt, PHC format):
+#   mut stored = Argon2.hash_password("correct horse battery staple")
+#   # $argon2id$v=19$m=19456,t=2,p=1$<salt>$<hash>
+#   if Argon2.verify(stored, attempt): ...            # constant-time compare
+#
+#   # Raw API (explicit parameters, returns raw tag bytes):
+#   mut r: Result[str, str] = Argon2.id(pw, salt, 3, 65536, 4, 32)
+#
+# Defaults of `hash_password`: Argon2id, m = 19456 KiB (19 MiB), t = 2, p = 1 — the
+# OWASP minimum recommendation. Raise m/t for your hardware budget (RFC 9106's "first
+# recommended option" is t=1, m=2 GiB; the "second" t=3, m=64 MiB, p=4).
+#
+# LIMITS / HONEST NOTES
+#   * Only Argon2 version 0x13 (19) is implemented (the current one); decoding a
+#     `v=16` hash is rejected.
+#   * Memory is one malloc of m KiB, wiped before it is freed. Passwords/secrets passed
+#     in as `str`s are not wiped (immutable, reference-counted).
+#   * Speed (pure Tauraro, measured on one x86-64 core): about 400 MiB of memory
+#     traffic per second, e.g. m = 64 MiB with t = 2 takes ~0.3 s. The default
+#     (19 MiB, t = 2) takes ~0.1 s. Lanes are processed sequentially.
+#   * Argon2d (data-dependent addressing) leaks timing about the password to a
+#     local attacker; use argon2id unless you know you need argon2d.
+
+from std.crypto.blake2 import Blake2b, Blake2bHasher
+from std.crypto.bytes import CryptoBytes
+from std.core.string import StringBuilder
+
+extern "C":
+    def _tr_c_malloc(size: int) -> Pointer[char]
+    def _tr_c_free(ptr: Pointer[char])
+    def _tr_c_memset(ptr: Pointer[char], val: int, n: int)
+    def _tr_c_secure_zero(ptr: Pointer[char], n: int)
+
+# ─── BlaMka compression function G (RFC 9106 section 3.5) ────────────────────
+
+def a2_ld(p: Pointer[u64], i: int) -> u64:
+    unsafe:
+        return p.offset(i).read()
+
+def a2_st(p: Pointer[u64], i: int, v: u64):
+    unsafe:
+        p.offset(i).write(v)
+
+def a2_rotr(x: u64, n: int) -> u64:
+    return (x >> n) | (x << (64 - n))
+
+# a + b + 2 * lo32(a) * lo32(b)
+def a2_mix(a: u64, b: u64) -> u64:
+    return a + b + (2 as u64) * (a & (4294967295 as u64)) * (b & (4294967295 as u64))
+
+def a2_gb(v: Pointer[u64], ia: int, ib: int, ic: int, id: int):
+    mut a: u64 = a2_ld(v, ia)
+    mut b: u64 = a2_ld(v, ib)
+    mut c: u64 = a2_ld(v, ic)
+    mut d: u64 = a2_ld(v, id)
+    a = a2_mix(a, b)
+    d = a2_rotr(d ^ a, 32)
+    c = a2_mix(c, d)
+    b = a2_rotr(b ^ c, 24)
+    a = a2_mix(a, b)
+    d = a2_rotr(d ^ a, 16)
+    c = a2_mix(c, d)
+    b = a2_rotr(b ^ c, 63)
+    a2_st(v, ia, a)
+    a2_st(v, ib, b)
+    a2_st(v, ic, c)
+    a2_st(v, id, d)
+
+# the BLAKE2b round P on 16 contiguous words
+def a2_p(v: Pointer[u64]):
+    a2_gb(v, 0, 4, 8, 12)
+    a2_gb(v, 1, 5, 9, 13)
+    a2_gb(v, 2, 6, 10, 14)
+    a2_gb(v, 3, 7, 11, 15)
+    a2_gb(v, 0, 5, 10, 15)
+    a2_gb(v, 1, 6, 11, 12)
+    a2_gb(v, 2, 7, 8, 13)
+    a2_gb(v, 3, 4, 9, 14)
+
+# dst = [dst if with_xor] ^ G(x, y). `s` is 272 words of scratch (R | Z | v).
+# dst may alias x or y (R is fully computed before dst is written).
+def a2_fill_block(dst: Pointer[u64], x: Pointer[u64], y: Pointer[u64], s: Pointer[u64], with_xor: bool):
+    mut i = 0
+    while i < 128:
+        mut r: u64 = a2_ld(x, i) ^ a2_ld(y, i)
+        a2_st(s, i, r)
+        a2_st(s, 128 + i, r)
+        i = i + 1
+    mut vv: Pointer[u64] = s
+    unsafe:
+        vv = s.offset(256)
+    mut row = 0
+    while row < 8:
+        mut k = 0
+        while k < 16:
+            a2_st(vv, k, a2_ld(s, 128 + row * 16 + k))
+            k = k + 1
+        a2_p(vv)
+        k = 0
+        while k < 16:
+            a2_st(s, 128 + row * 16 + k, a2_ld(vv, k))
+            k = k + 1
+        row = row + 1
+    mut col = 0
+    while col < 8:
+        mut m = 0
+        while m < 8:
+            a2_st(vv, 2 * m, a2_ld(s, 128 + 16 * m + 2 * col))
+            a2_st(vv, 2 * m + 1, a2_ld(s, 128 + 16 * m + 2 * col + 1))
+            m = m + 1
+        a2_p(vv)
+        m = 0
+        while m < 8:
+            a2_st(s, 128 + 16 * m + 2 * col, a2_ld(vv, 2 * m))
+            a2_st(s, 128 + 16 * m + 2 * col + 1, a2_ld(vv, 2 * m + 1))
+            m = m + 1
+        col = col + 1
+    i = 0
+    if with_xor:
+        while i < 128:
+            a2_st(dst, i, a2_ld(dst, i) ^ a2_ld(s, i) ^ a2_ld(s, 128 + i))
+            i = i + 1
+    else:
+        while i < 128:
+            a2_st(dst, i, a2_ld(s, i) ^ a2_ld(s, 128 + i))
+            i = i + 1
+
+# ─── byte helpers ────────────────────────────────────────────────────────────
+
+def a2_le32(v: int) -> str:
+    mut p: Pointer[char] = CryptoBytes.zeroed(4)
+    CryptoBytes.put(p, 0, v & 255)
+    CryptoBytes.put(p, 1, (v >> 8) & 255)
+    CryptoBytes.put(p, 2, (v >> 16) & 255)
+    CryptoBytes.put(p, 3, (v >> 24) & 255)
+    return CryptoBytes.wrap(p, 4)
+
+# H' variable-length hash (RFC 9106 section 3.3): `outlen` bytes from `x`.
+def a2_hprime(x: str, outlen: int) -> str:
+    if outlen <= 64:
+        return Blake2b.hash(CryptoBytes.concat(a2_le32(outlen), x), outlen)
+    mut r = (outlen + 31) / 32 - 2
+    mut out: Pointer[char] = CryptoBytes.zeroed(outlen)
+    mut v = Blake2b.hash(CryptoBytes.concat(a2_le32(outlen), x), 64)
+    mut pos = 0
+    mut i = 0
+    while i < 32:
+        CryptoBytes.put(out, pos + i, CryptoBytes.at(v, i))
+        i = i + 1
+    pos = pos + 32
+    mut blk = 2
+    while blk <= r:
+        v = Blake2b.hash(v, 64)
+        i = 0
+        while i < 32:
+            CryptoBytes.put(out, pos + i, CryptoBytes.at(v, i))
+            i = i + 1
+        pos = pos + 32
+        blk = blk + 1
+    mut last = Blake2b.hash(v, outlen - 32 * r)
+    i = 0
+    while i < outlen - 32 * r:
+        CryptoBytes.put(out, pos + i, CryptoBytes.at(last, i))
+        i = i + 1
+    return CryptoBytes.wrap(out, outlen)
+
+# load 1024 little-endian bytes of `s` into 128 words at `dst`
+def a2_load_block(dst: Pointer[u64], s: str):
+    mut i = 0
+    while i < 128:
+        mut w: u64 = 0
+        mut k = 7
+        while k >= 0:
+            w = (w << 8) | (CryptoBytes.at(s, i * 8 + k) as u64)
+            k = k - 1
+        a2_st(dst, i, w)
+        i = i + 1
+
+# ─── the memory-filling state ────────────────────────────────────────────────
+
+class A2Ctx:
+    mem:        Pointer[u64]
+    aux:        Pointer[u64]      # zero(128) | input(128) | address(128) | scratch(272)
+    lanes:      int
+    lane_len:   int
+    seg_len:    int
+    mem_blocks: int
+    passes:     int
+    variant:    int               # 0 = argon2d, 1 = argon2i, 2 = argon2id
+
+extend A2Ctx:
+    def block(self, idx: int) -> Pointer[u64]:
+        unsafe:
+            return self.mem.offset(idx * 128)
+
+    def auxp(self, off: int) -> Pointer[u64]:
+        unsafe:
+            return self.aux.offset(off)
+
+    def next_addresses(self):
+        mut input = self.auxp(128)
+        a2_st(input, 6, a2_ld(input, 6) + (1 as u64))
+        a2_fill_block(self.auxp(256), self.auxp(0), input, self.auxp(384), false)
+        a2_fill_block(self.auxp(256), self.auxp(0), self.auxp(256), self.auxp(384), false)
+
+    def index_alpha(self, pas: int, slice: int, index: int, pr: u64, same_lane: bool) -> int:
+        mut area = 0
+        if pas == 0:
+            if slice == 0:
+                area = index - 1
+            elif same_lane:
+                area = slice * self.seg_len + index - 1
+            else:
+                area = slice * self.seg_len
+                if index == 0: area = area - 1
+        else:
+            if same_lane:
+                area = self.lane_len - self.seg_len + index - 1
+            else:
+                area = self.lane_len - self.seg_len
+                if index == 0: area = area - 1
+        mut rel: u64 = pr
+        rel = (rel * rel) >> 32
+        rel = (area as u64) - (1 as u64) - (((area as u64) * rel) >> 32)
+        mut start = 0
+        if pas != 0:
+            if slice == 3: start = 0
+            else: start = (slice + 1) * self.seg_len
+        return (start + (rel as int)) % self.lane_len
+
+    def fill_segment(self, pas: int, lane: int, slice: int):
+        mut indep = self.variant == 1 or (self.variant == 2 and pas == 0 and slice < 2)
+        mut start = 0
+        if indep:
+            mut i = 0
+            while i < 128:
+                a2_st(self.auxp(128), i, 0 as u64)
+                i = i + 1
+            a2_st(self.auxp(128), 0, pas as u64)
+            a2_st(self.auxp(128), 1, lane as u64)
+            a2_st(self.auxp(128), 2, slice as u64)
+            a2_st(self.auxp(128), 3, self.mem_blocks as u64)
+            a2_st(self.auxp(128), 4, self.passes as u64)
+            a2_st(self.auxp(128), 5, self.variant as u64)
+        if pas == 0 and slice == 0:
+            start = 2
+            if indep: self.next_addresses()
+        mut curr = lane * self.lane_len + slice * self.seg_len + start
+        mut prev = curr - 1
+        if curr % self.lane_len == 0: prev = curr + self.lane_len - 1
+        mut idx = start
+        mut with_xor = pas != 0
+        while idx < self.seg_len:
+            if curr % self.lane_len == 1: prev = curr - 1
+            mut rnd: u64 = 0
+            if indep:
+                if idx % 128 == 0: self.next_addresses()
+                rnd = a2_ld(self.auxp(256), idx % 128)
+            else:
+                rnd = a2_ld(self.block(prev), 0)
+            mut ref_lane = ((rnd >> 32) % (self.lanes as u64)) as int
+            if pas == 0 and slice == 0: ref_lane = lane
+            mut ref_idx = self.index_alpha(pas, slice, idx, rnd & (4294967295 as u64), ref_lane == lane)
+            a2_fill_block(self.block(curr), self.block(prev), self.block(ref_lane * self.lane_len + ref_idx), self.auxp(384), with_xor)
+            idx = idx + 1
+            curr = curr + 1
+            prev = prev + 1
+
+# ─── public API ──────────────────────────────────────────────────────────────
+
+# Decoded PHC string.
+pub class Argon2Params:
+    pub ok:      bool
+    pub err:     str
+    pub variant: str      # "argon2id" / "argon2i" / "argon2d"
+    pub m:       int      # KiB
+    pub t:       int
+    pub p:       int
+    pub salt:    str      # raw
+    pub hash:    str      # raw tag
+
+pub class Argon2:
+    _dummy: int
+
+def a2_variant_id(name: str) -> int:
+    if name == "argon2d": return 0
+    if name == "argon2i": return 1
+    if name == "argon2id": return 2
+    return -1
+
+def a2_variant_name(y: int) -> str:
+    if y == 0: return "argon2d"
+    if y == 1: return "argon2i"
+    return "argon2id"
+
+# Core: variant 0/1/2, all parameters explicit. Returns the raw tag.
+def a2_core(password: str, salt: str, secret: str, ad: str, t: int, m: int, p: int, taglen: int, y: int) throws str -> str:
+    if y < 0 or y > 2: raise "argon2: unknown variant"
+    if t < 1: raise "argon2: time cost must be >= 1"
+    if p < 1 or p > 16777215: raise "argon2: parallelism must be 1..16777215"
+    if m < 8 * p: raise "argon2: memory must be >= 8 * parallelism KiB"
+    if taglen < 4: raise "argon2: tag length must be >= 4"
+    if salt.len() < 8: raise "argon2: salt must be at least 8 bytes"
+    if m > 1073741824: raise "argon2: memory cost too large"
+    mut mem_blocks = 4 * p * (m / (4 * p))
+    mut lane_len = mem_blocks / p
+    mut seg_len = lane_len / 4
+
+    # H0 (64 bytes)
+    mut hh = Blake2bHasher.init(64, "")
+    hh.update(a2_le32(p))
+    hh.update(a2_le32(taglen))
+    hh.update(a2_le32(m))
+    hh.update(a2_le32(t))
+    hh.update(a2_le32(19))
+    hh.update(a2_le32(y))
+    hh.update(a2_le32(password.len()))
+    hh.update(password)
+    hh.update(a2_le32(salt.len()))
+    hh.update(salt)
+    hh.update(a2_le32(secret.len()))
+    hh.update(secret)
+    hh.update(a2_le32(ad.len()))
+    hh.update(ad)
+    mut h0 = hh.finalize()
+    hh.free()
+
+    mut ctx = A2Ctx()
+    ctx.mem = _tr_c_malloc(mem_blocks * 1024 + 8) as Pointer[u64]
+    _tr_c_memset(ctx.mem as Pointer[char], 0, mem_blocks * 1024)
+    ctx.aux = _tr_c_malloc(656 * 8 + 8) as Pointer[u64]
+    _tr_c_memset(ctx.aux as Pointer[char], 0, 656 * 8)
+    ctx.lanes = p
+    ctx.lane_len = lane_len
+    ctx.seg_len = seg_len
+    ctx.mem_blocks = mem_blocks
+    ctx.passes = t
+    ctx.variant = y
+
+    # first two blocks of every lane
+    mut lane = 0
+    while lane < p:
+        mut b0 = a2_hprime(CryptoBytes.concat(CryptoBytes.concat(h0, a2_le32(0)), a2_le32(lane)), 1024)
+        mut b1 = a2_hprime(CryptoBytes.concat(CryptoBytes.concat(h0, a2_le32(1)), a2_le32(lane)), 1024)
+        a2_load_block(ctx.block(lane * lane_len), b0)
+        a2_load_block(ctx.block(lane * lane_len + 1), b1)
+        lane = lane + 1
+
+    mut pas = 0
+    while pas < t:
+        mut slice = 0
+        while slice < 4:
+            lane = 0
+            while lane < p:
+                ctx.fill_segment(pas, lane, slice)
+                lane = lane + 1
+            slice = slice + 1
+        pas = pas + 1
+
+    # C = XOR of the last block of each lane; tag = H'(C)
+    mut cb: Pointer[char] = CryptoBytes.zeroed(1024)
+    mut cw = cb as Pointer[u64]
+    lane = 0
+    while lane < p:
+        mut last = ctx.block(lane * lane_len + lane_len - 1)
+        mut w = 0
+        while w < 128:
+            a2_st(cw, w, a2_ld(cw, w) ^ a2_ld(last, w))
+            w = w + 1
+        lane = lane + 1
+    # serialise the words little-endian (host-independent)
+    mut cbytes: Pointer[char] = CryptoBytes.zeroed(1024)
+    mut wi = 0
+    while wi < 128:
+        mut wv: u64 = a2_ld(cw, wi)
+        mut k = 0
+        while k < 8:
+            CryptoBytes.put(cbytes, wi * 8 + k, ((wv >> (8 * k)) & (255 as u64)) as int)
+            k = k + 1
+        wi = wi + 1
+    mut tag = a2_hprime(CryptoBytes.wrap(cbytes, 1024), taglen)
+
+    _tr_c_secure_zero(ctx.mem as Pointer[char], mem_blocks * 1024)
+    _tr_c_free(ctx.mem as Pointer[char])
+    _tr_c_secure_zero(ctx.aux as Pointer[char], 656 * 8)
+    _tr_c_free(ctx.aux as Pointer[char])
+    _tr_c_secure_zero(cb, 1024)
+    _tr_c_free(cb)
+    return tag
+
+# base64 without padding (the PHC string alphabet)
+def a2_b64_enc(s: str) -> str:
+    mut tbl = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+    mut tp = tbl as Pointer[char]
+    mut sb = StringBuilder.init(s.len() * 2 + 4)
+    mut n = s.len()
+    mut i = 0
+    while i < n:
+        mut b0 = CryptoBytes.at(s, i)
+        mut b1 = 0
+        mut b2 = 0
+        if i + 1 < n: b1 = CryptoBytes.at(s, i + 1)
+        if i + 2 < n: b2 = CryptoBytes.at(s, i + 2)
+        sb.append_char(CryptoBytes.get(tp, b0 >> 2))
+        sb.append_char(CryptoBytes.get(tp, ((b0 & 3) << 4) | (b1 >> 4)))
+        if i + 1 < n: sb.append_char(CryptoBytes.get(tp, ((b1 & 15) << 2) | (b2 >> 6)))
+        if i + 2 < n: sb.append_char(CryptoBytes.get(tp, b2 & 63))
+        i = i + 3
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+def a2_b64_val(c: int) -> int:
+    if c >= 65 and c <= 90: return c - 65
+    if c >= 97 and c <= 122: return c - 71
+    if c >= 48 and c <= 57: return c + 4
+    if c == 43: return 62
+    if c == 47: return 63
+    return -1
+
+# true if `s` is well-formed unpadded base64 (alphabet only, length % 4 != 1)
+def a2_b64_valid(s: str) -> bool:
+    if s.len() % 4 == 1: return false
+    mut i = 0
+    while i < s.len():
+        if a2_b64_val(CryptoBytes.at(s, i)) < 0: return false
+        i = i + 1
+    return true
+
+# decode unpadded base64 (call a2_b64_valid first)
+def a2_b64_dec(s: str) -> str:
+    mut n = s.len()
+    mut outn = (n * 3) / 4
+    mut out: Pointer[char] = CryptoBytes.zeroed(outn)
+    mut o = 0
+    mut acc = 0
+    mut bits = 0
+    mut i = 0
+    while i < n:
+        mut v = a2_b64_val(CryptoBytes.at(s, i))
+        acc = (acc << 6) | v
+        bits = bits + 6
+        if bits >= 8:
+            bits = bits - 8
+            if o < outn:
+                CryptoBytes.put(out, o, (acc >> bits) & 255)
+                o = o + 1
+            acc = acc & ((1 << bits) - 1)
+        i = i + 1
+    return CryptoBytes.wrap(out, outn)
+
+# number of fields of `s` split at byte `sep` (empty string = 1 field)
+def a2_nfields(s: str, sep: int) -> int:
+    mut n = 1
+    mut i = 0
+    while i < s.len():
+        if CryptoBytes.at(s, i) == sep: n = n + 1
+        i = i + 1
+    return n
+
+# the k-th (0-based) field of `s` split at byte `sep`; "" if there is no such field
+def a2_field(s: str, sep: int, k: int) -> str:
+    mut idx = 0
+    mut start = 0
+    mut i = 0
+    while i <= s.len():
+        if i == s.len() or CryptoBytes.at(s, i) == sep:
+            if idx == k: return CryptoBytes.slice(s, start, i - start)
+            idx = idx + 1
+            start = i + 1
+        i = i + 1
+    return ""
+
+# parse a non-negative decimal; -1 if malformed
+def a2_atoi(s: str) -> int:
+    if s.len() == 0 or s.len() > 12: return -1
+    mut v = 0
+    mut i = 0
+    while i < s.len():
+        mut c = CryptoBytes.at(s, i)
+        if c < 48 or c > 57: return -1
+        v = v * 10 + (c - 48)
+        i = i + 1
+    return v
+
+def a2_bad(msg: str) -> Argon2Params:
+    mut r = Argon2Params()
+    r.ok = false
+    r.err = msg
+    r.variant = ""
+    r.m = 0
+    r.t = 0
+    r.p = 0
+    r.salt = ""
+    r.hash = ""
+    return r
+
+extend Argon2:
+    # Raw tag for an explicit variant ("argon2id" / "argon2i" / "argon2d"). Errors are
+    # reported as strings (invalid parameters). `secret` / `ad` are optional ("").
+    pub def hash_raw(variant: str, password: str, salt: str, t: int, m: int, p: int, taglen: int, secret: str, ad: str) throws str -> str:
+        return a2_core(password, salt, secret, ad, t, m, p, taglen, a2_variant_id(variant))?
+
+    pub def id(password: str, salt: str, t: int, m: int, p: int, taglen: int) throws str -> str:
+        return a2_core(password, salt, "", "", t, m, p, taglen, 2)?
+
+    pub def i(password: str, salt: str, t: int, m: int, p: int, taglen: int) throws str -> str:
+        return a2_core(password, salt, "", "", t, m, p, taglen, 1)?
+
+    pub def d(password: str, salt: str, t: int, m: int, p: int, taglen: int) throws str -> str:
+        return a2_core(password, salt, "", "", t, m, p, taglen, 0)?
+
+    # PHC string  $argon2id$v=19$m=..,t=..,p=..$<salt b64>$<tag b64>  for the given parameters
+    # and salt. The tag length is the length of `tag`.
+    pub def encode(variant: str, m: int, t: int, p: int, salt: str, tag: str) -> str:
+        mut sb = StringBuilder.init(160)
+        sb.append("$")
+        sb.append(variant)
+        sb.append("$v=19$m=")
+        sb.append_int(m)
+        sb.append(",t=")
+        sb.append_int(t)
+        sb.append(",p=")
+        sb.append_int(p)
+        sb.append("$")
+        sb.append(a2_b64_enc(salt))
+        sb.append("$")
+        sb.append(a2_b64_enc(tag))
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    # Hash a password into a self-describing PHC string with an explicit variant, cost
+    # parameters (m in KiB), random 16-byte salt and 32-byte tag. "" on invalid parameters.
+    pub def hash_password_with(password: str, variant: str, t: int, m: int, p: int) -> str:
+        mut salt = CryptoBytes.random(16)
+        mut r: Result[str, str] = a2_core_result(password, salt, t, m, p, 32, a2_variant_id(variant))
+        if r.is_err: return ""
+        return Argon2.encode(variant, m, t, p, salt, r.ok)
+
+    # Argon2id, m = 19456 KiB, t = 2, p = 1 (OWASP minimum recommendation).
+    pub def hash_password(password: str) -> str:
+        return Argon2.hash_password_with(password, "argon2id", 2, 19456, 1)
+
+    # Parse a PHC string. Check `.ok` / `.err` on the result.
+    pub def decode(encoded: str) -> Argon2Params:
+        if a2_nfields(encoded, 36) != 6: return a2_bad("argon2: malformed hash (expected 5 fields)")   # '$'
+        if a2_field(encoded, 36, 0).len() != 0: return a2_bad("argon2: hash must start with '$'")
+        mut y = a2_variant_id(a2_field(encoded, 36, 1))
+        if y < 0: return a2_bad("argon2: unknown variant")
+        if a2_field(encoded, 36, 2) != "v=19": return a2_bad("argon2: unsupported version (only v=19)")
+        mut kv = a2_field(encoded, 36, 3)
+        if a2_nfields(kv, 44) != 3: return a2_bad("argon2: malformed parameters")          # ','
+        mut f0 = a2_field(kv, 44, 0)
+        mut f1 = a2_field(kv, 44, 1)
+        mut f2 = a2_field(kv, 44, 2)
+        if f0.len() < 3 or f1.len() < 3 or f2.len() < 3: return a2_bad("argon2: malformed parameters")
+        if CryptoBytes.slice(f0, 0, 2) != "m=" or CryptoBytes.slice(f1, 0, 2) != "t=" or CryptoBytes.slice(f2, 0, 2) != "p=":
+            return a2_bad("argon2: parameters must be m=,t=,p=")
+        mut m = a2_atoi(CryptoBytes.slice(f0, 2, f0.len() - 2))
+        mut t = a2_atoi(CryptoBytes.slice(f1, 2, f1.len() - 2))
+        mut p = a2_atoi(CryptoBytes.slice(f2, 2, f2.len() - 2))
+        if m < 0 or t < 0 or p < 0: return a2_bad("argon2: malformed numeric parameter")
+        mut salt_b64 = a2_field(encoded, 36, 4)
+        mut tag_b64 = a2_field(encoded, 36, 5)
+        if not a2_b64_valid(salt_b64): return a2_bad("argon2: bad salt encoding")
+        if not a2_b64_valid(tag_b64): return a2_bad("argon2: bad hash encoding")
+        mut r = Argon2Params()
+        r.ok = true
+        r.err = ""
+        r.variant = a2_variant_name(y)
+        r.m = m
+        r.t = t
+        r.p = p
+        r.salt = a2_b64_dec(salt_b64)
+        r.hash = a2_b64_dec(tag_b64)
+        return r
+
+    # Verify `password` against a PHC string (any variant, any parameters it records).
+    # Constant-time tag comparison. Malformed strings and wrong passwords give false.
+    pub def verify(encoded: str, password: str) -> bool:
+        mut pr = Argon2.decode(encoded)
+        if not pr.ok: return false
+        if pr.hash.len() < 4: return false
+        mut res: Result[str, str] = a2_core_result(password, pr.salt, pr.t, pr.m, pr.p, pr.hash.len(), a2_variant_id(pr.variant))
+        if res.is_err: return false
+        return CryptoBytes.ct_eq(res.ok, pr.hash)
+
+    # True if the hash was made with weaker parameters than the given minimums (so the
+    # application should rehash after a successful login).
+    pub def needs_rehash(encoded: str, t: int, m: int, p: int) -> bool:
+        mut pr = Argon2.decode(encoded)
+        if not pr.ok: return true
+        if pr.variant != "argon2id": return true
+        return pr.t < t or pr.m < m or pr.p < p
+
+# non-throwing wrapper: `throws` functions are consumed through Result
+def a2_core_result(password: str, salt: str, t: int, m: int, p: int, taglen: int, y: int) -> Result[str, str]:
+    mut r: Result[str, str] = a2_core(password, salt, "", "", t, m, p, taglen, y)
+    return r

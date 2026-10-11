@@ -1,0 +1,128 @@
+# tests/lang/116_argon2.tr
+# std.crypto.argon2 (RFC 9106): the three section-5 test vectors (t=3, m=32 KiB, p=4, with
+# secret and associated data), then cases generated with `openssl kdf ARGON2D/I/ID`
+# (OpenSSL 3.5) covering parameter rounding, long tags (H' > 64 bytes), multi-lane
+# reference blocks, address-block regeneration (> 128 blocks per segment), NUL bytes,
+# empty inputs, plus the PHC string API (hash/verify/decode/needs_rehash) and error handling.
+
+from std.test import TestRunner
+from std.crypto.argon2 import Argon2, Argon2Params
+from std.crypto.bytes import CryptoBytes
+from std.encoding.hex import Hex
+
+# raw tag as hex, or "ERR:..." on failure
+def raw(variant: str, pw: str, salt: str, t: int, m: int, p: int, n: int, secret: str, ad: str) -> str:
+    mut r: Result[str, str] = Argon2.hash_raw(variant, pw, salt, t, m, p, n, secret, ad)
+    if r.is_err: return f"ERR:{r.err}"
+    return Hex.encode(r.ok)
+
+def rep(b: int, n: int) -> str:
+    mut p: Pointer[char] = CryptoBytes.zeroed(n)
+    mut i = 0
+    while i < n:
+        CryptoBytes.put(p, i, b)
+        i = i + 1
+    return CryptoBytes.wrap(p, n)
+
+def main():
+    mut t = TestRunner.init("116_argon2")
+    t.section("RFC 9106 section 5 test vectors")
+    mut rpw = rep(1, 32)
+    mut rsalt = rep(2, 16)
+    mut rsec = rep(3, 8)
+    mut rad = rep(4, 12)
+
+    t.assert_eq_str(raw("argon2d", rpw, rsalt, 3, 32, 4, 32, rsec, rad), "512b391b6f1162975371d30919734294f868e3be3984f3c1a13a4db9fabe4acb", "RFC 9106 argon2d")
+    t.assert_eq_str(raw("argon2i", rpw, rsalt, 3, 32, 4, 32, rsec, rad), "c814d9d1dc7f37aa13f0d77f2494bda1c8de6b016dd388d29952a4c4672b6ce8", "RFC 9106 argon2i")
+    t.assert_eq_str(raw("argon2id", rpw, rsalt, 3, 32, 4, 32, rsec, rad), "0d640df58d78766c08c037a34a8b53c9d01ef0452d75b65eb52520e96b01e659", "RFC 9106 argon2id")
+    t.section("cross-checked against OpenSSL")
+    t.assert_eq_str(raw("argon2id", Hex.decode("70617373776f7264"), Hex.decode("736f6d6573616c74"), 2, 64, 1, 32, "", ""), "16a1a498734609dd01456da406de9f3d9da93e6c86c300a12fc1465214ce4922", "pw/salt t2 m64 p1 (argon2id)")
+    t.assert_eq_str(raw("argon2i", Hex.decode("70617373776f7264"), Hex.decode("736f6d6573616c74"), 2, 64, 1, 32, "", ""), "989da65458e8be1440ae555d0b3c8ac3a6584e0d2290b9dcc915a68a71e41c1e", "pw/salt t2 m64 p1 (argon2i)")
+    t.assert_eq_str(raw("argon2d", Hex.decode("70617373776f7264"), Hex.decode("736f6d6573616c74"), 2, 64, 1, 32, "", ""), "f920d95538648465abeeba6ae06ea532ed26df314aff60150237d8fe116f62cd", "pw/salt t2 m64 p1 (argon2d)")
+    t.assert_eq_str(raw("argon2id", Hex.decode("707732"), Hex.decode("73616c7473616c74"), 1, 37, 2, 16, "", ""), "3b2609e7e255708ff00d95ef7019268a", "p2 m37 (rounded to 32) t1 len16 (argon2id)")
+    t.assert_eq_str(raw("argon2d", Hex.decode("616e6f746865722070617373776f7264"), Hex.decode("30313233343536373839616263646566"), 2, 100, 3, 4, "", ""), "e594f3a9", "p3 m100 (rounded to 96) t2 len4 (argon2d)")
+    t.assert_eq_str(raw("argon2id", Hex.decode("7038"), Hex.decode("73616c742d666f722d7038"), 1, 64, 8, 32, "", ""), "b3b2c742191078f9545bea6ea411e4038ec36145bc3f86122d0bedca0b6647f2", "p8 m64 t1 (argon2id)")
+    t.assert_eq_str(raw("argon2id", Hex.decode("7461676c656e"), Hex.decode("7461676c656e2d73616c742d313233"), 1, 32, 1, 63, "", ""), "a5c01eab713468eba1814c36de273fe867e9dc5637d089f605d9a7b8fd3d8da5e2f34ab83a897a6e39e327684d994bd4528694c73392f23fbf5b084af80616", "taglen 63 (argon2id)")
+    t.assert_eq_str(raw("argon2id", Hex.decode("7461676c656e"), Hex.decode("7461676c656e2d73616c742d313233"), 1, 32, 1, 64, "", ""), "b6ef1fb363c63a3316ba1e076a774b4627af03cfbd1faabdfc3c74ec3dd3d0e053fcde0bc17dd02308381ac07722e52e01c291dff17cf489a2b7ead336b11dfd", "taglen 64 (argon2id)")
+    t.assert_eq_str(raw("argon2id", Hex.decode("7461676c656e"), Hex.decode("7461676c656e2d73616c742d313233"), 1, 32, 1, 65, "", ""), "0e50bfb216f8ccd61e413fc3ae0a5b0e9d6ca29175411016876548e25944adb76158496fac357b4ea0f92175c04c964dafd203e3db03fbd8a71c4090c9ff589c7a", "taglen 65 (argon2id)")
+    t.assert_eq_str(raw("argon2id", Hex.decode("7461676c656e"), Hex.decode("7461676c656e2d73616c742d313233"), 1, 32, 1, 100, "", ""), "6ab508dface313ac1b5c650324a826a214268cdd5b3613c617eb3f62774cd2c9d4854c7cd193be9ef3e5b01d42764dd55100d2626dcb87eb7a6866aea252a930424a12552f93329206eff18b3e171ae8792ed9132e6d1cb411e463f194a32e6dcfbeac3c", "taglen 100 (argon2id)")
+    t.assert_eq_str(raw("argon2id", Hex.decode("7461676c656e"), Hex.decode("7461676c656e2d73616c742d313233"), 1, 32, 1, 128, "", ""), "a017aad8dd1ca9646aa917995d7d07592f38d7c4621a8c168f3b1e7fa669f1af7acaf9b5bd5c6d0ab2917a243c68c5a950b691fd028d696b04dbc23a52848d8a226d6ac5c1435ea9d6c41fdb2e02d35458f183f729c3a04479db23b9eb92d74c193598d99478c500cf9aae5e23c13260451a57099b00cf696aca6a907fdf3ab6", "taglen 128 (argon2id)")
+    t.assert_eq_str(raw("argon2id", Hex.decode("7461676c656e"), Hex.decode("7461676c656e2d73616c742d313233"), 1, 32, 1, 200, "", ""), "58f45bd719e03eaa27b4a37bf3946222bb4ca9fb9e4b87848924f8c46248d7ca9b1b1d1f05d03483c32c7efff099f0a8f2f2cf1379d70049db8ce65662d509e637af64070493c7742c5bd1f3962eb8cc7dd4eaf22ec9ae3e2b3bfbd64580dbdcbedbb7cc8645595832be89b0ff2a6268cfefd709e777f8c6b9234c49a96cc4f7434adfe8fe822acff67222b464a8774e7a149222bd825b71fae2063fdad439584c3daed4d7466e63a4dec561efb43ff2d437f143e615bd2eee33fd3185c1e87d55f02ca92891ee3c", "taglen 200 (argon2id)")
+    t.assert_eq_str(raw("argon2i", Hex.decode("61646472"), Hex.decode("616464722d73616c742d78797a"), 2, 600, 1, 32, "", ""), "dc904edd740baaf5eda5c2d5edcb7b4d29e21030e7cd87941b693b9678a9004e", "m600 t2 (address block regeneration) (argon2i)")
+    t.assert_eq_str(raw("argon2id", Hex.decode("6164647232"), Hex.decode("616464722d73616c742d78797a"), 1, 1100, 1, 32, "", ""), "699de960a733944bcafe7b67eac1c7e9fb6c2b038d8082a7733c6a4c43b4de0b", "m1100 t1 (argon2id indep slices > 128) (argon2id)")
+    t.assert_eq_str(raw("argon2i", Hex.decode("6164647233"), Hex.decode("616464722d73616c742d78797a"), 3, 1100, 2, 40, "", ""), "fc17b777e59e4018da5d2d3ad2b43c6704e489b493517cad4daa2054d603e2065773aed36d588c60", "m1100 t3 p2 argon2i (argon2i)")
+    t.assert_eq_str(raw("argon2id", "", Hex.decode("73616c7473616c74"), 1, 16, 1, 32, "", ""), "c1370c9ef52758f3f640fbae5552fc7960f1f1a90f1b7640115b3a77187ef36a", "empty password (argon2id)")
+    t.assert_eq_str(raw("argon2id", Hex.decode("00ff00807077"), Hex.decode("0001020304050607"), 2, 48, 2, 32, "", ""), "966abd17d914d37551371d28c90dd9c8abde3df2c40ce6f621ad830bc82a06bc", "binary password+salt with NULs (argon2id)")
+    t.assert_eq_str(raw("argon2id", Hex.decode("7077"), Hex.decode("73616c7473616c74"), 1, 16, 1, 32, Hex.decode("706570706572"), ""), "b20b1a6b8758db081de7fedb3cb9d49ae5a8c62709324d3f49a3eb53835a717f", "secret only (argon2id)")
+    t.assert_eq_str(raw("argon2i", Hex.decode("7077"), Hex.decode("73616c7473616c74"), 1, 16, 1, 32, "", Hex.decode("6173736f636961746564")), "c8a08a130e101fc3b6a756c9038ed1f79553aeb5bf4347d4117f1c6505689f33", "ad only (argon2i)")
+    t.assert_eq_str(raw("argon2d", Hex.decode("7434"), Hex.decode("73616c7473616c74"), 4, 16, 1, 32, "", ""), "52c7a82f361bcb84920b805f495fa9bc45aeb04520f517a84110c198da2d7e61", "t4 m16 p1 (argon2d)")
+    t.section("convenience raw API")
+    mut a1: Result[str, str] = Argon2.id("password", "somesalt", 2, 64, 1, 32)
+    t.assert_true(a1.is_ok, "Argon2.id ok")
+    t.assert_eq_str(Hex.encode(a1.ok), raw("argon2id", "password", "somesalt", 2, 64, 1, 32, "", ""), "Argon2.id == hash_raw")
+    mut a2: Result[str, str] = Argon2.i("password", "somesalt", 2, 64, 1, 32)
+    mut a3: Result[str, str] = Argon2.d("password", "somesalt", 2, 64, 1, 32)
+    t.assert_eq_str(Hex.encode(a2.ok), raw("argon2i", "password", "somesalt", 2, 64, 1, 32, "", ""), "Argon2.i == hash_raw")
+    t.assert_eq_str(Hex.encode(a3.ok), raw("argon2d", "password", "somesalt", 2, 64, 1, 32, "", ""), "Argon2.d == hash_raw")
+    t.assert_true(Hex.encode(a1.ok) != Hex.encode(a2.ok), "variants differ")
+    t.assert_true(raw("argon2id", "password", "somesalt", 2, 64, 1, 32, "", "") != raw("argon2id", "Password", "somesalt", 2, 64, 1, 32, "", ""), "password case matters")
+    t.assert_true(raw("argon2id", "password", "somesalt", 2, 64, 1, 32, "", "") != raw("argon2id", "password", "somesalt", 3, 64, 1, 32, "", ""), "time cost changes output")
+
+    t.section("parameter validation")
+    t.assert_true(raw("argon2id", "pw", "saltsalt", 0, 64, 1, 32, "", "").starts_with("ERR:"), "t = 0 rejected")
+    t.assert_true(raw("argon2id", "pw", "saltsalt", 1, 7, 1, 32, "", "").starts_with("ERR:"), "m < 8p rejected")
+    t.assert_true(raw("argon2id", "pw", "saltsalt", 1, 63, 8, 32, "", "").starts_with("ERR:"), "m < 8p (p=8) rejected")
+    t.assert_true(raw("argon2id", "pw", "saltsalt", 1, 64, 0, 32, "", "").starts_with("ERR:"), "p = 0 rejected")
+    t.assert_true(raw("argon2id", "pw", "saltsalt", 1, 64, 1, 3, "", "").starts_with("ERR:"), "taglen < 4 rejected")
+    t.assert_true(raw("argon2id", "pw", "short", 1, 64, 1, 32, "", "").starts_with("ERR:"), "salt < 8 bytes rejected")
+    t.assert_true(raw("argon3", "pw", "saltsalt", 1, 64, 1, 32, "", "").starts_with("ERR:"), "unknown variant rejected")
+
+    t.section("PHC string: encode / decode")
+    mut tag: Result[str, str] = Argon2.id("password", "somesalt", 2, 64, 1, 32)
+    mut enc = Argon2.encode("argon2id", 64, 2, 1, "somesalt", tag.ok)
+    t.assert_true(enc.starts_with("$argon2id$v=19$m=64,t=2,p=1$"), "encoded prefix")
+    mut dec = Argon2.decode(enc)
+    t.assert_true(dec.ok, "decode ok")
+    t.assert_eq_str(dec.variant, "argon2id", "decoded variant")
+    t.assert_eq_int(dec.m, 64, "decoded m")
+    t.assert_eq_int(dec.t, 2, "decoded t")
+    t.assert_eq_int(dec.p, 1, "decoded p")
+    t.assert_eq_str(dec.salt, "somesalt", "decoded salt")
+    t.assert_eq_str(Hex.encode(dec.hash), Hex.encode(tag.ok), "decoded tag")
+    # the well-known reference-implementation example string
+    mut known = Argon2.decode("$argon2i$v=19$m=65536,t=2,p=4$c29tZXNhbHQ$RdescudvJCsgt3ub+b+dWRWJTmaaJObG")
+    t.assert_true(known.ok, "reference-implementation string decodes")
+    t.assert_eq_str(known.salt, "somesalt", "its salt")
+    t.assert_eq_int(known.hash.len(), 24, "its tag length")
+    t.assert_eq_int(known.p, 4, "its parallelism")
+    t.assert_true(not Argon2.decode("").ok, "empty string rejected")
+    t.assert_true(not Argon2.decode("$argon2id$v=19$m=64,t=2,p=1$c29tZXNhbHQ").ok, "missing hash field")
+    t.assert_true(not Argon2.decode("$argon2x$v=19$m=64,t=2,p=1$c29tZXNhbHQ$AAAAAAAA").ok, "unknown variant")
+    t.assert_true(not Argon2.decode("$argon2id$v=16$m=64,t=2,p=1$c29tZXNhbHQ$AAAAAAAA").ok, "v=16 rejected")
+    t.assert_true(not Argon2.decode("$argon2id$v=19$m=64,p=1,t=2$c29tZXNhbHQ$AAAAAAAA").ok, "parameter order enforced")
+    t.assert_true(not Argon2.decode("$argon2id$v=19$m=x,t=2,p=1$c29tZXNhbHQ$AAAAAAAA").ok, "non-numeric parameter")
+    t.assert_true(not Argon2.decode("$argon2id$v=19$m=64,t=2,p=1$c29t!XNhbHQ$AAAAAAAA").ok, "bad base64 salt")
+
+    t.section("PHC string: hash_password / verify")
+    mut stored = Argon2.hash_password_with("hunter2", "argon2id", 1, 64, 1)
+    t.assert_true(stored.starts_with("$argon2id$v=19$m=64,t=1,p=1$"), "hash_password_with prefix")
+    t.assert_true(Argon2.verify(stored, "hunter2"), "right password verifies")
+    t.assert_true(not Argon2.verify(stored, "hunter3"), "wrong password fails")
+    t.assert_true(not Argon2.verify(stored, ""), "empty password fails")
+    t.assert_true(not Argon2.verify("garbage", "hunter2"), "garbage hash fails closed")
+    t.assert_true(not Argon2.verify("", "hunter2"), "empty hash fails closed")
+    mut stored2 = Argon2.hash_password_with("hunter2", "argon2id", 1, 64, 1)
+    t.assert_true(stored != stored2, "fresh random salt each time")
+    t.assert_true(Argon2.verify(stored2, "hunter2"), "second hash verifies")
+    mut sd = Argon2.hash_password_with("pw", "argon2d", 1, 32, 1)
+    t.assert_true(Argon2.verify(sd, "pw"), "argon2d string verifies")
+    mut si = Argon2.hash_password_with("pw", "argon2i", 1, 32, 2)
+    t.assert_true(Argon2.verify(si, "pw"), "argon2i p=2 string verifies")
+    t.assert_true(Argon2.verify("$argon2i$v=19$m=65536,t=2,p=4$c29tZXNhbHQ$RdescudvJCsgt3ub+b+dWRWJTmaaJObG", "password"), "reference-implementation hash of 'password' verifies (m=65536, t=2, p=4)")
+    t.assert_true(not Argon2.verify("$argon2i$v=19$m=65536,t=2,p=4$c29tZXNhbHQ$RdescudvJCsgt3ub+b+dWRWJTmaaJObG", "passwore"), "reference-implementation hash rejects a near-miss")
+    t.assert_eq_str(Argon2.hash_password_with("pw", "argon2id", 0, 64, 1), "", "invalid parameters give empty")
+    t.assert_true(Argon2.needs_rehash(stored, 2, 64, 1), "weaker t -> needs rehash")
+    t.assert_true(Argon2.needs_rehash(stored, 1, 128, 1), "weaker m -> needs rehash")
+    t.assert_true(not Argon2.needs_rehash(stored, 1, 64, 1), "same parameters -> no rehash")
+    t.assert_true(Argon2.needs_rehash(sd, 1, 32, 1), "argon2d -> needs rehash to argon2id")
+    t.summary()

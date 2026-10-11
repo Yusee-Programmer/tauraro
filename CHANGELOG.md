@@ -29,6 +29,10 @@ added here as each phase lands.
 - `from` stays a reserved word (it starts import statements and lifetime clauses).
 
 ### Added
+- **`std.crypto.argon2`** — Argon2d / Argon2i / Argon2id (RFC 9106) on top of BLAKE2b:
+  configurable time/memory/parallelism, optional secret and associated data, PHC-string
+  `hash_password` / `verify` / `needs_rehash`; RFC 9106 vectors plus OpenSSL cross-checks
+  (`tests/lang/116_argon2.tr`).
 - **`std.crypto.otp`** — HOTP (RFC 4226) / TOTP (RFC 6238) with SHA-1/256/512, windowed
   constant-time verification, Base32 secret helpers and `otpauth://` URIs; plus the
   binary-safe `Hmac.compute` / `verify` (SHA-1/256/384/512) it is built on

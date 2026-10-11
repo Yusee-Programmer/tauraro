@@ -654,3 +654,42 @@ bignum code — **not constant-time**; do not use it where an attacker can time 
 (signing, ECDH with a long-lived key). Deterministic nonces remove the bad-RNG failure mode, not side
 channels. Only P-256 and P-384 (prime field, `a = -3`, cofactor 1); no P-521, secp256k1 or Ed448.
 About 10 ms per P-256 scalar multiplication (a verify costs two).
+---
+
+## std.crypto.argon2 — Argon2d / Argon2i / Argon2id (RFC 9106)
+
+```tauraro
+from std.crypto.argon2 import Argon2, Argon2Params
+```
+
+The memory-hard password-hashing function (`std.crypto.kdf` only offers PBKDF2). Pure Tauraro
+on top of `std.crypto.blake2`. Argon2id is the variant to use for password storage.
+
+| Method | Signature | Description |
+|---|---|---|
+| `Argon2.hash_password` | `(password: str) -> str` | PHC string `$argon2id$v=19$m=19456,t=2,p=1$<salt>$<tag>` with a random 16-byte salt (OWASP-minimum parameters). |
+| `Argon2.hash_password_with` | `(password, variant, t, m, p) -> str` | Same with chosen variant (`"argon2id"`/`"argon2i"`/`"argon2d"`) and costs (`m` in KiB); `""` on invalid parameters. |
+| `Argon2.verify` | `(encoded: str, password: str) -> bool` | Verifies against any PHC string (parameters come from the string); constant-time tag compare; malformed input is `false`. |
+| `Argon2.needs_rehash` | `(encoded, t, m, p) -> bool` | True if the stored hash is weaker than the given minimums or not Argon2id. |
+| `Argon2.hash_raw` | `(variant, password, salt, t, m, p, taglen, secret, ad) throws str -> str` | Raw tag with every RFC parameter (optional `secret` / `ad`, `""` if unused). |
+| `Argon2.id` / `i` / `d` | `(password, salt, t, m, p, taglen) throws str -> str` | Raw tag, no secret/ad. |
+| `Argon2.encode` / `decode` | | Build / parse PHC strings (`Argon2Params`: `ok`, `err`, `variant`, `m`, `t`, `p`, `salt`, `hash`). |
+
+```tauraro
+mut stored = Argon2.hash_password("correct horse battery staple")   # store this
+if Argon2.verify(stored, attempt):
+    if Argon2.needs_rehash(stored, 3, 65536, 1):
+        stored = Argon2.hash_password_with(attempt, "argon2id", 3, 65536, 1)
+```
+
+Constraints (RFC 9106): `t >= 1`, `m >= 8 * p` KiB (rounded down to a multiple of `4 * p`),
+`p >= 1`, tag >= 4 bytes, salt >= 8 bytes (use 16 random bytes). Only Argon2 version 19 (0x13)
+is implemented; `v=16` strings are rejected. Lanes are computed one after another on a single
+thread (the output is identical to a parallel run), at roughly 400 MiB/s of memory traffic per
+core. The memory block is wiped before it is freed; the password `str` itself cannot be.
+
+Verified against the three RFC 9106 section 5 vectors and ~25 further cases generated with
+`openssl kdf ARGON2D/I/ID` (rounding, long tags, multi-lane, address-block regeneration, NULs,
+empty inputs), plus the reference-implementation example hash (`tests/lang/116_argon2.tr`).
+bcrypt is not provided (use Argon2id; it is the stronger, modern choice).
+

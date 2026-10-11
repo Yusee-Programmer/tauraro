@@ -18,6 +18,7 @@
 #   from std.crypto.rsa import Rsa, RsaPublicKey, RsaPrivateKey
 #   from std.crypto.otp import Hotp, Totp, Otp      # HOTP / TOTP one-time passwords
 #   from std.crypto.ecdsa import Ecdsa, EcCurve, EcPublicKey, EcPrivateKey
+#   from std.crypto.argon2 import Argon2, Argon2Params   # Argon2d/i/id password hashing
 
 from std.crypto.hash import Hash
 from std.crypto.hmac import Hmac
@@ -36,3 +37,4 @@ from std.crypto.bn import Mont
 from std.crypto.rsa import Rsa, RsaPublicKey, RsaPrivateKey
 from std.crypto.otp import Hotp, Totp, Otp
 from std.crypto.ecdsa import Ecdsa, EcCurve, EcPublicKey, EcPrivateKey
+from std.crypto.argon2 import Argon2, Argon2Params
