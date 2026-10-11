@@ -30,7 +30,7 @@ building libraries with `taupkg`)
 | [`std.sys`](sys.md) | Environment variables, file system, process control, timing, OS info, platform detection, graceful-shutdown signal handling, `.env` file loading (`Dotenv`), cron-expression parsing and next/previous fire times (`Cron`), memory-mapped files (`MemMap`), named shared memory + cross-process lock (`Shm`) |
 | [`std.term`](term.md) | Terminal UI: ANSI SGR styling/colors (`Term`/`Style`/`Color`), cursor control, terminal size query, progress bar and spinner |
 | [`std.test`](test.md) | Lightweight unit-testing framework |
-| [`std.text`](text.md) | Text processing: Myers line diff + unified_diff rendering, Levenshtein edit distance/similarity, word-wrap/indent |
+| [`std.text`](text.md) | Text processing: shell-style word splitting (`Shlex`), Myers line diff + unified_diff rendering, Levenshtein edit distance/similarity, word-wrap/indent |
 | [`std.unicode`](unicode.md) | UTF-8 codepoint iteration, slicing, case conversion, Unicode classification |
 
 ## Import conventions

@@ -90,6 +90,9 @@ added here as each phase lands.
   POSIX FIFOs (`Fifo`), and `IpcServer`/`IpcChannel` length-prefixed message channels over Unix domain
   sockets (Windows named pipes compile-checked), with timeouts, size limits and stale-socket recovery.
   Tested by `tests/lang/142_pipe.tr`, `143_ipc.tr`.
+- **`std.text.shlex`: shell-style word splitting.** `Shlex.split`/`parse`/`split_comments`, `quote`/`join`
+  (POSIX) and `split_windows`/`quote_windows`/`join_windows` (Windows command-line rules). Tested by
+  `tests/lang/148_shlex.tr`.
 - **`std.async.retry`** — `RetryPolicy` (max attempts, fixed/exponential backoff
   with cap, optional jitter, retry-on predicate, overall deadline, per-attempt
   timeout), `call_with_timeout` / `call_bool_with_timeout`, and a thread-safe

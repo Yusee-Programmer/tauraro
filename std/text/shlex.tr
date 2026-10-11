@@ -1,0 +1,338 @@
+# std.text.shlex — shell-style word splitting, quoting and joining.
+#
+#   from std.text.shlex import Shlex
+#
+#   mut args = Shlex.split("git commit -m 'fix: the \"bug\"' --amend")
+#   # ["git", "commit", "-m", "fix: the \"bug\"", "--amend"]
+#
+#   mut line = Shlex.join(args)        # quotes only where needed; round-trips
+#   mut r = Shlex.parse("echo 'oops")  # strict: r.ok is false, r.error says why
+#
+#   Shlex.quote("a b")                 # 'a b'
+#   Shlex.quote("it's")                # 'it'"'"'s'
+#
+#   # Windows command lines (the CommandLineToArgvW / MSVC CRT rules)
+#   Shlex.split_windows("prog.exe \"C:\\Program Files\\x\" a\\\"b")
+#   Shlex.join_windows(["prog.exe", "C:\\Program Files\\x"])
+#
+# POSIX rules (split / parse / split_comments / quote / join), as in sh (Python's
+# shlex.split differs slightly: it also unescapes only \" and \\ inside double
+# quotes and has no line continuation):
+#   * whitespace (space, tab, newline, CR) separates words;
+#   * 'single quotes' keep everything literally (no escapes inside);
+#   * "double quotes" keep everything except that a backslash escapes only
+#     one of  $ ` " \ newline  — before any other character the backslash is
+#     kept; a backslash-newline pair is removed (line continuation);
+#   * outside quotes a backslash makes the next character literal and a
+#     backslash-newline pair is removed;
+#   * adjacent quoted and unquoted pieces glue into ONE word ("a"'b'c -> abc);
+#   * an empty quoted piece ('' or "") still makes an (empty) word;
+#   * no variable, command, glob, brace or tilde expansion — this is only the
+#     tokenizer. `$HOME` stays the literal text `$HOME`.
+#
+# split() is lenient: an unterminated quote or a trailing lone backslash ends the
+# word at the end of the input (the quote is treated as closed). parse() reports
+# those as errors instead. Bytes are processed individually, so UTF-8 passes
+# through unchanged.
+#
+# Windows rules (split_windows / quote_windows / join_windows):
+#   * words are separated by spaces and tabs;
+#   * a double quote toggles "in quotes" mode (spaces are kept inside quotes);
+#   * 2n backslashes followed by a quote give n backslashes and the quote toggles
+#     the mode; 2n+1 backslashes followed by a quote give n backslashes and a
+#     literal quote; backslashes not followed by a quote are literal;
+#   * inside quotes, "" produces one literal quote and stays in quotes (the rule
+#     used by the modern MSVC runtime);
+#   * the first word (the program name) is parsed with the same rules here — the
+#     special no-escape rule CommandLineToArgvW applies to argv[0] is NOT
+#     implemented.
+# These helpers are pure string code: they work on every platform.
+
+from std.core.string import StringBuilder
+from std.string.str import Str
+
+pub class ShlexResult:
+    pub ok:     bool
+    pub error:  str
+    pub tokens: List[str]
+
+extend ShlexResult:
+    pub def count(self) -> int:
+        return self.tokens.len
+
+    pub def get(self, i: int) -> str:
+        return self.tokens.get(i)
+
+pub class Shlex:
+    _dummy: int
+
+# Character codes
+def _is_sep(c: int) -> bool:
+    return c == 32 or c == 9 or c == 10 or c == 13
+
+extend Shlex:
+    # Core POSIX tokenizer. Returns the result; `lenient` closes an open quote /
+    # trailing backslash at end of input instead of failing.
+    pub def _scan(s: str, comments: bool, lenient: bool) -> ShlexResult:
+        mut res = ShlexResult()
+        res.ok = true
+        res.error = ""
+        res.tokens = []
+        mut n = s.len()
+        mut i = 0
+        mut sb = StringBuilder.init(n + 8)
+        mut in_word = false
+        while i < n:
+            mut c = Str.char_at(s, i)
+            if _is_sep(c):
+                if in_word:
+                    res.tokens.append(sb.to_owned())
+                    sb.clear()
+                    in_word = false
+                i = i + 1
+            elif c == 35 and comments and not in_word:
+                # comment: skip to end of line
+                while i < n and Str.char_at(s, i) != 10:
+                    i = i + 1
+            elif c == 92:                       # backslash
+                if i + 1 >= n:
+                    if not lenient:
+                        res.ok = false
+                        res.error = "no escaped character after trailing backslash"
+                        sb.free()
+                        return res
+                    sb.append_char(92)
+                    in_word = true
+                    i = i + 1
+                else:
+                    mut d = Str.char_at(s, i + 1)
+                    if d == 10:
+                        pass                    # line continuation: drop both
+                    else:
+                        sb.append_char(d)
+                        in_word = true
+                    i = i + 2
+            elif c == 39:                       # single quote
+                in_word = true
+                i = i + 1
+                mut closed = false
+                while i < n:
+                    mut q = Str.char_at(s, i)
+                    i = i + 1
+                    if q == 39:
+                        closed = true
+                        break
+                    sb.append_char(q)
+                if not closed and not lenient:
+                    res.ok = false
+                    res.error = "no closing single quote"
+                    sb.free()
+                    return res
+            elif c == 34:                       # double quote
+                in_word = true
+                i = i + 1
+                mut closed2 = false
+                while i < n:
+                    mut q2 = Str.char_at(s, i)
+                    i = i + 1
+                    if q2 == 34:
+                        closed2 = true
+                        break
+                    if q2 == 92 and i < n:
+                        mut e = Str.char_at(s, i)
+                        if e == 34 or e == 92 or e == 36 or e == 96:
+                            sb.append_char(e)
+                            i = i + 1
+                        elif e == 10:
+                            i = i + 1           # continuation inside quotes
+                        else:
+                            sb.append_char(92)
+                    else:
+                        sb.append_char(q2)
+                if not closed2 and not lenient:
+                    res.ok = false
+                    res.error = "no closing double quote"
+                    sb.free()
+                    return res
+            else:
+                sb.append_char(c)
+                in_word = true
+                i = i + 1
+        if in_word:
+            res.tokens.append(sb.to_owned())
+        sb.free()
+        return res
+
+    # Split like a POSIX shell would into words (lenient about unterminated quotes).
+    pub def split(s: str) -> List[str]:
+        mut r = Shlex._scan(s, false, true)
+        return r.tokens
+
+    # Like split(), but `#` at the start of a word begins a comment that runs to
+    # the end of the line.
+    pub def split_comments(s: str) -> List[str]:
+        mut r = Shlex._scan(s, true, true)
+        return r.tokens
+
+    # Strict split: ok == false (with `error`) for an unterminated quote or a
+    # trailing backslash. `tokens` is empty in that case.
+    pub def parse(s: str) -> ShlexResult:
+        return Shlex._scan(s, false, false)
+
+    # True when `s` needs no quoting for a POSIX shell.
+    pub def is_safe(s: str) -> bool:
+        mut n = s.len()
+        if n == 0: return false
+        mut i = 0
+        while i < n:
+            mut c = Str.char_at(s, i)
+            mut ok = (c >= 48 and c <= 57) or (c >= 65 and c <= 90) or (c >= 97 and c <= 122)
+            if not ok:
+                ok = c == 64 or c == 37 or c == 43 or c == 61 or c == 58 or c == 44 or c == 46 or c == 47 or c == 45 or c == 95
+            if not ok: return false
+            i = i + 1
+        return true
+
+    # Quote one word so a POSIX shell reads it back as exactly `s`. Words made only
+    # of safe characters are returned unchanged; everything else is wrapped in
+    # single quotes (an embedded ' becomes '"'"'). The empty string is ''.
+    pub def quote(s: str) -> str:
+        if Shlex.is_safe(s): return s
+        mut sb = StringBuilder.init(s.len() + 8)
+        sb.append_char(39)
+        mut i = 0
+        mut n = s.len()
+        while i < n:
+            mut c = Str.char_at(s, i)
+            if c == 39:
+                sb.append("'\"'\"'")
+            else:
+                sb.append_char(c)
+            i = i + 1
+        sb.append_char(39)
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    # Join words into one command line; split(join(x)) == x.
+    pub def join(parts: List[str]) -> str:
+        mut sb = StringBuilder.init(64)
+        mut i = 0
+        while i < parts.len:
+            if i > 0: sb.append_char(32)
+            sb.append(Shlex.quote(parts.get(i)))
+            i = i + 1
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    # ── Windows ─────────────────────────────────────────────────────────────
+
+    pub def split_windows(s: str) -> List[str]:
+        mut out: List[str] = []
+        mut n = s.len()
+        mut i = 0
+        mut sb = StringBuilder.init(n + 8)
+        mut in_word = false
+        mut in_q = false
+        while i < n:
+            mut c = Str.char_at(s, i)
+            if c == 92:
+                mut bs = 0
+                while i < n and Str.char_at(s, i) == 92:
+                    bs = bs + 1
+                    i = i + 1
+                in_word = true
+                if i < n and Str.char_at(s, i) == 34:
+                    mut k = 0
+                    while k < bs / 2:
+                        sb.append_char(92)
+                        k = k + 1
+                    if bs % 2 == 1:
+                        sb.append_char(34)
+                        i = i + 1
+                    # even: the quote is handled by the next loop turn (toggles)
+                else:
+                    mut k2 = 0
+                    while k2 < bs:
+                        sb.append_char(92)
+                        k2 = k2 + 1
+            elif c == 34:
+                in_word = true
+                if in_q and i + 1 < n and Str.char_at(s, i + 1) == 34:
+                    sb.append_char(34)          # "" inside quotes -> literal quote
+                    i = i + 2
+                else:
+                    in_q = not in_q
+                    i = i + 1
+            elif (c == 32 or c == 9) and not in_q:
+                if in_word:
+                    out.append(sb.to_owned())
+                    sb.clear()
+                    in_word = false
+                i = i + 1
+            else:
+                sb.append_char(c)
+                in_word = true
+                i = i + 1
+        if in_word:
+            out.append(sb.to_owned())
+        sb.free()
+        return out
+
+    # Quote one argument for the Windows command-line rules above. Plain words
+    # (no space, tab, quote) are returned unchanged; the empty string becomes "".
+    pub def quote_windows(s: str) -> str:
+        mut n = s.len()
+        if n == 0: return "\"\""
+        mut need = false
+        mut j = 0
+        while j < n:
+            mut ch = Str.char_at(s, j)
+            if ch == 32 or ch == 9 or ch == 34 or ch == 10 or ch == 11:
+                need = true
+            j = j + 1
+        if not need: return s
+        mut sb = StringBuilder.init(n + 8)
+        sb.append_char(34)
+        mut i = 0
+        while i < n:
+            mut bs = 0
+            while i < n and Str.char_at(s, i) == 92:
+                bs = bs + 1
+                i = i + 1
+            if i == n:
+                # trailing backslashes precede the closing quote: double them
+                mut k = 0
+                while k < bs * 2:
+                    sb.append_char(92)
+                    k = k + 1
+            elif Str.char_at(s, i) == 34:
+                mut k2 = 0
+                while k2 < bs * 2 + 1:
+                    sb.append_char(92)
+                    k2 = k2 + 1
+                sb.append_char(34)
+                i = i + 1
+            else:
+                mut k3 = 0
+                while k3 < bs:
+                    sb.append_char(92)
+                    k3 = k3 + 1
+                sb.append_char(Str.char_at(s, i))
+                i = i + 1
+        sb.append_char(34)
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    pub def join_windows(parts: List[str]) -> str:
+        mut sb = StringBuilder.init(64)
+        mut i = 0
+        while i < parts.len:
+            if i > 0: sb.append_char(32)
+            sb.append(Shlex.quote_windows(parts.get(i)))
+            i = i + 1
+        mut out = sb.to_owned()
+        sb.free()
+        return out

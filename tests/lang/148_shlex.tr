@@ -1,0 +1,156 @@
+# tests/lang/148_shlex.tr
+# std.text.shlex — POSIX word splitting / quoting / joining and the Windows
+# command-line variant. Pure string code, runs everywhere.
+
+from std.test import TestRunner
+from std.text.shlex import Shlex, ShlexResult
+
+def show(parts: List[str]) -> str:
+    # unambiguous rendering: [a|b|c]
+    mut out = "["
+    mut i = 0
+    while i < parts.len:
+        if i > 0: out = out + "|"
+        out = out + parts.get(i)
+        i = i + 1
+    return out + "]"
+
+def main():
+    mut t = TestRunner.init("148_shlex")
+
+    t.section("POSIX split: whitespace")
+    t.assert_eq_str(show(Shlex.split("a b c")), "[a|b|c]", "simple words")
+    t.assert_eq_str(show(Shlex.split("  a \t b\n c  ")), "[a|b|c]", "mixed/leading/trailing whitespace")
+    t.assert_eq_int(Shlex.split("").len, 0, "empty input -> no words")
+    t.assert_eq_int(Shlex.split("   \t\n").len, 0, "blank input -> no words")
+
+    t.section("POSIX split: quotes")
+    t.assert_eq_str(show(Shlex.split("'a b' c")), "[a b|c]", "single quotes group")
+    t.assert_eq_str(show(Shlex.split("\"a b\" c")), "[a b|c]", "double quotes group")
+    t.assert_eq_str(show(Shlex.split("a'b c'd")), "[ab cd]", "quotes glue to neighbours")
+    t.assert_eq_str(show(Shlex.split("\"a\"'b'c")), "[abc]", "mixed pieces form one word")
+    t.assert_eq_str(show(Shlex.split("'\"'")), "[\"]", "double quote inside single quotes")
+    t.assert_eq_str(show(Shlex.split("\"'\"")), "[']", "single quote inside double quotes")
+    t.assert_eq_str(show(Shlex.split("'a\\b'")), "[a\\b]", "no escapes inside single quotes")
+    t.assert_eq_int(Shlex.split("''").len, 1, "'' is one (empty) word")
+    t.assert_eq_str(Shlex.split("''").get(0), "", "...and it is empty")
+    t.assert_eq_str(show(Shlex.split("a '' b")), "[a||b]", "empty word between words")
+    t.assert_eq_str(show(Shlex.split("\"\"\"\"")), "[]", "two adjacent empty double-quoted pieces make one empty word")
+
+    t.section("POSIX split: backslashes")
+    t.assert_eq_str(show(Shlex.split("a\\ b c")), "[a b|c]", "escaped space")
+    t.assert_eq_str(show(Shlex.split("\\'x\\'")), "['x']", "escaped quotes")
+    t.assert_eq_str(show(Shlex.split("a\\\\b")), "[a\\b]", "escaped backslash")
+    t.assert_eq_str(show(Shlex.split("\"a\\\"b\"")), "[a\"b]", "\\\" inside double quotes")
+    t.assert_eq_str(show(Shlex.split("\"a\\\\b\"")), "[a\\b]", "\\\\ inside double quotes")
+    t.assert_eq_str(show(Shlex.split("\"a\\nb\"")), "[a\\nb]", "backslash kept before an ordinary char in double quotes")
+    t.assert_eq_str(show(Shlex.split("\"\\$HOME\"")), "[$HOME]", "\\$ inside double quotes")
+    t.assert_eq_str(show(Shlex.split("a\\\nb")), "[ab]", "backslash-newline is a line continuation")
+    t.assert_eq_str(show(Shlex.split("\"a\\\nb\"")), "[ab]", "continuation inside double quotes")
+    t.assert_eq_str(show(Shlex.split("$HOME `x` *")), "[$HOME|`x`|*]", "no expansion: metacharacters stay literal")
+
+    t.section("POSIX split: realistic lines")
+    mut git = Shlex.split("git commit -m 'fix: the \"bug\"' --amend")
+    t.assert_eq_int(git.len, 5, "git line has 5 words")
+    t.assert_eq_str(git.get(4), "--amend", "last word")
+    t.assert_eq_str(git.get(3), "fix: the \"bug\"", "quoted message intact")
+    t.assert_eq_str(show(Shlex.split("sh -c \"echo 'hi there' && ls\"")), "[sh|-c|echo 'hi there' && ls]", "nested quotes")
+    t.assert_eq_str(show(Shlex.split("--name=\"John Smith\"")), "[--name=John Smith]", "option=\"quoted value\"")
+    t.assert_eq_str(show(Shlex.split("café \"naïve\"")), "[café|naïve]", "UTF-8 passes through")
+
+    t.section("POSIX split: comments")
+    t.assert_eq_str(show(Shlex.split_comments("a b # comment here\nc")), "[a|b|c]", "comment runs to end of line")
+    t.assert_eq_str(show(Shlex.split_comments("a#b c")), "[a#b|c]", "# inside a word is not a comment")
+    t.assert_eq_str(show(Shlex.split_comments("'#x' \\#y")), "[#x|#y]", "quoted/escaped # is literal")
+    t.assert_eq_str(show(Shlex.split("a #b")), "[a|#b]", "plain split() has no comments")
+
+    t.section("POSIX parse: strict errors")
+    mut ok1 = Shlex.parse("a 'b c' \"d\"")
+    t.assert_true(ok1.ok, "well-formed input parses")
+    t.assert_eq_int(ok1.count(), 3, "3 words")
+    t.assert_eq_str(ok1.get(1), "b c", "get(i)")
+    mut bad1 = Shlex.parse("echo 'oops")
+    t.assert_false(bad1.ok, "unterminated single quote")
+    t.assert_contains(bad1.error, "single", "error names the quote")
+    mut bad2 = Shlex.parse("echo \"oops")
+    t.assert_false(bad2.ok, "unterminated double quote")
+    t.assert_contains(bad2.error, "double", "error names the quote")
+    mut bad3 = Shlex.parse("echo oops\\")
+    t.assert_false(bad3.ok, "trailing backslash")
+    t.assert_eq_str(show(Shlex.split("echo 'oops")), "[echo|oops]", "split() is lenient: open quote closes at EOF")
+    t.assert_eq_str(show(Shlex.split("x\\")), "[x\\]", "split() keeps a trailing lone backslash")
+
+    t.section("POSIX quote / join")
+    t.assert_eq_str(Shlex.quote("abc"), "abc", "safe word unchanged")
+    t.assert_eq_str(Shlex.quote("a-b_c.d/e:f=g,h@i%j+k"), "a-b_c.d/e:f=g,h@i%j+k", "all safe punctuation unchanged")
+    t.assert_eq_str(Shlex.quote(""), "''", "empty string")
+    t.assert_eq_str(Shlex.quote("a b"), "'a b'", "space")
+    t.assert_eq_str(Shlex.quote("it's"), "'it'\"'\"'s'", "embedded single quote")
+    t.assert_eq_str(Shlex.quote("$HOME"), "'$HOME'", "dollar")
+    t.assert_eq_str(Shlex.quote("a;b|c&d"), "'a;b|c&d'", "shell operators")
+    t.assert_eq_str(Shlex.quote("*.txt"), "'*.txt'", "glob")
+    t.assert_eq_str(Shlex.quote("line1\nline2"), "'line1\nline2'", "newline")
+    t.assert_true(Shlex.is_safe("plain"), "is_safe true")
+    t.assert_false(Shlex.is_safe("not plain"), "is_safe false")
+    t.assert_false(Shlex.is_safe(""), "empty is not safe")
+    mut words: List[str] = []
+    words.append("ls")
+    words.append("-l")
+    words.append("my file.txt")
+    words.append("it's")
+    words.append("")
+    words.append("$x `y` \"z\" \\ end")
+    mut joined = Shlex.join(words)
+    t.assert_eq_str(joined, "ls -l 'my file.txt' 'it'\"'\"'s' '' '$x `y` \"z\" \\ end'", "join output")
+    mut back = Shlex.split(joined)
+    t.assert_eq_int(back.len, words.len, "round trip keeps the word count")
+    mut ri = 0
+    mut same = true
+    while ri < words.len:
+        if back.get(ri) != words.get(ri): same = false
+        ri = ri + 1
+    t.assert_true(same, "split(join(words)) == words")
+    mut nothing: List[str] = []
+    t.assert_eq_str(Shlex.join(nothing), "", "join of nothing")
+
+    t.section("Windows split")
+    t.assert_eq_str(show(Shlex.split_windows("a b c")), "[a|b|c]", "simple words")
+    t.assert_eq_str(show(Shlex.split_windows("  a \t b  ")), "[a|b]", "spaces and tabs separate")
+    t.assert_eq_str(show(Shlex.split_windows("\"C:\\Program Files\\x\" y")), "[C:\\Program Files\\x|y]", "quoted path with backslashes")
+    t.assert_eq_str(show(Shlex.split_windows("C:\\dir\\file.txt")), "[C:\\dir\\file.txt]", "backslashes not before a quote are literal")
+    t.assert_eq_str(show(Shlex.split_windows("a\\\"b")), "[a\"b]", "\\\" is a literal quote")
+    t.assert_eq_str(show(Shlex.split_windows("a\\\\\"b c\"")), "[a\\b c]", "2 backslashes + quote: one backslash, quote toggles")
+    t.assert_eq_str(show(Shlex.split_windows("a\\\\\\\"b")), "[a\\\"b]", "3 backslashes + quote: one backslash + literal quote")
+    t.assert_eq_str(show(Shlex.split_windows("\"a\\\\\" b")), "[a\\|b]", "backslashes before a closing quote are halved")
+    t.assert_eq_str(show(Shlex.split_windows("\"a\"\"b\"")), "[a\"b]", "\"\" inside quotes is a literal quote")
+    t.assert_eq_str(show(Shlex.split_windows("a\"b c\"d")), "[ab cd]", "quotes glue pieces")
+    t.assert_eq_int(Shlex.split_windows("\"\"").len, 1, "\"\" is an empty word")
+    t.assert_eq_int(Shlex.split_windows("").len, 0, "empty line")
+    t.assert_eq_str(show(Shlex.split_windows("a 'b c'")), "[a|'b|c']", "single quotes mean nothing on Windows")
+
+    t.section("Windows quote / join")
+    t.assert_eq_str(Shlex.quote_windows("plain"), "plain", "plain unchanged")
+    t.assert_eq_str(Shlex.quote_windows(""), "\"\"", "empty")
+    t.assert_eq_str(Shlex.quote_windows("a b"), "\"a b\"", "space")
+    t.assert_eq_str(Shlex.quote_windows("a\"b"), "\"a\\\"b\"", "embedded quote")
+    t.assert_eq_str(Shlex.quote_windows("C:\\dir\\"), "C:\\dir\\", "trailing backslash without spaces needs no quoting")
+    t.assert_eq_str(Shlex.quote_windows("C:\\my dir\\"), "\"C:\\my dir\\\\\"", "trailing backslash doubled inside quotes")
+    t.assert_eq_str(Shlex.quote_windows("a\\\"b c"), "\"a\\\\\\\"b c\"", "backslash before a quote is doubled")
+    mut wl: List[str] = []
+    wl.append("prog.exe")
+    wl.append("C:\\Program Files\\x\\")
+    wl.append("say \"hi\"")
+    wl.append("")
+    wl.append("a\\\\\"b")
+    wl.append("tab\there")
+    mut wj = Shlex.join_windows(wl)
+    mut wb = Shlex.split_windows(wj)
+    t.assert_eq_int(wb.len, wl.len, "Windows round trip keeps the word count")
+    mut wi = 0
+    mut wsame = true
+    while wi < wl.len:
+        if wb.get(wi) != wl.get(wi): wsame = false
+        wi = wi + 1
+    t.assert_true(wsame, "split_windows(join_windows(words)) == words")
+
+    t.summary()
