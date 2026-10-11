@@ -6126,7 +6126,21 @@ static inline char* _tr_char_to_str_alloc(long long code) { return _tr_char_to_s
 #ifdef TAURARO_BARE
 _TR_XLINK int _tr_system(const char* cmd) { (void)cmd; return -1; }
 #else
+#if (defined(__unix__) || defined(__APPLE__)) && !defined(__wasi__)
+#include <sys/wait.h>
+/* POSIX system() returns the raw wait status (exit code << 8, or the signal number);
+ * decode it so callers -- notably `tauraroc --run` -- see the child's real exit code
+ * (128+sig when killed by a signal) instead of a value that wraps to 0 in exit(). */
+_TR_XLINK int _tr_system(const char* cmd) {
+    int st = system(cmd);
+    if (st == -1) return -1;
+    if (WIFEXITED(st)) return WEXITSTATUS(st);
+    if (WIFSIGNALED(st)) return 128 + WTERMSIG(st);
+    return st;
+}
+#else
 _TR_XLINK int _tr_system(const char* cmd) { return system(cmd); }
+#endif
 #endif
 
 /* ── Panic / error ───────────────────────────────────────────────────── */
