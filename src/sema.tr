@@ -4548,6 +4548,11 @@ extend Sema:
                                 # Bare `name = expr` with no prior declaration and no `mut`:
                                 # declares an IMMUTABLE binding (Rust-like default).
                                 self.declare(sa_decl_name, SymbolKind.SVariable, box_asttype(hir_expr_type(hv)), false)
+                                # The target was lowered BEFORE it was declared, so it carries no type;
+                                # give it the declared one -- codegen keys the owning-local tracking
+                                # (a `str` local is released at scope exit) on the target's type.
+                                if hir_expr_type(htgt).name == "void" or hir_expr_type(htgt).name == "":
+                                    htgt = box_hirexpr(HirExpr.EIdent(sa_decl_name, hir_expr_type(hv), false))
                             elif self.scopes.len > 0 and self.is_global_not_local(sa_decl_name) and not sa_existing.is_mut:
                                 # Inside a function, assigning to a name that only
                                 # exists as an IMMUTABLE global introduces a fresh

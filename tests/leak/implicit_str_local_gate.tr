@@ -1,0 +1,29 @@
+# Leak gate: a `str` local introduced by a bare first assignment (`s = f()`, no `mut`) is an
+# owned local like `mut s = f()`: released at scope exit. Before, the assignment target carried
+# no type (it was lowered before being declared), so codegen emitted an untracked
+# `__auto_type s` and never released it. Run by scripts/leak_check.sh.
+extern "C":
+    def _tr_mem_live() -> int
+
+def make(n: int) -> str:
+    return "item-" + "x"
+
+def workload() -> int:
+    a = make(1)
+    b = "p" + a
+    c = make(2) + b
+    return a.len() + b.len() + c.len()
+
+def main():
+    workload()
+    mut before = _tr_mem_live()
+    mut r = 0
+    mut total = 0
+    while r < 100:
+        total = total + workload()
+        r = r + 1
+    mut leaked = _tr_mem_live() - before
+    if total == 100 * (6 + 7 + 13) and leaked <= 0:
+        print("LEAK-GATE PASS")
+    else:
+        print("LEAK-GATE FAIL leaked=" + leaked.to_str() + " total=" + total.to_str())
