@@ -35,11 +35,11 @@ extend Hex:
     # Encode bytes to lowercase hex string (2 chars per byte).
     pub def encode(s: str) -> str:
         mut p = s as Pointer[char]
-        mut n = _tr_strlen(s)
+        mut n = s.len()    # byte length from the str header: binary-safe (no strlen/NUL truncation)
         mut sb = StringBuilder.init(n * 2 + 2)
         mut i = 0
         while i < n:
-            mut byte = p.offset(i).read() as int
+            mut byte = (p.offset(i).read() as int) & 255   # `char` is signed: mask to 0..255
             sb.append_char(_hex_nibble_lower(byte >> 4))
             sb.append_char(_hex_nibble_lower(byte % 16))
             i = i + 1
@@ -50,11 +50,11 @@ extend Hex:
     # Encode bytes to uppercase hex string.
     pub def encode_upper(s: str) -> str:
         mut p = s as Pointer[char]
-        mut n = _tr_strlen(s)
+        mut n = s.len()    # byte length from the str header: binary-safe (no strlen/NUL truncation)
         mut sb = StringBuilder.init(n * 2 + 2)
         mut i = 0
         while i < n:
-            mut byte = p.offset(i).read() as int
+            mut byte = (p.offset(i).read() as int) & 255   # `char` is signed: mask to 0..255
             sb.append_char(_hex_nibble_upper(byte >> 4))
             sb.append_char(_hex_nibble_upper(byte % 16))
             i = i + 1
@@ -101,7 +101,7 @@ extend Hex:
         mut sb = StringBuilder.init(len * 2 + 2)
         mut i = 0
         while i < len:
-            mut byte = data.offset(i).read() as int
+            mut byte = (data.offset(i).read() as int) & 255   # `char` is signed: mask to 0..255
             sb.append_char(_hex_nibble_lower(byte >> 4))
             sb.append_char(_hex_nibble_lower(byte % 16))
             i = i + 1
