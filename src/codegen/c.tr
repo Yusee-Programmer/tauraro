@@ -2819,13 +2819,37 @@ pub class CGenerator:
                 return "((" + self.type_to_c(target_ty) + ")(" + self.gen_expr(expr) + "))"
             case HirExpr.EFString(parts, _): return self.gen_fstring(parts)
             case HirExpr.ETryExpr(expr, ok_ty):
-                # Fallback: unsafe extract (proper propagation handled at statement level)
+                # `?` in a NESTED expression position (call argument, operand, ...).
+                # The statement-level forms (SExpr/SLet/SReturn/SAssign) hoist the check
+                # themselves; anywhere else it used to fall to an unchecked extract that
+                # never tested Result.tag (an Err was silently read as Ok) and mis-typed a
+                # str Ok value as `TrStr*` (e.g. `print(r.read_string()?)`).
+                # Here the check is emitted IN PLACE as a GNU statement-expression whose
+                # `return` propagates the Err; an owned str result is hoisted into a wrap
+                # temp instead, so it is released after the enclosing statement.
                 mut inner_s2 = self.gen_expr(expr)
                 mut ok_c = self.type_to_c(ok_ty)
                 if ok_c == "void" or ok_c == "__auto_type": ok_c = "long long"
-                if _is_int_type(ok_ty.name) or ok_ty.name == "bool":
-                    return "((" + ok_c + ")(uintptr_t)((" + inner_s2 + ").data.Ok.val))"
-                return "((" + ok_c + "*)((" + inner_s2 + ").data.Ok.val))"
+                mut nq = "_qr" + self.next_temp()
+                mut nq_pre = "Result " + nq + " = (" + inner_s2 + ")"
+                mut nq_chk = "if (" + nq + ".tag == Result_Err) return " + nq
+                if _is_str_type(ok_ty.name):
+                    mut nq_tmp = "_wt" + self.next_temp()
+                    self.wrap_temp_decls.push(nq_pre)
+                    self.wrap_temp_decls.push(nq_chk)
+                    self.wrap_temp_decls.push("TrStr " + nq_tmp + " = _tr_str_unbox(" + nq + ".data.Ok.val)")
+                    self.wrap_temp_names.push(nq_tmp)
+                    return nq_tmp
+                mut nq_val = ""
+                if _is_int_type(ok_ty.name) or ok_ty.name == "bool" or ok_ty.name == "char":
+                    nq_val = "(" + ok_c + ")(uintptr_t)" + nq + ".data.Ok.val"
+                elif _is_float_type(ok_ty.name):
+                    nq_val = "_tr_ptr_to_f64(" + nq + ".data.Ok.val)"
+                elif ok_c.ends_with("*"):
+                    nq_val = "(" + ok_c + ")" + nq + ".data.Ok.val"
+                else:
+                    nq_val = "(" + ok_c + "*)" + nq + ".data.Ok.val"
+                return "({ " + nq_pre + "; " + nq_chk + "; " + nq_val + "; })"
             case HirExpr.ETuple(items, _): return self.gen_tuple(items)
             case HirExpr.EList(items, ty): return self.gen_list_literal(items, ty)
             case HirExpr.EDict(keys, vals, dict_ty): return self.gen_dict_literal(keys, vals, dict_ty)
