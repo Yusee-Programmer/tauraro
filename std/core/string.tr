@@ -88,14 +88,21 @@ extend StringBuilder:
         if x == 0:
             self.append_char(48)
             return
-        if x < 0:
-            neg = true
-            x = 0 - x
         mut start = self.buf.len
-        while x > 0:
-            mut d = x - (x / 10) * 10
-            self.append_char(48 + d)
-            x = x / 10
+        if x < 0:
+            # Peel digits off the NEGATIVE value: negating first (`0 - x`) overflows
+            # for INT64_MIN and traps (-ftrapv -> __negvdi2). For negative x, C's
+            # truncating `/` gives x/10 <= 0 and (x/10)*10 - x in 0..9.
+            neg = true
+            while x < 0:
+                mut q = x / 10
+                self.append_char(48 + (q * 10 - x))
+                x = q
+        else:
+            while x > 0:
+                mut d = x - (x / 10) * 10
+                self.append_char(48 + d)
+                x = x / 10
         if neg: self.append_char(45)
         mut lo = start
         mut hi = self.buf.len - 1
