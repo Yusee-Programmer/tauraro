@@ -9,6 +9,9 @@
 #   from std.encoding.ini    import IniDoc, IniSection, IniParser, Ini
 #   from std.encoding.base64 import Base64
 #   from std.encoding.hex    import Hex
+#   from std.encoding.base32 import Base32
+#   from std.encoding.cbor   import CBVal, Cbor
+#   from std.encoding.protobuf import Proto, ProtoWriter, ProtoReader
 
 from std.encoding.json   import JsonDoc
 from std.encoding.json   import JsonRef
@@ -29,3 +32,9 @@ from std.encoding.ini    import IniParser
 from std.encoding.ini    import Ini
 from std.encoding.base64 import Base64
 from std.encoding.hex    import Hex
+from std.encoding.base32 import Base32
+from std.encoding.cbor   import CBVal
+from std.encoding.cbor   import Cbor
+from std.encoding.protobuf import Proto
+from std.encoding.protobuf import ProtoWriter
+from std.encoding.protobuf import ProtoReader

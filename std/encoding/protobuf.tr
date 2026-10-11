@@ -1,0 +1,650 @@
+# std.encoding.protobuf — Protocol Buffers wire-format reader and writer.
+#
+# A LOW-LEVEL codec for the protobuf binary encoding
+# (https://protobuf.dev/programming-guides/encoding/): varints, ZigZag,
+# fixed32/fixed64, length-delimited fields, field tags and unknown-field
+# skipping. There is deliberately NO .proto compiler or reflection — you
+# write/read the fields of your message by number, the way hand-written
+# protobuf code does:
+#
+#   from std.encoding.protobuf import ProtoWriter, ProtoReader
+#
+#   mut w = ProtoWriter.init()
+#   w.write_int64(1, 150)                 # field 1 = 150      → 08 96 01
+#   w.write_string(2, "testing")          # field 2 = "testing"→ 12 07 74 65 73 74 69 6e 67
+#   mut inner = ProtoWriter.init()
+#   inner.write_int64(1, 150)
+#   w.write_message(3, inner)             # field 3 = {1: 150} → 1a 03 08 96 01
+#   inner.free()
+#   mut wire = w.to_str()                 # binary str (use wire.len())
+#   w.free()
+#
+#   mut r = ProtoReader.init(wire)
+#   while r.next_field()?:
+#       if r.field == 1:
+#           mut n = r.read_int64()?
+#           print(n)
+#       elif r.field == 2:
+#           mut name = r.read_string()?
+#           print(name)
+#       else:
+#           r.skip()?                     # unknown field: skipped, not an error
+#
+# Wire types (`ProtoReader.wire` / `ProtoWriter.write_tag`):
+#   0 VARINT   1 I64 (fixed64)   2 LEN   3 SGROUP   4 EGROUP   5 I32 (fixed32)
+#
+# 64-bit note: Tauraro's `int` is a signed 64-bit integer. uint64 / fixed64
+# values >= 2^63 are carried as the same 64-bit pattern (they read back
+# negative); uint32 / fixed32 always fit and read as 0..2^32-1.
+#
+# Reader errors (all via `throws str`, so `?` or a `Result[T, str]` binding
+# work): truncated varint/fixed/length-delimited data, varints longer than
+# 10 bytes (or overflowing 64 bits), field number 0 or > 2^29-1, wire types
+# 6/7, a length running past the end of the buffer, an unmatched end-group
+# tag, group nesting deeper than 64, and (read_string only) invalid UTF-8.
+#
+# Binary safety: wire data is a `str` whose real byte length is always used
+# (`s.len()`), so embedded 0x00 bytes are fine. Writers allocate; call
+# `.free()` when finished (same convention as StringBuilder).
+
+from std.core.string import StringBuilder
+
+extern "C":
+    def _tr_c_malloc(size: int) -> Pointer[char]
+    def _tr_c_memcpy(dst: Pointer[char], src: Pointer[char], n: int)
+    def _tr_str_wrap_len(s: Pointer[char], blen: int) -> str
+
+pub def PB_VARINT()  -> int: return 0
+pub def PB_I64()     -> int: return 1
+pub def PB_LEN()     -> int: return 2
+pub def PB_SGROUP()  -> int: return 3
+pub def PB_EGROUP()  -> int: return 4
+pub def PB_I32()     -> int: return 5
+
+# Maximum field number (2^29 - 1).
+pub def PB_MAX_FIELD() -> int: return 536870911
+
+# ─── bit helpers ────────────────────────────────────────────────────────────
+
+def _pb_rd_u8(data: str, off: int) -> int:
+    mut p = data as Pointer[char]
+    unsafe:
+        return (p.offset(off).read() as int) & 0xFF
+
+def _pb_slice(data: str, off: int, n: int) -> str:
+    mut out = _tr_c_malloc(n + 1)
+    if n > 0:
+        unsafe:
+            _tr_c_memcpy(out, (data as Pointer[char]).offset(off), n)
+    unsafe: out.offset(n).write('\0')
+    return _tr_str_wrap_len(out, n)
+
+# Logical (zero-filling) right shift of a signed int by 1..63.
+def _pb_lsr(v: int, n: int) -> int:
+    mut u: u64 = v as u64
+    return (u >> (n as u64)) as int
+
+def _pb_f64_bits(f: float) -> int:
+    mut tmp: float = f
+    mut p = (&tmp) as Pointer[int]
+    unsafe:
+        return p.read()
+
+def _pb_bits_f64(bits: int) -> float:
+    mut tmp: int = bits
+    mut p = (&tmp) as Pointer[float]
+    unsafe:
+        return p.read()
+
+def _pb_f32_bits(f: float) -> int:
+    mut g: f32 = f as f32
+    mut p = (&g) as Pointer[i32]
+    unsafe:
+        return (p.read() as int) & 0xFFFFFFFF
+
+def _pb_bits_f32(b: int) -> float:
+    mut i: i32 = (b & 0xFFFFFFFF) as i32
+    mut p = (&i) as Pointer[f32]
+    unsafe:
+        return p.read() as float
+
+# Sign-extend the low 32 bits of `v` (protobuf int32/sint32/sfixed32 decode).
+def _pb_sext32(v: int) -> int:
+    mut x = v & 0xFFFFFFFF
+    if x >= 2147483648: return x - 4294967296
+    return x
+
+# Strict UTF-8 validation (no overlongs, no surrogates, max U+10FFFF).
+def _pb_utf8_ok(s: str) -> bool:
+    mut n = s.len()
+    mut i = 0
+    while i < n:
+        mut c = _pb_rd_u8(s, i)
+        if c < 0x80:
+            i = i + 1
+        elif c >= 0xC2 and c <= 0xDF:
+            if i + 1 >= n: return false
+            if (_pb_rd_u8(s, i + 1) & 0xC0) != 0x80: return false
+            i = i + 2
+        elif c >= 0xE0 and c <= 0xEF:
+            if i + 2 >= n: return false
+            mut c1 = _pb_rd_u8(s, i + 1)
+            mut c2 = _pb_rd_u8(s, i + 2)
+            if (c1 & 0xC0) != 0x80 or (c2 & 0xC0) != 0x80: return false
+            if c == 0xE0 and c1 < 0xA0: return false      # overlong
+            if c == 0xED and c1 > 0x9F: return false      # surrogates
+            i = i + 3
+        elif c >= 0xF0 and c <= 0xF4:
+            if i + 3 >= n: return false
+            mut c1 = _pb_rd_u8(s, i + 1)
+            mut c2 = _pb_rd_u8(s, i + 2)
+            mut c3 = _pb_rd_u8(s, i + 3)
+            if (c1 & 0xC0) != 0x80 or (c2 & 0xC0) != 0x80 or (c3 & 0xC0) != 0x80: return false
+            if c == 0xF0 and c1 < 0x90: return false      # overlong
+            if c == 0xF4 and c1 > 0x8F: return false      # > U+10FFFF
+            i = i + 4
+        else:
+            return false
+    return true
+
+# ─── Proto — stateless helpers ──────────────────────────────────────────────
+
+pub class Proto:
+    _dummy: int
+
+extend Proto:
+    # ZigZag-encode a signed 64-bit value (also correct for sint32 inputs).
+    pub def zigzag(n: int) -> int:
+        mut u: u64 = n as u64
+        mut sign: u64 = (n >> 63) as u64      # arithmetic shift: all ones if negative
+        return ((u << (1 as u64)) ^ sign) as int
+
+    # Inverse of `zigzag` (64-bit; raw encoded value in, signed value out).
+    pub def unzigzag(v: int) -> int:
+        mut u: u64 = v as u64
+        mut lo: u64 = (v & 1) as u64
+        return ((u >> (1 as u64)) ^ ((0 as u64) - lo)) as int
+
+    # Number of bytes the varint encoding of `v` (raw 64-bit pattern) takes.
+    pub def varint_size(v: int) -> int:
+        mut u: u64 = v as u64
+        mut n = 1
+        while u >= (128 as u64):
+            u = u >> (7 as u64)
+            n = n + 1
+        return n
+
+    # Field key: (field_number << 3) | wire_type.
+    pub def make_tag(field: int, wire: int) -> int:
+        return (field << 3) | wire
+
+    pub def tag_field(tag: int) -> int:
+        return tag >> 3
+
+    pub def tag_wire(tag: int) -> int:
+        return tag & 7
+
+# ─── ProtoWriter ────────────────────────────────────────────────────────────
+
+pub class ProtoWriter:
+    pub buf: StringBuilder
+
+extend ProtoWriter:
+    pub def init() -> ProtoWriter:
+        mut w = ProtoWriter()
+        w.buf = StringBuilder.init(64)
+        return w
+
+    # ── raw primitives (no field key) ──
+    # LEB128 varint of a raw 64-bit pattern (negative ints take 10 bytes).
+    pub def put_varint(self, v: int):
+        mut u: u64 = v as u64
+        while u >= (128 as u64):
+            self.buf.append_char((((u & (127 as u64)) as int) | 128))
+            u = u >> (7 as u64)
+        self.buf.append_char(u as int)
+
+    # Little-endian fixed-width integers (low `nbytes` bytes of v).
+    pub def put_fixed32(self, v: int):
+        mut i = 0
+        while i < 4:
+            self.buf.append_char((v >> (i * 8)) & 0xFF)
+            i = i + 1
+
+    pub def put_fixed64(self, v: int):
+        mut i = 0
+        while i < 8:
+            self.buf.append_char((v >> (i * 8)) & 0xFF)
+            i = i + 1
+
+    # Append already-encoded bytes verbatim (e.g. a preserved unknown field).
+    pub def write_raw(self, s: str):
+        self.buf.append(s)
+
+    # Field key.
+    pub def write_tag(self, field: int, wire: int):
+        self.put_varint((field << 3) | wire)
+
+    # ── varint fields ──
+    # int32 / int64 / enum: negative values are sign-extended (10 bytes).
+    pub def write_int32(self, field: int, v: int):
+        self.write_tag(field, 0)
+        self.put_varint(v)
+
+    pub def write_int64(self, field: int, v: int):
+        self.write_tag(field, 0)
+        self.put_varint(v)
+
+    pub def write_enum(self, field: int, v: int):
+        self.write_tag(field, 0)
+        self.put_varint(v)
+
+    pub def write_uint32(self, field: int, v: int):
+        self.write_tag(field, 0)
+        self.put_varint(v & 0xFFFFFFFF)
+
+    pub def write_uint64(self, field: int, v: int):
+        self.write_tag(field, 0)
+        self.put_varint(v)
+
+    pub def write_sint32(self, field: int, v: int):
+        self.write_tag(field, 0)
+        self.put_varint(Proto.zigzag(_pb_sext32(v)) & 0xFFFFFFFF)
+
+    pub def write_sint64(self, field: int, v: int):
+        self.write_tag(field, 0)
+        self.put_varint(Proto.zigzag(v))
+
+    pub def write_bool(self, field: int, b: bool):
+        self.write_tag(field, 0)
+        if b:
+            self.buf.append_char(1)
+        else:
+            self.buf.append_char(0)
+
+    # ── fixed-width fields ──
+    pub def write_fixed32(self, field: int, v: int):
+        self.write_tag(field, 5)
+        self.put_fixed32(v)
+
+    pub def write_sfixed32(self, field: int, v: int):
+        self.write_tag(field, 5)
+        self.put_fixed32(v)
+
+    pub def write_float(self, field: int, f: float):
+        self.write_tag(field, 5)
+        self.put_fixed32(_pb_f32_bits(f))
+
+    pub def write_fixed64(self, field: int, v: int):
+        self.write_tag(field, 1)
+        self.put_fixed64(v)
+
+    pub def write_sfixed64(self, field: int, v: int):
+        self.write_tag(field, 1)
+        self.put_fixed64(v)
+
+    pub def write_double(self, field: int, f: float):
+        self.write_tag(field, 1)
+        self.put_fixed64(_pb_f64_bits(f))
+
+    # ── length-delimited fields ──
+    pub def write_bytes(self, field: int, s: str):
+        self.write_tag(field, 2)
+        self.put_varint(s.len())
+        self.buf.append(s)
+
+    pub def write_string(self, field: int, s: str):
+        self.write_bytes(field, s)
+
+    # Embed another writer's bytes as a sub-message.
+    pub def write_message(self, field: int, sub: ProtoWriter):
+        mut n = sub.buf.len()
+        self.write_tag(field, 2)
+        self.put_varint(n)
+        self.buf.append(sub.buf.as_str())
+
+    # Packed repeated fields (proto3 default for scalar numerics).
+    pub def write_packed_varints(self, field: int, xs: List[int]):
+        mut body = ProtoWriter.init()
+        mut i = 0
+        while i < len(xs):
+            body.put_varint(xs[i])
+            i = i + 1
+        self.write_message(field, body)
+        body.free()
+
+    pub def write_packed_sint(self, field: int, xs: List[int]):
+        mut body = ProtoWriter.init()
+        mut i = 0
+        while i < len(xs):
+            body.put_varint(Proto.zigzag(xs[i]))
+            i = i + 1
+        self.write_message(field, body)
+        body.free()
+
+    pub def write_packed_fixed32(self, field: int, xs: List[int]):
+        mut body = ProtoWriter.init()
+        mut i = 0
+        while i < len(xs):
+            body.put_fixed32(xs[i])
+            i = i + 1
+        self.write_message(field, body)
+        body.free()
+
+    pub def write_packed_fixed64(self, field: int, xs: List[int]):
+        mut body = ProtoWriter.init()
+        mut i = 0
+        while i < len(xs):
+            body.put_fixed64(xs[i])
+            i = i + 1
+        self.write_message(field, body)
+        body.free()
+
+    pub def write_packed_float(self, field: int, xs: List[float]):
+        mut body = ProtoWriter.init()
+        mut i = 0
+        while i < len(xs):
+            body.put_fixed32(_pb_f32_bits(xs[i]))
+            i = i + 1
+        self.write_message(field, body)
+        body.free()
+
+    pub def write_packed_double(self, field: int, xs: List[float]):
+        mut body = ProtoWriter.init()
+        mut i = 0
+        while i < len(xs):
+            body.put_fixed64(_pb_f64_bits(xs[i]))
+            i = i + 1
+        self.write_message(field, body)
+        body.free()
+
+    # ── output ──
+    pub def len(self) -> int:
+        return self.buf.len()
+
+    # Copy of the bytes written so far (binary `str`; use `.len()`).
+    pub def to_str(self) -> str:
+        return self.buf.to_owned()
+
+    pub def clear(self):
+        self.buf.clear()
+
+    pub def free(self):
+        self.buf.free()
+
+# ─── ProtoReader ────────────────────────────────────────────────────────────
+
+pub class ProtoReader:
+    pub data:        str
+    pub pos:         int    # next byte to read
+    pub end:         int    # one past the last readable byte
+    pub field:       int    # field number of the current field (after next_field)
+    pub wire:        int    # wire type of the current field
+    pub field_start: int    # offset of the current field's tag (see field_raw)
+
+extend ProtoReader:
+    pub def init(data: str) -> ProtoReader:
+        return ProtoReader.init_range(data, 0, data.len())
+
+    # Reader over data[start .. end) (no copy); `end` is clamped to the data.
+    pub def init_range(data: str, start: int, end: int) -> ProtoReader:
+        mut r = ProtoReader()
+        r.data = data
+        mut e = end
+        if e > data.len(): e = data.len()
+        mut s = start
+        if s < 0: s = 0
+        if s > e: s = e
+        r.pos = s
+        r.end = e
+        r.field = 0
+        r.wire = 0
+        r.field_start = s
+        return r
+
+    pub def eof(self) -> bool:
+        return self.pos >= self.end
+
+    pub def remaining(self) -> int:
+        return self.end - self.pos
+
+    # ── primitives ──
+    # LEB128 varint → raw 64-bit pattern.
+    pub def read_varint(self) throws str -> int:
+        mut result: u64 = 0 as u64
+        mut shift = 0
+        while true:
+            if self.pos >= self.end:
+                raise("protobuf: truncated varint")
+            mut b = _pb_rd_u8(self.data, self.pos)
+            self.pos = self.pos + 1
+            if shift == 63 and b > 1:
+                raise("protobuf: varint overflows 64 bits")
+            result = result | (((b & 127) as u64) << (shift as u64))
+            if (b & 128) == 0:
+                return result as int
+            shift = shift + 7
+            if shift > 63:
+                raise("protobuf: varint longer than 10 bytes")
+        return 0
+
+    pub def read_fixed32_raw(self) throws str -> int:
+        if self.end - self.pos < 4:
+            raise("protobuf: truncated fixed32")
+        mut v = 0
+        mut i = 3
+        while i >= 0:
+            v = (v << 8) | _pb_rd_u8(self.data, self.pos + i)
+            i = i - 1
+        self.pos = self.pos + 4
+        return v
+
+    pub def read_fixed64_raw(self) throws str -> int:
+        if self.end - self.pos < 8:
+            raise("protobuf: truncated fixed64")
+        mut v: u64 = 0 as u64
+        mut i = 7
+        while i >= 0:
+            v = (v << (8 as u64)) | (_pb_rd_u8(self.data, self.pos + i) as u64)
+            i = i - 1
+        self.pos = self.pos + 8
+        return v as int
+
+    # Advance to the next field key. Returns false at end of data; otherwise
+    # sets `field` / `wire` (and `field_start`).
+    pub def next_field(self) throws str -> bool:
+        if self.pos >= self.end: return false
+        self.field_start = self.pos
+        mut tag = self.read_varint()?
+        if tag < 0 or tag > 0xFFFFFFFF:
+            raise("protobuf: field key out of range")
+        mut f = tag >> 3
+        mut w = tag & 7
+        if f == 0:
+            raise("protobuf: field number 0 is invalid")
+        if f > 536870911:
+            raise("protobuf: field number too large")
+        if w == 6 or w == 7:
+            raise(f"protobuf: invalid wire type {w}")
+        self.field = f
+        self.wire = w
+        return true
+
+    # ── typed reads of the CURRENT field's value ──
+    pub def read_int64(self) throws str -> int:
+        return self.read_varint()?
+
+    pub def read_uint64(self) throws str -> int:
+        return self.read_varint()?
+
+    pub def read_int32(self) throws str -> int:
+        mut v = self.read_varint()?
+        return _pb_sext32(v)
+
+    pub def read_uint32(self) throws str -> int:
+        mut v = self.read_varint()?
+        return v & 0xFFFFFFFF
+
+    pub def read_enum(self) throws str -> int:
+        mut v = self.read_varint()?
+        return _pb_sext32(v)
+
+    pub def read_sint64(self) throws str -> int:
+        mut v = self.read_varint()?
+        return Proto.unzigzag(v)
+
+    pub def read_sint32(self) throws str -> int:
+        mut v = self.read_varint()?
+        return _pb_sext32(Proto.unzigzag(v & 0xFFFFFFFF))
+
+    pub def read_bool(self) throws str -> bool:
+        mut v = self.read_varint()?
+        return v != 0
+
+    pub def read_fixed32(self) throws str -> int:
+        return self.read_fixed32_raw()?
+
+    pub def read_sfixed32(self) throws str -> int:
+        mut v = self.read_fixed32_raw()?
+        return _pb_sext32(v)
+
+    pub def read_float(self) throws str -> float:
+        mut v = self.read_fixed32_raw()?
+        return _pb_bits_f32(v)
+
+    pub def read_fixed64(self) throws str -> int:
+        return self.read_fixed64_raw()?
+
+    pub def read_sfixed64(self) throws str -> int:
+        return self.read_fixed64_raw()?
+
+    pub def read_double(self) throws str -> float:
+        mut v = self.read_fixed64_raw()?
+        return _pb_bits_f64(v)
+
+    # Length prefix of a LEN field, validated against the remaining data.
+    def _read_len(self) throws str -> int:
+        mut n = self.read_varint()?
+        if n < 0 or n > self.end - self.pos:
+            raise("protobuf: length-delimited field runs past the end of the data")
+        return n
+
+    pub def read_bytes(self) throws str -> str:
+        mut n = self._read_len()?
+        mut s = _pb_slice(self.data, self.pos, n)
+        self.pos = self.pos + n
+        return s
+
+    # Like read_bytes, but the payload must be valid UTF-8 (proto3 `string`).
+    pub def read_string(self) throws str -> str:
+        mut s = self.read_bytes()?
+        if not _pb_utf8_ok(s):
+            raise("protobuf: string field is not valid UTF-8")
+        return s
+
+    # Sub-reader over a LEN field's payload (embedded message / packed data).
+    pub def read_message(self) throws str -> ProtoReader:
+        mut n = self._read_len()?
+        mut sub = ProtoReader.init_range(self.data, self.pos, self.pos + n)
+        self.pos = self.pos + n
+        return sub
+
+    # ── packed repeated fields (read a LEN field's payload as a list) ──
+    pub def read_packed_varints(self) throws str -> List[int]:
+        mut sub = self.read_message()?
+        mut out: List[int] = []
+        while not sub.eof():
+            mut v = sub.read_varint()?
+            out.append(v)
+        return out
+
+    pub def read_packed_sint(self) throws str -> List[int]:
+        mut sub = self.read_message()?
+        mut out: List[int] = []
+        while not sub.eof():
+            mut v = sub.read_varint()?
+            out.append(Proto.unzigzag(v))
+        return out
+
+    pub def read_packed_fixed32(self) throws str -> List[int]:
+        mut sub = self.read_message()?
+        mut out: List[int] = []
+        while not sub.eof():
+            mut v = sub.read_fixed32_raw()?
+            out.append(v)
+        return out
+
+    pub def read_packed_fixed64(self) throws str -> List[int]:
+        mut sub = self.read_message()?
+        mut out: List[int] = []
+        while not sub.eof():
+            mut v = sub.read_fixed64_raw()?
+            out.append(v)
+        return out
+
+    pub def read_packed_float(self) throws str -> List[float]:
+        mut sub = self.read_message()?
+        mut out: List[float] = []
+        while not sub.eof():
+            mut v = sub.read_fixed32_raw()?
+            out.append(_pb_bits_f32(v))
+        return out
+
+    pub def read_packed_double(self) throws str -> List[float]:
+        mut sub = self.read_message()?
+        mut out: List[float] = []
+        while not sub.eof():
+            mut v = sub.read_fixed64_raw()?
+            out.append(_pb_bits_f64(v))
+        return out
+
+    # ── unknown fields ──
+    # Skip the value of the CURRENT field according to its wire type
+    # (groups are skipped through their matching end tag).
+    pub def skip(self) throws str:
+        self._skip_value(self.wire, self.field, 0)?
+
+    def _skip_value(self, wire: int, field: int, depth: int) throws str:
+        if wire == 0:
+            self.read_varint()?
+        elif wire == 1:
+            if self.end - self.pos < 8:
+                raise("protobuf: truncated fixed64")
+            self.pos = self.pos + 8
+        elif wire == 2:
+            mut n = self._read_len()?
+            self.pos = self.pos + n
+        elif wire == 5:
+            if self.end - self.pos < 4:
+                raise("protobuf: truncated fixed32")
+            self.pos = self.pos + 4
+        elif wire == 3:
+            if depth >= 64:
+                raise("protobuf: groups nested too deeply")
+            while true:
+                if self.pos >= self.end:
+                    raise("protobuf: unterminated group")
+                mut tag = self.read_varint()?
+                if tag < 0 or tag > 0xFFFFFFFF:
+                    raise("protobuf: field key out of range")
+                mut f = tag >> 3
+                mut w = tag & 7
+                if f == 0:
+                    raise("protobuf: field number 0 is invalid")
+                if w == 6 or w == 7:
+                    raise(f"protobuf: invalid wire type {w}")
+                if w == 4:
+                    if f != field:
+                        raise("protobuf: mismatched end-group tag")
+                    return
+                self._skip_value(w, f, depth + 1)?
+        elif wire == 4:
+            raise("protobuf: unexpected end-group tag")
+        else:
+            raise(f"protobuf: invalid wire type {wire}")
+
+    # Raw bytes (key + value) of the current field, after `skip()` or any
+    # read — lets you copy unknown fields through unchanged
+    # (`writer.write_raw(reader.field_raw())`).
+    pub def field_raw(self) -> str:
+        return _pb_slice(self.data, self.field_start, self.pos - self.field_start)
