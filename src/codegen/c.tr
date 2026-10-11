@@ -4167,6 +4167,11 @@ pub class CGenerator:
             return "(strcmp(" + self.strz(ls) + ", " + self.strz(rs) + ") " + op + " 0)"
         if self.enums.contains(lt_n) and (op == "==" or op == "!="):
             return "(" + ls + ".tag " + op + " " + rs + ".tag)"
+        if op == "<<" and (lt_n == "int" or lt_n == "i64"):
+            # `int` is a signed 64-bit C long long: a plain signed `<<` is UB once the
+            # result leaves the type's range (x >= 2^31 << 32, 255 << 56). Shift on the
+            # unsigned representation and cast back (two's-complement wrap).
+            return "((long long)((unsigned long long)(" + ls + ") << (" + rs + ")))"
         return "(" + ls + " " + op + " " + rs + ")"
 
     pub def gen_unary(self, op: str, expr: Pointer[HirExpr]) -> str:
