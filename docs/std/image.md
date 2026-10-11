@@ -147,6 +147,54 @@ intervals and grayscale); at equal quality its PSNR matches libjpeg's within
 
 ---
 
+## std.image.gif — GIF
+
+```tauraro
+from std.image.gif import decode_gif, decode_gif_anim, encode_gif, encode_gif_ex, GifWriter, GifAnim
+```
+
+Pure Tauraro, GIF87a and GIF89a.
+
+**Decoder** — LZW (2..12-bit codes, clear/EOI, deferred clear), interlaced and
+sequential frames, global and local palettes, Graphic Control Extensions
+(delay, disposal 0/1/2/3, transparent index), Netscape loop count. Comment,
+plain-text and unknown extensions are skipped. Every frame is **composited onto
+the logical-screen canvas**, so `anim.frame(i)` is what a viewer shows at step
+`i`. The canvas starts fully transparent and the background colour index is not
+painted (as browsers do). A file whose later frames are damaged yields the
+frames decoded so far. Compositing was compared with Pillow frame by frame
+(disposal 0-3, local palettes, interlace, transparency, noise that forces LZW
+table resets, and a 184-frame real-world animation): 0 differing pixels.
+
+| Function / method | Description |
+|---|---|
+| `decode_gif(data, len_) -> Image` | First frame as RGBA8; `width == -1` on failure. |
+| `decode_gif_anim(data, len_) -> GifAnim` | `ok`, `width`, `height`, `frame_count`, `loop_count` (0 = forever, N = N plays, -1 = no loop extension). |
+| `anim.frame(i) -> Image` | Owned copy of composited frame `i`. |
+| `anim.delay_cs(i)`, `anim.disposal(i)`, `anim.frame_rect(i) -> (x, y, w, h)`, `anim.transparent_index(i)`, `anim.has_local_palette(i)` | Per-frame metadata. |
+| `anim.free()` | Release the animation (call it when done). |
+
+**Encoder** — exact palette when the image has at most 256 colours, otherwise
+median-cut quantisation (5 bits/channel histogram) with optional Floyd-Steinberg
+dithering. `alpha < 128` becomes the transparent index, `alpha >= 128` is opaque.
+LZW uses a hash dictionary and proper clear codes.
+
+| Function / method | Description |
+|---|---|
+| `encode_gif(img) -> (str, int)` | Single-frame GIF89a. |
+| `encode_gif_ex(img, dither: bool) -> (str, int)` | Same, optional dithering. |
+| `GifWriter.init(w, h, loop_count)` | Animation writer (`loop_count` 0 = forever, -1 = no loop extension). |
+| `w.add_frame(img, delay_cs)` / `w.add_frame_ex(img, delay_cs, disposal)` | Append a frame (same size as the canvas). |
+| `w.set_dither(bool)`, `w.set_optimize(bool)` | Optimise stores only the changed rectangle of each frame, using transparency. |
+| `w.finish() -> (str, int)` | Write the trailer and return the bytes. |
+
+Limits: every frame is quantised to its own 256-colour local palette (there is
+no global palette optimisation), frames must be as large as the canvas, and
+encoding is slower than decoding (median cut + hash LZW). Results of the
+encoder were verified by decoding with this decoder and with Pillow/libgif.
+
+---
+
 ## decode() — format sniffing
 
 ```tauraro

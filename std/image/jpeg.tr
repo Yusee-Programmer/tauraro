@@ -47,6 +47,7 @@ def _ib(vals: List[int]) -> IntBuf:
 def _zigzag() -> IntBuf:
     mut v = [0, 1, 8, 16, 9, 2, 3, 10, 17, 24, 32, 25, 18, 11, 4, 5, 12, 19, 26, 33, 40, 48, 41, 34, 27, 20, 13, 6, 7, 14, 21, 28, 35, 42, 49, 56, 57, 50, 43, 36, 29, 22, 15, 23, 30, 37, 44, 51, 58, 59, 52, 45, 38, 31, 39, 46, 53, 60, 61, 54, 47, 55, 62, 63]
     mut b = _ib(v)
+    v.free()
     mut i = 64
     while i < 80:
         b.set(i, 63)
@@ -977,6 +978,7 @@ extend JpegDec:
                 mut v = y0.get(i)
                 put_rgba(img, i, v, v, v, 255)
                 i = i + 1
+            y0.free()
             return img
         if self.ncomp == 3:
             mut c0 = self.upsample(0)
@@ -1002,6 +1004,9 @@ extend JpegDec:
                 else:
                     put_rgba(img, i, c0.get(i), c1.get(i), c2.get(i), 255)
                 i = i + 1
+            c0.free()
+            c1.free()
+            c2.free()
             return img
         # 4 components: CMYK or YCCK
         mut c0 = self.upsample(0)
@@ -1030,6 +1035,10 @@ extend JpegDec:
             else:
                 put_rgba(img, i, ((255 - a) * (255 - k) + 127) / 255, ((255 - b) * (255 - k) + 127) / 255, ((255 - c) * (255 - k) + 127) / 255, 255)
             i = i + 1
+        c0.free()
+        c1.free()
+        c2.free()
+        c3.free()
         return img
 
 # Header-only inspection: dimensions, component count, progressive flag.
@@ -1049,6 +1058,7 @@ pub def jpeg_info(data: str, len_: int) -> JpegInfo:
         inf.components = d.ncomp
         inf.progressive = d.prog != 0
         inf.adobe = d.adobe
+    d.free()
     return inf
 
 # Decode `len_` bytes of JPEG into an RGBA8 Image (alpha = 255). Returns an
@@ -1058,8 +1068,11 @@ pub def jpeg_info(data: str, len_: int) -> JpegInfo:
 pub def decode_jpeg(data: str, len_: int) -> Image:
     mut d = JpegDec.init(data as Pointer[char], len_)
     if not d.parse(false):
+        d.free()
         return bad_image()
-    return d.to_image()
+    mut img = d.to_image()
+    d.free()
+    return img
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Encoder
@@ -1133,6 +1146,7 @@ extend JpegEnc:
                 if v > 255: v = 255
                 e.qn.set(tc * 64 + i, v)
                 i = i + 1
+            base.free()
             tc = tc + 1
         mut t = 0
         while t < 4:
@@ -1151,6 +1165,8 @@ extend JpegEnc:
                     j = j + 1
                 cd = cd << 1
                 l = l + 1
+            bits.free()
+            vals.free()
             t = t + 1
         mut u = 0
         while u < 8:
@@ -1437,6 +1453,8 @@ pub def encode_jpeg_ex(img: Image, quality: int, subsampling: int, gray: bool, r
         while i < len(vals):
             e.out.push_u8(vals[i])
             i = i + 1
+        bits.free()
+        vals.free()
         t = t + 1
     if restart > 0:
         e.out.push_u8(255)
@@ -1458,6 +1476,7 @@ pub def encode_jpeg_ex(img: Image, quality: int, subsampling: int, gray: bool, r
     e.out.push_u8(0)
     e.out.push_u8(63)
     e.out.push_u8(0)
+    order.free()
 
     # ── entropy-coded data ──
     mut mcux = PW / mw
@@ -1497,6 +1516,12 @@ pub def encode_jpeg_ex(img: Image, quality: int, subsampling: int, gray: bool, r
     e.out.push_u8(217)
     mut olen = e.out.len
     mut result = e.out.to_str()
+    e.free()
+    py.free()
+    pcb.free()
+    pcr.free()
+    sb.free()
+    sr.free()
     return (result, olen)
 
 # Baseline JPEG, 4:2:0 chroma subsampling. See encode_jpeg_ex for options.

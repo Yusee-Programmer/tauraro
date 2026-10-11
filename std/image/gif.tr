@@ -1,0 +1,1139 @@
+# std.image.gif — GIF87a / GIF89a decode and encode (pure Tauraro).
+#
+# Decoder
+#   * LZW (variable width 2..12 bit codes, clear/EOI handling, deferred clear),
+#     interlaced and sequential frames, global + local palettes
+#   * Graphic Control Extension: per-frame delay, disposal method (0/1 keep,
+#     2 restore to background (transparent), 3 restore previous) and transparent
+#     colour index; Netscape 2.0 loop count; comment / plain-text / unknown
+#     extensions are skipped
+#   * every frame is composited onto the logical-screen canvas, so
+#     GifAnim.frame(i) is exactly what a viewer shows at step i (RGBA8; the
+#     canvas starts fully transparent and the background colour index is NOT
+#     painted, as browsers do)
+#   * a file whose later frames are damaged yields the frames decoded so far
+#
+# Encoder
+#   * colours: exact palette when the image has <= 256 distinct opaque colours,
+#     otherwise median-cut quantisation on a 5-bit/channel histogram, optional
+#     Floyd-Steinberg dithering
+#   * alpha < 128 becomes the transparent index; alpha >= 128 is opaque
+#   * LZW with a hash dictionary, 255-byte sub-blocks, proper clear codes
+#   * animation via GifWriter (Netscape loop extension, per-frame delay,
+#     disposal, local palettes, optional "optimise" mode that stores only the
+#     changed rectangle of each frame)
+#
+# Binary buffers are `str` + explicit length throughout (see std.image).
+#
+#   from std.image.gif import decode_gif, encode_gif, decode_gif_anim, GifWriter
+#   mut img = decode_gif(bytes, n)               # first frame, width < 0 on failure
+#   mut anim = decode_gif_anim(bytes, n)         # anim.ok, anim.frame_count
+#   mut f1 = anim.frame(1)                       # composited Image
+#   mut w = GifWriter.init(64, 64, 0)            # loop forever
+#   w.add_frame(frame_a, 10)
+#   w.add_frame(frame_b, 10)
+#   mut out, olen = w.finish()
+
+from std.image.mod import Image
+from std.image.buf import IntBuf, WideBuf, ByteArr, new_image, bad_image, put_rgba, get_ch
+from std.compress.common import rd8, rd16le, rd32le, CBuf
+
+# ── decoded animation ───────────────────────────────────────────────────────
+
+# All frames of a GIF, each already composited onto the full canvas. Frames
+# live in one contiguous RGBA strip; use frame(i) to get an owned Image copy.
+pub class GifAnim:
+    pub ok:          bool
+    pub width:       int
+    pub height:      int
+    pub frame_count: int
+    pub loop_count:  int      # 0 = loop forever, N = N plays, -1 = no loop extension (play once)
+    pub strip:       CBuf     # frame_count * width * height * 4 bytes
+    pub meta:        CBuf     # per frame 8 x u32: delay, disposal, left, top, w, h, transparent+1, has_local_palette
+
+extend GifAnim:
+    pub def init() -> GifAnim:
+        mut a = GifAnim()
+        a.ok = false
+        a.width = 0
+        a.height = 0
+        a.frame_count = 0
+        a.loop_count = -1
+        a.strip = CBuf.init(64)
+        a.meta = CBuf.init(64)
+        return a
+
+    # Release the frame strip and metadata (call when done with the animation).
+    pub def free(self):
+        self.strip.free()
+        self.meta.free()
+
+
+    def mget(self, i: int, f: int) -> int:
+        return rd32le(self.meta.data, (i * 8 + f) * 4)
+
+    # The composited canvas after frame `i` (0-based), as a fresh Image.
+    pub def frame(self, i: int) -> Image:
+        if i < 0 or i >= self.frame_count:
+            return bad_image()
+        mut img = new_image(self.width, self.height)
+        mut n = self.width * self.height * 4
+        mut base = i * n
+        mut k = 0
+        while k < n:
+            img.pixels.set(k, rd8(self.strip.data, base + k) as u8)
+            k = k + 1
+        return img
+
+    # Delay before the NEXT frame, in 1/100 s (0 if the file gave none).
+    pub def delay_cs(self, i: int) -> int:
+        return self.mget(i, 0)
+
+    pub def disposal(self, i: int) -> int:
+        return self.mget(i, 1)
+
+    # The sub-rectangle this frame's own pixel data covered: (x, y, w, h).
+    pub def frame_rect(self, i: int) -> (int, int, int, int):
+        return (self.mget(i, 2), self.mget(i, 3), self.mget(i, 4), self.mget(i, 5))
+
+    # The frame's transparent palette index, or -1.
+    pub def transparent_index(self, i: int) -> int:
+        return self.mget(i, 6) - 1
+
+    pub def has_local_palette(self, i: int) -> bool:
+        return self.mget(i, 7) != 0
+
+# ── LZW decoder ─────────────────────────────────────────────────────────────
+
+# Decode the LZW stream in `lz` (sub-blocks already concatenated) into at most
+# `npix` palette indices written to `out`. Returns the number of pixels decoded
+# (< npix on truncated / corrupt data). `ok` is false only for impossible codes.
+def _lzw_decode(lz: CBuf, mcs: int, npix: int, out: ByteArr) -> int:
+    if mcs < 2 or mcs > 8:
+        return -1
+    mut prefix = IntBuf.init(4096)
+    mut suffix = IntBuf.init(4096)
+    mut stack = ByteArr.init(4100)
+    mut clear = 1 << mcs
+    mut eoi = clear + 1
+    mut nxt = eoi + 1
+    mut size = mcs + 1
+    mut prev = -1
+    mut first = 0
+    mut n = 0
+    mut bitbuf = 0
+    mut bitcnt = 0
+    mut ip = 0
+    mut done = false
+    while n < npix and not done:
+        while bitcnt < size:
+            if ip >= lz.len:
+                done = true
+                break
+            bitbuf = bitbuf | (rd8(lz.data, ip) << bitcnt)
+            ip = ip + 1
+            bitcnt = bitcnt + 8
+        if done:
+            break
+        mut code = bitbuf & ((1 << size) - 1)
+        bitbuf = bitbuf >> size
+        bitcnt = bitcnt - size
+        if code == clear:
+            nxt = eoi + 1
+            size = mcs + 1
+            prev = -1
+            continue
+        if code == eoi:
+            break
+        if prev == -1:
+            if code >= clear:
+                break
+            out.set(n, code)
+            n = n + 1
+            prev = code
+            first = code
+            continue
+        mut cur = code
+        if code > nxt:
+            break
+        if code == nxt:
+            cur = prev
+        mut sp = 0
+        mut c = cur
+        while c >= clear:
+            stack.set(sp, suffix.get(c))
+            sp = sp + 1
+            c = prefix.get(c)
+            if sp > 4096:
+                break
+        stack.set(sp, c)
+        sp = sp + 1
+        first = c
+        # emit reversed stack
+        while sp > 0 and n < npix:
+            sp = sp - 1
+            out.set(n, stack.get(sp))
+            n = n + 1
+        if code == nxt and n < npix:
+            out.set(n, first)
+            n = n + 1
+        if nxt < 4096:
+            prefix.set(nxt, prev)
+            suffix.set(nxt, first)
+            nxt = nxt + 1
+            if nxt == (1 << size) and size < 12:
+                size = size + 1
+        prev = code
+    prefix.free()
+    suffix.free()
+    stack.free()
+    return n
+
+# Append the data sub-blocks starting at `pos` to `lz`; returns the position
+# after the block terminator, or -1 if the data is truncated.
+def _read_blocks(p: Pointer[char], len_: int, pos: int, lz: CBuf) -> int:
+    mut q = pos
+    while true:
+        if q >= len_:
+            return -1
+        mut bl = rd8(p, q)
+        q = q + 1
+        if bl == 0:
+            return q
+        if q + bl > len_:
+            return -1
+        mut j = 0
+        while j < bl:
+            lz.push_u8(rd8(p, q + j))
+            j = j + 1
+        q = q + bl
+    return q
+
+# ── decoder ─────────────────────────────────────────────────────────────────
+
+# Decode every frame of a GIF. On failure `ok` is false and frame_count is 0.
+pub def decode_gif_anim(data: str, len_: int) -> GifAnim:
+    mut a = GifAnim.init()
+    mut p = data as Pointer[char]
+    if len_ < 13:
+        return a
+    if rd8(p, 0) != 0x47 or rd8(p, 1) != 0x49 or rd8(p, 2) != 0x46 or rd8(p, 3) != 0x38:
+        return a
+    if (rd8(p, 4) != 0x37 and rd8(p, 4) != 0x39) or rd8(p, 5) != 0x61:
+        return a
+    mut W = rd16le(p, 6)
+    mut H = rd16le(p, 8)
+    mut flags = rd8(p, 10)
+    if W <= 0 or H <= 0:
+        return a
+    if W * H > 33554432:
+        return a
+    a.width = W
+    a.height = H
+    mut pos = 13
+    mut gct = ByteArr.init(768)
+    mut gsize = 0
+    if (flags & 0x80) != 0:
+        gsize = 1 << ((flags & 7) + 1)
+        if pos + gsize * 3 > len_:
+            gct.free()
+            return a
+        mut i = 0
+        while i < gsize * 3:
+            gct.set(i, rd8(p, pos + i))
+            i = i + 1
+        pos = pos + gsize * 3
+    mut canvas = ByteArr.init(W * H * 4)
+    mut saved = ByteArr.init(W * H * 4)
+    mut have_saved = false
+    mut prev_disposal = 0
+    mut prev_rect_x = 0
+    mut prev_rect_y = 0
+    mut prev_rect_w = 0
+    mut prev_rect_h = 0
+    # pending graphic control
+    mut g_delay = 0
+    mut g_disp = 0
+    mut g_trans = -1
+    mut lz = CBuf.init(1024)
+    mut lpal = ByteArr.init(768)
+    mut idx = ByteArr.init(W * H)
+    mut stop = false
+    while pos < len_ and not stop:
+        mut b = rd8(p, pos)
+        pos = pos + 1
+        if b == 0x3B:
+            break
+        if b == 0x21:
+            if pos >= len_:
+                break
+            mut label = rd8(p, pos)
+            pos = pos + 1
+            if label == 0xF9:
+                if pos + 6 > len_:
+                    break
+                mut bs = rd8(p, pos)
+                mut pk = rd8(p, pos + 1)
+                g_disp = (pk >> 2) & 7
+                g_delay = rd16le(p, pos + 2)
+                g_trans = -1
+                if (pk & 1) != 0:
+                    g_trans = rd8(p, pos + 4)
+                pos = pos + 1 + bs
+                # skip to terminator
+                while pos < len_ and rd8(p, pos) != 0:
+                    pos = pos + 1 + rd8(p, pos)
+                pos = pos + 1
+            elif label == 0xFF:
+                if pos >= len_:
+                    break
+                mut bs = rd8(p, pos)
+                mut isnet = false
+                if bs == 11 and pos + 1 + 11 + 5 <= len_:
+                    if rd8(p, pos + 1) == 0x4E and rd8(p, pos + 2) == 0x45 and rd8(p, pos + 3) == 0x54 and rd8(p, pos + 4) == 0x53 and rd8(p, pos + 5) == 0x43 and rd8(p, pos + 6) == 0x41 and rd8(p, pos + 7) == 0x50 and rd8(p, pos + 8) == 0x45:
+                        isnet = true
+                mut q = pos + 1 + bs
+                if isnet and q + 4 <= len_ and rd8(p, q) == 3 and rd8(p, q + 1) == 1:
+                    a.loop_count = rd16le(p, q + 2)
+                pos = q
+                while pos < len_ and rd8(p, pos) != 0:
+                    pos = pos + 1 + rd8(p, pos)
+                pos = pos + 1
+            else:
+                while pos < len_ and rd8(p, pos) != 0:
+                    pos = pos + 1 + rd8(p, pos)
+                pos = pos + 1
+            continue
+        if b != 0x2C:
+            # unknown block: stop, keep what we have
+            break
+        if pos + 9 > len_:
+            break
+        mut fx = rd16le(p, pos)
+        mut fy = rd16le(p, pos + 2)
+        mut fw = rd16le(p, pos + 4)
+        mut fh = rd16le(p, pos + 6)
+        mut fl = rd8(p, pos + 8)
+        pos = pos + 9
+        mut local = (fl & 0x80) != 0
+        mut interlaced = (fl & 0x40) != 0
+        mut psize = gsize
+        if local:
+            psize = 1 << ((fl & 7) + 1)
+            if pos + psize * 3 > len_:
+                break
+            mut i = 0
+            while i < psize * 3:
+                lpal.set(i, rd8(p, pos + i))
+                i = i + 1
+            pos = pos + psize * 3
+        if pos >= len_:
+            break
+        mut mcs = rd8(p, pos)
+        pos = pos + 1
+        lz.len = 0
+        mut np = _read_blocks(p, len_, pos, lz)
+        mut truncated = false
+        if np < 0:
+            truncated = true
+            np = len_
+        pos = np
+        if fw <= 0 or fh <= 0 or fx + fw > W or fy + fh > H:
+            # frame outside the canvas: tolerate by clipping would be ambiguous -> stop
+            stop = true
+            break
+        if psize == 0:
+            stop = true
+            break
+        # apply previous disposal
+        if a.frame_count > 0:
+            if prev_disposal == 2:
+                mut yy = prev_rect_y
+                while yy < prev_rect_y + prev_rect_h:
+                    mut xx = prev_rect_x
+                    while xx < prev_rect_x + prev_rect_w:
+                        mut o = (yy * W + xx) * 4
+                        canvas.set(o, 0)
+                        canvas.set(o + 1, 0)
+                        canvas.set(o + 2, 0)
+                        canvas.set(o + 3, 0)
+                        xx = xx + 1
+                    yy = yy + 1
+            elif prev_disposal == 3 and have_saved:
+                mut k = 0
+                while k < W * H * 4:
+                    canvas.set(k, saved.get(k))
+                    k = k + 1
+        if g_disp == 3:
+            mut k = 0
+            while k < W * H * 4:
+                saved.set(k, canvas.get(k))
+                k = k + 1
+            have_saved = true
+        mut got = _lzw_decode(lz, mcs, fw * fh, idx)
+        if got < 0:
+            stop = true
+            break
+        if got == 0 and truncated:
+            break
+        # draw
+        mut row = 0
+        while row < fh:
+            mut dy = row
+            if interlaced:
+                # rows in file order: pass 0 (step 8 @0), 1 (step 8 @4), 2 (step 4 @2), 3 (step 2 @1)
+                mut r2 = row
+                mut n0 = (fh + 7) / 8
+                mut n1 = (fh + 3) / 8
+                mut n2 = (fh + 1) / 4
+                if r2 < n0:
+                    dy = r2 * 8
+                elif r2 < n0 + n1:
+                    dy = (r2 - n0) * 8 + 4
+                elif r2 < n0 + n1 + n2:
+                    dy = (r2 - n0 - n1) * 4 + 2
+                else:
+                    dy = (r2 - n0 - n1 - n2) * 2 + 1
+            mut col = 0
+            while col < fw:
+                mut pi = row * fw + col
+                if pi < got:
+                    mut ci = idx.get(pi)
+                    if ci != g_trans:
+                        mut o = ((fy + dy) * W + fx + col) * 4
+                        if ci < psize:
+                            if local:
+                                canvas.set(o, lpal.get(ci * 3))
+                                canvas.set(o + 1, lpal.get(ci * 3 + 1))
+                                canvas.set(o + 2, lpal.get(ci * 3 + 2))
+                            else:
+                                canvas.set(o, gct.get(ci * 3))
+                                canvas.set(o + 1, gct.get(ci * 3 + 1))
+                                canvas.set(o + 2, gct.get(ci * 3 + 2))
+                        else:
+                            canvas.set(o, 0)
+                            canvas.set(o + 1, 0)
+                            canvas.set(o + 2, 0)
+                        canvas.set(o + 3, 255)
+                col = col + 1
+            row = row + 1
+        # snapshot
+        a.strip.push_raw(canvas.p, W * H * 4)
+        a.meta.push_u32le(g_delay)
+        a.meta.push_u32le(g_disp)
+        a.meta.push_u32le(fx)
+        a.meta.push_u32le(fy)
+        a.meta.push_u32le(fw)
+        a.meta.push_u32le(fh)
+        a.meta.push_u32le(g_trans + 1)
+        if local:
+            a.meta.push_u32le(1)
+        else:
+            a.meta.push_u32le(0)
+        a.frame_count = a.frame_count + 1
+        prev_disposal = g_disp
+        prev_rect_x = fx
+        prev_rect_y = fy
+        prev_rect_w = fw
+        prev_rect_h = fh
+        g_delay = 0
+        g_disp = 0
+        g_trans = -1
+        if truncated or got < fw * fh:
+            break
+        if a.frame_count >= 4096:
+            break
+        if a.frame_count * W * H * 4 > 805306368:
+            break
+    gct.free()
+    canvas.free()
+    saved.free()
+    lz.free()
+    lpal.free()
+    idx.free()
+    a.ok = a.frame_count > 0
+    return a
+
+# Decode the first frame (composited on the logical screen) as RGBA8. Returns
+# an Image with width == -1 on malformed input.
+pub def decode_gif(data: str, len_: int) -> Image:
+    mut a = decode_gif_anim(data, len_)
+    if not a.ok:
+        a.free()
+        return bad_image()
+    mut img = a.frame(0)
+    a.free()
+    return img
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Encoder
+# ═══════════════════════════════════════════════════════════════════════════
+
+# Result of colour reduction: an RGB palette, a palette index per pixel and the
+# transparent index (-1 when the image is fully opaque).
+class GifQuant:
+    pub pal:   ByteArr     # 768 bytes (RGB triples)
+    pub npal:  int         # entries in use, INCLUDING the transparent slot
+    pub idx:   ByteArr     # width * height palette indices
+    pub trans: int
+
+extend GifQuant:
+    pub def free(self):
+        self.pal.free()
+        self.idx.free()
+
+def _hash_key(key: int, mask: int) -> int:
+    return ((key * 40503) ^ (key >> 9)) & mask
+
+def _bin15(r: int, g: int, b: int) -> int:
+    return ((r >> 3) << 10) | ((g >> 3) << 5) | (b >> 3)
+
+# Nearest palette entry (squared RGB distance) among the first `n` entries.
+def _nearest(pal: ByteArr, n: int, r: int, g: int, b: int) -> int:
+    mut best = 0
+    mut bd = 1 << 40
+    mut i = 0
+    while i < n:
+        mut dr = r - pal.get(i * 3)
+        mut dg = g - pal.get(i * 3 + 1)
+        mut db = b - pal.get(i * 3 + 2)
+        mut d = dr * dr + dg * dg + db * db
+        if d < bd:
+            bd = d
+            best = i
+        i = i + 1
+    return best
+
+# Median-cut over the 15-bit colour histogram. Writes `k` (or fewer) palette
+# entries into `pal`; returns how many.
+def _median_cut(counts: IntBuf, rs: WideBuf, gs: WideBuf, bs: WideBuf, k: int, pal: ByteArr) -> int:
+    mut nb = 0
+    mut b = 0
+    while b < 32768:
+        if counts.get(b) > 0:
+            nb = nb + 1
+        b = b + 1
+    mut order = IntBuf.init(nb + 1)
+    mut tmp = IntBuf.init(nb + 1)
+    mut j = 0
+    b = 0
+    while b < 32768:
+        if counts.get(b) > 0:
+            order.set(j, b)
+            j = j + 1
+        b = b + 1
+    mut lo = IntBuf.init(k + 1)
+    mut hi = IntBuf.init(k + 1)
+    lo.set(0, 0)
+    hi.set(0, nb)
+    mut nbox = 1
+    while nbox < k:
+        # pick the splittable box with the largest population
+        mut bi = -1
+        mut bpop = -1
+        mut i = 0
+        while i < nbox:
+            if hi.get(i) - lo.get(i) > 1:
+                mut pop = 0
+                mut e = lo.get(i)
+                while e < hi.get(i):
+                    pop = pop + counts.get(order.get(e))
+                    e = e + 1
+                if pop > bpop:
+                    bpop = pop
+                    bi = i
+            i = i + 1
+        if bi < 0:
+            break
+        mut l = lo.get(bi)
+        mut h = hi.get(bi)
+        # channel with the widest range
+        mut rmin = 31
+        mut rmax = 0
+        mut gmin = 31
+        mut gmax = 0
+        mut bmin = 31
+        mut bmax = 0
+        mut e = l
+        while e < h:
+            mut bn = order.get(e)
+            mut r5 = bn >> 10
+            mut g5 = (bn >> 5) & 31
+            mut b5 = bn & 31
+            if r5 < rmin: rmin = r5
+            if r5 > rmax: rmax = r5
+            if g5 < gmin: gmin = g5
+            if g5 > gmax: gmax = g5
+            if b5 < bmin: bmin = b5
+            if b5 > bmax: bmax = b5
+            e = e + 1
+        mut ch = 0
+        mut rng = rmax - rmin
+        if gmax - gmin > rng:
+            rng = gmax - gmin
+            ch = 1
+        if bmax - bmin > rng:
+            rng = bmax - bmin
+            ch = 2
+        # counting sort of order[l..h) by that channel
+        mut cnt = IntBuf.init(33)
+        e = l
+        while e < h:
+            mut bn = order.get(e)
+            mut key = 0
+            if ch == 0:
+                key = bn >> 10
+            elif ch == 1:
+                key = (bn >> 5) & 31
+            else:
+                key = bn & 31
+            cnt.set(key + 1, cnt.get(key + 1) + 1)
+            e = e + 1
+        mut c = 0
+        while c < 32:
+            cnt.set(c + 1, cnt.get(c + 1) + cnt.get(c))
+            c = c + 1
+        e = l
+        while e < h:
+            mut bn = order.get(e)
+            mut key = 0
+            if ch == 0:
+                key = bn >> 10
+            elif ch == 1:
+                key = (bn >> 5) & 31
+            else:
+                key = bn & 31
+            tmp.set(l + cnt.get(key), bn)
+            cnt.set(key, cnt.get(key) + 1)
+            e = e + 1
+        cnt.free()
+        e = l
+        while e < h:
+            order.set(e, tmp.get(e))
+            e = e + 1
+        # split at the population median (both halves non-empty)
+        mut half = bpop / 2
+        mut acc = 0
+        mut sp = l
+        e = l
+        while e < h - 1:
+            acc = acc + counts.get(order.get(e))
+            sp = e + 1
+            if acc >= half:
+                break
+            e = e + 1
+        lo.set(nbox, sp)
+        hi.set(nbox, h)
+        hi.set(bi, sp)
+        nbox = nbox + 1
+    mut i = 0
+    while i < nbox:
+        mut sr = 0
+        mut sg = 0
+        mut sb = 0
+        mut pop = 0
+        mut e = lo.get(i)
+        while e < hi.get(i):
+            mut bn = order.get(e)
+            sr = sr + rs.get(bn)
+            sg = sg + gs.get(bn)
+            sb = sb + bs.get(bn)
+            pop = pop + counts.get(bn)
+            e = e + 1
+        if pop < 1:
+            pop = 1
+        pal.set(i * 3, (sr + pop / 2) / pop)
+        pal.set(i * 3 + 1, (sg + pop / 2) / pop)
+        pal.set(i * 3 + 2, (sb + pop / 2) / pop)
+        i = i + 1
+    order.free()
+    tmp.free()
+    lo.free()
+    hi.free()
+    return nbox
+
+def _quantize(img: Image, dither: bool) -> GifQuant:
+    mut W = img.width
+    mut H = img.height
+    mut n = W * H
+    mut q = GifQuant()
+    q.pal = ByteArr.init(768)
+    q.idx = ByteArr.init(n + 1)
+    q.trans = -1
+    q.npal = 0
+    mut keys = IntBuf.init(1024)
+    mut vals = IntBuf.init(1024)
+    mut ncol = 0
+    mut has_trans = false
+    mut i = 0
+    while i < n:
+        if get_ch(img, i, 3) < 128:
+            has_trans = true
+        else:
+            mut key = (get_ch(img, i, 0) << 16) | (get_ch(img, i, 1) << 8) | get_ch(img, i, 2)
+            mut h = _hash_key(key, 1023)
+            mut found = false
+            while keys.get(h) != 0:
+                if keys.get(h) == key + 1:
+                    found = true
+                    break
+                h = (h + 1) & 1023
+            if not found and ncol <= 256:
+                keys.set(h, key + 1)
+                vals.set(h, ncol)
+                if ncol < 256:
+                    q.pal.set(ncol * 3, key >> 16)
+                    q.pal.set(ncol * 3 + 1, (key >> 8) & 255)
+                    q.pal.set(ncol * 3 + 2, key & 255)
+                ncol = ncol + 1
+        i = i + 1
+    mut limit = 256
+    if has_trans:
+        limit = 255
+    if ncol <= limit:
+        i = 0
+        while i < n:
+            if get_ch(img, i, 3) < 128:
+                q.idx.set(i, ncol)
+            else:
+                mut key = (get_ch(img, i, 0) << 16) | (get_ch(img, i, 1) << 8) | get_ch(img, i, 2)
+                mut h = _hash_key(key, 1023)
+                while keys.get(h) != key + 1:
+                    h = (h + 1) & 1023
+                q.idx.set(i, vals.get(h))
+            i = i + 1
+        q.npal = ncol
+        if has_trans:
+            q.trans = ncol
+            q.npal = ncol + 1
+        keys.free()
+        vals.free()
+        return q
+    keys.free()
+    vals.free()
+    # ---- too many colours: median cut ----
+    mut counts = IntBuf.init(32768)
+    mut rs = WideBuf.init(32768)
+    mut gs = WideBuf.init(32768)
+    mut bs = WideBuf.init(32768)
+    i = 0
+    while i < n:
+        if get_ch(img, i, 3) >= 128:
+            mut r = get_ch(img, i, 0)
+            mut g = get_ch(img, i, 1)
+            mut b = get_ch(img, i, 2)
+            mut bn = _bin15(r, g, b)
+            counts.set(bn, counts.get(bn) + 1)
+            rs.set(bn, rs.get(bn) + r)
+            gs.set(bn, gs.get(bn) + g)
+            bs.set(bn, bs.get(bn) + b)
+        i = i + 1
+    mut npal = _median_cut(counts, rs, gs, bs, limit, q.pal)
+    # bin -> palette index (lazily; -1 = unknown)
+    mut bmap = IntBuf.init(32768)
+    bmap.fill(-1)
+    if not dither:
+        i = 0
+        while i < n:
+            if get_ch(img, i, 3) < 128:
+                q.idx.set(i, npal)
+            else:
+                mut bn = _bin15(get_ch(img, i, 0), get_ch(img, i, 1), get_ch(img, i, 2))
+                if bmap.get(bn) < 0:
+                    mut cn = counts.get(bn)
+                    bmap.set(bn, _nearest(q.pal, npal, (rs.get(bn) + cn / 2) / cn, (gs.get(bn) + cn / 2) / cn, (bs.get(bn) + cn / 2) / cn))
+                q.idx.set(i, bmap.get(bn))
+            i = i + 1
+    else:
+        # Floyd-Steinberg; error rows hold 16ths of a level per channel
+        mut e0 = IntBuf.init((W + 2) * 3)
+        mut e1 = IntBuf.init((W + 2) * 3)
+        mut y = 0
+        while y < H:
+            mut x = 0
+            while x < W:
+                mut pi = y * W + x
+                if get_ch(img, pi, 3) < 128:
+                    q.idx.set(pi, npal)
+                else:
+                    mut r = clamp_i(get_ch(img, pi, 0) + e0.get((x + 1) * 3) / 16)
+                    mut g = clamp_i(get_ch(img, pi, 1) + e0.get((x + 1) * 3 + 1) / 16)
+                    mut b = clamp_i(get_ch(img, pi, 2) + e0.get((x + 1) * 3 + 2) / 16)
+                    mut ci = _nearest(q.pal, npal, r, g, b)
+                    q.idx.set(pi, ci)
+                    mut er = r - q.pal.get(ci * 3)
+                    mut eg = g - q.pal.get(ci * 3 + 1)
+                    mut eb = b - q.pal.get(ci * 3 + 2)
+                    mut c = 0
+                    while c < 3:
+                        mut ev = er
+                        if c == 1: ev = eg
+                        if c == 2: ev = eb
+                        e0.set((x + 2) * 3 + c, e0.get((x + 2) * 3 + c) + ev * 7)
+                        e1.set(x * 3 + c, e1.get(x * 3 + c) + ev * 3)
+                        e1.set((x + 1) * 3 + c, e1.get((x + 1) * 3 + c) + ev * 5)
+                        e1.set((x + 2) * 3 + c, e1.get((x + 2) * 3 + c) + ev)
+                        c = c + 1
+                x = x + 1
+            mut t = 0
+            while t < (W + 2) * 3:
+                e0.set(t, e1.get(t))
+                e1.set(t, 0)
+                t = t + 1
+            y = y + 1
+        e0.free()
+        e1.free()
+    counts.free()
+    rs.free()
+    gs.free()
+    bs.free()
+    bmap.free()
+    q.npal = npal
+    if has_trans:
+        q.trans = npal
+        q.npal = npal + 1
+    return q
+
+def clamp_i(v: int) -> int:
+    if v < 0: return 0
+    if v > 255: return 255
+    return v
+
+# ── LZW encoder ──────────────────────────────────────────────────────────────
+
+class _GifBits:
+    pub out:  CBuf       # destination (sub-blocks are written here)
+    pub blk:  ByteArr    # current sub-block (up to 255 bytes)
+    pub bl:   int
+    pub acc:  int
+    pub nb:   int
+
+extend _GifBits:
+    pub def free(self):
+        self.blk.free()
+
+    def put_byte(self, b: int):
+        self.blk.set(self.bl, b)
+        self.bl = self.bl + 1
+        if self.bl == 255:
+            self.out.push_u8(255)
+            self.out.push_raw(self.blk.p, 255)
+            self.bl = 0
+
+    pub def put(self, code: int, size: int):
+        self.acc = self.acc | (code << self.nb)
+        self.nb = self.nb + size
+        while self.nb >= 8:
+            self.put_byte(self.acc & 255)
+            self.acc = self.acc >> 8
+            self.nb = self.nb - 8
+
+    pub def finish(self):
+        if self.nb > 0:
+            self.put_byte(self.acc & 255)
+            self.acc = 0
+            self.nb = 0
+        if self.bl > 0:
+            self.out.push_u8(self.bl)
+            self.out.push_raw(self.blk.p, self.bl)
+            self.bl = 0
+        self.out.push_u8(0)
+
+# Append the LZW image data (min code size byte, sub-blocks, terminator).
+def _lzw_encode(idx: ByteArr, n: int, mcs: int, out: CBuf):
+    out.push_u8(mcs)
+    mut bw = _GifBits()
+    bw.out = out
+    bw.blk = ByteArr.init(256)
+    bw.bl = 0
+    bw.acc = 0
+    bw.nb = 0
+    mut clear = 1 << mcs
+    mut eoi = clear + 1
+    mut keys = IntBuf.init(16384)
+    mut vals = IntBuf.init(16384)
+    mut nxt = eoi + 1
+    mut size = mcs + 1
+    bw.put(clear, size)
+    if n > 0:
+        mut prefix = idx.get(0)
+        mut i = 1
+        while i < n:
+            mut c = idx.get(i)
+            mut key = (prefix << 8) | c
+            mut h = _hash_key(key, 16383)
+            mut found = -1
+            while keys.get(h) != 0:
+                if keys.get(h) == key + 1:
+                    found = vals.get(h)
+                    break
+                h = (h + 1) & 16383
+            if found >= 0:
+                prefix = found
+            else:
+                bw.put(prefix, size)
+                if nxt < 4096:
+                    keys.set(h, key + 1)
+                    vals.set(h, nxt)
+                    nxt = nxt + 1
+                    if nxt > (1 << size) and size < 12:
+                        size = size + 1
+                else:
+                    bw.put(clear, size)
+                    keys.fill(0)
+                    nxt = eoi + 1
+                    size = mcs + 1
+                prefix = c
+            i = i + 1
+        bw.put(prefix, size)
+    bw.put(eoi, size)
+    bw.finish()
+    bw.free()
+    keys.free()
+    vals.free()
+
+# ── GifWriter ────────────────────────────────────────────────────────────────
+
+# Builds a GIF (single image or animation).
+#   w = GifWriter.init(width, height, loop_count)   # loop_count: -1 none, 0 forever, N
+#   w.add_frame(img, delay_cs)                      # frames are width x height Images
+#   mut bytes, n = w.finish()
+pub class GifWriter:
+    pub out:      CBuf
+    pub width:    int
+    pub height:   int
+    pub nframes:  int
+    pub dither:   bool
+    pub optimize: bool
+    pub prev:     ByteArr     # what a viewer currently shows (RGBA), for optimize
+    pub prev_alpha: bool      # previous frame had transparent pixels
+
+extend GifWriter:
+    pub def init(width: int, height: int, loop_count: int) -> GifWriter:
+        mut w = GifWriter()
+        w.out = CBuf.init(4096)
+        w.width = width
+        w.height = height
+        w.nframes = 0
+        w.dither = false
+        w.optimize = false
+        w.prev = ByteArr.init(width * height * 4 + 4)
+        w.prev_alpha = false
+        w.out.push_str("GIF89a", 6)
+        w.out.push_u16le(width)
+        w.out.push_u16le(height)
+        w.out.push_u8(0x70)     # no global colour table, 8-bit colour resolution
+        w.out.push_u8(0)
+        w.out.push_u8(0)
+        if loop_count >= 0:
+            w.out.push_u8(0x21)
+            w.out.push_u8(0xFF)
+            w.out.push_u8(11)
+            w.out.push_str("NETSCAPE2.0", 11)
+            w.out.push_u8(3)
+            w.out.push_u8(1)
+            w.out.push_u16le(loop_count)
+            w.out.push_u8(0)
+        return w
+
+    pub def free(self):
+        self.out.free()
+        self.prev.free()
+
+
+    # Floyd-Steinberg dithering when an image needs more than 256 colours.
+    pub def set_dither(self, on: bool):
+        self.dither = on
+
+    # Store only the changed rectangle of each frame (opaque animations only).
+    pub def set_optimize(self, on: bool):
+        self.optimize = on
+
+    def write_frame(self, q: GifQuant, x: int, y: int, w: int, h: int, delay_cs: int, disposal: int):
+        mut total = q.npal
+        if total < 2:
+            total = 2
+        mut nbits = 1
+        while (1 << nbits) < total:
+            nbits = nbits + 1
+        mut mcs = nbits
+        if mcs < 2:
+            mcs = 2
+        self.out.push_u8(0x21)
+        self.out.push_u8(0xF9)
+        self.out.push_u8(4)
+        mut pk = disposal << 2
+        if q.trans >= 0:
+            pk = pk | 1
+        self.out.push_u8(pk)
+        self.out.push_u16le(delay_cs)
+        if q.trans >= 0:
+            self.out.push_u8(q.trans)
+        else:
+            self.out.push_u8(0)
+        self.out.push_u8(0)
+        self.out.push_u8(0x2C)
+        self.out.push_u16le(x)
+        self.out.push_u16le(y)
+        self.out.push_u16le(w)
+        self.out.push_u16le(h)
+        self.out.push_u8(0x80 | (nbits - 1))
+        mut e = 0
+        while e < (1 << nbits) * 3:
+            self.out.push_u8(q.pal.get(e))
+            e = e + 1
+        _lzw_encode(q.idx, w * h, mcs, self.out)
+        self.nframes = self.nframes + 1
+
+    # Add a frame with the default disposal (keep; clear when the frame has
+    # transparent pixels so the next frame starts from a blank canvas).
+    pub def add_frame(self, img: Image, delay_cs: int):
+        self.add_frame_ex(img, delay_cs, -1)
+
+    # `disposal`: 0/1 keep, 2 restore background, 3 restore previous, -1 auto.
+    pub def add_frame_ex(self, img: Image, delay_cs: int, disposal: int):
+        mut W = self.width
+        mut H = self.height
+        # source frame as an exact W x H image (crop / pad with transparency)
+        mut src = new_image(W, H)
+        mut yy = 0
+        while yy < H and yy < img.height:
+            mut xx = 0
+            while xx < W and xx < img.width:
+                mut k = 0
+                while k < 4:
+                    src.pixels.set((yy * W + xx) * 4 + k, img.pixels.get((yy * img.width + xx) * 4 + k))
+                    k = k + 1
+                xx = xx + 1
+            yy = yy + 1
+        mut has_alpha = false
+        mut i = 0
+        while i < W * H:
+            if get_ch(src, i, 3) < 128:
+                has_alpha = true
+                break
+            i = i + 1
+        mut disp = disposal
+        if disp < 0:
+            disp = 1
+            if has_alpha:
+                disp = 2
+        if self.optimize and self.nframes > 0 and not has_alpha and not self.prev_alpha and disp == 1:
+            # bounding box of pixels that differ from what is on screen
+            mut x0 = W
+            mut y0 = H
+            mut x1 = -1
+            mut y1 = -1
+            yy = 0
+            while yy < H:
+                mut xx = 0
+                while xx < W:
+                    mut pi = yy * W + xx
+                    mut same = true
+                    mut k = 0
+                    while k < 3:
+                        if get_ch(src, pi, k) != self.prev.get(pi * 4 + k):
+                            same = false
+                        k = k + 1
+                    if not same:
+                        if xx < x0: x0 = xx
+                        if xx > x1: x1 = xx
+                        if yy < y0: y0 = yy
+                        if yy > y1: y1 = yy
+                    xx = xx + 1
+                yy = yy + 1
+            mut fx = 0
+            mut fy = 0
+            mut fw = 1
+            mut fh = 1
+            if x1 >= 0:
+                fx = x0
+                fy = y0
+                fw = x1 - x0 + 1
+                fh = y1 - y0 + 1
+            mut sub = new_image(fw, fh)
+            yy = 0
+            while yy < fh:
+                mut xx = 0
+                while xx < fw:
+                    mut pi = (fy + yy) * W + fx + xx
+                    mut same = x1 >= 0
+                    mut k = 0
+                    while k < 3:
+                        if get_ch(src, pi, k) != self.prev.get(pi * 4 + k):
+                            same = false
+                        k = k + 1
+                    mut o = (yy * fw + xx) * 4
+                    if same or x1 < 0:
+                        sub.pixels.set(o, 0 as u8)
+                        sub.pixels.set(o + 1, 0 as u8)
+                        sub.pixels.set(o + 2, 0 as u8)
+                        sub.pixels.set(o + 3, 0 as u8)
+                    else:
+                        sub.pixels.set(o, get_ch(src, pi, 0) as u8)
+                        sub.pixels.set(o + 1, get_ch(src, pi, 1) as u8)
+                        sub.pixels.set(o + 2, get_ch(src, pi, 2) as u8)
+                        sub.pixels.set(o + 3, 255 as u8)
+                    xx = xx + 1
+                yy = yy + 1
+            mut q = _quantize(sub, self.dither)
+            self.write_frame(q, fx, fy, fw, fh, delay_cs, disp)
+            # update the on-screen canvas with what the palette really shows
+            yy = 0
+            while yy < fh:
+                mut xx = 0
+                while xx < fw:
+                    mut ci = q.idx.get(yy * fw + xx)
+                    if ci != q.trans:
+                        mut o = ((fy + yy) * W + fx + xx) * 4
+                        self.prev.set(o, q.pal.get(ci * 3))
+                        self.prev.set(o + 1, q.pal.get(ci * 3 + 1))
+                        self.prev.set(o + 2, q.pal.get(ci * 3 + 2))
+                        self.prev.set(o + 3, 255)
+                    xx = xx + 1
+                yy = yy + 1
+            self.prev_alpha = false
+            q.free()
+            sub.free()
+            src.free()
+            return
+        mut q = _quantize(src, self.dither)
+        self.write_frame(q, 0, 0, W, H, delay_cs, disp)
+        i = 0
+        while i < W * H:
+            mut ci = q.idx.get(i)
+            if ci == q.trans:
+                self.prev.set(i * 4, 0)
+                self.prev.set(i * 4 + 1, 0)
+                self.prev.set(i * 4 + 2, 0)
+                self.prev.set(i * 4 + 3, 0)
+            else:
+                self.prev.set(i * 4, q.pal.get(ci * 3))
+                self.prev.set(i * 4 + 1, q.pal.get(ci * 3 + 1))
+                self.prev.set(i * 4 + 2, q.pal.get(ci * 3 + 2))
+                self.prev.set(i * 4 + 3, 255)
+            i = i + 1
+        self.prev_alpha = has_alpha
+        q.free()
+        src.free()
+
+    # Terminate the file and return (bytes, length).
+    pub def finish(self) -> (str, int):
+        self.out.push_u8(0x3B)
+        mut n = self.out.len
+        mut s = self.out.to_str()
+        return (s, n)
+
+# Encode one image as a (non-animated) GIF. Colours beyond 256 are reduced by
+# median cut; alpha < 128 becomes transparent. Returns (bytes, length).
+pub def encode_gif(img: Image) -> (str, int):
+    return encode_gif_ex(img, false)
+
+# Same as encode_gif with optional Floyd-Steinberg dithering.
+pub def encode_gif_ex(img: Image, dither: bool) -> (str, int):
+    mut w = GifWriter.init(img.width, img.height, -1)
+    w.set_dither(dither)
+    w.add_frame_ex(img, 0, 0)
+    mut r = w.finish()
+    w.free()
+    return r
