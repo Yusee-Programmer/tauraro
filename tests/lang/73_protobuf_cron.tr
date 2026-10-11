@@ -1,0 +1,548 @@
+# tests/lang/73_protobuf_cron.tr
+# std.encoding.protobuf (wire-format reader/writer; examples from the
+# protobuf "Encoding" guide) and std.sys.cron (5-field cron parsing,
+# next/previous fire times in UTC).
+
+from std.test import TestRunner
+from std.encoding.protobuf import ProtoWriter, ProtoReader, Proto
+from std.encoding.hex import Hex
+from std.sys.cron import Cron, CronSchedule
+from std.sys.datetime import DateTime, TimeZone
+from std.core.string import StringBuilder
+
+# Lower-case hex of a BINARY string (real byte length; see 72_base32_cbor).
+def tohex(s: str) -> str:
+    mut sb = StringBuilder.init(s.len() * 2 + 2)
+    mut p = s as Pointer[char]
+    mut i = 0
+    while i < s.len():
+        mut b = 0
+        unsafe:
+            b = (p.offset(i).read() as int) & 255
+        mut hi = b >> 4
+        mut lo = b & 15
+        if hi < 10: sb.append_char(48 + hi)
+        else: sb.append_char(87 + hi)
+        if lo < 10: sb.append_char(48 + lo)
+        else: sb.append_char(87 + lo)
+        i = i + 1
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+# Wire bytes produced by `w`, as hex (the writer is freed).
+def wire_hex(w: ProtoWriter) -> str:
+    mut s = w.to_str()
+    w.free()
+    return tohex(s)
+
+def bad_read(t: TestRunner, hex: str, msg: str):
+    mut r = ProtoReader.init(Hex.decode(hex))
+    mut go: Result[bool, str] = r.next_field()
+    if go.is_err:
+        t.assert_true(true, msg)
+        return
+    if not go.ok:
+        t.fail(msg + " (no field decoded)")
+        return
+    mut sk: Result[bool, str] = r.skip()
+    t.assert_true(sk.is_err, msg)
+
+def at(y: int, mo: int, d: int, h: int, mi: int, s: int) -> int:
+    return DateTime.in_zone(y, mo, d, h, mi, s, TimeZone.utc()).timestamp()
+
+# next fire time of `expr` strictly after `ts`, as "YYYY-MM-DD HH:MM:SS"
+# (or "none").
+def nxt(expr: str, ts: int) -> str:
+    mut r: Result[CronSchedule, str] = Cron.parse(expr)
+    if r.is_err: return "<parse error: " + r.err + ">"
+    mut v = r.ok.next_after(ts)
+    if v == -1: return "none"
+    return DateTime.from_timestamp_utc(v).to_string()
+
+def prv(expr: str, ts: int) -> str:
+    mut r: Result[CronSchedule, str] = Cron.parse(expr)
+    if r.is_err: return "<parse error: " + r.err + ">"
+    mut v = r.ok.prev_before(ts)
+    if v == -1: return "none"
+    return DateTime.from_timestamp_utc(v).to_string()
+
+def main():
+    mut t = TestRunner.init("73_protobuf_cron")
+
+    # ───────────────────────── protobuf ─────────────────────────
+    t.section("protobuf: varint / zigzag primitives")
+    mut vw = ProtoWriter.init()
+    vw.put_varint(1)
+    vw.put_varint(150)
+    vw.put_varint(300)
+    vw.put_varint(0)
+    vw.put_varint(127)
+    vw.put_varint(128)
+    t.assert_eq_str(wire_hex(vw), "019601ac0200" + "7f8001", "varints 1,150,300,0,127,128")
+    mut vm = ProtoWriter.init()
+    vm.put_varint(-1)
+    t.assert_eq_str(wire_hex(vm), "ffffffffffffffffff01", "-1 as a 10-byte varint")
+    t.assert_eq_int(Proto.varint_size(0), 1, "varint_size(0)")
+    t.assert_eq_int(Proto.varint_size(127), 1, "varint_size(127)")
+    t.assert_eq_int(Proto.varint_size(128), 2, "varint_size(128)")
+    t.assert_eq_int(Proto.varint_size(-1), 10, "varint_size(-1)")
+    t.assert_eq_int(Proto.zigzag(0), 0, "zigzag 0")
+    t.assert_eq_int(Proto.zigzag(-1), 1, "zigzag -1")
+    t.assert_eq_int(Proto.zigzag(1), 2, "zigzag 1")
+    t.assert_eq_int(Proto.zigzag(-2), 3, "zigzag -2")
+    t.assert_eq_int(Proto.zigzag(2147483647), 4294967294, "zigzag int32 max")
+    t.assert_eq_int(Proto.zigzag(-2147483648), 4294967295, "zigzag int32 min")
+    t.assert_eq_int(Proto.zigzag(-9223372036854775807 - 1), -1, "zigzag int64 min")
+    t.assert_eq_int(Proto.unzigzag(0), 0, "unzigzag 0")
+    t.assert_eq_int(Proto.unzigzag(1), -1, "unzigzag 1")
+    t.assert_eq_int(Proto.unzigzag(2), 1, "unzigzag 2")
+    t.assert_eq_int(Proto.unzigzag(3), -2, "unzigzag 3")
+    t.assert_eq_int(Proto.unzigzag(4294967294), 2147483647, "unzigzag 4294967294")
+    t.assert_eq_int(Proto.unzigzag(-1), -9223372036854775807 - 1, "unzigzag all-ones")
+    t.assert_eq_int(Proto.make_tag(1, 0), 8, "tag(1, varint) = 0x08")
+    t.assert_eq_int(Proto.make_tag(2, 2), 18, "tag(2, len) = 0x12")
+    t.assert_eq_int(Proto.tag_field(18), 2, "tag_field")
+    t.assert_eq_int(Proto.tag_wire(18), 2, "tag_wire")
+
+    t.section("protobuf: encoding-guide examples")
+    mut w1 = ProtoWriter.init()
+    w1.write_int64(1, 150)
+    t.assert_eq_str(wire_hex(w1), "089601", "field 1 = 150  ->  08 96 01")
+    mut w2 = ProtoWriter.init()
+    w2.write_string(2, "testing")
+    t.assert_eq_str(wire_hex(w2), "120774657374696e67", "field 2 = \"testing\"")
+    mut w3 = ProtoWriter.init()
+    mut w3in = ProtoWriter.init()
+    w3in.write_int64(1, 150)
+    w3.write_message(3, w3in)
+    w3in.free()
+    t.assert_eq_str(wire_hex(w3), "1a03089601", "field 3 = embedded {1: 150}")
+    mut w4 = ProtoWriter.init()
+    w4.write_packed_varints(4, [3, 270, 86942])
+    t.assert_eq_str(wire_hex(w4), "2206038e029ea705", "packed [3, 270, 86942]")
+
+    t.section("protobuf: scalar field writers")
+    mut s1 = ProtoWriter.init()
+    s1.write_int32(1, -1)
+    t.assert_eq_str(wire_hex(s1), "08ffffffffffffffffff01", "int32 -1 is sign-extended to 10 bytes")
+    mut s2 = ProtoWriter.init()
+    s2.write_sint32(1, -1)
+    s2.write_sint64(2, -2)
+    s2.write_sint32(3, 2147483647)
+    t.assert_eq_str(wire_hex(s2), "0801" + "1003" + "18feffffff0f", "sint32/sint64")
+    mut s3 = ProtoWriter.init()
+    s3.write_bool(1, true)
+    s3.write_bool(2, false)
+    s3.write_uint32(3, 4294967295)
+    s3.write_enum(4, 2)
+    t.assert_eq_str(wire_hex(s3), "0801" + "1000" + "18ffffffff0f" + "2002", "bool/uint32/enum")
+    mut s4 = ProtoWriter.init()
+    s4.write_fixed32(1, 1)
+    s4.write_sfixed32(2, -1)
+    s4.write_fixed64(3, 258)
+    s4.write_sfixed64(4, -1)
+    t.assert_eq_str(wire_hex(s4), "0d01000000" + "15ffffffff" + "190201000000000000" + "21ffffffffffffffff", "fixed32/64")
+    mut s5 = ProtoWriter.init()
+    s5.write_float(1, 1.5)
+    s5.write_double(2, 1.5)
+    s5.write_float(3, 1.0)
+    t.assert_eq_str(wire_hex(s5), "0d0000c03f" + "11000000000000f83f" + "1d0000803f", "float/double")
+    mut s6 = ProtoWriter.init()
+    s6.write_bytes(1, Hex.decode("00ff00"))
+    s6.write_string(2, "")
+    t.assert_eq_str(wire_hex(s6), "0a0300ff00" + "1200", "bytes with NULs, empty string")
+    mut s7 = ProtoWriter.init()
+    s7.write_tag(536870911, 0)
+    t.assert_eq_str(wire_hex(s7), "f8ffffff0f", "largest field number")
+    mut s8 = ProtoWriter.init()
+    s8.write_packed_sint(1, [0, -1, 1, -2])
+    s8.write_packed_fixed32(2, [1, 2])
+    s8.write_packed_double(3, [1.5])
+    t.assert_eq_str(wire_hex(s8), "0a0400010203" + "1208" + "0100000002000000" + "1a08000000000000f83f", "packed sint/fixed32/double")
+
+    t.section("protobuf: reading a message field by field")
+    mut mw = ProtoWriter.init()
+    mw.write_int64(1, 150)
+    mw.write_string(2, "testing")
+    mut inner = ProtoWriter.init()
+    inner.write_int64(1, -7)
+    inner.write_sint64(2, -7)
+    mw.write_message(3, inner)
+    inner.free()
+    mw.write_packed_varints(4, [3, 270, 86942])
+    mw.write_double(5, 2.5)
+    mw.write_float(6, -0.5)
+    mw.write_bool(7, true)
+    mw.write_fixed32(8, 4000000000)
+    mw.write_sfixed32(9, -5)
+    mw.write_fixed64(10, 1234567890123)
+    mw.write_sint32(11, -300)
+    mw.write_uint64(12, -1)
+    mw.write_bytes(13, Hex.decode("0001ff00"))
+    mut wire = mw.to_str()
+    mw.free()
+
+    mut r = ProtoReader.init(wire)
+    mut seen = 0
+    mut a1 = 0
+    mut a2 = ""
+    mut in_a = 0
+    mut in_b = 0
+    mut packed_n = 0
+    mut packed_mid = 0
+    mut d5 = 0.0
+    mut f6 = 0.0
+    mut b7 = false
+    mut f8 = 0
+    mut s9 = 0
+    mut f10 = 0
+    mut s11 = 0
+    mut u12 = 0
+    mut bytes13 = ""
+    mut err = ""
+    while true:
+        mut nf: Result[bool, str] = r.next_field()
+        if nf.is_err:
+            err = nf.err
+            break
+        if not nf.ok: break
+        seen = seen + 1
+        if r.field == 1:
+            a1 = r.read_int64().ok
+        elif r.field == 2:
+            a2 = r.read_string().ok
+        elif r.field == 3:
+            mut sub = r.read_message().ok
+            while not sub.eof():
+                mut ok = sub.next_field().ok
+                if sub.field == 1:
+                    in_a = sub.read_int64().ok
+                elif sub.field == 2:
+                    in_b = sub.read_sint64().ok
+                else:
+                    sub.skip()
+        elif r.field == 4:
+            mut xs = r.read_packed_varints().ok
+            packed_n = len(xs)
+            packed_mid = xs[1]
+        elif r.field == 5:
+            d5 = r.read_double().ok
+        elif r.field == 6:
+            f6 = r.read_float().ok
+        elif r.field == 7:
+            b7 = r.read_bool().ok
+        elif r.field == 8:
+            f8 = r.read_fixed32().ok
+        elif r.field == 9:
+            s9 = r.read_sfixed32().ok
+        elif r.field == 10:
+            f10 = r.read_fixed64().ok
+        elif r.field == 11:
+            s11 = r.read_sint32().ok
+        elif r.field == 12:
+            u12 = r.read_uint64().ok
+        elif r.field == 13:
+            bytes13 = r.read_bytes().ok
+        else:
+            r.skip()
+    t.assert_eq_str(err, "", "no read error")
+    t.assert_eq_int(seen, 13, "13 fields seen")
+    t.assert_eq_int(a1, 150, "field 1 int64")
+    t.assert_eq_str(a2, "testing", "field 2 string")
+    t.assert_eq_int(in_a, -7, "embedded int64 -7")
+    t.assert_eq_int(in_b, -7, "embedded sint64 -7")
+    t.assert_eq_int(packed_n, 3, "packed length")
+    t.assert_eq_int(packed_mid, 270, "packed element")
+    t.assert_eq_float(d5, 2.5, 0.0, "double")
+    t.assert_eq_float(f6, -0.5, 0.0, "float")
+    t.assert_true(b7, "bool")
+    t.assert_eq_int(f8, 4000000000, "fixed32 (unsigned)")
+    t.assert_eq_int(s9, -5, "sfixed32")
+    t.assert_eq_int(f10, 1234567890123, "fixed64")
+    t.assert_eq_int(s11, -300, "sint32")
+    t.assert_eq_int(u12, -1, "uint64 max reads as the all-ones pattern")
+    t.assert_eq_str(tohex(bytes13), "0001ff00", "bytes with NULs round-trip")
+    t.assert_true(r.eof(), "reader at EOF")
+
+    t.section("protobuf: int32 sign handling and packed readers")
+    mut ir = ProtoReader.init(Hex.decode("08ffffffffffffffffff01" + "10ffffffff0f" + "1801"))
+    mut ok1 = ir.next_field()
+    t.assert_eq_int(ir.read_int32().ok, -1, "int32 -1 (10-byte varint)")
+    mut ok2 = ir.next_field()
+    t.assert_eq_int(ir.read_int32().ok, -1, "int32 from a 5-byte varint truncates to -1")
+    mut ok3 = ir.next_field()
+    t.assert_eq_int(ir.read_enum().ok, 1, "enum 1")
+    mut pr = ProtoReader.init(Hex.decode("0a0400010203" + "1208" + "0100000002000000" + "1a08000000000000f83f" + "2204" + "0000c03f"))
+    mut pk1 = pr.next_field()
+    mut ps: List[int] = pr.read_packed_sint().ok
+    t.assert_eq_int(len(ps), 4, "packed sint length")
+    t.assert_eq_int(ps[1], -1, "packed sint[1]")
+    t.assert_eq_int(ps[3], -2, "packed sint[3]")
+    mut pk2 = pr.next_field()
+    mut pf: List[int] = pr.read_packed_fixed32().ok
+    t.assert_eq_int(pf[1], 2, "packed fixed32[1]")
+    mut pk3 = pr.next_field()
+    mut pd: List[float] = pr.read_packed_double().ok
+    t.assert_eq_float(pd[0], 1.5, 0.0, "packed double")
+    mut pk4 = pr.next_field()
+    mut pfl: List[float] = pr.read_packed_float().ok
+    t.assert_eq_float(pfl[0], 1.5, 0.0, "packed float")
+
+    t.section("protobuf: unknown-field skipping (every wire type)")
+    # field 1 varint, 2 fixed64, 3 len, 4 group{ 1: varint, 2: len, 3: group{} }, 5 fixed32, 15 = target
+    mut uw = ProtoWriter.init()
+    uw.write_int64(1, 99999)
+    uw.write_fixed64(2, 7)
+    uw.write_string(3, "ignore me")
+    uw.write_tag(4, 3)
+    uw.write_int64(1, 5)
+    uw.write_string(2, "in group")
+    uw.write_tag(3, 3)
+    uw.write_tag(3, 4)
+    uw.write_tag(4, 4)
+    uw.write_fixed32(5, 8)
+    uw.write_string(15, "found")
+    mut uwire = uw.to_str()
+    uw.free()
+    mut ur = ProtoReader.init(uwire)
+    mut found = ""
+    mut skipped = 0
+    while true:
+        mut more = ur.next_field().ok
+        if not more: break
+        if ur.field == 15:
+            found = ur.read_string().ok
+        else:
+            ur.skip()
+            skipped = skipped + 1
+    t.assert_eq_str(found, "found", "target field found past unknown fields")
+    t.assert_eq_int(skipped, 5, "five unknown fields skipped")
+
+    t.section("protobuf: copying unknown fields through (field_raw / write_raw)")
+    mut cw = ProtoWriter.init()
+    cw.write_int64(1, 42)
+    cw.write_string(9, "extra")
+    cw.write_fixed32(10, 5)
+    mut cwire = cw.to_str()
+    cw.free()
+    mut cr = ProtoReader.init(cwire)
+    mut out = ProtoWriter.init()
+    while true:
+        mut more2 = cr.next_field().ok
+        if not more2: break
+        if cr.field == 1:
+            mut v = cr.read_int64().ok
+            out.write_int64(1, v + 1)
+        else:
+            cr.skip()
+            out.write_raw(cr.field_raw())
+    t.assert_eq_str(wire_hex(out), "082b" + "4a05" + "6578747261" + "5505000000", "unknown fields preserved byte-for-byte")
+    t.assert_eq_str(tohex(cwire), "082a" + "4a05" + "6578747261" + "5505000000", "source bytes for comparison")
+
+    t.section("protobuf: reader errors")
+    bad_read(t, "0896", "truncated varint value")
+    bad_read(t, "08", "varint value missing")
+    bad_read(t, "0880808080808080808080" + "01", "varint of 11 bytes")
+    bad_read(t, "08ffffffffffffffffff02", "varint overflowing 64 bits")
+    bad_read(t, "00", "field number 0")
+    bad_read(t, "0e", "wire type 6")
+    bad_read(t, "0f", "wire type 7")
+    bad_read(t, "0a05616263", "length past end of data")
+    bad_read(t, "0a", "length missing")
+    bad_read(t, "0aff", "truncated length varint")
+    bad_read(t, "0dffffff", "truncated fixed32")
+    bad_read(t, "09ffffffff", "truncated fixed64")
+    bad_read(t, "0c", "stray end-group tag")
+    bad_read(t, "0b08", "unterminated group")
+    bad_read(t, "0b1c", "mismatched end-group tag (field 3 closes field 1)")
+    bad_read(t, "0a" + "ffffffffffffffffff01", "length of 2^64-1")
+    bad_read(t, "80808080" + "80", "key varint runs off the end")
+    bad_read(t, "f8ffffff1f", "field number above 2^29-1")
+    # strings must be valid UTF-8
+    mut u8r = ProtoReader.init(Hex.decode("0a02c328"))
+    mut u8n = u8r.next_field()
+    mut u8s: Result[str, str] = u8r.read_string()
+    t.assert_true(u8s.is_err, "invalid UTF-8 string rejected")
+    mut u8r2 = ProtoReader.init(Hex.decode("0a02c328"))
+    mut u8n2 = u8r2.next_field()
+    mut u8b: Result[str, str] = u8r2.read_bytes()
+    t.assert_true(u8b.is_ok, "same bytes are fine as `bytes`")
+    mut u8r3 = ProtoReader.init(Hex.decode("0a03e6b0b4"))
+    mut u8n3 = u8r3.next_field()
+    mut u8s3: Result[str, str] = u8r3.read_string()
+    t.assert_true(u8s3.is_ok, "valid 3-byte UTF-8 accepted")
+    mut u8r4 = ProtoReader.init(Hex.decode("0a03eda080"))
+    mut u8n4 = u8r4.next_field()
+    mut u8s4: Result[str, str] = u8r4.read_string()
+    t.assert_true(u8s4.is_err, "UTF-16 surrogate rejected")
+    mut u8r5 = ProtoReader.init(Hex.decode("0a02c080"))
+    mut u8n5 = u8r5.next_field()
+    mut u8s5: Result[str, str] = u8r5.read_string()
+    t.assert_true(u8s5.is_err, "overlong encoding rejected")
+
+    t.section("protobuf: empty input and sub-reader bounds")
+    mut er = ProtoReader.init("")
+    mut en: Result[bool, str] = er.next_field()
+    t.assert_true(en.is_ok, "empty input is not an error")
+    t.assert_true(not en.ok, "empty input has no fields")
+    mut br = ProtoReader.init(Hex.decode("0a04" + "0801" + "10"))
+    mut bn = br.next_field()
+    mut bsub: Result[ProtoReader, str] = br.read_message()
+    t.assert_true(bsub.is_err, "embedded length beyond the enclosing buffer")
+
+    # ───────────────────────── cron ─────────────────────────
+    # Reference instant: Sunday 2026-10-11 06:07:30 UTC.
+    mut base = at(2026, 10, 11, 6, 7, 30)
+
+    t.section("cron: next fire time")
+    t.assert_eq_str(nxt("* * * * *", base), "2026-10-11 06:08:00", "every minute")
+    t.assert_eq_str(nxt("*/15 * * * *", base), "2026-10-11 06:15:00", "every 15 minutes")
+    t.assert_eq_str(nxt("*/15 * * * *", at(2026, 10, 11, 6, 15, 0)), "2026-10-11 06:30:00", "strictly after an exact fire time")
+    t.assert_eq_str(nxt("*/15 * * * *", at(2026, 10, 11, 6, 14, 59)), "2026-10-11 06:15:00", "one second before a fire time")
+    t.assert_eq_str(nxt("0 * * * *", base), "2026-10-11 07:00:00", "top of the hour")
+    t.assert_eq_str(nxt("0 0 * * *", base), "2026-10-12 00:00:00", "daily at midnight")
+    t.assert_eq_str(nxt("30 9 * * *", base), "2026-10-11 09:30:00", "later today")
+    t.assert_eq_str(nxt("5 6 * * *", base), "2026-10-12 06:05:00", "already passed today")
+    t.assert_eq_str(nxt("10-40/10 * * * *", base), "2026-10-11 06:10:00", "range with step: 10")
+    t.assert_eq_str(nxt("10-40/10 * * * *", at(2026, 10, 11, 6, 40, 0)), "2026-10-11 07:10:00", "range with step wraps to next hour")
+    t.assert_eq_str(nxt("5/20 * * * *", at(2026, 10, 11, 6, 5, 0)), "2026-10-11 06:25:00", "N/S: 5,25,45 (25)")
+    t.assert_eq_str(nxt("5/20 * * * *", at(2026, 10, 11, 6, 45, 0)), "2026-10-11 07:05:00", "N/S: 5,25,45 (wrap)")
+    t.assert_eq_str(nxt("1,16,31,46 * * * *", base), "2026-10-11 06:16:00", "minute list")
+    t.assert_eq_str(nxt("0 8,12,18 * * *", base), "2026-10-11 08:00:00", "hour list")
+    t.assert_eq_str(nxt("0 */6 * * *", base), "2026-10-11 12:00:00", "every 6 hours")
+
+    t.section("cron: days of week and month names")
+    t.assert_eq_str(nxt("30 9 * * mon-fri", base), "2026-10-12 09:30:00", "weekdays: Sunday -> Monday")
+    t.assert_eq_str(nxt("30 9 * * MON-FRI", base), "2026-10-12 09:30:00", "names are case-insensitive")
+    t.assert_eq_str(nxt("30 9 * * 1-5", at(2026, 10, 9, 10, 0, 0)), "2026-10-12 09:30:00", "weekdays: Friday -> Monday")
+    t.assert_eq_str(nxt("0 0 * * sun", base), "2026-10-18 00:00:00", "next Sunday")
+    t.assert_eq_str(nxt("0 0 * * 0", base), "2026-10-18 00:00:00", "dow 0 = Sunday")
+    t.assert_eq_str(nxt("0 0 * * 7", base), "2026-10-18 00:00:00", "dow 7 = Sunday")
+    t.assert_eq_str(nxt("0 0 * * 5-7", base), "2026-10-16 00:00:00", "dow range 5-7 = Fri,Sat,Sun")
+    t.assert_eq_str(nxt("0 0 * * sat,wed", base), "2026-10-14 00:00:00", "dow list by name")
+    t.assert_eq_str(nxt("0 0 1 jan *", base), "2027-01-01 00:00:00", "month by name")
+    t.assert_eq_str(nxt("0 0 1 Jan,jul *", base), "2027-01-01 00:00:00", "month list by name")
+    t.assert_eq_str(nxt("0 12 15 oct-dec *", base), "2026-10-15 12:00:00", "month range by name")
+    t.assert_eq_str(nxt("0 0 1 * *", base), "2026-11-01 00:00:00", "first of next month")
+    t.assert_eq_str(nxt("0 0 1 */3 *", base), "2027-01-01 00:00:00", "every third month (jan,apr,jul,oct)")
+
+    t.section("cron: day-of-month / day-of-week OR semantics")
+    t.assert_eq_str(nxt("0 0 13 * fri", base), "2026-10-13 00:00:00", "13th OR friday: the 13th comes first")
+    t.assert_eq_str(nxt("0 0 13 * fri", at(2026, 10, 13, 0, 0, 0)), "2026-10-16 00:00:00", "13th OR friday: then Friday the 16th")
+    t.assert_eq_str(nxt("0 0 13 * *", base), "2026-10-13 00:00:00", "dom alone")
+    t.assert_eq_str(nxt("0 0 * * fri", base), "2026-10-16 00:00:00", "dow alone")
+    t.assert_eq_str(nxt("0 0 */2 * fri", base), "2026-10-23 00:00:00", "'*/2' counts as a star: odd day AND Friday (16th is even, 23rd is odd)")
+
+    t.section("cron: calendar edge cases")
+    t.assert_eq_str(nxt("0 0 31 * *", base), "2026-10-31 00:00:00", "31st this month")
+    t.assert_eq_str(nxt("0 0 31 * *", at(2026, 10, 31, 0, 0, 0)), "2026-12-31 00:00:00", "31st skips November")
+    t.assert_eq_str(nxt("0 0 29 2 *", base), "2028-02-29 00:00:00", "leap day")
+    t.assert_eq_str(nxt("0 0 29 2 *", at(2096, 3, 1, 0, 0, 0)), "2104-02-29 00:00:00", "leap day across the 2100 non-leap year")
+    t.assert_eq_str(nxt("0 0 31 2 *", base), "none", "impossible schedule")
+    t.assert_eq_str(nxt("0 0 1 1 *", at(2026, 12, 31, 23, 59, 30)), "2027-01-01 00:00:00", "year rollover")
+    t.assert_eq_str(nxt("59 23 31 12 *", at(2026, 12, 31, 23, 59, 0)), "2027-12-31 23:59:00", "end of year, strictly after")
+    t.assert_eq_str(nxt("* * * * *", at(2026, 12, 31, 23, 59, 30)), "2027-01-01 00:00:00", "minute rollover across the year")
+    t.assert_eq_str(nxt("0 0 29 * *", at(2026, 2, 1, 0, 0, 0)), "2026-03-29 00:00:00", "29th skips non-leap February")
+    t.assert_eq_str(nxt("* * * * *", at(1969, 12, 31, 23, 58, 30)), "1969-12-31 23:59:00", "before the epoch")
+
+    t.section("cron: macros")
+    t.assert_eq_str(nxt("@hourly", base), "2026-10-11 07:00:00", "@hourly")
+    t.assert_eq_str(nxt("@daily", base), "2026-10-12 00:00:00", "@daily")
+    t.assert_eq_str(nxt("@midnight", base), "2026-10-12 00:00:00", "@midnight")
+    t.assert_eq_str(nxt("@weekly", base), "2026-10-18 00:00:00", "@weekly")
+    t.assert_eq_str(nxt("@monthly", base), "2026-11-01 00:00:00", "@monthly")
+    t.assert_eq_str(nxt("@yearly", base), "2027-01-01 00:00:00", "@yearly")
+    t.assert_eq_str(nxt("@annually", base), "2027-01-01 00:00:00", "@annually")
+    t.assert_eq_str(nxt("  @daily  ", base), "2026-10-12 00:00:00", "macro with surrounding blanks")
+    t.assert_eq_str(nxt("  0\t0   * *  *  ", base), "2026-10-12 00:00:00", "tabs and repeated blanks")
+
+    t.section("cron: previous fire time")
+    t.assert_eq_str(prv("*/15 * * * *", base), "2026-10-11 06:00:00", "previous quarter hour")
+    t.assert_eq_str(prv("*/15 * * * *", at(2026, 10, 11, 6, 15, 0)), "2026-10-11 06:00:00", "strictly before an exact fire time")
+    t.assert_eq_str(prv("*/15 * * * *", at(2026, 10, 11, 6, 15, 1)), "2026-10-11 06:15:00", "one second after a fire time")
+    t.assert_eq_str(prv("0 0 * * *", base), "2026-10-11 00:00:00", "this morning's midnight")
+    t.assert_eq_str(prv("30 9 * * mon-fri", base), "2026-10-09 09:30:00", "previous weekday run (Friday)")
+    t.assert_eq_str(prv("0 0 29 2 *", base), "2024-02-29 00:00:00", "previous leap day")
+    t.assert_eq_str(prv("0 0 31 * *", base), "2026-08-31 00:00:00", "previous 31st skips September")
+    t.assert_eq_str(prv("0 0 1 1 *", base), "2026-01-01 00:00:00", "previous new year")
+    t.assert_eq_str(prv("59 23 31 12 *", base), "2025-12-31 23:59:00", "previous end of year")
+    t.assert_eq_str(prv("0 0 13 * fri", base), "2026-10-09 00:00:00", "previous Friday (OR semantics)")
+    t.assert_eq_str(prv("0 0 31 2 *", base), "none", "impossible schedule going backwards")
+    t.assert_eq_str(prv("* * * * *", at(2027, 1, 1, 0, 0, 0)), "2026-12-31 23:59:00", "previous minute across the year")
+
+    t.section("cron: matches / next_n / datetime wrappers / one-shot helpers")
+    mut sch: Result[CronSchedule, str] = Cron.parse("*/15 9-17 * * mon-fri")
+    t.assert_true(sch.is_ok, "parse ok")
+    t.assert_true(sch.ok.matches(at(2026, 10, 12, 9, 30, 0)), "Monday 09:30 matches")
+    t.assert_true(sch.ok.matches(at(2026, 10, 12, 9, 30, 45)), "any second within the minute matches")
+    t.assert_true(not sch.ok.matches(at(2026, 10, 12, 9, 31, 0)), "09:31 does not")
+    t.assert_true(not sch.ok.matches(at(2026, 10, 11, 9, 30, 0)), "Sunday does not")
+    t.assert_true(not sch.ok.matches(at(2026, 10, 12, 18, 0, 0)), "18:00 is outside 9-17")
+    mut five = sch.ok.next_n(base, 5)
+    t.assert_eq_int(len(five), 5, "next_n returns 5")
+    t.assert_eq_int(five[0], at(2026, 10, 12, 9, 0, 0), "next_n[0]")
+    t.assert_eq_int(five[4], at(2026, 10, 12, 10, 0, 0), "next_n[4]")
+    mut none_n: Result[CronSchedule, str] = Cron.parse("0 0 31 2 *")
+    t.assert_eq_int(len(none_n.ok.next_n(base, 3)), 0, "next_n of an impossible schedule is empty")
+    t.assert_eq_int(sch.ok.next_after(base), at(2026, 10, 12, 9, 0, 0), "next_after is an int timestamp")
+    t.assert_eq_int(sch.ok.prev_before(base), at(2026, 10, 9, 17, 45, 0), "prev_before is an int timestamp")
+    t.assert_eq_int(none_n.ok.next_after(base), -1, "no fire time -> -1")
+    t.assert_eq_str(sch.ok.to_string(), "*/15 9-17 * * mon-fri", "to_string is the source text")
+    mut dtb = DateTime.in_zone(2026, 10, 11, 6, 7, 30, TimeZone.utc())
+    t.assert_eq_str(sch.ok.next_datetime(dtb).to_string(), "2026-10-12 09:00:00", "next_datetime")
+    t.assert_eq_str(sch.ok.prev_datetime(dtb).to_string(), "2026-10-09 17:45:00", "prev_datetime")
+    mut one: Result[int, str] = Cron.next("@daily", base)
+    t.assert_eq_int(one.ok, at(2026, 10, 12, 0, 0, 0), "Cron.next one-shot")
+    mut onep: Result[int, str] = Cron.prev("@daily", base)
+    t.assert_eq_int(onep.ok, at(2026, 10, 11, 0, 0, 0), "Cron.prev one-shot")
+    mut oneb: Result[int, str] = Cron.next("nonsense", base)
+    t.assert_true(oneb.is_err, "Cron.next propagates parse errors")
+    t.assert_true(Cron.is_valid("0 0 * * *"), "is_valid true")
+    t.assert_true(not Cron.is_valid("0 0 * *"), "is_valid false")
+
+    t.section("cron: fixed UTC offsets")
+    # Lagos is UTC+1: 09:00 local = 08:00 UTC.
+    mut lag: Result[CronSchedule, str] = Cron.parse("0 9 * * *")
+    t.assert_eq_int(lag.ok.next_after_offset(base, 3600), at(2026, 10, 11, 8, 0, 0), "next 09:00 local at UTC+1 is 08:00 UTC today")
+    t.assert_eq_int(lag.ok.next_after_offset(base, -18000), at(2026, 10, 11, 14, 0, 0), "09:00 at UTC-5 is 14:00 UTC")
+    t.assert_eq_int(lag.ok.prev_before_offset(base, 3600), at(2026, 10, 10, 8, 0, 0), "previous 09:00 local (UTC+1)")
+    t.assert_true(lag.ok.matches_offset(at(2026, 10, 11, 8, 0, 0), 3600), "08:00 UTC matches 09:00 local")
+    t.assert_true(not lag.ok.matches(at(2026, 10, 11, 8, 0, 0)), "but not in UTC")
+    mut late: Result[CronSchedule, str] = Cron.parse("30 23 * * *")
+    t.assert_eq_int(late.ok.next_after_offset(at(2026, 10, 11, 22, 45, 0), 7200), at(2026, 10, 12, 21, 30, 0), "offset moves the day boundary (UTC+2)")
+
+    t.section("cron: parse errors")
+    t.assert_true(not Cron.is_valid(""), "empty expression")
+    t.assert_true(not Cron.is_valid("* * * *"), "4 fields")
+    t.assert_true(not Cron.is_valid("* * * * * *"), "6 fields (seconds unsupported)")
+    t.assert_true(not Cron.is_valid("60 * * * *"), "minute 60")
+    t.assert_true(not Cron.is_valid("-1 * * * *"), "negative minute")
+    t.assert_true(not Cron.is_valid("* 24 * * *"), "hour 24")
+    t.assert_true(not Cron.is_valid("* * 0 * *"), "day-of-month 0")
+    t.assert_true(not Cron.is_valid("* * 32 * *"), "day-of-month 32")
+    t.assert_true(not Cron.is_valid("* * * 0 *"), "month 0")
+    t.assert_true(not Cron.is_valid("* * * 13 *"), "month 13")
+    t.assert_true(not Cron.is_valid("* * * * 8"), "day-of-week 8")
+    t.assert_true(not Cron.is_valid("*/0 * * * *"), "step 0")
+    t.assert_true(not Cron.is_valid("*/ * * * *"), "empty step")
+    t.assert_true(not Cron.is_valid("*/2/3 * * * *"), "double step")
+    t.assert_true(not Cron.is_valid("a * * * *"), "garbage")
+    t.assert_true(not Cron.is_valid("5-1 * * * *"), "descending range")
+    t.assert_true(not Cron.is_valid("1-2-3 * * * *"), "double range")
+    t.assert_true(not Cron.is_valid("1,,2 * * * *"), "empty list item")
+    t.assert_true(not Cron.is_valid(",1 * * * *"), "leading comma")
+    t.assert_true(not Cron.is_valid("* * * foo *"), "unknown month name")
+    t.assert_true(not Cron.is_valid("* * * * funday"), "unknown day name")
+    t.assert_true(not Cron.is_valid("* * * mon *"), "weekday name in the month field")
+    t.assert_true(not Cron.is_valid("* * * * jan"), "month name in the weekday field")
+    t.assert_true(not Cron.is_valid("0 0 * * mon-1x"), "malformed range end")
+    t.assert_true(not Cron.is_valid("@reboot"), "@reboot unsupported")
+    t.assert_true(not Cron.is_valid("@sometimes"), "unknown macro")
+    t.assert_true(not Cron.is_valid("@daily extra"), "macro with extra fields")
+    t.assert_true(not Cron.is_valid("99999 * * * *"), "huge number")
+    mut pe: Result[CronSchedule, str] = Cron.parse("61 * * * *")
+    t.assert_contains(pe.err, "cron:", "error messages are prefixed")
+    t.assert_contains(pe.err, "minute", "error names the field")
+
+    t.summary()

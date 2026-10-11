@@ -1,0 +1,222 @@
+# std.encoding.base32 — Base32 encode and decode (RFC 4648 §6 and §7).
+#
+# Three alphabets are supported:
+#   * standard   "A-Z2-7"                  (RFC 4648 §6, `Base32.encode`)
+#   * extended   "0-9A-V" ("base32hex")    (RFC 4648 §7, `Base32.encode_hex`)
+#   * Crockford  "0-9A-Z" minus I L O U    (https://www.crockford.com/base32.html,
+#                `Base32.encode_crockford`) — the SAME alphabet std.crypto.uuid
+#                uses for ULIDs; this module reuses uuid's `_ulid_alphabet()` /
+#                `_ulid_char_val()` rather than duplicating the table.
+#
+# Padding: the RFC encodings pad the output to a multiple of 8 characters with
+# '='. Every encoder has a `_nopad` form, and the general `encode_opts` takes
+# the choice explicitly.
+#
+# Input is treated as arbitrary BINARY data: lengths always come from the
+# string's real byte length (`s.len()`), never from NUL scanning, so embedded
+# 0x00 bytes round-trip.
+#
+# Decoding is strict and reports problems through `throws str` (so callers
+# can use `?`, or bind the call to a `Result[str, str]`):
+#   * characters outside the alphabet                         -> error
+#   * '=' anywhere but as trailing padding                    -> error
+#   * impossible data lengths (1, 3 or 6 chars mod 8)         -> error
+#   * wrong amount of padding, or (when required) missing it  -> error
+#   * non-zero trailing bits (non-canonical encodings)        -> error
+# Decoding is case-insensitive (RFC 4648 §6 allows it for decoders); the
+# Crockford decoder additionally maps I/L -> 1 and O -> 0 and skips '-'.
+#
+# Usage:
+#   from std.encoding.base32 import Base32
+#
+#   Base32.encode("foobar")            # → "MZXW6YTBOI======"
+#   Base32.encode_nopad("foobar")      # → "MZXW6YTBOI"
+#   Base32.encode_hex("foobar")        # → "CPNMUOJ1E8======"
+#   mut r: Result[str, str] = Base32.decode("MZXW6YTBOI======")
+#   if r.is_ok: print(r.ok)            # foobar
+#   mut s = Base32.decode("MZXW6YTBOI")?   # padding optional by default
+
+from std.core.string import StringBuilder
+from std.crypto.uuid import _ulid_alphabet, _ulid_char_val
+
+# '='
+def _b32_pad() -> int: return 61
+
+def _b32_std_alphabet() -> str:
+    return "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
+
+def _b32_hex_alphabet() -> str:
+    return "0123456789ABCDEFGHIJKLMNOPQRSTUV"
+
+def _b32_byte_at(s: str, i: int) -> int:
+    mut p = s as Pointer[char]
+    unsafe:
+        return (p.offset(i).read() as int) & 255
+
+# Alphabet selectors: 0 = standard, 1 = base32hex, 2 = Crockford.
+def _b32_alpha(kind: int) -> str:
+    if kind == 1: return _b32_hex_alphabet()
+    if kind == 2: return _ulid_alphabet()
+    return _b32_std_alphabet()
+
+# Value (0..31) of an encoded character under the given alphabet, or -1.
+def _b32_char_val(kind: int, c: int) -> int:
+    mut u = c
+    if u >= 97 and u <= 122: u = u - 32          # case-insensitive
+    if kind == 0:
+        if u >= 65 and u <= 90: return u - 65    # A-Z -> 0..25
+        if u >= 50 and u <= 55: return u - 24    # 2-7 -> 26..31
+        return -1
+    if kind == 1:
+        if u >= 48 and u <= 57: return u - 48    # 0-9 -> 0..9
+        if u >= 65 and u <= 86: return u - 55    # A-V -> 10..31
+        return -1
+    # Crockford: forgiving aliases first, then uuid's shared table.
+    if u == 73 or u == 76: u = 49                # I, L -> 1
+    if u == 79: u = 48                           # O -> 0
+    return _ulid_char_val(u)
+
+def _b32_encode(s: str, kind: int, pad: bool) -> str:
+    mut alpha = _b32_alpha(kind) as Pointer[char]
+    mut n = s.len()
+    mut sb = StringBuilder.init((n / 5) * 8 + 16)
+    mut i = 0
+    mut buf = 0
+    mut bits = 0
+    while i < n:
+        buf = ((buf << 8) | _b32_byte_at(s, i)) & 0xFFFFFFFF
+        bits = bits + 8
+        i = i + 1
+        while bits >= 5:
+            mut idx = (buf >> (bits - 5)) & 31
+            unsafe:
+                sb.append_char(alpha.offset(idx).read() as int)
+            bits = bits - 5
+        buf = buf & ((1 << bits) - 1)
+    if bits > 0:
+        mut idx = (buf << (5 - bits)) & 31
+        unsafe:
+            sb.append_char(alpha.offset(idx).read() as int)
+    if pad:
+        while sb.len() % 8 != 0:
+            sb.append_char(_b32_pad())
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+def _b32_decode(s: str, kind: int, require_pad: bool) throws str -> str:
+    mut n = s.len()
+    mut crock = kind == 2
+    # Split off trailing '=' padding.
+    mut end = n
+    while end > 0 and _b32_byte_at(s, end - 1) == _b32_pad():
+        end = end - 1
+    mut pads = n - end
+    # Collect data characters (Crockford ignores '-').
+    mut vals: List[int] = []
+    mut i = 0
+    while i < end:
+        mut c = _b32_byte_at(s, i)
+        if c == _b32_pad():
+            raise(f"base32: unexpected '=' at position {i}")
+        if crock and c == 45:
+            i = i + 1
+            continue
+        mut v = _b32_char_val(kind, c)
+        if v < 0:
+            raise(f"base32: invalid character at position {i}")
+        vals.append(v)
+        i = i + 1
+    mut dn = len(vals)
+    mut rem = dn % 8
+    # 1, 3 and 6 leftover characters can never come from whole bytes.
+    if rem == 1 or rem == 3 or rem == 6:
+        raise(f"base32: invalid length ({dn} data characters)")
+    if pads > 0 or require_pad:
+        if pads > 0 and crock:
+            raise("base32: padding is not used by the Crockford alphabet")
+        if not crock:
+            mut want = 0
+            if rem == 2: want = 6
+            elif rem == 4: want = 4
+            elif rem == 5: want = 3
+            elif rem == 7: want = 1
+            if pads != want:
+                raise(f"base32: wrong padding (expected {want} '=', got {pads})")
+    mut sb = StringBuilder.init((dn / 8) * 5 + 8)
+    mut buf = 0
+    mut bits = 0
+    mut k = 0
+    while k < dn:
+        buf = ((buf << 5) | vals[k + 0]) & 0xFFFFFFFF
+        bits = bits + 5
+        k = k + 1
+        if bits >= 8:
+            sb.append_char((buf >> (bits - 8)) & 255)
+            bits = bits - 8
+            buf = buf & ((1 << bits) - 1)
+    if buf != 0:
+        sb.free()
+        raise("base32: non-zero trailing bits")
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+pub class Base32:
+    _dummy: int
+
+extend Base32:
+    # ── encode ───────────────────────────────────────────────────────────
+    # RFC 4648 §6, '='-padded.
+    pub def encode(s: str) -> str:
+        return _b32_encode(s, 0, true)
+
+    pub def encode_nopad(s: str) -> str:
+        return _b32_encode(s, 0, false)
+
+    # RFC 4648 §7 "base32hex" (extended hex alphabet), '='-padded.
+    pub def encode_hex(s: str) -> str:
+        return _b32_encode(s, 1, true)
+
+    pub def encode_hex_nopad(s: str) -> str:
+        return _b32_encode(s, 1, false)
+
+    # Crockford alphabet (no padding is ever emitted).
+    pub def encode_crockford(s: str) -> str:
+        return _b32_encode(s, 2, false)
+
+    # General form: `hex` picks the base32hex alphabet, `pad` the '=' padding.
+    pub def encode_opts(s: str, hex: bool, pad: bool) -> str:
+        if hex: return _b32_encode(s, 1, pad)
+        return _b32_encode(s, 0, pad)
+
+    # ── decode ───────────────────────────────────────────────────────────
+    # Standard alphabet. Padding is optional, but if present it must be exact.
+    pub def decode(s: str) throws str -> str:
+        return _b32_decode(s, 0, false)?
+
+    # Standard alphabet; padding is REQUIRED (input length must be % 8 == 0).
+    pub def decode_padded(s: str) throws str -> str:
+        return _b32_decode(s, 0, true)?
+
+    pub def decode_hex(s: str) throws str -> str:
+        return _b32_decode(s, 1, false)?
+
+    pub def decode_hex_padded(s: str) throws str -> str:
+        return _b32_decode(s, 1, true)?
+
+    pub def decode_crockford(s: str) throws str -> str:
+        return _b32_decode(s, 2, false)?
+
+    pub def decode_opts(s: str, hex: bool, require_pad: bool) throws str -> str:
+        if hex: return _b32_decode(s, 1, require_pad)?
+        return _b32_decode(s, 0, require_pad)?
+
+    # ── predicates ───────────────────────────────────────────────────────
+    pub def is_valid(s: str) -> bool:
+        mut r: Result[str, str] = _b32_decode(s, 0, false)
+        return r.is_ok
+
+    pub def is_valid_hex(s: str) -> bool:
+        mut r: Result[str, str] = _b32_decode(s, 1, false)
+        return r.is_ok

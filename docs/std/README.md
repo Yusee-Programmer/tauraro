@@ -15,7 +15,7 @@ building libraries with `taupkg`)
 | [`std.collections`](collections.md) | Data structures: Stack, Queue, Deque, Set (with algebra), Counter, Pair/Triple, MinHeap/MaxHeap, LinkedList, Graph, LruCache, BTreeMap (sorted map/range queries), Trie (prefix tree), BloomFilter, UnionFind (disjoint-set) |
 | [`std.compress`](compress.md) | Compression: zlib compress/decompress, raw deflate/inflate (`-lz` required), gzip container format |
 | [`std.crypto`](crypto.md) | Cryptography: SHA-256, SHA-512/384, HMAC-SHA256, SHA-1, MD5, UUID v3/v4/v5, ULID (incl. monotonic), AES-128/256 (CBC+PKCS#7), ChaCha20-Poly1305 AEAD, PBKDF2-HMAC-SHA256 key derivation, JWT (HS256) |
-| [`std.encoding`](encoding.md) | Data encoding: JSON, CSV, TOML, INI, YAML, XML, Base64, Hex |
+| [`std.encoding`](encoding.md) | Data encoding: JSON, CSV, TOML, INI, YAML, XML, Base64, Base32, Hex, CBOR, Protocol Buffers wire format |
 | [`std.gpu`](gpu.md) | GPU compute: CUDA/OpenCL/CPU device API (`Device`/`Buffer[T]`/`Module`/`Kernel`), Tauraro `@kernel` → PTX/SPIR-V, and OpenMP CPU dispatch (`Gpu.parallel`) |
 | [`std.image`](image.md) | Raster image decode/encode: BMP (24/32-bit), QOI, PNG (truecolor/grayscale, full DEFLATE inflate + stored-block deflate), shared `Image` (RGBA8) type, format-sniffing `decode()` |
 | [`std.io`](io.md) | File I/O, directory operations, path manipulation, console, buffered I/O, ZIP archive read/write (`ZipWriter`/`ZipReader`), tar archive read/write (`TarWriter`/`TarReader`) |
@@ -27,7 +27,7 @@ building libraries with `taupkg`)
 | [`std.regex`](regex.md) | POSIX extended regex: match, find, replace, split, count, capture groups (numbered + named), `Match`/`Captures`, backreference replace |
 | [`std.serialize`](serialize.md) | Value serialization: `Pickle` (own compact binary format for scalars + nested List/Dict/Vec/Set), `Msgpack` (real, wire-compatible MessagePack codec) |
 | [`std.string`](string.md) | String utilities (Str), formatting (Fmt), parsing, line/word splitting, `split_to_vec` |
-| [`std.sys`](sys.md) | Environment variables, file system, process control, timing, OS info, platform detection, graceful-shutdown signal handling, `.env` file loading (`Dotenv`) |
+| [`std.sys`](sys.md) | Environment variables, file system, process control, timing, OS info, platform detection, graceful-shutdown signal handling, `.env` file loading (`Dotenv`), cron-expression parsing and next/previous fire times (`Cron`) |
 | [`std.term`](term.md) | Terminal UI: ANSI SGR styling/colors (`Term`/`Style`/`Color`), cursor control, terminal size query, progress bar and spinner |
 | [`std.test`](test.md) | Lightweight unit-testing framework |
 | [`std.text`](text.md) | Text processing: Myers line diff + unified_diff rendering, Levenshtein edit distance/similarity, word-wrap/indent |

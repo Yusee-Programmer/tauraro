@@ -1,0 +1,920 @@
+# std.encoding.cbor — CBOR (RFC 8949) encoder / decoder.
+#
+# Wire-compatible with the Concise Binary Object Representation standard
+# (https://www.rfc-editor.org/rfc/rfc8949): bytes produced here decode in any
+# conforming implementation and vice versa. The API deliberately mirrors
+# std.serialize.msgpack: a dynamic tagged tree (`CBVal`) plus a static codec
+# class (`Cbor`) with `dumps` / `dumps_len` / `loads`.
+#
+# Supported data items (RFC 8949 §3):
+#   major 0/1  integers — full range -2^64 .. 2^64-1 (values outside Tauraro's
+#              64-bit `int` are kept as "big" ints, see below)
+#   major 2    byte strings        major 3  text strings
+#   major 4    arrays              major 5  maps (ANY CBVal as a key)
+#   major 6    tags (tag number + one enclosed item)
+#   major 7    false / true / null / undefined / other simple values, and
+#              IEEE-754 half / single / double floats
+#
+# Encoding is "preferred serialization" (RFC 8949 §4.1): shortest-form
+# integer/length heads, definite lengths only, and floats emitted in the
+# shortest of half/single/double that represents the value exactly (NaN
+# becomes f97e00; ±Infinity f97c00 / f9fc00). Map entries keep insertion
+# order (no deterministic key sorting — sort keys yourself if you need
+# RFC 8949 §4.2 core deterministic encoding).
+#
+# Decoding is strict and reports failures through `throws str` (use `?`, or
+# bind to a `Result[CBVal, str]`): truncated input, reserved additional-info
+# values 28-30, simple values 24..31 in the two-byte form, stray break
+# codes, mismatched chunks in indefinite-length strings, lengths larger than
+# the remaining input (checked before anything is allocated), nesting deeper
+# than 512, and — for `loads` — trailing bytes after the item. Indefinite-
+# length strings/arrays/maps (RFC 8949 §3.2.3) ARE accepted on decode (they
+# are re-encoded in definite form). Text strings are NOT UTF-8-validated.
+#
+# 64-bit note: Tauraro's `int` is a signed 64-bit integer. CBOR unsigned
+# integers in 2^63..2^64-1 and negative integers below -2^63 decode to a
+# "big" CBVal (`is_bigint()`); the raw 64-bit argument is kept in `i_val`
+# (`big_arg()`), the value itself is `big_arg` read as unsigned (kind 1) or
+# `-1 - big_arg` (kind 2). They re-encode exactly. `is_int()` is only true
+# for values that fit an `int`.
+#
+# Binary safety: byte/text payloads are `str`s whose real byte length is
+# used everywhere (embedded NULs are fine). Treat a `str` returned by
+# `dumps` the same way — pass the length along (`dumps_len`) or use
+# `s.len()`.
+#
+# Usage:
+#   from std.encoding.cbor import CBVal, Cbor
+#
+#   mut m = CBVal.init_map()
+#   m.map_set("id", CBVal.init_int(7))
+#   mut tags = CBVal.init_array()
+#   tags.array_push(CBVal.init_text("a"))
+#   m.map_set("tags", tags)
+#
+#   mut bytes_, blen = Cbor.dumps_len(m)
+#   mut back = Cbor.loads(bytes_, blen)?
+#   print(back.map_get("id").get_int())          # 7
+#   print(back.to_diag())                        # {"id": 7, "tags": ["a"]}
+
+from std.core.vec import Vec
+from std.core.string import StringBuilder
+
+extern "C":
+    def _tr_c_malloc(size: int) -> Pointer[char]
+    def _tr_c_memcpy(dst: Pointer[char], src: Pointer[char], n: int)
+    def _tr_str_wrap_len(s: Pointer[char], blen: int) -> str
+
+# ─── kind constants ─────────────────────────────────────────────────────────
+
+pub def CB_INT()       -> int: return 0
+pub def CB_BYTES()     -> int: return 1
+pub def CB_TEXT()      -> int: return 2
+pub def CB_ARRAY()     -> int: return 3
+pub def CB_MAP()       -> int: return 4
+pub def CB_TAG()       -> int: return 5
+pub def CB_BOOL()      -> int: return 6
+pub def CB_NULL()      -> int: return 7
+pub def CB_UNDEFINED() -> int: return 8
+pub def CB_FLOAT()     -> int: return 9
+pub def CB_SIMPLE()    -> int: return 10
+
+# Decoder nesting limit (guards the recursive descent against hostile input).
+pub def CB_MAX_DEPTH() -> int: return 512
+
+# INT64_MIN, spelled so no out-of-range literal is needed.
+def _cb_signbit() -> int:
+    return -9223372036854775807 - 1
+
+# ─── CBVal — tagged dynamic value tree ──────────────────────────────────────
+
+pub class CBVal:
+    pub kind:    int
+    pub b_val:   bool
+    pub i_val:   int     # INT value | raw u64 arg of a big int | tag number | simple value
+    pub big:     int     # 0 = i_val is the value; 1 = unsigned >= 2^63; 2 = negative < -2^63
+    pub f_val:   float
+    pub f_width: int     # preferred float width: 0 = shortest exact, 16, 32, 64
+    pub s_val:   str     # BYTES / TEXT payload
+    pub items:   Vec[CBVal]   # ARRAY elements | MAP values | TAG content (1 element)
+    pub keys:    Vec[CBVal]   # MAP keys (parallel to items)
+
+extend CBVal:
+    pub def _new() -> CBVal:
+        mut v = CBVal()
+        v.kind    = 0
+        v.b_val   = false
+        v.i_val   = 0
+        v.big     = 0
+        v.f_val   = 0.0
+        v.f_width = 0
+        v.s_val   = ""
+        v.items   = Vec[CBVal].init(4)
+        v.keys    = Vec[CBVal].init(4)
+        return v
+
+    pub def init_int(n: int) -> CBVal:
+        mut v = CBVal._new(); v.kind = 0; v.i_val = n
+        return v
+
+    # CBOR unsigned integer whose raw 64-bit pattern is `bits` (so values
+    # >= 2^63 are passed as the equivalent negative int).
+    pub def init_u64_raw(bits: int) -> CBVal:
+        mut v = CBVal._new(); v.kind = 0; v.i_val = bits
+        if bits < 0: v.big = 1
+        return v
+
+    # CBOR negative integer -1 - `bits`, `bits` being a raw 64-bit pattern.
+    pub def init_nint_raw(bits: int) -> CBVal:
+        mut v = CBVal._new(); v.kind = 0
+        if bits >= 0:
+            v.i_val = -1 - bits
+        else:
+            v.i_val = bits
+            v.big = 2
+        return v
+
+    pub def init_bytes(s: str) -> CBVal:
+        mut v = CBVal._new(); v.kind = 1; v.s_val = s
+        return v
+
+    pub def init_text(s: str) -> CBVal:
+        mut v = CBVal._new(); v.kind = 2; v.s_val = s
+        return v
+
+    pub def init_array() -> CBVal:
+        mut v = CBVal._new(); v.kind = 3
+        return v
+
+    pub def init_map() -> CBVal:
+        mut v = CBVal._new(); v.kind = 4
+        return v
+
+    # Tag `number` wrapping `content` (e.g. 1 = epoch date/time, 24 = encoded CBOR).
+    pub def init_tag(number: int, content: CBVal) -> CBVal:
+        mut v = CBVal._new(); v.kind = 5; v.i_val = number
+        v.items.push(content)
+        return v
+
+    pub def init_bool(b: bool) -> CBVal:
+        mut v = CBVal._new(); v.kind = 6; v.b_val = b
+        return v
+
+    pub def init_null() -> CBVal:
+        mut v = CBVal._new(); v.kind = 7
+        return v
+
+    pub def init_undefined() -> CBVal:
+        mut v = CBVal._new(); v.kind = 8
+        return v
+
+    # Float, encoded in the shortest exact width.
+    pub def init_float(f: float) -> CBVal:
+        mut v = CBVal._new(); v.kind = 9; v.f_val = f
+        return v
+
+    # Float with a requested minimum width (16, 32 or 64 bits). If the value
+    # cannot be represented exactly at that width the next wider one is used.
+    pub def init_float_w(f: float, width: int) -> CBVal:
+        mut v = CBVal._new(); v.kind = 9; v.f_val = f; v.f_width = width
+        return v
+
+    # An unassigned simple value (0..19 or 32..255).
+    pub def init_simple(n: int) -> CBVal:
+        mut v = CBVal._new(); v.kind = 10; v.i_val = n
+        return v
+
+    # ── predicates ──
+    pub def is_int(self)       -> bool: return self.kind == 0 and self.big == 0
+    pub def is_bigint(self)    -> bool: return self.kind == 0 and self.big != 0
+    pub def is_bytes(self)     -> bool: return self.kind == 1
+    pub def is_text(self)      -> bool: return self.kind == 2
+    pub def is_array(self)     -> bool: return self.kind == 3
+    pub def is_map(self)       -> bool: return self.kind == 4
+    pub def is_tag(self)       -> bool: return self.kind == 5
+    pub def is_bool(self)      -> bool: return self.kind == 6
+    pub def is_null(self)      -> bool: return self.kind == 7
+    pub def is_undefined(self) -> bool: return self.kind == 8
+    pub def is_float(self)     -> bool: return self.kind == 9
+    pub def is_simple(self)    -> bool: return self.kind == 10
+
+    # ── scalar accessors ──
+    pub def get_int(self)    -> int:   return self.i_val
+    pub def get_bool(self)   -> bool:  return self.b_val
+    pub def get_float(self)  -> float: return self.f_val
+    pub def get_text(self)   -> str:   return self.s_val
+    pub def get_bytes(self)  -> str:   return self.s_val
+    pub def get_simple(self) -> int:   return self.i_val
+    pub def big_arg(self)    -> int:   return self.i_val
+    pub def big_kind(self)   -> int:   return self.big
+
+    # ── tag ops ──
+    pub def tag_number(self) -> int:
+        return self.i_val
+
+    pub def tag_content(self) -> CBVal:
+        if self.kind != 5 or self.items.len < 1: return CBVal.init_undefined()
+        return self.items.get(0)
+
+    # ── array ops ──
+    pub def array_push(self, v: CBVal):
+        self.items.push(v)
+
+    pub def array_len(self) -> int:
+        return self.items.len
+
+    pub def array_get(self, i: int) -> CBVal:
+        if i < 0 or i >= self.items.len: return CBVal.init_undefined()
+        return self.items.get(i)
+
+    # ── map ops ──
+    # Set a text-keyed entry (replaces an existing equal key).
+    pub def map_set(self, key: str, v: CBVal):
+        self.map_put(CBVal.init_text(key), v)
+
+    # Set an entry with an arbitrary CBOR key (replaces an existing equal key).
+    pub def map_put(self, key: CBVal, v: CBVal):
+        mut i = 0
+        while i < self.keys.len:
+            if self.keys.get(i).eq(key):
+                # Rebuild instead of `self.items.set(i, v)`: Vec[T].set on a
+                # class element neither retains the new value nor releases
+                # the old one (use-after-free once the caller drops `v`).
+                # push() retains correctly, so copy through it.
+                mut ni = Vec[CBVal].init(self.items.len + 1)
+                mut j = 0
+                while j < self.items.len:
+                    if j == i:
+                        ni.push(v)
+                    else:
+                        ni.push(self.items.get(j))
+                    j = j + 1
+                self.items = ni
+                return
+            i = i + 1
+        self.keys.push(key)
+        self.items.push(v)
+
+    # Look up a text key; `undefined` when absent.
+    pub def map_get(self, key: str) -> CBVal:
+        mut i = 0
+        while i < self.keys.len:
+            mut k = self.keys.get(i)
+            if k.kind == 2 and k.s_val == key:
+                return self.items.get(i)
+            i = i + 1
+        return CBVal.init_undefined()
+
+    # Look up a (fitting) integer key; `undefined` when absent.
+    pub def map_get_int(self, key: int) -> CBVal:
+        mut i = 0
+        while i < self.keys.len:
+            mut k = self.keys.get(i)
+            if k.kind == 0 and k.big == 0 and k.i_val == key:
+                return self.items.get(i)
+            i = i + 1
+        return CBVal.init_undefined()
+
+    pub def map_has(self, key: str) -> bool:
+        mut i = 0
+        while i < self.keys.len:
+            mut k = self.keys.get(i)
+            if k.kind == 2 and k.s_val == key: return true
+            i = i + 1
+        return false
+
+    pub def map_len(self) -> int:
+        return self.keys.len
+
+    pub def map_key(self, i: int) -> CBVal:
+        return self.keys.get(i)
+
+    pub def map_val(self, i: int) -> CBVal:
+        return self.items.get(i)
+
+    # ── deep structural equality ──
+    # Floats compare by value (all NaNs are equal to each other); ints,
+    # big ints, strings, tags, simple values and containers compare
+    # structurally (maps are order-sensitive).
+    pub def eq(self, other: CBVal) -> bool:
+        if self.kind != other.kind: return false
+        mut k = self.kind
+        if k == 0: return self.big == other.big and self.i_val == other.i_val
+        if k == 1 or k == 2: return self.s_val == other.s_val
+        if k == 6: return self.b_val == other.b_val
+        if k == 7 or k == 8: return true
+        if k == 9:
+            if self.f_val != self.f_val and other.f_val != other.f_val: return true
+            return self.f_val == other.f_val
+        if k == 10: return self.i_val == other.i_val
+        if k == 5:
+            if self.i_val != other.i_val: return false
+            return self.items.get(0).eq(other.items.get(0))
+        if self.items.len != other.items.len: return false
+        mut i = 0
+        while i < self.items.len:
+            if not self.items.get(i).eq(other.items.get(i)): return false
+            if k == 4:
+                if not self.keys.get(i).eq(other.keys.get(i)): return false
+            i = i + 1
+        return true
+
+    # RFC 8949 §8 diagnostic notation (handy for logging and tests).
+    pub def to_diag(self) -> str:
+        mut sb = StringBuilder.init(64)
+        _cb_diag_into(self, sb)
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+# ─── byte helpers ───────────────────────────────────────────────────────────
+
+def _cb_rd_u8(data: str, off: int) -> int:
+    mut p = data as Pointer[char]
+    unsafe:
+        return (p.offset(off).read() as int) & 0xFF
+
+# Big-endian read of `nbytes` (1/2/4/8) as a raw 64-bit pattern (accumulated
+# in u64: shifting a signed accumulator into the sign bit is UB).
+def _cb_rd_be(data: str, off: int, nbytes: int) -> int:
+    mut result: u64 = 0 as u64
+    mut i = 0
+    while i < nbytes:
+        result = (result << (8 as u64)) | (_cb_rd_u8(data, off + i) as u64)
+        i = i + 1
+    return result as int
+
+def _cb_rd_slice(data: str, off: int, n: int) -> str:
+    mut out = _tr_c_malloc(n + 1)
+    if n > 0:
+        unsafe:
+            _tr_c_memcpy(out, (data as Pointer[char]).offset(off), n)
+    unsafe: out.offset(n).write('\0')
+    return _tr_str_wrap_len(out, n)
+
+def _cb_put_be(sb: StringBuilder, v: int, nbytes: int):
+    mut i = nbytes - 1
+    while i >= 0:
+        sb.append_char((v >> (i * 8)) & 0xFF)
+        i = i - 1
+
+# ─── float bit helpers ──────────────────────────────────────────────────────
+
+def _cb_float_to_bits(f: float) -> int:
+    mut tmp: float = f
+    mut p = (&tmp) as Pointer[int]
+    unsafe:
+        return p.read()
+
+def _cb_bits_to_float(bits: int) -> float:
+    mut tmp: int = bits
+    mut p = (&tmp) as Pointer[float]
+    unsafe:
+        return p.read()
+
+def _cb_f32_bits(f: float) -> int:
+    mut g: f32 = f as f32
+    mut p = (&g) as Pointer[i32]
+    unsafe:
+        return (p.read() as int) & 0xFFFFFFFF
+
+def _cb_bits_f32(b: int) -> float:
+    mut i: i32 = (b & 0xFFFFFFFF) as i32
+    mut p = (&i) as Pointer[f32]
+    unsafe:
+        return p.read() as float
+
+# Exact narrowing of a double's bit pattern to an IEEE half; -1 when the
+# value is not exactly representable. NaN narrows to the canonical 0x7e00.
+def _cb_double_to_half(bits: int) -> int:
+    mut sign = 0
+    if bits < 0: sign = 0x8000
+    mut e_raw = (bits >> 52) & 0x7FF
+    mut mant = bits & 0xFFFFFFFFFFFFF
+    if e_raw == 0x7FF:
+        if mant == 0: return sign | 0x7C00
+        return 0x7E00
+    if e_raw == 0:
+        if mant == 0: return sign      # +/-0 (double subnormals never fit a half)
+        return -1
+    mut e = e_raw - 1023
+    if e >= -14 and e <= 15:
+        if (mant & ((1 << 42) - 1)) != 0: return -1
+        return sign | ((e + 15) << 10) | (mant >> 42)
+    if e < -14 and e >= -24:
+        mut sig = (1 << 52) | mant
+        mut shift = 28 - e
+        if (sig & ((1 << shift) - 1)) != 0: return -1
+        return sign | (sig >> shift)
+    return -1
+
+def _cb_half_to_float(h: int) -> float:
+    mut sign = (h >> 15) & 1
+    mut e = (h >> 10) & 31
+    mut m = h & 1023
+    mut mag = 0
+    if e == 0:
+        if m != 0:
+            # Subnormal half: normalise into a normal double.
+            mut e2 = -14
+            while (m & 1024) == 0:
+                m = m << 1
+                e2 = e2 - 1
+            m = m & 1023
+            mag = ((e2 + 1023) << 52) | (m << 42)
+    elif e == 31:
+        mag = (0x7FF << 52) | (m << 42)
+    else:
+        mag = ((e - 15 + 1023) << 52) | (m << 42)
+    if sign == 1: mag = mag + _cb_signbit()
+    return _cb_bits_to_float(mag)
+
+# ─── Encoder ────────────────────────────────────────────────────────────────
+
+# Write an initial byte + argument in the shortest form. A NEGATIVE `arg` is
+# a raw u64 >= 2^63 and always takes the 8-byte form.
+def _cb_put_head(sb: StringBuilder, major: int, arg: int):
+    mut mt = major << 5
+    if arg < 0:
+        sb.append_char(mt | 27)
+        _cb_put_be(sb, arg, 8)
+    elif arg < 24:
+        sb.append_char(mt | arg)
+    elif arg < 256:
+        sb.append_char(mt | 24)
+        sb.append_char(arg)
+    elif arg < 65536:
+        sb.append_char(mt | 25)
+        _cb_put_be(sb, arg, 2)
+    elif arg < 4294967296:
+        sb.append_char(mt | 26)
+        _cb_put_be(sb, arg, 4)
+    else:
+        sb.append_char(mt | 27)
+        _cb_put_be(sb, arg, 8)
+
+def _cb_encode_float(sb: StringBuilder, f: float, width: int):
+    if f != f:
+        if width == 0 or width == 16:
+            sb.append_char(0xF9)
+            _cb_put_be(sb, 0x7E00, 2)
+        elif width == 32:
+            sb.append_char(0xFA)
+            _cb_put_be(sb, 0x7FC00000, 4)
+        else:
+            sb.append_char(0xFB)
+            _cb_put_be(sb, 0x7FF8000000000000, 8)
+        return
+    mut bits = _cb_float_to_bits(f)
+    if width == 0 or width == 16:
+        mut h = _cb_double_to_half(bits)
+        if h >= 0:
+            sb.append_char(0xF9)
+            _cb_put_be(sb, h, 2)
+            return
+    if width != 64:
+        mut g = _cb_bits_f32(_cb_f32_bits(f))
+        if g == f:
+            sb.append_char(0xFA)
+            _cb_put_be(sb, _cb_f32_bits(f), 4)
+            return
+    sb.append_char(0xFB)
+    _cb_put_be(sb, bits, 8)
+
+def _cb_encode_into(v: CBVal, sb: StringBuilder):
+    mut k = v.kind
+    if k == 0:
+        if v.big == 1:
+            _cb_put_head(sb, 0, v.i_val)
+        elif v.big == 2:
+            _cb_put_head(sb, 1, v.i_val)
+        elif v.i_val >= 0:
+            _cb_put_head(sb, 0, v.i_val)
+        else:
+            _cb_put_head(sb, 1, -1 - v.i_val)
+    elif k == 1:
+        _cb_put_head(sb, 2, v.s_val.len())
+        sb.append(v.s_val)
+    elif k == 2:
+        _cb_put_head(sb, 3, v.s_val.len())
+        sb.append(v.s_val)
+    elif k == 3:
+        mut n = v.items.len
+        _cb_put_head(sb, 4, n)
+        mut i = 0
+        while i < n:
+            _cb_encode_into(v.items.get(i), sb)
+            i = i + 1
+    elif k == 4:
+        mut n = v.keys.len
+        _cb_put_head(sb, 5, n)
+        mut i = 0
+        while i < n:
+            _cb_encode_into(v.keys.get(i), sb)
+            _cb_encode_into(v.items.get(i), sb)
+            i = i + 1
+    elif k == 5:
+        _cb_put_head(sb, 6, v.i_val)
+        _cb_encode_into(v.items.get(0), sb)
+    elif k == 6:
+        if v.b_val:
+            sb.append_char(0xF5)
+        else:
+            sb.append_char(0xF4)
+    elif k == 7:
+        sb.append_char(0xF6)
+    elif k == 8:
+        sb.append_char(0xF7)
+    elif k == 9:
+        _cb_encode_float(sb, v.f_val, v.f_width)
+    else:
+        mut n = v.i_val
+        if n < 24:
+            sb.append_char(0xE0 | n)
+        else:
+            sb.append_char(0xF8)
+            sb.append_char(n)
+
+# ─── Decoder ────────────────────────────────────────────────────────────────
+# The read offset is threaded through a 1-element List[int] out-parameter
+# (same convention as msgpack.tr / pickle.tr).
+
+# Read the argument selected by additional-info `ai` (0..27).
+def _cb_read_arg(data: str, n: int, off: List[int], ai: int) throws str -> int:
+    if ai < 24: return ai
+    if ai > 27:
+        raise(f"cbor: reserved additional information {ai} at offset {off[0] - 1}")
+    mut need = 1
+    if ai == 25: need = 2
+    elif ai == 26: need = 4
+    elif ai == 27: need = 8
+    if off[0] + need > n:
+        raise("cbor: truncated input")
+    mut v = _cb_rd_be(data, off[0], need)
+    off[0] = off[0] + need
+    return v
+
+# Definite-length payload size check: `len_` is a raw u64 so negative = huge.
+def _cb_check_len(len_: int, n: int, off: List[int], what: str) throws str:
+    if len_ < 0 or len_ > n - off[0]:
+        raise(f"cbor: {what} length exceeds the remaining input")
+
+def _cb_decode_at(data: str, n: int, off: List[int], depth: int) throws str -> CBVal:
+    if depth > CB_MAX_DEPTH():
+        raise("cbor: nesting too deep")
+    if off[0] >= n:
+        raise("cbor: truncated input")
+    mut ib = _cb_rd_u8(data, off[0])
+    off[0] = off[0] + 1
+    mut major = ib >> 5
+    mut ai = ib & 31
+
+    if major == 7:
+        if ai == 20: return CBVal.init_bool(false)
+        if ai == 21: return CBVal.init_bool(true)
+        if ai == 22: return CBVal.init_null()
+        if ai == 23: return CBVal.init_undefined()
+        if ai < 20: return CBVal.init_simple(ai)
+        if ai == 24:
+            if off[0] >= n: raise("cbor: truncated input")
+            mut sv = _cb_rd_u8(data, off[0])
+            off[0] = off[0] + 1
+            if sv < 32:
+                raise(f"cbor: invalid two-byte simple value {sv}")
+            return CBVal.init_simple(sv)
+        if ai == 25:
+            if off[0] + 2 > n: raise("cbor: truncated input")
+            mut h = _cb_rd_be(data, off[0], 2)
+            off[0] = off[0] + 2
+            mut fv = CBVal.init_float(_cb_half_to_float(h))
+            fv.f_width = 16
+            return fv
+        if ai == 26:
+            if off[0] + 4 > n: raise("cbor: truncated input")
+            mut b32 = _cb_rd_be(data, off[0], 4)
+            off[0] = off[0] + 4
+            mut fv = CBVal.init_float(_cb_bits_f32(b32))
+            fv.f_width = 32
+            return fv
+        if ai == 27:
+            if off[0] + 8 > n: raise("cbor: truncated input")
+            mut b64 = _cb_rd_be(data, off[0], 8)
+            off[0] = off[0] + 8
+            mut fv = CBVal.init_float(_cb_bits_to_float(b64))
+            fv.f_width = 64
+            return fv
+        if ai == 31:
+            raise("cbor: unexpected break code")
+        raise(f"cbor: reserved additional information {ai} at offset {off[0] - 1}")
+
+    if ai == 31:
+        return _cb_decode_indefinite(data, n, off, depth, major)?
+
+    mut arg = _cb_read_arg(data, n, off, ai)?
+    if major == 0:
+        return CBVal.init_u64_raw(arg)
+    if major == 1:
+        return CBVal.init_nint_raw(arg)
+    if major == 2 or major == 3:
+        _cb_check_len(arg, n, off, "string")?
+        mut s = _cb_rd_slice(data, off[0], arg)
+        off[0] = off[0] + arg
+        if major == 2: return CBVal.init_bytes(s)
+        return CBVal.init_text(s)
+    if major == 4:
+        # every element takes >= 1 byte, so a count above the remaining
+        # input is impossible — reject before looping.
+        _cb_check_len(arg, n, off, "array")?
+        mut arr = CBVal.init_array()
+        mut i = 0
+        while i < arg:
+            mut e = _cb_decode_at(data, n, off, depth + 1)?
+            arr.array_push(e)
+            i = i + 1
+        return arr
+    if major == 5:
+        if arg < 0 or arg > (n - off[0]) / 2:
+            raise("cbor: map length exceeds the remaining input")
+        mut m = CBVal.init_map()
+        mut i = 0
+        while i < arg:
+            mut kk = _cb_decode_at(data, n, off, depth + 1)?
+            mut vv = _cb_decode_at(data, n, off, depth + 1)?
+            m.map_put(kk, vv)
+            i = i + 1
+        return m
+    # major 6: tag
+    mut content = _cb_decode_at(data, n, off, depth + 1)?
+    return CBVal.init_tag(arg, content)
+
+# Indefinite-length (ai == 31) items: byte/text strings, arrays and maps.
+def _cb_decode_indefinite(data: str, n: int, off: List[int], depth: int, major: int) throws str -> CBVal:
+    if major == 2 or major == 3:
+        mut sb = StringBuilder.init(32)
+        while true:
+            if off[0] >= n:
+                sb.free()
+                raise("cbor: truncated input (unterminated indefinite string)")
+            mut b = _cb_rd_u8(data, off[0])
+            off[0] = off[0] + 1
+            if b == 0xFF: break
+            if (b >> 5) != major or (b & 31) == 31:
+                sb.free()
+                raise("cbor: bad chunk in indefinite-length string")
+            mut clen = _cb_read_arg(data, n, off, b & 31)?
+            _cb_check_len(clen, n, off, "string chunk")?
+            sb.append(_cb_rd_slice(data, off[0], clen))
+            off[0] = off[0] + clen
+        mut joined = sb.to_owned()
+        sb.free()
+        if major == 2: return CBVal.init_bytes(joined)
+        return CBVal.init_text(joined)
+    if major == 4:
+        mut arr = CBVal.init_array()
+        while true:
+            if off[0] >= n:
+                raise("cbor: truncated input (unterminated indefinite array)")
+            if _cb_rd_u8(data, off[0]) == 0xFF:
+                off[0] = off[0] + 1
+                break
+            mut e = _cb_decode_at(data, n, off, depth + 1)?
+            arr.array_push(e)
+        return arr
+    if major == 5:
+        mut m = CBVal.init_map()
+        while true:
+            if off[0] >= n:
+                raise("cbor: truncated input (unterminated indefinite map)")
+            if _cb_rd_u8(data, off[0]) == 0xFF:
+                off[0] = off[0] + 1
+                break
+            mut kk = _cb_decode_at(data, n, off, depth + 1)?
+            mut vv = _cb_decode_at(data, n, off, depth + 1)?
+            m.map_put(kk, vv)
+        return m
+    raise("cbor: indefinite length is not allowed for this major type")
+
+# ─── Diagnostic notation ────────────────────────────────────────────────────
+
+def _cb_hexdigit(n: int) -> int:
+    if n < 10: return 48 + n
+    return 87 + n
+
+# Decimal text of a raw u64 (negative int = value >= 2^63).
+def _cb_u64_str(raw: int) -> str:
+    if raw >= 0: return f"{raw}"
+    mut u: u64 = raw as u64
+    # q = u / 10 < 2^61, so it fits a signed int.
+    mut q: u64 = u / (10 as u64)
+    mut r: int = (u - q * (10 as u64)) as int
+    return f"{q as int}{r}"
+
+def _cb_diag_text(s: str, sb: StringBuilder):
+    sb.append_char(34)
+    mut i = 0
+    mut n = s.len()
+    while i < n:
+        mut c = _cb_rd_u8(s, i)
+        if c == 34:
+            sb.append("\\\"")
+        elif c == 92:
+            sb.append("\\\\")
+        elif c == 10:
+            sb.append("\\n")
+        elif c == 13:
+            sb.append("\\r")
+        elif c == 9:
+            sb.append("\\t")
+        elif c < 32:
+            sb.append("\\u00")
+            sb.append_char(_cb_hexdigit(c >> 4))
+            sb.append_char(_cb_hexdigit(c & 15))
+        else:
+            sb.append_char(c)
+        i = i + 1
+    sb.append_char(34)
+
+def _cb_diag_into(v: CBVal, sb: StringBuilder):
+    mut k = v.kind
+    if k == 0:
+        if v.big == 1:
+            sb.append(_cb_u64_str(v.i_val))
+        elif v.big == 2:
+            if v.i_val == -1:
+                sb.append("-18446744073709551616")
+            else:
+                sb.append("-")
+                sb.append(_cb_u64_str(v.i_val + 1))
+        else:
+            # f-string, not sb.append_int: append_int negates, which traps
+            # (signed overflow) for INT64_MIN.
+            sb.append(f"{v.i_val}")
+    elif k == 1:
+        sb.append("h'")
+        mut i = 0
+        while i < v.s_val.len():
+            mut c = _cb_rd_u8(v.s_val, i)
+            sb.append_char(_cb_hexdigit(c >> 4))
+            sb.append_char(_cb_hexdigit(c & 15))
+            i = i + 1
+        sb.append("'")
+    elif k == 2:
+        _cb_diag_text(v.s_val, sb)
+    elif k == 3:
+        sb.append("[")
+        mut i = 0
+        while i < v.items.len:
+            if i > 0: sb.append(", ")
+            _cb_diag_into(v.items.get(i), sb)
+            i = i + 1
+        sb.append("]")
+    elif k == 4:
+        sb.append("{")
+        mut i = 0
+        while i < v.keys.len:
+            if i > 0: sb.append(", ")
+            _cb_diag_into(v.keys.get(i), sb)
+            sb.append(": ")
+            _cb_diag_into(v.items.get(i), sb)
+            i = i + 1
+        sb.append("}")
+    elif k == 5:
+        sb.append(_cb_u64_str(v.i_val))
+        sb.append("(")
+        _cb_diag_into(v.items.get(0), sb)
+        sb.append(")")
+    elif k == 6:
+        if v.b_val:
+            sb.append("true")
+        else:
+            sb.append("false")
+    elif k == 7:
+        sb.append("null")
+    elif k == 8:
+        sb.append("undefined")
+    elif k == 9:
+        mut f = v.f_val
+        if f != f:
+            sb.append("NaN")
+        elif f > 1.7976931348623157e308:
+            sb.append("Infinity")
+        elif f < -1.7976931348623157e308:
+            sb.append("-Infinity")
+        else:
+            mut fs = f.to_str()
+            sb.append(fs)
+            # Keep floats visibly floats (RFC 8949 §8: 65504.0, not 65504).
+            if not fs.contains(".") and not fs.contains("e"):
+                sb.append(".0")
+    else:
+        sb.append("simple(")
+        sb.append_int(v.i_val)
+        sb.append(")")
+
+# ─── Public API ─────────────────────────────────────────────────────────────
+
+pub class Cbor:
+    _dummy: int
+
+extend Cbor:
+    # Serialize a CBVal tree to CBOR. `out_len[0]` receives the true byte
+    # length (the result may contain embedded NULs) — same out-parameter
+    # convention as Msgpack.dumps.
+    pub def dumps(v: CBVal, out_len: List[int]) -> str:
+        mut sb = StringBuilder.init(64)
+        _cb_encode_into(v, sb)
+        out_len[0] = sb.len()
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    # Same as `dumps` but returns (bytes, length).
+    pub def dumps_len(v: CBVal) -> (str, int):
+        mut out_len = [0]
+        mut bytes_ = Cbor.dumps(v, out_len)
+        return (bytes_, out_len[0])
+
+    # Decode exactly ONE data item that must span all `len_` bytes.
+    pub def loads(data: str, len_: int) throws str -> CBVal:
+        mut off = [0]
+        mut v = _cb_decode_at(data, len_, off, 0)?
+        if off[0] != len_:
+            raise(f"cbor: {len_ - off[0]} trailing byte(s) after the data item")
+        return v
+
+    # `loads` using the string's own byte length.
+    pub def loads_str(data: str) throws str -> CBVal:
+        return Cbor.loads(data, data.len())?
+
+    # Decode ONE data item from the start of `data`, ignoring what follows;
+    # `consumed[0]` receives the number of bytes it occupied (use it to walk
+    # a CBOR sequence, RFC 8742).
+    pub def loads_prefix(data: str, len_: int, consumed: List[int]) throws str -> CBVal:
+        mut off = [0]
+        mut v = _cb_decode_at(data, len_, off, 0)?
+        consumed[0] = off[0]
+        return v
+
+    # ── convenience one-shot helpers ──
+    pub def dump_int(n: int) -> (str, int):
+        return Cbor.dumps_len(CBVal.init_int(n))
+
+    pub def dump_float(f: float) -> (str, int):
+        return Cbor.dumps_len(CBVal.init_float(f))
+
+    pub def dump_bool(b: bool) -> (str, int):
+        return Cbor.dumps_len(CBVal.init_bool(b))
+
+    pub def dump_text(s: str) -> (str, int):
+        return Cbor.dumps_len(CBVal.init_text(s))
+
+    pub def dump_bytes(s: str) -> (str, int):
+        return Cbor.dumps_len(CBVal.init_bytes(s))
+
+    pub def dump_list_int(xs: List[int]) -> (str, int):
+        mut v = CBVal.init_array()
+        mut i = 0
+        while i < len(xs):
+            v.array_push(CBVal.init_int(xs[i]))
+            i = i + 1
+        return Cbor.dumps_len(v)
+
+    pub def dump_list_text(xs: List[str]) -> (str, int):
+        mut v = CBVal.init_array()
+        mut i = 0
+        while i < len(xs):
+            v.array_push(CBVal.init_text(xs[i]))
+            i = i + 1
+        return Cbor.dumps_len(v)
+
+    pub def dump_dict_str_str(d: Dict[str, str]) -> (str, int):
+        mut v = CBVal.init_map()
+        for key, val in d.items():
+            v.map_set(key, CBVal.init_text(val))
+        return Cbor.dumps_len(v)
+
+    pub def dump_dict_str_int(d: Dict[str, int]) -> (str, int):
+        mut v = CBVal.init_map()
+        for key, val in d.items():
+            v.map_set(key, CBVal.init_int(val))
+        return Cbor.dumps_len(v)
+
+    pub def load_list_int(data: str, len_: int) throws str -> List[int]:
+        mut v = Cbor.loads(data, len_)?
+        mut out: List[int] = []
+        mut i = 0
+        while i < v.array_len():
+            mut e = v.array_get(i)
+            if e.is_int(): out.append(e.get_int())
+            i = i + 1
+        return out
+
+    pub def load_list_text(data: str, len_: int) throws str -> List[str]:
+        mut v = Cbor.loads(data, len_)?
+        mut out: List[str] = []
+        mut i = 0
+        while i < v.array_len():
+            mut e = v.array_get(i)
+            if e.is_text(): out.append(e.get_text())
+            i = i + 1
+        return out
