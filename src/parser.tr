@@ -16,6 +16,15 @@ pub def box_expr(e: Expr) -> Pointer[Expr]:
         p.write(e)
         return p
 
+# `throws E -> R` written on a function-value type or closure literal: the call result type
+# Result[R, E] (flagged is_throws so a closure body wraps return/raise like a throws fn).
+pub def throws_result_type(ret: AstType, err: Pointer[AstType]) -> AstType:
+    mut rt = AstType.init("Result")
+    rt.args.push(box_asttype(ret))
+    rt.args.push(err)
+    rt.is_throws = true
+    return rt
+
 pub def box_stmt(s: Stmt) -> Pointer[Stmt]:
     unsafe:
         mut p = alloc[Stmt](1)
@@ -520,10 +529,18 @@ extend Parser:
                         dfn_t.args.push(box_asttype(dpt))
                         if self.peek() == Token.Comma: self.pos = self.pos + 1
                     if self.peek() == Token.RParen: self.pos = self.pos + 1
+                # `def(T) throws E -> R`: the call result is a Result[R, E], exactly the
+                # call-site type of a `throws` function.
+                mut dthrows = Pointer[AstType](0)
+                if self.peek() == Token.KwThrows:
+                    self.pos = self.pos + 1
+                    dthrows = box_asttype(self.parse_type())
                 mut dret = AstType.init("void")
                 if self.peek() == Token.Arrow:
                     self.pos = self.pos + 1
                     dret = self.parse_type()
+                if dthrows as usize != 0 as usize:
+                    dret = throws_result_type(dret, dthrows)
                 dfn_t.args.push(box_asttype(dret))
                 return dfn_t
             case Token.KwMut:
@@ -2234,9 +2251,17 @@ extend Parser:
                 if self.peek() == Token.RParen:
                     self.pos = self.pos + 1
                 mut return_type = Pointer[AstType](0)
+                mut clo_throws = Pointer[AstType](0)
+                if self.peek() == Token.KwThrows:
+                    self.pos = self.pos + 1
+                    clo_throws = box_asttype(self.parse_type())
                 if self.peek() == Token.Arrow:
                     self.pos = self.pos + 1
                     return_type = box_asttype(self.parse_type())
+                if clo_throws as usize != 0 as usize:
+                    mut clo_rt = AstType.init("void")
+                    if return_type as usize != 0 as usize: clo_rt = return_type.read()
+                    return_type = box_asttype(throws_result_type(clo_rt, clo_throws))
                 match self.peek():
                     case Token.Colon:
                         self.pos = self.pos + 1
@@ -2244,6 +2269,26 @@ extend Parser:
                         pass
                 mut body = self.parse_block()
                 return box_expr(Expr.EClosure(params, return_type, body, is_async))
+            case Token.KwLambda:
+                # `lambda x, y: expr` / `lambda: expr` -- a one-expression closure; the body
+                # is `return expr` and the return type is inferred from it by sema.
+                self.pos = self.pos + 1
+                mut lparams = Vec[Param].init(2)
+                while self.peek() != Token.Colon and self.peek() != Token.Eof and self.peek() != Token.Newline:
+                    mut lpn = self.consume_ident()
+                    if lpn == "": break
+                    lparams.push(Param.init(lpn, Pointer[AstType](0)))
+                    if self.peek() == Token.Comma:
+                        self.pos = self.pos + 1
+                match self.peek():
+                    case Token.Colon:
+                        self.pos = self.pos + 1
+                    case _:
+                        self.emit_diag("expected ':' after the parameters of a 'lambda'", "write `lambda x, y: expr`")
+                mut lbody_e = self.parse_expr()
+                mut lbody = Block.init()
+                lbody.push(box_stmt(Stmt.SReturn(lbody_e)))
+                return box_expr(Expr.EClosure(lparams, Pointer[AstType](0), lbody, False))
             case Token.FStrLit(raw, raw_blen):
                 self.pos = self.pos + 1
                 return self.parse_fstring(raw, raw_blen)

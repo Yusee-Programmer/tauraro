@@ -645,6 +645,25 @@ def main() -> void:
         print(f"digit: {result.value}")
 ```
 
+**Function values and closures can `throw` too.** Put `throws E` between the parameter list and
+the `->` in a function-value type or a closure literal; a call through such a value yields a
+`Result[R, E]` exactly like a call to a `throws` function, and `?` / `raise` work inside the closure:
+
+```python
+def run(op: def(int) throws str -> int, v: int) -> int:
+    r = op(v)
+    if r.is_err:
+        return -1
+    return r.ok
+
+mut bump = def (v: int) throws str -> int:
+    mut x = parse_digit(str_of(v))?
+    return x + 100
+```
+
+A `throws` function value must be given a `throws` function or closure (and vice versa): the two have
+different C return types and the compiler does not convert between them.
+
 **Compiler rule [T-4]:** The result of a `throws` call must be handled — either with `?`, with an `if result.is_err` check, or explicitly discarded. Silently ignoring it is a compile error.
 
 ### Common Mistakes

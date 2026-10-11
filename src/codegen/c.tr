@@ -7962,6 +7962,13 @@ pub class CGenerator:
         # `long long`/void C return type) instead of `_tr_exc_raise(...)`.
         mut saved_throws = self.cur_throws_ty
         self.cur_throws_ty = ""
+        # ... unless it is spelled `def (...) throws E -> R:` (bug log #18): then its C return
+        # type is the uniform `Result` and return/raise/? wrap exactly as in a throws function.
+        mut clo_is_throws = false
+        if ret_ty.is_throws and ret_ty.args.len == 2:
+            clo_is_throws = true
+            self.cur_throws_ty = ret_ty.args.get(1).read().name
+            if self.cur_throws_ty == "": self.cur_throws_ty = "str"
         self.buf = StringBuilder.init(512)
         self.closure_cap_set = Map[str, bool].init(8)
         mut cj = 0
@@ -7980,6 +7987,9 @@ pub class CGenerator:
         self.w(") {\n")
         self.w("    " + estruct + "* __env = __envp; (void)__env;\n")
         self.gen_block(body, 1)
+        if clo_is_throws:
+            # falling off the end of a Result-returning C function is UB: succeed with no value
+            self.w("    return ((Result){.tag=Result_Ok});\n")
         self.w("}\n")
         mut thisdef = self.buf.to_string().as_str()
         self.buf = saved_buf

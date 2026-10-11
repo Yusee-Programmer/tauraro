@@ -1,0 +1,65 @@
+# tests/lang/101_throws_fn_values.tr - `throws` in function-value types and closure literals,
+# and the one-line `lambda x: expr` / `lambda: expr` forms (bug log #18).
+
+from std.test import TestRunner
+
+def checked_inc(v: int) throws str -> int:
+    if v > 2:
+        raise("too big")
+    return v + 1
+
+# function-value parameter whose type carries `throws`
+def run(op: def(int) throws str -> int, v: int) -> int:
+    r = op(v)
+    if r.is_err:
+        return -1
+    return r.ok
+
+# `?` on a call through a throws function value, inside a throws function
+def chain(op: def(int) throws str -> int, v: int) throws str -> int:
+    a = op(v)?
+    return a * 10
+
+def apply(f: lambda, x: int) -> int:
+    return f(x)
+
+def main():
+    mut t = TestRunner.init("101_throws_fn_values")
+
+    t.section("named throws function as a value")
+    t.assert_eq_int(run(checked_inc, 1), 2, "ok path")
+    t.assert_eq_int(run(checked_inc, 5), -1, "error path")
+
+    t.section("closure literal with throws")
+    bump = def (v: int) throws str -> int:
+        x = checked_inc(v)?
+        return x + 100
+    t.assert_eq_int(run(bump, 1), 102, "closure ok path")
+    t.assert_eq_int(run(bump, 9), -1, "closure propagates ? error")
+
+    fail_big = def (v: int) throws str -> int:
+        if v > 2:
+            raise("closure says no")
+        return v
+    r = fail_big(7)
+    t.assert_true(r.is_err, "closure raise -> is_err")
+    t.assert_eq_str(r.err, "closure says no", "closure raise message")
+    t.assert_eq_int(fail_big(2).ok, 2, "closure returns Result_Ok")
+
+    t.section("? through a function value")
+    c1 = chain(checked_inc, 1)
+    t.assert_true(c1.is_ok, "chain ok")
+    t.assert_eq_int(c1.ok, 20, "chain value")
+    c2 = chain(checked_inc, 7)
+    t.assert_true(c2.is_err, "chain err")
+    t.assert_eq_str(c2.err, "too big", "chain err message")
+
+    t.section("lambda one-liners")
+    dbl = lambda x: x * 2
+    add = lambda x, y: x + y
+    five = lambda: 5
+    t.assert_eq_int(dbl(4), 8, "lambda x: x * 2")
+    t.assert_eq_int(add(3, 4), 7, "lambda x, y: x + y")
+    t.assert_eq_int(five(), 5, "lambda: 5 (colon right after lambda)")
+    t.assert_eq_int(apply(lambda x: x + 1, 41), 42, "lambda as an argument")
+    t.summary()
