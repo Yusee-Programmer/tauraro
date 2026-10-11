@@ -41,8 +41,12 @@ pub def rd16le(p: Pointer[char], i: int) -> int:
 pub def rd32le(p: Pointer[char], i: int) -> int:
     return rd8(p, i) | (rd8(p, i + 1) << 8) | (rd8(p, i + 2) << 16) | (rd8(p, i + 3) << 24)
 
+# 64-bit little-endian read; the result carries the bit pattern (values >= 2^63
+# come back negative). Computed in u64 so no signed shift overflows.
 pub def rd64le(p: Pointer[char], i: int) -> int:
-    return rd32le(p, i) | (rd32le(p, i + 4) << 32)
+    mut lo: u64 = rd32le(p, i) as u64
+    mut hi: u64 = rd32le(p, i + 4) as u64
+    return (lo | (hi << 32)) as int
 
 # `p` advanced by `n` bytes.
 pub def ptr_add(p: Pointer[char], n: int) -> Pointer[char]:

@@ -1,0 +1,1250 @@
+# std.compress.zstd — Zstandard (RFC 8878) frame decoder + encoder, pure Tauraro.
+#
+# No external library: portable on every platform CI covers.
+#
+# DECODER — complete for the standard format:
+#   * frames: header (window descriptor, content size, checksum flag),
+#     concatenated frames, skippable frames; XXH64 content checksum verified
+#   * blocks: Raw, RLE and Compressed
+#   * literals: Raw, RLE, Huffman-compressed (FSE-compressed or direct
+#     weights; 1 or 4 streams) and Treeless (previous table reused)
+#   * sequences: Predefined / RLE / FSE-compressed / Repeat table modes, all
+#     offset/match/literal-length codes, repeat-offset history
+#   * every length, offset and table is validated; `max_out` bounds output
+# Not supported (reported as an error): dictionaries (a frame that names a
+# non-zero Dictionary_ID), and legacy (pre-v0.8, v0.1-v0.7) frame formats.
+#
+# ENCODER — valid, simple, decodable by any conforming decoder (cross-checked
+# with the reference `zstd` CLI): per 128 KiB block it picks, in order of size,
+# an RLE block (all bytes equal), a compressed block (greedy hash-chain-free
+# LZ77 matcher -> sequences coded with the PREDEFINED FSE tables, literals
+# stored raw), or a Raw block. It does not (yet) Huffman-compress literals or
+# use custom/repeat FSE tables or repeat offsets, so its ratio is below
+# `zstd -1` on text, but it is always correct and far better than storing.
+#
+# Binary-data convention (same as std.compress.lz4): inputs are a `str` used
+# as a raw byte buffer + an explicit length; outputs are a `CResult`
+# (std.compress.common): `ok`, `err`, `len()`, `to_str()`, `data`, `free()`.
+#
+# Usage:
+#   from std.compress.zstd import Zstd
+#   mut c = Zstd.compress(data, dlen, true)            # true = XXH64 checksum
+#   mut d = Zstd.decompress(c.to_str(), c.len(), 1 << 26)
+#   if d.ok: print(d.to_str())
+#   c.free()
+#   d.free()
+
+from std.compress.common import CBuf, CResult, rd8, rd16le, rd32le, rd64le, ptr_add, mul32
+from std.compress.xxhash import Xxh64
+
+# ── small helpers ──────────────────────────────────────────────────────────
+
+# floor(log2(x)) for x >= 1 (-1 for x <= 0)
+def _hb(x: int) -> int:
+    mut r = -1
+    mut v = x
+    while v > 0:
+        r = r + 1
+        v = v >> 1
+    return r
+
+# `n` bits (n <= 32) of the byte stream at LSB-first bit offset `lo`.
+def _getbits(p: Pointer[char], lo: int, n: int) -> int:
+    if n <= 0: return 0
+    mut b0 = lo >> 3
+    mut sh = lo & 7
+    mut nb = (sh + n + 7) >> 3
+    mut v = 0
+    mut k = 0
+    while k < nb:
+        v = v | (rd8(p, b0 + k) << (8 * k))
+        k = k + 1
+    return (v >> sh) & ((1 << n) - 1)
+
+# Forward bit read with bytes past `avail` reading as 0 (n <= 16).
+def _fbits(p: Pointer[char], avail: int, bitpos: int, n: int) -> int:
+    mut b0 = bitpos >> 3
+    mut v = 0
+    mut k = 0
+    while k < 4:
+        if b0 + k < avail:
+            v = v | (rd8(p, b0 + k) << (8 * k))
+        k = k + 1
+    return (v >> (bitpos & 7)) & ((1 << n) - 1)
+
+# ── backward bit reader (FSE / Huffman streams) ───────────────────────────
+
+pub class ZBack:
+    p:    Pointer[char]
+    rem:  int          # unread bits (negative once over-read)
+    over: bool         # true once more bits were requested than the stream holds
+    bad:  bool         # empty stream or missing end-mark bit
+
+extend ZBack:
+    def init(p: Pointer[char], ln: int) -> ZBack:
+        mut b = ZBack()
+        b.p = p
+        b.over = false
+        b.bad = false
+        b.rem = 0
+        if ln <= 0:
+            b.bad = true
+            return b
+        mut last = rd8(p, ln - 1)
+        if last == 0:
+            b.bad = true
+            return b
+        b.rem = (ln - 1) * 8 + _hb(last)
+        return b
+
+    # Read `n` bits (first bit read is the most significant of the result).
+    def read(self, n: int) -> int:
+        if n <= 0: return 0
+        if self.rem <= 0:
+            self.over = true
+            self.rem = self.rem - n
+            return 0
+        if self.rem < n:
+            self.over = true
+            mut v = _getbits(self.p, 0, self.rem) << (n - self.rem)
+            self.rem = self.rem - n
+            return v
+        mut lo = self.rem - n
+        self.rem = lo
+        return _getbits(self.p, lo, n)
+
+    # Next `n` bits without consuming (zero padded past the end).
+    def peek(self, n: int) -> int:
+        if n <= 0: return 0
+        if self.rem <= 0: return 0
+        if self.rem < n:
+            return _getbits(self.p, 0, self.rem) << (n - self.rem)
+        return _getbits(self.p, self.rem - n, n)
+
+    def skip(self, n: int):
+        self.rem = self.rem - n
+        if self.rem < 0: self.over = true
+
+# ── FSE tables ─────────────────────────────────────────────────────────────
+
+pub class ZFse:
+    al:    int
+    sym:   List[int]
+    nbits: List[int]
+    base:  List[int]
+
+# Decoding table from a normalized distribution (-1 = "less than 1").
+def _fse_build(counts: List[int], nsym: int, al: int) -> ZFse:
+    mut size = 1 << al
+    mut t = ZFse()
+    t.al = al
+    mut sym: List[int] = []
+    mut nb: List[int] = []
+    mut bs: List[int] = []
+    mut i = 0
+    while i < size:
+        sym.append(0)
+        nb.append(0)
+        bs.append(0)
+        i = i + 1
+    mut high = size - 1
+    mut s = 0
+    while s < nsym:
+        if counts[s] == -1:
+            sym[high] = s
+            high = high - 1
+        s = s + 1
+    mut step = (size >> 1) + (size >> 3) + 3
+    mut mask = size - 1
+    mut pos = 0
+    s = 0
+    while s < nsym:
+        mut c = counts[s]
+        mut k = 0
+        while k < c:
+            sym[pos] = s
+            pos = (pos + step) & mask
+            while pos > high:
+                pos = (pos + step) & mask
+            k = k + 1
+        s = s + 1
+    mut nxt: List[int] = []
+    s = 0
+    while s < nsym:
+        if counts[s] == -1:
+            nxt.append(1)
+        else:
+            nxt.append(counts[s])
+        s = s + 1
+    mut u = 0
+    while u < size:
+        mut sy = sym[u]
+        mut ns = nxt[sy]
+        nxt[sy] = ns + 1
+        mut nbits = al - _hb(ns)
+        nb[u] = nbits
+        bs[u] = (ns << nbits) - size
+        u = u + 1
+    t.sym = sym
+    t.nbits = nb
+    t.base = bs
+    return t
+
+# Single-symbol table (RLE mode): every state decodes `s` and reads no bits.
+def _fse_rle(s: int) -> ZFse:
+    mut t = ZFse()
+    t.al = 0
+    mut a: List[int] = [s]
+    mut b: List[int] = [0]
+    mut c: List[int] = [0]
+    t.sym = a
+    t.nbits = b
+    t.base = c
+    return t
+
+pub class ZNC:
+    ok:     bool
+    used:   int
+    al:     int
+    counts: List[int]
+
+# Parse an FSE table description (RFC 8878 §4.1.1) from `avail` bytes at `p`.
+def _fse_read_ncount(p: Pointer[char], avail: int, max_sym: int, max_al: int) -> ZNC:
+    mut r = ZNC()
+    mut counts: List[int] = []
+    r.counts = counts
+    r.ok = false
+    r.used = 0
+    if avail < 1: return r
+    mut al = _fbits(p, avail, 0, 4) + 5
+    if al > max_al: return r
+    r.al = al
+    mut bitpos = 4
+    mut remaining = (1 << al) + 1
+    mut threshold = 1 << al
+    mut nbits = al + 1
+    mut charnum = 0
+    mut prev0 = false
+    while remaining > 1 and charnum <= max_sym:
+        if prev0:
+            mut n0 = charnum
+            while _fbits(p, avail, bitpos, 16) == 0xFFFF:
+                n0 = n0 + 24
+                bitpos = bitpos + 16
+                if (bitpos >> 3) > avail: return r
+            while _fbits(p, avail, bitpos, 2) == 3:
+                n0 = n0 + 3
+                bitpos = bitpos + 2
+            n0 = n0 + _fbits(p, avail, bitpos, 2)
+            bitpos = bitpos + 2
+            if n0 > max_sym + 1: return r
+            while charnum < n0:
+                counts.append(0)
+                charnum = charnum + 1
+            if charnum > max_sym: return r
+        mut mx = (2 * threshold - 1) - remaining
+        mut bits = _fbits(p, avail, bitpos, nbits)
+        mut count = 0
+        if (bits & (threshold - 1)) < mx:
+            count = bits & (threshold - 1)
+            bitpos = bitpos + nbits - 1
+        else:
+            count = bits & (2 * threshold - 1)
+            if count >= threshold: count = count - mx
+            bitpos = bitpos + nbits
+        count = count - 1
+        if count < 0:
+            remaining = remaining + count
+        else:
+            remaining = remaining - count
+        counts.append(count)
+        charnum = charnum + 1
+        prev0 = (count == 0)
+        while remaining < threshold:
+            nbits = nbits - 1
+            threshold = threshold >> 1
+            if threshold == 0: break
+        if (bitpos >> 3) > avail + 1: return r
+    if remaining != 1: return r
+    if charnum > max_sym + 1: return r
+    r.used = (bitpos + 7) >> 3
+    if r.used > avail: return r
+    r.ok = true
+    return r
+
+# ── FSE encoding tables (for the encoder) ─────────────────────────────────
+
+pub class ZEnc:
+    al:  int
+    dnb: List[int]     # deltaNbBits per symbol
+    dfs: List[int]     # deltaFindState per symbol
+    tab: List[int]     # state table
+
+# Build the FSE compression table for a normalized distribution; `d` is the
+# matching decoding table (its `sym` array is the shared symbol spreading).
+def _fse_build_ctable(counts: List[int], nsym: int, al: int, d: ZFse) -> ZEnc:
+    mut size = 1 << al
+    mut e = ZEnc()
+    e.al = al
+    mut cumul: List[int] = []
+    mut acc = 0
+    mut s = 0
+    while s < nsym:
+        cumul.append(acc)
+        if counts[s] == -1:
+            acc = acc + 1
+        else:
+            acc = acc + counts[s]
+        s = s + 1
+    mut tab: List[int] = []
+    mut u = 0
+    while u < size:
+        tab.append(0)
+        u = u + 1
+    u = 0
+    while u < size:
+        mut sy = d.sym[u]
+        tab[cumul[sy]] = size + u
+        cumul[sy] = cumul[sy] + 1
+        u = u + 1
+    mut dnb: List[int] = []
+    mut dfs: List[int] = []
+    mut total = 0
+    s = 0
+    while s < nsym:
+        mut c = counts[s]
+        if c == 0:
+            dnb.append(((al + 1) << 16) - size)
+            dfs.append(0)
+        elif c == -1 or c == 1:
+            dnb.append((al << 16) - size)
+            dfs.append(total - 1)
+            total = total + 1
+        else:
+            mut maxbo = al - _hb(c - 1)
+            mut minsp = c << maxbo
+            dnb.append((maxbo << 16) - minsp)
+            dfs.append(total - c)
+            total = total + c
+        s = s + 1
+    e.dnb = dnb
+    e.dfs = dfs
+    e.tab = tab
+    return e
+
+# ── sequence code tables ───────────────────────────────────────────────────
+
+pub class ZTab:
+    ready:  bool
+    llbase: List[int]
+    llbits: List[int]
+    mlbase: List[int]
+    mlbits: List[int]
+    pre_ll: ZFse
+    pre_of: ZFse
+    pre_ml: ZFse
+    enc_ll: ZEnc
+    enc_of: ZEnc
+    enc_ml: ZEnc
+
+mut _ztab = ZTab()
+
+def _zt() -> ZTab:
+    if _ztab.ready: return _ztab
+    mut llb: List[int] = []
+    mut lln: List[int] = []
+    mut mlb: List[int] = []
+    mut mln: List[int] = []
+    mut extra_ll: List[int] = [1, 1, 1, 1, 2, 2, 3, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+    mut extra_ml: List[int] = [1, 1, 1, 1, 2, 2, 3, 3, 4, 4, 5, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+    mut c = 0
+    while c < 16:
+        llb.append(c)
+        lln.append(0)
+        c = c + 1
+    mut base = 16
+    c = 0
+    while c < 20:
+        llb.append(base)
+        lln.append(extra_ll[c])
+        base = base + (1 << extra_ll[c])
+        c = c + 1
+    c = 0
+    while c < 32:
+        mlb.append(c + 3)
+        mln.append(0)
+        c = c + 1
+    base = 35
+    c = 0
+    while c < 21:
+        mlb.append(base)
+        mln.append(extra_ml[c])
+        base = base + (1 << extra_ml[c])
+        c = c + 1
+    _ztab.llbase = llb
+    _ztab.llbits = lln
+    _ztab.mlbase = mlb
+    _ztab.mlbits = mln
+    mut dll: List[int] = [4, 3, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 3, 2, 1, 1, 1, 1, 1, -1, -1, -1, -1]
+    mut dml: List[int] = [1, 4, 3, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, -1, -1, -1, -1, -1, -1, -1]
+    mut dof: List[int] = [1, 1, 1, 1, 1, 1, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, -1, -1, -1, -1, -1]
+    _ztab.pre_ll = _fse_build(dll, 36, 6)
+    _ztab.pre_ml = _fse_build(dml, 53, 6)
+    _ztab.pre_of = _fse_build(dof, 29, 5)
+    _ztab.enc_ll = _fse_build_ctable(dll, 36, 6, _ztab.pre_ll)
+    _ztab.enc_ml = _fse_build_ctable(dml, 53, 6, _ztab.pre_ml)
+    _ztab.enc_of = _fse_build_ctable(dof, 29, 5, _ztab.pre_of)
+    _ztab.ready = true
+    return _ztab
+
+# ── Huffman ────────────────────────────────────────────────────────────────
+
+pub class ZHuf:
+    maxbits: int
+    sym:     List[int]
+    nb:      List[int]
+
+pub class ZHufHdr:
+    ok:      bool
+    used:    int
+    err:     str
+    table:   ZHuf
+
+# Parse a Huffman tree description (RFC 8878 §4.2.1) from `avail` bytes at `p`
+# and build the decoding table.
+def _huf_read_table(p: Pointer[char], avail: int) -> ZHufHdr:
+    mut r = ZHufHdr()
+    r.ok = false
+    r.used = 0
+    r.err = ""
+    if avail < 1:
+        r.err = "zstd: truncated Huffman header"
+        return r
+    mut hb = rd8(p, 0)
+    mut weights: List[int] = []
+    mut used = 0
+    if hb >= 128:
+        mut nw = hb - 127
+        used = 1 + ((nw + 1) >> 1)
+        if used > avail:
+            r.err = "zstd: truncated Huffman weights"
+            return r
+        mut i = 0
+        while i < nw:
+            mut byte = rd8(p, 1 + (i >> 1))
+            if (i & 1) == 0:
+                weights.append(byte >> 4)
+            else:
+                weights.append(byte & 15)
+            i = i + 1
+    else:
+        used = 1 + hb
+        if hb == 0 or used > avail:
+            r.err = "zstd: bad Huffman FSE header size"
+            return r
+        mut nc = _fse_read_ncount(ptr_add(p, 1), hb, 255, 6)
+        if not nc.ok:
+            r.err = "zstd: bad Huffman weight table"
+            return r
+        mut tbl = _fse_build(nc.counts, len(nc.counts), nc.al)
+        mut bits = ZBack.init(ptr_add(p, 1 + nc.used), hb - nc.used)
+        if bits.bad:
+            r.err = "zstd: bad Huffman weight stream"
+            return r
+        mut st1 = bits.read(nc.al)
+        mut st2 = bits.read(nc.al)
+        while true:
+            weights.append(tbl.sym[st1])
+            st1 = tbl.base[st1] + bits.read(tbl.nbits[st1])
+            if bits.over:
+                weights.append(tbl.sym[st2])
+                break
+            weights.append(tbl.sym[st2])
+            st2 = tbl.base[st2] + bits.read(tbl.nbits[st2])
+            if bits.over:
+                weights.append(tbl.sym[st1])
+                break
+            if len(weights) > 255:
+                r.err = "zstd: too many Huffman weights"
+                return r
+        if len(weights) > 255:
+            r.err = "zstd: too many Huffman weights"
+            return r
+    # implied last weight
+    mut total = 0
+    mut i2 = 0
+    while i2 < len(weights):
+        mut w = weights[i2]
+        if w > 11:
+            r.err = "zstd: Huffman weight out of range"
+            return r
+        if w > 0: total = total + (1 << (w - 1))
+        i2 = i2 + 1
+    if total == 0:
+        r.err = "zstd: empty Huffman tree"
+        return r
+    mut maxbits = _hb(total) + 1
+    if maxbits > 11:
+        r.err = "zstd: Huffman depth exceeds 11"
+        return r
+    mut rest = (1 << maxbits) - total
+    if rest <= 0 or (rest & (rest - 1)) != 0:
+        r.err = "zstd: Huffman weights do not complete a prefix code"
+        return r
+    weights.append(_hb(rest) + 1)
+    if len(weights) > 256:
+        r.err = "zstd: too many Huffman symbols"
+        return r
+    # build the lookup table
+    mut size = 1 << maxbits
+    mut sym: List[int] = []
+    mut nb: List[int] = []
+    mut z = 0
+    while z < size:
+        sym.append(0)
+        nb.append(0)
+        z = z + 1
+    mut rankcount: List[int] = []
+    mut rk = 0
+    while rk < 13:
+        rankcount.append(0)
+        rk = rk + 1
+    mut s = 0
+    while s < len(weights):
+        rankcount[weights[s]] = rankcount[weights[s]] + 1
+        s = s + 1
+    mut rankstart: List[int] = []
+    rk = 0
+    while rk < 13:
+        rankstart.append(0)
+        rk = rk + 1
+    mut nxt = 0
+    mut w2 = 1
+    while w2 <= maxbits:
+        rankstart[w2] = nxt
+        nxt = nxt + (rankcount[w2] << (w2 - 1))
+        w2 = w2 + 1
+    s = 0
+    while s < len(weights):
+        mut ww = weights[s]
+        if ww > 0:
+            mut cnt = 1 << (ww - 1)
+            mut st = rankstart[ww]
+            mut k = 0
+            while k < cnt:
+                sym[st + k] = s
+                nb[st + k] = maxbits + 1 - ww
+                k = k + 1
+            rankstart[ww] = st + cnt
+        s = s + 1
+    mut h = ZHuf()
+    h.maxbits = maxbits
+    h.sym = sym
+    h.nb = nb
+    r.table = h
+    r.used = used
+    r.ok = true
+    return r
+
+# Decode `count` symbols from one backward Huffman stream into `out`.
+def _huf_stream(h: ZHuf, p: Pointer[char], ln: int, count: int, out: CBuf) -> bool:
+    mut bits = ZBack.init(p, ln)
+    if bits.bad: return false
+    mut i = 0
+    while i < count:
+        mut idx = bits.peek(h.maxbits)
+        out.push_u8(h.sym[idx])
+        bits.skip(h.nb[idx])
+        if bits.over: return false
+        i = i + 1
+    return bits.rem == 0
+
+# ── decoder ────────────────────────────────────────────────────────────────
+
+pub class ZDec:
+    err:     str
+    lit:     CBuf
+    huf:     ZHuf
+    have_huf: bool
+    ll:      ZFse
+    of:      ZFse
+    ml:      ZFse
+    have_ll: bool
+    have_of: bool
+    have_ml: bool
+    r1:      int
+    r2:      int
+    r3:      int
+
+extend ZDec:
+    def init() -> ZDec:
+        mut d = ZDec()
+        d.err = ""
+        d.lit = CBuf.init(1024)
+        d.have_huf = false
+        d.have_ll = false
+        d.have_of = false
+        d.have_ml = false
+        d.r1 = 1
+        d.r2 = 4
+        d.r3 = 8
+        return d
+
+    def reset_frame(self):
+        self.have_huf = false
+        self.have_ll = false
+        self.have_of = false
+        self.have_ml = false
+        self.r1 = 1
+        self.r2 = 4
+        self.r3 = 8
+
+    def fail(self, msg: str) -> int:
+        self.err = msg
+        return -1
+
+    # Decode the Literals_Section at p[0..n) into self.lit.
+    # Returns bytes consumed, or -1 (self.err set).
+    def read_literals(self, p: Pointer[char], n: int, bmax: int) -> int:
+        self.lit.len = 0
+        if n < 1: return self.fail("zstd: empty literals section")
+        mut b0 = rd8(p, 0)
+        mut typ = b0 & 3
+        mut sf = (b0 >> 2) & 3
+        if typ < 2:
+            mut hdr = 1
+            mut size = 0
+            if sf == 0 or sf == 2:
+                size = b0 >> 3
+            elif sf == 1:
+                hdr = 2
+                if n < 2: return self.fail("zstd: truncated literals header")
+                size = (b0 >> 4) | (rd8(p, 1) << 4)
+            else:
+                hdr = 3
+                if n < 3: return self.fail("zstd: truncated literals header")
+                size = (b0 >> 4) | (rd8(p, 1) << 4) | (rd8(p, 2) << 12)
+            if size > bmax: return self.fail("zstd: literals exceed block size limit")
+            if typ == 0:
+                if hdr + size > n: return self.fail("zstd: truncated raw literals")
+                self.lit.push_raw(ptr_add(p, hdr), size)
+                return hdr + size
+            if hdr + 1 > n: return self.fail("zstd: truncated RLE literals")
+            self.lit.push_fill(rd8(p, hdr), size)
+            return hdr + 1
+        # Huffman-compressed (2) / treeless (3)
+        mut hdr2 = 3
+        mut rbits = 10
+        mut streams = 1
+        if sf == 1:
+            streams = 4
+        elif sf == 2:
+            hdr2 = 4
+            rbits = 14
+            streams = 4
+        elif sf == 3:
+            hdr2 = 5
+            rbits = 18
+            streams = 4
+        if n < hdr2: return self.fail("zstd: truncated literals header")
+        mut h = 0
+        mut k = 0
+        while k < hdr2:
+            h = h | (rd8(p, k) << (8 * k))
+            k = k + 1
+        mut rsize = (h >> 4) & ((1 << rbits) - 1)
+        mut csize = (h >> (4 + rbits)) & ((1 << rbits) - 1)
+        if rsize > bmax: return self.fail("zstd: literals exceed block size limit")
+        if hdr2 + csize > n: return self.fail("zstd: truncated compressed literals")
+        mut q = ptr_add(p, hdr2)
+        mut avail = csize
+        if typ == 2:
+            mut hh = _huf_read_table(q, avail)
+            if not hh.ok: return self.fail(hh.err)
+            self.huf = hh.table
+            self.have_huf = true
+            q = ptr_add(q, hh.used)
+            avail = avail - hh.used
+        elif not self.have_huf:
+            return self.fail("zstd: treeless literals without a previous Huffman table")
+        if avail < 1: return self.fail("zstd: empty Huffman stream")
+        if streams == 1:
+            if not _huf_stream(self.huf, q, avail, rsize, self.lit):
+                return self.fail("zstd: corrupt Huffman literals stream")
+            return hdr2 + csize
+        if avail < 6: return self.fail("zstd: truncated Huffman jump table")
+        mut s1 = rd16le(q, 0)
+        mut s2 = rd16le(q, 2)
+        mut s3 = rd16le(q, 4)
+        mut s4 = avail - 6 - s1 - s2 - s3
+        if s4 < 1 or s1 < 1 or s2 < 1 or s3 < 1:
+            return self.fail("zstd: bad Huffman jump table")
+        mut each = (rsize + 3) / 4
+        mut last = rsize - 3 * each
+        if last < 0: return self.fail("zstd: bad literals size for 4 streams")
+        mut sp = ptr_add(q, 6)
+        if not _huf_stream(self.huf, sp, s1, each, self.lit): return self.fail("zstd: corrupt Huffman literals stream 1")
+        sp = ptr_add(sp, s1)
+        if not _huf_stream(self.huf, sp, s2, each, self.lit): return self.fail("zstd: corrupt Huffman literals stream 2")
+        sp = ptr_add(sp, s2)
+        if not _huf_stream(self.huf, sp, s3, each, self.lit): return self.fail("zstd: corrupt Huffman literals stream 3")
+        sp = ptr_add(sp, s3)
+        if not _huf_stream(self.huf, sp, s4, last, self.lit): return self.fail("zstd: corrupt Huffman literals stream 4")
+        return hdr2 + csize
+
+    # Select/parse one sequence-code table. Returns bytes consumed or -1.
+    def read_table(self, which: int, mode: int, p: Pointer[char], avail: int) -> int:
+        mut t = _zt()
+        mut max_sym = 35
+        mut max_al = 9
+        if which == 1:
+            max_sym = 31
+            max_al = 8
+        elif which == 2:
+            max_sym = 52
+        mut tbl = t.pre_ll
+        if mode == 0:
+            if which == 1:
+                tbl = t.pre_of
+            elif which == 2:
+                tbl = t.pre_ml
+            self.set_table(which, tbl)
+            return 0
+        if mode == 1:
+            if avail < 1: return self.fail("zstd: truncated RLE table")
+            mut s = rd8(p, 0)
+            if s > max_sym: return self.fail("zstd: RLE symbol out of range")
+            self.set_table(which, _fse_rle(s))
+            return 1
+        if mode == 2:
+            mut nc = _fse_read_ncount(p, avail, max_sym, max_al)
+            if not nc.ok: return self.fail("zstd: bad FSE table description")
+            self.set_table(which, _fse_build(nc.counts, len(nc.counts), nc.al))
+            return nc.used
+        # repeat
+        if which == 0 and not self.have_ll: return self.fail("zstd: repeat mode without a previous table")
+        if which == 1 and not self.have_of: return self.fail("zstd: repeat mode without a previous table")
+        if which == 2 and not self.have_ml: return self.fail("zstd: repeat mode without a previous table")
+        return 0
+
+    def set_table(self, which: int, t: ZFse):
+        if which == 0:
+            self.ll = t
+            self.have_ll = true
+        elif which == 1:
+            self.of = t
+            self.have_of = true
+        else:
+            self.ml = t
+            self.have_ml = true
+
+    # Decode one Compressed_Block's content p[0..n), appending to `out`.
+    def compressed_block(self, p: Pointer[char], n: int, out: CBuf, fstart: int, bmax: int, limit: int) -> bool:
+        mut bstart = out.len
+        mut used = self.read_literals(p, n, bmax)
+        if used < 0: return false
+        mut q = ptr_add(p, used)
+        mut rest = n - used
+        if rest < 1:
+            self.err = "zstd: missing sequences section"
+            return false
+        mut b0 = rd8(q, 0)
+        mut nseq = 0
+        mut pos = 1
+        if b0 == 0:
+            nseq = 0
+        elif b0 < 128:
+            nseq = b0
+        elif b0 < 255:
+            if rest < 2:
+                self.err = "zstd: truncated sequence count"
+                return false
+            nseq = ((b0 - 128) << 8) + rd8(q, 1)
+            pos = 2
+        else:
+            if rest < 3:
+                self.err = "zstd: truncated sequence count"
+                return false
+            nseq = rd8(q, 1) + (rd8(q, 2) << 8) + 0x7F00
+            pos = 3
+        if nseq == 0:
+            if rest != pos:
+                self.err = "zstd: trailing bytes after literals-only block"
+                return false
+            if out.len + self.lit.len > limit:
+                self.err = "zstd: output exceeds limit"
+                return false
+            out.push_raw(self.lit.data, self.lit.len)
+            return true
+        if pos >= rest:
+            self.err = "zstd: truncated sequences header"
+            return false
+        mut modes = rd8(q, pos)
+        pos = pos + 1
+        if (modes & 3) != 0:
+            self.err = "zstd: reserved sequence-mode bits set"
+            return false
+        mut c = self.read_table(0, modes >> 6, ptr_add(q, pos), rest - pos)
+        if c < 0: return false
+        pos = pos + c
+        c = self.read_table(1, (modes >> 4) & 3, ptr_add(q, pos), rest - pos)
+        if c < 0: return false
+        pos = pos + c
+        c = self.read_table(2, (modes >> 2) & 3, ptr_add(q, pos), rest - pos)
+        if c < 0: return false
+        pos = pos + c
+        mut bits = ZBack.init(ptr_add(q, pos), rest - pos)
+        if bits.bad:
+            self.err = "zstd: bad sequence bitstream"
+            return false
+        mut t = _zt()
+        mut llst = bits.read(self.ll.al)
+        mut ofst = bits.read(self.of.al)
+        mut mlst = bits.read(self.ml.al)
+        mut lpos = 0
+        mut i = 0
+        while i < nseq:
+            mut llc = self.ll.sym[llst]
+            mut ofc = self.of.sym[ofst]
+            mut mlc = self.ml.sym[mlst]
+            mut ofv = (1 << ofc) + bits.read(ofc)
+            mut mlen = t.mlbase[mlc] + bits.read(t.mlbits[mlc])
+            mut llen = t.llbase[llc] + bits.read(t.llbits[llc])
+            if i < nseq - 1:
+                llst = self.ll.base[llst] + bits.read(self.ll.nbits[llst])
+                mlst = self.ml.base[mlst] + bits.read(self.ml.nbits[mlst])
+                ofst = self.of.base[ofst] + bits.read(self.of.nbits[ofst])
+            if bits.over:
+                self.err = "zstd: sequence bitstream over-read"
+                return false
+            mut off = 0
+            if ofv > 3:
+                off = ofv - 3
+                self.r3 = self.r2
+                self.r2 = self.r1
+                self.r1 = off
+            else:
+                mut idx = ofv
+                if llen == 0: idx = ofv + 1
+                if idx == 1:
+                    off = self.r1
+                elif idx == 2:
+                    off = self.r2
+                    self.r2 = self.r1
+                    self.r1 = off
+                elif idx == 3:
+                    off = self.r3
+                    self.r3 = self.r2
+                    self.r2 = self.r1
+                    self.r1 = off
+                else:
+                    off = self.r1 - 1
+                    if off <= 0:
+                        self.err = "zstd: invalid repeat offset"
+                        return false
+                    self.r3 = self.r2
+                    self.r2 = self.r1
+                    self.r1 = off
+            if llen > self.lit.len - lpos:
+                self.err = "zstd: literal length exceeds literals"
+                return false
+            if out.len + llen + mlen > limit or (out.len - bstart) + llen + mlen > bmax:
+                self.err = "zstd: output exceeds limit"
+                return false
+            out.push_raw(ptr_add(self.lit.data, lpos), llen)
+            lpos = lpos + llen
+            if off > out.len - fstart or off <= 0:
+                self.err = "zstd: match offset out of range"
+                return false
+            out.copy_back(off, mlen)
+            i = i + 1
+        if bits.rem != 0:
+            self.err = "zstd: sequence bitstream not fully consumed"
+            return false
+        mut tail = self.lit.len - lpos
+        if out.len + tail > limit or (out.len - bstart) + tail > bmax:
+            self.err = "zstd: output exceeds limit"
+            return false
+        out.push_raw(ptr_add(self.lit.data, lpos), tail)
+        return true
+
+# ── encoder ────────────────────────────────────────────────────────────────
+
+# Forward LSB-first bit writer.
+pub class ZBW:
+    buf: CBuf
+    acc: int
+    nb:  int
+
+extend ZBW:
+    def init(cap: int) -> ZBW:
+        mut w = ZBW()
+        w.buf = CBuf.init(cap)
+        w.acc = 0
+        w.nb = 0
+        return w
+
+    def add(self, v: int, n: int):
+        if n <= 0: return
+        self.acc = self.acc | ((v & ((1 << n) - 1)) << self.nb)
+        self.nb = self.nb + n
+        while self.nb >= 8:
+            self.buf.push_u8(self.acc & 255)
+            self.acc = self.acc >> 8
+            self.nb = self.nb - 8
+
+    # Append the end-mark bit and pad to a byte boundary.
+    def close(self):
+        self.add(1, 1)
+        if self.nb > 0:
+            self.buf.push_u8(self.acc & 255)
+        self.acc = 0
+        self.nb = 0
+
+def _enc_init(e: ZEnc, sym: int) -> int:
+    mut dn = e.dnb[sym]
+    mut nbo = (dn + (1 << 15)) >> 16
+    mut value = (nbo << 16) - dn
+    return e.tab[(value >> nbo) + e.dfs[sym]]
+
+def _enc_sym(w: ZBW, e: ZEnc, state: int, sym: int) -> int:
+    mut nbo = (state + e.dnb[sym]) >> 16
+    w.add(state, nbo)
+    return e.tab[(state >> nbo) + e.dfs[sym]]
+
+# Code index for a literal-length (is_ll) or match-length value.
+def _len_code(t: ZTab, is_ll: bool, v: int) -> int:
+    if is_ll:
+        if v < 16: return v
+        mut c = 35
+        while t.llbase[c] > v:
+            c = c - 1
+        return c
+    mut m = v - 3
+    if m < 32: return m
+    mut c2 = 52
+    while t.mlbase[c2] > v:
+        c2 = c2 - 1
+    return c2
+
+# Encode the sequences bitstream using the predefined tables.
+def _encode_sequences(lls: List[int], mls: List[int], offs: List[int]) -> CBuf:
+    mut t = _zt()
+    mut nseq = len(lls)
+    mut w = ZBW.init(nseq * 4 + 16)
+    mut i = nseq - 1
+    mut llc = _len_code(t, true, lls[i])
+    mut mlc = _len_code(t, false, mls[i])
+    mut ofv = offs[i] + 3
+    mut ofc = _hb(ofv)
+    mut stml = _enc_init(t.enc_ml, mlc)
+    mut stof = _enc_init(t.enc_of, ofc)
+    mut stll = _enc_init(t.enc_ll, llc)
+    w.add(lls[i] - t.llbase[llc], t.llbits[llc])
+    w.add(mls[i] - t.mlbase[mlc], t.mlbits[mlc])
+    w.add(ofv - (1 << ofc), ofc)
+    i = nseq - 2
+    while i >= 0:
+        llc = _len_code(t, true, lls[i])
+        mlc = _len_code(t, false, mls[i])
+        ofv = offs[i] + 3
+        ofc = _hb(ofv)
+        stof = _enc_sym(w, t.enc_of, stof, ofc)
+        stml = _enc_sym(w, t.enc_ml, stml, mlc)
+        stll = _enc_sym(w, t.enc_ll, stll, llc)
+        w.add(lls[i] - t.llbase[llc], t.llbits[llc])
+        w.add(mls[i] - t.mlbase[mlc], t.mlbits[mlc])
+        w.add(ofv - (1 << ofc), ofc)
+        i = i - 1
+    w.add(stml, t.enc_ml.al)
+    w.add(stof, t.enc_of.al)
+    w.add(stll, t.enc_ll.al)
+    w.close()
+    return w.buf
+
+def _push_block_header(out: CBuf, last: int, btype: int, size: int):
+    mut h = last | (btype << 1) | (size << 3)
+    out.push_u8(h & 255)
+    out.push_u8((h >> 8) & 255)
+    out.push_u8((h >> 16) & 255)
+
+# Encode input bytes s[bs..be) as one block appended to `out`.
+# `table` is the cross-block match table (global positions + 1).
+def _encode_block(out: CBuf, s: Pointer[char], bs: int, be: int, last: int, table: List[int], tmp: CBuf):
+    mut size = be - bs
+    # RLE block?
+    mut b0 = rd8(s, bs)
+    mut same = true
+    mut k = bs + 1
+    while k < be:
+        if rd8(s, k) != b0:
+            same = false
+            break
+        k = k + 1
+    if same and size >= 4:
+        _push_block_header(out, last, 1, size)
+        out.push_u8(b0)
+        return
+    # LZ77 pass
+    mut lits = CBuf.init(size + 16)
+    mut lls: List[int] = []
+    mut mls: List[int] = []
+    mut offs: List[int] = []
+    mut anchor = bs
+    mut ip = bs
+    mut win = 131072
+    while ip + 4 <= be:
+        mut seq = rd32le(s, ip)
+        mut h = mul32(seq, 2654435761) >> 17
+        mut ref = table[h] - 1
+        table[h] = ip + 1
+        if ref >= 0 and ip - ref <= win and rd32le(s, ref) == seq:
+            mut mp = ip
+            mut rp = ref
+            while mp > anchor and rp > 0 and rd8(s, mp - 1) == rd8(s, rp - 1):
+                mp = mp - 1
+                rp = rp - 1
+            mut ml = 4 + (ip - mp)
+            while mp + ml < be and rd8(s, rp + ml) == rd8(s, mp + ml):
+                ml = ml + 1
+            lls.append(mp - anchor)
+            mls.append(ml)
+            offs.append(mp - rp)
+            lits.push_raw(ptr_add(s, anchor), mp - anchor)
+            ip = mp + ml
+            anchor = ip
+            if ip - 2 >= bs and ip + 2 <= be:
+                table[mul32(rd32le(s, ip - 2), 2654435761) >> 17] = ip - 1
+        else:
+            ip = ip + 1
+    lits.push_raw(ptr_add(s, anchor), be - anchor)
+    # assemble the compressed block body in `tmp`
+    tmp.len = 0
+    mut ln = lits.len
+    if ln < 32:
+        tmp.push_u8(ln << 3)
+    elif ln < 4096:
+        mut hh = (ln << 4) | 4
+        tmp.push_u8(hh & 255)
+        tmp.push_u8(hh >> 8)
+    else:
+        mut h3 = (ln << 4) | 12
+        tmp.push_u8(h3 & 255)
+        tmp.push_u8((h3 >> 8) & 255)
+        tmp.push_u8((h3 >> 16) & 255)
+    tmp.push_raw(lits.data, lits.len)
+    lits.free()
+    mut nseq = len(lls)
+    if nseq == 0:
+        tmp.push_u8(0)
+    else:
+        if nseq < 128:
+            tmp.push_u8(nseq)
+        elif nseq < 0x7F00:
+            tmp.push_u8((nseq >> 8) + 128)
+            tmp.push_u8(nseq & 255)
+        else:
+            tmp.push_u8(255)
+            tmp.push_u8((nseq - 0x7F00) & 255)
+            tmp.push_u8((nseq - 0x7F00) >> 8)
+        tmp.push_u8(0)                       # all three tables: Predefined_Mode
+        mut sb = _encode_sequences(lls, mls, offs)
+        tmp.push_raw(sb.data, sb.len)
+        sb.free()
+    if tmp.len < size:
+        _push_block_header(out, last, 2, tmp.len)
+        out.push_raw(tmp.data, tmp.len)
+    else:
+        _push_block_header(out, last, 0, size)
+        out.push_raw(ptr_add(s, bs), size)
+
+# ── public API ─────────────────────────────────────────────────────────────
+
+pub class Zstd:
+    _dummy: int
+
+extend Zstd:
+
+    # Compress `n` bytes of `data` into a Zstandard frame. When `checksum`
+    # is true a 32-bit XXH64-derived content checksum is appended.
+    pub def compress(data: str, n: int, checksum: bool) -> CResult:
+        mut s = data as Pointer[char]
+        mut out = CBuf.init(n + n / 8 + 64)
+        out.push_u32le(0xFD2FB528)
+        mut single = 0
+        if n <= 131072: single = 1
+        mut chk = 0
+        if checksum: chk = 1
+        mut fcs_flag = 0
+        if single == 1:
+            if n < 256:
+                fcs_flag = 0
+            elif n < 65792:
+                fcs_flag = 1
+            else:
+                fcs_flag = 2
+        else:
+            if n < 4294967296:
+                fcs_flag = 2
+            else:
+                fcs_flag = 3
+        out.push_u8((fcs_flag << 6) | (single << 5) | (chk << 2))
+        if single == 0:
+            out.push_u8(0x38)                 # window = 2^17
+        if fcs_flag == 0:
+            out.push_u8(n)
+        elif fcs_flag == 1:
+            out.push_u16le(n - 256)
+        elif fcs_flag == 2:
+            out.push_u32le(n)
+        else:
+            out.push_u64le(n)
+        if n == 0:
+            _push_block_header(out, 1, 0, 0)  # one empty last Raw block
+        else:
+            mut table: List[int] = []
+            mut ti = 0
+            while ti < 32768:
+                table.append(0)
+                ti = ti + 1
+            mut tmp = CBuf.init(131072 + 1024)
+            mut pos = 0
+            while pos < n:
+                mut bl = n - pos
+                if bl > 131072: bl = 131072
+                mut last = 0
+                if pos + bl >= n: last = 1
+                _encode_block(out, s, pos, pos + bl, last, table, tmp)
+                pos = pos + bl
+            tmp.free()
+        if checksum:
+            out.push_u32le(Xxh64.hash_ptr(s, n, 0) & 0xFFFFFFFF)
+        return CResult.success(out)
+    # Decompress one or more concatenated Zstandard frames (skippable frames
+    # are ignored). `max_out` bounds the total output size.
+    pub def decompress(data: str, n: int, max_out: int) -> CResult:
+        mut src = data as Pointer[char]
+        mut out = CBuf.init(256)
+        mut d = ZDec.init()
+        mut pos = 0
+        mut frames = 0
+        while pos < n:
+            if pos + 4 > n:
+                return CResult.failure("zstd: truncated frame magic", out)
+            mut magic = rd32le(src, pos)
+            if magic >= 0x184D2A50 and magic <= 0x184D2A5F:
+                if pos + 8 > n:
+                    return CResult.failure("zstd: truncated skippable frame", out)
+                mut skip = rd32le(src, pos + 4)
+                if pos + 8 + skip > n:
+                    return CResult.failure("zstd: truncated skippable frame", out)
+                pos = pos + 8 + skip
+                continue
+            if magic != 0xFD2FB528:
+                return CResult.failure("zstd: bad frame magic", out)
+            pos = pos + 4
+            if pos >= n:
+                return CResult.failure("zstd: truncated frame header", out)
+            mut fhd = rd8(src, pos)
+            pos = pos + 1
+            mut fcs_flag = fhd >> 6
+            mut single = (fhd >> 5) & 1
+            mut has_chk = (fhd >> 2) & 1
+            mut did_flag = fhd & 3
+            if (fhd & 0x08) != 0:
+                return CResult.failure("zstd: reserved frame header bit set", out)
+            mut wsize = 0
+            if single == 0:
+                if pos >= n:
+                    return CResult.failure("zstd: truncated frame header", out)
+                mut wd = rd8(src, pos)
+                pos = pos + 1
+                mut wlog = 10 + (wd >> 3)
+                if wlog > 40:
+                    return CResult.failure("zstd: window too large", out)
+                mut wbase = 1 << wlog
+                wsize = wbase + (wbase / 8) * (wd & 7)
+            mut didsz = 0
+            if did_flag == 1: didsz = 1
+            elif did_flag == 2: didsz = 2
+            elif did_flag == 3: didsz = 4
+            mut fcssz = 0
+            if fcs_flag == 0:
+                if single == 1: fcssz = 1
+            elif fcs_flag == 1: fcssz = 2
+            elif fcs_flag == 2: fcssz = 4
+            else: fcssz = 8
+            if pos + didsz + fcssz > n:
+                return CResult.failure("zstd: truncated frame header", out)
+            mut did = 0
+            mut k = 0
+            while k < didsz:
+                did = did | (rd8(src, pos + k) << (8 * k))
+                k = k + 1
+            if did != 0:
+                return CResult.failure("zstd: dictionaries are not supported", out)
+            pos = pos + didsz
+            mut fcs = -1
+            if fcssz > 0:
+                fcs = 0
+                if fcssz == 8:
+                    fcs = rd64le(src, pos)
+                else:
+                    k = 0
+                    while k < fcssz:
+                        fcs = fcs | (rd8(src, pos + k) << (8 * k))
+                        k = k + 1
+                if fcssz == 2: fcs = fcs + 256
+                if fcs < 0 or fcs > (1 << 62):
+                    return CResult.failure("zstd: content size too large", out)
+            pos = pos + fcssz
+            if single == 1: wsize = fcs
+            if fcs >= 0 and out.len + fcs > max_out:
+                return CResult.failure("zstd: output exceeds limit", out)
+            mut bmax = 131072
+            if wsize < bmax: bmax = wsize
+            d.reset_frame()
+            mut fstart = out.len
+            while true:
+                if pos + 3 > n:
+                    return CResult.failure("zstd: truncated block header", out)
+                mut bh = rd8(src, pos) | (rd8(src, pos + 1) << 8) | (rd8(src, pos + 2) << 16)
+                pos = pos + 3
+                mut last = bh & 1
+                mut btype = (bh >> 1) & 3
+                mut bsize = bh >> 3
+                if btype == 3:
+                    return CResult.failure("zstd: reserved block type", out)
+                if bsize > bmax:
+                    return CResult.failure("zstd: block larger than window/128KiB limit", out)
+                if btype == 1:
+                    if pos + 1 > n:
+                        return CResult.failure("zstd: truncated RLE block", out)
+                    if out.len + bsize > max_out:
+                        return CResult.failure("zstd: output exceeds limit", out)
+                    out.push_fill(rd8(src, pos), bsize)
+                    pos = pos + 1
+                else:
+                    if pos + bsize > n:
+                        return CResult.failure("zstd: truncated block", out)
+                    if btype == 0:
+                        if out.len + bsize > max_out:
+                            return CResult.failure("zstd: output exceeds limit", out)
+                        out.push_raw(ptr_add(src, pos), bsize)
+                    else:
+                        if not d.compressed_block(ptr_add(src, pos), bsize, out, fstart, bmax, max_out):
+                            return CResult.failure(d.err, out)
+                    pos = pos + bsize
+                if last == 1: break
+            if fcs >= 0 and out.len - fstart != fcs:
+                return CResult.failure("zstd: content size mismatch", out)
+            if has_chk == 1:
+                if pos + 4 > n:
+                    return CResult.failure("zstd: truncated content checksum", out)
+                if Xxh64.hash_ptr(ptr_add(out.data, fstart), out.len - fstart, 0) & 0xFFFFFFFF != rd32le(src, pos):
+                    return CResult.failure("zstd: content checksum mismatch", out)
+                pos = pos + 4
+            frames = frames + 1
+        if frames == 0:
+            return CResult.failure("zstd: no frame found", out)
+        return CResult.success(out)

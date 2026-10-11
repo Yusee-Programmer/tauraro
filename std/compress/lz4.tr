@@ -36,7 +36,7 @@
 # concatenated frames and skips skippable frames. Dictionaries (DictID) are
 # not supported (reported as an error).
 
-from std.compress.common import CBuf, CResult, rd8, rd16le, rd32le, ptr_add, mul32
+from std.compress.common import CBuf, CResult, rd8, rd16le, rd32le, rd64le, ptr_add, mul32
 from std.compress.xxhash import Xxh32
 
 # ── block format ───────────────────────────────────────────────────────────
@@ -279,7 +279,8 @@ extend Lz4:
                 return CResult.failure("lz4: dictionaries are not supported", out)
             mut csize = -1
             if has_csize == 1:
-                csize = rd32le(src, pos + 2) | (rd32le(src, pos + 6) << 32)
+                csize = rd64le(src, pos + 2)
+                if csize < 0: csize = 0x7FFFFFFFFFFFFFFF
             pos = pos + dlen + 1
             mut fstart = out.len
             while true:
