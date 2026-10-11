@@ -8727,6 +8727,47 @@ pub class CGenerator:
                         self.w(" = 0;\n")
                 self.decl_vars.insert(n, true)
             case HirStmt.SAssign(t, v):
+                # `obj.field = f()?` / `coll[i] = f()?`: the `?` was only propagated for a
+                # bare-identifier target (see the `x = f()?` case below); for a field /
+                # index target it fell through to gen_expr's ETryExpr fallback, which
+                # never checks Result.tag, so an Err silently stored its payload and the
+                # function carried on. Hoist the check + unwrap into a temp here, then
+                # re-run the ordinary assignment with the temp as RHS (so all existing
+                # retain/release-old logic still applies); the temp's own +1 (an
+                # unboxed str / owned class) is dropped afterwards.
+                match v.read():
+                    case HirExpr.ETryExpr(inner_tf, ok_tyf):
+                        mut _tf_ok_target = false
+                        match t.read():
+                            case HirExpr.EPropAccess(_, _, _): _tf_ok_target = true
+                            case HirExpr.EIndex(_, _, _): _tf_ok_target = true
+                            case _: pass
+                        if _tf_ok_target:
+                            mut tf_qr = "_qr" + self.next_temp()
+                            mut tf_inner = self.flush_wraps(self.gen_expr(inner_tf), false)
+                            self.w(pad + "Result " + tf_qr + " = (" + tf_inner + ");\n")
+                            self.w(pad + "if (" + tf_qr + ".tag == Result_Err) return " + tf_qr + ";\n")
+                            mut tf_c = self.type_to_c(ok_tyf)
+                            if tf_c == "void" or tf_c == "__auto_type": tf_c = "long long"
+                            mut tf_tmp = "_trv" + self.next_temp()
+                            mut tf_is_str = _is_str_type(ok_tyf.name)
+                            if _is_int_type(ok_tyf.name) or ok_tyf.name == "bool" or ok_tyf.name == "char":
+                                self.w(pad + tf_c + " " + tf_tmp + " = (" + tf_c + ")(uintptr_t)" + tf_qr + ".data.Ok.val;\n")
+                            elif _is_float_type(ok_tyf.name):
+                                self.w(pad + tf_c + " " + tf_tmp + " = _tr_ptr_to_f64(" + tf_qr + ".data.Ok.val);\n")
+                            elif tf_is_str:
+                                self.w(pad + "TrStr " + tf_tmp + " = _tr_str_unbox(" + tf_qr + ".data.Ok.val);\n")
+                            elif tf_c.ends_with("*"):
+                                self.w(pad + tf_c + " " + tf_tmp + " = (" + tf_c + ")" + tf_qr + ".data.Ok.val;\n")
+                            else:
+                                self.w(pad + tf_c + "* " + tf_tmp + " = (" + tf_c + "*)" + tf_qr + ".data.Ok.val;\n")
+                            self.gen_stmt(box_hirstmt(HirStmt.SAssign(t, box_hirexpr(HirExpr.EIdent(tf_tmp, ok_tyf, false)))), indent)
+                            if tf_is_str:
+                                self.w(pad + "_tr_str_release(" + tf_tmp + ");\n")
+                            elif self.is_heap_class_tn(self.resolve_generic_tyname(ok_tyf.name)):
+                                self.w(pad + "_tr_obj_release(" + tf_tmp + ", " + self.obj_drop_fn(self.resolve_generic_tyname(ok_tyf.name)) + ");\n")
+                            return
+                    case _: pass
                 match t.read():
                     case HirExpr.EIdent(n, _, _):
                         # A bare name's first assignment declares a local, EXCEPT
