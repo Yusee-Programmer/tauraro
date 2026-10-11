@@ -174,8 +174,8 @@ pub class FilteredEmitter[T]:
 
 extend FilteredEmitter[T]:
     pub def on(self, handler: def(T) -> void) -> int:
-        mut pred = self.predicate
-        mut inner = handler
+        pred = self.predicate
+        inner = handler
         mut wrapped = def (v: T) -> void:
             if pred(v): inner(v)
         return self.emitter.on(wrapped)

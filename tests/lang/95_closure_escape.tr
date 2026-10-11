@@ -1,0 +1,65 @@
+# tests/lang/95_closure_escape.tr - closures that outlive the frame that created them
+# (bug log #27, 59_events: ASan stack-use-after-scope). A let-bound closure that is
+# passed/stored/returned gets a heap env, and captures of IMMUTABLE bindings are copied
+# into it; captures of `mut` bindings stay by-reference so writes remain visible.
+
+from std.test import TestRunner
+
+pub class Slot:
+    pub cb: def(int) -> int
+
+extend Slot:
+    pub def set(self, f: def(int) -> int):
+        self.cb = f
+
+def install(s: Slot, k: int):
+    kk = k * 2
+    w = def (v: int) -> int:
+        return v + kk
+    s.set(w)
+
+def install_plain(s: Slot):
+    w = def (v: int) -> int:
+        return v * 3
+    s.set(w)
+
+def make_adder(n: int) -> def(int) -> int:
+    f = def (v: int) -> int:
+        return v + n
+    return f
+
+def make_adder_inline(n: int) -> def(int) -> int:
+    return def (v: int) -> int:
+        return v + n
+
+def clobber() -> int:
+    a = 111
+    b = 222
+    c = a + b
+    d = c * 2
+    return d + a + b
+
+def main():
+    mut t = TestRunner.init("95_closure_escape")
+    mut s = Slot()
+    install(s, 5)
+    clobber()
+    t.assert_eq_int(s.cb(1), 11, "stored let-bound closure keeps its by-value capture")
+    install_plain(s)
+    clobber()
+    t.assert_eq_int(s.cb(4), 12, "stored let-bound closure without captures")
+    add3: def(int) -> int = make_adder(3)
+    clobber()
+    t.assert_eq_int(add3(4), 7, "returned let-bound closure")
+    add10: def(int) -> int = make_adder_inline(10)
+    clobber()
+    t.assert_eq_int(add10(4), 14, "returned inline closure")
+    # a `mut` capture is still by-reference: the closure's writes are visible here
+    mut total = 0
+    bump = def (v: int) -> int:
+        total = total + v
+        return total
+    bump(2)
+    bump(5)
+    t.assert_eq_int(total, 7, "closure writes to a mut capture stay visible")
+    t.summary()

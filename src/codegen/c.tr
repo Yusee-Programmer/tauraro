@@ -237,6 +237,7 @@ pub class CGenerator:
     pub last_clo_estruct: str            # last gen_closure: inline env struct type
     pub last_clo_ptypes:  str            # last gen_closure: param type list (after env)
     pub last_clo_ret:     str            # last gen_closure: C return type
+    pub closure_heap_env: bool            # last gen_closure: the closure local escapes -> heap env
     pub last_clo_init:    str            # last gen_closure: positional env initializer
     pub decorator_defs:   Map[str, HirFunction]  # user-defined decorator registry
     pub overloaded_sigs:  Map[str, bool]          # "ClassName_method" keys where multiple overloads exist
@@ -320,6 +321,7 @@ pub class CGenerator:
         g.last_clo_ptypes = ""
         g.last_clo_ret = ""
         g.last_clo_init = ""
+        g.closure_heap_env = false
         g.decorator_defs  = Map[str, HirFunction].init(16)
         g.overloaded_sigs = Map[str, bool].init(32)
         g.type_alias_map  = Map[str, str].init(16)
@@ -7768,7 +7770,19 @@ pub class CGenerator:
         # block-scope prototype at the use site + take its address (matches gen_closure)
         return "({ " + retc + " " + name + "(" + proto_params + "); (void*)&" + name + "; })"
 
-    pub def gen_closure(self, params: Vec[HirParam], ret_ty: AstType, body: HirBlock, captures: Vec[HirParam]) -> str:
+    pub def gen_closure(self, params: Vec[HirParam], ret_ty: AstType, body: HirBlock, captures_in: Vec[HirParam]) -> str:
+        # Sema appends a pseudo-capture named "@heap" to a closure-valued local that
+        # escapes (passed / stored / returned): it must get a heap env, not a stack one.
+        mut captures = Vec[HirParam].init(captures_in.len + 1)
+        self.closure_heap_env = false
+        mut cm = 0
+        while cm < captures_in.len:
+            if captures_in.get(cm).name == "@heap":
+                self.closure_heap_env = true
+            else:
+                captures.push(captures_in.get(cm))
+            cm = cm + 1
+        mut heap_env_flag = self.closure_heap_env
         self.closure_count = self.closure_count + 1
         mut cname = "_closure_" + self.closure_count.to_str()
         mut ename = "_ClosureEnv_" + self.closure_count.to_str()
@@ -7795,6 +7809,14 @@ pub class CGenerator:
             mut cp = captures.get(ti)
             estruct = estruct + " " + self.type_to_c(cp.ty) + "* p_" + _safe_c_varname(cp.name) + ";"
             ti = ti + 1
+        # By-value captures (immutable bindings) own a COPY of the value in the env, after
+        # all the p_ pointers (so the positional stack-env initializer stays valid).
+        mut tv = 0
+        while tv < captures.len:
+            mut cpv = captures.get(tv)
+            if cpv.by_val:
+                estruct = estruct + " " + self.type_to_c(cpv.ty) + " v_" + _safe_c_varname(cpv.name) + ";"
+            tv = tv + 1
         estruct = estruct + " }"
         # Parameter type list (after the env pointer) — for the block-scope
         # prototype at the creation site.
@@ -7881,9 +7903,13 @@ pub class CGenerator:
             mut addr2 = "&" + sn2
             if self.closure_env_var != "" and self.closure_cap_set.contains(kp2.name):
                 addr2 = "__env->p_" + sn2
-            crt = crt + " __c->p_" + sn2 + " = " + addr2 + ";"
+            if kp2.by_val:
+                crt = crt + " __c->v_" + sn2 + " = *(" + addr2 + "); __c->p_" + sn2 + " = &__c->v_" + sn2 + ";"
+            else:
+                crt = crt + " __c->p_" + sn2 + " = " + addr2 + ";"
             kj = kj + 1
         crt = crt + " ((TrFnVal){(void*)&" + cname + ", (void*)__c}); })"
+        self.closure_heap_env = heap_env_flag
         return crt
 
     # -- Spawn wrapper pre-scan ------------------------------------------------
@@ -8553,6 +8579,13 @@ pub class CGenerator:
                     match v.read():
                         case HirExpr.EClosure(cl_params, cl_ret_ty, cl_body, _, cl_caps):
                             mut _cdrop = self.gen_closure(cl_params, cl_ret_ty, cl_body, cl_caps)
+                            # A closure local that is passed / stored / returned may outlive
+                            # this frame: give it the heap env (with by-value copies of its
+                            # immutable captures) instead of a stack env (stack-use-after-scope).
+                            if self.closure_heap_env:
+                                self.w(pad + "TrFnVal " + _safe_c_varname(n) + " = " + _cdrop + ";\n")
+                                self.decl_vars.insert(n, true)
+                                return
                             mut _cenv = "__clenv_" + self.last_clo_cname
                             # block-scope prototype so &fn resolves; stack env; TrFnVal.
                             self.w(pad + self.last_clo_ret + " " + self.last_clo_cname + "(void*" + self.last_clo_ptypes + ");\n")

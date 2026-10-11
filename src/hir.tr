@@ -159,6 +159,7 @@ extend HirBlock:
 pub class HirParam:
     pub name: str
     pub ty: AstType
+    pub by_val: bool    # closure capture only: the captured binding is immutable, so the env may hold a COPY (an escaping closure then never dangles into a dead frame)
 
 pub class HirFunction:
     pub name: str
