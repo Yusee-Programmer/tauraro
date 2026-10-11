@@ -3969,6 +3969,16 @@ pub class CGenerator:
                 return not self._fn_owned_lookup(rt + "." + m)
             case _: return false
 
+    # C lvalue for a plain local named `n`. Inside an outlined closure body a CAPTURED
+    # variable lives behind the env pointer (`(*(__env->p_n))`); reads already go through
+    # gen_expr's EIdent redirect, but the assignment paths that emit `<name> = ...`
+    # directly (str / class-local / `x = f()?`) must use the same redirect, else the
+    # generated C names a variable that doesn't exist in the closure function.
+    pub def lv_name(self, n: str) -> str:
+        if self.closure_env_var != "" and self.closure_cap_set.contains(n):
+            return "(*(__env->p_" + _safe_c_varname(n) + "))"
+        return _safe_c_varname(n)
+
     # Name of the per-class field-drop function (releases owned str/class fields).
     pub def obj_drop_fn(self, tn: str) -> str:
         return "_trdrop_" + tn
@@ -8985,13 +8995,13 @@ pub class CGenerator:
                                     ok_val4 = "_tr_ptr_to_f64(" + tmp_qr4 + ".data.Ok.val)"
                                 elif _is_str_type(ok_ty4.name):
                                     if self.str_local_names.contains(_trn):
-                                        self.w(pad + "_tr_str_release(" + _safe_c_varname(_trn) + ");\n")
+                                        self.w(pad + "_tr_str_release(" + self.lv_name(_trn) + ");\n")
                                     ok_val4 = "_tr_str_unbox(" + tmp_qr4 + ".data.Ok.val)"
                                 elif ok_c4.ends_with("*"):
                                     ok_val4 = "(" + ok_c4 + ")" + tmp_qr4 + ".data.Ok.val"
                                 else:
                                     ok_val4 = "(" + ok_c4 + "*)" + tmp_qr4 + ".data.Ok.val"
-                                self.w(pad + _safe_c_varname(_trn) + " = " + ok_val4 + ";\n")
+                                self.w(pad + self.lv_name(_trn) + " = " + ok_val4 + ";\n")
                                 return
                             case _: pass
                     case _: pass
@@ -9022,8 +9032,8 @@ pub class CGenerator:
                                         _wrapped_rhs = "_tr_str_retain(" + _wrapped_rhs + ")"
                                     case _: pass
                                 self.w(pad + "TrStr " + _strtmp + " = " + _wrapped_rhs + ";\n")
-                                self.w(pad + "_tr_str_release(" + _safe_c_varname(_an) + ");\n")
-                                self.w(pad + _safe_c_varname(_an) + " = " + _strtmp + ";\n")
+                                self.w(pad + "_tr_str_release(" + self.lv_name(_an) + ");\n")
+                                self.w(pad + self.lv_name(_an) + " = " + _strtmp + ";\n")
                                 return
                         case HirExpr.EPropAccess(_, _, _):
                             # A `ref str` (borrow) field does NOT own its value — the drop
@@ -9096,8 +9106,8 @@ pub class CGenerator:
                             if self.class_local_names.contains(_can):
                                 mut _cltmp = "_cltmp" + self.next_temp()
                                 self.w(pad + _cty2 + " " + _cltmp + " = " + _crhs + ";\n")
-                                self.w(pad + "_tr_obj_release(" + _safe_c_varname(_can) + ", " + _cdrop + ");\n")
-                                self.w(pad + _safe_c_varname(_can) + " = " + _cltmp + ";\n")
+                                self.w(pad + "_tr_obj_release(" + self.lv_name(_can) + ", " + _cdrop + ");\n")
+                                self.w(pad + self.lv_name(_can) + " = " + _cltmp + ";\n")
                                 return
                         case HirExpr.EPropAccess(_, _, _):
                             # The field co-owns its value (released in _trdrop_T), so a
