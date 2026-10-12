@@ -47,11 +47,10 @@
 # Limitations (honest list)
 #   * TCP connect is blocking with no connect timeout (the OS limit applies);
 #     timeouts only cover waiting for response bytes.
-#   * https:// goes through the runtime's _tr_tls_* layer (dlopen'd OpenSSL),
-#     which encrypts but DOES NOT VERIFY server certificates or host names.
-#     So https is refused unless you opt in with set_allow_unverified_tls(true).
-#     It also cannot honour read timeouts (blocking SSL_read). Not exercised by
-#     the offline test-suite (no network access there).
+#   * https:// uses std.net.tls, the built-in TLS 1.3 client: the server's
+#     certificate chain and host name are verified against the system roots
+#     (plus any set_ca_pem() roots). set_allow_unverified_tls(true) turns
+#     verification off (testing only). TLS 1.2-only servers are not supported.
 #   * No compression: requests send "Accept-Encoding: identity".
 #   * No keep-alive / connection reuse, no proxies, no Expect: 100-continue,
 #     no userinfo ("user:pw@host") or IPv6-literal URLs, IPv4 only (the
@@ -74,6 +73,8 @@ from std.net.url import Url
 from std.net.cookie import CookieJar
 from std.net.multipart import FormBuilder
 from std.net.multipart import MultipartBuilder
+from std.net.tls import trc_tls_connect, trc_tls_ok, trc_tls_error, trc_tls_set_timeout, trc_tls_write, trc_tls_read, trc_tls_close
+from std.crypto.x509 import TrustStore
 
 extern "C":
     def _tr_c_malloc(size: int) -> Pointer[char]
@@ -86,10 +87,6 @@ extern "C":
     def _tr_c_fopen(path: str, mode: str) -> Pointer[char]
     def _tr_c_fclose(fp: Pointer[char]) -> int
     def _tr_c_fwrite(buf: Pointer[char], size: int, nmemb: int, fp: Pointer[char]) -> int
-    def _tr_tls_connect(host: str, port: int) -> Pointer[char]
-    def _tr_tls_send(handle: Pointer[char], data: str) -> int
-    def _tr_tls_recv(handle: Pointer[char], cap: int) -> str
-    def _tr_tls_close(handle: Pointer[char])
 
 # ---------------------------------------------------------------------------
 # Small helpers
@@ -574,17 +571,47 @@ pub class ClientConn:
     pub is_tls: bool
     pub open:   bool
     pub nb:     bool
+    pub error:  str
 
 extend ClientConn:
+    # use_tls: TLS 1.3 via std.net.tls; `verify` checks the chain + host name
+    # against the system roots plus `ca_pem` (PEM text, may be "").
     pub def connect(host: str, port: int, use_tls: bool) -> ClientConn:
+        return ClientConn.connect_tls(host, port, use_tls, true, "", 30000)
+
+    pub def connect_tls(host: str, port: int, use_tls: bool, verify: bool, ca_pem: str, timeout_ms: int) -> ClientConn:
         mut c = ClientConn()
         c.is_tls = use_tls
         c.open   = false
         c.nb     = false
+        c.error  = ""
         c.tls    = 0 as Pointer[char]
         if use_tls:
-            c.tls = _tr_tls_connect(host, port)
-            c.open = (c.tls as usize) != 0
+            mut store = TrustStore.system()
+            mut own = false
+            if ca_pem.len() > 0:
+                store = TrustStore.system_copy()
+                store.add_pem(ca_pem)
+                own = true
+            mut hp = host as Pointer[char]
+            mut empty = ""
+            mut ap = empty as Pointer[char]
+            mut v = 0
+            if verify: v = 1
+            c.tls = trc_tls_connect(hp, host.len(), port, store._handle(), v, ap, timeout_ms)
+            if (c.tls as usize) != 0 and trc_tls_ok(c.tls) == 1:
+                c.open = true
+            else:
+                if (c.tls as usize) != 0:
+                    mut eb = _tr_c_malloc(301)
+                    mut en = trc_tls_error(c.tls, eb, 300)
+                    unsafe: eb.offset(en).write('\0')
+                    c.error = _tr_str_wrap_len(eb, en)
+                    trc_tls_close(c.tls)
+                    c.tls = 0 as Pointer[char]
+                else:
+                    c.error = "TLS: out of memory"
+            if own: store.dispose()
             return c
         c.tcp  = TcpStream.connect(host, port)
         c.open = c.tcp.is_connected()
@@ -595,7 +622,8 @@ extend ClientConn:
         mut total = Str.len(data)
         if total == 0: return true
         if self.is_tls:
-            return _tr_tls_send(self.tls, data) > 0
+            mut dp = data as Pointer[char]
+            return trc_tls_write(self.tls, dp, total) >= 0
         mut sent = self.tcp.send(data)
         while sent >= 0 and sent < total:
             mut rest = Str.slice(data, sent, total)
@@ -609,10 +637,14 @@ extend ClientConn:
     pub def read_raw(self, buf: Pointer[char], cap: int, deadline: int) -> int:
         if not self.open: return 0
         if self.is_tls:
-            mut s = _tr_tls_recv(self.tls, cap)
-            mut n = Str.len(s)
-            if n <= 0: return 0
-            unsafe: _tr_c_memcpy(buf, s as Pointer[char], n)
+            mut wait = 0
+            if deadline > 0:
+                wait = deadline - Clock.now_ms()
+                if wait < 1: return -3
+            trc_tls_set_timeout(self.tls, wait)
+            mut n = trc_tls_read(self.tls, buf, cap)
+            if n == -2: return -3
+            if n < 0: return -1
             return n
         if not self.nb:
             self.tcp.set_nonblocking()
@@ -631,7 +663,7 @@ extend ClientConn:
     pub def close(self):
         if self.is_tls:
             if (self.tls as usize) != 0:
-                _tr_tls_close(self.tls)
+                trc_tls_close(self.tls)
                 self.tls = 0 as Pointer[char]
         else:
             self.tcp.close()
@@ -652,6 +684,7 @@ pub class HttpSession:
     pub jar:              CookieJar
     pub use_cookies:      bool
     pub allow_unverified_tls: bool
+    pub ca_pem:           str      # extra trusted roots (PEM) for https
     pub max_body_bytes:   int      # cap for in-memory bodies (0 = unlimited)
 
 extend HttpSession:
@@ -667,6 +700,7 @@ extend HttpSession:
         s.jar              = CookieJar.init()
         s.use_cookies      = false
         s.allow_unverified_tls = false
+        s.ca_pem           = ""
         s.max_body_bytes   = 67108864
         return s
 
@@ -711,8 +745,13 @@ extend HttpSession:
     pub def set_max_body_bytes(self, n: int):
         self.max_body_bytes = n
 
+    # Skip certificate verification for https (testing only).
     pub def set_allow_unverified_tls(self, v: bool):
         self.allow_unverified_tls = v
+
+    # Trust these PEM roots in addition to the system store (e.g. a private CA).
+    pub def set_ca_pem(self, pem: str):
+        self.ca_pem = pem
 
     # Turn the cookie jar on (a fresh one unless you set your own first).
     pub def enable_cookies(self):
@@ -922,13 +961,15 @@ extend HttpSession:
         mut reply = HttpReply.init()
         reply.url = url.to_string()
         mut use_tls = url.is_https()
-        if use_tls and not self.allow_unverified_tls:
-            reply.error = "https refused: std TLS does not verify certificates (call set_allow_unverified_tls(true) to opt in)"
-            return reply
         mut wire = self._build_request(method, url, req_headers, body, ctype, strip_auth)
-        mut conn = ClientConn.connect(url.host, url.port, use_tls)
+        mut ctimeout = idle_ms
+        if ctimeout <= 0: ctimeout = 30000
+        mut conn = ClientConn.connect_tls(url.host, url.port, use_tls, not self.allow_unverified_tls, self.ca_pem, ctimeout)
         if not conn.open:
-            reply.error = "connection failed to " + url.host + ":" + Fmt.int_to_str(url.port)
+            if conn.error.len() > 0:
+                reply.error = conn.error
+            else:
+                reply.error = "connection failed to " + url.host + ":" + Fmt.int_to_str(url.port)
             return reply
         if not conn.send_all(wire):
             conn.close()

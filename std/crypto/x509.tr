@@ -1,0 +1,286 @@
+# std.crypto.x509 -- X.509 certificates, trust stores and chain verification.
+#
+# `Certificate` parses a DER/PEM certificate and exposes its fields; a
+# `TrustStore` holds trusted roots (the system bundle, PEM files, or single
+# certificates); `X509.verify_chain` builds and checks a path from a leaf
+# through untrusted intermediates to a trusted root, following RFC 5280:
+#
+#   * signatures (RSA PKCS#1 v1.5 / PSS, ECDSA P-256/P-384; SHA-1 refused)
+#   * validity periods of every certificate on the path
+#   * basicConstraints (CA flag, pathLenConstraint) and keyUsage keyCertSign
+#   * extendedKeyUsage (serverAuth / clientAuth) when a purpose is given
+#   * dNSName name constraints; unknown critical extensions are rejected
+#   * host names per RFC 6125 (subjectAltName only, "*." wildcards in the
+#     leftmost label, IP literals matched against iPAddress entries)
+#
+# Revocation (CRL/OCSP) is not checked.
+#
+# Usage:
+#   from std.crypto.x509 import Certificate, TrustStore, X509, PURPOSE_SERVER
+#   mut store = TrustStore.system()
+#   mut certs = Certificate.all_from_pem(read_file("chain.pem"))?
+#   mut code = X509.verify(store, certs, "example.com", 0, PURPOSE_SERVER)
+#   if code != 0: print(X509.error_text(code))
+
+from std.crypto.native import _cn_alloc, _cn_take, _cn_free, _cn_hex
+from std.crypto.digest import Digest
+from std.crypto.pk import PKey, Pem
+from std.core.string import StringBuilder
+from std.string.str import Str
+
+extern "C":
+    def trc_x509_parse(der: Pointer[char], n: int) -> Pointer[char]
+    def trc_x509_free(h: Pointer[char])
+    def trc_x509_text(h: Pointer[char], field: int, out: Pointer[char], cap: int) -> int
+    def trc_x509_int(h: Pointer[char], field: int) -> int
+    def trc_x509_bytes(h: Pointer[char], field: int, out: Pointer[char], cap: int) -> int
+    def trc_x509_matches_host(h: Pointer[char], host: Pointer[char], n: int) -> int
+    def trc_x509_signed_by(child: Pointer[char], issuer: Pointer[char]) -> int
+    def trc_x509_public_key(h: Pointer[char]) -> Pointer[char]
+    def trc_x509_store_new() -> Pointer[char]
+    def trc_x509_store_free(h: Pointer[char])
+    def trc_x509_store_count(h: Pointer[char]) -> int
+    def trc_x509_store_add_der(h: Pointer[char], der: Pointer[char], n: int) -> int
+    def trc_x509_store_add_pem(h: Pointer[char], pem: Pointer[char], n: int) -> int
+    def trc_x509_store_load_system(h: Pointer[char]) -> int
+    def trc_x509_store_system_shared() -> Pointer[char]
+    def trc_x509_verify_chain(store: Pointer[char], ders: Pointer[char], lens: Pointer[int], count: int, host: Pointer[char], hostlen: int, now: int, purpose: int) -> int
+    def trc_x509_error_text(code: int, out: Pointer[char], cap: int) -> int
+
+pub const PURPOSE_ANY = 0
+pub const PURPOSE_SERVER = 1
+pub const PURPOSE_CLIENT = 2
+
+# keyUsage bits (RFC 5280 section 4.2.1.3)
+pub const KU_DIGITAL_SIGNATURE = 1
+pub const KU_NON_REPUDIATION = 2
+pub const KU_KEY_ENCIPHERMENT = 4
+pub const KU_DATA_ENCIPHERMENT = 8
+pub const KU_KEY_AGREEMENT = 16
+pub const KU_KEY_CERT_SIGN = 32
+pub const KU_CRL_SIGN = 64
+
+# extendedKeyUsage bits
+pub const EKU_SERVER_AUTH = 1
+pub const EKU_CLIENT_AUTH = 2
+pub const EKU_ANY = 4
+pub const EKU_CODE_SIGNING = 8
+pub const EKU_EMAIL = 16
+pub const EKU_TIME_STAMPING = 32
+pub const EKU_OCSP_SIGNING = 64
+
+def _x_null(p: Pointer[char]) -> bool:
+    return (p as usize) == (0 as usize)
+
+def _x_lines(s: str) -> List[str]:
+    mut out: List[str] = []
+    if s.len() == 0: return out
+    mut parts = Str.split_keep_empty(s, "\n")
+    mut i = 0
+    while i < parts.len:
+        out.append(parts.get(i))
+        i = i + 1
+    return out
+
+pub class Certificate:
+    _h: Pointer[char]
+    _live: bool
+
+extend Certificate:
+    pub def from_der(der: str) throws str -> Certificate:
+        mut dp = der as Pointer[char]
+        mut h = trc_x509_parse(dp, der.len())
+        if _x_null(h): raise("X509: malformed certificate")
+        mut c = Certificate()
+        c._h = h
+        c._live = true
+        return c
+
+    # The first CERTIFICATE block of a PEM document.
+    pub def from_pem(text: str) throws str -> Certificate:
+        mut der = Pem.decode(text, "CERTIFICATE")?
+        return Certificate.from_der(der)?
+
+    # Every CERTIFICATE block of a PEM document, in order.
+    pub def all_from_pem(text: str) throws str -> List[Certificate]:
+        mut out: List[Certificate] = []
+        mut i = 0
+        while true:
+            mut r: Result[str, str] = Pem.decode_nth(text, "CERTIFICATE", i)
+            if r.is_err: break
+            mut c = Certificate.from_der(r.ok)?
+            out.append(c)
+            i = i + 1
+        if len(out) == 0: raise("X509: no certificates in PEM text")
+        return out
+
+    def _text(self, field: int) -> str:
+        mut out = _cn_alloc(8192)
+        mut n = trc_x509_text(self._h, field, out, 8192)
+        if n < 0: n = 0
+        return _cn_take(out, n)
+
+    def _bytes(self, field: int) -> str:
+        mut z = 0 as Pointer[char]
+        mut n = trc_x509_bytes(self._h, field, z, 0)
+        if n < 0: n = 0
+        mut out = _cn_alloc(n)
+        trc_x509_bytes(self._h, field, out, n)
+        return _cn_take(out, n)
+
+    # "C=US, O=Example, CN=example.com" (RDNs in certificate order).
+    pub def subject(self) -> str: return self._text(1)
+    pub def issuer(self) -> str: return self._text(2)
+    pub def serial_hex(self) -> str: return self._text(3)
+    pub def dns_names(self) -> List[str]:
+        mut t = self._text(4)
+        return _x_lines(t)
+    pub def ip_addresses(self) -> List[str]:
+        mut t = self._text(5)
+        return _x_lines(t)
+    pub def subject_key_id(self) -> str: return self._text(6)
+    pub def authority_key_id(self) -> str: return self._text(7)
+    # e.g. "sha256WithRSAEncryption", "ecdsa-with-SHA384", "rsassaPss".
+    pub def signature_algorithm(self) -> str: return self._text(8)
+    # "RSA", "EC P-256", "EC P-384", "Ed25519" or "unsupported".
+    pub def key_algorithm(self) -> str: return self._text(9)
+
+    pub def version(self) -> int: return trc_x509_int(self._h, 1)
+    # Validity bounds as Unix timestamps (seconds).
+    pub def not_before(self) -> int: return trc_x509_int(self._h, 2)
+    pub def not_after(self) -> int: return trc_x509_int(self._h, 3)
+    pub def is_ca(self) -> bool: return trc_x509_int(self._h, 4) == 1
+    # pathLenConstraint, or -1 if unlimited/absent.
+    pub def path_len(self) -> int: return trc_x509_int(self._h, 5)
+    # KU_* bits, or -1 if the extension is absent.
+    pub def key_usage(self) -> int: return trc_x509_int(self._h, 6)
+    # EKU_* bits, or -1 if the extension is absent.
+    pub def ext_key_usage(self) -> int: return trc_x509_int(self._h, 7)
+    pub def key_bits(self) -> int: return trc_x509_int(self._h, 8)
+
+    pub def is_valid_at(self, unix_time: int) -> bool:
+        return unix_time >= self.not_before() and unix_time <= self.not_after()
+
+    # RFC 6125 host-name / IP check against the subjectAltName entries.
+    pub def matches_host(self, host: str) -> bool:
+        mut hp = host as Pointer[char]
+        return trc_x509_matches_host(self._h, hp, host.len()) == 1
+
+    # True if `issuer`'s key produced this certificate's signature.
+    pub def is_signed_by(self, issuer: Certificate) -> bool:
+        return trc_x509_signed_by(self._h, issuer._h) == 1
+
+    pub def is_self_signed(self) -> bool:
+        return self.subject() == self.issuer() and trc_x509_signed_by(self._h, self._h) == 1
+
+    pub def der(self) -> str: return self._bytes(1)
+    pub def tbs_der(self) -> str: return self._bytes(2)
+    pub def subject_der(self) -> str: return self._bytes(3)
+    pub def issuer_der(self) -> str: return self._bytes(4)
+    pub def public_key_der(self) -> str: return self._bytes(5)
+    pub def signature(self) -> str: return self._bytes(6)
+
+    pub def to_pem(self) -> str:
+        mut d = self.der()
+        return Pem.encode(d, "CERTIFICATE")
+
+    # SHA-256 of the DER encoding, lower-case hex (as browsers show it).
+    pub def fingerprint_sha256(self) -> str:
+        mut d = self.der()
+        return Digest.sha256_hex(d)
+
+    # The subject public key (call dispose() on it when done).
+    pub def public_key(self) throws str -> PKey:
+        mut d = self.public_key_der()
+        return PKey.from_der(d)?
+
+    pub def dispose(self):
+        if self._live:
+            trc_x509_free(self._h)
+            self._live = false
+
+pub class TrustStore:
+    _h: Pointer[char]
+    _shared: bool
+
+extend TrustStore:
+    # An empty store.
+    pub def empty() -> TrustStore:
+        mut s = TrustStore()
+        s._h = trc_x509_store_new()
+        s._shared = false
+        return s
+
+    # The operating system's trusted roots (loaded once per process and
+    # shared; dispose() on it is a no-op). Honors SSL_CERT_FILE on POSIX.
+    pub def system() -> TrustStore:
+        mut s = TrustStore()
+        s._h = trc_x509_store_system_shared()
+        s._shared = true
+        return s
+
+    # A private copy of the system roots that you can extend.
+    pub def system_copy() -> TrustStore:
+        mut s = TrustStore.empty()
+        trc_x509_store_load_system(s._h)
+        return s
+
+    # Add every certificate in a PEM bundle; returns how many were added.
+    pub def add_pem(self, text: str) -> int:
+        mut tp = text as Pointer[char]
+        return trc_x509_store_add_pem(self._h, tp, text.len())
+
+    pub def add_der(self, der: str) throws str:
+        mut dp = der as Pointer[char]
+        if trc_x509_store_add_der(self._h, dp, der.len()) != 0: raise("TrustStore: malformed certificate")
+
+    pub def add(self, cert: Certificate) throws str:
+        mut d = cert.der()
+        self.add_der(d)?
+
+    pub def count(self) -> int: return trc_x509_store_count(self._h)
+
+    pub def _handle(self) -> Pointer[char]: return self._h
+
+    pub def dispose(self):
+        if not self._shared and not _x_null(self._h):
+            trc_x509_store_free(self._h)
+            self._h = 0 as Pointer[char]
+
+pub class X509:
+    _dummy: int
+
+extend X509:
+    # Verify a chain given as DER certificates (leaf first, then any
+    # intermediates in any order). `host` "" skips the name check; `now` 0
+    # means the current time; purpose is PURPOSE_SERVER / CLIENT / ANY.
+    # Returns 0 on success or a negative error code (see error_text).
+    pub def verify_der(store: TrustStore, chain: List[str], host: str, now: int, purpose: int) -> int:
+        if len(chain) == 0: return -1
+        mut sb = StringBuilder.init(4096)
+        mut lens: List[int] = []
+        mut i = 0
+        while i < len(chain):
+            mut d = chain[i]
+            sb.append(d)
+            lens.append(d.len())
+            i = i + 1
+        mut all = sb.to_owned()
+        sb.free()
+        mut ap = all as Pointer[char]
+        mut lp = lens as Pointer[int]
+        mut hp = host as Pointer[char]
+        return trc_x509_verify_chain(store._handle(), ap, lp, len(chain), hp, host.len(), now, purpose)
+
+    pub def verify(store: TrustStore, chain: List[Certificate], host: str, now: int, purpose: int) -> int:
+        mut ders: List[str] = []
+        mut i = 0
+        while i < len(chain):
+            ders.append(chain[i].der())
+            i = i + 1
+        return X509.verify_der(store, ders, host, now, purpose)
+
+    pub def error_text(code: int) -> str:
+        mut out = _cn_alloc(128)
+        mut n = trc_x509_error_text(code, out, 128)
+        return _cn_take(out, n)

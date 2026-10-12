@@ -16,6 +16,13 @@ spec, automated regression suite + CI, incremental compilation, and a batch of
 codegen-safety / diagnostics / stdlib / tooling improvements). Entries will be
 added here as each phase lands.
 
+### Changed
+- `std.net.client`'s `HttpSession`, `std.net.https`'s `HttpsClient` and `std.net.smtp` now use
+  `std.net.tls`: https is verified by default instead of being refused (`HttpSession`) or
+  silently unverified (`HttpsClient`). `set_allow_unverified_tls(true)` / `set_verify(false)`
+  opt out. `SmtpClient.starttls()` now really upgrades the connection. TLS 1.2-only servers are
+  not reachable through these clients any more.
+
 ### Compiler limitations closed
 - A static `init` that `throws` no longer gets `malloc`/`returns_nonnull` attributes (it returns a
   `Result` struct, so the generated C failed to compile).
@@ -31,6 +38,13 @@ added here as each phase lands.
 - `from` stays a reserved word (it starts import statements and lifetime clauses).
 
 ### Added
+- **Verified TLS without OpenSSL.** `std.net.tls` is a TLS 1.3 client (X25519/P-256/P-384,
+  AES-GCM, ChaCha20-Poly1305, ECDSA/RSA-PSS) that verifies the certificate chain and host name;
+  it can also upgrade an existing socket (STARTTLS). `std.crypto.x509` parses certificates and
+  verifies chains against `TrustStore.system()` (CA bundles / Windows ROOT store);
+  `std.crypto.pk` adds RSA (PKCS#1 v1.5, PSS) and ECDSA P-256/P-384 (RFC 6979) signing and
+  verification, ECDH and PEM/DER key parsing; `std.crypto.aead` adds AES-GCM and
+  ChaCha20-Poly1305. Tested by `tests/lang/106_x509_tls.tr`.
 - **`std.crypto` additions** — `SecureRandom` (OS CSPRNG, raises instead of degrading),
   `ConstantTime`, binary-safe `Digest`/`Hasher` (SHA-1/256/384/512), `Hmac.compute/verify`
   (all SHA variants), `Kdf.hkdf*` (RFC 5869) and `Kdf.pbkdf2_hmac`, `Sha3`/`Sha3Stream`

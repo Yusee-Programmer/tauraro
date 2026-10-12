@@ -20,6 +20,9 @@ from std.crypto.otp import Otp
 from std.crypto.argon2 import Argon2, Argon2Params, Argon2Hash
 from std.crypto.bcrypt import Bcrypt
 from std.crypto.native import ALG_SHA1, ALG_SHA256, ALG_SHA384, ALG_SHA512
+from std.crypto.aead import Aead, AEAD_AES_128_GCM, AEAD_AES_256_GCM, AEAD_CHACHA20_POLY1305
+from std.crypto.pk import PKey, Pem, SIG_PKCS1, SIG_PSS, CURVE_P256, CURVE_P384
+from std.crypto.x509 import Certificate, TrustStore, X509, PURPOSE_SERVER
 ```
 
 > The modules from `random` onward are backed by `std/crypto/crypto_native.c`,
@@ -532,3 +535,54 @@ Variants: `ARGON2D`, `ARGON2I`, `ARGON2ID`.
 
 Tested in `tests/lang/105_crypto_modern.tr` against the RFC/FIPS vectors and hashes produced by
 argon2-cffi and pyca/bcrypt.
+
+## AEAD — `std.crypto.aead`
+
+`Aead.seal(alg, key, nonce12, aad, plaintext)?` → ciphertext ‖ 16-byte tag; `Aead.open(alg, key, nonce12, aad, sealed)?`
+raises on any modification (constant-time tag check). `alg`: `AEAD_AES_128_GCM` (16-byte key), `AEAD_AES_256_GCM`,
+`AEAD_CHACHA20_POLY1305` (32-byte keys). Never reuse a nonce with the same key.
+
+## Public keys and signatures — `std.crypto.pk`
+
+`PKey` holds an RSA or EC (P-256/P-384) key, public or private, parsed from DER/PEM (SPKI, PKCS#8, PKCS#1, SEC1;
+encrypted PEM is not supported) or generated (`PKey.generate_ec(CURVE_P256)?`).
+
+| Method | Description |
+|---|---|
+| `PKey.from_pem(text)?` / `PKey.from_der(der)?` | Parse the first key block / a DER key. |
+| `PKey.ec_from_private(curve, scalar)?`, `ec_from_public(curve, point)?`, `rsa_from_public(n, e)?` | Build from raw parts (points are validated). |
+| `sign(msg, alg, scheme)?` / `verify(msg, sig, alg, scheme)` | RSA: `SIG_PKCS1` or `SIG_PSS` (salt = hash length). EC: DER ECDSA, scheme ignored, deterministic nonces (RFC 6979). |
+| `sign_raw(msg, alg)?` / `verify_raw(msg, sig, alg)` | ECDSA as fixed-size `r‖s` (JOSE/WebAuthn). |
+| `shared_secret(peer_point)?` | ECDH x-coordinate. |
+| `kind()`, `bits()`, `has_private()`, `public_bytes()`, `ec_private_bytes()?`, `dispose()` | Introspection / cleanup. |
+
+`Pem.decode(text, label)?`, `Pem.decode_nth(text, label, i)?`, `Pem.label_of(text, i)`, `Pem.encode(der, label)`.
+SHA-1 is accepted for verification only. Private-key code avoids secret-dependent branches and lookups but has
+not been independently audited for side channels.
+
+## X.509 — `std.crypto.x509`
+
+```tauraro
+from std.crypto.x509 import Certificate, TrustStore, X509, PURPOSE_SERVER
+
+mut chain = Certificate.all_from_pem(read_file("fullchain.pem"))?
+mut code = X509.verify(TrustStore.system(), chain, "example.com", 0, PURPOSE_SERVER)
+if code != 0: print(X509.error_text(code))
+print(chain[0].subject(), chain[0].dns_names(), chain[0].not_after())
+```
+
+`Certificate`: `subject()`, `issuer()`, `serial_hex()`, `dns_names()`, `ip_addresses()`, `not_before()`/`not_after()`
+(Unix time), `is_ca()`, `path_len()`, `key_usage()` (`KU_*` bits, -1 if absent), `ext_key_usage()` (`EKU_*`),
+`signature_algorithm()`, `key_algorithm()`, `key_bits()`, `matches_host(h)`, `is_signed_by(issuer)`,
+`is_self_signed()`, `fingerprint_sha256()`, `der()`, `to_pem()`, `public_key()?`.
+
+`TrustStore.system()` (OS roots: CA bundle files or the Windows ROOT store, loaded once and shared; honours
+`SSL_CERT_FILE`), `TrustStore.empty()`, `system_copy()`, `add_pem(text)`, `add_der(der)?`, `add(cert)?`, `count()`.
+
+`X509.verify(store, chain, host, now, purpose)` / `verify_der(...)` build a path through untrusted intermediates
+(any order) to a trust anchor and check signatures (SHA-1 refused), validity, basicConstraints/pathLen, keyUsage,
+EKU, dNSName name constraints, unknown critical extensions and the host name (RFC 6125: SAN only, single-label
+leftmost wildcards, IP SANs). Returns 0 or a negative code (`X509.error_text`). Revocation is not checked.
+
+Tested by `tests/lang/106_x509_tls.tr`; the TLS client was also checked against OpenSSL `s_server` (every cipher
+suite, HelloRetryRequest, KeyUpdate) and public HTTPS sites.

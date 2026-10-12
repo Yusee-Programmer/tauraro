@@ -125,3 +125,7 @@ pub def _cn_unb64(kind: int, s: str) throws str -> str:
         _cn_free(p)
         raise("base64: invalid input")
     return _cn_take(p, r)
+
+extern "C":
+    def trc_aead_seal(alg: int, key: Pointer[char], nonce: Pointer[char], aad: Pointer[char], alen: int, pt: Pointer[char], n: int, out: Pointer[char]) -> int
+    def trc_aead_open(alg: int, key: Pointer[char], nonce: Pointer[char], aad: Pointer[char], alen: int, ct: Pointer[char], n: int, out: Pointer[char]) -> int

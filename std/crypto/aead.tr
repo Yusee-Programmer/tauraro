@@ -1,0 +1,65 @@
+# std.crypto.aead -- authenticated encryption: AES-GCM and ChaCha20-Poly1305.
+#
+# One-shot AEAD with associated data (RFC 5116 interface). `seal` returns the
+# ciphertext with the 16-byte tag appended; `open` checks the tag in constant
+# time and raises if the message was modified. Nonces are 12 bytes and must
+# never repeat under the same key (use a counter, or SecureRandom for
+# low-volume keys).
+#
+#   AEAD_AES_128_GCM        key 16 bytes
+#   AEAD_AES_256_GCM        key 32 bytes
+#   AEAD_CHACHA20_POLY1305  key 32 bytes (RFC 8439)
+#
+# Usage:
+#   from std.crypto.aead import Aead, AEAD_AES_256_GCM
+#   mut ct = Aead.seal(AEAD_AES_256_GCM, key, nonce, "header", plaintext)?
+#   mut pt = Aead.open(AEAD_AES_256_GCM, key, nonce, "header", ct)?
+
+from std.crypto.native import trc_aead_seal, trc_aead_open, _cn_alloc, _cn_take, _cn_free
+
+pub const AEAD_AES_128_GCM = 1
+pub const AEAD_AES_256_GCM = 2
+pub const AEAD_CHACHA20_POLY1305 = 3
+
+def _aead_check(alg: int, key: str, nonce: str) throws str:
+    if alg != AEAD_AES_128_GCM and alg != AEAD_AES_256_GCM and alg != AEAD_CHACHA20_POLY1305:
+        raise("Aead: unknown algorithm")
+    mut want = 32
+    if alg == AEAD_AES_128_GCM: want = 16
+    if key.len() != want: raise(f"Aead: key must be {want} bytes")
+    if nonce.len() != 12: raise("Aead: nonce must be 12 bytes")
+
+pub class Aead:
+    _dummy: int
+
+extend Aead:
+    # Encrypt and authenticate; returns ciphertext || 16-byte tag.
+    pub def seal(alg: int, key: str, nonce: str, aad: str, plaintext: str) throws str -> str:
+        _aead_check(alg, key, nonce)?
+        mut n = plaintext.len()
+        mut out = _cn_alloc(n + 16)
+        mut kp = key as Pointer[char]
+        mut np = nonce as Pointer[char]
+        mut ap = aad as Pointer[char]
+        mut pp = plaintext as Pointer[char]
+        trc_aead_seal(alg, kp, np, ap, aad.len(), pp, n, out)
+        return _cn_take(out, n + 16)
+
+    # Verify and decrypt ciphertext || tag. Raises on any modification.
+    pub def open(alg: int, key: str, nonce: str, aad: str, sealed: str) throws str -> str:
+        _aead_check(alg, key, nonce)?
+        mut n = sealed.len()
+        if n < 16: raise("Aead: ciphertext shorter than the tag")
+        mut out = _cn_alloc(n - 16)
+        mut kp = key as Pointer[char]
+        mut np = nonce as Pointer[char]
+        mut ap = aad as Pointer[char]
+        mut cp = sealed as Pointer[char]
+        if trc_aead_open(alg, kp, np, ap, aad.len(), cp, n, out) < 0:
+            _cn_free(out)
+            raise("Aead: authentication failed")
+        return _cn_take(out, n - 16)
+
+    pub def key_size(alg: int) -> int:
+        if alg == AEAD_AES_128_GCM: return 16
+        return 32

@@ -287,13 +287,45 @@ print(r3.header("Content-Type"))           # "application/json"
 
 ---
 
+## std.net.tls — TLS 1.3 client
+
+A self-contained TLS 1.3 client (RFC 8446), no OpenSSL. Verifies the server's certificate chain and
+host name against the system trust store by default (`std.crypto.x509`). Key exchange X25519 /
+secp256r1 (secp384r1 via HelloRetryRequest); AES-128-GCM, AES-256-GCM, ChaCha20-Poly1305; server
+signatures ECDSA P-256/P-384 and RSA-PSS; SNI, ALPN, KeyUpdate. Not supported: TLS 1.2 and older,
+resumption/0-RTT, client certificates.
+
+```tauraro
+from std.net.tls import TlsStream, TlsOptions
+
+mut s = TlsStream.connect("example.com", 443)?
+s.write("GET / HTTP/1.1\r\nHost: example.com\r\nConnection: close\r\n\r\n")?
+mut resp = s.read_all()?
+print(s.cipher_suite())                  # TLS_AES_128_GCM_SHA256
+print(s.peer_certificates()[0].subject())
+s.close()
+```
+
+| Member | Description |
+|---|---|
+| `TlsOptions.default()` / `TlsOptions.insecure()` | Settings: `verify` (default true), `alpn` (`"h2,http/1.1"`), `timeout_ms` (30000), `ca_pem` (extra roots), `only_ca_pem`. |
+| `TlsStream.connect(host, port)?` / `connect_with(host, port, opts)?` | Resolve, connect (with timeout) and handshake. Raises with the TLS/verification error. |
+| `TlsStream.wrap_fd(fd, host, opts)?` | Handshake on an already-connected socket (STARTTLS). `close()` leaves the fd open. |
+| `write(data)?`, `read(cap)?`, `read_all()?`, `read_line(max)?` | I/O; `read` returns `""` at end of stream and raises on timeout. |
+| `alpn()`, `cipher_suite()`, `version()`, `peer_certificates()` | Connection details. |
+| `set_timeout(ms)`, `close()` | `close()` sends close_notify. |
+
+---
+
 ## std.net.https — HTTPS/TLS Client
 
 **When**: You need to call HTTPS endpoints — secure REST APIs, webhooks, OAuth flows.
-**Why**: Identical API to `HttpClient` but tunnelled through OpenSSL.
+**Why**: Identical API to `HttpClient`, over `std.net.tls` (built-in TLS 1.3, certificates verified).
 
-> **Opt-in** — compile with `-DTAURARO_TLS_OPENSSL -lssl -lcrypto`.
-> Without those flags all methods return `HttpClientResponse { status: 0, body: "tls connect failed" }`.
+> Certificate chain and host name are verified against the system trust store. On failure the
+> response has `status: 0` and the TLS error as its body. `set_verify(false)` disables
+> verification (testing only); `set_ca_pem(pem)` adds private roots. TLS 1.2-only servers are not
+> supported.
 
 ```tauraro
 from std.net.https import HttpsClient
@@ -303,7 +335,9 @@ from std.net.https import HttpsClient
 |---|---|---|---|
 | `HttpsClient.init` | `(host: str, port: int) -> HttpsClient` | `HttpsClient` | Create a TLS client. Default timeout: 10 000 ms. |
 | `set_header` | `(name: str, value: str)` | `void` | Add a header to all requests. |
-| `set_timeout` | `(ms: int)` | `void` | Set timeout hint. |
+| `set_timeout` | `(ms: int)` | `void` | Connect and read timeout. |
+| `set_verify` | `(v: bool)` | `void` | Turn certificate verification off/on (default on). |
+| `set_ca_pem` | `(pem: str)` | `void` | Trust these PEM roots in addition to the system store. |
 | `get` | `(path: str) -> HttpClientResponse` | `HttpClientResponse` | HTTPS GET. |
 | `post` | `(path: str, data: str) -> HttpClientResponse` | `HttpClientResponse` | HTTPS POST (form-encoded). |
 | `post_json` | `(path: str, data: str) -> HttpClientResponse` | `HttpClientResponse` | HTTPS POST (JSON). |
@@ -351,7 +385,8 @@ from std.net.multipart import FormBuilder, MultipartBuilder
 | `set_rewrite_post_on_301_302` | `(bool)` | `true` (default): `POST` becomes `GET` on 301/302 like browsers; `false`: keep the method. |
 | `enable_cookies` / `disable_cookies` / `set_cookie_jar` / `cookie_jar` | | Cookie handling (off by default). |
 | `set_max_body_bytes` | `(n)` | Cap for in-memory bodies (`0` = unlimited). |
-| `set_allow_unverified_tls` | `(bool)` | Required before any `https://` URL is attempted (see limitations). |
+| `set_allow_unverified_tls` | `(bool)` | Skip https certificate verification (testing only). |
+| `set_ca_pem` | `(pem: str)` | Extra trusted roots (PEM) for https. |
 | `get` / `head` / `delete` | `(url) -> HttpReply` | |
 | `post` / `put` / `patch` | `(url, body, content_type) -> HttpReply` | |
 | `post_json` | `(url, json) -> HttpReply` | |
@@ -399,7 +434,7 @@ mut r = HttpSession.init().post_multipart("http://127.0.0.1:8080/upload", m)
 
 ### Limitations
 
-- `https://` is refused unless you call `set_allow_unverified_tls(true)`: the runtime's `_tr_tls_*` layer (also behind `HttpsClient`) encrypts but **does not verify server certificates or host names**, and its reads are blocking (no idle timeout). It was not exercised by the offline test-suite.
+- `https://` uses `std.net.tls` (TLS 1.3 only, verified against the system roots); servers that only speak TLS 1.2 fail with a handshake error.
 - TCP connect is blocking with no connect timeout; IPv4 only; no proxies, no keep-alive/connection reuse, no `Expect: 100-continue`, no `user:pass@host` or IPv6-literal URLs.
 - No compression (`Accept-Encoding: identity` is sent).
 - In-memory bodies and callback chunks are `str` (NUL-terminated): a body with embedded NUL bytes is cut at the first NUL. Request bodies have the same limit. `download_to_file` is NUL-safe.
@@ -411,7 +446,7 @@ mut r = HttpSession.init().post_multipart("http://127.0.0.1:8080/upload", m)
 ## SMTP — `std.net.smtp`
 
 **When**: You need to send outbound email — transactional notifications, alerts, password resets — from a Tauraro program, against a real SMTP server.
-**Why**: A pure-Tauraro RFC 5321 client built entirely on `TcpStream` (plaintext) and the same OpenSSL TLS primitive `HttpsClient` uses (implicit TLS) — no new runtime C code. Handles multi-line reply parsing, RFC 5321 dot-stuffing, and `AUTH LOGIN`/`AUTH PLAIN` correctly (the parts most hand-rolled SMTP clients get subtly wrong).
+**Why**: A pure-Tauraro RFC 5321 client built on `TcpStream` and `std.net.tls` (verified TLS 1.3, both implicit TLS and STARTTLS). Handles multi-line reply parsing, RFC 5321 dot-stuffing, and `AUTH LOGIN`/`AUTH PLAIN` correctly (the parts most hand-rolled SMTP clients get subtly wrong).
 
 ```tauraro
 from std.net.smtp import SmtpClient, SmtpResponse
@@ -433,12 +468,13 @@ A parsed (possibly multi-line) SMTP reply.
 | Method | Signature | Returns | Description |
 |---|---|---|---|
 | `SmtpClient.connect` | `(host: str, port: int) -> SmtpClient` | `SmtpClient` | Open a plaintext TCP connection and read the server's greeting. Check `.connected`. |
-| `SmtpClient.connect_tls` | `(host: str, port: int) -> SmtpClient` | `SmtpClient` | Open an **implicit TLS** connection (e.g. port 465) and read the greeting. Uses the same OpenSSL primitive as `HttpsClient`; requires `-DTAURARO_TLS_OPENSSL -lssl -lcrypto` (see the `std.net.https` note above) — without it, connection fails and `.connected` is `false`. |
+| `SmtpClient.connect_tls` | `(host: str, port: int) -> SmtpClient` | `SmtpClient` | Open an **implicit TLS** connection (e.g. port 465), verifying the server certificate, and read the greeting. On failure `.connected` is `false` and `last_text` holds the TLS error. |
+| `SmtpClient.connect_tls_with` | `(host: str, port: int, opts: TlsOptions) -> SmtpClient` | `SmtpClient` | Same with explicit `TlsOptions` (private CA, timeout, verification). |
 | `ehlo` | `(client_host: str) -> SmtpResponse` | `SmtpResponse` | Send `EHLO`, correctly parsing a multi-line capability reply (`250-...` continuations, final line `250 ...`). Falls back to `HELO` automatically if the server rejects `EHLO`. Records capabilities for `supports_starttls`/`supports_auth`. |
 | `helo` | `(client_host: str) -> SmtpResponse` | `SmtpResponse` | Send plain `HELO` (no capability negotiation). |
 | `supports_starttls` | `() -> bool` | `bool` | `true` if the last `ehlo()` capability list advertised `STARTTLS`. |
 | `supports_auth` | `() -> bool` | `bool` | `true` if the last `ehlo()` capability list advertised `AUTH`. |
-| `starttls` | `() -> SmtpResponse` | `SmtpResponse` | Send `STARTTLS` and read the server's response. **Does not upgrade the connection to TLS** — see Limitations below. |
+| `starttls` | `() -> SmtpResponse` | `SmtpResponse` | Send `STARTTLS`; on `220`, run the TLS handshake on the same socket (verified with `client.tls_opts`). Sets `use_tls`; call `ehlo()` again afterwards. A failed handshake returns code `0` with the TLS error and disconnects. |
 | `auth_login` | `(username: str, password: str) -> SmtpResponse` | `SmtpResponse` | `AUTH LOGIN`: two round-trips, base64-encoded username then password. Returns the final (3rd) response. |
 | `auth_plain` | `(username: str, password: str) -> SmtpResponse` | `SmtpResponse` | `AUTH PLAIN`: single command, base64 of `"\0username\0password"`. |
 | `mail_from` | `(addr: str) -> SmtpResponse` | `SmtpResponse` | Send `MAIL FROM:<addr>`. |
@@ -499,7 +535,7 @@ if client.connected:
 
 ### Limitations (v1)
 
-- **`STARTTLS` does not upgrade the connection in place.** `starttls()` sends the command and reads the server's response (useful if you just need to satisfy a server that demands the handshake before `AUTH`), but the socket stays plaintext afterwards — the runtime's TLS primitive (the same one `HttpsClient` uses) only knows how to open a *fresh* TLS connection given a hostname; there is no client-side "wrap an already-connected fd in TLS" function (only a server-side equivalent exists, for TLS-terminating servers). For a real confidentiality guarantee, use `connect_tls()` (implicit TLS, typically port 465) instead — that path is fully functional TLS from the first byte.
+- TLS is TLS 1.3 only; a server limited to TLS 1.2 fails the handshake.
 - **No MIME / multipart / attachment support.** `send_mail`/`data` send a single `text/plain` body (headers + blank line + body text). Building a `multipart/mixed` message with attachments is left to the caller (construct the full body string yourself, including boundaries, and pass it to `data()` directly) or a future module.
 
 ---

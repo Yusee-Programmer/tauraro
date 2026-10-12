@@ -23,7 +23,11 @@
  *   X25519 (RFC 7748) ............. trc_x25519
  *   Argon2 i/d/id (RFC 9106) ...... trc_argon2
  *   bcrypt ($2a/$2b/$2y) .......... trc_bcrypt_raw
+ *   AEAD .......................... trc_aead_seal/open (AES-128/256-GCM, ChaCha20-Poly1305)
  */
+#if !defined(_WIN32) && !defined(__APPLE__) && !defined(_GNU_SOURCE)
+#  define _GNU_SOURCE
+#endif
 #include <stdint.h>
 #include <stddef.h>
 #include <string.h>
@@ -1337,3 +1341,262 @@ int64_t trc_b64_decode(int64_t kind, const char* s, int64_t n, char* out) {
     if (acc != 0 && kind != 2) return -1;   /* bcrypt salts: ignore spare bits */
     return o;
 }
+
+static u32 aead_be32(const u8* p) { return ((u32)p[0] << 24) | ((u32)p[1] << 16) | ((u32)p[2] << 8) | p[3]; }
+static void aead_put_be32(u8* p, u32 v) { p[0] = (u8)(v >> 24); p[1] = (u8)(v >> 16); p[2] = (u8)(v >> 8); p[3] = (u8)v; }
+static void aead_put_le32(u8* p, u32 v) { p[0] = (u8)v; p[1] = (u8)(v >> 8); p[2] = (u8)(v >> 16); p[3] = (u8)(v >> 24); }
+/* ═══════════════════════════ AES (encryption only) ═══════════════════════ */
+static const u8 aes_sbox[256] = {
+0x63,0x7c,0x77,0x7b,0xf2,0x6b,0x6f,0xc5,0x30,0x01,0x67,0x2b,0xfe,0xd7,0xab,0x76,0xca,0x82,0xc9,0x7d,0xfa,0x59,0x47,0xf0,0xad,0xd4,0xa2,0xaf,0x9c,0xa4,0x72,0xc0,
+0xb7,0xfd,0x93,0x26,0x36,0x3f,0xf7,0xcc,0x34,0xa5,0xe5,0xf1,0x71,0xd8,0x31,0x15,0x04,0xc7,0x23,0xc3,0x18,0x96,0x05,0x9a,0x07,0x12,0x80,0xe2,0xeb,0x27,0xb2,0x75,
+0x09,0x83,0x2c,0x1a,0x1b,0x6e,0x5a,0xa0,0x52,0x3b,0xd6,0xb3,0x29,0xe3,0x2f,0x84,0x53,0xd1,0x00,0xed,0x20,0xfc,0xb1,0x5b,0x6a,0xcb,0xbe,0x39,0x4a,0x4c,0x58,0xcf,
+0xd0,0xef,0xaa,0xfb,0x43,0x4d,0x33,0x85,0x45,0xf9,0x02,0x7f,0x50,0x3c,0x9f,0xa8,0x51,0xa3,0x40,0x8f,0x92,0x9d,0x38,0xf5,0xbc,0xb6,0xda,0x21,0x10,0xff,0xf3,0xd2,
+0xcd,0x0c,0x13,0xec,0x5f,0x97,0x44,0x17,0xc4,0xa7,0x7e,0x3d,0x64,0x5d,0x19,0x73,0x60,0x81,0x4f,0xdc,0x22,0x2a,0x90,0x88,0x46,0xee,0xb8,0x14,0xde,0x5e,0x0b,0xdb,
+0xe0,0x32,0x3a,0x0a,0x49,0x06,0x24,0x5c,0xc2,0xd3,0xac,0x62,0x91,0x95,0xe4,0x79,0xe7,0xc8,0x37,0x6d,0x8d,0xd5,0x4e,0xa9,0x6c,0x56,0xf4,0xea,0x65,0x7a,0xae,0x08,
+0xba,0x78,0x25,0x2e,0x1c,0xa6,0xb4,0xc6,0xe8,0xdd,0x74,0x1f,0x4b,0xbd,0x8b,0x8a,0x70,0x3e,0xb5,0x66,0x48,0x03,0xf6,0x0e,0x61,0x35,0x57,0xb9,0x86,0xc1,0x1d,0x9e,
+0xe1,0xf8,0x98,0x11,0x69,0xd9,0x8e,0x94,0x9b,0x1e,0x87,0xe9,0xce,0x55,0x28,0xdf,0x8c,0xa1,0x89,0x0d,0xbf,0xe6,0x42,0x68,0x41,0x99,0x2d,0x0f,0xb0,0x54,0xbb,0x16};
+
+typedef struct { u8 rk[240]; int nr; } aes_ctx;
+
+static void aes_init(aes_ctx* a, const u8* key, int klen) {
+    int nk = klen / 4, i; u8 t[4];
+    a->nr = nk + 6;
+    memcpy(a->rk, key, (size_t)klen);
+    { u8 rcon = 1;
+      for (i = nk; i < 4 * (a->nr + 1); i++) {
+        memcpy(t, a->rk + 4 * (i - 1), 4);
+        if (i % nk == 0) {
+            u8 x = t[0]; t[0] = aes_sbox[t[1]] ^ rcon; t[1] = aes_sbox[t[2]]; t[2] = aes_sbox[t[3]]; t[3] = aes_sbox[x];
+            rcon = (u8)((rcon << 1) ^ ((rcon & 0x80) ? 0x1b : 0));
+        } else if (nk > 6 && i % nk == 4) {
+            t[0] = aes_sbox[t[0]]; t[1] = aes_sbox[t[1]]; t[2] = aes_sbox[t[2]]; t[3] = aes_sbox[t[3]];
+        }
+        a->rk[4 * i] = a->rk[4 * (i - nk)] ^ t[0]; a->rk[4 * i + 1] = a->rk[4 * (i - nk) + 1] ^ t[1];
+        a->rk[4 * i + 2] = a->rk[4 * (i - nk) + 2] ^ t[2]; a->rk[4 * i + 3] = a->rk[4 * (i - nk) + 3] ^ t[3];
+      } }
+}
+static u8 xt(u8 x) { return (u8)((x << 1) ^ ((x & 0x80) ? 0x1b : 0)); }
+static void aes_enc(const aes_ctx* a, const u8* in, u8* out) {
+    u8 s[16], t[16]; int r, i;
+    for (i = 0; i < 16; i++) s[i] = in[i] ^ a->rk[i];
+    for (r = 1; r <= a->nr; r++) {
+        for (i = 0; i < 16; i++) t[i] = aes_sbox[s[(i + 4 * (i % 4)) % 16]];   /* SubBytes + ShiftRows */
+        if (r != a->nr) {
+            for (i = 0; i < 4; i++) {
+                u8* c = t + 4 * i; u8 a0 = c[0], a1 = c[1], a2 = c[2], a3 = c[3], all = a0 ^ a1 ^ a2 ^ a3;
+                c[0] ^= all ^ xt(a0 ^ a1); c[1] ^= all ^ xt(a1 ^ a2); c[2] ^= all ^ xt(a2 ^ a3); c[3] ^= all ^ xt(a3 ^ a0);
+            }
+        }
+        for (i = 0; i < 16; i++) s[i] = t[i] ^ a->rk[16 * r + i];
+    }
+    memcpy(out, s, 16);
+}
+
+/* ═══════════════════════════ GCM ═════════════════════════════════════════ */
+typedef struct { aes_ctx aes; u64 hh, hl; u64 th[16], tl[16]; } gcm_ctx;
+
+static void gcm_init(gcm_ctx* g, const u8* key, int klen) {
+    u8 z[16] = {0}, h[16]; int i;
+    aes_init(&g->aes, key, klen);
+    aes_enc(&g->aes, z, h);
+    g->hh = ((u64)aead_be32(h) << 32) | aead_be32(h + 4); g->hl = ((u64)aead_be32(h + 8) << 32) | aead_be32(h + 12);
+    /* Shoup 4-bit table: th/tl[i] = i * H (bit-reflected nibble index) */
+    g->th[0] = 0; g->tl[0] = 0;
+    g->th[8] = g->hh; g->tl[8] = g->hl;
+    for (i = 4; i > 0; i >>= 1) {
+        u64 vh = g->th[2 * i], vl = g->tl[2 * i], carry = vl & 1;
+        vl = (vh << 63) | (vl >> 1); vh = (vh >> 1) ^ (carry ? 0xe100000000000000ULL : 0);
+        g->th[i] = vh; g->tl[i] = vl;
+    }
+    for (i = 2; i < 16; i <<= 1) {
+        int j;
+        for (j = 1; j < i; j++) { g->th[i + j] = g->th[i] ^ g->th[j]; g->tl[i + j] = g->tl[i] ^ g->tl[j]; }
+    }
+}
+static const u64 gcm_last4[16] = {
+    0x0000, 0x1c20, 0x3840, 0x2460, 0x7080, 0x6ca0, 0x48c0, 0x54e0,
+    0xe100, 0xfd20, 0xd940, 0xc560, 0x9180, 0x8da0, 0xa9c0, 0xb5e0 };
+static void gcm_mult(const gcm_ctx* g, u8* x) {
+    int i; u8 lo, hi, rem; u64 zh, zl;
+    lo = x[15] & 0xf;
+    zh = g->th[lo]; zl = g->tl[lo];
+    for (i = 15; i >= 0; i--) {
+        lo = x[i] & 0xf; hi = (x[i] >> 4) & 0xf;
+        if (i != 15) {
+            rem = (u8)(zl & 0xf);
+            zl = (zh << 60) | (zl >> 4); zh = (zh >> 4) ^ (gcm_last4[rem] << 48);
+            zh ^= g->th[lo]; zl ^= g->tl[lo];
+        }
+        rem = (u8)(zl & 0xf);
+        zl = (zh << 60) | (zl >> 4); zh = (zh >> 4) ^ (gcm_last4[rem] << 48);
+        zh ^= g->th[hi]; zl ^= g->tl[hi];
+    }
+    aead_put_be32(x, (u32)(zh >> 32)); aead_put_be32(x + 4, (u32)zh); aead_put_be32(x + 8, (u32)(zl >> 32)); aead_put_be32(x + 12, (u32)zl);
+}
+static void ghash_update(const gcm_ctx* g, u8* y, const u8* d, size_t n) {
+    while (n > 0) {
+        size_t k = n < 16 ? n : 16, i;
+        for (i = 0; i < k; i++) y[i] ^= d[i];
+        gcm_mult(g, y);
+        d += k; n -= k;
+    }
+}
+/* enc=1: encrypt in->out, write tag. enc=0: decrypt and check tag (0 ok, -1 bad). */
+static int gcm_crypt(const gcm_ctx* g, int enc, const u8* iv12, const u8* aad, size_t alen,
+                     const u8* in, size_t n, u8* out, u8* tag) {
+    u8 j0[16], ctr[16], ks[16], y[16] = {0}, lens[16], ek[16]; size_t i, off; u32 c;
+    memcpy(j0, iv12, 12); j0[12] = 0; j0[13] = 0; j0[14] = 0; j0[15] = 1;
+    ghash_update(g, y, aad, alen);
+    if (!enc) ghash_update(g, y, in, n);
+    memcpy(ctr, j0, 16);
+    for (off = 0; off < n; off += 16) {
+        size_t k = n - off < 16 ? n - off : 16;
+        c = aead_be32(ctr + 12) + 1; aead_put_be32(ctr + 12, c);
+        aes_enc(&g->aes, ctr, ks);
+        for (i = 0; i < k; i++) out[off + i] = in[off + i] ^ ks[i];
+    }
+    if (enc) ghash_update(g, y, out, n);
+    memset(lens, 0, 16);
+    aead_put_be32(lens + 4, (u32)(alen * 8)); aead_put_be32(lens + 12, (u32)(n * 8));
+    aead_put_be32(lens, (u32)((u64)alen * 8 >> 32)); aead_put_be32(lens + 8, (u32)((u64)n * 8 >> 32));
+    ghash_update(g, y, lens, 16);
+    aes_enc(&g->aes, j0, ek);
+    for (i = 0; i < 16; i++) y[i] ^= ek[i];
+    if (enc) { memcpy(tag, y, 16); return 0; }
+    if (!trc_ct_eq((const char*)y, 16, (const char*)tag, 16)) { memset(out, 0, n); return -1; }
+    return 0;
+}
+
+/* ═══════════════════════ ChaCha20-Poly1305 (RFC 8439) ═════════════════════ */
+#define QR(a, b, c, d) a += b; d ^= a; d = (d << 16) | (d >> 16); c += d; b ^= c; b = (b << 12) | (b >> 20); \
+                       a += b; d ^= a; d = (d << 8) | (d >> 24);  c += d; b ^= c; b = (b << 7) | (b >> 25)
+static void chacha_block(const u8* key, u32 counter, const u8* nonce, u8* out) {
+    u32 s[16], x[16]; int i;
+    s[0] = 0x61707865; s[1] = 0x3320646e; s[2] = 0x79622d32; s[3] = 0x6b206574;
+    for (i = 0; i < 8; i++) s[4 + i] = ld32le(key + 4 * i);
+    s[12] = counter; s[13] = ld32le(nonce); s[14] = ld32le(nonce + 4); s[15] = ld32le(nonce + 8);
+    memcpy(x, s, sizeof s);
+    for (i = 0; i < 10; i++) {
+        QR(x[0], x[4], x[8], x[12]); QR(x[1], x[5], x[9], x[13]); QR(x[2], x[6], x[10], x[14]); QR(x[3], x[7], x[11], x[15]);
+        QR(x[0], x[5], x[10], x[15]); QR(x[1], x[6], x[11], x[12]); QR(x[2], x[7], x[8], x[13]); QR(x[3], x[4], x[9], x[14]);
+    }
+    for (i = 0; i < 16; i++) aead_put_le32(out + 4 * i, x[i] + s[i]);
+}
+static void chacha_xor(const u8* key, u32 counter, const u8* nonce, const u8* in, u8* out, size_t n) {
+    u8 ks[64]; size_t off, i;
+    for (off = 0; off < n; off += 64) {
+        size_t k = n - off < 64 ? n - off : 64;
+        chacha_block(key, counter++, nonce, ks);
+        for (i = 0; i < k; i++) out[off + i] = in[off + i] ^ ks[i];
+    }
+}
+typedef struct { u32 r[5], h[5], pad[4]; } poly_ctx;
+static void poly_init(poly_ctx* p, const u8* key) {
+    p->r[0] = (ld32le(key)) & 0x3ffffff; p->r[1] = (ld32le(key + 3) >> 2) & 0x3ffff03;
+    p->r[2] = (ld32le(key + 6) >> 4) & 0x3ffc0ff; p->r[3] = (ld32le(key + 9) >> 6) & 0x3f03fff;
+    p->r[4] = (ld32le(key + 12) >> 8) & 0x00fffff;
+    memset(p->h, 0, sizeof p->h);
+    p->pad[0] = ld32le(key + 16); p->pad[1] = ld32le(key + 20); p->pad[2] = ld32le(key + 24); p->pad[3] = ld32le(key + 28);
+}
+static void poly_block(poly_ctx* p, const u8* m, u32 hibit) {
+    u32 r0 = p->r[0], r1 = p->r[1], r2 = p->r[2], r3 = p->r[3], r4 = p->r[4];
+    u32 s1 = r1 * 5, s2 = r2 * 5, s3 = r3 * 5, s4 = r4 * 5;
+    u32 h0 = p->h[0], h1 = p->h[1], h2 = p->h[2], h3 = p->h[3], h4 = p->h[4]; u64 d0, d1, d2, d3, d4; u32 c;
+    h0 += (ld32le(m)) & 0x3ffffff; h1 += (ld32le(m + 3) >> 2) & 0x3ffffff; h2 += (ld32le(m + 6) >> 4) & 0x3ffffff;
+    h3 += (ld32le(m + 9) >> 6) & 0x3ffffff; h4 += (ld32le(m + 12) >> 8) | hibit;
+    d0 = (u64)h0 * r0 + (u64)h1 * s4 + (u64)h2 * s3 + (u64)h3 * s2 + (u64)h4 * s1;
+    d1 = (u64)h0 * r1 + (u64)h1 * r0 + (u64)h2 * s4 + (u64)h3 * s3 + (u64)h4 * s2;
+    d2 = (u64)h0 * r2 + (u64)h1 * r1 + (u64)h2 * r0 + (u64)h3 * s4 + (u64)h4 * s3;
+    d3 = (u64)h0 * r3 + (u64)h1 * r2 + (u64)h2 * r1 + (u64)h3 * r0 + (u64)h4 * s4;
+    d4 = (u64)h0 * r4 + (u64)h1 * r3 + (u64)h2 * r2 + (u64)h3 * r1 + (u64)h4 * r0;
+    c = (u32)(d0 >> 26); h0 = (u32)d0 & 0x3ffffff; d1 += c;
+    c = (u32)(d1 >> 26); h1 = (u32)d1 & 0x3ffffff; d2 += c;
+    c = (u32)(d2 >> 26); h2 = (u32)d2 & 0x3ffffff; d3 += c;
+    c = (u32)(d3 >> 26); h3 = (u32)d3 & 0x3ffffff; d4 += c;
+    c = (u32)(d4 >> 26); h4 = (u32)d4 & 0x3ffffff; h0 += c * 5;
+    c = h0 >> 26; h0 &= 0x3ffffff; h1 += c;
+    p->h[0] = h0; p->h[1] = h1; p->h[2] = h2; p->h[3] = h3; p->h[4] = h4;
+}
+static void poly_update(poly_ctx* p, const u8* m, size_t n) {   /* pads the tail block with zeros */
+    while (n >= 16) { poly_block(p, m, 1u << 24); m += 16; n -= 16; }
+    if (n) { u8 b[16] = {0}; memcpy(b, m, n); poly_block(p, b, 1u << 24); }
+}
+static void poly_finish(poly_ctx* p, u8* mac) {
+    u32 h0 = p->h[0], h1 = p->h[1], h2 = p->h[2], h3 = p->h[3], h4 = p->h[4], c, g0, g1, g2, g3, g4, mask; u64 f;
+    c = h1 >> 26; h1 &= 0x3ffffff; h2 += c; c = h2 >> 26; h2 &= 0x3ffffff; h3 += c;
+    c = h3 >> 26; h3 &= 0x3ffffff; h4 += c; c = h4 >> 26; h4 &= 0x3ffffff; h0 += c * 5;
+    c = h0 >> 26; h0 &= 0x3ffffff; h1 += c;
+    g0 = h0 + 5; c = g0 >> 26; g0 &= 0x3ffffff; g1 = h1 + c; c = g1 >> 26; g1 &= 0x3ffffff;
+    g2 = h2 + c; c = g2 >> 26; g2 &= 0x3ffffff; g3 = h3 + c; c = g3 >> 26; g3 &= 0x3ffffff; g4 = h4 + c - (1u << 26);
+    mask = (g4 >> 31) - 1;
+    g0 &= mask; g1 &= mask; g2 &= mask; g3 &= mask; g4 &= mask; mask = ~mask;
+    h0 = (h0 & mask) | g0; h1 = (h1 & mask) | g1; h2 = (h2 & mask) | g2; h3 = (h3 & mask) | g3; h4 = (h4 & mask) | g4;
+    h0 = (h0 | (h1 << 26)); h1 = ((h1 >> 6) | (h2 << 20)); h2 = ((h2 >> 12) | (h3 << 14)); h3 = ((h3 >> 18) | (h4 << 8));
+    f = (u64)h0 + p->pad[0]; h0 = (u32)f;
+    f = (u64)h1 + p->pad[1] + (f >> 32); h1 = (u32)f;
+    f = (u64)h2 + p->pad[2] + (f >> 32); h2 = (u32)f;
+    f = (u64)h3 + p->pad[3] + (f >> 32); h3 = (u32)f;
+    aead_put_le32(mac, h0); aead_put_le32(mac + 4, h1); aead_put_le32(mac + 8, h2); aead_put_le32(mac + 12, h3);
+}
+static int chachapoly_crypt(const u8* key, int enc, const u8* nonce, const u8* aad, size_t alen,
+                            const u8* in, size_t n, u8* out, u8* tag) {
+    u8 pk[64], mac[16], lens[16]; poly_ctx p;
+    chacha_block(key, 0, nonce, pk);
+    poly_init(&p, pk);
+    poly_update(&p, aad, alen);
+    if (!enc) poly_update(&p, in, n);
+    chacha_xor(key, 1, nonce, in, out, n);
+    if (enc) poly_update(&p, out, n);
+    aead_put_le32(lens, (u32)alen); aead_put_le32(lens + 4, (u32)((u64)alen >> 32));
+    aead_put_le32(lens + 8, (u32)n); aead_put_le32(lens + 12, (u32)((u64)n >> 32));
+    poly_block(&p, lens, 1u << 24);
+    poly_finish(&p, mac);
+    wipe(pk, sizeof pk);
+    if (enc) { memcpy(tag, mac, 16); return 0; }
+    if (!trc_ct_eq((const char*)mac, 16, (const char*)tag, 16)) { memset(out, 0, n); return -1; }
+    return 0;
+}
+
+/* Standalone AEAD entry points (std.crypto.aead).
+ * alg: 1 = AES-128-GCM, 2 = AES-256-GCM, 3 = ChaCha20-Poly1305 (key 16/32/32, nonce 12).
+ * seal writes n + 16 bytes; open reads n >= 16 and writes n - 16 (returns -1 on a bad tag). */
+int64_t trc_aead_seal(int64_t alg, const char* key, const char* nonce, const char* aad, int64_t alen,
+                      const char* pt, int64_t n, char* out) {
+    if (alg == 3) { chachapoly_crypt((const u8*)key, 1, (const u8*)nonce, (const u8*)aad, (size_t)alen, (const u8*)pt, (size_t)n, (u8*)out, (u8*)out + n); return n + 16; }
+    if (alg == 1 || alg == 2) {
+        gcm_ctx* g = (gcm_ctx*)malloc(sizeof(gcm_ctx));
+        if (!g) return -1;
+        gcm_init(g, (const u8*)key, alg == 1 ? 16 : 32);
+        gcm_crypt(g, 1, (const u8*)nonce, (const u8*)aad, (size_t)alen, (const u8*)pt, (size_t)n, (u8*)out, (u8*)out + n);
+        wipe(g, sizeof *g); free(g);
+        return n + 16;
+    }
+    return -1;
+}
+int64_t trc_aead_open(int64_t alg, const char* key, const char* nonce, const char* aad, int64_t alen,
+                      const char* ct, int64_t n, char* out) {
+    int r = -1;
+    if (n < 16) return -1;
+    if (alg == 3) r = chachapoly_crypt((const u8*)key, 0, (const u8*)nonce, (const u8*)aad, (size_t)alen, (const u8*)ct, (size_t)(n - 16), (u8*)out, (u8*)(ct + n - 16));
+    else if (alg == 1 || alg == 2) {
+        gcm_ctx* g = (gcm_ctx*)malloc(sizeof(gcm_ctx));
+        if (!g) return -1;
+        gcm_init(g, (const u8*)key, alg == 1 ? 16 : 32);
+        r = gcm_crypt(g, 0, (const u8*)nonce, (const u8*)aad, (size_t)alen, (const u8*)ct, (size_t)(n - 16), (u8*)out, (u8*)(ct + n - 16));
+        wipe(g, sizeof *g); free(g);
+    }
+    return r < 0 ? -1 : n - 16;
+}
+
+/* State API used by std/net/tls_native.c (one precomputed GCM table per direction). */
+int64_t trc_gcm_state_size(void) { return (int64_t)sizeof(gcm_ctx); }
+void trc_gcm_init(char* st, const char* key, int64_t klen) { gcm_init((gcm_ctx*)st, (const u8*)key, (int)klen); }
+int64_t trc_gcm_crypt(const char* st, int64_t enc, const char* iv12, const char* aad, int64_t alen,
+                      const char* in, int64_t n, char* out, char* tag) {
+    return gcm_crypt((const gcm_ctx*)st, (int)enc, (const u8*)iv12, (const u8*)aad, (size_t)alen, (const u8*)in, (size_t)n, (u8*)out, (u8*)tag);
+}
+int64_t trc_chachapoly_crypt(const char* key, int64_t enc, const char* nonce, const char* aad, int64_t alen,
+                             const char* in, int64_t n, char* out, char* tag) {
+    return chachapoly_crypt((const u8*)key, (int)enc, (const u8*)nonce, (const u8*)aad, (size_t)alen, (const u8*)in, (size_t)n, (u8*)out, (u8*)tag);
+}
+

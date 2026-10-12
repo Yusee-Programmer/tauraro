@@ -1,0 +1,249 @@
+# tauraro-cpp-shim: tls_native.c
+#
+# std.net.tls -- TLS 1.3 client connections with certificate verification.
+#
+# A self-contained TLS 1.3 client (RFC 8446): no OpenSSL. Certificates are
+# verified by default against the system trust store (or a TrustStore you
+# pass), including the host name. Offers X25519 / secp256r1 (secp384r1 on
+# HelloRetryRequest), AES-128-GCM, AES-256-GCM and ChaCha20-Poly1305, and
+# accepts ECDSA P-256/P-384 and RSA-PSS server signatures.
+#
+# Not supported: TLS 1.2 and older (servers that only speak TLS 1.2 fail with
+# a handshake_failure / protocol_version alert), session resumption, 0-RTT,
+# client certificates. For TLS 1.2-only servers, std.net.https's OpenSSL
+# path is still available.
+#
+# Usage:
+#   from std.net.tls import TlsStream, TlsOptions
+#   mut s = TlsStream.connect("example.com", 443)?
+#   s.write("GET / HTTP/1.1\r\nHost: example.com\r\nConnection: close\r\n\r\n")?
+#   mut body = s.read_all()?
+#   s.close()
+#
+#   # STARTTLS: upgrade an existing TcpStream after the protocol's upgrade command
+#   mut opts = TlsOptions.default()
+#   mut t = TlsStream.wrap_fd(tcp.fd, "mail.example.com", opts)?
+
+from std.crypto.native import _cn_alloc, _cn_take, _cn_free
+from std.crypto.x509 import Certificate, TrustStore
+from std.core.string import StringBuilder
+
+extern "C":
+    def trc_tls_connect(host: Pointer[char], hostlen: int, port: int, store: Pointer[char], verify: int, alpn: Pointer[char], timeout_ms: int) -> Pointer[char]
+    def trc_tls_client_fd(fd: int, host: Pointer[char], hostlen: int, store: Pointer[char], verify: int, alpn: Pointer[char], timeout_ms: int, owns_fd: int) -> Pointer[char]
+    def trc_tls_ok(h: Pointer[char]) -> int
+    def trc_tls_error(h: Pointer[char], out: Pointer[char], cap: int) -> int
+    def trc_tls_set_timeout(h: Pointer[char], ms: int)
+    def trc_tls_write(h: Pointer[char], d: Pointer[char], n: int) -> int
+    def trc_tls_read(h: Pointer[char], out: Pointer[char], cap: int) -> int
+    def trc_tls_alpn(h: Pointer[char], out: Pointer[char], cap: int) -> int
+    def trc_tls_cipher(h: Pointer[char]) -> int
+    def trc_tls_peer_cert_count(h: Pointer[char]) -> int
+    def trc_tls_peer_cert(h: Pointer[char], i: int, out: Pointer[char], cap: int) -> int
+    def trc_tls_fd(h: Pointer[char]) -> int
+    def trc_tls_close(h: Pointer[char])
+
+def _tls_null(p: Pointer[char]) -> bool:
+    return (p as usize) == (0 as usize)
+
+# Connection settings.
+pub class TlsOptions:
+    pub verify:     bool        # check the certificate chain and host name (default true)
+    pub alpn:       str         # comma-separated ALPN protocols, e.g. "h2,http/1.1" ("" = none)
+    pub timeout_ms: int         # connect + per-read timeout (0 = wait forever)
+    pub ca_pem:     str         # extra/alternative roots as PEM text ("" = system roots)
+    pub only_ca_pem: bool       # trust ONLY ca_pem, not the system roots
+
+extend TlsOptions:
+    pub def default() -> TlsOptions:
+        mut o = TlsOptions()
+        o.verify = true
+        o.alpn = ""
+        o.timeout_ms = 30000
+        o.ca_pem = ""
+        o.only_ca_pem = false
+        return o
+
+    # Skip certificate verification. Only for testing: the connection is then
+    # open to man-in-the-middle attacks.
+    pub def insecure() -> TlsOptions:
+        mut o = TlsOptions.default()
+        o.verify = false
+        return o
+
+pub class TlsStream:
+    _h: Pointer[char]
+    _store: TrustStore
+    _own_store: bool
+    pub host: str
+    pub open: bool
+    _pending: str
+
+extend TlsStream:
+    def _store_for(opts: TlsOptions) -> TrustStore:
+        if opts.ca_pem.len() == 0: return TrustStore.system()
+        if opts.only_ca_pem:
+            mut s = TrustStore.empty()
+            s.add_pem(opts.ca_pem)
+            return s
+        mut s2 = TrustStore.system_copy()
+        s2.add_pem(opts.ca_pem)
+        return s2
+
+    def _finish(h: Pointer[char], host: str, store: TrustStore, own: bool) throws str -> TlsStream:
+        if _tls_null(h):
+            if own: store.dispose()
+            raise("TLS: out of memory")
+        if trc_tls_ok(h) != 1:
+            mut out = _cn_alloc(300)
+            mut n = trc_tls_error(h, out, 300)
+            mut msg = _cn_take(out, n)
+            trc_tls_close(h)
+            if own: store.dispose()
+            raise(msg)
+        mut s = TlsStream()
+        s._h = h
+        s._store = store
+        s._own_store = own
+        s.host = host
+        s.open = true
+        s._pending = ""
+        return s
+
+    # Connect with default options (verified against the system roots).
+    pub def connect(host: str, port: int) throws str -> TlsStream:
+        mut o = TlsOptions.default()
+        return TlsStream.connect_with(host, port, o)?
+
+    pub def connect_with(host: str, port: int, opts: TlsOptions) throws str -> TlsStream:
+        mut store = TlsStream._store_for(opts)
+        mut own = opts.ca_pem.len() > 0
+        mut hp = host as Pointer[char]
+        mut ap = opts.alpn as Pointer[char]
+        mut v = 0
+        if opts.verify: v = 1
+        mut h = trc_tls_connect(hp, host.len(), port, store._handle(), v, ap, opts.timeout_ms)
+        return TlsStream._finish(h, host, store, own)?
+
+    # Run the TLS handshake on an already-connected socket (STARTTLS). The
+    # socket stays owned by the caller: close() sends close_notify but does
+    # not close the fd.
+    pub def wrap_fd(fd: int, host: str, opts: TlsOptions) throws str -> TlsStream:
+        mut store = TlsStream._store_for(opts)
+        mut own = opts.ca_pem.len() > 0
+        mut hp = host as Pointer[char]
+        mut ap = opts.alpn as Pointer[char]
+        mut v = 0
+        if opts.verify: v = 1
+        mut h = trc_tls_client_fd(fd, hp, host.len(), store._handle(), v, ap, opts.timeout_ms, 0)
+        return TlsStream._finish(h, host, store, own)?
+
+    # Send all of `data`.
+    pub def write(self, data: str) throws str:
+        if not self.open: raise("TLS: stream is closed")
+        mut dp = data as Pointer[char]
+        if trc_tls_write(self._h, dp, data.len()) < 0:
+            mut e = self.last_error()
+            raise(e)
+
+    # Up to `cap` bytes; "" at end of stream. Raises on errors and timeouts.
+    pub def read(self, cap: int) throws str -> str:
+        if self._pending.len() > 0:
+            mut k = cap
+            if k > self._pending.len(): k = self._pending.len()
+            mut head = self._pending.slice(0, k)
+            self._pending = self._pending.slice(k, self._pending.len())
+            return head
+        return self._read_raw(cap)?
+
+    def _read_raw(self, cap: int) throws str -> str:
+        if not self.open: return ""
+        mut n0 = cap
+        if n0 < 1: n0 = 1
+        mut out = _cn_alloc(n0)
+        mut n = trc_tls_read(self._h, out, n0)
+        if n == -2:
+            _cn_free(out)
+            raise("TLS: read timed out")
+        if n < 0:
+            _cn_free(out)
+            mut e = self.last_error()
+            raise(e)
+        return _cn_take(out, n)
+
+    # Read until the peer closes the stream.
+    pub def read_all(self) throws str -> str:
+        mut sb = StringBuilder.init(16384)
+        while true:
+            mut chunk = self.read(16384)?
+            if chunk.len() == 0: break
+            sb.append(chunk)
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    # One line including its "\n" (or what is left at end of stream), at most
+    # `max` bytes. For line-based protocols (SMTP, IMAP, POP3) after STARTTLS.
+    pub def read_line(self, max: int) throws str -> str:
+        while self._pending.find("\n") < 0 and self._pending.len() < max:
+            mut chunk = self._read_raw(4096)?
+            if chunk.len() == 0: break
+            self._pending = self._pending + chunk
+        mut nl = self._pending.find("\n")
+        mut take = self._pending.len()
+        if nl >= 0: take = nl + 1
+        if take > max: take = max
+        mut line = self._pending.slice(0, take)
+        self._pending = self._pending.slice(take, self._pending.len())
+        return line
+
+    pub def set_timeout(self, ms: int): trc_tls_set_timeout(self._h, ms)
+
+    # The negotiated ALPN protocol ("" if none).
+    pub def alpn(self) -> str:
+        mut out = _cn_alloc(64)
+        mut n = trc_tls_alpn(self._h, out, 63)
+        return _cn_take(out, n)
+
+    # e.g. "TLS_AES_128_GCM_SHA256".
+    pub def cipher_suite(self) -> str:
+        mut c = trc_tls_cipher(self._h)
+        if c == 0x1301: return "TLS_AES_128_GCM_SHA256"
+        if c == 0x1302: return "TLS_AES_256_GCM_SHA384"
+        if c == 0x1303: return "TLS_CHACHA20_POLY1305_SHA256"
+        return ""
+
+    pub def version(self) -> str: return "TLSv1.3"
+
+    # The server's certificate chain as sent (leaf first).
+    pub def peer_certificates(self) -> List[Certificate]:
+        mut out: List[Certificate] = []
+        mut n = trc_tls_peer_cert_count(self._h)
+        mut i = 0
+        while i < n:
+            mut z = 0 as Pointer[char]
+            mut len_ = trc_tls_peer_cert(self._h, i, z, 0)
+            mut buf = _cn_alloc(len_)
+            trc_tls_peer_cert(self._h, i, buf, len_)
+            mut der = _cn_take(buf, len_)
+            mut r: Result[Certificate, str] = Certificate.from_der(der)
+            if r.is_ok: out.append(r.ok)
+            i = i + 1
+        return out
+
+    pub def last_error(self) -> str:
+        mut out = _cn_alloc(300)
+        mut n = trc_tls_error(self._h, out, 300)
+        if n == 0:
+            _cn_free(out)
+            return "TLS: connection error"
+        return _cn_take(out, n)
+
+    pub def fd(self) -> int: return trc_tls_fd(self._h)
+
+    # Send close_notify and release the connection.
+    pub def close(self):
+        if self.open:
+            trc_tls_close(self._h)
+            self.open = false
+            if self._own_store: self._store.dispose()

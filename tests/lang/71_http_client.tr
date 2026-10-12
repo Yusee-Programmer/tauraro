@@ -666,7 +666,7 @@ def main():
     mut ftp = s.get("ftp://127.0.0.1/x")
     t.assert_true(Str.contains(ftp.error, "unsupported"), "non-http scheme rejected")
     mut tls = s.get("https://127.0.0.1:" + port.to_string() + "/ok")
-    t.assert_true(Str.contains(tls.error, "https refused"), "https refused unless unverified TLS is opted into")
+    t.assert_true(Str.starts_with(tls.error, "TLS"), "https to a plain-HTTP port fails the TLS handshake")
     mut refused = s.get("http://127.0.0.1:1/x")
     t.assert_true(Str.starts_with(refused.error, "connection failed"), "connection refused surfaces as an error")
     t.assert_true(refused.is_error(), "is_error on transport failure")

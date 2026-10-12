@@ -1,0 +1,256 @@
+# tauraro-cpp-shim: pk_native.c
+#
+# std.crypto.pk -- public-key cryptography: RSA and ECDSA (P-256, P-384).
+#
+# `PKey` holds an RSA or EC key (public, or private + public) parsed from DER
+# or PEM -- SubjectPublicKeyInfo, PKCS#8, PKCS#1 (RSA) and SEC1 (EC) are
+# accepted -- or generated (EC). It signs and verifies:
+#
+#   RSA   PKCS#1 v1.5 (SIG_PKCS1) or PSS (SIG_PSS, salt = hash length,
+#         MGF1 with the same hash), hash SHA-256/384/512 (SHA-1 for verify only)
+#   EC    ECDSA with deterministic nonces (RFC 6979); signatures are DER by
+#         default, or raw r||s with the `_raw` methods (JWS / WebAuthn style)
+#
+# and does ECDH (`shared_secret`). Encrypted PEM keys are not supported.
+# Private-key operations avoid secret-dependent branches and table lookups,
+# but this code has not had an independent side-channel audit.
+#
+# Usage:
+#   from std.crypto.pk import PKey, Pem, SIG_PSS, SIG_PKCS1
+#   from std.crypto.native import ALG_SHA256
+#   mut key = PKey.from_pem(read_file("key.pem"))?
+#   mut sig = key.sign("message", ALG_SHA256, SIG_PSS)?
+#   mut pub = PKey.from_pem(read_file("pub.pem"))?
+#   if pub.verify("message", sig, ALG_SHA256, SIG_PSS): ...
+#   key.dispose()
+
+from std.crypto.native import _cn_alloc, _cn_take, _cn_free, _cn_b64
+from std.core.string import StringBuilder
+
+extern "C":
+    def trc_pk_parse_der(der: Pointer[char], n: int, err: Pointer[int]) -> Pointer[char]
+    def trc_pk_free(h: Pointer[char])
+    def trc_pk_kind(h: Pointer[char]) -> int
+    def trc_pk_has_private(h: Pointer[char]) -> int
+    def trc_pk_bits(h: Pointer[char]) -> int
+    def trc_pk_public_raw(h: Pointer[char], out: Pointer[char], cap: int) -> int
+    def trc_pk_verify(h: Pointer[char], scheme: int, alg: int, msg: Pointer[char], mlen: int, sig: Pointer[char], siglen: int, sig_raw: int) -> int
+    def trc_pk_sign(h: Pointer[char], scheme: int, alg: int, msg: Pointer[char], mlen: int, out: Pointer[char], cap: int, sig_raw: int) -> int
+    def trc_pk_ec_generate(cid: int) -> Pointer[char]
+    def trc_pk_ec_from_private(cid: int, priv: Pointer[char], n: int) -> Pointer[char]
+    def trc_pk_ec_from_public(cid: int, pt: Pointer[char], n: int) -> Pointer[char]
+    def trc_pk_rsa_from_public(n: Pointer[char], nlen: int, e: Pointer[char], elen: int) -> Pointer[char]
+    def trc_pk_ec_private_raw(h: Pointer[char], out: Pointer[char]) -> int
+    def trc_pk_ecdh(h: Pointer[char], peer: Pointer[char], plen: int, out: Pointer[char]) -> int
+    def trc_pem_decode(pem: Pointer[char], n: int, index: int, label: Pointer[char], llen: int, out: Pointer[char], cap: int, label_out: Pointer[char]) -> int
+
+pub const KEY_RSA = 1
+pub const KEY_EC_P256 = 2
+pub const KEY_EC_P384 = 3
+pub const KEY_ED25519 = 4
+
+pub const SIG_PKCS1 = 0
+pub const SIG_PSS = 1
+
+pub const CURVE_P256 = 256
+pub const CURVE_P384 = 384
+
+def _pk_null(p: Pointer[char]) -> bool:
+    return (p as usize) == (0 as usize)
+
+# ─── PEM ─────────────────────────────────────────────────────────────────────
+pub class Pem:
+    _dummy: int
+
+extend Pem:
+    # The DER bytes of the index-th PEM block labelled `label` ("" = any label).
+    pub def decode_nth(text: str, label: str, index: int) throws str -> str:
+        mut cap = text.len()
+        mut out = _cn_alloc(cap + 4)
+        mut lab = _cn_alloc(64)
+        mut tp = text as Pointer[char]
+        mut lp = label as Pointer[char]
+        mut n = trc_pem_decode(tp, text.len(), index, lp, label.len(), out, cap + 4, lab)
+        _cn_free(lab)
+        if n < 0:
+            _cn_free(out)
+            if n == -1:
+                if label.len() > 0: raise(f"PEM: no '{label}' block found")
+                raise("PEM: no PEM block found")
+            raise("PEM: malformed or encrypted block")
+        return _cn_take(out, n)
+
+    pub def decode(text: str, label: str) throws str -> str:
+        return Pem.decode_nth(text, label, 0)?
+
+    # The label of the index-th block (e.g. "PRIVATE KEY"), or "" if none.
+    pub def label_of(text: str, index: int) -> str:
+        mut cap = text.len()
+        mut out = _cn_alloc(cap + 4)
+        mut lab = _cn_alloc(64)
+        mut tp = text as Pointer[char]
+        mut empty = ""
+        mut ep = empty as Pointer[char]
+        mut n = trc_pem_decode(tp, text.len(), index, ep, 0, out, cap + 4, lab)
+        _cn_free(out)
+        if n < 0:
+            _cn_free(lab)
+            return ""
+        mut l = 0
+        unsafe:
+            while l < 63 and (lab.offset(l).read() as int) != 0:
+                l = l + 1
+        return _cn_take(lab, l)
+
+    # Wrap DER bytes as a PEM block with 64-character lines.
+    pub def encode(der: str, label: str) -> str:
+        mut b64 = _cn_b64(0, true, der)
+        mut sb = StringBuilder.init(b64.len() + b64.len() / 64 + 64)
+        sb.append("-----BEGIN ")
+        sb.append(label)
+        sb.append("-----\n")
+        mut i = 0
+        while i < b64.len():
+            mut e = i + 64
+            if e > b64.len(): e = b64.len()
+            mut line = b64.slice(i, e)
+            sb.append(line)
+            sb.append("\n")
+            i = e
+        sb.append("-----END ")
+        sb.append(label)
+        sb.append("-----\n")
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+# ─── PKey ────────────────────────────────────────────────────────────────────
+pub class PKey:
+    _h: Pointer[char]
+    _live: bool
+
+extend PKey:
+    def _wrap(h: Pointer[char]) -> PKey:
+        mut k = PKey()
+        k._h = h
+        k._live = true
+        return k
+
+    # Parse a DER key: SubjectPublicKeyInfo, PKCS#8, PKCS#1 RSA or SEC1 EC.
+    pub def from_der(der: str) throws str -> PKey:
+        mut err = [0]
+        mut dp = der as Pointer[char]
+        mut ep = err as Pointer[int]
+        mut h = trc_pk_parse_der(dp, der.len(), ep)
+        if _pk_null(h):
+            if err[0] == -2: raise("PKey: unsupported key algorithm or curve")
+            raise("PKey: malformed key")
+        return PKey._wrap(h)
+
+    # Parse the first key block of a PEM document (PRIVATE KEY, RSA PRIVATE
+    # KEY, EC PRIVATE KEY, PUBLIC KEY or RSA PUBLIC KEY).
+    pub def from_pem(text: str) throws str -> PKey:
+        mut i = 0
+        while i < 16:
+            mut lab = Pem.label_of(text, i)
+            if lab.len() == 0: break
+            if lab.ends_with("KEY") and lab != "ENCRYPTED PRIVATE KEY":
+                mut der = Pem.decode_nth(text, "", i)?
+                return PKey.from_der(der)?
+            if lab == "ENCRYPTED PRIVATE KEY": raise("PKey: encrypted PEM keys are not supported")
+            i = i + 1
+        raise("PKey: no key found in PEM text")
+
+    # A fresh EC key pair on CURVE_P256 or CURVE_P384.
+    pub def generate_ec(curve: int) throws str -> PKey:
+        if curve != CURVE_P256 and curve != CURVE_P384: raise("PKey: curve must be CURVE_P256 or CURVE_P384")
+        mut h = trc_pk_ec_generate(curve)
+        if _pk_null(h): raise("PKey: key generation failed")
+        return PKey._wrap(h)
+
+    # EC private key from its raw big-endian scalar (32 or 48 bytes).
+    pub def ec_from_private(curve: int, scalar: str) throws str -> PKey:
+        mut sp = scalar as Pointer[char]
+        mut h = trc_pk_ec_from_private(curve, sp, scalar.len())
+        if _pk_null(h): raise("PKey: invalid EC private key")
+        return PKey._wrap(h)
+
+    # EC public key from a SEC1 point (04||X||Y, or compressed 02/03||X).
+    pub def ec_from_public(curve: int, point: str) throws str -> PKey:
+        mut pp = point as Pointer[char]
+        mut h = trc_pk_ec_from_public(curve, pp, point.len())
+        if _pk_null(h): raise("PKey: invalid EC public key (not on the curve)")
+        return PKey._wrap(h)
+
+    # RSA public key from big-endian modulus and exponent bytes.
+    pub def rsa_from_public(modulus: str, exponent: str) throws str -> PKey:
+        mut np = modulus as Pointer[char]
+        mut ep = exponent as Pointer[char]
+        mut h = trc_pk_rsa_from_public(np, modulus.len(), ep, exponent.len())
+        if _pk_null(h): raise("PKey: invalid RSA public key")
+        return PKey._wrap(h)
+
+    # KEY_RSA, KEY_EC_P256, KEY_EC_P384 or KEY_ED25519.
+    pub def kind(self) -> int: return trc_pk_kind(self._h)
+    pub def bits(self) -> int: return trc_pk_bits(self._h)
+    pub def has_private(self) -> bool: return trc_pk_has_private(self._h) == 1
+
+    # RSA: modulus bytes. EC: uncompressed point. Ed25519: 32 bytes.
+    pub def public_bytes(self) -> str:
+        mut out = _cn_alloc(1100)
+        mut n = trc_pk_public_raw(self._h, out, 1100)
+        if n < 0: n = 0
+        return _cn_take(out, n)
+
+    # EC private scalar (raises for RSA or public-only keys).
+    pub def ec_private_bytes(self) throws str -> str:
+        mut out = _cn_alloc(48)
+        mut n = trc_pk_ec_private_raw(self._h, out)
+        if n < 0:
+            _cn_free(out)
+            raise("PKey: not an EC private key")
+        return _cn_take(out, n)
+
+    def _sign(self, msg: str, alg: int, scheme: int, raw: int) throws str -> str:
+        if not self.has_private(): raise("PKey: signing needs a private key")
+        mut out = _cn_alloc(1100)
+        mut mp = msg as Pointer[char]
+        mut n = trc_pk_sign(self._h, scheme, alg, mp, msg.len(), out, 1100, raw)
+        if n < 0:
+            _cn_free(out)
+            raise("PKey: signing failed (unsupported hash, or key too small for PSS)")
+        return _cn_take(out, n)
+
+    # Sign `msg` (hashed with `alg`). scheme is SIG_PKCS1 or SIG_PSS for RSA,
+    # ignored for EC (DER-encoded ECDSA).
+    pub def sign(self, msg: str, alg: int, scheme: int) throws str -> str:
+        return self._sign(msg, alg, scheme, 0)?
+
+    # ECDSA signature as fixed-size r||s.
+    pub def sign_raw(self, msg: str, alg: int) throws str -> str:
+        return self._sign(msg, alg, 0, 1)?
+
+    pub def verify(self, msg: str, sig: str, alg: int, scheme: int) -> bool:
+        mut mp = msg as Pointer[char]
+        mut sp = sig as Pointer[char]
+        return trc_pk_verify(self._h, scheme, alg, mp, msg.len(), sp, sig.len(), 0) == 1
+
+    pub def verify_raw(self, msg: str, sig: str, alg: int) -> bool:
+        mut mp = msg as Pointer[char]
+        mut sp = sig as Pointer[char]
+        return trc_pk_verify(self._h, 0, alg, mp, msg.len(), sp, sig.len(), 1) == 1
+
+    # ECDH: the x-coordinate shared secret with a peer's SEC1 public point.
+    pub def shared_secret(self, peer_point: str) throws str -> str:
+        mut out = _cn_alloc(48)
+        mut pp = peer_point as Pointer[char]
+        mut n = trc_pk_ecdh(self._h, pp, peer_point.len(), out)
+        if n < 0:
+            _cn_free(out)
+            raise("PKey: ECDH failed (need an EC private key and a valid peer point)")
+        return _cn_take(out, n)
+
+    pub def dispose(self):
+        if self._live:
+            trc_pk_free(self._h)
+            self._live = false
