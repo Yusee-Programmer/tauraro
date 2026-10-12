@@ -1,0 +1,909 @@
+# std.encoding.pdf -- a small PDF 1.7 writer.
+# tauraro-cpp-shim: pdf_native.c
+#
+# Pages with text in the twelve standard Latin fonts (Helvetica, Times,
+# Courier and their bold/italic variants -- no embedding needed), exact text
+# measurement and word-wrapped text boxes, vector graphics (lines, rectangles,
+# rounded rectangles, ellipses, polygons, Bezier paths, dashes, transparency,
+# transforms), raster images (any std.image Image, with alpha as a soft mask;
+# JPEG files embedded as-is), links (URLs and pages), bookmarks and document
+# metadata. Content and image streams are Flate-compressed.
+#
+# Coordinates are PDF points (1/72 inch) with the origin at the bottom-left
+# corner of the page. Text is UTF-8; characters outside Windows-1252 (the
+# standard fonts' WinAnsiEncoding) print as "?".
+#
+# Usage:
+#   from std.encoding.pdf import PdfDocument, PDF_HELVETICA_BOLD, PDF_FILL
+#   mut doc = PdfDocument.init()
+#   doc.title = "Report"
+#   mut page = doc.add_page_a4()
+#   page.set_font(PDF_HELVETICA_BOLD, 24.0)
+#   page.text(72.0, 770.0, "Quarterly report")
+#   page.set_fill_color(30, 90, 200)
+#   page.rect(72.0, 700.0, 200.0, 40.0, PDF_FILL)
+#   doc.save("report.pdf")?
+
+from std.core.string import StringBuilder
+from std.image.mod import Image
+from std.sys.datetime import DateTime
+from std.io.file import File
+
+extern "C":
+    def trc_pdf_deflate_bound(n: int) -> int
+    def trc_pdf_deflate(data: Pointer[char], n: int, out: Pointer[char]) -> int
+    def trc_pdf_jpeg_info(data: Pointer[char], n: int, info: Pointer[int]) -> int
+    def trc_pdf_split_rgba(rgba: Pointer[char], npix: int, rgb: Pointer[char], alpha: Pointer[char]) -> int
+    def trc_pdf_text_width(font: int, s: Pointer[char], n: int) -> int
+    def _tr_c_malloc(size: int) -> Pointer[char]
+    def _tr_c_free(ptr: Pointer[char])
+    def _tr_str_wrap_len(s: Pointer[char], blen: int) -> str
+    def sin(x: float) -> float
+    def cos(x: float) -> float
+
+# Standard fonts.
+pub const PDF_HELVETICA = 0
+pub const PDF_HELVETICA_BOLD = 1
+pub const PDF_HELVETICA_OBLIQUE = 2
+pub const PDF_HELVETICA_BOLD_OBLIQUE = 3
+pub const PDF_TIMES = 4
+pub const PDF_TIMES_BOLD = 5
+pub const PDF_TIMES_ITALIC = 6
+pub const PDF_TIMES_BOLD_ITALIC = 7
+pub const PDF_COURIER = 8
+pub const PDF_COURIER_BOLD = 9
+pub const PDF_COURIER_OBLIQUE = 10
+pub const PDF_COURIER_BOLD_OBLIQUE = 11
+
+# Paint modes for shapes and paths.
+pub const PDF_STROKE = 1
+pub const PDF_FILL = 2
+pub const PDF_FILL_STROKE = 3
+
+# Text box alignment.
+pub const PDF_ALIGN_LEFT = 0
+pub const PDF_ALIGN_CENTER = 1
+pub const PDF_ALIGN_RIGHT = 2
+pub const PDF_ALIGN_JUSTIFY = 3
+
+pub def pdf_font_name(font: int) -> str:
+    if font == 1: return "Helvetica-Bold"
+    if font == 2: return "Helvetica-Oblique"
+    if font == 3: return "Helvetica-BoldOblique"
+    if font == 4: return "Times-Roman"
+    if font == 5: return "Times-Bold"
+    if font == 6: return "Times-Italic"
+    if font == 7: return "Times-BoldItalic"
+    if font == 8: return "Courier"
+    if font == 9: return "Courier-Bold"
+    if font == 10: return "Courier-Oblique"
+    if font == 11: return "Courier-BoldOblique"
+    return "Helvetica"
+
+# Font constant for a PostScript name ("Times-Bold"), or -1.
+pub def pdf_font_by_name(name: str) -> int:
+    mut i = 0
+    while i < 12:
+        if pdf_font_name(i) == name: return i
+        i = i + 1
+    return -1
+
+# ── encoding helpers ────────────────────────────────────────────────────────
+
+def _byte(s: str, i: int) -> int:
+    mut p = s as Pointer[char]
+    unsafe:
+        return (p.offset(i).read() as int) & 255
+
+# Compact decimal for content streams: at most 3 decimals, no trailing zeros.
+pub def pdf_num(v: float) -> str:
+    mut neg = v < 0.0
+    mut a = v
+    if neg: a = 0.0 - v
+    mut n = (a * 1000.0 + 0.5) as int
+    mut ip = n / 1000
+    mut fp = n % 1000
+    mut s = f"{ip}"
+    if fp > 0:
+        mut d = f"{fp}"
+        while d.len() < 3: d = "0" + d
+        while d.ends_with("0"): d = d.slice(0, d.len() - 1)
+        s = s + "." + d
+    if neg and n > 0: s = "-" + s
+    return s
+
+# Unicode code points of UTF-8 text (invalid bytes are taken as Latin-1).
+def _codepoints(s: str) -> List[int]:
+    mut out: List[int] = []
+    mut n = s.len()
+    mut i = 0
+    while i < n:
+        mut c = _byte(s, i)
+        mut need = 0
+        mut cp = c
+        if c >= 0xF0 and c < 0xF8:
+            need = 3
+            cp = c & 7
+        elif c >= 0xE0 and c < 0xF0:
+            need = 2
+            cp = c & 15
+        elif c >= 0xC2 and c < 0xE0:
+            need = 1
+            cp = c & 31
+        mut ok = i + need < n
+        mut k = 1
+        while ok and k <= need:
+            mut cc = _byte(s, i + k)
+            if (cc & 0xC0) != 0x80: ok = false
+            else: cp = (cp << 6) | (cc & 63)
+            k = k + 1
+        if need > 0 and ok:
+            out.append(cp)
+            i = i + need + 1
+        else:
+            out.append(c)
+            i = i + 1
+    return out
+
+def _winansi_cp(cp: int) -> int:
+    if cp < 0x80: return cp
+    if cp >= 0xA0 and cp <= 0xFF: return cp
+    if cp == 0x20AC: return 0x80
+    if cp == 0x201A: return 0x82
+    if cp == 0x0192: return 0x83
+    if cp == 0x201E: return 0x84
+    if cp == 0x2026: return 0x85
+    if cp == 0x2020: return 0x86
+    if cp == 0x2021: return 0x87
+    if cp == 0x02C6: return 0x88
+    if cp == 0x2030: return 0x89
+    if cp == 0x0160: return 0x8A
+    if cp == 0x2039: return 0x8B
+    if cp == 0x0152: return 0x8C
+    if cp == 0x017D: return 0x8E
+    if cp == 0x2018: return 0x91
+    if cp == 0x2019: return 0x92
+    if cp == 0x201C: return 0x93
+    if cp == 0x201D: return 0x94
+    if cp == 0x2022: return 0x95
+    if cp == 0x2013: return 0x96
+    if cp == 0x2014: return 0x97
+    if cp == 0x02DC: return 0x98
+    if cp == 0x2122: return 0x99
+    if cp == 0x0161: return 0x9A
+    if cp == 0x203A: return 0x9B
+    if cp == 0x0153: return 0x9C
+    if cp == 0x017E: return 0x9E
+    if cp == 0x0178: return 0x9F
+    return 0x3F
+
+# UTF-8 text -> WinAnsiEncoding bytes (tabs become a space, newlines are kept,
+# other control characters are dropped).
+pub def pdf_winansi(s: str) -> str:
+    mut cps = _codepoints(s)
+    mut sb = StringBuilder.init(len(cps) + 1)
+    mut i = 0
+    while i < len(cps):
+        mut cp = cps[i]
+        if cp == 9: sb.append_char(32)
+        elif cp == 10: sb.append_char(10)
+        elif cp >= 32: sb.append_char(_winansi_cp(cp))
+        i = i + 1
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+# A PDF literal string "( ... )" from raw bytes.
+def _lit(bytes: str) -> str:
+    mut sb = StringBuilder.init(bytes.len() + 8)
+    sb.append("(")
+    mut i = 0
+    while i < bytes.len():
+        mut c = _byte(bytes, i)
+        if c == 40 or c == 41 or c == 92:
+            sb.append_char(92)
+            sb.append_char(c)
+        elif c == 13: sb.append("\\r")
+        elif c == 10: sb.append("\\n")
+        else: sb.append_char(c)
+        i = i + 1
+    sb.append(")")
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+def _hex2(v: int) -> str:
+    mut hx = "0123456789ABCDEF"
+    return hx.slice((v >> 4) & 15, ((v >> 4) & 15) + 1) + hx.slice(v & 15, (v & 15) + 1)
+
+# A PDF text string (UTF-16BE with BOM, hex form) for metadata and bookmarks.
+def _text_string(s: str) -> str:
+    mut cps = _codepoints(s)
+    mut sb = StringBuilder.init(4 * len(cps) + 8)
+    sb.append("<FEFF")
+    mut i = 0
+    while i < len(cps):
+        mut cp = cps[i]
+        if cp >= 0x10000:
+            mut v = cp - 0x10000
+            mut hi = 0xD800 + (v >> 10)
+            mut lo = 0xDC00 + (v & 0x3FF)
+            sb.append(_hex2(hi >> 8))
+            sb.append(_hex2(hi & 255))
+            sb.append(_hex2(lo >> 8))
+            sb.append(_hex2(lo & 255))
+        else:
+            sb.append(_hex2(cp >> 8))
+            sb.append(_hex2(cp & 255))
+        i = i + 1
+    sb.append(">")
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+# zlib-compress bytes (FlateDecode).
+pub def pdf_deflate(data: str) -> str:
+    mut n = data.len()
+    mut cap = trc_pdf_deflate_bound(n)
+    mut buf = _tr_c_malloc(cap + 1)
+    mut m = trc_pdf_deflate(data as Pointer[char], n, buf)
+    if m < 0:
+        _tr_c_free(buf)
+        return ""
+    unsafe: buf.offset(m).write('\0')
+    return _tr_str_wrap_len(buf, m)
+
+def _ws_width(font: int, bytes: str) -> int:
+    return trc_pdf_text_width(font, bytes as Pointer[char], bytes.len())
+
+# Width of `text` in points in one of the standard fonts.
+pub def pdf_text_width(font: int, size: float, text: str) -> float:
+    mut enc = pdf_winansi(text)
+    return (_ws_width(font, enc) as float) * size / 1000.0
+
+def _split_words(s: str) -> List[str]:
+    mut out: List[str] = []
+    mut start = 0
+    mut i = 0
+    while i <= s.len():
+        if i == s.len() or _byte(s, i) == 32:
+            if i > start: out.append(s.slice(start, i))
+            start = i + 1
+        i = i + 1
+    return out
+
+def _split_lines(s: str) -> List[str]:
+    mut out: List[str] = []
+    mut start = 0
+    mut i = 0
+    while i <= s.len():
+        if i == s.len() or _byte(s, i) == 10:
+            mut line = s.slice(start, i)
+            if line.ends_with("\r"): line = line.slice(0, line.len() - 1)
+            out.append(line)
+            start = i + 1
+        i = i + 1
+    return out
+
+# Break UTF-8 text into lines no wider than `width` points (WinAnsi-encoded
+# lines are returned). Explicit newlines start new lines; a word wider than
+# the box is broken between characters.
+def _wrap_encoded(font: int, size: float, text: str, width: float, para_end: List[int]) -> List[str]:
+    mut out: List[str] = []
+    mut limit = (width * 1000.0 / size) as int
+    mut paras = _split_lines(pdf_winansi(text))
+    mut p = 0
+    while p < len(paras):
+        mut words = _split_words(paras[p])
+        mut line = ""
+        mut w = 0
+        while w < len(words):
+            mut word = words[w]
+            mut cand = word
+            if line.len() > 0: cand = line + " " + word
+            if _ws_width(font, cand) <= limit:
+                line = cand
+            elif line.len() > 0:
+                out.append(line)
+                para_end.append(0)
+                line = ""
+                continue
+            else:
+                # a single word wider than the box: hard-break it
+                mut cut = 1
+                while cut < word.len() and _ws_width(font, word.slice(0, cut + 1)) <= limit:
+                    cut = cut + 1
+                out.append(word.slice(0, cut))
+                para_end.append(0)
+                words[w] = word.slice(cut, word.len())
+                continue
+            w = w + 1
+        out.append(line)
+        para_end.append(1)
+        p = p + 1
+    return out
+
+pub def pdf_wrap_text(font: int, size: float, text: str, width: float) -> List[str]:
+    mut ends: List[int] = []
+    return _wrap_encoded(font, size, text, width, ends)
+
+# ── images ──────────────────────────────────────────────────────────────────
+
+# An image registered with PdfDocument.add_image / add_jpeg; draw it on any page.
+pub class PdfImage:
+    pub width:  int
+    pub height: int
+    pub index:  int
+
+# ── pages ───────────────────────────────────────────────────────────────────
+
+pub class PdfPage:
+    pub width:  float
+    pub height: float
+    pub index:  int
+    _ops:       StringBuilder
+    _font:      int
+    _size:      float
+    _font_mask: int
+    _images:    List[int]
+    _gs:        List[str]          # ExtGState dictionaries, named /GS0, /GS1...
+    _an_rect:   List[str]
+    _an_uri:    List[str]
+    _an_page:   List[int]
+    _an_y:      List[float]
+
+extend PdfPage:
+    def _op(self, s: str):
+        self._ops.append(s)
+        self._ops.append("\n")
+
+    # Append raw content-stream operators.
+    pub def raw(self, ops: str): self._op(ops)
+
+    # ── text ──
+    pub def set_font(self, font: int, size: float):
+        mut f = font
+        if f < 0 or f > 11: f = 0
+        self._font = f
+        self._size = size
+
+    pub def font(self) -> int: return self._font
+    pub def font_size(self) -> float: return self._size
+
+    pub def text_width(self, text: str) -> float:
+        return pdf_text_width(self._font, self._size, text)
+
+    def _show(self, x: float, y: float, enc: str, word_space: float):
+        self._font_mask = self._font_mask | (1 << self._font)
+        mut ws = ""
+        if word_space != 0.0: ws = pdf_num(word_space) + " Tw "
+        mut cmd = f"BT /F{self._font} " + pdf_num(self._size) + " Tf " + pdf_num(x) + " " + pdf_num(y) + " Td " + ws + _lit(enc) + " Tj ET"
+        if word_space != 0.0: cmd = cmd + " 0 Tw"
+        self._op(cmd)
+
+    # Text with its baseline starting at (x, y).
+    pub def text(self, x: float, y: float, text: str):
+        self._show(x, y, pdf_winansi(text).replace("\n", " "), 0.0)
+
+    # Text aligned on (x, y): PDF_ALIGN_LEFT / CENTER / RIGHT.
+    pub def text_aligned(self, x: float, y: float, text: str, align: int):
+        mut enc = pdf_winansi(text).replace("\n", " ")
+        mut w = (_ws_width(self._font, enc) as float) * self._size / 1000.0
+        mut x0 = x
+        if align == PDF_ALIGN_CENTER: x0 = x - w / 2.0
+        elif align == PDF_ALIGN_RIGHT: x0 = x - w
+        self._show(x0, y, enc, 0.0)
+
+    # Word-wrapped text in a box `width` wide whose top edge is at y. The first
+    # baseline sits one font size below y and lines are size * line_height
+    # apart. Justified text leaves the last line of each paragraph ragged.
+    # Returns y - lines * size * line_height (where the next line would start).
+    pub def text_box(self, x: float, y: float, width: float, text: str, align: int, line_height: float) -> float:
+        mut ends: List[int] = []
+        mut lines = _wrap_encoded(self._font, self._size, text, width, ends)
+        mut lead = self._size * line_height
+        mut base = y - self._size
+        mut i = 0
+        while i < len(lines):
+            mut ln = lines[i]
+            mut w = (_ws_width(self._font, ln) as float) * self._size / 1000.0
+            mut x0 = x
+            mut ws = 0.0
+            if align == PDF_ALIGN_CENTER: x0 = x + (width - w) / 2.0
+            elif align == PDF_ALIGN_RIGHT: x0 = x + width - w
+            elif align == PDF_ALIGN_JUSTIFY and ends[i] == 0:
+                mut spaces = 0
+                mut k = 0
+                while k < ln.len():
+                    if _byte(ln, k) == 32: spaces = spaces + 1
+                    k = k + 1
+                if spaces > 0: ws = (width - w) / (spaces as float)
+            if ln.len() > 0: self._show(x0, base, ln, ws)
+            base = base - lead
+            i = i + 1
+        return y - (len(lines) as float) * lead
+
+    # ── colours and graphics state ──
+    pub def set_fill_color(self, r: int, g: int, b: int):
+        self._op(pdf_num((r as float) / 255.0) + " " + pdf_num((g as float) / 255.0) + " " + pdf_num((b as float) / 255.0) + " rg")
+
+    pub def set_stroke_color(self, r: int, g: int, b: int):
+        self._op(pdf_num((r as float) / 255.0) + " " + pdf_num((g as float) / 255.0) + " " + pdf_num((b as float) / 255.0) + " RG")
+
+    pub def set_fill_gray(self, level: float): self._op(pdf_num(level) + " g")
+    pub def set_stroke_gray(self, level: float): self._op(pdf_num(level) + " G")
+    pub def set_line_width(self, w: float): self._op(pdf_num(w) + " w")
+    # 0 butt, 1 round, 2 projecting square
+    pub def set_line_cap(self, cap: int): self._op(f"{cap} J")
+    # 0 miter, 1 round, 2 bevel
+    pub def set_line_join(self, join: int): self._op(f"{join} j")
+    pub def set_dash(self, on: float, off: float): self._op("[" + pdf_num(on) + " " + pdf_num(off) + "] 0 d")
+    pub def clear_dash(self): self._op("[] 0 d")
+
+    # Constant opacity (0..1) for fills and strokes.
+    pub def set_alpha(self, fill: float, stroke: float):
+        mut d = "<< /Type /ExtGState /ca " + pdf_num(fill) + " /CA " + pdf_num(stroke) + " >>"
+        mut idx = -1
+        mut i = 0
+        while i < len(self._gs):
+            if self._gs[i] == d: idx = i
+            i = i + 1
+        if idx < 0:
+            idx = len(self._gs)
+            self._gs.append(d)
+        self._op(f"/GS{idx} gs")
+
+    pub def save(self): self._op("q")
+    pub def restore(self): self._op("Q")
+    pub def translate(self, dx: float, dy: float): self._op("1 0 0 1 " + pdf_num(dx) + " " + pdf_num(dy) + " cm")
+    pub def scale(self, sx: float, sy: float): self._op(pdf_num(sx) + " 0 0 " + pdf_num(sy) + " 0 0 cm")
+    # Rotate the coordinate system counter-clockwise by `degrees` around the origin.
+    pub def rotate(self, degrees: float):
+        mut r = degrees * 3.141592653589793 / 180.0
+        mut c = cos(r)
+        mut s = sin(r)
+        self._op(pdf_num(c) + " " + pdf_num(s) + " " + pdf_num(0.0 - s) + " " + pdf_num(c) + " 0 0 cm")
+
+    # ── paths ──
+    pub def move_to(self, x: float, y: float): self._op(pdf_num(x) + " " + pdf_num(y) + " m")
+    pub def line_to(self, x: float, y: float): self._op(pdf_num(x) + " " + pdf_num(y) + " l")
+    pub def curve_to(self, x1: float, y1: float, x2: float, y2: float, x3: float, y3: float):
+        self._op(pdf_num(x1) + " " + pdf_num(y1) + " " + pdf_num(x2) + " " + pdf_num(y2) + " " + pdf_num(x3) + " " + pdf_num(y3) + " c")
+    pub def close_path(self): self._op("h")
+
+    # Paint the current path: PDF_STROKE, PDF_FILL or PDF_FILL_STROKE.
+    pub def paint(self, mode: int):
+        if mode == PDF_FILL: self._op("f")
+        elif mode == PDF_FILL_STROKE: self._op("B")
+        else: self._op("S")
+
+    # Use the current path as the clipping region for what follows (wrap in save/restore).
+    pub def clip(self): self._op("W n")
+
+    pub def line(self, x1: float, y1: float, x2: float, y2: float):
+        self._op(pdf_num(x1) + " " + pdf_num(y1) + " m " + pdf_num(x2) + " " + pdf_num(y2) + " l S")
+
+    pub def rect(self, x: float, y: float, w: float, h: float, mode: int):
+        self._op(pdf_num(x) + " " + pdf_num(y) + " " + pdf_num(w) + " " + pdf_num(h) + " re")
+        self.paint(mode)
+
+    pub def rounded_rect(self, x: float, y: float, w: float, h: float, r: float, mode: int):
+        mut rr = r
+        if rr > w / 2.0: rr = w / 2.0
+        if rr > h / 2.0: rr = h / 2.0
+        mut k = rr * 0.5522847498
+        self.move_to(x + rr, y)
+        self.line_to(x + w - rr, y)
+        self.curve_to(x + w - rr + k, y, x + w, y + rr - k, x + w, y + rr)
+        self.line_to(x + w, y + h - rr)
+        self.curve_to(x + w, y + h - rr + k, x + w - rr + k, y + h, x + w - rr, y + h)
+        self.line_to(x + rr, y + h)
+        self.curve_to(x + rr - k, y + h, x, y + h - rr + k, x, y + h - rr)
+        self.line_to(x, y + rr)
+        self.curve_to(x, y + rr - k, x + rr - k, y, x + rr, y)
+        self.close_path()
+        self.paint(mode)
+
+    pub def ellipse(self, cx: float, cy: float, rx: float, ry: float, mode: int):
+        mut kx = rx * 0.5522847498
+        mut ky = ry * 0.5522847498
+        self.move_to(cx + rx, cy)
+        self.curve_to(cx + rx, cy + ky, cx + kx, cy + ry, cx, cy + ry)
+        self.curve_to(cx - kx, cy + ry, cx - rx, cy + ky, cx - rx, cy)
+        self.curve_to(cx - rx, cy - ky, cx - kx, cy - ry, cx, cy - ry)
+        self.curve_to(cx + kx, cy - ry, cx + rx, cy - ky, cx + rx, cy)
+        self.close_path()
+        self.paint(mode)
+
+    pub def circle(self, cx: float, cy: float, r: float, mode: int):
+        self.ellipse(cx, cy, r, r, mode)
+
+    # Closed polygon through points [x0, y0, x1, y1, ...].
+    pub def polygon(self, points: List[float], mode: int):
+        if len(points) < 4: return
+        self.move_to(points[0], points[1])
+        mut i = 2
+        while i + 1 < len(points):
+            self.line_to(points[i], points[i + 1])
+            i = i + 2
+        self.close_path()
+        self.paint(mode)
+
+    # Open polyline through points [x0, y0, x1, y1, ...].
+    pub def polyline(self, points: List[float]):
+        if len(points) < 4: return
+        self.move_to(points[0], points[1])
+        mut i = 2
+        while i + 1 < len(points):
+            self.line_to(points[i], points[i + 1])
+            i = i + 2
+        self._op("S")
+
+    # ── images and links ──
+    # Draw an image scaled into the rectangle (x, y, w, h).
+    pub def draw_image(self, img: PdfImage, x: float, y: float, w: float, h: float):
+        mut seen = false
+        mut i = 0
+        while i < len(self._images):
+            if self._images[i] == img.index: seen = true
+            i = i + 1
+        if not seen: self._images.append(img.index)
+        self._op("q " + pdf_num(w) + " 0 0 " + pdf_num(h) + " " + pdf_num(x) + " " + pdf_num(y) + f" cm /Im{img.index} Do Q")
+
+    def _rect_str(x: float, y: float, w: float, h: float) -> str:
+        return "[" + pdf_num(x) + " " + pdf_num(y) + " " + pdf_num(x + w) + " " + pdf_num(y + h) + "]"
+
+    # Clickable area opening a URL.
+    pub def link_url(self, x: float, y: float, w: float, h: float, url: str):
+        self._an_rect.append(PdfPage._rect_str(x, y, w, h))
+        self._an_uri.append(url)
+        self._an_page.append(-1)
+        self._an_y.append(0.0)
+
+    # Clickable area jumping to page `page_index` (0-based), scrolled to `y`.
+    pub def link_page(self, x: float, y: float, w: float, h: float, page_index: int, dest_y: float):
+        self._an_rect.append(PdfPage._rect_str(x, y, w, h))
+        self._an_uri.append("")
+        self._an_page.append(page_index)
+        self._an_y.append(dest_y)
+
+    # The page's content stream so far (uncompressed).
+    pub def content(self) -> str: return self._ops.as_str()
+
+# ── document ────────────────────────────────────────────────────────────────
+
+pub class PdfDocument:
+    pub title:    str
+    pub author:   str
+    pub subject:  str
+    pub keywords: str
+    pub creator:  str
+    pub producer: str
+    pub creation_date: str     # "D:YYYYMMDDHHmmSSZ"; filled in at output when empty
+    pub compress: bool
+    pub pages:    List[PdfPage]
+    _im_data:     List[str]
+    _im_filter:   List[str]
+    _im_cs:       List[str]
+    _im_extra:    List[str]
+    _im_w:        List[int]
+    _im_h:        List[int]
+    _im_mask:     List[str]    # compressed alpha plane, "" when opaque
+    _bm_title:    List[str]
+    _bm_page:     List[int]
+    _bm_y:        List[float]
+
+def _pad10(n: int) -> str:
+    mut s = f"{n}"
+    while s.len() < 10: s = "0" + s
+    return s
+
+def _two(n: int) -> str:
+    if n < 10: return f"0{n}"
+    return f"{n}"
+
+extend PdfDocument:
+    pub def init() -> PdfDocument:
+        mut d = PdfDocument()
+        d.title = ""
+        d.author = ""
+        d.subject = ""
+        d.keywords = ""
+        d.creator = ""
+        d.producer = "Tauraro std.encoding.pdf"
+        d.creation_date = ""
+        d.compress = true
+        d.pages = []
+        d._im_data = []
+        d._im_filter = []
+        d._im_cs = []
+        d._im_extra = []
+        d._im_w = []
+        d._im_h = []
+        d._im_mask = []
+        d._bm_title = []
+        d._bm_page = []
+        d._bm_y = []
+        return d
+
+    # A new page of w x h points (A4 is 595.28 x 841.89, Letter 612 x 792).
+    pub def add_page(self, w: float, h: float) -> PdfPage:
+        mut p = PdfPage()
+        p.width = w
+        p.height = h
+        p.index = len(self.pages)
+        p._ops = StringBuilder.init(1024)
+        p._font = 0
+        p._size = 12.0
+        p._font_mask = 0
+        p._images = []
+        p._gs = []
+        p._an_rect = []
+        p._an_uri = []
+        p._an_page = []
+        p._an_y = []
+        self.pages.append(p)
+        return p
+
+    pub def add_page_a4(self) -> PdfPage: return self.add_page(595.28, 841.89)
+    pub def add_page_letter(self) -> PdfPage: return self.add_page(612.0, 792.0)
+    pub def page_count(self) -> int: return len(self.pages)
+
+    def _add_raw_image(self, w: int, h: int, data: str, filter: str, cs: str, extra: str, mask: str) -> PdfImage:
+        mut im = PdfImage()
+        im.width = w
+        im.height = h
+        im.index = len(self._im_data)
+        self._im_data.append(data)
+        self._im_filter.append(filter)
+        self._im_cs.append(cs)
+        self._im_extra.append(extra)
+        self._im_w.append(w)
+        self._im_h.append(h)
+        self._im_mask.append(mask)
+        return im
+
+    # Embed an RGBA image (std.image). Translucent pixels become a soft mask.
+    pub def add_image(self, img: Image) -> PdfImage:
+        mut npix = img.width * img.height
+        mut rgb = _tr_c_malloc(3 * npix + 1)
+        mut alpha = _tr_c_malloc(npix + 1)
+        mut src: Pointer[char] = img.pixels.data
+        mut translucent = trc_pdf_split_rgba(src, npix, rgb, alpha)
+        unsafe: rgb.offset(3 * npix).write('\0')
+        mut rgb_s = _tr_str_wrap_len(rgb, 3 * npix)
+        mut data = pdf_deflate(rgb_s)
+        mut mask = ""
+        if translucent != 0:
+            unsafe: alpha.offset(npix).write('\0')
+            mut a_s = _tr_str_wrap_len(alpha, npix)
+            mask = pdf_deflate(a_s)
+        else:
+            _tr_c_free(alpha)
+        return self._add_raw_image(img.width, img.height, data, "/FlateDecode", "/DeviceRGB", "", mask)
+
+    # Embed a JPEG file's bytes unchanged (DCTDecode).
+    pub def add_jpeg(self, data: str) throws str -> PdfImage:
+        mut info: List[int] = [0, 0, 0, 0]
+        mut ip = info as Pointer[int]
+        if trc_pdf_jpeg_info(data as Pointer[char], data.len(), ip) != 0: raise("pdf: not a JPEG file")
+        mut cs = "/DeviceRGB"
+        mut extra = ""
+        if info[2] == 1: cs = "/DeviceGray"
+        elif info[2] == 4:
+            cs = "/DeviceCMYK"
+            if info[3] != 0: extra = " /Decode [1 0 1 0 1 0 1 0]"
+        elif info[2] != 3: raise(f"pdf: unsupported JPEG with {info[2]} components")
+        return self._add_raw_image(info[0], info[1], data, "/DCTDecode", cs, extra, "")
+
+    # Outline entry (bookmark) jumping to page_index at height y.
+    pub def add_bookmark(self, title: str, page_index: int, y: float):
+        self._bm_title.append(title)
+        self._bm_page.append(page_index)
+        self._bm_y.append(y)
+
+    def _stream(self, out: StringBuilder, dict_extra: str, data: str, may_compress: bool):
+        mut body = data
+        mut filt = ""
+        if may_compress and self.compress and data.len() > 0:
+            mut z = pdf_deflate(data)
+            if z.len() > 0 and z.len() < data.len():
+                body = z
+                filt = " /Filter /FlateDecode"
+        mut n = body.len()
+        out.append(f"<< /Length {n}" + filt + dict_extra + " >>\nstream\n")
+        out.append(body)
+        out.append("\nendstream")
+
+    # Serialize the document.
+    pub def to_bytes(self) -> str:
+        mut npages = len(self.pages)
+        mut nimg = len(self._im_data)
+        mut next = 4                          # 1 catalog, 2 page tree, 3 info
+        mut used = 0
+        mut i = 0
+        while i < npages:
+            used = used | self.pages[i]._font_mask
+            i = i + 1
+        mut font_obj: List[int] = []
+        i = 0
+        while i < 12:
+            if (used & (1 << i)) != 0:
+                font_obj.append(next)
+                next = next + 1
+            else: font_obj.append(0)
+            i = i + 1
+        mut img_obj: List[int] = []
+        mut mask_obj: List[int] = []
+        i = 0
+        while i < nimg:
+            img_obj.append(next)
+            next = next + 1
+            if self._im_mask[i].len() > 0:
+                mask_obj.append(next)
+                next = next + 1
+            else: mask_obj.append(0)
+            i = i + 1
+        mut page_obj: List[int] = []
+        mut content_obj: List[int] = []
+        mut annot_first: List[int] = []
+        i = 0
+        while i < npages:
+            page_obj.append(next)
+            content_obj.append(next + 1)
+            next = next + 2
+            annot_first.append(next)
+            next = next + len(self.pages[i]._an_rect)
+            i = i + 1
+        mut nbm = len(self._bm_title)
+        mut outline_obj = 0
+        if nbm > 0:
+            outline_obj = next
+            next = next + 1 + nbm
+        mut nobj = next - 1
+
+        mut out = StringBuilder.init(4096)
+        mut offsets: List[int] = [0]
+        out.append("%PDF-1.7\n%")
+        out.append_char(0xE2)
+        out.append_char(0xE3)
+        out.append_char(0xCF)
+        out.append_char(0xD3)
+        out.append("\n")
+
+        # 1: catalog
+        offsets.append(out.len())
+        out.append("1 0 obj\n<< /Type /Catalog /Pages 2 0 R")
+        if nbm > 0: out.append(f" /Outlines {outline_obj} 0 R /PageMode /UseOutlines")
+        out.append(" >>\nendobj\n")
+        # 2: page tree
+        offsets.append(out.len())
+        out.append("2 0 obj\n<< /Type /Pages /Kids [")
+        i = 0
+        while i < npages:
+            if i > 0: out.append(" ")
+            out.append(f"{page_obj[i]} 0 R")
+            i = i + 1
+        out.append(f"] /Count {npages} >>\nendobj\n")
+        # 3: info
+        offsets.append(out.len())
+        out.append("3 0 obj\n<<")
+        if self.title.len() > 0: out.append(" /Title " + _text_string(self.title))
+        if self.author.len() > 0: out.append(" /Author " + _text_string(self.author))
+        if self.subject.len() > 0: out.append(" /Subject " + _text_string(self.subject))
+        if self.keywords.len() > 0: out.append(" /Keywords " + _text_string(self.keywords))
+        if self.creator.len() > 0: out.append(" /Creator " + _text_string(self.creator))
+        if self.producer.len() > 0: out.append(" /Producer " + _text_string(self.producer))
+        mut date = self.creation_date
+        if date.len() == 0:
+            mut now = DateTime.utc_now()
+            date = f"D:{now.year}" + _two(now.month) + _two(now.day) + _two(now.hour) + _two(now.minute) + _two(now.second) + "Z"
+        out.append(" /CreationDate " + _lit(date) + " >>\nendobj\n")
+        # fonts
+        i = 0
+        while i < 12:
+            if font_obj[i] != 0:
+                offsets.append(out.len())
+                out.append(f"{font_obj[i]} 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /" + pdf_font_name(i) + " /Encoding /WinAnsiEncoding >>\nendobj\n")
+            i = i + 1
+        # images
+        i = 0
+        while i < nimg:
+            offsets.append(out.len())
+            mut d = f" /Type /XObject /Subtype /Image /Width {self._im_w[i]} /Height {self._im_h[i]} /ColorSpace " + self._im_cs[i] + " /BitsPerComponent 8" + self._im_extra[i]
+            if mask_obj[i] != 0: d = d + f" /SMask {mask_obj[i]} 0 R"
+            out.append(f"{img_obj[i]} 0 obj\n")
+            d = d + " /Filter " + self._im_filter[i]
+            self._stream(out, d, self._im_data[i], false)
+            out.append("\nendobj\n")
+            if mask_obj[i] != 0:
+                offsets.append(out.len())
+                out.append(f"{mask_obj[i]} 0 obj\n")
+                mut md = f" /Type /XObject /Subtype /Image /Width {self._im_w[i]} /Height {self._im_h[i]} /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /FlateDecode"
+                self._stream(out, md, self._im_mask[i], false)
+                out.append("\nendobj\n")
+            i = i + 1
+        # pages
+        i = 0
+        while i < npages:
+            mut pg = self.pages[i]
+            offsets.append(out.len())
+            out.append(f"{page_obj[i]} 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 " + pdf_num(pg.width) + " " + pdf_num(pg.height) + f"] /Contents {content_obj[i]} 0 R /Resources <<")
+            if pg._font_mask != 0:
+                out.append(" /Font <<")
+                mut f = 0
+                while f < 12:
+                    if (pg._font_mask & (1 << f)) != 0: out.append(f" /F{f} {font_obj[f]} 0 R")
+                    f = f + 1
+                out.append(" >>")
+            if len(pg._images) > 0:
+                out.append(" /XObject <<")
+                mut k = 0
+                while k < len(pg._images):
+                    mut ix = pg._images[k]
+                    out.append(f" /Im{ix} {img_obj[ix]} 0 R")
+                    k = k + 1
+                out.append(" >>")
+            if len(pg._gs) > 0:
+                out.append(" /ExtGState <<")
+                mut g = 0
+                while g < len(pg._gs):
+                    out.append(f" /GS{g} " + pg._gs[g])
+                    g = g + 1
+                out.append(" >>")
+            out.append(" >>")
+            mut na = len(pg._an_rect)
+            if na > 0:
+                out.append(" /Annots [")
+                mut a = 0
+                while a < na:
+                    if a > 0: out.append(" ")
+                    out.append(f"{annot_first[i] + a} 0 R")
+                    a = a + 1
+                out.append("]")
+            out.append(" >>\nendobj\n")
+            offsets.append(out.len())
+            out.append(f"{content_obj[i]} 0 obj\n")
+            self._stream(out, "", pg._ops.as_str(), true)
+            out.append("\nendobj\n")
+            mut a2 = 0
+            while a2 < na:
+                offsets.append(out.len())
+                out.append(f"{annot_first[i] + a2} 0 obj\n<< /Type /Annot /Subtype /Link /Rect " + pg._an_rect[a2] + " /Border [0 0 0]")
+                mut tp = pg._an_page[a2]
+                if tp < 0: out.append(" /A << /S /URI /URI " + _lit(pg._an_uri[a2]) + " >>")
+                elif tp < npages: out.append(f" /Dest [{page_obj[tp]} 0 R /XYZ 0 " + pdf_num(pg._an_y[a2]) + " 0]")
+                out.append(" >>\nendobj\n")
+                a2 = a2 + 1
+            i = i + 1
+        # outlines
+        if nbm > 0:
+            offsets.append(out.len())
+            out.append(f"{outline_obj} 0 obj\n<< /Type /Outlines /First {outline_obj + 1} 0 R /Last {outline_obj + nbm} 0 R /Count {nbm} >>\nendobj\n")
+            mut b = 0
+            while b < nbm:
+                mut me = outline_obj + 1 + b
+                offsets.append(out.len())
+                out.append(f"{me} 0 obj\n<< /Title " + _text_string(self._bm_title[b]) + f" /Parent {outline_obj} 0 R")
+                if b > 0: out.append(f" /Prev {me - 1} 0 R")
+                if b + 1 < nbm: out.append(f" /Next {me + 1} 0 R")
+                mut tp2 = self._bm_page[b]
+                if tp2 < 0 or tp2 >= npages: tp2 = 0
+                if npages > 0: out.append(f" /Dest [{page_obj[tp2]} 0 R /XYZ 0 " + pdf_num(self._bm_y[b]) + " 0]")
+                out.append(" >>\nendobj\n")
+                b = b + 1
+        # cross-reference table and trailer
+        mut xref = out.len()
+        out.append(f"xref\n0 {nobj + 1}\n0000000000 65535 f \n")
+        i = 1
+        while i <= nobj:
+            out.append(_pad10(offsets[i]) + " 00000 n \n")
+            i = i + 1
+        out.append(f"trailer\n<< /Size {nobj + 1} /Root 1 0 R /Info 3 0 R >>\nstartxref\n{xref}\n%%EOF\n")
+        mut res = out.to_owned()
+        out.free()
+        return res
+
+    pub def save(self, path: str) throws str:
+        mut data = self.to_bytes()
+        if not File.write_text(path, data): raise("pdf: cannot write " + path)

@@ -1,0 +1,231 @@
+# tests/lang/117_pdf.tr
+# std.encoding.pdf: number formatting, WinAnsi conversion, font metrics,
+# word wrapping, Flate compression, and the structure of written documents
+# (every xref offset must land on its object). The compressed vectors were
+# checked with Python's zlib.decompress, the font widths against the Adobe
+# metrics, and sample documents were rendered with Ghostscript and poppler.
+
+from std.test import TestRunner
+from std.encoding.pdf import PdfDocument, PdfPage, PdfImage, pdf_num, pdf_winansi, pdf_text_width, pdf_wrap_text, pdf_deflate, pdf_font_name, pdf_font_by_name
+from std.encoding.pdf import PDF_HELVETICA, PDF_HELVETICA_BOLD, PDF_TIMES, PDF_COURIER, PDF_STROKE, PDF_FILL, PDF_FILL_STROKE, PDF_ALIGN_LEFT, PDF_ALIGN_CENTER, PDF_ALIGN_RIGHT, PDF_ALIGN_JUSTIFY
+from std.encoding.hex import Hex
+from std.image.mod import Image
+from std.image.jpeg import encode_jpeg
+from std.io.file import File
+from std.sys.fs import Fs
+
+def test_numbers(t: TestRunner):
+    t.section("numbers")
+    t.assert_eq_str(pdf_num(0.0), "0", "zero")
+    t.assert_eq_str(pdf_num(1.5), "1.5", "one decimal")
+    t.assert_eq_str(pdf_num(-0.25), "-0.25", "negative")
+    t.assert_eq_str(pdf_num(595.28), "595.28", "A4 width")
+    t.assert_eq_str(pdf_num(1.0 / 3.0), "0.333", "rounded to 3 decimals")
+    t.assert_eq_str(pdf_num(-0.0001), "0", "tiny negative is 0")
+    t.assert_eq_str(pdf_num(72.0), "72", "integer")
+    t.assert_eq_str(pdf_num(0.05), "0.05", "leading zero kept")
+
+def test_text(t: TestRunner):
+    t.section("text encoding and metrics")
+    t.assert_eq_str(Hex.encode(pdf_winansi("A€“”—é")), "418093949" + "7e9", "WinAnsi specials")
+    t.assert_eq_str(pdf_winansi("x中y"), "x?y", "unmappable -> ?")
+    t.assert_eq_str(Hex.encode(pdf_winansi("a\tb\nc")), "6120620a63", "tab -> space, newline kept")
+    t.assert_eq_float(pdf_text_width(PDF_HELVETICA, 12.0, "Hello"), 27.336, 0.0001, "Helvetica width")
+    t.assert_eq_float(pdf_text_width(PDF_HELVETICA_BOLD, 10.0, "Hello"), 24.45, 0.0001, "Helvetica-Bold width")
+    t.assert_eq_float(pdf_text_width(PDF_TIMES, 10.0, "Hello"), 22.22, 0.0001, "Times width")
+    t.assert_eq_float(pdf_text_width(PDF_COURIER, 10.0, "Hello"), 30.0, 0.0001, "Courier width")
+    t.assert_eq_float(pdf_text_width(PDF_HELVETICA, 1000.0, "Ünïcode €"), 4558.0, 0.001, "Latin-1 and Euro widths")
+    t.assert_eq_str(pdf_font_name(PDF_TIMES), "Times-Roman", "font name")
+    t.assert_eq_int(pdf_font_by_name("Courier-Bold"), 9, "font by name")
+    t.assert_eq_int(pdf_font_by_name("Comic Sans"), -1, "unknown font")
+
+    mut text = "The quick brown fox jumps over the lazy dog. Pack my box with five dozen liquor jugs.\nNew paragraph."
+    mut lines = pdf_wrap_text(PDF_HELVETICA, 12.0, text, 150.0)
+    t.assert_true(len(lines) >= 4, "wrapped into several lines")
+    mut ok = true
+    mut i = 0
+    while i < len(lines):
+        if pdf_text_width(PDF_HELVETICA, 12.0, lines[i]) > 150.0: ok = false
+        i = i + 1
+    t.assert_true(ok, "every line fits the width")
+    t.assert_eq_str(lines[len(lines) - 1], "New paragraph.", "newline starts a paragraph")
+    t.assert_eq_str(lines[0], "The quick brown fox jumps", "first line (142.7pt of 150)")
+    mut long_word = pdf_wrap_text(PDF_COURIER, 10.0, "abcdefghijklmnop", 30.0)
+    t.assert_eq_int(len(long_word), 4, "over-long word is hard-broken")
+    t.assert_eq_str(long_word[0], "abcde", "5 Courier chars per 30pt at 10pt")
+
+def test_deflate(t: TestRunner):
+    t.section("flate")
+    t.assert_eq_str(Hex.encode(pdf_deflate("hello")), "7801cb48cdc9c90700062c0215", "small input")
+    mut cs = "BT /F0 12 Tf 72 720 Td (Hello) Tj ET\nBT /F0 12 Tf 72 700 Td (Hello) Tj ET\nBT /F0 12 Tf 72 680 Td (Hello) Tj ET\n"
+    t.assert_eq_str(Hex.encode(pdf_deflate(cs)), "7801730a51d07733503034520849533037022203859014050d8fd49c9c7c4d85902c05d7102e0c4506442832b3c0a20800b64a1a8c", "content stream with back-references")
+    t.assert_eq_str(Hex.encode(pdf_deflate("")), "7801030000000001", "empty input")
+    mut big = ""
+    mut i = 0
+    while i < 2000:
+        big = big + "0 0 1 rg 10 10 m 20 20 l S\n"
+        i = i + 1
+    mut z = pdf_deflate(big)
+    t.assert_true(z.len() * 20 < big.len(), "repetitive data compresses > 20x")
+
+# Every xref entry must point at "N 0 obj", and startxref at "xref".
+def check_xref(t: TestRunner, pdf: str, label: str):
+    mut sx = pdf.find("startxref\n")
+    t.assert_true(sx > 0, label + ": startxref present")
+    mut rest = pdf.slice(sx + 10, pdf.len())
+    mut nl = rest.find("\n")
+    mut xoff = int(rest.slice(0, nl))
+    t.assert_eq_str(pdf.slice(xoff, xoff + 4), "xref", label + ": startxref offset")
+    mut hdr = pdf.slice(xoff + 5, xoff + 40)
+    mut hl = hdr.find("\n")
+    mut count = int(hdr.slice(2, hl))
+    mut entries = xoff + 5 + hl + 1 + 20
+    mut ok = true
+    mut n = 1
+    while n < count:
+        mut e = pdf.slice(entries + (n - 1) * 20, entries + (n - 1) * 20 + 10)
+        mut off = int(e)
+        mut want = f"{n} 0 obj"
+        if pdf.slice(off, off + want.len()) != want:
+            ok = false
+            print("  bad xref entry " + want)
+        n = n + 1
+    t.assert_true(ok, label + f": all {count - 1} xref offsets land on their objects")
+    t.assert_true(pdf.ends_with("%%EOF\n"), label + ": %%EOF trailer")
+
+def test_document(t: TestRunner):
+    t.section("document")
+    mut doc = PdfDocument.init()
+    doc.compress = false
+    doc.creation_date = "D:20260101120000Z"
+    doc.title = "Test — Ü"
+    mut p = doc.add_page(200.0, 100.0)
+    p.set_font(PDF_HELVETICA, 12.0)
+    p.text(10.0, 80.0, "Hi (there)")
+    p.set_fill_color(255, 0, 0)
+    p.rect(10.0, 10.0, 50.0, 20.0, PDF_FILL)
+    p.set_alpha(0.5, 0.5)
+    p.set_alpha(0.5, 0.5)
+    p.set_alpha(0.25, 1.0)
+    p.link_url(10.0, 70.0, 60.0, 15.0, "https://example.com/a(b)")
+    mut p2 = doc.add_page_letter()
+    p2.set_font(PDF_COURIER, 10.0)
+    p2.text_aligned(306.0, 400.0, "mid", PDF_ALIGN_CENTER)
+    p2.link_page(0.0, 0.0, 10.0, 10.0, 0, 100.0)
+    doc.add_bookmark("Start", 0, 100.0)
+    doc.add_bookmark("Second", 1, 792.0)
+    t.assert_eq_int(doc.page_count(), 2, "page count")
+    t.assert_eq_str(p.content(), "BT /F0 12 Tf 10 80 Td (Hi \\(there\\)) Tj ET\n1 0 0 rg\n10 10 50 20 re\nf\n/GS0 gs\n/GS0 gs\n/GS1 gs\n", "content stream operators")
+    t.assert_eq_str(p2.content(), "BT /F8 10 Tf 297 400 Td (mid) Tj ET\n", "centered text position")
+    mut pdf = doc.to_bytes()
+    t.assert_true(pdf.starts_with("%PDF-1.7\n%"), "header")
+    check_xref(t, pdf, "plain")
+    t.assert_true(pdf.find("/BaseFont /Helvetica /Encoding /WinAnsiEncoding") > 0, "Helvetica resource")
+    t.assert_true(pdf.find("/BaseFont /Courier ") > 0, "Courier resource")
+    t.assert_true(pdf.find("/BaseFont /Times") < 0, "unused fonts are not written")
+    t.assert_true(pdf.find("/Title <FEFF005400650073007400202014002000DC>") > 0, "UTF-16BE title")
+    t.assert_true(pdf.find("/CreationDate (D:20260101120000Z)") > 0, "creation date")
+    t.assert_true(pdf.find("/URI (https://example.com/a\\(b\\))") > 0, "URI link escaped")
+    t.assert_true(pdf.find("/GS1 << /Type /ExtGState /ca 0.25 /CA 1 >>") > 0, "ExtGState registered once per value")
+    t.assert_true(pdf.find("/Outlines") > 0 and pdf.find("/Count 2") > 0, "outline tree")
+    t.assert_true(pdf.find("/MediaBox [0 0 612 792]") > 0, "letter media box")
+    t.assert_true(pdf.find("/Dest [") > 0, "internal link destination")
+    t.assert_true(pdf.find("/Filter /FlateDecode") < 0, "compress = false leaves streams plain")
+
+    doc.compress = true
+    mut zpdf = doc.to_bytes()
+    check_xref(t, zpdf, "compressed")
+    t.assert_true(zpdf.find("/Filter /FlateDecode") > 0, "content streams compressed")
+
+def test_text_box(t: TestRunner):
+    t.section("text box")
+    mut doc = PdfDocument.init()
+    mut p = doc.add_page_a4()
+    p.set_font(PDF_TIMES, 10.0)
+    mut y = p.text_box(50.0, 700.0, 120.0, "one two three four five six seven eight nine ten eleven twelve", PDF_ALIGN_JUSTIFY, 1.5)
+    mut lines = pdf_wrap_text(PDF_TIMES, 10.0, "one two three four five six seven eight nine ten eleven twelve", 120.0)
+    t.assert_eq_float(y, 700.0 - (len(lines) as float) * 15.0, 0.0001, "returned y")
+    mut c = p.content()
+    t.assert_true(c.find(" Tw (") > 0, "justified lines set word spacing")
+    t.assert_true(c.find("BT /F4 10 Tf 50 690 Td ") == 0, "first baseline one size below the top")
+    mut last = lines[len(lines) - 1]
+    t.assert_true(c.find("Td (" + last + ") Tj ET") > 0, "last line stays ragged")
+    mut q = doc.add_page_a4()
+    q.set_font(PDF_HELVETICA, 10.0)
+    q.text_box(0.0, 100.0, 100.0, "right", PDF_ALIGN_RIGHT, 1.0)
+    mut rw = pdf_text_width(PDF_HELVETICA, 10.0, "right")
+    t.assert_true(q.content().starts_with("BT /F0 10 Tf " + pdf_num(100.0 - rw) + " 90 Td"), "right alignment")
+
+def test_images(t: TestRunner) throws str:
+    t.section("images")
+    mut doc = PdfDocument.init()
+    mut p = doc.add_page(100.0, 100.0)
+    mut opaque = Image.init(2, 2)
+    mut x = 0
+    while x < 4:
+        opaque.set_pixel(x % 2, x / 2, 10, 20, 30, 255)
+        x = x + 1
+    mut a = doc.add_image(opaque)
+    mut clear = Image.init(3, 1)
+    mut b = doc.add_image(clear)
+    t.assert_eq_int(a.width, 2, "image width")
+    t.assert_eq_int(b.index, 1, "image index")
+    p.draw_image(a, 0.0, 0.0, 50.0, 50.0)
+    p.draw_image(b, 50.0, 0.0, 50.0, 50.0)
+    p.draw_image(a, 0.0, 50.0, 10.0, 10.0)
+    mut jb, jn = encode_jpeg(opaque, 90)
+    mut j = doc.add_jpeg(jb)?
+    t.assert_eq_int(j.height, 2, "JPEG height from SOF")
+    p.draw_image(j, 50.0, 50.0, 20.0, 20.0)
+    mut bad: Result[PdfImage, str] = doc.add_jpeg("not a jpeg")
+    t.assert_true(bad.is_err, "non-JPEG rejected")
+    mut pdf = doc.to_bytes()
+    check_xref(t, pdf, "images")
+    t.assert_true(pdf.find("/Width 2 /Height 2 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /FlateDecode") > 0, "RGB image XObject")
+    t.assert_true(pdf.find("/SMask") > 0, "translucent image gets a soft mask")
+    t.assert_true(pdf.find("/Filter /DCTDecode") > 0, "JPEG passed through")
+    t.assert_true(pdf.find(jb) > 0, "JPEG bytes embedded unchanged")
+    t.assert_true(pdf.find("/XObject << /Im0 ") > 0, "page XObject resources")
+    t.assert_true(p.content().find("q 50 0 0 50 0 0 cm /Im0 Do Q") == 0, "image placement")
+
+    mut path = "/tmp/tauraro_117_pdf_test.pdf"
+    doc.save(path)?
+    t.assert_eq_int(File.read_text(path).len(), pdf.len(), "saved file is byte-exact (binary-safe)")
+    Fs.delete(path)
+
+def test_shapes(t: TestRunner):
+    t.section("shapes")
+    mut doc = PdfDocument.init()
+    mut p = doc.add_page(100.0, 100.0)
+    p.circle(50.0, 50.0, 10.0, PDF_STROKE)
+    p.set_dash(3.0, 2.0)
+    p.polygon([0.0, 0.0, 10.0, 0.0, 5.0, 8.0], PDF_FILL_STROKE)
+    p.clear_dash()
+    p.save()
+    p.translate(5.0, 6.0)
+    p.rotate(90.0)
+    p.scale(2.0, 2.0)
+    p.restore()
+    p.line(0.0, 0.0, 1.0, 1.0)
+    mut c = p.content()
+    t.assert_true(c.starts_with("60 50 m\n60 55.523 55.523 60 50 60 c\n"), "circle as Bezier arcs")
+    t.assert_true(c.find("[3 2] 0 d\n0 0 m\n10 0 l\n5 8 l\nh\nB\n[] 0 d\n") > 0, "dashed polygon")
+    t.assert_true(c.find("q\n1 0 0 1 5 6 cm\n0 1 -1 0 0 0 cm\n2 0 0 2 0 0 cm\nQ\n") > 0, "transforms")
+    t.assert_true(c.ends_with("0 0 m 1 1 l S\n"), "line")
+
+def main():
+    mut t = TestRunner.init("117_pdf")
+    test_numbers(t)
+    test_text(t)
+    test_deflate(t)
+    test_document(t)
+    test_text_box(t)
+    mut r: Result[bool, str] = run_images(t)
+    t.assert_true(r.is_ok, "image tests ran")
+    if r.is_err: print(r.err)
+    test_shapes(t)
+    t.summary()
+
+def run_images(t: TestRunner) throws str -> bool:
+    test_images(t)?
+    return true
