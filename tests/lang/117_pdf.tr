@@ -188,7 +188,7 @@ def test_images(t: TestRunner) throws str:
     t.assert_true(pdf.find("/XObject << /Im0 ") > 0, "page XObject resources")
     t.assert_true(p.content().find("q 50 0 0 50 0 0 cm /Im0 Do Q") == 0, "image placement")
 
-    mut path = "/tmp/tauraro_117_pdf_test.pdf"
+    mut path = "build/tauraro_117_pdf_test.pdf"
     doc.save(path)?
     t.assert_eq_int(File.read_text(path).len(), pdf.len(), "saved file is byte-exact (binary-safe)")
     Fs.delete(path)

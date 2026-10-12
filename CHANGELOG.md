@@ -63,6 +63,11 @@ added here as each phase lands.
 - `from` stays a reserved word (it starts import statements and lifetime clauses).
 
 ### Added
+- **`tauraroc doc`** — API documentation from source (public constants, functions, classes with
+  their fields and `extend` methods, enums, interfaces, and their comments) as Markdown or HTML,
+  per file or for whole directory trees. **`tauraroc cov`** / **`--coverage`** — line coverage:
+  gcov instrumentation with `#line` mapping to `.tr` sources, a per-file report with missed lines,
+  and LCOV output. (`tauraroc fmt` already covers formatting.)
 - **`std.sys.sandbox`** — pledge-style promises (`stdio rpath wpath cpath inet unix dns proc
   thread exec id error ...`) enforced with seccomp-BPF on Linux (open flags and socket families
   checked), custom syscall allow / deny lists, filesystem `Unveil` via Landlock, and native

@@ -18,7 +18,10 @@ def write(path: str, text: str): File.write_text(path, text)
 def build_lib(t: TestRunner, dir: str, name: str, src: str) -> bool:
     mut tr = dir + "/" + name + "_src.tr"
     write(tr, src)
-    mut cmd = "./tauraroc " + tr + " --lib -o " + dir + "/" + name
+    # cmd.exe (Windows system()) does not run "./x"; the binary is tauraroc.exe there
+    mut exe = "./tauraroc"
+    if dylib_extension() == ".dll": exe = ".\\tauraroc.exe"
+    mut cmd = exe + " " + tr + " --lib -o " + dir + "/" + name
     mut rc = Process.system(cmd)
     t.assert_eq_int(rc, 0, "built " + name)
     return rc == 0

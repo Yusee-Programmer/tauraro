@@ -245,7 +245,26 @@ backends — see the note above — so array-heavy firmware stays heap-free ever
 |---|---|
 | `tauraroc fmt [-w] <file>` | Format source (to stdout, or in place with `-w`). |
 | `tauraroc lint <file>` | Analyze and report warnings/errors (like `--check`). |
+| `tauraroc doc <file-or-dir>... [-o DIR] [--html]` | API documentation from source: every `pub const` / `def` / `class` (fields and `extend` methods) / `enum` / `interface` with the comment block above it and the module's leading comment. Markdown on stdout, or one page per module plus an index in `DIR` (`--html` writes HTML, default `docs/api`). |
+| `tauraroc cov <file> [--lcov FILE] [--include-std] [options]` | Build with coverage instrumentation, run, and print per-file line coverage with the missed lines; `--lcov` also writes an LCOV tracefile (for genhtml, Codecov, editors). `std/` modules are left out unless `--include-std`. |
 | `tauraroc --version` | Print the compiler version. |
+
+### Coverage
+
+`--coverage` builds with the C compiler's gcov instrumentation at `-O0` and emits `#line` directives,
+so gcov reports `.tr` line numbers; `tauraroc cov` adds the run and the report:
+
+```text
+$ tauraroc cov app.tr --lcov coverage.info
+...program output...
+
+File       Lines   Hit  Cover  Missing
+app.tr        12     8  66.7%  3, 9-11
+TOTAL         12     8  66.7%
+```
+
+Requires `gcov` (GCC) or `llvm-cov gcov` (clang). Whether a line ran is exact; execution counts can
+include a loop's condition re-check on the line after it.
 
 ---
 
