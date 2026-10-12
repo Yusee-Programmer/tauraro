@@ -1,0 +1,416 @@
+# std.math.decimal -- exact decimal arithmetic (money, measurements, parsing).
+#
+# A `Decimal` is coefficient * 10^exponent with an arbitrary-precision
+# integer coefficient, so 0.1 + 0.2 is exactly 0.3 and amounts never pick up
+# binary floating-point error. Addition, subtraction and multiplication are
+# exact; division and rounding take an explicit number of decimal places and
+# a rounding mode:
+#
+#   ROUND_HALF_EVEN   banker's rounding (default for money)
+#   ROUND_HALF_UP     0.5 rounds away from zero
+#   ROUND_HALF_DOWN   0.5 rounds toward zero
+#   ROUND_DOWN        truncate toward zero
+#   ROUND_UP          away from zero
+#   ROUND_FLOOR       toward -infinity
+#   ROUND_CEILING     toward +infinity
+#
+# Usage:
+#   from std.math.decimal import Decimal, ROUND_HALF_UP
+#   mut price = Decimal.parse("19.99")?
+#   mut total = price.mul(Decimal.from_int(3))               # 59.97
+#   mut tax   = total.mul(Decimal.parse("0.075")?).quantize(2, ROUND_HALF_UP)   # 4.50
+#   mut each  = Decimal.parse("10")?.div(Decimal.from_int(3), 4, ROUND_HALF_EVEN)?   # 3.3333
+#   print(total.add(tax).to_str())                           # 64.47
+
+from std.math.bigint import BigInt
+from std.core.string import StringBuilder
+
+pub const ROUND_HALF_EVEN = 0
+pub const ROUND_HALF_UP = 1
+pub const ROUND_HALF_DOWN = 2
+pub const ROUND_DOWN = 3
+pub const ROUND_UP = 4
+pub const ROUND_FLOOR = 5
+pub const ROUND_CEILING = 6
+
+def _dc_byte(s: str, i: int) -> int:
+    mut p = s as Pointer[char]
+    unsafe:
+        return (p.offset(i).read() as int) & 255
+
+pub def _dc_pow10(k: int) -> BigInt:
+    mut r = BigInt.from_int(1)
+    if k <= 0: return r
+    mut chunk = k
+    while chunk >= 18:
+        r = r.mul(BigInt.from_int(1000000000000000000))
+        chunk = chunk - 18
+    mut small = 1
+    while chunk > 0:
+        small = small * 10
+        chunk = chunk - 1
+    return r.mul(BigInt.from_int(small))
+
+# n / d rounded with `mode` (d != 0).
+pub def _dc_round_div(n: BigInt, d: BigInt, mode: int) -> BigInt:
+    mut q = n.div(d)
+    mut r = n.rem(d)
+    if r.is_zero(): return q
+    # sign of the exact quotient
+    mut neg = (n.is_negative() and not d.is_negative()) or (not n.is_negative() and d.is_negative())
+    mut away = false
+    if mode == ROUND_DOWN:
+        away = false
+    elif mode == ROUND_UP:
+        away = true
+    elif mode == ROUND_FLOOR:
+        away = neg
+    elif mode == ROUND_CEILING:
+        away = not neg
+    else:
+        mut twice = r.abs().mul(BigInt.from_int(2))
+        mut c = twice.cmp(d.abs())
+        if c > 0:
+            away = true
+        elif c < 0:
+            away = false
+        else:
+            if mode == ROUND_HALF_UP: away = true
+            elif mode == ROUND_HALF_DOWN: away = false
+            else:
+                # half-even: away only when q is odd
+                mut lastdig = q.abs().rem(BigInt.from_int(2))
+                away = not lastdig.is_zero()
+    if away:
+        if neg: return q.sub(BigInt.from_int(1))
+        return q.add(BigInt.from_int(1))
+    return q
+
+pub class Decimal:
+    pub coef: BigInt     # signed coefficient
+    pub exp:  int        # value = coef * 10^exp
+
+extend Decimal:
+    pub def make(coef: BigInt, exp: int) -> Decimal:
+        mut d = Decimal()
+        d.coef = coef
+        d.exp = exp
+        return d
+
+    pub def zero() -> Decimal: return Decimal.make(BigInt.zero(), 0)
+
+    pub def from_int(n: int) -> Decimal: return Decimal.make(BigInt.from_int(n), 0)
+
+    pub def from_bigint(n: BigInt) -> Decimal: return Decimal.make(n, 0)
+
+    # Parse "123", "-0.0045", "1.5e3", "+2E-2". Raises on anything else.
+    pub def parse(text: str) throws str -> Decimal:
+        mut s = text.trim()
+        mut n = s.len()
+        if n == 0: raise("Decimal: empty string")
+        mut i = 0
+        mut neg = false
+        mut c0 = _dc_byte(s, 0)
+        if c0 == 45 or c0 == 43:
+            neg = c0 == 45
+            i = 1
+        mut digits = StringBuilder.init(n + 1)
+        mut frac = 0
+        mut seen_dot = false
+        mut ndig = 0
+        while i < n:
+            mut c = _dc_byte(s, i)
+            if c >= 48 and c <= 57:
+                digits.append_char(c)
+                ndig = ndig + 1
+                if seen_dot: frac = frac + 1
+            elif c == 46 and not seen_dot:
+                seen_dot = true
+            elif c == 95 and ndig > 0:
+                i = i + 1
+                continue
+            else:
+                break
+            i = i + 1
+        if ndig == 0:
+            digits.free()
+            raise(f"Decimal: invalid number '{text}'")
+        mut e = 0
+        if i < n:
+            mut ce = _dc_byte(s, i)
+            if ce != 101 and ce != 69:
+                digits.free()
+                raise(f"Decimal: invalid number '{text}'")
+            i = i + 1
+            mut eneg = false
+            if i < n and (_dc_byte(s, i) == 45 or _dc_byte(s, i) == 43):
+                eneg = _dc_byte(s, i) == 45
+                i = i + 1
+            mut edig = 0
+            while i < n:
+                mut cd = _dc_byte(s, i)
+                if cd < 48 or cd > 57:
+                    digits.free()
+                    raise(f"Decimal: invalid exponent in '{text}'")
+                e = e * 10 + (cd - 48)
+                if e > 100000000:
+                    digits.free()
+                    raise("Decimal: exponent out of range")
+                edig = edig + 1
+                i = i + 1
+            if edig == 0:
+                digits.free()
+                raise(f"Decimal: invalid exponent in '{text}'")
+            if eneg: e = 0 - e
+        mut dtext = digits.to_owned()
+        digits.free()
+        mut coef = BigInt.from_str(dtext)
+        if neg: coef = coef.negate()
+        return Decimal.make(coef, e - frac)
+
+    # Plain notation (never scientific): "-0.0045", "1500".
+    pub def to_str(self) -> str:
+        mut neg = self.coef.is_negative()
+        mut digits = self.coef.abs().to_str()
+        mut sb = StringBuilder.init(digits.len() + 8)
+        if neg: sb.append("-")
+        if self.exp >= 0:
+            sb.append(digits)
+            if not self.coef.is_zero():
+                mut z = 0
+                while z < self.exp:
+                    sb.append_char(48)
+                    z = z + 1
+        else:
+            mut places = 0 - self.exp
+            if digits.len() <= places:
+                sb.append("0.")
+                mut pad = places - digits.len()
+                while pad > 0:
+                    sb.append_char(48)
+                    pad = pad - 1
+                sb.append(digits)
+            else:
+                mut cut = digits.len() - places
+                mut ip = digits.slice(0, cut)
+                mut fp = digits.slice(cut, digits.len())
+                sb.append(ip)
+                sb.append(".")
+                sb.append(fp)
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    # Scientific notation with the exact digits: "1.2345E+3".
+    pub def to_sci_str(self) -> str:
+        if self.coef.is_zero(): return "0"
+        mut neg = self.coef.is_negative()
+        mut digits = self.coef.abs().to_str()
+        mut adj = self.exp + digits.len() - 1
+        mut sb = StringBuilder.init(digits.len() + 12)
+        if neg: sb.append("-")
+        mut first = digits.slice(0, 1)
+        sb.append(first)
+        if digits.len() > 1:
+            sb.append(".")
+            mut rest = digits.slice(1, digits.len())
+            sb.append(rest)
+        sb.append("E")
+        if adj >= 0: sb.append("+")
+        mut es = f"{adj}"
+        sb.append(es)
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    pub def is_zero(self) -> bool: return self.coef.is_zero()
+    pub def is_negative(self) -> bool: return self.coef.is_negative()
+
+    # -1, 0 or 1.
+    pub def sign(self) -> int:
+        if self.coef.is_zero(): return 0
+        if self.coef.is_negative(): return -1
+        return 1
+
+    pub def neg(self) -> Decimal: return Decimal.make(self.coef.negate(), self.exp)
+    pub def abs(self) -> Decimal: return Decimal.make(self.coef.abs(), self.exp)
+
+    # Number of digits after the decimal point in this representation.
+    pub def scale(self) -> int:
+        if self.exp >= 0: return 0
+        return 0 - self.exp
+
+    # Same value, coefficient scaled so the exponent is `e` (e <= exp).
+    def _at_exp(self, e: int) -> BigInt:
+        if e >= self.exp: return self.coef
+        return self.coef.mul(_dc_pow10(self.exp - e))
+
+    pub def add(self, other: Decimal) -> Decimal:
+        mut e = self.exp
+        if other.exp < e: e = other.exp
+        return Decimal.make(self._at_exp(e).add(other._at_exp(e)), e)
+
+    pub def sub(self, other: Decimal) -> Decimal:
+        mut e = self.exp
+        if other.exp < e: e = other.exp
+        return Decimal.make(self._at_exp(e).sub(other._at_exp(e)), e)
+
+    pub def mul(self, other: Decimal) -> Decimal:
+        return Decimal.make(self.coef.mul(other.coef), self.exp + other.exp)
+
+    # Exact quotient rounded to `places` decimals. Raises on division by zero.
+    pub def div(self, other: Decimal, places: int, mode: int) throws str -> Decimal:
+        if other.coef.is_zero(): raise("Decimal: division by zero")
+        # self/other * 10^places = (ca * 10^(ea - eb + places)) / cb
+        mut shift = self.exp - other.exp + places
+        mut num = self.coef
+        mut den = other.coef
+        if shift >= 0:
+            num = num.mul(_dc_pow10(shift))
+        else:
+            den = den.mul(_dc_pow10(0 - shift))
+        return Decimal.make(_dc_round_div(num, den, mode), 0 - places)
+
+    # Quotient with `digits` significant digits.
+    pub def div_sig(self, other: Decimal, digits: int, mode: int) throws str -> Decimal:
+        if other.coef.is_zero(): raise("Decimal: division by zero")
+        if self.coef.is_zero(): return Decimal.zero()
+        # estimate the magnitude: digits(a) + ea - digits(b) - eb
+        mut mag = self.coef.abs().to_str().len() + self.exp - other.coef.abs().to_str().len() - other.exp
+        mut places = digits - mag
+        mut q = self.div(other, places, mode)?
+        return q.round_sig(digits, mode)
+
+    # Integer remainder-style modulo: self - other * trunc(self / other).
+    pub def rem(self, other: Decimal) throws str -> Decimal:
+        if other.coef.is_zero(): raise("Decimal: division by zero")
+        mut q = self.div(other, 0, ROUND_DOWN)?
+        return self.sub(q.mul(other))
+
+    # Round to `places` decimals (may be negative: -2 rounds to hundreds).
+    pub def quantize(self, places: int, mode: int) -> Decimal:
+        mut target = 0 - places
+        if self.exp >= target:
+            return Decimal.make(self._at_exp(target), target)
+        mut den = _dc_pow10(target - self.exp)
+        return Decimal.make(_dc_round_div(self.coef, den, mode), target)
+
+    # Round to `digits` significant digits.
+    pub def round_sig(self, digits: int, mode: int) -> Decimal:
+        if self.coef.is_zero() or digits <= 0: return self
+        mut n = self.coef.abs().to_str().len()
+        if n <= digits: return self
+        mut drop = n - digits
+        mut r = Decimal.make(_dc_round_div(self.coef, _dc_pow10(drop), mode), self.exp + drop)
+        # rounding up can add a digit (999 -> 1000)
+        if r.coef.abs().to_str().len() > digits: return r.round_sig(digits, mode)
+        return r
+
+    # Drop trailing zeros of the coefficient (1.500 -> 1.5, 100 -> 1E+2).
+    pub def normalize(self) -> Decimal:
+        if self.coef.is_zero(): return Decimal.zero()
+        mut c = self.coef
+        mut e = self.exp
+        mut ten = BigInt.from_int(10)
+        while c.rem(ten).is_zero():
+            c = c.div(ten)
+            e = e + 1
+        return Decimal.make(c, e)
+
+    # Integer part toward zero.
+    pub def trunc(self) -> BigInt:
+        if self.exp >= 0: return self._at_exp(0)
+        return self.coef.div(_dc_pow10(0 - self.exp))
+
+    pub def floor(self) -> BigInt:
+        return self.quantize(0, ROUND_FLOOR).coef
+
+    pub def ceil(self) -> BigInt:
+        return self.quantize(0, ROUND_CEILING).coef
+
+    pub def to_int(self) -> int: return self.trunc().to_int()
+
+    pub def to_float(self) -> float:
+        mut s = self.to_sci_str()
+        return float(s.replace("E", "e"))
+
+    # Integer power, exact (n <= 0 gives 1).
+    pub def pow(self, n: int) -> Decimal:
+        if n <= 0: return Decimal.from_int(1)
+        return Decimal.make(self.coef.pow(n), self.exp * n)
+
+    # Square root to `places` decimals (raises for negative input).
+    pub def sqrt(self, places: int) throws str -> Decimal:
+        if self.coef.is_negative(): raise("Decimal: square root of a negative number")
+        if self.coef.is_zero(): return Decimal.make(BigInt.zero(), 0 - places)
+        # floor(sqrt(self * 10^(2*places))) by Newton on integers, then round
+        mut scaled = self.quantize(2 * places + 2, ROUND_DOWN)   # exact enough for the extra digit
+        mut n = scaled.coef
+        # n = value * 10^(2p+2): isqrt gives sqrt * 10^(p+1)
+        mut x = Decimal._isqrt(n)
+        mut r = Decimal.make(x, 0 - (places + 1))
+        return r.quantize(places, ROUND_HALF_EVEN)
+
+    pub def _isqrt(n: BigInt) -> BigInt:
+        if n.is_zero(): return n
+        mut digits = n.to_str().len()
+        mut x = _dc_pow10((digits + 1) / 2)
+        mut two = BigInt.from_int(2)
+        while true:
+            mut y = x.add(n.div(x)).div(two)
+            if y.cmp(x) >= 0: break
+            x = y
+        return x
+
+    # -1, 0, 1
+    pub def cmp(self, other: Decimal) -> int:
+        mut e = self.exp
+        if other.exp < e: e = other.exp
+        return self._at_exp(e).cmp(other._at_exp(e))
+
+    pub def eq(self, other: Decimal) -> bool: return self.cmp(other) == 0
+    pub def lt(self, other: Decimal) -> bool: return self.cmp(other) < 0
+    pub def le(self, other: Decimal) -> bool: return self.cmp(other) <= 0
+    pub def gt(self, other: Decimal) -> bool: return self.cmp(other) > 0
+    pub def ge(self, other: Decimal) -> bool: return self.cmp(other) >= 0
+
+    pub def min(self, other: Decimal) -> Decimal:
+        if self.cmp(other) <= 0: return self
+        return other
+
+    pub def max(self, other: Decimal) -> Decimal:
+        if self.cmp(other) >= 0: return self
+        return other
+
+    pub def __add__(self, other: Decimal) -> Decimal: return self.add(other)
+    pub def __sub__(self, other: Decimal) -> Decimal: return self.sub(other)
+    pub def __mul__(self, other: Decimal) -> Decimal: return self.mul(other)
+    pub def __neg__(self) -> Decimal: return self.neg()
+    pub def __eq__(self, other: Decimal) -> bool: return self.cmp(other) == 0
+    pub def __lt__(self, other: Decimal) -> bool: return self.cmp(other) < 0
+    pub def __le__(self, other: Decimal) -> bool: return self.cmp(other) <= 0
+    pub def __gt__(self, other: Decimal) -> bool: return self.cmp(other) > 0
+    pub def __ge__(self, other: Decimal) -> bool: return self.cmp(other) >= 0
+    pub def __str__(self) -> str: return self.to_str()
+
+    # Split `self` into `n` parts that differ by at most one unit of `places`
+    # and add up exactly (e.g. splitting a bill: 100.00 / 3 -> 33.34, 33.33, 33.33).
+    pub def allocate(self, n: int, places: int) throws str -> List[Decimal]:
+        if n <= 0: raise("Decimal.allocate: n must be positive")
+        mut total = self.quantize(places, ROUND_HALF_EVEN)
+        mut units = total.coef
+        mut nn = BigInt.from_int(n)
+        mut base = units.div(nn)
+        mut extra = units.sub(base.mul(nn)).to_int()
+        mut out: List[Decimal] = []
+        mut i = 0
+        mut step = 1
+        if extra < 0:
+            step = -1
+            extra = 0 - extra
+        while i < n:
+            mut c = base
+            if i < extra: c = c.add(BigInt.from_int(step))
+            out.append(Decimal.make(c, 0 - places))
+            i = i + 1
+        return out

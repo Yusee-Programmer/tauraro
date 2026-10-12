@@ -46,6 +46,11 @@ added here as each phase lands.
 - `from` stays a reserved word (it starts import statements and lifetime clauses).
 
 ### Added
+- **`std.math.decimal`, `std.math.rational`, `std.math.bigfloat`** — exact decimal arithmetic
+  with seven rounding modes (quantize, significant digits, sqrt, money allocation), exact
+  fractions (`limit_denominator`, floor/ceil/round), and arbitrary-precision decimal floating
+  point with sqrt/exp/ln/pow, pi and e. Tested by `tests/lang/112_decimal_rational.tr`
+  against Python's `decimal` and `fractions`.
 - **`std.collections` additions** — `BitSet`, `RingBuffer[T]`, `SkipList[K, V]`, `IntervalTree[V]`,
   `Rope`, `SlotMap[T]` (generation-checked handles), `Arena` (bump/region allocator) and `Slab`
   (fixed-size block allocator). Tested by `tests/lang/111_collections3.tr`.

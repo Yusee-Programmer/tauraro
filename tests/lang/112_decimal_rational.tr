@@ -1,0 +1,148 @@
+# tests/lang/112_decimal_rational.tr
+# std.math.decimal, std.math.rational and std.math.bigfloat. Expected values
+# come from Python's decimal (rounding modes, 50-digit sqrt/exp/ln) and
+# fractions (limit_denominator) modules.
+
+from std.test import TestRunner
+from std.math.decimal import Decimal, ROUND_HALF_EVEN, ROUND_HALF_UP, ROUND_HALF_DOWN, ROUND_DOWN, ROUND_UP, ROUND_FLOOR, ROUND_CEILING
+from std.math.rational import Rational
+from std.math.bigfloat import BigFloat
+from std.math.bigint import BigInt
+
+def d(s: str) -> Decimal:
+    mut r: Result[Decimal, str] = Decimal.parse(s)
+    return r.ok
+
+def q(s: str, places: int, mode: int) -> str:
+    return d(s).quantize(places, mode).to_str()
+
+def rat(s: str) -> Rational:
+    mut r: Result[Rational, str] = Rational.parse(s)
+    return r.ok
+
+def test_decimal(t: TestRunner):
+    t.section("Decimal parse / format")
+    t.assert_eq_str(d("123.4500").to_str(), "123.4500", "keeps trailing zeros")
+    t.assert_eq_str(d("-0.0045").to_str(), "-0.0045", "small negative")
+    t.assert_eq_str(d("1.5e3").to_str(), "1500", "exponent")
+    t.assert_eq_str(d("2E-3").to_str(), "0.002", "negative exponent")
+    t.assert_eq_str(d("+7").to_str(), "7", "plus sign")
+    t.assert_eq_str(d("1_000_000.5").to_str(), "1000000.5", "underscores")
+    t.assert_eq_str(d("12345.678").to_sci_str(), "1.2345678E+4", "scientific")
+    t.assert_eq_str(d("100").normalize().to_sci_str(), "1E+2", "normalize")
+    t.assert_eq_int(d("1.250").scale(), 3, "scale")
+    mut bad: Result[Decimal, str] = Decimal.parse("12.3.4")
+    t.assert_true(bad.is_err, "two dots")
+    mut bad2: Result[Decimal, str] = Decimal.parse("1e")
+    t.assert_true(bad2.is_err, "missing exponent digits")
+    mut bad3: Result[Decimal, str] = Decimal.parse("abc")
+    t.assert_true(bad3.is_err, "not a number")
+
+    t.section("Decimal arithmetic")
+    t.assert_eq_str(d("0.1").add(d("0.2")).to_str(), "0.3", "0.1 + 0.2 is exact")
+    t.assert_true(d("0.1").add(d("0.2")).eq(d("0.30")), "equality ignores trailing zeros")
+    t.assert_eq_str(d("19.99").mul(Decimal.from_int(3)).to_str(), "59.97", "multiply")
+    t.assert_eq_str(d("10").sub(d("0.001")).to_str(), "9.999", "subtract")
+    mut dv: Result[Decimal, str] = d("10").div(Decimal.from_int(3), 4, ROUND_HALF_EVEN)
+    t.assert_eq_str(dv.ok.to_str(), "3.3333", "divide to 4 places")
+    mut dv2: Result[Decimal, str] = d("1").div(d("7"), 30, ROUND_HALF_EVEN)
+    t.assert_eq_str(dv2.ok.to_str(), "0.142857142857142857142857142857", "divide to 30 places")
+    mut dz: Result[Decimal, str] = d("1").div(Decimal.zero(), 2, ROUND_HALF_EVEN)
+    t.assert_true(dz.is_err, "division by zero")
+    mut ds: Result[Decimal, str] = d("2").div_sig(d("3"), 5, ROUND_HALF_EVEN)
+    t.assert_eq_str(ds.ok.to_str(), "0.66667", "significant-digit division")
+    mut rm: Result[Decimal, str] = d("7.5").rem(d("2"))
+    t.assert_eq_str(rm.ok.to_str(), "1.5", "remainder")
+    t.assert_eq_str(d("1.1").pow(3).to_str(), "1.331", "power")
+    mut sq: Result[Decimal, str] = d("2").sqrt(20)
+    t.assert_eq_str(sq.ok.to_str(), "1.41421356237309504880", "square root")
+    t.assert_true(d("1.5").lt(d("1.51")), "compare")
+    t.assert_eq_int(d("-3").cmp(d("2")), -1, "cmp negative")
+    t.assert_eq_str(d("-3.7").trunc().to_str(), "-3", "trunc")
+    t.assert_eq_str(d("-3.2").floor().to_str(), "-4", "floor")
+    t.assert_eq_str(d("3.2").ceil().to_str(), "4", "ceil")
+    t.assert_true(d("2.5").to_float() == 2.5, "to_float")
+    t.assert_eq_str(d("1234.5678").round_sig(3, ROUND_HALF_EVEN).to_sci_str(), "1.23E+3", "round_sig")
+    t.assert_eq_str(d("999.96").round_sig(3, ROUND_HALF_UP).to_str(), "1000", "round_sig carry")
+    mut parts: Result[List[Decimal], str] = d("100").allocate(3, 2)
+    t.assert_eq_str(parts.ok[0].to_str(), "33.34", "allocate first share")
+    t.assert_eq_str(parts.ok[2].to_str(), "33.33", "allocate last share")
+    t.assert_true(parts.ok[0].add(parts.ok[1]).add(parts.ok[2]).eq(d("100")), "shares add up exactly")
+
+    t.section("Decimal rounding modes (Python decimal)")
+    # modes: HALF_EVEN HALF_UP HALF_DOWN DOWN UP FLOOR CEILING
+    t.assert_eq_str(q("2.45", 1, ROUND_HALF_EVEN) + " " + q("2.45", 1, ROUND_HALF_UP) + " " + q("2.45", 1, ROUND_HALF_DOWN) + " " + q("2.45", 1, ROUND_DOWN) + " " + q("2.45", 1, ROUND_UP) + " " + q("2.45", 1, ROUND_FLOOR) + " " + q("2.45", 1, ROUND_CEILING), "2.4 2.5 2.4 2.4 2.5 2.4 2.5", "2.45")
+    t.assert_eq_str(q("-2.45", 1, ROUND_HALF_EVEN) + " " + q("-2.45", 1, ROUND_HALF_UP) + " " + q("-2.45", 1, ROUND_HALF_DOWN) + " " + q("-2.45", 1, ROUND_DOWN) + " " + q("-2.45", 1, ROUND_UP) + " " + q("-2.45", 1, ROUND_FLOOR) + " " + q("-2.45", 1, ROUND_CEILING), "-2.4 -2.5 -2.4 -2.4 -2.5 -2.5 -2.4", "-2.45")
+    t.assert_eq_str(q("2.451", 1, ROUND_HALF_EVEN) + " " + q("2.451", 1, ROUND_HALF_DOWN) + " " + q("2.451", 1, ROUND_DOWN), "2.5 2.5 2.4", "2.451")
+    t.assert_eq_str(q("1.005", 2, ROUND_HALF_EVEN) + " " + q("1.005", 2, ROUND_HALF_UP), "1.00 1.01", "1.005")
+    t.assert_eq_str(q("999.995", 2, ROUND_HALF_EVEN) + " " + q("999.995", 2, ROUND_HALF_DOWN), "1000.00 999.99", "999.995 carries")
+    t.assert_eq_str(q("-0.0049", 2, ROUND_FLOOR) + " " + q("-0.0049", 2, ROUND_UP), "-0.01 -0.01", "-0.0049")
+    t.assert_eq_str(q("1234.5", -2, ROUND_HALF_EVEN), "1200", "negative places round to hundreds")
+    t.assert_eq_str(q("3", 2, ROUND_HALF_EVEN), "3.00", "quantize pads")
+
+def test_rational(t: TestRunner):
+    t.section("Rational")
+    mut a = rat("1/3")
+    mut b = rat("1/6")
+    t.assert_eq_str(a.add(b).to_str(), "1/2", "1/3 + 1/6")
+    t.assert_eq_str(rat("6/-8").to_str(), "-3/4", "normalized sign and terms")
+    t.assert_eq_str(rat("0.125").to_str(), "1/8", "exact decimal")
+    t.assert_eq_str(rat("1.5e-3").to_str(), "3/2000", "exponent form")
+    t.assert_eq_str(rat("4/2").to_str(), "2", "integer shown without denominator")
+    t.assert_eq_str(a.mul(rat("3/7")).to_str(), "1/7", "multiply")
+    mut dv: Result[Rational, str] = a.div(rat("2/9"))
+    t.assert_eq_str(dv.ok.to_str(), "3/2", "divide")
+    mut dz: Result[Rational, str] = a.div(Rational.zero())
+    t.assert_true(dz.is_err, "division by zero")
+    mut zden: Result[Rational, str] = Rational.of(1, 0)
+    t.assert_true(zden.is_err, "zero denominator")
+    mut pw: Result[Rational, str] = rat("2/3").pow(-2)
+    t.assert_eq_str(pw.ok.to_str(), "9/4", "negative power")
+    t.assert_true(rat("1/3").lt(rat("0.34")), "compare")
+    t.assert_eq_str(rat("-7/2").floor().to_str(), "-4", "floor")
+    t.assert_eq_str(rat("-7/2").ceil().to_str(), "-3", "ceil")
+    t.assert_eq_str(rat("7/2").round().to_str(), "4", "round half even (3.5 -> 4)")
+    t.assert_eq_str(rat("5/2").round().to_str(), "2", "round half even (2.5 -> 2)")
+    t.assert_eq_str(rat("-7/2").frac().to_str(), "1/2", "frac")
+    t.assert_eq_str(rat("5/6").to_decimal_str(4), "0.8333", "to decimal")
+    t.assert_true(rat("1/4").to_float() == 0.25, "to_float")
+    t.assert_eq_str(Rational.from_float_str("3.14159").limit_denominator(1000).to_str(), "355/113", "limit_denominator pi")
+    t.assert_eq_str(rat("0.333").limit_denominator(10).to_str(), "1/3", "limit_denominator 0.333")
+    t.assert_true(rat("10/4").is_integer() == false and rat("10/5").is_integer(), "is_integer")
+
+def test_bigfloat(t: TestRunner):
+    t.section("BigFloat (50 significant digits)")
+    mut p = 50
+    t.assert_eq_str(BigFloat.pi(p).to_str(), "3.1415926535897932384626433832795028841971693993751", "pi")
+    mut two: Result[BigFloat, str] = BigFloat.parse("2", p)
+    mut s2: Result[BigFloat, str] = two.ok.sqrt()
+    t.assert_eq_str(s2.ok.to_str(), "1.4142135623730950488016887242096980785696718753769", "sqrt 2")
+    t.assert_eq_str(BigFloat.e(p).to_str(), "2.7182818284590452353602874713526624977572470937000", "e")
+    mut ten: Result[BigFloat, str] = BigFloat.parse("10", p)
+    mut l10: Result[BigFloat, str] = ten.ok.ln()
+    t.assert_eq_str(l10.ok.to_str(), "2.3025850929940456840179914546843642076011014886288", "ln 10")
+    mut l2: Result[BigFloat, str] = two.ok.ln()
+    t.assert_eq_str(l2.ok.to_str(), "0.69314718055994530941723212145817656807550013436026", "ln 2")
+    mut m35: Result[BigFloat, str] = BigFloat.parse("-3.5", p)
+    mut e35: Result[BigFloat, str] = m35.ok.exp()
+    t.assert_eq_str(e35.ok.to_str(), "0.030197383422318500739786292363619845071660532247657", "exp(-3.5)")
+    mut small: Result[BigFloat, str] = BigFloat.parse("0.00123", p)
+    mut ls: Result[BigFloat, str] = small.ok.ln()
+    t.assert_eq_str(ls.ok.to_str(), "-6.7007411095978109248279486634618877449816064159218", "ln 0.00123")
+    mut b15: Result[BigFloat, str] = BigFloat.parse("1.5", p)
+    mut y: Result[BigFloat, str] = BigFloat.parse("2.25", p)
+    mut pw: Result[BigFloat, str] = b15.ok.pow(y.ok)
+    t.assert_eq_str(pw.ok.to_str(), "2.4900343193257235829197781152407462092463159106923", "1.5 ^ 2.25")
+    mut third: Result[BigFloat, str] = BigFloat.from_int(1, 30).div(BigFloat.from_int(3, 30))
+    t.assert_eq_str(third.ok.to_str(), "0.333333333333333333333333333333", "1/3 to 30 digits")
+    mut neg: Result[BigFloat, str] = m35.ok.sqrt()
+    t.assert_true(neg.is_err, "sqrt of a negative raises")
+    mut lz: Result[BigFloat, str] = BigFloat.from_int(0, 10).ln()
+    t.assert_true(lz.is_err, "ln 0 raises")
+
+def main():
+    mut t = TestRunner.init("112_decimal_rational")
+    test_decimal(t)
+    test_rational(t)
+    test_bigfloat(t)
+    t.summary()

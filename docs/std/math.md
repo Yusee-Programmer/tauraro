@@ -393,3 +393,41 @@ print((a * b).to_str())    # 246913578246913578246913578
 mut neg = BigInt.from_int(-7).div(BigInt.from_int(2))
 print(neg.to_str())        # -3 (rounds toward zero, not floor -4)
 ```
+
+---
+
+## Exact and arbitrary-precision numbers — `std.math.decimal`, `std.math.rational`, `std.math.bigfloat`
+
+### Decimal
+
+Coefficient × 10^exponent with a `BigInt` coefficient: `+ - *` are exact; division and rounding take decimal places
+and a rounding mode (`ROUND_HALF_EVEN`, `ROUND_HALF_UP`, `ROUND_HALF_DOWN`, `ROUND_DOWN`, `ROUND_UP`, `ROUND_FLOOR`,
+`ROUND_CEILING`).
+
+```tauraro
+from std.math.decimal import Decimal, ROUND_HALF_UP
+mut total = Decimal.parse("19.99")?.mul(Decimal.from_int(3))          # 59.97
+mut tax = total.mul(Decimal.parse("0.075")?).quantize(2, ROUND_HALF_UP)  # 4.50
+mut shares = Decimal.parse("100")?.allocate(3, 2)?                     # 33.34, 33.33, 33.33
+```
+
+`parse` ("1.5e-3", underscores allowed), `from_int`, `to_str` (plain), `to_sci_str`, `add/sub/mul`,
+`div(o, places, mode)?`, `div_sig(o, digits, mode)?`, `rem(o)?`, `quantize(places, mode)` (negative places round to
+tens/hundreds), `round_sig(digits, mode)`, `normalize`, `sqrt(places)?`, `pow(n)`, `trunc/floor/ceil -> BigInt`,
+`to_int`, `to_float`, `cmp/eq/lt/le/gt/ge`, `min/max`, `neg/abs/sign/scale`, `allocate(n, places)?`. Operators
+`+ - * == < ...` work too. Zero has no sign (`-0.00` prints as `0.00`).
+
+### Rational
+
+`num/den` in lowest terms (`BigInt`s). `Rational.parse("3/4" | "-7" | "0.125" | "1e-3")?`, `of(n, d)?`, `from_int`,
+`from_decimal`, `add/sub/mul`, `div(o)?`, `inv()?`, `pow(n)?` (negative n allowed), `cmp/eq/lt/...`,
+`floor/ceil/round/trunc -> BigInt` (round is half-even), `frac`, `to_decimal(places, mode)`, `to_decimal_str(places)`,
+`to_float`, `to_str` ("n/d"), `is_integer`, `limit_denominator(max_den)` (continued fractions, like Python's).
+
+### BigFloat
+
+A `Decimal` rounded to `prec` significant digits after each operation: `BigFloat.parse(text, prec)?`, `from_int`,
+`add/sub/mul`, `div(o)?`, `sqrt()?`, `exp()?`, `ln()?`, `pow(y)?`, `pow_int(n)?`, `BigFloat.pi(prec)`,
+`BigFloat.e(prec)`, `to_str`, `to_sci_str`, `with_prec`. Checked against Python's `decimal` at 50 digits.
+
+Tested by `tests/lang/112_decimal_rational.tr`.
