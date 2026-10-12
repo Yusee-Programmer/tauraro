@@ -128,3 +128,35 @@ mut bmp_bytes, bmp_len = encode_bmp(img)
 mut from_bmp = decode_bmp(bmp_bytes, bmp_len)
 mut png_bytes, png_len = encode_png(from_bmp)
 ```
+
+---
+
+## JPEG — `std.image.jpeg`
+
+`decode_jpeg(data, len) -> Image` (width -1 on failure) / `decode_jpeg_checked(data, len)? -> Image` read baseline and
+progressive JPEGs (any subsampling, restart markers, grayscale/YCbCr/RGB/CMYK/YCCK); output is within a few levels of
+libjpeg. Lossless, arithmetic-coded and 12-bit files are rejected. `jpeg_orientation(data, len)` returns the EXIF
+orientation (1-8); apply it with `std.image.ops.apply_orientation`.
+`encode_jpeg(img, quality) -> (str, int)` writes baseline JFIF (4:2:0 below quality 90, 4:4:4 from 90);
+`encode_jpeg_opts(img, quality, subsample, gray)` chooses explicitly. Transparency is composited onto white.
+
+## GIF — `std.image.gif`
+
+`decode_gif(data, len)` (first frame), `decode_gif_animation(data, len)? -> GifAnimation` (`frames`, `delays` in ms,
+`loop_count`, `width`, `height`; frames are full composited canvases). `encode_gif(img, dither) -> (str, int)`;
+`GifEncoder.init(w, h, loop_count)` → `add_frame(img, delay_ms, dither)?` → `finish() -> (str, int)`. Images with
+≤ 256 colours keep them exactly; otherwise median-cut quantisation with optional Floyd-Steinberg dithering. Alpha < 128
+becomes transparent.
+
+## Operations — `std.image.ops`
+
+| Function | Description |
+|---|---|
+| `resize_image(img, w, h, filter)`, `thumbnail(img, max_w, max_h, filter)`, `scale(img, factor, filter)` | `FILTER_NEAREST`, `FILTER_BOX`, `FILTER_BILINEAR`, `FILTER_BICUBIC`, `FILTER_LANCZOS`; premultiplied alpha. (`resize` is a built-in name.) |
+| `grayscale`, `invert`, `brightness(d)`, `contrast(f)`, `gamma(g)`, `saturation(f)`, `sepia`, `threshold(level)`, `opacity(f)`, `posterize(levels)` | Colour adjustments. |
+| `gaussian_blur(sigma)`, `box_blur(radius)`, `unsharp_mask(sigma, amount, threshold)`, `sharpen`, `edges` (Sobel), `emboss`, `convolve(kernel, size, divisor, bias)?` | Filters. |
+| `flip_horizontal`, `flip_vertical`, `rotate90/180/270` (clockwise), `transpose_image`, `crop(x, y, w, h)?`, `apply_orientation(img, exif)` | Geometry. |
+| `solid(w, h, r, g, b, a)`, `fill(img, ...)`, `paste(base, top, x, y, opacity)`, `copy_image(img)` | Canvas helpers (`fill`/`paste` modify in place). |
+
+`std.image.decode` now also recognises JPEG and GIF. Codecs and filters are C (`std/image/image_native.c`). Tested by
+`tests/lang/114_image2.tr`; the codecs were cross-checked against Pillow on synthetic images and photos.

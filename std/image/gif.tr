@@ -1,0 +1,113 @@
+# std.image.gif -- GIF decode (incl. animation) and encode.
+#
+# decode_gif returns the first frame; decode_gif_animation returns every
+# frame composited onto the full canvas (frame disposal, transparency and
+# interlacing handled) with per-frame delays in milliseconds and the loop
+# count (0 = forever, -1 = no looping extension).
+#
+# encode_gif quantises to at most 256 colours: images that already use <= 256
+# colours keep them exactly; others get a median-cut palette, optionally
+# with Floyd-Steinberg dithering. Pixels with alpha < 128 become transparent.
+# `GifEncoder` writes animations frame by frame.
+#
+# Usage:
+#   from std.image.gif import decode_gif_animation, GifEncoder
+#   mut anim = decode_gif_animation(bytes, n)?
+#   mut enc = GifEncoder.init(w, h, 0)            # loop forever
+#   enc.add_frame(frame1, 100, false)?
+#   enc.add_frame(frame2, 100, false)?
+#   mut (out, len_) = enc.finish()
+
+from std.image.mod import Image
+from std.image.native import trc_gif_decode, trc_img_free, trc_img_ok, trc_img_nframes, trc_img_delay, trc_img_loop
+from std.image.native import trc_gif_begin, trc_gif_add_frame, trc_gif_finish
+from std.image.native import _im_frame, _im_bad, _im_err, _im_take_buf
+
+pub class GifAnimation:
+    pub width:  int
+    pub height: int
+    pub frames: List[Image]
+    pub delays: List[int]     # milliseconds per frame
+    pub loop_count: int       # 0 = forever, -1 = play once (no NETSCAPE extension)
+
+# First frame; width == -1 on error.
+pub def decode_gif(data: str, len_: int) -> Image:
+    mut dp = data as Pointer[char]
+    mut h = trc_gif_decode(dp, len_)
+    if (h as usize) == (0 as usize): return _im_bad()
+    if trc_img_ok(h) != 1:
+        trc_img_free(h)
+        return _im_bad()
+    mut img = _im_frame(h, 0)
+    trc_img_free(h)
+    return img
+
+pub def decode_gif_animation(data: str, len_: int) throws str -> GifAnimation:
+    mut dp = data as Pointer[char]
+    mut h = trc_gif_decode(dp, len_)
+    if (h as usize) == (0 as usize): raise("GIF: out of memory")
+    if trc_img_ok(h) != 1:
+        mut e = _im_err(h)
+        trc_img_free(h)
+        raise(e)
+    mut a = GifAnimation()
+    a.frames = []
+    a.delays = []
+    mut n = trc_img_nframes(h)
+    mut i = 0
+    while i < n:
+        a.frames.append(_im_frame(h, i))
+        a.delays.append(trc_img_delay(h, i))
+        i = i + 1
+    mut first = a.frames[0]
+    a.width = first.width
+    a.height = first.height
+    a.loop_count = trc_img_loop(h)
+    trc_img_free(h)
+    return a
+
+# One still image as a GIF (dither: Floyd-Steinberg when colours are reduced).
+pub def encode_gif(img: Image, dither: bool) -> (str, int):
+    mut e = GifEncoder.init(img.width, img.height, -1)
+    mut r: Result[bool, str] = e.add_frame(img, 0, dither)
+    if r.is_err:
+        e.finish()
+        return ("", 0)
+    return e.finish()
+
+pub class GifEncoder:
+    _h: Pointer[char]
+    pub width:  int
+    pub height: int
+    pub max_colors: int
+
+extend GifEncoder:
+    # loop_count: 0 = forever, n = repeat n times, -1 = no loop extension.
+    pub def init(width: int, height: int, loop_count: int) -> GifEncoder:
+        mut e = GifEncoder()
+        e._h = trc_gif_begin(width, height, loop_count)
+        e.width = width
+        e.height = height
+        e.max_colors = 256
+        return e
+
+    # Append a frame (same size as the canvas) shown for delay_ms.
+    pub def add_frame(self, img: Image, delay_ms: int, dither: bool) throws str -> bool:
+        if (self._h as usize) == (0 as usize): raise("GIF: encoder already finished")
+        if img.width != self.width or img.height != self.height: raise("GIF: frame size differs from the canvas")
+        mut d = 0
+        if dither: d = 1
+        if trc_gif_add_frame(self._h, img.pixels.data, delay_ms, d, self.max_colors) != 0: raise("GIF: encoding failed")
+        return true
+
+    # The finished file as (bytes, length).
+    pub def finish(self) -> (str, int):
+        if (self._h as usize) == (0 as usize): return ("", 0)
+        mut lenbox = [0]
+        mut lp = lenbox as Pointer[int]
+        mut p = trc_gif_finish(self._h, lp)
+        self._h = 0 as Pointer[char]
+        if (p as usize) == (0 as usize): return ("", 0)
+        mut n = lenbox[0]
+        mut out = _im_take_buf(p, n)
+        return (out, n)

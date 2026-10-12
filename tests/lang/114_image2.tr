@@ -1,0 +1,214 @@
+# tests/lang/114_image2.tr
+# std.image.jpeg / std.image.gif / std.image.ops. Fixtures are produced by
+# Pillow (baseline + progressive JPEG, EXIF orientation, transparent and
+# animated GIF). The C codecs were also cross-checked against Pillow on
+# photos and synthetic images (all JPEG sampling modes, CMYK, restarts):
+# decoded pixels within 3 levels of libjpeg, GIF frames identical.
+
+from std.test import TestRunner
+from std.image.mod import Image, decode
+from std.image.jpeg import decode_jpeg, decode_jpeg_checked, encode_jpeg, encode_jpeg_opts, jpeg_orientation
+from std.image.gif import decode_gif, decode_gif_animation, encode_gif, GifEncoder, GifAnimation
+from std.image.ops import resize_image, thumbnail, scale, grayscale, invert, brightness, contrast, threshold, sepia, gaussian_blur, box_blur, sharpen, edges, convolve, flip_horizontal, flip_vertical, rotate90, rotate180, rotate270, crop, apply_orientation, paste, solid, fill, copy_image, FILTER_NEAREST, FILTER_BILINEAR, FILTER_LANCZOS
+from std.crypto.native import _cn_unhex
+
+def jpeg_base() -> str:
+    mut r: Result[str, str] = _cn_unhex("ffd8ffe000104a46494600010100000100010000ffdb0043000201010101010201010102020202020403020202020504040304060506060605060606070908060709070606080b08090a0a0a0a0a06080b0c0b0a0c090a0a0affdb004301020202020202050303050a0706070a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0affc00011080008001003011100021101031101ffc4001f0000010501010101010100000000000000000102030405060708090a0bffc400b5100002010303020403050504040000017d01020300041105122131410613516107227114328191a1082342b1c11552d1f02433627282090a161718191a25262728292a3435363738393a434445464748494a535455565758595a636465666768696a737475767778797a838485868788898a92939495969798999aa2a3a4a5a6a7a8a9aab2b3b4b5b6b7b8b9bac2c3c4c5c6c7c8c9cad2d3d4d5d6d7d8d9dae1e2e3e4e5e6e7e8e9eaf1f2f3f4f5f6f7f8f9faffc4001f0100030101010101010101010000000000000102030405060708090a0bffc400b51100020102040403040705040400010277000102031104052131061241510761711322328108144291a1b1c109233352f0156272d10a162434e125f11718191a262728292a35363738393a434445464748494a535455565758595a636465666768696a737475767778797a82838485868788898a92939495969798999aa2a3a4a5a6a7a8a9aab2b3b4b5b6b7b8b9bac2c3c4c5c6c7c8c9cad2d3d4d5d6d7d8d9dae2e3e4e5e6e7e8e9eaf2f3f4f5f6f7f8f9faffda000c03010002110311003f00f9aebf543fdd43f492bf96cff8573fffd9")
+    return r.ok
+
+def jpeg_prog() -> str:
+    mut r: Result[str, str] = _cn_unhex("ffd8ffe000104a46494600010100000100010000ffdb0043000201010101010201010102020202020403020202020504040304060506060605060606070908060709070606080b08090a0a0a0a0a06080b0c0b0a0c090a0a0affdb004301020202020202050303050a0706070a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0affc20011080008001003012200021101031101ffc400160001010100000000000000000000000000000708ffc4001501010100000000000000000000000000000001ffda000c030100021003100000019ae922bfffc40014100100000000000000000000000000000010ffda00080101000105023fffc40018110002030000000000000000000000000000084584c4ffda0008010301013f0175206d673fffc40018110002030000000000000000000000000000064382c1ffda0008010201013f01658ad87fffc40014100100000000000000000000000000000010ffda0008010100063f023fffc40014100100000000000000000000000000000010ffda0008010100013f213fffda000c0301000200030000001003ffc40014110100000000000000000000000000000000ffda0008010301013f100fffc40014110100000000000000000000000000000000ffda0008010201013f100fffc40014100100000000000000000000000000000010ffda0008010100013f103fffd9")
+    return r.ok
+
+def jpeg_exif6() -> str:
+    mut r: Result[str, str] = _cn_unhex("ffd8ffe000104a46494600010100000100010000ffe100224578696600004d4d002a00000008000101120003000000010006000000000000ffdb0043000302020302020303030304030304050805050404050a070706080c0a0c0c0b0a0b0b0d0e12100d0e110e0b0b1016101113141515150c0f171816141812141514ffdb00430103040405040509050509140d0b0d1414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414ffc00011080008001003012200021101031101ffc4001f0000010501010101010100000000000000000102030405060708090a0bffc400b5100002010303020403050504040000017d01020300041105122131410613516107227114328191a1082342b1c11552d1f02433627282090a161718191a25262728292a3435363738393a434445464748494a535455565758595a636465666768696a737475767778797a838485868788898a92939495969798999aa2a3a4a5a6a7a8a9aab2b3b4b5b6b7b8b9bac2c3c4c5c6c7c8c9cad2d3d4d5d6d7d8d9dae1e2e3e4e5e6e7e8e9eaf1f2f3f4f5f6f7f8f9faffc4001f0100030101010101010101010000000000000102030405060708090a0bffc400b51100020102040403040705040400010277000102031104052131061241510761711322328108144291a1b1c109233352f0156272d10a162434e125f11718191a262728292a35363738393a434445464748494a535455565758595a636465666768696a737475767778797a82838485868788898a92939495969798999aa2a3a4a5a6a7a8a9aab2b3b4b5b6b7b8b9bac2c3c4c5c6c7c8c9cad2d3d4d5d6d7d8d9dae2e3e4e5e6e7e8e9eaf2f3f4f5f6f7f8f9faffda000c03010002110311003f00f1cafb0e8a29f12ffcb9ff00b7bf40fa6a7fcd3dff00735ffbae7fffd9")
+    return r.ok
+
+def gif_small() -> str:
+    mut r: Result[str, str] = _cn_unhex("47494638396104000200810000ff000000ff000000ffffffff21f90401000003002c000000000400020000080c000104103060808000000202003b")
+    return r.ok
+
+def gif_anim() -> str:
+    mut r: Result[str, str] = _cn_unhex("47494638396103000300810000ff000000000000000000000021ff0b4e45545343415045322e30030100000021f90400050000002c00000000030003000008070001081c3830200021f90401070001002c0000000003000300810000ff00000000000000000008070001081c383020003b")
+    return r.ok
+
+def px(img: Image, x: int, y: int) -> List[int]:
+    mut r, g, b, a = img.get_pixel(x, y)
+    mut out: List[int] = [r, g, b, a]
+    return out
+
+def near(got: List[int], r: int, g: int, b: int, tol: int) -> bool:
+    mut d0 = got[0] - r
+    mut d1 = got[1] - g
+    mut d2 = got[2] - b
+    if d0 < 0: d0 = 0 - d0
+    if d1 < 0: d1 = 0 - d1
+    if d2 < 0: d2 = 0 - d2
+    return d0 <= tol and d1 <= tol and d2 <= tol
+
+# 32x24 test card: red / green / blue / white quadrant-ish blocks.
+def card() -> Image:
+    mut img = Image.init(32, 24)
+    mut y = 0
+    while y < 24:
+        mut x = 0
+        while x < 32:
+            if x < 16 and y < 12: img.set_pixel(x, y, 220, 30, 30, 255)
+            elif y < 12: img.set_pixel(x, y, 30, 200, 40, 255)
+            elif x < 16: img.set_pixel(x, y, 20, 40, 210, 255)
+            else: img.set_pixel(x, y, 250, 250, 250, 255)
+            x = x + 1
+        y = y + 1
+    return img
+
+def test_jpeg(t: TestRunner):
+    t.section("JPEG decode")
+    mut b = jpeg_base()
+    mut img = decode_jpeg(b, b.len())
+    t.assert_eq_int(img.width, 16, "width")
+    t.assert_eq_int(img.height, 8, "height")
+    t.assert_true(near(px(img, 2, 3), 255, 0, 128, 2), "left half colour (Pillow: 255,0,128)")
+    t.assert_true(near(px(img, 12, 3), 0, 254, 129, 2), "right half colour (Pillow: 0,254,129)")
+    t.assert_eq_int(px(img, 5, 5)[3], 255, "opaque")
+    mut p = jpeg_prog()
+    mut pimg = decode_jpeg(p, p.len())
+    t.assert_eq_int(pimg.width, 16, "progressive + 4:2:0 decodes")
+    t.assert_true(near(px(pimg, 12, 3), 0, 254, 130, 3), "progressive colour")
+    mut sniff = decode(p, p.len())
+    t.assert_eq_int(sniff.width, 16, "std.image.decode sniffs JPEG")
+    mut e = jpeg_exif6()
+    t.assert_eq_int(jpeg_orientation(e, e.len()), 6, "EXIF orientation")
+    t.assert_eq_int(jpeg_orientation(b, b.len()), 1, "no EXIF: upright")
+    mut upright = apply_orientation(decode_jpeg(e, e.len()), 6)
+    t.assert_eq_int(upright.width, 8, "orientation 6 rotates to portrait")
+    mut junk = "not a jpeg"
+    t.assert_eq_int(decode_jpeg(junk, junk.len()).width, -1, "bad data gives width -1")
+    mut chk: Result[Image, str] = decode_jpeg_checked(junk, junk.len())
+    t.assert_true(chk.is_err, "checked decode raises")
+    mut trunc = b.slice(0, 200)
+    t.assert_eq_int(decode_jpeg(trunc, trunc.len()).width, -1, "truncated file rejected")
+
+    t.section("JPEG encode")
+    mut c = card()
+    mut jbytes, n = encode_jpeg(c, 90)
+    t.assert_true(n > 100, "encoded")
+    mut back = decode_jpeg(jbytes, n)
+    t.assert_eq_int(back.width, 32, "round trip width")
+    t.assert_true(near(px(back, 4, 4), 220, 30, 30, 8), "red block survives")
+    t.assert_true(near(px(back, 28, 20), 250, 250, 250, 8), "white block survives")
+    mut lo, ln = encode_jpeg(c, 20)
+    t.assert_true(ln < n, "lower quality is smaller")
+    mut gb, gn = encode_jpeg_opts(c, 85, true, true)
+    mut gimg = decode_jpeg(gb, gn)
+    mut gp = px(gimg, 4, 4)
+    t.assert_true(gp[0] == gp[1] and gp[1] == gp[2], "grayscale JPEG")
+
+def test_gif(t: TestRunner):
+    t.section("GIF")
+    mut s = gif_small()
+    mut img = decode_gif(s, s.len())
+    t.assert_eq_int(img.width, 4, "width")
+    t.assert_true(near(px(img, 0, 0), 255, 0, 0, 0), "palette colour")
+    t.assert_true(near(px(img, 2, 0), 0, 0, 255, 0), "palette colour 2")
+    t.assert_eq_int(px(img, 3, 0)[3], 0, "transparent index")
+    t.assert_eq_int(decode(s, s.len()).width, 4, "std.image.decode sniffs GIF")
+    mut a = gif_anim()
+    mut ar: Result[GifAnimation, str] = decode_gif_animation(a, a.len())
+    t.assert_true(ar.is_ok, "animation decodes")
+    t.assert_eq_int(len(ar.ok.frames), 2, "two frames")
+    t.assert_eq_int(ar.ok.delays[0], 50, "delay 1")
+    t.assert_eq_int(ar.ok.delays[1], 70, "delay 2")
+    t.assert_eq_int(ar.ok.loop_count, 0, "loops forever")
+    t.assert_true(near(px(ar.ok.frames[1], 1, 1), 0, 0, 255, 0), "second frame colour")
+    mut c = card()
+    mut gb, gn = encode_gif(c, false)
+    mut back = decode_gif(gb, gn)
+    t.assert_true(near(px(back, 4, 4), 220, 30, 30, 0) and near(px(back, 28, 20), 250, 250, 250, 0), "<= 256 colours are kept exactly")
+    mut enc = GifEncoder.init(4, 4, 0)
+    mut f1 = solid(4, 4, 255, 0, 0, 255)
+    mut f2 = solid(4, 4, 0, 255, 0, 255)
+    mut ok1: Result[bool, str] = enc.add_frame(f1, 100, false)
+    mut ok2: Result[bool, str] = enc.add_frame(f2, 250, false)
+    mut bad: Result[bool, str] = enc.add_frame(card(), 10, false)
+    t.assert_true(bad.is_err, "frame size checked")
+    mut ab, an = enc.finish()
+    mut ar2: Result[GifAnimation, str] = decode_gif_animation(ab, an)
+    t.assert_eq_int(len(ar2.ok.frames), 2, "encoded animation frames")
+    t.assert_eq_int(ar2.ok.delays[1], 250, "encoded delay")
+    t.assert_true(near(px(ar2.ok.frames[1], 0, 0), 0, 255, 0, 0), "encoded frame colour")
+    mut grad = Image.init(64, 64)
+    mut y = 0
+    while y < 64:
+        mut x = 0
+        while x < 64:
+            grad.set_pixel(x, y, x * 4, y * 4, (x + y) * 2, 255)
+            x = x + 1
+        y = y + 1
+    mut qb, qn = encode_gif(grad, true)
+    mut q = decode_gif(qb, qn)
+    t.assert_true(near(px(q, 40, 20), 160, 80, 120, 40), "4096-colour gradient quantised and dithered")
+
+def test_ops(t: TestRunner):
+    t.section("resize and geometry")
+    mut c = card()
+    mut half = resize_image(c, 16, 12, FILTER_BILINEAR)
+    t.assert_eq_int(half.width, 16, "resize width")
+    t.assert_true(near(px(half, 2, 2), 220, 30, 30, 4), "resize keeps block colours")
+    mut big = resize_image(c, 64, 48, FILTER_LANCZOS)
+    t.assert_true(near(px(big, 4, 4), 220, 30, 30, 6), "upscale")
+    mut nn = resize_image(c, 8, 6, FILTER_NEAREST)
+    t.assert_true(near(px(nn, 7, 5), 250, 250, 250, 0), "nearest")
+    mut th = thumbnail(c, 10, 10, FILTER_BILINEAR)
+    t.assert_eq_int(th.width, 10, "thumbnail fits width")
+    t.assert_eq_int(th.height, 8, "thumbnail keeps aspect")
+    t.assert_eq_int(scale(c, 0.5, FILTER_BILINEAR).width, 16, "scale")
+    mut fh = flip_horizontal(c)
+    t.assert_true(near(px(fh, 0, 0), 30, 200, 40, 0), "flip horizontal")
+    mut fv = flip_vertical(c)
+    t.assert_true(near(px(fv, 0, 0), 20, 40, 210, 0), "flip vertical")
+    mut r90 = rotate90(c)
+    t.assert_eq_int(r90.width, 24, "rotate90 swaps size")
+    t.assert_true(near(px(r90, 0, 0), 20, 40, 210, 0), "rotate90 clockwise")
+    t.assert_true(near(px(rotate270(c), 0, 0), 30, 200, 40, 0), "rotate270")
+    t.assert_true(near(px(rotate180(c), 0, 0), 250, 250, 250, 0), "rotate180")
+    mut cr: Result[Image, str] = crop(c, 14, 10, 4, 4)
+    t.assert_true(near(px(cr.ok, 0, 0), 220, 30, 30, 0) and near(px(cr.ok, 3, 3), 250, 250, 250, 0), "crop")
+    mut badc: Result[Image, str] = crop(c, 30, 0, 5, 5)
+    t.assert_true(badc.is_err, "crop bounds")
+
+    t.section("colour and filters")
+    mut g = grayscale(c)
+    mut gp = px(g, 4, 4)
+    t.assert_true(gp[0] == gp[1] and gp[1] == gp[2] and gp[0] > 70 and gp[0] < 90, "grayscale luma")
+    t.assert_true(near(px(invert(c), 4, 4), 35, 225, 225, 0), "invert")
+    t.assert_true(near(px(brightness(c, 10.0), 28, 20), 255, 255, 255, 0), "brightness clamps")
+    t.assert_true(near(px(threshold(c, 128.0), 28, 20), 255, 255, 255, 0), "threshold")
+    mut flat = solid(10, 10, 100, 150, 200, 255)
+    t.assert_true(near(px(gaussian_blur(flat, 2.0), 5, 5), 100, 150, 200, 1), "blur keeps a flat colour")
+    t.assert_true(near(px(box_blur(flat, 2), 0, 0), 100, 150, 200, 1), "box blur")
+    t.assert_true(near(px(sharpen(flat), 5, 5), 100, 150, 200, 1), "sharpen keeps a flat colour")
+    mut ed = edges(c)
+    t.assert_true(px(ed, 16, 4)[0] > 100 and px(ed, 4, 4)[0] < 5, "edges at the boundary only")
+    mut k: List[float] = [0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0]
+    mut idr: Result[Image, str] = convolve(c, k, 3, 1.0, 0.0)
+    t.assert_true(near(px(idr.ok, 20, 3), 30, 200, 40, 0), "identity kernel")
+    mut bk: List[float] = [1.0, 2.0]
+    mut badk: Result[Image, str] = convolve(c, bk, 2, 1.0, 0.0)
+    t.assert_true(badk.is_err, "kernel size checked")
+    mut base = solid(4, 4, 0, 0, 255, 255)
+    mut dot = solid(2, 2, 255, 0, 0, 255)
+    paste(base, dot, 1, 1, 0.5)
+    t.assert_true(near(px(base, 1, 1), 128, 0, 128, 1), "paste with 50% opacity")
+    t.assert_true(near(px(base, 0, 0), 0, 0, 255, 0), "paste leaves the rest")
+    mut sp = sepia(c)
+    t.assert_true(px(sp, 28, 20)[0] >= px(sp, 28, 20)[2], "sepia is warm")
+    mut cp = copy_image(c)
+    fill(cp, 1, 2, 3, 4)
+    t.assert_true(near(px(c, 0, 0), 220, 30, 30, 0), "copy_image detaches")
+
+def main():
+    mut t = TestRunner.init("114_image2")
+    test_jpeg(t)
+    test_gif(t)
+    test_ops(t)
+    t.summary()

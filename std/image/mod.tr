@@ -1,4 +1,4 @@
-# std.image — Raster image decode/encode: BMP, QOI, PNG.
+# std.image — Raster image decode/encode: BMP, QOI, PNG, JPEG, GIF.
 #
 # One shared in-memory representation (Image, RGBA8 — 4 bytes/pixel,
 # row-major, top-to-bottom, no padding) that every codec below decodes
@@ -9,6 +9,11 @@
 #   from std.image.bmp import decode_bmp, encode_bmp
 #   from std.image.qoi import decode_qoi, encode_qoi
 #   from std.image.png import decode_png, encode_png
+from std.image.jpeg import decode_jpeg
+from std.image.gif import decode_gif
+#   from std.image.jpeg import decode_jpeg, encode_jpeg, jpeg_orientation
+#   from std.image.gif import decode_gif, decode_gif_animation, encode_gif, GifEncoder
+#   from std.image.ops import resize_image, thumbnail, gaussian_blur, grayscale, crop, ...
 #
 # Or just:
 #   from std.image import Image, decode, decode_bmp, encode_bmp,
@@ -69,6 +74,8 @@ extend Image:
 from std.image.bmp import decode_bmp, encode_bmp
 from std.image.qoi import decode_qoi, encode_qoi
 from std.image.png import decode_png, encode_png
+from std.image.jpeg import decode_jpeg
+from std.image.gif import decode_gif
 
 # Sniff the magic bytes of `data` (first `len_` bytes) and dispatch to the
 # matching decoder. Returns an Image with width == -1 on an unrecognized
@@ -84,6 +91,10 @@ pub def decode(data: str, len_: int) -> Image:
             b1 = p.offset(1).read() as int & 0xFF
         if b0 == 0x42 and b1 == 0x4D:   # "BM"
             return decode_bmp(data, len_)
+        if b0 == 0xFF and b1 == 0xD8:   # JPEG SOI
+            return decode_jpeg(data, len_)
+        if b0 == 0x47 and b1 == 0x49:   # "GI(F8)"
+            return decode_gif(data, len_)
         if len_ >= 4:
             mut b2 = 0
             mut b3 = 0

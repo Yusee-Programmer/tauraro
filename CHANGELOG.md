@@ -49,6 +49,12 @@ added here as each phase lands.
 - `from` stays a reserved word (it starts import statements and lifetime clauses).
 
 ### Added
+- **`std.image.jpeg`, `std.image.gif`, `std.image.ops`** — JPEG decode (baseline + progressive,
+  all subsamplings, CMYK, EXIF orientation) and encode; GIF decode with animation compositing
+  and encode with median-cut quantisation, dithering and animation; resizing (nearest, box,
+  bilinear, bicubic, Lanczos-3), colour adjustments, blur/sharpen/edges/convolution, flips,
+  rotations, crop and compositing. Cross-checked against Pillow; tested by
+  `tests/lang/114_image2.tr`.
 - **`std.math.tensor`** — n-dimensional float64 arrays with NumPy-style broadcasting, strided views
   (reshape/transpose/permute/slice/select/broadcast_to), elementwise math, axis reductions,
   softmax, batched matmul, concat/stack and linalg interop; kernels in C. Tested by
