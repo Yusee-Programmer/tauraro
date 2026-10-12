@@ -230,6 +230,7 @@ pub class Sema:
     pub in_async_fn:        bool
     pub assign_froms:       Map[str, int] # block-local last use tracking
     pub fn_sigs:            Map[str, AstType] # top-level fn name -> def(...)->R type, for first-class function references
+    pub closure_hint:       Pointer[AstType]  # expected def(...)->R type of the closure argument being lowered (null = none)
     pub extern_names:       Map[str, bool]    # [N-3] extern "C" function names (valid bare names not in fn_sigs/globals)
     # Nested declarations (class/def/enum/interface inside main()) hoisted to file scope.
     pub nested_classes:     Vec[HirClass]
@@ -342,6 +343,7 @@ extend Sema:
         s.in_async_fn        = false
         s.assign_froms       = Map[str, int].init(32)
         s.fn_sigs            = Map[str, AstType].init(64)
+        s.closure_hint       = Pointer[AstType](0)
         s.extern_names       = Map[str, bool].init(128)
         s.nested_classes     = Vec[HirClass].init(4)
         s.nested_functions   = Vec[HirFunction].init(4)
@@ -1615,6 +1617,50 @@ extend Sema:
     # `out` (best-effort recursive walk over the common HirExpr shapes). Used
     # to find `str` locals that a `return EXPR` reads, so they aren't
     # auto-dropped before EXPR is evaluated.
+    # Expected function type of argument k of a call to top-level `fname`
+    # (non-null only when that parameter is a `def(...) -> R` type).
+    pub def closure_hint_for_fn(self, fname: str, k: int) -> Pointer[AstType]:
+        mut nohint = Pointer[AstType](0)
+        if not self.fn_sigs.contains(fname): return nohint
+        mut sig = self.fn_sigs.get(fname)
+        if k >= sig.args.len - 1: return nohint
+        mut pt = sig.args.get(k)
+        if pt as usize == 0 as usize: return nohint
+        if pt.read().name == "def": return pt
+        return nohint
+
+    # Same for a method call `obj.method(...)`, used when every class that
+    # declares `method` agrees on the arity of the function-typed parameter
+    # (the receiver type is not known yet while the arguments are lowered).
+    pub def closure_hint_for_method(self, method: str, k: int) -> Pointer[AstType]:
+        mut nohint = Pointer[AstType](0)
+        mut found = Pointer[AstType](0)
+        mut ambiguous = false
+        mut keys = self.classes.keys()
+        mut ci = 0
+        while ci < keys.len:
+            mut cd = self.classes.get(keys.get(ci))
+            mut mi = 0
+            while mi < cd.methods.len:
+                mut md = cd.methods.get(mi)
+                if md.name == method:
+                    mut idx = 0
+                    mut pi = 0
+                    while pi < md.params.len:
+                        mut prm = md.params.get(pi)
+                        if prm.name != "self":
+                            if idx == k and prm.ty as usize != 0 as usize and prm.ty.read().name == "def":
+                                if found as usize == 0 as usize:
+                                    found = prm.ty
+                                elif found.read().args.len != prm.ty.read().args.len:
+                                    ambiguous = true
+                            idx = idx + 1
+                        pi = pi + 1
+                mi = mi + 1
+            ci = ci + 1
+        if ambiguous: return nohint
+        return found
+
     pub def collect_idents(self, e: Pointer[HirExpr], out: Vec[str]):
         if e as usize == 0 as usize: return
         if _is_invalid_ptr(e as usize): return
@@ -1675,6 +1721,15 @@ extend Sema:
                 self.collect_idents(inner, out)
                 self.collect_idents(to, out)
             case HirExpr.EYield(inner, _): self.collect_idents(inner, out)
+            case HirExpr.EFString(fparts, _):
+                # `return f"...{local}..."` reads the local while building the
+                # result; it must not be released before the return expression.
+                mut fpi = 0
+                while fpi < fparts.len:
+                    mut fpart = fparts.get(fpi)
+                    if fpart.is_expr and fpart.expr as usize != 0 as usize:
+                        self.collect_idents(fpart.expr, out)
+                    fpi = fpi + 1
             case _: pass
 
     # True if `name` is a declared local/param variable in any open scope.
@@ -5639,9 +5694,20 @@ extend Sema:
                             p23_seen.insert(p23_nm, true)
                     p23_k = p23_k + 1
                 mut hl = Vec[Pointer[HirExpr]].init(4)
+                mut _ch_fname = ""
+                if callee as usize != 0 as usize:
+                    match callee.read():
+                        case Expr.EIdent(_ch_n): _ch_fname = _ch_n
+                        case _: pass
                 mut k = 0
                 while k < args.len:
+                    self.closure_hint = Pointer[AstType](0)
+                    if _ch_fname != "":
+                        match args.get(k).read():
+                            case Expr.EClosure(_, _, _, _): self.closure_hint = self.closure_hint_for_fn(_ch_fname, k)
+                            case _: pass
                     hl.push(self.lower_expr(args.get(k)))
+                    self.closure_hint = Pointer[AstType](0)
                     k = k + 1
                 # release borrows after call
                 mut p23_ui = 0
@@ -5958,7 +6024,12 @@ extend Sema:
                 mut hl = Vec[Pointer[HirExpr]].init(4)
                 mut k = 0
                 while k < args.len:
+                    self.closure_hint = Pointer[AstType](0)
+                    match args.get(k).read():
+                        case Expr.EClosure(_, _, _, _): self.closure_hint = self.closure_hint_for_method(method, k)
+                        case _: pass
                     hl.push(self.lower_expr(args.get(k)))
+                    self.closure_hint = Pointer[AstType](0)
                     k = k + 1
                 mut _saved_recv_mc = self.in_recv_pos
                 self.in_recv_pos = true
@@ -6857,6 +6928,11 @@ extend Sema:
                     set_ty.args.push(box_asttype(hir_expr_type(sitems.get(0))))
                 return box_hirexpr(HirExpr.ESet(sitems, set_ty))
             case Expr.EClosure(params, ret_ty, body, is_async):
+                # Untyped parameters take their types from the expected `def(...) -> R`
+                # parameter type of the call this closure is passed to (else `int`).
+                mut _cl_hint = self.closure_hint
+                self.closure_hint = Pointer[AstType](0)
+                mut _cl_hint_ok = _cl_hint as usize != 0 as usize and _cl_hint.read().args.len == params.len + 1
                 self.enter_scope()
                 mut cap_idx = self.scopes.len - 1   # the closure's OWN scope
                 mut hparams = Vec[HirParam].init(params.len)
@@ -6864,7 +6940,10 @@ extend Sema:
                 while l < params.len:
                     mut pa = params.get(l)
                     mut pa_ty = AstType.init("int")
-                    if pa.ty as usize != 0 as usize: pa_ty = pa.ty.read()
+                    if pa.ty as usize != 0 as usize:
+                        pa_ty = pa.ty.read()
+                    elif _cl_hint_ok and _cl_hint.read().args.get(l) as usize != 0 as usize:
+                        pa_ty = _cl_hint.read().args.get(l).read()
                     self.declare(pa.name, SymbolKind.SVariable, box_asttype(pa_ty), false)
                     mut hpa = HirParam()
                     hpa.name = pa.name

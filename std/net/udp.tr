@@ -6,12 +6,6 @@ extern "C":
     def _tr_udp_send_to(fd: int, data: str, len: int, host: str, port: int) -> int
     def _tr_udp_recv_from(fd: int, buf: Pointer[char], cap: int, src: Pointer[char]) -> int
     def _tr_udp_close(fd: int)
-    def _tr_udp_reuse(fd: int) -> int
-    def _tr_udp_mcast_join(fd: int, group: str) -> int
-    def _tr_tcp_set_nonblocking(fd: int) -> int
-    def _tr_free(p: Pointer[char])
-    def _tr_time_ms() -> int
-    def _tr_sleep_ms(ms: int)
     def _tr_c_malloc(size: int) -> Pointer[char]
     def _tr_str_wrap(s: Pointer[char]) -> str
     def _tr_str_wrap_len(s: Pointer[char], blen: int) -> str
@@ -20,8 +14,6 @@ pub class UdpSocket:
     pub fd:   int
     pub open: bool
     pub port: int
-    pub src:  str     # "ip:port" of the sender of the last recv_wait() datagram
-    pub nb:   bool    # socket switched to non-blocking by recv_wait()
 
 extend UdpSocket:
     # Create a new UDP socket (not yet bound to a port).
@@ -30,8 +22,6 @@ extend UdpSocket:
         s.fd   = _tr_udp_socket()
         s.open = s.fd >= 0
         s.port = 0
-        s.src  = ""
-        s.nb   = false
         return s
 
     # Create and bind a UDP socket to a local port (for receiving).
@@ -48,65 +38,8 @@ extend UdpSocket:
     # Send data to host:port.  Returns bytes sent or -1.
     pub def send_to(self, data: str, host: str, port: int) -> int:
         if not self.open: return -1
-        mut p = data as Pointer[char]
-        mut n = 0
-        while p.offset(n).read() as int != 0: n = n + 1
+        mut n = data.len()
         return _tr_udp_send_to(self.fd, data, n, host, port)
-
-    # Binary-safe send: transmits all data.len() bytes (NUL bytes included),
-    # unlike send_to() which stops at the first NUL. Returns bytes sent or -1.
-    pub def send_bytes(self, data: str, host: str, port: int) -> int:
-        if not self.open: return -1
-        return _tr_udp_send_to(self.fd, data, data.len(), host, port)
-
-    # Wait up to timeout_ms for one datagram (up to cap bytes) and return it
-    # (binary-safe, real length). Returns "" on timeout / error / empty
-    # datagram; on success `self.src` holds the sender as "ip:port". The socket
-    # is switched to non-blocking mode and polled with 1 ms sleeps, so the wait
-    # is always bounded. (UDP errors such as ICMP port-unreachable also read as
-    # "nothing yet" until the deadline.)
-    pub def recv_wait(self, cap: int, timeout_ms: int) -> str:
-        if not self.open: return ""
-        if not self.nb:
-            _tr_tcp_set_nonblocking(self.fd)
-            self.nb = true
-        mut deadline = _tr_time_ms() + timeout_ms
-        while true:
-            mut buf = _tr_c_malloc(cap + 1)
-            mut src = _tr_c_malloc(64)
-            unsafe:
-                src.offset(0).write('\0')
-            mut n = _tr_udp_recv_from(self.fd, buf, cap, src)
-            if n > 0:
-                unsafe:
-                    buf.offset(n).write('\0')
-                self.src = _tr_str_wrap(src)
-                return _tr_str_wrap_len(buf, n)
-            _tr_free(buf)
-            _tr_free(src)
-            if _tr_time_ms() >= deadline: return ""
-            _tr_sleep_ms(1)
-        return ""
-
-    # Allow several sockets to bind the same port (SO_REUSEADDR/SO_REUSEPORT).
-    # Call BEFORE bind(): use UdpSocket.new(), reuse(), then bind_port().
-    pub def reuse(self) -> bool:
-        if not self.open: return false
-        return _tr_udp_reuse(self.fd) == 0
-
-    # Bind an already created socket (see reuse()). False on failure.
-    pub def bind_port(self, port: int) -> bool:
-        if not self.open: return false
-        if _tr_udp_bind(self.fd, port) != 0: return false
-        self.port = port
-        return true
-
-    # Join an IPv4 multicast group (e.g. "224.0.0.251") on the default interface
-    # and set multicast TTL 255 / loopback on. False if the OS refuses (no
-    # multicast route, sandbox, ...).
-    pub def join_group(self, group: str) -> bool:
-        if not self.open: return false
-        return _tr_udp_mcast_join(self.fd, group) == 0
 
     # Receive a datagram (up to cap bytes).
     # Returns the received string; caller can check src_addr after the call.

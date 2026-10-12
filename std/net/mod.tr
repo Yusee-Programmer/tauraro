@@ -13,12 +13,6 @@
 #   from std.net.cookie      import CookieJar, Cookie
 #   from std.net.multipart   import FormBuilder, MultipartBuilder
 #   from std.net.client      import HttpSession, ClientRequest, HttpReply, HeaderList
-#   from std.net.hpack       import HpackEncoder, HpackDecoder, HpackHeaders, Huffman
-#   from std.net.http2       import H2Client, H2Server, H2Request, H2Response, H2Conn
-#   from std.net.ntp         import NtpClient, NtpResult, NtpPacket
-#   from std.net.mdns        import MdnsMessage, MdnsRecord, MdnsSocket, MdnsResponder, DnsSdService
-#   from std.net.pop3        import Pop3Client, Pop3Entry
-#   from std.net.mailio      import MailConn
 
 from std.net.tcp         import TcpStream
 from std.net.tcp         import TcpListener
@@ -48,24 +42,3 @@ from std.net.client      import HttpSession
 from std.net.client      import ClientRequest
 from std.net.client      import HttpReply
 from std.net.client      import HeaderList
-from std.net.hpack       import HpackEncoder
-from std.net.hpack       import HpackDecoder
-from std.net.hpack       import HpackHeaders
-from std.net.hpack       import HpackTable
-from std.net.hpack       import Huffman
-from std.net.http2       import H2Client
-from std.net.http2       import H2Server
-from std.net.http2       import H2Request
-from std.net.http2       import H2Response
-from std.net.http2       import H2Conn
-from std.net.ntp         import NtpClient
-from std.net.ntp         import NtpResult
-from std.net.ntp         import NtpPacket
-from std.net.mdns        import MdnsMessage
-from std.net.mdns        import MdnsRecord
-from std.net.mdns        import MdnsSocket
-from std.net.mdns        import MdnsResponder
-from std.net.mdns        import DnsSdService
-from std.net.pop3        import Pop3Client
-from std.net.pop3        import Pop3Entry
-from std.net.mailio      import MailConn

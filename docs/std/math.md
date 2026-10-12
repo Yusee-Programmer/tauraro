@@ -393,3 +393,76 @@ print((a * b).to_str())    # 246913578246913578246913578
 mut neg = BigInt.from_int(-7).div(BigInt.from_int(2))
 print(neg.to_str())        # -3 (rounds toward zero, not floor -4)
 ```
+
+---
+
+## Exact and arbitrary-precision numbers — `std.math.decimal`, `std.math.rational`, `std.math.bigfloat`
+
+### Decimal
+
+Coefficient × 10^exponent with a `BigInt` coefficient: `+ - *` are exact; division and rounding take decimal places
+and a rounding mode (`ROUND_HALF_EVEN`, `ROUND_HALF_UP`, `ROUND_HALF_DOWN`, `ROUND_DOWN`, `ROUND_UP`, `ROUND_FLOOR`,
+`ROUND_CEILING`).
+
+```tauraro
+from std.math.decimal import Decimal, ROUND_HALF_UP
+mut total = Decimal.parse("19.99")?.mul(Decimal.from_int(3))          # 59.97
+mut tax = total.mul(Decimal.parse("0.075")?).quantize(2, ROUND_HALF_UP)  # 4.50
+mut shares = Decimal.parse("100")?.allocate(3, 2)?                     # 33.34, 33.33, 33.33
+```
+
+`parse` ("1.5e-3", underscores allowed), `from_int`, `to_str` (plain), `to_sci_str`, `add/sub/mul`,
+`div(o, places, mode)?`, `div_sig(o, digits, mode)?`, `rem(o)?`, `quantize(places, mode)` (negative places round to
+tens/hundreds), `round_sig(digits, mode)`, `normalize`, `sqrt(places)?`, `pow(n)`, `trunc/floor/ceil -> BigInt`,
+`to_int`, `to_float`, `cmp/eq/lt/le/gt/ge`, `min/max`, `neg/abs/sign/scale`, `allocate(n, places)?`. Operators
+`+ - * == < ...` work too. Zero has no sign (`-0.00` prints as `0.00`).
+
+### Rational
+
+`num/den` in lowest terms (`BigInt`s). `Rational.parse("3/4" | "-7" | "0.125" | "1e-3")?`, `of(n, d)?`, `from_int`,
+`from_decimal`, `add/sub/mul`, `div(o)?`, `inv()?`, `pow(n)?` (negative n allowed), `cmp/eq/lt/...`,
+`floor/ceil/round/trunc -> BigInt` (round is half-even), `frac`, `to_decimal(places, mode)`, `to_decimal_str(places)`,
+`to_float`, `to_str` ("n/d"), `is_integer`, `limit_denominator(max_den)` (continued fractions, like Python's).
+
+### BigFloat
+
+A `Decimal` rounded to `prec` significant digits after each operation: `BigFloat.parse(text, prec)?`, `from_int`,
+`add/sub/mul`, `div(o)?`, `sqrt()?`, `exp()?`, `ln()?`, `pow(y)?`, `pow_int(n)?`, `BigFloat.pi(prec)`,
+`BigFloat.e(prec)`, `to_str`, `to_sci_str`, `with_prec`. Checked against Python's `decimal` at 50 digits.
+
+Tested by `tests/lang/112_decimal_rational.tr`.
+
+---
+
+## Tensors — `std.math.tensor`
+
+n-dimensional float64 arrays with NumPy-style broadcasting; elementwise loops, reductions and matmul run in C
+(`std/math/tensor_native.c`).
+
+```tauraro
+from std.math.tensor import Tensor
+mut a = Tensor.arange(0.0, 6.0, 1.0).reshape([2, 3])?
+mut b = a.add(Tensor.vector([10.0, 20.0, 30.0]))?        # broadcast over rows
+mut m = a.matmul(a.transpose())?                          # (2, 2)
+mut p = a.softmax(1)?
+print(b.sum_axis(0, false)?.to_str())
+```
+
+- **Create**: `zeros/ones/full(shape[, v])`, `scalar(v)`, `from_list(values, shape)?`, `vector(values)`,
+  `arange(start, stop, step)`, `linspace(a, b, n)`, `eye(n)`, `random_uniform(shape, seed)`,
+  `random_normal(shape, mean, std, seed)`, `from_matrix`, `from_vector`.
+- **Views** (share storage): `reshape(shape)?` (one `-1`; copies non-contiguous data), `transpose()`, `permute(axes)?`,
+  `slice(axis, start, stop, step)?`, `select(axis, i)?`, `expand_dims(axis)`, `squeeze()`, `squeeze_axis(a)?`,
+  `broadcast_to(shape)?`. `copy()`, `contiguous()`, `flatten()`, `to_list()`.
+- **Access**: `get(idx)?`, `set(idx, v)?`, `item()?`, `shape`, `ndim()`, `size()`, `dim(axis)`, `shape_str()`.
+- **Elementwise** (broadcasting, raise on incompatible shapes): `add sub mul div pow maximum minimum atan2 fmod`,
+  comparisons `eq ne lt le gt ge` (0/1 masks), `logical_and/or`, `Tensor.where(cond, a, b)?`; scalar forms `add_s
+  sub_s mul_s div_s pow_s rsub_s rdiv_s max_s min_s gt_s lt_s eq_s clip`; unary `neg abs sqrt exp log log2 log10
+  log1p expm1 sin cos tan asin acos atan tanh relu leaky_relu sigmoid floor ceil round square sign`, `apply(f)`.
+- **Reductions**: `sum prod max min argmax argmin mean var std norm count_nonzero`, and `*_axis(axis, keepdims)?`
+  for sum/prod/max/min/argmax/argmin/mean; `softmax(axis)?`.
+- **Linear algebra**: `matmul(o)?` (2-D, vector cases, batched with broadcast leading dims), `dot(o)?`, `outer(o)?`,
+  `to_matrix()?` / `Tensor.from_matrix` (std.math.linalg).
+- **Join**: `Tensor.concat(parts, axis)?`, `Tensor.stack(parts, axis)?`. Text: `to_str()`.
+
+GPU execution is not wired in; use `std.gpu` kernels on `to_list()` data for that. Tested by `tests/lang/113_tensor.tr`.

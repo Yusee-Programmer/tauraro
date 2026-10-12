@@ -13,13 +13,13 @@
 #   from std.collections.trie       import Trie
 #   from std.collections.bloom      import BloomFilter
 #   from std.collections.unionfind  import UnionFind
-#   from std.collections.bitset     import Bitset
-#   from std.collections.ringbuffer import RingBuffer
+#   from std.collections.bitset     import BitSet
+#   from std.collections.ringbuf    import RingBuffer
 #   from std.collections.skiplist   import SkipList
+#   from std.collections.interval_tree import IntervalTree
 #   from std.collections.rope       import Rope
-#   from std.collections.intervaltree import IntervalTree
-#   from std.collections.arena      import Arena
-#   from std.collections.slab       import Slab
+#   from std.collections.slotmap    import SlotMap
+#   from std.collections.arena      import Arena, Slab
 
 from std.collections.vec       import Vec
 from std.collections.list      import LinkedList
@@ -41,10 +41,10 @@ from std.collections.btree     import BTreeMap
 from std.collections.trie      import Trie
 from std.collections.bloom     import BloomFilter
 from std.collections.unionfind import UnionFind
-from std.collections.bitset    import Bitset
-from std.collections.ringbuffer import RingBuffer
+from std.collections.bitset    import BitSet
+from std.collections.ringbuf   import RingBuffer
 from std.collections.skiplist  import SkipList
+from std.collections.interval_tree import IntervalTree
 from std.collections.rope      import Rope
-from std.collections.intervaltree import IntervalTree
-from std.collections.arena     import Arena
-from std.collections.slab      import Slab
+from std.collections.slotmap   import SlotMap
+from std.collections.arena     import Arena, Slab

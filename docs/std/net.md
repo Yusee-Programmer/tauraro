@@ -9,6 +9,11 @@ from std.net.http import HttpClient, HttpClientResponse, HttpHeader
 from std.net.client    import HttpSession, ClientRequest, HttpReply, HeaderList
 from std.net.cookie    import CookieJar, Cookie
 from std.net.multipart import FormBuilder, MultipartBuilder
+from std.net.imap      import ImapClient
+from std.net.pop3      import Pop3Client
+from std.net.dnsmsg    import Dns, DnsMessage
+from std.net.ntp       import Ntp
+from std.net.mdns      import Mdns
 ```
 
 > **Platform note** — All socket classes require `-lws2_32` on Windows (Winsock).  
@@ -287,13 +292,82 @@ print(r3.header("Content-Type"))           # "application/json"
 
 ---
 
+## std.net.tls — TLS 1.3 client
+
+A self-contained TLS 1.3 client (RFC 8446), no OpenSSL. Verifies the server's certificate chain and
+host name against the system trust store by default (`std.crypto.x509`). Key exchange X25519 /
+secp256r1 (secp384r1 via HelloRetryRequest); AES-128-GCM, AES-256-GCM, ChaCha20-Poly1305; server
+signatures ECDSA P-256/P-384 and RSA-PSS; SNI, ALPN, KeyUpdate. Not supported: TLS 1.2 and older,
+resumption/0-RTT, client certificates.
+
+```tauraro
+from std.net.tls import TlsStream, TlsOptions
+
+mut s = TlsStream.connect("example.com", 443)?
+s.write("GET / HTTP/1.1\r\nHost: example.com\r\nConnection: close\r\n\r\n")?
+mut resp = s.read_all()?
+print(s.cipher_suite())                  # TLS_AES_128_GCM_SHA256
+print(s.peer_certificates()[0].subject())
+s.close()
+```
+
+| Member | Description |
+|---|---|
+| `TlsOptions.default()` / `TlsOptions.insecure()` | Settings: `verify` (default true), `alpn` (`"h2,http/1.1"`), `timeout_ms` (30000), `ca_pem` (extra roots), `only_ca_pem`. |
+| `TlsStream.connect(host, port)?` / `connect_with(host, port, opts)?` | Resolve, connect (with timeout) and handshake. Raises with the TLS/verification error. |
+| `TlsStream.wrap_fd(fd, host, opts)?` | Handshake on an already-connected socket (STARTTLS). `close()` leaves the fd open. |
+| `write(data)?`, `read(cap)?`, `read_all()?`, `read_line(max)?` | I/O; `read` returns `""` at end of stream and raises on timeout. |
+| `alpn()`, `cipher_suite()`, `version()`, `peer_certificates()` | Connection details. |
+| `set_timeout(ms)`, `close()` | `close()` sends close_notify. |
+
+---
+
+## std.net.http2 — HTTP/2 client and HPACK
+
+One connection, many concurrent requests (RFC 9113): https with ALPN `h2` (verified TLS 1.3) or
+cleartext h2c with prior knowledge. Flow control, CONTINUATION, PING, SETTINGS, RST_STREAM and
+GOAWAY are handled; server push is disabled. Response trailers are exposed (gRPC status).
+
+```tauraro
+from std.net.http2 import Http2Client, H2Headers
+
+mut c = Http2Client.connect("nghttp2.org", 443)?
+mut h = H2Headers.init()
+mut a = c.submit("GET", "/httpbin/get", h, "", false)?
+mut b = c.submit("POST", "/httpbin/post", h, "payload", true)?
+c.wait_all()?                                   # both streams run concurrently
+mut ra = c.response(a)
+print(ra.status, ra.headers.get("content-type"), ra.body.len())
+c.release(a)
+c.release(b)
+mut r = c.get("/httpbin/headers")?              # submit + wait + response + release
+c.close()
+```
+
+| Member | Description |
+|---|---|
+| `Http2Client.connect(host, port)?` / `connect_with(host, port, Http2Options)?` | `Http2Options.default()` (https, verified) or `Http2Options.cleartext()`; fields `tls`, `verify`, `ca_pem`, `timeout_ms`. |
+| `submit(method, path, headers, body, has_body)? -> int` | Start a request; returns the stream id. `default_headers` (user-agent) are merged in; hop-by-hop headers are dropped. |
+| `wait(sid)?`, `wait_all()?`, `is_done(sid)` | Drive the connection. |
+| `response(sid) -> Http2Response` | `status`, `headers`, `trailers` (`H2Headers`), `body` (binary-safe), `error`, `ok()`. |
+| `request(...)?`, `get(path)?`, `post(path, body, content_type)?` | One-shot helpers. |
+| `release(sid)`, `ping()`, `is_closing()`, `set_timeout(ms)`, `close()` | Housekeeping (`release` cancels an open stream). |
+
+`H2Headers` is an ordered, case-insensitive header list (`add`, `set`, `get`, `has`, `remove`). `Hpack.init(table_size)`
+exposes the compressor (`encode(headers)?`, `decode(block)?`, `set_max_table`, `table_size`) and `Huffman.encode/decode`
+the RFC 7541 Huffman code. Sensitive headers (`authorization`, `cookie`, ...) are sent never-indexed.
+
+---
+
 ## std.net.https — HTTPS/TLS Client
 
 **When**: You need to call HTTPS endpoints — secure REST APIs, webhooks, OAuth flows.
-**Why**: Identical API to `HttpClient` but tunnelled through OpenSSL.
+**Why**: Identical API to `HttpClient`, over `std.net.tls` (built-in TLS 1.3, certificates verified).
 
-> **Opt-in** — compile with `-DTAURARO_TLS_OPENSSL -lssl -lcrypto`.
-> Without those flags all methods return `HttpClientResponse { status: 0, body: "tls connect failed" }`.
+> Certificate chain and host name are verified against the system trust store. On failure the
+> response has `status: 0` and the TLS error as its body. `set_verify(false)` disables
+> verification (testing only); `set_ca_pem(pem)` adds private roots. TLS 1.2-only servers are not
+> supported.
 
 ```tauraro
 from std.net.https import HttpsClient
@@ -303,7 +377,9 @@ from std.net.https import HttpsClient
 |---|---|---|---|
 | `HttpsClient.init` | `(host: str, port: int) -> HttpsClient` | `HttpsClient` | Create a TLS client. Default timeout: 10 000 ms. |
 | `set_header` | `(name: str, value: str)` | `void` | Add a header to all requests. |
-| `set_timeout` | `(ms: int)` | `void` | Set timeout hint. |
+| `set_timeout` | `(ms: int)` | `void` | Connect and read timeout. |
+| `set_verify` | `(v: bool)` | `void` | Turn certificate verification off/on (default on). |
+| `set_ca_pem` | `(pem: str)` | `void` | Trust these PEM roots in addition to the system store. |
 | `get` | `(path: str) -> HttpClientResponse` | `HttpClientResponse` | HTTPS GET. |
 | `post` | `(path: str, data: str) -> HttpClientResponse` | `HttpClientResponse` | HTTPS POST (form-encoded). |
 | `post_json` | `(path: str, data: str) -> HttpClientResponse` | `HttpClientResponse` | HTTPS POST (JSON). |
@@ -351,7 +427,8 @@ from std.net.multipart import FormBuilder, MultipartBuilder
 | `set_rewrite_post_on_301_302` | `(bool)` | `true` (default): `POST` becomes `GET` on 301/302 like browsers; `false`: keep the method. |
 | `enable_cookies` / `disable_cookies` / `set_cookie_jar` / `cookie_jar` | | Cookie handling (off by default). |
 | `set_max_body_bytes` | `(n)` | Cap for in-memory bodies (`0` = unlimited). |
-| `set_allow_unverified_tls` | `(bool)` | Required before any `https://` URL is attempted (see limitations). |
+| `set_allow_unverified_tls` | `(bool)` | Skip https certificate verification (testing only). |
+| `set_ca_pem` | `(pem: str)` | Extra trusted roots (PEM) for https. |
 | `get` / `head` / `delete` | `(url) -> HttpReply` | |
 | `post` / `put` / `patch` | `(url, body, content_type) -> HttpReply` | |
 | `post_json` | `(url, json) -> HttpReply` | |
@@ -399,7 +476,7 @@ mut r = HttpSession.init().post_multipart("http://127.0.0.1:8080/upload", m)
 
 ### Limitations
 
-- `https://` is refused unless you call `set_allow_unverified_tls(true)`: the runtime's `_tr_tls_*` layer (also behind `HttpsClient`) encrypts but **does not verify server certificates or host names**, and its reads are blocking (no idle timeout). It was not exercised by the offline test-suite.
+- `https://` uses `std.net.tls` (TLS 1.3 only, verified against the system roots); servers that only speak TLS 1.2 fail with a handshake error.
 - TCP connect is blocking with no connect timeout; IPv4 only; no proxies, no keep-alive/connection reuse, no `Expect: 100-continue`, no `user:pass@host` or IPv6-literal URLs.
 - No compression (`Accept-Encoding: identity` is sent).
 - In-memory bodies and callback chunks are `str` (NUL-terminated): a body with embedded NUL bytes is cut at the first NUL. Request bodies have the same limit. `download_to_file` is NUL-safe.
@@ -411,7 +488,7 @@ mut r = HttpSession.init().post_multipart("http://127.0.0.1:8080/upload", m)
 ## SMTP — `std.net.smtp`
 
 **When**: You need to send outbound email — transactional notifications, alerts, password resets — from a Tauraro program, against a real SMTP server.
-**Why**: A pure-Tauraro RFC 5321 client built entirely on `TcpStream` (plaintext) and the same OpenSSL TLS primitive `HttpsClient` uses (implicit TLS) — no new runtime C code. Handles multi-line reply parsing, RFC 5321 dot-stuffing, and `AUTH LOGIN`/`AUTH PLAIN` correctly (the parts most hand-rolled SMTP clients get subtly wrong).
+**Why**: A pure-Tauraro RFC 5321 client built on `TcpStream` and `std.net.tls` (verified TLS 1.3, both implicit TLS and STARTTLS). Handles multi-line reply parsing, RFC 5321 dot-stuffing, and `AUTH LOGIN`/`AUTH PLAIN` correctly (the parts most hand-rolled SMTP clients get subtly wrong).
 
 ```tauraro
 from std.net.smtp import SmtpClient, SmtpResponse
@@ -433,12 +510,13 @@ A parsed (possibly multi-line) SMTP reply.
 | Method | Signature | Returns | Description |
 |---|---|---|---|
 | `SmtpClient.connect` | `(host: str, port: int) -> SmtpClient` | `SmtpClient` | Open a plaintext TCP connection and read the server's greeting. Check `.connected`. |
-| `SmtpClient.connect_tls` | `(host: str, port: int) -> SmtpClient` | `SmtpClient` | Open an **implicit TLS** connection (e.g. port 465) and read the greeting. Uses the same OpenSSL primitive as `HttpsClient`; requires `-DTAURARO_TLS_OPENSSL -lssl -lcrypto` (see the `std.net.https` note above) — without it, connection fails and `.connected` is `false`. |
+| `SmtpClient.connect_tls` | `(host: str, port: int) -> SmtpClient` | `SmtpClient` | Open an **implicit TLS** connection (e.g. port 465), verifying the server certificate, and read the greeting. On failure `.connected` is `false` and `last_text` holds the TLS error. |
+| `SmtpClient.connect_tls_with` | `(host: str, port: int, opts: TlsOptions) -> SmtpClient` | `SmtpClient` | Same with explicit `TlsOptions` (private CA, timeout, verification). |
 | `ehlo` | `(client_host: str) -> SmtpResponse` | `SmtpResponse` | Send `EHLO`, correctly parsing a multi-line capability reply (`250-...` continuations, final line `250 ...`). Falls back to `HELO` automatically if the server rejects `EHLO`. Records capabilities for `supports_starttls`/`supports_auth`. |
 | `helo` | `(client_host: str) -> SmtpResponse` | `SmtpResponse` | Send plain `HELO` (no capability negotiation). |
 | `supports_starttls` | `() -> bool` | `bool` | `true` if the last `ehlo()` capability list advertised `STARTTLS`. |
 | `supports_auth` | `() -> bool` | `bool` | `true` if the last `ehlo()` capability list advertised `AUTH`. |
-| `starttls` | `() -> SmtpResponse` | `SmtpResponse` | Send `STARTTLS` and read the server's response. **Does not upgrade the connection to TLS** — see Limitations below. |
+| `starttls` | `() -> SmtpResponse` | `SmtpResponse` | Send `STARTTLS`; on `220`, run the TLS handshake on the same socket (verified with `client.tls_opts`). Sets `use_tls`; call `ehlo()` again afterwards. A failed handshake returns code `0` with the TLS error and disconnects. |
 | `auth_login` | `(username: str, password: str) -> SmtpResponse` | `SmtpResponse` | `AUTH LOGIN`: two round-trips, base64-encoded username then password. Returns the final (3rd) response. |
 | `auth_plain` | `(username: str, password: str) -> SmtpResponse` | `SmtpResponse` | `AUTH PLAIN`: single command, base64 of `"\0username\0password"`. |
 | `mail_from` | `(addr: str) -> SmtpResponse` | `SmtpResponse` | Send `MAIL FROM:<addr>`. |
@@ -499,8 +577,96 @@ if client.connected:
 
 ### Limitations (v1)
 
-- **`STARTTLS` does not upgrade the connection in place.** `starttls()` sends the command and reads the server's response (useful if you just need to satisfy a server that demands the handshake before `AUTH`), but the socket stays plaintext afterwards — the runtime's TLS primitive (the same one `HttpsClient` uses) only knows how to open a *fresh* TLS connection given a hostname; there is no client-side "wrap an already-connected fd in TLS" function (only a server-side equivalent exists, for TLS-terminating servers). For a real confidentiality guarantee, use `connect_tls()` (implicit TLS, typically port 465) instead — that path is fully functional TLS from the first byte.
+- TLS is TLS 1.3 only; a server limited to TLS 1.2 fails the handshake.
 - **No MIME / multipart / attachment support.** `send_mail`/`data` send a single `text/plain` body (headers + blank line + body text). Building a `multipart/mixed` message with attachments is left to the caller (construct the full body string yourself, including boundaries, and pass it to `data()` directly) or a future module.
+
+---
+
+## Mail — `std.net.pop3`, `std.net.imap`
+
+Both run over `std.net.linestream.LineStream` (plain TCP or verified TLS, with an in-place
+STARTTLS upgrade). Pass `tls = true` for implicit TLS (ports 995 / 993), or connect in plaintext
+(110 / 143) and call `starttls()` before authenticating. `-ERR` / `NO` / `BAD` replies raise with
+the server's text.
+
+```tauraro
+from std.net.imap import ImapClient
+from std.net.pop3 import Pop3Client
+
+mut c = ImapClient.connect("imap.example.com", 993, true)?
+c.login("user", "secret")?
+mut box = c.select("INBOX")?                # exists, recent, uidvalidity, uidnext, flags
+for uid in c.uid_search("UNSEEN")?:
+    mut raw = c.fetch_message(uid)?         # RFC 5322 bytes (BODY.PEEK[], keeps \Unseen)
+    c.add_flags(uid, "\\Seen")?
+c.logout()
+
+mut p = Pop3Client.connect("pop.example.com", 995, true)?
+p.login("user", "secret")?
+mut st = p.stat()?                           # st.count, st.size
+mut first = p.retr(1)?                       # dot-unstuffed, CRLF line ends
+p.quit()
+```
+
+| `ImapClient` | Description |
+|---|---|
+| `connect(host, port, tls)?` / `connect_with(host, port, tls, opts)?` | Connect and read the greeting (`[CAPABILITY]` codes are picked up). |
+| `starttls()?`, `login(user, pw)?`, `auth_plain(user, pw)?`, `logout()` | Session. `LOGIN` arguments are quoted and escaped. |
+| `capability()?`, `has_capability(name)` | Capabilities (upper-cased). |
+| `list_mailboxes(ref, pattern)?` | `ImapMailbox` (`name`, `delimiter`, `flags`); names sent as literals are handled. |
+| `select(box)?` / `examine(box)?` | `ImapStatus` (`exists`, `recent`, `uidvalidity`, `uidnext`, `flags`, `read_only`). |
+| `search(criteria)?` / `uid_search(criteria)?` | Matching sequence numbers / UIDs. |
+| `fetch(set, items, by_uid)?`, `fetch_message(uid)?` | `ImapMessage` (`seq`, `uid`, `flags`, `size`, `body`); `{n}` literals are read exactly, so bodies are binary-safe. |
+| `add_flags` / `remove_flags(uid, flags)?`, `copy` / `move(uid_set, box)?`, `expunge()?` | `move` uses `MOVE` when advertised, else COPY + `\Deleted` + EXPUNGE. |
+| `create` / `delete_mailbox` / `rename`, `append(box, message, flags)?`, `noop()?` | Mailbox management and upload. |
+| `command(text)?` / `command_raw(text)?` | Any other command; returns `ImapResponse` (`status`, `text`, `untagged` with their literals). |
+
+| `Pop3Client` | Description |
+|---|---|
+| `connect(host, port, tls)?` / `connect_with(...)?` | Connect and read the greeting. |
+| `starttls()?` (STLS), `login(user, pw)?`, `apop(user, pw)?`, `auth_plain(user, pw)?` | Authentication; APOP only when the greeting carries a timestamp. |
+| `capabilities()?` | CAPA list (empty if unsupported). |
+| `stat()?`, `list()?`, `uidl()?` | `Pop3Stat` (`count`, `size`); `Pop3Entry` (`num`, `size`, `uid`). |
+| `retr(n)?`, `top(n, lines)?` | Message text, dot-unstuffed, CRLF-terminated lines. |
+| `dele(n)?`, `rset()?`, `noop()?`, `quit()` | `quit` commits deletions and closes. |
+
+Not supported: IMAP IDLE/NOTIFY push, CONDSTORE/QRESYNC, BODYSTRUCTURE parsing; OAuth2
+(`XOAUTH2`) is available through `command(...)` with your own token.
+
+---
+
+## DNS messages, mDNS, NTP — `std.net.dnsmsg`, `std.net.mdns`, `std.net.ntp`, `std.net.udpx`
+
+`std.net.dns` resolves names through the OS. `std.net.dnsmsg` speaks the DNS wire protocol
+directly, so any record type can be asked of a chosen server:
+
+```tauraro
+from std.net.dnsmsg import Dns, DNS_MX, DNS_TXT, DNS_SRV
+from std.net.ntp import Ntp
+from std.net.mdns import Mdns
+
+mut r = Dns.lookup("1.1.1.1", "gmail.com", DNS_MX)?
+for rec in r.answers: print(rec.to_str())   # gmail.com 3600 MX 5 gmail-smtp-in.l.google.com
+
+mut t = Ntp.query("time.google.com")?
+print(f"clock offset {t.offset_ms} ms, delay {t.delay_ms} ms, stratum {t.stratum}")
+
+for svc in Mdns.browse("_http._tcp", 1500)?:
+    print(f"{svc.name} at {svc.host}:{svc.port} {svc.addresses}")
+```
+
+| API | Description |
+|---|---|
+| `DnsMessage.query(id, name, qtype, recursion)?` | Encode a query (with an EDNS0 OPT record, 4096-byte UDP payload). |
+| `DnsMessage.multi_query(id, names, qtypes, unicast)?` | Several questions; `unicast` sets the mDNS QU bit. |
+| `DnsMessage.parse(bytes)?` | Header flags, questions, `answers` / `authority` / `additional` as `DnsRecord`. Compression pointers are followed (loops and truncation raise). |
+| `DnsRecord` | `name`, `rtype`, `rclass`, `cache_flush`, `ttl`, `rdata`, plus decoded `address` (A/AAAA), `target` (NS/CNAME/PTR/MX/SRV/SOA), `priority`, `weight`, `port`, `texts`, `soa_serial`; `to_str()`. |
+| `Dns.lookup(server, name, qtype)?` / `lookup_port(server, port, name, qtype, timeout_ms)?` | One UDP query with a retry; checks the reply ID. |
+| `DNS_A`, `DNS_NS`, `DNS_CNAME`, `DNS_SOA`, `DNS_PTR`, `DNS_MX`, `DNS_TXT`, `DNS_AAAA`, `DNS_SRV`, `DNS_ANY`, `dns_type_name(t)` | Record types. |
+| `Ntp.query(server)?` / `query_port(server, port, timeout_ms)?` / `best_of(server, n)?` | SNTPv4 (RFC 4330): `NtpResult` with `offset_ms`, `delay_ms`, `server_time_ms`, `stratum`, `leap`, `version`, `ref_id`. Replies that do not echo the request, and kiss-o'-death packets, are rejected. |
+| `Mdns.query(name, qtype, ms)?`, `query_many(...)?`, `resolve_host("x.local", ms)?` | One-shot multicast DNS (RFC 6762) on 224.0.0.251:5353; collects every reply within the window. |
+| `Mdns.browse("_ipp._tcp", ms)?`, `service_types(ms)?`, `services_from_records(stype, recs)` | DNS-SD (RFC 6763) browsing into `MdnsService` (`name`, `instance`, `host`, `port`, `addresses`, `txt`). |
+| `UdpEndpoint.open(family, port)?` / `open_shared(...)?` | UDP with IPv4/IPv6, receive timeouts (`recv(cap, ms)?` returns a `Datagram` with `data`, `addr`, `port`, `timed_out`), multicast join/TTL, `local_port()`. `unix_ms()` is the wall clock in ms. |
 
 ---
 
@@ -763,187 +929,3 @@ if conn.ok:
 else:
     print("handshake failed: " + conn.err)
 ```
-
----
-
-## HPACK — `std.net.hpack`
-
-```tauraro
-from std.net.hpack import HpackEncoder, HpackDecoder, HpackHeaders, Huffman
-
-mut enc = HpackEncoder.init(4096)            # dynamic table limit (SETTINGS_HEADER_TABLE_SIZE)
-mut hs  = HpackHeaders.init()
-hs.add(":method", "GET")
-hs.add(":path", "/")
-hs.add_sensitive("authorization", "secret")  # literal, never indexed (RFC 7541 6.2.3)
-mut block = enc.encode(hs)                   # binary str, use block.len()
-
-mut dec = HpackDecoder.init(4096)
-mut r: Result[HpackHeaders, str] = dec.decode(block)
-if r.is_ok: print(r.ok.get(":path"))
-```
-
-RFC 7541 header compression: static table (61 entries), dynamic table with
-eviction, prefix integers, Huffman strings (`Huffman.encode/decode/encoded_len`),
-and the four literal/indexed representations. Decoding is strict (index 0,
-out-of-range indexes, truncated or overlong integers, EOS or bad padding in a
-Huffman string, size updates above the allowed maximum or after the first
-field, `max_string` / `max_list_size` limits all return `Err`). Encoder
-policy: indexed field on a table hit, else literal with incremental indexing;
-`add_sensitive` → never indexed, `add_no_index` → without indexing, entries
-larger than the table are sent without indexing. `set_max_table_size(n)`
-queues a size-update instruction (smallest value first if changed twice).
-Huffman mode via `set_huffman(HUFF_OFF() | HUFF_AUTO() | HUFF_ALWAYS())`.
-All of RFC 7541 Appendix C is reproduced byte for byte (`tests/lang/130_hpack.tr`).
-Header values are binary-safe (NUL and bytes ≥ 0x80 survive).
-
----
-
-## HTTP/2 — `std.net.http2`
-
-```tauraro
-from std.net.http2 import H2Client, H2Server, H2Request, H2Response
-from std.net.hpack import HpackHeaders
-
-# client: cleartext HTTP/2 with prior knowledge (RFC 9113 section 3.3, "h2c")
-mut c = H2Client.connect("127.0.0.1", 8080)
-if c.ok:
-    mut r = c.get("/hello")                       # H2Response: status, headers, body, trailers
-    if r.is_ok(): print(r.status.to_string() + " " + r.body)
-    mut hs = HpackHeaders.init()
-    hs.add("x-trace", "abc")
-    mut r2 = c.request("POST", "/echo", hs, "payload")
-    mut sid = c.start("GET", "/slow", hs, "")     # several streams in flight ...
-    mut r3 = c.wait(sid)                          # ... collect them in any order
-    c.close()
-
-# server: one connection at a time; the connection multiplexes any number of streams
-def handle(req: H2Request, resp: H2Response):
-    resp.status = 200
-    resp.body = "hi " + req.path
-mut s = H2Server.listen("127.0.0.1", 8080)
-s.serve_once(handle, 1000)                        # waits <= 1 s for a client, serves it
-```
-
-Layers: `h2_frame()` / `H2FrameReader` (9-byte frame header codec), `H2Conn` (sans-IO
-connection state machine: feed bytes with `receive()`, collect output with `take_output()`),
-and the blocking `H2Client` / `H2Server` wrappers over `std.net.tcp` with bounded waits.
-Implemented: connection preface, SETTINGS (+ACK), HEADERS/CONTINUATION (split to the peer's
-MAX_FRAME_SIZE), DATA (padding), PING, GOAWAY, RST_STREAM, WINDOW_UPDATE with connection and
-stream flow control in both directions, stream states, trailers, 1xx skipping, header validation
-(lower-case names, pseudo-header rules, no connection-specific headers), concurrent-stream limits,
-and HPACK via `std.net.hpack`. PRIORITY frames are parsed and ignored; PUSH_PROMISE is refused.
-Bodies are binary-safe.
-
-Limits: **TLS + ALPN (`h2` over https) is not available** (the runtime TLS has no ALPN), so only h2c with
-prior knowledge works; `H2Server` serves one connection at a time; IPv4 only; no server push or
-priorities. Tested in-process (`tests/lang/131_http2_codec.tr`, `132_http2_loopback.tr`) and against
-`curl --http2-prior-knowledge` (opt-in: `TAURARO_H2_CURL=1`).
-
----
-
-## SNTP — `std.net.ntp`
-
-```tauraro
-from std.net.ntp import NtpClient
-
-mut c = NtpClient.new("pool.ntp.org", 123)
-c.timeout_ms = 3000
-mut r = c.query()
-if r.ok:
-    print("offset " + r.offset_ms().to_string() + " ms, delay " + r.delay_ms().to_string() + " ms")
-    print("stratum " + r.stratum.to_string() + ", ref " + r.ref_id)
-else:
-    print("ntp failed: " + r.err)      # r.kod holds a Kiss-o'-Death code such as "RATE"
-```
-
-`NtpPacket` encodes/decodes the 48-byte RFC 5905 packet (leap indicator, version, mode,
-stratum, poll, precision, root delay/dispersion, reference id and the four 32.32
-timestamps). `ntp_offset` / `ntp_delay` implement `((t2-t1)+(t3-t4))/2` and `(t4-t1)-(t3-t2)`;
-`ntp_ts_to_unix_ns` converts timestamps (RFC 4330 era rule). The client ignores datagrams
-whose originate timestamp does not echo its request, wrong mode, stratum 16+, unsynchronised
-servers (LI=3) and datagrams from other addresses, and keeps waiting until `timeout_ms`.
-`ntp_server_reply` builds a server reply (useful for tests and local tools).
-
-It measures, it never sets the system clock. No NTS / symmetric-key authentication, no
-broadcast/symmetric modes, no multi-server filtering, IPv4 only. Needs the runtime helper
-`_tr_wall_ns()` (wall clock in nanoseconds; 100 ns resolution on Windows). Tests:
-`tests/lang/133_ntp.tr` (codec cross-checked with Python `struct`, fake UDP server on loopback).
-
-### `std.net.udp` additions
-
-`send_bytes` (binary-safe, unlike `send_to`), `recv_wait(cap, timeout_ms)` (bounded wait, sets `.src`
-to the sender "ip:port"), `reuse()`, `bind_port(port)`, `join_group("224.0.0.251")`.
-
----
-
-## mDNS / DNS-SD — `std.net.mdns`
-
-```tauraro
-from std.net.mdns import MdnsMessage, MdnsResponder, MdnsSocket, DnsSdService
-from std.net.mdns import dnssd_browse_query, mdns_browse
-
-# find services on the local link (multicast, opt-in network)
-mut found = mdns_browse("_http._tcp.local", 1500)      # Vec[DnsSdService]
-# each: instance, service_type, host, port, addrs, txt, txt_get("key")
-
-# publish one
-mut svc = DnsSdService.make("My Web", "_http._tcp", "local", "myhost.local", 8080, 120)
-svc.add_addr("192.168.1.20")
-svc.add_txt("path=/")
-mut resp = MdnsResponder.init()
-resp.add(svc)
-mut s = MdnsSocket.open_multicast()        # UDP 5353 (shared) + group 224.0.0.251; check s.ok
-while serving:
-    resp.serve_once(s, 500)                # wait <= 500 ms for one query and answer it
-
-# codec only (no sockets)
-mut wire = dnssd_browse_query("_http._tcp.local").encode()
-mut r: Result[MdnsMessage, str] = MdnsMessage.decode(wire)
-```
-
-`MdnsMessage` encodes/decodes RFC 1035 messages (questions with the QU bit, answer / authority /
-additional records, cache-flush bit, name compression both ways, `A`, `AAAA`, `PTR`, `SRV`, `TXT`; other
-types keep raw `rdata`). Names are text with `\.` `\\` `\DDD` escapes so DNS-SD instance names may
-contain dots. Decoding is strict and bounded (pointer loops, forward pointers, over-long labels, bad counts and
-truncated rdata are errors; every prefix of a valid packet is rejected cleanly). The DNS-SD layer builds
-browse / resolve / enumerate queries, collects `DnsSdService`s from responses (`dnssd_services`), and builds
-announce / goodbye messages. `MdnsResponder.answer(query, legacy)` is sans-IO and implements PTR browse
-with known-answer suppression, SRV/TXT/ANY for an instance, A/ANY for a host and the
-`_services._dns-sd._udp.local` meta query. Verified against hand-assembled Python packets, a real
-multicast loopback round trip, and `avahi-daemon` answering an A query for its hostname.
-
-Not implemented: probing / conflict resolution, caching and query back-off, TC-bit continuation,
-IPv6 multicast (the runtime sockets are AF_INET; AAAA is decoded, and published only from raw bytes).
-`MdnsSocket.open_unicast(port, host, dest_port)` runs the same code without multicast (tests,
-point-to-point). The multicast part of `tests/lang/135_mdns_loopback.tr` only runs with `TAURARO_MDNS_NET=1`.
-
----
-
-## POP3 — `std.net.pop3`
-
-```tauraro
-from std.net.pop3 import Pop3Client
-
-mut c = Pop3Client.connect("mail.example.com", 110)       # or Pop3Client.connect_tls(host, 995)
-if c.ok:
-    c.set_timeout(5000)
-    mut r: Result[bool, str] = c.login("user", "secret")      # USER/PASS (c.apop(...) for APOP)
-    if r.is_ok:
-        c.stat()                                              # c.count, c.octets
-        mut m: Result[str, str] = c.retr(1)                   # whole message, CRLF lines, binary safe
-        mut h: Result[str, str] = c.top(1, 0)                 # headers only
-        c.dele(1)
-    c.quit()                                                  # commits the DELE
-```
-
-Every command except `connect` / `quit` is `throws str`; the `Err` text is the server's `-ERR` line or a
-transport problem (`"timeout"`, `"connection closed by the server"`). Also `list()`, `list_one(n)`,
-`uidl()`, `rset()`, `noop()`, `capa()`. Multi-line replies are dot-unstuffed and capped by `max_bytes`
-(default 64 MiB). `std.net.mailio` provides the shared bounded-wait transport (`MailConn`) and RFC 5322
-header helpers: `mail_header(msg, "Subject")` (case-insensitive, unfolds), `mail_header_block`,
-`mail_body_part`.
-
-Limits: no STLS (the runtime cannot upgrade a connected socket); implicit TLS (995) does not verify
-certificates and cannot send NUL bytes; no SASL; IPv4 only. Tested against a scripted in-process
-server (`tests/lang/136_pop3.tr`: dot-stuffing, binary and 150 KB messages, APOP, truncation, silence).

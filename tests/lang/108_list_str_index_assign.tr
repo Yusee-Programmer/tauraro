@@ -1,0 +1,70 @@
+# tests/lang/108_list_str_index_assign.tr
+# Compiler regressions found while writing the stdlib:
+#  * `xs[i] = <str>` on a List[str] (List_TrStr) emitted the legacy char*
+#    store and did not compile; it now goes through List_TrStr_set.
+#  * `return f"...{local}..."` released `local` before building the result
+#    (use-after-free); f-string parts now count as reads of the return value.
+#  * an untyped lambda passed to a `def(float) -> float` parameter compiled its
+#    parameter as int (ABI mismatch); it now takes the expected parameter types.
+
+from std.test import TestRunner
+
+class Box:
+    pub items: List[str]
+
+class Greeter:
+    pub name: str
+
+extend Greeter:
+    pub def title(self) -> str:
+        return "Dr. " + self.name
+
+    pub def greet(self, msg: str) -> str:
+        mut who = self.title()
+        return f"{msg}, {who}! ({who})"
+
+def twice_f(f: def(float) -> float, x: float) -> float:
+    return f(f(x))
+
+class Scaler:
+    pub k: float
+
+extend Scaler:
+    pub def run(self, f: def(float) -> float) -> float:
+        return f(self.k)
+
+def main():
+    mut t = TestRunner.init("108_list_str_index_assign")
+    mut xs: List[str] = ["a", "b", "c"]
+    mut k = 1
+    xs[k] = "zz"
+    t.assert_eq_str(xs[1], "zz", "assign a literal")
+    xs[0] = xs[0] + "q"
+    t.assert_eq_str(xs[0], "aq", "assign a fresh concatenation of itself")
+    mut s = "local"
+    xs[2] = s
+    s = "changed"
+    t.assert_eq_str(xs[2], "local", "element keeps its own reference")
+    mut i = 0
+    while i < 200:
+        xs[0] = f"round {i}"
+        i = i + 1
+    t.assert_eq_str(xs[0], "round 199", "repeated replacement")
+    mut b = Box()
+    b.items = ["x", "y"]
+    b.items[1] = "y2"
+    t.assert_eq_str(b.items[1], "y2", "assign through a field")
+    t.assert_eq_int(len(xs), 3, "length unchanged")
+    mut g = Greeter()
+    g.name = "Ada"
+    mut k2 = 0
+    mut same = true
+    while k2 < 100:
+        if g.greet("Hello") != "Hello, Dr. Ada! (Dr. Ada)": same = false
+        k2 = k2 + 1
+    t.assert_true(same, "return f-string reading a local str")
+    t.assert_true(twice_f(lambda x: x * 1.5, 2.0) == 4.5, "lambda param typed from a function's def(float) param")
+    mut sc = Scaler()
+    sc.k = 0.25
+    t.assert_true(sc.run(lambda v: v + 0.5) == 0.75, "lambda param typed from a method's def(float) param")
+    t.summary()

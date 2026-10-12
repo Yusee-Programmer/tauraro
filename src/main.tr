@@ -13,7 +13,8 @@ from diag import c_red, c_yellow, c_green, c_cyan, c_dim, c_bold, spaces, repeat
 from sema import Sema
 from ast import Decl
 from fmt import Formatter
-from tokfmt import tf_main
+from doc import run_doc
+from coverage import coverage_reset, coverage_report
 from bindgen import run_bindgen, run_bindgen_cpp
 from codegen.c import CGenerator
 from codegen.cpp_export import CppExporter
@@ -74,8 +75,10 @@ pub def print_version():
 
 pub def print_usage():
     print("Usage: tauraroc <file.tr> [options]")
-    print("       tauraroc fmt [-w|--check] [--width N] [--sort-imports] <file.tr|dir>...   Format source (see `tauraroc fmt -h`)")
+    print("       tauraroc fmt [-w] <file.tr>   Format source (stdout, or -w in place)")
     print("       tauraroc lint <file.tr>       Analyze and report warnings/errors")
+    print("       tauraroc doc <file|dir>... [-o DIR] [--html]   API docs (Markdown to stdout, or files in DIR)")
+    print("       tauraroc cov <file.tr> [--lcov FILE] [--include-std]   Run with line coverage and report it")
     print("       tauraroc bindgen <hdr.h>      Generate FFI bindings from a C header (-o out.tr)")
     print("       tauraroc bindgen <hdr.hpp> -h cpp  Bind a C++ header (auto C++->C shim via libclang)")
     print("       tauraroc bindgen <hdr> --pkg <name>  Auto-discover include/link flags via pkg-config")
@@ -112,6 +115,7 @@ pub def print_usage():
     print("  --wasm-memory <MB> Initial linear memory for a --target wasm turnkey link (default 64)")
     print("  --sysroot <path>  Override sysroot for the cross-compiler")
     print("  --debug           Compile with ASAN and bounds-check assertions")
+    print("  --coverage        Instrument for line coverage (gcov data mapped to .tr lines)")
     print("  --strict          Treat alloc/dealloc outside 'unsafe:' as a hard error [U-1]")
     print("  --no-heap         Reject heap types (List/Dict/Set/heap class/dynamic str) [H-1] — structurally")
     print("                    zero-heap for bare metal; value-types/fixed-arrays/pointers/StrView only")
@@ -1210,7 +1214,7 @@ pub def compile_all_c_incremental(c_files: Vec[str], needs: Vec[bool], exe_path:
                       link_paths: Vec[str], lib_flags: Vec[str],
                       opt_level: str, verbose: bool, static_link: bool,
                       target: str, sysroot: str, debug_mode: bool, build_shared: bool,
-                      link_cxx: bool, use_lto: bool) -> int:
+                      link_cxx: bool, use_lto: bool, coverage: bool) -> int:
     mut cc = detect_c_compiler()
     mut triple = ""
     mut cross_flags = ""
@@ -1246,6 +1250,9 @@ pub def compile_all_c_incremental(c_files: Vec[str], needs: Vec[bool], exe_path:
     mut dbg = ""
     if debug_mode:
         dbg = " -fsanitize=address,undefined -g"
+    # Coverage: gcov counters; the #line markers map them to .tr lines.
+    if coverage:
+        dbg = dbg + " --coverage -g"
     # Shared-library builds need position-independent code in every object.
     mut pic = ""
     if build_shared: pic = " -fPIC"
@@ -1284,6 +1291,13 @@ pub def compile_all_c_incremental(c_files: Vec[str], needs: Vec[bool], exe_path:
                 crc = _tr_system(ccmd)
                 if crc != 0:
                     print(c_red("error") + ": compiling " + cpath + " failed (exit code " + str(crc) + ")")
+                    # The remaining changed modules were not compiled, but their new .c
+                    # is already on disk: drop their old objects so the next build does
+                    # not mistake "same .c as last time" for "object up to date".
+                    mut rj = i + 1
+                    while rj < c_files.len:
+                        if needs.get(rj): delete_file(obj_path_for(c_files.get(rj)))
+                        rj = rj + 1
                     return crc
                 if file_exists(opath): break
                 # Lost the race described above: the compiler exited 0 but the
@@ -1405,6 +1419,11 @@ pub def compile_wasm_incremental(c_files: Vec[str], needs: Vec[bool], exe_path: 
             mut crc = _tr_system(ccmd)
             if crc != 0:
                 print(c_red("error") + ": compiling " + cpath + " failed (exit code " + str(crc) + ")")
+                delete_file(opath)
+                mut rj = i + 1
+                while rj < c_files.len:
+                    if needs.get(rj): delete_file(obj_path_for(c_files.get(rj)))
+                    rj = rj + 1
                 return crc
         else:
             reused = reused + 1
@@ -1608,7 +1627,7 @@ pub def main(args: Vec[str]):
     mut subcmd = ""
     if args.len >= 2:
         mut a1 = args.get(1)
-        if a1 == "fmt" or a1 == "lint" or a1 == "bindgen": subcmd = a1
+        if a1 == "fmt" or a1 == "lint" or a1 == "bindgen" or a1 == "doc" or a1 == "cov": subcmd = a1
     if subcmd == "bindgen":
         # tauraroc bindgen <header.h> [-o out.tr] [--cc <compiler>] [-h cpp]  -> FFI bindings.
         # Default binds a C header; `-h cpp` binds a C++ header (auto-generates a C++->C shim
@@ -1669,16 +1688,26 @@ pub def main(args: Vec[str]):
         else:
             run_bindgen(bg_header, bg_out, bg_cc, bg_extra, bg_pkglibs, bg_macros)
         _tr_exit(0)
+    if subcmd == "doc":
+        # tauraroc doc <file-or-dir>... [-o DIR] [--html]
+        mut doc_inputs = Vec[str].init(4)
+        mut doc_out = ""
+        mut doc_html = false
+        mut dk = 2
+        while dk < args.len:
+            mut da = args.get(dk)
+            if da == "-o" and dk + 1 < args.len:
+                doc_out = args.get(dk + 1)
+                dk = dk + 1
+            elif da == "--html": doc_html = true
+            elif not str_starts_with(da, "-"): doc_inputs.push(da)
+            dk = dk + 1
+        if doc_inputs.len == 0:
+            print("error: doc requires a file or directory: tauraroc doc <file|dir>... [-o DIR] [--html]")
+            _tr_exit(1)
+        if doc_html and doc_out == "": doc_out = "docs/api"
+        _tr_exit(run_doc(doc_inputs, doc_out, doc_html))
     if subcmd == "fmt":
-        # Default: the token-based, verified, idempotent formatter (tokfmt.tr).
-        # `--ast` keeps the legacy AST printer (run_fmt below) for a single file.
-        mut legacy_ast = false
-        mut ak = 2
-        while ak < args.len:
-            if args.get(ak) == "--ast": legacy_ast = true
-            ak = ak + 1
-        if not legacy_ast:
-            _tr_exit(tf_main(args))
         mut write_in_place = false
         mut fpath = ""
         mut fk = 2
@@ -1722,6 +1751,9 @@ pub def main(args: Vec[str]):
     mut no_auto_cpp = false              # --no-auto-cpp    : don't auto-compile/link bindgen C++ shims (link them manually with --link)
     mut export_cpp  = false              # --export-cpp     : also emit an ergonomic C++ header (call Tauraro from C++); implies --lib
     mut wasm_memory_mb = 64              # --wasm-memory <MB>: initial linear memory for a --target wasm turnkey link
+    mut cov_mode    = false              # --coverage / `tauraroc cov`: gcov instrumentation with #line mapping to .tr
+    mut cov_lcov    = ""                 # --lcov <file>: also write an LCOV tracefile (cov)
+    mut cov_std     = false              # --include-std: report std/ modules too (cov)
 
     # `tauraroc lint <file>` runs resolution + semantic analysis and reports
     # warnings/errors without producing an executable (like --check, but framed
@@ -1729,6 +1761,10 @@ pub def main(args: Vec[str]):
     mut i = 1
     if subcmd == "lint":
         check_only = true
+        i = 2
+    if subcmd == "cov":
+        cov_mode = true
+        run_after = true
         i = 2
     while i < args.len:
         mut arg = args.get(i)
@@ -1782,6 +1818,13 @@ pub def main(args: Vec[str]):
         elif arg == "--sysroot" and i + 1 < args.len:
             i = i + 1
             sysroot = args.get(i)
+        elif arg == "--coverage":
+            cov_mode = true
+        elif arg == "--lcov" and i + 1 < args.len:
+            cov_lcov = args.get(i + 1)
+            i = i + 1
+        elif arg == "--include-std":
+            cov_std = true
         elif arg == "--debug":
             debug_mode = true
         elif arg == "--prof":
@@ -1818,6 +1861,8 @@ pub def main(args: Vec[str]):
     # narrow, documented workaround, not a silent behavior change.
     if not opt_level_explicit and opt_level == "2" and _tr_is_macos_arm64():
         opt_level = "1"
+    # coverage counts are only line-accurate without optimisation
+    if cov_mode and not opt_level_explicit: opt_level = "0"
 
     if input_path == "":
         print(c_red("error") + ": no input file specified")
@@ -2164,7 +2209,7 @@ pub def main(args: Vec[str]):
     mut c_gen  = CGenerator.init()
     # --debug: emit `#line N "src.tr"` directives so GCC/GDB diagnostics and
     # backtraces map generated C back to the original Tauraro source.
-    c_gen.emit_line_info = debug_mode
+    c_gen.emit_line_info = debug_mode or cov_mode
     # --prof: auto-wrap the compiled program's main() with CPU sampling
     # start/stop and a flat profile dump to stderr on exit -- lets `tauraroc
     # --run --prof foo.tr` or a `tauraroc foo.tr -o foo --prof` build profile
@@ -2214,6 +2259,7 @@ pub def main(args: Vec[str]):
     mut flags_sig = "opt=" + opt_level + ";tgt=" + target
     if static_link: flags_sig = flags_sig + ";static"
     if debug_mode:  flags_sig = flags_sig + ";debug"
+    if cov_mode:    flags_sig = flags_sig + ";cov"
     if sysroot != "": flags_sig = flags_sig + ";sysroot=" + sysroot
     mut flags_path = build_dir + ".build_flags"
     if file_exists(flags_path):
@@ -2600,7 +2646,7 @@ pub def main(args: Vec[str]):
     if not lib_mode and _tr_str_contains(tgt_triple, "wasm32-unknown-unknown"):
         rc = compile_wasm_incremental(all_c_files, needs_recompile, exe_path, build_dir, opt_level, verbose, wasm_memory_mb)
     else:
-        rc = compile_all_c_incremental(all_c_files, needs_recompile, exe_path, build_dir, link_paths, lib_flags, opt_level, verbose, static_link, target, sysroot, debug_mode, lib_mode, has_cpp, use_lto)
+        rc = compile_all_c_incremental(all_c_files, needs_recompile, exe_path, build_dir, link_paths, lib_flags, opt_level, verbose, static_link, target, sysroot, debug_mode, lib_mode, has_cpp, use_lto, cov_mode)
     if rc != 0:
         print(c_red("error") + ": compilation failed (exit code " + str(rc) + ")")
         _tr_exit(rc)
@@ -2610,5 +2656,9 @@ pub def main(args: Vec[str]):
     if run_after:
         mut run_path = to_runnable_path(exe_path)
         if _tr_is_windows(): run_path = path_to_native(run_path)
+        if cov_mode: coverage_reset(all_c_files)
         mut run_rc = _tr_system("\"" + run_path + "\"")
+        if cov_mode:
+            print("")
+            coverage_report(all_c_files, detect_c_compiler(), cov_lcov, cov_std)
         _tr_exit(run_rc)

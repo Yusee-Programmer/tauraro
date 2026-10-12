@@ -1,0 +1,161 @@
+# std.sys.unix_socket -- Unix-domain stream sockets for local IPC.
+#
+# A `UnixListener` binds a socket file and accepts connections; a
+# `UnixStream` connects to one (or comes from `UnixStream.pair()`, a
+# connected pair for parent/child or thread communication). Data is
+# binary-safe. On POSIX, `send_fd`/`recv_fd` pass open file descriptors
+# between processes (SCM_RIGHTS).
+#
+# Windows 10 (1803) and later support AF_UNIX stream sockets; `pair()` and
+# descriptor passing are POSIX only.
+#
+# Usage:
+#   from std.sys.unix_socket import UnixListener, UnixStream
+#   mut l = UnixListener.bind("/tmp/app.sock")?
+#   mut c = UnixStream.connect("/tmp/app.sock")?       # (another thread/process)
+#   mut s = l.accept(5000)?
+#   c.send("ping")?
+#   print(s.recv(100)?)
+
+from std.sys.ipc import trc_unix_listen, trc_unix_accept, trc_unix_connect, trc_unix_pair, trc_sock_send, trc_sock_recv, trc_sock_close
+from std.sys.ipc import trc_sock_shutdown_write, trc_unix_send_fd, trc_unix_recv_fd, trc_unlink_path
+from std.sys.ipc import _ipc_error, _ipc_cstr
+from std.crypto.native import _cn_alloc, _cn_take, _cn_free
+from std.core.string import StringBuilder
+
+pub class UnixStream:
+    pub fd: int
+    pub timeout_ms: int       # recv timeout (-1 = wait forever)
+
+extend UnixStream:
+    pub def from_fd(fd: int) -> UnixStream:
+        mut s = UnixStream()
+        s.fd = fd
+        s.timeout_ms = -1
+        return s
+
+    pub def connect(path: str) throws str -> UnixStream:
+        mut p = _ipc_cstr(path)
+        mut pp = p as Pointer[char]
+        mut fd = trc_unix_connect(pp)
+        if fd < 0:
+            mut e = _ipc_error()
+            raise(e)
+        return UnixStream.from_fd(fd)
+
+    # Two connected streams (POSIX socketpair).
+    pub def pair() throws str -> List[UnixStream]:
+        mut fds = [0, 0]
+        mut fp = fds as Pointer[int]
+        if trc_unix_pair(fp) < 0:
+            mut e = _ipc_error()
+            raise(e)
+        mut out: List[UnixStream] = []
+        out.append(UnixStream.from_fd(fds[0]))
+        out.append(UnixStream.from_fd(fds[1]))
+        return out
+
+    pub def send(self, data: str) throws str:
+        mut dp = data as Pointer[char]
+        if trc_sock_send(self.fd, dp, data.len()) < 0:
+            mut e = _ipc_error()
+            raise(e)
+
+    # Up to `cap` bytes; "" when the peer closed. Raises on timeout.
+    pub def recv(self, cap: int) throws str -> str:
+        mut n0 = cap
+        if n0 < 1: n0 = 1
+        mut out = _cn_alloc(n0)
+        mut n = trc_sock_recv(self.fd, out, n0, self.timeout_ms)
+        if n == -2:
+            _cn_free(out)
+            raise("unix socket: receive timed out")
+        if n < 0:
+            _cn_free(out)
+            mut e = _ipc_error()
+            raise(e)
+        return _cn_take(out, n)
+
+    # Exactly `n` bytes (raises if the stream ends first).
+    pub def recv_exact(self, n: int) throws str -> str:
+        mut sb = StringBuilder.init(n + 1)
+        while sb.len() < n:
+            mut chunk = self.recv(n - sb.len())?
+            if chunk.len() == 0:
+                sb.free()
+                raise("unix socket: stream ended early")
+            sb.append(chunk)
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    # Read until the peer closes.
+    pub def recv_all(self) throws str -> str:
+        mut sb = StringBuilder.init(4096)
+        while true:
+            mut chunk = self.recv(65536)?
+            if chunk.len() == 0: break
+            sb.append(chunk)
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    pub def set_timeout(self, ms: int): self.timeout_ms = ms
+
+    # Signal end of stream to the peer while keeping the read side open.
+    pub def shutdown_write(self):
+        trc_sock_shutdown_write(self.fd)
+
+    # Pass an open descriptor to the peer (POSIX).
+    pub def send_fd(self, fd: int) throws str:
+        if trc_unix_send_fd(self.fd, fd) < 0:
+            mut e = _ipc_error()
+            raise(e)
+
+    pub def recv_fd(self) throws str -> int:
+        mut fd = trc_unix_recv_fd(self.fd)
+        if fd < 0:
+            mut e = _ipc_error()
+            raise(e)
+        return fd
+
+    pub def close(self):
+        if self.fd >= 0:
+            trc_sock_close(self.fd)
+            self.fd = -1
+
+pub class UnixListener:
+    pub fd: int
+    pub path: str
+
+extend UnixListener:
+    # Bind and listen at `path`, replacing a stale socket file.
+    pub def bind(path: str) throws str -> UnixListener:
+        mut p = _ipc_cstr(path)
+        mut pp = p as Pointer[char]
+        mut fd = trc_unix_listen(pp, 64, 1)
+        if fd < 0:
+            mut e = _ipc_error()
+            raise(e)
+        mut l = UnixListener()
+        l.fd = fd
+        l.path = path
+        return l
+
+    # Next connection, waiting up to timeout_ms (-1 = forever).
+    pub def accept(self, timeout_ms: int) throws str -> UnixStream:
+        mut fd = trc_unix_accept(self.fd, timeout_ms)
+        if fd == -2: raise("unix socket: accept timed out")
+        if fd < 0:
+            mut e = _ipc_error()
+            raise(e)
+        return UnixStream.from_fd(fd)
+
+    # Stop listening and remove the socket file.
+    pub def close(self):
+        if self.fd >= 0:
+            trc_sock_close(self.fd)
+            self.fd = -1
+            mut p = _ipc_cstr(self.path)
+            mut pp = p as Pointer[char]
+            trc_unlink_path(pp)

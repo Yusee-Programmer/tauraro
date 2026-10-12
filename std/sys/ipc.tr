@@ -1,0 +1,60 @@
+# tauraro-cpp-shim: ipc_native.c
+#
+# std.sys.ipc -- internal bindings to std/sys/ipc_native.c, shared by
+# std.sys.mmap, std.sys.shm, std.sys.pipe and std.sys.unix_socket.
+
+from std.crypto.native import _cn_alloc, _cn_take, _cn_free
+
+extern "C":
+    def trc_ipc_last_error(out: Pointer[char], cap: int) -> int
+    def trc_mmap_file(path: Pointer[char], mode: int, offset: int, length: int) -> Pointer[char]
+    def trc_mmap_anon(size: int) -> Pointer[char]
+    def trc_map_len(h: Pointer[char]) -> int
+    def trc_map_writable(h: Pointer[char]) -> int
+    def trc_map_read(h: Pointer[char], off: int, out: Pointer[char], n: int) -> int
+    def trc_map_write(h: Pointer[char], off: int, d: Pointer[char], n: int) -> int
+    def trc_map_find(h: Pointer[char], needle: Pointer[char], nl: int, start: int) -> int
+    def trc_map_atomic_load(h: Pointer[char], off: int) -> int
+    def trc_map_atomic_store(h: Pointer[char], off: int, v: int) -> int
+    def trc_map_atomic_add(h: Pointer[char], off: int, v: int) -> int
+    def trc_map_atomic_cas(h: Pointer[char], off: int, expect: int, desired: int) -> int
+    def trc_map_flush(h: Pointer[char]) -> int
+    def trc_map_close(h: Pointer[char])
+    def trc_shm_open(name: Pointer[char], size: int, create: int, exclusive: int) -> Pointer[char]
+    def trc_shm_unlink(name: Pointer[char]) -> int
+    def trc_sem_open(name: Pointer[char], create: int, initial: int) -> Pointer[char]
+    def trc_sem_post(h: Pointer[char]) -> int
+    def trc_sem_wait(h: Pointer[char], timeout_ms: int) -> int
+    def trc_sem_close(h: Pointer[char])
+    def trc_sem_unlink(name: Pointer[char]) -> int
+    def trc_pipe(fds2: Pointer[int]) -> int
+    def trc_mkfifo(path: Pointer[char], mode: int) -> int
+    def trc_fd_open(path: Pointer[char], mode: int, nonblock: int) -> int
+    def trc_fd_read(fd: int, out: Pointer[char], cap: int) -> int
+    def trc_fd_write(fd: int, d: Pointer[char], n: int) -> int
+    def trc_fd_wait_readable(fd: int, timeout_ms: int) -> int
+    def trc_fd_close(fd: int) -> int
+    def trc_unix_listen(path: Pointer[char], backlog: int, unlink_first: int) -> int
+    def trc_unix_accept(lfd: int, timeout_ms: int) -> int
+    def trc_unix_connect(path: Pointer[char]) -> int
+    def trc_unix_pair(fds2: Pointer[int]) -> int
+    def trc_sock_send(fd: int, d: Pointer[char], n: int) -> int
+    def trc_sock_recv(fd: int, out: Pointer[char], cap: int, timeout_ms: int) -> int
+    def trc_sock_close(fd: int) -> int
+    def trc_sock_shutdown_write(fd: int) -> int
+    def trc_unix_send_fd(sock: int, fd: int) -> int
+    def trc_unix_recv_fd(sock: int) -> int
+    def trc_unlink_path(path: Pointer[char]) -> int
+
+# The calling thread's last IPC error text.
+pub def _ipc_error() -> str:
+    mut out = _cn_alloc(256)
+    mut n = trc_ipc_last_error(out, 256)
+    return _cn_take(out, n)
+
+# C string (NUL-terminated copy) for passing a path/name.
+pub def _ipc_cstr(s: str) -> str:
+    return s + ""
+
+pub def _ipc_null(p: Pointer[char]) -> bool:
+    return (p as usize) == (0 as usize)

@@ -1,0 +1,164 @@
+# tests/lang/118_dylib_plugin.tr
+# std.sys.dylib + std.sys.plugin. Builds real shared libraries with
+# `tauraroc --lib` (two plugins, a library that is not a plugin, one built for
+# another plugin ABI, one whose init hook refuses to load), then loads them,
+# calls int / float / str functions across the boundary, broadcasts hooks,
+# reloads and unloads. Also calls C library functions through dylib.
+
+from std.test import TestRunner
+from std.sys.dylib import DynLib, dylib_filename, dylib_extension, dylib_cstr_addr, dylib_read_cstr, dylib_call_int_ptr, DL_LOCAL
+from std.sys.plugin import PluginHost, Plugin, PLUGIN_ABI
+from std.sys.process import Process
+from std.io.file import File
+from std.io.dir import Dir
+from std.sys.fs import Fs
+
+def write(path: str, text: str): File.write_text(path, text)
+
+def build_lib(t: TestRunner, dir: str, name: str, src: str) -> bool:
+    mut tr = dir + "/" + name + "_src.tr"
+    write(tr, src)
+    # cmd.exe (Windows system()) does not run "./x"; the binary is tauraroc.exe there
+    mut exe = "./tauraroc"
+    if dylib_extension() == ".dll": exe = ".\\tauraroc.exe"
+    mut cmd = exe + " " + tr + " --lib -o " + dir + "/" + name
+    mut rc = Process.system(cmd)
+    t.assert_eq_int(rc, 0, "built " + name)
+    return rc == 0
+
+def make_plugins(t: TestRunner, dir: str) -> bool:
+    mut ok = true
+    ok = build_lib(t, dir, "alpha", "export def tauraro_plugin_abi() -> int:\n    return 1\nexport def tauraro_plugin_name() -> str:\n    return \"alpha\"\nexport def tauraro_plugin_version() -> str:\n    return \"1.2.3\"\nexport def add(a: int, b: int) -> int:\n    return a + b\nexport def scale(x: float, k: float) -> float:\n    return x * k\nexport def shout(s: str) -> str:\n    return s.upper() + \"!\"\nexport def join3(a: str, b: str, c: str) -> str:\n    return a + \"-\" + b + \"-\" + c\nexport def on_event(name: str, n: int) -> int:\n    return name.len() + n\n") and ok
+    ok = build_lib(t, dir, "beta", "export def tauraro_plugin_abi() -> int:\n    return 1\nexport def tauraro_plugin_name() -> str:\n    return \"beta\"\nexport def tauraro_plugin_init() -> int:\n    return 0\nexport def tauraro_plugin_shutdown() -> int:\n    return 0\nexport def on_event(name: str, n: int) -> int:\n    return 100\nexport def count() -> int:\n    return 7\n") and ok
+    ok = build_lib(t, dir, "notplugin", "export def add(a: int, b: int) -> int:\n    return a + b\n") and ok
+    ok = build_lib(t, dir, "oldabi", "export def tauraro_plugin_abi() -> int:\n    return 99\nexport def tauraro_plugin_name() -> str:\n    return \"old\"\n") and ok
+    ok = build_lib(t, dir, "refuses", "export def tauraro_plugin_abi() -> int:\n    return 1\nexport def tauraro_plugin_name() -> str:\n    return \"refuses\"\nexport def tauraro_plugin_init() -> int:\n    return 7\n") and ok
+    return ok
+
+def test_dylib(t: TestRunner, dir: str) throws str:
+    t.section("dylib")
+    mut ext = dylib_extension()
+    t.assert_true(ext == ".so" or ext == ".dylib" or ext == ".dll", "platform extension")
+    t.assert_true(dylib_filename("m").ends_with(ext), "dylib_filename")
+    mut lib = DynLib.open(dir + "/alpha" + ext)?
+    t.assert_true(lib.is_open(), "opened")
+    t.assert_eq_int(lib.call_int("add", [40, 2])?, 42, "int call")
+    t.assert_eq_float(lib.call_float("scale", [1.5, 4.0])?, 6.0, 0.0, "float call")
+    t.assert_eq_str(lib.call_str("shout", ["hey"])?, "HEY!", "str call")
+    t.assert_eq_str(lib.call_str("join3", ["a", "bb", "ccc"])?, "a-bb-ccc", "3 str args")
+    t.assert_eq_int(lib.call_str_int("on_event", "click", [10])?, 15, "str + int call")
+    t.assert_true(lib.has("add"), "has")
+    t.assert_false(lib.has("nope"), "has missing")
+    mut f = lib.symbol("add")?
+    t.assert_eq_int(dylib_call_int_ptr(f, [1, 2])?, 3, "call through a symbol address")
+    mut miss: Result[int, str] = lib.symbol("missing_fn")
+    t.assert_true(miss.is_err, "missing symbol raises")
+    if miss.is_err: t.assert_contains(miss.err, "missing_fn", "error names the symbol")
+    mut no_strs: List[str] = []
+    mut name = lib.call_str("tauraro_plugin_name", no_strs)?
+    lib.close()
+    t.assert_false(lib.is_open(), "closed")
+    t.assert_eq_str(name, "alpha", "string returned by a library survives closing it")
+    mut after: Result[int, str] = lib.call_int("add", [1, 1])
+    t.assert_true(after.is_err, "calls after close raise")
+    mut bad: Result[DynLib, str] = DynLib.open(dir + "/does_not_exist" + ext)
+    t.assert_true(bad.is_err, "missing library raises")
+
+    # C library functions
+    if ext == ".dll":
+        mut crt = DynLib.open("msvcrt.dll")?
+        mut s = "hello world"
+        t.assert_eq_int(crt.call_int("strlen", [dylib_cstr_addr(s)])?, 11, "C strlen")
+        t.assert_eq_float(crt.call_float("pow", [2.0, 10.0])?, 1024.0, 0.0, "C pow")
+        crt.close()
+    else:
+        mut me = DynLib.self_process()?
+        mut s2 = "hello world"
+        t.assert_eq_int(me.call_int("strlen", [dylib_cstr_addr(s2)])?, 11, "C strlen")
+        t.assert_eq_int(me.call_int("labs", [-42])?, 42, "C labs")
+        # libm is linked as-needed, so look pow up in the math library itself
+        mut mname = "libm.so.6"
+        if ext == ".dylib": mname = "libSystem.B.dylib"
+        mut mlib = DynLib.open(mname)?
+        t.assert_eq_float(mlib.call_float("pow", [2.0, 10.0])?, 1024.0, 0.0, "C pow")
+        mlib.close()
+        mut env_p = me.call_int("getenv", [dylib_cstr_addr("TAURARO_NO_SUCH_VAR")])?
+        t.assert_eq_int(env_p, 0, "NULL pointer result")
+        t.assert_eq_str(dylib_read_cstr(0), "", "read_cstr(0)")
+
+def test_plugins(t: TestRunner, dir: str) throws str:
+    t.section("plugins")
+    mut host = PluginHost.init()
+    mut n = host.discover(dir)
+    t.assert_eq_int(n, 2, "two plugins loaded")
+    t.assert_eq_int(len(host.errors), 3, "three libraries rejected")
+    mut errs = ""
+    mut i = 0
+    while i < len(host.errors):
+        errs = errs + host.errors[i] + "\n"
+        i = i + 1
+    t.assert_contains(errs, "does not export tauraro_plugin_abi", "non-plugin rejected")
+    t.assert_contains(errs, "plugin ABI 99", "ABI mismatch rejected")
+    t.assert_contains(errs, "init failed (code 7)", "refusing init rejected")
+    mut names = host.names()
+    t.assert_eq_str(names[0], "alpha", "load order")
+    t.assert_eq_str(names[1], "beta", "second plugin")
+    mut a = host.find("alpha")?
+    t.assert_eq_str(a.version, "1.2.3", "version")
+    t.assert_eq_int(a.call_int("add", [2, 3])?, 5, "plugin call")
+    t.assert_eq_str(a.call_str("shout", ["go"])?, "GO!", "plugin str call")
+    mut b = host.find("beta")?
+    t.assert_eq_str(b.version, "", "no version")
+    mut hooks = host.broadcast_str_int("on_event", "start", [1])
+    t.assert_eq_int(len(hooks), 2, "hook in both plugins")
+    t.assert_eq_int(hooks[0], 6, "alpha hook")
+    t.assert_eq_int(hooks[1], 100, "beta hook")
+    mut no_ints: List[int] = []
+    mut counts = host.broadcast_int("count", no_ints)
+    t.assert_eq_int(len(counts), 1, "only beta has count()")
+    mut dup: Result[Plugin, str] = host.load(a.path)
+    t.assert_true(dup.is_err, "duplicate name rejected")
+    mut r = host.reload("alpha")?
+    t.assert_eq_int(r.call_int("add", [20, 22])?, 42, "reloaded plugin works")
+    t.assert_eq_str(host.names()[1], "alpha", "reloaded plugin goes last")
+    host.unload("beta")?
+    t.assert_eq_int(host.count(), 1, "unloaded")
+    t.assert_false(host.has_plugin("beta"), "beta gone")
+    mut gone: Result[Plugin, str] = host.find("beta")
+    t.assert_true(gone.is_err, "find after unload raises")
+    host.unload_all()
+    t.assert_eq_int(host.count(), 0, "unload_all")
+    t.assert_eq_int(PLUGIN_ABI, 1, "ABI constant")
+
+def cleanup(dir: str):
+    mut d = Dir.init(dir)
+    mut entries = d.list()
+    mut i = 0
+    while i < entries.len:
+        mut e = entries.get(i)
+        if e != "." and e != "..": Fs.delete(dir + "/" + e)
+        i = i + 1
+    d.remove()
+
+def main():
+    mut t = TestRunner.init("118_dylib_plugin")
+    mut dir = f"build/plugtest-{Process.get_pid()}"
+    mut d = Dir.init(dir)
+    d.make()
+    if make_plugins(t, dir):
+        mut r1: Result[bool, str] = run_dylib(t, dir)
+        t.assert_true(r1.is_ok, "dylib section completed")
+        if r1.is_err: print(r1.err)
+        mut r2: Result[bool, str] = run_plugins(t, dir)
+        t.assert_true(r2.is_ok, "plugin section completed")
+        if r2.is_err: print(r2.err)
+    cleanup(dir)
+    t.summary()
+
+def run_dylib(t: TestRunner, dir: str) throws str -> bool:
+    test_dylib(t, dir)?
+    return true
+
+def run_plugins(t: TestRunner, dir: str) throws str -> bool:
+    test_plugins(t, dir)?
+    return true

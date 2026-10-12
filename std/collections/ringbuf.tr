@@ -1,0 +1,122 @@
+# std.collections.ringbuf -- a fixed-capacity circular buffer.
+#
+# `RingBuffer[T]` stores up to `capacity` items. push_back / push_front are
+# O(1); when the buffer is full they either refuse (returning false) or, with
+# `overwrite` on, drop the item at the other end -- the usual "keep the last
+# N samples" behaviour. Indexing is relative to the front.
+#
+# Usage:
+#   from std.collections.ringbuf import RingBuffer
+#   mut r = RingBuffer[int].init(3, true)     # keep the last 3
+#   r.push_back(1); r.push_back(2); r.push_back(3); r.push_back(4)
+#   r.to_list()                                # [2, 3, 4]
+#   r.pop_front(0)                             # 2 (0 = value when empty)
+
+pub class RingBuffer[T]:
+    pub data:      List[T]
+    pub head:      int
+    pub count:     int
+    pub capacity:  int
+    pub overwrite: bool
+
+extend RingBuffer[T]:
+    pub def init(capacity: int, overwrite: bool) -> RingBuffer[T]:
+        mut r = RingBuffer[T]()
+        r.data = []
+        r.head = 0
+        r.count = 0
+        mut c = capacity
+        if c < 1: c = 1
+        r.capacity = c
+        r.overwrite = overwrite
+        return r
+
+    def _put(self, phys: int, v: T):
+        if phys < len(self.data):
+            self.data[phys] = v
+        else:
+            self.data.append(v)
+
+    pub def len(self) -> int: return self.count
+    pub def is_empty(self) -> bool: return self.count == 0
+    pub def is_full(self) -> bool: return self.count == self.capacity
+
+    # Append at the back. When full: drop the front item (overwrite) or return false.
+    pub def push_back(self, v: T) -> bool:
+        if self.count == self.capacity:
+            if not self.overwrite: return false
+            # the slot after the back is the current front: overwrite it
+            self._put(self.head, v)
+            self.head = (self.head + 1) % self.capacity
+            return true
+        mut phys = (self.head + self.count) % self.capacity
+        if phys > len(self.data): phys = len(self.data)
+        self._put(phys, v)
+        self.count = self.count + 1
+        return true
+
+    # Prepend at the front. When full: drop the back item (overwrite) or return false.
+    pub def push_front(self, v: T) -> bool:
+        if len(self.data) < self.capacity:
+            # materialise every slot first so the physical ring is contiguous
+            while len(self.data) < self.capacity:
+                self.data.append(v)
+        if self.count == self.capacity:
+            if not self.overwrite: return false
+            self.head = (self.head + self.capacity - 1) % self.capacity
+            self.data[self.head] = v
+            return true
+        self.head = (self.head + self.capacity - 1) % self.capacity
+        self.data[self.head] = v
+        self.count = self.count + 1
+        return true
+
+    # Remove and return the front item, or `empty` when there is none.
+    pub def pop_front(self, empty: T) -> T:
+        if self.count == 0: return empty
+        mut v = self.data[self.head]
+        self.head = (self.head + 1) % self.capacity
+        self.count = self.count - 1
+        return v
+
+    pub def pop_back(self, empty: T) -> T:
+        if self.count == 0: return empty
+        mut phys = (self.head + self.count - 1) % self.capacity
+        mut v = self.data[phys]
+        self.count = self.count - 1
+        return v
+
+    pub def front(self, empty: T) -> T:
+        if self.count == 0: return empty
+        return self.data[self.head]
+
+    pub def back(self, empty: T) -> T:
+        if self.count == 0: return empty
+        return self.data[(self.head + self.count - 1) % self.capacity]
+
+    # i-th item from the front (negative i counts from the back), or `empty`.
+    pub def get(self, i: int, empty: T) -> T:
+        mut k = i
+        if k < 0: k = self.count + k
+        if k < 0 or k >= self.count: return empty
+        return self.data[(self.head + k) % self.capacity]
+
+    pub def set(self, i: int, v: T) -> bool:
+        mut k = i
+        if k < 0: k = self.count + k
+        if k < 0 or k >= self.count: return false
+        self.data[(self.head + k) % self.capacity] = v
+        return true
+
+    pub def clear(self):
+        self.head = 0
+        self.count = 0
+
+    # Items front to back.
+    pub def to_list(self) -> List[T]:
+        mut out: List[T] = []
+        mut i = 0
+        while i < self.count:
+            out.append(self.data[(self.head + i) % self.capacity])
+            i = i + 1
+        return out

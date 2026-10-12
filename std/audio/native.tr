@@ -1,0 +1,23 @@
+# tauraro-cpp-shim: audio_native.c
+#
+# std.audio.native -- internal bindings to std/audio/audio_native.c.
+
+extern "C":
+    def _tr_c_malloc(size: int) -> Pointer[char]
+    def _tr_c_memcpy(dst: Pointer[char], src: Pointer[char], n: int)
+    def _tr_str_wrap_len(s: Pointer[char], blen: int) -> str
+    def trc_au_free(h: Pointer[char])
+    def trc_au_ok(h: Pointer[char]) -> int
+    def trc_au_frames(h: Pointer[char]) -> int
+    def trc_au_channels(h: Pointer[char]) -> int
+    def trc_au_rate(h: Pointer[char]) -> int
+    def trc_au_bits(h: Pointer[char]) -> int
+    def trc_au_is_float(h: Pointer[char]) -> int
+    def trc_au_error(h: Pointer[char], out: Pointer[char], cap: int) -> int
+    def trc_au_copy(h: Pointer[char], out: Pointer[float])
+    def trc_wav_decode(data: Pointer[char], n: int) -> Pointer[char]
+    def trc_wav_encode(s: Pointer[float], frames: int, ch: int, rate: int, bits: int, is_float: int, dither: int, out_len: Pointer[int]) -> Pointer[char]
+    def trc_mp3_decode(data: Pointer[char], n: int) -> Pointer[char]
+    def trc_flac_decode(data: Pointer[char], n: int) -> Pointer[char]
+    def trc_au_buf_free(p: Pointer[char])
+    def trc_au_resample(inp: Pointer[float], frames: int, ch: int, from_rate: int, to_rate: int, out: Pointer[float], out_frames: int, quality: int) -> int

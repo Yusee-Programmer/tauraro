@@ -1,1721 +1,425 @@
-# std.net.http2 -- HTTP/2 (RFC 9113): frame codec, stream state machine, flow
-# control, HPACK (std.net.hpack), an h2c "prior knowledge" client and a minimal
-# server.
+# tauraro-cpp-shim: h2_native.c
 #
-#   from std.net.http2 import H2Client, H2Server, H2Request, H2Response, H2Conn
-#   from std.net.hpack import HpackHeaders
+# std.net.http2 -- HTTP/2 client (RFC 9113) and HPACK (RFC 7541).
 #
-#   # client (cleartext HTTP/2 with prior knowledge, RFC 9113 section 3.3)
-#   mut c = H2Client.connect("127.0.0.1", 8080)
-#   if c.ok:
-#       mut r = c.get("/hello")
-#       if r.is_ok(): print(r.status.to_string() + " " + r.body)
-#       c.close()
+# `Http2Client` opens one connection -- https with ALPN "h2" (verified TLS
+# 1.3 via std.net.tls) or cleartext h2c with prior knowledge -- and runs many
+# requests over it concurrently: `submit` starts a request and returns its
+# stream id, `wait`/`wait_all` drive the connection until streams finish,
+# `response` collects status, headers, body and trailers (gRPC puts its
+# status in trailers). Flow control, CONTINUATION frames, PING, SETTINGS,
+# RST_STREAM and GOAWAY are handled; server push is disabled.
 #
-#   # server: one connection at a time, handler fills the response
-#   def handle(req: H2Request, resp: H2Response):
-#       resp.status = 200
-#       resp.body = "hi " + req.path
-#   mut s = H2Server.listen("127.0.0.1", 8080)
-#   while s.ok:
-#       s.serve_once(handle, 1000)          # accept (<= 1 s) + serve that connection
+# `Hpack` exposes the header compressor on its own (dynamic table, Huffman,
+# never-indexed sensitive headers) for protocols that reuse it.
 #
-# Layers
-#   * H2FrameReader / h2_frame()   byte <-> frame codec (9-byte header, 24-bit length).
-#   * H2Conn      sans-IO connection: feed received bytes with receive(), collect bytes
-#                 to send with take_output(). Used by both client and server, and testable
-#                 without sockets (two H2Conn objects can be wired back to back).
-#   * H2Client / H2Server   blocking wrappers over std.net.tcp with bounded waits.
+# Usage:
+#   from std.net.http2 import Http2Client, H2Headers
+#   mut c = Http2Client.connect("nghttp2.org", 443)?
+#   mut a = c.submit("GET", "/httpbin/get", H2Headers.init(), "", false)?
+#   mut b = c.submit("GET", "/httpbin/headers", H2Headers.init(), "", false)?
+#   c.wait_all()?
+#   mut ra = c.response(a)
+#   print(ra.status, ra.headers.get("content-type"), ra.body)
+#   c.close()
 #
-# Implemented: connection preface, SETTINGS (+ACK, validation, INITIAL_WINDOW_SIZE
-# deltas, MAX_FRAME_SIZE, HEADER_TABLE_SIZE), HEADERS / CONTINUATION (header blocks
-# split to the peer's MAX_FRAME_SIZE), DATA with padding, PING (+ACK), GOAWAY,
-# RST_STREAM, WINDOW_UPDATE and connection/stream flow control in both directions
-# (receive windows are replenished as data is buffered), stream states
-# idle/open/half-closed/closed, trailers, 1xx interim responses (skipped), request
-# and response header validation (lower-case names, pseudo-header order, no
-# connection-specific headers), concurrent-stream limits, PRIORITY frames are parsed and
-# IGNORED (deprecated by RFC 9113), PUSH_PROMISE is refused (we send ENABLE_PUSH=0).
-#
-# NOT implemented / limits (honest list)
-#   * TLS + ALPN ("h2" over https) is out of scope: the runtime TLS layer has no ALPN
-#     support, so only h2c with prior knowledge works (no Upgrade: h2c either, it was
-#     removed from RFC 9113). Put a TLS terminator in front, or use std.net.https
-#     for HTTP/1.1.
-#   * H2Server serves ONE connection at a time (serve_once blocks until that
-#     connection ends); the connection itself multiplexes any number of streams.
-#     Handlers run to completion on the connection loop.
-#   * No server push, no stream priorities, no Extended CONNECT / RFC 8441, no HTTP/2
-#     CONNECT tunnelling beyond header validation.
-#   * IPv4 only (the runtime resolver is AF_INET); connect has no timeout.
-#   * Bodies are binary-safe `str` (real length), but very large bodies live in memory.
-#     max_body_bytes (default 64 MiB) caps what a peer can make us buffer per stream.
-#   * Response header names/values with CR/LF are not special in HTTP/2; names must be
-#     lower-case (send_* lower-cases them for you).
+#   mut r = c.get("/httpbin/get")?      # one-shot convenience
 
-from std.core.vec import Vec
+from std.crypto.native import _cn_alloc, _cn_take, _cn_free
+from std.crypto.x509 import TrustStore
+from std.net.tls import TlsOptions
 from std.core.string import StringBuilder
-from std.string.str import Str
-from std.sys.time import Clock
-from std.net.tcp import TcpStream
-from std.net.tcp import TcpListener
-from std.net.hpack import HpackEncoder
-from std.net.hpack import HpackDecoder
-from std.net.hpack import HpackHeaders
 
 extern "C":
-    def _tr_c_malloc(size: int) -> Pointer[char]
-    def _tr_c_free(ptr: Pointer[char])
-    def _tr_c_memcpy(dst: Pointer[char], src: Pointer[char], n: int)
-    def _tr_c_memmove(dst: Pointer[char], src: Pointer[char], n: int)
-    def _tr_str_wrap_len(s: Pointer[char], blen: int) -> str
-    def _tr_tcp_recv_nb(fd: int, buf: Pointer[char], cap: int) -> int
-    def _tr_tcp_send_raw(fd: int, buf: Pointer[char], len: int) -> int
+    def trc_h2_connect(host: Pointer[char], hostlen: int, port: int, tls: int, store: Pointer[char], verify: int, timeout_ms: int) -> Pointer[char]
+    def trc_h2_ok(h: Pointer[char]) -> int
+    def trc_h2_error(h: Pointer[char], out: Pointer[char], cap: int) -> int
+    def trc_h2_set_timeout(h: Pointer[char], ms: int)
+    def trc_h2_goaway(h: Pointer[char]) -> int
+    def trc_h2_submit(h: Pointer[char], method: Pointer[char], path: Pointer[char], extra: Pointer[char], elen: int, body: Pointer[char], blen: int, has_body: int) -> int
+    def trc_h2_wait(h: Pointer[char], sid: int, timeout_ms: int) -> int
+    def trc_h2_status(h: Pointer[char], sid: int) -> int
+    def trc_h2_state(h: Pointer[char], sid: int) -> int
+    def trc_h2_stream_error(h: Pointer[char], sid: int, out: Pointer[char], cap: int) -> int
+    def trc_h2_part(h: Pointer[char], sid: int, part: int, out: Pointer[char], cap: int) -> int
+    def trc_h2_release(h: Pointer[char], sid: int)
+    def trc_h2_ping(h: Pointer[char], timeout_ms: int) -> int
+    def trc_h2_close(h: Pointer[char])
+    def trc_hpack_new(max_size: int) -> Pointer[char]
+    def trc_hpack_free(h: Pointer[char])
+    def trc_hpack_set_max(h: Pointer[char], m: int)
+    def trc_hpack_table_size(h: Pointer[char]) -> int
+    def trc_hpack_table_count(h: Pointer[char]) -> int
+    def trc_hpack_encode(h: Pointer[char], blob: Pointer[char], n: int, out: Pointer[char], cap: int) -> int
+    def trc_hpack_decode(h: Pointer[char], data: Pointer[char], n: int, out: Pointer[char], cap: int) -> int
+    def trc_huffman_encode(s: Pointer[char], n: int, out: Pointer[char], cap: int) -> int
+    def trc_huffman_decode(s: Pointer[char], n: int, out: Pointer[char], cap: int) -> int
 
-# ---------------------------------------------------------------------------
-# Constants (functions, like std.net.tcp.WOULD_BLOCK)
-# ---------------------------------------------------------------------------
+def _h2_null(p: Pointer[char]) -> bool:
+    return (p as usize) == (0 as usize)
 
-# frame types
-pub def H2_DATA() -> int: return 0
-pub def H2_HEADERS() -> int: return 1
-pub def H2_PRIORITY() -> int: return 2
-pub def H2_RST_STREAM() -> int: return 3
-pub def H2_SETTINGS() -> int: return 4
-pub def H2_PUSH_PROMISE() -> int: return 5
-pub def H2_PING() -> int: return 6
-pub def H2_GOAWAY() -> int: return 7
-pub def H2_WINDOW_UPDATE() -> int: return 8
-pub def H2_CONTINUATION() -> int: return 9
-
-# flags
-pub def H2_FLAG_END_STREAM() -> int: return 1
-pub def H2_FLAG_ACK() -> int: return 1
-pub def H2_FLAG_END_HEADERS() -> int: return 4
-pub def H2_FLAG_PADDED() -> int: return 8
-pub def H2_FLAG_PRIORITY() -> int: return 32
-
-# error codes
-pub def H2_NO_ERROR() -> int: return 0
-pub def H2_PROTOCOL_ERROR() -> int: return 1
-pub def H2_INTERNAL_ERROR() -> int: return 2
-pub def H2_FLOW_CONTROL_ERROR() -> int: return 3
-pub def H2_SETTINGS_TIMEOUT() -> int: return 4
-pub def H2_STREAM_CLOSED() -> int: return 5
-pub def H2_FRAME_SIZE_ERROR() -> int: return 6
-pub def H2_REFUSED_STREAM() -> int: return 7
-pub def H2_CANCEL() -> int: return 8
-pub def H2_COMPRESSION_ERROR() -> int: return 9
-pub def H2_CONNECT_ERROR() -> int: return 10
-pub def H2_ENHANCE_YOUR_CALM() -> int: return 11
-pub def H2_INADEQUATE_SECURITY() -> int: return 12
-pub def H2_HTTP_1_1_REQUIRED() -> int: return 13
-
-# stream states (RFC 9113 section 5.1)
-pub def H2_ST_IDLE() -> int: return 0
-pub def H2_ST_OPEN() -> int: return 1
-pub def H2_ST_HALF_CLOSED_LOCAL() -> int: return 2
-pub def H2_ST_HALF_CLOSED_REMOTE() -> int: return 3
-pub def H2_ST_CLOSED() -> int: return 4
-
-# SETTINGS identifiers
-pub def H2_SET_HEADER_TABLE_SIZE() -> int: return 1
-pub def H2_SET_ENABLE_PUSH() -> int: return 2
-pub def H2_SET_MAX_CONCURRENT_STREAMS() -> int: return 3
-pub def H2_SET_INITIAL_WINDOW_SIZE() -> int: return 4
-pub def H2_SET_MAX_FRAME_SIZE() -> int: return 5
-pub def H2_SET_MAX_HEADER_LIST_SIZE() -> int: return 6
-
-# The 24-octet client connection preface.
-pub def h2_preface() -> str:
-    return "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"
-
-# Human-readable name of an error code.
-pub def h2_error_name(code: int) -> str:
-    if code == 0: return "NO_ERROR"
-    if code == 1: return "PROTOCOL_ERROR"
-    if code == 2: return "INTERNAL_ERROR"
-    if code == 3: return "FLOW_CONTROL_ERROR"
-    if code == 4: return "SETTINGS_TIMEOUT"
-    if code == 5: return "STREAM_CLOSED"
-    if code == 6: return "FRAME_SIZE_ERROR"
-    if code == 7: return "REFUSED_STREAM"
-    if code == 8: return "CANCEL"
-    if code == 9: return "COMPRESSION_ERROR"
-    if code == 10: return "CONNECT_ERROR"
-    if code == 11: return "ENHANCE_YOUR_CALM"
-    if code == 12: return "INADEQUATE_SECURITY"
-    if code == 13: return "HTTP_1_1_REQUIRED"
-    return "UNKNOWN_ERROR(" + code.to_string() + ")"
-
-# ---------------------------------------------------------------------------
-# Byte helpers (binary safe)
-# ---------------------------------------------------------------------------
-
-def _h2_u8(s: str, off: int) -> int:
+def _h2_byte(s: str, i: int) -> int:
     mut p = s as Pointer[char]
     unsafe:
-        return (p.offset(off).read() as int) & 0xFF
-
-def _h2_slice(s: str, off: int, n: int) -> str:
-    mut out = _tr_c_malloc(n + 1)
-    if n > 0:
-        unsafe:
-            _tr_c_memcpy(out, (s as Pointer[char]).offset(off), n)
-    unsafe: out.offset(n).write('\0')
-    return _tr_str_wrap_len(out, n)
-
-def _h2_buf_u8(sb: StringBuilder, off: int) -> int:
-    unsafe:
-        return (sb.buf.data.offset(off).read() as int) & 0xFF
-
-def _h2_buf_slice(sb: StringBuilder, off: int, n: int) -> str:
-    mut out = _tr_c_malloc(n + 1)
-    if n > 0:
-        unsafe:
-            _tr_c_memcpy(out, sb.buf.data.offset(off), n)
-    unsafe: out.offset(n).write('\0')
-    return _tr_str_wrap_len(out, n)
-
-# Drop the first n bytes of a StringBuilder in place.
-def _h2_buf_consume(sb: StringBuilder, n: int):
-    if n <= 0: return
-    if n >= sb.buf.len:
-        sb.clear()
-        return
-    unsafe:
-        _tr_c_memmove(sb.buf.data, sb.buf.data.offset(n), sb.buf.len - n)
-    sb.buf.len = sb.buf.len - n
-    unsafe: sb.buf.data.offset(sb.buf.len).write('\0')
-
-def _h2_put_u32(sb: StringBuilder, v: int):
-    sb.append_char((v >> 24) & 0xFF)
-    sb.append_char((v >> 16) & 0xFF)
-    sb.append_char((v >> 8) & 0xFF)
-    sb.append_char(v & 0xFF)
-
-def _h2_get_u32(s: str, off: int) -> int:
-    return (_h2_u8(s, off) << 24) | (_h2_u8(s, off + 1) << 16) | (_h2_u8(s, off + 2) << 8) | _h2_u8(s, off + 3)
-
-def _h2_concat(a: str, b: str) -> str:
-    mut sb = StringBuilder.init(a.len() + b.len() + 8)
-    sb.append(a)
-    sb.append(b)
-    mut out = sb.to_owned()
-    sb.free()
-    return out
+        return (p.offset(i).read() as int) & 255
 
 def _h2_lower(s: str) -> str:
-    mut n = s.len()
-    mut need = false
-    mut i = 0
-    while i < n:
-        mut c = _h2_u8(s, i)
-        if c >= 65 and c <= 90: need = true
-        i = i + 1
-    if not need: return s
-    mut sb = StringBuilder.init(n + 1)
-    mut j = 0
-    while j < n:
-        mut c2 = _h2_u8(s, j)
-        if c2 >= 65 and c2 <= 90: c2 = c2 + 32
-        sb.append_char(c2)
-        j = j + 1
-    mut out = sb.to_owned()
-    sb.free()
-    return out
-
-def _h2_has_upper(s: str) -> bool:
+    mut sb = StringBuilder.init(s.len() + 1)
     mut i = 0
     while i < s.len():
-        mut c = _h2_u8(s, i)
-        if c >= 65 and c <= 90: return true
-        i = i + 1
-    return false
-
-# ---------------------------------------------------------------------------
-# Frame codec
-# ---------------------------------------------------------------------------
-
-# Serialize one frame: 3-byte length, type, flags, 4-byte stream id (high bit 0),
-# payload. Returns a binary `str` (use .len()).
-pub def h2_frame(ftype: int, flags: int, stream_id: int, payload: str) -> str:
-    mut sb = StringBuilder.init(payload.len() + 16)
-    h2_put_frame(sb, ftype, flags, stream_id, payload)
-    mut out = sb.to_owned()
-    sb.free()
-    return out
-
-# Append one frame to a StringBuilder.
-pub def h2_put_frame(sb: StringBuilder, ftype: int, flags: int, stream_id: int, payload: str):
-    mut n = payload.len()
-    sb.append_char((n >> 16) & 0xFF)
-    sb.append_char((n >> 8) & 0xFF)
-    sb.append_char(n & 0xFF)
-    sb.append_char(ftype & 0xFF)
-    sb.append_char(flags & 0xFF)
-    _h2_put_u32(sb, stream_id & 0x7FFFFFFF)
-    sb.append(payload)
-
-# SETTINGS payload from (id, value) pairs.
-pub def h2_settings_payload(ids: List[int], values: List[int]) -> str:
-    mut sb = StringBuilder.init(64)
-    mut i = 0
-    while i < len(ids):
-        sb.append_char((ids[i] >> 8) & 0xFF)
-        sb.append_char(ids[i] & 0xFF)
-        _h2_put_u32(sb, values[i])
+        mut c = _h2_byte(s, i)
+        if c >= 65 and c <= 90: c = c + 32
+        sb.append_char(c)
         i = i + 1
     mut out = sb.to_owned()
     sb.free()
     return out
 
-# Incremental frame parser. feed() bytes as they arrive; call next() until it
-# returns false. After next() == true the frame is in ftype/flags/stream_id/payload.
-# next() throws when the length field exceeds max_frame_size (FRAME_SIZE_ERROR).
-pub class H2FrameReader:
-    pub buf:           StringBuilder
-    pub pos:           int
-    pub max_frame_size: int
-    pub ftype:         int
-    pub flags:         int
-    pub stream_id:     int
-    pub payload:       str
+# An ordered header list (names compared case-insensitively).
+pub class H2Headers:
+    pub names:  List[str]
+    pub values: List[str]
 
-extend H2FrameReader:
-    pub def init(max_frame_size: int) -> H2FrameReader:
-        mut r = H2FrameReader()
-        r.buf            = StringBuilder.init(1024)
-        r.pos            = 0
-        r.max_frame_size = max_frame_size
-        r.ftype          = 0
-        r.flags          = 0
-        r.stream_id      = 0
-        r.payload        = ""
-        return r
+extend H2Headers:
+    pub def init() -> H2Headers:
+        mut h = H2Headers()
+        h.names = []
+        h.values = []
+        return h
 
-    pub def feed(self, data: str):
-        self.buf.append(data)
+    pub def add(self, name: str, value: str):
+        self.names.append(name)
+        self.values.append(value)
 
-    # bytes buffered but not yet returned as frames
-    pub def pending(self) -> int:
-        return self.buf.len() - self.pos
+    # Replace every header called `name` with one value.
+    pub def set(self, name: str, value: str):
+        self.remove(name)
+        self.add(name, value)
 
-    pub def next(self) throws str -> bool:
-        mut avail = self.buf.len() - self.pos
-        if avail < 9: return false
-        mut b0 = _h2_buf_u8(self.buf, self.pos)
-        mut b1 = _h2_buf_u8(self.buf, self.pos + 1)
-        mut b2 = _h2_buf_u8(self.buf, self.pos + 2)
-        mut n = (b0 << 16) | (b1 << 8) | b2
-        if n > self.max_frame_size: raise("FRAME_SIZE_ERROR: frame of " + n.to_string() + " bytes exceeds " + self.max_frame_size.to_string())
-        if avail < 9 + n: return false
-        self.ftype = _h2_buf_u8(self.buf, self.pos + 3)
-        self.flags = _h2_buf_u8(self.buf, self.pos + 4)
-        self.stream_id = ((_h2_buf_u8(self.buf, self.pos + 5) & 0x7F) << 24) | (_h2_buf_u8(self.buf, self.pos + 6) << 16) | (_h2_buf_u8(self.buf, self.pos + 7) << 8) | _h2_buf_u8(self.buf, self.pos + 8)
-        self.payload = _h2_buf_slice(self.buf, self.pos + 9, n)
-        self.pos = self.pos + 9 + n
-        # compact once the consumed prefix gets large (or everything is consumed)
-        if self.pos >= self.buf.len():
-            self.buf.clear()
-            self.pos = 0
-        elif self.pos > 65536:
-            _h2_buf_consume(self.buf, self.pos)
-            self.pos = 0
-        return true
-
-    pub def free(self):
-        self.buf.free()
-
-# ---------------------------------------------------------------------------
-# Settings
-# ---------------------------------------------------------------------------
-
-pub class H2Settings:
-    pub header_table_size:      int
-    pub enable_push:            int
-    pub max_concurrent_streams: int   # 0 = unlimited (for the peer's settings)
-    pub initial_window_size:    int
-    pub max_frame_size:         int
-    pub max_header_list_size:   int   # 0 = unlimited
-
-extend H2Settings:
-    # RFC defaults (what a peer is assumed to have until it sends SETTINGS).
-    pub def rfc_defaults() -> H2Settings:
-        mut s = H2Settings()
-        s.header_table_size      = 4096
-        s.enable_push            = 1
-        s.max_concurrent_streams = 0
-        s.initial_window_size    = 65535
-        s.max_frame_size         = 16384
-        s.max_header_list_size   = 0
-        return s
-
-    # What this implementation advertises by default.
-    pub def local_defaults() -> H2Settings:
-        mut s = H2Settings()
-        s.header_table_size      = 4096
-        s.enable_push            = 0
-        s.max_concurrent_streams = 100
-        s.initial_window_size    = 262144
-        s.max_frame_size         = 16384
-        s.max_header_list_size   = 65536
-        return s
-
-# ---------------------------------------------------------------------------
-# H2Stream
-# ---------------------------------------------------------------------------
-
-pub class H2Stream:
-    pub id:          int
-    pub state:       int
-    pub send_window: int
-    pub recv_window: int
-    pub headers:     HpackHeaders    # first final header block received (request or response)
-    pub trailers:    HpackHeaders
-    pub got_headers: bool
-    pub got_trailers: bool
-    pub body:        StringBuilder   # received DATA
-    pub recv_done:   bool            # END_STREAM received, or the stream was reset
-    pub rst_code:    int             # -1 = not reset, else the RST_STREAM code
-    pub rst_by_peer: bool
-    pub out_data:    str             # queued, not yet sent body bytes
-    pub out_pos:     int
-    pub out_end:     bool            # send END_STREAM after out_data
-    pub out_has:     bool
-    pub taken:       bool            # server: request handed to the application
-    pub status:      int             # client: :status of the final response (0 = none yet)
-
-extend H2Stream:
-    pub def init(id: int, send_window: int, recv_window: int) -> H2Stream:
-        mut s = H2Stream()
-        s.id           = id
-        s.state        = 1
-        s.send_window  = send_window
-        s.recv_window  = recv_window
-        s.headers      = HpackHeaders.init()
-        s.trailers     = HpackHeaders.init()
-        s.got_headers  = false
-        s.got_trailers = false
-        s.body         = StringBuilder.init(256)
-        s.recv_done    = false
-        s.rst_code     = -1
-        s.rst_by_peer  = false
-        s.out_data     = ""
-        s.out_pos      = 0
-        s.out_end      = false
-        s.out_has      = false
-        s.taken        = false
-        s.status       = 0
-        return s
-
-    pub def body_str(self) -> str:
-        return self.body.to_owned()
-
-    pub def body_len(self) -> int:
-        return self.body.len()
-
-    pub def is_closed(self) -> bool:
-        return self.state == 4
-
-    # Release the buffers now (also done by the automatic drop of the object).
-    pub def dispose(self):
-        self.headers.free()
-        self.trailers.free()
-        self.body.free()
-
-# ---------------------------------------------------------------------------
-# Header validation (RFC 9113 section 8.2, 8.3)
-# ---------------------------------------------------------------------------
-
-def _h2_conn_specific(name: str) -> bool:
-    if name == "connection": return true
-    if name == "keep-alive": return true
-    if name == "proxy-connection": return true
-    if name == "transfer-encoding": return true
-    if name == "upgrade": return true
-    return false
-
-# "" when the header list is acceptable, else a description.
-# kind: 0 request, 1 response, 2 trailers
-def _h2_validate(hs: HpackHeaders, kind: int) -> str:
-    mut seen_regular = false
-    mut have_method = false
-    mut have_scheme = false
-    mut have_path = false
-    mut have_status = false
-    mut method = ""
-    mut i = 0
-    while i < hs.len():
-        mut name = hs.name_at(i)
-        mut value = hs.value_at(i)
-        if name.len() == 0: return "empty header name"
-        if _h2_has_upper(name): return "upper-case header name '" + name + "'"
-        if _h2_u8(name, 0) == 58:
-            if seen_regular: return "pseudo-header after a regular header"
-            if kind == 2: return "pseudo-header in trailers"
-            if kind == 0:
-                if name == ":method":
-                    if have_method: return "duplicate :method"
-                    have_method = true
-                    method = value
-                elif name == ":scheme":
-                    if have_scheme: return "duplicate :scheme"
-                    have_scheme = true
-                elif name == ":path":
-                    if have_path: return "duplicate :path"
-                    if value.len() == 0: return "empty :path"
-                    have_path = true
-                elif name == ":authority":
-                    mut dummy = 0
-                else:
-                    return "unknown request pseudo-header " + name
-            else:
-                if name == ":status":
-                    if have_status: return "duplicate :status"
-                    have_status = true
-                    if value.len() != 3: return "malformed :status"
-                else:
-                    return "unknown response pseudo-header " + name
-        else:
-            seen_regular = true
-            if _h2_conn_specific(name): return "connection-specific header '" + name + "'"
-            if name == "te" and value != "trailers": return "TE other than trailers"
-        i = i + 1
-    if kind == 0:
-        if not have_method: return "missing :method"
-        if method != "CONNECT":
-            if not have_scheme: return "missing :scheme"
-            if not have_path: return "missing :path"
-    if kind == 1:
-        if not have_status: return "missing :status"
-    return ""
-
-# ---------------------------------------------------------------------------
-# H2Conn -- sans-IO connection state machine
-# ---------------------------------------------------------------------------
-
-pub class H2Conn:
-    pub is_client:    bool
-    pub local:        H2Settings      # what we advertised
-    pub remote:       H2Settings      # what the peer advertised
-    pub enc:          HpackEncoder
-    pub dec:          HpackDecoder
-    pub streams:      Vec[H2Stream]
-    pub reader:       H2FrameReader
-    pub outbuf:       StringBuilder
-    pub send_window:  int             # connection-level, what the peer lets us send
-    pub recv_window:  int             # connection-level, what we still allow the peer
-    pub recv_target:  int
-    pub started:      bool
-    pub preface_ok:   bool
-    pub got_settings: bool
-    pub next_stream:  int             # next stream id we will open (client)
-    pub peer_last:    int             # highest peer-initiated stream id seen
-    pub goaway_sent:  bool
-    pub goaway_recv:  bool
-    pub goaway_code:  int
-    pub goaway_last:  int
-    pub goaway_debug: str
-    pub closed:       bool            # fatal connection error
-    pub err:          str
-    pub err_code:     int
-    pub ping_acks:    int
-    pub ping_last:    str
-    pub settings_acked: int
-    pub max_body_bytes: int
-    pub frames_in:    int
-    pub frames_out:   int
-    cont_active:      bool
-    cont_sid:         int
-    cont_end:         bool
-    cont_block:       StringBuilder
-    pre:              StringBuilder   # server: bytes of the preface seen so far
-
-extend H2Conn:
-    # Create a connection with explicit local settings; call start() to queue the
-    # preface (client) and the initial SETTINGS.
-    pub def with_settings(is_client: bool, local: H2Settings) -> H2Conn:
-        mut c = H2Conn()
-        c.is_client    = is_client
-        c.local        = local
-        c.remote       = H2Settings.rfc_defaults()
-        c.enc          = HpackEncoder.init(4096)
-        c.dec          = HpackDecoder.init(local.header_table_size)
-        c.dec.max_list_size = local.max_header_list_size
-        c.streams      = Vec[H2Stream].init(8)
-        c.reader       = H2FrameReader.init(local.max_frame_size)
-        c.outbuf       = StringBuilder.init(1024)
-        c.send_window  = 65535
-        c.recv_window  = 65535
-        c.recv_target  = 65535
-        c.started      = false
-        c.preface_ok   = is_client      # a client has no preface to verify
-        c.got_settings = false
-        c.next_stream  = 1
-        c.peer_last    = 0
-        c.goaway_sent  = false
-        c.goaway_recv  = false
-        c.goaway_code  = 0
-        c.goaway_last  = 0
-        c.goaway_debug = ""
-        c.closed       = false
-        c.err          = ""
-        c.err_code     = 0
-        c.ping_acks    = 0
-        c.ping_last    = ""
-        c.settings_acked = 0
-        c.max_body_bytes = 67108864
-        c.frames_in    = 0
-        c.frames_out   = 0
-        c.cont_active  = false
-        c.cont_sid     = 0
-        c.cont_end     = false
-        c.cont_block   = StringBuilder.init(256)
-        c.pre          = StringBuilder.init(32)
-        return c
-
-    pub def client() -> H2Conn:
-        mut c = H2Conn.with_settings(true, H2Settings.local_defaults())
-        c.start()
-        return c
-
-    pub def server() -> H2Conn:
-        mut c = H2Conn.with_settings(false, H2Settings.local_defaults())
-        c.start()
-        return c
-
-    # Queue the client preface (client only) and our SETTINGS frame, and grow the
-    # connection receive window to the target implied by the local initial window.
-    pub def start(self):
-        if self.started: return
-        self.started = true
-        if self.is_client:
-            self.outbuf.append(h2_preface())
-        mut ids: List[int] = []
-        mut vals: List[int] = []
-        ids.append(1)
-        vals.append(self.local.header_table_size)
-        ids.append(2)
-        vals.append(self.local.enable_push)
-        ids.append(3)
-        vals.append(self.local.max_concurrent_streams)
-        ids.append(4)
-        vals.append(self.local.initial_window_size)
-        ids.append(5)
-        vals.append(self.local.max_frame_size)
-        if self.local.max_header_list_size > 0:
-            ids.append(6)
-            vals.append(self.local.max_header_list_size)
-        self.queue_frame(4, 0, 0, h2_settings_payload(ids, vals))
-        mut target = self.local.initial_window_size * 4
-        if target < 65535: target = 65535
-        self.recv_target = target
-        if target > 65535:
-            self.send_window_update(0, target - 65535)
-            self.recv_window = target
-
-    # ---- output side -------------------------------------------------------
-
-    def queue_frame(self, ftype: int, flags: int, sid: int, payload: str):
-        h2_put_frame(self.outbuf, ftype, flags, sid, payload)
-        self.frames_out = self.frames_out + 1
-
-    # True when bytes are waiting to be written to the transport.
-    pub def has_output(self) -> bool:
-        return self.outbuf.len() > 0
-
-    # Take (and clear) the bytes to write to the peer. Binary `str`, use .len().
-    pub def take_output(self) -> str:
-        mut s = self.outbuf.to_owned()
-        self.outbuf.clear()
-        return s
-
-    def send_window_update(self, sid: int, inc: int):
-        mut sb = StringBuilder.init(8)
-        _h2_put_u32(sb, inc & 0x7FFFFFFF)
-        mut p = sb.to_owned()
-        sb.free()
-        self.queue_frame(8, 0, sid, p)
-
-    # RST_STREAM: abort a stream. Safe to call for unknown/closed streams.
-    pub def send_rst(self, sid: int, code: int):
-        mut sb = StringBuilder.init(8)
-        _h2_put_u32(sb, code)
-        mut p = sb.to_owned()
-        sb.free()
-        self.queue_frame(3, 0, sid, p)
-        mut ix = self.idx_of(sid)
-        if ix >= 0:
-            mut st = self.streams.get(ix)
-            st.state = 4
-            st.rst_code = code
-            st.recv_done = true
-            st.out_has = false
-            st.out_data = ""
-
-    # GOAWAY (once). code NO_ERROR for a graceful shutdown.
-    pub def send_goaway(self, code: int, debug: str):
-        if self.goaway_sent: return
-        self.goaway_sent = true
-        mut sb = StringBuilder.init(16 + debug.len())
-        _h2_put_u32(sb, self.peer_last)
-        _h2_put_u32(sb, code)
-        sb.append(debug)
-        mut p = sb.to_owned()
-        sb.free()
-        self.queue_frame(7, 0, 0, p)
-
-    # PING with an 8-byte opaque payload (shorter payloads are zero padded).
-    pub def send_ping(self, payload: str):
-        mut sb = StringBuilder.init(8)
+    pub def remove(self, name: str):
+        mut ln = _h2_lower(name)
+        mut nn: List[str] = []
+        mut nv: List[str] = []
         mut i = 0
-        while i < 8:
-            if i < payload.len(): sb.append_char(_h2_u8(payload, i))
-            else: sb.append_char(0)
+        while i < len(self.names):
+            mut cur = _h2_lower(self.names[i])
+            if cur != ln:
+                nn.append(self.names[i])
+                nv.append(self.values[i])
             i = i + 1
-        mut p = sb.to_owned()
-        sb.free()
-        self.queue_frame(6, 0, 0, p)
+        self.names = nn
+        self.values = nv
 
-    # A fatal connection error: queue GOAWAY and mark the connection closed.
-    def conn_error(self, code: int, msg: str) -> int:
-        self.send_goaway(code, msg)
-        self.closed = true
-        self.err = h2_error_name(code) + ": " + msg
-        self.err_code = code
-        return code
-
-    # ---- stream table ------------------------------------------------------
-
-    # Position of the stream with this id in `streams`, or -1 when unknown / released.
-    pub def idx_of(self, sid: int) -> int:
+    # First value of `name`, or "".
+    pub def get(self, name: str) -> str:
+        mut ln = _h2_lower(name)
         mut i = 0
-        while i < self.streams.len:
-            mut st = self.streams.get(i)
-            if st.id == sid: return i
+        while i < len(self.names):
+            mut cur = _h2_lower(self.names[i])
+            if cur == ln: return self.values[i]
             i = i + 1
-        return -1
+        return ""
 
-    pub def has_stream(self, sid: int) -> bool:
-        return self.idx_of(sid) >= 0
-
-    # The stream with this id. Check has_stream() first.
-    pub def stream(self, sid: int) -> H2Stream:
-        return self.streams.get(self.idx_of(sid))
-
-    # Number of streams that are not closed.
-    pub def active_streams(self) -> int:
-        mut n = 0
+    pub def has(self, name: str) -> bool:
+        mut ln = _h2_lower(name)
         mut i = 0
-        while i < self.streams.len:
-            mut st = self.streams.get(i)
-            if st.state != 4: n = n + 1
+        while i < len(self.names):
+            mut cur = _h2_lower(self.names[i])
+            if cur == ln: return true
             i = i + 1
-        return n
-
-    def active_of(self, ours: bool) -> int:
-        mut n = 0
-        mut i = 0
-        while i < self.streams.len:
-            mut st = self.streams.get(i)
-            mut mine = (st.id % 2 == 1) == self.is_client
-            if st.state != 4 and mine == ours: n = n + 1
-            i = i + 1
-        return n
-
-    # Forget a finished stream (frees its buffers). Frames that still arrive for
-    # it are treated as belonging to a closed stream.
-    pub def release(self, sid: int):
-        mut i = 0
-        while i < self.streams.len:
-            mut st = self.streams.get(i)
-            if st.id == sid:
-                st.dispose()
-                self.streams.remove(i)
-                return
-            i = i + 1
-
-    def new_stream(self, sid: int) -> H2Stream:
-        mut fresh = H2Stream.init(sid, self.remote.initial_window_size, self.local.initial_window_size)
-        self.streams.push(fresh)
-        # Return the element as a BORROW of the table (returning `fresh` itself would
-        # make every caller an owner and free the stream the Vec still holds).
-        return self.streams.get(self.streams.len - 1)
-
-    # First server-side stream whose request is complete and not yet taken, or -1.
-    pub def next_ready(self) -> int:
-        mut i = 0
-        while i < self.streams.len:
-            mut st = self.streams.get(i)
-            if st.recv_done and not st.taken and st.got_headers and st.rst_code < 0:
-                return st.id
-            i = i + 1
-        return -1
-
-    def end_local(self, st: H2Stream):
-        if st.state == 1: st.state = 2
-        elif st.state == 3: st.state = 4
-
-    def end_remote(self, st: H2Stream):
-        st.recv_done = true
-        if st.state == 1: st.state = 3
-        elif st.state == 2: st.state = 4
-
-    # ---- sending messages --------------------------------------------------
-
-    # Queue a HEADERS frame (+ CONTINUATIONs as needed) for `hs`. Names are
-    # lower-cased and connection-specific headers dropped.
-    def put_header_block(self, sid: int, hs: HpackHeaders, end_stream: bool):
-        mut clean = HpackHeaders.init()
-        mut i = 0
-        while i < hs.len():
-            mut nm = _h2_lower(hs.name_at(i))
-            mut keep = true
-            if _h2_conn_specific(nm): keep = false
-            if keep:
-                clean.names.push(nm)
-                clean.values.push(hs.value_at(i))
-                clean.flags.push(hs.flag_at(i))
-            i = i + 1
-        mut block = self.enc.encode(clean)
-        clean.free()
-        mut maxf = self.remote.max_frame_size
-        mut total = block.len()
-        mut flags = 0
-        if end_stream: flags = 1
-        if total <= maxf:
-            self.queue_frame(1, flags | 4, sid, block)
-            return
-        self.queue_frame(1, flags, sid, _h2_slice(block, 0, maxf))
-        mut off = maxf
-        while off < total:
-            mut n = total - off
-            if n > maxf: n = maxf
-            mut fl = 0
-            if off + n >= total: fl = 4
-            self.queue_frame(9, fl, sid, _h2_slice(block, off, n))
-            off = off + n
-
-    # Server/any side: send a header block on an existing stream (status line
-    # pseudo-header `:status` for responses). Returns false when the stream is
-    # unknown, closed or already finished on our side.
-    pub def send_headers(self, sid: int, hs: HpackHeaders, end_stream: bool) -> bool:
-        if self.closed: return false
-        mut ix = self.idx_of(sid)
-        if ix < 0: return false
-        mut st = self.streams.get(ix)
-        if st.state == 4 or st.state == 2: return false
-        self.put_header_block(sid, hs, end_stream)
-        if end_stream: self.end_local(st)
-        return true
-
-    # Queue body bytes for a stream; they are sent as flow control allows (call
-    # pump() after window changes; receive() does that automatically).
-    pub def send_data(self, sid: int, data: str, end_stream: bool) -> bool:
-        if self.closed: return false
-        mut ix = self.idx_of(sid)
-        if ix < 0: return false
-        mut st = self.streams.get(ix)
-        if st.state == 4 or st.state == 2: return false
-        if st.out_has and st.out_pos < st.out_data.len():
-            mut rest = _h2_slice(st.out_data, st.out_pos, st.out_data.len() - st.out_pos)
-            st.out_data = _h2_concat(rest, data)
-        else:
-            st.out_data = data
-        st.out_pos = 0
-        if end_stream: st.out_end = true
-        st.out_has = true
-        self.pump()
-        return true
-
-    # Send a complete response on a server stream: :status, headers, optional body.
-    pub def respond(self, sid: int, status: int, hs: HpackHeaders, body: str, trailers: HpackHeaders) -> bool:
-        mut all = HpackHeaders.init()
-        all.add(":status", status.to_string())
-        mut i = 0
-        while i < hs.len():
-            all.names.push(hs.name_at(i))
-            all.values.push(hs.value_at(i))
-            all.flags.push(hs.flag_at(i))
-            i = i + 1
-        mut has_trailers = trailers.len() > 0
-        mut ok = false
-        if body.len() == 0 and not has_trailers:
-            ok = self.send_headers(sid, all, true)
-        else:
-            ok = self.send_headers(sid, all, false)
-            if ok:
-                if has_trailers:
-                    ok = self.send_data(sid, body, false)
-                    if ok: ok = self.send_headers(sid, trailers, true)
-                else:
-                    ok = self.send_data(sid, body, true)
-        all.free()
-        return ok
-
-    # Client: open a stream with a request. `headers` are the regular headers (any
-    # case). Returns the stream id, -1 when the connection cannot take requests
-    # (closed / GOAWAY), -2 when the peer's concurrent stream limit is reached.
-    pub def send_request(self, method: str, scheme: str, authority: str, path: str, headers: HpackHeaders, body: str) -> int:
-        if self.closed or self.goaway_recv or self.goaway_sent: return -1
-        if self.remote.max_concurrent_streams > 0 and self.active_of(true) >= self.remote.max_concurrent_streams: return -2
-        mut sid = self.next_stream
-        self.next_stream = self.next_stream + 2
-        mut st = self.new_stream(sid)
-        mut all = HpackHeaders.init()
-        all.add(":method", method)
-        all.add(":scheme", scheme)
-        all.add(":path", path)
-        if authority.len() > 0: all.add(":authority", authority)
-        mut have_len = false
-        mut i = 0
-        while i < headers.len():
-            mut nm = _h2_lower(headers.name_at(i))
-            if nm == "content-length": have_len = true
-            if nm != "host":
-                all.names.push(nm)
-                all.values.push(headers.value_at(i))
-                all.flags.push(headers.flag_at(i))
-            i = i + 1
-        if body.len() > 0 and not have_len:
-            all.add("content-length", body.len().to_string())
-        if body.len() == 0:
-            self.put_header_block(sid, all, true)
-            self.end_local(st)
-        else:
-            self.put_header_block(sid, all, false)
-        all.free()
-        if body.len() > 0:
-            st.out_data = body
-            st.out_pos = 0
-            st.out_end = true
-            st.out_has = true
-            self.pump()
-        return sid
-
-    # Send as much queued DATA as the connection/stream windows and the peer's
-    # MAX_FRAME_SIZE allow.
-    pub def pump(self):
-        if self.closed: return
-        mut progress = true
-        while progress:
-            progress = false
-            mut i = 0
-            while i < self.streams.len:
-                mut st = self.streams.get(i)
-                i = i + 1
-                if not st.out_has: continue
-                if st.state == 4 or st.state == 2:
-                    st.out_has = false
-                    continue
-                mut total = st.out_data.len()
-                mut remaining = total - st.out_pos
-                if remaining <= 0:
-                    if st.out_end:
-                        self.queue_frame(0, 1, st.id, "")
-                        self.end_local(st)
-                        progress = true
-                    st.out_has = false
-                    st.out_data = ""
-                    st.out_pos = 0
-                    continue
-                mut n = remaining
-                if n > st.send_window: n = st.send_window
-                if n > self.send_window: n = self.send_window
-                if n > self.remote.max_frame_size: n = self.remote.max_frame_size
-                if n <= 0: continue
-                mut last = (n == remaining) and st.out_end
-                mut fl = 0
-                if last: fl = 1
-                self.queue_frame(0, fl, st.id, _h2_slice(st.out_data, st.out_pos, n))
-                st.send_window = st.send_window - n
-                self.send_window = self.send_window - n
-                st.out_pos = st.out_pos + n
-                progress = true
-                if last:
-                    self.end_local(st)
-                    st.out_has = false
-                    st.out_data = ""
-                    st.out_pos = 0
-
-    # ---- input side --------------------------------------------------------
-
-    # Feed bytes received from the peer. Throws on a connection error: the matching
-    # GOAWAY has already been queued (send take_output() and close the transport).
-    pub def receive(self, data: str) throws str -> bool:
-        if self.closed: raise(self.err)
-        mut d = data
-        if not self.preface_ok:
-            self.pre.append(d)
-            mut want = h2_preface()
-            mut have = self.pre.len()
-            mut cmp = have
-            if cmp > want.len(): cmp = want.len()
-            mut i = 0
-            while i < cmp:
-                if _h2_buf_u8(self.pre, i) != _h2_u8(want, i):
-                    self.conn_error(1, "invalid connection preface")
-                    raise(self.err)
-                i = i + 1
-            if have < want.len(): return true
-            self.preface_ok = true
-            d = _h2_buf_slice(self.pre, want.len(), have - want.len())
-            self.pre.clear()
-        self.reader.feed(d)
-        while true:
-            mut got: Result[bool, str] = self.reader.next()
-            if got.is_err:
-                self.conn_error(6, got.err)
-                raise(self.err)
-            if not got.ok: break
-            self.frames_in = self.frames_in + 1
-            mut code = self.handle_frame(self.reader.ftype, self.reader.flags, self.reader.stream_id, self.reader.payload)
-            if code != 0: raise(self.err)
-            if self.closed: raise(self.err)
-        self.pump()
-        return true
-
-    # Dispatch one frame. Returns 0, or a connection error code (err set, GOAWAY queued).
-    def handle_frame(self, ftype: int, flags: int, sid: int, payload: str) -> int:
-        if not self.got_settings and ftype != 4:
-            return self.conn_error(1, "first frame is not SETTINGS")
-        if self.cont_active and (ftype != 9 or sid != self.cont_sid):
-            return self.conn_error(1, "expected CONTINUATION")
-        if ftype == 0: return self.on_data(flags, sid, payload)
-        if ftype == 1: return self.on_headers(flags, sid, payload)
-        if ftype == 2:
-            if sid == 0: return self.conn_error(1, "PRIORITY on stream 0")
-            if payload.len() != 5:
-                if self.has_stream(sid): self.send_rst(sid, 6)
-            return 0
-        if ftype == 3: return self.on_rst(sid, payload)
-        if ftype == 4: return self.on_settings(flags, sid, payload)
-        if ftype == 5: return self.conn_error(1, "PUSH_PROMISE received but push is disabled")
-        if ftype == 6: return self.on_ping(flags, sid, payload)
-        if ftype == 7: return self.on_goaway(sid, payload)
-        if ftype == 8: return self.on_window_update(sid, payload)
-        if ftype == 9: return self.on_continuation(flags, sid, payload)
-        return 0
-
-    # Is `sid` a stream that never existed (idle)? Otherwise it is closed/released.
-    def is_idle(self, sid: int) -> bool:
-        if self.is_client:
-            if sid % 2 == 1: return sid >= self.next_stream
-            return true      # even ids would be server push: never legitimately opened
-        if sid % 2 == 0: return true
-        return sid > self.peer_last
-
-    # Account for received DATA against the connection window; replenish when low.
-    def conn_consume(self, n: int) -> int:
-        self.recv_window = self.recv_window - n
-        if self.recv_window < 0:
-            return self.conn_error(3, "connection flow-control window exceeded")
-        if self.recv_window < self.recv_target / 2:
-            self.send_window_update(0, self.recv_target - self.recv_window)
-            self.recv_window = self.recv_target
-        return 0
-
-    def on_data(self, flags: int, sid: int, payload: str) -> int:
-        if sid == 0: return self.conn_error(1, "DATA on stream 0")
-        mut total = payload.len()
-        mut off = 0
-        mut end = total
-        if (flags & 8) != 0:
-            if total < 1: return self.conn_error(6, "padded DATA without pad length")
-            mut pad = _h2_u8(payload, 0)
-            if pad >= total: return self.conn_error(1, "DATA padding longer than the frame")
-            off = 1
-            end = total - pad
-        mut c1 = self.conn_consume(total)
-        if c1 != 0: return c1
-        mut ix = self.idx_of(sid)
-        if ix < 0:
-            if self.is_idle(sid): return self.conn_error(1, "DATA on an idle stream")
-            return 0      # closed/released stream: ignore (flow control already counted)
-        mut st = self.streams.get(ix)
-        if st.state == 4:
-            return 0
-        if st.state == 3:
-            self.send_rst(sid, 5)
-            return 0
-        if not st.got_headers:
-            self.send_rst(sid, 1)
-            return 0
-        st.recv_window = st.recv_window - total
-        if st.recv_window < 0:
-            self.send_rst(sid, 3)
-            return 0
-        if end > off:
-            if st.body.len() + (end - off) > self.max_body_bytes:
-                self.send_rst(sid, 11)
-                return 0
-            st.body.append(_h2_slice(payload, off, end - off))
-        if (flags & 1) != 0:
-            self.end_remote(st)
-        elif st.recv_window < self.local.initial_window_size / 2:
-            self.send_window_update(sid, self.local.initial_window_size - st.recv_window)
-            st.recv_window = self.local.initial_window_size
-        return 0
-
-    def on_headers(self, flags: int, sid: int, payload: str) -> int:
-        if sid == 0: return self.conn_error(1, "HEADERS on stream 0")
-        mut off = 0
-        mut end = payload.len()
-        if (flags & 8) != 0:
-            if payload.len() < 1: return self.conn_error(6, "padded HEADERS without pad length")
-            mut pad = _h2_u8(payload, 0)
-            off = 1
-            if pad >= payload.len(): return self.conn_error(1, "HEADERS padding longer than the frame")
-            end = payload.len() - pad
-        if (flags & 32) != 0:
-            if end - off < 5: return self.conn_error(6, "HEADERS priority fields truncated")
-            mut dep = _h2_get_u32(payload, off) & 0x7FFFFFFF
-            if dep == sid: return self.conn_error(1, "stream depends on itself")
-            off = off + 5
-        if end < off: return self.conn_error(6, "HEADERS too short")
-        self.cont_block.clear()
-        self.cont_block.append(_h2_slice(payload, off, end - off))
-        self.cont_sid = sid
-        self.cont_end = (flags & 1) != 0
-        if (flags & 4) == 0:
-            self.cont_active = true
-            return 0
-        return self.finish_block()
-
-    def on_continuation(self, flags: int, sid: int, payload: str) -> int:
-        if not self.cont_active: return self.conn_error(1, "unexpected CONTINUATION")
-        if sid != self.cont_sid: return self.conn_error(1, "CONTINUATION on the wrong stream")
-        self.cont_block.append(payload)
-        mut cap = self.local.max_header_list_size * 2
-        if cap > 0 and self.cont_block.len() > cap + 4096:
-            return self.conn_error(11, "header block too large")
-        if (flags & 4) == 0: return 0
-        self.cont_active = false
-        return self.finish_block()
-
-    # A complete header block is in cont_block for stream cont_sid.
-    def finish_block(self) -> int:
-        self.cont_active = false
-        mut sid = self.cont_sid
-        mut end_stream = self.cont_end
-        mut block = self.cont_block.to_owned()
-        self.cont_block.clear()
-        # Always decode (keeps the HPACK dynamic table in step with the peer).
-        mut r: Result[HpackHeaders, str] = self.dec.decode(block)
-        if r.is_err: return self.conn_error(9, r.err)
-        mut hs = r.ok
-        mut ix = self.idx_of(sid)
-        if self.is_client:
-            if ix < 0:
-                if self.is_idle(sid): return self.conn_error(1, "HEADERS on an unopened stream")
-                return 0
-            return self.client_headers(self.streams.get(ix), hs, end_stream)
-        return self.server_headers(sid, ix, hs, end_stream)
-
-    def server_headers(self, sid: int, ix: int, hs: HpackHeaders, end_stream: bool) -> int:
-        if ix < 0:
-            if sid % 2 == 0: return self.conn_error(1, "client stream id must be odd")
-            if sid <= self.peer_last: return self.conn_error(5, "HEADERS on a closed stream")
-            self.peer_last = sid
-            if self.goaway_sent:
-                return 0      # shutting down: ignore new streams (peer will see REFUSED via GOAWAY)
-            if self.local.max_concurrent_streams > 0 and self.active_of(false) >= self.local.max_concurrent_streams:
-                mut rs = self.new_stream(sid)
-                self.send_rst(sid, 7)
-                return 0
-            mut st = self.new_stream(sid)
-            mut bad = _h2_validate(hs, 0)
-            if bad.len() > 0:
-                self.send_rst(sid, 1)
-                return 0
-            st.headers = hs
-            st.got_headers = true
-            if end_stream: self.end_remote(st)
-            return 0
-        # existing stream: trailers
-        mut st = self.streams.get(ix)
-        if st.state == 4: return 0
-        if st.state == 3:
-            self.send_rst(sid, 5)
-            return 0
-        if not st.got_headers:
-            return 0
-        if not end_stream:
-            self.send_rst(sid, 1)
-            return 0
-        mut bad2 = _h2_validate(hs, 2)
-        if bad2.len() > 0:
-            self.send_rst(sid, 1)
-            return 0
-        st.trailers = hs
-        st.got_trailers = true
-        self.end_remote(st)
-        return 0
-
-    def client_headers(self, st: H2Stream, hs: HpackHeaders, end_stream: bool) -> int:
-        if st.state == 4: return 0
-        if st.state == 3:
-            self.send_rst(st.id, 5)
-            return 0
-        if st.got_headers:
-            # trailers
-            if not end_stream:
-                self.send_rst(st.id, 1)
-                return 0
-            mut bt = _h2_validate(hs, 2)
-            if bt.len() > 0:
-                self.send_rst(st.id, 1)
-                return 0
-            st.trailers = hs
-            st.got_trailers = true
-            self.end_remote(st)
-            return 0
-        mut bad = _h2_validate(hs, 1)
-        if bad.len() > 0:
-            self.send_rst(st.id, 1)
-            return 0
-        mut code = Str.parse_int(hs.get(":status"))
-        if code >= 100 and code < 200 and not end_stream:
-            return 0      # interim response: skipped
-        st.status = code
-        st.headers = hs
-        st.got_headers = true
-        if end_stream: self.end_remote(st)
-        return 0
-
-    def on_rst(self, sid: int, payload: str) -> int:
-        if sid == 0: return self.conn_error(1, "RST_STREAM on stream 0")
-        if payload.len() != 4: return self.conn_error(6, "RST_STREAM length is not 4")
-        mut ix = self.idx_of(sid)
-        if ix < 0:
-            if self.is_idle(sid): return self.conn_error(1, "RST_STREAM on an idle stream")
-            return 0
-        mut st = self.streams.get(ix)
-        st.rst_code = _h2_get_u32(payload, 0)
-        st.rst_by_peer = true
-        st.state = 4
-        st.recv_done = true
-        st.out_has = false
-        st.out_data = ""
-        return 0
-
-    def on_settings(self, flags: int, sid: int, payload: str) -> int:
-        if sid != 0: return self.conn_error(1, "SETTINGS on a stream")
-        if (flags & 1) != 0:
-            if payload.len() != 0: return self.conn_error(6, "SETTINGS ACK with a payload")
-            self.settings_acked = self.settings_acked + 1
-            return 0
-        if payload.len() % 6 != 0: return self.conn_error(6, "SETTINGS length is not a multiple of 6")
-        mut i = 0
-        while i < payload.len():
-            mut id = (_h2_u8(payload, i) << 8) | _h2_u8(payload, i + 1)
-            mut v = _h2_get_u32(payload, i + 2)
-            i = i + 6
-            if id == 1:
-                mut want = v
-                if want > 4096: want = 4096
-                if want != self.enc.table.max_size: self.enc.set_max_table_size(want)
-                self.remote.header_table_size = v
-            elif id == 2:
-                if v > 1: return self.conn_error(1, "ENABLE_PUSH must be 0 or 1")
-                self.remote.enable_push = v
-            elif id == 3:
-                self.remote.max_concurrent_streams = v
-            elif id == 4:
-                if v > 2147483647: return self.conn_error(3, "INITIAL_WINDOW_SIZE above 2^31-1")
-                mut delta = v - self.remote.initial_window_size
-                mut k = 0
-                while k < self.streams.len:
-                    mut sk = self.streams.get(k)
-                    if sk.state != 4:
-                        sk.send_window = sk.send_window + delta
-                        if sk.send_window > 2147483647: return self.conn_error(3, "stream window overflow after SETTINGS")
-                    k = k + 1
-                self.remote.initial_window_size = v
-            elif id == 5:
-                if v < 16384 or v > 16777215: return self.conn_error(1, "MAX_FRAME_SIZE out of range")
-                self.remote.max_frame_size = v
-            elif id == 6:
-                self.remote.max_header_list_size = v
-        self.got_settings = true
-        self.queue_frame(4, 1, 0, "")
-        self.pump()
-        return 0
-
-    def on_ping(self, flags: int, sid: int, payload: str) -> int:
-        if sid != 0: return self.conn_error(1, "PING on a stream")
-        if payload.len() != 8: return self.conn_error(6, "PING length is not 8")
-        if (flags & 1) != 0:
-            self.ping_acks = self.ping_acks + 1
-            self.ping_last = payload
-            return 0
-        self.queue_frame(6, 1, 0, payload)
-        return 0
-
-    def on_goaway(self, sid: int, payload: str) -> int:
-        if sid != 0: return self.conn_error(1, "GOAWAY on a stream")
-        if payload.len() < 8: return self.conn_error(6, "GOAWAY too short")
-        self.goaway_recv = true
-        self.goaway_last = _h2_get_u32(payload, 0) & 0x7FFFFFFF
-        self.goaway_code = _h2_get_u32(payload, 4)
-        self.goaway_debug = _h2_slice(payload, 8, payload.len() - 8)
-        # our streams above last-stream-id were not processed
-        mut i = 0
-        while i < self.streams.len:
-            mut st = self.streams.get(i)
-            mut mine = (st.id % 2 == 1) == self.is_client
-            if mine and st.id > self.goaway_last and st.state != 4:
-                st.rst_code = 7
-                st.state = 4
-                st.recv_done = true
-                st.out_has = false
-            i = i + 1
-        return 0
-
-    def on_window_update(self, sid: int, payload: str) -> int:
-        if payload.len() != 4: return self.conn_error(6, "WINDOW_UPDATE length is not 4")
-        mut inc = _h2_get_u32(payload, 0) & 0x7FFFFFFF
-        if sid == 0:
-            if inc == 0: return self.conn_error(1, "WINDOW_UPDATE increment 0")
-            if self.send_window + inc > 2147483647: return self.conn_error(3, "connection window overflow")
-            self.send_window = self.send_window + inc
-            return 0
-        mut ix = self.idx_of(sid)
-        if ix < 0:
-            if self.is_idle(sid): return self.conn_error(1, "WINDOW_UPDATE on an idle stream")
-            return 0
-        mut st = self.streams.get(ix)
-        if inc == 0:
-            self.send_rst(sid, 1)
-            return 0
-        if st.state == 4: return 0
-        if st.send_window + inc > 2147483647:
-            self.send_rst(sid, 3)
-            return 0
-        st.send_window = st.send_window + inc
-        return 0
-
-    pub def free(self):
-        mut i = 0
-        while i < self.streams.len:
-            mut st = self.streams.get(i)
-            st.dispose()
-            i = i + 1
-        self.streams.free()
-        self.enc.free()
-        self.dec.free()
-        self.reader.free()
-        self.outbuf.free()
-        self.cont_block.free()
-        self.pre.free()
-
-# ---------------------------------------------------------------------------
-# Messages
-# ---------------------------------------------------------------------------
-
-pub class H2Response:
-    pub status:    int
-    pub headers:   HpackHeaders     # regular (non-pseudo) headers
-    pub trailers:  HpackHeaders
-    pub body:      str
-    pub error:     str              # "" on success
-    pub stream_id: int
-    pub rst_code:  int              # RST_STREAM code when the stream was reset, else -1
-
-extend H2Response:
-    pub def init() -> H2Response:
-        mut r = H2Response()
-        r.status    = 200
-        r.headers   = HpackHeaders.init()
-        r.trailers  = HpackHeaders.init()
-        r.body      = ""
-        r.error     = ""
-        r.stream_id = 0
-        r.rst_code  = -1
-        return r
-
-    pub def is_ok(self) -> bool:
-        return self.error.len() == 0
-
-    # First value of a header (names are lower-case in HTTP/2), or "".
-    pub def header(self, name: str) -> str:
-        return self.headers.get(_h2_lower(name))
-
-    pub def free(self):
-        self.headers.free()
-        self.trailers.free()
-
-pub class H2Request:
-    pub method:    str
-    pub scheme:    str
-    pub authority: str
-    pub path:      str
-    pub headers:   HpackHeaders     # regular (non-pseudo) headers
-    pub trailers:  HpackHeaders
-    pub body:      str
-    pub stream_id: int
-
-extend H2Request:
-    pub def init() -> H2Request:
-        mut r = H2Request()
-        r.method    = ""
-        r.scheme    = ""
-        r.authority = ""
-        r.path      = ""
-        r.headers   = HpackHeaders.init()
-        r.trailers  = HpackHeaders.init()
-        r.body      = ""
-        r.stream_id = 0
-        return r
-
-    pub def header(self, name: str) -> str:
-        return self.headers.get(_h2_lower(name))
-
-    pub def free(self):
-        self.headers.free()
-        self.trailers.free()
-
-# Copy the non-pseudo headers of `src` into `dst`.
-def _h2_copy_regular(src: HpackHeaders, dst: HpackHeaders):
-    mut i = 0
-    while i < src.len():
-        mut nm = src.name_at(i)
-        if nm.len() > 0 and _h2_u8(nm, 0) != 58:
-            dst.names.push(nm)
-            dst.values.push(src.value_at(i))
-            dst.flags.push(0)
-        i = i + 1
-
-# ---------------------------------------------------------------------------
-# Transport helpers (non-blocking socket + bounded polling)
-# ---------------------------------------------------------------------------
-
-# Write everything in conn.outbuf. `budget_ms` bounds how long a blocked socket
-# is waited for. Returns false on error/timeout.
-def _h2_flush(tcp: TcpStream, conn: H2Conn, budget_ms: int) -> bool:
-    mut n = conn.outbuf.len()
-    if n == 0: return true
-    mut deadline = Clock.now_ms() + budget_ms
-    mut sent = 0
-    while sent < n:
-        mut r = 0
-        unsafe:
-            r = _tr_tcp_send_raw(tcp.fd, conn.outbuf.buf.data.offset(sent), n - sent)
-        if r == -2:
-            if Clock.now_ms() >= deadline: return false
-            Clock.sleep_ms(1)
-        elif r <= 0:
-            return false
-        else:
-            sent = sent + r
-    conn.outbuf.clear()
-    return true
-
-# ---------------------------------------------------------------------------
-# H2Client (h2c, prior knowledge)
-# ---------------------------------------------------------------------------
-
-pub class H2Client:
-    pub tcp:        TcpStream
-    pub conn:       H2Conn
-    pub ok:         bool
-    pub err:        str
-    pub timeout_ms: int      # idle timeout while waiting for the peer (default 10000)
-    pub scheme:     str      # ":scheme" pseudo-header value (default "http")
-    pub authority:  str      # ":authority" ("host:port" by default)
-    rbuf:           Pointer[char]
-
-extend H2Client:
-    # Connect over plain TCP and speak HTTP/2 straight away (RFC 9113 section 3.3,
-    # "prior knowledge"). Check `.ok` / `.err`. The TCP connect itself has no
-    # timeout (the OS limit applies).
-    pub def connect(host: str, port: int) -> H2Client:
-        mut c = H2Client()
-        c.timeout_ms = 10000
-        c.scheme     = "http"
-        c.authority  = host + ":" + port.to_string()
-        c.err        = ""
-        c.conn       = H2Conn.client()
-        c.rbuf       = _tr_c_malloc(16385)
-        c.tcp        = TcpStream.connect(host, port)
-        c.ok         = c.tcp.is_connected()
-        if not c.ok:
-            c.err = "connect to " + c.authority + " failed"
-            return c
-        c.tcp.set_nonblocking()
-        if not _h2_flush(c.tcp, c.conn, c.timeout_ms):
-            c.ok = false
-            c.err = "could not send the connection preface"
-        return c
-
-    # Send queued frames. False (and ok=false) on failure.
-    pub def flush(self) -> bool:
-        self.conn.pump()
-        if not _h2_flush(self.tcp, self.conn, self.timeout_ms):
-            self.ok = false
-            if self.err.len() == 0: self.err = "write failed"
-            return false
-        return true
-
-    # Read once from the socket (waiting until `deadline`, an absolute
-    # Clock.now_ms() value) and feed the bytes to the connection.
-    # Returns bytes consumed (>0), 0 = peer closed, -1 = error, -3 = timeout.
-    def read_some(self, deadline: int) -> int:
-        while true:
-            mut n = _tr_tcp_recv_nb(self.tcp.fd, self.rbuf, 16384)
-            if n == -2:
-                if Clock.now_ms() >= deadline: return -3
-                Clock.sleep_ms(1)
-            elif n < 0:
-                return -1
-            elif n == 0:
-                return 0
-            else:
-                mut chunk = _h2_slice_ptr(self.rbuf, n)
-                mut r: Result[bool, str] = self.conn.receive(chunk)
-                if r.is_err:
-                    self.err = r.err
-                    self.ok = false
-                    _h2_flush(self.tcp, self.conn, 1000)
-                    return -1
-                return n
-        return -1
-
-    # Open a stream with a request and send it. Returns the stream id (>0), or a
-    # negative number on failure (see H2Conn.send_request; -1 also when the
-    # transport is down). The body is binary-safe.
-    pub def start(self, method: str, path: str, headers: HpackHeaders, body: str) -> int:
-        if not self.ok: return -1
-        mut sid = self.conn.send_request(method, self.scheme, self.authority, path, headers, body)
-        if sid < 0: return sid
-        if not self.flush(): return -1
-        return sid
-
-    # Drive the connection until the response on stream `sid` is complete (or the
-    # stream is reset / the connection fails / `timeout_ms` of silence passes).
-    pub def wait(self, sid: int) -> H2Response:
-        mut resp = H2Response.init()
-        resp.stream_id = sid
-        if not self.conn.has_stream(sid):
-            resp.error = "unknown stream"
-            return resp
-        mut deadline = Clock.now_ms() + self.timeout_ms
-        while true:
-            if not self.flush():
-                resp.error = self.err
-                return resp
-            mut st = self.conn.stream(sid)
-            if st.recv_done:
-                self.collect(st, resp)
-                self.conn.release(sid)
-                return resp
-            if self.conn.closed or not self.ok:
-                resp.error = self.err
-                if resp.error.len() == 0: resp.error = self.conn.err
-                return resp
-            mut n = self.read_some(deadline)
-            if n > 0:
-                deadline = Clock.now_ms() + self.timeout_ms
-            elif n == 0:
-                self.ok = false
-                self.err = "connection closed by peer"
-                # a response that completed in the final read is still returned above
-                mut st2 = self.conn.stream(sid)
-                if st2.recv_done:
-                    self.collect(st2, resp)
-                    self.conn.release(sid)
-                else:
-                    resp.error = self.err
-                return resp
-            elif n == -3:
-                resp.error = "timeout waiting for the response"
-                return resp
-            else:
-                resp.error = self.err
-                if resp.error.len() == 0: resp.error = "read failed"
-                return resp
-        return resp
-
-    def collect(self, st: H2Stream, resp: H2Response):
-        if st.rst_code >= 0:
-            resp.rst_code = st.rst_code
-            resp.error = "stream reset: " + h2_error_name(st.rst_code)
-            return
-        resp.status = st.status
-        _h2_copy_regular(st.headers, resp.headers)
-        _h2_copy_regular(st.trailers, resp.trailers)
-        resp.body = st.body.to_owned()
-
-    # One request/response round trip.
-    pub def request(self, method: str, path: str, headers: HpackHeaders, body: str) -> H2Response:
-        mut sid = self.start(method, path, headers, body)
-        if sid < 0:
-            mut bad = H2Response.init()
-            bad.error = self.err
-            if bad.error.len() == 0:
-                if sid == -2: bad.error = "too many concurrent streams"
-                else: bad.error = "connection cannot take requests"
-            return bad
-        return self.wait(sid)
-
-    pub def get(self, path: str) -> H2Response:
-        mut hs = HpackHeaders.init()
-        mut r = self.request("GET", path, hs, "")
-        hs.free()
-        return r
-
-    pub def post(self, path: str, content_type: str, body: str) -> H2Response:
-        mut hs = HpackHeaders.init()
-        hs.add("content-type", content_type)
-        mut r = self.request("POST", path, hs, body)
-        hs.free()
-        return r
-
-    # Abort a stream.
-    pub def cancel(self, sid: int):
-        self.conn.send_rst(sid, 8)
-        self.flush()
-
-    # PING and wait for the matching ACK. False on timeout/failure.
-    pub def ping(self) -> bool:
-        if not self.ok: return false
-        mut before = self.conn.ping_acks
-        self.conn.send_ping("tauraro!")
-        if not self.flush(): return false
-        mut deadline = Clock.now_ms() + self.timeout_ms
-        while self.conn.ping_acks == before:
-            mut n = self.read_some(deadline)
-            if n <= 0: return false
-        return true
-
-    # Graceful shutdown: GOAWAY(NO_ERROR) and close the socket.
-    pub def close(self):
-        if self.ok:
-            self.conn.send_goaway(0, "")
-            _h2_flush(self.tcp, self.conn, 500)
-        self.tcp.close()
-        self.ok = false
-        _tr_c_free(self.rbuf)
-        self.rbuf = 0 as Pointer[char]
-        self.conn.free()
-
-def _h2_slice_ptr(p: Pointer[char], n: int) -> str:
-    mut out = _tr_c_malloc(n + 1)
-    unsafe:
-        _tr_c_memcpy(out, p, n)
-        out.offset(n).write('\0')
-    return _tr_str_wrap_len(out, n)
-
-# ---------------------------------------------------------------------------
-# H2Server
-# ---------------------------------------------------------------------------
-
-pub class H2Server:
-    pub listener:    TcpListener
-    pub ok:          bool
-    pub port:        int
-    pub idle_ms:     int       # a connection that stays silent this long is closed (default 5000)
-    pub requests:    int       # requests served so far
-    pub connections: int
-    pub last_error:  str       # last connection error seen ("" if none)
-    pub settings:    H2Settings
-
-extend H2Server:
-    pub def listen(host: str, port: int) -> H2Server:
-        mut s = H2Server()
-        s.idle_ms     = 5000
-        s.requests    = 0
-        s.connections = 0
-        s.last_error  = ""
-        s.settings    = H2Settings.local_defaults()
-        s.listener    = TcpListener.listen(host, port)
-        s.ok          = s.listener.is_listening()
-        s.port        = port
-        if s.ok: s.listener.set_nonblocking()
-        return s
-
-    # Accept one connection (waiting at most accept_wait_ms) and serve it until the
-    # peer closes it, sends GOAWAY (after in-flight streams finish), fails the
-    # protocol, or is silent for idle_ms. Returns false when nobody connected.
-    # `handler` receives each request with a pre-filled 200 response to modify.
-    pub def serve_once(self, on_request: def(H2Request, H2Response) -> void, accept_wait_ms: int) -> bool:
-        if not self.ok: return false
-        mut deadline = Clock.now_ms() + accept_wait_ms
-        while true:
-            mut c = self.listener.accept_nb()
-            if c.fd >= 0:
-                self.connections = self.connections + 1
-                self.serve_stream(c, on_request)
-                c.close()
-                return true
-            if Clock.now_ms() >= deadline: return false
-            Clock.sleep_ms(2)
         return false
 
-    def serve_stream(self, tcp: TcpStream, on_request: def(H2Request, H2Response) -> void):
-        tcp.set_nonblocking()
-        mut conn = H2Conn.with_settings(false, self.settings)
-        conn.start()
-        mut buf = _tr_c_malloc(16385)
-        mut last = Clock.now_ms()
-        mut alive = _h2_flush(tcp, conn, 2000)
-        while alive and not conn.closed:
-            mut n = _tr_tcp_recv_nb(tcp.fd, buf, 16384)
-            if n == -2:
-                if Clock.now_ms() - last >= self.idle_ms:
-                    conn.send_goaway(0, "idle")
-                    _h2_flush(tcp, conn, 500)
-                    break
-                Clock.sleep_ms(1)
-            elif n <= 0:
-                break
-            else:
-                last = Clock.now_ms()
-                mut chunk = _h2_slice_ptr(buf, n)
-                mut r: Result[bool, str] = conn.receive(chunk)
-                if r.is_err:
-                    self.last_error = r.err
-                    _h2_flush(tcp, conn, 1000)
-                    break
-            self.dispatch(conn, on_request)
-            conn.pump()
-            alive = _h2_flush(tcp, conn, 2000)
-            if conn.goaway_recv and conn.active_streams() == 0: break
-        _tr_c_free(buf)
-        conn.free()
+    pub def len(self) -> int: return len(self.names)
 
-    # Run the handler for every complete request, then send its response.
-    def dispatch(self, conn: H2Conn, on_request: def(H2Request, H2Response) -> void):
-        while true:
-            mut sid = conn.next_ready()
-            if sid < 0: break
-            mut st = conn.stream(sid)
-            st.taken = true
-            mut req = H2Request.init()
-            req.stream_id = sid
-            req.method    = st.headers.get(":method")
-            req.scheme    = st.headers.get(":scheme")
-            req.authority = st.headers.get(":authority")
-            req.path      = st.headers.get(":path")
-            _h2_copy_regular(st.headers, req.headers)
-            _h2_copy_regular(st.trailers, req.trailers)
-            req.body = st.body.to_owned()
-            mut resp = H2Response.init()
-            resp.stream_id = sid
-            on_request(req, resp)
-            self.requests = self.requests + 1
-            conn.respond(sid, resp.status, resp.headers, resp.body, resp.trailers)
-            req.free()
-            resp.free()
-        # forget finished streams
-        mut i = conn.streams.len - 1
-        while i >= 0:
-            mut s2 = conn.streams.get(i)
-            if s2.state == 4 and (s2.taken or s2.rst_code >= 0):
-                conn.release(s2.id)
-            i = i - 1
+    # name NUL value NUL ... (the native wire format).
+    pub def to_blob(self) -> str:
+        mut sb = StringBuilder.init(256)
+        mut i = 0
+        while i < len(self.names):
+            sb.append(self.names[i])
+            sb.append_char(0)
+            sb.append(self.values[i])
+            sb.append_char(0)
+            i = i + 1
+        mut out = sb.to_owned()
+        sb.free()
+        return out
 
+    pub def from_blob(blob: str) -> H2Headers:
+        mut h = H2Headers.init()
+        mut i = 0
+        mut start = 0
+        mut name = ""
+        mut want_name = true
+        while i < blob.len():
+            if _h2_byte(blob, i) == 0:
+                mut part = blob.slice(start, i)
+                if want_name:
+                    name = part
+                else:
+                    h.add(name, part)
+                want_name = not want_name
+                start = i + 1
+            i = i + 1
+        return h
+
+# A completed (or failed) response.
+pub class Http2Response:
+    pub stream_id: int
+    pub status:    int          # 0 if the stream failed
+    pub headers:   H2Headers    # response headers (pseudo-headers such as :status included)
+    pub trailers:  H2Headers
+    pub body:      str          # binary-safe
+    pub error:     str          # "" on success
+
+extend Http2Response:
+    pub def ok(self) -> bool: return self.error.len() == 0 and self.status >= 200 and self.status < 300
+
+pub class Http2Options:
+    pub tls:        bool        # https (default) or cleartext h2c with prior knowledge
+    pub verify:     bool
+    pub ca_pem:     str
+    pub timeout_ms: int
+
+extend Http2Options:
+    pub def default() -> Http2Options:
+        mut o = Http2Options()
+        o.tls = true
+        o.verify = true
+        o.ca_pem = ""
+        o.timeout_ms = 30000
+        return o
+
+    pub def cleartext() -> Http2Options:
+        mut o = Http2Options.default()
+        o.tls = false
+        return o
+
+pub class Http2Client:
+    _h: Pointer[char]
+    _store: TrustStore
+    _own_store: bool
+    pub host: str
+    pub port: int
+    pub timeout_ms: int
+    pub default_headers: H2Headers
+
+extend Http2Client:
+    pub def connect(host: str, port: int) throws str -> Http2Client:
+        mut o = Http2Options.default()
+        return Http2Client.connect_with(host, port, o)?
+
+    pub def connect_with(host: str, port: int, opts: Http2Options) throws str -> Http2Client:
+        mut store = TrustStore.system()
+        mut own = false
+        if opts.ca_pem.len() > 0:
+            store = TrustStore.system_copy()
+            store.add_pem(opts.ca_pem)
+            own = true
+        mut hp = host as Pointer[char]
+        mut tl = 0
+        if opts.tls: tl = 1
+        mut v = 0
+        if opts.verify: v = 1
+        mut h = trc_h2_connect(hp, host.len(), port, tl, store._handle(), v, opts.timeout_ms)
+        if _h2_null(h):
+            if own: store.dispose()
+            raise("HTTP/2: out of memory")
+        if trc_h2_ok(h) != 1:
+            mut eb = _cn_alloc(300)
+            mut en = trc_h2_error(h, eb, 300)
+            mut msg = _cn_take(eb, en)
+            trc_h2_close(h)
+            if own: store.dispose()
+            raise(msg)
+        mut c = Http2Client()
+        c._h = h
+        c._store = store
+        c._own_store = own
+        c.host = host
+        c.port = port
+        c.timeout_ms = opts.timeout_ms
+        c.default_headers = H2Headers.init()
+        c.default_headers.add("user-agent", "tauraro-http2/1.0")
+        return c
+
+    def _err(self) -> str:
+        mut eb = _cn_alloc(300)
+        mut en = trc_h2_error(self._h, eb, 300)
+        return _cn_take(eb, en)
+
+    # Start a request; returns its stream id. `headers` are added after the
+    # default headers (same-named defaults are replaced). Connection-specific
+    # headers (Connection, Host, Transfer-Encoding, ...) are dropped.
+    pub def submit(self, method: str, path: str, headers: H2Headers, body: str, has_body: bool) throws str -> int:
+        mut all = H2Headers.init()
+        mut i = 0
+        while i < len(self.default_headers.names):
+            if not headers.has(self.default_headers.names[i]):
+                all.add(self.default_headers.names[i], self.default_headers.values[i])
+            i = i + 1
+        i = 0
+        while i < len(headers.names):
+            all.add(headers.names[i], headers.values[i])
+            i = i + 1
+        mut blob = all.to_blob()
+        mut mp = method as Pointer[char]
+        mut pp = path as Pointer[char]
+        mut bp = blob as Pointer[char]
+        mut dp = body as Pointer[char]
+        mut hb = 0
+        if has_body: hb = 1
+        mut sid = trc_h2_submit(self._h, mp, pp, bp, blob.len(), dp, body.len(), hb)
+        if sid < 0:
+            mut e = self._err()
+            raise(e)
+        return sid
+
+    # Drive the connection until stream `sid` finishes (or fails).
+    pub def wait(self, sid: int) throws str:
+        mut r = trc_h2_wait(self._h, sid, self.timeout_ms)
+        if r == -2: raise("HTTP/2: timed out")
+
+    # Drive the connection until every submitted stream finishes.
+    pub def wait_all(self) throws str:
+        mut r = trc_h2_wait(self._h, 0, self.timeout_ms)
+        if r == -2: raise("HTTP/2: timed out")
+        if r < 0:
+            mut e = self._err()
+            if e.len() > 0: raise(e)
+
+    # True once stream `sid` has completed or failed.
+    pub def is_done(self, sid: int) -> bool: return trc_h2_state(self._h, sid) >= 2
+
+    def _part(self, sid: int, part: int) -> str:
+        mut z = 0 as Pointer[char]
+        mut n = trc_h2_part(self._h, sid, part, z, 0)
+        if n <= 0: return ""
+        mut out = _cn_alloc(n)
+        trc_h2_part(self._h, sid, part, out, n)
+        return _cn_take(out, n)
+
+    # Collect the result of stream `sid` (after wait); keeps the data until release().
+    pub def response(self, sid: int) -> Http2Response:
+        mut r = Http2Response()
+        r.stream_id = sid
+        r.status = trc_h2_status(self._h, sid)
+        if r.status < 0: r.status = 0
+        mut hb = self._part(sid, 0)
+        mut tb = self._part(sid, 1)
+        r.headers = H2Headers.from_blob(hb)
+        r.trailers = H2Headers.from_blob(tb)
+        r.body = self._part(sid, 2)
+        mut eb = _cn_alloc(200)
+        mut en = trc_h2_stream_error(self._h, sid, eb, 200)
+        r.error = _cn_take(eb, en)
+        if r.status == 0 and r.error.len() == 0: r.error = "HTTP/2: no response"
+        return r
+
+    # Forget a stream (cancelling it with RST_STREAM if it is still open).
+    pub def release(self, sid: int): trc_h2_release(self._h, sid)
+
+    # submit + wait + response + release.
+    pub def request(self, method: str, path: str, headers: H2Headers, body: str, has_body: bool) throws str -> Http2Response:
+        mut sid = self.submit(method, path, headers, body, has_body)?
+        self.wait(sid)?
+        mut r = self.response(sid)
+        self.release(sid)
+        return r
+
+    pub def get(self, path: str) throws str -> Http2Response:
+        mut h = H2Headers.init()
+        return self.request("GET", path, h, "", false)?
+
+    pub def post(self, path: str, body: str, content_type: str) throws str -> Http2Response:
+        mut h = H2Headers.init()
+        h.add("content-type", content_type)
+        return self.request("POST", path, h, body, true)?
+
+    pub def ping(self) -> bool: return trc_h2_ping(self._h, self.timeout_ms) == 0
+
+    # True after the server sent GOAWAY (open a new connection for new requests).
+    pub def is_closing(self) -> bool: return trc_h2_goaway(self._h) == 1
+
+    pub def set_timeout(self, ms: int):
+        self.timeout_ms = ms
+        trc_h2_set_timeout(self._h, ms)
+
+    # Send GOAWAY and close the connection.
     pub def close(self):
-        self.listener.close()
-        self.ok = false
+        if not _h2_null(self._h):
+            trc_h2_close(self._h)
+            self._h = 0 as Pointer[char]
+            if self._own_store: self._store.dispose()
+
+# Standalone HPACK encoder / decoder (one direction each: keep one instance
+# per direction of a connection).
+pub class Hpack:
+    _h: Pointer[char]
+
+extend Hpack:
+    # max_table: SETTINGS_HEADER_TABLE_SIZE (4096 is the protocol default).
+    pub def init(max_table: int) -> Hpack:
+        mut x = Hpack()
+        x._h = trc_hpack_new(max_table)
+        return x
+
+    pub def encode(self, headers: H2Headers) throws str -> str:
+        mut blob = headers.to_blob()
+        mut bp = blob as Pointer[char]
+        mut cap = blob.len() * 2 + 64
+        mut out = _cn_alloc(cap)
+        mut n = trc_hpack_encode(self._h, bp, blob.len(), out, cap)
+        if n < 0:
+            _cn_free(out)
+            raise("HPACK: encoding failed")
+        return _cn_take(out, n)
+
+    pub def decode(self, block: str) throws str -> H2Headers:
+        mut bp = block as Pointer[char]
+        mut cap = block.len() * 8 + 4096
+        mut out = _cn_alloc(cap)
+        mut n = trc_hpack_decode(self._h, bp, block.len(), out, cap)
+        if n <= -2:
+            _cn_free(out)
+            cap = (0 - n) - 2
+            out = _cn_alloc(cap)
+            n = trc_hpack_decode(self._h, bp, block.len(), out, cap)
+        if n < 0:
+            _cn_free(out)
+            raise("HPACK: compression error")
+        mut blob = _cn_take(out, n)
+        return H2Headers.from_blob(blob)
+
+    # Change the dynamic table size (encoder: announced in the next block).
+    pub def set_max_table(self, size: int): trc_hpack_set_max(self._h, size)
+    pub def table_size(self) -> int: return trc_hpack_table_size(self._h)
+    pub def table_entries(self) -> int: return trc_hpack_table_count(self._h)
+
+    pub def dispose(self):
+        if not _h2_null(self._h):
+            trc_hpack_free(self._h)
+            self._h = 0 as Pointer[char]
+
+pub class Huffman:
+    _dummy: int
+
+extend Huffman:
+    # HPACK Huffman coding (RFC 7541 appendix B).
+    pub def encode(s: str) -> str:
+        mut sp = s as Pointer[char]
+        mut cap = s.len() * 4 + 8
+        mut out = _cn_alloc(cap)
+        mut n = trc_huffman_encode(sp, s.len(), out, cap)
+        if n < 0: n = 0
+        return _cn_take(out, n)
+
+    pub def decode(s: str) throws str -> str:
+        mut sp = s as Pointer[char]
+        mut cap = s.len() * 2 + 8
+        mut out = _cn_alloc(cap)
+        mut n = trc_huffman_decode(sp, s.len(), out, cap)
+        if n < 0:
+            _cn_free(out)
+            raise("HPACK: invalid Huffman string")
+        return _cn_take(out, n)

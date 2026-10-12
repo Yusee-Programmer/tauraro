@@ -1,0 +1,107 @@
+# tauraro-cpp-shim: udpx_native.c
+#
+# std.net.udpx -- UDP endpoints with receive timeouts, IPv6 and IPv4
+# multicast (used by std.net.ntp, std.net.mdns and std.net.dnsmsg).
+#
+# Usage:
+#   from std.net.udpx import UdpEndpoint
+#   mut u = UdpEndpoint.open(4, 0)?            # IPv4, ephemeral port
+#   u.send_to("ping", "127.0.0.1", 9999)?
+#   mut d = u.recv(1500, 1000)?                # "" on timeout
+#   print(d.data, d.addr, d.port)
+
+from std.crypto.native import _cn_alloc, _cn_take, _cn_free
+
+extern "C":
+    def trc_udpx_unix_ms() -> int
+    def trc_udpx_open(family: int, bind_port: int, reuse: int) -> int
+    def trc_udpx_join4(fd: int, group: Pointer[char], ttl: int, loop_on: int) -> int
+    def trc_udpx_set_multicast_ttl(fd: int, ttl: int) -> int
+    def trc_udpx_sendto(fd: int, data: Pointer[char], n: int, host: Pointer[char], port: int) -> int
+    def trc_udpx_recvfrom(fd: int, buf: Pointer[char], cap: int, timeout_ms: int, addr_out: Pointer[char], port_out: Pointer[int]) -> int
+    def trc_udpx_local_port(fd: int) -> int
+    def trc_udpx_close(fd: int)
+
+# Wall-clock milliseconds since the Unix epoch.
+pub def unix_ms() -> int: return trc_udpx_unix_ms()
+
+# One received datagram.
+pub class Datagram:
+    pub data:     str
+    pub addr:     str       # sender IP
+    pub port:     int
+    pub timed_out: bool
+
+pub class UdpEndpoint:
+    pub fd: int
+
+extend UdpEndpoint:
+    # family 4 or 6; port 0 = ephemeral.
+    pub def open(family: int, port: int) throws str -> UdpEndpoint:
+        mut fd = trc_udpx_open(family, port, 0)
+        if fd < 0: raise(f"UDP: cannot open/bind port {port}")
+        mut u = UdpEndpoint()
+        u.fd = fd
+        return u
+
+    # Bind with SO_REUSEADDR/SO_REUSEPORT (to share a port such as 5353).
+    pub def open_shared(family: int, port: int) throws str -> UdpEndpoint:
+        mut fd = trc_udpx_open(family, port, 1)
+        if fd < 0: raise(f"UDP: cannot bind shared port {port}")
+        mut u = UdpEndpoint()
+        u.fd = fd
+        return u
+
+    # Join an IPv4 multicast group (e.g. "224.0.0.251").
+    pub def join_multicast(self, group: str, ttl: int, loopback: bool) throws str:
+        mut g = group + ""
+        mut gp = g as Pointer[char]
+        mut lo = 0
+        if loopback: lo = 1
+        if trc_udpx_join4(self.fd, gp, ttl, lo) != 0: raise(f"UDP: cannot join multicast group {group}")
+
+    pub def set_multicast_ttl(self, ttl: int): trc_udpx_set_multicast_ttl(self.fd, ttl)
+
+    pub def local_port(self) -> int: return trc_udpx_local_port(self.fd)
+
+    # Binary-safe send.
+    pub def send_to(self, data: str, host: str, port: int) throws str:
+        mut dp = data as Pointer[char]
+        mut h = host + ""
+        mut hp = h as Pointer[char]
+        if trc_udpx_sendto(self.fd, dp, data.len(), hp, port) < 0: raise(f"UDP: send to {host}:{port} failed")
+
+    # Next datagram within timeout_ms (-1 = wait forever); check .timed_out.
+    pub def recv(self, cap: int, timeout_ms: int) throws str -> Datagram:
+        mut buf = _cn_alloc(cap)
+        mut addr = _cn_alloc(64)
+        mut pbox = [0]
+        mut pp = pbox as Pointer[int]
+        mut n = trc_udpx_recvfrom(self.fd, buf, cap, timeout_ms, addr, pp)
+        mut d = Datagram()
+        d.timed_out = false
+        if n == -2:
+            _cn_free(buf)
+            _cn_free(addr)
+            d.data = ""
+            d.addr = ""
+            d.port = 0
+            d.timed_out = true
+            return d
+        if n < 0:
+            _cn_free(buf)
+            _cn_free(addr)
+            raise("UDP: receive failed")
+        d.data = _cn_take(buf, n)
+        mut al = 0
+        unsafe:
+            while al < 63 and (addr.offset(al).read() as int) != 0:
+                al = al + 1
+        d.addr = _cn_take(addr, al)
+        d.port = pbox[0]
+        return d
+
+    pub def close(self):
+        if self.fd >= 0:
+            trc_udpx_close(self.fd)
+            self.fd = -1

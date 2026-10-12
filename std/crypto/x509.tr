@@ -1,952 +1,286 @@
-# std.crypto.x509 — X.509 v3 certificates (RFC 5280): parsing, signature
-# verification, chain validation against a set of trust anchors, hostname
-# matching (RFC 6125 rules), validity-time checks and system CA bundle loading.
+# std.crypto.x509 -- X.509 certificates, trust stores and chain verification.
 #
-# Built on std.encoding.asn1 / pem and std.crypto.rsa / ecdsa. Signature
-# algorithms: sha1/256/384/512 WithRSAEncryption, RSASSA-PSS, ecdsa-with-SHA1/
-# 256/384/512 (P-256, P-384, P-521 keys) and Ed25519. Anything else is reported as an
-# unsupported algorithm (a chain through it fails; nothing is silently trusted).
+# `Certificate` parses a DER/PEM certificate and exposes its fields; a
+# `TrustStore` holds trusted roots (the system bundle, PEM files, or single
+# certificates); `X509.verify_chain` builds and checks a path from a leaf
+# through untrusted intermediates to a trusted root, following RFC 5280:
 #
-# PARSING
-#   X509.parse_der(der) / parse_pem(text)              -> X509Cert  (throws str)
-#   X509.parse_pem_all(text) -> Vec[X509Cert]          every CERTIFICATE block (bad ones skipped)
-#   X509Cert fields: version, serial, issuer/subject (X509Name: raw, text, cn),
-#   not_before/not_after (Unix seconds), sig_alg_oid, key_alg ("rsa"/"ec"/"ed25519"/"other"),
-#   key_curve_oid, spki, tbs, signature, plus the extensions understood below.
-#   Extensions parsed: subjectAltName (DNS, IP, email, URI), basicConstraints,
-#   keyUsage, extKeyUsage, subject/authority key identifiers, nameConstraints
-#   (dNSName subtrees). An unknown extension marked CRITICAL makes the
-#   certificate fail chain verification (RFC 5280 4.2).
-#   cert.is_valid_at(t), is_ca(), is_self_issued(), can_sign_certs(),
-#   key_usage_has(bit), matches_hostname(host), fingerprint_sha256(),
-#   public_key_rsa() / public_key_ec(), describe().
+#   * signatures (RSA PKCS#1 v1.5 / PSS, ECDSA P-256/P-384; SHA-1 refused)
+#   * validity periods of every certificate on the path
+#   * basicConstraints (CA flag, pathLenConstraint) and keyUsage keyCertSign
+#   * extendedKeyUsage (serverAuth / clientAuth) when a purpose is given
+#   * dNSName name constraints; unknown critical extensions are rejected
+#   * host names per RFC 6125 (subjectAltName only, "*." wildcards in the
+#     leftmost label, IP literals matched against iPAddress entries)
 #
-# SIGNATURES
-#   cert.verify_signed_by(issuer_cert) -> bool
-#   cert.is_self_signed() -> bool                      subject == issuer AND signature checks out
-#   X509.verify_signature(spki, sig_alg_oid, params, signed_bytes, signature) -> bool
-#
-# TRUST + CHAINS
-#   mut store = X509Store.init()
-#   store.add_pem(text) -> int            add every CERTIFICATE in a PEM bundle
-#   store.load_system() -> int            first readable bundle among common Linux/macOS/BSD
-#                                         paths (and $SSL_CERT_FILE); 0 if none (e.g. Windows)
-#   X509.verify_chain(leaf, intermediates, store, host, now, opts) -> ChainResult
-#   X509.verify_server_chain(chain, store, host)   chain[0] = leaf; uses the current time,
-#                                         default options (server auth, SHA-1 rejected)
-#   ChainResult: ok, error, depth, anchor. Checks: signatures along the path (with
-#   backtracking over same-name candidate issuers), validity periods (anchors too),
-#   basicConstraints cA + pathLenConstraint, keyUsage keyCertSign on CAs, extKeyUsage on the leaf,
-#   nameConstraints (dNSName), critical-extension handling, depth limit, and — when `host` is not
-#   empty — hostname matching.
-#
-# HOSTNAME MATCHING (RFC 6125 / the browser profile): subjectAltName only (no Common Name
-# fallback); a name matches case-insensitively; a wildcard is accepted only as the ENTIRE leftmost
-# label ("*.example.com"), matches exactly one label ("a.example.com", not "a.b.example.com"
-# nor "example.com"), and the pattern needs at least two further labels ("*.com" never matches).
-# IP literals match only iPAddress SANs.
-#
-# NOT DONE (honest list): no revocation checking (CRL / OCSP), no certificate transparency, no
-# AIA chasing, no policy / policyMappings / inhibitAnyPolicy processing, nameConstraints only for
-# dNSName (a chain whose constraints use other name types is rejected if the leaf has names of
-# those types), only prime-field P-256/P-384/P-521 EC keys, RSA >= 512 bits, DER (not BER) only.
-#
-# Plugging into the HTTP client (documented, NOT wired — the runtime TLS layer is unchanged):
-# a TLS backend that exposes the peer's certificate chain as DER blobs can do
-#   mut chain = Vec[X509Cert].init(4)
-#   chain.push(X509.parse_der(leaf_der)?) ; chain.push(X509.parse_der(inter_der)?)
-#   mut res = X509.verify_server_chain(chain, store, "example.com")
-#   if not res.ok: abort the handshake with res.error
-# See docs/std/crypto.md ("Using X.509 with HttpSession").
+# Revocation (CRL/OCSP) is not checked.
 #
 # Usage:
-#   from std.crypto.x509 import X509, X509Cert, X509Store
-#   mut store = X509Store.init()
-#   store.load_system()
-#   mut leaf = X509.parse_pem(leaf_pem)?
-#   mut res = X509.verify_chain(leaf, X509.parse_pem_all(chain_pem), store, "example.com", Clock.timestamp(), X509.default_options())
-#   print(res.ok, res.error)
+#   from std.crypto.x509 import Certificate, TrustStore, X509, PURPOSE_SERVER
+#   mut store = TrustStore.system()
+#   mut certs = Certificate.all_from_pem(read_file("chain.pem"))?
+#   mut code = X509.verify(store, certs, "example.com", 0, PURPOSE_SERVER)
+#   if code != 0: print(X509.error_text(code))
 
-from std.core.vec import Vec
-from std.crypto.pkutil import Bytes, PkHash
-from std.crypto.bn import bn_byte_len, bn_bit_len
-from std.crypto.rsa import Rsa, RsaPublicKey
-from std.crypto.ecdsa import Ecdsa, EcPublicKey
-from std.crypto.ed25519 import Ed25519
-from std.encoding.asn1 import Der, DerNode, DerReader, Oid
-from std.encoding.pem import Pem, PemBlock
-from std.io.file import read_file, file_exists
-from std.sys.time import Clock
+from std.crypto.native import _cn_alloc, _cn_take, _cn_free, _cn_hex
+from std.crypto.digest import Digest
+from std.crypto.pk import PKey, Pem
+from std.core.string import StringBuilder
+from std.string.str import Str
 
 extern "C":
-    def _tr_getenv(name: str) -> Pointer[char]
+    def trc_x509_parse(der: Pointer[char], n: int) -> Pointer[char]
+    def trc_x509_free(h: Pointer[char])
+    def trc_x509_text(h: Pointer[char], field: int, out: Pointer[char], cap: int) -> int
+    def trc_x509_int(h: Pointer[char], field: int) -> int
+    def trc_x509_bytes(h: Pointer[char], field: int, out: Pointer[char], cap: int) -> int
+    def trc_x509_matches_host(h: Pointer[char], host: Pointer[char], n: int) -> int
+    def trc_x509_signed_by(child: Pointer[char], issuer: Pointer[char]) -> int
+    def trc_x509_public_key(h: Pointer[char]) -> Pointer[char]
+    def trc_x509_store_new() -> Pointer[char]
+    def trc_x509_store_free(h: Pointer[char])
+    def trc_x509_store_count(h: Pointer[char]) -> int
+    def trc_x509_store_add_der(h: Pointer[char], der: Pointer[char], n: int) -> int
+    def trc_x509_store_add_pem(h: Pointer[char], pem: Pointer[char], n: int) -> int
+    def trc_x509_store_load_system(h: Pointer[char]) -> int
+    def trc_x509_store_system_shared() -> Pointer[char]
+    def trc_x509_verify_chain(store: Pointer[char], ders: Pointer[char], lens: Pointer[int], count: int, host: Pointer[char], hostlen: int, now: int, purpose: int) -> int
+    def trc_x509_error_text(code: int, out: Pointer[char], cap: int) -> int
 
-pub class X509Name:
-    pub raw:   Vec[int]     # DER of the Name
-    pub text:  str          # "C=US, O=Example, CN=host" (DER order)
-    pub canon: str          # normalized form used for matching issuer/subject
-    pub cn:    str          # first commonName, or ""
+pub const PURPOSE_ANY = 0
+pub const PURPOSE_SERVER = 1
+pub const PURPOSE_CLIENT = 2
 
-pub class X509Cert:
-    pub der:           Vec[int]
-    pub tbs:           Vec[int]       # the exact signed TBSCertificate TLV
-    pub version:       int            # 1, 2 or 3
-    pub serial:        Vec[int]       # unsigned big-endian bytes
-    pub sig_alg_oid:   str
-    pub sig_params:    Vec[int]       # raw DER of the AlgorithmIdentifier parameters ([] if absent)
-    pub signature:     Vec[int]       # BIT STRING payload
-    pub issuer:        X509Name
-    pub subject:       X509Name
-    pub not_before:    int
-    pub not_after:     int
-    pub spki:          Vec[int]       # raw SubjectPublicKeyInfo
-    pub key_alg:       str            # "rsa" | "ec" | "ed25519" | "other"
-    pub key_curve_oid: str
-    pub has_san:       bool
-    pub san_dns:       List[str]
-    pub san_ips:       List[str]      # raw address bytes as hex (8 hex chars = IPv4, 32 = IPv6)
-    pub san_emails:    List[str]
-    pub san_uris:      List[str]
-    pub has_bc:        bool
-    pub bc_ca:         bool
-    pub bc_pathlen:    int            # -1 = no limit
-    pub has_ku:        bool
-    pub ku_bits:       int            # bit i set <=> KeyUsage bit i
-    pub has_eku:       bool
-    pub eku:           List[str]      # dotted OIDs
-    pub ski:           Vec[int]
-    pub aki:           Vec[int]
-    pub has_nc:        bool
-    pub nc_permit_dns: List[str]
-    pub nc_exclude_dns: List[str]
-    pub nc_other:      bool           # constraints of a name type we cannot evaluate
-    pub unknown_critical: str         # OID of the first unknown critical extension, or ""
+# keyUsage bits (RFC 5280 section 4.2.1.3)
+pub const KU_DIGITAL_SIGNATURE = 1
+pub const KU_NON_REPUDIATION = 2
+pub const KU_KEY_ENCIPHERMENT = 4
+pub const KU_DATA_ENCIPHERMENT = 8
+pub const KU_KEY_AGREEMENT = 16
+pub const KU_KEY_CERT_SIGN = 32
+pub const KU_CRL_SIGN = 64
 
-pub class X509Store:
-    pub roots: Vec[X509Cert]
+# extendedKeyUsage bits
+pub const EKU_SERVER_AUTH = 1
+pub const EKU_CLIENT_AUTH = 2
+pub const EKU_ANY = 4
+pub const EKU_CODE_SIGNING = 8
+pub const EKU_EMAIL = 16
+pub const EKU_TIME_STAMPING = 32
+pub const EKU_OCSP_SIGNING = 64
 
-pub class X509Options:
-    pub allow_sha1:  bool
-    pub purpose:     str      # "server" | "client" | "any"
-    pub max_depth:   int
-    pub check_time:  bool
+def _x_null(p: Pointer[char]) -> bool:
+    return (p as usize) == (0 as usize)
 
-pub class ChainResult:
-    pub ok:     bool
-    pub error:  str
-    pub depth:  int           # certificates in the verified path, trust anchor included
-    pub anchor: str           # subject of the trust anchor
+def _x_lines(s: str) -> List[str]:
+    mut out: List[str] = []
+    if s.len() == 0: return out
+    mut parts = Str.split_keep_empty(s, "\n")
+    mut i = 0
+    while i < parts.len:
+        out.append(parts.get(i))
+        i = i + 1
+    return out
+
+pub class Certificate:
+    _h: Pointer[char]
+    _live: bool
+
+extend Certificate:
+    pub def from_der(der: str) throws str -> Certificate:
+        mut dp = der as Pointer[char]
+        mut h = trc_x509_parse(dp, der.len())
+        if _x_null(h): raise("X509: malformed certificate")
+        mut c = Certificate()
+        c._h = h
+        c._live = true
+        return c
+
+    # The first CERTIFICATE block of a PEM document.
+    pub def from_pem(text: str) throws str -> Certificate:
+        mut der = Pem.decode(text, "CERTIFICATE")?
+        return Certificate.from_der(der)?
+
+    # Every CERTIFICATE block of a PEM document, in order.
+    pub def all_from_pem(text: str) throws str -> List[Certificate]:
+        mut out: List[Certificate] = []
+        mut i = 0
+        while true:
+            mut r: Result[str, str] = Pem.decode_nth(text, "CERTIFICATE", i)
+            if r.is_err: break
+            mut c = Certificate.from_der(r.ok)?
+            out.append(c)
+            i = i + 1
+        if len(out) == 0: raise("X509: no certificates in PEM text")
+        return out
+
+    def _text(self, field: int) -> str:
+        mut out = _cn_alloc(8192)
+        mut n = trc_x509_text(self._h, field, out, 8192)
+        if n < 0: n = 0
+        return _cn_take(out, n)
+
+    def _bytes(self, field: int) -> str:
+        mut z = 0 as Pointer[char]
+        mut n = trc_x509_bytes(self._h, field, z, 0)
+        if n < 0: n = 0
+        mut out = _cn_alloc(n)
+        trc_x509_bytes(self._h, field, out, n)
+        return _cn_take(out, n)
+
+    # "C=US, O=Example, CN=example.com" (RDNs in certificate order).
+    pub def subject(self) -> str: return self._text(1)
+    pub def issuer(self) -> str: return self._text(2)
+    pub def serial_hex(self) -> str: return self._text(3)
+    pub def dns_names(self) -> List[str]:
+        mut t = self._text(4)
+        return _x_lines(t)
+    pub def ip_addresses(self) -> List[str]:
+        mut t = self._text(5)
+        return _x_lines(t)
+    pub def subject_key_id(self) -> str: return self._text(6)
+    pub def authority_key_id(self) -> str: return self._text(7)
+    # e.g. "sha256WithRSAEncryption", "ecdsa-with-SHA384", "rsassaPss".
+    pub def signature_algorithm(self) -> str: return self._text(8)
+    # "RSA", "EC P-256", "EC P-384", "Ed25519" or "unsupported".
+    pub def key_algorithm(self) -> str: return self._text(9)
+
+    pub def version(self) -> int: return trc_x509_int(self._h, 1)
+    # Validity bounds as Unix timestamps (seconds).
+    pub def not_before(self) -> int: return trc_x509_int(self._h, 2)
+    pub def not_after(self) -> int: return trc_x509_int(self._h, 3)
+    pub def is_ca(self) -> bool: return trc_x509_int(self._h, 4) == 1
+    # pathLenConstraint, or -1 if unlimited/absent.
+    pub def path_len(self) -> int: return trc_x509_int(self._h, 5)
+    # KU_* bits, or -1 if the extension is absent.
+    pub def key_usage(self) -> int: return trc_x509_int(self._h, 6)
+    # EKU_* bits, or -1 if the extension is absent.
+    pub def ext_key_usage(self) -> int: return trc_x509_int(self._h, 7)
+    pub def key_bits(self) -> int: return trc_x509_int(self._h, 8)
+
+    pub def is_valid_at(self, unix_time: int) -> bool:
+        return unix_time >= self.not_before() and unix_time <= self.not_after()
+
+    # RFC 6125 host-name / IP check against the subjectAltName entries.
+    pub def matches_host(self, host: str) -> bool:
+        mut hp = host as Pointer[char]
+        return trc_x509_matches_host(self._h, hp, host.len()) == 1
+
+    # True if `issuer`'s key produced this certificate's signature.
+    pub def is_signed_by(self, issuer: Certificate) -> bool:
+        return trc_x509_signed_by(self._h, issuer._h) == 1
+
+    pub def is_self_signed(self) -> bool:
+        return self.subject() == self.issuer() and trc_x509_signed_by(self._h, self._h) == 1
+
+    pub def der(self) -> str: return self._bytes(1)
+    pub def tbs_der(self) -> str: return self._bytes(2)
+    pub def subject_der(self) -> str: return self._bytes(3)
+    pub def issuer_der(self) -> str: return self._bytes(4)
+    pub def public_key_der(self) -> str: return self._bytes(5)
+    pub def signature(self) -> str: return self._bytes(6)
+
+    pub def to_pem(self) -> str:
+        mut d = self.der()
+        return Pem.encode(d, "CERTIFICATE")
+
+    # SHA-256 of the DER encoding, lower-case hex (as browsers show it).
+    pub def fingerprint_sha256(self) -> str:
+        mut d = self.der()
+        return Digest.sha256_hex(d)
+
+    # The subject public key (call dispose() on it when done).
+    pub def public_key(self) throws str -> PKey:
+        mut d = self.public_key_der()
+        return PKey.from_der(d)?
+
+    pub def dispose(self):
+        if self._live:
+            trc_x509_free(self._h)
+            self._live = false
+
+pub class TrustStore:
+    _h: Pointer[char]
+    _shared: bool
+
+extend TrustStore:
+    # An empty store.
+    pub def empty() -> TrustStore:
+        mut s = TrustStore()
+        s._h = trc_x509_store_new()
+        s._shared = false
+        return s
+
+    # The operating system's trusted roots (loaded once per process and
+    # shared; dispose() on it is a no-op). Honors SSL_CERT_FILE on POSIX.
+    pub def system() -> TrustStore:
+        mut s = TrustStore()
+        s._h = trc_x509_store_system_shared()
+        s._shared = true
+        return s
+
+    # A private copy of the system roots that you can extend.
+    pub def system_copy() -> TrustStore:
+        mut s = TrustStore.empty()
+        trc_x509_store_load_system(s._h)
+        return s
+
+    # Add every certificate in a PEM bundle; returns how many were added.
+    pub def add_pem(self, text: str) -> int:
+        mut tp = text as Pointer[char]
+        return trc_x509_store_add_pem(self._h, tp, text.len())
+
+    pub def add_der(self, der: str) throws str:
+        mut dp = der as Pointer[char]
+        if trc_x509_store_add_der(self._h, dp, der.len()) != 0: raise("TrustStore: malformed certificate")
+
+    pub def add(self, cert: Certificate) throws str:
+        mut d = cert.der()
+        self.add_der(d)?
+
+    pub def count(self) -> int: return trc_x509_store_count(self._h)
+
+    pub def _handle(self) -> Pointer[char]: return self._h
+
+    pub def dispose(self):
+        if not self._shared and not _x_null(self._h):
+            trc_x509_store_free(self._h)
+            self._h = 0 as Pointer[char]
 
 pub class X509:
     _dummy: int
 
-# ── small string helpers (kept local so this module needs nothing else) ─────
-
-def _x_sub(s: str, i: int, n: int) -> str:
-    return Bytes.to_str(Bytes.slice(Bytes.from_str(s), i, n))
-
-def _x_tail(s: str, i: int) -> str:
-    return _x_sub(s, i, s.len() - i)
-
-def _x_collapse(s: str) -> str:
-    mut b = Bytes.from_str(s.lower())
-    mut out = Vec[int].init(b.len + 1)
-    mut prev_space = true
-    mut i = 0
-    while i < b.len:
-        mut c = b.get(i)
-        if c == 32 or c == 9 or c == 10 or c == 13:
-            if not prev_space: out.push(32)
-            prev_space = true
-        else:
-            out.push(c)
-            prev_space = false
-        i = i + 1
-    if out.len > 0 and out.get(out.len - 1) == 32: out.len = out.len - 1
-    return Bytes.to_str(out)
-
-def _x_short(oid: str) -> str:
-    if oid == "2.5.4.3": return "CN"
-    if oid == "2.5.4.6": return "C"
-    if oid == "2.5.4.7": return "L"
-    if oid == "2.5.4.8": return "ST"
-    if oid == "2.5.4.10": return "O"
-    if oid == "2.5.4.11": return "OU"
-    if oid == "2.5.4.5": return "serialNumber"
-    if oid == "1.2.840.113549.1.9.1": return "emailAddress"
-    if oid == "0.9.2342.19200300.100.1.25": return "DC"
-    return oid
-
-def _x_hash_of_oid(oid: str) -> str:
-    if oid == "1.3.14.3.2.26": return "sha1"
-    if oid == "2.16.840.1.101.3.4.2.1": return "sha256"
-    if oid == "2.16.840.1.101.3.4.2.2": return "sha384"
-    if oid == "2.16.840.1.101.3.4.2.3": return "sha512"
-    return ""
-
-def _x_parse_name(node: DerNode) throws str -> X509Name:
-    mut nm = X509Name()
-    nm.raw = Bytes.clone(node.raw)
-    nm.text = ""
-    nm.canon = ""
-    nm.cn = ""
-    if node.tag != 48: raise("x509: Name is not a SEQUENCE")
-    mut r = node.reader()
-    mut first_rdn = true
-    while r.more():
-        mut rdn = r.next()?
-        if rdn.tag != 49: raise("x509: RDN is not a SET")
-        mut rr = rdn.reader()
-        mut first_attr = true
-        while rr.more():
-            mut atv = rr.next()?
-            if atv.tag != 48: raise("x509: AttributeTypeAndValue is not a SEQUENCE")
-            mut ar = atv.reader()
-            mut oid = ar.next()?.as_oid()?
-            mut val = ar.next()?
-            mut s = ""
-            if val.is_string():
-                s = val.as_text()?
-            else:
-                s = "#" + Bytes.to_hex(val.raw)
-            if first_rdn:
-                nm.text = nm.text + _x_short(oid) + "=" + s
-            elif first_attr:
-                nm.text = nm.text + ", " + _x_short(oid) + "=" + s
-            else:
-                nm.text = nm.text + "+" + _x_short(oid) + "=" + s
-            if not first_attr and first_rdn:
-                pass
-            nm.canon = nm.canon + oid + "=" + _x_collapse(s) + ";"
-            if oid == "2.5.4.3" and nm.cn == "": nm.cn = s
-            first_attr = false
-            first_rdn = false
-        nm.canon = nm.canon + "|"
-    return nm
-
-def _x_names_equal(a: X509Name, b: X509Name) -> bool:
-    if Bytes.eq(a.raw, b.raw): return true
-    return a.canon == b.canon
-
-# ── certificate parsing ─────────────────────────────────────────────────────
-
-def _x_hex_of_octets(n: DerNode) -> str:
-    return Bytes.to_hex(n.content)
-
-def _x_parse_general_names(c: X509Cert, seq: DerNode) throws str:
-    mut r = seq.reader()
-    while r.more():
-        mut g = r.next()?
-        if g.tag == 130:
-            c.san_dns.push(Bytes.to_str(g.content))
-        elif g.tag == 135:
-            if g.content.len == 4 or g.content.len == 16:
-                c.san_ips.push(Bytes.to_hex(g.content))
-        elif g.tag == 129:
-            c.san_emails.push(Bytes.to_str(g.content))
-        elif g.tag == 134:
-            c.san_uris.push(Bytes.to_str(g.content))
-
-# GeneralSubtrees in NameConstraints: only dNSName ([2]) is evaluated.
-def _x_parse_subtrees(seq: DerNode, out: List[str], c: X509Cert) throws str:
-    mut r = seq.reader()
-    while r.more():
-        mut st = r.next()?
-        if st.tag != 48: raise("x509: bad GeneralSubtree")
-        mut sr = st.reader()
-        mut base = sr.next()?
-        if base.tag == 130:
-            out.push(Bytes.to_str(base.content))
-        else:
-            c.nc_other = true
-
-def _x_parse_extension(c: X509Cert, ext: DerNode) throws str:
-    mut er = ext.reader()
-    mut oid = er.next()?.as_oid()?
-    mut critical = false
-    mut nxt = er.next()?
-    if nxt.tag == 1:
-        critical = nxt.as_bool()?
-        nxt = er.next()?
-    if nxt.tag != 4: raise("x509: extension value is not an OCTET STRING")
-    mut value = Der.parse(nxt.content)?
-    if oid == "2.5.29.17":
-        c.has_san = true
-        _x_parse_general_names(c, value)?
-    elif oid == "2.5.29.19":
-        c.has_bc = true
-        mut br = value.reader()
-        while br.more():
-            mut f = br.next()?
-            if f.tag == 1: c.bc_ca = f.as_bool()?
-            elif f.tag == 2: c.bc_pathlen = f.as_int()?
-    elif oid == "2.5.29.15":
-        c.has_ku = true
-        mut i = 0
-        while i < 9:
-            if value.bit_is_set(i): c.ku_bits = c.ku_bits | (1 << i)
-            i = i + 1
-    elif oid == "2.5.29.37":
-        c.has_eku = true
-        mut kr = value.reader()
-        while kr.more():
-            c.eku.push(kr.next()?.as_oid()?)
-    elif oid == "2.5.29.14":
-        c.ski = value.as_octets()?
-    elif oid == "2.5.29.35":
-        mut ar = value.reader()
-        while ar.more():
-            mut f = ar.next()?
-            if f.tag == 128: c.aki = Bytes.clone(f.content)
-    elif oid == "2.5.29.30":
-        c.has_nc = true
-        mut nr = value.reader()
-        while nr.more():
-            mut f = nr.next()?
-            if f.tag == 160: _x_parse_subtrees(f, c.nc_permit_dns, c)?
-            elif f.tag == 161: _x_parse_subtrees(f, c.nc_exclude_dns, c)?
-    elif critical:
-        # unknown critical extensions are tolerated here, but fail chain validation.
-        # Known-and-harmless ones are listed so common real certificates verify.
-        if oid != "2.5.29.32" and oid != "2.5.29.36" and oid != "2.5.29.33" and oid != "2.5.29.31" and oid != "2.5.29.54" and oid != "1.3.6.1.5.5.7.1.1":
-            if c.unknown_critical == "": c.unknown_critical = oid
-
-def _x_alg_id(node: DerNode) throws str -> DerNode:
-    if node.tag != 48: raise("x509: AlgorithmIdentifier is not a SEQUENCE")
-    return node
-
 extend X509:
-    # Does a certificate DNS name `pattern` (possibly "*.example.com") cover `host`? See the
-    # hostname rules in the module header.
-    pub def match_dns(pattern: str, host: str) -> bool:
-        return _x_dns_match(pattern, host)
-
-    pub def default_options() -> X509Options:
-        mut o = X509Options()
-        o.allow_sha1 = false
-        o.purpose = "server"
-        o.max_depth = 8
-        o.check_time = true
-        return o
-
-    pub def parse_der(der: Vec[int]) throws str -> X509Cert:
-        mut top = Der.parse(der)?
-        if top.tag != 48: raise("x509: certificate is not a SEQUENCE")
-        mut tr = top.reader()
-        mut tbs = tr.next()?
-        mut outer_alg = _x_alg_id(tr.next()?)?
-        mut sigbits = tr.next()?
-        if tr.more(): raise("x509: trailing data after signatureValue")
-        if tbs.tag != 48: raise("x509: TBSCertificate is not a SEQUENCE")
-        mut c = X509Cert()
-        c.der = Bytes.clone(der)
-        c.tbs = Bytes.clone(tbs.raw)
-        c.signature = sigbits.as_bit_string()?
-        if sigbits.bit_unused() != 0: raise("x509: signature BIT STRING has unused bits")
-        c.version = 1
-        c.has_san = false
-        c.san_dns = []
-        c.san_ips = []
-        c.san_emails = []
-        c.san_uris = []
-        c.has_bc = false
-        c.bc_ca = false
-        c.bc_pathlen = -1
-        c.has_ku = false
-        c.ku_bits = 0
-        c.has_eku = false
-        c.eku = []
-        c.ski = Bytes.zeros(0)
-        c.aki = Bytes.zeros(0)
-        c.has_nc = false
-        c.nc_permit_dns = []
-        c.nc_exclude_dns = []
-        c.nc_other = false
-        c.unknown_critical = ""
-        c.key_alg = "other"
-        c.key_curve_oid = ""
-        # outer signature algorithm
-        mut oa = outer_alg.reader()
-        c.sig_alg_oid = oa.next()?.as_oid()?
-        c.sig_params = Bytes.zeros(0)
-        if oa.more():
-            mut p = oa.next()?
-            if p.tag != 5: c.sig_params = Bytes.clone(p.raw)
-        # TBSCertificate
-        mut r = tbs.reader()
-        mut f = r.next()?
-        if f.tag == 160:
-            c.version = f.child(0)?.as_int()? + 1
-            if c.version < 1 or c.version > 3: raise("x509: unsupported certificate version")
-            f = r.next()?
-        c.serial = f.as_unsigned_bytes()?
-        mut inner_alg = _x_alg_id(r.next()?)?
-        if not Bytes.eq(inner_alg.raw, outer_alg.raw): raise("x509: signatureAlgorithm differs from TBSCertificate.signature")
-        c.issuer = _x_parse_name(r.next()?)?
-        mut validity = r.next()?
-        if validity.tag != 48: raise("x509: bad Validity")
-        mut vr = validity.reader()
-        c.not_before = vr.next()?.as_time()?
-        c.not_after = vr.next()?.as_time()?
-        c.subject = _x_parse_name(r.next()?)?
-        mut spki = r.next()?
-        if spki.tag != 48: raise("x509: bad SubjectPublicKeyInfo")
-        c.spki = Bytes.clone(spki.raw)
-        mut sr = spki.reader()
-        mut kalg = sr.next()?
-        mut kar = kalg.reader()
-        mut koid = kar.next()?.as_oid()?
-        if koid == Oid.RSA_ENCRYPTION():
-            c.key_alg = "rsa"
-        elif koid == Oid.EC_PUBLIC_KEY():
-            c.key_alg = "ec"
-            if kar.more():
-                mut cp = kar.next()?
-                if cp.tag == 6: c.key_curve_oid = cp.as_oid()?
-        elif koid == Oid.ED25519():
-            c.key_alg = "ed25519"
-        while r.more():
-            mut g = r.next()?
-            if g.tag == 163:
-                mut exts = g.child(0)?
-                if exts.tag != 48: raise("x509: bad extensions")
-                mut er = exts.reader()
-                while er.more():
-                    _x_parse_extension(c, er.next()?)?
-        return c
-
-    pub def parse_pem(text: str) throws str -> X509Cert:
-        mut b = Pem.decode_label(text, "CERTIFICATE")?
-        return X509.parse_der(b.data)?
-
-    # Every well-formed CERTIFICATE block ("TRUSTED CERTIFICATE" bundles and
-    # unparsable certificates are skipped).
-    pub def parse_pem_all(text: str) -> Vec[X509Cert]:
-        mut out = Vec[X509Cert].init(8)
-        mut blocks = Pem.decode_all(text)
+    # Verify a chain given as DER certificates (leaf first, then any
+    # intermediates in any order). `host` "" skips the name check; `now` 0
+    # means the current time; purpose is PURPOSE_SERVER / CLIENT / ANY.
+    # Returns 0 on success or a negative error code (see error_text).
+    pub def verify_der(store: TrustStore, chain: List[str], host: str, now: int, purpose: int) -> int:
+        if len(chain) == 0: return -1
+        mut sb = StringBuilder.init(4096)
+        mut lens: List[int] = []
         mut i = 0
-        while i < blocks.len:
-            if blocks.get(i).label == "CERTIFICATE":
-                mut r: Result[X509Cert, str] = X509.parse_der(blocks.get(i).data)
-                if not r.is_err: out.push(r.ok)
+        while i < len(chain):
+            mut d = chain[i]
+            sb.append(d)
+            lens.append(d.len())
             i = i + 1
-        return out
+        mut all = sb.to_owned()
+        sb.free()
+        mut ap = all as Pointer[char]
+        mut lp = lens as Pointer[int]
+        mut hp = host as Pointer[char]
+        return trc_x509_verify_chain(store._handle(), ap, lp, len(chain), hp, host.len(), now, purpose)
 
-# ── certificate queries ─────────────────────────────────────────────────────
-
-# "1:2:abcd" -> 6 bytes; no empty groups allowed; [-1] marks a syntax error.
-def _x_v6_groups(text: str) -> Vec[int]:
-    mut res = Vec[int].init(16)
-    if text == "": return res
-    if text.starts_with(":") or text.ends_with(":"):
-        res.push(-1)
-        return res
-    mut parts = text.split(":")
-    mut i = 0
-    while i < parts.len():
-        mut g = parts[i] + ""
-        if g.len() > 4 or g.len() == 0:
-            return _x_bad_groups()
-        mut hv = Bytes.from_hex(_x_pad4(g))
-        if hv.len != 2: return _x_bad_groups()
-        res.push(hv.get(0))
-        res.push(hv.get(1))
-        i = i + 1
-    return res
-
-def _x_bad_groups() -> Vec[int]:
-    mut r = Vec[int].init(1)
-    r.push(-1)
-    return r
-
-def _x_parse_ip(host: str) -> Vec[int]:
-    mut out = Vec[int].init(16)
-    if host.find(":") >= 0:
-        # IPv6, with optional "::" compression and no embedded IPv4.
-        # (str.split drops empty fields, so the "::" gap is located by hand.)
-        if host.find(":::") >= 0: return out
-        mut gap = host.find("::")
-        mut left_s = host
-        mut right_s = ""
-        if gap >= 0:
-            left_s = _x_sub(host, 0, gap)
-            right_s = _x_tail(host, gap + 2)
-            if right_s.find("::") >= 0: return out
-        else:
-            if host.starts_with(":") or host.ends_with(":"): return out
-        mut head = _x_v6_groups(left_s)
-        mut tail = _x_v6_groups(right_s)
-        if head.len == 1 and head.get(0) == -1: return out
-        if tail.len == 1 and tail.get(0) == -1: return out
-        mut total = head.len + tail.len
-        if gap >= 0:
-            if total > 14: return out
-            Bytes.append(out, head)
-            Bytes.append(out, Bytes.zeros(16 - total))
-            Bytes.append(out, tail)
-        else:
-            if total != 16: return out
-            Bytes.append(out, head)
-        return out
-    mut q = host.split(".")
-    if q.len() != 4: return out
-    mut i = 0
-    while i < 4:
-        mut s = q[i] + ""
-        if s.len() == 0 or s.len() > 3: return Vec[int].init(4)
-        mut v = 0
-        mut sb = Bytes.from_str(s)
-        mut k = 0
-        while k < sb.len:
-            mut ch = sb.get(k)
-            if ch < 48 or ch > 57: return Vec[int].init(4)
-            v = v * 10 + (ch - 48)
-            k = k + 1
-        if v > 255: return Vec[int].init(4)
-        out.push(v)
-        i = i + 1
-    return out
-
-def _x_pad4(s: str) -> str:
-    mut r = s
-    while r.len() < 4:
-        r = "0" + r
-    return r
-
-# RFC 6125 name match for one presented DNS identifier.
-def _x_dns_match(pattern: str, host: str) -> bool:
-    mut p = pattern.lower()
-    mut h = host.lower()
-    if p.ends_with("."): p = _x_sub(p, 0, p.len() - 1)
-    if h.ends_with("."): h = _x_sub(h, 0, h.len() - 1)
-    if p == "" or h == "": return false
-    mut pb = Bytes.from_str(p)
-    mut i = 0
-    while i < pb.len:
-        if pb.get(i) >= 128: return false
-        i = i + 1
-    if not p.starts_with("*"): return p == h
-    if not p.starts_with("*."): return false
-    mut rest = _x_tail(p, 2)
-    if rest.find("*") >= 0: return false
-    if rest.find(".") < 0: return false
-    if rest.starts_with(".") or rest.find("..") >= 0: return false
-    mut dot = h.find(".")
-    if dot <= 0: return false
-    return _x_tail(h, dot + 1) == rest
-
-# NameConstraints dNSName subtree match: "example.com" covers itself and subdomains,
-# ".example.com" only subdomains, "" everything.
-def _x_nc_dns_match(constraint: str, name: str) -> bool:
-    mut c = constraint.lower()
-    mut n = name.lower()
-    if c == "": return true
-    if c.starts_with("."):
-        return n.ends_with(c) and n.len() > c.len()
-    if n == c: return true
-    return n.ends_with("." + c)
-
-extend X509Cert:
-    pub def is_valid_at(self, t: int) -> bool:
-        return t >= self.not_before and t <= self.not_after
-
-    pub def is_self_issued(self) -> bool:
-        return _x_names_equal(self.issuer, self.subject)
-
-    # CA per basicConstraints (a v3 certificate without the extension is not a CA).
-    pub def is_ca(self) -> bool:
-        return self.has_bc and self.bc_ca
-
-    pub def key_usage_has(self, bit: int) -> bool:
-        if not self.has_ku: return true
-        return (self.ku_bits & (1 << bit)) != 0
-
-    # keyCertSign (bit 5) allowed (no keyUsage extension = no restriction).
-    pub def can_sign_certs(self) -> bool:
-        return self.key_usage_has(5)
-
-    pub def fingerprint_sha256(self) -> str:
-        return Bytes.to_hex(PkHash.digest("sha256", self.der))
-
-    pub def public_key_rsa(self) throws str -> RsaPublicKey:
-        if self.key_alg != "rsa": raise("x509: certificate key is not RSA")
-        return Rsa.public_from_der(self.spki)?
-
-    pub def public_key_ec(self) throws str -> EcPublicKey:
-        if self.key_alg != "ec": raise("x509: certificate key is not EC")
-        return Ecdsa.public_from_der(self.spki)?
-
-    # SAN dNSName / iPAddress match (no Common Name fallback). See the module header.
-    pub def matches_hostname(self, host: str) -> bool:
-        if host == "": return false
-        mut ip = _x_parse_ip(host)
-        if ip.len > 0:
-            mut want = Bytes.to_hex(ip)
-            mut i = 0
-            while i < self.san_ips.len():
-                if self.san_ips[i] == want: return true
-                i = i + 1
-            return false
+    pub def verify(store: TrustStore, chain: List[Certificate], host: str, now: int, purpose: int) -> int:
+        mut ders: List[str] = []
         mut i = 0
-        while i < self.san_dns.len():
-            if _x_dns_match(self.san_dns[i], host): return true
+        while i < len(chain):
+            ders.append(chain[i].der())
             i = i + 1
-        return false
+        return X509.verify_der(store, ders, host, now, purpose)
 
-    pub def describe(self) -> str:
-        mut s = f"Subject: {self.subject.text}\nIssuer:  {self.issuer.text}\n"
-        s = s + f"Serial:  {Bytes.to_hex(self.serial)}\n"
-        s = s + f"Valid:   {Der.format_time(self.not_before)} .. {Der.format_time(self.not_after)}\n"
-        s = s + f"SigAlg:  {Oid.name(self.sig_alg_oid)}\nKey:     {self.key_alg}"
-        if self.key_curve_oid != "": s = s + " (" + Oid.name(self.key_curve_oid) + ")"
-        s = s + "\n"
-        if self.has_bc: s = s + f"CA:      {self.bc_ca} pathlen={self.bc_pathlen}\n"
-        if self.has_san:
-            mut i = 0
-            while i < self.san_dns.len():
-                s = s + "SAN DNS: " + self.san_dns[i] + "\n"
-                i = i + 1
-            i = 0
-            while i < self.san_ips.len():
-                s = s + "SAN IP:  " + self.san_ips[i] + "\n"
-                i = i + 1
-        return s
-
-    # Does `issuer`'s key verify this certificate's signature (names are NOT compared here)?
-    pub def verify_signed_by(self, issuer: X509Cert) -> bool:
-        return X509.verify_signature(issuer.spki, self.sig_alg_oid, self.sig_params, self.tbs, self.signature)
-
-    pub def is_self_signed(self) -> bool:
-        if not self.is_self_issued(): return false
-        return self.verify_signed_by(self)
-
-# ── signature verification ──────────────────────────────────────────────────
-
-pub class PssParams:
-    pub hash:     str
-    pub salt_len: int
-    pub ok:       bool
-
-def _x_parse_pss(params: Vec[int]) -> PssParams:
-    mut pp = PssParams()
-    pp.hash = "sha1"
-    pp.salt_len = 20
-    pp.ok = false
-    if params.len == 0:
-        pp.ok = true
-        return pp
-    mut top: Result[DerNode, str] = Der.parse(params)
-    if top.is_err: return pp
-    if top.ok.tag != 48: return pp
-    mut mgf_hash = "sha1"
-    mut r = top.ok.reader()
-    while r.more():
-        mut fr: Result[DerNode, str] = r.next()
-        if fr.is_err: return pp
-        mut f = fr.ok
-        mut cr: Result[DerNode, str] = f.child(0)
-        if cr.is_err: return pp
-        mut inner = cr.ok
-        if f.tag == 160:
-            mut o: Result[DerNode, str] = inner.child(0)
-            if o.is_err: return pp
-            mut os: Result[str, str] = o.ok.as_oid()
-            if os.is_err: return pp
-            pp.hash = _x_hash_of_oid(os.ok)
-            if pp.hash == "": return pp
-        elif f.tag == 161:
-            mut o: Result[DerNode, str] = inner.child(0)
-            if o.is_err: return pp
-            if not o.ok.is_oid(Oid.MGF1()): return pp
-            mut ha: Result[DerNode, str] = inner.child(1)
-            if ha.is_err: return pp
-            mut ho: Result[DerNode, str] = ha.ok.child(0)
-            if ho.is_err: return pp
-            mut hs: Result[str, str] = ho.ok.as_oid()
-            if hs.is_err: return pp
-            mgf_hash = _x_hash_of_oid(hs.ok)
-            if mgf_hash == "": return pp
-        elif f.tag == 162:
-            mut sv: Result[int, str] = inner.as_int()
-            if sv.is_err: return pp
-            pp.salt_len = sv.ok
-        elif f.tag == 163:
-            mut tv: Result[int, str] = inner.as_int()
-            if tv.is_err or tv.ok != 1: return pp
-        else:
-            return pp
-    if mgf_hash != pp.hash: return pp
-    pp.ok = true
-    return pp
-
-extend X509:
-    # Verify `signature` over `signed` with the public key in `spki`, using the
-    # X.509 signature-algorithm OID (+ raw parameters, only used for RSASSA-PSS).
-    pub def verify_signature(spki: Vec[int], alg_oid: str, params: Vec[int], signed: Vec[int], signature: Vec[int]) -> bool:
-        mut h = ""
-        mut kind = ""
-        if alg_oid == "1.2.840.113549.1.1.5": h = "sha1"; kind = "rsa"
-        elif alg_oid == "1.2.840.113549.1.1.11": h = "sha256"; kind = "rsa"
-        elif alg_oid == "1.2.840.113549.1.1.12": h = "sha384"; kind = "rsa"
-        elif alg_oid == "1.2.840.113549.1.1.13": h = "sha512"; kind = "rsa"
-        elif alg_oid == "1.2.840.113549.1.1.10": kind = "pss"
-        elif alg_oid == "1.2.840.10045.4.1": h = "sha1"; kind = "ec"
-        elif alg_oid == "1.2.840.10045.4.3.2": h = "sha256"; kind = "ec"
-        elif alg_oid == "1.2.840.10045.4.3.3": h = "sha384"; kind = "ec"
-        elif alg_oid == "1.2.840.10045.4.3.4": h = "sha512"; kind = "ec"
-        elif alg_oid == "1.3.101.112": kind = "ed25519"
-        else: return false
-        if kind == "rsa":
-            mut k: Result[RsaPublicKey, str] = Rsa.public_from_der(spki)
-            if k.is_err: return false
-            return Rsa.verify_pkcs1(k.ok, h, signed, signature)
-        if kind == "pss":
-            mut pp = _x_parse_pss(params)
-            if not pp.ok: return false
-            mut k: Result[RsaPublicKey, str] = Rsa.public_from_der(spki)
-            if k.is_err: return false
-            return Rsa.verify_pss(k.ok, pp.hash, signed, signature, pp.salt_len)
-        if kind == "ec":
-            mut k: Result[EcPublicKey, str] = Ecdsa.public_from_der(spki)
-            if k.is_err: return false
-            return Ecdsa.verify(k.ok, h, signed, signature)
-        # Ed25519: SPKI = SEQUENCE { AlgId, BIT STRING(32-byte key) }
-        mut top: Result[DerNode, str] = Der.parse(spki)
-        if top.is_err: return false
-        mut kb: Result[DerNode, str] = top.ok.child(1)
-        if kb.is_err: return false
-        mut raw: Result[Vec[int], str] = kb.ok.as_bit_string()
-        if raw.is_err: return false
-        if raw.ok.len != 32 or signature.len != 64: return false
-        return Ed25519.verify_bytes(Bytes.to_str(signed), signed.len, Bytes.to_hex(signature), Bytes.to_hex(raw.ok))
-
-# ── trust store ─────────────────────────────────────────────────────────────
-
-def _x_system_paths() -> List[str]:
-    mut p: List[str] = []
-    p.push("/etc/ssl/certs/ca-certificates.crt")
-    p.push("/etc/pki/tls/certs/ca-bundle.crt")
-    p.push("/etc/ssl/ca-bundle.pem")
-    p.push("/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem")
-    p.push("/etc/ssl/cert.pem")
-    p.push("/usr/local/etc/openssl/cert.pem")
-    p.push("/usr/local/etc/openssl@3/cert.pem")
-    p.push("/opt/homebrew/etc/ca-certificates/cert.pem")
-    p.push("/opt/homebrew/etc/openssl@3/cert.pem")
-    p.push("/usr/local/share/certs/ca-root-nss.crt")
-    p.push("/etc/openssl/certs/ca-certificates.crt")
-    p.push("/data/data/com.termux/files/usr/etc/tls/cert.pem")
-    return p
-
-extend X509Store:
-    pub def init() -> X509Store:
-        mut s = X509Store()
-        s.roots = Vec[X509Cert].init(8)
-        return s
-
-    pub def len(self) -> int:
-        return self.roots.len
-
-    pub def add(self, cert: X509Cert):
-        self.roots.push(cert)
-
-    # Adds every CERTIFICATE block of a PEM bundle; returns how many were added.
-    pub def add_pem(self, text: str) -> int:
-        mut all = X509.parse_pem_all(text)
-        mut i = 0
-        while i < all.len:
-            self.roots.push(all.get(i))
-            i = i + 1
-        return all.len
-
-    # Loads the first existing system bundle ($SSL_CERT_FILE first); returns the number of
-    # certificates loaded (0 = none found, e.g. on Windows, which keeps its roots in the OS store).
-    pub def load_system(self) -> int:
-        mut env = _tr_getenv("SSL_CERT_FILE")
-        if env as int != 0:
-            mut path = env as str
-            if path != "" and file_exists(path):
-                mut n = self.add_pem(read_file(path))
-                if n > 0: return n
-        mut paths = _x_system_paths()
-        mut i = 0
-        while i < paths.len():
-            if file_exists(paths[i]):
-                mut n = self.add_pem(read_file(paths[i]))
-                if n > 0: return n
-            i = i + 1
-        return 0
-
-    # Is this exact certificate (same DER) a trust anchor?
-    pub def contains(self, cert: X509Cert) -> bool:
-        mut i = 0
-        while i < self.roots.len:
-            if Bytes.eq(self.roots.get(i).der, cert.der): return true
-            i = i + 1
-        return false
-
-# ── chain validation ────────────────────────────────────────────────────────
-
-def _x_result(ok: bool, err: str, depth: int, anchor: str) -> ChainResult:
-    mut r = ChainResult()
-    r.ok = ok
-    r.error = err
-    r.depth = depth
-    r.anchor = anchor
-    return r
-
-def _x_has_eku(c: X509Cert, oid: str) -> bool:
-    mut i = 0
-    while i < c.eku.len():
-        if c.eku[i] == oid or c.eku[i] == "2.5.29.37.0": return true
-        i = i + 1
-    return false
-
-def _x_sha1_sig(c: X509Cert) -> bool:
-    if c.sig_alg_oid == "1.2.840.113549.1.1.5" or c.sig_alg_oid == "1.2.840.10045.4.1": return true
-    if c.sig_alg_oid == "1.2.840.113549.1.1.10":
-        mut pp = _x_parse_pss(c.sig_params)
-        return pp.ok and pp.hash == "sha1"
-    return false
-
-pub class LeafInfo:
-    pub dns:   List[str]
-    pub other: bool          # has SAN names of types other than dNSName
-
-def _x_leaf_info(leaf: X509Cert) -> LeafInfo:
-    mut li = LeafInfo()
-    li.dns = []
-    mut i = 0
-    while i < leaf.san_dns.len():
-        li.dns.push(leaf.san_dns[i])
-        i = i + 1
-    li.other = leaf.san_ips.len() > 0 or leaf.san_emails.len() > 0 or leaf.san_uris.len() > 0
-    return li
-
-# Does `ca`'s nameConstraints allow every dNSName of the leaf?
-def _x_nc_allows(ca: X509Cert, leaf: LeafInfo) -> str:
-    if not ca.has_nc: return ""
-    if ca.nc_other and leaf.other:
-        return "name constraints use a name type this verifier cannot evaluate"
-    mut i = 0
-    while i < leaf.dns.len():
-        mut n = leaf.dns[i] + ""
-        if n.starts_with("*."): n = _x_tail(n, 2)
-        mut k = 0
-        while k < ca.nc_exclude_dns.len():
-            if _x_nc_dns_match(ca.nc_exclude_dns[k], n): return f"name '{leaf.dns[i]}' is excluded by name constraints"
-            k = k + 1
-        if ca.nc_permit_dns.len() > 0:
-            mut okp = false
-            k = 0
-            while k < ca.nc_permit_dns.len():
-                if _x_nc_dns_match(ca.nc_permit_dns[k], n): okp = true
-                k = k + 1
-            if not okp: return f"name '{leaf.dns[i]}' is not permitted by name constraints"
-        i = i + 1
-    return ""
-
-# Shared checks for a certificate acting as a CA at position `below` (number of
-# CA certificates between it and the leaf).
-def _x_ca_ok(ca: X509Cert, below: int, now: int, opts: X509Options, anchor: bool) -> str:
-    if opts.check_time and not ca.is_valid_at(now): return f"CA certificate '{ca.subject.text}' is expired or not yet valid"
-    if ca.unknown_critical != "": return f"unhandled critical extension {ca.unknown_critical}"
-    if not anchor or ca.has_bc:
-        if ca.version == 3 and not ca.is_ca(): return f"'{ca.subject.text}' is not a CA (basicConstraints)"
-    if ca.has_bc and not ca.bc_ca: return f"'{ca.subject.text}' is not a CA (basicConstraints)"
-    if not ca.can_sign_certs(): return f"'{ca.subject.text}' keyUsage forbids certificate signing"
-    if ca.has_bc and ca.bc_pathlen >= 0 and below > ca.bc_pathlen: return f"path length constraint of '{ca.subject.text}' exceeded"
-    return ""
-
-# Try to extend the path above `cert`. Returns "" on success (and fills `depth_out[0]` /
-# `anchor_out[0]`), otherwise the most relevant error.
-def _x_extend(cert: X509Cert, leaf: LeafInfo, inters: Vec[X509Cert], store: X509Store, now: int, opts: X509Options, depth: int, below: int, depth_out: List[int], anchor_out: List[str]) -> str:
-    if depth > opts.max_depth: return "certificate chain too long"
-    mut best = ""
-    # 1. trust anchors
-    mut i = 0
-    while i < store.roots.len:
-        mut a = store.roots.get(i)
-        i = i + 1
-        if not _x_names_equal(a.subject, cert.issuer): continue
-        if not opts.allow_sha1 and _x_sha1_sig(cert): 
-            best = "certificate is signed with SHA-1"
-            continue
-        if not cert.verify_signed_by(a):
-            if best == "": best = f"signature of '{cert.subject.text}' does not verify against '{a.subject.text}'"
-            continue
-        mut e = _x_ca_ok(a, below, now, opts, true)
-        if e != "":
-            best = e
-            continue
-        mut nce = _x_nc_allows(a, leaf)
-        if nce != "":
-            best = nce
-            continue
-        depth_out.push(depth + 2)
-        anchor_out.push(a.subject.text)
-        return ""
-    # 2. intermediates
-    mut j = 0
-    while j < inters.len:
-        mut m = inters.get(j)
-        j = j + 1
-        if Bytes.eq(m.der, cert.der): continue
-        if not _x_names_equal(m.subject, cert.issuer): continue
-        if m.is_self_issued() and Bytes.eq(m.spki, cert.spki): continue
-        if not opts.allow_sha1 and _x_sha1_sig(cert):
-            best = "certificate is signed with SHA-1"
-            continue
-        if not cert.verify_signed_by(m):
-            if best == "": best = f"signature of '{cert.subject.text}' does not verify against '{m.subject.text}'"
-            continue
-        mut e = _x_ca_ok(m, below, now, opts, false)
-        if e != "":
-            best = e
-            continue
-        mut nce = _x_nc_allows(m, leaf)
-        if nce != "":
-            best = nce
-            continue
-        mut sub = _x_extend(m, leaf, inters, store, now, opts, depth + 1, below + 1, depth_out, anchor_out)
-        if sub == "": return ""
-        best = sub
-    if best == "":
-        if cert.is_self_issued(): return f"self-signed certificate '{cert.subject.text}' is not trusted"
-        return f"unable to find a trusted issuer for '{cert.subject.text}' (issuer: {cert.issuer.text})"
-    return best
-
-extend X509:
-    # Validate `leaf` (+ any untrusted `inters`) against `store` at Unix time `now`.
-    # `host` = "" skips the hostname check.
-    pub def verify_chain(leaf: X509Cert, inters: Vec[X509Cert], store: X509Store, host: str, now: int, opts: X509Options) -> ChainResult:
-        if opts.check_time and not leaf.is_valid_at(now):
-            if now < leaf.not_before: return _x_result(false, "certificate is not yet valid", 0, "")
-            return _x_result(false, "certificate has expired", 0, "")
-        if leaf.unknown_critical != "": return _x_result(false, f"unhandled critical extension {leaf.unknown_critical}", 0, "")
-        if opts.purpose == "server" and leaf.has_eku and not _x_has_eku(leaf, "1.3.6.1.5.5.7.3.1"):
-            return _x_result(false, "certificate is not valid for server authentication (extKeyUsage)", 0, "")
-        if opts.purpose == "client" and leaf.has_eku and not _x_has_eku(leaf, "1.3.6.1.5.5.7.3.2"):
-            return _x_result(false, "certificate is not valid for client authentication (extKeyUsage)", 0, "")
-        if host != "" and not leaf.matches_hostname(host):
-            return _x_result(false, f"certificate is not valid for '{host}'", 0, "")
-        mut depth_out: List[int] = []
-        mut anchor_out: List[str] = []
-        # the leaf itself may be a trust anchor (pinned certificate)
-        if store.contains(leaf):
-            return _x_result(true, "", 1, leaf.subject.text)
-        mut li = _x_leaf_info(leaf)
-        mut err = _x_extend(leaf, li, inters, store, now, opts, 0, 0, depth_out, anchor_out)
-        if err != "": return _x_result(false, err, 0, "")
-        return _x_result(true, "", depth_out[0], anchor_out[0])
-
-    # chain[0] = leaf, the rest are the untrusted intermediates the server sent.
-    # Current time, default options (server auth, SHA-1 signatures rejected).
-    pub def verify_server_chain(chain: Vec[X509Cert], store: X509Store, host: str) -> ChainResult:
-        if chain.len == 0: return _x_result(false, "empty certificate chain", 0, "")
-        mut inters = Vec[X509Cert].init(chain.len)
-        mut i = 1
-        while i < chain.len:
-            inters.push(chain.get(i))
-            i = i + 1
-        return X509.verify_chain(chain.get(0), inters, store, host, Clock.timestamp(), X509.default_options())
+    pub def error_text(code: int) -> str:
+        mut out = _cn_alloc(128)
+        mut n = trc_x509_error_text(code, out, 128)
+        return _cn_take(out, n)

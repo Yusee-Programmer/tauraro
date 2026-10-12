@@ -1,0 +1,363 @@
+# tests/lang/105_crypto_modern.tr
+# std.crypto additions: SecureRandom, ConstantTime, Digest/Hasher, binary-safe
+# Hmac, HKDF/PBKDF2, SHA-3/SHAKE, BLAKE2b/2s, BLAKE3, X25519, HOTP/TOTP,
+# Argon2 and bcrypt. Vectors come from the RFCs / FIPS documents named in
+# each section, plus strings produced by the reference argon2-cffi and
+# pyca/bcrypt libraries.
+
+from std.test import TestRunner
+from std.crypto.native import ALG_SHA1, ALG_SHA256, ALG_SHA384, ALG_SHA512, _cn_hex, _cn_unhex
+from std.crypto.random import SecureRandom
+from std.crypto.ct import ConstantTime
+from std.crypto.digest import Digest, Hasher
+from std.crypto.hmac import Hmac
+from std.crypto.kdf import Kdf
+from std.crypto.sha3 import Sha3, Sha3Stream
+from std.crypto.blake2 import Blake2, Blake2bStream
+from std.crypto.blake3 import Blake3, Blake3Stream
+from std.crypto.x25519 import X25519
+from std.crypto.otp import Otp
+from std.crypto.argon2 import Argon2, Argon2Params, Argon2Hash, ARGON2D, ARGON2I, ARGON2ID
+from std.crypto.bcrypt import Bcrypt
+
+def unhex(h: str) -> str:
+    mut r: Result[str, str] = _cn_unhex(h)
+    return r.ok
+
+def hx(s: str) -> str:
+    return _cn_hex(s)
+
+def rep(byte: int, n: int) -> str:
+    mut s = ""
+    mut i = 0
+    while i < n:
+        s = s + "\0"
+        i = i + 1
+    mut p = s as Pointer[char]
+    i = 0
+    while i < n:
+        unsafe: p.offset(i).write(byte as char)
+        i = i + 1
+    return s
+
+def test_random(t: TestRunner):
+    t.section("SecureRandom")
+    mut a: Result[str, str] = SecureRandom.bytes(32)
+    mut b: Result[str, str] = SecureRandom.bytes(32)
+    t.assert_true(a.is_ok and b.is_ok, "bytes() succeeds")
+    t.assert_eq_int(a.ok.len(), 32, "32 bytes")
+    t.assert_true(a.ok != b.ok, "two draws differ")
+    mut th: Result[str, str] = SecureRandom.token_hex(16)
+    t.assert_eq_int(th.ok.len(), 32, "token_hex(16) has 32 chars")
+    mut tu: Result[str, str] = SecureRandom.token_urlsafe(24)
+    t.assert_eq_int(tu.ok.len(), 32, "token_urlsafe(24) has 32 chars")
+    mut ok = true
+    mut seen0 = false
+    mut seen5 = false
+    mut i = 0
+    while i < 400:
+        mut r: Result[int, str] = SecureRandom.below(6)
+        if r.ok < 0 or r.ok >= 6: ok = false
+        if r.ok == 0: seen0 = true
+        if r.ok == 5: seen5 = true
+        i = i + 1
+    t.assert_true(ok, "below(6) stays in [0, 6)")
+    t.assert_true(seen0 and seen5, "below(6) reaches both ends")
+    mut rr: Result[int, str] = SecureRandom.range(10, 12)
+    t.assert_in_range(rr.ok, 10, 12, "range(10, 12)")
+    mut u: Result[float, str] = SecureRandom.unit()
+    t.assert_true(u.ok >= 0.0 and u.ok < 1.0, "unit() in [0, 1)")
+    mut bad: Result[int, str] = SecureRandom.below(0)
+    t.assert_true(bad.is_err, "below(0) raises")
+
+def test_ct(t: TestRunner):
+    t.section("ConstantTime")
+    t.assert_true(ConstantTime.eq("secret-token", "secret-token"), "equal")
+    t.assert_false(ConstantTime.eq("secret-token", "secret-tokeN"), "last byte differs")
+    t.assert_false(ConstantTime.eq("abc", "abcd"), "length differs")
+    mut z1 = unhex("00010200")
+    mut z2 = unhex("00010201")
+    t.assert_false(ConstantTime.eq(z1, z2), "difference after embedded NUL")
+    t.assert_true(ConstantTime.eq_n("abcdef", "abcxyz", 3), "eq_n prefix")
+    t.assert_eq_int(ConstantTime.select(true, 7, 9), 7, "select true")
+    t.assert_eq_int(ConstantTime.select(false, 7, 9), 9, "select false")
+
+def test_digest(t: TestRunner):
+    t.section("Digest (FIPS 180-4)")
+    t.assert_eq_str(Digest.sha1_hex("abc"), "a9993e364706816aba3e25717850c26c9cd0d89d", "SHA-1 abc")
+    t.assert_eq_str(Digest.sha256_hex("abc"), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", "SHA-256 abc")
+    t.assert_eq_str(Digest.sha384_hex("abc"), "cb00753f45a35e8bb5a03d699ac65007272c32ab0eded1631a8b605a43ff5bed8086072ba1e7cc2358baeca134c825a7", "SHA-384 abc")
+    t.assert_eq_str(Digest.sha512_hex("abc"), "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f", "SHA-512 abc")
+    mut nul = unhex("6100620063")
+    t.assert_eq_str(Digest.sha256_hex(nul), "8badde10c760e9b702defb4b5e225de79c515b1d2a5cfb000e140f3c6fbb5629", "SHA-256 over embedded NULs")
+    mut hr: Result[Hasher, str] = Hasher.init(ALG_SHA256)
+    mut h = hr.ok
+    h.update("a")
+    h.update("bc")
+    t.assert_eq_str(h.finish_hex(), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", "streaming SHA-256")
+    mut big = "abcdefghbcdefghicdefghijdefghijkefghijklfghijklmghijklmnhijklmnoijklmnopjklmnopqklmnopqrlmnopqrsmnopqrstnopqrstu"
+    t.assert_eq_str(Digest.sha512_hex(big), "8e959b75dae313da8cf4f72814fc143f8f7779c6eb9f7fa17299aeadb6889018501d289e4900f7e4331b99dec4b5433ac7d329eeb6dd26545e96e55b874be909", "SHA-512 two-block message")
+    mut bad: Result[str, str] = Digest.compute(7, "x")
+    t.assert_true(bad.is_err, "unknown algorithm id raises")
+
+def test_hmac_kdf(t: TestRunner):
+    t.section("HMAC (RFC 2202 / RFC 4231)")
+    mut msg = "what do ya want for nothing?"
+    t.assert_eq_str(hx(Hmac.sha1_raw("Jefe", msg)), "effcdf6ae5eb2fa2d27416d5f184df9c259a7c79", "HMAC-SHA1 case 2")
+    t.assert_eq_str(hx(Hmac.sha256_raw("Jefe", msg)), "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843", "HMAC-SHA256 case 2")
+    t.assert_eq_str(hx(Hmac.sha512_raw("Jefe", msg)), "164b7a7bfcf819e2e395fbe73b56e0a387bd64222e831fd610270cd7ea2505549758bf75c05a994a6d034f65f8f0e6fdcaeab1a34d4a6b4b636e070a38bce737", "HMAC-SHA512 case 2")
+    mut k20 = rep(11, 20)
+    t.assert_eq_str(hx(Hmac.sha384_raw(k20, "Hi There")), "afd03944d84895626b0825f4ab46907f15f9dadbe4101ec682aa034c7cebc59cfaea9ea9076ede7f4af152e8b2fa9cb6", "HMAC-SHA384 case 1")
+    mut k131 = rep(170, 131)
+    t.assert_eq_str(hx(Hmac.sha256_raw(k131, "Test Using Larger Than Block-Size Key - Hash Key First")), "60e431591ee0b67f0d8a26aacbf5b77f8e0bc6213728c5140546040f0ee37f54", "HMAC-SHA256 long key")
+    mut tag = Hmac.sha256_raw("Jefe", msg)
+    t.assert_true(Hmac.verify(ALG_SHA256, "Jefe", msg, tag), "verify full tag")
+    mut short = tag.slice(0, 16)
+    t.assert_true(Hmac.verify(ALG_SHA256, "Jefe", msg, short), "verify truncated tag")
+    t.assert_false(Hmac.verify(ALG_SHA256, "Jefe", "other", tag), "verify rejects other message")
+
+    t.section("HKDF (RFC 5869 case 1) and PBKDF2 (RFC 6070)")
+    mut ikm = rep(11, 22)
+    mut salt = unhex("000102030405060708090a0b0c")
+    mut info = unhex("f0f1f2f3f4f5f6f7f8f9")
+    mut prk: Result[str, str] = Kdf.hkdf_extract(ALG_SHA256, salt, ikm)
+    t.assert_eq_str(hx(prk.ok), "077709362c2e32df0ddc3f0dc47bba6390b6c73bb50f9c3122ec844ad7c2b3e5", "HKDF-Extract")
+    mut okm: Result[str, str] = Kdf.hkdf(ALG_SHA256, ikm, salt, info, 42)
+    t.assert_eq_str(hx(okm.ok), "3cb25f25faacd57a90434f64d0362f2a2d2d0a90cf1a5a4c5db02d56ecc4c5bf34007208d5b887185865", "HKDF OKM")
+    mut toolong: Result[str, str] = Kdf.hkdf_expand(ALG_SHA256, prk.ok, "", 255 * 32 + 1)
+    t.assert_true(toolong.is_err, "HKDF length limit")
+    mut p1: Result[str, str] = Kdf.pbkdf2_hmac(ALG_SHA1, "password", "salt", 1, 20)
+    t.assert_eq_str(hx(p1.ok), "0c60c80f961f0e71f3a9b524af6012062fe037a6", "PBKDF2-SHA1 c=1")
+    mut p2: Result[str, str] = Kdf.pbkdf2_hmac(ALG_SHA1, "password", "salt", 4096, 20)
+    t.assert_eq_str(hx(p2.ok), "4b007901b765489abead49d926f721d065a429c1", "PBKDF2-SHA1 c=4096")
+    mut p3: Result[str, str] = Kdf.pbkdf2_hmac(ALG_SHA256, "password", "salt", 4096, 32)
+    t.assert_eq_str(hx(p3.ok), "c5e478d59288c841aa530db6845c4c8d962893a001ce4e11a4963873aa98134a", "PBKDF2-SHA256 c=4096")
+    mut ps = unhex("7361006c74")
+    mut p4: Result[str, str] = Kdf.pbkdf2_hmac(ALG_SHA1, unhex("7061737300776f7264"), ps, 4096, 16)
+    t.assert_eq_str(hx(p4.ok), "56fa6aa75548099dcc37d7f03425e0c3", "PBKDF2 with NULs in password and salt")
+
+def test_sha3(t: TestRunner):
+    t.section("SHA-3 / SHAKE (FIPS 202)")
+    t.assert_eq_str(Sha3.sha3_224_hex("abc"), "e642824c3f8cf24ad09234ee7d3c766fc9a3a5168d0c94ad73b46fdf", "SHA3-224 abc")
+    t.assert_eq_str(Sha3.sha3_256_hex("abc"), "3a985da74fe225b2045c172d6bd390bd855f086e3e9d525b46bfe24511431532", "SHA3-256 abc")
+    t.assert_eq_str(Sha3.sha3_384_hex("abc"), "ec01498288516fc926459f58e2c6ad8df9b473cb0fc08c2596da7cf0e49be4b298d88cea927ac7f539f1edf228376d25", "SHA3-384 abc")
+    t.assert_eq_str(Sha3.sha3_512_hex("abc"), "b751850b1a57168a5693cd924b6b096e08f621827444f70d884f5d0240d2712e10e116e9192af3c91a7ec57647e3934057340b4cf408d5a56592f8274eec53f0", "SHA3-512 abc")
+    t.assert_eq_str(Sha3.sha3_256_hex(""), "a7ffc6f8bf1ed76651c14756a061d662f580ff4de43b49fa82d80a4b80f8434a", "SHA3-256 empty")
+    t.assert_eq_str(Sha3.shake128_hex("", 32), "7f9c2ba4e88f827d616045507605853ed73b8093f6efbc88eb1a6eacfa66ef26", "SHAKE128 empty")
+    t.assert_eq_str(Sha3.shake256_hex("", 64), "46b9dd2b0ba88d13233b3feb743eeb243fcd52ea62b81b82b50c27646ed5762fd75dc4ddd8c0f200cb05019d67b592f6fc821c49479ab48640292eacb3b7c4be", "SHAKE256 empty")
+    mut st = Sha3Stream.shake128()
+    mut u1: Result[bool, str] = _upd(st, "a")
+    mut u2: Result[bool, str] = _upd(st, "bc")
+    mut first = st.squeeze(10)
+    mut second = st.squeeze(22)
+    st.dispose()
+    t.assert_eq_str(hx(first) + hx(second), Sha3.shake128_hex("abc", 32), "streaming SHAKE128 squeezes in pieces")
+    mut s3r: Result[Sha3Stream, str] = Sha3Stream.sha3(256)
+    mut s3 = s3r.ok
+    mut u3: Result[bool, str] = _upd(s3, "ab")
+    mut u4: Result[bool, str] = _upd(s3, "c")
+    t.assert_eq_str(hx(s3.finish()), "3a985da74fe225b2045c172d6bd390bd855f086e3e9d525b46bfe24511431532", "streaming SHA3-256")
+    mut late = Sha3Stream.shake256()
+    mut q = late.squeeze(4)
+    mut u5: Result[bool, str] = _upd(late, "x")
+    t.assert_true(u5.is_err, "absorbing after squeezing raises")
+    late.dispose()
+
+def _upd(s: Sha3Stream, d: str) throws str -> bool:
+    s.update(d)?
+    return true
+
+def test_blake(t: TestRunner):
+    t.section("BLAKE2 (RFC 7693)")
+    t.assert_eq_str(Blake2.b512_hex("abc"), "ba80a53f981c4d0d6a2797b69f12f6e94c212f14685ac4b74b12bb6fdbffa2d17d87c5392aab792dc252d5de4533cc9518d38aa8dbf1925ab92386edd4009923", "BLAKE2b-512 abc")
+    t.assert_eq_str(Blake2.s256_hex("abc"), "508c5e8c327c14e2e1a72ba34eeb452f37458b209ed63a294d999b4c86675982", "BLAKE2s-256 abc")
+    mut key = unhex("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f")
+    mut kb: Result[str, str] = Blake2.b_keyed("", key, 64)
+    t.assert_eq_str(hx(kb.ok), "10ebb67700b1868efb4417987acf4690ae9d972fb7a590c2f02871799aaa4786b5e996e8f0f4eb981fc214b005f42d2ff4233499391653df7aefcbc13fc51568", "keyed BLAKE2b (KAT 0)")
+    mut ks: Result[str, str] = Blake2.s_keyed("", key.slice(0, 32), 32)
+    t.assert_eq_str(hx(ks.ok), "48a8997da407876b3d79c0d92325ad3b89cbb754d86ab71aee047ad345fd2c49", "keyed BLAKE2s (KAT 0)")
+    mut b16: Result[str, str] = Blake2.b("abc", 16)
+    t.assert_eq_int(b16.ok.len(), 16, "BLAKE2b-128 length")
+    mut toolong: Result[str, str] = Blake2.b("abc", 65)
+    t.assert_true(toolong.is_err, "BLAKE2b digest > 64 raises")
+    mut sr: Result[Blake2bStream, str] = Blake2bStream.init(64, "")
+    mut s = sr.ok
+    s.update("a")
+    s.update("bc")
+    t.assert_eq_str(hx(s.finish()), Blake2.b512_hex("abc"), "streaming BLAKE2b")
+
+    t.section("BLAKE3")
+    t.assert_eq_str(Blake3.hash_hex("abc"), "6437b3ac38465133ffb63b75273a8db548c558465d79db03fd359c6cd5bd9d85", "BLAKE3 abc")
+    t.assert_eq_str(hx(Blake3.hash_xof("", 64)), "af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262e00f03e7b69af26b7faaf09fcd333050338ddfe085b8cc869ca98b206c08243a", "BLAKE3 XOF")
+    mut k32 = unhex("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f")
+    mut kh: Result[str, str] = Blake3.keyed(k32, "hello world")
+    t.assert_eq_str(hx(kh.ok), "4ebf5cf7a32a345339118ca2eba61501ff2e13cfe42678516560aac298c3dad3", "BLAKE3 keyed")
+    t.assert_eq_str(hx(Blake3.derive_key("tauraro 2026 test", "secret material", 40)), "c3473357d0ce835c951ae7f050001c59b99b31999620b8b537ee73a2aa3576f4009027f9dd60dbda", "BLAKE3 derive_key")
+    mut bigs = ""
+    mut i = 0
+    while i < 10000:
+        bigs = bigs + "\0"
+        i = i + 1
+    mut bp = bigs as Pointer[char]
+    i = 0
+    while i < 10000:
+        unsafe: bp.offset(i).write((i % 251) as char)
+        i = i + 1
+    t.assert_eq_str(Blake3.hash_hex(bigs), "5f81f9e4ab67627b6b036d5d4e3bc40d9d3daa6fcc2b6dd07ab2bbf0a877da54", "BLAKE3 over 10000 bytes (tree)")
+    mut st = Blake3Stream.init()
+    st.update(bigs.slice(0, 3000))
+    st.update(bigs.slice(3000, 10000))
+    t.assert_eq_str(st.finish_hex(), "5f81f9e4ab67627b6b036d5d4e3bc40d9d3daa6fcc2b6dd07ab2bbf0a877da54", "streaming BLAKE3")
+    st.dispose()
+    mut badk: Result[str, str] = Blake3.keyed("short", "x")
+    t.assert_true(badk.is_err, "keyed needs 32 bytes")
+
+def test_x25519(t: TestRunner):
+    t.section("X25519 (RFC 7748)")
+    mut k = unhex("a546e36bf0527c9d3b16154b82465edd62144c0ac1fc5a18506a2244ba449ac4")
+    mut u = unhex("e6db6867583030db3594c1a424b15f7c726624ec26b3353b10a903a6d0ab1c4c")
+    mut r: Result[str, str] = X25519.scalar_mult(k, u)
+    t.assert_eq_str(hx(r.ok), "c3da55379de9c6908e94ea4df28d084f32eccf03491c71f754b4075577a28552", "section 5.2 vector 1")
+    mut a = unhex("77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a")
+    mut b = unhex("5dab087e624a8a4b79e17f8b83800ee66f3bb1292618b6fd1c2f8b27ff88e0eb")
+    mut apub: Result[str, str] = X25519.public_key(a)
+    mut bpub: Result[str, str] = X25519.public_key(b)
+    t.assert_eq_str(hx(apub.ok), "8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a", "Alice public key")
+    t.assert_eq_str(hx(bpub.ok), "de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f", "Bob public key")
+    mut s1: Result[str, str] = X25519.shared_secret(a, bpub.ok)
+    mut s2: Result[str, str] = X25519.shared_secret(b, apub.ok)
+    t.assert_eq_str(hx(s1.ok), "4a5d9d5ba4ce2de1728e3bf480350f25e07e21c947d19e3376f09b3c1e161742", "shared secret (Alice)")
+    t.assert_eq_str(hx(s2.ok), "4a5d9d5ba4ce2de1728e3bf480350f25e07e21c947d19e3376f09b3c1e161742", "shared secret (Bob)")
+    mut zero = rep(0, 32)
+    mut low: Result[str, str] = X25519.shared_secret(a, zero)
+    t.assert_true(low.is_err, "low-order point rejected")
+    mut gp: Result[str, str] = X25519.generate_private()
+    mut gpub: Result[str, str] = X25519.public_key(gp.ok)
+    mut x1: Result[str, str] = X25519.shared_secret(gp.ok, bpub.ok)
+    mut x2: Result[str, str] = X25519.shared_secret(b, gpub.ok)
+    t.assert_true(x1.ok == x2.ok, "fresh key pair agrees with Bob")
+    mut bad: Result[str, str] = X25519.public_key("short")
+    t.assert_true(bad.is_err, "wrong key length raises")
+
+def totp_is(t: TestRunner, secret: str, time: int, alg: int, want: str):
+    mut r: Result[str, str] = Otp.totp(secret, time, 30, 8, alg)
+    t.assert_eq_str(r.ok, want, f"TOTP alg {alg} at {time}")
+
+def test_otp(t: TestRunner):
+    t.section("HOTP (RFC 4226 appendix D)")
+    mut secret = "12345678901234567890"
+    mut want: List[str] = ["755224", "287082", "359152", "969429", "338314", "254676", "287922", "162583", "399871", "520489"]
+    mut i = 0
+    while i < 10:
+        mut r: Result[str, str] = Otp.hotp(secret, i, 6, ALG_SHA1)
+        t.assert_eq_str(r.ok, want[i], f"HOTP counter {i}")
+        i = i + 1
+    t.assert_eq_int(Otp.verify_hotp(secret, "969429", 0, 6, ALG_SHA1, 5), 4, "verify_hotp look-ahead returns next counter")
+    t.assert_eq_int(Otp.verify_hotp(secret, "520489", 0, 6, ALG_SHA1, 5), -1, "verify_hotp outside look-ahead")
+
+    t.section("TOTP (RFC 6238 appendix B)")
+    mut s256 = "12345678901234567890123456789012"
+    mut s512 = "1234567890123456789012345678901234567890123456789012345678901234"
+    totp_is(t, secret, 59, ALG_SHA1, "94287082")
+    totp_is(t, s256, 59, ALG_SHA256, "46119246")
+    totp_is(t, s512, 59, ALG_SHA512, "90693936")
+    totp_is(t, secret, 1111111109, ALG_SHA1, "07081804")
+    totp_is(t, s256, 1111111109, ALG_SHA256, "68084774")
+    totp_is(t, s512, 1111111109, ALG_SHA512, "25091201")
+    totp_is(t, secret, 1234567890, ALG_SHA1, "89005924")
+    totp_is(t, s256, 2000000000, ALG_SHA256, "90698825")
+    totp_is(t, s512, 20000000000, ALG_SHA512, "47863826")
+    t.assert_true(Otp.verify_totp(secret, "94287082", 59 + 30, 30, 8, ALG_SHA1, 1), "verify within window")
+    t.assert_false(Otp.verify_totp(secret, "94287082", 59 + 90, 30, 8, ALG_SHA1, 1), "reject outside window")
+    t.assert_false(Otp.verify_totp(secret, "9428708", 59, 30, 8, ALG_SHA1, 1), "reject wrong length")
+
+    t.section("OTP secrets and URIs")
+    mut b32 = Otp.secret_to_base32(secret)
+    t.assert_eq_str(b32, "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ", "secret to Base32")
+    mut back: Result[str, str] = Otp.secret_from_base32("gezd gnbv gy3t qojq gezd gnbv gy3t qojq")
+    t.assert_eq_str(back.ok, secret, "Base32 with spaces and lower case")
+    mut uri = Otp.provisioning_uri(b32, "alice@example.com", "Acme Co", ALG_SHA1, 6, 30)
+    t.assert_eq_str(uri, "otpauth://totp/Acme%20Co:alice%40example.com?secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ&issuer=Acme%20Co&algorithm=SHA1&digits=6&period=30", "provisioning URI")
+    mut gs: Result[str, str] = Otp.generate_secret(20)
+    t.assert_eq_int(gs.ok.len(), 20, "generate_secret length")
+    mut weak: Result[str, str] = Otp.generate_secret(4)
+    t.assert_true(weak.is_err, "short secrets refused")
+
+def test_argon2(t: TestRunner):
+    t.section("Argon2 (RFC 9106 section 5 vectors)")
+    mut pw = rep(1, 32)
+    mut salt = rep(2, 16)
+    mut secret = rep(3, 8)
+    mut ad = rep(4, 12)
+    mut d: Result[str, str] = Argon2.hash_raw_keyed(ARGON2D, pw, salt, secret, ad, 3, 32, 4, 32)
+    t.assert_eq_str(hx(d.ok), "512b391b6f1162975371d30919734294f868e3be3984f3c1a13a4db9fabe4acb", "Argon2d")
+    mut i: Result[str, str] = Argon2.hash_raw_keyed(ARGON2I, pw, salt, secret, ad, 3, 32, 4, 32)
+    t.assert_eq_str(hx(i.ok), "c814d9d1dc7f37aa13f0d77f2494bda1c8de6b016dd388d29952a4c4672b6ce8", "Argon2i")
+    mut id: Result[str, str] = Argon2.hash_raw_keyed(ARGON2ID, pw, salt, secret, ad, 3, 32, 4, 32)
+    t.assert_eq_str(hx(id.ok), "0d640df58d78766c08c037a34a8b53c9d01ef0452d75b65eb52520e96b01e659", "Argon2id")
+    mut raw: Result[str, str] = Argon2.hash_raw(ARGON2ID, "password", "somesalt", 2, 64, 1, 24)
+    t.assert_eq_str(hx(raw.ok), "068d62b26455936aa6ebe60060b0a65870dbfa3ddf8d41f7", "Argon2id raw (argon2-cffi)")
+
+    t.section("Argon2 PHC strings")
+    mut ext = "$argon2id$v=19$m=256,t=2,p=2$DtXQuxH5MRWbeObioz5+2A$plyZFTp5eWrLB47yqmly4aG0mce0ntYkHoqkaaqELm8"
+    t.assert_true(Argon2.verify(ext, "tauraro-pass"), "verify argon2-cffi hash")
+    t.assert_false(Argon2.verify(ext, "tauraro-pasS"), "reject wrong password")
+    mut ext_i = "$argon2i$v=19$m=128,t=3,p=1$ncNlkcn3QvU3XSO6vDseFQ$fMKvd+Sc+jb5Ln6DqQrTuf1+kosqRBl/hw4Mf55mUAM"
+    t.assert_true(Argon2.verify(ext_i, "pw2"), "verify argon2i hash")
+    mut dec: Result[Argon2Hash, str] = Argon2.decode(ext)
+    t.assert_eq_int(dec.ok.memory_kib, 256, "decode m")
+    t.assert_eq_int(dec.ok.time_cost, 2, "decode t")
+    t.assert_eq_int(dec.ok.parallelism, 2, "decode p")
+    t.assert_eq_int(dec.ok.salt.len(), 16, "decode salt")
+    mut params = Argon2Params.init(ARGON2ID, 1, 64, 1)
+    mut mine: Result[str, str] = Argon2.hash_with("s3cret", params)
+    t.assert_starts_with(mine.ok, "$argon2id$v=19$m=64,t=1,p=1$", "hash_with PHC prefix")
+    t.assert_true(Argon2.verify(mine.ok, "s3cret"), "round trip")
+    t.assert_false(Argon2.needs_rehash(mine.ok, params), "same params: no rehash")
+    mut stronger = Argon2Params.init(ARGON2ID, 2, 64, 1)
+    t.assert_true(Argon2.needs_rehash(mine.ok, stronger), "higher cost: rehash")
+    mut fixed: Result[str, str] = Argon2.hash_with_salt("s3cret", "0123456789abcdef", params)
+    mut fixed2: Result[str, str] = Argon2.hash_with_salt("s3cret", "0123456789abcdef", params)
+    t.assert_eq_str(fixed.ok, fixed2.ok, "explicit salt is deterministic")
+    t.assert_false(Argon2.verify("$argon2id$v=19$m=64,t=1$abc$def", "x"), "malformed string fails")
+    t.assert_false(Argon2.verify("$scrypt$ln=16$x$y", "x"), "foreign algorithm fails")
+    mut badsalt: Result[str, str] = Argon2.hash_raw(ARGON2ID, "pw", "short", 1, 64, 1, 32)
+    t.assert_true(badsalt.is_err, "salt under 8 bytes raises")
+    mut badmem: Result[str, str] = Argon2.hash_raw(ARGON2ID, "pw", "saltsalt", 1, 16, 4, 32)
+    t.assert_true(badmem.is_err, "memory under 8*p raises")
+
+def test_bcrypt(t: TestRunner):
+    t.section("bcrypt")
+    t.assert_true(Bcrypt.verify("hunter2", "$2b$05$0FPqfaf2rRY8lk3EWPECaeo9c19kLi/YYj7R3sCJ.8BOFLq27olxi"), "verify pyca/bcrypt hash")
+    t.assert_false(Bcrypt.verify("hunter3", "$2b$05$0FPqfaf2rRY8lk3EWPECaeo9c19kLi/YYj7R3sCJ.8BOFLq27olxi"), "reject wrong password")
+    t.assert_true(Bcrypt.verify("", "$2a$06$DCq7YPn5Rq63x1Lad4cll.TV4S6ytwfsfvkgY8jIucDrjc8deX1s."), "$2a$ empty-password vector")
+    t.assert_eq_int(Bcrypt.cost_of("$2a$06$DCq7YPn5Rq63x1Lad4cll.TV4S6ytwfsfvkgY8jIucDrjc8deX1s."), 6, "cost_of")
+    mut salt = unhex("1c4a0be5b4dda59c50c8b67d7fce4a0b")
+    mut h1: Result[str, str] = Bcrypt.hash_with_salt("correct horse", salt, 4)
+    t.assert_eq_int(h1.ok.len(), 60, "60-character output")
+    t.assert_starts_with(h1.ok, "$2b$04$", "prefix and cost")
+    t.assert_true(Bcrypt.verify("correct horse", h1.ok), "round trip")
+    mut h2: Result[str, str] = Bcrypt.hash("pw", 4)
+    t.assert_true(Bcrypt.verify("pw", h2.ok), "random-salt round trip")
+    t.assert_false(Bcrypt.needs_rehash(h2.ok, 4), "needs_rehash same cost")
+    t.assert_true(Bcrypt.needs_rehash(h2.ok, 12), "needs_rehash higher cost")
+    mut long = "0123456789012345678901234567890123456789012345678901234567890123456789012"
+    mut lr: Result[str, str] = Bcrypt.hash(long, 4)
+    t.assert_true(lr.is_err, "passwords over 72 bytes refused")
+    mut lowc: Result[str, str] = Bcrypt.hash("pw", 3)
+    t.assert_true(lowc.is_err, "cost 3 refused")
+    t.assert_false(Bcrypt.verify("pw", "$2b$04$tooshort"), "malformed hash fails")
+
+def main():
+    mut t = TestRunner.init("105_crypto_modern")
+    test_random(t)
+    test_ct(t)
+    test_digest(t)
+    test_hmac_kdf(t)
+    test_sha3(t)
+    test_blake(t)
+    test_x25519(t)
+    test_otp(t)
+    test_argon2(t)
+    test_bcrypt(t)
+    t.summary()

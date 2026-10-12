@@ -1,4 +1,4 @@
-# std.image — Raster image decode/encode: BMP, QOI, PNG.
+# std.image — Raster image decode/encode: BMP, QOI, PNG, JPEG, GIF.
 #
 # One shared in-memory representation (Image, RGBA8 — 4 bytes/pixel,
 # row-major, top-to-bottom, no padding) that every codec below decodes
@@ -6,17 +6,18 @@
 # `decode_bmp(bytes, len).encode_png()`.
 #
 # Sub-modules:
-#   from std.image.jpeg import decode_jpeg, encode_jpeg, encode_jpeg_ex, jpeg_info
-#   from std.image.gif import decode_gif, decode_gif_anim, encode_gif, GifWriter
-#   from std.image.transform import resize_image, crop, rotate, gaussian_blur, composite, ...
 #   from std.image.bmp import decode_bmp, encode_bmp
 #   from std.image.qoi import decode_qoi, encode_qoi
 #   from std.image.png import decode_png, encode_png
+from std.image.jpeg import decode_jpeg
+from std.image.gif import decode_gif
+#   from std.image.jpeg import decode_jpeg, encode_jpeg, jpeg_orientation
+#   from std.image.gif import decode_gif, decode_gif_animation, encode_gif, GifEncoder
+#   from std.image.ops import resize_image, thumbnail, gaussian_blur, grayscale, crop, ...
 #
 # Or just:
 #   from std.image import Image, decode, decode_bmp, encode_bmp,
-#                          decode_qoi, encode_qoi, decode_png, encode_png,
-#                          decode_jpeg, encode_jpeg
+#                          decode_qoi, encode_qoi, decode_png, encode_png
 #
 # `decode()` sniffs the magic bytes of a buffer and dispatches to the
 # right codec automatically.
@@ -73,7 +74,7 @@ extend Image:
 from std.image.bmp import decode_bmp, encode_bmp
 from std.image.qoi import decode_qoi, encode_qoi
 from std.image.png import decode_png, encode_png
-from std.image.jpeg import decode_jpeg, encode_jpeg
+from std.image.jpeg import decode_jpeg
 from std.image.gif import decode_gif
 
 # Sniff the magic bytes of `data` (first `len_` bytes) and dispatch to the
@@ -90,16 +91,16 @@ pub def decode(data: str, len_: int) -> Image:
             b1 = p.offset(1).read() as int & 0xFF
         if b0 == 0x42 and b1 == 0x4D:   # "BM"
             return decode_bmp(data, len_)
+        if b0 == 0xFF and b1 == 0xD8:   # JPEG SOI
+            return decode_jpeg(data, len_)
+        if b0 == 0x47 and b1 == 0x49:   # "GI(F8)"
+            return decode_gif(data, len_)
         if len_ >= 4:
             mut b2 = 0
             mut b3 = 0
             unsafe:
                 b2 = p.offset(2).read() as int & 0xFF
                 b3 = p.offset(3).read() as int & 0xFF
-            if b0 == 0xFF and b1 == 0xD8 and b2 == 0xFF:   # JPEG SOI + marker
-                return decode_jpeg(data, len_)
-            if b0 == 0x47 and b1 == 0x49 and b2 == 0x46 and b3 == 0x38:   # "GIF8"
-                return decode_gif(data, len_)
             if b0 == 0x71 and b1 == 0x6F and b2 == 0x69 and b3 == 0x66:   # "qoif"
                 return decode_qoi(data, len_)
             if len_ >= 8:

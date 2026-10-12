@@ -1,0 +1,204 @@
+# src/coverage.tr -- `tauraroc cov` / `--coverage`: line coverage for Tauraro
+# programs.
+#
+# A coverage build emits `#line N "file.tr"` before every statement (the same
+# line markers --debug uses) and compiles with the C compiler's --coverage at
+# -O0. After the program runs, gcov reports execution counts per *source* line
+# -- which the #line directives make the .tr lines -- and this module merges
+# them across modules into a per-file summary and, optionally, an LCOV file.
+
+from std.core.io import read_file, write_file, file_exists
+from core.vec import Vec
+from core.map import Map
+from core.string import StringBuilder
+
+extern "C":
+    def _tr_is_windows() -> bool
+
+def _cov_obj_base(c_path: str) -> str:
+    mut n = c_path.len()
+    if n > 2 and c_path.slice(n - 2, n) == ".c": return c_path.slice(0, n - 2)
+    return c_path
+
+def _cov_rm(path: str):
+    if _tr_is_windows(): _tr_system("del /Q \"" + path.replace("/", "\\") + "\" 2>nul >nul")
+    else: _tr_system("rm -f \"" + path + "\"")
+
+# Remove counters left by an earlier run so the report covers this run only.
+pub def coverage_reset(c_files: Vec[str]):
+    mut i = 0
+    while i < c_files.len:
+        mut g = _cov_obj_base(c_files.get(i)) + ".gcda"
+        if file_exists(g): _cov_rm(g)
+        i = i + 1
+
+# Which gcov to run: `gcov` normally, `llvm-cov gcov` when the compiler is clang
+# and plain gcov is not the LLVM one.
+def _cov_tool(cc: str) -> str:
+    mut null_dev = "/dev/null"
+    if _tr_is_windows(): null_dev = "nul"
+    if cc.find("clang") >= 0:
+        if _tr_system("llvm-cov --version >" + null_dev + " 2>&1") == 0: return "llvm-cov gcov"
+    return "gcov"
+
+def _cov_int(s: str) -> int:
+    mut t = s.trim()
+    mut v = 0
+    mut i = 0
+    mut any = false
+    while i < t.len():
+        mut c = t.slice(i, i + 1)
+        if c >= "0" and c <= "9":
+            v = v * 10 + int(c)
+            any = true
+        elif c == "*":
+            pass
+        else:
+            break
+        i = i + 1
+    if not any: return -1
+    return v
+
+def _cov_is_std(path: str) -> bool:
+    return path.starts_with("std/") or path.find("/std/") >= 0
+
+def _cov_ranges(lines: Vec[int]) -> str:
+    mut sb = StringBuilder.init(64)
+    mut i = 0
+    while i < lines.len:
+        mut a = lines.get(i)
+        mut b = a
+        while i + 1 < lines.len and lines.get(i + 1) == b + 1:
+            i = i + 1
+            b = lines.get(i)
+        if sb.len() > 0: sb.append(", ")
+        if a == b: sb.append(str(a))
+        else: sb.append(str(a) + "-" + str(b))
+        i = i + 1
+    return sb.to_string().as_str()
+
+def _cov_pad(s: str, w: int) -> str:
+    mut out = s
+    while out.len() < w: out = out + " "
+    return out
+
+def _cov_lpad(s: str, w: int) -> str:
+    mut out = s
+    while out.len() < w: out = " " + out
+    return out
+
+# Run gcov over every module object, print a summary of the .tr files and
+# optionally write an LCOV tracefile. Returns 0, or 1 when nothing was found.
+pub def coverage_report(c_files: Vec[str], cc: str, lcov_path: str, include_std: bool) -> int:
+    mut tool = _cov_tool(cc)
+    mut counts: Map[str, int] = Map[str, int].init(1024)   # "file\tline" -> count (0 = never run)
+    mut files: Vec[str] = Vec[str].init(16)
+    mut max_line: Map[str, int] = Map[str, int].init(16)
+    mut tmp = "_tr_gcov_out.txt"
+    mut i = 0
+    while i < c_files.len:
+        mut cpath = c_files.get(i)
+        mut base = _cov_obj_base(cpath)
+        if file_exists(base + ".gcda"):
+            mut cmd = tool + " -t -o \"" + base + ".o\" \"" + cpath + "\" > \"" + tmp + "\" 2>&1"
+            _tr_system(cmd)
+            mut text = ""
+            if file_exists(tmp): text = read_file(tmp)
+            mut src = ""
+            mut pos = 0
+            while pos < text.len():
+                mut nl = text.slice(pos, text.len()).find("\n")
+                mut line = ""
+                if nl < 0:
+                    line = text.slice(pos, text.len())
+                    pos = text.len()
+                else:
+                    line = text.slice(pos, pos + nl)
+                    pos = pos + nl + 1
+                mut c1 = line.find(":")
+                if c1 < 0: continue
+                mut rest = line.slice(c1 + 1, line.len())
+                mut c2 = rest.find(":")
+                if c2 < 0: continue
+                mut lno = _cov_int(rest.slice(0, c2))
+                mut cnt_s = line.slice(0, c1).trim()
+                if lno == 0:
+                    mut tail = rest.slice(c2 + 1, rest.len())
+                    if tail.starts_with("Source:"): src = tail.slice(7, tail.len()).trim()
+                    continue
+                if lno < 0 or src == "" or not src.ends_with(".tr"): continue
+                if cnt_s == "-": continue
+                mut cnt = 0
+                if cnt_s.starts_with("#####") or cnt_s.starts_with("====="): cnt = 0
+                else:
+                    cnt = _cov_int(cnt_s)
+                    if cnt < 0: continue
+                if not include_std and _cov_is_std(src): continue
+                mut key = src + "\t" + str(lno)
+                if counts.contains(key): counts.insert(key, counts.get(key) + cnt)
+                else:
+                    counts.insert(key, cnt)
+                    if not max_line.contains(src):
+                        max_line.insert(src, 0)
+                        files.push(src)
+                    if lno > max_line.get(src): max_line.insert(src, lno)
+        i = i + 1
+    _cov_rm(tmp)
+    if files.len == 0:
+        print("coverage: no line data found (did the program run to completion?)")
+        return 1
+
+    # sort file names (insertion sort; a handful of files)
+    mut fi = 1
+    while fi < files.len:
+        mut cur = files.get(fi)
+        mut fj = fi - 1
+        while fj >= 0 and files.get(fj) > cur:
+            files.set(fj + 1, files.get(fj))
+            fj = fj - 1
+        files.set(fj + 1, cur)
+        fi = fi + 1
+
+    mut lcov = StringBuilder.init(4096)
+    mut width = 4
+    mut k = 0
+    while k < files.len:
+        if files.get(k).len() > width: width = files.get(k).len()
+        k = k + 1
+    print(_cov_pad("File", width) + "   Lines   Hit  Cover  Missing")
+    mut tot_lines = 0
+    mut tot_hit = 0
+    k = 0
+    while k < files.len:
+        mut f = files.get(k)
+        mut nlines = 0
+        mut nhit = 0
+        mut missing: Vec[int] = Vec[int].init(16)
+        lcov.append("SF:" + f + "\n")
+        mut ln = 1
+        mut last = max_line.get(f)
+        while ln <= last:
+            mut key = f + "\t" + str(ln)
+            if counts.contains(key):
+                mut c = counts.get(key)
+                nlines = nlines + 1
+                if c > 0: nhit = nhit + 1
+                else: missing.push(ln)
+                lcov.append("DA:" + str(ln) + "," + str(c) + "\n")
+            ln = ln + 1
+        lcov.append("LF:" + str(nlines) + "\nLH:" + str(nhit) + "\nend_of_record\n")
+        mut pct = 100.0
+        if nlines > 0: pct = (nhit as float) * 100.0 / (nlines as float)
+        mut pct_s = str(((pct * 10.0 + 0.5) as int) / 10) + "." + str(((pct * 10.0 + 0.5) as int) % 10) + "%"
+        print(_cov_pad(f, width) + _cov_lpad(str(nlines), 8) + _cov_lpad(str(nhit), 6) + _cov_lpad(pct_s, 7) + "  " + _cov_ranges(missing))
+        tot_lines = tot_lines + nlines
+        tot_hit = tot_hit + nhit
+        k = k + 1
+    mut tpct = 100.0
+    if tot_lines > 0: tpct = (tot_hit as float) * 100.0 / (tot_lines as float)
+    mut tpct_s = str(((tpct * 10.0 + 0.5) as int) / 10) + "." + str(((tpct * 10.0 + 0.5) as int) % 10) + "%"
+    print(_cov_pad("TOTAL", width) + _cov_lpad(str(tot_lines), 8) + _cov_lpad(str(tot_hit), 6) + _cov_lpad(tpct_s, 7))
+    if lcov_path != "":
+        write_file(lcov_path, lcov.to_string().as_str())
+        print("coverage: LCOV data written to " + lcov_path)
+    return 0

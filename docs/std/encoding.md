@@ -635,66 +635,75 @@ while r.next_field()?:
         r.skip()?                     # unknown field
 ```
 
-## ASN.1 DER — `std.encoding.asn1`
-
-DER encoder/decoder for the structures behind X.509, PKCS#1/#8, SPKI and SEC1.
-Everything operates on **byte buffers** (`Vec[int]`, values 0..255 — `Bytes` in
-`std.crypto.pkutil` converts to/from binary `str` and hex), so embedded zero bytes are fine.
-
-```tauraro
-from std.encoding.asn1 import Der, DerNode, DerReader, Oid
-from std.crypto.pkutil import Bytes
-
-# (inside a `throws str` function)
-mut seq = Der.parse(der_bytes)?          # one TLV spanning the whole buffer
-mut r = seq.reader()                      # iterate the children
-mut version = r.next()?.as_int()?
-mut oid = r.next()?.as_oid()?             # "1.2.840.113549.1.1.11"
-print(Oid.name(oid))                      # "sha256WithRSAEncryption"
-
-# build: contents are already-encoded children, concatenated
-mut body = Bytes.concat(Der.integer_int(2), Der.oid("2.5.4.3"))
-mut tlv = Der.sequence(body)              # 30 08 02 01 02 06 03 55 04 03
-```
-
-| Decode | |
-|---|---|
-| `Der.parse(buf)` / `Der.parse_at(buf, off)` | one TLV (`DerNode{tag, content, raw}`); `raw` is the exact TLV (signatures cover it) |
-| `node.reader()` → `DerReader` | `more()`, `next()`, `peek_tag()`, `remaining()` |
-| `node.child(i)`, `child_count()` | indexed access to children |
-| `as_int`, `as_bn`, `as_bool`, `as_oid`, `as_octets`, `as_bit_string`, `as_text`, `as_time` | typed getters; `as_time` returns Unix seconds, `as_bn` an unsigned `std.crypto.bn` magnitude |
-| `is_oid(dotted)`, `is_context(n)`, `bit_is_set(i)` | helpers (bit 0 = MSB, the KeyUsage numbering) |
-
-| Encode | |
-|---|---|
-| `Der.tlv(tag, content)`, `sequence`, `set_of`, `explicit(n, c)`, `implicit(n, constructed, c)` | structure |
-| `integer_int`, `integer_bn`, `boolean`, `null`, `octet_string`, `bit_string(content, unused)`, `oid("1.2.3")`, `utf8`, `printable`, `ia5`, `generalized_time(unix)` | primitives |
-| `Der.unix_from_civil(y, m, d)`, `Der.format_time(unix)` | calendar helpers (proleptic Gregorian) |
-
-`Oid.name(dotted)` names the common OIDs; `Oid.SHA256()`, `Oid.RSA_ENCRYPTION()`, … return the ones the crypto modules use.
-
-Strictness: definite lengths only, minimal length encoding, single-byte tags (number < 31), lengths
-checked against the remaining input before copying, non-minimal INTEGERs rejected by `as_int`/`as_bn`.
-Not supported: BER indefinite lengths, high-tag-number form, REAL/EXTERNAL; string types are not
-charset-validated. Failures `raise` a `str`.
-
 ---
 
-## PEM — `std.encoding.pem`
+## PDF writer — `std.encoding.pdf`
 
-RFC 7468 armor. Handles bundles (many blocks), CRLF, and text before/between blocks.
+Writes PDF 1.7 documents with no external libraries: text in the twelve standard Latin fonts
+(Helvetica, Times and Courier families, so nothing is embedded), exact text measurement and
+word-wrapped text boxes, vector graphics, images, links, bookmarks and metadata. Content and image
+streams are Flate-compressed by a built-in deflate encoder (no `-lz` needed).
+
+Coordinates are points (1/72 inch) from the **bottom-left** corner. Text is UTF-8; characters
+outside Windows-1252 (the fonts' WinAnsiEncoding) print as `?`. Metadata and bookmark titles
+accept any Unicode.
 
 ```tauraro
-from std.encoding.pem import Pem, PemBlock
+from std.encoding.pdf import PdfDocument, PDF_HELVETICA_BOLD, PDF_TIMES, PDF_FILL, PDF_ALIGN_JUSTIFY
+from std.io.file import File
 
-mut text = Pem.encode("CERTIFICATE", der_bytes)      # 64-column lines
-mut blk = Pem.decode(text)?                          # first block: blk.label, blk.data
-mut all = Pem.decode_all(bundle_text)                # Vec[PemBlock]
-mut key = Pem.decode_label(text, "PRIVATE KEY")?
+mut doc = PdfDocument.init()
+doc.title = "Quarterly report"
+doc.author = "Finance"
+
+mut page = doc.add_page_a4()                       # 595.28 x 841.89 pt
+page.set_font(PDF_HELVETICA_BOLD, 24.0)
+page.text(72.0, 770.0, "Quarterly report — Q3")
+page.set_font(PDF_TIMES, 11.0)
+mut body_text = File.read_text("summary.txt")
+mut y = page.text_box(72.0, 740.0, 451.0, body_text, PDF_ALIGN_JUSTIFY, 1.4)
+
+page.set_fill_color(30, 90, 200)
+page.rect(72.0, y - 60.0, 200.0, 40.0, PDF_FILL)
+
+mut logo = doc.add_jpeg(File.read_text("logo.jpg"))?   # embedded as-is
+page.draw_image(logo, 450.0, 760.0, 72.0, 36.0)
+page.link_url(72.0, 760.0, 300.0, 30.0, "https://example.com/q3")
+doc.add_bookmark("Summary", 0, 841.0)
+doc.save("report.pdf")?
 ```
 
-`Pem.b64_encode(bytes) -> str` / `Pem.b64_decode(bytes) throws str` are the underlying (strict) base64 codecs.
-Legacy *encrypted* PEM (`Proc-Type:` headers) is rejected / skipped.
+| `PdfDocument` | Description |
+|---|---|
+| `PdfDocument.init()` | Empty document. Fields: `title`, `author`, `subject`, `keywords`, `creator`, `producer`, `creation_date` (`"D:YYYYMMDDHHmmSSZ"`, current UTC time when empty), `compress` (default true). |
+| `add_page(w, h)`, `add_page_a4()`, `add_page_letter()`, `page_count()`, `pages` | Pages, in order. |
+| `add_image(img)` | Embed a `std.image` `Image` (RGB, Flate); any non-opaque pixel adds an alpha soft mask. |
+| `add_jpeg(bytes)?` | Embed JPEG data unchanged (DCTDecode): grayscale, RGB or CMYK (Adobe inverted CMYK handled). |
+| `add_bookmark(title, page_index, y)` | Outline entry; the reader opens with the bookmarks panel. |
+| `to_bytes()`, `save(path)?` | Serialize / write the file. |
+
+| `PdfPage` | Description |
+|---|---|
+| `set_font(font, size)`, `text(x, y, s)`, `text_aligned(x, y, s, align)` | Single-line text at a baseline; `align` is `PDF_ALIGN_LEFT` / `CENTER` / `RIGHT`. |
+| `text_box(x, top, width, s, align, line_height)` | Word-wrapped text (newlines start paragraphs, over-long words are broken). `PDF_ALIGN_JUSTIFY` stretches all but each paragraph's last line. Returns the y where the next line would go. |
+| `text_width(s)` | Width in points in the current font. |
+| `set_fill_color(r, g, b)`, `set_stroke_color(r, g, b)`, `set_fill_gray(v)`, `set_stroke_gray(v)` | Colours (0–255, gray 0–1). |
+| `set_line_width`, `set_line_cap`, `set_line_join`, `set_dash(on, off)`, `clear_dash()`, `set_alpha(fill, stroke)` | Graphics state. |
+| `line`, `rect`, `rounded_rect`, `circle`, `ellipse`, `polygon(points, mode)`, `polyline(points)` | Shapes; `mode` is `PDF_STROKE`, `PDF_FILL` or `PDF_FILL_STROKE`. |
+| `move_to`, `line_to`, `curve_to`, `close_path`, `paint(mode)`, `clip()` | Free-form paths. |
+| `save()`, `restore()`, `translate(dx, dy)`, `rotate(degrees)`, `scale(sx, sy)` | Transforms. |
+| `draw_image(img, x, y, w, h)` | Place an image scaled into a rectangle. |
+| `link_url(x, y, w, h, url)`, `link_page(x, y, w, h, page_index, dest_y)` | Link annotations. |
+| `raw(ops)`, `content()` | Append raw content-stream operators / read the stream so far. |
+
+Helpers: `pdf_text_width(font, size, s)`, `pdf_wrap_text(font, size, s, width)`, `pdf_winansi(s)`,
+`pdf_deflate(bytes)` (zlib stream), `pdf_num(f)`, `pdf_font_name(font)`, `pdf_font_by_name(name)`.
+Fonts: `PDF_HELVETICA`, `PDF_HELVETICA_BOLD`, `PDF_HELVETICA_OBLIQUE`, `PDF_HELVETICA_BOLD_OBLIQUE`,
+`PDF_TIMES`, `PDF_TIMES_BOLD`, `PDF_TIMES_ITALIC`, `PDF_TIMES_BOLD_ITALIC`, `PDF_COURIER`,
+`PDF_COURIER_BOLD`, `PDF_COURIER_OBLIQUE`, `PDF_COURIER_BOLD_OBLIQUE`.
+
+Not supported: embedded TrueType/OpenType fonts (so no text outside Windows-1252), reading or
+editing existing PDFs, forms, encryption, PDF/A.
 
 ---
 

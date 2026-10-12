@@ -1,0 +1,199 @@
+# std.sys.plugin -- load plugins: shared libraries built with `tauraroc --lib`
+# (or any C library following the same convention).
+#
+# A plugin exports, with the C ABI:
+#   export def tauraro_plugin_abi() -> int:       return 1      # PLUGIN_ABI (required)
+#   export def tauraro_plugin_name() -> str:      return "png-export"   # required, unique
+#   export def tauraro_plugin_version() -> str:   return "1.0.0"        # optional
+#   export def tauraro_plugin_init() -> int:      return 0      # optional; non-zero refuses loading
+#   export def tauraro_plugin_shutdown() -> int:  return 0      # optional; called on unload
+# plus any functions the host calls by name (see std.sys.dylib for the
+# supported signatures).
+#
+# Usage (host):
+#   from std.sys.plugin import PluginHost
+#   mut host = PluginHost.init()
+#   host.discover("plugins")                  # loads every library there; failures -> host.errors
+#   for name in host.names(): print(name)
+#   mut p = host.find("png-export")?
+#   mut out = p.call_str("convert", [input])?
+#   mut counts = host.broadcast_str_int("on_event", "startup", [])   # every plugin with the hook
+#   host.unload_all()
+
+from std.sys.dylib import DynLib, dylib_extension
+from std.io.dir import Dir
+
+pub const PLUGIN_ABI = 1
+
+pub class Plugin:
+    pub name:    str
+    pub version: str
+    pub path:    str
+    pub lib:     DynLib
+
+extend Plugin:
+    pub def has(self, fn_name: str) -> bool: return self.lib.has(fn_name)
+    pub def symbol(self, fn_name: str) throws str -> int: return self.lib.symbol(fn_name)?
+    pub def call_int(self, fn_name: str, args: List[int]) throws str -> int: return self.lib.call_int(fn_name, args)?
+    pub def call_float(self, fn_name: str, args: List[float]) throws str -> float: return self.lib.call_float(fn_name, args)?
+    pub def call_str(self, fn_name: str, args: List[str]) throws str -> str: return self.lib.call_str(fn_name, args)?
+    pub def call_str_int(self, fn_name: str, s: str, args: List[int]) throws str -> int: return self.lib.call_str_int(fn_name, s, args)?
+
+pub class PluginHost:
+    pub plugins: List[Plugin]
+    pub errors:  List[str]       # "path: reason" for libraries discover() skipped
+
+def _plugin_str(lib: DynLib, fn_name: str) throws str -> str:
+    mut noargs: List[str] = []
+    return lib.call_str(fn_name, noargs)?
+
+extend PluginHost:
+    pub def init() -> PluginHost:
+        mut h = PluginHost()
+        h.plugins = []
+        h.errors = []
+        return h
+
+    # Load one plugin library. Raises when it is not a plugin, was built for
+    # another ABI, has a name already loaded, or its init hook refuses.
+    pub def load(self, path: str) throws str -> Plugin:
+        mut lib = DynLib.open(path)?
+        if not lib.has("tauraro_plugin_abi") or not lib.has("tauraro_plugin_name"):
+            lib.close()
+            raise("plugin: " + path + " does not export tauraro_plugin_abi / tauraro_plugin_name")
+        mut noargs: List[int] = []
+        mut abi_r: Result[int, str] = lib.call_int("tauraro_plugin_abi", noargs)
+        if abi_r.is_err or abi_r.ok != PLUGIN_ABI:
+            lib.close()
+            raise(f"plugin: {path} was built for plugin ABI {abi_r.ok}, this host speaks {PLUGIN_ABI}")
+        mut name_r: Result[str, str] = _plugin_str(lib, "tauraro_plugin_name")
+        if name_r.is_err or name_r.ok.len() == 0:
+            lib.close()
+            raise("plugin: " + path + " has an empty name")
+        mut name = name_r.ok
+        if self.has_plugin(name):
+            lib.close()
+            raise("plugin: '" + name + "' is already loaded")
+        mut version = ""
+        if lib.has("tauraro_plugin_version"):
+            mut vr: Result[str, str] = _plugin_str(lib, "tauraro_plugin_version")
+            if vr.is_ok: version = vr.ok
+        if lib.has("tauraro_plugin_init"):
+            mut ir: Result[int, str] = lib.call_int("tauraro_plugin_init", noargs)
+            if ir.is_err or ir.ok != 0:
+                lib.close()
+                raise(f"plugin: '{name}' init failed (code {ir.ok})")
+        mut p = Plugin()
+        p.name = name
+        p.version = version
+        p.path = path
+        p.lib = lib
+        self.plugins.append(p)
+        return p
+
+    # Load every shared library in `dir` (by this platform's extension).
+    # Libraries that fail to load are listed in `errors`. Returns how many loaded.
+    pub def discover(self, dir: str) -> int:
+        mut ext = dylib_extension()
+        mut d = Dir.init(dir)
+        mut entries = d.list()
+        mut names: List[str] = []
+        mut i = 0
+        while i < entries.len:
+            mut e = entries.get(i)
+            if e.ends_with(ext): names.append(e)
+            i = i + 1
+        names.sort()
+        mut loaded = 0
+        i = 0
+        while i < len(names):
+            mut path = dir + "/" + names[i]
+            mut r: Result[Plugin, str] = self.load(path)
+            if r.is_ok: loaded = loaded + 1
+            else: self.errors.append(path + ": " + r.err)
+            i = i + 1
+        return loaded
+
+    pub def has_plugin(self, name: str) -> bool:
+        mut i = 0
+        while i < len(self.plugins):
+            if self.plugins[i].name == name: return true
+            i = i + 1
+        return false
+
+    pub def find(self, name: str) throws str -> Plugin:
+        mut i = 0
+        while i < len(self.plugins):
+            if self.plugins[i].name == name: return self.plugins[i]
+            i = i + 1
+        raise("plugin: '" + name + "' is not loaded")
+
+    pub def names(self) -> List[str]:
+        mut out: List[str] = []
+        mut i = 0
+        while i < len(self.plugins):
+            out.append(self.plugins[i].name)
+            i = i + 1
+        return out
+
+    pub def count(self) -> int: return len(self.plugins)
+
+    def _index(self, name: str) -> int:
+        mut i = 0
+        while i < len(self.plugins):
+            if self.plugins[i].name == name: return i
+            i = i + 1
+        return -1
+
+    def _shutdown(p: Plugin):
+        if p.lib.has("tauraro_plugin_shutdown"):
+            mut noargs: List[int] = []
+            mut r: Result[int, str] = p.lib.call_int("tauraro_plugin_shutdown", noargs)
+        p.lib.close()
+
+    # Run the plugin's shutdown hook and unload it.
+    pub def unload(self, name: str) throws str:
+        mut i = self._index(name)
+        if i < 0: raise("plugin: '" + name + "' is not loaded")
+        mut p = self.plugins[i]
+        PluginHost._shutdown(p)
+        self.plugins.remove(i)
+
+    # Unload and load the same file again (pick up a rebuilt library).
+    pub def reload(self, name: str) throws str -> Plugin:
+        mut i = self._index(name)
+        if i < 0: raise("plugin: '" + name + "' is not loaded")
+        mut path = self.plugins[i].path
+        self.unload(name)?
+        return self.load(path)?
+
+    pub def unload_all(self):
+        while len(self.plugins) > 0:
+            mut last = len(self.plugins) - 1
+            mut p = self.plugins[last]
+            PluginHost._shutdown(p)
+            self.plugins.remove(last)
+
+    # Call `fn_name(args...) -> int` on every plugin that exports it; results in load order.
+    pub def broadcast_int(self, fn_name: str, args: List[int]) -> List[int]:
+        mut out: List[int] = []
+        mut i = 0
+        while i < len(self.plugins):
+            mut p = self.plugins[i]
+            if p.lib.has(fn_name):
+                mut r: Result[int, str] = p.lib.call_int(fn_name, args)
+                if r.is_ok: out.append(r.ok)
+            i = i + 1
+        return out
+
+    # Call `fn_name(s, args...) -> int` on every plugin that exports it.
+    pub def broadcast_str_int(self, fn_name: str, s: str, args: List[int]) -> List[int]:
+        mut out: List[int] = []
+        mut i = 0
+        while i < len(self.plugins):
+            mut p = self.plugins[i]
+            if p.lib.has(fn_name):
+                mut r: Result[int, str] = p.lib.call_str_int(fn_name, s, args)
+                if r.is_ok: out.append(r.ok)
+            i = i + 1
+        return out

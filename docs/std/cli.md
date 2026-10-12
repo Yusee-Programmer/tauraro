@@ -91,3 +91,47 @@ if parsed.has_subcommand():
 Short flags/options accept a single-letter alias (`-v` maps to the same
 result as `--verbose`); an unrecognized `--flag`/`-f` fails with `.ok =
 false` rather than being silently ignored.
+
+---
+
+## `std.cli.argparse` — declarative parsing
+
+```tauraro
+from std.cli.argparse import ArgParser, Arg
+
+def main():
+    mut p = ArgParser.init("tool", "Process some files.")
+    p.version("1.4.0")
+    p.add(Arg.count("verbose", "v", "More output (repeat for more)"))
+    p.add(Arg.option("output", "o", "Write results to FILE").value_name("FILE").default_value("out.txt").from_env("TOOL_OUT"))
+    p.add(Arg.option("jobs", "j", "Parallel jobs").of_int().default_value("4"))
+    p.add(Arg.option("format", "f", "Output format").one_of(["json", "yaml", "text"]))
+    p.add(Arg.option("tag", "t", "Add a tag").repeatable())
+    p.add(Arg.flag("color", "", "Colored output").allow_negation())
+    p.add(Arg.positional("inputs", "Files to process").count_range(1, -1))
+    mut build = p.command("build", "Build the project").also("b")
+    build.add(Arg.flag("release", "r", "Optimised build"))
+    mut ns = p.parse_process_or_exit()
+    if ns.command == "build" and ns.sub.flag("release"): print("release build")
+    print(ns.get("output"), ns.get_int("jobs"), ns.list("inputs"))
+```
+
+**Arg builders**: `Arg.flag(name, short, help)`, `Arg.count(...)` (`-vvv`), `Arg.option(...)`, `Arg.positional(name, help)`;
+chain `.value_name(m)`, `.default_value(v)`, `.mandatory()`, `.optional()`, `.repeatable()`, `.count_range(min, max)`
+(positional arity, -1 = unlimited), `.of_int()` / `.of_float()` / `.of_bool()`, `.one_of(list)`, `.from_env(var)`,
+`.allow_negation()` (`--no-x`), `.hide()`, `.in_group(title)`, `.also(long_alias)`. Long names are the name with
+`_` turned into `-`.
+
+**ArgParser**: `add(arg)`, `command(name, about)` (returns the sub-parser; `.also(alias)` adds names),
+`require_command()`, `mutually_exclusive(names)`, `require_one_of(names)`, `version(v)`, `set_epilog(t)`,
+`set_width(w)`, `response_files(true)` (`@file` expands to the file's shell-quoted words, `#` comments allowed),
+`parse(list)?`, `parse_vec(vec)?`, `parse_or_exit(list)`, `parse_process_or_exit()`, `help_text()`, `usage()`,
+`completion_script("bash" | "zsh" | "fish")?`.
+
+**Namespace**: `get(name)` (last value), `get_int/get_float/get_bool`, `flag(name)`, `count(name)`, `list(name)`,
+`has(name)` (any source), `given(name)` (command line), `source(name)`, `command`, `sub`, `command_path()`,
+`exit_now`/`exit_text` (set by `--help`, `-h`, `--version`, `-V`, `help <command>`).
+
+Syntax: `--opt value`, `--opt=value`, `-o value`, `-ovalue`, clustered `-vvn`, `--` ends options, negative numbers
+are values, unknown options get "did you mean" suggestions, errors include the usage line. Precedence: command
+line, environment variable, default.

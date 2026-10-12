@@ -1,0 +1,381 @@
+# tests/lang/111_collections3.tr
+# std.collections: BitSet, RingBuffer, SkipList, IntervalTree, Rope, SlotMap,
+# Arena and Slab. SkipList, IntervalTree, Rope and SlotMap are cross-checked
+# against brute-force models under thousands of random operations.
+
+from std.test import TestRunner
+from std.collections.bitset import BitSet
+from std.collections.ringbuf import RingBuffer
+from std.collections.skiplist import SkipList
+from std.collections.interval_tree import IntervalTree
+from std.collections.rope import Rope
+from std.collections.slotmap import SlotMap
+from std.collections.arena import Arena, Slab
+
+class Rng:
+    pub s: int
+
+extend Rng:
+    pub def init(seed: int) -> Rng:
+        mut r = Rng()
+        r.s = seed
+        return r
+
+    pub def next(self, n: int) -> int:
+        mut x = self.s
+        x = x ^ ((x << 13) & 0xFFFFFFFF)
+        x = x ^ (x >> 17)
+        x = x ^ ((x << 5) & 0xFFFFFFFF)
+        self.s = x & 0xFFFFFFFF
+        return self.s % n
+
+def ilist(xs: List[int]) -> str:
+    mut out = ""
+    mut i = 0
+    while i < len(xs):
+        if i > 0: out = out + ","
+        out = out + f"{xs[i]}"
+        i = i + 1
+    return out
+
+def test_bitset(t: TestRunner):
+    t.section("BitSet")
+    mut b = BitSet.init(10)
+    b.set(3)
+    b.set(31)
+    b.set(32)
+    b.set(100)
+    t.assert_true(b.test(31) and b.test(32) and b.test(100), "set across word boundaries")
+    t.assert_false(b.test(4), "unset bit")
+    t.assert_eq_int(b.count(), 4, "count")
+    t.assert_eq_int(b.next_set(4), 31, "next_set")
+    t.assert_eq_int(b.next_set(33), 100, "next_set skips empty words")
+    t.assert_eq_int(b.next_set(101), -1, "next_set at the end")
+    b.clear(31)
+    b.flip(3)
+    b.flip(5)
+    t.assert_eq_str(ilist(b.to_list()), "5,32,100", "clear and flip")
+    mut c = BitSet.from_list([5, 6, 7, 200])
+    t.assert_eq_str(ilist(b.union(c).to_list()), "5,6,7,32,100,200", "union")
+    t.assert_eq_str(ilist(b.intersection(c).to_list()), "5", "intersection")
+    t.assert_eq_str(ilist(b.difference(c).to_list()), "32,100", "difference")
+    t.assert_eq_str(ilist(b.symmetric_difference(c).to_list()), "6,7,32,100,200", "symmetric difference")
+    t.assert_true(BitSet.from_list([5]).is_subset_of(b), "subset")
+    t.assert_true(b.intersects(c), "intersects")
+    mut s = BitSet.from_string("0110001")
+    t.assert_eq_str(s.to_string(), "0110001", "string round trip")
+    mut all = BitSet.init(0)
+    all.set_all(70)
+    t.assert_eq_int(all.count(), 70, "set_all")
+    t.assert_eq_int(all.next_clear(0), 70, "next_clear")
+    mut cp = b.copy()
+    cp.union_with(c)
+    t.assert_eq_int(cp.count(), 6, "union_with")
+    cp.intersect_with(c)
+    t.assert_true(cp.equals(c), "intersect_with")
+    cp.subtract(c)
+    t.assert_true(cp.is_empty(), "subtract")
+
+def test_ring(t: TestRunner):
+    t.section("RingBuffer")
+    mut r = RingBuffer[int].init(3, true)
+    r.push_back(1)
+    r.push_back(2)
+    r.push_back(3)
+    r.push_back(4)
+    t.assert_eq_str(ilist(r.to_list()), "2,3,4", "overwrite keeps the last N")
+    t.assert_eq_int(r.get(0, -1), 2, "get front")
+    t.assert_eq_int(r.get(-1, -1), 4, "negative index")
+    t.assert_eq_int(r.pop_front(-1), 2, "pop_front")
+    t.assert_eq_int(r.pop_back(-1), 4, "pop_back")
+    r.push_front(9)
+    t.assert_eq_str(ilist(r.to_list()), "9,3", "push_front")
+    mut fixed = RingBuffer[str].init(2, false)
+    t.assert_true(fixed.push_back("a"), "push into space")
+    fixed.push_back("b")
+    t.assert_false(fixed.push_back("c"), "refuses when full without overwrite")
+    t.assert_eq_str(fixed.front(""), "a", "front")
+    t.assert_eq_str(fixed.back(""), "b", "back")
+    fixed.set(0, "z")
+    t.assert_eq_str(fixed.pop_front(""), "z", "set + pop")
+    t.assert_eq_str(fixed.pop_front(""), "b", "second pop")
+    t.assert_eq_str(fixed.pop_front("none"), "none", "empty pop returns the default")
+    mut model: List[int] = []
+    mut rb = RingBuffer[int].init(5, true)
+    mut rng = Rng.init(7)
+    mut ok = true
+    mut i = 0
+    while i < 3000:
+        mut op = rng.next(4)
+        if op < 2:
+            mut v = rng.next(1000)
+            rb.push_back(v)
+            model.append(v)
+            if len(model) > 5:
+                mut trimmed: List[int] = []
+                mut k = 1
+                while k < len(model):
+                    trimmed.append(model[k])
+                    k = k + 1
+                model = trimmed
+        elif op == 2 and len(model) > 0:
+            if rb.pop_front(-1) != model[0]: ok = false
+            mut rest: List[int] = []
+            mut k2 = 1
+            while k2 < len(model):
+                rest.append(model[k2])
+                k2 = k2 + 1
+            model = rest
+        elif len(model) > 0:
+            if rb.pop_back(-1) != model[len(model) - 1]: ok = false
+            model.pop()
+        if ilist(rb.to_list()) != ilist(model): ok = false
+        i = i + 1
+    t.assert_true(ok, "3000 random operations match a list model")
+
+def test_skiplist(t: TestRunner):
+    t.section("SkipList")
+    mut s = SkipList[int, str].init()
+    s.insert(30, "c")
+    s.insert(10, "a")
+    s.insert(20, "b")
+    t.assert_false(s.insert(20, "B"), "replace returns false")
+    t.assert_eq_str(ilist(s.keys()), "10,20,30", "sorted keys")
+    t.assert_eq_str(s.get(20, ""), "B", "get replaced value")
+    t.assert_eq_str(s.get(25, "none"), "none", "missing key")
+    t.assert_eq_str(ilist(s.range_keys(15, 31)), "20,30", "range [15, 31)")
+    t.assert_eq_int(s.floor_key(25, -1), 20, "floor")
+    t.assert_eq_int(s.ceiling_key(25, -1), 30, "ceiling")
+    t.assert_eq_int(s.floor_key(5, -1), -1, "no floor")
+    t.assert_eq_int(s.first_key(-1), 10, "first")
+    t.assert_eq_int(s.last_key(-1), 30, "last")
+    t.assert_true(s.remove(20), "remove")
+    t.assert_false(s.remove(20), "remove missing")
+    t.assert_eq_int(s.len(), 2, "len")
+    mut words = SkipList[str, int].init()
+    words.insert("pear", 3)
+    words.insert("apple", 1)
+    words.insert("fig", 2)
+    t.assert_eq_str(words.first_key(""), "apple", "string keys ordered")
+    t.assert_eq_int(words.get("fig", 0), 2, "string key lookup")
+
+    mut sl = SkipList[int, int].init()
+    mut present: List[bool] = []
+    mut vals: List[int] = []
+    mut k = 0
+    while k < 500:
+        present.append(false)
+        vals.append(0)
+        k = k + 1
+    mut rng = Rng.init(99)
+    mut ok = true
+    mut i = 0
+    while i < 6000:
+        mut key = rng.next(500)
+        mut op = rng.next(3)
+        if op < 2:
+            mut v = rng.next(100000)
+            mut isnew = sl.insert(key, v)
+            if isnew == present[key]: ok = false
+            present[key] = true
+            vals[key] = v
+        else:
+            if sl.remove(key) != present[key]: ok = false
+            present[key] = false
+        i = i + 1
+    mut expect: List[int] = []
+    k = 0
+    mut cnt = 0
+    while k < 500:
+        if present[k]:
+            expect.append(k)
+            cnt = cnt + 1
+            if sl.get(k, -1) != vals[k]: ok = false
+        k = k + 1
+    t.assert_true(ok, "6000 random inserts/removes agree with a model")
+    t.assert_eq_str(ilist(sl.keys()), ilist(expect), "final key order")
+    t.assert_eq_int(sl.len(), cnt, "final size")
+
+def test_intervals(t: TestRunner):
+    t.section("IntervalTree")
+    mut it = IntervalTree[str].init()
+    mut a = it.insert(10, 20, "meeting")
+    mut b = it.insert(15, 30, "lunch")
+    mut c = it.insert(40, 50, "gym")
+    t.assert_eq_str(ilist(it.query_point(17)), f"{a},{b}", "point inside two")
+    t.assert_eq_str(ilist(it.query_point(20)), f"{b}", "half-open end")
+    t.assert_eq_str(ilist(it.query_range(25, 45)), f"{b},{c}", "range overlap")
+    t.assert_false(it.overlaps(30, 40), "gap")
+    t.assert_eq_str(it.value(c, ""), "gym", "value")
+    t.assert_true(it.remove(b), "remove")
+    t.assert_eq_str(ilist(it.query_point(17)), f"{a}", "after remove")
+    t.assert_false(it.remove(b), "double remove")
+
+    mut tree = IntervalTree[int].init()
+    mut los: List[int] = []
+    mut his: List[int] = []
+    mut live: List[bool] = []
+    mut rng = Rng.init(4242)
+    mut ok = true
+    mut i = 0
+    while i < 800:
+        mut op = rng.next(4)
+        if op < 3 or len(los) == 0:
+            mut lo = rng.next(1000)
+            mut hi = lo + 1 + rng.next(80)
+            mut id = tree.insert(lo, hi, i)
+            if id != len(los): ok = false
+            los.append(lo)
+            his.append(hi)
+            live.append(true)
+        else:
+            mut victim = rng.next(len(los))
+            if tree.remove(victim) != live[victim]: ok = false
+            live[victim] = false
+        mut q = rng.next(1100)
+        mut got = tree.query_point(q)
+        mut want = 0
+        mut k = 0
+        while k < len(los):
+            if live[k] and los[k] <= q and q < his[k]: want = want + 1
+            k = k + 1
+        if len(got) != want: ok = false
+        mut gi = 0
+        while gi < len(got):
+            mut id2 = got[gi]
+            if not (live[id2] and los[id2] <= q and q < his[id2]): ok = false
+            gi = gi + 1
+        i = i + 1
+    t.assert_true(ok, "800 random operations + point queries agree with brute force")
+
+def test_rope(t: TestRunner):
+    t.section("Rope")
+    mut r = Rope.from_str("hello world")
+    r.insert(5, ",")
+    t.assert_eq_str(r.to_str(), "hello, world", "insert")
+    r.delete(0, 7)
+    t.assert_eq_str(r.to_str(), "world", "delete")
+    r.append("!")
+    r.prepend(">> ")
+    t.assert_eq_str(r.to_str(), ">> world!", "append/prepend")
+    t.assert_eq_str(r.slice(3, 3), "wor", "slice")
+    t.assert_eq_int(r.byte_at(3), 119, "byte_at")
+    t.assert_eq_int(r.find("ld", 0), 6, "find")
+    r.replace_range(3, 5, "there")
+    t.assert_eq_str(r.to_str(), ">> there!", "replace_range")
+    mut ml = Rope.from_str("a\nb\nc")
+    t.assert_eq_int(ml.line_count(), 3, "line_count")
+
+    mut big = ""
+    mut i = 0
+    while i < 400:
+        big = big + "0123456789"
+        i = i + 1
+    mut rope = Rope.from_str(big)
+    mut model = big
+    mut rng = Rng.init(1337)
+    mut ok = true
+    i = 0
+    while i < 1500:
+        mut op = rng.next(3)
+        mut pos = rng.next(model.len() + 1)
+        if op == 0:
+            mut piece = f"<{i}>"
+            rope.insert(pos, piece)
+            model = model.slice(0, pos) + piece + model.slice(pos, model.len())
+        elif op == 1:
+            mut n = rng.next(30)
+            rope.delete(pos, n)
+            mut e = pos + n
+            if e > model.len(): e = model.len()
+            model = model.slice(0, pos) + model.slice(e, model.len())
+        else:
+            mut n2 = rng.next(50)
+            mut e2 = pos + n2
+            if e2 > model.len(): e2 = model.len()
+            if rope.slice(pos, n2) != model.slice(pos, e2): ok = false
+        if rope.len() != model.len(): ok = false
+        i = i + 1
+    t.assert_true(ok, "1500 random edits keep length and slices in sync")
+    t.assert_true(rope.to_str() == model, "final text matches")
+    t.assert_true(rope.depth() < 40, "tree stays shallow")
+
+def test_slotmap(t: TestRunner):
+    t.section("SlotMap")
+    mut m = SlotMap[str].init()
+    mut a = m.insert("alpha")
+    mut b = m.insert("beta")
+    t.assert_eq_str(m.get(a, ""), "alpha", "get")
+    t.assert_true(m.remove(a), "remove")
+    t.assert_false(m.contains(a), "removed handle is dead")
+    mut c = m.insert("gamma")
+    t.assert_false(m.contains(a), "stale handle stays dead after slot reuse")
+    t.assert_eq_str(m.get(a, "stale"), "stale", "stale get returns the default")
+    t.assert_eq_str(m.get(c, ""), "gamma", "new handle works")
+    t.assert_true(m.set(b, "BETA"), "set")
+    t.assert_eq_int(m.len(), 2, "len")
+    t.assert_eq_int(len(m.handles()), 2, "handles")
+    m.clear()
+    t.assert_false(m.contains(b), "clear invalidates handles")
+    t.assert_eq_int(m.len(), 0, "empty")
+
+def test_arena(t: TestRunner):
+    t.section("Arena and Slab")
+    mut a = Arena.init(1024)
+    mut p1 = a.allocate(10)
+    mut p2 = a.allocate(10)
+    t.assert_eq_int((p2 as int) - (p1 as int), 16, "8-byte aligned bump")
+    mut big = a.allocate(5000)
+    t.assert_true((big as usize) != (0 as usize), "oversized request gets its own block")
+    t.assert_eq_int(a.block_count(), 2, "second block")
+    mut s = a.copy_str("arena text")
+    mut back = s as str
+    t.assert_eq_str(back, "arena text", "copy_str")
+    mut z = a.allocate_zeroed(64)
+    mut zero = true
+    mut k = 0
+    while k < 64:
+        unsafe:
+            if (z.offset(k).read() as int) != 0: zero = false
+        k = k + 1
+    t.assert_true(zero, "alloc_zeroed")
+    t.assert_true(a.bytes_used() >= 5000, "bytes_used")
+    a.reset()
+    t.assert_eq_int(a.block_count(), 1, "reset keeps one block")
+    t.assert_eq_int(a.bytes_used(), 0, "reset clears usage")
+    a.dispose()
+    t.assert_eq_int(a.block_count(), 0, "dispose")
+
+    mut sl = Slab.init(24, 4)
+    mut ptrs: List[int] = []
+    mut i = 0
+    while i < 10:
+        mut p = sl.allocate()
+        ptrs.append(p as int)
+        i = i + 1
+    t.assert_eq_int(sl.live_count(), 10, "live")
+    t.assert_eq_int(sl.capacity(), 12, "grew in chunks of 4")
+    mut distinct = true
+    i = 0
+    while i < 10:
+        mut j = i + 1
+        while j < 10:
+            if ptrs[i] == ptrs[j]: distinct = false
+            j = j + 1
+        i = i + 1
+    t.assert_true(distinct, "distinct blocks")
+    sl.release(ptrs[3] as Pointer[char])
+    mut again = sl.allocate()
+    t.assert_eq_int(again as int, ptrs[3], "released block is reused first")
+    sl.dispose()
+
+def main():
+    mut t = TestRunner.init("111_collections3")
+    test_bitset(t)
+    test_ring(t)
+    test_skiplist(t)
+    test_intervals(t)
+    test_rope(t)
+    test_slotmap(t)
+    test_arena(t)
+    t.summary()

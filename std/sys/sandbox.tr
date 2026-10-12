@@ -1,0 +1,218 @@
+# std.sys.sandbox -- drop privileges a process does not need.
+# tauraro-cpp-shim: sandbox_native.c
+#
+# Promises (pledge-style; a process keeps only what it lists):
+#   stdio   basic I/O on descriptors it already has, memory, time, signals,
+#           sockets it already holds (send/recv), pipes, polling
+#   rpath   open files read-only; stat, readlink, list directories, chdir
+#   wpath   open existing files for writing (no O_CREAT)
+#   cpath   create / remove / rename files and directories (any open flags)
+#   fattr   chmod, chown, utimes
+#   flock   file locks
+#   inet    IPv4/IPv6 sockets: socket, connect, bind, listen, accept
+#   unix    AF_UNIX sockets
+#   dns     what name resolution needs (UDP/TCP sockets, netlink); add rpath
+#           so /etc/resolv.conf and /etc/hosts can be read
+#   proc    fork, wait, kill, process groups, priorities
+#   thread  create threads (Linux; on OpenBSD threads come with stdio)
+#   exec    execve
+#   id      setuid / setgid family
+#   tty     terminal ioctls (part of stdio on Linux)
+#   error   denied calls fail with EPERM instead of killing the process
+#
+# Linux enforces promises with a seccomp-BPF filter (open flags and socket
+# domains are checked, not only syscall numbers) and paths with Landlock
+# (Unveil); OpenBSD uses pledge(2) / unveil(2). Elsewhere `supported()` is
+# false and every call raises. All restrictions are permanent for the process
+# and inherited by its children; `run_isolated` applies them in a forked child.
+#
+# Usage:
+#   from std.sys.sandbox import Sandbox, Unveil
+#   mut u = Unveil.init()?
+#   u.allow("/var/www", "r")?
+#   u.allow("/var/log/app", "rwc")?
+#   u.lock()?
+#   Sandbox.pledge("stdio rpath wpath cpath inet")?
+
+extern "C":
+    def trc_sb_error_into(dst: Pointer[char], cap: int) -> int
+    def trc_sb_backend() -> int
+    def trc_sb_fork() -> int
+    def trc_sb_wait(pid: int) -> int
+    def trc_sb_exit(code: int)
+    def trc_sb_seccomp_promises(bits: int, deny_errno: int) -> int
+    def trc_sb_seccomp_list(names: Pointer[char], allowlist: int, deny_errno: int) -> int
+    def trc_sb_syscall_nr(name: Pointer[char]) -> int
+    def trc_sb_landlock_abi() -> int
+    def trc_sb_landlock_create() -> int
+    def trc_sb_landlock_add(rfd: int, path: Pointer[char], perms: Pointer[char]) -> int
+    def trc_sb_landlock_restrict(rfd: int) -> int
+    def trc_sb_pledge(promises: Pointer[char]) -> int
+    def trc_sb_unveil(path: Pointer[char], perms: Pointer[char]) -> int
+    def _tr_c_malloc(size: int) -> Pointer[char]
+    def _tr_str_wrap_len(s: Pointer[char], blen: int) -> str
+
+pub const SANDBOX_EPERM = 1
+pub const SANDBOX_EACCES = 13
+
+def _sb_err() -> str:
+    mut buf = _tr_c_malloc(257)
+    mut n = trc_sb_error_into(buf, 257)
+    return _tr_str_wrap_len(buf, n)
+
+# Bit for one promise name, -1 when unknown.
+def _promise_bit(name: str) -> int:
+    if name == "stdio": return 1
+    if name == "rpath": return 2
+    if name == "wpath": return 4
+    if name == "cpath": return 8
+    if name == "fattr": return 16
+    if name == "flock": return 32
+    if name == "inet": return 64
+    if name == "unix": return 128
+    if name == "dns": return 256
+    if name == "proc": return 512
+    if name == "thread": return 1024
+    if name == "exec": return 2048
+    if name == "id": return 4096
+    if name == "tty": return 0
+    if name == "error": return 0
+    return -1
+
+def _words(s: str) -> List[str]:
+    mut out: List[str] = []
+    mut parts = s.split(" ")
+    mut i = 0
+    while i < parts.len:
+        mut w = parts.get(i).trim()
+        if w.len() > 0: out.append(w)
+        i = i + 1
+    return out
+
+pub class Sandbox:
+    _dummy: int
+
+extend Sandbox:
+    # "seccomp" (Linux), "pledge" (OpenBSD) or "none".
+    pub def backend() -> str:
+        mut b = trc_sb_backend()
+        if b == 1: return "seccomp"
+        if b == 2: return "pledge"
+        return "none"
+
+    pub def supported() -> bool: return trc_sb_backend() != 0
+
+    # Landlock ABI version of the running kernel (0 = filesystem rules unavailable).
+    pub def landlock_abi() -> int: return trc_sb_landlock_abi()
+
+    # Keep only the listed promises (space-separated, see the module header).
+    pub def pledge(promises: str) throws str:
+        mut words = _words(promises)
+        mut bits = 0
+        mut errno_mode = false
+        mut i = 0
+        while i < len(words):
+            mut b = _promise_bit(words[i])
+            if b < 0: raise("sandbox: unknown promise '" + words[i] + "'")
+            if words[i] == "error": errno_mode = true
+            bits = bits | b
+            i = i + 1
+        mut be = trc_sb_backend()
+        if be == 2:
+            mut native = ""
+            i = 0
+            while i < len(words):
+                if words[i] != "thread":
+                    if native.len() > 0: native = native + " "
+                    native = native + words[i]
+                i = i + 1
+            if trc_sb_pledge(native as Pointer[char]) != 0: raise("sandbox: " + _sb_err())
+            return
+        if be != 1: raise("sandbox: not supported on this platform")
+        mut deny = 0
+        if errno_mode: deny = SANDBOX_EPERM
+        if trc_sb_seccomp_promises(bits, deny) != 0: raise("sandbox: " + _sb_err())
+
+    # Make the listed syscalls fail with `err_code` (0 kills the process instead);
+    # everything else stays allowed. Linux only.
+    pub def deny_syscalls(names: List[str], err_code: int) throws str:
+        Sandbox._list_filter(names, false, err_code)?
+
+    # Allow only the listed syscalls; others fail with `err_code` (0 kills). Linux only.
+    pub def allow_only_syscalls(names: List[str], err_code: int) throws str:
+        Sandbox._list_filter(names, true, err_code)?
+
+    def _list_filter(names: List[str], allowlist: bool, err_code: int) throws str:
+        if trc_sb_backend() != 1: raise("sandbox: syscall filters need Linux seccomp")
+        mut joined = ""
+        mut i = 0
+        while i < len(names):
+            if Sandbox.syscall_number(names[i]) < 0: raise("sandbox: unknown syscall '" + names[i] + "' on this architecture")
+            if i > 0: joined = joined + "\n"
+            joined = joined + names[i]
+            i = i + 1
+        mut al = 0
+        if allowlist: al = 1
+        if trc_sb_seccomp_list(joined as Pointer[char], al, err_code) < 0: raise("sandbox: " + _sb_err())
+
+    # Syscall number on this architecture (Linux), or -1.
+    pub def syscall_number(name: str) -> int: return trc_sb_syscall_nr(name as Pointer[char])
+
+    # Fork; the child applies `promises` (skipped when "") and runs `body`,
+    # exiting with its result (0..255). Returns the child's exit code, or
+    # -N when signal N ended it (SIGSYS = 31 on Linux: a forbidden syscall).
+    # A child that cannot apply the promises exits with 125. POSIX only.
+    pub def run_isolated(promises: str, body: def() -> int) throws str -> int:
+        if Sandbox.backend() == "none" and promises.len() > 0: raise("sandbox: not supported on this platform")
+        mut pid = trc_sb_fork()
+        if pid < 0: raise("sandbox: fork failed")
+        if pid == 0:
+            if promises.len() > 0:
+                mut r: Result[bool, str] = _apply(promises)
+                if r.is_err: trc_sb_exit(125)
+            mut code = body()
+            trc_sb_exit(code & 255)
+        mut st = trc_sb_wait(pid)
+        if st >= 1000: return 0 - (st - 1000)
+        return st
+
+def _apply(promises: str) throws str -> bool:
+    Sandbox.pledge(promises)?
+    return true
+
+# Filesystem visibility (unveil): after lock(), only the allowed paths (and
+# what is beneath them) are reachable, with the given permissions:
+# r read, w write, x execute, c create/remove.
+pub class Unveil:
+    _fd:   int
+    _done: bool
+
+extend Unveil:
+    pub def init() throws str -> Unveil:
+        mut u = Unveil()
+        u._fd = -1
+        u._done = false
+        mut be = trc_sb_backend()
+        if be == 1:
+            u._fd = trc_sb_landlock_create()
+            if u._fd < 0: raise("sandbox: " + _sb_err())
+        elif be != 2:
+            raise("sandbox: not supported on this platform")
+        return u
+
+    pub def allow(self, path: str, perms: str) throws str:
+        if self._done: raise("sandbox: unveil is already locked")
+        if trc_sb_backend() == 2:
+            if trc_sb_unveil(path as Pointer[char], perms as Pointer[char]) != 0: raise("sandbox: " + path + ": " + _sb_err())
+            return
+        if trc_sb_landlock_add(self._fd, path as Pointer[char], perms as Pointer[char]) != 0:
+            raise("sandbox: " + path + ": " + _sb_err())
+
+    # Apply the rules (no further allow() calls).
+    pub def lock(self) throws str:
+        if self._done: return
+        self._done = true
+        if trc_sb_backend() == 2:
+            if trc_sb_unveil("" as Pointer[char], "" as Pointer[char]) != 0: raise("sandbox: " + _sb_err())
+            return
+        if trc_sb_landlock_restrict(self._fd) != 0: raise("sandbox: " + _sb_err())

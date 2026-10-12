@@ -11,8 +11,6 @@ from std.sys.datetime import DateTime, Date, Time, TimeDelta
 from std.sys.signal   import Signal
 from std.sys.dotenv   import Dotenv
 from std.sys.cron     import Cron, CronSchedule
-from std.sys.mmap     import MemMap
-from std.sys.shm      import Shm
 ```
 
 ---
@@ -491,83 +489,169 @@ print(DateTime.from_timestamp_utc(s.prev_before(now)).to_string())    # 2026-10-
 
 ---
 
-## std.sys.mmap — Memory-mapped files and anonymous shared memory
+## Memory maps, shared memory and IPC — `std.sys.mmap`, `std.sys.shm`, `std.sys.pipe`, `std.sys.unix_socket`
 
-**When**: You want to treat a file as a byte array (large read-mostly data, binary formats, an index you patch in place), or you need zero-filled memory that a forked child can share.
-**Why**: `MemMap` wraps `mmap`/`msync`/`munmap` (POSIX) and `CreateFileMapping`/`MapViewOfFile`/`FlushViewOfFile` (Windows). The mapping is **owned**: it is unmapped (and its file handle closed) when the `MemMap` goes out of scope, by the user-defined `free()`; `close()` does it early and is idempotent.
+Backed by `std/sys/ipc_native.c` (POSIX and Windows), linked automatically when imported. All data is
+binary-safe; failures raise with the OS error text.
 
-Constructors always return a `MemMap`; check `is_open()`. On failure `error` holds the OS message and `code` the `errno` / `GetLastError()`.
-
-| Constructor | Description |
-|---|---|
-| `MemMap.open_read(path)` | read-only shared mapping of the whole file |
-| `MemMap.open_readwrite(path)` | read-write; stores reach the file |
-| `MemMap.open_private(path)` | copy-on-write: stores stay in this mapping, never written back |
-| `MemMap.open_range(path, mode, offset, length)` | map a window (`mode` 0 read, 1 read-write, 2 private; `length <= 0` = to EOF). `offset` need not be page-aligned. Read-write with `offset+length` past EOF **grows the file** |
-| `MemMap.create(path, size)` | create/truncate a file of `size` bytes and map it read-write |
-| `MemMap.anonymous(size)` | zero-filled memory not backed by a file (`MAP_SHARED|MAP_ANONYMOUS`, so a `fork()`ed child shares it) |
-| `MemMap.supported()` / `MemMap.page_size()` | capability probe / mapping granularity |
-
-| Instance method | Description |
-|---|---|
-| `len()`, `is_open()`, `is_writable()`, `in_range(off, n)` | state and bounds |
-| `get_u8/i8/u16/i16/u32/i32/i64(off)`, `get_f64(off)` | little-endian fixed-width reads (`i64` values ≥ 2^63 read back negative) |
-| `set_u8/u16/u32/i64(off, v)`, `set_f64(off, v)` | writes; `false` if read-only or out of range |
-| `read_str(off, n)` / `write_str(off, s)` | binary-safe byte strings (`s.len()` is the real length, NULs included) |
-| `fill(off, n, byte)` | memset |
-| `atomic_load/atomic_store/atomic_add/atomic_cas(off, ...)` | 64-bit atomics on 8-byte-aligned offsets (`atomic_add` returns the **previous** value; `atomic_cas` returns `bool`) — valid across processes on shared maps |
-| `flush()` / `flush_async()` / `flush_range(off, n, wait)` | `msync` / `FlushViewOfFile` (+ `FlushFileBuffers` for `flush()`); a no-op `true` for anonymous memory |
-| `close()` | unmap now |
-
-Out-of-range reads return `0` / `""` and out-of-range or read-only writes return `false`: nothing outside the mapping is ever touched.
+### MemoryMap (`std.sys.mmap`)
 
 ```tauraro
-from std.sys.mmap import MemMap
-
-mut m = MemMap.create("table.bin", 4096)
-if m.is_open():
-    m.set_u32(0, 0xCAFE)
-    m.write_str(16, "hello")
-    m.flush()
-    print(m.read_str(16, 5))     # hello
-# unmapped here
+from std.sys.mmap import MemoryMap, MAP_READ, MAP_READ_WRITE, MAP_COPY
+mut m = MemoryMap.open("big.log", MAP_READ)?
+mut pos = m.find("ERROR", 0)
+mut line = m.read(pos, 80)?
+m.close()
 ```
 
-**Limitations**: a file truncated by another process while mapped faults on access (inherent to `mmap`); empty files cannot be mapped; bare-metal, kernel and WASI builds have no virtual memory — `supported()` is `false` and every constructor fails with `not supported on this platform`. The Windows backend is compile-checked with MinGW (zig) but is not exercised by a Windows run in the module author's environment — the Windows CI leg runs `tests/lang/140_mmap.tr`.
+| Member | Description |
+|---|---|
+| `MemoryMap.open(path, mode)?` / `open_range(path, mode, offset, length)?` | `MAP_READ`, `MAP_READ_WRITE` (writes reach the file), `MAP_COPY` (private copy-on-write). |
+| `MemoryMap.anonymous(size)?` | Zero-filled private memory. |
+| `len()`, `read(off, n)?`, `read_all()`, `write(off, data)?`, `byte_at(i)`, `set_byte(i, v)?`, `find(needle, start)` | Bounds-checked access. |
+| `atomic_load/store/add/cas(off, ...)` | 64-bit atomics at 8-byte aligned offsets (for shared maps). |
+| `flush()?`, `close()` | `flush` writes dirty pages of a file map to disk. |
+
+### SharedMemory and NamedSemaphore (`std.sys.shm`)
+
+`SharedMemory.create(name, size)?` (create or open), `create_new(name, size)?` (fail if it exists),
+`open(name)?` — each returns a `MemoryMap` onto the shared bytes; `SharedMemory.unlink(name)?` removes the
+name (POSIX; Windows segments vanish with their last handle). `NamedSemaphore.create(name, initial)?`,
+`open(name)?`, `post()?`, `wait(timeout_ms)? -> bool` (-1 forever, 0 try), `try_wait()?`, `close()`,
+`NamedSemaphore.unlink(name)?`. Names are plain identifiers; the platform prefix is added. On Linux with
+glibc older than 2.34, `shm_open`/`sem_open` need `-lrt`.
+
+### Pipes (`std.sys.pipe`)
+
+`Pipe.create()?` → `.reader` / `.writer` (`PipeEnd`: `read(cap)?`, `read_all()?`, `write(data)?`,
+`wait_readable(ms)`, `close()`, `fd`). `Fifo.create(path, mode)?`, `Fifo.open_read(path)?`,
+`Fifo.open_write(path)?`, `Fifo.remove(path)?` (POSIX only).
+
+### Unix-domain sockets (`std.sys.unix_socket`)
+
+`UnixListener.bind(path)?` → `accept(timeout_ms)?` → `UnixStream`; `UnixStream.connect(path)?`;
+`UnixStream.pair()?` (socketpair, POSIX). Streams: `send(data)?`, `recv(cap)?` (`""` when the peer closed),
+`recv_exact(n)?`, `recv_all()?`, `set_timeout(ms)`, `shutdown_write()`, `send_fd(fd)?` / `recv_fd()?`
+(SCM_RIGHTS, POSIX), `close()`. `UnixListener.close()` removes the socket file. Windows 10 1803+ supports
+AF_UNIX streams.
+
+Tested by `tests/lang/109_sys_ipc.tr`.
 
 ---
 
-## std.sys.shm — Named shared memory and a cross-process lock
+## Shared libraries and plugins — `std.sys.dylib`, `std.sys.plugin`
 
-**When**: Two or more processes (or a process and its children) must share a block of memory and coordinate access.
-**Why**: `Shm` wraps `shm_open` + `mmap` (POSIX) or a named pagefile-backed file mapping (`Local\tauraro_shm_<name>`, Windows). Each region is `size` user bytes behind a hidden 64-byte header (magic, size, lock word), so `len()` is the user size everywhere and `Shm.open(name)` needs no size.
+`std.sys.dylib` loads a shared library at run time (`dlopen` / `LoadLibraryW`) and calls its
+functions. Calls go through trampolines with exact C prototypes, so these signatures are supported:
 
-| Call | Description |
+| Method | C signature |
 |---|---|
-| `Shm.create(name, size)` | new zeroed region; **fails if the name exists** |
-| `Shm.open(name)` | attach to an existing region |
-| `Shm.create_or_open(name, size)` | create, or attach (the size must match an existing region) |
-| `Shm.unlink(name)` | POSIX: remove the name (live maps keep working). Windows: no-op `true` (the object dies with its last handle) |
-| `Shm.supported()`, `Shm.valid_name(name)` | probes (names: 1–30 chars of `[A-Za-z0-9._-]`; 30 because macOS caps shm names at 31 with the `/`) |
-| `get_*/set_*/read_str/write_str/fill/atomic_*` | same typed, bounds-checked access as `MemMap`, offsets start at 0 of the user area |
-| `lock(timeout_ms)` | `0` acquired, `1` acquired after **recovering a dead owner's lock**, `-1` timeout (`< 0` waits forever, `0` tries once), `-2` not open |
-| `try_lock()`, `unlock()`, `holds_lock()` | non-blocking acquire; release (`false` if the calling thread is not the owner) |
-| `close()` | unmap this view; releases the lock first if this object still holds it. Also runs at scope exit |
+| `call_int(name, [ints])?` | `int64 f(int64/pointer × 0–8)`; narrower integer parameters work on x86-64 and AArch64 |
+| `call_void(name, [ints])?` | `void f(int64/pointer × 0–8)` |
+| `call_float(name, [floats])?` | `double f(double × 0–6)` |
+| `call_str(name, [strs])?` | `str f(str × 0–4)`: functions exported by `tauraroc --lib` |
+| `call_str_int(name, s, [ints])?` | `int64 f(str, int64 × 0–3)`: functions exported by `tauraroc --lib` |
 
-The lock is a coarse mutex in the header: the owner id is `(pid << 32 | thread id)`, so it works between processes **and** threads, polls (spin then 1 ms sleeps) rather than using a futex, and is re-entrant for the same thread. If the owning *process* died, the next `lock()` takes it over and returns `1` so you know the protected data may be half-written. A dead *thread* in a live process, and PID reuse, cannot be detected.
+32-bit `float` parameters and struct arguments are not supported.
 
 ```tauraro
-from std.sys.shm import Shm
+from std.sys.dylib import DynLib, dylib_filename, dylib_cstr_addr
 
-mut a = Shm.create("jobs", 4096)
-a.set_i64(0, 0)
-# ... in any process:
-mut b = Shm.open("jobs")
-if b.lock(1000) >= 0:
-    b.set_i64(0, b.get_i64(0) + 1)
-    b.unlock()
-Shm.unlink("jobs")
+mut lib = DynLib.open("./libgeometry.so")?
+mut area = lib.call_float("circle_area", [2.0])?
+mut me = DynLib.self_process()?                     # POSIX: the program + libc
+mut n = me.call_int("strlen", [dylib_cstr_addr("hello")])?
+lib.close()
 ```
 
-Android (bionic has no `shm_open`), bare-metal and WASI report `not supported on this platform`. Tested by `tests/lang/141_shm.tr`, including `fork()`-based contention, stale-owner recovery and a locked 3-process counter.
+`DynLib.open(path)?` / `open_with(path, DL_GLOBAL | DL_LAZY)?`, `self_process()?` (POSIX), `symbol(name)?`
+(address), `has(name)`, `close()`. Helpers: `dylib_filename("m")` (`libm.so` / `libm.dylib` / `m.dll`),
+`dylib_extension()`, `dylib_cstr_addr(s)` (a `const char*` argument), `dylib_read_cstr(addr)`,
+`dylib_call_int_ptr(fn, args)?`, `dylib_call_float_ptr(fn, args)?`. Strings returned by a library
+are copied, so they stay valid after the library is closed.
 
+### Plugins
+
+A plugin is a shared library, usually built with `tauraroc plugin.tr --lib -o plugins/name`,
+that exports:
+
+```tauraro
+export def tauraro_plugin_abi() -> int:      return 1          # PLUGIN_ABI, required
+export def tauraro_plugin_name() -> str:     return "markdown" # required, unique
+export def tauraro_plugin_version() -> str:  return "1.0.0"    # optional
+export def tauraro_plugin_init() -> int:     return 0          # optional, non-zero refuses loading
+export def tauraro_plugin_shutdown() -> int: return 0          # optional, runs on unload
+
+export def render(src: str) -> str:                            # whatever the host calls
+    return "<p>" + src + "</p>"
+```
+
+```tauraro
+from std.sys.plugin import PluginHost
+
+mut host = PluginHost.init()
+host.discover("plugins")                   # every .so / .dylib / .dll in the directory
+for err in host.errors: print(err)         # libraries that were not valid plugins
+mut md = host.find("markdown")?
+print(md.call_str("render", ["hi"])?)
+mut results = host.broadcast_str_int("on_event", "startup", [])   # each plugin exporting the hook
+host.reload("markdown")?                    # pick up a rebuilt library
+host.unload_all()
+```
+
+`PluginHost`: `load(path)?`, `discover(dir)`, `find(name)?`, `has_plugin(name)`, `names()`, `count()`,
+`unload(name)?`, `reload(name)?`, `unload_all()`, `broadcast_int(fn, args)`,
+`broadcast_str_int(fn, s, args)`, plus `plugins` and `errors`. `Plugin`: `name`, `version`, `path`,
+`lib`, and the `call_*` / `has` / `symbol` methods of `DynLib`. Loading is refused when the ABI
+number differs, the name is already loaded, or `tauraro_plugin_init` returns non-zero.
+
+Each plugin carries its own copy of the Tauraro runtime. Pass plain values (`int`, `float`, `str`)
+across the boundary, not class instances or collections.
+
+Tested by `tests/lang/118_dylib_plugin.tr`.
+
+---
+
+## Sandboxing — `std.sys.sandbox`
+
+Drop the privileges a process does not need. On Linux, promises become a seccomp-BPF filter and
+`Unveil` becomes a Landlock ruleset (kernel 5.13+). On OpenBSD the module calls `pledge(2)` and
+`unveil(2)`. On other platforms `Sandbox.supported()` is false and the calls raise. Restrictions
+are permanent and inherited by child processes.
+
+```tauraro
+from std.sys.sandbox import Sandbox, Unveil
+
+mut u = Unveil.init()?
+u.allow("/srv/www", "r")?                    # r read, w write, x execute, c create/remove
+u.allow("/var/log/myapp", "rwc")?
+u.lock()?
+Sandbox.pledge("stdio rpath wpath cpath inet error")?
+```
+
+| Promise | Allows |
+|---|---|
+| `stdio` | I/O on descriptors already open, memory, time, signals, polling, pipes, send/recv on held sockets |
+| `rpath` | opening files read-only, stat / access / readlink, directory listing, chdir |
+| `wpath` | opening existing files for writing (no `O_CREAT`) |
+| `cpath` | creating, removing and renaming files and directories |
+| `fattr`, `flock` | chmod / chown / utimes; file locks |
+| `inet`, `unix` | IPv4/IPv6 or AF_UNIX sockets (`socket` is checked by address family), connect, bind, listen, accept |
+| `dns` | what name resolution needs; combine with `rpath` for `/etc/resolv.conf` |
+| `proc`, `thread`, `exec`, `id` | fork/wait/kill; creating threads (Linux); execve; setuid family |
+| `tty` | accepted (terminal ioctls are part of `stdio` on Linux) |
+| `error` | denied calls fail with `EPERM` instead of killing the process with SIGSYS |
+
+| API | Description |
+|---|---|
+| `Sandbox.backend()`, `supported()`, `landlock_abi()` | `"seccomp"`, `"pledge"` or `"none"`; Landlock ABI version (0 = unavailable). |
+| `Sandbox.pledge(promises)?` | Keep only the listed promises. Unknown names raise before anything is installed. |
+| `Sandbox.deny_syscalls(names, err_code)?` / `allow_only_syscalls(names, err_code)?` | Custom seccomp lists (Linux); `err_code` 0 kills instead of failing the call. |
+| `Sandbox.syscall_number(name)` | Syscall number on this architecture, or -1. |
+| `Sandbox.run_isolated(promises, body)?` | Fork; the child applies the promises and returns `body()` as its exit code. Returns that code, `-N` when signal N ended the child (`-31` = SIGSYS, a forbidden call), or 125 when the promises could not be applied. POSIX only. |
+| `Unveil.init()?`, `allow(path, perms)?`, `lock()?` | Restrict the visible filesystem to the allowed paths. |
+
+Linux filters cover x86-64, AArch64, i386, ARM and RISC-V 64, and reject syscalls from other ABIs
+(x32). Path promises check `open` / `openat` flags; `openat2` is only allowed with `cpath`.
+
+Tested by `tests/lang/119_sandbox.tr`.

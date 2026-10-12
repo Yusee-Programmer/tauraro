@@ -114,8 +114,10 @@ tauraroc --run hello.tr
 
 ```
 tauraroc <file.tr> [options]
-tauraroc fmt [-w|--check] <file|dir>...   Format source (stdout, -w in place, --check for CI)
+tauraroc fmt [-w] <file.tr>     Format source (stdout, or -w in place)
 tauraroc lint <file.tr>         Analyze and report warnings/errors
+tauraroc doc <file|dir>... [-o DIR] [--html]   API docs from pub items + comments
+tauraroc cov <file.tr> [--lcov FILE]           Run with line coverage and report it
 
   --version              Print compiler version and exit
   --run                  Compile and immediately execute
@@ -134,6 +136,7 @@ tauraroc lint <file.tr>         Analyze and report warnings/errors
   -O0/-O1/-O2/-O3        Optimization level (default: -O2)
   -Os                    Optimize for size
   --debug                AddressSanitizer + bounds-check assertions
+  --coverage             gcov instrumentation mapped to .tr lines (see `cov`)
   --strict               Alloc/dealloc outside `unsafe:` is an error [U-1]
   --no-heap              Reject all heap-allocating constructs [H-1]
   --prof                 Auto-wrap main() with CPU sampling; prints a flat

@@ -1,317 +1,70 @@
-# std.crypto.x25519 — X25519 Diffie-Hellman key exchange (RFC 7748), pure Tauraro.
+# std.crypto.x25519 -- X25519 Diffie-Hellman key exchange (RFC 7748).
 #
-# Curve25519 Montgomery-ladder scalar multiplication over GF(2^255-19) with
-# 16 x 16-bit limbs (the TweetNaCl formulation). The ladder uses a branch-free
-# conditional swap, so there is no secret-dependent branch or table index.
+# Keys are 32 RAW bytes (use the `_hex` helpers for printable forms). The
+# private key is any 32 random bytes; clamping happens inside the scalar
+# multiplication, as RFC 7748 specifies. The ladder is constant-time.
 #
-# Keys, public values and shared secrets are 32 RAW bytes in a `str` (true
-# length 32; print with Hex.encode). `_hex` helpers take / return lowercase hex.
-#
-# Verified against RFC 7748 section 5.2 (both scalar-mult vectors, the 1- and
-# 1000-iteration chain) and section 6.1 (Alice/Bob), and cross-checked with
-# OpenSSL / Python `cryptography` — see tests/lang/113_x25519.tr.
+# shared_secret() rejects an all-zero result, which a malicious peer can force
+# by sending a low-order point (RFC 7748 section 6.1). Feed the shared secret
+# through a KDF (e.g. Kdf.hkdf) before using it as a key.
 #
 # Usage:
 #   from std.crypto.x25519 import X25519
-#   mut a_sk = X25519.gen_private()               # 32 random bytes (OS CSPRNG)
-#   mut a_pk = X25519.public_key(a_sk)            # send to peer
-#   mut b_sk = X25519.gen_private()
-#   mut b_pk = X25519.public_key(b_sk)
-#   mut s1 = X25519.shared_secret(a_sk, b_pk)     # == shared_secret(b_sk, a_pk)
-#   # NEVER use the raw shared secret as a key: run it (plus both public keys)
-#   # through a KDF such as HKDF / BLAKE2b / SHA-256 first.
-#
-# `shared_secret` returns "" (empty) when an input is not 32 bytes or when the
-# result is all zeros (the peer sent a low-order point; RFC 7748 section 6.1
-# says implementations MAY reject this and protocols such as TLS 1.3 require it).
-# `scalarmult` is the raw RFC 7748 function and never rejects.
-#
-# Limits: constant-time behaviour relies on the C compiler not introducing
-# secret-dependent branches in the generated code (not formally audited), and
-# private keys are held in immutable `str`s that the runtime may copy; call
-# `CryptoBytes.secure_zero` on buffers you own where that matters.
+#   mut a_priv = X25519.generate_private()?
+#   mut a_pub  = X25519.public_key(a_priv)?
+#   ... exchange public keys ...
+#   mut shared = X25519.shared_secret(a_priv, b_pub)?
 
-from std.crypto.bytes import CryptoBytes
-from std.encoding.hex import Hex
+from std.crypto.native import trc_x25519, _cn_alloc, _cn_take, _cn_free, _cn_hex, _cn_unhex
+from std.crypto.random import SecureRandom
 
-extern "C":
-    def _tr_c_free(ptr: Pointer[char])
-    def _tr_c_secure_zero(ptr: Pointer[char], n: int)
-
-def gld(p: Pointer[int], i: int) -> int:
-    unsafe:
-        return p.offset(i).read()
-
-def gst(p: Pointer[int], i: int, v: int):
-    unsafe:
-        p.offset(i).write(v)
-
-def gsub(p: Pointer[int], off: int) -> Pointer[int]:
-    unsafe:
-        return p.offset(off)
-
-def gcar(o: Pointer[int]):
-    mut i = 0
-    while i < 16:
-        gst(o, i, gld(o, i) + 65536)
-        mut c = gld(o, i) >> 16
-        if i < 15:
-            gst(o, i + 1, gld(o, i + 1) + c - 1)
-        else:
-            gst(o, 0, gld(o, 0) + (c - 1) * 38)
-        gst(o, i, gld(o, i) - c * 65536)
-        i = i + 1
-
-# branch-free conditional swap of two field elements when b == 1
-def gsel(p: Pointer[int], q: Pointer[int], b: int):
-    mut c = ~(b - 1)
-    mut i = 0
-    while i < 16:
-        mut t = c & (gld(p, i) ^ gld(q, i))
-        gst(p, i, gld(p, i) ^ t)
-        gst(q, i, gld(q, i) ^ t)
-        i = i + 1
-
-def gadd(o: Pointer[int], a: Pointer[int], b: Pointer[int]):
-    mut i = 0
-    while i < 16:
-        gst(o, i, gld(a, i) + gld(b, i))
-        i = i + 1
-
-def gsubf(o: Pointer[int], a: Pointer[int], b: Pointer[int]):
-    mut i = 0
-    while i < 16:
-        gst(o, i, gld(a, i) - gld(b, i))
-        i = i + 1
-
-# o = a * b mod p. `t` is 31 limbs of scratch. The accumulation runs in u64 (two's
-# complement wraparound gives the exact signed result, because every true value fits
-# in an i64): the C backend builds with -ftrapv, which would otherwise turn each signed
-# add/mul into a checked call and make this loop ~5x slower.
-def gmul(o: Pointer[int], a: Pointer[int], b: Pointer[int], t: Pointer[int]):
-    mut ap = a as Pointer[u64]
-    mut bp = b as Pointer[u64]
-    mut tp = t as Pointer[u64]
-    mut op = o as Pointer[u64]
-    mut i = 0
-    unsafe:
-        while i < 31:
-            tp.offset(i).write(0 as u64)
-            i = i + 1
-        i = 0
-        while i < 16:
-            mut ai: u64 = ap.offset(i).read()
-            mut j = 0
-            while j < 16:
-                tp.offset(i + j).write(tp.offset(i + j).read() + ai * bp.offset(j).read())
-                j = j + 1
-            i = i + 1
-        i = 0
-        while i < 15:
-            tp.offset(i).write(tp.offset(i).read() + (38 as u64) * tp.offset(i + 16).read())
-            i = i + 1
-        i = 0
-        while i < 16:
-            op.offset(i).write(tp.offset(i).read())
-            i = i + 1
-    gcar(o)
-    gcar(o)
-
-def gcopy(o: Pointer[int], a: Pointer[int]):
-    mut i = 0
-    while i < 16:
-        gst(o, i, gld(a, i))
-        i = i + 1
-
-# o = i^(p-2) mod p. `c` is a 16-limb temp, `t` 31 limbs of scratch.
-def ginv(o: Pointer[int], i: Pointer[int], c: Pointer[int], t: Pointer[int]):
-    gcopy(c, i)
-    mut a = 253
-    while a >= 0:
-        gmul(c, c, c, t)
-        if a != 2 and a != 4:
-            gmul(c, c, i, t)
-        a = a - 1
-    gcopy(o, c)
-
-# Serialise a reduced field element into 32 little-endian bytes at `out`.
-def gpack(out: Pointer[char], n: Pointer[int], m: Pointer[int], tt: Pointer[int]):
-    gcopy(tt, n)
-    gcar(tt)
-    gcar(tt)
-    gcar(tt)
-    mut j = 0
-    while j < 2:
-        gst(m, 0, gld(tt, 0) - 65517)
-        mut i = 1
-        while i < 15:
-            gst(m, i, gld(tt, i) - 65535 - ((gld(m, i - 1) >> 16) & 1))
-            gst(m, i - 1, gld(m, i - 1) & 65535)
-            i = i + 1
-        gst(m, 15, gld(tt, 15) - 32767 - ((gld(m, 14) >> 16) & 1))
-        mut b = (gld(m, 15) >> 16) & 1
-        gst(m, 14, gld(m, 14) & 65535)
-        gsel(tt, m, 1 - b)
-        j = j + 1
-    mut k = 0
-    while k < 16:
-        CryptoBytes.put(out, 2 * k, gld(tt, k) & 255)
-        CryptoBytes.put(out, 2 * k + 1, (gld(tt, k) >> 8) & 255)
-        k = k + 1
-
-pub class X25519Keys:
-    pub private_key: str
-    pub public_key: str
+def _x25519_base() -> str:
+    mut p = _cn_alloc(32)
+    unsafe: p.offset(0).write(9 as char)
+    return _cn_take(p, 32)
 
 pub class X25519:
     _dummy: int
 
-# The RFC 7748 function X25519(k, u): both 32-byte raw strings -> 32-byte raw string.
-def x25519_raw(k: str, u: str) -> str:
-    mut ws = gsub(CryptoBytes.zeroed(20 * 16 * 8) as Pointer[int], 0)
-    mut a = gsub(ws, 0)
-    mut b = gsub(ws, 16)
-    mut c = gsub(ws, 32)
-    mut d = gsub(ws, 48)
-    mut e = gsub(ws, 64)
-    mut f = gsub(ws, 80)
-    mut x = gsub(ws, 96)       # 80 limbs: x[0..16] = u, x+16 = a, x+32 = c, x+48 = b, x+64 = d
-    mut t = gsub(ws, 176)      # 31 limbs scratch
-    mut z = gsub(ws, 208)      # scalar bytes as ints (32)
-    mut pm = gsub(ws, 240)     # pack scratch
-    mut pt = gsub(ws, 256)
-    mut k31 = 0
-    mut i = 0
-    while i < 32:
-        gst(z, i, CryptoBytes.at(k, i))
-        i = i + 1
-    gst(z, 31, (gld(z, 31) & 127) | 64)
-    gst(z, 0, gld(z, 0) & 248)
-    i = 0
-    while i < 16:
-        gst(x, i, CryptoBytes.at(u, 2 * i) + (CryptoBytes.at(u, 2 * i + 1) * 256))
-        i = i + 1
-    gst(x, 15, gld(x, 15) & 32767)
-    i = 0
-    while i < 16:
-        gst(b, i, gld(x, i))
-        gst(d, i, 0)
-        gst(a, i, 0)
-        gst(c, i, 0)
-        i = i + 1
-    gst(a, 0, 1)
-    gst(d, 0, 1)
-    # 121665 as a field element: {0xDB41, 1}
-    mut k121 = gsub(ws, 272)
-    gst(k121, 0, 56129)
-    gst(k121, 1, 1)
-    i = 254
-    while i >= 0:
-        mut r = (gld(z, i >> 3) >> (i & 7)) & 1
-        gsel(a, b, r)
-        gsel(c, d, r)
-        gadd(e, a, c)
-        gsubf(a, a, c)
-        gadd(c, b, d)
-        gsubf(b, b, d)
-        gmul(d, e, e, t)
-        gmul(f, a, a, t)
-        gmul(a, c, a, t)
-        gmul(c, b, e, t)
-        gadd(e, a, c)
-        gsubf(a, a, c)
-        gmul(b, a, a, t)
-        gsubf(c, d, f)
-        gmul(a, c, k121, t)
-        gadd(a, a, d)
-        gmul(c, c, a, t)
-        gmul(a, d, f, t)
-        gmul(d, b, x, t)
-        gmul(b, e, e, t)
-        gsel(a, b, r)
-        gsel(c, d, r)
-        i = i - 1
-    mut x16 = gsub(x, 16)
-    mut x32 = gsub(x, 32)
-    i = 0
-    while i < 16:
-        gst(x, i + 16, gld(a, i))
-        gst(x, i + 32, gld(c, i))
-        gst(x, i + 48, gld(b, i))
-        gst(x, i + 64, gld(d, i))
-        i = i + 1
-    ginv(x32, x32, f, t)
-    gmul(x16, x16, x32, t)
-    mut out: Pointer[char] = CryptoBytes.zeroed(32)
-    gpack(out, x16, pm, pt)
-    _tr_c_secure_zero(ws as Pointer[char], 20 * 16 * 8)
-    _tr_c_free(ws as Pointer[char])
-    return CryptoBytes.wrap(out, 32)
-
-def all_zero(s: str) -> bool:
-    mut acc = 0
-    mut i = 0
-    while i < s.len():
-        acc = acc | CryptoBytes.at(s, i)
-        i = i + 1
-    return acc == 0
-
 extend X25519:
-    # RFC 7748 X25519(scalar, u). Both arguments must be 32 bytes; otherwise "".
-    # The scalar is clamped internally as the RFC specifies. Never rejects a result.
-    pub def scalarmult(scalar: str, point: str) -> str:
-        if scalar.len() != 32 or point.len() != 32: return ""
-        return x25519_raw(scalar, point)
+    # 32 random bytes from the OS CSPRNG.
+    pub def generate_private() throws str -> str:
+        return SecureRandom.bytes(32)?
 
-    # The curve base point u = 9 as 32 raw bytes.
-    pub def base_point() -> str:
-        mut p: Pointer[char] = CryptoBytes.zeroed(32)
-        CryptoBytes.put(p, 0, 9)
-        return CryptoBytes.wrap(p, 32)
+    # The public key (scalar * base point 9) for a 32-byte private key.
+    pub def public_key(private_key: str) throws str -> str:
+        if private_key.len() != 32: raise("X25519: private key must be 32 bytes")
+        mut base = _x25519_base()
+        mut p = _cn_alloc(32)
+        mut kp = private_key as Pointer[char]
+        mut bp = base as Pointer[char]
+        trc_x25519(p, kp, bp)
+        return _cn_take(p, 32)
 
-    # Public key for a 32-byte private key: X25519(private, 9).
-    pub def public_key(private_key: str) -> str:
-        if private_key.len() != 32: return ""
-        return x25519_raw(private_key, X25519.base_point())
+    # The raw 32-byte shared secret with a peer's public key.
+    pub def shared_secret(private_key: str, peer_public: str) throws str -> str:
+        if private_key.len() != 32: raise("X25519: private key must be 32 bytes")
+        if peer_public.len() != 32: raise("X25519: public key must be 32 bytes")
+        mut p = _cn_alloc(32)
+        mut kp = private_key as Pointer[char]
+        mut pp = peer_public as Pointer[char]
+        if trc_x25519(p, kp, pp) != 0:
+            _cn_free(p)
+            raise("X25519: peer public key is a low-order point (all-zero shared secret)")
+        return _cn_take(p, 32)
 
-    # Diffie-Hellman shared secret. Returns "" if either input is not 32 bytes or the
-    # result is all zero (low-order peer point) — see the module notes.
-    pub def shared_secret(private_key: str, peer_public: str) -> str:
-        if private_key.len() != 32 or peer_public.len() != 32: return ""
-        mut s = x25519_raw(private_key, peer_public)
-        if all_zero(s): return ""
-        return s
+    # The raw scalar multiplication (no zero check), for test vectors.
+    pub def scalar_mult(scalar: str, point: str) throws str -> str:
+        if scalar.len() != 32 or point.len() != 32: raise("X25519: inputs must be 32 bytes")
+        mut p = _cn_alloc(32)
+        mut sp = scalar as Pointer[char]
+        mut pp = point as Pointer[char]
+        trc_x25519(p, sp, pp)
+        return _cn_take(p, 32)
 
-    # 32 fresh random bytes from the OS CSPRNG (BCryptGenRandom / /dev/urandom).
-    pub def gen_private() -> str:
-        return CryptoBytes.random(32)
+    pub def to_hex(key: str) -> str: return _cn_hex(key)
 
-    # Fresh keypair.
-    pub def keypair() -> X25519Keys:
-        mut k = X25519Keys()
-        k.private_key = X25519.gen_private()
-        k.public_key = X25519.public_key(k.private_key)
-        return k
-
-    # The private key after RFC 7748 clamping (clear bits 0-2 and 255, set bit 254):
-    # what is actually used as the scalar. Not needed for normal use.
-    pub def clamp(private_key: str) -> str:
-        if private_key.len() != 32: return ""
-        mut p: Pointer[char] = CryptoBytes.zeroed(32)
-        mut i = 0
-        while i < 32:
-            CryptoBytes.put(p, i, CryptoBytes.at(private_key, i))
-            i = i + 1
-        CryptoBytes.put(p, 0, CryptoBytes.get(p, 0) & 248)
-        CryptoBytes.put(p, 31, (CryptoBytes.get(p, 31) & 127) | 64)
-        return CryptoBytes.wrap(p, 32)
-
-    # Hex conveniences: hex in, hex out ("" on malformed input).
-    pub def public_key_hex(private_hex: str) -> str:
-        return Hex.encode(X25519.public_key(Hex.decode(private_hex)))
-
-    pub def shared_secret_hex(private_hex: str, peer_public_hex: str) -> str:
-        return Hex.encode(X25519.shared_secret(Hex.decode(private_hex), Hex.decode(peer_public_hex)))
-
-    pub def scalarmult_hex(scalar_hex: str, point_hex: str) -> str:
-        return Hex.encode(X25519.scalarmult(Hex.decode(scalar_hex), Hex.decode(point_hex)))
+    pub def from_hex(h: str) throws str -> str:
+        mut raw = _cn_unhex(h)?
+        if raw.len() != 32: raise("X25519: a key is 64 hex characters")
+        return raw

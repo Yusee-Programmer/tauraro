@@ -1,0 +1,212 @@
+# tests/lang/106_x509_tls.tr
+# std.crypto.aead, std.crypto.pk (RSA / ECDSA / ECDH / PEM), std.crypto.x509
+# (parsing, chain + host-name verification) and std.net.tls offline failure
+# paths. Keys, signatures and certificates were produced by pyca/cryptography;
+# the P-256 key is RFC 6979 appendix A.2.5's. Live TLS handshakes are exercised
+# manually against public servers and OpenSSL (no network in the suite).
+
+from std.test import TestRunner
+from std.crypto.native import ALG_SHA256, ALG_SHA384, ALG_SHA512, _cn_hex, _cn_unhex
+from std.crypto.aead import Aead, AEAD_AES_128_GCM, AEAD_AES_256_GCM, AEAD_CHACHA20_POLY1305
+from std.crypto.pk import PKey, Pem, KEY_RSA, KEY_EC_P256, KEY_EC_P384, SIG_PKCS1, SIG_PSS, CURVE_P256, CURVE_P384
+from std.crypto.x509 import Certificate, TrustStore, X509, PURPOSE_SERVER, PURPOSE_CLIENT, KU_DIGITAL_SIGNATURE, KU_KEY_CERT_SIGN, EKU_SERVER_AUTH
+from std.net.tls import TlsStream, TlsOptions
+
+def unhex(h: str) -> str:
+    mut r: Result[str, str] = _cn_unhex(h)
+    return r.ok
+
+def hx(s: str) -> str:
+    return _cn_hex(s)
+
+def rsa_priv() -> str:
+    return "-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEAqUGPwe7KVuDqM/0BnLlSsuDRRSUPz3aoti+hYd5jDVLunia7\nhHP44oFbgJtzJQt48dFbJ4edCka7cFyIMcgtN5v2c6MAydsGcoVXcREBUC24CYuH\n0Mo7l+HzLNPNJUIZw00W31VK1c+cci7L17dnhIpXPxXrUdI7c4mx6ckMp7otSM/A\n4qdHo3LIFhekp6m/3HdJaWWXO5m/lS+XZohkBRY3NRCULJvi12UnMif35csBpHGH\nYJ+lFrmQT7KdSe1iC4U/rB6m1gb4vPv+GkS7ba3XGe8yii9QanOdcz7I0asWHYob\n+I4s63RhTEwvF2EEzmYY1jqJzkWAd2WnGyx7EQIDAQABAoIBACU6QyMiAVW+Fy1T\nqRreZTrseYMGnZVhcUbPL6Ud27YGx264MLb3pia10pk1N8yOWy3/ARhu+uLTf289\nnwQqFg386yZwlCAR4Xdnbj3zglEvGSNaUgdhr91eiJTTyjO3eACtsEnzkef4x92S\nfunl0GpF3l5FFTL0NXjacKwt+S9bxyna+gXmg74FpKs8TAoSuWKtPfFnkHwVUo8B\nHXrf1r2WyF6pTn9eB1qzCKj6nFWPVimD2ft6U+3lTRZYbyabVDRHdlSS348DbEDS\nvimB16m5B7UDxUIeZ2VMXIAWM+9cYs9AJrj9bmpseNCSrmxJReWXpzBl+zuEy7Tt\nVfpy7RUCgYEA4sUDW0UtdTvBrTREuiNe+JizcFvS1vTrkSbnGLl5h+ltQ5bsxNWV\nzAeE9P/6cht/qMVcEhWpVjrgRnB4e10v60v6dm7WV3AQx5AGDfqAMhatRk0UMeXO\nPfaeilFn55ntRLZiFWmXdo6RfbDbfRu1tJHKlLTroaE1wY9CZ9f0yDUCgYEAvxK1\nE4l1y/v7YY79RbJgw/aTPgAW0nxlzvwnDcYo9byFfaxBcGBXuLe5hu5jnN2iy70W\nWKCf2yRpDX7jy1rc+0pf70jCqrqeFiQjgUFkFwwAAwraxpH6NVMDMg1zw1u5v31v\nuv0owrMOy6GF36XjDHNnX5kEpJVBqfba7WUK2u0CgYAVKnheu307tQElznwft490\nuqP898UdJS0bljr5ts4eHm6BYYPl912M9qK1T3Mr1V87/HfUhEsS7lnimTrVoOQJ\nHUVaaov9C0u1pL677Uar5iv0JNuesKloZS11EZYWKurXgAJ1py5o9XOk/K3v5nc2\nTGlRKfXYVziyQVHcaW7ChQKBgBTx6AeMOe1yYcv/8KODOjhA/0L8n4PTPxXBbkaE\nQlktoTR1fXbkGLmW6i9wUlsPsJjE0X5FnUBYbWudTTstaqvhK0L/ptcwPcQPkhTJ\nJj+ggR/UQMcjmVnfD6qc7uOrWmEzTtwghCdTmXuY6SPq+0iSHfLMw0WHVvtapAUB\n3n7BAoGBALpdWUwpoWfZZEFdM4ZFtjTgFlHvaR2lPpe7Fgas9oiYrdgWRIDcs9vj\nWY2vT5XxVgGYIA2ukgu+oc5uPjOYHPRPO4CG6YltdJqtlQUBqpYXOFV/D6UWBM6Z\nf9+MRGmhZoJZ9zXZQvSt1iNE3jT5O/ZGabIj/BaohF9jXZvnEOKu\n-----END RSA PRIVATE KEY-----\n"
+
+def rsa_pub() -> str:
+    return "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAqUGPwe7KVuDqM/0BnLlS\nsuDRRSUPz3aoti+hYd5jDVLunia7hHP44oFbgJtzJQt48dFbJ4edCka7cFyIMcgt\nN5v2c6MAydsGcoVXcREBUC24CYuH0Mo7l+HzLNPNJUIZw00W31VK1c+cci7L17dn\nhIpXPxXrUdI7c4mx6ckMp7otSM/A4qdHo3LIFhekp6m/3HdJaWWXO5m/lS+XZohk\nBRY3NRCULJvi12UnMif35csBpHGHYJ+lFrmQT7KdSe1iC4U/rB6m1gb4vPv+GkS7\nba3XGe8yii9QanOdcz7I0asWHYob+I4s63RhTEwvF2EEzmYY1jqJzkWAd2WnGyx7\nEQIDAQAB\n-----END PUBLIC KEY-----\n"
+
+def ec_priv() -> str:
+    return "-----BEGIN PRIVATE KEY-----\nMIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgya+p2EW6dRZrXCFX\nZ7HWk05Qw9s26JsSe4piKxIPZyGhRANCAARg/tS6JVqdMclh63TGNW1owEm4kjth\n+mzmaWIuYPKftnkD/hAIuLyZpBrp6VYovGTy8bIMLX6fUXejwpTURiKZ\n-----END PRIVATE KEY-----\n"
+
+def root_pem() -> str:
+    return "-----BEGIN CERTIFICATE-----\nMIIBfDCCASKgAwIBAgICEJIwCgYIKoZIzj0EAwIwMzEVMBMGA1UECgwMVGF1cmFy\nbyBUZXN0MRowGAYDVQQDDBFUYXVyYXJvIFRlc3QgUm9vdDAeFw0yNjAxMDEwMDAw\nMDBaFw0zNjAxMDEwMDAwMDBaMDMxFTATBgNVBAoMDFRhdXJhcm8gVGVzdDEaMBgG\nA1UEAwwRVGF1cmFybyBUZXN0IFJvb3QwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNC\nAARM/DWusRyCcmME0/44rYTEfQlQ4q53FzNoBSLapmiw+Xx7UmbQITXazbsMaDhZ\n4iJY48nIwDaZclO5vpdx/gLBoyYwJDASBgNVHRMBAf8ECDAGAQH/AgEAMA4GA1Ud\nDwEB/wQEAwIBBjAKBggqhkjOPQQDAgNIADBFAiAtuDTvHrpGzLDMSWHZQZTc5jth\n6oImrf80hld1+yP6ogIhAOq6CODgo+f3EIRMrqGvrPJDS6odeoY41NsH/bHtzBk2\n-----END CERTIFICATE-----\n"
+
+def leaf_pem() -> str:
+    return "-----BEGIN CERTIFICATE-----\nMIIB4DCCAYagAwIBAgIEEjSrzTAKBggqhkjOPQQDAjAzMRUwEwYDVQQKDAxUYXVy\nYXJvIFRlc3QxGjAYBgNVBAMMEVRhdXJhcm8gVGVzdCBSb290MB4XDTI2MDEwMTAw\nMDAwMFoXDTM2MDEwMTAwMDAwMFowMjEVMBMGA1UECgwMVGF1cmFybyBUZXN0MRkw\nFwYDVQQDDBBhcGkudGF1cmFyby50ZXN0MHYwEAYHKoZIzj0CAQYFK4EEACIDYgAE\nNgsDm/T49Vo1npWSQ/tCnToVl/YBN23xfIKkQtpZKlSywVDIvdQrc8v151LBkWD2\nvQap5P/V7rhg85IAlU2nu8BbZfNQivRFSq7F+EbGdT4lOw0ivpEO2uHyhss8wU2l\no2wwajAMBgNVHRMBAf8EAjAAMDUGA1UdEQQuMCyCEGFwaS50YXVyYXJvLnRlc3SC\nEiouY2RuLnRhdXJhcm8udGVzdIcEwAACBzATBgNVHSUEDDAKBggrBgEFBQcDATAO\nBgNVHQ8BAf8EBAMCB4AwCgYIKoZIzj0EAwIDSAAwRQIhAN1BO3QOGbwxuWKoXJWA\nhyYFgkUQVngue5+rkFflBLesAiBakMOyfm0vYbW7VXeuAmpgnFm38V3qVMmFOxFY\nD8u0tQ==\n-----END CERTIFICATE-----\n"
+
+def test_aead(t: TestRunner):
+    t.section("AEAD (pyca/cryptography vectors)")
+    mut key = unhex("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f")
+    mut key16 = key.slice(0, 16)
+    mut nonce = unhex("000102030405060708090a0b")
+    mut pt = "attack at dawn" + unhex("0021")
+    mut g1: Result[str, str] = Aead.seal(AEAD_AES_128_GCM, key16, nonce, "hdr", pt)
+    t.assert_eq_str(hx(g1.ok), "f218d3af0570d7353ff205eb41cd702918e383adc43a597141b10573addac7d6", "AES-128-GCM seal")
+    mut g2: Result[str, str] = Aead.seal(AEAD_AES_256_GCM, key, nonce, "hdr", pt)
+    t.assert_eq_str(hx(g2.ok), "2676a27aa68ee27af961f3eac687784c9e30432f233e9ba4162291798217c791", "AES-256-GCM seal")
+    mut c3: Result[str, str] = Aead.seal(AEAD_CHACHA20_POLY1305, key, nonce, "hdr", pt)
+    t.assert_eq_str(hx(c3.ok), "e88f7c614a7c8521c3a35b92ef730e42acbadad9d2acf03888f41505d0fba714", "ChaCha20-Poly1305 seal")
+    mut o1: Result[str, str] = Aead.open(AEAD_AES_256_GCM, key, nonce, "hdr", g2.ok)
+    t.assert_true(o1.ok == pt, "open round trip (binary plaintext)")
+    mut o2: Result[str, str] = Aead.open(AEAD_AES_256_GCM, key, nonce, "HDR", g2.ok)
+    t.assert_true(o2.is_err, "wrong associated data rejected")
+    mut tampered = g2.ok.slice(0, 3) + "X" + g2.ok.slice(4, g2.ok.len())
+    mut o3: Result[str, str] = Aead.open(AEAD_AES_256_GCM, key, nonce, "hdr", tampered)
+    t.assert_true(o3.is_err, "modified ciphertext rejected")
+    mut o4: Result[str, str] = Aead.open(AEAD_CHACHA20_POLY1305, key, nonce, "hdr", c3.ok)
+    t.assert_true(o4.ok == pt, "ChaCha20-Poly1305 open")
+    mut badkey: Result[str, str] = Aead.seal(AEAD_AES_128_GCM, key, nonce, "", "x")
+    t.assert_true(badkey.is_err, "wrong key size raises")
+
+def test_rsa(t: TestRunner):
+    t.section("RSA keys and signatures")
+    mut kr: Result[PKey, str] = PKey.from_pem(rsa_priv())
+    t.assert_true(kr.is_ok, "parse PKCS#1 RSA private key")
+    mut k = kr.ok
+    t.assert_eq_int(k.kind(), KEY_RSA, "kind")
+    t.assert_eq_int(k.bits(), 2048, "bits")
+    t.assert_true(k.has_private(), "has private")
+    mut pr: Result[PKey, str] = PKey.from_pem(rsa_pub())
+    mut pubk = pr.ok
+    t.assert_false(pubk.has_private(), "public key has no private part")
+    mut want = unhex("1fc142aee59064f30056b51c05774762a294badf7c6fc8c6ae89510a2e6a9dd1f4984980b8284be220f33ff59201e642a10fc9466c815b61a7dd13274330433a84450e83ce278272e430be73a418acd1b77bafaf116f37988f93a21718b824480ee7982303d851bc4c61eabc389a1f61d2adcbfafb59df937898864e41aaf6058a97815e993a24ba725bfdc14983f76feb09a7d272ca82f057c0ce1f76698ede8e75b71190770a4e1977908510f67d5d3d90fea6bd494fd1c43652400352c33d4157b2a30d69dbf08efb68ee42ac75f0b821b4da7c72f27d87a5a993defdb55ec7360a47fde34de5f97bbe5b4eeec542ed8dd42030f6509d24b4dcfe4fbad6da")
+    mut s1: Result[str, str] = k.sign("tauraro", ALG_SHA256, SIG_PKCS1)
+    t.assert_true(s1.ok == want, "PKCS#1 v1.5 signature matches pyca/cryptography")
+    t.assert_true(pubk.verify("tauraro", want, ALG_SHA256, SIG_PKCS1), "verify PKCS#1 v1.5")
+    t.assert_false(pubk.verify("tauraro!", want, ALG_SHA256, SIG_PKCS1), "reject other message")
+    mut pss = unhex("1a3864f156345356b2cbeef399d7edf2dadcba2ccf8266aac0ecf4288a6eef8c8af063dd89c5f2860794e2a68f82b0e22922aa1ce3316e6a1d175f23d5849218312fab4c4801c8f4560b86d2e86fd2aad51f6778a9b453eb0f474e7e205cac346116b62445cb89bc21fa0ad5f22a0061c303f8f2f6774e35075d1fad741bc3713f71243f51299fcda7f266ae8e205a4e26375e3b0a8a555fb2e72db0a9e367b533ab4f2836ab6e7e4d67a3a028794485423cd9ac1dbb792d2030aeb2b86b85c0b5ff264afbc31d9ddeed4dfe659563bf4e7a52dab1a22e3dee67ce63a483a121bb78c722aee0d5fa79e80b7c227967f1ba93cacfb3ccddb3e32ea9757f5d814f")
+    t.assert_true(pubk.verify("tauraro", pss, ALG_SHA256, SIG_PSS), "verify external PSS signature")
+    mut s2: Result[str, str] = k.sign("hello", ALG_SHA512, SIG_PSS)
+    t.assert_true(pubk.verify("hello", s2.ok, ALG_SHA512, SIG_PSS), "PSS sign/verify round trip")
+    t.assert_false(pubk.verify("hello", s2.ok, ALG_SHA512, SIG_PKCS1), "PSS signature is not PKCS#1")
+    mut ns: Result[str, str] = pubk.sign("x", ALG_SHA256, SIG_PKCS1)
+    t.assert_true(ns.is_err, "signing with a public key raises")
+    mut der: Result[str, str] = Pem.decode(rsa_pub(), "PUBLIC KEY")
+    mut again = Pem.encode(der.ok, "PUBLIC KEY")
+    t.assert_eq_str(again, rsa_pub(), "PEM encode/decode round trip")
+    t.assert_eq_str(Pem.label_of(rsa_priv(), 0), "RSA PRIVATE KEY", "PEM label")
+    mut bad: Result[PKey, str] = PKey.from_der("not a key")
+    t.assert_true(bad.is_err, "garbage DER rejected")
+    k.dispose()
+    pubk.dispose()
+
+def test_ec(t: TestRunner):
+    t.section("ECDSA (RFC 6979) and ECDH")
+    mut kr: Result[PKey, str] = PKey.from_pem(ec_priv())
+    mut k = kr.ok
+    t.assert_eq_int(k.kind(), KEY_EC_P256, "P-256 key")
+    mut raw: Result[str, str] = k.sign_raw("sample", ALG_SHA256)
+    t.assert_eq_str(hx(raw.ok), "efd48b2aacb6a8fd1140dd9cd45e81d69d2c877b56aaf991c34d0ea84eaf3716f7cb1c942d657c41d436c7a1b6e29f65f3e900dbb9aff4064dc4ab2f843acda8", "RFC 6979 A.2.5 deterministic signature")
+    t.assert_true(k.verify_raw("sample", raw.ok, ALG_SHA256), "verify raw r||s")
+    mut py = unhex("3045022100b6cff479fd43f796856780bf4716741ccc5256dd736a2a382ab5b71245f6550c02200b3ff90757a38e2bc70ae5d3f71ce1ebd0c9b0e607bb7efdbaf7e9a468066686")
+    t.assert_true(k.verify("tauraro", py, ALG_SHA384, 0), "verify pyca/cryptography DER signature")
+    mut der: Result[str, str] = k.sign("msg", ALG_SHA256, 0)
+    t.assert_true(k.verify("msg", der.ok, ALG_SHA256, 0), "DER sign/verify")
+    t.assert_false(k.verify("msh", der.ok, ALG_SHA256, 0), "reject other message")
+    mut pubbytes = k.public_bytes()
+    t.assert_eq_int(pubbytes.len(), 65, "uncompressed point")
+    mut pk2: Result[PKey, str] = PKey.ec_from_public(CURVE_P256, pubbytes)
+    t.assert_true(pk2.ok.verify("msg", der.ok, ALG_SHA256, 0), "public-only key verifies")
+    mut a: Result[PKey, str] = PKey.generate_ec(CURVE_P384)
+    mut b: Result[PKey, str] = PKey.generate_ec(CURVE_P384)
+    t.assert_eq_int(a.ok.kind(), KEY_EC_P384, "generated P-384")
+    mut s1: Result[str, str] = a.ok.shared_secret(b.ok.public_bytes())
+    mut s2: Result[str, str] = b.ok.shared_secret(a.ok.public_bytes())
+    t.assert_eq_int(s1.ok.len(), 48, "ECDH secret size")
+    t.assert_true(s1.ok == s2.ok, "ECDH agreement")
+    mut offcurve = "\x04" + pubbytes.slice(1, 64) + "\x00"
+    mut bad: Result[PKey, str] = PKey.ec_from_public(CURVE_P256, offcurve)
+    t.assert_true(bad.is_err, "point not on the curve rejected")
+    mut priv: Result[str, str] = k.ec_private_bytes()
+    t.assert_eq_str(hx(priv.ok), "c9afa9d845ba75166b5c215767b1d6934e50c3db36e89b127b8a622b120f6721", "private scalar")
+    k.dispose()
+
+def test_x509(t: TestRunner):
+    t.section("X.509 parsing")
+    mut lr: Result[Certificate, str] = Certificate.from_pem(leaf_pem())
+    mut rr: Result[Certificate, str] = Certificate.from_pem(root_pem())
+    mut leaf = lr.ok
+    mut root = rr.ok
+    t.assert_eq_str(leaf.subject(), "O=Tauraro Test, CN=api.tauraro.test", "subject")
+    t.assert_eq_str(leaf.issuer(), "O=Tauraro Test, CN=Tauraro Test Root", "issuer")
+    t.assert_eq_str(leaf.serial_hex(), "1234abcd", "serial")
+    mut names = leaf.dns_names()
+    t.assert_eq_int(len(names), 2, "two DNS names")
+    t.assert_eq_str(names[1], "*.cdn.tauraro.test", "wildcard SAN")
+    mut ips = leaf.ip_addresses()
+    t.assert_eq_str(ips[0], "192.0.2.7", "IP SAN")
+    t.assert_eq_int(leaf.not_before(), 1767225600, "notBefore")
+    t.assert_eq_int(leaf.not_after(), 2082758400, "notAfter")
+    t.assert_eq_int(leaf.version(), 3, "v3")
+    t.assert_false(leaf.is_ca(), "leaf is not a CA")
+    t.assert_true(root.is_ca(), "root is a CA")
+    t.assert_eq_int(root.path_len(), 0, "pathLenConstraint")
+    t.assert_true((root.key_usage() & KU_KEY_CERT_SIGN) != 0, "keyCertSign")
+    t.assert_eq_int(leaf.key_usage(), KU_DIGITAL_SIGNATURE, "leaf key usage")
+    t.assert_eq_int(leaf.ext_key_usage(), EKU_SERVER_AUTH, "serverAuth")
+    t.assert_eq_str(leaf.signature_algorithm(), "ecdsa-with-SHA256", "signature algorithm")
+    t.assert_eq_str(leaf.key_algorithm(), "EC P-384", "key algorithm")
+    t.assert_eq_int(leaf.key_bits(), 384, "key bits")
+    t.assert_eq_str(leaf.fingerprint_sha256(), "dabffcd3a5b00e0a5fd52dca5d4ed9e75395fcad005d6024df687feeb5f9f063", "SHA-256 fingerprint")
+    t.assert_true(leaf.is_signed_by(root), "leaf signed by root")
+    t.assert_false(root.is_signed_by(leaf), "root not signed by leaf")
+    t.assert_true(root.is_self_signed(), "root self-signed")
+    t.assert_eq_str(leaf.to_pem(), leaf_pem(), "PEM round trip")
+    t.assert_true(leaf.matches_host("api.tauraro.test"), "exact host")
+    t.assert_true(leaf.matches_host("API.Tauraro.Test"), "host match is case-insensitive")
+    t.assert_true(leaf.matches_host("img.cdn.tauraro.test"), "wildcard host")
+    t.assert_false(leaf.matches_host("a.b.cdn.tauraro.test"), "wildcard covers one label")
+    t.assert_false(leaf.matches_host("cdn.tauraro.test"), "wildcard needs a label")
+    t.assert_true(leaf.matches_host("192.0.2.7"), "IP host")
+    t.assert_false(leaf.matches_host("192.0.2.8"), "other IP")
+    t.assert_true(leaf.is_valid_at(1767225600 + 10), "valid inside window")
+    mut pkr: Result[PKey, str] = leaf.public_key()
+    t.assert_eq_int(pkr.ok.kind(), KEY_EC_P384, "certificate public key")
+    mut badc: Result[Certificate, str] = Certificate.from_der("junk")
+    t.assert_true(badc.is_err, "junk certificate rejected")
+
+    t.section("X.509 chain verification")
+    mut store = TrustStore.empty()
+    t.assert_eq_int(store.add_pem(root_pem()), 1, "root added")
+    mut chain: List[Certificate] = [leaf]
+    mut now = 1767225600 + 86400
+    t.assert_eq_int(X509.verify(store, chain, "api.tauraro.test", now, PURPOSE_SERVER), 0, "valid chain")
+    t.assert_eq_int(X509.verify(store, chain, "x.cdn.tauraro.test", now, PURPOSE_SERVER), 0, "valid via wildcard")
+    t.assert_eq_int(X509.verify(store, chain, "", now, PURPOSE_SERVER), 0, "no host check")
+    t.assert_eq_int(X509.verify(store, chain, "evil.test", now, PURPOSE_SERVER), -3, "host mismatch")
+    t.assert_eq_int(X509.verify(store, chain, "api.tauraro.test", 2082758400 + 1, PURPOSE_SERVER), -2, "expired")
+    t.assert_eq_int(X509.verify(store, chain, "api.tauraro.test", now, PURPOSE_CLIENT), -8, "wrong purpose")
+    t.assert_eq_str(X509.error_text(-3), "certificate does not match the host name", "error text")
+    mut empty = TrustStore.empty()
+    t.assert_eq_int(X509.verify(empty, chain, "api.tauraro.test", now, PURPOSE_SERVER), -4, "untrusted root")
+    mut pinned = TrustStore.empty()
+    mut ar: Result[bool, str] = add_cert(pinned, leaf)
+    t.assert_eq_int(X509.verify(pinned, chain, "api.tauraro.test", now, PURPOSE_SERVER), 0, "pinned leaf accepted")
+    mut sys = TrustStore.system()
+    t.assert_true(sys.count() >= 0, "system store loads (may be empty on minimal hosts)")
+    store.dispose()
+
+def add_cert(s: TrustStore, c: Certificate) throws str -> bool:
+    s.add(c)?
+    return true
+
+def test_tls_offline(t: TestRunner):
+    t.section("TLS failure paths (offline)")
+    mut opts = TlsOptions.default()
+    opts.timeout_ms = 2000
+    mut r: Result[TlsStream, str] = TlsStream.connect_with("127.0.0.1", 1, opts)
+    t.assert_true(r.is_err, "connection refused")
+    t.assert_starts_with(r.err, "TLS:", "error is prefixed")
+    mut r2: Result[TlsStream, str] = TlsStream.connect_with("no-such-host.invalid", 443, opts)
+    t.assert_true(r2.is_err, "unresolvable host")
+    mut ins = TlsOptions.insecure()
+    t.assert_false(ins.verify, "insecure() disables verification")
+
+def main():
+    mut t = TestRunner.init("106_x509_tls")
+    test_aead(t)
+    test_rsa(t)
+    test_ec(t)
+    test_x509(t)
+    test_tls_offline(t)
+    t.summary()

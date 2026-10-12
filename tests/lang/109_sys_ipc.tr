@@ -1,0 +1,288 @@
+# tests/lang/109_sys_ipc.tr
+# std.sys.mmap (file + anonymous maps), std.sys.shm (named segments and
+# semaphores), std.sys.pipe (pipes, FIFOs) and std.sys.unix_socket
+# (listener/stream, socketpair, descriptor passing). Cross-process behaviour
+# is exercised with two mappings / two handles of the same named object.
+
+from std.test import TestRunner
+from std.sys.mmap import MemoryMap, MAP_READ, MAP_READ_WRITE, MAP_COPY
+from std.sys.shm import SharedMemory, NamedSemaphore
+from std.sys.pipe import Pipe, PipeEnd, Fifo
+from std.sys.unix_socket import UnixListener, UnixStream
+from std.sys.platform import Platform
+from std.sys.process import Process
+from std.sys.fs import Fs
+from std.io.file import File
+from std.sys.time import Clock
+
+def tmp_path(name: str) -> str:
+    mut pid = Process.get_pid()
+    if Platform.is_windows(): return f"tauraro_ipc_{pid}_{name}"
+    return f"/tmp/tauraro_ipc_{pid}_{name}"
+
+def test_mmap(t: TestRunner):
+    t.section("mmap: files")
+    mut path = tmp_path("map.bin")
+    File.write_text(path, "0123456789abcdefghij")
+    mut r: Result[MemoryMap, str] = MemoryMap.open(path, MAP_READ)
+    t.assert_true(r.is_ok, "map a file read-only")
+    mut m = r.ok
+    t.assert_eq_int(m.len(), 20, "length")
+    mut head: Result[str, str] = m.read(0, 4)
+    t.assert_eq_str(head.ok, "0123", "read")
+    t.assert_eq_int(m.byte_at(10), 97, "byte_at")
+    t.assert_eq_int(m.find("cde", 0), 12, "find")
+    t.assert_eq_int(m.find("cde", 13), -1, "find from offset")
+    t.assert_false(m.is_writable(), "read-only map")
+    mut w: Result[bool, str] = wr(m, 0, "X")
+    t.assert_true(w.is_err, "write to a read-only map raises")
+    mut oob: Result[str, str] = m.read(18, 5)
+    t.assert_true(oob.is_err, "read past the end raises")
+    m.close()
+
+    mut rw: Result[MemoryMap, str] = MemoryMap.open(path, MAP_READ_WRITE)
+    mut m2 = rw.ok
+    mut w2: Result[bool, str] = wr(m2, 2, "AB")
+    t.assert_true(w2.is_ok, "write through a shared map")
+    mut f: Result[bool, str] = fl(m2)
+    m2.close()
+    t.assert_eq_str(File.read_text(path), "01AB456789abcdefghij", "file changed")
+
+    mut cp: Result[MemoryMap, str] = MemoryMap.open(path, MAP_COPY)
+    mut m3 = cp.ok
+    mut w3: Result[bool, str] = wr(m3, 0, "zz")
+    mut all = m3.read_all()
+    t.assert_eq_str(all.slice(0, 4), "zzAB", "copy-on-write map sees its own write")
+    m3.close()
+    t.assert_eq_str(File.read_text(path), "01AB456789abcdefghij", "file untouched by a copy map")
+
+    mut rg: Result[MemoryMap, str] = MemoryMap.open_range(path, MAP_READ, 10, 5)
+    t.assert_eq_str(rg.ok.read_all(), "abcde", "offset + length range")
+    rg.ok.close()
+    mut missing: Result[MemoryMap, str] = MemoryMap.open(tmp_path("nope"), MAP_READ)
+    t.assert_true(missing.is_err, "missing file raises")
+    Fs.delete(path)
+
+    t.section("mmap: anonymous")
+    mut a: Result[MemoryMap, str] = MemoryMap.anonymous(4096)
+    mut am = a.ok
+    t.assert_eq_int(am.byte_at(100), 0, "zero-filled")
+    mut sb: Result[bool, str] = setb(am, 100, 255)
+    t.assert_eq_int(am.byte_at(100), 255, "set_byte")
+    mut bin = "a" + "\0" + "b"
+    mut wb: Result[bool, str] = wr(am, 200, bin)
+    mut back: Result[str, str] = am.read(200, 3)
+    t.assert_true(back.ok == bin, "binary data round trip")
+    t.assert_eq_int(am.atomic_add(64, 5), 0, "atomic_add returns the old value")
+    t.assert_eq_int(am.atomic_add(64, 5), 5, "second add")
+    t.assert_true(am.atomic_cas(64, 10, 42), "cas succeeds on the expected value")
+    t.assert_false(am.atomic_cas(64, 10, 7), "cas fails otherwise")
+    t.assert_eq_int(am.atomic_load(64), 42, "atomic_load")
+    am.close()
+
+def wr(m: MemoryMap, off: int, data: str) throws str -> bool:
+    m.write(off, data)?
+    return true
+
+def fl(m: MemoryMap) throws str -> bool:
+    m.flush()?
+    return true
+
+def setb(m: MemoryMap, i: int, v: int) throws str -> bool:
+    m.set_byte(i, v)?
+    return true
+
+def test_shm(t: TestRunner):
+    t.section("shared memory")
+    mut name = f"tauraro-test-{Process.get_pid()}"
+    mut c: Result[MemoryMap, str] = SharedMemory.create(name, 8192)
+    t.assert_true(c.is_ok, "create a segment")
+    if c.is_err:
+        print(c.err)
+        return
+    mut a = c.ok
+    mut o: Result[MemoryMap, str] = SharedMemory.open(name)
+    t.assert_true(o.is_ok, "open it by name")
+    mut b = o.ok
+    t.assert_true(b.len() >= 8192, "opened size")
+    mut w: Result[bool, str] = wr(a, 16, "shared hello")
+    mut got: Result[str, str] = b.read(16, 12)
+    t.assert_eq_str(got.ok, "shared hello", "write in one mapping, read in the other")
+    a.atomic_add(0, 3)
+    b.atomic_add(0, 4)
+    t.assert_eq_int(a.atomic_load(0), 7, "atomics across mappings")
+    mut dup: Result[MemoryMap, str] = SharedMemory.create_new(name, 100)
+    t.assert_true(dup.is_err, "create_new refuses an existing name")
+    b.close()
+    a.close()
+    mut u: Result[bool, str] = unl(name)
+    if not Platform.is_windows():
+        mut gone: Result[MemoryMap, str] = SharedMemory.open(name)
+        t.assert_true(gone.is_err, "unlinked name is gone")
+
+    t.section("named semaphores")
+    mut sname = f"tauraro-sem-{Process.get_pid()}"
+    mut s: Result[NamedSemaphore, str] = NamedSemaphore.create(sname, 0)
+    t.assert_true(s.is_ok, "create")
+    if s.is_err: return
+    mut sem = s.ok
+    mut s2: Result[NamedSemaphore, str] = NamedSemaphore.open(sname)
+    mut other = s2.ok
+    mut tw: Result[bool, str] = sem.try_wait()
+    t.assert_false(tw.ok, "count 0: try_wait fails")
+    mut p: Result[bool, str] = post(other)
+    mut w1: Result[bool, str] = sem.wait(1000)
+    t.assert_true(w1.ok, "post through one handle, acquire through the other")
+    mut t0 = Clock.now_ms()
+    mut w2: Result[bool, str] = sem.wait(60)
+    t.assert_false(w2.ok, "timed wait times out")
+    t.assert_true(Clock.now_ms() - t0 >= 40, "waited about the timeout")
+    other.close()
+    sem.close()
+    mut su: Result[bool, str] = semunl(sname)
+
+def unl(name: str) throws str -> bool:
+    SharedMemory.unlink(name)?
+    return true
+
+def post(s: NamedSemaphore) throws str -> bool:
+    s.post()?
+    return true
+
+def semunl(name: str) throws str -> bool:
+    NamedSemaphore.unlink(name)?
+    return true
+
+class FifoJob implements Sendable:
+    pub path: str
+    pub done: Atomic[int]
+
+def fifo_writer(j: Shared[FifoJob]):
+    mut w: Result[PipeEnd, str] = Fifo.open_write(j.path)
+    if w.is_ok:
+        mut r: Result[bool, str] = pw(w.ok, "through the fifo")
+        w.ok.close()
+    j.done.store(1)
+
+def pw(p: PipeEnd, d: str) throws str -> bool:
+    p.write(d)?
+    return true
+
+def test_pipes(t: TestRunner):
+    t.section("pipes")
+    mut pr: Result[Pipe, str] = Pipe.create()
+    t.assert_true(pr.is_ok, "create")
+    mut p = pr.ok
+    mut data = "line1\n" + "\0" + "binary\n"
+    mut w: Result[bool, str] = pw(p.writer, data)
+    p.writer.close()
+    mut all: Result[str, str] = p.reader.read_all()
+    t.assert_true(all.ok == data, "binary data through a pipe")
+    mut eof: Result[str, str] = p.reader.read(10)
+    t.assert_eq_str(eof.ok, "", "end of stream after the writer closed")
+    p.reader.close()
+
+    if Platform.is_windows():
+        t.skip("FIFOs are POSIX only")
+        return
+    t.section("FIFOs")
+    mut path = tmp_path("fifo")
+    Fs.delete(path)
+    mut c: Result[bool, str] = mkf(path)
+    t.assert_true(c.is_ok, "mkfifo")
+    shared job = FifoJob()
+    job.path = path
+    job.done = Atomic.new(0)
+    mut th = Thread.spawn(fifo_writer, job)
+    mut r: Result[PipeEnd, str] = Fifo.open_read(path)
+    t.assert_true(r.is_ok, "open the read end")
+    mut text: Result[str, str] = r.ok.read_all()
+    t.assert_eq_str(text.ok, "through the fifo", "data from another thread")
+    r.ok.close()
+    th.join()
+    mut rm: Result[bool, str] = rmf(path)
+    t.assert_true(rm.is_ok, "remove")
+
+def mkf(path: str) throws str -> bool:
+    Fifo.create(path, 384)?
+    return true
+
+def rmf(path: str) throws str -> bool:
+    Fifo.remove(path)?
+    return true
+
+def test_unix(t: TestRunner):
+    t.section("Unix-domain sockets")
+    mut path = tmp_path("sock")
+    mut lr: Result[UnixListener, str] = UnixListener.bind(path)
+    if lr.is_err:
+        t.skip("AF_UNIX unavailable: " + lr.err)
+        return
+    mut l = lr.ok
+    mut cr: Result[UnixStream, str] = UnixStream.connect(path)
+    t.assert_true(cr.is_ok, "connect")
+    mut client = cr.ok
+    mut ar: Result[UnixStream, str] = l.accept(2000)
+    t.assert_true(ar.is_ok, "accept")
+    mut server = ar.ok
+    mut s1: Result[bool, str] = snd(client, "ping" + "\0" + "!")
+    mut got: Result[str, str] = server.recv_exact(6)
+    t.assert_true(got.ok == "ping" + "\0" + "!", "client -> server (binary)")
+    mut s2: Result[bool, str] = snd(server, "pong")
+    client.set_timeout(2000)
+    mut back: Result[str, str] = client.recv(100)
+    t.assert_eq_str(back.ok, "pong", "server -> client")
+    server.set_timeout(50)
+    mut to: Result[str, str] = server.recv(10)
+    t.assert_true(to.is_err, "recv timeout")
+    client.close()
+    server.set_timeout(2000)
+    mut eof: Result[str, str] = server.recv(10)
+    t.assert_eq_str(eof.ok, "", "peer closed")
+    server.close()
+    mut late: Result[UnixStream, str] = l.accept(30)
+    t.assert_true(late.is_err, "accept timeout")
+    l.close()
+    t.assert_false(File.file_exists(path), "socket file removed on close")
+    mut nobody: Result[UnixStream, str] = UnixStream.connect(path)
+    t.assert_true(nobody.is_err, "connect to a missing socket fails")
+
+    if Platform.is_windows(): return
+    t.section("socketpair and descriptor passing")
+    mut pr: Result[List[UnixStream], str] = UnixStream.pair()
+    mut a = pr.ok[0]
+    mut b = pr.ok[1]
+    mut x: Result[bool, str] = snd(a, "over the pair")
+    mut y: Result[str, str] = b.recv(100)
+    t.assert_eq_str(y.ok, "over the pair", "socketpair")
+    mut pipe_r: Result[Pipe, str] = Pipe.create()
+    mut p = pipe_r.ok
+    mut sf: Result[bool, str] = sfd(a, p.writer.fd)
+    t.assert_true(sf.is_ok, "send_fd")
+    mut nf: Result[int, str] = b.recv_fd()
+    t.assert_true(nf.is_ok and nf.ok >= 0, "recv_fd")
+    mut passed = PipeEnd.from_fd(nf.ok)
+    mut pw2: Result[bool, str] = pw(passed, "via passed fd")
+    passed.close()
+    p.writer.close()
+    mut rd: Result[str, str] = p.reader.read_all()
+    t.assert_eq_str(rd.ok, "via passed fd", "write through the received descriptor")
+    p.reader.close()
+    a.close()
+    b.close()
+
+def snd(s: UnixStream, d: str) throws str -> bool:
+    s.send(d)?
+    return true
+
+def sfd(s: UnixStream, fd: int) throws str -> bool:
+    s.send_fd(fd)?
+    return true
+
+def main():
+    mut t = TestRunner.init("109_sys_ipc")
+    test_mmap(t)
+    test_shm(t)
+    test_pipes(t)
+    test_unix(t)
+    t.summary()

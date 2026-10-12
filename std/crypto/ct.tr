@@ -1,0 +1,34 @@
+# std.crypto.ct -- constant-time helpers.
+#
+# Comparing secrets (MACs, password hashes, API tokens, OTP codes) with `==`
+# leaks, through timing, how many leading bytes matched. These helpers take
+# time that depends only on the lengths of their inputs.
+#
+# Usage:
+#   from std.crypto.ct import ConstantTime
+#   if ConstantTime.eq(expected_tag, received_tag): ...
+
+from std.crypto.native import trc_ct_eq
+
+pub class ConstantTime:
+    _dummy: int
+
+extend ConstantTime:
+    # True if a and b hold the same bytes (binary-safe, uses real lengths).
+    # Unequal lengths return false; only the lengths themselves can leak.
+    pub def eq(a: str, b: str) -> bool:
+        mut ap = a as Pointer[char]
+        mut bp = b as Pointer[char]
+        return trc_ct_eq(ap, a.len(), bp, b.len()) == 1
+
+    # Compare exactly n bytes of a and b (both must hold at least n bytes).
+    pub def eq_n(a: str, b: str, n: int) -> bool:
+        mut ap = a as Pointer[char]
+        mut bp = b as Pointer[char]
+        return trc_ct_eq(ap, n, bp, n) == 1
+
+    # Branch-free select: a when cond is true, otherwise b.
+    pub def select(cond: bool, a: int, b: int) -> int:
+        mut m = 0
+        if cond: m = -1
+        return (a & m) | (b & (~m))

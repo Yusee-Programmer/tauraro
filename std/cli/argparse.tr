@@ -1,0 +1,1315 @@
+# std.cli.argparse -- declarative command-line parsing with subcommands,
+# typed values and generated help.
+#
+# Declare arguments with `Arg` builders, add them to an `ArgParser`, then
+# `parse(args)` (raises with a usage message) or `parse_or_exit(args)`
+# (prints help / version / errors and exits):
+#
+#   from std.cli.argparse import ArgParser, Arg, Namespace
+#   mut p = ArgParser.init("tool", "Process some files.")
+#   p.version("1.4.0")
+#   p.add(Arg.count("verbose", "v", "More output (repeat for more)"))
+#   p.add(Arg.option("output", "o", "Write results to FILE").value_name("FILE").default_value("out.txt").from_env("TOOL_OUT"))
+#   p.add(Arg.option("jobs", "j", "Parallel jobs").of_int().default_value("4"))
+#   p.add(Arg.option("format", "f", "Output format").one_of(["json", "yaml", "text"]))
+#   p.add(Arg.option("tag", "t", "Add a tag").repeatable())
+#   p.add(Arg.flag("color", "", "Colored output").allow_negation())       # --color / --no-color
+#   p.add(Arg.positional("inputs", "Files to process").count_range(1, -1))
+#   mut build = p.command("build", "Build the project").also("b")
+#   build.add(Arg.flag("release", "r", "Optimised build"))
+#   mut ns = p.parse_or_exit(args)
+#   ns.count("verbose"); ns.get("output"); ns.get_int("jobs"); ns.list("tag"); ns.list("inputs")
+#   if ns.command == "build": ns.sub.flag("release")
+#
+# Supported syntax: --long value, --long=value, -s value, -svalue, clustered
+# short flags (-vvx), --no-<flag> for negatable flags, `--` to end options,
+# negative numbers as values, @file response files (one shell-quoted
+# argument list per file, `#` comments allowed; enable with
+# response_files(true)). Unknown options get "did you mean" suggestions.
+#
+# Value precedence: command line, then the environment variable, then the
+# default. Help is generated (wrapped to `width` columns) for every command;
+# `tool help <command>` also works. `completion_script("bash"|"zsh"|"fish")`
+# returns a shell completion script.
+
+from std.core.string import StringBuilder
+from std.text.distance import Distance
+from std.text.shlex import Shlex
+from std.io.file import File
+from std.sys.process import Process
+from std.sys.env import Env
+from std.core.vec import Vec
+
+extern "C":
+    def _tr_getenv(name: str) -> Pointer[char]
+    def _tr_eprint(s: str)
+
+pub const ARG_FLAG = 1
+pub const ARG_COUNT = 2
+pub const ARG_OPTION = 3
+pub const ARG_POSITIONAL = 4
+
+pub const TYPE_STR = 1
+pub const TYPE_INT = 2
+pub const TYPE_FLOAT = 3
+pub const TYPE_BOOL = 4
+
+# ─── helpers ─────────────────────────────────────────────────────────────────
+
+def _ap_byte(s: str, i: int) -> int:
+    mut p = s as Pointer[char]
+    unsafe:
+        return (p.offset(i).read() as int) & 255
+
+def _ap_env(name: str) -> str:
+    mut p = _tr_getenv(name)
+    if p as int == 0: return ""
+    mut v = p as str
+    return v + ""
+
+# Separator for multi-valued entries (ASCII unit separator, never typed).
+def _ap_sep() -> str:
+    mut sb = StringBuilder.init(2)
+    sb.append_char(31)
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+def _ap_split_sep(s: str) -> List[str]:
+    mut out: List[str] = []
+    if s.len() == 0: return out
+    mut start = 0
+    mut i = 0
+    while i < s.len():
+        if _ap_byte(s, i) == 31:
+            out.append(s.slice(start, i))
+            start = i + 1
+        i = i + 1
+    out.append(s.slice(start, s.len()))
+    return out
+
+def _ap_upper(s: str) -> str:
+    mut sb = StringBuilder.init(s.len() + 1)
+    mut i = 0
+    while i < s.len():
+        mut c = _ap_byte(s, i)
+        if c >= 97 and c <= 122: c = c - 32
+        if c == 45: c = 95
+        sb.append_char(c)
+        i = i + 1
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+def _ap_is_int(s: str) -> bool:
+    if s.len() == 0: return false
+    mut i = 0
+    if _ap_byte(s, 0) == 45 or _ap_byte(s, 0) == 43:
+        if s.len() == 1: return false
+        i = 1
+    while i < s.len():
+        mut c = _ap_byte(s, i)
+        if c < 48 or c > 57: return false
+        i = i + 1
+    return true
+
+def _ap_is_float(s: str) -> bool:
+    if s.len() == 0: return false
+    mut i = 0
+    mut digits = 0
+    mut dots = 0
+    mut exp = false
+    if _ap_byte(s, 0) == 45 or _ap_byte(s, 0) == 43: i = 1
+    while i < s.len():
+        mut c = _ap_byte(s, i)
+        if c >= 48 and c <= 57:
+            digits = digits + 1
+        elif c == 46 and not exp:
+            dots = dots + 1
+            if dots > 1: return false
+        elif (c == 101 or c == 69) and digits > 0 and not exp:
+            exp = true
+            if i + 1 < s.len() and (_ap_byte(s, i + 1) == 45 or _ap_byte(s, i + 1) == 43): i = i + 1
+            if i + 1 >= s.len(): return false
+        else:
+            return false
+        i = i + 1
+    return digits > 0
+
+# 1 true, 0 false, -1 not a boolean word.
+def _ap_bool_val(s: str) -> int:
+    mut l = s.lower()
+    if l == "true" or l == "yes" or l == "on" or l == "1": return 1
+    if l == "false" or l == "no" or l == "off" or l == "0": return 0
+    return -1
+
+def _ap_type_name(t: int) -> str:
+    if t == TYPE_INT: return "integer"
+    if t == TYPE_FLOAT: return "number"
+    if t == TYPE_BOOL: return "boolean"
+    return "string"
+
+def _ap_pad(s: str, width: int) -> str:
+    mut sb = StringBuilder.init(width + s.len() + 1)
+    sb.append(s)
+    mut k = s.len()
+    while k < width:
+        sb.append_char(32)
+        k = k + 1
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+# Word-wrap `text` into lines of at most `width` characters.
+def _ap_wrap(text: str, width: int) -> List[str]:
+    mut out: List[str] = []
+    mut w = width
+    if w < 10: w = 10
+    mut words = text.split(" ")
+    mut line = ""
+    mut i = 0
+    while i < words.len:
+        mut word = words.get(i)
+        if line.len() == 0:
+            line = word
+        elif line.len() + 1 + word.len() <= w:
+            line = line + " " + word
+        else:
+            out.append(line)
+            line = word
+        i = i + 1
+    if line.len() > 0 or len(out) == 0: out.append(line)
+    return out
+
+# ─── Arg ─────────────────────────────────────────────────────────────────────
+
+pub class Arg:
+    pub name:       str
+    pub long_name:  str
+    pub short_name: str
+    pub help:       str
+    pub kind:       int
+    pub vtype:      int
+    pub meta:       str
+    pub dflt:       str
+    pub has_dflt:   bool
+    pub req:        bool
+    pub multi:      bool
+    pub nmin:       int
+    pub nmax:       int
+    pub choices:    List[str]
+    pub env_var:    str
+    pub negatable:  bool
+    pub hidden:     bool
+    pub group:      str
+    pub aliases:    List[str]
+
+extend Arg:
+    def _base(name: str, short: str, help: str, kind: int) -> Arg:
+        mut a = Arg()
+        a.name = name
+        a.long_name = name.replace("_", "-")
+        a.short_name = short
+        a.help = help
+        a.kind = kind
+        a.vtype = TYPE_STR
+        a.meta = _ap_upper(name)
+        a.dflt = ""
+        a.has_dflt = false
+        a.req = false
+        a.multi = false
+        a.nmin = 1
+        a.nmax = 1
+        a.choices = []
+        a.env_var = ""
+        a.negatable = false
+        a.hidden = false
+        a.group = ""
+        a.aliases = []
+        return a
+
+    # A boolean switch: --name / -s.
+    pub def flag(name: str, short: str, help: str) -> Arg: return Arg._base(name, short, help, ARG_FLAG)
+
+    # A counted switch: -v -v or -vvv gives 3.
+    pub def count(name: str, short: str, help: str) -> Arg: return Arg._base(name, short, help, ARG_COUNT)
+
+    # An option that takes a value: --name VALUE, --name=VALUE, -s VALUE.
+    pub def option(name: str, short: str, help: str) -> Arg: return Arg._base(name, short, help, ARG_OPTION)
+
+    # A positional argument (one value unless count_range says otherwise).
+    pub def positional(name: str, help: str) -> Arg:
+        mut a = Arg._base(name, "", help, ARG_POSITIONAL)
+        a.long_name = ""
+        a.req = true
+        return a
+
+    # Placeholder shown in help (e.g. FILE).
+    pub def value_name(self, m: str) -> Arg:
+        self.meta = m
+        return self
+
+    pub def default_value(self, v: str) -> Arg:
+        self.dflt = v
+        self.has_dflt = true
+        return self
+
+    pub def mandatory(self) -> Arg:
+        self.req = true
+        return self
+
+    # Optional positional (equivalent to count_range(0, 1)).
+    pub def optional(self) -> Arg:
+        self.req = false
+        self.nmin = 0
+        return self
+
+    # An option that may be given several times (values accumulate).
+    pub def repeatable(self) -> Arg:
+        self.multi = true
+        return self
+
+    # Positional arity: min..max values (max -1 = unlimited).
+    pub def count_range(self, min: int, max: int) -> Arg:
+        self.nmin = min
+        self.nmax = max
+        self.multi = max != 1
+        self.req = min > 0
+        return self
+
+    pub def of_int(self) -> Arg:
+        self.vtype = TYPE_INT
+        return self
+
+    pub def of_float(self) -> Arg:
+        self.vtype = TYPE_FLOAT
+        return self
+
+    pub def of_bool(self) -> Arg:
+        self.vtype = TYPE_BOOL
+        return self
+
+    pub def one_of(self, values: List[str]) -> Arg:
+        self.choices = values
+        return self
+
+    # Read the value from this environment variable when not given.
+    pub def from_env(self, var: str) -> Arg:
+        self.env_var = var
+        return self
+
+    # Accept --no-<name> to turn a flag off.
+    pub def allow_negation(self) -> Arg:
+        self.negatable = true
+        return self
+
+    pub def hide(self) -> Arg:
+        self.hidden = true
+        return self
+
+    # Help section title for this argument.
+    pub def in_group(self, title: str) -> Arg:
+        self.group = title
+        return self
+
+    # Extra long name (without dashes).
+    pub def also(self, long_alias: str) -> Arg:
+        self.aliases.append(long_alias)
+        return self
+
+    def _spec(self) -> str:
+        if self.kind == ARG_POSITIONAL:
+            mut base = "<" + self.meta + ">"
+            if self.nmax != 1: base = base + "..."
+            if not self.req: base = "[" + base + "]"
+            return base
+        mut sb = StringBuilder.init(48)
+        if self.short_name.len() > 0:
+            sb.append("-")
+            sb.append(self.short_name)
+            if self.long_name.len() > 0: sb.append(", ")
+        else:
+            sb.append("    ")
+        if self.long_name.len() > 0:
+            sb.append("--")
+            if self.negatable:
+                sb.append("[no-]")
+            sb.append(self.long_name)
+        if self.kind == ARG_OPTION:
+            sb.append(" <")
+            sb.append(self.meta)
+            sb.append(">")
+        if self.kind == ARG_COUNT or (self.kind == ARG_OPTION and self.multi): sb.append("...")
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    def _help_line(self) -> str:
+        mut sb = StringBuilder.init(self.help.len() + 64)
+        sb.append(self.help)
+        if self.has_dflt and self.kind != ARG_FLAG:
+            sb.append(" [default: ")
+            sb.append(self.dflt)
+            sb.append("]")
+        if self.env_var.len() > 0:
+            sb.append(" [env: ")
+            sb.append(self.env_var)
+            sb.append("]")
+        if len(self.choices) > 0:
+            sb.append(" [possible values: ")
+            mut i = 0
+            while i < len(self.choices):
+                if i > 0: sb.append(", ")
+                sb.append(self.choices[i])
+                i = i + 1
+            sb.append("]")
+        mut out = sb.to_owned()
+        sb.free()
+        return out.trim()
+
+# ─── Namespace (parse result) ────────────────────────────────────────────────
+
+pub class Namespace:
+    pub keys:      List[str]
+    pub vals:      List[str]       # multiple values joined by the unit separator
+    pub counts:    List[int]       # how many times given on the command line
+    pub sources:   List[int]       # 0 unset, 1 command line, 2 environment, 3 default
+    pub command:   str             # chosen subcommand ("" if none)
+    pub sub:       Namespace       # its arguments (valid when command != "")
+    pub exit_now:  bool            # --help / --version was handled
+    pub exit_text: str
+
+extend Namespace:
+    pub def init() -> Namespace:
+        mut n = Namespace()
+        n.keys = []
+        n.vals = []
+        n.counts = []
+        n.sources = []
+        n.command = ""
+        n.exit_now = false
+        n.exit_text = ""
+        return n
+
+    def _idx(self, name: str) -> int:
+        mut i = 0
+        while i < len(self.keys):
+            if self.keys[i] == name: return i
+            i = i + 1
+        return -1
+
+    def _slot(self, name: str) -> int:
+        mut i = self._idx(name)
+        if i >= 0: return i
+        self.keys.append(name)
+        self.vals.append("")
+        self.counts.append(0)
+        self.sources.append(0)
+        return len(self.keys) - 1
+
+    # The value of an option/positional ("" if unset; the last value of a
+    # repeated option). Flags give "true"/"false".
+    pub def get(self, name: str) -> str:
+        mut i = self._idx(name)
+        if i < 0: return ""
+        mut parts = _ap_split_sep(self.vals[i])
+        if len(parts) == 0: return ""
+        return parts[len(parts) - 1]
+
+    pub def get_int(self, name: str) -> int:
+        mut v = self.get(name)
+        if v.len() == 0: return 0
+        return int(v)
+
+    pub def get_float(self, name: str) -> float:
+        mut v = self.get(name)
+        if v.len() == 0: return 0.0
+        return float(v)
+
+    pub def get_bool(self, name: str) -> bool:
+        return _ap_bool_val(self.get(name)) == 1
+
+    # True when a flag is on.
+    pub def flag(self, name: str) -> bool: return self.get_bool(name)
+
+    # Times a counted flag was given (or the value count of an option).
+    pub def count(self, name: str) -> int:
+        mut i = self._idx(name)
+        if i < 0: return 0
+        return self.counts[i]
+
+    # All values of a repeatable option or variadic positional.
+    pub def list(self, name: str) -> List[str]:
+        mut i = self._idx(name)
+        mut empty: List[str] = []
+        if i < 0: return empty
+        return _ap_split_sep(self.vals[i])
+
+    # True when the value came from the command line, environment or a default.
+    pub def has(self, name: str) -> bool:
+        mut i = self._idx(name)
+        return i >= 0 and self.sources[i] != 0
+
+    # True only when given on the command line.
+    pub def given(self, name: str) -> bool:
+        mut i = self._idx(name)
+        return i >= 0 and self.sources[i] == 1
+
+    # "command line", "environment", "default" or "unset".
+    pub def source(self, name: str) -> str:
+        mut i = self._idx(name)
+        if i < 0 or self.sources[i] == 0: return "unset"
+        if self.sources[i] == 1: return "command line"
+        if self.sources[i] == 2: return "environment"
+        return "default"
+
+    # The chain of chosen subcommands, e.g. ["remote", "add"].
+    pub def command_path(self) -> List[str]:
+        mut out: List[str] = []
+        mut cur = self
+        while cur.command.len() > 0:
+            out.append(cur.command)
+            cur = cur.sub
+        return out
+
+    def _set(self, name: str, v: str, src: int):
+        mut i = self._slot(name)
+        self.vals[i] = v
+        self.sources[i] = src
+
+    def _push(self, name: str, v: str):
+        mut i = self._slot(name)
+        if self.sources[i] == 1 and self.vals[i].len() + self.counts[i] > 0:
+            mut joined = self.vals[i] + _ap_sep() + v
+            self.vals[i] = joined
+        else:
+            self.vals[i] = v
+        self.counts[i] = self.counts[i] + 1
+        self.sources[i] = 1
+
+# ─── ArgParser ───────────────────────────────────────────────────────────────
+
+pub class ArgParser:
+    pub prog:       str
+    pub about:      str
+    pub epilog:     str
+    pub ver:        str
+    pub width:      int
+    pub args:       List[Arg]
+    pub commands:   List[ArgParser]
+    pub aliases:    List[str]
+    pub exclusive:  List[str]      # groups of names, comma-joined
+    pub one_req:    List[str]      # "at least one of" groups
+    pub need_command: bool
+    pub response:   bool
+    pub path:       str            # "tool build" (for usage lines)
+
+extend ArgParser:
+    pub def init(prog: str, about: str) -> ArgParser:
+        mut p = ArgParser()
+        p.prog = prog
+        p.about = about
+        p.epilog = ""
+        p.ver = ""
+        p.width = 80
+        p.args = []
+        p.commands = []
+        p.aliases = []
+        p.exclusive = []
+        p.one_req = []
+        p.need_command = false
+        p.response = false
+        p.path = prog
+        return p
+
+    pub def version(self, v: str): self.ver = v
+    pub def set_epilog(self, text: str): self.epilog = text
+    pub def set_width(self, w: int): self.width = w
+    # Expand @file arguments into the file's shell-quoted words.
+    pub def response_files(self, on: bool): self.response = on
+    # Require a subcommand.
+    pub def require_command(self): self.need_command = true
+
+    pub def add(self, a: Arg) -> ArgParser:
+        self.args.append(a)
+        return self
+
+    # Add a subcommand; returns its parser for adding arguments.
+    pub def command(self, name: str, about: str) -> ArgParser:
+        mut c = ArgParser.init(name, about)
+        c.width = self.width
+        c.response = self.response
+        c.path = self.path + " " + name
+        self.commands.append(c)
+        return c
+
+    # Extra name for a subcommand (call on the subcommand's parser).
+    pub def also(self, alias: str) -> ArgParser:
+        self.aliases.append(alias)
+        return self
+
+    # At most one of `names` may be given.
+    pub def mutually_exclusive(self, names: List[str]):
+        mut sb = StringBuilder.init(64)
+        mut i = 0
+        while i < len(names):
+            if i > 0: sb.append(",")
+            sb.append(names[i])
+            i = i + 1
+        self.exclusive.append(sb.to_owned())
+        sb.free()
+
+    # At least one of `names` must be given.
+    pub def require_one_of(self, names: List[str]):
+        mut sb = StringBuilder.init(64)
+        mut i = 0
+        while i < len(names):
+            if i > 0: sb.append(",")
+            sb.append(names[i])
+            i = i + 1
+        self.one_req.append(sb.to_owned())
+        sb.free()
+
+    # ── lookup ──
+    def _by_long(self, name: str) -> int:
+        mut i = 0
+        while i < len(self.args):
+            mut a = self.args[i]
+            if a.kind != ARG_POSITIONAL:
+                if a.long_name == name: return i
+                mut k = 0
+                while k < len(a.aliases):
+                    if a.aliases[k] == name: return i
+                    k = k + 1
+            i = i + 1
+        return -1
+
+    def _by_short(self, c: str) -> int:
+        mut i = 0
+        while i < len(self.args):
+            if self.args[i].kind != ARG_POSITIONAL and self.args[i].short_name == c: return i
+            i = i + 1
+        return -1
+
+    def _by_name(self, name: str) -> int:
+        mut i = 0
+        while i < len(self.args):
+            if self.args[i].name == name: return i
+            i = i + 1
+        return -1
+
+    def _find_command(self, name: str) -> int:
+        mut i = 0
+        while i < len(self.commands):
+            mut c = self.commands[i]
+            if c.prog == name: return i
+            mut k = 0
+            while k < len(c.aliases):
+                if c.aliases[k] == name: return i
+                k = k + 1
+            i = i + 1
+        return -1
+
+    def _has_short_digit(self) -> bool:
+        mut i = 0
+        while i < len(self.args):
+            mut s = self.args[i].short_name
+            if s.len() == 1 and _ap_byte(s, 0) >= 48 and _ap_byte(s, 0) <= 57: return true
+            i = i + 1
+        return false
+
+    def _looks_negative_number(self, tok: str) -> bool:
+        return tok.len() > 1 and _ap_byte(tok, 0) == 45 and _ap_is_float(tok) and not self._has_short_digit()
+
+    def _suggest(self, unknown: str) -> str:
+        mut best = ""
+        mut best_d = 3
+        mut i = 0
+        while i < len(self.args):
+            mut a = self.args[i]
+            if a.kind != ARG_POSITIONAL and a.long_name.len() > 0 and not a.hidden:
+                mut d = Distance.levenshtein(unknown, a.long_name)
+                if d < best_d:
+                    best_d = d
+                    best = "--" + a.long_name
+            i = i + 1
+        return best
+
+    def _suggest_command(self, unknown: str) -> str:
+        mut best = ""
+        mut best_d = 3
+        mut i = 0
+        while i < len(self.commands):
+            mut d = Distance.levenshtein(unknown, self.commands[i].prog)
+            if d < best_d:
+                best_d = d
+                best = self.commands[i].prog
+            i = i + 1
+        return best
+
+    def _err(self, msg: str) -> str:
+        mut u = self.usage()
+        return f"{self.path}: error: {msg}\n\n{u}\nFor more information, try '--help'."
+
+    # ── value storage with validation ──
+    def _store(self, ns: Namespace, a: Arg, v: str) throws str:
+        if a.vtype == TYPE_INT and not _ap_is_int(v):
+            mut m = self._err(f"invalid integer '{v}' for {a._spec().trim()}")
+            raise(m)
+        if a.vtype == TYPE_FLOAT and not _ap_is_float(v):
+            mut m2 = self._err(f"invalid number '{v}' for {a._spec().trim()}")
+            raise(m2)
+        if a.vtype == TYPE_BOOL and _ap_bool_val(v) < 0:
+            mut m3 = self._err(f"invalid boolean '{v}' for {a._spec().trim()} (use true/false)")
+            raise(m3)
+        if len(a.choices) > 0:
+            mut ok = false
+            mut i = 0
+            while i < len(a.choices):
+                if a.choices[i] == v: ok = true
+                i = i + 1
+            if not ok:
+                mut sb = StringBuilder.init(64)
+                i = 0
+                while i < len(a.choices):
+                    if i > 0: sb.append(", ")
+                    sb.append(a.choices[i])
+                    i = i + 1
+                mut allowed = sb.to_owned()
+                sb.free()
+                mut m4 = self._err(f"invalid value '{v}' for {a._spec().trim()} [possible values: {allowed}]")
+                raise(m4)
+        if a.multi or a.kind == ARG_POSITIONAL:
+            ns._push(a.name, v)
+        else:
+            ns._set(a.name, v, 1)
+            mut ix = ns._slot(a.name)
+            ns.counts[ix] = ns.counts[ix] + 1
+
+    def _expand_responses(self, args: List[str]) throws str -> List[str]:
+        mut out: List[str] = []
+        mut i = 0
+        mut ended = false
+        while i < len(args):
+            mut tok = args[i]
+            if tok == "--": ended = true
+            if not ended and self.response and tok.len() > 1 and _ap_byte(tok, 0) == 64:
+                mut path = tok.slice(1, tok.len())
+                if not File.file_exists(path):
+                    mut m = self._err(f"response file not found: {path}")
+                    raise(m)
+                mut text = File.read_text(path)
+                mut words = Shlex.split_comments(text)?
+                mut k = 0
+                while k < len(words):
+                    out.append(words[k])
+                    k = k + 1
+            else:
+                out.append(tok)
+            i = i + 1
+        return out
+
+    # Parse `args` (program arguments without the program name).
+    pub def parse(self, args: List[str]) throws str -> Namespace:
+        mut toks = self._expand_responses(args)?
+        return self._parse_from(toks, 0)?
+
+    def _parse_from(self, toks: List[str], start: int) throws str -> Namespace:
+        mut ns = Namespace.init()
+        mut positionals: List[str] = []
+        mut only_pos = false
+        mut i = start
+        while i < len(toks):
+            mut tok = toks[i]
+            i = i + 1
+            if only_pos:
+                positionals.append(tok)
+                continue
+            if tok == "--":
+                only_pos = true
+                continue
+            if tok.starts_with("--") and tok.len() > 2:
+                mut body = tok.slice(2, tok.len())
+                mut eq = body.find("=")
+                mut name = body
+                mut val = ""
+                mut has_val = false
+                if eq >= 0:
+                    name = body.slice(0, eq)
+                    val = body.slice(eq + 1, body.len())
+                    has_val = true
+                if name == "help":
+                    ns.exit_now = true
+                    ns.exit_text = self.help_text()
+                    return ns
+                if name == "version" and self.ver.len() > 0 and self._by_long("version") < 0:
+                    ns.exit_now = true
+                    ns.exit_text = f"{self.prog} {self.ver}"
+                    return ns
+                mut ai = self._by_long(name)
+                if ai < 0 and name.starts_with("no-"):
+                    mut base = name.slice(3, name.len())
+                    mut bi = self._by_long(base)
+                    if bi >= 0 and self.args[bi].kind == ARG_FLAG and self.args[bi].negatable:
+                        if has_val:
+                            mut m0 = self._err(f"--{name} does not take a value")
+                            raise(m0)
+                        ns._set(self.args[bi].name, "false", 1)
+                        continue
+                if ai < 0:
+                    mut sug = self._suggest(name)
+                    mut msg = f"unexpected argument '--{name}'"
+                    if sug.len() > 0: msg = msg + f"\n\n  tip: a similar argument exists: '{sug}'"
+                    mut m1 = self._err(msg)
+                    raise(m1)
+                mut a = self.args[ai]
+                if a.kind == ARG_FLAG:
+                    if has_val:
+                        mut bv = _ap_bool_val(val)
+                        if bv < 0:
+                            mut m2 = self._err(f"invalid boolean '{val}' for --{a.long_name}")
+                            raise(m2)
+                        if bv == 1: ns._set(a.name, "true", 1)
+                        else: ns._set(a.name, "false", 1)
+                    else:
+                        ns._set(a.name, "true", 1)
+                    continue
+                if a.kind == ARG_COUNT:
+                    mut ci = ns._slot(a.name)
+                    ns.counts[ci] = ns.counts[ci] + 1
+                    ns.sources[ci] = 1
+                    mut cs = f"{ns.counts[ci]}"
+                    ns.vals[ci] = cs
+                    continue
+                if not has_val:
+                    if i >= len(toks) or (toks[i].starts_with("-") and toks[i].len() > 1 and not self._looks_negative_number(toks[i])):
+                        mut m3 = self._err(f"a value is required for '--{a.long_name} <{a.meta}>' but none was supplied")
+                        raise(m3)
+                    val = toks[i]
+                    i = i + 1
+                self._store(ns, a, val)?
+                continue
+            if tok.starts_with("-") and tok.len() > 1 and not self._looks_negative_number(tok):
+                mut j = 1
+                while j < tok.len():
+                    mut ch = tok.slice(j, j + 1)
+                    j = j + 1
+                    if ch == "h" and self._by_short("h") < 0:
+                        ns.exit_now = true
+                        ns.exit_text = self.help_text()
+                        return ns
+                    if ch == "V" and self.ver.len() > 0 and self._by_short("V") < 0:
+                        ns.exit_now = true
+                        ns.exit_text = f"{self.prog} {self.ver}"
+                        return ns
+                    mut si = self._by_short(ch)
+                    if si < 0:
+                        mut m4 = self._err(f"unexpected argument '-{ch}'")
+                        raise(m4)
+                    mut sa = self.args[si]
+                    if sa.kind == ARG_FLAG:
+                        ns._set(sa.name, "true", 1)
+                    elif sa.kind == ARG_COUNT:
+                        mut ci2 = ns._slot(sa.name)
+                        ns.counts[ci2] = ns.counts[ci2] + 1
+                        ns.sources[ci2] = 1
+                        mut cs2 = f"{ns.counts[ci2]}"
+                        ns.vals[ci2] = cs2
+                    else:
+                        mut sval = ""
+                        if j < tok.len():
+                            sval = tok.slice(j, tok.len())
+                            if sval.starts_with("="): sval = sval.slice(1, sval.len())
+                        else:
+                            if i >= len(toks) or (toks[i].starts_with("-") and toks[i].len() > 1 and not self._looks_negative_number(toks[i])):
+                                mut m5 = self._err(f"a value is required for '-{ch} <{sa.meta}>' but none was supplied")
+                                raise(m5)
+                            sval = toks[i]
+                            i = i + 1
+                        self._store(ns, sa, sval)?
+                        j = tok.len()
+                continue
+            # positional or subcommand
+            if len(self.commands) > 0 and len(positionals) == 0:
+                if tok == "help" and self._find_command("help") < 0:
+                    ns.exit_now = true
+                    if i < len(toks):
+                        mut hc = self._find_command(toks[i])
+                        if hc >= 0:
+                            ns.exit_text = self.commands[hc].help_text()
+                            return ns
+                    ns.exit_text = self.help_text()
+                    return ns
+                mut ci3 = self._find_command(tok)
+                if ci3 >= 0:
+                    mut subp = self.commands[ci3]
+                    mut subns = subp._parse_from(toks, i)?
+                    ns.command = subp.prog
+                    ns.sub = subns
+                    if subns.exit_now:
+                        ns.exit_now = true
+                        ns.exit_text = subns.exit_text
+                        return ns
+                    self._finish(ns, positionals, true)?
+                    return ns
+                if self._count_positionals() == 0:
+                    mut sugc = self._suggest_command(tok)
+                    mut msgc = f"unrecognized subcommand '{tok}'"
+                    if sugc.len() > 0: msgc = msgc + f"\n\n  tip: a similar subcommand exists: '{sugc}'"
+                    mut m6 = self._err(msgc)
+                    raise(m6)
+            positionals.append(tok)
+        if self.need_command and len(self.commands) > 0:
+            mut m7 = self._err("a subcommand is required")
+            raise(m7)
+        self._finish(ns, positionals, false)?
+        return ns
+
+    def _count_positionals(self) -> int:
+        mut n = 0
+        mut i = 0
+        while i < len(self.args):
+            if self.args[i].kind == ARG_POSITIONAL: n = n + 1
+            i = i + 1
+        return n
+
+    # Positionals, environment, defaults and cross-argument checks. When a
+    # subcommand was chosen, this level's required positionals are not enforced.
+    def _finish(self, ns: Namespace, positionals: List[str], cmd_chosen: bool) throws str:
+        mut pos: List[Arg] = []
+        mut i = 0
+        while i < len(self.args):
+            if self.args[i].kind == ARG_POSITIONAL: pos.append(self.args[i])
+            i = i + 1
+        # minimum values still needed by each positional and those after it
+        mut need_after: List[int] = []
+        mut k = 0
+        while k < len(pos):
+            need_after.append(0)
+            k = k + 1
+        mut acc = 0
+        k = len(pos) - 1
+        while k >= 0:
+            need_after[k] = acc
+            acc = acc + pos[k].nmin
+            k = k - 1
+        mut p = 0
+        mut used = 0
+        while p < len(pos):
+            mut a = pos[p]
+            mut avail = len(positionals) - used - need_after[p]
+            mut take = a.nmax
+            if take < 0 or take > avail: take = avail
+            if take < 0: take = 0
+            if take < a.nmin and not cmd_chosen:
+                mut m = self._err(f"the required argument '<{a.meta}>' was not provided")
+                raise(m)
+            mut t = 0
+            while t < take:
+                self._store(ns, a, positionals[used + t])?
+                t = t + 1
+            used = used + take
+            p = p + 1
+        if used < len(positionals):
+            mut extra = positionals[used]
+            mut m2 = self._err(f"unexpected argument '{extra}' found")
+            raise(m2)
+        # environment and defaults, then required checks
+        i = 0
+        while i < len(self.args):
+            mut a2 = self.args[i]
+            if not ns.given(a2.name):
+                mut done = false
+                if a2.env_var.len() > 0:
+                    mut ev = _ap_env(a2.env_var)
+                    if ev.len() > 0:
+                        if a2.kind == ARG_FLAG:
+                            mut b = _ap_bool_val(ev)
+                            if b >= 0:
+                                if b == 1: ns._set(a2.name, "true", 2)
+                                else: ns._set(a2.name, "false", 2)
+                                done = true
+                        else:
+                            self._store(ns, a2, ev)?
+                            mut si = ns._slot(a2.name)
+                            ns.sources[si] = 2
+                            done = true
+                if not done and a2.has_dflt:
+                    ns._set(a2.name, a2.dflt, 3)
+                    done = true
+                if not done and a2.kind == ARG_FLAG:
+                    mut fi = ns._slot(a2.name)
+                    ns.vals[fi] = "false"
+                if not done and a2.kind == ARG_COUNT:
+                    mut ci = ns._slot(a2.name)
+                    ns.vals[ci] = "0"
+                if not done and a2.req and a2.kind == ARG_OPTION:
+                    mut m3 = self._err(f"the required argument '--{a2.long_name} <{a2.meta}>' was not provided")
+                    raise(m3)
+            i = i + 1
+        i = 0
+        while i < len(self.exclusive):
+            mut names = self.exclusive[i].split(",")
+            mut seen = ""
+            mut k2 = 0
+            while k2 < names.len:
+                mut nm = names.get(k2)
+                if ns.given(nm):
+                    if seen.len() > 0:
+                        mut m4 = self._err(f"the argument '{self._display(seen)}' cannot be used with '{self._display(nm)}'")
+                        raise(m4)
+                    seen = nm
+                k2 = k2 + 1
+            i = i + 1
+        i = 0
+        while i < len(self.one_req):
+            mut names2 = self.one_req[i].split(",")
+            mut any = false
+            mut shown = ""
+            mut k3 = 0
+            while k3 < names2.len:
+                mut nm2 = names2.get(k3)
+                if ns.has(nm2): any = true
+                if k3 > 0: shown = shown + ", "
+                shown = shown + self._display(nm2)
+                k3 = k3 + 1
+            if not any:
+                mut m5 = self._err(f"one of these arguments is required: {shown}")
+                raise(m5)
+            i = i + 1
+
+    def _display(self, name: str) -> str:
+        mut ai = self._by_name(name)
+        if ai < 0: return name
+        mut a = self.args[ai]
+        if a.kind == ARG_POSITIONAL: return "<" + a.meta + ">"
+        if a.long_name.len() > 0: return "--" + a.long_name
+        return "-" + a.short_name
+
+    # Parse a Vec[str] (e.g. Env.init().user_args()).
+    pub def parse_vec(self, args: Vec[str]) throws str -> Namespace:
+        mut l: List[str] = []
+        mut i = 0
+        while i < args.len:
+            l.append(args.get(i))
+            i = i + 1
+        return self.parse(l)?
+
+    # Parse this process's own arguments, exiting on help/version/errors.
+    pub def parse_process_or_exit(self) -> Namespace:
+        mut v = Env.init().user_args()
+        mut l: List[str] = []
+        mut i = 0
+        while i < v.len:
+            l.append(v.get(i))
+            i = i + 1
+        return self.parse_or_exit(l)
+
+    # Parse, or print help/version/errors and exit (0 for help/version, 2 for errors).
+    pub def parse_or_exit(self, args: List[str]) -> Namespace:
+        mut r: Result[Namespace, str] = self.parse(args)
+        if r.is_err:
+            _tr_eprint(r.err)
+            Process.exit(2)
+        if r.ok.exit_now:
+            print(r.ok.exit_text)
+            Process.exit(0)
+        return r.ok
+
+    # ── help ──
+    pub def usage(self) -> str:
+        mut sb = StringBuilder.init(128)
+        sb.append("Usage: ")
+        sb.append(self.path)
+        mut has_opts = false
+        mut i = 0
+        while i < len(self.args):
+            mut a = self.args[i]
+            if a.kind != ARG_POSITIONAL and not a.hidden:
+                if a.req:
+                    sb.append(" --")
+                    sb.append(a.long_name)
+                    sb.append(" <")
+                    sb.append(a.meta)
+                    sb.append(">")
+                else:
+                    has_opts = true
+            i = i + 1
+        if has_opts or self.ver.len() > 0 or true: sb.append(" [OPTIONS]")
+        i = 0
+        while i < len(self.args):
+            mut a2 = self.args[i]
+            if a2.kind == ARG_POSITIONAL and not a2.hidden:
+                sb.append(" ")
+                mut sp = a2._spec()
+                sb.append(sp)
+            i = i + 1
+        if len(self.commands) > 0:
+            if self.need_command: sb.append(" <COMMAND>")
+            else: sb.append(" [COMMAND]")
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    def _section(self, sb: StringBuilder, title: str, specs: List[str], helps: List[str]):
+        if len(specs) == 0: return
+        sb.append("\n")
+        sb.append(title)
+        sb.append(":\n")
+        mut col = 0
+        mut i = 0
+        while i < len(specs):
+            if specs[i].len() > col: col = specs[i].len()
+            i = i + 1
+        col = col + 4
+        if col > 34: col = 34
+        i = 0
+        while i < len(specs):
+            mut lines = _ap_wrap(helps[i], self.width - col - 2)
+            mut lead = "  " + specs[i]
+            if specs[i].len() + 2 >= col + 2:
+                sb.append(lead)
+                sb.append("\n")
+                mut k = 0
+                while k < len(lines):
+                    mut pad = _ap_pad("", col + 2)
+                    sb.append(pad)
+                    sb.append(lines[k])
+                    sb.append("\n")
+                    k = k + 1
+            else:
+                mut first = _ap_pad(lead, col + 2)
+                sb.append(first)
+                if len(lines) > 0: sb.append(lines[0])
+                sb.append("\n")
+                mut k2 = 1
+                while k2 < len(lines):
+                    mut pad2 = _ap_pad("", col + 2)
+                    sb.append(pad2)
+                    sb.append(lines[k2])
+                    sb.append("\n")
+                    k2 = k2 + 1
+            i = i + 1
+
+    pub def help_text(self) -> str:
+        mut sb = StringBuilder.init(1024)
+        if self.about.len() > 0:
+            mut ab = _ap_wrap(self.about, self.width)
+            mut k = 0
+            while k < len(ab):
+                sb.append(ab[k])
+                sb.append("\n")
+                k = k + 1
+            sb.append("\n")
+        mut u = self.usage()
+        sb.append(u)
+        sb.append("\n")
+        # positionals
+        mut ps: List[str] = []
+        mut ph: List[str] = []
+        mut i = 0
+        while i < len(self.args):
+            mut a = self.args[i]
+            if a.kind == ARG_POSITIONAL and not a.hidden:
+                ps.append(a._spec())
+                ph.append(a._help_line())
+            i = i + 1
+        self._section(sb, "Arguments", ps, ph)
+        # groups: default group first, then named groups in order of appearance
+        mut groups: List[str] = [""]
+        i = 0
+        while i < len(self.args):
+            mut g = self.args[i].group
+            mut seen = false
+            mut k2 = 0
+            while k2 < len(groups):
+                if groups[k2] == g: seen = true
+                k2 = k2 + 1
+            if not seen and self.args[i].kind != ARG_POSITIONAL: groups.append(g)
+            i = i + 1
+        mut gi = 0
+        while gi < len(groups):
+            mut os: List[str] = []
+            mut oh: List[str] = []
+            i = 0
+            while i < len(self.args):
+                mut a2 = self.args[i]
+                if a2.kind != ARG_POSITIONAL and not a2.hidden and a2.group == groups[gi]:
+                    os.append(a2._spec())
+                    oh.append(a2._help_line())
+                i = i + 1
+            if gi == 0:
+                if self._by_short("h") < 0: os.append("-h, --help")
+                else: os.append("    --help")
+                oh.append("Print help")
+                if self.ver.len() > 0:
+                    if self._by_short("V") < 0: os.append("-V, --version")
+                    else: os.append("    --version")
+                    oh.append("Print version")
+                self._section(sb, "Options", os, oh)
+            else:
+                self._section(sb, groups[gi], os, oh)
+            gi = gi + 1
+        if len(self.commands) > 0:
+            mut cs: List[str] = []
+            mut ch: List[str] = []
+            i = 0
+            while i < len(self.commands):
+                mut c = self.commands[i]
+                mut nm = c.prog
+                mut k3 = 0
+                while k3 < len(c.aliases):
+                    nm = nm + ", " + c.aliases[k3]
+                    k3 = k3 + 1
+                cs.append(nm)
+                ch.append(c.about)
+                i = i + 1
+            cs.append("help")
+            ch.append("Print this message or the help of the given subcommand")
+            self._section(sb, "Commands", cs, ch)
+        if self.epilog.len() > 0:
+            sb.append("\n")
+            sb.append(self.epilog)
+            sb.append("\n")
+        mut out = sb.to_owned()
+        sb.free()
+        return out.trim()
+
+    # ── shell completion ──
+    def _words(self) -> str:
+        mut sb = StringBuilder.init(256)
+        mut i = 0
+        while i < len(self.args):
+            mut a = self.args[i]
+            if a.kind != ARG_POSITIONAL and not a.hidden:
+                if a.long_name.len() > 0:
+                    sb.append("--")
+                    sb.append(a.long_name)
+                    sb.append(" ")
+                    if a.negatable:
+                        sb.append("--no-")
+                        sb.append(a.long_name)
+                        sb.append(" ")
+                if a.short_name.len() > 0:
+                    sb.append("-")
+                    sb.append(a.short_name)
+                    sb.append(" ")
+            i = i + 1
+        sb.append("--help")
+        if self.ver.len() > 0: sb.append(" --version")
+        i = 0
+        while i < len(self.commands):
+            sb.append(" ")
+            sb.append(self.commands[i].prog)
+            i = i + 1
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    def _fn_name(self) -> str:
+        return "_" + self.prog.replace("-", "_") + "_complete"
+
+    # A completion script for "bash", "zsh" or "fish".
+    pub def completion_script(self, shell: str) throws str -> str:
+        if shell != "bash" and shell != "zsh" and shell != "fish":
+            raise(f"completion_script: unsupported shell '{shell}' (use bash, zsh or fish)")
+        mut sb = StringBuilder.init(1024)
+        if shell == "bash" or shell == "zsh":
+            if shell == "zsh": sb.append("autoload -U +X bashcompinit && bashcompinit\n")
+            mut fname = self._fn_name()
+            sb.append(fname)
+            sb.append("() {\n    local cur cmd i\n    cur=\"${COMP_WORDS[COMP_CWORD]}\"\n    cmd=\"\"\n")
+            sb.append("    for ((i=1; i<COMP_CWORD; i++)); do\n        case \"${COMP_WORDS[i]}\" in\n")
+            mut i = 0
+            while i < len(self.commands):
+                mut c = self.commands[i]
+                sb.append("            ")
+                sb.append(c.prog)
+                mut k = 0
+                while k < len(c.aliases):
+                    sb.append("|")
+                    sb.append(c.aliases[k])
+                    k = k + 1
+                sb.append(") cmd=\"")
+                sb.append(c.prog)
+                sb.append("\";;\n")
+                i = i + 1
+            sb.append("        esac\n    done\n    case \"$cmd\" in\n")
+            i = 0
+            while i < len(self.commands):
+                sb.append("        ")
+                sb.append(self.commands[i].prog)
+                sb.append(") COMPREPLY=($(compgen -W \"")
+                mut w = self.commands[i]._words()
+                sb.append(w)
+                sb.append("\" -- \"$cur\"));;\n")
+                i = i + 1
+            sb.append("        *) COMPREPLY=($(compgen -W \"")
+            mut w0 = self._words()
+            sb.append(w0)
+            sb.append("\" -- \"$cur\"));;\n    esac\n}\ncomplete -o default -F ")
+            sb.append(fname)
+            sb.append(" ")
+            sb.append(self.prog)
+            sb.append("\n")
+        elif shell == "fish":
+            mut i2 = 0
+            while i2 < len(self.args):
+                mut a = self.args[i2]
+                if a.kind != ARG_POSITIONAL and not a.hidden:
+                    sb.append("complete -c ")
+                    sb.append(self.prog)
+                    if len(self.commands) > 0: sb.append(" -n __fish_use_subcommand")
+                    if a.long_name.len() > 0:
+                        sb.append(" -l ")
+                        sb.append(a.long_name)
+                    if a.short_name.len() > 0:
+                        sb.append(" -s ")
+                        sb.append(a.short_name)
+                    if a.kind == ARG_OPTION: sb.append(" -r")
+                    if len(a.choices) > 0:
+                        sb.append(" -a '")
+                        mut k2 = 0
+                        while k2 < len(a.choices):
+                            if k2 > 0: sb.append(" ")
+                            sb.append(a.choices[k2])
+                            k2 = k2 + 1
+                        sb.append("'")
+                    mut h = a.help.replace("'", "")
+                    sb.append(" -d '")
+                    sb.append(h)
+                    sb.append("'\n")
+                i2 = i2 + 1
+            i2 = 0
+            while i2 < len(self.commands):
+                mut c2 = self.commands[i2]
+                sb.append("complete -c ")
+                sb.append(self.prog)
+                sb.append(" -n __fish_use_subcommand -f -a ")
+                sb.append(c2.prog)
+                mut hd = c2.about.replace("'", "")
+                sb.append(" -d '")
+                sb.append(hd)
+                sb.append("'\n")
+                mut k3 = 0
+                while k3 < len(c2.args):
+                    mut sa = c2.args[k3]
+                    if sa.kind != ARG_POSITIONAL and not sa.hidden and sa.long_name.len() > 0:
+                        sb.append("complete -c ")
+                        sb.append(self.prog)
+                        sb.append(" -n '__fish_seen_subcommand_from ")
+                        sb.append(c2.prog)
+                        sb.append("' -l ")
+                        sb.append(sa.long_name)
+                        if sa.short_name.len() > 0:
+                            sb.append(" -s ")
+                            sb.append(sa.short_name)
+                        mut sh = sa.help.replace("'", "")
+                        sb.append(" -d '")
+                        sb.append(sh)
+                        sb.append("'\n")
+                    k3 = k3 + 1
+                i2 = i2 + 1
+        mut out = sb.to_owned()
+        sb.free()
+        return out

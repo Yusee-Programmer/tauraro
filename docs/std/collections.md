@@ -17,13 +17,6 @@ from std.collections.btree   import BTreeMap
 from std.collections.trie      import Trie
 from std.collections.bloom     import BloomFilter
 from std.collections.unionfind import UnionFind
-from std.collections.bitset    import Bitset
-from std.collections.ringbuffer import RingBuffer
-from std.collections.skiplist  import SkipList
-from std.collections.rope      import Rope
-from std.collections.intervaltree import IntervalTree
-from std.collections.arena     import Arena
-from std.collections.slab      import Slab
 ```
 
 ---
@@ -822,155 +815,49 @@ print(str(uf.component_count()))   # 6
 
 ---
 
-## Bitset
+## BitSet
 
-**When**: A set of small non-negative integers where memory and set algebra speed matter — visited flags, sieve tables, graph vertex sets, feature masks.
-**Why**: 64 members per machine word; `count`, union/intersection and iteration run a word at a time.
-
-`Bitset.init(n)` is fixed size (valid indices `0..n-1`; out-of-range `set`/`clear`/`flip` are silent no-ops and `test` is `false`). `Bitset.growable(n)` grows (zero-filled) when `set`/`flip` touches a larger index. Unused tail bits are always 0, so `count()`/`eq()` need no masking.
-
-| Method | Description |
-|---|---|
-| `init(n)`, `growable(n)`, `from_indices(Vec[int])`, `from_str("0101")` | Constructors (`from_str`: character k is bit k). |
-| `set(i)`, `clear(i)`, `flip(i)`, `assign(i, bool)`, `test(i)` / `get(i)` | Single-bit access. |
-| `set_all()`, `clear_all()`, `set_range(lo, hi)`, `invert()` | Bulk edits (`invert` flips every bit below `len()`). |
-| `len()`, `count()`, `any()`, `is_empty()`, `all()` | Size and population count (SWAR popcount). |
-| `rank(i)`, `select(k)` | Members below `i`; index of the k-th member (or -1). |
-| `next_set(from)`, `next_clear(from)` | Next member / non-member at or after `from`, or -1 — the iteration primitive. |
-| `to_vec()`, `to_str()`, `clone()`, `resize(n)` | Conversions and resizing (shrinking drops high bits). |
-| `union_with`, `intersect_with`, `difference_with`, `xor_with` | In-place algebra; a shorter operand is zero-extended, a growable receiver grows. |
-| `union`, `intersection`, `difference`, `sym_diff`, `complement` | Allocating algebra (result length = longer operand). |
-| `intersects`, `is_subset_of`, `eq` / `==` / `!=` | Predicates (length differences are ignored; missing bits count as clear). |
-
-```tauraro
-from std.collections.bitset import Bitset
-
-mut seen = Bitset.init(1000)
-seen.set(7)
-seen.set(512)
-print(str(seen.count()))            # 2
-mut i = seen.next_set(0)
-while i >= 0:                       # visits 7, then 512
-    print(str(i))
-    i = seen.next_set(i + 1)
-```
-
----
+`BitSet.init(nbits)`, `from_list(ints)`, `from_string("0101")`; `set(i)`, `clear(i)`, `flip(i)`, `assign(i, on)`,
+`test(i)`, `count()`, `is_empty()`, `next_set(start)`, `next_clear(start)`, `to_list()`, `set_all(n)`, `clear_all()`,
+`union/intersection/difference/symmetric_difference(other)` (new sets), `union_with/intersect_with/subtract(other)`
+(in place), `is_subset_of`, `intersects`, `equals`, `copy`, `to_string`. Grows when you set past the end.
 
 ## RingBuffer[T]
 
-**When**: A bounded FIFO that must never allocate after construction — log tails, sample windows, producer/consumer staging.
-**Why**: Fixed capacity circular buffer with an explicit full policy, chosen once at construction.
-
-`RingBuffer[T].init(cap, overwrite)`: with `overwrite = true` a full `push` drops the **oldest** element (counted by `dropped()`) and returns `true`; with `false` it leaves the buffer unchanged and returns `false`. Index 0 is always the oldest element.
-
-| Method | Description |
-|---|---|
-| `push(v) -> bool` | Append as newest. |
-| `pop_front()`, `pop_back()`, `front()`, `back()`, `at(i)` | Require a non-empty buffer / valid index. |
-| `try_pop_front()`, `try_pop_back()`, `try_front()`, `try_back()` | Total versions returning `Option[T]`. |
-| `pop_front_or(d)`, `pop_back_or(d)` | Total versions returning a default. |
-| `set_at(i, v)`, `clear()`, `to_vec()` | Replace in place, reset, oldest-first snapshot. |
-| `len()`, `capacity()`, `is_empty()`, `is_full()`, `dropped()` | State. |
-
-Works for `int`, `str` and class payloads (storage is filled lazily, so no dummy value is needed). A popped slot keeps its element alive until it is overwritten.
-
----
+`RingBuffer[T].init(capacity, overwrite)`: `push_back(v)` / `push_front(v)` (when full, drop from the other end if
+`overwrite`, else return false), `pop_front(empty)` / `pop_back(empty)`, `front(empty)`, `back(empty)`,
+`get(i, empty)` (negative counts from the back), `set(i, v)`, `len`, `is_full`, `clear`, `to_list`.
 
 ## SkipList[K, V]
 
-**When**: A sorted map you want to build and query incrementally with range scans, floor/ceiling lookups, and a reproducible shape.
-**Why**: Expected `O(log n)` insert/fetch/remove/floor/ceiling and `O(log n + k)` range queries; level generation uses a seedable xorshift64 generator, so `SkipList[K, V].init(seed)` gives identical structure for identical operations (iteration order is always ascending keys).
+Ordered map (keys with `<`/`==`: int, float, str), O(log n) expected. `insert(k, v) -> bool` (true if new),
+`get(k, missing)`, `contains`, `remove(k) -> bool`, `keys()`, `values()`, `first_key(missing)`, `last_key(missing)`,
+`floor_key(k, missing)`, `ceiling_key(k, missing)`, `range_keys(lo, hi)` / `range_values(lo, hi)` (lo <= k < hi).
 
-Keys use `<` / `==` (so `int` and `str` work). Lookup is named `fetch` (not `get`) to stay clear of the 2-type-parameter `get` inference gap (see `LruCache`). Storage is index based; removed nodes are recycled.
+## IntervalTree[V]
 
-| Method | Description |
-|---|---|
-| `init(seed)` | Seed `0` is replaced by a fixed constant. |
-| `insert(k, v) -> bool`, `put(k, v)` | `true` if the key was new; existing keys are updated. |
-| `fetch(k) -> Option[V]`, `fetch_or(k, d)`, `has(k)`, `find(k) -> cursor` | Point lookups. |
-| `remove(k) -> bool`, `remove_range(lo, hi) -> int`, `clear()` | Deletion. |
-| `first_key()`, `last_key()`, `floor_key(k)`, `ceil_key(k)` | `Option[K]` ordered queries (floor = greatest `<= k`, ceil = least `>= k`). |
-| `keys_vec()`, `values_vec()`, `range_keys(lo, hi)`, `range_values(lo, hi)`, `range_count(lo, hi)` | Ordered snapshots; ranges are half-open `[lo, hi)`. |
-| `cursor_first()`, `cursor_seek(k)`, `cursor_next(c)`, `cursor_floor(k)`, `cursor_last()`, `key_at(c)`, `value_at(c)`, `set_value_at(c, v)` | Allocation-free ordered iteration (`-1` ends). |
-
----
+Half-open integer intervals `[lo, hi)` with values; a treap augmented with subtree max-end. `insert(lo, hi, v) -> id`,
+`remove(id)`, `query_point(x) -> ids`, `query_range(lo, hi) -> ids` (overlapping, ordered by start), `values_at(x)`,
+`overlaps(lo, hi)`, `value(id, missing)`, `lo_of(id)`, `hi_of(id)`, `ids()`.
 
 ## Rope
 
-**When**: Editing large or frequently modified text — editor buffers, generated documents, undo stacks — where `str` concatenation/slicing is `O(n)` per edit.
-**Why**: An implicit-key treap whose nodes hold chunks of up to 256 bytes: `insert`/`delete` are `O(log n)`, `slice` is `O(log n + length)`, and small inserts that fit the chunk under the cursor don't split anything. When fragmentation drops the average chunk below ~16 bytes the rope compacts itself.
+Balanced tree of ≤ 512-byte chunks for editing large text: `Rope.from_str(s)`, `insert(pos, s)`, `delete(pos, n)`,
+`replace_range(pos, n, s)`, `append`, `prepend`, `slice(pos, n)`, `byte_at(i)`, `to_str()`, `len()`, `line_count()`,
+`find(needle, start)`, `depth()`, `rebalance()` (automatic when the tree gets deep or fragmented). Byte offsets.
 
-All positions are **byte offsets**, clamped to `[0, len()]`; the rope is not UTF-8 aware and cannot hold NUL bytes.
+## SlotMap[T]
 
-| Method | Description |
-|---|---|
-| `init()`, `with_seed(seed)`, `from_str(s)` | Constructors (the seed fixes the tree shape). |
-| `insert(pos, text)`, `append(text)`, `prepend(text)` | Add text. |
-| `delete(pos, n) -> int`, `replace(pos, n, text)`, `clear()` | Remove / replace; `delete` returns the bytes removed. |
-| `slice(a, b)`, `to_str()`, `char_at(pos)`, `find(needle, from)` | Read (`char_at` returns a byte or -1; `find` is `O(n)`). |
-| `len()`, `is_empty()`, `chunk_count()`, `compact()` | State and manual compaction. |
+Values addressed by generation-checked handles — the single-ownership alternative to pointers between objects.
+`insert(v) -> handle`, `get(h, missing)`, `set(h, v)`, `contains(h)`, `remove(h)` (stale handles stay invalid after the
+slot is reused), `handles()`, `values()`, `len`, `clear`.
 
----
+## Arena and Slab
 
-## IntervalTree[T]
+`Arena.init(block_size)`: bump allocation of raw 8-byte-aligned memory — `allocate(n)`, `allocate_zeroed(n)`,
+`copy_str(s)` (NUL-terminated copy), `reset()` (free all, keep one block), `dispose()`, `bytes_used()`,
+`bytes_reserved()`, `block_count()`. `Slab.init(obj_size, per_chunk)`: fixed-size blocks with a free list —
+`allocate()`, `release(p)`, `live_count()`, `capacity()`, `dispose()`. Pointers are invalid after reset/release/dispose.
 
-**When**: "Which ranges contain / overlap this point or range?" — scheduling conflicts, calendar lookups, IP-range tables, genome annotations.
-**Why**: Augmented treap (each node caches the maximum `hi` below it), so queries skip every subtree that ends before the query starts: `O(log n + k)`.
-
-Intervals are **closed** integer ranges `[lo, hi]` with a payload `T`; for half-open `[a, b)` insert `(a, b - 1)`. `lo > hi` is swapped. `insert` returns a stable id; results come back as ids ordered by `(lo, insertion order)`.
-
-| Method | Description |
-|---|---|
-| `init()`, `with_seed(seed)` | Constructors. |
-| `insert(lo, hi, v) -> id`, `remove(id) -> bool`, `contains(id)`, `clear()` | Mutation. |
-| `stab(p)`, `overlap(lo, hi)` | `Vec[int]` of ids. |
-| `stab_count(p)`, `overlap_count(lo, hi)`, `any_overlap(lo, hi)` | Counting without allocating the result. |
-| `stab_values(p)`, `overlap_values(lo, hi)`, `lo_of(id)`, `hi_of(id)`, `value_of(id)`, `set_value_of(id, v)`, `ids()` | Reading. |
-| `span_lo()`, `span_hi()` | Overall bounds (non-empty tree). |
-
----
-
-## Arena
-
-**When**: Many small allocations with one shared lifetime — parser nodes, per-request scratch, temporary tables — where per-allocation freeing is wasteful.
-**Why**: A bump allocator: `alloc_raw` is a pointer increment; everything is released at once.
-
-```tauraro
-from std.collections.arena import Arena
-
-def checksum() -> int:
-    mut a = Arena.init(64 * 1024)
-    mut xs = a.alloc_ints(1000)         # zero-filled Pointer[int]
-    unsafe: xs.offset(3).write(42)
-    mut cp = a.checkpoint()
-    a.alloc_raw(4096, 16)               # scratch: size, alignment (1..64)
-    a.rollback(cp)                      # discard the scratch, keep xs
-    mut v = 0
-    unsafe: v = xs.offset(3).read()
-    return v                            # a.free() is injected here by the compiler
-```
-
-**How frees are injected.** `Arena` is an ordinary owned class with a user-defined `free(self)`. The compiler drops it at every scope exit (normal return, early return, break/continue) and runs that `free()` exactly once, which returns every block to the allocator; you never call it yourself (an explicit `a.free()` is accepted, runs once, and the compiler's `[M-6]` check then forbids using `a` again). It holds only ints, so there is nothing else to release.
-
-An Arena holds raw zeroed bytes (ints, floats, scalar structs via `Pointer[T]`). It does **not** run constructors/destructors or reference counting, so keep class/`str` values in `Slab[T]` instead. Pointers are valid until the Arena is dropped, `reset()`, or rolled back past them; the compiler does not track raw-pointer lifetimes, so keep them in the owning scope. Allocation methods are `alloc_raw` (not `alloc`: a method named `alloc` is mistyped by the compiler, bug C1-1), `alloc_ints`, `alloc_floats`, `dup_bytes`, `new_int`. Also `checkpoint()`, `rollback(cp)`, `reset()`, `used()`, `capacity()`, `block_count()`.
-
----
-
-## Slab[T]
-
-**When**: A pool of objects referred to by small stable handles — entity tables, connection tables, graph nodes — with `O(1)` insert/remove and no dangling-handle bugs.
-**Why**: Slots are reused through a free list, and handles carry a generation (`handle = generation * 2^32 + slot`), so a stale handle never resolves to the value that later reuses its slot. Handles are always `> 0`; `-1` is a safe "none".
-
-Storage is a `Vec[T]`, so element retain/release is exactly `Vec`'s; works for `int`, `str` and classes. A removed slot keeps its old value alive until reused.
-
-| Method | Description |
-|---|---|
-| `init()` | Empty slab. |
-| `insert(v) -> handle`, `remove(h) -> bool`, `set(h, v) -> bool`, `clear()` | Mutation (stale handles return `false`). |
-| `get(h)`, `try_get(h) -> Option[T]`, `contains(h)` | Lookup (`get` needs a live handle). |
-| `handles()`, `len()`, `slots()`, `is_empty()` | Live handles in slot order; counts. |
-
-### Ownership and dropping of the generic containers
-
-`RingBuffer`, `SkipList`, `IntervalTree` and `Slab` declare `free(self)`, which is what makes the compiler inject a scope-exit drop for a generic-class local. As of this release the compiler generates no drop glue for generic classes, so (like `BTreeMap` and `LruCache`) `str`/class payloads and the small struct itself are not reclaimed; `int`/`float`/`bool` payloads leak only that struct (verified with LeakSanitizer). `Bitset`, `Rope` and `Arena` are not generic and are leak-free.
+Tested by `tests/lang/111_collections3.tr` (SkipList, IntervalTree, Rope, RingBuffer and SlotMap against brute-force
+models under randomized operations).

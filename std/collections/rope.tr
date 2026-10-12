@@ -1,334 +1,294 @@
-# std.collections.rope — Rope: a text buffer with O(log n) insert / delete /
-# slice, for editors and large generated documents.
+# std.collections.rope -- a rope: a balanced tree of text chunks.
 #
-# A rope is an implicit-key treap (randomised balanced tree) whose nodes each
-# hold a short text CHUNK (at most 256 bytes) instead of a single character.
-# The tree is ordered by position, every node caches the byte size of its
-# subtree, and priorities come from a seedable xorshift64 generator, so the
-# shape is reproducible (`Rope.with_seed`).
+# Editing large text by string concatenation copies the whole string on
+# every change. A `Rope` splits text into chunks of up to 512 bytes held in a
+# binary tree, so insert / delete / slice touch O(log n) nodes and only
+# copy the chunks at the edit point. Positions are byte offsets.
 #
-#   insert(pos, text)      O(log n + |text|)   (small inserts that fit in the
-#                                              chunk under `pos` do not split)
-#   delete(pos, n)         O(log n)            (+ freeing the removed nodes)
-#   slice(a, b) / to_str   O(log n + b - a)
-#   append / prepend / replace / char_at / find / compact
+# Edits create new interior nodes and leave old ones unreferenced; the tree
+# is rebuilt (rebalanced and compacted) automatically when it gets too deep
+# or too much garbage accumulates.
 #
-# All positions are BYTE offsets into the text, clamped to [0, len()].  The
-# rope is not UTF-8 aware: a position inside a multi-byte sequence splits it,
-# exactly like `str` indexing does.  Text cannot contain a NUL byte (Tauraro
-# strings are NUL-terminated).
-#
-# Fragmentation: many tiny edits leave many small chunks.  When the average
-# chunk shrinks below ~16 bytes the rope compacts itself (rebuilds with full
-# chunks, O(n), amortised O(1) per edit); `compact()` forces it.
-#
-# Storage is index-based (parallel Vecs, no raw pointers); removed nodes are
-# recycled through a free list and their chunk strings are released
-# immediately.  The compiler frees the rope at scope exit.  Not thread-safe.
+# Usage:
+#   from std.collections.rope import Rope
+#   mut r = Rope.from_str("hello world")
+#   r.insert(5, ",")              # "hello, world"
+#   r.delete(0, 7)                # "world"
+#   r.append("!")
+#   r.slice(1, 3)                 # "orl"
+#   r.to_str()
 
-from std.core.vec import Vec
 from std.core.string import StringBuilder
-from std.string.str import Str
+
+const ROPE_LEAF = 512
 
 pub class Rope:
-    pub chunks: Vec[str]
-    pub lft:    Vec[int]
-    pub rgt:    Vec[int]
-    pub pri:    Vec[int]
-    pub size:   Vec[int]      # bytes in the subtree rooted here
-    pub clen:   Vec[int]      # bytes in this node's own chunk
-    pub free_l: Vec[int]
+    pub left:   List[int]
+    pub right:  List[int]
+    pub length: List[int]
+    pub height: List[int]
+    pub text:   List[str]
     pub root:   int
-    pub live:   int           # nodes in use
-    pub rng:    int
-    pub sl:     int           # split scratch (left result)
-    pub sr:     int           # split scratch (right result)
+    pub leaves: int
 
 extend Rope:
-    pub def with_seed(seed: int) -> Rope:
+    pub def init() -> Rope:
         mut r = Rope()
-        r.chunks = Vec[str].init(8)
-        r.lft = Vec[int].init(8)
-        r.rgt = Vec[int].init(8)
-        r.pri = Vec[int].init(8)
-        r.size = Vec[int].init(8)
-        r.clen = Vec[int].init(8)
-        r.free_l = Vec[int].init(8)
-        r.root = -1
-        r.live = 0
-        r.rng = seed
-        if seed == 0: r.rng = 0x2545F4914F6CDD1D
-        r.sl = -1
-        r.sr = -1
+        r._reset()
         return r
 
-    pub def init() -> Rope:
-        return Rope.with_seed(88172645463325252)
+    def _reset(self):
+        self.left = []
+        self.right = []
+        self.length = []
+        self.height = []
+        self.text = []
+        self.root = -1
+        self.leaves = 0
 
     pub def from_str(s: str) -> Rope:
         mut r = Rope.init()
-        r.append(s)
+        r.root = r._build_from(s)
         return r
 
-    pub def len(self) -> int:
-        return self._sz(self.root)
+    def _leaf(self, s: str) -> int:
+        mut n = len(self.left)
+        self.left.append(-1)
+        self.right.append(-1)
+        self.length.append(s.len())
+        self.height.append(1)
+        self.text.append(s)
+        return n
 
-    pub def is_empty(self) -> bool:
-        return self.root < 0
+    def _node(self, a: int, b: int) -> int:
+        mut n = len(self.left)
+        self.left.append(a)
+        self.right.append(b)
+        self.length.append(self.length[a] + self.length[b])
+        mut h = self.height[a]
+        if self.height[b] > h: h = self.height[b]
+        self.height.append(h + 1)
+        self.text.append("")
+        return n
 
-    # Number of chunk nodes currently in the tree (a fragmentation measure).
-    pub def chunk_count(self) -> int:
-        return self.live
+    def _is_leaf(self, n: int) -> bool: return self.left[n] < 0
 
-    def _sz(self, t: int) -> int:
-        if t < 0: return 0
-        return self.size.get(t)
+    # Balanced tree over the chunks of s.
+    def _build_from(self, s: str) -> int:
+        if s.len() == 0: return -1
+        mut ids: List[int] = []
+        mut i = 0
+        while i < s.len():
+            mut e = i + ROPE_LEAF
+            if e > s.len(): e = s.len()
+            mut piece = s.slice(i, e)
+            ids.append(self._leaf(piece))
+            i = e
+        return self._build_ids(ids)
 
-    def _upd(self, t: int):
-        self.size.set(t, self._sz(self.lft.get(t)) + self.clen.get(t) + self._sz(self.rgt.get(t)))
+    def _build_ids(self, ids: List[int]) -> int:
+        if len(ids) == 0: return -1
+        mut level = ids
+        while len(level) > 1:
+            mut next: List[int] = []
+            mut k = 0
+            while k + 1 < len(level):
+                next.append(self._node(level[k], level[k + 1]))
+                k = k + 2
+            if k < len(level): next.append(level[k])
+            level = next
+        return level[0]
 
-    def _rand(self) -> int:
-        mut x: u64 = self.rng as u64
-        x = x ^ (x << 13)
-        x = x ^ (x >> 7)
-        x = x ^ (x << 17)
-        self.rng = x as int
-        return (x >> 1) as int
-
-    def _node(self, text: str, prio: int) -> int:
-        mut n = text.len()
-        if self.free_l.len > 0:
-            mut i = self.free_l.pop()
-            self.chunks.set(i, text)
-            self.lft.set(i, -1)
-            self.rgt.set(i, -1)
-            self.pri.set(i, prio)
-            self.size.set(i, n)
-            self.clen.set(i, n)
-            self.live = self.live + 1
-            return i
-        mut j = self.chunks.len
-        self.chunks.push(text)
-        self.lft.push(-1)
-        self.rgt.push(-1)
-        self.pri.push(prio)
-        self.size.push(n)
-        self.clen.push(n)
-        self.live = self.live + 1
-        return j
-
-    # Release a whole subtree back to the free list.
-    def _free_tree(self, t: int):
-        if t < 0: return
-        self._free_tree(self.lft.get(t))
-        self._free_tree(self.rgt.get(t))
-        self.chunks.set(t, "")
-        self.free_l.push(t)
-        self.live = self.live - 1
-
-    # Split subtree t after its first k bytes; results in self.sl / self.sr.
-    def _split(self, t: int, k: int):
-        if t < 0:
-            self.sl = -1
-            self.sr = -1
-            return
-        mut ls = self._sz(self.lft.get(t))
-        mut cl = self.clen.get(t)
-        if k <= ls:
-            self._split(self.lft.get(t), k)
-            self.lft.set(t, self.sr)
-            self._upd(t)
-            self.sr = t
-            return
-        if k >= ls + cl:
-            self._split(self.rgt.get(t), k - ls - cl)
-            self.rgt.set(t, self.sl)
-            self._upd(t)
-            self.sl = t
-            return
-        # k falls strictly inside this node's chunk: cut the chunk in two.
-        mut cut = k - ls
-        mut s = self.chunks.get(t)
-        mut head = Str.substr(s, 0, cut)
-        mut tail = Str.substr(s, cut, cl - cut)
-        mut n2 = self._node(tail, self.pri.get(t))
-        self.rgt.set(n2, self.rgt.get(t))
-        self.rgt.set(t, -1)
-        self.chunks.set(t, head)
-        self.clen.set(t, cut)
-        self._upd(t)
-        self._upd(n2)
-        self.sl = t
-        self.sr = n2
-
-    def _merge(self, a: int, b: int) -> int:
+    def _concat(self, a: int, b: int) -> int:
         if a < 0: return b
         if b < 0: return a
-        if self.pri.get(a) > self.pri.get(b):
-            self.rgt.set(a, self._merge(self.rgt.get(a), b))
-            self._upd(a)
-            return a
-        self.lft.set(b, self._merge(a, self.lft.get(b)))
-        self._upd(b)
-        return b
+        if self._is_leaf(a) and self._is_leaf(b) and self.length[a] + self.length[b] <= ROPE_LEAF:
+            mut joined = self.text[a] + self.text[b]
+            return self._leaf(joined)
+        return self._node(a, b)
 
-    # Try to place `text` inside the existing chunk covering pos.
-    def _ins_in(self, t: int, pos: int, text: str) -> bool:
-        if t < 0: return false
-        mut ls = self._sz(self.lft.get(t))
-        mut cl = self.clen.get(t)
-        mut ok = false
-        if pos < ls:
-            ok = self._ins_in(self.lft.get(t), pos, text)
-        elif pos <= ls + cl:
-            if cl + text.len() <= 256:
-                mut s = self.chunks.get(t)
-                mut off = pos - ls
-                mut ns = Str.substr(s, 0, off) + text + Str.substr(s, off, cl - off)
-                self.chunks.set(t, ns)
-                self.clen.set(t, cl + text.len())
-                ok = true
+    # Split subtree t at pos into [l, r] (written to out).
+    def _split(self, t: int, pos: int, out: List[int]):
+        if t < 0:
+            out[0] = -1
+            out[1] = -1
+            return
+        if pos <= 0:
+            out[0] = -1
+            out[1] = t
+            return
+        if pos >= self.length[t]:
+            out[0] = t
+            out[1] = -1
+            return
+        if self._is_leaf(t):
+            mut tx = self.text[t]
+            mut a = tx.slice(0, pos)
+            mut b = tx.slice(pos, tx.len())
+            out[0] = self._leaf(a)
+            out[1] = self._leaf(b)
+            return
+        mut l = self.left[t]
+        mut r = self.right[t]
+        if pos <= self.length[l]:
+            self._split(l, pos, out)
+            mut rr = self._concat(out[1], r)
+            out[1] = rr
         else:
-            ok = self._ins_in(self.rgt.get(t), pos - ls - cl, text)
-        if ok: self._upd(t)
-        return ok
+            self._split(r, pos - self.length[l], out)
+            mut ll = self._concat(l, out[0])
+            out[0] = ll
 
-    # Build a balanced-ish subtree from text in <=256-byte chunks.
-    def _build(self, text: str) -> int:
-        mut n = text.len()
-        mut mid = -1
-        mut off = 0
-        while off < n:
-            mut take = n - off
-            if take > 256: take = 256
-            mid = self._merge(mid, self._node(Str.substr(text, off, take), self._rand()))
-            off = off + take
-        return mid
+    def _maybe_rebuild(self):
+        if self.root < 0:
+            if len(self.left) > 64: self._reset()
+            return
+        mut live_leaves = self._count_leaves(self.root)
+        mut lim = 8
+        mut x = live_leaves
+        while x > 1:
+            lim = lim + 2
+            x = x / 2
+        if self.height[self.root] > lim or len(self.left) > 4 * (2 * live_leaves + 16):
+            self.rebalance()
 
-    # Insert text so that its first byte lands at byte offset pos.
-    pub def insert(self, pos: int, text: str):
-        if text.len() == 0: return
+    def _count_leaves(self, t: int) -> int:
+        if t < 0: return 0
+        if self._is_leaf(t): return 1
+        return self._count_leaves(self.left[t]) + self._count_leaves(self.right[t])
+
+    # Rebuild a perfectly balanced, compact tree (also merges small chunks).
+    pub def rebalance(self):
+        mut s = self.to_str()
+        self._reset()
+        self.root = self._build_from(s)
+
+    pub def len(self) -> int:
+        if self.root < 0: return 0
+        return self.length[self.root]
+
+    pub def is_empty(self) -> bool: return self.len() == 0
+
+    # Tree depth (1 for a single chunk, 0 when empty).
+    pub def depth(self) -> int:
+        if self.root < 0: return 0
+        return self.height[self.root]
+
+    # Insert s before byte offset pos (clamped to 0..len).
+    pub def insert(self, pos: int, s: str):
+        if s.len() == 0: return
         mut p = pos
         if p < 0: p = 0
-        mut total = self.len()
-        if p > total: p = total
-        if self.root >= 0 and text.len() < 64:
-            if self._ins_in(self.root, p, text):
-                self._maybe_compact()
-                return
-        self._split(self.root, p)
-        mut l = self.sl
-        mut r = self.sr
-        mut mid = self._build(text)
-        self.root = self._merge(self._merge(l, mid), r)
-        self._maybe_compact()
+        if p > self.len(): p = self.len()
+        mut parts = [-1, -1]
+        self._split(self.root, p, parts)
+        mut mid = self._build_from(s)
+        mut l = parts[0]
+        mut r = parts[1]
+        self.root = self._concat(self._concat(l, mid), r)
+        self._maybe_rebuild()
 
-    pub def append(self, text: str):
-        self.insert(self.len(), text)
+    pub def append(self, s: str): self.insert(self.len(), s)
+    pub def prepend(self, s: str): self.insert(0, s)
 
-    pub def prepend(self, text: str):
-        self.insert(0, text)
-
-    # Remove n bytes starting at pos (clamped).  Returns the number removed.
-    pub def delete(self, pos: int, n: int) -> int:
-        mut total = self.len()
+    # Remove n bytes starting at pos.
+    pub def delete(self, pos: int, n: int):
+        if n <= 0 or pos >= self.len(): return
         mut p = pos
         if p < 0: p = 0
-        if p >= total or n <= 0: return 0
-        mut cnt = n
-        if p + cnt > total: cnt = total - p
-        self._split(self.root, p)
-        mut l = self.sl
-        mut rest = self.sr
-        self._split(rest, cnt)
-        mut mid = self.sl
-        mut r = self.sr
-        self._free_tree(mid)
-        self.root = self._merge(l, r)
-        return cnt
+        mut parts = [-1, -1]
+        self._split(self.root, p, parts)
+        mut keep = parts[0]
+        mut rest = parts[1]
+        mut parts2 = [-1, -1]
+        self._split(rest, n, parts2)
+        self.root = self._concat(keep, parts2[1])
+        self._maybe_rebuild()
 
-    # Replace n bytes at pos with text.
-    pub def replace(self, pos: int, n: int, text: str):
-        mut p = pos
-        if p < 0: p = 0
-        self.delete(p, n)
-        self.insert(p, text)
+    # Replace n bytes at pos with s.
+    pub def replace_range(self, pos: int, n: int, s: str):
+        self.delete(pos, n)
+        self.insert(pos, s)
 
-    def _collect(self, t: int, lo: int, hi: int, base: int, sb: StringBuilder):
-        # Append bytes of subtree t that fall in [lo, hi) where t starts at `base`.
-        if t < 0: return
-        mut total = self.size.get(t)
-        if hi <= base or lo >= base + total: return
-        mut ls = self._sz(self.lft.get(t))
-        self._collect(self.lft.get(t), lo, hi, base, sb)
-        mut cs = base + ls
-        mut cl = self.clen.get(t)
-        if hi > cs and lo < cs + cl:
-            mut a = lo - cs
-            if a < 0: a = 0
-            mut b = hi - cs
-            if b > cl: b = cl
-            if a == 0 and b == cl:
-                sb.append(self.chunks.get(t))
+    # Byte at offset i (0..255), or -1.
+    pub def byte_at(self, i: int) -> int:
+        if i < 0 or i >= self.len(): return -1
+        mut t = self.root
+        mut k = i
+        while not self._is_leaf(t):
+            mut l = self.left[t]
+            if k < self.length[l]:
+                t = l
             else:
-                sb.append(Str.substr(self.chunks.get(t), a, b - a))
-        self._collect(self.rgt.get(t), lo, hi, cs + cl, sb)
+                k = k - self.length[l]
+                t = self.right[t]
+        mut p = self.text[t] as Pointer[char]
+        unsafe:
+            return (p.offset(k).read() as int) & 255
 
-    # Bytes [start, end) as a string (both clamped).
-    pub def slice(self, start: int, end: int) -> str:
-        mut a = start
-        mut b = end
-        if a < 0: a = 0
-        mut total = self.len()
-        if b > total: b = total
-        if a >= b: return ""
-        mut sb = StringBuilder.init(b - a + 1)
-        self._collect(self.root, a, b, 0, sb)
+    def _collect(self, t: int, pos: int, n: int, sb: StringBuilder):
+        if t < 0 or n <= 0: return
+        if self._is_leaf(t):
+            mut e = pos + n
+            if e > self.length[t]: e = self.length[t]
+            mut piece = self.text[t].slice(pos, e)
+            sb.append(piece)
+            return
+        mut l = self.left[t]
+        mut ll = self.length[l]
+        if pos < ll:
+            mut take = n
+            if pos + take > ll: take = ll - pos
+            self._collect(l, pos, take, sb)
+            if n > take: self._collect(self.right[t], 0, n - take, sb)
+        else:
+            self._collect(self.right[t], pos - ll, n, sb)
+
+    # n bytes starting at pos (clamped).
+    pub def slice(self, pos: int, n: int) -> str:
+        mut p = pos
+        if p < 0: p = 0
+        mut k = n
+        if p + k > self.len(): k = self.len() - p
+        if k <= 0: return ""
+        mut sb = StringBuilder.init(k + 1)
+        self._collect(self.root, p, k, sb)
         mut out = sb.to_owned()
         sb.free()
         return out
 
-    pub def to_str(self) -> str:
-        return self.slice(0, self.len())
+    pub def to_str(self) -> str: return self.slice(0, self.len())
 
-    # Byte value (0..255) at pos, or -1 if out of range.
-    pub def char_at(self, pos: int) -> int:
-        if pos < 0 or pos >= self.len(): return -1
-        mut t = self.root
-        mut p = pos
-        while t >= 0:
-            mut ls = self._sz(self.lft.get(t))
-            mut cl = self.clen.get(t)
-            if p < ls:
-                t = self.lft.get(t)
-            elif p < ls + cl:
-                return Str.char_at(self.chunks.get(t), p - ls)
-            else:
-                p = p - ls - cl
-                t = self.rgt.get(t)
-        return -1
+    # Number of '\n' bytes plus one (an empty rope has one line).
+    pub def line_count(self) -> int:
+        mut n = 1
+        mut ids: List[int] = []
+        self._leaf_ids(self.root, ids)
+        mut k = 0
+        while k < len(ids):
+            mut tx = self.text[ids[k]]
+            mut p = tx as Pointer[char]
+            mut j = 0
+            while j < tx.len():
+                mut c = 0
+                unsafe: c = (p.offset(j).read() as int) & 255
+                if c == 10: n = n + 1
+                j = j + 1
+            k = k + 1
+        return n
 
-    # First byte offset >= from where `needle` occurs, or -1.  O(n): it
-    # materialises the text.  Intended for convenience, not hot loops.
-    pub def find(self, needle: str, from_pos: int) -> int:
-        mut s = self.to_str()
-        mut start = from_pos
-        if start < 0: start = 0
-        if start > s.len(): return -1
-        mut hit = Str.index_of(Str.substr(s, start, s.len() - start), needle)
-        if hit < 0: return -1
-        return start + hit
+    def _leaf_ids(self, t: int, out: List[int]):
+        if t < 0: return
+        if self._is_leaf(t):
+            out.append(t)
+            return
+        self._leaf_ids(self.left[t], out)
+        self._leaf_ids(self.right[t], out)
 
-    pub def clear(self):
-        self._free_tree(self.root)
-        self.root = -1
-
-    # Rebuild the tree out of full-size chunks.
-    pub def compact(self):
-        mut s = self.to_str()
-        self._free_tree(self.root)
-        self.root = self._build(s)
-
-    def _maybe_compact(self):
-        if self.live > 64 and self.live * 16 > self.len():
-            self.compact()
+    # Byte offset of the first occurrence of needle at or after `start`, or -1.
+    pub def find(self, needle: str, start: int) -> int:
+        mut whole = self.to_str()
+        mut tail = whole.slice(start, whole.len())
+        mut at = tail.find(needle)
+        if at < 0: return -1
+        return at + start

@@ -142,27 +142,15 @@ print(Wrap.indent("a\nb\nc", "> "))
 
 ---
 
-## std.text.shlex — Shlex class
-
-```
-from std.text.shlex import Shlex, ShlexResult
-```
-
-**Why**: split a command line into words (and build one safely) the way a POSIX shell or the Windows C runtime does. Only the tokenizer — there is no variable, glob, command or tilde expansion.
+## std.text.shlex — Shlex
 
 | Method | Description |
 |---|---|
-| `Shlex.split(s) -> List[str]` | POSIX split. Whitespace separates, `'..'` is literal, `".."` honours `\$ \` \" \\ \<newline>`, `\x` escapes one char, quoted pieces glue to neighbours, `''` is an empty word. Lenient: an open quote closes at end of input. |
-| `Shlex.split_comments(s)` | Like `split`, with `#` starting a comment at a word boundary. |
-| `Shlex.parse(s) -> ShlexResult` | Strict: `ok == false` and `error` set for an unterminated quote or trailing backslash; otherwise `tokens` (`count()`, `get(i)`). |
-| `Shlex.quote(s)` / `Shlex.join(parts)` | Quote for POSIX sh (safe words unchanged, otherwise `'…'` with `'"'"'` for an embedded quote); `split(join(x)) == x`. |
-| `Shlex.is_safe(s)` | True if `s` needs no quoting. |
-| `Shlex.split_windows(s)` | Windows rules: spaces/tabs separate, `"` toggles quoting, `2n`/`2n+1` backslashes before a quote, `""` inside quotes is a literal quote. |
-| `Shlex.quote_windows(s)` / `Shlex.join_windows(parts)` | Inverse of `split_windows`. |
+| `Shlex.split(s)? -> List[str]` | POSIX shell word splitting (quotes, escapes, `a'b c'` joining). Raises on unterminated quotes. |
+| `Shlex.split_comments(s)?` | Same, with `#` comments. |
+| `Shlex.quote(word)` / `Shlex.join(words)` | Quote for a POSIX shell (`'it'"'"'s'`). |
+| `Shlex.split_windows(cmdline)` | CommandLineToArgvW rules (backslash/quote rules, `""` inside quotes). |
+| `Shlex.quote_windows(word)` / `Shlex.join_windows(words)` | Build Windows command lines. |
 
-Limitations: the argv[0] special case of `CommandLineToArgvW` is not implemented; bytes are processed individually (UTF-8 passes through). All helpers are pure string code and work on every platform.
-
-```
-mut args = Shlex.split("git commit -m 'fix: the \"bug\"' --amend")   # 5 words
-mut line = Shlex.join(args)
-```
+Follows `/bin/sh`: backslash-newline joins lines and `\$` inside double quotes becomes `$` (Python's `shlex`
+differs on both).

@@ -56,8 +56,7 @@ extend File:
     pub def write(self, data: str):
         if self._fp as int == 0: return
         mut p = data as Pointer[char]
-        mut n = 0
-        while p.offset(n).read() as int != 0: n = n + 1
+        mut n = data.len()
         _tr_c_fwrite(p, 1, n, self._fp)
         self.content = data
 
@@ -65,8 +64,7 @@ extend File:
     pub def append(self, data: str):
         if self._fp as int == 0: return
         mut p = data as Pointer[char]
-        mut n = 0
-        while p.offset(n).read() as int != 0: n = n + 1
+        mut n = data.len()
         _tr_c_fwrite(p, 1, n, self._fp)
         self.content = self.content + data
 
@@ -134,8 +132,7 @@ extend File:
         mut fp = _tr_c_fopen(path, "wb")
         if fp as int == 0: return false
         mut p = data as Pointer[char]
-        mut n = 0
-        while p.offset(n).read() as int != 0: n = n + 1
+        mut n = data.len()
         _tr_c_fwrite(p, 1, n, fp)
         _tr_c_fclose(fp)
         return true
@@ -144,8 +141,7 @@ extend File:
         mut fp = _tr_c_fopen(path, "ab")
         if fp as int == 0: return false
         mut p = data as Pointer[char]
-        mut n = 0
-        while p.offset(n).read() as int != 0: n = n + 1
+        mut n = data.len()
         _tr_c_fwrite(p, 1, n, fp)
         _tr_c_fclose(fp)
         return true

@@ -9,7 +9,28 @@ from std.crypto.sha512 import Sha512
 from std.crypto.chacha20 import ChaCha20, Poly1305
 from std.crypto.kdf import Kdf
 from std.crypto.jwt import Jwt, JwtResult
+from std.crypto.random import SecureRandom
+from std.crypto.ct import ConstantTime
+from std.crypto.digest import Digest, Hasher
+from std.crypto.sha3 import Sha3, Sha3Stream
+from std.crypto.blake2 import Blake2, Blake2bStream
+from std.crypto.blake3 import Blake3, Blake3Stream
+from std.crypto.x25519 import X25519
+from std.crypto.otp import Otp
+from std.crypto.argon2 import Argon2, Argon2Params, Argon2Hash
+from std.crypto.bcrypt import Bcrypt
+from std.crypto.native import ALG_SHA1, ALG_SHA256, ALG_SHA384, ALG_SHA512
+from std.crypto.aead import Aead, AEAD_AES_128_GCM, AEAD_AES_256_GCM, AEAD_CHACHA20_POLY1305
+from std.crypto.pk import PKey, Pem, SIG_PKCS1, SIG_PSS, CURVE_P256, CURVE_P384
+from std.crypto.x509 import Certificate, TrustStore, X509, PURPOSE_SERVER
 ```
+
+> The modules from `random` onward are backed by `std/crypto/crypto_native.c`,
+> a dependency-free C file that `tauraroc` compiles and links automatically
+> (via the `# tauraro-cpp-shim:` pragma in `std/crypto/native.tr`) when any of
+> them is imported. They are all binary-safe: a `str` argument's length is
+> `s.len()`, so embedded NUL bytes count. Digests and keys are returned as RAW
+> bytes; `_hex` variants return lower-case hex.
 
 > SHA-256, HMAC-SHA256, and MD5 are implemented in pure C — no external library required.
 > UUID v4 uses `/dev/urandom` on POSIX and `rand()` on Windows.
@@ -398,402 +419,170 @@ match Jwt.decode(token, "wrong-secret"):
 
 ---
 
-## std.crypto.bytes — CryptoBytes (constant-time compare, secure wipe, binary helpers)
+## Secure randomness — `std.crypto.random`
 
-```tauraro
-from std.crypto.bytes import CryptoBytes
-```
+OS CSPRNG (`getrandom`/`/dev/urandom`, `BCryptGenRandom`). Every call raises
+(`throws str`) if the OS generator is unavailable; it never falls back to `rand()`.
 
-Binary values in `std.crypto` (digests, keys, MACs) are `str`s used as raw byte
-buffers; the `str` header carries the true length, so embedded NULs are fine.
-Print them with `Hex.encode`, build them with `Hex.decode`.
-
-| Method | Signature | Description |
+| Method | Returns | Description |
 |---|---|---|
-| `CryptoBytes.ct_eq` | `(a: str, b: str) -> bool` | Constant-time equality (no early exit, no data-dependent branch; time depends only on the lengths). Different lengths return `false` immediately. Use it for MAC / token / password-hash comparison instead of `==`. |
-| `CryptoBytes.ct_eq_n` | `(a: Pointer[char], b: Pointer[char], n: int) -> bool` | Same, for the first `n` bytes of two raw buffers. |
-| `CryptoBytes.ct_eq_int` | `(x: int, y: int) -> int` | Branch-free `1` if the low 32 bits are equal else `0`. |
-| `CryptoBytes.secure_zero` | `(p: Pointer[char], n: int)` | Wipe `n` bytes with volatile stores (a C runtime helper, `_tr_c_secure_zero`), so the compiler cannot drop it as a dead store. |
-| `CryptoBytes.random` | `(n: int) -> str` | `n` bytes from the OS CSPRNG (`BCryptGenRandom` / `/dev/urandom`). |
-| `CryptoBytes.at` | `(s: str, i: int) -> int` | Unsigned byte `i` (0..255). |
-| `CryptoBytes.zeroed` / `wrap` / `release` | `(n) -> Pointer[char]` / `(p, n) -> str` / `(p)` | Allocate a zeroed `n`-byte buffer, turn it into a binary-safe `str` (ownership moves), or free it. `get`/`put` read/write a byte. |
-| `CryptoBytes.slice` / `concat` | `(s, start, n) -> str` / `(a, b) -> str` | Byte-exact slice / concatenation. |
+| `SecureRandom.bytes(n)` | `str` | `n` raw random bytes. |
+| `SecureRandom.token_hex(n)` | `str` | `n` bytes as `2n` hex chars. |
+| `SecureRandom.token_urlsafe(n)` | `str` | `n` bytes as unpadded base64url. |
+| `SecureRandom.int63()` | `int` | Uniform non-negative 63-bit integer. |
+| `SecureRandom.below(n)` | `int` | Uniform in `[0, n)`, no modulo bias. |
+| `SecureRandom.range(lo, hi)` | `int` | Uniform in `[lo, hi]`. |
+| `SecureRandom.unit()` | `float` | Uniform in `[0, 1)` (53 bits). |
 
-**Honest limits.** `ct_eq` is the standard accumulate-the-XOR idiom compiled by an
-optimising C compiler: it holds on mainstream compilers but there is no
-language-level guarantee. `secure_zero` wipes a buffer you own; `str` values are
-reference-counted and may be copied by the runtime, so a secret that lived in a
-`str` cannot be guaranteed erased. The std.crypto hashers and ciphers that keep
-state in an explicit buffer wipe it in `free()`.
+## Constant-time comparison — `std.crypto.ct`
 
----
-
-## std.crypto.sha3 — SHA-3, SHAKE, Keccak
-
-```tauraro
-from std.crypto.sha3 import Sha3, Sha3Hasher
-```
-
-FIPS 202 SHA3-224/256/384/512, the SHAKE128/256 extendable-output functions and the
-original-padding Keccak-256/512 (as used by Ethereum), in pure Tauraro (the
-Keccak-f[1600] permutation is computed from its definition, no big tables).
-
-| Method | Signature | Returns |
-|---|---|---|
-| `Sha3.sha3_224` / `sha3_256` / `sha3_384` / `sha3_512` | `(data: str) -> str` | raw digest (28/32/48/64 bytes) |
-| `Sha3.sha3_256_hex` (etc.) | `(data: str) -> str` | lowercase hex |
-| `Sha3.shake128` / `shake256` | `(data: str, outlen: int) -> str` | `outlen` raw XOF bytes (`_hex` variants too) |
-| `Sha3.keccak256` / `keccak512` | `(data: str) -> str` | raw digest with the pre-standard 0x01 padding |
-| `Sha3Hasher.sha3_256()` (etc., `shake128()`, `shake256()`, `keccak256()`) | `() -> Sha3Hasher` | incremental hasher |
-| `h.update(data)` / `h.update_bytes(data, n)` | | absorb |
-| `h.digest()` / `h.digest_hex()` | `-> str` | fixed-length digest (finishes the hash) |
-| `h.squeeze(n)` | `(n: int) -> str` | next `n` output bytes; call repeatedly for XOF streaming |
-| `h.free()` | | wipe and release the sponge state |
-
-```tauraro
-print(Sha3.sha3_256_hex("abc"))
-# 3a985da74fe225b2045c172d6bd390bd855f086e3e9d525b46bfe24511431532
-mut x = Sha3Hasher.shake256()
-x.update("seed")
-mut block1 = x.squeeze(32)
-mut block2 = x.squeeze(32)      # continues the stream
-x.free()
-```
-
-Verified against the NIST FIPS 202 examples (empty, "abc", 448/896-bit messages, one million
-`a`), Keccak-256/512 known answers, and Python `hashlib` for lengths straddling every rate
-boundary (`tests/lang/110_sha3.tr`).
-
----
-
-## std.crypto.blake2 — BLAKE2b and BLAKE2s (RFC 7693)
-
-```tauraro
-from std.crypto.blake2 import Blake2b, Blake2s, Blake2bHasher, Blake2sHasher
-```
-
-| Method | Signature | Description |
-|---|---|---|
-| `Blake2b.hash` / `hash_hex` | `(data: str, outlen: int) -> str` | BLAKE2b with `outlen` 1..64 bytes (raw / hex). Returns `""` for an invalid `outlen`. |
-| `Blake2b.keyed` / `keyed_hex` | `(data: str, key: str, outlen: int) -> str` | Keyed (MAC) mode, key up to 64 bytes. |
-| `Blake2b.hash_params` | `(data, outlen, key, salt, person) -> str` | Full parameter block; `salt`/`person` are `""` or exactly 16 bytes. |
-| `Blake2s.*` | same, `outlen` 1..32, key up to 32, salt/person `""` or 8 bytes | BLAKE2s. |
-| `Blake2bHasher.init(outlen, key)` / `init_full(...)` | `-> Blake2bHasher` | Incremental: `update(data)`, `update_bytes(data, n)`, `finalize()` / `finalize_hex()` (once), `is_ok()`, `free()`. `Blake2sHasher` is the same. |
-
-```tauraro
-print(Blake2b.hash_hex("abc", 64))
-mut tag = Blake2b.keyed("message", "secret key", 32)   # 32-byte MAC
-```
-
-Sequential mode only (no tree hashing, no XOF mode). Verified against the RFC 7693
-vectors, the official BLAKE2 keyed known-answer vectors and Python `hashlib`
-(`tests/lang/111_blake2.tr`).
-
----
-
-## std.crypto.x25519 — X25519 key exchange (RFC 7748)
-
-```tauraro
-from std.crypto.x25519 import X25519, X25519Keys
-```
-
-| Method | Signature | Description |
-|---|---|---|
-| `X25519.gen_private` | `() -> str` | 32 random bytes from the OS CSPRNG. |
-| `X25519.public_key` | `(private_key: str) -> str` | `X25519(private, 9)`. |
-| `X25519.shared_secret` | `(private_key: str, peer_public: str) -> str` | DH shared secret; returns `""` for wrong-size input **or an all-zero result** (low-order peer point). |
-| `X25519.scalarmult` | `(scalar: str, point: str) -> str` | The raw RFC 7748 function (never rejects a result). |
-| `X25519.keypair` | `() -> X25519Keys` | Fresh `private_key` / `public_key`. |
-| `X25519.clamp`, `base_point`, `*_hex` helpers | | Utilities; hex in / hex out variants. |
-
-```tauraro
-mut a = X25519.keypair()
-mut b = X25519.keypair()
-mut s1 = X25519.shared_secret(a.private_key, b.public_key)
-mut s2 = X25519.shared_secret(b.private_key, a.public_key)   # == s1
-# derive the session key with a KDF (e.g. Blake2b.hash(s1 + both public keys, 32)); never use s1 directly
-```
-
-Montgomery ladder with a branch-free conditional swap (no secret-dependent branches or
-table indices), 16 x 16-bit limbs. Verified against RFC 7748 section 5.2 (vectors and the
-1/1000-iteration chain), section 6.1 and OpenSSL via Python `cryptography`
-(`tests/lang/113_x25519.tr`). A scalar multiplication takes about 2 ms; constant-time
-behaviour depends on the C compiler and has not been formally audited.
-
-## Public-key toolkit (RSA, ECDSA, X.509)
-
-These modules are pure Tauraro and **interoperate with OpenSSL**: the tests verify
-signatures and decrypt ciphertexts produced by the `openssl` CLI, and our signatures
-were checked with `openssl dgst -verify` / `openssl pkeyutl`. They share three helpers:
-
-| Module | Purpose |
+| Method | Description |
 |---|---|
-| `std.crypto.pkutil` | `Bytes` (byte buffers = `Vec[int]` 0..255: `from_str/to_str/from_hex/to_hex/slice/concat/eq/eq_ct/random`), `PkHash` (`digest(alg, data)`, `hmac(alg, key, msg)` for `"sha1"/"sha256"/"sha384"/"sha512"`, raw output) |
-| `std.crypto.bn` | unsigned big numbers (28-bit limbs, `Vec[int]`): `bn_from_hex/bn_to_hex/bn_from_bytes/bn_to_bytes`, `bn_add/sub/mul/divmod/shl/shr/cmp`, `Mont` (Montgomery context: `mul`, `pow`, `inv_prime`, modular `add/sub`), `bn_modexp` |
-| `std.encoding.asn1`, `std.encoding.pem` | DER and PEM (see `encoding.md`) |
+| `ConstantTime.eq(a, b) -> bool` | Equal bytes? Time depends only on the lengths. |
+| `ConstantTime.eq_n(a, b, n) -> bool` | Compare the first `n` bytes. |
+| `ConstantTime.select(cond, a, b) -> int` | `a` if `cond` else `b`, without a data-dependent branch. |
 
-Why not `std.math.bigint`? It is a decimal (base 10^9) type whose division is a per-limb
-binary search: one 2048-bit modular exponentiation takes minutes there. `std.crypto.bn` does
-a full 2048-bit `modexp` (2048-bit exponent) in roughly a second *including* a cold compile,
-and an RSA-2048 signature (CRT) in well under that.
+## Binary-safe SHA-1/SHA-2 — `std.crypto.digest`
 
-### RSA — `std.crypto.rsa`
+`Digest.sha1/sha256/sha384/sha512(data)` return raw digests; `*_hex` return hex;
+`Digest.compute(alg, data)` takes an `ALG_*` id. `Hasher.init(alg)` → `update(data)` →
+`finish()` / `finish_hex()` hashes incrementally (call `dispose()` to abandon one).
 
-```tauraro
-from std.crypto.rsa import Rsa, RsaPublicKey, RsaPrivateKey
-from std.crypto.pkutil import Bytes
+## HMAC additions — `std.crypto.hmac`
 
-# (inside a `throws str` function)
-mut pk = Rsa.public_from_pem(pem_text)?               # SPKI or PKCS#1 public
-mut priv = Rsa.private_from_pem(key_text)?             # PKCS#1 or PKCS#8
-mut sig = Rsa.sign_pkcs1(priv, "sha256", Bytes.from_str("hello"))?
-mut ok = Rsa.verify_pkcs1(pk, "sha256", Bytes.from_str("hello"), sig)    # bool
-mut pss = Rsa.sign_pss(priv, "sha256", msg, 32)?       # random 32-byte salt
-mut ok2 = Rsa.verify_pss(pk, "sha256", msg, pss, 32)  # salt_len < 0: accept any
-mut ct = Rsa.oaep_encrypt(pk, "sha256", secret, label)?
-mut pt = Rsa.oaep_decrypt(priv, "sha256", ct, label)?
-```
+`Hmac.compute(alg, key, msg)` (raw tag, any `ALG_*`), `Hmac.sha1_raw/sha256_raw/sha384_raw/sha512_raw(key, msg)`,
+`Hmac.compute_hex(...)`, and `Hmac.verify(alg, key, msg, tag) -> bool` (constant time; accepts tags truncated to
+≥ 10 bytes). The original `Hmac.sha256(key, klen, msg)` is unchanged.
 
-| API | Notes |
+## HKDF and PBKDF2 additions — `std.crypto.kdf`
+
+| Method | Description |
 |---|---|
-| `Rsa.public_from_pem/der`, `private_from_pem/der` | auto-detect SPKI vs PKCS#1, PKCS#8 vs PKCS#1; keys must be >= 512 bits; encrypted PEM unsupported |
-| `Rsa.public_to_der/pem` (SPKI), `private_to_der/pem` (PKCS#1) | byte-identical to OpenSSL's output |
-| `sign_pkcs1`, `verify_pkcs1`, `sign_pkcs1_digest`, `verify_pkcs1_digest` | EMSA-PKCS1-v1_5; verification compares the whole encoded message (no lenient parsing) |
-| `sign_pss`, `sign_pss_with_salt`, `verify_pss` | RSASSA-PSS, MGF1 with the message hash |
-| `oaep_encrypt`, `oaep_encrypt_with_seed`, `oaep_decrypt`, `oaep_max_message` | RSAES-OAEP (SHA-1/256/384/512 + label); decrypt failures all say `rsa: decryption error` |
+| `Kdf.hkdf(alg, ikm, salt, info, length)` | RFC 5869 extract-then-expand. |
+| `Kdf.hkdf_extract(alg, salt, ikm)` / `Kdf.hkdf_expand(alg, prk, info, length)` | The two halves. |
+| `Kdf.pbkdf2_hmac(alg, password, salt, iterations, dklen)` | PBKDF2 with HMAC-SHA1/256/384/512, binary-safe, in C. |
 
-`verify_*` never raise: any malformed input is simply `false`. PKCS#1 v1.5 *encryption* and
-key generation are deliberately not provided.
+## SHA-3 and SHAKE — `std.crypto.sha3`
 
-**Limitations (honest):** the arithmetic is variable-time and there is no RSA blinding, so
-**private-key operations are not hardened against local timing/cache attackers**; CRT results are
-re-checked with the public key. Public-key verification handles only public data. SHA-1 is accepted for
-legacy interop only.
----
+`Sha3.sha3_224/256/384/512(data)` (+ `_hex`), `Sha3.shake128(data, n)` / `shake256(data, n)` (+ `_hex`).
+`Sha3Stream.sha3(bits)?`, `Sha3Stream.shake128()`, `Sha3Stream.shake256()` → `update(data)?` →
+`finish()` (SHA-3) or repeated `squeeze(n)` (SHAKE, continues the same output stream) → `dispose()`.
 
-## std.crypto.hmac — binary-safe HMAC (SHA-1 / 256 / 384 / 512)
+## BLAKE2 — `std.crypto.blake2`
 
-`Hmac.sha256` / `sha256_str` (above) hash the message with `strlen`, so a message
-containing a NUL byte is truncated. `Hmac.compute` takes the true length of its
-`str` arguments and so is safe for counters, nonces and other binary data:
+`Blake2.b512(data)`, `Blake2.b(data, outlen)?` (1–64), `Blake2.b_keyed(data, key, outlen)?` (key ≤ 64 bytes —
+a keyed BLAKE2b is a MAC), `Blake2.s256(data)`, `Blake2.s(data, outlen)?`, `Blake2.s_keyed(...)?`, plus `_hex`
+forms. `Blake2bStream.init(outlen, key)?` hashes incrementally.
 
-| Method | Signature | Description |
-|---|---|---|
-| `Hmac.compute` | `(alg: str, key: str, msg: str) -> str` | RFC 2104 HMAC; `alg` is `"sha1"`, `"sha256"`, `"sha384"` or `"sha512"`. Returns the RAW tag, or `""` for an unknown algorithm. Keys longer than the block size are hashed first. |
-| `Hmac.compute_hex` | same | Lowercase hex tag. |
-| `Hmac.verify` | `(alg, key, msg, tag) -> bool` | Constant-time tag check (`CryptoBytes.ct_eq`). |
-| `Hmac.hash_raw` / `block_size` / `digest_size` | | Helpers. |
+## BLAKE3 — `std.crypto.blake3`
 
-Verified against the RFC 2202 / 4231 cases and Python `hmac` (`tests/lang/115_hmac_otp.tr`).
+`Blake3.hash(data)` / `hash_hex`, `Blake3.hash_xof(data, n)`, `Blake3.keyed(key32, data)?`,
+`Blake3.keyed_xof(...)?`, `Blake3.derive_key(context, material, n)`. `Blake3Stream.init()` /
+`init_keyed(key)?` / `init_derive_key(context)` → `update` → `finish(n)` (repeatable) → `dispose()`.
 
----
-
-## std.crypto.otp — HOTP and TOTP one-time passwords
+## X25519 — `std.crypto.x25519`
 
 ```tauraro
-from std.crypto.otp import Hotp, Totp, Otp
+from std.crypto.x25519 import X25519
+from std.crypto.kdf import Kdf
+from std.crypto.native import ALG_SHA256
+
+mut mine = X25519.generate_private()?
+mut my_pub = X25519.public_key(mine)?          # send to the peer
+mut shared = X25519.shared_secret(mine, peer_pub)?   # raises on a low-order peer key
+mut key = Kdf.hkdf(ALG_SHA256, shared, "", "my protocol v1", 32)?
 ```
 
-| Method | Signature | Description |
-|---|---|---|
-| `Hotp.generate` | `(secret: str, counter: int, digits: int, alg: str) -> str` | RFC 4226 code, zero-padded; `digits` 6..10, `alg` `"sha1"`/`"sha256"`/`"sha512"`; `""` on invalid parameters. |
-| `Hotp.verify` | `(secret, code, counter, look_ahead, digits, alg) -> int` | Constant-time check over a counter window; returns the matching counter or `-1`. |
-| `Totp.generate` | `(secret, unix_time, period, digits, alg) -> str` | RFC 6238 code. |
-| `Totp.now` | `(secret_b32: str) -> str` | Code for the current time (SHA-1, 6 digits, 30 s) — what authenticator apps show. |
-| `Totp.verify` / `verify_b32` | `(secret, code, unix_time, window, period, digits, alg) -> int` | Accepts steps within +/- `window`; returns the matched time step or `-1`. |
-| `Otp.decode_secret` / `encode_secret` | `(b32) -> str` / `(raw) -> str` | Base32 secrets (via `std.encoding.base32`); decoding tolerates lower case, spaces, dashes and padding. |
-| `Otp.generate_secret_b32` / `generate_secret` | `(nbytes: int) -> str` | Fresh random secret from the OS CSPRNG (20 bytes recommended). |
-| `Otp.provisioning_uri` | `(kind, issuer, account, secret_b32, alg, digits, period, counter) -> str` | `otpauth://` Key URI for QR codes. |
+Also `X25519.scalar_mult(scalar, point)?`, `X25519.to_hex(key)`, `X25519.from_hex(hex)?`.
 
-```tauraro
-mut secret = Otp.generate_secret_b32(20)          # store; show as QR via provisioning_uri
-mut code = Totp.now(secret)                       # "492039"
-mut step = Totp.verify_b32(secret, user_code, Totp.unix_now(), 1)
-if step > last_used_step:                         # reject replays of the same step yourself
-    last_used_step = step
-```
+## One-time passwords — `std.crypto.otp`
 
-Verified against the RFC 4226 Appendix D vectors and the RFC 6238 Appendix B vectors for
-SHA-1, SHA-256 and SHA-512 (`tests/lang/115_hmac_otp.tr`). Verification does not store used
-codes or rate-limit; both are the caller's job.
-
-
-### ECDSA and ECDH — `std.crypto.ecdsa`
-
-NIST **P-256**, **P-384** and **P-521** (`Ecdsa.p256()`, `Ecdsa.p384()`, `Ecdsa.p521()`): ECDSA with **RFC 6979 deterministic nonces**,
-and ECDH. Verified against the RFC 6979 appendix vectors, Python `cryptography` (deterministic
-ECDSA), OpenSSL-made signatures and `openssl pkeyutl -derive`; our signatures pass `openssl dgst -verify`.
-
-```tauraro
-from std.crypto.ecdsa import Ecdsa, EcPublicKey, EcPrivateKey
-from std.crypto.pkutil import Bytes
-
-# (inside a `throws str` function)
-mut priv = Ecdsa.generate(Ecdsa.p256())                  # or private_from_pem / private_from_scalar
-mut sig = Ecdsa.sign(priv, "sha256", Bytes.from_str("hi"))?        # DER SEQUENCE{r, s}
-mut ok = Ecdsa.verify(priv.public_key(), "sha256", Bytes.from_str("hi"), sig)
-mut raw = Ecdsa.sign_raw(priv, "sha256", msg)?                     # r||s (JWS ES256 form)
-mut pt = priv.public_key().to_point(true)                          # 33-byte compressed SEC1 point
-mut pk = Ecdsa.public_from_pem(spki_text)?                         # validates the point is on the curve
-mut shared = Ecdsa.ecdh(priv, peer_public_key)?                    # x coordinate, 32 bytes (P-256)
-```
-
-| API | Notes |
+| Method | Description |
 |---|---|
-| `Ecdsa.generate(curve)`, `private_from_scalar(curve, d_bytes)` | random / explicit private key |
-| `private_from_pem/der`, `public_from_pem/der`, `public_from_point(curve, bytes)` | SEC1 `EC PRIVATE KEY`, PKCS#8, SPKI, `04||X||Y` and compressed `02/03||X` points; every point is validated |
-| `private_to_pem/der` (SEC1), `public_to_pem/der` (SPKI), `pk.to_point(compressed)` | byte-identical to OpenSSL's encodings |
-| `sign`, `sign_raw`, `sign_digest`, `sign_digest_sig` | hash names `sha1/sha256/sha384/sha512`; the same hash seeds the RFC 6979 nonce |
-| `verify`, `verify_raw`, `verify_digest`, `verify_rs` | return `bool`, never raise |
-| `sig_to_der(r, s)`, `sig_from_der(der)` | encoding conversion (`EcSignature{r, s}`) |
-| `ecdh(priv, pk)` | raw shared secret — feed it to a KDF (`Kdf` / hash) before use |
-| `sign_with_k` | explicit nonce, for test vectors only; never use a nonce twice |
+| `Otp.hotp(secret, counter, digits, alg)?` | RFC 4226 code (6–10 digits, SHA-1/256/512). |
+| `Otp.totp(secret, unix_time, step, digits, alg)?` | RFC 6238 code. |
+| `Otp.verify_totp(secret, code, unix_time, step, digits, alg, window) -> bool` | Accepts ±`window` steps, constant-time compare. |
+| `Otp.verify_hotp(secret, code, counter, digits, alg, look_ahead) -> int` | Next counter to store, or -1. |
+| `Otp.totp_counter(unix_time, step)` | The time step (store it to block replays). |
+| `Otp.generate_secret(nbytes)?` | Random secret (≥ 10 bytes). |
+| `Otp.secret_to_base32(raw)` / `Otp.secret_from_base32(text)?` | Authenticator-app encoding. |
+| `Otp.provisioning_uri(b32, account, issuer, alg, digits, period)` | `otpauth://totp/...` for QR codes (`provisioning_uri_hotp` for HOTP). |
 
-**Limitations (honest):** scalar multiplication is plain left-to-right double-and-add on variable-time
-bignum code — **not constant-time**; do not use it where an attacker can time private-key operations
-(signing, ECDH with a long-lived key). Deterministic nonces remove the bad-RNG failure mode, not side
-channels. Only P-256 and P-384 (prime field, `a = -3`, cofactor 1); no P-521, secp256k1 or Ed448.
-About 10 ms per P-256 scalar multiplication (a verify costs two).
----
+## Argon2 — `std.crypto.argon2`
 
-## std.crypto.argon2 — Argon2d / Argon2i / Argon2id (RFC 9106)
+Argon2d / Argon2i / Argon2id (RFC 9106, version 0x13) with PHC strings
+(`$argon2id$v=19$m=19456,t=2,p=1$salt$hash`) compatible with other Argon2 libraries.
+Defaults (`Argon2Params.default()`): Argon2id, 19 MiB, t = 2, p = 1 (OWASP). Lanes run sequentially.
 
-```tauraro
-from std.crypto.argon2 import Argon2, Argon2Params
-```
-
-The memory-hard password-hashing function (`std.crypto.kdf` only offers PBKDF2). Pure Tauraro
-on top of `std.crypto.blake2`. Argon2id is the variant to use for password storage.
-
-| Method | Signature | Description |
-|---|---|---|
-| `Argon2.hash_password` | `(password: str) -> str` | PHC string `$argon2id$v=19$m=19456,t=2,p=1$<salt>$<tag>` with a random 16-byte salt (OWASP-minimum parameters). |
-| `Argon2.hash_password_with` | `(password, variant, t, m, p) -> str` | Same with chosen variant (`"argon2id"`/`"argon2i"`/`"argon2d"`) and costs (`m` in KiB); `""` on invalid parameters. |
-| `Argon2.verify` | `(encoded: str, password: str) -> bool` | Verifies against any PHC string (parameters come from the string); constant-time tag compare; malformed input is `false`. |
-| `Argon2.needs_rehash` | `(encoded, t, m, p) -> bool` | True if the stored hash is weaker than the given minimums or not Argon2id. |
-| `Argon2.hash_raw` | `(variant, password, salt, t, m, p, taglen, secret, ad) throws str -> str` | Raw tag with every RFC parameter (optional `secret` / `ad`, `""` if unused). |
-| `Argon2.id` / `i` / `d` | `(password, salt, t, m, p, taglen) throws str -> str` | Raw tag, no secret/ad. |
-| `Argon2.encode` / `decode` | | Build / parse PHC strings (`Argon2Params`: `ok`, `err`, `variant`, `m`, `t`, `p`, `salt`, `hash`). |
-
-```tauraro
-mut stored = Argon2.hash_password("correct horse battery staple")   # store this
-if Argon2.verify(stored, attempt):
-    if Argon2.needs_rehash(stored, 3, 65536, 1):
-        stored = Argon2.hash_password_with(attempt, "argon2id", 3, 65536, 1)
-```
-
-Constraints (RFC 9106): `t >= 1`, `m >= 8 * p` KiB (rounded down to a multiple of `4 * p`),
-`p >= 1`, tag >= 4 bytes, salt >= 8 bytes (use 16 random bytes). Only Argon2 version 19 (0x13)
-is implemented; `v=16` strings are rejected. Lanes are computed one after another on a single
-thread (the output is identical to a parallel run), at roughly 400 MiB/s of memory traffic per
-core. The memory block is wiped before it is freed; the password `str` itself cannot be.
-
-Verified against the three RFC 9106 section 5 vectors and ~25 further cases generated with
-`openssl kdf ARGON2D/I/ID` (rounding, long tags, multi-lane, address-block regeneration, NULs,
-empty inputs), plus the reference-implementation example hash (`tests/lang/116_argon2.tr`).
-bcrypt is not provided (use Argon2id; it is the stronger, modern choice).
-
----
-
-## std.crypto.blake3 — BLAKE3
-
-```tauraro
-from std.crypto.blake3 import Blake3, Blake3Hasher
-```
-
-| Method | Signature | Description |
-|---|---|---|
-| `Blake3.hash` / `hash_hex` | `(data: str, n: int) -> str` | Default mode with `n` output bytes (32 standard). BLAKE3 is an XOF: the first 32 bytes of a 64-byte output equal the 32-byte hash. |
-| `Blake3.keyed_hash` / `keyed_hash_hex` | `(key: str, data: str, n: int) -> str` | MAC / PRF mode; `key` must be exactly 32 bytes (otherwise `""`). |
-| `Blake3.derive_key` / `derive_key_hex` | `(context: str, material: str, n: int) -> str` | KDF mode; `context` should be a hard-coded, globally unique, application-specific string. |
-| `Blake3Hasher.new()` / `new_keyed(key)` / `new_derive_key(context)` | `-> Blake3Hasher` | Incremental hasher: `update(data)`, `update_bytes(data, n)`, `finalize(n)` / `finalize_hex(n)` (repeatable, non-consuming), `is_ok()`, `free()`. |
-
-```tauraro
-print(Blake3.hash_hex("abc", 32))
-mut session_key = Blake3.derive_key("myapp 2026-10-11 session key", shared_secret, 32)
-```
-
-The full tree mode (1024-byte chunks, chaining-value stack, parent nodes) is implemented as
-in the reference implementation, sequentially (no SIMD / threads): about 50 MB/s. Verified
-against the official vectors reproducible offline (empty, 1, 3, 1023, 1024, 1025 bytes, keyed
-and derive_key at length 0) and a spec-derived Python model for 1..102400-byte inputs, keyed,
-derive_key and long outputs (`tests/lang/112_blake3.tr`). The official `test_vectors.json`
-file was not available offline, so its remaining entries were not run.
-
-Rough speeds of the pure-Tauraro hashes on one x86-64 core: BLAKE2b ~100 MB/s, BLAKE3 ~50 MB/s,
-SHA-3-256 ~20 MB/s.
-
-channels. Only P-256, P-384 and P-521 (prime field, `a = -3`, cofactor 1); no secp256k1 or Ed448.
-About 10 ms per P-256 scalar multiplication (a verify costs two); P-521 is several times slower.
-
-
-### X.509 certificates — `std.crypto.x509`
-
-Parses X.509 v3 certificates (RFC 5280) and validates chains against a set of trust anchors, with
-no OpenSSL involved. Signatures: `sha1/256/384/512WithRSAEncryption`, RSASSA-PSS, ECDSA
-(P-256/P-384/P-521, SHA-1/256/384/512) and Ed25519 — all 121 roots of the Debian/Ubuntu system bundle
-(RSA, P-256/384/521) verify their own self-signature. Built on `asn1`, `pem`, `rsa`, `ecdsa`, `ed25519`.
-
-```tauraro
-from std.crypto.x509 import X509, X509Cert, X509Store
-from std.sys.time import Clock
-
-# (inside a `throws str` function)
-mut store = X509Store.init()
-mut n = store.load_system()          # $SSL_CERT_FILE, then /etc/ssl/certs/ca-certificates.crt,
-                                     # /etc/pki/tls/certs/ca-bundle.crt, /etc/ssl/cert.pem, ...; 0 if none
-store.add_pem(my_private_ca_pem)     # or pin your own roots
-
-mut leaf = X509.parse_pem(leaf_pem)?
-mut inters = X509.parse_pem_all(intermediates_pem)           # untrusted, as sent by the server
-mut res = X509.verify_chain(leaf, inters, store, "example.com", Clock.timestamp(), X509.default_options())
-if res.ok:
-    print("trusted via " + res.anchor + ", path length " + res.depth.to_str())
-else:
-    print("rejected: " + res.error)
-```
-
-| API | Notes |
+| Method | Description |
 |---|---|
-| `X509.parse_der(der)`, `parse_pem(text)` | `throws str`; strict DER. `parse_pem_all(text)` returns every `CERTIFICATE` block of a bundle (broken ones are skipped) |
-| `X509Cert` fields | `version`, `serial`, `subject` / `issuer` (`X509Name`: `text`, `cn`, `raw`), `not_before` / `not_after` (Unix seconds), `sig_alg_oid`, `key_alg` (`rsa`/`ec`/`ed25519`/`other`), `key_curve_oid`, `spki`, `san_dns/san_ips/san_emails/san_uris`, `bc_ca`, `bc_pathlen`, `ku_bits`, `eku`, `ski`, `aki`, name constraints |
-| `cert.is_valid_at(t)`, `is_ca()`, `can_sign_certs()`, `key_usage_has(bit)`, `is_self_issued()`, `is_self_signed()` | key-usage bit 0 = digitalSignature, 5 = keyCertSign |
-| `cert.verify_signed_by(issuer)` | signature check only (names are not compared) |
-| `cert.matches_hostname(host)`, `X509.match_dns(pattern, host)` | RFC 6125 matching, see below |
-| `cert.public_key_rsa()`, `public_key_ec()`, `fingerprint_sha256()`, `describe()` | |
-| `X509Store.init()`, `add(cert)`, `add_pem(text)`, `load_system()`, `contains(cert)`, `len()` | `load_system` returns the number of roots loaded (0 on Windows, whose roots live in the OS store) |
-| `X509.verify_chain(leaf, inters, store, host, now, opts)` | `ChainResult{ok, error, depth, anchor}`; `host = ""` skips the name check |
-| `X509.verify_server_chain(chain, store, host)` | `chain[0]` = leaf; current time and default options |
-| `X509.default_options()` | `purpose` `"server"` (also `"client"`, `"any"`), `allow_sha1 = false`, `max_depth = 8`, `check_time = true` |
+| `Argon2.hash(password)?` | PHC string with defaults and a random salt. |
+| `Argon2.hash_with(password, params)?` / `hash_with_salt(password, salt, params)?` | Custom costs. |
+| `Argon2.verify(encoded, password) -> bool` | Constant-time; false for malformed strings. |
+| `Argon2.needs_rehash(encoded, params) -> bool` | True when the stored costs differ. |
+| `Argon2.decode(encoded)? -> Argon2Hash` / `Argon2.encode(...)` | PHC parsing / formatting. |
+| `Argon2.hash_raw(variant, password, salt, t, m_kib, p, outlen)?` | Raw KDF output. |
+| `Argon2.hash_raw_keyed(variant, password, salt, secret, ad, t, m_kib, p, outlen)?` | With secret key K and associated data X. |
 
-**What `verify_chain` checks:** every signature up to a trust anchor (with backtracking when several
-candidate issuers share a name), validity periods of all certificates including the anchor,
-`basicConstraints` CA flag and `pathLenConstraint`, `keyUsage` keyCertSign on every issuer, `extKeyUsage`
-on the leaf (serverAuth / clientAuth), dNSName `nameConstraints`, rejection of unknown **critical**
-extensions, SHA-1 signatures (unless `allow_sha1`), and the hostname. A certificate that is itself in
-the store (pinning) or an intermediate placed in the store is accepted as an anchor.
+Variants: `ARGON2D`, `ARGON2I`, `ARGON2ID`.
 
-**Hostname rules (RFC 6125 / browser profile):** only `subjectAltName` is consulted — there is **no
-Common Name fallback**. Matching is case-insensitive; a wildcard is honoured only as the whole leftmost
-label (`*.example.com` matches `a.example.com`, not `example.com`, `a.b.example.com`, `f*.example.com` or
-`*.com`). IP-address hosts match only `iPAddress` SANs (IPv4 and IPv6, incl. `::` forms).
+## bcrypt — `std.crypto.bcrypt`
 
-**Not done:** revocation (CRL/OCSP), certificate transparency, AIA fetching, certificate policies,
-nameConstraints for non-DNS names (a chain using them is rejected when the leaf has such names),
-non-prime-field curves, BER encodings.
+`Bcrypt.hash(password, cost)?` → `$2b$<cost>$...` (60 chars), `Bcrypt.hash_with_salt(password, salt16, cost)?`,
+`Bcrypt.verify(password, hashed) -> bool` (accepts `$2a$`/`$2b$`/`$2y$`), `Bcrypt.cost_of(hashed)`,
+`Bcrypt.needs_rehash(hashed, cost)`. `hash` refuses passwords over 72 bytes instead of silently truncating;
+`verify` truncates at 72 bytes for compatibility with hashes made elsewhere.
 
-#### Using X.509 with `HttpSession`
+Tested in `tests/lang/105_crypto_modern.tr` against the RFC/FIPS vectors and hashes produced by
+argon2-cffi and pyca/bcrypt.
 
-The runtime TLS layer is **unchanged**: `std.net.https` / `HttpSession` still connect without
-certificate validation (`set_allow_unverified_tls`). A TLS backend that can hand over the peer's
-certificate chain (DER blobs, leaf first) would plug the verifier in like this, after the handshake and
-before any request bytes are sent:
+## AEAD — `std.crypto.aead`
+
+`Aead.seal(alg, key, nonce12, aad, plaintext)?` → ciphertext ‖ 16-byte tag; `Aead.open(alg, key, nonce12, aad, sealed)?`
+raises on any modification (constant-time tag check). `alg`: `AEAD_AES_128_GCM` (16-byte key), `AEAD_AES_256_GCM`,
+`AEAD_CHACHA20_POLY1305` (32-byte keys). Never reuse a nonce with the same key.
+
+## Public keys and signatures — `std.crypto.pk`
+
+`PKey` holds an RSA or EC (P-256/P-384) key, public or private, parsed from DER/PEM (SPKI, PKCS#8, PKCS#1, SEC1;
+encrypted PEM is not supported) or generated (`PKey.generate_ec(CURVE_P256)?`).
+
+| Method | Description |
+|---|---|
+| `PKey.from_pem(text)?` / `PKey.from_der(der)?` | Parse the first key block / a DER key. |
+| `PKey.ec_from_private(curve, scalar)?`, `ec_from_public(curve, point)?`, `rsa_from_public(n, e)?` | Build from raw parts (points are validated). |
+| `sign(msg, alg, scheme)?` / `verify(msg, sig, alg, scheme)` | RSA: `SIG_PKCS1` or `SIG_PSS` (salt = hash length). EC: DER ECDSA, scheme ignored, deterministic nonces (RFC 6979). |
+| `sign_raw(msg, alg)?` / `verify_raw(msg, sig, alg)` | ECDSA as fixed-size `r‖s` (JOSE/WebAuthn). |
+| `shared_secret(peer_point)?` | ECDH x-coordinate. |
+| `kind()`, `bits()`, `has_private()`, `public_bytes()`, `ec_private_bytes()?`, `dispose()` | Introspection / cleanup. |
+
+`Pem.decode(text, label)?`, `Pem.decode_nth(text, label, i)?`, `Pem.label_of(text, i)`, `Pem.encode(der, label)`.
+SHA-1 is accepted for verification only. Private-key code avoids secret-dependent branches and lookups but has
+not been independently audited for side channels.
+
+## X.509 — `std.crypto.x509`
 
 ```tauraro
-mut chain = Vec[X509Cert].init(4)
-chain.push(X509.parse_der(leaf_der)?)           # + one push per intermediate
-mut store = X509Store.init()
-store.load_system()
-mut res = X509.verify_server_chain(chain, store, host)
-if not res.ok: abort the connection with res.error
+from std.crypto.x509 import Certificate, TrustStore, X509, PURPOSE_SERVER
+
+mut chain = Certificate.all_from_pem(read_file("fullchain.pem"))?
+mut code = X509.verify(TrustStore.system(), chain, "example.com", 0, PURPOSE_SERVER)
+if code != 0: print(X509.error_text(code))
+print(chain[0].subject(), chain[0].dns_names(), chain[0].not_after())
 ```
+
+`Certificate`: `subject()`, `issuer()`, `serial_hex()`, `dns_names()`, `ip_addresses()`, `not_before()`/`not_after()`
+(Unix time), `is_ca()`, `path_len()`, `key_usage()` (`KU_*` bits, -1 if absent), `ext_key_usage()` (`EKU_*`),
+`signature_algorithm()`, `key_algorithm()`, `key_bits()`, `matches_host(h)`, `is_signed_by(issuer)`,
+`is_self_signed()`, `fingerprint_sha256()`, `der()`, `to_pem()`, `public_key()?`.
+
+`TrustStore.system()` (OS roots: CA bundle files or the Windows ROOT store, loaded once and shared; honours
+`SSL_CERT_FILE`), `TrustStore.empty()`, `system_copy()`, `add_pem(text)`, `add_der(der)?`, `add(cert)?`, `count()`.
+
+`X509.verify(store, chain, host, now, purpose)` / `verify_der(...)` build a path through untrusted intermediates
+(any order) to a trust anchor and check signatures (SHA-1 refused), validity, basicConstraints/pathLen, keyUsage,
+EKU, dNSName name constraints, unknown critical extensions and the host name (RFC 6125: SAN only, single-label
+leftmost wildcards, IP SANs). Returns 0 or a negative code (`X509.error_text`). Revocation is not checked.
+
+Tested by `tests/lang/106_x509_tls.tr`; the TLS client was also checked against OpenSSL `s_server` (every cipher
+suite, HelloRetryRequest, KeyUpdate) and public HTTPS sites.

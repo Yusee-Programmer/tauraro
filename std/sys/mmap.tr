@@ -1,340 +1,127 @@
-# std.sys.mmap — memory-mapped files and anonymous shared memory.
+# std.sys.mmap -- memory-mapped files and anonymous memory.
 #
-#   from std.sys.mmap import MemMap
+# A `MemoryMap` gives byte-level access to a file's contents without reading
+# it into a string first; writes to a MAP_READ_WRITE map go straight to the
+# file (call flush() to force them to disk). MAP_COPY maps are private:
+# writes are visible only to this process. Anonymous maps are zero-filled
+# scratch memory. Offsets are bounds-checked; out-of-range access raises.
 #
-#   mut m = MemMap.open_readwrite("data.bin")
-#   if not m.is_open():
-#       print("cannot map: " + m.error)
-#       return
-#   m.set_u32(0, 0xCAFE)                 # little-endian fixed-width access
-#   m.write_str(16, "hello")             # raw bytes in
-#   print(m.read_str(16, 5))             # raw bytes out (binary-safe str)
-#   m.flush()                            # msync / FlushViewOfFile
-#   # `m` is unmapped (and its file handle closed) at scope exit — the
-#   # user-defined `free()` below runs there, exactly like StringBuilder;
-#   # `m.close()` does the same early and is idempotent.
+# 64-bit atomics (atomic_add / atomic_cas / ...) work at 8-byte aligned
+# offsets and are meant for maps shared between processes (std.sys.shm).
 #
-# Modes
-#   MemMap.open_read(path)       read-only shared mapping
-#   MemMap.open_readwrite(path)  read-write; stores reach the file (MAP_SHARED)
-#   MemMap.open_private(path)    copy-on-write: stores are visible to this
-#                                mapping only and never written back
-#   MemMap.open_range(path, mode, offset, length)
-#                                map a window; `offset` need not be aligned
-#                                (the module aligns it internally)
-#   MemMap.create(path, size)    create/truncate a file of `size` bytes, map it RW
-#   MemMap.anonymous(size)       zero-filled memory that is NOT backed by a file;
-#                                shared with fork()ed children on POSIX
-#
-# Failure model (the std.sys / std.io convention, no exceptions): the open_*
-# constructors always return a MemMap; check `is_open()`. On failure `error`
-# holds the OS message and `code` the errno / GetLastError() value.
-# Out-of-range reads return 0 / "" and out-of-range or read-only writes return
-# false — they never touch memory outside the mapping.
-#
-# Platforms: POSIX mmap/msync/munmap; Windows CreateFileMapping +
-# MapViewOfFile + FlushViewOfFile. Bare-metal, kernel and WASI builds have no
-# virtual memory: `supported()` is false, every constructor fails with
-# "not supported on this platform".
-#
-# Limits worth knowing: a mapped file that is truncated by another process
-# can fault (SIGBUS) on access — that is inherent to mmap. Empty files cannot
-# be mapped. Opening read-write with an explicit length larger than the file
-# GROWS the file to that length.
+# Usage:
+#   from std.sys.mmap import MemoryMap, MAP_READ, MAP_READ_WRITE
+#   mut m = MemoryMap.open("data.bin", MAP_READ)?
+#   mut header = m.read(0, 16)?
+#   mut at = m.find("needle", 0)
+#   m.close()
 
-extern "C":
-    def _tr_mmap_open(path: str, mode: int, offset: int, len: int) -> Pointer[char]
-    def _tr_mmap_create(path: str, len: int) -> Pointer[char]
-    def _tr_mmap_anon(len: int) -> Pointer[char]
-    def _tr_mmap_base(h: Pointer[char]) -> Pointer[char]
-    def _tr_mmap_len(h: Pointer[char]) -> int
-    def _tr_mmap_flush(h: Pointer[char], off: int, len: int, sync: int) -> int
-    def _tr_mmap_close(h: Pointer[char]) -> int
-    def _tr_mem_get(p: Pointer[char], off: int, w: int) -> int
-    def _tr_mem_set(p: Pointer[char], off: int, w: int, v: int)
-    def _tr_mem_get_f64(p: Pointer[char], off: int) -> float
-    def _tr_mem_set_f64(p: Pointer[char], off: int, v: float)
-    def _tr_mem_atomic_load64(p: Pointer[char]) -> int
-    def _tr_mem_atomic_store64(p: Pointer[char], v: int)
-    def _tr_mem_atomic_add64(p: Pointer[char], v: int) -> int
-    def _tr_mem_atomic_cas64(p: Pointer[char], expected: int, desired: int) -> int
-    def _tr_sys_errno() -> int
-    def _tr_sys_errstr(code: int) -> str
-    def _tr_sys_feature(id: int) -> int
-    def _tr_sys_page_size() -> int
-    def _tr_c_malloc(size: int) -> Pointer[char]
-    def _tr_free(p: Pointer[char])
-    def _tr_c_memcpy(dst: Pointer[char], src: Pointer[char], n: int)
-    def _tr_c_memset(p: Pointer[char], v: int, n: int)
-    def _tr_str_wrap_len(s: Pointer[char], blen: int) -> str
+from std.sys.ipc import trc_mmap_file, trc_mmap_anon, trc_map_len, trc_map_writable, trc_map_read, trc_map_write, trc_map_find
+from std.sys.ipc import trc_map_atomic_load, trc_map_atomic_store, trc_map_atomic_add, trc_map_atomic_cas, trc_map_flush, trc_map_close
+from std.sys.ipc import _ipc_error, _ipc_cstr, _ipc_null
+from std.crypto.native import _cn_alloc, _cn_take, _cn_free
 
-# ── raw helpers shared with std.sys.shm ─────────────────────────────────────
+pub const MAP_READ = 0
+pub const MAP_READ_WRITE = 1
+pub const MAP_COPY = 2
 
-# Copy n bytes out of raw memory into a fresh binary-safe str.
-pub def mem_read_str(base: Pointer[char], off: int, n: int) -> str:
-    if n <= 0: return ""
-    mut buf = _tr_c_malloc(n + 1)
-    unsafe:
-        _tr_c_memcpy(buf, base.offset(off), n)
-        buf.offset(n).write('\0')
-    return _tr_str_wrap_len(buf, n)
+pub class MemoryMap:
+    _h: Pointer[char]
+    pub size: int
 
-# Copy all bytes of s into raw memory at off.
-pub def mem_write_str(base: Pointer[char], off: int, s: str):
-    mut n = s.len()
-    if n <= 0: return
-    unsafe:
-        _tr_c_memcpy(base.offset(off), s as Pointer[char], n)
-
-pub def mem_sign_extend(v: int, width: int) -> int:
-    if width == 1:
-        if v >= 128: return v - 256
-        return v
-    if width == 2:
-        if v >= 32768: return v - 65536
-        return v
-    if width == 4:
-        if v >= 2147483648: return v - 4294967296
-        return v
-    return v
-
-pub def MMAP_READ()    -> int: return 0
-pub def MMAP_WRITE()   -> int: return 1
-pub def MMAP_PRIVATE() -> int: return 2
-
-# ── MemMap ──────────────────────────────────────────────────────────────────
-
-pub class MemMap:
-    pub handle:   Pointer[char]
-    pub base:     Pointer[char]
-    pub size:     int
-    pub writable: bool
-    pub opened:   bool
-    pub code:     int
-    pub error:    str
-
-extend MemMap:
-    # Zero-state object used for failures.
-    pub def _failed(code: int) -> MemMap:
-        mut m = MemMap()
-        m.handle = 0 as Pointer[char]
-        m.base = 0 as Pointer[char]
-        m.size = 0
-        m.writable = false
-        m.opened = false
-        m.code = code
-        m.error = _tr_sys_errstr(code)
+extend MemoryMap:
+    pub def _wrap(h: Pointer[char]) -> MemoryMap:
+        mut m = MemoryMap()
+        m._h = h
+        m.size = trc_map_len(h)
         return m
 
-    pub def _wrap(h: Pointer[char], writable: bool) -> MemMap:
-        mut m = MemMap()
-        m.handle = h
-        m.base = _tr_mmap_base(h)
-        m.size = _tr_mmap_len(h)
-        m.writable = writable
-        m.opened = true
-        m.code = 0
-        m.error = ""
-        return m
+    # Map a whole file (it must exist and be non-empty).
+    pub def open(path: str, mode: int) throws str -> MemoryMap:
+        return MemoryMap.open_range(path, mode, 0, 0)?
 
-    # True when this platform has virtual memory / file mapping.
-    pub def supported() -> bool:
-        return _tr_sys_feature(1) == 1
+    # Map `length` bytes starting at `offset` (length 0 = to the end).
+    pub def open_range(path: str, mode: int, offset: int, length: int) throws str -> MemoryMap:
+        if mode < 0 or mode > 2: raise("mmap: mode must be MAP_READ, MAP_READ_WRITE or MAP_COPY")
+        mut p = _ipc_cstr(path)
+        mut pp = p as Pointer[char]
+        mut h = trc_mmap_file(pp, mode, offset, length)
+        if _ipc_null(h):
+            mut e = _ipc_error()
+            raise(e)
+        return MemoryMap._wrap(h)
 
-    # Mapping granularity: the alignment of internal map starts (page size on POSIX,
-    # allocation granularity on Windows). `open_range` offsets do not need to be aligned.
-    pub def page_size() -> int:
-        return _tr_sys_page_size()
+    # Zero-filled private memory of `size` bytes.
+    pub def anonymous(size: int) throws str -> MemoryMap:
+        mut h = trc_mmap_anon(size)
+        if _ipc_null(h):
+            mut e = _ipc_error()
+            raise(e)
+        return MemoryMap._wrap(h)
 
-    pub def open_read(path: str) -> MemMap:
-        return MemMap.open_range(path, 0, 0, 0)
+    pub def len(self) -> int: return self.size
+    pub def is_writable(self) -> bool: return trc_map_writable(self._h) == 1
 
-    pub def open_readwrite(path: str) -> MemMap:
-        return MemMap.open_range(path, 1, 0, 0)
+    # `n` bytes at `offset` (binary-safe copy).
+    pub def read(self, offset: int, n: int) throws str -> str:
+        if n < 0 or offset < 0 or offset + n > self.size: raise("mmap: read outside the mapping")
+        mut out = _cn_alloc(n)
+        trc_map_read(self._h, offset, out, n)
+        return _cn_take(out, n)
 
-    pub def open_private(path: str) -> MemMap:
-        return MemMap.open_range(path, 2, 0, 0)
+    # The whole mapping as a string.
+    pub def read_all(self) -> str:
+        mut out = _cn_alloc(self.size)
+        trc_map_read(self._h, 0, out, self.size)
+        return _cn_take(out, self.size)
 
-    # mode: MMAP_READ() / MMAP_WRITE() / MMAP_PRIVATE(). length <= 0 maps to the
-    # end of the file.
-    pub def open_range(path: str, mode: int, offset: int, length: int) -> MemMap:
-        mut h = _tr_mmap_open(path, mode, offset, length)
-        if (h as int) == 0:
-            return MemMap._failed(_tr_sys_errno())
-        return MemMap._wrap(h, mode != 0)
+    pub def write(self, offset: int, data: str) throws str:
+        mut dp = data as Pointer[char]
+        if trc_map_write(self._h, offset, dp, data.len()) < 0:
+            mut e = _ipc_error()
+            raise(e)
 
-    pub def create(path: str, size: int) -> MemMap:
-        mut h = _tr_mmap_create(path, size)
-        if (h as int) == 0:
-            return MemMap._failed(_tr_sys_errno())
-        return MemMap._wrap(h, true)
+    # Byte value 0..255 at `i`, or -1 when out of range.
+    pub def byte_at(self, i: int) -> int:
+        if i < 0 or i >= self.size: return -1
+        mut out = _cn_alloc(1)
+        trc_map_read(self._h, i, out, 1)
+        mut v = 0
+        unsafe: v = (out.read() as int) & 255
+        _cn_free(out)
+        return v
 
-    pub def anonymous(size: int) -> MemMap:
-        mut h = _tr_mmap_anon(size)
-        if (h as int) == 0:
-            return MemMap._failed(_tr_sys_errno())
-        return MemMap._wrap(h, true)
+    pub def set_byte(self, i: int, v: int) throws str:
+        mut b = _cn_alloc(1)
+        unsafe: b.write((v & 255) as char)
+        mut r = trc_map_write(self._h, i, b, 1)
+        _cn_free(b)
+        if r < 0:
+            mut e = _ipc_error()
+            raise(e)
 
-    # ── state ────────────────────────────────────────────────────────────────
+    # First offset >= `start` where `needle` occurs, or -1.
+    pub def find(self, needle: str, start: int) -> int:
+        mut np = needle as Pointer[char]
+        return trc_map_find(self._h, np, needle.len(), start)
 
-    pub def is_open(self) -> bool:
-        return self.opened
+    # Atomic 64-bit operations at an 8-byte aligned offset.
+    pub def atomic_load(self, offset: int) -> int: return trc_map_atomic_load(self._h, offset)
+    pub def atomic_store(self, offset: int, v: int): trc_map_atomic_store(self._h, offset, v)
+    # Adds `v` and returns the previous value.
+    pub def atomic_add(self, offset: int, v: int) -> int: return trc_map_atomic_add(self._h, offset, v)
+    # Sets `desired` if the slot holds `expect`; true on success.
+    pub def atomic_cas(self, offset: int, expect: int, desired: int) -> bool:
+        return trc_map_atomic_cas(self._h, offset, expect, desired) == 1
 
-    pub def len(self) -> int:
-        return self.size
+    # Write dirty pages of a file mapping back to disk.
+    pub def flush(self) throws str:
+        if trc_map_flush(self._h) < 0:
+            mut e = _ipc_error()
+            raise(e)
 
-    pub def is_writable(self) -> bool:
-        return self.opened and self.writable
-
-    # True when [off, off+n) lies inside the mapping.
-    pub def in_range(self, off: int, n: int) -> bool:
-        if not self.opened: return false
-        if off < 0 or n < 0: return false
-        if off > self.size: return false
-        return n <= self.size - off
-
-    # ── reads (little-endian; out of range -> 0) ─────────────────────────────
-
-    pub def get_u8(self, off: int) -> int:
-        if not self.in_range(off, 1): return 0
-        return _tr_mem_get(self.base, off, 1)
-
-    pub def get_i8(self, off: int) -> int:
-        return mem_sign_extend(self.get_u8(off), 1)
-
-    pub def get_u16(self, off: int) -> int:
-        if not self.in_range(off, 2): return 0
-        return _tr_mem_get(self.base, off, 2)
-
-    pub def get_i16(self, off: int) -> int:
-        return mem_sign_extend(self.get_u16(off), 2)
-
-    pub def get_u32(self, off: int) -> int:
-        if not self.in_range(off, 4): return 0
-        return _tr_mem_get(self.base, off, 4)
-
-    pub def get_i32(self, off: int) -> int:
-        return mem_sign_extend(self.get_u32(off), 4)
-
-    # 64-bit values >= 2^63 read back negative (same bit pattern).
-    pub def get_i64(self, off: int) -> int:
-        if not self.in_range(off, 8): return 0
-        return _tr_mem_get(self.base, off, 8)
-
-    pub def get_f64(self, off: int) -> float:
-        if not self.in_range(off, 8): return 0.0
-        return _tr_mem_get_f64(self.base, off)
-
-    # n raw bytes starting at off (clamped to the mapping); binary-safe.
-    pub def read_str(self, off: int, n: int) -> str:
-        if not self.in_range(off, n): return ""
-        return mem_read_str(self.base, off, n)
-
-    # ── writes (false when read-only or out of range) ────────────────────────
-
-    pub def set_u8(self, off: int, v: int) -> bool:
-        if not self.writable or not self.in_range(off, 1): return false
-        _tr_mem_set(self.base, off, 1, v)
-        return true
-
-    pub def set_u16(self, off: int, v: int) -> bool:
-        if not self.writable or not self.in_range(off, 2): return false
-        _tr_mem_set(self.base, off, 2, v)
-        return true
-
-    pub def set_u32(self, off: int, v: int) -> bool:
-        if not self.writable or not self.in_range(off, 4): return false
-        _tr_mem_set(self.base, off, 4, v)
-        return true
-
-    pub def set_i64(self, off: int, v: int) -> bool:
-        if not self.writable or not self.in_range(off, 8): return false
-        _tr_mem_set(self.base, off, 8, v)
-        return true
-
-    pub def set_f64(self, off: int, v: float) -> bool:
-        if not self.writable or not self.in_range(off, 8): return false
-        _tr_mem_set_f64(self.base, off, v)
-        return true
-
-    pub def write_str(self, off: int, s: str) -> bool:
-        if not self.writable or not self.in_range(off, s.len()): return false
-        mem_write_str(self.base, off, s)
-        return true
-
-    # Set n bytes starting at off to the byte value b.
-    pub def fill(self, off: int, n: int, b: int) -> bool:
-        if not self.writable or not self.in_range(off, n): return false
-        if n == 0: return true
-        unsafe:
-            _tr_c_memset(self.base.offset(off), b, n)
-        return true
-
-    # ── atomics (8-byte aligned offsets only; work across processes on shared maps) ──
-
-    pub def atomic_ok(self, off: int) -> bool:
-        if not self.in_range(off, 8): return false
-        mut addr = (self.base as int) + off
-        return (addr % 8) == 0
-
-    pub def atomic_load(self, off: int) -> int:
-        if not self.atomic_ok(off): return 0
-        unsafe:
-            return _tr_mem_atomic_load64(self.base.offset(off))
-        return 0
-
-    pub def atomic_store(self, off: int, v: int) -> bool:
-        if not self.writable or not self.atomic_ok(off): return false
-        unsafe:
-            _tr_mem_atomic_store64(self.base.offset(off), v)
-        return true
-
-    # Adds v and returns the PREVIOUS value (fetch-add). Returns 0 when refused;
-    # check atomic_ok()/is_writable() first if that is ambiguous.
-    pub def atomic_add(self, off: int, v: int) -> int:
-        if not self.writable or not self.atomic_ok(off): return 0
-        unsafe:
-            return _tr_mem_atomic_add64(self.base.offset(off), v)
-        return 0
-
-    # Compare-and-swap; true when the swap happened.
-    pub def atomic_cas(self, off: int, expected: int, desired: int) -> bool:
-        if not self.writable or not self.atomic_ok(off): return false
-        mut seen = 0
-        unsafe:
-            seen = _tr_mem_atomic_cas64(self.base.offset(off), expected, desired)
-        return seen == expected
-
-    # ── persistence ──────────────────────────────────────────────────────────
-
-    # Wait until all dirty pages reach storage (msync MS_SYNC / FlushViewOfFile +
-    # FlushFileBuffers). No-op (true) for anonymous memory and private mappings.
-    pub def flush(self) -> bool:
-        if not self.opened: return false
-        return _tr_mmap_flush(self.handle, 0, 0, 1) == 0
-
-    # Schedule write-back without waiting.
-    pub def flush_async(self) -> bool:
-        if not self.opened: return false
-        return _tr_mmap_flush(self.handle, 0, 0, 0) == 0
-
-    pub def flush_range(self, off: int, n: int, wait: bool) -> bool:
-        if not self.in_range(off, n): return false
-        mut s = 0
-        if wait: s = 1
-        return _tr_mmap_flush(self.handle, off, n, s) == 0
-
-    # ── lifetime ─────────────────────────────────────────────────────────────
-
-    # Unmap and release OS handles now. Safe to call twice.
     pub def close(self):
-        if self.opened:
-            _tr_mmap_close(self.handle)
-            self.opened = false
-            self.handle = 0 as Pointer[char]
-            self.base = 0 as Pointer[char]
+        if not _ipc_null(self._h):
+            trc_map_close(self._h)
+            self._h = 0 as Pointer[char]
             self.size = 0
-
-    # Runs automatically at scope exit.
-    pub def free(self):
-        self.close()

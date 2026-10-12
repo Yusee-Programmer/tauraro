@@ -16,7 +16,41 @@ spec, automated regression suite + CI, incremental compilation, and a batch of
 codegen-safety / diagnostics / stdlib / tooling improvements). Entries will be
 added here as each phase lands.
 
+### Changed
+- `File.write`, `File.append` and `File.write_text` / `append_text` write the string's real
+  length instead of stopping at the first NUL byte, so binary files are written intact.
+- `UdpSocket.send_to` sends the string's real length instead of stopping at the first NUL byte.
+- `TcpStream.send` / `send_nb` / `send_async` send the string's real length instead of stopping
+  at the first NUL byte (binary protocols such as HTTP/2 frames were truncated).
+- `std.net.client`'s `HttpSession`, `std.net.https`'s `HttpsClient` and `std.net.smtp` now use
+  `std.net.tls`: https is verified by default instead of being refused (`HttpSession`) or
+  silently unverified (`HttpsClient`). `set_allow_unverified_tls(true)` / `set_verify(false)`
+  opt out. `SmtpClient.starttls()` now really upgrades the connection. TLS 1.2-only servers are
+  not reachable through these clients any more.
+
 ### Compiler limitations closed
+- `export def` functions keep their exact name in the shared library and its header unless it is a
+  C keyword or a name libc declares. Names such as `count`, `new` and `delete` used to be exported
+  as `_tr_fn_<name>`, and a call to such an export from inside the library referenced the
+  unprefixed, undefined symbol.
+- `mut w = words[i]` (and `w = words[i]`) on a `List` / `Vec` / `Array` of `str` aliased the
+  element without retaining it, yet released the local at scope exit, so each loop iteration
+  dropped one of the list's references (use-after-free once elements were heap strings, e.g. any
+  `split` or `slice` result). The local now retains the element.
+- Incremental builds: when one module's C failed to compile, later changed modules were left
+  with their previous objects, and the next build reused those stale `.o` files (their `.c`
+  already matched), producing link errors or a wrong binary. Their objects are now dropped.
+- An untyped lambda passed to a `def(float) -> float` (or any function-typed) parameter now takes
+  its parameter types from that signature; it used to compile them as `int`, so the call read
+  garbage through the mismatched C ABI.
+- `return f"...{local}..."` released `local` before the f-string was built (use-after-free):
+  f-string parts now count as reads of the returned expression.
+- `xs[i] = s` inside a generic class whose `List[T]` is instantiated with `T = str` generated an
+  assignment to an rvalue; it now uses `List_TrStr_set` as well.
+- `xs[i] = s` on a `List[str]` generated a `char*` store into the refcounted `List_TrStr` and
+  did not compile; it now uses `List_TrStr_set` (old element released, fresh values not leaked).
+- A static `init` that `throws` no longer gets `malloc`/`returns_nonnull` attributes (it returns a
+  `Result` struct, so the generated C failed to compile).
 - **`[F-4]`** a `throws` function value where a plain `def(...) -> R` is expected (or the
   reverse) is a compile error with a fix hint; no hidden wrapper is generated.
 - **Closure return types are inferred.** `lambda x: x * 2.5`, `lambda: "s"`, class results and
@@ -29,107 +63,86 @@ added here as each phase lands.
 - `from` stays a reserved word (it starts import statements and lifetime clauses).
 
 ### Added
-- **`std.net.pop3`** — POP3 client (USER/PASS, APOP, STAT, LIST, UIDL, RETR, TOP, DELE, RSET, CAPA; dot-unstuffing,
-  binary safe) on the new bounded-wait `std.net.mailio` transport + RFC 5322 header helpers (`tests/lang/136_pop3.tr`).
-- **`std.net.mdns`** — mDNS (RFC 6762) / DNS-SD (RFC 6763): DNS message codec with name compression, browse/resolve/
-  enumerate/announce helpers, sans-IO `MdnsResponder` (known-answer suppression), opt-in multicast `MdnsSocket`.
-  Checked against Python-built packets, a multicast loopback round trip and avahi (`tests/lang/134_mdns_codec.tr`, `135_mdns_loopback.tr`).
-- **`std.crypto.blake3`** — BLAKE3 (hash, keyed hash, derive_key, extendable output, incremental
-  hasher) with the full chunk tree; official vectors + a spec-derived model (`tests/lang/112_blake3.tr`).
-- **`std.crypto.argon2`** — Argon2d / Argon2i / Argon2id (RFC 9106) on top of BLAKE2b:
-  configurable time/memory/parallelism, optional secret and associated data, PHC-string
-  `hash_password` / `verify` / `needs_rehash`; RFC 9106 vectors plus OpenSSL cross-checks
-  (`tests/lang/116_argon2.tr`).
-- **`std.net.ntp`** — SNTP client + RFC 5905 packet codec (offset/delay, kiss-o'-death, spoof checks); `std.net.udp` gains
-  binary-safe `send_bytes`, bounded `recv_wait`, `reuse`, `join_group`; new runtime helpers `_tr_udp_reuse`, `_tr_udp_mcast_join`,
-  `_tr_wall_ns`; `std.net.wire` byte helpers (`tests/lang/133_ntp.tr`).
-- **`std.crypto.otp`** — HOTP (RFC 4226) / TOTP (RFC 6238) with SHA-1/256/512, windowed
-  constant-time verification, Base32 secret helpers and `otpauth://` URIs; plus the
-  binary-safe `Hmac.compute` / `verify` (SHA-1/256/384/512) it is built on
-  (`tests/lang/115_hmac_otp.tr`, RFC vectors).
-- **`std.crypto.x509`** — X.509 v3 parsing (names, validity, SAN, keyUsage/EKU, basicConstraints,
-  nameConstraints, SPKI), signature verification (RSA PKCS#1/PSS, ECDSA P-256/384/521, Ed25519),
-  chain building and validation against a trust store (pathLen, CA/keyUsage, name constraints, critical
-  extensions, validity, SHA-1 rejection), RFC 6125 hostname matching (no CN fallback, single-label
-  wildcards, IP SANs) and system CA bundle loading (`X509Store.load_system`). All 121 roots of the system
-  bundle verify; fixtures cross-checked with `openssl verify` (`tests/lang/124_x509.tr`). No revocation.
-- **`std.crypto.ecdsa`** — ECDSA and ECDH on NIST P-256 / P-384 / P-521: RFC 6979 deterministic nonces, DER and
-  raw `r||s` signatures, SEC1/PKCS#8/SPKI keys (compressed and uncompressed points, on-curve validation),
-  key generation. RFC 6979 vectors, OpenSSL signatures/ECDH secrets and Python `cryptography`'s deterministic
-  ECDSA all agree (`tests/lang/122_ecdsa.tr`). Not constant-time (documented).
-- **`std.net.http2`** — HTTP/2 (RFC 9113): frame codec, stream state machine, flow control, sans-IO `H2Conn`,
-  h2c prior-knowledge `H2Client` and minimal `H2Server`. Verified over loopback and with `curl --http2-prior-knowledge`
-  (`tests/lang/131_http2_codec.tr`, `132_http2_loopback.tr`). No TLS/ALPN (runtime TLS lacks ALPN).
-  ECDSA all agree (`tests/lang/122_ecdsa.tr`, `123_ecdsa_p521.tr`). Not constant-time (documented).
-- **`std.net.hpack`** — HPACK (RFC 7541): `HpackEncoder` / `HpackDecoder` / `HpackHeaders`,
-  static + dynamic tables, Huffman coding, never-indexed headers, strict error-reporting decoder.
-  All RFC 7541 Appendix C examples verified in both directions (`tests/lang/130_hpack.tr`).
-- **`std.crypto.sha3`** — SHA3-224/256/384/512, SHAKE128/256 (incremental `squeeze`)
-  and Keccak-256/512, pure Tauraro; NIST FIPS 202 vectors + `hashlib`
-  cross-check (`tests/lang/110_sha3.tr`).
-- **`std.crypto.blake2`** — BLAKE2b / BLAKE2s (RFC 7693): variable digest size,
-  keyed mode, salt/personalization, incremental API (`tests/lang/111_blake2.tr`).
-- **`std.crypto.x25519`** — X25519 Diffie-Hellman (RFC 7748) with keygen helpers and
-  low-order-point rejection (`tests/lang/113_x25519.tr`).
-- **`std.crypto.bytes`** — `CryptoBytes`: constant-time `ct_eq`, volatile
-  `secure_zero` (new runtime helper `_tr_c_secure_zero`), OS `random`, binary-safe
-  slice/concat (`tests/lang/114_crypto_bytes.tr`).
-- **`std.audio`** — shared `AudioBuffer` (interleaved f32) with sinc/linear resampling, remix, mix, gain/normalize/fades;
-  **`std.audio.wav`**: PCM 8/16/24/32, float 32/64, A-law/µ-law, WAVE_FORMAT_EXTENSIBLE, LIST/INFO tags, byte-identical
-  to Python's `wave` writer. `tests/lang/163_wav.tr`.
-- **`std.image.transform`** — resize (nearest/bilinear/bicubic/lanczos, Pillow-compatible), crop, flips, 90°/arbitrary rotation,
-  convolution (box/gaussian blur, sharpen, Laplacian/Sobel edges, emboss, custom kernels), colour adjustments, alpha
-  compositing; `decode()` now sniffs GIF. `tests/lang/162_transform.tr`.
-- **`std.image.gif`** — pure-Tauraro GIF87a/89a: LZW decode (interlace, local palettes, transparency, disposal 0-3,
-  Netscape loop) with every frame composited like a viewer (pixel-identical to Pillow), `decode_gif`/`decode_gif_anim`;
-  encoder with exact/median-cut palettes, dithering, `GifWriter` animations (delays, loop, optimise-to-changed-rect).
-  `tests/lang/161_gif.tr`.
-- **`std.image.jpeg`** — pure-Tauraro JPEG: baseline + progressive decode (Huffman, IJG islow IDCT,
-  YCbCr/grayscale/CMYK/YCCK, any chroma subsampling, restart markers; bit-identical to libjpeg on the
-  tested files) and baseline encode with quality / subsampling / grayscale / restart options;
-  `jpeg_info`, `decode()` sniffing. Shared `std.image.buf` raw buffers. `tests/lang/160_jpeg.tr`.
-- **`std.encoding.asn1` / `std.encoding.pem` / `std.crypto.bn` / `std.crypto.pkutil` / `std.crypto.rsa`**
-  — ASN.1 DER encoder/decoder (OIDs, times, strict lengths) and PEM armor (bundles, CRLF); a binary
-  big-number + Montgomery library (28-bit limbs; a 2048-bit modexp in ~1 s, where `std.math.bigint` takes
-  minutes); byte-buffer/digest/HMAC helpers; and RSA (PKCS#1 v1.5 + RSASSA-PSS sign/verify, RSAES-OAEP,
-  PKCS#1/PKCS#8/SPKI key parsing and PEM export). Verified against OpenSSL in both directions.
-  Documented in `docs/std/encoding.md` and `docs/std/crypto.md`, tested by `tests/lang/120_asn1_pem.tr`
-  and `tests/lang/121_rsa.tr`.
-- **`std.sys.mmap` / `std.sys.shm`: memory-mapped files and named shared memory.** `MemMap` (read-only,
-  read-write and private/copy-on-write file maps, windows, anonymous shared memory, typed little-endian
-  access, atomics, flush, unmap at scope exit) and `Shm` (named regions with a size header, atomics and a
-  cross-process lock with dead-owner recovery) over `mmap`/`shm_open` (POSIX) and
-  `CreateFileMapping`/`MapViewOfFile` (Windows); bare/WASI report unsupported. New `_tr_mmap_*`,
-  `_tr_shm_*`, `_tr_mem_*`, `_tr_sys_*` runtime helpers. Tested by `tests/lang/140_mmap.tr`,
-  `141_shm.tr`.
-- **`std.collections` data structures: `Bitset`, `RingBuffer[T]`, `SkipList[K, V]`,
-  `Rope`, `IntervalTree[T]`, `Arena`, `Slab[T]`.** Fixed/growable bitset with set
-  algebra, rank/select and iteration; fixed-capacity ring buffer with overwrite or
-  refuse policy; seedable deterministic skip-list ordered map with range/floor/ceiling
-  queries; chunked treap rope with `O(log n)` insert/delete/slice; augmented-treap
-  interval tree with stabbing/overlap queries; bump `Arena` (its scope-exit free is
-  injected by the compiler) and generational `Slab[T]` handle pool. Documented in
-  `docs/std/collections.md`, tested by `tests/lang/150_bitset_ringbuffer.tr` ..
-  `154_arena_slab.tr` (model-checked, ASan-clean).
-- **`std.io.pipe` / `std.io.ipc`: pipes and message-framed IPC.** Anonymous pipes (`Pipe`, `PipeEnd`),
-  POSIX FIFOs (`Fifo`), and `IpcServer`/`IpcChannel` length-prefixed message channels over Unix domain
-  sockets (Windows named pipes compile-checked), with timeouts, size limits and stale-socket recovery.
-  Tested by `tests/lang/142_pipe.tr`, `143_ipc.tr`.
-- **`std.text.shlex`: shell-style word splitting.** `Shlex.split`/`parse`/`split_comments`, `quote`/`join`
-  (POSIX) and `split_windows`/`quote_windows`/`join_windows` (Windows command-line rules). Tested by
-  `tests/lang/148_shlex.tr`.
-- **`tauraroc fmt` rewritten: an idempotent, comment-preserving, self-verifying formatter.**
-  Token/layout based (new `src/srclex.tr` lexeme layer + `src/tokfmt.tr`) instead of printing
-  the AST: 4-space indentation, canonical spacing, blank-line normalisation, comment placement,
-  optional line wrapping at brackets (`--width`, default 100) and optional `--sort-imports`.
-  New `--check` (exit 1 when a file would change), `-w` for files and directories, `-` for
-  stdin/stdout. Every file is proved before it is written: the output must re-lex to the identical
-  real-lexer token stream, parse, and be a fixed point, otherwise the file is left untouched.
-  `scripts/fmt_guarantee.sh` formats a copy of `std/`, `tests/`, `examples/` and `src/` and checks
-  the fixed point plus byte-identical generated C for every test program. The previous AST printer
-  stays available as `tauraroc fmt --ast`. `scripts/check_fmt.sh` is a CI-ready `--check` wrapper
-  (not enabled in the workflow). Tests: `tests/lang/170_fmt_basic.tr`, `171_fmt_modes.tr`,
-  `172_fmt_corpus.tr`. See `docs/dev/11_developer_tools.md`.
+- **`tauraroc doc`** — API documentation from source (public constants, functions, classes with
+  their fields and `extend` methods, enums, interfaces, and their comments) as Markdown or HTML,
+  per file or for whole directory trees. **`tauraroc cov`** / **`--coverage`** — line coverage:
+  gcov instrumentation with `#line` mapping to `.tr` sources, a per-file report with missed lines,
+  and LCOV output. (`tauraroc fmt` already covers formatting.)
+- **`std.sys.sandbox`** — pledge-style promises (`stdio rpath wpath cpath inet unix dns proc
+  thread exec id error ...`) enforced with seccomp-BPF on Linux (open flags and socket families
+  checked), custom syscall allow / deny lists, filesystem `Unveil` via Landlock, and native
+  `pledge` / `unveil` on OpenBSD; `Sandbox.run_isolated` runs a function in a sandboxed child.
+- **`std.sys.dylib`, `std.sys.plugin`** — load shared libraries at run time (`dlopen` /
+  `LoadLibraryW`) and call int / double / `str` functions through exact-prototype trampolines;
+  a plugin convention on top (`tauraro_plugin_abi` / `_name` / `_version` / `_init` / `_shutdown`
+  exports from a `tauraroc --lib` library) with directory discovery, ABI checks, hook broadcast,
+  reload and unload.
+- **`std.encoding.pdf`** — PDF 1.7 writer: standard-14 Latin fonts with exact metrics, word-wrapped
+  and justified text boxes, shapes / paths / dashes / transparency / transforms, images (RGBA with
+  soft masks, JPEG pass-through), URL and page links, bookmarks, Unicode metadata, and a built-in
+  deflate encoder (fixed or dynamic Huffman per block) for FlateDecode without libz.
+- **`std.net.imap`, `std.net.pop3`** — IMAP4rev1 client (LOGIN / AUTHENTICATE PLAIN, STARTTLS,
+  LIST, SELECT / EXAMINE, SEARCH / UID SEARCH, FETCH with exact `{n}` literal handling, STORE,
+  COPY / MOVE, EXPUNGE, CREATE / DELETE / RENAME, APPEND, raw `command`) and POP3 client (USER /
+  PASS, APOP, AUTH PLAIN, STLS, CAPA, STAT, LIST, UIDL, RETR / TOP with dot-unstuffing, DELE,
+  RSET, QUIT), both over verified TLS or plaintext + STARTTLS via the new
+  `std.net.linestream.LineStream`.
+- **`std.net.dnsmsg`** — DNS wire format: query encoding (EDNS0), response parsing with name
+  compression for A, AAAA, NS, CNAME, PTR, MX, TXT, SRV, SOA; `Dns.lookup(server, name, type)`.
+- **`std.net.mdns`** — one-shot multicast DNS queries, host resolution and DNS-SD service
+  browsing. **`std.net.ntp`** — SNTPv4 client (offset, delay, stratum, reference ID).
+- **`std.net.udpx`** — `UdpEndpoint`: IPv4/IPv6 UDP with receive timeouts, sender address, and
+  multicast membership; `unix_ms()` wall clock.
+- **`std.audio`** — `AudioBuffer` with WAV decode/encode (PCM 8–32-bit, float, A-law/μ-law,
+  extensible), MP3 and FLAC decoding (vendored public-domain minimp3 and dr_flac), windowed-sinc
+  resampling, channel mixing, gain/normalize/fades/trim/concat/mix, and tone/noise generators.
+  Tested by `tests/lang/115_audio.tr`. Opus/Vorbis are not supported.
+- **`std.image.jpeg`, `std.image.gif`, `std.image.ops`** — JPEG decode (baseline + progressive,
+  all subsamplings, CMYK, EXIF orientation) and encode; GIF decode with animation compositing
+  and encode with median-cut quantisation, dithering and animation; resizing (nearest, box,
+  bilinear, bicubic, Lanczos-3), colour adjustments, blur/sharpen/edges/convolution, flips,
+  rotations, crop and compositing. Cross-checked against Pillow; tested by
+  `tests/lang/114_image2.tr`.
+- **`std.math.tensor`** — n-dimensional float64 arrays with NumPy-style broadcasting, strided views
+  (reshape/transpose/permute/slice/select/broadcast_to), elementwise math, axis reductions,
+  softmax, batched matmul, concat/stack and linalg interop; kernels in C. Tested by
+  `tests/lang/113_tensor.tr`.
+- **`std.math.decimal`, `std.math.rational`, `std.math.bigfloat`** — exact decimal arithmetic
+  with seven rounding modes (quantize, significant digits, sqrt, money allocation), exact
+  fractions (`limit_denominator`, floor/ceil/round), and arbitrary-precision decimal floating
+  point with sqrt/exp/ln/pow, pi and e. Tested by `tests/lang/112_decimal_rational.tr`
+  against Python's `decimal` and `fractions`.
+- **`std.collections` additions** — `BitSet`, `RingBuffer[T]`, `SkipList[K, V]`, `IntervalTree[V]`,
+  `Rope`, `SlotMap[T]` (generation-checked handles), `Arena` (bump/region allocator) and `Slab`
+  (fixed-size block allocator). Tested by `tests/lang/111_collections3.tr`.
+- **`std.cli.argparse`** — declarative CLI parsing: typed/validated values with choices, env-var
+  fallbacks and defaults, counted and repeatable options, variadic positionals, negatable flags,
+  argument groups, mutually-exclusive / required-one-of groups, nested subcommands with aliases,
+  `@file` response files, "did you mean" suggestions, wrapped help and bash/zsh/fish completion
+  scripts. **`std.text.shlex`** — POSIX and Windows command-line splitting/quoting.
+  Tested by `tests/lang/110_argparse_shlex.tr`.
+- **IPC: `std.sys.mmap`, `std.sys.shm`, `std.sys.pipe`, `std.sys.unix_socket`** — memory-mapped
+  files and anonymous maps (with cross-process 64-bit atomics), named shared memory and named
+  semaphores, anonymous pipes and FIFOs, Unix-domain stream sockets with socketpair and
+  descriptor passing. POSIX and Windows. Tested by `tests/lang/109_sys_ipc.tr`.
+- **`std.net.http2`** — HTTP/2 client with stream multiplexing over verified TLS (ALPN `h2`) or
+  h2c prior knowledge: flow control, CONTINUATION, trailers, RST_STREAM/GOAWAY handling, plus a
+  standalone `Hpack` codec (dynamic table, Huffman) and `H2Headers`. Tested by
+  `tests/lang/107_http2.tr` (RFC 7541 appendix C vectors and a loopback h2c server).
+- **Verified TLS without OpenSSL.** `std.net.tls` is a TLS 1.3 client (X25519/P-256/P-384,
+  AES-GCM, ChaCha20-Poly1305, ECDSA/RSA-PSS) that verifies the certificate chain and host name;
+  it can also upgrade an existing socket (STARTTLS). `std.crypto.x509` parses certificates and
+  verifies chains against `TrustStore.system()` (CA bundles / Windows ROOT store);
+  `std.crypto.pk` adds RSA (PKCS#1 v1.5, PSS) and ECDSA P-256/P-384 (RFC 6979) signing and
+  verification, ECDH and PEM/DER key parsing; `std.crypto.aead` adds AES-GCM and
+  ChaCha20-Poly1305. Tested by `tests/lang/106_x509_tls.tr`.
+- **`std.crypto` additions** — `SecureRandom` (OS CSPRNG, raises instead of degrading),
+  `ConstantTime`, binary-safe `Digest`/`Hasher` (SHA-1/256/384/512), `Hmac.compute/verify`
+  (all SHA variants), `Kdf.hkdf*` (RFC 5869) and `Kdf.pbkdf2_hmac`, `Sha3`/`Sha3Stream`
+  (SHA3-224..512, SHAKE128/256), `Blake2` (2b/2s, keyed), `Blake3` (hash/keyed/derive_key, XOF),
+  `X25519` (RFC 7748), `Otp` (HOTP/TOTP + `otpauth://` URIs), `Argon2` (d/i/id, PHC strings) and
+  `Bcrypt` ($2a/$2b/$2y). Kernels live in `std/crypto/crypto_native.c`, linked automatically via
+  the module shim pragma. Tested by `tests/lang/105_crypto_modern.tr`.
 - **`std.async.retry`** — `RetryPolicy` (max attempts, fixed/exponential backoff
   with cap, optional jitter, retry-on predicate, overall deadline, per-attempt
   timeout), `call_with_timeout` / `call_bool_with_timeout`, and a thread-safe

@@ -1,299 +1,130 @@
-# std.sys.shm — named shared memory + a simple cross-process lock.
+# std.sys.shm -- named shared memory and named semaphores between processes.
 #
-#   from std.sys.shm import Shm
+# `SharedMemory.create(name, size)` makes (or opens) a named segment that
+# other processes open with `SharedMemory.open(name)`; both get a
+# std.sys.mmap MemoryMap onto the same bytes. Coordinate access with the
+# map's atomic operations or a `NamedSemaphore`.
 #
-#   # process A
-#   mut a = Shm.create("jobs", 4096)          # fails if "jobs" already exists
-#   a.set_i64(0, 0)
+# Names are plain identifiers ("myapp-cache"); the platform prefix is added
+# (POSIX "/name", Windows "Local\name"). On POSIX a name lives until
+# `SharedMemory.unlink(name)` (or reboot); on Windows a segment disappears
+# with its last open handle.
 #
-#   # process B (or the same process)
-#   mut b = Shm.open("jobs")                  # attach to an existing region
-#   if b.lock(1000) >= 0:                     # wait up to 1s for the lock
-#       b.atomic_add(0, 1)
-#       b.unlock()
-#
-#   Shm.unlink("jobs")                        # POSIX: remove the name (maps stay valid)
-#
-# A region is `size` user bytes preceded by a hidden 64-byte header (magic, size,
-# lock word). `len()` is the user size on every platform; `get_*/set_*` offsets
-# start at 0 of the user area.
-#
-# Names: 1..30 characters from [A-Za-z0-9._-] (30 because macOS caps POSIX shm
-# names at 31 including the leading '/'). POSIX: shm_open("/name"). Windows:
-# a pagefile-backed file mapping called Local\tauraro_shm_<name> (session scope).
-#
-# Lifetime: the OS object lives until it is removed AND every mapping is gone.
-# POSIX: call Shm.unlink(name) once (typically the creator, at shutdown). Windows:
-# the object disappears when the last handle closes, so unlink() is a no-op that
-# returns true. Dropping/close()-ing a Shm only unmaps THIS process's view (and
-# releases the lock if this object holds it).
-#
-# The lock (`lock/try_lock/unlock`):
-#   * a 64-bit word in the header: (pid << 32 | thread id) of the owner; 0 = free;
-#   * works between processes AND between threads, spin-then-sleep(1ms) polling —
-#     it is a coarse mutex, not a futex: fine for coordination, not for hot loops;
-#   * re-entrant for the SAME thread of the same process (acquiring twice is a
-#     no-op; one unlock() releases);
-#   * stale-owner recovery: if the owning PROCESS died, the next lock() takes
-#     the lock over and returns 1 (so the caller knows the protected data may be
-#     half-written). Thread death inside a live process cannot be detected;
-#   * PID reuse can in theory hide a dead owner — documented limitation.
-#
-# Failure model: constructors return a Shm; check `is_open()`; `error`/`code`
-# describe the failure. Unsupported platforms (bare-metal, WASI, Android — which
-# has no shm_open) fail with "not supported on this platform".
+# Usage (two processes):
+#   from std.sys.shm import SharedMemory, NamedSemaphore
+#   mut m = SharedMemory.create("demo-seg", 4096)?      # process A
+#   m.write(8, "hello")?
+#   mut ready = NamedSemaphore.create("demo-ready", 0)?
+#   ready.post()?
+#   ...
+#   mut m2 = SharedMemory.open("demo-seg")?             # process B
+#   NamedSemaphore.open("demo-ready")?.wait(-1)?
+#   print(m2.read(8, 5)?)
 
-from std.sys.mmap import mem_read_str, mem_write_str
-from std.string.str import Str
+from std.sys.ipc import trc_shm_open, trc_shm_unlink, trc_sem_open, trc_sem_post, trc_sem_wait, trc_sem_close, trc_sem_unlink
+from std.sys.ipc import _ipc_error, _ipc_cstr, _ipc_null
+from std.sys.mmap import MemoryMap
 
-extern "C":
-    def _tr_shm_open(name: str, size: int, flags: int) -> Pointer[char]
-    def _tr_shm_unlink(name: str) -> int
-    def _tr_shm_created(h: Pointer[char]) -> int
-    def _tr_shm_lock(h: Pointer[char], timeout_ms: int) -> int
-    def _tr_shm_unlock(h: Pointer[char]) -> int
-    def _tr_mmap_base(h: Pointer[char]) -> Pointer[char]
-    def _tr_mmap_len(h: Pointer[char]) -> int
-    def _tr_mmap_close(h: Pointer[char]) -> int
-    def _tr_mem_get(p: Pointer[char], off: int, w: int) -> int
-    def _tr_mem_set(p: Pointer[char], off: int, w: int, v: int)
-    def _tr_mem_get_f64(p: Pointer[char], off: int) -> float
-    def _tr_mem_set_f64(p: Pointer[char], off: int, v: float)
-    def _tr_mem_atomic_load64(p: Pointer[char]) -> int
-    def _tr_mem_atomic_store64(p: Pointer[char], v: int)
-    def _tr_mem_atomic_add64(p: Pointer[char], v: int) -> int
-    def _tr_mem_atomic_cas64(p: Pointer[char], expected: int, desired: int) -> int
-    def _tr_c_memset(p: Pointer[char], v: int, n: int)
-    def _tr_sys_errno() -> int
-    def _tr_sys_errstr(code: int) -> str
-    def _tr_sys_feature(id: int) -> int
+pub class SharedMemory:
+    _dummy: int
 
-pub def SHM_CREATE()   -> int: return 1
-pub def SHM_EXCL()     -> int: return 2
-pub def SHM_EXISTING() -> int: return 4
+extend SharedMemory:
+    # Create the segment (or open it if it already exists) with at least `size` bytes.
+    pub def create(name: str, size: int) throws str -> MemoryMap:
+        if size <= 0: raise("shm: size must be positive")
+        mut n = _ipc_cstr(name)
+        mut np = n as Pointer[char]
+        mut h = trc_shm_open(np, size, 1, 0)
+        if _ipc_null(h):
+            mut e = _ipc_error()
+            raise(e)
+        return MemoryMap._wrap(h)
 
-pub class Shm:
-    pub handle:  Pointer[char]
-    pub base:    Pointer[char]
-    pub size:    int
-    pub name:    str
-    pub opened:  bool
-    pub held:    bool      # this object currently holds the lock
-    pub created: bool      # this call created the OS object
-    pub code:    int
-    pub error:   str
+    # Create the segment, failing if the name is already in use.
+    pub def create_new(name: str, size: int) throws str -> MemoryMap:
+        if size <= 0: raise("shm: size must be positive")
+        mut n = _ipc_cstr(name)
+        mut np = n as Pointer[char]
+        mut h = trc_shm_open(np, size, 1, 1)
+        if _ipc_null(h):
+            mut e = _ipc_error()
+            raise(e)
+        return MemoryMap._wrap(h)
 
-extend Shm:
-    pub def _failed(name: str, code: int) -> Shm:
-        mut s = Shm()
-        s.handle = 0 as Pointer[char]
-        s.base = 0 as Pointer[char]
-        s.size = 0
+    # Open an existing segment (maps all of it).
+    pub def open(name: str) throws str -> MemoryMap:
+        mut n = _ipc_cstr(name)
+        mut np = n as Pointer[char]
+        mut h = trc_shm_open(np, 0, 0, 0)
+        if _ipc_null(h):
+            mut e = _ipc_error()
+            raise(e)
+        return MemoryMap._wrap(h)
+
+    # Remove the name; existing mappings stay valid (no-op on Windows).
+    pub def unlink(name: str) throws str:
+        mut n = _ipc_cstr(name)
+        mut np = n as Pointer[char]
+        if trc_shm_unlink(np) < 0:
+            mut e = _ipc_error()
+            raise(e)
+
+pub class NamedSemaphore:
+    _h: Pointer[char]
+    pub name: str
+
+extend NamedSemaphore:
+    def _wrap(h: Pointer[char], name: str) -> NamedSemaphore:
+        mut s = NamedSemaphore()
+        s._h = h
         s.name = name
-        s.opened = false
-        s.held = false
-        s.created = false
-        s.code = code
-        s.error = _tr_sys_errstr(code)
         return s
 
-    pub def _open_flags(name: str, size: int, flags: int) -> Shm:
-        mut h = _tr_shm_open(name, size, flags)
-        if (h as int) == 0:
-            return Shm._failed(name, _tr_sys_errno())
-        mut s = Shm()
-        s.handle = h
-        s.base = _tr_mmap_base(h)
-        s.size = _tr_mmap_len(h)
-        s.name = name
-        s.opened = true
-        s.held = false
-        s.created = _tr_shm_created(h) == 1
-        s.code = 0
-        s.error = ""
-        return s
+    # Create (or open) with an initial count.
+    pub def create(name: str, initial: int) throws str -> NamedSemaphore:
+        mut n = _ipc_cstr(name)
+        mut np = n as Pointer[char]
+        mut h = trc_sem_open(np, 1, initial)
+        if _ipc_null(h):
+            mut e = _ipc_error()
+            raise(e)
+        return NamedSemaphore._wrap(h, name)
 
-    pub def supported() -> bool:
-        return _tr_sys_feature(2) == 1
+    pub def open(name: str) throws str -> NamedSemaphore:
+        mut n = _ipc_cstr(name)
+        mut np = n as Pointer[char]
+        mut h = trc_sem_open(np, 0, 0)
+        if _ipc_null(h):
+            mut e = _ipc_error()
+            raise(e)
+        return NamedSemaphore._wrap(h, name)
 
-    # True when `name` is usable on every platform (see the module header).
-    pub def valid_name(name: str) -> bool:
-        mut n = name.len()
-        if n == 0 or n > 30: return false
-        mut i = 0
-        while i < n:
-            mut c = Str.char_at(name, i)
-            mut ok = (c >= 97 and c <= 122) or (c >= 65 and c <= 90) or (c >= 48 and c <= 57) or c == 95 or c == 45 or c == 46
-            if not ok: return false
-            i = i + 1
-        return true
+    # Increment (release one waiter).
+    pub def post(self) throws str:
+        if trc_sem_post(self._h) < 0:
+            mut e = _ipc_error()
+            raise(e)
 
-    # Create a NEW region of `size` zeroed bytes; fails if the name is taken.
-    pub def create(name: str, size: int) -> Shm:
-        return Shm._open_flags(name, size, 3)
+    # Decrement, waiting up to timeout_ms (-1 = forever, 0 = try once).
+    # True if acquired, false on timeout.
+    pub def wait(self, timeout_ms: int) throws str -> bool:
+        mut r = trc_sem_wait(self._h, timeout_ms)
+        if r < 0:
+            mut e = _ipc_error()
+            raise(e)
+        return r == 1
 
-    # Attach to an existing region (its size is read from the header).
-    pub def open(name: str) -> Shm:
-        return Shm._open_flags(name, 0, 4)
+    pub def try_wait(self) throws str -> bool:
+        return self.wait(0)?
 
-    # Create it if missing, otherwise attach; `size` must match an existing region.
-    pub def create_or_open(name: str, size: int) -> Shm:
-        return Shm._open_flags(name, size, 1)
-
-    # Remove the name (POSIX). Existing mappings keep working. Windows: no-op, true.
-    pub def unlink(name: str) -> bool:
-        return _tr_shm_unlink(name) == 0
-
-    pub def is_open(self) -> bool:
-        return self.opened
-
-    pub def created_here(self) -> bool:
-        return self.created
-
-    pub def len(self) -> int:
-        return self.size
-
-    pub def in_range(self, off: int, n: int) -> bool:
-        if not self.opened: return false
-        if off < 0 or n < 0: return false
-        if off > self.size: return false
-        return n <= self.size - off
-
-    # ── typed access (little-endian; out of range -> 0 / false) ──────────────
-
-    pub def get_u8(self, off: int) -> int:
-        if not self.in_range(off, 1): return 0
-        return _tr_mem_get(self.base, off, 1)
-
-    pub def get_u16(self, off: int) -> int:
-        if not self.in_range(off, 2): return 0
-        return _tr_mem_get(self.base, off, 2)
-
-    pub def get_u32(self, off: int) -> int:
-        if not self.in_range(off, 4): return 0
-        return _tr_mem_get(self.base, off, 4)
-
-    pub def get_i64(self, off: int) -> int:
-        if not self.in_range(off, 8): return 0
-        return _tr_mem_get(self.base, off, 8)
-
-    pub def get_f64(self, off: int) -> float:
-        if not self.in_range(off, 8): return 0.0
-        return _tr_mem_get_f64(self.base, off)
-
-    pub def read_str(self, off: int, n: int) -> str:
-        if not self.in_range(off, n): return ""
-        return mem_read_str(self.base, off, n)
-
-    pub def set_u8(self, off: int, v: int) -> bool:
-        if not self.in_range(off, 1): return false
-        _tr_mem_set(self.base, off, 1, v)
-        return true
-
-    pub def set_u16(self, off: int, v: int) -> bool:
-        if not self.in_range(off, 2): return false
-        _tr_mem_set(self.base, off, 2, v)
-        return true
-
-    pub def set_u32(self, off: int, v: int) -> bool:
-        if not self.in_range(off, 4): return false
-        _tr_mem_set(self.base, off, 4, v)
-        return true
-
-    pub def set_i64(self, off: int, v: int) -> bool:
-        if not self.in_range(off, 8): return false
-        _tr_mem_set(self.base, off, 8, v)
-        return true
-
-    pub def set_f64(self, off: int, v: float) -> bool:
-        if not self.in_range(off, 8): return false
-        _tr_mem_set_f64(self.base, off, v)
-        return true
-
-    pub def write_str(self, off: int, s: str) -> bool:
-        if not self.in_range(off, s.len()): return false
-        mem_write_str(self.base, off, s)
-        return true
-
-    pub def fill(self, off: int, n: int, b: int) -> bool:
-        if not self.in_range(off, n): return false
-        if n == 0: return true
-        unsafe:
-            _tr_c_memset(self.base.offset(off), b, n)
-        return true
-
-    # ── atomics on 8-byte aligned offsets (valid across processes) ───────────
-
-    pub def atomic_ok(self, off: int) -> bool:
-        if not self.in_range(off, 8): return false
-        mut addr = (self.base as int) + off
-        return (addr % 8) == 0
-
-    pub def atomic_load(self, off: int) -> int:
-        if not self.atomic_ok(off): return 0
-        unsafe:
-            return _tr_mem_atomic_load64(self.base.offset(off))
-        return 0
-
-    pub def atomic_store(self, off: int, v: int) -> bool:
-        if not self.atomic_ok(off): return false
-        unsafe:
-            _tr_mem_atomic_store64(self.base.offset(off), v)
-        return true
-
-    # Fetch-add: returns the previous value.
-    pub def atomic_add(self, off: int, v: int) -> int:
-        if not self.atomic_ok(off): return 0
-        unsafe:
-            return _tr_mem_atomic_add64(self.base.offset(off), v)
-        return 0
-
-    pub def atomic_cas(self, off: int, expected: int, desired: int) -> bool:
-        if not self.atomic_ok(off): return false
-        mut seen = 0
-        unsafe:
-            seen = _tr_mem_atomic_cas64(self.base.offset(off), expected, desired)
-        return seen == expected
-
-    # ── cross-process lock ───────────────────────────────────────────────────
-
-    # Acquire, waiting up to timeout_ms (< 0: forever, 0: try once).
-    # Returns 0 acquired, 1 acquired after taking over a DEAD owner's lock
-    # (data may be inconsistent), -1 timed out, -2 not an open region.
-    pub def lock(self, timeout_ms: int) -> int:
-        if not self.opened: return -2
-        mut r = _tr_shm_lock(self.handle, timeout_ms)
-        if r >= 0: self.held = true
-        return r
-
-    pub def try_lock(self) -> bool:
-        return self.lock(0) >= 0
-
-    # Release the lock. False when the calling thread does not own it.
-    pub def unlock(self) -> bool:
-        if not self.opened: return false
-        mut r = _tr_shm_unlock(self.handle)
-        if r == 0:
-            self.held = false
-            return true
-        return false
-
-    pub def holds_lock(self) -> bool:
-        return self.held
-
-    # ── lifetime ─────────────────────────────────────────────────────────────
-
-    # Unmap this view (releases the lock first if this object holds it).
     pub def close(self):
-        if self.opened:
-            if self.held:
-                _tr_shm_unlock(self.handle)
-                self.held = false
-            _tr_mmap_close(self.handle)
-            self.opened = false
-            self.handle = 0 as Pointer[char]
-            self.base = 0 as Pointer[char]
-            self.size = 0
+        if not _ipc_null(self._h):
+            trc_sem_close(self._h)
+            self._h = 0 as Pointer[char]
 
-    pub def free(self):
-        self.close()
+    pub def unlink(name: str) throws str:
+        mut n = _ipc_cstr(name)
+        mut np = n as Pointer[char]
+        if trc_sem_unlink(np) < 0:
+            mut e = _ipc_error()
+            raise(e)

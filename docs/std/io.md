@@ -540,36 +540,6 @@ mut miss = r.find_entry("nope.txt")   # -1 — not present
 
 ---
 
-## Pipes — `std.io.pipe`
-
-```
-from std.io.pipe import Pipe, PipeEnd, Fifo
-```
-
-**Why**: anonymous pipes (POSIX `pipe()`, Windows `CreatePipe`) and POSIX named pipes (FIFOs) with timeouts and binary-safe reads/writes.
-
-- `Pipe.create()` → `Pipe` (`ok`, `error`); `write`, `write_all`, `read_timeout(max, ms)`, `take_reader()`, `take_writer()`; both ends are closed at scope exit.
-- `PipeEnd` owns one handle: `read_timeout`, `read_exact(n, ms)`, `read_all(max, ms)`, `write`, `write_all`, `wait_readable(ms)`, `close`. After a read `status` is `PIPE_OK`, `PIPE_EOF`, `PIPE_TIMEOUT` or `PIPE_ERROR`.
-- `Fifo.create/remove/open_read/open_write/supported` (POSIX only).
-- A write to a pipe with no reader fails (the runtime ignores SIGPIPE). Handles are not inherited by spawned programs — use them with threads or `fork()`.
-- Limits: FIFOs are unsupported on Windows (use `std.io.ipc` named pipes); bare-metal/WASI report unsupported.
-
-## IPC channels — `std.io.ipc`
-
-```
-from std.io.ipc import IpcServer, IpcChannel, IpcMessage, Ipc
-```
-
-**Why**: a message-framed local channel (4-byte big-endian length + payload, binary safe, size-limited) over Unix domain sockets (POSIX) or named pipes `\\.\pipe\name` (Windows).
-
-- `IpcServer.listen(addr)` / `listen_replace(addr)` (removes a stale socket file, refuses a live one) → `accept(ms)` → `IpcChannel`.
-- `IpcChannel.connect(addr, ms)` retries until the server is up; `IpcChannel.pair()` + `take_peer()` gives a connected pair for threads/`fork()`.
-- `send(data)`, `recv(ms)` → `IpcMessage` (`status`: `IPC_OK`, `IPC_TIMEOUT`, `IPC_CLOSED`, `IPC_ERROR`, `IPC_TOO_BIG`); a timed-out `recv` keeps a partial frame for the next call. `set_max_message(n)` bounds allocation from a hostile peer (default 16 MiB).
-- `Ipc.supported()`, `Ipc.default_address(app)`.
-- Limits: the Windows backend is compile-checked only; `pair()`/`listen_replace` are POSIX only; `listen_replace` probes the address by connecting, so a live server sees one connection that closes at once.
-
----
-
 ## std.sys.fs — File-system operations
 
 **When**: You need to delete, rename/move, copy, or check files outside the `File`/`Dir` instance APIs.

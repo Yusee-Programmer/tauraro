@@ -1,0 +1,118 @@
+# std.crypto.digest -- binary-safe SHA-1 / SHA-256 / SHA-384 / SHA-512.
+#
+# std.crypto.hash's older helpers hash NUL-terminated text and return hex;
+# this module hashes arbitrary bytes (its length comes from `s.len()`, so
+# embedded 0x00 bytes count) and returns RAW digests, with `_hex` variants.
+# A streaming `Hasher` covers data that arrives in pieces.
+#
+# Usage:
+#   from std.crypto.digest import Digest, Hasher
+#   from std.crypto.native import ALG_SHA256
+#   mut d = Digest.sha256(data)          # 32 raw bytes
+#   mut h = Digest.sha256_hex("abc")     # "ba7816bf..."
+#   mut st = Hasher.init(ALG_SHA256)?
+#   st.update(part1)
+#   st.update(part2)
+#   mut sum = st.finish()                # raw digest; the hasher is released
+
+from std.crypto.native import ALG_SHA1, ALG_SHA256, ALG_SHA384, ALG_SHA512
+from std.crypto.native import trc_digest, trc_digest_state_size, trc_digest_begin, trc_digest_update, trc_digest_finish
+from std.crypto.native import _cn_alloc, _cn_take, _cn_free, _cn_hex, _cn_md_size
+
+pub class Digest:
+    _dummy: int
+
+extend Digest:
+    # Raw digest of `data` with one of the ALG_* ids (raises on an unknown id).
+    pub def compute(alg: int, data: str) throws str -> str:
+        mut sz = _cn_md_size(alg)
+        if sz < 0: raise(f"Digest: unknown algorithm id {alg}")
+        mut p = _cn_alloc(sz)
+        mut dp = data as Pointer[char]
+        trc_digest(alg, dp, data.len(), p)
+        return _cn_take(p, sz)
+
+    # Digest size in bytes for an ALG_* id (-1 if unknown).
+    pub def size(alg: int) -> int:
+        return _cn_md_size(alg)
+
+    pub def sha1(data: str) -> str:
+        mut p = _cn_alloc(20)
+        mut dp = data as Pointer[char]
+        trc_digest(ALG_SHA1, dp, data.len(), p)
+        return _cn_take(p, 20)
+
+    pub def sha256(data: str) -> str:
+        mut p = _cn_alloc(32)
+        mut dp = data as Pointer[char]
+        trc_digest(ALG_SHA256, dp, data.len(), p)
+        return _cn_take(p, 32)
+
+    pub def sha384(data: str) -> str:
+        mut p = _cn_alloc(48)
+        mut dp = data as Pointer[char]
+        trc_digest(ALG_SHA384, dp, data.len(), p)
+        return _cn_take(p, 48)
+
+    pub def sha512(data: str) -> str:
+        mut p = _cn_alloc(64)
+        mut dp = data as Pointer[char]
+        trc_digest(ALG_SHA512, dp, data.len(), p)
+        return _cn_take(p, 64)
+
+    pub def sha1_hex(data: str) -> str:
+        mut d = Digest.sha1(data)
+        return _cn_hex(d)
+
+    pub def sha256_hex(data: str) -> str:
+        mut d = Digest.sha256(data)
+        return _cn_hex(d)
+
+    pub def sha384_hex(data: str) -> str:
+        mut d = Digest.sha384(data)
+        return _cn_hex(d)
+
+    pub def sha512_hex(data: str) -> str:
+        mut d = Digest.sha512(data)
+        return _cn_hex(d)
+
+# Incremental hashing. Call finish() exactly once (it releases the state);
+# call dispose() instead if you abandon a hasher before finishing.
+pub class Hasher:
+    pub alg: int
+    _st: Pointer[char]
+    _live: bool
+
+extend Hasher:
+    pub def init(alg: int) throws str -> Hasher:
+        if _cn_md_size(alg) < 0: raise(f"Hasher: unknown algorithm id {alg}")
+        mut h = Hasher()
+        h.alg = alg
+        h._st = _cn_alloc(trc_digest_state_size())
+        trc_digest_begin(h._st, alg)
+        h._live = true
+        return h
+
+    pub def update(self, data: str):
+        if not self._live: return
+        mut dp = data as Pointer[char]
+        trc_digest_update(self._st, dp, data.len())
+
+    # The raw digest; afterwards the hasher is spent.
+    pub def finish(self) -> str:
+        mut sz = _cn_md_size(self.alg)
+        mut p = _cn_alloc(sz)
+        if self._live:
+            trc_digest_finish(self._st, p)
+            _cn_free(self._st)
+            self._live = false
+        return _cn_take(p, sz)
+
+    pub def finish_hex(self) -> str:
+        mut d = self.finish()
+        return _cn_hex(d)
+
+    pub def dispose(self):
+        if self._live:
+            _cn_free(self._st)
+            self._live = false

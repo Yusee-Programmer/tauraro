@@ -87,6 +87,40 @@ if ($cc) {
     Remove-Item -Recurse -Force $libdir -ErrorAction SilentlyContinue
 }
 
+# --- `tauraroc doc` -------------------------------------------------------
+$total++
+Write-Host "==> doc generator"
+$docdir = Join-Path $env:TEMP ("tau_doc_" + [System.Guid]::NewGuid().ToString("N"))
+New-Item -ItemType Directory -Path $docdir | Out-Null
+$docsrc = @'
+# shapes -- geometry helpers
+
+# Area of a w x h rectangle.
+pub def area(w: float, h: float) -> float:
+    return w * h
+
+# A point in the plane.
+pub class Point:
+    pub x: float   # horizontal
+
+extend Point:
+    # Distance from the origin.
+    pub def norm(self) -> float:
+        return self.x * self.x
+'@
+Set-Content -Path (Join-Path $docdir "shapes.tr") -Value $docsrc -Encoding ascii
+$dout = (& $TAURAROC doc (Join-Path $docdir "shapes.tr") 2>&1 | Out-String)
+$dmiss = @()
+foreach ($want in @("shapes -- geometry helpers", "def area(w: float, h: float) -> float", "Area of a w x h rectangle.", "A point in the plane.", "horizontal", "def norm(self) -> float", "Distance from the origin.")) {
+    if (-not $dout.Contains($want)) { $dmiss += $want }
+}
+if ($dmiss.Count -gt 0) {
+    Write-Host "  FAILED (missing: $($dmiss -join '; '))"
+    $failed++
+    $failedFiles += "doc_generator"
+}
+Remove-Item -Recurse -Force $docdir -ErrorAction SilentlyContinue
+
 Write-Host ""
 Write-Host "==================================="
 Write-Host "Test files: $total, failed: $failed"

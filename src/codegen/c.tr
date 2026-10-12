@@ -79,6 +79,20 @@ pub def _safe_c_varname(n: str) -> str:
     if _is_c_keyword(n): return "_tr_v_" + n
     return n
 
+# Only the C language's own keywords (no library names): the names an
+# `export def` / `extern` function cannot keep in C at all.
+pub def _is_c_lang_keyword(n: str) -> bool:
+    if n == "double" or n == "float" or n == "int" or n == "char": return true
+    if n == "long" or n == "short" or n == "void" or n == "unsigned": return true
+    if n == "signed" or n == "register" or n == "inline" or n == "auto": return true
+    if n == "struct" or n == "union" or n == "enum" or n == "extern": return true
+    if n == "static" or n == "volatile" or n == "const" or n == "restrict": return true
+    if n == "typedef" or n == "sizeof" or n == "alignof" or n == "typeof": return true
+    if n == "goto" or n == "switch" or n == "case" or n == "default": return true
+    if n == "do" or n == "for" or n == "while" or n == "if" or n == "else": return true
+    if n == "break" or n == "continue" or n == "return": return true
+    return false
+
 pub def _is_c_keyword(n: str) -> bool:
     # C language keywords
     if n == "double" or n == "float" or n == "int" or n == "char": return true
@@ -2235,6 +2249,9 @@ pub class CGenerator:
                 return "static __attribute__((hot)) "
             if f.ret_ty.name == "void" or f.ret_ty.name == "" or f.ret_ty.name == "None":
                 return "static __attribute__((hot)) "
+            # A `throws` init returns a Result struct by value, not the class pointer.
+            if f.throws_ty.name != "":
+                return "static __attribute__((hot)) "
             # `malloc`/`returns_nonnull` are pointer-only. They apply when the
             # factory returns a heap class pointer; an `init` returning an enum
             # or primitive (by value) must NOT carry them.
@@ -2273,6 +2290,8 @@ pub class CGenerator:
             if self.value_types.contains(f.class_name):
                 return "__attribute__((hot)) "
             if f.ret_ty.name == "void" or f.ret_ty.name == "" or f.ret_ty.name == "None":
+                return "__attribute__((hot)) "
+            if f.throws_ty.name != "":
                 return "__attribute__((hot)) "
             if not self.classes.contains(f.ret_ty.name):
                 return "__attribute__((hot)) "
@@ -2476,7 +2495,8 @@ pub class CGenerator:
     pub def fn_cname(self, n: str) -> str:
         if self.functions.contains(n):
             mut ff = self.functions.get(n)
-            if ff.is_extern or ff.is_export or ff.class_name != "": return n
+            if ff.is_extern or ff.class_name != "": return n
+            if ff.is_export: return self.export_cname(n)
         if _is_c_keyword(n): return "_tr_fn_" + n
         if n.starts_with("_tr_"): return n
         if not self.functions.contains(n): return n
@@ -2486,6 +2506,14 @@ pub class CGenerator:
         mut hit = libc_fn_names().contains(" " + n + " ")
         self.libc_names_cache.insert(n, hit)
         if hit: return "_tr_fn_" + n
+        return n
+
+    # C symbol of an `export def`: its own name, so a shared library exports
+    # exactly what the author wrote -- except a C keyword, or a name libc
+    # already declares (which would not compile next to the libc headers).
+    pub def export_cname(self, n: str) -> str:
+        if _is_c_lang_keyword(n): return "_tr_fn_" + n
+        if libc_fn_names().contains(" " + n + " "): return "_tr_fn_" + n
         return n
 
     pub def gen_func_sig(self, f: HirFunction, class_name: str) -> str:
@@ -2498,7 +2526,9 @@ pub class CGenerator:
         if fname == "main": fname = "_tr_main"
         # Escape C reserved keywords used as function names
         if class_name == "" and self.emit_fn_name == "":
-            if f.is_extern or f.is_export:
+            if f.is_export and not f.is_extern:
+                fname = self.export_cname(fname)
+            elif f.is_extern:
                 if _is_c_keyword(fname): fname = "_tr_fn_" + fname
             else:
                 fname = self.fn_cname(fname)
@@ -8926,6 +8956,17 @@ pub class CGenerator:
                                         # on a plain local binding like this one).
                                         init_s = "_tr_str_retain(" + init_s + ")"
                                         self.str_local_names.insert(n, true)
+                                    case HirExpr.EIndex(ix_obj, _, _):
+                                        # `mut w = words[i]` on a List/Vec/Array of str:
+                                        # gen_index yields the element's own TrStr
+                                        # (no retain), but this local is released at
+                                        # scope exit -- retain so each iteration does
+                                        # not drop the list's reference (UAF once the
+                                        # element is heap-allocated).
+                                        mut ix_on = hir_expr_type(ix_obj).name
+                                        if ix_on == "List" or ix_on == "Vec" or ix_on == "Array":
+                                            init_s = "_tr_str_retain(" + init_s + ")"
+                                        self.str_local_names.insert(n, true)
                                     case _: self.str_local_names.insert(n, true)
                         elif self.is_heap_class_tn(self.resolve_generic_tyname(hir_expr_type(v).name)) and not self.interfaces.contains(ty.name):
                             # Refcounted heap class. A proven borrow is a zero-cost
@@ -9050,6 +9091,12 @@ pub class CGenerator:
                                     match v.read():
                                         case HirExpr.EPropAccess(_, _, _):
                                             _sa_rhs = "_tr_str_retain(" + _sa_rhs + ")"
+                                        case HirExpr.EIndex(_sa_ixo, _, _):
+                                            # List/Vec/Array str element: gen_index aliases
+                                            # it without a retain (see the SLet case).
+                                            mut _sa_ixn = hir_expr_type(_sa_ixo).name
+                                            if _sa_ixn == "List" or _sa_ixn == "Vec" or _sa_ixn == "Array":
+                                                _sa_rhs = "_tr_str_retain(" + _sa_rhs + ")"
                                         case _: pass
                                     self.w(pad + "TrStr " + _safe_c_varname(n) + " = " + _sa_rhs + ";\n")
                                     self.str_local_names.insert(n, true)
@@ -9091,11 +9138,25 @@ pub class CGenerator:
                             mut _si_call = self.cls_method_c_call(idx_ty_n, "__setitem__", _si_obj, _si_key + ", " + _si_val)
                             self.w(pad + self.flush_wraps(_si_call, true) + ";\n")
                             return
-                        # list[i] = str_value into a legacy List_str (char* elements):
-                        # assign the raw char* lvalue, not the _tr_str_lit-wrapped rvalue.
+                        # list[i] = str_value. A List[str] is List_TrStr (refcounted
+                        # elements): List_TrStr_set releases the old element and
+                        # retains the new one. A legacy List_str (char* elements)
+                        # still assigns the raw char* lvalue.
                         if idx_ty_n == "List" or idx_ty_n == "Vec":
                             mut idx_full_ty = hir_expr_type(idx_obj)
-                            if idx_full_ty.args.len > 0 and _is_str_type(idx_full_ty.args.get(0).read().name):
+                            # (resolve_generic_prim: inside a monomorphized List[T] body T may be str)
+                            if idx_full_ty.args.len > 0 and _is_str_type(self.resolve_generic_prim(idx_full_ty.args.get(0).read().name)):
+                                if idx_ty_n == "List" and (self.type_to_c(hir_expr_type(idx_obj)).starts_with("List_TrStr") or not _is_str_type(idx_full_ty.args.get(0).read().name)):
+                                    mut _lt_obj = self.gen_expr(idx_obj)
+                                    mut _lt_key = self.gen_expr(idx_key)
+                                    if self._is_fresh_str_expr(v):
+                                        # set() retains; drop the fresh value's own reference.
+                                        mut _lt_fresh = "{ TrStr _lt_v = " + self.gen_expr(v) + "; List_TrStr_set(" + _lt_obj + ", " + _lt_key + ", _lt_v); _tr_str_release(_lt_v); }"
+                                        self.w(pad + self.flush_wraps(_lt_fresh, true) + "\n")
+                                        return
+                                    mut _lt_stmt = "List_TrStr_set(" + _lt_obj + ", " + _lt_key + ", " + self.gen_expr(v) + ")"
+                                    self.w(pad + self.flush_wraps(_lt_stmt, true) + ";\n")
+                                    return
                                 mut _li_obj = self.gen_expr(idx_obj)
                                 mut _li_key = self.gen_expr(idx_key)
                                 mut _li_lvalue = _li_obj + "->data[(_tr_bounds_check(" + _li_key + ", " + _li_obj + "->len), " + _li_key + ")]"
@@ -9251,6 +9312,12 @@ pub class CGenerator:
                                         # scope exit), so retain — else the store over-
                                         # releases the field's buffer (UAF; broke CI inherit).
                                         _wrapped_rhs = "_tr_str_retain(" + _wrapped_rhs + ")"
+                                    case HirExpr.EIndex(_wr_ixo, _, _):
+                                        # List/Vec/Array str element: aliased without a
+                                        # retain by gen_index; this local owns it.
+                                        mut _wr_ixn = hir_expr_type(_wr_ixo).name
+                                        if _wr_ixn == "List" or _wr_ixn == "Vec" or _wr_ixn == "Array":
+                                            _wrapped_rhs = "_tr_str_retain(" + _wrapped_rhs + ")"
                                     case _: pass
                                 self.w(pad + "TrStr " + _strtmp + " = " + _wrapped_rhs + ";\n")
                                 self.w(pad + "_tr_str_release(" + self.lv_name(_an) + ");\n")
