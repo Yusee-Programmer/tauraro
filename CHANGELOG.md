@@ -63,6 +63,10 @@ added here as each phase lands.
 - `from` stays a reserved word (it starts import statements and lifetime clauses).
 
 ### Added
+- **`std.sys.sandbox`** — pledge-style promises (`stdio rpath wpath cpath inet unix dns proc
+  thread exec id error ...`) enforced with seccomp-BPF on Linux (open flags and socket families
+  checked), custom syscall allow / deny lists, filesystem `Unveil` via Landlock, and native
+  `pledge` / `unveil` on OpenBSD; `Sandbox.run_isolated` runs a function in a sandboxed child.
 - **`std.sys.dylib`, `std.sys.plugin`** — load shared libraries at run time (`dlopen` /
   `LoadLibraryW`) and call int / double / `str` functions through exact-prototype trampolines;
   a plugin convention on top (`tauraro_plugin_abi` / `_name` / `_version` / `_init` / `_shutdown`

@@ -1,0 +1,137 @@
+# tests/lang/119_sandbox.tr
+# std.sys.sandbox. Every restriction is applied in a forked child
+# (Sandbox.run_isolated) that probes what still works and reports the
+# outcomes as bits of its exit code; a child killed by the seccomp filter
+# shows up as -31 (SIGSYS). Landlock cases run when the kernel supports it.
+# Platforms without a sandbox backend only check that calls are refused.
+
+from std.test import TestRunner
+from std.sys.sandbox import Sandbox, Unveil, SANDBOX_EACCES
+from std.io.file import File
+from std.io.dir import Dir
+from std.sys.fs import Fs
+from std.net.udpx import UdpEndpoint
+
+def probe_dir() -> str: return "build/sandbox_probe"
+def existing_file() -> str: return "build/sandbox_probe/existing.txt"
+def new_file() -> str: return "build/sandbox_probe/new.txt"
+
+def can_read() -> bool: return File.read_text(existing_file()) == "hello"
+
+def can_overwrite() -> bool:
+    mut f = File.init(existing_file(), "r+b")
+    if not f.is_open(): return false
+    f.write("HELLO")
+    f.close()
+    return true
+
+def can_create() -> bool:
+    mut ok = File.write_text(new_file(), "x")
+    if ok: Fs.delete(new_file())
+    return ok
+
+def can_socket() -> bool:
+    mut r: Result[UdpEndpoint, str] = UdpEndpoint.open(4, 0)
+    if r.is_err: return false
+    mut u = r.ok
+    u.close()
+    return true
+
+# Bits: 1 read, 2 overwrite existing, 4 create, 8 socket.
+def probe_all() -> int:
+    mut m = 0
+    if can_read(): m = m | 1
+    if can_overwrite(): m = m | 2
+    if can_create(): m = m | 4
+    if can_socket(): m = m | 8
+    return m
+
+def probe_socket_kills() -> int:
+    if can_read(): pass
+    mut ok = can_socket()
+    return 77        # not reached when the filter kills the process
+
+def deny_socket_then_probe() -> int:
+    mut names: List[str] = ["socket"]
+    mut r: Result[bool, str] = deny(names)
+    if r.is_err: return 200
+    mut m = 0
+    if can_read(): m = m | 1
+    if can_socket(): m = m | 8
+    return m
+
+def deny(names: List[str]) throws str -> bool:
+    Sandbox.deny_syscalls(names, SANDBOX_EACCES)?
+    return true
+
+def landlock_probe() -> int:
+    mut r: Result[bool, str] = unveil_probe_dir()
+    if r.is_err: return 201
+    mut m = 0
+    if can_read(): m = m | 1
+    if can_overwrite(): m = m | 2
+    if can_create(): m = m | 4
+    if File.read_text("tests/lang/119_sandbox.tr").len() > 0: m = m | 16
+    return m
+
+def unveil_probe_dir() throws str -> bool:
+    mut u = Unveil.init()?
+    u.allow(probe_dir(), "r")?
+    u.lock()?
+    return true
+
+def reset_probe():
+    File.write_text(existing_file(), "hello")
+
+def run(t: TestRunner, promises: str, body: def() -> int, want: int, label: str):
+    reset_probe()
+    mut r: Result[int, str] = Sandbox.run_isolated(promises, body)
+    t.assert_true(r.is_ok, label + ": child ran")
+    if r.is_ok: t.assert_eq_int(r.ok, want, label)
+
+def test_linux(t: TestRunner):
+    t.section("seccomp promises")
+    t.assert_true(Sandbox.syscall_number("read") >= 0, "syscall number")
+    t.assert_eq_int(Sandbox.syscall_number("no_such_call"), -1, "unknown syscall")
+    mut bad: Result[int, str] = Sandbox.run_isolated("stdio bogus", probe_all)
+    t.assert_true(bad.is_ok and bad.ok == 125, "unknown promise: child refuses to run")
+    run(t, "", probe_all, 15, "no restrictions")
+    run(t, "stdio rpath error", probe_all, 1, "rpath: read only")
+    run(t, "stdio rpath wpath error", probe_all, 3, "wpath: overwrite but not create")
+    run(t, "stdio rpath wpath cpath error", probe_all, 7, "cpath: create")
+    run(t, "stdio rpath inet error", probe_all, 9, "inet: sockets")
+    run(t, "stdio rpath unix error", probe_all, 1, "unix promise does not allow AF_INET")
+    run(t, "stdio rpath", probe_socket_kills, -31, "without error: forbidden call kills (SIGSYS)")
+    t.section("syscall lists")
+    run(t, "", deny_socket_then_probe, 1, "deny_syscalls blocks only the listed call")
+    mut unknown: Result[bool, str] = deny_unknown()
+    t.assert_true(unknown.is_err, "unknown syscall name rejected before installing")
+    t.section("landlock")
+    if Sandbox.landlock_abi() > 0:
+        run(t, "", landlock_probe, 1, "unveiled dir readable, nothing else")
+    else:
+        t.skip("Landlock not available on this kernel")
+
+def deny_unknown() throws str -> bool:
+    mut names: List[str] = ["no_such_call"]
+    Sandbox.deny_syscalls(names, SANDBOX_EACCES)?
+    return true
+
+def main():
+    mut t = TestRunner.init("119_sandbox")
+    mut d = Dir.init(probe_dir())
+    d.make()
+    reset_probe()
+    t.section("backend")
+    mut be = Sandbox.backend()
+    t.assert_true(be == "seccomp" or be == "pledge" or be == "none", "backend name")
+    if be == "seccomp":
+        test_linux(t)
+    elif be == "none":
+        mut r: Result[bool, str] = deny_unknown()
+        t.assert_true(r.is_err, "unsupported platform refuses filters")
+        mut u: Result[Unveil, str] = Unveil.init()
+        t.assert_true(u.is_err, "unsupported platform refuses unveil")
+    Fs.delete(existing_file())
+    d.remove()
+    t.summary()

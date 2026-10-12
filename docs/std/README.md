@@ -28,7 +28,7 @@ building libraries with `taupkg`)
 | [`std.regex`](regex.md) | POSIX extended regex: match, find, replace, split, count, capture groups (numbered + named), `Match`/`Captures`, backreference replace |
 | [`std.serialize`](serialize.md) | Value serialization: `Pickle` (own compact binary format for scalars + nested List/Dict/Vec/Set), `Msgpack` (real, wire-compatible MessagePack codec) |
 | [`std.string`](string.md) | String utilities (Str), formatting (Fmt), parsing, line/word splitting, `split_to_vec` |
-| [`std.sys`](sys.md) | Environment, file system, processes, timing, OS/platform info, signals, `.env`, cron expressions, memory maps, shared memory + named semaphores, pipes/FIFOs, Unix-domain sockets, shared-library loading (`dylib`) and plugins |
+| [`std.sys`](sys.md) | Environment, file system, processes, timing, OS/platform info, signals, `.env`, cron expressions, memory maps, shared memory + named semaphores, pipes/FIFOs, Unix-domain sockets, shared-library loading (`dylib`) and plugins, sandboxing (seccomp + Landlock, pledge + unveil) |
 | [`std.term`](term.md) | Terminal UI: ANSI SGR styling/colors (`Term`/`Style`/`Color`), cursor control, terminal size query, progress bar and spinner |
 | [`std.test`](test.md) | Lightweight unit-testing framework |
 | [`std.text`](text.md) | Text processing: line diff + unified diff, Levenshtein distance, word-wrap/indent, Markdown, shell word splitting/quoting (`Shlex`) |

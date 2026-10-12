@@ -609,3 +609,49 @@ Each plugin carries its own copy of the Tauraro runtime. Pass plain values (`int
 across the boundary, not class instances or collections.
 
 Tested by `tests/lang/118_dylib_plugin.tr`.
+
+---
+
+## Sandboxing — `std.sys.sandbox`
+
+Drop the privileges a process does not need. On Linux, promises become a seccomp-BPF filter and
+`Unveil` becomes a Landlock ruleset (kernel 5.13+). On OpenBSD the module calls `pledge(2)` and
+`unveil(2)`. On other platforms `Sandbox.supported()` is false and the calls raise. Restrictions
+are permanent and inherited by child processes.
+
+```tauraro
+from std.sys.sandbox import Sandbox, Unveil
+
+mut u = Unveil.init()?
+u.allow("/srv/www", "r")?                    # r read, w write, x execute, c create/remove
+u.allow("/var/log/myapp", "rwc")?
+u.lock()?
+Sandbox.pledge("stdio rpath wpath cpath inet error")?
+```
+
+| Promise | Allows |
+|---|---|
+| `stdio` | I/O on descriptors already open, memory, time, signals, polling, pipes, send/recv on held sockets |
+| `rpath` | opening files read-only, stat / access / readlink, directory listing, chdir |
+| `wpath` | opening existing files for writing (no `O_CREAT`) |
+| `cpath` | creating, removing and renaming files and directories |
+| `fattr`, `flock` | chmod / chown / utimes; file locks |
+| `inet`, `unix` | IPv4/IPv6 or AF_UNIX sockets (`socket` is checked by address family), connect, bind, listen, accept |
+| `dns` | what name resolution needs; combine with `rpath` for `/etc/resolv.conf` |
+| `proc`, `thread`, `exec`, `id` | fork/wait/kill; creating threads (Linux); execve; setuid family |
+| `tty` | accepted (terminal ioctls are part of `stdio` on Linux) |
+| `error` | denied calls fail with `EPERM` instead of killing the process with SIGSYS |
+
+| API | Description |
+|---|---|
+| `Sandbox.backend()`, `supported()`, `landlock_abi()` | `"seccomp"`, `"pledge"` or `"none"`; Landlock ABI version (0 = unavailable). |
+| `Sandbox.pledge(promises)?` | Keep only the listed promises. Unknown names raise before anything is installed. |
+| `Sandbox.deny_syscalls(names, err_code)?` / `allow_only_syscalls(names, err_code)?` | Custom seccomp lists (Linux); `err_code` 0 kills instead of failing the call. |
+| `Sandbox.syscall_number(name)` | Syscall number on this architecture, or -1. |
+| `Sandbox.run_isolated(promises, body)?` | Fork; the child applies the promises and returns `body()` as its exit code. Returns that code, `-N` when signal N ended the child (`-31` = SIGSYS, a forbidden call), or 125 when the promises could not be applied. POSIX only. |
+| `Unveil.init()?`, `allow(path, perms)?`, `lock()?` | Restrict the visible filesystem to the allowed paths. |
+
+Linux filters cover x86-64, AArch64, i386, ARM and RISC-V 64, and reject syscalls from other ABIs
+(x32). Path promises check `open` / `openat` flags; `openat2` is only allowed with `cpath`.
+
+Tested by `tests/lang/119_sandbox.tr`.
