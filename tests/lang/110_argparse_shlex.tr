@@ -1,0 +1,199 @@
+# tests/lang/110_argparse_shlex.tr
+# std.text.shlex (POSIX + Windows splitting/quoting; expectations match
+# Python's shlex except where /bin/sh differs: backslash-newline joins lines
+# and \$ is unescaped inside double quotes) and std.cli.argparse.
+
+from std.test import TestRunner
+from std.text.shlex import Shlex
+from std.cli.argparse import ArgParser, Arg, Namespace
+from std.io.file import File
+from std.sys.fs import Fs
+from std.sys.process import Process
+
+def jn(xs: List[str]) -> str:
+    mut out = ""
+    mut i = 0
+    while i < len(xs):
+        if i > 0: out = out + "|"
+        out = out + xs[i]
+        i = i + 1
+    return out
+
+def words(s: str) -> str:
+    mut r: Result[List[str], str] = Shlex.split(s)
+    if r.is_err: return "ERR"
+    return jn(r.ok)
+
+def test_shlex(t: TestRunner):
+    t.section("shlex POSIX split")
+    t.assert_eq_str(words("cc -o \"my prog\" src/a.c"), "cc|-o|my prog|src/a.c", "double quotes")
+    t.assert_eq_str(words("echo 'single quoted' \"double \\\"q\\\"\" back\\ slash"), "echo|single quoted|double \"q\"|back slash", "mixed quoting")
+    t.assert_eq_str(words("a'b c'\"d\" e"), "ab cd|e", "adjacent quoted parts join")
+    t.assert_eq_str(words("''  \"\" x"), "||x", "empty quoted words")
+    t.assert_eq_str(words("x \\\n y"), "x|y", "backslash-newline continues the line")
+    t.assert_eq_str(words("path\\with \"C:\\\\dir\""), "pathwith|C:\\dir", "backslashes")
+    t.assert_eq_str(words("tab\tsep  multi   space"), "tab|sep|multi|space", "whitespace runs")
+    t.assert_eq_str(words("$HOME '$HOME' \"\\$HOME\""), "$HOME|$HOME|$HOME", "dollar handling")
+    t.assert_eq_str(words("trail\\\\"), "trail\\", "escaped backslash at the end")
+    t.assert_eq_str(words("utf8 ü \"quoted ü\""), "utf8|ü|quoted ü", "UTF-8 passes through")
+    t.assert_eq_str(words("'open"), "ERR", "unterminated single quote")
+    t.assert_eq_str(words("\"open"), "ERR", "unterminated double quote")
+    t.assert_eq_str(words("dangling\\"), "ERR", "trailing backslash")
+    mut c: Result[List[str], str] = Shlex.split_comments("ls -l # list files\nnext 'line' #x")
+    t.assert_eq_str(jn(c.ok), "ls|-l|next|line", "comments")
+    mut nc: Result[List[str], str] = Shlex.split("a#b # c")
+    t.assert_eq_str(jn(nc.ok), "a#b|#|c", "# is literal without comments")
+
+    t.section("shlex quote / join")
+    t.assert_eq_str(Shlex.quote(""), "''", "empty")
+    t.assert_eq_str(Shlex.quote("plain"), "plain", "safe word unquoted")
+    t.assert_eq_str(Shlex.quote("has space"), "'has space'", "space")
+    t.assert_eq_str(Shlex.quote("it's"), "'it'\"'\"'s'", "single quote")
+    t.assert_eq_str(Shlex.quote("$(rm -rf)"), "'$(rm -rf)'", "shell metacharacters")
+    t.assert_eq_str(Shlex.quote("ok-chars_@%+=:,./"), "ok-chars_@%+=:,./", "safe punctuation")
+    mut ws: List[str] = ["cp", "my file", "it's", ""]
+    mut joined = Shlex.join(ws)
+    t.assert_eq_str(joined, "cp 'my file' 'it'\"'\"'s' ''", "join")
+    t.assert_eq_str(words(joined), "cp|my file|it's|", "join/split round trip")
+
+    t.section("shlex Windows rules")
+    t.assert_eq_str(jn(Shlex.split_windows("prog \"a b\" c")), "prog|a b|c", "quotes")
+    t.assert_eq_str(jn(Shlex.split_windows("a\\\\\\\"b c\\d")), "a\\\"b|c\\d", "2n+1 backslashes before a quote")
+    t.assert_eq_str(jn(Shlex.split_windows("\"a\\\\\" b")), "a\\|b", "2n backslashes before a quote")
+    t.assert_eq_str(jn(Shlex.split_windows("\"say \"\"hi\"\"\"")), "say \"hi\"", "doubled quote inside quotes")
+    t.assert_eq_str(Shlex.quote_windows("C:\\Program Files\\x\\"), "\"C:\\Program Files\\x\\\\\"", "trailing backslash doubled")
+    t.assert_eq_str(Shlex.quote_windows("a\"b"), "\"a\\\"b\"", "embedded quote")
+    t.assert_eq_str(Shlex.quote_windows("simple"), "simple", "no quoting needed")
+    mut wl: List[str] = ["x y", "z\\\"", ""]
+    mut back = Shlex.split_windows(Shlex.join_windows(wl))
+    t.assert_eq_int(len(back), 3, "Windows round trip count")
+    t.assert_eq_str(back[1], "z\\\"", "Windows round trip value")
+
+def build() -> ArgParser:
+    mut p = ArgParser.init("tool", "Process some files.")
+    p.version("1.4.0")
+    p.add(Arg.count("verbose", "v", "More output (repeat for more)"))
+    p.add(Arg.option("output", "o", "Write results to FILE").value_name("FILE").default_value("out.txt").from_env("TAURARO_TEST_OUT"))
+    p.add(Arg.option("jobs", "j", "Parallel jobs").of_int().default_value("4"))
+    p.add(Arg.option("ratio", "", "Mix ratio").of_float())
+    p.add(Arg.option("format", "f", "Output format").one_of(["json", "yaml", "text"]))
+    p.add(Arg.option("tag", "t", "Add a tag").repeatable())
+    p.add(Arg.flag("color", "", "Colored output").allow_negation())
+    p.add(Arg.flag("dry_run", "n", "Do nothing").in_group("Safety"))
+    p.add(Arg.flag("json", "", "JSON logs"))
+    p.add(Arg.flag("yaml", "", "YAML logs"))
+    p.add(Arg.positional("inputs", "Files to process").count_range(1, -1))
+    p.mutually_exclusive(["json", "yaml"])
+    mut b = p.command("build", "Build the project").also("b")
+    b.add(Arg.flag("release", "r", "Optimised build"))
+    b.add(Arg.option("target", "", "Target triple").mandatory())
+    return p
+
+def parse(p: ArgParser, line: str) -> Result[Namespace, str]:
+    mut r: Result[List[str], str] = Shlex.split(line)
+    return p.parse(r.ok)
+
+def test_argparse(t: TestRunner):
+    t.section("argparse basics")
+    mut p = build()
+    mut r = parse(p, "-vv --output=res.json -j 8 --tag a -t b -tc in1.txt in2.txt")
+    t.assert_true(r.is_ok, "parses")
+    if r.is_err:
+        print(r.err)
+        return
+    mut ns = r.ok
+    t.assert_eq_int(ns.count("verbose"), 2, "counted -vv")
+    t.assert_eq_str(ns.get("output"), "res.json", "--opt=value")
+    t.assert_eq_int(ns.get_int("jobs"), 8, "typed int")
+    t.assert_eq_str(jn(ns.list("tag")), "a|b|c", "repeatable option incl. -tc")
+    t.assert_eq_str(jn(ns.list("inputs")), "in1.txt|in2.txt", "variadic positional")
+    t.assert_false(ns.flag("color"), "unset flag is false")
+    t.assert_eq_str(ns.source("output"), "command line", "source")
+    t.assert_eq_str(ns.command, "", "no subcommand")
+
+    mut r2 = parse(p, "file.txt")
+    t.assert_eq_str(r2.ok.get("output"), "out.txt", "default value")
+    t.assert_eq_str(r2.ok.source("output"), "default", "default source")
+    t.assert_eq_int(r2.ok.get_int("jobs"), 4, "typed default")
+    t.assert_eq_int(r2.ok.count("verbose"), 0, "zero count")
+
+    mut r3 = parse(p, "--color --no-color --ratio -0.5 -nv json.txt -- -notanoption")
+    t.assert_true(r3.is_ok, "negation, negative number, -- separator")
+    if r3.is_ok:
+        t.assert_false(r3.ok.flag("color"), "--no-color wins (last)")
+        t.assert_true(r3.ok.get_float("ratio") < -0.49, "negative number as a value")
+        t.assert_true(r3.ok.flag("dry_run"), "clustered -n")
+        t.assert_eq_int(r3.ok.count("verbose"), 1, "clustered -v")
+        t.assert_eq_str(jn(r3.ok.list("inputs")), "json.txt|-notanoption", "everything after -- is positional")
+
+    t.section("argparse errors")
+    mut e1 = parse(p, "--outptu x f")
+    t.assert_true(e1.is_err, "unknown option")
+    t.assert_contains(e1.err, "a similar argument exists: '--output'", "suggestion")
+    t.assert_contains(e1.err, "Usage: tool", "usage in the error")
+    mut e2 = parse(p, "-j many f")
+    t.assert_contains(e2.err, "invalid integer 'many'", "type check")
+    mut e3 = parse(p, "--format xml f")
+    t.assert_contains(e3.err, "possible values: json, yaml, text", "choices")
+    mut e4 = parse(p, "")
+    t.assert_contains(e4.err, "'<INPUTS>' was not provided", "required positional")
+    mut e5 = parse(p, "--json --yaml f")
+    t.assert_contains(e5.err, "'--json' cannot be used with '--yaml'", "mutually exclusive")
+    mut e6 = parse(p, "--output")
+    t.assert_contains(e6.err, "a value is required", "missing value")
+    mut e7 = parse(p, "build")
+    t.assert_contains(e7.err, "'--target <TARGET>' was not provided", "required option in a subcommand")
+
+    t.section("argparse subcommands, help, version")
+    mut s = parse(p, "-v b --release --target x86_64")
+    t.assert_true(s.is_ok, "alias 'b' selects build")
+    if s.is_ok:
+        t.assert_eq_str(s.ok.command, "build", "command name")
+        t.assert_true(s.ok.sub.flag("release"), "sub flag")
+        t.assert_eq_str(s.ok.sub.get("target"), "x86_64", "sub option")
+        t.assert_eq_int(s.ok.count("verbose"), 1, "parent options before the command")
+        t.assert_eq_str(jn(s.ok.command_path()), "build", "command path")
+    mut h = parse(p, "--help")
+    t.assert_true(h.ok.exit_now, "help exits")
+    mut ht = h.ok.exit_text
+    t.assert_contains(ht, "Usage: tool [OPTIONS] <INPUTS>... [COMMAND]", "usage line")
+    t.assert_contains(ht, "-o, --output <FILE>", "option spec")
+    t.assert_contains(ht, "[default: out.txt] [env:", "default + env shown")
+    t.assert_contains(ht, "                           TAURARO_TEST_OUT]", "long help wraps under its column")
+    t.assert_contains(ht, "--[no-]color", "negatable flag")
+    t.assert_contains(ht, "Safety:", "custom group")
+    t.assert_contains(ht, "build, b", "command alias listed")
+    mut hb = parse(p, "help build")
+    t.assert_contains(hb.ok.exit_text, "Usage: tool build", "help <command>")
+    mut v = parse(p, "--version")
+    t.assert_eq_str(v.ok.exit_text, "tool 1.4.0", "version")
+    mut sc = parse(p, "biuld")
+    t.assert_true(sc.is_ok, "a word that is not a command becomes a positional")
+
+    t.section("argparse env and response files")
+    mut pid = Process.get_pid()
+    mut path = f"tauraro_args_{pid}.txt"
+    File.write_text(path, "# options\n--tag 'from file' -j 2\nlisted.txt\n")
+    p.response_files(true)
+    mut rf = parse(p, "@" + path + " extra.txt")
+    t.assert_true(rf.is_ok, "response file parsed")
+    if rf.is_ok:
+        t.assert_eq_str(rf.ok.get("tag"), "from file", "quoted value from the file")
+        t.assert_eq_int(rf.ok.get_int("jobs"), 2, "option from the file")
+        t.assert_eq_str(jn(rf.ok.list("inputs")), "listed.txt|extra.txt", "positionals from file and command line")
+    Fs.delete(path)
+
+    t.section("argparse completion scripts")
+    mut bash: Result[str, str] = p.completion_script("bash")
+    t.assert_contains(bash.ok, "complete -o default -F _tool_complete tool", "bash")
+    t.assert_contains(bash.ok, "--release", "subcommand options listed")
+    mut fish: Result[str, str] = p.completion_script("fish")
+    t.assert_contains(fish.ok, "complete -c tool -n __fish_use_subcommand -l format -s f -r -a 'json yaml text'", "fish choices")
+    mut bad: Result[str, str] = p.completion_script("tcsh")
+    t.assert_true(bad.is_err, "unknown shell")
+
+def main():
+    mut t = TestRunner.init("110_argparse_shlex")
+    test_shlex(t)
+    test_argparse(t)
+    t.summary()

@@ -1675,6 +1675,15 @@ extend Sema:
                 self.collect_idents(inner, out)
                 self.collect_idents(to, out)
             case HirExpr.EYield(inner, _): self.collect_idents(inner, out)
+            case HirExpr.EFString(fparts, _):
+                # `return f"...{local}..."` reads the local while building the
+                # result; it must not be released before the return expression.
+                mut fpi = 0
+                while fpi < fparts.len:
+                    mut fpart = fparts.get(fpi)
+                    if fpart.is_expr and fpart.expr as usize != 0 as usize:
+                        self.collect_idents(fpart.expr, out)
+                    fpi = fpi + 1
             case _: pass
 
     # True if `name` is a declared local/param variable in any open scope.
