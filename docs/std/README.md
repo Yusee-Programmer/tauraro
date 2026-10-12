@@ -18,6 +18,7 @@ building libraries with `taupkg`)
 | [`std.encoding`](encoding.md) | Data encoding: JSON, CSV, TOML, INI, YAML, XML, Base64, Base32, Hex, CBOR, Protocol Buffers wire format |
 | [`std.gpu`](gpu.md) | GPU compute: CUDA/OpenCL/CPU device API (`Device`/`Buffer[T]`/`Module`/`Kernel`), Tauraro `@kernel` → PTX/SPIR-V, and OpenMP CPU dispatch (`Gpu.parallel`) |
 | [`std.image`](image.md) | Raster image decode/encode: BMP (24/32-bit), QOI, PNG (truecolor/grayscale, full DEFLATE inflate + stored-block deflate), shared `Image` (RGBA8) type, format-sniffing `decode()` |
+| [`std.audio`](audio.md) | Raster audio decode/encode: BMP (24/32-bit), QOI, PNG (truecolor/grayscale, full DEFLATE inflate + stored-block deflate), shared `Audio` (RGBA8) type, format-sniffing `decode()` |
 | [`std.io`](io.md) | File I/O, directory operations, path manipulation, console, buffered I/O, ZIP archive read/write (`ZipWriter`/`ZipReader`), tar archive read/write (`TarWriter`/`TarReader`) |
 | [`std.iter`](iter.md) | Range construction, int/float vector transforms, folds, prefix sums, normalization |
 | [`std.log`](log.md) | Leveled structured logging: text/JSON formats, stdout/file sinks, per-target filtering (`Logger`/`Fields`) |

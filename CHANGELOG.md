@@ -52,6 +52,10 @@ added here as each phase lands.
 - `from` stays a reserved word (it starts import statements and lifetime clauses).
 
 ### Added
+- **`std.audio`** — `AudioBuffer` with WAV decode/encode (PCM 8–32-bit, float, A-law/μ-law,
+  extensible), MP3 and FLAC decoding (vendored public-domain minimp3 and dr_flac), windowed-sinc
+  resampling, channel mixing, gain/normalize/fades/trim/concat/mix, and tone/noise generators.
+  Tested by `tests/lang/115_audio.tr`. Opus/Vorbis are not supported.
 - **`std.image.jpeg`, `std.image.gif`, `std.image.ops`** — JPEG decode (baseline + progressive,
   all subsamplings, CMYK, EXIF orientation) and encode; GIF decode with animation compositing
   and encode with median-cut quantisation, dithering and animation; resizing (nearest, box,

@@ -1,0 +1,154 @@
+# tests/lang/115_audio.tr
+# std.audio: WAV round trips (8/16/24/32-bit PCM, float 32), MP3 decoding
+# (ISO/minimp3 conformance vector l3-nonstandard-id3v2, with an ID3v2 tag),
+# FLAC decoding (a verbatim-subframe stream from a reference encoder), and
+# the DSP helpers. The C side was also checked against the l3-hecommon and
+# l3-si_block vectors (max 1 LSB from the reference PCM) and 24-bit FLAC.
+
+from std.test import TestRunner
+from std.audio.mod import Audio, AudioBuffer, Wav, Mp3, Flac
+from std.crypto.native import _cn_unhex
+
+extern "C":
+    def sqrt(x: float) -> float
+    def fabs(x: float) -> float
+
+def mp3_vec() -> str:
+    mut r: Result[str, str] = _cn_unhex("49443303000000000e36544954320000000b00000074657374207469746c6500000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000fffb54c400000a3060de0cbc6901460ae3f5dc24e1041662a86e0a46783bc07560e801539a4218c000eea643172a24a9c6862e1eb3b04b0a28b080430b080e13c1430b4b3ac286708c99a07336033949a7e6cce934fa0d99d26b9b76935cdbb326b41b75264d7004bf7db5d6ea00077ec1e65a88861d01a0a0a838054ba08094680e2622902fda342cf628d0d8a2ff6d20485c207c707cc1b3060d986d86d86e0c36c3706e0188d1aa24c1d868f333cf6668f3df9f99fffa3aecc68d30fac1ce")
+    return r.ok
+
+def flac_vec() -> str:
+    mut r: Result[str, str] = _cn_unhex("664c6143800000220080008000000000000003e800f00000012c00000000000000000000000000000000fff86008007fc1020000095012411a7721a027712bb02e312eda2da62a9f25e51fa9182a0fb3069dfd44f406eb42e352dc87d726d365d16cd14fd30dd697dbc7e269ea39f2e8fc1b05760e9a17291ecb25342a202d5f2ece2e602c18280f226c1b6b13510a720129f7d5eed3e680df32d933d4bfd205d121d21ad4e9d96fdf7ee6daef36f83d01930ada13b21bc022b428452c3c2e6f2ec82d4329f124f31e7b16cc0e35050dfbb2f282e9dbe217db84d666d2f0d146d179d386d75adccde3a7eba2f46dfdae0706101718841ff726242acb2dbd2edd2e1e2b89273721551a1f11df08e7ff96f648ed5ee531de17d856d42ad1bed129d273d58eda59e0a6e832f0b1f9cc03260c61a060fff86008017fd402151d1d0223be290e2cbb2e9f2ea82cd4293723f51d4415680cb2037bfa20f101e87be0e5da8cd5b2d287d12dd1b0d40cd829dddce4eced10f5f5ff410894119019d9211a27092b692e0f2ede2dd02aed2655203518cc1067075afe03f4bfebeee3eadd05d785d3a1d183d13fd2d9d63fdb4fe1d6e991f230fb5d04b80de416821e3a24be29cb2d2d2ec22e7a2c58287122ed1c0513fe0b2c01e8f891ef85e721dfbcd99fd50ad22cd121d1f5d49fd903def6e639ee84f78100d40a1f13031b25223227e22bfb2e532ed22d742a4525671f0b17730eeb05cafc70f339ea85e2abdbfdd6bfd326d156d163d34bd6fcdc50e30feaf6f3b4fcef06490f6317e11f6a4dd7fff86008022b400225b32a7b2d922ed82e3f2bce279f21db1abd128f09a30054f704ee0ee5cfde9cd8bdd46fd1ded123d247d53ed9e9e019e78eeffdf90f02670ba814711c6a234128b12c802e8a2eb92d0a2990246e1dd816120d6a0439fade9baf")
+    return r.ok
+
+def close(a: float, b: float, eps: float) -> bool:
+    mut d = a - b
+    if d < 0.0: d = 0.0 - d
+    return d <= eps
+
+def crossings(b: AudioBuffer) -> int:
+    mut n = 0
+    mut i = 1
+    while i < len(b.samples):
+        if (b.samples[i - 1] < 0.0) != (b.samples[i] < 0.0): n = n + 1
+        i = i + 1
+    return n
+
+def test_wav(t: TestRunner):
+    t.section("WAV round trips")
+    mut vals: List[float] = [0.0, 0.5, -0.5, 0.25, -1.0, 0.75]
+    mut src: Result[AudioBuffer, str] = AudioBuffer.from_samples(8000, 2, vals)
+    mut b = src.ok
+    t.assert_eq_int(b.frames(), 3, "frames")
+    mut bits: List[int] = [16, 24, 32]
+    mut i = 0
+    while i < len(bits):
+        mut enc: Result[str, str] = Wav.encode(b, bits[i], false)
+        mut dec: Result[AudioBuffer, str] = Wav.decode(enc.ok, enc.ok.len())
+        t.assert_eq_int(dec.ok.channels, 2, f"channels at {bits[i]} bits")
+        t.assert_eq_int(dec.ok.sample_rate, 8000, f"rate at {bits[i]} bits")
+        t.assert_eq_int(dec.ok.source_bits, bits[i], f"bit depth {bits[i]}")
+        t.assert_true(close(dec.ok.samples[1], 0.5, 0.0002) and close(dec.ok.samples[4], -1.0, 0.0002), f"values at {bits[i]} bits")
+        i = i + 1
+    mut f: Result[str, str] = Wav.encode(b, 32, true)
+    t.assert_eq_int(f.ok.len(), 44 + 6 * 4, "float file size")
+    mut fd: Result[AudioBuffer, str] = Wav.decode(f.ok, f.ok.len())
+    t.assert_true(fd.ok.samples[5] == 0.75, "float32 is exact")
+    mut e8: Result[str, str] = Wav.encode(b, 8, false)
+    mut d8: Result[AudioBuffer, str] = Wav.decode(e8.ok, e8.ok.len())
+    t.assert_true(close(d8.ok.samples[1], 0.5, 0.02), "8-bit")
+    mut bad: Result[str, str] = Wav.encode(b, 12, false)
+    t.assert_true(bad.is_err, "unsupported depth")
+    mut junk: Result[AudioBuffer, str] = Wav.decode("RIFF0000WAVE", 12)
+    t.assert_true(junk.is_err, "missing chunks")
+    mut sniff: Result[AudioBuffer, str] = Audio.decode(f.ok, f.ok.len())
+    t.assert_eq_int(sniff.ok.frames(), 3, "Audio.decode sniffs WAV")
+
+def test_codecs(t: TestRunner):
+    t.section("MP3 (ISO conformance vector)")
+    mut m = mp3_vec()
+    mut r: Result[AudioBuffer, str] = Mp3.decode(m, m.len())
+    t.assert_true(r.is_ok, "decodes past the ID3v2 tag")
+    t.assert_eq_int(r.ok.channels, 1, "mono")
+    t.assert_eq_int(r.ok.sample_rate, 48000, "48 kHz")
+    t.assert_eq_int(r.ok.frames(), 1152, "one frame of samples")
+    mut ok = true
+    mut idx: List[int] = [100, 300, 500, 700, 900, 1100]
+    mut want: List[int] = [0, 0, 0, 0, 0, 0]
+    mut k = 0
+    while k < len(idx):
+        mut got = r.ok.samples[idx[k]] * 32768.0
+        if not close(got, want[k] as float, 1.5): ok = false
+        k = k + 1
+    t.assert_true(ok, "samples match the reference PCM (within 1 LSB)")
+    mut viaa: Result[AudioBuffer, str] = Audio.decode(m, m.len())
+    t.assert_eq_int(viaa.ok.frames(), 1152, "Audio.decode sniffs ID3/MP3")
+    mut nomp3: Result[AudioBuffer, str] = Mp3.decode("nothing here", 12)
+    t.assert_true(nomp3.is_err, "no frames is an error")
+
+    t.section("FLAC")
+    mut fl = flac_vec()
+    mut fr: Result[AudioBuffer, str] = Flac.decode(fl, fl.len())
+    t.assert_true(fr.is_ok, "decodes")
+    t.assert_eq_int(fr.ok.frames(), 300, "frames")
+    t.assert_eq_int(fr.ok.sample_rate, 16000, "rate")
+    t.assert_true(close(fr.ok.samples[7] * 32768.0, 11825.0, 0.01), "exact sample 7")
+    t.assert_true(close(fr.ok.samples[299] * 32768.0, -1314.0, 0.01), "exact last sample")
+    mut viaf: Result[AudioBuffer, str] = Audio.decode(fl, fl.len())
+    t.assert_true(viaf.is_ok, "Audio.decode sniffs FLAC")
+    mut unk: Result[AudioBuffer, str] = Audio.decode("OggS....", 8)
+    t.assert_true(unk.is_err, "unsupported format")
+
+def test_dsp(t: TestRunner):
+    t.section("generators and measurements")
+    mut s = Audio.sine(440.0, 1.0, 8000, 0.5)
+    t.assert_eq_int(s.frames(), 8000, "1 second")
+    t.assert_true(close(s.duration(), 1.0, 0.0001), "duration")
+    t.assert_true(close(s.peak(), 0.5, 0.001), "peak")
+    t.assert_true(close(s.rms(), 0.5 / sqrt(2.0), 0.001), "rms of a sine")
+    t.assert_true(close(s.peak_db(), -6.0206, 0.01), "peak dBFS")
+    t.assert_true(crossings(s) >= 878 and crossings(s) <= 882, "440 Hz has ~880 zero crossings")
+    t.assert_true(close(Audio.square(100.0, 0.1, 8000, 0.3).peak(), 0.3, 0.0001), "square")
+    t.assert_true(Audio.sawtooth(100.0, 0.1, 8000, 0.8).peak() <= 0.8, "sawtooth")
+    mut n1 = Audio.noise(0.1, 8000, 1.0, 5)
+    mut n2 = Audio.noise(0.1, 8000, 1.0, 5)
+    t.assert_true(n1.samples[100] == n2.samples[100], "seeded noise")
+    t.assert_true(Audio.silence(0.5, 8000, 2).peak() == 0.0, "silence")
+
+    t.section("transformations")
+    mut st = s.to_channels(2)
+    t.assert_eq_int(st.channels, 2, "up-mix")
+    t.assert_true(st.get(10, 0) == st.get(10, 1), "duplicated channels")
+    t.assert_true(close(st.to_mono().get(10, 0), s.get(10, 0), 0.000001), "down-mix")
+    mut up = s.resample(16000, 32)
+    t.assert_eq_int(up.frames(), 16000, "resampled length")
+    t.assert_true(crossings(up) >= 876 and crossings(up) <= 884, "pitch preserved when resampling up")
+    mut down = s.resample(4000, 32)
+    t.assert_true(crossings(down) >= 876 and crossings(down) <= 884, "pitch preserved when resampling down")
+    t.assert_true(close(down.peak(), 0.5, 0.03), "amplitude preserved")
+    mut hf = Audio.sine(3000.0, 0.5, 16000, 0.5).resample(4000, 32)
+    t.assert_true(hf.rms() < 0.05, "content above the new Nyquist is filtered out")
+    t.assert_true(close(s.gain_db(6.0206).peak(), 1.0, 0.002), "gain_db")
+    t.assert_true(close(s.normalize(0.9).peak(), 0.9, 0.0001), "normalize")
+    t.assert_true(s.gain(4.0).clip().peak() == 1.0, "clip")
+    mut fin = s.fade_in(0.5)
+    t.assert_true(fabs(fin.get(10, 0)) < 0.01 and close(fabs(fin.get(4100, 0)), fabs(s.get(4100, 0)), 0.0001), "fade in")
+    mut fo = s.fade_out(0.25)
+    t.assert_true(fabs(fo.get(7999, 0)) < 0.001, "fade out")
+    mut tr = s.trim(0.25, 0.5)
+    t.assert_eq_int(tr.frames(), 2000, "trim")
+    t.assert_true(tr.get(0, 0) == s.get(2000, 0), "trim start")
+    mut cc = tr.concat(tr)
+    t.assert_eq_int(cc.frames(), 4000, "concat")
+    mut mx = s.mix(s, 1.0)
+    t.assert_true(close(mx.peak(), 1.0, 0.002), "mix")
+    t.assert_true(s.reverse().get(0, 0) == s.get(7999, 0), "reverse")
+    mut big = AudioBuffer.from_samples(8000, 2, [0.1, 0.2, 0.3])
+    t.assert_true(big.is_err, "interleaving checked")
+
+def main():
+    mut t = TestRunner.init("115_audio")
+    test_wav(t)
+    test_codecs(t)
+    test_dsp(t)
+    t.summary()

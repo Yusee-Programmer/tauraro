@@ -1,0 +1,399 @@
+# std.audio -- audio buffers, WAV/MP3/FLAC decoding, WAV encoding and DSP.
+#
+# An `AudioBuffer` holds interleaved float samples in [-1, 1] (frame f,
+# channel c is samples[f * channels + c]) plus the sample rate.
+#
+#   Wav.decode   PCM 8/16/24/32-bit, IEEE float 32/64, A-law, mu-law,
+#                WAVE_FORMAT_EXTENSIBLE
+#   Wav.encode   PCM 8/16/24/32-bit (TPDF dither for 8/16-bit) or float 32
+#   Mp3.decode   MPEG-1/2/2.5 Layer III (vendored minimp3, public domain)
+#   Flac.decode  FLAC (vendored dr_flac, public domain / MIT-0)
+#   Audio.decode sniffs the format
+#
+# Opus and Ogg Vorbis are not supported.
+#
+# DSP helpers return new buffers: to_mono, to_channels, resample (windowed
+# sinc), gain_db, normalize, fade_in/out, trim, concat, mix, reverse;
+# measurements peak / rms / duration; generators sine / square / sawtooth /
+# noise / silence.
+#
+# Usage:
+#   from std.audio import Audio, AudioBuffer, Wav
+#   mut buf = Audio.decode(bytes, n)?
+#   mut out = buf.to_mono().resample(16000, 32).normalize(0.9)
+#   mut wav = Wav.encode(out, 16, false)?
+
+from std.audio.native import trc_au_free, trc_au_ok, trc_au_frames, trc_au_channels, trc_au_rate, trc_au_bits, trc_au_error, trc_au_copy
+from std.audio.native import trc_wav_decode, trc_wav_encode, trc_mp3_decode, trc_flac_decode, trc_au_buf_free, trc_au_resample
+from std.audio.native import _tr_c_malloc, _tr_c_memcpy, _tr_str_wrap_len
+
+extern "C":
+    def sin(x: float) -> float
+    def sqrt(x: float) -> float
+    def pow(base: float, exp: float) -> float
+    def log10(x: float) -> float
+    def floor(x: float) -> float
+    def fabs(x: float) -> float
+
+def _au_zeros(n: int) -> List[float]:
+    mut xs: List[float] = []
+    xs.reserve(n)
+    mut i = 0
+    while i < n:
+        xs.append(0.0)
+        i = i + 1
+    return xs
+
+def _au_err(h: Pointer[char]) -> str:
+    mut out = _tr_c_malloc(161)
+    mut n = trc_au_error(h, out, 160)
+    unsafe: out.offset(n).write('\0')
+    return _tr_str_wrap_len(out, n)
+
+def _au_from_handle(h: Pointer[char]) throws str -> AudioBuffer:
+    if (h as usize) == (0 as usize): raise("audio: out of memory")
+    if trc_au_ok(h) != 1:
+        mut e = _au_err(h)
+        trc_au_free(h)
+        raise(e)
+    mut b = AudioBuffer.init(trc_au_rate(h), trc_au_channels(h), trc_au_frames(h))
+    mut sp = b.samples as Pointer[float]
+    trc_au_copy(h, sp)
+    b.source_bits = trc_au_bits(h)
+    trc_au_free(h)
+    return b
+
+def _db_to_lin(db: float) -> float: return pow(10.0, db / 20.0)
+
+pub class AudioBuffer:
+    pub sample_rate: int
+    pub channels:    int
+    pub samples:     List[float]
+    pub source_bits: int          # bit depth of the decoded source (0 if generated)
+
+extend AudioBuffer:
+    # Silence of `frames` frames.
+    pub def init(sample_rate: int, channels: int, frames: int) -> AudioBuffer:
+        mut b = AudioBuffer()
+        b.sample_rate = sample_rate
+        b.channels = channels
+        b.samples = _au_zeros(frames * channels)
+        b.source_bits = 0
+        return b
+
+    # Wrap interleaved samples.
+    pub def from_samples(sample_rate: int, channels: int, samples: List[float]) throws str -> AudioBuffer:
+        if channels < 1: raise("audio: channels must be >= 1")
+        if len(samples) % channels != 0: raise("audio: sample count is not a multiple of the channel count")
+        mut b = AudioBuffer()
+        b.sample_rate = sample_rate
+        b.channels = channels
+        b.samples = samples
+        b.source_bits = 0
+        return b
+
+    pub def frames(self) -> int: return len(self.samples) / self.channels
+    pub def duration(self) -> float: return (self.frames() as float) / (self.sample_rate as float)
+
+    pub def get(self, frame: int, channel: int) -> float:
+        return self.samples[frame * self.channels + channel]
+
+    pub def set(self, frame: int, channel: int, v: float):
+        self.samples[frame * self.channels + channel] = v
+
+    pub def copy(self) -> AudioBuffer:
+        mut b = AudioBuffer.init(self.sample_rate, self.channels, self.frames())
+        mut i = 0
+        while i < len(self.samples):
+            b.samples[i] = self.samples[i]
+            i = i + 1
+        return b
+
+    # ── measurements ──
+    pub def peak(self) -> float:
+        mut m = 0.0
+        mut i = 0
+        while i < len(self.samples):
+            mut v = fabs(self.samples[i])
+            if v > m: m = v
+            i = i + 1
+        return m
+
+    pub def rms(self) -> float:
+        if len(self.samples) == 0: return 0.0
+        mut s = 0.0
+        mut i = 0
+        while i < len(self.samples):
+            s = s + self.samples[i] * self.samples[i]
+            i = i + 1
+        return sqrt(s / (len(self.samples) as float))
+
+    # Peak level in dBFS (-inf as -1000 for silence).
+    pub def peak_db(self) -> float:
+        mut p = self.peak()
+        if p <= 0.0: return -1000.0
+        return 20.0 * log10(p)
+
+    # ── channel layout ──
+    pub def to_mono(self) -> AudioBuffer:
+        if self.channels == 1: return self.copy()
+        mut n = self.frames()
+        mut b = AudioBuffer.init(self.sample_rate, 1, n)
+        mut f = 0
+        while f < n:
+            mut s = 0.0
+            mut c = 0
+            while c < self.channels:
+                s = s + self.samples[f * self.channels + c]
+                c = c + 1
+            b.samples[f] = s / (self.channels as float)
+            f = f + 1
+        return b
+
+    # Up-mix (duplicating) or down-mix (averaging into the first channels).
+    pub def to_channels(self, n: int) -> AudioBuffer:
+        if n == self.channels: return self.copy()
+        if n == 1: return self.to_mono()
+        mut fr = self.frames()
+        mut b = AudioBuffer.init(self.sample_rate, n, fr)
+        mut mono = self.to_mono()
+        mut f = 0
+        while f < fr:
+            mut c = 0
+            while c < n:
+                if self.channels == 1 or c >= self.channels:
+                    b.samples[f * n + c] = mono.samples[f]
+                else:
+                    b.samples[f * n + c] = self.samples[f * self.channels + c]
+                c = c + 1
+            f = f + 1
+        return b
+
+    # Windowed-sinc resampling; quality = taps per side (16 fast .. 64 high).
+    pub def resample(self, rate: int, quality: int) -> AudioBuffer:
+        if rate == self.sample_rate or rate <= 0: return self.copy()
+        mut inf = self.frames()
+        mut outf = (inf * rate + self.sample_rate / 2) / self.sample_rate
+        mut b = AudioBuffer.init(rate, self.channels, outf)
+        mut ip = self.samples as Pointer[float]
+        mut op = b.samples as Pointer[float]
+        trc_au_resample(ip, inf, self.channels, self.sample_rate, rate, op, outf, quality)
+        return b
+
+    # ── level ──
+    pub def gain(self, factor: float) -> AudioBuffer:
+        mut b = self.copy()
+        mut i = 0
+        while i < len(b.samples):
+            b.samples[i] = b.samples[i] * factor
+            i = i + 1
+        return b
+
+    pub def gain_db(self, db: float) -> AudioBuffer: return self.gain(_db_to_lin(db))
+
+    # Scale so the peak equals `target` (0 < target <= 1).
+    pub def normalize(self, target: float) -> AudioBuffer:
+        mut p = self.peak()
+        if p <= 0.0: return self.copy()
+        return self.gain(target / p)
+
+    # Clamp every sample to [-1, 1].
+    pub def clip(self) -> AudioBuffer:
+        mut b = self.copy()
+        mut i = 0
+        while i < len(b.samples):
+            if b.samples[i] > 1.0: b.samples[i] = 1.0
+            if b.samples[i] < -1.0: b.samples[i] = -1.0
+            i = i + 1
+        return b
+
+    # Linear fades over `seconds`.
+    pub def fade_in(self, seconds: float) -> AudioBuffer:
+        mut b = self.copy()
+        mut n = (seconds * (self.sample_rate as float)) as int
+        if n > b.frames(): n = b.frames()
+        mut f = 0
+        while f < n:
+            mut g = (f as float) / (n as float)
+            mut c = 0
+            while c < b.channels:
+                b.samples[f * b.channels + c] = b.samples[f * b.channels + c] * g
+                c = c + 1
+            f = f + 1
+        return b
+
+    pub def fade_out(self, seconds: float) -> AudioBuffer:
+        mut b = self.copy()
+        mut total = b.frames()
+        mut n = (seconds * (self.sample_rate as float)) as int
+        if n > total: n = total
+        mut f = 0
+        while f < n:
+            mut g = (f as float) / (n as float)
+            mut fr = total - 1 - f
+            mut c = 0
+            while c < b.channels:
+                b.samples[fr * b.channels + c] = b.samples[fr * b.channels + c] * g
+                c = c + 1
+            f = f + 1
+        return b
+
+    # ── editing ──
+    # Frames between start and end seconds.
+    pub def trim(self, start: float, end: float) -> AudioBuffer:
+        mut a = (start * (self.sample_rate as float)) as int
+        mut z = (end * (self.sample_rate as float)) as int
+        if a < 0: a = 0
+        if z > self.frames(): z = self.frames()
+        if z < a: z = a
+        mut b = AudioBuffer.init(self.sample_rate, self.channels, z - a)
+        mut i = 0
+        while i < (z - a) * self.channels:
+            b.samples[i] = self.samples[a * self.channels + i]
+            i = i + 1
+        return b
+
+    # Append `other` (converted to this buffer's rate and channel count).
+    pub def concat(self, other: AudioBuffer) -> AudioBuffer:
+        mut o = other.to_channels(self.channels).resample(self.sample_rate, 32)
+        mut b = AudioBuffer.init(self.sample_rate, self.channels, self.frames() + o.frames())
+        mut i = 0
+        while i < len(self.samples):
+            b.samples[i] = self.samples[i]
+            i = i + 1
+        mut j = 0
+        while j < len(o.samples):
+            b.samples[i + j] = o.samples[j]
+            j = j + 1
+        return b
+
+    # Sum `other` * gain into a copy of this buffer (the longer length wins).
+    pub def mix(self, other: AudioBuffer, gain: float) -> AudioBuffer:
+        mut o = other.to_channels(self.channels).resample(self.sample_rate, 32)
+        mut n = self.frames()
+        if o.frames() > n: n = o.frames()
+        mut b = AudioBuffer.init(self.sample_rate, self.channels, n)
+        mut i = 0
+        while i < len(b.samples):
+            mut v = 0.0
+            if i < len(self.samples): v = self.samples[i]
+            if i < len(o.samples): v = v + o.samples[i] * gain
+            b.samples[i] = v
+            i = i + 1
+        return b
+
+    pub def reverse(self) -> AudioBuffer:
+        mut n = self.frames()
+        mut b = AudioBuffer.init(self.sample_rate, self.channels, n)
+        mut f = 0
+        while f < n:
+            mut c = 0
+            while c < self.channels:
+                b.samples[f * self.channels + c] = self.samples[(n - 1 - f) * self.channels + c]
+                c = c + 1
+            f = f + 1
+        return b
+
+pub class Wav:
+    _dummy: int
+
+extend Wav:
+    pub def decode(data: str, len_: int) throws str -> AudioBuffer:
+        mut dp = data as Pointer[char]
+        return _au_from_handle(trc_wav_decode(dp, len_))?
+
+    # bits: 8/16/24/32 (PCM) or 32 with float_format. 8/16-bit output is dithered.
+    pub def encode(buf: AudioBuffer, bits: int, float_format: bool) throws str -> str:
+        mut lenbox = [0]
+        mut lp = lenbox as Pointer[int]
+        mut sp = buf.samples as Pointer[float]
+        mut fl = 0
+        if float_format: fl = 1
+        mut p = trc_wav_encode(sp, buf.frames(), buf.channels, buf.sample_rate, bits, fl, 1, lp)
+        if (p as usize) == (0 as usize): raise("WAV: unsupported bit depth (use 8, 16, 24, 32 or float 32)")
+        mut n = lenbox[0]
+        mut out = _tr_c_malloc(n + 1)
+        _tr_c_memcpy(out, p, n)
+        unsafe: out.offset(n).write('\0')
+        trc_au_buf_free(p)
+        return _tr_str_wrap_len(out, n)
+
+pub class Mp3:
+    _dummy: int
+
+extend Mp3:
+    pub def decode(data: str, len_: int) throws str -> AudioBuffer:
+        mut dp = data as Pointer[char]
+        return _au_from_handle(trc_mp3_decode(dp, len_))?
+
+pub class Flac:
+    _dummy: int
+
+extend Flac:
+    pub def decode(data: str, len_: int) throws str -> AudioBuffer:
+        mut dp = data as Pointer[char]
+        return _au_from_handle(trc_flac_decode(dp, len_))?
+
+def _au_b(s: str, i: int) -> int:
+    mut p = s as Pointer[char]
+    unsafe:
+        return (p.offset(i).read() as int) & 255
+
+pub class Audio:
+    _dummy: int
+
+extend Audio:
+    # Decode WAV, FLAC or MP3 by sniffing the first bytes.
+    pub def decode(data: str, len_: int) throws str -> AudioBuffer:
+        if len_ >= 12 and data.slice(0, 4) == "RIFF": return Wav.decode(data, len_)?
+        if len_ >= 4 and data.slice(0, 4) == "fLaC": return Flac.decode(data, len_)?
+        if len_ >= 3 and data.slice(0, 3) == "ID3": return Mp3.decode(data, len_)?
+        if len_ >= 2 and _au_b(data, 0) == 255 and (_au_b(data, 1) & 0xE0) == 0xE0: return Mp3.decode(data, len_)?
+        raise("audio: unrecognised format (WAV, FLAC and MP3 are supported)")
+
+    # ── generators ──
+    pub def silence(seconds: float, rate: int, channels: int) -> AudioBuffer:
+        return AudioBuffer.init(rate, channels, (seconds * (rate as float)) as int)
+
+    pub def sine(freq: float, seconds: float, rate: int, amplitude: float) -> AudioBuffer:
+        mut n = (seconds * (rate as float)) as int
+        mut b = AudioBuffer.init(rate, 1, n)
+        mut i = 0
+        while i < n:
+            b.samples[i] = amplitude * sin(6.283185307179586 * freq * (i as float) / (rate as float))
+            i = i + 1
+        return b
+
+    pub def square(freq: float, seconds: float, rate: int, amplitude: float) -> AudioBuffer:
+        mut b = Audio.sine(freq, seconds, rate, 1.0)
+        mut i = 0
+        while i < len(b.samples):
+            if b.samples[i] >= 0.0: b.samples[i] = amplitude
+            else: b.samples[i] = 0.0 - amplitude
+            i = i + 1
+        return b
+
+    pub def sawtooth(freq: float, seconds: float, rate: int, amplitude: float) -> AudioBuffer:
+        mut n = (seconds * (rate as float)) as int
+        mut b = AudioBuffer.init(rate, 1, n)
+        mut i = 0
+        while i < n:
+            mut ph = freq * (i as float) / (rate as float)
+            b.samples[i] = amplitude * (2.0 * (ph - floor(ph + 0.5)))
+            i = i + 1
+        return b
+
+    # Uniform white noise (seeded, reproducible).
+    pub def noise(seconds: float, rate: int, amplitude: float, seed: int) -> AudioBuffer:
+        mut n = (seconds * (rate as float)) as int
+        mut b = AudioBuffer.init(rate, 1, n)
+        mut s = seed & 0xFFFFFFFF
+        if s == 0: s = 0x2545F491
+        mut i = 0
+        while i < n:
+            s = s ^ ((s << 13) & 0xFFFFFFFF)
+            s = s ^ (s >> 17)
+            s = s ^ ((s << 5) & 0xFFFFFFFF)
+            b.samples[i] = amplitude * (((s as float) / 2147483648.0) - 1.0)
+            i = i + 1
+        return b
