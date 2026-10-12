@@ -1,0 +1,425 @@
+# tauraro-cpp-shim: h2_native.c
+#
+# std.net.http2 -- HTTP/2 client (RFC 9113) and HPACK (RFC 7541).
+#
+# `Http2Client` opens one connection -- https with ALPN "h2" (verified TLS
+# 1.3 via std.net.tls) or cleartext h2c with prior knowledge -- and runs many
+# requests over it concurrently: `submit` starts a request and returns its
+# stream id, `wait`/`wait_all` drive the connection until streams finish,
+# `response` collects status, headers, body and trailers (gRPC puts its
+# status in trailers). Flow control, CONTINUATION frames, PING, SETTINGS,
+# RST_STREAM and GOAWAY are handled; server push is disabled.
+#
+# `Hpack` exposes the header compressor on its own (dynamic table, Huffman,
+# never-indexed sensitive headers) for protocols that reuse it.
+#
+# Usage:
+#   from std.net.http2 import Http2Client, H2Headers
+#   mut c = Http2Client.connect("nghttp2.org", 443)?
+#   mut a = c.submit("GET", "/httpbin/get", H2Headers.init(), "", false)?
+#   mut b = c.submit("GET", "/httpbin/headers", H2Headers.init(), "", false)?
+#   c.wait_all()?
+#   mut ra = c.response(a)
+#   print(ra.status, ra.headers.get("content-type"), ra.body)
+#   c.close()
+#
+#   mut r = c.get("/httpbin/get")?      # one-shot convenience
+
+from std.crypto.native import _cn_alloc, _cn_take, _cn_free
+from std.crypto.x509 import TrustStore
+from std.net.tls import TlsOptions
+from std.core.string import StringBuilder
+
+extern "C":
+    def trc_h2_connect(host: Pointer[char], hostlen: int, port: int, tls: int, store: Pointer[char], verify: int, timeout_ms: int) -> Pointer[char]
+    def trc_h2_ok(h: Pointer[char]) -> int
+    def trc_h2_error(h: Pointer[char], out: Pointer[char], cap: int) -> int
+    def trc_h2_set_timeout(h: Pointer[char], ms: int)
+    def trc_h2_goaway(h: Pointer[char]) -> int
+    def trc_h2_submit(h: Pointer[char], method: Pointer[char], path: Pointer[char], extra: Pointer[char], elen: int, body: Pointer[char], blen: int, has_body: int) -> int
+    def trc_h2_wait(h: Pointer[char], sid: int, timeout_ms: int) -> int
+    def trc_h2_status(h: Pointer[char], sid: int) -> int
+    def trc_h2_state(h: Pointer[char], sid: int) -> int
+    def trc_h2_stream_error(h: Pointer[char], sid: int, out: Pointer[char], cap: int) -> int
+    def trc_h2_part(h: Pointer[char], sid: int, part: int, out: Pointer[char], cap: int) -> int
+    def trc_h2_release(h: Pointer[char], sid: int)
+    def trc_h2_ping(h: Pointer[char], timeout_ms: int) -> int
+    def trc_h2_close(h: Pointer[char])
+    def trc_hpack_new(max_size: int) -> Pointer[char]
+    def trc_hpack_free(h: Pointer[char])
+    def trc_hpack_set_max(h: Pointer[char], m: int)
+    def trc_hpack_table_size(h: Pointer[char]) -> int
+    def trc_hpack_table_count(h: Pointer[char]) -> int
+    def trc_hpack_encode(h: Pointer[char], blob: Pointer[char], n: int, out: Pointer[char], cap: int) -> int
+    def trc_hpack_decode(h: Pointer[char], data: Pointer[char], n: int, out: Pointer[char], cap: int) -> int
+    def trc_huffman_encode(s: Pointer[char], n: int, out: Pointer[char], cap: int) -> int
+    def trc_huffman_decode(s: Pointer[char], n: int, out: Pointer[char], cap: int) -> int
+
+def _h2_null(p: Pointer[char]) -> bool:
+    return (p as usize) == (0 as usize)
+
+def _h2_byte(s: str, i: int) -> int:
+    mut p = s as Pointer[char]
+    unsafe:
+        return (p.offset(i).read() as int) & 255
+
+def _h2_lower(s: str) -> str:
+    mut sb = StringBuilder.init(s.len() + 1)
+    mut i = 0
+    while i < s.len():
+        mut c = _h2_byte(s, i)
+        if c >= 65 and c <= 90: c = c + 32
+        sb.append_char(c)
+        i = i + 1
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+# An ordered header list (names compared case-insensitively).
+pub class H2Headers:
+    pub names:  List[str]
+    pub values: List[str]
+
+extend H2Headers:
+    pub def init() -> H2Headers:
+        mut h = H2Headers()
+        h.names = []
+        h.values = []
+        return h
+
+    pub def add(self, name: str, value: str):
+        self.names.append(name)
+        self.values.append(value)
+
+    # Replace every header called `name` with one value.
+    pub def set(self, name: str, value: str):
+        self.remove(name)
+        self.add(name, value)
+
+    pub def remove(self, name: str):
+        mut ln = _h2_lower(name)
+        mut nn: List[str] = []
+        mut nv: List[str] = []
+        mut i = 0
+        while i < len(self.names):
+            mut cur = _h2_lower(self.names[i])
+            if cur != ln:
+                nn.append(self.names[i])
+                nv.append(self.values[i])
+            i = i + 1
+        self.names = nn
+        self.values = nv
+
+    # First value of `name`, or "".
+    pub def get(self, name: str) -> str:
+        mut ln = _h2_lower(name)
+        mut i = 0
+        while i < len(self.names):
+            mut cur = _h2_lower(self.names[i])
+            if cur == ln: return self.values[i]
+            i = i + 1
+        return ""
+
+    pub def has(self, name: str) -> bool:
+        mut ln = _h2_lower(name)
+        mut i = 0
+        while i < len(self.names):
+            mut cur = _h2_lower(self.names[i])
+            if cur == ln: return true
+            i = i + 1
+        return false
+
+    pub def len(self) -> int: return len(self.names)
+
+    # name NUL value NUL ... (the native wire format).
+    pub def to_blob(self) -> str:
+        mut sb = StringBuilder.init(256)
+        mut i = 0
+        while i < len(self.names):
+            sb.append(self.names[i])
+            sb.append_char(0)
+            sb.append(self.values[i])
+            sb.append_char(0)
+            i = i + 1
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    pub def from_blob(blob: str) -> H2Headers:
+        mut h = H2Headers.init()
+        mut i = 0
+        mut start = 0
+        mut name = ""
+        mut want_name = true
+        while i < blob.len():
+            if _h2_byte(blob, i) == 0:
+                mut part = blob.slice(start, i)
+                if want_name:
+                    name = part
+                else:
+                    h.add(name, part)
+                want_name = not want_name
+                start = i + 1
+            i = i + 1
+        return h
+
+# A completed (or failed) response.
+pub class Http2Response:
+    pub stream_id: int
+    pub status:    int          # 0 if the stream failed
+    pub headers:   H2Headers    # response headers (pseudo-headers such as :status included)
+    pub trailers:  H2Headers
+    pub body:      str          # binary-safe
+    pub error:     str          # "" on success
+
+extend Http2Response:
+    pub def ok(self) -> bool: return self.error.len() == 0 and self.status >= 200 and self.status < 300
+
+pub class Http2Options:
+    pub tls:        bool        # https (default) or cleartext h2c with prior knowledge
+    pub verify:     bool
+    pub ca_pem:     str
+    pub timeout_ms: int
+
+extend Http2Options:
+    pub def default() -> Http2Options:
+        mut o = Http2Options()
+        o.tls = true
+        o.verify = true
+        o.ca_pem = ""
+        o.timeout_ms = 30000
+        return o
+
+    pub def cleartext() -> Http2Options:
+        mut o = Http2Options.default()
+        o.tls = false
+        return o
+
+pub class Http2Client:
+    _h: Pointer[char]
+    _store: TrustStore
+    _own_store: bool
+    pub host: str
+    pub port: int
+    pub timeout_ms: int
+    pub default_headers: H2Headers
+
+extend Http2Client:
+    pub def connect(host: str, port: int) throws str -> Http2Client:
+        mut o = Http2Options.default()
+        return Http2Client.connect_with(host, port, o)?
+
+    pub def connect_with(host: str, port: int, opts: Http2Options) throws str -> Http2Client:
+        mut store = TrustStore.system()
+        mut own = false
+        if opts.ca_pem.len() > 0:
+            store = TrustStore.system_copy()
+            store.add_pem(opts.ca_pem)
+            own = true
+        mut hp = host as Pointer[char]
+        mut tl = 0
+        if opts.tls: tl = 1
+        mut v = 0
+        if opts.verify: v = 1
+        mut h = trc_h2_connect(hp, host.len(), port, tl, store._handle(), v, opts.timeout_ms)
+        if _h2_null(h):
+            if own: store.dispose()
+            raise("HTTP/2: out of memory")
+        if trc_h2_ok(h) != 1:
+            mut eb = _cn_alloc(300)
+            mut en = trc_h2_error(h, eb, 300)
+            mut msg = _cn_take(eb, en)
+            trc_h2_close(h)
+            if own: store.dispose()
+            raise(msg)
+        mut c = Http2Client()
+        c._h = h
+        c._store = store
+        c._own_store = own
+        c.host = host
+        c.port = port
+        c.timeout_ms = opts.timeout_ms
+        c.default_headers = H2Headers.init()
+        c.default_headers.add("user-agent", "tauraro-http2/1.0")
+        return c
+
+    def _err(self) -> str:
+        mut eb = _cn_alloc(300)
+        mut en = trc_h2_error(self._h, eb, 300)
+        return _cn_take(eb, en)
+
+    # Start a request; returns its stream id. `headers` are added after the
+    # default headers (same-named defaults are replaced). Connection-specific
+    # headers (Connection, Host, Transfer-Encoding, ...) are dropped.
+    pub def submit(self, method: str, path: str, headers: H2Headers, body: str, has_body: bool) throws str -> int:
+        mut all = H2Headers.init()
+        mut i = 0
+        while i < len(self.default_headers.names):
+            if not headers.has(self.default_headers.names[i]):
+                all.add(self.default_headers.names[i], self.default_headers.values[i])
+            i = i + 1
+        i = 0
+        while i < len(headers.names):
+            all.add(headers.names[i], headers.values[i])
+            i = i + 1
+        mut blob = all.to_blob()
+        mut mp = method as Pointer[char]
+        mut pp = path as Pointer[char]
+        mut bp = blob as Pointer[char]
+        mut dp = body as Pointer[char]
+        mut hb = 0
+        if has_body: hb = 1
+        mut sid = trc_h2_submit(self._h, mp, pp, bp, blob.len(), dp, body.len(), hb)
+        if sid < 0:
+            mut e = self._err()
+            raise(e)
+        return sid
+
+    # Drive the connection until stream `sid` finishes (or fails).
+    pub def wait(self, sid: int) throws str:
+        mut r = trc_h2_wait(self._h, sid, self.timeout_ms)
+        if r == -2: raise("HTTP/2: timed out")
+
+    # Drive the connection until every submitted stream finishes.
+    pub def wait_all(self) throws str:
+        mut r = trc_h2_wait(self._h, 0, self.timeout_ms)
+        if r == -2: raise("HTTP/2: timed out")
+        if r < 0:
+            mut e = self._err()
+            if e.len() > 0: raise(e)
+
+    # True once stream `sid` has completed or failed.
+    pub def is_done(self, sid: int) -> bool: return trc_h2_state(self._h, sid) >= 2
+
+    def _part(self, sid: int, part: int) -> str:
+        mut z = 0 as Pointer[char]
+        mut n = trc_h2_part(self._h, sid, part, z, 0)
+        if n <= 0: return ""
+        mut out = _cn_alloc(n)
+        trc_h2_part(self._h, sid, part, out, n)
+        return _cn_take(out, n)
+
+    # Collect the result of stream `sid` (after wait); keeps the data until release().
+    pub def response(self, sid: int) -> Http2Response:
+        mut r = Http2Response()
+        r.stream_id = sid
+        r.status = trc_h2_status(self._h, sid)
+        if r.status < 0: r.status = 0
+        mut hb = self._part(sid, 0)
+        mut tb = self._part(sid, 1)
+        r.headers = H2Headers.from_blob(hb)
+        r.trailers = H2Headers.from_blob(tb)
+        r.body = self._part(sid, 2)
+        mut eb = _cn_alloc(200)
+        mut en = trc_h2_stream_error(self._h, sid, eb, 200)
+        r.error = _cn_take(eb, en)
+        if r.status == 0 and r.error.len() == 0: r.error = "HTTP/2: no response"
+        return r
+
+    # Forget a stream (cancelling it with RST_STREAM if it is still open).
+    pub def release(self, sid: int): trc_h2_release(self._h, sid)
+
+    # submit + wait + response + release.
+    pub def request(self, method: str, path: str, headers: H2Headers, body: str, has_body: bool) throws str -> Http2Response:
+        mut sid = self.submit(method, path, headers, body, has_body)?
+        self.wait(sid)?
+        mut r = self.response(sid)
+        self.release(sid)
+        return r
+
+    pub def get(self, path: str) throws str -> Http2Response:
+        mut h = H2Headers.init()
+        return self.request("GET", path, h, "", false)?
+
+    pub def post(self, path: str, body: str, content_type: str) throws str -> Http2Response:
+        mut h = H2Headers.init()
+        h.add("content-type", content_type)
+        return self.request("POST", path, h, body, true)?
+
+    pub def ping(self) -> bool: return trc_h2_ping(self._h, self.timeout_ms) == 0
+
+    # True after the server sent GOAWAY (open a new connection for new requests).
+    pub def is_closing(self) -> bool: return trc_h2_goaway(self._h) == 1
+
+    pub def set_timeout(self, ms: int):
+        self.timeout_ms = ms
+        trc_h2_set_timeout(self._h, ms)
+
+    # Send GOAWAY and close the connection.
+    pub def close(self):
+        if not _h2_null(self._h):
+            trc_h2_close(self._h)
+            self._h = 0 as Pointer[char]
+            if self._own_store: self._store.dispose()
+
+# Standalone HPACK encoder / decoder (one direction each: keep one instance
+# per direction of a connection).
+pub class Hpack:
+    _h: Pointer[char]
+
+extend Hpack:
+    # max_table: SETTINGS_HEADER_TABLE_SIZE (4096 is the protocol default).
+    pub def init(max_table: int) -> Hpack:
+        mut x = Hpack()
+        x._h = trc_hpack_new(max_table)
+        return x
+
+    pub def encode(self, headers: H2Headers) throws str -> str:
+        mut blob = headers.to_blob()
+        mut bp = blob as Pointer[char]
+        mut cap = blob.len() * 2 + 64
+        mut out = _cn_alloc(cap)
+        mut n = trc_hpack_encode(self._h, bp, blob.len(), out, cap)
+        if n < 0:
+            _cn_free(out)
+            raise("HPACK: encoding failed")
+        return _cn_take(out, n)
+
+    pub def decode(self, block: str) throws str -> H2Headers:
+        mut bp = block as Pointer[char]
+        mut cap = block.len() * 8 + 4096
+        mut out = _cn_alloc(cap)
+        mut n = trc_hpack_decode(self._h, bp, block.len(), out, cap)
+        if n <= -2:
+            _cn_free(out)
+            cap = (0 - n) - 2
+            out = _cn_alloc(cap)
+            n = trc_hpack_decode(self._h, bp, block.len(), out, cap)
+        if n < 0:
+            _cn_free(out)
+            raise("HPACK: compression error")
+        mut blob = _cn_take(out, n)
+        return H2Headers.from_blob(blob)
+
+    # Change the dynamic table size (encoder: announced in the next block).
+    pub def set_max_table(self, size: int): trc_hpack_set_max(self._h, size)
+    pub def table_size(self) -> int: return trc_hpack_table_size(self._h)
+    pub def table_entries(self) -> int: return trc_hpack_table_count(self._h)
+
+    pub def dispose(self):
+        if not _h2_null(self._h):
+            trc_hpack_free(self._h)
+            self._h = 0 as Pointer[char]
+
+pub class Huffman:
+    _dummy: int
+
+extend Huffman:
+    # HPACK Huffman coding (RFC 7541 appendix B).
+    pub def encode(s: str) -> str:
+        mut sp = s as Pointer[char]
+        mut cap = s.len() * 4 + 8
+        mut out = _cn_alloc(cap)
+        mut n = trc_huffman_encode(sp, s.len(), out, cap)
+        if n < 0: n = 0
+        return _cn_take(out, n)
+
+    pub def decode(s: str) throws str -> str:
+        mut sp = s as Pointer[char]
+        mut cap = s.len() * 2 + 8
+        mut out = _cn_alloc(cap)
+        mut n = trc_huffman_decode(sp, s.len(), out, cap)
+        if n < 0:
+            _cn_free(out)
+            raise("HPACK: invalid Huffman string")
+        return _cn_take(out, n)

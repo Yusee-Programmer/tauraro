@@ -317,6 +317,43 @@ s.close()
 
 ---
 
+## std.net.http2 — HTTP/2 client and HPACK
+
+One connection, many concurrent requests (RFC 9113): https with ALPN `h2` (verified TLS 1.3) or
+cleartext h2c with prior knowledge. Flow control, CONTINUATION, PING, SETTINGS, RST_STREAM and
+GOAWAY are handled; server push is disabled. Response trailers are exposed (gRPC status).
+
+```tauraro
+from std.net.http2 import Http2Client, H2Headers
+
+mut c = Http2Client.connect("nghttp2.org", 443)?
+mut h = H2Headers.init()
+mut a = c.submit("GET", "/httpbin/get", h, "", false)?
+mut b = c.submit("POST", "/httpbin/post", h, "payload", true)?
+c.wait_all()?                                   # both streams run concurrently
+mut ra = c.response(a)
+print(ra.status, ra.headers.get("content-type"), ra.body.len())
+c.release(a)
+c.release(b)
+mut r = c.get("/httpbin/headers")?              # submit + wait + response + release
+c.close()
+```
+
+| Member | Description |
+|---|---|
+| `Http2Client.connect(host, port)?` / `connect_with(host, port, Http2Options)?` | `Http2Options.default()` (https, verified) or `Http2Options.cleartext()`; fields `tls`, `verify`, `ca_pem`, `timeout_ms`. |
+| `submit(method, path, headers, body, has_body)? -> int` | Start a request; returns the stream id. `default_headers` (user-agent) are merged in; hop-by-hop headers are dropped. |
+| `wait(sid)?`, `wait_all()?`, `is_done(sid)` | Drive the connection. |
+| `response(sid) -> Http2Response` | `status`, `headers`, `trailers` (`H2Headers`), `body` (binary-safe), `error`, `ok()`. |
+| `request(...)?`, `get(path)?`, `post(path, body, content_type)?` | One-shot helpers. |
+| `release(sid)`, `ping()`, `is_closing()`, `set_timeout(ms)`, `close()` | Housekeeping (`release` cancels an open stream). |
+
+`H2Headers` is an ordered, case-insensitive header list (`add`, `set`, `get`, `has`, `remove`). `Hpack.init(table_size)`
+exposes the compressor (`encode(headers)?`, `decode(block)?`, `set_max_table`, `table_size`) and `Huffman.encode/decode`
+the RFC 7541 Huffman code. Sensitive headers (`authorization`, `cookie`, ...) are sent never-indexed.
+
+---
+
 ## std.net.https — HTTPS/TLS Client
 
 **When**: You need to call HTTPS endpoints — secure REST APIs, webhooks, OAuth flows.

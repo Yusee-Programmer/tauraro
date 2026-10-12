@@ -17,6 +17,8 @@ codegen-safety / diagnostics / stdlib / tooling improvements). Entries will be
 added here as each phase lands.
 
 ### Changed
+- `TcpStream.send` / `send_nb` / `send_async` send the string's real length instead of stopping
+  at the first NUL byte (binary protocols such as HTTP/2 frames were truncated).
 - `std.net.client`'s `HttpSession`, `std.net.https`'s `HttpsClient` and `std.net.smtp` now use
   `std.net.tls`: https is verified by default instead of being refused (`HttpSession`) or
   silently unverified (`HttpsClient`). `set_allow_unverified_tls(true)` / `set_verify(false)`
@@ -24,6 +26,8 @@ added here as each phase lands.
   not reachable through these clients any more.
 
 ### Compiler limitations closed
+- `xs[i] = s` on a `List[str]` generated a `char*` store into the refcounted `List_TrStr` and
+  did not compile; it now uses `List_TrStr_set` (old element released, fresh values not leaked).
 - A static `init` that `throws` no longer gets `malloc`/`returns_nonnull` attributes (it returns a
   `Result` struct, so the generated C failed to compile).
 - **`[F-4]`** a `throws` function value where a plain `def(...) -> R` is expected (or the
@@ -38,6 +42,10 @@ added here as each phase lands.
 - `from` stays a reserved word (it starts import statements and lifetime clauses).
 
 ### Added
+- **`std.net.http2`** — HTTP/2 client with stream multiplexing over verified TLS (ALPN `h2`) or
+  h2c prior knowledge: flow control, CONTINUATION, trailers, RST_STREAM/GOAWAY handling, plus a
+  standalone `Hpack` codec (dynamic table, Huffman) and `H2Headers`. Tested by
+  `tests/lang/107_http2.tr` (RFC 7541 appendix C vectors and a loopback h2c server).
 - **Verified TLS without OpenSSL.** `std.net.tls` is a TLS 1.3 client (X25519/P-256/P-384,
   AES-GCM, ChaCha20-Poly1305, ECDSA/RSA-PSS) that verifies the certificate chain and host name;
   it can also upgrade an existing socket (STARTTLS). `std.crypto.x509` parses certificates and

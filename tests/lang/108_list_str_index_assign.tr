@@ -1,0 +1,33 @@
+# tests/lang/108_list_str_index_assign.tr
+# `xs[i] = <str>` on a List[str] (List_TrStr): the codegen used to emit the
+# legacy char* store and the generated C did not compile. The element is now
+# replaced through List_TrStr_set (old value released, fresh values not leaked).
+
+from std.test import TestRunner
+
+class Box:
+    pub items: List[str]
+
+def main():
+    mut t = TestRunner.init("108_list_str_index_assign")
+    mut xs: List[str] = ["a", "b", "c"]
+    mut k = 1
+    xs[k] = "zz"
+    t.assert_eq_str(xs[1], "zz", "assign a literal")
+    xs[0] = xs[0] + "q"
+    t.assert_eq_str(xs[0], "aq", "assign a fresh concatenation of itself")
+    mut s = "local"
+    xs[2] = s
+    s = "changed"
+    t.assert_eq_str(xs[2], "local", "element keeps its own reference")
+    mut i = 0
+    while i < 200:
+        xs[0] = f"round {i}"
+        i = i + 1
+    t.assert_eq_str(xs[0], "round 199", "repeated replacement")
+    mut b = Box()
+    b.items = ["x", "y"]
+    b.items[1] = "y2"
+    t.assert_eq_str(b.items[1], "y2", "assign through a field")
+    t.assert_eq_int(len(xs), 3, "length unchanged")
+    t.summary()
