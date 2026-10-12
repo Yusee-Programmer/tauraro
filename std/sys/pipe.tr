@@ -1,0 +1,131 @@
+# std.sys.pipe -- anonymous pipes and FIFOs (named pipes).
+#
+# `Pipe.create()` returns a connected pair of descriptors: bytes written to
+# `writer` come out of `reader` (in this process, or in a child that
+# inherits the descriptors). A FIFO is a pipe with a path in the file system
+# (POSIX only): one process opens it for reading, another for writing.
+#
+# Reads return "" at end of stream (all writers closed). Data is binary-safe.
+#
+# Usage:
+#   from std.sys.pipe import Pipe, Fifo
+#   mut p = Pipe.create()?
+#   p.writer.write("hello")?
+#   p.writer.close()
+#   print(p.reader.read_all()?)
+
+from std.sys.ipc import trc_pipe, trc_mkfifo, trc_fd_open, trc_fd_read, trc_fd_write, trc_fd_wait_readable, trc_fd_close, trc_unlink_path
+from std.sys.ipc import _ipc_error, _ipc_cstr
+from std.crypto.native import _cn_alloc, _cn_take, _cn_free
+from std.core.string import StringBuilder
+
+# One end of a pipe or FIFO.
+pub class PipeEnd:
+    pub fd: int
+
+extend PipeEnd:
+    pub def from_fd(fd: int) -> PipeEnd:
+        mut e = PipeEnd()
+        e.fd = fd
+        return e
+
+    # Up to `cap` bytes ("" at end of stream).
+    pub def read(self, cap: int) throws str -> str:
+        if self.fd < 0: raise("pipe: closed")
+        mut n0 = cap
+        if n0 < 1: n0 = 1
+        mut out = _cn_alloc(n0)
+        mut n = trc_fd_read(self.fd, out, n0)
+        if n == -2:
+            _cn_free(out)
+            raise("pipe: no data available (non-blocking)")
+        if n < 0:
+            _cn_free(out)
+            mut e = _ipc_error()
+            raise(e)
+        return _cn_take(out, n)
+
+    # Read until end of stream.
+    pub def read_all(self) throws str -> str:
+        mut sb = StringBuilder.init(4096)
+        while true:
+            mut chunk = self.read(65536)?
+            if chunk.len() == 0: break
+            sb.append(chunk)
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    # True when data (or end of stream) is ready within timeout_ms (POSIX).
+    pub def wait_readable(self, timeout_ms: int) -> bool:
+        return trc_fd_wait_readable(self.fd, timeout_ms) == 1
+
+    pub def write(self, data: str) throws str:
+        if self.fd < 0: raise("pipe: closed")
+        mut dp = data as Pointer[char]
+        if trc_fd_write(self.fd, dp, data.len()) < 0:
+            mut e = _ipc_error()
+            raise(e)
+
+    pub def close(self):
+        if self.fd >= 0:
+            trc_fd_close(self.fd)
+            self.fd = -1
+
+pub class Pipe:
+    pub reader: PipeEnd
+    pub writer: PipeEnd
+
+extend Pipe:
+    pub def create() throws str -> Pipe:
+        mut fds = [0, 0]
+        mut fp = fds as Pointer[int]
+        if trc_pipe(fp) < 0:
+            mut e = _ipc_error()
+            raise(e)
+        mut p = Pipe()
+        p.reader = PipeEnd.from_fd(fds[0])
+        p.writer = PipeEnd.from_fd(fds[1])
+        return p
+
+    pub def close(self):
+        self.reader.close()
+        self.writer.close()
+
+pub class Fifo:
+    _dummy: int
+
+extend Fifo:
+    # Create a FIFO node at `path` (mode e.g. 0o600 = 384). POSIX only.
+    pub def create(path: str, mode: int) throws str:
+        mut p = _ipc_cstr(path)
+        mut pp = p as Pointer[char]
+        if trc_mkfifo(pp, mode) < 0:
+            mut e = _ipc_error()
+            raise(e)
+
+    # Opening for reading blocks until a writer opens the FIFO (and vice versa).
+    pub def open_read(path: str) throws str -> PipeEnd:
+        mut p = _ipc_cstr(path)
+        mut pp = p as Pointer[char]
+        mut fd = trc_fd_open(pp, 0, 0)
+        if fd < 0:
+            mut e = _ipc_error()
+            raise(e)
+        return PipeEnd.from_fd(fd)
+
+    pub def open_write(path: str) throws str -> PipeEnd:
+        mut p = _ipc_cstr(path)
+        mut pp = p as Pointer[char]
+        mut fd = trc_fd_open(pp, 1, 0)
+        if fd < 0:
+            mut e = _ipc_error()
+            raise(e)
+        return PipeEnd.from_fd(fd)
+
+    pub def remove(path: str) throws str:
+        mut p = _ipc_cstr(path)
+        mut pp = p as Pointer[char]
+        if trc_unlink_path(pp) < 0:
+            mut e = _ipc_error()
+            raise(e)

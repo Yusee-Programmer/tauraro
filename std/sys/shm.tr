@@ -1,0 +1,130 @@
+# std.sys.shm -- named shared memory and named semaphores between processes.
+#
+# `SharedMemory.create(name, size)` makes (or opens) a named segment that
+# other processes open with `SharedMemory.open(name)`; both get a
+# std.sys.mmap MemoryMap onto the same bytes. Coordinate access with the
+# map's atomic operations or a `NamedSemaphore`.
+#
+# Names are plain identifiers ("myapp-cache"); the platform prefix is added
+# (POSIX "/name", Windows "Local\name"). On POSIX a name lives until
+# `SharedMemory.unlink(name)` (or reboot); on Windows a segment disappears
+# with its last open handle.
+#
+# Usage (two processes):
+#   from std.sys.shm import SharedMemory, NamedSemaphore
+#   mut m = SharedMemory.create("demo-seg", 4096)?      # process A
+#   m.write(8, "hello")?
+#   mut ready = NamedSemaphore.create("demo-ready", 0)?
+#   ready.post()?
+#   ...
+#   mut m2 = SharedMemory.open("demo-seg")?             # process B
+#   NamedSemaphore.open("demo-ready")?.wait(-1)?
+#   print(m2.read(8, 5)?)
+
+from std.sys.ipc import trc_shm_open, trc_shm_unlink, trc_sem_open, trc_sem_post, trc_sem_wait, trc_sem_close, trc_sem_unlink
+from std.sys.ipc import _ipc_error, _ipc_cstr, _ipc_null
+from std.sys.mmap import MemoryMap
+
+pub class SharedMemory:
+    _dummy: int
+
+extend SharedMemory:
+    # Create the segment (or open it if it already exists) with at least `size` bytes.
+    pub def create(name: str, size: int) throws str -> MemoryMap:
+        if size <= 0: raise("shm: size must be positive")
+        mut n = _ipc_cstr(name)
+        mut np = n as Pointer[char]
+        mut h = trc_shm_open(np, size, 1, 0)
+        if _ipc_null(h):
+            mut e = _ipc_error()
+            raise(e)
+        return MemoryMap._wrap(h)
+
+    # Create the segment, failing if the name is already in use.
+    pub def create_new(name: str, size: int) throws str -> MemoryMap:
+        if size <= 0: raise("shm: size must be positive")
+        mut n = _ipc_cstr(name)
+        mut np = n as Pointer[char]
+        mut h = trc_shm_open(np, size, 1, 1)
+        if _ipc_null(h):
+            mut e = _ipc_error()
+            raise(e)
+        return MemoryMap._wrap(h)
+
+    # Open an existing segment (maps all of it).
+    pub def open(name: str) throws str -> MemoryMap:
+        mut n = _ipc_cstr(name)
+        mut np = n as Pointer[char]
+        mut h = trc_shm_open(np, 0, 0, 0)
+        if _ipc_null(h):
+            mut e = _ipc_error()
+            raise(e)
+        return MemoryMap._wrap(h)
+
+    # Remove the name; existing mappings stay valid (no-op on Windows).
+    pub def unlink(name: str) throws str:
+        mut n = _ipc_cstr(name)
+        mut np = n as Pointer[char]
+        if trc_shm_unlink(np) < 0:
+            mut e = _ipc_error()
+            raise(e)
+
+pub class NamedSemaphore:
+    _h: Pointer[char]
+    pub name: str
+
+extend NamedSemaphore:
+    def _wrap(h: Pointer[char], name: str) -> NamedSemaphore:
+        mut s = NamedSemaphore()
+        s._h = h
+        s.name = name
+        return s
+
+    # Create (or open) with an initial count.
+    pub def create(name: str, initial: int) throws str -> NamedSemaphore:
+        mut n = _ipc_cstr(name)
+        mut np = n as Pointer[char]
+        mut h = trc_sem_open(np, 1, initial)
+        if _ipc_null(h):
+            mut e = _ipc_error()
+            raise(e)
+        return NamedSemaphore._wrap(h, name)
+
+    pub def open(name: str) throws str -> NamedSemaphore:
+        mut n = _ipc_cstr(name)
+        mut np = n as Pointer[char]
+        mut h = trc_sem_open(np, 0, 0)
+        if _ipc_null(h):
+            mut e = _ipc_error()
+            raise(e)
+        return NamedSemaphore._wrap(h, name)
+
+    # Increment (release one waiter).
+    pub def post(self) throws str:
+        if trc_sem_post(self._h) < 0:
+            mut e = _ipc_error()
+            raise(e)
+
+    # Decrement, waiting up to timeout_ms (-1 = forever, 0 = try once).
+    # True if acquired, false on timeout.
+    pub def wait(self, timeout_ms: int) throws str -> bool:
+        mut r = trc_sem_wait(self._h, timeout_ms)
+        if r < 0:
+            mut e = _ipc_error()
+            raise(e)
+        return r == 1
+
+    pub def try_wait(self) throws str -> bool:
+        return self.wait(0)?
+
+    pub def close(self):
+        if not _ipc_null(self._h):
+            trc_sem_close(self._h)
+            self._h = 0 as Pointer[char]
+
+    pub def unlink(name: str) throws str:
+        mut n = _ipc_cstr(name)
+        mut np = n as Pointer[char]
+        if trc_sem_unlink(np) < 0:
+            mut e = _ipc_error()
+            raise(e)

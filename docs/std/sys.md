@@ -486,3 +486,53 @@ mut now = DateTime.in_zone(2026, 10, 11, 6, 7, 30, TimeZone.utc()).timestamp()  
 print(DateTime.from_timestamp_utc(s.next_after(now)).to_string())     # 2026-10-12 09:00:00
 print(DateTime.from_timestamp_utc(s.prev_before(now)).to_string())    # 2026-10-09 17:45:00
 ```
+
+---
+
+## Memory maps, shared memory and IPC — `std.sys.mmap`, `std.sys.shm`, `std.sys.pipe`, `std.sys.unix_socket`
+
+Backed by `std/sys/ipc_native.c` (POSIX and Windows), linked automatically when imported. All data is
+binary-safe; failures raise with the OS error text.
+
+### MemoryMap (`std.sys.mmap`)
+
+```tauraro
+from std.sys.mmap import MemoryMap, MAP_READ, MAP_READ_WRITE, MAP_COPY
+mut m = MemoryMap.open("big.log", MAP_READ)?
+mut pos = m.find("ERROR", 0)
+mut line = m.read(pos, 80)?
+m.close()
+```
+
+| Member | Description |
+|---|---|
+| `MemoryMap.open(path, mode)?` / `open_range(path, mode, offset, length)?` | `MAP_READ`, `MAP_READ_WRITE` (writes reach the file), `MAP_COPY` (private copy-on-write). |
+| `MemoryMap.anonymous(size)?` | Zero-filled private memory. |
+| `len()`, `read(off, n)?`, `read_all()`, `write(off, data)?`, `byte_at(i)`, `set_byte(i, v)?`, `find(needle, start)` | Bounds-checked access. |
+| `atomic_load/store/add/cas(off, ...)` | 64-bit atomics at 8-byte aligned offsets (for shared maps). |
+| `flush()?`, `close()` | `flush` writes dirty pages of a file map to disk. |
+
+### SharedMemory and NamedSemaphore (`std.sys.shm`)
+
+`SharedMemory.create(name, size)?` (create or open), `create_new(name, size)?` (fail if it exists),
+`open(name)?` — each returns a `MemoryMap` onto the shared bytes; `SharedMemory.unlink(name)?` removes the
+name (POSIX; Windows segments vanish with their last handle). `NamedSemaphore.create(name, initial)?`,
+`open(name)?`, `post()?`, `wait(timeout_ms)? -> bool` (-1 forever, 0 try), `try_wait()?`, `close()`,
+`NamedSemaphore.unlink(name)?`. Names are plain identifiers; the platform prefix is added. On Linux with
+glibc older than 2.34, `shm_open`/`sem_open` need `-lrt`.
+
+### Pipes (`std.sys.pipe`)
+
+`Pipe.create()?` → `.reader` / `.writer` (`PipeEnd`: `read(cap)?`, `read_all()?`, `write(data)?`,
+`wait_readable(ms)`, `close()`, `fd`). `Fifo.create(path, mode)?`, `Fifo.open_read(path)?`,
+`Fifo.open_write(path)?`, `Fifo.remove(path)?` (POSIX only).
+
+### Unix-domain sockets (`std.sys.unix_socket`)
+
+`UnixListener.bind(path)?` → `accept(timeout_ms)?` → `UnixStream`; `UnixStream.connect(path)?`;
+`UnixStream.pair()?` (socketpair, POSIX). Streams: `send(data)?`, `recv(cap)?` (`""` when the peer closed),
+`recv_exact(n)?`, `recv_all()?`, `set_timeout(ms)`, `shutdown_write()`, `send_fd(fd)?` / `recv_fd()?`
+(SCM_RIGHTS, POSIX), `close()`. `UnixListener.close()` removes the socket file. Windows 10 1803+ supports
+AF_UNIX streams.
+
+Tested by `tests/lang/109_sys_ipc.tr`.

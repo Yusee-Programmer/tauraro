@@ -42,6 +42,10 @@ added here as each phase lands.
 - `from` stays a reserved word (it starts import statements and lifetime clauses).
 
 ### Added
+- **IPC: `std.sys.mmap`, `std.sys.shm`, `std.sys.pipe`, `std.sys.unix_socket`** — memory-mapped
+  files and anonymous maps (with cross-process 64-bit atomics), named shared memory and named
+  semaphores, anonymous pipes and FIFOs, Unix-domain stream sockets with socketpair and
+  descriptor passing. POSIX and Windows. Tested by `tests/lang/109_sys_ipc.tr`.
 - **`std.net.http2`** — HTTP/2 client with stream multiplexing over verified TLS (ALPN `h2`) or
   h2c prior knowledge: flow control, CONTINUATION, trailers, RST_STREAM/GOAWAY handling, plus a
   standalone `Hpack` codec (dynamic table, Huffman) and `H2Headers`. Tested by
