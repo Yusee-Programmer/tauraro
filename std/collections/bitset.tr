@@ -1,0 +1,254 @@
+# std.collections.bitset -- a growable set of non-negative integers stored
+# as bits.
+#
+# Each word holds 32 bits (kept in an `int`, so shifts never touch the sign
+# bit). Membership, insertion and removal are O(1); count/union/intersection
+# work a word at a time. Setting a bit past the end grows the set.
+#
+# Usage:
+#   from std.collections.bitset import BitSet
+#   mut b = BitSet.init(100)
+#   b.set(3)
+#   b.set(70)
+#   b.test(70)            # true
+#   b.count()             # 2
+#   b.next_set(4)         # 70
+#   mut c = b.union(other)
+
+from std.core.string import StringBuilder
+
+def _bs_pop32(x: int) -> int:
+    mut v = x & 0xFFFFFFFF
+    v = v - ((v >> 1) & 0x55555555)
+    v = (v & 0x33333333) + ((v >> 2) & 0x33333333)
+    v = (v + (v >> 4)) & 0x0F0F0F0F
+    return ((v * 0x01010101) & 0xFFFFFFFF) >> 24
+
+def _bs_ctz32(x: int) -> int:
+    mut v = x & 0xFFFFFFFF
+    if v == 0: return 32
+    mut n = 0
+    while (v & 1) == 0:
+        v = v >> 1
+        n = n + 1
+    return n
+
+pub class BitSet:
+    pub words: List[int]
+    pub size:  int          # logical size in bits (highest index + 1 that was allocated)
+
+extend BitSet:
+    # An empty set with room for `nbits` bits (it grows on demand).
+    pub def init(nbits: int) -> BitSet:
+        mut b = BitSet()
+        b.words = []
+        b.size = 0
+        b._grow(nbits)
+        return b
+
+    # A set containing every index listed.
+    pub def from_list(items: List[int]) -> BitSet:
+        mut b = BitSet.init(64)
+        mut i = 0
+        while i < len(items):
+            b.set(items[i])
+            i = i + 1
+        return b
+
+    # Parse "0101..." (character i is bit i).
+    pub def from_string(s: str) -> BitSet:
+        mut b = BitSet.init(s.len())
+        mut p = s as Pointer[char]
+        mut i = 0
+        while i < s.len():
+            mut c = 0
+            unsafe: c = (p.offset(i).read() as int) & 255
+            if c == 49: b.set(i)
+            i = i + 1
+        return b
+
+    def _grow(self, nbits: int):
+        mut need = (nbits + 31) / 32
+        while len(self.words) < need:
+            self.words.append(0)
+        if nbits > self.size: self.size = nbits
+
+    # Add i.
+    pub def set(self, i: int):
+        if i < 0: return
+        if i >= self.size: self._grow(i + 1)
+        mut w = i / 32
+        self.words[w] = self.words[w] | (1 << (i % 32))
+
+    # Remove i.
+    pub def clear(self, i: int):
+        if i < 0 or i >= self.size: return
+        mut w = i / 32
+        self.words[w] = self.words[w] & (~(1 << (i % 32)) & 0xFFFFFFFF)
+
+    pub def assign(self, i: int, on: bool):
+        if on: self.set(i)
+        else: self.clear(i)
+
+    # Toggle i.
+    pub def flip(self, i: int):
+        if i < 0: return
+        if i >= self.size: self._grow(i + 1)
+        mut w = i / 32
+        self.words[w] = self.words[w] ^ (1 << (i % 32))
+
+    pub def test(self, i: int) -> bool:
+        if i < 0 or i >= self.size: return false
+        return ((self.words[i / 32] >> (i % 32)) & 1) == 1
+
+    # Number of members.
+    pub def count(self) -> int:
+        mut n = 0
+        mut i = 0
+        while i < len(self.words):
+            n = n + _bs_pop32(self.words[i])
+            i = i + 1
+        return n
+
+    pub def is_empty(self) -> bool:
+        mut i = 0
+        while i < len(self.words):
+            if self.words[i] != 0: return false
+            i = i + 1
+        return true
+
+    # Capacity in bits.
+    pub def capacity(self) -> int: return self.size
+
+    pub def clear_all(self):
+        mut i = 0
+        while i < len(self.words):
+            self.words[i] = 0
+            i = i + 1
+
+    # Set every bit below `nbits`.
+    pub def set_all(self, nbits: int):
+        self._grow(nbits)
+        mut i = 0
+        while i < nbits:
+            if i % 32 == 0 and i + 32 <= nbits:
+                self.words[i / 32] = 0xFFFFFFFF
+                i = i + 32
+            else:
+                self.set(i)
+                i = i + 1
+
+    # Smallest member >= start, or -1.
+    pub def next_set(self, start: int) -> int:
+        mut i = start
+        if i < 0: i = 0
+        if i >= self.size: return -1
+        mut w = i / 32
+        mut word = (self.words[w] >> (i % 32)) & 0xFFFFFFFF
+        if word != 0: return i + _bs_ctz32(word)
+        w = w + 1
+        while w < len(self.words):
+            if self.words[w] != 0: return w * 32 + _bs_ctz32(self.words[w])
+            w = w + 1
+        return -1
+
+    # Smallest non-member >= start (may be past the current capacity).
+    pub def next_clear(self, start: int) -> int:
+        mut i = start
+        if i < 0: i = 0
+        while i < self.size:
+            if not self.test(i): return i
+            i = i + 1
+        return i
+
+    # Members in increasing order.
+    pub def to_list(self) -> List[int]:
+        mut out: List[int] = []
+        mut i = self.next_set(0)
+        while i >= 0:
+            out.append(i)
+            i = self.next_set(i + 1)
+        return out
+
+    pub def copy(self) -> BitSet:
+        mut b = BitSet.init(self.size)
+        mut i = 0
+        while i < len(self.words):
+            b.words[i] = self.words[i]
+            i = i + 1
+        return b
+
+    def _combine(self, other: BitSet, op: int) -> BitSet:
+        mut n = self.size
+        if other.size > n: n = other.size
+        mut b = BitSet.init(n)
+        mut i = 0
+        while i < len(b.words):
+            mut a = 0
+            mut c = 0
+            if i < len(self.words): a = self.words[i]
+            if i < len(other.words): c = other.words[i]
+            if op == 0: b.words[i] = a | c
+            elif op == 1: b.words[i] = a & c
+            elif op == 2: b.words[i] = a & (~c & 0xFFFFFFFF)
+            else: b.words[i] = a ^ c
+            i = i + 1
+        return b
+
+    pub def union(self, other: BitSet) -> BitSet: return self._combine(other, 0)
+    pub def intersection(self, other: BitSet) -> BitSet: return self._combine(other, 1)
+    pub def difference(self, other: BitSet) -> BitSet: return self._combine(other, 2)
+    pub def symmetric_difference(self, other: BitSet) -> BitSet: return self._combine(other, 3)
+
+    # In-place forms.
+    pub def union_with(self, other: BitSet):
+        if other.size > self.size: self._grow(other.size)
+        mut i = 0
+        while i < len(other.words):
+            self.words[i] = self.words[i] | other.words[i]
+            i = i + 1
+
+    pub def intersect_with(self, other: BitSet):
+        mut i = 0
+        while i < len(self.words):
+            mut c = 0
+            if i < len(other.words): c = other.words[i]
+            self.words[i] = self.words[i] & c
+            i = i + 1
+
+    pub def subtract(self, other: BitSet):
+        mut i = 0
+        while i < len(self.words) and i < len(other.words):
+            self.words[i] = self.words[i] & (~other.words[i] & 0xFFFFFFFF)
+            i = i + 1
+
+    pub def is_subset_of(self, other: BitSet) -> bool:
+        mut i = 0
+        while i < len(self.words):
+            mut c = 0
+            if i < len(other.words): c = other.words[i]
+            if (self.words[i] & (~c & 0xFFFFFFFF)) != 0: return false
+            i = i + 1
+        return true
+
+    pub def intersects(self, other: BitSet) -> bool:
+        mut i = 0
+        while i < len(self.words) and i < len(other.words):
+            if (self.words[i] & other.words[i]) != 0: return true
+            i = i + 1
+        return false
+
+    pub def equals(self, other: BitSet) -> bool:
+        return self.is_subset_of(other) and other.is_subset_of(self)
+
+    # "0101..." over the capacity (character i is bit i).
+    pub def to_string(self) -> str:
+        mut sb = StringBuilder.init(self.size + 1)
+        mut i = 0
+        while i < self.size:
+            if self.test(i): sb.append_char(49)
+            else: sb.append_char(48)
+            i = i + 1
+        mut out = sb.to_owned()
+        sb.free()
+        return out

@@ -28,6 +28,8 @@ added here as each phase lands.
 ### Compiler limitations closed
 - `return f"...{local}..."` released `local` before the f-string was built (use-after-free):
   f-string parts now count as reads of the returned expression.
+- `xs[i] = s` inside a generic class whose `List[T]` is instantiated with `T = str` generated an
+  assignment to an rvalue; it now uses `List_TrStr_set` as well.
 - `xs[i] = s` on a `List[str]` generated a `char*` store into the refcounted `List_TrStr` and
   did not compile; it now uses `List_TrStr_set` (old element released, fresh values not leaked).
 - A static `init` that `throws` no longer gets `malloc`/`returns_nonnull` attributes (it returns a
@@ -44,6 +46,9 @@ added here as each phase lands.
 - `from` stays a reserved word (it starts import statements and lifetime clauses).
 
 ### Added
+- **`std.collections` additions** — `BitSet`, `RingBuffer[T]`, `SkipList[K, V]`, `IntervalTree[V]`,
+  `Rope`, `SlotMap[T]` (generation-checked handles), `Arena` (bump/region allocator) and `Slab`
+  (fixed-size block allocator). Tested by `tests/lang/111_collections3.tr`.
 - **`std.cli.argparse`** — declarative CLI parsing: typed/validated values with choices, env-var
   fallbacks and defaults, counted and repeatable options, variadic positionals, negatable flags,
   argument groups, mutually-exclusive / required-one-of groups, nested subcommands with aliases,

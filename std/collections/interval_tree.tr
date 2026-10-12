@@ -1,0 +1,188 @@
+# std.collections.interval_tree -- intervals with overlap queries.
+#
+# `IntervalTree[V]` stores half-open integer intervals [lo, hi) with a value
+# each. Queries return every stored interval containing a point or
+# overlapping a range, in O(log n + matches). It is a treap ordered by
+# (lo, id) and augmented with the maximum `hi` of each subtree; nodes live in
+# parallel arrays, addressed by index.
+#
+# Usage:
+#   from std.collections.interval_tree import IntervalTree
+#   mut t = IntervalTree[str].init()
+#   mut a = t.insert(10, 20, "meeting")
+#   t.insert(15, 30, "lunch")
+#   t.query_point(17)              # ids of both
+#   t.value(a, "")                 # "meeting"
+#   t.remove(a)
+
+pub class IntervalTree[V]:
+    pub lo:     List[int]
+    pub hi:     List[int]
+    pub vals:   List[V]
+    pub prio:   List[int]
+    pub left:   List[int]
+    pub right:  List[int]
+    pub maxhi:  List[int]
+    pub alive:  List[bool]
+    pub root:   int
+    pub count:  int
+    pub rng:    int
+
+extend IntervalTree[V]:
+    pub def init() -> IntervalTree[V]:
+        mut t = IntervalTree[V]()
+        t.lo = []
+        t.hi = []
+        t.vals = []
+        t.prio = []
+        t.left = []
+        t.right = []
+        t.maxhi = []
+        t.alive = []
+        t.root = -1
+        t.count = 0
+        t.rng = 0x1234567
+        return t
+
+    def _rand(self) -> int:
+        mut x = self.rng
+        x = x ^ ((x << 13) & 0xFFFFFFFF)
+        x = x ^ (x >> 17)
+        x = x ^ ((x << 5) & 0xFFFFFFFF)
+        self.rng = x & 0xFFFFFFFF
+        return self.rng
+
+    def _fix(self, n: int):
+        mut m = self.hi[n]
+        mut l = self.left[n]
+        mut r = self.right[n]
+        if l >= 0 and self.maxhi[l] > m: m = self.maxhi[l]
+        if r >= 0 and self.maxhi[r] > m: m = self.maxhi[r]
+        self.maxhi[n] = m
+
+    # (lo, id) ordering
+    def _less(self, a: int, b: int) -> bool:
+        if self.lo[a] != self.lo[b]: return self.lo[a] < self.lo[b]
+        return a < b
+
+    # Split subtree t into (< key node, >= key node); returns via out list [l, r].
+    def _split(self, t: int, key: int, out: List[int]):
+        if t < 0:
+            out[0] = -1
+            out[1] = -1
+            return
+        if self._less(t, key):
+            self._split(self.right[t], key, out)
+            self.right[t] = out[0]
+            self._fix(t)
+            out[0] = t
+        else:
+            self._split(self.left[t], key, out)
+            self.left[t] = out[1]
+            self._fix(t)
+            out[1] = t
+
+    def _merge(self, a: int, b: int) -> int:
+        if a < 0: return b
+        if b < 0: return a
+        if self.prio[a] > self.prio[b]:
+            self.right[a] = self._merge(self.right[a], b)
+            self._fix(a)
+            return a
+        self.left[b] = self._merge(a, self.left[b])
+        self._fix(b)
+        return b
+
+    # Add [lo, hi) with a value; returns its id (stable until removed).
+    pub def insert(self, lo: int, hi: int, v: V) -> int:
+        mut h = hi
+        if h < lo: h = lo
+        mut id = len(self.lo)
+        self.lo.append(lo)
+        self.hi.append(h)
+        self.vals.append(v)
+        self.prio.append(self._rand())
+        self.left.append(-1)
+        self.right.append(-1)
+        self.maxhi.append(h)
+        self.alive.append(true)
+        mut parts = [-1, -1]
+        self._split(self.root, id, parts)
+        mut l = parts[0]
+        mut r = parts[1]
+        self.root = self._merge(self._merge(l, id), r)
+        self.count = self.count + 1
+        return id
+
+    def _remove_from(self, t: int, id: int) -> int:
+        if t < 0: return -1
+        if t == id: return self._merge(self.left[t], self.right[t])
+        if self._less(id, t):
+            self.left[t] = self._remove_from(self.left[t], id)
+        else:
+            self.right[t] = self._remove_from(self.right[t], id)
+        self._fix(t)
+        return t
+
+    # Remove the interval with this id; false if unknown.
+    pub def remove(self, id: int) -> bool:
+        if id < 0 or id >= len(self.alive) or not self.alive[id]: return false
+        self.root = self._remove_from(self.root, id)
+        self.alive[id] = false
+        self.left[id] = -1
+        self.right[id] = -1
+        self.count = self.count - 1
+        return true
+
+    pub def len(self) -> int: return self.count
+    pub def is_empty(self) -> bool: return self.count == 0
+    pub def contains_id(self, id: int) -> bool: return id >= 0 and id < len(self.alive) and self.alive[id]
+
+    pub def value(self, id: int, missing: V) -> V:
+        if not self.contains_id(id): return missing
+        return self.vals[id]
+
+    pub def lo_of(self, id: int) -> int: return self.lo[id]
+    pub def hi_of(self, id: int) -> int: return self.hi[id]
+
+    def _collect(self, t: int, qlo: int, qhi: int, out: List[int]):
+        if t < 0 or self.maxhi[t] <= qlo: return
+        self._collect(self.left[t], qlo, qhi, out)
+        if self.lo[t] < qhi and self.hi[t] > qlo: out.append(t)
+        if self.lo[t] < qhi: self._collect(self.right[t], qlo, qhi, out)
+
+    # Ids of intervals overlapping [lo, hi), ordered by start.
+    pub def query_range(self, lo: int, hi: int) -> List[int]:
+        mut out: List[int] = []
+        self._collect(self.root, lo, hi, out)
+        return out
+
+    # Ids of intervals containing x.
+    pub def query_point(self, x: int) -> List[int]:
+        return self.query_range(x, x + 1)
+
+    # Values of intervals containing x.
+    pub def values_at(self, x: int) -> List[V]:
+        mut ids = self.query_point(x)
+        mut out: List[V] = []
+        mut i = 0
+        while i < len(ids):
+            out.append(self.vals[ids[i]])
+            i = i + 1
+        return out
+
+    # True if any stored interval overlaps [lo, hi).
+    pub def overlaps(self, lo: int, hi: int) -> bool:
+        return len(self.query_range(lo, hi)) > 0
+
+    # All live ids ordered by start.
+    pub def ids(self) -> List[int]:
+        mut out: List[int] = []
+        self._inorder(self.root, out)
+        return out
+
+    def _inorder(self, t: int, out: List[int]):
+        if t < 0: return
+        self._inorder(self.left[t], out)
+        out.append(t)
+        self._inorder(self.right[t], out)

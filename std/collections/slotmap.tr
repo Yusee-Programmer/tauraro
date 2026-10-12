@@ -1,0 +1,112 @@
+# std.collections.slotmap -- a slab of values addressed by stable handles.
+#
+# `SlotMap[T]` stores values in a dense array and hands out integer handles
+# that stay valid until the value is removed. A handle packs the slot index
+# with a generation counter, so a stale handle (to a removed value whose slot
+# was reused) is detected instead of silently returning the new occupant.
+# This is the usual replacement for pointers between objects (graphs, entity
+# systems, caches) under single ownership: the map owns every value, and
+# everything else holds handles.
+#
+# Usage:
+#   from std.collections.slotmap import SlotMap
+#   mut m = SlotMap[str].init()
+#   mut h = m.insert("alpha")
+#   m.get(h, "")            # "alpha"
+#   m.remove(h)
+#   m.contains(h)           # false (and stays false after the slot is reused)
+
+def _sm_idx(h: int) -> int: return h & 0xFFFFFFFF
+def _sm_gen(h: int) -> int: return (h >> 32) & 0x7FFFFFFF
+
+pub class SlotMap[T]:
+    pub vals:  List[T]
+    pub gens:  List[int]
+    pub used:  List[bool]
+    pub free:  List[int]
+    pub count: int
+
+extend SlotMap[T]:
+    pub def init() -> SlotMap[T]:
+        mut m = SlotMap[T]()
+        m.vals = []
+        m.gens = []
+        m.used = []
+        m.free = []
+        m.count = 0
+        return m
+
+    def _handle(self, idx: int) -> int: return (self.gens[idx] << 32) | idx
+
+    # Store v and return its handle.
+    pub def insert(self, v: T) -> int:
+        if len(self.free) > 0:
+            mut idx = self.free[len(self.free) - 1]
+            self.free.pop()
+            self.vals[idx] = v
+            self.used[idx] = true
+            self.count = self.count + 1
+            return self._handle(idx)
+        mut idx2 = len(self.vals)
+        self.vals.append(v)
+        self.gens.append(1)
+        self.used.append(true)
+        self.count = self.count + 1
+        return self._handle(idx2)
+
+    pub def contains(self, h: int) -> bool:
+        mut idx = _sm_idx(h)
+        return h > 0 and idx < len(self.vals) and self.used[idx] and self.gens[idx] == _sm_gen(h)
+
+    # The value for a live handle, or `missing`.
+    pub def get(self, h: int, missing: T) -> T:
+        if not self.contains(h): return missing
+        return self.vals[_sm_idx(h)]
+
+    # Replace the value of a live handle; false for stale handles.
+    pub def set(self, h: int, v: T) -> bool:
+        if not self.contains(h): return false
+        self.vals[_sm_idx(h)] = v
+        return true
+
+    # Remove; the slot is reused later with a new generation.
+    pub def remove(self, h: int) -> bool:
+        if not self.contains(h): return false
+        mut idx = _sm_idx(h)
+        self.used[idx] = false
+        self.gens[idx] = (self.gens[idx] + 1) & 0x7FFFFFFF
+        if self.gens[idx] == 0: self.gens[idx] = 1
+        self.free.append(idx)
+        self.count = self.count - 1
+        return true
+
+    pub def len(self) -> int: return self.count
+    pub def is_empty(self) -> bool: return self.count == 0
+
+    # Handles of all live values, in slot order.
+    pub def handles(self) -> List[int]:
+        mut out: List[int] = []
+        mut i = 0
+        while i < len(self.vals):
+            if self.used[i]: out.append(self._handle(i))
+            i = i + 1
+        return out
+
+    pub def values(self) -> List[T]:
+        mut out: List[T] = []
+        mut i = 0
+        while i < len(self.vals):
+            if self.used[i]: out.append(self.vals[i])
+            i = i + 1
+        return out
+
+    pub def clear(self):
+        mut i = 0
+        while i < len(self.vals):
+            if self.used[i]:
+                self.used[i] = false
+                self.gens[i] = (self.gens[i] + 1) & 0x7FFFFFFF
+                if self.gens[i] == 0: self.gens[i] = 1
+                self.free.append(i)
+            i = i + 1
+        self.count = 0

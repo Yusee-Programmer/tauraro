@@ -9102,8 +9102,9 @@ pub class CGenerator:
                         # still assigns the raw char* lvalue.
                         if idx_ty_n == "List" or idx_ty_n == "Vec":
                             mut idx_full_ty = hir_expr_type(idx_obj)
-                            if idx_full_ty.args.len > 0 and _is_str_type(idx_full_ty.args.get(0).read().name):
-                                if self.type_to_c(hir_expr_type(idx_obj)).starts_with("List_TrStr"):
+                            # (resolve_generic_prim: inside a monomorphized List[T] body T may be str)
+                            if idx_full_ty.args.len > 0 and _is_str_type(self.resolve_generic_prim(idx_full_ty.args.get(0).read().name)):
+                                if idx_ty_n == "List" and (self.type_to_c(hir_expr_type(idx_obj)).starts_with("List_TrStr") or not _is_str_type(idx_full_ty.args.get(0).read().name)):
                                     mut _lt_obj = self.gen_expr(idx_obj)
                                     mut _lt_key = self.gen_expr(idx_key)
                                     if self._is_fresh_str_expr(v):
